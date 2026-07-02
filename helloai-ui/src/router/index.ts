@@ -1,0 +1,41 @@
+import { createRouter, createWebHashHistory } from 'vue-router'
+import MainLayout from '@/layouts/MainLayout.vue'
+
+const routes = [
+  {
+    path: '/login',
+    component: () => import('@/views/Login.vue'),
+    meta: { title: '登录' }
+  },
+  {
+    path: '/',
+    component: MainLayout,
+    redirect: '/dashboard',
+    children: [
+      { path: 'dashboard',  component: () => import('@/views/Dashboard.vue'),  meta: { title: '概览' } },
+      { path: 'tasks',      component: () => import('@/views/task/TaskList.vue'), meta: { title: '任务管理' } },
+      { path: 'sub-tasks',  component: () => import('@/views/subtask/SubTaskList.vue'), meta: { title: '子任务' } },
+      { path: 'sub-tasks/:id', component: () => import('@/views/subtask/SubTaskDetail.vue'), meta: { title: '子任务详情' } },
+      { path: 'agents',     component: () => import('@/views/agent/AgentList.vue'), meta: { title: 'Agent管理' } },
+      { path: 'reviews',    component: () => import('@/views/review/ReviewList.vue'), meta: { title: '审查中心' } },
+      { path: 'rewards',    component: () => import('@/views/reward/RewardList.vue'), meta: { title: '积分流水' } },
+      { path: 'activity',   component: () => import('@/views/activity/ActivityList.vue'), meta: { title: '活动流' } },
+      { path: 'rules',      component: () => import('@/views/rule/RuleList.vue'), meta: { title: '规则配置' } },
+      { path: 'attachments', component: () => import('@/views/attachment/AttachmentList.vue'), meta: { title: '附件管理' } },
+      { path: 'settings',   component: () => import('@/views/Settings.vue'),  meta: { title: '系统设置' } }
+    ]
+  }
+]
+
+const router = createRouter({
+  history: createWebHashHistory(),
+  routes
+})
+
+router.beforeEach((to) => {
+  if (to.path !== '/login' && !sessionStorage.getItem('adminToken') && !sessionStorage.getItem('agentKey')) {
+    return '/login'
+  }
+})
+
+export default router

@@ -1,0 +1,48 @@
+# ============================================================
+# HelloAI .gitignore
+# ============================================================
+
+# --- Java / Maven ---
+*.class
+*.jar
+*.war
+*.ear
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+dependency-reduced-pom.xml
+build/
+
+# --- Vue / Node ---
+node_modules/
+dist/
+*.tsbuildinfo
+
+# --- IDE ---
+.idea/
+*.iml
+*.iws
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*.~
+
+# --- Env / Logs ---
+.env
+.env.local
+*.log
+logs/
+
+# --- Maven wrapper ---
+!.mvn/wrapper/maven-wrapper.jar

@@ -1,0 +1,73 @@
+server:
+  port: 6565
+
+spring:
+  application:
+    name: helloai
+  datasource:
+    url: jdbc:postgresql://localhost:5432/helloai?currentSchema=public&reWriteBatchedInserts=true
+    username: helloai
+    password: helloai_123
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+  redis:
+    host: localhost
+    port: 6379
+    lettuce:
+      pool:
+        max-active: 8
+        max-idle: 8
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+    listener:
+      simple:
+        acknowledge-mode: manual
+        concurrency: 5
+        max-concurrency: 20
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+mybatis-plus:
+  global-config:
+    db-config:
+      id-type: assign_id
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+  configuration:
+    map-underscore-to-camel-case: true
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs
+
+moss:
+  thread:
+    pool:
+      core-size: 8
+      max-size: 64
+      queue-capacity: 1000
+      keep-alive-seconds: 60
+
+score:
+  time-weight: 0.25
+  quality-weight: 0.30
+  coop-weight: 0.25
+  stability-weight: 0.15
+  efficiency-weight: 0.05
+
+logging:
+  level:
+    com.helloai: INFO
+    com.helloai.core: DEBUG
+    com.helloai.job: INFO
