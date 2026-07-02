@@ -23,7 +23,7 @@ public class ScoreController {
     private final AgentService agentService;
 
     @GetMapping("/me")
-    public R<Map<String, Object>> getMyScore(@RequestParam Long agentId) {
+    public R<Map<String, Object>> getMyScore(@RequestParam("agentId") Long agentId) {
         return R.ok(rewardService.getAgentScoreSummary(agentId));
     }
 

@@ -33,8 +33,8 @@ public class FeedController {
     public R<PageResult<FeedResponse>> list(
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "30") int pageSize,
-            @RequestParam(required = false) String level,
-            @RequestParam(required = false) String source) {
+            @RequestParam(value = "level", required = false) String level,
+            @RequestParam(value = "source", required = false) String source) {
         var wrapper = new LambdaQueryWrapper<ActivityLog>()
                 .eq(level != null && !level.isBlank(), ActivityLog::getLevel, level)
                 .eq(source != null && !source.isBlank(), ActivityLog::getSource, source)

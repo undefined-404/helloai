@@ -23,7 +23,7 @@ public class RulesController {
      * 获取规则列表（前端需要 Rule[] 数组格式）
      */
     @GetMapping
-    public R<List<Rule>> list(@RequestParam(required = false) String ruleType) {
+    public R<List<Rule>> list(@RequestParam(value = "ruleType", required = false) String ruleType) {
         var wrapper = new LambdaQueryWrapper<Rule>()
                 .eq(ruleType != null && !ruleType.isBlank(), Rule::getRuleType, ruleType)
                 .orderByAsc(Rule::getPriority);
@@ -45,8 +45,8 @@ public class RulesController {
      */
     @GetMapping("/merged")
     public R<Map<String, Object>> getMergedRules(
-            @RequestParam(required = false) Long taskId,
-            @RequestParam(required = false) Long subTaskId) {
+            @RequestParam(value = "taskId", required = false) Long taskId,
+            @RequestParam(value = "subTaskId", required = false) Long subTaskId) {
         String content = ruleService.getMergedRules(taskId, subTaskId);
         return R.ok(Map.of("content", content));
     }

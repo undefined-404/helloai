@@ -37,9 +37,9 @@ public class TaskController {
 
     @GetMapping
     public R<?> list(
-            @RequestParam(required = false) Integer page,
-            @RequestParam(defaultValue = "20") int pageSize,
-            @RequestParam(required = false) String status) {
+            @RequestParam(value = "page", required = false) Integer page,
+            @RequestParam(value = "pageSize", defaultValue = "20") int pageSize,
+            @RequestParam(value = "status", required = false) String status) {
         var wrapper = new LambdaQueryWrapper<Task>()
                 .eq(status != null && !status.isBlank(), Task::getStatus, TaskStatus.valueOf(status))
                 .orderByDesc(Task::getCreateTime);

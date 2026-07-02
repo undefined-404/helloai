@@ -32,9 +32,9 @@ public class AdminAgentController {
     public R<PageResult<AgentResponse>> list(
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int pageSize,
-            @RequestParam(required = false) String role,
-            @RequestParam(required = false) String status,
-            @RequestParam(required = false) String keyword) {
+            @RequestParam(value = "role", required = false) String role,
+            @RequestParam(value = "status", required = false) String status,
+            @RequestParam(value = "keyword", required = false) String keyword) {
         var wrapper = new LambdaQueryWrapper<Agent>()
                 .eq(role != null && !role.isBlank(), Agent::getRole, AgentRole.valueOf(role.toUpperCase()))
                 .eq(status != null && !status.isBlank(), Agent::getStatus, AgentStatus.valueOf(status.toUpperCase()))

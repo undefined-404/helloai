@@ -22,7 +22,7 @@ public class AttachmentController {
      * 附件列表
      */
     @GetMapping
-    public R<List<Attachment>> list(@RequestParam(required = false) Long subTaskId) {
+    public R<List<Attachment>> list(@RequestParam(value = "subTaskId", required = false) Long subTaskId) {
         var wrapper = new LambdaQueryWrapper<Attachment>()
                 .eq(subTaskId != null, Attachment::getSubTaskId, subTaskId)
                 .orderByDesc(Attachment::getCreateTime);

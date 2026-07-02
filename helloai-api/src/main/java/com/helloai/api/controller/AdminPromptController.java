@@ -23,7 +23,7 @@ public class AdminPromptController {
      * 按角色获取模板列表
      */
     @GetMapping
-    public R<List<PromptTemplateResponse>> list(@RequestParam(required = false) String role) {
+    public R<List<PromptTemplateResponse>> list(@RequestParam(value = "role", required = false) String role) {
         if (role != null && !role.isBlank()) {
             return R.ok(promptTemplateService.getByRole(role).stream().map(this::toResponse).toList());
         }
@@ -70,7 +70,7 @@ public class AdminPromptController {
      * 获取角色的默认模板
      */
     @GetMapping("/default")
-    public R<PromptTemplateResponse> getDefault(@RequestParam String role) {
+    public R<PromptTemplateResponse> getDefault(@RequestParam("role") String role) {
         PromptTemplate template = promptTemplateService.getDefaultByRole(role);
         if (template == null) return R.fail("未找到角色 " + role + " 的默认模板");
         return R.ok(toResponse(template));

@@ -50,9 +50,9 @@ public class SubTaskController {
 
     @GetMapping
     public R<List<SubTaskResponse>> list(
-            @RequestParam(required = false) Long taskId,
-            @RequestParam(required = false) String status,
-            @RequestParam(required = false) Long assignedAgent) {
+            @RequestParam(value = "taskId", required = false) Long taskId,
+            @RequestParam(value = "status", required = false) String status,
+            @RequestParam(value = "assignedAgent", required = false) Long assignedAgent) {
         var wrapper = new LambdaQueryWrapper<SubTask>()
                 .eq(taskId != null, SubTask::getTaskId, taskId)
                 .eq(status != null && !status.isBlank(), SubTask::getStatus, SubTaskStatus.valueOf(status))
@@ -69,14 +69,10 @@ public class SubTaskController {
         return R.ok(toResponse(subTask));
     }
 
-    /**
-     * 通用状态变更（前端兼容）
-     */
     @PostMapping("/change-status")
     public R<Void> changeStatus(@RequestBody Map<String, Object> body) {
         Long subTaskId = Long.valueOf(body.get("subTaskId").toString());
         String newStatus = (String) body.get("newStatus");
-        // 委托给对应的 action 方法
         switch (SubTaskStatus.valueOf(newStatus)) {
             case ASSIGNED -> {
                 Object agentId = body.get("agentId");
@@ -95,7 +91,7 @@ public class SubTaskController {
     }
 
     @PostMapping("/{id}/claim")
-    public R<Void> claim(@PathVariable Long id, @RequestParam Long agentId) {
+    public R<Void> claim(@PathVariable Long id, @RequestParam("agentId") Long agentId) {
         subTaskService.claim(id, agentId);
         return R.ok();
     }
@@ -136,9 +132,6 @@ public class SubTaskController {
         return R.ok();
     }
 
-    /**
-     * 获取可认领的子任务列表
-     */
     @GetMapping("/available")
     public R<List<SubTaskResponse>> available() {
         List<SubTask> list = subTaskService.list(
@@ -149,7 +142,7 @@ public class SubTaskController {
     }
 
     @GetMapping("/mine")
-    public R<List<SubTaskResponse>> mine(@RequestParam Long agentId) {
+    public R<List<SubTaskResponse>> mine(@RequestParam("agentId") Long agentId) {
         var wrapper = new LambdaQueryWrapper<SubTask>()
                 .eq(SubTask::getAssignedAgent, agentId)
                 .orderByDesc(SubTask::getCreateTime);

@@ -33,7 +33,7 @@ public class ReviewController {
     }
 
     @GetMapping
-    public R<List<ReviewResponse>> list(@RequestParam(required = false) Long subTaskId) {
+    public R<List<ReviewResponse>> list(@RequestParam(value = "subTaskId", required = false) Long subTaskId) {
         if (subTaskId != null) {
             return R.ok(reviewService.getBySubTaskId(subTaskId).stream().map(this::toResponse).toList());
         }

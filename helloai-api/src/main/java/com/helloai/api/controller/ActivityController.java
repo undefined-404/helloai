@@ -23,8 +23,8 @@ public class ActivityController {
      */
     @GetMapping
     public R<?> list(
-            @RequestParam(required = false) Long agentId,
-            @RequestParam(required = false) Long subTaskId,
+            @RequestParam(value = "agentId", required = false) Long agentId,
+            @RequestParam(value = "subTaskId", required = false) Long subTaskId,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "30") int pageSize) {
         var wrapper = new LambdaQueryWrapper<ActivityLog>()
