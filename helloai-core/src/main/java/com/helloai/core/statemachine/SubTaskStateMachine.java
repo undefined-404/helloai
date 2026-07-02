@@ -13,13 +13,13 @@ public class SubTaskStateMachine {
 
     static {
         TRANSITIONS.put(SubTaskStatus.PENDING,     Set.of(SubTaskStatus.ASSIGNED, SubTaskStatus.CANCELLED));
-        TRANSITIONS.put(SubTaskStatus.ASSIGNED,     Set.of(SubTaskStatus.IN_PROGRESS, SubTaskStatus.PENDING));
-        TRANSITIONS.put(SubTaskStatus.IN_PROGRESS,  Set.of(SubTaskStatus.REVIEW, SubTaskStatus.BLOCKED));
-        TRANSITIONS.put(SubTaskStatus.REVIEW,       Set.of(SubTaskStatus.DONE, SubTaskStatus.REWORK));
-        TRANSITIONS.put(SubTaskStatus.REWORK,       Set.of(SubTaskStatus.IN_PROGRESS));
-        TRANSITIONS.put(SubTaskStatus.BLOCKED,      Set.of(SubTaskStatus.PENDING));
-        TRANSITIONS.put(SubTaskStatus.DONE,        Set.of());
-        TRANSITIONS.put(SubTaskStatus.CANCELLED,   Set.of());
+        TRANSITIONS.put(SubTaskStatus.ASSIGNED,     Set.of(SubTaskStatus.IN_PROGRESS, SubTaskStatus.PENDING, SubTaskStatus.CANCELLED));
+        TRANSITIONS.put(SubTaskStatus.IN_PROGRESS,  Set.of(SubTaskStatus.REVIEW, SubTaskStatus.BLOCKED, SubTaskStatus.CANCELLED));
+        TRANSITIONS.put(SubTaskStatus.REVIEW,       Set.of(SubTaskStatus.DONE, SubTaskStatus.REWORK, SubTaskStatus.CANCELLED));
+        TRANSITIONS.put(SubTaskStatus.REWORK,       Set.of(SubTaskStatus.IN_PROGRESS, SubTaskStatus.CANCELLED));
+        TRANSITIONS.put(SubTaskStatus.BLOCKED,      Set.of(SubTaskStatus.PENDING, SubTaskStatus.CANCELLED));
+        TRANSITIONS.put(SubTaskStatus.DONE,         Set.of());
+        TRANSITIONS.put(SubTaskStatus.CANCELLED,    Set.of());
     }
 
     public static boolean canTransition(SubTaskStatus from, SubTaskStatus to) {

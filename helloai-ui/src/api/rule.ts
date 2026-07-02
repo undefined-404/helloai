@@ -6,6 +6,6 @@ export const ruleApi = {
     return request.get<any, Rule[]>('/rules', { params })
   },
   getById(id: number) {
-    return request.get<any, Rule>(/rules/)
+    return request.get<any, Rule>(`/rules/${id}`)
   }
 }

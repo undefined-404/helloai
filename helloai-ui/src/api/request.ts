@@ -27,9 +27,14 @@ instance.interceptors.response.use(
     if (res.code === 200) {
       return res.data
     }
+    // 登录接口错误由页面自己处理提示
+    if (response.config.url?.includes('/auth/')) {
+      return Promise.reject(new Error(res.msg))
+    }
     if (res.code === 401 || res.code === 403) {
       ElMessage.error(res.msg || '认证失败')
       sessionStorage.removeItem('adminToken')
+      sessionStorage.removeItem('agentKey')
       window.location.hash = '#/login'
       return Promise.reject(new Error(res.msg))
     }

@@ -5,7 +5,7 @@ spring:
   application:
     name: helloai
   datasource:
-    url: jdbc:postgresql://localhost:5432/helloai?currentSchema=public&reWriteBatchedInserts=true
+    url: jdbc:postgresql://localhost:25432/helloai?currentSchema=public&reWriteBatchedInserts=true
     username: helloai
     password: helloai_123
     driver-class-name: org.postgresql.Driver
@@ -13,16 +13,17 @@ spring:
       maximum-pool-size: 20
       minimum-idle: 5
       connection-timeout: 30000
-  redis:
-    host: localhost
-    port: 6379
-    lettuce:
-      pool:
-        max-active: 8
-        max-idle: 8
+  data:
+    redis:
+      host: localhost
+      port: 26379
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
   rabbitmq:
     host: localhost
-    port: 5672
+    port: 25672
     username: guest
     password: guest
     listener:
@@ -58,6 +59,14 @@ moss:
       max-size: 64
       queue-capacity: 1000
       keep-alive-seconds: 60
+
+
+# === Agent 自注册配置 ===
+helloai:
+  agent:
+    registration-token: "helloai-reg-2024"
+    allow-registration: true
+
 
 score:
   time-weight: 0.25

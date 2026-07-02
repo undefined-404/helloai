@@ -26,4 +26,7 @@ public class RequestLog extends BaseEntity {
 
     private Integer duration;
     private String ip;
+    private Integer statusCode;
+    private String authType;
+    private Long authId;
 }

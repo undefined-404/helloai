@@ -18,6 +18,9 @@ public class SubTask extends BaseEntity {
     private Long taskId;
     private Long moduleId;
     private String title;
+    private String deliverable;
+    private String acceptance;
+    private String priority;
 
     @TableField("status")
     private SubTaskStatus status;
@@ -34,6 +37,8 @@ public class SubTask extends BaseEntity {
     private Integer compositeScore;
     private String scoreGrade;
     private OffsetDateTime deadline;
+    private Integer reworkCount;
+    private OffsetDateTime completedAt;
 
     @Version
     private Integer version;

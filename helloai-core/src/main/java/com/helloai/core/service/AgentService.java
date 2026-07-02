@@ -67,6 +67,51 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
         log.info("Agent 状态变更: id={}, status={}", agentId, status);
     }
 
+    /**
+     * 重置 Agent API Key
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public String resetApiKey(Long agentId) {
+        Agent agent = getById(agentId);
+        if (agent == null) {
+            throw new BizException("Agent 不存在: " + agentId);
+        }
+        String newKey = "ak_" + generateRandomHex(32);
+        agent.setApiKey(newKey);
+        updateById(agent);
+        log.info("Agent API Key 重置: id={}", agentId);
+        return newKey;
+    }
+
+    /**
+     * 删除 Agent（逻辑删除）
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteAgent(Long agentId) {
+        Agent agent = getById(agentId);
+        if (agent == null) {
+            throw new BizException("Agent 不存在: " + agentId);
+        }
+        removeById(agentId);
+        log.info("Agent 删除: id={}, name={}", agentId, agent.getName());
+    }
+
+    /**
+     * 更新 Agent 信息
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void updateAgent(Long agentId, String name, String modelType, String remark) {
+        Agent agent = getById(agentId);
+        if (agent == null) {
+            throw new BizException("Agent 不存在: " + agentId);
+        }
+        if (name != null) agent.setName(name);
+        if (modelType != null) agent.setModelType(modelType);
+        if (remark != null) agent.setRemark(remark);
+        updateById(agent);
+        log.info("Agent 信息更新: id={}", agentId);
+    }
+
     private String generateRandomHex(int length) {
         byte[] bytes = new byte[length / 2];
         SECURE_RANDOM.nextBytes(bytes);

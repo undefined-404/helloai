@@ -6,6 +6,6 @@ export const attachmentApi = {
     return request.get<any, Attachment[]>('/attachments', { params: { subTaskId } })
   },
   getById(id: number) {
-    return request.get<any, Attachment>(/attachments/)
+    return request.get<any, Attachment>(`/attachments/${id}`)
   }
 }

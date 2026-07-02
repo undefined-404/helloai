@@ -20,4 +20,7 @@ public class ActivityLog extends BaseEntity {
 
     @TableField(typeHandler = JacksonTypeHandler.class)
     private Map<String, Object> detail;
+
+    private String level;
+    private String source;
 }

@@ -1,6 +1,8 @@
 package com.helloai.common.constant;
 
-public enum OutboxStatus {
+import com.baomidou.mybatisplus.annotation.IEnum;
+
+public enum OutboxStatus implements IEnum<Integer> {
     PENDING(0),
     SUCCESS(1),
     FAILED(2);
@@ -11,7 +13,8 @@ public enum OutboxStatus {
         this.value = value;
     }
 
-    public int getValue() {
+    @Override
+    public Integer getValue() {
         return value;
     }
 }

@@ -86,15 +86,21 @@ import { ElMessage } from 'element-plus'
 import { subTaskApi } from '@/api/subTask'
 import { reviewApi } from '@/api/review'
 import { SUB_TASK_STATUS_MAP, SCORE_GRADE_MAP } from '@/types'
+import type { CreateReviewRequest, ReviewRecord, ReviewResult, SubTask } from '@/types'
 
 const route = useRoute()
 const loading = ref(false)
-const subTask = ref<any>(null)
-const reviews = ref<any[]>([])
+const subTask = ref<SubTask | null>(null)
+const reviews = ref<ReviewRecord[]>([])
 const reviewDialog = ref(false)
 const submitting = ref(false)
 const reviewFormRef = ref()
-const reviewForm = ref({ result: 'APPROVED', score: 3, issues: '', comment: '' })
+const reviewForm = ref<{ result: ReviewResult; score: number; issues: string; comment: string }>({
+  result: 'APPROVED',
+  score: 3,
+  issues: '',
+  comment: ''
+})
 const reviewRules = { result: [{ required: true }], score: [{ required: true }] }
 
 async function load() {
@@ -106,6 +112,7 @@ async function load() {
 }
 
 async function handleAction(action: string) {
+  if (!subTask.value) return
   try {
     const apiCalls: Record<string, Function> = {
       claim: (id: number) => subTaskApi.claim(id, 1),
@@ -123,17 +130,18 @@ async function handleReassign() {}
 
 async function submitReview() {
   const valid = await reviewFormRef.value?.validate().catch(() => false)
-  if (!valid) return
+  if (!valid || !subTask.value) return
   submitting.value = true
   try {
-    await reviewApi.create({
+    const payload: CreateReviewRequest = {
       subTaskId: subTask.value.id,
-      result: reviewForm.value.result as any,
+      result: reviewForm.value.result,
       score: reviewForm.value.score,
       issues: reviewForm.value.issues,
       comment: reviewForm.value.comment,
       reworkAgentId: null
-    })
+    }
+    await reviewApi.create(payload)
     ElMessage.success('审查提交成功')
     reviewDialog.value = false
     load()

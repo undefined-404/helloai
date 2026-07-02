@@ -425,6 +425,113 @@ public class SubTaskController {
 ```
 
 ### 6.3 Controller 职责边界
+### 6.4 嵌套资源路径规范
+
+父子资源关系用路径嵌套表达：`/api/{parent}/{parentId}/{child}`
+
+```java
+// Task 下的 Module
+@RestController
+@RequestMapping("/api/tasks/{taskId}/modules")
+public class ModuleController {
+    @GetMapping
+    public R<List<Module>> list(@PathVariable Long taskId) { ... }
+    
+    @PostMapping
+    public R<Module> create(@PathVariable Long taskId, @RequestBody @Valid ModuleCreateRequest req) { ... }
+}
+```
+
+### 6.5 状态操作端点规范
+
+状态变更使用专用 `POST` 端点，路径格式：`/{id}/{action}`
+
+```java
+// 子任务状态操作（每个动作一个独立端点）
+@PostMapping("/{id}/claim")
+public R<SubTask> claim(@PathVariable Long id, @RequestBody ClaimRequest req) { ... }
+
+@PostMapping("/{id}/start")
+public R<SubTask> start(@PathVariable Long id) { ... }
+
+@PostMapping("/{id}/submit")
+public R<SubTask> submit(@PathVariable Long id) { ... }
+```
+
+### 6.6 分页查询规范
+
+列表接口统一接收 `page` 和 `pageSize` 查询参数，默认值 `page=1, pageSize=20`。
+
+```java
+@GetMapping
+public R<PageResult<T>> list(
+        @RequestParam(defaultValue = "1") int page,
+        @RequestParam(defaultValue = "20") int pageSize,
+        // ... 过滤参数
+) {
+    Page<T> result = service.page(new Page<>(page, pageSize), wrapper);
+    return R.ok(PageResult.of(result));
+}
+```
+
+如果列表接口对外返回 `Response DTO`，则在 Controller 中完成实体到 DTO 的轻量映射，推荐统一使用 `PageResult.of(page, mapper)`：
+
+```java
+@GetMapping
+public R<PageResult<TaskResponse>> list(
+        @RequestParam(defaultValue = "1") int page,
+        @RequestParam(defaultValue = "20") int pageSize
+) {
+    Page<Task> result = taskService.page(new Page<>(page, pageSize), wrapper);
+    return R.ok(PageResult.of(result, this::toResponse));
+}
+```
+
+分页响应封装：
+
+```java
+@Data
+public class PageResult<T> {
+    private List<T> list;
+    private long total;
+    private long pages;
+    private long current;
+    
+    public static <T> PageResult<T> of(Page<T> page) {
+        PageResult<T> r = new PageResult<>();
+        r.setList(page.getRecords());
+        r.setTotal(page.getTotal());
+        r.setPages(page.getPages());
+        r.setCurrent(page.getCurrent());
+        return r;
+    }
+
+    public static <S, T> PageResult<T> of(Page<S> page, Function<S, T> mapper) {
+        PageResult<T> r = new PageResult<>();
+        r.setList(page.getRecords().stream().map(mapper).toList());
+        r.setTotal(page.getTotal());
+        r.setPages(page.getPages());
+        r.setCurrent(page.getCurrent());
+        return r;
+    }
+}
+```
+
+### 6.7 Request/Response DTO 分类规范
+
+| 类型 | 包路径 | 命名规则 | 示例 |
+|------|--------|----------|------|
+| 请求 DTO | `dto/{domain}/` | `{Action}Request` | `CreateTaskRequest` |
+| 响应 DTO | `dto/{domain}/` | `{Action}Response` | `TaskResponse` |
+| 通用分页 | `dto/` | `PageResult<T>` | `PageResult<SubTask>` |
+
+默认规则：
+
+- 查询接口、详情接口、列表接口默认返回 `Response DTO`
+- 创建/更新接口如果返回资源快照，也默认返回 `Response DTO`
+- 纯命令型接口（如状态推进、删除、触发动作）优先返回 `R<Void>`
+- 聚合看板、技能下发、简单 KV 响应可返回专用聚合 DTO 或 `Map<String, Object>`，但不直接暴露实体
+
 
 | 允许 | 禁止 |
 |------|------|
@@ -506,6 +613,68 @@ subTaskMapper.update(null,
 > ⚠️ **乐观锁必须使用 `@Version` + `updateById`**，禁止手动拼接 `setSql("version = version + 1")`。
 
 ---
+
+### 7.4 状态机模式
+
+
+复杂状态流转（如子任务状态机）需要在 Service 层明确定义合法转移表：
+
+```java
+public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
+
+    private static final Map<SubTaskStatus, Set<SubTaskStatus>> VALID_TRANSITIONS = Map.of(
+        SubTaskStatus.PENDING,     Set.of(SubTaskStatus.ASSIGNED),
+        SubTaskStatus.ASSIGNED,    Set.of(SubTaskStatus.IN_PROGRESS, SubTaskStatus.PENDING),
+        SubTaskStatus.IN_PROGRESS, Set.of(SubTaskStatus.REVIEW),
+        SubTaskStatus.REVIEW,      Set.of(SubTaskStatus.DONE, SubTaskStatus.REWORK),
+        SubTaskStatus.REWORK,      Set.of(SubTaskStatus.IN_PROGRESS),
+        SubTaskStatus.BLOCKED,     Set.of(SubTaskStatus.PENDING),
+        SubTaskStatus.DONE,        Set.of(),
+        SubTaskStatus.CANCELLED,   Set.of()
+    );
+
+    private void validateTransition(SubTaskStatus from, SubTaskStatus to) {
+        Set<SubTaskStatus> allowed = VALID_TRANSITIONS.get(from);
+        if (allowed == null || !allowed.contains(to)) {
+            throw new BizException(String.format(
+                "状态转移不合法: %s → %s", from, to));
+        }
+    }
+}
+```
+
+每个对外状态操作方法（`claim`、`start`、`submit`、`complete`、`rework`、`block`）内部先调用 `validateTransition()`，再执行字段更新 + 事务提交。
+
+### 7.5 跨 Service 事务协作模式
+
+当一个操作需要跨多个 Service 更新数据时（例如审查通过 → 修改子任务状态 + 加积分），使用以下模式：
+
+```java
+@Service
+@RequiredArgsConstructor  // 所有依赖通过构造器注入
+public class ReviewService {
+
+    private final SubTaskService subTaskService;  // 跨 Service 注入
+    private final RewardService rewardService;
+
+    @Transactional(rollbackFor = Exception.class)  // 统一事务边界
+    public ReviewRecord createReview(...) {
+        // 1. 写审查记录
+        save(reviewRecord);
+
+        // 2. 推进子任务状态（跨 Service，同一事务）
+        if ("approved".equals(result)) {
+            subTaskService.complete(subTaskId);       // 同事务
+            rewardService.grant(subTaskId, score);    // 同事务
+        } else {
+            subTaskService.rework(subTaskId, reworkAgent);
+        }
+    }
+}
+```
+
+> ⚠️ **禁止**在跨 Service 调用中使用 `@Transactional(propagation = Propagation.REQUIRES_NEW)`，除非有明确的异步隔离需求。默认使用 `REQUIRED`（同一事务）。
+
 
 ## 8. 数据库设计规范
 
@@ -1255,7 +1424,7 @@ public class {Name}CompensationTask {
 | 自动填充 | 使用 `setFieldValByName`，不手动补 `createTime` / `updateTime` / `deleted` | [5.3 自动填充机制](#53-自动填充机制) |
 | 启动类 | `scanBasePackages` 保持 `"com.helloai"`，并配置 `@MapperScan("com.helloai.core.mapper")` | [3.3 启动类配置](#33-启动类配置) |
 | 数据库连接 | JDBC URL 指向 PostgreSQL，使用 `timestamptz` | [8.2 JDBC 连接配置](#82-jdbc-连接配置) |
-| Controller 与 Service | Controller 只做参数接收、DTO 转换、返回封装；事务放在 Service 层 | [6. Controller 规范](#6-controller-规范)、[7. Service 规范](#7-service-规范) |
+| Controller 与 Service | Controller 只做参数接收、DTO 转换、返回封装；查询默认返回 `Response DTO`；事务放在 Service 层 | [6. Controller 规范](#6-controller-规范)、[7. Service 规范](#7-service-规范) |
 | 依赖注入 | 使用构造器注入，非 `@Autowired` 字段注入 | [1. 总体原则](#1-总体原则) |
 | 状态与常量 | 禁止硬编码状态值，统一使用枚举类（`SubTaskStatus`、`AgentRole`） | [4. 命名规范](#4-命名规范)、[16.6 状态机模板](#166-状态机模板) |
 | 事务与一致性 | `@Transactional(rollbackFor = Exception.class)`；Outbox 与业务操作同一事务 | [9. Outbox 事务性消息规范](#9-outbox-事务性消息规范) |
@@ -1414,3 +1583,8 @@ export default {
 - [ ] 日志包含关键业务标识（subTaskId、eventId、agentId）
 - [ ] Vue 列表页：根元素 `<el-card>` + header，表格 `<el-table border stripe>`，空状态占位
 - [ ] Vue 页面：`data()` / `computed` / `filters` / `created()` / `methods` 分区清晰
+- [ ] 状态机转移在 Service 层明确定义 `VALID_TRANSITIONS`，不散落在各方法中
+- [ ] 跨 Service 事务调用使用 `@Transactional(rollbackFor = Exception.class)` 统一管理事务边界
+- [ ] SKILL.md 等静态资源文件放在 `resources/skills/` 下，不硬编码在 Java 代码中
+- [ ] 嵌套资源路径遵循 `/api/{parent}/{parentId}/{child}` 格式
+- [ ] 状态操作端点使用 `POST /{id}/{action}` 格式，一个动作对应一个独立方法

@@ -32,6 +32,8 @@ export type ReviewResult = 'APPROVED' | 'REJECTED'
 
 export type TaskStatus = 'PENDING' | 'IN_PROGRESS' | 'DONE' | 'CANCELLED'
 
+export type AttachmentStatus = 'ACTIVE' | 'INACTIVE' | 'DELETED'
+
 // --- 实体 ---
 export interface Task {
   id: number

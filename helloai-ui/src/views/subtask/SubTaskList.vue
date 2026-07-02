@@ -16,8 +16,8 @@
       <el-table-column prop="title" label="标题" min-width="180" show-overflow-tooltip />
       <el-table-column label="状态" width="100">
         <template #default="{ row }">
-          <el-tag :type="SUB_TASK_STATUS_MAP[row.status]?.type || 'info'" size="small">
-            {{ SUB_TASK_STATUS_MAP[row.status]?.label || row.status }}
+          <el-tag :type="getSubTaskStatusMeta(row.status)?.type || 'info'" size="small">
+            {{ getSubTaskStatusMeta(row.status)?.label || row.status }}
           </el-tag>
         </template>
       </el-table-column>
@@ -54,17 +54,18 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { subTaskApi } from '@/api/subTask'
 import { SUB_TASK_STATUS_MAP, SCORE_GRADE_MAP } from '@/types'
+import type { SubTask, SubTaskStatus } from '@/types'
 
 const router = useRouter()
-const list = ref<any[]>([])
+const list = ref<SubTask[]>([])
 const total = ref(0)
 const loading = ref(false)
-const statusFilter = ref('')
+const statusFilter = ref<SubTaskStatus | ''>('')
 
 async function load(page = 1) {
   loading.value = true
   try {
-    const params: any = { page, size: 20 }
+    const params: { page: number; size: number; status?: SubTaskStatus } = { page, size: 20 }
     if (statusFilter.value) params.status = statusFilter.value
     list.value = await subTaskApi.list(params)
     total.value = list.value.length
@@ -72,13 +73,17 @@ async function load(page = 1) {
 }
 function loadPage(page: number) { load(page) }
 
-async function handleClaim(row: any) {
+async function handleClaim(row: SubTask) {
   try {
     await ElMessageBox.prompt('输入 Agent ID', '认领子任务', { inputValue: '' })
     await subTaskApi.claim(row.id, 1)
     ElMessage.success('认领成功')
     load()
   } catch {}
+}
+
+function getSubTaskStatusMeta(status: SubTask['status']) {
+  return SUB_TASK_STATUS_MAP[status]
 }
 
 onMounted(() => load())

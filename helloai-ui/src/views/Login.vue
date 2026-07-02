@@ -12,12 +12,21 @@
             <el-radio value="agent" border>Agent 密钥登录</el-radio>
           </el-radio-group>
         </el-form-item>
+        <el-form-item v-if="form.type === 'admin'" prop="username">
+          <el-input v-model="form.username" placeholder="用户名" clearable />
+        </el-form-item>
         <el-form-item prop="credential">
-          <el-input v-model="form.credential" :placeholder="form.type === 'admin' ? '管理员令牌' : 'API Key'" clearable />
+          <el-input
+            v-model="form.credential"
+            :placeholder="form.type === 'admin' ? '密码' : 'API Key'"
+            :type="form.type === 'admin' ? 'password' : 'text'"
+            clearable
+          />
         </el-form-item>
         <el-form-item>
           <el-button type="primary" :loading="loading" style="width:100%" @click="handleLogin">登 录</el-button>
         </el-form-item>
+        <p v-if="errorMsg" class="error-msg">{{ errorMsg }}</p>
       </el-form>
     </el-card>
   </div>
@@ -27,13 +36,16 @@
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import request from '@/api/request'
 
 const router = useRouter()
 const formRef = ref()
 const loading = ref(false)
+const errorMsg = ref('')
 
 const form = reactive({
   type: 'admin',
+  username: 'admin',
   credential: ''
 })
 
@@ -45,16 +57,29 @@ async function handleLogin() {
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
   loading.value = true
+  errorMsg.value = ''
   try {
+    const payload: any = {
+      type: form.type,
+      credential: form.credential
+    }
     if (form.type === 'admin') {
-      sessionStorage.setItem('adminToken', form.credential)
-      sessionStorage.setItem('adminUser', 'Admin')
+      payload.username = form.username || 'admin'
+    }
+    const res = await request.post('/auth/login', payload)
+    if (form.type === 'admin') {
+      sessionStorage.setItem('adminToken', res.token)
+      sessionStorage.setItem('adminUser', res.displayName || res.role || 'Admin')
+      sessionStorage.removeItem('agentKey')
     } else {
       sessionStorage.setItem('agentKey', form.credential)
-      sessionStorage.setItem('adminUser', 'Agent')
+      sessionStorage.setItem('adminUser', res.displayName || 'Agent')
+      sessionStorage.removeItem('adminToken')
     }
     ElMessage.success('登录成功')
     router.push('/dashboard')
+  } catch (e: any) {
+    errorMsg.value = e.message || '登录失败'
   } finally {
     loading.value = false
   }
@@ -68,4 +93,5 @@ async function handleLogin() {
 .login-header h2 { margin: 12px 0 0; font-weight: 600; color: #303133; }
 .login-type { display: flex; width: 100%; }
 .login-type .el-radio { flex: 1; justify-content: center; }
+.error-msg { color: #f56c6c; font-size: 13px; text-align: center; margin: 0; }
 </style>

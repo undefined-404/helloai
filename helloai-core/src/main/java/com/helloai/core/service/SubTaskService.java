@@ -11,6 +11,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.OffsetDateTime;
+
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -40,7 +42,7 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
 
         agentOutboxService.createEvent(subTask, newStatus);
 
-        log.info("任务状态变更: subTaskId={}, from={}, to={}, agentId={}",
+        log.info("子任务状态变更: subTaskId={}, from={}, to={}, agentId={}",
                 subTaskId, oldStatus, newStatus, agentId);
     }
 
@@ -60,11 +62,36 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
     }
 
     @Transactional(rollbackFor = Exception.class)
+    public void complete(Long subTaskId) {
+        SubTask subTask = getById(subTaskId);
+        if (subTask == null) throw new BizException("子任务不存在: " + subTaskId);
+        SubTaskStateMachine.validate(subTask.getStatus(), SubTaskStatus.DONE);
+        subTask.setStatus(SubTaskStatus.DONE);
+        subTask.setCompletedAt(OffsetDateTime.now());
+        updateById(subTask);
+        agentOutboxService.createEvent(subTask, SubTaskStatus.DONE);
+        log.info("子任务审查通过: subTaskId={}", subTaskId);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public void rework(Long subTaskId, Long reworkAgentId) {
+        SubTask subTask = getById(subTaskId);
+        if (subTask == null) throw new BizException("子任务不存在: " + subTaskId);
+        SubTaskStateMachine.validate(subTask.getStatus(), SubTaskStatus.REWORK);
+        subTask.setStatus(SubTaskStatus.REWORK);
+        subTask.setReworkCount(subTask.getReworkCount() != null ? subTask.getReworkCount() + 1 : 1);
+        if (reworkAgentId != null) {
+            subTask.setAssignedAgent(reworkAgentId);
+        }
+        updateById(subTask);
+        agentOutboxService.createEvent(subTask, SubTaskStatus.REWORK);
+        log.info("子任务驳回返工: subTaskId={}, reworkCount={}", subTaskId, subTask.getReworkCount());
+    }
+
+    @Transactional(rollbackFor = Exception.class)
     public void block(Long subTaskId) {
         SubTask subTask = getById(subTaskId);
-        if (subTask == null) {
-            throw new BizException("子任务不存在: " + subTaskId);
-        }
+        if (subTask == null) throw new BizException("子任务不存在: " + subTaskId);
         if (subTask.getStatus() != SubTaskStatus.IN_PROGRESS
                 && subTask.getStatus() != SubTaskStatus.ASSIGNED
                 && subTask.getStatus() != SubTaskStatus.REWORK) {
@@ -74,18 +101,25 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
     }
 
     @Transactional(rollbackFor = Exception.class)
+    public void cancel(Long subTaskId) {
+        SubTask subTask = getById(subTaskId);
+        if (subTask == null) throw new BizException("子任务不存在: " + subTaskId);
+        if (subTask.getStatus() == SubTaskStatus.DONE || subTask.getStatus() == SubTaskStatus.CANCELLED) {
+            throw new BizException("已完成或已取消的子任务不能再次取消");
+        }
+        changeStatus(subTaskId, SubTaskStatus.CANCELLED, null);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
     public void reassign(Long subTaskId, Long newAgentId) {
         SubTask subTask = getById(subTaskId);
-        if (subTask == null) {
-            throw new BizException("子任务不存在: " + subTaskId);
-        }
+        if (subTask == null) throw new BizException("子任务不存在: " + subTaskId);
         if (subTask.getStatus() != SubTaskStatus.BLOCKED) {
             throw new BizException("只有 BLOCKED 状态才能重新分配");
         }
         subTask.setStatus(SubTaskStatus.PENDING);
         subTask.setAssignedAgent(newAgentId);
         updateById(subTask);
-
         changeStatus(subTaskId, SubTaskStatus.ASSIGNED, newAgentId);
     }
 }

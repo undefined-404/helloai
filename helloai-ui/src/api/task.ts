@@ -6,6 +6,6 @@ export const taskApi = {
     return request.get<any, Task[]>('/tasks', { params })
   },
   getById(id: number) {
-    return request.get<any, Task>(/tasks/)
+    return request.get<any, Task>(`/tasks/${id}`)
   }
 }
