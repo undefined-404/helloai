@@ -1,8 +1,6 @@
 package com.helloai.api.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.helloai.api.dto.PageResult;
 import com.helloai.api.dto.subtask.CreateSubTaskRequest;
 import com.helloai.api.dto.subtask.ReassignRequest;
 import com.helloai.api.dto.subtask.ReworkRequest;
@@ -53,9 +51,10 @@ public class SubTaskController {
             @RequestParam(value = "taskId", required = false) Long taskId,
             @RequestParam(value = "status", required = false) String status,
             @RequestParam(value = "assignedAgent", required = false) Long assignedAgent) {
+        SubTaskStatus statusFilter = (status != null && !status.isBlank()) ? SubTaskStatus.valueOf(status) : null;
         var wrapper = new LambdaQueryWrapper<SubTask>()
                 .eq(taskId != null, SubTask::getTaskId, taskId)
-                .eq(status != null && !status.isBlank(), SubTask::getStatus, SubTaskStatus.valueOf(status))
+                .eq(statusFilter != null, SubTask::getStatus, statusFilter)
                 .eq(assignedAgent != null, SubTask::getAssignedAgent, assignedAgent)
                 .orderByDesc(SubTask::getCreateTime);
         List<SubTaskResponse> list = subTaskService.list(wrapper).stream().map(this::toResponse).toList();

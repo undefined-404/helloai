@@ -80,7 +80,7 @@ public class ToolsController {
      * CLI 在线更新告知（版本检查）
      */
     @GetMapping("/cli/check-update")
-    public R<Map<String, Object>> checkUpdate(@RequestParam(defaultValue = "0") int currentVersion) {
+    public R<Map<String, Object>> checkUpdate(@RequestParam(value = "currentVersion", defaultValue = "0") int currentVersion) {
         int latest = Integer.parseInt(CLI_VERSION);
         boolean hasUpdate = currentVersion < latest;
         return R.ok(Map.of(

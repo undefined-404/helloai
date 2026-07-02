@@ -40,8 +40,9 @@ public class TaskController {
             @RequestParam(value = "page", required = false) Integer page,
             @RequestParam(value = "pageSize", defaultValue = "20") int pageSize,
             @RequestParam(value = "status", required = false) String status) {
+        TaskStatus taskStatus = (status != null && !status.isBlank()) ? TaskStatus.valueOf(status) : null;
         var wrapper = new LambdaQueryWrapper<Task>()
-                .eq(status != null && !status.isBlank(), Task::getStatus, TaskStatus.valueOf(status))
+                .eq(taskStatus != null, Task::getStatus, taskStatus)
                 .orderByDesc(Task::getCreateTime);
 
         // 前端直接使用列表（不传 page 时返回全部）

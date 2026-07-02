@@ -38,6 +38,13 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import request from '@/api/request'
 
+interface LoginResponse {
+  token: string
+  type: 'admin' | 'agent'
+  displayName?: string
+  role?: string
+}
+
 const router = useRouter()
 const formRef = ref()
 const loading = ref(false)
@@ -66,7 +73,7 @@ async function handleLogin() {
     if (form.type === 'admin') {
       payload.username = form.username || 'admin'
     }
-    const res = await request.post('/auth/login', payload)
+    const res = await request.post<any, LoginResponse>('/auth/login', payload)
     if (form.type === 'admin') {
       sessionStorage.setItem('adminToken', res.token)
       sessionStorage.setItem('adminUser', res.displayName || res.role || 'Admin')

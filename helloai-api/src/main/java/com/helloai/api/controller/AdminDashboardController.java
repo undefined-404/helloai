@@ -155,7 +155,7 @@ public class AdminDashboardController {
      * 趋势数据（近 N 天）
      */
     @GetMapping("/trends")
-    public R<DashboardTrend> trends(@RequestParam(defaultValue = "7") int days) {
+    public R<DashboardTrend> trends(@RequestParam(value = "days", defaultValue = "7") int days) {
         OffsetDateTime start = OffsetDateTime.now().minusDays(days);
 
         DashboardTrend trend = new DashboardTrend();

@@ -25,8 +25,8 @@ public class ActivityController {
     public R<?> list(
             @RequestParam(value = "agentId", required = false) Long agentId,
             @RequestParam(value = "subTaskId", required = false) Long subTaskId,
-            @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "30") int pageSize) {
+            @RequestParam(value = "page", defaultValue = "1") int page,
+            @RequestParam(value = "pageSize", defaultValue = "30") int pageSize) {
         var wrapper = new LambdaQueryWrapper<ActivityLog>()
                 .eq(agentId != null, ActivityLog::getAgentId, agentId)
                 .eq(subTaskId != null, ActivityLog::getSubTaskId, subTaskId)

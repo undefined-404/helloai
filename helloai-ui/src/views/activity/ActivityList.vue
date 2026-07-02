@@ -23,6 +23,14 @@ import { activityApi } from '@/api/activity'
 
 const list = ref<any[]>([])
 const loading = ref(false)
-async function load() { loading.value = true; try { list.value = await activityApi.list() } finally { loading.value = false } }
+async function load() {
+  loading.value = true
+  try {
+    const result = await activityApi.list()
+    list.value = Array.isArray(result) ? result : []
+  } finally {
+    loading.value = false
+  }
+}
 onMounted(() => load())
 </script>

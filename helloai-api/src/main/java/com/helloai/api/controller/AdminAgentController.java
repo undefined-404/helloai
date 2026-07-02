@@ -30,14 +30,16 @@ public class AdminAgentController {
      */
     @GetMapping
     public R<PageResult<AgentResponse>> list(
-            @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "20") int pageSize,
+            @RequestParam(value = "page", defaultValue = "1") int page,
+            @RequestParam(value = "pageSize", defaultValue = "20") int pageSize,
             @RequestParam(value = "role", required = false) String role,
             @RequestParam(value = "status", required = false) String status,
             @RequestParam(value = "keyword", required = false) String keyword) {
+        AgentRole roleFilter = (role != null && !role.isBlank()) ? AgentRole.valueOf(role.toUpperCase()) : null;
+        AgentStatus statusFilter = (status != null && !status.isBlank()) ? AgentStatus.valueOf(status.toUpperCase()) : null;
         var wrapper = new LambdaQueryWrapper<Agent>()
-                .eq(role != null && !role.isBlank(), Agent::getRole, AgentRole.valueOf(role.toUpperCase()))
-                .eq(status != null && !status.isBlank(), Agent::getStatus, AgentStatus.valueOf(status.toUpperCase()))
+                .eq(roleFilter != null, Agent::getRole, roleFilter)
+                .eq(statusFilter != null, Agent::getStatus, statusFilter)
                 .and(keyword != null && !keyword.isBlank(), w -> w
                         .like(Agent::getName, keyword)
                         .or().like(Agent::getRemark, keyword))
