@@ -1,0 +1,111 @@
+﻿/* ========================================
+   HelloAI — Animations & Motion System
+   ======================================== */
+
+/* ---- Fade + Slide Up (entrance) ---- */
+@keyframes ha-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ---- Fade In ---- */
+@keyframes ha-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ---- Scale In ---- */
+@keyframes ha-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ---- Slide In Right (for sidebar) ---- */
+@keyframes ha-slide-right {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* ---- Shimmer (skeleton loading) ---- */
+@keyframes ha-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* ---- Utility Classes ---- */
+
+/* Staggered entrance — apply to children */
+.ha-stagger-entrance > * {
+  opacity: 0;
+  animation: ha-fade-up var(--ha-duration-entrance) var(--ha-ease-out) forwards;
+}
+.ha-stagger-entrance > *:nth-child(1)  { animation-delay: 0ms; }
+.ha-stagger-entrance > *:nth-child(2)  { animation-delay: 80ms; }
+.ha-stagger-entrance > *:nth-child(3)  { animation-delay: 160ms; }
+.ha-stagger-entrance > *:nth-child(4)  { animation-delay: 240ms; }
+.ha-stagger-entrance > *:nth-child(5)  { animation-delay: 320ms; }
+.ha-stagger-entrance > *:nth-child(6)  { animation-delay: 400ms; }
+.ha-stagger-entrance > *:nth-child(7)  { animation-delay: 480ms; }
+.ha-stagger-entrance > *:nth-child(8)  { animation-delay: 560ms; }
+
+/* Single entrance */
+.ha-entrance-up {
+  animation: ha-fade-up var(--ha-duration-slow) var(--ha-ease-out) both;
+}
+.ha-entrance-fade {
+  animation: ha-fade-in var(--ha-duration-slow) var(--ha-ease-out) both;
+}
+.ha-entrance-scale {
+  animation: ha-scale-in 400ms var(--ha-ease-out) both;
+}
+
+/* Page transition wrapper */
+.ha-page-enter {
+  animation: ha-fade-up 400ms var(--ha-ease-out) both;
+}
+
+/* Row entrance for tables */
+.ha-row-entrance {
+  animation: ha-fade-in var(--ha-duration-normal) var(--ha-ease-out) both;
+}
+
+/* Card hover lift */
+.ha-card-lift {
+  transition: transform var(--ha-duration-normal) var(--ha-ease-out),
+              box-shadow var(--ha-duration-normal) var(--ha-ease-out);
+}
+.ha-card-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.10) !important;
+}
+
+/* Skeleton loading */
+.ha-skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--ha-surface) 25%,
+    var(--ha-surface-hover) 37%,
+    var(--ha-surface) 63%
+  );
+  background-size: 200% 100%;
+  animation: ha-shimmer 1.5s ease-in-out infinite;
+  border-radius: var(--ha-radius-sm);
+}

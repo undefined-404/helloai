@@ -1,0 +1,461 @@
+﻿/* ========================================
+   HelloAI Design System — CSS Variables
+   Linear-inspired, blue-primary, cool-neutral
+   ======================================== */
+
+:root {
+  /* ---- Colors ---- */
+  --ha-primary: #2B5FD9;
+  --ha-primary-hover: #224DB8;
+  --ha-primary-active: #1B3D8F;
+  --ha-primary-muted: #EEF2FF;
+  --ha-primary-light: #E8EDFF;
+
+  --ha-bg: #FFFFFF;
+  --ha-surface: #F6F8FA;
+  --ha-surface-hover: #F0F2F5;
+  --ha-surface-elevated: #FFFFFF;
+
+  --ha-border: #E2E5EA;
+  --ha-border-light: #F0F2F5;
+
+  --ha-ink: #1A1C1E;
+  --ha-ink-secondary: #4B5563;
+  --ha-muted: #6B7280;
+
+  --ha-success: #10B981;
+  --ha-success-bg: #ECFDF5;
+  --ha-warning: #F59E0B;
+  --ha-warning-bg: #FFFBEB;
+  --ha-danger: #EF4444;
+  --ha-danger-bg: #FEF2F2;
+  --ha-info: #3B82F6;
+  --ha-info-bg: #EFF6FF;
+
+  /* ---- Typography ---- */
+  --ha-font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  --ha-font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+
+  /* ---- Border Radius ---- */
+  --ha-radius-sm: 4px;
+  --ha-radius-md: 8px;
+  --ha-radius-lg: 12px;
+  --ha-radius-xl: 16px;
+
+  /* ---- Shadows ---- */
+  --ha-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06);
+  --ha-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.08);
+  --ha-shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.12);
+
+  /* ---- Spacing ---- */
+  --ha-space-xs: 4px;
+  --ha-space-sm: 8px;
+  --ha-space-md: 16px;
+  --ha-space-lg: 24px;
+  --ha-space-xl: 32px;
+  --ha-space-2xl: 48px;
+
+  /* ---- Transitions ---- */
+  --ha-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ha-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ha-duration-fast: 150ms;
+  --ha-duration-normal: 250ms;
+  --ha-duration-slow: 400ms;
+  --ha-duration-entrance: 500ms;
+}
+
+/* ---- Global Base Styles ---- */
+* {
+  box-sizing: border-box;
+}
+
+html {
+  font-family: var(--ha-font-family);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  color: var(--ha-ink);
+  background: var(--ha-bg);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* ---- Scrollbar (Webkit) ---- */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+/* ---- Selection ---- */
+::selection {
+  background: var(--ha-primary-muted);
+  color: var(--ha-primary);
+}
+
+/* ========================================
+   Element Plus Overrides
+   ======================================== */
+
+/* ---- Buttons ---- */
+.el-button {
+  --el-button-border-radius: var(--ha-radius-md) !important;
+  font-family: var(--ha-font-family);
+  transition: all var(--ha-duration-fast) var(--ha-ease-out) !important;
+}
+.el-button--primary {
+  --el-button-bg-color: var(--ha-primary) !important;
+  --el-button-border-color: var(--ha-primary) !important;
+  --el-button-hover-bg-color: var(--ha-primary-hover) !important;
+  --el-button-hover-border-color: var(--ha-primary-hover) !important;
+  --el-button-active-bg-color: var(--ha-primary-active) !important;
+}
+.el-button--small {
+  --el-button-size: 28px;
+  font-size: 13px;
+}
+
+/* ---- Cards ---- */
+.el-card {
+  --el-card-border-color: transparent !important;
+  --el-card-padding: 20px;
+  border-radius: var(--ha-radius-lg) !important;
+  background: var(--ha-surface-elevated) !important;
+  box-shadow: var(--ha-shadow-sm) !important;
+  border: none !important;
+  transition: box-shadow var(--ha-duration-normal) var(--ha-ease-out),
+              transform var(--ha-duration-normal) var(--ha-ease-out);
+}
+.el-card:hover {
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.10) !important;
+}
+.el-card.is-never-shadow {
+  box-shadow: none !important;
+}
+.el-card__header {
+  padding: 16px 20px !important;
+  border-bottom: 1px solid var(--ha-border-light) !important;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ha-ink);
+}
+
+/* ---- Table ---- */
+.el-table {
+  --el-table-border-color: transparent !important;
+  --el-table-header-bg-color: transparent !important;
+  --el-table-tr-bg-color: transparent !important;
+  --el-table-row-hover-bg-color: var(--ha-surface-hover) !important;
+  --el-table-current-row-bg-color: var(--ha-primary-muted) !important;
+  font-size: 14px;
+}
+.el-table th.el-table__cell {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--ha-muted) !important;
+  background: transparent !important;
+  padding: 10px 16px !important;
+  border-bottom: 1px solid var(--ha-border-light) !important;
+}
+.el-table td.el-table__cell {
+  padding: 12px 16px !important;
+  border-bottom: 1px solid var(--ha-border-light) !important;
+}
+.el-table--border td.el-table__cell {
+  border-right: none !important;
+}
+.el-table--border th.el-table__cell {
+  border-right: none !important;
+}
+.el-table__body-wrapper tr:last-child td {
+  border-bottom: none !important;
+}
+.el-table--striped .el-table__body tr.el-table__row--striped td {
+  background: #FAFBFC !important;
+}
+
+/* ---- Form ---- */
+.el-input {
+  --el-input-border-radius: var(--ha-radius-md) !important;
+  --el-input-focus-border-color: var(--ha-primary) !important;
+  --el-input-hover-border-color: #c4c8cf !important;
+  --el-input-height: 32px;
+  font-family: var(--ha-font-family);
+}
+.el-input__wrapper {
+  border-radius: var(--ha-radius-md) !important;
+  box-shadow: 0 0 0 1px var(--ha-border) inset !important;
+}
+.el-input__wrapper.is-focus {
+  box-shadow: 0 0 0 2px var(--ha-primary) inset !important;
+}
+.el-input__inner {
+  font-size: 14px;
+}
+.el-input__inner::placeholder {
+  color: var(--ha-muted);
+}
+
+/* ---- Select ---- */
+.el-select {
+  --el-select-border-color-hover: #c4c8cf;
+}
+.el-select__wrapper {
+  border-radius: var(--ha-radius-md) !important;
+  box-shadow: 0 0 0 1px var(--ha-border) inset !important;
+  min-height: 32px;
+}
+.el-select__wrapper.is-focus {
+  box-shadow: 0 0 0 2px var(--ha-primary) inset !important;
+}
+
+/* ---- Tag ---- */
+.el-tag {
+  --el-tag-border-radius: var(--ha-radius-sm);
+  font-family: var(--ha-font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  padding: 0 8px;
+  height: 22px;
+  line-height: 22px;
+  border: none;
+}
+.el-tag--success {
+  --el-tag-bg-color: var(--ha-success-bg);
+  --el-tag-text-color: #059669;
+}
+.el-tag--warning {
+  --el-tag-bg-color: var(--ha-warning-bg);
+  --el-tag-text-color: #D97706;
+}
+.el-tag--danger {
+  --el-tag-bg-color: var(--ha-danger-bg);
+  --el-tag-text-color: #DC2626;
+}
+.el-tag--info {
+  --el-tag-bg-color: var(--ha-info-bg);
+  --el-tag-text-color: var(--ha-info);
+}
+
+/* ---- Menu ---- */
+.el-menu {
+  border-right: none !important;
+}
+.el-menu-item {
+  font-size: 14px !important;
+  border-radius: 6px !important;
+  margin: 2px 8px !important;
+  width: auto !important;
+  transition: all var(--ha-duration-fast) var(--ha-ease-out) !important;
+}
+.el-menu-item.is-active {
+  background: var(--ha-primary-muted) !important;
+  color: var(--ha-primary) !important;
+}
+
+/* ---- Dialog ---- */
+.el-dialog {
+  --el-dialog-border-radius: var(--ha-radius-xl) !important;
+  box-shadow: var(--ha-shadow-lg) !important;
+}
+.el-dialog__header {
+  padding: 20px 24px 0 !important;
+  font-weight: 600;
+  font-size: 16px;
+}
+.el-dialog__body {
+  padding: 16px 24px !important;
+}
+.el-dialog__footer {
+  padding: 0 24px 20px !important;
+}
+
+/* ---- Breadcrumb ---- */
+.el-breadcrumb {
+  font-size: 13px !important;
+}
+.el-breadcrumb__inner {
+  color: var(--ha-muted) !important;
+}
+.el-breadcrumb__inner.is-link {
+  color: var(--ha-primary) !important;
+}
+
+/* ---- Empty ---- */
+.el-empty {
+  padding: 40px 0;
+}
+.el-empty__description p {
+  color: var(--ha-muted) !important;
+  font-size: 14px;
+}
+
+/* ---- Pagination ---- */
+.el-pagination {
+  --el-pagination-button-color: var(--ha-ink);
+  --el-pagination-hover-color: var(--ha-primary);
+  font-family: var(--ha-font-family);
+}
+.el-pagination.is-background .el-pager li {
+  border-radius: var(--ha-radius-md) !important;
+}
+.el-pagination.is-background .el-pager li.is-active {
+  background: var(--ha-primary) !important;
+}
+
+/* ---- Dropdown ---- */
+.el-dropdown-menu {
+  border-radius: var(--ha-radius-md) !important;
+  box-shadow: var(--ha-shadow-md) !important;
+  border: none !important;
+  padding: 4px !important;
+}
+.el-dropdown-menu__item {
+  border-radius: var(--ha-radius-sm) !important;
+  font-size: 13px !important;
+  padding: 6px 12px !important;
+}
+
+/* ---- Avatar ---- */
+.el-avatar {
+  --el-avatar-bg-color: var(--ha-primary-muted);
+}
+
+/* ---- Divider ---- */
+.el-divider {
+  --el-divider-border-color: var(--ha-border-light);
+}
+
+/* ---- Loading ---- */
+.el-loading-spinner .path {
+  stroke: var(--ha-primary) !important;
+}
+
+/* ---- Menu (dark sidebar) ---- */
+.sidebar-menu.el-menu {
+  background: transparent !important;
+}
+.sidebar-menu .el-menu-item {
+  color: rgba(255, 255, 255, 0.65) !important;
+  border-radius: 6px !important;
+  margin: 2px 10px !important;
+  padding: 0 12px !important;
+  height: 38px !important;
+  line-height: 38px !important;
+}
+.sidebar-menu .el-menu-item:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: rgba(255, 255, 255, 0.90) !important;
+}
+.sidebar-menu .el-menu-item.is-active {
+  background: var(--ha-primary) !important;
+  color: #ffffff !important;
+}
+.sidebar-menu .el-menu-item .el-icon {
+  margin-right: 8px;
+  font-size: 18px;
+}
+
+/* ---- Card Header (shared) ---- */
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.card-header span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* ========================================
+   Redesign-Skill Audit Fixes
+   ======================================== */
+
+/* ---- Tinted Shadows (not generic black) ---- */
+:root {
+  --ha-shadow-sm: 0 1px 3px rgba(43, 95, 217, 0.08);
+  --ha-shadow-md: 0 4px 16px rgba(43, 95, 217, 0.10);
+  --ha-shadow-lg: 0 8px 32px rgba(43, 95, 217, 0.14);
+}
+
+/* ---- Text-wrap: balance on headings ---- */
+h1, h2, h3, h4, h5, h6,
+.el-card__header,
+.card-header span {
+  text-wrap: balance;
+}
+
+/* ---- Tabular figures on data ---- */
+.el-table td.el-table__cell,
+.stat-value,
+[class*="stat-"] .value {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Body text max-width for readability ---- */
+p, .el-empty__description p {
+  max-width: 65ch;
+}
+
+/* ---- Subtle link underlines ---- */
+a {
+  color: var(--ha-primary);
+  text-decoration: none;
+  transition: color var(--ha-duration-fast);
+}
+a:hover {
+  color: var(--ha-primary-hover);
+  text-decoration: underline;
+}
+
+/* ---- Minimum height: 100dvh for fullscreen sections ---- */
+.fullscreen-section {
+  min-height: 100dvh;
+  min-height: 100svh;
+}
+
+/* ---- Skip to content (a11y) hidden but accessible ---- */
+.skip-to-content {
+  position: absolute;
+  top: -40px;
+  left: 0;
+  z-index: 9999;
+  padding: 8px 16px;
+  background: var(--ha-primary);
+  color: white;
+  font-size: 14px;
+  transition: top 150ms;
+}
+.skip-to-content:focus {
+  top: 0;
+}
+
+/* ---- Consistent heading letter-spacing ---- */
+.el-card__header {
+  letter-spacing: -0.01em;
+}
+
+/* ---- Orphan word prevention ---- */
+p, .el-descriptions__title, .card-header span {
+  text-wrap: pretty;
+}

@@ -5,9 +5,9 @@ spring:
   application:
     name: helloai
   datasource:
-    url: jdbc:postgresql://localhost:25432/helloai?currentSchema=public&reWriteBatchedInserts=true
-    username: helloai
-    password: helloai_123
+    url: jdbc:postgresql://localhost:15432/helloai?currentSchema=public&reWriteBatchedInserts=true
+    username: postgres
+    password: postgres
     driver-class-name: org.postgresql.Driver
     hikari:
       maximum-pool-size: 20

@@ -14,11 +14,11 @@ services:
     container_name: helloai-postgres
     restart: unless-stopped
     ports:
-      - "25432:5432"
+      - "15432:5432"
     environment:
       POSTGRES_DB: helloai
-      POSTGRES_USER: helloai
-      POSTGRES_PASSWORD: helloai_123
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

@@ -1,20 +1,22 @@
-<template>
-  <el-card>
-    <template #header>
-      <div class="card-header">
-        <span><el-icon><Notification /></el-icon> 活动流</span>
-        <el-button size="small" type="primary" @click="load">刷新</el-button>
-      </div>
-    </template>
-    <el-table :data="list" border stripe v-loading="loading" style="width:100%">
-      <el-table-column prop="id" label="ID" width="70" />
-      <el-table-column prop="agentId" label="Agent" width="80" />
-      <el-table-column prop="subTaskId" label="子任务" width="80" />
-      <el-table-column prop="action" label="行为" min-width="160" />
-      <el-table-column prop="createTime" label="时间" width="170" />
-    </el-table>
-    <el-empty v-if="!list.length && !loading" description="暂无活动" />
-  </el-card>
+﻿<template>
+  <div class="page ha-entrance-up">
+    <el-card>
+      <template #header>
+        <div class="card-header">
+          <span>活动流</span>
+          <el-button size="small" type="primary" @click="load">刷新</el-button>
+        </div>
+      </template>
+      <el-table :data="list" border stripe v-loading="loading" style="width:100%">
+        <el-table-column prop="id" label="ID" width="70" />
+        <el-table-column prop="agentId" label="Agent" width="80" />
+        <el-table-column prop="subTaskId" label="子任务" width="80" />
+        <el-table-column prop="action" label="行为" min-width="160" />
+        <el-table-column prop="createTime" label="时间" width="170" />
+      </el-table>
+      <el-empty v-if="!list.length && !loading" description="暂无活动" />
+    </el-card>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -34,3 +36,7 @@ async function load() {
 }
 onMounted(() => load())
 </script>
+
+<style scoped>
+.page { max-width: 1200px; }
+</style>
