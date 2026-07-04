@@ -20,10 +20,15 @@ public class AdminPromptController {
     private final PromptTemplateService promptTemplateService;
 
     /**
-     * 按角色获取模板列表
+     * 获取模板列表（可按角色、分类筛选）
      */
     @GetMapping
-    public R<List<PromptTemplateResponse>> list(@RequestParam(value = "role", required = false) String role) {
+    public R<List<PromptTemplateResponse>> list(
+            @RequestParam(value = "role", required = false) String role,
+            @RequestParam(value = "category", required = false) String category) {
+        if (category != null && !category.isBlank()) {
+            return R.ok(promptTemplateService.getByCategory(category).stream().map(this::toResponse).toList());
+        }
         if (role != null && !role.isBlank()) {
             return R.ok(promptTemplateService.getByRole(role).stream().map(this::toResponse).toList());
         }

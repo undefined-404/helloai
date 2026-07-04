@@ -30,6 +30,17 @@ public class PromptTemplateService extends ServiceImpl<PromptTemplateMapper, Pro
     }
 
     /**
+     * 按分类获取模板列表
+     */
+    public List<PromptTemplate> getByCategory(String category) {
+        return lambdaQuery()
+                .eq(PromptTemplate::getCategory, category)
+                .orderByDesc(PromptTemplate::getIsDefault)
+                .orderByDesc(PromptTemplate::getVersion)
+                .list();
+    }
+
+    /**
      * 获取角色的默认模板
      */
     public PromptTemplate getDefaultByRole(String role) {
