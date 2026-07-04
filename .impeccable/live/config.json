@@ -1,8 +1,6 @@
-﻿{
-    "files":  [
-                  "index.html"
-              ],
-    "insertBefore":  "\u003c/body\u003e",
-    "commentSyntax":  "html",
-    "cspChecked":  true
+{
+  "files": ["helloai-ui/index.html"],
+  "insertBefore": "</body>",
+  "commentSyntax": "html",
+  "cspChecked": true
 }

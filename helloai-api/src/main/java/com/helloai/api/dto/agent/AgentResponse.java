@@ -5,6 +5,7 @@ import com.helloai.common.constant.AgentStatus;
 import lombok.Data;
 
 import java.time.OffsetDateTime;
+import java.util.Map;
 
 @Data
 public class AgentResponse {
@@ -13,6 +14,8 @@ public class AgentResponse {
     private AgentRole role;
     private String apiKey;
     private String modelType;
+    private Map<String, Object> modelConfig;
+    private String specializationSlug;
     private AgentStatus status;
     private Integer score;
     private String remark;

@@ -1,129 +1,304 @@
 <template>
   <div class="page ha-entrance-up">
-    <el-card>
-      <template #header>
-        <div class="card-header">
-          <span>Agent 管理</span>
-          <el-button size="small" type="primary" @click="registerDialog = true">注册 Agent</el-button>
+    <!-- 工具栏 -->
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <el-input
+          v-model="keyword"
+          placeholder="搜索 Agent 名称或描述..."
+          prefix-icon="Search"
+          clearable
+          class="search-input"
+          @keyup.enter="search"
+          @clear="search"
+        />
+        <div class="role-filters">
+          <button
+            v-for="r in roleFilters"
+            :key="r.value"
+            :class="['role-pill', { active: filterRole === r.value }]"
+            @click="setFilter(r.value)"
+          >
+            {{ r.label }}
+          </button>
         </div>
-      </template>
-      <el-table :data="list" border stripe v-loading="loading" style="width:100%">
-        <el-table-column prop="name" label="名称" min-width="140" />
-        <el-table-column label="角色" width="120">
-          <template #default="{ row }">
-            <el-tag :type="roleTag(row.role)" size="small">{{ row.role }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" width="90">
-          <template #default="{ row }">
-            <el-tag :type="row.status==='ACTIVE'?'success':'info'" size="small">{{ row.status }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="score" label="积分" width="80" sortable />
-        <el-table-column prop="modelType" label="模型" min-width="120" />
-        <el-table-column label="注册时间" width="170">
-          <template #default="{ row }">{{ fmtTime(row.createTime) }}</template>
-        </el-table-column>
-        <el-table-column label="操作" :width="ACTION.THREE" fixed="right">
-          <template #default="{ row }">
-            <div class="action-cell">
-              <el-button size="small" @click="router.push('/sub-tasks?agent='+row.id)">任务</el-button>
-              <el-button size="small" @click="router.push('/inbox')">收件箱</el-button>
-              <el-button size="small" type="warning" @click="handleResetKey(row)">重置Key</el-button>
-            </div>
-          </template>
-        </el-table-column>
-      </el-table>
-      <el-empty v-if="!list.length && !loading" description="暂无 Agent" />
+      </div>
+      <div class="toolbar-right">
+        <el-button :icon="Refresh" :loading="loading" @click="load()">刷新</el-button>
+        <el-button type="primary" @click="registerDialog = true">注册 Agent</el-button>
+      </div>
+    </div>
 
-      <el-dialog v-model="registerDialog" title="注册新 Agent" width="480px" top="5vh">
-        <el-form ref="formRef" :model="form" :rules="rules" label-width="80px">
-          <el-form-item label="名称" prop="name">
-            <el-input v-model="form.name" />
-          </el-form-item>
-          <el-form-item label="角色" prop="role">
-            <el-select v-model="form.role" style="width:100%">
-              <el-option label="规划器 PLANNER" value="PLANNER" />
-              <el-option label="执行器 EXECUTOR" value="EXECUTOR" />
-              <el-option label="审查器 REVIEWER" value="REVIEWER" />
-              <el-option label="巡逻 PATROL" value="PATROL" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="专业化" v-if="form.role==='EXECUTOR'">
-            <el-select v-model="form.specializationSlug" style="width:100%" clearable placeholder="选择 Agent 专业化配置">
-              <el-option v-for="s in specOptions" :key="s.value" :label="s.label" :value="s.value" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="描述">
-            <el-input v-model="form.description" type="textarea" :rows="2" />
-          </el-form-item>
-        </el-form>
-        <template #footer>
-          <el-button @click="registerDialog=false">取消</el-button>
-          <el-button type="primary" :loading="registering" @click="handleRegister">注册</el-button>
-        </template>
-      </el-dialog>
-    </el-card>
+    <!-- 卡片网格 -->
+    <div v-loading="loading" class="card-grid" v-if="!loading || list.length > 0">
+      <AgentCard
+        v-for="(agent, idx) in list"
+        :key="agent.id"
+        :agent="agent"
+        :index="idx"
+        @click="goDetail"
+        @edit="openEdit"
+        @toggle-status="openToggleStatus"
+        @delete="openDelete"
+      />
+
+      <!-- 空状态 -->
+      <el-empty
+        v-if="!loading && list.length === 0"
+        description="暂无 Agent"
+        :image-size="80"
+        style="grid-column: 1 / -1"
+      />
+    </div>
+
+    <!-- 骨架加载 -->
+    <div v-if="loading && list.length === 0" class="card-grid">
+      <div v-for="i in 6" :key="i" class="ha-skeleton" style="height:180px;border-radius:var(--ha-radius-lg)" />
+    </div>
+
+    <!-- 分页 -->
+    <div v-if="total > 0" class="pagination-bar">
+      <span class="page-info">第 {{ current }} / {{ pages }} 页，共 {{ total }} 条</span>
+      <el-pagination
+        background
+        layout="prev, pager, next"
+        :total="total"
+        :page-size="pageSize"
+        :current-page="current"
+        @current-change="loadPage"
+      />
+    </div>
+
+    <!-- 注册弹窗 -->
+    <el-dialog v-model="registerDialog" title="注册新 Agent" width="480px" top="5vh">
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="80px">
+        <el-form-item label="名称" prop="name">
+          <el-input v-model="form.name" />
+        </el-form-item>
+        <el-form-item label="角色" prop="role">
+          <el-select v-model="form.role" style="width:100%">
+            <el-option label="规划器 PLANNER" value="PLANNER" />
+            <el-option label="执行器 EXECUTOR" value="EXECUTOR" />
+            <el-option label="审查器 REVIEWER" value="REVIEWER" />
+            <el-option label="巡逻 PATROL" value="PATROL" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="专业化" v-if="form.role === 'EXECUTOR'">
+          <el-select v-model="form.specializationSlug" clearable placeholder="选择 Agent 专业化配置" style="width:100%">
+            <el-option label="无 (默认)" value="" />
+            <el-option label="AI酱瓜-后端" value="executor-backend" />
+            <el-option label="AI小珂-前端" value="executor-frontend" />
+            <el-option label="AI小云-运维" value="executor-devops" />
+            <el-option label="AI小吴-调研" value="executor-researcher" />
+            <el-option label="AI小安-测试" value="executor-tester" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="form.description" type="textarea" :rows="2" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="registerDialog = false">取消</el-button>
+        <el-button type="primary" :loading="registering" @click="handleRegister">注册</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 编辑弹窗 -->
+    <AgentEditDialog v-model="editDialog" :agent="editTarget" @saved="load()" />
+
+    <!-- 状态切换弹窗 -->
+    <AgentStatusDialog v-model="statusDialog" :agent="statusTarget" @done="load()" />
+
+    <!-- 删除确认弹窗 -->
+    <AgentDeleteDialog v-model="deleteDialog" :agent="deleteTarget" @done="load()" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted, reactive } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { Search, Refresh } from '@element-plus/icons-vue'
 import { agentApi } from '@/api/agent'
-import { ACTION } from '@/utils/tableConfig'
-import { fmtTime } from '@/utils/tableConfig'
+import type { AgentListItem, AgentRole } from '@/types'
+import AgentCard from './components/AgentCard.vue'
+import AgentEditDialog from './components/AgentEditDialog.vue'
+import AgentStatusDialog from './components/AgentStatusDialog.vue'
+import AgentDeleteDialog from './components/AgentDeleteDialog.vue'
 
 const router = useRouter()
-const list = ref<any[]>([])
+
+// ── 筛选 ──
+const keyword = ref('')
+const filterRole = ref<string>('all')
+const roleFilters = [
+  { value: 'all', label: '全部' },
+  { value: 'PLANNER', label: '规划者' },
+  { value: 'EXECUTOR', label: '执行者' },
+  { value: 'REVIEWER', label: '审查者' },
+  { value: 'PATROL', label: '巡查者' },
+]
+
+function setFilter(v: string) {
+  filterRole.value = v
+  load()
+}
+
+function search() {
+  load()
+}
+
+// ── 分页 ──
+const list = ref<AgentListItem[]>([])
+const total = ref(0)
+const current = ref(1)
+const pages = ref(1)
+const pageSize = 12
 const loading = ref(false)
+
+async function load(page = 1) {
+  loading.value = true
+  try {
+    const params: any = { page, pageSize }
+    if (filterRole.value !== 'all') params.role = filterRole.value
+    if (keyword.value) params.keyword = keyword.value
+    const res = await agentApi.adminList(params)
+    list.value = res.list || []
+    total.value = res.total
+    current.value = page
+    pages.value = res.pages || 1
+  } finally {
+    loading.value = false
+  }
+}
+
+function loadPage(p: number) { load(p) }
+
+function goDetail(id: number) {
+  router.push(`/agents/${id}`)
+}
+
+// ── 注册 ──
 const registerDialog = ref(false)
 const registering = ref(false)
 const formRef = ref()
-const form = ref({ name: '', role: 'EXECUTOR', specializationSlug: '', description: '' })
-const rules = { name: [{ required: true }], role: [{ required: true }] }
-
-const specOptions = [
-  { label: '无 (默认)', value: '' },
-  { label: 'AI酱瓜-后端', value: 'executor-backend' },
-  { label: 'AI小珂-前端', value: 'executor-frontend' },
-  { label: 'AI小云-运维', value: 'executor-devops' },
-  { label: 'AI小吴-调研', value: 'executor-researcher' },
-  { label: 'AI小安-测试', value: 'executor-tester' }
-]
-
-const roleMap: Record<string, string> = { PLANNER: '', EXECUTOR: 'primary', REVIEWER: 'success', PATROL: 'warning' }
-function roleTag(role: string) { return roleMap[role] || '' }
-
-async function load() {
-  loading.value = true
-  try { list.value = await agentApi.list() } finally { loading.value = false }
-}
+const form = reactive({ name: '', role: 'EXECUTOR', description: '', specializationSlug: '' })
+const rules = { name: [{ required: true, message: '请输入名称', trigger: 'blur' }] }
 
 async function handleRegister() {
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
   registering.value = true
   try {
-    const res: any = await agentApi.register({ name: form.value.name, role: form.value.role, description: form.value.description })
+    const res: any = await agentApi.register({ name: form.name, role: form.role, description: form.description })
     ElMessage.success('注册成功，API Key: ' + (res.apiKey || ''))
     registerDialog.value = false
     load()
   } finally { registering.value = false }
 }
 
-async function handleResetKey(row: any) {
-  await ElMessageBox.confirm(`确定重置 ${row.name} 的 API Key？旧 Key 将立即失效。`, '确认重置', { type: 'warning' })
-  try {
-    const res = await agentApi.resetKey(row.id)
-    ElMessage.success('新 API Key: ' + (res.apiKey || ''))
-  } catch (e) { /* */ }
-}
+// ── 编辑/状态/删除操作 ──
+const editDialog = ref(false)
+const editTarget = ref<AgentListItem | null>(null)
+function openEdit(agent: AgentListItem) { editTarget.value = agent; editDialog.value = true }
+
+const statusDialog = ref(false)
+const statusTarget = ref<AgentListItem | null>(null)
+function openToggleStatus(agent: AgentListItem) { statusTarget.value = agent; statusDialog.value = true }
+
+const deleteDialog = ref(false)
+const deleteTarget = ref<AgentListItem | null>(null)
+function openDelete(agent: AgentListItem) { deleteTarget.value = agent; deleteDialog.value = true }
 
 onMounted(() => load())
 </script>
 
 <style scoped>
-.page { max-width: var(--ha-content-width); }
+/* ── 工具栏 ── */
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.toolbar-left {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.search-input {
+  max-width: 360px;
+}
+
+.role-filters {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.role-pill {
+  padding: 4px 14px;
+  font-size: 13px;
+  font-family: var(--ha-font-family);
+  border: 1px solid var(--ha-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ha-ink-secondary);
+  cursor: pointer;
+  transition: all var(--ha-duration-fast) var(--ha-ease-out);
+}
+
+.role-pill:hover {
+  border-color: var(--ha-primary);
+  color: var(--ha-primary);
+}
+
+.role-pill.active {
+  background: var(--ha-primary);
+  color: #fff;
+  border-color: var(--ha-primary);
+}
+
+/* ── 卡片网格 ── */
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+/* ── 分页 ── */
+.pagination-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 24px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.page-info {
+  font-size: 13px;
+  color: var(--ha-muted);
+}
+
+@media (max-width: 768px) {
+  .card-grid {
+    grid-template-columns: 1fr;
+  }
+  .toolbar {
+    flex-direction: column;
+  }
+  .search-input {
+    max-width: 100%;
+  }
+  .pagination-bar {
+    justify-content: center;
+  }
+}
 </style>

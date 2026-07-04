@@ -25,7 +25,7 @@ class OptionalEnumFilterControllerTest {
         AdminAgentController controller = new AdminAgentController(agentService);
 
         assertThatCode(() -> {
-            var response = controller.list(1, 20, null, null, null);
+            var response = controller.list(1, 20, null, null, null, null, null);
             assertThat(response.getCode()).isEqualTo(200);
             assertThat(response.getData().getList()).isEmpty();
         }).doesNotThrowAnyException();

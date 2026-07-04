@@ -4,12 +4,10 @@
 
 // --- 分页 ---
 export interface PageResult<T> {
-  items: T[]
+  list: T[]
   total: number
-  page: number
-  pageSize: number
-  totalPages: number
-  hasMore: boolean
+  pages: number
+  current: number
 }
 
 // --- 统一返回 ---
@@ -68,10 +66,89 @@ export interface Agent {
   name: string
   role: AgentRole
   modelType: string | null
+  modelConfig: Record<string, any> | null
+  specializationSlug: string | null
   status: AgentStatus
   score: number
   remark: string | null
   createTime: string
+}
+
+export interface AgentListItem {
+  id: number
+  name: string
+  role: AgentRole
+  description: string
+  status: AgentStatus
+  totalScore: number
+  rank: number
+  // workload
+  assignedCount: number
+  inProgressCount: number
+  doneCount: number
+  blockedCount: number
+  reviewCount: number
+  // timeline
+  lastRequestAt: string | null
+  lastActivityAt: string | null
+  createdAt: string
+}
+
+export interface AgentDetail extends AgentListItem {
+  totalAgents: number
+  rewardCount: number
+  penaltyCount: number
+  totalRewardRecords: number
+  apiKey: string
+  modelType: string | null
+  specializationSlug: string | null
+}
+
+export interface AgentRelatedCounts {
+  agentId: number
+  agentName: string
+  subTaskCount: number
+  reviewCount: number
+  rewardCount: number
+  activityCount: number
+  patrolCount: number
+}
+
+export interface AgentDeleteResult {
+  agentName: string
+  subTaskCount: number
+  reviewCount: number
+  rewardCount: number
+  activityCount: number
+  patrolCount: number
+}
+
+export interface ScoreLogItem {
+  id: number
+  agentId: number
+  subTaskId: number | null
+  reason: string
+  delta: number
+  balance: number
+  createTime: string
+}
+
+export interface ActivityLogItem {
+  id: number
+  agentId: number
+  subTaskId: number | null
+  action: string
+  summary: string
+  level: string
+  createTime: string
+}
+
+// --- 角色颜色映射 ---
+export const ROLE_COLOR_MAP: Record<AgentRole, { bar: string; bg: string; text: string; border: string; tagType: '' | 'success' | 'warning' | 'danger' | 'info' | 'primary' }> = {
+  PLANNER:  { bar: '#7C3AED', bg: '#F5F3FF', text: '#6D28D9', border: '#EDE9FE', tagType: '' },
+  EXECUTOR: { bar: '#3B82F6', bg: '#EFF6FF', text: '#2563EB', border: '#DBEAFE', tagType: 'primary' },
+  REVIEWER: { bar: '#F59E0B', bg: '#FFFBEB', text: '#D97706', border: '#FEF3C7', tagType: 'warning' },
+  PATROL:   { bar: '#14B8A6', bg: '#F0FDFA', text: '#0D9488', border: '#CCFBF1', tagType: 'success' },
 }
 
 export interface ReviewRecord {
