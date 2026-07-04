@@ -10,5 +10,8 @@ export const agentApi = {
   },
   register(data: { name: string; role: string; description?: string }) {
     return request.post('/agents/register', data)
+  },
+  resetKey(id: number) {
+    return request.post<any, { apiKey: string; message: string }>(`/admin/agents/${id}/reset-key`)
   }
 }

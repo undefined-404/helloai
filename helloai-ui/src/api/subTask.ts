@@ -28,5 +28,11 @@ export const subTaskApi = {
   },
   available() {
     return request.get<any, SubTask[]>('/sub-tasks/available')
+  },
+  pause(id: number) {
+    return request.post(`/sub-tasks/${id}/pause`)
+  },
+  resume(id: number) {
+    return request.post(`/sub-tasks/${id}/resume`)
   }
 }

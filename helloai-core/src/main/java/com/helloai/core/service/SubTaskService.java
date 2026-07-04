@@ -3,8 +3,12 @@ package com.helloai.core.service;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.core.entity.ReviewRecord;
 import com.helloai.core.entity.SubTask;
+import com.helloai.core.mapper.ReviewRecordMapper;
 import com.helloai.core.mapper.SubTaskMapper;
+import com.helloai.core.service.score.ImplicitScoreCalculator;
+import com.helloai.core.service.score.ImplicitScoreCalculator.ScoreResult;
 import com.helloai.core.statemachine.SubTaskStateMachine;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -12,6 +16,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @Service
@@ -19,6 +26,10 @@ import java.time.OffsetDateTime;
 public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
 
     private final AgentOutboxService agentOutboxService;
+    private final AgentInboxService agentInboxService;
+    private final ReviewRecordMapper reviewRecordMapper;
+    private final ImplicitScoreCalculator implicitScoreCalculator;
+    private final RewardService rewardService;
 
     @Transactional(rollbackFor = Exception.class)
     public void changeStatus(Long subTaskId, SubTaskStatus newStatus, Long agentId) {
@@ -41,6 +52,9 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
         }
 
         agentOutboxService.createEvent(subTask, newStatus);
+
+        // v1.1: 投递收件箱通知
+        sendInboxNotification(subTask, newStatus, oldStatus);
 
         log.info("子任务状态变更: subTaskId={}, from={}, to={}, agentId={}",
                 subTaskId, oldStatus, newStatus, agentId);
@@ -68,9 +82,109 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
         SubTaskStateMachine.validate(subTask.getStatus(), SubTaskStatus.DONE);
         subTask.setStatus(SubTaskStatus.DONE);
         subTask.setCompletedAt(OffsetDateTime.now());
+
+        // v1.1: 隐式评分集成
+        if (subTask.getAssignedAgent() != null) {
+            try {
+                List<ReviewRecord> reviews = reviewRecordMapper.selectList(
+                        new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ReviewRecord>()
+                                .eq(ReviewRecord::getSubTaskId, subTaskId)
+                                .orderByAsc(ReviewRecord::getRound));
+                int blockCount = 0; // 可扩展: 从 activity_log 统计
+                int timeoutCount = subTask.getTimeoutCount() != null ? subTask.getTimeoutCount() : 0;
+
+                ScoreResult scoreResult = implicitScoreCalculator.calculate(subTask, reviews, blockCount, timeoutCount);
+
+                // 写回评分结果
+                Map<String, Object> factors = new HashMap<>();
+                factors.put("timeScore", scoreResult.getFactors().getTimeScore());
+                factors.put("qualityScore", scoreResult.getFactors().getQualityScore());
+                factors.put("coopScore", scoreResult.getFactors().getCoopScore());
+                factors.put("stabilityScore", scoreResult.getFactors().getStabilityScore());
+                factors.put("efficiencyScore", scoreResult.getFactors().getEfficiencyScore());
+                subTask.setScoreFactors(factors);
+                subTask.setCompositeScore(scoreResult.getCompositeScore());
+                subTask.setScoreGrade(scoreResult.getGrade());
+
+                // 隐式积分奖惩
+                if (scoreResult.getRewardDelta() != null && scoreResult.getRewardDelta() != 0) {
+                    rewardService.addReward(
+                            subTask.getAssignedAgent(),
+                            "隐式评分(" + scoreResult.getGrade() + "级)",
+                            scoreResult.getRewardDelta(),
+                            subTaskId);
+                }
+
+                log.info("隐式评分完成: subTaskId={}, grade={}, composite={}, delta={}",
+                        subTaskId, scoreResult.getGrade(), scoreResult.getCompositeScore(),
+                        scoreResult.getRewardDelta());
+            } catch (Exception e) {
+                log.error("隐式评分计算失败: subTaskId={}", subTaskId, e);
+                // 评分失败不阻塞 DONE 状态转换
+            }
+        }
+
         updateById(subTask);
         agentOutboxService.createEvent(subTask, SubTaskStatus.DONE);
         log.info("子任务审查通过: subTaskId={}", subTaskId);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public void pause(Long subTaskId) {
+        changeStatus(subTaskId, SubTaskStatus.PAUSED, null);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public void resume(Long subTaskId) {
+        changeStatus(subTaskId, SubTaskStatus.IN_PROGRESS, null);
+    }
+
+    /**
+     * 向相关 Agent 投递收件箱通知
+     */
+    private void sendInboxNotification(SubTask subTask, SubTaskStatus newStatus, SubTaskStatus oldStatus) {
+        String eventId = "subtask." + subTask.getId() + "." + System.currentTimeMillis();
+        Long agentId = subTask.getAssignedAgent();
+        String title = subTask.getTitle();
+
+        try {
+            switch (newStatus) {
+                case ASSIGNED -> {
+                    if (agentId != null) {
+                        agentInboxService.send(agentId, eventId, "sub_task.assigned",
+                                "新任务已分配: " + title,
+                                "交付物: " + (subTask.getDeliverable() != null ? subTask.getDeliverable() : "待确认"),
+                                "sub_task", subTask.getId(), "HIGH");
+                    }
+                }
+                case REWORK -> {
+                    if (agentId != null) {
+                        agentInboxService.send(agentId, eventId, "sub_task.rejected",
+                                "任务需返工: " + title,
+                                "请查审查记录了解具体问题",
+                                "sub_task", subTask.getId(), "HIGH");
+                    }
+                }
+                case BLOCKED -> {
+                    agentInboxService.send(agentId != null ? agentId : 0L, eventId, "sub_task.blocked",
+                            "任务异常: " + title,
+                            "需要 Planner 排障处理",
+                            "sub_task", subTask.getId(), "URGENT");
+                }
+                case PAUSED -> {
+                    if (agentId != null) {
+                        agentInboxService.send(agentId, eventId, "sub_task.paused",
+                                "任务已暂停: " + title,
+                                "请保存当前进度，等待恢复通知",
+                                "sub_task", subTask.getId(), "HIGH");
+                    }
+                }
+                default -> {}
+            }
+        } catch (Exception e) {
+            log.error("收件箱通知发送失败: subTaskId={}, status={}", subTask.getId(), newStatus, e);
+            // 通知失败不影响主流程
+        }
     }
 
     @Transactional(rollbackFor = Exception.class)

@@ -1,21 +1,29 @@
 # HelloAI 代码开发规范
 
 > 适用项目：HelloAI（AI Agent 协作调度平台）  
-> 生效范围：后端单体服务 + 前端管理后台（Vue 3 / shadcn-vue）  
-> 版本：V1.0  
-> 最后更新：2026-07-02  
+> 生效范围：后端单体服务 + 前端管理后台（Vue 3 / Element Plus）  
+> 版本：V1.1  
+> 最后更新：2026-07-03  
+> 变更：修正前端技术栈声明 + 补充注释/接口/常量/配置/资源/日期/空值/测试 8 项规范 + 冗余整合
 > 致敬：Hello World! —— 每一位程序员的第一行代码
 ---
 
 ## 目录
 
 1. [总体原则](#1-总体原则)
+   - [1.x 代码注释规范](#1x-代码注释规范)
 2. [技术栈与版本约束](#2-技术栈与版本约束)
 3. [项目结构与模块职责](#3-项目结构与模块职责)
+   - [3.x 配置属性类规范](#3x-配置属性类规范)
+   - [3.x 资源文件存放规范](#3x-资源文件存放规范)
 4. [命名规范](#4-命名规范)
+   - [4.x 接口使用原则](#4x-接口使用原则)
+   - [4.x 常量与枚举命名](#4x-常量与枚举命名)
 5. [实体类规范](#5-实体类规范)
+   - [5.5 日期时间处理规范](#55-日期时间处理规范)
 6. [Controller 规范](#6-controller-规范)
 7. [Service 规范](#7-service-规范)
+   - [7.6 空值与 Optional 处理规范](#76-空值与-optional-处理规范)
 8. [数据库设计规范](#8-数据库设计规范)
 9. [Outbox 事务性消息规范](#9-outbox-事务性消息规范)
 10. [消息队列编码规范](#10-消息队列编码规范)
@@ -27,6 +35,8 @@
 16. [代码模板（附录）](#16-代码模板附录)
 17. [开发高频校验清单（附录）](#17-开发高频校验清单附录)
 18. [Vue 页面规范](#18-vue-页面规范)
+19. [新增代码前校验清单](#19-新增代码前校验清单)
+20. [测试规范](#20-测试规范)
 
 ---
 
@@ -44,6 +54,41 @@
 | 逻辑删除 | `@TableLogic` 标注 `deleted` 字段，0=未删除 / 1=已删除 |
 | 乐观锁 | 使用 `@Version` 注解，禁止手动写 `version = version + 1` SQL |
 | 状态常量 | **禁止硬编码**，统一使用枚举类（`SubTaskStatus`、`AgentRole` 等） |
+
+---
+
+### 1.x 代码注释规范
+
+| 场景 | 规范 |
+|------|------|
+| 类注释 | 所有 `@Service`、`@Component`、`@RestController` 类**必须**写 Javadoc 类注释，说明职责和主要依赖 |
+| 公共方法 | `public` 方法**建议**写 Javadoc，说明参数、返回值、异常；私有方法用单行注释说明"为什么这样做" |
+| 复杂逻辑 | 超过 10 行的业务逻辑块**必须**加注释，说明意图而非描述代码 |
+| TODO | `// TODO(author): 描述` — 必须带作者和日期 |
+| FIXME | `// FIXME: 描述 (关联Issue)` — 必须关联 Issue 或限期修复 |
+
+```java
+/**
+ * Agent 收件箱服务。
+ * 负责将 MQ 事件投递到各 Agent 的持久化收件箱，支持离线积攒、上线补处理。
+ *
+ * 核心设计：同一 (eventId, agentId) 最多投递一次（联合唯一约束）。
+ */
+@Service
+public class AgentInboxService {
+
+    /**
+     * 向指定 Agent 投递收件箱消息。幂等。
+     *
+     * @param agentId 目标 Agent ID
+     * @param event   MQ 领域事件，含 eventId / type / entityId
+     * @throws BizException 当 Agent 不存在或已禁用时
+     */
+    public void send(Long agentId, DomainEvent event) { ... }
+}
+```
+
+> **原则**: 注释解释"为什么"（Why），代码解释"是什么"（What）。不写 `// i++ 自增` 这类无意义注释。
 
 ---
 
@@ -126,6 +171,65 @@ public class HelloAIApplication {
 | RabbitMQ | 5672 / 15672 | 消息队列 / 管理后台 |
 | MinIO | 9000 / 9001 | 对象存储 / Console |
 
+### 3.x 配置属性类规范
+
+```java
+@Data
+@ConfigurationProperties(prefix = "moss.thread.pool")
+public class MossThreadPoolProperties {
+    /** 核心线程数 */
+    private int coreSize = 8;
+    /** 最大线程数（线上可调至 128/256） */
+    private int maxSize = 64;
+    /** 队列容量 */
+    private int queueCapacity = 1000;
+    /** 空闲线程存活秒数 */
+    private int keepAliveSeconds = 60;
+}
+```
+
+| 规则 | 说明 |
+|------|------|
+| 命名 | `XxxProperties`，如 `AgentConfigProperties`、`MossThreadPoolProperties` |
+| 注解 | `@Data` + `@ConfigurationProperties(prefix = "...")` |
+| 放置位置 | `com.helloai.common.config` |
+| 默认值 | **必须**提供合理默认值，避免配置缺失导致启动失败 |
+| 校验 | 复杂配置类用 `@Validated` + `@Min`/`@Max`/`@NotEmpty` 等约束注解 |
+| 前缀 | 小写 + 点号分隔（`helloai.agent`、`moss.thread.pool`） |
+
+### 3.x 资源文件存放规范
+
+```
+helloai-start/src/main/resources/
+├── application.yml                  # 主配置
+├── db/
+│   └── migration/
+│       ├── V1__init_schema.sql
+│       └── ...
+├── scripts/
+│   └── task-cli.py                  # Agent CLI 工具（可执行脚本）
+├── skills/
+│   ├── planner/
+│   │   └── SKILL.md                 # Planner 技能文档
+│   ├── executor/
+│   │   └── SKILL.md                 # Executor 技能文档
+│   ├── reviewer/
+│   │   └── SKILL.md                 # Reviewer 技能文档
+│   └── patrol/
+│       └── SKILL.md                 # Patrol 技能文档
+└── templates/
+    └── agent-onboarding.md          # 注册引导模板
+```
+
+| 目录 | 用途 |
+|------|------|
+| `scripts/` | 可执行脚本（Python CLI 等） |
+| `skills/` | 角色技能文档（SKILL.md），运行时可替换变量 |
+| `templates/` | 静态文本模板（onboarding 引导等） |
+| `db/migration/` | Flyway 数据库迁移脚本 |
+
+> **强制**: 所有资源文件**必须通过 `ClassPathResource` 读取**，禁止硬编码绝对路径。
+
 ---
 
 ## 4. 命名规范
@@ -196,6 +300,29 @@ com.helloai.{模块名}.{层}
 - 时间字段：`create_time` / `update_time`（**非** `created_at` / `updated_at`）
 - JSONB 字段：`context`、`score_factors`、`detail`、`payload`
 - 布尔/状态：`status`、`deleted`、`result`
+
+### 4.x 接口使用原则
+
+| 场景 | 是否强制接口 | 说明 |
+|------|:----------:|------|
+| Service 层 | **不强制** | 单一实现时直接写 `XxxService` 类即可；存在多实现（如多数据源、Mock）时才提取接口 |
+| Mapper 层 | 不强制 | MyBatis-Plus `BaseMapper` 已满足，自定义方法直接写在 Mapper 接口中即可 |
+| 策略模式 | **强制** | 如 `AgentExecutor`（Claude/Codex/Local 三实现），必须有接口 |
+| Feign 客户端 | **强制** | 未来微服务化时 API 层必须定义接口 |
+
+> **原则**: 不要为了"面向接口编程"而制造空接口。接口是抽象边界的产物，不是代码模板的填充物。
+
+### 4.x 常量与枚举命名
+
+| 类型 | 命名规则 | 示例 |
+|------|----------|------|
+| 常量类 | `XxxConstant`（单数） | `CacheConstant`、`MqConstant` |
+| 常量值 | 全大写 + 下划线 | `MAX_RETRY_COUNT = 5` |
+| 枚举类 | `XxxStatus`、`XxxType`、`XxxRole` | `SubTaskStatus`、`AgentRole` |
+| 枚举值 | 全大写 | `PENDING`、`ASSIGNED`、`IN_PROGRESS` |
+| 配置项前缀 | 小写 + 点号 | `moss.thread.pool.core-size` |
+
+> **禁止**: 在业务代码中硬编码魔法数字（如 `if (status == 3)`、`if ("active".equals(s))`），必须改用枚举。
 
 ---
 
@@ -381,9 +508,31 @@ wrapper.apply("score_factors->>'grade' = {0}", "S")
 wrapper.apply("context @> {0}::jsonb", "{\"hasError\": true}");
 ```
 
----
+### 5.5 日期时间处理规范
 
-## 6. Controller 规范
+| 场景 | Java 类型 | 数据库类型 | 序列化格式 |
+|------|----------|-----------|-----------|
+| 创建/更新时间戳 | `OffsetDateTime` | `timestamptz` | ISO 8601 (`2026-07-03T12:00:00+08:00`) |
+| 纯日期（如交付日期） | `LocalDate` | `date` | `YYYY-MM-DD` |
+| 纯时间（如定时触发） | `LocalTime` | `time` | `HH:mm:ss` |
+| 持续时间 | `java.time.Duration` | — | — |
+
+> **禁止**:
+> - 禁止使用 `java.util.Date` 和 `java.sql.Timestamp`（已过时）
+> - 禁止在数据库使用 `timestamp without time zone`，一律用 `timestamptz`
+> - 禁止在 Controller 层手动格式化时间为字符串，前端负责格式化
+
+**序列化示例**:
+```java
+// 实体中
+private OffsetDateTime createTime;     // MyBatis-Plus 自动映射 timestamptz
+private LocalDate deadlineDate;        // 纯日期字段
+
+// JSON 序列化时自动输出 ISO 8601 格式
+// {"createTime": "2026-07-03T12:00:00+08:00", "deadlineDate": "2026-07-10"}
+```
+
+---
 
 ### 6.1 基本规则
 
@@ -674,6 +823,30 @@ public class ReviewService {
 ```
 
 > ⚠️ **禁止**在跨 Service 调用中使用 `@Transactional(propagation = Propagation.REQUIRES_NEW)`，除非有明确的异步隔离需求。默认使用 `REQUIRED`（同一事务）。
+
+### 7.6 空值与 Optional 处理规范
+
+| 场景 | 规范 |
+|------|------|
+| Service 返回单个实体 | 查不到返回 `null`，调用方用 `Objects.requireNonNullElse` 或判空后抛 `BizException` |
+| Service 返回列表 | 查不到返回 `Collections.emptyList()`，**绝不**返回 `null` |
+| Mapper 查询 | `selectOne` 可能返回 `null`，Controller 层**必须**判空 |
+| Optional | 仅在链式操作中使用（`Optional.ofNullable(x).map(...).orElse(...)`），**禁止**作为方法参数、类字段或返回值类型 |
+
+```java
+// ✅ 推荐：列表方法绝不返回 null
+public List<SubTask> listByStatus(SubTaskStatus status) {
+    List<SubTask> list = lambdaQuery().eq(SubTask::getStatus, status).list();
+    return list != null ? list : Collections.emptyList();
+}
+
+// ❌ 禁止：列表方法可能返回 null
+public List<SubTask> listByStatus(SubTaskStatus status) {
+    return lambdaQuery().eq(SubTask::getStatus, status).list();
+}
+```
+
+> **原则**: 方法返回集合类型时，"没有数据"和"出错"是两个概念。前者返回空集合，后者抛异常。
 
 
 ## 8. 数据库设计规范
@@ -1133,6 +1306,8 @@ public class ContextManager {
 
 ## 16. 代码模板（附录）
 
+> **注意**: 本章为快速拷贝模板，内容与正文第 5-7 章、第 15 章有重叠。**正文规范优先于模板**——模板仅作参考，实际编码以正文规范为准。
+
 ### 16.1 Entity 模板
 
 ```java
@@ -1415,6 +1590,8 @@ public class {Name}CompensationTask {
 
 ## 17. 开发高频校验清单（附录）
 
+> **用途**: 开发中的速查卡片，按类别分类，适合打印贴在显示器旁。提交前的完整 Checklist 见第 19 章。
+
 ### 17.1 后端速查
 
 | 类别 | 快速检查 | 参考章节 |
@@ -1452,7 +1629,7 @@ public class {Name}CompensationTask {
 
 ### 18.1 列表页标准结构
 
-前端使用 Vue 3 + shadcn-vue，列表页遵循以下约定：
+前端使用 Vue 3 + Element Plus，列表页遵循以下约定：
 
 - 列表页优先使用 `<el-card>` 作为根容器，Header 保持"标题 + 右侧操作按钮"的统一结构
 - 表格整体保持流式布局：`<el-table ... style="width:100%">`
@@ -1564,6 +1741,8 @@ export default {
 
 ## 19. 新增代码前校验清单
 
+> **用途**: 提交 PR 前的完整逐项 Checklist。开发中快速查阅用第 17 章速查卡片。
+
 - [ ] `.java` 文件为 UTF-8 without BOM
 - [ ] 业务实体继承 `BaseEntity` + `@Data` + `@TableName`；关系表不继承 `BaseEntity`，复合主键
 - [ ] 业务实体未重复定义 id/deleted/createBy/updateBy/createTime/updateTime
@@ -1588,3 +1767,80 @@ export default {
 - [ ] SKILL.md 等静态资源文件放在 `resources/skills/` 下，不硬编码在 Java 代码中
 - [ ] 嵌套资源路径遵循 `/api/{parent}/{parentId}/{child}` 格式
 - [ ] 状态操作端点使用 `POST /{id}/{action}` 格式，一个动作对应一个独立方法
+
+---
+
+## 20. 测试规范
+
+### 20.1 测试分层
+
+| 层级 | 类命名 | 包路径 | 工具 |
+|------|--------|--------|------|
+| 单元测试 | `XxxTest` | `src/test/java/...` | JUnit 5 + Mockito |
+| 集成测试 | `XxxIntegrationTest` | `src/test/java/...` | Testcontainers (PG+Redis+RabbitMQ) |
+| API 测试 | `postman/` | 项目根目录 | Postman Collection |
+
+### 20.2 单元测试规范
+
+```java
+@ExtendWith(MockitoExtension.class)
+class SubTaskStateMachineTest {
+
+    @Test
+    @DisplayName("PENDING → ASSIGNED 是合法转换")
+    void pendingToAssigned_shouldPass() {
+        assertDoesNotThrow(() ->
+            SubTaskStateMachine.validate(PENDING, ASSIGNED));
+    }
+
+    @Test
+    @DisplayName("PENDING → DONE 是非法转换，应抛出 BizException")
+    void pendingToDone_shouldThrow() {
+        BizException ex = assertThrows(BizException.class, () ->
+            SubTaskStateMachine.validate(PENDING, DONE));
+        assertEquals("非法状态转换: PENDING -> DONE", ex.getMessage());
+    }
+}
+```
+
+| 规则 | 说明 |
+|------|------|
+| 测试类命名 | `被测类名 + Test` |
+| 测试方法命名 | `方法名_场景_预期结果`（英文下划线） |
+| `@DisplayName` | 写中文描述，清晰表达测试意图 |
+| Mock | 使用 `@Mock` + `@InjectMocks`，不手动 new 对象 |
+| 断言 | 优先使用 `assertThrows` / `assertDoesNotThrow`，再用 `assertEquals` |
+
+### 20.3 集成测试规范
+
+```java
+@SpringBootTest
+@Testcontainers
+class NotificationConsumerIntegrationTest extends BaseIntegrationTest {
+    // 继承 BaseIntegrationTest（已定义 PG + Redis + RabbitMQ 容器）
+    // 测试真实 MQ 消费 → inbox 投递 → Agent 查询的完整链路
+}
+```
+
+### 20.4 强制覆盖要求
+
+| 模块 | 行覆盖率目标 | 说明 |
+|------|:----------:|------|
+| `helloai-core/statemachine` | **100%** | 状态机所有转换路径必须覆盖 |
+| `helloai-core/service/score` | **100%** | 评分计算器所有档位必须覆盖 |
+| `helloai-mq/consumer` | ≥ 70% | MQ 消费逻辑覆盖 ACK/补偿/幂等 |
+| `helloai-job/task` | ≥ 50% | 补偿任务覆盖超时/正常路径 |
+| `helloai-core/service` | ≥ 60% | 业务逻辑覆盖主流程 |
+
+### 20.5 关键测试场景
+
+```
+☐ 状态机: 所有 9 种状态的合法/非法转换全覆盖
+☐ Outbox: 事件创建 → MQ 发送成功 → 状态更新
+☐ Outbox: 事件创建 → MQ 发送失败 → 补偿重试
+☐ Inbox: 同一 (event_id, agent_id) 投递两次，第二次被去重
+☐ 评分: 5 个档位（S/A/B/C/D）的分数计算正确
+☐ ACK 丢失: kill -9 模拟 → ExecutionCompensationTask 30s 内补偿
+☐ 认证: 错误 API Key → 401，错误 Registration Token → 403
+☐ 暂停/恢复: PAUSED 后恢复，Agent 能获取完整上下文
+```

@@ -10,6 +10,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
@@ -27,16 +28,13 @@ public class AgentHealthCheckTask {
         if (!tryLock()) return;
 
         try {
-            long totalActive = agentService.listActive().size();
+            List<Agent> activeAgents = agentService.listActive();
+            long totalActive = activeAgents.size();
 
-            long executorCount = agentService.listByRole(AgentRole.EXECUTOR).stream()
-                    .filter(a -> a.getStatus() == AgentStatus.ACTIVE).count();
-            long reviewerCount = agentService.listByRole(AgentRole.REVIEWER).stream()
-                    .filter(a -> a.getStatus() == AgentStatus.ACTIVE).count();
-            long plannerCount = agentService.listByRole(AgentRole.PLANNER).stream()
-                    .filter(a -> a.getStatus() == AgentStatus.ACTIVE).count();
-            long patrolCount = agentService.listByRole(AgentRole.PATROL).stream()
-                    .filter(a -> a.getStatus() == AgentStatus.ACTIVE).count();
+            long executorCount = activeAgents.stream().filter(a -> a.getRole() == AgentRole.EXECUTOR).count();
+            long reviewerCount = activeAgents.stream().filter(a -> a.getRole() == AgentRole.REVIEWER).count();
+            long plannerCount = activeAgents.stream().filter(a -> a.getRole() == AgentRole.PLANNER).count();
+            long patrolCount = activeAgents.stream().filter(a -> a.getRole() == AgentRole.PATROL).count();
 
             log.info("Agent 健康检查: total={}, planner={}, executor={}, reviewer={}, patrol={}",
                     totalActive, plannerCount, executorCount, reviewerCount, patrolCount);
@@ -46,6 +44,15 @@ public class AgentHealthCheckTask {
             }
             if (reviewerCount == 0) {
                 log.warn("无活跃的 REVIEWER，已完成的任务无法被审查");
+            }
+
+            // v1.1: 检测超过 30 分钟未活动的 Agent
+            java.time.OffsetDateTime threshold30min = java.time.OffsetDateTime.now().minusMinutes(30);
+            for (Agent agent : activeAgents) {
+                if (agent.getUpdateTime() != null && agent.getUpdateTime().isBefore(threshold30min)) {
+                    log.warn("Agent 可能离线: id={}, name={}, role={}, lastActive={}",
+                            agent.getId(), agent.getName(), agent.getRole(), agent.getUpdateTime());
+                }
             }
 
         } finally {

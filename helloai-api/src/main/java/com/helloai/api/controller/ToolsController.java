@@ -1,10 +1,11 @@
 package com.helloai.api.controller;
 
 import com.helloai.common.base.R;
+import com.helloai.common.config.AgentConfigProperties;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
-import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -21,6 +22,7 @@ import java.util.Map;
 public class ToolsController {
 
     private static final String CLI_VERSION = "2";
+    private final AgentConfigProperties agentConfig;
 
     /**
      * 列出可用工具
@@ -43,7 +45,7 @@ public class ToolsController {
      * 下载 CLI 工具
      */
     @GetMapping(value = "/cli", produces = "text/plain; charset=utf-8")
-    public ResponseEntity<String> downloadCli() {
+    public ResponseEntity<String> downloadCli(HttpServletRequest request) {
         try {
             ClassPathResource resource = new ClassPathResource("scripts/task-cli.py");
             if (!resource.exists()) {
@@ -53,6 +55,11 @@ public class ToolsController {
 
             // 替换版本号占位符
             content = content.replace("CLI_VERSION = 1", "CLI_VERSION = " + CLI_VERSION);
+            // v1.1: 运行时替换 BASE_URL
+            String baseUrl = resolveBaseUrl(request);
+            content = content.replaceFirst(
+                    "BASE_URL\\s*=\\s*\"[^\"]*\"",
+                    "BASE_URL = \"" + baseUrl + "\"");
 
             return ResponseEntity.ok()
                     .header("Content-Disposition", "attachment; filename=task-cli.py")
@@ -62,6 +69,20 @@ public class ToolsController {
             log.error("读取 task-cli.py 失败", e);
             return ResponseEntity.internalServerError().build();
         }
+    }
+
+    private String resolveBaseUrl(HttpServletRequest request) {
+        // 优先使用配置的 baseUrl，否则从请求推导
+        if (agentConfig.getBaseUrl() != null && !agentConfig.getBaseUrl().isBlank()) {
+            return agentConfig.getBaseUrl();
+        }
+        String scheme = request.getScheme();
+        String host = request.getServerName();
+        int port = request.getServerPort();
+        if (("http".equals(scheme) && port == 80) || ("https".equals(scheme) && port == 443)) {
+            return scheme + "://" + host;
+        }
+        return scheme + "://" + host + ":" + port;
     }
 
     /**

@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="page ha-entrance-up">
     <el-card>
       <template #header>
@@ -8,13 +8,22 @@
         </div>
       </template>
       <el-table :data="list" border stripe v-loading="loading" style="width:100%">
-        <el-table-column prop="id" label="ID" width="70" />
-        <el-table-column prop="agentId" label="Agent" width="80" />
-        <el-table-column prop="subTaskId" label="子任务" width="80" />
-        <el-table-column prop="action" label="行为" min-width="160" />
-        <el-table-column prop="createTime" label="时间" width="170" />
+        <el-table-column prop="action" label="动作" min-width="120" show-overflow-tooltip />
+        <el-table-column prop="detail" label="详情" min-width="300" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.detail ? JSON.stringify(row.detail) : '-' }}</template>
+        </el-table-column>
+        <el-table-column label="级别" width="80">
+          <template #default="{ row }">
+            <el-tag v-if="row.level==='ERROR'" size="small" type="danger">ERROR</el-tag>
+            <el-tag v-else-if="row.level==='WARN'" size="small" type="warning">WARN</el-tag>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="时间" width="170">
+          <template #default="{ row }">{{ fmtTime(row.createTime) }}</template>
+        </el-table-column>
       </el-table>
-      <el-empty v-if="!list.length && !loading" description="暂无活动" />
+      <el-empty v-if="!list.length && !loading" description="暂无活动记录" />
     </el-card>
   </div>
 </template>
@@ -22,21 +31,14 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { activityApi } from '@/api/activity'
+import { fmtTime } from '@/utils/tableConfig'
 
 const list = ref<any[]>([])
 const loading = ref(false)
-async function load() {
-  loading.value = true
-  try {
-    const result = await activityApi.list()
-    list.value = Array.isArray(result) ? result : []
-  } finally {
-    loading.value = false
-  }
-}
+async function load() { loading.value = true; try { list.value = await activityApi.list() } finally { loading.value = false } }
 onMounted(() => load())
 </script>
 
 <style scoped>
-.page { max-width: 1200px; }
+.page { max-width: var(--ha-content-width); }
 </style>

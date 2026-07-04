@@ -1,9 +1,9 @@
-﻿<template>
+<template>
   <div class="page ha-entrance-up" v-loading="loading">
     <el-card v-if="item">
       <template #header>
         <div class="card-header">
-          <span>子任务详情 #{{ item.id }}</span>
+          <span>子任务详情</span>
           <el-button size="small" @click="router.push('/sub-tasks')">返回列表</el-button>
         </div>
       </template>
@@ -22,7 +22,7 @@
           </el-tag>
           <span v-else>-</span>
         </el-descriptions-item>
-        <el-descriptions-item label="创建时间" :span="2">{{ item.createTime }}</el-descriptions-item>
+        <el-descriptions-item label="创建时间" :span="2">{{ fmtTime(item.createTime) }}</el-descriptions-item>
         <el-descriptions-item label="内容" :span="2">{{ item.content || '-' }}</el-descriptions-item>
       </el-descriptions>
     </el-card>
@@ -32,8 +32,10 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { subTaskApi } from '@/api/subTask'
 import { SUB_TASK_STATUS_MAP, SCORE_GRADE_MAP } from '@/types'
+import { fmtTime } from '@/utils/tableConfig'
 import type { SubTask } from '@/types'
 
 const route = useRoute()
@@ -47,14 +49,24 @@ function getSubTaskStatusMeta(status: SubTask['status']) {
 
 onMounted(async () => {
   loading.value = true
-  try {
-    item.value = await subTaskApi.getById(Number(route.params.id))
-  } finally {
+  try { item.value = await subTaskApi.getById(Number(route.params.id)) } catch (e: any) { ElMessage.error('加载子任务详情失败') } finally {
     loading.value = false
   }
 })
 </script>
 
 <style scoped>
-.page { max-width: 900px; }
+.page { max-width: var(--ha-content-width); }
+
+@media (max-width: 768px) {
+  .page :deep(.el-descriptions__body .el-descriptions__table .el-descriptions-row) {
+    display: flex;
+    flex-direction: column;
+  }
+  .page :deep(.el-descriptions__cell) {
+    padding: 8px 12px !important;
+  }
+}
 </style>
+
+

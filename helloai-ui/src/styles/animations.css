@@ -94,7 +94,7 @@
 }
 .ha-card-lift:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.10) !important;
+  box-shadow: 0 4px 20px rgba(124, 58, 237, 0.14) !important;
 }
 
 /* Skeleton loading */

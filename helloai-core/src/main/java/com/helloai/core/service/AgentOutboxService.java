@@ -77,6 +77,7 @@ public class AgentOutboxService extends ServiceImpl<AgentOutboxEventMapper, Agen
             case REVIEW -> "agent.reviewer.assigned";
             case REWORK -> "agent.executor.rework";
             case BLOCKED -> "agent.planner.blocked";
+            case PAUSED -> "agent.executor.paused";
             case DONE -> "agent.planner.done";
             default -> "agent.system." + status.name().toLowerCase();
         };

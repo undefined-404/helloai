@@ -1,6 +1,6 @@
 ﻿<template>
   <div class="login-page">
-    <!-- Left brand panel with animated character -->
+    <!-- 左侧品牌面板 + 动画角色 -->
     <div class="login-brand">
       <div class="brand-hero">
         <div class="brand-header">
@@ -16,7 +16,7 @@
             :isFocused="isFormFocused"
             :isTyping="isTyping"
             :focusTarget="focusTarget"
-            :primaryColor="'#5B8DEF'"
+            primaryColor="#7C3AED"
           />
         </div>
       </div>
@@ -34,19 +34,19 @@
         </div>
       </div>
 
-      <!-- Decorative elements -->
+      <!-- 装饰元素 -->
       <div class="deco-grid" />
       <div class="deco-blur deco-blur-1" />
       <div class="deco-blur deco-blur-2" />
     </div>
 
-    <!-- Right login panel -->
+    <!-- 右侧登录面板 -->
     <div class="login-panel">
       <div class="login-card-wrapper">
         <div class="mobile-logo">
-      <span class="mobile-logo-text">Hello</span>
-      <span class="mobile-logo-text mobile-logo-accent">AI</span>
-    </div>
+          <span class="mobile-logo-text">Hello</span>
+          <span class="mobile-logo-text mobile-logo-accent">AI</span>
+        </div>
 
         <div class="login-card">
           <div class="login-card-header">
@@ -64,14 +64,18 @@
             @keyup.enter="handleLogin"
           >
             <el-form-item prop="type">
-              <div class="login-tabs">
+              <div class="login-tabs" role="tablist" aria-label="登录方式">
                 <button
+                  role="tab"
+                  :aria-selected="form.type === 'admin'"
                   :class="['login-tab', { active: form.type === 'admin' }]"
                   @click="form.type = 'admin'"
                 >
                   管理员登录
                 </button>
                 <button
+                  role="tab"
+                  :aria-selected="form.type === 'agent'"
                   :class="['login-tab', { active: form.type === 'agent' }]"
                   @click="form.type = 'agent'"
                 >
@@ -109,6 +113,7 @@
                   class="toggle-pwd-btn"
                   @click="showPassword = !showPassword"
                   type="button"
+                  :aria-label="showPassword ? '隐藏密码' : '显示密码'"
                 >
                   <el-icon :size="18"><View /></el-icon>
                 </button>
@@ -159,19 +164,20 @@ const loading = ref(false)
 const errorMsg = ref('')
 const showPassword = ref(false)
 
-// Animated character state
+// 动画角色状态
 const isFormFocused = ref(false)
 const isTyping = ref(false)
 const focusTarget = ref<'none' | 'email' | 'password'>('none')
-let typingTimer: ReturnType<typeof setTimeout>
+let typingTimer: ReturnType<typeof setTimeout> | null = null
 
 const form = reactive({
-  type: 'admin',
-  username: 'admin',
+  type: 'admin' as 'admin' | 'agent',
+  username: '',
   credential: ''
 })
 
 const rules = {
+  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
   credential: [{ required: true, message: '请输入凭证', trigger: 'blur' }]
 }
 
@@ -182,72 +188,64 @@ function onFocus(target: 'email' | 'password') {
 
 function onBlur() {
   isFormFocused.value = false
-  isTyping.value = false
   focusTarget.value = 'none'
 }
 
 function onTyping() {
   isTyping.value = true
-  clearTimeout(typingTimer)
+  if (typingTimer) clearTimeout(typingTimer)
   typingTimer = setTimeout(() => {
     isTyping.value = false
-  }, 500)
+  }, 800)
 }
 
 async function handleLogin() {
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
+
   loading.value = true
   errorMsg.value = ''
+
   try {
-    const payload: any = {
+    const res = await request.post<any, LoginResponse>('/auth/login', {
       type: form.type,
+      username: form.username,
       credential: form.credential
-    }
-    if (form.type === 'admin') {
-      payload.username = form.username || 'admin'
-    }
-    const res = await request.post<any, LoginResponse>('/auth/login', payload)
-    if (form.type === 'admin') {
-      sessionStorage.setItem('adminToken', res.token)
-      sessionStorage.setItem('adminUser', res.displayName || res.role || 'Admin')
-      sessionStorage.removeItem('agentKey')
-    } else {
-      sessionStorage.setItem('agentKey', form.credential)
-      sessionStorage.setItem('adminUser', res.displayName || 'Agent')
-      sessionStorage.removeItem('adminToken')
-    }
+    })
+
+    sessionStorage.setItem('adminToken', res.token)
+    sessionStorage.setItem('loginType', res.type)
+    if (res.displayName) sessionStorage.setItem('adminUser', res.displayName)
+
     ElMessage.success('登录成功')
     router.push('/dashboard')
   } catch (e: any) {
-    errorMsg.value = e.message || '登录失败'
+    errorMsg.value = e?.response?.data?.message || e?.message || '登录失败，请检查账号和密码'
   } finally {
     loading.value = false
   }
 }
 
 onMounted(() => {
-  // Pre-focus state: character looks at visitor
-  setTimeout(() => {
-    isFormFocused.value = true
-    focusTarget.value = 'email'
-    setTimeout(() => {
-      isFormFocused.value = false
-      focusTarget.value = 'none'
-    }, 2000)
-  }, 1000)
+  // 如果已登录，直接跳转
+  if (sessionStorage.getItem('adminToken')) {
+    router.replace('/dashboard')
+  }
 })
 </script>
 
 <style scoped>
+/* =====================
+   LAYOUT
+   ===================== */
 .login-page {
-  min-height: 100dvh;
   display: flex;
+  height: 100vh;
   overflow: hidden;
 }
 
 /* =====================
-   LEFT PANEL (Brand)
+   LEFT BRAND PANEL
    ===================== */
 .login-brand {
   flex: 1;
@@ -257,7 +255,7 @@ onMounted(() => {
     #A78BFA 50%,
     #06B6D4 100%
   );
-  background-size: 400% 400%;
+  background-size: 200% 200%;
   animation: brand-aurora 15s ease infinite;
   display: flex;
   flex-direction: column;
@@ -265,120 +263,58 @@ onMounted(() => {
   padding: 2rem 3rem;
   position: relative;
   isolation: isolate;
-  overflow: hidden;
-  min-width: 0;
 }
 
 .brand-hero {
   flex: 1;
   display: flex;
   flex-direction: column;
-  align-items: center;
   justify-content: center;
-  width: 100%;
-  position: relative;
-  z-index: 20;
-}
-
-.brand-bottom {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  position: relative;
-  z-index: 20;
+  align-items: center;
 }
 
 .brand-header {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  position: relative;
-  margin-bottom: 30px;
+  text-align: center;
+  margin-bottom: 16px;
 }
 
-.brand-icon-box {
-  position: relative;
-  width: 44px;
-  height: 44px;
+.brand-text-group {
   display: flex;
-  align-items: center;
+  gap: 4px;
   justify-content: center;
-}
-.brand-icon-ring {
-  position: absolute;
-  inset: 0;
-  border-radius: 12px;
-  background: linear-gradient(135deg, rgba(43, 95, 217, 0.3), rgba(99, 102, 241, 0.15));
-  box-shadow: 0 0 20px rgba(43, 95, 217, 0.15), inset 0 1px 0 rgba(255,255,255,0.1);
-}
-.brand-icon-inner {
-  position: relative;
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.95);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-}
-
-.brand-icon-img {
-  width: 26px;
-  height: 26px;
-  display: block;
-  object-fit: contain;
-}
-
-.brand-icon-img--mobile {
-  width: 24px;
-  height: 24px;
 }
 
 .brand-header-text {
   color: #fff;
   font-size: 80px;
   font-weight: 700;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
+  line-height: 1;
 }
 .brand-header-accent {
-  color: #1E293B;
   font-weight: 800;
 }
-.brand-text-group {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
 
-/* ---- Character Area ---- */
 .character-area {
-  position: relative;
   display: flex;
-  align-items: center;
   justify-content: center;
-  height: 300px;
+  margin-top: 8px;
 }
 
-/* ---- Quote ---- */
 .brand-quote {
-  position: relative;
-  z-index: 20;
   display: flex;
   flex-direction: column;
   align-items: center;
   text-align: center;
-  width: 100%;
-  margin: 0 auto;
-  padding: 0 1rem;
+  margin-bottom: 32px;
 }
 
 .quote-text {
-  color: rgba(255, 255, 255, 0.90);
-  font-size: 16px;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 18px;
   font-weight: 500;
-  margin: 0 0 6px;
+  margin: 0 0 8px;
+  max-width: none;
   text-wrap: balance;
 }
 
@@ -386,37 +322,42 @@ onMounted(() => {
   color: rgba(255, 255, 255, 0.55);
   font-size: 14px;
   margin: 0;
-  text-wrap: pretty;
+  max-width: none;
 }
 
-/* ---- Footer ---- */
+/* ---- Brand Panel Footer ---- */
+.brand-bottom {
+  position: relative;
+  z-index: 1;
+}
+
 .panel-footer {
   display: flex;
-  align-items: center;
   justify-content: center;
   gap: 24px;
-  font-size: 13px;
-  position: relative;
-  z-index: 20;
+  padding-bottom: 8px;
 }
 
 .panel-footer a {
-  color: rgba(255, 255, 255, 0.50);
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 12px;
   text-decoration: none;
-  transition: color 0.15s;
+  transition: color var(--ha-duration-fast);
 }
 .panel-footer a:hover {
-  color: rgba(255, 255, 255, 0.80);
+  color: rgba(255, 255, 255, 0.85);
 }
 
 .footer-version {
-  color: rgba(255, 255, 255, 0.25);
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 12px;
 }
 
-/* ---- Decorative ---- */
+/* ---- Decorative Elements ---- */
 .deco-grid {
   position: absolute;
   inset: 0;
+  z-index: 0;
   background-image:
     linear-gradient(to right, rgba(255,255,255,0.03) 1px, transparent 1px),
     linear-gradient(to bottom, rgba(255,255,255,0.03) 1px, transparent 1px);
@@ -429,7 +370,7 @@ onMounted(() => {
   border-radius: 50%;
   filter: blur(80px);
   pointer-events: none;
-  will-change: transform;
+  will-change: transform, filter;
 }
 .deco-blur-1 {
   top: 15%;
@@ -490,10 +431,11 @@ onMounted(() => {
 }
 
 .login-card-wrapper {
-  width: 380px;
+  width: 100%;
+  max-width: 380px;
 }
 
-/* ---- Mobile Logo ---- */
+/* ---- Mobile Logo (visible only on small screens) ---- */
 .mobile-logo {
   display: none;
   align-items: center;
@@ -504,36 +446,13 @@ onMounted(() => {
   margin-bottom: 40px;
 }
 
-.brand-icon-box-mobile {
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, rgba(43, 95, 217, 0.12), rgba(99, 102, 241, 0.06));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-right: 6px;
-}
-
 .mobile-logo-text {
-  color: #1E293B;
+  color: var(--ha-ink);
   letter-spacing: -0.01em;
 }
 .mobile-logo-accent {
-  color: #2B5FD9;
+  color: var(--ha-primary);
   font-weight: 800;
-}
-
-@media (max-width: 1023px) {
-  .mobile-logo {
-  display: none;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  font-size: 20px;
-  font-weight: 700;
-  margin-bottom: 40px;
-}
 }
 
 /* ---- Card ---- */
@@ -586,7 +505,7 @@ onMounted(() => {
 }
 
 .login-tab:hover {
-  border-color: #c4c8cf;
+  border-color: var(--ha-ink-secondary);
   color: var(--ha-ink);
 }
 
@@ -616,7 +535,7 @@ onMounted(() => {
 
 .login-submit:hover {
   transform: translateY(-1px);
-  box-shadow: 0 4px 16px rgba(43, 95, 217, 0.30);
+  box-shadow: 0 4px 16px rgba(124, 58, 237, 0.30);
 }
 
 .login-submit:active {
@@ -640,7 +559,7 @@ onMounted(() => {
   cursor: pointer;
   padding: 4px;
   z-index: 10;
-  transition: color 0.15s;
+  transition: color var(--ha-duration-fast);
 }
 .toggle-pwd-btn:hover {
   color: var(--ha-ink);
@@ -659,7 +578,7 @@ onMounted(() => {
   animation: ha-fade-up 250ms var(--ha-ease-out) both;
 }
 .msg-fade-leave-active {
-  animation: ha-fade-in 150ms ease reverse both;
+  animation: ha-fade-in 150ms var(--ha-ease-out) reverse both;
 }
 
 /* ---- Footer ---- */
@@ -683,6 +602,9 @@ onMounted(() => {
   .login-panel {
     width: 100%;
     min-height: 100dvh;
+  }
+  .mobile-logo {
+    display: flex;
   }
 }
 </style>

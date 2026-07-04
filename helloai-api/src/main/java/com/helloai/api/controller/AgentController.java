@@ -7,6 +7,7 @@ import com.helloai.common.config.AgentConfigProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.entity.Agent;
 import com.helloai.core.service.AgentService;
+import com.helloai.core.service.PromptTemplateService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
@@ -26,6 +27,7 @@ public class AgentController {
 
     private final AgentService agentService;
     private final AgentConfigProperties agentConfig;
+    private final PromptTemplateService promptTemplateService;
 
     @GetMapping
     public R<List<AgentResponse>> list() {
@@ -83,6 +85,19 @@ public class AgentController {
         }
 
         String role = agent.getRole().name().toLowerCase();
+        String baseUrl = agentConfig.getBaseUrl() != null && !agentConfig.getBaseUrl().isBlank()
+                ? agentConfig.getBaseUrl() : "http://localhost:6565";
+
+        // v1.1: DB 优先 — 从 prompt_template 表获取 SKILL 内容
+        try {
+            String content = promptTemplateService.getSkillForAgent(
+                    agent.getRole().name(), apiKey, baseUrl, agent.getName());
+            return R.ok(Map.of("role", role, "content", content));
+        } catch (Exception e) {
+            log.warn("从 DB 获取 SKILL 失败，回退到文件: role={}", role, e);
+        }
+
+        // 文件兜底
         try {
             ClassPathResource resource = new ClassPathResource("skills/" + role + "/SKILL.md");
             if (!resource.exists()) {
@@ -90,7 +105,7 @@ public class AgentController {
             }
             String content = Files.readString(resource.getFile().toPath(), StandardCharsets.UTF_8);
             content = content.replace("<注册后填入>", apiKey);
-            content = content.replace("{{BASE_URL}}", "http://localhost:6565");
+            content = content.replace("{{BASE_URL}}", baseUrl);
 
             return R.ok(Map.of(
                     "role", role,

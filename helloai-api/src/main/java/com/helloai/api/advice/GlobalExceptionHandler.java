@@ -2,6 +2,7 @@ package com.helloai.api.advice;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.base.R;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -14,13 +15,18 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 public class GlobalExceptionHandler {
 
     @ExceptionHandler(BizException.class)
-    public R<Void> handleBizException(BizException e) {
+    public R<Void> handleBizException(BizException e, HttpServletResponse response) {
         log.warn("业务异常: code={}, message={}", e.getCode(), e.getMessage());
         if (e.getCode() == 401) {
+            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
             return R.fail(401, e.getMessage());
         }
         if (e.getCode() == 403) {
+            response.setStatus(HttpServletResponse.SC_FORBIDDEN);
             return R.fail(403, e.getMessage());
+        }
+        if (e.getCode() != null && e.getCode() >= 400 && e.getCode() < 600) {
+            response.setStatus(e.getCode());
         }
         return R.fail(e.getCode(), e.getMessage());
     }

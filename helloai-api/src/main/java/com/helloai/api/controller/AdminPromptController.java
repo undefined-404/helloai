@@ -91,9 +91,13 @@ public class AdminPromptController {
         PromptTemplateResponse response = new PromptTemplateResponse();
         response.setId(template.getId());
         response.setRole(template.getRole());
+        response.setCategory(template.getCategory());
+        response.setSlug(template.getSlug());
         response.setName(template.getName());
+        response.setDescription(template.getDescription());
         response.setContent(template.getContent());
         response.setIsDefault(template.getIsDefault());
+        response.setIsExample(template.getIsExample());
         response.setVersion(template.getVersion());
         response.setRemark(template.getRemark());
         response.setCreateTime(template.getCreateTime());

@@ -4,6 +4,7 @@ public enum SubTaskStatus {
     PENDING,
     ASSIGNED,
     IN_PROGRESS,
+    PAUSED,
     REVIEW,
     DONE,
     REWORK,

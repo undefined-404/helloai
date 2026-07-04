@@ -3,6 +3,11 @@ import MainLayout from '@/layouts/MainLayout.vue'
 
 const routes = [
   {
+    path: '/setup',
+    component: () => import('@/views/setup/SetupWizard.vue'),
+    meta: { title: '初始化向导' }
+  },
+  {
     path: '/login',
     component: () => import('@/views/Login.vue'),
     meta: { title: '登录' }
@@ -21,6 +26,8 @@ const routes = [
       { path: 'rewards',    component: () => import('@/views/reward/RewardList.vue'), meta: { title: '积分流水' } },
       { path: 'activity',   component: () => import('@/views/activity/ActivityList.vue'), meta: { title: '活动流' } },
       { path: 'rules',      component: () => import('@/views/rule/RuleList.vue'), meta: { title: '规则配置' } },
+      { path: 'prompts',    component: () => import('@/views/prompt/PromptList.vue'), meta: { title: 'Prompt管理' } },
+      { path: 'inbox',      component: () => import('@/views/inbox/AgentInbox.vue'), meta: { title: '收件箱' } },
       { path: 'attachments', component: () => import('@/views/attachment/AttachmentList.vue'), meta: { title: '附件管理' } },
       { path: 'settings',   component: () => import('@/views/Settings.vue'),  meta: { title: '系统设置' } }
     ]
@@ -33,7 +40,7 @@ const router = createRouter({
 })
 
 router.beforeEach((to) => {
-  if (to.path !== '/login' && !sessionStorage.getItem('adminToken') && !sessionStorage.getItem('agentKey')) {
+  if (to.path !== '/login' && to.path !== '/setup' && !sessionStorage.getItem('adminToken') && !sessionStorage.getItem('agentKey')) {
     return '/login'
   }
 })

@@ -131,6 +131,18 @@ public class SubTaskController {
         return R.ok();
     }
 
+    @PostMapping("/{id}/pause")
+    public R<Void> pause(@PathVariable Long id) {
+        subTaskService.pause(id);
+        return R.ok();
+    }
+
+    @PostMapping("/{id}/resume")
+    public R<Void> resume(@PathVariable Long id) {
+        subTaskService.resume(id);
+        return R.ok();
+    }
+
     @GetMapping("/available")
     public R<List<SubTaskResponse>> available() {
         List<SubTask> list = subTaskService.list(

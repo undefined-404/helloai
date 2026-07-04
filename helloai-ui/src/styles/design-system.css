@@ -1,15 +1,15 @@
 ﻿/* ========================================
    HelloAI Design System — CSS Variables
-   Linear-inspired, blue-primary, cool-neutral
+   Purple-primary, cool-neutral, Linear-inspired
    ======================================== */
 
 :root {
-  /* ---- Colors ---- */
-  --ha-primary: #2B5FD9;
-  --ha-primary-hover: #224DB8;
-  --ha-primary-active: #1B3D8F;
-  --ha-primary-muted: #EEF2FF;
-  --ha-primary-light: #E8EDFF;
+  /* ---- Colors (purple-primary) ---- */
+  --ha-primary: #7C3AED;
+  --ha-primary-hover: #6D28D9;
+  --ha-primary-active: #5B21B6;
+  --ha-primary-muted: #F5F3FF;
+  --ha-primary-light: #EDE9FE;
 
   --ha-bg: #FFFFFF;
   --ha-surface: #F6F8FA;
@@ -32,6 +32,21 @@
   --ha-info: #3B82F6;
   --ha-info-bg: #EFF6FF;
 
+  /* ---- Scrollbar ---- */
+  --ha-scrollbar-thumb: #d1d5db;
+  --ha-scrollbar-thumb-hover: #9ca3af;
+
+  /* ---- Sidebar (purple gradient) ---- */
+  --ha-sidebar-bg-start: #7C3AED;
+  --ha-sidebar-bg-end: #06B6D4;
+  --ha-sidebar-text: rgba(255, 255, 255, 0.85);
+  --ha-sidebar-text-muted: rgba(255, 255, 255, 0.55);
+  --ha-sidebar-hover: rgba(255, 255, 255, 0.10);
+  --ha-sidebar-active: rgba(255, 255, 255, 0.20);
+
+  /* ---- Content Width (fluid) ---- */
+  --ha-content-width: 100%;
+
   /* ---- Typography ---- */
   --ha-font-family: 'Inter', system-ui, -apple-system, sans-serif;
   --ha-font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
@@ -42,10 +57,10 @@
   --ha-radius-lg: 12px;
   --ha-radius-xl: 16px;
 
-  /* ---- Shadows ---- */
-  --ha-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06);
-  --ha-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.08);
-  --ha-shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.12);
+  /* ---- Shadows (purple-tinted) ---- */
+  --ha-shadow-sm: 0 1px 3px rgba(124, 58, 237, 0.08);
+  --ha-shadow-md: 0 4px 16px rgba(124, 58, 237, 0.10);
+  --ha-shadow-lg: 0 8px 32px rgba(124, 58, 237, 0.14);
 
   /* ---- Spacing ---- */
   --ha-space-xs: 4px;
@@ -94,11 +109,11 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #d1d5db;
-  border-radius: 3px;
+  background: var(--ha-scrollbar-thumb);
+  border-radius: var(--ha-radius-sm);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #9ca3af;
+  background: var(--ha-scrollbar-thumb-hover);
 }
 
 /* ---- Selection ---- */
@@ -141,7 +156,7 @@ body {
               transform var(--ha-duration-normal) var(--ha-ease-out);
 }
 .el-card:hover {
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.10) !important;
+  box-shadow: 0 1px 6px rgba(124, 58, 237, 0.10) !important;
 }
 .el-card.is-never-shadow {
   box-shadow: none !important;
@@ -156,85 +171,43 @@ body {
 
 /* ---- Table ---- */
 .el-table {
-  --el-table-border-color: transparent !important;
-  --el-table-header-bg-color: transparent !important;
+  --el-table-border-color: var(--ha-border) !important;
+  --el-table-header-bg-color: var(--ha-surface) !important;
   --el-table-tr-bg-color: transparent !important;
   --el-table-row-hover-bg-color: var(--ha-surface-hover) !important;
   --el-table-current-row-bg-color: var(--ha-primary-muted) !important;
   font-size: 14px;
+  color: var(--ha-ink);
 }
 .el-table th.el-table__cell {
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: var(--ha-muted) !important;
-  background: transparent !important;
-  padding: 10px 16px !important;
-  border-bottom: 1px solid var(--ha-border-light) !important;
-}
-.el-table td.el-table__cell {
-  padding: 12px 16px !important;
-  border-bottom: 1px solid var(--ha-border-light) !important;
-}
-.el-table--border td.el-table__cell {
-  border-right: none !important;
-}
-.el-table--border th.el-table__cell {
-  border-right: none !important;
-}
-.el-table__body-wrapper tr:last-child td {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ha-ink) !important;
+  background: var(--ha-surface) !important;
+  padding: 10px 12px !important;
+  border-right: 1px solid var(--ha-border) !important;
   border-bottom: none !important;
 }
-.el-table--striped .el-table__body tr.el-table__row--striped td {
-  background: #FAFBFC !important;
+.el-table th.el-table__cell.el-table__cell:last-child {
+  border-right: none !important;
 }
-
-/* ---- Form ---- */
-.el-input {
-  --el-input-border-radius: var(--ha-radius-md) !important;
-  --el-input-focus-border-color: var(--ha-primary) !important;
-  --el-input-hover-border-color: #c4c8cf !important;
-  --el-input-height: 32px;
-  font-family: var(--ha-font-family);
+.el-table td.el-table__cell {
+  padding: 10px 12px !important;
+  border-bottom: 1px solid var(--ha-border-light) !important;
+  border-right: 1px solid var(--ha-border) !important;
 }
-.el-input__wrapper {
-  border-radius: var(--ha-radius-md) !important;
-  box-shadow: 0 0 0 1px var(--ha-border) inset !important;
+.el-table td.el-table__cell:last-child {
+  border-right: none !important;
 }
-.el-input__wrapper.is-focus {
-  box-shadow: 0 0 0 2px var(--ha-primary) inset !important;
+.el-table::before {
+  display: none;
 }
-.el-input__inner {
-  font-size: 14px;
-}
-.el-input__inner::placeholder {
-  color: var(--ha-muted);
-}
-
-/* ---- Select ---- */
-.el-select {
-  --el-select-border-color-hover: #c4c8cf;
-}
-.el-select__wrapper {
-  border-radius: var(--ha-radius-md) !important;
-  box-shadow: 0 0 0 1px var(--ha-border) inset !important;
-  min-height: 32px;
-}
-.el-select__wrapper.is-focus {
-  box-shadow: 0 0 0 2px var(--ha-primary) inset !important;
+.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+  background: var(--ha-surface) !important;
 }
 
 /* ---- Tag ---- */
 .el-tag {
-  --el-tag-border-radius: var(--ha-radius-sm);
-  font-family: var(--ha-font-mono);
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-  padding: 0 8px;
-  height: 22px;
-  line-height: 22px;
   border: none;
 }
 .el-tag--success {
@@ -260,7 +233,7 @@ body {
 }
 .el-menu-item {
   font-size: 14px !important;
-  border-radius: 6px !important;
+  border-radius: var(--ha-radius-sm) !important;
   margin: 2px 8px !important;
   width: auto !important;
   transition: all var(--ha-duration-fast) var(--ha-ease-out) !important;
@@ -354,7 +327,7 @@ body {
 }
 .sidebar-menu .el-menu-item {
   color: rgba(255, 255, 255, 0.65) !important;
-  border-radius: 6px !important;
+  border-radius: var(--ha-radius-sm) !important;
   margin: 2px 10px !important;
   padding: 0 12px !important;
   height: 38px !important;
@@ -387,16 +360,17 @@ body {
   font-weight: 600;
 }
 
-/* ========================================
-   Redesign-Skill Audit Fixes
-   ======================================== */
-
-/* ---- Tinted Shadows (not generic black) ---- */
-:root {
-  --ha-shadow-sm: 0 1px 3px rgba(43, 95, 217, 0.08);
-  --ha-shadow-md: 0 4px 16px rgba(43, 95, 217, 0.10);
-  --ha-shadow-lg: 0 8px 32px rgba(43, 95, 217, 0.14);
+/* ---- Input ---- */
+.el-input__wrapper {
+  box-shadow: 0 0 0 1px var(--ha-border) inset !important;
 }
+.el-input__wrapper.is-focus {
+  box-shadow: 0 0 0 2px var(--ha-primary) inset !important;
+}
+
+/* ========================================
+   Typography & Layout Utilities
+   ======================================== */
 
 /* ---- Text-wrap: balance on headings ---- */
 h1, h2, h3, h4, h5, h6,
@@ -444,7 +418,7 @@ a:hover {
   background: var(--ha-primary);
   color: white;
   font-size: 14px;
-  transition: top 150ms;
+  transition: top var(--ha-duration-fast);
 }
 .skip-to-content:focus {
   top: 0;
@@ -458,4 +432,230 @@ a:hover {
 /* ---- Orphan word prevention ---- */
 p, .el-descriptions__title, .card-header span {
   text-wrap: pretty;
+}
+
+/* ========================================
+   Responsive Utilities
+   ======================================== */
+
+/* ---- Responsive page padding ---- */
+.page {
+  padding: clamp(12px, 2vw, 24px);
+}
+
+/* ---- Responsive table wrapper ---- */
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ---- Action cell: wrap buttons on small screens ---- */
+.action-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* ========================================
+   Mobile Adaptations
+   ======================================== */
+
+@media (max-width: 768px) {
+  /* ---- Forms: auto label width ---- */
+  .el-form-item__label {
+    width: auto !important;
+    padding-bottom: 4px;
+  }
+
+  /* ---- Descriptions: single column ---- */
+  .el-descriptions__body .el-descriptions__table .el-descriptions-row {
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ---- Cards: reduce padding ---- */
+  .el-card {
+    --el-card-padding: 16px !important;
+  }
+
+  /* ---- Login card wrapper ---- */
+  .login-card-wrapper {
+    width: 100% !important;
+    padding: 0 16px;
+  }
+
+  /* ---- Page heading: smaller ---- */
+  .page-heading,
+  h2.login-heading {
+    font-size: 20px !important;
+  }
+
+  /* ---- Stat cards: single column ---- */
+  .stats-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@media (max-width: 480px) {
+  /* ---- Even tighter padding ---- */
+  .page {
+    padding: 8px;
+  }
+
+  /* ---- Filter bar: full width on mobile ---- */
+  .filter-bar > * {
+    width: 100%;
+  }
+
+  /* ---- Dialog: full screen on mobile ---- */
+  .el-dialog {
+    --el-dialog-width: 92vw !important;
+    margin-top: 4vh !important;
+  }
+
+  .el-dialog__body {
+    padding: 12px 16px !important;
+  }
+}
+
+/* ========================================
+   Hardening: Edge Case Handling
+   ======================================== */
+
+/* ---- Long text overflow protection ---- */
+.ha-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ha-line-clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.ha-word-wrap {
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  hyphens: auto;
+}
+
+/* ---- Ensure flex/grid items don't overflow ---- */
+.ha-min-width-zero {
+  min-width: 0;
+}
+
+/* ---- Disabled button cursor ---- */
+.el-button.is-disabled {
+  cursor: not-allowed !important;
+}
+
+/* ---- Image max-width safety ---- */
+img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* ========================================
+   Dark Mode — semantic-first, content only
+   Sidebar gradient remains unchanged (already dark-tolerant).
+   ======================================== */
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ha-bg: #131417;
+    --ha-surface: #1A1C20;
+    --ha-surface-hover: #22252A;
+    --ha-surface-elevated: #1E2025;
+
+    --ha-border: #2D3036;
+    --ha-border-light: #26282E;
+
+    --ha-ink: #E5E7EB;
+    --ha-ink-secondary: #9CA3AF;
+    --ha-muted: #6B7280;
+
+    /* Muted accents — lower opacity on dark */
+    --ha-primary-muted: rgba(124, 58, 237, 0.15);
+    --ha-primary-light: rgba(124, 58, 237, 0.08);
+
+    --ha-success-bg: rgba(16, 185, 129, 0.12);
+    --ha-warning-bg: rgba(245, 158, 11, 0.12);
+    --ha-danger-bg: rgba(239, 68, 68, 0.12);
+    --ha-info-bg: rgba(59, 130, 246, 0.12);
+
+    /* Purple-tinted shadows become glow on dark */
+    --ha-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.30);
+    --ha-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.35);
+    --ha-shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.45);
+  }
+
+  /* Element Plus dark overrides */
+  .el-table {
+    --el-table-tr-bg-color: var(--ha-surface-elevated) !important;
+    --el-table-row-hover-bg-color: var(--ha-surface-hover) !important;
+    --el-table-header-bg-color: var(--ha-surface) !important;
+  }
+
+  .el-table th.el-table__cell {
+    background: var(--ha-surface) !important;
+    color: var(--ha-ink-secondary) !important;
+  }
+
+  .el-table td.el-table__cell {
+    border-bottom-color: var(--ha-border-light) !important;
+    border-right-color: var(--ha-border) !important;
+  }
+
+  .el-input__wrapper {
+    background: var(--ha-surface) !important;
+    box-shadow: 0 0 0 1px var(--ha-border) inset !important;
+  }
+
+  .el-input__inner {
+    color: var(--ha-ink) !important;
+  }
+
+  .el-select .el-input__wrapper {
+    background: var(--ha-surface) !important;
+  }
+
+  .el-dialog {
+    background: var(--ha-surface-elevated) !important;
+  }
+
+  .el-dropdown-menu {
+    background: var(--ha-surface-elevated) !important;
+    border: 1px solid var(--ha-border) !important;
+  }
+
+  .el-dropdown-menu__item:hover {
+    background: var(--ha-surface-hover) !important;
+  }
+
+  .el-pagination .btn-prev,
+  .el-pagination .btn-next {
+    background: var(--ha-surface-elevated) !important;
+    color: var(--ha-ink) !important;
+  }
+
+  .el-empty__description p {
+    color: var(--ha-muted) !important;
+  }
+
+  .el-card__header {
+    border-bottom-color: var(--ha-border-light) !important;
+  }
+}
+
+/* ---- Reduced motion: global safety ---- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

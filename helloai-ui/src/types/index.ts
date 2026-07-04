@@ -21,8 +21,8 @@ export interface R<T> {
 }
 
 // --- 枚举 ---
-export type SubTaskStatus = 'PENDING' | 'ASSIGNED' | 'IN_PROGRESS' | 'REVIEW'
-  | 'DONE' | 'REWORK' | 'BLOCKED' | 'CANCELLED'
+export type SubTaskStatus = 'PENDING' | 'ASSIGNED' | 'IN_PROGRESS' | 'PAUSED'
+  | 'REVIEW' | 'DONE' | 'REWORK' | 'BLOCKED' | 'CANCELLED'
 
 export type AgentRole = 'PLANNER' | 'EXECUTOR' | 'REVIEWER' | 'PATROL'
 
@@ -164,6 +164,7 @@ export const SUB_TASK_STATUS_MAP: Record<SubTaskStatus, { label: string; type: '
   PENDING:     { label: '待分配',   type: 'info' },
   ASSIGNED:    { label: '已分配',   type: '' },
   IN_PROGRESS: { label: '执行中',   type: 'primary' },
+  PAUSED:      { label: '已暂停',   type: 'warning' },
   REVIEW:      { label: '审查中',   type: 'warning' },
   DONE:        { label: '已完成',   type: 'success' },
   REWORK:      { label: '返工',     type: 'danger' },
@@ -203,4 +204,68 @@ export interface Attachment {
   previewUrl: string | null
   status: AttachmentStatus
   createTime: string
+}
+
+// --- v1.1 新增类型 ---
+
+export interface PromptTemplate {
+  id: number
+  role: string
+  category: string
+  slug: string | null
+  name: string
+  description: string | null
+  content: string
+  isDefault: number
+  isExample: number
+  version: number
+  remark: string | null
+  createTime: string
+  updateTime: string
+}
+
+export interface AgentInbox {
+  id: number
+  agentId: number
+  eventId: string
+  eventType: string
+  title: string
+  summary: string | null
+  refType: string | null
+  refId: number | null
+  isRead: number
+  isArchived: number
+  readAt: string | null
+  priority: string
+  createTime: string
+}
+
+export interface ConversationMessage {
+  id: number
+  subTaskId: number
+  messageId: string
+  role: string
+  senderType: string
+  senderId: number | null
+  content: string
+  contentType: string
+  seq: number
+  createTime: string
+}
+
+export const PROMPT_CATEGORY_MAP: Record<string, string> = {
+  ROLE_TEMPLATE: '角色模板',
+  AGENT_SPECIALIZATION: 'Agent 专业化',
+  SKILL: '技能文档'
+}
+
+export const INBOX_EVENT_TYPE_MAP: Record<string, string> = {
+  'sub_task.assigned': '新任务',
+  'sub_task.submitted': '待审查',
+  'sub_task.rejected': '需返工',
+  'sub_task.blocked': '任务阻塞',
+  'sub_task.paused': '已暂停',
+  'sub_task.resumed': '已恢复',
+  'sub_task.cancelled': '已取消',
+  'task.completed': '任务完成'
 }
