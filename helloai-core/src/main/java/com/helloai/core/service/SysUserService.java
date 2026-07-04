@@ -82,4 +82,24 @@ public class SysUserService extends ServiceImpl<SysUserMapper, SysUser> {
         updateById(user);
         log.info("管理员密码重置: id={}", userId);
     }
+
+    /**
+     * 管理员修改自己的密码
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void changePassword(Long userId, String currentPassword, String newPassword) {
+        SysUser user = getById(userId);
+        if (user == null) {
+            throw new BizException("用户不存在: " + userId);
+        }
+        if (!authService.matchesPassword(currentPassword, user.getPassword())) {
+            throw new BizException("当前密码不正确");
+        }
+        if (currentPassword.equals(newPassword)) {
+            throw new BizException("新密码不能与当前密码相同");
+        }
+        user.setPassword(authService.encodePassword(newPassword));
+        updateById(user);
+        log.info("管理员修改密码: id={}", userId);
+    }
 }

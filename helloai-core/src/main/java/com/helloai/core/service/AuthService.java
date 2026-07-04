@@ -101,6 +101,13 @@ public class AuthService {
     }
 
     /**
+     * 校验明文密码是否匹配加密密码
+     */
+    public boolean matchesPassword(String rawPassword, String encodedPassword) {
+        return passwordEncoder.matches(rawPassword, encodedPassword);
+    }
+
+    /**
      * 管理员会话信息
      */
     public record AdminSession(String token, Long id, String username, String displayName, String role) {}

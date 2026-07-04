@@ -1,6 +1,5 @@
-﻿<template>
+<template>
   <el-container class="app-shell">
-    <!-- Sidebar 鈥?purple gradient matching Login page -->
     <el-aside :width="collapsed ? '64px' : '220px'" class="app-sidebar">
       <div class="sidebar-header">
         <div class="sidebar-logo">
@@ -62,7 +61,6 @@
         </el-menu-item>
       </el-menu>
 
-      <!-- User area at sidebar bottom -->
       <div class="sidebar-footer" :class="{ collapsed: collapsed }">
         <el-dropdown trigger="click" placement="top-start">
           <div class="sidebar-user">
@@ -72,20 +70,30 @@
           </div>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item @click="router.push('/settings')">
+              <el-dropdown-item v-if="isAdmin" @click="openPasswordDialog">
+                <el-icon><Lock /></el-icon>修改密码
+              </el-dropdown-item>
+              <el-dropdown-item v-if="isAdmin" @click="router.push('/settings')">
                 <el-icon><Tools /></el-icon>系统设置
               </el-dropdown-item>
               <el-dropdown-item @click="handleLogout">
-                <el-icon><SwitchButton /></el-icon>退出登录              </el-dropdown-item>
+                <el-icon><SwitchButton /></el-icon>退出登录
+              </el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
-        <el-button v-show="!collapsed" :icon="collapsed ? Expand : Fold" text class="collapse-btn" :aria-label="collapsed ? '展开侧边栏' : '收起侧边栏'" @click="collapsed = !collapsed" />
+        <el-button
+          v-show="!collapsed"
+          :icon="collapsed ? Expand : Fold"
+          text
+          class="collapse-btn"
+          :aria-label="collapsed ? '展开侧边栏' : '收起侧边栏'"
+          @click="collapsed = !collapsed"
+        />
       </div>
       <el-button v-show="collapsed" :icon="Expand" text class="collapse-btn-mini" @click="collapsed = !collapsed" />
     </el-aside>
 
-    <!-- Content area 鈥?no topbar, breadcrumb in page -->
     <el-main class="app-content">
       <router-view v-slot="{ Component }">
         <transition name="page-fade" mode="out-in">
@@ -93,18 +101,76 @@
         </transition>
       </router-view>
     </el-main>
+
+    <el-dialog
+      v-model="passwordDialogVisible"
+      title="修改密码"
+      width="420px"
+      destroy-on-close
+      @closed="resetPasswordForm"
+    >
+      <el-form label-position="top" class="password-form">
+        <el-form-item label="当前密码">
+          <el-input
+            v-model="passwordForm.currentPassword"
+            type="password"
+            show-password
+            placeholder="请输入当前登录密码"
+          />
+        </el-form-item>
+        <el-form-item label="新密码">
+          <el-input
+            v-model="passwordForm.newPassword"
+            type="password"
+            show-password
+            placeholder="至少 6 位，建议使用高强度密码"
+          />
+        </el-form-item>
+        <el-form-item label="确认新密码">
+          <el-input
+            v-model="passwordForm.confirmPassword"
+            type="password"
+            show-password
+            placeholder="再次输入新密码"
+          />
+        </el-form-item>
+        <p class="password-form-tip">修改成功后会退出当前会话，请使用新密码重新登录。</p>
+      </el-form>
+
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="passwordDialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="changingPassword" @click="handleChangePassword">
+            保存新密码
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
   </el-container>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Fold, Expand, ArrowDown, SwitchButton } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { ArrowDown, Expand, Fold } from '@element-plus/icons-vue'
+import { authApi } from '@/api/auth'
 
 const route = useRoute()
 const router = useRouter()
 const collapsed = ref(false)
-const userName = ref(sessionStorage.getItem('adminUser') || 'Admin')
+const passwordDialogVisible = ref(false)
+const changingPassword = ref(false)
+
+const loginType = sessionStorage.getItem('loginType') || (sessionStorage.getItem('agentKey') ? 'agent' : 'admin')
+const isAdmin = loginType !== 'agent'
+const userName = ref(sessionStorage.getItem(isAdmin ? 'adminUser' : 'agentName') || (isAdmin ? 'Admin' : 'Agent'))
+
+const passwordForm = reactive({
+  currentPassword: '',
+  newPassword: '',
+  confirmPassword: ''
+})
 
 const activeMenu = computed(() => {
   const path = route.path
@@ -112,23 +178,79 @@ const activeMenu = computed(() => {
   return path
 })
 
-function handleLogout() {
-  sessionStorage.clear()
-  router.push('/login')
+function clearAuthStorage() {
+  sessionStorage.removeItem('adminToken')
+  sessionStorage.removeItem('adminUser')
+  sessionStorage.removeItem('agentKey')
+  sessionStorage.removeItem('agentName')
+  sessionStorage.removeItem('loginType')
+}
+
+function resetPasswordForm() {
+  passwordForm.currentPassword = ''
+  passwordForm.newPassword = ''
+  passwordForm.confirmPassword = ''
+}
+
+function openPasswordDialog() {
+  resetPasswordForm()
+  passwordDialogVisible.value = true
+}
+
+async function handleLogout() {
+  try {
+    if (isAdmin && sessionStorage.getItem('adminToken')) {
+      await authApi.logout()
+    }
+  } catch {
+    // 会话不存在时忽略服务端登出失败，继续清理前端状态
+  } finally {
+    clearAuthStorage()
+    router.push('/login')
+  }
+}
+
+async function handleChangePassword() {
+  if (!passwordForm.currentPassword) {
+    ElMessage.error('请输入当前密码')
+    return
+  }
+  if (!passwordForm.newPassword) {
+    ElMessage.error('请输入新密码')
+    return
+  }
+  if (passwordForm.newPassword.length < 6) {
+    ElMessage.error('新密码至少 6 位')
+    return
+  }
+  if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+    ElMessage.error('两次输入的新密码不一致')
+    return
+  }
+
+  changingPassword.value = true
+  try {
+    await authApi.changePassword({
+      currentPassword: passwordForm.currentPassword,
+      newPassword: passwordForm.newPassword
+    })
+    ElMessage.success('密码已更新，请重新登录')
+    passwordDialogVisible.value = false
+    clearAuthStorage()
+    router.push('/login')
+  } catch (e: any) {
+    ElMessage.error(e?.message || '修改密码失败')
+  } finally {
+    changingPassword.value = false
+  }
 }
 </script>
 
 <style scoped>
 .app-shell { height: 100vh; overflow: hidden; }
 
-/* ---- Sidebar 鈥?Dynamic Purple Gradient (matching Login page) ---- */
 .app-sidebar {
-  background: linear-gradient(
-    135deg,
-    #7C3AED 0%,
-    #A78BFA 50%,
-    #06B6D4 100%
-  );
+  background: linear-gradient(135deg, #7C3AED 0%, #A78BFA 50%, #06B6D4 100%);
   background-size: 400% 400%;
   animation: sidebar-aurora 18s ease infinite;
   display: flex;
@@ -139,7 +261,6 @@ function handleLogout() {
   isolation: isolate;
 }
 
-/* Sidebar content fade-in when expanding */
 .sidebar-title,
 .sidebar-menu .el-menu-item span,
 .user-name,
@@ -148,20 +269,18 @@ function handleLogout() {
   transition: opacity var(--ha-duration-fast) var(--ha-ease-out);
 }
 
-/* Decorative grid overlay */
 .app-sidebar::before {
   content: '';
   position: absolute;
   inset: 0;
   background-image:
-    linear-gradient(to right, rgba(255,255,255,0.03) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(255,255,255,0.03) 1px, transparent 1px);
+    linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
   background-size: 28px 28px;
   pointer-events: none;
   z-index: 0;
 }
 
-/* Floating blur elements */
 .app-sidebar::after {
   content: '';
   position: absolute;
@@ -204,11 +323,13 @@ function handleLogout() {
   position: relative;
   z-index: 1;
 }
+
 .sidebar-logo {
   display: flex;
   align-items: center;
   gap: 10px;
 }
+
 .sidebar-title {
   color: #fff;
   font-size: 17px;
@@ -217,7 +338,6 @@ function handleLogout() {
   white-space: nowrap;
 }
 
-/* ---- Sidebar Menu ---- */
 .sidebar-menu {
   flex: 1;
   overflow-y: auto;
@@ -227,6 +347,7 @@ function handleLogout() {
   position: relative;
   z-index: 1;
 }
+
 .sidebar-menu .el-menu-item {
   color: var(--ha-sidebar-text-muted) !important;
   border-radius: 8px !important;
@@ -237,32 +358,36 @@ function handleLogout() {
   font-size: 14px !important;
   transition: all var(--ha-duration-fast) var(--ha-ease-out) !important;
 }
+
 .sidebar-menu .el-menu-item:hover {
   background: var(--ha-sidebar-hover) !important;
   color: #fff !important;
 }
+
 .sidebar-menu .el-menu-item.is-active {
   background: var(--ha-sidebar-active) !important;
   color: #fff !important;
   font-weight: 600;
 }
+
 .sidebar-menu .el-menu-item .el-icon {
   font-size: 18px;
 }
 
-/* ---- Sidebar Footer (user area) ---- */
 .sidebar-footer {
   padding: 10px 12px;
-  border-top: 1px solid rgba(255,255,255,0.10);
+  border-top: 1px solid rgba(255, 255, 255, 0.10);
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-shrink: 0;
 }
+
 .sidebar-footer.collapsed {
   justify-content: center;
   padding: 10px 0;
 }
+
 .sidebar-user {
   display: flex;
   align-items: center;
@@ -271,10 +396,12 @@ function handleLogout() {
   flex: 1;
   min-width: 0;
 }
+
 .user-avatar {
-  --el-avatar-bg-color: rgba(255,255,255,0.20) !important;
+  --el-avatar-bg-color: rgba(255, 255, 255, 0.20) !important;
   flex-shrink: 0;
 }
+
 .user-name {
   font-size: 13px;
   font-weight: 500;
@@ -283,27 +410,33 @@ function handleLogout() {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
 .user-arrow {
   color: var(--ha-sidebar-text-muted);
   flex-shrink: 0;
   margin-left: auto;
 }
+
 .collapse-btn {
   color: var(--ha-sidebar-text-muted) !important;
   flex-shrink: 0;
   padding: 4px !important;
 }
+
 .collapse-btn:hover {
   color: #fff !important;
 }
+
 .collapse-btn-mini {
   color: var(--ha-sidebar-text-muted) !important;
   margin: 10px auto;
   display: block;
 }
-.collapse-btn-mini:hover { color: #fff !important; }
 
-/* ---- Content (fluid, responsive padding) ---- */
+.collapse-btn-mini:hover {
+  color: #fff !important;
+}
+
 .app-content {
   background: var(--ha-surface);
   padding: clamp(16px, 2vw, 32px);
@@ -311,30 +444,42 @@ function handleLogout() {
   height: 100vh;
 }
 
-/* ---- Page Transition ---- */
+.password-form-tip {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--ha-muted);
+  line-height: 1.6;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .page-fade-enter-active { animation: ha-fade-up 350ms var(--ha-ease-out) both; }
 .page-fade-leave-active { animation: ha-fade-in 150ms var(--ha-ease-in-out) reverse both; }
 
-/* ---- Safe area for mobile notches ---- */
 .app-shell {
   padding-top: env(safe-area-inset-top);
 }
 
-/* ---- Sidebar: collapse to icon-only on small screens ---- */
 @media (max-width: 1024px) {
   .app-sidebar {
     width: 64px !important;
   }
+
   .app-sidebar .sidebar-title,
   .app-sidebar .user-name,
   .app-sidebar .user-arrow,
   .app-sidebar .sidebar-footer .collapse-btn {
     display: none !important;
   }
-  /* Keep expand button visible on tablet so users can re-expand */
+
   .app-sidebar .collapse-btn-mini {
     display: block !important;
   }
+
   .app-sidebar.sidebar-expanded {
     width: 220px !important;
     position: fixed;
@@ -344,26 +489,29 @@ function handleLogout() {
     z-index: 1000;
     box-shadow: var(--ha-shadow-lg);
   }
+
   .app-sidebar.sidebar-expanded .sidebar-title,
   .app-sidebar.sidebar-expanded .user-name,
   .app-sidebar.sidebar-expanded .user-arrow {
     display: flex !important;
     flex-direction: column;
   }
+
   .app-sidebar.sidebar-expanded .collapse-btn {
     display: flex !important;
   }
+
   .app-sidebar.sidebar-expanded .collapse-btn-mini {
     display: none !important;
   }
 }
 
-/* Larger touch targets on touch devices */
 @media (pointer: coarse) {
   .sidebar-menu .el-menu-item {
     height: 44px !important;
     line-height: 44px !important;
   }
+
   .collapse-btn,
   .collapse-btn-mini {
     min-height: 44px;
@@ -377,5 +525,3 @@ function handleLogout() {
   }
 }
 </style>
-
-

@@ -1,7 +1,9 @@
 package com.helloai.api.controller;
 
+import com.helloai.api.dto.auth.ChangePasswordRequest;
 import com.helloai.api.dto.auth.LoginRequest;
 import com.helloai.api.dto.auth.LoginResponse;
+import com.helloai.api.interceptor.AuthInterceptor;
 import com.helloai.common.base.R;
 import com.helloai.core.entity.Agent;
 import com.helloai.core.service.AuthService;
@@ -42,6 +44,23 @@ public class AuthController {
     @PostMapping("/logout")
     public R<Void> logout(@RequestHeader("X-Admin-Token") String token) {
         authService.adminLogout(token);
+        return R.ok();
+    }
+
+    @PostMapping("/change-password")
+    public R<Void> changePassword(
+            @Valid @RequestBody ChangePasswordRequest req,
+            @RequestHeader(value = "X-Admin-Token", required = false) String token,
+            HttpServletRequest httpReq) {
+        String authType = (String) httpReq.getAttribute(AuthInterceptor.AUTH_TYPE_KEY);
+        if (!"admin".equals(authType)) {
+            return R.fail(403, "只有管理员账号支持修改密码");
+        }
+        Long userId = (Long) httpReq.getAttribute(AuthInterceptor.AUTH_ID_KEY);
+        sysUserService.changePassword(userId, req.getCurrentPassword(), req.getNewPassword());
+        if (token != null && !token.isBlank()) {
+            authService.adminLogout(token);
+        }
         return R.ok();
     }
 

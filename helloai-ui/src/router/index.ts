@@ -41,8 +41,15 @@ const router = createRouter({
 })
 
 router.beforeEach((to) => {
-  if (to.path !== '/login' && to.path !== '/setup' && !sessionStorage.getItem('adminToken') && !sessionStorage.getItem('agentKey')) {
+  const hasAdminToken = !!sessionStorage.getItem('adminToken')
+  const hasAgentKey = !!sessionStorage.getItem('agentKey')
+
+  if (to.path !== '/login' && to.path !== '/setup' && !hasAdminToken && !hasAgentKey) {
     return '/login'
+  }
+
+  if (to.path === '/settings' && hasAgentKey && !hasAdminToken) {
+    return '/inbox'
   }
 })
 

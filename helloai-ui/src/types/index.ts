@@ -79,6 +79,7 @@ export interface AgentListItem {
   name: string
   role: AgentRole
   description: string
+  remark?: string | null
   status: AgentStatus
   totalScore: number
   rank: number
