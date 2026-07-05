@@ -14,8 +14,8 @@ import org.springframework.core.io.ClassPathResource;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.List;
 import java.util.Map;
 
@@ -49,6 +49,12 @@ public class AgentController {
         AgentRole role = AgentRole.valueOf(body.get("role").toUpperCase());
         String description = body.getOrDefault("description", "");
         Agent agent = agentService.register(name, role, description);
+        // 保存 specializationSlug（如有）
+        String specializationSlug = body.get("specializationSlug");
+        if (specializationSlug != null && !specializationSlug.isBlank()) {
+            agent.setSpecializationSlug(specializationSlug);
+            agentService.updateById(agent);
+        }
         return R.ok(toRegistrationResponse(agent));
     }
 
@@ -68,6 +74,12 @@ public class AgentController {
         String description = body.getOrDefault("description", "");
         AgentRole role = AgentRole.valueOf(roleStr.toUpperCase());
         Agent agent = agentService.register(name, role, description);
+        // 保存 specializationSlug（如有）
+        String specializationSlug = body.get("specializationSlug");
+        if (specializationSlug != null && !specializationSlug.isBlank()) {
+            agent.setSpecializationSlug(specializationSlug);
+            agentService.updateById(agent);
+        }
 
         log.info("Agent 自助注册成功: name={}, role={}, id={}", name, role, agent.getId());
         return R.ok(toRegistrationResponse(agent));
@@ -88,24 +100,29 @@ public class AgentController {
         String baseUrl = agentConfig.getBaseUrl() != null && !agentConfig.getBaseUrl().isBlank()
                 ? agentConfig.getBaseUrl() : "http://localhost:6565";
 
-        // v1.1: DB 优先 — 从 prompt_template 表获取 SKILL 内容
+        // 从文件系统读取 SKILL 内容
         try {
             String content = promptTemplateService.getSkillForAgent(
-                    agent.getRole().name(), apiKey, baseUrl, agent.getName());
+                    agent.getRole().name(), apiKey, baseUrl, agent.getName(), agent.getId());
             return R.ok(Map.of("role", role, "content", content));
         } catch (Exception e) {
-            log.warn("从 DB 获取 SKILL 失败，回退到文件: role={}", role, e);
+            log.warn("获取 SKILL 失败，回退到文件: role={}", role, e);
         }
 
-        // 文件兜底
+        // 文件兜底（jar 兼容）
         try {
             ClassPathResource resource = new ClassPathResource("skills/" + role + "/SKILL.md");
             if (!resource.exists()) {
                 return R.fail("未找到 " + role + " 角色的 SKILL.md");
             }
-            String content = Files.readString(resource.getFile().toPath(), StandardCharsets.UTF_8);
+            String content;
+            try (InputStream in = resource.getInputStream()) {
+                content = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            }
             content = content.replace("<注册后填入>", apiKey);
             content = content.replace("{{BASE_URL}}", baseUrl);
+            content = content.replace("<你的ID>", String.valueOf(agent.getId()));
+            content = content.replace("<你的 ID>", String.valueOf(agent.getId()));
 
             return R.ok(Map.of(
                     "role", role,

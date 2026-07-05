@@ -51,6 +51,7 @@
 
     <!-- Hover 操作栏 -->
     <div class="card-actions" @click.stop>
+      <el-button size="small" type="primary" plain @click="$emit('onboarding', agent)">生成接入内容</el-button>
       <el-button size="small" @click="$emit('edit', agent)">编辑</el-button>
       <el-button size="small" @click="$emit('toggle-status', agent)">
         {{ agent.status === 'ACTIVE' ? '禁用' : '启用' }}
@@ -75,6 +76,7 @@ defineEmits<{
   edit: [agent: AgentListItem]
   'toggle-status': [agent: AgentListItem]
   delete: [agent: AgentListItem]
+  onboarding: [agent: AgentListItem]
 }>()
 
 const roleColor = computed(() => ROLE_COLOR_MAP[props.agent.role] || ROLE_COLOR_MAP.EXECUTOR)

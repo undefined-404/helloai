@@ -10,6 +10,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Map;
+
 @Slf4j
 @RestController
 @RequestMapping("/api/activity")
@@ -37,5 +39,30 @@ public class ActivityController {
         }
         Page<ActivityLog> result = activityLogMapper.selectPage(new Page<>(page, pageSize), wrapper);
         return R.ok(PageResult.of(result));
+    }
+
+    /**
+     * Agent 写入活动日志。
+     * 认证由 AuthInterceptor 处理（从 _authId 获取 agentId）。
+     */
+    @PostMapping
+    public R<ActivityLog> create(@RequestBody Map<String, Object> body,
+                                  @RequestAttribute("_authId") Long agentId) {
+        ActivityLog entity = new ActivityLog();
+        entity.setAgentId(agentId);
+        entity.setAction((String) body.get("action"));
+        entity.setLevel((String) body.getOrDefault("level", "INFO"));
+        entity.setSource((String) body.getOrDefault("source", "agent"));
+        if (body.get("subTaskId") != null) {
+            entity.setSubTaskId(Long.valueOf(body.get("subTaskId").toString()));
+        }
+        if (body.get("detail") instanceof Map) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> detail = (Map<String, Object>) body.get("detail");
+            entity.setDetail(detail);
+        }
+        activityLogMapper.insert(entity);
+        log.info("Agent 活动日志写入: agentId={}, action={}, subTaskId={}", agentId, entity.getAction(), entity.getSubTaskId());
+        return R.ok(entity);
     }
 }

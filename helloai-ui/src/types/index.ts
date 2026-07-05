@@ -145,6 +145,18 @@ export interface ActivityLogItem {
   createTime: string
 }
 
+/** Agent 接入内容生成响应 */
+export interface AgentOnboardingResponse {
+  agentId: string | number
+  agentName: string
+  role: string
+  apiKey: string
+  baseUrl: string
+  title: string
+  content: string
+  skillContent: string
+}
+
 // --- 角色颜色映射 ---
 export const ROLE_COLOR_MAP: Record<AgentRole, { bar: string; bg: string; text: string; border: string; tagType: '' | 'success' | 'warning' | 'danger' | 'info' | 'primary' }> = {
   PLANNER:  { bar: '#7C3AED', bg: '#F5F3FF', text: '#6D28D9', border: '#EDE9FE', tagType: '' },

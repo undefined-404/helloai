@@ -9,10 +9,13 @@ import com.helloai.api.dto.agent.*;
 import com.helloai.common.base.R;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
+import com.helloai.common.config.AgentConfigProperties;
 import com.helloai.core.entity.Agent;
 import com.helloai.core.entity.ActivityLog;
 import com.helloai.core.entity.RewardLog;
 import com.helloai.core.service.AgentService;
+import com.helloai.core.service.PromptTemplateService;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -31,6 +34,8 @@ import java.util.Map;
 public class AdminAgentController {
 
     private final AgentService agentService;
+    private final PromptTemplateService promptTemplateService;
+    private final AgentConfigProperties agentConfigProperties;
 
     // ══════════════════════════════════════════════════════════════
     //  列表（分页 + 筛选 + enrichment）
@@ -179,6 +184,48 @@ public class AdminAgentController {
         ApiKeyResponse response = new ApiKeyResponse();
         response.setApiKey(newKey);
         return R.ok(response);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  接入内容生成（管理员视角一键生成 Agent onboarding 文本）
+    // ══════════════════════════════════════════════════════════════
+
+    @GetMapping("/{id}/onboarding-content")
+    public R<AgentOnboardingResponse> onboardingContent(@PathVariable("id") Long id,
+                                                        HttpServletRequest request) {
+        Agent agent = agentService.getById(id);
+        if (agent == null) {
+            return R.fail("Agent 不存在");
+        }
+
+        // 1. 解析 baseUrl（优先配置，否则从请求推导）
+        String baseUrl = agentConfigProperties.getBaseUrl();
+        if (baseUrl == null || baseUrl.isBlank()) {
+            baseUrl = request.getScheme() + "://"
+                    + request.getServerName() + ":"
+                    + request.getServerPort();
+        }
+
+        // 2. 获取纯 SKILL 内容（变量已替换）
+        String skillContent = promptTemplateService.getSkillForAgent(
+                agent.getRole().name(), agent.getApiKey(), baseUrl, agent.getName(), agent.getId());
+
+        // 3. 拼装完整接入内容
+        String content = promptTemplateService.buildOnboardingContent(
+                agent.getRole().name(), agent.getApiKey(), baseUrl, agent.getName(), agent.getId());
+
+        // 4. 组装响应
+        AgentOnboardingResponse resp = new AgentOnboardingResponse();
+        resp.setAgentId(agent.getId());
+        resp.setAgentName(agent.getName());
+        resp.setRole(agent.getRole().name());
+        resp.setApiKey(agent.getApiKey());
+        resp.setBaseUrl(baseUrl);
+        resp.setTitle("复制到 Trae / Qoder 的接入内容");
+        resp.setContent(content);
+        resp.setSkillContent(skillContent);
+
+        return R.ok(resp);
     }
 
     // ══════════════════════════════════════════════════════════════

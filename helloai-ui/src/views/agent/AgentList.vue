@@ -40,6 +40,7 @@
         @edit="openEdit"
         @toggle-status="openToggleStatus"
         @delete="openDelete"
+        @onboarding="openOnboarding"
       />
 
       <!-- 空状态 -->
@@ -111,6 +112,9 @@
 
     <!-- 删除确认弹窗 -->
     <AgentDeleteDialog v-model="deleteDialog" :agent="deleteTarget" @done="load()" />
+
+    <!-- 接入内容生成弹窗 -->
+    <AgentOnboardingDialog v-model="onboardingDialog" :agent-id="onboardingAgentId" />
   </div>
 </template>
 
@@ -125,6 +129,7 @@ import AgentCard from './components/AgentCard.vue'
 import AgentEditDialog from './components/AgentEditDialog.vue'
 import AgentStatusDialog from './components/AgentStatusDialog.vue'
 import AgentDeleteDialog from './components/AgentDeleteDialog.vue'
+import AgentOnboardingDialog from './components/AgentOnboardingDialog.vue'
 
 const router = useRouter()
 
@@ -190,9 +195,20 @@ async function handleRegister() {
   if (!valid) return
   registering.value = true
   try {
-    const res: any = await agentApi.register({ name: form.name, role: form.role, description: form.description })
-    ElMessage.success('注册成功，API Key: ' + (res.apiKey || ''))
+    const res: any = await agentApi.register({
+      name: form.name,
+      role: form.role,
+      description: form.description,
+      specializationSlug: form.specializationSlug || undefined
+    })
+    // 注册成功后关闭注册弹窗，直接打开 onboarding 弹窗
     registerDialog.value = false
+    onboardingAgentId.value = res.id
+    onboardingDialog.value = true
+    // 重置表单
+    form.name = ''
+    form.description = ''
+    form.specializationSlug = ''
     load()
   } finally { registering.value = false }
 }
@@ -209,6 +225,14 @@ function openToggleStatus(agent: AgentListItem) { statusTarget.value = agent; st
 const deleteDialog = ref(false)
 const deleteTarget = ref<AgentListItem | null>(null)
 function openDelete(agent: AgentListItem) { deleteTarget.value = agent; deleteDialog.value = true }
+
+// ── 接入内容生成 ──
+const onboardingDialog = ref(false)
+const onboardingAgentId = ref<string | number | null>(null)
+function openOnboarding(agent: AgentListItem) {
+  onboardingAgentId.value = agent.id
+  onboardingDialog.value = true
+}
 
 onMounted(() => load())
 </script>

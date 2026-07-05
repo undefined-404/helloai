@@ -79,6 +79,7 @@
           <el-button :type="agent.status === 'ACTIVE' ? 'warning' : 'success'" @click="openToggleStatus">
             {{ agent.status === 'ACTIVE' ? '禁用' : '启用' }}
           </el-button>
+          <el-button type="primary" plain @click="openOnboarding">生成接入内容</el-button>
           <el-button type="primary" @click="handleResetKey">重置 API Key</el-button>
           <el-button type="danger" @click="openDelete">删除 Agent</el-button>
         </div>
@@ -154,6 +155,9 @@
         </template>
       </el-input>
     </el-dialog>
+
+    <!-- 接入内容生成弹窗 -->
+    <AgentOnboardingDialog v-model="onboardingDialog" :agent-id="agent?.id || null" />
   </div>
 </template>
 
@@ -168,6 +172,7 @@ import type { AgentDetail, AgentListItem, ScoreLogItem, ActivityLogItem, AgentRo
 import AgentEditDialog from './components/AgentEditDialog.vue'
 import AgentStatusDialog from './components/AgentStatusDialog.vue'
 import AgentDeleteDialog from './components/AgentDeleteDialog.vue'
+import AgentOnboardingDialog from './components/AgentOnboardingDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -262,6 +267,12 @@ async function handleResetKey() {
 function copyKey() {
   navigator.clipboard.writeText(newApiKey.value)
   ElMessage.success('已复制到剪贴板')
+}
+
+// ── 接入内容生成 ──
+const onboardingDialog = ref(false)
+function openOnboarding() {
+  onboardingDialog.value = true
 }
 
 onMounted(() => loadDetail())

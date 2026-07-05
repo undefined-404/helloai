@@ -10,8 +10,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.List;
 import java.util.Map;
 
@@ -51,7 +51,10 @@ public class ToolsController {
             if (!resource.exists()) {
                 return ResponseEntity.notFound().build();
             }
-            String content = Files.readString(resource.getFile().toPath(), StandardCharsets.UTF_8);
+            String content;
+            try (InputStream in = resource.getInputStream()) {
+                content = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            }
 
             // 替换版本号占位符
             content = content.replace("CLI_VERSION = 1", "CLI_VERSION = " + CLI_VERSION);

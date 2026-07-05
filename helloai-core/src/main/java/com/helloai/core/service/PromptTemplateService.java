@@ -6,9 +6,13 @@ import com.helloai.core.entity.PromptTemplate;
 import com.helloai.core.mapper.PromptTemplateMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 @Slf4j
@@ -154,17 +158,51 @@ public class PromptTemplateService extends ServiceImpl<PromptTemplateMapper, Pro
     }
 
     /**
-     * 获取 Agent 的 SKILL.md（运行时变量替换）
+     * 获取 Agent 的 SKILL.md（从文件系统读取 + 运行时变量替换）。
+     * 文件路径: resources/skills/{role}/SKILL.md
      */
-    public String getSkillForAgent(String role, String apiKey, String baseUrl, String agentName) {
-        PromptTemplate skill = getByRoleAndCategory(role, "SKILL");
-        if (skill == null) {
-            throw new BizException("未找到角色 " + role + " 的 SKILL 文档");
+    public String getSkillForAgent(String role, String apiKey, String baseUrl, String agentName, Long agentId) {
+        String content;
+        ClassPathResource resource = new ClassPathResource(
+                "skills/" + role.toLowerCase() + "/SKILL.md");
+        if (!resource.exists()) {
+            throw new BizException("未找到角色 " + role + " 的 SKILL 文档（文件路径: skills/"
+                    + role.toLowerCase() + "/SKILL.md）");
         }
-        String content = skill.getContent();
+        try (InputStream in = resource.getInputStream()) {
+            content = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new BizException("读取 SKILL 文档失败: " + e.getMessage());
+        }
         content = content.replace("<注册后填入>", apiKey);
         content = content.replace("{{BASE_URL}}", baseUrl);
         content = content.replace("{{AGENT_NAME}}", agentName);
+        content = content.replace("<你的ID>", String.valueOf(agentId));
+        content = content.replace("<你的 ID>", String.valueOf(agentId));
         return content;
+    }
+
+    /**
+     * 拼装完整接入内容（Agent 信息摘要 + 执行要求 + SKILL）。
+     * 生成结果可直接复制到 Trae / Qoder 供外部 Agent 接入使用。
+     */
+    public String buildOnboardingContent(String role, String apiKey, String baseUrl,
+                                          String agentName, Long agentId) {
+        String skillContent = getSkillForAgent(role, apiKey, baseUrl, agentName, agentId);
+
+        return "你是 HelloAI 平台中的一个已注册 Agent，请按以下信息接入并开始工作。\n\n"
+                + "【Agent 信息】\n"
+                + "- Agent ID：" + agentId + "\n"
+                + "- 名称：" + agentName + "\n"
+                + "- 角色：" + role + "\n"
+                + "- API Key：" + apiKey + "\n"
+                + "- 服务地址：" + baseUrl + "\n\n"
+                + "【执行要求】\n"
+                + "1. 你已在 HelloAI 平台完成注册，无需再次注册。\n"
+                + "2. 你需要按照以下 Skill 内容工作。\n"
+                + "3. 文中所有 API 请求需携带 Header: Authorization: Bearer " + apiKey + "\n"
+                + "4. 首次进入后先获取规则，再查收件箱和任务。\n\n"
+                + "【SKILL】\n"
+                + skillContent;
     }
 }

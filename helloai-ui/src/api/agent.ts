@@ -1,5 +1,5 @@
 import request from './request'
-import type { Agent, AgentListItem, AgentDetail, AgentRelatedCounts, AgentDeleteResult, ScoreLogItem, ActivityLogItem, PageResult } from '@/types'
+import type { Agent, AgentListItem, AgentDetail, AgentOnboardingResponse, AgentRelatedCounts, AgentDeleteResult, ScoreLogItem, ActivityLogItem, PageResult } from '@/types'
 
 export const agentApi = {
   // ── 现有 ──
@@ -9,7 +9,7 @@ export const agentApi = {
   getById(id: string) {
     return request.get<any, Agent>(`/agents/${id}`)
   },
-  register(data: { name: string; role: string; description?: string }) {
+  register(data: { name: string; role: string; description?: string; specializationSlug?: string }) {
     return request.post('/agents/register', data)
   },
 
@@ -64,5 +64,10 @@ export const agentApi = {
   // ── 活动日志 ──
   activityLogs(id: string, params?: { page?: number; pageSize?: number; action?: string }) {
     return request.get<any, PageResult<ActivityLogItem>>(`/admin/agents/${id}/activity-logs`, { params })
+  },
+
+  // ── 接入内容生成 ──
+  getOnboardingContent(id: string) {
+    return request.get<any, AgentOnboardingResponse>(`/admin/agents/${id}/onboarding-content`)
   },
 }
