@@ -26,7 +26,7 @@
       </el-table>
       <el-empty v-if="!list.length && !loading" description="暂无积分记录" />
 
-      <el-dialog v-model="adjustDialog" title="手动调整积分" width="480px" top="5vh">
+      <el-dialog v-model="adjustDialog" title="手动调整积分" width="480px" top="5vh" append-to-body>
         <el-form ref="adjustFormRef" :model="adjustForm" :rules="adjustRules" label-width="100px">
           <el-form-item label="Agent ID" prop="agentId">
             <el-input v-model.number="adjustForm.agentId" />

@@ -4,6 +4,7 @@
     :title="agent?.status === 'ACTIVE' ? '禁用 Agent' : '启用 Agent'"
     width="420px"
     top="10vh"
+    append-to-body
     @close="$emit('close')"
   >
     <div style="text-align:center;padding:12px 0">

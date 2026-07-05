@@ -33,7 +33,7 @@
         </el-menu-item>
         <el-menu-item index="/prompts">
           <el-icon><EditPen /></el-icon>
-          <span>Prompt管理</span>
+          <span>Prompt 管理</span>
         </el-menu-item>
         <el-menu-item index="/inbox">
           <el-icon><Message /></el-icon>
@@ -106,6 +106,7 @@
       v-model="passwordDialogVisible"
       title="修改密码"
       width="420px"
+      append-to-body
       destroy-on-close
       @closed="resetPasswordForm"
     >

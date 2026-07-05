@@ -47,7 +47,7 @@ public class AgentInboxController {
      */
     @PutMapping("/{id}/read")
     public R<Void> markRead(@RequestAttribute("_authId") Long agentId,
-                            @PathVariable Long id) {
+                            @PathVariable("id") Long id) {
         inboxService.markRead(agentId, id);
         return R.ok();
     }
@@ -57,7 +57,7 @@ public class AgentInboxController {
      */
     @PutMapping("/{id}/archive")
     public R<Void> markArchived(@RequestAttribute("_authId") Long agentId,
-                                @PathVariable Long id) {
+                                @PathVariable("id") Long id) {
         inboxService.markArchived(agentId, id);
         return R.ok();
     }

@@ -11,6 +11,7 @@ public class AgentListItemVO {
     private Long id;
     private String name;
     private AgentRole role;
+    private String apiKey;
     private String description;
     private AgentStatus status;
     private Integer totalScore;

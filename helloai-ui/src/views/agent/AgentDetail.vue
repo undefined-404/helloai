@@ -144,7 +144,7 @@
     <AgentDeleteDialog v-model="deleteDialog" :agent="deleteAgentData" @done="handleDeleted" />
 
     <!-- 重置 Key 结果 -->
-    <el-dialog v-model="keyDialog" title="新 API Key" width="480px" top="10vh">
+    <el-dialog v-model="keyDialog" title="新 API Key" width="480px" top="10vh" append-to-body>
       <p style="font-size:13px;color:var(--ha-warning);margin:0 0 8px">
         此 Key 仅显示一次，请立即复制保存。
       </p>
@@ -174,6 +174,10 @@ const router = useRouter()
 const loading = ref(false)
 const agent = ref<AgentDetail | null>(null)
 
+function getAgentId() {
+  return String(route.params.id || '')
+}
+
 const roleLabels: Record<AgentRole, string> = {
   PLANNER: '规划者', EXECUTOR: '执行者', REVIEWER: '审查者', PATROL: '巡查者'
 }
@@ -188,9 +192,13 @@ const roleStyle = computed(() => {
 async function loadDetail() {
   loading.value = true
   try {
-    const id = Number(route.params.id)
+    const id = getAgentId()
     agent.value = await agentApi.adminDetail(id)
     await Promise.all([loadScoreLogs(1), loadActivityLogs(1)])
+  } catch (e: any) {
+    const message = e?.response?.data?.msg || e?.message || 'Agent 详情加载失败'
+    ElMessage.error(message)
+    router.replace('/agents')
   } finally {
     loading.value = false
   }
@@ -204,7 +212,7 @@ const scoreLoading = ref(false)
 async function loadScoreLogs(page = 1) {
   scoreLoading.value = true
   try {
-    const id = Number(route.params.id)
+    const id = getAgentId()
     const res = await agentApi.scoreLogs(id, { page, pageSize: scorePageSize })
     scoreList.value = res.list || []
     scoreTotal.value = res.total
@@ -219,7 +227,7 @@ const activityLoading = ref(false)
 async function loadActivityLogs(page = 1) {
   activityLoading.value = true
   try {
-    const id = Number(route.params.id)
+    const id = getAgentId()
     const res = await agentApi.activityLogs(id, { page, pageSize: activityPageSize })
     activityList.value = res.list || []
     activityTotal.value = res.total

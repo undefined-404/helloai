@@ -27,7 +27,7 @@
       </el-table>
       <el-empty v-if="!list.length && !loading" description="暂无规则" />
 
-      <el-dialog v-model="editDialog" :title="editing.id ? '编辑规则' : '新建规则'" width="650px" top="5vh">
+      <el-dialog v-model="editDialog" :title="editing.id ? '编辑规则' : '新建规则'" width="650px" top="5vh" append-to-body>
         <el-form ref="formRef" :model="editForm" :rules="rules" label-width="80px">
           <el-row :gutter="16">
             <el-col :span="12">

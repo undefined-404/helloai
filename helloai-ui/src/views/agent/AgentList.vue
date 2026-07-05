@@ -70,7 +70,7 @@
     </div>
 
     <!-- 注册弹窗 -->
-    <el-dialog v-model="registerDialog" title="注册新 Agent" width="480px" top="5vh">
+    <el-dialog v-model="registerDialog" title="注册新 Agent" width="480px" top="5vh" append-to-body>
       <el-form ref="formRef" :model="form" :rules="rules" label-width="80px">
         <el-form-item label="名称" prop="name">
           <el-input v-model="form.name" />
@@ -174,7 +174,7 @@ async function load(page = 1) {
 
 function loadPage(p: number) { load(p) }
 
-function goDetail(id: number) {
+function goDetail(id: string) {
   router.push(`/agents/${id}`)
 }
 

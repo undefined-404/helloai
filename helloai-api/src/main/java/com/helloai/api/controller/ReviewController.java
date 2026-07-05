@@ -41,7 +41,7 @@ public class ReviewController {
     }
 
     @GetMapping("/{id}")
-    public R<ReviewResponse> getById(@PathVariable Long id) {
+    public R<ReviewResponse> getById(@PathVariable("id") Long id) {
         ReviewRecord record = reviewService.getById(id);
         if (record == null) {
             return R.fail("审查记录不存在");

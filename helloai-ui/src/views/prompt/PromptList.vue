@@ -3,7 +3,7 @@
     <el-card>
       <template #header>
         <div class="card-header">
-          <span>Prompt 管理</span>
+          <span>模板管理</span>
           <el-button size="small" type="primary" @click="openCreate">新建模板</el-button>
         </div>
       </template>
@@ -49,7 +49,7 @@
       <el-empty v-if="!list.length && !loading" description="暂无 Prompt 模板" />
     </el-card>
 
-    <el-dialog v-model="editDialog" :title="editing.id ? '编辑模板' : '新建模板'" width="800px" top="5vh">
+    <el-dialog v-model="editDialog" :title="editing.id ? '编辑模板' : '新建模板'" width="800px" top="5vh" append-to-body>
       <el-form ref="formRef" :model="editForm" :rules="rules" label-width="90px">
         <el-row :gutter="16">
           <el-col :span="12"><el-form-item label="名称" prop="name"><el-input v-model="editForm.name" /></el-form-item></el-col>
@@ -69,12 +69,12 @@
       <template #footer><el-button @click="editDialog=false">取消</el-button><el-button type="primary" :loading="saving" @click="handleSave">保存</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="composeDialog" title="Prompt 组合预览" width="800px" top="5vh">
+    <el-dialog v-model="composeDialog" title="Prompt 组合预览" width="800px" top="5vh" append-to-body>
       <el-input v-model="composeResult" type="textarea" :rows="20" readonly />
       <template #footer><el-button @click="composeDialog=false">关闭</el-button><el-button type="primary" @click="copyCompose">复制</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="skillDialog" title="SKILL 预览" width="700px" top="5vh">
+    <el-dialog v-model="skillDialog" title="SKILL 预览" width="700px" top="5vh" append-to-body>
       <el-input v-model="skillContent" type="textarea" :rows="18" readonly />
       <template #footer><el-button @click="skillDialog=false">关闭</el-button></template>
     </el-dialog>

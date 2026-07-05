@@ -97,11 +97,88 @@ def _get_raw(api_key: str, path: str) -> str:
         sys.exit(1)
 
 
+def _reg_post(token: str, path: str, body: dict) -> dict:
+    """注册请求（无需 API Key，用注册令牌）"""
+    url = f"{BASE_URL}/api{path}"
+    data = json.dumps(body).encode() if body else None
+    headers = {"Content-Type": "application/json"}
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req) as resp:
+            result = json.loads(resp.read().decode())
+            if result.get("code") == 200:
+                return result.get("data", {})
+            print(f"❌ 注册失败: {result.get('msg', '未知错误')}", file=sys.stderr)
+            sys.exit(1)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        try:
+            msg = json.loads(body).get("msg", str(e))
+        except json.JSONDecodeError:
+            msg = body or str(e)
+        print(f"❌ HTTP {e.code}: {msg}", file=sys.stderr)
+        sys.exit(1)
+    except urllib.error.URLError as e:
+        print(f"❌ 网络错误: {e.reason}", file=sys.stderr)
+        sys.exit(1)
+
+
 # ============================================================
 # 命令
 # ============================================================
 
-def cmd_poll(api_key: str, args: list):
+def cmd_register(args):
+    """Agent 自注册 — 使用注册令牌注册，获取 API Key"""
+    # 解析 --name --role --token --description
+    name = None
+    role = None
+    token = None
+    description = ""
+    i = 0
+    while i < len(args):
+        if args[i] == "--name" and i + 1 < len(args):
+            name = args[i + 1]; i += 2
+        elif args[i] == "--role" and i + 1 < len(args):
+            role = args[i + 1]; i += 2
+        elif args[i] == "--token" and i + 1 < len(args):
+            token = args[i + 1]; i += 2
+        elif args[i] == "--description" and i + 1 < len(args):
+            description = args[i + 1]; i += 2
+        elif args[i].startswith("--name="):
+            name = args[i][7:]; i += 1
+        elif args[i].startswith("--role="):
+            role = args[i][7:]; i += 1
+        elif args[i].startswith("--token="):
+            token = args[i][8:]; i += 1
+        elif args[i].startswith("--description="):
+            description = args[i][14:]; i += 1
+        else:
+            i += 1
+
+    if not name or not role or not token:
+        print("用法: python task-cli.py register --name <名称> --role <角色> --token <注册令牌> [--description <描述>]", file=sys.stderr)
+        print("角色: planner / executor / reviewer / patrol", file=sys.stderr)
+        sys.exit(1)
+
+    valid_roles = {"planner", "executor", "reviewer", "patrol"}
+    if role.lower() not in valid_roles:
+        print(f"❌ 无效角色: {role}，可选: {', '.join(sorted(valid_roles))}", file=sys.stderr)
+        sys.exit(1)
+
+    data = _reg_post(token, "/agents/register-with-token", {
+        "name": name,
+        "role": role.lower(),
+        "description": description,
+        "registrationToken": token,
+    })
+
+    print(f"✅ 注册成功")
+    print(f"   Agent ID:  {data.get('id')}")
+    print(f"   API Key:   {data.get('apiKey')}")
+    print(f"   角色:      {data.get('role')}")
+    print(f"\n⚠️  请立即获取你的 SKILL.md:")
+    print(f"   python task-cli.py --key {data.get('apiKey')} skill > SKILL.md")
+    print(f"\n   然后将 SKILL.md 粘贴到你的 AI Agent 中即可开始工作。")
     """查看我的子任务"""
     data = _get(api_key, "/sub-tasks/mine")
     items = data.get("list", data if isinstance(data, list) else [])
@@ -214,6 +291,7 @@ def cmd_update(api_key: str, args: list):
 # ============================================================
 
 COMMANDS = {
+    "register": cmd_register,
     "poll": cmd_poll,
     "submit": cmd_submit,
     "status": cmd_status,
@@ -227,13 +305,15 @@ def print_usage():
     print(textwrap.dedent(f"""\
     HelloAI Agent CLI v{CLI_VERSION}
     用法:
+      python task-cli.py register --name <名称> --role <角色> --token <注册令牌>
       python task-cli.py --key <API_KEY> <命令> [参数]
 
     命令:
+      register               Agent 自注册（首次使用，无需 --key）
       poll                   查看我的子任务列表
       submit <id>            提交子任务成果
       status <id>            查看子任务状态
-      skill                  获取角色 SKILL.md
+      skill                  获取角色 SKILL.md (API Key 自动填入)
       version                查看版本信息
       update                 更新 CLI + SKILL.md
     """))
@@ -256,16 +336,22 @@ def main():
         else:
             cmd_args.append(arg)
 
-    if not api_key:
-        print("错误: 请提供 --key <API_KEY>", file=sys.stderr)
-        print_usage()
-        sys.exit(1)
-
     if not cmd_args:
         print_usage()
         sys.exit(1)
 
     command = cmd_args[0]
+
+    # register 命令不需要 API Key
+    if command == "register":
+        cmd_register(cmd_args[1:])
+        return
+
+    if not api_key and command != "register":
+        print("错误: 请提供 --key <API_KEY>（register 命令除外）", file=sys.stderr)
+        print_usage()
+        sys.exit(1)
+
     cmd_fn = COMMANDS.get(command)
     if not cmd_fn:
         print(f"未知命令: {command}", file=sys.stderr)

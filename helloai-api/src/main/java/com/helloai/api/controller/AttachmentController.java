@@ -37,7 +37,7 @@ public class AttachmentController {
      * 附件详情
      */
     @GetMapping("/{id}")
-    public R<Attachment> getById(@PathVariable Long id) {
+    public R<Attachment> getById(@PathVariable("id") Long id) {
         Attachment attachment = attachmentMapper.selectById(id);
         if (attachment == null) return R.fail("附件不存在");
         return R.ok(attachment);
@@ -47,7 +47,7 @@ public class AttachmentController {
      * 附件下载 — 302 重定向到 MinIO 预签名 URL 或存储地址
      */
     @GetMapping("/{id}/download")
-    public ResponseEntity<Void> download(@PathVariable Long id) {
+    public ResponseEntity<Void> download(@PathVariable("id") Long id) {
         Attachment attachment = attachmentMapper.selectById(id);
         if (attachment == null) {
             throw new BizException(404, "附件不存在");

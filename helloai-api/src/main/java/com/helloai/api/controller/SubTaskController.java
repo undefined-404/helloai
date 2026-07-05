@@ -62,7 +62,7 @@ public class SubTaskController {
     }
 
     @GetMapping("/{id}")
-    public R<SubTaskResponse> getById(@PathVariable Long id) {
+    public R<SubTaskResponse> getById(@PathVariable("id") Long id) {
         SubTask subTask = subTaskService.getById(id);
         if (subTask == null) return R.fail("子任务不存在");
         return R.ok(toResponse(subTask));
@@ -90,55 +90,55 @@ public class SubTaskController {
     }
 
     @PostMapping("/{id}/claim")
-    public R<Void> claim(@PathVariable Long id, @RequestParam("agentId") Long agentId) {
+    public R<Void> claim(@PathVariable("id") Long id, @RequestParam("agentId") Long agentId) {
         subTaskService.claim(id, agentId);
         return R.ok();
     }
 
     @PostMapping("/{id}/start")
-    public R<Void> start(@PathVariable Long id) {
+    public R<Void> start(@PathVariable("id") Long id) {
         subTaskService.start(id);
         return R.ok();
     }
 
     @PostMapping("/{id}/submit")
-    public R<Void> submit(@PathVariable Long id) {
+    public R<Void> submit(@PathVariable("id") Long id) {
         subTaskService.submit(id);
         return R.ok();
     }
 
     @PostMapping("/{id}/complete")
-    public R<Void> complete(@PathVariable Long id) {
+    public R<Void> complete(@PathVariable("id") Long id) {
         subTaskService.complete(id);
         return R.ok();
     }
 
     @PostMapping("/{id}/rework")
-    public R<Void> rework(@PathVariable Long id, @RequestBody ReworkRequest req) {
+    public R<Void> rework(@PathVariable("id") Long id, @RequestBody ReworkRequest req) {
         subTaskService.rework(id, req.getReworkAgentId());
         return R.ok();
     }
 
     @PostMapping("/{id}/block")
-    public R<Void> block(@PathVariable Long id) {
+    public R<Void> block(@PathVariable("id") Long id) {
         subTaskService.block(id);
         return R.ok();
     }
 
     @PostMapping("/{id}/reassign")
-    public R<Void> reassign(@PathVariable Long id, @Valid @RequestBody ReassignRequest req) {
+    public R<Void> reassign(@PathVariable("id") Long id, @Valid @RequestBody ReassignRequest req) {
         subTaskService.reassign(id, req.getAgentId());
         return R.ok();
     }
 
     @PostMapping("/{id}/pause")
-    public R<Void> pause(@PathVariable Long id) {
+    public R<Void> pause(@PathVariable("id") Long id) {
         subTaskService.pause(id);
         return R.ok();
     }
 
     @PostMapping("/{id}/resume")
-    public R<Void> resume(@PathVariable Long id) {
+    public R<Void> resume(@PathVariable("id") Long id) {
         subTaskService.resume(id);
         return R.ok();
     }

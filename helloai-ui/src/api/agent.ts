@@ -6,7 +6,7 @@ export const agentApi = {
   list(params?: { role?: string; status?: string }) {
     return request.get<any, Agent[]>('/agents', { params })
   },
-  getById(id: number) {
+  getById(id: string) {
     return request.get<any, Agent>(`/agents/${id}`)
   },
   register(data: { name: string; role: string; description?: string }) {
@@ -27,42 +27,42 @@ export const agentApi = {
   },
 
   // ── 管理端详情 ──
-  adminDetail(id: number) {
+  adminDetail(id: string) {
     return request.get<any, AgentDetail>(`/admin/agents/${id}`)
   },
 
   // ── 更新 Agent 信息 ──
-  updateProfile(id: number, data: { name?: string; modelType?: string; specializationSlug?: string; remark?: string }) {
+  updateProfile(id: string, data: { name?: string; modelType?: string; specializationSlug?: string; remark?: string }) {
     return request.put<any, void>(`/admin/agents/${id}`, data)
   },
 
   // ── 切换状态 ──
-  updateStatus(id: number, status: 'ACTIVE' | 'DISABLED') {
+  updateStatus(id: string, status: 'ACTIVE' | 'DISABLED') {
     return request.put<any, void>(`/admin/agents/${id}/status`, { status })
   },
 
   // ── 重置 Key ──
-  resetKey(id: number) {
+  resetKey(id: string) {
     return request.post<any, { apiKey: string; message: string }>(`/admin/agents/${id}/reset-key`)
   },
 
   // ── 关联数据统计 ──
-  relatedCounts(id: number) {
+  relatedCounts(id: string) {
     return request.get<any, AgentRelatedCounts>(`/admin/agents/${id}/related-counts`)
   },
 
   // ── 级联删除 ──
-  deleteAgent(id: number, confirmName: string) {
+  deleteAgent(id: string, confirmName: string) {
     return request.delete<any, AgentDeleteResult>(`/admin/agents/${id}`, { data: { confirmName } })
   },
 
   // ── 积分明细 ──
-  scoreLogs(id: number, params?: { page?: number; pageSize?: number }) {
+  scoreLogs(id: string, params?: { page?: number; pageSize?: number }) {
     return request.get<any, PageResult<ScoreLogItem>>(`/admin/agents/${id}/score-logs`, { params })
   },
 
   // ── 活动日志 ──
-  activityLogs(id: number, params?: { page?: number; pageSize?: number; action?: string }) {
+  activityLogs(id: string, params?: { page?: number; pageSize?: number; action?: string }) {
     return request.get<any, PageResult<ActivityLogItem>>(`/admin/agents/${id}/activity-logs`, { params })
   },
 }

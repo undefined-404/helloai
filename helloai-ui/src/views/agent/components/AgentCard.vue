@@ -71,7 +71,7 @@ const props = defineProps<{
 }>()
 
 defineEmits<{
-  click: [id: number]
+  click: [id: string]
   edit: [agent: AgentListItem]
   'toggle-status': [agent: AgentListItem]
   delete: [agent: AgentListItem]

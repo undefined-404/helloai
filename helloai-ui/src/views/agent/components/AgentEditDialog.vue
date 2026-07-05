@@ -4,6 +4,7 @@
     title="编辑 Agent"
     width="480px"
     top="5vh"
+    append-to-body
     @close="$emit('close')"
   >
     <el-form ref="formRef" :model="form" :rules="rules" label-width="80px">
@@ -31,6 +32,13 @@
           <el-option label="AI小安-测试" value="executor-tester" />
         </el-select>
       </el-form-item>
+      <el-form-item label="API Key">
+        <el-input :model-value="form.apiKey" readonly>
+          <template #append>
+            <el-button @click="copyApiKey">复制</el-button>
+          </template>
+        </el-input>
+      </el-form-item>
       <el-form-item label="描述">
         <el-input v-model="form.remark" type="textarea" :rows="2" placeholder="职责简要" />
       </el-form-item>
@@ -57,7 +65,7 @@ watch(visible, v => emit('update:modelValue', v))
 
 const saving = ref(false)
 const formRef = ref()
-const form = reactive({ name: '', role: 'EXECUTOR', modelType: '', specializationSlug: '', remark: '' })
+const form = reactive({ name: '', role: 'EXECUTOR', modelType: '', specializationSlug: '', remark: '', apiKey: '' })
 const rules = { name: [{ required: true, message: '请输入名称', trigger: 'blur' }] }
 
 watch(() => props.agent, (a) => {
@@ -67,8 +75,14 @@ watch(() => props.agent, (a) => {
     form.modelType = ''
     form.specializationSlug = ''
     form.remark = a.description || ''
+    form.apiKey = a.apiKey || ''
   }
 }, { immediate: true })
+
+function copyApiKey() {
+  navigator.clipboard.writeText(form.apiKey)
+  ElMessage.success('API Key 已复制到剪贴板')
+}
 
 async function handleSave() {
   const valid = await formRef.value?.validate().catch(() => false)

@@ -34,7 +34,7 @@ public class RulesController {
      * 获取单个规则
      */
     @GetMapping("/{id}")
-    public R<Rule> getById(@PathVariable Long id) {
+    public R<Rule> getById(@PathVariable("id") Long id) {
         Rule rule = ruleService.getById(id);
         if (rule == null) return R.fail("规则不存在");
         return R.ok(rule);

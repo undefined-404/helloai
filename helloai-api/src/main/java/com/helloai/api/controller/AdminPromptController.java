@@ -39,7 +39,7 @@ public class AdminPromptController {
      * 获取单个模板
      */
     @GetMapping("/{id}")
-    public R<PromptTemplateResponse> getById(@PathVariable Long id) {
+    public R<PromptTemplateResponse> getById(@PathVariable("id") Long id) {
         PromptTemplate template = promptTemplateService.getById(id);
         if (template == null) return R.fail("模板不存在");
         return R.ok(toResponse(template));
@@ -57,7 +57,7 @@ public class AdminPromptController {
      * 更新模板
      */
     @PutMapping("/{id}")
-    public R<PromptTemplateResponse> update(@PathVariable Long id, @RequestBody PromptTemplate template) {
+    public R<PromptTemplateResponse> update(@PathVariable("id") Long id, @RequestBody PromptTemplate template) {
         template.setId(id);
         return R.ok(toResponse(promptTemplateService.update(template)));
     }
@@ -66,7 +66,7 @@ public class AdminPromptController {
      * 删除模板
      */
     @DeleteMapping("/{id}")
-    public R<Void> delete(@PathVariable Long id) {
+    public R<Void> delete(@PathVariable("id") Long id) {
         promptTemplateService.removeById(id);
         return R.ok();
     }

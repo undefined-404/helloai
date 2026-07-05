@@ -59,6 +59,7 @@ public class AdminAgentController {
             vo.setId(a.getId());
             vo.setName(a.getName());
             vo.setRole(a.getRole());
+            vo.setApiKey(a.getApiKey());
             vo.setDescription(a.getRemark());
             vo.setStatus(a.getStatus());
             vo.setTotalScore(a.getScore());
@@ -82,7 +83,7 @@ public class AdminAgentController {
     // ══════════════════════════════════════════════════════════════
 
     @GetMapping("/{id}")
-    public R<AgentDetailVO> getById(@PathVariable Long id) {
+    public R<AgentDetailVO> getById(@PathVariable("id") Long id) {
         Agent agent = agentService.getAgentDetail(id);
         if (agent == null) return R.fail("Agent 不存在");
 
@@ -143,7 +144,8 @@ public class AdminAgentController {
     // ══════════════════════════════════════════════════════════════
 
     @PutMapping("/{id}")
-    public R<Void> update(@PathVariable Long id, @RequestBody AgentUpdateRequest req) {
+    public R<Void> update(@PathVariable("id") Long id, @RequestBody AgentUpdateRequest req) {
+        log.info("更新 Agent 请求: id={}, body={}", id, req);
         Agent agent = agentService.getById(id);
         if (agent == null) return R.fail("Agent 不存在");
 
@@ -161,7 +163,7 @@ public class AdminAgentController {
     // ══════════════════════════════════════════════════════════════
 
     @PutMapping("/{id}/status")
-    public R<Void> updateStatus(@PathVariable Long id, @RequestBody Map<String, String> body) {
+    public R<Void> updateStatus(@PathVariable("id") Long id, @RequestBody Map<String, String> body) {
         AgentStatus status = AgentStatus.valueOf(body.get("status").toUpperCase());
         agentService.updateStatus(id, status);
         return R.ok();
@@ -172,7 +174,7 @@ public class AdminAgentController {
     // ══════════════════════════════════════════════════════════════
 
     @PostMapping("/{id}/reset-key")
-    public R<ApiKeyResponse> resetKey(@PathVariable Long id) {
+    public R<ApiKeyResponse> resetKey(@PathVariable("id") Long id) {
         String newKey = agentService.resetApiKey(id);
         ApiKeyResponse response = new ApiKeyResponse();
         response.setApiKey(newKey);
@@ -184,7 +186,7 @@ public class AdminAgentController {
     // ══════════════════════════════════════════════════════════════
 
     @GetMapping("/{id}/related-counts")
-    public R<AgentRelatedCounts> relatedCounts(@PathVariable Long id) {
+    public R<AgentRelatedCounts> relatedCounts(@PathVariable("id") Long id) {
         Map<String, Object> counts = agentService.getRelatedCounts(id);
         AgentRelatedCounts vo = new AgentRelatedCounts();
         vo.setAgentId((Long) counts.get("agentId"));
@@ -202,7 +204,7 @@ public class AdminAgentController {
     // ══════════════════════════════════════════════════════════════
 
     @DeleteMapping("/{id}")
-    public R<AgentDeleteResult> delete(@PathVariable Long id,
+    public R<AgentDeleteResult> delete(@PathVariable("id") Long id,
                                         @RequestBody Map<String, String> body) {
         String confirmName = body.get("confirmName");
         if (confirmName == null || confirmName.isBlank()) {
@@ -225,7 +227,7 @@ public class AdminAgentController {
 
     @GetMapping("/{id}/score-logs")
     public R<PageResult<ScoreLogItem>> scoreLogs(
-            @PathVariable Long id,
+            @PathVariable("id") Long id,
             @RequestParam(value = "page", defaultValue = "1") int page,
             @RequestParam(value = "pageSize", defaultValue = "20") int pageSize) {
         Page<RewardLog> result = agentService.getScoreLogs(id, page, pageSize);
@@ -248,7 +250,7 @@ public class AdminAgentController {
 
     @GetMapping("/{id}/activity-logs")
     public R<PageResult<ActivityLogItem>> activityLogs(
-            @PathVariable Long id,
+            @PathVariable("id") Long id,
             @RequestParam(value = "page", defaultValue = "1") int page,
             @RequestParam(value = "pageSize", defaultValue = "20") int pageSize,
             @RequestParam(value = "action", required = false) String action) {

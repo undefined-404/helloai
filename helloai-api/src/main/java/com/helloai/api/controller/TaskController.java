@@ -55,14 +55,14 @@ public class TaskController {
     }
 
     @GetMapping("/{id}")
-    public R<Task> getById(@PathVariable Long id) {
+    public R<Task> getById(@PathVariable("id") Long id) {
         Task task = taskService.getById(id);
         if (task == null) return R.fail("任务不存在");
         return R.ok(task);
     }
 
     @PutMapping("/{id}/status")
-    public R<Task> updateStatus(@PathVariable Long id,
+    public R<Task> updateStatus(@PathVariable("id") Long id,
                                  @Valid @RequestBody UpdateTaskStatusRequest req) {
         Task task = taskService.getById(id);
         if (task == null) return R.fail("任务不存在");
@@ -74,7 +74,7 @@ public class TaskController {
     }
 
     @PutMapping("/{id}")
-    public R<Task> update(@PathVariable Long id, @RequestBody CreateTaskRequest req) {
+    public R<Task> update(@PathVariable("id") Long id, @RequestBody CreateTaskRequest req) {
         Task task = taskService.getById(id);
         if (task == null) return R.fail("任务不存在");
         task.setTitle(req.getTitle());

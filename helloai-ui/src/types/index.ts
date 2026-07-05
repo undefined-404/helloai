@@ -62,7 +62,7 @@ export interface SubTask {
 }
 
 export interface Agent {
-  id: number
+  id: string
   name: string
   role: AgentRole
   modelType: string | null
@@ -75,9 +75,10 @@ export interface Agent {
 }
 
 export interface AgentListItem {
-  id: number
+  id: string
   name: string
   role: AgentRole
+  apiKey: string
   description: string
   remark?: string | null
   status: AgentStatus
@@ -106,7 +107,7 @@ export interface AgentDetail extends AgentListItem {
 }
 
 export interface AgentRelatedCounts {
-  agentId: number
+  agentId: string
   agentName: string
   subTaskCount: number
   reviewCount: number
@@ -126,7 +127,7 @@ export interface AgentDeleteResult {
 
 export interface ScoreLogItem {
   id: number
-  agentId: number
+  agentId: string
   subTaskId: number | null
   reason: string
   delta: number
@@ -136,7 +137,7 @@ export interface ScoreLogItem {
 
 export interface ActivityLogItem {
   id: number
-  agentId: number
+  agentId: string
   subTaskId: number | null
   action: string
   summary: string

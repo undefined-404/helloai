@@ -251,6 +251,7 @@
       :title="supportContent.title"
       width="440px"
       class="support-dialog"
+      append-to-body
       destroy-on-close
     >
       <p class="support-dialog-intro">{{ supportContent.intro }}</p>

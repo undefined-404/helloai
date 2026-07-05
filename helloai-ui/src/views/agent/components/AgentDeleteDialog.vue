@@ -4,6 +4,7 @@
     title="删除 Agent"
     width="480px"
     top="8vh"
+    append-to-body
     @open="loadCounts"
     @close="$emit('close')"
   >

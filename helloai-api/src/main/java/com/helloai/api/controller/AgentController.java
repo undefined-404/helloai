@@ -35,7 +35,7 @@ public class AgentController {
     }
 
     @GetMapping("/{id}")
-    public R<AgentResponse> getById(@PathVariable Long id) {
+    public R<AgentResponse> getById(@PathVariable("id") Long id) {
         Agent agent = agentService.getById(id);
         if (agent == null) {
             return R.fail("Agent 不存在");
