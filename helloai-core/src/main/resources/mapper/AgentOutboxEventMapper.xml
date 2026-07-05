@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.helloai.core.mapper.AgentOutboxEventMapper">
+
+    <!--
+        覆盖 BaseMapper 默认的 insert：
+        PostgreSQL 的 JSONB 列不接受未指定类型的字符串参数，
+        这里显式用 ::jsonb 进行类型转换，避免 "column payload is of type jsonb but expression is of type character varying"。
+    -->
+    <insert id="insert" parameterType="com.helloai.core.entity.AgentOutboxEvent" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO agent_outbox_event (
+            id, event_id, event_type, routing_key, payload,
+            status, retry_count, deleted,
+            create_by, update_by, create_time, update_time
+        ) VALUES (
+            #{id},
+            #{eventId},
+            #{eventType},
+            #{routingKey},
+            #{payload,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
+            #{status},
+            #{retryCount},
+            #{deleted},
+            #{createBy},
+            #{updateBy},
+            #{createTime},
+            #{updateTime}
+        )
+    </insert>
+
+</mapper>

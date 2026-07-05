@@ -6,8 +6,12 @@ import com.helloai.api.dto.PageResult;
 import com.helloai.api.dto.task.CreateTaskRequest;
 import com.helloai.api.dto.task.UpdateTaskStatusRequest;
 import com.helloai.common.base.R;
+import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.TaskStatus;
+import com.helloai.core.entity.Agent;
 import com.helloai.core.entity.Task;
+import com.helloai.core.service.AgentInboxService;
+import com.helloai.core.service.AgentService;
 import com.helloai.core.service.TaskService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -23,6 +27,8 @@ import java.util.List;
 public class TaskController {
 
     private final TaskService taskService;
+    private final AgentService agentService;
+    private final AgentInboxService agentInboxService;
 
     @PostMapping
     public R<Task> create(@Valid @RequestBody CreateTaskRequest req) {
@@ -32,6 +38,22 @@ public class TaskController {
         task.setStatus(TaskStatus.PENDING);
         taskService.save(task);
         log.info("任务创建: id={}, title={}", task.getId(), req.getTitle());
+
+        // v1.1 修复: 创建任务后通知所有 PLANNER
+        try {
+            List<Agent> planners = agentService.listByRole(AgentRole.PLANNER);
+            String eventId = "task.create." + task.getId() + "." + System.currentTimeMillis();
+            for (Agent planner : planners) {
+                agentInboxService.send(planner.getId(), eventId, "task.created",
+                        "新任务需要规划: " + req.getTitle(),
+                        req.getDescription() != null ? req.getDescription() : "请查看详情",
+                        "task", task.getId(), "HIGH");
+            }
+            log.info("已通知 {} 个 PLANNER Agent", planners.size());
+        } catch (Exception e) {
+            log.warn("任务创建后通知 PLANNER 失败: taskId={}", task.getId(), e);
+        }
+
         return R.ok(task);
     }
 

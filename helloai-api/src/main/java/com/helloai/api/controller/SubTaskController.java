@@ -8,6 +8,7 @@ import com.helloai.api.dto.subtask.SubTaskResponse;
 import com.helloai.common.base.R;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.entity.SubTask;
+import com.helloai.core.service.AgentInboxService;
 import com.helloai.core.service.SubTaskService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +25,7 @@ import java.util.Map;
 public class SubTaskController {
 
     private final SubTaskService subTaskService;
+    private final AgentInboxService agentInboxService;
 
     @PostMapping
     public R<SubTaskResponse> create(@Valid @RequestBody CreateSubTaskRequest req) {
@@ -43,6 +45,20 @@ public class SubTaskController {
         }
         subTaskService.save(subTask);
         log.info("子任务创建: id={}, title={}, taskId={}", subTask.getId(), req.getTitle(), req.getTaskId());
+
+        // v1.1 修复: 创建时即发送通知，避免 EXECUTOR 轮询不到
+        if (req.getAssignedAgent() != null) {
+            try {
+                String eventId = "subtask.create." + subTask.getId() + "." + System.currentTimeMillis();
+                agentInboxService.send(req.getAssignedAgent(), eventId, "sub_task.assigned",
+                        "新任务已分配: " + req.getTitle(),
+                        "交付物: " + (req.getDeliverable() != null ? req.getDeliverable() : "待确认"),
+                        "sub_task", subTask.getId(), "HIGH");
+            } catch (Exception e) {
+                log.warn("子任务创建后发送通知失败: subtaskId={}", subTask.getId(), e);
+            }
+        }
+
         return R.ok(toResponse(subTask));
     }
 

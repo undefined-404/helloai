@@ -2,10 +2,13 @@ package com.helloai.api.controller;
 
 import com.helloai.api.dto.CreateReviewRequest;
 import com.helloai.api.dto.review.ReviewResponse;
+import com.helloai.api.interceptor.AuthInterceptor;
 import com.helloai.common.base.R;
+import com.helloai.common.base.BizException;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.core.entity.ReviewRecord;
 import com.helloai.core.service.ReviewService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -23,10 +26,26 @@ public class ReviewController {
 
     @PostMapping
     public R<ReviewResponse> create(@Valid @RequestBody CreateReviewRequest request,
-                                   @RequestHeader(value = "X-Agent-Id", required = false) Long agentId) {
+                                   @RequestHeader(value = "X-Agent-Id", required = false) Long agentId,
+                                   HttpServletRequest httpRequest) {
         ReviewResult result = ReviewResult.valueOf(request.getResult().toUpperCase());
+
+        // v1.1 修复：优先从 Header 取 reviewerAgentId；若 Header 缺失，从 AuthInterceptor 上下文取
+        Long reviewerAgentId = agentId;
+        if (reviewerAgentId == null) {
+            Object attr = httpRequest.getAttribute(AuthInterceptor.AUTH_ID_KEY);
+            if (attr instanceof Long) {
+                reviewerAgentId = (Long) attr;
+            } else if (attr instanceof Number) {
+                reviewerAgentId = ((Number) attr).longValue();
+            }
+        }
+        if (reviewerAgentId == null) {
+            throw new BizException("无法识别审查者身份，请通过 X-Agent-Id Header 或 Bearer 认证");
+        }
+
         ReviewRecord record = reviewService.createReview(
-                request.getSubTaskId(), agentId, result,
+                request.getSubTaskId(), reviewerAgentId, result,
                 request.getScore() != null ? request.getScore() : 3,
                 request.getIssues(), request.getComment(), request.getReworkAgentId());
         return R.ok(toResponse(record));

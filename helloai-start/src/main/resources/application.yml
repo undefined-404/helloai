@@ -45,6 +45,8 @@ mybatis-plus:
       logic-not-delete-value: 0
   configuration:
     map-underscore-to-camel-case: true
+  # 自定义 XML mapper 路径（覆盖 BaseMapper.insert 默认行为，例如 JSONB 列）
+  mapper-locations: classpath*:mapper/**/*.xml
 
 springdoc:
   swagger-ui:

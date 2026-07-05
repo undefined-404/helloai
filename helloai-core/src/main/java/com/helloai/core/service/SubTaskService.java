@@ -2,7 +2,9 @@ package com.helloai.core.service;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.core.entity.Agent;
 import com.helloai.core.entity.ReviewRecord;
 import com.helloai.core.entity.SubTask;
 import com.helloai.core.mapper.ReviewRecordMapper;
@@ -27,6 +29,7 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
 
     private final AgentOutboxService agentOutboxService;
     private final AgentInboxService agentInboxService;
+    private final AgentService agentService;
     private final ReviewRecordMapper reviewRecordMapper;
     private final ImplicitScoreCalculator implicitScoreCalculator;
     private final RewardService rewardService;
@@ -177,6 +180,21 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
                                 "任务已暂停: " + title,
                                 "请保存当前进度，等待恢复通知",
                                 "sub_task", subTask.getId(), "HIGH");
+                    }
+                }
+                case REVIEW -> {
+                    // v1.1 修复: EXECUTOR 提交后，通知所有 PLANNER/REVIEWER 来审查
+                    try {
+                        List<Agent> planners = agentService.listByRole(AgentRole.PLANNER);
+                        for (Agent planner : planners) {
+                            agentInboxService.send(planner.getId(), eventId, "sub_task.review",
+                                    "任务已提交审查: " + title,
+                                    "请 PLANNER/REVIEWER 评分并完成审查",
+                                    "sub_task", subTask.getId(), "HIGH");
+                        }
+                        log.info("REVIEW 通知发送: subtaskId={}, planners={}", subTask.getId(), planners.size());
+                    } catch (Exception e) {
+                        log.error("REVIEW 通知发送失败: subtaskId={}", subTask.getId(), e);
                     }
                 }
                 default -> {}
