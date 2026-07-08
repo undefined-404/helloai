@@ -29,7 +29,9 @@
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column prop="assignedAgentName" label="负责人" min-width="100" />
+        <el-table-column label="负责人" min-width="100">
+          <template #default="{ row }">{{ row.assignedAgentName || '-' }}</template>
+        </el-table-column>
         <el-table-column label="创建时间" width="170">
           <template #default="{ row }">{{ fmtTime(row.createTime) }}</template>
         </el-table-column>

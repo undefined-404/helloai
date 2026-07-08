@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.helloai.core.mapper.AgentMapper">
+
+    <!--
+        覆盖 BaseMapper.insert：PostgreSQL 的 JSONB 列不接受未指定类型的字符串参数，
+        这里显式用 ::jsonb 进行类型转换，并指定 JacksonTypeHandler 处理 Map 字段。
+        解决 AgentService.register() 写入 capabilities / labels / model_config 时的
+        "column capabilities is of type jsonb but expression is of type character varying" 错误。
+        注意：MyBatis-Plus insert 的入参被包装为 @Param("et")，所有实体字段需通过 et.xxx 访问。
+    -->
+    <insert id="insert" parameterType="com.helloai.core.entity.Agent">
+        INSERT INTO agent (
+            id, name, role, api_key, model_type, model_config,
+            specialization_slug, status, score,
+            access_type, capabilities, labels,
+            last_seen_at, last_active_at, online_status, offline_reason, offline_at,
+            deleted, create_by, update_by, create_time, update_time, remark
+        ) VALUES (
+            #{id}, #{name}, #{role}, #{apiKey}, #{modelType},
+            #{modelConfig,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
+            #{specializationSlug}, #{status}, #{score},
+            #{accessType},
+            #{capabilities,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
+            #{labels,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
+            #{lastSeenAt}, #{lastActiveAt}, #{onlineStatus},
+            #{offlineReason}, #{offlineAt},
+            #{deleted}, #{createBy}, #{updateBy},
+            #{createTime}, #{updateTime}, #{remark}
+        )
+    </insert>
+
+    <!--
+        覆盖 BaseMapper.updateById：PostgreSQL 的 JSONB 列不接受未指定类型的字符串参数，
+        这里显式用 ::jsonb 进行类型转换，并指定 JacksonTypeHandler 处理 Map 字段。
+        解决 AgentController.registerWithToken() 写入 capabilities / labels 时的
+        "column capabilities is of type jsonb but expression is of type character varying" 错误。
+        注意：MyBatis-Plus updateById 的入参被包装为 @Param("et")，所有实体字段需通过 et.xxx 访问；
+              @Param("MP_OPTLOCK_VERSION_ORIGINAL") 是乐观锁拦截器附加参数。
+    -->
+    <update id="updateById" parameterType="com.helloai.core.entity.Agent">
+        UPDATE agent
+        SET name = #{et.name},
+            role = #{et.role},
+            api_key = #{et.apiKey},
+            model_type = #{et.modelType},
+            model_config = #{et.modelConfig,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
+            specialization_slug = #{et.specializationSlug},
+            status = #{et.status},
+            score = #{et.score},
+            access_type = #{et.accessType},
+            capabilities = #{et.capabilities,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
+            labels = #{et.labels,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
+            last_seen_at = #{et.lastSeenAt},
+            last_active_at = #{et.lastActiveAt},
+            online_status = #{et.onlineStatus},
+            offline_reason = #{et.offlineReason},
+            offline_at = #{et.offlineAt},
+            update_by = #{et.updateBy},
+            update_time = #{et.updateTime}
+        WHERE id = #{et.id} AND deleted = 0
+    </update>
+
+    <!--
+        阶段 4 Reconcile：CAS UPDATE 标 OFFLINE。
+        只有同时满足以下条件的 Agent 才会被标离线：
+          1) id 匹配
+          2) last_seen_at 仍 < cutoff（防止 seen() 刚刷新就被覆盖）
+          3) online_status 不是 SLEEPING（系统不自动覆盖管理员状态）
+          4) 未删除
+        影响行数 = 0 表示 CAS 失败（说明心跳刚到或 Agent 已 SLEEPING），调用方应放弃处理。
+    -->
+    <update id="markOfflineIfStale">
+        UPDATE agent
+        SET online_status = #{newStatus},
+            offline_reason = #{reason},
+            offline_at = #{now},
+            update_time = #{now}
+        WHERE id = #{agentId}
+          AND last_seen_at &lt; #{cutoff}
+          AND (online_status IS DISTINCT FROM 'SLEEPING')
+          AND deleted = 0
+    </update>
+
+    <!--
+        阶段 4 Reconcile：扫描 last_seen_at 早于 cutoff 的 Agent。
+        返回结果包括 ONLINE / IDLE / OFFLINE 三种状态（排除 SLEEPING 和已删除）。
+        调用方（AgentHealthCheckTask）对每个 Agent 调用 markOfflineIfStale 做 CAS 标 OFFLINE。
+        IS DISTINCT FROM 用于安全处理 NULL（last_seen_at 为 NULL 也算超时）。
+    -->
+    <select id="selectByLastSeenBefore" resultType="com.helloai.core.entity.Agent">
+        SELECT * FROM agent
+        WHERE (last_seen_at IS NULL OR last_seen_at &lt; #{cutoff})
+          AND (online_status IS DISTINCT FROM 'SLEEPING')
+          AND deleted = 0
+    </select>
+
+</mapper>

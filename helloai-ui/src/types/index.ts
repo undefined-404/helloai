@@ -33,8 +33,13 @@ export type TaskStatus = 'PENDING' | 'IN_PROGRESS' | 'DONE' | 'CANCELLED'
 export type AttachmentStatus = 'ACTIVE' | 'INACTIVE' | 'DELETED'
 
 // --- 实体 ---
+// v1.1 修复: Long ID 后端已序列化为 string, 前端类型用 string | number 兼容
+// 任何对外使用的 Long 主键 / 外键字段（如 id、taskId、subTaskId、agentId、userId 等）均为 string
+export type LongId = string | number
+export type IntCount = number  // 普通计数字段仍按 number
+
 export interface Task {
-  id: number
+  id: LongId
   title: string
   description: string
   status: TaskStatus
@@ -43,12 +48,12 @@ export interface Task {
 }
 
 export interface SubTask {
-  id: number
-  taskId: number
-  moduleId: number | null
+  id: LongId
+  taskId: LongId
+  moduleId: LongId | null
   title: string
   status: SubTaskStatus
-  assignedAgent: number | null
+  assignedAgent: LongId | null
   assignedAgentName?: string
   content: string
   context: Record<string, any> | null
@@ -56,6 +61,7 @@ export interface SubTask {
   compositeScore: number | null
   scoreGrade: string | null
   deadline: string | null
+  reworkCount: number
   timeoutCount: number
   createTime: string
   updateTime: string
@@ -126,9 +132,9 @@ export interface AgentDeleteResult {
 }
 
 export interface ScoreLogItem {
-  id: number
+  id: LongId
   agentId: string
-  subTaskId: number | null
+  subTaskId: LongId | null
   reason: string
   delta: number
   balance: number
@@ -136,9 +142,9 @@ export interface ScoreLogItem {
 }
 
 export interface ActivityLogItem {
-  id: number
+  id: LongId
   agentId: string
-  subTaskId: number | null
+  subTaskId: LongId | null
   action: string
   summary: string
   level: string
@@ -166,9 +172,9 @@ export const ROLE_COLOR_MAP: Record<AgentRole, { bar: string; bg: string; text: 
 }
 
 export interface ReviewRecord {
-  id: number
-  subTaskId: number
-  reviewerAgent: number
+  id: LongId
+  subTaskId: LongId
+  reviewerAgent: LongId
   result: ReviewResult
   score: number
   issues: string | null
@@ -178,9 +184,9 @@ export interface ReviewRecord {
 }
 
 export interface RewardLog {
-  id: number
-  agentId: number
-  subTaskId: number | null
+  id: LongId
+  agentId: LongId
+  subTaskId: LongId | null
   reason: string
   delta: number
   balance: number
@@ -188,25 +194,25 @@ export interface RewardLog {
 }
 
 export interface ActivityLog {
-  id: number
-  agentId: number
-  subTaskId: number | null
+  id: LongId
+  agentId: LongId
+  subTaskId: LongId | null
   action: string
   detail: Record<string, any> | null
   createTime: string
 }
 
 export interface PatrolRecord {
-  id: number
-  subTaskId: number
-  patrolAgent: number
+  id: LongId
+  subTaskId: LongId
+  patrolAgent: LongId
   alertType: string
   description: string | null
   createTime: string
 }
 
 export interface AgentOutboxEvent {
-  id: number
+  id: LongId
   eventId: string
   eventType: string
   routingKey: string
@@ -229,25 +235,25 @@ export interface DashboardStats {
 
 // --- 请求 DTO ---
 export interface ChangeStatusRequest {
-  subTaskId: number
+  subTaskId: LongId
   newStatus: SubTaskStatus
-  agentId: number | null
+  agentId: LongId | null
 }
 
 export interface CreateReviewRequest {
-  subTaskId: number
+  subTaskId: LongId
   result: ReviewResult
   score: number
   issues: string
   comment: string
-  reworkAgentId: number | null
+  reworkAgentId: LongId | null
 }
 
 export interface AdjustScoreRequest {
-  agentId: number
+  agentId: LongId
   scoreDelta: number
   reason: string
-  subTaskId: number | null
+  subTaskId: LongId | null
 }
 
 // --- 状态标签映射 ---
@@ -272,7 +278,7 @@ export const SCORE_GRADE_MAP: Record<string, { label: string; type: '' | 'succes
 }
 
 export interface Rule {
-  id: number
+  id: LongId
   name: string
   ruleType: string
   priority: number
@@ -283,8 +289,8 @@ export interface Rule {
 }
 
 export interface Attachment {
-  id: number
-  subTaskId: number
+  id: LongId
+  subTaskId: LongId
   fileName: string
   fileType: string
   mimeType: string
@@ -300,7 +306,7 @@ export interface Attachment {
 // --- v1.1 新增类型 ---
 
 export interface PromptTemplate {
-  id: number
+  id: LongId
   role: string
   category: string
   slug: string | null
@@ -316,14 +322,14 @@ export interface PromptTemplate {
 }
 
 export interface AgentInbox {
-  id: number
-  agentId: number
+  id: LongId
+  agentId: string
   eventId: string
   eventType: string
   title: string
   summary: string | null
   refType: string | null
-  refId: number | null
+  refId: LongId | null
   isRead: number
   isArchived: number
   readAt: string | null
@@ -332,12 +338,12 @@ export interface AgentInbox {
 }
 
 export interface ConversationMessage {
-  id: number
-  subTaskId: number
+  id: LongId
+  subTaskId: LongId
   messageId: string
   role: string
   senderType: string
-  senderId: number | null
+  senderId: LongId | null
   content: string
   contentType: string
   seq: number

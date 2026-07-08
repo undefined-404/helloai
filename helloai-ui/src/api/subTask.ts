@@ -1,38 +1,39 @@
 import request from './request'
-import type { SubTask, ChangeStatusRequest, PageResult } from '@/types'
+import type { SubTask, ChangeStatusRequest, PageResult, LongId } from '@/types'
 
 export const subTaskApi = {
   list(params?: { status?: string; page?: number; size?: number }) {
     return request.get<any, SubTask[]>('/sub-tasks', { params })
   },
-  getById(id: number) {
+  // v1.1 修复: LongID 后端已全局序列化为 string，传 string 避免任何 Number() 精度丢
+  getById(id: LongId) {
     return request.get<any, SubTask>(`/sub-tasks/${id}`)
   },
   changeStatus(data: ChangeStatusRequest) {
     return request.post('/sub-tasks/change-status', data)
   },
-  claim(id: number, agentId: number) {
+  claim(id: LongId, agentId: LongId) {
     return request.post(`/sub-tasks/${id}/claim`, null, { params: { agentId } })
   },
-  start(id: number) {
+  start(id: LongId) {
     return request.post(`/sub-tasks/${id}/start`)
   },
-  submit(id: number) {
+  submit(id: LongId) {
     return request.post(`/sub-tasks/${id}/submit`)
   },
-  block(id: number) {
+  block(id: LongId) {
     return request.post(`/sub-tasks/${id}/block`)
   },
-  mine(agentId: number) {
+  mine(agentId: LongId) {
     return request.get<any, SubTask[]>('/sub-tasks/mine', { params: { agentId } })
   },
   available() {
     return request.get<any, SubTask[]>('/sub-tasks/available')
   },
-  pause(id: number) {
+  pause(id: LongId) {
     return request.post(`/sub-tasks/${id}/pause`)
   },
-  resume(id: number) {
+  resume(id: LongId) {
     return request.post(`/sub-tasks/${id}/resume`)
   }
 }

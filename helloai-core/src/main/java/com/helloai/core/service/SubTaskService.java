@@ -82,6 +82,13 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
     public void complete(Long subTaskId) {
         SubTask subTask = getById(subTaskId);
         if (subTask == null) throw new BizException("子任务不存在: " + subTaskId);
+
+        // v1.1 幂等性: 已是 DONE 状态直接返回，避免前端/重试重复调用报 DONE→DONE 错误
+        if (subTask.getStatus() == SubTaskStatus.DONE) {
+            log.info("complete() 幂等跳过: subTaskId={} 已是 DONE", subTaskId);
+            return;
+        }
+
         SubTaskStateMachine.validate(subTask.getStatus(), SubTaskStatus.DONE);
         subTask.setStatus(SubTaskStatus.DONE);
         subTask.setCompletedAt(OffsetDateTime.now());

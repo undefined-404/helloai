@@ -7,6 +7,7 @@ import com.helloai.api.dto.admin.AgentCreateRequest;
 import com.helloai.api.dto.admin.AgentUpdateRequest;
 import com.helloai.api.dto.agent.*;
 import com.helloai.common.base.R;
+import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.config.AgentConfigProperties;
@@ -20,6 +21,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -172,6 +174,65 @@ public class AdminAgentController {
         AgentStatus status = AgentStatus.valueOf(body.get("status").toUpperCase());
         agentService.updateStatus(id, status);
         return R.ok();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  阶段 4.3 SLEEPING 状态管理（v2.4 §4.3）
+    //  - sleep/wake 只切 online_status，不动 AgentStatus（管理态/计算态分离）
+    //  - 系统不自动 SLEEPING（HeartbeatService + AgentHealthCheckTask + AgentMapper 已防护）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 管理员手动暂停 Agent（v2.4 §4.3）。
+     * <p>设 online_status=SLEEPING，不动 AgentStatus/oldline_reason/offline_at。
+     * <br>仅 X-Admin-Token 鉴权的管理员可调用（AuthInterceptor 已拦截）。
+     */
+    @PutMapping("/{id}/sleep")
+    public R<Map<String, Object>> sleep(@PathVariable("id") Long id,
+                                         @RequestBody(required = false) Map<String, String> body,
+                                         HttpServletRequest request) {
+        String operator = operatorOf(request);
+        String reason = body == null ? null : body.get("reason");
+        Agent agent = agentService.sleepAgent(id, operator, reason);
+        return R.ok(toSleepWakeVO(agent, "sleep"));
+    }
+
+    /**
+     * 管理员手动恢复 Agent（v2.4 §4.3）。
+     * <p>设 online_status=OFFLINE（不强行 ONLINE，让系统心跳自然计算 IDLE/ONLINE）。
+     * <br>仅 X-Admin-Token 鉴权的管理员可调用。
+     */
+    @PutMapping("/{id}/wake")
+    public R<Map<String, Object>> wake(@PathVariable("id") Long id,
+                                        @RequestBody(required = false) Map<String, String> body,
+                                        HttpServletRequest request) {
+        String operator = operatorOf(request);
+        String reason = body == null ? null : body.get("reason");
+        Agent agent = agentService.wakeAgent(id, operator, reason);
+        return R.ok(toSleepWakeVO(agent, "wake"));
+    }
+
+    /**
+     * 从 request 属性中取操作人（AuthInterceptor 注入的 _authName），
+     * 未拿到时回退 "admin"（与 Service 层的默认一致）。
+     */
+    private String operatorOf(HttpServletRequest request) {
+        Object name = request.getAttribute("_authName");
+        return name != null ? String.valueOf(name) : "admin";
+    }
+
+    /**
+     * sleep/wake 响应 VO：返回 agent 关键状态变更信息。
+     */
+    private Map<String, Object> toSleepWakeVO(Agent agent, String action) {
+        Map<String, Object> vo = new LinkedHashMap<>();
+        vo.put("agentId", agent.getId());
+        vo.put("agentName", agent.getName());
+        vo.put("action", action);
+        vo.put("onlineStatus", agent.getOnlineStatus());
+        vo.put("updateBy", agent.getUpdateBy());
+        vo.put("updateTime", agent.getUpdateTime());
+        return vo;
     }
 
     // ══════════════════════════════════════════════════════════════

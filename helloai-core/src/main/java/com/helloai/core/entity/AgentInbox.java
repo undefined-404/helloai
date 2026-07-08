@@ -48,4 +48,7 @@ public class AgentInbox extends BaseEntity {
 
     /** 优先级: URGENT/HIGH/NORMAL/LOW */
     private String priority;
+
+    /** 消息过期时间（超过此时间未读的消息可被定时清理） */
+    private OffsetDateTime expiresAt;
 }

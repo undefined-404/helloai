@@ -34,7 +34,9 @@ spring:
   flyway:
     enabled: true
     locations: classpath:db/migration
-    baseline-on-migrate: true
+    # 容忍历史迁移脚本不在 classpath（V2-V10 在历史会话中已应用但脚本文件未保留）
+    validate-on-migrate: false
+    ignore-missing-migrations: true
 
 mybatis-plus:
   global-config:

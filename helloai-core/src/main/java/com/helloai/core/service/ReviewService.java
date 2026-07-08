@@ -68,12 +68,14 @@ public class ReviewService extends ServiceImpl<ReviewRecordMapper, ReviewRecord>
         save(record);
 
         if (result == ReviewResult.APPROVED) {
-            subTaskService.changeStatus(subTaskId, SubTaskStatus.DONE, null);
+            // v1.1 修复: APPROVED 走 complete() 触发 5 因子隐式评分（score_factors/composite_score/score_grade/completed_at + reward_log）
+            subTaskService.complete(subTaskId);
         } else {
             subTaskService.changeStatus(subTaskId, SubTaskStatus.REWORK,
                     reworkAgentId != null ? reworkAgentId : executorAgentId);
         }
 
+        // 简易奖励（与原 v1.0 行为兼容：按 review.score 直接加减固定分）
         if (executorAgentId != null) {
             Integer delta = SCORE_RULES.get(score);
             if (delta != null && delta != 0) {

@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.helloai.core.mapper.SubTaskMapper">
+
+    <!--
+        覆盖 BaseMapper.updateById：PostgreSQL 的 JSONB 列不接受未指定类型的字符串参数，
+        这里显式用 ::jsonb 进行类型转换，避免 "column score_factors is of type jsonb but expression is of type character varying"。
+        修复 ReviewService 走 complete() 后写入 5 因子评分时的更新报错。
+        注意：MyBatis-Plus updateById 的入参被包装为 @Param("et")，所有实体字段需通过 et.xxx 访问；
+              @Param("MP_OPTLOCK_VERSION_ORIGINAL") 是乐观锁拦截器附加参数。
+    -->
+    <update id="updateById" parameterType="com.helloai.core.entity.SubTask">
+        UPDATE sub_task
+        SET task_id = #{et.taskId},
+            module_id = #{et.moduleId},
+            title = #{et.title},
+            deliverable = #{et.deliverable},
+            acceptance = #{et.acceptance},
+            priority = #{et.priority},
+            status = #{et.status},
+            assigned_agent = #{et.assignedAgent},
+            content = #{et.content},
+            context = #{et.context,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
+            score_factors = #{et.scoreFactors,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
+            composite_score = #{et.compositeScore},
+            score_grade = #{et.scoreGrade},
+            deadline = #{et.deadline},
+            rework_count = #{et.reworkCount},
+            completed_at = #{et.completedAt},
+            version = #{et.version},
+            timeout_count = #{et.timeoutCount},
+            update_by = #{et.updateBy},
+            update_time = #{et.updateTime}
+        WHERE id = #{et.id} AND version = #{MP_OPTLOCK_VERSION_ORIGINAL} AND deleted = 0
+    </update>
+
+    <!--
+        原子认领子任务（MCP claimSubTask 工具底层）。
+        并发安全：WHERE 条件同时检查 PENDING + assigned_agent 归属，
+        保证同一 sub_task 最多被一个 Agent 认领成功。
+    -->
+    <update id="claimAtomic">
+        UPDATE sub_task
+        SET assigned_agent = #{agentId},
+            status = 'ASSIGNED',
+            version = version + 1,
+            update_time = CURRENT_TIMESTAMP
+        WHERE id = #{subTaskId}
+          AND status = 'PENDING'
+          AND (assigned_agent IS NULL OR assigned_agent = #{agentId})
+          AND deleted = 0
+    </update>
+
+</mapper>

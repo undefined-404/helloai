@@ -96,6 +96,13 @@ CREATE TABLE IF NOT EXISTS agent (
     specialization_slug VARCHAR(128),
     status              VARCHAR(32)  NOT NULL DEFAULT 'ACTIVE',
     score               INT          NOT NULL DEFAULT 0,
+    -- 阶段 0 补全 + 阶段 4 三件套（合并自 V11__stage4_agent_fields.sql）
+    access_type         VARCHAR(32)  NOT NULL DEFAULT 'CLI_CLIENT',
+    capabilities        JSONB        DEFAULT '{}'::jsonb,
+    labels              JSONB        DEFAULT '{}'::jsonb,
+    online_status       VARCHAR(16)  NOT NULL DEFAULT 'OFFLINE',
+    offline_reason      VARCHAR(64),
+    offline_at          TIMESTAMPTZ,
     create_by           VARCHAR(64)  NOT NULL DEFAULT '',
     update_by           VARCHAR(64)  NOT NULL DEFAULT '',
     create_time         TIMESTAMPTZ  NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -103,10 +110,14 @@ CREATE TABLE IF NOT EXISTS agent (
     deleted             SMALLINT     NOT NULL DEFAULT 0,
     remark              VARCHAR(255),
     CONSTRAINT chk_agent_role CHECK (role IN ('PLANNER', 'EXECUTOR', 'REVIEWER', 'PATROL')),
-    CONSTRAINT chk_agent_status CHECK (status IN ('ACTIVE', 'DISABLED'))
+    CONSTRAINT chk_agent_status CHECK (status IN ('ACTIVE', 'DISABLED')),
+    CONSTRAINT chk_agent_access_type CHECK (access_type IN ('CLI_CLIENT','API_KEY_LLM','WEB_BROWSER')),
+    CONSTRAINT chk_agent_online_status CHECK (online_status IN ('ONLINE','IDLE','OFFLINE','SLEEPING'))
 );
 CREATE INDEX IF NOT EXISTS idx_agent_role ON agent(role, status) WHERE deleted = 0;
 CREATE INDEX IF NOT EXISTS idx_agent_api_key ON agent(api_key) WHERE deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_agent_access_type ON agent(access_type) WHERE deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_agent_online_status ON agent(online_status) WHERE deleted = 0;
 DROP TRIGGER IF EXISTS update_agent_update_time ON agent;
 CREATE TRIGGER update_agent_update_time BEFORE UPDATE ON agent
     FOR EACH ROW EXECUTE FUNCTION update_update_time_column();
@@ -1310,3 +1321,118 @@ VALUES (
     'system',
     'system'
 ) ON CONFLICT (id) DO NOTHING;
+
+-- ============================================================
+-- agent_mcp_server — 按 Agent 维度的 MCP 工具开关/策略/权限配置表
+-- 参考: v2.4 文档 §4.4
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS agent_mcp_server (
+    id                  BIGSERIAL    PRIMARY KEY,
+    agent_id            BIGINT       NOT NULL,
+    tool_name           VARCHAR(64)  NOT NULL,
+    is_enabled          SMALLINT     NOT NULL DEFAULT 1,
+    rate_limit          INT          NOT NULL DEFAULT 0,
+    param_constraints   JSONB,
+    config              JSONB,
+
+    create_by           VARCHAR(64)  NOT NULL DEFAULT '',
+    update_by           VARCHAR(64)  NOT NULL DEFAULT '',
+    create_time         TIMESTAMPTZ  NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time         TIMESTAMPTZ  NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted             SMALLINT     NOT NULL DEFAULT 0,
+    remark              VARCHAR(255)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ams_agent_tool ON agent_mcp_server(agent_id, tool_name) WHERE deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_ams_agent_enabled ON agent_mcp_server(agent_id, is_enabled) WHERE deleted = 0;
+
+DROP TRIGGER IF EXISTS update_ams_update_time ON agent_mcp_server;
+CREATE TRIGGER update_ams_update_time BEFORE UPDATE ON agent_mcp_server
+    FOR EACH ROW EXECUTE FUNCTION update_update_time_column();
+
+COMMENT ON TABLE agent_mcp_server IS '按 Agent 维度的 MCP 工具开关/策略/权限配置表';
+COMMENT ON COLUMN agent_mcp_server.agent_id IS 'Agent ID，关联 agent.id';
+COMMENT ON COLUMN agent_mcp_server.tool_name IS '工具名: pullTasks/ack/heartbeat/uploadArtifact/claimSubTask/reportBlocked';
+COMMENT ON COLUMN agent_mcp_server.is_enabled IS '是否启用该工具（开关），0=禁用, 1=启用';
+COMMENT ON COLUMN agent_mcp_server.rate_limit IS '频率限制（次/分钟），0=不限';
+COMMENT ON COLUMN agent_mcp_server.param_constraints IS '参数约束 JSONB，如 {"max":50}';
+COMMENT ON COLUMN agent_mcp_server.config IS '扩展配置 JSONB，如 {"pullIntervalSec":60}';
+
+-- 默认数据：为所有已有 EXECUTOR Agent 启用全部 6 个工具
+INSERT INTO agent_mcp_server (agent_id, tool_name, is_enabled, rate_limit, create_by, update_by)
+SELECT a.id, tool.name, 1, 0, 'system', 'system'
+FROM agent a
+CROSS JOIN (VALUES
+    ('pullTasks'),
+    ('ack'),
+    ('heartbeat'),
+    ('claimSubTask'),
+    ('uploadArtifact'),
+    ('reportBlocked')
+) AS tool(name)
+WHERE a.role = 'EXECUTOR' AND a.deleted = 0
+ON CONFLICT (agent_id, tool_name) WHERE deleted = 0 DO NOTHING;
+
+-- ============================================================
+-- agent 表增加心跳相关字段
+-- 参考: v2.4 文档 §4.1 Agent 表扩展
+-- ============================================================
+
+ALTER TABLE agent
+    ADD COLUMN IF NOT EXISTS last_seen_at     TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS last_active_at   TIMESTAMPTZ;
+
+COMMENT ON COLUMN agent.last_seen_at   IS '最近一次心跳时间（heartbeat 工具刷新）';
+COMMENT ON COLUMN agent.last_active_at IS '最近一次任务活跃时间（start/submit 时刷新）';
+
+-- ============================================================
+-- 20. task_timeline 任务时间线表（合并自 V12__create_task_timeline.sql）
+-- 用于审计所有任务关键事件（子任务分配、审查结果、心跳、reconcile 等）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS task_timeline (
+    id              BIGINT NOT NULL PRIMARY KEY,
+    task_id         BIGINT,
+    sub_task_id     BIGINT,
+    event_type      VARCHAR(64) NOT NULL,
+    role            VARCHAR(32) NOT NULL,
+    agent_id        BIGINT,
+    payload         JSONB       DEFAULT '{}'::jsonb,
+    deleted         SMALLINT    NOT NULL DEFAULT 0,
+    create_by       VARCHAR(64) NOT NULL DEFAULT '',
+    update_by       VARCHAR(64) NOT NULL DEFAULT '',
+    create_time     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    remark          VARCHAR(500),
+    CONSTRAINT chk_task_timeline_event_type CHECK (event_type ~ '^[a-z][a-z0-9_]*$'),
+    CONSTRAINT chk_task_timeline_role CHECK (role IN ('PLANNER', 'EXECUTOR', 'REVIEWER', 'PATROL', 'SYSTEM'))
+);
+
+-- 索引：按任务/子任务拉取时间线
+CREATE INDEX IF NOT EXISTS idx_task_timeline_task      ON task_timeline(task_id, create_time)     WHERE deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_task_timeline_sub_task  ON task_timeline(sub_task_id, create_time) WHERE deleted = 0;
+-- 索引：按 agent + role 拉取某 agent 的所有事件
+CREATE INDEX IF NOT EXISTS idx_task_timeline_agent     ON task_timeline(agent_id, create_time)    WHERE deleted = 0;
+-- 索引：按 event_type 反查（如 reconcile 事件、blocked 事件）
+CREATE INDEX IF NOT EXISTS idx_task_timeline_event     ON task_timeline(event_type, create_time)  WHERE deleted = 0;
+-- 索引：按 create_time 倒序拉取最新事件
+CREATE INDEX IF NOT EXISTS idx_task_timeline_time      ON task_timeline(create_time DESC)         WHERE deleted = 0;
+
+DROP TRIGGER IF EXISTS update_task_timeline_update_time ON task_timeline;
+CREATE TRIGGER update_task_timeline_update_time BEFORE UPDATE ON task_timeline
+    FOR EACH ROW EXECUTE FUNCTION update_update_time_column();
+
+COMMENT ON TABLE  task_timeline IS '任务时间线 — 关键事件审计表';
+COMMENT ON COLUMN task_timeline.id         IS '主键ID';
+COMMENT ON COLUMN task_timeline.task_id    IS '所属任务ID (可空：SYSTEM 级事件无具体任务)';
+COMMENT ON COLUMN task_timeline.sub_task_id IS '所属子任务ID (可空)';
+COMMENT ON COLUMN task_timeline.event_type IS '事件类型: sub_task.assigned / review.approved / agent.offline_reconcile 等';
+COMMENT ON COLUMN task_timeline.role       IS '事件角色: PLANNER/EXECUTOR/REVIEWER/PATROL/SYSTEM';
+COMMENT ON COLUMN task_timeline.agent_id   IS '触发事件的 Agent ID (可空)';
+COMMENT ON COLUMN task_timeline.payload    IS '事件载荷 (JSONB, 任意结构)';
+COMMENT ON COLUMN task_timeline.deleted    IS '逻辑删除标记: 0-未删除, 1-已删除';
+COMMENT ON COLUMN task_timeline.create_by  IS '创建人';
+COMMENT ON COLUMN task_timeline.update_by  IS '更新人';
+COMMENT ON COLUMN task_timeline.create_time IS '创建时间';
+COMMENT ON COLUMN task_timeline.update_time IS '更新时间';
+COMMENT ON COLUMN task_timeline.remark     IS '备注';

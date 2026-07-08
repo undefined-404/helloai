@@ -15,7 +15,7 @@
             {{ getSubTaskStatusMeta(item.status)?.label || item.status }}
           </el-tag>
         </el-descriptions-item>
-        <el-descriptions-item label="负责人">{{ item.assignedAgent || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="负责人">{{ item.assignedAgentName || item.assignedAgent || '-' }}</el-descriptions-item>
         <el-descriptions-item label="评分">
           <el-tag v-if="item.scoreGrade" :type="SCORE_GRADE_MAP[item.scoreGrade]?.type || 'info'" size="small">
             {{ SCORE_GRADE_MAP[item.scoreGrade]?.label || item.scoreGrade }}
@@ -49,7 +49,10 @@ function getSubTaskStatusMeta(status: SubTask['status']) {
 
 onMounted(async () => {
   loading.value = true
-  try { item.value = await subTaskApi.getById(Number(route.params.id)) } catch (e: any) { ElMessage.error('加载子任务详情失败') } finally {
+  try {
+    // v1.1 修复：路由参数是 string，不要 Number() 转 LongID（>2^53 会丢精度）
+    item.value = await subTaskApi.getById(String(route.params.id))
+  } catch (e: any) { ElMessage.error('加载子任务详情失败') } finally {
     loading.value = false
   }
 })

@@ -4,10 +4,12 @@ import com.helloai.api.dto.agent.AgentRegistrationResponse;
 import com.helloai.api.dto.agent.AgentResponse;
 import com.helloai.common.base.R;
 import com.helloai.common.config.AgentConfigProperties;
+import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.entity.Agent;
 import com.helloai.core.service.AgentService;
 import com.helloai.core.service.PromptTemplateService;
+import com.helloai.core.util.AgentCapability;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
@@ -44,45 +46,92 @@ public class AgentController {
     }
 
     @PostMapping("/register")
-    public R<AgentRegistrationResponse> register(@RequestBody Map<String, String> body) {
-        String name = body.get("name");
-        AgentRole role = AgentRole.valueOf(body.get("role").toUpperCase());
-        String description = body.getOrDefault("description", "");
+    public R<AgentRegistrationResponse> register(@RequestBody Map<String, Object> body) {
+        String name = (String) body.get("name");
+        AgentRole role = AgentRole.valueOf(((String) body.get("role")).toUpperCase());
+        String description = (String) body.getOrDefault("description", "");
         Agent agent = agentService.register(name, role, description);
-        // 保存 specializationSlug（如有）
-        String specializationSlug = body.get("specializationSlug");
-        if (specializationSlug != null && !specializationSlug.isBlank()) {
-            agent.setSpecializationSlug(specializationSlug);
-            agentService.updateById(agent);
-        }
+        applyRegistrationExtras(agent, body);
+        log.info("Agent 手动注册成功: name={}, role={}, id={}", name, role, agent.getId());
         return R.ok(toRegistrationResponse(agent));
     }
 
     @PostMapping("/register-with-token")
-    public R<AgentRegistrationResponse> registerWithToken(@RequestBody Map<String, String> body) {
+    public R<AgentRegistrationResponse> registerWithToken(@RequestBody Map<String, Object> body) {
         if (!agentConfig.isAllowRegistration()) {
             return R.fail(403, "Agent 自注册已关闭，请联系管理员创建");
         }
 
-        String token = body.get("registrationToken");
+        String token = (String) body.get("registrationToken");
         if (token == null || !token.equals(agentConfig.getRegistrationToken())) {
             return R.fail(403, "注册令牌无效");
         }
 
-        String name = body.get("name");
-        String roleStr = body.get("role");
-        String description = body.getOrDefault("description", "");
+        String name = (String) body.get("name");
+        String roleStr = (String) body.get("role");
+        String description = (String) body.getOrDefault("description", "");
         AgentRole role = AgentRole.valueOf(roleStr.toUpperCase());
         Agent agent = agentService.register(name, role, description);
-        // 保存 specializationSlug（如有）
-        String specializationSlug = body.get("specializationSlug");
+        applyRegistrationExtras(agent, body);
+
+        log.info("Agent 自助注册成功: name={}, role={}, id={}, accessType={}",
+                name, role, agent.getId(), agent.getAccessType());
+        return R.ok(toRegistrationResponse(agent));
+    }
+
+    /**
+     * 处理注册入参的可选扩展字段：accessType / specializationSlug / capabilities / labels。
+     *
+     * <p>accessType 默认 CLI_CLIENT；capabilities 按 accessType 默认值填充后允许调用方覆盖；
+     * labels 直接存储。</p>
+     */
+    @SuppressWarnings("unchecked")
+    private void applyRegistrationExtras(Agent agent, Map<String, Object> body) {
+        // 1) specializationSlug（已有逻辑）
+        String specializationSlug = (String) body.get("specializationSlug");
         if (specializationSlug != null && !specializationSlug.isBlank()) {
             agent.setSpecializationSlug(specializationSlug);
-            agentService.updateById(agent);
         }
 
-        log.info("Agent 自助注册成功: name={}, role={}, id={}", name, role, agent.getId());
-        return R.ok(toRegistrationResponse(agent));
+        // 2) accessType（默认 CLI_CLIENT）
+        String accessTypeStr = (String) body.get("accessType");
+        AgentAccessType accessType = AgentAccessType.CLI_CLIENT;
+        if (accessTypeStr != null && !accessTypeStr.isBlank()) {
+            try {
+                accessType = AgentAccessType.valueOf(accessTypeStr.toUpperCase());
+            } catch (IllegalArgumentException e) {
+                log.warn("未知 accessType={}，回退默认 CLI_CLIENT", accessTypeStr);
+            }
+        }
+        agent.setAccessType(accessType);
+
+        // 阶段 0 默认值：新注册的 Agent 在线状态为 OFFLINE
+        if (agent.getOnlineStatus() == null) {
+            agent.setOnlineStatus(com.helloai.common.constant.AgentOnlineStatus.OFFLINE);
+        }
+
+        // 3) labels（直接存储）
+        Object labelsObj = body.get("labels");
+        if (labelsObj instanceof Map<?, ?> rawLabels) {
+            final Map<String, Object> labels = new java.util.HashMap<>();
+            rawLabels.forEach((k, v) -> labels.put(String.valueOf(k), v));
+            agent.setLabels(labels);
+        }
+
+        // 4) capabilities（默认值 + 调用方覆盖）
+        Object capsObj = body.get("capabilities");
+        final Map<String, Object> override;
+        if (capsObj instanceof Map<?, ?> rawCaps) {
+            Map<String, Object> tmp = new java.util.HashMap<>();
+            rawCaps.forEach((k, v) -> tmp.put(String.valueOf(k), v));
+            override = tmp;
+        } else {
+            override = null;
+        }
+        agent.setCapabilities(AgentCapability.mergeDefaults(accessType, override));
+
+        // 持久化所有可选字段变更
+        agentService.updateById(agent);
     }
 
     @GetMapping("/me/skill")
@@ -141,11 +190,22 @@ public class AgentController {
         response.setRole(agent.getRole());
         response.setApiKey(agent.getApiKey());
         response.setModelType(agent.getModelType());
+        response.setModelConfig(agent.getModelConfig());
+        response.setSpecializationSlug(agent.getSpecializationSlug());
         response.setStatus(agent.getStatus());
         response.setScore(agent.getScore());
         response.setRemark(agent.getRemark());
         response.setCreateTime(agent.getCreateTime());
         response.setUpdateTime(agent.getUpdateTime());
+        // 阶段 0 补全 + 阶段 4 三件套
+        response.setAccessType(agent.getAccessType());
+        response.setCapabilities(agent.getCapabilities());
+        response.setLabels(agent.getLabels());
+        response.setLastSeenAt(agent.getLastSeenAt());
+        response.setLastActiveAt(agent.getLastActiveAt());
+        response.setOnlineStatus(agent.getOnlineStatus());
+        response.setOfflineReason(agent.getOfflineReason());
+        response.setOfflineAt(agent.getOfflineAt());
         return response;
     }
 

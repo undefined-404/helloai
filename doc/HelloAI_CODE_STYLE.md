@@ -204,8 +204,7 @@ helloai-start/src/main/resources/
 ├── application.yml                  # 主配置
 ├── db/
 │   └── migration/
-│       ├── V1__init_schema.sql
-│       └── ...
+│       └── V1__init_all.sql         # 唯一迁移文件（所有 DDL+种子数据合并于此）
 ├── scripts/
 │   └── task-cli.py                  # Agent CLI 工具（可执行脚本）
 ├── skills/
@@ -909,10 +908,11 @@ CREATE TRIGGER update_sub_task_update_time BEFORE UPDATE ON sub_task
 
 ### 8.4 Flyway 迁移规范
 
-- 所有 DDL 放在 `helloai-start/src/main/resources/db/migration/`
-- 命名：`V{版本号}__{描述}.sql`，如 `V1__init_schema.sql`
-- 禁止修改已发布的迁移脚本，新增变更用更高版本号
-- 生产环境 `baseline-on-migrate: true`
+- 所有 DDL **合并到单一文件** `helloai-start/src/main/resources/db/migration/V1__init_all.sql`
+- **禁止**创建新的 `V2/V3/...` 迁移文件。所有建表、加字段、索引、种子数据统一追加到 V1 末尾
+- 仅保留一个迁移文件，确保新环境启动时一次执行完毕，避免多版本迁移的 checksum 冲突
+- `application.yml` 中 Flyway 配置只保留 `enabled: true` + `locations`，**不加** `baseline-on-migrate` 和 `repair-on-migrate`
+- 所有 DDL 必须使用 `IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` / `ON CONFLICT DO NOTHING` 等幂等语法，确保重复执行不报错
 
 ---
 

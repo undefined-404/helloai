@@ -5,6 +5,8 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.AgentAccessType;
+import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.SubTaskStatus;
@@ -16,6 +18,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.security.SecureRandom;
+import java.time.OffsetDateTime;
 import java.util.*;
 
 /**
@@ -37,6 +40,7 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
     private final ActivityLogMapper activityLogMapper;
     private final PatrolRecordMapper patrolRecordMapper;
     private final ReviewRecordMapper reviewRecordMapper;
+    private final TaskTimelineService taskTimelineService;
 
     // ══════════════════════════════════════════════════════════════
     //  注册 / 基础 CRUD（不变）
@@ -55,8 +59,14 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
         agent.setStatus(AgentStatus.ACTIVE);
         agent.setScore(0);
         agent.setRemark(description);
+        // 阶段 0 补全默认值
+        agent.setAccessType(AgentAccessType.CLI_CLIENT);
+        agent.setCapabilities(new java.util.HashMap<>());
+        agent.setLabels(new java.util.HashMap<>());
+        agent.setOnlineStatus(AgentOnlineStatus.OFFLINE);
         save(agent);
-        log.info("Agent 注册成功: name={}, role={}, id={}", name, role, agent.getId());
+        log.info("Agent 注册成功: name={}, role={}, id={}, accessType={}",
+                name, role, agent.getId(), agent.getAccessType());
         return agent;
     }
 
@@ -262,6 +272,104 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
                         .eq(ActivityLog::getAgentId, agentId)
                         .eq(action != null && !action.isBlank(), ActivityLog::getAction, action)
                         .orderByDesc(ActivityLog::getCreateTime));
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  阶段 4.3 SLEEPING 状态管理（v2.4 §4.3）
+    //  - sleep：管理员手动暂停 Agent，系统不自动设 SLEEPING
+    //  - wake：恢复后设 OFFLINE（让系统心跳自然计算 IDLE/ONLINE，不强行 ONLINE）
+    //  - SLEEPING 不写 offline_reason/offline_at（v2.4 行 419）
+    //  - 每次操作都写 task_timeline 审计（event_type=agent_sleep/agent_wake, role=SYSTEM）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 管理员手动暂停 Agent（v2.4 §4.3）。
+     *
+     * <p>行为：
+     * <ol>
+     *   <li>校验当前状态不能是 SLEEPING（避免重复 sleep）</li>
+     *   <li>设 online_status=SLEEPING + update_by=operator</li>
+     *   <li><b>不动</b> offline_reason/offline_at（v2.4 行 419：SLEEPING 不写此字段）</li>
+     *   <li>写 task_timeline 审计（event_type=agent_sleep, role=SYSTEM）</li>
+     * </ol>
+     *
+     * <p>SLEEPING 防护（已实现，本方法不重复校验）：
+     * <ul>
+     *   <li>HeartbeatService.seen/active 检测到 SLEEPING 不会覆盖 online_status</li>
+     *   <li>AgentHealthCheckTask 扫描时跳过 SLEEPING（IS DISTINCT FROM 'SLEEPING'）</li>
+     *   <li>AgentMapper.markOfflineIfStale CAS 条件中也防护 SLEEPING</li>
+     * </ul>
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public Agent sleepAgent(Long agentId, String operator, String reason) {
+        Agent agent = getById(agentId);
+        if (agent == null) throw new BizException("Agent 不存在: " + agentId);
+
+        AgentOnlineStatus prev = agent.getOnlineStatus();
+        if (prev == AgentOnlineStatus.SLEEPING) {
+            throw new BizException("Agent 已经是 SLEEPING 状态，无需重复暂停: id=" + agentId);
+        }
+
+        agent.setOnlineStatus(AgentOnlineStatus.SLEEPING);
+        agent.setUpdateBy(operator != null && !operator.isBlank() ? operator : "admin");
+        updateById(agent);
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("operator", agent.getUpdateBy());
+        if (reason != null && !reason.isBlank()) payload.put("reason", reason);
+        payload.put("prev_status", prev != null ? prev.name() : "UNKNOWN");
+        payload.put("new_status", AgentOnlineStatus.SLEEPING.name());
+        payload.put("at", OffsetDateTime.now().toString());
+
+        taskTimelineService.recordEvent(
+                null, null, "agent_sleep", AgentRole.SYSTEM, agentId, payload);
+
+        log.info("Agent 手动暂停: id={}, prev={}, operator={}, reason={}",
+                agentId, prev, agent.getUpdateBy(), reason);
+        return agent;
+    }
+
+    /**
+     * 管理员手动恢复 Agent（v2.4 §4.3）。
+     *
+     * <p>行为：
+     * <ol>
+     *   <li>校验当前状态必须是 SLEEPING（避免错误恢复）</li>
+     *   <li>设 online_status=OFFLINE + update_by=operator（不强行 ONLINE，让系统下次心跳计算）</li>
+     *   <li>保持 offline_reason/offline_at 不变（v2.4 行 419）</li>
+     *   <li>写 task_timeline 审计（event_type=agent_wake, role=SYSTEM）</li>
+     * </ol>
+     *
+     * <p>为什么 wake 后设 OFFLINE 而不是 ONLINE：v2.4 §4.1 设计原则，三态由 last_seen_at/last_active_at
+     * 计算，避免 Agent 还未发送心跳就误判为 ONLINE。下次 heartbeat 调用时 HeartbeatService
+     * 会计算为 IDLE/ONLINE。</p>
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public Agent wakeAgent(Long agentId, String operator, String reason) {
+        Agent agent = getById(agentId);
+        if (agent == null) throw new BizException("Agent 不存在: " + agentId);
+
+        AgentOnlineStatus prev = agent.getOnlineStatus();
+        if (prev != AgentOnlineStatus.SLEEPING) {
+            throw new BizException("Agent 不是 SLEEPING 状态，无法唤醒: id=" + agentId + ", current=" + prev);
+        }
+
+        agent.setOnlineStatus(AgentOnlineStatus.OFFLINE);
+        agent.setUpdateBy(operator != null && !operator.isBlank() ? operator : "admin");
+        updateById(agent);
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("operator", agent.getUpdateBy());
+        if (reason != null && !reason.isBlank()) payload.put("reason", reason);
+        payload.put("prev_status", prev.name());
+        payload.put("new_status", AgentOnlineStatus.OFFLINE.name());
+        payload.put("at", OffsetDateTime.now().toString());
+
+        taskTimelineService.recordEvent(
+                null, null, "agent_wake", AgentRole.SYSTEM, agentId, payload);
+
+        log.info("Agent 手动唤醒: id={}, operator={}, reason={}", agentId, agent.getUpdateBy(), reason);
+        return agent;
     }
 
     // ══════════════════════════════════════════════════════════════

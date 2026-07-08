@@ -1,5 +1,6 @@
 package com.helloai.core.service;
 
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.core.entity.SysUser;
@@ -45,11 +46,18 @@ public class SysUserService extends ServiceImpl<SysUserMapper, SysUser> {
      */
     @Transactional(rollbackFor = Exception.class)
     public void updateLoginInfo(Long userId, String ip) {
-        lambdaUpdate()
-                .eq(SysUser::getId, userId)
-                .set(SysUser::getLastLoginTime, OffsetDateTime.now())
-                .set(SysUser::getLastLoginIp, ip)
-                .update();
+        try {
+            int updated = baseMapper.update(null,
+                    Wrappers.<SysUser>lambdaUpdate()
+                            .eq(SysUser::getId, userId)
+                            .set(SysUser::getLastLoginTime, OffsetDateTime.now())
+                            .set(SysUser::getLastLoginIp, ip)
+            );
+            log.info("管理员最后登录信息已更新: userId={}, ip={}, rows={}", userId, ip, updated);
+        } catch (Exception e) {
+            log.error("更新管理员最后登录信息失败: userId={}, ip={}", userId, ip, e);
+            throw new BizException("记录最后登录信息失败: " + e.getMessage());
+        }
     }
 
     /**
