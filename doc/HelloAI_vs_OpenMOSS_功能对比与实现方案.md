@@ -1,8 +1,16 @@
 # HelloAI vs OpenMOSS — 功能对比与 Java 实现方案
 
+> 定位说明
+>
+> - 本文件保留为历史对标分析与功能补齐方案资产，用于说明当时与 OpenMOSS 的差异判断及补齐思路。
+> - 当前项目现实边界请以 `doc/HelloAI_项目基线文档.md` 为准。
+> - 当前实现与计划差异请以 `doc/HelloAI_实现差距表.md` 为准。
+> - 每轮实际改动、联调结果、修复经过与差距关闭情况，统一记录到 `doc/HelloAI_迭代执行记录.md`。
+> - 正文中出现的“已存在 / 缺失 / 现状 / 结论”等表述，默认保留 2026-07-05 对表时的历史判断，不直接代表当前仓库最新结论。
+>
 **日期**: 2026-07-05  
 **对比范围**: task-cli.py 命令 + 配套后端 API + 相关文档  
-**源码路径**:
+**历史对表路径**:
 - HelloAI: `E:\yhzx\1027\helloai`
 - OpenMOSS: `E:\workspace\openMoss\OpenMOSS-main` (后端) + `OpenMOSS-webui` (WebUI 静态资源)
 
@@ -351,7 +359,7 @@ CLI notification + GET /api/config/notification     (后端需新增)
 CLI st edit    + PUT /api/sub-tasks/{id}            (后端需新增)
 ```
 
-### 3.3 缺失的文档
+### 3.5 缺失的文档
 
 | 文件 | OpenMOSS 路径 | 说明 |
 |------|---------------|------|

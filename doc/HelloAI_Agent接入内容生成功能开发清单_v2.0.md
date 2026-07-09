@@ -1,5 +1,11 @@
 # HelloAI Agent 接入内容生成功能开发清单
 
+> 定位说明
+>
+> - 本文件保留为功能方案、接口设计、开发清单与验收口径文档。
+> - 实际开发过程中的调试记录、联调结果、修复经过与阶段性执行结论，统一记录到 `doc/HelloAI_迭代执行记录.md`。
+> - 如本文件与当前代码现状不一致，优先以代码、验收结果和《迭代执行记录》为准，再回修本文件。
+
 **版本**: v2.0  
 **日期**: 2026-07-05  
 **变更**: 合并 GPT-5 方案（工程完整度）与 MiniMax 方案（UX 闭环思路），形成最终可执行版本
@@ -44,9 +50,9 @@
 
 ## 2. 交互方案
 
-### 2.1 核心流程：注册向导（MiniMax 贡献）
+### 2.1 核心流程：注册向导
 
-这是本方案相比 GPT-5 原版最大的增强点——把"注册 → Key 一闪而过 → 用户懵逼"改造为"注册 → 自动展示 onboarding → 一键复制"。
+本方案将原先“注册成功后仅短暂提示 API Key”的体验，调整为“注册成功后直接展示 onboarding 内容并支持复制”。
 
 ```
 ┌──────────────────────────────────────────┐
@@ -381,7 +387,7 @@ export interface AgentOnboardingResponse {
 </template>
 ```
 
-### 4.4 列表页：注册改为向导式（MiniMax 贡献）
+### 4.4 列表页：注册改为向导式
 
 **修改文件**: `helloai-ui/src/views/agent/AgentList.vue`
 
@@ -392,18 +398,17 @@ export interface AgentOnboardingResponse {
 const onboardingDialog = ref(false)
 const onboardingAgentId = ref<string | number | null>(null)
 
-// 改造注册逻辑 — 修复 specializationSlug 传递 + 注册后切换弹窗
+// 改造注册逻辑：传递 specializationSlug + 注册后切换弹窗
 async function handleRegister() {
   const res: any = await agentApi.register({
     name: form.name,
     role: form.role,
     description: form.description,
-    specializationSlug: form.specializationSlug || undefined  // ← 修复：之前未传递
+    specializationSlug: form.specializationSlug || undefined
   })
-  // 不再用 ElMessage.success（一闪而过），改为：
   registerDialog.value = false
-  onboardingAgentId.value = res.id  // 注册返回的 Agent ID
-  onboardingDialog.value = true     // 直接打开 onboarding 弹窗
+  onboardingAgentId.value = res.id
+  onboardingDialog.value = true
 }
 
 // 列表页按钮打开
@@ -475,7 +480,7 @@ function openOnboarding() {
 />
 ```
 
-### 4.7 移除 PromptList 菜单（MiniMax 贡献）
+### 4.7 移除 PromptList 菜单
 
 **修改文件**: `helloai-ui/src/router/index.ts`
 
@@ -563,7 +568,9 @@ GET /api/admin/agents/{id}/onboarding-content
 
 ---
 
-## 6. 执行步骤
+## 6. 建议实施顺序
+
+> 说明：本节用于指导开发落地顺序，不记录某次实际执行是否完成；实际执行结果统一写入 `doc/HelloAI_迭代执行记录.md`。
 
 ### 第 1 阶段：后端（预计 1 小时）
 
@@ -600,7 +607,7 @@ GET /api/admin/agents/{id}/onboarding-content
 
 **验收**：侧边栏无 Prompt 菜单，直接访问 `/prompts` 无页面
 
-### 第 5 阶段：联调验证（预计 1 小时）
+### 第 5 阶段：联调与验收验证（预计 1 小时）
 
 - [ ] 注册一个新的 `EXECUTOR` Agent（选一个专业化）
 - [ ] 验证注册弹窗第 2 步自动展示 onboarding 内容

@@ -823,7 +823,25 @@ INSERT INTO sys_config (id, config_key, config_value, description)
 VALUES
     (1000000000000000001, 'system.name', 'HelloAI', '系统名称'),
     (1000000000000000002, 'system.description', 'AI Agent 协作调度平台', '系统描述'),
-    (1000000000000000003, 'system.setup_finished', '0', '是否完成初始化向导：0-未完成，1-已完成')
+    (1000000000000000003, 'system.setup_finished', '1', '是否完成初始化向导：0-未完成，1-已完成')
+ON CONFLICT (id) DO NOTHING;
+
+-- 默认管理员账号：admin / admin123
+INSERT INTO sys_user (
+    id, username, password, nickname, role, status,
+    create_by, update_by, remark
+)
+VALUES (
+    1000000000000000001,
+    'admin',
+    '$2a$10$efhAaeAhAeMS7eVro/Iz5.Ai5frxt.3U9DwEa1KGaYwCpClUnejUG',
+    '系统管理员',
+    'SUPER_ADMIN',
+    'ACTIVE',
+    'system',
+    'system',
+    '默认管理员账号：admin / admin123'
+)
 ON CONFLICT (id) DO NOTHING;
 
 -- ============================================================

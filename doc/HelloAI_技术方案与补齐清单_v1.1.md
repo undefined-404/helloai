@@ -1,9 +1,17 @@
 # HelloAI 技术方案与功能补齐清单
 
+> 归档说明
+>
+> - 本文件保留为历史技术方案资产，用于回溯设计背景与阶段性补齐思路。
+> - 当前项目现实边界请以 `doc/HelloAI_项目基线文档.md` 为准。
+> - 当前实现与计划差异请以 `doc/HelloAI_实现差距表.md` 为准。
+> - 每轮实际改动请记录到 `doc/HelloAI_迭代执行记录.md`，不再继续把执行日志灌入本文件正文。
+> - 正文中出现的“现状 / 已有 / 缺失 / 需新增”等表述，默认保留本方案编写时的历史判断，不直接代表当前仓库最新结论。
+> - **每次新增或修改代码前，必须先对照 `doc/HelloAI_CODE_STYLE.md`；如实现与规范不一致，应优先修正文档或实现，不允许绕过规范另起新写法。**
+
 **版本**: v1.1.1  
 **日期**: 2026-07-03  
-**上一版问题**: 5 个核心矛盾 + 5 个 P0 遗漏 + 5 个 P1 遗漏 + 4 个 P2 遗漏（共 20 条）  
-**本版修正**: 全部 20 条反馈已消化并整合 + 3 个实施注意事项
+**形成背景**: 基于当时识别出的 20 条问题反馈整理形成的历史补齐方案版本
 
 ---
 
@@ -1220,7 +1228,7 @@ public class AgentHealthCheckTask {
   /api/agent/**        → 需要 Agent API Key
   /api/agents/register → 无需认证（仅验证 X-Registration-Token）
   /api/agents/me/skill → 需要 Agent API Key
-  /api/tools/cli       → 需要 Agent API Key
+  /api/tools/cli       → 当前实现默认放行（以 WebMvcConfig 为准，若后续收紧需同步更新文档与代码规范）
   /api/health          → 无需认证
   /api/setup/**        → 无需认证
   /api/feed/**         → 无需认证（公开）

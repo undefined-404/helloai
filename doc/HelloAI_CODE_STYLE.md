@@ -2,10 +2,36 @@
 
 > 适用项目：HelloAI（AI Agent 协作调度平台）  
 > 生效范围：后端单体服务 + 前端管理后台（Vue 3 / Element Plus）  
-> 版本：V1.1  
-> 最后更新：2026-07-03  
-> 变更：修正前端技术栈声明 + 补充注释/接口/常量/配置/资源/日期/空值/测试 8 项规范 + 冗余整合
+> 版本：V1.2  
+> 最后更新：2026-07-09  
+> 本版重点：对齐当前仓库真实版本、端口、初始化方式、DTO 规则、分页写法与依赖注入示例；补充“每次改代码前必须先对照本规范”的使用要求
 > 致敬：Hello World! —— 每一位程序员的第一行代码
+---
+
+## 摘要
+
+### 文档定位
+
+本文件是 HelloAI 的代码事实规范，目标是减少以下歧义：
+
+- 当前仓库真实技术栈与历史文档不一致
+- 示例代码与当前项目推荐写法不一致
+- 开发时不知道“该参考技术方案、路线图，还是代码规范”
+
+### 使用要求
+
+- 每次新增或修改代码前，先对照本文件确认是否存在明确规范。
+- 若当前代码实现与本文件不一致，应优先判断是旧代码待收口，还是规范本身过时；不要绕过规范直接新增第三种写法。
+- 若修改引入新的公共约定，应同步更新本文件，而不是只留在 PR、聊天记录或临时说明中。
+- 若与项目基线文档、实现差距表存在冲突，以代码事实和项目基线为准，并尽快回写本文件。
+
+### 维护边界
+
+- 本文件负责“怎么写代码”
+- `HelloAI_项目基线文档.md` 负责“当前项目是什么”
+- `HelloAI_实现差距表.md` 负责“计划与现实差在哪里”
+- `HelloAI_迭代执行记录.md` 负责“这一轮到底做了什么”
+
 ---
 
 ## 目录
@@ -54,6 +80,9 @@
 | 逻辑删除 | `@TableLogic` 标注 `deleted` 字段，0=未删除 / 1=已删除 |
 | 乐观锁 | 使用 `@Version` 注解，禁止手动写 `version = version + 1` SQL |
 | 状态常量 | **禁止硬编码**，统一使用枚举类（`SubTaskStatus`、`AgentRole` 等） |
+| 开发入口 | **每次改代码前先读本规范，再对照 `HelloAI_项目基线文档.md` 与 `HelloAI_实现差距表.md` 判断边界** |
+
+> **强制要求**：如果本文件已有明确规范，开发实现必须优先遵守；若确需例外，必须同时更新文档说明例外条件。
 
 ---
 
@@ -97,16 +126,17 @@ public class AgentInboxService {
 | 组件 | 版本 | 备注 |
 |------|------|------|
 | Java | 17 | 编译目标 17，LTS 版本 |
-| Spring Boot | 3.2.6 | 单体架构，预留微服务扩展（未来可引入 Nacos） |
-| MyBatis-Plus | 3.5.6 | `mybatis-plus-boot-starter` |
+| Spring Boot | 3.4.10 | 当前主线稳定版本 |
+| Spring AI | 1.1.8 | 当前父 POM 实际版本，MCP 主线依赖 |
+| MyBatis-Plus | 3.5.9 | 使用 `mybatis-plus-spring-boot3-starter` |
+| MyBatis-Spring | 3.0.4 | Spring Boot 3.x 配套版本 |
 | PostgreSQL | 16 | 主数据库，支持 JSONB、pgvector 扩展 |
 | PostgreSQL Driver | 42.7.3 | JDBC 驱动 |
 | Redis | 7.x | 缓存 + 分布式锁 + 去重 + 上下文存储 |
 | RabbitMQ | 3.12+ | 消息中间件，Topic Exchange + DLX |
-| MinIO | RELEASE.2024 | 对象存储，附件（图片/PDF/Word） |
-| SpringDoc | 2.6.0 | OpenAPI 3 文档（替代 Knife4j） |
+| MinIO | Docker Compose 当前为 `latest` | 开发环境以仓库当前配置为准 |
+| SpringDoc | 2.8.0 | OpenAPI 3 文档 |
 | Flyway | 10.14.0 | 数据库版本迁移 |
-| Hutool | 5.8.27 | 工具库 |
 | Lombok | - | Spring Boot 管理版本 |
 | Guava | 33.2.0-jre | 工具库 |
 
@@ -121,7 +151,7 @@ public class AgentInboxService {
 ### 3.1 单体模块拆分
 
 ```
-helloai-java/
+helloai/
 ├── helloai-common/          # 基础工具：BaseEntity、R、BizException、常量、工具类
 ├── helloai-mq/              # MQ 层：RabbitMQ 配置、Producer、幂等消费基类、去重服务
 ├── helloai-job/             # 定时任务：Outbox 补偿、通知重试、超时巡检、健康检查、执行记录补偿
@@ -166,10 +196,10 @@ public class HelloAIApplication {
 | 服务 | 端口 | 说明 |
 |------|------|------|
 | HelloAI API | 6565 | 单体应用主端口 |
-| PostgreSQL | 5432 | 数据库 |
-| Redis | 6379 | 缓存 |
-| RabbitMQ | 5672 / 15672 | 消息队列 / 管理后台 |
-| MinIO | 9000 / 9001 | 对象存储 / Console |
+| PostgreSQL | 15432 | Docker Compose 开发环境映射端口 |
+| Redis | 26379 | Docker Compose 开发环境映射端口 |
+| RabbitMQ | 25672 / 25673 | 消息队列 / 管理后台 |
+| MinIO | 29000 / 29001 | 对象存储 / Console |
 
 ### 3.x 配置属性类规范
 
@@ -266,7 +296,7 @@ com.helloai.{模块名}.{层}
 | Service 接口 | `{Name}Service` | `SubTaskService`、`ReviewService` |
 | Service 实现 | `{Name}ServiceImpl` | `SubTaskServiceImpl`（当前项目可直接用类，不强制接口） |
 | Controller | `{Name}Controller` | `SubTaskController`、`AgentController` |
-| DTO | `{Name}DTO` / `{Name}Request` | `SubTaskDTO`、`CreateSubTaskRequest` |
+| DTO | `{Action}Request` / `{Action}Response` | `CreateTaskRequest`、`TaskResponse` |
 | MQ 消费者 | `{Name}Consumer` | `ExecutorEventConsumer`、`ReviewerEventConsumer` |
 | 定时任务 | `{Name}Task` | `AgentEventCompensationTask`、`SubTaskTimeoutTask` |
 | 常量类 | `{Name}Status` / `{Name}Role` | `SubTaskStatus`、`AgentRole` |
@@ -563,10 +593,10 @@ public class SubTaskController {
     }
 
     @GetMapping("/{id}")
-    public R<SubTaskDTO> getById(@PathVariable Long id) {
+    public R<SubTaskResponse> getById(@PathVariable Long id) {
         SubTask subTask = subTaskService.getById(id);
         if (subTask == null) return R.fail("SubTask not found");
-        // ... 转换 DTO
+        // ... 转换 Response DTO
         return R.ok(dto);
     }
 }
@@ -609,12 +639,13 @@ public R<SubTask> submit(@PathVariable Long id) { ... }
 ### 6.6 分页查询规范
 
 列表接口统一接收 `page` 和 `pageSize` 查询参数，默认值 `page=1, pageSize=20`。
+当使用 `@RequestParam(defaultValue = "...")` 时，必须显式声明参数名，避免运行时因未开启参数名保留而绑定失败。
 
 ```java
 @GetMapping
 public R<PageResult<T>> list(
-        @RequestParam(defaultValue = "1") int page,
-        @RequestParam(defaultValue = "20") int pageSize,
+        @RequestParam(value = "page", defaultValue = "1") int page,
+        @RequestParam(value = "pageSize", defaultValue = "20") int pageSize,
         // ... 过滤参数
 ) {
     Page<T> result = service.page(new Page<>(page, pageSize), wrapper);
@@ -627,8 +658,8 @@ public R<PageResult<T>> list(
 ```java
 @GetMapping
 public R<PageResult<TaskResponse>> list(
-        @RequestParam(defaultValue = "1") int page,
-        @RequestParam(defaultValue = "20") int pageSize
+        @RequestParam(value = "page", defaultValue = "1") int page,
+        @RequestParam(value = "pageSize", defaultValue = "20") int pageSize
 ) {
     Page<Task> result = taskService.page(new Page<>(page, pageSize), wrapper);
     return R.ok(PageResult.of(result, this::toResponse));
@@ -869,9 +900,9 @@ remark      varchar(255) DEFAULT NULL                                         --
 ```yaml
 spring:
   datasource:
-    url: jdbc:postgresql://localhost:5432/helloai?currentSchema=public&reWriteBatchedInserts=true
-    username: helloai
-    password: helloai_123
+    url: jdbc:postgresql://localhost:15432/helloai?currentSchema=public&reWriteBatchedInserts=true
+    username: postgres
+    password: postgres
     driver-class-name: org.postgresql.Driver
     hikari:
       maximum-pool-size: 20
@@ -1236,7 +1267,7 @@ helloai-core/agent/
 ├── callback/
 │   └── AgentCallbackHandler.java   # 统一回调处理，驱动状态机
 ├── context/
-│   └── ContextManager.java         # 对话历史管理（Redis 主存 + MySQL 归档）
+│   └── ContextManager.java         # 对话历史管理（Redis 主存 + PostgreSQL/归档表）
 └── mqconsumer/
     ├── ExecutorEventConsumer.java  # 消费 executor 队列
     ├── ReviewerEventConsumer.java  # 消费 reviewer 队列
@@ -1284,10 +1315,10 @@ AgentResult result = agentExecutor.execute(task).get(120, TimeUnit.SECONDS);
 
 ```java
 @Service
+@RequiredArgsConstructor
 public class ContextManager {
 
-    @Autowired
-    private StringRedisTemplate redis;
+    private final StringRedisTemplate redis;
 
     // 热数据：Redis，活跃任务上下文
     public void appendMessage(Long subTaskId, String role, String content) {
@@ -1295,7 +1326,7 @@ public class ContextManager {
         // ... 写入 Redis List，TTL 24h
     }
 
-    // 冷归档：任务完成后异步写入 MySQL
+    // 冷归档：任务完成后异步写入 PostgreSQL / 对应归档表
     public void archiveOnComplete(Long subTaskId) {
         // ... 读取 Redis → 写入 conversation_archive → 删除 Redis
     }
@@ -1342,16 +1373,17 @@ public class {Name} extends BaseEntity {
 ### 16.2 DTO 模板
 
 ```java
-package com.helloai.api.dto;
+package com.helloai.api.dto.{domain};
 
 import lombok.Data;
+import java.time.OffsetDateTime;
 
 @Data
-public class {Name}DTO {
-    private String id;        // Long.toString()，前端兼容
+public class {Name}Response {
+    private Long id;
     private String title;
     private String status;
-    private String createTime;
+    private OffsetDateTime createTime;
 }
 ```
 
@@ -1361,7 +1393,7 @@ public class {Name}DTO {
 package com.helloai.api.controller;
 
 import com.helloai.common.base.R;
-import com.helloai.api.dto.{Name}DTO;
+import com.helloai.api.dto.{domain}.{Name}Response;
 import com.helloai.core.service.{Name}Service;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -1384,8 +1416,8 @@ public class {Name}Controller {
     }
 
     @GetMapping("/{id}")
-    public R<{Name}DTO> getById(@PathVariable Long id) {
-        return R.ok(service.getDtoById(id));
+    public R<{Name}Response> getById(@PathVariable Long id) {
+        return R.ok(service.getResponseById(id));
     }
 }
 ```
