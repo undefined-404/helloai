@@ -3,9 +3,15 @@ package com.helloai.job.task;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
+import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.entity.Agent;
+import com.helloai.core.entity.SubTask;
 import com.helloai.core.mapper.AgentMapper;
+import com.helloai.core.mapper.SubTaskMapper;
+import com.helloai.core.service.AgentSelector;
+import com.helloai.core.service.AgentService;
 import com.helloai.core.service.TaskTimelineService;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -37,7 +43,10 @@ import java.util.concurrent.TimeUnit;
 public class AgentHealthCheckTask {
 
     private final AgentMapper agentMapper;
+    private final SubTaskMapper subTaskMapper;
     private final TaskTimelineService taskTimelineService;
+    private final AgentService agentService;
+    private final AgentSelector agentSelector;
     private final StringRedisTemplate redis;
 
     private static final String LOCK_KEY = "scheduler:lock:AgentHealth";
@@ -150,11 +159,60 @@ public class AgentHealthCheckTask {
     }
 
     /**
-     * 占位方法：v1.1 阶段仅记录日志，
-     * 阶段 4.6 AgentSelector.pickAlternative() 完成后再实装任务重分配。
+     * 将离线 Agent 的未完成任务重分配给同角色替代 Agent（v2.4 §4.6）。
+     *
+     * <p>重分配范围：status ∈ {ASSIGNED, IN_PROGRESS} 且 assigned_agent = agentId。
+     * PENDING 未分配具体 Agent，DONE/CANCELLED 已完成，均不处理。</p>
+     *
+     * <p>每次重分配走 {@link AgentSelector#pickAlternative(Long, AgentRole)}，
+     * 自动跳过 SLEEPING/OFFLINE/熔断中 Agent，按 score 选最优替代。</p>
      */
     private void reassignStaleTasks(Long agentId) {
-        log.info("[占位] Agent {} 任务重分配待阶段 4.6 实施", agentId);
+        // 获取原 Agent 角色用于同角色替代
+        Agent offlineAgent = agentService.getById(agentId);
+        AgentRole role = offlineAgent != null ? offlineAgent.getRole() : null;
+
+        // 查询待重分配任务：ASSIGNED 或 IN_PROGRESS
+        List<SubTask> staleTasks = subTaskMapper.selectList(
+                new LambdaQueryWrapper<SubTask>()
+                        .eq(SubTask::getAssignedAgent, agentId)
+                        .in(SubTask::getStatus, SubTaskStatus.ASSIGNED, SubTaskStatus.IN_PROGRESS));
+
+        if (staleTasks.isEmpty()) {
+            log.info("Agent {} 离线，无待重分配任务", agentId);
+            return;
+        }
+
+        log.warn("Agent {} 离线，待重分配任务数: {}, role={}", agentId, staleTasks.size(), role);
+
+        int reassigned = 0;
+        int failed = 0;
+
+        for (SubTask task : staleTasks) {
+            try {
+                Agent alternative = agentSelector.pickAlternative(agentId, role);
+                if (alternative == null) {
+                    log.warn("无可替代 Agent，任务保持挂起: subTaskId={}, agentId={}, role={}",
+                            task.getId(), agentId, role);
+                    failed++;
+                    continue;
+                }
+
+                task.setAssignedAgent(alternative.getId());
+                subTaskMapper.updateById(task);
+
+                log.info("任务重分配: subTaskId={}, oldAgent={} → newAgent={}, status={}",
+                        task.getId(), agentId, alternative.getId(), task.getStatus());
+                reassigned++;
+
+            } catch (Exception e) {
+                log.error("任务重分配失败: subTaskId={}, agentId={}", task.getId(), agentId, e);
+                failed++;
+            }
+        }
+
+        log.info("Agent {} 离线任务重分配完成: total={}, reassigned={}, failed={}",
+                agentId, staleTasks.size(), reassigned, failed);
     }
 
     private boolean tryLock() {

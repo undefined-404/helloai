@@ -133,6 +133,7 @@ public class McpToolService {
         if (agentId.equals(subTask.getAssignedAgent())
                 && (subTask.getStatus() == SubTaskStatus.ASSIGNED
                     || subTask.getStatus() == SubTaskStatus.IN_PROGRESS)) {
+            heartbeatService.active(agentId);
             ClaimSubTaskResult result = new ClaimSubTaskResult();
             result.setOk(true);
             result.setClaimed(true);
@@ -169,6 +170,8 @@ public class McpToolService {
             result.setReason("race_condition_or_invalid_status");
             return result;
         }
+
+        heartbeatService.active(agentId);
 
         // 重新读取获取最新 version
         SubTask updated = subTaskService.getById(subTaskId);

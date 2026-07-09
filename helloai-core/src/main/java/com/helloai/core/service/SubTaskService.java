@@ -30,6 +30,7 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
     private final AgentOutboxService agentOutboxService;
     private final AgentInboxService agentInboxService;
     private final AgentService agentService;
+    private final HeartbeatService heartbeatService;
     private final ReviewRecordMapper reviewRecordMapper;
     private final ImplicitScoreCalculator implicitScoreCalculator;
     private final RewardService rewardService;
@@ -58,6 +59,10 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
 
         // v1.1: 投递收件箱通知
         sendInboxNotification(subTask, newStatus, oldStatus);
+        if (subTask.getAssignedAgent() != null
+                && (newStatus == SubTaskStatus.IN_PROGRESS || newStatus == SubTaskStatus.REVIEW)) {
+            heartbeatService.active(subTask.getAssignedAgent());
+        }
 
         log.info("子任务状态变更: subTaskId={}, from={}, to={}, agentId={}",
                 subTaskId, oldStatus, newStatus, agentId);
@@ -247,6 +252,25 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
             throw new BizException("已完成或已取消的子任务不能再次取消");
         }
         changeStatus(subTaskId, SubTaskStatus.CANCELLED, null);
+    }
+
+    /**
+     * 将 PENDING 子任务分配给指定 Agent（v2.4 §4.5 熔断调度入口）。
+     *
+     * <p><b>⚠️ 调用约束：本方法只能由 {@link ResilientDispatcher} 调用！</b>
+     * 业务方必须走 {@code resilientDispatcher.assignNext(agentId, subTaskId)}，
+     * 直接调用本方法将<b>绕过熔断保护</b>，导致不可用 Agent 仍被分配任务。</p>
+     *
+     * <p>只允许 PENDING 状态，避免抢任务冲突。</p>
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void assignNext(Long agentId, Long subTaskId) {
+        SubTask subTask = getById(subTaskId);
+        if (subTask == null) throw new BizException("子任务不存在: " + subTaskId);
+        if (subTask.getStatus() != SubTaskStatus.PENDING) {
+            throw new BizException("只有 PENDING 状态的子任务才能分配，当前状态: " + subTask.getStatus());
+        }
+        changeStatus(subTaskId, SubTaskStatus.ASSIGNED, agentId);
     }
 
     @Transactional(rollbackFor = Exception.class)

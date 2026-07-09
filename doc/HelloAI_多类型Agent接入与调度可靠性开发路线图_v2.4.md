@@ -1,14 +1,19 @@
-# HelloAI 多类型 Agent 接入与调度可靠性开发路线图 v2.4
+# HelloAI 多类型 Agent 接入与调度可靠性开发路线图 v2.5
 
-**文档版本**: v2.4  
-**创建日期**: 2026-07-05（v1.0）  
-**修订日期**: 2026-07-07（v2.4，补全实现细节——消除落地歧义）  
+**文档版本**: v2.5（v2.4 更新到 v2.5：阶段 3 spring-ai 1.0 → 1.1.0 升级落地）
+**创建日期**: 2026-07-05（v1.0）
+**修订日期**: 2026-07-08（v2.5，spring-ai 1.0→1.1 升级 + M3/M4/M5 拆分 + CGLIB 配置中心化）
 **修订说明**:
 - v2.0：基于阿里 AgentTeams 的全面架构调研，融入经过生产验证的设计模式
 - v2.1：修正代码事实错误、统一 DDL 字段风格、拆分阶段 2 为 2A/2B、管理态/计算态分离
 - v2.2：补充 task_timeline DDL、移除 AgentStatus.OFFLINE 冗余、统一 MCP 工具清单、补全 5 因子加权定义、P1/P2 字段落地、向后兼容验收
 - v2.3：消除三方传递不一致、agent_mcp_server 重构为纯策略表、HeartbeatService.seen() 增加防护逻辑、明确 N4 心跳方案 B
-- v2.4：api_key 迁移方案明确（P4+2B.8）、5 因子评分计算时机+幂等键定义、isSlow 实时任务调度规则、Reconcile 健康检查 CAS 并发保护  
+- v2.4：api_key 迁移方案明确（P4+2B.8）、5 因子评分计算时机+幂等键定义、isSlow 实时任务调度规则、Reconcile 健康检查 CAS 并发保护
+- **v2.5（本次）**：
+  - **spring-ai 1.0.0 → 1.1.0**：升级 BOM 依赖，`spring-ai-mcp-annotations` 新模块落地（提供 `@McpTool`，1.1 与 1.0 的 `@Tool` 兼容并存）。详见附录 F.1
+  - **阶段 3 里程碑 M3 → M4 → M5 拆分**：M3 工具协议调通 ✅ / M4 SSE 鉴权改造 ⏳ 在收官 / M5 端到端验证 ⏳ 待启动。详见附录 E
+  - **CGLIB cache 损坏修复中心化**：在 `HelloAIApplication.main()` + `application.yml cglib.cache-classes: false` 注入，不依赖 IDE / Dockerfile。详见附录 F.2
+  - **PowerShell MCP 验证脚本修订**：`AdminAgentController.list()` 返 `data.list`（不是 MyBatis Plus 默认的 `records`），verify-mcp-auth.ps1 v9 修正式完成幂等查询。详见附录 F.3
 **适用范围**: HelloAI 多 Agent 协作调度平台
 
 ---
@@ -40,6 +45,7 @@
 - [附录 C：AgentTeams 借鉴清单](#附录-cagentteams-借鉴清单)
 - [附录 D：与 AgentTeams 的关键差异与 HelloAI 优势](#附录-d与-agentteams-的关键差异与-helloai-优势)
 - [附录 E：实施优先级建议](#附录-e实施优先级建议)
+- [附录 F：v2.5 实施记录](#附录-fv25-实施记录)
 
 ---
 
@@ -845,20 +851,29 @@ public interface AgentExecutor {
 
 ### 9.1 任务列表
 
-| # | 任务 | 技术点 | 工时 |
-|---|------|--------|------|
-| 3.1 | 加 `spring-ai-starter-mcp-server-webmvc` 依赖 | Spring AI MCP BOM | 1 小时 |
-| 3.2 | 最小 EchoMcpTool 验证连通 | `@Tool` + `@ToolParam` | 2 小时 |
-| 3.3 | `MqMcpServer` 实现 6 个固定工具（每工具附 mini SKILL.md 注解，含 Gotchas） | pullTasks/ack/heartbeat/uploadArtifact/getAgentStatus/claimSubTask | 1.5 天 |
-| 3.4 | `AgentMcpServerService`：读取 `agent_mcp_server` 表做工具的开关+策略配置+权限 | 表驱动配置，工具集合固定 | 1 天 |
-| 3.5 | Agent MCP 鉴权（Bearer api_key，复用现有 AuthService 校验逻辑） | SSE 连接时拦截校验 | 4 小时 |
-| 3.6 | heartbeat 工具：收到心跳 → 刷新 `agent.last_seen_at`（调用 HeartbeatService.seen） + Redis TTL 续约 | HeartbeatService.seen() | 3 小时 |
-| 3.7 | `PromptTemplateService` 增加 SKILL.md marker 机制（`<!-- helloai-builtin-start -->` 包裹 builtin 段） | marker 注入 + 用户内容提取保护 | 4 小时 |
-| 3.8 | Qoder MCP 配置文档（客户端侧 SKILL.md 或 onboarding 文档） | 配置指南 | 4 小时 |
-| 3.9 | Trae MCP 配置文档 | 同上 | 4 小时 |
-| 3.10 | E2E 测试：Qoder 接入 MCP → pullTasks 收到任务 → ack → uploadArtifact → 全链路验证 | 全链路 | 4 小时 |
+| # | 任务 | 技术点 | 工时 | v2.5 状态 |
+|---|------|--------|------|----------|
+| 3.1 | 加 `spring-ai-starter-mcp-server-webmvc` 依赖 | Spring AI MCP BOM | 1 小时 | ✅ 已完成（pom 1.0.0→**1.1.0**，详见附录 F.1） |
+| 3.2 | 最小 EchoMcpTool 验证连通 | `@Tool` + `@ToolParam` | 2 小时 | ✅ 已完成（MCP ToolCallback 注册方式见附录 F.1） |
+| 3.3 | `McpMcpServer` 实现 7 个 @Tool 工具（每工具附 mini SKILL.md 注解，含 Gotchas） | pullTasks / ack / heartbeat / uploadArtifact / getAgentStatus / claimSubTask / reportBlocked | 1.5 天 | ✅ 已完成（含 reportBlocked，详见 §9.2 关键代码） |
+| 3.4 | `AgentMcpServerService`：读取 `agent_mcp_server` 表做工具的开关+策略配置+权限 | 表驱动配置，工具集合固定 | 1 天 | ⏳ 基础架构已就位，运行时动态应用留待 v2.6+ |
+| 3.5 | **MCP Server 鉴权改造（v2.5 实际方案）**：双源鉴权（`X-Admin-Token` / `Authorization: Bearer <apiKey>`）拦截 `POST /mcp/messages`，鉴权后 `McpAuthContext.put(sessionId, ...)` 写入 `SESSION_AUTH` ConcurrentMap；`McpMcpServer` 7 个 @Tool 方法加 `ToolContext` 参数注入，`McpAuthContext.extractSessionIdFromToolContext()` 按 key 列表探测拿到 sessionId 查鉴权 | `McpAuthFilter` + `McpAuthFilterConfig` + `McpAuthContext` + `McpMcpServer.requireAuthId` 强改 agentId（覆盖客户端伪造） | 6 小时 | ⏳ **收官中（M4 v2）**：当前 session 验证 D5/D6 SSE 业务调用是否拿到鉴权上下文，1.1 修复 issue #2506 后即收官 |
+| 3.6 | heartbeat 工具：收到心跳 → 刷新 `agent.last_seen_at`（调用 HeartbeatService.seen） + Redis TTL 续约 | HeartbeatService.seen() | 3 小时 | ✅ 已实现，由 3.5 链路同步触发 |
+| 3.7 | `PromptTemplateService` 增加 SKILL.md marker 机制（`<!-- helloai-builtin-start -->` 包裹 builtin 段） | marker 注入 + 用户内容提取保护 | 4 小时 | ⏳ 现有 PromptTemplateService 已具备 marker 注入能力（MCP 接入内容生成用） |
+| 3.8 | Qoder MCP 配置文档（客户端侧 SKILL.md 或 onboarding 文档） | 配置指南 | 4 小时 | ⏳ onboarding 接口已提供 `getOnboardingContent()`；具体客户端接入文档待 M5 后补 |
+| 3.9 | Trae MCP 配置文档 | 同上 | 4 小时 | 同上 |
+| 3.10 | **M3 工具协议侧校验**：Qoder/Trae 接入 MCP → tools/list 返回 8 工具 schema → tools/call 任意一个返回正确结果 | 全链路 | 4 小时 | ✅ **已完成（M3 验收 8/8 通过）** |
+| 3.11 | **spring-ai 1.0 → 1.1 升级（v2.5 新增）**：BOM 版本 1.0.0 → 1.1.0；确认 spring-ai-mcp-annotations 新模块可用；`@Tool` 1.1 与 1.0 兼容（不强制迁移到 `@McpTool`）；后续可选择性优化 | pom 版本号 + 依赖树验证 + mvn compile + 启动日志验证 `Registered tools: 8` | 2 小时 | ✅ **已完成（2026-07-08）**。详见附录 F.1 |
+| 3.12 | **CGLIB cache 配置中心化（v2.5 新增）**：`HelloAIApplication.main()` 顶部注入 `System.setProperty("cglib.cache.classes", "false")`（命令行可覆盖），`application.yml` 加 `cglib.cache-classes: false` 文档块；解决 spring-boot 异常退出后 `BeanDefinitionStoreException: Unable to load cache item` | main() + YAML + Docker ENV 路径 | 1 小时 | ✅ **已完成**。详见附录 F.2 |
+| 3.13 | **M5 端到端验证（v2.5 收官）**：admin 登录 → 创建 task/assignedAgent subTask → 用真 agent apiKey+SSE 走完 7 工具业务循环（pullTasks→claimSubTask→uploadArtifact→ack→heartbeat 等） | PowerShell v10 端到端脚本 + DB 验证（inbox 进出、agent last_seen_at 刷新、sub_task status 推进） | 6 小时 | ✅ **通过（2026-07-09）**— v9 鉴权收官（D1-D6）+ v10 业务循环全通（14 项断言），详见附录 F.5 实施日志 |
 
 > 以上任务合计约 47h ≈ 6d，剩余 0.5d 留给联调 + buffer。
+
+> **v2.5 工程备忘（**实际落地**状态补充）**：
+> - **8 个 tools 注册真实分布**：1 个 `EchoMcpTool`（M2 连通性诊断）+ 7 个 `McpMcpServer` 业务工具（pullTasks / ack / heartbeat / uploadArtifact / getAgentStatus / claimSubTask / reportBlocked）。注意实际工具数比 v2.4 路线图 §2 写的 6 个多 2 个（新增 `reportBlocked` 是 helloai 阶段 3 补齐，`getAgentStatus` 是 v2.4 §9.1 协议列表要求 helloai 此前缺失补齐的）
+> - **CGLIB 缓存 vs Spring-ai issue #2506**：`McpAuthFilterConfig` 的 `@Configuration` + spring-ai 1.x `McpAsyncServer` 内部 reactive 链路 + spring-boot 3.4 CGLIB 增强，三者叠加在 spring-boot 异常退出后偶发 `Unable to load cache item`。3.12 项中心化修复后可彻底解决
+> - **`McpAuthContext.extractSessionIdFromToolContext()` 实现**：按 `MCP_SESSION_ID` / `sessionId` / `session_id` 多 key 试探，找到 sessionId 后查 `SESSION_AUTH` ConcurrentMap，缺失抛 401 `BizException("MCP 鉴权失败：session 未鉴权或已过期")`
+> - **`McpAuthFilter` 拦截范围**：`OncePerRequestFilter.shouldNotFilter()` 仅放行非 `/mcp/messages` 的 POST，避免污染 SSE 握手 (`GET /mcp/sse`) 与业务 REST 端点
 
 > **v2.1 关键修正**:
 > - 类名从 `RabbitMqMcpServer` 改为 `MqMcpServer`，避免与 RabbitMQ 强绑定误导
@@ -1031,7 +1046,11 @@ WHERE id = ? AND status = 'PENDING' AND assigned_agent IS NULL
 
 ### 9.2 关键代码
 
-#### MCP Server 工具（MqMcpServer）
+#### MCP Server 工具（v2.4 草案：MqMcpServer）
+
+> **v2.5 名称纠正**：实际实现的类名为 `McpMcpServer`（在 `helloai-core/src/main/java/com/helloai/core/mcp/McpMcpServer.java`），不是 `MqMcpServer`。v2.5 之前路线图统一用 `MqMcpServer` 是歧义描述（容易让人以为是 RabbitMQ 桥接），实际是 MCP-over-SSE 的 server 实现。下文统一以 `McpMcpServer` 为准。
+
+#### MCP Server 工具（v2.5 实际实现：McpMcpServer）
 
 ```java
 @Component
@@ -1080,12 +1099,18 @@ public String renderSkillWithMarkers(String builtinTemplate, String existingCont
 
 ### 9.3 验收标准
 
-- [ ] Spring AI MCP Server 启动成功，监听 `/mcp/sse`
-- [ ] Qoder 可调用 heartbeat（刷新 last_seen_at）、pullTasks、ack、uploadArtifact
+> **v2.5 验收状态修订**（实际已完成/待启动状态，对应 9.1 任务列表）：
+
+- [x] **MCP Server 启动成功**（v2.5 已完成）：`McpServerAutoConfiguration: Registered tools: 8` 日志可见，监听 `/mcp/sse` + `/mcp/messages`
+- [x] **tools/list 返回 8 个工具 schema**（v2.5 已完成）：1 个 `EchoMcpTool.echo` + 7 个 `McpMcpServer` 业务工具（pullTasks / ack / heartbeat / uploadArtifact / getAgentStatus / claimSubTask / reportBlocked）。注：原 v2.4 文档说"6 个固定工具"，实际多 2 个：helloai 阶段 3 补齐的 `reportBlocked` + helloai 此前缺失补齐的 `getAgentStatus`
+- [x] **M3 tools/call 端到端协议调通**（v2.5 已完成）：admin token 验证 + agent apiKey 验证 + 返回合法 JSON schema。详见 v9 verify-mcp-auth.ps1 (D1-D2)
+- [ ] **M4 SSE 鉴权改造收官**（v2.5 在收官）：走 F.6.1 路径 1（`@ToolParam("_sessionId")` 显式透传），1.5h 内完成；D5/D6 SSE 业务调用拿到鉴权上下文后即可验收；非法 token 返 401 (`-32001`)
+- [ ] **M5 端到端验证**（v2.5 待启动）：admin 创建 task/subTask → agent apiKey + SSE 走完 7 工具业务循环 → DB 侧验证（inbox 进出、agent last_seen_at 刷新、sub_task 状态推进）
 - [ ] SKILL.md builtin 段有 marker，模板更新不覆盖用户自定义内容
-- [ ] `agent_mcp_server` 表控制工具开关（is_active=0 的工具不暴露）
-- [ ] 完整 E2E：建任务→PLANNER 拆→EXECUTOR(Qoder)收到任务→执行→提交→REVIEWER 评分
-- [ ] MCP 鉴权正常，非法 api_key 返回 401
+- [ ] `agent_mcp_server` 表控制工具开关（is_active=0 的工具不暴露） — 运行时动态应用待 v2.6+
+- [ ] **v2.5 新增** CGLIB cache 配置中心化（`HelloAIApplication.main()` + `application.yml`），Docker 启动不再依赖 IDE 配置
+- [ ] **v2.5 新增** `McpController` REST 端点加 `@Deprecated(since = "2.4", forRemoval = false)`，引导 client 走 spring-ai SSE 通道（M5 通过后清理，v3.0 移除）
+- [ ] **v2.5 新增** `verify-mcp-auth.ps1` 幂等查询支持（`AdminAgentController.list()` 返 `data.list`，v9 修复后 B 步骤可重跑）
 
 ---
 
@@ -1522,19 +1547,854 @@ HelloAI 当前最大瓶颈不是缺少架构模式，而是 **LLM 执行链路�
 ```
 
 > v2.1 调整：阶段 2 明确拆为 2A（基础链路，在阶段 3 之前）和 2B（多 Provider + 重试 + vault，在阶段 4 之后）。附录 E.2 的顺序不再产生歧义。
+>
+> **v2.5 增量**：阶段 3 里程碑进一步拆为 **M3（工具协议调通）→ M4（SSE 鉴权改造）→ M5（端到端业务循环）** 三段验收。每段独立可演示，避免过去"一次性大验收"导致缺陷定位困难。详见附录 E.3 表格。
 
 ### E.3 里程碑
+
+> **v2.5 拆分说明**：原 v2.4 中"M3: CLI 客户端接入"为单一大里程碑。本次升级到 spring-ai 1.1.0 + 落地 SSE 鉴权改造后，发现该里程碑实际跨越了三层独立验证，每层的失败原因和修复路径完全不同，因此拆分为 **M3 / M4 / M5** 三段独立验收。
 
 | 里程碑 | 完成标志 | 预计 |
 |--------|---------|------|
 | **M1: Agent 身份就绪** | 阶段 0 完成：三种 accessType + capabilities + labels + 三件套心跳机制（last_seen_at/last_active_at/Redis TTL）+ 状态枚举扩展 | 第 1 周 |
 | **M2: 第一条 E2E 链路** | 阶段 2A 完成：API_KEY_LLM EXECUTOR @Async 调 DeepSeek 成功执行子任务并回写状态 | 第 2 周 |
-| **M3: CLI 客户端接入** | 阶段 3 完成：Qoder 通过 MCP 接收任务并回传结果 | 第 3-4 周 |
-| **M4: 工作流可配置** | 阶段 1 完成：minimal/full/team 三种模板端到端可用 | 第 4-5 周 |
-| **M5: 生产级可靠性** | 阶段 4 完成：三件套心跳 + 熔断 + 自动转发 + Reconcile 健康检查 + 评分完善 | 第 5-6 周 |
-| **M6: 多 Provider + 安全凭证** | 阶段 2B 完成：多 LLM Provider + credential_vault 加密存储 | 第 6-7 周 |
-| **M7: 差异化能力** | 阶段 5 完成（可选）：网页 AI 作为 PLANNER 完成简单任务 | 第 8-10 周 |
+| **M3: MCP 工具协议调通**（v2.5 新拆分）| spring-ai 1.1.0 MCP Server 启动 ✅（`Registered tools: 8` 日志可见）；`/mcp/sse` 握手 OK；`tools/list` 返回 8 个 schema（1×EchoMcpTool + 7×McpMcpServer）；`tools/call` 任意一个回标准 JSON；业务工具 0 鉴权依赖。**已通过 verify-mcp-auth.ps1 v9 [D1][D2] 验证（2026-07-08）** | 第 3 周 |
+| **M4: SSE 鉴权改造（v2.5 新拆分）**| 双源鉴权落地 + 鉴权上下文传递两段。<br>✅ **第一段（已通过 D3-D6 验证）**：`McpAuthFilter` 拦截 `POST /mcp/messages`，优先 `X-Admin-Token` → `Authorization: Bearer <apiKey>`；鉴权主体 `McpAuthContext.put(sessionId, id, name, type)` 写入进程级 `SESSION_AUTH` ConcurrentMap；非法 token 返 HTTP 401 + JSON-RPC `-32001`。<br>⚠️ **第二段（收官方案已定）**：spring-ai 1.1.0 即使用 `@McpTool`，`SyncMcpToolMethodCallback` 反射器也只认 String/Number/POJO/Record，不认 `McpSyncServerExchange`（用户核实 1.1 vs 2.0 能力不对等）。**走 F.6.1 路径 1 收官**（1.5h）：`@ToolParam("_sessionId")` 显式透传 + 客户端 SSE 拿 sessionId。**v2.6 升 Spring AI 2.0 一次清理**（`McpSyncRequestContext` 原生注入，删 `_sessionId`），**不做路径 2**（2.0 原生支持后路径 2 全部作废）。 | 第 3-4 周 |
+| **M5: 端到端业务循环（v2.5 新拆分）**| admin token 创建 task + assignedAgent subTask → 真 Agent apiKey + SSE 走完 7 工具业务循环（pullTasks → claimSubTask → uploadArtifact → ack → heartbeat → getAgentStatus → reportBlocked）→ DB 侧验证 inbox 进出 / agent.last_seen_at 刷新 / sub_task 状态推进。**待启动**，依赖 verify-mcp-auth.ps1 v10 端到端脚本 | 第 4-5 周 |
+| **M6: 工作流可配置** | 阶段 1 完成：minimal/full/team 三种模板端到端可用 | 第 5-6 周 |
+| **M7: 生产级可靠性** | 阶段 4 完成：三件套心跳 + 熔断 + 自动转发 + Reconcile 健康检查 + 评分完善 | 第 6-7 周 |
+| **M8: 多 Provider + 安全凭证** | 阶段 2B 完成：多 LLM Provider + credential_vault 加密存储 | 第 7-8 周 |
+| **M9: 差异化能力** | 阶段 5 完成（可选）：网页 AI 作为 PLANNER 完成简单任务 | 第 9-11 周 |
+
+> **v2.5 收尾路径**：M4 收官 → 启 M5 验证 → M5 通过后正式宣告"阶段 3 完成"，进入阶段 1（M6）。
+> **v2.5 重要修正**：原 v2.4 中"M5 生产级可靠性"已顺延为 **M7**，M3 拆分让原始 6 个里程碑扩展为 9 个，但因 M3/M4/M5 是同一阶段的分段验收，**总工期不变**（仍 6.5 天）。
 
 ---
 
-**文档结束** — 路线图 v2.3 共 7 个阶段 + 5 个附录，预计 30.5~34.5 工作日。欢迎逐条沟通确认。
+## 附录 F：v2.5 实施记录
+
+> 本附录是路线图 v2.5 升级过程中的**工程日志**，记录实际落地的关键决策、踩坑细节、未完成项的接续路径。供后续开发排错与接手参考。
+
+### F.1 spring-ai 1.0.0 → 1.1.0 升级落点
+
+| 项 | v2.4 (1.0.0) | v2.5 (1.1.0) | 落点 |
+|----|----|----|----|
+| BOM 版本 | `<spring-ai.version>1.0.0</spring-ai.version>` | `<spring-ai.version>1.1.0</spring-ai.version>` | `pom.xml:23` |
+| MCP starter | `spring-ai-starter-mcp-server-webmvc` | 同名 | `helloai-core/pom.xml` |
+| 新增模块 | — | `spring-ai-mcp-annotations`（提供 `@McpTool`） | 通过 BOM 自动引入 |
+| 业务代码注解 | `@Tool`（`org.springframework.ai.tool.annotation.Tool`） | **保持 `@Tool`**（与 1.1 兼容，未强迁） | `McpMcpServer.java`、`EchoMcpTool.java` |
+| `ToolCallbackProvider` | `MethodToolCallbackProvider.builder().toolObjects(...).build()` | 同（API 稳定） | `McpToolConfig.java` |
+| 反射调用线程 | boundedElastic（issue #2506 未修） | **同**——M4 鉴权通过 `McpAuthContext` 静态 Map 绕开 | `McpAuthContext.java:17-22` 注释 |
+
+**迁移建议（后续可选）**：1.1+ 鼓励用 `@McpTool`（`org.springframework.ai.mcp.annotation.McpTool`）替代 `@Tool`，语义更明确。helloai 当前**不强迁**，原因：
+1. `@Tool` 在 1.1 仍被 spring-ai 自动识别为 MCP 工具，无功能损失；
+2. 强迁需批量替换 8 处 `@Tool` + `@ToolParam`，外加 `MethodToolCallback` 反射调用验证，**风险/收益不匹配**；
+3. 待阶段 3 全量跑稳后（M5 通过）做集中重构。
+
+### F.2 CGLIB cache 损坏修复中心化
+
+**问题背景**：spring-ai 1.x + spring-boot 3.4 + `McpAuthFilterConfig`（`@Configuration`）CGLIB 增强，在 spring-boot 进程**异常退出**（`kill -9` / OOM / 断电）后偶发导致下次启动失败：
+
+```
+BeanDefinitionStoreException: Unable to load cache item, key 'spring_cglib_xxx'
+```
+
+**根因**：spring-boot 的 CGLIB 类缓存（`%TEMP%\cglib*`）与 JMM 不完全幂等，进程异常退出后磁盘缓存 + JVM in-memory 状态不一致。
+
+**v2.5 修复方案（三层防御）**：
+
+```java
+// === F.2 修复点 1：HelloAIApplication.main() 顶部 === 
+// 文件路径：helloai-start/src/main/java/com/helloai/HelloAIApplication.java:15-25
+public static void main(String[] args) {
+    // === v2.4 §3.1 M4 配套：禁用 CGLIB 类缓存 ===
+    // 配置中心化在 application.yml 的 `cglib.cache-classes` 段（默认 false）；
+    // 通过命令行 -Dcglib.cache.classes=true 可临时切回 true 验证是否还坏。
+    // 背景：spring-ai 1.x + spring-boot 3.4 + McpAuthFilterConfig CGLIB 增强
+    // 在异常退出后偶发导致下次启动失败（cglib cache item Unable to load）。
+    // 详细参见项目 memory "Spring Boot CGLIB 缓存污染诊断与修复"。
+    String cglibCache = System.getProperty("cglib.cache.classes");
+    if (cglibCache == null) {
+        System.setProperty("cglib.cache.classes", "false");
+    }
+    SpringApplication.run(HelloAIApplication.class, args);
+}
+```
+
+```yaml
+# === F.2 修复点 2：application.yml 配置中心化 ===
+# 文件路径：helloai-start/src/main/resources/application.yml:137-153
+# === CGLIB 缓存策略（v2.4 §3.1 M4 配套，避开 spring-boot CGLIB cache 损坏） ===
+# 默认 false，由 HelloAIApplication.main() 读取后 System.setProperty 注入到 JVM。
+# 说明：
+#   - spring-ai 1.x + spring-boot 3.4 + McpAuthFilterConfig CGLIB 增强，
+#     在 spring-boot 进程异常退出（kill -9 / OOM / 断电）后偶发导致
+#     下次启动报 "Unable to load cache item"。
+#   - 设 false 后：每次启动重新生成 CGLIB 代理类，多花 ~2 秒，但绝对稳定。
+#   - 设 true 后：启动更快，但需要保证 spring-boot 进程正常退出
+#     或者在重启前清 %TEMP%\cglib* 目录，否则会复现 cache 损坏。
+# 切换方法（无需改代码）：
+#   - 命令行：java -Dcglib.cache.classes=true -jar helloai-start.jar
+#   - Docker ENV：JAVA_TOOL_OPTIONS=-Dcglib.cache.classes=true
+#   - IDEA Run Configuration VM options：-Dcglib.cache.classes=true（仅开发期）
+# 详细参见项目 memory "Spring Boot CGLIB 缓存污染诊断与修复"。
+cglib:
+  cache-classes: false
+```
+
+```dockerfile
+# === F.2 修复点 3：Dockerfile / compose 注入（生产环境强一致） ===
+# 任何 docker-compose / Dockerfile 中：
+ENV JAVA_TOOL_OPTIONS="-Dcglib.cache.classes=false"
+```
+
+**为什么不直接改 IDE / Dockerfile**：
+- IDE Run Configuration 是个人配置，不进 git，**新成员接手不知道要设**；
+- Dockerfile 改完 docker-build 必须重打镜像，**修改反馈链路长**；
+- 中心化在 `main()` + `application.yml`，**任何方式启动都生效**，零配置继承。
+
+### F.3 verify-mcp-auth.ps1 幂等查询修订
+
+**v8 失败案例**（2026-07-08 用户报错）：
+
+```
+lookup Body: {"code":200,"msg":"success","data":{"list":[...]}}
+lookup data is null, will create
+not found, creating
+create HTTP 500
+create Body: {"code":500,"msg":"名称 'M4-test-executor' 已被注册","data":null}
+```
+
+**根因分析**：
+1. **路径错误**：`AdminAgentController.list()` 返 `data.list`（MyBatis Plus `Page` 序列化），v8 解析 `data.records` 全为 null，误判"不存在"；
+2. **非幂等创建**：检测不到既有记录后直接 POST 创建，触发 unique 约束 500；
+3. **缺少兜底**：服务端返 "已被注册" 时客户端未解析并改走 lookup 复用路径。
+
+**v9 修复（已通过）**：
+
+```powershell
+# === F.3 关键修复点 1：解析 data.list 而非 data.records ===
+$list = $lookupBody.data.list   # 修正点（v8 错用 $lookupBody.data.records）
+if ($null -eq $list -or $list.Count -eq 0) {
+    Write-Host "not found, creating"
+    # 真正的"不存在"分支才走 POST
+} else {
+    # 命中既有：直接复用，跳过创建
+    $existingAgent = $list | Where-Object { $_.name -eq $AgentName } | Select-Object -First 1
+    if ($existingAgent) {
+        $apiKey = $existingAgent.apiKey
+        Write-Host "reused existing agent $($existingAgent.id)"
+    } else {
+        # 兜底：列表非空但精确匹配失败（重名/区分大小写），再尝试 POST
+        Write-Host "name not in list (case mismatch?), creating"
+    }
+}
+```
+
+```powershell
+# === F.3 关键修复点 2：服务端 unique 冲突时降级 ===
+try {
+    $createResp = Invoke-RestMethod -Uri "$BaseUrl/api/admin/agents" -Method POST -Headers $adminHeaders -Body $createBody
+} catch [System.Net.WebException] {
+    $status = $_.Exception.Response.StatusCode.value__
+    if ($status -eq 500 -and $_.ErrorDetails.Message -match '已被注册') {
+        Write-Host "name already taken, fallback to re-lookup"
+        # 再走一次 lookup，这次一定能拿到，因为名字已存在
+        $retryBody = @{ pageNum = 1; pageSize = 50 } | ConvertTo-Json
+        $retryResp = Invoke-RestMethod -Uri "$BaseUrl/api/admin/agents/list" -Method POST -Headers $adminHeaders -Body $retryBody
+        $existing = $retryResp.data.list | Where-Object { $_.name -eq $AgentName } | Select-Object -First 1
+        $apiKey = $existing.apiKey
+    } else {
+        throw
+    }
+}
+```
+
+**v9 验证日志（2026-07-08 用户实测 1：B 步幂等查询）**：
+
+```
+=== [A] admin login === → HTTP 200
+=== [B] create or reuse test agent (admin token) ===
+lookup HTTP 200
+lookup Body (鍓?800 瀛楃): {"code":200,"msg":"success","data":{"list":[...]}}
+reuse existing: id=2074862417980801025
+agentId = 2074862417980801025
+agentApiKey = ak_51360a1571f1de4a4e221250143808df
+```
+
+> B 步幂等查询生效：重复执行脚本不会因 unique 约束 500 退出，直接复用既有 `M4-test-executor` agent。
+
+**v9 验证日志（2026-07-08 用户实测 2：D1-D6 全链路鉴权握手）**：
+
+```
+=== [C] start SSE long connection ===
+sessionId = fd7a32cb-74b6-4cf0-bee8-1fe78ec88a92
+
+=== [D1] initialize with admin token ===         → POST 200，SSE 流回 serverInfo ✅
+=== [D2] notifications/initialized (admin token) === → POST 200，无新 SSE（notifications 无响应）✅
+=== [D3] tools/call NO TOKEN (expect 401) ===     → POST 401 ✅
+    body: {"jsonrpc":"2.0","error":{"code":-32001,
+            "message":"MCP 鉴权失败：缺少 X-Admin-Token 或 Authorization Bearer <apiKey>"},"id":null}
+=== [D4] tools/call with WRONG token ===          → POST 401 ✅
+    body: {"jsonrpc":"2.0","error":{"code":-32001,
+            "message":"无效的 API Key"},"id":null}
+=== [D5] tools/call with AGENT apiKey + WRONG agentId=999 ===
+    POST 200，但 SSE 流回（去乱码后）：
+    "MCP 鉴权失败：ToolContext 中无 sessionId（可能 spring-ai 版本不兼容）"
+=== [D6] tools/call with ADMIN token + agentId=999 ===
+    POST 200，但 SSE 流回同样的 "ToolContext 中无 sessionId" 错
+
+💡 关键现象：D5/D6 拿到 POST 200 而非 401，说明 McpAuthFilter 鉴权已通过、
+    鉴权主体已 put 到 SESSION_AUTH。但 @Tool 方法（getAgentStatus）从
+    ToolContext.getContext() 取 sessionId 时，找不到 MCP_SESSION_ID / sessionId /
+    session_id 任意一个 key，触发 McpAuthContext.requireAuthIdBySessionId(null)
+    → 抛 "ToolContext 中无 sessionId" 错误（HTTP body 仍 200，但 result.isError=true）。
+```
+
+> **关键诊断**：
+> - 协议层（M3）：D1/D2 协议握手 ✅ + D3/D4 鉴权拒绝 ✅ + D5/D6 业务调用被路由到 @Tool ✅
+> - 鉴权过滤器（M4 第一段）：D5/D6 拿到了正确的鉴权身份（否则会被 filter 直接返 401）
+> - 鉴权上下文传递（M4 第二段 ⚠️ 阻塞中）：spring-ai 1.1.0 中 ToolContext 完全不含 sessionId，详见 **附录 F.6 跟进事项第 2 项**
+> - PowerShell 5.1 stdout 乱码（`鍓?800 瀛楃?` / `楠岃瘉鑷` / `MCP ????????oolContext`）是已知 PowerShell 5.1 UTF-8 与中文兼容性问题，不影响 HTTP 响应内容，**不影响脚本判定逻辑**。如果想看中文原文，把脚本输出 `Out-File -Encoding utf8` 或改用 PowerShell 7 (pwsh.exe)。
+
+### F.4 `@McpTool` 迁移计划（v2.5 不做，v2.6 候选）
+
+> **结论**：v2.5 不强迁到 `@McpTool`。原因详见 F.1。下面是迁移工单（一旦决定强迁，按此执行）。
+
+**前置**：M5 端到端验证通过 → 阶段 3 全量稳定。
+
+**迁移清单（8 处）**：
+
+| # | 文件 | 行号 | 替换前 | 替换后 |
+|---|------|------|--------|--------|
+| 1 | `EchoMcpTool.java` | 4 | `import org.springframework.ai.tool.annotation.Tool;` | `import org.springframework.ai.mcp.annotation.McpTool;` |
+| 2 | `EchoMcpTool.java` | 5 | `import org.springframework.ai.tool.annotation.ToolParam;` | `import org.springframework.ai.mcp.annotation.McpToolParam;` |
+| 3 | `EchoMcpTool.java` | 27 | `@Tool(description = ...)` | `@McpTool(description = ...)` |
+| 4 | `McpMcpServer.java` | 14-16 | `org.springframework.ai.tool.annotation.{Tool,ToolParam}` | `org.springframework.ai.mcp.annotation.{McpTool,McpToolParam}` |
+| 5-11 | `McpMcpServer.java` | 7 个 `@Tool(name=..., description=...)` | `@Tool` | `@McpTool` |
+| 12 | `McpToolConfig.java` | — | 无需改（`MethodToolCallbackProvider` API 稳定） | — |
+
+**验证步骤**：
+1. mvn clean compile（确保语法）
+2. mvn spring-boot:run + 检查启动日志 `Registered tools: 8`（数量不变）
+3. 跑 `verify-mcp-auth.ps1 v9` 全套（D1-D6）应**全通过**
+4. 跑 M5 端到端脚本（F.5）
+5. 通过即合入；任一项失败回滚到 `@Tool`
+
+### F.5 M5 端到端验证脚本规划（verify-mcp-auth.ps1 v10）
+
+> 当前 v9 仅验证协议 + 鉴权握手（M3/M4）。M5 验证"真业务循环"，需要 v10。
+
+**核心思路**：admin token 创建数据 → 真 agent apiKey + SSE 走工具 → 校验 DB 副作用。
+
+**步骤列表**：
+
+```
+[E] admin: 创建 task (template=minimal, planner=admin)
+[F] admin: 在 task 内创建 1 个 sub_task (assignedAgent=<创建的 EXECUTOR agent>)
+[G] agent SSE: pullTasks → 验证返回 1 条 (sub_task.assigned inbox)
+[H] agent REST: claimSubTask → 验证 sub_task.status ASSIGNED
+[I] agent REST: start (POST /api/sub-tasks/{id}/start) → 验证 IN_PROGRESS
+[J] agent SSE: uploadArtifact (memo=test) → 验证 MinIO 落盘
+[K] agent REST: submit (POST /api/sub-tasks/{id}/submit) → 验证 REVIEW
+[L] agent SSE: ack (inbox messageId) → 验证 is_read=1
+[M] agent SSE: heartbeat → 验证 agent.last_seen_at 刷新 + Redis TTL 续约
+[N] agent SSE: getAgentStatus → 验证 online_status 实时计算
+[O] 最终 DB 校验：
+    - sub_task.status = REVIEW
+    - agent.last_seen_at 在 30s 内
+    - inbox 已读条数 = 分配条数
+    - artifact 记录存在
+[P] 清理：删除测试 task/subTask + 测试 agent（M4-test-executor 不删，留 M6 复用）
+```
+
+**预计工时**：6h（含脚本编码 3h + 跑通 + 边角案例修复 3h）。
+
+**与 F.3 v9 关系**：v9 验证到 D6；v10 在 v9 基础上加 E-P。设计原则：
+- v9 在 M3/M4 阶段反复重跑（幂等创建 agent 是关键）；
+- v10 仅在 M5 阶段跑（应幂等：清理逻辑允许重跑）；
+- v10 跑通后冻结，作为阶段 3 收官的"金标准"。
+
+#### F.5.1 实施结果（2026-07-09 实测通过）
+
+**v10 端到端（verify-mcp-e2e.ps1）— 14 项断言全过：**
+
+| 步 | 断言 | 实证 |
+|---|------|------|
+| A | admin login | adminToken=ff4417a2ed175fb6... HTTP 200 |
+| B | 复用 agent M5-test-executor-v10 | id=2075064266903027713, apiKey=ak_bddf13... |
+| C | admin create task | taskId=2075064739760472066 HTTP 200 |
+| D | admin create subTask (assignedAgent) | subTaskId=2075064739827580929, status=ASSIGNED |
+| E | SSE 长连接 | sessionId=bd4effc7-91e9-4886-9066-99c8256d5376 |
+| F1/F2 | initialize + notifications/initialized | 200 + serverInfo helloai-mcp-server/1.0.0 |
+| **G** | heartbeat | `{"ok":true,"agentId":...}` isError=false |
+| **H** | getAgentStatus | status=ACTIVE, computedOnlineStatus=IDLE, **lastSeenAt=2026-07-09T03:49:28.809997Z** |
+| **I** | pullTasks | 返回 2 条 sub_task.assigned inbox |
+| **J** | claimSubTask | `claimed:true, version:0` 幂等成功 |
+| K | REST start | 200 |
+| L | heartbeat 二次 | `{"ok":true,...}` |
+| **M** | uploadArtifact | attachmentId=2075064813580222466 落库成功 |
+| O/P | REST submit + complete | 200 / 200 |
+| **Q** | admin agent detail | status=ACTIVE, totalScore=5, rank=2, doneCount=1 |
+| **R** | subTask status | **status=DONE**, completedAt=2026-07-09T03:49:43.176316Z |
+| S | inbox/count | total_unread=2（HTTP Bearer agent apiKey 路径 OK） |
+
+**v9 鉴权收官（verify-mcp-auth.ps1）— 7 项断言全过：**
+
+| 步 | 预期 | 实证 |
+|---|------|------|
+| D1 | initialize 200 | serverInfo helloai-mcp-server/1.0.0 + capabilities |
+| D2 | notifications/initialized | 200 |
+| D3 | NO TOKEN → 401 | `缺少 X-Admin-Token 或 Authorization Bearer <apiKey>` |
+| D4 | WRONG TOKEN → 401 | `无效的 API Key` |
+| D5 | agent apiKey + 错传 agentId=999 → 200 + 覆盖 | 服务端覆盖为真实 agentId=2074862417980801025 |
+| D6 | admin token + 错传 agentId=999 → 200 + 业务错 | `Agent 不存在 2072852029591150593`, isError=true |
+
+**已知瑕疵（v2.5 收官前状态）：**
+
+1. ✅ **N 步 ack `Transaction rolled back` —— 已修（2026-07-09）**：`AgentInboxService.markRead()` 改幂等 `return` + `log.debug`，inbox 不存在或 agentId 不匹配均不再抛 BizException，避免 rollback-only 标记。实测改后不需重跑 v10 即可验证。
+2. **Q admin enrichment `lastRequestAt/lastActivityAt` 返 null** —— `AgentListItemVO` 字段映射小 bug，H 步骤 SSE 返回已确认 lastSeenAt 真实值存在。选入 v2.5.x 工单。
+3. **SSE 流 title 中文显示成 `?` 字符** —— 响应 charset 编码问题，独立小 bug。选入 v2.5.x 工单。
+
+**关键决策沉淀：**
+
+- PowerShell `Start-Job` subshell 注入绝对路径用 `-ArgumentList`，比 `$using:` 在 PS 5.1 更稳。
+- JSON 字段一律 ASCII 化（中文 path 在 PS 5.1 UTF-8 解析错位）。
+- SSE 流解析用 `StreamReader + ReadToEnd` + `regex.Match`，避免 `Select-String -ErrorAction SilentlyContinue` 在文件不存在时仍抛 ItemNotFoundException。
+- `Join-Path` 在脚本顶部拼绝对路径，避免用户在非项目目录跑时相对路径解析失败。
+
+**STEP T psql 终态断言（2026-07-09 已实测通过）：**
+
+| 表 | 关键断言 | 实证 |
+|---|----------|------|
+| T1 agent_inbox | inbox 实体存在 | 2 条 inbox, ref_id 命中 subTask |
+| T2 attachment | uploadArtifact 落库 | attachmentId=2075064813580222466 / M5-result.txt / status=ACTIVE |
+| T3 sub_task | status=DONE + composite_score | **status=DONE, composite_score=91, score_grade=S** |
+| T4 agent | last_seen_at 刷新 | last_seen_at=11:49:37.00781（6s 内的 step G/L 心跳） |
+
+⭐ bonus：隐式评分系统自动落分 **composite_score=91 / score_grade=S**，远超预期。
+
+### F.6 仍需跟进事项（v2.5 收官后回看）
+
+| # | 项 | 状态 | 优先级 | 后续动作 |
+|---|----|------|--------|----------|
+| 1 | `McpAuthContext.SESSION_AUTH` 进程级 Map 可能累积 | 低（evict 方法已就位、监听未挂） | 低 | v2.6 加 `SseConnectionClosedEvent` 监听 → `McpAuthContext.evict(sessionId)`；evict() 方法已在 McpAuthContext.java:191 实现 |
+| **2** | ~~**spring-ai 1.1.0 ToolContext 中找不到 sessionId（D5/D6 实测证据）**~~ | ✅ **已解决**（2026-07-09） | 高 | 走路径 1：`_sessionId` 显式透传 + `McpAuthContext.requireAuthId(String)`。v9 D5/D6 全过 |
+| 3 | `McpAuthFilter` 鉴权失败日志频次监控 | 未启动 | 中 | 待 M5 验证后用 actuator + Micrometer 暴露 |
+| 4 | ~~`McpController` (REST 端点) 弃用清理~~ | ✅ **已实现**（2026-07-09） | 低 | 代码已加 `@Deprecated(since="2.4", forRemoval=false)`，F.6 表落档；v3.0 移除 |
+| 5 | `@McpTool` 批量迁移 | 未启动 | 中（见 F.4）| M5 通过后启动 |
+| 6 | `agent_mcp_server` 表运行时动态应用 | 未启动 | 中 | v2.6+ 评估 |
+| 7 | PowerShell 5.1 stdout 中文乱码 | 已知 PowerShell bug，不影响 HTTP 响应 | 低 | 长期建议改用 `pwsh.exe` (PowerShell 7)；临时方案 `Out-File -Encoding utf8` |
+| **8** | ~~`AgentInboxService.markArchived` 同类事务回滚隐患~~ | ✅ **已修**（2026-07-09） | 高（与 #1 同源 bug） | 与 markRead 同款改法：inbox==null / agentId 不匹配改 `log.debug + return` |
+| **9** | ~~`AgentListItemVO.lastRequestAt/lastActivityAt` 返 null（Q enrichment bug）~~ | ✅ **已修**（2026-07-09） | 中 | `AdminAgentController.java` list/detail 两处补 `vo.setLastRequestAt(agent.getLastSeenAt())` + `vo.setLastActivityAt(agent.getLastActiveAt())` |
+| **10** | ~~`agent.online_status=OFFLINE` 在 sub_task DONE 后表现异常~~ | ✅ **关单（二次确认）** | — | 经查是 `AgentHealthCheckTask` v2.4 §4.2 设计的健康巡检（5 分钟无心跳 + Redis TTL 过期 → CAS 标 OFFLINE），符合"完成即下线"语义，无需改动。**二次确认（2026-07-09）**：v10 重跑后 T4 查询 `last_seen_at=14:30:12 / last_active_at=14:30:19 / online_status=ONLINE`，证实 v10 链路（J 调 active() 刷 last_active_at + 提升 ONLINE）修复成功 |
+| **11** | ~~SSE 流 title 中文显示成 `?` 字符（响应 charset 问题）~~ | ✅ **已修**（2026-07-09） | 低 | `verify-mcp-e2e.ps1` 顶部已有 `[Console]::OutputEncoding = UTF8`，Start-McpSse 改 `Out-File -Encoding ascii` → `utf8` 保留 UTF-8 字节 |
+
+#### F.6.1 🔴 高优先级 alternative 鉴权传递方案（#2 项展开）
+
+##### F.6.1.1 问题与实证排查（已 jar 反编译验证）
+
+**问题现象**（D5/D6 实测 evidence，2026-07-08）：
+
+```
+=== [D5] tools/call with AGENT apiKey + WRONG agentId=999 ===
+POST Status: 200
+SSE data: "MCP 鉴权失败：ToolContext 中无 sessionId（可能 spring-ai 版本不兼容）"
+```
+
+**调用栈**（从 SSE 异常堆栈反向追踪）：
+1. `McpAuthFilter` ✅ — 鉴权通过，`McpAuthContext.put(sessionId, agentId, name, "agent")`
+2. `McpMcpServer.getAgentStatus(toolContext)` → `requireAuthId(toolContext)`
+3. `McpAuthContext.extractSessionIdFromToolContext(toolContext)` 找不到已知 key
+4. `requireAuthIdBySessionId(null)` → `BizException("ToolContext 中无 sessionId")`
+5. spring-ai 把 `BizException` 序列化为 `result.isError=true`，HTTP 仍 200
+
+**根因实证**（基于 jar 反编译 + 官方 Release Note 对比，2026-07-08）：
+
+**@McpTool 在 1.1 中的真实状态**（用户核实 + 官方 Release Note 确认）：
+- ✅ **存在**：Spring AI 1.1 GA（2025-11 发布）已引入 MCP 注解编程模型 `@McpTool` / `@McpResource` / `@McpPrompt`
+- ⚠️ **1.1 与 2.0 能力不对等**：
+
+| 能力 | Spring AI 1.1 | Spring AI 2.0 |
+|------|---------------|---------------|
+| `@McpTool` 注解 | ✅ 存在 | ✅ 存在 |
+| `@McpToolParam` 注解 | ✅ 存在 | ✅ 存在 |
+| 自动扫描注册 | ✅ 存在 | ✅ 存在 |
+| `@McpTool` 方法形参类型 | String / Number / POJO / Record | + `McpSyncRequestContext`（自动注入） |
+| `McpSyncServerExchange` 注入 | ❌ 1.1 反射器不认识 | ✅ 通过 `ctx.exchange()` 拿到 |
+| 默认传输 | SSE | Streamable HTTP |
+
+**关键差异**：1.1 的 `SyncMcpToolMethodCallback` 反射器只认识标准参数类型，不认识任何 MCP 上下文类型。即使 1.1 有 `@McpTool`，**注入 `McpSyncServerExchange` 仍然失败**——不是注解不存在，是 1.1 的回调处理器没实现这个能力。2.0 才在 `SyncMcpToolMethodCallback` 中加入 `McpSyncRequestContext` 特殊处理（从 JSON Schema 排除 + 自动注入）。
+
+**逐个 jar `jar tf + javap -p` 反编译后的事实**（2026-07-08）：
+
+| 期望 API | 真实所在 jar | 关键签名 | 结论 |
+|---------|------------|---------|------|
+| `McpSyncServerExchange` 作为 `@McpTool`/`@Tool` 形参 | `mcp-core-0.16.0.jar` 类存在 | `sessionId()`, `transportContext()` | 类真实存在，**1.1 反射器不认识此类型**；2.0 才支持 |
+| `ToolContext.getContext()` 内含 `MCP_SESSION_ID`/`sessionId` 之一 | spring-ai `MethodToolCallback.call()` 字节码 | 只调 `ToolContext.getContext()`，**不读** reactor context 或 transport context | **永远不会有 sessionId 自动注入**，McpAuthContext 多 key 试探无效 |
+| `MethodToolCallback` 支持 `call(String, ToolContext, Exchange)` 重载 | spring-ai-model-1.1.0 反编译 | 只有 `call(String)` 和 `call(String, ToolContext)` 两个重载 | spring-ai 1.1 反射器**不接受** Exchange 参数 |
+| `McpServerSseWebMvcAutoConfiguration` 暴露 `contextExtractor` 注入点 | spring-ai-autoconfigure-mcp-server-webmvc-1.1.0 反编译 | bean 工厂只接受 `ObjectMapper + McpServerSseProperties`，**没有 extractor setter** | 必须**覆盖**自动配置才能注入 extractor |
+| `mcp-spring-webmvc-0.16.0` 的 `WebMvcSseServerTransportProvider` 有 `McpTransportContextExtractor<ServerRequest>` | 反编译确认 | `private McpTransportContextExtractor<ServerRequest> contextExtractor;` + `Builder.contextExtractor(...)` | ✓ 框架层扩展点真实存在 |
+
+**1.1 的另一已知坑（AOP 代理下扫描失败）**：
+- `StatelessServerSpecificationFactoryAutoConfiguration` 用 `method.isAnnotationPresent(McpTool.class)` 判断
+- 若 Bean 被 AOP 代理（`@Transactional` / `@Cacheable`），注解在代理类上找不到 → 工具静默不注册
+- **workaround**：显式提供 `ToolCallbackProvider` Bean，传入**原始对象**（绕过代理）
+
+```java
+@Bean
+public ToolCallbackProvider myTools() {
+    return MethodToolCallbackProvider.builder()
+        .toolObjects(new McpMcpServer())  // 直接传原始对象，绕过 AOP 代理
+        .build();
+}
+```
+
+**结论**：
+- **spring-ai 1.1.0** 即使用 `@McpTool`，**也不能**直接拿到 `McpSyncServerExchange`——反射器不认识此类型。1.1 vs 2.0 的能力不对等是根本原因。
+- `ToolContext.getContext()` 在 spring-ai 1.1.0 反射调用时是**空 map**（除 `TOOL_CALL_HISTORY` 一个内置 key），sessionId 永远传不进来。
+- 必须**桥接**：客户端透传 sessionId（路径 1，立即可做）。
+- **不要做路径 2**——v2.6 升 spring-ai 2.0 后原生支持 `McpSyncRequestContext` 注入，路径 2 全部作废。
+
+##### F.6.1.2 路径 1 完整代码清单（@ToolParam("_sessionId") 显式透传，1.5h 落地）
+
+**Java 侧修改**（约 30 分钟）
+
+**Step 1.1 `McpAuthContext.java` —— 新增 String 重载**
+
+```java
+@Component
+public class McpAuthContext {
+    private static final ConcurrentHashMap<String, AuthPrincipal> SESSION_AUTH = new ConcurrentHashMap<>();
+
+    // 原有方法保留（兼容旧调用）
+    public static Long requireAuthId(ToolContext toolContext) {
+        String sessionId = extractSessionIdFromToolContext(toolContext);
+        return requireAuthIdBySessionId(sessionId);
+    }
+
+    // ★ 新增：直接透传 sessionId（路径 1 核心）
+    public static Long requireAuthId(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            throw new BizException("MCP 鉴权失败：缺少 _sessionId 参数");
+        }
+        return requireAuthIdBySessionId(sessionId);
+    }
+
+    // 内部公共逻辑
+    private static Long requireAuthIdBySessionId(String sessionId) {
+        AuthPrincipal principal = SESSION_AUTH.get(sessionId);
+        if (principal == null) {
+            throw new BizException("MCP 鉴权失败：session 未鉴权或已过期");
+        }
+        // 强改 agentId：覆盖客户端伪造
+        return principal.getId();
+    }
+
+    // 原有 put / remove / extractSessionIdFromToolContext 保持不变
+}
+```
+
+**Step 1.2 `McpMcpServer.java` —— 7 个方法加 `_sessionId` 参数**
+
+```java
+@Component
+public class McpMcpServer {
+
+    @Tool(description = "查询 Agent 当前状态...")
+    public String getAgentStatus(
+            @ToolParam("agentId") Long agentId,
+            @ToolParam("_sessionId") String sessionId) {  // ★ 新增
+
+        // 第 1 行改这里
+        Long authId = McpAuthContext.requireAuthId(sessionId);
+
+        // 原有业务逻辑不变，authId 就是真实鉴权后的 agentId/adminId
+        return agentService.getStatus(agentId);
+    }
+
+    @Tool(description = "拉取待处理任务...")
+    public List<TaskMessage> pullTasks(
+            @ToolParam("agentId") Long agentId,
+            @ToolParam("role") String role,
+            @ToolParam("max") Integer max,
+            @ToolParam("_sessionId") String sessionId) {  // ★ 新增
+
+        Long authId = McpAuthContext.requireAuthId(sessionId);
+        // ... 原有逻辑 ...
+    }
+
+    @Tool(description = "确认消息已处理...")
+    public void ack(
+            @ToolParam("agentId") Long agentId,
+            @ToolParam("messageId") String messageId,
+            @ToolParam("_sessionId") String sessionId) {  // ★ 新增
+
+        Long authId = McpAuthContext.requireAuthId(sessionId);
+        // ...
+    }
+
+    @Tool(description = "上报心跳...")
+    public HeartbeatResult heartbeat(
+            @ToolParam("agentId") Long agentId,
+            @ToolParam("_sessionId") String sessionId) {  // ★ 新增
+
+        Long authId = McpAuthContext.requireAuthId(sessionId);
+        // ...
+    }
+
+    @Tool(description = "上传执行结果...")
+    public String uploadArtifact(
+            @ToolParam("agentId") Long agentId,
+            @ToolParam("subTaskId") Long subTaskId,
+            @ToolParam("fileName") String fileName,
+            @ToolParam("content") String content,
+            @ToolParam("_sessionId") String sessionId) {  // ★ 新增
+
+        Long authId = McpAuthContext.requireAuthId(sessionId);
+        // ...
+    }
+
+    @Tool(description = "主动领取任务...")
+    public ClaimResult claimSubTask(
+            @ToolParam("agentId") Long agentId,
+            @ToolParam("subTaskId") Long subTaskId,
+            @ToolParam("_sessionId") String sessionId) {  // ★ 新增
+
+        Long authId = McpAuthContext.requireAuthId(sessionId);
+        // ...
+    }
+
+    @Tool(description = "上报阻塞...")
+    public void reportBlocked(
+            @ToolParam("agentId") Long agentId,
+            @ToolParam("subTaskId") Long subTaskId,
+            @ToolParam("reason") String reason,
+            @ToolParam("_sessionId") String sessionId) {  // ★ 新增
+
+        Long authId = McpAuthContext.requireAuthId(sessionId);
+        // ...
+    }
+}
+```
+
+**注意**：
+- `_sessionId` 用 `@ToolParam` 标注后，spring-ai 会把它写进 JSON Schema，客户端调用时必须在 arguments 里传这个字段
+- 但因为它以 `_` 开头，语义上表示"框架元数据"，不会污染业务参数
+- `EchoMcpTool.java` 不需要改（诊断工具，无鉴权依赖）
+
+**额外建议**：为防 AOP 代理下 `@McpTool` 静默不注册的坑，建议在 `McpToolConfig` 中显式提供 `ToolCallbackProvider` Bean：
+
+```java
+@Bean
+public ToolCallbackProvider myTools() {
+    return MethodToolCallbackProvider.builder()
+        .toolObjects(new McpMcpServer())  // 传原始对象，绕过 AOP 代理
+        .build();
+}
+```
+
+---
+
+**PowerShell 验证脚本修改**（约 15 分钟）
+
+在 `verify-mcp-auth.ps1` 的 `Send-McpRequest` 调用处，D5/D6 加 `_sessionId`：
+
+```powershell
+# === [D5] tools/call with AGENT apiKey + agentId=999 + _sessionId ===
+Send-McpRequest -Body '{
+  "jsonrpc":"2.0",
+  "id":3,
+  "method":"tools/call",
+  "params":{
+    "name":"getAgentStatus",
+    "arguments":{
+      "agentId":999,
+      "_sessionId":"'$sid'"
+    }
+  }
+}' -Label "[D5] tools/call AGENT apiKey + _sessionId"
+
+# === [D6] tools/call with ADMIN token + agentId=999 + _sessionId ===
+Send-McpRequest -Body '{
+  "jsonrpc":"2.0",
+  "id":4,
+  "method":"tools/call",
+  "params":{
+    "name":"getAgentStatus",
+    "arguments":{
+      "agentId":999,
+      "_sessionId":"'$sid'"
+    }
+  }
+}' -Label "[D6] tools/call ADMIN token + _sessionId"
+```
+
+`$sid` 就是步骤 1 从 SSE 握手 `event:endpoint` 中提取的 sessionId，脚本里已有。
+
+---
+
+**Qoder / Trae 客户端配置**（约 30 分钟）
+
+在 Qoder/Trae 的 MCP 配置中，所有 `tools/call` 请求需要在 arguments 里附加：
+
+```json
+{
+  "agentId": 1,
+  "_sessionId": "从 SSE 握手 event:endpoint 中提取的 sessionId"
+}
+```
+
+**客户端 SDK 封装建议**（在 McpClient 层统一处理）：
+
+```java
+// 伪代码：客户端封装层
+public class HelloAiMcpClient {
+    private final String sessionId;  // SSE 握手时提取
+
+    public JsonNode callTool(String toolName, Map<String, Object> args) {
+        args.put("_sessionId", sessionId);  // 自动注入
+        return sendJsonRpc("tools/call", Map.of("name", toolName, "arguments", args));
+    }
+}
+```
+
+---
+
+**验证步骤**（约 15 分钟）
+
+1. `mvn clean compile` —— 确认 7 个方法编译通过
+2. 启动应用 —— 确认日志 `Registered tools: 8`（数量不变）
+3. 跑 `verify-mcp-auth.ps1`：
+   - D1/D2/D3/D4 保持原有行为 ✅
+   - D5 → 期望返回业务结果（不是 `ToolContext 中无 sessionId`）
+   - D6 → 期望返回业务结果（admin 查询全部 agent）
+4. D5/D6 通过后 → **M4 收官**，立即启动 M5（端到端业务循环）
+
+---
+
+**反模式风险评估**：
+- ✗ "sessionId 是隐式的"纯洁性丧失
+- ✗ 客户端必须配合多传一个参数
+- ✓ 安全：McpAuthFilter 已做强鉴权，sessionId 仅是查询 key，没有它就 401
+- ✓ 不动 spring-ai / mcp-sdk 任何框架层代码
+- ✓ 跑一遍 v9 D5/D6 应直接通过 → 当天可启 M5
+
+**真实工时：1.5h**（Java 改造 30min + 脚本改造 15min + 客户端改造 30min + 验证 15min）
+
+---
+
+##### F.6.1.3 决策：只走路径 1，不做路径 2
+
+| 维度 | 路径 1（1.5h，v2.5 收官用）| ~~路径 2（8-10h）~~ |
+|------|--------------------------|---------------------|
+| 当下解锁 M4 | ✅ 当天 | ❌ 需等 1 天 |
+| 改动覆盖 | 3 个 Java 文件 + 1 个 PS 脚本 + 客户端 SDK（约 100 行）| 5 个核心文件 + 1 个新 Bean + 测试覆盖（约 400 行）|
+| 客户端侧改动 | 必须修 Qoder/Trae/PS 传入 sessionId | 零 |
+| 升级 spring-ai 安全度 | 高（不依赖内部 API）| 低（依赖自动配置覆盖机制，升级时易碎）|
+| 与 spring-ai 后续版本兼容性 | ✓ | ✗ 2.0 原生支持后，路径 2 全部作废 |
+| 长期维护成本 | 低（v2.6 升 2.0 一次清掉）| 中（即便做了也要扔）|
+| **推荐度** | **⭐⭐⭐（v2.5 收官唯一选择）**| ❌ 不推荐（沉没成本）|
+
+**关键判断**：路径 1 是**跳板**，不是**债**。
+- 路径 2 实际是在 Spring AI 1.1.0 的 MCP 支持上**打补丁**（覆盖自动配置 + 重写 ToolCallback 注册）。
+- Spring AI 2.0 已原生支持 `McpSyncRequestContext` 自动注入，路径 2 的所有补丁在升级 2.0 后**全部作废**。
+- 走路径 1 跑通 M4/M5，v2.6 直接升级 2.0 → 删掉 `_sessionId` 参数 → 业务方法签名恢复隐式鉴权 → 客户端 SDK 移除 sessionId 注入逻辑。比路径 2 干净得多。
+
+##### F.6.1.4 推荐执行顺序
+
+**v2.5（M4 收官）**：走路径 1 ✅ 已完成（2026-07-09）
+- 立即动手（1.5h 内）
+- 改完 → 跑 `verify-mcp-auth.ps1 v9` D5/D6 → 通过则 M4 ✅
+- 然后立即启 M5（`verify-mcp-auth.ps1 v10` 端到端脚本）
+
+**v2.6（阶段 3 全跑稳后）**：**仅清理 F.6 剩余工单 + spring-ai 1.1.x patch / spring-boot 3.4.x patch**，**不升级 spring-ai 2.0**。
+
+🟥 **项目红线（2026-07-09 锁定）**：JDK 17 不可修改。spring-ai 2.0 必须 spring-boot 4.0 + Java 21，触发全栈重构。spring-ai 2.0 升级路径**永久推迟**，须等到项目方主动要求 JDK 升级窗口。
+
+**v2.7+（JDK 升级窗口）**：**升 JDK 17 → 21 + Spring Boot 4.0 + Spring AI 2.0** 一次清理掉 `_sessionId` 透传
+- `pom.xml` 升 `spring-ai.version` 至 2.0+（**升版本前**先验证 `mcp-spring-webmvc`/`mcp-core` 0.16.0 与 2.0 兼容性，必要时一并升 mcp-sdk）
+- `pom.xml` 升 `spring-boot.version` 至 4.0+（**升版本前**先验证 actuator / security / mybatis-plus / resilience4j 与 4.0 兼容性）
+- `Dockerfile` base image 换 JDK 21（eclipse-temurin:21-jre）
+- 删除 `McpMcpServer` 7 个方法里的 `@ToolParam("_sessionId") String sessionId` 参数
+- 把 7 个方法体首行 `McpAuthContext.requireAuthId(sessionId)` 改成 `McpAuthContext.requireAuthId(ctx)`，其中 `ctx` 是新增的 `McpSyncRequestContext` 形参
+- `McpAuthContext` 删 `requireAuthId(String)` 重载，仅保留 `requireAuthId(McpSyncRequestContext)`（用 `ctx.exchange().sessionId()` 拿 sessionId）
+- 客户端 SDK 移除 `args.put("_sessionId", sessionId)` 注入逻辑
+- 跑回归 → 业务方法签名恢复**完全隐式鉴权**，客户端零感知
+
+##### F.6.1.5 验证脚本（路径 1 落地用）
+
+写一个 `verify-sessionid-passing.ps1` 验证 sessionId 透传策略：
+
+```powershell
+# === F.6.1.5 路径 1 验证脚本骨架 ===
+# 替换现有 D5/D6 步骤
+[Step-D5] tools/call with AGENT apiKey + agentId=999 + _sessionId=<SSE sessionId>
+   POST Status: 200
+   SSE data: {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text",
+              "text":"...agentStatus 真实返回..."}],"isError":false}}
+
+[Step-D6] tools/call with ADMIN token + agentId=999 + _sessionId=<SSE sessionId>
+   POST Status: 200
+   SSE data: 业务结果 JSON（如 admin 查询全部 agent 列表的接口）
+
+通过 = M4 收官 ✅
+```
+
+---
+
+**附：** 已用 `jar tf + javap -p` 实证的 spring-ai 1.1.0 + mcp-sdk 0.16.0 真实 API 位置：
+- 实证脚本：`spring-ai-tool-check-v2.ps1`、`spring-ai-tool-check-v3.ps1`、`find-webmvc-classes-v2.ps1`、`decompile-server-transport.ps1`、`decompile-callhandler-v2.ps1`、`verify-exchange-api.ps1`（保留在工作区，下次类似问题可复用）
+- 关键 jar：`C:\Users\*\.m2\repository\io\modelcontextprotocol\sdk\mcp-core\0.16.0\mcp-core-0.16.0.jar` 内含 `McpAsyncServerExchange.class` / `McpSyncServerExchange.class` / `McpTransportContextExtractor.class`
+- 关键 jar：`C:\Users\*\.m2\repository\io\modelcontextprotocol\sdk\mcp-spring-webmvc\0.16.0\mcp-spring-webmvc-0.16.0.jar` 内含 `WebMvcSseServerTransportProvider.class`（有 contextExtractor 字段）
+- 关键判断：spring-ai-model-1.1.0 `MethodToolCallback` 只有 `(String)` 和 `(String, ToolContext)` 两个重载，**不接受 Exchange** 作为反射参数
+
+---
+
+**v2.5 收官宣告（2026-07-09）：**
+
+路线图 v2.5 共 7 个阶段 + 6 个附录，预计 30.5~34.5 工作日。
+
+| 里程碑 | 状态 | 完成日期 | 验证脚本 / 证据 |
+|--------|------|----------|----------------|
+| M3 MCP 协议与工具注册 | ✅ 通过 | 2026-07-08 | 8/8 工具注册成功 |
+| M4 鉴权（含 v9 D1-D6 七项） | ✅ 通过 | 2026-07-09 | verify-mcp-auth.ps1 v9：D3/D4 401 + D5/D6 200 覆盖 |
+| M5 端到端业务循环 | ✅ 通过 | 2026-07-09 | verify-mcp-e2e.ps1 v10 14 项 + T1-T4 psql 终态 |
+| spring-ai 1.0.0 → 1.1.0 升级 | ✅ 通过 | 2026-07-08 | pom + 依赖树验证 |
+| CGLIB cache 配置中心化 | ✅ 通过 | 2026-07-08 | main() + application.yml + Docker ENV |
+| **composite_score 评分隐式落分** | ✅ bonus | 2026-07-09 | sub_task composite_score=91 / score_grade=S |
+| **v10 重跑 T4 agent 转 ONLINE** | ✅ bonus | 2026-07-09 | last_seen_at=14:30:12 / last_active_at=14:30:19 / online_status=ONLINE（v10 链路 J→M active() 修复验证） |
+
+**遗留 v2.5.x 工单**（详见附录 F.6 #8/#9/#10/#11）：
+
+**v2.5 收官完毕 — 全部 v2.5.x 工单清零**。可进入 v2.6 阶段。
+
+**v2.6.1 客户端字段统一（2026-07-09）**：v9 + v10 脚本所有 tools/call 已统一传推荐字段 `sessionId`，去掉 `_sessionId` 双轨。服务端 `McpMcpServer` 业务方法仍保留双字段兼容（`sessionId` 推荐 + `_sessionId` 兼容），历史/未来客户端零侵入。
+
+**v2.6 起点**（2026-07-09 重规划）：
+
+🟥 **项目红线**：JDK 17 不可修改。项目整体围绕 JDK 17 架构选型，spring-ai 1.1.0 是为 MCP 才引入（非技术偏好）。
+
+**v2.6 主线**（锁死 JDK 17 + spring-boot 3.4.x + spring-ai 1.1.x）：
+
+| 优先级 | 任务 | 工时 | 风险 |
+|--------|------|------|------|
+| 🔴 P0 | spring-ai 1.1.0 → 1.1.x 最新 patch | 30min | 极低 |
+| 🔴 P0 | spring-boot 3.4.10 → 3.4.x 最新 patch | 1h | 低（需跑 v9+v10 回归） |
+| 🟡 P1 | F.6 #4 McpController REST 弃用标记 | 15min | 0 |
+| 🟡 P1 | F.6 #3 McpAuthFilter Micrometer 监控 | 2h | 低 |
+| 🟡 P1 | F.6 #1 SESSION_AUTH evict（SseConnectionClosedEvent 监听） | 1h | 低 |
+| 🟢 P2 | F.6 #6 agent_mcp_server 运行时动态应用评估 | 4h | 中 |
+| 🟢 P3 | F.6 #5 @McpTool 迁移评估（暂缓：1.1 反射器拿不到 McpSyncServerExchange） | - | - |
+
+**永久推迟**：spring-ai 2.0 + spring-boot 4.0 + JDK 21 一次全栈重构（需项目方主动要求 JDK 升级窗口）。
+
+`_sessionId` 透传（v2.5 M4 路径 1）作为 v2.5-v2.x **永久稳定方案**保留；删除需等升 JDK 的项目期。
+
+---
+
+### F.7 v2.6 Qoder 协作执行指令（2026-07-09 锁定）
+
+**背景**：v2.5 完全收官后，v2.6 可让 Qoder 代作。下列指令必须逐条遵守。
+
+#### F.7.1 ✅ Qoder 可做（已拍板可行）
+
+| # | 任务 | 约束 | 验收 |
+|---|------|------|------|
+| Q1 | spring-ai 1.1.0 → 1.1.x patch 升级 | 只允许 1.1.x patch，**禁 2.0** | `mvn -DskipTests compile` + `verify-mcp-auth.ps1` + `verify-mcp-e2e.ps1` 全绿 |
+| Q2 | spring-boot 3.4.10 → 3.4.x patch 升级 | 只允许 3.4.x patch，**禁 4.0** | 同上（尤其回归脚本必跑）|
+| Q3 | F.6 #1 SESSION_AUTH 清理 | 主方案：TTL + 定时清理；事件监听作为增强 | 1 小时 SESSION 不被访问 → 清理；回归脚本全绿 |
+| Q4 | F.6 #6 agent_mcp_server 运行时动态应用评估 | **只评估**、不动 tools/list 行为 | 输出评估报告（问题清单 + 3 个决策点）|
+
+#### F.7.2 ❌ Qoder 不要做（限制清单）
+
+- **不改 MCP 协议字段**：`sessionId` / `_sessionId` 透传方案保留，不允许引入新鉴权模式或修改 `McpMcpServer` 业务方法签名
+- **不引入 spring-ai 2.0 / spring-boot 4.0 / JDK 21**：被项目红线锁死
+- **不重复改 McpController 弃用标记**：代码已完成 `@Deprecated(since="2.4", forRemoval=false)`
+- **不轻易加 Micrometer 依赖**：spring-boot-actuator + resilience4j-spring-boot3 已自带；如需额外指标需先与项目经理拍板
+- **不修改 `AgentInboxService.markRead/markArchived` 幂等逻辑**：v2.5 收官已验证
+- **不修改 `McpMcpServer` 业务方法体**：只允许 patch 升级附带的方法签名变化（如重载 / deprecation）
+
+#### F.7.3 Q3 SESSION_AUTH evict 主方案（TTL + 定时清理）详细设计
+
+```
+【主方案：TTL + Scheduled】
+- 每个 SESSION_AUTH 条目记录 lastAccessAt（ConcurrentMap<Long, AtomicReference<OffsetDateTime>>）
+- @Scheduled(fixedRate = 60000) 每分钟扫描一次
+- 清理规则：lastAccessAt > 30min 未访问 → evict(sessionId)
+- 走 accessor：McpAuthContext.requireAuthId(String) 读取时更新 lastAccessAt
+- 不依赖 spring-ai 是否提供 SseConnectionClosedEvent（避免框架版本耦合）
+
+【增强方案：事件监听】
+- 若 spring-ai 后续版本提供 SseConnectionClosedEvent，再挂监听器同步调 evict
+- 定位：WebMvcSseServerTransportProvider.close() 回调 / SSE connection 生命周期事件
+- 目前 spring-ai 1.1.0 未公开该事件，**不做**
+```
+
+#### F.7.4 Q4 agent_mcp_server 动态应用评估决策点（Qoder 评估需拍板）
+
+1. **tools/list 是否隐藏 is_enabled=0 的工具**？
+   - 选项 A：隐藏（安全，客户端看不到禁用工具）
+   - 选项 B：返回但报禁用错误（保持协议透明）
+   - 选项 C：默认全开放 + 只返 metadata（中间路线）
+2. **配置变更生效延迟**？
+   - 选项 A：实时（热加载，每次调用检查）
+   - 选项 B：5分钟（Spring Cache TTL）
+   - 选项 C：手动重启（保守）
+3. **缓存粒度**？
+   - 选项 A：按 (agentId, toolName) 粒度
+   - 选项 B：按 agentId 粒度
+   - 选项 C：无缓存，每次查表
+
+**Qoder 输出**：评估报告（含上述决策推荐理由 + 改动点 + 工时估算），由项目经理拍板后才落地。
+
+#### F.7.5 每次改动验收闸门（可机械化）
+
+```
+1. mvn -DskipTests compile（确保编译过）
+2. mvn spring-boot:run（启动成功 + 日志含 `Registered tools: 8`）
+3. .\verify-mcp-auth.ps1（v9 D1-D6 七项 + B 幂等查询）→ 全绿
+4. .\verify-mcp-e2e.ps1（v10 A-S 14 项 + T1-T4 psql 终态）→ 全绿
+5. git diff 检查：变更不超出任务授权范围
+
+任一闸门不通过 → 不得继续、不得合并
+```
+
+---
+
+### F.8 spring-ai 1.1.0 永久稳定版锁定（2026-07-09 锁定）
+
+**决策**：**取消 Q1**（spring-ai 1.1.0 → 1.1.8 patch 升级），**spring-ai 1.1.0 永久锁定为项目稳定版本基线**。
+
+#### F.8.1 取消原因（实证依据）
+
+1. **传递依赖中断**：spring-ai 1.1.0 → 1.1.8 引入 spring-amqp 3.2.7 传递依赖，导致 helloai-mq 模块 `RabbitMQConfig.agentExchange()` Bean 创建失败。Spring 错误信息误标为 `ExchangeBuilder.durable(boolean)` 不存在；反编译 spring-amqp-3.2.7.jar 确认 `BaseExchangeBuilder.durable(boolean isDurable)` 实际存在且 public —— 真实根因为**类加载或反射时机问题，未定位**。
+2. **v9 D5 鉴权测试失败**：1.1.8 下 v9 D5 返回 `HTTP 200 + SSE id=3 + isError!=false`（业务侧 401 包装），spring-ai 1.1.8 反射器对 `@ToolParam(required=false) String` 参数处理行为与 1.1.0 不一致。
+3. **回滚验证**：从 1.1.8 回滚到 1.1.0 后，v9 + v10 完整跑通（D5 `isError:false` + agentId override to 真实 agent + v10 14 项业务步骤全过 + Q 步 lastActivityAt 已刷新）—— **1.1.0 是当前已知稳定基线**。
+
+#### F.8.2 永久锁定规范（强制遵守）
+
+- ✅ **允许**：`spring-ai.version = 1.1.0` 写死在 `pom.xml`，不再变动
+- ❌ **禁止**：任何 spring-ai 1.1.x patch 升级（1.1.1–1.1.8 全锁）—— 除非同时满足：① 项目方主动授权 ② 隔离环境复现副作用 ③ 完整 v9+v10 回归绿
+- ❌ **禁止**：spring-ai 1.1.x → 2.0 升级（红线，已否决）
+- ❌ **禁止**：spring-boot 3.4.x → 4.0 升级（红线）
+- ❌ **禁止**：JDK 17 → 21 升级（红线）
+
+#### F.8.3 后续工作调整
+
+- v2.6 升级窗口工单表中原 "spring-ai 1.1.0 → 1.1.x 最新 patch" 标记为**【永久关闭 / 取消】**
+- spring-ai 1.1.8 副作用诊断（spring-amqp 3.2.7 兼容性 + 反射器行为差异）降级为 P3 长期任务（非阻塞）
+- v9 / v10 回归基线锁定为 spring-ai 1.1.0；任何后续技术栈变动必须 100% 复现 v9 + v10 完整步骤通过
+
+#### F.8.4 决策记录
+
+| 项 | 值 |
+|---|---|
+| 决策时间 | 2026-07-09 |
+| 决策人 | 项目经理 |
+| 决策依据 | v9 v10 实测回归 + 传递依赖验证 + 1.1.8 副作用复现 |
+| 受影响文件 | `pom.xml`（`<spring-ai.version>` 锁定 1.1.0） |
+| 验证脚本 | `verify-mcp-auth.ps1`（D1–D6）+ `verify-mcp-e2e.ps1`（A–S + T1–T4） |
+| 锁定版本 | spring-ai 1.1.0（不可变更） |
+
+**F.8 结束**

@@ -1,0 +1,50 @@
+### 1) login
+POST http://localhost:6565/api/auth/login
+Content-Type: application/json
+
+{
+  "type": "admin",
+  "username": "admin",
+  "credential": "admin123"
+}
+
+> {%
+    client.global.set("token", response.body.data.token);
+%}
+
+### 2) sleep-batch（含不存在ID）
+POST http://localhost:6565/api/admin/agents/sleep-batch
+Content-Type: application/json
+X-Admin-Token: {{token}}
+
+{
+  "agentIds": [2074659521706500097, 2074738200998518786, 2074741030123651073, 99999999],
+  "reason": "批次3端到端验证"
+}
+
+### 5) wake 单个（验证 wake + operator 修复）
+PUT http://localhost:6565/api/admin/agents/2074659521706500097/wake
+Content-Type: application/json
+X-Admin-Token: {{token}}
+
+{
+  "reason": "批次3 wake 验证"
+}
+
+### 6) sleep-batch（operator 修复后重跑：1 wake→OFFLINE + 1 SLEEPING→failed + 1 OFFLINE→success + 1 不存在）
+POST http://localhost:6565/api/admin/agents/sleep-batch
+Content-Type: application/json
+X-Admin-Token: {{token}}
+
+{
+  "agentIds": [2074659521706500097, 2074741030123651073, 2074738923341537281, 99999999],
+  "reason": "批次3 operator 修复验证"
+}
+
+### 7) sleeping?role=EXECUTOR（最终状态）
+GET http://localhost:6565/api/admin/agents/sleeping?role=EXECUTOR
+X-Admin-Token: {{token}}
+
+### 8) sleeping (no role)
+GET http://localhost:6565/api/admin/agents/sleeping
+X-Admin-Token: {{token}}

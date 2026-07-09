@@ -92,10 +92,12 @@ public class AgentInboxService extends ServiceImpl<AgentInboxMapper, AgentInbox>
     public void markRead(Long agentId, Long inboxId) {
         AgentInbox inbox = getById(inboxId);
         if (inbox == null) {
-            throw new BizException("收件箱消息不存在: " + inboxId);
+            log.debug("markRead 幂等: inbox 不存在, id={}", inboxId);
+            return;
         }
         if (!inbox.getAgentId().equals(agentId)) {
-            throw new BizException("无权操作其他 Agent 的收件箱");
+            log.debug("markRead 幂等: agent 不匹配, expected={}, actual={}", agentId, inbox.getAgentId());
+            return;
         }
         lambdaUpdate()
                 .eq(AgentInbox::getId, inboxId)
@@ -112,10 +114,12 @@ public class AgentInboxService extends ServiceImpl<AgentInboxMapper, AgentInbox>
     public void markArchived(Long agentId, Long inboxId) {
         AgentInbox inbox = getById(inboxId);
         if (inbox == null) {
-            throw new BizException("收件箱消息不存在: " + inboxId);
+            log.debug("markArchived 幂等: inbox 不存在, id={}", inboxId);
+            return;
         }
         if (!inbox.getAgentId().equals(agentId)) {
-            throw new BizException("无权操作其他 Agent 的收件箱");
+            log.debug("markArchived 幂等: agent 不匹配, expected={}, actual={}", agentId, inbox.getAgentId());
+            return;
         }
         lambdaUpdate()
                 .eq(AgentInbox::getId, inboxId)

@@ -15,7 +15,23 @@ import java.util.Map;
  * <p>
  * REST 通道用于 curl 测试和管理台调用；JSON-RPC 通道用于 MCP 兼容客户端（Qoder/Trae/CLI）。
  * 认证：走现有 AuthInterceptor（Authorization: Bearer &lt;API_KEY&gt;），agentId 从 _authId 注入。
+ *
+ * <p><b style="color:orange">[M4 起标记为 @Deprecated]</b><br>
+ * v2.4 §3.1/§9 路线 C 阶段 3 MCP Server spring-ai 改造后，外部 MCP 客户端应改走
+ * <b>SSE 通道</b>：
+ * <ul>
+ *   <li>建立连接：{@code GET /mcp/sse} → 拿 sessionId</li>
+ *   <li>握手：{@code POST /mcp/messages?sessionId=xxx} body=JSON-RPC 2.0 {@code initialize}</li>
+ *   <li>调用工具：{@code POST /mcp/messages?sessionId=xxx} body=JSON-RPC 2.0 {@code tools/call}（带 {@code Authorization: Bearer <apiKey>}）</li>
+ *   <li>响应：通过 SSE 长连接异步推回（data: {"jsonrpc":"2.0","id":..,"result":..}）</li>
+ * </ul>
+ * 鉴权从 {@link com.helloai.core.mcp.McpAuthFilter McpAuthFilter} 接入（POST /mcp/messages）。<br>
+ * 业务实现：{@link com.helloai.core.mcp.McpMcpServer}（spring-ai {@code @Tool} 注解方法）。<br>
+ * 本类仅作为兼容旧客户端保留，<b>不再演进</b>，预计 v3.0 移除。
+ *
+ * @deprecated since 2.4 — 改用 spring-ai MCP Server SSE 通道（{@code /mcp/sse} + {@code /mcp/messages}）
  */
+@Deprecated(since = "2.4", forRemoval = false)
 @Slf4j
 @RestController
 @RequestMapping("/api/mcp")

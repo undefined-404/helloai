@@ -46,3 +46,14 @@ logs/
 
 # --- Maven wrapper ---
 !.mvn/wrapper/maven-wrapper.jar
+
+# --- Spring Boot 运行态临时文件 ---
+.spring-boot-pid
+
+# --- 临时验证输出（v2.6 2026-07-09 补充）---
+# SSE 验证脚本的临时输出文件
+sse*.txt
+# verify-mcp-e2e.ps1 生成的临时终态查询脚本
+m5-e2e-psql.log.sql
+# 临时编译日志（建议用 IDE / mvn 直接看，不入仓）
+.mvn-compile-*.log

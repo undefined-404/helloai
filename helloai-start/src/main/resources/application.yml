@@ -4,6 +4,16 @@ server:
 spring:
   application:
     name: helloai
+  # === MCP Server（v2.4 §3.1 / §9 spring-ai 路线 C） ===
+  # spring-ai 1.0 GA 默认 sse-endpoint=/sse（短路径），与 v2.4 文档约定的 /mcp/sse 路径不一致
+  # 显式覆盖到 v2.4 路径，确保 Qoder/Trae 按文档配置可直连
+  ai:
+    mcp:
+      server:
+        name: helloai-mcp-server
+        version: 1.0.0
+        sse-endpoint: /mcp/sse         # v2.4 §9.3 验收：对齐文档路径
+        sse-message-endpoint: /mcp/messages  # 标准 message endpoint（v2.4 协议约定）
   datasource:
     url: jdbc:postgresql://localhost:15432/helloai?currentSchema=public&reWriteBatchedInserts=true
     username: postgres
@@ -70,6 +80,11 @@ helloai:
   agent:
     registration-token: "helloai-reg-2024"
     allow-registration: true
+  alert:
+    # 钉钉机器人 Webhook（v2.4 §4.8）。留空则不发送
+    dingtalk-webhook-url: ""
+    # 飞书机器人 Webhook（v2.4 §4.8）。留空则不发送
+    feishu-webhook-url: ""
 
 
 score:
@@ -84,3 +99,54 @@ logging:
     com.helloai: INFO
     com.helloai.core: DEBUG
     com.helloai.job: INFO
+
+# === Resilience4j 熔断降级（v2.4 §4.5） ===
+resilience4j:
+  circuitbreaker:
+    configs:
+      default:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 10
+        failure-rate-threshold: 30
+        wait-duration-in-open-state: 60s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+        record-exceptions:
+          - com.helloai.common.base.BizException
+          - java.lang.RuntimeException
+        ignore-exceptions:
+          - com.helloai.common.base.AgentUnavailableException
+    instances:
+      agentDispatch:
+        base-config: default
+
+# === Actuator 指标暴露（v2.4 §4.8） ===
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,circuitbreakers
+  metrics:
+    export:
+      simple:
+        enabled: true
+  endpoint:
+    health:
+      show-details: always
+
+# === CGLIB 缓存策略（v2.4 §3.1 M4 配套，避开 spring-boot CGLIB cache 损坏） ===
+# 默认 false，由 HelloAIApplication.main() 读取后 System.setProperty 注入到 JVM。
+# 说明：
+#   - spring-ai 1.x + spring-boot 3.4 + McpAuthFilterConfig CGLIB 增强，
+#     在 spring-boot 进程异常退出（kill -9 / OOM / 断电）后偶发导致
+#     下次启动报 "Unable to load cache item"。
+#   - 设 false 后：每次启动重新生成 CGLIB 代理类，多花 ~2 秒，但绝对稳定。
+#   - 设 true 后：启动更快，但需要保证 spring-boot 进程正常退出
+#     或者在重启前清 %TEMP%\cglib* 目录，否则会复现 cache 损坏。
+# 切换方法（无需改代码）：
+#   - 命令行：java -Dcglib.cache.classes=true -jar helloai-start.jar
+#   - Docker ENV：JAVA_TOOL_OPTIONS=-Dcglib.cache.classes=true
+#   - IDEA Run Configuration VM options：-Dcglib.cache.classes=true（仅开发期）
+# 详细参见项目 memory "Spring Boot CGLIB 缓存污染诊断与修复"。
+cglib:
+  cache-classes: false

@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.helloai.api.dto.PageResult;
 import com.helloai.api.dto.admin.AgentCreateRequest;
 import com.helloai.api.dto.admin.AgentUpdateRequest;
+import com.helloai.api.dto.admin.SleepBatchRequest;
 import com.helloai.api.dto.agent.*;
 import com.helloai.common.base.R;
 import com.helloai.common.constant.AgentOnlineStatus;
@@ -21,8 +22,11 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * 管理端 Agent 控制器。
@@ -80,6 +84,9 @@ public class AdminAgentController {
             vo.setReviewCount(wl.getOrDefault("reviewCount", 0));
             vo.setRank(agentService.scoreRank(a.getId()));
             vo.setCreatedAt(a.getCreateTime());
+            // v2.5.x #9 enrichment 字段映射补齐：last_seen_at/last_active_at → lastRequestAt/lastActivityAt
+            vo.setLastRequestAt(a.getLastSeenAt());
+            vo.setLastActivityAt(a.getLastActiveAt());
 
             return vo;
         }));
@@ -113,6 +120,9 @@ public class AdminAgentController {
         vo.setReviewCount(wl.getOrDefault("reviewCount", 0));
         vo.setRank(agentService.scoreRank(id));
         vo.setCreatedAt(agent.getCreateTime());
+        // v2.5.x #9 enrichment 字段映射补齐：last_seen_at/last_active_at → lastRequestAt/lastActivityAt
+        vo.setLastRequestAt(agent.getLastSeenAt());
+        vo.setLastActivityAt(agent.getLastActiveAt());
 
         // 统计奖励/惩罚次数
         vo.setTotalAgents( Integer.parseInt(agentService.lambdaQuery().count().toString()));
@@ -210,6 +220,51 @@ public class AdminAgentController {
         String reason = body == null ? null : body.get("reason");
         Agent agent = agentService.wakeAgent(id, operator, reason);
         return R.ok(toSleepWakeVO(agent, "wake"));
+    }
+
+    /**
+     * 批量暂停 Agent（v2.4 §4.3 批次 3）。
+     *
+     * <p>支持部分成功/失败：返回结构见 {@code AgentService.sleepAgentBatch}。
+     * <br>仅 X-Admin-Token 鉴权的管理员可调用。
+     */
+    @PostMapping("/sleep-batch")
+    public R<Map<String, Object>> sleepBatch(@RequestBody SleepBatchRequest req,
+                                              HttpServletRequest request) {
+        if (req == null || req.getAgentIds() == null || req.getAgentIds().isEmpty()) {
+            return R.fail("agentIds 不能为空");
+        }
+        String operator = operatorOf(request);
+        Map<String, Object> result = agentService.sleepAgentBatch(
+                req.getAgentIds(), operator, req.getReason());
+        return R.ok(result);
+    }
+
+    /**
+     * 查询 SLEEPING 状态的 Agent 列表（v2.4 §4.3 批次 3）。
+     *
+     * @param role 可选；为空时返回所有角色的 SLEEPING Agent
+     * <br>仅 X-Admin-Token 鉴权的管理员可调用。
+     */
+    @GetMapping("/sleeping")
+    public R<List<SleepingAgentVO>> sleeping(
+            @RequestParam(value = "role", required = false) String role) {
+        AgentRole roleFilter = (role != null && !role.isBlank())
+                ? AgentRole.valueOf(role.toUpperCase()) : null;
+        List<Agent> agents = agentService.findSleepingByRole(roleFilter);
+        List<SleepingAgentVO> vos = new ArrayList<>(agents.size());
+        for (Agent a : agents) {
+            SleepingAgentVO vo = new SleepingAgentVO();
+            vo.setId(a.getId());
+            vo.setName(a.getName());
+            vo.setRole(a.getRole());
+            vo.setOnlineStatus(a.getOnlineStatus());
+            vo.setUpdateBy(a.getUpdateBy());
+            vo.setUpdateTime(a.getUpdateTime());
+            vos.add(vo);
+        }
+        log.debug("查询 SLEEPING Agent: role={}, count={}", roleFilter, vos.size());
+        return R.ok(vos);
     }
 
     /**
