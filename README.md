@@ -1,39 +1,109 @@
-# helloai
+# HelloAI
+
+> 智能 Agent 管理平台 — 多类型 Agent 编排、监控、优化一体化
 
 #### 介绍
-{**以下是 Gitee 平台说明，您可以替换此简介**
-Gitee 是 OSCHINA 推出的基于 Git 的代码托管平台（同时支持 SVN）。专为开发者提供稳定、高效、安全的云端软件开发协作平台
-无论是个人、团队、或是企业，都能够用 Gitee 实现代码托管、项目管理、协作开发。企业项目请看 [https://gitee.com/enterprises](https://gitee.com/enterprises)}
+
+- **HelloAI** 是一个基于 Spring AI MCP 协议的 AI Agent 管理平台，管理员可在统一面板内完成 Agent 接入、任务编排、性能监控与质量评估。
+- 平台通过 **MCP SSE**（`/mcp/sse`）与 Agent 双向通信，提供标准工具集：`pullTasks` / `ack` / `heartbeat` / `uploadArtifact` / `getAgentStatus` / `claimSubTask`。
+- 项目运行时红线：**JDK 17**；不引入 Spring AI 2.0 / Spring Boot 4.0 路线（除非项目方主动开启 JDK 升级窗口）。
+
+平台支持多类型 Agent 接入（示例）：
+- CLI Agent
+- API Key Agent（OpenAI-compatible / 自定义）
+- Web Agent
+- EXECUTOR Agent（本地执行器）
 
 #### 软件架构
-软件架构说明
 
+**技术栈**
+
+| 层 | 技术 | 版本 |
+|---|---|---|
+| 运行时 | JDK | **17**（项目红线，永久锁定）|
+| 后端框架 | Spring Boot | **3.4.10** |
+| AI 协议 | spring-ai | **1.1.0**（永久稳定版基线）|
+| MCP SDK | mcp-sdk | 0.16.0 |
+| 持久化 | PostgreSQL + MyBatis-Plus + Flyway | — |
+| 缓存 | Redis (Lettuce) | — |
+| 消息队列 | RabbitMQ | — |
+| 弹性 | Resilience4j CircuitBreaker | — |
+| 监控 | Spring Boot Actuator | — |
+| 前端 | Vue 3 + TypeScript + Vite + Element Plus | — |
+
+**项目结构**
+
+```
+helloai/                          # 多模块 Maven 工程
+├── helloai-common/               # 公共基础（常量、异常、枚举）
+├── helloai-api/                  # REST 接口层（Controller + DTO + VO）
+├── helloai-core/                 # 核心业务（Service + MCP Server + 熔断调度）
+├── helloai-mq/                   # 消息队列（RabbitMQ 配置 + 消费者）
+├── helloai-job/                  # 定时任务（健康检查 + SESSION_AUTH 清理）
+├── helloai-start/                # 启动模块（Application + application.yml + Flyway）
+├── helloai-ui/                   # 前端（Vue 3 SPA）
+└── doc/                          # 项目文档
+    └── HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4.md
+```
 
 #### 安装教程
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+**前置依赖**
+
+- JDK 17
+- Maven 3.8+
+- Docker + Docker Compose（基础设施）
+
+**步骤**
+
+```bash
+# 1. 启动基础设施（PostgreSQL / Redis / RabbitMQ）
+docker compose up -d
+
+# 2. 编译 + 启动后端
+mvn clean package -DskipTests
+java -jar helloai-start/target/helloai-start.jar
+
+# 3. 启动前端
+cd helloai-ui
+npm install
+npm run dev
+```
+
+后端启动后访问：
+- API: <http://localhost:6565>
+- Swagger UI: <http://localhost:6565/swagger-ui.html>
+- 健康检查: <http://localhost:6565/actuator/health>
 
 #### 使用说明
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+**验收与回归（金标准脚本）**
+
+| 脚本 | 范围 |
+|---|---|
+| `verify-mcp-auth.ps1` | MCP 鉴权回归（D1-D6） |
+| `verify-mcp-e2e.ps1` | MCP 端到端业务循环（含 T1-T4 DB 取证） |
+
+**文档导航**
+
+- 开发路线图：[`doc/HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4.md`](doc/HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4.md)
+- EXECUTOR 接入指南：[`.executor-onboarding.md`](.executor-onboarding.md)
+- 设计系统：[`DESIGN.md`](DESIGN.md)
+- 产品定义：[`PRODUCT.md`](PRODUCT.md)
 
 #### 参与贡献
 
-1.  Fork 本仓库
-2.  新建 Feat_xxx 分支
-3.  提交代码
-4.  新建 Pull Request
-
+1. Fork 本仓库
+2. 新建 `feat_xxx` 或 `fix_xxx` 分支
+3. 提交前必须跑通 `verify-mcp-auth.ps1` + `verify-mcp-e2e.ps1`
+4. 新建 Pull Request，附上脚本输出
 
 #### 特技
 
-1.  使用 Readme\_XXX.md 来支持不同的语言，例如 Readme\_en.md, Readme\_zh.md
-2.  Gitee 官方博客 [blog.gitee.com](https://blog.gitee.com)
-3.  你可以 [https://gitee.com/explore](https://gitee.com/explore) 这个地址来了解 Gitee 上的优秀开源项目
-4.  [GVP](https://gitee.com/gvp) 全称是 Gitee 最有价值开源项目，是综合评定出的优秀开源项目
-5.  Gitee 官方提供的使用手册 [https://gitee.com/help](https://gitee.com/help)
-6.  Gitee 封面人物是一档用来展示 Gitee 会员风采的栏目 [https://gitee.com/gitee-stars/](https://gitee.com/gitee-stars/)
+1. English: [`README.en.md`](README.en.md)
+2. 回归脚本是事实源：`verify-mcp-auth.ps1` / `verify-mcp-e2e.ps1`
+3. 优先读路线图再看代码：[`doc/HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4.md`](doc/HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4.md)
+
+#### 许可证
+
+[LICENSE](LICENSE)

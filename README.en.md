@@ -1,36 +1,109 @@
-# helloai
+# HelloAI
 
-#### Description
-{**When you're done, you can delete the content in this README and update the file with details for others getting started with your repository**}
+> Intelligent Agent Management Platform — Unified orchestration, monitoring, and optimization for multi-type AI Agents
+
+#### Introduction
+
+- **HelloAI** is an AI Agent management platform built on the Spring AI MCP protocol. It enables administrators to onboard Agents, orchestrate tasks, monitor performance, and evaluate quality from a single dashboard.
+- The platform communicates with Agents via **MCP SSE** (`/mcp/sse`) and exposes standard tools: `pullTasks` / `ack` / `heartbeat` / `uploadArtifact` / `getAgentStatus` / `claimSubTask`.
+- Runtime red-line: **JDK 17**. No Spring AI 2.0 / Spring Boot 4.0 upgrades unless the project explicitly opens a JDK upgrade window.
+
+Supported Agent types (examples):
+- CLI Agent
+- API Key Agent (OpenAI-compatible / custom)
+- Web Agent
+- EXECUTOR Agent (local executor)
 
 #### Software Architecture
-Software architecture description
+
+**Tech stack**
+
+| Layer | Technology | Version |
+|---|---|---|
+| Runtime | JDK | **17** (project red-line, permanently locked) |
+| Backend framework | Spring Boot | **3.4.10** |
+| AI protocol | spring-ai | **1.1.0** (permanent stable baseline) |
+| MCP SDK | mcp-sdk | 0.16.0 |
+| Persistence | PostgreSQL + MyBatis-Plus + Flyway | — |
+| Cache | Redis (Lettuce) | — |
+| Message queue | RabbitMQ | — |
+| Resilience | Resilience4j CircuitBreaker | — |
+| Observability | Spring Boot Actuator | — |
+| Frontend | Vue 3 + TypeScript + Vite + Element Plus | — |
+
+**Repository structure**
+
+```
+helloai/                          # Multi-module Maven project
+├── helloai-common/               # Common utilities (constants, exceptions, enums)
+├── helloai-api/                  # REST API layer (Controller + DTO + VO)
+├── helloai-core/                 # Core services (MCP Server, dispatcher, business)
+├── helloai-mq/                   # RabbitMQ config + consumers
+├── helloai-job/                  # Scheduled jobs (health checks, SESSION_AUTH cleanup)
+├── helloai-start/                # Application bootstrap + application.yml + Flyway
+├── helloai-ui/                   # Frontend (Vue 3 SPA)
+└── doc/                          # Docs
+    └── HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4.md
+```
 
 #### Installation
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+**Prerequisites**
 
-#### Instructions
+- JDK 17
+- Maven 3.8+
+- Docker + Docker Compose (infrastructure)
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+**Steps**
 
-#### Contribution
+```bash
+# 1. Start infrastructure (PostgreSQL / Redis / RabbitMQ)
+docker compose up -d
 
-1.  Fork the repository
-2.  Create Feat_xxx branch
-3.  Commit your code
-4.  Create Pull Request
+# 2. Build and start backend
+mvn clean package -DskipTests
+java -jar helloai-start/target/helloai-start.jar
 
+# 3. Start frontend
+cd helloai-ui
+npm install
+npm run dev
+```
 
-#### Gitee Feature
+After backend startup:
+- API: <http://localhost:6565>
+- Swagger UI: <http://localhost:6565/swagger-ui.html>
+- Health: <http://localhost:6565/actuator/health>
 
-1.  You can use Readme\_XXX.md to support different languages, such as Readme\_en.md, Readme\_zh.md
-2.  Gitee blog [blog.gitee.com](https://blog.gitee.com)
-3.  Explore open source project [https://gitee.com/explore](https://gitee.com/explore)
-4.  The most valuable open source project [GVP](https://gitee.com/gvp)
-5.  The manual of Gitee [https://gitee.com/help](https://gitee.com/help)
-6.  The most popular members  [https://gitee.com/gitee-stars/](https://gitee.com/gitee-stars/)
+#### Usage
+
+**Regression scripts (golden standard)**
+
+| Script | Scope |
+|---|---|
+| `verify-mcp-auth.ps1` | MCP auth regression (D1-D6) |
+| `verify-mcp-e2e.ps1` | MCP end-to-end business loop (with DB evidence T1-T4) |
+
+**Documentation**
+
+- Roadmap: [`doc/HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4.md`](doc/HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4.md)
+- EXECUTOR onboarding: [`.executor-onboarding.md`](.executor-onboarding.md)
+- Design system: [`DESIGN.md`](DESIGN.md)
+- Product definition: [`PRODUCT.md`](PRODUCT.md)
+
+#### Contributing
+
+1. Fork this repository
+2. Create a branch `feat_xxx` or `fix_xxx`
+3. Run `verify-mcp-auth.ps1` and `verify-mcp-e2e.ps1` before pushing
+4. Open a Pull Request with script outputs attached
+
+#### Tips
+
+1. Chinese README: [`README.md`](README.md)
+2. Regression scripts are the source of truth: `verify-mcp-auth.ps1` / `verify-mcp-e2e.ps1`
+3. Start with the roadmap before diving into code
+
+#### License
+
+[LICENSE](LICENSE)
