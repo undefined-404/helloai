@@ -19,7 +19,7 @@ import java.util.Map;
  *
  * <p>字段分组：</p>
  * <ul>
- *   <li>身份/调度：name / role / apiKey / modelType / modelConfig / specializationSlug / status / score</li>
+ *   <li>身份/调度：name / role / apiKey(consumerToken 工牌) / modelType / modelConfig / specializationSlug / status / score</li>
  *   <li>阶段 0 补全：accessType / capabilities / labels</li>
  *   <li>阶段 4 三件套：lastSeenAt / lastActiveAt / onlineStatus / offlineReason / offlineAt</li>
  * </ul>
@@ -37,7 +37,19 @@ public class Agent extends BaseEntity {
 
     private String name;
     private AgentRole role;
+
+    /**
+     * Agent 工牌 consumerToken。
+     *
+     * <p>语义收口（T2）：
+     * <ul>
+     *   <li>CLI_CLIENT：继续作为 MCP / HTTP 接入鉴权 token</li>
+     *   <li>API_KEY_LLM：只保留平台内身份标识，不再存真实 LLM Secret</li>
+     * </ul>
+     * 真实 LLM 凭证统一进入 `credential_vault`。</p>
+     */
     private String apiKey;
+
     private String modelType;
 
     @TableField(typeHandler = JacksonTypeHandler.class)

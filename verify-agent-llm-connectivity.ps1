@@ -1,0 +1,114 @@
+param(
+    [string]$BaseUrl = "http://localhost:6565",
+    [switch]$BindVault,
+    [string]$VaultProvider = "deepseek",
+    [string]$VaultApiKeyEnv = "DEEPSEEK_API_KEY",
+    [string]$AdminUsername = "admin",
+    [string]$AdminPassword = "admin123",
+    [switch]$SkipSuccessAssert
+)
+
+$ErrorActionPreference = "Stop"
+
+function Assert-True([bool]$Cond, [string]$Msg) {
+    if (-not $Cond) {
+        Write-Host ("ASSERT_FAIL: " + $Msg)
+        exit 1
+    }
+}
+
+function Invoke-Json([string]$Method, [string]$Url, [object]$Body, [hashtable]$Headers) {
+    $json = $null
+    if ($Body -ne $null) {
+        $json = ($Body | ConvertTo-Json -Depth 10)
+    }
+    try {
+        return Invoke-RestMethod -Method $Method -Uri $Url -Headers $Headers -ContentType "application/json" -Body $json -TimeoutSec 120
+    } catch {
+        $resp = $_.Exception.Response
+        if ($resp -ne $null) {
+            $statusCode = $null
+            try { $statusCode = [int]$resp.StatusCode } catch {}
+            Write-Host ("HTTP_FAIL: " + $Method + " " + $Url + " status=" + $statusCode)
+            try {
+                $stream = $resp.GetResponseStream()
+                if ($stream -ne $null) {
+                    $reader = New-Object System.IO.StreamReader($stream)
+                    $bodyText = $reader.ReadToEnd()
+                    if (-not [string]::IsNullOrWhiteSpace($bodyText)) {
+                        Write-Host "FAIL_BODY_BEGIN"
+                        Write-Host $bodyText
+                        Write-Host "FAIL_BODY_END"
+                    }
+                }
+            } catch {
+            }
+        } else {
+            Write-Host ("HTTP_FAIL: " + $Method + " " + $Url + " (no response body)")
+        }
+        throw
+    }
+}
+
+Write-Host "STEP1: admin login"
+$loginResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/auth/login") -Body @{
+    type = "admin"
+    username = $AdminUsername
+    credential = $AdminPassword
+} -Headers @{}
+
+Assert-True ($loginResp.code -eq 200) ("login code=" + $loginResp.code + " msg=" + $loginResp.msg)
+Assert-True ($loginResp.data -ne $null) "login data is null"
+Assert-True (-not [string]::IsNullOrWhiteSpace($loginResp.data.token)) "admin token is empty"
+$adminToken = $loginResp.data.token
+
+Write-Host "STEP2: register API_KEY_LLM agent"
+$name = "T7-connectivity-" + [DateTime]::UtcNow.ToString("yyyyMMddHHmmss")
+$regResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/agents/register") -Body @{
+    name = $name
+    role = "EXECUTOR"
+    description = "llm connectivity probe"
+    accessType = "API_KEY_LLM"
+    modelType = "deepseek:deepseek-chat"
+} -Headers @{}
+
+Assert-True ($regResp.code -eq 200) ("register code=" + $regResp.code + " msg=" + $regResp.msg)
+Assert-True ($regResp.data -ne $null) "register data is null"
+Assert-True ($regResp.data.id -ne $null) "agentId is null"
+$agentId = [string]$regResp.data.id
+Write-Host ("agentId=" + $agentId)
+
+if ($BindVault) {
+    Write-Host "STEP2.1: bind credential_vault"
+    $apiKey = [System.Environment]::GetEnvironmentVariable($VaultApiKeyEnv)
+    Assert-True (-not [string]::IsNullOrWhiteSpace($apiKey)) ("env var is empty: " + $VaultApiKeyEnv)
+    $bindResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/credentials/agents/" + $agentId + "/api-key") -Body @{
+        provider = $VaultProvider
+        apiKey = $apiKey
+        remark = "verify-agent-llm-connectivity.ps1"
+    } -Headers @{
+        "X-Admin-Token" = $adminToken
+    }
+    Assert-True ($bindResp.code -eq 200) ("bind vault code=" + $bindResp.code + " msg=" + $bindResp.msg)
+}
+
+Write-Host "STEP3: call connectivity probe"
+$probeResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/agent-executions/connectivity/" + $agentId) -Body @{
+    userPrompt = "Please reply with OK for HelloAI connectivity probe."
+} -Headers @{
+    "X-Admin-Token" = $adminToken
+}
+
+Assert-True ($probeResp.code -eq 200) ("probe code=" + $probeResp.code + " msg=" + $probeResp.msg)
+Assert-True ($probeResp.data -ne $null) "probe data is null"
+
+Write-Host "CONNECTIVITY_RESULT_BEGIN"
+$probeResp.data | ConvertTo-Json -Depth 10
+Write-Host "CONNECTIVITY_RESULT_END"
+
+if (-not $SkipSuccessAssert) {
+    Assert-True ($probeResp.data.success -eq $true) ("connectivity success=false stage=" + $probeResp.data.stage + " error=" + $probeResp.data.errorMessage)
+}
+
+Write-Host "OK: connectivity probe finished"
+exit 0

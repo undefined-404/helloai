@@ -31,34 +31,55 @@ public class AgentExecutionRecordService extends ServiceImpl<AgentExecutionRecor
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public void markRunning(Long id) {
-        lambdaUpdate()
+    public boolean markRunning(Long id) {
+        return lambdaUpdate()
                 .eq(AgentExecutionRecord::getId, id)
+                .eq(AgentExecutionRecord::getStatus, ExecutionStatus.PENDING)
                 .set(AgentExecutionRecord::getStatus, ExecutionStatus.RUNNING)
                 .set(AgentExecutionRecord::getStartTime, OffsetDateTime.now())
                 .update();
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public void markSuccess(Long id) {
-        lambdaUpdate()
+    public boolean markSuccess(Long id) {
+        return lambdaUpdate()
                 .eq(AgentExecutionRecord::getId, id)
+                .eq(AgentExecutionRecord::getStatus, ExecutionStatus.RUNNING)
                 .set(AgentExecutionRecord::getStatus, ExecutionStatus.SUCCESS)
                 .set(AgentExecutionRecord::getEndTime, OffsetDateTime.now())
                 .update();
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public void markFailed(Long id, String errorMsg) {
+    public boolean markFailed(Long id, String errorMsg) {
         String truncated = errorMsg != null && errorMsg.length() > 500
                 ? errorMsg.substring(0, 500)
                 : errorMsg;
-        lambdaUpdate()
+        return lambdaUpdate()
                 .eq(AgentExecutionRecord::getId, id)
+                .eq(AgentExecutionRecord::getStatus, ExecutionStatus.RUNNING)
                 .set(AgentExecutionRecord::getStatus, ExecutionStatus.FAILED)
                 .set(AgentExecutionRecord::getEndTime, OffsetDateTime.now())
                 .set(AgentExecutionRecord::getErrorMsg, truncated)
                 .update();
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public boolean markTimeout(Long id) {
+        return lambdaUpdate()
+                .eq(AgentExecutionRecord::getId, id)
+                .in(AgentExecutionRecord::getStatus, ExecutionStatus.PENDING, ExecutionStatus.RUNNING)
+                .set(AgentExecutionRecord::getStatus, ExecutionStatus.TIMEOUT)
+                .set(AgentExecutionRecord::getEndTime, OffsetDateTime.now())
+                .set(AgentExecutionRecord::getErrorMsg, "执行命令超时")
+                .update();
+    }
+
+    public boolean hasPendingOrRunning(Long subTaskId) {
+        return lambdaQuery()
+                .eq(AgentExecutionRecord::getSubTaskId, subTaskId)
+                .in(AgentExecutionRecord::getStatus, ExecutionStatus.PENDING, ExecutionStatus.RUNNING)
+                .count() > 0;
     }
 
     private String getHostName() {

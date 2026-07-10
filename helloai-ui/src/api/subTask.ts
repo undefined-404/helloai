@@ -13,16 +13,16 @@ export const subTaskApi = {
     return request.post('/sub-tasks/change-status', data)
   },
   claim(id: LongId, agentId: LongId) {
-    return request.post(`/sub-tasks/${id}/claim`, null, { params: { agentId } })
+    return request.post(`/sub-tasks/claim/${id}`, null, { params: { agentId } })
   },
   start(id: LongId) {
-    return request.post(`/sub-tasks/${id}/start`)
+    return request.post(`/sub-tasks/start/${id}`)
   },
   submit(id: LongId) {
-    return request.post(`/sub-tasks/${id}/submit`)
+    return request.post(`/sub-tasks/submit/${id}`)
   },
   block(id: LongId) {
-    return request.post(`/sub-tasks/${id}/block`)
+    return request.post(`/sub-tasks/block/${id}`)
   },
   mine(agentId: LongId) {
     return request.get<any, SubTask[]>('/sub-tasks/mine', { params: { agentId } })
@@ -31,9 +31,9 @@ export const subTaskApi = {
     return request.get<any, SubTask[]>('/sub-tasks/available')
   },
   pause(id: LongId) {
-    return request.post(`/sub-tasks/${id}/pause`)
+    return request.post(`/sub-tasks/pause/${id}`)
   },
   resume(id: LongId) {
-    return request.post(`/sub-tasks/${id}/resume`)
+    return request.post(`/sub-tasks/resume/${id}`)
   }
 }

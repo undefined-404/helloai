@@ -2,9 +2,11 @@ package com.helloai.core.service;
 
 import com.helloai.common.base.AgentUnavailableException;
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.entity.Agent;
+import io.github.resilience4j.core.ConfigurationNotFoundException;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.RequiredArgsConstructor;
@@ -44,6 +46,8 @@ public class ResilientDispatcher {
     private final AgentService agentService;
     private final AgentSelector agentSelector;
 
+    private static final String DISPATCH_CB_NAME = "agentDispatch";
+
     /**
      * 弹性分配任务给指定 Agent。
      *
@@ -62,8 +66,7 @@ public class ResilientDispatcher {
     @CircuitBreaker(name = "agentDispatch", fallbackMethod = "assignNextFallback")
     public void assignNext(Long agentId, Long subTaskId) {
         // 按 agentId 维度获取独立熔断器（以 agentDispatch 配置为模板）
-        io.github.resilience4j.circuitbreaker.CircuitBreaker perAgentCb = circuitBreakerRegistry.circuitBreaker(
-                "agentDispatch-" + agentId, "agentDispatch");
+        io.github.resilience4j.circuitbreaker.CircuitBreaker perAgentCb = resolvePerAgentCircuitBreaker(agentId);
 
         // 注册审计监听（幂等，同一 cbName 只注册一次）
         circuitBreakerEventRecorder.registerListener(agentId, perAgentCb);
@@ -79,7 +82,9 @@ public class ResilientDispatcher {
             if (onlineStatus == AgentOnlineStatus.SLEEPING) {
                 throw new AgentUnavailableException("Agent 处于 SLEEPING 状态，不可分配: " + agentId, agentId);
             }
-            if (onlineStatus == AgentOnlineStatus.OFFLINE) {
+            AgentAccessType accessType = agent.getAccessType();
+            if (onlineStatus == AgentOnlineStatus.OFFLINE
+                    && (accessType == null || accessType.requiresRuntimeLiveness())) {
                 throw new AgentUnavailableException("Agent 处于 OFFLINE 状态，不可分配: " + agentId, agentId);
             }
 
@@ -87,6 +92,17 @@ public class ResilientDispatcher {
                     agentId, subTaskId, onlineStatus);
             subTaskService.assignNext(agentId, subTaskId);
         }).run();
+    }
+
+    private io.github.resilience4j.circuitbreaker.CircuitBreaker resolvePerAgentCircuitBreaker(Long agentId) {
+        String perAgentName = DISPATCH_CB_NAME + "-" + agentId;
+        try {
+            return circuitBreakerRegistry.circuitBreaker(perAgentName, DISPATCH_CB_NAME);
+        } catch (ConfigurationNotFoundException e) {
+            log.warn("熔断模板配置不存在，回退默认配置: template={}, perAgentName={}",
+                    DISPATCH_CB_NAME, perAgentName);
+            return circuitBreakerRegistry.circuitBreaker(perAgentName);
+        }
     }
 
     /**

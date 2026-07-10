@@ -9,7 +9,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @SpringBootApplication(scanBasePackages = "com.helloai")
 @MapperScan("com.helloai.core.mapper")
 @EnableScheduling
-@EnableAsync
+@EnableAsync(proxyTargetClass = true)
 public class HelloAIApplication {
 
     public static void main(String[] args) {

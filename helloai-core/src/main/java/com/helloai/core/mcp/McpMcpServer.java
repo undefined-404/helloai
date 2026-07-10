@@ -133,7 +133,7 @@ public class McpMcpServer {
             - DB 原子条件更新保证并发安全：仅 status=PENDING 且 assigned_agent IS NULL 才成功
             - 重复 claim 同一子任务（已归属自己）：claimed=true 幂等成功
             - 已被他人抢走或状态已变：claimed=false（reason: already_claimed_by_other / invalid_status:xxx）
-            - claimed=true 后应继续调用 start（REST POST /api/sub-tasks/{id}/start）推进到 IN_PROGRESS
+            - claimed=true 后应继续调用 start（REST POST /api/sub-tasks/start/{id}）推进到 IN_PROGRESS
             【相关工具】pullTasks
             """)
     public McpToolService.ClaimSubTaskResult claimSubTask(

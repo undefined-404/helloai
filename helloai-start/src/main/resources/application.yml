@@ -14,6 +14,16 @@ spring:
         version: 1.0.0
         sse-endpoint: /mcp/sse         # v2.4 §9.3 验收：对齐文档路径
         sse-message-endpoint: /mcp/messages  # 标准 message endpoint（v2.4 协议约定）
+    deepseek:
+      api-key: ${DEEPSEEK_API_KEY:sk-a36fdda1d4ad4e0386e78fc435be0d16}
+      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+      chat:
+        completions-path: ${DEEPSEEK_CHAT_COMPLETIONS_PATH:/v1/chat/completions}
+        options:
+          model: ${DEEPSEEK_CHAT_MODEL:deepseek-chat}
+      http:
+        connect-timeout-ms: ${DEEPSEEK_CONNECT_TIMEOUT_MS:5000}
+        read-timeout-ms: ${DEEPSEEK_READ_TIMEOUT_MS:60000}
   datasource:
     url: jdbc:postgresql://localhost:15432/helloai?currentSchema=public&reWriteBatchedInserts=true
     username: postgres
@@ -80,6 +90,17 @@ helloai:
   agent:
     registration-token: "helloai-reg-2024"
     allow-registration: true
+  execution:
+    enabled: true
+    mock-mode: false
+    require-vault: true
+    provider: deepseek
+    model: deepseek-chat
+    mock-response-prefix: "[mock-executor]"
+    sync-timeout-seconds: 180
+  security:
+    credential:
+      aes-key-base64: ${HELLOAI_CREDENTIAL_AES_KEY_BASE64:MEsmol1MWDTT69/lAOGeYGmDa9/a6S/lfHdfmekX0MM=}
   alert:
     # 钉钉机器人 Webhook（v2.4 §4.8）。留空则不发送
     dingtalk-webhook-url: ""

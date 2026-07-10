@@ -1,0 +1,117 @@
+package com.helloai.core.service;
+
+import com.helloai.common.constant.AgentAccessType;
+import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.ExecutionStatus;
+import com.helloai.core.agent.domain.ExecutionCommand;
+import com.helloai.core.entity.Agent;
+import com.helloai.core.entity.AgentExecutionRecord;
+import com.helloai.core.entity.SubTask;
+import com.helloai.core.event.ExecutionCommandCreatedEvent;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
+
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+@DisplayName("ExecutionCommandService")
+class ExecutionCommandServiceTest {
+
+    @Mock
+    private SubTaskService subTaskService;
+
+    @Mock
+    private AgentService agentService;
+
+    @Mock
+    private AgentExecutionRecordService agentExecutionRecordService;
+
+    @Mock
+    private TaskTimelineService taskTimelineService;
+
+    @Mock
+    private ApplicationEventPublisher applicationEventPublisher;
+
+    @InjectMocks
+    private ExecutionCommandService executionCommandService;
+
+    @Test
+    @DisplayName("为 ASSIGNED 子任务创建 execution command 并发布事件")
+    void shouldCreateExecutionCommandAndPublishEvent() {
+        SubTask subTask = new SubTask();
+        subTask.setId(22L);
+        subTask.setTaskId(33L);
+
+        Agent agent = new Agent();
+        agent.setId(11L);
+        agent.setRole(AgentRole.EXECUTOR);
+        agent.setAccessType(AgentAccessType.API_KEY_LLM);
+
+        AgentExecutionRecord record = new AgentExecutionRecord();
+        record.setId(44L);
+        record.setSubTaskId(22L);
+        record.setStatus(ExecutionStatus.PENDING);
+
+        subTask.setAssignedAgent(11L);
+        when(subTaskService.getByIdForUpdate(22L)).thenReturn(subTask);
+        when(agentService.getById(11L)).thenReturn(agent);
+        when(agentExecutionRecordService.hasPendingOrRunning(22L)).thenReturn(false);
+        when(agentExecutionRecordService.createPending(any(), any())).thenReturn(record);
+
+        ExecutionCommand command = executionCommandService.createAssignedCommand(22L, 11L, "assigned");
+
+        assertEquals(44L, command.getRecordId());
+        assertEquals(22L, command.getSubTaskId());
+        assertEquals(11L, command.getAgentId());
+        assertEquals("assigned", command.getTrigger());
+        assertEquals(AgentAccessType.API_KEY_LLM, command.getAccessType());
+        assertNotNull(command.getEventId());
+
+        verify(taskTimelineService).recordEvent(
+                33L, 22L, "sub_task_execution_command_created", AgentRole.SYSTEM, 11L,
+                Map.of(
+                        "trigger", "assigned",
+                        "recordId", 44L,
+                        "eventId", command.getEventId(),
+                        "accessType", "API_KEY_LLM"));
+
+        ArgumentCaptor<ExecutionCommandCreatedEvent> eventCaptor =
+                ArgumentCaptor.forClass(ExecutionCommandCreatedEvent.class);
+        verify(applicationEventPublisher).publishEvent(eventCaptor.capture());
+        assertEquals(command, eventCaptor.getValue().getCommand());
+    }
+
+    @Test
+    @DisplayName("子任务已有进行中执行记录时拒绝重复创建 execution command")
+    void shouldRejectWhenPendingOrRunningRecordExists() {
+        SubTask subTask = new SubTask();
+        subTask.setId(22L);
+        subTask.setTaskId(33L);
+        subTask.setAssignedAgent(11L);
+
+        Agent agent = new Agent();
+        agent.setId(11L);
+        agent.setRole(AgentRole.EXECUTOR);
+        agent.setAccessType(AgentAccessType.API_KEY_LLM);
+
+        when(subTaskService.getByIdForUpdate(22L)).thenReturn(subTask);
+        when(agentExecutionRecordService.hasPendingOrRunning(22L)).thenReturn(true);
+
+        assertThatThrownBy(() -> executionCommandService.createAssignedCommand(22L, 11L, "assigned"))
+                .isInstanceOf(com.helloai.common.base.BizException.class)
+                .hasMessageContaining("进行中的执行记录");
+    }
+}

@@ -7,9 +7,13 @@ import com.helloai.api.dto.subtask.ReworkRequest;
 import com.helloai.api.dto.subtask.SubTaskResponse;
 import com.helloai.common.base.R;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.entity.SubTask;
-import com.helloai.core.service.AgentInboxService;
+import com.helloai.core.service.AgentExecutionRecordService;
+import com.helloai.core.service.ExecutionCommandService;
+import com.helloai.core.service.SubTaskDispatchService;
 import com.helloai.core.service.SubTaskService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -25,7 +29,10 @@ import java.util.Map;
 public class SubTaskController {
 
     private final SubTaskService subTaskService;
-    private final AgentInboxService agentInboxService;
+    private final SubTaskDispatchService subTaskDispatchService;
+    private final ExecutionCommandService executionCommandService;
+    private final AgentExecutionRecordService agentExecutionRecordService;
+    private final HttpServletRequest request;
 
     @PostMapping
     public R<SubTaskResponse> create(@Valid @RequestBody CreateSubTaskRequest req) {
@@ -37,27 +44,9 @@ public class SubTaskController {
         subTask.setDeliverable(req.getDeliverable());
         subTask.setAcceptance(req.getAcceptance());
         subTask.setPriority(req.getPriority() != null ? req.getPriority() : "MEDIUM");
-        if (req.getAssignedAgent() != null) {
-            subTask.setStatus(SubTaskStatus.ASSIGNED);
-            subTask.setAssignedAgent(req.getAssignedAgent());
-        } else {
-            subTask.setStatus(SubTaskStatus.PENDING);
-        }
-        subTaskService.save(subTask);
+        subTask.setStatus(SubTaskStatus.PENDING);
+        subTask = subTaskService.create(subTask, req.getAssignedAgent());
         log.info("子任务创建: id={}, title={}, taskId={}", subTask.getId(), req.getTitle(), req.getTaskId());
-
-        // v1.1 修复: 创建时即发送通知，避免 EXECUTOR 轮询不到
-        if (req.getAssignedAgent() != null) {
-            try {
-                String eventId = "subtask.create." + subTask.getId() + "." + System.currentTimeMillis();
-                agentInboxService.send(req.getAssignedAgent(), eventId, "sub_task.assigned",
-                        "新任务已分配: " + req.getTitle(),
-                        "交付物: " + (req.getDeliverable() != null ? req.getDeliverable() : "待确认"),
-                        "sub_task", subTask.getId(), "HIGH");
-            } catch (Exception e) {
-                log.warn("子任务创建后发送通知失败: subtaskId={}", subTask.getId(), e);
-            }
-        }
 
         return R.ok(toResponse(subTask));
     }
@@ -105,58 +94,104 @@ public class SubTaskController {
         return R.ok();
     }
 
-    @PostMapping("/{id}/claim")
+    @PostMapping("/claim/{id}")
     public R<Void> claim(@PathVariable("id") Long id, @RequestParam("agentId") Long agentId) {
         subTaskService.claim(id, agentId);
         return R.ok();
     }
 
-    @PostMapping("/{id}/start")
+    @PostMapping("/start/{id}")
     public R<Void> start(@PathVariable("id") Long id) {
         subTaskService.start(id);
         return R.ok();
     }
 
-    @PostMapping("/{id}/submit")
+    @PostMapping("/submit/{id}")
     public R<Void> submit(@PathVariable("id") Long id) {
         subTaskService.submit(id);
         return R.ok();
     }
 
-    @PostMapping("/{id}/complete")
+    @PostMapping("/complete/{id}")
     public R<Void> complete(@PathVariable("id") Long id) {
         subTaskService.complete(id);
         return R.ok();
     }
 
-    @PostMapping("/{id}/rework")
+    @PostMapping("/rework/{id}")
     public R<Void> rework(@PathVariable("id") Long id, @RequestBody ReworkRequest req) {
         subTaskService.rework(id, req.getReworkAgentId());
         return R.ok();
     }
 
-    @PostMapping("/{id}/block")
+    @PostMapping("/block/{id}")
     public R<Void> block(@PathVariable("id") Long id) {
         subTaskService.block(id);
         return R.ok();
     }
 
-    @PostMapping("/{id}/reassign")
+    @PostMapping("/reassign/{id}")
     public R<Void> reassign(@PathVariable("id") Long id, @Valid @RequestBody ReassignRequest req) {
-        subTaskService.reassign(id, req.getAgentId());
+        subTaskDispatchService.dispatchBlockedSubTask(id, req.getAgentId());
         return R.ok();
     }
 
-    @PostMapping("/{id}/pause")
+    @PostMapping("/pause/{id}")
     public R<Void> pause(@PathVariable("id") Long id) {
         subTaskService.pause(id);
         return R.ok();
     }
 
-    @PostMapping("/{id}/resume")
+    @PostMapping("/resume/{id}")
     public R<Void> resume(@PathVariable("id") Long id) {
         subTaskService.resume(id);
         return R.ok();
+    }
+
+    @PostMapping("/execute/{id}")
+    public R<Map<String, Object>> execute(@PathVariable("id") Long id) {
+        requireAdmin();
+
+        // 1. subTask 存在
+        SubTask subTask = subTaskService.getById(id);
+        if (subTask == null) {
+            return R.fail("子任务不存在");
+        }
+
+        // 2. assignedAgent != null
+        if (subTask.getAssignedAgent() == null) {
+            return R.fail("子任务未分配 Agent");
+        }
+
+        // 3. status 仅允许 ASSIGNED / REWORK / PAUSED
+        SubTaskStatus status = subTask.getStatus();
+        if (status != SubTaskStatus.ASSIGNED
+                && status != SubTaskStatus.REWORK
+                && status != SubTaskStatus.PAUSED) {
+            return R.fail("子任务状态不允许执行: " + status);
+        }
+
+        // 4. 不存在 PENDING/RUNNING 执行记录，防重复发命令
+        if (agentExecutionRecordService.hasPendingOrRunning(id)) {
+            return R.fail("子任务已有进行中的执行记录，请勿重复触发");
+        }
+
+        ExecutionCommand command = executionCommandService.createAssignedCommand(
+                id, subTask.getAssignedAgent(), "admin-execute");
+
+        return R.ok(Map.of(
+                "recordId", command.getRecordId(),
+                "eventId", command.getEventId(),
+                "subTaskId", command.getSubTaskId(),
+                "agentId", command.getAgentId(),
+                "trigger", command.getTrigger()));
+    }
+
+    private void requireAdmin() {
+        Object type = request.getAttribute(com.helloai.api.interceptor.AuthInterceptor.AUTH_TYPE_KEY);
+        if (type == null || !"admin".equals(type.toString())) {
+            throw new com.helloai.common.base.BizException(403, "admin only");
+        }
     }
 
     @GetMapping("/available")

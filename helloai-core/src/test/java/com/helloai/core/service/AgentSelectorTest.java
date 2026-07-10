@@ -1,6 +1,7 @@
 package com.helloai.core.service;
 
 import com.helloai.common.constant.AgentOnlineStatus;
+import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.entity.Agent;
@@ -53,6 +54,7 @@ class AgentSelectorTest {
         a.setId(id);
         a.setName("agent-" + id);
         a.setRole(AgentRole.EXECUTOR);
+        a.setAccessType(AgentAccessType.CLI_CLIENT);
         a.setScore(score);
         a.setOnlineStatus(onlineStatus);
         a.setStatus(status);
@@ -121,6 +123,24 @@ class AgentSelectorTest {
 
             assertThat(result).isNotNull();
             assertThat(result.getId()).isEqualTo(3L);
+        }
+
+        @Test
+        @DisplayName("API_KEY_LLM 的 OFFLINE 不参与过滤")
+        void shouldKeepOfflineApiKeyLlmCandidate() {
+            Agent offlineApi = agent(2L, 90, AgentOnlineStatus.OFFLINE, AgentStatus.ACTIVE);
+            offlineApi.setAccessType(AgentAccessType.API_KEY_LLM);
+            Agent onlineCli = agent(3L, 60, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(offlineApi, onlineCli));
+            when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
+            when(circuitBreakerRegistry.find("agentDispatch-3")).thenReturn(Optional.empty());
+
+            Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(2L);
         }
 
         @Test

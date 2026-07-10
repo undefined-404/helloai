@@ -13,10 +13,11 @@
 
 1. **查收件箱** → `GET {{BASE_URL}}/api/agent/inbox`
 2. **获取最新规则** → `GET {{BASE_URL}}/api/rules/merged`（返回合并后的规则提示词，必须执行）
-3. **查看我的子任务** → `GET {{BASE_URL}}/api/sub-tasks/mine?agentId=<你的ID>`
-4. **按优先级处理**: REWORK > ASSIGNED > IN_PROGRESS
-5. **无任务时**: `GET {{BASE_URL}}/api/sub-tasks/available` 认领新任务
-6. **完成后**: 提交 → 写日志
+3. **按任务计划节点回看参考实现**：涉及调度、执行链、结果回写时，回看 `E:\workspace\AgentTeams-main` 相关源码，确保没有偏离开发初衷
+4. **查看我的子任务** → `GET {{BASE_URL}}/api/sub-tasks/mine?agentId=<你的ID>`
+5. **按优先级处理**: REWORK > ASSIGNED > IN_PROGRESS
+6. **无任务时**: `GET {{BASE_URL}}/api/sub-tasks/available` 认领新任务
+7. **完成后**: 提交 → 写日志
 
 ## API 端点参考
 
@@ -29,7 +30,7 @@ curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox
 curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox/count
 
 # 标记已读
-curl -X PUT -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox/<消息ID>/read
+curl -X PUT -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox/read/<消息ID>
 ```
 
 ### 规则
@@ -46,16 +47,16 @@ curl -H "Authorization: Bearer <API_KEY>" "{{BASE_URL}}/api/sub-tasks/mine?agent
 curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/available
 
 # 认领子任务
-curl -X POST -H "Authorization: Bearer <API_KEY>" "{{BASE_URL}}/api/sub-tasks/<子任务ID>/claim?agentId=<你的ID>"
+curl -X POST -H "Authorization: Bearer <API_KEY>" "{{BASE_URL}}/api/sub-tasks/claim/<子任务ID>?agentId=<你的ID>"
 
 # 开始执行
-curl -X POST -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/<子任务ID>/start
+curl -X POST -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/start/<子任务ID>
 
 # 查看子任务详情（含交付物要求、验收标准）
 curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/<子任务ID>
 
 # 提交成果
-curl -X POST -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/<子任务ID>/submit
+curl -X POST -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/submit/<子任务ID>
 ```
 
 ### 审查记录（返工时使用）

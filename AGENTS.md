@@ -11,8 +11,9 @@ Before editing code in this repository, read these documents first:
 1. `doc/HelloAI_项目基线文档.md`
 2. `doc/HelloAI_实现差距表.md`
 3. `doc/HelloAI_迭代执行记录.md`
-4. `doc/HelloAI_CODE_STYLE.md`
-5. `doc/HelloAI_Agent接入内容生成功能开发清单_v2.0.md`
+4. `doc/HelloAI_调度解耦重构分析.md`
+5. `doc/HelloAI_CODE_STYLE.md`
+6. `doc/HelloAI_Agent接入内容生成功能开发清单_v2.0.md`
 
 ### Why These Documents Matter
 
@@ -22,6 +23,8 @@ Before editing code in this repository, read these documents first:
   - Defines whether a topic is already delivered, partially delivered, not delivered, or only a documentation mismatch.
 - `HelloAI_迭代执行记录.md`
   - Records recent implementation rounds, actual changes, and current leftovers.
+- `HelloAI_调度解耦重构分析.md`
+  - Defines the current scheduling refactor direction and the alignment target against `E:\workspace\AgentTeams-main`.
 - `HelloAI_CODE_STYLE.md`
   - Defines the code style and engineering conventions that must be followed.
 - `HelloAI_Agent接入内容生成功能开发清单_v2.0.md`
@@ -88,7 +91,8 @@ Update them when:
 - The repository also contains a Trae rule file at `.trae/rules/执行规则.md`.
 - The repository also contains local skills such as `.trae/skills/helloai-preflight/SKILL.md` and mirrored skill directories for multiple AI tools.
 - If multiple instruction sources overlap, keep them consistent and prefer the stricter project-specific rule.
+- 涉及调度、执行链、异步回写、MQ 解耦的代码修改时，应优先遵循 `doc/HelloAI_调度解耦重构分析.md`；旧路线图与旧方案文档只保留为历史资产，不再作为当前调度实现的主设计依据。
 
 ### One-line Requirement
 
-In this repository, no code change should happen before checking the baseline, gap analysis, iteration record, code style, and the existing project plan.
+In this repository, no code change should happen before checking the baseline, gap analysis, iteration record, scheduling refactor analysis, code style, and the existing project plan.

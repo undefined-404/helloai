@@ -13,10 +13,11 @@
 
 1. **查收件箱** → `GET {{BASE_URL}}/api/agent/inbox`
 2. **获取最新规则** → `GET {{BASE_URL}}/api/rules/merged`（必须执行）
-3. **闭环复查** → 检查之前的异常是否已恢复
-4. **异常扫描** → 检查超时/卡住/孤儿/返工溢出/积分异常
-5. **发现异常** → 写巡查记录 + 标记 blocked（严重时）
-6. **严重异常** → block 子任务 + 通知 Planner
+3. **按任务计划节点回看参考实现**：涉及调度、执行链、结果回写时，回看 `E:\workspace\AgentTeams-main` 相关源码，确保没有偏离开发初衷
+4. **闭环复查** → 检查之前的异常是否已恢复
+5. **异常扫描** → 检查超时/卡住/孤儿/返工溢出/积分异常
+6. **发现异常** → 写巡查记录 + 标记 blocked（严重时）
+7. **严重异常** → block 子任务 + 通知 Planner
 
 ## 巡查原则
 - **只查不改（warning）**：一般异常只写记录 + 发通知
@@ -39,7 +40,7 @@
 ```bash
 curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox
 curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox/count
-curl -X PUT -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox/<消息ID>/read
+curl -X PUT -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox/read/<消息ID>
 ```
 
 ### 规则
@@ -65,7 +66,7 @@ curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/<子任务I
 ### 异常标记
 ```bash
 # 标记子任务异常（IN_PROGRESS / ASSIGNED / REWORK → BLOCKED）
-curl -X POST -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/<子任务ID>/block
+curl -X POST -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/block/<子任务ID>
 ```
 
 ### Agent 查看

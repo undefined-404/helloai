@@ -7,6 +7,7 @@ import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.entity.Agent;
 import com.helloai.core.entity.ReviewRecord;
 import com.helloai.core.entity.SubTask;
+import com.helloai.core.event.SubTaskAssignedEvent;
 import com.helloai.core.mapper.ReviewRecordMapper;
 import com.helloai.core.mapper.SubTaskMapper;
 import com.helloai.core.service.score.ImplicitScoreCalculator;
@@ -14,6 +15,7 @@ import com.helloai.core.service.score.ImplicitScoreCalculator.ScoreResult;
 import com.helloai.core.statemachine.SubTaskStateMachine;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,6 +23,7 @@ import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -34,6 +37,31 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
     private final ReviewRecordMapper reviewRecordMapper;
     private final ImplicitScoreCalculator implicitScoreCalculator;
     private final RewardService rewardService;
+    private final ApplicationEventPublisher applicationEventPublisher;
+
+    @Transactional(rollbackFor = Exception.class)
+    public SubTask create(SubTask subTask, Long assignedAgentId) {
+        subTask.setAssignedAgent(null);
+        subTask.setStatus(SubTaskStatus.PENDING);
+        save(subTask);
+        if (assignedAgentId != null) {
+            claim(subTask.getId(), assignedAgentId);
+        }
+        return getById(subTask.getId());
+    }
+
+    /**
+     * 按子任务主键加行级锁读取。
+     *
+     * <p>用于命令创建等需要“读现状 + 紧接写入”原子化的路径，
+     * 避免在同一子任务上出现并发重复发命令。</p>
+     */
+    public SubTask getByIdForUpdate(Long subTaskId) {
+        return lambdaQuery()
+                .eq(SubTask::getId, subTaskId)
+                .last("FOR UPDATE")
+                .one();
+    }
 
     @Transactional(rollbackFor = Exception.class)
     public void changeStatus(Long subTaskId, SubTaskStatus newStatus, Long agentId) {
@@ -46,7 +74,9 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
         SubTaskStateMachine.validate(oldStatus, newStatus);
 
         subTask.setStatus(newStatus);
-        if (agentId != null) {
+        if (newStatus == SubTaskStatus.PENDING && agentId == null) {
+            subTask.setAssignedAgent(null);
+        } else if (agentId != null) {
             subTask.setAssignedAgent(agentId);
         }
 
@@ -59,6 +89,7 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
 
         // v1.1: 投递收件箱通知
         sendInboxNotification(subTask, newStatus, oldStatus);
+        publishAssignmentEvent(subTask, newStatus);
         if (subTask.getAssignedAgent() != null
                 && (newStatus == SubTaskStatus.IN_PROGRESS || newStatus == SubTaskStatus.REVIEW)) {
             heartbeatService.active(subTask.getAssignedAgent());
@@ -217,6 +248,14 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
         }
     }
 
+    private void publishAssignmentEvent(SubTask subTask, SubTaskStatus newStatus) {
+        if (newStatus != SubTaskStatus.ASSIGNED || subTask.getAssignedAgent() == null) {
+            return;
+        }
+        applicationEventPublisher.publishEvent(
+                new SubTaskAssignedEvent(subTask.getId(), subTask.getAssignedAgent()));
+    }
+
     @Transactional(rollbackFor = Exception.class)
     public void rework(Long subTaskId, Long reworkAgentId) {
         SubTask subTask = getById(subTaskId);
@@ -273,16 +312,35 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
         changeStatus(subTaskId, SubTaskStatus.ASSIGNED, agentId);
     }
 
+    /**
+     * 将子任务重置为待重新调度的 PENDING 状态。
+     *
+     * <p>该方法用于离线补偿、阻塞重分配等“需要重新走弹性调度器”的系统路径。
+     * 会清空当前 assignedAgent，让后续 {@link ResilientDispatcher#assignNext(Long, Long)}
+     * 重新发布标准 ASSIGNED 事件与自动执行链。</p>
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public SubTask resetToPendingForDispatch(Long subTaskId, Set<SubTaskStatus> allowedStatuses) {
+        SubTask subTask = getById(subTaskId);
+        if (subTask == null) {
+            throw new BizException("子任务不存在: " + subTaskId);
+        }
+        if (!allowedStatuses.contains(subTask.getStatus())) {
+            throw new BizException("子任务状态不允许重新调度: subTaskId=" + subTaskId + ", status=" + subTask.getStatus());
+        }
+
+        subTask.setStatus(SubTaskStatus.PENDING);
+        subTask.setAssignedAgent(null);
+        boolean updated = updateById(subTask);
+        if (!updated) {
+            throw new BizException("并发修改，请重试");
+        }
+        return getById(subTaskId);
+    }
+
     @Transactional(rollbackFor = Exception.class)
     public void reassign(Long subTaskId, Long newAgentId) {
-        SubTask subTask = getById(subTaskId);
-        if (subTask == null) throw new BizException("子任务不存在: " + subTaskId);
-        if (subTask.getStatus() != SubTaskStatus.BLOCKED) {
-            throw new BizException("只有 BLOCKED 状态才能重新分配");
-        }
-        subTask.setStatus(SubTaskStatus.PENDING);
-        subTask.setAssignedAgent(newAgentId);
-        updateById(subTask);
+        resetToPendingForDispatch(subTaskId, Set.of(SubTaskStatus.BLOCKED));
         changeStatus(subTaskId, SubTaskStatus.ASSIGNED, newAgentId);
     }
 }

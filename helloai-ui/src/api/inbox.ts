@@ -9,9 +9,9 @@ export const inboxApi = {
     return request.get<any, { total_unread: number }>('/agent/inbox/count')
   },
   markRead(id: number) {
-    return request.put(`/agent/inbox/${id}/read`)
+    return request.put(`/agent/inbox/read/${id}`)
   },
   markArchived(id: number) {
-    return request.put(`/agent/inbox/${id}/archive`)
+    return request.put(`/agent/inbox/archive/${id}`)
   }
 }

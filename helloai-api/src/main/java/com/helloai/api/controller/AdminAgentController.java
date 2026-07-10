@@ -179,7 +179,7 @@ public class AdminAgentController {
     //  状态
     // ══════════════════════════════════════════════════════════════
 
-    @PutMapping("/{id}/status")
+    @PutMapping("/status/{id}")
     public R<Void> updateStatus(@PathVariable("id") Long id, @RequestBody Map<String, String> body) {
         AgentStatus status = AgentStatus.valueOf(body.get("status").toUpperCase());
         agentService.updateStatus(id, status);
@@ -197,7 +197,7 @@ public class AdminAgentController {
      * <p>设 online_status=SLEEPING，不动 AgentStatus/oldline_reason/offline_at。
      * <br>仅 X-Admin-Token 鉴权的管理员可调用（AuthInterceptor 已拦截）。
      */
-    @PutMapping("/{id}/sleep")
+    @PutMapping("/sleep/{id}")
     public R<Map<String, Object>> sleep(@PathVariable("id") Long id,
                                          @RequestBody(required = false) Map<String, String> body,
                                          HttpServletRequest request) {
@@ -212,7 +212,7 @@ public class AdminAgentController {
      * <p>设 online_status=OFFLINE（不强行 ONLINE，让系统心跳自然计算 IDLE/ONLINE）。
      * <br>仅 X-Admin-Token 鉴权的管理员可调用。
      */
-    @PutMapping("/{id}/wake")
+    @PutMapping("/wake/{id}")
     public R<Map<String, Object>> wake(@PathVariable("id") Long id,
                                         @RequestBody(required = false) Map<String, String> body,
                                         HttpServletRequest request) {
@@ -294,7 +294,7 @@ public class AdminAgentController {
     //  重置 Key
     // ══════════════════════════════════════════════════════════════
 
-    @PostMapping("/{id}/reset-key")
+    @PostMapping("/reset-key/{id}")
     public R<ApiKeyResponse> resetKey(@PathVariable("id") Long id) {
         String newKey = agentService.resetApiKey(id);
         ApiKeyResponse response = new ApiKeyResponse();

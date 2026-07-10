@@ -83,7 +83,7 @@ public class TaskController {
         return R.ok(task);
     }
 
-    @PutMapping("/{id}/status")
+    @PutMapping("/status/{id}")
     public R<Task> updateStatus(@PathVariable("id") Long id,
                                  @Valid @RequestBody UpdateTaskStatusRequest req) {
         Task task = taskService.getById(id);

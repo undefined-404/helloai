@@ -12,12 +12,12 @@
 #   H) [tool 2] agent SSE getAgentStatus             -> expect computedOnlineStatus ONLINE/IDLE
 #   I) [tool 3] agent SSE pullTasks                  -> expect >=1 inbox (sub_task.assigned)
 #   J) [tool 4] agent SSE claimSubTask               -> expect claimed=true (idempotent)
-#   K) REST POST /api/sub-tasks/{id}/start           -> expect status=IN_PROGRESS
+#   K) REST POST /api/sub-tasks/start/{id}           -> expect status=IN_PROGRESS
 #   L) [tool 1 again] agent SSE heartbeat            -> expect last_active_at refreshed
 #   M) [tool 5] agent SSE uploadArtifact             -> expect attachmentId
 #   N) [tool 6] agent SSE ack                        -> expect inbox.is_read=1
-#   O) REST POST /api/sub-tasks/{id}/submit          -> expect status=REVIEW
-#   P) REST POST /api/sub-tasks/{id}/complete        -> expect status=DONE
+#   O) REST POST /api/sub-tasks/submit/{id}          -> expect status=REVIEW
+#   P) REST POST /api/sub-tasks/complete/{id}        -> expect status=DONE
 #   Q) admin GET /api/admin/agents/{id}              -> verify lastSeenAt/lastActiveAt
 #   R) admin GET /api/sub-tasks/{id}                 -> verify status=DONE
 #   S) HTTP /api/agent/inbox/count (Bearer apiKey)   -> verify unread count
@@ -333,7 +333,7 @@ Send-Mcp -Body $jBody -Label "[J] tools/call claimSubTask (agent apiKey)" -Heade
 # STEP K: REST POST start (subTask IN_PROGRESS)
 # ============================================================
 Write-Output "=== [K] REST start subTask -> IN_PROGRESS ==="
-$kResp = Invoke-Json -Method POST -Uri "$base/api/sub-tasks/$subTaskId/start" -Body "" -Headers @{ "X-Admin-Token" = $adminToken }
+$kResp = Invoke-Json -Method POST -Uri "$base/api/sub-tasks/start/$subTaskId" -Body "" -Headers @{ "X-Admin-Token" = $adminToken }
 Write-Output "start HTTP $($kResp.Code)"
 Write-Output "start Body: $($kResp.Body)"
 Write-Output ""
@@ -401,7 +401,7 @@ Send-Mcp -Body $nBody -Label "[N] tools/call ack (agent apiKey)" -Headers @{ "Au
 # STEP O: REST POST submit (subTask REVIEW)
 # ============================================================
 Write-Output "=== [O] REST submit subTask -> REVIEW ==="
-$oResp = Invoke-Json -Method POST -Uri "$base/api/sub-tasks/$subTaskId/submit" -Body "" -Headers @{ "X-Admin-Token" = $adminToken }
+$oResp = Invoke-Json -Method POST -Uri "$base/api/sub-tasks/submit/$subTaskId" -Body "" -Headers @{ "X-Admin-Token" = $adminToken }
 Write-Output "submit HTTP $($oResp.Code)"
 Write-Output "submit Body: $($oResp.Body)"
 Write-Output ""
@@ -410,7 +410,7 @@ Write-Output ""
 # STEP P: REST POST complete (subTask DONE)
 # ============================================================
 Write-Output "=== [P] REST complete subTask -> DONE ==="
-$pResp = Invoke-Json -Method POST -Uri "$base/api/sub-tasks/$subTaskId/complete" -Body "" -Headers @{ "X-Admin-Token" = $adminToken }
+$pResp = Invoke-Json -Method POST -Uri "$base/api/sub-tasks/complete/$subTaskId" -Body "" -Headers @{ "X-Admin-Token" = $adminToken }
 Write-Output "complete HTTP $($pResp.Code)"
 Write-Output "complete Body: $($pResp.Body)"
 Write-Output ""

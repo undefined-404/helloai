@@ -24,6 +24,7 @@
 - 若当前代码实现与本文件不一致，应优先判断是旧代码待收口，还是规范本身过时；不要绕过规范直接新增第三种写法。
 - 若修改引入新的公共约定，应同步更新本文件，而不是只留在 PR、聊天记录或临时说明中。
 - 若与项目基线文档、实现差距表存在冲突，以代码事实和项目基线为准，并尽快回写本文件。
+- 若修改涉及调度、执行链、异步回写、MQ 解耦，开发前必须先阅读 `doc/HelloAI_调度解耦重构分析.md`，并按任务计划节点回看 `E:\workspace\AgentTeams-main` 相关源码，确认没有偏离当前收敛方向。
 
 ### 维护边界
 
@@ -80,7 +81,7 @@
 | 逻辑删除 | `@TableLogic` 标注 `deleted` 字段，0=未删除 / 1=已删除 |
 | 乐观锁 | 使用 `@Version` 注解，禁止手动写 `version = version + 1` SQL |
 | 状态常量 | **禁止硬编码**，统一使用枚举类（`SubTaskStatus`、`AgentRole` 等） |
-| 开发入口 | **每次改代码前先读本规范，再对照 `HelloAI_项目基线文档.md` 与 `HelloAI_实现差距表.md` 判断边界** |
+| 开发入口 | **每次改代码前先读本规范，再对照 `HelloAI_项目基线文档.md`、`HelloAI_实现差距表.md` 与 `HelloAI_调度解耦重构分析.md` 判断边界** |
 
 > **强制要求**：如果本文件已有明确规范，开发实现必须优先遵守；若确需例外，必须同时更新文档说明例外条件。
 
@@ -622,17 +623,17 @@ public class ModuleController {
 
 ### 6.5 状态操作端点规范
 
-状态变更使用专用 `POST` 端点，路径格式：`/{id}/{action}`
+状态变更使用专用动作端点，**优先**使用 `/{action}/{id}`，避免把标识参数夹在路径中间；若历史接口已对外提供 `/{id}/{action}`，可短期兼容保留，但新代码与新文档统一按前者书写。
 
 ```java
 // 子任务状态操作（每个动作一个独立端点）
-@PostMapping("/{id}/claim")
+@PostMapping("/claim/{id}")
 public R<SubTask> claim(@PathVariable Long id, @RequestBody ClaimRequest req) { ... }
 
-@PostMapping("/{id}/start")
+@PostMapping("/start/{id}")
 public R<SubTask> start(@PathVariable Long id) { ... }
 
-@PostMapping("/{id}/submit")
+@PostMapping("/submit/{id}")
 public R<SubTask> submit(@PathVariable Long id) { ... }
 ```
 

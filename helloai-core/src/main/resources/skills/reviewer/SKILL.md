@@ -13,9 +13,10 @@
 
 1. **查收件箱** → `GET {{BASE_URL}}/api/agent/inbox`
 2. **获取最新规则** → `GET {{BASE_URL}}/api/rules/merged`（必须执行）
-3. **查看待审查子任务** → `GET {{BASE_URL}}/api/sub-tasks?status=REVIEW`
-4. **无待审查任务** → 本次唤醒结束
-5. **逐个审查**: 读交付物 → 查工作目录 → 对照验收标准 → 评分 → 写审查记录
+3. **按任务计划节点回看参考实现**：涉及调度、执行链、结果回写时，回看 `E:\workspace\AgentTeams-main` 相关源码，确保没有偏离开发初衷
+4. **查看待审查子任务** → `GET {{BASE_URL}}/api/sub-tasks?status=REVIEW`
+5. **无待审查任务** → 本次唤醒结束
+6. **逐个审查**: 读交付物 → 查工作目录 → 对照验收标准 → 评分 → 写审查记录
 
 ## 审查原则
 - **对照标准**：严格按照验收标准审查
@@ -39,7 +40,7 @@
 ```bash
 curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox
 curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox/count
-curl -X PUT -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox/<消息ID>/read
+curl -X PUT -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox/read/<消息ID>
 ```
 
 ### 规则

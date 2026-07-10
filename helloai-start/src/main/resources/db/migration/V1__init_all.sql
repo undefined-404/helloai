@@ -126,7 +126,7 @@ COMMENT ON TABLE agent IS '智能体配置表';
 COMMENT ON COLUMN agent.id IS '主键ID';
 COMMENT ON COLUMN agent.name IS '智能体名称';
 COMMENT ON COLUMN agent.role IS '智能体角色：PLANNER/EXECUTOR/REVIEWER/PATROL';
-COMMENT ON COLUMN agent.api_key IS '智能体访问密钥';
+COMMENT ON COLUMN agent.api_key IS 'Agent 工牌 consumerToken；CLI_CLIENT 用于对外鉴权，API_KEY_LLM 不存真实 LLM 凭证';
 COMMENT ON COLUMN agent.model_type IS '所用模型类型';
 COMMENT ON COLUMN agent.model_config IS '模型特定配置 (temperature, max_tokens 等)';
 COMMENT ON COLUMN agent.specialization_slug IS '关联的 AGENT_SPECIALIZATION 标识 (如 executor-backend)';
@@ -140,7 +140,56 @@ COMMENT ON COLUMN agent.deleted IS '逻辑删除标记：0-未删除，1-已删�
 COMMENT ON COLUMN agent.remark IS '备注';
 
 -- ============================================================
--- 4. sub_task 子任务表（含 V3 扩展字段 + V10 PAUSED 状态）
+-- 4. credential_vault 凭证保险库（T1 最小底座，仅 API_KEY_LLM 场景）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS credential_vault (
+    id               BIGINT NOT NULL PRIMARY KEY,
+    owner_type       VARCHAR(32)  NOT NULL DEFAULT 'AGENT',
+    owner_id         BIGINT       NOT NULL,
+    provider         VARCHAR(64)  NOT NULL,
+    credential_type  VARCHAR(32)  NOT NULL DEFAULT 'API_KEY',
+    encrypted_value  TEXT,
+    secret_ref       VARCHAR(255),
+    status           VARCHAR(16)  NOT NULL DEFAULT 'ACTIVE',
+    expires_at       TIMESTAMPTZ,
+    create_by        VARCHAR(64)  NOT NULL DEFAULT '',
+    update_by        VARCHAR(64)  NOT NULL DEFAULT '',
+    create_time      TIMESTAMPTZ  NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time      TIMESTAMPTZ  NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted          SMALLINT     NOT NULL DEFAULT 0,
+    remark           VARCHAR(255),
+    CONSTRAINT chk_credential_vault_owner_type CHECK (owner_type IN ('AGENT')),
+    CONSTRAINT chk_credential_vault_credential_type CHECK (credential_type IN ('API_KEY')),
+    CONSTRAINT chk_credential_vault_status CHECK (status IN ('ACTIVE', 'DISABLED')),
+    CONSTRAINT chk_credential_vault_value CHECK (encrypted_value IS NOT NULL OR secret_ref IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_credential_vault_owner ON credential_vault(owner_type, owner_id) WHERE deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_credential_vault_status ON credential_vault(status) WHERE deleted = 0;
+CREATE UNIQUE INDEX IF NOT EXISTS uk_credential_vault_owner_provider_type
+    ON credential_vault(owner_type, owner_id, provider, credential_type) WHERE deleted = 0;
+DROP TRIGGER IF EXISTS update_credential_vault_update_time ON credential_vault;
+CREATE TRIGGER update_credential_vault_update_time BEFORE UPDATE ON credential_vault
+    FOR EACH ROW EXECUTE FUNCTION update_update_time_column();
+
+COMMENT ON TABLE credential_vault IS '凭证保险库（真实 LLM 凭证只存这里，agent.api_key 只保留工牌语义）';
+COMMENT ON COLUMN credential_vault.id IS '主键ID';
+COMMENT ON COLUMN credential_vault.owner_type IS '归属对象类型：当前固定为 AGENT';
+COMMENT ON COLUMN credential_vault.owner_id IS '归属对象 ID，例如 agent.id';
+COMMENT ON COLUMN credential_vault.provider IS 'LLM Provider 标识，如 deepseek/openai/claude';
+COMMENT ON COLUMN credential_vault.credential_type IS '凭证类型：当前固定为 API_KEY';
+COMMENT ON COLUMN credential_vault.encrypted_value IS '应用层加密后的凭证值';
+COMMENT ON COLUMN credential_vault.secret_ref IS '外部 Secret 引用（与 encrypted_value 二选一或并存）';
+COMMENT ON COLUMN credential_vault.status IS '凭证状态：ACTIVE/DISABLED';
+COMMENT ON COLUMN credential_vault.expires_at IS '可选到期时间';
+COMMENT ON COLUMN credential_vault.create_by IS '创建人';
+COMMENT ON COLUMN credential_vault.update_by IS '更新人';
+COMMENT ON COLUMN credential_vault.create_time IS '创建时间';
+COMMENT ON COLUMN credential_vault.update_time IS '更新时间';
+COMMENT ON COLUMN credential_vault.deleted IS '逻辑删除标记：0-未删除，1-已删除';
+COMMENT ON COLUMN credential_vault.remark IS '备注';
+
+-- ============================================================
+-- 5. sub_task 子任务表（含 V3 扩展字段 + V10 PAUSED 状态）
 -- ============================================================
 CREATE TABLE IF NOT EXISTS sub_task (
     id              BIGINT NOT NULL PRIMARY KEY,

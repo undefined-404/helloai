@@ -38,12 +38,12 @@ export const agentApi = {
 
   // ── 切换状态 ──
   updateStatus(id: string, status: 'ACTIVE' | 'DISABLED') {
-    return request.put<any, void>(`/admin/agents/${id}/status`, { status })
+    return request.put<any, void>(`/admin/agents/status/${id}`, { status })
   },
 
   // ── 重置 Key ──
   resetKey(id: string) {
-    return request.post<any, { apiKey: string; message: string }>(`/admin/agents/${id}/reset-key`)
+    return request.post<any, { apiKey: string; message: string }>(`/admin/agents/reset-key/${id}`)
   },
 
   // ── 关联数据统计 ──

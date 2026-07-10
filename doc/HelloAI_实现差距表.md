@@ -53,6 +53,7 @@
 | D4 | Spring AI 版本口径 | 历史路线图附录 F.8 仍写 `1.1.0` 永久锁定 | 当前父工程实际为 `1.1.8`，且 macOS 回归已通过 | 已收口 | README/基线已同步，历史路线图仅保留归档说明 |
 | D5 | `/api/tools/cli` 鉴权口径 | 技术方案曾将其描述为需要鉴权的 Agent 入口 | 当前 MVC 配置已放行该接口 | 文档失真 | 二选一收口，以实际行为为准 |
 | D6 | 心跳刷新规则口径 | 路线图写“心跳/拉取/ack 任一请求即刷新 `last_seen_at`” | 当前明确刷新在线态的是 `heartbeat` 工具 | 文档失真 | 若设计以文档为准则补代码，否则改文档 |
+| D7 | README 文档边界 | README 容易被继续塞入开发阶段接口调整与兼容说明 | 当前项目已拆分“README / 实现差距 / 迭代记录”三层职责 | 已收口 | README 仅保留介绍与使用说明，阶段性调整只写差距表与执行记录 |
 
 ### 3. 路线图 N1-N10 差距总表
 
@@ -63,11 +64,11 @@
 | N3 | MCP Server 工具集 | 已交付但口径不一致 | 实际工具数量已超过最初“固定 6 工具”表述 | 先改文档，再评估兼容策略 |
 | N4 | 心跳与在线判定 | 已交付 | 三件套已形成主线能力 | 保持现状 |
 | N5 | 熔断降级 | 已交付 | 已形成 per-agent 熔断与 fallback | 保持现状 |
-| N6 | API Key 类 AgentExecutor | 未落地 | 缺统一接口与平台侧直调执行路径 | 后续重点补齐 |
+| N6 | API Key 类 AgentExecutor | 部分落地 | 已完成 P1-P4 范围内的主链收口：`ASSIGNED` 后只发 execution command，本地 consumer 异步消费，`ExecutionResultHandler`/`ExecutionCompensationTask`/CAS 状态推进已接通。2026-07-10 已完成真实 blocked 重分配样本 `ASSIGNED -> REVIEW` 验收；2026-07-11 进一步完成运行态验证：并发双击 `/api/sub-tasks/execute/{id}` 仅落 1 条 execution command，超时补偿可稳定收敛为 `agent_execution_record=TIMEOUT`、`sub_task=BLOCKED` 并写入 `sub_task_execute_failed` 时间线。当前遗留主要是消费载体仍为本地 Spring 事件，`SubTaskExecutionService` 仍保留部分执行编排职责，且“补偿回滚原子性”尚未通过带人工延迟点的受控实验做强证明 | 继续按 `HelloAI_调度解耦重构分析.md` 的“命令分发 / 异步消费 / 结果回写”方向收敛，下一步补独立消费载体、继续收紧 `SubTaskExecutionService`，并增加可控延迟点或集成测试来证明补偿回滚原子性 |
 | N7 | 健康检查改写 | 已交付 | Reconcile 与离线重分配已具备 | 保持现状 |
 | N8 | 网页版 AI 浏览器接入 | 未落地 | 仅见 `WEB_BROWSER` 枚举预留，缺执行模块 | 后续独立迭代 |
-| N9 | Spring AI ChatClient 复用 | 未落地 | 文档提及但仓库未见实际使用点 | 与 N6 联动实施 |
-| N10 | 工牌模式 + `credential_vault` | 未落地 | 缺表结构、实体、服务、迁移策略 | 后续重点补齐 |
+| N9 | Spring AI ChatClient 复用 | 部分落地 | 已接入 ChatClient mock/real 双模式；支持 DeepSeek 通过扩展点动态构建 ChatClient（仍待更多 Provider 与更完善的配置收口） | 继续补多 Provider |
+| N10 | 工牌模式 + `credential_vault` | 部分落地 | 已补最小表结构、绑定接口与 AES-GCM 加解密，并可在 real 执行中从 vault 注入 apiKey；仍缺轮换/迁移/更细粒度权限模型 | 继续补轮换与迁移 |
 
 ### 4. 额外缺口
 
@@ -158,6 +159,18 @@
 - 结论：待决策
 - 优先建议：先按当前代码更新文档；若后续确实需要“拉取/回执也算活跃”，再补代码
 
+#### D7 README 文档边界
+
+- 文档定位：
+  - `README.md`
+  - `doc/HelloAI_实现差距表.md`
+  - `doc/HelloAI_迭代执行记录.md`
+- 代码定位：不适用
+- 当前状态：已收口
+- 差距定义：README 只应承担项目介绍、启动与使用说明，不继续承载开发阶段接口调整、兼容层上下线等执行性内容
+- 结论：改文档
+- 备注：动作路径切换、兼容层下线、回归取证等内容统一记入《实现差距表》和《迭代执行记录》
+
 ### 7. 路线图 N1-N10 逐项对表
 
 #### N1 接入类型 + 能力画像
@@ -229,10 +242,13 @@
 - 文档定位：
   - `doc/HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4.md`
 - 代码定位：
-  - 当前仓库未见 `AgentExecutor` 接口、`ApiKeyExecutor` 实现或平台内直调 LLM 执行入口
-- 当前状态：未落地
-- 差距定义：缺统一执行抽象层，也缺基于平台侧配置直调模型的执行通路
-- 结论：真补功能
+  - `helloai-core/src/main/java/com/helloai/core/agent/executor/AgentExecutor.java`
+  - `helloai-core/src/main/java/com/helloai/core/agent/executor/ApiKeyAgentExecutor.java`
+  - `helloai-core/src/main/java/com/helloai/core/agent/executor/AgentExecutorRouter.java`
+  - `helloai-core/src/main/java/com/helloai/core/service/PlatformAgentExecutionService.java`
+- 当前状态：部分落地
+- 差距定义：已完成调度解耦前三步最小骨架，并在 P1-P4 中继续把执行主链收口为“`executionCommandExecutor` 单层 consumer 边界 + `AgentExecutor` 同步接口 + `PlatformAgentExecutionService.executeSync(...)` 直调 + HTTP connect/read timeout + `/execute/{id}` 发命令 + CAS 状态推进 + 现有 `ExecutionCompensationTask` 超时补偿”模型：`SubTaskAutoExecutionDispatcher` 在 `ASSIGNED` 后只生成 execution command，`ExecutionCommandService` 复用 `agent_execution_record` 创建 `PENDING` 记录，`LocalExecutionCommandConsumer` 在事务提交后异步消费命令并推进执行记录进入 `RUNNING / SUCCESS / FAILED`，`ExecutionResultHandler` 统一承接 `lastExecution` 回写、`submit/block` 和 `sub_task_execute_submit/failed` 时间线，`ExecutionCompensationTask` 负责把超时记录收敛到 `TIMEOUT` 并回推子任务状态。2026-07-10 已完成真实 blocked 重分配样本验收：复用已有 ACTIVE `credential_vault` 的 `API_KEY_LLM` Agent（`targetAgentId=2075602256649543682`），最终通过样本 `taskId=2075606213899923459`、`subTaskId=2075606214105444353` 已验证 `sub_task.status=REVIEW`、`agent_execution_record.status=SUCCESS`，并在日志/数据库中确认 `sub_task_dispatch_prepare -> sub_task_auto_execute_dispatch -> sub_task_execution_command_created -> sub_task_execution_command_consume -> sub_task_execute_start -> sub_task_execute_submit` 全链路完成，执行线程名收敛为 `exec-cmd-*`。2026-07-11 又补做了两类运行态验证：一是并发双击 `/api/sub-tasks/execute/{id}`，独立样本 `subTaskId=2075629381607870465` 最终只生成 1 条执行记录（`recordId=2075629437459222529`），未再出现重复发命令；二是超时补偿样本 `subTaskId=2075633062499700737`、`recordId=10783704462190` 被稳定收敛到 `agent_execution_record.status=TIMEOUT`、`sub_task.status=BLOCKED`，并留下 `sub_task_execute_failed` 时间线。围绕“超时补偿回滚”又做了多轮 `pause` 撞窗，最近一次已把首波请求压到补偿开始后约 174ms，但仍未打进事务内部；当前尚未观察到 `TIMEOUT` 与 `IN_PROGRESS` 撕裂样本，不过这仍属于“运行态未见异常”，不等价于“已通过受控实验强证明回滚原子性”。当前遗留已收口为：消费载体仍是本地 Spring 事件，`SubTaskExecutionService` 仍保留部分执行编排职责，尚未切到独立 MQ / DB poller；超时补偿回滚原子性仍建议通过测试专用延迟点或更可控的集成测试进一步证明
+- 结论：继续补功能
 - 优先级：P1
 
 #### N7 健康检查改写
@@ -264,11 +280,13 @@
 - 文档定位：
   - `doc/HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4.md`
 - 代码定位：
-  - `pom.xml`
-  - 当前仓库未见 `ChatClient` 直接使用点
-- 当前状态：未落地
-- 差距定义：虽已引入 Spring AI 体系，但当前使用重点在 MCP Server，不在平台内 LLM 执行链
-- 结论：真补功能
+  - `helloai-core/pom.xml`
+  - `helloai-core/src/main/java/com/helloai/core/service/AgentChatClientService.java`
+  - `helloai-core/src/main/java/com/helloai/core/agent/executor/ApiKeyAgentExecutor.java`
+  - `helloai-api/src/main/java/com/helloai/api/controller/AgentExecutionController.java`
+- 当前状态：部分落地
+- 差距定义：已通过 Spring AI `ChatClient` 接通稳定 mock 模式，并提供最小验证入口；真实 Provider 配置、真实 LLM 调用和多 Provider 复用仍未实现
+- 结论：继续补功能
 - 优先级：P1
 
 #### N10 工牌模式 + `credential_vault`
@@ -276,10 +294,15 @@
 - 文档定位：
   - `doc/HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4.md`
 - 代码定位：
-  - 当前仓库未见 `credential_vault` 表、实体、服务、迁移逻辑
-- 当前状态：未落地
-- 差距定义：真实凭证未进入独立保险库，`api_key` 语义升级和历史迁移策略尚未实现
-- 结论：真补功能
+  - `helloai-start/src/main/resources/db/migration/V1__init_all.sql`
+  - `helloai-start/src/main/resources/db/migration/V14__create_credential_vault.sql`
+  - `helloai-core/src/main/java/com/helloai/core/entity/CredentialVault.java`
+  - `helloai-core/src/main/java/com/helloai/core/service/CredentialVaultService.java`
+  - `helloai-common/src/main/java/com/helloai/common/constant/AgentAccessType.java`
+  - `helloai-core/src/main/java/com/helloai/core/entity/Agent.java`
+- 当前状态：部分落地
+- 差距定义：最小 `credential_vault` 模型、增量迁移、初始化入口和 `agent.api_key=consumerToken` 语义已落地；历史数据迁移、真实加解密链和完整注册校验仍未实现
+- 结论：继续补功能
 - 优先级：P1
 
 ### 8. 当前文档治理结论

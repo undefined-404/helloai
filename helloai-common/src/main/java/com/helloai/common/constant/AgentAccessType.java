@@ -21,6 +21,35 @@ public enum AgentAccessType {
     WEB_BROWSER;
 
     /**
+     * 当前 accessType 是否仍使用 `agent.api_key` 作为对外鉴权工牌。
+     *
+     * <p>当前仅 CLI_CLIENT 直接通过 MCP / HTTP 持工牌接入平台。</p>
+     */
+    public boolean usesConsumerTokenAuth() {
+        return this == CLI_CLIENT;
+    }
+
+    /**
+     * 当前 accessType 是否要求平台从 `credential_vault` 读取托管凭证。
+     *
+     * <p>T1/T2 约束：只有 API_KEY_LLM 使用托管凭证；
+     * `agent.api_key` 对它只保留工牌语义，不再承载真实 LLM Secret。</p>
+     */
+    public boolean usesCredentialVault() {
+        return this == API_KEY_LLM;
+    }
+
+    /**
+     * 当前 accessType 是否依赖运行时连接存活（心跳/在线态）来参与调度。
+     *
+     * <p>当前只有 CLI_CLIENT 需要由心跳驱动 online_status；
+     * API_KEY_LLM / WEB_BROWSER 走平台侧触发，不应因默认 OFFLINE 而被调度器误判为不可分配。</p>
+     */
+    public boolean requiresRuntimeLiveness() {
+        return this == CLI_CLIENT;
+    }
+
+    /**
      * 返回 accessType 对应的默认 capabilities（注册时可独立覆盖）。
      *
      * @return 不可变 Map，键为能力名，值为默认布尔/数值

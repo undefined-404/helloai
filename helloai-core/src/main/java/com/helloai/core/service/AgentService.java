@@ -56,7 +56,7 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
         Agent agent = new Agent();
         agent.setName(name);
         agent.setRole(role);
-        agent.setApiKey("ak_" + generateRandomHex(32));
+        agent.setApiKey(issueConsumerToken());
         agent.setStatus(AgentStatus.ACTIVE);
         agent.setScore(0);
         agent.setRemark(description);
@@ -66,8 +66,8 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
         agent.setLabels(new java.util.HashMap<>());
         agent.setOnlineStatus(AgentOnlineStatus.OFFLINE);
         save(agent);
-        log.info("Agent 注册成功: name={}, role={}, id={}, accessType={}",
-                name, role, agent.getId(), agent.getAccessType());
+        log.info("Agent 注册成功: name={}, role={}, id={}, accessType={}, consumerTokenIssued={}",
+                name, role, agent.getId(), agent.getAccessType(), agent.getApiKey() != null);
         if (role == AgentRole.EXECUTOR) {
             agentMcpServerService.enableDefaultsForAgent(agent.getId());
         }
@@ -101,10 +101,10 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
     public String resetApiKey(Long agentId) {
         Agent agent = getById(agentId);
         if (agent == null) throw new BizException("Agent 不存在: " + agentId);
-        String newKey = "ak_" + generateRandomHex(32);
+        String newKey = issueConsumerToken();
         agent.setApiKey(newKey);
         updateById(agent);
-        log.info("Agent API Key 重置: id={}", agentId);
+        log.info("Agent 工牌 consumerToken 重置: id={}", agentId);
         return newKey;
     }
 
@@ -498,6 +498,16 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
     // ══════════════════════════════════════════════════════════════
     //  Util
     // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 下发 Agent 工牌 consumerToken。
+     *
+     * <p>T2 语义收口后，`agent.api_key` 保持字段名不变，但含义升级为 consumerToken。
+     * 真实 LLM 凭证不得再落在该字段。</p>
+     */
+    private String issueConsumerToken() {
+        return "ak_" + generateRandomHex(32);
+    }
 
     private String generateRandomHex(int length) {
         byte[] bytes = new byte[length / 2];

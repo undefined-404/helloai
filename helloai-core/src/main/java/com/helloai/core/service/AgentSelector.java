@@ -58,7 +58,8 @@ public class AgentSelector {
         return candidates.stream()
                 .filter(a -> !a.getId().equals(excludeAgentId))
                 .filter(a -> a.getOnlineStatus() != AgentOnlineStatus.SLEEPING)
-                .filter(a -> a.getOnlineStatus() != AgentOnlineStatus.OFFLINE)
+                .filter(a -> a.getOnlineStatus() != AgentOnlineStatus.OFFLINE
+                        || (a.getAccessType() != null && !a.getAccessType().requiresRuntimeLiveness()))
                 .filter(a -> a.getStatus() == AgentStatus.ACTIVE)
                 .filter(this::isCircuitClosed)
                 .max(Comparator.comparing(Agent::getScore, Comparator.nullsFirst(Comparator.naturalOrder())))

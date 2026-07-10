@@ -13,10 +13,11 @@
 
 1. **查收件箱** → `GET {{BASE_URL}}/api/agent/inbox`
 2. **获取最新规则** → `GET {{BASE_URL}}/api/rules/merged`（必须执行）
-3. **异常处理** → 检查 blocked 子任务并重新分配
-4. **进度监控** → 检查各任务下子任务的执行状态
-5. **待分配处理** → 为 PENDING 子任务指派 Agent
-6. **收尾交付** → 所有子任务 DONE 时将任务标记为 DONE
+3. **按任务计划节点回看参考实现**：涉及调度、执行链、结果回写时，回看 `E:\workspace\AgentTeams-main` 相关源码，确保没有偏离开发初衷
+4. **异常处理** → 检查 blocked 子任务并重新分配
+5. **进度监控** → 检查各任务下子任务的执行状态
+6. **待分配处理** → 为 PENDING 子任务指派 Agent
+7. **收尾交付** → 所有子任务 DONE 时将任务标记为 DONE
 
 ## API 端点参考
 
@@ -24,7 +25,7 @@
 ```bash
 curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox
 curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox/count
-curl -X PUT -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox/<消息ID>/read
+curl -X PUT -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox/read/<消息ID>
 ```
 
 ### 规则
@@ -50,7 +51,7 @@ curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/tasks/<任务ID>
 curl -X PUT -H "Authorization: Bearer <API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{"status":"CANCELLED"}' \
-  {{BASE_URL}}/api/tasks/<任务ID>/status
+  {{BASE_URL}}/api/tasks/status/<任务ID>
 ```
 
 ### 模块管理
@@ -86,11 +87,11 @@ curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/<子任务I
 curl -X POST -H "Authorization: Bearer <API_KEY>" \
   -H "Content-Type: application/json" \
   -d '{"agentId":<新AgentID>}' \
-  {{BASE_URL}}/api/sub-tasks/<子任务ID>/reassign
+  {{BASE_URL}}/api/sub-tasks/reassign/<子任务ID>
 
 # 暂停 / 恢复
-curl -X POST -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/<子任务ID>/pause
-curl -X POST -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/<子任务ID>/resume
+curl -X POST -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/pause/<子任务ID>
+curl -X POST -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/resume/<子任务ID>
 
 # 取消子任务
 curl -X POST -H "Authorization: Bearer <API_KEY>" \

@@ -1,15 +1,21 @@
 package com.helloai.job.task;
 
+import com.helloai.common.base.BizException;
+import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.entity.AgentExecutionRecord;
+import com.helloai.core.entity.SubTask;
 import com.helloai.core.mapper.AgentExecutionRecordMapper;
+import com.helloai.core.service.AgentExecutionRecordService;
+import com.helloai.core.service.ExecutionResultHandler;
 import com.helloai.core.service.SubTaskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
 import java.time.OffsetDateTime;
@@ -22,12 +28,14 @@ import java.util.concurrent.TimeUnit;
 public class ExecutionCompensationTask {
 
     private final AgentExecutionRecordMapper executionRecordMapper;
+    private final AgentExecutionRecordService agentExecutionRecordService;
+    private final ExecutionResultHandler executionResultHandler;
     private final SubTaskService subTaskService;
+    private final AgentExecutionProperties executionProperties;
+    private final TransactionTemplate transactionTemplate;
     private final StringRedisTemplate redis;
 
     private static final String LOCK_KEY = "scheduler:lock:ExecutionComp";
-    private static final Duration PENDING_TIMEOUT = Duration.ofMinutes(5);
-    private static final Duration RUNNING_TIMEOUT = Duration.ofMinutes(10);
 
     @Scheduled(fixedRate = 30000)
     public void compensate() {
@@ -35,39 +43,30 @@ public class ExecutionCompensationTask {
 
         try {
             OffsetDateTime now = OffsetDateTime.now();
+            Duration pendingTimeout = Duration.ofMinutes(executionProperties.getPendingTimeoutMinutes());
+            Duration runningTimeout = Duration.ofMinutes(executionProperties.getRunningTimeoutMinutes());
 
             List<AgentExecutionRecord> pendingStuck = executionRecordMapper
-                    .selectByStatusAndCreateTimeBefore(ExecutionStatus.PENDING, now.minus(PENDING_TIMEOUT));
+                    .selectByStatusAndCreateTimeBefore(ExecutionStatus.PENDING, now.minus(pendingTimeout));
 
             for (AgentExecutionRecord record : pendingStuck) {
-                log.warn("Execution PENDING timeout, BLOCKED: eventId={}, subTaskId={}",
+                log.warn("Execution PENDING timeout: eventId={}, subTaskId={}",
                         record.getEventId(), record.getSubTaskId());
-
-                executionRecordMapper.updateStatus(record.getId(), ExecutionStatus.FAILED,
+                compensateRecordAtomically(
+                        record,
                         "PENDING timeout: ACK lost or JVM crash before execution");
-
-                try {
-                    subTaskService.changeStatus(record.getSubTaskId(), SubTaskStatus.BLOCKED, null);
-                } catch (Exception e) {
-                    log.error("触发 BLOCKED 失败: subTaskId={}", record.getSubTaskId(), e);
-                }
             }
 
             List<AgentExecutionRecord> runningStuck = executionRecordMapper
-                    .selectByStatusAndStartTimeBefore(ExecutionStatus.RUNNING, now.minus(RUNNING_TIMEOUT));
+                    .selectByStatusAndStartTimeBefore(ExecutionStatus.RUNNING, now.minus(runningTimeout));
 
             for (AgentExecutionRecord record : runningStuck) {
                 log.error("Execution RUNNING timeout: eventId={}, subTaskId={}",
                         record.getEventId(), record.getSubTaskId());
-
-                executionRecordMapper.updateStatus(record.getId(), ExecutionStatus.TIMEOUT,
-                        "RUNNING timeout: AI execution exceeded 10 minutes");
-
-                try {
-                    subTaskService.changeStatus(record.getSubTaskId(), SubTaskStatus.BLOCKED, null);
-                } catch (Exception e) {
-                    log.error("触发 BLOCKED 失败: subTaskId={}", record.getSubTaskId(), e);
-                }
+                compensateRecordAtomically(
+                        record,
+                        "RUNNING timeout: execution exceeded "
+                                + executionProperties.getRunningTimeoutMinutes() + " minutes");
             }
 
             if (!pendingStuck.isEmpty() || !runningStuck.isEmpty()) {
@@ -77,6 +76,27 @@ public class ExecutionCompensationTask {
 
         } finally {
             unlock();
+        }
+    }
+
+    private void compensateRecordAtomically(AgentExecutionRecord record, String errorMessage) {
+        try {
+            transactionTemplate.executeWithoutResult(status -> {
+                if (!agentExecutionRecordService.markTimeout(record.getId())) {
+                    return;
+                }
+
+                SubTask subTask = subTaskService.getById(record.getSubTaskId());
+                if (subTask != null && subTask.getStatus() == SubTaskStatus.IN_PROGRESS) {
+                    executionResultHandler.handleFailure(
+                            record.getSubTaskId(),
+                            null,
+                            new BizException(errorMessage));
+                }
+            });
+        } catch (Exception e) {
+            log.error("执行记录超时补偿失败: recordId={}, subTaskId={}",
+                    record.getId(), record.getSubTaskId(), e);
         }
     }
 

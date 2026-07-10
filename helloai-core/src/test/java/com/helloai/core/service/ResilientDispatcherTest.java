@@ -2,6 +2,7 @@ package com.helloai.core.service;
 
 import com.helloai.common.base.AgentUnavailableException;
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
@@ -74,6 +75,7 @@ class ResilientDispatcherTest {
         a.setId(id);
         a.setName("agent-" + id);
         a.setRole(AgentRole.EXECUTOR);
+        a.setAccessType(AgentAccessType.CLI_CLIENT);
         a.setOnlineStatus(AgentOnlineStatus.ONLINE);
         a.setStatus(AgentStatus.ACTIVE);
         return a;
@@ -113,6 +115,19 @@ class ResilientDispatcherTest {
                     .isInstanceOf(AgentUnavailableException.class)
                     .hasMessageContaining("OFFLINE");
         }
+
+        @Test
+        @DisplayName("API_KEY_LLM 默认 OFFLINE 也允许调度")
+        void shouldAllowOfflineApiKeyLlmAgent() {
+            Agent apiAgent = onlineAgent(1L);
+            apiAgent.setAccessType(AgentAccessType.API_KEY_LLM);
+            apiAgent.setOnlineStatus(AgentOnlineStatus.OFFLINE);
+            when(agentService.getById(1L)).thenReturn(apiAgent);
+
+            resilientDispatcher.assignNext(1L, 100L);
+
+            verify(subTaskService).assignNext(eq(1L), eq(100L));
+        }
     }
 
     @Nested
@@ -126,6 +141,25 @@ class ResilientDispatcherTest {
             when(agentService.getById(1L)).thenReturn(online);
 
             resilientDispatcher.assignNext(1L, 100L);
+
+            verify(subTaskService).assignNext(eq(1L), eq(100L));
+        }
+
+        @Test
+        @DisplayName("缺少 agentDispatch 模板配置时回退默认配置")
+        void shouldFallbackToDefaultRegistryConfigWhenNamedTemplateMissing() {
+            CircuitBreakerRegistry registryWithoutNamedConfig = CircuitBreakerRegistry.of(
+                    CircuitBreakerConfig.ofDefaults());
+            ResilientDispatcher dispatcherWithoutNamedConfig = new ResilientDispatcher(
+                    registryWithoutNamedConfig,
+                    eventRecorder,
+                    subTaskService,
+                    agentService,
+                    agentSelector);
+            Agent online = onlineAgent(1L);
+            when(agentService.getById(1L)).thenReturn(online);
+
+            dispatcherWithoutNamedConfig.assignNext(1L, 100L);
 
             verify(subTaskService).assignNext(eq(1L), eq(100L));
         }
