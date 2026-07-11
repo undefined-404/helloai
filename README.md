@@ -45,7 +45,11 @@ helloai/                          # 多模块 Maven 工程
 └── doc/                          # 项目文档
     ├── HelloAI_项目基线文档.md
     ├── HelloAI_实现差距表.md
-    └── HelloAI_迭代执行记录.md
+    ├── HelloAI_迭代执行记录.md
+    ├── HelloAI_调度解耦重构分析.md
+    ├── HelloAI_执行链路架构分析.md
+    ├── HelloAI_架构设计参考.md
+    └── HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4_archived.md
 ```
 
 #### 安装教程
@@ -94,12 +98,22 @@ npm run dev
 - 已在 macOS 下完成 `verify-mcp-auth.sh` + `verify-mcp-e2e.sh` 主链路回归
 - Windows 下原 `verify-mcp-auth.ps1` + `verify-mcp-e2e.ps1` 保留为兼容验证入口
 
+**MCP 通道与工具口径**
+
+- 主通道：MCP SSE（`/mcp/sse` + `/mcp/messages`）是唯一主通道
+- 兼容通道：`McpController` 的 REST `tools/list` / `tools/call` 属于兼容保留（计划逐步标记 deprecated，详见差距表 D2）
+- 工具数量：不在 README 写死数量；以 `tools/list` 返回为准（详见差距表 D1/N3）
+- 心跳刷新：`last_seen_at`/在线态刷新以 `heartbeat` 为主；是否将 pull/ack 也计入活跃需代码配合再升级（详见差距表 D6）
+
 **文档导航**
 
 - 项目基线：[`doc/HelloAI_项目基线文档.md`](doc/HelloAI_项目基线文档.md)
 - 实现差距：[`doc/HelloAI_实现差距表.md`](doc/HelloAI_实现差距表.md)
 - 迭代执行记录：[`doc/HelloAI_迭代执行记录.md`](doc/HelloAI_迭代执行记录.md)
-- 历史路线图（归档参考）：[`doc/HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4.md`](doc/HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4.md)
+- 调度架构分析：[`doc/HelloAI_调度解耦重构分析.md`](doc/HelloAI_调度解耦重构分析.md)
+- 执行链路分析：[`doc/HelloAI_执行链路架构分析.md`](doc/HelloAI_执行链路架构分析.md)
+- 架构设计参考：[`doc/HelloAI_架构设计参考.md`](doc/HelloAI_架构设计参考.md)
+- 历史路线图（归档参考）：[`doc/HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4_archived.md`](doc/HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4_archived.md)
 - 历史技术方案（归档参考）：[`doc/HelloAI_技术方案与补齐清单_v1.1.md`](doc/HelloAI_技术方案与补齐清单_v1.1.md)
 - EXECUTOR 接入指南：[`.executor-onboarding.md`](.executor-onboarding.md)
 - 设计系统：[`DESIGN.md`](DESIGN.md)

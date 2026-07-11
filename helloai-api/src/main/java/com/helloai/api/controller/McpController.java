@@ -27,7 +27,7 @@ import java.util.Map;
  * </ul>
  * 鉴权从 {@link com.helloai.core.mcp.McpAuthFilter McpAuthFilter} 接入（POST /mcp/messages）。<br>
  * 业务实现：{@link com.helloai.core.mcp.McpMcpServer}（spring-ai {@code @Tool} 注解方法）。<br>
- * 本类仅作为兼容旧客户端保留，<b>不再演进</b>，预计 v3.0 移除。
+ * 本类仅作为兼容旧客户端保留，<b>不再演进</b>，预计下个大版本移除。
  *
  * @deprecated since 2.4 — 改用 spring-ai MCP Server SSE 通道（{@code /mcp/sse} + {@code /mcp/messages}）
  */

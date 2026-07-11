@@ -29,13 +29,13 @@
 
 | 维度 | OpenMOSS | HelloAI |
 |------|----------|---------|
-| 后端语言 | Python 3 / FastAPI | Java 17 / Spring Boot 3.2 |
-| ORM | SQLAlchemy | MyBatis-Plus 3.5.6 |
+| 后端语言 | Python 3 / FastAPI | Java 17 / Spring Boot 3.4.x |
+| ORM | SQLAlchemy | MyBatis-Plus 3.5.x |
 | 数据库 | SQLite | PostgreSQL 16 |
 | ID 类型 | `String` (UUID v4) | `Long` (雪花算法) |
 | 认证方式 | `X-Admin-Token` / `Bearer <api_key>` | 相同（已对齐） |
 | 统一响应 | FastAPI JSON | `R<T>` (code+msg+data+traceId) |
-| CLI 工具 | `skills/task-cli.py` (847 行) | `helloai-core/.../scripts/task-cli.py` (280 行) |
+| CLI 工具 | `skills/task-cli.py` (847 行) | classpath `scripts/task-cli.py`（由 `ToolsController` 提供下载） |
 | CLI 版本管理 | `config.yaml` 中 `cli_version` | `ToolsController` 中硬编码 `CLI_VERSION = "2"` |
 | Web 前端 | Vue SPA (static 目录，源码不在仓库) | Vue 3 + Element Plus (`helloai-ui/`) |
 

@@ -5,7 +5,7 @@
 #### Introduction
 
 - **HelloAI** is an AI Agent management platform built on the Spring AI MCP protocol. It enables administrators to onboard Agents, orchestrate tasks, monitor performance, and evaluate quality from a single dashboard.
-- The platform communicates with Agents via **MCP SSE** (`/mcp/sse`) and exposes standard tools: `pullTasks` / `ack` / `heartbeat` / `uploadArtifact` / `getAgentStatus` / `claimSubTask`.
+- The platform communicates with Agents via **MCP SSE** (`/mcp/sse`). Tool count is intentionally not hard-coded here; treat `tools/list` output as the source of truth.
 - Runtime red-line: **JDK 17**. No Spring AI 2.0 / Spring Boot 4.0 upgrades unless the project explicitly opens a JDK upgrade window.
 
 Supported Agent types (examples):
@@ -22,7 +22,7 @@ Supported Agent types (examples):
 |---|---|---|
 | Runtime | JDK | **17** (project red-line, permanently locked) |
 | Backend framework | Spring Boot | **3.4.10** |
-| AI protocol | spring-ai | **1.1.0** (permanent stable baseline) |
+| AI protocol | spring-ai | **1.1.8** (current runtime baseline) |
 | MCP SDK | mcp-sdk | 0.16.0 |
 | Persistence | PostgreSQL + MyBatis-Plus + Flyway | — |
 | Cache | Redis (Lettuce) | — |
@@ -43,7 +43,13 @@ helloai/                          # Multi-module Maven project
 ├── helloai-start/                # Application bootstrap + application.yml + Flyway
 ├── helloai-ui/                   # Frontend (Vue 3 SPA)
 └── doc/                          # Docs
-    └── HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4.md
+    ├── HelloAI_项目基线文档.md
+    ├── HelloAI_实现差距表.md
+    ├── HelloAI_迭代执行记录.md
+    ├── HelloAI_调度解耦重构分析.md
+    ├── HelloAI_执行链路架构分析.md
+    ├── HelloAI_架构设计参考.md
+    └── HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4_archived.md
 ```
 
 #### Installation
@@ -86,7 +92,13 @@ After backend startup:
 
 **Documentation**
 
-- Roadmap: [`doc/HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4.md`](doc/HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4.md)
+- Baseline: [`doc/HelloAI_项目基线文档.md`](doc/HelloAI_项目基线文档.md)
+- Gap analysis: [`doc/HelloAI_实现差距表.md`](doc/HelloAI_实现差距表.md)
+- Iteration record: [`doc/HelloAI_迭代执行记录.md`](doc/HelloAI_迭代执行记录.md)
+- Scheduling refactor analysis: [`doc/HelloAI_调度解耦重构分析.md`](doc/HelloAI_调度解耦重构分析.md)
+- Execution chain analysis: [`doc/HelloAI_执行链路架构分析.md`](doc/HelloAI_执行链路架构分析.md)
+- Architecture reference: [`doc/HelloAI_架构设计参考.md`](doc/HelloAI_架构设计参考.md)
+- Archived roadmap: [`doc/HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4_archived.md`](doc/HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4_archived.md)
 - EXECUTOR onboarding: [`.executor-onboarding.md`](.executor-onboarding.md)
 - Design system: [`DESIGN.md`](DESIGN.md)
 - Product definition: [`PRODUCT.md`](PRODUCT.md)
@@ -102,7 +114,7 @@ After backend startup:
 
 1. Chinese README: [`README.md`](README.md)
 2. Regression scripts are the source of truth: `verify-mcp-auth.ps1` / `verify-mcp-e2e.ps1`
-3. Start with the roadmap before diving into code
+3. Start with the baseline and gap analysis before diving into code
 
 #### License
 

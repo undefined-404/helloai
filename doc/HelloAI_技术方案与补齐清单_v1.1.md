@@ -44,7 +44,7 @@
 
 | 原则 | 说明 |
 |------|------|
-| **Agent 不消费 MQ** | MQ 是平台内部事件总线。Agent 永远只通过 HTTP API 与平台交互 |
+| **Agent 不直连 MQ** | MQ 是平台内部事件总线（Outbox → MQ → Consumer → Inbox/状态收敛）。外部 Agent 仍只通过 HTTP/MCP 与平台交互 |
 | **数据库是唯一事实源** | 任务详情、对话历史、附件、规则全部从 DB 通过 HTTP API 拉取 |
 | **平台不关心 Agent 运行时类型** | 只认 API Key + HTTP，无论 Claude Code / Qoder / OpenClaw 均等对待 |
 
@@ -122,18 +122,18 @@ Agent 拿到消息 → HTTP API → 从 DB 拉完整上下文
 | `AgentOutboxService` | helloai-core/service/ | 状态变更后写 Outbox 事件，含 `resolveRoutingKey()` 逻辑 |
 | `ReviewService` | helloai-core/service/ | 创建审查 → 调用 `SubTaskService.changeStatus()` → 调用 `RewardService.addReward()` |
 | `RewardService` | helloai-core/service/ | `addReward(agentId, reason, delta, subTaskId)` |
-| `ImplicitScoreCalculator` | helloai-core/service/score/ | `@Component`，`calculate()` 返回 `ScoreResult`。**当前未被任何 Service 调用** |
+| `ImplicitScoreCalculator` | helloai-core/service/score/ | `@Component`，`calculate()` 返回 `ScoreResult`。是否接入主链以当前代码与差距表结论为准 |
 | `RabbitMQConfig` | helloai-mq/config/ | 已有 4 个角色队列 + DLX。需新增 1 个通知队列 |
 | `AuthInterceptor` | helloai-api/interceptor/ | 拦截 `/api/**`，验证 `X-Admin-Token` 或 `Authorization: Bearer` |
 | `WebMvcConfig` | helloai-api/config/ | 注册拦截器，排除无需认证的路径 |
 | `AgentConfigProperties` | helloai-common/config/ | `registrationToken` + `allowRegistration` |
 | `SubTask` (Entity) | helloai-core/entity/ | 含 `deliverable`, `acceptance`, `priority`, `reworkCount`, `completedAt`, `@Version` |
-| `Agent` (Entity) | helloai-core/entity/ | 含 `modelType`。需增加 `modelConfig`, `specializationSlug` |
+| `Agent` (Entity) | helloai-core/entity/ | 字段以当前 `V1__init_all.sql` 与实体类为准（含 accessType/capabilities/labels/在线态三件套等） |
 | `ToolsController` | helloai-api/controller/ | `GET /api/tools/cli`。需增强：运行时替换 BASE_URL |
 | `SetupController` | helloai-api/controller/ | `GET /api/setup/status`, `POST /api/setup/initialize` |
 | `HealthController` | helloai-api/controller/ | `GET /api/health` |
 | `AdminInitializer` | helloai-start/config/ | `CommandLineRunner`，创建默认 admin 用户 |
-| `AgentHealthCheckTask` | helloai-job/task/ | 已有骨架，需补充具体逻辑 |
+| `AgentHealthCheckTask` | helloai-job/task/ | 是否为“骨架/已落地”以当前代码与差距表结论为准 |
 
 ### 2.2 新增组件与现有组件的集成点
 
