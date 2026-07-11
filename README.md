@@ -49,7 +49,7 @@ helloai/                          # 多模块 Maven 工程
     ├── HelloAI_调度解耦重构分析.md
     ├── HelloAI_执行链路架构分析.md
     ├── HelloAI_架构设计参考.md
-    └── HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4_archived.md
+    └── HelloAI_外部项目借鉴技术细节.md
 ```
 
 #### 安装教程
@@ -113,8 +113,7 @@ npm run dev
 - 调度架构分析：[`doc/HelloAI_调度解耦重构分析.md`](doc/HelloAI_调度解耦重构分析.md)
 - 执行链路分析：[`doc/HelloAI_执行链路架构分析.md`](doc/HelloAI_执行链路架构分析.md)
 - 架构设计参考：[`doc/HelloAI_架构设计参考.md`](doc/HelloAI_架构设计参考.md)
-- 历史路线图（归档参考）：[`doc/HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4_archived.md`](doc/HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4_archived.md)
-- 历史技术方案（归档参考）：[`doc/HelloAI_技术方案与补齐清单_v1.1.md`](doc/HelloAI_技术方案与补齐清单_v1.1.md)
+- 外部项目借鉴技术细节：[`doc/HelloAI_外部项目借鉴技术细节.md`](doc/HelloAI_外部项目借鉴技术细节.md)
 - EXECUTOR 接入指南：[`.executor-onboarding.md`](.executor-onboarding.md)
 - 设计系统：[`DESIGN.md`](DESIGN.md)
 - 产品定义：[`PRODUCT.md`](PRODUCT.md)

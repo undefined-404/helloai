@@ -49,7 +49,7 @@ helloai/                          # Multi-module Maven project
     ├── HelloAI_调度解耦重构分析.md
     ├── HelloAI_执行链路架构分析.md
     ├── HelloAI_架构设计参考.md
-    └── HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4_archived.md
+    └── HelloAI_外部项目借鉴技术细节.md
 ```
 
 #### Installation
@@ -98,7 +98,7 @@ After backend startup:
 - Scheduling refactor analysis: [`doc/HelloAI_调度解耦重构分析.md`](doc/HelloAI_调度解耦重构分析.md)
 - Execution chain analysis: [`doc/HelloAI_执行链路架构分析.md`](doc/HelloAI_执行链路架构分析.md)
 - Architecture reference: [`doc/HelloAI_架构设计参考.md`](doc/HelloAI_架构设计参考.md)
-- Archived roadmap: [`doc/HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4_archived.md`](doc/HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4_archived.md)
+- External project reference details: [`doc/HelloAI_外部项目借鉴技术细节.md`](doc/HelloAI_外部项目借鉴技术细节.md)
 - EXECUTOR onboarding: [`.executor-onboarding.md`](.executor-onboarding.md)
 - Design system: [`DESIGN.md`](DESIGN.md)
 - Product definition: [`PRODUCT.md`](PRODUCT.md)

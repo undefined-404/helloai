@@ -13,7 +13,7 @@ Before editing code in this repository, read these documents first:
 3. `doc/HelloAI_迭代执行记录.md`
 4. `doc/HelloAI_调度解耦重构分析.md`
 5. `doc/HelloAI_CODE_STYLE.md`
-6. `doc/HelloAI_Agent接入内容生成功能开发清单_v2.0.md`
+6. `doc/HelloAI_架构设计参考.md`
 
 ### Why These Documents Matter
 
@@ -27,8 +27,8 @@ Before editing code in this repository, read these documents first:
   - Defines the current scheduling refactor direction and the alignment target against `E:\workspace\AgentTeams-main`.
 - `HelloAI_CODE_STYLE.md`
   - Defines the code style and engineering conventions that must be followed.
-- `HelloAI_Agent接入内容生成功能开发清单_v2.0.md`
-  - Provides project-wide development planning context, scope, and technical direction for Agent-related work.
+- `HelloAI_架构设计参考.md`
+  - Defines design philosophy, reference sources, core concepts, and target-state directions for the platform architecture.
 
 ### Mandatory Working Rules
 
