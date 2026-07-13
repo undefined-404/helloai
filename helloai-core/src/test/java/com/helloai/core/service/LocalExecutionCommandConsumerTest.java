@@ -57,6 +57,7 @@ class LocalExecutionCommandConsumerTest {
                 .build();
 
         when(agentExecutionRecordService.markRunning(44L)).thenReturn(true);
+        when(agentExecutionRecordService.markSuccess(44L)).thenReturn(true);
         localExecutionCommandConsumer.onCommandCreated(new ExecutionCommandCreatedEvent(command));
 
         verify(agentExecutionRecordService).markRunning(44L);
@@ -89,6 +90,7 @@ class LocalExecutionCommandConsumerTest {
                 .build();
 
         when(agentExecutionRecordService.markRunning(44L)).thenReturn(true);
+        when(agentExecutionRecordService.markFailed(44L, "exec failed")).thenReturn(true);
         doThrow(new BizException("exec failed")).when(subTaskExecutionService).executeCommand(command);
 
         // P1 修复后：consume 不再 rethrow，无需 try/catch

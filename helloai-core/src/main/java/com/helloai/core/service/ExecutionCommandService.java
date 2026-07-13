@@ -52,6 +52,8 @@ public class ExecutionCommandService {
                     + ", commandAgent=" + agentId);
         }
         if (agentExecutionRecordService.hasPendingOrRunning(subTaskId)) {
+            log.warn("跳过创建执行命令：子任务已有进行中的执行记录: subTaskId={}, agentId={}, trigger={}",
+                    subTaskId, agentId, trigger);
             throw new BizException("子任务已有进行中的执行记录: " + subTaskId);
         }
         Agent agent = agentService.getById(agentId);

@@ -288,3 +288,77 @@
 
 - 本轮为单元测试（Mockito），未覆盖集成测试（需要真实 DB + 并发线程）
 - SubTaskExecutionService.executeOnce() 的编排-执行-回写混合结构未在本轮拆分
+
+---
+
+### 2026-07-13 P2 测试验证——4 类 7 个单元测试全部通过
+
+#### 1. 范围
+
+- 在 IDEA 中手动执行本轮 P1/P2 涉及的全部单元测试，验证无编译错误、无逻辑缺陷
+- 修复构建过程中暴露的 BOM 字符、缺失 import、mock 返回值不完整等问题
+- 为防重拦截路径补充可观测日志
+
+#### 2. 实际落地
+
+- **ExecutionResultHandlerTest（4 个测试 ✅）**
+  - `shouldHandleSuccess`：IN_PROGRESS 状态正常推进 REVIEW
+  - `shouldHandleFailure`：IN_PROGRESS 状态正常推进 BLOCKED
+  - `shouldNotReviveSubTaskWhenStatusIsBlocked`（P2-2）：BLOCKED 状态下不调用 submit、不覆写 context、记录 discarded 事件——日志输出 `跳过 handleSuccess：子任务状态已非 IN_PROGRESS`
+  - `shouldNotBlockWhenStatusIsNotInProgress`（P2-3）：BLOCKED 状态下不重复调用 block，仍记录失败 timeline
+
+- **ExecutionCommandServiceTest（3 个测试 ✅）**
+  - `shouldCreateExecutionCommandAndPublishEvent`：正常创建命令并发布事件——日志输出 `执行命令已创建`
+  - `shouldRejectWhenPendingOrRunningRecordExists`：已有进行中记录时抛 BizException——日志输出 `跳过创建执行命令：子任务已有进行中的执行记录`
+  - `shouldUseBothRowLockAndHasPendingOrRunningForDuplicatePrevention`（P2-1）：验证 getByIdForUpdate（行锁）先于 hasPendingOrRunning（应用层检查）调用
+
+- **LocalExecutionCommandConsumerTest（3 个测试 ✅）**
+  - `shouldConsumeWhenCommandCreatedEventArrives`：正常消费并 markSuccess
+  - `shouldMarkFailedWhenConsumeThrowsException`：异常路径 markFailed（P1 后 consume 不再 rethrow，异常由内部 log.error 记录）
+  - `shouldSkipExecutionWhenMarkRunningReturnsFalse`：markRunning CAS 失败时提前 return——日志输出 `跳过执行(记录已非 PENDING)`
+
+- **ExecutionCompensationTaskTest（3 个测试 ✅）**
+  - `shouldMarkPendingTimeoutWithoutBlockingWhenSubTaskNotInProgress`：PENDING 超时 + subTask=ASSIGNED → 仅标记 TIMEOUT，不调用 handleFailure
+  - `shouldHandleFailureWhenRunningRecordTimesOut`：RUNNING 超时 + subTask=IN_PROGRESS → markTimeout + handleFailure 推进 BLOCKED
+  - `shouldIgnoreWhenNoTimedOutRecords`：无超时记录时不触发任何补偿动作
+
+- **构建问题修复**
+  - 4 个 Java 文件带 UTF-8 BOM（`﻿`）：移除前 3 字节
+  - `ExecutionResultHandlerTest` 缺失 `import static org.mockito.Mockito.never`：补上
+  - `LocalExecutionCommandConsumerTest` 中 `markSuccess`/`markFailed` mock 未设返回值导致输出"被拒绝" warn：补上 `thenReturn(true)`
+  - `ExecutionCommandService` 防重拦截路径缺日志：新增 `log.warn`
+
+#### 3. 影响
+
+- 代码变化：
+  - `ExecutionCommandService.java`（+1 行 log.warn）
+  - `ExecutionResultHandlerTest.java`（+1 行 import）
+  - `LocalExecutionCommandConsumerTest.java`（+2 行 mock 返回值）
+  - 4 个文件去除 BOM（内容无变化）
+- 测试结果：4 类共 13 个单元测试全部通过，exit code 0
+
+#### 4. 遗留
+
+- 未覆盖集成测试（需要真实 DB + 并发线程模拟补偿 vs consumer 真实竞态）
+- `ExecutionCompensationTaskTest` 已验证补偿任务的 CAS + 状态守卫逻辑正确，与 P2 `handleSuccess` 守卫形成"补偿先到 BLOCKED / consumer 后到不复活"的双向保护闭环
+
+#### 5. 可复现验证
+
+执行以下命令可复现本轮全部测试：
+
+```bash
+# helloai-core 模块（P1/P2 涉及的 3 个测试类，共 10 个用例）
+mvn test -pl helloai-core -Dtest="ExecutionResultHandlerTest,ExecutionCommandServiceTest,LocalExecutionCommandConsumerTest"
+
+# helloai-job 模块（补偿任务，3 个用例）
+mvn test -pl helloai-job -Dtest="ExecutionCompensationTaskTest"
+```
+
+或指定完整类名：
+
+| 测试类 | 用例数 | 验证重点 |
+|--------|--------|----------|
+| `com.helloai.core.service.ExecutionResultHandlerTest` | 4 | handleSuccess 守卫（P2-2）、handleFailure 不重复 block（P2-3） |
+| `com.helloai.core.service.ExecutionCommandServiceTest` | 3 | 命令创建 + 行锁+应用层双重防重（P2-1） |
+| `com.helloai.core.service.LocalExecutionCommandConsumerTest` | 3 | consume 不再 rethrow（P1）、markRunning CAS 跳过 |
+| `com.helloai.job.task.ExecutionCompensationTaskTest` | 3 | 补偿 markTimeout CAS + handleFailure 状态守卫 |
