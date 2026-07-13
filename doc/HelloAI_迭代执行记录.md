@@ -186,3 +186,105 @@
 #### 5. 遗留
 
 - 若后续新增面向 Codex 的本地 skills 目录，应继续沿用 `.agents/skills/helloai-preflight` 作为母版
+
+
+### 2026-07-13 P0 文档失真关闭——D1/D2/D5/D6
+
+#### 1. 范围
+
+- 关闭实现差距表中全部四项文档失真（D1/D2/D5/D6）
+- 同步收口 N3（MCP Server 工具集口径）
+
+#### 2. 实际落地
+
+- **D1（MCP 工具数量口径）**：确认 README 已明确 "工具数量不写死，以 	ools/list 实际输出为准"，关闭
+- **D2（兼容通道定位）**：确认 README 已明确 "MCP SSE 是唯一主通道，REST 	ools/list / 	ools/call 属兼容保留"，关闭
+- **D5（/api/tools/cli 鉴权口径）**：代码验证——WebMvcConfig 中 /api/tools/cli 已通过 excludePathPatterns 排除鉴权（作为 CLI 工具的公开下载入口，设计如此），关闭
+- **D6（心跳刷新规则口径）**：确认 README 已明确 "last_seen_at/在线态刷新以 heartbeat 为主"，关闭
+- 同步将 D1-D7 的状态从 "未关闭/已关闭" 统一为 "✅ 已关闭"
+- 更新 N3 状态：从 "已交付但口径未完全收口" 收口为 "已交付"
+- 更新 Section 5 优先级：将条目 1 标记为已完成
+
+#### 3. 影响
+
+- 对外行为变化：无
+- 文档变化：doc/HelloAI_实现差距表.md（6 行状态修改 + 1 行 N3 修改 + Section 5 更新）
+- 数据结构变化：无
+
+#### 4. 遗留
+
+- N1/N6/N9/N10 仍待推进（属于后续工作）
+- 接近零遗留——本轮是所有文档失真项的最终关闭轮
+---
+
+### 2026-07-13 P1 代码修复——双回写风险 + LLM 调用可观测性
+
+#### 1. 范围
+
+- 修复 LocalExecutionCommandConsumer.consume() catch 块中的双重回写风险
+- 为 SubTaskExecutionService.executeOnce() 增加 LLM 调用前后的可观测 timeline 事件
+
+#### 2. 实际落地
+
+- **修复 1：移除 Consumer 中的 	hrow e**
+  - 原逻辑：catch 中 markFailed() + 	hrow e，导致 executeOnce() 内部的 handleFailure() 和 consumer 的 markFailed() 形成双重回写竞态
+  - 新逻辑：catch 中仅 markFailed()，不再 rethrow，注释说明子任务降级已由内部 handleFailure 完成
+  - 影响文件：helloai-core/.../LocalExecutionCommandConsumer.java（1 行改动）
+
+- **修复 2：增加 LLM 调用前后可观测事件**
+  - 在 platformAgentExecutionService.executeSync() 前后分别记录 sub_task_llm_call_start 和 sub_task_llm_call_end 到 task_timeline
+  - 在异常路径中记录 sub_task_llm_call_failed
+  - 这三个新事件使外部可以区分"卡在执行编排层"还是"卡在 LLM HTTP 调用中"
+  - 影响文件：helloai-core/.../SubTaskExecutionService.java（+9 行）
+
+#### 3. 影响
+
+- 对外行为变化：无（LLM 调用事件仅为观测增强，不影响业务路径）
+- 代码变化：LocalExecutionCommandConsumer.java（语义变更：不再 rethrow）、SubTaskExecutionService.java（新增 timeline 事件）
+- 数据结构变化：	ask_timeline 表新增三种事件类型（sub_task_llm_call_start / sub_task_llm_call_end / sub_task_llm_call_failed）
+
+#### 4. 遗留
+
+- 并发场景回归测试已在 P2 轮次完成
+- SubTaskExecutionService.executeOnce() 的编排-执行-回写混合结构未在本轮解决（属于 Phase 2 WorkUnit 显式建模的范畴）
+
+### 2026-07-13 P2 并发缺陷修复与测试
+
+#### 1. 范围
+
+- 修复 P2-2 揭示的真实并发缺陷：补偿任务将 subTask 推进到 BLOCKED 后，consumer 的 handleSuccess 缺少状态前置检查
+- 补充 P2-1/P2-2/P2-3 三个 Mockito 单元测试
+
+#### 2. 实际落地
+
+- **P2-2 缺陷修复**：在 ExecutionResultHandler.handleSuccess() 中增加状态前置检查
+  - 如果 subTask.status != IN_PROGRESS，不推进到 REVIEW，不覆写 context
+  - 记录 sub_task_execute_result_discarded 事件到 timeline，包含当前状态和 LLM 结果信息
+  - 添加 @Slf4j 注解
+
+- **P2-2 测试**：shouldNotReviveSubTaskWhenStatusIsBlocked
+  - 验证 BLOCKED 状态下 handleSuccess 不调用 submit、不覆写 context、记录 discarded 事件
+
+- **P2-3 测试**：shouldNotBlockWhenStatusIsNotInProgress
+  - 验证 handleFailure 对已是 BLOCKED 的子任务不重复调用 block
+
+- **P2-1 测试**：shouldUseBothRowLockAndHasPendingOrRunningForDuplicatePrevention
+  - 验证 getByIdForUpdate（行锁）和 hasPendingOrRunning（应用层检查）被按序调用
+
+- **P1 测试同步更新**：LocalExecutionCommandConsumerTest.shouldMarkFailedWhenConsumeThrowsException
+  - 移除 try/catch 包装，因为 P1 修复后 consume 不再 rethrow
+
+#### 3. 影响
+
+- 代码变化：
+  - ExecutionResultHandler.java（+状态前置检查 +@Slf4j）
+  - ExecutionResultHandlerTest.java（+2 个测试）
+  - ExecutionCommandServiceTest.java（+1 个测试）
+  - LocalExecutionCommandConsumerTest.java（移除 try/catch）
+- 数据结构变化：	ask_timeline 新增 sub_task_execute_result_discarded 事件类型
+- 对外行为变化：被补偿任务正确 BLOCKED 的子任务不再被 consumer 的迟到结果"干扰"
+
+#### 4. 遗留
+
+- 本轮为单元测试（Mockito），未覆盖集成测试（需要真实 DB + 并发线程）
+- SubTaskExecutionService.executeOnce() 的编排-执行-回写混合结构未在本轮拆分

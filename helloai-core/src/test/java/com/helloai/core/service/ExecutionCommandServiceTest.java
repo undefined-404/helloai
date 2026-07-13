@@ -114,4 +114,36 @@ class ExecutionCommandServiceTest {
                 .isInstanceOf(com.helloai.common.base.BizException.class)
                 .hasMessageContaining("进行中的执行记录");
     }
+
+    @Test
+    @DisplayName("P2-1: 防重保护应同时使用 DB 行锁 + hasPendingOrRunning 双重检查")
+    void shouldUseBothRowLockAndHasPendingOrRunningForDuplicatePrevention() {
+        SubTask subTask = new SubTask();
+        subTask.setId(22L);
+        subTask.setTaskId(33L);
+        subTask.setAssignedAgent(11L);
+
+        Agent agent = new Agent();
+        agent.setId(11L);
+        agent.setRole(AgentRole.EXECUTOR);
+        agent.setAccessType(AgentAccessType.API_KEY_LLM);
+
+        AgentExecutionRecord record = new AgentExecutionRecord();
+        record.setId(44L);
+        record.setSubTaskId(22L);
+        record.setStatus(ExecutionStatus.PENDING);
+
+        // 验证行锁 + 应用层检查都被调用
+        when(subTaskService.getByIdForUpdate(22L)).thenReturn(subTask);
+        when(agentService.getById(11L)).thenReturn(agent);
+        when(agentExecutionRecordService.hasPendingOrRunning(22L)).thenReturn(false);
+        when(agentExecutionRecordService.createPending(any(), any())).thenReturn(record);
+
+        executionCommandService.createAssignedCommand(22L, 11L, "assigned");
+
+        // 确认行锁先于应用层检查
+        var inOrder = org.mockito.Mockito.inOrder(subTaskService, agentExecutionRecordService);
+        inOrder.verify(subTaskService).getByIdForUpdate(22L);
+        inOrder.verify(agentExecutionRecordService).hasPendingOrRunning(22L);
+    }
 }

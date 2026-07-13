@@ -5,6 +5,7 @@ import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.entity.SubTask;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,6 +20,7 @@ import java.util.Map;
  * 让 {@link SubTaskExecutionService} 更聚焦“执行本身”，
  * 后续也便于把结果处理独立挂接到 MQ/轮询消费端。</p>
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ExecutionResultHandler {
@@ -33,6 +35,25 @@ public class ExecutionResultHandler {
             return;
         }
 
+
+        // 防御：如果子任务已被补偿任务推进到 BLOCKED/TIMEOUT，不应继续推进到 REVIEW
+        // 场景：补偿任务在 LLM 调用期间将 subTask 标记为 BLOCKED，
+        //       consumer 拿到 LLM 结果后不应"复活"子任务。
+        if (subTask.getStatus() != SubTaskStatus.IN_PROGRESS) {
+            log.warn("跳过 handleSuccess：子任务状态已非 IN_PROGRESS（可能被补偿任务推进）: subTaskId={}, status={}",
+                    subTaskId, subTask.getStatus());
+            taskTimelineService.recordEvent(
+                    subTask.getTaskId(),
+                    subTaskId,
+                    "sub_task_execute_result_discarded",
+                    AgentRole.EXECUTOR,
+                    agentId,
+                    safeMap(
+                            "reason", "subtask_status_not_in_progress",
+                            "currentStatus", subTask.getStatus().name(),
+                            "llmSuccess", result.isSuccess()));
+            return;
+        }
         Map<String, Object> ctx = new HashMap<>(subTask.getContext() != null ? subTask.getContext() : Map.of());
         Map<String, Object> last = new HashMap<>();
         last.put("at", OffsetDateTime.now().toString());

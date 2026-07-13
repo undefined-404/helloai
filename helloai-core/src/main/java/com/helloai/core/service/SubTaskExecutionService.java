@@ -177,7 +177,15 @@ public class SubTaskExecutionService {
                     "subTaskId", subTaskId,
                     "agentId", agent.getId()
             ));
+            taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_llm_call_start",
+                    AgentRole.EXECUTOR, agent.getId(),
+                    Map.of("agentId", agent.getId(), "agentName", agent.getName()));
             AgentResult result = platformAgentExecutionService.executeSync(agent, task);
+            taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_llm_call_end",
+                    AgentRole.EXECUTOR, agent.getId(),
+                    Map.of("agentId", agent.getId(), "success", result.isSuccess(),
+                            "finishReason", result.getFinishReason(),
+                            "tokens", result.getTokenUsage()));
             executionResultHandler.handleSuccess(subTaskId, agent.getId(), result);
             dbg("sub_task_execute_success", safeMap(
                     "subTaskId", subTaskId,
@@ -187,11 +195,14 @@ public class SubTaskExecutionService {
                     "finishReason", result.getFinishReason()
             ));
             return result;
-        } catch (Exception e) {
+            } catch (Exception e) {
             Throwable root = e;
             while (root.getCause() != null && root.getCause() != root) {
                 root = root.getCause();
             }
+            taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_llm_call_failed",
+                    AgentRole.EXECUTOR, agent.getId(),
+                    Map.of("agentId", agent.getId(), "error", e.getMessage()));
             dbg("sub_task_execute_exception", safeMap(
                     "subTaskId", subTaskId,
                     "agentId", agent.getId(),

@@ -87,7 +87,7 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
             }
             log.error("执行命令消费失败: subTaskId={}, agentId={}, recordId={}",
                     command.getSubTaskId(), command.getAgentId(), command.getRecordId(), e);
-            throw e;
+            // 不再 rethrow：executeOnce() 内部 handleFailure 已将子任务推进到 BLOCKED，本层只需确保执行记录标记 FAILED
         }
     }
 

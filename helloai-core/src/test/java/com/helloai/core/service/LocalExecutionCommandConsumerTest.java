@@ -91,10 +91,10 @@ class LocalExecutionCommandConsumerTest {
         when(agentExecutionRecordService.markRunning(44L)).thenReturn(true);
         doThrow(new BizException("exec failed")).when(subTaskExecutionService).executeCommand(command);
 
-        try {
-            localExecutionCommandConsumer.consume(command);
-        } catch (BizException ignore) {
-        }
+        // P1 修复后：consume 不再 rethrow，无需 try/catch
+        localExecutionCommandConsumer.consume(command);
+
+
 
         verify(agentExecutionRecordService).markRunning(44L);
         verify(subTaskExecutionService).executeCommand(command);
