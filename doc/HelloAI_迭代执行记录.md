@@ -146,3 +146,43 @@
 
 - `doc/HelloAI_当前能力确认矩阵.md` 与《实现差距表》存在部分内容重叠，后续可考虑合并或明确差异边界
 - README 项目结构图中不再列举已删除的历史文档
+
+---
+
+### 2026-07-13 多 Agent Skills / Rules 口径同步
+
+#### 1. 范围
+
+- 将多家 Agent 使用的本地 preflight skill / rule 统一到新的文档矩阵口径
+
+#### 2. 实际落地
+
+- 更新 `.agents/skills/helloai-preflight/SKILL.md`：
+  - 必读文档从 5 份调整为 6 份
+  - 移除已删除的 `HelloAI_Agent接入内容生成功能开发清单_v2.0.md`
+  - 新增 `doc/HelloAI_调度解耦重构分析.md` 与 `doc/HelloAI_架构设计参考.md`
+  - 补充“调度、执行链、异步回写、MQ 解耦优先遵循调度解耦分析”的规则
+- 将上述 preflight skill 同步镜像到：
+  - `.trae/skills/helloai-preflight/SKILL.md`
+  - `.qoder/skills/helloai-preflight/SKILL.md`
+  - `.cursor/skills/helloai-preflight/SKILL.md`
+  - `.claude/skills/helloai-preflight/SKILL.md`
+- 同步更新 `.trae/rules/执行规则.md`，确保 Trae 规则文件与 skill 口径一致
+- 确认 `.codex` 当前只有 `hooks.json`，没有独立本地 skills 目录，因此本轮不新增重复 skill 配置
+
+#### 3. 验证
+
+- 全目录检索确认多家 preflight skill 已不再引用 `v2.0` 开发清单
+- 全目录检索确认多家 preflight skill 已统一引用《调度解耦重构分析》与《架构设计参考》
+- 确认 Trae rule 与共享 preflight skill 文本一致
+
+#### 4. 影响
+
+- 对外行为变化：无
+- 配置变化：
+  - 修改 6 份 preflight skill / rule 文件
+- 数据结构变化：无
+
+#### 5. 遗留
+
+- 若后续新增面向 Codex 的本地 skills 目录，应继续沿用 `.agents/skills/helloai-preflight` 作为母版
