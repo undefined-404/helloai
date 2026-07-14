@@ -39,6 +39,7 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
     private final ImplicitScoreCalculator implicitScoreCalculator;
     private final RewardService rewardService;
     private final ApplicationEventPublisher applicationEventPublisher;
+    private final TaskTimelineService taskTimelineService;
 
     @Transactional(rollbackFor = Exception.class)
     public SubTask create(SubTask subTask, Long assignedAgentId) {
@@ -66,6 +67,11 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
 
     @Transactional(rollbackFor = Exception.class)
     public void changeStatus(Long subTaskId, SubTaskStatus newStatus, Long agentId) {
+        changeStatus(subTaskId, newStatus, agentId, null);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public void changeStatus(Long subTaskId, SubTaskStatus newStatus, Long agentId, Map<String, Object> contextPatch) {
         SubTask subTask = getById(subTaskId);
         if (subTask == null) {
             throw new BizException("子任务不存在: " + subTaskId);
@@ -73,6 +79,12 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
 
         SubTaskStatus oldStatus = subTask.getStatus();
         SubTaskStateMachine.validate(oldStatus, newStatus);
+
+        if (contextPatch != null && !contextPatch.isEmpty()) {
+            Map<String, Object> ctx = new HashMap<>(subTask.getContext() != null ? subTask.getContext() : Map.of());
+            ctx.putAll(contextPatch);
+            subTask.setContext(ctx);
+        }
 
         subTask.setStatus(newStatus);
         if (newStatus == SubTaskStatus.PENDING && agentId == null) {
@@ -213,10 +225,20 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
                     }
                 }
                 case BLOCKED -> {
-                    agentInboxService.send(agentId != null ? agentId : 0L, eventId, "sub_task.blocked",
-                            "任务异常: " + title,
-                            "需要 Planner 排障处理",
-                            "sub_task", subTask.getId(), "URGENT");
+                    String reason = null;
+                    if (subTask.getContext() != null && subTask.getContext().get("blockedReason") instanceof String r) {
+                        reason = r;
+                    }
+                    String summary = reason != null && !reason.isBlank()
+                            ? ("阻塞原因: " + reason)
+                            : "需要 Planner 排障处理";
+                    List<Agent> planners = agentService.listByRole(AgentRole.PLANNER);
+                    for (Agent planner : planners) {
+                        agentInboxService.send(planner.getId(), eventId, "sub_task.blocked",
+                                "任务阻塞: " + title,
+                                summary,
+                                "sub_task", subTask.getId(), "URGENT");
+                    }
                 }
                 case PAUSED -> {
                     if (agentId != null) {
@@ -274,6 +296,11 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
 
     @Transactional(rollbackFor = Exception.class)
     public void block(Long subTaskId) {
+        block(subTaskId, null, null);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public void block(Long subTaskId, String reason, Long reporterAgentId) {
         SubTask subTask = getById(subTaskId);
         if (subTask == null) throw new BizException("子任务不存在: " + subTaskId);
         if (subTask.getStatus() != SubTaskStatus.IN_PROGRESS
@@ -281,7 +308,30 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
                 && subTask.getStatus() != SubTaskStatus.REWORK) {
             throw new BizException("只能对 IN_PROGRESS/ASSIGNED/REWORK 状态的子任务标记 BLOCKED");
         }
-        changeStatus(subTaskId, SubTaskStatus.BLOCKED, null);
+
+        Map<String, Object> patch = new HashMap<>();
+        if (reason != null && !reason.isBlank()) {
+            patch.put("blockedReason", reason);
+        }
+        if (reporterAgentId != null) {
+            patch.put("blockedByAgentId", reporterAgentId);
+        }
+        patch.put("blockedAt", OffsetDateTime.now().toString());
+
+        changeStatus(subTaskId, SubTaskStatus.BLOCKED, null, patch);
+
+        SubTask updated = getById(subTaskId);
+        if (updated != null) {
+            taskTimelineService.recordEvent(
+                    updated.getTaskId(),
+                    updated.getId(),
+                    "sub_task_report_blocked",
+                    AgentRole.EXECUTOR,
+                    reporterAgentId,
+                    Map.of(
+                            "reason", reason != null ? reason : "",
+                            "source", "agent_report"));
+        }
     }
 
     @Transactional(rollbackFor = Exception.class)

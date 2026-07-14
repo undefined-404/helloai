@@ -47,7 +47,7 @@ public class McpController {
     /** GET /api/mcp/tools — 列出当前 Agent 可用的工具 */
     @GetMapping("/tools")
     public R<?> listTools(@RequestAttribute("_authId") Long agentId) {
-        return R.ok(java.util.List.of("pullTasks", "ack", "claimSubTask", "heartbeat", "uploadArtifact", "reportBlocked"));
+        return R.ok(java.util.List.of("pullTasks", "ack", "claimSubTask", "heartbeat", "uploadArtifact", "submitResult", "reportBlocked"));
     }
 
     /** POST /api/mcp/tools/pullTasks */
@@ -110,6 +110,24 @@ public class McpController {
         return R.ok(mcpToolService.uploadArtifact(agentId, subTaskId, fileName, mimeType, fileSize, storageUrl));
     }
 
+    /** POST /api/mcp/tools/submitResult */
+    @PostMapping("/tools/submitResult")
+    public R<SubmitResultResult> submitResult(
+            @RequestAttribute("_authId") Long agentId,
+            @RequestBody Map<String, Object> body) {
+        Long subTaskId = toLong(body.get("subTaskId"));
+        String resultId = (String) body.get("resultId");
+        Boolean success = body.get("success") instanceof Boolean b ? b : null;
+        String output = (String) body.get("output");
+        String error = (String) body.get("error");
+        String finishReason = (String) body.get("finishReason");
+
+        if (subTaskId == null) return R.fail("subTaskId 不能为空");
+        if (success == null) return R.fail("success 不能为空");
+
+        return R.ok(mcpToolService.submitResult(agentId, subTaskId, resultId, success, output, error, finishReason));
+    }
+
     /** POST /api/mcp/tools/reportBlocked */
     @PostMapping("/tools/reportBlocked")
     public R<ReportBlockedResult> reportBlocked(
@@ -150,6 +168,7 @@ public class McpController {
                     Map.of("name", "claimSubTask", "description", "原子认领子任务"),
                     Map.of("name", "heartbeat", "description", "心跳上报"),
                     Map.of("name", "uploadArtifact", "description", "注册产物附件元数据"),
+                    Map.of("name", "submitResult", "description", "上交子任务执行结果"),
                     Map.of("name", "reportBlocked", "description", "上报任务阻塞")
             )));
         }
@@ -211,6 +230,17 @@ public class McpController {
                 if (fileName == null || fileName.isBlank()) throw new BizException("fileName is required");
                 if (storageUrl == null || storageUrl.isBlank()) throw new BizException("storageUrl is required");
                 yield mcpToolService.uploadArtifact(agentId, subTaskId, fileName, mimeType, fileSize, storageUrl);
+            }
+            case "submitResult" -> {
+                Long subTaskId = toLong(args.get("subTaskId"));
+                String resultId = (String) args.get("resultId");
+                Boolean success = args.get("success") instanceof Boolean b ? b : null;
+                String output = (String) args.get("output");
+                String error = (String) args.get("error");
+                String finishReason = (String) args.get("finishReason");
+                if (subTaskId == null) throw new BizException("subTaskId is required");
+                if (success == null) throw new BizException("success is required");
+                yield mcpToolService.submitResult(agentId, subTaskId, resultId, success, output, error, finishReason);
             }
             case "reportBlocked" -> {
                 Long subTaskId = toLong(args.get("subTaskId"));

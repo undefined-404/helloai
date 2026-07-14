@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -28,12 +29,20 @@ public class AgentOutboxService extends ServiceImpl<AgentOutboxEventMapper, Agen
         event.setEventId(UUID.randomUUID().toString().replace("-", ""));
         event.setEventType("sub_task." + newStatus.name().toLowerCase());
         event.setRoutingKey(resolveRoutingKey(subTask, newStatus));
-        event.setPayload(Map.of(
+        Map<String, Object> payload = new HashMap<>(Map.of(
                 "subTaskId", subTask.getId(),
                 "taskId", subTask.getTaskId(),
                 "status", newStatus.name(),
                 "agentId", subTask.getAssignedAgent() != null ? subTask.getAssignedAgent() : 0L
         ));
+        if (newStatus == SubTaskStatus.BLOCKED
+                && subTask.getContext() != null
+                && subTask.getContext().get("blockedReason") instanceof String reason
+                && reason != null
+                && !reason.isBlank()) {
+            payload.put("blockedReason", reason);
+        }
+        event.setPayload(payload);
         event.setStatus(OutboxStatus.PENDING);
         event.setRetryCount(0);
         save(event);

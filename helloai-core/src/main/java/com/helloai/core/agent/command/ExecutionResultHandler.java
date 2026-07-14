@@ -4,6 +4,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.entity.SubTask;
+import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -33,83 +34,142 @@ public class ExecutionResultHandler {
 
     @Transactional(rollbackFor = Exception.class)
     public void handleSuccess(Long subTaskId, Long agentId, AgentResult result) {
-        SubTask subTask = subTaskService.getById(subTaskId);
-        if (subTask == null) {
-            return;
-        }
-
-
-        // 防御：如果子任务已被补偿任务推进到 BLOCKED/TIMEOUT，不应继续推进到 REVIEW
-        // 场景：补偿任务在 LLM 调用期间将 subTask 标记为 BLOCKED，
-        //       consumer 拿到 LLM 结果后不应"复活"子任务。
-        if (subTask.getStatus() != SubTaskStatus.IN_PROGRESS) {
-            log.warn("跳过 handleSuccess：子任务状态已非 IN_PROGRESS（可能被补偿任务推进）: subTaskId={}, status={}",
-                    subTaskId, subTask.getStatus());
-            taskTimelineService.recordEvent(
-                    subTask.getTaskId(),
-                    subTaskId,
-                    "sub_task_execute_result_discarded",
-                    AgentRole.EXECUTOR,
-                    agentId,
-                    safeMap(
-                            "reason", "subtask_status_not_in_progress",
-                            "currentStatus", subTask.getStatus().name(),
-                            "llmSuccess", result.isSuccess()));
-            return;
-        }
-        Map<String, Object> ctx = new HashMap<>(subTask.getContext() != null ? subTask.getContext() : Map.of());
-        Map<String, Object> last = new HashMap<>();
-        last.put("at", OffsetDateTime.now().toString());
-        last.put("agentId", agentId);
-        last.put("success", result.isSuccess());
-        last.put("executor", result.getExecutorName());
-        last.put("finishReason", result.getFinishReason());
-        last.put("tokens", result.getTokenUsage());
-        last.put("output", result.getOutput());
-        ctx.put("lastExecution", last);
-        subTask.setContext(ctx);
-        subTaskService.updateById(subTask);
-
-        subTaskService.submit(subTaskId);
-        taskTimelineService.recordEvent(
-                subTask.getTaskId(),
-                subTaskId,
-                "sub_task_execute_submit",
-                AgentRole.EXECUTOR,
-                agentId,
-                safeMap(
-                        "success", result.isSuccess(),
-                        "executor", result.getExecutorName(),
-                        "tokens", result.getTokenUsage()));
+        ExecutionResultReport report = new ExecutionResultReport();
+        report.setSubTaskId(subTaskId);
+        report.setAgentId(agentId);
+        report.setSource("INTERNAL");
+        report.setIdempotencyKey(null);
+        report.setSuccess(result.isSuccess());
+        report.setExecutorName(result.getExecutorName());
+        report.setFinishReason(result.getFinishReason());
+        report.setTokenUsage(result.getTokenUsage());
+        report.setOutput(result.getOutput());
+        report.setError(null);
+        handleReport(report);
     }
 
     @Transactional(rollbackFor = Exception.class)
     public void handleFailure(Long subTaskId, Long agentId, Exception e) {
-        SubTask subTask = subTaskService.getById(subTaskId);
+        ExecutionResultReport report = new ExecutionResultReport();
+        report.setSubTaskId(subTaskId);
+        report.setAgentId(agentId);
+        report.setSource("INTERNAL");
+        report.setIdempotencyKey(null);
+        report.setSuccess(false);
+        report.setExecutorName(null);
+        report.setFinishReason(null);
+        report.setTokenUsage(null);
+        report.setOutput(null);
+        report.setError(e != null ? e.getMessage() : "unknown_error");
+        handleReport(report);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public ExecutionResultApplyResult handleReport(ExecutionResultReport report) {
+        if (report == null || report.getSubTaskId() == null) {
+            ExecutionResultApplyResult r = new ExecutionResultApplyResult();
+            r.setApplied(false);
+            r.setStatus("invalid_report");
+            return r;
+        }
+
+        SubTask subTask = subTaskService.getById(report.getSubTaskId());
         if (subTask == null) {
-            return;
+            ExecutionResultApplyResult r = new ExecutionResultApplyResult();
+            r.setApplied(false);
+            r.setStatus("subtask_not_found");
+            return r;
         }
 
         Map<String, Object> ctx = new HashMap<>(subTask.getContext() != null ? subTask.getContext() : Map.of());
+        Object lastExecutionObj = ctx.get("lastExecution");
+        if (report.getIdempotencyKey() != null
+                && !report.getIdempotencyKey().isBlank()
+                && lastExecutionObj instanceof Map<?, ?> lastExecutionMap) {
+            Object lastKey = lastExecutionMap.get("idempotencyKey");
+            if (report.getIdempotencyKey().equals(lastKey)) {
+                ExecutionResultApplyResult r = new ExecutionResultApplyResult();
+                r.setApplied(true);
+                r.setIdempotent(true);
+                r.setStatus("idempotent_duplicate");
+                return r;
+            }
+        }
+
+        if (subTask.getStatus() != SubTaskStatus.IN_PROGRESS) {
+            taskTimelineService.recordEvent(
+                    subTask.getTaskId(),
+                    report.getSubTaskId(),
+                    "sub_task_execute_result_discarded",
+                    AgentRole.EXECUTOR,
+                    report.getAgentId(),
+                    safeMap(
+                            "reason", "subtask_status_not_in_progress",
+                            "currentStatus", subTask.getStatus().name(),
+                            "source", report.getSource(),
+                            "idempotencyKey", report.getIdempotencyKey(),
+                            "success", report.isSuccess()));
+            ExecutionResultApplyResult r = new ExecutionResultApplyResult();
+            r.setApplied(false);
+            r.setStatus("discarded_subtask_status_not_in_progress");
+            return r;
+        }
+
         Map<String, Object> last = new HashMap<>();
         last.put("at", OffsetDateTime.now().toString());
-        last.put("agentId", agentId);
-        last.put("success", false);
-        last.put("error", e.getMessage());
+        last.put("agentId", report.getAgentId());
+        last.put("success", report.isSuccess());
+        last.put("source", report.getSource());
+        last.put("idempotencyKey", report.getIdempotencyKey());
+        last.put("executor", report.getExecutorName());
+        last.put("finishReason", report.getFinishReason());
+        last.put("tokens", report.getTokenUsage());
+        last.put("output", report.getOutput());
+        last.put("error", report.getError());
         ctx.put("lastExecution", last);
         subTask.setContext(ctx);
         subTaskService.updateById(subTask);
 
-        if (subTask.getStatus() == SubTaskStatus.IN_PROGRESS) {
-            subTaskService.block(subTaskId);
+        if (report.isSuccess()) {
+            subTaskService.submit(report.getSubTaskId());
+            taskTimelineService.recordEvent(
+                    subTask.getTaskId(),
+                    report.getSubTaskId(),
+                    "sub_task_execute_submit",
+                    AgentRole.EXECUTOR,
+                    report.getAgentId(),
+                    safeMap(
+                            "success", true,
+                            "source", report.getSource(),
+                            "executor", report.getExecutorName(),
+                            "tokens", report.getTokenUsage(),
+                            "idempotencyKey", report.getIdempotencyKey()));
+        } else {
+            subTaskService.block(report.getSubTaskId());
+            taskTimelineService.recordEvent(
+                    subTask.getTaskId(),
+                    report.getSubTaskId(),
+                    "sub_task_execute_failed",
+                    AgentRole.EXECUTOR,
+                    report.getAgentId(),
+                    safeMap(
+                            "success", false,
+                            "source", report.getSource(),
+                            "error", report.getError(),
+                            "idempotencyKey", report.getIdempotencyKey()));
         }
-        taskTimelineService.recordEvent(
-                subTask.getTaskId(),
-                subTaskId,
-                "sub_task_execute_failed",
-                AgentRole.EXECUTOR,
-                agentId,
-                safeMap("error", e.getMessage()));
+
+        ExecutionResultApplyResult r = new ExecutionResultApplyResult();
+        r.setApplied(true);
+        r.setStatus("applied");
+        return r;
+    }
+
+    @Data
+    public static class ExecutionResultApplyResult {
+        private boolean applied;
+        private boolean idempotent;
+        private String status;
     }
 
     private static Map<String, Object> safeMap(Object... keyValues) {

@@ -19,13 +19,14 @@ import org.springframework.stereotype.Component;
 /**
  * helloai MCP Server 业务工具集（v2.4 §3.1 / §9 路线 C 标准化）。
  * <p>
- * 暴露给外部 MCP Client（如 Qoder / Trae / MCP Inspector）的 7 个工具：
+ * 暴露给外部 MCP Client（如 Qoder / Trae / MCP Inspector）的 8 个工具：
  * <ol>
  *   <li>{@code pullTasks} —— 拉取 Agent 待处理收件箱（v2.4 §9.1）</li>
  *   <li>{@code ack} —— 确认收件箱消息已处理（v2.4 §9.1）</li>
  *   <li>{@code claimSubTask} —— 原子认领子任务（v2.4 §9.1，并发互斥）</li>
  *   <li>{@code heartbeat} —— 心跳上报（v2.4 §9.1，refresh last_seen_at）</li>
  *   <li>{@code uploadArtifact} —— 上传产物附件元数据（v2.4 §9.1）</li>
+ *   <li>{@code submitResult} —— 上交子任务执行结果（v2.5 补齐，进入统一回写入口）</li>
  *   <li>{@code reportBlocked} —— 上报任务阻塞（自动通知所有 PLANNER 排障）</li>
  *   <li>{@code getAgentStatus} —— 查询 Agent 自身状态（v2.4 §9.1 协议列，helloai 此前缺失，本类新增）</li>
  * </ol>
@@ -211,7 +212,38 @@ public class McpMcpServer {
     }
 
     // ================================================================
-    // 6. reportBlocked
+    // 6. submitResult
+    // ================================================================
+
+    @Tool(name = "submitResult", description = """
+            【何时使用】EXECUTOR 完成子任务后，上交执行结果（成功或失败）。
+            【调用频率】每个子任务最多提交一次；重复提交必须带相同 resultId 以实现幂等。
+            【Gotchas】
+            - 只能提交自己名下子任务（assigned_agent 必须等于 agentId）
+            - 如果子任务仍是 ASSIGNED，本工具会先推进到 IN_PROGRESS 再回写结果
+            - success=true 时建议提供 output；success=false 时建议提供 error
+            【相关工具】claimSubTask、uploadArtifact
+            """)
+    public McpToolService.SubmitResultResult submitResult(
+            @ToolParam(description = "Agent ID（v2.4 §9.1 协议字段；M4 鉴权后会被服务端覆盖）", required = true) Long agentId,
+            @ToolParam(description = "子任务 ID", required = true) Long subTaskId,
+            @ToolParam(description = "结果幂等键（推荐必填，同一子任务重复提交需保持一致）", required = false) String resultId,
+            @ToolParam(description = "是否成功（true=成功，false=失败）", required = true) Boolean success,
+            @ToolParam(description = "成功输出（success=true 时建议填写）", required = false) String output,
+            @ToolParam(description = "失败原因（success=false 时建议填写）", required = false) String error,
+            @ToolParam(description = "结束原因（可选，如 completed/failed/timeout）", required = false) String finishReason,
+            @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
+            @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
+        Long authAgentId = requireAuthId(sessionId, _sessionId);
+        if (agentId == null || !authAgentId.equals(agentId)) {
+            log.warn("MCP submitResult: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
+        }
+        agentId = authAgentId;
+        return mcpToolService.submitResult(agentId, subTaskId, resultId, success, output, error, finishReason);
+    }
+
+    // ================================================================
+    // 7. reportBlocked
     // ================================================================
 
     @Tool(name = "reportBlocked", description = """
@@ -239,7 +271,7 @@ public class McpMcpServer {
     }
 
     // ================================================================
-    // 7. getAgentStatus（v2.4 §9.1 协议列要求，helloai 此前缺失，本类新增）
+    // 8. getAgentStatus（v2.4 §9.1 协议列要求，helloai 此前缺失，本类新增）
     // ================================================================
 
     @Tool(name = "getAgentStatus", description = """

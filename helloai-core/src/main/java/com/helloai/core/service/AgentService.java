@@ -167,6 +167,15 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
         return m;
     }
 
+    public int inProgressCount(Long agentId) {
+        if (agentId == null) return 0;
+        return Integer.parseInt(subTaskMapper.selectCount(
+                new LambdaQueryWrapper<SubTask>()
+                        .eq(SubTask::getAssignedAgent, agentId)
+                        .eq(SubTask::getStatus, SubTaskStatus.IN_PROGRESS)
+                        .eq(SubTask::getDeleted, 0)).toString());
+    }
+
     public int scoreRank(Long agentId) {
         Agent self = getById(agentId);
         if (self == null || self.getScore() == null) return 0;

@@ -44,6 +44,7 @@ public class AgentMcpServerService extends ServiceImpl<AgentMcpServerMapper, Age
             "claimSubTask",
             "heartbeat",
             "uploadArtifact",
+            "submitResult",
             "reportBlocked",
             "getAgentStatus"
     );
@@ -111,6 +112,23 @@ public class AgentMcpServerService extends ServiceImpl<AgentMcpServerMapper, Age
                 .eq(AgentMcpServer::getAgentId, agentId)
                 .eq(AgentMcpServer::getToolName, toolName)
                 .one();
+        if (config == null && DEFAULT_EXECUTOR_TOOLS.contains(toolName)) {
+            AgentMcpServer row = new AgentMcpServer();
+            row.setAgentId(agentId);
+            row.setToolName(toolName);
+            row.setIsEnabled(DEFAULT_IS_ENABLED);
+            row.setRateLimit(DEFAULT_RATE_LIMIT);
+            row.setCreateBy(SYSTEM_OPERATOR);
+            row.setUpdateBy(SYSTEM_OPERATOR);
+            try {
+                save(row);
+            } catch (DuplicateKeyException e) {
+            }
+            config = lambdaQuery()
+                    .eq(AgentMcpServer::getAgentId, agentId)
+                    .eq(AgentMcpServer::getToolName, toolName)
+                    .one();
+        }
         return config != null && config.getIsEnabled() != null && config.getIsEnabled() == 1;
     }
 

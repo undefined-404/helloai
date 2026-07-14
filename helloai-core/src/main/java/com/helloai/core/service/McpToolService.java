@@ -3,6 +3,8 @@ package com.helloai.core.service;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.core.agent.command.ExecutionResultHandler;
+import com.helloai.core.agent.command.ExecutionResultReport;
 import com.helloai.core.entity.*;
 import com.helloai.core.mapper.SubTaskMapper;
 import lombok.RequiredArgsConstructor;
@@ -29,6 +31,7 @@ public class McpToolService {
     private final SubTaskMapper subTaskMapper;
     private final HeartbeatService heartbeatService;
     private final AttachmentService attachmentService;
+    private final ExecutionResultHandler executionResultHandler;
 
     // ================================================================
     // pullTasks
@@ -240,6 +243,85 @@ public class McpToolService {
     }
 
     // ================================================================
+    // submitResult
+    // ================================================================
+
+    @Transactional(rollbackFor = Exception.class)
+    public SubmitResultResult submitResult(Long agentId, Long subTaskId, String resultId,
+                                          Boolean success, String output, String error, String finishReason) {
+        assertAgentActive(agentId);
+        assertToolEnabled(agentId, "submitResult");
+
+        if (subTaskId == null) {
+            SubmitResultResult r = new SubmitResultResult();
+            r.setOk(false);
+            r.setAccepted(false);
+            r.setReason("subTaskId_required");
+            return r;
+        }
+        if (success == null) {
+            SubmitResultResult r = new SubmitResultResult();
+            r.setOk(false);
+            r.setAccepted(false);
+            r.setReason("success_required");
+            return r;
+        }
+
+        SubTask subTask = subTaskService.getById(subTaskId);
+        if (subTask == null) {
+            SubmitResultResult r = new SubmitResultResult();
+            r.setOk(false);
+            r.setAccepted(false);
+            r.setReason("subtask_not_found");
+            return r;
+        }
+        if (subTask.getAssignedAgent() == null || !agentId.equals(subTask.getAssignedAgent())) {
+            SubmitResultResult r = new SubmitResultResult();
+            r.setOk(false);
+            r.setAccepted(false);
+            r.setReason("not_task_owner");
+            return r;
+        }
+
+        if (subTask.getStatus() == SubTaskStatus.ASSIGNED) {
+            subTaskService.start(subTaskId);
+            subTask = subTaskService.getById(subTaskId);
+        }
+        if (subTask == null || subTask.getStatus() != SubTaskStatus.IN_PROGRESS) {
+            SubmitResultResult r = new SubmitResultResult();
+            r.setOk(false);
+            r.setAccepted(false);
+            r.setReason("invalid_status:" + (subTask != null ? subTask.getStatus() : "null"));
+            return r;
+        }
+
+        ExecutionResultReport report = new ExecutionResultReport();
+        report.setSubTaskId(subTaskId);
+        report.setAgentId(agentId);
+        report.setSource("EXTERNAL");
+        report.setIdempotencyKey(resultId);
+        report.setSuccess(success);
+        report.setExecutorName("cli_client");
+        report.setFinishReason(finishReason);
+        report.setTokenUsage(null);
+        report.setOutput(output);
+        report.setError(error);
+
+        ExecutionResultHandler.ExecutionResultApplyResult applyResult = executionResultHandler.handleReport(report);
+
+        heartbeatService.active(agentId);
+
+        SubmitResultResult r = new SubmitResultResult();
+        r.setOk(true);
+        r.setAccepted(applyResult != null && applyResult.isApplied());
+        r.setIdempotent(applyResult != null && applyResult.isIdempotent());
+        r.setStatus(applyResult != null ? applyResult.getStatus() : "unknown");
+        r.setSubTaskId(subTaskId);
+        r.setResultId(resultId);
+        return r;
+    }
+
+    // ================================================================
     // reportBlocked
     // ================================================================
 
@@ -264,7 +346,7 @@ public class McpToolService {
             throw new BizException("只能阻塞自己名下的子任务");
         }
 
-        subTaskService.block(subTaskId);
+        subTaskService.block(subTaskId, reason, agentId);
 
         ReportBlockedResult result = new ReportBlockedResult();
         result.setOk(true);
@@ -355,6 +437,17 @@ public class McpToolService {
         private boolean ok;
         private Long attachmentId;
         private String storageUrl;
+    }
+
+    @lombok.Data
+    public static class SubmitResultResult {
+        private boolean ok;
+        private boolean accepted;
+        private boolean idempotent;
+        private String status;
+        private String reason;
+        private Long subTaskId;
+        private String resultId;
     }
 
     @lombok.Data
