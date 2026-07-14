@@ -9,6 +9,7 @@ import com.helloai.core.entity.SubTask;
 import com.helloai.core.mapper.AgentMapper;
 import com.helloai.core.mapper.SubTaskMapper;
 import com.helloai.core.service.AgentService;
+import com.helloai.core.service.ExternalAgentFailureTracker;
 import com.helloai.core.service.SubTaskDispatchService;
 import com.helloai.core.service.TaskTimelineService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -48,6 +49,7 @@ public class AgentHealthCheckTask {
     private final AgentService agentService;
     private final SubTaskDispatchService subTaskDispatchService;
     private final StringRedisTemplate redis;
+    private final ExternalAgentFailureTracker failureTracker;
 
     private static final String LOCK_KEY = "scheduler:lock:AgentHealth";
 
@@ -138,6 +140,10 @@ public class AgentHealthCheckTask {
                                 ? agent.getLastSeenAt().toString() : "null",
                         "agent_name", agent.getName() != null ? agent.getName() : "unknown"
                 ));
+
+        // 5) N11 阈值回退计数：心跳丢失 / 离线被视为执行失败。
+        // 已被 SQL 条件限定 access_type=CLI_CLIENT（API_KEY_LLM/WEB_BROWSER 不会写库）。
+        failureTracker.recordFailure(agent.getId());
     }
 
     /**

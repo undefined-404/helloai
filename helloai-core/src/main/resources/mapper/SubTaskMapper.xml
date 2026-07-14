@@ -51,4 +51,32 @@
           AND deleted = 0
     </update>
 
+    <!--
+        N11 阈值回退：原子累加 sub_task.external_fallback_count。
+        并发安全：UPDATE 同时满足"id + deleted"；不依赖读后写。
+        语义：每次 ExternalAgentFallbackTask 重新分发某个子任务时 +1，
+        便于监控外部 Agent 频繁失败场景。
+    -->
+    <update id="incrementExternalFallbackCount">
+        UPDATE sub_task
+        SET external_fallback_count = COALESCE(external_fallback_count, 0) + 1,
+            update_time = #{now}
+        WHERE id = #{subTaskId}
+          AND deleted = 0
+    </update>
+
+    <!--
+        N11 阈值回退：查询某 Agent 处于 IN_PROGRESS/ASSIGNED 的子任务列表，
+        供 ExternalAgentFallbackTask 触发重新分发时使用。
+        只返回仍在跑（未结束、未取消）的子任务。
+    -->
+    <select id="selectInFlightByAgent" resultType="com.helloai.core.entity.SubTask">
+        SELECT * FROM sub_task
+        WHERE assigned_agent = #{agentId}
+          AND status IN ('ASSIGNED', 'IN_PROGRESS', 'REWORK')
+          AND deleted = 0
+        ORDER BY id ASC
+        LIMIT #{limit}
+    </select>
+
 </mapper>

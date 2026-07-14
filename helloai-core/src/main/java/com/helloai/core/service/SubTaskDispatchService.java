@@ -1,9 +1,12 @@
 package com.helloai.core.service;
 
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.executor.AgentSelector;
+import com.helloai.core.entity.Agent;
 import com.helloai.core.entity.SubTask;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -29,6 +32,7 @@ public class SubTaskDispatchService {
     private final ResilientDispatcher resilientDispatcher;
     private final TaskTimelineService taskTimelineService;
     private final AgentSelector agentSelector;
+    private final AgentService agentService;
 
     /**
      * 对 BLOCKED 子任务执行重新调度。
@@ -112,5 +116,93 @@ public class SubTaskDispatchService {
         log.info("子任务自动分配进入调度链: subTaskId={}, preferredAgentId={}, role={}",
                 subTaskId, preferred.getId(), role);
         return preferred.getId();
+    }
+
+    /**
+     * N11 外部 Agent 阈值回退入口。
+     *
+     * <p>由 {@code ExternalAgentFallbackTask} 在 CLI_CLIENT Agent
+     * 连续失败达到阈值后调用：
+     * <ol>
+     *   <li>把子任务重置为 PENDING（清空原 assignedAgent）</li>
+     *   <li>在同角色 EXECUTOR 中按 score 降序选一个 API_KEY_LLM 类型的活跃 Agent；</li>
+     *   <li>把"原失败 Agent"和"新选中的 LLM Agent"都写入 task_timeline 审计；</li>
+     *   <li>交给 {@link ResilientDispatcher#assignNext} 做 fast-fail + 熔断 + fallback
+     *       收口，避免 Controller / 补偿任务绕开主调度链。</li>
+     * </ol>
+     * </p>
+     *
+     * <p>为什么不直接复用 {@link #dispatchPendingSubTaskAuto}？因为
+     * auto 走 {@code AgentSelector.pickPreferred}，仍然可能被
+     * {@code preferExternal=true} 选回 CLI_CLIENT，违反"N11 强制回退到 LLM"的语义。
+     * 本方法绕过 Selector，直接查询同角色 API_KEY_LLM Agent。</p>
+     *
+     * @param subTaskId       待重新分发的子任务 ID
+     * @param failedAgentId   触发回退的 CLI_CLIENT Agent ID（仅用于审计，不参与实际选人）
+     * @param reason          触发回退的原因（用于 task_timeline.payload）
+     * @return 实际采用的新 Agent ID（回退后用哪个 API_KEY_LLM Agent 接替）
+     * @throws BizException 找不到 API_KEY_LLM 候选时抛出
+     */
+    public Long redispatchForFallback(Long subTaskId, Long failedAgentId, String reason) {
+        SubTask subTask = subTaskService.resetToPendingForDispatch(
+                subTaskId, Set.of(SubTaskStatus.ASSIGNED, SubTaskStatus.IN_PROGRESS,
+                        SubTaskStatus.BLOCKED, SubTaskStatus.REWORK));
+        if (subTask == null) {
+            throw new BizException("子任务不存在: " + subTaskId);
+        }
+
+        // 角色从失败 Agent 推导：SubTask 本身不存角色，失败 Agent 的 role 决定了
+        // 我们要选哪个 role 的 API_KEY_LLM Agent 接替；取不到时回退 EXECUTOR。
+        Agent failedAgent = failedAgentId != null ? agentService.getById(failedAgentId) : null;
+        final AgentRole role = (failedAgent != null && failedAgent.getRole() != null)
+                ? failedAgent.getRole() : AgentRole.EXECUTOR;
+        Agent fallbackAgent = pickApiKeyLlmAgent(role);
+
+        if (fallbackAgent == null) {
+            String msg = String.format(
+                    "N11 阈值回退失败：未找到同角色(role=%s) 的 API_KEY_LLM Agent，subTaskId=%d",
+                    role, subTaskId);
+            log.error(msg);
+            throw new BizException(msg);
+        }
+
+        taskTimelineService.recordEvent(
+                subTask.getTaskId(),
+                subTask.getId(),
+                "sub_task_dispatch_prepare",
+                AgentRole.SYSTEM,
+                fallbackAgent.getId(),
+                Map.of(
+                        "trigger", "external_fallback",
+                        "preferredAgentId", fallbackAgent.getId(),
+                        "previousAgentId", failedAgentId,
+                        "reason", reason != null ? reason : ""));
+
+        resilientDispatcher.assignNext(fallbackAgent.getId(), subTaskId);
+        log.info("N11 阈值回退已重新进入调度链: subTaskId={}, failedAgentId={}, fallbackAgentId={}",
+                subTaskId, failedAgentId, fallbackAgent.getId());
+        return fallbackAgent.getId();
+    }
+
+    /**
+     * 在同角色 EXECUTOR/PLANNER/REVIEWER 中按 score 降序选一个
+     * access_type=API_KEY_LLM 且 status=ACTIVE 的 Agent。
+     *
+     * <p>简单实现：基于 {@code AgentService.listActive} + stream filter。
+     * 不复用 {@link AgentSelector} 是为了彻底屏蔽"preferExternal"在回退路径上的影响，
+     * 即使配置被误改也保证回退方向。</p>
+     */
+    private Agent pickApiKeyLlmAgent(AgentRole inputRole) {
+        final AgentRole role = (inputRole != null) ? inputRole : AgentRole.EXECUTOR;
+        return agentService.listActive().stream()
+                .filter(a -> a.getAccessType() == AgentAccessType.API_KEY_LLM)
+                .filter(a -> a.getStatus() == AgentStatus.ACTIVE)
+                .filter(a -> role.equals(a.getRole()))
+                .filter(a -> a.getOnlineStatus() == null
+                        || a.getOnlineStatus().name().equals("ONLINE")
+                        || a.getOnlineStatus().name().equals("IDLE"))
+                .max(java.util.Comparator.comparing(
+                        Agent::getScore, java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())))
+                .orElse(null);
     }
 }

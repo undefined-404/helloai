@@ -44,4 +44,12 @@ public class SubTask extends BaseEntity {
     private Integer version;
 
     private Integer timeoutCount;
+
+    /**
+     * N11 阈值回退（V17 新增）：当前子任务已发生的"外部→LLM"回退次数。
+     *
+     * <p>每次 ExternalAgentFallbackTask 触发对当前子任务的重新分发，
+     * 都会把该值 +1；可用于监控 / 限流（如回退 3 次后直接放弃或转人工）。</p>
+     */
+    private Integer externalFallbackCount;
 }

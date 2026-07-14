@@ -1,8 +1,10 @@
 package com.helloai.core.agent.command;
 
+import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
+import com.helloai.core.entity.Agent;
 import com.helloai.core.entity.SubTask;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -15,9 +17,13 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import com.helloai.core.service.AgentService;
+import com.helloai.core.service.ExternalAgentFailureTracker;
 import com.helloai.core.service.SubTaskService;
 import com.helloai.core.service.TaskTimelineService;
 
@@ -30,6 +36,12 @@ class ExecutionResultHandlerTest {
 
     @Mock
     private TaskTimelineService taskTimelineService;
+
+    @Mock
+    private ExternalAgentFailureTracker failureTracker;
+
+    @Mock
+    private AgentService agentService;
 
     @InjectMocks
     private ExecutionResultHandler executionResultHandler;
@@ -63,8 +75,12 @@ class ExecutionResultHandlerTest {
 
         verify(subTaskService).submit(22L);
         verify(taskTimelineService).recordEvent(
-                33L, 22L, "sub_task_execute_submit", AgentRole.EXECUTOR, 11L,
-                Map.of("success", true, "executor", "ApiKeyAgentExecutor", "tokens", 12));
+                eq(33L), eq(22L), eq("sub_task_execute_submit"), eq(AgentRole.EXECUTOR), eq(11L),
+                argThat((Map<String, Object> payload) ->
+                        Boolean.TRUE.equals(payload.get("success"))
+                                && "ApiKeyAgentExecutor".equals(payload.get("executor"))
+                                && payload.containsKey("tokens")
+                                && "INTERNAL".equals(payload.get("source"))));
     }
 
     @Test
@@ -91,8 +107,11 @@ class ExecutionResultHandlerTest {
 
         verify(subTaskService).block(22L);
         verify(taskTimelineService).recordEvent(
-                33L, 22L, "sub_task_execute_failed", AgentRole.EXECUTOR, 11L,
-                Map.of("error", "boom"));
+                eq(33L), eq(22L), eq("sub_task_execute_failed"), eq(AgentRole.EXECUTOR), eq(11L),
+                argThat((Map<String, Object> payload) ->
+                        Boolean.FALSE.equals(payload.get("success"))
+                                && "boom".equals(payload.get("error"))
+                                && "INTERNAL".equals(payload.get("source"))));
     }
 
     @Test
@@ -123,7 +142,7 @@ class ExecutionResultHandlerTest {
     }
 
     @Test
-    @DisplayName("P2-3: handleFailure 对非 IN_PROGRESS 状态的子任务不应调用 block")
+    @DisplayName("P2-3: handleFailure 对非 IN_PROGRESS 状态的子任务不应调用 block，并丢弃结果记录 timeline")
     void shouldNotBlockWhenStatusIsNotInProgress() {
         SubTask subTask = new SubTask();
         subTask.setId(22L);
@@ -135,9 +154,15 @@ class ExecutionResultHandlerTest {
 
         // 不应再次 block
         verify(subTaskService, never()).block(22L);
-        // 但应该记录失败事件
+        // 不应修改 context
+        verify(subTaskService, never()).updateById(org.mockito.ArgumentMatchers.any(SubTask.class));
+        // 走 "结果被丢弃" 时间线（Phase 2B 后由 handleReport() 统一接管非 IN_PROGRESS 拒绝）
         verify(taskTimelineService).recordEvent(
-                33L, 22L, "sub_task_execute_failed", AgentRole.EXECUTOR, 11L,
-                Map.of("error", "boom"));
+                eq(33L), eq(22L), eq("sub_task_execute_result_discarded"), eq(AgentRole.EXECUTOR), eq(11L),
+                argThat((Map<String, Object> payload) ->
+                        "subtask_status_not_in_progress".equals(payload.get("reason"))
+                                && "BLOCKED".equals(payload.get("currentStatus"))
+                                && Boolean.FALSE.equals(payload.get("success"))
+                                && "INTERNAL".equals(payload.get("source"))));
     }
 }

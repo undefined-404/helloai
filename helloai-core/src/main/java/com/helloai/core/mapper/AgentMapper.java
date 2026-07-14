@@ -58,4 +58,42 @@ public interface AgentMapper extends BaseMapper<Agent> {
      * 调用方需根据业务判断是否要标 OFFLINE（依赖 CAS 防止覆盖）。</p>
      */
     List<Agent> selectByLastSeenBefore(@Param("cutoff") OffsetDateTime cutoff);
+
+    // ══════════════════════════════════════════════════════════════
+    //  N11 阈值回退：CLI_CLIENT Agent 连续失败计数 + 候选扫描
+    //  详见 AgentMapper.xml 对应 SQL 注释
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 原子累加 CLI_CLIENT Agent 连续失败次数。
+     *
+     * @return 1 = 成功累加；0 = Agent 不存在 / 非 CLI_CLIENT / 已删除
+     */
+    int incrementConsecutiveFailure(@Param("agentId") Long agentId,
+                                    @Param("now") OffsetDateTime now);
+
+    /**
+     * 重置连续失败计数（成功路径上调用）。
+     *
+     * @return 1 = 成功重置；0 = Agent 不存在 / 非 CLI_CLIENT / 已删除
+     */
+    int resetConsecutiveFailure(@Param("agentId") Long agentId,
+                                @Param("now") OffsetDateTime now);
+
+    /**
+     * 标记回退已触发：清零计数 + 写入 last_fallback_at。
+     *
+     * @return 1 = 成功标记；0 = Agent 不存在 / 非 CLI_CLIENT / 已删除
+     */
+    int markFallbackTriggered(@Param("agentId") Long agentId,
+                              @Param("now") OffsetDateTime now);
+
+    /**
+     * 扫描超阈值候选 Agent。
+     *
+     * <p>条件：CLI_CLIENT + 未删除 + 连续失败次数 &gt;= threshold +
+     * 处于 cooldown 之外（last_fallback_at 为空或早于 cooldownCutoff）。</p>
+     */
+    List<Agent> selectFallbackCandidates(@Param("threshold") int threshold,
+                                         @Param("cooldownCutoff") OffsetDateTime cooldownCutoff);
 }

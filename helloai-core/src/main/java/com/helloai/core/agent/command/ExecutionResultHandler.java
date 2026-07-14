@@ -1,9 +1,13 @@
 package com.helloai.core.agent.command;
 
+import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
+import com.helloai.core.entity.Agent;
 import com.helloai.core.entity.SubTask;
+import com.helloai.core.service.AgentService;
+import com.helloai.core.service.ExternalAgentFailureTracker;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -31,6 +35,8 @@ public class ExecutionResultHandler {
 
     private final SubTaskService subTaskService;
     private final TaskTimelineService taskTimelineService;
+    private final ExternalAgentFailureTracker failureTracker;
+    private final AgentService agentService;
 
     @Transactional(rollbackFor = Exception.class)
     public void handleSuccess(Long subTaskId, Long agentId, AgentResult result) {
@@ -157,6 +163,18 @@ public class ExecutionResultHandler {
                             "source", report.getSource(),
                             "error", report.getError(),
                             "idempotencyKey", report.getIdempotencyKey()));
+        }
+
+        // N11 阈值回退计数：仅对 CLI_CLIENT Agent 累加/重置。
+        // SQL 条件已限定 access_type=CLI_CLIENT，误调 API_KEY_LLM 也不会写库；
+        // tracker 内部已做 try/catch + REQUIRES_NEW，本处不再 try/catch。
+        Agent targetAgent = report.getAgentId() != null ? agentService.getById(report.getAgentId()) : null;
+        if (targetAgent != null && targetAgent.getAccessType() == AgentAccessType.CLI_CLIENT) {
+            if (report.isSuccess()) {
+                failureTracker.recordSuccess(report.getAgentId());
+            } else {
+                failureTracker.recordFailure(report.getAgentId());
+            }
         }
 
         ExecutionResultApplyResult r = new ExecutionResultApplyResult();

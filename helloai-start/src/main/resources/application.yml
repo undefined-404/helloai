@@ -95,6 +95,12 @@ helloai:
     auto-assign-on-create: false
     prefer-external: false
     require-idle: true
+    # Phase 2C N11：外部 Agent 连续失败阈值后自动回退到平台内 API_KEY_LLM
+    fallback:
+      enabled: true
+      failure-threshold: 3
+      cooldown-minutes: 10
+      scan-interval-ms: 60000
   execution:
     enabled: true
     mock-mode: false

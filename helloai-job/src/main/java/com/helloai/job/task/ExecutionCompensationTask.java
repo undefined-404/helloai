@@ -2,13 +2,18 @@ package com.helloai.job.task;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentExecutionProperties;
+import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.core.entity.Agent;
 import com.helloai.core.entity.AgentExecutionRecord;
 import com.helloai.core.entity.SubTask;
 import com.helloai.core.mapper.AgentExecutionRecordMapper;
+import com.helloai.core.mapper.AgentMapper;
 import com.helloai.core.service.AgentExecutionRecordService;
 import com.helloai.core.agent.command.ExecutionResultHandler;
+import com.helloai.core.service.AgentService;
+import com.helloai.core.service.ExternalAgentFailureTracker;
 import com.helloai.core.service.SubTaskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -34,6 +39,8 @@ public class ExecutionCompensationTask {
     private final AgentExecutionProperties executionProperties;
     private final TransactionTemplate transactionTemplate;
     private final StringRedisTemplate redis;
+    private final ExternalAgentFailureTracker failureTracker;
+    private final AgentMapper agentMapper;
 
     private static final String LOCK_KEY = "scheduler:lock:ExecutionComp";
 
@@ -97,6 +104,13 @@ public class ExecutionCompensationTask {
         } catch (Exception e) {
             log.error("执行记录超时补偿失败: recordId={}, subTaskId={}",
                     record.getId(), record.getSubTaskId(), e);
+        }
+
+        // N11 阈值回退计数：超时被视为执行失败。仅对 CLI_CLIENT Agent 累加；
+        // SQL 条件已限定 access_type=CLI_CLIENT，误调不会写库。
+        Long agentId = record.getAgentId();
+        if (agentId != null) {
+            failureTracker.recordFailure(agentId);
         }
     }
 

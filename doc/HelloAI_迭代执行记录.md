@@ -782,3 +782,83 @@ mvn test -pl helloai-job -Dtest="ExecutionCompensationTaskTest"
 
 - 调度策略“外部执行超时/掉线多次后回退 LLM”的阈值计数闭环尚未落地（需要明确计数来源与自动重分配策略）
 - 执行命令主链仍未接入 MQ Consumer（仍按 N6 后续推进“MQ 主链路 + DB 状态中心 + Poller 兜底恢复”）
+
+---
+
+### 2026-07-14 Phase 2C N11 外部 Agent 阈值回退 LLM 闭环
+
+#### 1. 范围
+
+- 关闭 Phase 2B 遗留“外部执行超时/掉线多次后回退 LLM”的阈值计数闭环
+- 把 N11 从「策略配置已收口」升级为「策略配置 + 自动回退闭环」已交付
+- 三处失败来源（handleReport / ExecutionCompensationTask / AgentHealthCheckTask）统一累加计数并触发重新分发
+- 重新分发绕过 `AgentSelector`（避免 `preferExternal=true` 又选回 CLI_CLIENT）
+
+#### 2. 实际落地
+
+- **Flyway V17：`V17__agent_external_fallback_fields.sql`**
+  - `agent` 表新增 `consecutive_failure_count INT NOT NULL DEFAULT 0` / `last_failure_at TIMESTAMPTZ` / `last_fallback_at TIMESTAMPTZ`
+  - `sub_task` 表新增 `external_fallback_count INT NOT NULL DEFAULT 0`
+  - 部分索引 `idx_agent_external_failure_scan ON agent(consecutive_failure_count, last_fallback_at) WHERE access_type='CLI_CLIENT' AND deleted=0`
+  - 启动日志 `[V17] agent / sub_task 阈值回退字段补全完成`
+
+- **`AgentFallbackProperties`（helloai-common）**
+  - `@ConfigurationProperties(prefix = "helloai.dispatch.fallback")`
+  - 字段：`enabled`（默认 true）/ `failureThreshold`（默认 3）/ `cooldownMinutes`（默认 10）/ `scanIntervalMs`（默认 60_000L）
+
+- **实体扩展**
+  - `Agent` 新增 3 个 N11 字段：`consecutiveFailureCount` / `lastFailureAt` / `lastFallbackAt`
+  - `SubTask` 新增 `externalFallbackCount`
+
+- **Mapper 扩展**
+  - `AgentMapper`：incrementConsecutiveFailure / resetConsecutiveFailure / markFallbackTriggered / selectFallbackCandidates
+  - `SubTaskMapper`：incrementExternalFallbackCount / selectInFlightByAgent
+  - 写入路径用 `REQUIRES_NEW` 事务，rollback 不会丢计数
+
+- **`ExternalAgentFailureTracker`（helloai-core 新建）**
+  - `recordFailure(agentId)` / `recordSuccess(agentId)` / `markFallbackTriggered(agentId)` 全部 `Propagation.REQUIRES_NEW`
+  - `findFallbackCandidates()`：阈值 + 冷却期过滤 + 按 count desc / last_failure_at asc 排序
+  - `shouldFallback(agent)` 纯函数：CLI_CLIENT + 阈值达标 + 冷却期满
+  - try/catch 包裹所有写入，避免计数器异常打断主链路
+
+- **`SubTaskDispatchService.redispatchForFallback(subTaskId, failedAgentId, reason)`（新建）**
+  - 复用 `subTaskService.resetToPendingForDispatch(...)` 把 ASSIGNED/IN_PROGRESS/BLOCKED/REWORK 拉回 PENDING
+  - **绕过 `AgentSelector`**：直接 `agentService.listActive().stream().filter(API_KEY_LLM).filter(role).filter(ONLINE/IDLE).max(score)`
+  - 记录 timeline `agent_external_fallback_dispatched`，payload 含 trigger / preferredAgentId / previousAgentId / reason
+  - 走 `resilientDispatcher.assignNext(fallbackAgentId, subTaskId)` 进入 fast-fail + 熔断 + fallback 链
+
+- **三处失败来源统一注入**
+  - `ExecutionResultHandler.handleReport`：CLI_CLIENT + 失败 → `recordFailure`；成功 → `recordSuccess`
+  - `ExecutionCompensationTask.compensate`：`markFailed` / `markTimeout` 之后追加 `recordFailure(failedAgentId)`
+  - `AgentHealthCheckTask.processStaleAgent`：超时未心跳 + 还在 `IN_PROGRESS` → `recordFailure`
+
+- **`ExternalAgentFallbackTask`（helloai-job 新建）**
+  - `@Scheduled(fixedDelayString = "${helloai.dispatch.fallback.scan-interval-ms:60000}")` 周期扫描
+  - Redis 分布式锁 `scheduler:lock:ExternalAgentFallback`
+  - 5 道前置：开关 / 锁 / 候选非空 / 单 Agent 非空 / 记录 timeline `agent_external_fallback_triggered`
+  - 对每个候选 Agent 的在飞子任务逐条 `redispatchForFallback`，最后 `markFallbackTriggered` 写回 `last_fallback_at`
+
+#### 3. 影响
+
+- 对外行为变化：
+  - 默认阈值 `failure-threshold=3` + `cooldown-minutes=10`，外部 Agent 连续失败 3 次后下一次定时扫描自动把在飞子任务转交同角色 API_KEY_LLM Agent
+  - 阈值与冷却期可调（`helloai.dispatch.fallback.*`）
+  - 外部 Agent 成功上报 → 自动 `recordSuccess` → 计数器清零
+- 配置变化：`application.yml` `helloai.dispatch.fallback.*` 4 项默认值
+- 数据结构变化：
+  - `agent` 加 3 列 + `sub_task` 加 1 列 + 1 个部分索引（Flyway V17）
+  - `task_timeline` 新增事件 `agent_external_fallback_dispatched` / `agent_external_fallback_triggered`
+- 差距项变化：N11 从「部分落地」收口为「已交付」
+
+#### 4. 验证
+
+- `mvn test -pl helloai-core` → 113 个测试全部通过（含 `ExternalAgentFailureTrackerTest` 15 用例 + `SubTaskDispatchServiceTest` 新增 3 用例）
+- `mvn test -pl helloai-job` → `ExternalAgentFallbackTaskTest` 10 用例全部通过（含 `shouldSkipWhenDisabled` / `shouldSkipWhenLockNotAcquired` / 候选扫描 / 单 Agent 处理 / 时序）
+- 全量 `mvn -DskipTests package` → 6 模块 BUILD SUCCESS
+- `grep "agent_external_fallback"` 验证 timeline 事件名拼写一致：2 处生产代码命中 + 2 处测试命中
+
+#### 5. 遗留
+
+- N11 阈值回退闭环已落地，本轮是 Phase 2B 遗留项的最终关闭
+- 执行命令 MQ Consumer 主链路仍未接入（仍属 N6 范围，下一轮 P2.3 推进“共用 `ExecutionCommandConsumer` 接口 + 新增 MQ Consumer”骨架）
+- 冷却期与阈值当前是全局配置，暂未支持 per-Agent 覆写（按需后续加 `agent.fallback_threshold_override` 列）

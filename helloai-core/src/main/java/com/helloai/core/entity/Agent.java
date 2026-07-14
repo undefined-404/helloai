@@ -92,4 +92,23 @@ public class Agent extends BaseEntity {
 
     /** 最近一次被判定离线的时间 */
     private OffsetDateTime offlineAt;
+
+    // ============================================================
+    // N11 阈值回退字段（V17 新增）
+    // ============================================================
+
+    /**
+     * 连续失败次数；成功一次清零；>= threshold 时被 ExternalAgentFallbackTask
+     * 视为回退候选。
+     */
+    private Integer consecutiveFailureCount;
+
+    /** 最近一次失败时间（与 consecutive_failure_count 同步刷新） */
+    private OffsetDateTime lastFailureAt;
+
+    /**
+     * 最近一次回退触发时间；用于 cooldown 判定，避免刚回退的 Agent
+     * 在冷却期内被反复触发。
+     */
+    private OffsetDateTime lastFallbackAt;
 }

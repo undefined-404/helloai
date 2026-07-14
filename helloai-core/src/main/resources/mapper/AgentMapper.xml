@@ -15,6 +15,7 @@
             specialization_slug, status, score,
             access_type, capabilities, labels,
             last_seen_at, last_active_at, online_status, offline_reason, offline_at,
+            consecutive_failure_count, last_failure_at, last_fallback_at,
             deleted, create_by, update_by, create_time, update_time, remark
         ) VALUES (
             #{id}, #{name}, #{role}, #{apiKey}, #{modelType},
@@ -25,6 +26,7 @@
             #{labels,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
             #{lastSeenAt}, #{lastActiveAt}, #{onlineStatus},
             #{offlineReason}, #{offlineAt},
+            #{consecutiveFailureCount}, #{lastFailureAt}, #{lastFallbackAt},
             #{deleted}, #{createBy}, #{updateBy},
             #{createTime}, #{updateTime}, #{remark}
         )
@@ -56,6 +58,9 @@
             online_status = #{et.onlineStatus},
             offline_reason = #{et.offlineReason},
             offline_at = #{et.offlineAt},
+            consecutive_failure_count = #{et.consecutiveFailureCount},
+            last_failure_at = #{et.lastFailureAt},
+            last_fallback_at = #{et.lastFallbackAt},
             update_by = #{et.updateBy},
             update_time = #{et.updateTime}
         WHERE id = #{et.id} AND deleted = 0
@@ -93,6 +98,68 @@
         WHERE (last_seen_at IS NULL OR last_seen_at &lt; #{cutoff})
           AND (online_status IS DISTINCT FROM 'SLEEPING')
           AND deleted = 0
+    </select>
+
+    <!--
+        N11 阈值回退：原子累加 CLI_CLIENT Agent 连续失败次数。
+        并发安全：UPDATE 同时满足"id + access_type + deleted"三条件，
+        不依赖读后写，避免多节点竞争导致计数丢失。
+        返回值 1 = 成功累加，0 = Agent 不存在 / 非 CLI_CLIENT / 已删除。
+    -->
+    <update id="incrementConsecutiveFailure">
+        UPDATE agent
+        SET consecutive_failure_count = COALESCE(consecutive_failure_count, 0) + 1,
+            last_failure_at = #{now},
+            update_time = #{now}
+        WHERE id = #{agentId}
+          AND access_type = 'CLI_CLIENT'
+          AND deleted = 0
+    </update>
+
+    <!--
+        N11 阈值回退：成功路径上重置失败计数（清零 + 清空 last_failure_at）。
+        仅在 access_type = CLI_CLIENT 时生效；API_KEY_LLM / WEB_BROWSER 不参与 N11 闭环。
+    -->
+    <update id="resetConsecutiveFailure">
+        UPDATE agent
+        SET consecutive_failure_count = 0,
+            last_failure_at = NULL,
+            update_time = #{now}
+        WHERE id = #{agentId}
+          AND access_type = 'CLI_CLIENT'
+          AND deleted = 0
+    </update>
+
+    <!--
+        N11 阈值回退：标记"本次回退已触发"。
+        原子写回 last_fallback_at + 同步清零 consecutive_failure_count（一次扫描只触发一次），
+        避免后续 cycle 又把它当作候选。
+    -->
+    <update id="markFallbackTriggered">
+        UPDATE agent
+        SET consecutive_failure_count = 0,
+            last_failure_at = NULL,
+            last_fallback_at = #{now},
+            update_time = #{now}
+        WHERE id = #{agentId}
+          AND access_type = 'CLI_CLIENT'
+          AND deleted = 0
+    </update>
+
+    <!--
+        N11 阈值回退：扫描超阈值候选 Agent。
+        调用方（ExternalAgentFallbackTask）传入 threshold + cooldownCutoff：
+          - consecutive_failure_count >= threshold
+          - last_fallback_at IS NULL OR last_fallback_at < cooldownCutoff
+        仅返回 CLI_CLIENT + 未删除 Agent。
+    -->
+    <select id="selectFallbackCandidates" resultType="com.helloai.core.entity.Agent">
+        SELECT * FROM agent
+        WHERE access_type = 'CLI_CLIENT'
+          AND deleted = 0
+          AND COALESCE(consecutive_failure_count, 0) >= #{threshold}
+          AND (last_fallback_at IS NULL OR last_fallback_at &lt; #{cooldownCutoff})
+        ORDER BY consecutive_failure_count DESC, last_failure_at ASC
     </select>
 
 </mapper>

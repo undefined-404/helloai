@@ -47,9 +47,9 @@
 | N6 | 执行命令消费与结果回写 | 部分落地 | 已完成 DB Poller 主线化：`consumer-mode` 支持 `EVENT / POLLER / BOTH`，默认 `POLLER`；`ExecutionCommandService` 在 `EVENT/BOTH` 才发布本地事务事件，`POLLER` 仅落库 PENDING 命令；`ExecutionCommandPoller` 在 `POLLER/BOTH` 扫描全部 PENDING（主消费），在 `EVENT` 仅扫描孤儿 PENDING（兜底）；Poller 依赖抽象 `ExecutionCommandConsumer`，默认实现为 `LocalExecutionCommandConsumer.consume()`（Bean 常驻）。结果回写入口已收口为 `ExecutionResultHandler.handleReport(ExecutionResultReport)`，平台内执行链与外部 MCP `submitResult` 统一走该入口。当前尚未新增 MQ Consumer，执行命令主链仍未切到 RabbitMQ | 后续推进“MQ 主链路 + DB 状态中心 + Poller 兜底恢复”（引入执行命令 MQ Consumer，Poller 保留为漏消费/超时/恢复兜底） |
 | N7 | 健康检查改写 | 已交付 | Reconcile、离线重分配、兜底收敛已具备 | 保持现状 |
 | N8 | 网页版 AI 浏览器接入 | 未落地 | 只有枚举与预留，没有真实接入模块 | 后续独立迭代 |
-| N9 | Provider 配置与 ChatClient 复用 | 部分落地 | Provider 配置入口已统一（`helloai.providers`）+ provider/model 解析已收口（`AgentProviderResolver`）；仍缺 ChatModel 缓存（每次 new）及多 Provider 扩展验证 | 继续补功能 |
+| N9 | Provider 配置与 ChatClient 复用 | 已交付 | Provider 配置入口已统一（`helloai.providers`）+ provider/model 解析已收口（`AgentProviderResolver`）+ `ProviderChatModelCache` 按 (provider, baseUrl, apiKey 指纹) 缓存 ChatModel 实例（避免每次 new DeepSeekChatModel）；`DeepSeekProviderChatClientFactory` 已接入缓存，SHA-256 指纹保证明文 API Key 不入 cache key | 保持现状 |
 | N10 | 工牌模式 + `credential_vault` | 部分落地 | 最小模型、绑定与托管语义已具备，但轮换、迁移、权限颗粒度仍未收口 | 继续补功能 |
-| N11 | 调度策略：外部优先 + 空闲优先 + LLM 保底 | 部分落地 | 已将候选选择收口为可配置策略：支持 `preferExternal`、`requireIdle`、`forceAccessType(API_KEY_LLM 纯保底回归)`；并提供“初始分配自动选人入口”与 `autoAssignOnCreate` 开关（默认关闭以保持 PENDING+claim 工作流）。尚未形成基于“外部执行超时/掉线次数阈值”的自动回退与再分配闭环 | 继续补功能 |
+| N11 | 调度策略：外部优先 + 空闲优先 + LLM 保底 | 已交付 | 候选选择策略收口为可配置项（`preferExternal` / `requireIdle` / `forceAccessType` / `autoAssignOnCreate`），并已落地“外部 Agent 连续失败阈值后自动回退到平台内 API_KEY_LLM”闭环：V17 补 agent.consecutive_failure_count/last_failure_at/last_fallback_at + sub_task.external_fallback_count；`ExternalAgentFailureTracker` 在 `ExecutionResultHandler.handleReport` / `ExecutionCompensationTask` / `AgentHealthCheckTask` 三处统一累加与重置；`SubTaskDispatchService.redispatchForFallback` 绕过 `AgentSelector`（不被 preferExternal 影响）直接选同角色 API_KEY_LLM Agent；`ExternalAgentFallbackTask`（helloai-job，60s 周期 + Redis 锁）扫描超阈值 CLI_CLIENT Agent 触发重新分发；阈值与冷却期可由 `helloai.dispatch.fallback.{failure-threshold,cooldown-minutes}` 调节 | 保持现状 |
 
 ---
 
