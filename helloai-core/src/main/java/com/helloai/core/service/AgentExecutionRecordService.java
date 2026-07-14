@@ -119,6 +119,32 @@ public class AgentExecutionRecordService extends ServiceImpl<AgentExecutionRecor
     }
 
     /**
+     * DB Poller 主消费扫描：查找「所有未被消费的 PENDING」记录（不限于孤儿）。
+     *
+     * <p>扫描条件：{@code status='PENDING'}，无 {@code last_attempt_at} 阈值限制。
+     * 用于 {@code consumer-mode=POLLER|BOTH} 模式：Poller 作为主消费路径，
+     * 必须能扫到刚创建的 PENDING 记录，否则会产生不可接受的延迟。</p>
+     *
+     * <p>由 Consumer 内部 CAS {@code markRunning} 推进 PENDING→RUNNING 保证幂等：
+     * 若事件主消费已经推进过该行，Poller 的 consume 会在 markRunning 步骤被 CAS 拒绝，自然跳过。</p>
+     *
+     * <p>按 {@code create_time} 升序遍历：先扫最早创建的 PENDING 行，优先避免堆积。</p>
+     *
+     * @param limit 单批扫描上限
+     * @return 所有 PENDING 记录列表（按 create_time 升序）
+     */
+    public List<AgentExecutionRecord> listAllPending(int limit) {
+        if (limit <= 0) {
+            return List.of();
+        }
+        return lambdaQuery()
+                .eq(AgentExecutionRecord::getStatus, ExecutionStatus.PENDING)
+                .orderByAsc(AgentExecutionRecord::getCreateTime)
+                .last("LIMIT " + limit)
+                .list();
+    }
+
+    /**
      * DB Poller 触及痕迹：更新 {@code last_attempt_at} 为当前时间。
      *
      * <p>本方法不限制 status：</p>

@@ -10,6 +10,7 @@ import com.helloai.core.event.ExecutionCommandCreatedEvent;
 import com.helloai.core.service.AgentExecutionRecordService;
 import com.helloai.core.service.AgentService;
 import com.helloai.core.agent.command.ExecutionResultHandler;
+import com.helloai.core.agent.command.ExecutionResultReport;
 import com.helloai.core.agent.execution.SubTaskExecutionService;
 import com.helloai.core.service.SubTaskService;
 import com.helloai.core.service.TaskTimelineService;
@@ -24,11 +25,12 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * 本地事件版执行命令消费者。
+ * 平台内执行命令消费者。
  *
- * <p>当前先用 Spring 事务事件把"命令创建"和"命令消费"分离开：
- * 调度侧只负责创建命令，消费侧在事务提交后异步接管执行。
- * 后续若切到 DB poller 或 MQ，只需要替换本类的事件来源即可。</p>
+ * <p>{@link #consume(ExecutionCommand)} 是与命令来源无关的实际消费入口，供 DB Poller 直接调用；
+ * {@link #onCommandCreated(ExecutionCommandCreatedEvent)} 仅作为 EVENT / BOTH 模式的本地事务事件适配器。
+ * POLLER 模式下 {@code ExecutionCommandService} 不发布事件，因此不会进入事件适配器，
+ * 但本 Bean 必须保留，供 Poller 完成实际消费。</p>
  *
  * <p>消费侧职责分层（对齐架构设计参考 §3.1 调度分离）：</p>
  * <ol>
@@ -143,7 +145,18 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
         // 5. 纯执行 + 6. 结果回写
         try {
             AgentResult result = subTaskExecutionService.executeOnce(subTask, agent);
-            executionResultHandler.handleSuccess(command.getSubTaskId(), command.getAgentId(), result);
+            ExecutionResultReport report = new ExecutionResultReport();
+            report.setSubTaskId(command.getSubTaskId());
+            report.setAgentId(command.getAgentId());
+            report.setSource("INTERNAL");
+            report.setIdempotencyKey(command.getEventId());
+            report.setSuccess(result.isSuccess());
+            report.setExecutorName(result.getExecutorName());
+            report.setFinishReason(result.getFinishReason());
+            report.setTokenUsage(result.getTokenUsage());
+            report.setOutput(result.getOutput());
+            report.setError(null);
+            executionResultHandler.handleReport(report);
             if (command.getRecordId() != null) {
                 if (!agentExecutionRecordService.markSuccess(command.getRecordId())) {
                     log.warn("SUCCESS 写入被拒绝(记录已超时补偿): recordId={}", command.getRecordId());
@@ -160,7 +173,18 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
                     AgentRole.EXECUTOR,
                     command.getAgentId(),
                     Map.of("agentId", command.getAgentId(), "error", e.getMessage()));
-            executionResultHandler.handleFailure(command.getSubTaskId(), command.getAgentId(), e);
+            ExecutionResultReport report = new ExecutionResultReport();
+            report.setSubTaskId(command.getSubTaskId());
+            report.setAgentId(command.getAgentId());
+            report.setSource("INTERNAL");
+            report.setIdempotencyKey(command.getEventId());
+            report.setSuccess(false);
+            report.setExecutorName(null);
+            report.setFinishReason(null);
+            report.setTokenUsage(null);
+            report.setOutput(null);
+            report.setError(e.getMessage());
+            executionResultHandler.handleReport(report);
             if (command.getRecordId() != null) {
                 if (!agentExecutionRecordService.markFailed(command.getRecordId(), e.getMessage())) {
                     log.warn("FAILED 写入被拒绝(记录已超时补偿): recordId={}", command.getRecordId());

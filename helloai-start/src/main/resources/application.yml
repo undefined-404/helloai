@@ -103,11 +103,17 @@ helloai:
     model: deepseek-chat
     mock-response-prefix: "[mock-executor]"
     sync-timeout-seconds: 180
-    # Phase 2A §5.1: DB Poller 兜底扫描 — 处理 Spring 事务事件丢失场景
+    # Phase 2A §5.1/§5.2: DB Poller 主消费；EVENT 模式下退化为孤儿 PENDING 兜底扫描
     poller-enabled: true
-    poller-interval-ms: 30000
+    poller-interval-ms: 1000
     poller-orphan-threshold-seconds: 60
     poller-batch-size: 20
+    # Phase 2A §5.2: DB Poller 主线化
+    # consumer-mode 决定主消费从哪条路径走：
+    #   EVENT: 事务事件为主，Poller 仅扫孤儿（兼容模式）
+    #   POLLER: 不发布事务事件，Poller 扫所有 PENDING 作为主路径（默认）
+    #   BOTH: 事件与 Poller 并行，CAS 保证幂等，适合 EVENT→POLLER 过渡
+    consumer-mode: POLLER
   # N9: 多Provider统一配置入口，替代各factory中散落的@Value
   providers:
     deepseek:

@@ -4,7 +4,7 @@ import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.core.agent.domain.ExecutionCommand;
-import com.helloai.core.agent.mqconsumer.LocalExecutionCommandConsumer;
+import com.helloai.core.agent.mqconsumer.ExecutionCommandConsumer;
 import com.helloai.core.entity.AgentExecutionRecord;
 import com.helloai.core.entity.SubTask;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,6 +19,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -58,7 +59,7 @@ class ExecutionCommandPollerTest {
     @Mock
     private AgentExecutionRecordService agentExecutionRecordService;
     @Mock
-    private LocalExecutionCommandConsumer localExecutionCommandConsumer;
+    private ExecutionCommandConsumer executionCommandConsumer;
     @Mock
     private TaskTimelineService taskTimelineService;
     @Mock
@@ -75,6 +76,9 @@ class ExecutionCommandPollerTest {
         lenient().when(executionProperties.isPollerEnabled()).thenReturn(true);
         lenient().when(executionProperties.getPollerOrphanThresholdSeconds()).thenReturn(60);
         lenient().when(executionProperties.getPollerBatchSize()).thenReturn(20);
+        lenient().when(executionProperties.getPollerIntervalMs()).thenReturn(1000L);
+        lenient().when(executionProperties.isPollerMain()).thenReturn(false);
+        lenient().when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.EVENT);
     }
 
     private AgentExecutionRecord orphanRecord(Long recordId, Long subTaskId, Long agentId,
@@ -112,7 +116,7 @@ class ExecutionCommandPollerTest {
                     eq(33L), eq(22L), eq("sub_task_execution_command_poll_recovery"),
                     any(), eq(11L), any());
             ArgumentCaptor<ExecutionCommand> commandCaptor = ArgumentCaptor.forClass(ExecutionCommand.class);
-            verify(localExecutionCommandConsumer).consume(commandCaptor.capture());
+            verify(executionCommandConsumer).consume(commandCaptor.capture());
             ExecutionCommand command = commandCaptor.getValue();
             assertThat(command.getRecordId()).isEqualTo(101L);
             assertThat(command.getEventId()).isEqualTo("evt-101");
@@ -137,7 +141,7 @@ class ExecutionCommandPollerTest {
             verify(agentExecutionRecordService).markPolled(101L);
             verify(agentExecutionRecordService).markPolled(102L);
             verify(agentExecutionRecordService).markPolled(103L);
-            verify(localExecutionCommandConsumer, times(3)).consume(any(ExecutionCommand.class));
+            verify(executionCommandConsumer, times(3)).consume(any(ExecutionCommand.class));
         }
 
         @Test
@@ -150,7 +154,7 @@ class ExecutionCommandPollerTest {
             poller.poll();
 
             ArgumentCaptor<ExecutionCommand> commandCaptor = ArgumentCaptor.forClass(ExecutionCommand.class);
-            verify(localExecutionCommandConsumer).consume(commandCaptor.capture());
+            verify(executionCommandConsumer).consume(commandCaptor.capture());
             assertThat(commandCaptor.getValue().getTrigger()).isEqualTo("poll-recovery:unknown");
         }
     }
@@ -166,7 +170,7 @@ class ExecutionCommandPollerTest {
 
             poller.poll();
 
-            verifyNoInteractions(localExecutionCommandConsumer, taskTimelineService);
+            verifyNoInteractions(executionCommandConsumer, taskTimelineService);
             verify(agentExecutionRecordService, never()).markPolled(anyLong());
         }
 
@@ -179,7 +183,7 @@ class ExecutionCommandPollerTest {
             poller.poll();
 
             verify(agentExecutionRecordService).markPolled(101L);
-            verify(localExecutionCommandConsumer, never()).consume(any(ExecutionCommand.class));
+            verify(executionCommandConsumer, never()).consume(any(ExecutionCommand.class));
             verifyNoInteractions(taskTimelineService);
         }
 
@@ -192,7 +196,7 @@ class ExecutionCommandPollerTest {
             poller.poll();
 
             verify(agentExecutionRecordService).markPolled(101L);
-            verify(localExecutionCommandConsumer, never()).consume(any(ExecutionCommand.class));
+            verify(executionCommandConsumer, never()).consume(any(ExecutionCommand.class));
         }
 
         @Test
@@ -204,7 +208,7 @@ class ExecutionCommandPollerTest {
             poller.poll();
 
             verify(agentExecutionRecordService).markPolled(101L);
-            verify(localExecutionCommandConsumer, never()).consume(any(ExecutionCommand.class));
+            verify(executionCommandConsumer, never()).consume(any(ExecutionCommand.class));
         }
 
         @Test
@@ -218,7 +222,7 @@ class ExecutionCommandPollerTest {
 
             verify(agentExecutionRecordService).markPolled(101L);
             verifyNoInteractions(taskTimelineService);
-            verify(localExecutionCommandConsumer).consume(any(ExecutionCommand.class));
+            verify(executionCommandConsumer).consume(any(ExecutionCommand.class));
         }
 
         @Test
@@ -229,7 +233,7 @@ class ExecutionCommandPollerTest {
             poller.poll();
 
             verifyNoInteractions(agentExecutionRecordService);
-            verifyNoInteractions(localExecutionCommandConsumer);
+            verifyNoInteractions(executionCommandConsumer);
         }
 
         @Test
@@ -242,13 +246,13 @@ class ExecutionCommandPollerTest {
             when(subTaskService.getById(anyLong())).thenReturn(null);
             // 让第一条 consume 抛异常
             doThrow(new RuntimeException("模拟 LLM 异常"))
-                    .when(localExecutionCommandConsumer).consume(argThat(c -> c != null && c.getRecordId() != null && c.getRecordId().equals(101L)));
+                    .when(executionCommandConsumer).consume(argThat(c -> c != null && c.getRecordId() != null && c.getRecordId().equals(101L)));
 
             poller.poll();
 
             verify(agentExecutionRecordService).markPolled(101L);
             verify(agentExecutionRecordService).markPolled(102L);
-            verify(localExecutionCommandConsumer, times(2)).consume(any(ExecutionCommand.class));
+            verify(executionCommandConsumer, times(2)).consume(any(ExecutionCommand.class));
         }
 
         @Test
@@ -259,7 +263,102 @@ class ExecutionCommandPollerTest {
 
             assertThrows(RuntimeException.class, () -> poller.poll());
 
-            verifyNoInteractions(localExecutionCommandConsumer);
+            verifyNoInteractions(executionCommandConsumer);
+        }
+    }
+
+    @Nested
+    @DisplayName("PollerMain — POLLER/BOTH 模式走 listAllPending")
+    class PollerMain {
+
+        @Test
+        @DisplayName("POLLER 模式：调 listAllPending，listOrphanPending 不被调")
+        void shouldUseListAllPendingInPollerMode() {
+            when(executionProperties.isPollerMain()).thenReturn(true);
+            when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.POLLER);
+            AgentExecutionRecord pending = orphanRecord(201L, 22L, 11L, AgentAccessType.API_KEY_LLM, "assigned");
+            when(agentExecutionRecordService.listAllPending(20)).thenReturn(List.of(pending));
+            SubTask subTask = new SubTask();
+            subTask.setId(22L);
+            subTask.setTaskId(33L);
+            when(subTaskService.getById(22L)).thenReturn(subTask);
+
+            poller.poll();
+
+            verify(agentExecutionRecordService).listAllPending(20);
+            verify(agentExecutionRecordService, never()).listOrphanPending(anyInt(), anyInt());
+            verify(agentExecutionRecordService).markPolled(201L);
+            verify(executionCommandConsumer).consume(any(ExecutionCommand.class));
+        }
+
+        @Test
+        @DisplayName("BOTH 模式：同样调 listAllPending（与事件消费者并行）")
+        void shouldUseListAllPendingInBothMode() {
+            lenient().when(executionProperties.isPollerMain()).thenReturn(true);
+            lenient().when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.BOTH);
+            when(agentExecutionRecordService.listAllPending(20)).thenReturn(List.of());
+
+            poller.poll();
+
+            verify(agentExecutionRecordService).listAllPending(20);
+            verify(agentExecutionRecordService, never()).listOrphanPending(anyInt(), anyInt());
+            verifyNoInteractions(executionCommandConsumer);
+        }
+
+        @Test
+        @DisplayName("POLLER 模式 + 长 interval：记录 warning 但不阻断流程")
+        void shouldWarnOnLongIntervalInPollerMode() {
+            when(executionProperties.isPollerMain()).thenReturn(true);
+            lenient().when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.POLLER);
+            when(executionProperties.getPollerIntervalMs()).thenReturn(10000L);
+            when(agentExecutionRecordService.listAllPending(20)).thenReturn(List.of());
+
+            poller.poll();
+
+            // 验证没有异常，且走了 listAllPending（说明 warning 之后还是继续走主路径）
+            verify(agentExecutionRecordService).listAllPending(20);
+        }
+
+        @Test
+        @DisplayName("POLLER 主路径触发：trigger 前缀为 poll-main:，timeline 事件为 sub_task_execution_command_polled_main")
+        void shouldUsePollMainPrefixAndTimeline() {
+            when(executionProperties.isPollerMain()).thenReturn(true);
+            when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.POLLER);
+            AgentExecutionRecord pending = orphanRecord(301L, 22L, 11L, AgentAccessType.API_KEY_LLM, "assigned");
+            when(agentExecutionRecordService.listAllPending(20)).thenReturn(List.of(pending));
+            SubTask subTask = new SubTask();
+            subTask.setId(22L);
+            subTask.setTaskId(33L);
+            when(subTaskService.getById(22L)).thenReturn(subTask);
+
+            poller.poll();
+
+            ArgumentCaptor<ExecutionCommand> commandCaptor = ArgumentCaptor.forClass(ExecutionCommand.class);
+            verify(executionCommandConsumer).consume(commandCaptor.capture());
+            assertThat(commandCaptor.getValue().getTrigger()).isEqualTo("poll-main:assigned");
+
+            ArgumentCaptor<Map<String, Object>> timelineCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(taskTimelineService).recordEvent(
+                    eq(33L), eq(22L), eq("sub_task_execution_command_polled_main"),
+                    any(), eq(11L), timelineCaptor.capture());
+            @SuppressWarnings("unchecked")
+            Map<String, Object> captured = timelineCaptor.getValue();
+            assertThat(captured).containsEntry("scan", "listAllPending");
+        }
+
+        @Test
+        @DisplayName("EVENT 模式：调 listOrphanPending，listAllPending 不被调（保留原兜底逻辑）")
+        void shouldStillUseListOrphanPendingInEventMode() {
+            // 默认是 EVENT 模式
+            AgentExecutionRecord orphan = orphanRecord(401L, 22L, 11L, AgentAccessType.API_KEY_LLM, "assigned");
+            when(agentExecutionRecordService.listOrphanPending(60, 20)).thenReturn(List.of(orphan));
+            when(subTaskService.getById(22L)).thenReturn(null);
+
+            poller.poll();
+
+            verify(agentExecutionRecordService).listOrphanPending(60, 20);
+            verify(agentExecutionRecordService, never()).listAllPending(anyInt());
+            verify(executionCommandConsumer).consume(any(ExecutionCommand.class));
         }
     }
 }

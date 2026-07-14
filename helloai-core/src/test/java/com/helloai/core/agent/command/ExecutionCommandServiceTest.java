@@ -1,5 +1,6 @@
 package com.helloai.core.agent.command;
 
+import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ExecutionStatus;
@@ -24,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import com.helloai.core.service.AgentExecutionRecordService;
@@ -49,6 +51,9 @@ class ExecutionCommandServiceTest {
 
     @Mock
     private ApplicationEventPublisher applicationEventPublisher;
+
+    @Mock
+    private AgentExecutionProperties executionProperties;
 
     @InjectMocks
     private ExecutionCommandService executionCommandService;
@@ -76,6 +81,8 @@ class ExecutionCommandServiceTest {
         when(agentExecutionRecordService.hasPendingOrRunning(22L)).thenReturn(false);
         when(agentExecutionRecordService.createPending(any(), eq(22L), eq(11L),
                 eq(AgentAccessType.API_KEY_LLM), eq("assigned"))).thenReturn(record);
+        when(executionProperties.isEventMode()).thenReturn(true);
+        when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.EVENT);
 
         ExecutionCommand command = executionCommandService.createAssignedCommand(22L, 11L, "assigned");
 
@@ -98,6 +105,38 @@ class ExecutionCommandServiceTest {
                 ArgumentCaptor.forClass(ExecutionCommandCreatedEvent.class);
         verify(applicationEventPublisher).publishEvent(eventCaptor.capture());
         assertEquals(command, eventCaptor.getValue().getCommand());
+    }
+
+    @Test
+    @DisplayName("POLLER 模式创建 execution command 后不发布本地事件")
+    void shouldNotPublishEventInPollerMode() {
+        SubTask subTask = new SubTask();
+        subTask.setId(22L);
+        subTask.setTaskId(33L);
+        subTask.setAssignedAgent(11L);
+
+        Agent agent = new Agent();
+        agent.setId(11L);
+        agent.setRole(AgentRole.EXECUTOR);
+        agent.setAccessType(AgentAccessType.API_KEY_LLM);
+
+        AgentExecutionRecord record = new AgentExecutionRecord();
+        record.setId(44L);
+        record.setSubTaskId(22L);
+        record.setStatus(ExecutionStatus.PENDING);
+
+        when(subTaskService.getByIdForUpdate(22L)).thenReturn(subTask);
+        when(agentService.getById(11L)).thenReturn(agent);
+        when(agentExecutionRecordService.hasPendingOrRunning(22L)).thenReturn(false);
+        when(agentExecutionRecordService.createPending(any(), eq(22L), eq(11L),
+                eq(AgentAccessType.API_KEY_LLM), eq("assigned"))).thenReturn(record);
+        when(executionProperties.isEventMode()).thenReturn(false);
+        when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.POLLER);
+
+        ExecutionCommand command = executionCommandService.createAssignedCommand(22L, 11L, "assigned");
+
+        assertEquals(44L, command.getRecordId());
+        verify(applicationEventPublisher, never()).publishEvent(any());
     }
 
     @Test
@@ -145,6 +184,8 @@ class ExecutionCommandServiceTest {
         when(agentExecutionRecordService.hasPendingOrRunning(22L)).thenReturn(false);
         when(agentExecutionRecordService.createPending(any(), eq(22L), eq(11L),
                 eq(AgentAccessType.API_KEY_LLM), eq("assigned"))).thenReturn(record);
+        when(executionProperties.isEventMode()).thenReturn(true);
+        when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.EVENT);
 
         executionCommandService.createAssignedCommand(22L, 11L, "assigned");
 

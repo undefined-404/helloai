@@ -1,6 +1,7 @@
 package com.helloai.core.agent.command;
 
 import com.helloai.common.base.BizException;
+import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.entity.Agent;
@@ -23,8 +24,8 @@ import com.helloai.core.service.TaskTimelineService;
 /**
  * 执行命令服务。
  *
- * <p>当前只负责“生成命令 + 记录命令痕迹 + 发布命令创建事件”，
- * 不在这里直接触发平台执行，从而把调度层和执行层之间先切出清晰边界。</p>
+ * <p>当前只负责“生成命令 + 记录命令痕迹”，并按消费模式决定是否发布本地命令创建事件，
+ * 不在这里直接触发平台执行，从而把调度层和执行层之间切出清晰边界。</p>
  */
 @Slf4j
 @Service
@@ -36,6 +37,7 @@ public class ExecutionCommandService {
     private final AgentExecutionRecordService agentExecutionRecordService;
     private final TaskTimelineService taskTimelineService;
     private final ApplicationEventPublisher applicationEventPublisher;
+    private final AgentExecutionProperties executionProperties;
 
     /**
      * 为已分配子任务创建执行命令。
@@ -93,9 +95,15 @@ public class ExecutionCommandService {
                         "eventId", eventId,
                         "accessType", agent.getAccessType().name()));
 
-        applicationEventPublisher.publishEvent(new ExecutionCommandCreatedEvent(command));
-        log.info("执行命令已创建: subTaskId={}, agentId={}, recordId={}, trigger={}",
-                subTaskId, agentId, record.getId(), trigger);
+        // EVENT / BOTH 模式发布事务事件；POLLER 模式只保留已落库的 PENDING 命令
+        if (executionProperties.isEventMode()) {
+            applicationEventPublisher.publishEvent(new ExecutionCommandCreatedEvent(command));
+        } else {
+            log.debug("执行命令已创建（POLLER 主消费模式，跳过 publishEvent）: subTaskId={}, recordId={}",
+                    subTaskId, record.getId());
+        }
+        log.info("执行命令已创建: subTaskId={}, agentId={}, recordId={}, trigger={}, consumer-mode={}",
+                subTaskId, agentId, record.getId(), trigger, executionProperties.getConsumerMode());
         return command;
     }
 }
