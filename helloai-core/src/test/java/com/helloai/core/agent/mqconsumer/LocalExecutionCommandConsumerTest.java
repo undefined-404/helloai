@@ -26,6 +26,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.same;
 import static org.mockito.Mockito.doThrow;
@@ -93,10 +94,15 @@ class LocalExecutionCommandConsumerTest {
                     33L, 22L, "sub_task_execute_start", AgentRole.EXECUTOR, 11L,
                     Map.of("executor", "platform"));
             verify(subTaskExecutionService).executeOnce(subTask, agent);
-            verify(executionResultHandler).handleSuccess(22L, 11L, ok);
+            verify(executionResultHandler).handleReport(argThat((com.helloai.core.agent.command.ExecutionResultReport r) ->
+                    r.getSubTaskId() != null && r.getSubTaskId() == 22L
+                            && r.getAgentId() != null && r.getAgentId() == 11L
+                            && r.isSuccess()
+                            && "INTERNAL".equals(r.getSource())
+                            && "evt-1".equals(r.getIdempotencyKey())));
             verify(agentExecutionRecordService).markSuccess(44L);
             // 不应回写失败
-            verify(executionResultHandler, never()).handleFailure(any(), any(), any());
+            verify(executionResultHandler, never()).handleReport(argThat((com.helloai.core.agent.command.ExecutionResultReport r) -> !r.isSuccess()));
             verify(agentExecutionRecordService, never()).markFailed(any(), any());
         }
 
@@ -122,10 +128,15 @@ class LocalExecutionCommandConsumerTest {
             verify(taskTimelineService).recordEvent(
                     33L, 22L, "sub_task_llm_call_failed", AgentRole.EXECUTOR, 11L,
                     Map.of("agentId", 11L, "error", "exec failed"));
-            verify(executionResultHandler).handleFailure(eq(22L), eq(11L), any(BizException.class));
+            verify(executionResultHandler).handleReport(argThat((com.helloai.core.agent.command.ExecutionResultReport r) ->
+                    r.getSubTaskId() != null && r.getSubTaskId() == 22L
+                            && r.getAgentId() != null && r.getAgentId() == 11L
+                            && !r.isSuccess()
+                            && "exec failed".equals(r.getError())
+                            && "evt-1".equals(r.getIdempotencyKey())));
             verify(agentExecutionRecordService).markFailed(44L, "exec failed");
             // 不应回写成功
-            verify(executionResultHandler, never()).handleSuccess(any(), any(), any());
+            verify(executionResultHandler, never()).handleReport(argThat((com.helloai.core.agent.command.ExecutionResultReport r) -> r.isSuccess()));
             verify(agentExecutionRecordService, never()).markSuccess(any());
         }
     }

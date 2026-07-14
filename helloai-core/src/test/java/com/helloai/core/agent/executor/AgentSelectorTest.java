@@ -258,4 +258,121 @@ class AgentSelectorTest {
             assertThat(result.getId()).isEqualTo(2L);
         }
     }
+
+    @Nested
+    @DisplayName("调度策略 3：prefer-external / force-access-type / require-idle / pickPreferred")
+    class DispatchPolicy {
+
+        private AgentSelector policySelector;
+
+        @BeforeEach
+        void initPolicySelector() {
+            // 重新构造一个“策略全开”的 Selector，覆盖默认 setUp 的 preferExternal=false/requireIdle=false
+            AgentDispatchProperties policyProps = new AgentDispatchProperties();
+            policyProps.setPreferExternal(true);
+            policyProps.setRequireIdle(true);
+            policyProps.setForceAccessType(null);
+            policySelector = new AgentSelector(agentService, circuitBreakerRegistry, policyProps);
+        }
+
+        private Agent agentWith(Long id, Integer score,
+                                AgentOnlineStatus onlineStatus, AgentStatus status,
+                                AgentAccessType accessType) {
+            Agent a = agent(id, score, onlineStatus, status);
+            a.setAccessType(accessType);
+            return a;
+        }
+
+        @Test
+        @DisplayName("preferExternal=true：CLI_CLIENT 优先于分数更高的 API_KEY_LLM")
+        void shouldPreferHigherAccessTypeRankOverHigherScore() {
+            Agent cli = agentWith(2L, 80, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE,
+                    AgentAccessType.CLI_CLIENT);
+            Agent api = agentWith(3L, 95, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE,
+                    AgentAccessType.API_KEY_LLM);
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(cli, api));
+            // requireIdle=true 时会调 inProgressCount
+            when(agentService.inProgressCount(2L)).thenReturn(0);
+            when(agentService.inProgressCount(3L)).thenReturn(0);
+            when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
+            when(circuitBreakerRegistry.find("agentDispatch-3")).thenReturn(Optional.empty());
+
+            Agent result = policySelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(2L);
+            assertThat(result.getAccessType()).isEqualTo(AgentAccessType.CLI_CLIENT);
+        }
+
+        @Test
+        @DisplayName("forceAccessType=API_KEY_LLM：CLI_CLIENT 被过滤，只剩 API_KEY_LLM")
+        void shouldFilterOutNonMatchingAccessType() {
+            Agent cli = agentWith(2L, 100, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE,
+                    AgentAccessType.CLI_CLIENT);
+            Agent api = agentWith(3L, 60, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE,
+                    AgentAccessType.API_KEY_LLM);
+
+            // 本用例单独构造一个 forceAccessType=API_KEY_LLM、requireIdle=false 的 Selector，
+            // 隔离于 initPolicySelector 的 requireIdle=true
+            AgentDispatchProperties forceProps = new AgentDispatchProperties();
+            forceProps.setPreferExternal(false);
+            forceProps.setRequireIdle(false);
+            forceProps.setForceAccessType(AgentAccessType.API_KEY_LLM);
+            AgentSelector forceSelector = new AgentSelector(agentService, circuitBreakerRegistry, forceProps);
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(cli, api));
+            when(circuitBreakerRegistry.find("agentDispatch-3")).thenReturn(Optional.empty());
+
+            Agent result = forceSelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(3L);
+            assertThat(result.getAccessType()).isEqualTo(AgentAccessType.API_KEY_LLM);
+        }
+
+        @Test
+        @DisplayName("requireIdle=true：inProgressCount>0 的 Agent 被跳过")
+        void shouldSkipBusyAgentWhenRequireIdleEnabled() {
+            Agent busy = agentWith(2L, 100, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE,
+                    AgentAccessType.CLI_CLIENT);
+            Agent idle = agentWith(3L, 50, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE,
+                    AgentAccessType.CLI_CLIENT);
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(busy, idle));
+            when(agentService.inProgressCount(2L)).thenReturn(3); // 忙
+            when(agentService.inProgressCount(3L)).thenReturn(0); // 闲
+            when(circuitBreakerRegistry.find("agentDispatch-3")).thenReturn(Optional.empty());
+
+            Agent result = policySelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(3L);
+        }
+
+        @Test
+        @DisplayName("pickPreferred：不传 excludeAgentId 时命中首位候选（preferExternal=true）")
+        void pickPreferredShouldRespectPreferExternal() {
+            Agent cli = agentWith(2L, 70, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE,
+                    AgentAccessType.CLI_CLIENT);
+            Agent api = agentWith(3L, 95, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE,
+                    AgentAccessType.API_KEY_LLM);
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(api, cli));
+            when(agentService.inProgressCount(2L)).thenReturn(0);
+            when(agentService.inProgressCount(3L)).thenReturn(0);
+            when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
+            when(circuitBreakerRegistry.find("agentDispatch-3")).thenReturn(Optional.empty());
+
+            Agent result = policySelector.pickPreferred(AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(2L);
+            assertThat(result.getAccessType()).isEqualTo(AgentAccessType.CLI_CLIENT);
+        }
+    }
 }
