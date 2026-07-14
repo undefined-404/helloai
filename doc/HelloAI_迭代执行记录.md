@@ -1059,9 +1059,18 @@ mvn test -pl helloai-job -Dtest="ExecutionCompensationTaskTest"
   （具体：MqExecutionCommandConsumerTest 8 + ExecutionCommandServiceDispatchTest 6 + ExecutionCommandMqPublisherTest 5）
 - 新增 5 用例覆盖：无事务直发 / JSON 可还原 / 有事务延后 / 回滚不发 / 序列化失败
 
-#### 5. 遗留
+#### 5. 遗留（下一轮路线已拍板，三个阶段有严格依赖关系，不并列）
 
-- E2E 冒烟仍未跑（需 RabbitMQ 环境）
-- Poller 兜底切除与消费侧回写链路改造仍未做
-- Publisher 未接入 CorrelationData / publisher-confirms 回执（当前依靠 `RabbitMQConfig.rabbitTemplate` 的 confirm callback 日志可见性），回执失败时的重发策略留待后续与 Outbox 可靠投递层一同考虑
+1. **先跑 E2E 冒烟**（前提：具备 RabbitMQ 环境）
+   - 开 `dispatch-mode=BOTH` + `producer-enabled=true` + `consumer-enabled=true`
+   - 重点验证 Redis + DB 双层幂等能否抵消本地事件与 MQ 双消费
+   - 确认 MQ 主链路真实可跑后才进入第二阶段
+2. **再补生产端可靠投递**（前提：① 已通过）
+   - Publisher 接入 `CorrelationData` / publisher-confirms 回执，现阶段仅靠 `RabbitMQConfig.rabbitTemplate` 的 confirm callback 日志可见性
+   - Outbox 可靠投递层与回执失败重发策略一同考虑
+3. **最后处理 Poller 与回写链路**（前提：①② 已稳定）
+   - Poller **不切除**，而是从“主消费载体”降级为孤儿 / 超时 / 补偿兜底（保留作为 MQ 主链异常时的恢复机制）
+   - `AsyncExecutionResultConsumer` 消费侧回写链路改造后置，等 MQ 主链与生产端可靠性稳定后再动
+
+> ❗ 不得跳过上一阶段直接进下一阶段；尤其不得在 E2E 冒烟未跑前就推 Outbox 或在生产端可靠性未就绪前变动 Poller 当前职责。
 

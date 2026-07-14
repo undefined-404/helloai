@@ -348,7 +348,15 @@ TCC 在本项目中更多作为最终一致与兜底思路参考，而不是逐�
 - 继续削薄 `SubTaskExecutionService` 的编排职责
 - 将 `ExecutionResultHandler` 固化为唯一执行结果入口
 - 强化 ExecutionCommand 幂等、补偿、晚到结果防覆盖
-- **Phase 2D / 2E / 2F 已完成项**：MQ 主链路的“生产→消费”椅骨已全部接上，默认零行为变化：`MqExecutionCommandConsumer` + `ExecutionCommandMqPublisher` 共用 `ExecutionCommandConsumer` 接口；topology（`EXECUTION_COMMAND_QUEUE` / `EXECUTION_COMMAND_EXCHANGE` / binding 与 DLX 复用）由 `RabbitMQConfig` 统一声明；由 `AgentExecutionProperties.dispatch-mode`（`NONE / EVENT / MQ / BOTH`，默认 `NONE`）控制分发，`MqExecutionCommandProperties.{producer-enabled, consumer-enabled}` 分别控制 Publisher / Consumer 注册，支持独立灰度；`ExecutionDispatchValidator` 启动期 fail-fast。**Phase 2F 修正两个阻断性问题：**（a）Publisher 将投递挂到 `TransactionSynchronization.afterCommit()`，与本地事件 `@TransactionalEventListener(AFTER_COMMIT)` 语义对齐，避免“事务未提交先发消息”与“回滚后消息已发”；（b）Publisher 改为显式 `ObjectMapper.writeValueAsBytes` + `rabbitTemplate.send(Message)`，与消费端 `readValue(byte[])` 完全对称，不依赖默认 SimpleMessageConverter，也不侵入全局 `RabbitTemplate` converter。下一轮在具备 RabbitMQ 的环境开 `dispatch-mode=BOTH` + `producer-enabled=true` + `consumer-enabled=true` 做 E2E，观察幂等抵消双消费；Poller 兜底切除与消费侧回写链路改造留待独立迭代
+- **Phase 2D / 2E / 2F 已完成项**：MQ 主链路的“生产→消费”椅骨已全部接上，默认零行为变化：`MqExecutionCommandConsumer` + `ExecutionCommandMqPublisher` 共用 `ExecutionCommandConsumer` 接口；topology（`EXECUTION_COMMAND_QUEUE` / `EXECUTION_COMMAND_EXCHANGE` / binding 与 DLX 复用）由 `RabbitMQConfig` 统一声明；由 `AgentExecutionProperties.dispatch-mode`（`NONE / EVENT / MQ / BOTH`，默认 `NONE`）控制分发，`MqExecutionCommandProperties.{producer-enabled, consumer-enabled}` 分别控制 Publisher / Consumer 注册，支持独立灰度；`ExecutionDispatchValidator` 启动期 fail-fast。**Phase 2F 修正两个阻断性问题：**（a）Publisher 将投递挂到 `TransactionSynchronization.afterCommit()`，与本地事件 `@TransactionalEventListener(AFTER_COMMIT)` 语义对齐，避免“事务未提交先发消息”与“回滚后消息已发”；（b）Publisher 改为显式 `ObjectMapper.writeValueAsBytes` + `rabbitTemplate.send(Message)`，与消费端 `readValue(byte[])` 完全对称，不依赖默认 SimpleMessageConverter，也不侵入全局 `RabbitTemplate` converter。下一轮路线拍板见下方独立段落。
+
+**下一轮路线拍板（MQ 主链收尾，3 阶段严格依赖，不并列）**：
+
+1. **E2E 冒烟**（前提：具备 RabbitMQ 环境）：开 `dispatch-mode=BOTH` + `producer-enabled=true` + `consumer-enabled=true`，重点验证 Redis + DB 双层幂等对“本地事件 × MQ”双消费的抵消能力，确认 MQ 主链路真实可跑；
+2. **生产端可靠投递**（前提：① 已通过）：Publisher 接入 `CorrelationData` / publisher-confirms 回执，与 Outbox 可靠投递层一同考虑回执失败重发策略；
+3. **Poller 职责重定位 + 消费侧回写链路改造**（前提：①② 已稳定）：Poller **从“主消费载体”降级为孤儿 / 超时 / 补偿兜底**（不切除，作为 MQ 主链异常时的恢复机制保留）；`AsyncExecutionResultConsumer` 回写链路改造后置。
+
+> ❗ 不得跳阶推进；尤其不得在 E2E 未跑前推 Outbox，或在生产端可靠性未就绪前变动 Poller 当前职责。
 
 ### 5.2 第二阶段：补任务运行时能力
 
