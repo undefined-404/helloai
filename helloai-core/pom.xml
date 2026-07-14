@@ -20,6 +20,10 @@
             <artifactId>helloai-common</artifactId>
         </dependency>
         <dependency>
+            <groupId>com.helloai</groupId>
+            <artifactId>helloai-mq</artifactId>
+        </dependency>
+        <dependency>
             <groupId>com.baomidou</groupId>
             <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
         </dependency>

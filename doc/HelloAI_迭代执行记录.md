@@ -862,3 +862,71 @@ mvn test -pl helloai-job -Dtest="ExecutionCompensationTaskTest"
 - N11 阈值回退闭环已落地，本轮是 Phase 2B 遗留项的最终关闭
 - 执行命令 MQ Consumer 主链路仍未接入（仍属 N6 范围，下一轮 P2.3 推进“共用 `ExecutionCommandConsumer` 接口 + 新增 MQ Consumer”骨架）
 - 冷却期与阈值当前是全局配置，暂未支持 per-Agent 覆写（按需后续加 `agent.fallback_threshold_override` 列）
+
+---
+
+### 2026-07-14 Phase 2D N6 MQ ExecutionCommand Consumer 骨架（默认 CONDITIONAL 关闭）
+
+#### 1. 范围
+
+- 关闭 Phase 2B/2C 遗留“执行命令 MQ Consumer 主链路未接入”项
+- 遵循 `doc/HelloAI_调度解耦重构分析.md` 的“调度只发命令、执行独立消费、结果异步回写”哲学，新建 `MqExecutionCommandConsumer` 骨架
+- `MqExecutionCommandConsumer` 与 `LocalExecutionCommandConsumer` **共用 `ExecutionCommandConsumer` 接口**，最终执行链都收敛在同一套 6 步流程上
+- **默认 CONDITIONAL 关闭**（`helloai.mq.execution-command.enabled=false`），不影响现有 POLLER / EVENT 主链路；生产/具备 RabbitMQ 的回归环境可手动开启
+
+#### 2. 实际落地
+
+- **`helloai-core/pom.xml`**
+  - 新增 `com.helloai:helloai-mq` 依赖（`P2.3a`）——`MqExecutionCommandConsumer` 需要 `AbstractIdempotentConsumer` / `MessageDeduplicationService` / `RabbitMQConfig` / `@RabbitListener` 等 MQ 组件
+
+- **`MqExecutionCommandProperties`（helloai-common 新建）**
+  - `@ConfigurationProperties(prefix = "helloai.mq.execution-command")`
+  - 字段：`enabled`（默认 `false`）/ `exchange` / `queue` / `routingKey`
+
+- **`ExecutionCommandMqMessage`（helloai-core/agent/mqconsumer 新建 DTO）**
+  - 由于 `ExecutionCommand` 使用 Lombok `@Value`、缺少无参构造与 setter，与 Jackson 反序列化不兼容
+  - 单独提供 `@Data @Builder` 的 MQ 载体，字段：`recordId / eventId / subTaskId / agentId / trigger / accessType`
+  - 枚举 `AgentAccessType` 以**字符串**形式落地，避免枚举顺序漂移导致反序列化失败
+  - `from(ExecutionCommand)` / `toDomain()` 两端转换，未知枚举值按 `null` 处理（保留向后兼容）
+
+- **`RabbitMQConfig`（helloai-mq 扩展）**
+  - 新增常量 `EXECUTION_COMMAND_QUEUE` / `EXECUTION_COMMAND_EXCHANGE`
+  - 新增 3 个 Bean：`executionCommandExchange`（TopicExchange）/ `executionCommandQueue`（durable，绑 `x-dead-letter-exchange = DLX_EXCHANGE` 与 `x-dead-letter-routing-key = DLX_QUEUE`）/ `executionCommandBinding`（`execution.command.*`）
+  - 复用 `helloai-mq` 既有 `DLX_EXCHANGE` / `DLX_QUEUE`，不新增 DLX 拓扑
+
+- **`MqExecutionCommandConsumer`（helloai-core/agent/mqconsumer 新建）**
+  - `implements ExecutionCommandConsumer` + `extends AbstractIdempotentConsumer`（遵循 `CODE_STYLE §10.3`）
+  - `consume(ExecutionCommand)` 直接委托给 `LocalExecutionCommandConsumer.consume(command)`，**不重复实现 6 步执行链**
+  - `@RabbitListener(queues = EXECUTION_COMMAND_QUEUE, ackMode = "MANUAL")`：MANUAL ACK 语义
+  - 消息体反序列化失败 / `eventId` 缺失/空白 → `basicAck`（不阻塞队列）
+  - `tryConsume(eventId, CONSUMER_NAME, () -> consume(command))` 走 Redis + DB 双层幂等
+  - 消费成功 → `basicAck`；消费失败 → `basicNack(requeue=false)` 走 DLX
+  - `@ConditionalOnProperty(name = "helloai.mq.execution-command.enabled", havingValue = "true")` 默认不注册 Bean
+
+- **`application.yml`（helloai-start）**
+  - 新增 `helloai.mq.execution-command.*` 4 项默认配置：`enabled=false` / `exchange=helloai.execution-command.exchange` / `queue=helloai.execution-command.queue` / `routing-key=execution.command.created`
+  - 附注释说明：默认 CONDITIONAL 关闭，生产或具备 RabbitMQ 的回归环境可打开
+
+- **`MqExecutionCommandConsumerTest`（helloai-core 测试 新建）**
+  - Mockito 为主 + 真实 `ObjectMapper` 序列化，4 个 `@Nested`：`HappyPath` / `EdgeCases` / `Deduplication` / `ChannelIo`
+  - 覆盖 6 类行为：正常消息委托+ACK / 坏 JSON ACK / 缺 eventId ACK / 空白 eventId ACK / 委托异常 NACK→DLX / 幂等命中不重复调 consume / `consume(command)` 显式委托 `LocalExecutionCommandConsumer` / `channel.basicAck` 抛 `IOException` 透传
+
+#### 3. 影响
+
+- 对外行为变化：
+  - 默认无变化（`enabled=false`，Bean 不注册，MQ 主路径不启用）
+  - `enabled=true` 开启后：调度端向 `helloai.execution-command.exchange`（`execution.command.*` 路由）发消息 → `MqExecutionCommandConsumer.onMessage` 消费 → 委托 `LocalExecutionCommandConsumer` 执行 6 步链 → ACK / NACK
+- 配置变化：`application.yml` 新增 `helloai.mq.execution-command.*` 4 项
+- 数据结构变化：无（不涉及 schema / Flyway）
+- 差距项变化：N6 从“实现路径待定”进展为“骨架已交付（CONDITIONAL 关闭）”
+
+#### 4. 验证
+
+- `mvn -pl helloai-core,helloai-mq -am test -Dtest=MqExecutionCommandConsumerTest -Dsurefire.failIfNoSpecifiedTests=false` → 8 个用例全部通过（`Tests run: 8, Failures: 0, Errors: 0, Skipped: 0`），`BUILD SUCCESS`
+- `git status` 脏文件清单与本轮改动一致：`helloai-core/pom.xml` / `RabbitMQConfig.java` / `application.yml` 3 处修改 + `MqExecutionCommandProperties.java` / `ExecutionCommandMqMessage.java` / `MqExecutionCommandConsumer.java` / `MqExecutionCommandConsumerTest.java` 4 处新增
+
+#### 5. 遗留
+
+- MQ Consumer 默认关闭，需要在具备 RabbitMQ 的环境打开 `helloai.mq.execution-command.enabled=true` 做 E2E 验证
+- 生产端（`ExecutionCommandService`）仍只发本地事件 + DB Poller，暂未同时发 MQ 消息（本轮只加 Consumer 骨架）
+- `MqExecutionCommandConsumer` 未注入 `MqExecutionCommandProperties`（仅占位 `describeProperties()`），后续接入配置可读与启动期日志

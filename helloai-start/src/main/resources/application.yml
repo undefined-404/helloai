@@ -120,6 +120,15 @@ helloai:
     #   POLLER: 不发布事务事件，Poller 扫所有 PENDING 作为主路径（默认）
     #   BOTH: 事件与 Poller 并行，CAS 保证幂等，适合 EVENT→POLLER 过渡
     consumer-mode: POLLER
+  # Phase 2D N6: MQ ExecutionCommand Consumer 骨架（默认 CONDITIONAL 关闭）
+  #   enabled=true 时 MqExecutionCommandConsumer 才会被注册为 Spring Bean；
+  #   生产或具备 RabbitMQ 的回归环境可以打开；当前骨架阶段默认关闭。
+  mq:
+    execution-command:
+      enabled: false
+      exchange: helloai.execution-command.exchange
+      queue: helloai.execution-command.queue
+      routing-key: execution.command.created
   # N9: 多Provider统一配置入口，替代各factory中散落的@Value
   providers:
     deepseek:

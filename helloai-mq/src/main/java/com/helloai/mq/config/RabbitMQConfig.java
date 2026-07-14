@@ -14,6 +14,9 @@ public class RabbitMQConfig {
     public static final String AGENT_TOPIC_EXCHANGE = "helloai.agent.exchange";
     public static final String DLX_EXCHANGE = "helloai.dlx.exchange";
 
+    public static final String EXECUTION_COMMAND_QUEUE = "helloai.execution-command.queue";
+    public static final String EXECUTION_COMMAND_EXCHANGE = "helloai.execution-command.exchange";
+
     public static final String EXECUTOR_QUEUE = "helloai.executor.queue";
     public static final String REVIEWER_QUEUE = "helloai.reviewer.queue";
     public static final String PLANNER_QUEUE = "helloai.planner.queue";
@@ -29,6 +32,11 @@ public class RabbitMQConfig {
     @Bean
     public DirectExchange dlxExchange() {
         return ExchangeBuilder.directExchange(DLX_EXCHANGE).durable(true).build();
+    }
+
+    @Bean
+    public TopicExchange executionCommandExchange() {
+        return ExchangeBuilder.topicExchange(EXECUTION_COMMAND_EXCHANGE).durable(true).build();
     }
 
     @Bean
@@ -69,6 +77,14 @@ public class RabbitMQConfig {
     }
 
     @Bean
+    public Queue executionCommandQueue() {
+        return QueueBuilder.durable(EXECUTION_COMMAND_QUEUE)
+                .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
+                .withArgument("x-dead-letter-routing-key", DLX_QUEUE)
+                .build();
+    }
+
+    @Bean
     public Queue notificationQueue() {
         return QueueBuilder.durable(NOTIFICATION_QUEUE)
                 .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
@@ -79,6 +95,11 @@ public class RabbitMQConfig {
     @Bean
     public Binding notificationBinding() {
         return BindingBuilder.bind(notificationQueue()).to(agentExchange()).with("agent.notification.*");
+    }
+
+    @Bean
+    public Binding executionCommandBinding() {
+        return BindingBuilder.bind(executionCommandQueue()).to(executionCommandExchange()).with("execution.command.*");
     }
 
     @Bean
