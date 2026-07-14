@@ -930,3 +930,83 @@ mvn test -pl helloai-job -Dtest="ExecutionCompensationTaskTest"
 - MQ Consumer 默认关闭，需要在具备 RabbitMQ 的环境打开 `helloai.mq.execution-command.enabled=true` 做 E2E 验证
 - 生产端（`ExecutionCommandService`）仍只发本地事件 + DB Poller，暂未同时发 MQ 消息（本轮只加 Consumer 骨架）
 - `MqExecutionCommandConsumer` 未注入 `MqExecutionCommandProperties`（仅占位 `describeProperties()`），后续接入配置可读与启动期日志
+
+---
+
+### Phase 2E：N6 生产端接入 MQ + 派发模式对称化
+
+#### 1. 范围
+
+- 关闭 Phase 2D 遗留 ②「生产端 `ExecutionCommandService` 未发 MQ」与 ③「Consumer 未注入 Properties」
+- 遵循 `doc/HelloAI_调度解耦重构分析.md` "调度只发命令、执行独立消费"目标态：为生产端 / 调度侧引入与 `consumer-mode` **语义对称**的 `dispatch-mode`（`NONE / EVENT / MQ / BOTH`），把生产端行为从消费侧配置上摧开
+- MQ 生产 / 消费开关**独立灰度**：`producer-enabled` 与 `consumer-enabled` 拆开
+- **默认零行为变化**：`dispatch-mode` 默认 `NONE`，命令只落库交给 DB Poller 兜底，与当前 `consumer-mode=POLLER` 事实配套
+- **fail-fast 而非隐式回退**：`dispatch-mode ∈ {MQ, BOTH}` 但 producer 开关未开 / Publisher Bean 不可用 → 启动 & 运行期均抛 `IllegalStateException`
+- 本轮不做 E2E（RabbitMQ 环境 ready 后再跑），也不切 Poller 兜底
+
+#### 2. 实际落地
+
+- **`AgentExecutionProperties`（helloai-common）**
+  - 新增枚举 `DispatchMode { NONE, EVENT, MQ, BOTH }`
+  - 新增字段 `private DispatchMode dispatchMode = DispatchMode.NONE`
+  - 新增辅助方法 `isDispatchEvent()` / `isDispatchMq()`，与既有 `isEventMode()` / `isPollerMain()` 语义对称
+
+- **`MqExecutionCommandProperties`（helloai-common）**
+  - `enabled` 拆成 `producerEnabled`（默认 `false`）+ `consumerEnabled`（默认 `false`）
+  - `exchange` / `queue` / `routingKey` JavaDoc 明确"仅作为启动日志与调试参考，topology 由 `RabbitMQConfig` 常量声明"
+
+- **`ExecutionCommandMqPublisher`（helloai-core/agent/command 新建）**
+  - `@ConditionalOnProperty(name = "helloai.mq.execution-command.producer-enabled", havingValue = "true")` 默认不注册
+  - 依赖 `RabbitTemplate` + `MqExecutionCommandProperties`
+  - `publish(ExecutionCommand)`：`ExecutionCommandMqMessage.from(cmd)` → `convertAndSend(EXCHANGE, routingKey, msg, mpp)`
+  - 消息后处理：`messageId = correlationId = eventId`（去重键在消息头显式携带），`deliveryMode = PERSISTENT`
+  - 结构化日志：`mq.execution-command.publish eventId=... subTaskId=... agentId=... routingKey=...`
+
+- **`ExecutionCommandService`（helloai-core）**
+  - 生产端读 `dispatch-mode` 分发（与 `consumer-mode` 完全解耦）；Publisher 通过 `ObjectProvider<ExecutionCommandMqPublisher>` 注入，避免 producer 关闭时启动失败
+  - `NONE`：只落库 + DEBUG 日志
+  - `EVENT`：`applicationEventPublisher.publishEvent(ExecutionCommandCreatedEvent)`
+  - `MQ`：`mqPublisher.publish(command)`；`getIfAvailable() == null` → 抛 `IllegalStateException`
+  - `BOTH`：先发本地事件，再发 MQ（Publisher 缺失同样 fail-fast）
+  - 汇总日志加 `dispatch-mode` 与 `consumer-mode` 双字段
+  - 移除 `@RequiredArgsConstructor`，改为显式构造函数（为兼容 `ObjectProvider` 参数）
+
+- **`ExecutionDispatchValidator`（helloai-core/agent/command 新建）**
+  - `@PostConstruct` 一次性把 `dispatch-mode` / `consumer-mode` / `producer-enabled` / `consumer-enabled` / `exchange` / `queue` / `routing-key` 打印到启动日志
+  - `dispatch-mode ∈ {MQ, BOTH}` 但 `producer-enabled=false` 或 Publisher Bean 不可用 → 抛 `IllegalStateException` 阻断上下文启动
+  - `dispatch-mode ∈ {MQ, BOTH}` 但 `consumer-enabled=false` → 只 WARN 不阻断（允许 shadow / 跨实例消费场景）
+
+- **`MqExecutionCommandConsumer`（helloai-core）**
+  - `@ConditionalOnProperty` 从 `enabled` → `consumer-enabled`
+  - 构造函数注入 `MqExecutionCommandProperties`，`describeProperties()` 从返回 `null` 改为返回真实 properties
+
+- **`application.yml`（helloai-start）**
+  - 修复历史缩进 bug：Phase 2D 追加时 `exchange` / `queue` 顶格错乱（运行时靠 `MqExecutionCommandProperties` 默认值兜住），本轮正为规范缩进
+  - `helloai.execution.dispatch-mode: NONE`（显式默认）
+  - `helloai.mq.execution-command.enabled` → 拆成 `producer-enabled: false` + `consumer-enabled: false`
+  - 附注释说明 4 挡语义与"支持先开生产端 shadow 观察队列堆积、再开消费端"的灰度节奏
+
+- **测试**
+  - `MqExecutionCommandConsumerTest`：构造函数从 4 参改为 5 参（+ `MqExecutionCommandProperties`），既有 8 用例继续绿
+  - `ExecutionCommandServiceDispatchTest`（新建，6 用例）：`DispatchByMode` 覆盖 NONE / EVENT / MQ / BOTH 各分支的事件与 MQ 调用次数；`FailFast` 覆盖 `MQ` / `BOTH` 缺 Publisher 时的 `IllegalStateException` + 异常消息包含 `dispatch-mode=`
+
+#### 3. 影响
+
+- 对外行为变化：
+  - **默认零变化**：`dispatch-mode=NONE`，命令只落库交给 Poller 兜底，与 Phase 2D 之前完全一致
+  - `dispatch-mode=MQ` + `producer-enabled=true` + `consumer-enabled=true` 开启后：`ExecutionCommandService` → `ExecutionCommandMqPublisher.publish` → RabbitMQ (`execution.command.created`) → `MqExecutionCommandConsumer.onMessage` → 委托 `LocalExecutionCommandConsumer` 执行 6 步链
+  - `dispatch-mode` 与 `producer-enabled` 配置组合矛盾时启动 fail-fast
+- 配置变化：`helloai.execution.dispatch-mode` 新增；`helloai.mq.execution-command.enabled` 拆成 `producer-enabled` + `consumer-enabled`
+- 数据结构变化：无
+- 差距项变化：N6 从"骨架已交付（CONDITIONAL 关闭）" → "主链路已连通（producer/consumer 独立开关，E2E 待验证）"
+
+#### 4. 验证
+
+- `mvn "-pl=helloai-core" "-am" test "-Dtest=MqExecutionCommandConsumerTest,ExecutionCommandServiceDispatchTest" "-Dsurefire.failIfNoSpecifiedTests=false"` → `Tests run: 14, Failures: 0, Errors: 0, Skipped: 0`，`BUILD SUCCESS`
+- 手工核对：`ExecutionCommandServiceDispatchTest` 日志显示 4 种 `dispatch-mode` 均按预期打印分发路径；`fail-fast` 用例异常消息包含 `dispatch-mode=MQ`
+
+#### 5. 遗留
+
+- E2E 冒烟仍未跑（需 RabbitMQ 环境）：至少覆盖 `dispatch-mode=BOTH + producer-enabled=true + consumer-enabled=true`，观察 Redis + DB 幂等确实抵消双消费
+- Poller 兜底切除 / 主路径切换未做，本轮明确保留 Poller 作为兜底路径
+- 未做消费侧回写链路（`AsyncExecutionResultConsumer`）改造，`ExecutionResultHandler.handleReport` 现有主路径不动

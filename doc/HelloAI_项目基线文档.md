@@ -31,7 +31,7 @@
 - 熔断降级与同角色替补
 - Reconcile 健康检查与离线重分配
 - Session TTL 清理
-- MQ 维度的执行命令消费骨架：`MqExecutionCommandConsumer` 与 `LocalExecutionCommandConsumer` 共用 `ExecutionCommandConsumer` 接口，`@RabbitListener` MANUAL ACK；默认 CONDITIONAL 关闭（`helloai.mq.execution-command.enabled=false`），生产或具备 RabbitMQ 的回归环境可手动打开。详见 §6 文档矩阵中“迭代执行记录 Phase 2D”条目
+- MQ 维度的执行命令主链路（producer/consumer 双开关）：`MqExecutionCommandConsumer` 与 `LocalExecutionCommandConsumer` 共用 `ExecutionCommandConsumer` 接口，`@RabbitListener` MANUAL ACK；`ExecutionCommandMqPublisher` 完成生产端接入，由 `AgentExecutionProperties.dispatch-mode`（`NONE / EVENT / MQ / BOTH`，默认 `NONE`）控制分发方式，`MqExecutionCommandProperties.{producer-enabled, consumer-enabled}` 分别控制 Publisher / Consumer 注册，支持独立灰度；MQ 段 Publisher Bean 不可用则 `ExecutionDispatchValidator` 启动期 fail-fast，不隐式回退。默认零行为变化（POLLER 仍为默认主消费载体）；具备 RabbitMQ 环境可开 `dispatch-mode=BOTH` + 双开关做 E2E。详见 §6 文档矩阵中“迭代执行记录 Phase 2D / Phase 2E”条目
 - 基础管理后台与前端主流程
 
 ---
@@ -41,7 +41,7 @@
 以下内容即使在历史文档中被展开描述，也默认属于目标态、部分落地或待补能力，不能直接按“已交付”理解：
 
 - 工作流模板与 Team 编排
-- 独立 MQ 版执行命令消费载体（DB Poller 主消费已交付；MQ Consumer 骨架已交付且 CONDITIONAL 关闭；MQ 主链投产 + 生产端对接发送仍待下一轮）
+- 独立 MQ 版执行命令消费载体（DB Poller 主消费已交付；MQ Consumer / Publisher 骨架均已交付且默认关闭；可通过 `dispatch-mode` + `producer-enabled` / `consumer-enabled` 独立灰度；MQ 主链 E2E 投产与 Poller 兜底切除仍待 RabbitMQ 环境 ready 下一轮）
 - `credential_vault` 的完整轮换、迁移与权限模型
 - 浏览器型 Agent 的真实接入链路
 - 多 Provider 的完整配置复用与平台内执行统一抽象

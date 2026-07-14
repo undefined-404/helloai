@@ -89,6 +89,38 @@ public class AgentExecutionProperties {
      */
     private ConsumerMode consumerMode = ConsumerMode.POLLER;
 
+    /**
+     * 执行命令派发模式（生产端 / 调度侧的显式配置）。
+     *
+     * <p>与 {@link ConsumerMode} 语义对称：{@code ConsumerMode} 描述<em>消费端</em>从哪条路径消费执行命令；
+     * {@code DispatchMode} 描述<em>生产端</em>把执行命令<em>额外</em>向哪条路径推送。
+     * 两者相互独立，共同覆盖调度解耦重构分析中"调度只发命令、执行独立消费"的目标态。</p>
+     *
+     * <p>四挡：
+     * <ul>
+     *     <li>{@code NONE}：命令只落库，不发本地事件、不发 MQ，交由 DB Poller 兜底消费——
+     *         与项目当前默认事实（consumer-mode=POLLER）配套，保持零行为变化；</li>
+     *     <li>{@code EVENT}：只发布本地 Spring 事务事件（旧 EVENT 路径）；</li>
+     *     <li>{@code MQ}：只投递 RabbitMQ（前提 producer-enabled=true 且 Publisher Bean 可用，
+     *         否则启动期或运行期 fail-fast，不做隐式回退）；</li>
+     *     <li>{@code BOTH}：本地事件 + MQ 双发，用于 EVENT→MQ 灰度切换过渡。</li>
+     * </ul>
+     * </p>
+     */
+    public enum DispatchMode {
+        NONE,
+        EVENT,
+        MQ,
+        BOTH
+    }
+
+    /**
+     * 派发模式。默认 {@link DispatchMode#NONE}，保持"命令只落库、Poller 兜底"的当前生产事实。
+     *
+     * <p>本字段仅供生产端 {@code ExecutionCommandService} 读取，与 {@link #consumerMode} 完全解耦。</p>
+     */
+    private DispatchMode dispatchMode = DispatchMode.NONE;
+
     /** 是否为 Poller 主消费模式（POLLER 或 BOTH 都算）。 */
     public boolean isPollerMain() {
         return consumerMode == ConsumerMode.POLLER || consumerMode == ConsumerMode.BOTH;
@@ -97,5 +129,15 @@ public class AgentExecutionProperties {
     /** 是否为事件主消费模式（EVENT 或 BOTH 都算）。 */
     public boolean isEventMode() {
         return consumerMode == ConsumerMode.EVENT || consumerMode == ConsumerMode.BOTH;
+    }
+
+    /** 是否需要生产端发布本地 Spring 事件（EVENT 或 BOTH）。 */
+    public boolean isDispatchEvent() {
+        return dispatchMode == DispatchMode.EVENT || dispatchMode == DispatchMode.BOTH;
+    }
+
+    /** 是否需要生产端投递 MQ（MQ 或 BOTH）。 */
+    public boolean isDispatchMq() {
+        return dispatchMode == DispatchMode.MQ || dispatchMode == DispatchMode.BOTH;
     }
 }

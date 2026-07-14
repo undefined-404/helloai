@@ -120,12 +120,20 @@ helloai:
     #   POLLER: 不发布事务事件，Poller 扫所有 PENDING 作为主路径（默认）
     #   BOTH: 事件与 Poller 并行，CAS 保证幂等，适合 EVENT→POLLER 过渡
     consumer-mode: POLLER
-  # Phase 2D N6: MQ ExecutionCommand Consumer 骨架（默认 CONDITIONAL 关闭）
-  #   enabled=true 时 MqExecutionCommandConsumer 才会被注册为 Spring Bean；
-  #   生产或具备 RabbitMQ 的回归环境可以打开；当前骨架阶段默认关闭。
+    # Phase 2E: 生产端 / 调度侧的显式派发模式，与 consumer-mode 完全解耦
+    #   NONE:  命令只落库，交给 DB Poller 兜底消费（默认，与 consumer-mode=POLLER 配套）
+    #   EVENT: 只发布本地 Spring 事件（旧 EVENT 路径）
+    #   MQ:    只投递 RabbitMQ，前提需 mq.execution-command.producer-enabled=true，否则启动 fail-fast
+    #   BOTH:  事件 + MQ 双发，用于 EVENT→MQ 灰度切换
+    dispatch-mode: NONE
+  # Phase 2D N6 / Phase 2E: MQ ExecutionCommand 主链路开关（默认均关闭）
+  #   producer-enabled=true 时 ExecutionCommandMqPublisher 才会注册（必须与 dispatch-mode=MQ/BOTH 同时打开）
+  #   consumer-enabled=true 时 MqExecutionCommandConsumer 才会注册
+  #   两个开关相互独立，支持"先开生产端 shadow 观察队列堆积、再开消费端"的灰度节奏
   mq:
     execution-command:
-      enabled: false
+      producer-enabled: false
+      consumer-enabled: false
       exchange: helloai.execution-command.exchange
       queue: helloai.execution-command.queue
       routing-key: execution.command.created

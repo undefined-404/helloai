@@ -35,7 +35,7 @@ import java.nio.charset.StandardCharsets;
  *
  * <p>消费骨架约束：</p>
  * <ol>
- *     <li>仅在 {@code helloai.mq.execution-command.enabled=true} 时生效，关闭后整个 Bean 不存在，不影响既有 POLLER / EVENT 主链路</li>
+ *     <li>仅在 {@code helloai.mq.execution-command.consumer-enabled=true} 时生效，关闭后整个 Bean 不存在，不影响既有 POLLER / EVENT 主链路</li>
  *     <li>消息体为 {@link ExecutionCommandMqMessage} JSON；解析失败按 ACK 处理（写入死信也无意义）</li>
  *     <li>采用 MANUAL ACK：消费成功 → basicAck；消费失败 → basicNack(requeue=false) 走 DLX</li>
  *     <li>幂等由父类 {@link AbstractIdempotentConsumer#tryConsume} 提供 Redis + DB 双层去重</li>
@@ -44,7 +44,7 @@ import java.nio.charset.StandardCharsets;
  */
 @Slf4j
 @Component
-@ConditionalOnProperty(name = "helloai.mq.execution-command.enabled", havingValue = "true")
+@ConditionalOnProperty(name = "helloai.mq.execution-command.consumer-enabled", havingValue = "true")
 public class MqExecutionCommandConsumer extends AbstractIdempotentConsumer implements ExecutionCommandConsumer {
 
     /**
@@ -53,13 +53,16 @@ public class MqExecutionCommandConsumer extends AbstractIdempotentConsumer imple
     static final String CONSUMER_NAME = "MqExecutionCommandConsumer";
 
     private final LocalExecutionCommandConsumer localDelegate;
+    private final MqExecutionCommandProperties mqProperties;
 
     public MqExecutionCommandConsumer(JdbcTemplate jdbcTemplate,
                                       ObjectMapper objectMapper,
                                       MessageDeduplicationService deduplicationService,
-                                      LocalExecutionCommandConsumer localDelegate) {
+                                      LocalExecutionCommandConsumer localDelegate,
+                                      MqExecutionCommandProperties mqProperties) {
         super(jdbcTemplate, objectMapper, deduplicationService);
         this.localDelegate = localDelegate;
+        this.mqProperties = mqProperties;
     }
 
     /**
@@ -120,9 +123,11 @@ public class MqExecutionCommandConsumer extends AbstractIdempotentConsumer imple
     }
 
     /**
-     * 提供给外部（生产端）的对外配置引用，便于调试与启动期日志。
+     * 提供给外部（生产端 / 启动日志）的对外配置引用。
+     *
+     * <p>Phase 2E 起已真正注入 {@link MqExecutionCommandProperties}，不再返回 null。</p>
      */
     public MqExecutionCommandProperties describeProperties() {
-        return null; // 当前版本未注入 properties，保留扩展位
+        return mqProperties;
     }
 }

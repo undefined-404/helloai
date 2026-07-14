@@ -8,8 +8,8 @@ import com.helloai.core.entity.Agent;
 import com.helloai.core.entity.AgentExecutionRecord;
 import com.helloai.core.entity.SubTask;
 import com.helloai.core.event.ExecutionCommandCreatedEvent;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,12 +24,14 @@ import com.helloai.core.service.TaskTimelineService;
 /**
  * 执行命令服务。
  *
- * <p>当前只负责“生成命令 + 记录命令痕迹”，并按消费模式决定是否发布本地命令创建事件，
- * 不在这里直接触发平台执行，从而把调度层和执行层之间切出清晰边界。</p>
+ * <p>当前只负责“生成命令 + 记录命令痕迹”，并按 {@link AgentExecutionProperties.DispatchMode dispatch-mode} 决定
+ * 是否发布本地命令事件、是否投递 RabbitMQ，不在这里直接触发平台执行，从而把调度层和执行层之间切出清晰边界。</p>
+ *
+ * <p>Phase 2E 变更：将生产端分发从 {@code consumer-mode} 上摧开，改为读取对称的
+ * {@code helloai.execution.dispatch-mode}，彻底解耦"消费侧配置"与"生产侧行为"。</p>
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class ExecutionCommandService {
 
     private final SubTaskService subTaskService;
@@ -38,6 +40,23 @@ public class ExecutionCommandService {
     private final TaskTimelineService taskTimelineService;
     private final ApplicationEventPublisher applicationEventPublisher;
     private final AgentExecutionProperties executionProperties;
+    private final ObjectProvider<ExecutionCommandMqPublisher> mqPublisherProvider;
+
+    public ExecutionCommandService(SubTaskService subTaskService,
+                                   AgentService agentService,
+                                   AgentExecutionRecordService agentExecutionRecordService,
+                                   TaskTimelineService taskTimelineService,
+                                   ApplicationEventPublisher applicationEventPublisher,
+                                   AgentExecutionProperties executionProperties,
+                                   ObjectProvider<ExecutionCommandMqPublisher> mqPublisherProvider) {
+        this.subTaskService = subTaskService;
+        this.agentService = agentService;
+        this.agentExecutionRecordService = agentExecutionRecordService;
+        this.taskTimelineService = taskTimelineService;
+        this.applicationEventPublisher = applicationEventPublisher;
+        this.executionProperties = executionProperties;
+        this.mqPublisherProvider = mqPublisherProvider;
+    }
 
     /**
      * 为已分配子任务创建执行命令。
@@ -95,15 +114,31 @@ public class ExecutionCommandService {
                         "eventId", eventId,
                         "accessType", agent.getAccessType().name()));
 
-        // EVENT / BOTH 模式发布事务事件；POLLER 模式只保留已落库的 PENDING 命令
-        if (executionProperties.isEventMode()) {
+        // Phase 2E: 按 dispatch-mode 显式分发，与 consumer-mode 完全解耦
+        //   NONE  : 只落库，交给 DB Poller 兜底（当前默认）
+        //   EVENT : 只发本地 Spring 事件（旧 EVENT 路径）
+        //   MQ    : 只投递 RabbitMQ，Publisher 不可用 → fail-fast
+        //   BOTH  : 事件 + MQ 双发，用于灰度过渡
+        AgentExecutionProperties.DispatchMode dispatchMode = executionProperties.getDispatchMode();
+        if (executionProperties.isDispatchEvent()) {
             applicationEventPublisher.publishEvent(new ExecutionCommandCreatedEvent(command));
-        } else {
-            log.debug("执行命令已创建（POLLER 主消费模式，跳过 publishEvent）: subTaskId={}, recordId={}",
+        }
+        if (executionProperties.isDispatchMq()) {
+            ExecutionCommandMqPublisher mqPublisher = mqPublisherProvider.getIfAvailable();
+            if (mqPublisher == null) {
+                // 启动期 ExecutionDispatchValidator 已抦截；这里是运行期的第二道防线，不隐式回退
+                throw new IllegalStateException(
+                        "helloai.execution.dispatch-mode=" + dispatchMode
+                                + " 但 ExecutionCommandMqPublisher Bean 不可用，请同时设置 helloai.mq.execution-command.producer-enabled=true");
+            }
+            mqPublisher.publish(command);
+        }
+        if (dispatchMode == AgentExecutionProperties.DispatchMode.NONE) {
+            log.debug("执行命令已创建（dispatch-mode=NONE，只落库，交给 Poller 兜底）: subTaskId={}, recordId={}",
                     subTaskId, record.getId());
         }
-        log.info("执行命令已创建: subTaskId={}, agentId={}, recordId={}, trigger={}, consumer-mode={}",
-                subTaskId, agentId, record.getId(), trigger, executionProperties.getConsumerMode());
+        log.info("执行命令已创建: subTaskId={}, agentId={}, recordId={}, trigger={}, dispatch-mode={}, consumer-mode={}",
+                subTaskId, agentId, record.getId(), trigger, dispatchMode, executionProperties.getConsumerMode());
         return command;
     }
 }

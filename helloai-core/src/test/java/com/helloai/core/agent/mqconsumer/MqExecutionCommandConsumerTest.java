@@ -1,6 +1,7 @@
 package com.helloai.core.agent.mqconsumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.helloai.common.config.MqExecutionCommandProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.mq.service.MessageDeduplicationService;
@@ -64,7 +65,8 @@ class MqExecutionCommandConsumerTest {
 
     @BeforeEach
     void setUp() {
-        consumer = new MqExecutionCommandConsumer(jdbcTemplate, MAPPER, deduplicationService, localDelegate);
+        MqExecutionCommandProperties properties = new MqExecutionCommandProperties();
+        consumer = new MqExecutionCommandConsumer(jdbcTemplate, MAPPER, deduplicationService, localDelegate, properties);
     }
 
     /**
