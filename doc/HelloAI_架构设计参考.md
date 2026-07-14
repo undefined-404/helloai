@@ -348,6 +348,7 @@ TCC 在本项目中更多作为最终一致与兜底思路参考，而不是逐�
 - 继续削薄 `SubTaskExecutionService` 的编排职责
 - 将 `ExecutionResultHandler` 固化为唯一执行结果入口
 - 强化 ExecutionCommand 幂等、补偿、晚到结果防覆盖
+- **Phase 2D 已完成项**：MQ Consumer 骨架（`MqExecutionCommandConsumer` + `RabbitMQConfig` 加 `EXECUTION_COMMAND_QUEUE` / `EXECUTION_COMMAND_EXCHANGE` / binding，复用 `DLX_EXCHANGE` / `DLX_QUEUE`；与 `LocalExecutionCommandConsumer` 共用 `ExecutionCommandConsumer` 接口；`@ConditionalOnProperty` 默认 CONDITIONAL 关闭）。下一轮在具备 RabbitMQ 的环境做 E2E，同时让 `ExecutionCommandService` 在发本地事件的同时发 MQ，使两路消费并存
 
 ### 5.2 第二阶段：补任务运行时能力
 
