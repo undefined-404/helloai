@@ -1,4 +1,4 @@
-﻿# HelloAI 实现差距表
+# HelloAI 实现差距表
 
 ## 1. 文档定位
 
@@ -39,16 +39,17 @@
 
 | 编号 | 主题 | 当前状态 | 差距定义 | 处理建议 |
 |---|---|---|---|---|
-| N1 | Outbox / 命令可靠投递底座 | 部分落地 | `AgentOutboxService` 已承担事务性消息发布基础能力，Outbox 思路已进入主线；但执行命令链路尚未切到独立 MQ / DB poller，当前仍主要依赖本地事件消费 | 继续补功能 |
+| N1 | Outbox / 命令可靠投递底座 | 部分落地 | `AgentOutboxService` 已承担事务性消息发布基础能力，Outbox 思路已进入主线；执行命令已完成 DB Poller 主消费载体（`consumer-mode=POLLER` 默认），但尚未形成“执行命令 → Outbox → MQ → 独立 Consumer”的可靠投递闭环 | 继续补功能 |
 | N2 | 可配置工作流模板 | 未落地 | 缺模板表、模板管理、模板化调度入口与 Team 编排 | 后续独立迭代 |
-| N3 | MCP Server 工具集 | 已交付 | 工具主链已可用，口径已随 D1/D2 关闭同步收口 | 保持现状 |
+| N3 | MCP Server 工具集 | 已交付 | MCP SSE 主通道工具链已可用，已具备外部 Agent 最小执行闭环能力：`pullTasks/ack/claimSubTask/heartbeat/uploadArtifact/submitResult/reportBlocked/getAgentStatus`（其中 `submitResult` 对接统一回写入口，`reportBlocked` 记录阻塞原因证据链） | 保持现状 |
 | N4 | 心跳与在线判定 | 已交付 | 在线态三件套、在线计算态与巡检收敛已具备 | 保持现状 |
 | N5 | 熔断降级 | 已交付 | per-agent 熔断与同角色替补策略已具备 | 保持现状 |
-| N6 | 执行命令消费与结果回写 | 部分落地 | 已形成“命令创建 → DB Poller 兜底 + 本地事件快速路径 → 结果回写/补偿”的双路径主链：消费者已拆为 6 步分层（加载 → startIfNeeded → markRunning → timeline → executeOnce 纯执行 → handleSuccess/Failure 回写 → markSuccess/Failed），executeOnce 已被削薄为纯执行；本地 Spring 事务事件仍是实时主路径，新增 ExecutionCommandPoller 作为独立 DB Poller 兜底消费者（扫 “孤儿 PENDING” 行重建 ExecutionCommand 并触发消费），二者通过 Consumer 内部 CAS markRunning 保证幂等 | 后续推进架构设计参考 §5.2 控制命令层 |
+| N6 | 执行命令消费与结果回写 | 部分落地 | 已完成 DB Poller 主线化：`consumer-mode` 支持 `EVENT / POLLER / BOTH`，默认 `POLLER`；`ExecutionCommandService` 在 `EVENT/BOTH` 才发布本地事务事件，`POLLER` 仅落库 PENDING 命令；`ExecutionCommandPoller` 在 `POLLER/BOTH` 扫描全部 PENDING（主消费），在 `EVENT` 仅扫描孤儿 PENDING（兜底）；Poller 依赖抽象 `ExecutionCommandConsumer`，默认实现为 `LocalExecutionCommandConsumer.consume()`（Bean 常驻）。结果回写入口已收口为 `ExecutionResultHandler.handleReport(ExecutionResultReport)`，平台内执行链与外部 MCP `submitResult` 统一走该入口。当前尚未新增 MQ Consumer，执行命令主链仍未切到 RabbitMQ | 后续推进“MQ 主链路 + DB 状态中心 + Poller 兜底恢复”（引入执行命令 MQ Consumer，Poller 保留为漏消费/超时/恢复兜底） |
 | N7 | 健康检查改写 | 已交付 | Reconcile、离线重分配、兜底收敛已具备 | 保持现状 |
 | N8 | 网页版 AI 浏览器接入 | 未落地 | 只有枚举与预留，没有真实接入模块 | 后续独立迭代 |
 | N9 | Provider 配置与 ChatClient 复用 | 部分落地 | Provider 配置入口已统一（`helloai.providers`）+ provider/model 解析已收口（`AgentProviderResolver`）；仍缺 ChatModel 缓存（每次 new）及多 Provider 扩展验证 | 继续补功能 |
 | N10 | 工牌模式 + `credential_vault` | 部分落地 | 最小模型、绑定与托管语义已具备，但轮换、迁移、权限颗粒度仍未收口 | 继续补功能 |
+| N11 | 调度策略：外部优先 + 空闲优先 + LLM 保底 | 部分落地 | 已将候选选择收口为可配置策略：支持 `preferExternal`、`requireIdle`、`forceAccessType(API_KEY_LLM 纯保底回归)`；并提供“初始分配自动选人入口”与 `autoAssignOnCreate` 开关（默认关闭以保持 PENDING+claim 工作流）。尚未形成基于“外部执行超时/掉线次数阈值”的自动回退与再分配闭环 | 继续补功能 |
 
 ---
 

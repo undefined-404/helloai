@@ -26,6 +26,7 @@
 - MCP SSE 接入与消息链路
 - 管理员 Token / Agent API Key 双通道鉴权
 - MCP 工具注册与业务工具调用
+- 外部 Agent 执行闭环最小集：`submitResult` 上交结果进入统一回写入口；`reportBlocked` 上报阻塞原因进入证据链
 - Agent 在线状态三件套：`last_seen_at` / `last_active_at` / `online_status`
 - 熔断降级与同角色替补
 - Reconcile 健康检查与离线重分配
@@ -39,7 +40,7 @@
 以下内容即使在历史文档中被展开描述，也默认属于目标态、部分落地或待补能力，不能直接按“已交付”理解：
 
 - 工作流模板与 Team 编排
-- 独立 MQ / DB poller 版执行命令消费载体
+- 独立 MQ 版执行命令消费载体（当前执行命令已完成 DB Poller 主消费载体，MQ 主链尚未落地）
 - `credential_vault` 的完整轮换、迁移与权限模型
 - 浏览器型 Agent 的真实接入链路
 - 多 Provider 的完整配置复用与平台内执行统一抽象

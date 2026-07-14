@@ -54,6 +54,47 @@
 
 ---
 
+### 2026-07 DB Poller 主线化
+
+#### 1. 范围
+
+- 将执行命令消费载体从“EVENT 主消费 + Poller 兜底”推进到“DB Poller 主消费”（默认）
+- 修复 POLLER 模式下 Poller 找不到消费者导致无法启动的 wiring 问题
+- 本轮不新增 MQ Consumer，不扩展 RabbitMQ 业务消费链
+
+#### 2. 实际落地
+
+- `AgentExecutionProperties` 支持 `EVENT / POLLER / BOTH` 三种模式，默认 `POLLER`；默认扫描周期调整为 `1000ms`
+- `ExecutionCommandService`：
+  - `POLLER` 模式只落库 PENDING 命令，不发布本地事务事件
+  - `EVENT / BOTH` 模式继续发布事件
+- `ExecutionCommandPoller`：
+  - `POLLER / BOTH` 模式扫描全部 PENDING 作为主消费
+  - `EVENT` 模式仅扫描孤儿 PENDING 作为兜底
+  - 改为依赖抽象 `ExecutionCommandConsumer`
+- `LocalExecutionCommandConsumer`：
+  - 消费 Bean 始终存在（供 Poller 注入）
+  - 本地事务事件仅作为 `EVENT/BOTH` 模式的适配入口
+- `application.yml` 默认配置改为：`consumer-mode: POLLER`、`poller-interval-ms: 1000`（避免多开关冲突）
+
+#### 3. 验证
+
+- 启动期验证：`consumer-mode=POLLER` 时应用可正常启动，Poller 能正常注入并调用消费者
+- 行为验证：`POLLER` 模式下命令创建后不依赖事务事件，PENDING 记录可被 Poller 周期扫描推进
+
+#### 4. 影响
+
+- 对外行为变化：执行命令主消费载体默认切换为 DB Poller
+- 配置变化：`helloai.execution.consumer-mode` 默认 `POLLER`；`helloai.execution.poller-interval-ms` 默认 `1000`
+- 代码变化：执行命令发布/消费链路按 `consumer-mode` 分流，Poller 逻辑从“孤儿兜底”升级为“主消费”
+
+#### 5. 遗留
+
+- 执行命令尚未新增 MQ Consumer，未形成“执行命令 → MQ → 独立 Consumer”的主链路
+- 需要补齐 POLLER 主消费模式下的运行态取证脚本与回归用例（崩溃恢复/重复消费/晚到结果）
+
+---
+
 ### 2026-07-11 文档矩阵二次修订
 
 #### 1. 范围
@@ -684,3 +725,60 @@ mvn test -pl helloai-job -Dtest="ExecutionCompensationTaskTest"
 - `grep "com.helloai.core.service.score"` 全仓检索 → 0 命中，旧路径已无任何残留
 - `grep "com.helloai.core.score"` 全仓检索 → 命中 3 处（新文件本身 1 处 + `SubTaskService` import 2 处）
 - `core/service/` 根目录现仅保留 25 个业务 Service
+
+---
+
+### 2026-07-14 Phase 2B 外部 Agent 执行闭环补齐 + 调度策略 3（外部优先/空闲优先/LLM 保底）
+
+#### 1. 范围
+
+- 将“执行结果回写”收口为统一领域入口，供平台内执行链与 MCP 外部 Agent 共用
+- 补齐外部 Agent 上报阻塞原因的证据链（timeline/context/inbox/outbox）
+- 推进调度策略 3：同角色候选优先外部 Agent、空闲优先、并提供“纯 LLM 回归”强制开关
+- 扩展为“初始分配也按外部优先选人”（提供自动分配入口与可控开关）
+
+#### 2. 实际落地
+
+- **统一回写入口（结果回写层）**
+  - 新增 `ExecutionResultReport` 标准输入对象
+  - `ExecutionResultHandler` 新增 `handleReport(report)` 作为唯一状态推进与审计落痕入口
+  - 平台内执行链与外部 MCP 均转换为 `ExecutionResultReport` 后进入该入口
+
+- **外部适配器：MCP `submitResult`**
+  - 新增 MCP 工具 `submitResult`：接收外部 Agent 的结果 payload，做鉴权/归属/幂等等校验后进入统一回写入口
+  - 目标：让 `CLI_CLIENT`（Qoder/Trae/Codex 等）具备“领取任务 → 执行 → 上交结果 → 状态收敛”的最小闭环
+
+- **外部阻塞证据链补齐**
+  - `reportBlocked` 传入 `reason` 不再丢弃：写入 `sub_task.context` 并记录 timeline 事件 `sub_task_report_blocked`
+  - `BLOCKED` 通知摘要优先展示 `blockedReason`，便于 Planner 排障
+  - 对应 outbox payload 增补 `blockedReason` 字段，便于后续 MQ/补偿链消费
+
+- **调度策略 3（可配置）**
+  - 新增 `helloai.dispatch.*` 配置：
+    - `prefer-external`：同角色候选优先 `CLI_CLIENT`（默认 false，不影响纯 LLM 回归）
+    - `require-idle`：要求候选当前无 `IN_PROGRESS` 子任务（默认 true）
+    - `force-access-type`：强制仅在指定接入类型内选人（典型：`API_KEY_LLM` 纯保底回归）
+    - `auto-assign-on-create`：创建子任务后是否自动进入初始分配（默认 false，保持 PENDING+claim 工作流不变）
+  - `AgentSelector` 新增 `pickPreferred(role)`，并在候选过滤中统一应用上述策略
+
+- **初始分配自动选人入口**
+  - 新增 `SubTaskDispatchService.dispatchPendingSubTaskAuto(subTaskId, role)`：对 PENDING 子任务按策略选首选 Agent，并交给 `ResilientDispatcher.assignNext` 进入 fast-fail + 熔断 + fallback 的最终分配链
+  - `SubTaskController.create` 在 `auto-assign-on-create=true` 且未指定 `assignedAgent` 时触发自动分配
+
+#### 3. 影响
+
+- 对外行为变化：
+  - 默认无变化（调度策略默认 `prefer-external=false`、`auto-assign-on-create=false`）
+  - 外部 Agent 现在可通过 MCP `submitResult` 上交结果并驱动子任务状态收敛
+  - 外部 Agent `reportBlocked(reason)` 的原因进入证据链，Planner 可见且可追溯
+- 配置变化：新增 `helloai.dispatch.*` 段并在 `application.yml` 给出默认值
+- 数据结构变化：无
+
+#### 4. 验证
+
+- `mvn -DskipTests package` → BUILD SUCCESS
+
+#### 5. 遗留
+
+- 调度策略“外部执行超时/掉线多次后回退 LLM”的阈值计数闭环尚未落地（需要明确计数来源与自动重分配策略）
+- 执行命令主链仍未接入 MQ Consumer（仍按 N6 后续推进“MQ 主链路 + DB 状态中心 + Poller 兜底恢复”）
