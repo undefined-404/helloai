@@ -1,5 +1,7 @@
 package com.helloai.core.service;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.core.entity.Agent;
@@ -43,6 +45,15 @@ public class RewardService extends ServiceImpl<RewardLogMapper, RewardLog> {
 
         log.info("积分变动: agentId={}, delta={}, balance={}, reason={}",
                 agentId, delta, newBalance, reason);
+    }
+
+    /**
+     * 分页查询全局积分流水，按创建时间倒序。
+     */
+    public IPage<RewardLog> listAllLogs(int page, int pageSize) {
+        return lambdaQuery()
+                .orderByDesc(RewardLog::getCreateTime)
+                .page(new Page<>(page, pageSize));
     }
 
     public Map<String, Object> getAgentScoreSummary(Long agentId) {

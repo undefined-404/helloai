@@ -1144,3 +1144,45 @@ DB 验证：
   - `MqExecutionCommandConsumer.onMessage` 在 `tryConsumeEnhanced` 返回 true 时仍然 NACK→DLX；区分"幂等跳过"与"业务失败"，前者应该 ACK 而不是 NACK（否则 DLX 会堆积大量"重复消息"，干扰真实失败信号）
   - `login-raw.ps1` 密码仍写错（`helloai123`），同步成 `admin123`（不在本轮范围，单独立一个文档 / 脚本维护轮）
 
+---
+
+### 2026-07-14 前端积分流水修复 + Agent ID 选择组件化
+
+#### 1. 范围
+
+- 修复积分流水页面（RewardList.vue）展示数据为空的问题
+- 将散落在多个页面中的"手工输入 Agent ID"统一为下拉选择组件
+- 修复认领子任务时 Agent ID 硬编码为 1 的 Bug
+
+#### 2. 实际落地
+
+- **积分流水数据修复**
+  - 根因：前端 RewardList.vue 调用 `GET /api/scores/leaderboard`（返回 Agent 积分排行榜 `{agentId, agentName, role, totalScore}`），但表格列绑定的 prop 为 `reason / delta / balance / createTime`（reward_log 表字段），前后端数据结构不匹配导致全部单元格为空
+  - 后端新增 `GET /api/scores/logs?page=&pageSize=` 端点，调用 `RewardService.listAllLogs()` 分页查询 reward_log 表按创建时间倒序返回，字段与前端表格列完全对齐
+  - 前端 RewardList.vue 切到新端点，解析 IPage.records，新增分页组件
+
+- **AgentSelect 组件新建**
+  - 新建 `components/AgentSelect.vue`：可复用的 Agent 下拉选择组件，挂载时自动从 `GET /agents` 加载列表，支持 filterable 搜索，选项格式 `名称 (角色)`，支持 v-model 双向绑定
+
+- **RewardList.vue 手动调整积分弹窗**：Agent ID 输入框从 `<el-input>` 替换为 `<AgentSelect>`，不再手工填写
+
+- **SubTaskList.vue 认领子任务**
+  - 将 `ElMessageBox.prompt('输入 Agent ID')` 替换为弹窗 + `<AgentSelect>` 下拉选择
+  - **Bug 修复**：原逻辑 `subTaskApi.claim(row.id, 1)` 中 agentId 硬编码为 1，无论 prompt 输入什么值都被忽略；修复后改为使用弹窗中选中的 agent ID
+
+- **环境修复**：Shell 默认 JDK 24 与项目 Lombok 不兼容导致编译失败（TypeTag :: UNKNOWN），切回 JDK 17 后正常；`helloai-common` 模块未 mvn install 导致 IDE 报"程序包 com.helloai.common.base 不存在"
+
+#### 3. 影响
+
+- 对外行为变化：积分流水页正确展示 reward_log 数据；Agent ID 不再需要手工输入；认领子任务不再硬编码 agentId=1
+- 代码变化：
+  - 后端 2 文件：RewardService.java（+listAllLogs）、ScoreController.java（+/logs 端点）
+  - 前端 4 文件：AgentSelect.vue（新建）、reward.ts（+logs API）、RewardList.vue（切端点+分页+AgentSelect）、SubTaskList.vue（弹窗+AgentSelect+Bug 修复）
+- 数据结构变化：无
+- 差距项变化：无（本轮为 UX 收口与 Bug 修复，不涉及核心差距项）
+
+#### 4. 遗留
+
+- 认领子任务后续应按流程中注册的有效角色 agent 进行筛选，甚至降级到 LLM 模型自创建的 agent（当前仅全量列出所有 Agent）
+- AgentSelect 组件当前使用 `GET /agents`（全量），后续数据量增大时可考虑接入管理端分页接口 `GET /admin/agents`
+

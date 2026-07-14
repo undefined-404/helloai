@@ -26,10 +26,15 @@
       </el-table>
       <el-empty v-if="!list.length && !loading" description="暂无积分记录" />
 
+      <el-pagination
+        v-if="total > 0" background layout="prev, pager, next"
+        :total="total" :page-size="pageSize" @current-change="load" style="margin-top:16px;text-align:center"
+      />
+
       <el-dialog v-model="adjustDialog" title="手动调整积分" width="480px" top="5vh" append-to-body>
         <el-form ref="adjustFormRef" :model="adjustForm" :rules="adjustRules" label-width="100px">
           <el-form-item label="Agent ID" prop="agentId">
-            <el-input v-model.number="adjustForm.agentId" />
+            <AgentSelect v-model="adjustForm.agentId" />
           </el-form-item>
           <el-form-item label="调整分数" prop="scoreDelta">
             <el-input-number v-model="adjustForm.scoreDelta" :min="-100" :max="100" />
@@ -51,9 +56,12 @@
 import { ref, onMounted, reactive } from 'vue'
 import { ElMessage } from 'element-plus'
 import { rewardApi } from '@/api/reward'
+import AgentSelect from '@/components/AgentSelect.vue'
 import { fmtTime } from '@/utils/tableConfig'
 
 const list = ref<any[]>([])
+const total = ref(0)
+const pageSize = ref(20)
 const loading = ref(false)
 const adjustDialog = ref(false)
 const adjusting = ref(false)
@@ -61,7 +69,14 @@ const adjustFormRef = ref()
 const adjustForm = reactive({ agentId: null as number | null, scoreDelta: 0, reason: '' })
 const adjustRules = { agentId: [{ required: true }], scoreDelta: [{ required: true }], reason: [{ required: true }] }
 
-async function load() { loading.value = true; try { list.value = await rewardApi.leaderboard() } finally { loading.value = false } }
+async function load(page = 1) {
+  loading.value = true
+  try {
+    const res: any = await rewardApi.logs({ page, pageSize: pageSize.value })
+    list.value = res.records || []
+    total.value = res.total || 0
+  } finally { loading.value = false }
+}
 
 async function handleAdjust() {
   const valid = await adjustFormRef.value?.validate().catch(() => false)

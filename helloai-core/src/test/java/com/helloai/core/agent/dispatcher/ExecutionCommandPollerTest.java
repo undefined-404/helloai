@@ -4,7 +4,7 @@ import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.core.agent.domain.ExecutionCommand;
-import com.helloai.core.agent.mqconsumer.ExecutionCommandConsumer;
+import com.helloai.core.agent.mqconsumer.LocalExecutionCommandConsumer;
 import com.helloai.core.entity.AgentExecutionRecord;
 import com.helloai.core.entity.SubTask;
 import org.junit.jupiter.api.BeforeEach;
@@ -59,7 +59,7 @@ class ExecutionCommandPollerTest {
     @Mock
     private AgentExecutionRecordService agentExecutionRecordService;
     @Mock
-    private ExecutionCommandConsumer executionCommandConsumer;
+    private LocalExecutionCommandConsumer executionCommandConsumer;
     @Mock
     private TaskTimelineService taskTimelineService;
     @Mock

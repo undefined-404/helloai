@@ -51,15 +51,32 @@
         v-if="total > 0" background layout="prev, pager, next"
         :total="total" :page-size="20" @current-change="loadPage" style="margin-top:16px;text-align:center"
       />
+
+      <!-- 认领弹窗 -->
+      <el-dialog v-model="claimDialog.visible" title="认领子任务" width="420px" top="5vh" append-to-body>
+        <el-form label-width="100px">
+          <el-form-item label="子任务">
+            <span>{{ claimDialog.row?.title || '-' }}</span>
+          </el-form-item>
+          <el-form-item label="认领 Agent">
+            <AgentSelect v-model="claimDialog.agentId" placeholder="选择认领的 Agent" />
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="claimDialog.visible = false">取消</el-button>
+          <el-button type="primary" :loading="claimDialog.loading" :disabled="!claimDialog.agentId" @click="doClaim">确认认领</el-button>
+        </template>
+      </el-dialog>
     </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { subTaskApi } from '@/api/subTask'
+import AgentSelect from '@/components/AgentSelect.vue'
 import { SUB_TASK_STATUS_MAP, SCORE_GRADE_MAP } from '@/types'
 import { ACTION } from '@/utils/tableConfig'
 import { fmtTime } from '@/utils/tableConfig'
@@ -82,13 +99,25 @@ async function load(page = 1) {
 }
 function loadPage(page: number) { load(page) }
 
+const claimDialog = reactive<{ visible: boolean; loading: boolean; agentId: string | number | null; row: SubTask | null }>({
+  visible: false, loading: false, agentId: null, row: null,
+})
+
 async function handleClaim(row: SubTask) {
+  claimDialog.row = row
+  claimDialog.agentId = null
+  claimDialog.visible = true
+}
+
+async function doClaim() {
+  if (!claimDialog.row || !claimDialog.agentId) return
+  claimDialog.loading = true
   try {
-    await ElMessageBox.prompt('输入 Agent ID', '认领子任务', { inputValue: '' })
-    await subTaskApi.claim(row.id, 1)
+    await subTaskApi.claim(claimDialog.row.id, claimDialog.agentId)
     ElMessage.success('认领成功')
+    claimDialog.visible = false
     load()
-  } catch {}
+  } finally { claimDialog.loading = false }
 }
 
 async function handlePause(row: SubTask) {

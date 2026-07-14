@@ -1,8 +1,10 @@
 package com.helloai.api.controller;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.helloai.common.base.R;
 import com.helloai.api.dto.AdjustScoreRequest;
 import com.helloai.core.entity.Agent;
+import com.helloai.core.entity.RewardLog;
 import com.helloai.core.service.AgentService;
 import com.helloai.core.service.RewardService;
 import lombok.RequiredArgsConstructor;
@@ -25,6 +27,16 @@ public class ScoreController {
     @GetMapping("/me")
     public R<Map<String, Object>> getMyScore(@RequestParam("agentId") Long agentId) {
         return R.ok(rewardService.getAgentScoreSummary(agentId));
+    }
+
+    /**
+     * 积分流水明细，分页查询。
+     */
+    @GetMapping("/logs")
+    public R<IPage<RewardLog>> logs(
+            @RequestParam(value = "page", defaultValue = "1") int page,
+            @RequestParam(value = "pageSize", defaultValue = "20") int pageSize) {
+        return R.ok(rewardService.listAllLogs(page, pageSize));
     }
 
     @GetMapping("/leaderboard")

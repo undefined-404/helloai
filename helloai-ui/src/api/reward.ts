@@ -7,6 +7,9 @@ export const rewardApi = {
   leaderboard() {
     return request.get<any, Record<string, any>[]>('/scores/leaderboard')
   },
+  logs(params?: { page?: number; pageSize?: number }) {
+    return request.get<any, any>('/scores/logs', { params })
+  },
   adjust(data: { agentId: number; scoreDelta: number; reason: string; subTaskId?: number | null }) {
     return request.post('/scores/adjust', data)
   }
