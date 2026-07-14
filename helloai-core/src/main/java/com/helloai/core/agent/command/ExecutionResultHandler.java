@@ -1,4 +1,4 @@
-package com.helloai.core.service;
+package com.helloai.core.agent.command;
 
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
@@ -12,6 +12,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.Map;
+import com.helloai.core.agent.execution.SubTaskExecutionService;
+import com.helloai.core.service.SubTaskService;
+import com.helloai.core.service.TaskTimelineService;
 
 /**
  * 执行结果处理器。

@@ -1,4 +1,4 @@
-package com.helloai.core.service;
+package com.helloai.core.agent.chat;
 
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentRole;

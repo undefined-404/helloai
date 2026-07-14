@@ -1,4 +1,4 @@
-package com.helloai.core.service;
+package com.helloai.core.agent.execution;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentRole;
@@ -23,11 +23,30 @@ import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.Map;
+import com.helloai.core.agent.command.ExecutionResultHandler;
+import com.helloai.core.service.AgentService;
+import com.helloai.core.service.SubTaskService;
+import com.helloai.core.service.TaskTimelineService;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class SubTaskExecutionService {
+
+    /**
+     * 子任务执行服务。
+     *
+     * <p>职责划分（对齐架构设计参考 §3.1 调度分离）：</p>
+     * <ul>
+     *     <li>{@link #executeCommand(ExecutionCommand)}：完整编排入口，含参数校验、加载、状态推进、执行、回写。</li>
+     *     <li>{@link #executeOnce(SubTask, Agent)}：纯执行入口，只负责组装 AgentTask + 调平台执行器 + 观测 timeline。</li>
+     *     <li>{@link #startIfNeeded(Long, SubTaskStatus)}：状态推进前置，允许消费者在调 {@link #executeOnce} 之前调用。</li>
+     * </ul>
+     *
+     * <p>消费者（LocalExecutionCommandConsumer 或未来 MQ/DB poller）可以组合调用
+     * {@code startIfNeeded + executeOnce + ExecutionResultHandler.handleSuccess/Failure} 实现分层，
+     * 也可以直接调用 {@link #executeCommand(ExecutionCommand)} 拿完整链路（向后兼容入口）。</p>
+     */
 
     private final SubTaskService subTaskService;
     private final AgentService agentService;
@@ -108,7 +127,10 @@ public class SubTaskExecutionService {
     /**
      * 按执行命令执行子任务——系统唯一公共执行入口。
      *
-     * <p>一次加载 SubTask + Agent 并校验，消除二次读库 TOCTOU 窗口。</p>
+     * <p>完整编排：参数校验 → 加载 subTask + agent → 一致性校验 → 状态推进 → 纯执行 → 结果回写。
+     * 本入口保留向后兼容，面向「外部 API 层直接调用」或「未分层消费者」场景；
+     * 已经分层的消费者（如 LocalExecutionCommandConsumer）应组合调用
+     * {@link #startIfNeeded} + {@link #executeOnce} + ExecutionResultHandler 实现完整链。</p>
      */
     public AgentResult executeCommand(ExecutionCommand command) {
         if (command == null) {
@@ -140,10 +162,30 @@ public class SubTaskExecutionService {
             throw new BizException("Agent 不存在: " + subTask.getAssignedAgent());
         }
 
-        return executeOnce(subTask, agent);
+        // 状态推进前置
+        startIfNeeded(subTask.getId(), subTask.getStatus());
+
+        try {
+            AgentResult result = executeOnce(subTask, agent);
+            executionResultHandler.handleSuccess(command.getSubTaskId(), command.getAgentId(), result);
+            return result;
+        } catch (Exception e) {
+            executionResultHandler.handleFailure(command.getSubTaskId(), command.getAgentId(), e);
+            throw e;
+        }
     }
 
-    private AgentResult executeOnce(SubTask subTask, Agent agent) {
+    /**
+     * 纯执行入口。
+     *
+     * <p>负责：状态守卫、组装 AgentTask、调平台执行器、记录 LLM 调用 timeline。
+     * 不做：状态推进（{@link #startIfNeeded}）、结果回写（由调用方负责）。</p>
+     *
+     * <p>设计参考 §3.1 调度分离：执行层只负责消费命令 + 执行 + 回传原始结果，
+     * 不再携带状态机推进与回写职责，让 {@link LocalExecutionCommandConsumer}
+     * 或未来 MQ/DB poller 消费者统一拿到「调度 + 回写」两端能力。</p>
+     */
+    public AgentResult executeOnce(SubTask subTask, Agent agent) {
         Long subTaskId = subTask.getId();
 
         if (subTask.getStatus() == SubTaskStatus.DONE || subTask.getStatus() == SubTaskStatus.CANCELLED) {
@@ -158,62 +200,37 @@ public class SubTaskExecutionService {
                 "agentOnlineStatus", agent.getOnlineStatus() != null ? agent.getOnlineStatus().name() : null
         ));
 
-        startIfNeeded(subTaskId, subTask.getStatus());
-        taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_execute_start",
-                AgentRole.EXECUTOR, agent.getId(), Map.of("executor", "platform"));
-
-        try {
-            Map<String, Object> context = new HashMap<>();
-            context.put("taskId", subTask.getTaskId());
-            context.put("subTaskId", subTaskId);
-            AgentTask task = AgentTask.builder()
-                    .subTaskId(subTaskId)
-                    .systemPrompt("")
-                    .userPrompt(buildUserPrompt(subTask))
-                    .context(context)
-                    .requiredCapabilities(Map.of())
-                    .build();
-            dbg("sub_task_execute_before_platform", safeMap(
-                    "subTaskId", subTaskId,
-                    "agentId", agent.getId()
-            ));
-            taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_llm_call_start",
-                    AgentRole.EXECUTOR, agent.getId(),
-                    Map.of("agentId", agent.getId(), "agentName", agent.getName()));
-            AgentResult result = platformAgentExecutionService.executeSync(agent, task);
-            taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_llm_call_end",
-                    AgentRole.EXECUTOR, agent.getId(),
-                    Map.of("agentId", agent.getId(), "success", result.isSuccess(),
-                            "finishReason", result.getFinishReason(),
-                            "tokens", result.getTokenUsage()));
-            executionResultHandler.handleSuccess(subTaskId, agent.getId(), result);
-            dbg("sub_task_execute_success", safeMap(
-                    "subTaskId", subTaskId,
-                    "agentId", agent.getId(),
-                    "success", result.isSuccess(),
-                    "executor", result.getExecutorName(),
-                    "finishReason", result.getFinishReason()
-            ));
-            return result;
-            } catch (Exception e) {
-            Throwable root = e;
-            while (root.getCause() != null && root.getCause() != root) {
-                root = root.getCause();
-            }
-            taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_llm_call_failed",
-                    AgentRole.EXECUTOR, agent.getId(),
-                    Map.of("agentId", agent.getId(), "error", e.getMessage()));
-            dbg("sub_task_execute_exception", safeMap(
-                    "subTaskId", subTaskId,
-                    "agentId", agent.getId(),
-                    "exception", e.getClass().getName(),
-                    "message", e.getMessage(),
-                    "rootException", root.getClass().getName(),
-                    "rootMessage", root.getMessage()
-            ));
-            executionResultHandler.handleFailure(subTaskId, agent.getId(), e);
-            throw e;
-        }
+        Map<String, Object> context = new HashMap<>();
+        context.put("taskId", subTask.getTaskId());
+        context.put("subTaskId", subTaskId);
+        AgentTask task = AgentTask.builder()
+                .subTaskId(subTaskId)
+                .systemPrompt("")
+                .userPrompt(buildUserPrompt(subTask))
+                .context(context)
+                .requiredCapabilities(Map.of())
+                .build();
+        dbg("sub_task_execute_before_platform", safeMap(
+                "subTaskId", subTaskId,
+                "agentId", agent.getId()
+        ));
+        taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_llm_call_start",
+                AgentRole.EXECUTOR, agent.getId(),
+                Map.of("agentId", agent.getId(), "agentName", agent.getName()));
+        AgentResult result = platformAgentExecutionService.executeSync(agent, task);
+        taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_llm_call_end",
+                AgentRole.EXECUTOR, agent.getId(),
+                safeMap("agentId", agent.getId(), "success", result.isSuccess(),
+                        "finishReason", result.getFinishReason(),
+                        "tokens", result.getTokenUsage()));
+        dbg("sub_task_execute_success", safeMap(
+                "subTaskId", subTaskId,
+                "agentId", agent.getId(),
+                "success", result.isSuccess(),
+                "executor", result.getExecutorName(),
+                "finishReason", result.getFinishReason()
+        ));
+        return result;
     }
 
     @Transactional(rollbackFor = Exception.class)

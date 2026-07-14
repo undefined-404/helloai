@@ -1,4 +1,4 @@
-package com.helloai.core.service;
+package com.helloai.core.agent.execution;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentExecutionProperties;
@@ -20,6 +20,8 @@ import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.Map;
+import com.helloai.core.observability.HeartbeatService;
+import com.helloai.core.service.AgentService;
 
 /**
  * 平台内 Agent 执行入口。

@@ -1,4 +1,4 @@
-package com.helloai.core.service;
+package com.helloai.core.agent.dispatcher;
 
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
@@ -21,6 +21,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.HashMap;
+import com.helloai.core.agent.command.ExecutionCommandService;
+import com.helloai.core.service.AgentService;
+import com.helloai.core.service.SubTaskService;
+import com.helloai.core.service.TaskTimelineService;
 
 /**
  * 子任务自动执行命令派发器。

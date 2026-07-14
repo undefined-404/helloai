@@ -98,6 +98,18 @@ helloai:
     model: deepseek-chat
     mock-response-prefix: "[mock-executor]"
     sync-timeout-seconds: 180
+    # Phase 2A §5.1: DB Poller 兜底扫描 — 处理 Spring 事务事件丢失场景
+    poller-enabled: true
+    poller-interval-ms: 30000
+    poller-orphan-threshold-seconds: 60
+    poller-batch-size: 20
+  # N9: 多Provider统一配置入口，替代各factory中散落的@Value
+  providers:
+    deepseek:
+      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+      default-model: ${DEEPSEEK_CHAT_MODEL:deepseek-chat}
+      connect-timeout-ms: ${DEEPSEEK_CONNECT_TIMEOUT_MS:5000}
+      read-timeout-ms: ${DEEPSEEK_READ_TIMEOUT_MS:60000}
   security:
     credential:
       aes-key-base64: ${HELLOAI_CREDENTIAL_AES_KEY_BASE64:MEsmol1MWDTT69/lAOGeYGmDa9/a6S/lfHdfmekX0MM=}

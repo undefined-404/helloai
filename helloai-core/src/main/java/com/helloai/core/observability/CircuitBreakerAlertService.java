@@ -1,4 +1,4 @@
-package com.helloai.core.service;
+package com.helloai.core.observability;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;

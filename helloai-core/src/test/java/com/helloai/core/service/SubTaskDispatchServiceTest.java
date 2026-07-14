@@ -15,6 +15,7 @@ import java.util.Set;
 
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import com.helloai.core.agent.dispatcher.ResilientDispatcher;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("SubTaskDispatchService")

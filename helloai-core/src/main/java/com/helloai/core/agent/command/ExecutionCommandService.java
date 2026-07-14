@@ -1,4 +1,4 @@
-package com.helloai.core.service;
+package com.helloai.core.agent.command;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentRole;
@@ -15,6 +15,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Map;
 import java.util.UUID;
+import com.helloai.core.service.AgentExecutionRecordService;
+import com.helloai.core.service.AgentService;
+import com.helloai.core.service.SubTaskService;
+import com.helloai.core.service.TaskTimelineService;
 
 /**
  * 执行命令服务。
@@ -65,7 +69,8 @@ public class ExecutionCommandService {
         }
 
         String eventId = UUID.randomUUID().toString().replace("-", "");
-        AgentExecutionRecord record = agentExecutionRecordService.createPending(eventId, subTaskId);
+        AgentExecutionRecord record = agentExecutionRecordService.createPending(
+                eventId, subTaskId, agentId, agent.getAccessType(), trigger);
 
         ExecutionCommand command = ExecutionCommand.builder()
                 .recordId(record.getId())

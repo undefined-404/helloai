@@ -44,10 +44,10 @@
 | N3 | MCP Server 工具集 | 已交付 | 工具主链已可用，口径已随 D1/D2 关闭同步收口 | 保持现状 |
 | N4 | 心跳与在线判定 | 已交付 | 在线态三件套、在线计算态与巡检收敛已具备 | 保持现状 |
 | N5 | 熔断降级 | 已交付 | per-agent 熔断与同角色替补策略已具备 | 保持现状 |
-| N6 | 执行命令消费与结果回写 | 部分落地 | 已形成“命令创建 -> 本地 consumer -> 结果回写/补偿”的主链，但消费者仍为本地 Spring 事件，尚未切换到独立 MQ / DB poller；`SubTaskExecutionService` 仍保留部分执行编排职责 | 继续按调度解耦方向收口 |
+| N6 | 执行命令消费与结果回写 | 部分落地 | 已形成“命令创建 → DB Poller 兜底 + 本地事件快速路径 → 结果回写/补偿”的双路径主链：消费者已拆为 6 步分层（加载 → startIfNeeded → markRunning → timeline → executeOnce 纯执行 → handleSuccess/Failure 回写 → markSuccess/Failed），executeOnce 已被削薄为纯执行；本地 Spring 事务事件仍是实时主路径，新增 ExecutionCommandPoller 作为独立 DB Poller 兜底消费者（扫 “孤儿 PENDING” 行重建 ExecutionCommand 并触发消费），二者通过 Consumer 内部 CAS markRunning 保证幂等 | 后续推进架构设计参考 §5.2 控制命令层 |
 | N7 | 健康检查改写 | 已交付 | Reconcile、离线重分配、兜底收敛已具备 | 保持现状 |
 | N8 | 网页版 AI 浏览器接入 | 未落地 | 只有枚举与预留，没有真实接入模块 | 后续独立迭代 |
-| N9 | Provider 配置与 ChatClient 复用 | 部分落地 | 已有最小能力与扩展方向，但多 Provider 的完整配置复用仍未收口 | 继续补功能 |
+| N9 | Provider 配置与 ChatClient 复用 | 部分落地 | Provider 配置入口已统一（`helloai.providers`）+ provider/model 解析已收口（`AgentProviderResolver`）；仍缺 ChatModel 缓存（每次 new）及多 Provider 扩展验证 | 继续补功能 |
 | N10 | 工牌模式 + `credential_vault` | 部分落地 | 最小模型、绑定与托管语义已具备，但轮换、迁移、权限颗粒度仍未收口 | 继续补功能 |
 
 ---

@@ -1,4 +1,4 @@
-package com.helloai.core.service;
+package com.helloai.core.observability;
 
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentStatus;

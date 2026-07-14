@@ -1,4 +1,4 @@
-package com.helloai.core.service;
+package com.helloai.core.agent.command;
 
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
@@ -23,8 +23,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import com.helloai.core.service.AgentExecutionRecordService;
+import com.helloai.core.service.AgentService;
+import com.helloai.core.service.SubTaskService;
+import com.helloai.core.service.TaskTimelineService;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("ExecutionCommandService")
@@ -69,7 +74,8 @@ class ExecutionCommandServiceTest {
         when(subTaskService.getByIdForUpdate(22L)).thenReturn(subTask);
         when(agentService.getById(11L)).thenReturn(agent);
         when(agentExecutionRecordService.hasPendingOrRunning(22L)).thenReturn(false);
-        when(agentExecutionRecordService.createPending(any(), any())).thenReturn(record);
+        when(agentExecutionRecordService.createPending(any(), eq(22L), eq(11L),
+                eq(AgentAccessType.API_KEY_LLM), eq("assigned"))).thenReturn(record);
 
         ExecutionCommand command = executionCommandService.createAssignedCommand(22L, 11L, "assigned");
 
@@ -137,7 +143,8 @@ class ExecutionCommandServiceTest {
         when(subTaskService.getByIdForUpdate(22L)).thenReturn(subTask);
         when(agentService.getById(11L)).thenReturn(agent);
         when(agentExecutionRecordService.hasPendingOrRunning(22L)).thenReturn(false);
-        when(agentExecutionRecordService.createPending(any(), any())).thenReturn(record);
+        when(agentExecutionRecordService.createPending(any(), eq(22L), eq(11L),
+                eq(AgentAccessType.API_KEY_LLM), eq("assigned"))).thenReturn(record);
 
         executionCommandService.createAssignedCommand(22L, 11L, "assigned");
 

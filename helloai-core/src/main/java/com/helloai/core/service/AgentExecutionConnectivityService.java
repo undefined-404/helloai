@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.stereotype.Service;
+import com.helloai.core.agent.chat.AgentChatClientService;
 
 /**
  * Agent LLM 连通性验证服务。

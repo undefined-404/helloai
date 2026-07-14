@@ -6,7 +6,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.entity.Agent;
 import com.helloai.core.service.AgentService;
-import com.helloai.core.service.HeartbeatService;
+import com.helloai.core.observability.HeartbeatService;
 import com.helloai.core.service.McpToolService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;

@@ -1,7 +1,8 @@
-package com.helloai.core.service;
+package com.helloai.core.agent.chat;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentExecutionProperties;
+import com.helloai.core.agent.chat.AgentProviderResolver;
 import com.helloai.core.agent.chat.ProviderChatClientFactory;
 import com.helloai.core.entity.Agent;
 import lombok.RequiredArgsConstructor;
@@ -56,7 +57,7 @@ public class AgentChatClientService {
             if (apiKeyPlaintext != null && !apiKeyPlaintext.isBlank()) {
                 String effectiveProvider = provider != null && !provider.isBlank()
                         ? provider : executionProperties.getProvider();
-                String model = resolveModel(agent);
+                String model = AgentProviderResolver.resolveModel(agent, null);
                 java.util.List<ProviderChatClientFactory> factories =
                         providerChatClientFactoriesProvider.getIfAvailable(java.util.List::of);
                 ProviderChatClientFactory factory = factories.stream()
@@ -81,15 +82,6 @@ public class AgentChatClientService {
                 .user(userPrompt != null ? userPrompt : "")
                 .call()
                 .chatResponse();
-    }
-
-    private String resolveModel(Agent agent) {
-        String modelType = agent.getModelType();
-        if (modelType == null || modelType.isBlank()) {
-            return null;
-        }
-        int idx = modelType.indexOf(':');
-        return idx >= 0 && idx + 1 < modelType.length() ? modelType.substring(idx + 1) : modelType;
     }
 
     /**

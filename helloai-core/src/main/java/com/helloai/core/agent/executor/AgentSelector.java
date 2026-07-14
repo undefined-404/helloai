@@ -1,4 +1,4 @@
-package com.helloai.core.service;
+package com.helloai.core.agent.executor;
 
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.Comparator;
 import java.util.List;
+import com.helloai.core.service.AgentService;
 
 /**
  * Agent 选择器（v2.4 §4.6）。

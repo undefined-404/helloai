@@ -1,4 +1,4 @@
-package com.helloai.core.service;
+package com.helloai.core.agent.dispatcher;
 
 import com.helloai.common.base.AgentUnavailableException;
 import com.helloai.common.base.BizException;
@@ -29,6 +29,10 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import com.helloai.core.agent.executor.AgentSelector;
+import com.helloai.core.observability.CircuitBreakerEventRecorder;
+import com.helloai.core.service.AgentService;
+import com.helloai.core.service.SubTaskService;
 
 /**
  * ResilientDispatcher 单元测试（v2.4 §4.10）。

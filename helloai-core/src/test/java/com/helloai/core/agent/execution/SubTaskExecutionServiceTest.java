@@ -1,0 +1,226 @@
+package com.helloai.core.agent.execution;
+
+import com.helloai.common.base.BizException;
+import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.core.agent.domain.AgentResult;
+import com.helloai.core.agent.domain.AgentTask;
+import com.helloai.core.agent.domain.ExecutionCommand;
+import com.helloai.core.entity.Agent;
+import com.helloai.core.entity.SubTask;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import com.helloai.core.agent.command.ExecutionResultHandler;
+import com.helloai.core.service.AgentService;
+import com.helloai.core.service.SubTaskService;
+import com.helloai.core.service.TaskTimelineService;
+
+@ExtendWith(MockitoExtension.class)
+@DisplayName("SubTaskExecutionService")
+class SubTaskExecutionServiceTest {
+
+    @Mock
+    private SubTaskService subTaskService;
+
+    @Mock
+    private AgentService agentService;
+
+    @Mock
+    private PlatformAgentExecutionService platformAgentExecutionService;
+
+    @Mock
+    private TaskTimelineService taskTimelineService;
+
+    @Mock
+    private ExecutionResultHandler executionResultHandler;
+
+    @InjectMocks
+    private SubTaskExecutionService subTaskExecutionService;
+
+    @Nested
+    @DisplayName("executeOnce — 纯执行入口")
+    class ExecuteOnce {
+
+        @Test
+        @DisplayName("should not call startIfNeeded when executeOnce runs")
+        void shouldNotCallStartIfNeededWhenExecuteOnceRuns() {
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            Agent agent = agent();
+
+            AgentResult ok = AgentResult.builder().success(true).build();
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(ok);
+
+            AgentResult result = subTaskExecutionService.executeOnce(subTask, agent);
+
+            assertThat(result).isSameAs(ok);
+            // 纯执行：不应调用状态推进、不应回写
+            verify(subTaskService, never()).start(any());
+            verify(executionResultHandler, never()).handleSuccess(any(), any(), any());
+            verify(executionResultHandler, never()).handleFailure(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("should propagate exception without calling handleFailure when executeOnce throws")
+        void shouldPropagateExceptionWithoutHandleFailureWhenExecuteOnceThrows() {
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            Agent agent = agent();
+
+            RuntimeException root = new RuntimeException("llm down");
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenThrow(root);
+
+            assertThatThrownBy(() -> subTaskExecutionService.executeOnce(subTask, agent))
+                    .isSameAs(root);
+
+            // 纯执行：异常直接传播，不应回写
+            verify(executionResultHandler, never()).handleFailure(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("should reject when subTask status is DONE")
+        void shouldRejectWhenSubTaskStatusIsDone() {
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.DONE);
+            Agent agent = agent();
+
+            assertThatThrownBy(() -> subTaskExecutionService.executeOnce(subTask, agent))
+                    .isInstanceOf(BizException.class)
+                    .hasMessageContaining("不可执行");
+        }
+    }
+
+    @Nested
+    @DisplayName("executeCommand — 完整编排入口（向后兼容）")
+    class ExecuteCommand {
+
+        @Test
+        @DisplayName("should call startIfNeeded + handleFailure when executeSync throws")
+        void shouldPropagateOriginalExceptionWhenExecuteSyncThrows() {
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.ASSIGNED);
+            Agent agent = agent();
+
+            RuntimeException root = new RuntimeException();
+            when(subTaskService.getById(22L)).thenReturn(subTask);
+            when(agentService.getById(44L)).thenReturn(agent);
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenThrow(root);
+
+            ExecutionCommand command = ExecutionCommand.builder()
+                    .subTaskId(22L)
+                    .agentId(44L)
+                    .trigger("test")
+                    .build();
+
+            assertThatThrownBy(() -> subTaskExecutionService.executeCommand(command))
+                    .isSameAs(root);
+
+            verify(subTaskService).start(22L);
+            verify(executionResultHandler).handleFailure(22L, 44L, root);
+        }
+
+        @Test
+        @DisplayName("should throw BizException when agentId mismatch")
+        void shouldThrowWhenAgentIdMismatch() {
+            SubTask subTask = subTask();
+            subTask.setAssignedAgent(44L);
+
+            when(subTaskService.getById(22L)).thenReturn(subTask);
+
+            ExecutionCommand command = ExecutionCommand.builder()
+                    .subTaskId(22L)
+                    .agentId(99L)
+                    .trigger("test")
+                    .build();
+
+            assertThatThrownBy(() -> subTaskExecutionService.executeCommand(command))
+                    .isInstanceOf(BizException.class);
+        }
+
+        @Test
+        @DisplayName("should throw BizException when agentId is null")
+        void shouldThrowWhenCommandAgentIdIsNull() {
+            ExecutionCommand command = ExecutionCommand.builder()
+                    .subTaskId(22L)
+                    .agentId(null)
+                    .trigger("test")
+                    .build();
+
+            assertThatThrownBy(() -> subTaskExecutionService.executeCommand(command))
+                    .isInstanceOf(BizException.class)
+                    .hasMessageContaining("agentId");
+        }
+    }
+
+    @Nested
+    @DisplayName("startIfNeeded — 状态推进前置")
+    class StartIfNeeded {
+
+        @Test
+        @DisplayName("should skip when status is IN_PROGRESS")
+        void shouldSkipWhenStatusInProgress() {
+            subTaskExecutionService.startIfNeeded(22L, SubTaskStatus.IN_PROGRESS);
+            verify(subTaskService, never()).start(any());
+        }
+
+        @Test
+        @DisplayName("should call subTaskService.start when status is ASSIGNED")
+        void shouldCallStartWhenAssigned() {
+            subTaskExecutionService.startIfNeeded(22L, SubTaskStatus.ASSIGNED);
+            verify(subTaskService).start(22L);
+        }
+
+        @Test
+        @DisplayName("should call subTaskService.start when status is REWORK")
+        void shouldCallStartWhenRework() {
+            subTaskExecutionService.startIfNeeded(22L, SubTaskStatus.REWORK);
+            verify(subTaskService).start(22L);
+        }
+
+        @Test
+        @DisplayName("should call subTaskService.start when status is PAUSED")
+        void shouldCallStartWhenPaused() {
+            subTaskExecutionService.startIfNeeded(22L, SubTaskStatus.PAUSED);
+            verify(subTaskService).start(22L);
+        }
+
+        @Test
+        @DisplayName("should throw when status is BLOCKED")
+        void shouldThrowWhenStatusBlocked() {
+            assertThatThrownBy(() -> subTaskExecutionService.startIfNeeded(22L, SubTaskStatus.BLOCKED))
+                    .isInstanceOf(BizException.class)
+                    .hasMessageContaining("不允许执行");
+        }
+    }
+
+    private static SubTask subTask() {
+        SubTask subTask = new SubTask();
+        subTask.setId(22L);
+        subTask.setTaskId(33L);
+        subTask.setAssignedAgent(44L);
+        subTask.setTitle("demo");
+        subTask.setContent("demo content");
+        return subTask;
+    }
+
+    private static Agent agent() {
+        Agent agent = new Agent();
+        agent.setId(44L);
+        agent.setName("test-agent");
+        return agent;
+    }
+}

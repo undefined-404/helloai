@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
+import com.helloai.core.observability.HeartbeatService;
 
 /**
  * MCP 工具核心逻辑。

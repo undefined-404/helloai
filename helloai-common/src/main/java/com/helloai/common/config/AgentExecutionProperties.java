@@ -37,4 +37,16 @@ public class AgentExecutionProperties {
 
     /** RUNNING 执行记录超时分钟数，默认 10。 */
     private int runningTimeoutMinutes = 10;
+
+    /** DB Poller 兜底扫描周期（毫秒）。默认 30000 ms（30 秒）。 */
+    private long pollerIntervalMs = 30000L;
+
+    /** DB Poller 扫描孤儿阈值（秒）。超过该时间未被 Poller 触及的 PENDING 行视为孤儿。默认 60 秒。 */
+    private int pollerOrphanThresholdSeconds = 60;
+
+    /** DB Poller 单批扫描上限，避免扫到大量孤儿记录时阻塞调度线程。默认 20。 */
+    private int pollerBatchSize = 20;
+
+    /** DB Poller 是否启用。默认 true。 */
+    private boolean pollerEnabled = true;
 }

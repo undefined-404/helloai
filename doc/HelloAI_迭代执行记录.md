@@ -362,3 +362,325 @@ mvn test -pl helloai-job -Dtest="ExecutionCompensationTaskTest"
 | `com.helloai.core.service.ExecutionCommandServiceTest` | 3 | 命令创建 + 行锁+应用层双重防重（P2-1） |
 | `com.helloai.core.service.LocalExecutionCommandConsumerTest` | 3 | consume 不再 rethrow（P1）、markRunning CAS 跳过 |
 | `com.helloai.job.task.ExecutionCompensationTaskTest` | 3 | 补偿 markTimeout CAS + handleFailure 状态守卫 |
+
+---
+
+### 2026-07-13 Phase 2A N9 Provider 配置复用
+
+#### 1. 范围
+
+- 收口多 Provider 统一配置入口（`helloai.providers.<name>.*`），解决配置散落、路径杂糅、factory 每次 new ChatModel 三个问题
+- 统一 provider/model 解析逻辑到 `AgentProviderResolver`，消除 `ApiKeyAgentExecutor` 和 `AgentChatClientService` 中的重复解析
+
+#### 2. 实际落地
+
+- **新增 `AgentProviderProperties`（helloai-common）**
+  - `@ConfigurationProperties(prefix = "helloai.providers")`，统一管理 baseUrl / defaultModel / 超时
+  - `getConfig(provider)` 大小写不敏感查找
+  - 通过 `@EnableConfigurationProperties` 激活（非 `@Component` 扫描）
+
+- **新增 `AgentProviderResolver`（helloai-core）**
+  - 静态工具类，从 `Agent.modelType`（格式 `provider:model`）解析 provider 和 model
+  - `resolveProvider(agent, fallback)` / `resolveModel(agent, fallback)`
+
+- **配置更新（application.yml）**
+  - 新增 `helloai.providers.deepseek.*` 段，替代散落的 `spring.ai.deepseek.*`
+  - 支持环境变量 fallback（`DEEPSEEK_BASE_URL` / `DEEPSEEK_CHAT_MODEL` / `DEEPSEEK_CONNECT_TIMEOUT_MS` / `DEEPSEEK_READ_TIMEOUT_MS`）
+
+- **重构 `DeepSeekProviderChatClientFactory`（helloai-start）**
+  - 移除所有 `@Value` 注解
+  - 注入 `AgentProviderProperties`，从统一配置读取参数
+  - model 优先级：参数传入 > properties.defaultModel > 常量默认值
+
+- **重构 `AgentChatClientService.generate()`**
+  - factory 分支：通过 `AgentProviderResolver.resolveModel()` 解析 model，选 factory → 调 `createChatClient`
+  - 保留 mock 模式和 ChatClient.Builder fallback 路径
+
+- **重构 `ApiKeyAgentExecutor.execute()`**
+  - 删除 `resolveProvider()` 本地方法
+  - provider 解析统一委托 `AgentProviderResolver.resolveProvider()`
+
+#### 3. 验证
+
+- 旧 `@Value` 注解全量移除：`grep @Value.*deepseek` 零命中
+- 旧 `spring.ai.deepseek` 引用全量移除：Java 代码零命中
+- `AgentProviderResolverTest` 12 个用例全部通过（resolveProvider 5 + resolveModel 7），覆盖 null/blank/无冒号/冒号无模型等边界
+- `mvn test -pl helloai-core -Dtest="AgentProviderResolverTest"` → BUILD SUCCESS
+
+#### 4. 影响
+
+- 对外行为变化：无（配置路径从 `spring.ai.deepseek.*` 迁移到 `helloai.providers.deepseek.*`，语义等价）
+- 代码变化：
+  - 新增 `AgentProviderProperties.java`（helloai-common）
+  - 新增 `AgentProviderResolver.java`（helloai-core）
+  - 重构 `DeepSeekProviderChatClientFactory.java`（移除 @Value，注入 properties）
+  - 重构 `AgentChatClientService.java`（factory 分支使用 resolver）
+  - 重构 `ApiKeyAgentExecutor.java`（删除 resolveProvider）
+  - 修改 `HelloAIApplication.java`（+@EnableConfigurationProperties）
+  - 修改 `application.yml`（+helloai.providers 段）
+- 新增测试：`AgentProviderResolverTest.java`（12 用例）
+- 数据结构变化：无
+
+#### 5. 遗留
+
+- N9 标记为"部分落地"——Provider 配置入口已统一，但 ChatModel 缓存优化（避免每次 new）未在本轮实施
+- N10（credential_vault 轮换/迁移/权限颗粒度）仍为独立后续工作
+- 后续新增 Provider（如 OpenAI）只需：① YAML 加一段配置 ② 新增一个 `ProviderChatClientFactory` 实现
+
+---
+
+### 2026-07-13 Phase 2A N6 executeOnce 削薄
+
+#### 1. 范围
+
+- 按架构设计参考 §5.1「继续削薄 `SubTaskExecutionService` 的编排职责」推进 executeOnce 拆解
+- 将「状态推进 + 纯执行 + 结果回写」三层混合职责拆开，让消费者拿到完整分层调用能力
+
+#### 2. 实际落地
+
+- **`SubTaskExecutionService.executeOnce(subTask, agent)` 削薄为纯执行**
+  - 原职责（混合）：状态守卫 + startIfNeeded 状态推进 + timeline sub_task_execute_start + 组装 AgentTask + timeline llm_call_start/end + 调 platform.executeSync() + handleSuccess/handleFailure 结果回写
+  - 新职责（纯执行）：状态守卫（DONE/CANCELLED 拒入） + 组装 AgentTask + timeline sub_task_llm_call_start/end + 调 platformAgentExecutionService.executeSync() + 返回 AgentResult / 抛异常
+  - 不再做 startIfNeeded、不再做 handleSuccess/Failure
+  - private → public，供分层消费者调用
+
+- **`SubTaskExecutionService.startIfNeeded(subTaskId, status)` 保持 public**
+  - 状态推进前置，让消费者可以在调 executeOnce 之前先确保 subTask 状态正确
+
+- **`SubTaskExecutionService.executeCommand(command)` 保持完整编排入口**
+  - 内部按 startIfNeeded → executeOnce → handleSuccess/handleFailure 串成完整链
+  - 向后兼容：现有 executeCommand 调用方（外部 API 层）继续可用
+
+- **`LocalExecutionCommandConsumer.consume(command)` 重写为 6 步分层**
+  - ① 加载 subTask + agent + 一致性校验
+  - ② startIfNeeded 推进 subTask 到 IN_PROGRESS
+  - ③ markRunning CAS
+  - ④ timeline sub_task_execution_command_consume + sub_task_execute_start
+  - ⑤ executeOnce 纯执行
+  - ⑥ handleSuccess / handleFailure + markSuccess / markFailed CAS
+  - 失败路径：executeOnce 抛异常 → 记录 sub_task_llm_call_failed timeline → handleFailure → markFailed
+
+#### 3. 影响
+
+- 对外行为变化：无（消费者外部行为不变；执行链路完全等价）
+- 代码变化：
+  - `SubTaskExecutionService.java`：executeOnce 由 private → public + 削薄；executeCommand 补全完整链；类注释更新
+  - `LocalExecutionCommandConsumer.java`：consume 重写为 6 步分层；新增 AgentService 注入；新增 ExecutionResultHandler 注入
+  - `SubTaskExecutionServiceTest.java`：拆分 ExecuteOnce / ExecuteCommand / StartIfNeeded 三个 @Nested，共 11 个测试
+  - `LocalExecutionCommandConsumerTest.java`：拆分 HappyPath / SkipPath 两个 @Nested，共 7 个测试
+- 数据结构变化：无
+- 新 timeline 事件：`sub_task_execution_command_consume_skipped`（仅当 startIfNeeded 拒绝时记录）
+
+#### 4. 验证
+
+- `mvn -pl helloai-core -Dtest="SubTaskExecutionServiceTest,LocalExecutionCommandConsumerTest,ExecutionResultHandlerTest,ExecutionCommandServiceTest,AgentProviderResolverTest" test` → 37 个测试全部通过
+- `mvn -pl helloai-job -Dtest="ExecutionCompensationTaskTest" test` → 3 个测试全部通过
+- `mvn -DskipTests clean install` → 6 个模块全部 BUILD SUCCESS
+
+---
+
+### 2026-07-13 Phase 2A N6 DB Poller 落地 — §5.1 阶段一收官
+
+#### 1. 范围
+
+- 按架构设计参考 §5.1「将本地 Spring 事件消费者继续收口到独立 MQ / DB poller 消费模型」落地 DB Poller 独立消费载体
+- 关闭实现差距表 N6 「消费者仍为本地 Spring 事件」遗留点
+- 补齐 agent_execution_record 兑底扫描所需的存储字段 + 扫描索引
+
+#### 2. 实际落地
+
+- **Flyway V16：`V16__agent_execution_record_poller_fields.sql`**
+  - 扩展 `agent_execution_record` 表：新增 `trigger` / `agent_id` / `access_type` / `last_attempt_at` 4 个字段
+  - `agent_id` / `access_type` 为兑底扫描时的「命令恢复」元数据
+  - `last_attempt_at` 为 DB Poller 兑底扫描的状态机字段（NULL 表示尚未被 Poller 触及过）
+  - 新增部分索引 `idx_exec_record_pending_attempt ON agent_execution_record(last_attempt_at, create_time) WHERE status='PENDING'`
+  - 启动日志输出 `[V16] agent_execution_record poller 字段补全完成，已存在相关列数 = N`
+
+- **`AgentExecutionRecord` 实体扩展**：补齐 4 个字段 + Javadoc 说明冗余存储语义
+
+- **`AgentExecutionRecordService` 签名变更 + 新增**
+  - `createPending(eventId, subTaskId, agentId, accessType, trigger)`：冗余存储 trigger / agentId / accessType
+  - `listOrphanPending(thresholdSeconds, limit)`：扫描 `status='PENDING' AND (last_attempt_at IS NULL OR last_attempt_at < now - threshold)` 行，按 `create_time` 升序返回 `LIMIT`
+  - `markPolled(id)`：记录 Poller 触及痕迹，下个周期不会重复扫到
+  - 为空阈值 / limit 增加防御性短路返回 `List.of()`
+
+- **`ExecutionCommandService.createAssignedCommand`**：调用新签名的 createPending，写入完整字段
+
+- **`ExecutionCommandPoller`（新建）**
+  - `@ConditionalOnProperty(name = "helloai.execution.poller-enabled", ...)` 开启可控
+  - `@Scheduled(fixedDelayString = "${helloai.execution.poller-interval-ms:30000}")` 周期扫描
+  - poll() 入口先看 `executionProperties.isPollerEnabled()`（运行时动态开关），false 直接 return
+  - 对每条孤儿记录依次：markPolled → 完整性校验（缺 subTaskId/agentId/accessType 跳过） → 记录 timeline `sub_task_execution_command_poll_recovery` → 构造 `ExecutionCommand`（trigger 前缀 `poll-recovery:`）→ 调用 `localExecutionCommandConsumer.consume()`
+  - 单条异常不影响整批扫描，listOrphanPending 异常向上抛出让调度框架处理
+
+- **`AgentExecutionProperties`（helloai-common）补全 4 个 poller 字段**：`pollerEnabled` / `pollerIntervalMs` / `pollerOrphanThresholdSeconds` / `pollerBatchSize`，默认值与架构参考对齐
+
+- **`application.yml`**：`helloai.execution.poller-*` 四项配置带上注释
+
+#### 3. 双路径主链
+
+- **实时路径**：`SubTaskAutoExecutionDispatcher → ExecutionCommandService → publishEvent(ExecutionCommandCreatedEvent) → @Async @TransactionalEventListener → LocalExecutionCommandConsumer.consume()`（保留，实时性优先）
+- **兑底路径**：`ExecutionCommandPoller.@Scheduled → agentExecutionRecordService.listOrphanPending() → 重建 ExecutionCommand → LocalExecutionCommandConsumer.consume()`（新，独立可工作）
+- **幂等保护**：两条路径都会调用 `markRunning` CAS，被另一条路先推进状态后，后到路径被 CAS 拒绝，自然跳过
+- **兑底场景**：应用重启 / @Async 线程池积压 / 主路径异常丢失时，Poller 接管，避免 PENDING 长期孤儿化
+
+#### 4. 影响
+
+- 对外行为变化：无（新增兑底路径不改变主路径语义；事件丢失场景反而能被恢复）
+- 代码变化：
+  - 新增 `ExecutionCommandPoller.java`（156 行）
+  - 新增 `ExecutionCommandPollerTest.java`（11 个测试用例：3 HappyPath + 8 SkipPath）
+  - 变更 `AgentExecutionRecordService.java`：createPending 签名扩展 + 新增 listOrphanPending / markPolled
+  - 变更 `AgentExecutionRecord.java`：实体加 4 个字段
+  - 变更 `ExecutionCommandService.java`：调用新签名的 createPending
+  - 变更 `ExecutionCommandServiceTest.java`：适配新签名（+import eq）
+  - 变更 `AgentExecutionProperties.java`：加 4 个 poller 字段
+- 配置变化：`application.yml` `helloai.execution.poller-*` 4 项
+- 数据结构变化：
+  - `agent_execution_record` 表加 4 列 + 1 个部分索引（Flyway V16）
+  - `task_timeline` 表新增事件类型 `sub_task_execution_command_poll_recovery`
+
+#### 5. 验证
+
+- `mvn clean install` → 7 个模块 BUILD SUCCESS
+- `mvn test -pl helloai-core` → 72 个测试全部通过（包含 ExecutionCommandPollerTest 11 用例）
+- `mvn test -pl helloai-common,helloai-core,helloai-mq,helloai-job,helloai-api,helloai-start` → 全量 BUILD SUCCESS
+- `grep createPending` 全仓检索 → 唯一调用点 ExecutionCommandService 已适配
+
+#### 6. 遗留
+
+- §5.1 阶段一 四项工作全部落地完成：
+  - ✅ DB Poller 消费载体（本轮）
+  - ✅ SubTaskExecutionService 编排职责削薄（上一轮）
+  - ✅ ExecutionResultHandler 唯一执行结果入口（早前轮）
+  - ✅ ExecutionCommand 幂等 / 补偿 / 防覆盖（早前轮）
+- 下一步可推进架构设计参考 §5.2 阶段二：工作单元显式建模 + 控制命令层（STOP/PAUSE/REPLAN）+ 用户输入可重入
+- 当前 Poller 在主路径之外独享调度线程，Poller 自身故障不会影响主路径
+
+---
+
+### 2026-07-13 §5.2 启动前结构清理 — ExecutionCommand*Consumer 迁入 agent.mqconsumer
+
+#### 1. 范围
+
+- §5.1 阶段一收官后，进入 §5.2 阶段二之前，先把"消费者"代码从 service/ 根目录剥离，对齐 CODE_STYLE §15.1「helloai-core/agent/mqconsumer/」子包规范
+- 纯结构调整：5 个文件物理位置变更 + import 改写，**业务逻辑零变化**
+- 用户决策点：先按"修法 1"最小代价路线执行（不迁 ExecutionCommandPoller，也不动 service/ 子域拆分）
+
+#### 2. 实际落地
+
+- **新建 `core/agent/mqconsumer/` 与 `core/test/.../mqconsumer/` 两个目录**
+  - 补齐 §15.1 缺失的子包，与现有 `agent/domain`、`agent/executor`、`agent/chat` 平级
+- **迁入 3 个文件（main + test）**
+  - `ExecutionCommandConsumer.java`（接口，18 行）— package 从 `core.service` → `core.agent.mqconsumer`
+  - `LocalExecutionCommandConsumer.java`（实现，179 行）— package 同步迁移，并补 6 行 import 解决跨包调用 6 个 Service（AgentExecutionRecordService / AgentService / ExecutionResultHandler / SubTaskExecutionService / SubTaskService / TaskTimelineService）
+  - `LocalExecutionCommandConsumerTest.java`（244 行）— 跟随生产同包迁移，并补 6 行 import 解决 @Mock 跨包
+- **补 2 个 import（留在 service/ 的 Poller + PollerTest）**
+  - `ExecutionCommandPoller.java`：原同包依赖变跨包，补 `import com.helloai.core.agent.mqconsumer.LocalExecutionCommandConsumer;`
+  - `ExecutionCommandPollerTest.java`：同上
+- **未迁移的 4 个文件保持原位**
+  - `ExecutionCommandService.java` + Test：发布事件，不直接调用消费者
+  - `ExecutionCommandPoller.java` + Test：兜底调度任务，按 §14 规范属调度域而非消费者域
+
+#### 3. 影响
+
+- 对外行为变化：无（package 路径变更，类名 / 方法名 / Spring Bean 名全部不变；@Component 自动扫描仍生效）
+- 代码变化：
+  - 新建 2 个目录（main/test）
+  - 迁移 3 个文件位置
+  - 4 个文件加 import（Poller ×1 + PollerTest ×1 + LocalConsumer ×6 + LocalConsumerTest ×6 = 共 14 行 import）
+  - 3 个文件改 package 声明
+- 数据结构变化：无
+- 测试覆盖：本地事件消费者与 Poller 的 18 个测试全部保持原位运行不需调整
+
+#### 4. 验证
+
+- `mvn clean install` → 7 个模块 BUILD SUCCESS
+- `mvn test -pl helloai-core` → 72 个测试全部通过（含 `LocalExecutionCommandConsumerTest` 7 用例 + `ExecutionCommandPollerTest` 11 用例）
+- `mvn test -pl helloai-job` → 3 个测试全部通过
+- `grep "package com.helloai.core.service"` 命中：剩余文件均为真实 Service / Poller / Scheduler，不再包含 ExecutionCommand*Consumer
+- `grep "import com.helloai.core.agent.mqconsumer"` 命中 2 处（Poller + PollerTest），证明跨包引用正确
+
+#### 5. 遗留
+
+- N6 状态不变（双路径主链已闭环，本轮仅是代码结构调整，不修改文档失真项 / 差距项状态）
+- `ExecutionCommandPoller` 仍在 `core/service/`，未迁出；后续若推进 service/ 子域拆分，可考虑把 Poller 移到 `core/job/`（但独立子模块会因依赖方向产生循环，仅供未来架构设计参考）
+- `core/service/` 下仍混有策略类（AgentSelector / ResilientDispatcher / SubTaskAutoExecutionDispatcher）以及评分计算器 ImplicitScoreCalculator；后续可按业务子域重新拆分
+- 下一步目标：架构设计参考 §5.2 阶段二（工作单元显式建模 + 控制命令层 STOP / PAUSE / REPLAN + 用户输入可重入）
+
+---
+
+### 2026-07-13 §5.2 启动前结构清理 — service/ 根目录杂类分层
+
+#### 1. 范围
+
+- 承接上一轮消费者迁移，继续清理 `helloai-core/core/service/` 根目录中不属于业务 Service 的 Agent 执行链与可观测性组件
+- 按用户确认的 A + B 范围执行：Agent 全家桶与 observability 横切组件；`service/score/ImplicitScoreCalculator` 不在本轮范围内
+- 纯结构重构：只迁移物理位置、修改 package 并补齐跨包 import，业务逻辑、Bean 行为、数据结构与对外接口均不变
+
+#### 2. 实际落地
+
+- **Agent 执行链组件归入 `core/agent/` 分层**
+  - `agent/executor/`：`AgentSelector`
+  - `agent/chat/`：`AgentChatClientService`
+  - `agent/command/`：`ExecutionCommandService`、`ExecutionResultHandler`
+  - `agent/execution/`：`SubTaskExecutionService`、`PlatformAgentExecutionService`
+  - `agent/dispatcher/`：`SubTaskAutoExecutionDispatcher`、`ExecutionCommandPoller`、`ResilientDispatcher`
+- **横切可观测性组件归入 `core/observability/`**
+  - `CircuitBreakerAlertService`
+  - `CircuitBreakerEventRecorder`
+  - `HeartbeatService`
+- **测试与引用同步调整**
+  - 9 个对应测试类跟随生产代码迁入新的 Agent 子包
+  - 同步更新迁出类自身、反向引用方及测试类的跨包 import
+  - `core/service/` 根目录现仅保留 25 个业务 Service；评分计算器 `ImplicitScoreCalculator` 继续保留在 `service/score/` 子目录（已在下一轮迁出，详见后文）
+
+#### 3. 影响
+
+- 对外行为变化：无
+- 代码变化：迁移 12 个生产文件与 9 个测试文件，新增 `agent/dispatcher`、`agent/command`、`agent/execution`、`core/observability` 等职责明确的目录
+- 数据结构变化：无
+- 差距项变化：无；N6 仍为“部分落地”，本轮不改变执行命令双路径主链及后续 §5.2 控制命令层目标
+
+#### 4. 验证
+
+- `mvn clean install` → 7 个模块 BUILD SUCCESS
+- `helloai-core` → 72 个测试全部通过
+- `helloai-job` → 3 个测试全部通过
+- 目录复核：9 个 Agent 执行链生产类与 3 个 observability 生产类均位于目标子包，`service/` 根目录不再混放上述 Selector、Dispatcher、Poller、Command、Execution、Chat 与可观测性组件
+
+#### 5. 遗留
+
+- 评分计算器 `ImplicitScoreCalculator` 下轮单独迁出到 `core/score/`，与 `core/observability/` 对齐形成“顶层领域子包”粒度
+- 下一步仍按架构设计参考 §5.2 推进工作单元显式建模、控制命令层与用户输入可重入
+
+---
+
+### 2026-07-13 §5.2 启动前结构清理 — ImplicitScoreCalculator 迁入 core/score/
+
+#### 1. 范围
+
+- 承接上一轮 `service/ 根目录杂类分层` 的遗留，单独处理评分计算器
+- 不动业务逻辑、不改 Bean 行为、不改对外接口：仅迁移物理位置、修改 package 并补齐跨包 import
+- 目标：让 `core/service/` 只剩真业务 Service；评分域做成与 `core/observability/` 平级的顶层领域子包
+
+#### 2. 实际落地
+
+- **迁移生产文件**：`ImplicitScoreCalculator` 从 `core/service/score/` → `core/score/`，package 从 `com.helloai.core.service.score` → `com.helloai.core.score`
+- **删除空目录**：旧 `core/service/score/` 整个删除
+- **反向 import 更新**：`SubTaskService` 中 2 行 `com.helloai.core.service.score.*` → `com.helloai.core.score.*`（含 `ImplicitScoreCalculator` 与 `ImplicitScoreCalculator.ScoreResult` 内部类）
+- **未带测试文件**：`helloai-core/src/test` 下没有 `ImplicitScoreCalculator` 配套测试，故仅生产代码调整
+
+#### 3. 影响
+
+- 对外行为变化：无（类名、Bean 名、`@Component` 注解、字段与方法签名全部不变）
+- 代码变化：1 个生产文件位置迁移 + 1 个反向引用 import 调整 + 1 个空目录删除
+- 数据结构变化：无
+- 差距项变化：无
+
+#### 4. 验证
+
+- `mvn clean install` → 7 个模块 BUILD SUCCESS（Total time 21.266s）
+- `grep "com.helloai.core.service.score"` 全仓检索 → 0 命中，旧路径已无任何残留
+- `grep "com.helloai.core.score"` 全仓检索 → 命中 3 处（新文件本身 1 处 + `SubTaskService` import 2 处）
+- `core/service/` 根目录现仅保留 25 个业务 Service

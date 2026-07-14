@@ -1,8 +1,9 @@
-package com.helloai.core.service;
+package com.helloai.core.agent.execution;
 
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.core.agent.chat.AgentChatClientService;
 import com.helloai.core.agent.chat.ProviderChatClientFactory;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
@@ -24,6 +25,9 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verify;
+import com.helloai.core.observability.HeartbeatService;
+import com.helloai.core.service.AgentService;
+import com.helloai.core.service.CredentialVaultBindingService;
 
 /**
  * PlatformAgentExecutionService 单元测试。

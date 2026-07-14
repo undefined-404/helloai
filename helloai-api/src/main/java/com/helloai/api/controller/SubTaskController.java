@@ -10,7 +10,7 @@ import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.entity.SubTask;
 import com.helloai.core.service.AgentExecutionRecordService;
-import com.helloai.core.service.ExecutionCommandService;
+import com.helloai.core.agent.command.ExecutionCommandService;
 import com.helloai.core.service.SubTaskDispatchService;
 import com.helloai.core.service.SubTaskService;
 import jakarta.servlet.http.HttpServletRequest;

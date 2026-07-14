@@ -1,4 +1,4 @@
-package com.helloai.core.service;
+package com.helloai.core.agent.dispatcher;
 
 import com.helloai.common.base.AgentUnavailableException;
 import com.helloai.common.base.BizException;
@@ -12,6 +12,10 @@ import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import com.helloai.core.agent.executor.AgentSelector;
+import com.helloai.core.observability.CircuitBreakerEventRecorder;
+import com.helloai.core.service.AgentService;
+import com.helloai.core.service.SubTaskService;
 
 /**
  * 弹性调度器（v2.4 §4.5）。

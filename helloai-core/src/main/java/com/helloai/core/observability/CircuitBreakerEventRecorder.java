@@ -1,4 +1,4 @@
-package com.helloai.core.service;
+package com.helloai.core.observability;
 
 import com.helloai.common.constant.AgentRole;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
@@ -12,6 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import com.helloai.core.service.TaskTimelineService;
 
 /**
  * 熔断器事件审计记录器（v2.4 §4.7）。

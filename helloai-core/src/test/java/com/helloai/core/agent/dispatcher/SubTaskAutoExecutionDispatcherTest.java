@@ -1,4 +1,4 @@
-package com.helloai.core.service;
+package com.helloai.core.agent.dispatcher;
 
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
@@ -15,6 +15,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import com.helloai.core.agent.command.ExecutionCommandService;
+import com.helloai.core.service.AgentService;
+import com.helloai.core.service.SubTaskService;
+import com.helloai.core.service.TaskTimelineService;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("SubTaskAutoExecutionDispatcher")

@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.Map;
 import java.util.Set;
+import com.helloai.core.agent.dispatcher.ResilientDispatcher;
 
 /**
  * 子任务调度分配服务。

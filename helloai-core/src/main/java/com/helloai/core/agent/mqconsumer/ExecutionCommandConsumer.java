@@ -1,4 +1,4 @@
-package com.helloai.core.service;
+package com.helloai.core.agent.mqconsumer;
 
 import com.helloai.core.agent.domain.ExecutionCommand;
 

@@ -8,7 +8,7 @@ import com.helloai.core.entity.AgentExecutionRecord;
 import com.helloai.core.entity.SubTask;
 import com.helloai.core.mapper.AgentExecutionRecordMapper;
 import com.helloai.core.service.AgentExecutionRecordService;
-import com.helloai.core.service.ExecutionResultHandler;
+import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.service.SubTaskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

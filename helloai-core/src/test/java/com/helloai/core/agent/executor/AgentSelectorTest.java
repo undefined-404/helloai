@@ -1,4 +1,4 @@
-package com.helloai.core.service;
+package com.helloai.core.agent.executor;
 
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentAccessType;
@@ -20,6 +20,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
+import com.helloai.core.service.AgentService;
 
 /**
  * AgentSelector 单元测试（v2.4 §4.10）。

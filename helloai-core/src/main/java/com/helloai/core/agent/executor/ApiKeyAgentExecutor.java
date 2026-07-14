@@ -3,10 +3,11 @@ package com.helloai.core.agent.executor;
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentAccessType;
+import com.helloai.core.agent.chat.AgentProviderResolver;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.entity.Agent;
-import com.helloai.core.service.AgentChatClientService;
+import com.helloai.core.agent.chat.AgentChatClientService;
 import com.helloai.core.service.CredentialVaultBindingService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -118,7 +119,7 @@ public class ApiKeyAgentExecutor implements AgentExecutor {
 
     @Override
     public AgentResult execute(Agent agent, AgentTask task) {
-        final String provider = resolveProvider(agent);
+        final String provider = AgentProviderResolver.resolveProvider(agent, executionProperties.getProvider());
         dbg("api_key_llm_execute_enter", safeMap(
                 "agentId", agent.getId(),
                 "subTaskId", task.getSubTaskId(),
@@ -216,12 +217,4 @@ public class ApiKeyAgentExecutor implements AgentExecutor {
         return agent != null && agent.getAccessType() == AgentAccessType.API_KEY_LLM;
     }
 
-    private String resolveProvider(Agent agent) {
-        String modelType = agent.getModelType();
-        if (modelType == null || modelType.isBlank()) {
-            return executionProperties.getProvider();
-        }
-        int separator = modelType.indexOf(':');
-        return separator > 0 ? modelType.substring(0, separator) : modelType;
-    }
 }
