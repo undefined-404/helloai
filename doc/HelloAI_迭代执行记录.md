@@ -1074,3 +1074,73 @@ mvn test -pl helloai-job -Dtest="ExecutionCompensationTaskTest"
 
 > ❗ 不得跳过上一阶段直接进下一阶段；尤其不得在 E2E 冒烟未跑前就推 Outbox 或在生产端可靠性未就绪前变动 Poller 当前职责。
 
+### Phase 2G：E2E 冒烟（MQ + Local 双路同时消费，验证 Redis + DB 幂等抵消）
+
+#### 1. 范围
+
+- 接 Phase 2F 遗留的第①阶段：在本地 Docker RabbitMQ + Postgres + Redis 环境，跑 `dispatch-mode=BOTH` + `producer/consumer=true` 的全链路冒烟
+- 重点验证：
+  1. Publisher `afterCommit` 之后才真正发送（防止事务回滚后误发）
+  2. 本地事件消费与 MQ 消费同时到达时，幂等层能否保证**只有一次**实际执行
+  3. Redis + DB 双层幂等层都生效（不靠"Redus 误以为 DB 已经写入了"的虚假判断）
+
+#### 2. 实际落地
+
+- **Flyway V18**：`helloai-start/src/main/resources/db/migration/V18__event_consumption_log.sql`，创建 `event_consumption_log` 表 + `(message_id, consumer)` 复合唯一索引
+  - ⚠️ Phase 2E/2F 引入幂等层时**该表 DDL 漏写**，Spring Boot 启动后 MQ Consumer 任何 `isDuplicate` 调用都会报 `BadSqlGrammarException: relation "event_consumption_log" does not exist`，被 catch 静默吞掉
+  - 后果：DB 幂等层实际未生效，只靠 Redis 一层兜底。Redis 一旦 flush 或过期，双消费就会重放
+  - E2E 启动后第一时间从 `spring-boot-run.log` 看到这个 BadSqlGrammar 才反向定位到 DDL 缺失
+- **MessageDeduplicationService 修复 ON CONFLICT**：在 V18 创建的复合唯一索引上，`ON CONFLICT (message_id)` 与索引不匹配，PG 抛 `there is no unique or exclusion constraint matching the ON CONFLICT specification`，被 catch 静默吞掉
+  - 修后为 `ON CONFLICT (message_id, consumer) DO NOTHING`
+  - 修后：重跑 E2E，`event_consumption_log` 成功写入 1 条 `MqExecutionCommandConsumer / CONSUMED` 记录 ✓
+- **ExecutionCommandPoller 构造器歧义修复**：Phase 2E 引入 `MqExecutionCommandConsumer` 后，`ExecutionCommandConsumer` 接口出现两个实现 (`localExecutionCommandConsumer` + `mqExecutionCommandConsumer`)，Spring Bean 工厂报 `expected single matching bean but found 2`，应用起不来
+  - 修后：Poller 显式构造器参数类型为 `LocalExecutionCommandConsumer`，语义上也是对的（Poller 是兜底路径，必须投递到本地执行链，不能循环回 MQ）
+- **login-raw.ps1 密码错**：脚本里写的是 `helloai123`，V1 迁移默认 admin 账号密码是 `admin123`，修正
+- **认证 header 修正**：`POST /api/sub-tasks/execute/{id}` 要走 `X-Admin-Token`，不是 `Authorization: Bearer ...`
+- **启动脚本中文路径修复**：`start-sb-e2e-mq.ps1` 里 `$javaExe = 'C:\Users\史航\.jdks\...\java.exe'` 被 Node fallback shell 编码坏，`Start-Process` 报 "系统找不到指定的文件"；改成运行时枚举 `C:\Users\*\.jdks\ms-17.0.18\bin\java.exe`，脚本本身不再含中文字节
+- **E2E 触发参数**：造 `sub_task(id=9998887771001, status=ASSIGNED, assigned_agent=2074741030123651073)` + `agent(id=2074741030123651073, name=stage4-api-llm-agent-v4, access_type=API_KEY_LLM)`，`POST /api/sub-tasks/execute/9998887771001` 触发，eventId 动态生成
+
+#### 3. E2E 证据
+
+启动关键日志：
+- `execution-command.mq-publisher.init exchange=helloai.execution-command.exchange routingKey=execution.command.created`
+- `execution-dispatch.config dispatch-mode=BOTH consumer-mode=POLLER mq.producer-enabled=true mq.consumer-enabled=true`
+- `execution-dispatch.validate dispatch-mode=BOTH producer-enabled=true publisher-bean=ready`
+- `Flyway: Successfully applied 1 migration to schema "public", now at version v18`
+
+触发后关键日志序列（eventId=`0d774054e1e14f7fbcd869388cb64805`，recordId=`2077000530561904642`）：
+1. `mq.execution-command.publish.register-after-commit eventId=...` （Publisher 只注册 afterCommit，未实际发）
+2. `mq.execution-command.publish eventId=... routingKey=execution.command.created bodyBytes=192` （提交后才发）
+3. `[exec-cmd-1]` 本地事件 `consume`：`startIfNeeded` 被另一条路径抢先推进到 IN_PROGRESS → 记录 `sub_task_execution_command_consume_skipped` → 返回
+4. `[ntContainer#0-3]` MQ `tryConsume`：Redis miss → DB miss → 执行 `localDelegate.consume()` → 推进 subTask 到 IN_PROGRESS → 走完整 6 步执行链 → `sub_task_execution_command_consume` + `sub_task_execute_start` + `sub_task_llm_call_start` + `sub_task_llm_call_failed`
+5. `MessageDeduplicationService.markConsumed` → Redis SET + DB INSERT (修复后生效) → `MqExecutionCommandConsumer` 36ms 完成 → MQ ACK
+
+DB 验证：
+- `event_consumption_log`: 1 条 `MqExecutionCommandConsumer / CONSUMED / 0d774054e1e14f7fbcd869388cb64805` ✓
+- `task_timeline`: 8 条事件，**仅 1 次 `sub_task_llm_call_start/failed`**，未出现双 LLM 调用 ✓
+- `agent_execution_record`: 1 条 `status=FAILED`（业务失败：Agent 未配置启用态托管凭证 `provider=deepseek`），未出现双 RUNNING ✓
+- `sub_task`: status=`BLOCKED`，version 递增正常
+- RabbitMQ Management API: `publish=2, ack=1, deliver=2`（同 eventId 投递 2 次但只 ack 1 次，符合预期；最初一次是带 confirm 的 publish，ack 是消费者处理完）
+
+#### 4. 关键结论
+
+- **✅ Phase 2F Publisher afterCommit + 显式 JSON 序列化的两个修复点全部生效**：register-after-commit 日志和 publish 日志有时间顺序，证明发布是在事务提交后才发出的；bodyBytes=192 表明 ObjectMapper 显式序列化成功。
+- **✅ 双消费幂等抵消**：
+  - 场景：本地事件与 MQ 几乎同时到达本地 execute 链
+  - 谁赢？**MQ 路径抢先**（RabbitListener 线程 + `localDelegate.consume()`），把 subTask 推到 IN_PROGRESS 并记录 consume timeline；本地事件路径随后进入 `consume(command)`，`startIfNeeded` 拒绝（当前状态已是 IN_PROGRESS），被本地 startIfNeeded 防御性 catch 拦住 → record `sub_task_execution_command_consume_skipped` → 返回。
+  - 结果：`sub_task_llm_call_start` / `sub_task_llm_call_failed` **只发生 1 次**，没有出现双 LLM 调用。
+  - 兜底机制分层：
+    1. **DB CAS 层（最稳）**：`agent_execution_record.markRunning(recordId)` PENDING→RUNNING CAS，与 subTask startIfNeeded 协同保证只有一条消费路径真正推进业务。
+    2. **Redis 快路径**：`mq:dedup:<eventId>` TTL 24h，对同一消息多消费者竞争时直接拦截。
+    3. **DB event_consumption_log 兜底**（Phase 2G 修复后才真正生效）：Redis 失效时通过 `(message_id, consumer)` 唯一索引识别已消费。
+- **⚠️ 顺手抓到的 3 个隐性 bug**（V18 + ON CONFLICT + Poller 双实现歧义）都是 Phase 2E/2F 引入 MQ 主链时埋下的，未跑 E2E 完全不会暴露。这反向说明"先 E2E 冒烟再继续推生产端可靠性"这个顺序判断是对的。
+
+#### 5. 遗留
+
+- ② Publisher Confirm / Outbox 可靠投递（前提：① 已通过）
+- ③ Poller 降级为孤儿 / 超时 / 补偿兜底（前提：①② 已稳定）
+- 后续可考虑的细化（不在本轮范围）：
+  - `MessageDeduplicationService.markConsumed` 的 PK 用 `System.nanoTime()`，高并发下撞值风险，建议切到 Snowflake ID 生成器
+  - `MqExecutionCommandConsumer.onMessage` 在 `tryConsumeEnhanced` 返回 true 时仍然 NACK→DLX；区分"幂等跳过"与"业务失败"，前者应该 ACK 而不是 NACK（否则 DLX 会堆积大量"重复消息"，干扰真实失败信号）
+  - `login-raw.ps1` 密码仍写错（`helloai123`），同步成 `admin123`（不在本轮范围，单独立一个文档 / 脚本维护轮）
+

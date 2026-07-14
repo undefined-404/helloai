@@ -47,10 +47,15 @@ public class MessageDeduplicationService {
         redisTemplate.opsForValue().set(redisKey, "1", DEDUP_TTL);
 
         try {
+            // ON CONFLICT 必须匹配表上实际唯一索引 uk_event_consumption_log_msg_consumer
+            // (message_id, consumer)：同一消费者对同一条消息只允许一条记录。
+            // 若误写 ON CONFLICT (message_id)，PG 会抛
+            // "there is no unique or exclusion constraint matching the ON CONFLICT specification"，
+            // 被下方 catch 静默吞掉，导致事件消费幂等日志永远写不进去。
             jdbcTemplate.update(
                     "INSERT INTO event_consumption_log (id, message_id, consumer, status, create_by, update_by, create_time, update_time) " +
                     "VALUES (?, ?, ?, 'CONSUMED', 'system', 'system', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) " +
-                    "ON CONFLICT (message_id) DO NOTHING",
+                    "ON CONFLICT (message_id, consumer) DO NOTHING",
                     System.nanoTime(), messageId, consumerGroup);
         } catch (Exception e) {
             log.debug("消费记录已存在(幂等): messageId={}", messageId);
@@ -64,7 +69,7 @@ public class MessageDeduplicationService {
             jdbcTemplate.update(
                     "INSERT INTO event_consumption_log (id, message_id, consumer, status, create_by, update_by, create_time, update_time) " +
                     "VALUES (?, ?, 'FAILED', 'FAILED', 'system', 'system', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) " +
-                    "ON CONFLICT (message_id) DO NOTHING",
+                    "ON CONFLICT (message_id, consumer) DO NOTHING",
                     System.nanoTime(), messageId);
         } catch (Exception e) {
             // ignore

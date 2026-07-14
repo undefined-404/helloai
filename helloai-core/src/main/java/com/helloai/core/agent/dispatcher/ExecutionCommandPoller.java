@@ -5,9 +5,9 @@ import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.mqconsumer.ExecutionCommandConsumer;
+import com.helloai.core.agent.mqconsumer.LocalExecutionCommandConsumer;
 import com.helloai.core.entity.AgentExecutionRecord;
 import com.helloai.core.entity.SubTask;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -62,7 +62,6 @@ import com.helloai.core.service.TaskTimelineService;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 @ConditionalOnProperty(name = "helloai.execution.poller-enabled", havingValue = "true", matchIfMissing = true)
 public class ExecutionCommandPoller {
 
@@ -71,6 +70,23 @@ public class ExecutionCommandPoller {
     private final TaskTimelineService taskTimelineService;
     private final SubTaskService subTaskService;
     private final AgentExecutionProperties executionProperties;
+
+    /**
+     * 显式绑定 {@link LocalExecutionCommandConsumer}：Poller 是孤儿 / 超时 / 补偿兜底路径，
+     * 必须投递到本地执行链，禁止循环回 MQ。此显式构造器同时解决 dispatch-mode=BOTH 场景下
+     * ExecutionCommandConsumer 接口存在两个实现（Local / MQ）导致的 UnsatisfiedDependency。
+     */
+    public ExecutionCommandPoller(AgentExecutionRecordService agentExecutionRecordService,
+                                  LocalExecutionCommandConsumer executionCommandConsumer,
+                                  TaskTimelineService taskTimelineService,
+                                  SubTaskService subTaskService,
+                                  AgentExecutionProperties executionProperties) {
+        this.agentExecutionRecordService = agentExecutionRecordService;
+        this.executionCommandConsumer = executionCommandConsumer;
+        this.taskTimelineService = taskTimelineService;
+        this.subTaskService = subTaskService;
+        this.executionProperties = executionProperties;
+    }
 
     /**
      * DB Poller 周期扫描入口。
