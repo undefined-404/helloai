@@ -6,6 +6,8 @@ import com.helloai.api.dto.subtask.ReassignRequest;
 import com.helloai.api.dto.subtask.ReworkRequest;
 import com.helloai.api.dto.subtask.SubTaskResponse;
 import com.helloai.common.base.R;
+import com.helloai.common.config.AgentDispatchProperties;
+import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.entity.SubTask;
@@ -33,6 +35,7 @@ public class SubTaskController {
     private final ExecutionCommandService executionCommandService;
     private final AgentExecutionRecordService agentExecutionRecordService;
     private final HttpServletRequest request;
+    private final AgentDispatchProperties agentDispatchProperties;
 
     @PostMapping
     public R<SubTaskResponse> create(@Valid @RequestBody CreateSubTaskRequest req) {
@@ -47,6 +50,11 @@ public class SubTaskController {
         subTask.setStatus(SubTaskStatus.PENDING);
         subTask = subTaskService.create(subTask, req.getAssignedAgent());
         log.info("子任务创建: id={}, title={}, taskId={}", subTask.getId(), req.getTitle(), req.getTaskId());
+
+        if (req.getAssignedAgent() == null && agentDispatchProperties.isAutoAssignOnCreate()) {
+            subTaskDispatchService.dispatchPendingSubTaskAuto(subTask.getId(), AgentRole.EXECUTOR);
+            subTask = subTaskService.getById(subTask.getId());
+        }
 
         return R.ok(toResponse(subTask));
     }

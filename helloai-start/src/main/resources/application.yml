@@ -90,6 +90,11 @@ helloai:
   agent:
     registration-token: "helloai-reg-2024"
     allow-registration: true
+  # Phase 2B 调度策略 3：外部优先 / 空闲优先 / 平台内 LLM 保底
+  dispatch:
+    auto-assign-on-create: false
+    prefer-external: false
+    require-idle: true
   execution:
     enabled: true
     mock-mode: false

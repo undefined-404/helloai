@@ -3,6 +3,7 @@ package com.helloai.core.agent.executor;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
+import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.core.entity.Agent;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
@@ -29,6 +30,23 @@ public class AgentSelector {
 
     private final AgentService agentService;
     private final CircuitBreakerRegistry circuitBreakerRegistry;
+    private final AgentDispatchProperties agentDispatchProperties;
+
+    /**
+     * 从指定角色的 Agent 中选取首选执行器（用于初始分配）。
+     *
+     * <p>注意：本方法只负责“选人”，不落库、不发布事件。
+     * 分配与熔断降级应由 {@link com.helloai.core.agent.dispatcher.ResilientDispatcher} 统一完成。</p>
+     */
+    public Agent pickPreferred(AgentRole role) {
+        List<Agent> candidates;
+        if (role != null) {
+            candidates = agentService.listByRole(role);
+        } else {
+            candidates = agentService.listActive();
+        }
+        return pickFromCandidates(candidates, null);
+    }
 
     /**
      * 从同角色 Agent 中选取替代者。
@@ -49,22 +67,45 @@ public class AgentSelector {
      */
     public Agent pickAlternative(Long excludeAgentId, AgentRole role) {
         List<Agent> candidates;
-
         if (role != null) {
             candidates = agentService.listByRole(role);
         } else {
             candidates = agentService.listActive();
         }
+        return pickFromCandidates(candidates, excludeAgentId);
+    }
 
+    private Agent pickFromCandidates(List<Agent> candidates, Long excludeAgentId) {
         return candidates.stream()
-                .filter(a -> !a.getId().equals(excludeAgentId))
+                .filter(a -> excludeAgentId == null || !a.getId().equals(excludeAgentId))
+                .filter(a -> agentDispatchProperties.getForceAccessType() == null
+                        || (a.getAccessType() != null && a.getAccessType() == agentDispatchProperties.getForceAccessType()))
                 .filter(a -> a.getOnlineStatus() != AgentOnlineStatus.SLEEPING)
                 .filter(a -> a.getOnlineStatus() != AgentOnlineStatus.OFFLINE
                         || (a.getAccessType() != null && !a.getAccessType().requiresRuntimeLiveness()))
+                .filter(a -> !agentDispatchProperties.isRequireIdle() || agentService.inProgressCount(a.getId()) == 0)
                 .filter(a -> a.getStatus() == AgentStatus.ACTIVE)
                 .filter(this::isCircuitClosed)
-                .max(Comparator.comparing(Agent::getScore, Comparator.nullsFirst(Comparator.naturalOrder())))
+                .max(resolveComparator())
                 .orElse(null);
+    }
+
+    private Comparator<Agent> resolveComparator() {
+        if (!agentDispatchProperties.isPreferExternal()) {
+            return Comparator.comparing(Agent::getScore, Comparator.nullsFirst(Comparator.naturalOrder()));
+        }
+        return Comparator
+                .comparingInt(this::accessTypeRank)
+                .thenComparing(Agent::getScore, Comparator.nullsFirst(Comparator.naturalOrder()));
+    }
+
+    private int accessTypeRank(Agent agent) {
+        if (agent == null || agent.getAccessType() == null) return 0;
+        return switch (agent.getAccessType()) {
+            case CLI_CLIENT -> 3;
+            case API_KEY_LLM -> 2;
+            case WEB_BROWSER -> 1;
+        };
     }
 
     /**

@@ -4,6 +4,7 @@ import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
+import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.core.entity.Agent;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
@@ -43,7 +44,10 @@ class AgentSelectorTest {
 
     @BeforeEach
     void setUp() {
-        agentSelector = new AgentSelector(agentService, circuitBreakerRegistry);
+        AgentDispatchProperties props = new AgentDispatchProperties();
+        props.setPreferExternal(false);
+        props.setRequireIdle(false);
+        agentSelector = new AgentSelector(agentService, circuitBreakerRegistry, props);
     }
 
     // ════════════════════════════════════════════════════════════
