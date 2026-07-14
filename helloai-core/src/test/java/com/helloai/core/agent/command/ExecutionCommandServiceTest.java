@@ -81,7 +81,9 @@ class ExecutionCommandServiceTest {
         when(agentExecutionRecordService.hasPendingOrRunning(22L)).thenReturn(false);
         when(agentExecutionRecordService.createPending(any(), eq(22L), eq(11L),
                 eq(AgentAccessType.API_KEY_LLM), eq("assigned"))).thenReturn(record);
-        when(executionProperties.isEventMode()).thenReturn(true);
+        when(executionProperties.isDispatchEvent()).thenReturn(true);
+        when(executionProperties.isDispatchMq()).thenReturn(false);
+        when(executionProperties.getDispatchMode()).thenReturn(AgentExecutionProperties.DispatchMode.EVENT);
         when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.EVENT);
 
         ExecutionCommand command = executionCommandService.createAssignedCommand(22L, 11L, "assigned");
@@ -108,7 +110,7 @@ class ExecutionCommandServiceTest {
     }
 
     @Test
-    @DisplayName("POLLER 模式创建 execution command 后不发布本地事件")
+    @DisplayName("dispatch-mode=NONE 时创建 execution command 后不发布本地事件")
     void shouldNotPublishEventInPollerMode() {
         SubTask subTask = new SubTask();
         subTask.setId(22L);
@@ -130,7 +132,9 @@ class ExecutionCommandServiceTest {
         when(agentExecutionRecordService.hasPendingOrRunning(22L)).thenReturn(false);
         when(agentExecutionRecordService.createPending(any(), eq(22L), eq(11L),
                 eq(AgentAccessType.API_KEY_LLM), eq("assigned"))).thenReturn(record);
-        when(executionProperties.isEventMode()).thenReturn(false);
+        when(executionProperties.isDispatchEvent()).thenReturn(false);
+        when(executionProperties.isDispatchMq()).thenReturn(false);
+        when(executionProperties.getDispatchMode()).thenReturn(AgentExecutionProperties.DispatchMode.NONE);
         when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.POLLER);
 
         ExecutionCommand command = executionCommandService.createAssignedCommand(22L, 11L, "assigned");
@@ -184,7 +188,9 @@ class ExecutionCommandServiceTest {
         when(agentExecutionRecordService.hasPendingOrRunning(22L)).thenReturn(false);
         when(agentExecutionRecordService.createPending(any(), eq(22L), eq(11L),
                 eq(AgentAccessType.API_KEY_LLM), eq("assigned"))).thenReturn(record);
-        when(executionProperties.isEventMode()).thenReturn(true);
+        when(executionProperties.isDispatchEvent()).thenReturn(true);
+        when(executionProperties.isDispatchMq()).thenReturn(false);
+        when(executionProperties.getDispatchMode()).thenReturn(AgentExecutionProperties.DispatchMode.EVENT);
         when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.EVENT);
 
         executionCommandService.createAssignedCommand(22L, 11L, "assigned");

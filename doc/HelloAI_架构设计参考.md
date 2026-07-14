@@ -348,7 +348,7 @@ TCC 在本项目中更多作为最终一致与兜底思路参考，而不是逐�
 - 继续削薄 `SubTaskExecutionService` 的编排职责
 - 将 `ExecutionResultHandler` 固化为唯一执行结果入口
 - 强化 ExecutionCommand 幂等、补偿、晚到结果防覆盖
-- **Phase 2D 已完成项**：MQ Consumer 骨架（`MqExecutionCommandConsumer` + `RabbitMQConfig` 加 `EXECUTION_COMMAND_QUEUE` / `EXECUTION_COMMAND_EXCHANGE` / binding，复用 `DLX_EXCHANGE` / `DLX_QUEUE`；与 `LocalExecutionCommandConsumer` 共用 `ExecutionCommandConsumer` 接口；`@ConditionalOnProperty` 默认 CONDITIONAL 关闭）。下一轮在具备 RabbitMQ 的环境做 E2E，同时让 `ExecutionCommandService` 在发本地事件的同时发 MQ，使两路消费并存
+- **Phase 2D / 2E / 2F 已完成项**：MQ 主链路的“生产→消费”椅骨已全部接上，默认零行为变化：`MqExecutionCommandConsumer` + `ExecutionCommandMqPublisher` 共用 `ExecutionCommandConsumer` 接口；topology（`EXECUTION_COMMAND_QUEUE` / `EXECUTION_COMMAND_EXCHANGE` / binding 与 DLX 复用）由 `RabbitMQConfig` 统一声明；由 `AgentExecutionProperties.dispatch-mode`（`NONE / EVENT / MQ / BOTH`，默认 `NONE`）控制分发，`MqExecutionCommandProperties.{producer-enabled, consumer-enabled}` 分别控制 Publisher / Consumer 注册，支持独立灰度；`ExecutionDispatchValidator` 启动期 fail-fast。**Phase 2F 修正两个阻断性问题：**（a）Publisher 将投递挂到 `TransactionSynchronization.afterCommit()`，与本地事件 `@TransactionalEventListener(AFTER_COMMIT)` 语义对齐，避免“事务未提交先发消息”与“回滚后消息已发”；（b）Publisher 改为显式 `ObjectMapper.writeValueAsBytes` + `rabbitTemplate.send(Message)`，与消费端 `readValue(byte[])` 完全对称，不依赖默认 SimpleMessageConverter，也不侵入全局 `RabbitTemplate` converter。下一轮在具备 RabbitMQ 的环境开 `dispatch-mode=BOTH` + `producer-enabled=true` + `consumer-enabled=true` 做 E2E，观察幂等抵消双消费；Poller 兜底切除与消费侧回写链路改造留待独立迭代
 
 ### 5.2 第二阶段：补任务运行时能力
 

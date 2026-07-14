@@ -931,6 +931,14 @@ mvn test -pl helloai-job -Dtest="ExecutionCompensationTaskTest"
 - 生产端（`ExecutionCommandService`）仍只发本地事件 + DB Poller，暂未同时发 MQ 消息（本轮只加 Consumer 骨架）
 - `MqExecutionCommandConsumer` 未注入 `MqExecutionCommandProperties`（仅占位 `describeProperties()`），后续接入配置可读与启动期日志
 
+> ⚠️ **Phase 2E / 2F 更新说明（上方旧描述仅作历史快照，以下方标注为准）：**
+>
+> - `helloai.mq.execution-command.enabled` **已于 Phase 2E 拆分废弃**，当前配置项为 `helloai.mq.execution-command.producer-enabled` 与 `helloai.mq.execution-command.consumer-enabled`，默认均 `false`
+> - 上方遗留 ②（生产端未发 MQ）**已于 Phase 2E 关闭**：新增 `ExecutionCommandMqPublisher`，由 `AgentExecutionProperties.dispatch-mode` 控制是否发 MQ
+> - 上方遗留 ③（Consumer 未注入 Properties）**已于 Phase 2E 关闭**
+> - ②另外存在两个阻断性问题：事务时机与消息编码，**已于 Phase 2F 修复**（Publisher 接入 `TransactionSynchronization.afterCommit()` + 显式 JSON 序列化）
+> - E2E 验证的开关也相应从单 `enabled=true` 变为 `dispatch-mode=BOTH` + `producer-enabled=true` + `consumer-enabled=true`
+
 ---
 
 ### Phase 2E：N6 生产端接入 MQ + 派发模式对称化
@@ -1010,3 +1018,50 @@ mvn test -pl helloai-job -Dtest="ExecutionCompensationTaskTest"
 - E2E 冒烟仍未跑（需 RabbitMQ 环境）：至少覆盖 `dispatch-mode=BOTH + producer-enabled=true + consumer-enabled=true`，观察 Redis + DB 幂等确实抵消双消费
 - Poller 兜底切除 / 主路径切换未做，本轮明确保留 Poller 作为兜底路径
 - 未做消费侧回写链路（`AsyncExecutionResultConsumer`）改造，`ExecutionResultHandler.handleReport` 现有主路径不动
+
+---
+
+### Phase 2F：N6 两个阻断性问题修复（事务时机 + 消息编码）
+
+#### 1. 范围
+
+- 关闭 Phase 2E 遗留的两个阻断性问题（均影响 MQ 主链路能否真正跑通）
+- 保持方向不变（方案 B：dispatch-mode + 双开关），仅修正实现与本地事件路径语义不对齐的两处细节
+- 修完后 N6 才真正能描述为“MQ 主链路已连通（E2E 待验证）”；未修之前属于“骨架已搭好但链路断开”
+
+#### 2. 实际落地
+
+- **`ExecutionCommandMqPublisher.publish()` 事务时机对齐 AFTER_COMMIT**
+  - 原实现：`ExecutionCommandService.createAssignedCommand` 在 `@Transactional` 方法体里直接 `mqPublisher.publish(command)`，DB 事务未提交时消息已发；本地事件路径用的是 `@TransactionalEventListener(AFTER_COMMIT)`，两路径语义不对称
+  - 两类事故风险：（a）事务回滚后消息已发出；（b）消费端读“还未提交”的 `subTask` / `agent` / `record` 而走 ACK 丢弃分支（`MqExecutionCommandConsumer` 现有做法就是将“读不到实体”当尚未就绪情况 ACK）
+  - 修复：`publish()` 里先判 `TransactionSynchronizationManager.isSynchronizationActive()`，有事务上下文时仅 `registerSynchronization` 一个 `afterCommit()` 回调，无事务上下文（脚本 / 单测）退化为立即发送；`Service` 层零修改，语义完全内嵌到 Publisher
+- **`ExecutionCommandMqPublisher.publish()` 改为显式 JSON 序列化**
+  - 原实现：`rabbitTemplate.convertAndSend(exchange, routingKey, POJO)` 依赖默认 `SimpleMessageConverter`，而 `ExecutionCommandMqMessage` 既非 `Serializable` 也无对应 converter，直接抛 `MessageConversionException` → “链路根本发不出去”；而消费端已不对称地按 JSON 用 `objectMapper.readValue(byte[])` 解析
+  - 修复：改为 `objectMapper.writeValueAsBytes(message)` + `rabbitTemplate.send(exchange, routingKey, new Message(body, props))`，手动设 `contentType=application/json` / `contentEncoding=UTF-8` / `messageId=eventId` / `correlationId=eventId` / `deliveryMode=PERSISTENT`；与消费端 `readValue(byte[])` 完全对称；不依赖默认 converter，不侵入全局 `RabbitTemplate`，避免波及 `DomainEventPublisher` 等其他路径
+- **`ExecutionCommandMqPublisher` 构造函数新增 `ObjectMapper` 参数**（Spring Boot 默认能提供）与新增 `doPublish(command)` 私有方法（封装真正发送）
+- **`ExecutionCommandMqPublisherTest` 新增**（5 用例）
+  - `NoTransactionContext`：无事务 → 立即发送，`MessageProperties` 字段全对；body 为 JSON，`objectMapper.readValue(byte[])` 可还原全部字段
+  - `ActiveTransactionContext`：有事务 → 仅注册 sync，未 `afterCommit` 前 broker 零调用；手动触发 `syncs.get(0).afterCommit()` 后才真发；模拟回滚（`clearSynchronization` 不触发 afterCommit）→ 永不发送
+  - `FailurePaths`：JSON 序列化失败 → 抛 `IllegalStateException`（包含 `eventId` 与 `JsonProcessingException` cause），broker 零调用
+
+#### 3. 影响
+
+- 对外行为变化：默认 `dispatch-mode=NONE` + 双开关 `false`，Publisher Bean 不注册 → 本轮对默认行为零影响
+- 行为衍生：开启 `dispatch-mode=MQ` 或 `BOTH` 后，MQ 消息总于“DB 事务提交之后”才交给 broker，不会出现“先发后提交”或“提交失败但消息已发”；消费端可以直接信任 `subTask / agent / record` 已存在
+- 配置变化：无（开关与消费结构不变）
+- 数据结构变化：无
+- 差距项变化：N6 从“骨架已搭好但链路断开” → “主链路已连通（producer/consumer 独立开关，E2E 待验证）”的描述真正成立（Phase 2E 描述超前，本轮补统）
+
+#### 4. 验证
+
+- `mvn -pl helloai-core -am test -Dtest=MqExecutionCommandConsumerTest,ExecutionCommandServiceDispatchTest,ExecutionCommandMqPublisherTest -Dsurefire.failIfNoSpecifiedTests=false`
+  → `Tests run: 19, Failures: 0, Errors: 0, Skipped: 0`，`BUILD SUCCESS`
+  （具体：MqExecutionCommandConsumerTest 8 + ExecutionCommandServiceDispatchTest 6 + ExecutionCommandMqPublisherTest 5）
+- 新增 5 用例覆盖：无事务直发 / JSON 可还原 / 有事务延后 / 回滚不发 / 序列化失败
+
+#### 5. 遗留
+
+- E2E 冒烟仍未跑（需 RabbitMQ 环境）
+- Poller 兜底切除与消费侧回写链路改造仍未做
+- Publisher 未接入 CorrelationData / publisher-confirms 回执（当前依靠 `RabbitMQConfig.rabbitTemplate` 的 confirm callback 日志可见性），回执失败时的重发策略留待后续与 Outbox 可靠投递层一同考虑
+
