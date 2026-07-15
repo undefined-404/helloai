@@ -160,13 +160,13 @@ CREATE TABLE IF NOT EXISTS credential_vault (
     remark           VARCHAR(255),
     CONSTRAINT chk_credential_vault_owner_type CHECK (owner_type IN ('AGENT')),
     CONSTRAINT chk_credential_vault_credential_type CHECK (credential_type IN ('API_KEY')),
-    CONSTRAINT chk_credential_vault_status CHECK (status IN ('ACTIVE', 'DISABLED')),
+    CONSTRAINT chk_credential_vault_status CHECK (status IN ('ACTIVE', 'DISABLED', 'EXPIRED')),
     CONSTRAINT chk_credential_vault_value CHECK (encrypted_value IS NOT NULL OR secret_ref IS NOT NULL)
 );
 CREATE INDEX IF NOT EXISTS idx_credential_vault_owner ON credential_vault(owner_type, owner_id) WHERE deleted = 0;
 CREATE INDEX IF NOT EXISTS idx_credential_vault_status ON credential_vault(status) WHERE deleted = 0;
-CREATE UNIQUE INDEX IF NOT EXISTS uk_credential_vault_owner_provider_type
-    ON credential_vault(owner_type, owner_id, provider, credential_type) WHERE deleted = 0;
+CREATE UNIQUE INDEX IF NOT EXISTS uk_credential_vault_owner_provider_type_active
+    ON credential_vault(owner_type, owner_id, provider, credential_type) WHERE status = 'ACTIVE' AND deleted = 0;
 DROP TRIGGER IF EXISTS update_credential_vault_update_time ON credential_vault;
 CREATE TRIGGER update_credential_vault_update_time BEFORE UPDATE ON credential_vault
     FOR EACH ROW EXECUTE FUNCTION update_update_time_column();
@@ -1503,3 +1503,58 @@ COMMENT ON COLUMN task_timeline.update_by  IS '更新人';
 COMMENT ON COLUMN task_timeline.create_time IS '创建时间';
 COMMENT ON COLUMN task_timeline.update_time IS '更新时间';
 COMMENT ON COLUMN task_timeline.remark     IS '备注';
+
+-- ============================================================
+-- 21. agent_duty_lease Agent 值班租约表（AgentHub V1 T3）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS agent_duty_lease (
+    id               BIGINT NOT NULL PRIMARY KEY,
+    agent_id         BIGINT       NOT NULL,
+    session_id       VARCHAR(64)  NOT NULL,
+    work_mode        VARCHAR(32)  NOT NULL DEFAULT 'AUTO',
+    max_concurrent   INT          NOT NULL DEFAULT 1,
+    status           VARCHAR(16)  NOT NULL DEFAULT 'ACTIVE',
+    started_at       TIMESTAMPTZ  NOT NULL,
+    last_renewed_at  TIMESTAMPTZ  NOT NULL,
+    expires_at       TIMESTAMPTZ  NOT NULL,
+    close_reason     VARCHAR(128),
+    create_by        VARCHAR(64)  NOT NULL DEFAULT '',
+    update_by        VARCHAR(64)  NOT NULL DEFAULT '',
+    create_time      TIMESTAMPTZ  NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time      TIMESTAMPTZ  NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted          SMALLINT     NOT NULL DEFAULT 0,
+    remark           VARCHAR(255),
+    CONSTRAINT chk_duty_lease_status CHECK (status IN ('ACTIVE', 'CLOSED', 'EXPIRED'))
+);
+CREATE INDEX IF NOT EXISTS idx_duty_lease_agent ON agent_duty_lease(agent_id, status) WHERE deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_duty_lease_expires ON agent_duty_lease(expires_at) WHERE status = 'ACTIVE' AND deleted = 0;
+-- T3 补齐：同一 Agent 同时只能有一条 ACTIVE 租约；EXPIRED/CLOSED 可保留多份审计。
+CREATE UNIQUE INDEX IF NOT EXISTS uk_duty_lease_agent_active
+    ON agent_duty_lease(agent_id) WHERE status = 'ACTIVE' AND deleted = 0;
+-- T3 补齐：FK 关联 agent 表，保证 lease.agent_id 不会指向已删除的 agent。
+ALTER TABLE agent_duty_lease
+    DROP CONSTRAINT IF EXISTS fk_duty_lease_agent;
+ALTER TABLE agent_duty_lease
+    ADD CONSTRAINT fk_duty_lease_agent
+    FOREIGN KEY (agent_id) REFERENCES agent(id);
+DROP TRIGGER IF EXISTS update_agent_duty_lease_update_time ON agent_duty_lease;
+CREATE TRIGGER update_agent_duty_lease_update_time BEFORE UPDATE ON agent_duty_lease
+    FOR EACH ROW EXECUTE FUNCTION update_update_time_column();
+
+COMMENT ON TABLE agent_duty_lease IS 'Agent 值班租约表（AgentHub V1 值班态事实源）';
+COMMENT ON COLUMN agent_duty_lease.id IS '主键ID';
+COMMENT ON COLUMN agent_duty_lease.agent_id IS '关联的 Agent ID';
+COMMENT ON COLUMN agent_duty_lease.session_id IS '值班会话标识（同一次 checkIn 的 lease 共享）';
+COMMENT ON COLUMN agent_duty_lease.work_mode IS '工作模式：AUTO 等';
+COMMENT ON COLUMN agent_duty_lease.max_concurrent IS '最大并发子任务数';
+COMMENT ON COLUMN agent_duty_lease.status IS '租约状态：ACTIVE/CLOSED/EXPIRED';
+COMMENT ON COLUMN agent_duty_lease.started_at IS '值班开始时间';
+COMMENT ON COLUMN agent_duty_lease.last_renewed_at IS '最近一次续约时间';
+COMMENT ON COLUMN agent_duty_lease.expires_at IS '租约过期时间';
+COMMENT ON COLUMN agent_duty_lease.close_reason IS '关闭原因（仅在 status=CLOSED 时填写）';
+COMMENT ON COLUMN agent_duty_lease.create_by IS '创建人';
+COMMENT ON COLUMN agent_duty_lease.update_by IS '更新人';
+COMMENT ON COLUMN agent_duty_lease.create_time IS '创建时间';
+COMMENT ON COLUMN agent_duty_lease.update_time IS '更新时间';
+COMMENT ON COLUMN agent_duty_lease.deleted IS '逻辑删除标记：0-未删除，1-已删除';
+COMMENT ON COLUMN agent_duty_lease.remark IS '备注';

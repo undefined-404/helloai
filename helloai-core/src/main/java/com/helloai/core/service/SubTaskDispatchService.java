@@ -205,4 +205,51 @@ public class SubTaskDispatchService {
                         Agent::getScore, java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())))
                 .orElse(null);
     }
+
+    /**
+     * ASSIGNED 超时回收：长时间无人 claim 的 ASSIGNED 子任务自动回收到 PENDING 并重新调度。
+     *
+     * <p>P0 可靠性缺口：任务 ASSIGNED 给 Agent 后，如果该 Agent 长时间不 claim
+     *（断连、静默丢弃、Bug），任务就永远卡在 ASSIGNED。该方法将超时任务回收
+     * 到 PENDING 并重新进入完整调度链（选人 → 分配 → 通知 → 自动执行）。</p>
+     *
+     * <p>与其它重分配入口的区别：
+     * <ul>
+     *   <li>{@link #dispatchBlockedSubTask} —— 对 BLOCKED 子任务按 preferredAgentId 重试</li>
+     *   <li>{@link #redispatchOfflineSubTask} —— Agent 被判离线后回收其 ASSIGNED/IN_PROGRESS 子任务</li>
+     *   <li>本方法 —— ASSIGNED 后长时间无人 claim，原 Agent 可能仍在线但静默丢弃</li>
+     * </ul>
+     * </p>
+     *
+     * @param subTaskId       超时的子任务 ID
+     * @param originalAgentId 原分配的 Agent ID（用于审计）
+     * @param role            期望角色（用于重新选人，null 时回退 EXECUTOR）
+     */
+    public void redispatchAssignedTimeout(Long subTaskId, Long originalAgentId, AgentRole role) {
+        SubTask subTask = subTaskService.resetToPendingForDispatch(
+                subTaskId, Set.of(SubTaskStatus.ASSIGNED));
+        taskTimelineService.recordEvent(
+                subTask.getTaskId(),
+                subTask.getId(),
+                "sub_task_dispatch_prepare",
+                AgentRole.SYSTEM,
+                originalAgentId,
+                Map.of(
+                        "trigger", "assigned_timeout",
+                        "previousAgentId", originalAgentId));
+
+        // 必须排除 originalAgentId：原 Agent 可能仍在线但静默丢弃，
+        // 重分回它只是原地打转。使用 pickAlternative(excludeAgentId, role)
+        // 走 AgentSelector 已有的"同角色排除指定 Agent"选人逻辑。
+        var preferred = agentSelector.pickAlternative(originalAgentId, role);
+        if (preferred == null) {
+            log.warn("ASSIGNED超时回收：无可用候选 Agent: subTaskId={}, role={}, excludeAgentId={}",
+                    subTaskId, role != null ? role : "null", originalAgentId);
+            return;
+        }
+
+        resilientDispatcher.assignNext(preferred.getId(), subTaskId);
+        log.info("ASSIGNED超时已回收: subTaskId={}, originalAgentId={}, newPreferredAgentId={}",
+                subTaskId, originalAgentId, preferred.getId());
+    }
 }

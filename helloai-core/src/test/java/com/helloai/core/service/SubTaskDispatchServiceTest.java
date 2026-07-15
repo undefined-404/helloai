@@ -194,4 +194,50 @@ class SubTaskDispatchServiceTest {
         verify(resilientDispatcher, never())
                 .assignNext(any(), any());
     }
+
+    // ══════════════════════════════════════════════════════════════
+    //  AgentHub V1 T1: redispatchAssignedTimeout 必须排除原 Agent
+    //  ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("ASSIGNED超时: pickAlternative 必须传 originalAgentId 以排除静默原 Agent")
+    void shouldExcludeOriginalAgentWhenRedispatchingAssignedTimeout() {
+        SubTask subTask = new SubTask();
+        subTask.setId(61L);
+        subTask.setTaskId(71L);
+
+        Agent newAgent = new Agent();
+        newAgent.setId(99L);
+        newAgent.setName("replacement-agent");
+        newAgent.setRole(AgentRole.EXECUTOR);
+
+        when(subTaskService.resetToPendingForDispatch(61L, Set.of(SubTaskStatus.ASSIGNED)))
+                .thenReturn(subTask);
+        when(agentSelector.pickAlternative(11L, AgentRole.EXECUTOR)).thenReturn(newAgent);
+
+        subTaskDispatchService.redispatchAssignedTimeout(61L, 11L, AgentRole.EXECUTOR);
+
+        // 必须用 pickAlternative(originalAgentId, role)，而不是 pickPreferred(role)
+        verify(agentSelector).pickAlternative(11L, AgentRole.EXECUTOR);
+        verify(agentSelector, never()).pickPreferred(any());
+        verify(resilientDispatcher).assignNext(99L, 61L);
+    }
+
+    @Test
+    @DisplayName("ASSIGNED超时: 无可用替代 Agent 时不调 ResilientDispatcher")
+    void shouldNotCallDispatcherWhenNoAlternativeAvailable() {
+        SubTask subTask = new SubTask();
+        subTask.setId(62L);
+        subTask.setTaskId(72L);
+
+        when(subTaskService.resetToPendingForDispatch(62L, Set.of(SubTaskStatus.ASSIGNED)))
+                .thenReturn(subTask);
+        // pickAlternative 返回 null（只有原 Agent 一个候选）
+        when(agentSelector.pickAlternative(11L, AgentRole.EXECUTOR)).thenReturn(null);
+
+        subTaskDispatchService.redispatchAssignedTimeout(62L, 11L, AgentRole.EXECUTOR);
+
+        verify(agentSelector).pickAlternative(11L, AgentRole.EXECUTOR);
+        verify(resilientDispatcher, never()).assignNext(any(), any());
+    }
 }

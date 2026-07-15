@@ -167,4 +167,37 @@ public class CredentialVaultBindingService {
             throw e;
         }
     }
+
+    /**
+     * 轮换 Agent 的 API Key 凭证。
+     *
+     * <p>AgentHub V1 T4：旧凭证 → EXPIRED，新凭证 → ACTIVE。</p>
+     * <p>与 {@link #bindAgentApiKey} 的区别：</p>
+     * <ul>
+     *   <li>bindAgentApiKey：旧凭证 → DISABLED（人为停用语义）</li>
+     *   <li>rotateAgentApiKey：旧凭证 → EXPIRED（自动轮换语义），
+     *       在 remark 中记录 rotated_from_id 审计链</li>
+     * </ul>
+     *
+     * @param agentId         Agent ID
+     * @param provider        LLM Provider
+     * @param apiKeyPlaintext 新 API Key 明文
+     * @param remark          审计备注
+     * @return 新创建的 ACTIVE 凭证
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public CredentialVault rotateAgentApiKey(Long agentId, String provider,
+                                             String apiKeyPlaintext, String remark) {
+        if (agentId == null) {
+            throw new BizException("agentId 不能为空");
+        }
+        if (provider == null || provider.isBlank()) {
+            throw new BizException("provider 不能为空");
+        }
+        if (apiKeyPlaintext == null || apiKeyPlaintext.isBlank()) {
+            throw new BizException("apiKey 不能为空");
+        }
+        String encrypted = credentialCryptoService.encryptToBase64(apiKeyPlaintext);
+        return credentialVaultService.rotateAgentApiKey(agentId, provider, encrypted, null, remark);
+    }
 }

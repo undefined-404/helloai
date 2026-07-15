@@ -79,4 +79,18 @@
         LIMIT #{limit}
     </select>
 
+    <!--
+        ASSIGNED 超时巡检：查询 status=ASSIGNED 且 update_time 早于 deadline 的记录。
+        用于 AssignedSubTaskTimeoutTask 回收长时间无人 claim 的子任务。
+        按 update_time 升序（最早超时的优先处理），limit 防止单轮扫描过多。
+    -->
+    <select id="selectTimedOutAssigned" resultType="com.helloai.core.entity.SubTask">
+        SELECT * FROM sub_task
+        WHERE status = 'ASSIGNED'
+          AND update_time &lt; #{deadline}
+          AND deleted = 0
+        ORDER BY update_time ASC
+        LIMIT #{limit}
+    </select>
+
 </mapper>

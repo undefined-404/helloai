@@ -84,4 +84,56 @@ public class CredentialVaultService extends ServiceImpl<CredentialVaultMapper, C
                                                      String remark) {
         return saveAgentApiKeyCredential(agentId, provider, encryptedValue, secretRef, null, remark);
     }
+
+    /**
+     * 轮换 Agent 的 API Key 凭证：旧凭证 → EXPIRED，新凭证 → ACTIVE。
+     *
+     * <p>AgentHub V1 T4 轮换语义：</p>
+     * <ul>
+     *   <li>旧 ACTIVE 凭证标为 {@code EXPIRED}（非 DISABLED），
+     *       区分"人为停用"和"自动轮换"</li>
+     *   <li>新建 ACTIVE 凭证，在 remark 中记录 rotated_from_id 审计链</li>
+     *   <li>事务内保证一致性：旧凭证过期 + 新凭证创建原子完成</li>
+     * </ul>
+     *
+     * @param agentId        Agent ID
+     * @param provider       LLM Provider
+     * @param encryptedValue 新凭证加密值
+     * @param secretRef      新凭证 Secret 引用
+     * @param remark         审计备注
+     * @return 新创建的 ACTIVE 凭证
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public CredentialVault rotateAgentApiKey(Long agentId, String provider,
+                                             String encryptedValue, String secretRef,
+                                             String remark) {
+        CredentialVault oldVault = getActiveAgentApiKey(agentId, provider);
+
+        if (oldVault != null) {
+            lambdaUpdate()
+                    .eq(CredentialVault::getId, oldVault.getId())
+                    .set(CredentialVault::getStatus, CredentialStatus.EXPIRED)
+                    .set(CredentialVault::getRemark,
+                            (oldVault.getRemark() != null ? oldVault.getRemark() + " | " : "")
+                                    + "rotated at " + OffsetDateTime.now())
+                    .update();
+        }
+
+        String finalRemark = remark != null ? remark : "credential rotation";
+        if (oldVault != null) {
+            finalRemark = finalRemark + " | rotated_from_id=" + oldVault.getId();
+        }
+
+        CredentialVault newVault = new CredentialVault();
+        newVault.setOwnerType(CredentialOwnerType.AGENT);
+        newVault.setOwnerId(agentId);
+        newVault.setProvider(provider);
+        newVault.setCredentialType(CredentialType.API_KEY);
+        newVault.setEncryptedValue(encryptedValue);
+        newVault.setSecretRef(secretRef);
+        newVault.setStatus(CredentialStatus.ACTIVE);
+        newVault.setRemark(finalRemark);
+        save(newVault);
+        return newVault;
+    }
 }

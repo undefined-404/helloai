@@ -9,5 +9,13 @@ public enum CredentialStatus {
     ACTIVE,
 
     /** 已停用，保留记录但不再参与路由。 */
-    DISABLED
+    DISABLED,
+
+    /**
+     * 已过期（轮换语义）。
+     *
+     * <p>AgentHub V1 T4：轮换时旧凭证标为 EXPIRED 而非 DISABLED，
+     * 区分"人为停用"和"自动轮换淘汰"，保留审计线索。</p>
+     */
+    EXPIRED
 }

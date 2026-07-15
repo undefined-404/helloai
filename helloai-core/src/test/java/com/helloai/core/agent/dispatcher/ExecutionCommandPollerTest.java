@@ -19,7 +19,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.OffsetDateTime;
 import java.util.List;
-import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -354,7 +353,6 @@ class ExecutionCommandPollerTest {
         @Test
         @DisplayName("空 batch：POLLER 模式也不调 listAllPending，零孤儿时直接 return")
         void shouldNotCallListAllPendingWhenEmptyInPollerMode() {
-            when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.POLLER);
             when(agentExecutionRecordService.listOrphanPending(60, 20)).thenReturn(List.of());
 
             poller.poll();

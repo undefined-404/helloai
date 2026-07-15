@@ -258,6 +258,51 @@
 - 接近零遗留——本轮是所有文档失真项的最终关闭轮
 ---
 
+### 2026-07-15 AgentHub 方案文档收口
+
+#### 1. 范围
+
+- 将外部 Agent 接入层增强思路从历史草案中收编为新的专项方案文档
+- 统一 V1 / V2 / V3 三阶段版本口径，作为后续扩展参考
+
+#### 2. 实际落地
+
+- 新增 `doc/HelloAI_agenthub.md`，作为 AgentHub 方向的主方案文档，明确：
+  - 本文档用于描述外部 Agent 接入层增强方案，而非当前实现事实
+  - 方案分为三阶段：
+    - V1 最小版：`agent_duty_lease` + `checkIn/checkOut` + 值班优先分配 + 看板展示
+    - V2 增强版：Bridge 守护进程桥接当前 `/mcp/sse` 主通道
+    - V3 产品版：门铃通知通道 + 一键安装，通知层只负责唤醒
+  - 当前主线约束：
+    - 不引入第二控制面
+    - 不改变 `MCP-over-SSE` 为主协议的定位
+    - 不新增与 `online_status` 平行竞争的 Agent 主状态枚举
+- 将 `doc/helloai_agenthub_complete.md` 降级为历史草案，并补充顶部归档说明，明确：
+  - 旧文档保留原始设想与灵感
+  - 其中关于 `AgentStatus` 扩展、WebSocket 主通道、ShiftManager 的方案不再直接作为开发主参考
+  - 后续统一以 `doc/HelloAI_agenthub.md` 为主
+- 在新文档中补充“旧文档能力映射表”，把旧草案中的核心想法收口为：
+  - 值班租约模型
+  - `checkIn/checkOut`
+  - `submitResult` 语义扩展
+  - Bridge
+  - 门铃通知通道
+  - 看板增强
+
+#### 3. 影响
+
+- 对外行为变化：无
+- 文档变化：
+  - 新增 `doc/HelloAI_agenthub.md`
+  - 修改 `doc/helloai_agenthub_complete.md`
+  - 回写 `doc/HelloAI_迭代执行记录.md`
+- 数据结构变化：无
+
+#### 4. 遗留
+
+- `agent_duty_lease`、`checkIn/checkOut`、Bridge、门铃通知目前仍处于方案阶段，尚未进入代码实现
+- 后续若基于该方案开始开发，应先按 preflight 守则对照基线 / 差距 / 调度解耦分析，再按 V1 → V2 → V3 顺序推进，避免跳阶段
+
 ### 2026-07-13 P1 代码修复——双回写风险 + LLM 调用可观测性
 
 #### 1. 范围
@@ -1490,3 +1535,65 @@ DB 验证：
 - 认领子任务后续应按流程中注册的有效角色 agent 进行筛选，甚至降级到 LLM 模型自创建的 agent（当前仅全量列出所有 Agent）
 - AgentSelect 组件当前使用 `GET /agents`（全量），后续数据量增大时可考虑接入管理端分页接口 `GET /admin/agents`
 
+---
+
+### AgentHub V1 轮后反馈修复——credential_vault / redispatch / duty_lease / Redis 锁 / Poller 兜底验证
+
+#### 1. 范围
+
+针对 AgentHub V1 四轮迭代后由用户反馈暴露出来的 5 个隐患进行收口修复：
+
+- credential_vault 轮换被唯一索引直接卡死
+- `redispatchAssignedTimeout` 可能把任务重分回原 Agent 造成原地打转
+- agent_duty_lease 缺少 DB 层的“同一 Agent 同时只能有一条 ACTIVE lease”约束
+- `AssignedSubTaskTimeoutTask` Redis 锁释放不安全（固定 value + 简单 delete）
+- `verify-poller-e2e.ps1` 未覆盖“主消费路径不可达”的 Poller 兑底验证
+
+#### 2. 实际落地
+
+- **credential_vault 唯一索引**（`V1__init_all.sql`）
+  - 原索引 `uk_credential_vault_owner_provider_type` 不区分状态，`rotateAgentApiKey()` 会在第一次轮换命中 `EXISTING → EXPIRED + INSERT ACTIVE` 的唯一约束冲突。
+  - 改为部分唯一索引 `uk_credential_vault_owner_provider_type_active`，`WHERE status = 'ACTIVE' AND deleted = 0`，允许同一 (owner_type, owner_id, provider, credential_type) 多条历史状态共存。
+
+- **`redispatchAssignedTimeout` 排除原 Agent**（`SubTaskDispatchService`）
+  - 原实现 `agentSelector.pickPreferred(role)` 不带排除参数，原 Agent 静默丢弃但仍在线且分数最高时会造成原地打转。
+  - 改为 `agentSelector.pickAlternative(originalAgentId, role)`，与"同角色排除指定 Agent"的选人逻辑复用。
+  - `SubTaskDispatchServiceTest` 新增两个用例：`shouldExcludeOriginalAgentWhenRedispatchingAssignedTimeout`、`shouldNotCallDispatcherWhenNoAlternativeAvailable`。
+
+- **agent_duty_lease 库级约束**（`V1__init_all.sql`）
+  - service 层“先关旧 lease 再开新 lease”能被并发 `checkIn` 击穿。
+  - 补部分唯一索引 `uk_duty_lease_agent_active` (`agent_id` WHERE `status='ACTIVE' AND deleted=0`)，并加 FK `fk_duty_lease_agent` 引用 `agent(id)`。
+
+- **Redis 锁安全释放**（`AssignedSubTaskTimeoutTask`）
+  - 原实现固定 value `"1"` + 简单 `delete`；单轮扫描 >60s 后锁过期会被其他实例重抢，原实例 finally 会误删别人的锁。
+  - `scan()` 生成 UUID 作为 token，`tryLock(token)` 使用 `SET NX EX` 带 TTL，`unlock(token)` 走 Lua：`if get == ARGV[1] then del`，保证只有自己 token 能解锁。
+  - `AssignedSubTaskTimeoutTaskTest` 新增 `shouldUseLuaUnlockScriptWithMatchingToken`，验证 Lua 脚本作为参数被传入且带正确 token。
+
+- **Poller 兑底验证**（`verify-poller-e2e.ps1` → v3.1）
+  - 脚本无法重启 Spring Boot 关闭 MQ/Event 消费者，采用轻量等价：直接 `INSERT INTO agent_execution_record`，绕过 `ExecutionCommandService.publish()`。这种记录不会进入 MQ (`agent_command_outbox` 也不会写)，也不会发布本地 Spring 事件，Poller 是唯一可能处理者。
+  - 新增 S5 场景，四个断言：
+    - (a) `last_attempt_at IS NOT NULL`：`markPolled` 被调用（仅 Poller 调用）
+    - (b) timeline 含 `sub_task_execution_command_poll_recovery`：仅 Poller 写
+    - (c) `sub_task_execution_command_consume` 事件的 `payload.trigger` 以 `poll-recovery:` 开头：Poller 会重写 trigger 前缀，主消费者不会
+    - (d) 反证：不存在 `trigger` 不以 `poll-recovery:` 开头的 `consume` 事件（出现即证明主消费者也参与了处理）
+  - 额外：S5 入口先 `UPDATE sub_task SET status='PENDING'`，避开 S1/S4 后 sub_task 终态导致 `startIfNeeded` 拒绝、只写 `consume_skipped` 不带 trigger 的假阴性。
+  - S6（手动场景）说明加入头部注释：需重启 Spring Boot 时设 `helloai.mq.execution-command.consumer-enabled=false`、单独跑 S1-S4，不能从脚本中自动运行。
+
+#### 3. 影响
+
+- 对外行为变化：调用 `rotateAgentApiKey()` 可正常轮换；ASSIGNED 超时回收不再原地打转；并发 `checkIn` 会被 DB 层拒绝重复 ACTIVE；Redis 锁释放不再误伤他人；Poller 兑底验证脚本可以证明主消费路径隔离下 Poller 仍能兑底。
+- 代码变化：
+  - `helloai-start/src/main/resources/db/migration/V1__init_all.sql`：1 个索引重定义 + 1 个索引新增 + 1 个 FK 约束
+  - `helloai-core/src/main/java/com/helloai/core/service/SubTaskDispatchService.java`：`redispatchAssignedTimeout` 改调 `pickAlternative`
+  - `helloai-core/src/test/java/com/helloai/core/service/SubTaskDispatchServiceTest.java`：2 个测试新增
+  - `helloai-job/src/main/java/com/helloai/job/task/AssignedSubTaskTimeoutTask.java`：UUID token + Lua 解锁
+  - `helloai-job/src/test/java/com/helloai/job/task/AssignedSubTaskTimeoutTaskTest.java`：1 个测试新增
+  - `verify-poller-e2e.ps1`：v3 → v3.1，1 个场景（S5）新增，头部注释扩充
+- 数据结构变化：`credential_vault` 与 `agent_duty_lease` 表的索引 / FK 约束变化（需 Flyway 重跑 V1 环境需重置或手动修复索引名）；其他无。
+
+#### 4. 遗留
+
+- 如果未来需要同一 owner 多条 ACTIVE credential（例如主/备密钥同时生效），当前部分唯一索引会拒绝这种情况，后续要重新调整索引条件。
+- `agent_duty_lease` FK 加上后，`agent` 表中删除 Agent 会联动拦截，未在 `AgentService` 里预检；后续如需支持硬删除 Agent，需先处理其 duty_lease。
+- Poller E2E v3.1 的 S5 依赖 sub_task 被重置为 PENDING 后被重新推进；若后续 `startIfNeeded` 增强、限制某些来源不允重启，本场景需要重写。
+- S6（manual MQ-isolation）未实现为脚本可执行步骤，依赖人工手动重启验证，未保留 CI 路径。

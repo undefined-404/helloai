@@ -35,4 +35,16 @@ public interface SubTaskMapper extends BaseMapper<SubTask> {
      */
     List<SubTask> selectInFlightByAgent(@Param("agentId") Long agentId,
                                         @Param("limit") int limit);
+
+    /**
+     * 查询 ASSIGNED 超时未 claim 的子任务（按 update_time 升序，limit 上限）。
+     *
+     * <p>只查 status=ASSIGNED 且 update_time 早于 deadline 的记录。
+     * 用于 AssignedSubTaskTimeoutTask 巡检回收。</p>
+     *
+     * @param deadline 超时截止时间（update_time < deadline 视为超时）
+     * @param limit    单次最多返回条数
+     */
+    List<SubTask> selectTimedOutAssigned(@Param("deadline") OffsetDateTime deadline,
+                                         @Param("limit") int limit);
 }
