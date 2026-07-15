@@ -3,10 +3,12 @@ package com.helloai.core.agent.command;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.core.agent.domain.ExecutionCommand;
+import com.helloai.core.agent.mqconsumer.ExecutionCommandMqMessage;
 import com.helloai.core.entity.Agent;
 import com.helloai.core.entity.AgentExecutionRecord;
 import com.helloai.core.entity.SubTask;
 import com.helloai.core.event.ExecutionCommandCreatedEvent;
+import com.helloai.core.service.AgentCommandOutboxService;
 import com.helloai.core.service.AgentExecutionRecordService;
 import com.helloai.core.service.AgentService;
 import com.helloai.core.service.SubTaskService;
@@ -18,12 +20,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -33,22 +32,25 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Phase 2E N6：{@link ExecutionCommandService} 按 {@code dispatch-mode} 分发的单元测试。
+ * Phase 2H ②a：{@link ExecutionCommandService} 按 {@code dispatch-mode} 分发的单元测试。
  *
- * <p>覆盖 4 种 dispatch-mode + fail-fast：</p>
+ * <p>Phase 2H 关键变化：MQ / BOTH 分支不再调
+ * {@link ExecutionCommandMqPublisher}，改为调用
+ * {@link AgentCommandOutboxService#createPending(ExecutionCommand, ExecutionCommandMqMessage)}
+ * 写 outbox 行（由 OutboxRelayTask 异步发 MQ）。测试重点相应迁移到 outbox 调用。</p>
+ *
+ * <p>覆盖：</p>
  * <ol>
- *     <li>{@code NONE}：只落库，事件与 MQ 均零调用（默认，与 consumer-mode=POLLER 配套）</li>
- *     <li>{@code EVENT}：只发本地事件，MQ 零调用</li>
- *     <li>{@code MQ}：只发 MQ，本地事件零调用</li>
- *     <li>{@code BOTH}：本地事件与 MQ 各调 1 次</li>
- *     <li>{@code MQ} + Publisher Bean 缺失 → 运行期 fail-fast（{@link IllegalStateException}），
- *         而不是隐式回退到 EVENT / NONE</li>
+ *     <li>{@code NONE}：只落库，事件与 outbox 均零调用</li>
+ *     <li>{@code EVENT}：只发本地事件，outbox 零调用</li>
+ *     <li>{@code MQ}：只写 outbox（PENDING），本地事件零调用</li>
+ *     <li>{@code BOTH}：本地事件 + outbox 各调 1 次</li>
  * </ol>
  *
  * <p>本测试不启动 Spring 容器，也不引入 RabbitMQ，全部基于 Mockito 装配。</p>
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("ExecutionCommandService dispatch-mode")
+@DisplayName("ExecutionCommandService dispatch-mode (Phase 2H ②a)")
 class ExecutionCommandServiceDispatchTest {
 
     @Mock
@@ -62,9 +64,7 @@ class ExecutionCommandServiceDispatchTest {
     @Mock
     private ApplicationEventPublisher applicationEventPublisher;
     @Mock
-    private ExecutionCommandMqPublisher mqPublisher;
-    @Mock
-    private ObjectProvider<ExecutionCommandMqPublisher> mqPublisherProvider;
+    private AgentCommandOutboxService agentCommandOutboxService;
 
     private final AgentExecutionProperties executionProperties = new AgentExecutionProperties();
 
@@ -80,7 +80,7 @@ class ExecutionCommandServiceDispatchTest {
     void setUp() {
         service = new ExecutionCommandService(
                 subTaskService, agentService, agentExecutionRecordService, taskTimelineService,
-                applicationEventPublisher, executionProperties, mqPublisherProvider);
+                applicationEventPublisher, executionProperties, agentCommandOutboxService);
     }
 
     /**
@@ -111,7 +111,7 @@ class ExecutionCommandServiceDispatchTest {
     class DispatchByMode {
 
         @Test
-        @DisplayName("NONE：只落库，事件与 MQ 均零调用")
+        @DisplayName("NONE：只落库，事件与 outbox 均零调用")
         void shouldDispatchNothingWhenNone() {
             executionProperties.setDispatchMode(AgentExecutionProperties.DispatchMode.NONE);
             primeCommonMocks();
@@ -120,11 +120,11 @@ class ExecutionCommandServiceDispatchTest {
 
             assertEquals(RECORD_ID, command.getRecordId());
             verify(applicationEventPublisher, never()).publishEvent(any(ExecutionCommandCreatedEvent.class));
-            verify(mqPublisherProvider, never()).getIfAvailable();
+            verify(agentCommandOutboxService, never()).createPending(any(), any());
         }
 
         @Test
-        @DisplayName("EVENT：只发本地事件，MQ 零调用")
+        @DisplayName("EVENT：只发本地事件，outbox 零调用")
         void shouldDispatchEventOnlyWhenEvent() {
             executionProperties.setDispatchMode(AgentExecutionProperties.DispatchMode.EVENT);
             primeCommonMocks();
@@ -132,67 +132,33 @@ class ExecutionCommandServiceDispatchTest {
             service.createAssignedCommand(SUB_TASK_ID, AGENT_ID, TRIGGER);
 
             verify(applicationEventPublisher, times(1)).publishEvent(any(ExecutionCommandCreatedEvent.class));
-            verify(mqPublisherProvider, never()).getIfAvailable();
+            verify(agentCommandOutboxService, never()).createPending(any(), any());
         }
 
         @Test
-        @DisplayName("MQ：只发 MQ，本地事件零调用")
+        @DisplayName("MQ：只写 outbox（PENDING），本地事件零调用")
         void shouldDispatchMqOnlyWhenMq() {
             executionProperties.setDispatchMode(AgentExecutionProperties.DispatchMode.MQ);
-            when(mqPublisherProvider.getIfAvailable()).thenReturn(mqPublisher);
             primeCommonMocks();
 
             service.createAssignedCommand(SUB_TASK_ID, AGENT_ID, TRIGGER);
 
             verify(applicationEventPublisher, never()).publishEvent(any(ExecutionCommandCreatedEvent.class));
-            verify(mqPublisher, times(1)).publish(any(ExecutionCommand.class));
+            verify(agentCommandOutboxService, times(1))
+                    .createPending(any(ExecutionCommand.class), any(ExecutionCommandMqMessage.class));
         }
 
         @Test
-        @DisplayName("BOTH：本地事件与 MQ 各调 1 次")
+        @DisplayName("BOTH：本地事件 + outbox 各调 1 次")
         void shouldDispatchBothWhenBoth() {
             executionProperties.setDispatchMode(AgentExecutionProperties.DispatchMode.BOTH);
-            when(mqPublisherProvider.getIfAvailable()).thenReturn(mqPublisher);
             primeCommonMocks();
 
             service.createAssignedCommand(SUB_TASK_ID, AGENT_ID, TRIGGER);
 
             verify(applicationEventPublisher, times(1)).publishEvent(any(ExecutionCommandCreatedEvent.class));
-            verify(mqPublisher, times(1)).publish(any(ExecutionCommand.class));
-        }
-    }
-
-    @Nested
-    @DisplayName("fail-fast")
-    class FailFast {
-
-        @Test
-        @DisplayName("MQ 但 Publisher Bean 不可用 → IllegalStateException，不隐式回退")
-        void shouldFailFastWhenMqButPublisherMissing() {
-            executionProperties.setDispatchMode(AgentExecutionProperties.DispatchMode.MQ);
-            when(mqPublisherProvider.getIfAvailable()).thenReturn(null);
-            primeCommonMocks();
-
-            IllegalStateException ex = assertThrows(IllegalStateException.class,
-                    () -> service.createAssignedCommand(SUB_TASK_ID, AGENT_ID, TRIGGER));
-
-            assertTrue(ex.getMessage().contains("dispatch-mode=MQ"),
-                    "异常消息应显式包含 dispatch-mode，便于线上诊断: " + ex.getMessage());
-            verify(applicationEventPublisher, never()).publishEvent(any(ExecutionCommandCreatedEvent.class));
-        }
-
-        @Test
-        @DisplayName("BOTH 但 Publisher Bean 不可用 → 本地事件已发但 MQ fail-fast")
-        void shouldFailFastWhenBothButPublisherMissing() {
-            executionProperties.setDispatchMode(AgentExecutionProperties.DispatchMode.BOTH);
-            when(mqPublisherProvider.getIfAvailable()).thenReturn(null);
-            primeCommonMocks();
-
-            assertThrows(IllegalStateException.class,
-                    () -> service.createAssignedCommand(SUB_TASK_ID, AGENT_ID, TRIGGER));
-
-            // 本地事件在 MQ 分支之前已发出（BOTH 语义），事务将回滚（此处不 verify 事务，只验证事件确实发过）
-            verify(applicationEventPublisher, times(1)).publishEvent(any(ExecutionCommandCreatedEvent.class));
+            verify(agentCommandOutboxService, times(1))
+                    .createPending(any(ExecutionCommand.class), any(ExecutionCommandMqMessage.class));
         }
     }
 }

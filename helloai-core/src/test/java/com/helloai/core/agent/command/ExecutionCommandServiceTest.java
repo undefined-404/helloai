@@ -5,36 +5,50 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.core.agent.domain.ExecutionCommand;
+import com.helloai.core.agent.mqconsumer.ExecutionCommandMqMessage;
 import com.helloai.core.entity.Agent;
 import com.helloai.core.entity.AgentExecutionRecord;
 import com.helloai.core.entity.SubTask;
 import com.helloai.core.event.ExecutionCommandCreatedEvent;
+import com.helloai.core.service.AgentCommandOutboxService;
+import com.helloai.core.service.AgentExecutionRecordService;
+import com.helloai.core.service.AgentService;
+import com.helloai.core.service.SubTaskService;
+import com.helloai.core.service.TaskTimelineService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import com.helloai.core.service.AgentExecutionRecordService;
-import com.helloai.core.service.AgentService;
-import com.helloai.core.service.SubTaskService;
-import com.helloai.core.service.TaskTimelineService;
 
+/**
+ * Phase 2H ②a 适配后的 {@link ExecutionCommandService} 单元测试。
+ *
+ * <p>本测试覆盖：</p>
+ * <ul>
+ *     <li>EVENT 路径仍发本地事件且不写 outbox；</li>
+ *     <li>NONE 路径零调用；</li>
+ *     <li>MQ 路径改写 outbox.createPending；</li>
+ *     <li>子任务已有进行中执行记录时拒绝创建；</li>
+ *     <li>DB 行锁 + hasPendingOrRunning 双重防重。</li>
+ * </ul>
+ */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("ExecutionCommandService")
+@DisplayName("ExecutionCommandService (Phase 2H ②a)")
 class ExecutionCommandServiceTest {
 
     @Mock
@@ -55,8 +69,17 @@ class ExecutionCommandServiceTest {
     @Mock
     private AgentExecutionProperties executionProperties;
 
-    @InjectMocks
+    @Mock
+    private AgentCommandOutboxService agentCommandOutboxService;
+
     private ExecutionCommandService executionCommandService;
+
+    @BeforeEach
+    void setUp() {
+        executionCommandService = new ExecutionCommandService(
+                subTaskService, agentService, agentExecutionRecordService, taskTimelineService,
+                applicationEventPublisher, executionProperties, agentCommandOutboxService);
+    }
 
     @Test
     @DisplayName("为 ASSIGNED 子任务创建 execution command 并发布事件")
@@ -64,6 +87,7 @@ class ExecutionCommandServiceTest {
         SubTask subTask = new SubTask();
         subTask.setId(22L);
         subTask.setTaskId(33L);
+        subTask.setAssignedAgent(11L);
 
         Agent agent = new Agent();
         agent.setId(11L);
@@ -75,7 +99,6 @@ class ExecutionCommandServiceTest {
         record.setSubTaskId(22L);
         record.setStatus(ExecutionStatus.PENDING);
 
-        subTask.setAssignedAgent(11L);
         when(subTaskService.getByIdForUpdate(22L)).thenReturn(subTask);
         when(agentService.getById(11L)).thenReturn(agent);
         when(agentExecutionRecordService.hasPendingOrRunning(22L)).thenReturn(false);
@@ -107,6 +130,9 @@ class ExecutionCommandServiceTest {
                 ArgumentCaptor.forClass(ExecutionCommandCreatedEvent.class);
         verify(applicationEventPublisher).publishEvent(eventCaptor.capture());
         assertEquals(command, eventCaptor.getValue().getCommand());
+
+        // EVENT 路径下不应写 outbox
+        verify(agentCommandOutboxService, never()).createPending(any(), any());
     }
 
     @Test
@@ -141,6 +167,45 @@ class ExecutionCommandServiceTest {
 
         assertEquals(44L, command.getRecordId());
         verify(applicationEventPublisher, never()).publishEvent(any());
+        verify(agentCommandOutboxService, never()).createPending(any(), any());
+    }
+
+    @Test
+    @DisplayName("dispatch-mode=MQ 时调用 outbox.createPending，不发本地事件")
+    void shouldEnqueueOutboxWhenDispatchMq() {
+        SubTask subTask = new SubTask();
+        subTask.setId(22L);
+        subTask.setTaskId(33L);
+        subTask.setAssignedAgent(11L);
+
+        Agent agent = new Agent();
+        agent.setId(11L);
+        agent.setRole(AgentRole.EXECUTOR);
+        agent.setAccessType(AgentAccessType.API_KEY_LLM);
+
+        AgentExecutionRecord record = new AgentExecutionRecord();
+        record.setId(44L);
+        record.setSubTaskId(22L);
+        record.setStatus(ExecutionStatus.PENDING);
+
+        when(subTaskService.getByIdForUpdate(22L)).thenReturn(subTask);
+        when(agentService.getById(11L)).thenReturn(agent);
+        when(agentExecutionRecordService.hasPendingOrRunning(22L)).thenReturn(false);
+        when(agentExecutionRecordService.createPending(any(), eq(22L), eq(11L),
+                eq(AgentAccessType.API_KEY_LLM), eq("assigned"))).thenReturn(record);
+        when(executionProperties.isDispatchEvent()).thenReturn(false);
+        when(executionProperties.isDispatchMq()).thenReturn(true);
+        when(executionProperties.getDispatchMode()).thenReturn(AgentExecutionProperties.DispatchMode.MQ);
+        when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.POLLER);
+
+        executionCommandService.createAssignedCommand(22L, 11L, "assigned");
+
+        verify(applicationEventPublisher, never()).publishEvent(any(ExecutionCommandCreatedEvent.class));
+        ArgumentCaptor<ExecutionCommand> cmdCaptor = ArgumentCaptor.forClass(ExecutionCommand.class);
+        ArgumentCaptor<ExecutionCommandMqMessage> msgCaptor = ArgumentCaptor.forClass(ExecutionCommandMqMessage.class);
+        verify(agentCommandOutboxService).createPending(cmdCaptor.capture(), msgCaptor.capture());
+        assertEquals("API_KEY_LLM", msgCaptor.getValue().getAccessType());
+        assertEquals(22L, cmdCaptor.getValue().getSubTaskId());
     }
 
     @Test
@@ -162,6 +227,8 @@ class ExecutionCommandServiceTest {
         assertThatThrownBy(() -> executionCommandService.createAssignedCommand(22L, 11L, "assigned"))
                 .isInstanceOf(com.helloai.common.base.BizException.class)
                 .hasMessageContaining("进行中的执行记录");
+
+        verify(agentCommandOutboxService, never()).createPending(any(), any());
     }
 
     @Test
@@ -182,7 +249,6 @@ class ExecutionCommandServiceTest {
         record.setSubTaskId(22L);
         record.setStatus(ExecutionStatus.PENDING);
 
-        // 验证行锁 + 应用层检查都被调用
         when(subTaskService.getByIdForUpdate(22L)).thenReturn(subTask);
         when(agentService.getById(11L)).thenReturn(agent);
         when(agentExecutionRecordService.hasPendingOrRunning(22L)).thenReturn(false);
@@ -195,7 +261,6 @@ class ExecutionCommandServiceTest {
 
         executionCommandService.createAssignedCommand(22L, 11L, "assigned");
 
-        // 确认行锁先于应用层检查
         var inOrder = org.mockito.Mockito.inOrder(subTaskService, agentExecutionRecordService);
         inOrder.verify(subTaskService).getByIdForUpdate(22L);
         inOrder.verify(agentExecutionRecordService).hasPendingOrRunning(22L);

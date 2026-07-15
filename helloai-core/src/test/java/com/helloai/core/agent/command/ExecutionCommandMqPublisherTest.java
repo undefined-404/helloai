@@ -20,6 +20,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageDeliveryMode;
 import org.springframework.amqp.core.MessageProperties;
+import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -102,15 +103,18 @@ class ExecutionCommandMqPublisherTest {
             publisher.publish(sampleCommand);
 
             ArgumentCaptor<Message> captor = ArgumentCaptor.forClass(Message.class);
+            ArgumentCaptor<CorrelationData> cdCaptor = ArgumentCaptor.forClass(CorrelationData.class);
             verify(rabbitTemplate, times(1)).send(
                     eq(RabbitMQConfig.EXECUTION_COMMAND_EXCHANGE),
                     eq("execution.command.created"),
-                    captor.capture());
+                    captor.capture(),
+                    cdCaptor.capture());
             MessageProperties mp = captor.getValue().getMessageProperties();
             assertThat(mp.getMessageId()).isEqualTo("evt-abc");
             assertThat(mp.getCorrelationId()).isEqualTo("evt-abc");
             assertThat(mp.getDeliveryMode()).isEqualTo(MessageDeliveryMode.PERSISTENT);
             assertThat(mp.getContentType()).isEqualTo(MessageProperties.CONTENT_TYPE_JSON);
+            assertThat(cdCaptor.getValue().getId()).isEqualTo("evt-abc");
         }
 
         @Test
@@ -122,7 +126,7 @@ class ExecutionCommandMqPublisherTest {
             publisher.publish(sampleCommand);
 
             ArgumentCaptor<Message> captor = ArgumentCaptor.forClass(Message.class);
-            verify(rabbitTemplate).send(anyString(), anyString(), captor.capture());
+            verify(rabbitTemplate).send(anyString(), anyString(), captor.capture(), any(CorrelationData.class));
             byte[] body = captor.getValue().getBody();
 
             ExecutionCommandMqMessage decoded =
@@ -161,7 +165,8 @@ class ExecutionCommandMqPublisherTest {
             verify(rabbitTemplate, times(1)).send(
                     eq(RabbitMQConfig.EXECUTION_COMMAND_EXCHANGE),
                     eq("execution.command.created"),
-                    any(Message.class));
+                    any(Message.class),
+                    any(CorrelationData.class));
         }
 
         @Test

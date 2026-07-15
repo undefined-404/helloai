@@ -10,6 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageDeliveryMode;
 import org.springframework.amqp.core.MessageProperties;
+import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -84,17 +85,21 @@ public class ExecutionCommandMqPublisher {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    doPublish(command);
+                    doPublish(command, command.getEventId());
                 }
             });
             log.debug("mq.execution-command.publish.register-after-commit eventId={} subTaskId={} agentId={}",
                     command.getEventId(), command.getSubTaskId(), command.getAgentId());
         } else {
-            doPublish(command);
+            doPublish(command, command.getEventId());
         }
     }
 
-    private void doPublish(ExecutionCommand command) {
+    public CorrelationData publishWithCorrelation(ExecutionCommand command, String correlationKey) {
+        return doPublish(command, correlationKey);
+    }
+
+    private CorrelationData doPublish(ExecutionCommand command, String correlationKey) {
         ExecutionCommandMqMessage message = ExecutionCommandMqMessage.from(command);
         byte[] body;
         try {
@@ -112,12 +117,15 @@ public class ExecutionCommandMqPublisher {
         props.setCorrelationId(command.getEventId());
         props.setDeliveryMode(MessageDeliveryMode.PERSISTENT);
         Message amqp = new Message(body, props);
+        CorrelationData correlationData = new CorrelationData(correlationKey);
         rabbitTemplate.send(
                 RabbitMQConfig.EXECUTION_COMMAND_EXCHANGE,
                 properties.getRoutingKey(),
-                amqp);
+                amqp,
+                correlationData);
         log.info("mq.execution-command.publish eventId={} subTaskId={} agentId={} routingKey={} bodyBytes={}",
                 command.getEventId(), command.getSubTaskId(), command.getAgentId(),
                 properties.getRoutingKey(), body.length);
+        return correlationData;
     }
 }

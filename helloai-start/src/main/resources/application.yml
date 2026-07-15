@@ -46,6 +46,8 @@ spring:
     port: 25672
     username: guest
     password: guest
+    publisher-confirm-type: correlated
+    publisher-returns: true
     listener:
       simple:
         acknowledge-mode: manual
