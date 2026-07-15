@@ -1,23 +1,25 @@
 # ============================================================
-# helloai DB Poller end-to-end verifier (v1)
+# helloai DB Poller end-to-end verifier (v2 — T5 降级后)
 # Ref:  doc/HelloAI_调度解耦重构分析.md §7 阶段 1
 #       架构设计参考 §5.1 第一阶段 / §5.2 第二阶段
 #
-# Targets three behaviors of consumer-mode=POLLER:
-#   S1 crash recovery          -> orphan PENDING picked up by listAllPending
+# T5 起重塑：DB Poller 已从"主消费载体"降级为"孤儿 / 超时 / 补偿兜底"。
+# Targets three behaviors applicable under any consumer-mode (EVENT/POLLER/BOTH):
+#   S1 crash recovery          -> orphan PENDING picked up by listOrphanPending
+#                                 (consumer failed mid-flight; markPolled triggers consume)
 #   S2 duplicate consumption   -> CAS markRunning only fires once per record
+#                                 (Poller 与主消费路径并存时由 CAS 保证幂等)
 #   S3 late-arriving result    -> sub_task IN_PROGRESS receive late execution
 #                                 result via ExecutionResultHandler.handleReport
 #                                 (idempotency key dedup + non-IN_PROGRESS discard)
 #
 # Pre-conditions:
 #   - helloai-postgres container is Up+healthy (docker compose up -d)
-#   - helloai-start Spring Boot is running on 6565 with consumer-mode=POLLER
-#   - Application.yml applies:
+#   - helloai-start Spring Boot is running on 6565 with default config:
 #       helloai.execution.poller-enabled=true
 #       helloai.execution.poller-interval-ms=1000
 #       helloai.execution.poller-batch-size=20
-#       helloai.execution.consumer-mode=POLLER
+#       helloai.execution.consumer-mode=POLLER  (任意模式均能跑通 S1/S2)
 #
 # Usage (project root):
 #   powershell -ExecutionPolicy Bypass -File .\verify-poller-e2e.ps1
@@ -109,12 +111,9 @@ if (Test-Path $appYml) {
 }
 Write-Output "spring-boot port = $servicePort"
 
-# probe health
+# probe health (PS 5.1 兼容：使用 Invoke-WebRequest 替代 [System.Net.Http.HttpClient]，后者仅 .NET 5+ 可用)
 try {
-    $h = [System.Net.Http.HttpClient]::new()
-    $h.Timeout = [TimeSpan]::FromSeconds(3)
-    $hr = $h.GetAsync("http://localhost:$servicePort/api/health").Result
-    $h.Dispose()
+    $hr = Invoke-WebRequest -Uri "http://localhost:$servicePort/api/health" -UseBasicParsing -TimeoutSec 3 -Method Get
     if ([int]$hr.StatusCode -ne 200) {
         Write-Error "Spring Boot health endpoint HTTP $($hr.StatusCode), please run start-sb.ps1"
         exit 1
@@ -200,10 +199,13 @@ Write-Output ""
 # ============================================================
 # STEP S1: orphan PENDING recovery
 #   Insert a PENDING record with create_time in the past + last_attempt_at NULL.
+#   T5 起重塑：Poller 走 listOrphanPending(threshold, batchSize)，
+#   扫描条件 last_attempt_at IS NULL OR last_attempt_at < now() - thresholdSeconds，
+#   last_attempt_at 默认 NULL → 直接命中。
 #   Expectation:
-#     - poller picks it up via listAllPending (consumer-mode=POLLER)
-#     - last_attempt_at gets refreshed
-#     - task_timeline records sub_task_execution_command_polled_main
+#     - poller picks it up via listOrphanPending (任意 consumer-mode 都会扫)
+#     - last_attempt_at gets refreshed by markPolled
+#     - task_timeline records sub_task_execution_command_poll_recovery (T5 起统一事件名)
 # ============================================================
 Write-Output "=== [S1] crash recovery — orphan PENDING ==="
 
@@ -231,11 +233,11 @@ SELECT id, status, last_attempt_at IS NOT NULL AS polled
 FROM agent_execution_record
 WHERE event_id = '$s1EventId';
 
--- 2. timeline recorded
+-- 2. timeline recorded (T5 起统一事件名 sub_task_execution_command_poll_recovery)
 SELECT event_type, role, created_at
 FROM task_timeline
 WHERE sub_task_id = $subTaskId AND deleted = 0
-  AND event_type = 'sub_task_execution_command_polled_main'
+  AND event_type = 'sub_task_execution_command_poll_recovery'
 ORDER BY create_time DESC LIMIT 5;
 "@
 $rc = Run-Psql -Sql $s1CheckSql -OutFile $s1ReportFile
@@ -245,7 +247,7 @@ $s1Body = Get-Content $s1ReportFile -Raw
 Write-Output "S1 result:"
 Write-Output $s1Body
 $s1Pass = $true
-if ($s1Body -notmatch "sub_task_execution_command_polled_main") { $s1Pass = $false }
+if ($s1Body -notmatch "sub_task_execution_command_poll_recovery") { $s1Pass = $false }
 if ($s1Body -notmatch "\|t\|") { $s1Pass = $false }
 
 if ($s1Pass) {

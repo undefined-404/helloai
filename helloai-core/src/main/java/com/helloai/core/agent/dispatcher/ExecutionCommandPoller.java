@@ -21,43 +21,57 @@ import com.helloai.core.service.SubTaskService;
 import com.helloai.core.service.TaskTimelineService;
 
 /**
- * 执行命令 DB Poller 消费者。
+ * 执行命令 DB Poller 兜底扫描器。
  *
- * <p>对应架构设计参考 §5.1 第一阶段「将本地 Spring 事件消费者继续收口到独立 MQ / DB poller 消费模型」，
- * 以及 §5.2 第二阶段「DB Poller 主线化」。</p>
+ * <p><b>T5 起重塑</b>：本类从"主消费载体"降级为"孤儿 / 超时 / 补偿兜底恢复机制"。
+ * 与架构设计参考 §5.1 阶段一拍板、差距表 N6 处理建议对齐：
+ * MQ 主链（{@code MqExecutionCommandConsumer}）已成为主消费路径，
+ * 本 Poller 保留作为 MQ 主链异常（broker 丢消息、Consumer Bean 未注册、JVM 异常退出、
+ * 主消费路径被 disable）的恢复机制，不再扫全量 PENDING 作为主路径。</p>
  *
  * <h3>职责</h3>
  * <ul>
- *     <li>EVENT 模式：定时扫描 {@code agent_execution_record} 表中长时间未被消费的 PENDING 行（孤儿），重发到消费链路；</li>
- *     <li>POLLER / BOTH 模式：定时扫描「所有」PENDING 行作为主消费路径；</li>
- *     <li>不依赖 Spring 事务事件、不依赖 @Async 线程池，跨进程 / 跨实例可独立工作。</li>
+ *     <li><b>所有模式统一扫描孤儿 PENDING</b>：{@code listOrphanPending(threshold, batchSize)}，
+ *         扫描条件 {@code status='PENDING' AND (last_attempt_at IS NULL OR last_attempt_at < now - thresholdSeconds)}；</li>
+ *     <li><b>不区分 consumer-mode</b>：无论 EVENT/POLLER/BOTH，本 Poller 行为一致——只兜底、不主推。</li>
+ *     <li><b>不依赖 Spring 事务事件 / @Async 线程池</b>，跨进程/跨实例可独立工作。</li>
  * </ul>
  *
  * <h3>与主路径的关系</h3>
- * <p>本 Poller 在 EVENT 模式下为<b>兜底路径</b>，主路径为事务事件触发
- * （{@code SubTaskAutoExecutionDispatcher → ExecutionCommandService →
- * publishEvent → @Async @TransactionalEventListener → LocalExecutionCommandConsumer}）。</p>
- * <p>本 Poller 在 POLLER 模式下为<b>主路径</b>，命令创建服务不发布本地事务事件，
- * 所有 PENDING 记录的推进都走本 Poller，跨进程 / 跨实例可独立扩容。</p>
- * <p>本 Poller 在 BOTH 模式下与事件消费者并行运行，由 Consumer 内部 CAS markRunning 保证幂等。</p>
+ * <p>任何模式下，本 Poller 都是兜底路径；主消费路径失效时它接管重新触发消费。
+ * 区分仅在于主消费路径的载体：</p>
+ * <ul>
+ *     <li>{@code consumer-mode=EVENT}：{@code LocalExecutionCommandConsumer.onCommandCreated}
+ *         （{@code @Async + @TransactionalEventListener}）作为主消费；</li>
+ *     <li>{@code consumer-mode=POLLER}（默认）：{@code MqExecutionCommandConsumer}（{@code @RabbitListener}）
+ *         作为主消费，读 MQ 消息委托给 {@code LocalExecutionCommandConsumer.consume}；</li>
+ *     <li>{@code consumer-mode=BOTH}：本地事务事件 + MQ 双主消费并行，
+ *         由 Consumer 内部 CAS {@code markRunning} 保证幂等。</li>
+ * </ul>
+ *
+ * <h3>与 ExecutionCompensationTask 的边界</h3>
+ * <p>本 Poller <em>不</em>承担"超时补偿"职责。PENDING/RUNNING 超时回收由
+ * {@code ExecutionCompensationTask}（helloai-job）独立承担：30s 周期扫 create_time < now - pendingTimeoutMinutes
+ * 或 start_time < now - runningTimeoutMinutes 的记录，调 {@code markTimeout} + subTask BLOCKED；
+ * 本 Poller 1s 周期扫孤儿 PENDING 重新触发消费——两条职责、两条节奏，互不干扰。</p>
  *
  * <h3>幂等保护</h3>
  * <p>Poller 触发的 consume 调用已经天然幂等：</p>
  * <ol>
  *     <li>本 Poller 先调用 {@code markPolled(id)} 留下扫描痕迹；</li>
  *     <li>Consumer 内部继续走 {@code markRunning(id)} CAS：PENDING→RUNNING；</li>
- *     <li>若主路径已经把 PENDING 行推进到 RUNNING/SUCCESS/FAILED/timeout，Poller 的 consume
+ *     <li>若主路径已经把 PENDING 行推进到 RUNNING/SUCCESS/FAILED/TIMEOUT，Poller 的 consume
  *         会在 markRunning 步骤被 CAS 拒绝，自然跳过；</li>
- *     <li>若主路径已经丢失（如应用重启 / @Async 线程池积压），Poller 接管并完成消费。</li>
+ *     <li>若主路径已经丢失（如 MQ Consumer Bean 未注册 / @Async 线程池积压 / JVM 异常退出），Poller 接管并完成消费。</li>
  * </ol>
  *
  * <h3>配置项</h3>
  * <ul>
  *     <li>{@code helloai.execution.poller-enabled}（默认 true）</li>
  *     <li>{@code helloai.execution.poller-interval-ms}（默认 1000）</li>
- *     <li>{@code helloai.execution.poller-orphan-threshold-seconds}（默认 60；仅 EVENT 模式使用）</li>
+ *     <li>{@code helloai.execution.poller-orphan-threshold-seconds}（默认 60；任何模式都用）</li>
  *     <li>{@code helloai.execution.poller-batch-size}（默认 20）</li>
- *     <li>{@code helloai.execution.consumer-mode}（默认 POLLER）</li>
+ *     <li>{@code helloai.execution.consumer-mode}（T5 起仅描述主消费路径载体，与 Poller 扫描行为无关）</li>
  * </ul>
  */
 @Slf4j
@@ -92,6 +106,11 @@ public class ExecutionCommandPoller {
      * DB Poller 周期扫描入口。
      *
      * <p>{@code fixedDelayString} 直接绑定配置项，支持通过 yaml / 环境变量动态调整扫描周期。</p>
+     *
+     * <p><b>T5 起行为收口</b>：本 Poller 不再区分 {@code consumer-mode}，统一调用
+     * {@code listOrphanPending(threshold, batchSize)} 扫描孤儿 PENDING。
+     * 主消费路径由 {@code MqExecutionCommandConsumer}（POLLER/BOTH）或
+     * {@code LocalExecutionCommandConsumer.onCommandCreated}（EVENT）承担。</p>
      */
     @Scheduled(fixedDelayString = "${helloai.execution.poller-interval-ms:1000}")
     public void poll() {
@@ -100,38 +119,26 @@ public class ExecutionCommandPoller {
         }
 
         int batchSize = executionProperties.getPollerBatchSize();
+        int threshold = executionProperties.getPollerOrphanThresholdSeconds();
 
-        // POLLER / BOTH 模式：扫所有 PENDING 作为主路径
-        // EVENT 模式：仅扫孤儿 PENDING 作为兜底
-        List<AgentExecutionRecord> candidates;
-        String scanType;
-        if (executionProperties.isPollerMain()) {
-            candidates = agentExecutionRecordService.listAllPending(batchSize);
-            scanType = "listAllPending";
-            // POLLER 主消费模式下推荐较短的扫描间隔
-            if (executionProperties.getPollerIntervalMs() > 5000L) {
-                log.warn("Poller 主消费模式 (consumer-mode=POLLER|BOTH) 下扫描周期 {} ms 偏长，建议调短到 1000-3000 ms 以避免主路径延迟",
-                        executionProperties.getPollerIntervalMs());
-            }
-        } else {
-            int threshold = executionProperties.getPollerOrphanThresholdSeconds();
-            candidates = agentExecutionRecordService.listOrphanPending(threshold, batchSize);
-            scanType = "listOrphanPending";
-        }
+        // T5 起：所有 consumer-mode 统一扫孤儿 PENDING，不再调用 listAllPending；
+        // 主消费路径由 MQ Consumer（POLLER/BOTH）或本地事务事件（EVENT）承担。
+        List<AgentExecutionRecord> candidates = agentExecutionRecordService.listOrphanPending(threshold, batchSize);
+        String scanType = "listOrphanPending";
 
         if (candidates.isEmpty()) {
             return;
         }
 
-        log.info("DB Poller 扫描到 {} 条待处理 PENDING (mode={}, scan={}, batchSize={})",
-                candidates.size(), executionProperties.getConsumerMode(), scanType, batchSize);
+        log.info("DB Poller 扫描到 {} 条孤儿 PENDING (consumer-mode={}, scan={}, threshold={}s, batchSize={})",
+                candidates.size(), executionProperties.getConsumerMode(), scanType, threshold, batchSize);
 
         for (AgentExecutionRecord record : candidates) {
             try {
                 processRecord(record, scanType);
             } catch (Exception e) {
                 // 单条记录异常不影响整批扫描
-                log.error("DB Poller 处理 PENDING 异常: recordId={}, eventId={}, subTaskId={}, scan={}",
+                log.error("DB Poller 处理孤儿 PENDING 异常: recordId={}, eventId={}, subTaskId={}, scan={}",
                         record.getId(), record.getEventId(), record.getSubTaskId(), scanType, e);
             }
         }
@@ -152,11 +159,8 @@ public class ExecutionCommandPoller {
         SubTask subTask = subTaskService.getById(record.getSubTaskId());
 
         // 4. 记录 timeline：Poller 处理事件
-        //    - listAllPending（主消费）使用 sub_task_execution_command_polled_main
-        //    - listOrphanPending（兜底）使用 sub_task_execution_command_poll_recovery
-        String timelineEvent = "listAllPending".equals(scanType)
-                ? "sub_task_execution_command_polled_main"
-                : "sub_task_execution_command_poll_recovery";
+        //    T5 起：scanType 恒为 listOrphanPending，timeline 事件统一使用 sub_task_execution_command_poll_recovery
+        String timelineEvent = "sub_task_execution_command_poll_recovery";
         if (subTask != null) {
             taskTimelineService.recordEvent(
                     subTask.getTaskId(),
@@ -169,12 +173,13 @@ public class ExecutionCommandPoller {
                             "eventId", record.getEventId(),
                             "originalTrigger", record.getTrigger(),
                             "accessType", record.getAccessType().name(),
-                            "scan", scanType));
+                            "scan", scanType,
+                            "consumerMode", executionProperties.getConsumerMode().name()));
         }
 
-        // 5. 构造 ExecutionCommand，trigger 前缀区分主路径 / 兜底
+        // 5. 构造 ExecutionCommand，trigger 前缀统一使用 poll-recovery:
         String originalTrigger = record.getTrigger() != null ? record.getTrigger() : "unknown";
-        String triggerPrefix = "listAllPending".equals(scanType) ? "poll-main:" : "poll-recovery:";
+        String triggerPrefix = "poll-recovery:";
         ExecutionCommand command = ExecutionCommand.builder()
                 .recordId(record.getId())
                 .eventId(record.getEventId())

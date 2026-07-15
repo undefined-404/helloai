@@ -111,31 +111,36 @@ helloai:
     model: deepseek-chat
     mock-response-prefix: "[mock-executor]"
     sync-timeout-seconds: 180
-    # Phase 2A §5.1/§5.2: DB Poller 主消费；EVENT 模式下退化为孤儿 PENDING 兜底扫描
+    # Phase 2A §5.1/§5.2 + T5 改造：DB Poller 兜底扫描（主消费路径由 consumer-mode 决定）
     poller-enabled: true
     poller-interval-ms: 1000
     poller-orphan-threshold-seconds: 60
     poller-batch-size: 20
-    # Phase 2A §5.2: DB Poller 主线化
-    # consumer-mode 决定主消费从哪条路径走：
-    #   EVENT: 事务事件为主，Poller 仅扫孤儿（兼容模式）
-    #   POLLER: 不发布事务事件，Poller 扫所有 PENDING 作为主路径（默认）
-    #   BOTH: 事件与 Poller 并行，CAS 保证幂等，适合 EVENT→POLLER 过渡
+    # T5 起重塑语义：consumer-mode 仅描述"主消费路径由谁承担"，Poller 自身已统一降级为孤儿兜底；
+    # 三种模式都对应 Poller 仅扫孤儿 PENDING（listOrphanPending），不再调用 listAllPending。
+    # 主消费路径：
+    #   EVENT: 本地事务事件 (@Async + @TransactionalEventListener → LocalExecutionCommandConsumer)
+    #   POLLER: MQ Consumer (@RabbitListener → MqExecutionCommandConsumer → LocalExecutionCommandConsumer)
+    #   BOTH:   本地事务事件 + MQ Consumer 并行，CAS markRunning 保证幂等
+    # ⚠️ POLLER/BOTH 模式下 ExecutionDispatchValidator 会强制要求 helloai.mq.execution-command.consumer-enabled=true
+    #   默认开启（见下），启动期 fail-fast，避免"主消费路径失效但 Poller 仅兜底"的部署形态
     consumer-mode: POLLER
     # Phase 2E: 生产端 / 调度侧的显式派发模式，与 consumer-mode 完全解耦
-    #   NONE:  命令只落库，交给 DB Poller 兜底消费（默认，与 consumer-mode=POLLER 配套）
+    #   NONE:  命令只落库，交给 DB Poller 兜底消费（与 consumer-mode=EVENT 配套保留）
     #   EVENT: 只发布本地 Spring 事件（旧 EVENT 路径）
     #   MQ:    只投递 RabbitMQ，前提需 mq.execution-command.producer-enabled=true，否则启动 fail-fast
     #   BOTH:  事件 + MQ 双发，用于 EVENT→MQ 灰度切换
-    dispatch-mode: NONE
-  # Phase 2D N6 / Phase 2E: MQ ExecutionCommand 主链路开关（默认均关闭）
+    # ⚠️ MQ/BOTH 模式下 ExecutionDispatchValidator 会同时校验 producer-enabled + outbox.relay.enabled
+    dispatch-mode: MQ
+  # Phase 2D N6 / Phase 2E / T5：MQ ExecutionCommand 主链路开关
   #   producer-enabled=true 时 ExecutionCommandMqPublisher 才会注册（必须与 dispatch-mode=MQ/BOTH 同时打开）
   #   consumer-enabled=true 时 MqExecutionCommandConsumer 才会注册
-  #   两个开关相互独立，支持"先开生产端 shadow 观察队列堆积、再开消费端"的灰度节奏
+  # ⚠️ T5 起：consumer-mode=POLLER/BOTH 必须开启 consumer-enabled=true（启动期 fail-fast）
+  #   默认两个开关都打开，对齐"MQ 主链 + Poller 兜底"的目标形态
   mq:
     execution-command:
-      producer-enabled: false
-      consumer-enabled: false
+      producer-enabled: true
+      consumer-enabled: true
       exchange: helloai.execution-command.exchange
       queue: helloai.execution-command.queue
       routing-key: execution.command.created

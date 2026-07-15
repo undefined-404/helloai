@@ -119,20 +119,29 @@ public class AgentExecutionRecordService extends ServiceImpl<AgentExecutionRecor
     }
 
     /**
-     * DB Poller 主消费扫描：查找「所有未被消费的 PENDING」记录（不限于孤儿）。
+     * 旧 DB Poller 主消费扫描：查找「所有未被消费的 PENDING」记录（不限于孤儿）。
+     *
+     * <p><b>T5 起重写为兼容方法</b>：本方法不再被 {@code ExecutionCommandPoller} 调用——
+     * Poller 已降级为孤儿/超时/补偿兜底，统一只走 {@link #listOrphanPending(int, int)}，
+     * 主消费路径由 {@code MqExecutionCommandConsumer}（POLLER/BOTH）或
+     * {@code LocalExecutionCommandConsumer.onCommandCreated}（EVENT）承担。</p>
+     *
+     * <p><b>为何保留</b>：</p>
+     * <ul>
+     *     <li>本方法仍可作为运维排查/历史数据回查工具——例如需要手工列全表 PENDING
+     *         排查积压时直接 SELECT 即可，无需走 Service；</li>
+     *     <li>未来若需要 "主路径回退到 Poller 全量扫描" 的兼容开关，本方法可直接复用，零迁移成本。</li>
+     * </ul>
      *
      * <p>扫描条件：{@code status='PENDING'}，无 {@code last_attempt_at} 阈值限制。
-     * 用于 {@code consumer-mode=POLLER|BOTH} 模式：Poller 作为主消费路径，
-     * 必须能扫到刚创建的 PENDING 记录，否则会产生不可接受的延迟。</p>
-     *
-     * <p>由 Consumer 内部 CAS {@code markRunning} 推进 PENDING→RUNNING 保证幂等：
-     * 若事件主消费已经推进过该行，Poller 的 consume 会在 markRunning 步骤被 CAS 拒绝，自然跳过。</p>
-     *
-     * <p>按 {@code create_time} 升序遍历：先扫最早创建的 PENDING 行，优先避免堆积。</p>
+     * 按 {@code create_time} 升序遍历：先扫最早创建的 PENDING 行，优先避免堆积。</p>
      *
      * @param limit 单批扫描上限
      * @return 所有 PENDING 记录列表（按 create_time 升序）
+     * @deprecated T5 起 Poller 不再调用本方法；保留仅为兼容历史代码与排查工具。
+     *             新代码请使用 {@link #listOrphanPending(int, int)} 扫描孤儿 PENDING。
      */
+    @Deprecated
     public List<AgentExecutionRecord> listAllPending(int limit) {
         if (limit <= 0) {
             return List.of();

@@ -17,25 +17,45 @@ public class AgentExecutionProperties {
     /**
      * 执行命令消费载体模式。
      *
-     * <p>定义"主消费"从哪条路径走，与架构设计参考 §5.2 阶段二「DB Poller 主线化」对齐。</p>
+     * <p><b>T5 起重塑语义（与差距表 N6 + 架构参考 §5.1 阶段一拍板对齐）</b>：
+     * 三种模式都对应"Poller 仅作孤儿/超时/补偿兜底"，区别在于<b>主消费路径</b>由谁承担。
+     * 主消费路径失效时（如 MQ Consumer Bean 未注册、@Async 线程池卡死、JVM 异常退出），
+     * Poller 通过 {@code listOrphanPending(threshold)} 兜底扫描重新触发消费。</p>
+     *
+     * <ul>
+     *     <li>{@code EVENT}：{@code @Async + @TransactionalEventListener} 作为本地事务事件主消费，
+     *         Poller 仅扫孤儿（兼容模式，与 §5.1 ②a 之前的旧行为等价）；</li>
+     *     <li>{@code POLLER}：MQ 主消费路径（前提 {@code dispatch-mode ∈ {MQ,BOTH}} +
+     *         {@code helloai.mq.execution-command.consumer-enabled=true} + {@code producer-enabled=true} +
+     *         {@code outbox.relay.enabled=true}，启动期 {@code ExecutionDispatchValidator} 会 fail-fast），
+     *         Poller 仅扫孤儿；</li>
+     *     <li>{@code BOTH}：本地事务事件 + MQ 双主消费，由 Consumer 内部 CAS {@code markRunning}
+     *         保证幂等（与 EVENT→MQ 灰度切换过渡形态），Poller 仅扫孤儿。</li>
+     * </ul>
+     *
+     * <p><b>本轮明确不做</b>：保留 POLLER 旧语义"扫全量 PENDING 作主路径"作为兼容模式——
+     * MQ 投递已通过 ②a/②b 完成可靠性收口，Poller 降级为兜底是必然演进方向，
+     * 但仍允许通过不修改代码直接切回旧 POLLER 语义（虽然 {@code ExecutionDispatchValidator}
+     * 会在默认配置下阻断这种部署）。</p>
      */
     public enum ConsumerMode {
         /**
-         * 事件消费：
-         * {@code @Async + @TransactionalEventListener} 作为实时主路径，
-         * DB Poller 仅扫描孤儿 PENDING 作为兜底恢复。
+         * 事件消费（兼容模式）：
+         * {@code @Async + @TransactionalEventListener} 作为本地事务事件主消费，
+         * Poller 仅扫孤儿 PENDING 作为兜底恢复。
          */
         EVENT,
         /**
-         * Poller 主消费（默认）：
-         * 命令创建后不发布本地事件，主消费完全由 DB Poller 周期扫描所有 PENDING 记录推进；
-         * 消费载体不再依赖 Spring 事务事件，跨进程/跨实例可独立扩容。
+         * MQ 主消费（默认）：
+         * MQ Consumer Bean（{@code MqExecutionCommandConsumer}）作为主消费路径，
+         * 消费端读 MQ 消息 → 委托 {@code LocalExecutionCommandConsumer} 推进；
+         * Poller 仅扫孤儿 PENDING 作为 MQ 主链异常时的兜底恢复。
          */
         POLLER,
         /**
-         * 双消费：事件主消费与 Poller 同时运行；
-         * Poller 扫描所有 PENDING，由 Consumer 内部 CAS markRunning 保证幂等，
-         * 可作为 EVENT→POLLER 的过渡阶段。
+         * 双消费：本地事务事件与 MQ Consumer 同时作为主消费路径并行运行，
+         * 由 Consumer 内部 CAS {@code markRunning} 保证幂等；
+         * Poller 仅扫孤儿。适合作为 EVENT→POLLER 灰度切换过渡阶段。
          */
         BOTH
     }
@@ -121,12 +141,24 @@ public class AgentExecutionProperties {
      */
     private DispatchMode dispatchMode = DispatchMode.NONE;
 
-    /** 是否为 Poller 主消费模式（POLLER 或 BOTH 都算）。 */
+    /**
+     * 是否为 MQ 主消费模式（POLLER 或 BOTH 都算）。
+     *
+     * <p>T5 起重塑语义：POLLER/BOTH 模式都对应"MQ Consumer 作为主消费路径"，
+     * Poller 仅扫孤儿作兜底。本方法名保留仅为兼容外部调用方（如
+     * {@code ExecutionCommandPoller} 与 {@code ExecutionDispatchValidator}），
+     * 实际语义已从"Poller 主消费"更新为"MQ 主消费路径启用"。</p>
+     */
     public boolean isPollerMain() {
         return consumerMode == ConsumerMode.POLLER || consumerMode == ConsumerMode.BOTH;
     }
 
-    /** 是否为事件主消费模式（EVENT 或 BOTH 都算）。 */
+    /**
+     * 是否为事件主消费模式（EVENT 或 BOTH 都算）。
+     *
+     * <p>仅描述"消费侧使用了本地 {@code @TransactionalEventListener} 主路径"，
+     * 与 Poller 兜底职责无关。</p>
+     */
     public boolean isEventMode() {
         return consumerMode == ConsumerMode.EVENT || consumerMode == ConsumerMode.BOTH;
     }

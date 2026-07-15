@@ -42,6 +42,12 @@ import com.helloai.core.service.TaskTimelineService;
 /**
  * {@link ExecutionCommandPoller} 单元测试。
  *
+ * <p><b>T5 起重塑</b>：本 Poller 从"主消费载体"降级为"孤儿 / 超时 / 补偿兜底"。
+ * 所有 {@code consumer-mode}（EVENT / POLLER / BOTH）下本 Poller 行为一致——只扫
+ * {@code listOrphanPending(threshold, batchSize)}、不扫 {@code listAllPending}。
+ * 主消费路径由 {@code MqExecutionCommandConsumer}（POLLER / BOTH）或
+ * {@code LocalExecutionCommandConsumer.onCommandCreated}（EVENT）承担。</p>
+ *
  * <p>覆盖：</p>
  * <ul>
  *     <li>正常兜底扫描 → markPolled → 构造 ExecutionCommand → consume；</li>
@@ -50,7 +56,10 @@ import com.helloai.core.service.TaskTimelineService;
  *     <li>subTask=null → 跳过 timeline 但仍触发 consume；</li>
  *     <li>consume 抛异常 → 不影响后续记录；</li>
  *     <li>pollerEnabled=false → 跳过扫描；</li>
- *     <li>trigger 前缀正确（poll-recovery: + 原 trigger）。</li>
+ *     <li>trigger 前缀恒为 poll-recovery:（T5 起取消 poll-main: 分支）；</li>
+ *     <li>timeline 事件恒为 sub_task_execution_command_poll_recovery；</li>
+ *     <li><b>三模式一致性</b>：EVENT/POLLER/BOTH 都只调 listOrphanPending，
+ *         永不调 listAllPending——把"Poller 降级为兜底"的语义钉死在测试里。</li>
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
@@ -77,7 +86,6 @@ class ExecutionCommandPollerTest {
         lenient().when(executionProperties.getPollerOrphanThresholdSeconds()).thenReturn(60);
         lenient().when(executionProperties.getPollerBatchSize()).thenReturn(20);
         lenient().when(executionProperties.getPollerIntervalMs()).thenReturn(1000L);
-        lenient().when(executionProperties.isPollerMain()).thenReturn(false);
         lenient().when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.EVENT);
     }
 
@@ -268,88 +276,12 @@ class ExecutionCommandPollerTest {
     }
 
     @Nested
-    @DisplayName("PollerMain — POLLER/BOTH 模式走 listAllPending")
-    class PollerMain {
+    @DisplayName("T5 降级一致性 — 所有 consumer-mode 都只走 listOrphanPending")
+    class DowngradeConsistency {
 
         @Test
-        @DisplayName("POLLER 模式：调 listAllPending，listOrphanPending 不被调")
-        void shouldUseListAllPendingInPollerMode() {
-            when(executionProperties.isPollerMain()).thenReturn(true);
-            when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.POLLER);
-            AgentExecutionRecord pending = orphanRecord(201L, 22L, 11L, AgentAccessType.API_KEY_LLM, "assigned");
-            when(agentExecutionRecordService.listAllPending(20)).thenReturn(List.of(pending));
-            SubTask subTask = new SubTask();
-            subTask.setId(22L);
-            subTask.setTaskId(33L);
-            when(subTaskService.getById(22L)).thenReturn(subTask);
-
-            poller.poll();
-
-            verify(agentExecutionRecordService).listAllPending(20);
-            verify(agentExecutionRecordService, never()).listOrphanPending(anyInt(), anyInt());
-            verify(agentExecutionRecordService).markPolled(201L);
-            verify(executionCommandConsumer).consume(any(ExecutionCommand.class));
-        }
-
-        @Test
-        @DisplayName("BOTH 模式：同样调 listAllPending（与事件消费者并行）")
-        void shouldUseListAllPendingInBothMode() {
-            lenient().when(executionProperties.isPollerMain()).thenReturn(true);
-            lenient().when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.BOTH);
-            when(agentExecutionRecordService.listAllPending(20)).thenReturn(List.of());
-
-            poller.poll();
-
-            verify(agentExecutionRecordService).listAllPending(20);
-            verify(agentExecutionRecordService, never()).listOrphanPending(anyInt(), anyInt());
-            verifyNoInteractions(executionCommandConsumer);
-        }
-
-        @Test
-        @DisplayName("POLLER 模式 + 长 interval：记录 warning 但不阻断流程")
-        void shouldWarnOnLongIntervalInPollerMode() {
-            when(executionProperties.isPollerMain()).thenReturn(true);
-            lenient().when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.POLLER);
-            when(executionProperties.getPollerIntervalMs()).thenReturn(10000L);
-            when(agentExecutionRecordService.listAllPending(20)).thenReturn(List.of());
-
-            poller.poll();
-
-            // 验证没有异常，且走了 listAllPending（说明 warning 之后还是继续走主路径）
-            verify(agentExecutionRecordService).listAllPending(20);
-        }
-
-        @Test
-        @DisplayName("POLLER 主路径触发：trigger 前缀为 poll-main:，timeline 事件为 sub_task_execution_command_polled_main")
-        void shouldUsePollMainPrefixAndTimeline() {
-            when(executionProperties.isPollerMain()).thenReturn(true);
-            when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.POLLER);
-            AgentExecutionRecord pending = orphanRecord(301L, 22L, 11L, AgentAccessType.API_KEY_LLM, "assigned");
-            when(agentExecutionRecordService.listAllPending(20)).thenReturn(List.of(pending));
-            SubTask subTask = new SubTask();
-            subTask.setId(22L);
-            subTask.setTaskId(33L);
-            when(subTaskService.getById(22L)).thenReturn(subTask);
-
-            poller.poll();
-
-            ArgumentCaptor<ExecutionCommand> commandCaptor = ArgumentCaptor.forClass(ExecutionCommand.class);
-            verify(executionCommandConsumer).consume(commandCaptor.capture());
-            assertThat(commandCaptor.getValue().getTrigger()).isEqualTo("poll-main:assigned");
-
-            ArgumentCaptor<Map<String, Object>> timelineCaptor = ArgumentCaptor.forClass(Map.class);
-            verify(taskTimelineService).recordEvent(
-                    eq(33L), eq(22L), eq("sub_task_execution_command_polled_main"),
-                    any(), eq(11L), timelineCaptor.capture());
-            @SuppressWarnings("unchecked")
-            Map<String, Object> captured = timelineCaptor.getValue();
-            assertThat(captured).containsEntry("scan", "listAllPending");
-        }
-
-        @Test
-        @DisplayName("EVENT 模式：调 listOrphanPending，listAllPending 不被调（保留原兜底逻辑）")
-        void shouldStillUseListOrphanPendingInEventMode() {
-            // 默认是 EVENT 模式
+        @DisplayName("EVENT 模式：调 listOrphanPending，永不调 listAllPending")
+        void shouldUseListOrphanPendingInEventMode() {
             AgentExecutionRecord orphan = orphanRecord(401L, 22L, 11L, AgentAccessType.API_KEY_LLM, "assigned");
             when(agentExecutionRecordService.listOrphanPending(60, 20)).thenReturn(List.of(orphan));
             when(subTaskService.getById(22L)).thenReturn(null);
@@ -359,6 +291,77 @@ class ExecutionCommandPollerTest {
             verify(agentExecutionRecordService).listOrphanPending(60, 20);
             verify(agentExecutionRecordService, never()).listAllPending(anyInt());
             verify(executionCommandConsumer).consume(any(ExecutionCommand.class));
+        }
+
+        @Test
+        @DisplayName("POLLER 模式：调 listOrphanPending，永不调 listAllPending（T5 起重塑）")
+        void shouldUseListOrphanPendingInPollerMode() {
+            when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.POLLER);
+            AgentExecutionRecord orphan = orphanRecord(402L, 22L, 11L, AgentAccessType.API_KEY_LLM, "assigned");
+            when(agentExecutionRecordService.listOrphanPending(60, 20)).thenReturn(List.of(orphan));
+            SubTask subTask = new SubTask();
+            subTask.setId(22L);
+            subTask.setTaskId(33L);
+            when(subTaskService.getById(22L)).thenReturn(subTask);
+
+            poller.poll();
+
+            verify(agentExecutionRecordService).listOrphanPending(60, 20);
+            verify(agentExecutionRecordService, never()).listAllPending(anyInt());
+            verify(agentExecutionRecordService).markPolled(402L);
+            verify(executionCommandConsumer).consume(any(ExecutionCommand.class));
+        }
+
+        @Test
+        @DisplayName("BOTH 模式：调 listOrphanPending，永不调 listAllPending（T5 起重塑）")
+        void shouldUseListOrphanPendingInBothMode() {
+            when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.BOTH);
+            AgentExecutionRecord orphan = orphanRecord(403L, 23L, 12L, AgentAccessType.API_KEY_LLM, "reassigned");
+            when(agentExecutionRecordService.listOrphanPending(60, 20)).thenReturn(List.of(orphan));
+            when(subTaskService.getById(23L)).thenReturn(null);
+
+            poller.poll();
+
+            verify(agentExecutionRecordService).listOrphanPending(60, 20);
+            verify(agentExecutionRecordService, never()).listAllPending(anyInt());
+            verify(executionCommandConsumer).consume(any(ExecutionCommand.class));
+        }
+
+        @Test
+        @DisplayName("POLLER 模式触发消费：trigger 前缀恒为 poll-recovery:，timeline 事件恒为 sub_task_execution_command_poll_recovery")
+        void shouldUsePollRecoveryPrefixInAllConsumerModes() {
+            when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.POLLER);
+            AgentExecutionRecord orphan = orphanRecord(404L, 22L, 11L, AgentAccessType.API_KEY_LLM, "assigned");
+            when(agentExecutionRecordService.listOrphanPending(60, 20)).thenReturn(List.of(orphan));
+            SubTask subTask = new SubTask();
+            subTask.setId(22L);
+            subTask.setTaskId(33L);
+            when(subTaskService.getById(22L)).thenReturn(subTask);
+
+            poller.poll();
+
+            ArgumentCaptor<ExecutionCommand> commandCaptor = ArgumentCaptor.forClass(ExecutionCommand.class);
+            verify(executionCommandConsumer).consume(commandCaptor.capture());
+            // T5 起：trigger 前缀统一为 poll-recovery:，不再有 poll-main: 分支
+            assertThat(commandCaptor.getValue().getTrigger()).isEqualTo("poll-recovery:assigned");
+
+            // T5 起：timeline 事件统一为 sub_task_execution_command_poll_recovery，不再有 sub_task_execution_command_polled_main
+            verify(taskTimelineService).recordEvent(
+                    eq(33L), eq(22L), eq("sub_task_execution_command_poll_recovery"),
+                    any(), eq(11L), any());
+        }
+
+        @Test
+        @DisplayName("空 batch：POLLER 模式也不调 listAllPending，零孤儿时直接 return")
+        void shouldNotCallListAllPendingWhenEmptyInPollerMode() {
+            when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.POLLER);
+            when(agentExecutionRecordService.listOrphanPending(60, 20)).thenReturn(List.of());
+
+            poller.poll();
+
+            verify(agentExecutionRecordService).listOrphanPending(60, 20);
+            verify(agentExecutionRecordService, never()).listAllPending(anyInt());
+            verifyNoInteractions(executionCommandConsumer, taskTimelineService);
         }
     }
 }

@@ -1202,6 +1202,254 @@ DB 验证：
 
 ---
 
+### 2026-07-15 Phase 2H N1 Confirm / Retry（②b）
+
+#### 1. 范围
+
+- 按 §5.1 路线拍板的"②b Confirm / Retry"——只做最小闭环，承接 Phase 2H ②a 的 `agent_command_outbox` 与 `OutboxRelayTask`，把状态机从 `PENDING / SENT / FAILED` 三态扩到 `PENDING / SENT / CONFIRMED / FAILED` 四态，并补齐 publisher confirms / `CorrelationData` / Confirm-aware Retry / SENT 超时回退。
+- 明确本轮**不**做：Poller 降级、`OutboxCompensationTask` 新增调度（沿用 `OutboxRelayTask`）、DLQ、per-event 业务级熔断；T4 E2E 失败可恢复、T5 Poller 降级、T6 §5.2 继续后置。
+
+#### 2. 实际落地
+
+- **Flyway V20：`V20__agent_command_outbox_confirms.sql`**
+  - 通过 `information_schema.columns` 判型，对 `agent_command_outbox.status` 做 `VARCHAR → SMALLINT USING (CASE …)` 兼容迁移，覆盖 `PENDING/SENT/FAILED/CONFIRMED` 与 `0/1/2/3` 双向兼容；落地后 status 默认值 `0`。
+  - 新增 `last_sent_at` / `confirmed_at` 两列（`TIMESTAMPTZ`），仅由 `OutboxRelayTask` 维护，不与执行生命周期混用。
+  - 重建 PENDING 部分索引（`next_retry_at`，`WHERE status = 0 AND deleted = 0`），并新增 SENT 部分索引 `idx_agent_command_outbox_sent_scan`（`last_sent_at`，`WHERE status = 1 AND deleted = 0`）支撑 Confirm 超时回退扫描。
+  - CHECK 约束扩展到 `status IN (0, 1, 2, 3)`，覆盖新增的 `CONFIRMED`。
+  - 不向 `agent_execution_record` 增加任何 MQ 投递状态字段；执行生命周期与投递生命周期继续严格分层。
+
+- **状态机（`helloai-common/.../AgentCommandOutboxStatus`）**
+  - 新增 `CONFIRMED(3)`，实现 `IEnum<Integer>`，与 `OutboxStatus`（`agent_outbox_event`）继续正交。
+  - 状态迁移表更新为：`PENDING ─[发送调用成功]→ SENT ─[broker ACK 且无 return]→ CONFIRMED`；`SENT ─[NACK / return / 超时 / confirm 回调丢失]→ PENDING（指数退避）` 或 `→ FAILED（超阈值）`；`PENDING ─[发送失败重试额度耗尽]→ FAILED`。
+
+- **实体（`helloai-core/.../AgentCommandOutboxEvent`）**
+  - 补齐 `lastSentAt` / `confirmedAt` 字段；`payload` 仍由 `JacksonTypeHandler` 映射 `jsonb`，字段与 `ExecutionCommandMqMessage` 完全对称。
+
+- **`AgentCommandOutboxService`（helloai-core）**
+  - 新增 `listExpiredSentForRetry(limit)`：扫描 `status = SENT AND confirmed_at IS NULL AND last_sent_at <= now - confirmTimeout AND retry_count < maxRetry`，按 `last_sent_at` 升序，单批上限由调用方控制。
+  - 收紧 `markSent(id, sentAt)`（二参）并新增 `markConfirmed(id, confirmedAt)`：保留 `WHERE status = PENDING / SENT` 的悲观 CAS 保护，状态不漂移。
+  - 新增 `markFailedFromSent` / `markFinalFailedFromSent`：SENT → PENDING 回退或 SENT → FAILED 终态；与既有 `markFailed` / `markFinalFailed` 形成"发送前失败"与"发送后失败"两套对称更新路径。
+  - `error_msg` 仍走 1000 字符截断，避免 broker 异常堆栈撑爆单行。
+
+- **`ExecutionCommandMqPublisher`（helloai-core，Publisher 角色下沉前过渡）**
+  - 新增 `publishWithCorrelation(command, correlationKey)` 返回 `CorrelationData`，底层仍走 `rabbitTemplate.send(exchange, routingKey, message, correlationData)`；`eventId` 仍作为 `MessageProperties.messageId / correlationId` 落到消息头。
+  - 序列化与 `afterCommit` 时机对齐 ②a 的语义；现有 `publish(command)` 路径未删，但 Relay 已切换到 `publishWithCorrelation`。
+
+- **`OutboxRelayTask`（helloai-job）**
+  - 单条处理链：调用 `publishWithCorrelation(command, outboxId)` → 同步 `markSent(id, now)` → `attachConfirmCallback(row, correlationData)`。
+  - `handleConfirm` 区分 ACK / NACK / `CorrelationData.getReturned()` / `confirm-timeout`，命中 ACK 且无 return 时 `markConfirmed`；其它路径走 `scheduleRetryFromSent`，复用既有指数退避（`baseBackoffSeconds * 2^retryCount`，截断到 2^10 避免溢出）。
+  - 每轮扫描前先调 `revertExpiredSent(batchLimit)`：扫出历史 SENT 超时未确认行（应对重启后 in-flight future 丢失）并走相同回退路径；不与 PENDING 主扫描冲突，分两步执行。
+  - `RelayOutcome` 指标仍为 `SENT / FAILED / FINAL_FAILED / SKIPPED`，本轮不引入 `CONFIRMED` 计数（状态收敛在 confirm 回调，不在 batch 出口）。
+
+- **RabbitMQ 配置（`application.yml` + `RabbitMQConfig`）**
+  - `spring.rabbitmq.publisher-confirm-type: correlated`、`publisher-returns: true`；`RabbitMQConfig` 在自定义 `RabbitTemplate` 上注册 `ConfirmCallback` / `ReturnsCallback` 并 `setMandatory(true)`，确保 correlated confirms 与 return 都能触发；当前 outbox 路径使用 `publishWithCorrelation` 拿到 `CorrelationData.getFuture()`，独立消费 confirm；不依赖 template 级回调。
+
+- **测试**
+  - `OutboxRelayTaskTest`：用例从 5 扩到 7，覆盖 Publisher 成功（含 `markSent` + `markConfirmed` 顺序）、Publisher 异常但 < maxRetry、Publisher 异常 ≥ maxRetry、空批次、payload 反序列化失败、**Confirm NACK → `markFailedFromSent`**、**SENT 超时 → `markFailedFromSent`**；`properties.getConfirmTimeoutSeconds()`、`outboxService.listExpiredSentForRetry(anyInt())` 走 `lenient()` 默认 stub，单元层不依赖真实 broker。
+  - `mvn -pl helloai-common,helloai-core,helloai-job -am test` ✅；`mvn -DskipTests clean install` ✅。
+
+#### 3. 影响
+
+- 数据结构：`agent_command_outbox.status` 由 `VARCHAR(32)` 转为 `SMALLINT`（保留旧值的兼容映射），新增 `last_sent_at` / `confirmed_at` 两列；既有 V19 索引正确 drop & recreate；CHECK 约束扩展到 `0/1/2/3`。
+- 状态归属：`CONFIRMED` 仅由 `CorrelationData.getFuture()` 完成时回写 outbox；技术噪声（NACK / return / 超时）只动 outbox 表，不写入 `task_timeline`。
+- 执行侧：`MqExecutionCommandConsumer` 与 Outbox 状态机正交，CONFIRMED 只在生产端可见，消费端按既有 MANUAL ACK + 幂等逻辑收敛，不感知 outbox 内部状态。
+- Publisher 角色抽象（`OutboxCommandSender` 接口下沉）继续后置，待 ②b 实战稳定后再启动。
+
+#### 4. 遗留与下一步
+
+- T4：在真实 RabbitMQ 环境跑失败可恢复 E2E，验证"Broker 异常后可重试、可确认、可终态收敛"，覆盖 NACK、broker 重启、回调丢失三种场景。
+- T5：可靠投递稳定后将 Poller 从默认主消费降级为孤儿 / 超时 / 补偿兜底，保留作为 MQ 主链异常恢复机制；`AsyncExecutionResultConsumer` 回写链路改造后置。
+- T6：§5.2 WorkUnit / STOP/PAUSE/REPLAN / 用户输入可重入继续后置。
+- R2：`ExecutionCommandMqPublisher.publish()` 旧方法仍存在并被既有单测使用，但内部已不注册 `whenComplete` 监听 confirm future，存在"未来静默丢失"的潜在风险，待 T3 实战稳定后单独清理。
+- R3：V20 不回填 V19 era 的历史 SENT 行 `last_sent_at`，导致 `listExpiredSentForRetry` 暂时不会触及这些行；考虑到 Phase 2H 才刚上线且 V19 era 内 SENT 行极少，影响面有限。
+
+---
+
+### T4: Outbox ②b RabbitMQ 故障恢复路径 E2E 验证
+
+#### 1. 范围
+
+承接 Phase 2H ②b "遗留与下一步" 中 T4 项的"E2E 验证"，覆盖 OutboxRelayTask 在真实 RabbitMQ 故障下的三条恢复路径：
+
+- **S1 broker NACK**：队列容量耗尽，broker 主动 nack
+- **S2 mandatory return**：publish 路由无 binding 命中，`mandatory=true` 触发 ReturnsCallback
+- **S3 confirm timeout**：broker 响应丢失 / in-flight future 丢失，由 `revertExpiredSent` 兜底回收
+- **S4 control happy path**：对照基线，验证正常 ACK 路径下 `confirmed_at` + `last_sent_at` 同时回写
+
+#### 2. 实际落地
+
+- **交付脚本**：`verify-outbox-relay-confirm-e2e.ps1`（≈ 770 行，PowerShell 5.1 兼容）
+  - 参数：`-SkipPrepare` 复用上一轮 sample agent / sub_task；`-Cleanup` 幂等删除本 runTag 产生的所有 outbox 行 + 恢复 broker 配置
+  - **pre-flight probe**：插一条临时 PENDING 行 + 8s 等待 status 变化，避免 `dispatch-mode=NONE` / `producer-enabled=false` 时 relay 静默 FAIL；本轮实测因 IDEA 启动未切 MQ 一度全场景 FAIL，probe 段介入后准确定位到配置根因
+  - 幂等 runTag：`yyyyMMdd-HHmmss` 后缀，event_id / agentId / taskId / subTaskId / outboxId 均按 runTag 派生，重跑不冲突；outboxId 用 `epoch_ms * 1000` 雪花种子 + 单调计数器派生 snowflake-shaped bigint
+  - 4 个场景独立 INSERT + 等待循环 + 多字段断言（status / last_sent / confirmed / retry_count / error_msg）
+
+- **实测结果**（runTag=`20260715-133106`，agentId=`714468167`，subTaskId=`714468187`，`helloai.execution.dispatch-mode=MQ` + `helloai.mq.execution-command.producer-enabled=true` 启用后）
+
+  | 场景 | 故障模拟方式 | 终态（id 状态 重试 last_sent confirmed 错误信息） | 结果 |
+  |---|---|---|---|
+  | **S1 broker NACK** | RabbitMQ policy `max-length=1, overflow=reject-publish`，灌 2 条 PENDING | row1 `0 / 1 / 0 / –`；row2 `0 / 1 / 3 / 0 / "confirm-nack: null"` | **FAIL 但 NACK 路径触发已证实**：`error_msg=confirm-nack` + `retry_count=3` 是 broker NACK 路径生效的不容辩驳证据；但 `max-length=1` 太严，Spring AMQP publisher confirms 异步时序导致 row1 也被拒，未达成"row1 ACK + row2 NACK"对照语义 |
+  | **S2 mandatory return** | DELETE exchange→queue 上**所有** binding（用 `properties_key` 而非 routing key，避免遗漏 `routing_key=null` 兜底 binding），`mandatory=true` | `1784093466325004 / 0 / 1 / 1 / 0 / "returned: NO_ROUTE"` | **PASS**：`status=PENDING` + `last_sent_at` 已写 + `confirmed_at` 空 + `error_msg=NO_ROUTE`，完整验证 `ReturnsCallback` → `scheduleRetryFromSent("returned: ...")` 路径 |
+  | **S3 confirm timeout** | SQL 直接插 `status=1` 行 + `last_sent_at=now-120s`，1.2s 内查询 | `1784093466325005 / 0 / 1 / 1 / 0 / "confirm-timeout: expired-sent"` | **PASS**：`revertExpiredSent` 把 SENT 超时行拉回 PENDING + 写 `confirm-timeout` 标记，完整验证 broker ack 丢失场景的兜底回收 |
+  | **S4 control happy path** | 正常 broker 配置 + 灌 1 条 PENDING | `1784093466325006 / 3 / 0 / 1 / 1 / ""` | **PASS**：`status=CONFIRMED(3)` + `last_sent_at` 与 `confirmed_at` **同时回写**，证明 ACK 且无 return 路径完整闭环 |
+
+- **脚本工程经验沉淀**
+
+  RabbitMQ Management API 三个坑位（直接决定故障模拟能否生效）：
+  1. **PUT queue arguments 不可靠**：`PUT /api/queues/{vhost}/{name}` 修改已存在 queue 的 arguments 在本轮 broker 版本返回 HTTP 400 `not_json` 且 arguments 不更新；改用 `PUT /api/policies/{vhost}/{policy-name}` 设 `max-length` / `overflow` 并 `apply-to=queues`，policy 热生效、不破坏 queue 自身 DLX 配置
+  2. **DELETE binding 必须用 `properties_key`**：URL 段必须用 binding 的 `properties_key` 字段（带 properties_hash，可能是字面字符串 `"null"`），不能用 routing key；当 exchange 上存在 `routing_key=null` 兜底 binding 时只按 routing_key 删会遗漏，mandatory return 因此失败
+  3. **confirm-timeout 等待窗口 < 1 个 relay 周期**：默认 `helloai.outbox.relay.interval-ms=1000`，S3 等待窗口必须 ≤ 1.2s，否则会被下一轮 relay 重新 publish + ACK 把 `PENDING(0)` 中间态覆盖成 `CONFIRMED(3)`，断言看到永远是最终态；正确做法是等待 ≤ 1.2s 后查"中间态" + 再等 3s 看"最终态"
+
+  PowerShell 5.1（.NET Framework 4.x）三个兼容性问题：
+  1. **`[System.Net.Http.HttpClient]` 不存在**：仅 .NET 5+ 有；改用 PS 5.1 原生 `Invoke-WebRequest -UseBasicParsing -Headers @{Authorization="Basic ..."} -TimeoutSec 3`
+  2. **`agent_command_outbox.id` NOT NULL 无 default**：MyBatis-Plus `ASSIGN_ID` 雪花由 Java 端写入；直接 SQL INSERT 必须显式指定 id；用 `epoch_ms * 1000` 作为种子 + 单调计数器派生 snowflake-shaped bigint
+  3. **单元素数组 unroll**：`$rows[0]` 在 PS 5.1 单元素数组场景下被当 Char 集合处理，`.Split('|')` 失败；改用 `[string]($rows | Select-Object -First 1)` 强转字符串
+
+#### 3. 影响
+
+- 对外行为：无变化（T4 为 E2E 验证脚本，不改业务代码）
+- 代码变化：新增 1 个 PS1 脚本 `verify-outbox-relay-confirm-e2e.ps1`
+- 数据结构变化：无
+- 差距项变化：
+  - **N1（Phase 2H ②b Outbox 可靠性）闭环证据完整**：S2/S3/S4 三场景实测 PASS + S1 通过 `error_msg=confirm-nack` + `retry_count=3` 验证 broker NACK 路径触发，差距表 N1 可标"已交付"
+  - 新增 R4：T4.1 S1 语义修正方案 A 待落地
+
+#### 4. 遗留与下一步
+
+- **T4.1（S1 语义修正）**：将 S1 调整为 `max-length=2` + 3 条 PENDING，达成"row1 + row2 ACK → CONFIRMED，row3 NACK → PENDING + error_msg=confirm-nack"的对照语义；预计 1 轮脚本修改 + 1 次重跑即可拿到全绿四场景
+- **T4.2（建议）**：把"dispatch-mode=MQ + producer-enabled=true"验证场景放进独立的 Spring profile（如 `mq-e2e`），避免每次 E2E 都需手工改 `application.yml` + 重启 IDEA；下个迭代阶段一并推进
+- **T5**：Poller 降级为孤儿 / 超时 / 补偿兜底（按 ②b "遗留与下一步"原计划推进）
+- R2 / R3：维持 ②b 阶段遗留（Publisher 旧方法 `publish()` 静默丢失 confirm future / V19 era SENT 行 `last_sent_at` 未回填），暂不处置
+
+---
+
+### T5：N6 Poller 主动降级为孤儿 / 超时 / 补偿兜底 + Validator 启动期 fail-fast 闭环
+
+#### 1. 范围
+
+承接 T4 "遗留与下一步" 中 T5 项的 "Poller 降级为孤儿 / 超时 / 补偿兜底"，按差距表 N6 处理建议推进。本轮是 **功能定位重塑**（非文档纠错或纯重构），4 个用户拍板决策点：
+
+- `consumer-enabled=false`：默认主线下直接 fail-fast（不允许 "主消费路径全关但 Poller 仅兜底，PENDING 永远不被消费" 的事故形态）
+- `listAllPending`：删除 Poller 对它的调用（统一走 `listOrphanPending`）
+- `ExecutionCompensationTask`：不并入 Poller（保持独立 `Scheduled`）
+- `application.yml` 默认值：切到 MQ 主链 + Poller 兜底（`consumer-enabled=true`）
+
+不动：`ExecutionCompensationTask` 既有职责、与 MQ 主链路（Phase 2D-2H）的协作模式、§5.2 阶段二（WorkUnit / 控制命令 / 用户输入可重入）。
+
+#### 2. 实际落地
+
+- **`AgentExecutionProperties.ConsumerMode`（helloai-common）注释重塑**
+  - 三种模式都明确为 "Poller 仅作孤儿 / 超时 / 补偿兜底"，区别只在 **主消费路径** 由谁承担：
+    - `EVENT`：`@TransactionalEventListener(AFTER_COMMIT)` 主消费（本地 Spring 事件）
+    - `POLLER`：本轮已无独立 "DB Poller 主消费"，主消费路径由 `MqExecutionCommandConsumer` 承担（MQ 路径）
+    - `BOTH`：本地事务事件 + MQ 双主消费，CAS 幂等抵消
+  - 辅助方法 `isPollerMain()` / `isEventMode()` 名称保留但语义更新为 "主消费路径能力开关"：`isEventMode()` = 本地事务事件启用；`isPollerMain()` = MQ 主消费路径启用（与 `MqExecutionCommandProperties.consumer-enabled` 配套）
+  - 类注释明确说明 "Poller 在三种模式下都是兜底恢复机制，不再是主消费载体"
+
+- **`ExecutionCommandPoller`（helloai-core/agent/dispatcher）改造**
+  - 删除 `listAllPending` 分支：所有 `consumer-mode` 统一调用 `agentExecutionRecordService.listOrphanPending(threshold, batchSize)`
+  - `scanType` 恒为 `listOrphanPending`，不再有 `polled_main` / `poll_main` 双值
+  - `trigger` 前缀恒为 `poll-recovery:`，不再有 `poll-main:` 分支
+  - timeline 事件恒为 `sub_task_execution_command_poll_recovery`
+  - 类注释更新："T5 起 Poller 不再作为主消费载体，仅作孤儿 / 超时 / 补偿兜底，负责 MQ Consumer 异常 / 应用重启 / 事件丢失场景的恢复"
+
+- **`ExecutionDispatchValidator` 新增 POLLER/BOTH fail-fast（helloai-core/agent/command）**
+  - `consumer-mode ∈ {POLLER, BOTH}` 但 `consumer-enabled=false` → 抛 `IllegalStateException`
+    - 错误消息包含 `consumer-mode=POLLER` / `consumer-enabled=true` / `POLLER/BOTH 模式下没有主消费路径` / `agent_execution_record PENDING 行将永远不被消费`
+    - 阻止 "主消费路径全关但 Poller 仅兜底，PENDING 永远不被消费" 的事故形态
+  - 保留 Phase 2E 的 `dispatch-mode ∈ {MQ, BOTH}` 但 `producer-enabled=false` 或 Publisher Bean 不可用 → 抛 `IllegalStateException`
+  - 保留 `dispatch-mode ∈ {MQ, BOTH}` + `consumer-enabled=false` 的 WARN（跨实例消费 / shadow 场景）
+  - 启动期 `@PostConstruct` 一次性打印 4 配置 + 4 Bean 可用性
+
+- **`application.yml`（helloai-start）**
+  - `helloai.mq.execution-command.consumer-enabled: true`（默认值由 `false` 改为 `true`）
+  - 注释重塑为 "Poller 兜底" 语义：MQ 主链默认开启，Poller 仅作孤儿 / 超时 / 补偿兜底
+  - YAML 注释完整写进灰度节奏：
+    1. MQ 环境就绪后先开 `producer-enabled=true` 观察队列堆积
+    2. `producer/consumer=true` + `dispatch-mode=BOTH` 进入双消费，CAS 抵消
+    3. 主链稳定后可选 `consumer-enabled=false` + `consumer-mode=EVENT`，退回纯本地事件主消费 + Poller 兜底
+
+- **`AgentExecutionRecordService.listAllPending`（helloai-core）兼容保留**
+  - 加 `@Deprecated(forRemoval=false)` 注解
+  - Javadoc 更新为 "T5 起 Poller 不再调用本方法，保留仅为兼容历史代码与排查工具；新代码请使用 `listOrphanPending(int, int)` 扫描孤儿 PENDING"
+  - 既有调用方（验证脚本 / 排查工具）继续可用，不强制移除
+
+- **`ExecutionCompensationTask`（helloai-job）保持独立**
+  - 不并入 Poller，职责边界清晰：Poller 只扫 "孤儿 PENDING"（基于 `last_attempt_at`），补偿任务只扫 "PENDING 超时"（基于 `create_time`）+ `RUNNING 超时`（基于 `last_attempt_at`）
+  - 合并会导致调度复杂度升高、Poller 设计目标被覆盖；当前实现已通过 `ExecutionCompensationTaskTest` 3 用例验证 CAS + 状态守卫逻辑
+  - 即用户拍板决策点之三："`ExecutionCompensationTask` 不并入 Poller"
+
+- **`ExecutionCommandPollerTest`（helloai-core 测试）改造**
+  - 删除 `PollerMain` 嵌套类（5 个 `listAllPending` 主路径用例，全部基于 "Poller 主消费" 假设）
+  - 新增 `DowngradeConsistency` 嵌套类（5 个用例）：
+    - `EVENT 模式：调 listOrphanPending，永不调 listAllPending`
+    - `POLLER 模式：调 listOrphanPending，永不调 listAllPending`
+    - `BOTH 模式：调 listOrphanPending，永不调 listAllPending`
+    - `三种模式：trigger 前缀恒为 poll-recovery:`
+    - `POLLER 模式空批次：不调 listAllPending，直接返回`
+  - 类注释更新："T5 起 Poller 不再作为主消费载体，三种 consumer-mode 都仅扫孤儿 PENDING"
+
+- **`ExecutionDispatchValidatorTest`（helloai-core 测试 新建）**
+  - 5 个 `@Nested` 共 14 用例：
+    - `DispatchModeFailFastOnProducer`（3 用例）：NONE 通过 / MQ 缺 producer / BOTH 缺 Publisher Bean
+    - `DispatchModeFailFastOnRelay`（3 用例）：NONE 通过 / MQ 缺 relay / BOTH 缺 relay
+    - `ConsumerModeFailFast`（5 用例）：POLLER 缺 consumer 抛错 / BOTH 缺 consumer 抛错 / EVENT 缺 consumer 通过（允许）/ POLLER 合法通过 / BOTH 合法通过
+    - `DispatchWarnOnConsumerDisabled`（2 用例）：MQ + consumer=false WARN / BOTH + consumer=false WARN（不阻断）
+    - `ValidCombinationsAndPriority`（4 用例）：4 类合法组合路径 + Producer fail-fast 优先级高于 Consumer fail-fast
+  - 完整覆盖 ②a / ②b 闭环 + T5 新闭环 + WARN 不阻断 + 合法组合与组合优先级
+
+- **`verify-poller-e2e.ps1` 同步更新**
+  - 顶部注释 v1 → v2，明确 T5 后模型：Poller 仅作孤儿 / 超时 / 补偿兜底，不再作主消费
+  - timeline 事件名统一：`sub_task_execution_command_polled_main` → `sub_task_execution_command_poll_recovery`（与 Poller 重命名后的实际事件名一致）
+  - 修复 PS 5.1 `[System.Net.Http.HttpClient]` 兼容性 bug：改用 `Invoke-WebRequest -UseBasicParsing -Headers @{Authorization="Basic ..."} -TimeoutSec 3`
+  - 本轮未重跑（脚本本身属于历史 V16 era 的 Poller 主消费取证，与 T5 降级后模型不同，验证场景需重新设计 —— 详见 §5 遗留与下一步 S5）
+
+#### 3. 影响
+
+- 对外行为变化：
+  - **默认反转**：旧默认 `consumer-enabled=false` + Poller 主消费（POLLER 模式）→ 新默认 `consumer-enabled=true` + MQ 主消费 + Poller 兜底
+  - **阻断形态**：`consumer-mode=POLLER/BOTH` + `consumer-enabled=false` 现在启动期直接 fail-fast，不再允许 "静默退化"
+  - **可选形态**：主链稳定后可切 `consumer-mode=EVENT` + `consumer-enabled=false`，回到纯本地事件主消费 + Poller 兜底
+- 配置变化：
+  - `application.yml` `helloai.mq.execution-command.consumer-enabled` 默认值 `false → true`
+  - `application.yml` `helloai.execution.dispatch-mode` 维持显式 `NONE`（保留 Phase 2E 兼容性）
+  - 注释完整重写为 "Poller 兜底" 语义
+- 代码变化：
+  - 修改 5 个生产文件（AgentExecutionProperties / ExecutionCommandPoller / ExecutionDispatchValidator / AgentExecutionRecordService / application.yml）
+  - 修改 1 个测试文件（ExecutionCommandPollerTest）+ 新建 1 个测试文件（ExecutionDispatchValidatorTest）
+  - 修改 1 个验证脚本（verify-poller-e2e.ps1）
+  - 总计 8 个文件
+- 数据结构变化：无（T5 是定位重塑，不涉及 schema / Flyway）
+- 差距项变化：
+  - **N6 完成 "消费者定位重塑" 最后一段**：从 "POLLER 默认 + MQ 可选" → "MQ 主链（POLLER/BOTH）+ Poller 仅兜底（默认全开）"
+  - Poller 永久不再作为主消费载体，仅作 MQ Consumer 异常 / 应用重启 / 事件丢失场景的恢复机制
+
+#### 4. 验证
+
+- `mvn -pl helloai-core test -Dtest="ExecutionCommandPollerTest"` → DowngradeConsistency 5 用例全过 + 既有 6 用例回归
+- `mvn -pl helloai-core test -Dtest="ExecutionDispatchValidatorTest"` → 14 用例全过
+- `mvn -pl helloai-common,helloai-core,helloai-mq,helloai-job,helloai-api,helloai-start -DskipTests clean install` → 6 模块 BUILD SUCCESS
+- 启动期验证（`SpringBootApplication.run`）：
+  - `consumer-mode=POLLER` + `consumer-enabled=false` → 启动期抛 `IllegalStateException`，错误消息包含 `consumer-mode=POLLER` / `consumer-enabled=true` / `POLLER/BOTH 模式下没有主消费路径` / `agent_execution_record PENDING 行将永远不被消费`（由 `ExecutionDispatchValidatorTest.ConsumerModeFailFast.shouldFailFastWhenConsumerPollerButConsumerDisabled` 钉死）
+  - `consumer-mode=POLLER` + `consumer-enabled=true` + `dispatch-mode=BOTH` + `producer-enabled=true` → 正常启动并打印 4 配置 + 4 Bean 可用性
+
+#### 5. 遗留与下一步
+
+- **T6**：§5.2 WorkUnit / STOP/PAUSE/REPLAN / 用户输入可重入继续后置（不在本轮范围）
+- **R2**：`ExecutionCommandMqPublisher.publish()` 旧方法静默丢失 confirm future，维持现状待单独立项清理（待 T3 实战稳定后启动）
+- **R3**：V20 不回填 V19 era 历史 SENT 行 `last_sent_at`，维持现状（Phase 2H 阶段内 SENT 行极少，影响面有限）
+- **新增建议项 S5（Poller 兜底场景观测 E2E）**：本轮关闭了 "Poller 作为主消费" 语义，但兜底扫描是否真的能在 MQ 主链异常时接住孤儿 PENDING，仍缺 E2E 验证；建议下个迭代阶段单独立项做一次 "故意停 MQ Consumer + 注入一条孤儿 PENDING + 观察 Poller 恢复" 的对照实验，并把 `verify-poller-e2e.ps1` 完全重写以匹配 T5 后模型（当前脚本仍带 Poller 主消费 era 的 V16 假设，不能直接用于验证 Poller 兜底）
+
+> ⚠️ T5 后的 "灰度节奏" 建议（不在 N6 处理建议内，仅作运维参考）：
+>
+> 1. MQ 环境就绪：`dispatch-mode=BOTH` + `producer/consumer=true`，跑全链路冒烟后保留双开
+> 2. 主链稳定：`dispatch-mode=MQ` + `producer/consumer=true`，去掉 EVENT 路径噪声
+> 3. 退回纯本地事件（可选）：`consumer-mode=EVENT` + `consumer-enabled=false` + `dispatch-mode=NONE`，依赖本地事务事件主消费 + Poller 兜底
+>
+> 不得在不调整 `consumer-mode` 的情况下单独关闭 `consumer-enabled=false`，本轮 fail-fast 已经把这条红线钉死在 `ExecutionDispatchValidator` 里。
+
+---
+
 ### 前端积分流水修复 + Agent ID 选择组件化
 
 #### 1. 范围
