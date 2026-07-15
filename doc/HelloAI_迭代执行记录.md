@@ -520,7 +520,7 @@ mvn test -pl helloai-job -Dtest="ExecutionCompensationTaskTest"
 
 ---
 
-### 2026-07-13 Phase 2A N6 DB Poller 落地 — §5.1 阶段一收官
+### 2026-07-13 Phase 2A N6 DB Poller 落地 — §5.1 主链已跑通，E2E 已验证，当前处于可靠性收尾窗口
 
 #### 1. 范围
 
@@ -590,13 +590,14 @@ mvn test -pl helloai-job -Dtest="ExecutionCompensationTaskTest"
 
 #### 6. 遗留
 
-- §5.1 阶段一 四项工作全部落地完成：
+- §5.1 的执行主链基础能力已落地，但可靠性收尾尚未结束：
   - ✅ DB Poller 消费载体（本轮）
   - ✅ SubTaskExecutionService 编排职责削薄（上一轮）
   - ✅ ExecutionResultHandler 唯一执行结果入口（早前轮）
   - ✅ ExecutionCommand 幂等 / 补偿 / 防覆盖（早前轮）
-- 下一步可推进架构设计参考 §5.2 阶段二：工作单元显式建模 + 控制命令层（STOP/PAUSE/REPLAN）+ 用户输入可重入
-- 当前 Poller 在主路径之外独享调度线程，Poller 自身故障不会影响主路径
+- MQ 主链虽已完成 Phase 2G E2E 冒烟验证，但 Outbox Confirm / Retry、失败可恢复验证与 Poller 兜底职责重定位仍未完成。
+- 后续按依赖顺序推进：Phase 2H ②a Outbox 最小闭环 → ②b Publisher Confirm / Retry → RabbitMQ 失败可恢复 E2E → Poller 降级；§5.2 阶段二后置。
+- 当前 Poller 保留为现行消费载体，待可靠投递闭环稳定后再降级为孤儿 / 超时 / 补偿兜底。
 
 ---
 
@@ -604,7 +605,7 @@ mvn test -pl helloai-job -Dtest="ExecutionCompensationTaskTest"
 
 #### 1. 范围
 
-- §5.1 阶段一收官后，进入 §5.2 阶段二之前，先把"消费者"代码从 service/ 根目录剥离，对齐 CODE_STYLE §15.1「helloai-core/agent/mqconsumer/」子包规范
+- §5.1 主链基础能力落地后、在 §5.2 阶段二启动前，先把"消费者"代码从 service/ 根目录剥离，对齐 CODE_STYLE §15.1「helloai-core/agent/mqconsumer/」子包规范
 - 纯结构调整：5 个文件物理位置变更 + import 改写，**业务逻辑零变化**
 - 用户决策点：先按"修法 1"最小代价路线执行（不迁 ExecutionCommandPoller，也不动 service/ 子域拆分）
 
@@ -1143,6 +1144,61 @@ DB 验证：
   - `MessageDeduplicationService.markConsumed` 的 PK 用 `System.nanoTime()`，高并发下撞值风险，建议切到 Snowflake ID 生成器
   - `MqExecutionCommandConsumer.onMessage` 在 `tryConsumeEnhanced` 返回 true 时仍然 NACK→DLX；区分"幂等跳过"与"业务失败"，前者应该 ACK 而不是 NACK（否则 DLX 会堆积大量"重复消息"，干扰真实失败信号）
   - `login-raw.ps1` 密码仍写错（`helloai123`），同步成 `admin123`（不在本轮范围，单独立一个文档 / 脚本维护轮）
+
+---
+
+### 2026-07-15 Phase 2H N1 Outbox 最小闭环（②a）
+
+#### 1. 范围
+
+- 按 N1 与架构设计参考 §5.1 的拆步方案，先落地 `ExecutionCommand -> agent_command_outbox -> OutboxRelayTask -> RabbitMQ` 的最小闭环。
+- `dispatch-mode=MQ/BOTH` 时，执行命令对应的 `agent_execution_record` 与 Outbox 行在同一事务内写入；`NONE/EVENT` 路径保持原有语义不变。
+- 明确隔离两类生命周期：`agent_execution_record` 只表示执行生命周期，`agent_command_outbox` 只表示 MQ 投递生命周期；本轮不把投递状态字段塞入执行记录，也不把普通投递重试噪声写入 `task_timeline`。
+- 本轮只完成 ②a，不提前实施 ②b Confirm/Retry、T4 失败可恢复 E2E、T5 Poller 降级或 §5.2 阶段二。
+
+#### 2. 实际落地
+
+- **Flyway V19：`V19__agent_command_outbox.sql`**
+  - 新建独立 `agent_command_outbox` 表，与既有 `agent_outbox_event`（SubTask 状态变更事件）分离，避免不同 payload / routing 语义互相扫描。
+  - `aggregate_type` 固定为 `EXECUTION_COMMAND`；payload 使用 JSONB；本轮状态为 `PENDING / SENT / FAILED` 三态。
+  - 保留 `retry_count`、`next_retry_at`、`error_msg`，并补齐 eventId 唯一索引、PENDING 扫描索引与状态审计索引。
+
+- **Outbox 基础对象（helloai-common / helloai-core）**
+  - 新增 `AgentCommandOutboxStatus`、`OutboxAggregateType` 与 `AgentCommandOutboxRelayProperties`。
+  - 新增 `AgentCommandOutboxEvent`、`AgentCommandOutboxEventMapper` 与 `AgentCommandOutboxService`。
+  - `AgentCommandOutboxService` 提供 5 个最小方法：`createPending`、`listReadyForRelay`、`markSent`、`markFailed`、`markFinalFailed`。
+  - `createPending` 依赖外层事务；状态更新按 `status=PENDING` 条件保护，失败重试使用应用侧指数退避。
+
+- **`ExecutionCommandService` 接入 Outbox**
+  - `dispatch-mode=MQ/BOTH` 改为在创建执行记录的同一事务内写入 Outbox PENDING 行，不再由业务服务直接调用 Publisher。
+  - `dispatch-mode=NONE/EVENT` 保持原有只落库 / 发布本地事件语义。
+  - `ExecutionCommandMqPublisher` 本轮仍作为 Relay 使用的底层发送器；Publisher 角色抽象与进一步下沉后移至 ②b（T2.4-Deferred）。
+
+- **`OutboxRelayTask`（helloai-job）**
+  - 使用 `@Scheduled` 默认每 `1000ms` 扫描，单批默认 `50` 行；通过 Redis `SETNX` 锁（30 秒 TTL）保证多实例串行 Relay。
+  - 读取到期 PENDING 行，反序列化 payload 后调用 `ExecutionCommandMqPublisher`；调用未抛异常则标记 `SENT`，失败则回写 `retry_count / next_retry_at / error_msg`，超过阈值标记 `FAILED`。
+  - ②a 的 `SENT` 仅表示当前发送调用成功返回，不代表 Broker Confirm；`CONFIRMED` 与 Confirm-aware Retry 留到 ②b。
+  - payload 反序列化失败按不可重试的终态错误处理，直接标记 `FAILED`，不污染业务时间线。
+
+#### 3. 影响
+
+- 数据结构：新增 V19 `agent_command_outbox`；未向 `agent_execution_record` 增加 MQ 投递状态字段。
+- 状态归属：Broker 投递、重试节奏与最终失败只回写 Outbox；超过阈值或最终失败是否补业务级 timeline，留待 ②b 的告警 / 业务事件设计统一处理。
+- 默认行为：默认 `dispatch-mode=NONE` 不受影响；Poller 当前仍保留为现行消费载体，待可靠投递闭环稳定后再调整职责。
+
+#### 4. 验证
+
+- `ExecutionCommandServiceDispatchTest`：4 个 dispatch-mode 用例全部通过，验证 NONE / EVENT / MQ / BOTH 分支行为。
+- `ExecutionCommandServiceTest`：5 个用例全部通过，验证 MQ 路径改为写 Outbox。
+- `OutboxRelayTaskTest`：5 个用例全部通过，覆盖发送成功、可重试失败、终态失败、空批次与 payload 反序列化失败。
+- 本轮共 14 个单元测试通过；RabbitMQ Confirm / 失败可恢复 E2E 不在本轮验证范围，Phase 2G 已完成的主链 E2E 证据保持有效。
+
+#### 5. 遗留与下一步
+
+- ②b：补 `CorrelationData`、publisher confirms、`CONFIRMED` 状态与 Confirm-aware Retry，并明确 `FAILED / CONFIRMED / next_retry_at / retry_count` 的状态机边界。
+- T4：在真实 RabbitMQ 环境跑失败可恢复 E2E，验证的不只是“能发”，而是 Broker 异常后可重试、可确认、可终态收敛。
+- T5：可靠投递稳定后，将 Poller 从默认主消费降为孤儿 / 超时 / 补偿兜底，保留作为 MQ 主链异常恢复机制。
+- T6：§5.2 的 WorkUnit、STOP/PAUSE/REPLAN、用户输入可重入继续后置。
 
 ---
 

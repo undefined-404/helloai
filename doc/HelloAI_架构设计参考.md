@@ -350,13 +350,15 @@ TCC 在本项目中更多作为最终一致与兜底思路参考，而不是逐�
 - 强化 ExecutionCommand 幂等、补偿、晚到结果防覆盖
 - **Phase 2D / 2E / 2F 已完成项**：MQ 主链路的“生产→消费”椅骨已全部接上，默认零行为变化：`MqExecutionCommandConsumer` + `ExecutionCommandMqPublisher` 共用 `ExecutionCommandConsumer` 接口；topology（`EXECUTION_COMMAND_QUEUE` / `EXECUTION_COMMAND_EXCHANGE` / binding 与 DLX 复用）由 `RabbitMQConfig` 统一声明；由 `AgentExecutionProperties.dispatch-mode`（`NONE / EVENT / MQ / BOTH`，默认 `NONE`）控制分发，`MqExecutionCommandProperties.{producer-enabled, consumer-enabled}` 分别控制 Publisher / Consumer 注册，支持独立灰度；`ExecutionDispatchValidator` 启动期 fail-fast。**Phase 2F 修正两个阻断性问题：**（a）Publisher 将投递挂到 `TransactionSynchronization.afterCommit()`，与本地事件 `@TransactionalEventListener(AFTER_COMMIT)` 语义对齐，避免“事务未提交先发消息”与“回滚后消息已发”；（b）Publisher 改为显式 `ObjectMapper.writeValueAsBytes` + `rabbitTemplate.send(Message)`，与消费端 `readValue(byte[])` 完全对称，不依赖默认 SimpleMessageConverter，也不侵入全局 `RabbitTemplate` converter。下一轮路线拍板见下方独立段落。
 
-**下一轮路线拍板（MQ 主链收尾，3 阶段严格依赖，不并列）**：
+**MQ 主链路线拍板（按差距表 N6 与迭代记录 Phase 2G 状态更新；①②③ 严格依赖，不并列）**：
 
-1. **E2E 冒烟**（前提：具备 RabbitMQ 环境）：开 `dispatch-mode=BOTH` + `producer-enabled=true` + `consumer-enabled=true`，重点验证 Redis + DB 双层幂等对“本地事件 × MQ”双消费的抵消能力，确认 MQ 主链路真实可跑；
-2. **生产端可靠投递**（前提：① 已通过）：Publisher 接入 `CorrelationData` / publisher-confirms 回执，与 Outbox 可靠投递层一同考虑回执失败重发策略；
-3. **Poller 职责重定位 + 消费侧回写链路改造**（前提：①② 已稳定）：Poller **从“主消费载体”降级为孤儿 / 超时 / 补偿兜底**（不切除，作为 MQ 主链异常时的恢复机制保留）；`AsyncExecutionResultConsumer` 回写链路改造后置。
+- ✅ **① E2E 冒烟**（已通过）：`dispatch-mode=BOTH` + `producer-enabled=true` + `consumer-enabled=true` 跑通，Redis + DB 双层幂等对 "本地事件 × MQ" 双消费的抵消能力得到验证；详细证据见差距表 N6 与迭代记录 Phase 2G
+- ⏳ **② 生产端可靠投递**（前提：① 已通过 ✅）—— **拆为两小步**：
+  - **②a 最小闭环** —— `ExecutionCommand` 与 Outbox 同事务写入，`OutboxRelay` 负责 MQ 投递（替代业务服务直接调用），`ExecutionCommandMqPublisher` 退化为 `OutboxRelay` 使用的底层发送器；outbox 表维护 `PENDING / SENT / FAILED` 三态
+  - **②b Confirm / Retry** —— 接入 `CorrelationData` + publisher-confirms 回执；outbox 状态机扩为 `PENDING / SENT / CONFIRMED / FAILED / retry_count / next_retry_at`；新增 `OutboxCompensationTask` 扫描重发；跑一轮 RabbitMQ E2E，从 "能发" 验证到 "失败可恢复"
+- 🔒 **③ Poller 职责重定位 + 消费侧回写链路改造**（前提：②a ②b 已稳定）：Poller **从 "主消费载体" 降级为孤儿 / 超时 / 补偿兜底**（不切除，作为 MQ 主链异常时的恢复机制保留）；`AsyncExecutionResultConsumer` 回写链路改造后置
 
-> ❗ 不得跳阶推进；尤其不得在 E2E 未跑前推 Outbox，或在生产端可靠性未就绪前变动 Poller 当前职责。
+> ❗ 不得跳阶推进；尤其不得在 ②a 未稳定前提前到 ②b，或在 ②b 未稳定前推进 Poller 职责重定位，或在可靠性收尾窗口未关闭前提前启动 §5.2 阶段二。MQ 投递生命周期（**outbox** 表）与执行生命周期（**agent_execution_record**）严格分层，不混字段；技术噪声（broker nack / 重发节奏）只动 outbox 表，超阈值或最终失败才落一条业务级 timeline。
 
 ### 5.2 第二阶段：补任务运行时能力
 

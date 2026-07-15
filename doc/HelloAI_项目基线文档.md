@@ -41,7 +41,7 @@
 以下内容即使在历史文档中被展开描述，也默认属于目标态、部分落地或待补能力，不能直接按“已交付”理解：
 
 - 工作流模板与 Team 编排
-- 独立 MQ 版执行命令消费载体（DB Poller 主消费已交付；MQ Consumer / Publisher 骨架均已交付且默认关闭；可通过 `dispatch-mode` + `producer-enabled` / `consumer-enabled` 独立灰度；MQ 主链 E2E 投产与 Poller 兜底切除仍待 RabbitMQ 环境 ready 下一轮）
+- 独立 MQ 版执行命令消费载体（DB Poller 主消费已交付；MQ Consumer 骨架已交付；`ExecutionCommandMqPublisher` 与 `MqExecutionCommandConsumer` 在 `dispatch-mode=BOTH + producer/consumer=true` 下 E2E 已验证；详见差距表 N6 与迭代记录 Phase 2G；当前**处于可靠性收尾窗口**：下一阶段是 Outbox 一体化与 Publisher Confirm，Poller 仍保留）
 - `credential_vault` 的完整轮换、迁移与权限模型
 - 浏览器型 Agent 的真实接入链路
 - 多 Provider 的完整配置复用与平台内执行统一抽象

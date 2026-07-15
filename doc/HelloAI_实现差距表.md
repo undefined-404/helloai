@@ -39,12 +39,12 @@
 
 | 编号 | 主题 | 当前状态 | 差距定义 | 处理建议 |
 |---|---|---|---|---|
-| N1 | Outbox / 命令可靠投递底座 | 部分落地 | `AgentOutboxService` 已承担事务性消息发布基础能力，Outbox 思路已进入主线；执行命令已完成 DB Poller 主消费载体（`consumer-mode=POLLER` 默认），但尚未形成“执行命令 → Outbox → MQ → 独立 Consumer”的可靠投递闭环 | 继续补功能 |
+| N1 | Outbox / 命令可靠投递底座 | 最小闭环已落地（②a） | `AgentOutboxService`（SubTask 状态变更事件）已具备事务性 Outbox 能力；**Phase 2H ②a** 新增 `agent_command_outbox` 表 + `AgentCommandOutboxService`（5 个最小方法：createPending / listReadyForRelay / markSent / markFailed / markFinalFailed）+ `OutboxRelayTask`（helloai-job，Redis 锁 + 应用侧指数退避）+ `AgentCommandOutboxRelayProperties`（`enabled/interval-ms/batch-limit/max-retry/base-backoff-seconds`）。`ExecutionCommandService` 在 `dispatch-mode ∈ {MQ,BOTH}` 时改为同事务写 outbox，OutboxRelay 异步取行调 `ExecutionCommandMqPublisher` 真正投递；`aggregate_type` 固定 `EXECUTION_COMMAND` 防止后续统一 outbox 语义发散。本轮明确<em>不做</em>：publisher confirms / CorrelationData / CONFIRMED 状态机扩展 / per-event 熔断 / DLQ——属于②b | 继续补②b Broker Confirm + 状态机扩展，再推 T4 E2E 失败可恢复验证 |
 | N2 | 可配置工作流模板 | 未落地 | 缺模板表、模板管理、模板化调度入口与 Team 编排 | 后续独立迭代 |
 | N3 | MCP Server 工具集 | 已交付 | MCP SSE 主通道工具链已可用，已具备外部 Agent 最小执行闭环能力：`pullTasks/ack/claimSubTask/heartbeat/uploadArtifact/submitResult/reportBlocked/getAgentStatus`（其中 `submitResult` 对接统一回写入口，`reportBlocked` 记录阻塞原因证据链） | 保持现状 |
 | N4 | 心跳与在线判定 | 已交付 | 在线态三件套、在线计算态与巡检收敛已具备 | 保持现状 |
 | N5 | 熔断降级 | 已交付 | per-agent 熔断与同角色替补策略已具备 | 保持现状 |
-| N6 | 执行命令消费与结果回写 | MQ 主链路连通（E2E 已验证） | 已完成 DB Poller 主线化：`consumer-mode` 支持 `EVENT / POLLER / BOTH`，默认 `POLLER`；`ExecutionCommandService` 在 `EVENT/BOTH` 才发布本地事务事件，`POLLER` 仅落库 PENDING 命令；`ExecutionCommandPoller` 在 `POLLER/BOTH` 扫描全部 PENDING（主消费），在 `EVENT` 仅扫描孤儿 PENDING（兜底）；Poller 依赖抽象 `ExecutionCommandConsumer`，默认实现为 `LocalExecutionCommandConsumer.consume()`（Bean 常驻）。结果回写入口已收口为 `ExecutionResultHandler.handleReport(ExecutionResultReport)`，平台内执行链与外部 MCP `submitResult` 统一走该入口。Phase 2D 增 MQ Consumer 骨架；Phase 2E 完成生产端接入（`ExecutionCommandMqPublisher` + dispatch-mode + 双开关 + DispatchValidator fail-fast）；Phase 2F 修复事务时机与显式 JSON 序列化两个阻断性问题。**Phase 2G（2026-07-14）完成 E2E 冒烟：** `dispatch-mode=BOTH` + `producer/consumer=true` 下双路消费同时进入，实际只发生 1 次 `sub_task_llm_call_start/failed`，双消费被 DB CAS 层（`agent_execution_record.markRunning` + `subTask.startIfNeeded`）抵消；Redis 快路径 `mq:dedup:<eventId>` TTL 24h + DB `event_consumption_log`（V18 补表 + `ON CONFLICT (message_id, consumer)` 修复合唯一索引）双层幂等。E2E 顺手抓到 Phase 2E/2F 遗留的 3 个隐性 bug：`event_consumption_log` 表 DDL 漏写、`ON CONFLICT (message_id)` 与复合索引不匹配、`ExecutionCommandPoller` 在双 Consumer 实现下 Spring Bean 工厂报歧义。Poller 下一轮将主动降级为孤儿 / 超时 / 补偿兜底（保留作为 MQ 主链异常恢复机制），AsyncExecutionResultConsumer 改造后置 | 推② Publisher Confirm / Outbox 与③ Poller 降级，依赖本轮已验证的本地+MQ 双路幂等 |
+| N6 | 执行命令消费与结果回写 | MQ 主链路连通（E2E 已验证） + ②a Outbox 投递闭环已落地 | 已完成 DB Poller 主线化：`consumer-mode` 支持 `EVENT / POLLER / BOTH`，默认 `POLLER`；`ExecutionCommandService` 在 `EVENT/BOTH` 才发布本地事务事件，`POLLER` 仅落库 PENDING 命令；`ExecutionCommandPoller` 在 `POLLER/BOTH` 扫描全部 PENDING（主消费），在 `EVENT` 仅扫描孤儿 PENDING（兜底）；Poller 依赖抽象 `ExecutionCommandConsumer`，默认实现为 `LocalExecutionCommandConsumer.consume()`（Bean 常驻）。结果回写入口已收口为 `ExecutionResultHandler.handleReport(ExecutionResultReport)`，平台内执行链与外部 MCP `submitResult` 统一走该入口。Phase 2D 增 MQ Consumer 骨架；Phase 2E 完成生产端接入（`ExecutionCommandMqPublisher` + dispatch-mode + 双开关 + DispatchValidator fail-fast）；Phase 2F 修复事务时机与显式 JSON 序列化两个阻断性问题。**Phase 2G（2026-07-14）完成 E2E 冒烟：** `dispatch-mode=BOTH` + `producer/consumer=true` 下双路消费同时进入，实际只发生 1 次 `sub_task_llm_call_start/failed`，双消费被 DB CAS 层（`agent_execution_record.markRunning` + `subTask.startIfNeeded`）抵消；Redis 快路径 `mq:dedup:<eventId>` TTL 24h + DB `event_consumption_log`（V18 补表 + `ON CONFLICT (message_id, consumer)` 修复合唯一索引）双层幂等。E2E 顺手抓到 Phase 2E/2F 遗留的 3 个隐性 bug：`event_consumption_log` 表 DDL 漏写、`ON CONFLICT (message_id)` 与复合索引不匹配、`ExecutionCommandPoller` 在双 Consumer 实现下 Spring Bean 工厂报歧义。**Phase 2H ②a (2026-07-15)：** `ExecutionCommandService` 在 `dispatch-mode ∈ {MQ,BOTH}` 改为同事务写 `agent_command_outbox`（新表，aggregate_type 固定 `EXECUTION_COMMAND`），OutboxRelayTask 周期取行调 `ExecutionCommandMqPublisher` 真正投递；MQ 投递生命周期与执行生命周期在数据层彻底分离，详情见 N1。Poller 下一轮将主动降级为孤儿 / 超时 / 补偿兜底（保留作为 MQ 主链异常恢复机制），AsyncExecutionResultConsumer 改造后置 | 推②b Publisher Confirm + CorrelationData → T4 RabbitMQ E2E 失败可恢复验证 → T5 Poller 降级；T6 §5.2 后置 |
 | N7 | 健康检查改写 | 已交付 | Reconcile、离线重分配、兜底收敛已具备 | 保持现状 |
 | N8 | 网页版 AI 浏览器接入 | 未落地 | 只有枚举与预留，没有真实接入模块 | 后续独立迭代 |
 | N9 | Provider 配置与 ChatClient 复用 | 已交付 | Provider 配置入口已统一（`helloai.providers`）+ provider/model 解析已收口（`AgentProviderResolver`）+ `ProviderChatModelCache` 按 (provider, baseUrl, apiKey 指纹) 缓存 ChatModel 实例（避免每次 new DeepSeekChatModel）；`DeepSeekProviderChatClientFactory` 已接入缓存，SHA-256 指纹保证明文 API Key 不入 cache key | 保持现状 |
@@ -56,8 +56,9 @@
 ## 5. 当前建议优先级
 
 1. ~~先继续关闭文档失真项：D1、D2、D5、D6~~ ✅ 全部已关闭（2026-07-13）
-2. 再继续夯实执行链：N1、N6、N9、N10
+2. 再继续夯实执行链：N1 ②a 已落地（最小闭环）→ ②b Publisher Confirm / CorrelationData → T4 RabbitMQ 失败可恢复 E2E → T5 Poller 降级；N6 / N9 / N10 维持现状
 3. 最后推进产品化编排能力：N2、N8
+4. §5.2 后置（WorkUnit / STOP/PAUSE/REPLAN / 用户输入可重入）—— 等可靠投递与兜底职责收紧之后再开
 
 ---
 
