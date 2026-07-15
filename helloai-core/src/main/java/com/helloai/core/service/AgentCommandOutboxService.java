@@ -20,29 +20,37 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Phase 2H ②a 引入：
+ * Phase 2H ②a 引入 / Phase 2H ②b 扩展：
  * 执行命令 Outbox（{@code agent_command_outbox}）的 Service。
  *
  * <p><b>职责边界</b>：本 Service 只承载"执行命令 → MQ"的投递生命周期；
  * 与 {@link AgentOutboxService}（SubTask 状态变更通知）严格分层——
  * 不共用表、不共用枚举、不共用 Service。</p>
  *
- * <p><b>最小闭环 5 方法</b>（本轮范围，②a）：</p>
+ * <p><b>方法清单</b>：</p>
  * <ol>
  *   <li>{@link #createPending}：业务事务内写入 PENDING 行，{@code eventId} 与
  *       {@link ExecutionCommand#getEventId()} 对齐作为唯一索引防重投；</li>
  *   <li>{@link #listReadyForRelay}：Relay 任务按批拉取"到时间且未超阈值的 PENDING"行；</li>
- *   <li>{@link #markSent}：发送成功标记 SENT；</li>
+ *   <li>{@link #listExpiredSentForRetry}（②b 新增）：扫出 SENT 后超过 Confirm 超时窗口、仍未确认的行，
+ *       应对重启后 in-flight future 丢失的恢复；</li>
+ *   <li>{@link #markSent}（②b 收紧为二参）：发送成功标记 SENT 并写入 {@code last_sent_at}；</li>
+ *   <li>{@link #markConfirmed}（②b 新增）：broker ACK 回写 CONFIRMED；</li>
  *   <li>{@link #markFailed}：发送失败累计 {@code retry_count} 并按指数退避设置 {@code next_retry_at}，保持 PENDING；</li>
- *   <li>{@link #markFinalFailed}：超过 {@code maxRetry} 标记 FAILED 终结，不再扫描。</li>
+ *   <li>{@link #markFailedFromSent}（②b 新增）：SENT → PENDING 回退，用于 NACK / return / confirm-timeout；</li>
+ *   <li>{@link #markFinalFailed}：超过 {@code maxRetry} 标记 FAILED 终结，不再扫描；</li>
+ *   <li>{@link #markFinalFailedFromSent}（②b 新增）：SENT → FAILED 终态，与 {@code markFailedFromSent} 共同覆盖
+ *       "发送后失败"两路收尾。</li>
  * </ol>
  *
- * <p><b>本轮明确不做</b>：</p>
+ * <p><b>本轮明确不做</b>（②b 收口后的遗留）：</p>
  * <ul>
- *   <li>CAS claim：本轮 OutboxRelayTask 单实例 Redis 锁串行执行，不引入乐观锁 CAS；
- *       ②b publisher-confirms 引入后视并发模型再决定是否补 CAS；</li>
- *   <li>CONFIRMED 状态：本轮三态枚举只有 PENDING/SENT/FAILED；</li>
- *   <li>DLQ/告警：FAILED 终态仅记录 {@code error_msg}，由人工或后续告警通道处理。</li>
+ *   <li>Poller 降级为孤儿 / 超时 / 补偿兜底——T5 推进，本轮 Relay 仍是 MQ 主投递载体；</li>
+ *   <li>{@code OutboxCompensationTask} 独立调度——本轮直接复用 {@code OutboxRelayTask}，
+ *       不新增 Scheduled；</li>
+ *   <li>DLQ 与 per-eventId 业务级熔断——本轮未引入，FAILED 仅写 {@code error_msg} 等待后续告警通道；</li>
+ *   <li>CAS claim——本轮 Relay 单实例 Redis 锁串行执行，状态更新靠 {@code WHERE status=…} 悲观 CAS；
+ *       后续若开多副本并发扫描再考虑乐观锁。</li>
  * </ul>
  */
 @Slf4j

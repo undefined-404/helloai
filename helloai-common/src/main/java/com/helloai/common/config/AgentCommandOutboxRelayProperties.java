@@ -5,7 +5,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 /**
- * Phase 2H ②a 引入：
+ * Phase 2H ②a 引入 / Phase 2H ②b 扩展：
  * 执行命令 Outbox Relay 任务的可调参数。
  *
  * <p>本类是 {@code OutboxRelayTask}（helloai-job）的运行开关与节奏参数，
@@ -20,12 +20,16 @@ import org.springframework.stereotype.Component;
  *       batch-limit: 50                   # 单批扫描上限
  *       max-retry: 5                      # 单条 outbox 最多重试次数；超阈值标记 FAILED
  *       base-backoff-seconds: 2           # 失败后下次重试的指数退避基数（秒）
+ *       confirm-timeout-seconds: 30       # ②b：SENT 后超过该秒数未确认即视为超时，自动回退到 PENDING 重试
  * </pre>
  *
- * <p>本轮明确不做：<br>
- * (1) CONFIRMED 状态机扩展——属于 ②b publisher-confirms；<br>
- * (2) per-eventId 重试预算之外的"业务级熔断"——本轮未引入；<br>
- * (3) 分区/批量并行扫描——本轮单线程顺序执行；最小闭环不需要。</p>
+ * <p>历史明确不做：
+ * <ul>
+ *   <li>Poller 降级为兜底——T5 才推进，本轮 Relay 仍是 MQ 主投递载体；</li>
+ *   <li>{@code OutboxCompensationTask} 新增调度——本轮直接复用 {@code OutboxRelayTask}，不引入新的 Scheduled；</li>
+ *   <li>DLQ 与 per-eventId 业务级熔断——本轮未引入；</li>
+ *   <li>分区/批量并行扫描——本轮单线程顺序执行；最小闭环不需要。</li>
+ * </ul>
  */
 @Data
 @Component

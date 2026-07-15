@@ -12,7 +12,7 @@ import java.time.OffsetDateTime;
 import java.util.Map;
 
 /**
- * Phase 2H ②a 引入：
+ * Phase 2H ②a 引入 / Phase 2H ②b 扩展：
  * 执行命令 Outbox 行实体（{@code agent_command_outbox}）。
  *
  * <p>本实体与 {@link AgentOutboxEvent}（SubTask 状态变更事件）严格分层——前者负责
@@ -27,10 +27,13 @@ import java.util.Map;
  *   <li>{@link #aggregateId}：业务聚合根 ID，即 {@code agent_execution_record.id}；</li>
  *   <li>{@link #payload}：{@code ExecutionCommandMqMessage} 的 JSON 序列化形式，
  *       与 {@code MqExecutionCommandConsumer.onMessage} 消费端 {@code objectMapper.readValue(byte[])} 对称；</li>
- *   <li>{@link #status}：PENDING / SENT / FAILED 三态，由
- *       {@link com.helloai.common.constant.AgentCommandOutboxStatus} 约束；</li>
+ *   <li>{@link #status}：PENDING / SENT / CONFIRMED / FAILED 四态（②a 三态，②b 新增 CONFIRMED），
+ *       由 {@link com.helloai.common.constant.AgentCommandOutboxStatus} 约束；</li>
  *   <li>{@link #nextRetryAt}：失败后下次可扫时间，按
  *       {@code baseBackoff * 2^retryCount} 指数退避；</li>
+ *   <li>{@link #lastSentAt}（②b 新增）：最近一次成功发送给 broker 的时间，
+ *       是 {@code listExpiredSentForRetry} 计算 Confirm 超时的依据；</li>
+ *   <li>{@link #confirmedAt}（②b 新增）：broker ACK 回写完成时间，写入即视作 CONFIRMED。</li>
  * </ul>
  */
 @Data
