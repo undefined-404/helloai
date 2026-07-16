@@ -90,6 +90,33 @@ Update them when:
 - a gap item is closed or changes state,
 - or the current round introduces a meaningful new implementation result.
 
+#### 6. Scripts must declare UTF-8 encoding to prevent CJK garbled output
+
+Any PowerShell (`.ps1`) or Linux shell (`.sh`) script written into this repository MUST declare the output encoding at the top of the file (right after the comment header, before any business logic). This applies to `verify-*.ps1`, `start-*.ps1`, `test-*.ps1`, e2e / smoke scripts, hook scripts, CI scripts, and any temporary verification script — no exceptions for "temporary" use.
+
+PowerShell (`.ps1`) mandatory header template:
+
+```
+# <script purpose>
+# Usage: .\xxx.ps1
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+```
+
+Linux shell (`.sh`) mandatory header template:
+
+```
+#!/usr/bin/env bash
+# <script purpose>
+export LANG=zh_CN.UTF-8
+export LC_ALL=zh_CN.UTF-8
+```
+
+Additional rules:
+
+- When a script sends a JSON body containing CJK text via `Invoke-WebRequest` / `curl`, write the body to a temp file as UTF-8 first and reference the file; do not rely on the console default encoding.
+- If garbled CJK appears on the console or in logs, check whether these header lines are missing before investigating other causes.
+
 ### Additional Notes
 
 - The repository also contains a Trae rule file at .trae/rules/鎵ц瑙勫垯.md.
