@@ -20,8 +20,11 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 import com.helloai.core.service.AgentService;
+import com.helloai.core.service.AgentDutyLeaseService;
 
 /**
  * AgentSelector 单元测试（v2.4 §4.10）。
@@ -40,6 +43,9 @@ class AgentSelectorTest {
     @Mock
     private CircuitBreakerRegistry circuitBreakerRegistry;
 
+    @Mock
+    private AgentDutyLeaseService agentDutyLeaseService;
+
     private AgentSelector agentSelector;
 
     @BeforeEach
@@ -47,7 +53,10 @@ class AgentSelectorTest {
         AgentDispatchProperties props = new AgentDispatchProperties();
         props.setPreferExternal(false);
         props.setRequireIdle(false);
-        agentSelector = new AgentSelector(agentService, circuitBreakerRegistry, props);
+        // 防御式默认 stub：仅在多候选 comparator 排序时被 dutyRank 调用，
+        // 单候选用例不会走到，用 lenient() 避开 STRICT_STUBS 下的 UnnecessaryStubbing。
+        lenient().when(agentDutyLeaseService.isOnDuty(anyLong())).thenReturn(false);
+        agentSelector = new AgentSelector(agentService, circuitBreakerRegistry, props, agentDutyLeaseService);
     }
 
     // ════════════════════════════════════════════════════════════
@@ -272,7 +281,7 @@ class AgentSelectorTest {
             policyProps.setPreferExternal(true);
             policyProps.setRequireIdle(true);
             policyProps.setForceAccessType(null);
-            policySelector = new AgentSelector(agentService, circuitBreakerRegistry, policyProps);
+            policySelector = new AgentSelector(agentService, circuitBreakerRegistry, policyProps, agentDutyLeaseService);
         }
 
         private Agent agentWith(Long id, Integer score,
@@ -320,7 +329,8 @@ class AgentSelectorTest {
             forceProps.setPreferExternal(false);
             forceProps.setRequireIdle(false);
             forceProps.setForceAccessType(AgentAccessType.API_KEY_LLM);
-            AgentSelector forceSelector = new AgentSelector(agentService, circuitBreakerRegistry, forceProps);
+            AgentSelector forceSelector =
+                    new AgentSelector(agentService, circuitBreakerRegistry, forceProps, agentDutyLeaseService);
 
             when(agentService.listByRole(AgentRole.EXECUTOR))
                     .thenReturn(List.of(cli, api));

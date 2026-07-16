@@ -318,6 +318,66 @@ public class McpMcpServer {
         return r;
     }
 
+    // ================================================================
+    // 9. checkIn（AgentHub V1 P0-A）
+    // ================================================================
+
+    @Tool(name = "checkIn", description = """
+            【何时使用】Agent 上线后声明“上班”，获取一份值班租约（需周期性 renew）。
+            【调用频率】每个会话一次；重复 checkIn 安全（旧 ACTIVE 租约会先被关闭为 CLOSED）。
+            【效果】写入 agent_duty_lease 一行 ACTIVE 记录，同时刷新心跳。
+            【Gotchas】
+            - 本工具 <b>不</b>改变 online_status / status 枚举，仅新增“值班态”事实。
+            - AgentSelector 会将“当前是否处于值班”作为软优先级最高一档（平手时值班 Agent 优先）。
+            - ttlMinutes 建议与 Agent 自身 renew 周期匹配，默认 30 分钟；到期后会被 DutyLeaseExpirationTask
+              自动翻为 EXPIRED，不会阀到商业逻辑。
+            【相关工具】checkOut、heartbeat
+            """)
+    public McpToolService.CheckInResult checkIn(
+            @ToolParam(description = "Agent ID（v2.4 §9.1 协议字段；M4 鉴权后会被服务端覆盖）", required = true) Long agentId,
+            @ToolParam(description = "工作模式（如 AUTO），可为空", required = false) String workMode,
+            @ToolParam(description = "最大并发子任务数，默认 1", required = false) Integer maxConcurrent,
+            @ToolParam(description = "租约有效期（分钟），默认 30", required = false) Integer ttlMinutes,
+            @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
+            @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
+        Long authAgentId = requireAuthId(sessionId, _sessionId);
+        if (agentId == null || !authAgentId.equals(agentId)) {
+            log.warn("MCP checkIn: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
+        }
+        agentId = authAgentId;
+        return mcpToolService.checkIn(agentId, workMode, maxConcurrent, ttlMinutes);
+    }
+
+    // ================================================================
+    // 10. checkOut（AgentHub V1 P0-A）
+    // ================================================================
+
+    @Tool(name = "checkOut", description = """
+            【何时使用】Agent 主动下线 / 会话结束时声明“下班”，关闭当前 ACTIVE 值班租约。
+            【调用频率】会话结束前一次；幂等（无 ACTIVE 租约时 closedCount=0）。
+            【效果】agent_duty_lease 中相关 ACTIVE 行翻为 CLOSED，close_reason 记录传入值。
+            【Gotchas】
+            - 本工具不直接重分配已 ASSIGNED 子任务；离岗补偿仍由
+              SubTaskDispatchService.redispatchAssignedTimeout 通过常规超时兜底完成。
+            - checkOut 后仍可 checkIn 重新上班；两次会话不共享 sessionId。
+            【相关工具】checkIn
+            """)
+    public McpToolService.CheckOutResult checkOut(
+            @ToolParam(description = "Agent ID（v2.4 §9.1 协议字段；M4 鉴权后会被服务端覆盖）", required = true) Long agentId,
+            @ToolParam(description = "关闭原因（推荐字段名 closeReason，如 shutdown / session_end / manual_close），可缺省", required = false) String closeReason,
+            @ToolParam(description = "兼容参数：旧字段名 reason，等同 closeReason", required = false) String reason,
+            @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
+            @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
+        Long authAgentId = requireAuthId(sessionId, _sessionId);
+        if (agentId == null || !authAgentId.equals(agentId)) {
+            log.warn("MCP checkOut: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
+        }
+        agentId = authAgentId;
+        // 优先 closeReason（主字段名），缺失时回退 reason（兼容旧客户端）
+        String effectiveReason = (closeReason != null && !closeReason.isBlank()) ? closeReason : reason;
+        return mcpToolService.checkOut(agentId, effectiveReason);
+    }
+
     @Data
     public static class GetAgentStatusResult {
         private Long agentId;

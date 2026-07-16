@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -140,5 +141,43 @@ public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, Age
         updateById(active);
         log.info("Agent {} 值班租约已续约: expiresAt={}", agentId, active.getExpiresAt());
         return active;
+    }
+
+    /**
+     * 扫描到期的 ACTIVE 租约并批量翻为 EXPIRED（AgentHub V1 P0-C）。
+     *
+     * <p>由 helloai-job 中的 {@code DutyLeaseExpirationTask} 周期性调用。
+     * 每个 Agent 的翻转单独一条 UPDATE，沿用 {@link #closeLease} 相同的
+     * 原子条件更新 SQL，仅将 status 从 'ACTIVE' 改为 'EXPIRED'，close_reason 为 'lease_expired'。</p>
+     *
+     * <p>安全兵：若同一个 Agent 的旧 lease 已被 checkIn 新建时关闭、新建不到期，
+     * closeActiveLeases 也只会影响新的 ACTIVE 行（旧行已非 ACTIVE）；但因为新行不在
+     * selectExpiredLeases 结果中，不会被作为“到期”代入本方法。</p>
+     *
+     * @param batchLimit 单轮扫描上限，建议 100～500
+     * @return 成功翻为 EXPIRED 的行数
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public int expireLeases(int batchLimit) {
+        int limit = batchLimit > 0 ? batchLimit : 100;
+        OffsetDateTime now = OffsetDateTime.now();
+        List<AgentDutyLease> expired = baseMapper.selectExpiredLeases(now, limit);
+        if (expired == null || expired.isEmpty()) {
+            return 0;
+        }
+        int total = 0;
+        for (AgentDutyLease lease : expired) {
+            int rows = baseMapper.closeActiveLeases(
+                    lease.getAgentId(),
+                    AgentDutyLeaseStatus.EXPIRED.name(),
+                    "lease_expired",
+                    now);
+            if (rows > 0) {
+                total += rows;
+                log.info("值班租约到期已翻为 EXPIRED: agentId={}, leaseId={}, expiresAt={}",
+                        lease.getAgentId(), lease.getId(), lease.getExpiresAt());
+            }
+        }
+        return total;
     }
 }

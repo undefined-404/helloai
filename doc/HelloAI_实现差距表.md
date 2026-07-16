@@ -32,6 +32,7 @@
 | D5 | `/api/tools/cli` 鉴权口径 | ✅ 已关闭 | 代码验证：`WebMvcConfig` 中 `/api/tools/cli` 已通过 `excludePathPatterns` 排除鉴权（公开下载入口，设计如此）。历史技术方案不再作为事实源（2026-07-13） |
 | D6 | 心跳刷新规则口径 | ✅ 已关闭 | README 已明确：`last_seen_at`/在线态刷新以 `heartbeat` 为主；仅将 pull/ack 也计入活跃需代码配合再升级（2026-07-13） |
 | D7 | README 文档边界 | ✅ 已关闭 | README 已收口为项目介绍与使用说明，不再承载阶段性执行结论 |
+| D8 | PS 5.1 脚本 UTF-8 编码规范未沉淀到 skills | ✅ 已关闭 | 5 份 `helloai-preflight` SKILL.md（.agents/.qoder/.trae/.cursor/.claude）+ `AGENTS.md` 同步落地“脚本必须显式声明 UTF-8 编码”规则，覆盖运行时输出编码（[Console]::OutputEncoding / $OutputEncoding）、源文件 BOM（UTF-8 with BOM + `Parser.ParseFile` 自检）、管道原始字节传输（`cmd /c type` / `[Diagnostics.Process]`）、here-string 串入 U+FEFF 隐限（入口 `TrimStart([char]0xFEFF)`）四个子项。以后任何新增 verify-*.ps1 / start-*.ps1 / test-*.ps1 / hook / CI 脚本都应遵循（2026-07-16） |
 
 ---
 
@@ -50,15 +51,19 @@
 | N9 | Provider 配置与 ChatClient 复用 | 已交付 | Provider 配置入口已统一（`helloai.providers`）+ provider/model 解析已收口（`AgentProviderResolver`）+ `ProviderChatModelCache` 按 (provider, baseUrl, apiKey 指纹) 缓存 ChatModel 实例（避免每次 new DeepSeekChatModel）；`DeepSeekProviderChatClientFactory` 已接入缓存，SHA-256 指纹保证明文 API Key 不入 cache key | 保持现状 |
 | N10 | 工牌模式 + `credential_vault` | 部分落地 | 最小模型、绑定与托管语义已具备；Agent API Key 的最小轮换语义已落地（`ACTIVE / EXPIRED` + 审计备注），但迁移、过渡期双活策略与权限颗粒度仍未收口 | 继续补功能 |
 | N11 | 调度策略：外部优先 + 空闲优先 + LLM 保底 | 已交付 | 候选选择策略收口为可配置项（`preferExternal` / `requireIdle` / `forceAccessType` / `autoAssignOnCreate`），并已落地“外部 Agent 连续失败阈值后自动回退到平台内 API_KEY_LLM”闭环：V17 补 agent.consecutive_failure_count/last_failure_at/last_fallback_at + sub_task.external_fallback_count；`ExternalAgentFailureTracker` 在 `ExecutionResultHandler.handleReport` / `ExecutionCompensationTask` / `AgentHealthCheckTask` 三处统一累加与重置；`SubTaskDispatchService.redispatchForFallback` 绕过 `AgentSelector`（不被 preferExternal 影响）直接选同角色 API_KEY_LLM Agent；`ExternalAgentFallbackTask`（helloai-job，60s 周期 + Redis 锁）扫描超阈值 CLI_CLIENT Agent 触发重新分发；阈值与冷却期可由 `helloai.dispatch.fallback.{failure-threshold,cooldown-minutes}` 调节 | 保持现状 |
+| N12 | AgentHub V1 P0：值班租约闭环 + 值班优先调度 | 已交付 P0 | 2026-07-16 落地 AgentHub V1 P0 三件（checkIn / checkOut / DutyLeaseExpirationTask）真实环境 E2E：`agent_duty_lease` 表（V18）承载 Agent 值班租约，状态机 `ACTIVE / CLOSED / EXPIRED`（`uk_duty_lease_agent_active` partial unique index 防止同一 Agent 多条 ACTIVE 行）；`AgentDutyLeaseService.checkIn` 赋予 Agent 值班权（workMode=NORMAL/STRICT/maxConcurrent/ttlMinutes）+ heartbeat 联动；`checkOut` 主动闭锁并记录 closeReason（服务端参数名 `closeReason` 为准，旧字段名 `reason` 兼容）；`DutyLeaseExpirationTask`（helloai-job，`@Scheduled fixedRate=30_000` + Redis Lua 锁）扫描过期 ACTIVE 租约翻为 `EXPIRED`，close_reason=`lease_expired`；`AgentSelector.pickAlternative` 增加 `dutyRank` 排序（值班中的 Agent 优先于未值班），多候选用例排序时调用 `agentDutyLeaseService.isOnDuty(agentId)`，`lenient()` mock 避免单候选用例 UnnecessaryStubbing。`MyBatisPlusMetaObjectHandler.insertFill` 补 `consecutiveFailureCount=0` 默认填充（v2.4 N11 字段遗漏修复）。`McpMcpServer` 补 `checkIn` / `checkOut` 工具（`@Tool` + `@ToolParam`），认证上下文 `requireAuthId(sessionId,_sessionId)` 覆盖客户端传的 agentId。`agent_mcp_server` 表 V21 seed 新建 Agent 自动启用 `checkIn/checkOut`（partial unique index `idx_ams_agent_tool WHERE deleted=0`，ON CONFLICT 子句必须显式带 partial 条件）。E2E 脚本：`verify-agenthub-duty-e2e.ps1`（S1 checkIn / S2 checkOut / S3 Lease 过期扫描 3 场景实测通过 ALL PASSED）。skill 规则 6 + D8 同步落地 PS 5.1 脚本编码防护四原则。本轮明确不做：dashboard、调度重新计入值班权重以外的二次排序、`workMode=STRICT` 下的独占报锁语义、动态 TTL 自适应 | 保持现状；后续 P1 可考虑值班报表 + 多 Agent 同时值班的 concurrency 预扣语义 |
 
 ---
 
 ## 5. 当前建议优先级
 
 1. ~~先继续关闭文档失真项：D1、D2、D5、D6~~ ✅ 全部已关闭（2026-07-13）
-2. 再继续夯实执行链：N1 ②a + ②b 已落地（最小闭环 + Confirm/Retry）→ T4 RabbitMQ 失败可恢复 E2E ✅ → T5 Poller 降级 + Validator 启动期 fail-fast 闭环 ✅；N6 标已交付（含 T5 + S5 最小等价验证）；后续仅保留 **S6**（手动 MQ-isolation）作为补充验证；N9 / N10 维持现状
-3. 最后推进产品化编排能力：N2、N8
-4. §5.2 后置（WorkUnit / STOP/PAUSE/REPLAN / 用户输入可重入）—— 等可靠投递与兜底职责收紧之后再开
+2. ~~D7、D8 已关闭（2026-07-13 / 2026-07-16）~~
+3. 再继续夯实执行链：N1 ②a + ②b 已落地（最小闭环 + Confirm/Retry）→ T4 RabbitMQ 失败可恢复 E2E ✅ → T5 Poller 降级 + Validator 启动期 fail-fast 闭环 ✅；N6 标已交付（含 T5 + S5 最小等价验证）；后续仅保留 **S6**（手动 MQ-isolation）作为补充验证
+4. AgentHub V1 P0 已交付（2026-07-16）：N12 值班租约闭环 + 值班优先调度；E2E 脚本 `verify-agenthub-duty-e2e.ps1` 可重复回归
+5. N9 / N10 / N11 维持现状
+6. 最后推进产品化编排能力：N2、N8
+7. §5.2 后置（WorkUnit / STOP/PAUSE/REPLAN / 用户输入可重入）—— 等可靠投递与兜底职责收紧之后再开
 
 ---
 

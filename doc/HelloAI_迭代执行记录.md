@@ -1597,3 +1597,76 @@ DB 验证：
 - `agent_duty_lease` FK 加上后，`agent` 表中删除 Agent 会联动拦截，未在 `AgentService` 里预检；后续如需支持硬删除 Agent，需先处理其 duty_lease。
 - Poller E2E v3.1 的 S5 依赖 sub_task 被重置为 PENDING 后被重新推进；若后续 `startIfNeeded` 增强、限制某些来源不允重启，本场景需要重写。
 - S6（manual MQ-isolation）未实现为脚本可执行步骤，依赖人工手动重启验证，未保留 CI 路径。
+
+---
+
+### 2026-07-16 AgentHub V1 P0 真实环境 e2e 落地 + skill 规则 6 同步
+
+#### 1. 范围
+
+- T4.1 调度策略 §4.10 “值班优先” 收口（AgentSelector 增加 `dutyRank` 排序）
+- AgentHub V1 P0 三件：checkIn / checkOut / DutyLeaseExpirationTask 真实环境 E2E
+- skill 规则 6 “脚本必须显式声明 UTF-8 编码” 同步到 5 份 SKILL.md + AGENTS.md
+
+#### 2. 实际落地
+
+- **T4.1 §4.10 值班优先收口（方案 A）**
+  - `AgentSelector` 注入 `AgentDutyLeaseService`，在多候选 comparator 排序时调用 `agentDutyLeaseService.isOnDuty(agentId)` 优先选择值班中的 Agent。
+  - 单候选用例（如 `shouldSkipSleeping` / `shouldReturnNullWhenNoCandidates` 等）不走 comparator，`setUp` 里 `when(...isOnDuty...).thenReturn(false)` 是防御式默认 stub，但 Mockito STRICT_STUBS 检测不到调用会报 `UnnecessaryStubbing`。
+  - `AgentSelectorTest.setUp` 改为 `lenient().when(...)` 避开误报，9 个测试零无关逻辑变化。
+
+- **AgentHub V1 P0-A：checkIn / checkOut**
+  - `agent_duty_lease` 表（Flyway V18）：`status ∈ {ACTIVE / CLOSED / EXPIRED}`，部分唯一索引 `uk_duty_lease_agent_active` (`agent_id` WHERE `status='ACTIVE' AND deleted=0`) 阻止同一 Agent 多条 ACTIVE 行。
+  - `AgentDutyLeaseService.checkIn(agentId, workMode, maxConcurrent, ttlMinutes)`：开启 ACTIVE 租约，`expires_at = now + ttlMinutes`，同时调用 `heartbeatService.seen(agentId)` 联动在线态；`ttlMinutes` 为 null 或 ≤0 默认 30。
+  - `AgentDutyLeaseService.closeLease(agentId, closeReason)`：将 ACTIVE 翻为 CLOSED，`closeReason` 为 null 时默认 `"manual_close"`。
+  - `McpMcpServer.checkIn` / `checkOut` 两个 `@Tool`：参数 `agentId / workMode / maxConcurrent / ttlMinutes / sessionId / _sessionId`，`requireAuthId(sessionId, _sessionId)` 鉴权后覆盖客户端传的 agentId。
+  - `checkOut` 参数名修复：服务端 `@ToolParam reason` 改为 `closeReason`（主字段名），保留 `reason` 作为 alias（兼容旧客户端）。
+
+- **AgentHub V1 P0-C：DutyLeaseExpirationTask**
+  - `helloai-job` 新增 `@Scheduled fixedRate=30_000` + Redis Lua 锁。
+  - 扫描 `agent_duty_lease` 中 `status='ACTIVE' AND expires_at < now()` 的行，翻为 `status='EXPIRED'`, `close_reason='lease_expired'`。
+
+- **新增 NOT NULL 字段填写修复（N11 遗留）**
+  - `Agent.consecutiveFailureCount` 字段在 entity 里有，但 `MyBatisPlusMetaObjectHandler.insertFill` 没填默认值（业务逻辑不填 → `AgentService.register()` INSERT 撞 NOT NULL 约束 → 500 `DataIntegrityViolationException`）。
+  - `MyBatisPlusMetaObjectHandler.insertFill` 补 `setFieldValByName("consecutiveFailureCount", 0, metaObject)`，覆盖所有 INSERT Agent 路径。
+
+- **E2E 脚本：`verify-agenthub-duty-e2e.ps1`（新增）**
+  - S1：MCP-over-SSE `tools/call checkIn` (workMode=NORMAL, maxConcurrent=3, ttlMinutes=5) → docker exec psql 断言 `status='ACTIVE' / work_mode='NORMAL' / max_concurrent='3' / expires_at > now()`。
+  - S2：MCP-over-SSE `tools/call checkOut` (closeReason='e2e_test_close') → docker exec psql 断言 `status='CLOSED' / close_reason='e2e_test_close'`。
+  - S3：手工 INSERT 一条 `expires_at=now-1min` 的 ACTIVE 租约，等 35s，DutyLeaseExpirationTask 巡检翻为 `status='EXPIRED' / close_reason='lease_expired'`。
+  - `-Cleanup` 开关删 lease/inbox，幂等回归。
+  - 复用 `verify-mcp-e2e.ps1` 的 MCP SSE 长连接样板 + `verify-outbox-relay-confirm-e2e.ps1` 的 `Run-Psql / Get-PsqlFields` 样板。
+  - 最终 ALL PASSED 顺序：**S1 OK → S2 OK → S3 OK → ALL PASSED**（实测 2026-07-16 11:34 通过）。
+
+- **skill 规则 6 “脚本必须显式声明 UTF-8 编码” 同步**
+  - 5 份 `helloai-preflight/SKILL.md`（`.agents` 母版 + `.qoder/.trae/.cursor/.claude` 4 镜像）+ `AGENTS.md` 同步新增以下子项：
+    1. **运行时输出编码**：`[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` + `$OutputEncoding = [System.Text.Encoding]::UTF8`，Linux shell 用 `export LANG=zh_CN.UTF-8` + `export LC_ALL=zh_CN.UTF-8`。
+    2. **源文件 BOM**：PS 5.1 中文 Windows 默认按 GBK 解析源码，UTF-8 no-BOM 会导致中文字符串解析错；脚本文件应保存为 UTF-8 with BOM（前 3 字节 `EF BB BF`）；同时交付前用 `Parser.ParseFile` 做静态语法自检。
+    3. **管道原始字节传输**：PS 5.1 字符串通过管道喂给 docker/ssh/mysql 时以 UTF-16 LE+BOM 写 stdin，会被外部命令识别不了；要么 `cmd /c type <file> | <external>` 透传字节，要么用 `[Diagnostics.Process]` + `StandardInputEncoding=UTF8` + `BaseStream.Write()`。
+    4. **here-string 串入 U+FEFF 隐限**：UTF-8 with BOM 的 .ps1 文件被 PS 5.1 解析时，here-string `@"..."@` 内容首字符是源文件 BOM；helper 入口必须 `$input = $input.TrimStart([char]0xFEFF)`。
+  - 同步状态：5 份 SKILL.md 均一致更新。
+
+- **e2e 脚本踩到的真实坑位（沉淀进 skill）**
+  - **脚本源文件必须 UTF-8 with BOM**：早期版本用 `WriteAllText(..., UTF8NoBom)` 写脚本，PS 5.1 按 GBK 解析中文报错 `字符串缺少终止符: "`；修复用 `New-Object System.Text.UTF8Encoding($true)` 重写脚本加 BOM。
+  - **`Get-Content -Raw` 默认 ANSI 解码**：从 utf-8 临时文件读 SQL 时塞进 U+FEFF；最终改用 `Process API` 完全控制 stdin 字节流。
+  - **PS 5.1 管道 UTF-16 LE**：字符串 `| docker` 时被包装成 UTF-16 LE+BOM，psql 收到乱码字节；改用 `.NET Process` API + `BaseStream.Write()` 写字节。
+  - **here-string 污染**：脚本本身是 UTF-8 BOM 后，`$Sql` 变量首字符是 U+FEFF；`Run-Psql` 入口 `TrimStart([char]0xFEFF)` 剥掉。
+
+#### 3. 影响
+
+- 对外行为变化：Agent 现可通过 MCP SSE `checkIn` 主动声明值班，调度器在多候选用 `pickAlternative` 时优先选值班中的 Agent；过期的 ACTIVE 租约会自动翻为 EXPIRED。
+- 代码变化：
+  - `helloai-core/.../mcp/McpMcpServer.java`：新增 `checkIn` / `checkOut` 两个 `@Tool`；`checkOut` 主字段名 `closeReason` 兼容 `reason`。
+  - `helloai-core/.../service/AgentDutyLeaseService.java`：新增 `checkIn / closeLease / isOnDuty`。
+  - `helloai-core/.../agent/executor/AgentSelector.java`：增加 `dutyRank` 排序。
+  - `helloai-core/.../entity/Agent.java` + `MyBatisPlusMetaObjectHandler.insertFill`：补 `consecutiveFailureCount` 默认填充。
+  - `helloai-job/.../task/DutyLeaseExpirationTask.java`：新增 `@Scheduled` 巡检。
+  - `verify-agenthub-duty-e2e.ps1`：新增 S1/S2/S3 三场景脚本。
+  - 5 份 SKILL.md + AGENTS.md 同步规则 6 四子项。
+- 数据结构变化：`agent_duty_lease` 表新增（Flyway V18），`agent_mcp_server` 表新增 `checkIn/checkOut` 默认 seed（Flyway V21）。
+
+#### 4. 遗留
+
+- `b7-a mvn -q -DskipTests package` 全项目冒烟：通过 Node fallback shell 调起的 `mvn` launcher 在 OpenJDK 17.0.18+8 + Windows 11 环境下崩溃（`EXCEPTION_ACCESS_VIOLATION` 在 `jvm.dll+0x2cf4ce`，elapsed time 0.023s，11 个 hs_err_pid*.log 同一症状），与本轮代码无关。用户后续在 IDEA 内 Rebuild + Maven clean + package 验证均通过，等价于 b7-a 验证。后续 `mvn` 命令应直接从 IDEA Run/Debug 或原生 `cmd /c mvn ...` 调用，避免 Node fallback shell。
+- AgentHub P0 未做的项目：dashboard / 值班报表、`workMode=STRICT` 下的独占报锁语义、动态 TTL 自适应、多 Agent 同时值班的 concurrency 预扣语义；后续 AgentHub V1 P1 启动时按优先级推。
+- E2E 脚本依赖用户手动在 IDEA 启动后端 + docker compose 起 postgres/redis/rabbitmq；CI 路径未沉淀。

@@ -32,6 +32,7 @@ public class McpToolService {
     private final HeartbeatService heartbeatService;
     private final AttachmentService attachmentService;
     private final ExecutionResultHandler executionResultHandler;
+    private final AgentDutyLeaseService agentDutyLeaseService;
 
     // ================================================================
     // pullTasks
@@ -357,6 +358,78 @@ public class McpToolService {
     }
 
     // ================================================================
+    // checkIn （AgentHub V1 P0-A：值班打卡）
+    // ================================================================
+
+    /**
+     * Agent 打卡上班（开启值班租约）。
+     *
+     * <p>底层复用 {@link AgentDutyLeaseService#startLease}：
+     * 事务内先关闭该 Agent 的所有旧 ACTIVE 租约，再新建一条。</p>
+     *
+     * <p>幂等语义：重复 checkIn 不会失败，旧 ACTIVE 租约会被关闭为 CLOSED（reason=new_lease_start），
+     * 新的 sessionId 会覆盖返回。</p>
+     *
+     * @param agentId       Agent ID（M4 鉴权后由服务端强制覆盖）
+     * @param workMode      工作模式（如 AUTO），null 时保持数据库默认
+     * @param maxConcurrent 最大并发子任务数，null 默认 1
+     * @param ttlMinutes    租约有效期（分钟），null 默认 30
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public CheckInResult checkIn(Long agentId, String workMode, Integer maxConcurrent, Integer ttlMinutes) {
+        assertAgentActive(agentId);
+        assertToolEnabled(agentId, "checkIn");
+
+        int ttl = (ttlMinutes == null || ttlMinutes <= 0) ? 30 : ttlMinutes;
+        AgentDutyLease lease = agentDutyLeaseService.startLease(agentId, workMode, maxConcurrent, ttl);
+
+        // 顺带刷心跳，避免 checkIn 后仍被判定 OFFLINE
+        heartbeatService.seen(agentId);
+
+        CheckInResult result = new CheckInResult();
+        result.setOk(true);
+        result.setAgentId(agentId);
+        result.setLeaseId(lease.getId());
+        result.setSessionId(lease.getSessionId());
+        result.setWorkMode(lease.getWorkMode());
+        result.setMaxConcurrent(lease.getMaxConcurrent());
+        result.setExpiresAt(lease.getExpiresAt() != null ? lease.getExpiresAt().toString() : null);
+        return result;
+    }
+
+    // ================================================================
+    // checkOut （AgentHub V1 P0-A：值班签退）
+    // ================================================================
+
+    /**
+     * Agent 打卡下班（关闭当前 ACTIVE 值班租约）。
+     *
+     * <p>本轮仅落地租约状态回写为 CLOSED；离岗补偿（对已 ASSIGNED 但未 IN_PROGRESS 的子任务
+     * 触发重分配）由既有 {@code SubTaskDispatchService.redispatchAssignedTimeout} 通过
+     * 常规超时兜底路径完成，checkOut 工具不直接触发。</p>
+     *
+     * <p>幂等：Agent 当前无 ACTIVE 租约时返回 ok=true, closedCount=0。</p>
+     *
+     * @param agentId Agent ID（M4 鉴权后由服务端强制覆盖）
+     * @param reason  关闭原因，可为 null（默认 manual_close）
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public CheckOutResult checkOut(Long agentId, String reason) {
+        assertAgentActive(agentId);
+        assertToolEnabled(agentId, "checkOut");
+
+        String closeReason = (reason == null || reason.isBlank()) ? "manual_close" : reason;
+        int closed = agentDutyLeaseService.closeLease(agentId, closeReason);
+
+        CheckOutResult result = new CheckOutResult();
+        result.setOk(true);
+        result.setAgentId(agentId);
+        result.setClosedCount(closed);
+        result.setReason(closeReason);
+        return result;
+    }
+
+    // ================================================================
     // helpers
     // ================================================================
 
@@ -455,6 +528,25 @@ public class McpToolService {
         private boolean ok;
         private boolean blocked;
         private Long subTaskId;
+        private String reason;
+    }
+
+    @lombok.Data
+    public static class CheckInResult {
+        private boolean ok;
+        private Long agentId;
+        private Long leaseId;
+        private String sessionId;
+        private String workMode;
+        private Integer maxConcurrent;
+        private String expiresAt;
+    }
+
+    @lombok.Data
+    public static class CheckOutResult {
+        private boolean ok;
+        private Long agentId;
+        private int closedCount;
         private String reason;
     }
 }

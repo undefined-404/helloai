@@ -16,6 +16,10 @@ public class MyBatisPlusMetaObjectHandler implements MetaObjectHandler {
         this.setFieldValByName("updateBy", getCurrentUser(), metaObject);
         this.setFieldValByName("createTime", OffsetDateTime.now(), metaObject);
         this.setFieldValByName("updateTime", OffsetDateTime.now(), metaObject);
+        // v2.4 N11 新增字段：连续失败计数。表中 NOT NULL，无 default，
+        // 任何 INSERT Agent 的路径（如 AgentService.register）都必须填 0，否则
+        // 会撞 "null value in column consecutive_failure_count violates not-null constraint"。
+        this.setFieldValByName("consecutiveFailureCount", 0, metaObject);
     }
 
     @Override

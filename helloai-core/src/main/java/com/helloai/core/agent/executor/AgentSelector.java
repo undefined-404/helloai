@@ -14,6 +14,7 @@ import org.springframework.stereotype.Component;
 import java.util.Comparator;
 import java.util.List;
 import com.helloai.core.service.AgentService;
+import com.helloai.core.service.AgentDutyLeaseService;
 
 /**
  * Agent 选择器（v2.4 §4.6）。
@@ -31,6 +32,7 @@ public class AgentSelector {
     private final AgentService agentService;
     private final CircuitBreakerRegistry circuitBreakerRegistry;
     private final AgentDispatchProperties agentDispatchProperties;
+    private final AgentDutyLeaseService agentDutyLeaseService;
 
     /**
      * 从指定角色的 Agent 中选取首选执行器（用于初始分配）。
@@ -91,12 +93,34 @@ public class AgentSelector {
     }
 
     private Comparator<Agent> resolveComparator() {
+        // AgentHub V1 P0-B：“当前是否处于值班”作为软优先级最高一档。
+        // 无硬拒绝：即使无任何值班 Agent，仍能从非值班候选中选出，
+        // 保证与当前行为向后兼容（V1 未上线时 checkIn 未被调用，选择器表现与以前一致）。
+        Comparator<Agent> dutyFirst = Comparator.comparingInt(this::dutyRank);
         if (!agentDispatchProperties.isPreferExternal()) {
-            return Comparator.comparing(Agent::getScore, Comparator.nullsFirst(Comparator.naturalOrder()));
+            return dutyFirst.thenComparing(Agent::getScore, Comparator.nullsFirst(Comparator.naturalOrder()));
         }
-        return Comparator
-                .comparingInt(this::accessTypeRank)
+        return dutyFirst
+                .thenComparingInt(this::accessTypeRank)
                 .thenComparing(Agent::getScore, Comparator.nullsFirst(Comparator.naturalOrder()));
+    }
+
+    /**
+     * 值班优先的 rank：ACTIVE lease 存在 → 1，否则 0。
+     *
+     * <p>max() 取最大，因此值班 Agent 优先。安全兵：isOnDuty 内部容忍 agentId==null。</p>
+     */
+    private int dutyRank(Agent agent) {
+        if (agent == null || agent.getId() == null) {
+            return 0;
+        }
+        try {
+            return agentDutyLeaseService.isOnDuty(agent.getId()) ? 1 : 0;
+        } catch (Exception e) {
+            // 防御式：任何 lease 查询异常都不影响选择（降级为非值班处理）
+            log.debug("dutyRank fallback to 0 for agent {}: {}", agent.getId(), e.getMessage());
+            return 0;
+        }
     }
 
     private int accessTypeRank(Agent agent) {
