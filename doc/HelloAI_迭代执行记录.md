@@ -1817,3 +1817,83 @@ DB 验证：
 - 遗留：
   - 控制台 CJK 显示在 PowerShell 5.1 下仍会有乱码，但不影响脚本断言与 `.out` 文件内容；如后续需要，可单独做控制台输出 ASCII 化收口。
   - `helloai-api/src/main/java/com/helloai/api/controller/HealthController.java` 与 `helloai-start/src/main/resources/application.yml` 的当前工作区修改未纳入本轮验证收口提交，按用户后续独立决策处理。
+  
+  ---
+  
+  ### 2026-07-16 A 档收尾：R2 Publisher 旧方法清理 + R3 V19 era SENT/CONFIRMED backfill + AgentHub V1 P1 dashboard 前端接入
+  
+  #### 1. 范围
+  
+  - 关闭 P1 实现差距表遗留中“可立刻动手”的三件事：**R2 旧 Publisher 方法清理、R3 V19 era SENT/CONFIRMED 行时间戳 backfill、AgentHub V1 P1 dashboard 前端接入**。
+  - 本轮不涉及 `workMode=STRICT` 独占报锁语义、多 Agent 同时值班的 concurrency 预扣、动态 TTL 自适应、N2/N8 独立迭代。
+  
+  #### 2. 实际落地
+  
+  - **R2：清理 `ExecutionCommandMqPublisher.publish(ExecutionCommand)` 旧方法**
+    - 旧入口仅做“事务活跃时注册 `afterCommit` 回调、无事务立即发”，②a 引入 Outbox 后该入口已无调用方，唯一生产路径是 `OutboxRelayTask` → `publishWithCorrelation`，旧方法保留只会形成第二套时序假设。
+    - 删除 `publish(ExecutionCommand)` 方法、清空 `TransactionSynchronization*` 两个 import；类级 javadoc “Phase 2F 关键修正一”段落改为“②b 收尾：AFTER_COMMIT 语义已移除”，列表项调用方由 `ExecutionCommandService` 改为 `OutboxRelayTask`。
+    - 单测同步：删除整个 `ActiveTransactionContext` 嵌套类（AFTER_COMMIT 用例 2 个 + `@AfterEach` 同步清理 1 个）；`NoTransactionContext` 两个用例改为 `publishWithCorrelation`，新增 1 个用例验证 `correlationKey` 与 `eventId` 不一致时 `MessageProperties` 仍以 `eventId` 为准、返回的 `CorrelationData` 携带 outbox 主键（覆盖 ②b Confirm 回写场景）。
+    - 语义自检：全工程 0 处调用旧 `publish(ExecutionCommand)`，0 处 import 残留。
+  
+  - **R3：V22 `agent_command_outbox_backfill_timestamps` 回填历史 SENT/CONFIRMED 行**
+    - V19 表只有 `update_time`（BEFORE UPDATE 触发器维护），V20 才加 `last_sent_at`/`confirmed_at` 两列但未 backfill；V21 已被 `seed_agent_mcp_server_duty_tools` 占用，本轮使用 **V22**。
+    - 回填策略（保守近似，全部 WHERE IS NULL 守卫，重跑安全）：
+      - `status=1 AND deleted=0 AND last_sent_at IS NULL` → `last_sent_at = update_time`（OutboxRelayTask markSent 唯一动作即同步 `last_sent_at` 与 `update_time`，二者近似相等）
+      - `status=3 AND deleted=0 AND confirmed_at IS NULL` → `confirmed_at = update_time`
+      - `status=2` FAILED 不回填：语义可能是 publish 阶段失败（不该置值）或 broker NACK，历史不一致，保持 NULL
+      - `status=0` PENDING 不动：语义上未发生
+    - 幂等：所有 UPDATE 都有 IS NULL 守卫，可重复执行。
+  
+  - **AgentHub V1 P1 dashboard 前端接入**
+    - 后端值班报表两个只读端点（`GET /api/admin/duty-leases` 分页 + `/overview` 概览）此前已具备，本轮补齐前端。
+    - 新增 `helloai-ui/src/api/duty.ts`：`dutyApi.list({ agentId?, status?, page, size })` + `dutyApi.overview()`，对齐后端 `AgentDutyLeaseController` 与 `R<PageResult<DutyLeaseResponse>>` 解包。
+    - 新增 `helloai-ui/src/types/duty.ts`：`DutyLeaseResponse` / `DutyOverviewResponse` / `DutyLeaseStatus` / `DUTY_LEASE_STATUS_MAP`（值班中/已签退/已过期），`PageResult<T>` 直接复用 `types/index.ts` 已有定义避免重复。
+    - 新增 `helloai-ui/src/views/duty/DutyLeaseList.vue`：状态 + Agent ID 过滤、分页表（租约 ID / Agent 名+ID / 会话 / 模式 / 并发上限 / 状态 tag / 开始·续约·过期时间 / 关闭原因），`DUTY_LEASE_STATUS_MAP` 统一渲染。
+    - `Dashboard.vue` 加 “Agent 值班概览”区块：4 个 stat 卡（值班中 / 已签退 / 已过期 / 租约总数）+ “查看全部租约 →” 链接，异步加载 `loadDutyOverview()` 失败仅 `console.warn`，不阻断 dashboard 主图。
+    - 路由 `router/index.ts` 注册 `/duty-leases`，菜单 `MainLayout.vue` 增加 `Clock` 图标菜单项（同步 import 列表）。
+  
+  - **`scripts/powershell/verify-dashboard-duty-leases.ps1` 验证脚本**
+    - 遵循 SKILL.md 规则 6：UTF-8 强制头（无 BOM）+ PS 5.1 单引号 + `+` 拼接、runtime 字面量纯 ASCII、CJK 仅出现在 `#` 注释与 `.out` 文件内容。
+    - 覆盖 S1 overview 字段齐、S2 list 分页结构、S3 `status=ACTIVE` 过滤生效、S4 V22 backfill 抽查（`status=1` 行 `last_sent_at IS NULL` 数为 0 且 `status=3` 行 `confirmed_at IS NULL` 数为 0）。
+    - 模板参照 `verify-agenthub-duty-e2e.ps1`：同一套 `Invoke-Json` / `Run-Psql` / `Get-PsqlFields` helper，pre-flight 同样要求 docker compose + IDEA 启动 + Flyway 已跑 V22。
+  
+  #### 3. 影响
+  
+  - 对外行为变化：无新增业务语义，仅删除一条已无调用方的旧方法、给历史数据补齐时间戳、新增一个前端页面与一个菜单项。
+  - 代码变化：
+    - `helloai-core/.../ExecutionCommandMqPublisher.java`：删除旧 `publish` 方法、清冗余 import、改类级 javadoc
+    - `helloai-core/.../ExecutionCommandMqPublisherTest.java`：删除 AFTER_COMMIT 用例、改 `publish` → `publishWithCorrelation`、新增 correlationKey 用例
+    - `helloai-start/.../db/migration/V22__agent_command_outbox_backfill_timestamps.sql`（新增）
+    - `helloai-ui/src/api/duty.ts`（新增）
+    - `helloai-ui/src/types/duty.ts`（新增）
+    - `helloai-ui/src/views/duty/DutyLeaseList.vue`（新增）
+    - `helloai-ui/src/views/Dashboard.vue`：新增 “Agent 值班概览”区块 + `loadDutyOverview()` 加载
+    - `helloai-ui/src/router/index.ts`：注册 `/duty-leases`
+    - `helloai-ui/src/layouts/MainLayout.vue`：新增菜单项 + `Clock` 图标 import
+    - `scripts/powershell/verify-dashboard-duty-leases.ps1`（新增）
+  - 数据库变化：V22 backfill 在 Flyway 启动时一次性执行，对 status IN (1,3) 且 IS NULL 的行做时间戳回填，无 schema 变化。
+  
+  #### 4. 遗留
+  
+  - AgentHub V1 P1 仍余：`workMode=STRICT` 独占报锁语义、多 Agent 同时值班的 concurrency 预扣语义、动态 TTL 自适应（按 N12 缺口继续）。
+  - ~~b1 的 `mvn -pl helloai-core compile` / `test` 编译验证未在本轮执行（环境无 mvn）~~：**已实测通过**（2026-07-16 23:1x） → 详见 §5 验证回执。
+  - ~~`verify-dashboard-duty-leases.ps1` 尚未真实环境实测~~：**S1-S4 已在真实环境实测全部 PASS**（2026-07-16 23:1x） → 详见 §5 验证回执。
+  
+  #### 5. 验证回执（2026-07-16 23:1x 实测）
+  
+  ##### 5.1 实证列
+  
+  | 项 | 实际状态 | 说明 |
+  |---|---|---|
+  | R2 `ExecutionCommandMqPublisher` 编译产物 | ✅ `target/classes/.../ExecutionCommandMqPublisher.class` 5358 bytes（23:06）| 用户本地 mvn rebuild + package 通过 |
+  | R2 单测 JUnit Runner | ✅ 4/4 PASSED，`Process finished with exit code 0`（IDEA JUnit 23:18 实测）| `DirectPublish.publishWithCorrelationSendsImmediately` / `publishBodyIsRestorableJson` / `publishUsesCorrelationKeyOnlyOnReturnedCorrelationData` / `FailurePaths.publishThrowsWhenSerializationFails` 全过；FailurePaths 中出现的 `ERROR mq.execution-command.serialize.failed ... JsonMappingException: boom for eventId=evt-abc` 是用例 mock 故意触发的失败传播场景，非缺陷 |
+  | 全工程残留旧 `publish(ExecutionCommand)` 调用点 | ✅ 0 处 | 全工程 grep 无命中 |
+  | macOS zsh 等价脚本 | ✅ **新增** `scripts/shell/verify-dashboard-duty-leases.sh`（已 `chmod +x`、`zsh -n` 语法检查通过）| 依赖 jq + docker + curl + zsh（用户机器均具备），与 PS1 同源；pre-flight 同样 fail-fast |
+  | verify 端到端实测（PS1） | ✅ **S1 overview / S2 list / S3 status=ACTIVE 过滤 / S4 V22 backfill 抽查** 全 PASSED | V22 因 fresh volume `agent_command_outbox` 无历史 SENT/CONFIRMED 行，S4 总数均为 0，符合“空表也 PASS”的幂等设计 |
+  
+  ##### 5.2 本轮首次 S1 overview 实测遇 HTTP 500 的根因澄清（非 Flyway 回归，不立项）
+  
+  - 现象：第一次跑 verify 脚本时 S1 overview 返回 HTTP 500 `{"code":500,"msg":"服务内部错误..."}`
+  - 根因：**非 Flyway 回归**。用户在 Windows / macOS 之间手工把 V1~V22 多个 SQL 文件合并回 `V1__init_all.sql` 做集中初始化时，遗漏了其中某段（典型为某条 CREATE TABLE 或 seed INSERT），导致 `agent_duty_lease` 等派生表未随 V1 一同初始化。手动补跑一次合并后的 `init_all.sql` 后四步全过（实测时已排除）。
+  - 决策：用户明确“新环境干净 Flyway 跑下来不会复现，问题可暂忽略”，本轮 **不立项 P-FIX**；新成员接入仍以官方 `docker compose up -d` + Flyway V1~V22 顺序跑为主路径。
+  - 复现防护（非本次交付）：未来如再需手工合并迁移文件，建议增加一份“合并后 V1 ≡ 当前 baseline”的差异自检脚本（不在本轮范围内）。
