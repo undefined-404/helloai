@@ -8,7 +8,6 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.mqconsumer.ExecutionCommandMqMessage;
 import com.helloai.mq.config.RabbitMQConfig;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -22,10 +21,6 @@ import org.springframework.amqp.core.MessageDeliveryMode;
 import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
-
-import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -37,22 +32,23 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
- * Phase 2F N6：{@link ExecutionCommandMqPublisher} 单测。
+ * Phase 2H ②b 收尾：{@link ExecutionCommandMqPublisher} 单测。
  *
- * <p>覆盖两条关键语义：</p>
+ * <p>Phase 2F 的"AFTER_COMMIT 推迟"语义在 ②a 引入 Outbox 后已无调用方，本轮删除
+ * {@code publish(ExecutionCommand)} 入口并同步清掉对应测试分支。
+ * 现仅覆盖 {@link ExecutionCommandMqPublisher#publishWithCorrelation}：</p>
  * <ol>
- *     <li>投递时机对齐 AFTER_COMMIT：事务活跃时只注册 sync，直到 {@code afterCommit()} 才真发；
- *         事务未提交 / 回滚时永远不发。</li>
  *     <li>显式 JSON 序列化：body 是 JSON 字节，消费端可用 {@link ObjectMapper#readValue} 完整还原
- *         {@link ExecutionCommandMqMessage} 字段；序列化失败抛 {@link IllegalStateException} 且不落 broker。</li>
+ *         {@link ExecutionCommandMqMessage} 字段；</li>
+ *     <li>MessageProperties 正确：contentType/encoding/messageId/correlationId/deliveryMode 全部对齐消费端；</li>
+ *     <li>返回的 {@link CorrelationData#getId()} 等于 correlationKey，供 Outbox confirm 回写。</li>
+ *     <li>序列化失败抛 {@link IllegalStateException} 且不落 broker。</li>
  * </ol>
  *
- * <p>使用真实 {@link ObjectMapper}（不 mock 序列化路径），mock {@link RabbitTemplate} 以避免连 RabbitMQ；
- * 有事务分支用 {@link TransactionSynchronizationManager#initSynchronization()} 模拟事务上下文，
- * {@link org.junit.jupiter.api.AfterEach} 强制清理，避免污染其他测试。</p>
+ * <p>使用真实 {@link ObjectMapper}（不 mock 序列化路径），mock {@link RabbitTemplate} 以避免连 RabbitMQ。</p>
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("ExecutionCommandMqPublisher (Phase 2F)")
+@DisplayName("ExecutionCommandMqPublisher (Phase 2H ②b)")
 class ExecutionCommandMqPublisherTest {
 
     @Mock
@@ -78,29 +74,19 @@ class ExecutionCommandMqPublisherTest {
                 .trigger("assigned")
                 .accessType(AgentAccessType.CLI_CLIENT)
                 .build();
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
-            TransactionSynchronizationManager.clearSynchronization();
-        }
-    }
-
-    @AfterEach
-    void tearDown() {
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
-            TransactionSynchronizationManager.clearSynchronization();
-        }
     }
 
     @Nested
-    @DisplayName("无事务上下文")
-    class NoTransactionContext {
+    @DisplayName("publishWithCorrelation：投递即落 broker")
+    class DirectPublish {
 
         @Test
-        @DisplayName("无事务 → 立即发送到 broker，MessageProperties 正确")
-        void publishSendsImmediatelyWhenNoTx() {
+        @DisplayName("调用后立即发送 broker，MessageProperties 正确，返回 CorrelationData")
+        void publishWithCorrelationSendsImmediately() {
             ExecutionCommandMqPublisher publisher = new ExecutionCommandMqPublisher(
                     rabbitTemplate, properties, realObjectMapper);
 
-            publisher.publish(sampleCommand);
+            CorrelationData returned = publisher.publishWithCorrelation(sampleCommand, "evt-abc");
 
             ArgumentCaptor<Message> captor = ArgumentCaptor.forClass(Message.class);
             ArgumentCaptor<CorrelationData> cdCaptor = ArgumentCaptor.forClass(CorrelationData.class);
@@ -115,6 +101,9 @@ class ExecutionCommandMqPublisherTest {
             assertThat(mp.getDeliveryMode()).isEqualTo(MessageDeliveryMode.PERSISTENT);
             assertThat(mp.getContentType()).isEqualTo(MessageProperties.CONTENT_TYPE_JSON);
             assertThat(cdCaptor.getValue().getId()).isEqualTo("evt-abc");
+            // 返回值也要携带 correlationKey，供 ConfirmCallback 异步回写
+            assertThat(returned).isNotNull();
+            assertThat(returned.getId()).isEqualTo("evt-abc");
         }
 
         @Test
@@ -123,7 +112,7 @@ class ExecutionCommandMqPublisherTest {
             ExecutionCommandMqPublisher publisher = new ExecutionCommandMqPublisher(
                     rabbitTemplate, properties, realObjectMapper);
 
-            publisher.publish(sampleCommand);
+            publisher.publishWithCorrelation(sampleCommand, "evt-abc");
 
             ArgumentCaptor<Message> captor = ArgumentCaptor.forClass(Message.class);
             verify(rabbitTemplate).send(anyString(), anyString(), captor.capture(), any(CorrelationData.class));
@@ -138,50 +127,24 @@ class ExecutionCommandMqPublisherTest {
             assertThat(decoded.getTrigger()).isEqualTo("assigned");
             assertThat(decoded.getAccessType()).isEqualTo("CLI_CLIENT");
         }
-    }
-
-    @Nested
-    @DisplayName("有事务上下文（AFTER_COMMIT 语义）")
-    class ActiveTransactionContext {
 
         @Test
-        @DisplayName("有事务 → 仅注册 sync；未 commit 前 broker 零调用；afterCommit 触发才真发")
-        void publishDefersUntilAfterCommit() {
+        @DisplayName("correlationKey 与 eventId 不一致时，MessageProperties 仍以 eventId 为准，返回的 CorrelationData 携带 correlationKey")
+        void publishUsesCorrelationKeyOnlyOnReturnedCorrelationData() {
             ExecutionCommandMqPublisher publisher = new ExecutionCommandMqPublisher(
                     rabbitTemplate, properties, realObjectMapper);
 
-            TransactionSynchronizationManager.initSynchronization();
-            publisher.publish(sampleCommand);
+            CorrelationData returned = publisher.publishWithCorrelation(sampleCommand, "outbox-row-42");
 
-            // 尚未 commit：broker 层零调用
-            verifyNoInteractions(rabbitTemplate);
-            // 已注册 1 个 sync
-            List<TransactionSynchronization> syncs =
-                    TransactionSynchronizationManager.getSynchronizations();
-            assertThat(syncs).hasSize(1);
-
-            // 手动触发 afterCommit：此时才交给 broker
-            syncs.get(0).afterCommit();
-            verify(rabbitTemplate, times(1)).send(
-                    eq(RabbitMQConfig.EXECUTION_COMMAND_EXCHANGE),
-                    eq("execution.command.created"),
-                    any(Message.class),
-                    any(CorrelationData.class));
-        }
-
-        @Test
-        @DisplayName("事务未 commit（回滚 / 清空同步）→ 永远不发送到 broker")
-        void publishNotSentWhenTransactionRolledBack() {
-            ExecutionCommandMqPublisher publisher = new ExecutionCommandMqPublisher(
-                    rabbitTemplate, properties, realObjectMapper);
-
-            TransactionSynchronizationManager.initSynchronization();
-            publisher.publish(sampleCommand);
-
-            // 模拟回滚：清空同步而不触发 afterCommit
-            TransactionSynchronizationManager.clearSynchronization();
-
-            verifyNoInteractions(rabbitTemplate);
+            ArgumentCaptor<Message> captor = ArgumentCaptor.forClass(Message.class);
+            ArgumentCaptor<CorrelationData> cdCaptor = ArgumentCaptor.forClass(CorrelationData.class);
+            verify(rabbitTemplate).send(
+                    anyString(), anyString(), captor.capture(), cdCaptor.capture());
+            // MessageProperties 始终用 eventId，便于消费端幂等
+            assertThat(captor.getValue().getMessageProperties().getMessageId()).isEqualTo("evt-abc");
+            // CorrelationData 携带 caller 传入的 outbox 主键，供 Confirm 回写精准定位行
+            assertThat(cdCaptor.getValue().getId()).isEqualTo("outbox-row-42");
+            assertThat(returned.getId()).isEqualTo("outbox-row-42");
         }
     }
 
@@ -202,7 +165,7 @@ class ExecutionCommandMqPublisherTest {
             ExecutionCommandMqPublisher publisher = new ExecutionCommandMqPublisher(
                     rabbitTemplate, properties, failingMapper);
 
-            assertThatThrownBy(() -> publisher.publish(sampleCommand))
+            assertThatThrownBy(() -> publisher.publishWithCorrelation(sampleCommand, "evt-abc"))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("evt-abc")
                     .hasCauseInstanceOf(JsonProcessingException.class);

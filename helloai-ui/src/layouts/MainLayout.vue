@@ -56,6 +56,10 @@
           <el-icon><Setting /></el-icon>
           <span>规则配置</span>
         </el-menu-item>
+        <el-menu-item index="/duty-leases">
+          <el-icon><Clock /></el-icon>
+          <span>值班租约</span>
+        </el-menu-item>
         <el-menu-item index="/attachments">
           <el-icon><Folder /></el-icon>
           <span>附件管理</span>
@@ -155,7 +159,7 @@
 import { computed, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowDown, Expand, Fold } from '@element-plus/icons-vue'
+import { ArrowDown, Clock, Expand, Fold } from '@element-plus/icons-vue'
 import { authApi } from '@/api/auth'
 
 const route = useRoute()

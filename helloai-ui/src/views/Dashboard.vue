@@ -44,6 +44,47 @@
         <el-empty v-else description="暂无吞吐量数据" :image-size="80" />
       </div>
     </div>
+
+    <!-- AgentHub V1 P1 值班租约概览 -->
+    <div v-if="!errorMsg" class="duty-section ha-entrance-up" style="animation-delay: 300ms">
+      <div class="section-header">
+        <div class="section-title">
+          <el-icon color="#0EA5E9"><Clock /></el-icon>
+          <span>Agent 值班概览</span>
+        </div>
+        <router-link to="/duty-leases" class="section-link">查看全部租约 →</router-link>
+      </div>
+      <div class="stats-grid">
+        <div class="stat-card" :class="dutyLoading ? 'is-loading' : ''">
+          <div class="stat-dot success" aria-hidden="true" />
+          <div class="stat-body">
+            <div class="stat-label">值班中</div>
+            <div class="stat-value">{{ dutyOverview.activeCount }}</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-dot primary" aria-hidden="true" />
+          <div class="stat-body">
+            <div class="stat-label">已签退</div>
+            <div class="stat-value">{{ dutyOverview.closedCount }}</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-dot warning" aria-hidden="true" />
+          <div class="stat-body">
+            <div class="stat-label">已过期</div>
+            <div class="stat-value">{{ dutyOverview.expiredCount }}</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-dot" :class="dutyOverview.expiredCount > 0 ? 'danger' : 'primary'" aria-hidden="true" />
+          <div class="stat-body">
+            <div class="stat-label">租约总数</div>
+            <div class="stat-value">{{ dutyOverview.totalCount }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -51,10 +92,19 @@
 import { ref, computed, onMounted, nextTick, onUnmounted } from 'vue'
 import * as echarts from 'echarts'
 import { dashboardApi } from '@/api/dashboard'
-import { DataLine } from '@element-plus/icons-vue'
+import { dutyApi } from '@/api/duty'
+import type { DutyOverviewResponse } from '@/types/duty'
+import { Clock, DataLine } from '@element-plus/icons-vue'
 
 const loading = ref(false)
 const errorMsg = ref('')
+const dutyLoading = ref(false)
+const dutyOverview = ref<DutyOverviewResponse>({
+  activeCount: 0,
+  closedCount: 0,
+  expiredCount: 0,
+  totalCount: 0
+})
 
 interface Stat {
   label: string
@@ -215,7 +265,30 @@ async function loadDashboard() {
   }
 }
 
-onMounted(() => loadDashboard())
+async function loadDutyOverview() {
+  dutyLoading.value = true
+  try {
+    const data = await dutyApi.overview()
+    if (data) {
+      dutyOverview.value = {
+        activeCount: data.activeCount ?? 0,
+        closedCount: data.closedCount ?? 0,
+        expiredCount: data.expiredCount ?? 0,
+        totalCount: data.totalCount ?? 0
+      }
+    }
+  } catch (e: any) {
+    // 值班概览拉取失败不阻断 dashboard 主图，仅静默
+    console.warn('[dashboard] duty overview load failed:', e?.message || e)
+  } finally {
+    dutyLoading.value = false
+  }
+}
+
+onMounted(() => {
+  loadDashboard()
+  loadDutyOverview()
+})
 
 onUnmounted(() => {
   rankInstance?.dispose()
@@ -228,6 +301,38 @@ onUnmounted(() => {
 
 .dashboard-error {
   margin-bottom: 16px;
+}
+
+/* ---- Duty Overview Section ---- */
+.duty-section {
+  margin-top: 20px;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ha-ink);
+}
+
+.section-link {
+  font-size: 13px;
+  color: var(--ha-primary);
+  text-decoration: none;
+  transition: opacity var(--ha-duration-fast) var(--ha-ease-out);
+}
+
+.section-link:hover {
+  opacity: 0.75;
 }
 
 /* ---- Stats ---- */
