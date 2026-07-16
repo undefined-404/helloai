@@ -116,6 +116,7 @@ Additional rules:
 
 - When a script sends a JSON body containing CJK text via `Invoke-WebRequest` / `curl`, write the body to a temp file as UTF-8 first and reference the file; do not rely on the console default encoding.
 - If garbled CJK appears on the console or in logs, check whether these header lines are missing before investigating other causes.
+- Prefer single-quoted strings with `+` concatenation for all script output; avoid double-quoted interpolation that embeds CJK (especially full-width parens `（）`). Under PS 5.1, CJK inside a double-quoted string can make the parser close the string early and then treat a later `}` as a stray token (`Unexpected token '}'` / unterminated-string errors), even when the file is saved as UTF-8 with BOM. Keep runtime literals ASCII and put CJK only in `#` comments. Reference: `verify-execution-dispatch-guard.ps1`.
 
 ### Additional Notes
 

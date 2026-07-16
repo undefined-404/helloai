@@ -1,5 +1,8 @@
 package com.helloai.core.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentDutyLeaseStatus;
@@ -10,7 +13,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -179,5 +184,44 @@ public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, Age
             }
         }
         return total;
+    }
+
+    /**
+     * 分页查询值班租约（AgentHub V1 P1 值班报表数据源，只读）。
+     *
+     * <p>为运营看板提供值班租约列表，支持按 Agent、状态过滤，
+     * 按值班开始时间倒序（最近上班的在前）。逻辑删除由 {@code @TableLogic} 自动过滤。</p>
+     *
+     * @param agentId  可选，按 Agent 过滤；null 表示不限
+     * @param status   可选，按租约状态过滤；null 表示不限
+     * @param pageNum  页码（从 1 开始）
+     * @param pageSize 每页条数
+     * @return 分页结果，绝不返回 null
+     */
+    public IPage<AgentDutyLease> listLeases(Long agentId, AgentDutyLeaseStatus status,
+                                            long pageNum, long pageSize) {
+        LambdaQueryWrapper<AgentDutyLease> wrapper = new LambdaQueryWrapper<AgentDutyLease>()
+                .eq(agentId != null, AgentDutyLease::getAgentId, agentId)
+                .eq(status != null, AgentDutyLease::getStatus, status)
+                .orderByDesc(AgentDutyLease::getStartedAt);
+        return page(new Page<>(pageNum, pageSize), wrapper);
+    }
+
+    /**
+     * 按状态统计值班租约条数（AgentHub V1 P1 值班报表数据源，只读）。
+     *
+     * <p>遍历所有状态并计数，缺失状态补 0，保证返回的键始终齐全
+     * （ACTIVE / CLOSED / EXPIRED），供看板状态分布卡片直接消费。</p>
+     *
+     * @return 状态 → 条数（顺序稳定），绝不返回 null
+     */
+    public Map<AgentDutyLeaseStatus, Long> countByStatus() {
+        Map<AgentDutyLeaseStatus, Long> counts = new LinkedHashMap<>();
+        for (AgentDutyLeaseStatus s : AgentDutyLeaseStatus.values()) {
+            long c = count(new LambdaQueryWrapper<AgentDutyLease>()
+                    .eq(AgentDutyLease::getStatus, s));
+            counts.put(s, c);
+        }
+        return counts;
     }
 }

@@ -22,10 +22,13 @@
 #                                       * consume 事件的 trigger 以 poll-recovery: 开头
 #                                       * 反证：没有任何 trigger 不以 poll-recovery: 开头的
 #                                         consume 事件被记录（说明没有任何主消费者参与）
-#   S6  manual MQ-isolation check   — 需手动：重启 Spring Boot 时把
-#                                     helloai.mq.execution-command.consumer-enabled 设为 false，
-#                                     然后单独跑 S1-S4。本脚本不能自动完成这一步，因为它需要
-#                                     重启 JVM 且会破坏健康检查。
+#   S6  已迁出 —— 见 verify-execution-dispatch-guard.ps1（S6, v1.0）。
+#       旧 S6 是"重启时把 consumer-enabled 设为 false，再跑 S1-S4"；但 T5 引入
+#       ExecutionDispatchValidator 后，consumer-mode ∈ {POLLER, BOTH} + consumer-enabled=false
+#       会在 @PostConstruct 阶段直接 fail-fast，应用根本起不来，旧组合已不再是"能跑的验证"。
+#       S6 因此重定义为独立的"启动期 fail-fast 守卫验证"（反复用不同配置组合启动、观察
+#       非法组合启动失败 / 合法组合 /api/health 200），本质是"重启 JVM + 观察启动成败"，
+#       与本脚本的"运行期 Poller 兜底 E2E"不是一类验证，故单独成脚本、不再塞进这里。
 #
 # T5 semantics verified per scenario:
 #   - timeline event name: sub_task_execution_command_poll_recovery (not _polled_main)

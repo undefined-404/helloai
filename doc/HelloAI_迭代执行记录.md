@@ -1616,7 +1616,7 @@ DB 验证：
   - `AgentSelectorTest.setUp` 改为 `lenient().when(...)` 避开误报，9 个测试零无关逻辑变化。
 
 - **AgentHub V1 P0-A：checkIn / checkOut**
-  - `agent_duty_lease` 表（Flyway V18）：`status ∈ {ACTIVE / CLOSED / EXPIRED}`，部分唯一索引 `uk_duty_lease_agent_active` (`agent_id` WHERE `status='ACTIVE' AND deleted=0`) 阻止同一 Agent 多条 ACTIVE 行。
+  - `agent_duty_lease` 表（`V1__init_all.sql` 第 1508 行随初始化建表，AgentHub V1 T3；**注：早期本记录误写 Flyway V18，V18 实为 `event_consumption_log`**）：`status ∈ {ACTIVE / CLOSED / EXPIRED}`，部分唯一索引 `uk_duty_lease_agent_active` (`agent_id` WHERE `status='ACTIVE' AND deleted=0`) 阻止同一 Agent 多条 ACTIVE 行。
   - `AgentDutyLeaseService.checkIn(agentId, workMode, maxConcurrent, ttlMinutes)`：开启 ACTIVE 租约，`expires_at = now + ttlMinutes`，同时调用 `heartbeatService.seen(agentId)` 联动在线态；`ttlMinutes` 为 null 或 ≤0 默认 30。
   - `AgentDutyLeaseService.closeLease(agentId, closeReason)`：将 ACTIVE 翻为 CLOSED，`closeReason` 为 null 时默认 `"manual_close"`。
   - `McpMcpServer.checkIn` / `checkOut` 两个 `@Tool`：参数 `agentId / workMode / maxConcurrent / ttlMinutes / sessionId / _sessionId`，`requireAuthId(sessionId, _sessionId)` 鉴权后覆盖客户端传的 agentId。
@@ -1663,10 +1663,94 @@ DB 验证：
   - `helloai-job/.../task/DutyLeaseExpirationTask.java`：新增 `@Scheduled` 巡检。
   - `verify-agenthub-duty-e2e.ps1`：新增 S1/S2/S3 三场景脚本。
   - 5 份 SKILL.md + AGENTS.md 同步规则 6 四子项。
-- 数据结构变化：`agent_duty_lease` 表新增（Flyway V18），`agent_mcp_server` 表新增 `checkIn/checkOut` 默认 seed（Flyway V21）。
+- 数据结构变化：`agent_duty_lease` 表已在 `V1__init_all.sql`（第 1508 行）随初始化建表，**非本轮新增**（早期本记录误写 Flyway V18，V18 实为 `event_consumption_log`）；本轮实际新增的 schema 变更仅 `agent_mcp_server` 表 `checkIn/checkOut` 默认 seed（Flyway V21 `V21__seed_agent_mcp_server_duty_tools.sql`）。
 
 #### 4. 遗留
 
 - `b7-a mvn -q -DskipTests package` 全项目冒烟：通过 Node fallback shell 调起的 `mvn` launcher 在 OpenJDK 17.0.18+8 + Windows 11 环境下崩溃（`EXCEPTION_ACCESS_VIOLATION` 在 `jvm.dll+0x2cf4ce`，elapsed time 0.023s，11 个 hs_err_pid*.log 同一症状），与本轮代码无关。用户后续在 IDEA 内 Rebuild + Maven clean + package 验证均通过，等价于 b7-a 验证。后续 `mvn` 命令应直接从 IDEA Run/Debug 或原生 `cmd /c mvn ...` 调用，避免 Node fallback shell。
 - AgentHub P0 未做的项目：dashboard / 值班报表、`workMode=STRICT` 下的独占报锁语义、动态 TTL 自适应、多 Agent 同时值班的 concurrency 预扣语义；后续 AgentHub V1 P1 启动时按优先级推。
 - E2E 脚本依赖用户手动在 IDEA 启动后端 + docker compose 起 postgres/redis/rabbitmq；CI 路径未沉淀。
+
+---
+
+### 2026-07-16 A 档收尾：值班只读报表接口 + S6 重定义为启动守卫 + 文档失真修正
+
+#### 1. 范围
+
+- N12 P1 收尾：新增值班租约只读报表接口（分页列表 + 状态概览），作为后续 dashboard 数据源。
+- N6 遗留 S6 收口：把"手动 MQ-isolation 重启验证"重定义为独立的启动期 fail-fast 守卫脚本。
+- 文档失真修正：差距表 + 迭代记录中 `agent_duty_lease` 被误记为 Flyway V18 的两处（实为 `V1__init_all.sql` 建表，V18 是 `event_consumption_log`）。
+- 明确不做：`AgentExecutionProperties.java` 注释（核查后无 T5 前旧语义残留，见下）、dashboard 前端、`workMode=STRICT` 独占报锁、concurrency 预扣。
+
+#### 2. 实际落地
+
+- **N12 P1：值班只读报表接口**
+  - `AgentDutyLeaseService` 新增两个只读查询：`listLeases(agentId, status, pageNum, pageSize)`（`LambdaQueryWrapper` 条件过滤 + `orderByDesc(startedAt)` + MyBatis-Plus `page(...)` 分页）、`countByStatus()`（按 `AgentDutyLeaseStatus` 枚举逐状态 `count(...)`，`LinkedHashMap` 保序）。
+  - 新增 DTO（`helloai-api/dto/duty/`）：`DutyLeaseResponse`（租约列表项，含 agentId/agentName/sessionId/workMode/maxConcurrent/status/startedAt/lastRenewedAt/expiresAt/closeReason）、`DutyOverviewResponse`（active/closed/expired/total 状态概览）。
+  - 新增 `AgentDutyLeaseController`（`@RestController @RequestMapping("/api/admin/duty-leases") @RequiredArgsConstructor`，构造器注入 `AgentDutyLeaseService` + `AgentMapper`）：
+    - `GET /api/admin/duty-leases`：`list(agentId, status, page=1, size=20)` → `R<PageResult<DutyLeaseResponse>>`，`@RequestParam` 显式 `value`+`defaultValue`；列表项 `agentName` 用局部 `nameCache`（`HashMap` + `computeIfAbsent`）避免逐行查 Agent 名的 N+1。
+    - `GET /api/admin/duty-leases/overview` → `R<DutyOverviewResponse>`，从 `countByStatus()` 组装。
+  - 遵循 CODE_STYLE：Controller 薄、返回 `R<T>`、查询返回 Response DTO、逻辑删除交 `@TableLogic` 自动过滤。
+
+- **N6 遗留 S6：重定义为独立启动守卫脚本 `verify-execution-dispatch-guard.ps1`（新增）**
+  - 背景：T5 引入 `ExecutionDispatchValidator` 后，旧 S6 组合（consumer-mode ∈ {POLLER,BOTH} + consumer-enabled=false）会在 `@PostConstruct` 阶段直接 `IllegalStateException` fail-fast，应用根本起不来——旧 S6 已不再是"能跑的验证"，而是"被启动期守卫拦截的非法部署形态"。它本质需要"重启 JVM + 观察启动成败"，与 `verify-poller-e2e.ps1` 的"运行期 Poller 兜底 E2E"不是一类验证，故单独成脚本、不再塞进 poller 脚本。
+  - 三场景：G1（`consumer-enabled=false` → 期望 fail-fast，日志含 `consumer-mode=POLLER` + `consumer-enabled=true`）、G2（`producer-enabled=false` → 期望 fail-fast，日志含 `dispatch-mode=MQ` + `producer-enabled=true`）、G3（`dispatch-mode=NONE` + `consumer-mode=EVENT` → 期望启动成功 + `/api/health` 200，合法最简组合不依赖 MQ）。
+  - 断言口径：`Verify-FailFast`（进程在超时内退出 + exitCode≠0 + 日志命中期望 ASCII 片段 + 6565 未 Listen）；`Verify-Healthy`（进程持续存活 + `/api/health` 200）。脚本跑完不自动重启正常实例，仅打印恢复提示。遵循 skill 规则 6 编码防护。
+  - `verify-poller-e2e.ps1` 头注释 S6 段同步改写：从"手动 MQ-isolation"改为"已迁出，见 `verify-execution-dispatch-guard.ps1`"，并说明 T5 fail-fast 使旧组合作废。
+
+- **文档失真修正（两处 V18→V1）**
+  - 差距表 N6 处理建议：S6 从"手动 MQ-isolation 补充对照实验"改写为"独立启动期 fail-fast 守卫脚本"；N12 处理建议：标注值班只读报表接口已交付；§5 优先级第 3 条同步。
+  - 迭代记录：2026-07-16 AgentHub 轮的两处 `agent_duty_lease（Flyway V18）` 修正为 `V1__init_all.sql 第 1508 行建表`，并注明 V18 实为 `event_consumption_log`、本轮实际新增 schema 仅 V21 `agent_mcp_server` duty tools seed。
+
+#### 3. 影响
+
+- 对外行为变化：新增 `GET /api/admin/duty-leases`（分页列表）+ `GET /api/admin/duty-leases/overview`（状态概览）两个只读管理端点。
+- 代码变化：
+  - `helloai-core/.../service/AgentDutyLeaseService.java`：新增 `listLeases` / `countByStatus` 两个只读方法（+ `LambdaQueryWrapper` / `IPage` / `Page` / `LinkedHashMap` / `Map` import）。
+  - `helloai-api/.../controller/AgentDutyLeaseController.java`（新增）、`helloai-api/.../dto/duty/DutyLeaseResponse.java`（新增）、`helloai-api/.../dto/duty/DutyOverviewResponse.java`（新增）。
+  - `verify-execution-dispatch-guard.ps1`（新增，S6 v1.0；交付后用户实测触发 PS 5.1 解析错误 `Unexpected token '}'`，定位为双引号字符串内含中文全角括号叠加隐藏 BOM 字节被解析器提前闭合，已全量重构为**单引号 + `+` 拼接、runtime 字面量纯 ASCII、头注释去中文**）、`verify-poller-e2e.ps1`（头注释 S6 段改写）。
+  - skill 规则 6 补第 5 子项（双引号 CJK 提前闭合陷阱 + 单引号拼接修复范式）：5 份 `helloai-preflight` SKILL.md（`.agents` 母版 + `.qoder/.trae/.cursor/.claude` 4 镜像）+ `AGENTS.md`（Additional rules 补一条英文精简条目）同步；差距表 D8 补第 5 子项。注：`.agents/helloai-guidance.master.json` 生成器母版不在仓库内，AGENTS.md 本轮按其既有精简英文风格手工补条，未走"改母版→重生成"路径。
+  - `doc/HelloAI_实现差距表.md`（N6/N12 处理建议 + §5 优先级）、`doc/HelloAI_迭代执行记录.md`（两处 V18→V1 失真修正 + 本轮记录）。
+- 数据结构变化：无（值班报表复用既有 `agent_duty_lease` 表，纯只读查询）。
+- 主动不改：`AgentExecutionProperties.java` —— 用户反馈"下面字段注释还写着 DB Poller 成为主消费路径"，Grep 全文核查后注释已全是 T5 新语义（"Poller 仅作兜底"/"MQ 主消费 + Poller 孤儿兜底"/"不再是主消费路径（T5 语义）"），无该陈旧残留，故本轮不动此文件；真正的歧义源是枚举值名 `POLLER` 本身与"MQ 主消费"语义不符，改名为破坏性变更，建议单独立项，本轮不做。
+
+#### 4. 遗留
+
+- 值班报表 Java 改动（Controller + 2 DTO + Service 只读方法）需在 IDEA 内 Rebuild 验证编译：Bash 工具经 Node fallback shell 调 `mvn` 会必现 JVM `EXCEPTION_ACCESS_VIOLATION` 崩溃，本轮已逐一静态核对依赖点（`PageResult.of` / `R` / `LambdaQueryWrapper` / `AgentMapper` 均为既有可用 API），编译验证转 IDEA。
+- `verify-execution-dispatch-guard.ps1` 需在"后端可启动 + docker compose 起 postgres/redis/rabbitmq + jar 已构建"环境下实测 G1/G2/G3；本轮仅交付脚本，未跑真实三场景。
+- dashboard 前端接入值班报表接口、`workMode=STRICT` 独占报锁语义、动态 TTL 自适应、多 Agent 同时值班的 concurrency 预扣语义仍为 AgentHub V1 P1 后续项。
+
+---
+
+### 2026-07-16 A 档收尾验证：值班报表编译确认 + S6 守卫脚本实测 12/12 PASS
+
+#### 1. 范围
+
+- 关闭上一轮（“A 档收尾”）两处遗留：值班报表 Java 编译验证、`verify-execution-dispatch-guard.ps1` 三场景实测。
+- 明确不做：值班报表两个只读端点的运行时冒烟（`GET /api/admin/duty-leases` 与 `/overview`），按用户约定推迟到前后端联调时一并测；dashboard 前端、`workMode=STRICT` 独占报锁、concurrency 预扣不做。
+
+#### 2. 实际落地
+
+- **值班报表编译验证（上轮遗留①关闭）**
+  - 用户在 IDEA Rebuild + Maven clean + package 通过；核实 `AgentDutyLeaseController.class` / `DutyLeaseResponse.class` / `DutyOverviewResponse.class`（helloai-api）+ `AgentDutyLeaseService.class`（helloai-core）均于 15:07 重新编译，`helloai-start-1.0.0-SNAPSHOT.jar`（约 60MB）同批产出。`mvn package` 成功即等价编译验证，无需 verify-*.ps1。
+
+- **`verify-execution-dispatch-guard.ps1` 实测 + 三处修复（上轮遗留②关闭）**
+  - 实测前脚本因运行环境暴露三个 bug，逐一修复：
+    1. **java 解析健壮化**：裸 `java` 命中 Oracle javapath 存根（静默空转、无输出）、且用户机上 `ms-17.0.18` 这套 JDK 安装本身损坏（连 `java -version` 都直接 `EXCEPTION_ACCESS_VIOLATION @ jvm.dll+0x2cf4ce` 崩溃）。改 `Resolve-JavaExe` 为探测式：按 显式 `-JavaExe` → `JAVA_HOME` → `where.exe`（跳过 javapath/WindowsApps）→ `%USERPROFILE%\.jdks\*` 降序 逐个 `Probe-JavaVersion`（用 Start-Process 跑 `-version`），跳过静默/崩溃候选，选中首个能真正打印版本号者（实测自动选中健康的 `ms-17.0.19`）。新增 `-JavaExe` 手动覆盖参数。
+    2. **退出码取空**：`Start-Process -PassThru -NoNewWindow` 起的进程退出后 `.ExitCode` 返回空（断言 `exit code non-zero (got )` 假失败）。修复：Start-Process 后立刻 `$null = $proc.Handle` 缓存句柄，保留 ExitCode。
+    3. **`[string]` 参数类型约束强转**：`param([string]$JavaExe)` 使脚本作用域的 `$script:JavaExe` 被约束为 [string]，直接把 `Resolve-JavaExe` 返回的 hashtable 赋给它会被 `.ToString()` 成字符串 `"System.Collections.Hashtable"`，导致 FilePath 为空。修复：用独立无类型变量 `$javaInfo` 接 hashtable，只把 `.Exe` 字符串赋 `$script:JavaExe`。
+  - 修复后实测三场景（真实 jar，docker postgres Up）：**G1（`consumer-enabled=false`）fail-fast + exit code 1 + 日志命中 `consumer-mode=POLLER`/`consumer-enabled=true` + 6565 未 Listen；G2（`producer-enabled=false`）fail-fast + exit code 1 + 日志命中 `dispatch-mode=MQ`/`producer-enabled=true` + 6565 未 Listen；G3（`dispatch-mode=NONE` + `consumer-mode=EVENT`）进程存活 + `/api/health` 200。PASS: 12 / FAIL: 0（2026-07-16 14:59 实测）。** 证明 T5 `ExecutionDispatchValidator` 启动期 fail-fast 守卫在真实环境按预期拦截非法组合、放行合法最简组合。
+
+#### 3. 影响
+
+- 对外行为变化：无（本轮为验证 + 脚本健壮化，无业务代码改动）。
+- 代码变化：
+  - `verify-execution-dispatch-guard.ps1`：`Resolve-JavaExe` 重写为探测式 + 新增 `Probe-JavaVersion` + 新增 `-JavaExe` 参数 + `Start-App` 加 `$null = $proc.Handle` + preflight 用独立变量 `$javaInfo` 避免类型强转 + exit code null 假阳性修复。
+  - `doc/HelloAI_实现差距表.md`（N6 S6 补实测结论）、`doc/HelloAI_迭代执行记录.md`（本轮记录）。
+- 数据结构变化：无。
+
+#### 4. 遗留
+
+- 值班报表两个只读端点（`GET /api/admin/duty-leases` 分页列表 + `/overview` 状态概览）的运行时冒烟未做，约定在 AgentHub V1 P1 dashboard 前后端联调时一并验证。
+- `ms-17.0.18` 这套 JDK 安装已损坏（非项目问题），建议用户删除或重装；守卫脚本已能自动绕过、优先选健康 JDK。
+- dashboard 前端接入、`workMode=STRICT` 独占报锁、动态 TTL 自适应、多 Agent 同时值班的 concurrency 预扣仍为 AgentHub V1 P1 后续项。
