@@ -8,7 +8,7 @@
 //   - com.helloai.api.dto.PageResult
 // ============================================================
 
-import type { LongId, PageResult } from './index'
+import type { LongId } from './index'
 
 // --- 枚举 ---
 export type DutyLeaseStatus = 'ACTIVE' | 'CLOSED' | 'EXPIRED'

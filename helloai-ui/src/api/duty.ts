@@ -1,5 +1,6 @@
 import request from './request'
-import type { DutyLeaseResponse, DutyOverviewResponse, PageResult } from '@/types/duty'
+import type { DutyLeaseResponse, DutyOverviewResponse } from '@/types/duty'
+import type { PageResult } from '@/types'
 
 /**
  * AgentHub V1 P1 值班报表前端 API（对齐后端 AgentDutyLeaseController）。

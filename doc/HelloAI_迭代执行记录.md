@@ -1897,3 +1897,71 @@ DB 验证：
   - 根因：**非 Flyway 回归**。用户在 Windows / macOS 之间手工把 V1~V22 多个 SQL 文件合并回 `V1__init_all.sql` 做集中初始化时，遗漏了其中某段（典型为某条 CREATE TABLE 或 seed INSERT），导致 `agent_duty_lease` 等派生表未随 V1 一同初始化。手动补跑一次合并后的 `init_all.sql` 后四步全过（实测时已排除）。
   - 决策：用户明确“新环境干净 Flyway 跑下来不会复现，问题可暂忽略”，本轮 **不立项 P-FIX**；新成员接入仍以官方 `docker compose up -d` + Flyway V1~V22 顺序跑为主路径。
   - 复现防护（非本次交付）：未来如再需手工合并迁移文件，建议增加一份“合并后 V1 ≡ 当前 baseline”的差异自检脚本（不在本轮范围内）。
+  
+  ---
+  
+  ## 6. 下一步方案：N12 P1 剩余三项（待用户拍板）
+  
+  本节由 2026-07-16 A 档收尾后双文档同步记录使用，仅作方案池与工作量参考，不包含代码落地。决定启动哪个方案后请在本节下追加“### 已拍板：方案 X”子节，再据此拉新迭代轮次。
+  
+  ### 6.1 背景
+  
+  A 档收尾（2026-07-16）已交付 N12 的 P0（值班租约闭环 + 值班优先调度）与 P1（只读报表 + dashboard 前端接入 + R2 旧 Publisher 清理 + R3 V22 backfill）。剩余三项 P1 能力尚未动：
+  
+  | 项 | 字段已存在 | 语义未实现 | 触达模块 |
+  |---|---|---|---|
+  | STRICT 独占报锁 | `agent_duty_lease.work_mode` | Selector 未按 STRICT 拒绝非专属任务 / 独占期间不接受其它任务 | `AgentSelector.pickAlternative` |
+  | concurrency 预扣 | `agent_duty_lease.max_concurrent` | Selector 未读 `max_concurrent`，未维护 `sub_task` slot 引用计数 | `sub_task` 状态机 + slot 计数表 + Redis SETNX 锁 + Selector + Job |
+  | 动态 TTL 自适应 | `agent_duty_lease.ttl_minutes` | startLease 与续约都是硬编码 TTL，未根据 `agent.score` / `consecutive_failure_count` 动态调整 | `DutyLeaseExpirationTask` + `AgentDutyLeaseService.startLease / heartbeat` |
+  
+  ### 6.2 五方案对比
+  
+  | 方案 | 内容 | 总估时 | 风险 | 推荐度 | 适用场景 |
+  |---|---|---|---|---|---|
+  | **A1** | 仅做 STRICT 独占报锁 | 0.5–1h | 低 | ⭐⭐⭐ 试水 | 想知道 N12 后续怎么“调档”，先做个轻的压压轴 |
+  | **A2** | STRICT → 动态 TTL → concurrency 三项顺序从轻到重 | 5–8h（分 3 段） | 低→中→高 渐进可控 | ⭐⭐⭐⭐⭐ | 期望分项交付，每项独立 commit + verify + 文档回填 |
+  | **A3** | 仅做 concurrency 预扣（价值最高） | 3–4h | 高 | ⭐⭐ | 上来啃最难的骨，头铁专用 |
+  | **A4** | 三项一次性串行做完（合并一个 round） | 5–8h 一次 | 中 | ⭐⭐ | 跨度大，不建议作为单一轮次 |
+  | **A5** | A1 + Agent 管理页文案轻改（`ACTIVE/DISABLED` → “在岗/离岗”） | 1.5h | 低 | ⭐⭐⭐⭐ | 兼顾 UI 概念混淆与 N12 后续，工作面最小 |
+  
+  ### 6.3 单项细节
+  
+  #### 6.3.1 STRICT 独占报锁（轻）
+  
+  - `AgentSelector.pickAlternative`：当存在任一 ACTIVE 且 `work_mode=STRICT` 的 lease，若任务不匹配该 Agent 专业域则跳过；STRICT 期间仅专属任务可被派发到该 Agent。
+  - `McpMcpServer.checkIn` 已收 tool 入口，无需新增。
+  - 单测 1–2 个用例覆盖：STRICT Agent 接到非专属任务时不入候选；专属任务可正常派发。
+  - 验证脚本沿用 `verify-agenthub-duty-e2e.ps1` 加 S6 STRICT 子场景（不新增脚本）。
+  
+  #### 6.3.2 动态 TTL 自适应（中）
+  
+  - 指标：优先读 `agent.score`（如已有）或 `consecutive_failure_count`；低表现 Agent 缩短 TTL（5min）以便快速回收，高表现 Agent 拉长 TTL（2–4h）减少续约开销。
+  - `AgentDutyLeaseService.startLease`：TTL 入参可空，为空时按 `Agent.score` 计算默认值。
+  - `heartbeat`/`DutyLeaseExpirationTask` 续约路径调用 `adaptiveRenew(now)`，按上次成功时间拉长或缩短。
+  - 新增 V24 `agent_duty_lease_renewal_policy` 表（`agent_id`, `consecutive_failure_count`, `recent_success_rate`, `last_score`, `effective_ttl_minutes`）作为策略落地处。
+  - 单测 2–3 个用例覆盖：低分 Agent TTL 缩短；高分 Agent TTL 延长；连续失败重置 TTL。
+  - 新增 `verify-dashboard-duty-leases.ps1` 子场景 S7 抽查续约 TTL 区间。
+  
+  #### 6.3.3 concurrency 预扣（重）
+  
+  - 新增 `agent_slot_inuse` 物化表（或用 `sub_task WHERE status IN (ASSIGNED, IN_PROGRESS, REVIEW, REWORK)` 实时 GROUP BY）。
+  - `AgentSelector.pickAlternative`：排除 `inuse >= max_concurrent` 的 Agent，保留按 `dutyRank` 排序的语义。
+  - `sub_task` 状态机：在 `ASSIGNED → IN_PROGRESS → REVIEW/DONE/REWORK/CANCELLED` 转换时维护 slot 引用计数（ASSIGNED +1，DONE/CANCELLED -1）。
+  - Redis SETNX 三段式：`acquireSlot(agentId)`（预扣）/ 真扣（事务内提交）/ `releaseSlot(agentId)`（归还）；任一异常路径都需要正确归还。
+  - 跨进程锁避坑：slot 计数走 Redis 主键，DB 写入走 `uk_duty_lease_agent_active` 的 partial unique index 防重。
+  - 单测 3–4 个用例：预扣冲突降级、跨进程释放一致性、ABORTED/FAILED 归还、最大并发上限生效。
+  - 新增 `verify-agenthub-duty-e2e.ps1` 子场景 S7 concurrency（多 sub_task 打到同一 Agent 时不超过 max_concurrent）。
+  - 文档同步：差距表 N12 行从“保持现状”改为“部分交付 / A2/A3 子项进行中”。
+  
+  ### 6.4 推荐路径
+  
+  - **首选 A2**：从轻到重，渐进可控，3 个 atomic round，每项独立 commit + verify + 文档回填。
+  - **次选 A5**：若想先消化“Agent 管理页面与值班租约页面 ACTIVE 同名” 的概念混淆，同步做 UI 轻改。
+  - **不推荐 A4**：跨度大，单一轮次风险不可控。
+  
+  ### 6.5 待用户拍板
+  
+  - [ ] 方案 A1 / A2 / A3 / A4 / A5 中选一个
+  - [ ] 选完后回写本节“### 已拍板：方案 X” 并在差距表 §5 优先级建议 / N12 处理建议列同步状态
+  
+  ---
