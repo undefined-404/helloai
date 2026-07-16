@@ -1,5 +1,17 @@
-# ============================================================
+﻿# ============================================================
 # helloai execution-dispatch startup guard verifier (S6, v1.0)
+# 用途：验证 ExecutionDispatchValidator 的启动期 fail-fast 守卫。反复用不同
+#       调度配置组合启动 helloai-start，断言非法组合在 @PostConstruct 直接 fail-fast
+#       （进程退出码非 0 + 6565 未 Listen + 日志命中期望片段），合法组合 /api/health 200。
+#         G1  consumer-mode=POLLER + consumer-enabled=false  -> 期望 fail-fast
+#         G2  dispatch-mode=MQ     + producer-enabled=false  -> 期望 fail-fast
+#         G3  dispatch-mode=NONE   + consumer-mode=EVENT     -> 期望 /api/health 200
+# Ref:  doc/HelloAI_实现差距表.md      (N6，S6 守卫脚本 = 本文件)
+#       doc/HelloAI_调度解耦重构分析.md (Validator 启动期 fail-fast / consumer-mode 语义)
+#       .agents/skills/helloai-preflight/SKILL.md (规则 6：脚本 UTF-8 编码)
+# 前置：docker compose up -d 起 helloai-postgres；已 mvn package 出最新 jar。
+# 用法（项目根）：
+#   powershell -ExecutionPolicy Bypass -File .\scripts\powershell\verify-execution-dispatch-guard.ps1
 # (all strings use single-quote + concat to avoid PS 5.1 parser issues)
 # ============================================================
 
@@ -19,7 +31,8 @@ $ErrorActionPreference = 'Continue'
 $container = 'helloai-postgres'
 $port      = 6565
 $healthUrl = 'http://localhost:6565/api/health'
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+# 脚本已迁至 scripts/powershell/，仓库根 = 脚本目录向上两级（保持 tmp 日志目录与迁移前一致）
+$scriptDir = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path))
 $runTag    = (Get-Date -Format 'yyyyMMdd-HHmmss')
 $logDir    = Join-Path $scriptDir ('tmp\dispatch-guard-' + $runTag)
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
@@ -280,7 +293,7 @@ Write-Output (' logDir = ' + $logDir)
 Write-Output ''
 Write-Output 'NOTE: all test instances stopped, port 6565 released.'
 Write-Output '      To resume normal operation, start with default config, e.g.:'
-Write-Output '      powershell -ExecutionPolicy Bypass -File .\start-sb.ps1'
+Write-Output '      powershell -ExecutionPolicy Bypass -File .\scripts\powershell\start-sb.ps1'
 Write-Output ''
 
 if ($global:FailCount -gt 0) { exit 1 } else { exit 0 }

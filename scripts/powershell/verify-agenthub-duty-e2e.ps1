@@ -20,8 +20,8 @@
 #   - Flyway 已跑到 V21（agent_mcp_server 已 seed checkIn/checkOut）
 #
 # Usage (project root, PowerShell 5.1):
-#   powershell -ExecutionPolicy Bypass -File .\verify-agenthub-duty-e2e.ps1
-#   powershell -ExecutionPolicy Bypass -File .\verify-agenthub-duty-e2e.ps1 -Cleanup
+#   powershell -ExecutionPolicy Bypass -File .\scripts\powershell\verify-agenthub-duty-e2e.ps1
+#   powershell -ExecutionPolicy Bypass -File .\scripts\powershell\verify-agenthub-duty-e2e.ps1 -Cleanup
 # ============================================================
 
 param(
@@ -41,7 +41,8 @@ $OutputEncoding           = $script:Utf8NoBom   # 关键：无 BOM，防止管�
 Add-Type -AssemblyName System.Net.Http
 
 $base        = "http://localhost:6565"
-$scriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
+# 脚本已迁至 scripts/powershell/，仓库根 = 脚本目录向上两级（保持 .out/.log 相对路径与迁移前一致）
+$scriptDir   = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path))
 $sseFile     = Join-Path $scriptDir "sse-duty-e2e.txt"
 $logFile     = Join-Path $scriptDir "verify-agenthub-duty-e2e.log"
 

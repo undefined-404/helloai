@@ -1,3 +1,12 @@
+﻿# ============================================================
+# helloai 辅助运维脚本：启动 helloai-start 后端（Phase 2G E2E MQ 场景）
+# 用途：以 dispatch-mode=BOTH + producer/consumer 双开关=true 启动后端，供 MQ 链路
+#       E2E（Outbox / Confirm、双路消费）使用；日志 spring-boot-e2e-mq.log(.err)。
+# Ref:  doc/HelloAI_实现差距表.md (N1 Outbox / N6 执行命令消费)；配合 verify-outbox-relay-confirm-e2e.ps1。
+# 用法（项目根）：powershell -File .\scripts\powershell\start-sb-e2e-mq.ps1
+# 注意：脚本内以绝对路径 Set-Location 到仓库根，位置无关；当前写死用 .jdks\ms-17.0.18，
+#       若该 JDK 损坏（EXCEPTION_ACCESS_VIOLATION）需改为健康 JDK（如 ms-17.0.19）。
+# ============================================================
 $ErrorActionPreference = 'Stop'
 Set-Location e:\yhzx\1027\helloai
 $logFile = 'e:\yhzx\1027\helloai\spring-boot-e2e-mq.log'

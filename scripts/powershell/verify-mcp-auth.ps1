@@ -1,5 +1,11 @@
-# ============================================================
+﻿# ============================================================
 # helloai MCP M4 鉴权验证脚本 v9
+# 用途：验证 MCP-over-SSE 通道的鉴权闭环（无 token / admin token / agent apiKey
+#       组合 -> 期望 401 / 200 + agentId 覆盖），M4 认证上下文回归。
+# Ref:  doc/HelloAI_实现差距表.md (N3 MCP Server 工具集 / N10 工牌模式 credential_vault)
+#       .agents/skills/helloai-preflight/SKILL.md (规则 6：脚本 UTF-8 编码)
+# 前置：helloai-start 已在 6565 运行；docker compose 起 postgres。
+# 用法（项目根）：powershell -File .\scripts\powershell\verify-mcp-auth.ps1
 # 流程：
 #   1) admin 登录 -> adminToken
 #   2) 创建测试 agent (adminToken) -> agentApiKey

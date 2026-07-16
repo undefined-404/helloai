@@ -1,3 +1,13 @@
+﻿# ============================================================
+# helloai 子任务重派自动执行验证脚本
+# 用途：验证子任务在 blocked / offline 两种场景下被重新分派到目标 API_KEY_LLM Agent
+#       后能自动继续执行闭环（reassign -> 目标 Agent 接手 -> assignedAgent 校验 + timeline 证据）。
+# Ref:  doc/HelloAI_调度解耦重构分析.md；doc/HelloAI_实现差距表.md (N11 调度策略：外部优先/空闲优先/LLM 保底)
+# 前置：helloai-start 已在 6565 运行；-BindVault 时需环境变量 DEEPSEEK_API_KEY。
+# 用法（项目根）：
+#   powershell -File .\scripts\powershell\verify-subtask-redispatch-auto-execution.ps1 -Scenario blocked
+#   powershell -File .\scripts\powershell\verify-subtask-redispatch-auto-execution.ps1 -Scenario offline
+# ============================================================
 param(
     [string]$BaseUrl = "http://localhost:6565",
     [ValidateSet("blocked", "offline")]

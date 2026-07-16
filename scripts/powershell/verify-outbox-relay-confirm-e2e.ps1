@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # helloai Phase 2H ②b RabbitMQ failure-path verifier (v1)
 # Ref:  doc/HelloAI_迭代执行记录.md T4
 #       差距表 N1 / 调度解耦分析 / OutboxRelayTask.handleConfirm
@@ -69,7 +69,8 @@ $execCmdExchange = 'helloai.execution-command.exchange'
 $execCmdQueue    = 'helloai.execution-command.queue'
 $execCmdBinding  = 'execution.command.*'
 
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+# 脚本已迁至 scripts/powershell/，仓库根 = 脚本目录向上两级（保持 .out 日志与 helloai-start 相对路径与迁移前一致）
+$scriptDir = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path))
 
 $runTag = (Get-Date -Format 'yyyyMMdd-HHmmss')
 

@@ -1,3 +1,11 @@
+﻿# ============================================================
+# helloai Agent 执行预览验证脚本
+# 用途：验证 Agent 执行链路"最小执行/预览"闭环——建 Agent +（可选）绑定 credential_vault，
+#       触发执行并断言输出包含期望片段（默认 [mock-executor]）。
+# Ref:  doc/HelloAI_执行链路架构分析.md；doc/HelloAI_实现差距表.md (N6 执行命令消费与结果回写 / N10 credential_vault)
+# 前置：helloai-start 已在 6565 运行。
+# 用法（项目根）：powershell -File .\scripts\powershell\verify-agent-execution-preview.ps1
+# ============================================================
 param(
     [string]$BaseUrl = "http://localhost:6565",
     [string]$ExpectedSubstring = "[mock-executor]",

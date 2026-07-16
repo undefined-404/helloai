@@ -1,3 +1,13 @@
+﻿# ============================================================
+# helloai 子任务重派诊断编排脚本
+# 用途：一键编排"（可选构建并）重启后端 -> 等 /actuator/health UP -> 跑
+#       verify-subtask-redispatch-auto-execution.ps1 -> 打印 subTaskId 与排障 SQL"，
+#       用于 blocked / offline 重派链路的诊断复现。
+# Ref:  doc/HelloAI_调度解耦重构分析.md；doc/HelloAI_实现差距表.md (N11 调度策略)
+# 前置：docker compose 起 postgres；仓库可 mvn package。
+# 用法（项目根）：powershell -File .\scripts\powershell\run-redispatch-diagnose.ps1 -Scenario blocked
+# 说明：调用同目录 kill-old.ps1 / start-sb.ps1 / verify-subtask-redispatch-auto-execution.ps1（$PSScriptRoot 相对）。
+# ============================================================
 param(
     [string]$BaseUrl = "http://localhost:6565",
     [ValidateSet("blocked", "offline")]
@@ -38,8 +48,8 @@ if ($RestartBackend) {
         Write-Host "STEP0: build backend"
         mvn -pl helloai-start -am -DskipTests package | Out-Null
     }
-    & .\kill-old.ps1
-    & .\start-sb.ps1
+    & (Join-Path $PSScriptRoot 'kill-old.ps1')
+    & (Join-Path $PSScriptRoot 'start-sb.ps1')
 }
 
 Write-Host "STEP0.1: wait for /actuator/health"
@@ -66,7 +76,7 @@ $invokeParams = @{
 }
 if ($BindVault) { $invokeParams.BindVault = $true }
 
-$output = & .\verify-subtask-redispatch-auto-execution.ps1 @invokeParams 2>&1 | Tee-Object -FilePath $logPath
+$output = & (Join-Path $PSScriptRoot 'verify-subtask-redispatch-auto-execution.ps1') @invokeParams 2>&1 | Tee-Object -FilePath $logPath
 Write-Host ("runLog=" + $logPath)
 
 $subTaskId = $null

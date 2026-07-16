@@ -1,3 +1,11 @@
+﻿# ============================================================
+# helloai Agent LLM 真连通验证脚本
+# 用途：验证平台内 API_KEY_LLM Agent 通过 credential_vault 绑定真实 Provider(DeepSeek)
+#       后能真正连通 LLM 并返回结果（真连通冒烟，非 mock）。
+# Ref:  doc/HelloAI_实现差距表.md (N9 Provider 配置与 ChatClient 复用 / N10 credential_vault)
+# 前置：helloai-start 已在 6565 运行；-BindVault 时需环境变量 DEEPSEEK_API_KEY。
+# 用法（项目根）：powershell -File .\scripts\powershell\verify-agent-llm-connectivity.ps1 -BindVault
+# ============================================================
 param(
     [string]$BaseUrl = "http://localhost:6565",
     [switch]$BindVault,

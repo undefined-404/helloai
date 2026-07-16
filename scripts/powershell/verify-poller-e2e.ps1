@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # helloai DB Poller end-to-end verifier (v3.1 — T5 降级后 + AgentHub V1 + 主消费路径隔离)
 # Ref:  doc/HelloAI_调度解耦重构分析.md §7 阶段 1
 #       架构设计参考 §5.1 第一阶段
@@ -41,8 +41,8 @@
 #   - Poller enabled + consumer-mode allows Poller to run
 #
 # Usage (project root):
-#   powershell -ExecutionPolicy Bypass -File .\verify-poller-e2e.ps1
-#   powershell -ExecutionPolicy Bypass -File .\verify-poller-e2e.ps1 -SkipPrepare
+#   powershell -ExecutionPolicy Bypass -File .\scripts\powershell\verify-poller-e2e.ps1
+#   powershell -ExecutionPolicy Bypass -File .\scripts\powershell\verify-poller-e2e.ps1 -SkipPrepare
 #
 # All runtime literals are ASCII (PS 5.1 + UTF-8 no-BOM double-quote pitfall).
 # Comments may use CJK for readability.
@@ -58,7 +58,8 @@ $ErrorActionPreference = 'Stop'
 $container = 'helloai-postgres'
 $pgUser    = 'postgres'
 $pgDb      = 'helloai'
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+# 脚本已迁至 scripts/powershell/，仓库根 = 脚本目录向上两级（保持 .out 日志与 helloai-start 相对路径与迁移前一致）
+$scriptDir = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path))
 
 $runTag = (Get-Date -Format 'yyyyMMdd-HHmmss')
 
