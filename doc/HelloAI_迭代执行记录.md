@@ -1754,3 +1754,66 @@ DB 验证：
 - 值班报表两个只读端点（`GET /api/admin/duty-leases` 分页列表 + `/overview` 状态概览）的运行时冒烟未做，约定在 AgentHub V1 P1 dashboard 前后端联调时一并验证。
 - `ms-17.0.18` 这套 JDK 安装已损坏（非项目问题），建议用户删除或重装；守卫脚本已能自动绕过、优先选健康 JDK。
 - dashboard 前端接入、`workMode=STRICT` 独占报锁、动态 TTL 自适应、多 Agent 同时值班的 concurrency 预扣仍为 AgentHub V1 P1 后续项。
+
+---
+
+### 2026-07-16 B 档收尾验证：Poller 兜底 E2E 实测 15/15 PASS
+
+#### 1. 范围
+
+- 关闭 N6 运行态兜底验证遗留：在真实运行环境下重跑 `scripts/powershell/verify-poller-e2e.ps1`，确认 S1-S5 全部可重复通过。
+- 本轮只收口验证脚本与文档，不改业务链路语义；明确不做：新增消费模式、调整 `ExecutionCompensationTask` 周期、改 `startIfNeeded` 契约、扩展到前端/dashboard。
+
+#### 2. 实际落地
+
+- **`scripts/powershell/verify-poller-e2e.ps1` 健壮化与口径收口**
+  - pre-flight 健康检查由单次 `Invoke-WebRequest` 改为 30 秒窗口内重试，并在失败时额外输出 `listening=` 与 `lastErr=`，区分“服务未启动”与“服务已起但 health 不通”。
+  - mock execution hard gate 前移到 sample prepare 之前；若 `GET /api/health/execution-mode` 返回 `mockMode=false` 且 provider 不是 `mock`，脚本直接 fail-fast，避免失败时先污染 e2e 样本数据。
+  - 新增 `-AllowRealExecution` 开关；默认仍坚持 fail-fast，只有显式允许时才在真实 LLM 环境继续执行。
+
+- **S2 / S4 / S5 样本构造修正，统一对齐 T5 `startIfNeeded` 契约**
+  - 首轮实测暴露出脚本-行为漂移：S2/S4/S5 若把样本 `sub_task` 建成或重置为 `PENDING`，当前 T5 的 `startIfNeeded` 会拒绝推进，只留下 `consume_skipped` 或被 30s `ExecutionCompensationTask` 抢先标 `TIMEOUT`，无法证明 Poller 驱动的真实 consume-path。
+  - 修正后：
+    - S2 改为独立 `ASSIGNED` sub_task（不复用主样本）；
+    - S4 三个额外 sub_task 全改为独立 `ASSIGNED`；
+    - S5 改为独立 `ASSIGNED` sub_task，不再 reset 共享样本回 `PENDING`。
+  - 这样 Poller 推出的 `consume -> startIfNeeded -> executeOnce` 路径与当前代码事实一致，不再依赖旧 era 的 `PENDING` 语义。
+
+- **S4 orphan age 窗口修正，避开补偿任务抢占**
+  - 首轮 runTag=`20260716-174205`：S4 三条记录使用 `create_time = now() - 300s`，在 5 秒等待窗口内被 `ExecutionCompensationTask` 抢先标 `TIMEOUT`，表现为 `total=3 / polled=0 / progressed=3 / distinct_sub_tasks=0`，属于“超时补偿推进”，不是 Poller 兜底证据。
+  - 修正为 `create_time = now() - 240s`：仍大于 `poller-orphan-threshold-seconds=60`，足以被 `listOrphanPending` 扫到；同时小于 `pendingTimeoutMinutes=5` 的 300s 阈值，避免被 30s timeout compensation 抢先接管。
+
+- **最终实测结果（真实运行环境）**
+  - `scripts/powershell/verify-poller-e2e.ps1`
+  - runTag=`20260716-174605`
+  - **PASS: 15 / FAIL: 0**
+  - 分场景：
+    - S1：孤儿 `PENDING` 行被 Poller 扫到，`last_attempt_at` 刷新，timeline 落 `sub_task_execution_command_poll_recovery`
+    - S2：5 条同 sub_task `PENDING` 记录中仅 1 条推进出 `PENDING`，验证 CAS `markRunning` 去重
+    - S3：`IN_PROGRESS` 子任务可接受晚到 `submitResult`
+    - S4：`polled=3 / progressed=3 / distinct_sub_tasks=3`，证明 3 条孤儿记录都由 Poller 兜底接住并推进
+    - S5：`last_attempt_at`、`sub_task_execution_command_poll_recovery`、`poll-recovery:` trigger、`rogue_consume_events=0` 四项证据链均成立，证明主消费路径不可达的轻量等价场景下，处理痕迹全部来自 Poller
+
+#### 3. 影响
+
+- 对外行为变化：无（本轮仅为验证脚本收口与文档回写）。
+- 代码变化：
+  - `scripts/powershell/verify-poller-e2e.ps1`
+    - 新增 pre-flight health retry / `listening=` 诊断
+    - mock gate 前移 + `provider` 判定 + `-AllowRealExecution`
+    - S2/S4/S5 独立 `ASSIGNED` sub_task 样本隔离
+    - S4 orphan age 从 300s 调整到 240s，避免 timeout compensation 抢占
+    - 若干 psql 输出解析与断言正则增强（避免表头/页脚干扰）
+- 文档变化：
+  - `doc/HelloAI_实现差距表.md`：N6 补最新 Poller E2E 15/15 与 S6 守卫 12/12 证据
+  - `doc/HelloAI_迭代执行记录.md`：补本轮收尾记录
+
+#### 4. 结论与遗留
+
+- 结论：N6 当前已同时具备
+  - **启动期守卫证据**：`scripts/powershell/verify-execution-dispatch-guard.ps1` → PASS 12 / FAIL 0
+  - **运行态兜底证据**：`scripts/powershell/verify-poller-e2e.ps1` → PASS 15 / FAIL 0
+  - 可视为 “T5 Poller 兜底 + Validator 启动期 fail-fast” 验证闭环完成。
+- 遗留：
+  - 控制台 CJK 显示在 PowerShell 5.1 下仍会有乱码，但不影响脚本断言与 `.out` 文件内容；如后续需要，可单独做控制台输出 ASCII 化收口。
+  - `helloai-api/src/main/java/com/helloai/api/controller/HealthController.java` 与 `helloai-start/src/main/resources/application.yml` 的当前工作区修改未纳入本轮验证收口提交，按用户后续独立决策处理。

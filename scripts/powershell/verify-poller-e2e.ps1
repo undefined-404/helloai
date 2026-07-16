@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 # helloai DB Poller end-to-end verifier (v3.1 — T5 降级后 + AgentHub V1 + 主消费路径隔离)
 # Ref:  doc/HelloAI_调度解耦重构分析.md §7 阶段 1
 #       架构设计参考 §5.1 第一阶段
@@ -49,7 +49,8 @@
 # ============================================================
 
 param(
-    [switch]$SkipPrepare
+    [switch]$SkipPrepare,
+    [switch]$AllowRealExecution
 )
 
 $ErrorActionPreference = 'Stop'
@@ -141,17 +142,79 @@ if (Test-Path $appYml) {
 }
 Write-Output "spring-boot port = $servicePort"
 
-try {
-    $hr = Invoke-WebRequest -Uri "http://localhost:$servicePort/api/health" -UseBasicParsing -TimeoutSec 3 -Method Get
-    if ([int]$hr.StatusCode -ne 200) {
-        Write-Error "Spring Boot health HTTP $($hr.StatusCode), please run start-sb.ps1"
-        exit 1
+$healthOk = $false
+$lastHealthErr = $null
+$deadline = (Get-Date).AddSeconds(30)
+while ((Get-Date) -lt $deadline) {
+    try {
+        $hr = Invoke-WebRequest -Uri "http://localhost:$servicePort/api/health" -UseBasicParsing -TimeoutSec 3 -Method Get
+        if ([int]$hr.StatusCode -eq 200) { $healthOk = $true; break }
+        $lastHealthErr = "HTTP " + $hr.StatusCode
+    } catch {
+        $lastHealthErr = $_.Exception.Message
     }
-    Write-Output "Spring Boot health OK"
-} catch {
-    Write-Error "Spring Boot unreachable: $($_.Exception.Message)"
+    Start-Sleep -Seconds 2
+}
+if (-not $healthOk) {
+    $port = 6565
+    try { $port = [int]$servicePort } catch {}
+    $listen = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+    $isListening = [bool]$listen
+    Write-Error ("Spring Boot unreachable at http://localhost:" + $servicePort + " (listening=" + $isListening + ", lastErr=" + $lastHealthErr + "). Start Spring Boot first (IDEA or .\\scripts\\powershell\\start-sb.ps1), then re-run.")
     exit 1
 }
+Write-Output "Spring Boot health OK"
+Write-Output ""
+
+# ============================================================
+# STEP 0.5: mock-execution hard gate (pre-flight for consume-path scenarios)
+#
+# 用户约束：S2/S5 走真实主消费链（consume -> startIfNeeded -> markRunning ->
+# executeOnce），必须锁定 mock 执行，不依赖真实 DeepSeek。否则脚本会把
+# "调度/消费链路验证" 退化为 "外部 LLM 稳定性验证"，引入随机波动。
+#
+# 证据优先级：
+#   (1) 运行期端点 GET /api/health/execution-mode（公开、无需认证，已在
+#       WebMvcConfig 中 /api/health/** 放行）回显 live app 的
+#       helloai.execution.mock-mode——最可信的运行期证据。
+#   (2) 若该端点不存在（旧构建未重启）或不可达，回退读 boot 配置源
+#       application.yml 的 mock-mode（配置源证据，非活时运行值）。
+#   两者均无法确认 mock-mode=true 时，直接 FAIL。
+# ============================================================
+Write-Output "=== [0.5] mock-execution hard gate ==="
+$mockMode = $null
+$provider = $null
+$mockSource = $null
+try {
+    $mockProbe = Invoke-WebRequest -Uri "http://localhost:$servicePort/api/health/execution-mode" -UseBasicParsing -TimeoutSec 5 -Method Get
+    $mockJson = $mockProbe.Content | ConvertFrom-Json
+    $mockMode = [bool]$mockJson.data.mockMode
+    $provider = [string]$mockJson.data.provider
+    $mockSource = 'runtime endpoint /api/health/execution-mode'
+} catch {
+    Write-Output ("runtime execution-mode probe unavailable (" + $_.Exception.Message + "); falling back to application.yml config source")
+    if (Test-Path $appYml) {
+        $mockLine = Select-String -Path $appYml -Pattern '^\s*mock-mode:\s*(true|false)' | Select-Object -First 1
+        if ($mockLine) {
+            $mockMode = ($mockLine.Matches.Groups[1].Value -eq 'true')
+            $mockSource = 'application.yml (config source, NOT live runtime)'
+        }
+        $providerLine = Select-String -Path $appYml -Pattern '^\s*provider:\s*(\S+)\s*$' | Select-Object -First 1
+        if ($providerLine) {
+            $provider = [string]$providerLine.Matches.Groups[1].Value
+        }
+    }
+}
+$safeMock = ($mockMode -eq $true) -or ($provider -eq 'mock')
+if (-not $safeMock) {
+    if ($AllowRealExecution) {
+        Write-Warning ("mock execution is OFF (mockMode=" + $mockMode + ", provider=" + $provider + ", source=" + $mockSource + "). Continue because -AllowRealExecution is set. This run may call a real LLM and is NOT a stable regression baseline.")
+    } else {
+        Write-Error ("mock execution is OFF or unconfirmed (mockMode=" + $mockMode + ", provider=" + $provider + ", source=" + $mockSource + "). This env would trigger a real LLM; results are NOT a stable regression baseline. Set helloai.execution.mock-mode=true (or provider=mock) and restart Spring Boot, or re-run with -AllowRealExecution.")
+        exit 1
+    }
+}
+Write-Output ("mock execution confirmed (mockMode=" + $mockMode + ", provider=" + $provider + ", source: " + $mockSource + ")")
 Write-Output ""
 
 # ============================================================
@@ -212,7 +275,13 @@ if ($rc -ne 0) {
     Write-Error "failed to read sample ids, see $idsFile.err"
     exit 1
 }
-$idsLine = Get-Content $idsFile -TotalCount 1
+# psql 用 -A -F '|' 但未加 -t，输出第 1 行是列名表头、末行是 "(N rows)" 页脚，
+# 故不能盲取首行，需过滤出真正的数据行（三段纯数字，以 '|' 分隔）
+$idsLine = Get-Content $idsFile | Where-Object { $_ -match '^\d+\|\d+\|\d+$' } | Select-Object -First 1
+if (-not $idsLine) {
+    Write-Error "failed to parse sample ids from $idsFile (no numeric data row found)"
+    exit 1
+}
 $ids = $idsLine.Split('|')
 $subTaskId = [long]$ids[0]
 $agentId   = [long]$ids[1]
@@ -252,7 +321,7 @@ SELECT id, status, last_attempt_at IS NOT NULL AS polled
 FROM agent_execution_record
 WHERE event_id = '$s1EventId';
 
-SELECT event_type, role, created_at
+SELECT event_type, role, create_time
 FROM task_timeline
 WHERE sub_task_id = $subTaskId AND deleted = 0
   AND event_type = 'sub_task_execution_command_poll_recovery'
@@ -266,7 +335,7 @@ Write-Output "S1 raw output:"
 Write-Output $s1Body
 
 Assert-Pass ($s1Body -match "sub_task_execution_command_poll_recovery") "S1" "timeline event 'sub_task_execution_command_poll_recovery' found"
-Assert-Pass ($s1Body -match "\|t\|") "S1" "last_attempt_at refreshed (polled=true)"
+Assert-Pass ($s1Body -match '\|t(\r?\n|$)') "S1" "last_attempt_at refreshed (polled=true)"
 Write-Output ""
 
 # ============================================================
@@ -277,15 +346,26 @@ Write-Output "=== [S2] duplicate consumption ==="
 Write-Output "      5 PENDING records for same sub_task; CAS markRunning dedup"
 
 $s2Prefix = "evt-poller-s2-$runTag"
+# id 基值在 PowerShell 内用 [long] 算好（$subTaskId 已是 [long]），避免在 SQL 里
+# 用 int4 字面量相乘导致 "integer out of range"（112801095 * 1000 溢出 int4）
+$s2RecordBase = $subTaskId * 1000 + 100
+# 用户约束：S2 用独立 sub_task（ASSIGNED）隔离，走真实 consume 链推进出 PENDING。
+# startIfNeeded 允许 ASSIGNED -> start()，消费方能把记录推出 PENDING；不再复用共享
+# sample sub_task，也不 reset 回 PENDING。title 前缀 poller-e2e-s2-sub- 不匹配
+# ids 选取用的 'poller-e2e-subtask-%'，避免被后续轮次误选为主样本。
+$s2SubId = $subTaskId + 400
 $s2PrepareSql = @"
 DELETE FROM agent_execution_record WHERE event_id LIKE '$s2Prefix%';
+INSERT INTO sub_task (id, task_id, title, content, status, assigned_agent, deliverable, acceptance, priority, version, rework_count, deleted, create_by, update_by)
+VALUES ($s2SubId, $taskId, 'poller-e2e-s2-sub-$runTag', 'e2e s2 dedup subtask', 'ASSIGNED', $agentId, 'x', 'x', 'MEDIUM', 0, 0, 0, 'e2e', 'e2e')
+ON CONFLICT (id) DO NOTHING;
 INSERT INTO agent_execution_record
     (id, event_id, sub_task_id, status, agent_id, access_type, trigger,
      retry_count, deleted, create_by, update_by, create_time, update_time)
 SELECT
-    $subTaskId * 1000 + 100 + gs AS id,
+    $s2RecordBase + gs               AS id,
     '$s2Prefix-' || gs               AS event_id,
-    $subTaskId                       AS sub_task_id,
+    $s2SubId                         AS sub_task_id,
     'PENDING'                        AS status,
     $agentId                         AS agent_id,
     'API_KEY_LLM'                    AS access_type,
@@ -294,7 +374,7 @@ SELECT
     0                                AS deleted,
     'e2e'                            AS create_by,
     'e2e'                            AS update_by,
-    now()                            AS create_time,
+    now() - INTERVAL '120 seconds'   AS create_time,
     now()                            AS update_time
 FROM generate_series(1, 5) gs;
 "@
@@ -304,7 +384,13 @@ if ($rc -ne 0) { Write-Error "S2 insert failed"; exit 1 }
 Write-Output "poller cycles wait (4s)..."
 Start-Sleep -Seconds 4
 
+# 聚合行放首个查询：total|advanced 便于稳健解析（避免依赖 GROUP BY 分裂后的字面 '5'）。
 $s2CheckSql = @"
+SELECT COUNT(*) AS total,
+       COUNT(*) FILTER (WHERE status <> 'PENDING') AS advanced
+FROM agent_execution_record
+WHERE event_id LIKE '$s2Prefix%';
+
 SELECT status, COUNT(*) AS cnt
 FROM agent_execution_record
 WHERE event_id LIKE '$s2Prefix%'
@@ -318,7 +404,14 @@ $s2Body = Get-Content $s2ReportFile -Raw
 Write-Output "S2 status distribution:"
 Write-Output $s2Body
 
-Assert-Pass (($s2Body -match "5") -and ($s2Body -match "RUNNING|SUCCESS|FAILED")) "S2" "5 rows accounted; at least 1 advanced out of PENDING"
+if ($s2Body -match "(\d+)\|(\d+)") {
+    $s2Total = [int]$Matches[1]
+    $s2Advanced = [int]$Matches[2]
+    Assert-Pass ($s2Total -eq 5) "S2" "5 records accounted (got $s2Total)"
+    Assert-Pass ($s2Advanced -ge 1) "S2" "at least 1 advanced out of PENDING via consume (got $s2Advanced)"
+} else {
+    Assert-Pass $false "S2" "unable to parse aggregate row"
+}
 Write-Output ""
 
 # ============================================================
@@ -330,6 +423,8 @@ Write-Output "      IN_PROGRESS sub_task accepts late submitResult via Execution
 
 $s3RecordId = $subTaskId * 1000 + 999
 $s3EventId  = "evt-poller-s3-$runTag"
+# timeline id 同样在 PowerShell 内用 [long] 算好，避免 SQL 侧 int4 相乘溢出
+$s3TimelineId = $subTaskId * 10000 + 5001
 
 $s3PrepareSql = @"
 DELETE FROM task_timeline WHERE sub_task_id = $subTaskId AND event_type LIKE 'sub_task_execute_%' AND payload->>'source' = 'E2E_S3';
@@ -349,7 +444,7 @@ INSERT INTO task_timeline
     (id, task_id, sub_task_id, event_type, role, agent_id, payload,
      deleted, create_by, update_by, create_time, update_time)
 VALUES
-    ($subTaskId * 10000 + 5001,
+    ($s3TimelineId,
      $taskId, $subTaskId, 'sub_task_execute_submit', 'EXECUTOR', $agentId,
      jsonb_build_object(
         'success', true,
@@ -387,7 +482,7 @@ Write-Output $s3Body
 Assert-Pass ($s3Body -match "IN_PROGRESS") "S3" "sub_task status is IN_PROGRESS"
 Assert-Pass ($s3Body -match "RUNNING") "S3" "execution record is RUNNING"
 Assert-Pass ($s3Body -match "sub_task_execute_submit") "S3" "timeline event 'sub_task_execute_submit' found"
-Assert-Pass ($s3Body -match "discarded_rows\|0") "S3" "no discarded timeline events"
+Assert-Pass ($s3Body -match 'discarded_rows\r?\n0(\r?\n|$)') "S3" "no discarded timeline events"
 Write-Output ""
 
 # ============================================================
@@ -402,16 +497,28 @@ Write-Output "      3 orphan PENDING records across different ids; all should be
 
 $s4Prefix = "evt-poller-s4-$runTag"
 $s4RecordBase = $subTaskId * 1000 + 500
+# S4 用 3 个不同的 sub_task；agent_execution_record.sub_task_id 有 FK 指向 sub_task(id)，
+# 故先建好这 3 个 sub_task。title 用与主用例不同的前缀，避免下一轮
+# 按 title LIKE 'poller-e2e-subtask-%' 选 id 时误选中这些额外 sub_task。
+$s4Sub1 = $subTaskId + 100
+$s4Sub2 = $subTaskId + 200
+$s4Sub3 = $subTaskId + 300
 
 $s4PrepareSql = @"
 DELETE FROM agent_execution_record WHERE event_id LIKE '$s4Prefix%';
+INSERT INTO sub_task (id, task_id, title, content, status, assigned_agent, deliverable, acceptance, priority, version, rework_count, deleted, create_by, update_by)
+VALUES
+    ($s4Sub1, $taskId, 'poller-e2e-s4-extra-1-$runTag', 'e2e s4 extra subtask', 'ASSIGNED', $agentId, 'x', 'x', 'MEDIUM', 0, 0, 0, 'e2e', 'e2e'),
+    ($s4Sub2, $taskId, 'poller-e2e-s4-extra-2-$runTag', 'e2e s4 extra subtask', 'ASSIGNED', $agentId, 'x', 'x', 'MEDIUM', 0, 0, 0, 'e2e', 'e2e'),
+    ($s4Sub3, $taskId, 'poller-e2e-s4-extra-3-$runTag', 'e2e s4 extra subtask', 'ASSIGNED', $agentId, 'x', 'x', 'MEDIUM', 0, 0, 0, 'e2e', 'e2e')
+ON CONFLICT (id) DO NOTHING;
 INSERT INTO agent_execution_record
     (id, event_id, sub_task_id, status, agent_id, access_type, trigger,
      retry_count, deleted, create_by, update_by, create_time, update_time)
 VALUES
-    ($s4RecordBase + 1, '$s4Prefix-1', $subTaskId + 100, 'PENDING', $agentId, 'API_KEY_LLM', 'assigned', 0, 0, 'e2e', 'e2e', now() - INTERVAL '300 seconds', now()),
-    ($s4RecordBase + 2, '$s4Prefix-2', $subTaskId + 200, 'PENDING', $agentId, 'API_KEY_LLM', 'assigned', 0, 0, 'e2e', 'e2e', now() - INTERVAL '300 seconds', now()),
-    ($s4RecordBase + 3, '$s4Prefix-3', $subTaskId + 300, 'PENDING', $agentId, 'API_KEY_LLM', 'assigned', 0, 0, 'e2e', 'e2e', now() - INTERVAL '300 seconds', now());
+    ($s4RecordBase + 1, '$s4Prefix-1', $s4Sub1, 'PENDING', $agentId, 'API_KEY_LLM', 'assigned', 0, 0, 'e2e', 'e2e', now() - INTERVAL '240 seconds', now()),
+    ($s4RecordBase + 2, '$s4Prefix-2', $s4Sub2, 'PENDING', $agentId, 'API_KEY_LLM', 'assigned', 0, 0, 'e2e', 'e2e', now() - INTERVAL '240 seconds', now()),
+    ($s4RecordBase + 3, '$s4Prefix-3', $s4Sub3, 'PENDING', $agentId, 'API_KEY_LLM', 'assigned', 0, 0, 'e2e', 'e2e', now() - INTERVAL '240 seconds', now());
 "@
 $rc = Run-Psql -Sql $s4PrepareSql -OutFile "$s4ReportFile.pre"
 if ($rc -ne 0) { Write-Error "S4 insert failed"; exit 1 }
@@ -495,20 +602,24 @@ Write-Output "      期望：所有处理痕迹都来自 Poller；任何主消�
 $s5RecordId = $subTaskId * 1000 + 555
 $s5EventId  = "evt-poller-s5-$runTag"
 
-# S1/S4 之后 sample sub_task 可能已在终态(SUCCESS/FAILED), startIfNeeded 会拒绝;
-# 为了让 S5 拿到带 trigger 字段的 consume 事件而不是只写 consume_skipped,
-# 在 S5 入口先把 sub_task 拨回 PENDING。
+# 用户约束：S5 用独立 sub_task（ASSIGNED）隔离，不再把共享 sample sub_task
+# reset 回 PENDING。与 T5 startIfNeeded 契约对齐（ASSIGNED -> start()），让 Poller
+# 推的 consume 能拿到带 trigger 字段的 sub_task_execution_command_consume 事件，
+# 而不是只写 consume_skipped。title 前缀 poller-e2e-s5-sub- 不匹配 ids 选取用的
+# 'poller-e2e-subtask-%'，避免被后续轮次误选为主样本。
+$s5SubId = $subTaskId + 500
 $s5PrepareSql = @"
 DELETE FROM agent_execution_record WHERE event_id = '$s5EventId';
 
-UPDATE sub_task SET status = 'PENDING', update_time = now(), update_by = 'e2e-s5'
-WHERE id = $subTaskId AND deleted = 0;
+INSERT INTO sub_task (id, task_id, title, content, status, assigned_agent, deliverable, acceptance, priority, version, rework_count, deleted, create_by, update_by)
+VALUES ($s5SubId, $taskId, 'poller-e2e-s5-sub-$runTag', 'e2e s5 poller-only subtask', 'ASSIGNED', $agentId, 'x', 'x', 'MEDIUM', 0, 0, 0, 'e2e', 'e2e')
+ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO agent_execution_record
     (id, event_id, sub_task_id, status, agent_id, access_type, trigger,
      retry_count, deleted, create_by, update_by, create_time, update_time)
 VALUES
-    ($s5RecordId, '$s5EventId', $subTaskId, 'PENDING', $agentId, 'API_KEY_LLM', 'assigned',
+    ($s5RecordId, '$s5EventId', $s5SubId, 'PENDING', $agentId, 'API_KEY_LLM', 'assigned',
      0, 0, 'e2e', 'e2e', now() - INTERVAL '120 seconds', now());
 "@
 $rc = Run-Psql -Sql $s5PrepareSql -OutFile "$s5ReportFile.pre"
@@ -531,7 +642,7 @@ SELECT event_type,
        payload->>'scan'            AS scan,
        payload->>'consumerMode'    AS consumer_mode
 FROM task_timeline
-WHERE sub_task_id = $subTaskId AND deleted = 0
+WHERE sub_task_id = $s5SubId AND deleted = 0
   AND event_type = 'sub_task_execution_command_poll_recovery'
   AND payload->>'eventId' = '$s5EventId'
 ORDER BY create_time DESC LIMIT 5;
@@ -541,7 +652,7 @@ SELECT event_type,
        payload->>'eventId' AS event_id,
        payload->>'trigger' AS trigger
 FROM task_timeline
-WHERE sub_task_id = $subTaskId AND deleted = 0
+WHERE sub_task_id = $s5SubId AND deleted = 0
   AND event_type = 'sub_task_execution_command_consume'
   AND payload->>'eventId' = '$s5EventId'
 ORDER BY create_time DESC LIMIT 5;
@@ -549,7 +660,7 @@ ORDER BY create_time DESC LIMIT 5;
 -- (d) 反证：是否存在 trigger 不以 poll-recovery: 开头的 consume 事件
 SELECT COUNT(*) AS rogue_consume_events
 FROM task_timeline
-WHERE sub_task_id = $subTaskId AND deleted = 0
+WHERE sub_task_id = $s5SubId AND deleted = 0
   AND event_type = 'sub_task_execution_command_consume'
   AND payload->>'eventId' = '$s5EventId'
   AND (payload->>'trigger' IS NULL
@@ -563,7 +674,7 @@ Write-Output "S5 raw output:"
 Write-Output $s5Body
 
 # (a) Poller markPolled 留下了 last_attempt_at
-Assert-Pass ($s5Body -match "\|t\|") "S5" "(a) last_attempt_at 被 Poller 刷新（markPolled）"
+Assert-Pass ($s5Body -match '\|t(\r?\n|$)') "S5" "(a) last_attempt_at refreshed by Poller (markPolled)"
 
 # (b) Poller 专属 timeline 事件存在
 Assert-Pass ($s5Body -match "sub_task_execution_command_poll_recovery") `
@@ -571,11 +682,11 @@ Assert-Pass ($s5Body -match "sub_task_execution_command_poll_recovery") `
 
 # (c) 内层 consume 事件的 trigger 必须以 poll-recovery: 开头
 Assert-Pass ($s5Body -match "poll-recovery:") `
-    "S5" "(c) consume 事件 trigger 以 'poll-recovery:' 开头（Poller 改造过的触发器）"
+    "S5" "(c) consume trigger starts with 'poll-recovery:'"
 
 # (d) 反证：不能出现主消费者路径的痕迹
-Assert-Pass ($s5Body -match "rogue_consume_events\|0") `
-    "S5" "(d) 反证：不存在 trigger 不以 poll-recovery: 开头的 consume 事件（主消费者未参与）"
+Assert-Pass ($s5Body -match 'rogue_consume_events\r?\n0(\r?\n|$)') `
+    "S5" "(d) no rogue consume events (trigger not starting with poll-recovery:)"
 
 Write-Output ""
 
