@@ -22,13 +22,16 @@
 
       <!-- 内容区 -->
       <div v-if="data" style="margin-bottom:8px;font-size:12px;color:var(--ha-muted)">
-        以下内容可直接复制到 Trae / Qoder 聊天框中，外部 Agent 即可按此接入并开始工作。
+        以下是 HelloAI 平台为该 Agent 生成的接入内容。请按需使用底部按钮：
+        <strong>复制全部</strong> 用于人工交接；
+        <strong style="color:var(--el-color-success)">下载 hello_ai_skills.md</strong> 用于保存到 IDE 的 skills 目录；
+        <strong style="color:var(--el-color-warning)">一键上班口令</strong> 用于在新会话第一句话里激活 AI Agent。
       </div>
       <el-input
         v-if="data"
         type="textarea"
         :rows="18"
-        :model-value="showSkillOnly ? data.skillContent : data.content"
+        :model-value="data.content"
         readonly
         style="font-family: monospace; font-size:12px; line-height:1.7"
       />
@@ -36,8 +39,8 @@
 
     <template #footer>
       <el-button type="primary" @click="copyContent">📋 复制全部</el-button>
-      <el-button @click="copySkill">📋 仅复制 SKILL</el-button>
-      <el-button @click="toggleView">{{ showSkillOnly ? '查看完整内容' : '查看纯 Skill' }}</el-button>
+      <el-button type="success" @click="downloadSkill">⬇️ 下载 hello_ai_skills.md</el-button>
+      <el-button type="warning" @click="copyActivation">🚀 一键上班口令</el-button>
       <el-button @click="close">关闭</el-button>
     </template>
   </el-dialog>
@@ -60,14 +63,12 @@ const emit = defineEmits<{
 
 const loading = ref(false)
 const data = ref<AgentOnboardingResponse | null>(null)
-const showSkillOnly = ref(false)
 
 async function fetchData() {
   if (!props.agentId) return
   loading.value = true
   try {
     data.value = await agentApi.getOnboardingContent(String(props.agentId))
-    showSkillOnly.value = false
   } catch (e: any) {
     const msg = e?.response?.data?.msg || e?.message || '获取接入内容失败'
     ElMessage.error(msg)
@@ -95,15 +96,34 @@ function copyContent() {
   }
 }
 
-function copySkill() {
-  if (data.value) {
-    navigator.clipboard.writeText(data.value.skillContent)
-    ElMessage.success('已复制 SKILL 内容到剪贴板')
-  }
+// 文件名净化：仅保留 ASCII 字母/数字/短横线/下划线，中文名降级为 _
+// 避免 Windows/Linux 下文件名出现跨平台兼容问题
+function sanitizeFilename(name: string): string {
+  const safe = (name || 'agent').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64)
+  return safe || 'agent'
 }
 
-function toggleView() {
-  showSkillOnly.value = !showSkillOnly.value
+// 下载 hello_ai_skills.md（方案 C：hello_ai_<agentName>.md）
+function downloadSkill() {
+  if (!data.value) return
+  const blob = new Blob([data.value.skillContent], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `hello_ai_${sanitizeFilename(String(data.value.agentName || ''))}.md`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+  ElMessage.success('已下载 hello_ai_skills.md，请保存到 IDE 的 skills 目录')
+}
+
+// 复制一键上班口令：粘到 IDE 对话框第一句话即可触发 AI Agent 自检接入
+function copyActivation() {
+  if (!data.value) return
+  const cmd = `你是 HelloAI 平台的 ${data.value.agentName}（ID=${data.value.agentId}），请按平台 SKILL 接入并开始工作。`
+  navigator.clipboard.writeText(cmd)
+  ElMessage.success('已复制激活口令，粘到 IDE 对话框即可触发接入')
 }
 
 function close() {

@@ -56,6 +56,12 @@
 | `submitResult` | 完成子任务后上交执行结果（成功或失败）；重复提交须带相同 `resultId` 保证幂等 |
 | `reportBlocked` | 遇到外部依赖不可用 / 环境缺失等无法自行解决的阻塞时上报 |
 
+> 🧭 **`checkIn` 租约机制（实测必看）**
+> - 租约是**一次性签发**：`expires_at = now + ttlMinutes`，默认 30 分钟；到点直接 EXPIRED，**不会自动续约**。
+> - DB 部分唯一索引 `uk_duty_lease_agent_active` 阻止同一 Agent 多条 ACTIVE 行；如需"续约"必须先 `checkOut` 旧租约，再 `checkIn` 一次。
+> - 租约 EXPIRED 后，门铃长连接会被服务端**主动关闭**，需要重新走 checkIn → 建门铃两步骤。
+> - **建议节奏**：在 ttlMinutes 到期前 1 分钟主动重做一次 checkIn，避免被静默切到 OFFLINE。
+
 ### 1.3 推荐工作循环（门铃模式）
 ```
 1. getAgentStatus          # 确认鉴权与在线
@@ -69,6 +75,27 @@
 8. submitResult            # 上交结果
 9. ack                     # 确认对应收件箱消息已处理
 10. 会话结束 checkOut       # 打卡下班
+```
+
+### 1.3.bis 心跳节拍与下线剧本
+
+**心跳节拍（含租约续签窗口）**
+```
+T+0s      : checkIn（拿到 leaseId / sessionId / expiresAt）
+T+1s      : 建门铃 SSE（保持后台进程）
+T+30s     : heartbeat（沿用同一 sessionId）
+T+60s     : heartbeat
+...        : 每 30 秒一次，5 分钟窗口内必有一次
+T+(ttl-1)m : 主动重做 checkIn 续约，避免被判 OFFLINE
+```
+
+**下线清理剧本（必须按顺序执行）**
+```
+1. 停止本机所有 pullTasks / REST 轮询后台进程（如 qoder-ceshi-poll.ps1 等）
+2. MCP tools/call checkOut（关 ACTIVE 租约）
+3. close 门铃 SSE 长连接（kill 后台 curl PID）
+4. close /mcp/sse 长连接（kill 后台 curl PID）
+5. 验证 dashboard 或 GET /api/agents/<你的ID> 显示 OFFLINE
 ```
 
 ### 1.4 MCP SSE 握手与 sessionId 透传（关键·避坑）
@@ -111,6 +138,13 @@ curl -N -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agents/doorbell/ss
 建连成功会立即收到一帧握手信号 `event:connected`。
 
 ### 2.2 门铃信号类型
+
+> 🔴 **重要：门铃永远不传任务实体**
+> - 门铃 `event:inbox` 帧只携带 **类型 + 引用 ID**，不携带任务正文：
+>   `{"type":"inbox","eventType":"sub_task.assigned","refType":"sub_task","refId":"<subTaskId>"}`
+> - 任务描述、交付物要求、优先级等正文必须再调一次 MCP `pullTasks`（或 REST `/api/agent/inbox`）才能拿到。
+> - 把 `refId` 当作"去 inbox 里查"的主键，**不要尝试在门铃帧里解析正文**。
+
 | type | 含义 | 你的动作 |
 |---|---|---|
 | `connected` | 建连握手 | 确认门铃可用 |
@@ -215,5 +249,18 @@ python task-cli.py --key <API_KEY> skill         # 获取本 SKILL 文档（Key 
 python task-cli.py --key <API_KEY> version       # 查看版本
 python task-cli.py --key <API_KEY> update        # 更新 CLI + SKILL
 ```
+
+---
+
+## 常见错误码速查（MCP 与门铃通道）
+
+| 码 | 报文关键片段 | 根因 | 修法 |
+|---|---|---|---|
+| 400 | `Invalid message format` | POST `/mcp/messages` 缺 `charset=utf-8` | 用 `StringContent(..., UTF8, 'application/json')` 让容器自动追加 charset |
+| 401 | `Unauthorized` | Bearer 头错 | 检查 API Key 前缀 `ak_` 与拼写 |
+| 404 | `/api/mcp/tools` 只列 7 个工具 | 这是 v2.4 降级视图，没含 `checkIn`/`checkOut` | 改走 SSE 通道 `/mcp/sse` 调 `tools/list` 拿全 10 个工具 |
+| 500 | `Agent 未在岗（无 ACTIVE 值班租约）` | 没 checkIn 直接建门铃 | 先 MCP `tools/call checkIn` 再建门铃 |
+| 500 | `sessionId 不能为空` | tool arguments 漏 `sessionId` 字段 | 把 SSE endpoint 帧拿到的 sid **同时**拼进 URL `?sessionId=` 与 arguments `sessionId` |
+| 500 | `Unknown tool: checkIn`（走 REST JSON-RPC） | 走了 `/api/mcp/jsonrpc` 旧通道，dispatch switch 不含 checkIn | 换 `/mcp/sse` + `/mcp/messages` 通道 |
 
 > **建议**：优先走 MCP（可享门铃秒级唤醒 + 全套工具）；无 MCP 客户端时用 REST curl；CLI 仅覆盖 poll/submit/status 三个高频操作。
