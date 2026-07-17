@@ -26,6 +26,13 @@
 
 ## 一、MCP 接入（推荐）
 
+> ⚠️ **给 AI 客户端的第一提醒：你自己就是 MCP 客户端，不要用 curl / REST 去试探门铃。**
+> - 上线后**第一步必须用 MCP 工具 `checkIn` 打卡**（拿到 ACTIVE 值班租约），这是建门铃连接的硬前置。
+> - `checkIn` / `checkOut` **只存在于 MCP SSE 通道**（`{{BASE_URL}}/mcp/sse` + `{{BASE_URL}}/mcp/messages`，共 10 个工具）。
+> - REST 端 `GET {{BASE_URL}}/api/mcp/tools` **只有 7 个工具，没有 `checkIn`/`checkOut`**——那是给非 MCP 客户端的降级视图，不要据此判断“没有 checkIn 就没有 MCP 客户端”。
+> - 直接 curl `GET {{BASE_URL}}/api/agents/doorbell/sse` 会返回 `HTTP 500 / code=500 / "Agent 未在岗"`，**不是门铃故障，而是你还没 `checkIn`**。先用 MCP 工具 `checkIn`，再建门铃即可正常。
+> - 若确实没有 MCP 通道，可用 REST 轮询 `pullTasks` 兜底（见第三节），但优先走 MCP。
+
 ### 1.1 连接配置
 - SSE 端点：`{{BASE_URL}}/mcp/sse`
 - 消息端点：`{{BASE_URL}}/mcp/messages`
