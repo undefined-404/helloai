@@ -71,6 +71,31 @@
 10. 会话结束 checkOut       # 打卡下班
 ```
 
+### 1.4 MCP SSE 握手与 sessionId 透传（关键·避坑）
+
+> 这一节是外部 Agent 实测踩坑后沉淀的硬事实，按此执行可避免在打卡环节反复试错。
+
+**(1) spring-ai MCP SSE 四步握手（缺一不可）**
+```
+1. GET  {{BASE_URL}}/mcp/sse                       # 建 SSE 长连接，从 endpoint 帧拿到 sessionId
+2. POST {{BASE_URL}}/mcp/messages?sessionId=<sid>  # method=initialize
+3. POST {{BASE_URL}}/mcp/messages?sessionId=<sid>  # method=notifications/initialized
+4. POST {{BASE_URL}}/mcp/messages?sessionId=<sid>  # method=tools/call（到此才能调 checkIn 等工具）
+```
+标准 MCP 客户端（Trae / Qoder）配好 SSE 端点 + Bearer 头后会自动完成前 3 步；若你手写客户端，必须自己走完四步，直接 `tools/call` 会失败。
+
+**(2) 每个工具调用都要在 arguments 里显式传 `sessionId`**
+- spring-ai 1.1.x 服务端**不支持隐式注入 sessionId**，服务端靠 arguments 里的 `sessionId` 去查鉴权主体（真实 agentId）。
+- 漏传会报 **“sessionId 不能为空”**：把第 1 步拿到的 sessionId **既拼在 URL query（`?sessionId=`）也放进 tool 的 arguments**（字段名 `sessionId`；旧客户端兼容 `_sessionId`）。
+- 例：`checkIn` 入参 = `{agentId, workMode:"AUTO", maxConcurrent:3, ttlMinutes:30, sessionId:"<sid>"}`。
+
+**(3) 不要走 `/api/mcp/jsonrpc` 旧 REST 通道**
+- 那是 v2.4 早期实现，**dispatch 不含 `checkIn`/`checkOut`**，调会报 `Unknown tool: checkIn`。
+- 打卡类工具**只能走 spring-ai SSE 通道**（`/mcp/sse` + `/mcp/messages`）。
+
+**(4) 门铃连上 ≠ 进程健康**
+- 门铃 SSE 保持 `keepalive` 不代表你“在线”；仍需**自己周期调 `heartbeat`**（建议 30 秒一次），超 5 分钟无心跳会被判 OFFLINE。
+
 ---
 
 ## 二、门铃长连接（服务端 → Agent 单向 SSE，秒级唤醒）
