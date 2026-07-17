@@ -7,8 +7,11 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentDutyLeaseStatus;
 import com.helloai.core.entity.AgentDutyLease;
+import com.helloai.core.event.DutyLeaseClosedEvent;
 import com.helloai.core.mapper.AgentDutyLeaseMapper;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -33,7 +36,10 @@ import java.util.UUID;
  */
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, AgentDutyLease> {
+
+    private final ApplicationEventPublisher eventPublisher;
 
     /**
      * 查询 Agent 当前有效的值班租约。
@@ -119,6 +125,8 @@ public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, Age
                 OffsetDateTime.now());
         if (closed > 0) {
             log.info("Agent {} 值班租约已关闭: reason={}, affected={}", agentId, reason, closed);
+            // 签退（checkOut）→ 事务提交后主动断门铃（离岗即挂电话，设计 §6.4）
+            eventPublisher.publishEvent(new DutyLeaseClosedEvent(agentId, reason));
         }
         return closed;
     }
@@ -181,6 +189,8 @@ public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, Age
                 total += rows;
                 log.info("值班租约到期已翻为 EXPIRED: agentId={}, leaseId={}, expiresAt={}",
                         lease.getAgentId(), lease.getId(), lease.getExpiresAt());
+                // 租约到期 → 事务提交后主动断门铃（与 checkOut 同一条断连路径）
+                eventPublisher.publishEvent(new DutyLeaseClosedEvent(lease.getAgentId(), "lease_expired"));
             }
         }
         return total;

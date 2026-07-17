@@ -3,9 +3,11 @@ package com.helloai.core.service;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.core.entity.AgentInbox;
+import com.helloai.core.event.InboxMessageCreatedEvent;
 import com.helloai.core.mapper.AgentInboxMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,6 +25,8 @@ import java.util.List;
 @Service
 @RequiredArgsConstructor
 public class AgentInboxService extends ServiceImpl<AgentInboxMapper, AgentInbox> {
+
+    private final ApplicationEventPublisher eventPublisher;
 
     /**
      * 向指定 Agent 投递收件箱消息。幂等。
@@ -55,9 +59,16 @@ public class AgentInboxService extends ServiceImpl<AgentInboxMapper, AgentInbox>
         try {
             save(inbox);
         } catch (DuplicateKeyException e) {
-            // (event_id, agent_id) 联合唯一约束 → 已投递，跳过
+            // (event_id, agent_id) 联合唯一约束 → 已投递，跳过；重复投递不再响铃
             log.debug("收件箱消息已存在，跳过: eventId={}, agentId={}", eventId, agentId);
+            return;
         }
+
+        // 收件箱首次落库成功 → 发布事件驱动门铃响铃（AFTER_COMMIT 异步，尽力而为）。
+        // 发布点在 @Transactional 方法内，@TransactionalEventListener 将在本事务提交后才触发，
+        // 保证"先落库、后响铃"，门铃丢失也可由 pullTasks 轮询兜底。
+        eventPublisher.publishEvent(new InboxMessageCreatedEvent(
+                agentId, eventId, eventType, refType, refId));
     }
 
     /**

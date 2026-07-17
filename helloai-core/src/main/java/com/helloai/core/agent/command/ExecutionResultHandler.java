@@ -13,6 +13,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.OffsetDateTime;
 import java.util.HashMap;
@@ -167,13 +169,25 @@ public class ExecutionResultHandler {
 
         // N11 阈值回退计数：仅对 CLI_CLIENT Agent 累加/重置。
         // SQL 条件已限定 access_type=CLI_CLIENT，误调 API_KEY_LLM 也不会写库；
-        // tracker 内部已做 try/catch + REQUIRES_NEW，本处不再 try/catch。
+        // tracker 内部已做 try/catch + REQUIRES_NEW。
+        //
+        // 关键：failureTracker 以 REQUIRES_NEW 独立事务更新同一 agent 行，而本事务在成功路径下
+        // 已通过 subTaskService.submit() -> changeStatus(REVIEW) -> heartbeatService.active()
+        // 锁定了该 agent 行；若在事务内直接调用，会形成"外层持锁 + 内层新事务改同一行"的自死锁。
+        // 因此挪到主事务提交后（afterCommit）执行：此时行锁已释放，REQUIRES_NEW 独立语义仍保留。
         Agent targetAgent = report.getAgentId() != null ? agentService.getById(report.getAgentId()) : null;
         if (targetAgent != null && targetAgent.getAccessType() == AgentAccessType.CLI_CLIENT) {
-            if (report.isSuccess()) {
-                failureTracker.recordSuccess(report.getAgentId());
+            final Long trackAgentId = report.getAgentId();
+            final boolean trackSuccess = report.isSuccess();
+            if (TransactionSynchronizationManager.isSynchronizationActive()) {
+                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        applyFailureTracking(trackAgentId, trackSuccess);
+                    }
+                });
             } else {
-                failureTracker.recordFailure(report.getAgentId());
+                applyFailureTracking(trackAgentId, trackSuccess);
             }
         }
 
@@ -188,6 +202,18 @@ public class ExecutionResultHandler {
         private boolean applied;
         private boolean idempotent;
         private String status;
+    }
+
+    /**
+     * N11 计数写入（成功重置 / 失败累加）。由主事务 afterCommit 回调触发，
+     * 确保执行时 agent 行锁已释放，避免与主链路事务自死锁。
+     */
+    private void applyFailureTracking(Long agentId, boolean success) {
+        if (success) {
+            failureTracker.recordSuccess(agentId);
+        } else {
+            failureTracker.recordFailure(agentId);
+        }
     }
 
     private static Map<String, Object> safeMap(Object... keyValues) {

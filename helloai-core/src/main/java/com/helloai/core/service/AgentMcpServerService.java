@@ -23,7 +23,13 @@ import java.util.stream.Collectors;
 public class AgentMcpServerService extends ServiceImpl<AgentMcpServerMapper, AgentMcpServer> {
 
     /**
-     * EXECUTOR 默认启用的 7 个 MCP 工具清单（v2.5 M5 端到端业务循环必需）。
+     * EXECUTOR 默认启用的 10 个 MCP 工具清单（外部 Agent 一键接入即拿全套能力）。
+     * <p>
+     * 设计原则（见 doc/HelloAI_门铃通知通道设计.md）：一键注册应交付外部 Agent
+     * 使用 HelloAI 调度平台的<b>完整工具集</b>——用哪些、何时用是外部 Agent 的决策，
+     * 平台的责任是「给全」。故值班打卡 checkIn/checkOut 亦纳入默认授权，
+     * 否则外部 Agent 无法上岗（isOnDuty=false），门铃长连接建不起来。
+     * </p>
      * <p>
      * 注：EchoMcpTool.echo 是平台内置连通性诊断工具，不挂在 Agent 维度，
      * 走 spring-ai ToolCallbackProvider 自动注册，不在此列。
@@ -34,8 +40,11 @@ public class AgentMcpServerService extends ServiceImpl<AgentMcpServerMapper, Age
      *   <li>{@code claimSubTask}   —— 原子认领子任务（v2.4 §9.1）</li>
      *   <li>{@code heartbeat}      —— 心跳上报（v2.4 §9.1）</li>
      *   <li>{@code uploadArtifact} —— 上传产物附件元数据（v2.4 §9.1）</li>
+     *   <li>{@code submitResult}   —— 上交子任务执行结果（v2.5 M5）</li>
      *   <li>{@code reportBlocked}  —— 上报任务阻塞（v2.5 补齐）</li>
      *   <li>{@code getAgentStatus} —— 查询 Agent 自身状态（v2.4 §9.1 helloai 此前缺失补齐）</li>
+     *   <li>{@code checkIn}        —— 值班打卡上班，建 ACTIVE 租约（AgentHub V1 P0-A；门铃长连接前置）</li>
+     *   <li>{@code checkOut}       —— 值班打卡下班，关闭 ACTIVE 租约（AgentHub V1 P0-A）</li>
      * </ul>
      */
     public static final List<String> DEFAULT_EXECUTOR_TOOLS = List.of(
@@ -46,7 +55,9 @@ public class AgentMcpServerService extends ServiceImpl<AgentMcpServerMapper, Age
             "uploadArtifact",
             "submitResult",
             "reportBlocked",
-            "getAgentStatus"
+            "getAgentStatus",
+            "checkIn",
+            "checkOut"
     );
 
     /** 默认启用 is_enabled 值。 */
@@ -57,17 +68,17 @@ public class AgentMcpServerService extends ServiceImpl<AgentMcpServerMapper, Age
     private static final String SYSTEM_OPERATOR = "system_agent_register";
 
     /**
-     * 为新建 Agent 启用 EXECUTOR 默认 7 工具（已存在跳过，安全幂等）。
+     * 为新建 Agent 启用 EXECUTOR 默认 10 工具（已存在跳过，安全幂等）。
      * <p>
      * 由 {@link AgentService#register(String, com.helloai.common.constant.AgentRole, String)}
      * 在 {@code save(agent)} 之后调用，纳入同一事务。
      * </p>
      * <p>
      * 注意：AgentService.register() 对 role 不做限制（PLANNER / EXECUTOR / REVIEWER /
-     * PATROL / 其他都可注册），但默认 7 工具按 EXECUTOR 业务循环最优集设计。
+     * PATROL / 其他都可注册），但默认 10 工具按 EXECUTOR 业务循环 + 值班打卡最优集设计。
      * 若未来 PLANNER/REVIEWER 注册需要差异化工具集，
      * 应在 AgentService.register() 之前/之后按 role 分流。
-     * 当前实现统一给非 EXECUTOR 也启用 7 工具 —— 因为 ON CONFLICT + 已存在跳过不会出错，
+     * 当前实现统一给非 EXECUTOR 也启用 10 工具 —— 因为 ON CONFLICT + 已存在跳过不会出错，
      * 且后续若需为 PLANNER 启用 planner_tools（如 decomposePlan），
      * 独立走 {@code enableSpecificTools(agentId, names)} 方法叠加即可。
      * </p>

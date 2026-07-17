@@ -220,7 +220,7 @@ V1 不做以下内容：
 | `id` | 主键 |
 | `agent_id` | Agent ID |
 | `session_id` | 值班会话标识，可用于关联 MCP 会话或 Bridge 会话 |
-| `work_mode` | `FULL_TIME / PART_TIME / SPOT` 等值班模式 |
+| `work_mode` | `AUTO / STRICT` 等值班模式（`AUTO` 等同早期口径的 `NORMAL`，表示 Agent 默认可与他人并行；`STRICT` 为独占报锁，仅专属任务才匹配，详见 §6.5） |
 | `max_concurrent` | 期望最大并发 |
 | `status` | `ACTIVE / CLOSED / EXPIRED / FORCE_CLOSED` |
 | `started_at` | 上班时间 |

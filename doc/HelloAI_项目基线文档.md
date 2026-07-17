@@ -72,6 +72,10 @@
 - 不把外部项目的基础设施形态（K8s / Matrix / MinIO / 大量治理壳）原样搬进当前主线
 - 引入 Agent 执行状态（IDLE / WORKING / INTERRUPTED）优先通过查询推导而非新增 DB 枚举，
   避免与 `online_status`（ONLINE / OFFLINE / SLEEPING）形成双套状态体系
+- 双心跳（`last_seen_at` / `last_active_at`）与上班打卡（`agent_duty_lease`）仅用于外部 Agent
+  （`CLI_CLIENT` / `WEB_BROWSER`）的可用性判定：打卡是被调度选中的准入第一步，双心跳是验证其是否在
+  正常干活的运行时监控；`API_KEY_LLM` 豁免这两类判定，其可用性以"任务是否按时完成 + 定期 API Key
+  可用性探测"衡量（三层可用性模型详见 `doc/HelloAI_架构设计参考.md` §3.8）
 
 ---
 
