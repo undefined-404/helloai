@@ -2233,7 +2233,18 @@ DB 验证：
     - S6.2 workMode=`strict` 小写 → DB work_mode=STRICT（大小写不敏感）✓
     - S6.3 workMode=BOGUS_VALUE → BizException 拒绝，lease count 不增（仍为 N）✓
   - 脚本报 `Parser.ParseFile` 自检 **PARSE-OK**
-  
-  ---
-  
-  ---
+
+---
+
+### 6.7 UI：AgentOnboardingDialog 接入弹窗按钮换位（2026-07-17）
+
+UI 行为变更：`helloai-ui/src/views/agent/components/AgentOnboardingDialog.vue` 把"复制 SKILL + 切换视图"两个 AI 视角按钮替换为：
+
+- ⬇️ **下载 hello_ai_skills.md**（文件名方案 C：`hello_ai_<agentName>.md`，中文 agent 名降级为下划线，跨平台兼容）
+- 🚀 **一键上班口令**（动态拼接 `你是 HelloAI 平台的 <agentName>（ID=<agentId>），请按平台 SKILL 接入并开始工作。`）
+
+顺手删除 `showSkillOnly` ref + `copySkill` + `toggleView`（功能由下载按钮接管）。commit `65161ba`。
+
+> 说明：同 commit 中 `skills/executor/SKILL.md` 按"平台外部 Agent 接入文档"域分类，不进本迭代记录；本节仅回填项目开发侧 UI 改动。
+
+---
