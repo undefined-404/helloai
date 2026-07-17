@@ -6,6 +6,9 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.core.entity.Agent;
+import com.helloai.core.entity.AgentDutyLease;
+import com.helloai.common.constant.AgentDutyLeaseStatus;
+import com.helloai.common.constant.WorkMode;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,6 +25,8 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import com.helloai.core.service.AgentService;
 import com.helloai.core.service.AgentDutyLeaseService;
@@ -259,6 +264,121 @@ class AgentSelectorTest {
 
             when(agentService.listByRole(AgentRole.EXECUTOR))
                     .thenReturn(List.of(withScore, nullScore));
+            when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
+
+            Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(2L);
+        }
+    }
+
+    @Nested
+    @DisplayName("N12 P1 STRICT 独占报锁")
+    class StrictDutyFiltering {
+
+        private AgentDutyLease strictLease(Long agentId) {
+            AgentDutyLease lease = new AgentDutyLease();
+            lease.setAgentId(agentId);
+            lease.setStatus(AgentDutyLeaseStatus.ACTIVE);
+            lease.setWorkMode(WorkMode.STRICT.name());
+            return lease;
+        }
+
+        private AgentDutyLease autoLease(Long agentId) {
+            AgentDutyLease lease = new AgentDutyLease();
+            lease.setAgentId(agentId);
+            lease.setStatus(AgentDutyLeaseStatus.ACTIVE);
+            lease.setWorkMode(WorkMode.AUTO.name());
+            return lease;
+        }
+
+        @Test
+        @DisplayName("跳过以 STRICT 模式在岗的 Agent，不进入替补池")
+        void shouldSkipStrictOnDutyAgent() {
+            Agent strictAgent = agent(2L, 90, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            Agent autoAgent = agent(3L, 60, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(strictAgent, autoAgent));
+            when(agentDutyLeaseService.getActiveLease(2L)).thenReturn(strictLease(2L));
+            when(agentDutyLeaseService.getActiveLease(3L)).thenReturn(autoLease(3L));
+            when(circuitBreakerRegistry.find("agentDispatch-3")).thenReturn(Optional.empty());
+
+            Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(3L);
+        }
+
+        @Test
+        @DisplayName("所有候选都是 STRICT → 返回 null，不出动任何 Agent 顶班")
+        void shouldReturnNullWhenAllCandidatesStrict() {
+            Agent strict1 = agent(2L, 90, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            Agent strict2 = agent(3L, 80, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(strict1, strict2));
+            when(agentDutyLeaseService.getActiveLease(2L)).thenReturn(strictLease(2L));
+            when(agentDutyLeaseService.getActiveLease(3L)).thenReturn(strictLease(3L));
+
+            Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNull();
+        }
+
+        @Test
+        @DisplayName("无租约的 Agent 视为 AUTO，正常参与替补池")
+        void shouldTreatNoLeaseAgentAsAuto() {
+            Agent strict = agent(2L, 90, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            Agent noLease = agent(3L, 60, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(strict, noLease));
+            when(agentDutyLeaseService.getActiveLease(2L)).thenReturn(strictLease(2L));
+            when(agentDutyLeaseService.getActiveLease(3L)).thenReturn(null);
+            when(circuitBreakerRegistry.find("agentDispatch-3")).thenReturn(Optional.empty());
+
+            Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(3L);
+        }
+
+        @Test
+        @DisplayName("历史脏数据：work_mode=null/空串/未识别 → lenient 按 AUTO，不阻断选择")
+        void shouldLenientParseDirtyWorkMode() {
+            Agent dirty = agent(2L, 90, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            Agent clean = agent(3L, 60, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+
+            AgentDutyLease dirtyLease = new AgentDutyLease();
+            dirtyLease.setAgentId(2L);
+            dirtyLease.setStatus(AgentDutyLeaseStatus.ACTIVE);
+            dirtyLease.setWorkMode("garbage_legacy_value");
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(dirty, clean));
+            when(agentDutyLeaseService.getActiveLease(2L)).thenReturn(dirtyLease);
+            when(agentDutyLeaseService.getActiveLease(3L)).thenReturn(null);
+            when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
+            when(circuitBreakerRegistry.find("agentDispatch-3")).thenReturn(Optional.empty());
+
+            Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            // dirty 被当作 AUTO，高分胜出 → agent 2
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(2L);
+        }
+
+        @Test
+        @DisplayName("lease 查询异常 → 防御式降级，不阻断选择")
+        void shouldFallbackWhenLeaseQueryThrows() {
+            Agent a = agent(2L, 90, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(a));
+            when(agentDutyLeaseService.getActiveLease(2L))
+                    .thenThrow(new RuntimeException("db down"));
             when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
 
             Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR);

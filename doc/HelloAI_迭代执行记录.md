@@ -1900,6 +1900,228 @@ DB 验证：
   
   ---
   
+### 2026-07-17 AgentHub V3 门铃通知通道：PR-1 内核 + PR-2 响铃接线（单测 17/17 全绿）
+
+#### 1. 范围
+
+- 按 `doc/HelloAI_门铃通知通道设计.md` §10 的最小 PR 拆分，落地 **PR-1 门铃内核** + **PR-2 响铃接线**：补一条“服务端 → 外部 Agent 单向 SSE 门铃”，把外部 `CLI_CLIENT` 从任务发布到感知的 0~30s 轮询延迟降到秒级。
+- 明确不做（本轮）：PR-3 值班/鉴权收口（`isOnDuty` 建连校验、`checkOut`/租约到期主动 disconnect）与端到端验证脚本；可选 PR-4 保活刷心跳；不引入 WebSocket/STOMP/Netty；不新增 Flyway/表/MQ 队列；不改 `AgentStatus`/`AgentOnlineStatus` 枚举；不做多实例 fanout（单实例进程内 Map）。
+
+#### 2. 实际落地
+
+- **PR-1 门铃内核（能连上 / 能收 `connected` 握手 / 断连能清理）**
+  - `DoorbellProperties`（helloai-common `config`）：`@ConfigurationProperties(prefix="helloai.doorbell")`，`enabled=true` / `emitterTimeoutMs=1_800_000`（30min） / `keepaliveIntervalMs=15_000`，仿 `helloai.dispatch.*` 集中管理。
+  - `DoorbellSignal`（helloai-core `doorbell`）：`@Getter @JsonInclude(NON_NULL)`，字段 `type/eventType/refType/refId/serverTime`，静态工厂 `connected()` / `keepalive()` / `inbox(eventType,refType,refId)`；信号极简，**不含 title/summary/正文**（正文由 Agent 随后 `pullTasks` 拉取，保证门铃丢失不丢信息）。
+  - `DoorbellRegistry`（helloai-core `doorbell`）：仿 `McpAuthContext` 单例风格的进程内 `ConcurrentHashMap<Long,SseEmitter>`；`register`（同一 agentId 已有连接先关旧再建新、防泄漏）/ `unregister`（用 `remove(key,value)` 值条件删除，避免误删“关旧建新后的新连接”）/ `get` / `isConnected` / `size`。
+  - `DoorbellService`（helloai-core `doorbell`）：`connect(agentId)` 先校 `enabled`，建 `SseEmitter`（超时取 `emitterTimeoutMs`）并挂 `onCompletion/onTimeout/onError` 回调均从 registry 注销，`register` 后立即 `doSend` 一条 `type=connected` 握手；`ring(agentId,signal)` 未连返回 false（尽力而为）；`disconnect(agentId)` / `connectionCount()`；私有 `doSend` 发送异常静默注销、不重试不抛错。
+  - `AgentDoorbellController`（helloai-api）：`GET /api/agents/doorbell/sse`，`produces=MediaType.TEXT_EVENT_STREAM_VALUE`，入参 `@RequestAttribute("_authId") Long agentId`，直接返回 `doorbellService.connect(agentId)`；复用 `AuthInterceptor` 对 `/api/**` 的 Bearer apiKey 鉴权链，不新增 token 体系。
+  - 单测：`DoorbellRegistryTest`（5 例：注册/查询/关旧建新/值条件注销/size）+ `DoorbellServiceTest`（6 例：disabled 拒连/connected 握手/ring 命中/ring 未连/disconnect/connectionCount）。
+
+- **PR-2 响铃接线（发任务 → 门铃响 → 客户端被唤醒）**
+  - `InboxMessageCreatedEvent`（helloai-core `event`）：`@Getter` 不可变事件，字段最小化 `agentId/eventId/eventType/refType/refId`（不携 title/summary）。
+  - `AgentInboxService.send()` 一处收口发事件：注入 `ApplicationEventPublisher`；`save(inbox)` 成功后 `publishEvent(new InboxMessageCreatedEvent(...))`；`catch(DuplicateKeyException)`（`(event_id,agent_id)` 联合唯一约束→已投递）分支 `return` **不发事件**，避免重复投递重复响铃。因三条通知路径（`TaskController.create` 直发 / `SubTaskService` 状态流转五种 / MQ `NotificationConsumer`）全收口于 `send()`，此一处发事件即覆盖全部。
+  - `DoorbellRinger`（helloai-core `doorbell`）：`@Async("doorbellExecutor") @TransactionalEventListener(phase=TransactionPhase.AFTER_COMMIT)` 监听 `InboxMessageCreatedEvent`，调 `doorbellService.ring(agentId, DoorbellSignal.inbox(...))`；`event==null || agentId==null` 直接 return，异常只 `log.debug` 不向上抛（靠轮询兜底）。选 AFTER_COMMIT 而非 `send()` 内直接响铃：保证“先落库、后响铃”，与项目既有 Outbox / 本地执行事件的 AFTER_COMMIT 时序哲学一致（架构参考 §5.1 Phase 2F），避免“响了铃但收件箱未提交、Agent pull 不到”。
+  - `DoorbellExecutorConfig`（helloai-start `config`）：`@Bean("doorbellExecutor")` `ThreadPoolTaskExecutor` core=2 / max=4 / queue=500 / `ThreadPoolExecutor.DiscardPolicy`，与 `executionCommandExecutor` 池隔离，响铃拥塞时直接丢弃——门铃尽力而为，永不拖累主链路（`@EnableAsync` 已在 `HelloAIApplication`）。
+  - 单测：`DoorbellRingerTest`（4 例：正常响铃/null 事件不响/ring 抛异常被吞/agentId 为空不响）+ `AgentInboxServiceTest`（2 例：`spy(new AgentInboxService(eventPublisher))` + `doReturn(true).when(service).save(any())` 验证发事件；`doThrow(new DuplicateKeyException("dup"))...` 验证 `never()` 发事件）。
+
+#### 3. 影响
+
+- 对外行为变化：新增一个只进不出的 SSE 端点 `GET /api/agents/doorbell/sse`（建连即回 `connected`）；收件箱首次落库后会向已连门铃的 Agent 推一条 `type=inbox` 信号。MCP 主线（`pullTasks/claimSubTask/submitResult`）完全不改。
+- 代码变化（新增 8 / 修改 1）：
+  - 新增 `helloai-common/.../config/DoorbellProperties.java`
+  - 新增 `helloai-core/.../doorbell/DoorbellSignal.java` / `DoorbellRegistry.java` / `DoorbellService.java` / `DoorbellRinger.java`
+  - 新增 `helloai-core/.../event/InboxMessageCreatedEvent.java`
+  - 新增 `helloai-api/.../controller/AgentDoorbellController.java`
+  - 新增 `helloai-start/.../config/DoorbellExecutorConfig.java`
+  - 修改 `helloai-core/.../service/AgentInboxService.java`（注入 `ApplicationEventPublisher` + `save` 成功发事件 + `DuplicateKey` 分支 return 不发，+12/-1）
+  - 新增测试：`DoorbellRegistryTest` / `DoorbellServiceTest` / `DoorbellRingerTest`（helloai-core `doorbell`）+ `AgentInboxServiceTest`（helloai-core `service`）
+  - `doc/HelloAI_实现差距表.md`（新增 N13 + §2 结论 + §5 优先级）、`doc/HelloAI_迭代执行记录.md`（本轮记录）
+- 数据结构变化：无（门铃是纯运行时连接态，不落库；`SseEmitter` 为 Spring WebMVC 原生，helloai-core 经 `spring-ai-starter-mcp-server-webmvc` 传递依赖 `spring-webmvc`，零新增依赖）。
+
+#### 4. 遗留
+
+- **PR-3 值班/鉴权收口（设计 §6.1/§10）**：建连前置 `AgentDutyLeaseService.isOnDuty(agentId)` 校验（未打卡/非 ACTIVE 拒连）；`checkOut` 或租约 EXPIRED 时主动 `DoorbellService.disconnect(agentId)`；补端到端验证脚本（建连→发任务→秒级收 `inbox`→pullTasks；以及“关闭 SSE 后再产生消息仍能轮询消费”证明门铃丢失不致命）。
+- 运行时端到端冒烟（真实后端 + docker compose + 外部 Agent 模拟建连）本轮未做，随 PR-3 验证脚本一并补。
+- 可选 PR-4：门铃保活/建连顺带刷 `HeartbeatService.seen(agentId)`（降低 Agent 额外 heartbeat 频率）；多实例实时性（Redis Pub/Sub fanout）为 §12 演进项。
+
+#### 5. 验证回执
+
+- `mvn -pl helloai-core -am test -Dtest=DoorbellRegistryTest,DoorbellServiceTest,DoorbellRingerTest,AgentInboxServiceTest` → **17 例全绿 BUILD SUCCESS**（Registry 5 + Service 6 + Ringer 4 + Inbox 2）。
+- `mvn -pl helloai-start -am install "-Dmaven.test.skip=true"` → **全 reactor MAIN 编译 BUILD SUCCESS**。
+- stale .m2 jar 排查：`mvn -pl helloai-start -am test-compile` 首次报 helloai-job 测试找不到 `AgentFallbackProperties`/`AgentCommandOutboxRelayProperties`（两类均在 helloai-common，本轮未触），定位为本地 `.m2` 陈旧 common jar；`mvn install` 刷新后 `mvn -pl helloai-job test-compile` BUILD SUCCESS，确认非代码回归。
+- PowerShell 注意：不支持 `&&`/`cd /d`（改 `Set-Location ...; mvn ...`）；`-Dkey=value` 需加引号防参数被拆分；`-pl X -Dtest=...` 需 `-am` 重建上游（新增的 `DoorbellProperties` 在 common）。
+
+---
+
+### 2026-07-17 AgentHub V3 门铃通知通道：PR-3 值班鉴权收口 + 兜底验证脚本（单测 22/22 全绿）
+
+#### 1. 范围
+
+- 承接同日 PR-1（门铃内核）+ PR-2（响铃接线），落地设计 §6.1/§10 的 **PR-3 值班/鉴权收口 + 兜底验证**：建连前置 `isOnDuty` 闸门（未打卡拒连）、`checkOut`/租约到期时主动断门铃、补端到端验证脚本。
+- 明确不做（本轮）：可选 PR-4 保活刷 `last_seen_at`；多实例 Redis Pub/Sub fanout（§12 演进项）；不新增 Flyway/表/MQ 队列；不引入 WebSocket。
+
+#### 2. 实际落地
+
+- **建连闸门（`DoorbellService.connect`）**：`DoorbellService` 构造注入 `AgentDutyLeaseService`，`connect(agentId)` 在 `enabled` 校验后前置 `isOnDuty(agentId)`——无 ACTIVE 值班租约即抛 `BizException(500)` 拒连（"先打卡再接电话"）。Controller/鉴权链不变，异常经 `GlobalExceptionHandler` 映射为 HTTP 500 + body `code=500`。
+- **主动断连（事件解耦，规避构造循环）**：为避免 `DoorbellService ↔ AgentDutyLeaseService` 双向构造依赖，反向断连走本地领域事件——新增 `DutyLeaseClosedEvent`（helloai-core/event，携 `agentId`/`reason`）；`AgentDutyLeaseService` 加 `@RequiredArgsConstructor` + `ApplicationEventPublisher`，`closeLease`（覆盖 checkOut）与 `expireLeases`（覆盖租约到期）在关闭行数 >0 时 `publishEvent`，`startLease` 防御性关旧**不发**事件（避免刚 checkIn 就被断连）。新增 `DoorbellDutyListener`（`@Async("doorbellExecutor") @TransactionalEventListener(AFTER_COMMIT)`，与 `DoorbellRinger` 对称）监听后调 `doorbellService.disconnect(agentId)`，异常静默。
+- **Bean 创建顺序无环**：`agentDutyLeaseService`（仅需 publisher）→ `doorbellService`（需 agentDutyLeaseService）→ `doorbellDutyListener` / `doorbellRinger`（需 doorbellService），全 reactor `install` BUILD SUCCESS 间接验证无编译/装配级循环。
+- **端到端脚本 `scripts/powershell/verify-doorbell-e2e.ps1`**：S1 无 ACTIVE 租约建连 → HTTP 500 + `code=500`；S2 直接 INSERT 一条 ACTIVE 租约 → curl `-N` 建连读首帧 → 断言 `HTTP/1.1 200` + `event:connected` + `"type":"connected"`；S3 把租约 `expires_at` 改到过去 → 等 35s `DutyLeaseExpirationTask` 翻 EXPIRED → 事件驱动主动断连 → 断言 DB `status=EXPIRED,close_reason=lease_expired` 且 SSE 后台 job 结束（流被服务端 `complete` 关闭）。脚本遵循规则 6：UTF-8 with BOM、单引号 + `+` 拼接、runtime 字面量纯 ASCII、CJK 只留注释。
+
+#### 3. 影响
+
+- 新增 3 个文件：`DutyLeaseClosedEvent`、`DoorbellDutyListener`、`verify-doorbell-e2e.ps1`；新增单测 `DoorbellDutyListenerTest`。
+- 改 3 个文件：`DoorbellService`（注入 + 闸门）、`AgentDutyLeaseService`（发事件）、`DoorbellServiceTest`（补未在岗拒连用例 + mock dutyLeaseService）。
+- 行为变化：门铃建连从"仅校验 enabled"收紧为"enabled + isOnDuty"；离岗（checkOut / 到期）从"仅靠 SSE 超时自然回收"升级为"事件驱动秒级主动断连"。
+
+#### 4. 遗留
+
+- 运行时端到端冒烟**已实测通过**（见下方验证回执），本项遗留关闭。
+- 可选 PR-4：门铃保活帧顺带刷 `HeartbeatService.seen(agentId)`（降低 Agent 额外 heartbeat 频率）；多实例 Redis Pub/Sub fanout。
+
+#### 5. 验证回执
+
+- `mvn -pl helloai-core -am test -Dtest=DoorbellRegistryTest,DoorbellServiceTest,DoorbellRingerTest,DoorbellDutyListenerTest,AgentInboxServiceTest` → **22 例全绿 BUILD SUCCESS**（Registry 5 + Service 7 + Ringer 4 + DutyListener 4 + Inbox 2）。
+- `mvn -pl helloai-start -am install "-Dmaven.test.skip=true"` → **全 reactor MAIN 编译 BUILD SUCCESS**（含 helloai-start，间接验证无装配级循环依赖）。
+- `verify-doorbell-e2e.ps1` 经 `[System.Management.Automation.Language.Parser]::ParseFile` 自检 → **PARSE-OK**；首次因 Write 落盘无 BOM 触发 PS 5.1 以 ANSI 码页误读 CJK 注释报解析错，改存 UTF-8 with BOM（`EF BB BF`）后通过（对齐 D8 规则 6 源文件 BOM 子项）。
+- **2026-07-17 真实环境实跑 `verify-doorbell-e2e.ps1` → ALL PASSED**（用户自启后端 + docker，agentId 2077974111691915266）：`S1 OK` 未在岗建连 HTTP 500 `{"code":500,"msg":"Agent 未在岗…"}`；`S2 OK` 在岗建连 `HTTP/1.1 200` + `event:connected` + `data:{"type":"connected",...}`；`S3a OK` 租约翻 `EXPIRED | lease_expired`；`S3b OK` SSE 后台 job state=`Completed`（事件驱动主动断连生效）。至此 N13 运行时冒烟闭环。
+
+---
+
+### 2026-07-17 AgentHub V3 门铃通知通道：PR-4 保活帧调度 + 双心跳（方案 A，单测 33/33 全绿）
+
+#### 1. 范围
+
+- 承接同日 PR-1/2/3，落地设计 §6.2/§10.4 的 **PR-4**：① 门铃保活帧定时广播（周期性向已连门铃推 `keepalive`，防反向代理/NAT 空闲超时掐断长连接）；② 双心跳（建连时顺带刷一次 `HeartbeatService.seen`，让门铃建连也计入在线证据）。
+- 明确不做（本轮）：多实例 Redis Pub/Sub fanout（§12 演进项，单实例进程内 Map 无需）；保活帧不刷 `last_seen_at`（仅 connect 刷，规避僵尸连接掩盖离线）；不引入 WebSocket；不新增 Flyway/表/MQ 队列。
+
+#### 2. 实际落地
+
+- **① 保活帧调度（本地无锁，每实例都跑）**：新增 `DoorbellKeepaliveTask`（helloai-core/doorbell，`@Component` + `@Scheduled(fixedRateString = "${helloai.doorbell.keepalive-interval-ms:15000}")`），由 helloai-start `@EnableScheduling` 驱动。**关键设计：与 `DutyLeaseExpirationTask` 的 Redis 选主锁相反——门铃保活绝不选主。** `SseEmitter` 是进程内连接态，某 Agent 的连接只落在持有它的那个实例，若选主只让一台跑会导致其它实例的连接被空闲超时掐断，因此每个实例必须保活自己 `DoorbellRegistry` 里的连接。任务体先判 `enabled` 与 `connectionCount()==0` 早退，再 `broadcastKeepalive()`，异常整体 `catch` 吞掉（靠客户端重连 + pullTasks 轮询兜底，永不打断调度线程）。
+- **广播实现**：`DoorbellRegistry` 新增 `forEach(BiConsumer<Long,SseEmitter>)`（委托 `ConcurrentHashMap.forEach` 弱一致遍历，遍历中允许并发 register/unregister 不抛 CME）；`DoorbellService.broadcastKeepalive()` 遍历发 `DoorbellSignal.keepalive()`，复用既有 `doSend`（失败静默注销），返回成功条数。
+- **② 双心跳（方案 A，默认关）**：`DoorbellProperties` 新增 `refreshHeartbeat`（默认 **false**，保守）；`DoorbellService` 注入 `HeartbeatService`，`connect(agentId)` 在回推 `connected` 握手后，若开关开则调私有 `refreshSeen(agentId)` → `heartbeatService.seen(agentId)`（刷 Redis TTL + `last_seen_at` + 三态重算），异常静默不阻断建连。**仅建连刷一次**（建连是客户端主动、最可信的存活证据），保活帧轮不刷——避免“僵尸连接”被持续判 ONLINE 掩盖真实离线。
+- **无循环依赖**：`DoorbellService(core) → HeartbeatService(core) → AgentMapper/StringRedisTemplate` 不回指；Bean 创建无环（全 reactor `install` 间接验证）。
+
+#### 3. 影响
+
+- 新增 2 个文件：`DoorbellKeepaliveTask`、`DoorbellKeepaliveTaskTest`（4 用例：关闭跳过 / 无连接跳过 / 有连接广播一次 / 广播异常被吞）。
+- 改 5 个文件：`DoorbellRegistry`（+`forEach`）、`DoorbellService`（+`broadcastKeepalive` + 注入 `HeartbeatService` + `connect` 条件 `refreshSeen`）、`DoorbellProperties`（+`refreshHeartbeat` 默认 false）、`DoorbellServiceTest`（构造改 4 参 + 补广播 2 例 + 双心跳 3 例）、`DoorbellRegistryTest`（+`forEach` 2 例）。
+- 对外行为变化：门铃长连接每 15s（默认）收到一帧 `keepalive`；`refresh-heartbeat=true` 时建连会顺带刷一次 `last_seen_at`（默认关，不改变现有在线判定行为）。
+
+#### 4. 遗留
+
+- 多实例实时性（Redis Pub/Sub fanout）为 §12 演进项，单实例部署下无需，暂不做。
+
+#### 5. 验证回执
+
+- `mvn -pl helloai-core -am test -Dtest=DoorbellRegistryTest,DoorbellServiceTest,DoorbellRingerTest,DoorbellDutyListenerTest,DoorbellKeepaliveTaskTest,AgentInboxServiceTest "-Dsurefire.failIfNoSpecifiedTests=false"` → **33 例全绿 BUILD SUCCESS**（Registry 7 + Service 12 + Ringer 4 + DutyListener 4 + Keepalive 4 + Inbox 2）。
+- `mvn -pl helloai-start -am install "-Dmaven.test.skip=true"` → **全 reactor MAIN 编译 BUILD SUCCESS**。
+- PowerShell 注意：`DoorbellProperties.refreshHeartbeat` 在 helloai-common，跨模块新增字段必须 `-am` 让 common 在同一 reactor 重编——首次漏 `-am` 用陈旧 `.m2` common jar 报 `NoSuchMethodError: isRefreshHeartbeat()`，补 `-am` 后转绿；`-am` 连带 common 跑测试无匹配需 `-Dsurefire.failIfNoSpecifiedTests=false`。
+
+---
+
+### 2026-07-17 外部 Agent 一键接入补全：checkIn/checkOut 纳入默认授权 + executor SKILL 升级为全套 MCP 说明书
+
+#### 1. 范围
+
+- 承接“外部第三方 AI Agent 接入 HelloAI 调度平台”的分步端到端验证（第 1 步一键注册已实测 PASS=9），推进 **第 2 步：注册 → 打卡（checkIn）→ 门铃 SSE 长连接**。
+- 定位到的接缝断层：门铃建连闸门 `isOnDuty` 逻辑正确，但自助注册的 EXECUTOR 因 `checkIn`/`checkOut` **不在 `DEFAULT_EXECUTOR_TOOLS`** 默认授权清单 → 打不了卡 → 建不起门铃长连接。此为“平台没把工具给全”的产品缺口，非外部 AI 使用问题。
+- 用户口径（路 A：修产品）：一键注册的本意是交付外部 AI 使用平台的**完整说明书 + 全套 MCP 工具**；用哪些/何时用是外部 AI 的事，但“没给全”是平台责任。据此：① 修默认授权；② 补全一键生成的 SKILL 说明书（打卡接口 + 如何操作 + 全套 MCP 工具）；③ 补真实路径验证脚本。
+- 明确不做（本轮）：不改 Flyway/表结构（靠既有懒启用机制覆盖存量 Agent）；不动门铃闸门逻辑；不扩展 v3/v4/v5（后续步骤）。
+
+#### 2. 实际落地
+
+- **① checkIn/checkOut 纳入默认授权（`AgentMcpServerService.DEFAULT_EXECUTOR_TOOLS`）**
+  - 清单由 8 → 10：`pullTasks, ack, claimSubTask, heartbeat, uploadArtifact, submitResult, reportBlocked, getAgentStatus` 追加 `checkIn, checkOut`。
+  - **一处改动全覆盖，无需 Flyway**：`isToolEnabled(agentId, toolName)` 对 `DEFAULT_EXECUTOR_TOOLS` 内的工具有**懒启用**逻辑——`config == null && DEFAULT_EXECUTOR_TOOLS.contains(toolName)` 时自动 insert 启用行。因此新注册 Agent 走 `enableDefaultsForAgent` 插 10 行；**存量 Agent 首次调 `checkIn` 时被 `isToolEnabled` 懒启用补授权**。类注释与 `enableDefaultsForAgent` 方法注释由“7/8 工具”统一为“10 工具”。
+
+- **② executor SKILL.md 升级为完整说明书（`helloai-core/.../resources/skills/executor/SKILL.md`）**
+  - 原版全是 REST curl、只字未提 MCP——正是“没给全”。重写为完整接入手册（约 183 行），占位符 `<注册后填入>`/`{{BASE_URL}}`/`{{AGENT_NAME}}`/`<你的ID>` 保持不变（由 `PromptTemplateService` 注册时替换）。
+  - 新结构：认证信息 → 两种接入方式对比（MCP 推荐 / REST 兜底）→ **一、MCP 接入**（1.1 连接配置 `/mcp/sse` + `/mcp/messages?sessionId=` + Bearer；1.2 全套 **10 个 MCP 工具**表含“何时使用”；1.3 推荐工作循环：`getAgentStatus → checkIn → 建门铃 → 收 inbox 信号 → pullTasks → claimSubTask → 执行 → uploadArtifact → submitResult → ack → checkOut`）→ **二、门铃长连接**（2.1 `curl -N .../doorbell/sse`，前置须 `checkIn` 否则 HTTP 500；2.2 信号类型 `connected/inbox/keepalive`；2.3 保活与重连）→ **三、REST API 参考**（保留收件箱/规则/子任务/审查/积分/日志兜底）→ 注意事项。
+
+- **③ 真实路径验证脚本 `scripts/powershell/verify-onboarding-doorbell.ps1`（新增）**
+  - 与 `verify-doorbell-e2e.ps1`（S2 直接 DB INSERT 一条 ACTIVE 租约）互补——本脚本证明**外部 AI 用自己 apiKey 通过 MCP 真能打卡**：S0 `POST /api/agents/register` 取 apiKey+agentId；S1 未打卡建门铃应拒（HTTP 500 + `code=500`）；S2 MCP 握手（`/mcp/sse` 抓 sessionId → initialize → notifications/initialized → `tools/call checkIn`，Bearer）读 SSE 流断言含 `leaseId`/`ok:true`；S3 打卡后建门铃断言 HTTP 200 + `event:connected`。
+  - 遵循规则 6：UTF-8 编码头 + runtime 字面量纯 ASCII + CJK 只在注释；交付前踩到 line 148 **单引号内 CJK `'工具未启用'` 触发 PS 5.1 解析器提前闭合字符串**（规则 6 同类坑，此前仅记录双引号，本轮确认单引号亦然），改为纯 ASCII 正向断言后 `Parser.ParseFile` → PARSE-OK。
+
+#### 3. 影响
+
+- 对外行为变化：外部 AI 一键注册即拿**全套 10 个 MCP 工具**（含值班打卡）与含 MCP/打卡/门铃说明的完整 SKILL；自助注册后可直接 `checkIn` 上岗并建立门铃长连接（此前会被 tool-authz 拦截）。
+- 代码变化：
+  - `helloai-core/.../service/AgentMcpServerService.java`：`DEFAULT_EXECUTOR_TOOLS` 8→10（+`checkIn`/`checkOut`）+ 类/方法注释同步。
+  - `helloai-core/.../resources/skills/executor/SKILL.md`：重写为含 MCP 全套工具 + 打卡 + 门铃的完整说明书。
+  - `scripts/powershell/verify-onboarding-doorbell.ps1`（新增，第 2 步真实路径 E2E）。
+  - `doc/HelloAI_实现差距表.md` + `doc/HelloAI_迭代执行记录.md`（本轮回填）。
+- 数据结构变化：无（靠 `isToolEnabled` 懒启用覆盖存量 Agent，不新增 Flyway）。
+
+#### 4. 遗留
+
+- `verify-onboarding-doorbell.ps1` 已 PARSE-OK，**真实环境 E2E 已实测 ALL PASSED**（2026-07-17，本项遗留关闭）。
+- 第 2 步之后的 v3（门铃推 inbox → 外部 AI 调 MCP pullTasks 取任务）、v4（连接不中断 + 双心跳保活）、v5（submitResult 反馈闭环）为后续步骤，本轮未触及。
+
+#### 5. 验证回执
+
+- `mvn -pl helloai-core -am compile -DskipTests` → **BUILD SUCCESS**（`DEFAULT_EXECUTOR_TOOLS` 改动编译通过）。
+- `verify-onboarding-doorbell.ps1` 经 `[System.Management.Automation.Language.Parser]::ParseFile` 自检 → **PARSE-OK**（修掉单引号 CJK 提前闭合后）。
+- **2026-07-17 真实环境实跑 `verify-onboarding-doorbell.ps1` → ALL PASSED（PASS=7 FAIL=0，agentId 2078004629359747074）**：`S0` 自助注册拿 apiKey `ak_5c25e8d31...`；`S1` 未打卡建门铃 HTTP 500 `{"code":500,"msg":"Agent 未在岗…”}`；`S2` MCP `tools/call checkIn` HTTP 200 → ACTIVE 租约建立（**仅靠默认授权修复、未 seed DB**）；`S3` 打卡后建门铃 `HTTP/1.1 200` + `event:connected` + `data:{"type":"connected",...}`。至此第 2 步（注册→MCP checkIn→门铃 connected）真实路径闭环。
+
+---
+
+### 2026-07-17 外部 Agent 接入第 3 步：门铃 inbox 唤醒 → MCP pullTasks 取任务（闭环实测通过）
+
+#### 1. 范围
+
+- 承接第 2 步（注册→checkIn→门铃 connected），推进 **第 3 步：门铃推 inbox 信号 → 外部 AI 调 MCP pullTasks 取任务**。
+- 本步为**纯验证**，无产品代码改动：触发链路（`AgentInboxService.send` → `InboxMessageCreatedEvent` → `DoorbellRinger` → 门铃 ring）、pullTasks、子任务分配均已实现。
+
+#### 2. 实际落地
+
+- **新增验证脚本 `scripts/powershell/verify-onboarding-pull.ps1`**：S0 注册 → S1 MCP `checkIn` 上岗 → S2 建门铃 SSE（保持）收 `connected` → S3 `POST /api/tasks` + `POST /api/sub-tasks{assignedAgent}` 造一条 ASSIGNED 子任务（真实 inbox 源 `sub_task.assigned`）→ S4 断言门铃流出现 `event:inbox`（`type=inbox`、`eventType=sub_task.assigned`）→ S5 MCP `pullTasks` 断言返回含该 `sub_task.assigned` 且 `subTaskId` 匹配。
+- **关键设计**：inbox 必须走 service 层（`AgentInboxService.send`）才会发事件、才会响铃；DB 直插不触发——故脚本用真实 REST 建 task+sub_task 驱动。executor apiKey 可通过 AuthInterceptor 调 `/api/tasks`、`/api/sub-tasks`、MCP `pullTasks`（不区分角色）。
+- **脚本断言正则修正**：pullTasks 结果在 SSE 帧里是嵌套**转义 JSON**（`\"subTaskId\":<id>`），首版正则 `"subTaskId"\s*:` 被字段名前的转义反斜杠卡住 → 改为容错字符类 `subTaskId[\\":\s]*` 兼容转义/非转义两种形态。
+
+#### 3. 影响
+
+- 无产品代码/数据结构变动；仅新增一个验证脚本 + 本轮文档回填。
+
+#### 4. 遗留
+
+- 日志里 `sub_task.assigned` 消息 title 显示为乱码（`鬂颅件鹔″凡鈙嚇鎄`=“新任务已分配”）——为 curl 落盘 SSE 文件时 UTF-8/GBK 显示错位，**仅日志观感**，不影响断言（断言只匹配 ASCII 的 `sub_task.assigned` 与数字 ID）。
+- v4（连接不中断 + 双心跳保活）、v5（submitResult 反馈闭环）为后续步骤。
+
+#### 5. 验证回执
+
+- **2026-07-17 真实环境实跑 `verify-onboarding-pull.ps1` → ALL PASSED（PASS=12 FAIL=0，agentId 2078007902414237698）**：S4 门铃推 `event:inbox` `{"type":"inbox","eventType":"sub_task.assigned","refType":"sub_task","refId":"2078007941622591490"}`；S5 MCP pullTasks 返回 `{"messageId":"inbox-...","type":"sub_task.assigned","subTaskId":2078007941622591490,"taskId":2078007941509345281,...}`。门铃 `refId` = pullTasks `subTaskId` = S3 创建 ID 三处一致，“响铃唤醒→拉取正文”契约闭环。
+- 附带观察：同一门铃流还抓到一条 `event:keepalive`（14:44:34），提前印证 PR-4 `DoorbellKeepaliveTask` 保活帧在真实环境生效。
+- `verify-onboarding-pull.ps1` 经 `Parser.ParseFile` 自检 → **PARSE-OK**。
+
+---
+
+### 2026-07-17 外部 Agent 接入第 4 步：连接不中断 + 双心跳刷在线（实测通过）
+
+#### 1. 范围
+
+- 承接第 3 步，推进 **第 4 步：连接不中断 + 双心跳保活**。“双心跳”指两条方向：方向 A（server→client）由 `DoorbellKeepaliveTask` 按 `keepalive-interval-ms`（默认 15s）向活跃连接广播 `event:keepalive` 穿透反代空闲超时；方向 B（client→server）由 Agent 调 MCP `heartbeat` → `HeartbeatService.seen` 刷 `last_seen_at` + Redis TTL 并重算在线态。
+- 本步为**纯验证**，无产品代码改动（`DoorbellKeepaliveTask`、`heartbeat`、`getAgentStatus` 均已在 PR-4 / v2.4 阶段交付）。
+
+#### 2. 实际落地
+
+- **新增验证脚本 `scripts/powershell/verify-onboarding-heartbeat.ps1`**：S0 注册 → S1 MCP `checkIn` 上岗 → S2 建门铃 SSE（后台保持）收 `connected` → S3 保持门铃 ~20s 跨一个保活周期，断言收到 `event:keepalive` 且后台连接 job 仍 `Running`（连接未被切断）→ S4 REST `POST /api/mcp/tools/heartbeat` 断言 `ok:true` + agentId 匹配 → S5 MCP `getAgentStatus` 断言 `computedOnlineStatus`∈{ONLINE,IDLE} 且 `lastSeenAt` 已刷新。
+- **关键设计**：S3 用后台 job 的 `Running` 状态直接作为“连接未被服务端切断”的证据（15s 保活周期内若长连接会断，20s 窗口内必现形）；heartbeat 走同步 REST（好断言），getAgentStatus REST 未暴露故走 MCP SSE 通道。
+
+#### 3. 影响
+
+- 无产品代码/数据结构变动；仅新增一个验证脚本 + 本轮文档回填。
+
+#### 4. 遗留
+
+- v5（完成任务 + submitResult 反馈闭环）为最后一步。
+
+#### 5. 验证回执
+
+- **2026-07-17 真实环境实跑 `verify-onboarding-heartbeat.ps1` → ALL PASSED（PASS=12 FAIL=0，agentId 2078010246900150274）**：S3 `event:keepalive`@14:54:04 距建连 14:53:51 约 13s（吻合 15s 周期）+ job `Running`；S4 heartbeat REST `{"ok":true,"agentId":"2078010246900150274",...}`；S5 getAgentStatus `computedOnlineStatus=IDLE`（`lastActiveAt=null` 未执行任务→按三态判定就是 IDLE）、`lastSeenAt=2026-07-17T06:54:14Z` 与 heartbeat 时刻一致（心跳确实刷新了 last_seen_at）。
+- `verify-onboarding-heartbeat.ps1` 经 `Parser.ParseFile` 自检 → **PARSE-OK**。
+
+---
+
   ## 6. 下一步方案：N12 P1 剩余三项（待用户拍板）
   
   本节由 2026-07-16 A 档收尾后双文档同步记录使用，仅作方案池与工作量参考，不包含代码落地。决定启动哪个方案后请在本节下追加“### 已拍板：方案 X”子节，再据此拉新迭代轮次。
@@ -1961,7 +2183,57 @@ DB 验证：
   
   ### 6.5 待用户拍板
   
-  - [ ] 方案 A1 / A2 / A3 / A4 / A5 中选一个
+  - [x] **2026-07-17 用户拍板 A2**（从轻到重三项顺序分 3 段 atomic round），本节同步补充 A2 第 1 段 STRICT 独占报锁 交付记录于 §6.6
+  - [ ] A2 第 2 段（动态 TTL 自适应）启动时机
+  - [ ] A2 第 3 段（concurrency 预扣）启动时机
   - [ ] 选完后回写本节“### 已拍板：方案 X” 并在差距表 §5 优先级建议 / N12 处理建议列同步状态
+  
+  ---
+  
+  ### 6.6 已拍板：方案 A2 第 1 段（STRICT 独占报锁）— 2026-07-17 交付
+  
+  #### 1. 范围
+  
+  按用户拍板的 A2 路径推进本轮 3 段 atomic round 中的第 1 段，语义收口为：**STRICT Agent 只接自己被初始指派的任务，不参与别人失败后的 pickAlternative 替补池抢派别人失败的任务**。本轮明确不做：A2 第 2 段（动态 TTL 自适应）、A2 第 3 段（concurrency 预扣）、按“任务域”识别专属（当前业务模型无 conversationId/sessionId/groupId，Agent 端有 specialization_slug/capabilities/labels 字段支撑但 SubTask 端无“所需域”字段，留待后续轮次）。
+  
+  #### 2. 实际落地
+  
+  - **枚举基座**——新增 `helloai-common/.../constant/WorkMode.java`：`AUTO` / `STRICT` 两值，**双解析策略**：
+    - `lenientParse(String raw)`：DB 读取宽容——`null` / 空串 / 未知值→返回 `AUTO`（不抛异常，避免脏数据让运行崩）
+    - `strictParse(String raw)`：MCP 入参严格——非法值抛 `IllegalArgumentException`（调用方 `McpToolService.checkIn` 改包为 `BizException` 拒绝，不静默降级为 AUTO）
+  - **Selector 过滤**——`AgentSelector.pickFromCandidates` 在原 `ACTIVE` 过滤之后、熔断检查之前加一行 `.filter(a -> !isOnStrictDuty(a.getId()))`；新增私有方法 `isOnStrictDuty(Long agentId)`，读 `agentDutyLeaseService.getActiveLease(agentId)` + `WorkMode.lenientParse(lease.getWorkMode()) == STRICT` 判定，**查询异常回退 false**（不因租约查询偶发抖动误退）
+  - **入参校验**——`McpToolService.checkIn` 改 `mode = WorkMode.strictParse(workMode)`，`catch (IllegalArgumentException e) { throw new BizException(e.getMessage()); }`；落库用 `mode.name()` 字符串保证与枚举名完全一致
+  - **单测**——`AgentSelectorTest` 新增 `StrictDutyFiltering` 分组 5 个用例（`shouldSkipStrictOnDutyAgent` / `shouldReturnNullWhenAllCandidatesStrict` / `shouldTreatNoLeaseAgentAsAuto` / `shouldLenientParseDirtyWorkMode` / `shouldFallbackWhenLeaseQueryThrows`），全量 19/19 全绿
+  - **E2E 脚本**——`verify-agenthub-duty-e2e.ps1` NORMAL→AUTO 5 处一致性修订 + 追加 S6.1/S6.2/S6.3 三子场景（约 99 行）：
+    - **S6.1** workMode=STRICT checkIn → DB `status=ACTIVE, work_mode=STRICT` 断言
+    - **S6.2** workMode=`strict`（小写）checkIn → DB `work_mode=STRICT`（大小写不敏感，证明 lenientParse / strictParse 都管用）
+    - **S6.3** workMode=`BOGUS_VALUE` checkIn → 断言**不**落库（BizException 拒绝、lease count 前后不变）
+  - **踩坑沉淀**——本轮在 e2e 脚本踩到两个独立 PS 5.1 坑，均已落 memory：
+    1. **MCP `tools/call` 返回 JSON-RPC 2.0（`{jsonrpc,id,result:{content:[{type,text}]}}`），不是平台 `{code,msg,data}` 业务包装**——断言必须用 HTTP 200 + DB 状态，**不能** `ConvertFrom-Json` 后直接拿 `$body.code`
+    2. **PS 5.1 函数 `return $arr`（单元素数组）会被 unroll 成 `System.String`**——调用方 `$arr[0]` 取到首字符而非首元素。修复：函数改为返回**单 string**，调用方拿到 string 后用 `.Split('|')` 拿 String[]（.NET String.Split 在 PS 脚本层调用不 unroll）。同时捎带把所有 Write-Error / Write-Output 字符串按规则 6 改成“单引号 + `+` 拼接，runtime 字面量纯 ASCII、中文只留注释”
+  
+  #### 3. 影响
+  
+  - **对外行为变化**：`AgentSelector.pickAlternative` 调起时，候选列表里 ACTIVE 租约 `work_mode=STRICT` 的 Agent 会被过滤——它们不再抢派别人失败的任务；`checkIn` 入参非法值直接 BizException 拒绝（不会静默降级为 AUTO 让值班表里偷偷跑 AUTO 模式）
+  - **配置变化**：`agent_duty_lease.work_mode` 字段已存在（`V1__init_all.sql` AgentHub V1 T3 建表），无 schema 变化；MCP `tools/call` 客户端可在 `checkIn` 入参中传 `"workMode":"STRICT"` 显式开启严格模式（缺省 `AUTO`）
+  - **代码变化**：`WorkMode.java`（新建 71 行）；`AgentSelector.java` import + 一行 `.filter` + 19 行 `isOnStrictDuty`；`McpToolService.java` import + 8 行入参校验；`AgentSelectorTest.java` 115 行新增 + 6 行 helper；`verify-agenthub-duty-e2e.ps1` 5 处 NORMAL→AUTO + 99 行 S6 子场景 + 函数 return 改单 string + 7 处 Write-Error/Write-Output 按规则 6 重写
+  
+  #### 4. 遗留
+  
+  - A2 第 2 段（动态 TTL 自适应）未启动
+  - A2 第 3 段（concurrency 预扣）未启动
+  - “专属任务”按域匹配未实现（业务模型无 conversationId 概念、SubTask 端无“所需域”字段），但已通过 §6.6 第 1 段范围说明明确口径——STRICT 退出替补池 = 不接替补；如后续要按域专属再开一段
+  
+  #### 5. 验证回执
+  
+  - **`mvn -pl helloai-core -am compile`** BUILD SUCCESS
+  - **`mvn -pl helloai-core -am test -Dtest=AgentSelectorTest`** 19/19 全绿（含 5 个新 STRICT 用例）
+  - **`scripts/powershell/verify-agenthub-duty-e2e.ps1` 真实环境实测 ALL PASSED**（S1 checkIn / S2 checkOut / S3 DutyLeaseExpirationTask / **S6 N12-P1 STRICT 三子场景**）：
+    - S6.1 workMode=STRICT → DB status=ACTIVE, work_mode=STRICT ✓
+    - S6.2 workMode=`strict` 小写 → DB work_mode=STRICT（大小写不敏感）✓
+    - S6.3 workMode=BOGUS_VALUE → BizException 拒绝，lease count 不增（仍为 N）✓
+  - 脚本报 `Parser.ParseFile` 自检 **PARSE-OK**
+  
+  ---
   
   ---

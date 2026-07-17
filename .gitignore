@@ -57,3 +57,12 @@ sse*.txt
 m5-e2e-psql.log.sql
 # 临时编译日志（建议用 IDE / mvn 直接看，不入仓）
 .mvn-compile-*.log
+
+# --- e2e 脚本 SQL 输出文件（v2.6.2 2026-07-17 补充）---
+# verify-*.ps1 写出的 psql 输出结果，重跑即覆盖
+*.out
+*.out.pre
+*.out.bak
+# --- 临时调试与诊断产物（v2.6.2 2026-07-17 补充）---
+tmp/
+.dbg/

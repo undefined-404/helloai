@@ -125,7 +125,9 @@ function Get-PsqlFields {
         Where-Object { $_ -and $_ -notmatch '^\(' } |
         Select-Object -First 1
     if (-not $line) { return $null }
-    return ($line -replace '<NULL>', '').Split('|')
+    # 返回单 string，避开 PS 5.1 函数 return 时单元素数组被 unroll 成 System.String 的坑。
+    # 调用方拿到 string 后自己 .Split('|')，而 string.Split() 总是返回 String[]（不会 unroll）。
+    return ($line -replace '<NULL>', '')
 }
 
 # ============================================================
@@ -304,8 +306,8 @@ Send-Mcp -Sid $sid -Body '{"jsonrpc":"2.0","method":"notifications/initialized"}
 # ============================================================
 # STEP S1: checkIn -> lease ACTIVE
 # ============================================================
-Write-Output "=== [S1] tools/call checkIn (workMode=NORMAL, maxConcurrent=3, ttlMinutes=5) ==="
-$s1Body = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"checkIn","arguments":{"agentId":' + $agentId + ',"workMode":"NORMAL","maxConcurrent":3,"ttlMinutes":5,"sessionId":"' + $sid + '"}}}'
+Write-Output "=== [S1] tools/call checkIn (workMode=AUTO, maxConcurrent=3, ttlMinutes=5) ==="
+$s1Body = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"checkIn","arguments":{"agentId":' + $agentId + ',"workMode":"AUTO","maxConcurrent":3,"ttlMinutes":5,"sessionId":"' + $sid + '"}}}'
 $s1Resp = Send-Mcp -Sid $sid -Body $s1Body -Label "S1 checkIn" -Headers @{ "Authorization" = "Bearer $agentApiKey" }
 
 # Assert via DB
@@ -325,18 +327,19 @@ if ($rc -ne 0) {
     Stop-Job $sseInfo.Job -PassThru | Remove-Job -Force -ErrorAction SilentlyContinue
     exit 1
 }
-$s1Fields = Get-PsqlFields -Path $s1File
-if (-not $s1Fields) {
+$s1Line = Get-PsqlFields -Path $s1File
+if (-not $s1Line) {
     Write-Error "S1 FAILED: no ACTIVE lease row found (see $s1File)"
     Stop-Job $sseInfo.Job -PassThru | Remove-Job -Force -ErrorAction SilentlyContinue
     exit 1
 }
+$s1Fields = $s1Line.Split('|')
 Write-Output "S1 fields: $($s1Fields -join ' | ')"
 if ($s1Fields[0] -ne 'ACTIVE')       { Write-Error "S1 FAIL: status != ACTIVE"; exit 1 }
-if ($s1Fields[1] -ne 'NORMAL')       { Write-Error "S1 FAIL: work_mode != NORMAL"; exit 1 }
+if ($s1Fields[1] -ne 'AUTO')         { Write-Error "S1 FAIL: work_mode != AUTO"; exit 1 }
 if ($s1Fields[2] -ne '3')            { Write-Error "S1 FAIL: max_concurrent != 3"; exit 1 }
 if ($s1Fields[3] -ne 't')            { Write-Error "S1 FAIL: lease already expired"; exit 1 }
-Write-Output "S1 OK: checkIn -> lease ACTIVE, work_mode=NORMAL, max_concurrent=3, not-yet-expired"
+Write-Output "S1 OK: checkIn -> lease ACTIVE, work_mode=AUTO, max_concurrent=3, not-yet-expired"
 Write-Output ""
 
 # ============================================================
@@ -356,8 +359,9 @@ ORDER BY id DESC LIMIT 1;
 $s2File = Join-Path $scriptDir "verify-agenthub-duty-e2e-s2.out"
 $rc = Run-Psql -Sql $s2Sql -OutFile $s2File
 if ($rc -ne 0) { Write-Error "S2 psql rc=$rc; see $s2File"; exit 1 }
-$s2Fields = Get-PsqlFields -Path $s2File
-if (-not $s2Fields) { Write-Error "S2 FAIL: no lease row"; exit 1 }
+$s2Line = Get-PsqlFields -Path $s2File
+if (-not $s2Line) { Write-Error "S2 FAIL: no lease row"; exit 1 }
+$s2Fields = $s2Line.Split('|')
 Write-Output "S2 fields: $($s2Fields -join ' | ')"
 if ($s2Fields[0] -ne 'CLOSED')          { Write-Error "S2 FAIL: status != CLOSED"; exit 1 }
 if ($s2Fields[1] -ne 'e2e_test_close')  { Write-Error "S2 FAIL: close_reason mismatch ($($s2Fields[1]))"; exit 1 }
@@ -381,7 +385,7 @@ INSERT INTO agent_duty_lease
    started_at, last_renewed_at, expires_at,
    create_by, update_by, create_time, update_time, deleted, remark)
 VALUES
-  ($leaseIdSeq, $agentId, 'e2e-expired-lease', 'NORMAL', 3, 'ACTIVE',
+  ($leaseIdSeq, $agentId, 'e2e-expired-lease', 'AUTO', 3, 'ACTIVE',
    now() - interval '3 minutes',
    now() - interval '3 minutes',
    now() - interval '1 minute',
@@ -403,12 +407,141 @@ WHERE id = $leaseIdSeq AND deleted = 0;
 $s3File = Join-Path $scriptDir "verify-agenthub-duty-e2e-s3.out"
 $rc = Run-Psql -Sql $s3Sql -OutFile $s3File
 if ($rc -ne 0) { Write-Error "S3 psql rc=$rc; see $s3File"; exit 1 }
-$s3Fields = Get-PsqlFields -Path $s3File
-if (-not $s3Fields) { Write-Error "S3 FAIL: no lease row found for id=$leaseIdSeq"; exit 1 }
+$s3Line = Get-PsqlFields -Path $s3File
+if (-not $s3Line) { Write-Error "S3 FAIL: no lease row found for id=$leaseIdSeq"; exit 1 }
+$s3Fields = $s3Line.Split('|')
 Write-Output "S3 fields: $($s3Fields -join ' | ')"
 if ($s3Fields[0] -ne 'EXPIRED')       { Write-Error "S3 FAIL: status != EXPIRED (got $($s3Fields[0]))"; exit 1 }
 if ($s3Fields[1] -ne 'lease_expired') { Write-Error "S3 FAIL: close_reason != lease_expired (got $($s3Fields[1]))"; exit 1 }
 Write-Output "S3 OK: DutyLeaseExpirationTask flipped lease ACTIVE->EXPIRED with reason=lease_expired"
+Write-Output ""
+
+# ============================================================
+# STEP S6: N12 P1 STRICT 独占报锁（AgentSelector 退出替补池）
+#   - 创建独立 test agent（不复用主 agent，主 agent 已被 S2 签退）
+#   - S6.1 workMode=STRICT checkIn -> DB 断言 work_mode=STRICT
+#   - S6.2 workMode=strict（小写）checkIn -> DB 断言 work_mode=STRICT（大小写不敏感）
+#   - S6.3 workMode=BOGUS_VALUE checkIn -> 断言 BizException 拒绝（不默默降级 AUTO）
+#   - S6.4 cleanup checkOut
+# ============================================================
+Write-Output "=== [S6] N12 P1 STRICT 独占报锁 (AgentSelector pickAlternative 过滤验证) ==="
+
+$strictAgentName = 'duty-e2e-strict-agent-v1'
+$strictLookupResp = Invoke-Json -Method GET -Uri "$base/api/admin/agents?pageNum=1&pageSize=200" -Headers @{ "X-Admin-Token" = $adminToken }
+$strictLookupJson = $strictLookupResp.Body | ConvertFrom-Json
+$strictAgentId = $null
+$strictAgentApiKey = $null
+if ($strictLookupJson -and $strictLookupJson.data -and $strictLookupJson.data.list) {
+    $strictExisting = @($strictLookupJson.data.list | Where-Object { $_.name -eq $strictAgentName })
+    if ($strictExisting.Count -gt 0) {
+        $strictAgentId = $strictExisting[0].id
+        $strictAgentApiKey = $strictExisting[0].apiKey
+        Write-Output "S6 reuse existing strict agentId=$strictAgentId"
+    }
+}
+if (-not $strictAgentId) {
+    $strictCreateBody = "{`"name`":`"$strictAgentName`",`"role`":`"EXECUTOR`",`"remark`":`"AgentHub N12 P1 STRICT e2e auto-created`"}"
+    $strictCreateResp = Invoke-Json -Method POST -Uri "$base/api/admin/agents" -Body $strictCreateBody -Headers @{ "X-Admin-Token" = $adminToken }
+    if ($strictCreateResp.Code -ne 200) { Write-Error "S6 create agent HTTP $($strictCreateResp.Code)"; exit 1 }
+    $strictCreateJson = $strictCreateResp.Body | ConvertFrom-Json
+    if ($strictCreateJson.code -ne 200) { Write-Error "S6 create agent biz-fail: $($strictCreateJson.msg)"; exit 1 }
+    $strictAgentData = $strictCreateJson.data
+    $strictAgentId = $strictAgentData.id
+    $strictAgentApiKey = $strictAgentData.apiKey
+    Write-Output "S6 created strict agentId=$strictAgentId"
+}
+
+# seed checkIn / checkOut tool（幂等）
+$strictSeedSql = @"
+INSERT INTO agent_mcp_server (agent_id, tool_name, is_enabled, rate_limit, create_by, update_by)
+SELECT $strictAgentId, tool.name, 1, 0, 'e2e', 'e2e'
+FROM (VALUES ('checkIn'), ('checkOut')) AS tool(name)
+ON CONFLICT (agent_id, tool_name) WHERE deleted = 0 DO NOTHING;
+"@
+$strictSeedFile = Join-Path $scriptDir "verify-agenthub-duty-e2e-s6-seed.out"
+$null = Run-Psql -Sql $strictSeedSql -OutFile $strictSeedFile
+
+# 清理旧 lease（避免 uk_duty_lease_agent_active 冲突）
+$strictCleanSql = "DELETE FROM agent_duty_lease WHERE agent_id = $strictAgentId;"
+$null = Run-Psql -Sql $strictCleanSql -OutFile (Join-Path $scriptDir 'verify-agenthub-duty-e2e-s6-clean.out')
+
+# ---------- S6.1 workMode=STRICT checkIn ----------
+# MCP tools/call 返回 JSON-RPC 2.0 格式 ({jsonrpc,id,result:{content:[{type,text}]}})，
+# 不业务包装的 {code,msg,data}。断言只用 HTTP 200 + DB 状态，不解析业务响应体。
+$s61Body = '{"jsonrpc":"2.0","id":61,"method":"tools/call","params":{"name":"checkIn","arguments":{"agentId":' + $strictAgentId + ',"workMode":"STRICT","maxConcurrent":1,"ttlMinutes":5,"sessionId":"' + $sid + '"}}}'
+$s61Resp = Send-Mcp -Sid $sid -Body $s61Body -Label "S6.1 checkIn STRICT" -Headers @{ "Authorization" = "Bearer $strictAgentApiKey" }
+if ($s61Resp.Code -ne 200) {
+    Write-Error ('S6.1 FAIL: HTTP=' + $s61Resp.Code + ' body=' + $s61Resp.Body)
+    exit 1
+}
+
+$s61AssertSql = "SELECT status, work_mode FROM agent_duty_lease WHERE agent_id = $strictAgentId AND deleted = 0 ORDER BY id DESC LIMIT 1;"
+$s61AssertFile = Join-Path $scriptDir "verify-agenthub-duty-e2e-s6-1.out"
+$rc = Run-Psql -Sql $s61AssertSql -OutFile $s61AssertFile
+$s61Line = Get-PsqlFields -Path $s61AssertFile
+if (-not $s61Line) { Write-Error 'S6.1 FAIL: no lease row'; exit 1 }
+$s61Fields = $s61Line.Split('|')
+if ($s61Fields[0] -ne 'ACTIVE') { Write-Error ('S6.1 FAIL: status != ACTIVE (got ' + $s61Fields[0] + ')'); exit 1 }
+if ($s61Fields[1] -ne 'STRICT') { Write-Error ('S6.1 FAIL: work_mode != STRICT (got ' + $s61Fields[1] + ')'); exit 1 }
+Write-Output 'S6.1 OK: checkIn(workMode=STRICT) -> DB status=ACTIVE, work_mode=STRICT'
+
+# 签退为 S6.2 清理 ACTIVE（uk_duty_lease_agent_active 同一 agent 只 1 条）
+$s61OutBody = '{"jsonrpc":"2.0","id":62,"method":"tools/call","params":{"name":"checkOut","arguments":{"agentId":' + $strictAgentId + ',"closeReason":"s6_1_cleanup","sessionId":"' + $sid + '"}}}'
+$null = Send-Mcp -Sid $sid -Body $s61OutBody -Label "S6.1 checkOut cleanup" -Headers @{ "Authorization" = "Bearer $strictAgentApiKey" }
+
+# ---------- S6.2 workMode=strict (lower-case) checkIn ----------
+# 验证 strictParse 大小写不敏感。HTTP 200 + DB work_mode=STRICT 说明大小写不敏感成功。
+$s62Body = '{"jsonrpc":"2.0","id":63,"method":"tools/call","params":{"name":"checkIn","arguments":{"agentId":' + $strictAgentId + ',"workMode":"strict","maxConcurrent":1,"ttlMinutes":5,"sessionId":"' + $sid + '"}}}'
+$s62Resp = Send-Mcp -Sid $sid -Body $s62Body -Label "S6.2 checkIn strict lower" -Headers @{ "Authorization" = "Bearer $strictAgentApiKey" }
+if ($s62Resp.Code -ne 200) {
+    Write-Error ('S6.2 FAIL: HTTP=' + $s62Resp.Code + ' body=' + $s62Resp.Body)
+    exit 1
+}
+$s62AssertSql = "SELECT work_mode FROM agent_duty_lease WHERE agent_id = $strictAgentId AND deleted = 0 ORDER BY id DESC LIMIT 1;"
+$s62AssertFile = Join-Path $scriptDir "verify-agenthub-duty-e2e-s6-2.out"
+$rc = Run-Psql -Sql $s62AssertSql -OutFile $s62AssertFile
+$s62Line = Get-PsqlFields -Path $s62AssertFile
+if (-not $s62Line) { Write-Error 'S6.2 FAIL: no lease row'; exit 1 }
+$s62Fields = $s62Line.Split('|')
+if ($s62Fields[0] -ne 'STRICT') { Write-Error ('S6.2 FAIL: work_mode != STRICT (got ' + $s62Fields[0] + '), case-insensitive check failed'); exit 1 }
+Write-Output 'S6.2 OK: checkIn(workMode=strict lower) -> DB work_mode=STRICT (case-insensitive)'
+
+$s62OutBody = '{"jsonrpc":"2.0","id":64,"method":"tools/call","params":{"name":"checkOut","arguments":{"agentId":' + $strictAgentId + ',"closeReason":"s6_2_cleanup","sessionId":"' + $sid + '"}}}'
+$null = Send-Mcp -Sid $sid -Body $s62OutBody -Label "S6.2 checkOut cleanup" -Headers @{ "Authorization" = "Bearer $strictAgentApiKey" }
+
+# ---------- S6.3 workMode=BOGUS_VALUE checkIn -> 拒绝 ----------
+# 验证 strictParse 拒绝非法值。成功标志：HTTP 仍 200（MCP tools/call 不会传 HTTP 非 200），
+# 但 DB 中 lease 不增加（即不被 BizException 拒绝后不会落库）。
+$s63BeforeCountSql = "SELECT COUNT(*) FROM agent_duty_lease WHERE agent_id = $strictAgentId AND deleted = 0;"
+$s63BeforeCountFile = Join-Path $scriptDir "verify-agenthub-duty-e2e-s6-3-before.out"
+$rc = Run-Psql -Sql $s63BeforeCountSql -OutFile $s63BeforeCountFile
+$s63BeforeCountLine = Get-PsqlFields -Path $s63BeforeCountFile
+if (-not $s63BeforeCountLine) { Write-Error 'S6.3 FAIL: before count empty'; exit 1 }
+$s63BeforeCount = $s63BeforeCountLine.Split('|')[0]
+
+$s63Body = '{"jsonrpc":"2.0","id":65,"method":"tools/call","params":{"name":"checkIn","arguments":{"agentId":' + $strictAgentId + ',"workMode":"BOGUS_VALUE","maxConcurrent":1,"ttlMinutes":5,"sessionId":"' + $sid + '"}}}'
+$s63Resp = Send-Mcp -Sid $sid -Body $s63Body -Label "S6.3 checkIn BOGUS_VALUE" -Headers @{ "Authorization" = "Bearer $strictAgentApiKey" }
+if ($s63Resp.Code -ne 200) {
+    Write-Error ('S6.3 FAIL: HTTP=' + $s63Resp.Code + ' body=' + $s63Resp.Body)
+    exit 1
+}
+
+$s63AfterCountSql = "SELECT COUNT(*) FROM agent_duty_lease WHERE agent_id = $strictAgentId AND deleted = 0;"
+$s63AfterCountFile = Join-Path $scriptDir "verify-agenthub-duty-e2e-s6-3-after.out"
+$rc = Run-Psql -Sql $s63AfterCountSql -OutFile $s63AfterCountFile
+$s63AfterCountLine = Get-PsqlFields -Path $s63AfterCountFile
+if (-not $s63AfterCountLine) { Write-Error 'S6.3 FAIL: after count empty'; exit 1 }
+$s63AfterCount = $s63AfterCountLine.Split('|')[0]
+if ($s63AfterCount -ne $s63BeforeCount) {
+    Write-Error ('S6.3 FAIL: BOGUS_VALUE was accepted and persisted (lease count from ' + $s63BeforeCount + ' to ' + $s63AfterCount + ')')
+    exit 1
+}
+Write-Output ('S6.3 OK: workMode=BOGUS_VALUE was rejected by BizException, lease count unchanged (still ' + $s63AfterCount + ')')
+
+# ---------- S6.4 清理（如果 S6.3 之前还有 ACTIVE 也兜底清一次） ----------
+$s64CleanBody = '{"jsonrpc":"2.0","id":66,"method":"tools/call","params":{"name":"checkOut","arguments":{"agentId":' + $strictAgentId + ',"closeReason":"s6_final_cleanup","sessionId":"' + $sid + '"}}}'
+$null = Send-Mcp -Sid $sid -Body $s64CleanBody -Label "S6.4 final checkOut" -Headers @{ "Authorization" = "Bearer $strictAgentApiKey" }
+Write-Output 'S6 OK: STRICT persisted / case-insensitive / invalid-rejected three cases all green'
 Write-Output ""
 
 # ============================================================
@@ -422,6 +555,7 @@ Write-Output "SSE log:    $sseFile"
 Write-Output "S1 out:     $(Join-Path $scriptDir 'verify-agenthub-duty-e2e-s1.out')"
 Write-Output "S2 out:     $(Join-Path $scriptDir 'verify-agenthub-duty-e2e-s2.out')"
 Write-Output "S3 out:     $(Join-Path $scriptDir 'verify-agenthub-duty-e2e-s3.out')"
+Write-Output "S6 out:     $(Join-Path $scriptDir 'verify-agenthub-duty-e2e-s6-*.out')"
 Write-Output ""
-Write-Output "ALL PASSED: S1 checkIn / S2 checkOut / S3 DutyLeaseExpirationTask"
+Write-Output "ALL PASSED: S1 checkIn / S2 checkOut / S3 DutyLeaseExpirationTask / S6 N12-P1 STRICT"
 Write-Output "如需反复回归，可先跑 -Cleanup 清空 lease/inbox，再重跑此脚本"

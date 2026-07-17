@@ -1,10 +1,14 @@
 package com.helloai.core.agent.executor;
 
+import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
-import com.helloai.common.config.AgentDispatchProperties;
+import com.helloai.common.constant.WorkMode;
 import com.helloai.core.entity.Agent;
+import com.helloai.core.entity.AgentDutyLease;
+import com.helloai.core.service.AgentService;
+import com.helloai.core.service.AgentDutyLeaseService;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import lombok.RequiredArgsConstructor;
@@ -13,8 +17,6 @@ import org.springframework.stereotype.Component;
 
 import java.util.Comparator;
 import java.util.List;
-import com.helloai.core.service.AgentService;
-import com.helloai.core.service.AgentDutyLeaseService;
 
 /**
  * Agent 选择器（v2.4 §4.6）。
@@ -60,6 +62,8 @@ public class AgentSelector {
      *   <li>跳过 OFFLINE 状态</li>
      *   <li>跳过 status != ACTIVE（已禁用的 Agent）</li>
      *   <li>跳过熔断器已打开的 Agent（per-agent 维度）</li>
+     *   <li>N12 P1 STRICT 独占报锁：跳过当前以 STRICT 模式在岗的 Agent
+     *       （不参与他人失败后的替补池，但可被初始/直接分配的任务命中）</li>
      *   <li>按 score DESC 排序，选最高分</li>
      * </ol>
      *
@@ -87,6 +91,7 @@ public class AgentSelector {
                         || (a.getAccessType() != null && !a.getAccessType().requiresRuntimeLiveness()))
                 .filter(a -> !agentDispatchProperties.isRequireIdle() || agentService.inProgressCount(a.getId()) == 0)
                 .filter(a -> a.getStatus() == AgentStatus.ACTIVE)
+                .filter(a -> !isOnStrictDuty(a.getId()))
                 .filter(this::isCircuitClosed)
                 .max(resolveComparator())
                 .orElse(null);
@@ -130,6 +135,29 @@ public class AgentSelector {
             case API_KEY_LLM -> 2;
             case WEB_BROWSER -> 1;
         };
+    }
+
+    /**
+     * N12 P1 STRICT 独占报锁（A2 第 1 段）语义：
+     * 返回 true 表示该 Agent 当前以 STRICT 模式上岗，
+     * 平台不应当把它列入他人失败/熔断后的替补池候选。
+     *
+     * <p>防御式：任何 lease 查询异常都降级为 false（不阻断选择）。</p>
+     */
+    private boolean isOnStrictDuty(Long agentId) {
+        if (agentId == null) {
+            return false;
+        }
+        try {
+            AgentDutyLease lease = agentDutyLeaseService.getActiveLease(agentId);
+            if (lease == null) {
+                return false;
+            }
+            return WorkMode.lenientParse(lease.getWorkMode()) == WorkMode.STRICT;
+        } catch (Exception e) {
+            log.debug("isOnStrictDuty fallback to false for agent {}: {}", agentId, e.getMessage());
+            return false;
+        }
     }
 
     /**

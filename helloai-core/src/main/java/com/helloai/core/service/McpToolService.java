@@ -2,6 +2,8 @@ package com.helloai.core.service;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentStatus;
+import com.helloai.common.constant.WorkMode;
+import com.helloai.core.entity.AgentDutyLease;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.agent.command.ExecutionResultReport;
@@ -381,7 +383,14 @@ public class McpToolService {
         assertToolEnabled(agentId, "checkIn");
 
         int ttl = (ttlMinutes == null || ttlMinutes <= 0) ? 30 : ttlMinutes;
-        AgentDutyLease lease = agentDutyLeaseService.startLease(agentId, workMode, maxConcurrent, ttl);
+        // N12 P1 STRICT 独占报锁：严格校验入参，非法值立即拒绝（不被默默降级为 AUTO）。
+        WorkMode mode;
+        try {
+            mode = WorkMode.strictParse(workMode);
+        } catch (IllegalArgumentException e) {
+            throw new BizException(e.getMessage());
+        }
+        AgentDutyLease lease = agentDutyLeaseService.startLease(agentId, mode.name(), maxConcurrent, ttl);
 
         // 顺带刷心跳，避免 checkIn 后仍被判定 OFFLINE
         heartbeatService.seen(agentId);
