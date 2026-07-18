@@ -77,9 +77,9 @@ public class AgentDutyLeaseController {
         resp.setWorkMode(lease.getWorkMode());
         resp.setMaxConcurrent(lease.getMaxConcurrent());
         resp.setStatus(lease.getStatus());
-        resp.setStartedAt(lease.getStartedAt());
-        resp.setLastRenewedAt(lease.getLastRenewedAt());
-        resp.setExpiresAt(lease.getExpiresAt());
+        resp.setStartedAt(lease.getStartTime());
+        resp.setLastRenewedAt(lease.getLastRenewTime());
+        resp.setExpiresAt(lease.getExpireTime());
         resp.setCloseReason(lease.getCloseReason());
         if (lease.getAgentId() != null) {
             String name = nameCache.computeIfAbsent(lease.getAgentId(), id -> {

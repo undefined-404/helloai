@@ -145,7 +145,7 @@ public class McpToolService {
         }
 
         // 已归属于自己 → 幂等返回成功
-        if (agentId.equals(subTask.getAssignedAgent())
+        if (agentId.equals(subTask.getAssignedAgentId())
                 && (subTask.getStatus() == SubTaskStatus.ASSIGNED
                     || subTask.getStatus() == SubTaskStatus.IN_PROGRESS)) {
             heartbeatService.active(agentId);
@@ -159,7 +159,7 @@ public class McpToolService {
         }
 
         // 已归属于他人
-        if (subTask.getAssignedAgent() != null && !agentId.equals(subTask.getAssignedAgent())) {
+        if (subTask.getAssignedAgentId() != null && !agentId.equals(subTask.getAssignedAgentId())) {
             ClaimSubTaskResult result = new ClaimSubTaskResult();
             result.setOk(true);
             result.setClaimed(false);
@@ -286,7 +286,7 @@ public class McpToolService {
             r.setReason("subtask_not_found");
             return r;
         }
-        if (subTask.getAssignedAgent() == null || !agentId.equals(subTask.getAssignedAgent())) {
+        if (subTask.getAssignedAgentId() == null || !agentId.equals(subTask.getAssignedAgentId())) {
             SubmitResultResult r = new SubmitResultResult();
             r.setOk(false);
             r.setAccepted(false);
@@ -353,7 +353,7 @@ public class McpToolService {
         if (subTask == null) {
             throw new BizException("子任务不存在: " + subTaskId);
         }
-        if (!agentId.equals(subTask.getAssignedAgent())) {
+        if (!agentId.equals(subTask.getAssignedAgentId())) {
             throw new BizException("只能阻塞自己名下的子任务");
         }
 
@@ -410,7 +410,7 @@ public class McpToolService {
         result.setSessionId(lease.getSessionId());
         result.setWorkMode(lease.getWorkMode());
         result.setMaxConcurrent(lease.getMaxConcurrent());
-        result.setExpiresAt(lease.getExpiresAt() != null ? lease.getExpiresAt().toString() : null);
+        result.setExpiresAt(lease.getExpireTime() != null ? lease.getExpireTime().toString() : null);
         return result;
     }
 

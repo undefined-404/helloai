@@ -51,5 +51,5 @@ public class CredentialVault extends BaseEntity {
     private CredentialStatus status;
 
     /** 可选到期时间。 */
-    private OffsetDateTime expiresAt;
+    private OffsetDateTime expireTime;
 }

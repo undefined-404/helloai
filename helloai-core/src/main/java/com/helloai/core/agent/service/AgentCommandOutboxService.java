@@ -104,8 +104,8 @@ public class AgentCommandOutboxService extends ServiceImpl<AgentCommandOutboxEve
         return list(new LambdaQueryWrapper<AgentCommandOutboxEvent>()
                 .eq(AgentCommandOutboxEvent::getStatus, AgentCommandOutboxStatus.PENDING)
                 .lt(AgentCommandOutboxEvent::getRetryCount, maxRetry)
-                .and(w -> w.isNull(AgentCommandOutboxEvent::getNextRetryAt)
-                        .or().le(AgentCommandOutboxEvent::getNextRetryAt, OffsetDateTime.now()))
+                .and(w -> w.isNull(AgentCommandOutboxEvent::getNextRetryTime)
+                        .or().le(AgentCommandOutboxEvent::getNextRetryTime, OffsetDateTime.now()))
                 .orderByAsc(AgentCommandOutboxEvent::getCreateTime)
                 .last("LIMIT " + limit));
     }
@@ -116,11 +116,11 @@ public class AgentCommandOutboxService extends ServiceImpl<AgentCommandOutboxEve
         OffsetDateTime cutoff = OffsetDateTime.now().minusSeconds(confirmTimeoutSeconds);
         return list(new LambdaQueryWrapper<AgentCommandOutboxEvent>()
                 .eq(AgentCommandOutboxEvent::getStatus, AgentCommandOutboxStatus.SENT)
-                .isNull(AgentCommandOutboxEvent::getConfirmedAt)
-                .isNotNull(AgentCommandOutboxEvent::getLastSentAt)
-                .le(AgentCommandOutboxEvent::getLastSentAt, cutoff)
+                .isNull(AgentCommandOutboxEvent::getConfirmedTime)
+                .isNotNull(AgentCommandOutboxEvent::getLastSentTime)
+                .le(AgentCommandOutboxEvent::getLastSentTime, cutoff)
                 .lt(AgentCommandOutboxEvent::getRetryCount, maxRetry)
-                .orderByAsc(AgentCommandOutboxEvent::getLastSentAt)
+                .orderByAsc(AgentCommandOutboxEvent::getLastSentTime)
                 .last("LIMIT " + limit));
     }
 
@@ -136,8 +136,8 @@ public class AgentCommandOutboxService extends ServiceImpl<AgentCommandOutboxEve
                 .eq(AgentCommandOutboxEvent::getId, id)
                 .eq(AgentCommandOutboxEvent::getStatus, AgentCommandOutboxStatus.PENDING)
                 .set(AgentCommandOutboxEvent::getStatus, AgentCommandOutboxStatus.SENT)
-                .set(AgentCommandOutboxEvent::getLastSentAt, sentAt)
-                .set(AgentCommandOutboxEvent::getConfirmedAt, null)
+                .set(AgentCommandOutboxEvent::getLastSentTime, sentAt)
+                .set(AgentCommandOutboxEvent::getConfirmedTime, null)
                 .set(AgentCommandOutboxEvent::getErrorMsg, null)
                 .update();
         if (!ok) {
@@ -154,7 +154,7 @@ public class AgentCommandOutboxService extends ServiceImpl<AgentCommandOutboxEve
                 .eq(AgentCommandOutboxEvent::getId, id)
                 .eq(AgentCommandOutboxEvent::getStatus, AgentCommandOutboxStatus.SENT)
                 .set(AgentCommandOutboxEvent::getStatus, AgentCommandOutboxStatus.CONFIRMED)
-                .set(AgentCommandOutboxEvent::getConfirmedAt, confirmedAt)
+                .set(AgentCommandOutboxEvent::getConfirmedTime, confirmedAt)
                 .set(AgentCommandOutboxEvent::getErrorMsg, null)
                 .update();
         if (!ok) {
@@ -177,7 +177,7 @@ public class AgentCommandOutboxService extends ServiceImpl<AgentCommandOutboxEve
                 .eq(AgentCommandOutboxEvent::getId, id)
                 .eq(AgentCommandOutboxEvent::getStatus, AgentCommandOutboxStatus.PENDING)
                 .set(AgentCommandOutboxEvent::getRetryCount, retryCount)
-                .set(AgentCommandOutboxEvent::getNextRetryAt, nextRetryAt)
+                .set(AgentCommandOutboxEvent::getNextRetryTime, nextRetryAt)
                 .set(AgentCommandOutboxEvent::getErrorMsg, truncate(error))
                 .update();
         if (!ok) {
@@ -195,7 +195,7 @@ public class AgentCommandOutboxService extends ServiceImpl<AgentCommandOutboxEve
                 .eq(AgentCommandOutboxEvent::getStatus, AgentCommandOutboxStatus.SENT)
                 .set(AgentCommandOutboxEvent::getStatus, AgentCommandOutboxStatus.PENDING)
                 .set(AgentCommandOutboxEvent::getRetryCount, retryCount)
-                .set(AgentCommandOutboxEvent::getNextRetryAt, nextRetryAt)
+                .set(AgentCommandOutboxEvent::getNextRetryTime, nextRetryAt)
                 .set(AgentCommandOutboxEvent::getErrorMsg, truncate(error))
                 .update();
         if (!ok) {

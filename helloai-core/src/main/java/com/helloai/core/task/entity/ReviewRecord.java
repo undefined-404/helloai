@@ -12,7 +12,7 @@ import lombok.EqualsAndHashCode;
 public class ReviewRecord extends BaseEntity {
 
     private Long subTaskId;
-    private Long reviewerAgent;
+    private Long reviewerAgentId;
     private ReviewResult result;
     private Integer score;
     private String issues;

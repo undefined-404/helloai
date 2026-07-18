@@ -11,7 +11,7 @@ import lombok.EqualsAndHashCode;
 public class PatrolRecord extends BaseEntity {
 
     private Long subTaskId;
-    private Long patrolAgent;
+    private Long patrolAgentId;
     private String alertType;
     private String description;
 }

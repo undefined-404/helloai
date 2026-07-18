@@ -171,14 +171,14 @@ public class ExecutionCommandPoller {
                     safeMap(
                             "recordId", record.getId(),
                             "eventId", record.getEventId(),
-                            "originalTrigger", record.getTrigger(),
+                            "originalTrigger", record.getTriggerType(),
                             "accessType", record.getAccessType().name(),
                             "scan", scanType,
                             "consumerMode", executionProperties.getConsumerMode().name()));
         }
 
         // 5. 构造 ExecutionCommand，trigger 前缀统一使用 poll-recovery:
-        String originalTrigger = record.getTrigger() != null ? record.getTrigger() : "unknown";
+        String originalTrigger = record.getTriggerType() != null ? record.getTriggerType() : "unknown";
         String triggerPrefix = "poll-recovery:";
         ExecutionCommand command = ExecutionCommand.builder()
                 .recordId(record.getId())

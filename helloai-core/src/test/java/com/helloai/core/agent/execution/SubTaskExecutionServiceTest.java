@@ -137,7 +137,7 @@ class SubTaskExecutionServiceTest {
         @DisplayName("should throw BizException when agentId mismatch")
         void shouldThrowWhenAgentIdMismatch() {
             SubTask subTask = subTask();
-            subTask.setAssignedAgent(44L);
+            subTask.setAssignedAgentId(44L);
 
             when(subTaskService.getById(22L)).thenReturn(subTask);
 
@@ -211,7 +211,7 @@ class SubTaskExecutionServiceTest {
         SubTask subTask = new SubTask();
         subTask.setId(22L);
         subTask.setTaskId(33L);
-        subTask.setAssignedAgent(44L);
+        subTask.setAssignedAgentId(44L);
         subTask.setTitle("demo");
         subTask.setContent("demo content");
         return subTask;

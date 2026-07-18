@@ -205,7 +205,7 @@ class LocalExecutionCommandConsumerTest {
         @DisplayName("should skip when agentId does not match assignedAgent")
         void shouldSkipWhenAgentIdMismatch() {
             SubTask subTask = subTask();
-            subTask.setAssignedAgent(99L); // 与 command.agentId=11L 不一致
+            subTask.setAssignedAgentId(99L); // 与 command.agentId=11L 不一致
 
             when(subTaskService.getById(22L)).thenReturn(subTask);
 
@@ -236,7 +236,7 @@ class LocalExecutionCommandConsumerTest {
         SubTask subTask = new SubTask();
         subTask.setId(22L);
         subTask.setTaskId(33L);
-        subTask.setAssignedAgent(11L);
+        subTask.setAssignedAgentId(11L);
         subTask.setStatus(SubTaskStatus.ASSIGNED);
         return subTask;
     }

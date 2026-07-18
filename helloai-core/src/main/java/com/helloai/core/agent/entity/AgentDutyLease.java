@@ -39,14 +39,14 @@ public class AgentDutyLease extends BaseEntity {
     /** 租约状态。 */
     private AgentDutyLeaseStatus status;
 
-    /** 值班开始时间。 */
-    private OffsetDateTime startedAt;
+    /** 租约开始时间。 */
+    private OffsetDateTime startTime;
 
     /** 最近一次续约时间。 */
-    private OffsetDateTime lastRenewedAt;
+    private OffsetDateTime lastRenewTime;
 
-    /** 租约过期时间（started_at + lease TTL）。 */
-    private OffsetDateTime expiresAt;
+    /** 租约过期时间（start_time + lease TTL）。 */
+    private OffsetDateTime expireTime;
 
     /** 关闭原因（仅在 status=CLOSED 时填写）。 */
     private String closeReason;

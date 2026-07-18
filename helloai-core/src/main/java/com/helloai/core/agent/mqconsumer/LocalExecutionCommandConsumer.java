@@ -82,18 +82,18 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
             log.warn("执行命令消费跳过：subTask 不存在 subTaskId={}", command.getSubTaskId());
             return;
         }
-        if (subTask.getAssignedAgent() == null) {
+        if (subTask.getAssignedAgentId() == null) {
             log.warn("执行命令消费跳过：subTask 未分配 Agent subTaskId={}", command.getSubTaskId());
             return;
         }
-        if (!command.getAgentId().equals(subTask.getAssignedAgent())) {
+        if (!command.getAgentId().equals(subTask.getAssignedAgentId())) {
             log.warn("执行命令消费跳过：command.agentId={} 与 subTask.assignedAgent={} 不匹配",
-                    command.getAgentId(), subTask.getAssignedAgent());
+                    command.getAgentId(), subTask.getAssignedAgentId());
             return;
         }
-        Agent agent = agentService.getById(subTask.getAssignedAgent());
+        Agent agent = agentService.getById(subTask.getAssignedAgentId());
         if (agent == null) {
-            log.warn("执行命令消费跳过：Agent 不存在 agentId={}", subTask.getAssignedAgent());
+            log.warn("执行命令消费跳过：Agent 不存在 agentId={}", subTask.getAssignedAgentId());
             return;
         }
 

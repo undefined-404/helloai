@@ -242,7 +242,7 @@ class ExternalAgentFailureTrackerTest {
         a.setStatus(AgentStatus.ACTIVE);
         a.setOnlineStatus(AgentOnlineStatus.ONLINE);
         a.setConsecutiveFailureCount(failureCount);
-        a.setLastFallbackAt(lastFallbackAt);
+        a.setLastFallbackTime(lastFallbackAt);
         return a;
     }
 }

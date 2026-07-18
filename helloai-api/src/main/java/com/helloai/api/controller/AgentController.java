@@ -201,11 +201,11 @@ public class AgentController {
         response.setAccessType(agent.getAccessType());
         response.setCapabilities(agent.getCapabilities());
         response.setLabels(agent.getLabels());
-        response.setLastSeenAt(agent.getLastSeenAt());
-        response.setLastActiveAt(agent.getLastActiveAt());
+        response.setLastSeenAt(agent.getLastSeenTime());
+        response.setLastActiveAt(agent.getLastActiveTime());
         response.setOnlineStatus(agent.getOnlineStatus());
         response.setOfflineReason(agent.getOfflineReason());
-        response.setOfflineAt(agent.getOfflineAt());
+        response.setOfflineAt(agent.getOfflineTime());
         return response;
     }
 

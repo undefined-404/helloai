@@ -21,7 +21,7 @@ import java.util.Map;
  * <ul>
  *   <li>身份/调度：name / role / apiKey(consumerToken 工牌) / modelType / modelConfig / specializationSlug / status / score</li>
  *   <li>阶段 0 补全：accessType / capabilities / labels</li>
- *   <li>阶段 4 三件套：lastSeenAt / lastActiveAt / onlineStatus / offlineReason / offlineAt</li>
+ *   <li>阶段 4 三件套：lastSeenTime / lastActiveTime / onlineStatus / offlineReason / offlineTime</li>
  * </ul>
  *
  * <p>状态分离原则（v2.4 P1 + v2.2 设计决策）：</p>
@@ -79,10 +79,10 @@ public class Agent extends BaseEntity {
     // ============================================================
 
     /** 最近一次心跳时间（heartbeat/拉取/ack 即刷新）— 在线判定依据 */
-    private OffsetDateTime lastSeenAt;
+    private OffsetDateTime lastSeenTime;
 
     /** 最近一次任务活跃时间（start/submit/claim 即刷新）— 活跃度依据 */
-    private OffsetDateTime lastActiveAt;
+    private OffsetDateTime lastActiveTime;
 
     /** 计算态在线状态（ONLINE/IDLE/OFFLINE/SLEEPING）— 由系统计算 */
     private AgentOnlineStatus onlineStatus;
@@ -91,7 +91,7 @@ public class Agent extends BaseEntity {
     private String offlineReason;
 
     /** 最近一次被判定离线的时间 */
-    private OffsetDateTime offlineAt;
+    private OffsetDateTime offlineTime;
 
     // ============================================================
     // N11 阈值回退字段（V17 新增）
@@ -104,11 +104,11 @@ public class Agent extends BaseEntity {
     private Integer consecutiveFailureCount;
 
     /** 最近一次失败时间（与 consecutive_failure_count 同步刷新） */
-    private OffsetDateTime lastFailureAt;
+    private OffsetDateTime lastFailureTime;
 
     /**
      * 最近一次回退触发时间；用于 cooldown 判定，避免刚回退的 Agent
      * 在冷却期内被反复触发。
      */
-    private OffsetDateTime lastFallbackAt;
+    private OffsetDateTime lastFallbackTime;
 }

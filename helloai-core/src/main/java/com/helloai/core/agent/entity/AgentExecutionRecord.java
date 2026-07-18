@@ -27,7 +27,7 @@ public class AgentExecutionRecord extends BaseEntity {
      * 命令触发来源：assigned / reassigned / retry / poll-recovery。
      * <p>冗余存储：便于 DB Poller 恢复 ExecutionCommand 时还原调度上下文。</p>
      */
-    private String trigger;
+    private String triggerType;
 
     /**
      * 目标 Agent ID。
@@ -44,7 +44,7 @@ public class AgentExecutionRecord extends BaseEntity {
     /**
      * DB Poller 最近一次扫描该行的时间。
      * <p>NULL 表示尚未被 Poller 触及过。</p>
-     * <p>扫描条件：{@code status='PENDING' AND (last_attempt_at IS NULL OR last_attempt_at < now - threshold)}。</p>
+     * <p>扫描条件：{@code status='PENDING' AND (last_attempt_time IS NULL OR last_attempt_time < now - threshold)}。</p>
      */
-    private OffsetDateTime lastAttemptAt;
+    private OffsetDateTime lastAttemptTime;
 }

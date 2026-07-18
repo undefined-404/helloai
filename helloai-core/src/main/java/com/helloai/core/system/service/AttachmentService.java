@@ -35,7 +35,7 @@ public class AttachmentService extends ServiceImpl<AttachmentMapper, Attachment>
         if (subTask == null) {
             throw new BizException("子任务不存在: " + subTaskId);
         }
-        if (!agentId.equals(subTask.getAssignedAgent())) {
+        if (!agentId.equals(subTask.getAssignedAgentId())) {
             throw new BizException("无权为该子任务上传附件: subTaskId=" + subTaskId + ", agentId=" + agentId);
         }
 

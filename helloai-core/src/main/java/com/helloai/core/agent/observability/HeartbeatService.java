@@ -81,7 +81,7 @@ public class HeartbeatService {
             return;
         }
         OffsetDateTime now = OffsetDateTime.now();
-        agent.setLastSeenAt(now);
+        agent.setLastSeenTime(now);
 
         // 3) SLEEPING 防护：只刷 seen_at，不动 online_status
         if (agent.getOnlineStatus() == AgentOnlineStatus.SLEEPING) {
@@ -96,7 +96,7 @@ public class HeartbeatService {
         if (agent.getOnlineStatus() == AgentOnlineStatus.OFFLINE
                 && computed != AgentOnlineStatus.OFFLINE) {
             agent.setOfflineReason(null);
-            agent.setOfflineAt(null);
+            agent.setOfflineTime(null);
             log.info("Agent 从 OFFLINE 恢复: agentId={}, newStatus={}", agentId, computed);
         }
         agent.setOnlineStatus(computed);
@@ -117,7 +117,7 @@ public class HeartbeatService {
         if (agent == null) return;
 
         OffsetDateTime now = OffsetDateTime.now();
-        agent.setLastActiveAt(now);
+        agent.setLastActiveTime(now);
 
         // SLEEPING 防护：不动 online_status
         if (agent.getOnlineStatus() == AgentOnlineStatus.SLEEPING) {
@@ -127,11 +127,11 @@ public class HeartbeatService {
 
         // active 通常意味着 Agent 在做事，应视为 ONLINE
         // 若 last_seen_at 还在 5 分钟内，把 online_status 提升到 ONLINE
-        if (agent.getLastSeenAt() != null
-                && agent.getLastSeenAt().isAfter(now.minusMinutes(5))) {
+        if (agent.getLastSeenTime() != null
+                && agent.getLastSeenTime().isAfter(now.minusMinutes(5))) {
             if (agent.getOnlineStatus() == AgentOnlineStatus.OFFLINE) {
                 agent.setOfflineReason(null);
-                agent.setOfflineAt(null);
+                agent.setOfflineTime(null);
             }
             agent.setOnlineStatus(AgentOnlineStatus.ONLINE);
         }
@@ -160,11 +160,11 @@ public class HeartbeatService {
     public AgentOnlineStatus checkOnlineStatus(Agent agent, OffsetDateTime now) {
         if (agent == null) return AgentOnlineStatus.OFFLINE;
         OffsetDateTime cutoff = now.minusMinutes(5);
-        OffsetDateTime lastSeen = agent.getLastSeenAt();
+        OffsetDateTime lastSeen = agent.getLastSeenTime();
         if (lastSeen == null || lastSeen.isBefore(cutoff)) {
             return AgentOnlineStatus.OFFLINE;
         }
-        OffsetDateTime lastActive = agent.getLastActiveAt();
+        OffsetDateTime lastActive = agent.getLastActiveTime();
         if (lastActive != null && lastActive.isAfter(cutoff)) {
             return AgentOnlineStatus.ONLINE;
         }

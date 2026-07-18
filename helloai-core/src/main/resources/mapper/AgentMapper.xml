@@ -14,8 +14,8 @@
             id, name, role, api_key, model_type, model_config,
             specialization_slug, status, score,
             access_type, capabilities, labels,
-            last_seen_at, last_active_at, online_status, offline_reason, offline_at,
-            consecutive_failure_count, last_failure_at, last_fallback_at,
+            last_seen_time, last_active_time, online_status, offline_reason, offline_time,
+            consecutive_failure_count, last_failure_time, last_fallback_time,
             deleted, create_by, update_by, create_time, update_time, remark
         ) VALUES (
             #{id}, #{name}, #{role}, #{apiKey}, #{modelType},
@@ -24,9 +24,9 @@
             #{accessType},
             #{capabilities,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
             #{labels,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
-            #{lastSeenAt}, #{lastActiveAt}, #{onlineStatus},
-            #{offlineReason}, #{offlineAt},
-            #{consecutiveFailureCount}, #{lastFailureAt}, #{lastFallbackAt},
+            #{lastSeenTime}, #{lastActiveTime}, #{onlineStatus},
+            #{offlineReason}, #{offlineTime},
+            #{consecutiveFailureCount}, #{lastFailureTime}, #{lastFallbackTime},
             #{deleted}, #{createBy}, #{updateBy},
             #{createTime}, #{updateTime}, #{remark}
         )
@@ -53,14 +53,14 @@
             access_type = #{et.accessType},
             capabilities = #{et.capabilities,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
             labels = #{et.labels,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
-            last_seen_at = #{et.lastSeenAt},
-            last_active_at = #{et.lastActiveAt},
+            last_seen_time = #{et.lastSeenTime},
+            last_active_time = #{et.lastActiveTime},
             online_status = #{et.onlineStatus},
             offline_reason = #{et.offlineReason},
-            offline_at = #{et.offlineAt},
+            offline_time = #{et.offlineTime},
             consecutive_failure_count = #{et.consecutiveFailureCount},
-            last_failure_at = #{et.lastFailureAt},
-            last_fallback_at = #{et.lastFallbackAt},
+            last_failure_time = #{et.lastFailureTime},
+            last_fallback_time = #{et.lastFallbackTime},
             update_by = #{et.updateBy},
             update_time = #{et.updateTime}
         WHERE id = #{et.id} AND deleted = 0
@@ -70,7 +70,7 @@
         阶段 4 Reconcile：CAS UPDATE 标 OFFLINE。
         只有同时满足以下条件的 Agent 才会被标离线：
           1) id 匹配
-          2) last_seen_at 仍 < cutoff（防止 seen() 刚刷新就被覆盖）
+          2) last_seen_time 仍 < cutoff（防止 seen() 刚刷新就被覆盖）
           3) online_status 不是 SLEEPING（系统不自动覆盖管理员状态）
           4) 未删除
         影响行数 = 0 表示 CAS 失败（说明心跳刚到或 Agent 已 SLEEPING），调用方应放弃处理。
@@ -79,23 +79,23 @@
         UPDATE agent
         SET online_status = #{newStatus},
             offline_reason = #{reason},
-            offline_at = #{now},
+            offline_time = #{now},
             update_time = #{now}
         WHERE id = #{agentId}
-          AND last_seen_at &lt; #{cutoff}
+          AND last_seen_time &lt; #{cutoff}
           AND (online_status IS DISTINCT FROM 'SLEEPING')
           AND deleted = 0
     </update>
 
     <!--
-        阶段 4 Reconcile：扫描 last_seen_at 早于 cutoff 的 Agent。
+        阶段 4 Reconcile：扫描 last_seen_time 早于 cutoff 的 Agent。
         返回结果包括 ONLINE / IDLE / OFFLINE 三种状态（排除 SLEEPING 和已删除）。
         调用方（AgentHealthCheckTask）对每个 Agent 调用 markOfflineIfStale 做 CAS 标 OFFLINE。
-        IS DISTINCT FROM 用于安全处理 NULL（last_seen_at 为 NULL 也算超时）。
+        IS DISTINCT FROM 用于安全处理 NULL（last_seen_time 为 NULL 也算超时）。
     -->
     <select id="selectByLastSeenBefore" resultType="com.helloai.core.agent.entity.Agent">
         SELECT * FROM agent
-        WHERE (last_seen_at IS NULL OR last_seen_at &lt; #{cutoff})
+        WHERE (last_seen_time IS NULL OR last_seen_time &lt; #{cutoff})
           AND (online_status IS DISTINCT FROM 'SLEEPING')
           AND deleted = 0
     </select>
@@ -109,7 +109,7 @@
     <update id="incrementConsecutiveFailure">
         UPDATE agent
         SET consecutive_failure_count = COALESCE(consecutive_failure_count, 0) + 1,
-            last_failure_at = #{now},
+            last_failure_time = #{now},
             update_time = #{now}
         WHERE id = #{agentId}
           AND access_type = 'CLI_CLIENT'
@@ -117,13 +117,13 @@
     </update>
 
     <!--
-        N11 阈值回退：成功路径上重置失败计数（清零 + 清空 last_failure_at）。
+        N11 阈值回退：成功路径上重置失败计数（清零 + 清空 last_failure_time）。
         仅在 access_type = CLI_CLIENT 时生效；API_KEY_LLM / WEB_BROWSER 不参与 N11 闭环。
     -->
     <update id="resetConsecutiveFailure">
         UPDATE agent
         SET consecutive_failure_count = 0,
-            last_failure_at = NULL,
+            last_failure_time = NULL,
             update_time = #{now}
         WHERE id = #{agentId}
           AND access_type = 'CLI_CLIENT'
@@ -132,14 +132,14 @@
 
     <!--
         N11 阈值回退：标记"本次回退已触发"。
-        原子写回 last_fallback_at + 同步清零 consecutive_failure_count（一次扫描只触发一次），
+        原子写回 last_fallback_time + 同步清零 consecutive_failure_count（一次扫描只触发一次），
         避免后续 cycle 又把它当作候选。
     -->
     <update id="markFallbackTriggered">
         UPDATE agent
         SET consecutive_failure_count = 0,
-            last_failure_at = NULL,
-            last_fallback_at = #{now},
+            last_failure_time = NULL,
+            last_fallback_time = #{now},
             update_time = #{now}
         WHERE id = #{agentId}
           AND access_type = 'CLI_CLIENT'
@@ -150,7 +150,7 @@
         N11 阈值回退：扫描超阈值候选 Agent。
         调用方（ExternalAgentFallbackTask）传入 threshold + cooldownCutoff：
           - consecutive_failure_count >= threshold
-          - last_fallback_at IS NULL OR last_fallback_at < cooldownCutoff
+          - last_fallback_time IS NULL OR last_fallback_time < cooldownCutoff
         仅返回 CLI_CLIENT + 未删除 Agent。
     -->
     <select id="selectFallbackCandidates" resultType="com.helloai.core.agent.entity.Agent">
@@ -158,8 +158,8 @@
         WHERE access_type = 'CLI_CLIENT'
           AND deleted = 0
           AND COALESCE(consecutive_failure_count, 0) >= #{threshold}
-          AND (last_fallback_at IS NULL OR last_fallback_at &lt; #{cooldownCutoff})
-        ORDER BY consecutive_failure_count DESC, last_failure_at ASC
+          AND (last_fallback_time IS NULL OR last_fallback_time &lt; #{cooldownCutoff})
+        ORDER BY consecutive_failure_count DESC, last_failure_time ASC
     </select>
 
 </mapper>

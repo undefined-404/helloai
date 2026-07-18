@@ -29,7 +29,7 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>采用 Reconcile 模式（v2.4 P2）：
  * <ol>
- *   <li>每 60s 扫描一次 last_seen_at 早于 5 分钟的 Agent</li>
+ *   <li>每 60s 扫描一次 last_seen_time 早于 5 分钟的 Agent</li>
  *   <li>对每个超时 Agent，先尝试主动 ping（v1.1 占位）</li>
  *   <li>ping 失败 → 用 CAS UPDATE 标 OFFLINE（防止 seen() 刷新覆盖）</li>
  *   <li>CAS 成功 → 触发任务重分配（v1.1 占位） + 写 task_timeline 审计</li>
@@ -120,7 +120,7 @@ public class AgentHealthCheckTask {
         }
 
         log.warn("Agent 标 OFFLINE: agentId={}, name={}, role={}, lastSeen={}",
-                agent.getId(), agent.getName(), agent.getRole(), agent.getLastSeenAt());
+                agent.getId(), agent.getName(), agent.getRole(), agent.getLastSeenTime());
 
         // 3) 重新分配任务（v1.1 占位：阶段 4.6 AgentSelector.pickAlternative() 完成后再实装）
         reassignStaleTasks(agent.getId());
@@ -135,9 +135,9 @@ public class AgentHealthCheckTask {
                 agent.getId(),
                 Map.of(
                         "reason", REASON_HEARTBEAT_LOST,
-                        "offline_at", now.toString(),
-                        "last_seen_at", agent.getLastSeenAt() != null
-                                ? agent.getLastSeenAt().toString() : "null",
+                        "offline_time", now.toString(),
+                        "last_seen_time", agent.getLastSeenTime() != null
+                                ? agent.getLastSeenTime().toString() : "null",
                         "agent_name", agent.getName() != null ? agent.getName() : "unknown"
                 ));
 
@@ -149,7 +149,7 @@ public class AgentHealthCheckTask {
     /**
      * Redis TTL 二次验证（v1.1 阶段替代 ping）。
      *
-     * <p>HeartbeatService.seen() 会同时写 Redis TTL 和 DB last_seen_at，
+     * <p>HeartbeatService.seen() 会同时写 Redis TTL 和 DB last_seen_time，
      * 但 Redis 写入可能比 DB 慢（罕见），如果 DB 看起来超时但 Redis TTL 还在，
      * 说明心跳刚到，放弃标 OFFLINE。</p>
      */
@@ -178,7 +178,7 @@ public class AgentHealthCheckTask {
         // 查询待重分配任务：ASSIGNED 或 IN_PROGRESS
         List<SubTask> staleTasks = subTaskMapper.selectList(
                 new LambdaQueryWrapper<SubTask>()
-                        .eq(SubTask::getAssignedAgent, agentId)
+                        .eq(SubTask::getAssignedAgentId, agentId)
                         .in(SubTask::getStatus, SubTaskStatus.ASSIGNED, SubTaskStatus.IN_PROGRESS));
 
         if (staleTasks.isEmpty()) {

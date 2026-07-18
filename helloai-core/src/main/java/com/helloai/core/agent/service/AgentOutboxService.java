@@ -33,7 +33,7 @@ public class AgentOutboxService extends ServiceImpl<AgentOutboxEventMapper, Agen
                 "subTaskId", subTask.getId(),
                 "taskId", subTask.getTaskId(),
                 "status", newStatus.name(),
-                "agentId", subTask.getAssignedAgent() != null ? subTask.getAssignedAgent() : 0L
+                "agentId", subTask.getAssignedAgentId() != null ? subTask.getAssignedAgentId() : 0L
         ));
         if (newStatus == SubTaskStatus.BLOCKED
                 && subTask.getContext() != null

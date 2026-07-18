@@ -159,7 +159,7 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
 
         List<SubTask> subs = subTaskMapper.selectList(
                 new LambdaQueryWrapper<SubTask>()
-                        .eq(SubTask::getAssignedAgent, agentId)
+                        .eq(SubTask::getAssignedAgentId, agentId)
                         .select(SubTask::getStatus));
 
         for (SubTask s : subs) {
@@ -176,7 +176,7 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
         if (agentId == null) return 0;
         return Integer.parseInt(subTaskMapper.selectCount(
                 new LambdaQueryWrapper<SubTask>()
-                        .eq(SubTask::getAssignedAgent, agentId)
+                        .eq(SubTask::getAssignedAgentId, agentId)
                         .eq(SubTask::getStatus, SubTaskStatus.IN_PROGRESS)
                         .eq(SubTask::getDeleted, 0)).toString());
     }
@@ -210,15 +210,15 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
         counts.put("agentId", agentId);
         counts.put("agentName", agent.getName());
         counts.put("subTaskCount", (long) subTaskMapper.selectCount(
-                new LambdaQueryWrapper<SubTask>().eq(SubTask::getAssignedAgent, agentId)));
+                new LambdaQueryWrapper<SubTask>().eq(SubTask::getAssignedAgentId, agentId)));
         counts.put("reviewCount", (long) reviewRecordMapper.selectCount(
-                new LambdaQueryWrapper<ReviewRecord>().eq(ReviewRecord::getReviewerAgent, agentId)));
+                new LambdaQueryWrapper<ReviewRecord>().eq(ReviewRecord::getReviewerAgentId, agentId)));
         counts.put("rewardCount", (long) rewardLogMapper.selectCount(
                 new LambdaQueryWrapper<RewardLog>().eq(RewardLog::getAgentId, agentId)));
         counts.put("activityCount", (long) activityLogMapper.selectCount(
                 new LambdaQueryWrapper<ActivityLog>().eq(ActivityLog::getAgentId, agentId)));
         counts.put("patrolCount", (long) patrolRecordMapper.selectCount(
-                new LambdaQueryWrapper<PatrolRecord>().eq(PatrolRecord::getPatrolAgent, agentId)));
+                new LambdaQueryWrapper<PatrolRecord>().eq(PatrolRecord::getPatrolAgentId, agentId)));
         return counts;
     }
 
@@ -236,26 +236,26 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
 
         // 先统计
         int subTaskCount = Integer.parseInt(subTaskMapper.selectCount(
-                new LambdaQueryWrapper<SubTask>().eq(SubTask::getAssignedAgent, agentId)).toString());
+                new LambdaQueryWrapper<SubTask>().eq(SubTask::getAssignedAgentId, agentId)).toString());
         int reviewCount = Integer.parseInt(reviewRecordMapper.selectCount(
-                new LambdaQueryWrapper<ReviewRecord>().eq(ReviewRecord::getReviewerAgent, agentId)).toString());
+                new LambdaQueryWrapper<ReviewRecord>().eq(ReviewRecord::getReviewerAgentId, agentId)).toString());
         int rewardCount = Integer.parseInt(rewardLogMapper.selectCount(
                 new LambdaQueryWrapper<RewardLog>().eq(RewardLog::getAgentId, agentId)).toString());
         int activityCount = Integer.parseInt(activityLogMapper.selectCount(
                 new LambdaQueryWrapper<ActivityLog>().eq(ActivityLog::getAgentId, agentId)).toString());
         int patrolCount = Integer.parseInt(patrolRecordMapper.selectCount(
-                new LambdaQueryWrapper<PatrolRecord>().eq(PatrolRecord::getPatrolAgent, agentId)).toString());
+                new LambdaQueryWrapper<PatrolRecord>().eq(PatrolRecord::getPatrolAgentId, agentId)).toString());
 
         // unlink 子任务
         subTaskMapper.update(null,
                 new LambdaUpdateWrapper<SubTask>()
-                        .eq(SubTask::getAssignedAgent, agentId)
-                        .set(SubTask::getAssignedAgent, null));
+                        .eq(SubTask::getAssignedAgentId, agentId)
+                        .set(SubTask::getAssignedAgentId, null));
 
         // 清理级联数据
         rewardLogMapper.delete(new LambdaQueryWrapper<RewardLog>().eq(RewardLog::getAgentId, agentId));
         activityLogMapper.delete(new LambdaQueryWrapper<ActivityLog>().eq(ActivityLog::getAgentId, agentId));
-        patrolRecordMapper.delete(new LambdaQueryWrapper<PatrolRecord>().eq(PatrolRecord::getPatrolAgent, agentId));
+        patrolRecordMapper.delete(new LambdaQueryWrapper<PatrolRecord>().eq(PatrolRecord::getPatrolAgentId, agentId));
 
         removeById(agentId);
 

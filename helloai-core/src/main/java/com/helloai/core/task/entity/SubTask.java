@@ -25,7 +25,7 @@ public class SubTask extends BaseEntity {
     @TableField("status")
     private SubTaskStatus status;
 
-    private Long assignedAgent;
+    private Long assignedAgentId;
     private String content;
 
     @TableField(typeHandler = JacksonTypeHandler.class)
@@ -38,7 +38,7 @@ public class SubTask extends BaseEntity {
     private String scoreGrade;
     private OffsetDateTime deadline;
     private Integer reworkCount;
-    private OffsetDateTime completedAt;
+    private OffsetDateTime completeTime;
 
     @Version
     private Integer version;

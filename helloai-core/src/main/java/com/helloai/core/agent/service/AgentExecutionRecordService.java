@@ -34,7 +34,7 @@ public class AgentExecutionRecordService extends ServiceImpl<AgentExecutionRecor
         record.setSubTaskId(subTaskId);
         record.setAgentId(agentId);
         record.setAccessType(accessType);
-        record.setTrigger(trigger);
+        record.setTriggerType(trigger);
         record.setStatus(ExecutionStatus.PENDING);
         record.setWorkerNode(getHostName());
         record.setRetryCount(0);
@@ -111,8 +111,8 @@ public class AgentExecutionRecordService extends ServiceImpl<AgentExecutionRecor
         OffsetDateTime cutoff = OffsetDateTime.now().minusSeconds(thresholdSeconds);
         return lambdaQuery()
                 .eq(AgentExecutionRecord::getStatus, ExecutionStatus.PENDING)
-                .and(w -> w.isNull(AgentExecutionRecord::getLastAttemptAt)
-                        .or().lt(AgentExecutionRecord::getLastAttemptAt, cutoff))
+                .and(w -> w.isNull(AgentExecutionRecord::getLastAttemptTime)
+                        .or().lt(AgentExecutionRecord::getLastAttemptTime, cutoff))
                 .orderByAsc(AgentExecutionRecord::getCreateTime)
                 .last("LIMIT " + limit)
                 .list();
@@ -167,7 +167,7 @@ public class AgentExecutionRecordService extends ServiceImpl<AgentExecutionRecor
     public boolean markPolled(Long id) {
         return lambdaUpdate()
                 .eq(AgentExecutionRecord::getId, id)
-                .set(AgentExecutionRecord::getLastAttemptAt, OffsetDateTime.now())
+                .set(AgentExecutionRecord::getLastAttemptTime, OffsetDateTime.now())
                 .update();
     }
 

@@ -90,7 +90,7 @@ public class AssignedSubTaskTimeoutTask {
             int failed = 0;
             for (SubTask subTask : timedOut) {
                 try {
-                    Long originalAgentId = subTask.getAssignedAgent();
+                    Long originalAgentId = subTask.getAssignedAgentId();
                     Agent originalAgent = originalAgentId != null
                             ? agentService.getById(originalAgentId) : null;
                     AgentRole role = originalAgent != null && originalAgent.getRole() != null
