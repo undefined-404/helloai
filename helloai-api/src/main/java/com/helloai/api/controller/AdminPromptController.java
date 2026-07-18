@@ -3,7 +3,7 @@ package com.helloai.api.controller;
 import com.helloai.api.dto.admin.PromptTemplateResponse;
 import com.helloai.common.base.R;
 import com.helloai.core.entity.PromptTemplate;
-import com.helloai.core.service.PromptTemplateService;
+import com.helloai.core.system.service.PromptTemplateService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;

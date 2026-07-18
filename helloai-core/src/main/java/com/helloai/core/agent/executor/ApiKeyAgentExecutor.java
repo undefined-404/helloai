@@ -8,7 +8,7 @@ import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.entity.Agent;
 import com.helloai.core.agent.chat.AgentChatClientService;
-import com.helloai.core.service.CredentialVaultBindingService;
+import com.helloai.core.system.service.CredentialVaultBindingService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.metadata.Usage;

@@ -7,7 +7,7 @@ import com.helloai.common.base.R;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.core.entity.ReviewRecord;
-import com.helloai.core.service.ReviewService;
+import com.helloai.core.task.service.ReviewService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;

@@ -5,7 +5,7 @@ import com.helloai.api.dto.module.CreateModuleRequest;
 import com.helloai.api.dto.module.ModuleResponse;
 import com.helloai.common.base.R;
 import com.helloai.core.entity.Module;
-import com.helloai.core.service.ModuleService;
+import com.helloai.core.system.service.ModuleService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

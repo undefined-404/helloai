@@ -2,7 +2,7 @@ package com.helloai.api.controller;
 
 import com.helloai.common.base.R;
 import com.helloai.core.entity.AgentInbox;
-import com.helloai.core.service.AgentInboxService;
+import com.helloai.core.agent.service.AgentInboxService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

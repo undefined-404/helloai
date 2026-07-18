@@ -21,7 +21,7 @@ import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import com.helloai.core.observability.HeartbeatService;
-import com.helloai.core.service.AgentService;
+import com.helloai.core.agent.service.AgentService;
 
 /**
  * 平台内 Agent 执行入口。

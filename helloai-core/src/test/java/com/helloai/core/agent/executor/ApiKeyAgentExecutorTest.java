@@ -6,7 +6,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.entity.Agent;
 import com.helloai.core.agent.chat.AgentChatClientService;
-import com.helloai.core.service.CredentialVaultBindingService;
+import com.helloai.core.system.service.CredentialVaultBindingService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 

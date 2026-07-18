@@ -34,9 +34,9 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
-import com.helloai.core.service.AgentExecutionRecordService;
-import com.helloai.core.service.SubTaskService;
-import com.helloai.core.service.TaskTimelineService;
+import com.helloai.core.agent.service.AgentExecutionRecordService;
+import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskTimelineService;
 
 /**
  * {@link ExecutionCommandPoller} 单元测试。

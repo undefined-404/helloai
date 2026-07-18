@@ -28,8 +28,8 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import com.helloai.core.service.AgentService;
-import com.helloai.core.service.AgentDutyLeaseService;
+import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.agent.service.AgentDutyLeaseService;
 
 /**
  * AgentSelector 单元测试（v2.4 §4.10）。

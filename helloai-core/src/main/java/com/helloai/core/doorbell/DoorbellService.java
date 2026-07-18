@@ -3,7 +3,7 @@ package com.helloai.core.doorbell;
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.DoorbellProperties;
 import com.helloai.core.observability.HeartbeatService;
-import com.helloai.core.service.AgentDutyLeaseService;
+import com.helloai.core.agent.service.AgentDutyLeaseService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;

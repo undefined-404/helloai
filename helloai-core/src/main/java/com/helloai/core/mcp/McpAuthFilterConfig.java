@@ -1,6 +1,6 @@
 package com.helloai.core.mcp;
 
-import com.helloai.core.service.AuthService;
+import com.helloai.core.system.service.AuthService;
 import lombok.RequiredArgsConstructor;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;

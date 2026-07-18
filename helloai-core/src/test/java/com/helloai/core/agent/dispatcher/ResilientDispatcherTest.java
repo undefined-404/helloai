@@ -31,8 +31,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.observability.CircuitBreakerEventRecorder;
-import com.helloai.core.service.AgentService;
-import com.helloai.core.service.SubTaskService;
+import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.task.service.SubTaskService;
 
 /**
  * ResilientDispatcher 单元测试（v2.4 §4.10）。

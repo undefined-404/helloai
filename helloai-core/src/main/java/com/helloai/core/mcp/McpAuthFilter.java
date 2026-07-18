@@ -3,7 +3,7 @@ package com.helloai.core.mcp;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
 import com.helloai.core.entity.Agent;
-import com.helloai.core.service.AuthService;
+import com.helloai.core.system.service.AuthService;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.servlet.FilterChain;

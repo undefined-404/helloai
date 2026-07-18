@@ -6,8 +6,8 @@ import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.entity.Agent;
 import com.helloai.core.entity.SubTask;
-import com.helloai.core.service.AgentService;
-import com.helloai.core.service.ExternalAgentFailureTracker;
+import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.agent.service.ExternalAgentFailureTracker;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -20,8 +20,8 @@ import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import com.helloai.core.agent.execution.SubTaskExecutionService;
-import com.helloai.core.service.SubTaskService;
-import com.helloai.core.service.TaskTimelineService;
+import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskTimelineService;
 
 /**
  * 执行结果处理器。

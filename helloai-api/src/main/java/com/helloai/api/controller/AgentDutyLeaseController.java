@@ -9,7 +9,7 @@ import com.helloai.common.constant.AgentDutyLeaseStatus;
 import com.helloai.core.entity.Agent;
 import com.helloai.core.entity.AgentDutyLease;
 import com.helloai.core.mapper.AgentMapper;
-import com.helloai.core.service.AgentDutyLeaseService;
+import com.helloai.core.agent.service.AgentDutyLeaseService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.GetMapping;

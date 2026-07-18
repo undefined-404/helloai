@@ -3,7 +3,7 @@ package com.helloai.job.task;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.entity.SubTask;
-import com.helloai.core.service.SubTaskService;
+import com.helloai.core.task.service.SubTaskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;

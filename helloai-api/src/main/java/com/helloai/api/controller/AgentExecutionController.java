@@ -8,9 +8,9 @@ import com.helloai.common.base.R;
 import com.helloai.core.agent.domain.AgentExecutionConnectivityResult;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.entity.Agent;
-import com.helloai.core.service.AgentExecutionConnectivityService;
-import com.helloai.core.service.AgentExecutionPreviewService;
-import com.helloai.core.service.AgentService;
+import com.helloai.core.agent.service.AgentExecutionConnectivityService;
+import com.helloai.core.agent.service.AgentExecutionPreviewService;
+import com.helloai.core.agent.service.AgentService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 

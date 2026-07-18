@@ -14,8 +14,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.observability.CircuitBreakerEventRecorder;
-import com.helloai.core.service.AgentService;
-import com.helloai.core.service.SubTaskService;
+import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.task.service.SubTaskService;
 
 /**
  * 弹性调度器（v2.4 §4.5）。

@@ -16,9 +16,9 @@ import org.springframework.stereotype.Component;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import com.helloai.core.service.AgentExecutionRecordService;
-import com.helloai.core.service.SubTaskService;
-import com.helloai.core.service.TaskTimelineService;
+import com.helloai.core.agent.service.AgentExecutionRecordService;
+import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskTimelineService;
 
 /**
  * 执行命令 DB Poller 兜底扫描器。

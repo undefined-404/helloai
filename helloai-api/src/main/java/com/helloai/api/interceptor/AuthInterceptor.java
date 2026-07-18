@@ -2,7 +2,7 @@ package com.helloai.api.interceptor;
 
 import com.helloai.common.base.BizException;
 import com.helloai.core.entity.Agent;
-import com.helloai.core.service.AuthService;
+import com.helloai.core.system.service.AuthService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
