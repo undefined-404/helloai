@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 # helloai Phase 2H ②b RabbitMQ failure-path verifier (v1)
 # Ref:  doc/HelloAI_迭代执行记录.md T4
 #       差距表 N1 / 调度解耦分析 / OutboxRelayTask.handleConfirm
@@ -11,16 +11,16 @@
 #   S2 mandatory return-> publish to exchange with no binding match (mandatory=true
 #                         causes ReturnsCallback to mark CorrelationData.getReturned())
 #   S3 confirm timeout -> simulate broker ack lost / in-flight future lost by
-#                         inserting a SENT row with stale last_sent_at so that
+#                         inserting a SENT row with stale last_sent_time so that
 #                         OutboxRelayTask.revertExpiredSent picks it up and routes
 #                         through scheduleRetryFromSent("confirm-timeout: expired-sent")
 #
 # Assertions:
 #   - NACK / return / timeout  -> outbox row falls back to PENDING (markFailedFromSent)
-#                                 with last_sent_at written, confirmed_at NULL,
-#                                 retry_count incremented, next_retry_at in the future.
+#                                 with last_sent_time written, confirmed_time NULL,
+#                                 retry_count incremented, next_retry_time in the future.
 #   - On overflow max-retry     -> FAILED (markFinalFailedFromSent).
-#   - CONFIRMED rows            -> confirmed_at + last_sent_at both populated
+#   - CONFIRMED rows            -> confirmed_time + last_sent_time both populated
 #                                 (asserted via a control row that hits the happy path).
 #
 # Pre-conditions:
@@ -461,7 +461,7 @@ INSERT INTO task (id, title, description, status, deleted, create_by, update_by)
 VALUES ($taskId, '$taskTitle', 't4 outbox e2e auto task', 'PENDING', 0, 'e2e-t4', 'e2e-t4')
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO sub_task (id, task_id, title, content, status, assigned_agent, deliverable, acceptance, priority, version, rework_count, deleted, create_by, update_by)
+INSERT INTO sub_task (id, task_id, title, content, status, assigned_agent_id, deliverable, acceptance, priority, version, rework_count, deleted, create_by, update_by)
 VALUES ($subTaskId, $taskId, '$subTitle', 't4 outbox e2e sample subtask', 'ASSIGNED', $agentId, 'verified output', 'sub_task.status in DONE/REVIEW', 'MEDIUM', 0, 0, 0, 'e2e-t4', 'e2e-t4')
 ON CONFLICT (id) DO NOTHING;
 "@
@@ -540,10 +540,10 @@ SELECT
     id,
     status,
     retry_count,
-    (last_sent_at IS NOT NULL)::int AS has_last_sent,
-    (confirmed_at IS NOT NULL)::int AS has_confirmed,
-    COALESCE(EXTRACT(EPOCH FROM (last_sent_at - create_time))::int, -1) AS last_sent_after_create_s,
-    COALESCE(EXTRACT(EPOCH FROM (now() - next_retry_at))::int, -999) AS secs_until_next_retry,
+    (last_sent_time IS NOT NULL)::int AS has_last_sent,
+    (confirmed_time IS NOT NULL)::int AS has_confirmed,
+    COALESCE(EXTRACT(EPOCH FROM (last_sent_time - create_time))::int, -1) AS last_sent_after_create_s,
+    COALESCE(EXTRACT(EPOCH FROM (now() - next_retry_time))::int, -999) AS secs_until_next_retry,
     LEFT(COALESCE(error_msg,''), 200) AS err
 FROM agent_command_outbox
 WHERE id = $OutboxId AND deleted = 0;
@@ -559,8 +559,8 @@ WHERE id = $OutboxId AND deleted = 0;
 #   - Expect:
 #       row #1 -> CONFIRMED (ACK from broker; queue slot 1/2)
 #       row #2 -> CONFIRMED (ACK from broker; queue slot 2/2)
-#       row #3 -> markFailedFromSent (NACK) -> status PENDING, last_sent_at written,
-#                 confirmed_at NULL, error_msg contains 'confirm-nack'
+#       row #3 -> markFailedFromSent (NACK) -> status PENDING, last_sent_time written,
+#                 confirmed_time NULL, error_msg contains 'confirm-nack'
 #   - Scheme A rationale: max-length=2 leaves headroom for the two happy-path rows so
 #     r1/r2 CONFIRMED is not sensitive to broker ack ordering; only r3 hits overflow.
 #   - Restore queue args at end
@@ -597,8 +597,8 @@ SELECT
   (SELECT status FROM agent_command_outbox WHERE id = $($s1Row1.id) AND deleted = 0) AS r1_status,
   (SELECT status FROM agent_command_outbox WHERE id = $($s1Row2.id) AND deleted = 0) AS r2_status,
   (SELECT status FROM agent_command_outbox WHERE id = $($s1Row3.id) AND deleted = 0) AS r3_status,
-  (SELECT (last_sent_at IS NOT NULL)::int FROM agent_command_outbox WHERE id = $($s1Row3.id) AND deleted = 0) AS r3_has_last_sent,
-  (SELECT (confirmed_at IS NOT NULL)::int FROM agent_command_outbox WHERE id = $($s1Row3.id) AND deleted = 0) AS r3_has_confirmed;
+  (SELECT (last_sent_time IS NOT NULL)::int FROM agent_command_outbox WHERE id = $($s1Row3.id) AND deleted = 0) AS r3_has_last_sent,
+  (SELECT (confirmed_time IS NOT NULL)::int FROM agent_command_outbox WHERE id = $($s1Row3.id) AND deleted = 0) AS r3_has_confirmed;
 "@
     $tmpChk = [System.IO.Path]::GetTempFileName()
     $null = Run-Psql -Sql $checkSql -OutFile $tmpChk
@@ -625,14 +625,14 @@ SELECT
     (SELECT status FROM agent_command_outbox WHERE id = $($s1Row1.id) AND deleted = 0) AS r1_status,
     (SELECT status FROM agent_command_outbox WHERE id = $($s1Row2.id) AND deleted = 0) AS r2_status,
     (SELECT status FROM agent_command_outbox WHERE id = $($s1Row3.id) AND deleted = 0) AS r3_status,
-    (SELECT (last_sent_at IS NOT NULL)::int FROM agent_command_outbox WHERE id = $($s1Row3.id) AND deleted = 0) AS r3_has_last_sent,
-    (SELECT (confirmed_at IS NOT NULL)::int FROM agent_command_outbox WHERE id = $($s1Row3.id) AND deleted = 0) AS r3_has_confirmed,
+    (SELECT (last_sent_time IS NOT NULL)::int FROM agent_command_outbox WHERE id = $($s1Row3.id) AND deleted = 0) AS r3_has_last_sent,
+    (SELECT (confirmed_time IS NOT NULL)::int FROM agent_command_outbox WHERE id = $($s1Row3.id) AND deleted = 0) AS r3_has_confirmed,
     (SELECT retry_count FROM agent_command_outbox WHERE id = $($s1Row3.id) AND deleted = 0) AS r3_retry_count,
     (SELECT LEFT(COALESCE(error_msg,''), 200) FROM agent_command_outbox WHERE id = $($s1Row3.id) AND deleted = 0) AS r3_err,
-    (SELECT (confirmed_at IS NOT NULL)::int FROM agent_command_outbox WHERE id = $($s1Row1.id) AND deleted = 0) AS r1_has_confirmed,
-    (SELECT (last_sent_at IS NOT NULL)::int FROM agent_command_outbox WHERE id = $($s1Row1.id) AND deleted = 0) AS r1_has_last_sent,
-    (SELECT (confirmed_at IS NOT NULL)::int FROM agent_command_outbox WHERE id = $($s1Row2.id) AND deleted = 0) AS r2_has_confirmed,
-    (SELECT (last_sent_at IS NOT NULL)::int FROM agent_command_outbox WHERE id = $($s1Row2.id) AND deleted = 0) AS r2_has_last_sent;
+    (SELECT (confirmed_time IS NOT NULL)::int FROM agent_command_outbox WHERE id = $($s1Row1.id) AND deleted = 0) AS r1_has_confirmed,
+    (SELECT (last_sent_time IS NOT NULL)::int FROM agent_command_outbox WHERE id = $($s1Row1.id) AND deleted = 0) AS r1_has_last_sent,
+    (SELECT (confirmed_time IS NOT NULL)::int FROM agent_command_outbox WHERE id = $($s1Row2.id) AND deleted = 0) AS r2_has_confirmed,
+    (SELECT (last_sent_time IS NOT NULL)::int FROM agent_command_outbox WHERE id = $($s1Row2.id) AND deleted = 0) AS r2_has_last_sent;
 "@
 $rc = Run-Psql -Sql $s1FinalSql -OutFile $s1ReportFile
 $s1Body = Get-Content $s1ReportFile -Raw
@@ -658,7 +658,7 @@ if ($s1Pass -and ($s1Fields[9] -ne '1')) { $s1Pass = $false }   # r2 confirmed=1
 if ($s1Pass -and ($s1Fields[10] -ne '1')) { $s1Pass = $false }  # r2 last_sent=1
 
 if ($s1Pass) {
-    Write-Output "[S1] PASS - Scheme A: r1+r2 CONFIRMED, r3 fell back to PENDING with last_sent_at + confirm-nack in error_msg"
+    Write-Output "[S1] PASS - Scheme A: r1+r2 CONFIRMED, r3 fell back to PENDING with last_sent_time + confirm-nack in error_msg"
 } else {
     Write-Output "[S1] FAIL - see $s1ReportFile"
     Write-Output "Note: Scheme A expects r1+r2 CONFIRMED and only r3 NACK'd; check queue max-length=2 policy + OutboxRelay log."
@@ -672,7 +672,7 @@ Write-Output ""
 #     mandatory=true triggers ReturnsCallback which sets CorrelationData.getReturned()
 #     OutboxRelayTask.handleConfirm treats this as a return and calls scheduleRetryFromSent
 #   - Expect:
-#       row -> markFailedFromSent -> status PENDING, last_sent_at written, confirmed_at NULL
+#       row -> markFailedFromSent -> status PENDING, last_sent_time written, confirmed_time NULL
 #   - Restore binding at end
 # ============================================================
 Write-Output "=== [S2] mandatory return: drop binding, message unroutable ==="
@@ -697,8 +697,8 @@ for ($i = 0; $i -lt 20; $i++) {
     $checkSql = @"
 SELECT
   (SELECT status FROM agent_command_outbox WHERE id = $($s2Row.id) AND deleted = 0),
-  (SELECT (last_sent_at IS NOT NULL)::int FROM agent_command_outbox WHERE id = $($s2Row.id) AND deleted = 0),
-  (SELECT (confirmed_at IS NOT NULL)::int FROM agent_command_outbox WHERE id = $($s2Row.id) AND deleted = 0),
+  (SELECT (last_sent_time IS NOT NULL)::int FROM agent_command_outbox WHERE id = $($s2Row.id) AND deleted = 0),
+  (SELECT (confirmed_time IS NOT NULL)::int FROM agent_command_outbox WHERE id = $($s2Row.id) AND deleted = 0),
   (SELECT LEFT(COALESCE(error_msg,''), 200) FROM agent_command_outbox WHERE id = $($s2Row.id) AND deleted = 0);
 "@
     $tmpChk = [System.IO.Path]::GetTempFileName()
@@ -736,7 +736,7 @@ if ($s2Pass -and ($s2Fields[4] -ne '0')) { $s2Pass = $false }   # confirmed=0
 if ($s2Pass -and ($s2Fields[7] -notmatch 'returned')) { $s2Pass = $false }
 
 if ($s2Pass) {
-    Write-Output "[S2] PASS - return path: row fell back to PENDING with last_sent_at written, error_msg indicates return"
+    Write-Output "[S2] PASS - return path: row fell back to PENDING with last_sent_time written, error_msg indicates return"
 } else {
     Write-Output "[S2] FAIL - see $s2ReportFile"
     Write-Output "Note: return path requires broker ack + ReturnsCallback both to fire before confirm-timeout."
@@ -745,14 +745,14 @@ Write-Output ""
 
 # ============================================================
 # SCENARIO S3: confirm timeout (simulated)
-#   - Insert a SENT row with stale last_sent_at so that OutboxRelayTask.revertExpiredSent
+#   - Insert a SENT row with stale last_sent_time so that OutboxRelayTask.revertExpiredSent
 #     picks it up via listExpiredSentForRetry (which scans SENT rows where
-#     last_sent_at <= now - confirmTimeout AND retry_count < maxRetry)
+#     last_sent_time <= now - confirmTimeout AND retry_count < maxRetry)
 #   - This emulates broker ack-loss / in-flight future-loss / restart-mid-confirm paths
 #     that are not otherwise producible from outside the broker
 #   - Expect:
 #       row -> scheduleRetryFromSent -> markFailedFromSent -> status PENDING,
-#              retry_count incremented, last_sent_at preserved, confirmed_at NULL,
+#              retry_count incremented, last_sent_time preserved, confirmed_time NULL,
 #              error_msg contains 'confirm-timeout'
 # ============================================================
 Write-Output "=== [S3] confirm timeout (simulated via stale SENT row) ==="
@@ -766,7 +766,7 @@ DELETE FROM agent_command_outbox WHERE id = $s3RowId;
 DELETE FROM agent_command_outbox WHERE event_id = '$s3EventId';
 INSERT INTO agent_command_outbox
     (id, event_id, aggregate_type, aggregate_id, payload, status, retry_count,
-     last_sent_at, next_retry_at, deleted, create_by, update_by)
+     last_sent_time, next_retry_time, deleted, create_by, update_by)
 VALUES
     ($s3RowId, '$s3EventId', 'EXECUTION_COMMAND', '$s3AggregateId',
      jsonb_build_object('eventId','$s3EventId','subTaskId','$($subTaskId + 4)','agentId','$agentId','trigger','t4-TIMEOUT','accessType','API_KEY_LLM','recordId',null),
@@ -784,7 +784,7 @@ $tmpIds = [System.IO.Path]::GetTempFileName()
 $null = Run-Psql -Sql $idsSql -OutFile $tmpIds
 $s3RowId = [long](Get-FirstPsqlDataLine -Path $tmpIds)
 Remove-Item $tmpIds -ErrorAction SilentlyContinue
-Write-Output "S3 prepared: row.id=$s3RowId (SENT, last_sent_at=now-120s)"
+Write-Output "S3 prepared: row.id=$s3RowId (SENT, last_sent_time=now-120s)"
 
 Write-Output "S3 waiting for revertExpiredSent cycle (up to 2s, before next retry window elapses)..."
 $s3Done = $false
@@ -822,14 +822,14 @@ if ($s3Pass) {
 } else {
     Write-Output "[S3] FAIL - see $s3ReportFile"
     Write-Output "Note: confirmTimeoutSeconds default is 30s; if app started with shorter window,"
-    Write-Output "      row created with last_sent_at = now-120s should still satisfy."
+    Write-Output "      row created with last_sent_time = now-120s should still satisfy."
 }
 Write-Output ""
 
 # ============================================================
 # SCENARIO S4 (control): happy path CONFIRMED
 #   - Insert 1 PENDING row under normal broker config
-#   - Expect CONFIRMED with last_sent_at + confirmed_at both populated
+#   - Expect CONFIRMED with last_sent_time + confirmed_time both populated
 # ============================================================
 Write-Output "=== [S4] control: happy path CONFIRMED ==="
 
@@ -844,8 +844,8 @@ for ($i = 0; $i -lt 15; $i++) {
     $checkSql = @"
 SELECT
   (SELECT status FROM agent_command_outbox WHERE id = $($s4Row.id) AND deleted = 0),
-  (SELECT (last_sent_at IS NOT NULL)::int FROM agent_command_outbox WHERE id = $($s4Row.id) AND deleted = 0),
-  (SELECT (confirmed_at IS NOT NULL)::int FROM agent_command_outbox WHERE id = $($s4Row.id) AND deleted = 0);
+  (SELECT (last_sent_time IS NOT NULL)::int FROM agent_command_outbox WHERE id = $($s4Row.id) AND deleted = 0),
+  (SELECT (confirmed_time IS NOT NULL)::int FROM agent_command_outbox WHERE id = $($s4Row.id) AND deleted = 0);
 "@
     $tmpChk = [System.IO.Path]::GetTempFileName()
     $null = Run-Psql -Sql $checkSql -OutFile $tmpChk

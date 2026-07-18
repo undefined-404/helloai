@@ -5,7 +5,7 @@
 #        helloai.doorbell.keepalive-interval-ms (default 15s) so the SSE long connection
 #        survives reverse-proxy idle timeouts (connection not interrupted).
 #     B) client -> server : the agent calls MCP heartbeat -> HeartbeatService.seen(agentId)
-#        which refreshes last_seen_at + Redis TTL and recomputes online status.
+#        which refreshes last_seen_time + Redis TTL and recomputes online status.
 #
 #   S0 POST /api/agents/register                       -> apiKey + agentId (self-service)
 #   S1 MCP tools/call checkIn (Bearer apiKey)          -> ACTIVE lease (on-duty)
@@ -205,7 +205,7 @@ if ($hbOk -and $mcp -and $mcp.SessionId) {
     # getAgentStatus result is a nested/escaped JSON string in the SSE frame, so field names
     # appear as \"computedOnlineStatus\":\"IDLE\". Use tolerant char classes for both forms.
     Assert ($mcpContent2 -match 'computedOnlineStatus[\\":\s]*(ONLINE|IDLE)') 'S5 computedOnlineStatus is ONLINE or IDLE (not OFFLINE)'
-    # last_seen_at was just refreshed by the heartbeat, so it must be a non-null 20xx timestamp
+    # last_seen_time was just refreshed by the heartbeat, so it must be a non-null 20xx timestamp
     Assert ($mcpContent2 -match 'lastSeenAt[\\":\s]*20\d\d') 'S5 lastSeenAt refreshed by the heartbeat'
 } else {
     Write-Host '[SKIP] S5 getAgentStatus (no heartbeat ok or MCP session)' -ForegroundColor Yellow

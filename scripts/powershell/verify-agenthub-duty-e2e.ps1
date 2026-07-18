@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 # helloai AgentHub V1 P0 (checkIn / checkOut / DutyLeaseExpiration) real-env e2e
 # Ref:
 #   doc/HelloAI_迭代执行记录.md  (AgentHub V1 P0)
@@ -8,7 +8,7 @@
 # 覆盖三个真实环境场景（IDEA 启动后端 + docker compose 起 postgres / redis / rabbitmq）：
 #   S1  MCP-over-SSE tools/call checkIn      -> agent_duty_lease 出现 status=ACTIVE 行
 #   S2  MCP-over-SSE tools/call checkOut     -> 同一行翻为 CLOSED，close_reason 匹配
-#   S3  手工 INSERT 一条 expires_at 已过期的 ACTIVE 租约（独立 test agent）
+#   S3  手工 INSERT 一条 expire_time 已过期的 ACTIVE 租约（独立 test agent）
 #        -> 等 35s，DutyLeaseExpirationTask (@Scheduled fixedRate=30s) 巡检
 #        -> DB 校验 status='EXPIRED', close_reason='lease_expired'
 #
@@ -314,7 +314,7 @@ $s1Resp = Send-Mcp -Sid $sid -Body $s1Body -Label "S1 checkIn" -Headers @{ "Auth
 Write-Output "--- [S1] DB assertion ---"
 $s1Sql = @"
 SELECT status, work_mode, max_concurrent,
-       (expires_at > now()) AS not_yet_expired,
+       (expire_time > now()) AS not_yet_expired,
        COALESCE(close_reason, '')
 FROM agent_duty_lease
 WHERE agent_id = $agentId AND status = 'ACTIVE' AND deleted = 0
@@ -370,7 +370,7 @@ Write-Output ""
 
 # ============================================================
 # STEP S3: Lease Expiration
-#   - 直接 INSERT 一条 expires_at 已过期的 ACTIVE 租约
+#   - 直接 INSERT 一条 expire_time 已过期的 ACTIVE 租约
 #   - 等 35s，让 DutyLeaseExpirationTask @Scheduled(fixedRate=30s) 至少跑 1 次
 #   - 校验 status='EXPIRED', close_reason='lease_expired'
 #
@@ -382,7 +382,7 @@ $leaseIdSeq = [long]([DateTimeOffset]::Now.ToUnixTimeMilliseconds() * 1000 + 7)
 $s3InsertSql = @"
 INSERT INTO agent_duty_lease
   (id, agent_id, session_id, work_mode, max_concurrent, status,
-   started_at, last_renewed_at, expires_at,
+   start_time, last_renew_time, expire_time,
    create_by, update_by, create_time, update_time, deleted, remark)
 VALUES
   ($leaseIdSeq, $agentId, 'e2e-expired-lease', 'AUTO', 3, 'ACTIVE',
@@ -394,7 +394,7 @@ VALUES
 $s3InsertFile = Join-Path $scriptDir "verify-agenthub-duty-e2e-s3-insert.out"
 $rc = Run-Psql -Sql $s3InsertSql -OutFile $s3InsertFile
 if ($rc -ne 0) { Write-Error "S3 insert rc=$rc; see $s3InsertFile"; exit 1 }
-Write-Output "inserted expired ACTIVE lease id=$leaseIdSeq (expires_at=now-1min)"
+Write-Output "inserted expired ACTIVE lease id=$leaseIdSeq (expire_time=now-1min)"
 
 Write-Output "waiting 35s for DutyLeaseExpirationTask fixedRate=30s (may hit 1-2 ticks)..."
 Start-Sleep -Seconds 35

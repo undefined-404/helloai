@@ -17,7 +17,7 @@
 #   S5  Poller-only recovery path  — 直接 INSERT 绕过 ExecutionCommandService.publish()，
 #                                     没有 MQ 消息也没有本地 Spring 事件，是"主消费路径
 #                                     不可达"的等价形态。断言：
-#                                       * last_attempt_at 被刷新 (markPolled)
+#                                       * last_attempt_time 被刷新 (markPolled)
 #                                       * timeline 含 sub_task_execution_command_poll_recovery
 #                                       * consume 事件的 trigger 以 poll-recovery: 开头
 #                                       * 反证：没有任何 trigger 不以 poll-recovery: 开头的
@@ -248,7 +248,7 @@ INSERT INTO task (id, title, description, status, deleted, create_by, update_by)
 VALUES ($taskId, '$taskTitle', 'e2e auto task (poller verifier v3)', 'PENDING', 0, 'e2e', 'e2e')
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO sub_task (id, task_id, title, content, status, assigned_agent, deliverable, acceptance, priority, version, rework_count, deleted, create_by, update_by)
+INSERT INTO sub_task (id, task_id, title, content, status, assigned_agent_id, deliverable, acceptance, priority, version, rework_count, deleted, create_by, update_by)
 VALUES ($subTaskId, $taskId, '$subTitle', 'e2e sample subtask', 'PENDING', $agentId, 'verified output', 'sub_task.status in DONE/REVIEW', 'MEDIUM', 0, 0, 0, 'e2e', 'e2e')
 ON CONFLICT (id) DO NOTHING;
 "@
@@ -317,7 +317,7 @@ Write-Output "poller cycle wait (3s)..."
 Start-Sleep -Seconds 3
 
 $s1CheckSql = @"
-SELECT id, status, last_attempt_at IS NOT NULL AS polled
+SELECT id, status, last_attempt_time IS NOT NULL AS polled
 FROM agent_execution_record
 WHERE event_id = '$s1EventId';
 
@@ -335,7 +335,7 @@ Write-Output "S1 raw output:"
 Write-Output $s1Body
 
 Assert-Pass ($s1Body -match "sub_task_execution_command_poll_recovery") "S1" "timeline event 'sub_task_execution_command_poll_recovery' found"
-Assert-Pass ($s1Body -match '\|t(\r?\n|$)') "S1" "last_attempt_at refreshed (polled=true)"
+Assert-Pass ($s1Body -match '\|t(\r?\n|$)') "S1" "last_attempt_time refreshed (polled=true)"
 Write-Output ""
 
 # ============================================================
@@ -356,7 +356,7 @@ $s2RecordBase = $subTaskId * 1000 + 100
 $s2SubId = $subTaskId + 400
 $s2PrepareSql = @"
 DELETE FROM agent_execution_record WHERE event_id LIKE '$s2Prefix%';
-INSERT INTO sub_task (id, task_id, title, content, status, assigned_agent, deliverable, acceptance, priority, version, rework_count, deleted, create_by, update_by)
+INSERT INTO sub_task (id, task_id, title, content, status, assigned_agent_id, deliverable, acceptance, priority, version, rework_count, deleted, create_by, update_by)
 VALUES ($s2SubId, $taskId, 'poller-e2e-s2-sub-$runTag', 'e2e s2 dedup subtask', 'ASSIGNED', $agentId, 'x', 'x', 'MEDIUM', 0, 0, 0, 'e2e', 'e2e')
 ON CONFLICT (id) DO NOTHING;
 INSERT INTO agent_execution_record
@@ -506,7 +506,7 @@ $s4Sub3 = $subTaskId + 300
 
 $s4PrepareSql = @"
 DELETE FROM agent_execution_record WHERE event_id LIKE '$s4Prefix%';
-INSERT INTO sub_task (id, task_id, title, content, status, assigned_agent, deliverable, acceptance, priority, version, rework_count, deleted, create_by, update_by)
+INSERT INTO sub_task (id, task_id, title, content, status, assigned_agent_id, deliverable, acceptance, priority, version, rework_count, deleted, create_by, update_by)
 VALUES
     ($s4Sub1, $taskId, 'poller-e2e-s4-extra-1-$runTag', 'e2e s4 extra subtask', 'ASSIGNED', $agentId, 'x', 'x', 'MEDIUM', 0, 0, 0, 'e2e', 'e2e'),
     ($s4Sub2, $taskId, 'poller-e2e-s4-extra-2-$runTag', 'e2e s4 extra subtask', 'ASSIGNED', $agentId, 'x', 'x', 'MEDIUM', 0, 0, 0, 'e2e', 'e2e'),
@@ -528,12 +528,12 @@ Start-Sleep -Seconds 5
 
 $s4CheckSql = @"
 SELECT COUNT(*) AS total,
-       COUNT(*) FILTER (WHERE last_attempt_at IS NOT NULL) AS polled,
+       COUNT(*) FILTER (WHERE last_attempt_time IS NOT NULL) AS polled,
        COUNT(*) FILTER (WHERE status <> 'PENDING') AS progressed
 FROM agent_execution_record
 WHERE event_id LIKE '$s4Prefix%';
 
-SELECT event_id, status, last_attempt_at IS NOT NULL AS polled
+SELECT event_id, status, last_attempt_time IS NOT NULL AS polled
 FROM agent_execution_record
 WHERE event_id LIKE '$s4Prefix%'
 ORDER BY event_id;
@@ -583,7 +583,7 @@ Write-Output ""
 # 本地 Spring 事件被发布 —— Poller 是唯一可能看到它的执行者。
 #
 # 验证维度：
-#   (a) last_attempt_at IS NOT NULL
+#   (a) last_attempt_time IS NOT NULL
 #       —— Poller.processRecord 第一步就是 markPolled,主消费者不写这个字段。
 #   (b) timeline 含 sub_task_execution_command_poll_recovery
 #       —— 只有 Poller 写这个事件;LocalExecutionCommandConsumer 只写
@@ -611,7 +611,7 @@ $s5SubId = $subTaskId + 500
 $s5PrepareSql = @"
 DELETE FROM agent_execution_record WHERE event_id = '$s5EventId';
 
-INSERT INTO sub_task (id, task_id, title, content, status, assigned_agent, deliverable, acceptance, priority, version, rework_count, deleted, create_by, update_by)
+INSERT INTO sub_task (id, task_id, title, content, status, assigned_agent_id, deliverable, acceptance, priority, version, rework_count, deleted, create_by, update_by)
 VALUES ($s5SubId, $taskId, 'poller-e2e-s5-sub-$runTag', 'e2e s5 poller-only subtask', 'ASSIGNED', $agentId, 'x', 'x', 'MEDIUM', 0, 0, 0, 'e2e', 'e2e')
 ON CONFLICT (id) DO NOTHING;
 
@@ -631,7 +631,7 @@ Start-Sleep -Seconds 3
 # 一次 SQL 取齐 (a)(b)(c)(d) 四个维度
 $s5CheckSql = @"
 -- (a) Poller 触及标志
-SELECT id, status, last_attempt_at IS NOT NULL AS polled
+SELECT id, status, last_attempt_time IS NOT NULL AS polled
 FROM agent_execution_record
 WHERE event_id = '$s5EventId';
 
@@ -673,8 +673,8 @@ $s5Body = Get-Content $s5ReportFile -Raw
 Write-Output "S5 raw output:"
 Write-Output $s5Body
 
-# (a) Poller markPolled 留下了 last_attempt_at
-Assert-Pass ($s5Body -match '\|t(\r?\n|$)') "S5" "(a) last_attempt_at refreshed by Poller (markPolled)"
+# (a) Poller markPolled 留下了 last_attempt_time
+Assert-Pass ($s5Body -match '\|t(\r?\n|$)') "S5" "(a) last_attempt_time refreshed by Poller (markPolled)"
 
 # (b) Poller 专属 timeline 事件存在
 Assert-Pass ($s5Body -match "sub_task_execution_command_poll_recovery") `

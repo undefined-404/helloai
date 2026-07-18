@@ -10,7 +10,7 @@
 #   S1  GET /api/admin/duty-leases/overview          -> 200,active/closed/expired/total 字段齐
 #   S2  GET /api/admin/duty-leases                   -> 200,PageResult.list/total/pages/current 齐
 #   S3  GET /api/admin/duty-leases?status=ACTIVE     -> 过滤生效(返回行 status 均为 ACTIVE)
-#   S4  DB 抽查: agent_command_outbox 中 status IN (1,3) 行的 last_sent_at / confirmed_at 不全为 NULL
+#   S4  DB 抽查: agent_command_outbox 中 status IN (1,3) 行的 last_sent_time / confirmed_time 不全为 NULL
 #        验证 V22 backfill 已生效 (R3 收尾证据)
 #
 # Pre-conditions:
@@ -240,17 +240,17 @@ log ""
 
 # ============================================================
 # [S4] V22 backfill audit
-#   - agent_command_outbox status=1 (SENT) 行 last_sent_at IS NULL 数量
-#   - agent_command_outbox status=3 (CONFIRMED) 行 confirmed_at IS NULL 数量
+#   - agent_command_outbox status=1 (SENT) 行 last_sent_time IS NULL 数量
+#   - agent_command_outbox status=3 (CONFIRMED) 行 confirmed_time IS NULL 数量
 #   - 两者均应为 0 (V22 已 backfill); total=0 也算通过(空表)
 # ============================================================
 log "=== [S4] V22 backfill audit on agent_command_outbox ==="
 
 s4_sql="SELECT
   (SELECT COUNT(*) FROM agent_command_outbox WHERE status = 1 AND deleted = 0) AS sent_total,
-  (SELECT COUNT(*) FROM agent_command_outbox WHERE status = 1 AND deleted = 0 AND last_sent_at IS NULL) AS sent_null_last_sent,
+  (SELECT COUNT(*) FROM agent_command_outbox WHERE status = 1 AND deleted = 0 AND last_sent_time IS NULL) AS sent_null_last_sent,
   (SELECT COUNT(*) FROM agent_command_outbox WHERE status = 3 AND deleted = 0) AS confirmed_total,
-  (SELECT COUNT(*) FROM agent_command_outbox WHERE status = 3 AND deleted = 0 AND confirmed_at IS NULL) AS confirmed_null_confirmed;"
+  (SELECT COUNT(*) FROM agent_command_outbox WHERE status = 3 AND deleted = 0 AND confirmed_time IS NULL) AS confirmed_null_confirmed;"
 
 s4_csv=""
 run_psql_one_row "$s4_sql" "s4_csv"
@@ -278,10 +278,10 @@ log "S4 fields: ${S4_SENT_TOTAL} | ${S4_SENT_NULL_LAST} | ${S4_CONFIRMED_TOTAL} 
 
 # 仅当存在该状态行时才要求 backfill 已 100% 完成
 if [[ "$S4_SENT_TOTAL" -gt 0 && "$S4_SENT_NULL_LAST" -ne 0 ]]; then
-  fail "S4 FAIL: $S4_SENT_NULL_LAST / $S4_SENT_TOTAL SENT rows still have last_sent_at IS NULL (V22 backfill missing)"
+  fail "S4 FAIL: $S4_SENT_NULL_LAST / $S4_SENT_TOTAL SENT rows still have last_sent_time IS NULL (V22 backfill missing)"
 fi
 if [[ "$S4_CONFIRMED_TOTAL" -gt 0 && "$S4_CONFIRMED_NULL" -ne 0 ]]; then
-  fail "S4 FAIL: $S4_CONFIRMED_NULL / $S4_CONFIRMED_TOTAL CONFIRMED rows still have confirmed_at IS NULL (V22 backfill missing)"
+  fail "S4 FAIL: $S4_CONFIRMED_NULL / $S4_CONFIRMED_TOTAL CONFIRMED rows still have confirmed_time IS NULL (V22 backfill missing)"
 fi
 
 log "S4 OK: sent_total=$S4_SENT_TOTAL (null_last_sent=$S4_SENT_NULL_LAST), confirmed_total=$S4_CONFIRMED_TOTAL (null_confirmed=$S4_CONFIRMED_NULL)"

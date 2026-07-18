@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 # helloai AgentHub V3 门铃通知通道 PR-3 real-env e2e
 # Ref:
 #   doc/HelloAI_门铃通知通道设计.md        (PR-3 值班鉴权收口 + 兜底验证)
@@ -9,7 +9,7 @@
 # 覆盖三个真实环境场景（IDEA 启动后端 + docker compose 起 postgres / redis / rabbitmq）：
 #   S1  未在岗建连被拒     : 无 ACTIVE 租约时 GET /api/agents/doorbell/sse -> HTTP 500, body code=500
 #   S2  在岗建连收握手     : INSERT 一条 ACTIVE 租约 -> SSE 建连收到 event:connected 握手帧
-#   S3  离岗主动断门铃     : 把租约 expires_at 改到过去 -> 等 35s 让 DutyLeaseExpirationTask 翻 EXPIRED
+#   S3  离岗主动断门铃     : 把租约 expire_time 改到过去 -> 等 35s 让 DutyLeaseExpirationTask 翻 EXPIRED
 #                            -> 发 DutyLeaseClosedEvent -> DoorbellDutyListener 主动 disconnect
 #                            -> DB 校验 status=EXPIRED, close_reason=lease_expired；SSE 后台 job 结束(流被关闭)
 #
@@ -267,7 +267,7 @@ $leaseId = [long]([DateTimeOffset]::Now.ToUnixTimeMilliseconds() * 1000 + 13)
 $s2Insert = @"
 INSERT INTO agent_duty_lease
   (id, agent_id, session_id, work_mode, max_concurrent, status,
-   started_at, last_renewed_at, expires_at,
+   start_time, last_renew_time, expire_time,
    create_by, update_by, create_time, update_time, deleted, remark)
 VALUES
   ($leaseId, $agentId, 'doorbell-e2e-lease', 'NORMAL', 3, 'ACTIVE',
@@ -302,13 +302,13 @@ Write-Output ''
 # STEP S3: lease expiration -> active disconnect
 # ============================================================
 Write-Output '=== [S3] lease expiration triggers active doorbell disconnect ==='
-# 把租约 expires_at 改到过去（仍 ACTIVE），让 DutyLeaseExpirationTask 巡检时翻 EXPIRED
-$s3Update = 'UPDATE agent_duty_lease SET expires_at = now() - interval ''1 minute'' ' +
+# 把租约 expire_time 改到过去（仍 ACTIVE），让 DutyLeaseExpirationTask 巡检时翻 EXPIRED
+$s3Update = 'UPDATE agent_duty_lease SET expire_time = now() - interval ''1 minute'' ' +
             'WHERE id = ' + $leaseId + ' AND status = ''ACTIVE'';'
 $s3UpdateFile = Join-Path $scriptDir 'verify-doorbell-e2e-s3-update.out'
 $rc = Run-Psql -Sql $s3Update -OutFile $s3UpdateFile
 if ($rc -ne 0) { Write-Error ('S3 update rc=' + $rc + '; see ' + $s3UpdateFile); exit 1 }
-Write-Output 'set lease expires_at into the past; waiting 35s for DutyLeaseExpirationTask (fixedRate=30s)...'
+Write-Output 'set lease expire_time into the past; waiting 35s for DutyLeaseExpirationTask (fixedRate=30s)...'
 Start-Sleep -Seconds 35
 
 # 断言 1：DB 中租约翻为 EXPIRED

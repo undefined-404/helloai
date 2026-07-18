@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 # helloai MCP M5 end-to-end business loop verifier v10
 # 用途：MCP-over-SSE 完整业务闭环 E2E（登录/建 Agent/建 Task/SubTask ->
 #       heartbeat/pullTasks/claim/uploadArtifact/ack/submit/complete 全链路）。
@@ -11,12 +11,12 @@
 #   D) admin create SubTask (assignedAgent=agentId) -> subTaskId (auto inbox)
 #   E) SSE long connection (curl -N)                -> sessionId
 #   F) [protocol] initialize + notifications/initialized (admin token)
-#   G) [tool 1] agent SSE heartbeat                  -> expect last_seen_at refreshed
+#   G) [tool 1] agent SSE heartbeat                  -> expect last_seen_time refreshed
 #   H) [tool 2] agent SSE getAgentStatus             -> expect computedOnlineStatus ONLINE/IDLE
 #   I) [tool 3] agent SSE pullTasks                  -> expect >=1 inbox (sub_task.assigned)
 #   J) [tool 4] agent SSE claimSubTask               -> expect claimed=true (idempotent)
 #   K) REST POST /api/sub-tasks/start/{id}           -> expect status=IN_PROGRESS
-#   L) [tool 1 again] agent SSE heartbeat            -> expect last_active_at refreshed
+#   L) [tool 1 again] agent SSE heartbeat            -> expect last_active_time refreshed
 #   M) [tool 5] agent SSE uploadArtifact             -> expect attachmentId
 #   N) [tool 6] agent SSE ack                        -> expect inbox.is_read=1
 #   O) REST POST /api/sub-tasks/submit/{id}          -> expect status=REVIEW
@@ -307,7 +307,7 @@ Send-Mcp -Body '{"jsonrpc":"2.0","method":"notifications/initialized"}' -Label "
 # ============================================================
 # STEP G: agent SSE heartbeat
 # ============================================================
-Write-Output "=== [G] agent SSE heartbeat (refresh last_seen_at) ==="
+Write-Output "=== [G] agent SSE heartbeat (refresh last_seen_time) ==="
 $gBody = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"heartbeat","arguments":{"agentId":' + $agentId + ',"sessionId":"' + $sid + '"}}}'
 Send-Mcp -Body $gBody -Label "[G] tools/call heartbeat (agent apiKey)" -Headers @{ "Authorization" = "Bearer $agentApiKey" }
 
@@ -342,9 +342,9 @@ Write-Output "start Body: $($kResp.Body)"
 Write-Output ""
 
 # ============================================================
-# STEP L: agent SSE heartbeat 2nd (IN_PROGRESS -> last_active_at refresh)
+# STEP L: agent SSE heartbeat 2nd (IN_PROGRESS -> last_active_time refresh)
 # ============================================================
-Write-Output "=== [L] agent SSE heartbeat 2nd (IN_PROGRESS, refresh last_active_at) ==="
+Write-Output "=== [L] agent SSE heartbeat 2nd (IN_PROGRESS, refresh last_active_time) ==="
 $lBody = '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"heartbeat","arguments":{"agentId":' + $agentId + ',"sessionId":"' + $sid + '"}}}'
 Send-Mcp -Body $lBody -Label "[L] tools/call heartbeat 2nd (agent apiKey)" -Headers @{ "Authorization" = "Bearer $agentApiKey" }
 
@@ -421,7 +421,7 @@ Write-Output ""
 # ============================================================
 # STEP Q: admin GET agent detail
 # ============================================================
-Write-Output "=== [Q] admin GET agent detail (last_seen_at/last_active_at refresh check) ==="
+Write-Output "=== [Q] admin GET agent detail (last_seen_time/last_active_time refresh check) ==="
 $qResp = Invoke-Json -Method GET -Uri "$base/api/admin/agents/$agentId" -Headers @{ "X-Admin-Token" = $adminToken }
 Write-Output "agent detail HTTP $($qResp.Code)"
 Write-Output "agent detail Body: $($qResp.Body)"
@@ -466,7 +466,7 @@ Write-Output ""
 Write-Output "=== [T] write psql snapshot script (4 SELECTs) ==="
 $psqlScript = @"
 -- T1. inbox read
-SELECT id, agent_id, event_type, ref_type, ref_id, is_read, read_at
+SELECT id, agent_id, event_type, ref_type, ref_id, is_read, read_time
 FROM agent_inbox
 WHERE agent_id = $agentId AND deleted = 0
 ORDER BY id DESC LIMIT 5;
@@ -478,12 +478,12 @@ WHERE sub_task_id = $subTaskId AND deleted = 0
 ORDER BY id DESC LIMIT 5;
 
 -- T3. sub_task final state (DONE + score)
-SELECT id, status, assigned_agent, completed_at, composite_score, score_grade
+SELECT id, status, assigned_agent_id, complete_time, composite_score, score_grade
 FROM sub_task
 WHERE id = $subTaskId AND deleted = 0;
 
 -- T4. agent heartbeat fields
-SELECT id, name, last_seen_at, last_active_at, online_status
+SELECT id, name, last_seen_time, last_active_time, online_status
 FROM agent
 WHERE id = $agentId;
 "@

@@ -9,7 +9,7 @@
 #   S1  GET /api/admin/duty-leases/overview          -> 200，active/closed/expired/total 字段齐
 #   S2  GET /api/admin/duty-leases                   -> 200，PageResult.list/total/pages/current 齐
 #   S3  GET /api/admin/duty-leases?status=ACTIVE     -> 过滤生效（返回行 status 均为 ACTIVE）
-#   S4  DB 抽查：agent_command_outbox 中 status IN (1,3) 行的 last_sent_at/confirmed_at 不全为 NULL
+#   S4  DB 抽查：agent_command_outbox 中 status IN (1,3) 行的 last_sent_time/confirmed_time 不全为 NULL
 #        验证 V22 backfill 已生效（R3 收尾证据）
 #
 # Pre-conditions:
@@ -226,17 +226,17 @@ Write-Output ''
 
 # ============================================================
 # STEP S4: V22 backfill effectiveness
-#   - agent_command_outbox 中 status=1 (SENT) 行 last_sent_at IS NULL 数量
-#   - agent_command_outbox 中 status=3 (CONFIRMED) 行 confirmed_at IS NULL 数量
+#   - agent_command_outbox 中 status=1 (SENT) 行 last_sent_time IS NULL 数量
+#   - agent_command_outbox 中 status=3 (CONFIRMED) 行 confirmed_time IS NULL 数量
 #   - 两者均应为 0（V22 已 backfill）；允许数据库本身无该状态行（total=0）也算通过
 # ============================================================
 Write-Output '=== [S4] V22 backfill audit on agent_command_outbox ==='
 $s4Sql = @"
 SELECT
     (SELECT COUNT(*) FROM agent_command_outbox WHERE status = 1 AND deleted = 0) AS sent_total,
-    (SELECT COUNT(*) FROM agent_command_outbox WHERE status = 1 AND deleted = 0 AND last_sent_at IS NULL) AS sent_null_last_sent,
+    (SELECT COUNT(*) FROM agent_command_outbox WHERE status = 1 AND deleted = 0 AND last_sent_time IS NULL) AS sent_null_last_sent,
     (SELECT COUNT(*) FROM agent_command_outbox WHERE status = 3 AND deleted = 0) AS confirmed_total,
-    (SELECT COUNT(*) FROM agent_command_outbox WHERE status = 3 AND deleted = 0 AND confirmed_at IS NULL) AS confirmed_null_confirmed;
+    (SELECT COUNT(*) FROM agent_command_outbox WHERE status = 3 AND deleted = 0 AND confirmed_time IS NULL) AS confirmed_null_confirmed;
 "@
 $s4File = Join-Path $scriptDir 'verify-dashboard-duty-leases-s4.out'
 $rc = Run-Psql -Sql $s4Sql -OutFile $s4File
@@ -256,11 +256,11 @@ $s4ConfirmedTotal     = [int]$s4Fields[2]
 $s4ConfirmedNull      = [int]$s4Fields[3]
 
 if ($s4SentTotal -gt 0 -and $s4SentNullLastSent -ne 0) {
-    Write-Error "S4 FAIL: $s4SentNullLastSent / $s4SentTotal SENT rows still have last_sent_at IS NULL (V22 backfill missing)"
+    Write-Error "S4 FAIL: $s4SentNullLastSent / $s4SentTotal SENT rows still have last_sent_time IS NULL (V22 backfill missing)"
     exit 1
 }
 if ($s4ConfirmedTotal -gt 0 -and $s4ConfirmedNull -ne 0) {
-    Write-Error "S4 FAIL: $s4ConfirmedNull / $s4ConfirmedTotal CONFIRMED rows still have confirmed_at IS NULL (V22 backfill missing)"
+    Write-Error "S4 FAIL: $s4ConfirmedNull / $s4ConfirmedTotal CONFIRMED rows still have confirmed_time IS NULL (V22 backfill missing)"
     exit 1
 }
 Write-Output "S4 OK: sent_total=$s4SentTotal (null_last_sent=$s4SentNullLastSent), confirmed_total=$s4ConfirmedTotal (null_confirmed=$s4ConfirmedNull)"

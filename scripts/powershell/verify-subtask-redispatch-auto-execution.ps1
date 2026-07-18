@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 # helloai 子任务重派自动执行验证脚本
 # 用途：验证子任务在 blocked / offline 两种场景下被重新分派到目标 API_KEY_LLM Agent
 #       后能自动继续执行闭环（reassign -> 目标 Agent 接手 -> assignedAgent 校验 + timeline 证据）。
@@ -219,7 +219,7 @@ function Write-SqlSnapshot([string]$Path, [string]$ScenarioValue, [string]$TaskI
         "-- scenario=" + $ScenarioValue,
         "",
         "-- T1. sub_task final state",
-        "SELECT id, task_id, status, assigned_agent, completed_at, update_time",
+        "SELECT id, task_id, status, assigned_agent_id, complete_time, update_time",
         "FROM sub_task",
         "WHERE id = " + $SubTaskId + " AND deleted = 0;",
         "",
@@ -230,12 +230,12 @@ function Write-SqlSnapshot([string]$Path, [string]$ScenarioValue, [string]$TaskI
         "ORDER BY id DESC LIMIT 20;",
         "",
         "-- T3. source agent heartbeat / online fields",
-        "SELECT id, name, role, status, online_status, last_seen_at, last_active_at, offline_reason, offline_at",
+        "SELECT id, name, role, status, online_status, last_seen_time, last_active_time, offline_reason, offline_time",
         "FROM agent",
         "WHERE id = " + $SourceAgentId + ";",
         "",
         "-- T4. target agent online fields",
-        "SELECT id, name, role, status, online_status, last_seen_at, last_active_at, offline_reason, offline_at",
+        "SELECT id, name, role, status, online_status, last_seen_time, last_active_time, offline_reason, offline_time",
         "FROM agent",
         "WHERE id = " + $TargetAgentId + ";",
         "",

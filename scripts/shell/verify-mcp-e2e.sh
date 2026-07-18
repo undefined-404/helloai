@@ -353,7 +353,7 @@ log ""
 
 cat >"$PSQL_SNAPSHOT_FILE" <<EOF
 -- T1. inbox read
-SELECT id, agent_id, event_type, ref_type, ref_id, is_read, read_at
+SELECT id, agent_id, event_type, ref_type, ref_id, is_read, read_time
 FROM agent_inbox
 WHERE agent_id = $AGENT_ID AND deleted = 0
 ORDER BY id DESC LIMIT 5;
@@ -365,12 +365,12 @@ WHERE sub_task_id = $SUB_TASK_ID AND deleted = 0
 ORDER BY id DESC LIMIT 5;
 
 -- T3. sub_task final state
-SELECT id, status, assigned_agent, completed_at, composite_score, score_grade
+SELECT id, status, assigned_agent_id, complete_time, composite_score, score_grade
 FROM sub_task
 WHERE id = $SUB_TASK_ID AND deleted = 0;
 
 -- T4. agent heartbeat fields
-SELECT id, name, last_seen_at, last_active_at, online_status
+SELECT id, name, last_seen_time, last_active_time, online_status
 FROM agent
 WHERE id = $AGENT_ID;
 EOF
