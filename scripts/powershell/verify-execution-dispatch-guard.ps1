@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 # helloai execution-dispatch startup guard verifier (S6, v1.0)
 # 用途：验证 ExecutionDispatchValidator 的启动期 fail-fast 守卫。反复用不同
 #       调度配置组合启动 helloai-start，断言非法组合在 @PostConstruct 直接 fail-fast
@@ -54,9 +54,39 @@ function Assert-Pass {
 function Free-Port {
     $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
     foreach ($c in $conns) {
-        Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue
+        $ownerPid = [int]$c.OwningProcess
+        $ownerProc = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
+        # IDEA 启动的 helloai-start 进程不会写 .spring-boot-pid；
+        # 但我们的 kill-old.ps1 会清掉 .spring-boot-pid 后再 kill。
+        # 提示用户：脚本会终止 :6565 上所有 java 进程（包括可能的 IDEA）。
+        if ($ownerProc -and $ownerProc.ProcessName -eq 'java') {
+            $cmdLine = (Get-CimInstance Win32_Process -Filter ('ProcessId=' + $ownerPid) -ErrorAction SilentlyContinue).CommandLine
+            $isIde = ($cmdLine -and ($cmdLine -match 'idea64.exe|com\.helloai\.HelloAIApplication|HelloAIApplication\.main'))
+            $via = if ($isIde) { 'IDEA / dev launcher' } else { 'jar launcher (start-sb.ps1 or mvn spring-boot:run)' }
+            Write-Output ('Free-Port: killing java pid=' + $ownerPid + ' via=' + $via)
+        }
+        Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
     }
     Start-Sleep -Seconds 3
+}
+
+function Assert-NoIdeBackend {
+    # 检测是否有 IDEA 启动的 helloai-start：commandLine 包含 HelloAIApplication.main
+    $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+    foreach ($c in $conns) {
+        $ownerPid = [int]$c.OwningProcess
+        $ownerProc = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
+        if ($ownerProc -and $ownerProc.ProcessName -eq 'java') {
+            $cmdLine = (Get-CimInstance Win32_Process -Filter ('ProcessId=' + $ownerPid) -ErrorAction SilentlyContinue).CommandLine
+            if ($cmdLine -and ($cmdLine -match 'idea64.exe|com\.helloai\.HelloAIApplication|HelloAIApplication\.main')) {
+                Write-Output ''
+                Write-Output 'WARNING: :6565 is held by IDEA-launched java pid=' + $ownerPid
+                Write-Output '         this script will TERMINATE that process (Stop-Process -Force) on first Free-Port.'
+                Write-Output '         please stop your IDEA run before continuing, or skip this verifier.'
+                Write-Output ''
+            }
+        }
+    }
 }
 
 function Is-PortListening {
@@ -220,9 +250,23 @@ if ($LASTEXITCODE -ne 0 -or -not ($dockerCheck -match "$container\|Up")) {
 }
 Write-Output ('container ' + $container + ' is Up')
 
+# 在做任何 Free-Port 之前，先警告 IDEA 启动的进程
+Assert-NoIdeBackend
+
 if (-not (Test-Path $JarPath)) {
-    Write-Error ('jar not found: ' + $JarPath + ' (rebuild helloai-start first)')
-    exit 1
+    # 自动构建：避免用户每次 mvn package 时跑这个脚本还失败
+    Write-Output ('jar not found: ' + $JarPath + ' — attempting mvn package -DskipTests...')
+    Push-Location $scriptDir
+    try {
+        & mvn -pl helloai-start -am -DskipTests package | Out-Null
+    } finally {
+        Pop-Location
+    }
+    if (-not (Test-Path $JarPath)) {
+        Write-Error ('jar still not found after mvn package: ' + $JarPath + '. Check mvn output above.')
+        exit 1
+    }
+    Write-Output ('jar built: ' + $JarPath)
 }
 Write-Output ('jar = ' + $JarPath)
 Write-Output ('logDir = ' + $logDir)

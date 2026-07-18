@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 # helloai 子任务重派诊断编排脚本
 # 用途：一键编排"（可选构建并）重启后端 -> 等 /actuator/health UP -> 跑
 #       verify-subtask-redispatch-auto-execution.ps1 -> 打印 subTaskId 与排障 SQL"，
@@ -27,11 +27,19 @@ $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::InputEncoding  = [System.Text.Encoding]::UTF8
 
+# 默认行为：若 :6565 已被 helloai-start 占用（IDEA / start-sb / IDE 等任何启动方式），
+# 我们只跑诊断子任务，不再默认 kill+restart。仅在显式传入 -RestartBackend 时才会重启。
 if (-not $PSBoundParameters.ContainsKey("RestartBackend")) {
-    $RestartBackend = $true
+    $RestartBackend = $false
 }
 if (-not $PSBoundParameters.ContainsKey("BuildBackend")) {
-    $BuildBackend = $true
+    $BuildBackend = $false
+}
+
+function Get-PortOwnerPid {
+    param([int]$Port)
+    $c = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($c) { return [int]$c.OwningProcess } else { return $null }
 }
 
 $env:DEEPSEEK_CONNECT_TIMEOUT_MS = [string]$DeepSeekConnectTimeoutMs
@@ -42,8 +50,24 @@ Write-Host ("ENV: DEEPSEEK_CONNECT_TIMEOUT_MS=" + $env:DEEPSEEK_CONNECT_TIMEOUT_
 Write-Host ("ENV: DEEPSEEK_READ_TIMEOUT_MS=" + $env:DEEPSEEK_READ_TIMEOUT_MS)
 Write-Host ("ENV: HELLOAI_EXECUTION_SYNC_TIMEOUT_SECONDS=" + $env:HELLOAI_EXECUTION_SYNC_TIMEOUT_SECONDS)
 
+# pre-flight: 检测 :6565 是否被占用，避免误杀已有进程（IDEA / start-sb）
+$existingOwner = Get-PortOwnerPid -Port 6565
+if ($existingOwner -and (-not $RestartBackend)) {
+    $procInfo = Get-Process -Id $existingOwner -ErrorAction SilentlyContinue
+    $procDesc = 'pid=' + $existingOwner
+    if ($procInfo) {
+        $procDesc = 'java pid=' + $existingOwner + ' start=' + $procInfo.StartTime
+    }
+    Write-Host ('PRE_FLIGHT: :6565 already occupied by ' + $procDesc + ' - script will NOT restart backend.')
+    Write-Host 'PRE_FLIGHT: pass -RestartBackend to force kill+rebuild (will terminate the existing process).'
+} elseif ($existingOwner -and $RestartBackend) {
+    Write-Host ('PRE_FLIGHT: :6565 occupied by pid=' + $existingOwner + ' - explicit -RestartBackend requested, will kill+restart.')
+} else {
+    Write-Host 'PRE_FLIGHT: :6565 free, backend not running.'
+}
+
 if ($RestartBackend) {
-    Write-Host "STEP0: restart backend"
+    Write-Host "STEP0: restart backend (explicit -RestartBackend)"
     if ($BuildBackend) {
         Write-Host "STEP0: build backend"
         mvn -pl helloai-start -am -DskipTests package | Out-Null
@@ -89,9 +113,9 @@ foreach ($line in $output) {
 if (-not [string]::IsNullOrWhiteSpace($subTaskId)) {
     Write-Host ("EVIDENCE: subTaskId=" + $subTaskId)
     Write-Host "SQL_RECENT_BEGIN"
-    Write-Host ("SELECT id, status, assigned_agent, update_time FROM sub_task WHERE id = " + $subTaskId + " AND deleted = 0;")
+    Write-Host ("SELECT id, status, assigned_agent_id, update_time FROM sub_task WHERE id = " + $subTaskId + " AND deleted = 0;")
     Write-Host ("SELECT id, event_type, role, agent_id, payload, create_time FROM task_timeline WHERE sub_task_id = " + $subTaskId + " AND deleted = 0 ORDER BY id DESC LIMIT 20;")
-    Write-Host ("SELECT id, task_id, status, assigned_agent, update_time FROM sub_task WHERE deleted = 0 ORDER BY update_time DESC LIMIT 10;")
+    Write-Host ("SELECT id, task_id, status, assigned_agent_id, update_time FROM sub_task WHERE deleted = 0 ORDER BY update_time DESC LIMIT 10;")
     Write-Host "SQL_RECENT_END"
 }
 
