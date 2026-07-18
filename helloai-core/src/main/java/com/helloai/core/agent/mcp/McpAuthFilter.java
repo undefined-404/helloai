@@ -1,4 +1,4 @@
-package com.helloai.core.mcp;
+package com.helloai.core.agent.mcp;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;

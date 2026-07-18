@@ -1,4 +1,4 @@
-package com.helloai.core.mcp;
+package com.helloai.core.agent.mcp;
 
 import lombok.Data;
 import org.springframework.ai.tool.annotation.Tool;

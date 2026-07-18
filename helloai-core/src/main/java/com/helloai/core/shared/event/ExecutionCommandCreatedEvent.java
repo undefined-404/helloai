@@ -1,4 +1,4 @@
-package com.helloai.core.event;
+package com.helloai.core.shared.event;
 
 import com.helloai.core.agent.domain.ExecutionCommand;
 import lombok.Getter;

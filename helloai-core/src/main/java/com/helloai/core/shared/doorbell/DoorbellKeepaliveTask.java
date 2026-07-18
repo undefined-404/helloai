@@ -1,4 +1,4 @@
-package com.helloai.core.doorbell;
+package com.helloai.core.shared.doorbell;
 
 import com.helloai.common.config.DoorbellProperties;
 import lombok.RequiredArgsConstructor;

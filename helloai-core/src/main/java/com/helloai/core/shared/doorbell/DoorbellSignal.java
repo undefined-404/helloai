@@ -1,4 +1,4 @@
-package com.helloai.core.doorbell;
+package com.helloai.core.shared.doorbell;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.Getter;

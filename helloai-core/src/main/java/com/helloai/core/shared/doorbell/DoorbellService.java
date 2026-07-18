@@ -1,8 +1,8 @@
-package com.helloai.core.doorbell;
+package com.helloai.core.shared.doorbell;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.DoorbellProperties;
-import com.helloai.core.observability.HeartbeatService;
+import com.helloai.core.agent.observability.HeartbeatService;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

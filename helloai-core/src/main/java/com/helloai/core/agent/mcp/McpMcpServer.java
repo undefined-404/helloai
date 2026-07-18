@@ -1,4 +1,4 @@
-package com.helloai.core.mcp;
+package com.helloai.core.agent.mcp;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentOnlineStatus;
@@ -6,8 +6,8 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.AgentService;
-import com.helloai.core.observability.HeartbeatService;
-import com.helloai.core.service.McpToolService;
+import com.helloai.core.agent.observability.HeartbeatService;
+import com.helloai.core.agent.mcp.McpToolService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

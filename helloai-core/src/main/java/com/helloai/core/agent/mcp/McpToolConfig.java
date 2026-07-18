@@ -1,4 +1,4 @@
-package com.helloai.core.mcp;
+package com.helloai.core.agent.mcp;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.tool.ToolCallbackProvider;

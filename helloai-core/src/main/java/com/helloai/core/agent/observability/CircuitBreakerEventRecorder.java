@@ -1,4 +1,4 @@
-package com.helloai.core.observability;
+package com.helloai.core.agent.observability;
 
 import com.helloai.common.constant.AgentRole;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;

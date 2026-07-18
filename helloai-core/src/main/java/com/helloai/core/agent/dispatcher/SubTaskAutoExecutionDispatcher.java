@@ -4,7 +4,7 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.event.SubTaskAssignedEvent;
+import com.helloai.core.shared.event.SubTaskAssignedEvent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

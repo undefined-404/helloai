@@ -30,7 +30,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import com.helloai.core.agent.executor.AgentSelector;
-import com.helloai.core.observability.CircuitBreakerEventRecorder;
+import com.helloai.core.agent.observability.CircuitBreakerEventRecorder;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.service.SubTaskService;
 

@@ -1,6 +1,6 @@
-package com.helloai.core.doorbell;
+package com.helloai.core.shared.doorbell;
 
-import com.helloai.core.event.InboxMessageCreatedEvent;
+import com.helloai.core.shared.event.InboxMessageCreatedEvent;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

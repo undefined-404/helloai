@@ -7,7 +7,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentDutyLeaseStatus;
 import com.helloai.core.agent.entity.AgentDutyLease;
-import com.helloai.core.event.DutyLeaseClosedEvent;
+import com.helloai.core.shared.event.DutyLeaseClosedEvent;
 import com.helloai.core.agent.mapper.AgentDutyLeaseMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

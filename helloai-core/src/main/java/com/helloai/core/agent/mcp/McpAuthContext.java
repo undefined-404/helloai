@@ -1,4 +1,4 @@
-package com.helloai.core.mcp;
+package com.helloai.core.agent.mcp;
 
 import com.helloai.common.base.BizException;
 import lombok.extern.slf4j.Slf4j;

@@ -1,4 +1,4 @@
-package com.helloai.core.score;
+package com.helloai.core.task.score;
 
 import com.helloai.core.task.entity.ReviewRecord;
 import com.helloai.core.task.entity.SubTask;

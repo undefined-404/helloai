@@ -1,7 +1,7 @@
 package com.helloai.core.agent.service;
 
 import com.helloai.core.agent.entity.AgentInbox;
-import com.helloai.core.event.InboxMessageCreatedEvent;
+import com.helloai.core.shared.event.InboxMessageCreatedEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

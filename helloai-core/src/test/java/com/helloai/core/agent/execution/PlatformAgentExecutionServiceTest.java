@@ -25,7 +25,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verify;
-import com.helloai.core.observability.HeartbeatService;
+import com.helloai.core.agent.observability.HeartbeatService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.system.service.CredentialVaultBindingService;
 

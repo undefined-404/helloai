@@ -9,7 +9,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.system.service.PromptTemplateService;
-import com.helloai.core.util.AgentCapability;
+import com.helloai.core.agent.AgentCapability;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;

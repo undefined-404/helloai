@@ -1,4 +1,4 @@
-package com.helloai.core.service;
+package com.helloai.core.agent.mcp;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentStatus;
@@ -23,7 +23,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
-import com.helloai.core.observability.HeartbeatService;
+import com.helloai.core.agent.observability.HeartbeatService;
 
 /**
  * MCP 工具核心逻辑。

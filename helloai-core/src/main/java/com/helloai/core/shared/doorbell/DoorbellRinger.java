@@ -1,6 +1,6 @@
-package com.helloai.core.doorbell;
+package com.helloai.core.shared.doorbell;
 
-import com.helloai.core.event.InboxMessageCreatedEvent;
+import com.helloai.core.shared.event.InboxMessageCreatedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;

@@ -20,7 +20,7 @@ import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.Map;
-import com.helloai.core.observability.HeartbeatService;
+import com.helloai.core.agent.observability.HeartbeatService;
 import com.helloai.core.agent.service.AgentService;
 
 /**

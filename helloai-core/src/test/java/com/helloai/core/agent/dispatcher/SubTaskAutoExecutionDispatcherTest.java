@@ -4,7 +4,7 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.event.SubTaskAssignedEvent;
+import com.helloai.core.shared.event.SubTaskAssignedEvent;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

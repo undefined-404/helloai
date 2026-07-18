@@ -3,7 +3,7 @@ package com.helloai.core.agent.service;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.core.agent.entity.AgentInbox;
-import com.helloai.core.event.InboxMessageCreatedEvent;
+import com.helloai.core.shared.event.InboxMessageCreatedEvent;
 import com.helloai.core.agent.mapper.AgentInboxMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

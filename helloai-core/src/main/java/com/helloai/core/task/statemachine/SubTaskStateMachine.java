@@ -1,4 +1,4 @@
-package com.helloai.core.statemachine;
+package com.helloai.core.task.statemachine;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.SubTaskStatus;

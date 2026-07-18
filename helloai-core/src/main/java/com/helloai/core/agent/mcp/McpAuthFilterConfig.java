@@ -1,4 +1,4 @@
-package com.helloai.core.mcp;
+package com.helloai.core.agent.mcp;
 
 import com.helloai.core.system.service.AuthService;
 import lombok.RequiredArgsConstructor;

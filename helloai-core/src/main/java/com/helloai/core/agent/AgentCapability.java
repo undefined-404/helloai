@@ -1,4 +1,4 @@
-package com.helloai.core.util;
+package com.helloai.core.agent;
 
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.core.agent.entity.Agent;

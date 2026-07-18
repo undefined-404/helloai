@@ -1,4 +1,4 @@
-package com.helloai.core.doorbell;
+package com.helloai.core.shared.doorbell;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -15,7 +15,7 @@ import java.util.function.BiConsumer;
  * 并主动响铃"的核心——这正是 spring-ai MCP 传输层封装掉、业务侧拿不到的能力
  * （见 {@code doc/HelloAI_门铃通知通道设计.md} §4.3）。</p>
  *
- * <p>设计取舍，仿 {@link com.helloai.core.mcp.McpAuthContext}：</p>
+ * <p>设计取舍，仿 {@link com.helloai.core.agent.mcp.McpAuthContext}：</p>
  * <ul>
  *   <li>纯进程内 {@link ConcurrentMap}，连接态本就不该持久化，故不落库；</li>
  *   <li>同一 Agent 只保留一条门铃连接：新连接到来时关旧建新，防止连接泄漏；</li>
