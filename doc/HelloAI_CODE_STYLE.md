@@ -2,9 +2,9 @@
 
 > 适用项目：HelloAI（AI Agent 协作调度平台）  
 > 生效范围：后端单体服务 + 前端管理后台（Vue 3 / Element Plus）  
-> 版本：V1.3  
+> 版本：V1.4  
 > 最后更新：2026-07-18  
-> 本版重点：第 8 章追加 8.5 节"字段命名强制规则"（V23 字段命名规范化迁移配套规范，明确 xxx_time / xxx_id / xxx_count 命名与 PG RENAME COLUMN 实施要点）
+> 本版重点：对齐 core 业务域分包重构后的代码事实——修正 3.2 启动类 @MapperScan 示例、3.x 资源文件位置、4.1 包命名示例、8.4 Flyway 规范与多版本迁移现实的冲突；补写 6.3 Controller 职责边界（含分层红线与待收口清单）；3.x 业务域分包规则补全子包清单与 outbox 归属决策；8.5 实施要点追加"变更残留检查范围"
 > 致敬：Hello World! —— 每一位程序员的第一行代码
 ---
 
@@ -175,22 +175,26 @@ helloai/
 ```java
 package com.helloai;
 
-import org.mybatis.spring.annotation.MapperScan;
-import org.springframework.boot.SpringApplication;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.scheduling.annotation.EnableScheduling;
-
 @SpringBootApplication(scanBasePackages = "com.helloai")
-@MapperScan("com.helloai.core.mapper")
+@EnableConfigurationProperties(AgentProviderProperties.class)
+@MapperScan({
+        "com.helloai.core.agent.mapper",
+        "com.helloai.core.task.mapper",
+        "com.helloai.core.system.mapper"
+})
 @EnableScheduling
+@EnableAsync(proxyTargetClass = true)
 public class HelloAIApplication {
     public static void main(String[] args) {
+        // 禁用 CGLIB 类缓存（spring-ai 1.x + spring-boot 3.4 + McpAuthFilterConfig
+        // CGLIB 增强在异常退出后偶发导致下次启动失败），详见启动类注释
         SpringApplication.run(HelloAIApplication.class, args);
     }
 }
 ```
 
 > ⚠️ `scanBasePackages` **必须**设为 `"com.helloai"`，确保所有模块的 Bean 能被扫描到。
+> ⚠️ `@MapperScan` **必须**显式列出三个业务域的 mapper 包（core 域分包重构后已不存在统一的 `core.mapper` 包）；新增业务域时在此追加对应 mapper 包。
 
 ### 3.3 服务端口
 
@@ -233,30 +237,26 @@ public class MossThreadPoolProperties {
 ```
 helloai-start/src/main/resources/
 ├── application.yml                  # 主配置
-├── db/
-│   └── migration/
-│       └── V1__init_all.sql         # 唯一迁移文件（所有 DDL+种子数据合并于此）
+└── db/
+    └── migration/                   # Flyway 多版本迁移脚本（V1__init_all.sql ～ V23__field_naming_normalization.sql）
+
+helloai-core/src/main/resources/
+├── mapper/                          # 自定义 Mapper XML（AgentMapper.xml 等 5 个）
 ├── scripts/
 │   └── task-cli.py                  # Agent CLI 工具（可执行脚本）
-├── skills/
-│   ├── planner/
-│   │   └── SKILL.md                 # Planner 技能文档
-│   ├── executor/
-│   │   └── SKILL.md                 # Executor 技能文档
-│   ├── reviewer/
-│   │   └── SKILL.md                 # Reviewer 技能文档
-│   └── patrol/
-│       └── SKILL.md                 # Patrol 技能文档
-└── templates/
-    └── agent-onboarding.md          # 注册引导模板
+└── skills/
+    ├── planner/SKILL.md             # Planner 技能文档
+    ├── executor/SKILL.md            # Executor 技能文档
+    ├── reviewer/SKILL.md            # Reviewer 技能文档
+    └── patrol/SKILL.md              # Patrol 技能文档
 ```
 
-| 目录 | 用途 |
-|------|------|
-| `scripts/` | 可执行脚本（Python CLI 等） |
-| `skills/` | 角色技能文档（SKILL.md），运行时可替换变量 |
-| `templates/` | 静态文本模板（onboarding 引导等） |
-| `db/migration/` | Flyway 数据库迁移脚本 |
+| 目录 | 模块 | 用途 |
+|------|------|------|
+| `db/migration/` | helloai-start | Flyway 数据库迁移脚本（多版本，详见 8.4） |
+| `mapper/` | helloai-core | 需要覆盖 BaseMapper 或自定义 SQL 的 Mapper XML |
+| `scripts/` | helloai-core | 可执行脚本（Python CLI 等） |
+| `skills/` | helloai-core | 角色技能文档（SKILL.md），运行时可替换变量 |
 
 > **强制**: 所有资源文件**必须通过 `ClassPathResource` 读取**，禁止硬编码绝对路径。
 
@@ -269,7 +269,12 @@ core 模块统一采用"业务域分包 + 域内技术分层"，禁止新增顶�
 - com.helloai.core.system  系统支撑域（用户、配置、规则、模块、凭据、附件）
 - com.helloai.core.shared  跨域基础设施（event、doorbell）
 
-每个域内固定子包：entity / mapper / service；按域需要可扩展（chat、command、dispatcher 等）。
+每个域内固定子包：entity / mapper / service；按域需要可扩展。当前各域完整子包：
+
+- **agent**：entity / mapper / service / domain / chat / command / dispatcher / execution / executor / mqconsumer / mcp / observability
+- **task**：entity / mapper / service / statemachine / score
+- **system**：entity / mapper / service
+- **shared**：event / doorbell
 
 语义边界（强制）：
 - xxx.entity = 映射数据库表的持久化实体
@@ -277,6 +282,10 @@ core 模块统一采用"业务域分包 + 域内技术分层"，禁止新增顶�
 
 新增类的放置判断：先问"它服务哪个业务域"，再问"它在域内承担什么技术角色"。
 跨域通用设施才允许放 shared，放 shared 前需在提交说明中写明理由。
+
+**outbox 归属决策**：事务性 outbox 的两张表（agent_outbox_event、agent_command_outbox）及其 entity / mapper / service 归属 agent 域（它们服务的就是 agent 命令与事件分发）；中继调度 OutboxRelayTask 属 helloai-job，MQ 收发侧属 helloai-mq。当第二个业务域引入 outbox 时，再评估将 entity/mapper/service 下沉至 shared/outbox；不要提前建空包占位。
+
+**start 模块配置类归属（待收口）**：规则上启动模块配置类应统一放在 `com.helloai.start.config`；当前 `com.helloai.config`（MyBatisPlusMetaObjectHandler、AdminInitializer）与 `com.helloai.start.chat`（DeepSeekProviderChatClientFactory）为历史遗留分裂包，后续应分别并入 `start.config` 与 `core/agent/chat/provider`，在此之前新配置类一律放 `start.config`。
 
 ---
 
@@ -291,20 +300,16 @@ com.helloai.{模块名}.{层}
 示例：
 - `com.helloai.common.base`
 - `com.helloai.common.constant`
-- `com.helloai.core.entity`
-- `com.helloai.core.mapper`
-- `com.helloai.core.service`
-- `com.helloai.core.statemachine`
-- `com.helloai.core.agent.executor`
-- `com.helloai.core.agent.mqconsumer`
-- `com.helloai.core.storage`
-- `com.helloai.core.outbox`
-- `com.helloai.api.controller`
-- `com.helloai.api.dto`
-- `com.helloai.api.config`
+- `com.helloai.core.agent.entity` / `com.helloai.core.agent.mapper` / `com.helloai.core.agent.service`
+- `com.helloai.core.agent.executor` / `com.helloai.core.agent.mqconsumer` / `com.helloai.core.agent.mcp`
+- `com.helloai.core.task.entity` / `com.helloai.core.task.statemachine` / `com.helloai.core.task.score`
+- `com.helloai.core.system.entity` / `com.helloai.core.system.service`
+- `com.helloai.core.shared.event` / `com.helloai.core.shared.doorbell`
+- `com.helloai.api.controller` / `com.helloai.api.dto` / `com.helloai.api.config`
 - `com.helloai.job.task`
-- `com.helloai.mq.config`
-- `com.helloai.mq.consumer`
+- `com.helloai.mq.config` / `com.helloai.mq.consumer`
+
+> **禁止**新增 `com.helloai.core.entity` / `core.mapper` / `core.service` 等顶层平铺包（已随业务域分包重构废弃）；core 下新增类必须先定位业务域，详见 3.x 业务域分包规则。
 
 ### 4.2 类命名
 
@@ -344,10 +349,12 @@ com.helloai.{模块名}.{层}
 ### 4.4 数据库字段命名
 
 - 表名：蛇形（`task`、`sub_task`、`agent_execution_record`）
-- 字段名：蛇形（`task_id`、`assigned_agent`、`create_time`）
+- 字段名：蛇形（`task_id`、`assigned_agent_id`、`create_time`）
 - 时间字段：`create_time` / `update_time`（**非** `created_at` / `updated_at`）
 - JSONB 字段：`context`、`score_factors`、`detail`、`payload`
 - 布尔/状态：`status`、`deleted`、`result`
+
+> 字段命名的强制细则（时间 `xxx_time`、外键 `xxx_id`、计量 `xxx_count`、避开关键字、主键策略）以 **8.5 字段命名强制规则** 为唯一权威。
 
 ### 4.x 接口使用原则
 
@@ -622,6 +629,20 @@ public class SubTaskController {
 ```
 
 ### 6.3 Controller 职责边界
+
+Controller 只允许做三件事：**参数接收与校验、调用 Service、封装返回**。
+
+**分层红线（强制）**：
+
+1. **禁止注入 Mapper**——任何查询/写入都必须经过 Service，Controller 出现 `private final XxxMapper` 即违规；
+2. **禁止书写 SQL / QueryWrapper 条件**——条件构造属 Service 层职责；
+3. **禁止事务注解**——`@Transactional` 只允许出现在 Service；
+4. 返回 DTO 不返回 Entity（见 6.7）；异常统一交 `GlobalExceptionHandler`，不在 Controller 里 try-catch 业务异常。
+
+> ⚠️ 当前待收口清单（6 个历史违规，后续迭代逐一迁回 Service）：
+> `ActivityController`、`AdminDashboardController`、`AgentDutyLeaseController`、`AttachmentController`、`DashboardController`、`FeedController`。
+> 在上述文件完成收口前，**新增接口不允许再以它们为参照**。
+
 ### 6.4 嵌套资源路径规范
 
 父子资源关系用路径嵌套表达：`/api/{parent}/{parentId}/{child}`
@@ -958,11 +979,11 @@ CREATE TRIGGER update_sub_task_update_time BEFORE UPDATE ON sub_task
 
 ### 8.4 Flyway 迁移规范
 
-- 所有 DDL **合并到单一文件** `helloai-start/src/main/resources/db/migration/V1__init_all.sql`
-- **禁止**创建新的 `V2/V3/...` 迁移文件。所有建表、加字段、索引、种子数据统一追加到 V1 末尾
-- 仅保留一个迁移文件，确保新环境启动时一次执行完毕，避免多版本迁移的 checksum 冲突
+- 仓库实际为多版本迁移（`V1__init_all.sql` ～ `V23__field_naming_normalization.sql`），**禁止再修改已执行的 V1～V23 历史脚本**（改历史脚本会导致已有环境 checksum 校验失败）
+- 所有新增 DDL（建表、加字段、索引、种子数据、字段改名）**必须新建 `V{N+1}__<用途>.sql`**，版本号顺延，用途用小写蛇形描述
+- 所有 DDL 必须使用 `IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` / `ON CONFLICT DO NOTHING` 等幂等语法；脚本末尾附 `DO $$ ... RAISE NOTICE` 验证块（参照 V16/V17/V23 样式）
 - `application.yml` 中 Flyway 配置只保留 `enabled: true` + `locations`，**不加** `baseline-on-migrate` 和 `repair-on-migrate`
-- 所有 DDL 必须使用 `IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` / `ON CONFLICT DO NOTHING` 等幂等语法，确保重复执行不报错
+- 字段改名类迁移必须与 entity 字段改名、XML 裸列名、Java 裸列名字符串在同一提交内完成（参照 8.5 实施要点）
 
 ### 8.5 字段命名强制规则
 
@@ -985,7 +1006,8 @@ CREATE TRIGGER update_sub_task_update_time BEFORE UPDATE ON sub_task
 3. **MyBatis-Plus 自定义 XML 需手改两处**：SQL 裸列名 + `#{et.xxx}` OGNL 引用（IDEA Rename Field **不会**联动）。
 4. **Java 端裸列名 UpdateWrapper 字符串**也需手改（项目内唯一已知位置：`AgentHealthCheckTask` L138-139 UpdateWrapper）。
 5. **PG `RENAME COLUMN` 自动更新**引用该列的索引 / 约束定义，本项目 4 个索引（`idx_agent_command_outbox_pending_scan` / `idx_agent_command_outbox_sent_scan` / `idx_exec_record_pending_attempt` / `idx_agent_external_failure_scan`）无需重建；列注释随列保留。
-6. **多版本迁移文件存在例外**：仓库实际已存在 `V1`～`V23` 多版本迁移文件，`8.4` 关于"禁止 V_NN"的描述与代码事实冲突；新增表 / 加字段 / 索引 / 种子数据追加到 `V1__init_all.sql` 仍然有效，但字段命名规范化、跨表结构调整等"演进型变更"应走新的 `V_NN__<用途>.sql` 迁移文件并保持 `IF NOT EXISTS` 等幂等语法。
+6. 迁移文件管理按 8.4 执行（历史脚本冻结、新建 `V_NN__<用途>.sql`）。
+7. **变更残留检查范围（强制）**：字段改名 / 包重构完成后，旧名残留 grep 的检查范围 = **Java 源码 + mapper XML + `scripts/`（PowerShell 与 shell 验证脚本）+ `doc/`**。scripts 不参与编译启动，是残留高发区；消息契约除外——jsonb payload 内的键名（如 `trigger`）属域对象序列化契约，不随 DB 列改名。
 
 ---
 
@@ -1384,7 +1406,7 @@ public class ContextManager {
 ### 16.1 Entity 模板
 
 ```java
-package com.helloai.core.entity;
+package com.helloai.core.{domain}.entity;
 
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.baomidou.mybatisplus.annotation.TableField;
@@ -1436,7 +1458,7 @@ package com.helloai.api.controller;
 
 import com.helloai.common.base.R;
 import com.helloai.api.dto.{domain}.{Name}Response;
-import com.helloai.core.service.{Name}Service;
+import com.helloai.core.{domain}.service.{Name}Service;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -1467,12 +1489,12 @@ public class {Name}Controller {
 ### 16.4 ServiceImpl 模板
 
 ```java
-package com.helloai.core.service;
+package com.helloai.core.{domain}.service;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
-import com.helloai.core.entity.{Name};
-import com.helloai.core.mapper.{Name}Mapper;
+import com.helloai.core.{domain}.entity.{Name};
+import com.helloai.core.{domain}.mapper.{Name}Mapper;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -1506,9 +1528,9 @@ import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.executor.AgentExecutor;
 import com.helloai.core.agent.executor.AgentRouter;
-import com.helloai.core.entity.AgentExecutionRecord;
-import com.helloai.core.mapper.AgentExecutionRecordMapper;
-import com.helloai.core.service.SubTaskService;
+import com.helloai.core.agent.entity.AgentExecutionRecord;
+import com.helloai.core.agent.mapper.AgentExecutionRecordMapper;
+import com.helloai.core.task.service.SubTaskService;
 import com.helloai.mq.config.RabbitMQConfig;
 import com.rabbitmq.client.Channel;
 import lombok.RequiredArgsConstructor;
@@ -1581,7 +1603,7 @@ public class {Name}EventConsumer {
 ### 16.6 状态机模板
 
 ```java
-package com.helloai.core.statemachine;
+package com.helloai.core.task.statemachine;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.SubTaskStatus;
@@ -1673,7 +1695,7 @@ public class {Name}CompensationTask {
 | 文件编码 | `.java` 文件必须是 UTF-8 without BOM，文件首字节直接是 `package` | [1. 总体原则](#1-总体原则) |
 | 实体与主键 | 业务实体继承 `BaseEntity`，关系表不用；ID 使用 `Long + ASSIGN_ID` | [5. 实体类规范](#5-实体类规范) |
 | 自动填充 | 使用 `setFieldValByName`，不手动补 `createTime` / `updateTime` / `deleted` | [5.3 自动填充机制](#53-自动填充机制) |
-| 启动类 | `scanBasePackages` 保持 `"com.helloai"`，并配置 `@MapperScan("com.helloai.core.mapper")` | [3.3 启动类配置](#33-启动类配置) |
+| 启动类 | `scanBasePackages` 保持 `"com.helloai"`，`@MapperScan` 显式列出 `core.agent/task/system` 三个 mapper 包 | [3.2 启动类配置](#32-启动类配置) |
 | 数据库连接 | JDBC URL 指向 PostgreSQL，使用 `timestamptz` | [8.2 JDBC 连接配置](#82-jdbc-连接配置) |
 | Controller 与 Service | Controller 只做参数接收、DTO 转换、返回封装；查询默认返回 `Response DTO`；事务放在 Service 层 | [6. Controller 规范](#6-controller-规范)、[7. Service 规范](#7-service-规范) |
 | 依赖注入 | 使用构造器注入，非 `@Autowired` 字段注入 | [1. 总体原则](#1-总体原则) |
@@ -1714,43 +1736,43 @@ public class {Name}CompensationTask {
 
 ```html
 <template>
-  <el-card>
-    <div slot="header">
-      <span><i class="el-icon-s-xxx"></i> 任务列表</span>
-      <el-button size="mini" type="primary" style="float:right" @click="load">刷新</el-button>
-    </div>
+   <el-card>
+      <div slot="header">
+         <span><i class="el-icon-s-xxx"></i> 任务列表</span>
+         <el-button size="mini" type="primary" style="float:right" @click="load">刷新</el-button>
+      </div>
 
-    <el-table :data="list" border stripe style="width:100%" v-loading="loading">
-      <el-table-column prop="id" label="ID" width="80" />
-      <el-table-column prop="title" label="标题" min-width="160" show-overflow-tooltip />
-      <el-table-column label="状态" width="100">
-        <template slot-scope="{row}">
-          <el-tag :type="tagMap(row.status)" size="small">{{ row.status }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="评分" width="80">
-        <template slot-scope="{row}">
-          <el-tag :type="scoreTagMap(row.scoreGrade)" size="small">{{ row.scoreGrade }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="时间" min-width="160" />
-      <el-table-column label="操作" width="120" fixed="right">
-        <template slot-scope="{row}">
-          <el-button size="mini" @click="handleDetail(row)">详情</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+      <el-table :data="list" border stripe style="width:100%" v-loading="loading">
+         <el-table-column prop="id" label="ID" width="80" />
+         <el-table-column prop="title" label="标题" min-width="160" show-overflow-tooltip />
+         <el-table-column label="状态" width="100">
+            <template slot-scope="{row}">
+               <el-tag :type="tagMap(row.status)" size="small">{{ row.status }}</el-tag>
+            </template>
+         </el-table-column>
+         <el-table-column label="评分" width="80">
+            <template slot-scope="{row}">
+               <el-tag :type="scoreTagMap(row.scoreGrade)" size="small">{{ row.scoreGrade }}</el-tag>
+            </template>
+         </el-table-column>
+         <el-table-column label="时间" min-width="160" />
+         <el-table-column label="操作" width="120" fixed="right">
+            <template slot-scope="{row}">
+               <el-button size="mini" @click="handleDetail(row)">详情</el-button>
+            </template>
+         </el-table-column>
+      </el-table>
 
-    <!-- 空状态 -->
-    <div v-if="!list.length && !loading" style="text-align:center;padding:60px;color:#909399">
-      <i class="el-icon-s-xxx" style="font-size:64px;display:block;margin-bottom:12px"></i>
-      <p>暂无数据</p>
-    </div>
+      <!-- 空状态 -->
+      <div v-if="!list.length && !loading" style="text-align:center;padding:60px;color:#909399">
+         <i class="el-icon-s-xxx" style="font-size:64px;display:block;margin-bottom:12px"></i>
+         <p>暂无数据</p>
+      </div>
 
-    <!-- 分页 -->
-    <el-pagination v-if="total > 0" background layout="prev, pager, next" :total="total"
-      :page-size="20" @current-change="load" style="margin-top:16px;text-align:center" />
-  </el-card>
+      <!-- 分页 -->
+      <el-pagination v-if="total > 0" background layout="prev, pager, next" :total="total"
+                     :page-size="20" @current-change="load" style="margin-top:16px;text-align:center" />
+   </el-card>
 </template>
 ```
 
@@ -1760,31 +1782,31 @@ public class {Name}CompensationTask {
 
 ```javascript
 <script>
-import { apiFunction } from '@/api/module'
+   import { apiFunction } from '@/api/module'
 
-export default {
-  // 1. data — 响应式状态
-  data() {
-    return { list: [], total: 0, loading: false }
-  },
-  // 2. computed — 派生状态（如 Pinia store getters）
-  computed: {
-    isAdmin() { return this.$store.getters.isAdmin }
-  },
-  // 3. filters — 格式化（时间、金额等）
-  filters: {
-    fmt(v) { return v || '-' }
-  },
-  // 4. 生命周期 — 初始化加载
-  created() { this.load(1) },
-  // 5. methods — 按功能分组（加载 → 搜索 → 操作 → 工具）
-  methods: {
-    load(page) { /* API 调用 */ },
-    search() { this.load(1) },
-    handleDetail(row) { /* ... */ },
-    tagMap(v) { /* 状态颜色映射 */ },
-    scoreTagMap(v) { /* S/A/B/C/D 颜色映射 */ }
-  }
+   export default {
+   // 1. data — 响应式状态
+   data() {
+   return { list: [], total: 0, loading: false }
+},
+   // 2. computed — 派生状态（如 Pinia store getters）
+   computed: {
+   isAdmin() { return this.$store.getters.isAdmin }
+},
+   // 3. filters — 格式化（时间、金额等）
+   filters: {
+   fmt(v) { return v || '-' }
+},
+   // 4. 生命周期 — 初始化加载
+   created() { this.load(1) },
+   // 5. methods — 按功能分组（加载 → 搜索 → 操作 → 工具）
+   methods: {
+   load(page) { /* API 调用 */ },
+   search() { this.load(1) },
+   handleDetail(row) { /* ... */ },
+   tagMap(v) { /* 状态颜色映射 */ },
+   scoreTagMap(v) { /* S/A/B/C/D 颜色映射 */ }
+}
 }
 </script>
 ```
@@ -1860,20 +1882,20 @@ export default {
 @ExtendWith(MockitoExtension.class)
 class SubTaskStateMachineTest {
 
-    @Test
-    @DisplayName("PENDING → ASSIGNED 是合法转换")
-    void pendingToAssigned_shouldPass() {
-        assertDoesNotThrow(() ->
-            SubTaskStateMachine.validate(PENDING, ASSIGNED));
-    }
+   @Test
+   @DisplayName("PENDING → ASSIGNED 是合法转换")
+   void pendingToAssigned_shouldPass() {
+      assertDoesNotThrow(() ->
+              SubTaskStateMachine.validate(PENDING, ASSIGNED));
+   }
 
-    @Test
-    @DisplayName("PENDING → DONE 是非法转换，应抛出 BizException")
-    void pendingToDone_shouldThrow() {
-        BizException ex = assertThrows(BizException.class, () ->
-            SubTaskStateMachine.validate(PENDING, DONE));
-        assertEquals("非法状态转换: PENDING -> DONE", ex.getMessage());
-    }
+   @Test
+   @DisplayName("PENDING → DONE 是非法转换，应抛出 BizException")
+   void pendingToDone_shouldThrow() {
+      BizException ex = assertThrows(BizException.class, () ->
+              SubTaskStateMachine.validate(PENDING, DONE));
+      assertEquals("非法状态转换: PENDING -> DONE", ex.getMessage());
+   }
 }
 ```
 
@@ -1891,8 +1913,8 @@ class SubTaskStateMachineTest {
 @SpringBootTest
 @Testcontainers
 class NotificationConsumerIntegrationTest extends BaseIntegrationTest {
-    // 继承 BaseIntegrationTest（已定义 PG + Redis + RabbitMQ 容器）
-    // 测试真实 MQ 消费 → inbox 投递 → Agent 查询的完整链路
+   // 继承 BaseIntegrationTest（已定义 PG + Redis + RabbitMQ 容器）
+   // 测试真实 MQ 消费 → inbox 投递 → Agent 查询的完整链路
 }
 ```
 
