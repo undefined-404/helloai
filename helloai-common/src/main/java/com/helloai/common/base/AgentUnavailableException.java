@@ -18,8 +18,8 @@ package com.helloai.common.base;
  *
  * <p>在 Resilience4j 配置中通过 {@code ignore-exceptions} 排除，避免污染熔断统计。</p>
  *
- * @see com.helloai.core.service.ResilientDispatcher
- * @see com.helloai.core.service.AgentSelector
+ * @see com.helloai.core.agent.dispatcher.ResilientDispatcher
+ * @see com.helloai.core.agent.executor.AgentSelector
  */
 public class AgentUnavailableException extends RuntimeException {
 

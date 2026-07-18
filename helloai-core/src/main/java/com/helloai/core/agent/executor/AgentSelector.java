@@ -24,7 +24,7 @@ import java.util.List;
  * <p>在熔断降级 / 主 Agent 不可用时，从同角色 Agent 中选择替代者。
  * 自动跳过 SLEEPING、OFFLINE、熔断中的 Agent，优先选分数最高的可用 Agent。</p>
  *
- * @see ResilientDispatcher
+ * @see com.helloai.core.agent.dispatcher.ResilientDispatcher
  */
 @Slf4j
 @Component
