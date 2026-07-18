@@ -115,7 +115,7 @@ class OutboxRelayTaskTest {
         row.setAggregateId("1000");
         row.setStatus(AgentCommandOutboxStatus.PENDING);
         row.setRetryCount(retryCount);
-        row.setNextRetryAt(null);
+        row.setNextRetryTime(null);
         Map<String, Object> payload = new HashMap<>();
         payload.put("recordId", 1000L);
         payload.put("eventId", row.getEventId());

@@ -72,7 +72,7 @@ public class CredentialVaultService extends ServiceImpl<CredentialVaultMapper, C
         vault.setEncryptedValue(encryptedValue);
         vault.setSecretRef(secretRef);
         vault.setStatus(CredentialStatus.ACTIVE);
-        vault.setExpiresAt(expiresAt);
+        vault.setExpireTime(expiresAt);
         vault.setRemark(remark);
         save(vault);
         return vault;

@@ -114,7 +114,7 @@ public class AgentInboxService extends ServiceImpl<AgentInboxMapper, AgentInbox>
                 .eq(AgentInbox::getId, inboxId)
                 .eq(AgentInbox::getAgentId, agentId)
                 .set(AgentInbox::getIsRead, 1)
-                .set(AgentInbox::getReadAt, OffsetDateTime.now())
+                .set(AgentInbox::getReadTime, OffsetDateTime.now())
                 .update();
     }
 

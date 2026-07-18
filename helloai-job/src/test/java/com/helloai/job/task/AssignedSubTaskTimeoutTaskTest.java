@@ -230,7 +230,7 @@ class AssignedSubTaskTimeoutTaskTest {
     private static SubTask subTask(Long id, Long agentId) {
         SubTask s = new SubTask();
         s.setId(id);
-        s.setAssignedAgent(agentId);
+        s.setAssignedAgentId(agentId);
         s.setStatus(SubTaskStatus.ASSIGNED);
         return s;
     }

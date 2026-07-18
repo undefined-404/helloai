@@ -63,12 +63,12 @@ public class ExecutionCommandService {
         if (subTask == null) {
             throw new BizException("子任务不存在: " + subTaskId);
         }
-        if (subTask.getAssignedAgent() == null) {
+        if (subTask.getAssignedAgentId() == null) {
             throw new BizException("子任务未分配 Agent: " + subTaskId);
         }
-        if (!subTask.getAssignedAgent().equals(agentId)) {
+        if (!subTask.getAssignedAgentId().equals(agentId)) {
             throw new BizException("子任务分配 Agent 不匹配: subTaskId=" + subTaskId
-                    + ", assigned=" + subTask.getAssignedAgent()
+                    + ", assigned=" + subTask.getAssignedAgentId()
                     + ", commandAgent=" + agentId);
         }
         if (agentExecutionRecordService.hasPendingOrRunning(subTaskId)) {

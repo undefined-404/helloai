@@ -72,7 +72,7 @@ public class ReviewController {
         ReviewResponse response = new ReviewResponse();
         response.setId(record.getId());
         response.setSubTaskId(record.getSubTaskId());
-        response.setReviewerAgent(record.getReviewerAgent());
+        response.setReviewerAgent(record.getReviewerAgentId());
         response.setResult(record.getResult());
         response.setScore(record.getScore());
         response.setIssues(record.getIssues());

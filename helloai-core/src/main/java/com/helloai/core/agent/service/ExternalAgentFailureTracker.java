@@ -154,7 +154,7 @@ public class ExternalAgentFailureTracker {
         }
         OffsetDateTime cooldownCutoff = OffsetDateTime.now()
                 .minusMinutes(properties.getCooldownMinutes());
-        OffsetDateTime lastFallbackAt = agent.getLastFallbackAt();
+        OffsetDateTime lastFallbackAt = agent.getLastFallbackTime();
         return lastFallbackAt == null || lastFallbackAt.isBefore(cooldownCutoff);
     }
 

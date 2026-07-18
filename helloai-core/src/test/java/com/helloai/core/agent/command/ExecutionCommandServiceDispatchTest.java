@@ -90,7 +90,7 @@ class ExecutionCommandServiceDispatchTest {
         SubTask subTask = new SubTask();
         subTask.setId(SUB_TASK_ID);
         subTask.setTaskId(TASK_ID);
-        subTask.setAssignedAgent(AGENT_ID);
+        subTask.setAssignedAgentId(AGENT_ID);
         when(subTaskService.getByIdForUpdate(SUB_TASK_ID)).thenReturn(subTask);
 
         when(agentExecutionRecordService.hasPendingOrRunning(SUB_TASK_ID)).thenReturn(false);

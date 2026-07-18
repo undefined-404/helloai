@@ -29,11 +29,11 @@ import java.util.Map;
  *       与 {@code MqExecutionCommandConsumer.onMessage} 消费端 {@code objectMapper.readValue(byte[])} 对称；</li>
  *   <li>{@link #status}：PENDING / SENT / CONFIRMED / FAILED 四态（②a 三态，②b 新增 CONFIRMED），
  *       由 {@link com.helloai.common.constant.AgentCommandOutboxStatus} 约束；</li>
- *   <li>{@link #nextRetryAt}：失败后下次可扫时间，按
+ *   <li>{@link #nextRetryTime}：失败后下次可扫时间，按
  *       {@code baseBackoff * 2^retryCount} 指数退避；</li>
- *   <li>{@link #lastSentAt}（②b 新增）：最近一次成功发送给 broker 的时间，
+ *   <li>{@link #lastSentTime}（②b 新增）：最近一次成功发送给 broker 的时间，
  *       是 {@code listExpiredSentForRetry} 计算 Confirm 超时的依据；</li>
- *   <li>{@link #confirmedAt}（②b 新增）：broker ACK 回写完成时间，写入即视作 CONFIRMED。</li>
+ *   <li>{@link #confirmedTime}（②b 新增）：broker ACK 回写完成时间，写入即视作 CONFIRMED。</li>
  * </ul>
  */
 @Data
@@ -66,11 +66,11 @@ public class AgentCommandOutboxEvent extends BaseEntity {
     private Integer retryCount;
 
     /** 下一次可重试时间（指数退避）。 */
-    private OffsetDateTime nextRetryAt;
+    private OffsetDateTime nextRetryTime;
 
-    private OffsetDateTime lastSentAt;
+    private OffsetDateTime lastSentTime;
 
-    private OffsetDateTime confirmedAt;
+    private OffsetDateTime confirmedTime;
 
     /** 最后一次失败原因（成功时为空）。 */
     private String errorMsg;

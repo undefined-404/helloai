@@ -18,7 +18,7 @@
             acceptance = #{et.acceptance},
             priority = #{et.priority},
             status = #{et.status},
-            assigned_agent = #{et.assignedAgent},
+            assigned_agent_id = #{et.assignedAgentId},
             content = #{et.content},
             context = #{et.context,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
             score_factors = #{et.scoreFactors,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
@@ -26,7 +26,7 @@
             score_grade = #{et.scoreGrade},
             deadline = #{et.deadline},
             rework_count = #{et.reworkCount},
-            completed_at = #{et.completedAt},
+            complete_time = #{et.completeTime},
             version = #{et.version},
             timeout_count = #{et.timeoutCount},
             update_by = #{et.updateBy},
@@ -36,18 +36,18 @@
 
     <!--
         原子认领子任务（MCP claimSubTask 工具底层）。
-        并发安全：WHERE 条件同时检查 PENDING + assigned_agent 归属，
+        并发安全：WHERE 条件同时检查 PENDING + assigned_agent_id 归属，
         保证同一 sub_task 最多被一个 Agent 认领成功。
     -->
     <update id="claimAtomic">
         UPDATE sub_task
-        SET assigned_agent = #{agentId},
+        SET assigned_agent_id = #{agentId},
             status = 'ASSIGNED',
             version = version + 1,
             update_time = CURRENT_TIMESTAMP
         WHERE id = #{subTaskId}
           AND status = 'PENDING'
-          AND (assigned_agent IS NULL OR assigned_agent = #{agentId})
+          AND (assigned_agent_id IS NULL OR assigned_agent_id = #{agentId})
           AND deleted = 0
     </update>
 
@@ -72,7 +72,7 @@
     -->
     <select id="selectInFlightByAgent" resultType="com.helloai.core.task.entity.SubTask">
         SELECT * FROM sub_task
-        WHERE assigned_agent = #{agentId}
+        WHERE assigned_agent_id = #{agentId}
           AND status IN ('ASSIGNED', 'IN_PROGRESS', 'REWORK')
           AND deleted = 0
         ORDER BY id ASC

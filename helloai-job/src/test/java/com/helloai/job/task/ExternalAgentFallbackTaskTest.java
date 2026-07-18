@@ -218,7 +218,7 @@ class ExternalAgentFallbackTaskTest {
     private static SubTask subTask(Long id, Long agentId) {
         SubTask s = new SubTask();
         s.setId(id);
-        s.setAssignedAgent(agentId);
+        s.setAssignedAgentId(agentId);
         return s;
     }
 }

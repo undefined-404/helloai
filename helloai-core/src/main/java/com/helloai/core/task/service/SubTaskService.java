@@ -46,7 +46,7 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
 
     @Transactional(rollbackFor = Exception.class)
     public SubTask create(SubTask subTask, Long assignedAgentId) {
-        subTask.setAssignedAgent(null);
+        subTask.setAssignedAgentId(null);
         subTask.setStatus(SubTaskStatus.PENDING);
         save(subTask);
         if (assignedAgentId != null) {
@@ -91,9 +91,9 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
 
         subTask.setStatus(newStatus);
         if (newStatus == SubTaskStatus.PENDING && agentId == null) {
-            subTask.setAssignedAgent(null);
+            subTask.setAssignedAgentId(null);
         } else if (agentId != null) {
-            subTask.setAssignedAgent(agentId);
+            subTask.setAssignedAgentId(agentId);
         }
 
         boolean updated = updateById(subTask);
@@ -106,9 +106,9 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
         // v1.1: 投递收件箱通知
         sendInboxNotification(subTask, newStatus, oldStatus);
         publishAssignmentEvent(subTask, newStatus);
-        if (subTask.getAssignedAgent() != null
+        if (subTask.getAssignedAgentId() != null
                 && (newStatus == SubTaskStatus.IN_PROGRESS || newStatus == SubTaskStatus.REVIEW)) {
-            heartbeatService.active(subTask.getAssignedAgent());
+            heartbeatService.active(subTask.getAssignedAgentId());
         }
 
         log.info("子任务状态变更: subTaskId={}, from={}, to={}, agentId={}",
@@ -143,10 +143,10 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
 
         SubTaskStateMachine.validate(subTask.getStatus(), SubTaskStatus.DONE);
         subTask.setStatus(SubTaskStatus.DONE);
-        subTask.setCompletedAt(OffsetDateTime.now());
+        subTask.setCompleteTime(OffsetDateTime.now());
 
         // v1.1: 隐式评分集成
-        if (subTask.getAssignedAgent() != null) {
+        if (subTask.getAssignedAgentId() != null) {
             try {
                 List<ReviewRecord> reviews = reviewRecordMapper.selectList(
                         new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ReviewRecord>()
@@ -171,7 +171,7 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
                 // 隐式积分奖惩
                 if (scoreResult.getRewardDelta() != null && scoreResult.getRewardDelta() != 0) {
                     rewardService.addReward(
-                            subTask.getAssignedAgent(),
+                            subTask.getAssignedAgentId(),
                             "隐式评分(" + scoreResult.getGrade() + "级)",
                             scoreResult.getRewardDelta(),
                             subTaskId);
@@ -206,7 +206,7 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
      */
     private void sendInboxNotification(SubTask subTask, SubTaskStatus newStatus, SubTaskStatus oldStatus) {
         String eventId = "subtask." + subTask.getId() + "." + System.currentTimeMillis();
-        Long agentId = subTask.getAssignedAgent();
+        Long agentId = subTask.getAssignedAgentId();
         String title = subTask.getTitle();
 
         try {
@@ -275,11 +275,11 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
     }
 
     private void publishAssignmentEvent(SubTask subTask, SubTaskStatus newStatus) {
-        if (newStatus != SubTaskStatus.ASSIGNED || subTask.getAssignedAgent() == null) {
+        if (newStatus != SubTaskStatus.ASSIGNED || subTask.getAssignedAgentId() == null) {
             return;
         }
         applicationEventPublisher.publishEvent(
-                new SubTaskAssignedEvent(subTask.getId(), subTask.getAssignedAgent()));
+                new SubTaskAssignedEvent(subTask.getId(), subTask.getAssignedAgentId()));
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -290,7 +290,7 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
         subTask.setStatus(SubTaskStatus.REWORK);
         subTask.setReworkCount(subTask.getReworkCount() != null ? subTask.getReworkCount() + 1 : 1);
         if (reworkAgentId != null) {
-            subTask.setAssignedAgent(reworkAgentId);
+            subTask.setAssignedAgentId(reworkAgentId);
         }
         updateById(subTask);
         agentOutboxService.createEvent(subTask, SubTaskStatus.REWORK);
@@ -384,7 +384,7 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
         }
 
         subTask.setStatus(SubTaskStatus.PENDING);
-        subTask.setAssignedAgent(null);
+        subTask.setAssignedAgentId(null);
         boolean updated = updateById(subTask);
         if (!updated) {
             throw new BizException("并发修改，请重试");

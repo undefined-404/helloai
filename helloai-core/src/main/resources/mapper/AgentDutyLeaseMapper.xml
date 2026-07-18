@@ -33,15 +33,15 @@
 
     <!--
         AgentHub V1 T3：扫描超时未续约的 ACTIVE 租约。
-        条件：status='ACTIVE' + expires_at &lt; cutoff + 未删除。
+        条件：status='ACTIVE' + expire_time &lt; cutoff + 未删除。
         由定时任务调用，将超时租约标记为 EXPIRED。
     -->
     <select id="selectExpiredLeases" resultType="com.helloai.core.agent.entity.AgentDutyLease">
         SELECT * FROM agent_duty_lease
         WHERE status = 'ACTIVE'
-          AND expires_at &lt; #{cutoff}
+          AND expire_time &lt; #{cutoff}
           AND deleted = 0
-        ORDER BY expires_at ASC
+        ORDER BY expire_time ASC
         LIMIT #{limit}
     </select>
 

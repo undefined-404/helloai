@@ -96,7 +96,7 @@ class ExecutionCommandPollerTest {
         record.setSubTaskId(subTaskId);
         record.setAgentId(agentId);
         record.setAccessType(accessType);
-        record.setTrigger(trigger);
+        record.setTriggerType(trigger);
         record.setStatus(ExecutionStatus.PENDING);
         record.setCreateTime(OffsetDateTime.now().minusMinutes(2));
         return record;

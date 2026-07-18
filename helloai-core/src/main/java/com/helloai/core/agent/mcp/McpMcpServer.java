@@ -310,10 +310,10 @@ public class McpMcpServer {
         r.setStatus(agent.getStatus() != null ? agent.getStatus().name() : null);
         r.setDbOnlineStatus(agent.getOnlineStatus() != null ? agent.getOnlineStatus().name() : null);
         r.setComputedOnlineStatus(computed != null ? computed.name() : null);
-        r.setLastSeenAt(agent.getLastSeenAt() != null ? agent.getLastSeenAt().toString() : null);
-        r.setLastActiveAt(agent.getLastActiveAt() != null ? agent.getLastActiveAt().toString() : null);
+        r.setLastSeenAt(agent.getLastSeenTime() != null ? agent.getLastSeenTime().toString() : null);
+        r.setLastActiveAt(agent.getLastActiveTime() != null ? agent.getLastActiveTime().toString() : null);
         r.setOfflineReason(agent.getOfflineReason());
-        r.setOfflineAt(agent.getOfflineAt() != null ? agent.getOfflineAt().toString() : null);
+        r.setOfflineAt(agent.getOfflineTime() != null ? agent.getOfflineTime().toString() : null);
         r.setServerTime(java.time.OffsetDateTime.now().toString());
         return r;
     }

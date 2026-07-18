@@ -68,7 +68,7 @@ public class SubTaskController {
         var wrapper = new LambdaQueryWrapper<SubTask>()
                 .eq(taskId != null, SubTask::getTaskId, taskId)
                 .eq(statusFilter != null, SubTask::getStatus, statusFilter)
-                .eq(assignedAgent != null, SubTask::getAssignedAgent, assignedAgent)
+                .eq(assignedAgent != null, SubTask::getAssignedAgentId, assignedAgent)
                 .orderByDesc(SubTask::getCreateTime);
         List<SubTaskResponse> list = subTaskService.list(wrapper).stream().map(this::toResponse).toList();
         return R.ok(list);
@@ -167,7 +167,7 @@ public class SubTaskController {
         }
 
         // 2. assignedAgent != null
-        if (subTask.getAssignedAgent() == null) {
+        if (subTask.getAssignedAgentId() == null) {
             return R.fail("子任务未分配 Agent");
         }
 
@@ -185,7 +185,7 @@ public class SubTaskController {
         }
 
         ExecutionCommand command = executionCommandService.createAssignedCommand(
-                id, subTask.getAssignedAgent(), "admin-execute");
+                id, subTask.getAssignedAgentId(), "admin-execute");
 
         return R.ok(Map.of(
                 "recordId", command.getRecordId(),
@@ -214,7 +214,7 @@ public class SubTaskController {
     @GetMapping("/mine")
     public R<List<SubTaskResponse>> mine(@RequestParam("agentId") Long agentId) {
         var wrapper = new LambdaQueryWrapper<SubTask>()
-                .eq(SubTask::getAssignedAgent, agentId)
+                .eq(SubTask::getAssignedAgentId, agentId)
                 .orderByDesc(SubTask::getCreateTime);
         List<SubTaskResponse> list = subTaskService.list(wrapper).stream().map(this::toResponse).toList();
         return R.ok(list);
@@ -230,11 +230,11 @@ public class SubTaskController {
         response.setAcceptance(subTask.getAcceptance());
         response.setPriority(subTask.getPriority());
         response.setStatus(subTask.getStatus());
-        response.setAssignedAgent(subTask.getAssignedAgent());
+        response.setAssignedAgent(subTask.getAssignedAgentId());
         response.setContent(subTask.getContent());
         response.setReworkCount(subTask.getReworkCount());
         response.setDeadline(subTask.getDeadline());
-        response.setCompletedAt(subTask.getCompletedAt());
+        response.setCompletedAt(subTask.getCompleteTime());
         response.setCreateTime(subTask.getCreateTime());
         response.setUpdateTime(subTask.getUpdateTime());
         return response;

@@ -52,14 +52,14 @@ public class ReviewService extends ServiceImpl<ReviewRecordMapper, ReviewRecord>
             throw new BizException("子任务状态为 " + subTask.getStatus() + "，只有 REVIEW 状态才能审查");
         }
 
-        Long executorAgentId = subTask.getAssignedAgent();
+        Long executorAgentId = subTask.getAssignedAgentId();
 
         long round = count(new LambdaQueryWrapper<ReviewRecord>()
                 .eq(ReviewRecord::getSubTaskId, subTaskId)) + 1;
 
         ReviewRecord record = new ReviewRecord();
         record.setSubTaskId(subTaskId);
-        record.setReviewerAgent(reviewerAgentId);
+        record.setReviewerAgentId(reviewerAgentId);
         record.setResult(result);
         record.setScore(score);
         record.setIssues(issues);

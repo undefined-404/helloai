@@ -95,13 +95,13 @@ public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, Age
         lease.setWorkMode(workMode);
         lease.setMaxConcurrent(maxConcurrent != null ? maxConcurrent : 1);
         lease.setStatus(AgentDutyLeaseStatus.ACTIVE);
-        lease.setStartedAt(now);
-        lease.setLastRenewedAt(now);
-        lease.setExpiresAt(now.plusMinutes(ttlMinutes));
+        lease.setStartTime(now);
+        lease.setLastRenewTime(now);
+        lease.setExpireTime(now.plusMinutes(ttlMinutes));
         save(lease);
 
         log.info("Agent {} 值班租约已创建: sessionId={}, expiresAt={}",
-                agentId, lease.getSessionId(), lease.getExpiresAt());
+                agentId, lease.getSessionId(), lease.getExpireTime());
         return lease;
     }
 
@@ -149,10 +149,10 @@ public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, Age
             return null;
         }
         OffsetDateTime now = OffsetDateTime.now();
-        active.setLastRenewedAt(now);
-        active.setExpiresAt(now.plusMinutes(ttlMinutes));
+        active.setLastRenewTime(now);
+        active.setExpireTime(now.plusMinutes(ttlMinutes));
         updateById(active);
-        log.info("Agent {} 值班租约已续约: expiresAt={}", agentId, active.getExpiresAt());
+        log.info("Agent {} 值班租约已续约: expiresAt={}", agentId, active.getExpireTime());
         return active;
     }
 
@@ -188,7 +188,7 @@ public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, Age
             if (rows > 0) {
                 total += rows;
                 log.info("值班租约到期已翻为 EXPIRED: agentId={}, leaseId={}, expiresAt={}",
-                        lease.getAgentId(), lease.getId(), lease.getExpiresAt());
+                        lease.getAgentId(), lease.getId(), lease.getExpireTime());
                 // 租约到期 → 事务提交后主动断门铃（与 checkOut 同一条断连路径）
                 eventPublisher.publishEvent(new DutyLeaseClosedEvent(lease.getAgentId(), "lease_expired"));
             }
@@ -213,7 +213,7 @@ public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, Age
         LambdaQueryWrapper<AgentDutyLease> wrapper = new LambdaQueryWrapper<AgentDutyLease>()
                 .eq(agentId != null, AgentDutyLease::getAgentId, agentId)
                 .eq(status != null, AgentDutyLease::getStatus, status)
-                .orderByDesc(AgentDutyLease::getStartedAt);
+                .orderByDesc(AgentDutyLease::getStartTime);
         return page(new Page<>(pageNum, pageSize), wrapper);
     }
 

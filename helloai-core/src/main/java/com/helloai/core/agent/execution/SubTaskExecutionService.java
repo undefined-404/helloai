@@ -148,18 +148,18 @@ public class SubTaskExecutionService {
         if (subTask == null) {
             throw new BizException("子任务不存在: " + command.getSubTaskId());
         }
-        if (subTask.getAssignedAgent() == null) {
+        if (subTask.getAssignedAgentId() == null) {
             throw new BizException("子任务未分配 Agent: " + command.getSubTaskId());
         }
 
-        if (!command.getAgentId().equals(subTask.getAssignedAgent())) {
+        if (!command.getAgentId().equals(subTask.getAssignedAgentId())) {
             throw new BizException("命令 Agent 与子任务分配 Agent 不匹配: command="
-                    + command.getAgentId() + ", assigned=" + subTask.getAssignedAgent());
+                    + command.getAgentId() + ", assigned=" + subTask.getAssignedAgentId());
         }
 
-        Agent agent = agentService.getById(subTask.getAssignedAgent());
+        Agent agent = agentService.getById(subTask.getAssignedAgentId());
         if (agent == null) {
-            throw new BizException("Agent 不存在: " + subTask.getAssignedAgent());
+            throw new BizException("Agent 不存在: " + subTask.getAssignedAgentId());
         }
 
         // 状态推进前置
@@ -195,7 +195,7 @@ public class SubTaskExecutionService {
         dbg("sub_task_execute_enter", safeMap(
                 "subTaskId", subTaskId,
                 "status", subTask.getStatus() != null ? subTask.getStatus().name() : null,
-                "assignedAgent", subTask.getAssignedAgent(),
+                "assignedAgent", subTask.getAssignedAgentId(),
                 "agentAccessType", agent.getAccessType() != null ? agent.getAccessType().name() : null,
                 "agentOnlineStatus", agent.getOnlineStatus() != null ? agent.getOnlineStatus().name() : null
         ));

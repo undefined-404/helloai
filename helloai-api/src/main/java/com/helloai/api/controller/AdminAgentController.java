@@ -85,8 +85,8 @@ public class AdminAgentController {
             vo.setRank(agentService.scoreRank(a.getId()));
             vo.setCreatedAt(a.getCreateTime());
             // v2.5.x #9 enrichment 字段映射补齐：last_seen_at/last_active_at → lastRequestAt/lastActivityAt
-            vo.setLastRequestAt(a.getLastSeenAt());
-            vo.setLastActivityAt(a.getLastActiveAt());
+            vo.setLastRequestAt(a.getLastSeenTime());
+            vo.setLastActivityAt(a.getLastActiveTime());
 
             return vo;
         }));
@@ -121,8 +121,8 @@ public class AdminAgentController {
         vo.setRank(agentService.scoreRank(id));
         vo.setCreatedAt(agent.getCreateTime());
         // v2.5.x #9 enrichment 字段映射补齐：last_seen_at/last_active_at → lastRequestAt/lastActivityAt
-        vo.setLastRequestAt(agent.getLastSeenAt());
-        vo.setLastActivityAt(agent.getLastActiveAt());
+        vo.setLastRequestAt(agent.getLastSeenTime());
+        vo.setLastActivityAt(agent.getLastActiveTime());
 
         // 统计奖励/惩罚次数
         vo.setTotalAgents( Integer.parseInt(agentService.lambdaQuery().count().toString()));

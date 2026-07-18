@@ -65,7 +65,7 @@ public class AdminDashboardController {
                 new LambdaQueryWrapper<SubTask>().eq(SubTask::getStatus, SubTaskStatus.REVIEW).eq(SubTask::getDeleted, 0)));
         overview.setTodayCompleted(subTaskMapper.selectCount(
                 new LambdaQueryWrapper<SubTask>()
-                        .ge(SubTask::getCompletedAt, todayStart)
+                        .ge(SubTask::getCompleteTime, todayStart)
                         .eq(SubTask::getStatus, SubTaskStatus.DONE)
                         .eq(SubTask::getDeleted, 0)));
         overview.setTodayCreated(taskMapper.selectCount(
@@ -117,8 +117,8 @@ public class AdminDashboardController {
             item.setSubTaskId(st.getId());
             item.setSubTaskTitle(st.getTitle());
             item.setPriority(st.getPriority());
-            if (st.getAssignedAgent() != null) {
-                Agent agent = agentMapper.selectById(st.getAssignedAgent());
+            if (st.getAssignedAgentId() != null) {
+                Agent agent = agentMapper.selectById(st.getAssignedAgentId());
                 if (agent != null) {
                     item.setAssignedAgent(agent.getName());
                 }
@@ -137,7 +137,7 @@ public class AdminDashboardController {
             item.setRole(agent.getRole().name());
             long taskCount = subTaskMapper.selectCount(
                     new LambdaQueryWrapper<SubTask>()
-                            .eq(SubTask::getAssignedAgent, agent.getId())
+                            .eq(SubTask::getAssignedAgentId, agent.getId())
                             .ge(SubTask::getCreateTime, sevenDaysAgo)
                             .eq(SubTask::getDeleted, 0));
             item.setTaskCount((int) taskCount);
@@ -177,8 +177,8 @@ public class AdminDashboardController {
                             .eq(Task::getDeleted, 0)));
             completedCounts.add(subTaskMapper.selectCount(
                     new LambdaQueryWrapper<SubTask>()
-                            .ge(SubTask::getCompletedAt, dayStart)
-                            .lt(SubTask::getCompletedAt, dayEnd)
+                            .ge(SubTask::getCompleteTime, dayStart)
+                            .lt(SubTask::getCompleteTime, dayEnd)
                             .eq(SubTask::getStatus, SubTaskStatus.DONE)
                             .eq(SubTask::getDeleted, 0)));
             reviewedCounts.add(subTaskMapper.selectCount(

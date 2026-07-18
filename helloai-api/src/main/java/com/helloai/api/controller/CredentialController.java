@@ -64,7 +64,7 @@ public class CredentialController {
         resp.setProvider(vault.getProvider());
         resp.setCredentialType(vault.getCredentialType() != null ? vault.getCredentialType().name() : null);
         resp.setStatus(vault.getStatus() != null ? vault.getStatus().name() : null);
-        resp.setExpiresAt(vault.getExpiresAt());
+        resp.setExpiresAt(vault.getExpireTime());
         resp.setHasEncryptedValue(vault.getEncryptedValue() != null && !vault.getEncryptedValue().isBlank());
         resp.setHasSecretRef(vault.getSecretRef() != null && !vault.getSecretRef().isBlank());
         resp.setCreateTime(vault.getCreateTime());

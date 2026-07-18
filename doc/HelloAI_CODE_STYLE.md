@@ -2,9 +2,9 @@
 
 > 适用项目：HelloAI（AI Agent 协作调度平台）  
 > 生效范围：后端单体服务 + 前端管理后台（Vue 3 / Element Plus）  
-> 版本：V1.2  
-> 最后更新：2026-07-09  
-> 本版重点：对齐当前仓库真实版本、端口、初始化方式、DTO 规则、分页写法与依赖注入示例；补充“每次改代码前必须先对照本规范”的使用要求
+> 版本：V1.3  
+> 最后更新：2026-07-18  
+> 本版重点：第 8 章追加 8.5 节"字段命名强制规则"（V23 字段命名规范化迁移配套规范，明确 xxx_time / xxx_id / xxx_count 命名与 PG RENAME COLUMN 实施要点）
 > 致敬：Hello World! —— 每一位程序员的第一行代码
 ---
 
@@ -963,6 +963,29 @@ CREATE TRIGGER update_sub_task_update_time BEFORE UPDATE ON sub_task
 - 仅保留一个迁移文件，确保新环境启动时一次执行完毕，避免多版本迁移的 checksum 冲突
 - `application.yml` 中 Flyway 配置只保留 `enabled: true` + `locations`，**不加** `baseline-on-migrate` 和 `repair-on-migrate`
 - 所有 DDL 必须使用 `IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` / `ON CONFLICT DO NOTHING` 等幂等语法，确保重复执行不报错
+
+### 8.5 字段命名强制规则
+
+> 来源：V23 字段命名规范化迁移（`helloai-start/src/main/resources/db/migration/V23__field_naming_normalization.sql`，2026-07-18 落地 20 列）。
+> 本节是字段命名的"唯一权威"，与本规范 8.1～8.4 冲突时以本节为准。
+
+| 类别 | 强制规则 |
+|------|----------|
+| 时间字段 | 一律 `xxx_time`（对齐 `create_time` / `update_time`），**禁止** `_at` 后缀；DATE 类型一律 `xxx_date` |
+| 外键 / ID 引用 | 一律 `xxx_id`；同一 ID 多角色引用必须加角色前缀：`assigned_agent_id`、`reviewer_agent_id`、`patrol_agent_id` |
+| 状态字段 | `varchar` + 枚举字符串（不使用数字枚举） |
+| 计量字段 | 一律 `xxx_count`（如 `consecutive_failure_count`、`timeout_count`），**禁止** `total_xxx` / `num_xxx` 混用 |
+| 关键字 | 列名必须避开数据库关键字（`trigger` / `order` / `level` / `user` 等）；无法避开时使用 `xxx_type` / `xxx_source` 形式（如 `trigger_type`） |
+| 主键 | 新增表主键一律 `BIGINT` + 应用层雪花 ID，**禁止**新增 `bigserial` 自增主键 |
+
+实施要点：
+
+1. **DB 列改名后 Java 字段必须同步改名**——项目采用 `map-underscore-to-camel-case: true`，不能靠 `@TableField(value="旧列名")` 挂旧名。
+2. **DTO 字段保持稳定**——API 契约不因 entity 改名而变；`AgentResponse.lastSeenAt`、`SubTaskResponse.assignedAgent` 等仍保留旧名，entity→DTO 装配点显式 `response.setXxx(entity.getNewName())`。
+3. **MyBatis-Plus 自定义 XML 需手改两处**：SQL 裸列名 + `#{et.xxx}` OGNL 引用（IDEA Rename Field **不会**联动）。
+4. **Java 端裸列名 UpdateWrapper 字符串**也需手改（项目内唯一已知位置：`AgentHealthCheckTask` L138-139 UpdateWrapper）。
+5. **PG `RENAME COLUMN` 自动更新**引用该列的索引 / 约束定义，本项目 4 个索引（`idx_agent_command_outbox_pending_scan` / `idx_agent_command_outbox_sent_scan` / `idx_exec_record_pending_attempt` / `idx_agent_external_failure_scan`）无需重建；列注释随列保留。
+6. **多版本迁移文件存在例外**：仓库实际已存在 `V1`～`V23` 多版本迁移文件，`8.4` 关于"禁止 V_NN"的描述与代码事实冲突；新增表 / 加字段 / 索引 / 种子数据追加到 `V1__init_all.sql` 仍然有效，但字段命名规范化、跨表结构调整等"演进型变更"应走新的 `V_NN__<用途>.sql` 迁移文件并保持 `IF NOT EXISTS` 等幂等语法。
 
 ---
 

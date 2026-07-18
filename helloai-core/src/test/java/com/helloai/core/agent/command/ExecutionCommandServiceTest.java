@@ -87,7 +87,7 @@ class ExecutionCommandServiceTest {
         SubTask subTask = new SubTask();
         subTask.setId(22L);
         subTask.setTaskId(33L);
-        subTask.setAssignedAgent(11L);
+        subTask.setAssignedAgentId(11L);
 
         Agent agent = new Agent();
         agent.setId(11L);
@@ -141,7 +141,7 @@ class ExecutionCommandServiceTest {
         SubTask subTask = new SubTask();
         subTask.setId(22L);
         subTask.setTaskId(33L);
-        subTask.setAssignedAgent(11L);
+        subTask.setAssignedAgentId(11L);
 
         Agent agent = new Agent();
         agent.setId(11L);
@@ -176,7 +176,7 @@ class ExecutionCommandServiceTest {
         SubTask subTask = new SubTask();
         subTask.setId(22L);
         subTask.setTaskId(33L);
-        subTask.setAssignedAgent(11L);
+        subTask.setAssignedAgentId(11L);
 
         Agent agent = new Agent();
         agent.setId(11L);
@@ -214,7 +214,7 @@ class ExecutionCommandServiceTest {
         SubTask subTask = new SubTask();
         subTask.setId(22L);
         subTask.setTaskId(33L);
-        subTask.setAssignedAgent(11L);
+        subTask.setAssignedAgentId(11L);
 
         Agent agent = new Agent();
         agent.setId(11L);
@@ -237,7 +237,7 @@ class ExecutionCommandServiceTest {
         SubTask subTask = new SubTask();
         subTask.setId(22L);
         subTask.setTaskId(33L);
-        subTask.setAssignedAgent(11L);
+        subTask.setAssignedAgentId(11L);
 
         Agent agent = new Agent();
         agent.setId(11L);

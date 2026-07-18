@@ -67,8 +67,8 @@ public class DashboardController {
             OffsetDateTime dayEnd = dayStart.plusDays(1);
             long count = subTaskMapper.selectCount(
                     new LambdaQueryWrapper<SubTask>()
-                            .ge(SubTask::getCompletedAt, dayStart)
-                            .lt(SubTask::getCompletedAt, dayEnd)
+                            .ge(SubTask::getCompleteTime, dayStart)
+                            .lt(SubTask::getCompleteTime, dayEnd)
                             .eq(SubTask::getStatus, SubTaskStatus.DONE)
                             .eq(SubTask::getDeleted, 0));
             throughput.add(Map.of("date", dayStart.format(fmt), "count", count));
