@@ -4,7 +4,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentProviderProperties;
 import com.helloai.core.agent.chat.ProviderChatClientFactory;
 import com.helloai.core.agent.chat.ProviderChatModelCache;
-import com.helloai.core.entity.Agent;
+import com.helloai.core.agent.entity.Agent;
 import io.micrometer.observation.ObservationRegistry;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.client.ChatClient;

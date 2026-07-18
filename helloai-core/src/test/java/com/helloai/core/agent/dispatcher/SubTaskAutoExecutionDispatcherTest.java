@@ -2,9 +2,9 @@ package com.helloai.core.agent.dispatcher;
 
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
-import com.helloai.core.entity.Agent;
-import com.helloai.core.entity.SubTask;
-import com.helloai.core.event.SubTaskAssignedEvent;
+import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.shared.event.SubTaskAssignedEvent;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -16,9 +16,9 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import com.helloai.core.agent.command.ExecutionCommandService;
-import com.helloai.core.service.AgentService;
-import com.helloai.core.service.SubTaskService;
-import com.helloai.core.service.TaskTimelineService;
+import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskTimelineService;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("SubTaskAutoExecutionDispatcher")

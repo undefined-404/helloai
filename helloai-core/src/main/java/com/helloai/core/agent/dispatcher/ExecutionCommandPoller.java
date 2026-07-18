@@ -6,8 +6,8 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.mqconsumer.ExecutionCommandConsumer;
 import com.helloai.core.agent.mqconsumer.LocalExecutionCommandConsumer;
-import com.helloai.core.entity.AgentExecutionRecord;
-import com.helloai.core.entity.SubTask;
+import com.helloai.core.agent.entity.AgentExecutionRecord;
+import com.helloai.core.task.entity.SubTask;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -16,9 +16,9 @@ import org.springframework.stereotype.Component;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import com.helloai.core.service.AgentExecutionRecordService;
-import com.helloai.core.service.SubTaskService;
-import com.helloai.core.service.TaskTimelineService;
+import com.helloai.core.agent.service.AgentExecutionRecordService;
+import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskTimelineService;
 
 /**
  * 执行命令 DB Poller 兜底扫描器。

@@ -1,9 +1,9 @@
-package com.helloai.core.doorbell;
+package com.helloai.core.shared.doorbell;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.DoorbellProperties;
-import com.helloai.core.observability.HeartbeatService;
-import com.helloai.core.service.AgentDutyLeaseService;
+import com.helloai.core.agent.observability.HeartbeatService;
+import com.helloai.core.agent.service.AgentDutyLeaseService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

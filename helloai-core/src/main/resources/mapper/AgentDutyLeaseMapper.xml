@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="com.helloai.core.mapper.AgentDutyLeaseMapper">
+<mapper namespace="com.helloai.core.agent.mapper.AgentDutyLeaseMapper">
 
     <!--
         AgentHub V1 T3：查询 Agent 当前有效的值班租约。
         条件：agent_id 匹配 + status='ACTIVE' + 未删除，
         按 create_time 倒序取最新一条（防御性：理论上只有一条 ACTIVE）。
     -->
-    <select id="selectActiveByAgentId" resultType="com.helloai.core.entity.AgentDutyLease">
+    <select id="selectActiveByAgentId" resultType="com.helloai.core.agent.entity.AgentDutyLease">
         SELECT * FROM agent_duty_lease
         WHERE agent_id = #{agentId}
           AND status = 'ACTIVE'
@@ -36,7 +36,7 @@
         条件：status='ACTIVE' + expires_at &lt; cutoff + 未删除。
         由定时任务调用，将超时租约标记为 EXPIRED。
     -->
-    <select id="selectExpiredLeases" resultType="com.helloai.core.entity.AgentDutyLease">
+    <select id="selectExpiredLeases" resultType="com.helloai.core.agent.entity.AgentDutyLease">
         SELECT * FROM agent_duty_lease
         WHERE status = 'ACTIVE'
           AND expires_at &lt; #{cutoff}

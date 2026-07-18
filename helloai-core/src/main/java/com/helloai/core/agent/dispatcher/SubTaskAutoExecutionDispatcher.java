@@ -2,9 +2,9 @@ package com.helloai.core.agent.dispatcher;
 
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
-import com.helloai.core.entity.Agent;
-import com.helloai.core.entity.SubTask;
-import com.helloai.core.event.SubTaskAssignedEvent;
+import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.shared.event.SubTaskAssignedEvent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -22,9 +22,9 @@ import java.nio.file.Path;
 import java.util.Map;
 import java.util.HashMap;
 import com.helloai.core.agent.command.ExecutionCommandService;
-import com.helloai.core.service.AgentService;
-import com.helloai.core.service.SubTaskService;
-import com.helloai.core.service.TaskTimelineService;
+import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskTimelineService;
 
 /**
  * 子任务自动执行命令派发器。

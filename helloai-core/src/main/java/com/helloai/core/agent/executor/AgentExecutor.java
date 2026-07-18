@@ -2,7 +2,7 @@ package com.helloai.core.agent.executor;
 
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
-import com.helloai.core.entity.Agent;
+import com.helloai.core.agent.entity.Agent;
 
 import java.util.Map;
 import java.util.Objects;

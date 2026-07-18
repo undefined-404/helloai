@@ -2,8 +2,8 @@ package com.helloai.api.controller;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.base.R;
-import com.helloai.core.service.McpToolService;
-import com.helloai.core.service.McpToolService.*;
+import com.helloai.core.agent.mcp.McpToolService;
+import com.helloai.core.agent.mcp.McpToolService.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -25,8 +25,8 @@ import java.util.Map;
  *   <li>调用工具：{@code POST /mcp/messages?sessionId=xxx} body=JSON-RPC 2.0 {@code tools/call}（带 {@code Authorization: Bearer <apiKey>}）</li>
  *   <li>响应：通过 SSE 长连接异步推回（data: {"jsonrpc":"2.0","id":..,"result":..}）</li>
  * </ul>
- * 鉴权从 {@link com.helloai.core.mcp.McpAuthFilter McpAuthFilter} 接入（POST /mcp/messages）。<br>
- * 业务实现：{@link com.helloai.core.mcp.McpMcpServer}（spring-ai {@code @Tool} 注解方法）。<br>
+ * 鉴权从 {@link com.helloai.core.agent.mcp.McpAuthFilter McpAuthFilter} 接入（POST /mcp/messages）。<br>
+ * 业务实现：{@link com.helloai.core.agent.mcp.McpMcpServer}（spring-ai {@code @Tool} 注解方法）。<br>
  * 本类仅作为兼容旧客户端保留，<b>不再演进</b>，预计下个大版本移除。
  *
  * @deprecated since 2.4 — 改用 spring-ai MCP Server SSE 通道（{@code /mcp/sse} + {@code /mcp/messages}）

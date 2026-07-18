@@ -1,6 +1,6 @@
 package com.helloai.job.task;
 
-import com.helloai.core.service.AgentDutyLeaseService;
+import com.helloai.core.agent.service.AgentDutyLeaseService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;

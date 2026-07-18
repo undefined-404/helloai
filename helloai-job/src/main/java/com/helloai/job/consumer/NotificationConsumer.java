@@ -1,7 +1,7 @@
 package com.helloai.job.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.helloai.core.service.AgentInboxService;
+import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.mq.config.RabbitMQConfig;
 import com.helloai.mq.consumer.AbstractIdempotentConsumer;
 import com.helloai.mq.service.MessageDeduplicationService;

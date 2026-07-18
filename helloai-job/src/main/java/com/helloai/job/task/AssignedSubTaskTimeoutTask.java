@@ -1,11 +1,11 @@
 package com.helloai.job.task;
 
 import com.helloai.common.constant.AgentRole;
-import com.helloai.core.entity.Agent;
-import com.helloai.core.entity.SubTask;
-import com.helloai.core.mapper.SubTaskMapper;
-import com.helloai.core.service.AgentService;
-import com.helloai.core.service.SubTaskDispatchService;
+import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.mapper.SubTaskMapper;
+import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.task.service.SubTaskDispatchService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;

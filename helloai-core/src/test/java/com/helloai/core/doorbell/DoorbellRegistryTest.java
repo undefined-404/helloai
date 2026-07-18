@@ -1,4 +1,4 @@
-package com.helloai.core.doorbell;
+package com.helloai.core.shared.doorbell;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

@@ -1,6 +1,6 @@
 package com.helloai.api.controller;
 
-import com.helloai.core.doorbell.DoorbellService;
+import com.helloai.core.shared.doorbell.DoorbellService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;

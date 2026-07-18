@@ -6,8 +6,8 @@ import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.domain.ExecutionCommand;
-import com.helloai.core.entity.Agent;
-import com.helloai.core.entity.SubTask;
+import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.task.entity.SubTask;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -24,9 +24,9 @@ import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import com.helloai.core.agent.command.ExecutionResultHandler;
-import com.helloai.core.service.AgentService;
-import com.helloai.core.service.SubTaskService;
-import com.helloai.core.service.TaskTimelineService;
+import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskTimelineService;
 
 @Slf4j
 @Service

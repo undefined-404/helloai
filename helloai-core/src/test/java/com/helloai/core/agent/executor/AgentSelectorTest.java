@@ -5,8 +5,8 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.config.AgentDispatchProperties;
-import com.helloai.core.entity.Agent;
-import com.helloai.core.entity.AgentDutyLease;
+import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.entity.AgentDutyLease;
 import com.helloai.common.constant.AgentDutyLeaseStatus;
 import com.helloai.common.constant.WorkMode;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
@@ -28,8 +28,8 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import com.helloai.core.service.AgentService;
-import com.helloai.core.service.AgentDutyLeaseService;
+import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.agent.service.AgentDutyLeaseService;
 
 /**
  * AgentSelector 单元测试（v2.4 §4.10）。

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="com.helloai.core.mapper.SubTaskMapper">
+<mapper namespace="com.helloai.core.task.mapper.SubTaskMapper">
 
     <!--
         覆盖 BaseMapper.updateById：PostgreSQL 的 JSONB 列不接受未指定类型的字符串参数，
@@ -9,7 +9,7 @@
         注意：MyBatis-Plus updateById 的入参被包装为 @Param("et")，所有实体字段需通过 et.xxx 访问；
               @Param("MP_OPTLOCK_VERSION_ORIGINAL") 是乐观锁拦截器附加参数。
     -->
-    <update id="updateById" parameterType="com.helloai.core.entity.SubTask">
+    <update id="updateById" parameterType="com.helloai.core.task.entity.SubTask">
         UPDATE sub_task
         SET task_id = #{et.taskId},
             module_id = #{et.moduleId},
@@ -70,7 +70,7 @@
         供 ExternalAgentFallbackTask 触发重新分发时使用。
         只返回仍在跑（未结束、未取消）的子任务。
     -->
-    <select id="selectInFlightByAgent" resultType="com.helloai.core.entity.SubTask">
+    <select id="selectInFlightByAgent" resultType="com.helloai.core.task.entity.SubTask">
         SELECT * FROM sub_task
         WHERE assigned_agent = #{agentId}
           AND status IN ('ASSIGNED', 'IN_PROGRESS', 'REWORK')
@@ -84,7 +84,7 @@
         用于 AssignedSubTaskTimeoutTask 回收长时间无人 claim 的子任务。
         按 update_time 升序（最早超时的优先处理），limit 防止单轮扫描过多。
     -->
-    <select id="selectTimedOutAssigned" resultType="com.helloai.core.entity.SubTask">
+    <select id="selectTimedOutAssigned" resultType="com.helloai.core.task.entity.SubTask">
         SELECT * FROM sub_task
         WHERE status = 'ASSIGNED'
           AND update_time &lt; #{deadline}

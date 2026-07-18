@@ -1,8 +1,8 @@
 package com.helloai.job.task;
 
 import com.helloai.common.constant.OutboxStatus;
-import com.helloai.core.entity.AgentOutboxEvent;
-import com.helloai.core.service.AgentOutboxService;
+import com.helloai.core.agent.entity.AgentOutboxEvent;
+import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.mq.config.RabbitMQConfig;
 import com.helloai.mq.producer.DomainEventPublisher;
 import lombok.RequiredArgsConstructor;

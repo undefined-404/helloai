@@ -260,6 +260,24 @@ helloai-start/src/main/resources/
 
 > **强制**: 所有资源文件**必须通过 `ClassPathResource` 读取**，禁止硬编码绝对路径。
 
+### 3.x 业务域分包规则
+
+core 模块统一采用"业务域分包 + 域内技术分层"，禁止新增顶层 entity/mapper/service 平铺包：
+
+- com.helloai.core.agent   智能体域（注册、调度、执行、对话、MCP、可观测）
+- com.helloai.core.task    任务域（任务、子任务、评审、评分、时间线、状态机）
+- com.helloai.core.system  系统支撑域（用户、配置、规则、模块、凭据、附件）
+- com.helloai.core.shared  跨域基础设施（event、doorbell）
+
+每个域内固定子包：entity / mapper / service；按域需要可扩展（chat、command、dispatcher 等）。
+
+语义边界（强制）：
+- xxx.entity = 映射数据库表的持久化实体
+- xxx.domain = 不映射表的纯内存领域对象/值对象（如 ExecutionCommand、AgentTask）
+
+新增类的放置判断：先问"它服务哪个业务域"，再问"它在域内承担什么技术角色"。
+跨域通用设施才允许放 shared，放 shared 前需在提交说明中写明理由。
+
 ---
 
 ## 4. 命名规范

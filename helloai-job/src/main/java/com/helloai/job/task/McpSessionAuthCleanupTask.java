@@ -1,6 +1,6 @@
 package com.helloai.job.task;
 
-import com.helloai.core.mcp.McpAuthContext;
+import com.helloai.core.agent.mcp.McpAuthContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;

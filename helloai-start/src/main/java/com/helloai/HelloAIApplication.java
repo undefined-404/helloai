@@ -10,7 +10,11 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication(scanBasePackages = "com.helloai")
 @EnableConfigurationProperties(AgentProviderProperties.class)
-@MapperScan("com.helloai.core.mapper")
+@MapperScan({
+        "com.helloai.core.agent.mapper",
+        "com.helloai.core.task.mapper",
+        "com.helloai.core.system.mapper"
+})
 @EnableScheduling
 @EnableAsync(proxyTargetClass = true)
 public class HelloAIApplication {

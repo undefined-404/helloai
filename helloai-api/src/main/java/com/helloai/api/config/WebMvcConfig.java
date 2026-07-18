@@ -2,8 +2,8 @@ package com.helloai.api.config;
 
 import com.helloai.api.interceptor.AuthInterceptor;
 import com.helloai.api.interceptor.RequestLogInterceptor;
-import com.helloai.core.mapper.RequestLogMapper;
-import com.helloai.core.service.AuthService;
+import com.helloai.core.system.mapper.RequestLogMapper;
+import com.helloai.core.system.service.AuthService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;

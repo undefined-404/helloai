@@ -1,6 +1,6 @@
 package com.helloai.core.agent.chat;
 
-import com.helloai.core.entity.Agent;
+import com.helloai.core.agent.entity.Agent;
 
 /**
  * Provider 和 Model 解析工具。

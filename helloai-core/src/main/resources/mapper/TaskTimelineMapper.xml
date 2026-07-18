@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="com.helloai.core.mapper.TaskTimelineMapper">
+<mapper namespace="com.helloai.core.task.mapper.TaskTimelineMapper">
 
     <!--
         覆盖 BaseMapper.insert：PostgreSQL 的 JSONB 列不接受未指定类型的字符串参数，
@@ -8,7 +8,7 @@
         解决 TaskTimelineService.recordEvent() 写入 payload 时的
         "column payload is of type jsonb but expression is of type character varying" 错误。
     -->
-    <insert id="insert" parameterType="com.helloai.core.entity.TaskTimeline">
+    <insert id="insert" parameterType="com.helloai.core.task.entity.TaskTimeline">
         INSERT INTO task_timeline (
             id, task_id, sub_task_id, event_type, role, agent_id, payload,
             deleted, create_by, update_by, create_time, update_time, remark

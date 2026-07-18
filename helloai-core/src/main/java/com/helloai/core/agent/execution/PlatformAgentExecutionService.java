@@ -6,7 +6,7 @@ import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.executor.AgentExecutor;
 import com.helloai.core.agent.executor.AgentExecutorRouter;
-import com.helloai.core.entity.Agent;
+import com.helloai.core.agent.entity.Agent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -20,8 +20,8 @@ import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.Map;
-import com.helloai.core.observability.HeartbeatService;
-import com.helloai.core.service.AgentService;
+import com.helloai.core.agent.observability.HeartbeatService;
+import com.helloai.core.agent.service.AgentService;
 
 /**
  * 平台内 Agent 执行入口。
