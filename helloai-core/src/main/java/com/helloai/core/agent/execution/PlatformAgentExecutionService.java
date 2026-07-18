@@ -6,7 +6,7 @@ import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.executor.AgentExecutor;
 import com.helloai.core.agent.executor.AgentExecutorRouter;
-import com.helloai.core.entity.Agent;
+import com.helloai.core.agent.entity.Agent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;

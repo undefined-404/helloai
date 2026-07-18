@@ -4,7 +4,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
-import com.helloai.core.entity.Agent;
+import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.observability.HeartbeatService;
 import com.helloai.core.service.McpToolService;

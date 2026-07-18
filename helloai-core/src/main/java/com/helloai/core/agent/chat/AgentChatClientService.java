@@ -4,7 +4,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.core.agent.chat.AgentProviderResolver;
 import com.helloai.core.agent.chat.ProviderChatClientFactory;
-import com.helloai.core.entity.Agent;
+import com.helloai.core.agent.entity.Agent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.ai.chat.client.ChatClient;

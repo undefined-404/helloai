@@ -2,7 +2,7 @@ package com.helloai.api.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.helloai.common.base.R;
-import com.helloai.core.entity.Rule;
+import com.helloai.core.system.entity.Rule;
 import com.helloai.core.system.service.RuleService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

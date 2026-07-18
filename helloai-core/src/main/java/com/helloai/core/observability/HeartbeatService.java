@@ -2,8 +2,8 @@ package com.helloai.core.observability;
 
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentStatus;
-import com.helloai.core.entity.Agent;
-import com.helloai.core.mapper.AgentMapper;
+import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.mapper.AgentMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;

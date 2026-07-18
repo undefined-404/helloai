@@ -1,7 +1,7 @@
 package com.helloai.core.util;
 
 import com.helloai.common.constant.AgentAccessType;
-import com.helloai.core.entity.Agent;
+import com.helloai.core.agent.entity.Agent;
 
 import java.util.HashMap;
 import java.util.List;

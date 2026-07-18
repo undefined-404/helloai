@@ -5,7 +5,7 @@ import com.helloai.api.dto.auth.LoginRequest;
 import com.helloai.api.dto.auth.LoginResponse;
 import com.helloai.api.interceptor.AuthInterceptor;
 import com.helloai.common.base.R;
-import com.helloai.core.entity.Agent;
+import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.system.service.AuthService;
 import com.helloai.core.system.service.SysUserService;
 import jakarta.servlet.http.HttpServletRequest;

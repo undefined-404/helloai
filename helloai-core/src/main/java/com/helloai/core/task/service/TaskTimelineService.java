@@ -2,8 +2,8 @@ package com.helloai.core.task.service;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.constant.AgentRole;
-import com.helloai.core.entity.TaskTimeline;
-import com.helloai.core.mapper.TaskTimelineMapper;
+import com.helloai.core.task.entity.TaskTimeline;
+import com.helloai.core.task.mapper.TaskTimelineMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;

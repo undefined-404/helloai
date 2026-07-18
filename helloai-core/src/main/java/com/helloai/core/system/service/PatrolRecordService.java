@@ -1,8 +1,8 @@
 package com.helloai.core.system.service;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.helloai.core.entity.PatrolRecord;
-import com.helloai.core.mapper.PatrolRecordMapper;
+import com.helloai.core.system.entity.PatrolRecord;
+import com.helloai.core.system.mapper.PatrolRecordMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 

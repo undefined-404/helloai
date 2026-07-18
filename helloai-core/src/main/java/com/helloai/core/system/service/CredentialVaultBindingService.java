@@ -2,7 +2,7 @@ package com.helloai.core.system.service;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.crypto.CredentialCryptoService;
-import com.helloai.core.entity.CredentialVault;
+import com.helloai.core.system.entity.CredentialVault;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;

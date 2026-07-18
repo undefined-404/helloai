@@ -1,7 +1,7 @@
 package com.helloai.core.score;
 
-import com.helloai.core.entity.ReviewRecord;
-import com.helloai.core.entity.SubTask;
+import com.helloai.core.task.entity.ReviewRecord;
+import com.helloai.core.task.entity.SubTask;
 import lombok.Builder;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;

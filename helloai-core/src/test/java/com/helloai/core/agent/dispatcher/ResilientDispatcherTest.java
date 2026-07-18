@@ -6,7 +6,7 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
-import com.helloai.core.entity.Agent;
+import com.helloai.core.agent.entity.Agent;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;

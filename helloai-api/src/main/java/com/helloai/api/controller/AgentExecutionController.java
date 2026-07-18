@@ -7,7 +7,7 @@ import com.helloai.api.dto.agent.AgentExecutionPreviewResponse;
 import com.helloai.common.base.R;
 import com.helloai.core.agent.domain.AgentExecutionConnectivityResult;
 import com.helloai.core.agent.domain.AgentResult;
-import com.helloai.core.entity.Agent;
+import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.AgentExecutionConnectivityService;
 import com.helloai.core.agent.service.AgentExecutionPreviewService;
 import com.helloai.core.agent.service.AgentService;

@@ -1,8 +1,8 @@
 package com.helloai.core.agent.service;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.helloai.core.entity.AgentMcpServer;
-import com.helloai.core.mapper.AgentMcpServerMapper;
+import com.helloai.core.agent.entity.AgentMcpServer;
+import com.helloai.core.agent.mapper.AgentMcpServerMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;

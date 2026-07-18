@@ -6,7 +6,7 @@ import com.helloai.common.base.R;
 import com.helloai.common.config.AgentConfigProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
-import com.helloai.core.entity.Agent;
+import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.system.service.PromptTemplateService;
 import com.helloai.core.util.AgentCapability;

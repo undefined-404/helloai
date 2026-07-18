@@ -2,8 +2,8 @@ package com.helloai.core.system.service;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
-import com.helloai.core.entity.PromptTemplate;
-import com.helloai.core.mapper.PromptTemplateMapper;
+import com.helloai.core.system.entity.PromptTemplate;
+import com.helloai.core.system.mapper.PromptTemplateMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;

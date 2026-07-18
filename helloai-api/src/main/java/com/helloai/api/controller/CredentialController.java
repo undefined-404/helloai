@@ -4,7 +4,7 @@ import com.helloai.api.dto.credential.BindAgentApiKeyRequest;
 import com.helloai.api.dto.credential.CredentialInfoResponse;
 import com.helloai.common.base.R;
 import com.helloai.common.constant.CredentialOwnerType;
-import com.helloai.core.entity.CredentialVault;
+import com.helloai.core.system.entity.CredentialVault;
 import com.helloai.core.system.service.CredentialVaultBindingService;
 import com.helloai.core.system.service.CredentialVaultService;
 import jakarta.servlet.http.HttpServletRequest;

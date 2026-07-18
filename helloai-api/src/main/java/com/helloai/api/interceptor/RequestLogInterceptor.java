@@ -1,7 +1,7 @@
 package com.helloai.api.interceptor;
 
-import com.helloai.core.entity.RequestLog;
-import com.helloai.core.mapper.RequestLogMapper;
+import com.helloai.core.system.entity.RequestLog;
+import com.helloai.core.system.mapper.RequestLogMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.MDC;

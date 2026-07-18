@@ -1,6 +1,6 @@
 package com.helloai.core.agent.chat;
 
-import com.helloai.core.entity.Agent;
+import com.helloai.core.agent.entity.Agent;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;

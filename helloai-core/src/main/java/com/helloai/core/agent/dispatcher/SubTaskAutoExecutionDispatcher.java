@@ -2,8 +2,8 @@ package com.helloai.core.agent.dispatcher;
 
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
-import com.helloai.core.entity.Agent;
-import com.helloai.core.entity.SubTask;
+import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.event.SubTaskAssignedEvent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;

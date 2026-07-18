@@ -6,7 +6,7 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.core.agent.chat.AgentProviderResolver;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
-import com.helloai.core.entity.Agent;
+import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.chat.AgentChatClientService;
 import com.helloai.core.system.service.CredentialVaultBindingService;
 import com.fasterxml.jackson.databind.ObjectMapper;

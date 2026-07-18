@@ -10,7 +10,7 @@ import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.ExecutionCommand;
-import com.helloai.core.entity.SubTask;
+import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.command.ExecutionCommandService;
 import com.helloai.core.task.service.SubTaskDispatchService;

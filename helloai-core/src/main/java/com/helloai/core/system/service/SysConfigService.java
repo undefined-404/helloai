@@ -1,8 +1,8 @@
 package com.helloai.core.system.service;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.helloai.core.entity.SysConfig;
-import com.helloai.core.mapper.SysConfigMapper;
+import com.helloai.core.system.entity.SysConfig;
+import com.helloai.core.system.mapper.SysConfigMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;

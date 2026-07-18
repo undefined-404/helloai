@@ -1,8 +1,8 @@
 package com.helloai.core.agent.service;
 
 import com.helloai.common.config.AgentFallbackProperties;
-import com.helloai.core.entity.Agent;
-import com.helloai.core.mapper.AgentMapper;
+import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.mapper.AgentMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;

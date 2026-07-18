@@ -1,7 +1,7 @@
 package com.helloai.core.agent.executor;
 
 import com.helloai.common.base.BizException;
-import com.helloai.core.entity.Agent;
+import com.helloai.core.agent.entity.Agent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 

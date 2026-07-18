@@ -1,10 +1,10 @@
 package com.helloai.core.system.service;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.helloai.core.entity.Module;
-import com.helloai.core.entity.Task;
-import com.helloai.core.mapper.ModuleMapper;
-import com.helloai.core.mapper.TaskMapper;
+import com.helloai.core.system.entity.Module;
+import com.helloai.core.task.entity.Task;
+import com.helloai.core.system.mapper.ModuleMapper;
+import com.helloai.core.task.mapper.TaskMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;

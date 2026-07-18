@@ -1,7 +1,7 @@
 package com.helloai.api.controller;
 
 import com.helloai.common.base.R;
-import com.helloai.core.entity.AgentInbox;
+import com.helloai.core.agent.entity.AgentInbox;
 import com.helloai.core.agent.service.AgentInboxService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;

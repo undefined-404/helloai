@@ -5,7 +5,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
-import com.helloai.core.entity.Agent;
+import com.helloai.core.agent.entity.Agent;
 import io.github.resilience4j.core.ConfigurationNotFoundException;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;

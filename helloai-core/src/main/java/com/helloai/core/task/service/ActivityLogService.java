@@ -1,8 +1,8 @@
 package com.helloai.core.task.service;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.helloai.core.entity.ActivityLog;
-import com.helloai.core.mapper.ActivityLogMapper;
+import com.helloai.core.task.entity.ActivityLog;
+import com.helloai.core.task.mapper.ActivityLogMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 

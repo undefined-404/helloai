@@ -2,8 +2,8 @@ package com.helloai.core.system.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.helloai.core.entity.Rule;
-import com.helloai.core.mapper.RuleMapper;
+import com.helloai.core.system.entity.Rule;
+import com.helloai.core.system.mapper.RuleMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;

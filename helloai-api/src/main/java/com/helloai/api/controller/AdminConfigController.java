@@ -2,7 +2,7 @@ package com.helloai.api.controller;
 
 import com.helloai.api.dto.admin.ConfigBatchRequest;
 import com.helloai.common.base.R;
-import com.helloai.core.entity.SysConfig;
+import com.helloai.core.system.entity.SysConfig;
 import com.helloai.core.system.service.SysConfigService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

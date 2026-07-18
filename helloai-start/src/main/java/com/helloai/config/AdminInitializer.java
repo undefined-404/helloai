@@ -1,8 +1,8 @@
 package com.helloai.config;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.helloai.core.entity.SysUser;
-import com.helloai.core.mapper.SysUserMapper;
+import com.helloai.core.system.entity.SysUser;
+import com.helloai.core.system.mapper.SysUserMapper;
 import com.helloai.core.system.service.AuthService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

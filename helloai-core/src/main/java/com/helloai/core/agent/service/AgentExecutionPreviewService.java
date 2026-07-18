@@ -3,7 +3,7 @@ package com.helloai.core.agent.service;
 import com.helloai.common.base.BizException;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
-import com.helloai.core.entity.Agent;
+import com.helloai.core.agent.entity.Agent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 

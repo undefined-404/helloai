@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="com.helloai.core.mapper.AgentMapper">
+<mapper namespace="com.helloai.core.agent.mapper.AgentMapper">
 
     <!--
         覆盖 BaseMapper.insert：PostgreSQL 的 JSONB 列不接受未指定类型的字符串参数，
@@ -9,7 +9,7 @@
         "column capabilities is of type jsonb but expression is of type character varying" 错误。
         注意：MyBatis-Plus insert 的入参被包装为 @Param("et")，所有实体字段需通过 et.xxx 访问。
     -->
-    <insert id="insert" parameterType="com.helloai.core.entity.Agent">
+    <insert id="insert" parameterType="com.helloai.core.agent.entity.Agent">
         INSERT INTO agent (
             id, name, role, api_key, model_type, model_config,
             specialization_slug, status, score,
@@ -40,7 +40,7 @@
         注意：MyBatis-Plus updateById 的入参被包装为 @Param("et")，所有实体字段需通过 et.xxx 访问；
               @Param("MP_OPTLOCK_VERSION_ORIGINAL") 是乐观锁拦截器附加参数。
     -->
-    <update id="updateById" parameterType="com.helloai.core.entity.Agent">
+    <update id="updateById" parameterType="com.helloai.core.agent.entity.Agent">
         UPDATE agent
         SET name = #{et.name},
             role = #{et.role},
@@ -93,7 +93,7 @@
         调用方（AgentHealthCheckTask）对每个 Agent 调用 markOfflineIfStale 做 CAS 标 OFFLINE。
         IS DISTINCT FROM 用于安全处理 NULL（last_seen_at 为 NULL 也算超时）。
     -->
-    <select id="selectByLastSeenBefore" resultType="com.helloai.core.entity.Agent">
+    <select id="selectByLastSeenBefore" resultType="com.helloai.core.agent.entity.Agent">
         SELECT * FROM agent
         WHERE (last_seen_at IS NULL OR last_seen_at &lt; #{cutoff})
           AND (online_status IS DISTINCT FROM 'SLEEPING')
@@ -153,7 +153,7 @@
           - last_fallback_at IS NULL OR last_fallback_at < cooldownCutoff
         仅返回 CLI_CLIENT + 未删除 Agent。
     -->
-    <select id="selectFallbackCandidates" resultType="com.helloai.core.entity.Agent">
+    <select id="selectFallbackCandidates" resultType="com.helloai.core.agent.entity.Agent">
         SELECT * FROM agent
         WHERE access_type = 'CLI_CLIENT'
           AND deleted = 0

@@ -1,8 +1,8 @@
 package com.helloai.core.agent.service;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.helloai.core.entity.ConversationMessage;
-import com.helloai.core.mapper.ConversationMessageMapper;
+import com.helloai.core.agent.entity.ConversationMessage;
+import com.helloai.core.agent.mapper.ConversationMessageMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;

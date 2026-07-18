@@ -4,8 +4,8 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.constant.CredentialOwnerType;
 import com.helloai.common.constant.CredentialStatus;
 import com.helloai.common.constant.CredentialType;
-import com.helloai.core.entity.CredentialVault;
-import com.helloai.core.mapper.CredentialVaultMapper;
+import com.helloai.core.system.entity.CredentialVault;
+import com.helloai.core.system.mapper.CredentialVaultMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 

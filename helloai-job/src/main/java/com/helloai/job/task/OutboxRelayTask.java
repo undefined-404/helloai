@@ -7,7 +7,7 @@ import com.helloai.common.constant.AgentCommandOutboxStatus;
 import com.helloai.core.agent.command.ExecutionCommandMqPublisher;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.mqconsumer.ExecutionCommandMqMessage;
-import com.helloai.core.entity.AgentCommandOutboxEvent;
+import com.helloai.core.agent.entity.AgentCommandOutboxEvent;
 import com.helloai.core.agent.service.AgentCommandOutboxService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
