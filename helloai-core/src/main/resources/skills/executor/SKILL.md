@@ -62,19 +62,24 @@
 > - 租约 EXPIRED 后，门铃长连接会被服务端**主动关闭**，需要重新走 checkIn → 建门铃两步骤。
 > - **建议节奏**：在 ttlMinutes 到期前 1 分钟主动重做一次 checkIn，避免被静默切到 OFFLINE。
 
-### 1.3 推荐工作循环（门铃模式）
+### 1.3 推荐工作循环（常驻值班模式）
+
+> ❌ 反模式：`checkIn` → 8 秒门铃探针 → 退出（=OFFLINE 假阳性）
+> ✅ 正模式：`checkIn` → 拉起常驻值班进程（同时管门铃 SSE + heartbeat + pullTasks）
+
 ```
 1. getAgentStatus          # 确认鉴权与在线
 2. checkIn                 # 打卡上班，拿到 ACTIVE 值班租约（门铃前置）
-3. 建立门铃长连接           # GET {{BASE_URL}}/api/agents/doorbell/sse（见第二节）
-   周期性 heartbeat        # 每 30 秒一次，维持在线
-4. 收到门铃 type=inbox 信号 # 立即 pullTasks 取任务（也可 30s 轮询兜底）
+3. 拉起常驻值班进程          # 同时管：门铃 SSE（实时推送）+ 30s heartbeat + 30s pullTasks（见 §1.5）
+   ❌ 禁止 checkIn 后只做探针
+   ❌ 禁止 checkIn 后等待用户输入
+4. 收到门铃 type=inbox 信号 # 立即 pullTasks 取任务（30s pullTasks 轮询兜底防漏）
 5. claimSubTask            # 认领子任务
 6. 执行任务
 7. uploadArtifact          # 登记产物（如有）
 8. submitResult            # 上交结果
 9. ack                     # 确认对应收件箱消息已处理
-10. 会话结束 checkOut       # 打卡下班
+10. 会话结束 / Ctrl+C       # 触发 daemon 退出清理剧本（§1.5.4）：checkOut → 关连接
 ```
 
 ### 1.3.bis 心跳节拍与下线剧本
@@ -122,6 +127,103 @@ T+(ttl-1)m : 主动重做 checkIn 续约，避免被判 OFFLINE
 
 **(4) 门铃连上 ≠ 进程健康**
 - 门铃 SSE 保持 `keepalive` 不代表你“在线”；仍需**自己周期调 `heartbeat`**（建议 30 秒一次），超 5 分钟无心跳会被判 OFFLINE。
+
+### 1.5 常驻值班协议（必读·关键）
+
+> 🔴 **致命前提**：`checkIn` 拿到 ACTIVE 租约后，**必须**立刻拉起常驻值班进程。仅做几秒钟门铃探针就退出 = OFFLINE 假阳性 = 任务派给你后被重派 = 你收件箱里看到"通知到了但任务不是我的"。
+>
+> **唯一正确模式**：常驻值班进程同时管三件事——门铃 SSE（实时推送）+ 30s heartbeat（健康证明）+ 30s pullTasks（兜底防漏）。三者并行直到 Ctrl+C 触发退出清理。
+
+#### 1.5.1 关键认知：门铃 SSE 是真推送，不是轮询
+
+```
+时间轴事件：
+T+0.000s   Agent   GET /api/agents/doorbell/sse （HTTP 长连接挂起）
+T+0.001s   平台    HTTP 200 + Connection: keep-alive + text/event-stream
+T+5.000s   平台    主动推 event:keepalive  ← 服务端主动写，Agent 不用查
+T+30.000s  平台    又主动推一帧 keepalive
+T+N.000s   平台    主动推 event:inbox（任务到达） ← 秒级唤醒，Agent 不用查
+```
+
+**关键**：
+- 门铃 SSE 是 **HTTP/1.1 keep-alive + 服务端 push**。平台有事件就推，Agent 不用每秒问"有没有任务"。
+- 因此 **30s pullTasks 不是为了"知道有任务"**（门铃已经告诉你了），**而是为了"门铃断时不丢消息"** 的兜底。
+- **30s heartbeat 也不是为了"收事件"**，而是为了**证明你的进程还活着**（服务端 5 分钟无心跳判 OFFLINE）。
+
+#### 1.5.2 常驻三件套（同一后台进程并行）
+
+| 任务 | 频率 | 性质 | 工具 |
+|---|---|---|---|
+| 门铃 SSE 监听 | 持续（被动） | 实时推送接收 | `GET /api/agents/doorbell/sse` |
+| 周期 heartbeat | 每 30s | 健康证明 | `MCP tools/call heartbeat(sid)` |
+| 周期 pullTasks | 每 30s | 门铃断时的兜底 | `MCP tools/call pullTasks(sid)` |
+| 租约续签 | ttlMinutes 到期前 60s | 资源续期 | checkOut + checkIn + 重连门铃 |
+
+**强烈建议**：把三件事写到一个 daemon 脚本里（参考 `scripts/powershell/qoder-ceshi-daemon.ps1`），**主循环一次性管完**。
+
+#### 1.5.3 TTL 续签节奏
+
+```
+T+0s        : checkIn（拿到 leaseId / sessionId / expiresAt）
+T+30s       : heartbeat + pullTasks
+T+60s       : heartbeat + pullTasks
+...
+T+(ttl-1)m  : 续签窗口（主动重做 checkIn）：
+              ① MCP checkOut(sid) 关旧租约
+              ② MCP tools/call checkIn(sid, ttlMinutes) 拿新租约
+              ③ 重建门铃 SSE 连接（sid 可能变）
+T+30m       : 旧租约 expires_at 到点，服务端会主动 close SSE；提前 60s 重签避免断流
+```
+
+#### 1.5.4 退出清理剧本（必须按顺序执行）
+
+```
+1. 停本机所有 pullTasks / heartbeat 定时器（daemon 主循环退出即可）
+2. MCP tools/call checkOut(sid)    # 关 ACTIVE 租约，否则 30 分钟内不会真正 OFFLINE
+3. kill 门铃 SSE 后台 curl.exe 进程
+4. kill /mcp/sse 后台 curl.exe 进程
+5. GET /api/agents/<你的ID> 验证显示 OFFLINE（可选，dashboard 也行）
+```
+
+> 漏步骤 2 会导致租约残留在 DB 30 分钟内继续占据"在岗"状态，影响派单。漏步骤 3/4 不会立即出错，但会留下幽灵进程。
+
+#### 1.5.5 反模式（不要这么做）
+
+```bash
+# ❌ 反模式 A：checkIn 后只做 8 秒门铃探针就退出
+checkIn ... 
+curl -N .../doorbell/sse &  # 8 秒后 kill
+exit 0
+# 结果：onlineStatus=OFFLINE，所有派单被重派
+
+# ❌ 反模式 B：checkIn 后等待用户输入
+checkIn ...
+echo "已打卡，等待任务"
+read -p "按回车继续..."
+# 结果：用户不动 = 进程挂起 = 门铃断开 + 无心跳 = 5 分钟后 OFFLINE
+
+# ❌ 反模式 C：把门铃 SSE 放后台 Job 但 daemon 主进程很快退出
+checkIn ...
+curl -N .../doorbell/sse > doorbell.log 2>&1 &  # 后台
+echo "请把门铃日志发给我"                     # 主进程退出
+exit 0
+# 结果：父进程退出后子 Job 可能被一起回收（取决于 shell），门铃断
+```
+
+#### 1.5.6 正模式骨架（参考实现见 `scripts/powershell/qoder-ceshi-daemon.ps1`）
+
+```powershell
+# 1) 一次性：MCP 四步握手 + checkIn
+# 2) 启动门铃 SSE（前台进程持有，不放后台 Job）
+# 3) while (-not $shouldExit) {
+#      - MCP heartbeat(sid)
+#      - MCP pullTasks(sid) -> 若有 ASSIGNED 触发后续工作循环
+#      - 检查门铃流增量 -> 若有 event:inbox -> 立即 pullTasks
+#      - 检查租约 expires_at -> 若 < now+60s -> checkOut + checkIn + 重连门铃
+#      - Start-Sleep 30
+#    }
+# 4) 退出清理（Ctrl+C）：停轮询 -> checkOut -> 关门铃 -> 关 /mcp/sse
+```
 
 ---
 

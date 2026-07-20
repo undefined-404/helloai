@@ -2306,3 +2306,163 @@ UI 行为变更：`helloai-ui/src/views/agent/components/AgentOnboardingDialog.v
 - 提交策略：单 commit 提交本次全部改动（含 6 Controller + 6 Service + 3 包归位 + pom + 文档）。
 
 ---
+
+### 2026-07-20 调度链缺陷修复（v2.6 §4.1）
+
+#### 1. 范围
+
+按 `doc/design/HelloAI_调度解耦重构分析.md` v2.6 §4.1 节拍板，针对历史 commit `9e47f17` 提交前的四项调度链遗留缺陷做收口：
+
+- **AOP 降级未织入**：`ResilientDispatcher` `@CircuitBreaker` 在缺 AOP starter 的环境下不触发 fallback（仅 `ResilientDispatcherTest` 纯 unit 验证 new 路径）
+- **心跳离线阈值不统一**：`AgentHealthCheckTask` 硬编码 `STALE_THRESHOLD_MINUTES`，与 `AgentSelector` 各自的 `heartbeatFreshMinutes` 规则漂移
+- **离线重派失败后无二跳**：`AgentHealthCheckTask.reassignStaleTasks` 仅调一次 `redispatchOfflineSubTask`，抛错即放弃
+- **PENDING 未指派孤儿无全局兜底**：`ExternalAgentFallbackTask` 只扫描 N11 候选，不管 PENDING + assigned_agent_id IS NULL + 有历史 record + 无活跃 record 的调度链遗留
+
+范围明确：不涉及 v3 路线图；不重做 AOP 失败语义；不动 PENDING 派发的业务编排；不替换 Reconcile 主链；外部 Agent 一键接入（M5）链路保持现状。
+
+#### 2. 实际落地
+
+##### 2.1 补齐 AOP 依赖与统一心跳健康配置
+
+- `helloai-core/pom.xml` 新增 `spring-boot-starter-aop`（让 `@CircuitBreaker`/`@Aspect` 可被 Spring 代理织入）
+- 新建 `helloai-common/.../config/AgentHealthProperties`：`prefix=helloai.agent.health`，默认 `offlineMinutes=5`（对齐 Redis 心跳 TTL 30s × 10 = 5min）
+- `AgentDispatchProperties.heartbeatFreshMinutes` 字段删除（迁移注释指向 `AgentHealthProperties.offlineMinutes`），消除两套配置漂移风险
+
+##### 2.2 统一 Selector 与回退候选心跳过滤
+
+- `AgentSelector.isHeartbeatFresh` 改用 `AgentHealthProperties.getOfflineMinutes()`；`thresholdMinutes <= 0` 视为关闭过滤（逃生口）；API_KEY_LLM/WEB_BROWSER 始终视为新鲜（架构 §3.8 三层可用性）
+- `AgentMapper.selectFallbackCandidates` 增加 `@Param("lastSeenCutoff") OffsetDateTime lastSeenCutoff`，SQL 增加 `last_seen_time IS NOT NULL AND last_seen_time > #{lastSeenCutoff}`；与 Java 侧 `AgentSelector` 共用同一阈值
+- `ExternalAgentFailureTracker.shouldFallback` 同步加心跳检查（`offlineMinutes <= 0` 时 bypass，包括 null last_seen_time 也视为可回退）
+- `AgentHealthCheckTask` 删除硬编码 `STALE_THRESHOLD_MINUTES`，改用 `healthProperties.getOfflineMinutes()`
+
+##### 2.3 修复离线重派与 PENDING 遗留兜底
+
+- `AgentHealthCheckTask.reassignStaleTasks` 重构为按 Agent 维度调用：
+  - 首选路径：`subTaskDispatchService.redispatchOfflineSubTask(task.id, agentId)`（弹性 fallback 触发）
+  - 二次路径：首选失败后调 `subTaskDispatchService.dispatchPendingSubTaskAuto(task.id, fallbackRole)`，role 用原 Agent 的 `agent.role`，缺失时回退 `AgentRole.EXECUTOR`
+  - 统计三档：`reassignedByFallback` / `reassignedByAuto` / `failed`
+- `SubTaskMapper` 新增 `selectPendingUnassignedWithoutActiveExecutionRecord(int limit)`：筛 PENDING + assigned_agent_id IS NULL + EXISTS 历史 record + NOT EXISTS 活跃 PENDING/RUNNING record
+- `ExternalAgentFallbackTask.scan()` 拆分为两个独立阶段：
+  - 阶段 A：`failureTracker.findFallbackCandidates()` -> `processCandidate`（N11 阈值回退）
+  - 阶段 B：`recoverPendingUnassigned()` 全局 PENDING 兜底（每次扫描独立一次，避免阶段 A 失败时不执行）
+
+##### 2.4 补齐核心与任务调度回归测试
+
+- 新增 `ResilientDispatcherAopIntegrationTest`（Spring Boot 集成测试，`@SpringBootConfiguration + @EnableAspectJAutoProxy + @ImportAutoConfiguration({AopAutoConfiguration, CircuitBreakerAutoConfiguration})`），3 个测试验证：Bean 是 AOP 代理 / OFFLINE CLI_CLIENT 触发 fallback / `Advised.getTargetClass()` 暴露原类
+- 新增 `AgentHealthCheckTaskTest`（11 个测试，3 个 Nested：Precondition / ReassignStaleTasks / OfflineCasGuard），通过反射调用 `reassignStaleTasks(Agent)`：首选成功 / 首选失败->二次成功 / 双层失败 / OFFLINE CAS 返回 0 / Redis TTL 仍在 / `offlineMinutes <= 0` 禁用
+- `ExternalAgentFailureTrackerTest` 增心跳相关测试（null last_seen / 新鲜/过期/边界 / `offlineMinutes <= 0` 旁路），遗留 2 参数 `shouldDelegateToMapper` 升级为 3 参数版本
+- `ExternalAgentFallbackTaskTest` 增 7 个 PENDING 兜底测试：阶段 A 无候选仍执行阶段 B / 状态变化跳过 / 删除跳过 / 已分配跳过 / 单条失败不中断 / 不污染 N11 计数 / N11 成功时仍跑 PENDING 兜底
+- `AgentSelectorTest` 增 `v2.6 心跳新鲜度过滤` Nested（7 用例）：默认 5min 边界 / 15min 过期 / 4min 新鲜 / API_KEY_LLM null 豁免 / 多候选 fresher 战胜 stale / `offlineMinutes=0` 关闭过滤 / `offlineMinutes=3` 自定义阈值
+- 顺手修复 pre-existing：`helloai-core/src/test/java/com/helloai/core/doorbell/` 下 5 个 Doorbell 测试文件（`DoorbellRegistryTest` / `DoorbellServiceTest` / `DoorbellDutyListenerTest` / `DoorbellKeepaliveTaskTest` / `DoorbellRingerTest`）package 声明为 `com.helloai.core.shared.doorbell` 但放在错误目录下，迁移到正确目录后全部通过
+
+#### 3. 验证
+
+- `mvn -pl helloai-common install -DskipTests` SUCCESS
+- `mvn -pl helloai-core test -Dtest='AgentSelectorTest,ExternalAgentFailureTrackerTest,ResilientDispatcherTest,ResilientDispatcherAopIntegrationTest'` **58/58 全绿**
+- `mvn -pl helloai-job test -Dtest='AgentHealthCheckTaskTest,ExternalAgentFallbackTaskTest,SubTaskPendingOrphanTaskTest'` **38/38 全绿**
+- `mvn -pl helloai-core install -DskipTests` SUCCESS
+- `mvn test`（reactor 全量）**BUILD SUCCESS**：HelloAI Common / MQ / Core / Job / API / Start 7 模块全 SUCCESS，helloai-core 216 个测试全绿（含已修复的 5 个 Doorbell 测试）
+- `mvn -pl helloai-start -am package -DskipTests` SUCCESS，`helloai-start/target/helloai-start-1.0.0-SNAPSHOT.jar` 62MB 产物可构建（沙箱无 PostgreSQL/Redis，真实链路断心跳验收需外部环境执行）
+
+#### 4. 影响
+
+- **架构影响**：心跳阈值唯一源（`helloai.agent.health.offline-minutes`，默认 5min），消除 Java/SQL 规则漂移；AOP starter 上车后 `@CircuitBreaker`/`@Aspect` 注解可织入
+- **调度影响**：离线重派二次路径就绪，原 Agent 失败时按角色 EXECUTOR 回退二次选人；PENDING 未指派孤儿全局兜底（阶段 B），不会卡在历史 record + 无活跃 record 的调度链遗留
+- **测试影响**：AgentSelectorTest 19->26、ExternalAgentFailureTrackerTest 11->22、ExternalAgentFallbackTaskTest 8->15、AgentHealthCheckTaskTest 0->11、新增 ResilientDispatcherAopIntegrationTest 3；覆盖率从“单元验证 new 路径”提升到“真实 Spring 上下文织入 + fallback 触发”
+- **对外行为**：API 路径、配置 key 兼容（`AgentDispatchProperties.heartbeatFreshMinutes` 删除不影响线上，因为从未被 application.yml 引用）；幂等守卫（OFFLINE CAS `IS DISTINCT FROM`）维持现状
+- **文档影响**：差距表 N7 / N11 项更新“二次选人加固 + 5min 健康阈值统一 + PENDING 兜底”子条目
+
+#### 5. 遗留与下一步
+
+- 真实断心跳链路验收（启动 Spring Boot + PostgreSQL/Redis + 创建 CLI_CLIENT Agent + 等待 5 分钟超时）需在外部环境执行；沙箱内只能验证 jar 集成构建与单元/集成测试
+- `OfflineAgentAutoRedispatchProperties`（如需将 offlineMinutes 提升为 per-Agent 配置）暂未抽取，本轮统一为全局默认 5min 即可覆盖 N11/N12/N7 三处使用方
+- `verify-subtask-redispatch-auto-execution.ps1` 的 `-Scenario offline` 路径（480s 超时）已可跑；本轮未在沙箱内联跑（无 DB/Redis），但脚本本身保持现状
+
+---
+
+### 6.8 EXECUTOR 端到端实时性修复：SKILL §1.5 常驻值班协议 + 参考 daemon + UI 下载入口（2026-07-20）
+
+#### 1. 范围
+
+针对 qoder-ceshi（EXECUTOR 外部 Agent）被调度后“打卡就走”的伪在线模式——`checkIn` 到后只跑 8 秒探针就退出，导致 22 秒认领窗口被误认为已错过、平台動辄走重派路径——推动 Agent 侧向“真常驻值班”转型，本轮重点修改：
+
+- **A 类（必做，本轮完成）**：
+  - `executor/SKILL.md` §1.5 新增《常驻值班协议（必读·关键）》，明确“checkIn 拿到 ACTIVE 后必须立刻拉起常驻后台进程”跳出致命前提
+  - 同文件 §1.3 推荐工作循环改为“拉起常驻值班进程”替代旧“建立门铃长连接 + 周期性 heartbeat”描述
+  - 新增 `scripts/powershell/qoder-ceshi-daemon.ps1`（PowerShell 5.1 兼容）作为参考实现骨架
+- **B 类（建议同 commit）**：
+  - `AgentOnboardingDialog.vue` 增按钮“下载常驻值班脚本（PowerShell）”（type=info），弹窗文本补充说明
+  - `helloai-ui/public/scripts/powershell/qoder-ceshi-daemon.ps1` 同步拷贝为静态资源（避免后端 DTO 改动，下轮补 `daemonScript` 字段）
+- **C 类（顺后下轮）**：
+  - 派单过滤 OFFLINE：仅派给 `onlineStatus=ONLINE` 的 Agent，跳过 OFFLINE
+  - inbox 状态机：重派时给原 assignee 标记 `superseded=true`，UI 区分“待 claim / 已错过认领窗口”
+  - 错误可观测性：在收件箱 UI 区分两种状态【需后端协调 + 数据迁移 + 状态机调整，以补缺口】
+
+#### 2. 实际落地
+
+##### 2.1 SKILL.md §1.5 常驻值班协议（必读·关键）
+
+文件：`helloai-core/src/main/resources/skills/executor/SKILL.md`
+
+- **§1.5.1 关键认知**：明确门铃 SSE 是真推送（server push），不是轮询；定时任务只是补丁（heartbeat/续签/兜底）
+- **§1.5.2 常驻三件套**：门铃 SSE（实时推送）+ 30s heartbeat（健康证明）+ 30s pullTasks（兜底防漏），必须同一后台进程并行
+- **§1.5.3 TTL 续签节奏**：到期前 1 分钟（`renew-before-expiry-sec=60`）自动 `checkOut + checkIn + 重连门铃`，避免服务端主动关 SSE
+- **§1.5.4 退出清理剧本（必须按顺序执行）**：停轮询 → MCP `checkOut` → kill doorbell curl → kill /mcp/sse curl
+- **§1.5.5 反模式（不要这么做）**：`checkIn → 8s 探针 → 退出`、单轮询不心跳、不重连门铃遗漏心等等
+- **§1.5.6 正模式骨架**：Python/Kotlin/Node/Shell 参考指向 `scripts/powershell/qoder-ceshi-daemon.ps1`
+
+此外 §1.3 的“推荐工作循环”补了一句绑合依赖：`checkIn 后拉起常驻值班进程（见 §1.5），不允许仅探针后退出`。
+
+预计净增：+~70行（§1.5 主体 + §1.3 工作循环微调）。
+
+##### 2.2 参考 daemon 脚本（PowerShell 5.1）
+
+文件：`scripts/powershell/qoder-ceshi-daemon.ps1`（新建）
+
+骨干映射计划：
+
+- 入口：UTF-8 编码头 + `Get-Date` BOM 剥除
+- `Start-McpSse / Stop-McpSse`：`Start-Job -ScriptBlock { & curl.exe -i -N ... } | Out-File -Encoding ascii`，`Select-String` 抽 sessionId
+- `Start-DoorbellSse / Stop-DoorbellSse`：同上，加 query `?sessionId=<sid>`
+- `Initialize-Mcp`：initialize + notifications/initialized
+- `Invoke-CheckIn / Invoke-CheckOut`：调 MCP tools/call
+- `Invoke-Heartbeat / Invoke-PullTasks`：30s 心跳 + 30s 拉取
+- `Read-DoorbellDelta`：基于 marker file 的增量读取，扫 `event:inbox` / keepalive
+- `Test-LeaseExpiringSoon / Invoke-RenewLease`：到期前 60s 走 checkOut+checkIn+重连
+- 主循环：30 秒一个 tick；Ctrl+C 触发退出清理剧本
+
+预计净增：+~180 行。
+
+##### 2.3 UI 下载入口（B 类）
+
+文件：`helloai-ui/src/views/agent/components/AgentOnboardingDialog.vue` + `helloai-ui/public/scripts/powershell/qoder-ceshi-daemon.ps1`
+
+- 新按钮“下载常驻值班脚本（PowerShell）”（type=info）插于“下载 hello_ai_skills.md”与“一键上班口令”之间
+- 加 `downloadDaemon()` 方法：`fetch('/scripts/powershell/qoder-ceshi-daemon.ps1')` → `Blob` → 浏览器触发下载，文件名 `hello_ai_<agentName>_daemon.ps1`
+- 本轮未改 DTO（`daemonScript` 字段跳到下轮 C 类一起备），UX 提示“下载后请手动改 agentId/apiKey”（对应提示信息已在脚本头部以 == 例注释方式呈现）
+
+预计净增 UI：+~30 行。
+
+#### 3. 验证
+
+- **`mvn -pl helloai-core test -Dtest=PreFlightTest`**：16/16 全绿，§1.5 预飞行检查不被现有 doctest 拦截
+- **`scripts/powershell/qoder-ceshi-daemon.ps1`**：能解析、函数 `/ Start-Job / curl / regex pipeline` 语法树 PARSE-OK（[System.Management.Automation.Language.Parser]::ParseFile）
+- **端到端股】补充**：本轮仅 `SKILL.md` + `daemon.ps1` + UI 改动，股】为 qoder-ceshi 实测点（后续 C 类补齐后跨轮验证）
+
+#### 4. 影响
+
+- **架构影响**：EXECUTOR 接入路径从“AI 主观调度”转为“标准化常驻进程”，减少外部 Agent 重复踩坑（一处 SKILL 多个 Agent 复用）
+- **设计补救**：门铃 SSE “真推送 vs 轮询” 调表避免下一轮 Agent 重走老路；PE门铃 +30s heartbeat 缺口
+- **文档影响**：SKILL.md §1.5 作为后续 EXECUTOR Agent 接入必读范本；AgentOnboardingDialog 文本补充“下载 daemon 后门铃推送”描述
+- **UI 影响**：弹窗按钮从 4 个增为 5 个；右侧 public/ 资源体积 +12.5 KB（daemon.ps1）
+- **接口影响**：对外 API 未变（`AgentOnboardingResponse` 未增 `daemonScript` 字段；下轮顺手补）
+
+#### 5. 遗留与下一步
+
+- **C 类三项平台侧优化**：派单过滤 OFFLINE、inbox `superseded` 状态机、UI "待 claim / 已错过" 双状态区分，仍顺后下轮（2 人天估算）
+- **DTO 补字段**：下轮补 `AgentOnboardingResponse.daemonScript`（String，主体内嵌入脚本原文），下载按钮可从 DTO 里取、避免从 `public/` 冷拉静态资源
+- **多平台 daemon 骨架**：本轮只出 PS 5.1 版本（覆盖当前所有测试用例）；Linux bash 版本下轮按需补（正文架可用同一 §1.5.6 骨架）
+- **实测证据加权**：股】后续补一次以“门铃常驻 vs 探针模式”两种调度路径上拍“认领耗时中位数 / 超时率”对比，证实本轮修复价值
+- **合并策略**：A 类（SKILL.md + daemon.ps1）+ B 类（UI 按钮 + public/ 拷贝）合并一条 commit：`feat(executor): add §1.5 常驻值班协议 + 参考 daemon 脚本 + UI 下载入口`；本轮文档回填随同 commit 入提交
+
+---
