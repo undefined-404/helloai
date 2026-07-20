@@ -17,7 +17,7 @@
 - 当前项目是一套基于 Spring Boot + Spring AI MCP 的多 Agent 协作调度平台。
 - 当前主线已具备 MCP SSE 接入、双通道鉴权、工具调用、在线状态三件套、熔断降级、Reconcile 健康检查、管理后台与基础前端能力。
 - 当前工程运行基线保持在 `JDK 17 + Spring Boot 3.4.x + Spring AI 1.1.x`。
-- 涉及调度、执行链、异步回写、MQ 解耦的后续设计与实现，统一优先参考 `doc/HelloAI_调度解耦重构分析.md` 与 `E:\workspace\AgentTeams-main` 的分层思想。
+- 涉及调度、执行链、异步回写、MQ 解耦的后续设计与实现，统一优先参考 `doc/design/HelloAI_调度解耦重构分析.md` 与 `E:\workspace\AgentTeams-main` 的分层思想。
 
 ---
 
@@ -59,9 +59,9 @@
 
 参考吸收原则与后续开发方向由以下文档承担，本文档不重复展开：
 
-- 参考来源与吸收边界：`doc/HelloAI_架构设计参考.md` §1
-- 后续开发思路与阶段划分：`doc/HelloAI_架构设计参考.md` §5
-- 具体外部文件路径与代码模式：`doc/HelloAI_外部项目借鉴技术细节.md`
+- 参考来源与吸收边界：`doc/design/HelloAI_架构设计参考.md` §1
+- 后续开发思路与阶段划分：`doc/design/HelloAI_架构设计参考.md` §5
+- 具体外部文件路径与代码模式：`doc/design/HelloAI_外部项目借鉴技术细节.md`
 
 ### 5.1 已确认的统一边界
 
@@ -75,7 +75,7 @@
 - 双心跳（`last_seen_at` / `last_active_at`）与上班打卡（`agent_duty_lease`）仅用于外部 Agent
   （`CLI_CLIENT` / `WEB_BROWSER`）的可用性判定：打卡是被调度选中的准入第一步，双心跳是验证其是否在
   正常干活的运行时监控；`API_KEY_LLM` 豁免这两类判定，其可用性以"任务是否按时完成 + 定期 API Key
-  可用性探测"衡量（三层可用性模型详见 `doc/HelloAI_架构设计参考.md` §3.8）
+  可用性探测"衡量（三层可用性模型详见 `doc/design/HelloAI_架构设计参考.md` §3.8）
 
 ---
 
@@ -85,21 +85,21 @@
 
 - `doc/HelloAI_项目基线文档.md`：项目是什么
 - `doc/HelloAI_实现差距表.md`：差在哪里
-- `doc/HelloAI_迭代执行记录.md`：做了什么
+- `doc/log/HelloAI_迭代执行记录.md`：做了什么
 
 ### 6.2 专项分析
 
-- `doc/HelloAI_调度解耦重构分析.md`
-- `doc/HelloAI_执行链路架构分析.md`
+- `doc/design/HelloAI_调度解耦重构分析.md`
+- `doc/archive/HelloAI_执行链路架构分析.md`
 
 ### 6.3 设计参考
 
-- `doc/HelloAI_架构设计参考.md`：设计理念、参考来源、核心概念与目标态方向
-- `doc/HelloAI_外部项目借鉴技术细节.md`：按借鉴项目维度整理的具体技术细节、代码模式与文件路径
+- `doc/design/HelloAI_架构设计参考.md`：设计理念、参考来源、核心概念与目标态方向
+- `doc/design/HelloAI_外部项目借鉴技术细节.md`：按借鉴项目维度整理的具体技术细节、代码模式与文件路径
 
 ### 6.4 能力确认
 
-- `doc/HelloAI_当前能力确认矩阵.md`
+- `doc/archive/HelloAI_当前能力确认矩阵.md`
 
 ### 6.5 工程规范
 
@@ -107,7 +107,7 @@
 
 ### 6.6 其他参考
 
-- `doc/HelloAi Agent 任务调度优先级机制设计文档.md`
+- `doc/design/HelloAi Agent 任务调度优先级机制设计文档.md`
 
 ---
 
@@ -132,3 +132,22 @@
 - 后端数据库初始化以 `helloai-start/src/main/resources/db/migration/V1__init_all.sql` 为单一初始化入口
 - Controller 只做参数接收、DTO 转换与返回封装
 - 代码事实与文档不一致时，优先修正文档误导，而不是用文档掩盖现状
+
+---
+
+## 9. 能力边界
+
+| 能力项 | 当前状态 | 说明 |
+| --- | --- | --- |
+| CLI Agent 自注册 | 已支持 | 支持通过 `/api/agents/register-with-token` 注册，默认 `accessType=CLI_CLIENT` |
+| CLI Agent 鉴权接入 | 已支持 | 注册后可持 `Bearer apiKey` 调用 `/api/agents/me/skill`、MCP/SSE/HTTP 工具 |
+| API_KEY_LLM 自动执行 | 已支持 | 子任务 `ASSIGNED` 后可自动创建 `ExecutionCommand` 并由本地 consumer 执行 |
+| CLI Agent 主动拉任务消费 | 已支持 | 通过 `pullTasks / ack / claimSubTask / heartbeat / reportBlocked` 等工具实现 |
+| EXECUTOR 自动执行主链 | 已支持 | 调度、命令消费、执行、结果回写、超时补偿链路均已接通 |
+| PLANNER 自动拆解任务 | 部分支持 | 创建任务后会通知 PLANNER，但未看到完整自动拆解编排主链 |
+| REVIEWER 自动审查 | 部分支持 | 子任务进入 `REVIEW` 后有通知，但当前主流程仍依赖显式 review 提交 |
+| PATROL 自动巡检链路 | 未完整支持 | 有角色、表和统计，但未看到完整 patrol 编排主链 |
+| Agent 离线后同角色重分发 | 已支持 | 会重置子任务并交回弹性调度器，按同角色替补 |
+| 执行超时补偿 | 已支持 | `PENDING/RUNNING` 超时会补偿为 `TIMEOUT`，必要时推进 `BLOCKED` |
+| 消息未消费后的统一超时转派 | 未完整支持 | 当前没有一套对所有角色 inbox/message 的统一“超时未消费 -> 自动转派”机制 |
+| MQ DLQ 基础设施 | 已有基础设施 | RabbitMQ 已配置 DLX/DLQ，但业务主链尚未全面建立在该机制上 |

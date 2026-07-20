@@ -38,7 +38,7 @@
 
 #### 1. 范围
 
-- 按 `doc/HelloAI_调度解耦重构分析.md` 推进执行链收口
+- 按 `doc/design/HelloAI_调度解耦重构分析.md` 推进执行链收口
 
 #### 2. 实际落地
 
@@ -105,7 +105,7 @@
 #### 2. 实际落地
 
 - 识别出 `HelloAI_多类型Agent接入与调度可靠性开发路线图_v3.0.md` 存在多处事实性失真，不适合继续作为路线图或事实参考
-- 将 `v3.0` 降级并重写为 `doc/HelloAI_架构设计参考.md`，只保留：
+- 将 `v3.0` 降级并重写为 `doc/design/HelloAI_架构设计参考.md`，只保留：
   - 参考来源说明与综合吸收边界（OpenMOSS / AgentTeams-main / Vibe-Skills-main / 优先级机制设计文档 / trade-cloud）
   - 技术栈版本表
   - 核心概念定义（调度分离、双心跳、熔断、Outbox、TCC、工作单元、控制命令）
@@ -125,7 +125,7 @@
 - 三轮文档矩阵二次分析：确认三个历史文档（v1.1、OpenMOSS 对比、v2.0 开发清单）已有归档标记
 - 修复 README.en.md 文档列表不完整（补上《调度解耦重构分析》与《执行链路架构分析》）
 - 修正 `McpController.java` Javadoc 中"预计 v3.0 移除"为"预计下个大版本移除"
-- 继续扩写 `doc/HelloAI_架构设计参考.md`：将 `OpenMOSS / AgentTeams-main / Vibe-Skills-main / HelloAi Agent 任务调度优先级机制设计文档 / trade-cloud` 的吸收边界、适用落点与开发顺序写清楚
+- 继续扩写 `doc/design/HelloAI_架构设计参考.md`：将 `OpenMOSS / AgentTeams-main / Vibe-Skills-main / HelloAi Agent 任务调度优先级机制设计文档 / trade-cloud` 的吸收边界、适用落点与开发顺序写清楚
 - 更新《项目基线文档》：新增“已确认的参考吸收原则”与“已确认的后续开发方向”，明确哪些来源指导接入层、调度层、运行时层与可靠性层
 
 #### 3. 验证
@@ -139,11 +139,11 @@
 
 - 对外行为变化：无
 - 文档变化：
-  - 新增 `doc/HelloAI_架构设计参考.md`
+  - 新增 `doc/design/HelloAI_架构设计参考.md`
   - 新增 `doc/HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4_archived.md`
   - 收口 `doc/HelloAI_项目基线文档.md`
   - 收口 `doc/HelloAI_实现差距表.md`
-  - 回写 `doc/HelloAI_迭代执行记录.md`
+  - 回写 `doc/log/HelloAI_迭代执行记录.md`
   - 收口 `README.en.md`（补全文档列表）
   - 收口 `helloai-api/.../McpController.java`（v3.0 措辞修正）
 - 数据结构变化：无
@@ -164,7 +164,7 @@
 
 #### 2. 实际落地
 
-- 新增 `doc/HelloAI_外部项目借鉴技术细节.md`：按 AgentTeams-main / Vibe-Skills-main / OpenMOSS / 优先级设计文档 / trade-cloud 五个维度，列出具体文件路径、代码模式与 HelloAI 落点映射，含借鉴优先级速查表
+- 新增 `doc/design/HelloAI_外部项目借鉴技术细节.md`：按 AgentTeams-main / Vibe-Skills-main / OpenMOSS / 优先级设计文档 / trade-cloud 五个维度，列出具体文件路径、代码模式与 HelloAI 落点映射，含借鉴优先级速查表
 - 删除 4 个历史文档：
   - `HelloAI_多类型Agent接入与调度可靠性开发路线图_v2.4_archived.md`（仅剩归档声明，无实质内容）
   - `HelloAI_vs_OpenMOSS_功能对比与实现方案.md`（历史对标分析，其洞察已吸收到架构设计参考和借鉴技术细节中）
@@ -185,7 +185,7 @@
 
 #### 4. 遗留
 
-- `doc/HelloAI_当前能力确认矩阵.md` 与《实现差距表》存在部分内容重叠，后续可考虑合并或明确差异边界
+- `doc/archive/HelloAI_当前能力确认矩阵.md` 与《实现差距表》存在部分内容重叠，后续可考虑合并或明确差异边界
 - README 项目结构图中不再列举已删除的历史文档
 
 ---
@@ -201,7 +201,7 @@
 - 更新 `.agents/skills/helloai-preflight/SKILL.md`：
   - 必读文档从 5 份调整为 6 份
   - 移除已删除的 `HelloAI_Agent接入内容生成功能开发清单_v2.0.md`
-  - 新增 `doc/HelloAI_调度解耦重构分析.md` 与 `doc/HelloAI_架构设计参考.md`
+  - 新增 `doc/design/HelloAI_调度解耦重构分析.md` 与 `doc/design/HelloAI_架构设计参考.md`
   - 补充“调度、执行链、异步回写、MQ 解耦优先遵循调度解耦分析”的规则
 - 将上述 preflight skill 同步镜像到：
   - `.trae/skills/helloai-preflight/SKILL.md`
@@ -267,7 +267,7 @@
 
 #### 2. 实际落地
 
-- 新增 `doc/HelloAI_agenthub.md`，作为 AgentHub 方向的主方案文档，明确：
+- 新增 `doc/archive/HelloAI_agenthub.md`，作为 AgentHub 方向的主方案文档，明确：
   - 本文档用于描述外部 Agent 接入层增强方案，而非当前实现事实
   - 方案分为三阶段：
     - V1 最小版：`agent_duty_lease` + `checkIn/checkOut` + 值班优先分配 + 看板展示
@@ -277,10 +277,10 @@
     - 不引入第二控制面
     - 不改变 `MCP-over-SSE` 为主协议的定位
     - 不新增与 `online_status` 平行竞争的 Agent 主状态枚举
-- 将 `doc/helloai_agenthub_complete.md` 降级为历史草案，并补充顶部归档说明，明确：
+- 将 `doc/archive/helloai_agenthub_complete.md` 降级为历史草案，并补充顶部归档说明，明确：
   - 旧文档保留原始设想与灵感
   - 其中关于 `AgentStatus` 扩展、WebSocket 主通道、ShiftManager 的方案不再直接作为开发主参考
-  - 后续统一以 `doc/HelloAI_agenthub.md` 为主
+  - 后续统一以 `doc/archive/HelloAI_agenthub.md` 为主
 - 在新文档中补充“旧文档能力映射表”，把旧草案中的核心想法收口为：
   - 值班租约模型
   - `checkIn/checkOut`
@@ -293,9 +293,9 @@
 
 - 对外行为变化：无
 - 文档变化：
-  - 新增 `doc/HelloAI_agenthub.md`
-  - 修改 `doc/helloai_agenthub_complete.md`
-  - 回写 `doc/HelloAI_迭代执行记录.md`
+  - 新增 `doc/archive/HelloAI_agenthub.md`
+  - 修改 `doc/archive/helloai_agenthub_complete.md`
+  - 回写 `doc/log/HelloAI_迭代执行记录.md`
 - 数据结构变化：无
 
 #### 4. 遗留
@@ -916,7 +916,7 @@ mvn test -pl helloai-job -Dtest="ExecutionCompensationTaskTest"
 #### 1. 范围
 
 - 关闭 Phase 2B/2C 遗留“执行命令 MQ Consumer 主链路未接入”项
-- 遵循 `doc/HelloAI_调度解耦重构分析.md` 的“调度只发命令、执行独立消费、结果异步回写”哲学，新建 `MqExecutionCommandConsumer` 骨架
+- 遵循 `doc/design/HelloAI_调度解耦重构分析.md` 的“调度只发命令、执行独立消费、结果异步回写”哲学，新建 `MqExecutionCommandConsumer` 骨架
 - `MqExecutionCommandConsumer` 与 `LocalExecutionCommandConsumer` **共用 `ExecutionCommandConsumer` 接口**，最终执行链都收敛在同一套 6 步流程上
 - **默认 CONDITIONAL 关闭**（`helloai.mq.execution-command.enabled=false`），不影响现有 POLLER / EVENT 主链路；生产/具备 RabbitMQ 的回归环境可手动开启
 
@@ -992,7 +992,7 @@ mvn test -pl helloai-job -Dtest="ExecutionCompensationTaskTest"
 #### 1. 范围
 
 - 关闭 Phase 2D 遗留 ②「生产端 `ExecutionCommandService` 未发 MQ」与 ③「Consumer 未注入 Properties」
-- 遵循 `doc/HelloAI_调度解耦重构分析.md` "调度只发命令、执行独立消费"目标态：为生产端 / 调度侧引入与 `consumer-mode` **语义对称**的 `dispatch-mode`（`NONE / EVENT / MQ / BOTH`），把生产端行为从消费侧配置上摧开
+- 遵循 `doc/design/HelloAI_调度解耦重构分析.md` "调度只发命令、执行独立消费"目标态：为生产端 / 调度侧引入与 `consumer-mode` **语义对称**的 `dispatch-mode`（`NONE / EVENT / MQ / BOTH`），把生产端行为从消费侧配置上摧开
 - MQ 生产 / 消费开关**独立灰度**：`producer-enabled` 与 `consumer-enabled` 拆开
 - **默认零行为变化**：`dispatch-mode` 默认 `NONE`，命令只落库交给 DB Poller 兜底，与当前 `consumer-mode=POLLER` 事实配套
 - **fail-fast 而非隐式回退**：`dispatch-mode ∈ {MQ, BOTH}` 但 producer 开关未开 / Publisher Bean 不可用 → 启动 & 运行期均抛 `IllegalStateException`
@@ -1710,7 +1710,7 @@ DB 验证：
   - `helloai-api/.../controller/AgentDutyLeaseController.java`（新增）、`helloai-api/.../dto/duty/DutyLeaseResponse.java`（新增）、`helloai-api/.../dto/duty/DutyOverviewResponse.java`（新增）。
   - `verify-execution-dispatch-guard.ps1`（新增，S6 v1.0；交付后用户实测触发 PS 5.1 解析错误 `Unexpected token '}'`，定位为双引号字符串内含中文全角括号叠加隐藏 BOM 字节被解析器提前闭合，已全量重构为**单引号 + `+` 拼接、runtime 字面量纯 ASCII、头注释去中文**）、`verify-poller-e2e.ps1`（头注释 S6 段改写）。
   - skill 规则 6 补第 5 子项（双引号 CJK 提前闭合陷阱 + 单引号拼接修复范式）：5 份 `helloai-preflight` SKILL.md（`.agents` 母版 + `.qoder/.trae/.cursor/.claude` 4 镜像）+ `AGENTS.md`（Additional rules 补一条英文精简条目）同步；差距表 D8 补第 5 子项。注：`.agents/helloai-guidance.master.json` 生成器母版不在仓库内，AGENTS.md 本轮按其既有精简英文风格手工补条，未走"改母版→重生成"路径。
-  - `doc/HelloAI_实现差距表.md`（N6/N12 处理建议 + §5 优先级）、`doc/HelloAI_迭代执行记录.md`（两处 V18→V1 失真修正 + 本轮记录）。
+  - `doc/HelloAI_实现差距表.md`（N6/N12 处理建议 + §5 优先级）、`doc/log/HelloAI_迭代执行记录.md`（两处 V18→V1 失真修正 + 本轮记录）。
 - 数据结构变化：无（值班报表复用既有 `agent_duty_lease` 表，纯只读查询）。
 - 主动不改：`AgentExecutionProperties.java` —— 用户反馈"下面字段注释还写着 DB Poller 成为主消费路径"，Grep 全文核查后注释已全是 T5 新语义（"Poller 仅作兜底"/"MQ 主消费 + Poller 孤儿兜底"/"不再是主消费路径（T5 语义）"），无该陈旧残留，故本轮不动此文件；真正的歧义源是枚举值名 `POLLER` 本身与"MQ 主消费"语义不符，改名为破坏性变更，建议单独立项，本轮不做。
 
@@ -1746,7 +1746,7 @@ DB 验证：
 - 对外行为变化：无（本轮为验证 + 脚本健壮化，无业务代码改动）。
 - 代码变化：
   - `verify-execution-dispatch-guard.ps1`：`Resolve-JavaExe` 重写为探测式 + 新增 `Probe-JavaVersion` + 新增 `-JavaExe` 参数 + `Start-App` 加 `$null = $proc.Handle` + preflight 用独立变量 `$javaInfo` 避免类型强转 + exit code null 假阳性修复。
-  - `doc/HelloAI_实现差距表.md`（N6 S6 补实测结论）、`doc/HelloAI_迭代执行记录.md`（本轮记录）。
+  - `doc/HelloAI_实现差距表.md`（N6 S6 补实测结论）、`doc/log/HelloAI_迭代执行记录.md`（本轮记录）。
 - 数据结构变化：无。
 
 #### 4. 遗留
@@ -1806,7 +1806,7 @@ DB 验证：
     - 若干 psql 输出解析与断言正则增强（避免表头/页脚干扰）
 - 文档变化：
   - `doc/HelloAI_实现差距表.md`：N6 补最新 Poller E2E 15/15 与 S6 守卫 12/12 证据
-  - `doc/HelloAI_迭代执行记录.md`：补本轮收尾记录
+  - `doc/log/HelloAI_迭代执行记录.md`：补本轮收尾记录
 
 #### 4. 结论与遗留
 
@@ -1904,7 +1904,7 @@ DB 验证：
 
 #### 1. 范围
 
-- 按 `doc/HelloAI_门铃通知通道设计.md` §10 的最小 PR 拆分，落地 **PR-1 门铃内核** + **PR-2 响铃接线**：补一条“服务端 → 外部 Agent 单向 SSE 门铃”，把外部 `CLI_CLIENT` 从任务发布到感知的 0~30s 轮询延迟降到秒级。
+- 按 `doc/archive/HelloAI_门铃通知通道设计.md` §10 的最小 PR 拆分，落地 **PR-1 门铃内核** + **PR-2 响铃接线**：补一条“服务端 → 外部 Agent 单向 SSE 门铃”，把外部 `CLI_CLIENT` 从任务发布到感知的 0~30s 轮询延迟降到秒级。
 - 明确不做（本轮）：PR-3 值班/鉴权收口（`isOnDuty` 建连校验、`checkOut`/租约到期主动 disconnect）与端到端验证脚本；可选 PR-4 保活刷心跳；不引入 WebSocket/STOMP/Netty；不新增 Flyway/表/MQ 队列；不改 `AgentStatus`/`AgentOnlineStatus` 枚举；不做多实例 fanout（单实例进程内 Map）。
 
 #### 2. 实际落地
@@ -1935,7 +1935,7 @@ DB 验证：
   - 新增 `helloai-start/.../config/DoorbellExecutorConfig.java`
   - 修改 `helloai-core/.../service/AgentInboxService.java`（注入 `ApplicationEventPublisher` + `save` 成功发事件 + `DuplicateKey` 分支 return 不发，+12/-1）
   - 新增测试：`DoorbellRegistryTest` / `DoorbellServiceTest` / `DoorbellRingerTest`（helloai-core `doorbell`）+ `AgentInboxServiceTest`（helloai-core `service`）
-  - `doc/HelloAI_实现差距表.md`（新增 N13 + §2 结论 + §5 优先级）、`doc/HelloAI_迭代执行记录.md`（本轮记录）
+  - `doc/HelloAI_实现差距表.md`（新增 N13 + §2 结论 + §5 优先级）、`doc/log/HelloAI_迭代执行记录.md`（本轮记录）
 - 数据结构变化：无（门铃是纯运行时连接态，不落库；`SseEmitter` 为 Spring WebMVC 原生，helloai-core 经 `spring-ai-starter-mcp-server-webmvc` 传递依赖 `spring-webmvc`，零新增依赖）。
 
 #### 4. 遗留
@@ -2049,7 +2049,7 @@ DB 验证：
   - `helloai-core/.../service/AgentMcpServerService.java`：`DEFAULT_EXECUTOR_TOOLS` 8→10（+`checkIn`/`checkOut`）+ 类/方法注释同步。
   - `helloai-core/.../resources/skills/executor/SKILL.md`：重写为含 MCP 全套工具 + 打卡 + 门铃的完整说明书。
   - `scripts/powershell/verify-onboarding-doorbell.ps1`（新增，第 2 步真实路径 E2E）。
-  - `doc/HelloAI_实现差距表.md` + `doc/HelloAI_迭代执行记录.md`（本轮回填）。
+  - `doc/HelloAI_实现差距表.md` + `doc/log/HelloAI_迭代执行记录.md`（本轮回填）。
 - 数据结构变化：无（靠 `isToolEnabled` 懒启用覆盖存量 Agent，不新增 Flyway）。
 
 #### 4. 遗留

@@ -26,10 +26,10 @@ description: "HelloAI 项目动手前守则。凡是在本仓库做代码修改�
 
 1. doc/HelloAI_项目基线文档.md
 2. doc/HelloAI_实现差距表.md
-3. doc/HelloAI_迭代执行记录.md
-4. doc/HelloAI_调度解耦重构分析.md
+3. doc/log/HelloAI_迭代执行记录.md
+4. doc/design/HelloAI_调度解耦重构分析.md
 5. doc/HelloAI_CODE_STYLE.md
-6. doc/HelloAI_架构设计参考.md
+6. doc/design/HelloAI_架构设计参考.md
 
 ## 读取目的
 
@@ -88,7 +88,7 @@ description: "HelloAI 项目动手前守则。凡是在本仓库做代码修改�
 - Spring AI 维持当前项目基线，不做跨大版本升级
 - 以后端真实实现、Flyway、验收脚本为准，不拿旧路线图覆盖现实代码
 - 不把编排逻辑塞进 Controller
-- 涉及调度、执行链、异步回写、MQ 解耦的改动时，优先遵循 `doc/HelloAI_调度解耦重构分析.md`
+- 涉及调度、执行链、异步回写、MQ 解耦的改动时，优先遵循 `doc/design/HelloAI_调度解耦重构分析.md`
 - 旧路线图、旧技术方案和对比文档只保留为历史资产，不再作为当前实现的主设计依据
 
 ### 规则 4：优先做"小而闭环"的落地
@@ -113,7 +113,7 @@ description: "HelloAI 项目动手前守则。凡是在本仓库做代码修改�
 优先回填：
 
 - `doc/HelloAI_实现差距表.md`
-- `doc/HelloAI_迭代执行记录.md`
+- `doc/log/HelloAI_迭代执行记录.md`
 
 ### 规则 6：脚本必须显式声明 UTF-8 编码，避免中文乱码
 

@@ -12,10 +12,10 @@ Before editing code in this repository, read these documents first:
 
 1. doc/HelloAI_项目基线文档.md
 2. doc/HelloAI_实现差距表.md
-3. doc/HelloAI_迭代执行记录.md
-4. doc/HelloAI_调度解耦重构分析.md
+3. doc/log/HelloAI_迭代执行记录.md
+4. doc/design/HelloAI_调度解耦重构分析.md
 5. doc/HelloAI_CODE_STYLE.md
-6. doc/HelloAI_架构设计参考.md
+6. doc/design/HelloAI_架构设计参考.md
 
 ### Why These Documents Matter
 
@@ -23,13 +23,13 @@ Before editing code in this repository, read these documents first:
   - Defines the current project baseline and what is already delivered versus still target-state.
 - `doc/HelloAI_实现差距表.md`
   - Defines whether a topic is already delivered, partially delivered, not delivered, or only a documentation mismatch.
-- `doc/HelloAI_迭代执行记录.md`
+- `doc/log/HelloAI_迭代执行记录.md`
   - Records recent implementation rounds, actual changes, and current leftovers.
-- `doc/HelloAI_调度解耦重构分析.md`
+- `doc/design/HelloAI_调度解耦重构分析.md`
   - Defines the current scheduling refactor direction and the alignment target against `E:\workspace\AgentTeams-main`.
 - `doc/HelloAI_CODE_STYLE.md`
   - Defines the code style and engineering conventions that must be followed.
-- `doc/HelloAI_架构设计参考.md`
+- `doc/design/HelloAI_架构设计参考.md`
   - Defines design philosophy, reference sources, core concepts, and target-state directions for the platform architecture.
 
 ### Mandatory Working Rules
@@ -63,7 +63,7 @@ Do not violate these constraints:
 - Spring AI must stay on the current project baseline unless the user explicitly changes that decision
 - Do not use historical roadmap text to override current code reality
 - Do not move orchestration logic into Controller classes
-- For scheduling, execution chain, async write-back, or MQ decoupling changes, prioritize `doc/HelloAI_调度解耦重构分析.md`
+- For scheduling, execution chain, async write-back, or MQ decoupling changes, prioritize `doc/design/HelloAI_调度解耦重构分析.md`
 - Old roadmaps, technical plans, and comparison docs remain historical assets only and are not the primary design source for current implementation
 
 #### 4. Prefer small, closed-loop implementation
@@ -82,7 +82,7 @@ Do not expand into unrelated frontend polishing or broad documentation cleanup u
 After implementation, check whether these need updates:
 
 - `doc/HelloAI_实现差距表.md`
-- `doc/HelloAI_迭代执行记录.md`
+- `doc/log/HelloAI_迭代执行记录.md`
 
 Update them when:
 
