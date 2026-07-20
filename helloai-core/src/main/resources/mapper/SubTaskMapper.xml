@@ -93,4 +93,33 @@
         LIMIT #{limit}
     </select>
 
+    <!--
+        v2.6 §4.1 新增（PENDING 孤儿回收，2026-07-20）：
+
+        场景：dispatch-mode=EVENT 主路径上 Spring 事务事件丢失、
+        agent_execution_record 行未被创建、但 sub_task 一直停在 PENDING。
+        ExecutionCommandPoller 扫的是“有 execution_record 记录的孤儿”，
+        覆盖不到“压根没建 record”的 PENDING 子任务。
+
+        本扫描只返回 id 列表（轻量），调用方拿 id 后从 Service 补读最新状态
+        再重派，避免 TOCTOU 问题。
+
+        NOT EXISTS 子查询：排除已建过 record 的子任务（合规子任务）。
+        create_time < cutoff：避免误伤刚创建的合法 PENDING。
+        deleted=0：与项目其它扫描逻辑保持一致，软删不参与扫描。
+        ORDER BY id ASC：先扫最小 id，优先避免堆积。
+    -->
+    <select id="selectStalePendingWithoutExecutionRecord" resultType="java.lang.Long">
+        SELECT st.id FROM sub_task st
+        WHERE st.status = 'PENDING'
+          AND st.create_time &lt; #{cutoff}
+          AND st.deleted = 0
+          AND NOT EXISTS (
+              SELECT 1 FROM agent_execution_record aer
+              WHERE aer.sub_task_id = st.id
+          )
+        ORDER BY st.id ASC
+        LIMIT #{limit}
+    </select>
+
 </mapper>

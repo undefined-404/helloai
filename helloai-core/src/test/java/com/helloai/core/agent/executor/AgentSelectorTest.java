@@ -19,6 +19,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.OffsetDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 
@@ -77,6 +79,26 @@ class AgentSelectorTest {
         a.setScore(score);
         a.setOnlineStatus(onlineStatus);
         a.setStatus(status);
+        // v2.6 §4.1：默认心跳新鲜（now），避免现有 helper 出来的 CLI_CLIENT 因
+        // last_seen_time=null 被 isHeartbeatFresh 过滤；心跳用例请改用 agentWithHeartbeat(...)
+        a.setLastSeenTime(OffsetDateTime.now().minus(2, ChronoUnit.MINUTES));
+        return a;
+    }
+
+    /**
+     * 心跳新鲜度测试专用构造器。明确指定 last_seen_time，方便测试 v2.6 §4.1
+     * AgentSelector 的心跳新鲜度过滤逻辑。
+     *
+     * @param lastSeenMinutesAgo 距今分钟数；null 表示 last_seen_time 为 null
+     */
+    private Agent agentWithHeartbeat(Long id, Integer score, AgentOnlineStatus onlineStatus,
+                                     AgentStatus status, Long lastSeenMinutesAgo) {
+        Agent a = agent(id, score, onlineStatus, status);
+        if (lastSeenMinutesAgo != null) {
+            a.setLastSeenTime(OffsetDateTime.now().minus(lastSeenMinutesAgo, ChronoUnit.MINUTES));
+        } else {
+            a.setLastSeenTime(null);
+        }
         return a;
     }
 
@@ -503,6 +525,138 @@ class AgentSelectorTest {
             assertThat(result).isNotNull();
             assertThat(result.getId()).isEqualTo(2L);
             assertThat(result.getAccessType()).isEqualTo(AgentAccessType.CLI_CLIENT);
+        }
+    }
+
+    /**
+     * v2.6 §4.1 心跳语义对齐：AgentSelector 必须按 last_seen_time 新鲜度过滤。
+     * 默认阈值 10 分钟，API_KEY_LLM 豁免。
+     */
+    @Nested
+    @DisplayName("v2.6 心跳新鲜度过滤（last_seen_time）")
+    class HeartbeatFreshness {
+
+        @Test
+        @DisplayName("CLI_CLIENT last_seen_time=null → 视为不新鲜，被跳过")
+        void shouldSkipCliAgentWithNullLastSeenTime() {
+            Agent nullLastSeen = agentWithHeartbeat(2L, 90, AgentOnlineStatus.ONLINE,
+                    AgentStatus.ACTIVE, null);
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(nullLastSeen));
+
+            Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNull();
+        }
+
+        @Test
+        @DisplayName("CLI_CLIENT last_seen_time=15分钟前（>10min 默认阈值） → 被跳过")
+        void shouldSkipCliAgentWithStaleLastSeenTime() {
+            Agent stale = agentWithHeartbeat(2L, 90, AgentOnlineStatus.ONLINE,
+                    AgentStatus.ACTIVE, 15L);
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(stale));
+
+            Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNull();
+        }
+
+        @Test
+        @DisplayName("CLI_CLIENT last_seen_time=5分钟前（<10min 默认阈值） → 保留")
+        void shouldKeepCliAgentWithFreshLastSeenTime() {
+            Agent fresh = agentWithHeartbeat(2L, 90, AgentOnlineStatus.ONLINE,
+                    AgentStatus.ACTIVE, 5L);
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(fresh));
+            when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
+
+            Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(2L);
+        }
+
+        @Test
+        @DisplayName("API_KEY_LLM last_seen_time=null → 豁免，保留（不需运行时心跳）")
+        void shouldKeepApiKeyLlmAgentWithNullLastSeenTime() {
+            Agent apiAgent = agentWithHeartbeat(2L, 90, AgentOnlineStatus.ONLINE,
+                    AgentStatus.ACTIVE, null);
+            apiAgent.setAccessType(AgentAccessType.API_KEY_LLM);
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(apiAgent));
+            when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
+
+            Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(2L);
+            assertThat(result.getAccessType()).isEqualTo(AgentAccessType.API_KEY_LLM);
+        }
+
+        @Test
+        @DisplayName("多候选：fresher CLI_CLIENT 战胜 stale CLI_CLIENT")
+        void shouldPickFreshOverStaleAmongCliClients() {
+            Agent stale = agentWithHeartbeat(2L, 95, AgentOnlineStatus.ONLINE,
+                    AgentStatus.ACTIVE, 15L);  // 过期
+            Agent freshButLowerScore = agentWithHeartbeat(3L, 70, AgentOnlineStatus.ONLINE,
+                    AgentStatus.ACTIVE, 5L);   // 新鲜
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(stale, freshButLowerScore));
+            when(circuitBreakerRegistry.find("agentDispatch-3")).thenReturn(Optional.empty());
+
+            Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            // 尽管 stale 分数更高，因心跳过期被过滤掉
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(3L);
+        }
+
+        @Test
+        @DisplayName("heartbeatFreshMinutes=0（关闭过滤） → 所有 CLI_CLIENT 都保留")
+        void shouldDisableFilterWhenThresholdZero() {
+            AgentDispatchProperties zeroProps = new AgentDispatchProperties();
+            zeroProps.setPreferExternal(false);
+            zeroProps.setRequireIdle(false);
+            zeroProps.setHeartbeatFreshMinutes(0);
+            AgentSelector zeroSelector = new AgentSelector(
+                    agentService, circuitBreakerRegistry, zeroProps, agentDutyLeaseService);
+
+            Agent stale = agentWithHeartbeat(2L, 90, AgentOnlineStatus.ONLINE,
+                    AgentStatus.ACTIVE, 120L);  // 2 小时前
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(stale));
+            when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
+
+            Agent result = zeroSelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(2L);
+        }
+
+        @Test
+        @DisplayName("heartbeatFreshMinutes=3 自定义阈值：9 分钟前视为过期")
+        void shouldRespectCustomThreshold() {
+            AgentDispatchProperties customProps = new AgentDispatchProperties();
+            customProps.setPreferExternal(false);
+            customProps.setRequireIdle(false);
+            customProps.setHeartbeatFreshMinutes(3);
+            AgentSelector customSelector = new AgentSelector(
+                    agentService, circuitBreakerRegistry, customProps, agentDutyLeaseService);
+
+            Agent stale = agentWithHeartbeat(2L, 90, AgentOnlineStatus.ONLINE,
+                    AgentStatus.ACTIVE, 9L);  // 9 分钟前 > 3 分钟阈值
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(stale));
+
+            Agent result = customSelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNull();
         }
     }
 }

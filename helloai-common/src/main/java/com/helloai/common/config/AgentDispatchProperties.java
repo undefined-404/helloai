@@ -43,4 +43,21 @@ public class AgentDispatchProperties {
      * 打开后将调用调度服务按角色自动选人并进入 ASSIGNED。</p>
      */
     private boolean autoAssignOnCreate = false;
+
+    /**
+     * AgentSelector 心跳新鲜度阈值（v2.6 §4.1 2026-07-20 新增）。
+     *
+     * <p>调度选人时除了看 {@code online_status}，还会比对 {@code last_seen_time}：
+     * 若 last_seen_time 距今超过本阈值，即使 online_status 还显示 ONLINE/IDLE，
+     * 也视为“心跳过期”不参与本次选人。</p>
+     *
+     * <p>背景：Reconcile 周期（{{@code AgentHealthCheckTask} 60s）有最大延迟，
+     * 上游 OFFLINE 状态的传播滞后会导致选人挑到刚被死但还未来得及标 OFFLINE 的 Agent；
+     * 本阈值给 Selector 自护再上一道闸门。</p>
+     *
+     * <p>默认 10 分钟（心跳 TTL 5 分钟 + 2×Reconcile 周期作为安全垫）。
+     * API_KEY_LLM Agent 始终视为新鲜（架构 §3.8 三层可用性，requiresRuntimeLiveness=false）。
+     * 设置为 0 或负数可关闭该过滤（不推荐）。</p>
+     */
+    private int heartbeatFreshMinutes = 10;
 }
