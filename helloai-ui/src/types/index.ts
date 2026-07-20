@@ -71,6 +71,8 @@ export interface Agent {
   id: string
   name: string
   role: AgentRole
+  // M4.5: 接入类型，用于前端过滤可派发 Agent（CLI_CLIENT / API_KEY_LLM / WEB_BROWSER）
+  accessType?: 'CLI_CLIENT' | 'API_KEY_LLM' | 'WEB_BROWSER' | string
   modelType: string | null
   modelConfig: Record<string, any> | null
   specializationSlug: string | null
@@ -238,6 +240,34 @@ export interface ChangeStatusRequest {
   subTaskId: LongId
   newStatus: SubTaskStatus
   agentId: LongId | null
+}
+
+// --- M4.5 派发控制台新增类型 ---
+export interface CreateSubTaskPayload {
+  taskId: LongId
+  moduleId?: LongId
+  title: string
+  description?: string
+  deliverable?: string
+  acceptance?: string
+  priority?: string
+  assignedAgent?: LongId
+}
+
+export interface TaskTimelineItem {
+  id: LongId
+  eventType: string
+  role: string | null
+  agentId: LongId | null
+  payload: Record<string, any> | null
+  createTime: string
+}
+
+export interface ModuleItem {
+  id: LongId
+  taskId: LongId
+  name: string
+  sortOrder?: number
 }
 
 export interface CreateReviewRequest {

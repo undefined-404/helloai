@@ -17,6 +17,7 @@ import com.helloai.core.task.statemachine.SubTaskStateMachine;
 import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentService;
+import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -24,6 +25,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -396,5 +398,60 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
     public void reassign(Long subTaskId, Long newAgentId) {
         resetToPendingForDispatch(subTaskId, Set.of(SubTaskStatus.BLOCKED));
         changeStatus(subTaskId, SubTaskStatus.ASSIGNED, newAgentId);
+    }
+
+    /**
+     * 批量创建子任务（v2.5 M4.5 派发控制台——同内容 fan-out 派给多个 Agent）。
+     *
+     * <p>传入的是已经由 Controller 完成 DTO→Entity 映射的实体集合 + 各自关联的 assignedAgentId。
+     * 逐项调用现有 {@link #create(SubTask, Long)} 单建逻辑：</p>
+     * <ul>
+     *   <li>复用单建的所有装配与状态机逻辑（禁止复制方法体）</li>
+     *   <li>每项自身独立事务，单项失败不阻挡其他项（catch 隔离）</li>
+     *   <li>返回成功创建的实体列表（不含失败项）</li>
+     * </ul>
+     *
+     * <p>Controller 不感知事务边界，只负责传入、调用、转换为 Response DTO。</p>
+     *
+     * @param items 创建参数（实体 + assignedAgentId）
+     * @return 成功创建的 SubTask 列表（顺序与输入一致，跳过失败项）
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public List<SubTask> createBatch(List<BatchCreateItem> items) {
+        if (items == null || items.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<SubTask> created = new java.util.ArrayList<>(items.size());
+        int failCount = 0;
+        for (BatchCreateItem item : items) {
+            if (item == null || item.getSubTask() == null) {
+                failCount++;
+                continue;
+            }
+            try {
+                SubTask subTask = create(item.getSubTask(), item.getAssignedAgentId());
+                created.add(subTask);
+            } catch (Exception e) {
+                failCount++;
+                log.warn("子任务批量派发单项失败: title={}, agentId={}, err={}",
+                        item.getSubTask().getTitle(), item.getAssignedAgentId(), e.getMessage());
+            }
+        }
+        log.info("子任务批量派发: total={}, success={}, failed={}",
+                items.size(), created.size(), failCount);
+        return created;
+    }
+
+    /**
+     * 批量创建单项参数（v2.5 M4.5）。
+     *
+     * <p>实体已由 Controller 完成 DTO 映射（含 taskId / moduleId / title / content /
+     * deliverable / acceptance / priority / status=PENDING）；assignedAgentId 为直派 Agent ID
+     * （可空，为空时走 PENDING 等自动派发）。</p>
+     */
+    @Data
+    public static class BatchCreateItem {
+        private SubTask subTask;
+        private Long assignedAgentId;
     }
 }

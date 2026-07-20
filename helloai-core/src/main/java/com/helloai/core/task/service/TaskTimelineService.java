@@ -9,6 +9,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -59,5 +61,24 @@ public class TaskTimelineService extends ServiceImpl<TaskTimelineMapper, TaskTim
         timeline.setPayload(payload != null ? payload : Map.of());
         save(timeline);
         log.debug("TaskTimeline event recorded: type={}, agentId={}, role={}", eventType, agentId, role);
+    }
+
+    /**
+     * 查询指定子任务的时间线条目，按 id 升序（v2.5 M4.5 派发控制台联调）。
+     *
+     * <p>供 {@code GET /api/sub-tasks/{id}/timeline} 调用。
+     * 仅返回该子任务的事件，不含系统级事件（如 agent_offline）。</p>
+     *
+     * @param subTaskId 子任务 ID；为空时返回空集合
+     * @return 时间线条目列表（按 id 升序）；不存在子任务时返回空集合
+     */
+    public List<TaskTimeline> listBySubTaskId(Long subTaskId) {
+        if (subTaskId == null) {
+            return Collections.emptyList();
+        }
+        return lambdaQuery()
+                .eq(TaskTimeline::getSubTaskId, subTaskId)
+                .orderByAsc(TaskTimeline::getId)
+                .list();
     }
 }

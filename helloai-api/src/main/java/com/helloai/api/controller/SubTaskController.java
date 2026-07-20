@@ -5,22 +5,26 @@ import com.helloai.api.dto.subtask.CreateSubTaskRequest;
 import com.helloai.api.dto.subtask.ReassignRequest;
 import com.helloai.api.dto.subtask.ReworkRequest;
 import com.helloai.api.dto.subtask.SubTaskResponse;
+import com.helloai.api.dto.subtask.TaskTimelineItem;
 import com.helloai.common.base.R;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.entity.TaskTimeline;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.command.ExecutionCommandService;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskTimelineService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -36,18 +40,11 @@ public class SubTaskController {
     private final AgentExecutionRecordService agentExecutionRecordService;
     private final HttpServletRequest request;
     private final AgentDispatchProperties agentDispatchProperties;
+    private final TaskTimelineService taskTimelineService;
 
     @PostMapping
     public R<SubTaskResponse> create(@Valid @RequestBody CreateSubTaskRequest req) {
-        SubTask subTask = new SubTask();
-        subTask.setTaskId(req.getTaskId());
-        subTask.setModuleId(req.getModuleId());
-        subTask.setTitle(req.getTitle());
-        subTask.setContent(req.getDescription());
-        subTask.setDeliverable(req.getDeliverable());
-        subTask.setAcceptance(req.getAcceptance());
-        subTask.setPriority(req.getPriority() != null ? req.getPriority() : "MEDIUM");
-        subTask.setStatus(SubTaskStatus.PENDING);
+        SubTask subTask = toEntity(req);
         subTask = subTaskService.create(subTask, req.getAssignedAgent());
         log.info("子任务创建: id={}, title={}, taskId={}", subTask.getId(), req.getTitle(), req.getTaskId());
 
@@ -57,6 +54,68 @@ public class SubTaskController {
         }
 
         return R.ok(toResponse(subTask));
+    }
+
+    /**
+     * 批量创建子任务（v2.5 M4.5 派发控制台）。
+     *
+     * <p>同内容 fan-out 派发给多个 Agent；逐项独立创建（每项自身独立事务），
+     * 单项失败不影响其余；返回成功创建的列表（不含失败项）。</p>
+     */
+    @PostMapping("/batch")
+    public R<List<SubTaskResponse>> createBatch(@Valid @RequestBody List<CreateSubTaskRequest> reqs) {
+        if (reqs == null || reqs.isEmpty()) {
+            return R.ok(List.of());
+        }
+        List<SubTaskService.BatchCreateItem> items = new ArrayList<>(reqs.size());
+        for (CreateSubTaskRequest req : reqs) {
+            SubTaskService.BatchCreateItem it = new SubTaskService.BatchCreateItem();
+            it.setSubTask(toEntity(req));
+            it.setAssignedAgentId(req.getAssignedAgent());
+            items.add(it);
+        }
+        List<SubTask> created = subTaskService.createBatch(items);
+        List<SubTaskResponse> resp = created.stream().map(this::toResponse).toList();
+        log.info("子任务批量派发: requested={}, created={}", reqs.size(), resp.size());
+        return R.ok(resp);
+    }
+
+    /**
+     * 子任务执行时间线（v2.5 M4.5 派发控制台联调可视化）。
+     *
+     * <p>按 id 升序返回该子任务相关的所有 TaskTimeline 事件；不含系统级事件（如 agent_offline）。</p>
+     */
+    @GetMapping("/{id}/timeline")
+    public R<List<TaskTimelineItem>> timeline(@PathVariable("id") Long id) {
+        List<TaskTimeline> rows = taskTimelineService.listBySubTaskId(id);
+        List<TaskTimelineItem> items = rows.stream().map(this::toTimelineItem).toList();
+        return R.ok(items);
+    }
+
+    /** 从 CreateSubTaskRequest 装配 SubTask 实体（Controller 唯一装配点）。 */
+    private SubTask toEntity(CreateSubTaskRequest req) {
+        SubTask subTask = new SubTask();
+        subTask.setTaskId(req.getTaskId());
+        subTask.setModuleId(req.getModuleId());
+        subTask.setTitle(req.getTitle());
+        subTask.setContent(req.getDescription());
+        subTask.setDeliverable(req.getDeliverable());
+        subTask.setAcceptance(req.getAcceptance());
+        subTask.setPriority(req.getPriority() != null ? req.getPriority() : "MEDIUM");
+        subTask.setStatus(SubTaskStatus.PENDING);
+        return subTask;
+    }
+
+    /** TaskTimeline 实体 → TaskTimelineItem DTO。 */
+    private TaskTimelineItem toTimelineItem(TaskTimeline e) {
+        TaskTimelineItem it = new TaskTimelineItem();
+        it.setId(e.getId());
+        it.setEventType(e.getEventType());
+        it.setRole(e.getRole() != null ? e.getRole().name() : null);
+        it.setAgentId(e.getAgentId());
+        it.setPayload(e.getPayload());
+        it.setCreateTime(e.getCreateTime());
+        return it;
     }
 
     @GetMapping

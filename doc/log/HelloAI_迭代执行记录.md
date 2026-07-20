@@ -2519,3 +2519,62 @@ UI 行为变更：`helloai-ui/src/views/agent/components/AgentOnboardingDialog.v
 - **区分计数语义**：当前 `reassign_attempt_count` 对所有重分配类型统一计数；未来如需要区分（离线重派 vs N11回退），可扩展 `reassign_attempt_reason` 字段
 
 ---
+
+### 6.9 M4.5 派发控制台：批量派发 API + 子任务时间线 + 5s 轮询可视化（2026-07-20）
+
+#### 1. 范围
+
+按 `doc/M4.5_派发控制台实施清单.md` 落地，填补"运营/调度人工快速把同一个子任务 fan-out 派给多个 EXECUTOR"链路最后一公里：
+
+- **后端**：同内容 fan-out 创建子任务，避免前端 N 次串行调用
+- **可视化**：子任务详情页加执行时间线，让操作员看到 claim / submit / review / blocked 等 timeline 事件不用直接查 DB
+- **实时性**：详情页打开时 5s 轮询，进入终态后自动停止，避免人工刷
+- **UI 入口**：子任务列表页"刷新"按钮旁加"快速派发"按钮打开新对话框
+
+#### 2. 实际落地
+
+##### 2.1 后端 API（helloai-api + helloai-core Service）
+
+- `SubTaskController` 增两条端点：
+  - `POST /api/sub-tasks/batch`（`createBatch`）：接 `List<CreateSubTaskRequest>`，逐项调现有 `create()` 装配 + 入库逻辑，单项失败 catch 隔离返回成功列表
+  - `GET /api/sub-tasks/{id}/timeline`（`timeline`）：按 id 升序返回该子任务的 `TaskTimeline` 列表，映射到 `TaskTimelineItem` DTO
+  - 顺手把原 `create()` 内的 DTO→Entity 装配抽出为 `toEntity()` 私有方法，避免 createBatch 重复粘代码（**复用优先原则**）
+- `SubTaskService.createBatch(List<BatchCreateItem>)`：复用现有 `create(SubTask, Long)` 单建方法，单项 `try/catch` 隔离，返回成功列表
+- `TaskTimelineService.listBySubTaskId(Long)`：新方法供 Controller 调用，按 id ASC
+- 新建 DTO `helloai-api/.../dto/subtask/TaskTimelineItem.java`（与 V23 字段命名规范一致，eventType/role/agentId/payload/createTime）
+
+##### 2.2 前端（M4.5 实施清单）
+
+- 新建 `src/api/module.ts`：`moduleApi.list(taskId)` + `create(taskId, data)`，对应后端 `/api/tasks/{taskId}/modules`
+- `src/api/task.ts` 新增 `create(data)`
+- `src/api/subTask.ts` 新增 `createBatch(data)` + `timeline(id)` 两个方法；`CreateSubTaskPayload` 与 `TaskTimelineItem` 类型补到 `src/types/index.ts`
+- 新建 `src/components/QuickDispatchDialog.vue`：
+  - 字段：任务（可新建）/ 模块（可新建）/ 标题 / 描述 / 验收 / 优先级 / 执行 Agent（multiple，自动过滤 role=EXECUTOR 且 accessType=CLI_CLIENT）
+  - 提交用 `Promise.allSettled` 逐项派发，汇聚报告"成功 N / 失败 M"，失败项列出 Agent 名 + 错误信息
+- `views/subtask/SubTaskList.vue`：页头"刷新"按钮旁加 `<el-button type="primary" @click="dispatchVisible = true">快速派发</el-button>` + 挂载 `<QuickDispatchDialog v-model="dispatchVisible" @done="load" />`
+- `views/subtask/SubTaskDetail.vue`：
+  - 新增"执行时间线"卡片（el-card + el-timeline），数据源 `subTaskApi.timeline(id)`
+  - 每条节点显示 eventType + role/agentId + fmtTime(createTime)，payload 用 `<el-collapse>` 折叠展示 JSON
+  - **5s 轮询**：进入页面时启动；进入终态（DONE/CANCELLED）后停止；`onBeforeUnmount` clearInterval
+  - eventType → el-tag 颜色映射（assigned/created→primary, completed/submitted/review→success, blocked/rejected/failed→danger, paused/warning→warning）
+
+#### 3. 验证
+
+- `npm run build`：TypeScript 类型检查 + 构建通过
+- 后端：与 v2.6 §4.1 + V24 一并 `mvn test` reactor SUCCESS（SubTaskController 无 Mapper 注入、Controller 红线合规）
+
+#### 4. 影响
+
+- **接口新增**：`POST /api/sub-tasks/batch`、`GET /api/sub-tasks/{id}/timeline`
+- **DTO 新增**：`TaskTimelineItem`（API 层，对应实体 `TaskTimeline`）
+- **UI 新增**：`QuickDispatchDialog` + SubTaskList "快速派发"按钮 + SubTaskDetail 时间线卡片 + 5s 轮询
+- **行为变化**：前端扇出派发从"前端 N 次串行调用"改为后端批量端点（同一语义，单项失败隔离）；子任务详情页自动刷新时间线（无需手动刷新）
+- **遗留 DTO 字段**：`AgentOnboardingResponse.daemonScript` 仍未加，与 §6.8（EXECUTOR 常驻值班）合并到下轮 C 类一起补
+
+#### 5. 遗留与下一步
+
+- SubTaskDetail 轮询频率 5s 硬编码：未来可改为配置项 `helloai.ui.subtask-detail-poll-interval-ms`
+- QuickDispatchDialog 列表里"（值班中）"标注为本轮 TODO（涉及 duty 接口联调），下轮补
+- DTO 补字段：`AgentOnboardingResponse.daemonScript`（来自 §6.8 C 类遗留）、`TaskTimelineItem.payload` 改用强类型 V 各事件专属 DTO 而非 `Record<string, any>`
+
+---

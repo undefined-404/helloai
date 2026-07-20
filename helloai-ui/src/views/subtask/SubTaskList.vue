@@ -8,6 +8,7 @@
             <el-select v-model="statusFilter" placeholder="状态筛选" clearable style="width:140px;margin-right:8px" @change="load">
               <el-option v-for="[k,v] in Object.entries(SUB_TASK_STATUS_MAP)" :key="k" :label="v.label" :value="k" />
             </el-select>
+            <el-button size="small" type="primary" style="margin-right:8px" @click="dispatchVisible = true">快速派发</el-button>
             <el-button size="small" type="primary" @click="load">刷新</el-button>
           </div>
         </div>
@@ -67,6 +68,9 @@
           <el-button type="primary" :loading="claimDialog.loading" :disabled="!claimDialog.agentId" @click="doClaim">确认认领</el-button>
         </template>
       </el-dialog>
+
+      <!-- M4.5: 快速派发对话框 -->
+      <QuickDispatchDialog v-model="dispatchVisible" @done="load" />
     </el-card>
   </div>
 </template>
@@ -77,6 +81,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { subTaskApi } from '@/api/subTask'
 import AgentSelect from '@/components/AgentSelect.vue'
+import QuickDispatchDialog from '@/components/QuickDispatchDialog.vue'
 import { SUB_TASK_STATUS_MAP, SCORE_GRADE_MAP } from '@/types'
 import { ACTION } from '@/utils/tableConfig'
 import { fmtTime } from '@/utils/tableConfig'
@@ -87,6 +92,7 @@ const list = ref<SubTask[]>([])
 const total = ref(0)
 const loading = ref(false)
 const statusFilter = ref<SubTaskStatus | ''>('')
+const dispatchVisible = ref(false)
 
 async function load(page = 1) {
   loading.value = true
