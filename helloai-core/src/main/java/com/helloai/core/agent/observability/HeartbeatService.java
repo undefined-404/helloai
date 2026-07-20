@@ -20,11 +20,18 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>三件套心跳：
  * <ul>
- *   <li>last_seen_at（DB）— heartbeat/拉取/ack 即刷新，2 秒级</li>
- *   <li>last_active_at（DB）— start/submit/claim 即刷新，按需</li>
+ *   <li>last_seen_time（DB）— heartbeat/拉取/ack 即刷新，2 秒级</li>
+ *   <li>last_active_time（DB）— start/submit/claim 即刷新，按需</li>
  *   <li>Redis TTL（缓存）— agent:heartbeat:{id} = last_seen_at，5 分钟过期</li>
  * </ul>
- * </p>
+ *
+ * <p>活跃即在线契约（v2.6 §4.1 心跳语义对齐，2026-07-20 落地）：
+ * <ul>
+ *   <li>{@link #seen(Long)}：连接存活证据——刷 Redis TTL + last_seen_time + 重算 online_status</li>
+ *   <li>{@link #active(Long)}：业务活跃证据——复用 seen() 完整双写后再附加 last_active_time</li>
+ * </ul>
+ * 这样 MCP 工具调用（pullTasks / claim / submit）期间 Agent 自动保持在线，
+ * 避免"干活被判死"的事故形态。</p>
  *
  * <p>三态即时写回（方案 B，避免 Reconcile 滞后）：
  * <ul>
@@ -105,36 +112,36 @@ public class HeartbeatService {
     }
 
     /**
-     * 活跃刷新（任务执行时调用）：更新 last_active_at。
+     * 活跃刷新（任务执行时调用）。
      *
-     * <p>注意：active() 不强制刷新 last_seen_at（active 是任务执行的副产物，
-     * 而 seen 才是连接存活的标志）；但若在线状态已离线，active 会顺带刷 seen_at
-     * 让 Agent 回到 ONLINE。</p>
+     * <p><b>v2.6 §4.1 心跳语义对齐（2026-07-20）</b>：本方法复用 {@link #seen(Long)}
+     * 的完整双写逻辑（Redis TTL + DB last_seen_time + 三态重算），随后再单独刷
+     * {@code last_active_time}。这样 MCP 工具调用（pullTasks / claim / submit）
+     * 期间 Agent 自动保持在线，离线判定（仅看 last_seen_time）不会把干活的 Agent 误判死。</p>
+     *
+     * <p><b>last_active_time 单独刷的理由</b>：{@code seen} 的契约是"连接存活"，
+     * 不应被业务行为顺带刷新——否则任何 MCP 调用都会改 last_active_time，污染
+     * "最近一次业务执行时刻"的语义。拆为 seen() + 单字段 updateById 两步，契约各自独立。</p>
+     *
+     * <p><b>SLEEPING 防护</b>：{@code seen()} 内部已保护 SLEEPING 状态不被覆盖
+     * online_status，本方法直接复用，行为与调用 {@code seen()} 一致。</p>
      */
     @Transactional(rollbackFor = Exception.class)
     public void active(Long agentId) {
-        Agent agent = agentMapper.selectById(agentId);
-        if (agent == null) return;
-
-        OffsetDateTime now = OffsetDateTime.now();
-        agent.setLastActiveTime(now);
-
-        // SLEEPING 防护：不动 online_status
-        if (agent.getOnlineStatus() == AgentOnlineStatus.SLEEPING) {
-            agentMapper.updateById(agent);
+        if (agentId == null) {
             return;
         }
+        // 1) 复用 seen() 的完整双写：Redis TTL + DB last_seen_time + 三态重算
+        //    seen() 内部已处理 SLEEPING / OFFLINE→ONLINE 恢复 / Agent 不存在 等边界
+        seen(agentId);
 
-        // active 通常意味着 Agent 在做事，应视为 ONLINE
-        // 若 last_seen_at 还在 5 分钟内，把 online_status 提升到 ONLINE
-        if (agent.getLastSeenTime() != null
-                && agent.getLastSeenTime().isAfter(now.minusMinutes(5))) {
-            if (agent.getOnlineStatus() == AgentOnlineStatus.OFFLINE) {
-                agent.setOfflineReason(null);
-                agent.setOfflineTime(null);
-            }
-            agent.setOnlineStatus(AgentOnlineStatus.ONLINE);
+        // 2) 单独刷 last_active_time（独立于 seen 的"连接存活"语义）
+        Agent agent = agentMapper.selectById(agentId);
+        if (agent == null) {
+            log.debug("heartbeat active: Agent 已不存在，跳过 last_active_time 刷新: agentId={}", agentId);
+            return;
         }
+        agent.setLastActiveTime(OffsetDateTime.now());
         agentMapper.updateById(agent);
         log.debug("heartbeat active: agentId={}", agentId);
     }

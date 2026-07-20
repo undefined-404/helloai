@@ -97,6 +97,11 @@ helloai:
     auto-assign-on-create: false
     prefer-external: false
     require-idle: true
+    # V24：子任务重分配最大尝试次数（熔断阈值）
+    # 所有类型的重分配（离线重派、超时回收、N11回退、阻塞重试）每尝试一次累加
+    # sub_task.reassign_attempt_count；达到阈值后直接标记子任务为 CANCELLED，
+    # 打破"Agent全掉线→无限重分配"的死循环。设为 0 禁用熔断（不推荐生产使用）。
+    max-reassign-attempts: 5
     # Phase 2C N11：外部 Agent 连续失败阈值后自动回退到平台内 API_KEY_LLM
     fallback:
       enabled: true

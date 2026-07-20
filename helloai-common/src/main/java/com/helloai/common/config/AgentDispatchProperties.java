@@ -39,25 +39,23 @@ public class AgentDispatchProperties {
     /**
      * 创建子任务时是否自动分配（初始分配）。
      *
-     * <p>默认 false，保持现有“创建即 PENDING，可由外部 Agent claim”的工作流不变；
+     * <p>默认 false，保持现有"创建即 PENDING，可由外部 Agent claim"的工作流不变；
      * 打开后将调用调度服务按角色自动选人并进入 ASSIGNED。</p>
      */
     private boolean autoAssignOnCreate = false;
 
     /**
-     * AgentSelector 心跳新鲜度阈值（v2.6 §4.1 2026-07-20 新增）。
+     * V24：子任务重分配最大尝试次数（熔断阈值）。
      *
-     * <p>调度选人时除了看 {@code online_status}，还会比对 {@code last_seen_time}：
-     * 若 last_seen_time 距今超过本阈值，即使 online_status 还显示 ONLINE/IDLE，
-     * 也视为“心跳过期”不参与本次选人。</p>
+     * <p>所有类型的重分配（离线重派、超时回收、N11回退、阻塞重试）
+     * 每尝试一次累加 sub_task.reassign_attempt_count；达到本阈值后不再
+     * 重新分配，直接标记子任务为 CANCELLED，打破无限重试死循环。</p>
      *
-     * <p>背景：Reconcile 周期（{{@code AgentHealthCheckTask} 60s）有最大延迟，
-     * 上游 OFFLINE 状态的传播滞后会导致选人挑到刚被死但还未来得及标 OFFLINE 的 Agent；
-     * 本阈值给 Selector 自护再上一道闸门。</p>
-     *
-     * <p>默认 10 分钟（心跳 TTL 5 分钟 + 2×Reconcile 周期作为安全垫）。
-     * API_KEY_LLM Agent 始终视为新鲜（架构 §3.8 三层可用性，requiresRuntimeLiveness=false）。
-     * 设置为 0 或负数可关闭该过滤（不推荐）。</p>
+     * <p>默认 5 次。设为 0 或负数表示禁用熔断（不推荐生产使用）。</p>
      */
-    private int heartbeatFreshMinutes = 10;
+    private int maxReassignAttempts = 5;
+
+    // 注：原 heartbeatFreshMinutes 字段（v2.6 §4.1 2026-07-20）已迁移至
+    //     AgentHealthProperties.offlineMinutes，作为 Selector / Reconcile / SQL 回退候选
+    //     共用的单一心跳阈值来源。详见 com.helloai.common.config.AgentHealthProperties。
 }

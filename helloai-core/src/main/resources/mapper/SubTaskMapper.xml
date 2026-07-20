@@ -29,6 +29,8 @@
             complete_time = #{et.completeTime},
             version = #{et.version},
             timeout_count = #{et.timeoutCount},
+            external_fallback_count = #{et.externalFallbackCount},
+            reassign_attempt_count = #{et.reassignAttemptCount},
             update_by = #{et.updateBy},
             update_time = #{et.updateTime}
         WHERE id = #{et.id} AND version = #{MP_OPTLOCK_VERSION_ORIGINAL} AND deleted = 0
@@ -117,6 +119,61 @@
           AND NOT EXISTS (
               SELECT 1 FROM agent_execution_record aer
               WHERE aer.sub_task_id = st.id
+          )
+        ORDER BY st.id ASC
+        LIMIT #{limit}
+    </select>
+
+    <!--
+        V24 重分配熔断：原子累加 sub_task.reassign_attempt_count。
+        与 incrementExternalFallbackCount 平行但语义独立：
+        external_fallback_count 仅计 N11 外部→LLM 回退，
+        reassign_attempt_count 计所有类型的重分配入口。
+        并发安全：UPDATE 同时满足 id + deleted；不依赖读后写。
+    -->
+    <update id="incrementReassignAttemptCount">
+        UPDATE sub_task
+        SET reassign_attempt_count = COALESCE(reassign_attempt_count, 0) + 1,
+            update_time = #{now}
+        WHERE id = #{subTaskId}
+          AND deleted = 0
+    </update>
+
+    <!--
+        v2.6 §4.1 新增（调度链遗留 PENDING 未指派兜底）：
+
+        定位：与 selectStalePendingWithoutExecutionRecord 互补，专供 ExternalAgentFallbackTask
+        做全局兜底扫描。
+
+        命中条件：
+          1) status = 'PENDING' 且 assigned_agent_id IS NULL
+          2) 历史上存在 agent_execution_record 记录
+          3) 当前不存在活跃（PENDING/RUNNING）execution record
+
+        这种状态意味着"离线重派在 reset 后失败留下"的调度链遗留任务：
+          - 之前确实被分配过 → 有历史 record
+          - 当前没有 poller 在跑 → 没有活跃 record
+          - 已经被 reset 回 PENDING + 无人指派
+
+        区别于 SubTaskPendingOrphanTask 处理的无 record 旧 PENDING；
+        区别于 Poller 处理的活跃 PENDING/RUNNING record。
+
+        不依赖时间字段（区别于 selectStalePendingWithoutExecutionRecord 的 create_time 阈值）；
+        一旦命中即视为异常状态，需尽快恢复。
+    -->
+    <select id="selectPendingUnassignedWithoutActiveExecutionRecord" resultType="java.lang.Long">
+        SELECT st.id FROM sub_task st
+        WHERE st.status = 'PENDING'
+          AND st.assigned_agent_id IS NULL
+          AND st.deleted = 0
+          AND EXISTS (
+              SELECT 1 FROM agent_execution_record aer
+              WHERE aer.sub_task_id = st.id
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM agent_execution_record aer2
+              WHERE aer2.sub_task_id = st.id
+                AND aer2.status IN ('PENDING', 'RUNNING')
           )
         ORDER BY st.id ASC
         LIMIT #{limit}

@@ -1,6 +1,7 @@
 package com.helloai.core.agent.executor;
 
 import com.helloai.common.config.AgentDispatchProperties;
+import com.helloai.common.config.AgentHealthProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
@@ -37,6 +38,7 @@ public class AgentSelector {
     private final AgentService agentService;
     private final CircuitBreakerRegistry circuitBreakerRegistry;
     private final AgentDispatchProperties agentDispatchProperties;
+    private final AgentHealthProperties agentHealthProperties;
     private final AgentDutyLeaseService agentDutyLeaseService;
 
     /**
@@ -64,10 +66,10 @@ public class AgentSelector {
      *   <li>跳过 SLEEPING 状态</li>
      *   <li>跳过 OFFLINE 状态（v2.6 §4.1 由 markOfflineIfStale + Reconcile保证唯一性，
      *       API_KEY_LLM 豁免）</li>
-     *   <li>v2.6 §4.1 新增：心跳新鲜度过滤—— last_seen_time 距今超过
-     *       {@code agentDispatchProperties.heartbeatFreshMinutes}（默认 10 分钟）
-     *       的 Agent 被跳过，即使 online_status 仍是 ONLINE；防止选人拿到
-     *       “刚被死但还未来得及被 Reconcile 标 OFFLINE”的 Agent。
+     *   <li>v2.6 §4.1：心跳新鲜度过滤—— last_seen_time 距今超过
+     *       {@link AgentHealthProperties#getOfflineMinutes()}（默认 5 分钟，
+     *       对齐 Redis 心跳 TTL）的 Agent 被跳过，即使 online_status 仍是 ONLINE；
+     *       防止选人拿到“刚被死但还未来得及被 Reconcile 标 OFFLINE”的 Agent。
      *       API_KEY_LLM 始终视为新鲜（不需要运行时心跳）。</li>
      *   <li>跳过 status != ACTIVE（已禁用的 Agent）</li>
      *   <li>跳过熔断器已打开的 Agent（per-agent 维度）</li>
@@ -108,17 +110,17 @@ public class AgentSelector {
     }
 
     /**
-     * 心跳新鲜度检查（v2.6 §4.1 2026-07-20 新增）。
+     * 心跳新鲜度检查（v2.6 §4.1）。
      *
-     * <p>返回 true 表示 Agent 近期可见、参与选人：
+     * <p>返回 true 表示 Agent 近期可见、参与选人：</p>
      * <ul>
      *   <li>API_KEY_LLM 类型 始终视为新鲜（requiresRuntimeLiveness=false，
      *       架构 §3.8 三层可用性）</li>
-     *   <li>CLI_CLIENT：last_seen_time 距今 ≤ heartbeatFreshMinutes
-     *       （默认 10 分钟）视为新鲜；last_seen_time=null 也视为陈旧</li>
+     *   <li>CLI_CLIENT：last_seen_time 距今 ≤
+     *       {@link AgentHealthProperties#getOfflineMinutes()}（默认 5 分钟，
+     *       对齐 Redis TTL）视为新鲜；last_seen_time=null 也视为陈旧</li>
      *   <li>阈值 ≤ 0 时视为关闭过滤（不推荐生产使用）</li>
      * </ul>
-     * </p>
      *
      * <p>防御式：不因本检查本身报错而影响选人（如 last_seen_time 为 null
      * 造成 NPE 会被 try/catch 降级为不新鲜）。</p>
@@ -133,7 +135,7 @@ public class AgentSelector {
             if (accessType != null && !accessType.requiresRuntimeLiveness()) {
                 return true;
             }
-            int thresholdMinutes = agentDispatchProperties.getHeartbeatFreshMinutes();
+            int thresholdMinutes = agentHealthProperties.getOfflineMinutes();
             if (thresholdMinutes <= 0) {
                 // 关闭过滤（逃生口）
                 return true;

@@ -1,6 +1,7 @@
 package com.helloai.core.agent.service;
 
 import com.helloai.common.config.AgentFallbackProperties;
+import com.helloai.common.config.AgentHealthProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
@@ -26,6 +27,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -47,7 +49,7 @@ class ExternalAgentFailureTrackerTest {
     private AgentMapper agentMapper;
 
     private AgentFallbackProperties properties;
-
+    private AgentHealthProperties healthProperties;
     private ExternalAgentFailureTracker tracker;
 
     @BeforeEach
@@ -58,7 +60,11 @@ class ExternalAgentFailureTrackerTest {
         properties.setCooldownMinutes(10);
         properties.setScanIntervalMs(60_000L);
 
-        tracker = new ExternalAgentFailureTracker(agentMapper, properties);
+        // v2.6 §4.1：共享 5 分钟健康阈值；测试用 5 分钟以贴近真实链路
+        healthProperties = new AgentHealthProperties();
+        healthProperties.setOfflineMinutes(5);
+
+        tracker = new ExternalAgentFailureTracker(agentMapper, properties, healthProperties);
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -135,16 +141,18 @@ class ExternalAgentFailureTrackerTest {
     class FindCandidates {
 
         @Test
-        @DisplayName("透传 threshold + cooldownCutoff（now - cooldownMinutes）到 Mapper")
+        @DisplayName("透传 threshold + cooldownCutoff + lastSeenCutoff（now - offlineMinutes）到 Mapper")
         void shouldDelegateToMapper() {
             Agent a = cliAgent(1L, 5, null);
-            when(agentMapper.selectFallbackCandidates(eq(3), any(OffsetDateTime.class)))
+            when(agentMapper.selectFallbackCandidates(
+                    eq(3), any(OffsetDateTime.class), any(OffsetDateTime.class)))
                     .thenReturn(List.of(a));
 
             List<Agent> result = tracker.findFallbackCandidates();
 
             assertThat(result).hasSize(1).containsExactly(a);
-            verify(agentMapper, times(1)).selectFallbackCandidates(eq(3), any(OffsetDateTime.class));
+            verify(agentMapper, times(1)).selectFallbackCandidates(
+                    eq(3), any(OffsetDateTime.class), any(OffsetDateTime.class));
         }
 
         @Test
@@ -155,7 +163,36 @@ class ExternalAgentFailureTrackerTest {
             List<Agent> result = tracker.findFallbackCandidates();
 
             assertThat(result).isEmpty();
-            verify(agentMapper, never()).selectFallbackCandidates(anyInt(), any());
+            verify(agentMapper, never()).selectFallbackCandidates(anyInt(), any(), any());
+        }
+
+        @Test
+        @DisplayName("透传 threshold + cooldownCutoff + lastSeenCutoff（now - offlineMinutes）到 Mapper")
+        void shouldDelegateThreeParamsToMapper() {
+            Agent a = cliAgent(1L, 5, null, OffsetDateTime.now().minusMinutes(2));
+            when(agentMapper.selectFallbackCandidates(eq(3), any(OffsetDateTime.class), any(OffsetDateTime.class)))
+                    .thenReturn(List.of(a));
+
+            List<Agent> result = tracker.findFallbackCandidates();
+
+            assertThat(result).hasSize(1).containsExactly(a);
+            verify(agentMapper, times(1)).selectFallbackCandidates(
+                    eq(3), any(OffsetDateTime.class), any(OffsetDateTime.class));
+        }
+
+        @Test
+        @DisplayName("offlineMinutes <= 0 时 lastSeenCutoff 退化为 MIN，不过滤心跳")
+        void shouldBypassHeartbeatFilterWhenThresholdZero() {
+            healthProperties.setOfflineMinutes(0);
+            Agent a = cliAgent(1L, 5, null, null);
+            when(agentMapper.selectFallbackCandidates(eq(3), any(OffsetDateTime.class), any(OffsetDateTime.class)))
+                    .thenReturn(List.of(a));
+
+            tracker.findFallbackCandidates();
+
+            // 心跳过滤关闭，但参数仍会透传给 SQL（cutoff 为 MIN）
+            verify(agentMapper, times(1)).selectFallbackCandidates(
+                    eq(3), any(OffsetDateTime.class), any(OffsetDateTime.class));
         }
     }
 
@@ -224,8 +261,46 @@ class ExternalAgentFailureTrackerTest {
         @Test
         @DisplayName("consecutiveFailureCount=null 视为 0")
         void shouldTreatNullCountAsZero() {
-            Agent a = cliAgent(1L, null, null);
+            Agent a = cliAgent(1L, null, null, OffsetDateTime.now().minusMinutes(2));
             assertThat(tracker.shouldFallback(a)).isFalse();
+        }
+
+        // v2.6 §4.1：心跳新鲜度规则（与 SQL selectFallbackCandidates 完全一致）
+
+        @Test
+        @DisplayName("CLI_CLIENT + last_seen_time=null → false（心跳未知视为过期）")
+        void shouldReturnFalseWhenLastSeenNull() {
+            Agent a = cliAgent(1L, 5, null, null);
+            assertThat(tracker.shouldFallback(a)).isFalse();
+        }
+
+        @Test
+        @DisplayName("CLI_CLIENT + last_seen_time 在阈值内（4 分钟前）→ true")
+        void shouldReturnTrueWhenHeartbeatFresh() {
+            Agent a = cliAgent(1L, 5, null, OffsetDateTime.now().minusMinutes(4));
+            assertThat(tracker.shouldFallback(a)).isTrue();
+        }
+
+        @Test
+        @DisplayName("CLI_CLIENT + last_seen_time 超过阈值（6 分钟前）→ false")
+        void shouldReturnFalseWhenHeartbeatStale() {
+            Agent a = cliAgent(1L, 5, null, OffsetDateTime.now().minusMinutes(6));
+            assertThat(tracker.shouldFallback(a)).isFalse();
+        }
+
+        @Test
+        @DisplayName("CLI_CLIENT + 阈值边界（exactly 5 分钟前）→ false（严格 after）")
+        void shouldReturnFalseAtBoundary() {
+            Agent a = cliAgent(1L, 5, null, OffsetDateTime.now().minusMinutes(5));
+            assertThat(tracker.shouldFallback(a)).isFalse();
+        }
+
+        @Test
+        @DisplayName("offlineMinutes <= 0 时心跳过滤关闭 → null last_seen_time 也可 true")
+        void shouldBypassHeartbeatFilterWhenZeroThreshold() {
+            healthProperties.setOfflineMinutes(0);
+            Agent a = cliAgent(1L, 5, null, null);
+            assertThat(tracker.shouldFallback(a)).isTrue();
         }
     }
 
@@ -234,6 +309,17 @@ class ExternalAgentFailureTrackerTest {
     // ═══════════════════════════════════════════════════════════════
 
     private static Agent cliAgent(Long id, Integer failureCount, OffsetDateTime lastFallbackAt) {
+        return cliAgent(id, failureCount, lastFallbackAt, OffsetDateTime.now().minusMinutes(2));
+    }
+
+    /**
+     * 心跳可控构造器（v2.6 §4.1）。
+     *
+     * @param lastSeenTime Agent.last_seen_time；null 表示从未心跳
+     */
+    private static Agent cliAgent(Long id, Integer failureCount,
+                                  OffsetDateTime lastFallbackAt,
+                                  OffsetDateTime lastSeenTime) {
         Agent a = new Agent();
         a.setId(id);
         a.setName("cli-agent-" + id);
@@ -243,6 +329,7 @@ class ExternalAgentFailureTrackerTest {
         a.setOnlineStatus(AgentOnlineStatus.ONLINE);
         a.setConsecutiveFailureCount(failureCount);
         a.setLastFallbackTime(lastFallbackAt);
+        a.setLastSeenTime(lastSeenTime);
         return a;
     }
 }

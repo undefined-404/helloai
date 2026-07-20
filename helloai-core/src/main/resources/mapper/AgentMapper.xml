@@ -72,8 +72,12 @@
           1) id 匹配
           2) last_seen_time 仍 < cutoff（防止 seen() 刚刷新就被覆盖）
           3) online_status 不是 SLEEPING（系统不自动覆盖管理员状态）
-          4) 未删除
-        影响行数 = 0 表示 CAS 失败（说明心跳刚到或 Agent 已 SLEEPING），调用方应放弃处理。
+          4) online_status 不是 OFFLINE（v2.6 §4.1 2026-07-20 新增：已离线 Agent 不再重复标记，
+             避免每个 Reconcile cycle 都重复写一条 agent_offline timeline 与重复累加 failure count；
+             仅在跨 OFFLINE→OFFLINE 的重复刷写场景生效，OFFLINE→ONLINE→OFFLINE 仍可正常标记）
+          5) 未删除
+        影响行数 = 0 表示 CAS 失败（说明心跳刚到 / Agent 已 SLEEPING / 已被本轮或上一轮标 OFFLINE），
+        调用方应放弃处理。
     -->
     <update id="markOfflineIfStale">
         UPDATE agent
@@ -84,6 +88,7 @@
         WHERE id = #{agentId}
           AND last_seen_time &lt; #{cutoff}
           AND (online_status IS DISTINCT FROM 'SLEEPING')
+          AND (online_status IS DISTINCT FROM 'OFFLINE')
           AND deleted = 0
     </update>
 
@@ -148,9 +153,12 @@
 
     <!--
         N11 阈值回退：扫描超阈值候选 Agent。
-        调用方（ExternalAgentFallbackTask）传入 threshold + cooldownCutoff：
+        调用方（ExternalAgentFallbackTask）传入 threshold + cooldownCutoff + lastSeenCutoff：
           - consecutive_failure_count >= threshold
           - last_fallback_time IS NULL OR last_fallback_time < cooldownCutoff
+          - v2.6 §4.1：last_seen_time IS NOT NULL AND last_seen_time > lastSeenCutoff
+            （心跳新鲜度过滤；与 AgentSelector、AgentHealthCheckTask 共用
+            AgentHealthProperties.offlineMinutes，与 shouldFallback 的纯函数规则一致）
         仅返回 CLI_CLIENT + 未删除 Agent。
     -->
     <select id="selectFallbackCandidates" resultType="com.helloai.core.agent.entity.Agent">
@@ -159,6 +167,8 @@
           AND deleted = 0
           AND COALESCE(consecutive_failure_count, 0) >= #{threshold}
           AND (last_fallback_time IS NULL OR last_fallback_time &lt; #{cooldownCutoff})
+          AND last_seen_time IS NOT NULL
+          AND last_seen_time &gt; #{lastSeenCutoff}
         ORDER BY consecutive_failure_count DESC, last_failure_time ASC
     </select>
 

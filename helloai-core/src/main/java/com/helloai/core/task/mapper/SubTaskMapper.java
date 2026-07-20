@@ -31,6 +31,18 @@ public interface SubTaskMapper extends BaseMapper<SubTask> {
                                        @Param("now") OffsetDateTime now);
 
     /**
+     * V24：原子累加 sub_task.reassign_attempt_count（重分配熔断计数器）。
+     *
+     * <p>所有类型的重分配入口（离线重派、超时回收、N11回退、阻塞重试）都通过
+     * 本方法累加计数。达到 max-reassign-attempts 阈值后由
+     * {@link com.helloai.core.task.service.SubTaskDispatchService} 判定熔断。</p>
+     *
+     * @return 1 = 成功累加；0 = 子任务不存在或已删除
+     */
+    int incrementReassignAttemptCount(@Param("subTaskId") Long subTaskId,
+                                      @Param("now") OffsetDateTime now);
+
+    /**
      * 查询某 Agent 处于 IN_PROGRESS/ASSIGNED/REWORK 的子任务列表（按 id 升序，limit 上限）。
      */
     List<SubTask> selectInFlightByAgent(@Param("agentId") Long agentId,
@@ -74,4 +86,36 @@ public interface SubTaskMapper extends BaseMapper<SubTask> {
      */
     List<Long> selectStalePendingWithoutExecutionRecord(@Param("cutoff") OffsetDateTime cutoff,
                                                         @Param("limit") int limit);
+
+    /**
+     * 查询“有历史 execution record、但无活跃 PENDING/RUNNING record”
+     * 的 PENDING 未指派子任务 ID 列表（v2.6 §4.1）。
+     *
+     * <p>职责定位：本方法与 {@link #selectStalePendingWithoutExecutionRecord}
+     * 互为补充，由 {@code ExternalAgentFallbackTask} 全局兜底使用：</p>
+     * <ul>
+     *   <li>无任何 execution record → 由 SubTaskPendingOrphanTask / 上面的方法处理</li>
+     *   <li>有历史 record 但无活跃 record + status=PENDING + assigned_agent_id IS NULL
+     *       → 由本方法覆盖；这正是“离线重派在 reset 后失败留下”的典型调度链遗留</li>
+     *   <li>有活跃 PENDING/RUNNING record → 继续交给 Poller/补偿链</li>
+     * </ul>
+     *
+     * <p>扫描条件：
+     * <ul>
+     *   <li>{@code status='PENDING'}</li>
+     *   <li>{@code assigned_agent_id IS NULL}</li>
+     *   <li>{@code EXISTS} 历史 execution record（任意状态）</li>
+     *   <li>{@code NOT EXISTS} 活跃（PENDING/RUNNING）execution record</li>
+     *   <li>{@code deleted=0}</li>
+     * </ul>
+     * </p>
+     *
+     * <p>只返回 id 列表，调用方按 id 补读最新状态后逐条处理，避免直接根据扫描结果变更状态。
+     * 本查询<b>不依赖时间字段</b>：调度链遗留可能发生在任何时间点，
+     * 一旦命中就属于异常状态需尽快恢复。</p>
+     *
+     * @param limit 单次返回最多条数
+     * @return 调度链遗留 PENDING 未指派子任务 ID 列表（按 id ASC）
+     */
+    List<Long> selectPendingUnassignedWithoutActiveExecutionRecord(@Param("limit") int limit);
 }

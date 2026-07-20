@@ -54,6 +54,11 @@
             <groupId>io.github.resilience4j</groupId>
             <artifactId>resilience4j-spring-boot3</artifactId>
         </dependency>
+        <!-- Spring AOP starter：让 @CircuitBreaker/@Aspect 等注解可被 Spring 代理织入（v2.6 §4.1 调度链修复） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aop</artifactId>
+        </dependency>
         <!-- Spring AI MCP Server WebMVC（v2.4 §3.1 / §9 MCP Server 标准化，路线 C） -->
         <dependency>
             <groupId>org.springframework.ai</groupId>

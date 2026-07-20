@@ -5,11 +5,13 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
+import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.agent.service.ExternalAgentFailureTracker;
 import com.helloai.core.task.service.SubTaskDispatchService;
+import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -63,6 +65,8 @@ class ExternalAgentFallbackTaskTest {
     private StringRedisTemplate redis;
     @Mock
     private ValueOperations<String, String> valueOps;
+    @Mock
+    private SubTaskService subTaskService;
 
     private AgentFallbackProperties properties;
     private ExternalAgentFallbackTask task;
@@ -77,7 +81,7 @@ class ExternalAgentFallbackTaskTest {
 
         task = new ExternalAgentFallbackTask(
                 failureTracker, subTaskDispatchService, subTaskMapper,
-                taskTimelineService, properties, redis);
+                taskTimelineService, properties, redis, subTaskService);
 
         // 默认让 tryLock 成功（用 lenient 避免 shouldSkipWhenDisabled 这种短路测试报 UnnecessaryStubbings）
         lenient().when(redis.opsForValue()).thenReturn(valueOps);
@@ -120,6 +124,134 @@ class ExternalAgentFallbackTaskTest {
 
             verify(failureTracker, times(1)).findFallbackCandidates();
             verify(subTaskDispatchService, never()).redispatchForFallback(anyLong(), anyLong(), anyString());
+        }
+
+        @Test
+        @DisplayName("无候选 Agent → 仍要执行调度链遗留 PENDING 兜底（v2.6 §4.1）")
+        void shouldStillRunPendingRecoveryWhenNoCandidates() {
+            when(failureTracker.findFallbackCandidates()).thenReturn(List.of());
+            when(subTaskMapper.selectPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
+                    .thenReturn(List.of(5001L));
+            SubTask latest = pendingUnassignedTask(5001L);
+            when(subTaskService.getById(5001L)).thenReturn(latest);
+
+            task.scan();
+
+            verify(failureTracker, times(1)).findFallbackCandidates();
+            verify(subTaskDispatchService, never()).redispatchForFallback(anyLong(), anyLong(), anyString());
+            // 关键：即使无 N11 候选，也要执行 PENDING 兜底
+            verify(subTaskMapper, times(1)).selectPendingUnassignedWithoutActiveExecutionRecord(anyInt());
+            verify(subTaskDispatchService, times(1))
+                    .dispatchPendingSubTaskAuto(eq(5001L), eq(AgentRole.EXECUTOR));
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  v2.6 §4.1：调度链遗留 PENDING 未指派兜底
+    // ══════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("调度链遗留 PENDING 未指派兜底（recoverPendingUnassigned）")
+    class PendingUnassignedRecovery {
+
+        @Test
+        @DisplayName("扫描到候选 → 补读最新状态 → 仍为 PENDING 且未指派 → 自动选人")
+        void shouldRecoverPendingUnassigned() {
+            when(failureTracker.findFallbackCandidates()).thenReturn(List.of());
+            when(subTaskMapper.selectPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
+                    .thenReturn(List.of(5001L, 5002L));
+            when(subTaskService.getById(5001L)).thenReturn(pendingUnassignedTask(5001L));
+            when(subTaskService.getById(5002L)).thenReturn(pendingUnassignedTask(5002L));
+
+            task.scan();
+
+            verify(subTaskDispatchService, times(1))
+                    .dispatchPendingSubTaskAuto(eq(5001L), eq(AgentRole.EXECUTOR));
+            verify(subTaskDispatchService, times(1))
+                    .dispatchPendingSubTaskAuto(eq(5002L), eq(AgentRole.EXECUTOR));
+        }
+
+        @Test
+        @DisplayName("扫描到的子任务状态已变化 → 跳过，不强制覆盖")
+        void shouldSkipWhenStatusChanged() {
+            when(failureTracker.findFallbackCandidates()).thenReturn(List.of());
+            when(subTaskMapper.selectPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
+                    .thenReturn(List.of(5001L));
+            SubTask changed = pendingUnassignedTask(5001L);
+            changed.setStatus(SubTaskStatus.ASSIGNED);  // 已被其他链路推进
+            changed.setAssignedAgentId(999L);
+            when(subTaskService.getById(5001L)).thenReturn(changed);
+
+            task.scan();
+
+            verify(subTaskDispatchService, never())
+                    .dispatchPendingSubTaskAuto(anyLong(), any());
+        }
+
+        @Test
+        @DisplayName("扫描到的子任务不存在（已被删除） → 跳过")
+        void shouldSkipWhenSubTaskDeleted() {
+            when(failureTracker.findFallbackCandidates()).thenReturn(List.of());
+            when(subTaskMapper.selectPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
+                    .thenReturn(List.of(5001L));
+            when(subTaskService.getById(5001L)).thenReturn(null);
+
+            task.scan();
+
+            verify(subTaskDispatchService, never())
+                    .dispatchPendingSubTaskAuto(anyLong(), any());
+        }
+
+        @Test
+        @DisplayName("扫描到子任务已被指派 → 跳过")
+        void shouldSkipWhenAlreadyAssigned() {
+            when(failureTracker.findFallbackCandidates()).thenReturn(List.of());
+            when(subTaskMapper.selectPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
+                    .thenReturn(List.of(5001L));
+            SubTask assigned = pendingUnassignedTask(5001L);
+            assigned.setAssignedAgentId(777L);  // 已被分配
+            when(subTaskService.getById(5001L)).thenReturn(assigned);
+
+            task.scan();
+
+            verify(subTaskDispatchService, never())
+                    .dispatchPendingSubTaskAuto(anyLong(), any());
+        }
+
+        @Test
+        @DisplayName("单条 dispatchPendingSubTaskAuto 失败 → 不中断其他候选")
+        void shouldContinueOnSingleDispatchFailure() {
+            when(failureTracker.findFallbackCandidates()).thenReturn(List.of());
+            when(subTaskMapper.selectPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
+                    .thenReturn(List.of(5001L, 5002L));
+            when(subTaskService.getById(5001L)).thenReturn(pendingUnassignedTask(5001L));
+            when(subTaskService.getById(5002L)).thenReturn(pendingUnassignedTask(5002L));
+            when(subTaskDispatchService.dispatchPendingSubTaskAuto(eq(5001L), any()))
+                    .thenThrow(new RuntimeException("synthetic failure"));
+
+            task.scan();
+
+            // 两条都被尝试
+            verify(subTaskDispatchService, times(1))
+                    .dispatchPendingSubTaskAuto(eq(5001L), eq(AgentRole.EXECUTOR));
+            verify(subTaskDispatchService, times(1))
+                    .dispatchPendingSubTaskAuto(eq(5002L), eq(AgentRole.EXECUTOR));
+        }
+
+        @Test
+        @DisplayName("兜底不写入 N11 冷却 / external_fallback_count")
+        void shouldNotPolluteN11Counters() {
+            when(failureTracker.findFallbackCandidates()).thenReturn(List.of());
+            when(subTaskMapper.selectPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
+                    .thenReturn(List.of(5001L));
+            when(subTaskService.getById(5001L)).thenReturn(pendingUnassignedTask(5001L));
+
+            task.scan();
+
+            // PENDING 兜底不写 N11 冷却
+            verify(failureTracker, never()).markFallbackTriggered(anyLong());
+            // PENDING 兜底不累加 external_fallback_count
+            verify(subTaskMapper, never()).incrementExternalFallbackCount(anyLong(), any(OffsetDateTime.class));
         }
     }
 
@@ -219,6 +351,14 @@ class ExternalAgentFallbackTaskTest {
         SubTask s = new SubTask();
         s.setId(id);
         s.setAssignedAgentId(agentId);
+        return s;
+    }
+
+    private static SubTask pendingUnassignedTask(Long id) {
+        SubTask s = new SubTask();
+        s.setId(id);
+        s.setStatus(SubTaskStatus.PENDING);
+        s.setAssignedAgentId(null);
         return s;
     }
 }

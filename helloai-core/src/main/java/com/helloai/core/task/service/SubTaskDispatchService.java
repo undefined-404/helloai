@@ -1,6 +1,7 @@
 package com.helloai.core.task.service;
 
 import com.helloai.common.base.BizException;
+import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
@@ -9,10 +10,12 @@ import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.mapper.SubTaskMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.time.OffsetDateTime;
 import java.util.Map;
 import java.util.Set;
 import com.helloai.core.agent.dispatcher.ResilientDispatcher;
@@ -34,11 +37,17 @@ public class SubTaskDispatchService {
     private final TaskTimelineService taskTimelineService;
     private final AgentSelector agentSelector;
     private final AgentService agentService;
+    private final SubTaskMapper subTaskMapper;
+    private final AgentDispatchProperties agentDispatchProperties;
 
     /**
      * 对 BLOCKED 子任务执行重新调度。
      */
     public void dispatchBlockedSubTask(Long subTaskId, Long preferredAgentId) {
+        // V24: 重分配熔断检查
+        if (checkReassignCircuitBreaker(subTaskId)) {
+            return;
+        }
         SubTask subTask = subTaskService.resetToPendingForDispatch(
                 subTaskId, Set.of(SubTaskStatus.BLOCKED));
         taskTimelineService.recordEvent(
@@ -61,6 +70,10 @@ public class SubTaskDispatchService {
      * 由其 fast-fail + fallback 选择替代 Agent，保持角色与熔断逻辑一致。</p>
      */
     public void redispatchOfflineSubTask(Long subTaskId, Long offlineAgentId) {
+        // V24: 重分配熔断检查
+        if (checkReassignCircuitBreaker(subTaskId)) {
+            return;
+        }
         SubTask subTask = subTaskService.resetToPendingForDispatch(
                 subTaskId, Set.of(SubTaskStatus.ASSIGNED, SubTaskStatus.IN_PROGRESS));
         taskTimelineService.recordEvent(
@@ -145,6 +158,10 @@ public class SubTaskDispatchService {
      * @throws BizException 找不到 API_KEY_LLM 候选时抛出
      */
     public Long redispatchForFallback(Long subTaskId, Long failedAgentId, String reason) {
+        // V24: 重分配熔断检查
+        if (checkReassignCircuitBreaker(subTaskId)) {
+            return null;
+        }
         SubTask subTask = subTaskService.resetToPendingForDispatch(
                 subTaskId, Set.of(SubTaskStatus.ASSIGNED, SubTaskStatus.IN_PROGRESS,
                         SubTaskStatus.BLOCKED, SubTaskStatus.REWORK));
@@ -227,6 +244,10 @@ public class SubTaskDispatchService {
      * @param role            期望角色（用于重新选人，null 时回退 EXECUTOR）
      */
     public void redispatchAssignedTimeout(Long subTaskId, Long originalAgentId, AgentRole role) {
+        // V24: 重分配熔断检查
+        if (checkReassignCircuitBreaker(subTaskId)) {
+            return;
+        }
         SubTask subTask = subTaskService.resetToPendingForDispatch(
                 subTaskId, Set.of(SubTaskStatus.ASSIGNED));
         taskTimelineService.recordEvent(
@@ -252,5 +273,81 @@ public class SubTaskDispatchService {
         resilientDispatcher.assignNext(preferred.getId(), subTaskId);
         log.info("ASSIGNED超时已回收: subTaskId={}, originalAgentId={}, newPreferredAgentId={}",
                 subTaskId, originalAgentId, preferred.getId());
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  V24：重分配熔断 —— 防止无限重分配死循环
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 检查子任务重分配是否已达熔断阈值。
+     *
+     * <p>每个重分配入口（{@link #redispatchOfflineSubTask}、
+     * {@link #redispatchAssignedTimeout}、{@link #redispatchForFallback}、
+     * {@link #dispatchBlockedSubTask}）在执行前调用本方法。</p>
+     *
+     * <p>逻辑：
+     * <ol>
+     *   <li>{@code max-reassign-attempts <= 0} → 熔断禁用，返回 false</li>
+     *   <li>子任务不存在或已是终态（DONE/CANCELLED）→ 返回 true（跳过）</li>
+     *   <li>{@code reassign_attempt_count >= max-reassign-attempts}
+     *       → 标记子任务为 CANCELLED + 记录 timeline → 返回 true（熔断）</li>
+     *   <li>否则 → 原子累加 {@code reassign_attempt_count} → 返回 false（放行）</li>
+     * </ol>
+     * </p>
+     *
+     * @param subTaskId 待检查的子任务 ID
+     * @return true = 跳过本次重分配（已达熔断阈值或子任务已终态）；false = 继续重分配
+     */
+    private boolean checkReassignCircuitBreaker(Long subTaskId) {
+        int maxAttempts = agentDispatchProperties.getMaxReassignAttempts();
+        if (maxAttempts <= 0) {
+            // 熔断禁用（逃生口，不推荐生产使用）
+            return false;
+        }
+
+        SubTask subTask = subTaskService.getById(subTaskId);
+        if (subTask == null) {
+            return false;
+        }
+
+        // 终态不再重分配
+        SubTaskStatus currentStatus = subTask.getStatus();
+        if (currentStatus == SubTaskStatus.DONE || currentStatus == SubTaskStatus.CANCELLED) {
+            log.debug("子任务已终态，跳过重分配: subTaskId={}, status={}", subTaskId, currentStatus);
+            return true;
+        }
+
+        int currentCount = subTask.getReassignAttemptCount() != null
+                ? subTask.getReassignAttemptCount() : 0;
+
+        if (currentCount >= maxAttempts) {
+            log.warn("子任务重分配熔断触发: subTaskId={}, reassignAttemptCount={}, maxReassignAttempts={}, 将子任务标记为 CANCELLED",
+                    subTaskId, currentCount, maxAttempts);
+            try {
+                subTaskService.changeStatus(subTaskId, SubTaskStatus.CANCELLED, null,
+                        Map.of("cancel_reason", "reassign_attempt_exceeded",
+                                "reassign_attempt_count", String.valueOf(currentCount),
+                                "max_reassign_attempts", String.valueOf(maxAttempts)));
+                taskTimelineService.recordEvent(
+                        subTask.getTaskId(),
+                        subTask.getId(),
+                        "sub_task_cancelled",
+                        AgentRole.SYSTEM,
+                        null,
+                        Map.of(
+                                "reason", "reassign_attempt_exceeded",
+                                "reassign_attempt_count", currentCount,
+                                "max_reassign_attempts", maxAttempts));
+            } catch (Exception e) {
+                log.error("子任务重分配熔断-取消失败: subTaskId={}", subTaskId, e);
+            }
+            return true;
+        }
+
+        // 原子累加重分配计数
+        subTaskMapper.incrementReassignAttemptCount(subTaskId, OffsetDateTime.now());
+        log.debug("子任务重分配计数累加: subTaskId={}, currentCount={}", subTaskId, currentCount);
+        return false;
     }
 }

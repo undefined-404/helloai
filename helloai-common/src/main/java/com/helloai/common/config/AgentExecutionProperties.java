@@ -97,6 +97,35 @@ public class AgentExecutionProperties {
     private boolean pollerEnabled = true;
 
     /**
+     * v2.6 §4.1 新增（2026-07-20）：PENDING 孤儿阈值（分钟）。
+     *
+     * <p>子任务 status=PENDING 且 create_time 距今超过本阈值、且尚未创建
+     * {@code agent_execution_record} 记录的，视为“dispatch-mode=EVENT 主路径丢失”
+     * 的孤儿，由 {@code SubTaskPendingOrphanTask} 周期重派。默认值 30 分钟。</p>
+     *
+     * <p>为什么 30 分钟比 ExecutionCompensationTask 的 5 分钟更大？因为
+     * ExecutionCommandPoller 实际上可以租 60 秒间隔扫描已建 record 的孤儿 PENDING；
+     * PENDING 但无 record 的孤儿是真正的“主路径丢失”，需要更宽阈值容许重试。</p>
+     */
+    private int pendingOrphanThresholdMinutes = 30;
+
+    /**
+     * v2.6 §4.1 新增（2026-07-20）：PENDING 孤儿巡检周期（毫秒）。默认 60000ms=1 分钟。
+     */
+    private long pendingOrphanScanIntervalMs = 60000L;
+
+    /**
+     * v2.6 §4.1 新增（2026-07-20）：PENDING 孤儿巡检单批上限。默认 50 条，防止调
+     * 度线程被批量重派阻塞。
+     */
+    private int pendingOrphanBatchSize = 50;
+
+    /**
+     * v2.6 §4.1 新增（2026-07-20）：PENDING 孤儿巡检是否启用。默认 true。
+     */
+    private boolean pendingOrphanEnabled = true;
+
+    /**
      * 消费载体模式。默认 POLLER，使 DB Poller 成为执行命令主消费路径。
      *
      * <p>三挡：

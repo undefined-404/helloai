@@ -92,8 +92,11 @@ public interface AgentMapper extends BaseMapper<Agent> {
      * 扫描超阈值候选 Agent。
      *
      * <p>条件：CLI_CLIENT + 未删除 + 连续失败次数 &gt;= threshold +
-     * 处于 cooldown 之外（last_fallback_at 为空或早于 cooldownCutoff）。</p>
+     * 处于 cooldown 之外（last_fallback_at 为空或早于 cooldownCutoff）+
+     * 心跳新鲜（v2.6 §4.1：last_seen_time 非空且晚于 lastSeenCutoff，
+     * 与 AgentSelector / AgentHealthCheckTask 共用 AgentHealthProperties.offlineMinutes）。</p>
      */
     List<Agent> selectFallbackCandidates(@Param("threshold") int threshold,
-                                         @Param("cooldownCutoff") OffsetDateTime cooldownCutoff);
+                                         @Param("cooldownCutoff") OffsetDateTime cooldownCutoff,
+                                         @Param("lastSeenCutoff") OffsetDateTime lastSeenCutoff);
 }

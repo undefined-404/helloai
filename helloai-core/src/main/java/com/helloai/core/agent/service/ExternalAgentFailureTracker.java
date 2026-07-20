@@ -1,6 +1,7 @@
 package com.helloai.core.agent.service;
 
 import com.helloai.common.config.AgentFallbackProperties;
+import com.helloai.common.config.AgentHealthProperties;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentMapper;
 import lombok.RequiredArgsConstructor;
@@ -37,6 +38,7 @@ public class ExternalAgentFailureTracker {
 
     private final AgentMapper agentMapper;
     private final AgentFallbackProperties properties;
+    private final AgentHealthProperties healthProperties;
 
     // ══════════════════════════════════════════════════════════════
     //  计数侧 — 失败/成功路径调用
@@ -122,6 +124,9 @@ public class ExternalAgentFailureTracker {
      *   <li>{@code access_type = CLI_CLIENT}</li>
      *   <li>{@code consecutive_failure_count >= threshold}</li>
      *   <li>cooldown 已过：{@code last_fallback_at IS NULL} 或早于 {@code now - cooldown}</li>
+     *   <li>v2.6 §4.1：心跳新鲜——{@code last_seen_time} 非空且晚于
+     *       {@code now - healthProperties.offlineMinutes}；与 AgentSelector
+     *       和 AgentHealthCheckTask 共用同一阈值，避免 SQL 与 Java 侧规则漂移</li>
      * </ol>
      */
     public java.util.List<Agent> findFallbackCandidates() {
@@ -130,15 +135,18 @@ public class ExternalAgentFailureTracker {
         }
         OffsetDateTime cooldownCutoff = OffsetDateTime.now()
                 .minusMinutes(properties.getCooldownMinutes());
+        OffsetDateTime lastSeenCutoff = resolveLastSeenCutoff();
         return agentMapper.selectFallbackCandidates(
-                properties.getFailureThreshold(), cooldownCutoff);
+                properties.getFailureThreshold(), cooldownCutoff, lastSeenCutoff);
     }
 
     /**
      * 纯函数式判定：当前 Agent 是否构成回退候选（不查 DB）。
      *
      * <p>给上层在已读到 Agent 实体时复用，避免重复 SQL 扫描。
-     * 判定规则与 {@link #findFallbackCandidates()} 完全一致。</p>
+     * 判定规则与 {@link #findFallbackCandidates()} 完全一致，包括 v2.6 §4.1
+     * 心跳新鲜度检查：CLI_CLIENT 必须在 {@code AgentHealthProperties.offlineMinutes}
+     * 之内有过心跳（{@code last_seen_time > now - offlineMinutes}）。</p>
      */
     public boolean shouldFallback(Agent agent) {
         if (!isEnabled() || agent == null) {
@@ -155,7 +163,37 @@ public class ExternalAgentFailureTracker {
         OffsetDateTime cooldownCutoff = OffsetDateTime.now()
                 .minusMinutes(properties.getCooldownMinutes());
         OffsetDateTime lastFallbackAt = agent.getLastFallbackTime();
-        return lastFallbackAt == null || lastFallbackAt.isBefore(cooldownCutoff);
+        if (lastFallbackAt != null && !lastFallbackAt.isBefore(cooldownCutoff)) {
+            return false;
+        }
+        // v2.6 §4.1：CLI_CLIENT 必须心跳新鲜，避免把"刚被死但还没标 OFFLINE"
+        // 的 Agent 当作回退候选；与 SQL selectFallbackCandidates 规则一致。
+        // 阈值 <= 0 表示关闭过滤（逃生口）：null last_seen_time 也视为可回退。
+        int offlineMinutes = healthProperties != null
+                ? healthProperties.getOfflineMinutes() : 0;
+        if (offlineMinutes <= 0) {
+            return true;
+        }
+        OffsetDateTime lastSeen = agent.getLastSeenTime();
+        if (lastSeen == null) {
+            return false;
+        }
+        OffsetDateTime lastSeenCutoff = OffsetDateTime.now().minusMinutes(offlineMinutes);
+        return lastSeen.isAfter(lastSeenCutoff);
+    }
+
+    /**
+     * 计算心跳新鲜度截止时间，与 AgentSelector / AgentHealthCheckTask
+     * 共用 {@link AgentHealthProperties#getOfflineMinutes()}。阈值 <= 0
+     * 时返回 {@link OffsetDateTime#MIN} 表示"不过滤"。
+     */
+    private OffsetDateTime resolveLastSeenCutoff() {
+        int minutes = healthProperties != null
+                ? healthProperties.getOfflineMinutes() : 0;
+        if (minutes <= 0) {
+            return OffsetDateTime.MIN;
+        }
+        return OffsetDateTime.now().minusMinutes(minutes);
     }
 
     private boolean isEnabled() {

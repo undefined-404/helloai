@@ -5,6 +5,7 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.config.AgentDispatchProperties;
+import com.helloai.common.config.AgentHealthProperties;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
 import com.helloai.common.constant.AgentDutyLeaseStatus;
@@ -60,10 +61,14 @@ class AgentSelectorTest {
         AgentDispatchProperties props = new AgentDispatchProperties();
         props.setPreferExternal(false);
         props.setRequireIdle(false);
+        AgentHealthProperties health = new AgentHealthProperties();
+        // 默认 5 分钟，对齐 Redis TTL；保留构造函数以便用例按需覆盖
+        health.setOfflineMinutes(5);
         // 防御式默认 stub：仅在多候选 comparator 排序时被 dutyRank 调用，
         // 单候选用例不会走到，用 lenient() 避开 STRICT_STUBS 下的 UnnecessaryStubbing。
         lenient().when(agentDutyLeaseService.isOnDuty(anyLong())).thenReturn(false);
-        agentSelector = new AgentSelector(agentService, circuitBreakerRegistry, props, agentDutyLeaseService);
+        agentSelector = new AgentSelector(
+                agentService, circuitBreakerRegistry, props, health, agentDutyLeaseService);
     }
 
     // ════════════════════════════════════════════════════════════
@@ -423,7 +428,10 @@ class AgentSelectorTest {
             policyProps.setPreferExternal(true);
             policyProps.setRequireIdle(true);
             policyProps.setForceAccessType(null);
-            policySelector = new AgentSelector(agentService, circuitBreakerRegistry, policyProps, agentDutyLeaseService);
+            AgentHealthProperties policyHealth = new AgentHealthProperties();
+            policyHealth.setOfflineMinutes(5);
+            policySelector = new AgentSelector(
+                    agentService, circuitBreakerRegistry, policyProps, policyHealth, agentDutyLeaseService);
         }
 
         private Agent agentWith(Long id, Integer score,
@@ -471,8 +479,11 @@ class AgentSelectorTest {
             forceProps.setPreferExternal(false);
             forceProps.setRequireIdle(false);
             forceProps.setForceAccessType(AgentAccessType.API_KEY_LLM);
+            AgentHealthProperties forceHealth = new AgentHealthProperties();
+            forceHealth.setOfflineMinutes(5);
             AgentSelector forceSelector =
-                    new AgentSelector(agentService, circuitBreakerRegistry, forceProps, agentDutyLeaseService);
+                    new AgentSelector(
+                            agentService, circuitBreakerRegistry, forceProps, forceHealth, agentDutyLeaseService);
 
             when(agentService.listByRole(AgentRole.EXECUTOR))
                     .thenReturn(List.of(cli, api));
@@ -565,10 +576,10 @@ class AgentSelectorTest {
         }
 
         @Test
-        @DisplayName("CLI_CLIENT last_seen_time=5分钟前（<10min 默认阈值） → 保留")
+        @DisplayName("CLI_CLIENT last_seen_time=4分钟前（<5min 默认阈值） → 保留")
         void shouldKeepCliAgentWithFreshLastSeenTime() {
             Agent fresh = agentWithHeartbeat(2L, 90, AgentOnlineStatus.ONLINE,
-                    AgentStatus.ACTIVE, 5L);
+                    AgentStatus.ACTIVE, 4L);
 
             when(agentService.listByRole(AgentRole.EXECUTOR))
                     .thenReturn(List.of(fresh));
@@ -604,7 +615,7 @@ class AgentSelectorTest {
             Agent stale = agentWithHeartbeat(2L, 95, AgentOnlineStatus.ONLINE,
                     AgentStatus.ACTIVE, 15L);  // 过期
             Agent freshButLowerScore = agentWithHeartbeat(3L, 70, AgentOnlineStatus.ONLINE,
-                    AgentStatus.ACTIVE, 5L);   // 新鲜
+                    AgentStatus.ACTIVE, 4L);   // 新鲜
 
             when(agentService.listByRole(AgentRole.EXECUTOR))
                     .thenReturn(List.of(stale, freshButLowerScore));
@@ -618,14 +629,15 @@ class AgentSelectorTest {
         }
 
         @Test
-        @DisplayName("heartbeatFreshMinutes=0（关闭过滤） → 所有 CLI_CLIENT 都保留")
+        @DisplayName("offlineMinutes=0（关闭过滤） → 所有 CLI_CLIENT 都保留")
         void shouldDisableFilterWhenThresholdZero() {
             AgentDispatchProperties zeroProps = new AgentDispatchProperties();
             zeroProps.setPreferExternal(false);
             zeroProps.setRequireIdle(false);
-            zeroProps.setHeartbeatFreshMinutes(0);
+            AgentHealthProperties zeroHealth = new AgentHealthProperties();
+            zeroHealth.setOfflineMinutes(0);
             AgentSelector zeroSelector = new AgentSelector(
-                    agentService, circuitBreakerRegistry, zeroProps, agentDutyLeaseService);
+                    agentService, circuitBreakerRegistry, zeroProps, zeroHealth, agentDutyLeaseService);
 
             Agent stale = agentWithHeartbeat(2L, 90, AgentOnlineStatus.ONLINE,
                     AgentStatus.ACTIVE, 120L);  // 2 小时前
@@ -640,14 +652,15 @@ class AgentSelectorTest {
         }
 
         @Test
-        @DisplayName("heartbeatFreshMinutes=3 自定义阈值：9 分钟前视为过期")
+        @DisplayName("offlineMinutes=3 自定义阈值：9 分钟前视为过期")
         void shouldRespectCustomThreshold() {
             AgentDispatchProperties customProps = new AgentDispatchProperties();
             customProps.setPreferExternal(false);
             customProps.setRequireIdle(false);
-            customProps.setHeartbeatFreshMinutes(3);
+            AgentHealthProperties customHealth = new AgentHealthProperties();
+            customHealth.setOfflineMinutes(3);
             AgentSelector customSelector = new AgentSelector(
-                    agentService, circuitBreakerRegistry, customProps, agentDutyLeaseService);
+                    agentService, circuitBreakerRegistry, customProps, customHealth, agentDutyLeaseService);
 
             Agent stale = agentWithHeartbeat(2L, 90, AgentOnlineStatus.ONLINE,
                     AgentStatus.ACTIVE, 9L);  // 9 分钟前 > 3 分钟阈值

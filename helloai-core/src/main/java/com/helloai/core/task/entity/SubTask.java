@@ -52,4 +52,13 @@ public class SubTask extends BaseEntity {
      * 都会把该值 +1；可用于监控 / 限流（如回退 3 次后直接放弃或转人工）。</p>
      */
     private Integer externalFallbackCount;
+
+    /**
+     * 重分配尝试次数（V24 新增）：所有类型的重分配（离线重派、超时回收、
+     * N11回退、阻塞重试）都计数。
+     *
+     * <p>达到 {@code helloai.dispatch.max-reassign-attempts}（默认 5）后，
+     * 子任务将被直接标记为 CANCELLED，不再进入重分配链，防止无限重试死循环。</p>
+     */
+    private Integer reassignAttemptCount;
 }

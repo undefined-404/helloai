@@ -2,11 +2,13 @@ package com.helloai.job.task;
 
 import com.helloai.common.config.AgentFallbackProperties;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.agent.service.ExternalAgentFailureTracker;
 import com.helloai.core.task.service.SubTaskDispatchService;
+import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -51,12 +53,15 @@ public class ExternalAgentFallbackTask {
     private final TaskTimelineService taskTimelineService;
     private final AgentFallbackProperties properties;
     private final StringRedisTemplate redis;
+    private final SubTaskService subTaskService;
 
     private static final String LOCK_KEY = "scheduler:lock:ExternalAgentFallback";
     /** 单次扫描最多处理的子任务数（防止某轮候选 Agent 持有大量在跑任务时阻塞调度） */
     private static final int BATCH_LIMIT = 50;
     /** 单 Agent 最多拉多少在跑子任务 */
     private static final int PER_AGENT_LIMIT = 20;
+    /** v2.6 §4.1：调度链遗留 PENDING 未指派子任务单轮处理上限 */
+    private static final int PENDING_ORPHAN_BATCH_LIMIT = 50;
 
     @Scheduled(fixedDelayString = "${helloai.dispatch.fallback.scan-interval-ms:60000}",
                initialDelay = 30_000L)
@@ -71,19 +76,25 @@ public class ExternalAgentFallbackTask {
         }
 
         try {
+            // 阶段 A：N11 阈值回退 — 处理超阈值候选 Agent 的在跑子任务
             List<Agent> candidates = failureTracker.findFallbackCandidates();
-            if (candidates.isEmpty()) {
-                return;
+            if (!candidates.isEmpty()) {
+                log.info("N11 阈值回退扫描: 发现 {} 个超阈值 CLI_CLIENT Agent", candidates.size());
+                int totalRedispatched = 0;
+                for (Agent agent : candidates) {
+                    int redispatched = processCandidate(agent);
+                    totalRedispatched += redispatched;
+                }
+                log.info("N11 阈值回退扫描完成: candidateAgents={}, redispatchedSubTasks={}",
+                        candidates.size(), totalRedispatched);
+            } else {
+                log.debug("N11 阈值回退扫描: 本轮无超阈值候选 Agent");
             }
-            log.info("N11 阈值回退扫描: 发现 {} 个超阈值 CLI_CLIENT Agent", candidates.size());
 
-            int totalRedispatched = 0;
-            for (Agent agent : candidates) {
-                int redispatched = processCandidate(agent);
-                totalRedispatched += redispatched;
-            }
-            log.info("N11 阈值回退扫描完成: candidateAgents={}, redispatchedSubTasks={}",
-                    candidates.size(), totalRedispatched);
+            // 阶段 B：v2.6 §4.1 调度链遗留 PENDING 未指派兜底（全局唯一一次）
+            // 与阶段 A 共享同一 Redis 锁，但作为独立阶段；
+            // 即使没有 N11 候选也要执行，避免仅依赖阶段 A。
+            recoverPendingUnassigned();
 
         } catch (Exception e) {
             log.error("ExternalAgentFallbackTask 执行异常", e);
@@ -164,5 +175,79 @@ public class ExternalAgentFallbackTask {
 
     private void unlock() {
         redis.delete(LOCK_KEY);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  v2.6 §4.1：调度链遗留 PENDING 未指派子任务全局兜底
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 兜底处理"有历史 execution record 但无活跃 record、且处于 PENDING 未指派"的调度链遗留任务。
+     *
+     * <p>目标：覆盖"离线重派在 reset 后失败留下"的子任务。判定 SQL 见
+     * {@code SubTaskMapper.selectPendingUnassignedWithoutActiveExecutionRecord}。</p>
+     *
+     * <p>职责划分：
+     * <ul>
+     *   <li>无 execution record 的陈旧 PENDING → 由 SubTaskPendingOrphanTask 处理</li>
+     *   <li>本方法覆盖"有历史 record、无活跃 record、PENDING 且未指派"</li>
+     *   <li>有活跃 PENDING/RUNNING record → 继续交给 Poller/补偿链</li>
+     * </ul>
+     *
+     * <p>每条记录：先按 id 补读最新状态，并发状态变化按跳过处理，
+     * 仍为 PENDING 且未指派时按 EXECUTOR 角色调用
+     * {@link SubTaskDispatchService#dispatchPendingSubTaskAuto} 重新选人。</p>
+     *
+     * <p>本兜底只执行一次（在 N11 阶段 A 后独立执行），不重复计数、不累加
+     * {@code external_fallback_count}、不计入某个 Agent 的 N11 冷却。
+     * 不放进每个候选 Agent 循环，避免重复重派。</p>
+     */
+    private void recoverPendingUnassigned() {
+        List<Long> orphanIds;
+        try {
+            orphanIds = subTaskMapper.selectPendingUnassignedWithoutActiveExecutionRecord(
+                    PENDING_ORPHAN_BATCH_LIMIT);
+        } catch (Exception e) {
+            log.error("扫描调度链遗留 PENDING 未指派任务失败", e);
+            return;
+        }
+        if (orphanIds.isEmpty()) {
+            log.debug("调度链遗留 PENDING 未指派兜底: 本轮无目标");
+            return;
+        }
+        log.info("调度链遗留 PENDING 未指派兜底: 发现 {} 个候选", orphanIds.size());
+
+        int recovered = 0;
+        int skipped = 0;
+        int failed = 0;
+
+        for (Long subTaskId : orphanIds) {
+            try {
+                SubTask latest = subTaskService.getById(subTaskId);
+                if (latest == null) {
+                    skipped++;
+                    continue;
+                }
+                // 并发状态变化：不再是 PENDING 或已被指派则跳过，不强制覆盖
+                if (latest.getStatus() != SubTaskStatus.PENDING
+                        || latest.getAssignedAgentId() != null) {
+                    log.debug("调度链遗留任务状态已变化，跳过: subTaskId={}, status={}, assignedAgentId={}",
+                            subTaskId, latest.getStatus(), latest.getAssignedAgentId());
+                    skipped++;
+                    continue;
+                }
+                // 仍为 PENDING 且未指派，按 EXECUTOR 角色重新选人
+                subTaskDispatchService.dispatchPendingSubTaskAuto(
+                        subTaskId, AgentRole.EXECUTOR);
+                log.info("调度链遗留 PENDING 未指派兜底成功: subTaskId={}", subTaskId);
+                recovered++;
+            } catch (Exception e) {
+                log.error("调度链遗留 PENDING 未指派兜底失败: subTaskId={}", subTaskId, e);
+                failed++;
+            }
+        }
+
+        log.info("调度链遗留 PENDING 未指派兜底完成: candidates={}, recovered={}, skipped={}, failed={}",
+                orphanIds.size(), recovered, skipped, failed);
     }
 }

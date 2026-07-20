@@ -171,10 +171,19 @@ public class ExecutionResultHandler {
         // SQL 条件已限定 access_type=CLI_CLIENT，误调 API_KEY_LLM 也不会写库；
         // tracker 内部已做 try/catch + REQUIRES_NEW。
         //
-        // 关键：failureTracker 以 REQUIRES_NEW 独立事务更新同一 agent 行，而本事务在成功路径下
-        // 已通过 subTaskService.submit() -> changeStatus(REVIEW) -> heartbeatService.active()
-        // 锁定了该 agent 行；若在事务内直接调用，会形成"外层持锁 + 内层新事务改同一行"的自死锁。
-        // 因此挪到主事务提交后（afterCommit）执行：此时行锁已释放，REQUIRES_NEW 独立语义仍保留。
+        // 关键自死锁防护（v2.6 §4.1 2026-07-20 锁语义重审）：
+        // v2.5 修复点：failureTracker 以 REQUIRES_NEW 独立事务更新同一 agent 行，
+        // 而本事务在成功路径下已通过 subTaskService.submit() -> changeStatus(REVIEW)
+        // -> heartbeatService.active() 锁定了该 agent 行；若在事务内直接调用，
+        // 会形成"外层持锁 + 内层新事务改同一行"的自死锁。
+        // 修复：把 failureTracker.recordSuccess/Failure 挪到主事务提交后（afterCommit）
+        // 执行——此时行锁已释放，REQUIRES_NEW 独立语义仍保留。
+        //
+        // v2.6 补充（active() 现在复用 seen()，DB 行锁变频繁）：
+        // seen() 内部会调 agentMapper.updateById(agent)，同样锁定 agent 行；
+        // 若 failureTracker 留在主事务内，即便 active() 用 SELECT+UPDATE
+        // 顺序，REQUIRES_NEW 内层仍会撞主层持有同一行的锁，因此 afterCommit
+        // 模式不可豁免——本段逻辑必须保留。
         Agent targetAgent = report.getAgentId() != null ? agentService.getById(report.getAgentId()) : null;
         if (targetAgent != null && targetAgent.getAccessType() == AgentAccessType.CLI_CLIENT) {
             final Long trackAgentId = report.getAgentId();
@@ -207,6 +216,11 @@ public class ExecutionResultHandler {
     /**
      * N11 计数写入（成功重置 / 失败累加）。由主事务 afterCommit 回调触发，
      * 确保执行时 agent 行锁已释放，避免与主链路事务自死锁。
+     *
+     * <p><b>v2.6 §4.1 2026-07-20 重新声明不可豁免</b>：{@code HeartbeatService.active()}
+     * 在 v2.6 改为复用 seen() 双写，内部走 {@code agentMapper.updateById(agent)}
+     * 锁 agent 行；本方法若留在主事务内（而非 afterCommit），会与外层事务
+     * 持有的 agent 行锁形成自死锁。本类 L178-192 处的 afterCommit 注册不可删除。</p>
      */
     private void applyFailureTracking(Long agentId, boolean success) {
         if (success) {

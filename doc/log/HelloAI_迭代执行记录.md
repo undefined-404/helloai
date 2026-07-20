@@ -2466,3 +2466,56 @@ UI 行为变更：`helloai-ui/src/views/agent/components/AgentOnboardingDialog.v
 - **合并策略**：A 类（SKILL.md + daemon.ps1）+ B 类（UI 按钮 + public/ 拷贝）合并一条 commit：`feat(executor): add §1.5 常驻值班协议 + 参考 daemon 脚本 + UI 下载入口`；本轮文档回填随同 commit 入提交
 
 ---
+
+### 2026-07-20 重分配熔断（V24）
+
+#### 1. 范围
+
+- 修复"同角色所有 Agent 全掉线时子任务无限重分配"的死循环 Bug
+- 新增基于计数的重分配熔断机制：达到阈值后直接取消子任务，不再继续重试
+
+#### 2. 问题背景
+
+用户反馈：sub-task-002 无限重新分配，重新分配的 Agent 都是 OFFLINE 状态，系统持续轮询形成死循环。
+
+根因链路：
+1. `AgentHealthCheckTask`（每 60s）检测到 Agent 超时 → 标记 OFFLINE → `reassignStaleTasks()`
+2. `redispatchOfflineSubTask()` → `ResilientDispatcher.assignNext()` → OFFLINE fast-fail → fallback `pickAlternative()` 全部 OFFLINE 返回 null → 抛异常
+3. 二次路径 `dispatchPendingSubTaskAuto()` 也选不到在线 Agent → 失败
+4. 子任务退回 PENDING → `ExternalAgentFallbackTask.recoverPendingUnassigned()` 捡起 → 再次尝试 → 失败
+5. 周而复始，形成死循环
+
+#### 3. 实际落地
+
+- **V24 Flyway**：`V24__sub_task_reassign_attempt_count.sql` 新增 `sub_task.reassign_attempt_count INT NOT NULL DEFAULT 0`
+- **实体**：`SubTask.java` 新增 `reassignAttemptCount` 字段（`@TableField` 自动映射）
+- **Mapper**：`SubTaskMapper.xml` 新增 `incrementReassignAttemptCount` 原子累加 SQL（COALESCE +1，不依赖读后写）
+  - `updateById` 覆盖 SQL 新增 `external_fallback_count`、`reassign_attempt_count` 两列（修复之前遗漏的列覆盖）
+- **配置**：`AgentDispatchProperties.maxReassignAttempts`（默认 5），`application.yml` 新增 `helloai.dispatch.max-reassign-attempts: 5`
+- **核心逻辑**：`SubTaskDispatchService.checkReassignCircuitBreaker(subTaskId)` 私有方法，在 4 个重分配入口前统一调用：
+  - `maxReassignAttempts <= 0` → 熔断禁用（逃生口）
+  - 子任务终态（DONE/CANCELLED）→ 跳过
+  - `reassign_attempt_count >= maxReassignAttempts` → 标记 CANCELLED + 记录 `sub_task_cancelled` timeline（reason=`reassign_attempt_exceeded`）→ 返回 true（跳过本次重分配）
+  - 否则 → 原子累加计数 → 返回 false（继续重分配）
+- **4 个入口全部接入**：`redispatchOfflineSubTask`、`redispatchAssignedTimeout`、`redispatchForFallback`、`dispatchBlockedSubTask`
+- **测试**：`SubTaskDispatchServiceTest` 新增 `SubTaskMapper` / `AgentDispatchProperties` mock + `@BeforeEach` 设置熔断默认关闭（保持 7 个已有测试行为不变），7/7 全绿
+
+#### 4. 验证
+
+- `mvn -pl helloai-common,helloai-core -am -DskipTests compile` → BUILD SUCCESS
+- `mvn -pl helloai-core -am test -Dtest=SubTaskDispatchServiceTest` → Tests run: 7, Failures: 0, Errors: 0, Skipped: 0
+
+#### 5. 影响
+
+- **行为变化**：子任务重分配最多尝试 5 次（可配置），达到后自动取消，不再无限重试
+- **配置新增**：`helloai.dispatch.max-reassign-attempts`（默认 5，设为 0 禁用熔断）
+- **DB 新增**：`sub_task.reassign_attempt_count` 列（V24 迁移）
+- **接口影响**：对外 API 未变；CANCELLED 子任务在现有查询中自动过滤
+
+#### 6. 遗留与下一步
+
+- 熔断后手动恢复：当前需管理员从 DB 手动重置 `reassign_attempt_count=0` + `status=PENDING` 后再触发重分配；未来可考虑 UI 一键恢复
+- 监控告警：建议在 `sub_task_cancelled`（reason=`reassign_attempt_exceeded`）事件上加钉钉/飞书通知
+- **区分计数语义**：当前 `reassign_attempt_count` 对所有重分配类型统一计数；未来如需要区分（离线重派 vs N11回退），可扩展 `reassign_attempt_reason` 字段
+
+---

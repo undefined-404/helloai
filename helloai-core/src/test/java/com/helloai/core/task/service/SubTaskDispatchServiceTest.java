@@ -1,6 +1,7 @@
 package com.helloai.core.task.service;
 
 import com.helloai.common.base.BizException;
+import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
@@ -10,6 +11,8 @@ import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.mapper.SubTaskMapper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,6 +28,8 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -49,8 +54,20 @@ class SubTaskDispatchServiceTest {
     @Mock
     private AgentService agentService;
 
+    @Mock
+    private SubTaskMapper subTaskMapper;
+
+    @Mock
+    private AgentDispatchProperties agentDispatchProperties;
+
     @InjectMocks
     private SubTaskDispatchService subTaskDispatchService;
+
+    @BeforeEach
+    void setUp() {
+        // V24 熔断默认禁用（现有测试不改动行为）
+        lenient().when(agentDispatchProperties.getMaxReassignAttempts()).thenReturn(0);
+    }
 
     @Test
     @DisplayName("BLOCKED 重分配走统一调度入口")
