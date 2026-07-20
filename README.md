@@ -4,7 +4,7 @@
 
 #### 介绍
 
-- **HelloAI** 是一个基于 Spring AI MCP 协议的 AI Agent 协作调度平台：外部 AI（Qoder、Trae、Codex CLI、Claude Code 等）一键接入后，平台像调度微服务一样向它们派发育务任务，并回收执行结果。
+- **HelloAI** 是一个基于 Spring AI MCP 协议的 AI Agent 协作调度平台：外部 AI（Qoder、Trae、Codex CLI、Claude Code 等）一键接入后，平台像调度微服务一样向它们派发子任务，并回收执行结果。
 - 平台通过 **MCP SSE**（`/mcp/sse`）与 Agent 通信，通过**门铃 SSE 长连接**（`/api/agents/doorbell/sse`）实现任务秒级唤醒——外部 AI 收到响铃信号后主动调 MCP 工具取件，替代传统的定时轮询待办模式。
 - 项目运行时红线：**JDK 17**；不引入 Spring AI 2.0 / Spring Boot 4.0 路线（除非项目方主动开启 JDK 升级窗口）。
 
