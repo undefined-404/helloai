@@ -6,9 +6,11 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentDutyLeaseStatus;
+import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
 import com.helloai.core.shared.event.DutyLeaseClosedEvent;
 import com.helloai.core.agent.mapper.AgentDutyLeaseMapper;
+import com.helloai.core.agent.mapper.AgentMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -16,10 +18,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Agent 值班租约服务。
@@ -40,6 +47,37 @@ import java.util.UUID;
 public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, AgentDutyLease> {
 
     private final ApplicationEventPublisher eventPublisher;
+    private final AgentMapper agentMapper;
+
+    /**
+     * 按 ID 批量查询 Agent 名称（用于值班租约报表面板填充 agentName）。
+     *
+     * <p>为避免 N+1，本方法走 {@code AgentMapper.selectBatchIds} 一次性查询。
+     * 入参中的 null 元素会被跳过；返回 Map 键为 Agent ID，值为 Agent 名称（无记录的 ID 不在 Map 中）。</p>
+     *
+     * @param agentIds 待查询的 Agent ID 集合（可为 null 或空集合）
+     * @return id → name 映射；输入为空时返回空 Map
+     */
+    public Map<Long, String> getAgentNamesByIds(Collection<Long> agentIds) {
+        if (agentIds == null || agentIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Set<Long> idSet = agentIds.stream().filter(Objects::nonNull).collect(Collectors.toSet());
+        if (idSet.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        List<Agent> agents = agentMapper.selectBatchIds(idSet);
+        if (agents == null || agents.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<Long, String> result = new LinkedHashMap<>();
+        for (Agent a : agents) {
+            if (a.getId() != null && a.getName() != null) {
+                result.put(a.getId(), a.getName());
+            }
+        }
+        return result;
+    }
 
     /**
      * 查询 Agent 当前有效的值班租约。

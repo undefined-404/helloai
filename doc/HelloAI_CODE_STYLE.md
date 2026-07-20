@@ -285,7 +285,7 @@ core 模块统一采用"业务域分包 + 域内技术分层"，禁止新增顶�
 
 **outbox 归属决策**：事务性 outbox 的两张表（agent_outbox_event、agent_command_outbox）及其 entity / mapper / service 归属 agent 域（它们服务的就是 agent 命令与事件分发）；中继调度 OutboxRelayTask 属 helloai-job，MQ 收发侧属 helloai-mq。当第二个业务域引入 outbox 时，再评估将 entity/mapper/service 下沉至 shared/outbox；不要提前建空包占位。
 
-**start 模块配置类归属（待收口）**：规则上启动模块配置类应统一放在 `com.helloai.start.config`；当前 `com.helloai.config`（MyBatisPlusMetaObjectHandler、AdminInitializer）与 `com.helloai.start.chat`（DeepSeekProviderChatClientFactory）为历史遗留分裂包，后续应分别并入 `start.config` 与 `core/agent/chat/provider`，在此之前新配置类一律放 `start.config`。
+**start 模块配置类归属**：启动模块配置类统一放在 `com.helloai.start.config`；`MyBatisPlusMetaObjectHandler`、`AdminInitializer` 已并入该包，`DeepSeekProviderChatClientFactory` 已迁至 `core.agent.chat.provider`（与 ChatClient 工厂族同源）。新配置类一律放 `start.config`，不允许再出现分裂包。
 
 ---
 
@@ -639,9 +639,7 @@ Controller 只允许做三件事：**参数接收与校验、调用 Service、�
 3. **禁止事务注解**——`@Transactional` 只允许出现在 Service；
 4. 返回 DTO 不返回 Entity（见 6.7）；异常统一交 `GlobalExceptionHandler`，不在 Controller 里 try-catch 业务异常。
 
-> ⚠️ 当前待收口清单（6 个历史违规，后续迭代逐一迁回 Service）：
-> `ActivityController`、`AdminDashboardController`、`AgentDutyLeaseController`、`AttachmentController`、`DashboardController`、`FeedController`。
-> 在上述文件完成收口前，**新增接口不允许再以它们为参照**。
+> ✅ 收口完成：6 个历史违规 Controller（ActivityController、AdminDashboardController、AgentDutyLeaseController、AttachmentController、DashboardController、FeedController）已全部迁回 Service，对应 Mapper 调用与 QueryWrapper 已下移至对应 Service 新增方法（ActivityLogService / AdminDashboardService / AgentDutyLeaseService / AttachmentService / DashboardService / FeedService）。上述四条分层红线作为硬约束持续生效，新增接口不得再次触发。
 
 ### 6.4 嵌套资源路径规范
 

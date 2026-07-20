@@ -6,9 +6,7 @@ import com.helloai.api.dto.duty.DutyLeaseResponse;
 import com.helloai.api.dto.duty.DutyOverviewResponse;
 import com.helloai.common.base.R;
 import com.helloai.common.constant.AgentDutyLeaseStatus;
-import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
-import com.helloai.core.agent.mapper.AgentMapper;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -17,8 +15,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Agent 值班租约只读报表入口（AgentHub V1 P1）。
@@ -34,7 +34,6 @@ import java.util.Map;
 public class AgentDutyLeaseController {
 
     private final AgentDutyLeaseService agentDutyLeaseService;
-    private final AgentMapper agentMapper;
 
     /**
      * 分页查询值班租约，可按 Agent、状态过滤。
@@ -46,9 +45,13 @@ public class AgentDutyLeaseController {
             @RequestParam(value = "page", defaultValue = "1") long page,
             @RequestParam(value = "size", defaultValue = "20") long size) {
         IPage<AgentDutyLease> result = agentDutyLeaseService.listLeases(agentId, status, page, size);
-        // 同页多条租约常属同一批 Agent，用缓存避免逐条重复查 agent 表
-        Map<Long, String> nameCache = new HashMap<>();
-        return R.ok(PageResult.of(result, lease -> toResponse(lease, nameCache)));
+        // 一次性查询本页涉及的 Agent 名称（避免 N+1）
+        Map<Long, String> nameMap = agentDutyLeaseService.getAgentNamesByIds(
+                result.getRecords().stream()
+                        .map(AgentDutyLease::getAgentId)
+                        .filter(Objects::nonNull)
+                        .collect(Collectors.toSet()));
+        return R.ok(PageResult.of(result, lease -> toResponse(lease, nameMap)));
     }
 
     /**
@@ -69,7 +72,7 @@ public class AgentDutyLeaseController {
         return R.ok(resp);
     }
 
-    private DutyLeaseResponse toResponse(AgentDutyLease lease, Map<Long, String> nameCache) {
+    private DutyLeaseResponse toResponse(AgentDutyLease lease, Map<Long, String> nameMap) {
         DutyLeaseResponse resp = new DutyLeaseResponse();
         resp.setId(lease.getId());
         resp.setAgentId(lease.getAgentId());
@@ -82,11 +85,10 @@ public class AgentDutyLeaseController {
         resp.setExpiresAt(lease.getExpireTime());
         resp.setCloseReason(lease.getCloseReason());
         if (lease.getAgentId() != null) {
-            String name = nameCache.computeIfAbsent(lease.getAgentId(), id -> {
-                Agent agent = agentMapper.selectById(id);
-                return agent != null ? agent.getName() : null;
-            });
-            resp.setAgentName(name);
+            String name = nameMap.get(lease.getAgentId());
+            if (name != null) {
+                resp.setAgentName(name);
+            }
         }
         return resp;
     }

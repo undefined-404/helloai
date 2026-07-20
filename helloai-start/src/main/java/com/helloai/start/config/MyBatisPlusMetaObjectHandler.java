@@ -1,4 +1,4 @@
-package com.helloai.config;
+package com.helloai.start.config;
 
 import com.baomidou.mybatisplus.core.handlers.MetaObjectHandler;
 import org.apache.ibatis.reflection.MetaObject;

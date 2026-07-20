@@ -1,4 +1,4 @@
-package com.helloai.config;
+package com.helloai.start.config;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.helloai.core.system.entity.SysUser;

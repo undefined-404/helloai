@@ -1,4 +1,4 @@
-package com.helloai.start.chat;
+package com.helloai.core.agent.chat.provider;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentProviderProperties;

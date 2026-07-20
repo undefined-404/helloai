@@ -12,6 +12,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Collections;
+import java.util.List;
+
 /**
  * 附件服务 — 管理 SubTask 的产物附件元数据。
  * 实际文件存储由 MinIO/对象存储负责，本服务只管理 DB 元数据。
@@ -53,6 +56,55 @@ public class AttachmentService extends ServiceImpl<AttachmentMapper, Attachment>
 
         log.info("附件注册: id={}, subTaskId={}, fileName={}", attachment.getId(), subTaskId, fileName);
         return attachment;
+    }
+
+    /**
+     * 按子任务 ID 查询附件列表（按创建时间倒序）。
+     *
+     * <p>{@code subTaskId} 为空时返回所有附件；逻辑删除由 {@code @TableLogic}
+     * 自动过滤。</p>
+     *
+     * @param subTaskId 可选子任务 ID 过滤；null 表示不限
+     * @return 附件列表（绝不返回 null）
+     */
+    public List<Attachment> list(Long subTaskId) {
+        List<Attachment> result = lambdaQuery()
+                .eq(subTaskId != null, Attachment::getSubTaskId, subTaskId)
+                .orderByDesc(Attachment::getCreateTime)
+                .list();
+        return result != null ? result : Collections.emptyList();
+    }
+
+    /**
+     * 按 ID 查询附件；不存在时抛 {@link BizException}(404, "附件不存在")，
+     * 供 Controller 统一透传给全局异常处理。
+     *
+     * @param id 附件主键
+     * @return 附件实体
+     * @throws BizException 当附件不存在
+     */
+    public Attachment getByIdRequired(Long id) {
+        Attachment attachment = getById(id);
+        if (attachment == null) {
+            throw new BizException(404, "附件不存在");
+        }
+        return attachment;
+    }
+
+    /**
+     * 获取附件存储地址（用于下载重定向）。
+     *
+     * @param id 附件主键
+     * @return 存储 URL；为空或空白时抛 {@link BizException}(500, "附件存储地址不可用")
+     * @throws BizException 当附件不存在或存储地址不可用
+     */
+    public String getStorageUrlRequired(Long id) {
+        Attachment attachment = getByIdRequired(id);
+        String downloadUrl = attachment.getStorageUrl();
+        if (downloadUrl == null || downloadUrl.isBlank()) {
+            throw new BizException(500, "附件存储地址不可用");
+        }
+        return downloadUrl;
     }
 
     private String detectFileType(String fileName) {

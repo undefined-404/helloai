@@ -2245,6 +2245,64 @@ UI 行为变更：`helloai-ui/src/views/agent/components/AgentOnboardingDialog.v
 
 顺手删除 `showSkillOnly` ref + `copySkill` + `toggleView`（功能由下载按钮接管）。commit `65161ba`。
 
-> 说明：同 commit 中 `skills/executor/SKILL.md` 按"平台外部 Agent 接入文档"域分类，不进本迭代记录；本节仅回填项目开发侧 UI 改动。
+> 说明：同 commit 中 `skills/executor/SKILL.md` 按“平台外部 Agent 接入文档”域分类，不进本迭代记录；本节仅回填项目开发侧 UI 改动。
+
+### 2026-07 Controller 分层红线收口（§6.3 + 3.x 包归位）
+
+#### 1. 范围
+
+按 `doc/HelloAI_CODE_STYLE.md` §6.3 第 1 条「禁止注入 Mapper」与第 2 条「禁止书写 SQL/QueryWrapper 条件」强制收口 6 个历史违规 Controller；同步完成两项包归位：`com.helloai.config` 2 个类并入 `com.helloai.start.config`、`helloai-start/.../chat/DeepSeekProviderChatClientFactory` 移至 `helloai-core/.../core/agent/chat/provider`；Code Style §6.3 待收口清单与 3.x start 配置类待收口段落同步收口。本轮完成后提交一个 commit。
+
+#### 2. 实际落地
+
+##### 2.1 6 个 Controller Mapper 收口（`helloai-api/.../controller/`）
+
+| Controller | 原 Mapper 注入 | 改后依赖 Service | 下移查询方法 |
+|---|---|---|---|
+| ActivityController | ActivityLogMapper | ActivityLogService | `list(page,pageSize,level,source,subTaskId)` / `record(...)` |
+| AdminDashboardController | TaskMapper/SubTaskMapper/AgentMapper/SysUserService/AgentService | AdminDashboardService | `getOverview()` / `listBlockedHighlight()` / `listReviewHighlight()` / `listLowActivityAgents()` / `getTrends(days)` |
+| AgentDutyLeaseController | AgentMapper | AgentDutyLeaseService | 复用现有 `getAgentNamesByIds(...)` 去掉原 nameCache N+1 |
+| AttachmentController | AttachmentMapper | AttachmentService | `list(subTaskId)` / `getByIdRequired(id)` / `getStorageUrlRequired(id)` |
+| DashboardController | TaskMapper/SubTaskMapper/AgentMapper | DashboardService | `getStats()` |
+| FeedController | ActivityLogMapper/AgentMapper | FeedService | `listActivityLogs(...)` / `resolveAgentNames(logs)` / `listAgentSummaries()` |
+
+所有 Controller 现在零 Mapper 依赖；返回 DTO 装配（`ActivityLog→FeedResponse`、`Agent→AgentResponse`、`AgentDutyLease→DutyLeaseResponse`、`Map→DashboardOverview`）保留在 Controller（§6.7 原则）。`AttachmentController.getById` 错误处理由 `R.fail(...)` 改为 `BizException(404)` 统一走全局异常处理（语义等价，错误响应体不变）。
+
+##### 2.2 Service 调整（`helloai-core/.../`）
+
+- **扩展**：`ActivityLogService`（新增 `list` / `record`，事务性写入带 INFO 默认 + agent 默认 source）/ `AgentDutyLeaseService`（新增 `getAgentNamesByIds`，内部 `selectBatchIds` 避免 N+1）/ `AttachmentService`（新增 `list` / `getByIdRequired` / `getStorageUrlRequired`）。
+- **新建**：`AdminDashboardService`（不继承 ServiceImpl，跨 Mapper 聚合，返回 Map 避开 core→api DTO 依赖）/ `DashboardService`（同样不继承 ServiceImpl）/ `FeedService`（聚合 ActivityLog + Agent，复用 ActivityLogService.page）。
+
+##### 2.3 包归位（git mv 保留历史）
+
+- `helloai-start/.../config/MyBatisPlusMetaObjectHandler.java`：package `com.helloai.config` → `com.helloai.start.config`
+- `helloai-start/.../config/AdminInitializer.java`：package `com.helloai.config` → `com.helloai.start.config`
+- `helloai-start/.../start/chat/DeepSeekProviderChatClientFactory.java` → `helloai-core/.../core/agent/chat/provider/DeepSeekProviderChatClientFactory.java`：package `com.helloai.start.chat` → `com.helloai.core.agent.chat.provider`
+
+##### 2.4 依赖补齐
+
+`helloai-core/pom.xml` 新增 `spring-ai-starter-model-deepseek`（Spring AI BOM 已 import，无需指定版本）——因为 `DeepSeekProviderChatClientFactory` 现位于 core，需要在 core 直接依赖 deepseek starter 才能解析 `org.springframework.ai.deepseek.*`。`helloai-start/pom.xml` 保留该依赖是透传必要（application.yml 仍声明 deepseek 字段）。
+
+##### 2.5 CODE_STYLE.md 文档同步
+
+- §3.x start 模块配置类归属段落：「（待收口）」去掉，改为陈述句描述已收口事实；不再允许再出现分裂包。
+- §6.3 Controller 职责边界：「当前待收口清单 6 个」删除，替换为「✅ 收口完成」清单 + 对应 6 个 Service 名。
+
+#### 3. 验证
+
+- `mvn -DskipTests clean compile`：7 模块全 SUCCESS（HelloAI Common / MQ / Core / Job / API / Start），`Compiling 78 source files with javac [debug parameters target 17]` 在 helloai-api 阶段正常通过；本次新增/改动的源文件全部编译通过，无新增警告。
+- `git status`：6 Controller M + 3 Service M + 3 RM（git mv）+ 3 Service 新增 + helloai-core/pom.xml M + CODE_STYLE.md M；DIFF 总计：删 Mapper 字段 6 处 / 删 selectList/selectCount/selectById/selectPage 等调用 10+ 处，新增 Service 方法调用 10+ 处。
+
+#### 4. 影响
+
+- **对外行为**：完全等价。API 路径、请求/响应 schema、错误码（含 404 / 500 BizException→R.fail 映射）保持不变。
+- **架构分层**：Controller 层 0 Mapper；Service 层成为对应 Controller 的唯一访问边界；§6.3 第 1 条「禁止注入 Mapper」在 6 个历史违规文件上正式生效。
+- **包结构**：`com.helloai.config` 与 `com.helloai.start.chat` 两个分裂包正式退出；新增配置类一律落 `com.helloai.start.config`，新增 ChatClient 工厂一律落 `core.agent.chat.provider`。
+- **后续约束**：任何新增 Controller 必须遵循当前模板（构造器注入 Service，不持有 Mapper）；CODE_STYLE §6.3 与 §3.x 已是终态文字，不再回退。
+
+#### 5. 说明
+
+- 本轮明确不做：6 个 Service 的单测补齐（独立迭代）；`ActivityLogService.record` 事务边界与 `AttachmentService.register` 现有逻辑保留原状；`AttachmentController.getById` 错误路径从 `R.fail("附件不存在")` 改为 `BizException(404,"附件不存在")` 是顺手统一走全局异常处理，对外响应仍为 `{code:404,msg:"附件不存在"}`，下游不受影响。
+- 提交策略：单 commit 提交本次全部改动（含 6 Controller + 6 Service + 3 包归位 + pom + 文档）。
 
 ---
