@@ -1,18 +1,30 @@
 # HelloAI
 
-> Intelligent Agent Management Platform — Unified orchestration, monitoring, and optimization for multi-type AI Agents
+> AI Agent Collaboration & Scheduling Platform — Schedule AI Agents like microservices
 
 #### Introduction
 
-- **HelloAI** is an AI Agent management platform built on the Spring AI MCP protocol. It enables administrators to onboard Agents, orchestrate tasks, monitor performance, and evaluate quality from a single dashboard.
-- The platform communicates with Agents via **MCP SSE** (`/mcp/sse`). Tool count is intentionally not hard-coded here; treat `tools/list` output as the source of truth.
+- **HelloAI** is an AI Agent collaboration & scheduling platform built on the Spring AI MCP protocol. Once an external AI (Qoder, Trae, Codex CLI, Claude Code, etc.) is onboarded with one click, the platform dispatches business tasks to them just like scheduling microservices, and reaps the execution results.
+- The platform communicates with Agents via **MCP SSE** (`/mcp/sse`), and achieves sub-second task wake-up through a **doorbell SSE long-lived connection** (`/api/agents/doorbell/sse`) — when an external AI receives the ring signal, it actively calls MCP tools to pick up work, replacing the legacy poll-on-a-timer pattern.
 - Runtime red-line: **JDK 17**. No Spring AI 2.0 / Spring Boot 4.0 upgrades unless the project explicitly opens a JDK upgrade window.
 
-Supported Agent types (examples):
-- CLI Agent
-- API Key Agent (OpenAI-compatible / custom)
-- Web Agent
-- EXECUTOR Agent (local executor)
+**Core capabilities**
+
+| Capability | Description |
+|---|---|
+| One-click onboarding | After registration, an external AI receives an auto-generated skills brief; following it walks the AI through connect / check-in / pick-task end-to-end |
+| Duty check-in | `checkIn` / `checkOut` duty lease (`ACTIVE` / `CLOSED` / `EXPIRED` state machine + auto expiration scan); on-duty Agents are dispatched first |
+| Doorbell wake-up | Server → Agent unidirectional SSE long-lived connection, sub-second ring on new tasks; connection only allowed after check-in, auto hang-up on check-out or lease expiry |
+| MCP tool protocol | `pullTasks` / `claimSubTask` / `submitResult` / `reportBlocked` / `heartbeat` / `uploadArtifact` and others — tool count is whatever `tools/list` actually returns |
+| Elastic scheduling | External-first + idle-first + LLM fallback; external Agents that fail consecutively beyond the threshold auto-fall-back to in-platform `API_KEY_LLM`; same-role replacement |
+| Reliable delivery | Transactional Outbox (`PENDING` / `SENT` / `CONFIRMED` / `FAILED` four states) + publisher confirms + timeout-driven retry |
+| Stability | Resilience4j per-agent circuit breaker, Reconcile health checks, execution-timeout compensation, three-layer idempotent consumption (DB CAS + Redis + consumption log) |
+
+**Supported Agent types**
+
+- `CLI_CLIENT` — external AI Agents (Qoder / Trae / Codex CLI / Claude Code and others; onboarded and verified)
+- `API_KEY_LLM` — platform-hosted API-key Agents (auto execution chain)
+- `WEB_BROWSER` — web-based AI (enum reserved, integration chain on the roadmap)
 
 #### Software Architecture
 
@@ -22,11 +34,10 @@ Supported Agent types (examples):
 |---|---|---|
 | Runtime | JDK | **17** (project red-line, permanently locked) |
 | Backend framework | Spring Boot | **3.4.10** |
-| AI protocol | spring-ai | **1.1.8** (current runtime baseline) |
-| MCP SDK | mcp-sdk | 0.16.0 |
+| AI protocol | Spring AI | **1.1.8** |
 | Persistence | PostgreSQL + MyBatis-Plus + Flyway | — |
 | Cache | Redis (Lettuce) | — |
-| Message queue | RabbitMQ | — |
+| Message queue | RabbitMQ (with publisher confirms / DLX) | — |
 | Resilience | Resilience4j CircuitBreaker | — |
 | Observability | Spring Boot Actuator | — |
 | Frontend | Vue 3 + TypeScript + Vite + Element Plus | — |
@@ -35,21 +46,20 @@ Supported Agent types (examples):
 
 ```
 helloai/                          # Multi-module Maven project
-├── helloai-common/               # Common utilities (constants, exceptions, enums)
-├── helloai-api/                  # REST API layer (Controller + DTO + VO)
-├── helloai-core/                 # Core services (MCP Server, dispatcher, business)
-├── helloai-mq/                   # RabbitMQ config + consumers
-├── helloai-job/                  # Scheduled jobs (health checks, SESSION_AUTH cleanup)
-├── helloai-start/                # Application bootstrap + application.yml + Flyway
+├── helloai-common/               # Common utilities (constants, enums, exceptions, config props)
+├── helloai-mq/                   # Message queue (RabbitMQ config + idempotent-consumer base)
+├── helloai-core/                 # Core business (business-domain sub-packages)
+│   └── com.helloai.core/
+│       ├── agent/                #   Agent domain: register / schedule / execute / chat / MCP / doorbell observability
+│       ├── task/                 #   Task domain: task / sub-task / review / score / state machine / timeline
+│       ├── system/               #   System support domain: user / config / rule / credential / attachment
+│       └── shared/               #   Cross-domain facilities: domain events / doorbell channel
+├── helloai-api/                  # REST API layer (Controller + DTO; Mapper access forbidden)
+├── helloai-job/                  # Scheduled jobs (Outbox relay / timeout compensation / health check / lease expiry)
+├── helloai-start/                # Bootstrap (Application + application.yml + Flyway)
 ├── helloai-ui/                   # Frontend (Vue 3 SPA)
-└── doc/                          # Docs
-    ├── HelloAI_项目基线文档.md
-    ├── HelloAI_实现差距表.md
-    ├── HelloAI_迭代执行记录.md
-    ├── HelloAI_调度解耦重构分析.md
-    ├── HelloAI_执行链路架构分析.md
-    ├── HelloAI_架构设计参考.md
-    └── HelloAI_外部项目借鉴技术细节.md
+├── scripts/                      # Verification scripts (powershell/ + shell/)
+└── doc/                          # Project docs (see doc/README.md doc map)
 ```
 
 #### Installation
@@ -63,10 +73,10 @@ helloai/                          # Multi-module Maven project
 **Steps**
 
 ```bash
-# 1. Start infrastructure (PostgreSQL / Redis / RabbitMQ)
+# 1. Start infrastructure (PostgreSQL / Redis / RabbitMQ / MinIO)
 docker compose up -d
 
-# 2. Build and start backend
+# 2. Build + start backend (Flyway auto-runs V1~V23 migrations)
 mvn clean package -DskipTests
 java -jar helloai-start/target/helloai-start.jar
 
@@ -79,42 +89,57 @@ npm run dev
 After backend startup:
 - API: <http://localhost:6565>
 - Swagger UI: <http://localhost:6565/swagger-ui.html>
-- Health: <http://localhost:6565/actuator/health>
+- Health check: <http://localhost:6565/actuator/health>
 
 #### Usage
 
-**Regression scripts (golden standard)**
+**External AI Agent quick onboarding**
 
-| Script | Scope |
+1. In the admin console create an Agent (role `EXECUTOR`, type `CLI_CLIENT`) and copy the auto-generated skills brief.
+2. Paste the skills brief into the external AI (e.g. Qoder / Trae); the AI will automatically complete: register & auth → MCP connect → `checkIn` → establish doorbell long-lived connection.
+3. After the platform dispatches a task, the AI receives a doorbell ring and follows the skills rules: `pullTasks` → `claimSubTask` → execute → `submitResult`.
+4. Exception path: if execution is blocked, call `reportBlocked` (with evidence chain); if the platform times out without submission, it auto-compensates and re-dispatches to another on-duty Agent of the same role.
+
+**Verification & regression scripts**
+
+All verification scripts live in `scripts/powershell/` (Windows) and `scripts/shell/` (macOS); script output is the source of truth:
+
+| Script | Coverage |
 |---|---|
-| `verify-mcp-auth.ps1` | MCP auth regression (D1-D6) |
-| `verify-mcp-e2e.ps1` | MCP end-to-end business loop (with DB evidence T1-T4) |
+| `verify-mcp-auth.*` | MCP auth regression |
+| `verify-mcp-e2e.*` | MCP end-to-end business loop |
+| `verify-onboarding*.ps1` | External Agent five-step onboarding (register / check-in / doorbell / pull / submit) |
+| `verify-doorbell-e2e.ps1` | Doorbell long-lived connection (connect / handshake / expiry hang-up) |
+| `verify-agenthub-duty-e2e.ps1` | Duty lease (checkIn / checkOut / expiry scan / STRICT exclusive) |
+| `verify-poller-e2e.ps1` | DB Poller fallback consumption |
+
+**MCP channel conventions**
+
+- Primary channel: MCP SSE (`/mcp/sse` + `/mcp/messages`) is the only primary channel; REST `tools/list` / `tools/call` are kept for backward compatibility.
+- Heartbeat refresh: `last_seen_time` / online-state refresh uses the `heartbeat` tool as the primary trigger.
 
 **Documentation**
 
-- Baseline: [`doc/HelloAI_项目基线文档.md`](doc/HelloAI_项目基线文档.md)
-- Gap analysis: [`doc/HelloAI_实现差距表.md`](doc/HelloAI_实现差距表.md)
-- Iteration record: [`doc/log/HelloAI_迭代执行记录.md`](doc/log/HelloAI_迭代执行记录.md)
-- Scheduling refactor analysis: [`doc/design/HelloAI_调度解耦重构分析.md`](doc/design/HelloAI_调度解耦重构分析.md)
-- Execution chain analysis: [`doc/archive/HelloAI_执行链路架构分析.md`](doc/archive/HelloAI_执行链路架构分析.md)
-- Architecture reference: [`doc/design/HelloAI_架构设计参考.md`](doc/design/HelloAI_架构设计参考.md)
-- External project reference details: [`doc/design/HelloAI_外部项目借鉴技术细节.md`](doc/design/HelloAI_外部项目借鉴技术细节.md)
-- EXECUTOR onboarding: [`.executor-onboarding.md`](.executor-onboarding.md)
-- Design system: [`DESIGN.md`](DESIGN.md)
-- Product definition: [`PRODUCT.md`](PRODUCT.md)
+Start with [`doc/README.md`](doc/README.md) (the doc map: positioning and fact level of each document). Four sources of truth:
+
+- Code style: [`doc/HelloAI_CODE_STYLE.md`](doc/HelloAI_CODE_STYLE.md) (V1.4 — must read before changing code)
+- Project baseline: [`doc/HelloAI_项目基线文档.md`](doc/HelloAI_项目基线文档.md)
+- Implementation gap: [`doc/HelloAI_实现差距表.md`](doc/HelloAI_实现差距表.md)
+- Current progress: [`doc/项目进度.md`](doc/项目进度.md)
+
+Also: EXECUTOR onboarding guide [`.executor-onboarding.md`](.executor-onboarding.md) / design system [`DESIGN.md`](DESIGN.md) / product definition [`PRODUCT.md`](PRODUCT.md).
 
 #### Contributing
 
 1. Fork this repository
 2. Create a branch `feat_xxx` or `fix_xxx`
-3. Run `verify-mcp-auth.ps1` and `verify-mcp-e2e.ps1` before pushing
-4. Open a Pull Request with script outputs attached
+3. Read `doc/HelloAI_CODE_STYLE.md` before changing code; for scheduling / execution-chain changes also read `doc/design/HelloAI_调度解耦重构分析.md`
+4. Before submitting, run the `scripts/` verification scripts relevant to your change and attach script output to the PR
 
 #### Tips
 
-1. Chinese README: [`README.md`](README.md)
-2. Regression scripts are the source of truth: `verify-mcp-auth.ps1` / `verify-mcp-e2e.ps1`
-3. Start with the baseline and gap analysis before diving into code
+1. Chinese: [`README.md`](README.md)
+2. Always start from the source-of-truth docs (baseline / gap / progress); historical design docs are archived in `doc/archive/` and no longer serve as development references
 
 #### License
 
