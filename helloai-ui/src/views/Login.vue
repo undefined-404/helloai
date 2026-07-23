@@ -689,20 +689,24 @@ onBeforeUnmount(() => {
 }
 
 .deco-blur-1 {
-  top: 15%;
-  right: 10%;
-  width: 300px;
-  height: 300px;
-  background: rgba(124, 58, 237, 0.22);
+  top: 45%;
+  left: 50%;
+  width: 420px;
+  height: 420px;
+  margin-top: -210px;
+  margin-left: -210px;
+  background: rgba(124, 58, 237, 0.18);
   animation: blur-float-1 14s ease-in-out infinite;
 }
 
 .deco-blur-2 {
-  bottom: 20%;
-  left: 5%;
-  width: 400px;
-  height: 400px;
-  background: rgba(6, 182, 212, 0.14);
+  top: 58%;
+  left: 50%;
+  width: 460px;
+  height: 460px;
+  margin-top: -230px;
+  margin-left: -230px;
+  background: rgba(6, 182, 212, 0.10);
   animation: blur-float-2 18s ease-in-out infinite;
 }
 
