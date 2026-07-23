@@ -65,14 +65,6 @@ const maskRadius = 80
 
 // 骨架层遮罩样式 - 使用 radial-gradient 作为 mask
 const skeletonMaskStyle = computed(() => {
-  if (!isRevealed.value) {
-    return {
-      maskImage: 'none',
-      WebkitMaskImage: 'none',
-      opacity: 0
-    }
-  }
-
   // 将相对坐标转换为像素坐标
   const x = (mouseX.value + 0.5) * props.size
   const y = (mouseY.value + 0.5) * props.size
@@ -83,7 +75,7 @@ const skeletonMaskStyle = computed(() => {
   return {
     maskImage: mask,
     WebkitMaskImage: mask,
-    opacity: 1
+    opacity: isRevealed.value ? 1 : 0
   }
 })
 
@@ -156,7 +148,7 @@ function onToggle(e: TouchEvent) {
 
 .avatar-skeleton {
   z-index: 2;
-  transition: opacity 0.2s ease;
+  transition: opacity 0.3s ease;
   /* mask 由 :style 动态绑定 */
 }
 
