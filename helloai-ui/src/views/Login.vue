@@ -11,7 +11,7 @@
 
         <div class="character-area">
           <AnimatedCharacter
-            :size="300"
+            :size="320"
             :isFocused="isFormFocused"
             :isTyping="isTyping"
             :focusTarget="focusTarget"
@@ -610,6 +610,7 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: center;
   margin-top: 8px;
+  filter: drop-shadow(0 16px 48px rgba(0, 0, 0, 0.25));
 }
 
 .brand-bottom {

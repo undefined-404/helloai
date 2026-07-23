@@ -1,94 +1,50 @@
 <template>
-  <div class="character-wrapper" ref="containerRef">
-    <!-- Robot Character SVG -->
-    <svg
-      :width="size"
-      :height="size"
-      viewBox="0 0 240 280"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      class="robot-char"
-      :class="{ idle: !isFocused, listening: isFocused, typing: isTyping }"
-    >
-      <!-- Antenna glow -->
-      <circle cx="120" cy="24" r="6" :fill="antennaColor" class="antenna-glow" />
+  <div
+    ref="containerRef"
+    class="avatar-reveal"
+    :class="{ 'is-revealed': isRevealed }"
+    :style="{ width: size + 'px', height: size + 'px' }"
+    tabindex="0"
+    role="img"
+    aria-label="HelloAI 虚拟人物，鼠标移动时显示机械骨架"
+    @mouseenter="onReveal"
+    @mouseleave="onHide"
+    @mousemove="onMouseMove"
+    @focus="onReveal"
+    @blur="onHide"
+    @touchstart.passive="onToggle"
+  >
+    <!-- 人物底图 -->
+    <img
+      :src="avatarBase"
+      alt=""
+      class="avatar-layer avatar-base"
+      draggable="false"
+    />
 
-      <!-- Antenna line -->
-      <line x1="120" y1="30" x2="120" y2="48" stroke="#C4A484" stroke-width="2" />
+    <!-- 骨架揭示层 - 使用 CSS mask 跟随鼠标 -->
+    <img
+      :src="avatarSkeleton"
+      alt=""
+      class="avatar-layer avatar-skeleton"
+      :style="skeletonMaskStyle"
+      draggable="false"
+    />
 
-      <!-- Ears -->
-      <rect x="28" y="100" width="18" height="40" rx="9" fill="#DDF5E3" class="ear-left" />
-      <rect x="194" y="100" width="18" height="40" rx="9" fill="#DDF5E3" class="ear-right" />
-
-      <!-- Head -->
-      <rect
-        x="44" y="48" width="152" height="140" rx="32"
-        :fill="headColor"
-        :stroke="headBorderColor"
-        stroke-width="2"
-        class="robot-head"
-      />
-
-      <!-- Face screen area -->
-      <rect
-        x="60" y="72" width="120" height="80" rx="16"
-        fill="#FFF7F0"
-        class="face-screen"
-      />
-
-      <!-- Left Eye -->
-      <g class="eye-group left-eye">
-        <ellipse cx="96" cy="112" rx="18" ry="20" fill="white" class="eye-white" />
-        <ellipse
-          cx="96" cy="112" rx="8" ry="10"
-          :fill="eyeColor"
-          class="pupil"
-          :style="{ transform: `translate(${leftPupilX}px, ${leftPupilY}px)` }"
-        />
-        <ellipse cx="92" cy="107" rx="3" ry="3" fill="white" class="eye-shine" />
-      </g>
-
-      <!-- Right Eye -->
-      <g class="eye-group right-eye">
-        <ellipse cx="144" cy="112" rx="18" ry="20" fill="white" class="eye-white" />
-        <ellipse
-          cx="144" cy="112" rx="8" ry="10"
-          :fill="eyeColor"
-          class="pupil"
-          :style="{ transform: `translate(${rightPupilX}px, ${rightPupilY}px)` }"
-        />
-        <ellipse cx="140" cy="107" rx="3" ry="3" fill="white" class="eye-shine" />
-      </g>
-
-      <!-- Blink overlay -->
-      <rect
-        x="60" y="72" width="120" height="80" rx="16"
-        :fill="headColor"
-        class="blink-overlay"
-      />
-
-      <!-- Mouth -->
-      <path
-        :d="mouthPath"
-        stroke="#6B4423"
-        stroke-width="2.5"
-        stroke-linecap="round"
-        fill="none"
-        class="robot-mouth"
-      />
-
-      <!-- Cheek blush -->
-      <ellipse cx="78" cy="134" rx="10" ry="5" fill="#F3D2C1" class="cheek left-cheek" />
-      <ellipse cx="162" cy="134" rx="10" ry="5" fill="#F3D2C1" class="cheek right-cheek" />
-
-      <!-- Body neck connector -->
-      <!-- <rect x="100" y="188" width="40" height="16" rx="6" fill="#DDF5E3" /> -->
-    </svg>
+    <!-- 光标指示器 -->
+    <div
+      v-if="isRevealed"
+      class="cursor-indicator"
+      :style="cursorStyle"
+      aria-hidden="true"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed } from 'vue'
+import avatarBase from '@/assets/avatar/helloai-avatar-base.png'
+import avatarSkeleton from '@/assets/avatar/helloai-avatar-skeleton.png'
 
 const props = withDefaults(defineProps<{
   size?: number
@@ -98,211 +54,171 @@ const props = withDefaults(defineProps<{
   focusTarget?: 'none' | 'email' | 'password'
 }>(), {
   size: 200,
-  primaryColor: '#FF9E64',
+  primaryColor: '#7C3AED',
   isFocused: false,
   isTyping: false,
   focusTarget: 'none'
 })
 
 const containerRef = ref<HTMLDivElement>()
-const mouseX = ref(0.5)
-const mouseY = ref(0.5)
-const isBlinking = ref(false)
-const blinkTimer = ref<ReturnType<typeof setInterval>>()
+const isRevealed = ref(false)
+const touchRevealed = ref(false)
 
-// ---- Mouse Tracking ----
-function handleMouseMove(e: MouseEvent) {
+// 鼠标位置（相对容器中心，-0.5 到 0.5）
+const mouseX = ref(0)
+const mouseY = ref(0)
+
+// 遮罩半径（像素）
+const maskRadius = 80
+
+// 骨架层遮罩样式 - 使用 radial-gradient 作为 mask
+const skeletonMaskStyle = computed(() => {
+  if (!isRevealed.value) {
+    return {
+      maskImage: 'none',
+      WebkitMaskImage: 'none',
+      opacity: 0
+    }
+  }
+
+  // 将相对坐标转换为像素坐标
+  const x = (mouseX.value + 0.5) * props.size
+  const y = (mouseY.value + 0.5) * props.size
+
+  // 创建径向渐变遮罩，中心跟随鼠标
+  const mask = `radial-gradient(circle ${maskRadius}px at ${x}px ${y}px, black 0%, black 60%, transparent 100%)`
+
+  return {
+    maskImage: mask,
+    WebkitMaskImage: mask,
+    opacity: 1
+  }
+})
+
+// 光标指示器样式
+const cursorStyle = computed(() => {
+  const x = (mouseX.value + 0.5) * props.size
+  const y = (mouseY.value + 0.5) * props.size
+
+  return {
+    left: `${x}px`,
+    top: `${y}px`,
+    width: `${maskRadius * 2}px`,
+    height: `${maskRadius * 2}px`
+  }
+})
+
+function onMouseMove(e: MouseEvent) {
   if (!containerRef.value) return
+
   const rect = containerRef.value.getBoundingClientRect()
-  const cx = rect.left + rect.width / 2
-  const cy = rect.top + rect.height / 2
-  mouseX.value = Math.max(0, Math.min(1, (e.clientX - cx) / rect.width + 0.5))
-  mouseY.value = Math.max(0, Math.min(1, (e.clientY - cy) / rect.height + 0.5))
+  const centerX = rect.left + rect.width / 2
+  const centerY = rect.top + rect.height / 2
+
+  // 计算相对位置（-0.5 到 0.5）
+  mouseX.value = (e.clientX - centerX) / rect.width
+  mouseY.value = (e.clientY - centerY) / rect.height
 }
 
-// ---- Blink Cycle ----
-function startBlinkCycle() {
-  blinkTimer.value = setInterval(() => {
-    isBlinking.value = true
-    setTimeout(() => { isBlinking.value = false }, 150)
-  }, 2500 + Math.random() * 2000)
+function onReveal() {
+  isRevealed.value = true
 }
 
-// ---- Pupil Positions ----
-const pupilRange = 6
-
-const leftPupilX = computed(() => {
-  if (props.focusTarget === 'email') return -2
-  if (props.focusTarget === 'password') return 1
-  return (mouseX.value - 0.5) * 2 * pupilRange
-})
-
-const leftPupilY = computed(() => {
-  if (props.focusTarget !== 'none') return 2
-  return (mouseY.value - 0.5) * 2 * pupilRange
-})
-
-const rightPupilX = computed(() => {
-  if (props.focusTarget === 'email') return -2
-  if (props.focusTarget === 'password') return 1
-  return (mouseX.value - 0.5) * 2 * pupilRange
-})
-
-const rightPupilY = computed(() => {
-  if (props.focusTarget !== 'none') return 2
-  return (mouseY.value - 0.5) * 2 * pupilRange
-})
-
-// ---- Mouth Animation ----
-const mouthPath = computed(() => {
-  if (props.isTyping) {
-    return 'M 100 150 Q 120 165 140 150'
+function onHide() {
+  if (!touchRevealed.value) {
+    isRevealed.value = false
   }
-  if (props.isFocused) {
-    return 'M 104 152 Q 120 162 136 152'
+}
+
+function onToggle(e: TouchEvent) {
+  touchRevealed.value = !touchRevealed.value
+  isRevealed.value = touchRevealed.value
+
+  if (touchRevealed.value && containerRef.value) {
+    // 触摸时默认显示中心区域
+    mouseX.value = 0
+    mouseY.value = 0
   }
-  return 'M 106 154 Q 120 160 134 154'
-})
-
-// ---- Colors ----
-const headColor = computed(() => '#FFF7F0')
-const headBorderColor = computed(() => '#F3D2C1')
-const eyeColor = computed(() => props.primaryColor)
-const antennaColor = computed(() => props.primaryColor)
-
-onMounted(() => {
-  window.addEventListener('mousemove', handleMouseMove)
-  startBlinkCycle()
-})
-
-onUnmounted(() => {
-  window.removeEventListener('mousemove', handleMouseMove)
-  clearInterval(blinkTimer.value)
-})
+}
 </script>
 
 <style scoped>
-.character-wrapper {
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
+.avatar-reveal {
   position: relative;
+  overflow: hidden;
+  border-radius: 50%;
+  cursor: crosshair;
+  outline: none;
   z-index: 20;
+  flex-shrink: 0;
+  transition: box-shadow 0.4s ease;
 }
 
-.robot-char {
-  transition: transform 0.7s cubic-bezier(0.34, 1.56, 0.64, 1);
-  filter: drop-shadow(0 8px 32px rgba(255, 158, 100, 0.12));
+.avatar-reveal:focus-visible {
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.6),
+              0 0 0 6px v-bind(primaryColor);
 }
 
-.robot-char.idle {
-  animation: float 4s ease-in-out infinite;
-}
-
-.robot-char.listening {
-  animation: lean-forward 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
-}
-
-.robot-char.typing {
-  animation: bounce-subtle 0.3s ease-in-out;
-}
-
-/* ---- Antenna Glow ---- */
-.antenna-glow {
-  animation: pulse-glow 2s ease-in-out infinite;
-}
-
-@keyframes pulse-glow {
-  0%, 100% { opacity: 0.6; r: 5; }
-  50% { opacity: 1; r: 7; }
-}
-
-/* ---- Eye Shine ---- */
-.eye-shine {
-  transition: opacity 0.3s;
-}
-
-/* ---- Blink Overlay ---- */
-.blink-overlay {
-  opacity: 0;
-  transition: opacity 0.1s;
+.avatar-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center top;
+  user-select: none;
   pointer-events: none;
 }
 
-.robot-char .blink-overlay {
-  animation: none;
+.avatar-base {
+  z-index: 1;
+  transition: transform 0.3s ease;
 }
 
-/* ---- Float Animation ---- */
-@keyframes float {
+.avatar-skeleton {
+  z-index: 2;
+  transition: opacity 0.2s ease;
+  /* mask 由 :style 动态绑定 */
+}
+
+/* 光标指示器 - 显示遮罩区域轮廓 */
+.cursor-indicator {
+  position: absolute;
+  z-index: 3;
+  border: 1px solid rgba(6, 182, 212, 0.4);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  box-shadow:
+    0 0 20px rgba(6, 182, 212, 0.2),
+    inset 0 0 20px rgba(124, 58, 237, 0.1);
+  animation: cursor-pulse 2s ease-in-out infinite;
+}
+
+@keyframes cursor-pulse {
   0%, 100% {
-    transform: translateY(0);
+    box-shadow:
+      0 0 20px rgba(6, 182, 212, 0.2),
+      inset 0 0 20px rgba(124, 58, 237, 0.1);
   }
   50% {
-    transform: translateY(-8px);
+    box-shadow:
+      0 0 30px rgba(6, 182, 212, 0.35),
+      inset 0 0 30px rgba(124, 58, 237, 0.2);
   }
 }
 
-/* ---- Lean Forward ---- */
-@keyframes lean-forward {
-  0% { transform: translateY(0) scale(1); }
-  50% { transform: translateY(4px) scale(0.98); }
-  100% { transform: translateY(2px) scale(0.99); }
-}
+/* 减少动画偏好 */
+@media (prefers-reduced-motion: reduce) {
+  .avatar-skeleton,
+  .avatar-base,
+  .cursor-indicator {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 
-/* ---- Subtle Bounce ---- */
-@keyframes bounce-subtle {
-  0% { transform: translateY(0); }
-  30% { transform: translateY(-3px); }
-  60% { transform: translateY(1px); }
-  100% { transform: translateY(0); }
-}
-
-/* ---- Ear Wiggle ---- */
-.robot-char.listening .ear-left {
-  animation: ear-wiggle 1s ease-in-out infinite;
-}
-.robot-char.listening .ear-right {
-  animation: ear-wiggle 1s ease-in-out infinite 0.15s;
-}
-
-@keyframes ear-wiggle {
-  0%, 100% { transform: rotate(0deg); }
-  25% { transform: rotate(-3deg); }
-  75% { transform: rotate(3deg); }
-}
-
-/* ---- Eye Group ---- */
-.eye-group {
-  transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-/* ---- Pupil ---- */
-.pupil {
-  transition: transform 0.15s ease-out;
-}
-
-/* ---- Cheek Blush ---- */
-.cheek {
-  transition: transform 0.5s;
-}
-.robot-char.listening .cheek {
-  transform: scale(1.03);
-}
-
-/* ---- Face Screen ---- */
-.face-screen {
-  transition: filter 0.4s;
-}
-.robot-char.listening .face-screen {
-  filter: brightness(0.98);
-}
-
-/* ---- Robot Head ---- */
-.robot-head {
-  transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-.robot-char.listening .robot-head {
-  stroke-width: 2.5;
+  .cursor-indicator {
+    animation: none;
+  }
 }
 </style>
