@@ -1,6 +1,7 @@
 <template>
   <div class="login-page">
     <div class="login-brand">
+      <StarfieldBackground />
       <div class="brand-hero">
         <div class="brand-header">
           <div class="brand-text-group">
@@ -292,6 +293,7 @@ import { Key, Lock, User, View } from '@element-plus/icons-vue'
 import { authApi } from '@/api/auth'
 import { settingsApi } from '@/api/settings'
 import AnimatedCharacter from '@/components/AnimatedCharacter.vue'
+import StarfieldBackground from '@/components/StarfieldBackground.vue'
 
 type EntryMode = 'login' | 'register'
 type LoginMode = 'admin' | 'agent'
@@ -564,14 +566,13 @@ onBeforeUnmount(() => {
 
 .login-brand {
   flex: 1;
-  background: linear-gradient(135deg, #7C3AED 0%, #A78BFA 50%, #06B6D4 100%);
-  background-size: 200% 200%;
-  animation: brand-aurora 15s ease infinite;
+  background: hsl(217, 64%, 6%);
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
   padding: 2rem 3rem;
   position: relative;
+  overflow: hidden;
   isolation: isolate;
 }
 
@@ -581,6 +582,8 @@ onBeforeUnmount(() => {
   flex-direction: column;
   justify-content: center;
   align-items: center;
+  position: relative;
+  z-index: 2;
 }
 
 .brand-header {
@@ -615,7 +618,7 @@ onBeforeUnmount(() => {
 
 .brand-bottom {
   position: relative;
-  z-index: 1;
+  z-index: 2;
 }
 
 .brand-quote {
@@ -668,7 +671,7 @@ onBeforeUnmount(() => {
 .deco-grid {
   position: absolute;
   inset: 0;
-  z-index: 0;
+  z-index: 1;
   background-image:
     linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
     linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
@@ -678,6 +681,7 @@ onBeforeUnmount(() => {
 
 .deco-blur {
   position: absolute;
+  z-index: 1;
   border-radius: 50%;
   filter: blur(80px);
   pointer-events: none;
@@ -702,12 +706,6 @@ onBeforeUnmount(() => {
   animation: blur-float-2 18s ease-in-out infinite;
 }
 
-@keyframes brand-aurora {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
-}
-
 @keyframes blur-float-1 {
   0% { transform: translate3d(0, 0, 0) scale(1); }
   50% { transform: translate3d(-70px, 40px, 0) scale(1.08); }
@@ -721,11 +719,6 @@ onBeforeUnmount(() => {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .login-brand {
-    animation: none;
-    background-size: auto;
-  }
-
   .deco-blur-1,
   .deco-blur-2 {
     animation: none;
