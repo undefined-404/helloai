@@ -30,14 +30,6 @@
       :style="skeletonMaskStyle"
       draggable="false"
     />
-
-    <!-- 光标指示器 -->
-    <div
-      v-if="isRevealed"
-      class="cursor-indicator"
-      :style="cursorStyle"
-      aria-hidden="true"
-    />
   </div>
 </template>
 
@@ -95,19 +87,6 @@ const skeletonMaskStyle = computed(() => {
   }
 })
 
-// 光标指示器样式
-const cursorStyle = computed(() => {
-  const x = (mouseX.value + 0.5) * props.size
-  const y = (mouseY.value + 0.5) * props.size
-
-  return {
-    left: `${x}px`,
-    top: `${y}px`,
-    width: `${maskRadius * 2}px`,
-    height: `${maskRadius * 2}px`
-  }
-})
-
 function onMouseMove(e: MouseEvent) {
   if (!containerRef.value) return
 
@@ -147,7 +126,7 @@ function onToggle(e: TouchEvent) {
   position: relative;
   overflow: hidden;
   border-radius: 50%;
-  cursor: crosshair;
+  cursor: default;
   outline: none;
   z-index: 20;
   flex-shrink: 0;
@@ -181,44 +160,11 @@ function onToggle(e: TouchEvent) {
   /* mask 由 :style 动态绑定 */
 }
 
-/* 光标指示器 - 显示遮罩区域轮廓 */
-.cursor-indicator {
-  position: absolute;
-  z-index: 3;
-  border: 1px solid rgba(6, 182, 212, 0.4);
-  border-radius: 50%;
-  transform: translate(-50%, -50%);
-  pointer-events: none;
-  box-shadow:
-    0 0 20px rgba(6, 182, 212, 0.2),
-    inset 0 0 20px rgba(124, 58, 237, 0.1);
-  animation: cursor-pulse 2s ease-in-out infinite;
-}
-
-@keyframes cursor-pulse {
-  0%, 100% {
-    box-shadow:
-      0 0 20px rgba(6, 182, 212, 0.2),
-      inset 0 0 20px rgba(124, 58, 237, 0.1);
-  }
-  50% {
-    box-shadow:
-      0 0 30px rgba(6, 182, 212, 0.35),
-      inset 0 0 30px rgba(124, 58, 237, 0.2);
-  }
-}
-
 /* 减少动画偏好 */
 @media (prefers-reduced-motion: reduce) {
   .avatar-skeleton,
-  .avatar-base,
-  .cursor-indicator {
+  .avatar-base {
     transition-duration: 0.01ms !important;
-    animation-duration: 0.01ms !important;
-  }
-
-  .cursor-indicator {
-    animation: none;
   }
 }
 </style>
