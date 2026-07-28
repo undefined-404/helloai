@@ -32,7 +32,7 @@
       <template #header>
         <div class="card-header">
           <span>执行时间线</span>
-          <span style="font-size:12px;color:#909399">{{ timelinePolling ? '轮询中（5s）' : '已停止' }} · 共 {{ timeline.length }} 条</span>
+          <span style="font-size:12px;color:var(--ha-muted)">{{ timelinePolling ? '轮询中（5s）' : '已停止' }} · 共 {{ timeline.length }} 条</span>
         </div>
       </template>
       <el-empty v-if="!timeline.length" description="暂无时间线事件" />
@@ -161,11 +161,11 @@ onBeforeUnmount(() => {
 <style scoped>
 .page { max-width: var(--ha-content-width); }
 .tl-head { display: flex; align-items: center; gap: 8px; }
-.tl-meta { color: #909399; font-size: 12px; }
+.tl-meta { color: var(--ha-muted); font-size: 12px; }
 .tl-payload {
   margin: 0;
   padding: 8px 12px;
-  background: #f5f7fa;
+  background: var(--ha-surface);
   border-radius: 4px;
   font-size: 12px;
   line-height: 1.5;

@@ -4,41 +4,41 @@
    ======================================== */
 
 :root {
-  /* ---- Colors (purple-primary) ---- */
+  /* ---- Colors (purple-primary, deep navy dark theme) ---- */
   --ha-primary: #7C3AED;
   --ha-primary-hover: #6D28D9;
   --ha-primary-active: #5B21B6;
-  --ha-primary-muted: #F5F3FF;
-  --ha-primary-light: #EDE9FE;
+  --ha-primary-muted: rgba(124, 58, 237, 0.18);
+  --ha-primary-light: rgba(124, 58, 237, 0.10);
 
-  --ha-bg: #FFFFFF;
-  --ha-surface: #F6F8FA;
-  --ha-surface-hover: #F0F2F5;
-  --ha-surface-elevated: #FFFFFF;
+  --ha-bg: #0A0E1A;
+  --ha-surface: #0F1524;
+  --ha-surface-hover: #1A2138;
+  --ha-surface-elevated: #121828;
 
-  --ha-border: #E2E5EA;
-  --ha-border-light: #F0F2F5;
+  --ha-border: #242D47;
+  --ha-border-light: #1C2438;
 
-  --ha-ink: #1A1C1E;
-  --ha-ink-secondary: #4B5563;
-  --ha-muted: #6B7280;
+  --ha-ink: #EEF2F8;
+  --ha-ink-secondary: #A9B4C7;
+  --ha-muted: #7C8AA0;
 
   --ha-success: #10B981;
-  --ha-success-bg: #ECFDF5;
+  --ha-success-bg: rgba(16, 185, 129, 0.12);
   --ha-warning: #F59E0B;
-  --ha-warning-bg: #FFFBEB;
+  --ha-warning-bg: rgba(245, 158, 11, 0.12);
   --ha-danger: #EF4444;
-  --ha-danger-bg: #FEF2F2;
+  --ha-danger-bg: rgba(239, 68, 68, 0.12);
   --ha-info: #3B82F6;
-  --ha-info-bg: #EFF6FF;
+  --ha-info-bg: rgba(59, 130, 246, 0.12);
 
   /* ---- Scrollbar ---- */
-  --ha-scrollbar-thumb: #d1d5db;
-  --ha-scrollbar-thumb-hover: #9ca3af;
+  --ha-scrollbar-thumb: #2A3350;
+  --ha-scrollbar-thumb-hover: #3A4568;
 
-  /* ---- Sidebar (purple gradient) ---- */
-  --ha-sidebar-bg-start: #7C3AED;
-  --ha-sidebar-bg-end: #06B6D4;
+  /* ---- Sidebar (deep navy gradient) ---- */
+  --ha-sidebar-bg-start: #0D1220;
+  --ha-sidebar-bg-end: #0E2233;
   --ha-sidebar-text: rgba(255, 255, 255, 0.85);
   --ha-sidebar-text-muted: rgba(255, 255, 255, 0.55);
   --ha-sidebar-hover: rgba(255, 255, 255, 0.10);
@@ -57,10 +57,10 @@
   --ha-radius-lg: 12px;
   --ha-radius-xl: 16px;
 
-  /* ---- Shadows (purple-tinted) ---- */
-  --ha-shadow-sm: 0 1px 3px rgba(124, 58, 237, 0.08);
-  --ha-shadow-md: 0 4px 16px rgba(124, 58, 237, 0.10);
-  --ha-shadow-lg: 0 8px 32px rgba(124, 58, 237, 0.14);
+  /* ---- Shadows (dark + subtle purple glow) ---- */
+  --ha-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --ha-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.40), 0 0 12px rgba(124, 58, 237, 0.06);
+  --ha-shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.50), 0 0 24px rgba(124, 58, 237, 0.08);
 
   /* ---- Spacing ---- */
   --ha-space-xs: 4px;
@@ -122,6 +122,28 @@ body {
   color: var(--ha-primary);
 }
 
+/* ---- Element Plus dark palette alignment ----
+   将 EP 官方 dark 的中性黑色板对齐到项目深蓝色板，
+   覆盖 message/notification/popper 等 append-to-body 弹层 */
+html.dark {
+  --el-bg-color: #121828;
+  --el-bg-color-page: #0A0E1A;
+  --el-bg-color-overlay: #161E33;
+  --el-fill-color-blank: #121828;
+  --el-fill-color: #1A2138;
+  --el-fill-color-light: #17203A;
+  --el-fill-color-lighter: #141B30;
+  --el-text-color-primary: #EEF2F8;
+  --el-text-color-regular: #A9B4C7;
+  --el-text-color-secondary: #7C8AA0;
+  --el-text-color-placeholder: #5B6880;
+  --el-border-color: #242D47;
+  --el-border-color-light: #1C2438;
+  --el-border-color-lighter: #1C2438;
+  --el-border-color-extra-light: #182036;
+  --el-mask-color: rgba(4, 7, 15, 0.60);
+}
+
 /* ========================================
    Element Plus Overrides
    ======================================== */
@@ -156,7 +178,7 @@ body {
               transform var(--ha-duration-normal) var(--ha-ease-out);
 }
 .el-card:hover {
-  box-shadow: 0 1px 6px rgba(124, 58, 237, 0.10) !important;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.45), 0 0 12px rgba(124, 58, 237, 0.10) !important;
 }
 .el-card.is-never-shadow {
   box-shadow: none !important;
@@ -212,19 +234,19 @@ body {
 }
 .el-tag--success {
   --el-tag-bg-color: var(--ha-success-bg);
-  --el-tag-text-color: #059669;
+  --el-tag-text-color: #34D399;
 }
 .el-tag--warning {
   --el-tag-bg-color: var(--ha-warning-bg);
-  --el-tag-text-color: #D97706;
+  --el-tag-text-color: #FBBF24;
 }
 .el-tag--danger {
   --el-tag-bg-color: var(--ha-danger-bg);
-  --el-tag-text-color: #DC2626;
+  --el-tag-text-color: #F87171;
 }
 .el-tag--info {
   --el-tag-bg-color: var(--ha-info-bg);
-  --el-tag-text-color: var(--ha-info);
+  --el-tag-text-color: #60A5FA;
 }
 
 /* ---- Menu ---- */
@@ -297,7 +319,7 @@ body {
 .el-dropdown-menu {
   border-radius: var(--ha-radius-md) !important;
   box-shadow: var(--ha-shadow-md) !important;
-  border: none !important;
+  border: 1px solid var(--ha-border) !important;
   padding: 4px !important;
 }
 .el-dropdown-menu__item {
@@ -393,12 +415,12 @@ p, .el-empty__description p {
 
 /* ---- Subtle link underlines ---- */
 a {
-  color: var(--ha-primary);
+  color: #A78BFA;
   text-decoration: none;
   transition: color var(--ha-duration-fast);
 }
 a:hover {
-  color: var(--ha-primary-hover);
+  color: #C4B5FD;
   text-decoration: underline;
 }
 
@@ -560,95 +582,38 @@ img {
 }
 
 /* ========================================
-   Dark Mode — semantic-first, content only
-   Sidebar gradient remains unchanged (already dark-tolerant).
+   Dark Component Refinements (permanent dark theme)
+   全站永久暗色：基础色板由 :root token 与 html.dark EP 变量提供，
+   此处仅保留需要额外层次对比的组件精修。
+   不加 !important，避免覆盖登录页等局部作用域样式。
    ======================================== */
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --ha-bg: #131417;
-    --ha-surface: #1A1C20;
-    --ha-surface-hover: #22252A;
-    --ha-surface-elevated: #1E2025;
+/* 输入框：比卡片底更深一层，形成内凹层次 */
+.el-input__wrapper,
+.el-textarea__inner {
+  background-color: var(--ha-surface);
+}
+.el-input__inner,
+.el-textarea__inner {
+  color: var(--ha-ink);
+}
 
-    --ha-border: #2D3036;
-    --ha-border-light: #26282E;
+/* 弹窗/下拉：实心深色表面 */
+.el-dialog {
+  background: var(--ha-surface-elevated);
+}
+.el-dropdown-menu {
+  background: var(--ha-surface-elevated);
+}
+.el-dropdown-menu__item:hover {
+  background: var(--ha-surface-hover);
+}
 
-    --ha-ink: #E5E7EB;
-    --ha-ink-secondary: #9CA3AF;
-    --ha-muted: #6B7280;
-
-    /* Muted accents — lower opacity on dark */
-    --ha-primary-muted: rgba(124, 58, 237, 0.15);
-    --ha-primary-light: rgba(124, 58, 237, 0.08);
-
-    --ha-success-bg: rgba(16, 185, 129, 0.12);
-    --ha-warning-bg: rgba(245, 158, 11, 0.12);
-    --ha-danger-bg: rgba(239, 68, 68, 0.12);
-    --ha-info-bg: rgba(59, 130, 246, 0.12);
-
-    /* Purple-tinted shadows become glow on dark */
-    --ha-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.30);
-    --ha-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.35);
-    --ha-shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.45);
-  }
-
-  /* Element Plus dark overrides */
-  .el-table {
-    --el-table-tr-bg-color: var(--ha-surface-elevated) !important;
-    --el-table-row-hover-bg-color: var(--ha-surface-hover) !important;
-    --el-table-header-bg-color: var(--ha-surface) !important;
-  }
-
-  .el-table th.el-table__cell {
-    background: var(--ha-surface) !important;
-    color: var(--ha-ink-secondary) !important;
-  }
-
-  .el-table td.el-table__cell {
-    border-bottom-color: var(--ha-border-light) !important;
-    border-right-color: var(--ha-border) !important;
-  }
-
-  .el-input__wrapper {
-    background: var(--ha-surface) !important;
-    box-shadow: 0 0 0 1px var(--ha-border) inset !important;
-  }
-
-  .el-input__inner {
-    color: var(--ha-ink) !important;
-  }
-
-  .el-select .el-input__wrapper {
-    background: var(--ha-surface) !important;
-  }
-
-  .el-dialog {
-    background: var(--ha-surface-elevated) !important;
-  }
-
-  .el-dropdown-menu {
-    background: var(--ha-surface-elevated) !important;
-    border: 1px solid var(--ha-border) !important;
-  }
-
-  .el-dropdown-menu__item:hover {
-    background: var(--ha-surface-hover) !important;
-  }
-
-  .el-pagination .btn-prev,
-  .el-pagination .btn-next {
-    background: var(--ha-surface-elevated) !important;
-    color: var(--ha-ink) !important;
-  }
-
-  .el-empty__description p {
-    color: var(--ha-muted) !important;
-  }
-
-  .el-card__header {
-    border-bottom-color: var(--ha-border-light) !important;
-  }
+/* 分页按钮：深色底 */
+.el-pagination .btn-prev,
+.el-pagination .btn-next {
+  background: var(--ha-surface-elevated);
+  color: var(--ha-ink);
 }
 
 /* ---- Reduced motion: global safety ---- */

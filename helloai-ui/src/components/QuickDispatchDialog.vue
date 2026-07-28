@@ -70,7 +70,7 @@
             :value="a.id"
           />
         </el-select>
-        <div style="margin-top:4px;color:#909399;font-size:12px">
+        <div style="margin-top:4px;color:var(--ha-muted);font-size:12px">
           共 {{ availableAgents.length }} 个可用 EXECUTOR（role=EXECUTOR 且 accessType=CLI_CLIENT）
         </div>
       </el-form-item>

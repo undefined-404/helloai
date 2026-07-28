@@ -1,9 +1,11 @@
-﻿import { createApp } from 'vue'
+import { createApp } from 'vue'
 import App from './App.vue'
 import router from './router'
 import { createPinia } from 'pinia'
 import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
+/* Element Plus 官方暗色变量：兜底 message/notification/popper 等 append-to-body 弹层 */
+import 'element-plus/theme-chalk/dark/css-vars.css'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 
 /* ---- Design System ---- */
