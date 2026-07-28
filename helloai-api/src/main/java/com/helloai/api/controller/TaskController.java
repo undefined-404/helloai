@@ -10,6 +10,8 @@ import com.helloai.common.base.R;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.planner.PlannerAnalysisService;
+import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentService;
@@ -31,6 +33,7 @@ public class TaskController {
     private final TaskService taskService;
     private final AgentService agentService;
     private final AgentInboxService agentInboxService;
+    private final PlannerAnalysisService plannerAnalysisService;
 
     @PostMapping
     public R<Task> create(@Valid @RequestBody CreateTaskRequest req) {
@@ -114,6 +117,31 @@ public class TaskController {
     @PostMapping("/{id}/republish")
     public R<Task> republish(@PathVariable("id") Long id) {
         return R.ok(taskService.republish(id));
+    }
+
+    // ══════════════════════════════════════════════════════
+    //  Planner 平台内拆解（草案生成 / 查看 / 确认 / 拒绝，编排全在 core）
+    // ══════════════════════════════════════════════════════
+
+    @PostMapping("/{id}/plan")
+    public R<List<SubTask>> plan(@PathVariable("id") Long id) {
+        return R.ok(plannerAnalysisService.decompose(id));
+    }
+
+    @GetMapping("/{id}/plan")
+    public R<List<SubTask>> planDrafts(@PathVariable("id") Long id) {
+        return R.ok(plannerAnalysisService.listDrafts(id));
+    }
+
+    @PostMapping("/{id}/plan/confirm")
+    public R<List<SubTask>> confirmPlan(@PathVariable("id") Long id) {
+        return R.ok(plannerAnalysisService.confirmPlan(id));
+    }
+
+    @PostMapping("/{id}/plan/reject")
+    public R<Map<String, Object>> rejectPlan(@PathVariable("id") Long id) {
+        int cancelled = plannerAnalysisService.rejectPlan(id);
+        return R.ok(Map.of("taskId", id, "cancelledCount", cancelled));
     }
 
     // ══════════════════════════════════════════════════════════

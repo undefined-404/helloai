@@ -12,6 +12,9 @@ public class SubTaskStateMachine {
     private static final Map<SubTaskStatus, Set<SubTaskStatus>> TRANSITIONS = new EnumMap<>(SubTaskStatus.class);
 
     static {
+        // V26 规划草案态：确认后转正（PENDING，进入既有分发链）或拒绝（CANCELLED，保留审计）；
+        // 草案不可被 claim/assignNext/自动重派触碰（它们只认 PENDING 等状态）。
+        TRANSITIONS.put(SubTaskStatus.PENDING_PLAN_REVIEW, Set.of(SubTaskStatus.PENDING, SubTaskStatus.CANCELLED));
         TRANSITIONS.put(SubTaskStatus.PENDING,     Set.of(SubTaskStatus.ASSIGNED, SubTaskStatus.CANCELLED, SubTaskStatus.DEAD_LETTER));
         TRANSITIONS.put(SubTaskStatus.ASSIGNED,     Set.of(SubTaskStatus.IN_PROGRESS, SubTaskStatus.BLOCKED, SubTaskStatus.PENDING, SubTaskStatus.CANCELLED, SubTaskStatus.DEAD_LETTER));
         TRANSITIONS.put(SubTaskStatus.IN_PROGRESS,  Set.of(SubTaskStatus.REVIEW, SubTaskStatus.BLOCKED, SubTaskStatus.PAUSED, SubTaskStatus.CANCELLED, SubTaskStatus.DEAD_LETTER));

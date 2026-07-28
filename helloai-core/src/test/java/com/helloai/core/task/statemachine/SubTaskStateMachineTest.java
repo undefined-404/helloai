@@ -9,7 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * SubTaskStateMachine 状态流转单元测试（V25 补充 DEAD_LETTER 死信态）。
+ * SubTaskStateMachine 状态流转单元测试（V25 补充 DEAD_LETTER 死信态；V26 补充 PENDING_PLAN_REVIEW 草案态）。
  */
 @DisplayName("SubTaskStateMachine")
 class SubTaskStateMachineTest {
@@ -59,6 +59,43 @@ class SubTaskStateMachineTest {
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("非法状态转换");
         assertThatThrownBy(() -> SubTaskStateMachine.validate(SubTaskStatus.DEAD_LETTER, SubTaskStatus.PENDING))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("非法状态转换");
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  V26 规划草案态：PENDING_PLAN_REVIEW
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("V26: PENDING_PLAN_REVIEW 仅允许转向 PENDING（确认转正）或 CANCELLED（拒绝草案）")
+    void shouldOnlyAllowConfirmOrRejectFromPlanReview() {
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.PENDING_PLAN_REVIEW, SubTaskStatus.PENDING)).isTrue();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.PENDING_PLAN_REVIEW, SubTaskStatus.CANCELLED)).isTrue();
+
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.PENDING_PLAN_REVIEW, SubTaskStatus.ASSIGNED)).isFalse();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.PENDING_PLAN_REVIEW, SubTaskStatus.IN_PROGRESS)).isFalse();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.PENDING_PLAN_REVIEW, SubTaskStatus.DONE)).isFalse();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.PENDING_PLAN_REVIEW, SubTaskStatus.DEAD_LETTER)).isFalse();
+    }
+
+    @Test
+    @DisplayName("V26: 任何状态都不允许转入 PENDING_PLAN_REVIEW（草案态只能由拆解落库产生）")
+    void shouldRejectAnyTransitionIntoPlanReview() {
+        for (SubTaskStatus from : SubTaskStatus.values()) {
+            assertThat(SubTaskStateMachine.canTransition(from, SubTaskStatus.PENDING_PLAN_REVIEW))
+                    .as("from=%s", from)
+                    .isFalse();
+        }
+    }
+
+    @Test
+    @DisplayName("V26: 草案态非法流转 validate 抛 BizException")
+    void shouldThrowOnIllegalPlanReviewTransition() {
+        assertThatThrownBy(() -> SubTaskStateMachine.validate(SubTaskStatus.PENDING_PLAN_REVIEW, SubTaskStatus.ASSIGNED))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("非法状态转换");
+        assertThatThrownBy(() -> SubTaskStateMachine.validate(SubTaskStatus.PENDING, SubTaskStatus.PENDING_PLAN_REVIEW))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("非法状态转换");
     }
