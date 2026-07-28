@@ -75,20 +75,19 @@ public class AgentDutyLeaseController {
     }
 
     /**
-     * 值班租约状态概览（看板顶部卡片数据源）。
+     * 今日打卡概览（看板顶部卡片数据源）。
+     *
+     * <p>按 Agent 维度统计：每个 Agent 只按其最新租约状态计一次，
+     * 不再按历史租约条数累计。</p>
      */
     @GetMapping("/overview")
     public R<DutyOverviewResponse> overview() {
-        Map<AgentDutyLeaseStatus, Long> counts = agentDutyLeaseService.countByStatus();
-        long active = counts.getOrDefault(AgentDutyLeaseStatus.ACTIVE, 0L);
-        long closed = counts.getOrDefault(AgentDutyLeaseStatus.CLOSED, 0L);
-        long expired = counts.getOrDefault(AgentDutyLeaseStatus.EXPIRED, 0L);
+        Map<AgentDutyLeaseStatus, Long> counts = agentDutyLeaseService.countTodayAgentsByStatus();
 
         DutyOverviewResponse resp = new DutyOverviewResponse();
-        resp.setActiveCount(active);
-        resp.setClosedCount(closed);
-        resp.setExpiredCount(expired);
-        resp.setTotalCount(active + closed + expired);
+        resp.setActiveCount(counts.getOrDefault(AgentDutyLeaseStatus.ACTIVE, 0L));
+        resp.setClosedCount(counts.getOrDefault(AgentDutyLeaseStatus.CLOSED, 0L));
+        resp.setExpiredCount(counts.getOrDefault(AgentDutyLeaseStatus.EXPIRED, 0L));
         return R.ok(resp);
     }
 

@@ -165,13 +165,13 @@ if (-not $s1Data) {
     Write-Error 'S1 FAIL: no data field in response'
     exit 1
 }
-foreach ($field in @('activeCount','closedCount','expiredCount','totalCount')) {
+foreach ($field in @('activeCount','closedCount','expiredCount')) {
     if ($null -eq $s1Data.$field) {
         Write-Error "S1 FAIL: missing field [$field]"
         exit 1
     }
 }
-Write-Output "S1 OK: active=$($s1Data.activeCount) closed=$($s1Data.closedCount) expired=$($s1Data.expiredCount) total=$($s1Data.totalCount)"
+Write-Output "S1 OK: active=$($s1Data.activeCount) closed=$($s1Data.closedCount) expired=$($s1Data.expiredCount)"
 Write-Output ''
 
 # ============================================================

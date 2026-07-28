@@ -45,16 +45,16 @@
       </div>
     </div>
 
-    <!-- AgentHub V1 P1 打卡上班概览 -->
+    <!-- AgentHub V1 P1 今日打卡概览（Agent 维度：每个 Agent 只按最新状态计一次） -->
     <div v-if="!errorMsg" class="duty-section ha-entrance-up" style="animation-delay: 300ms">
       <div class="section-header">
         <div class="section-title">
           <el-icon color="#0EA5E9"><Clock /></el-icon>
-          <span>Agent 打卡概览</span>
+          <span>今日打卡概览</span>
         </div>
         <router-link to="/duty-leases" class="section-link">查看全部打卡记录 →</router-link>
       </div>
-      <div class="stats-grid">
+      <div class="stats-grid duty-grid">
         <div class="stat-card" :class="dutyLoading ? 'is-loading' : ''">
           <div class="stat-dot success" aria-hidden="true" />
           <div class="stat-body">
@@ -76,13 +76,6 @@
             <div class="stat-value">{{ dutyOverview.expiredCount }}</div>
           </div>
         </div>
-        <div class="stat-card">
-          <div class="stat-dot" :class="dutyOverview.expiredCount > 0 ? 'danger' : 'primary'" aria-hidden="true" />
-          <div class="stat-body">
-            <div class="stat-label">打卡总数</div>
-            <div class="stat-value">{{ dutyOverview.totalCount }}</div>
-          </div>
-        </div>
       </div>
     </div>
   </div>
@@ -102,8 +95,7 @@ const dutyLoading = ref(false)
 const dutyOverview = ref<DutyOverviewResponse>({
   activeCount: 0,
   closedCount: 0,
-  expiredCount: 0,
-  totalCount: 0
+  expiredCount: 0
 })
 
 interface Stat {
@@ -273,8 +265,7 @@ async function loadDutyOverview() {
       dutyOverview.value = {
         activeCount: data.activeCount ?? 0,
         closedCount: data.closedCount ?? 0,
-        expiredCount: data.expiredCount ?? 0,
-        totalCount: data.totalCount ?? 0
+        expiredCount: data.expiredCount ?? 0
       }
     }
   } catch (e: any) {
@@ -341,6 +332,11 @@ onUnmounted(() => {
   grid-template-columns: repeat(4, 1fr);
   gap: 16px;
   margin-bottom: 20px;
+}
+
+/* 今日打卡概览：三状态卡片（在线/下班/超时） */
+.duty-grid {
+  grid-template-columns: repeat(3, 1fr);
 }
 
 .stat-card {

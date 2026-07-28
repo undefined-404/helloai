@@ -73,4 +73,18 @@
         SELECT COUNT(DISTINCT agent_id) FROM agent_duty_lease WHERE deleted = 0
     </select>
 
+    <!--
+        今日打卡概览：每个 Agent 取最新一条租约的状态（Agent 维度去重，一个 Agent 只计一次）。
+        口径：今日有打卡记录（start_time >= todayStart）或当前仍在线（ACTIVE，
+        含昨日打卡至今未下班）的 Agent；ACTIVE 租约永远是该 Agent 最新一条
+        （startLease 会先关旧 ACTIVE），故 DISTINCT ON 取组内最新即为当前状态。
+    -->
+    <select id="selectTodayLatestStatusPerAgent" resultType="string">
+        SELECT DISTINCT ON (agent_id) status
+        FROM agent_duty_lease
+        WHERE deleted = 0
+          AND (start_time &gt;= #{todayStart} OR status = 'ACTIVE')
+        ORDER BY agent_id, start_time DESC, id DESC
+    </select>
+
 </mapper>

@@ -24,7 +24,7 @@ export const dutyApi = {
     return request.get<any, PageResult<DutyAgentLatestResponse>>('/admin/duty-leases/by-agent', { params })
   },
 
-  /** 打卡状态概览（Dashboard 顶部卡片数据源）。 */
+  /** 今日打卡概览（Dashboard 顶部卡片数据源，Agent 维度去重）。 */
   overview() {
     return request.get<any, DutyOverviewResponse>('/admin/duty-leases/overview')
   }

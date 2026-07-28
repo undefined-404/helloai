@@ -60,6 +60,14 @@ public interface AgentDutyLeaseMapper extends BaseMapper<AgentDutyLease> {
     /** 有租约记录的 Agent 总数（Agent 维度分页的 total）。 */
     long countDistinctAgents();
 
+    /**
+     * 今日打卡概览：每个 Agent 取最新一条租约的状态（Agent 维度去重）。
+     *
+     * <p>口径：今日有打卡记录（start_time &gt;= todayStart）或当前仍在线（ACTIVE）
+     * 的 Agent，每个 Agent 只返回一个状态值（其最新租约的 status）。</p>
+     */
+    List<String> selectTodayLatestStatusPerAgent(@Param("todayStart") OffsetDateTime todayStart);
+
     /** 物理删除某 Agent 的全部值班租约（外键引用 agent.id，仅供 Agent 级联删除使用）。 */
     @Delete("DELETE FROM agent_duty_lease WHERE agent_id = #{agentId}")
     int physicalDeleteByAgentId(@Param("agentId") Long agentId);

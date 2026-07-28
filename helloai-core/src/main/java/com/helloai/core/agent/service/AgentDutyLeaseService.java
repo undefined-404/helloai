@@ -281,19 +281,31 @@ public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, Age
     }
 
     /**
-     * 按状态统计值班租约条数（AgentHub V1 P1 值班报表数据源，只读）。
+     * 今日打卡概览：按 Agent 维度统计各状态的 Agent 数（只读）。
      *
-     * <p>遍历所有状态并计数，缺失状态补 0，保证返回的键始终齐全
-     * （ACTIVE / CLOSED / EXPIRED），供看板状态分布卡片直接消费。</p>
+     * <p>每个 Agent 只按其最新一条租约的状态计一次（要么在线、要么下班、
+     * 要么超时），而非历史租约条数累计。口径：今日有打卡记录或当前仍
+     * ACTIVE 在线（含昨日打卡至今未下班）的 Agent。缺失状态补 0，保证
+     * 返回的键始终齐全（ACTIVE / CLOSED / EXPIRED），供看板卡片直接消费。</p>
      *
-     * @return 状态 → 条数（顺序稳定），绝不返回 null
+     * @return 状态 → Agent 数（顺序稳定），绝不返回 null
      */
-    public Map<AgentDutyLeaseStatus, Long> countByStatus() {
+    public Map<AgentDutyLeaseStatus, Long> countTodayAgentsByStatus() {
+        OffsetDateTime todayStart = OffsetDateTime.now()
+                .withHour(0).withMinute(0).withSecond(0).withNano(0);
+        List<String> statuses = baseMapper.selectTodayLatestStatusPerAgent(todayStart);
+
         Map<AgentDutyLeaseStatus, Long> counts = new LinkedHashMap<>();
         for (AgentDutyLeaseStatus s : AgentDutyLeaseStatus.values()) {
-            long c = count(new LambdaQueryWrapper<AgentDutyLease>()
-                    .eq(AgentDutyLease::getStatus, s));
-            counts.put(s, c);
+            counts.put(s, 0L);
+        }
+        for (String status : statuses) {
+            for (AgentDutyLeaseStatus s : AgentDutyLeaseStatus.values()) {
+                if (s.name().equals(status)) {
+                    counts.merge(s, 1L, Long::sum);
+                    break;
+                }
+            }
         }
         return counts;
     }

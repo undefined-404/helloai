@@ -45,15 +45,14 @@ export interface DutyAgentLatestResponse extends DutyLeaseResponse {
   leaseCount: number
 }
 
+// 今日打卡概览：按 Agent 维度去重，每个 Agent 只按其最新租约状态计一次
 export interface DutyOverviewResponse {
-  /** 当前在线（ACTIVE）打卡记录条数，等于在岗 Agent 数。 */
+  /** 今日在线（最新租约 ACTIVE）的 Agent 数。 */
   activeCount: number
-  /** 已下班（CLOSED）打卡记录条数。 */
+  /** 今日已下班（最新租约 CLOSED）的 Agent 数。 */
   closedCount: number
-  /** 已超时（EXPIRED）打卡记录条数。 */
+  /** 今日超时（最新租约 EXPIRED）的 Agent 数。 */
   expiredCount: number
-  /** 全部打卡记录条数（历史累计，未删除）。 */
-  totalCount: number
 }
 
 // --- 状态标签映射（看板 / 列表统一展示） ---

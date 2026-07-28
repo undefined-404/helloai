@@ -180,7 +180,7 @@ assert_eq "200" "$HTTP_CODE" "S1 overview failed"
 s1_data="$(print -r -- "$HTTP_BODY" | jq -r '.data // empty')"
 [[ -n "$s1_data" ]] || fail "S1 FAIL: no data field"
 
-for field in activeCount closedCount expiredCount totalCount; do
+for field in activeCount closedCount expiredCount; do
   val="$(print -r -- "$s1_data" | jq -r ".$field // empty")"
   [[ -n "$val" ]] || fail "S1 FAIL: missing field [$field]"
 done
@@ -188,8 +188,7 @@ done
 active="$(print -r -- "$s1_data" | jq -r '.activeCount')"
 closed="$(print -r -- "$s1_data" | jq -r '.closedCount')"
 expired="$(print -r -- "$s1_data" | jq -r '.expiredCount')"
-total="$(print -r -- "$s1_data" | jq -r '.totalCount')"
-log "S1 OK: active=$active closed=$closed expired=$expired total=$total"
+log "S1 OK: active=$active closed=$closed expired=$expired"
 log ""
 
 # ============================================================
