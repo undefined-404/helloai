@@ -17,7 +17,7 @@
         <span
           class="status-dot"
           :class="agent.status === 'ACTIVE' ? 'active' : 'disabled'"
-          :title="agent.status === 'ACTIVE' ? '活跃' : '已禁用'"
+          :title="agent.status === 'ACTIVE' ? '已注册' : '已注销'"
         />
       </div>
 
@@ -54,7 +54,7 @@
       <el-button size="small" type="primary" plain @click="$emit('onboarding', agent)">生成接入内容</el-button>
       <el-button size="small" @click="$emit('edit', agent)">编辑</el-button>
       <el-button size="small" @click="$emit('toggle-status', agent)">
-        {{ agent.status === 'ACTIVE' ? '禁用' : '启用' }}
+        {{ agent.status === 'ACTIVE' ? '注销' : '恢复注册' }}
       </el-button>
       <el-button size="small" type="danger" @click="$emit('delete', agent)">删除</el-button>
     </div>

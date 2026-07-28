@@ -14,9 +14,9 @@
       stripe
       v-loading="loading"
       style="width: 100%"
-      empty-text="暂无租约记录"
+      empty-text="暂无打卡记录"
     >
-      <el-table-column prop="id" label="租约 ID" width="120" />
+      <el-table-column prop="id" label="记录 ID" width="120" />
       <el-table-column prop="sessionId" label="会话" min-width="180" show-overflow-tooltip />
       <el-table-column prop="workMode" label="模式" width="90" />
       <el-table-column label="状态" width="100">
@@ -26,13 +26,13 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="开始时间" width="160">
+      <el-table-column label="上班时间" width="160">
         <template #default="{ row }">{{ fmtTime(row.startedAt) }}</template>
       </el-table-column>
       <el-table-column label="续约时间" width="160">
         <template #default="{ row }">{{ fmtTime(row.lastRenewedAt) }}</template>
       </el-table-column>
-      <el-table-column label="过期时间" width="160">
+      <el-table-column label="超时时间" width="160">
         <template #default="{ row }">{{ fmtTime(row.expiresAt) }}</template>
       </el-table-column>
       <el-table-column prop="closeReason" label="关闭原因" min-width="140" show-overflow-tooltip>
@@ -74,7 +74,7 @@ watch(() => props.modelValue, v => { visible.value = v })
 watch(visible, v => emit('update:modelValue', v))
 
 const dialogTitle = computed(() =>
-  `值班记录 — ${props.agentName || '未知 Agent'} #${props.agentId ?? ''}`
+  `打卡记录 — ${props.agentName || '未知 Agent'} #${props.agentId ?? ''}`
 )
 
 const list = ref<DutyLeaseResponse[]>([])

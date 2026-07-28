@@ -2728,3 +2728,65 @@ UI 行为变更：`helloai-ui/src/views/agent/components/AgentOnboardingDialog.v
 - Agent 维度主列表暂无状态过滤（如需"只看值班中 Agent"可在 by-agent SQL 外层加 status 条件，待需求明确后补）
 
 ---
+
+### 6.14 全站暗色主题统一（登录页 + 后台，2026-07-22）
+
+#### 1. 背景
+
+登录页此前已改造为深蓝星空 + 玻璃拟态暗色风格（.login-page 局部 token 覆盖），但登录后后台仍为亮色主题，前后视觉割裂。经用户确认采用"全站永久暗色 + 深蓝底实心卡片"方案（不做亮/暗切换，后台不用玻璃拟态保表格可读性）。
+
+#### 2. 实际落地
+
+- **design-system.css（主战场）**：`:root` 亮色 token 整体替换为登录页同调性深蓝暗色值（bg #0A0E1A / surface #0F1524 / elevated #121828 / border #242D47 / ink #EEF2F8）；删除旧 `prefers-color-scheme: dark` 媒体块（#131417 中性灰色板弃用），其 EP 补丁提升为常规规则；新增 `html.dark` 段将 EP 官方 dark 变量（--el-bg-color 系）对齐项目深蓝色板；Tag 四色文字换暗色可读变体（#34D399/#FBBF24/#F87171/#60A5FA）；阴影改黑色系 + 弱紫光晕
+- **基础设施**：index.html `<html>` 加 `class="dark"`；main.ts 引入 `element-plus/theme-chalk/dark/css-vars.css` 兜底 message/notification/popper 等 append-to-body 弹层
+- **MainLayout.vue**：侧边栏从亮紫→青渐变改为深蓝渐变（#0D1220→#141B33→#0E2233，保留极光动画/网格/青色光斑）；菜单选中态改品牌紫实底 + 紫色投影；头像底色改紫色半透明
+- **硬编码残留清理**：SubTaskDetail.vue（#909399×2、#f5f7fa 改 token）、QuickDispatchDialog.vue（#909399 改 token）；AgentList.vue 的 #fff 在紫色实底上保留
+- **Login.vue 零改动**：局部 token 覆盖与新全局暗色值同调性，自然兼容
+
+#### 3. 测试与验证
+
+- `npm run build`（vue-tsc + vite）→ 0 错误
+- 浏览器实测（admin 登录后样式探针）：Dashboard（body #0A0E1A/卡片 #121828/文字 #EEF2F8）、任务列表（表头 #0F1524）、新建弹窗（弹窗 #121828/输入框 #0F1524/标签 #A9B4C7）、侧边栏深蓝渐变 + 紫色选中态均生效
+- 登录页回归：星空 Canvas、玻璃卡片 rgba(18,24,40,0.6) + blur(20px)、tab 样式均未受影响
+
+#### 4. 影响
+
+- **行为变化**：全站（登录页 + 后台）统一为深蓝暗色主题，无亮色模式；原"登录页暗色 + 后台亮色"分层策略废弃
+- **接口/DB 变更**：无（纯前端样式层）
+
+#### 5. 遗留与下一步
+
+- ECharts 图表仅初始化时读取 cssVar，若未来引入主题切换需补重绘监听
+- 如需恢复亮色或加切换开关，需把 :root 暗色值回迁至 html.dark 作用域并补开关逻辑
+
+---
+
+### 6.15 打卡上班语义改造（值班租约改名 + Agent 注册态文案，2026-07-22）
+
+#### 1. 背景
+
+用户要求两项语义重命名：①“值班租约”改为“打卡上班”，状态一一对应 ACTIVE→在线、EXPIRED→超时、CLOSED→下班；②Agent 注册状态改为“已注册/已注销”，消除“活跃”文案对“注册=在线”的误导（AgentStatus 本就是管理态，与 onlineStatus 在线监测双轨分离，一键注册链路现状本就不含在线监测）。经确认采用“界面语义层改造”：仅改文案与对外文档术语，后端枚举字符串（ACTIVE/CLOSED/EXPIRED、ACTIVE/DISABLED）、DB、MCP 协议契约零改动。
+
+#### 2. 实际落地
+
+- **打卡上班前端**：`types/duty.ts` DUTY_LEASE_STATUS_MAP 改为 在线(success)/下班(info)/超时(warning)；`MainLayout.vue` 菜单与 `router/index.ts` title 改“打卡上班”（路由路径 /duty-leases 不变）；`DutyLeaseList.vue`（标题/列名/empty-text）、`DutyLeaseHistoryDialog.vue`（标题“打卡记录”/列名）、`Dashboard.vue`（“Agent 打卡概览”卡片四标签 在线/下班/超时/打卡总数）、`api/duty.ts` 注释同步
+- **Agent 注册态前端**：`AgentDetail.vue`/`AgentCard.vue` 状态文案“活跃/已禁用”→“已注册/已注销”，操作按钮“禁用/启用”→“注销/恢复注册”；`AgentStatusDialog.vue` 弹窗标题/确认文案/成功消息全套同步；`AgentOnboardingDialog.vue`“常驻值班脚本/进程”→“常驻打卡”
+- **后端对外文档（不改逻辑）**：`McpMcpServer.java` checkIn/checkOut 的 @Tool description “值班租约/值班态”→打卡术语；`skills/executor/SKILL.md` 全文 11 处“值班”字样统一为打卡术语（机制描述与枚举值 ACTIVE/CLOSED/EXPIRED 原样保留）
+- **明确不做**：枚举 `AgentDutyLeaseStatus`/`AgentStatus` 及其字符串值、Flyway 迁移、API/路由路径、MCP 工具名、心跳/在线监测/AgentSelector/注册链路逻辑均零改动
+
+#### 3. 测试与验证
+
+- `npm run build`（vue-tsc + vite）→ 0 错误；`mvn -pl helloai-core -am compile` → BUILD SUCCESS
+- 浏览器实测（localhost:5174 探针）：打卡上班页（菜单/标题/列名/真实 EXPIRED 数据显示“超时”标签）、Dashboard 打卡概览四标签、Agent 卡片（状态点“已注册”/按钮“注销”）、注销弹窗（标题/文案/“确认注销”）全部生效
+
+#### 4. 影响
+
+- **行为变化**：纯展示层语义更名，无任何接口/调度/数据行为变化；已接入的外部 Agent 不受影响
+- **接口/DB 变更**：无
+
+#### 5. 遗留与下一步
+
+- 若未来需要枚举值与新语义完全对齐（如租约 ACTIVE→ONLINE、Agent ACTIVE→REGISTERED），需 Flyway 迁移翻写存量 + CHECK 约束/部分唯一索引同步 + 外部 Agent SKILL 文档同步，属协议级变更需单独立项
+- 已下发给外部 Agent 的旧版 hello_ai_skills.md 仍含“值班”旧术语，重新生成接入内容即可刷新
+
+---

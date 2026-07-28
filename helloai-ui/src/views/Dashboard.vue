@@ -45,41 +45,41 @@
       </div>
     </div>
 
-    <!-- AgentHub V1 P1 值班租约概览 -->
+    <!-- AgentHub V1 P1 打卡上班概览 -->
     <div v-if="!errorMsg" class="duty-section ha-entrance-up" style="animation-delay: 300ms">
       <div class="section-header">
         <div class="section-title">
           <el-icon color="#0EA5E9"><Clock /></el-icon>
-          <span>Agent 值班概览</span>
+          <span>Agent 打卡概览</span>
         </div>
-        <router-link to="/duty-leases" class="section-link">查看全部租约 →</router-link>
+        <router-link to="/duty-leases" class="section-link">查看全部打卡记录 →</router-link>
       </div>
       <div class="stats-grid">
         <div class="stat-card" :class="dutyLoading ? 'is-loading' : ''">
           <div class="stat-dot success" aria-hidden="true" />
           <div class="stat-body">
-            <div class="stat-label">值班中</div>
+            <div class="stat-label">在线</div>
             <div class="stat-value">{{ dutyOverview.activeCount }}</div>
           </div>
         </div>
         <div class="stat-card">
           <div class="stat-dot primary" aria-hidden="true" />
           <div class="stat-body">
-            <div class="stat-label">已签退</div>
+            <div class="stat-label">下班</div>
             <div class="stat-value">{{ dutyOverview.closedCount }}</div>
           </div>
         </div>
         <div class="stat-card">
           <div class="stat-dot warning" aria-hidden="true" />
           <div class="stat-body">
-            <div class="stat-label">已过期</div>
+            <div class="stat-label">超时</div>
             <div class="stat-value">{{ dutyOverview.expiredCount }}</div>
           </div>
         </div>
         <div class="stat-card">
           <div class="stat-dot" :class="dutyOverview.expiredCount > 0 ? 'danger' : 'primary'" aria-hidden="true" />
           <div class="stat-body">
-            <div class="stat-label">租约总数</div>
+            <div class="stat-label">打卡总数</div>
             <div class="stat-value">{{ dutyOverview.totalCount }}</div>
           </div>
         </div>
@@ -278,7 +278,7 @@ async function loadDutyOverview() {
       }
     }
   } catch (e: any) {
-    // 值班概览拉取失败不阻断 dashboard 主图，仅静默
+    // 打卡概览拉取失败不阻断 dashboard 主图，仅静默
     console.warn('[dashboard] duty overview load failed:', e?.message || e)
   } finally {
     dutyLoading.value = false

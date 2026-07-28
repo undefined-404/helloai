@@ -15,7 +15,7 @@
             <div class="detail-tags">
               <span class="tag-role" :style="roleStyle">{{ roleLabel(agent.role) }}</span>
               <el-tag :type="agent.status === 'ACTIVE' ? 'success' : 'info'" size="small">
-                {{ agent.status === 'ACTIVE' ? '活跃' : '已禁用' }}
+                {{ agent.status === 'ACTIVE' ? '已注册' : '已注销' }}
               </el-tag>
             </div>
           </div>
@@ -77,7 +77,7 @@
         <div class="ops-row">
           <el-button @click="openEdit">编辑信息</el-button>
           <el-button :type="agent.status === 'ACTIVE' ? 'warning' : 'success'" @click="openToggleStatus">
-            {{ agent.status === 'ACTIVE' ? '禁用' : '启用' }}
+            {{ agent.status === 'ACTIVE' ? '注销' : '恢复注册' }}
           </el-button>
           <el-button type="primary" plain @click="openOnboarding">生成接入内容</el-button>
           <el-button type="primary" @click="handleResetKey">重置 API Key</el-button>

@@ -25,7 +25,7 @@
         以下是 HelloAI 平台为该 Agent 生成的接入内容。请按需使用底部按钮：
         <strong>复制全部</strong> 用于人工交接；
         <strong style="color:var(--el-color-success)">下载 hello_ai_skills.md</strong> 用于保存到 IDE 的 skills 目录；
-        <strong style="color:var(--el-color-info)">下载 daemon 脚本</strong> 用于拉起常驻值班进程（§1.5 协议、门铃推送）后免打卡；
+        <strong style="color:var(--el-color-info)">下载 daemon 脚本</strong> 用于拉起常驻打卡进程（§1.5 协议、门铃推送）后免手动打卡；
         <strong style="color:var(--el-color-warning)">一键上班口令</strong> 用于在新会话第一句话里激活 AI Agent。
       </div>
       <el-input
@@ -41,7 +41,7 @@
     <template #footer>
       <el-button type="primary" @click="copyContent">📋 复制全部</el-button>
       <el-button type="success" @click="downloadSkill">⬇️ 下载 hello_ai_skills.md</el-button>
-      <el-button type="info" :loading="daemonLoading" @click="downloadDaemon">⬇️ 下载常驻值班脚本（PowerShell）</el-button>
+      <el-button type="info" :loading="daemonLoading" @click="downloadDaemon">⬇️ 下载常驻打卡脚本（PowerShell）</el-button>
       <el-button type="warning" @click="copyActivation">🚀 一键上班口令</el-button>
       <el-button @click="close">关闭</el-button>
     </template>

@@ -1,5 +1,5 @@
 // ============================================================
-// HelloAI AgentHub V1 P1 值班报表前端类型
+// HelloAI AgentHub V1 P1 打卡上班报表前端类型
 // ------------------------------------------------------------
 // 对齐后端:
 //   - com.helloai.api.dto.duty.DutyLeaseResponse
@@ -21,7 +21,7 @@ export interface DutyLeaseResponse {
   agentId: LongId
   /** Agent 名称（关联 agent 表冗余，Agent 已删除时为 null）。 */
   agentName: string | null
-  /** 值班会话标识。 */
+  /** 打卡会话标识。 */
   sessionId: string
   /** 工作模式。 */
   workMode: string
@@ -29,7 +29,7 @@ export interface DutyLeaseResponse {
   maxConcurrent: number | null
   /** 租约状态。 */
   status: DutyLeaseStatus
-  /** 值班开始时间。 */
+  /** 上班开始时间。 */
   startedAt: string | null
   /** 最近一次续约时间。 */
   lastRenewedAt: string | null
@@ -39,26 +39,26 @@ export interface DutyLeaseResponse {
   closeReason: string | null
 }
 
-// Agent 维度值班列表项：每个 Agent 一行（最新租约 + 租约总数）
+// Agent 维度打卡列表项：每个 Agent 一行（最新打卡记录 + 记录总数）
 export interface DutyAgentLatestResponse extends DutyLeaseResponse {
   /** 该 Agent 的租约总条数。 */
   leaseCount: number
 }
 
 export interface DutyOverviewResponse {
-  /** 当前值班中（ACTIVE）租约条数，等于在岗 Agent 数。 */
+  /** 当前在线（ACTIVE）打卡记录条数，等于在岗 Agent 数。 */
   activeCount: number
-  /** 已签退（CLOSED）租约条数。 */
+  /** 已下班（CLOSED）打卡记录条数。 */
   closedCount: number
-  /** 已过期（EXPIRED）租约条数。 */
+  /** 已超时（EXPIRED）打卡记录条数。 */
   expiredCount: number
-  /** 全部租约条数（历史累计，未删除）。 */
+  /** 全部打卡记录条数（历史累计，未删除）。 */
   totalCount: number
 }
 
 // --- 状态标签映射（看板 / 列表统一展示） ---
 export const DUTY_LEASE_STATUS_MAP: Record<DutyLeaseStatus, { label: string; type: '' | 'success' | 'warning' | 'danger' | 'info' }> = {
-  ACTIVE:  { label: '值班中', type: 'success' },
-  CLOSED:  { label: '已签退', type: 'info' },
-  EXPIRED: { label: '已过期', type: 'warning' }
+  ACTIVE:  { label: '在线', type: 'success' },
+  CLOSED:  { label: '下班', type: 'info' },
+  EXPIRED: { label: '超时', type: 'warning' }
 }

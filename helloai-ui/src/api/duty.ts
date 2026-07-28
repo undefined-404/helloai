@@ -3,13 +3,13 @@ import type { DutyLeaseResponse, DutyAgentLatestResponse, DutyOverviewResponse }
 import type { PageResult, LongId } from '@/types'
 
 /**
- * AgentHub V1 P1 值班报表前端 API（对齐后端 AgentDutyLeaseController）。
+ * AgentHub V1 P1 打卡上班报表前端 API（对齐后端 AgentDutyLeaseController）。
  *
  * <p>全部为只读接口：写入语义（checkIn/checkOut/续约/过期扫描）仍归属 MCP 工具、
  * AgentDutyLeaseService 与 DutyLeaseExpirationTask。</p>
  */
 export const dutyApi = {
-  /** 分页查询值班租约，可按 agentId / status 过滤。 */
+  /** 分页查询打卡记录，可按 agentId / status 过滤。 */
   list(params?: {
     agentId?: LongId | null
     status?: 'ACTIVE' | 'CLOSED' | 'EXPIRED' | null
@@ -19,12 +19,12 @@ export const dutyApi = {
     return request.get<any, PageResult<DutyLeaseResponse>>('/admin/duty-leases', { params })
   },
 
-  /** Agent 维度分页：每个 Agent 只返回最新一条租约 + 租约总数。 */
+  /** Agent 维度分页：每个 Agent 只返回最新一条打卡记录 + 记录总数。 */
   listByAgent(params?: { page?: number; size?: number }) {
     return request.get<any, PageResult<DutyAgentLatestResponse>>('/admin/duty-leases/by-agent', { params })
   },
 
-  /** 值班租约状态概览（Dashboard 顶部卡片数据源）。 */
+  /** 打卡状态概览（Dashboard 顶部卡片数据源）。 */
   overview() {
     return request.get<any, DutyOverviewResponse>('/admin/duty-leases/overview')
   }

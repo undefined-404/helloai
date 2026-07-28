@@ -3,19 +3,19 @@
     <el-card>
       <template #header>
         <div class="card-header">
-          <span>Agent 值班租约</span>
+          <span>Agent 打卡上班</span>
           <el-button size="small" @click="load(currentPage)">刷新</el-button>
         </div>
       </template>
 
-      <!-- Agent 维度表格：每个 Agent 一行，展示最新一条租约 -->
+      <!-- Agent 维度表格：每个 Agent 一行，展示最新一条打卡记录 -->
       <el-table
         :data="list"
         border
         stripe
         v-loading="loading"
         style="width: 100%"
-        empty-text="暂无值班租约"
+        empty-text="暂无打卡记录"
       >
         <el-table-column label="Agent" min-width="180">
           <template #default="{ row }">
@@ -38,16 +38,16 @@
             <span v-else>{{ row.maxConcurrent }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="开始时间" width="160">
+        <el-table-column label="上班时间" width="160">
           <template #default="{ row }">{{ fmtTime(row.startedAt) }}</template>
         </el-table-column>
         <el-table-column label="续约时间" width="160">
           <template #default="{ row }">{{ fmtTime(row.lastRenewedAt) }}</template>
         </el-table-column>
-        <el-table-column label="过期时间" width="160">
+        <el-table-column label="超时时间" width="160">
           <template #default="{ row }">{{ fmtTime(row.expiresAt) }}</template>
         </el-table-column>
-        <el-table-column label="租约总数" width="90" align="center">
+        <el-table-column label="打卡总数" width="90" align="center">
           <template #default="{ row }">{{ row.leaseCount }}</template>
         </el-table-column>
         <el-table-column label="操作" width="90" fixed="right">
@@ -103,7 +103,7 @@ async function load(page = 1) {
   }
 }
 
-// ── 单 Agent 历史租约（分页对话框）──
+// ── 单 Agent 历史打卡记录（分页对话框）──
 const historyVisible = ref(false)
 const historyAgentId = ref<LongId | null>(null)
 const historyAgentName = ref<string | null>(null)

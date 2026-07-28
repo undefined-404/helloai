@@ -323,12 +323,12 @@ public class McpMcpServer {
     // ================================================================
 
     @Tool(name = "checkIn", description = """
-            【何时使用】Agent 上线后声明“上班”，获取一份值班租约（需周期性 renew）。
+            【何时使用】Agent 上线后声明“打卡上班”，获取一份打卡租约（需周期性 renew）。
             【调用频率】每个会话一次；重复 checkIn 安全（旧 ACTIVE 租约会先被关闭为 CLOSED）。
             【效果】写入 agent_duty_lease 一行 ACTIVE 记录，同时刷新心跳。
             【Gotchas】
-            - 本工具 <b>不</b>改变 online_status / status 枚举，仅新增“值班态”事实。
-            - AgentSelector 会将“当前是否处于值班”作为软优先级最高一档（平手时值班 Agent 优先）。
+            - 本工具 <b>不</b>改变 online_status / status 枚举，仅新增“在岗打卡态”事实。
+            - AgentSelector 会将“当前是否在岗（已打卡）”作为软优先级最高一档（平手时已打卡 Agent 优先）。
             - ttlMinutes 建议与 Agent 自身 renew 周期匹配，默认 30 分钟；到期后会被 DutyLeaseExpirationTask
               自动翻为 EXPIRED，不会阀到商业逻辑。
             【相关工具】checkOut、heartbeat
@@ -353,7 +353,7 @@ public class McpMcpServer {
     // ================================================================
 
     @Tool(name = "checkOut", description = """
-            【何时使用】Agent 主动下线 / 会话结束时声明“下班”，关闭当前 ACTIVE 值班租约。
+            【何时使用】Agent 主动下线 / 会话结束时声明“打卡下班”，关闭当前 ACTIVE 打卡租约。
             【调用频率】会话结束前一次；幂等（无 ACTIVE 租约时 closedCount=0）。
             【效果】agent_duty_lease 中相关 ACTIVE 行翻为 CLOSED，close_reason 记录传入值。
             【Gotchas】

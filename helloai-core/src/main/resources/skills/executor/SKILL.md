@@ -27,7 +27,7 @@
 ## 一、MCP 接入（推荐）
 
 > ⚠️ **给 AI 客户端的第一提醒：你自己就是 MCP 客户端，不要用 curl / REST 去试探门铃。**
-> - 上线后**第一步必须用 MCP 工具 `checkIn` 打卡**（拿到 ACTIVE 值班租约），这是建门铃连接的硬前置。
+> - 上线后**第一步必须用 MCP 工具 `checkIn` 打卡**（拿到 ACTIVE 打卡租约），这是建门铃连接的硬前置。
 > - `checkIn` / `checkOut` **只存在于 MCP SSE 通道**（`{{BASE_URL}}/mcp/sse` + `{{BASE_URL}}/mcp/messages`，共 10 个工具）。
 > - REST 端 `GET {{BASE_URL}}/api/mcp/tools` **只有 7 个工具，没有 `checkIn`/`checkOut`**——那是给非 MCP 客户端的降级视图，不要据此判断“没有 checkIn 就没有 MCP 客户端”。
 > - 直接 curl `GET {{BASE_URL}}/api/agents/doorbell/sse` 会返回 `HTTP 500 / code=500 / "Agent 未在岗"`，**不是门铃故障，而是你还没 `checkIn`**。先用 MCP 工具 `checkIn`，再建门铃即可正常。
@@ -45,7 +45,7 @@
 
 | 工具 | 何时使用 |
 |---|---|
-| `checkIn` | **上线后先打卡上班**，获取一份值班租约（ACTIVE）。门铃长连接的前置：没打卡不允许建门铃连接 |
+| `checkIn` | **上线后先打卡上班**，获取一份打卡租约（ACTIVE）。门铃长连接的前置：没打卡不允许建门铃连接 |
 | `checkOut` | 会话结束 / 主动下线时打卡下班，关闭当前租约 |
 | `getAgentStatus` | 启动后查询自身状态，确认鉴权与在线状态后再接活 |
 | `pullTasks` | 查询分配给自己的待处理收件箱（建议每 30 秒轮询一次；收到门铃 `inbox` 信号则立即调用） |
@@ -62,15 +62,15 @@
 > - 租约 EXPIRED 后，门铃长连接会被服务端**主动关闭**，需要重新走 checkIn → 建门铃两步骤。
 > - **建议节奏**：在 ttlMinutes 到期前 1 分钟主动重做一次 checkIn，避免被静默切到 OFFLINE。
 
-### 1.3 推荐工作循环（常驻值班模式）
+### 1.3 推荐工作循环（常驻打卡模式）
 
 > ❌ 反模式：`checkIn` → 8 秒门铃探针 → 退出（=OFFLINE 假阳性）
-> ✅ 正模式：`checkIn` → 拉起常驻值班进程（同时管门铃 SSE + heartbeat + pullTasks）
+> ✅ 正模式：`checkIn` → 拉起常驻打卡进程（同时管门铃 SSE + heartbeat + pullTasks）
 
 ```
 1. getAgentStatus          # 确认鉴权与在线
-2. checkIn                 # 打卡上班，拿到 ACTIVE 值班租约（门铃前置）
-3. 拉起常驻值班进程          # 同时管：门铃 SSE（实时推送）+ 30s heartbeat + 30s pullTasks（见 §1.5）
+2. checkIn                 # 打卡上班，拿到 ACTIVE 打卡租约（门铃前置）
+3. 拉起常驻打卡进程          # 同时管：门铃 SSE（实时推送）+ 30s heartbeat + 30s pullTasks（见 §1.5）
    ❌ 禁止 checkIn 后只做探针
    ❌ 禁止 checkIn 后等待用户输入
 4. 收到门铃 type=inbox 信号 # 立即 pullTasks 取任务（30s pullTasks 轮询兜底防漏）
@@ -128,11 +128,11 @@ T+(ttl-1)m : 主动重做 checkIn 续约，避免被判 OFFLINE
 **(4) 门铃连上 ≠ 进程健康**
 - 门铃 SSE 保持 `keepalive` 不代表你“在线”；仍需**自己周期调 `heartbeat`**（建议 30 秒一次），超 5 分钟无心跳会被判 OFFLINE。
 
-### 1.5 常驻值班协议（必读·关键）
+### 1.5 常驻打卡协议（必读·关键）
 
-> 🔴 **致命前提**：`checkIn` 拿到 ACTIVE 租约后，**必须**立刻拉起常驻值班进程。仅做几秒钟门铃探针就退出 = OFFLINE 假阳性 = 任务派给你后被重派 = 你收件箱里看到"通知到了但任务不是我的"。
+> 🔴 **致命前提**：`checkIn` 拿到 ACTIVE 租约后，**必须**立刻拉起常驻打卡进程。仅做几秒钟门铃探针就退出 = OFFLINE 假阳性 = 任务派给你后被重派 = 你收件箱里看到“通知到了但任务不是我的”。
 >
-> **唯一正确模式**：常驻值班进程同时管三件事——门铃 SSE（实时推送）+ 30s heartbeat（健康证明）+ 30s pullTasks（兜底防漏）。三者并行直到 Ctrl+C 触发退出清理。
+> **唯一正确模式**：常驻打卡进程同时管三件事——门铃 SSE（实时推送）+ 30s heartbeat（健康证明）+ 30s pullTasks（兜底防漏）。三者并行直到 Ctrl+C 触发退出清理。
 
 #### 1.5.1 关键认知：门铃 SSE 是真推送，不是轮询
 
@@ -234,7 +234,7 @@ exit 0
 
 ### 2.1 建立连接
 ```bash
-# 前置：必须先 checkIn（持有 ACTIVE 值班租约），否则建连被拒（HTTP 500，code=500，"Agent 未在岗"）
+# 前置：必须先 checkIn（持有 ACTIVE 打卡租约），否则建连被拒（HTTP 500，code=500，"Agent 未在岗"）
 curl -N -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agents/doorbell/sse
 ```
 建连成功会立即收到一帧握手信号 `event:connected`。
@@ -361,7 +361,7 @@ python task-cli.py --key <API_KEY> update        # 更新 CLI + SKILL
 | 400 | `Invalid message format` | POST `/mcp/messages` 缺 `charset=utf-8` | 用 `StringContent(..., UTF8, 'application/json')` 让容器自动追加 charset |
 | 401 | `Unauthorized` | Bearer 头错 | 检查 API Key 前缀 `ak_` 与拼写 |
 | 404 | `/api/mcp/tools` 只列 7 个工具 | 这是 v2.4 降级视图，没含 `checkIn`/`checkOut` | 改走 SSE 通道 `/mcp/sse` 调 `tools/list` 拿全 10 个工具 |
-| 500 | `Agent 未在岗（无 ACTIVE 值班租约）` | 没 checkIn 直接建门铃 | 先 MCP `tools/call checkIn` 再建门铃 |
+| 500 | `Agent 未在岗（无 ACTIVE 打卡租约）` | 没 checkIn 直接建门铃 | 先 MCP `tools/call checkIn` 再建门铃 |
 | 500 | `sessionId 不能为空` | tool arguments 漏 `sessionId` 字段 | 把 SSE endpoint 帧拿到的 sid **同时**拼进 URL `?sessionId=` 与 arguments `sessionId` |
 | 500 | `Unknown tool: checkIn`（走 REST JSON-RPC） | 走了 `/api/mcp/jsonrpc` 旧通道，dispatch switch 不含 checkIn | 换 `/mcp/sse` + `/mcp/messages` 通道 |
 

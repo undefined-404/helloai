@@ -1,7 +1,7 @@
 <template>
   <el-dialog
     v-model="visible"
-    :title="agent?.status === 'ACTIVE' ? '禁用 Agent' : '启用 Agent'"
+    :title="agent?.status === 'ACTIVE' ? '注销 Agent' : '恢复注册'"
     width="420px"
     top="10vh"
     append-to-body
@@ -9,11 +9,11 @@
   >
     <div style="text-align:center;padding:12px 0">
       <p style="font-size:15px;color:var(--ha-ink);margin:0">
-        {{ agent?.status === 'ACTIVE' ? '确定要禁用此 Agent？' : '确定要启用此 Agent？' }}
+        {{ agent?.status === 'ACTIVE' ? '确定要注销此 Agent？' : '确定要恢复此 Agent 的注册？' }}
       </p>
       <p style="font-size:13px;color:var(--ha-muted);margin:8px 0 0">
-        <template v-if="agent?.status === 'ACTIVE'">禁用后该 Agent 将无法接收任务和调用 API。</template>
-        <template v-else>启用后该 Agent 将恢复正常工作。</template>
+        <template v-if="agent?.status === 'ACTIVE'">注销后该 Agent 将无法接收任务和调用 API。</template>
+        <template v-else>恢复注册后该 Agent 将恢复正常工作。</template>
       </p>
     </div>
     <template #footer>
@@ -23,7 +23,7 @@
         :loading="loading"
         @click="handleConfirm"
       >
-        {{ agent?.status === 'ACTIVE' ? '确认禁用' : '确认启用' }}
+        {{ agent?.status === 'ACTIVE' ? '确认注销' : '确认恢复注册' }}
       </el-button>
     </template>
   </el-dialog>
@@ -50,7 +50,7 @@ async function handleConfirm() {
   try {
     const newStatus = props.agent.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE'
     await agentApi.updateStatus(props.agent.id, newStatus)
-    ElMessage.success(newStatus === 'ACTIVE' ? '已启用' : '已禁用')
+    ElMessage.success(newStatus === 'ACTIVE' ? '已恢复注册' : '已注销')
     visible.value = false
     emit('done')
   } finally { loading.value = false }

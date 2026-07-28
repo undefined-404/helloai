@@ -58,7 +58,7 @@
         </el-menu-item>
         <el-menu-item index="/duty-leases">
           <el-icon><Clock /></el-icon>
-          <span>值班租约</span>
+          <span>打卡上班</span>
         </el-menu-item>
         <el-menu-item index="/attachments">
           <el-icon><Folder /></el-icon>
@@ -256,9 +256,10 @@ async function handleChangePassword() {
 .app-shell { height: 100vh; overflow: hidden; }
 
 .app-sidebar {
-  background: linear-gradient(135deg, #7C3AED 0%, #A78BFA 50%, #06B6D4 100%);
+  background: linear-gradient(160deg, #0D1220 0%, #141B33 55%, #0E2233 100%);
   background-size: 400% 400%;
   animation: sidebar-aurora 18s ease infinite;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -371,9 +372,10 @@ async function handleChangePassword() {
 }
 
 .sidebar-menu .el-menu-item.is-active {
-  background: var(--ha-sidebar-active) !important;
+  background: var(--ha-primary) !important;
   color: #fff !important;
   font-weight: 600;
+  box-shadow: 0 4px 14px rgba(124, 58, 237, 0.35);
 }
 
 .sidebar-menu .el-menu-item .el-icon {
@@ -382,7 +384,7 @@ async function handleChangePassword() {
 
 .sidebar-footer {
   padding: 10px 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.10);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -404,7 +406,7 @@ async function handleChangePassword() {
 }
 
 .user-avatar {
-  --el-avatar-bg-color: rgba(255, 255, 255, 0.20) !important;
+  --el-avatar-bg-color: rgba(124, 58, 237, 0.45) !important;
   flex-shrink: 0;
 }
 
