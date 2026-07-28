@@ -2790,3 +2790,73 @@ UI 行为变更：`helloai-ui/src/views/agent/components/AgentOnboardingDialog.v
 - 已下发给外部 Agent 的旧版 hello_ai_skills.md 仍含“值班”旧术语，重新生成接入内容即可刷新
 
 ---
+
+### 6.16 Planner 平台内自动拆解闭环（V26，2026-07-28）
+
+#### 1. 背景
+
+Planner 角色此前只有枚举定义与一份约 60 行的纯 REST 版 SKILL.md，既无平台内自动拆解能力，也无外部 Planner 接入的完整说明书。结合参考项目 AgentTeams-main（拆解→确认→分发的交互范式）与 openMoss（task-planner 拆分四要素/防重复拆分/排障六步闭环）分析后，确定在不新增基础设施的前提下补齐“需求 → LLM 自动拆解 → 用户确认/拒绝 → 进入既有分发链”闭环；原差距表 §5 7b“场景 1~3 全绿前不启动 planner 编排层”门禁按用户决策提前解除（拆解链与执行链经草案态硬隔离，缺陷可独立定位）。
+
+#### 2. 实际落地
+
+- **领域模型（helloai-common）**：`SubTaskStatus` 新增 `PENDING_PLAN_REVIEW` 草案态，状态机仅允许 → `PENDING`（确认转正）/ `CANCELLED`（拒绝），任何状态不可转入草案态（只能由拆解落库产生）；`TaskStatus` 新增 `PLANNING`（拆解进行中，防重复触发）；Flyway `V26__planner_plan_review_status.sql` 重建 `chk_sub_task_status` / `chk_task_status` CHECK 约束纳入新值
+- **旁路排查结论（全链路安全）**：`claimSubTask`/`assignNext`/各 redispatch/`ExecutionCompensationTask`/`SubTaskPendingOrphanTask`/XML mapper/dashboard 统计均精确匹配既有状态枚举，`PENDING_PLAN_REVIEW` 对 claim/分发/超时回收/统计天然不可见，无需任何防御性修改
+- **Prompt 模板**：`helloai-core/resources/prompts/planner-decompose.md`，移植 openMoss 拆分四要素（目标/交付物/验收标准/优先级），要求输出严格 JSON 数组（title/content/deliverable/acceptance/priority），限定 3~10 条
+- **`PlannerAnalysisService`（新增 core/planner 包，编排收口 core 对齐 §6.3）**：`decompose`（校验 Task PENDING + 已存在非 CANCELLED 子任务拒绝 + CAS `lambdaUpdate().eq(status,PENDING).set(status,PLANNING)` 防并发 + `AgentSelector.pickPreferred(PLANNER)` 选 API_KEY_LLM Agent（首选非 LLM 时回退候选列表筛选）+ `PlatformAgentExecutionService.executeSync` 调 LLM + strip markdown fence 容错解析 + 逐条校验必填/数量上限/priority 归一化 + 事务内 saveBatch 草案 + timeline `task_plan_generated`；失败路径 CAS 回退 PENDING + `task_plan_failed` 携 LLM 原始错误）/ `listDrafts` / `confirmPlan`（草案逐条 changeStatus → PENDING，Task → IN_PROGRESS，按 `autoAssignOnCreate` 逐条 `dispatchPendingSubTaskAuto`，与手工创建子任务分发路径完全同构）/ `rejectPlan`（草案翻 CANCELLED 保留审计，Task 回退 PENDING 可重新拆解）
+- **API 入口（helloai-api）**：`TaskController` 四个薄入口（只转发不含编排）：`POST /api/tasks/{id}/plan`、`GET /api/tasks/{id}/plan`、`POST /api/tasks/{id}/plan/confirm`、`POST /api/tasks/{id}/plan/reject`
+- **外部 Planner SKILL.md 升级**：`skills/planner/SKILL.md` 重写（约 60 行 → 347 行），对齐 executor 版结构（MCP 四步握手/checkIn 租约/门铃/常驻打卡三件套/退出剧本/错误码速查 + REST 兜底），新增 Planner 专属工作流（每次唤醒固定流程：查收件箱 → blocked 六步排障闭环 → 进度监控 → 为 PENDING 子任务指派 → 全 DONE 收尾）+ 拆分四要素质量标准 + 防重复拆分原则
+- **明确不做**：前端规划确认页、planner 专用 MCP 工具（decomposePlan 保持演进项）、子任务依赖 DAG；不改 `SubTaskAutoExecutionDispatcher` 的 accessType 过滤（执行面语义，与拆解无关）
+
+#### 3. 测试与验证
+
+- `PlannerAnalysisServiceTest` 13 用例（正常拆解含 fence 容错 + priority 归一化 / 首选非 LLM 回退候选 / JSON 解析失败回退 / LLM 失败 / 非 PENDING 拒绝 / 已有子任务拒绝 / CAS 失败 / 无 Planner Agent / confirm 含开关 autoAssign 两路 / confirm・reject 非法态 / reject 流转），项目内首例 `lambdaQuery`/`lambdaUpdate` 链式 mock（直接 mock 链包装类 + `lenient()` 兜底 stub）；`SubTaskStateMachineTest` 补 V26 三用例（草案态仅可转 PENDING/CANCELLED、任何状态不可转入、非法转换抛 BizException）
+- `mvn -pl helloai-core -am test` → **helloai-core 244 全绿 BUILD SUCCESS**；全模块 `mvn compile` → 无 ERROR
+- **多模块 SNAPSHOT 教训**：不带 `-am` 单跑 helloai-core 测试时报 `NoSuchFieldError: PENDING_PLAN_REVIEW`（本地仓库 helloai-common 快照是旧版），须先 `mvn -pl helloai-common install -DskipTests` 再跑；以后改动 common 枚举/实体后单模块测试前必须先 install common
+- 端到端脚本 `scripts/powershell/verify-planner-decompose.ps1`（12 步：登录 → 注册 PLANNER Agent → confirm 路径（草案 PENDING_PLAN_REVIEW + Task PLANNING → 转正 PENDING/ASSIGNED + Task IN_PROGRESS）→ reject 路径（cancelledCount + Task 回退 PENDING）→ 重复拆解拒绝），遵循 D8 规则（UTF-8 编码头 + runtime 字面量纯 ASCII），`Parser.ParseFile` 自检 PS-SYNTAX-OK；**待真实环境（6565 + 可用 deepseek Provider）实测**
+
+#### 4. 影响
+
+- **接口新增**：`POST/GET /api/tasks/{id}/plan`、`POST /api/tasks/{id}/plan/confirm`、`POST /api/tasks/{id}/plan/reject`
+- **DB 变更**：V26 重建 `sub_task`/`task` 两张表 CHECK 约束（纳入 `PENDING_PLAN_REVIEW`/`PLANNING`），无新表无新列
+- **行为变化**：Task 新增 PLANNING 中间态；确认前草案子任务对整个调度/补偿/统计链不可见；既有手工创建子任务、Executor 执行链路零改动
+- **文档**：差距表新增 N16（已交付）+ §5 7b 门禁解除说明 + §6 治理结论条目
+
+#### 5. 遗留与下一步
+
+- `verify-planner-decompose.ps1` 待真实环境回归（需 helloai-start 运行 + deepseek Provider 可用）
+- 前端规划确认页（草案列表 + 确认/拒绝按钮）后续独立迭代，本轮以 REST + 验证脚本闭环
+- planner 专用 MCP 工具 `decomposePlan`（`AgentMcpServerService` 注释预留）、子任务依赖 DAG 编排、循环任务保持演进项
+
+---
+
+### 6.17 管理员会话 Redis 化（修复后端重启前端掉线，2026-07-28）
+
+#### 1. 背景
+
+管理员登录态（X-Admin-Token）此前只存在 `AuthService` 实例字段的 `ConcurrentHashMap` 里：后端重启内存清空 → 下一次请求 401 → 前端 `request.ts` 拦截器清 sessionStorage 强制踢回登录页；且 token 无 TTL，进程存活期间永久有效（安全隐患）。用户确认方案：会话态迁 Redis，登录动作本身仍查 DB + BCrypt 不变；Redis 不可用时直接拒绝（Redis 已是心跳/MQ 幂等的强依赖，不做内存降级）。
+
+#### 2. 实际落地
+
+- **`AuthService`（helloai-core/system）**：内存 `adminTokens` Map 删除，改存 Redis（key `auth:admin:token:{token}`，对齐 `agent:heartbeat:`/`mq:dedup:` 命名风格；value 为 `AdminSession` JSON，专用 `new ObjectMapper()` 不复用全局 Bean 避免 Long→String 定制策略干扰；TTL 8 小时）
+- **滑动续期**：`validateAdminToken` 命中后 `redis.expire(key, TTL)` 重置 8h，活跃会话不会使用中途过期；未命中抛 401；缓存值损坏（序列化格式变更/脏数据）则清 key + 401 强制重登
+- **登出/改密**：`adminLogout` 改为 Redis delete（改密踢会话链路复用同一方法，行为不变）
+- **契约零变更**：token 生成方式（SecureRandom 32 字节 hex）、`AuthInterceptor`/`McpAuthFilter`/前端/验证脚本均无需改动
+- **明确不做**：Agent apiKey 的 Redis 短缓存（仍每请求直查 DB，非掉线问题，纯优化项保持演进）；MCP SESSION_AUTH 保持内存 + SessionAuthCleaner（绑定 SSE 长连接 sessionId，重启后连接本身就断，存 Redis 无意义）
+
+#### 3. 测试与验证
+
+- 新增 `AuthServiceTest` 9 用例（登录写 Redis key/TTL 断言 / 密码错不写 Redis / 用户不存在 / 校验命中滑动续期 / 未命中 401 / 损坏值清 key+401 / 登出删 key / agentKey 无效 401 / 禁用 403），Mockito mock `StringRedisTemplate`+`ValueOperations`（对齐 `HeartbeatServiceActiveTest` 范式），全绿
+- `mvn -pl helloai-core -am test -Dtest=AuthServiceTest` 通过；全模块 `mvn compile` 无 ERROR
+- 坑位：PowerShell 下 `-Dsurefire.failIfNoSpecifiedTests=false` 带点号的 -D 参数会被拆分，必须整体加引号
+
+#### 4. 影响
+
+- **行为变化**：后端重启后管理员会话不再丢失；会话新增 8h 滑动过期（此前永不过期）；Redis 不可用时鉴权报错（新增强依赖，与项目 Redis 定位一致）
+- **接口/DB/前端**：零变更
+
+#### 5. 遗留与下一步
+
+- Agent apiKey 校验的 Redis 短缓存（TTL 5min + 禁用时主动失效）保持演进项
+- TTL 8h 目前为代码常量，如需环境差异化再外置 `application.yml`
+
+---
