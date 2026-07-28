@@ -172,4 +172,12 @@
         ORDER BY consecutive_failure_count DESC, last_failure_time ASC
     </select>
 
+    <!--
+        物理删除 Agent：@TableLogic 会把 deleteById 改写为 UPDATE deleted=1，
+        级联删除要求真删，这里显式 DELETE。仅供 AgentService.deleteAgentCascade 使用。
+    -->
+    <delete id="physicalDeleteById">
+        DELETE FROM agent WHERE id = #{agentId}
+    </delete>
+
 </mapper>

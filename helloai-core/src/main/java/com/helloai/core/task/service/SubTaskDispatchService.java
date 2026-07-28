@@ -102,6 +102,11 @@ public class SubTaskDispatchService {
      * @return 实际采用的首选 Agent ID（注意：若首选 fast-fail，最终可能由 fallback 选择其他 Agent）
      */
     public Long dispatchPendingSubTaskAuto(Long subTaskId, AgentRole role) {
+        // V25: 重分配熔断检查 —— 封堵定时兜底任务（PendingOrphan / recoverPendingUnassigned /
+        // HealthCheck 二次选人）经本入口无限改派的旁路
+        if (checkReassignCircuitBreaker(subTaskId)) {
+            return null;
+        }
         SubTask subTask = subTaskService.getById(subTaskId);
         if (subTask == null) {
             throw new BizException("子任务不存在: " + subTaskId);
@@ -130,6 +135,63 @@ public class SubTaskDispatchService {
         log.info("子任务自动分配进入调度链: subTaskId={}, preferredAgentId={}, role={}",
                 subTaskId, preferred.getId(), role);
         return preferred.getId();
+    }
+
+    /**
+     * 死信人工兜底：将 DEAD_LETTER 子任务直接指派给指定 Agent（V25）。
+     *
+     * <p>重分配熔断触发后子任务进入 DEAD_LETTER 死信池，自动调度链不再接触。
+     * 本方法是唯一的死信恢复入口，由人工确认目标 Agent 后调用：
+     * <ol>
+     *   <li>校验子任务当前状态必须为 DEAD_LETTER；</li>
+     *   <li>清零 reassign_attempt_count（重新投入调度链后计数从头开始）；</li>
+     *   <li>直接 changeStatus → ASSIGNED（与现有手动指派语义一致，
+     *       changeStatus 内部自带 outbox 事件 + 收件箱通知 + 自动执行链）；</li>
+     *   <li>写 task_timeline 审计事件 sub_task_dead_letter_manual_assign。</li>
+     * </ol>
+     * </p>
+     *
+     * <p>人工兜底路径不做在线/心跳拦截：人工判断优先，与现有
+     * POST /sub-tasks 带 assignedAgent 的手动指派口径保持一致。</p>
+     *
+     * @param subTaskId 死信子任务 ID
+     * @param agentId   人工指定的目标 Agent ID
+     * @throws BizException 子任务不存在或状态不是 DEAD_LETTER 时抛出
+     */
+    public void redispatchDeadLetter(Long subTaskId, Long agentId) {
+        SubTask subTask = subTaskService.getById(subTaskId);
+        if (subTask == null) {
+            throw new BizException("子任务不存在: " + subTaskId);
+        }
+        if (subTask.getStatus() != SubTaskStatus.DEAD_LETTER) {
+            throw new BizException("只有 DEAD_LETTER 状态的子任务才能人工兜底指派: subTaskId="
+                    + subTaskId + ", status=" + subTask.getStatus());
+        }
+        if (agentId == null) {
+            throw new BizException("人工兜底指派必须指定目标 Agent: subTaskId=" + subTaskId);
+        }
+        Agent agent = agentService.getById(agentId);
+        if (agent == null) {
+            throw new BizException("Agent 不存在: " + agentId);
+        }
+
+        // 清零熔断计数，重新投入调度链后从头计数
+        subTaskMapper.resetReassignAttemptCount(subTaskId, OffsetDateTime.now());
+
+        // 直接指派（DEAD_LETTER → ASSIGNED，状态机已允许）
+        subTaskService.changeStatus(subTaskId, SubTaskStatus.ASSIGNED, agentId);
+
+        taskTimelineService.recordEvent(
+                subTask.getTaskId(),
+                subTask.getId(),
+                "sub_task_dead_letter_manual_assign",
+                AgentRole.SYSTEM,
+                agentId,
+                Map.of(
+                        "trigger", "manual_dead_letter_redispatch",
+                        "assignedAgentId", agentId,
+                        "agentName", agent.getName() != null ? agent.getName() : "unknown"));
+        log.info("死信子任务人工兜底指派完成: subTaskId={}, agentId={}", subTaskId, agentId);
     }
 
     /**
@@ -284,20 +346,24 @@ public class SubTaskDispatchService {
      *
      * <p>每个重分配入口（{@link #redispatchOfflineSubTask}、
      * {@link #redispatchAssignedTimeout}、{@link #redispatchForFallback}、
-     * {@link #dispatchBlockedSubTask}）在执行前调用本方法。</p>
+     * {@link #dispatchBlockedSubTask}、{@link #dispatchPendingSubTaskAuto}）
+     * 在执行前调用本方法。</p>
      *
      * <p>逻辑：
      * <ol>
      *   <li>{@code max-reassign-attempts <= 0} → 熔断禁用，返回 false</li>
-     *   <li>子任务不存在或已是终态（DONE/CANCELLED）→ 返回 true（跳过）</li>
+     *   <li>子任务不存在或已是终态/死信（DONE/CANCELLED/DEAD_LETTER）→ 返回 true（跳过）</li>
      *   <li>{@code reassign_attempt_count >= max-reassign-attempts}
-     *       → 标记子任务为 CANCELLED + 记录 timeline → 返回 true（熔断）</li>
+     *       → 标记子任务为 DEAD_LETTER（死信池，待人工兜底）+ 记录 timeline → 返回 true（熔断）</li>
      *   <li>否则 → 原子累加 {@code reassign_attempt_count} → 返回 false（放行）</li>
      * </ol>
      * </p>
      *
+     * <p>V25：熔断后的状态由 CANCELLED 改为 DEAD_LETTER，区分"人工主动取消"与
+     * "系统熔断待人工"；死信由 {@link #redispatchDeadLetter} 人工恢复。</p>
+     *
      * @param subTaskId 待检查的子任务 ID
-     * @return true = 跳过本次重分配（已达熔断阈值或子任务已终态）；false = 继续重分配
+     * @return true = 跳过本次重分配（已达熔断阈值或子任务已终态/死信）；false = 继续重分配
      */
     private boolean checkReassignCircuitBreaker(Long subTaskId) {
         int maxAttempts = agentDispatchProperties.getMaxReassignAttempts();
@@ -311,10 +377,11 @@ public class SubTaskDispatchService {
             return false;
         }
 
-        // 终态不再重分配
+        // 终态/死信不再重分配（死信只能走 redispatchDeadLetter 人工入口）
         SubTaskStatus currentStatus = subTask.getStatus();
-        if (currentStatus == SubTaskStatus.DONE || currentStatus == SubTaskStatus.CANCELLED) {
-            log.debug("子任务已终态，跳过重分配: subTaskId={}, status={}", subTaskId, currentStatus);
+        if (currentStatus == SubTaskStatus.DONE || currentStatus == SubTaskStatus.CANCELLED
+                || currentStatus == SubTaskStatus.DEAD_LETTER) {
+            log.debug("子任务已终态或死信，跳过重分配: subTaskId={}, status={}", subTaskId, currentStatus);
             return true;
         }
 
@@ -322,17 +389,17 @@ public class SubTaskDispatchService {
                 ? subTask.getReassignAttemptCount() : 0;
 
         if (currentCount >= maxAttempts) {
-            log.warn("子任务重分配熔断触发: subTaskId={}, reassignAttemptCount={}, maxReassignAttempts={}, 将子任务标记为 CANCELLED",
+            log.warn("子任务重分配熔断触发: subTaskId={}, reassignAttemptCount={}, maxReassignAttempts={}, 将子任务转入 DEAD_LETTER 死信池待人工兜底",
                     subTaskId, currentCount, maxAttempts);
             try {
-                subTaskService.changeStatus(subTaskId, SubTaskStatus.CANCELLED, null,
-                        Map.of("cancel_reason", "reassign_attempt_exceeded",
+                subTaskService.changeStatus(subTaskId, SubTaskStatus.DEAD_LETTER, null,
+                        Map.of("dead_letter_reason", "reassign_attempt_exceeded",
                                 "reassign_attempt_count", String.valueOf(currentCount),
                                 "max_reassign_attempts", String.valueOf(maxAttempts)));
                 taskTimelineService.recordEvent(
                         subTask.getTaskId(),
                         subTask.getId(),
-                        "sub_task_cancelled",
+                        "sub_task_dead_letter",
                         AgentRole.SYSTEM,
                         null,
                         Map.of(
@@ -340,7 +407,7 @@ public class SubTaskDispatchService {
                                 "reassign_attempt_count", currentCount,
                                 "max_reassign_attempts", maxAttempts));
             } catch (Exception e) {
-                log.error("子任务重分配熔断-取消失败: subTaskId={}", subTaskId, e);
+                log.error("子任务重分配熔断-转死信失败: subTaskId={}", subTaskId, e);
             }
             return true;
         }

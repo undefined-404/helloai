@@ -9,6 +9,8 @@ import java.time.OffsetDateTime;
 public class SubTaskResponse {
     private Long id;
     private Long taskId;
+    /** 主任务标题冗余字段（列表/详情展示归属任务用，由 Controller 批量回填） */
+    private String taskTitle;
     private Long moduleId;
     private String title;
     private String deliverable;

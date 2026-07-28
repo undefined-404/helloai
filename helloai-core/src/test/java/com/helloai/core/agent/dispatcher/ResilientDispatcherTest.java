@@ -26,6 +26,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -72,6 +73,9 @@ class ResilientDispatcherTest {
                 subTaskService,
                 agentService,
                 agentSelector);
+        // V25：assignNext fast-fail 段新增心跳新鲜度检查，默认桩为“新鲜”，
+        // 心跳陈旧场景在具体用例中单独覆盖
+        lenient().when(agentSelector.isHeartbeatFresh(any())).thenReturn(true);
     }
 
     private Agent onlineAgent(Long id) {
@@ -118,6 +122,21 @@ class ResilientDispatcherTest {
             assertThatThrownBy(() -> resilientDispatcher.assignNext(1L, 100L))
                     .isInstanceOf(AgentUnavailableException.class)
                     .hasMessageContaining("OFFLINE");
+        }
+
+        @Test
+        @DisplayName("V25: CLI_CLIENT ONLINE 但心跳陈旧 → 抛 AgentUnavailableException（走 fallback）")
+        void shouldThrowAgentUnavailableForStaleHeartbeat() {
+            Agent stale = onlineAgent(1L);
+            when(agentService.getById(1L)).thenReturn(stale);
+            // DB online_status 仍 ONLINE，但心跳新鲜度检查判定已失联
+            when(agentSelector.isHeartbeatFresh(stale)).thenReturn(false);
+
+            assertThatThrownBy(() -> resilientDispatcher.assignNext(1L, 100L))
+                    .isInstanceOf(AgentUnavailableException.class)
+                    .hasMessageContaining("心跳已陈旧");
+
+            verify(subTaskService, never()).assignNext(anyLong(), anyLong());
         }
 
         @Test

@@ -1,6 +1,6 @@
 import request from './request'
-import type { DutyLeaseResponse, DutyOverviewResponse } from '@/types/duty'
-import type { PageResult } from '@/types'
+import type { DutyLeaseResponse, DutyAgentLatestResponse, DutyOverviewResponse } from '@/types/duty'
+import type { PageResult, LongId } from '@/types'
 
 /**
  * AgentHub V1 P1 值班报表前端 API（对齐后端 AgentDutyLeaseController）。
@@ -11,12 +11,17 @@ import type { PageResult } from '@/types'
 export const dutyApi = {
   /** 分页查询值班租约，可按 agentId / status 过滤。 */
   list(params?: {
-    agentId?: number | null
+    agentId?: LongId | null
     status?: 'ACTIVE' | 'CLOSED' | 'EXPIRED' | null
     page?: number
     size?: number
   }) {
     return request.get<any, PageResult<DutyLeaseResponse>>('/admin/duty-leases', { params })
+  },
+
+  /** Agent 维度分页：每个 Agent 只返回最新一条租约 + 租约总数。 */
+  listByAgent(params?: { page?: number; size?: number }) {
+    return request.get<any, PageResult<DutyAgentLatestResponse>>('/admin/duty-leases/by-agent', { params })
   },
 
   /** 值班租约状态概览（Dashboard 顶部卡片数据源）。 */

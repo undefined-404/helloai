@@ -20,7 +20,7 @@ export interface R<T> {
 
 // --- 枚举 ---
 export type SubTaskStatus = 'PENDING' | 'ASSIGNED' | 'IN_PROGRESS' | 'PAUSED'
-  | 'REVIEW' | 'DONE' | 'REWORK' | 'BLOCKED' | 'CANCELLED'
+  | 'REVIEW' | 'DONE' | 'REWORK' | 'BLOCKED' | 'CANCELLED' | 'DEAD_LETTER'
 
 export type AgentRole = 'PLANNER' | 'EXECUTOR' | 'REVIEWER' | 'PATROL'
 
@@ -47,9 +47,26 @@ export interface Task {
   updateTime: string
 }
 
+// 任务删除前风险提示 + 删除结果回显共用（对应后端 TaskRelatedCounts）
+export interface TaskRelatedCounts {
+  taskId: string
+  taskTitle: string
+  subTaskCount: number
+  // 处于 ASSIGNED/IN_PROGRESS 的子任务数，删除会丢弃其在途执行结果
+  activeSubTaskCount: number
+  deadLetterCount: number
+  moduleCount: number
+  reviewCount: number
+  executionCount: number
+  unreadInboxCount: number
+  timelineCount: number
+}
+
 export interface SubTask {
   id: LongId
   taskId: LongId
+  // 主任务标题冗余字段（后端 Controller 批量回填，列表展示归属任务用）
+  taskTitle?: string | null
   moduleId: LongId | null
   title: string
   status: SubTaskStatus
@@ -296,7 +313,8 @@ export const SUB_TASK_STATUS_MAP: Record<SubTaskStatus, { label: string; type: '
   DONE:        { label: '已完成',   type: 'success' },
   REWORK:      { label: '返工',     type: 'danger' },
   BLOCKED:     { label: '阻塞',     type: 'danger' },
-  CANCELLED:   { label: '已取消',   type: 'info' }
+  CANCELLED:   { label: '已取消',   type: 'info' },
+  DEAD_LETTER: { label: '死信待人工', type: 'danger' }
 }
 
 export const SCORE_GRADE_MAP: Record<string, { label: string; type: '' | 'success' | 'warning' | 'danger' | 'info' }> = {

@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.helloai.api.dto.PageResult;
 import com.helloai.api.dto.task.CreateTaskRequest;
+import com.helloai.api.dto.task.TaskRelatedCounts;
 import com.helloai.api.dto.task.UpdateTaskStatusRequest;
 import com.helloai.common.base.R;
 import com.helloai.common.constant.AgentRole;
@@ -19,6 +20,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @RestController
@@ -103,5 +105,52 @@ public class TaskController {
         task.setDescription(req.getDescription());
         taskService.updateById(task);
         return R.ok(task);
+    }
+
+    // ══════════════════════════════════════════════════════════
+    //  重新发布（重置 PENDING + 重新通知 PLANNER，不触碰子任务）
+    // ══════════════════════════════════════════════════════════
+
+    @PostMapping("/{id}/republish")
+    public R<Task> republish(@PathVariable("id") Long id) {
+        return R.ok(taskService.republish(id));
+    }
+
+    // ══════════════════════════════════════════════════════════
+    //  关联数据统计（删除前风险提示）
+    // ══════════════════════════════════════════════════════════
+
+    @GetMapping("/{id}/related-counts")
+    public R<TaskRelatedCounts> relatedCounts(@PathVariable("id") Long id) {
+        return R.ok(toRelatedCounts(taskService.getRelatedCounts(id)));
+    }
+
+    // ══════════════════════════════════════════════════════════
+    //  级联删除（子任务/死信/收件箱未读消息一并物理清理）
+    // ══════════════════════════════════════════════════════════
+
+    @DeleteMapping("/{id}")
+    public R<TaskRelatedCounts> delete(@PathVariable("id") Long id,
+                                       @RequestBody Map<String, String> body) {
+        String confirmTitle = body.get("confirmTitle");
+        if (confirmTitle == null || confirmTitle.isBlank()) {
+            return R.fail("请输入任务标题以确认删除");
+        }
+        return R.ok(toRelatedCounts(taskService.deleteTaskCascade(id, confirmTitle)));
+    }
+
+    private TaskRelatedCounts toRelatedCounts(Map<String, Object> counts) {
+        TaskRelatedCounts vo = new TaskRelatedCounts();
+        vo.setTaskId((Long) counts.get("taskId"));
+        vo.setTaskTitle((String) counts.get("taskTitle"));
+        vo.setSubTaskCount((Integer) counts.get("subTaskCount"));
+        vo.setActiveSubTaskCount((Integer) counts.get("activeSubTaskCount"));
+        vo.setDeadLetterCount((Integer) counts.get("deadLetterCount"));
+        vo.setModuleCount((Integer) counts.get("moduleCount"));
+        vo.setReviewCount((Integer) counts.get("reviewCount"));
+        vo.setExecutionCount((Integer) counts.get("executionCount"));
+        vo.setUnreadInboxCount((Integer) counts.get("unreadInboxCount"));
+        vo.setTimelineCount((Integer) counts.get("timelineCount"));
+        return vo;
     }
 }

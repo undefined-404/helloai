@@ -1,5 +1,6 @@
 package com.helloai.job.task;
 
+import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.Agent;
@@ -59,14 +60,18 @@ class AssignedSubTaskTimeoutTaskTest {
     private StringRedisTemplate redis;
     @Mock
     private ValueOperations<String, String> valueOps;
+    @Mock
+    private AgentDispatchProperties agentDispatchProperties;
 
     private AssignedSubTaskTimeoutTask task;
 
     @BeforeEach
     void setUp() {
         task = new AssignedSubTaskTimeoutTask(
-                subTaskMapper, subTaskDispatchService, agentService, redis);
+                subTaskMapper, subTaskDispatchService, agentService, redis, agentDispatchProperties);
 
+        // V25：超时阈值改读配置，默认桩为原硬编码值 10 分钟
+        lenient().when(agentDispatchProperties.getAssignedTimeoutMinutes()).thenReturn(10);
         // 默认 tryLock 成功
         lenient().when(redis.opsForValue()).thenReturn(valueOps);
         lenient().when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any()))

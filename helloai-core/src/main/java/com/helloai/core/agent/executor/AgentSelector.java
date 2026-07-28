@@ -124,8 +124,11 @@ public class AgentSelector {
      *
      * <p>防御式：不因本检查本身报错而影响选人（如 last_seen_time 为 null
      * 造成 NPE 会被 try/catch 降级为不新鲜）。</p>
+     *
+     * <p>V25：改为 public 供 {@link com.helloai.core.agent.dispatcher.ResilientDispatcher}
+     * 在 fast-fail 阶段复用，封堵"DB online_status 滞后 ONLINE 但 Agent 已死"的误派窗口。</p>
      */
-    private boolean isHeartbeatFresh(Agent agent) {
+    public boolean isHeartbeatFresh(Agent agent) {
         if (agent == null || agent.getId() == null) {
             return false;
         }

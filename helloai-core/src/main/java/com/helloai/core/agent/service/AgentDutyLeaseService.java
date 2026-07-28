@@ -8,6 +8,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentDutyLeaseStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
+import com.helloai.core.agent.entity.AgentDutyLeaseLatestRow;
 import com.helloai.core.shared.event.DutyLeaseClosedEvent;
 import com.helloai.core.agent.mapper.AgentDutyLeaseMapper;
 import com.helloai.core.agent.mapper.AgentMapper;
@@ -253,6 +254,30 @@ public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, Age
                 .eq(status != null, AgentDutyLease::getStatus, status)
                 .orderByDesc(AgentDutyLease::getStartTime);
         return page(new Page<>(pageNum, pageSize), wrapper);
+    }
+
+    /**
+     * Agent 维度分页：每个 Agent 只返回最新一条租约 + 该 Agent 租约总数（只读）。
+     *
+     * <p>total 为有租约记录的 Agent 数；排序按最新租约开始时间倒序
+     * （最近上班的 Agent 在前）。分组取最新走 Mapper 自定义 DISTINCT ON SQL，
+     * 非 MyBatis-Plus 分页插件链路，故手工拼 Page。</p>
+     *
+     * @param pageNum  页码（从 1 开始）
+     * @param pageSize 每页 Agent 数
+     * @return 分页结果，绝不返回 null
+     */
+    public IPage<AgentDutyLeaseLatestRow> listLatestPerAgent(long pageNum, long pageSize) {
+        long safePageNum = Math.max(pageNum, 1);
+        long safePageSize = Math.max(pageSize, 1);
+        long total = baseMapper.countDistinctAgents();
+        Page<AgentDutyLeaseLatestRow> page = new Page<>(safePageNum, safePageSize, total);
+        if (total == 0) {
+            page.setRecords(Collections.emptyList());
+            return page;
+        }
+        page.setRecords(baseMapper.selectLatestPerAgent((safePageNum - 1) * safePageSize, safePageSize));
+        return page;
     }
 
     /**

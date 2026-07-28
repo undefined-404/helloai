@@ -2574,7 +2574,157 @@ UI 行为变更：`helloai-ui/src/views/agent/components/AgentOnboardingDialog.v
 #### 5. 遗留与下一步
 
 - SubTaskDetail 轮询频率 5s 硬编码：未来可改为配置项 `helloai.ui.subtask-detail-poll-interval-ms`
-- QuickDispatchDialog 列表里"（值班中）"标注为本轮 TODO（涉及 duty 接口联调），下轮补
+- QuickDispatchDialog 列表里“（值班中）”标注为本轮 TODO（涉及 duty 接口联调），下轮补
 - DTO 补字段：`AgentOnboardingResponse.daemonScript`（来自 §6.8 C 类遗留）、`TaskTimelineItem.payload` 改用强类型 V 各事件专属 DTO 而非 `Record<string, any>`
+
+---
+
+### 6.10 改派链路熔断收口 + 死信人工兜底（V25）（2026-07-28）
+
+#### 1. 背景与问题确诊
+
+真实 AI 联调中发现：手动指派子任务给在线外部 Agent 后，若该 Agent 未及时接收，系统自动降级改派存在三大旁路：
+
+1. **无限改派旁路**：`dispatchPendingSubTaskAuto` 无 `checkReassignCircuitBreaker`，被 3 个定时任务（AgentHealthCheckTask 二次选人 / ExternalAgentFallbackTask.recoverPendingUnassigned / SubTaskPendingOrphanTask）每 60s 反复调用 → V24 熔断形同虚设
+2. **误派窗口**：`ResilientDispatcher.assignNext` fast-fail 只查 DB `online_status`，不查心跳新鲜度 → 存在约 5-6 分钟“DB 仍 ONLINE 但 Agent 已死”的误派窗口
+3. **无人工兜底**：V24 熔断后直接 CANCELLED（终态），无死信池、无人工恢复入口，只能手动改库
+
+#### 2. 实际落地
+
+- **V25 Flyway**：`V25__sub_task_dead_letter_status.sql` 重建 `chk_sub_task_status` CHECK 约束，加入 `DEAD_LETTER`
+- **枚举/状态机**：`SubTaskStatus` 新增 `DEAD_LETTER`（非终态）；`SubTaskStateMachine` 新增流转 `PENDING/ASSIGNED/IN_PROGRESS/BLOCKED/REWORK → DEAD_LETTER`，`DEAD_LETTER → ASSIGNED（人工指派）/ CANCELLED（人工放弃）`
+- **熔断收口**：`dispatchPendingSubTaskAuto` 入口顶部加 `checkReassignCircuitBreaker`，封堵三个定时任务的无计数旁路；`checkReassignCircuitBreaker` 达阈值后改置 `DEAD_LETTER`（原 CANCELLED），timeline 事件改 `sub_task_dead_letter`，context 写入 `dead_letter_reason=reassign_attempt_exceeded`；终态跳过判断加 `DEAD_LETTER`。手动链（`POST /sub-tasks` 带 assignedAgent、`claim`、`change-status`）有意不加拦截：人工判断优先
+- **心跳新鲜度 fast-fail**：`AgentSelector.isHeartbeatFresh` 改 public 供复用；`ResilientDispatcher.assignNext` 在 SLEEPING/OFFLINE 判断后新增心跳新鲜度检查，不新鲜抛 `AgentUnavailableException` 走 fallback 选替代（API_KEY_LLM / WEB_BROWSER 在 isHeartbeatFresh 内部已豁免）；同时覆盖 `dispatchBlockedSubTask` 的 preferredAgentId 路径
+- **死信人工兜底**：`SubTaskDispatchService.redispatchDeadLetter(subTaskId, agentId)`：校验 DEAD_LETTER → `resetReassignAttemptCount` 清零（SubTaskMapper 新增）→ `changeStatus → ASSIGNED`（自带 outbox + 收件箱 + 自动执行链）→ timeline `sub_task_dead_letter_manual_assign`；`SubTaskController` 新增 `POST /api/sub-tasks/dead-letter/redispatch/{id}`（复用 ReassignRequest）；死信列表复用现有列表接口按 `status=DEAD_LETTER` 过滤
+- **ASSIGNED 超时阈值配置化**：`AgentDispatchProperties.assignedTimeoutMinutes`（默认 10），`AssignedSubTaskTimeoutTask` 删硬编码常量改读配置；`application.yml` 补 `helloai.dispatch.assigned-timeout-minutes: 10`
+- **前端最小适配**：`types/index.ts` SubTaskStatus 联合类型 + 状态标签映射加 `DEAD_LETTER: 死信待人工/danger`；`SubTaskDetail.vue` `TERMINAL_STATUSES` 不加 DEAD_LETTER（可人工再指派，非终态）
+- **口径说明**：AgentHealthCheckTask 首选+二次路径同轮各计 1 次属两次真实改派尝试，接受该口径（只会更快进死信）；不引入 RabbitMQ 层面 DLQ（死信是业务态）
+
+#### 3. 测试与验证
+
+- `SubTaskDispatchServiceTest` 新增 4 例：达阈值置 DEAD_LETTER 且不选人 / 未达阈值计数累加正常调度 / redispatchDeadLetter 清零+ASSIGNED / 非 DEAD_LETTER 报错（11/11 全绿）
+- `ResilientDispatcherTest` 新增心跳陈旧 fast-fail 用例（setUp 默认桩 isHeartbeatFresh=true 保护既有用例）
+- 新建 `SubTaskStateMachineTest`（5 例：DEAD_LETTER 进/出流转 + 非法流转 + 抽样回归）
+- `AssignedSubTaskTimeoutTaskTest` 适配新构造器（注入 AgentDispatchProperties mock）
+- 全量 `mvn test`：BUILD SUCCESS，helloai-core 226 + helloai-job 56 全绿无回归
+- 新增 `scripts/powershell/verify-subtask-deadletter.ps1`：建子任务 → block → 连续 reassign 触发熔断计数 → 断言 DEAD_LETTER → 人工兜底接口 → 断言 ASSIGNED 且计数清零（需运行时环境，待真实环境回归）
+
+#### 4. 影响
+
+- **行为变化**：所有自动改派入口（含原旁路 dispatchPendingSubTaskAuto）统一受熔断管控；达阈值后进 DEAD_LETTER 死信池而非 CANCELLED，可人工恢复
+- **接口新增**：`POST /api/sub-tasks/dead-letter/redispatch/{id}`
+- **DB 变更**：V25 重建 CHECK 约束（加 DEAD_LETTER）
+- **配置新增**：`helloai.dispatch.assigned-timeout-minutes`（默认 10）
+
+#### 5. 遗留与下一步
+
+- 死信管理 UI 页面（列表筛选 + 一键再指派）未做，当前复用列表接口 status=DEAD_LETTER 过滤 + API 兜底
+- `verify-subtask-deadletter.ps1` 待真实环境实测回填结果
+- 监控告警：建议在 `sub_task_dead_letter` 事件上加钉钉/飞书通知（沿用 V24 遗留项）
+- NotificationConsumer ack 修复、消息信封统一不在本轮范围（后续单独处理）
+
+---
+
+### 6.11 任务-子任务关联打通 + 子任务列表真分页（2026-07-28）
+
+#### 1. 背景与问题确诊
+
+真实使用中发现任务管理页与子任务页"看起来没有关联"：`TaskList.vue` 跳转已携带 `/sub-tasks?taskId=行id`，`sub_task.task_id` 外键与后端 `?taskId=` 过滤能力也齐全，但断点在前端——`SubTaskList.vue` 不读 `route.query.taskId`、`subTask.ts` 参数类型缺 `taskId` 字段，导致过滤参数从未发出。顺带确诊两处次生问题：子任务列表为假分页（后端无分页参数、前端 `list.length` 当 total）；`SubTaskResponse` 无主任务标题，全量列表无法展示归属任务。
+
+#### 2. 实际落地
+
+- **前端关联打通**：`SubTaskList.vue` 读 `route.query.taskId`（LongId 保持 string 防精度丢）→ 列表过滤 + 顶部 `el-alert` 主任务信息条（标题 + 状态 tag + "查看全部子任务"清筛按钮）+ `watch(taskId)` 联动刷新；主任务查询失败降级显示 taskId 不阻断列表。`subTask.ts` list 参数补 `taskId?: LongId`；`task.ts` `getById` 参数 `number → LongId`
+- **后端 §6.3 收口 + 分页**：`SubTaskService` 新增 `list(taskId, status, assignedAgentId, page, pageSize)` 返回 `IPage<SubTask>`（条件构造从 Controller 下沉；`page` 为 null/<=0 时全量包装成 Page，兼容 SKILL.md 外部 Agent 纯数组契约）；`SubTaskController.list` 删除内联 `LambdaQueryWrapper`，改 `R<?>` 双返回（不传 page 返回数组 / 传 page 返回 `PageResult`，同 `TaskController` 模式），新增 `page`/`pageSize` 参数
+- **主任务标题回填**：`SubTaskResponse` 新增 `taskTitle` 冗余字段；Controller 注入 `TaskService`，新增 `attachTaskTitles`（`listByIds` 一次查询批量回填，防 N+1），list 与 getById 均回填
+- **前端真分页**：`subTask.ts` list 改传 `page`/`pageSize` 返回 `PageResult<SubTask>`；`SubTaskList.vue` `load()` 取 `res.list`/`res.total`，`el-pagination` 绑 `currentPage`；顺手修掉模板 `@change="load"`/`@click="load"` 事件对象误传为 page 参数的隐患（改 `load(1)`/`load(currentPage)`）；`types/index.ts` `SubTask` 补 `taskTitle?: string | null`，全量视图表格加"所属任务"列（按 taskId 过滤时隐藏避免与信息条重复）
+- **兼容性决策**：`GET /api/sub-tasks` 不传 page 保持纯数组返回，planner/patrol/reviewer 的 SKILL.md 契约零破坏；`/available`、`/mine` 的 §6.3 违规不在本轮范围
+
+#### 3. 测试与验证
+
+- 全 reactor `mvn -q -DskipTests install` → BUILD SUCCESS
+- `mvn -pl helloai-core,helloai-api test` → **helloai-core 228 全绿 + BUILD SUCCESS**，无回归
+- 前端 `npx vue-tsc -b --force` → 0 错误
+
+#### 4. 影响
+
+- **行为变化**：任务管理页"子任务"入口现在真正只展示该主任务的子任务并带信息条；子任务列表改服务端真分页；全量视图新增"所属任务"列
+- **接口变化**：`GET /api/sub-tasks` 新增可选 `page`/`pageSize` 参数（传 page 返回 PageResult，不传保持数组，向后兼容）；`SubTaskResponse` 新增 `taskTitle` 字段
+- **DB 变更**：无
+
+#### 5. 遗留与下一步
+
+- `/available`、`/mine` 两端点仍在 Controller 内联 QueryWrapper（§6.3 待收口清单，后续统一处理）
+- `mine` / `available` 返回未回填 `taskTitle`（外部 Agent 场景暂无展示需求）
+
+---
+
+### 6.12 任务管理 CRUD 收口 + 级联删除（竞态免疫）（2026-07-28）
+
+#### 1. 背景与问题确诊
+
+任务管理页此前只有列表+子任务跳转，无新建/编辑/删除入口；且删除任务面临与消息链路的竞态风险：任务删除后，旧收件箱通知、在途 MQ 通知、残留执行记录可能让"已删任务"继续被 Agent 消费或幽灵执行。设计原则沿用"消息只是门铃、DB 是唯一事实源"：级联**物理删除**后所有消费端（claimSubTask / submitResult / LocalExecutionCommandConsumer / handleReport / Poller）实时回查 DB 均得 not_found 直接丢弃，与现有防线天然兼容；唯一缺口是"删除瞬间在途的 MQ 通知落库成孤儿 inbox"，在 NotificationConsumer 补防御分支兜底。
+
+#### 2. 实际落地
+
+- **Mapper 物理删除 SQL**（`@TableLogic` 软删陷阱规避，全部 `@Delete` 注解 + 显式 `physicalDeleteXxx` 命名 + Javadoc 标注"仅供任务级联删除使用"）：`TaskMapper.physicalDeleteById`、`SubTaskMapper.physicalDeleteByTaskId`、`ModuleMapper.physicalDeleteByTaskId`、`TaskTimelineMapper.physicalDeleteByTaskId`、`ReviewRecordMapper.physicalDeleteByTaskId + countByTaskId`、`AgentExecutionRecordMapper.physicalDeleteByTaskId + countByTaskId`、`AgentInboxMapper.physicalDeleteByTaskRef + countUnreadByTaskRef`（ref 三段 OR：task 直引 / sub_task 子查询 / review 双层子查询）
+- **TaskService 下沉三方法**（按 AgentService 惯例直接注入 7 个 Mapper 防循环依赖，AgentInboxService 作无回向依赖叶子服务注入复用门铃链路）：
+  - `getRelatedCounts(taskId)`：子任务/在途(ASSIGNED+IN_PROGRESS)/死信/模块/审查/执行记录/未读收件箱/时间线 计数
+  - `deleteTaskCascade(taskId, confirmTitle)`：标题精确匹配校验（照 Agent confirmName 范式）→ `@Transactional` 内按序物理删 inbox→execution→review→timeline→sub_task→module→task（前三者 SQL 依赖 sub_task 子查询，必须先删）→ 返回删除前 counts 回显
+  - `republish(taskId)`：DONE 抛 BizException；重置 PENDING；新 eventId `task.republish.{id}.{ts}` 通知全部 PLANNER（`(event_id,agent_id)` 唯一约束不与历史冲突）；**不触碰已有子任务**
+- **TaskController 三端点**：`POST /{id}/republish`、`GET /{id}/related-counts`（新 DTO `TaskRelatedCounts`）、`DELETE /{id}`（body 传 `confirmTitle`，空值 fail 提示）
+- **NotificationConsumer 防御分支**：写 inbox 前 `refTargetExists(refType, refId)` 回查（task/sub_task/review → getById != null），目标已删则 log.info 丢弃——兜底"任务已删、在途 MQ 通知还在飞"窗口
+- **前端**：`types/index.ts` 新增 `TaskRelatedCounts` 接口；`task.ts` 补 `update/republish/relatedCounts/deleteTask`（delete 走 `{ data: { confirmTitle } }` body）；新建 `TaskFormDialog.vue`（新建/编辑共用，title 必填）+ `TaskDeleteDialog.vue`（照 AgentDeleteDialog 范式：@open 加载影响面统计、activeSubTaskCount>0 显示"丢弃在途执行结果"警示、输入标题精确匹配激活危险按钮）；`TaskList.vue` header 加"新建"、操作列加 编辑/重新发布（DONE 禁用 + ElMessageBox 确认）/删除
+- **拍板口径**：重新发布不动子任务只重置+重通知，DONE 不允许重发；task_timeline 随任务一起物理删
+
+#### 3. 测试与验证
+
+- 全 reactor `mvn -q -DskipTests install` → 无 ERROR
+- `mvn -pl helloai-core,helloai-api,helloai-job test` → **56 测试全绿 + BUILD SUCCESS**，无回归
+- 前端 `npx vue-tsc --noEmit` → 0 错误
+
+#### 4. 影响
+
+- **接口新增**：`POST /api/tasks/{id}/republish`、`GET /api/tasks/{id}/related-counts`、`DELETE /api/tasks/{id}`
+- **行为变化**：任务删除为**物理级联删除**（子任务含死信/模块/审查/执行记录/收件箱引用/时间线一并清理），不走 `@TableLogic` 软删；MQ 通知消费前回查目标存在性
+- **DTO 新增**：`TaskRelatedCounts`（API 层）
+- **DB 变更**：无（纯应用层 SQL）
+
+#### 5. 遗留与下一步
+
+- 改派竞态 4 个已识别漏洞未修（本轮范围外，候选下轮）：①改派入口不作废旧 inbox 通知 ②`ExecutionResultHandler.handleReport` 不校验 report.agentId==assignedAgentId ③改派不取消旧 PENDING 执行记录 ④同 Agent 再改派 Poller 重放旧命令
+- 删除操作无操作人审计（当前无登录体系，后续补）
+
+---
+
+### 6.13 值班租约列表改 Agent 维度展示 + 历史记录分页对话框（2026-07-28）
+
+#### 1. 背景
+
+值班租约页此前平铺展示全部租约记录，同一 Agent 反复 checkIn 产生大量历史行，运营难以一眼看清"每个 Agent 当前值班状态"。改为 Agent 维度展开：每个 Agent 一行只显最新租约 + 租约总数，点"更多"弹窗分页查看该 Agent 全部历史，Agent 维度主列表也分页。
+
+#### 2. 实际落地
+
+- **Mapper**：`AgentDutyLeaseMapper` 新增 `selectLatestPerAgent(offset,size)`（PostgreSQL `DISTINCT ON (agent_id)` 按 start_time 倒序取组内最新，JOIN 子查询带出 lease_count，外层按最新租约开始时间倒序）+ `countDistinctAgents()`；查询行对象 `AgentDutyLeaseLatestRow extends AgentDutyLease`（非表实体，冒余 leaseCount）
+- **Service**：`AgentDutyLeaseService.listLatestPerAgent(pageNum,pageSize)`——自定义 SQL 非 MP 分页插件链路，手工拼 Page（count + offset 查询）
+- **Controller**：`GET /api/admin/duty-leases/by-agent`（page/size）返回 `PageResult<DutyAgentLatestResponse>`（extends DutyLeaseResponse + leaseCount），agentName 批量回填防 N+1；"查某 Agent 全部记录"复用既有 list 端点的 agentId 过滤 + 分页，未新建端点
+- **前端**：`types/duty.ts` 加 `DutyAgentLatestResponse`；`api/duty.ts` 加 `listByAgent`，顺手修 `list.agentId` 参数类型 `number → LongId`（雪花 ID 传 number 有精度丢失隐患）；新建 `DutyLeaseHistoryDialog.vue`（单 Agent 历史租约分页表，pageSize=10）；`DutyLeaseList.vue` 重写为 Agent 维度主表（Agent/最新状态/最新会话/模式/并发/三时间/租约总数/更多），原 status/agentId 平铺过滤区随平铺视图一并移除（历史对话框内可见全部状态）
+- **兼容性**：既有 `GET /admin/duty-leases`（平铺分页）与 `/overview` 端点零改动，Dashboard 概览卡片不受影响
+
+#### 3. 测试与验证
+
+- 全 reactor `mvn -q -DskipTests install` → 无 ERROR；`mvn -pl helloai-core,helloai-api test` → **helloai-core 228 全绿 + BUILD SUCCESS**
+- 前端 `npx vue-tsc --noEmit` → 0 错误
+- DISTINCT ON SQL 经 postgres_helloai MCP 真库验证：qoder-ceshi（8 条租约）正确返回最新一条 + lease_count=8
+
+#### 4. 影响
+
+- **接口新增**：`GET /api/admin/duty-leases/by-agent`
+- **行为变化**：值班租约页主视图从租约平铺改为 Agent 维度；历史记录入口下沉到每行"更多"对话框
+- **DTO 新增**：`DutyAgentLatestResponse`（API 层）、`AgentDutyLeaseLatestRow`（core 查询视图行）
+- **DB 变更**：无
+
+#### 5. 遗留与下一步
+
+- Agent 维度主列表暂无状态过滤（如需"只看值班中 Agent"可在 by-agent SQL 外层加 status 条件，待需求明确后补）
 
 ---

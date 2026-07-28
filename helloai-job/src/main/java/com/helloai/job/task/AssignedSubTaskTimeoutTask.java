@@ -1,5 +1,6 @@
 package com.helloai.job.task;
 
+import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
@@ -47,6 +48,7 @@ public class AssignedSubTaskTimeoutTask {
     private final SubTaskDispatchService subTaskDispatchService;
     private final AgentService agentService;
     private final StringRedisTemplate redis;
+    private final AgentDispatchProperties agentDispatchProperties;
 
     private static final String LOCK_KEY = "scheduler:lock:AssignedSubTaskTimeout";
 
@@ -58,9 +60,6 @@ public class AssignedSubTaskTimeoutTask {
     private static final RedisScript<Long> UNLOCK_SCRIPT = new DefaultRedisScript<>(
             "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
             Long.class);
-
-    /** ASSIGNED 超时阈值（分钟）：update_time 距今超过此值视为超时 */
-    static final long ASSIGNED_TIMEOUT_MINUTES = 10;
 
     /** 单次扫描最多处理的子任务数 */
     private static final int BATCH_LIMIT = 50;
@@ -77,7 +76,8 @@ public class AssignedSubTaskTimeoutTask {
         }
 
         try {
-            OffsetDateTime deadline = OffsetDateTime.now().minusMinutes(ASSIGNED_TIMEOUT_MINUTES);
+            OffsetDateTime deadline = OffsetDateTime.now()
+                    .minusMinutes(agentDispatchProperties.getAssignedTimeoutMinutes());
             List<SubTask> timedOut = subTaskMapper.selectTimedOutAssigned(deadline, BATCH_LIMIT);
 
             if (timedOut.isEmpty()) {

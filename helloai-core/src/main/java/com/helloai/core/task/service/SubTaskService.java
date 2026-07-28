@@ -1,5 +1,8 @@
 package com.helloai.core.task.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentRole;
@@ -55,6 +58,41 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
             claim(subTask.getId(), assignedAgentId);
         }
         return getById(subTask.getId());
+    }
+
+    /**
+     * 子任务条件查询（主任务 / 状态 / 负责 Agent 组合过滤）。
+     *
+     * <p>按 §6.3 分层红线从 SubTaskController 收口：条件构造归 Service 层。
+     * {@code page == null || page <= 0} 时返回全量列表（包装成 IPage，便于 Controller 统一处理），
+     * 兼容 SKILL.md 外部 Agent 不分页调用契约；否则按分页参数返回。</p>
+     *
+     * @param taskId          主任务 ID，可为 null
+     * @param status          子任务状态，可为 null
+     * @param assignedAgentId 负责 Agent ID，可为 null
+     * @param page            页码，null 或 <=0 表示不分页
+     * @param pageSize        每页条数（仅分页时生效）
+     * @return 分页结果或全量列表；绝不返回 null
+     */
+    public IPage<SubTask> list(Long taskId, SubTaskStatus status, Long assignedAgentId, Integer page, int pageSize) {
+        LambdaQueryWrapper<SubTask> wrapper = new LambdaQueryWrapper<SubTask>()
+                .eq(taskId != null, SubTask::getTaskId, taskId)
+                .eq(status != null, SubTask::getStatus, status)
+                .eq(assignedAgentId != null, SubTask::getAssignedAgentId, assignedAgentId)
+                .orderByDesc(SubTask::getCreateTime);
+
+        if (page == null || page <= 0) {
+            // 不分页：全量列表包装成 IPage，保持返回类型统一
+            List<SubTask> all = list(wrapper);
+            if (all == null) {
+                all = Collections.emptyList();
+            }
+            Page<SubTask> full = new Page<>(1, Math.max(all.size(), 1));
+            full.setRecords(all);
+            full.setTotal(all.size());
+            return full;
+        }
+        return page(new Page<>(page, pageSize), wrapper);
     }
 
     /**

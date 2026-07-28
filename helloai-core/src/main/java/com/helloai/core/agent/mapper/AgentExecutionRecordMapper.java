@@ -3,6 +3,7 @@ package com.helloai.core.agent.mapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.core.agent.entity.AgentExecutionRecord;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
@@ -24,4 +25,12 @@ public interface AgentExecutionRecordMapper extends BaseMapper<AgentExecutionRec
 
     @Update("UPDATE agent_execution_record SET status = #{status}, error_msg = #{errorMsg}, update_time = CURRENT_TIMESTAMP WHERE id = #{id}")
     int updateStatus(@Param("id") Long id, @Param("status") ExecutionStatus status, @Param("errorMsg") String errorMsg);
+
+    /** 统计某任务下全部子任务的执行记录数（删除前风险提示用）。 */
+    @Select("SELECT COUNT(*) FROM agent_execution_record WHERE sub_task_id IN (SELECT id FROM sub_task WHERE task_id = #{taskId})")
+    int countByTaskId(@Param("taskId") Long taskId);
+
+    /** 物理删除某任务下全部执行记录（外键引用 sub_task.id，必须先于子任务删除，仅供任务级联删除使用）。 */
+    @Delete("DELETE FROM agent_execution_record WHERE sub_task_id IN (SELECT id FROM sub_task WHERE task_id = #{taskId})")
+    int physicalDeleteByTaskId(@Param("taskId") Long taskId);
 }

@@ -1,6 +1,8 @@
 package com.helloai.api.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.helloai.api.dto.PageResult;
 import com.helloai.api.dto.subtask.CreateSubTaskRequest;
 import com.helloai.api.dto.subtask.ReassignRequest;
 import com.helloai.api.dto.subtask.ReworkRequest;
@@ -12,11 +14,13 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.entity.TaskTimeline;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.command.ExecutionCommandService;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -25,8 +29,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Slf4j
 @RestController
@@ -35,6 +43,7 @@ import java.util.Map;
 public class SubTaskController {
 
     private final SubTaskService subTaskService;
+    private final TaskService taskService;
     private final SubTaskDispatchService subTaskDispatchService;
     private final ExecutionCommandService executionCommandService;
     private final AgentExecutionRecordService agentExecutionRecordService;
@@ -118,26 +127,38 @@ public class SubTaskController {
         return it;
     }
 
+    /**
+     * 子任务列表查询（主任务 / 状态 / 负责 Agent 组合过滤）。
+     *
+     * <p>双返回兼容：不传 page（或 page<=0）返回全量数组，保持 SKILL.md 外部 Agent
+     * 不分页调用契约；传 page 返回 {@link PageResult} 分页结构（管理台真分页）。
+     * 条件构造已按 §6.3 下沉至 {@link SubTaskService#list}。</p>
+     */
     @GetMapping
-    public R<List<SubTaskResponse>> list(
+    public R<?> list(
             @RequestParam(value = "taskId", required = false) Long taskId,
             @RequestParam(value = "status", required = false) String status,
-            @RequestParam(value = "assignedAgent", required = false) Long assignedAgent) {
+            @RequestParam(value = "assignedAgent", required = false) Long assignedAgent,
+            @RequestParam(value = "page", required = false) Integer page,
+            @RequestParam(value = "pageSize", defaultValue = "20") int pageSize) {
         SubTaskStatus statusFilter = (status != null && !status.isBlank()) ? SubTaskStatus.valueOf(status) : null;
-        var wrapper = new LambdaQueryWrapper<SubTask>()
-                .eq(taskId != null, SubTask::getTaskId, taskId)
-                .eq(statusFilter != null, SubTask::getStatus, statusFilter)
-                .eq(assignedAgent != null, SubTask::getAssignedAgentId, assignedAgent)
-                .orderByDesc(SubTask::getCreateTime);
-        List<SubTaskResponse> list = subTaskService.list(wrapper).stream().map(this::toResponse).toList();
-        return R.ok(list);
+        IPage<SubTaskResponse> result = subTaskService
+                .list(taskId, statusFilter, assignedAgent, page, pageSize)
+                .convert(this::toResponse);
+        attachTaskTitles(result.getRecords());
+        if (page == null || page <= 0) {
+            return R.ok(result.getRecords());
+        }
+        return R.ok(PageResult.of(result));
     }
 
     @GetMapping("/{id}")
     public R<SubTaskResponse> getById(@PathVariable("id") Long id) {
         SubTask subTask = subTaskService.getById(id);
         if (subTask == null) return R.fail("子任务不存在");
-        return R.ok(toResponse(subTask));
+        SubTaskResponse response = toResponse(subTask);
+        attachTaskTitles(List.of(response));
+        return R.ok(response);
     }
 
     @PostMapping("/change-status")
@@ -200,6 +221,20 @@ public class SubTaskController {
     @PostMapping("/reassign/{id}")
     public R<Void> reassign(@PathVariable("id") Long id, @Valid @RequestBody ReassignRequest req) {
         subTaskDispatchService.dispatchBlockedSubTask(id, req.getAgentId());
+        return R.ok();
+    }
+
+    /**
+     * 死信人工兜底指派（V25）：将 DEAD_LETTER 子任务直接指派给指定 Agent。
+     *
+     * <p>重分配熔断（reassign_attempt_count 达阈值）后子任务进入 DEAD_LETTER 死信池，
+     * 由人工确认目标 Agent 后调用本接口：熔断计数清零 + 直接 ASSIGNED。
+     * 死信列表复用现有列表接口按 status=DEAD_LETTER 过滤。</p>
+     */
+    @PostMapping("/dead-letter/redispatch/{id}")
+    public R<Void> redispatchDeadLetter(@PathVariable("id") Long id,
+                                        @Valid @RequestBody ReassignRequest req) {
+        subTaskDispatchService.redispatchDeadLetter(id, req.getAgentId());
         return R.ok();
     }
 
@@ -277,6 +312,22 @@ public class SubTaskController {
                 .orderByDesc(SubTask::getCreateTime);
         List<SubTaskResponse> list = subTaskService.list(wrapper).stream().map(this::toResponse).toList();
         return R.ok(list);
+    }
+
+    /** 批量回填主任务标题（一次 listByIds 查询，避免逐条 N+1）。 */
+    private void attachTaskTitles(List<SubTaskResponse> responses) {
+        Set<Long> taskIds = responses.stream()
+                .map(SubTaskResponse::getTaskId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        if (taskIds.isEmpty()) {
+            return;
+        }
+        Map<Long, String> titleMap = new HashMap<>();
+        for (Task task : taskService.listByIds(taskIds)) {
+            titleMap.put(task.getId(), task.getTitle());
+        }
+        responses.forEach(r -> r.setTaskTitle(titleMap.get(r.getTaskId())));
     }
 
     private SubTaskResponse toResponse(SubTask subTask) {

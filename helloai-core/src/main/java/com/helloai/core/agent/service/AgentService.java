@@ -45,6 +45,8 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
     private final ActivityLogMapper activityLogMapper;
     private final PatrolRecordMapper patrolRecordMapper;
     private final ReviewRecordMapper reviewRecordMapper;
+    private final AgentInboxMapper agentInboxMapper;
+    private final AgentDutyLeaseMapper agentDutyLeaseMapper;
     private final TaskTimelineService taskTimelineService;
     private final AgentMcpServerService agentMcpServerService;
 
@@ -209,16 +211,16 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
         Map<String, Object> counts = new LinkedHashMap<>();
         counts.put("agentId", agentId);
         counts.put("agentName", agent.getName());
-        counts.put("subTaskCount", (long) subTaskMapper.selectCount(
-                new LambdaQueryWrapper<SubTask>().eq(SubTask::getAssignedAgentId, agentId)));
-        counts.put("reviewCount", (long) reviewRecordMapper.selectCount(
-                new LambdaQueryWrapper<ReviewRecord>().eq(ReviewRecord::getReviewerAgentId, agentId)));
-        counts.put("rewardCount", (long) rewardLogMapper.selectCount(
-                new LambdaQueryWrapper<RewardLog>().eq(RewardLog::getAgentId, agentId)));
-        counts.put("activityCount", (long) activityLogMapper.selectCount(
-                new LambdaQueryWrapper<ActivityLog>().eq(ActivityLog::getAgentId, agentId)));
-        counts.put("patrolCount", (long) patrolRecordMapper.selectCount(
-                new LambdaQueryWrapper<PatrolRecord>().eq(PatrolRecord::getPatrolAgentId, agentId)));
+        counts.put("subTaskCount", subTaskMapper.selectCount(
+                new LambdaQueryWrapper<SubTask>().eq(SubTask::getAssignedAgentId, agentId)).intValue());
+        counts.put("reviewCount", reviewRecordMapper.selectCount(
+                new LambdaQueryWrapper<ReviewRecord>().eq(ReviewRecord::getReviewerAgentId, agentId)).intValue());
+        counts.put("rewardCount", rewardLogMapper.selectCount(
+                new LambdaQueryWrapper<RewardLog>().eq(RewardLog::getAgentId, agentId)).intValue());
+        counts.put("activityCount", activityLogMapper.selectCount(
+                new LambdaQueryWrapper<ActivityLog>().eq(ActivityLog::getAgentId, agentId)).intValue());
+        counts.put("patrolCount", patrolRecordMapper.selectCount(
+                new LambdaQueryWrapper<PatrolRecord>().eq(PatrolRecord::getPatrolAgentId, agentId)).intValue());
         return counts;
     }
 
@@ -252,12 +254,17 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
                         .eq(SubTask::getAssignedAgentId, agentId)
                         .set(SubTask::getAssignedAgentId, null));
 
-        // 清理级联数据
-        rewardLogMapper.delete(new LambdaQueryWrapper<RewardLog>().eq(RewardLog::getAgentId, agentId));
-        activityLogMapper.delete(new LambdaQueryWrapper<ActivityLog>().eq(ActivityLog::getAgentId, agentId));
-        patrolRecordMapper.delete(new LambdaQueryWrapper<PatrolRecord>().eq(PatrolRecord::getPatrolAgentId, agentId));
+        // 清理级联数据（物理删除：@TableLogic 会把普通 delete 改写为 UPDATE deleted=1，
+        // 这里走 Mapper 自定义 DELETE SQL 真删，不留残留行）
+        rewardLogMapper.physicalDeleteByAgentId(agentId);
+        activityLogMapper.physicalDeleteByAgentId(agentId);
+        patrolRecordMapper.physicalDeleteByAgentId(agentId);
+        agentMcpServerService.physicalDeleteByAgentId(agentId);
+        // agent_inbox / agent_duty_lease 对 agent.id 有外键约束，必须先于 agent 行删除
+        agentInboxMapper.physicalDeleteByAgentId(agentId);
+        agentDutyLeaseMapper.physicalDeleteByAgentId(agentId);
 
-        removeById(agentId);
+        baseMapper.physicalDeleteById(agentId);
 
         log.info("Agent 级联删除完成: id={}, name={}, reward={}, activity={}, patrol={}",
                 agentId, agent.getName(), rewardCount, activityCount, patrolCount);

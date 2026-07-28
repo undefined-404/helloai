@@ -551,17 +551,28 @@ onBeforeUnmount(() => {
   display: flex;
   height: 100vh;
   overflow: hidden;
-  --login-accent-start: #7C3AED;
+  --login-accent-start: #A78BFA;
   --login-accent-solid: #7C3AED;
   --login-accent-solid-hover: #6D28D9;
   --login-accent-solid-active: #5B21B6;
-  --login-accent-soft: #F4F1FF;
-  --login-accent-soft-hover: #EEE8FF;
-  --login-accent-border: #D8CCFF;
-  --login-accent-border-strong: #A78BFA;
-  --login-accent-ink: #5B21B6;
-  --login-accent-shadow: 0 10px 24px rgba(124, 58, 237, 0.20);
-  --login-accent-shadow-hover: 0 14px 28px rgba(91, 33, 182, 0.24);
+  --login-accent-soft: rgba(124, 58, 237, 0.12);
+  --login-accent-soft-hover: rgba(124, 58, 237, 0.20);
+  --login-accent-border: rgba(124, 58, 237, 0.35);
+  --login-accent-border-strong: rgba(167, 139, 250, 0.65);
+  --login-accent-ink: #C4B5FD;
+  --login-accent-shadow: 0 10px 24px rgba(124, 58, 237, 0.35);
+  --login-accent-shadow-hover: 0 14px 30px rgba(124, 58, 237, 0.45);
+
+  /* 登录页专用暗色主题：仅覆盖本页作用域内的 --ha-* token，不影响登录后后台 */
+  --ha-bg: #0A0E1A;
+  --ha-surface: rgba(255, 255, 255, 0.03);
+  --ha-surface-elevated: rgba(18, 24, 40, 0.60);
+  --ha-border: rgba(255, 255, 255, 0.10);
+  --ha-border-light: rgba(255, 255, 255, 0.08);
+  --ha-ink: #EEF2F8;
+  --ha-ink-secondary: rgba(255, 255, 255, 0.72);
+  --ha-muted: rgba(255, 255, 255, 0.50);
+  --ha-primary-muted: rgba(124, 58, 237, 0.18);
 }
 
 .login-brand {
@@ -764,9 +775,14 @@ onBeforeUnmount(() => {
 }
 
 .login-card {
+  position: relative;
   background: var(--ha-surface-elevated);
+  backdrop-filter: blur(20px) saturate(1.2);
+  -webkit-backdrop-filter: blur(20px) saturate(1.2);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--ha-radius-xl);
-  box-shadow: var(--ha-shadow-sm);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45),
+              0 0 40px rgba(124, 58, 237, 0.08);
   padding: 32px;
   display: flex;
   flex-direction: column;
@@ -805,30 +821,30 @@ onBeforeUnmount(() => {
   height: 38px;
   border: 1px solid var(--login-accent-border);
   border-radius: var(--ha-radius-md);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, var(--login-accent-soft) 100%);
-  color: #6B5FA3;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.72);
   font-size: 13px;
   font-weight: 600;
   font-family: var(--ha-font-family);
   cursor: pointer;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  box-shadow: none;
   transition: all var(--ha-duration-fast) var(--ha-ease-out);
 }
 
 .entry-tab:hover,
 .login-tab:hover {
   border-color: var(--login-accent-border-strong);
-  background: linear-gradient(180deg, #FFFFFF 0%, var(--login-accent-soft-hover) 100%);
-  color: var(--login-accent-ink);
+  background: rgba(124, 58, 237, 0.14);
+  color: #FFFFFF;
   transform: translateY(-1px);
 }
 
 .entry-tab.active,
 .login-tab.active {
-  border-color: rgba(124, 58, 237, 0.08);
+  border-color: transparent;
   background: var(--login-accent-solid);
   color: #FFFFFF;
-  box-shadow: 0 8px 18px rgba(124, 58, 237, 0.18);
+  box-shadow: 0 6px 18px rgba(124, 58, 237, 0.40);
 }
 
 .section-stack {
@@ -848,6 +864,42 @@ onBeforeUnmount(() => {
 
 .login-form :deep(.el-input__wrapper) {
   padding-left: 12px;
+}
+
+/* Element Plus 输入框暗色适配（仅登录页作用域） */
+.login-panel :deep(.el-input__wrapper) {
+  background-color: rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.login-panel :deep(.el-input__wrapper:hover) {
+  box-shadow: inset 0 0 0 1px var(--login-accent-border-strong);
+}
+
+.login-panel :deep(.el-input__wrapper.is-focus) {
+  box-shadow: inset 0 0 0 1px var(--login-accent-solid),
+              0 0 0 3px rgba(124, 58, 237, 0.22);
+}
+
+.login-panel :deep(.el-input__inner) {
+  color: #EEF2F8;
+  -webkit-text-fill-color: #EEF2F8;
+}
+
+.login-panel :deep(.el-input__inner::placeholder) {
+  color: rgba(255, 255, 255, 0.40);
+}
+
+.login-panel :deep(.el-input__prefix),
+.login-panel :deep(.el-input__suffix),
+.login-panel :deep(.el-input__icon),
+.login-panel :deep(.el-input__clear) {
+  color: rgba(255, 255, 255, 0.50);
+}
+
+.login-panel :deep(.el-input__inner:-webkit-autofill) {
+  -webkit-text-fill-color: #EEF2F8;
+  transition: background-color 9999s ease-in-out 0s;
 }
 
 .mode-context {
@@ -1007,7 +1059,7 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
   border-radius: 999px;
   background: var(--ha-primary-muted);
-  color: var(--ha-primary);
+  color: #C4B5FD;
   padding: 4px 10px;
   font-size: 12px;
   font-weight: 600;
@@ -1050,17 +1102,17 @@ onBeforeUnmount(() => {
 
 .register-card-actions :deep(.el-button--primary.is-plain) {
   --el-button-text-color: var(--login-accent-ink);
-  --el-button-hover-text-color: var(--login-accent-ink);
-  --el-button-active-text-color: var(--login-accent-ink);
-  background: linear-gradient(180deg, #FFFFFF 0%, var(--login-accent-soft) 100%);
+  --el-button-hover-text-color: #FFFFFF;
+  --el-button-active-text-color: #FFFFFF;
+  background: rgba(124, 58, 237, 0.10);
   border: 1px solid var(--login-accent-border) !important;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  box-shadow: none;
 }
 
 .register-card-actions :deep(.el-button--primary.is-plain:hover) {
-  background: linear-gradient(180deg, #FFFFFF 0%, var(--login-accent-soft-hover) 100%);
+  background: rgba(124, 58, 237, 0.20);
   border-color: var(--login-accent-border-strong) !important;
-  box-shadow: 0 8px 18px rgba(124, 58, 237, 0.10);
+  box-shadow: 0 8px 18px rgba(124, 58, 237, 0.20);
 }
 
 .register-card-actions :deep(.el-button--text) {

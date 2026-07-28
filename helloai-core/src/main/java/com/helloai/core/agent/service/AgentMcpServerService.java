@@ -116,6 +116,15 @@ public class AgentMcpServerService extends ServiceImpl<AgentMcpServerMapper, Age
     }
 
     /**
+     * 物理删除某 Agent 的全部 MCP 工具绑定（仅供 Agent 级联删除使用）。
+     *
+     * @return 实际删除行数
+     */
+    public int physicalDeleteByAgentId(Long agentId) {
+        return baseMapper.physicalDeleteByAgentId(agentId);
+    }
+
+    /**
      * 查询指定 Agent 的某个工具是否启用。
      */
     public boolean isToolEnabled(Long agentId, String toolName) {

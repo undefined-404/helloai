@@ -3,6 +3,8 @@ package com.helloai.core.agent.mapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.helloai.common.constant.AgentDutyLeaseStatus;
 import com.helloai.core.agent.entity.AgentDutyLease;
+import com.helloai.core.agent.entity.AgentDutyLeaseLatestRow;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
@@ -45,4 +47,20 @@ public interface AgentDutyLeaseMapper extends BaseMapper<AgentDutyLease> {
      */
     List<AgentDutyLease> selectExpiredLeases(@Param("cutoff") OffsetDateTime cutoff,
                                              @Param("limit") int limit);
+
+    /**
+     * Agent 维度分页：每个 Agent 取最新一条租约 + 该 Agent 租约总数。
+     *
+     * <p>PostgreSQL {@code DISTINCT ON} 按 start_time 倒序取组内最新，
+     * 外层按最新租约开始时间倒序（最近上班的 Agent 在前）。</p>
+     */
+    List<AgentDutyLeaseLatestRow> selectLatestPerAgent(@Param("offset") long offset,
+                                                       @Param("size") long size);
+
+    /** 有租约记录的 Agent 总数（Agent 维度分页的 total）。 */
+    long countDistinctAgents();
+
+    /** 物理删除某 Agent 的全部值班租约（外键引用 agent.id，仅供 Agent 级联删除使用）。 */
+    @Delete("DELETE FROM agent_duty_lease WHERE agent_id = #{agentId}")
+    int physicalDeleteByAgentId(@Param("agentId") Long agentId);
 }

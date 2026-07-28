@@ -8,40 +8,7 @@
         </div>
       </template>
 
-      <!-- 过滤区 -->
-      <div class="filter-bar">
-        <div class="filter-item">
-          <span class="filter-label">状态</span>
-          <el-select
-            v-model="filter.status"
-            placeholder="全部"
-            clearable
-            style="width: 140px"
-            @change="load(1)"
-          >
-            <el-option
-              v-for="(meta, key) in DUTY_LEASE_STATUS_MAP"
-              :key="key"
-              :label="meta.label"
-              :value="key"
-            />
-          </el-select>
-        </div>
-        <div class="filter-item">
-          <span class="filter-label">Agent ID</span>
-          <el-input
-            v-model.number="filter.agentId"
-            placeholder="可选,精确匹配"
-            clearable
-            style="width: 200px"
-            @keyup.enter="load(1)"
-            @clear="load(1)"
-          />
-        </div>
-        <el-button type="primary" @click="load(1)">查询</el-button>
-      </div>
-
-      <!-- 表格 -->
+      <!-- Agent 维度表格：每个 Agent 一行，展示最新一条租约 -->
       <el-table
         :data="list"
         border
@@ -50,41 +17,42 @@
         style="width: 100%"
         empty-text="暂无值班租约"
       >
-        <el-table-column prop="id" label="租约 ID" width="120" />
         <el-table-column label="Agent" min-width="180">
           <template #default="{ row }">
             <span class="agent-name">{{ row.agentName || '—' }}</span>
             <span class="agent-id">#{{ row.agentId }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="sessionId" label="会话" min-width="200" show-overflow-tooltip />
-        <el-table-column prop="workMode" label="模式" width="100" />
-        <el-table-column label="并发上限" width="100" align="center">
-          <template #default="{ row }">
-            <span v-if="row.maxConcurrent == null">—</span>
-            <span v-else>{{ row.maxConcurrent }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" width="110">
-          <template #default="{ row }: { row: DutyLeaseResponse }">
+        <el-table-column label="最新状态" width="110">
+          <template #default="{ row }: { row: DutyAgentLatestResponse }">
             <el-tag :type="DUTY_LEASE_STATUS_MAP[row.status]?.type || 'info'" size="small">
               {{ DUTY_LEASE_STATUS_MAP[row.status]?.label || row.status }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="开始时间" width="170">
+        <el-table-column prop="sessionId" label="最新会话" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="workMode" label="模式" width="90" />
+        <el-table-column label="并发上限" width="90" align="center">
+          <template #default="{ row }">
+            <span v-if="row.maxConcurrent == null">—</span>
+            <span v-else>{{ row.maxConcurrent }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="开始时间" width="160">
           <template #default="{ row }">{{ fmtTime(row.startedAt) }}</template>
         </el-table-column>
-        <el-table-column label="续约时间" width="170">
+        <el-table-column label="续约时间" width="160">
           <template #default="{ row }">{{ fmtTime(row.lastRenewedAt) }}</template>
         </el-table-column>
-        <el-table-column label="过期时间" width="170">
+        <el-table-column label="过期时间" width="160">
           <template #default="{ row }">{{ fmtTime(row.expiresAt) }}</template>
         </el-table-column>
-        <el-table-column prop="closeReason" label="关闭原因" min-width="160" show-overflow-tooltip>
+        <el-table-column label="租约总数" width="90" align="center">
+          <template #default="{ row }">{{ row.leaseCount }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="90" fixed="right">
           <template #default="{ row }">
-            <span v-if="!row.closeReason" class="muted">—</span>
-            <span v-else>{{ row.closeReason }}</span>
+            <el-button size="small" link type="primary" @click="openHistory(row)">更多</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -100,42 +68,34 @@
         style="margin-top: 16px; text-align: center"
       />
     </el-card>
+
+    <DutyLeaseHistoryDialog
+      v-model="historyVisible"
+      :agent-id="historyAgentId"
+      :agent-name="historyAgentName"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { dutyApi } from '@/api/duty'
-import { DUTY_LEASE_STATUS_MAP, type DutyLeaseResponse, type DutyLeaseStatus } from '@/types/duty'
+import { DUTY_LEASE_STATUS_MAP, type DutyAgentLatestResponse } from '@/types/duty'
+import type { LongId } from '@/types'
 import { fmtTime } from '@/utils/tableConfig'
+import DutyLeaseHistoryDialog from './components/DutyLeaseHistoryDialog.vue'
 
-const list = ref<DutyLeaseResponse[]>([])
+const list = ref<DutyAgentLatestResponse[]>([])
 const total = ref(0)
 const pageSize = ref(20)
 const currentPage = ref(1)
 const loading = ref(false)
 
-const filter = reactive<{
-  status: DutyLeaseStatus | null
-  agentId: number | null
-}>({
-  status: null,
-  agentId: null
-})
-
 async function load(page = 1) {
   loading.value = true
   currentPage.value = page
   try {
-    const params: Record<string, any> = {
-      page,
-      size: pageSize.value
-    }
-    if (filter.status) params.status = filter.status
-    if (filter.agentId != null && String(filter.agentId).trim() !== '') {
-      params.agentId = filter.agentId
-    }
-    const res = await dutyApi.list(params)
+    const res = await dutyApi.listByAgent({ page, size: pageSize.value })
     list.value = res?.list || []
     total.value = res?.total || 0
   } finally {
@@ -143,53 +103,33 @@ async function load(page = 1) {
   }
 }
 
+// ── 单 Agent 历史租约（分页对话框）──
+const historyVisible = ref(false)
+const historyAgentId = ref<LongId | null>(null)
+const historyAgentName = ref<string | null>(null)
+function openHistory(row: DutyAgentLatestResponse) {
+  historyAgentId.value = row.agentId
+  historyAgentName.value = row.agentName
+  historyVisible.value = true
+}
+
 onMounted(() => load(1))
 </script>
 
 <style scoped>
-.page {
-  max-width: var(--ha-content-width);
-}
-
+.page { max-width: var(--ha-content-width); }
 .card-header {
   display: flex;
-  align-items: center;
   justify-content: space-between;
-}
-
-.filter-bar {
-  display: flex;
   align-items: center;
-  gap: 16px;
-  margin-bottom: 16px;
-  flex-wrap: wrap;
 }
-
-.filter-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.filter-label {
-  font-size: 13px;
-  color: var(--ha-muted);
-  white-space: nowrap;
-}
-
 .agent-name {
-  font-weight: 500;
+  font-weight: 600;
   color: var(--ha-ink);
-  margin-right: 6px;
+  margin-right: 8px;
 }
-
 .agent-id {
   font-size: 12px;
-  color: var(--ha-muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-}
-
-.muted {
-  color: var(--ha-muted);
+  color: var(--ha-ink-secondary);
 }
 </style>

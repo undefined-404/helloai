@@ -2,7 +2,9 @@ package com.helloai.core.task.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.helloai.core.task.entity.TaskTimeline;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
 
 /**
  * TaskTimeline Mapper。
@@ -12,4 +14,8 @@ import org.apache.ibatis.annotations.Mapper;
  */
 @Mapper
 public interface TaskTimelineMapper extends BaseMapper<TaskTimeline> {
+
+    /** 物理删除某任务的全部时间线审计记录（仅供任务级联删除使用）。 */
+    @Delete("DELETE FROM task_timeline WHERE task_id = #{taskId}")
+    int physicalDeleteByTaskId(@Param("taskId") Long taskId);
 }

@@ -21,6 +21,7 @@ import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -29,6 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -257,5 +259,111 @@ class SubTaskDispatchServiceTest {
 
         verify(agentSelector).pickAlternative(11L, AgentRole.EXECUTOR);
         verify(resilientDispatcher, never()).assignNext(any(), any());
+    }
+
+    // ══════════════════════════════════════════════════════════
+    //  V25 死信：熔断达阈值 → DEAD_LETTER；人工兜底 redispatchDeadLetter
+    // ══════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("V25: dispatchPendingSubTaskAuto 达熔断阈值 → 置 DEAD_LETTER 且不再选人")
+    void shouldMoveToDeadLetterWhenReassignAttemptsExceeded() {
+        when(agentDispatchProperties.getMaxReassignAttempts()).thenReturn(5);
+
+        SubTask subTask = new SubTask();
+        subTask.setId(81L);
+        subTask.setTaskId(91L);
+        subTask.setStatus(SubTaskStatus.PENDING);
+        subTask.setReassignAttemptCount(5);
+        when(subTaskService.getById(81L)).thenReturn(subTask);
+
+        Long result = subTaskDispatchService.dispatchPendingSubTaskAuto(81L, AgentRole.EXECUTOR);
+
+        assertThat(result).isNull();
+        verify(subTaskService).changeStatus(81L, SubTaskStatus.DEAD_LETTER, null,
+                Map.of("dead_letter_reason", "reassign_attempt_exceeded",
+                        "reassign_attempt_count", "5",
+                        "max_reassign_attempts", "5"));
+        verify(taskTimelineService).recordEvent(
+                91L,
+                81L,
+                "sub_task_dead_letter",
+                AgentRole.SYSTEM,
+                null,
+                Map.of("reason", "reassign_attempt_exceeded",
+                        "reassign_attempt_count", 5,
+                        "max_reassign_attempts", 5));
+        verify(agentSelector, never()).pickPreferred(any());
+        verify(resilientDispatcher, never()).assignNext(any(), any());
+    }
+
+    @Test
+    @DisplayName("V25: 未达阈值 → 计数累加后正常进入调度链")
+    void shouldIncrementCountAndDispatchWhenBelowThreshold() {
+        when(agentDispatchProperties.getMaxReassignAttempts()).thenReturn(5);
+
+        SubTask subTask = new SubTask();
+        subTask.setId(82L);
+        subTask.setTaskId(92L);
+        subTask.setStatus(SubTaskStatus.PENDING);
+        subTask.setReassignAttemptCount(2);
+        when(subTaskService.getById(82L)).thenReturn(subTask);
+
+        Agent preferred = new Agent();
+        preferred.setId(99L);
+        when(agentSelector.pickPreferred(AgentRole.EXECUTOR)).thenReturn(preferred);
+
+        Long result = subTaskDispatchService.dispatchPendingSubTaskAuto(82L, AgentRole.EXECUTOR);
+
+        assertThat(result).isEqualTo(99L);
+        verify(subTaskMapper).incrementReassignAttemptCount(eq(82L), any(OffsetDateTime.class));
+        verify(subTaskService, never()).changeStatus(anyLong(), any(), any(), any());
+        verify(resilientDispatcher).assignNext(99L, 82L);
+    }
+
+    @Test
+    @DisplayName("V25: redispatchDeadLetter 清零计数并直接指派 ASSIGNED")
+    void shouldResetCountAndAssignWhenRedispatchDeadLetter() {
+        SubTask subTask = new SubTask();
+        subTask.setId(83L);
+        subTask.setTaskId(93L);
+        subTask.setStatus(SubTaskStatus.DEAD_LETTER);
+        when(subTaskService.getById(83L)).thenReturn(subTask);
+
+        Agent agent = new Agent();
+        agent.setId(15L);
+        agent.setName("manual-agent");
+        when(agentService.getById(15L)).thenReturn(agent);
+
+        subTaskDispatchService.redispatchDeadLetter(83L, 15L);
+
+        verify(subTaskMapper).resetReassignAttemptCount(eq(83L), any(OffsetDateTime.class));
+        verify(subTaskService).changeStatus(83L, SubTaskStatus.ASSIGNED, 15L);
+        verify(taskTimelineService).recordEvent(
+                93L,
+                83L,
+                "sub_task_dead_letter_manual_assign",
+                AgentRole.SYSTEM,
+                15L,
+                Map.of("trigger", "manual_dead_letter_redispatch",
+                        "assignedAgentId", 15L,
+                        "agentName", "manual-agent"));
+    }
+
+    @Test
+    @DisplayName("V25: 非 DEAD_LETTER 状态调用 redispatchDeadLetter → BizException")
+    void shouldThrowWhenRedispatchNonDeadLetter() {
+        SubTask subTask = new SubTask();
+        subTask.setId(84L);
+        subTask.setTaskId(94L);
+        subTask.setStatus(SubTaskStatus.ASSIGNED);
+        when(subTaskService.getById(84L)).thenReturn(subTask);
+
+        assertThatThrownBy(() -> subTaskDispatchService.redispatchDeadLetter(84L, 15L))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("DEAD_LETTER");
+
+        verify(subTaskMapper, never()).resetReassignAttemptCount(anyLong(), any());
+        verify(subTaskService, never()).changeStatus(anyLong(), any(), anyLong());
     }
 }

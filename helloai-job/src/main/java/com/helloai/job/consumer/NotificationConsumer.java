@@ -2,6 +2,9 @@ package com.helloai.job.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.core.agent.service.AgentInboxService;
+import com.helloai.core.task.service.ReviewService;
+import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskService;
 import com.helloai.mq.config.RabbitMQConfig;
 import com.helloai.mq.consumer.AbstractIdempotentConsumer;
 import com.helloai.mq.service.MessageDeduplicationService;
@@ -22,12 +25,21 @@ import java.util.Map;
 public class NotificationConsumer extends AbstractIdempotentConsumer {
 
     private final AgentInboxService agentInboxService;
+    private final TaskService taskService;
+    private final SubTaskService subTaskService;
+    private final ReviewService reviewService;
 
     public NotificationConsumer(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper,
                                  MessageDeduplicationService deduplicationService,
-                                 AgentInboxService agentInboxService) {
+                                 AgentInboxService agentInboxService,
+                                 TaskService taskService,
+                                 SubTaskService subTaskService,
+                                 ReviewService reviewService) {
         super(jdbcTemplate, objectMapper, deduplicationService);
         this.agentInboxService = agentInboxService;
+        this.taskService = taskService;
+        this.subTaskService = subTaskService;
+        this.reviewService = reviewService;
     }
 
     @SuppressWarnings("unchecked")
@@ -58,10 +70,30 @@ public class NotificationConsumer extends AbstractIdempotentConsumer {
                 Long refId = toLong(target.get("refId"));
                 String priority = (String) target.getOrDefault("priority", "NORMAL");
 
+                // 防御：目标已被级联删除时丢弃在途通知，避免写入孤儿消息
+                // 误导 Agent 拉取不存在的任务（DB 是唯一事实源，消息只是门铃）
+                if (!refTargetExists(refType, refId)) {
+                    log.info("通知目标已删除，丢弃: eventId={}, refType={}, refId={}", eventId, refType, refId);
+                    continue;
+                }
+
                 agentInboxService.send(agentId, eventId, eventType,
                         title, summary, refType, refId, priority);
             }
         });
+    }
+
+    /** 校验通知引用的业务对象是否仍存在（任务级联删除后的在途消息兜底）。 */
+    private boolean refTargetExists(String refType, Long refId) {
+        if (refType == null || refType.isBlank() || refId == null) {
+            return true;
+        }
+        return switch (refType) {
+            case "task" -> taskService.getById(refId) != null;
+            case "sub_task" -> subTaskService.getById(refId) != null;
+            case "review" -> reviewService.getById(refId) != null;
+            default -> true;
+        };
     }
 
     private Long toLong(Object value) {

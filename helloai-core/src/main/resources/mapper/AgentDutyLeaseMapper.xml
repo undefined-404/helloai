@@ -45,4 +45,32 @@
         LIMIT #{limit}
     </select>
 
+    <!--
+        Agent 维度分页：每个 Agent 取最新一条租约 + 该 Agent 租约总数。
+        DISTINCT ON (agent_id) 配合 ORDER BY agent_id, start_time DESC 取组内最新，
+        外层再按最新租约开始时间倒序（最近上班的 Agent 在前）。
+    -->
+    <select id="selectLatestPerAgent" resultType="com.helloai.core.agent.entity.AgentDutyLeaseLatestRow">
+        SELECT t.*, c.lease_count
+        FROM (
+            SELECT DISTINCT ON (agent_id) *
+            FROM agent_duty_lease
+            WHERE deleted = 0
+            ORDER BY agent_id, start_time DESC, id DESC
+        ) t
+        JOIN (
+            SELECT agent_id, COUNT(*) AS lease_count
+            FROM agent_duty_lease
+            WHERE deleted = 0
+            GROUP BY agent_id
+        ) c ON c.agent_id = t.agent_id
+        ORDER BY t.start_time DESC, t.id DESC
+        LIMIT #{size} OFFSET #{offset}
+    </select>
+
+    <!-- 有租约记录的 Agent 总数（Agent 维度分页的 total）。 -->
+    <select id="countDistinctAgents" resultType="long">
+        SELECT COUNT(DISTINCT agent_id) FROM agent_duty_lease WHERE deleted = 0
+    </select>
+
 </mapper>

@@ -39,6 +39,12 @@ export interface DutyLeaseResponse {
   closeReason: string | null
 }
 
+// Agent 维度值班列表项：每个 Agent 一行（最新租约 + 租约总数）
+export interface DutyAgentLatestResponse extends DutyLeaseResponse {
+  /** 该 Agent 的租约总条数。 */
+  leaseCount: number
+}
+
 export interface DutyOverviewResponse {
   /** 当前值班中（ACTIVE）租约条数，等于在岗 Agent 数。 */
   activeCount: number

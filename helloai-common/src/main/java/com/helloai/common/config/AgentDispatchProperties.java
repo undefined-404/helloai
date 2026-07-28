@@ -55,6 +55,17 @@ public class AgentDispatchProperties {
      */
     private int maxReassignAttempts = 5;
 
+    /**
+     * V25：ASSIGNED 超时未 claim 回收阈值（分钟）。
+     *
+     * <p>子任务 ASSIGNED 后若 update_time 超过本阈值仍无人 claim，
+     * 由 AssignedSubTaskTimeoutTask 回收到 PENDING 并重新进入调度链。
+     * 原为硬编码常量 10 分钟，现提为配置项便于联调时缩短观察周期。</p>
+     *
+     * <p>默认 10 分钟。</p>
+     */
+    private int assignedTimeoutMinutes = 10;
+
     // 注：原 heartbeatFreshMinutes 字段（v2.6 §4.1 2026-07-20）已迁移至
     //     AgentHealthProperties.offlineMinutes，作为 Selector / Reconcile / SQL 回退候选
     //     共用的单一心跳阈值来源。详见 com.helloai.common.config.AgentHealthProperties。

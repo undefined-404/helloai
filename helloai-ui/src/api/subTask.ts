@@ -2,8 +2,10 @@ import request from './request'
 import type { SubTask, ChangeStatusRequest, PageResult, LongId, CreateSubTaskPayload, TaskTimelineItem } from '@/types'
 
 export const subTaskApi = {
-  list(params?: { status?: string; page?: number; size?: number }) {
-    return request.get<any, SubTask[]>('/sub-tasks', { params })
+  // taskId: 按主任务过滤（任务管理页跳转携带），LongId 传 string 防精度丢
+  // 传 page 时后端返回 PageResult 真分页；不传 page 返回全量数组（SKILL.md 外部 Agent 契约）
+  list(params: { taskId?: LongId; status?: string; page: number; pageSize?: number }) {
+    return request.get<any, PageResult<SubTask>>('/sub-tasks', { params })
   },
   // v1.1 修复: LongID 后端已全局序列化为 string，传 string 避免任何 Number() 精度丢
   getById(id: LongId) {

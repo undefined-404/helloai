@@ -131,9 +131,22 @@
         reassign_attempt_count 计所有类型的重分配入口。
         并发安全：UPDATE 同时满足 id + deleted；不依赖读后写。
     -->
-    <update id="incrementReassignAttemptCount">
+        <update id="incrementReassignAttemptCount">
         UPDATE sub_task
         SET reassign_attempt_count = COALESCE(reassign_attempt_count, 0) + 1,
+            update_time = #{now}
+        WHERE id = #{subTaskId}
+          AND deleted = 0
+    </update>
+
+    <!--
+        V25 死信人工兜底：重置 reassign_attempt_count 为 0。
+        仅由 SubTaskDispatchService.redispatchDeadLetter 在人工指派前调用，
+        保证重新投入调度链后熔断计数从头开始。
+    -->
+    <update id="resetReassignAttemptCount">
+        UPDATE sub_task
+        SET reassign_attempt_count = 0,
             update_time = #{now}
         WHERE id = #{subTaskId}
           AND deleted = 0

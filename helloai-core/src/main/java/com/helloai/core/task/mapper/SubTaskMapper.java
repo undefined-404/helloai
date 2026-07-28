@@ -2,6 +2,7 @@ package com.helloai.core.task.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.helloai.core.task.entity.SubTask;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
@@ -41,6 +42,17 @@ public interface SubTaskMapper extends BaseMapper<SubTask> {
      */
     int incrementReassignAttemptCount(@Param("subTaskId") Long subTaskId,
                                       @Param("now") OffsetDateTime now);
+
+    /**
+     * V25：重置 sub_task.reassign_attempt_count 为 0（死信人工兜底）。
+     *
+     * <p>仅由 {@link com.helloai.core.task.service.SubTaskDispatchService#redispatchDeadLetter}
+     * 在人工指派 DEAD_LETTER 子任务前调用，避免重新投入调度链后立即再次熔断。</p>
+     *
+     * @return 1 = 成功重置；0 = 子任务不存在或已删除
+     */
+    int resetReassignAttemptCount(@Param("subTaskId") Long subTaskId,
+                                  @Param("now") OffsetDateTime now);
 
     /**
      * 查询某 Agent 处于 IN_PROGRESS/ASSIGNED/REWORK 的子任务列表（按 id 升序，limit 上限）。
@@ -118,4 +130,8 @@ public interface SubTaskMapper extends BaseMapper<SubTask> {
      * @return 调度链遗留 PENDING 未指派子任务 ID 列表（按 id ASC）
      */
     List<Long> selectPendingUnassignedWithoutActiveExecutionRecord(@Param("limit") int limit);
+
+    /** 物理删除某任务下全部子任务（含 DEAD_LETTER 死信行，仅供任务级联删除使用）。 */
+    @Delete("DELETE FROM sub_task WHERE task_id = #{taskId}")
+    int physicalDeleteByTaskId(@Param("taskId") Long taskId);
 }

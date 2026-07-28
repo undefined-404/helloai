@@ -9,5 +9,7 @@ public enum SubTaskStatus {
     DONE,
     REWORK,
     BLOCKED,
-    CANCELLED
+    CANCELLED,
+    /** 死信：重分配熔断后转入人工兜底池（可人工再指派或放弃，非终态） */
+    DEAD_LETTER
 }

@@ -99,4 +99,14 @@ public interface AgentMapper extends BaseMapper<Agent> {
     List<Agent> selectFallbackCandidates(@Param("threshold") int threshold,
                                          @Param("cooldownCutoff") OffsetDateTime cooldownCutoff,
                                          @Param("lastSeenCutoff") OffsetDateTime lastSeenCutoff);
+
+    /**
+     * 物理删除 Agent（真实 DELETE，绕过 {@code @TableLogic} 逻辑删除改写）。
+     *
+     * <p>仅供 {@code AgentService.deleteAgentCascade} 级联删除使用；
+     * 其余路径一律走 MyBatis-Plus 逻辑删除。</p>
+     *
+     * @return 影响行数；0 表示 Agent 不存在
+     */
+    int physicalDeleteById(@Param("agentId") Long agentId);
 }

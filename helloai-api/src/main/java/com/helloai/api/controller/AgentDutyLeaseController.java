@@ -2,11 +2,13 @@ package com.helloai.api.controller;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.helloai.api.dto.PageResult;
+import com.helloai.api.dto.duty.DutyAgentLatestResponse;
 import com.helloai.api.dto.duty.DutyLeaseResponse;
 import com.helloai.api.dto.duty.DutyOverviewResponse;
 import com.helloai.common.base.R;
 import com.helloai.common.constant.AgentDutyLeaseStatus;
 import com.helloai.core.agent.entity.AgentDutyLease;
+import com.helloai.core.agent.entity.AgentDutyLeaseLatestRow;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -55,6 +57,24 @@ public class AgentDutyLeaseController {
     }
 
     /**
+     * Agent 维度分页：每个 Agent 只展示最新一条租约 + 租约总数。
+     *
+     * <p>"查看某 Agent 全部记录"复用 {@link #list} 的 agentId 过滤 + 分页。</p>
+     */
+    @GetMapping("/by-agent")
+    public R<PageResult<DutyAgentLatestResponse>> listByAgent(
+            @RequestParam(value = "page", defaultValue = "1") long page,
+            @RequestParam(value = "size", defaultValue = "20") long size) {
+        IPage<AgentDutyLeaseLatestRow> result = agentDutyLeaseService.listLatestPerAgent(page, size);
+        Map<Long, String> nameMap = agentDutyLeaseService.getAgentNamesByIds(
+                result.getRecords().stream()
+                        .map(AgentDutyLease::getAgentId)
+                        .filter(Objects::nonNull)
+                        .collect(Collectors.toSet()));
+        return R.ok(PageResult.of(result, row -> toAgentLatestResponse(row, nameMap)));
+    }
+
+    /**
      * 值班租约状态概览（看板顶部卡片数据源）。
      */
     @GetMapping("/overview")
@@ -70,6 +90,29 @@ public class AgentDutyLeaseController {
         resp.setExpiredCount(expired);
         resp.setTotalCount(active + closed + expired);
         return R.ok(resp);
+    }
+
+    private DutyAgentLatestResponse toAgentLatestResponse(AgentDutyLeaseLatestRow row,
+                                                          Map<Long, String> nameMap) {
+        DutyAgentLatestResponse resp = new DutyAgentLatestResponse();
+        resp.setId(row.getId());
+        resp.setAgentId(row.getAgentId());
+        resp.setSessionId(row.getSessionId());
+        resp.setWorkMode(row.getWorkMode());
+        resp.setMaxConcurrent(row.getMaxConcurrent());
+        resp.setStatus(row.getStatus());
+        resp.setStartedAt(row.getStartTime());
+        resp.setLastRenewedAt(row.getLastRenewTime());
+        resp.setExpiresAt(row.getExpireTime());
+        resp.setCloseReason(row.getCloseReason());
+        resp.setLeaseCount(row.getLeaseCount());
+        if (row.getAgentId() != null) {
+            String name = nameMap.get(row.getAgentId());
+            if (name != null) {
+                resp.setAgentName(name);
+            }
+        }
+        return resp;
     }
 
     private DutyLeaseResponse toResponse(AgentDutyLease lease, Map<Long, String> nameMap) {

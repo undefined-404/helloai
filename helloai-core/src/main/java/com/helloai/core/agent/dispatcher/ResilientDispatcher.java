@@ -91,6 +91,13 @@ public class ResilientDispatcher {
                     && (accessType == null || accessType.requiresRuntimeLiveness())) {
                 throw new AgentUnavailableException("Agent 处于 OFFLINE 状态，不可分配: " + agentId, agentId);
             }
+            // V25：心跳新鲜度 fast-fail —— online_status 翻 OFFLINE 依赖 5min 阈值 + 60s 巡检，
+            // 存在"DB 仍 ONLINE 但 Agent 已死"的滞后窗口；对需运行时存活的 Agent（CLI_CLIENT）
+            // 复用 AgentSelector 的心跳新鲜度判断，不新鲜直接走 fallback 选替代 Agent。
+            // API_KEY_LLM / WEB_BROWSER 在 isHeartbeatFresh 内部已豁免。
+            if (!agentSelector.isHeartbeatFresh(agent)) {
+                throw new AgentUnavailableException("Agent 心跳已陈旧（疑似失联），不可分配: " + agentId, agentId);
+            }
 
             log.info("弹性调度分配: agentId={}, subTaskId={}, onlineStatus={}",
                     agentId, subTaskId, onlineStatus);
