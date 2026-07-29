@@ -6,11 +6,14 @@ import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.shared.event.SubTaskSubmittedForReviewEvent;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.service.ExternalAgentFailureTracker;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -39,6 +42,8 @@ public class ExecutionResultHandler {
     private final TaskTimelineService taskTimelineService;
     private final ExternalAgentFailureTracker failureTracker;
     private final AgentService agentService;
+    private final ApplicationEventPublisher applicationEventPublisher;
+    private final ConversationService conversationService;
 
     @Transactional(rollbackFor = Exception.class)
     public void handleSuccess(Long subTaskId, Long agentId, AgentResult result) {
@@ -138,6 +143,25 @@ public class ExecutionResultHandler {
         subTask.setContext(ctx);
         subTaskService.updateById(subTask);
 
+        // 对话流增量副本：执行产出/失败原因写入 conversation_message，
+        // INTERNAL/EXTERNAL 上报共用本入口；REQUIRES_NEW 独立事务 + try/catch，失败不阻断主链路
+        try {
+            if (report.isSuccess()) {
+                conversationService.addMessage(report.getSubTaskId(), report.getAgentId(),
+                        "assistant", "agent",
+                        report.getOutput() != null ? report.getOutput() : "",
+                        "sub_task_execute");
+            } else {
+                conversationService.addMessage(report.getSubTaskId(), report.getAgentId(),
+                        "assistant", "agent",
+                        report.getError() != null ? report.getError() : "unknown_error",
+                        "sub_task_execute_failed");
+            }
+        } catch (Exception e) {
+            log.warn("执行对话流写入失败（不阻断主链路）: subTaskId={}, err={}",
+                    report.getSubTaskId(), e.getMessage());
+        }
+
         if (report.isSuccess()) {
             subTaskService.submit(report.getSubTaskId());
             taskTimelineService.recordEvent(
@@ -152,6 +176,10 @@ public class ExecutionResultHandler {
                             "executor", report.getExecutorName(),
                             "tokens", report.getTokenUsage(),
                             "idempotencyKey", report.getIdempotencyKey()));
+            // V27 核验门控：事务提交后异步触发 LLM 自动核验（AFTER_COMMIT 监听），
+            // 核验 LLM 调用不阻塞结果回报事务；是否启用由监听侧按配置判定
+            applicationEventPublisher.publishEvent(
+                    new SubTaskSubmittedForReviewEvent(report.getSubTaskId(), report.getAgentId()));
         } else {
             subTaskService.block(report.getSubTaskId());
             taskTimelineService.recordEvent(

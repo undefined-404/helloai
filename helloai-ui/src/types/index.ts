@@ -73,6 +73,8 @@ export interface SubTask {
   assignedAgent: LongId | null
   assignedAgentName?: string
   content: string
+  // V27 依赖编排：前置子任务 id 列表（全部 DONE 才分发），旧数据为空数组
+  dependsOn?: LongId[]
   context: Record<string, any> | null
   scoreFactors: Record<string, any> | null
   compositeScore: number | null
@@ -277,6 +279,19 @@ export interface TaskTimelineItem {
   role: string | null
   agentId: LongId | null
   payload: Record<string, any> | null
+  createTime: string
+}
+
+// V28 子任务执行对话流（GET /sub-tasks/{id}/conversation），toolName 区分消息来源
+export interface ConversationMessageItem {
+  id: LongId
+  role: string
+  senderType: string
+  senderId: LongId | null
+  content: string
+  contentType: string | null
+  toolName: string | null
+  seq: number
   createTime: string
 }
 

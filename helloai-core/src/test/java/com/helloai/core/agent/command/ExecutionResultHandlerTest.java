@@ -43,6 +43,9 @@ class ExecutionResultHandlerTest {
     @Mock
     private AgentService agentService;
 
+    @Mock
+    private org.springframework.context.ApplicationEventPublisher applicationEventPublisher;
+
     @InjectMocks
     private ExecutionResultHandler executionResultHandler;
 

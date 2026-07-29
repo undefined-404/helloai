@@ -1,5 +1,5 @@
 import request from './request'
-import type { SubTask, ChangeStatusRequest, PageResult, LongId, CreateSubTaskPayload, TaskTimelineItem } from '@/types'
+import type { SubTask, ChangeStatusRequest, PageResult, LongId, CreateSubTaskPayload, TaskTimelineItem, ConversationMessageItem } from '@/types'
 
 export const subTaskApi = {
   // taskId: 按主任务过滤（任务管理页跳转携带），LongId 传 string 防精度丢
@@ -22,6 +22,14 @@ export const subTaskApi = {
   // M4.5: 子任务执行时间线（SubTaskDetail 轮询使用）
   timeline(id: LongId) {
     return request.get<any, TaskTimelineItem[]>(`/sub-tasks/${id}/timeline`)
+  },
+  // V28: 子任务执行对话流（执行产出全文 + 核验 Prompt/分析原文）
+  conversation(id: LongId) {
+    return request.get<any, ConversationMessageItem[]>(`/sub-tasks/${id}/conversation`)
+  },
+  // V25: 死信人工兜底指派（DEAD_LETTER → ASSIGNED，熔断计数清零）
+  redispatchDeadLetter(id: LongId, agentId: LongId) {
+    return request.post(`/sub-tasks/dead-letter/redispatch/${id}`, { agentId })
   },
   changeStatus(data: ChangeStatusRequest) {
     return request.post('/sub-tasks/change-status', data)

@@ -93,4 +93,34 @@ public class ReviewService extends ServiceImpl<ReviewRecordMapper, ReviewRecord>
                 .eq(ReviewRecord::getSubTaskId, subTaskId)
                 .orderByAsc(ReviewRecord::getRound));
     }
+
+    /**
+     * 自动核验落库（仅记录，不做状态流转、不做奖励加减分）。
+     *
+     * <p>与 {@link #createReview} 的分工：自动核验链路由 SubTaskReviewService
+     * 自己负责 complete/rework，本方法只把判定结果写进 review_record，
+     * 使自动核验与人工审查同表可查；{@code remark="AUTO_REVIEW"} 标记来源。</p>
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ReviewRecord recordAutoReview(Long subTaskId, Long reviewerAgentId,
+                                          ReviewResult result, int score,
+                                          String issues, String comment) {
+        long round = count(new LambdaQueryWrapper<ReviewRecord>()
+                .eq(ReviewRecord::getSubTaskId, subTaskId)) + 1;
+
+        ReviewRecord record = new ReviewRecord();
+        record.setSubTaskId(subTaskId);
+        record.setReviewerAgentId(reviewerAgentId);
+        record.setResult(result);
+        record.setScore(score);
+        record.setIssues(issues);
+        record.setComment(comment);
+        record.setRound((int) round);
+        record.setRemark("AUTO_REVIEW");
+        save(record);
+
+        log.info("自动核验落库: subTaskId={}, result={}, score={}, round={}",
+                subTaskId, result.name(), score, round);
+        return record;
+    }
 }

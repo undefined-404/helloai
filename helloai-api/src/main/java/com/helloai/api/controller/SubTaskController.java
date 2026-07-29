@@ -3,6 +3,7 @@ package com.helloai.api.controller;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.helloai.api.dto.PageResult;
+import com.helloai.api.dto.subtask.ConversationMessageItem;
 import com.helloai.api.dto.subtask.CreateSubTaskRequest;
 import com.helloai.api.dto.subtask.ReassignRequest;
 import com.helloai.api.dto.subtask.ReworkRequest;
@@ -13,6 +14,8 @@ import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.ExecutionCommand;
+import com.helloai.core.agent.entity.ConversationMessage;
+import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.entity.TaskTimeline;
@@ -50,6 +53,7 @@ public class SubTaskController {
     private final HttpServletRequest request;
     private final AgentDispatchProperties agentDispatchProperties;
     private final TaskTimelineService taskTimelineService;
+    private final ConversationService conversationService;
 
     @PostMapping
     public R<SubTaskResponse> create(@Valid @RequestBody CreateSubTaskRequest req) {
@@ -101,6 +105,19 @@ public class SubTaskController {
         return R.ok(items);
     }
 
+    /**
+     * 子任务执行对话流（V28 对话流可观测）。
+     *
+     * <p>按 seq 升序返回执行产出全文与自动核验的 Prompt / 分析原文，
+     * 来源由 toolName 区分；只做实体→DTO 映射，不含编排。</p>
+     */
+    @GetMapping("/{id}/conversation")
+    public R<List<ConversationMessageItem>> conversation(@PathVariable("id") Long id) {
+        List<ConversationMessage> rows = conversationService.getMessages(id);
+        List<ConversationMessageItem> items = rows.stream().map(this::toConversationItem).toList();
+        return R.ok(items);
+    }
+
     /** 从 CreateSubTaskRequest 装配 SubTask 实体（Controller 唯一装配点）。 */
     private SubTask toEntity(CreateSubTaskRequest req) {
         SubTask subTask = new SubTask();
@@ -124,6 +141,20 @@ public class SubTaskController {
         it.setAgentId(e.getAgentId());
         it.setPayload(e.getPayload());
         it.setCreateTime(e.getCreateTime());
+        return it;
+    }
+
+    private ConversationMessageItem toConversationItem(ConversationMessage m) {
+        ConversationMessageItem it = new ConversationMessageItem();
+        it.setId(m.getId());
+        it.setRole(m.getRole());
+        it.setSenderType(m.getSenderType());
+        it.setSenderId(m.getSenderId());
+        it.setContent(m.getContent());
+        it.setContentType(m.getContentType());
+        it.setToolName(m.getToolName());
+        it.setSeq(m.getSeq());
+        it.setCreateTime(m.getCreateTime());
         return it;
     }
 
@@ -343,6 +374,7 @@ public class SubTaskController {
         response.setAssignedAgent(subTask.getAssignedAgentId());
         response.setContent(subTask.getContent());
         response.setReworkCount(subTask.getReworkCount());
+        response.setDependsOn(subTask.dependsOnIdList());
         response.setDeadline(subTask.getDeadline());
         response.setCompletedAt(subTask.getCompleteTime());
         response.setCreateTime(subTask.getCreateTime());

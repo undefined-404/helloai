@@ -27,6 +27,11 @@
           <el-icon><Document /></el-icon>
           <span>子任务</span>
         </el-menu-item>
+        <!-- V25 死信池：复用子任务列表页 + 状态筛选，不建独立页面 -->
+        <el-menu-item index="/sub-tasks?status=DEAD_LETTER">
+          <el-icon><Warning /></el-icon>
+          <span>死信池</span>
+        </el-menu-item>
         <el-menu-item index="/agents">
           <el-icon><User /></el-icon>
           <span>Agent管理</span>
@@ -159,7 +164,7 @@
 import { computed, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowDown, Clock, Expand, Fold } from '@element-plus/icons-vue'
+import { ArrowDown, Clock, Expand, Fold, Warning } from '@element-plus/icons-vue'
 import { authApi } from '@/api/auth'
 
 const route = useRoute()
@@ -180,7 +185,10 @@ const passwordForm = reactive({
 
 const activeMenu = computed(() => {
   const path = route.path
-  if (path.startsWith('/sub-tasks')) return '/sub-tasks'
+  if (path.startsWith('/sub-tasks')) {
+    // 死信池菜单与子任务菜单同路由，按 query.status 区分高亮
+    return route.query.status === 'DEAD_LETTER' ? '/sub-tasks?status=DEAD_LETTER' : '/sub-tasks'
+  }
   return path
 })
 

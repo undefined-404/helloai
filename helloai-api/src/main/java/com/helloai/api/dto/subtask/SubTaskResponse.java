@@ -4,6 +4,7 @@ import com.helloai.common.constant.SubTaskStatus;
 import lombok.Data;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 
 @Data
 public class SubTaskResponse {
@@ -20,6 +21,8 @@ public class SubTaskResponse {
     private Long assignedAgent;
     private String content;
     private Integer reworkCount;
+    /** 依赖的子任务 id 列表（V27 新增，同 Task 内；空列表=无依赖） */
+    private List<Long> dependsOn;
     private OffsetDateTime deadline;
     private OffsetDateTime completedAt;
     private OffsetDateTime createTime;

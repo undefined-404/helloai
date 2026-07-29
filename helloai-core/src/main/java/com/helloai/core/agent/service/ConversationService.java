@@ -6,6 +6,7 @@ import com.helloai.core.agent.mapper.ConversationMessageMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
@@ -21,12 +22,17 @@ import java.util.UUID;
 public class ConversationService extends ServiceImpl<ConversationMessageMapper, ConversationMessage> {
 
     /**
-     * 向子任务对话追加一条消息
+     * 向子任务对话追加一条消息。
+     *
+     * <p>REQUIRES_NEW 独立事务：对话流是主链路的增量副本，
+     * 写入失败由调用方 try/catch 记 warn，绝不阻断执行/核验主事务。</p>
+     *
+     * @param toolName 消息来源标记（如 sub_task_execute / subtask_review_prompt），可为 null
      */
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
     public ConversationMessage addMessage(Long subTaskId, Long senderId,
                                            String role, String senderType,
-                                           String content) {
+                                           String content, String toolName) {
         // 计算下一个序号
         ConversationMessage lastMsg = lambdaQuery()
                 .eq(ConversationMessage::getSubTaskId, subTaskId)
@@ -43,6 +49,7 @@ public class ConversationService extends ServiceImpl<ConversationMessageMapper, 
         msg.setSenderId(senderId);
         msg.setContent(content);
         msg.setContentType("text");
+        msg.setToolName(toolName);
         msg.setSeq(nextSeq);
         save(msg);
 

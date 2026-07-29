@@ -27,6 +27,34 @@
       </el-descriptions>
     </el-card>
 
+    <!-- V28: 执行对话流（执行产出全文 + 核验 Prompt/分析原文） -->
+    <el-card v-if="item" style="margin-top:16px">
+      <template #header>
+        <div class="card-header">
+          <span>执行对话流</span>
+          <span style="font-size:12px;color:var(--ha-muted)">共 {{ conversation.length }} 条</span>
+        </div>
+      </template>
+      <el-empty v-if="!conversation.length" description="暂无对话消息" />
+      <div v-else class="conv-list">
+        <div v-for="msg in conversation" :key="msg.id" class="conv-item">
+          <div class="conv-head">
+            <el-tag size="small" :type="convTagType(msg.toolName)">{{ convTagLabel(msg.toolName) }}</el-tag>
+            <span class="conv-meta">
+              #{{ msg.seq }} · {{ msg.role }}/{{ msg.senderType }}<template v-if="msg.senderId"> · agent={{ msg.senderId }}</template>
+              · {{ fmtTime(msg.createTime) }}
+            </span>
+          </div>
+          <el-collapse v-if="msg.content.length > 300" class="conv-collapse">
+            <el-collapse-item :title="msg.content.slice(0, 100) + '…（展开全文 ' + msg.content.length + ' 字）'" name="c">
+              <pre class="conv-content">{{ msg.content }}</pre>
+            </el-collapse-item>
+          </el-collapse>
+          <pre v-else class="conv-content">{{ msg.content || '-' }}</pre>
+        </div>
+      </div>
+    </el-card>
+
     <!-- M4.5: 执行时间线（M5 联调可视化） -->
     <el-card v-if="item" style="margin-top:16px">
       <template #header>
@@ -68,13 +96,14 @@ import { ElMessage } from 'element-plus'
 import { subTaskApi } from '@/api/subTask'
 import { SUB_TASK_STATUS_MAP, SCORE_GRADE_MAP } from '@/types'
 import { fmtTime } from '@/utils/tableConfig'
-import type { SubTask, TaskTimelineItem } from '@/types'
+import type { SubTask, TaskTimelineItem, ConversationMessageItem } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
 const item = ref<SubTask | null>(null)
 const loading = ref(false)
 const timeline = ref<TaskTimelineItem[]>([])
+const conversation = ref<ConversationMessageItem[]>([])
 let pollTimer: number | null = null
 const timelinePolling = ref(false)
 
@@ -91,6 +120,22 @@ function eventTypeColor(eventType: string): '' | 'success' | 'warning' | 'danger
   if (eventType.includes('blocked') || eventType.includes('rejected') || eventType.includes('failed')) return 'danger'
   if (eventType.includes('paused') || eventType.includes('warning')) return 'warning'
   return 'info'
+}
+
+// V28: 对话流消息来源标签（toolName → 展示文案/颜色）
+const CONV_TAG_MAP: Record<string, { label: string; type: 'success' | 'danger' | 'info' | 'warning' }> = {
+  sub_task_execute: { label: '执行产出', type: 'success' },
+  sub_task_execute_failed: { label: '执行失败', type: 'danger' },
+  subtask_review_prompt: { label: '核验请求', type: 'info' },
+  subtask_review_verdict: { label: '核验分析', type: 'warning' }
+}
+
+function convTagLabel(toolName: string | null) {
+  return (toolName && CONV_TAG_MAP[toolName]?.label) || toolName || '消息'
+}
+
+function convTagType(toolName: string | null) {
+  return (toolName && CONV_TAG_MAP[toolName]?.type) || 'info'
 }
 
 async function loadDetail(id: string) {
@@ -112,10 +157,19 @@ async function loadTimeline(id: string) {
   }
 }
 
+async function loadConversation(id: string) {
+  try {
+    conversation.value = await subTaskApi.conversation(id)
+  } catch (e) {
+    // 对话流拉取失败不影响主流程
+  }
+}
+
 async function pollOnce() {
   const id = String(route.params.id)
   const fresh = await loadDetail(id)
   await loadTimeline(id)
+  await loadConversation(id)
   if (fresh && TERMINAL_STATUSES.includes(fresh.status)) {
     stopPolling()
   }
@@ -142,6 +196,7 @@ onMounted(async () => {
     const id = String(route.params.id)
     await loadDetail(id)
     await loadTimeline(id)
+    await loadConversation(id)
     // 进入页面时启动 5s 轮询；进入终态后停止
     if (item.value && !TERMINAL_STATUSES.includes(item.value.status)) {
       startPolling()
@@ -169,6 +224,23 @@ onBeforeUnmount(() => {
   border-radius: 4px;
   font-size: 12px;
   line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* V28: 执行对话流 */
+.conv-list { display: flex; flex-direction: column; gap: 12px; }
+.conv-item { border: 1px solid var(--ha-border, rgba(255,255,255,0.08)); border-radius: 6px; padding: 10px 12px; }
+.conv-head { display: flex; align-items: center; gap: 8px; }
+.conv-meta { color: var(--ha-muted); font-size: 12px; }
+.conv-collapse { margin-top: 6px; }
+.conv-content {
+  margin: 6px 0 0;
+  padding: 8px 12px;
+  background: var(--ha-surface);
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-all;
 }

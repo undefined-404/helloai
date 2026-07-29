@@ -59,6 +59,8 @@
               <el-button v-if="row.status==='PENDING'" size="small" type="primary" @click="handleClaim(row)">认领</el-button>
               <el-button v-if="row.status==='IN_PROGRESS'" size="small" type="warning" @click="handlePause(row)">暂停</el-button>
               <el-button v-if="row.status==='PAUSED'" size="small" type="success" @click="handleResume(row)">恢复</el-button>
+              <!-- V25 死信人工兜底：重新指派给指定 Agent（DEAD_LETTER → ASSIGNED） -->
+              <el-button v-if="row.status==='DEAD_LETTER'" size="small" type="danger" @click="handleRedispatch(row)">重新指派</el-button>
             </div>
           </template>
         </el-table-column>
@@ -83,6 +85,22 @@
         <template #footer>
           <el-button @click="claimDialog.visible = false">取消</el-button>
           <el-button type="primary" :loading="claimDialog.loading" :disabled="!claimDialog.agentId" @click="doClaim">确认认领</el-button>
+        </template>
+      </el-dialog>
+
+      <!-- 死信重新指派弹窗：复用 AgentSelect 选目标 Agent -->
+      <el-dialog v-model="redispatchDialog.visible" title="死信重新指派" width="420px" top="5vh" append-to-body>
+        <el-form label-width="100px">
+          <el-form-item label="子任务">
+            <span>{{ redispatchDialog.row?.title || '-' }}</span>
+          </el-form-item>
+          <el-form-item label="目标 Agent">
+            <AgentSelect v-model="redispatchDialog.agentId" placeholder="选择重新指派的 Agent" />
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="redispatchDialog.visible = false">取消</el-button>
+          <el-button type="primary" :loading="redispatchDialog.loading" :disabled="!redispatchDialog.agentId" @click="doRedispatch">确认指派</el-button>
         </template>
       </el-dialog>
 
@@ -116,6 +134,8 @@ const statusFilter = ref<SubTaskStatus | ''>('')
 const dispatchVisible = ref(false)
 // 路由 query 中的主任务 ID（LongId 保持 string，不转 Number 防精度丢）
 const taskId = computed(() => (route.query.taskId ? String(route.query.taskId) : ''))
+// 路由 query 中的状态筛选（死信池菜单跳 /sub-tasks?status=DEAD_LETTER 复用本页）
+const statusQuery = computed(() => (route.query.status ? String(route.query.status) : ''))
 const parentTask = ref<Task | null>(null)
 
 async function loadParentTask() {
@@ -147,6 +167,8 @@ function clearTaskFilter() { router.replace('/sub-tasks') }
 
 // 同页面内 taskId 变化（如清除筛选 / 从不同主任务进入）时联动刷新
 watch(taskId, () => { loadParentTask(); load() })
+// 同页面内 status query 变化（子任务菜单 ↔ 死信池菜单切换）时同步筛选并刷新
+watch(statusQuery, (v) => { statusFilter.value = (v as SubTaskStatus) || ''; load(1) })
 
 const claimDialog = reactive<{ visible: boolean; loading: boolean; agentId: string | number | null; row: SubTask | null }>({
   visible: false, loading: false, agentId: null, row: null,
@@ -186,8 +208,35 @@ async function handleResume(row: SubTask) {
   } catch {}
 }
 
+// V25 死信人工兜底：重新指派（后端清熔断计数并转 ASSIGNED）
+const redispatchDialog = reactive<{ visible: boolean; loading: boolean; agentId: string | number | null; row: SubTask | null }>({
+  visible: false, loading: false, agentId: null, row: null,
+})
+
+function handleRedispatch(row: SubTask) {
+  redispatchDialog.row = row
+  redispatchDialog.agentId = null
+  redispatchDialog.visible = true
+}
+
+async function doRedispatch() {
+  if (!redispatchDialog.row || !redispatchDialog.agentId) return
+  redispatchDialog.loading = true
+  try {
+    await subTaskApi.redispatchDeadLetter(redispatchDialog.row.id, redispatchDialog.agentId)
+    ElMessage.success('重新指派成功')
+    redispatchDialog.visible = false
+    load()
+  } finally { redispatchDialog.loading = false }
+}
+
 function getSubTaskStatusMeta(status: SubTask['status']) { return SUB_TASK_STATUS_MAP[status] }
-onMounted(() => { loadParentTask(); load() })
+onMounted(() => {
+  // 带筛选跳转（死信池菜单）：先用 query.status 初始化筛选再加载
+  if (statusQuery.value) statusFilter.value = statusQuery.value as SubTaskStatus
+  loadParentTask()
+  load()
+})
 </script>
 
 <style scoped>
