@@ -429,6 +429,36 @@ export interface ConversationMessage {
   createTime: string
 }
 
+// V29 对话式需求澄清
+export type RequirementConversationStatus = 'ACTIVE' | 'FINALIZED' | 'ABANDONED'
+
+export interface RequirementConversation {
+  id: LongId
+  title: string
+  status: RequirementConversationStatus
+  taskId: LongId | null
+  finalTitle: string | null
+  finalDescription: string | null
+  roundCount: number
+  createTime: string
+  updateTime: string
+}
+
+export interface RequirementMessage {
+  id: LongId
+  conversationId: LongId
+  role: 'user' | 'assistant'
+  content: string
+  seq: number
+  createTime: string
+}
+
+/** 会话 + 全部消息（create / send / detail 统一返回） */
+export interface ClarifyConversationDetail {
+  conversation: RequirementConversation
+  messages: RequirementMessage[]
+}
+
 export const PROMPT_CATEGORY_MAP: Record<string, string> = {
   ROLE_TEMPLATE: '角色模板',
   AGENT_SPECIALIZATION: 'Agent 专业化',

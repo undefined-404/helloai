@@ -19,6 +19,7 @@ const routes = [
     children: [
       { path: 'dashboard',  component: () => import('@/views/Dashboard.vue'),  meta: { title: '概览' } },
       { path: 'tasks',      component: () => import('@/views/task/TaskList.vue'), meta: { title: '任务管理' } },
+      { path: 'requirement-chat', component: () => import('@/views/requirement/RequirementChat.vue'), meta: { title: '对话新建' } },
       { path: 'sub-tasks',  component: () => import('@/views/subtask/SubTaskList.vue'), meta: { title: '子任务' } },
       { path: 'sub-tasks/:id', component: () => import('@/views/subtask/SubTaskDetail.vue'), meta: { title: '子任务详情' } },
       { path: 'agents',     component: () => import('@/views/agent/AgentList.vue'), meta: { title: 'Agent管理' } },

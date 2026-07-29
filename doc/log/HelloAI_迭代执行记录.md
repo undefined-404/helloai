@@ -2907,3 +2907,49 @@ Planner 角色此前只有枚举定义与一份约 60 行的纯 REST 版 SKILL.m
 - `dependsOn` 在草案审阅中只读展示不可编辑（依赖编辑属演进项）；第二步"对话式需求澄清窗口"已有概要设计，建议本轮验收后单独立项
 
 ---
+
+### 6.19 对话式需求澄清窗口（V29，2026-07-29）
+
+#### 1. 背景
+
+§6.18 收口后拆解链已可视化，但入口仍要求用户一次性写清需求——模糊想法没有承接面。本轮落地"第二步立项"：用户带着半成品想法进对话窗口，LLM 扮演资深需求分析师多轮追问澄清（边界/交付物/验收标准），信息足够即产出终稿，一键创建任务并顺路自动拆解，与 §6.16/§6.18 的拆解审阅链无缝衔接。用户已拍板：独立页面交付（非 TaskList 内嵌）、终稿确认后前端自动调既有 plan 接口。
+
+#### 2. 实际落地
+
+**DB（Flyway V29__requirement_clarify.sql）**
+
+- `requirement_conversation`：title（首条用户消息截断 50 字）/ status `ACTIVE/FINALIZED/ABANDONED` + CHECK / `task_id` **软引用无 FK**（刻意不加入 `deleteTaskCascade` 的 FK 引用面，删任务后允许悬挂，注释注明）/ final_title + final_description（LLM 最近一次终稿暂存，等用户确认）/ round_count（用户消息轮数）；partial 索引 `(status, create_time) WHERE deleted=0`
+- `requirement_message`：conversation_id FK / role CHECK `user/assistant` / content / seq；索引 `(conversation_id, seq)`。两表均照 `V19__agent_command_outbox.sql` 范例：BIGINT 应用侧雪花主键 + 审计列全套 + `update_update_time_column` 触发器 + 逐列 COMMENT
+
+**后端（helloai-core + helloai-api）**
+
+- `core/planner/` 新增 entity（RequirementConversation/RequirementMessage，继承 BaseEntity）+ mapper（两个空 BaseMapper，`HelloAIApplication` @MapperScan 补第四包 `com.helloai.core.planner.mapper`）+ 薄 CRUD `RequirementConversationService`（空 ServiceImpl）/ `RequirementMessageService`（`addMessage` 查最大 seq+1 落库，照 ConversationService.addMessage 范式但不需要 REQUIRES_NEW）
+- `RequirementClarifyService`（编排收口 core，**完整复用 PlannerAnalysisService 五段式**，类不加事务——LLM 耗时不占 DB 事务）：`create`（截断标题建会话 → 走一轮）/ `sendMessage`（requireActive + 轮数上限 20 校验 → doRound：存 user 消息 + round_count+1 → `pickPlannerAgent`（12 行刻意复制不抽象，注释注明）→ transcript 渲染 `prompts/requirement-clarify.md`（占位符 `{{CONVERSATION_HISTORY}}`，`用户：/助手：` 逐行拼接）→ executeSync（context 带 conversationId + scene=requirement_clarify）→ `stripToJsonObject`（照 stripToJsonArray 改花括号版）+ Jackson 解析 `ClarifyReply`——type=question 存 assistant 消息；type=final 存 assistant 消息（空则「已生成终稿」）+ final_title/final_description 回填会话行；LLM/解析失败 user 消息保留、抛 BizException 可重发）/ `finalize`（校验 ACTIVE + 终稿非空 → 建 Task PENDING + best-effort 通知全部 PLANNER 写收件箱（照 TaskController.create 通知段搬 core）→ 会话回填 task_id + FINALIZED → timeline `task_created_from_clarify`）/ `abandon` / `listConversations`（create_time 倒序 LIMIT 50）/ `detail`
+- LLM 输出协议（严格 JSON 单对象禁围栏）：追问 `{"type":"question","message":...}`；终稿 `{"type":"final","title":"50字内","description":"结构化需求","message":"终稿说明"}`；Prompt 引导每轮最多 3 问、信息足够即出终稿
+- `RequirementConversationController`（`/api/requirement-conversations` 六薄端点：POST / 创建、POST /{id}/messages、GET / 列表、GET /{id} 详情、POST /{id}/finalize、POST /{id}/abandon）+ `ClarifyMessageRequest` DTO（@NotBlank）
+
+**前端（helloai-ui）**
+
+- `types/index.ts` 补 RequirementConversationStatus/RequirementConversation/RequirementMessage/ClarifyConversationDetail；`api/clarify.ts` 六方法（create/send 单请求 `timeout: 120_000` 照 taskApi.plan 范式）
+- 新页面 `views/requirement/RequirementChat.vue`：左栏会话列表（新会话按钮 + ABANDONED 置灰）；右栏气泡流（user 右 `--ha-primary-muted` / assistant 左 `--ha-surface-elevated`，全走 design-system 变量）+ 发送中 loading 占位气泡 + Enter 发送；会话有 final_title 即渲染终稿卡片（标题+描述只读，不满意继续对话让 LLM 修正）——ACTIVE 态主按钮「创建任务并自动拆解」：ElMessageBox 确认 → finalize 得 task → 页内 loading 调 `taskApi.plan` → `router.push('/tasks?review={taskId}')`（plan 失败拦截器已弹错、仍跳 /tasks 可手动重拆）；FINALIZED 态只读 + 「查看任务」链接
+- 接线：`router/index.ts` 补 `/requirement-chat` 路由；`MainLayout.vue` 任务管理下加菜单项（ChatDotRound）；`TaskList.vue` 工具栏加「对话新建」按钮 + onMounted 读 `route.query.review` 自动 `openPlanReview`（找不到静默忽略）
+
+#### 3. 测试与验证
+
+- 单测 `RequirementClarifyServiceTest`(13，照 PlannerAnalysisServiceTest 链式 mock 范式)：question/final 双路径、fence 容错、非 JSON 报错、轮数上限、finalize 无终稿拒绝/成功建 task、非 ACTIVE 拒发；`mvn -pl helloai-core -am test`（JDK 17）全绿 BUILD SUCCESS；坑位：`executeSync` 有重载，verify 必须 typed matchers `any(Agent.class), any(AgentTask.class)` 否则 ambiguous 编译错
+- `npx vue-tsc --noEmit` 0 错 + `npm run build` 通过（chunk 警告为既有）
+- **zsh 脚本真实环境 10 步全绿**：`scripts/shell/verify-requirement-clarify.sh`（照 verify-planner-decompose.sh 模板含 STEP2.1 凭证绑定）——创建会话（详尽需求）→ 1 轮追问后推进出终稿「内部日报统计模块开发」（conversationId=2082494629529395201）→ finalize 建 task PENDING（taskId=2082494653785055233）→ 会话 FINALIZED + taskId 回填 → FINALIZED 拒发（code!=200）→ plan 拆解 6 条草案 → abandon 回归 → 列表断言
+- **浏览器闭环实测 8 步全过**（console 0 error）：新会话模糊需求 → LLM 3 条追问 → 补充 → 终稿卡片「团队周报收集与自动汇总工具」→ 创建并拆解 → 跳 `/tasks?review=…` 自动弹 5 条草案审阅 → 会话侧变「已建任务」只读。轻微现象：草案弹窗关闭偶需点两次（疑似动画时序，不影响流程）
+
+#### 4. 影响
+
+- **接口/DB**：新增 V29 两张表 + 六个新端点，既有接口零改动；`deleteTaskCascade` 零改动（task_id 软引用悬挂由产品语义接受）
+- **行为变化**：立项入口从"一次写清"扩展为"对话澄清"，与拆解审阅链（§6.16/§6.18）串成"模糊想法 → 终稿 → 任务 → 草案 → 分发"完整链路
+
+#### 5. 遗留与下一步
+
+- 首期不做（已拍板裁剪）：SSE 流式输出（Doorbell SSE 是 Agent 侧信号通道不可蹭）、终稿手动编辑、会话删除（仅 abandon）、列表分页（LIMIT 50）
+- 草案弹窗关闭偶需点两次的动画时序问题待顺手排查（非本链路引入，§6.18 组件既有）
+- 带附件子任务删除回归仍待造数验证（继承 §6.18 遗留）
+
+---

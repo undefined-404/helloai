@@ -23,6 +23,11 @@
           <el-icon><List /></el-icon>
           <span>任务管理</span>
         </el-menu-item>
+        <!-- V29 对话式需求澄清入口 -->
+        <el-menu-item index="/requirement-chat">
+          <el-icon><ChatDotRound /></el-icon>
+          <span>对话新建</span>
+        </el-menu-item>
         <el-menu-item index="/sub-tasks">
           <el-icon><Document /></el-icon>
           <span>子任务</span>

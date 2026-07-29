@@ -6,6 +6,7 @@
           <span>任务管理</span>
           <div class="header-actions">
             <el-button size="small" type="primary" @click="openCreate">新建</el-button>
+            <el-button size="small" @click="router.push('/requirement-chat')">对话新建</el-button>
             <el-button size="small" @click="load">刷新</el-button>
           </div>
         </div>
@@ -63,7 +64,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { taskApi } from '@/api/task'
 import { fmtTime } from '@/utils/tableConfig'
@@ -73,11 +74,20 @@ import PlanReviewDialog from './components/PlanReviewDialog.vue'
 import { TASK_STATUS_MAP } from '@/types'
 import type { Task, TaskStatus, LongId } from '@/types'
 
+const route = useRoute()
 const router = useRouter()
 const list = ref<any[]>([])
 const loading = ref(false)
 async function load() { loading.value = true; try { list.value = await taskApi.list() } finally { loading.value = false } }
-onMounted(() => load())
+// V29 对话新建跳转带 ?review=taskId 时，加载后自动打开草案审阅（找不到静默忽略）
+onMounted(async () => {
+  await load()
+  const review = route.query.review
+  if (review) {
+    const row = list.value.find(t => String(t.id) === String(review))
+    if (row) openPlanReview(row)
+  }
+})
 
 // ── 新建/编辑 ──
 const formVisible = ref(false)
