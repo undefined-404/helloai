@@ -2889,7 +2889,11 @@ Planner 角色此前只有枚举定义与一份约 60 行的纯 REST 版 SKILL.m
 
 - `mvn -pl helloai-core -am test`（JDK 17）→ 全绿 BUILD SUCCESS（无 deleteTaskCascade 既有单测，无直接构造 TaskService 的测试，构造器变更零破坏）
 - `npx vue-tsc --noEmit` 0 错；`npm run build` 通过（chunk 体积警告为既有问题）
-- 未完成：浏览器闭环实测（新建→拆解→审阅→确认/拒绝）与带附件子任务的删除回归——本轮 6565 后端未启动，待真实环境与 `verify-planner-decompose.ps1`（N16 遗留）同一环境一次收口
+- ~~未完成：浏览器闭环实测（新建→拆解→审阅→确认/拒绝）与带附件子任务的删除回归——本轮 6565 后端未启动~~ → 2026-07-29 同日补验（真实环境 6565 + deepseek）：
+  - **脚本回归**：`verify-planner-decompose.ps1` 等价迁移为 macOS zsh 版 `scripts/shell/verify-planner-decompose.sh`（curl+jq，照 verify-dashboard-duty-leases.sh 模板规范），真实环境 e2e 12 步全绿——confirm 路径拆解 5 条草案全 PENDING_PLAN_REVIEW → Task PLANNING → 确认转正 PENDING/ASSIGNED + Task IN_PROGRESS + 草案清零；reject 路径 cancelledCount 匹配 + Task 回退 PENDING；对 IN_PROGRESS 任务重复拆解被拒
+  - **迁移坑位**：zsh `status` 为只读内置变量（局部变量改名 st）；原 ps1 缺凭证绑定步骤——新注册 planner Agent 无 deepseek 托管凭证时拆解必 500「Agent 未配置启用态托管凭证」，zsh 版补 STEP2.1 绑定 `/api/credentials/agents/{id}/api-key`（env `DEEPSEEK_API_KEY` 优先，缺省回退 application.yml 默认 key，对齐 verify-inner-loop-e2e.ps1 做法）
+  - **浏览器 UI 闭环实测通过**：confirm 路径 `ui-e2e-confirm-01` 拆解 6 条草案（含合理优先级与拓扑依赖）→ 审阅弹窗自动打开 → 确认分发后任务「进行中」；reject 路径 `ui-e2e-reject-01` 4 条草案 → 拒绝重拆 → 回「待规划」且可重拆；拆解期间状态「拆解中」+ 行内「审阅草案」按钮可随时重开弹窗；全程 console 0 error
+  - 仍未覆盖：带附件子任务的删除回归（需造带附件数据，见 §5 遗留）
 
 #### 4. 影响
 
@@ -2899,7 +2903,7 @@ Planner 角色此前只有枚举定义与一份约 60 行的纯 REST 版 SKILL.m
 #### 5. 遗留与下一步
 
 - **孤儿文件**：attachment 行删除后对象存储里的物理文件（bucketName/objectKey）成为孤儿，文件清理需单独立项，与本次 DB 完整性修复解耦
-- 浏览器闭环实测 + `verify-planner-decompose.ps1` 回归待真实环境（6565 后端 + deepseek Provider 可用）
+- ~~浏览器闭环实测 + `verify-planner-decompose.ps1` 回归待真实环境（6565 后端 + deepseek Provider 可用）~~ → 2026-07-29 同日收口（zsh 版脚本 e2e 12 步全绿 + UI 闭环实测通过，见 §3）；带附件子任务删除回归仍待造数验证
 - `dependsOn` 在草案审阅中只读展示不可编辑（依赖编辑属演进项）；第二步"对话式需求澄清窗口"已有概要设计，建议本轮验收后单独立项
 
 ---
