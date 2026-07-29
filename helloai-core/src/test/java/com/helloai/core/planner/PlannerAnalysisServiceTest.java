@@ -5,7 +5,6 @@ import com.baomidou.mybatisplus.extension.conditions.update.LambdaUpdateChainWra
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
-import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
@@ -39,6 +38,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -77,9 +77,6 @@ class PlannerAnalysisServiceTest {
     @Mock
     private SubTaskDispatchService subTaskDispatchService;
 
-    @Mock
-    private AgentDispatchProperties agentDispatchProperties;
-
     private PlannerAnalysisService plannerAnalysisService;
 
     // lambdaQuery / lambdaUpdate 链式 mock（项目内首例：手动 stub 链式返回自身）
@@ -95,7 +92,7 @@ class PlannerAnalysisServiceTest {
         plannerAnalysisService = new PlannerAnalysisService(
                 taskService, subTaskService, agentService, agentSelector,
                 platformAgentExecutionService, taskTimelineService,
-                subTaskDispatchService, agentDispatchProperties, new ObjectMapper());
+                subTaskDispatchService, new ObjectMapper());
 
         lenient().when(subTaskService.lambdaQuery()).thenReturn(subTaskQueryChain);
         lenient().when(subTaskQueryChain.eq(any(), any())).thenReturn(subTaskQueryChain);
@@ -302,7 +299,7 @@ class PlannerAnalysisServiceTest {
     // ══════════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("confirm：草案批量转正 PENDING，Task → IN_PROGRESS，autoAssign 开启时逐条分发")
+    @DisplayName("confirm：草案批量转正 PENDING，Task → IN_PROGRESS，无条件逐条分发")
     void shouldConfirmDraftsAndDispatch() {
         Task task = planningTask();
         when(taskService.getById(TASK_ID)).thenReturn(task);
@@ -310,7 +307,6 @@ class PlannerAnalysisServiceTest {
         when(subTaskService.list(TASK_ID, SubTaskStatus.PENDING_PLAN_REVIEW, null, null, 0))
                 .thenReturn(pageOf(drafts));
         when(subTaskService.getById(anyLong())).thenAnswer(inv -> draft(inv.getArgument(0)));
-        when(agentDispatchProperties.isAutoAssignOnCreate()).thenReturn(true);
 
         List<SubTask> confirmed = plannerAnalysisService.confirmPlan(TASK_ID);
 
@@ -327,17 +323,20 @@ class PlannerAnalysisServiceTest {
     }
 
     @Test
-    @DisplayName("confirm：autoAssign 关闭时不触发分发")
-    void shouldConfirmWithoutDispatchWhenAutoAssignDisabled() {
+    @DisplayName("confirm：单条分发失败不阻断确认与其余分发")
+    void shouldConfirmEvenWhenDispatchFails() {
         when(taskService.getById(TASK_ID)).thenReturn(planningTask());
+        List<SubTask> drafts = List.of(draft(1L), draft(2L));
         when(subTaskService.list(TASK_ID, SubTaskStatus.PENDING_PLAN_REVIEW, null, null, 0))
-                .thenReturn(pageOf(List.of(draft(1L))));
+                .thenReturn(pageOf(drafts));
         when(subTaskService.getById(anyLong())).thenAnswer(inv -> draft(inv.getArgument(0)));
-        when(agentDispatchProperties.isAutoAssignOnCreate()).thenReturn(false);
+        doThrow(new BizException("无可用 Agent"))
+                .when(subTaskDispatchService).dispatchPendingSubTaskAuto(1L, AgentRole.EXECUTOR);
 
-        plannerAnalysisService.confirmPlan(TASK_ID);
+        List<SubTask> confirmed = plannerAnalysisService.confirmPlan(TASK_ID);
 
-        verify(subTaskDispatchService, never()).dispatchPendingSubTaskAuto(anyLong(), any());
+        assertThat(confirmed).hasSize(2);
+        verify(subTaskDispatchService).dispatchPendingSubTaskAuto(2L, AgentRole.EXECUTOR);
     }
 
     @Test
@@ -386,5 +385,51 @@ class PlannerAnalysisServiceTest {
         assertThatThrownBy(() -> plannerAnalysisService.rejectPlan(TASK_ID))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("只有 PLANNING");
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  validateDependencies：依赖环校验（V27）
+    // ════════════════════════════════════════════════════════════
+
+    private PlannerAnalysisService.PlanDraftItem item(List<Integer> dependsOn) {
+        PlannerAnalysisService.PlanDraftItem it = new PlannerAnalysisService.PlanDraftItem();
+        it.setTitle("t");
+        it.setContent("c");
+        it.setDependsOn(dependsOn);
+        return it;
+    }
+
+    @Test
+    @DisplayName("validateDependencies：合法 DAG（链式+汇聚）通过，null/空依赖视为无依赖")
+    void shouldAcceptValidDag() {
+        // 1 ← 2，(1,2) ← 3，4 无依赖
+        List<PlannerAnalysisService.PlanDraftItem> items = List.of(
+                item(null), item(List.of(1)), item(List.of(1, 2)), item(List.of()));
+        plannerAnalysisService.validateDependencies(items); // 不抛即通过
+    }
+
+    @Test
+    @DisplayName("validateDependencies：成环整批拒绝")
+    void shouldRejectCyclicDependencies() {
+        // 1→2→3→1 成环
+        List<PlannerAnalysisService.PlanDraftItem> items = List.of(
+                item(List.of(3)), item(List.of(1)), item(List.of(2)));
+        assertThatThrownBy(() -> plannerAnalysisService.validateDependencies(items))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("循环依赖");
+    }
+
+    @Test
+    @DisplayName("validateDependencies：序号越界/自引用拒绝")
+    void shouldRejectOutOfRangeAndSelfReference() {
+        assertThatThrownBy(() -> plannerAnalysisService.validateDependencies(
+                List.of(item(List.of(5)), item(null))))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("依赖序号非法");
+
+        assertThatThrownBy(() -> plannerAnalysisService.validateDependencies(
+                List.of(item(List.of(1)))))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("不得依赖自身");
     }
 }

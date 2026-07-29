@@ -276,6 +276,8 @@ class SubTaskDispatchServiceTest {
         subTask.setStatus(SubTaskStatus.PENDING);
         subTask.setReassignAttemptCount(5);
         when(subTaskService.getById(81L)).thenReturn(subTask);
+        // V27 ready 守卫在熔断检查前，无依赖子任务视为就绪
+        when(subTaskService.isReady(subTask)).thenReturn(true);
 
         Long result = subTaskDispatchService.dispatchPendingSubTaskAuto(81L, AgentRole.EXECUTOR);
 
@@ -308,6 +310,8 @@ class SubTaskDispatchServiceTest {
         subTask.setStatus(SubTaskStatus.PENDING);
         subTask.setReassignAttemptCount(2);
         when(subTaskService.getById(82L)).thenReturn(subTask);
+        // V27 ready 守卫在熔断检查前，无依赖子任务视为就绪
+        when(subTaskService.isReady(subTask)).thenReturn(true);
 
         Agent preferred = new Agent();
         preferred.setId(99L);

@@ -42,6 +42,9 @@ public class MyBatisPlusConfig {
             TypeHandlerRegistry registry = configuration.getTypeHandlerRegistry();
             registry.register(java.util.Map.class, JacksonTypeHandler.class);
             registry.register(java.util.HashMap.class, JacksonTypeHandler.class);
+            // V27：sub_task.depends_on 是 List<Long> JSONB 列，SELECT 读出同样需要显式注册
+            registry.register(java.util.List.class, JacksonTypeHandler.class);
+            registry.register(java.util.ArrayList.class, JacksonTypeHandler.class);
         };
     }
 }

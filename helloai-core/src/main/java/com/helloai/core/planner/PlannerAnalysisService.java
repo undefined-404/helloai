@@ -4,7 +4,6 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
-import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
@@ -30,7 +29,9 @@ import org.springframework.stereotype.Service;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -77,7 +78,6 @@ public class PlannerAnalysisService {
     private final PlatformAgentExecutionService platformAgentExecutionService;
     private final TaskTimelineService taskTimelineService;
     private final SubTaskDispatchService subTaskDispatchService;
-    private final AgentDispatchProperties agentDispatchProperties;
     private final ObjectMapper objectMapper;
 
     // ══════════════════════════════════════════════════════════════
@@ -141,8 +141,10 @@ public class PlannerAnalysisService {
             }
 
             List<PlanDraftItem> items = parseDraftItems(result.getOutput());
+            validateDependencies(items);
             List<SubTask> drafts = buildDrafts(taskId, items, planner);
             subTaskService.saveBatch(drafts);
+            applyDependsOn(drafts, items);
 
             taskTimelineService.recordEvent(taskId, null, "task_plan_generated",
                     AgentRole.PLANNER, planner.getId(),
@@ -212,19 +214,19 @@ public class PlannerAnalysisService {
         taskTimelineService.recordEvent(taskId, null, "task_plan_confirmed",
                 AgentRole.PLANNER, null, Map.of("subTaskCount", drafts.size()));
 
-        // 事务外触发自动分发（分发链内部有独立事务与事件），单条失败不阻断其余
-        if (agentDispatchProperties.isAutoAssignOnCreate()) {
-            for (SubTask draft : drafts) {
-                try {
-                    subTaskDispatchService.dispatchPendingSubTaskAuto(draft.getId(), AgentRole.EXECUTOR);
-                } catch (Exception e) {
-                    log.warn("草案转正后自动分发失败（保持 PENDING 等待兜底任务）: subTaskId={}, err={}",
-                            draft.getId(), e.getMessage());
-                }
+        // 事务外触发自动分发（分发链内部有独立事务与事件），单条失败不阻断其余。
+        // V27：确认草案是用户显式启动内循环的动作，不受 auto-assign-on-create
+        // （任务创建即分发）开关控制；否则开关关闭时只能等孤儿扫描兜底，
+        // 内循环无法自动运转。ready 守卫会自动拦住依赖未就绪的节点。
+        for (SubTask draft : drafts) {
+            try {
+                subTaskDispatchService.dispatchPendingSubTaskAuto(draft.getId(), AgentRole.EXECUTOR);
+            } catch (Exception e) {
+                log.warn("草案转正后自动分发失败（保持 PENDING 等待兜底任务）: subTaskId={}, err={}",
+                        draft.getId(), e.getMessage());
             }
         }
-        log.info("任务规划草案已确认: taskId={}, subTaskCount={}, autoAssign={}",
-                taskId, drafts.size(), agentDispatchProperties.isAutoAssignOnCreate());
+        log.info("任务规划草案已确认: taskId={}, subTaskCount={}", taskId, drafts.size());
         return drafts.stream().map(d -> subTaskService.getById(d.getId())).toList();
     }
 
@@ -378,6 +380,88 @@ public class PlannerAnalysisService {
         return VALID_PRIORITIES.contains(upper) ? upper : "MEDIUM";
     }
 
+    /**
+     * 依赖校验（V27）：序号越界/自引用即拒，再用 Kahn 拓扑排序做环检测，
+     * 成环整批拒绝（抛 BizException → decompose 失败回退 PENDING 可重拆）。
+     *
+     * <p>序号为 1-based（指向同批草案中的第 N 条）；dependsOn 为 null/空视为无依赖。</p>
+     */
+    void validateDependencies(List<PlanDraftItem> items) {
+        int n = items.size();
+        // 1) 逐条范围校验
+        for (int i = 0; i < n; i++) {
+            List<Integer> deps = items.get(i).getDependsOn();
+            if (deps == null) {
+                continue;
+            }
+            for (Integer dep : deps) {
+                if (dep == null || dep < 1 || dep > n) {
+                    throw new BizException("拆解结果第 " + (i + 1) + " 条依赖序号非法: " + dep
+                            + "（合法范围 1~" + n + "）");
+                }
+                if (dep == i + 1) {
+                    throw new BizException("拆解结果第 " + (i + 1) + " 条不得依赖自身");
+                }
+            }
+        }
+        // 2) Kahn 拓扑排序环检测（入度法：能全部出队 = 无环）
+        int[] inDegree = new int[n];
+        List<List<Integer>> adjacency = new ArrayList<>(n);
+        for (int i = 0; i < n; i++) {
+            adjacency.add(new ArrayList<>());
+        }
+        for (int i = 0; i < n; i++) {
+            List<Integer> deps = items.get(i).getDependsOn();
+            if (deps == null) {
+                continue;
+            }
+            for (Integer dep : deps) {
+                adjacency.get(dep - 1).add(i); // 前置 → 后继
+                inDegree[i]++;
+            }
+        }
+        Deque<Integer> queue = new ArrayDeque<>();
+        for (int i = 0; i < n; i++) {
+            if (inDegree[i] == 0) {
+                queue.add(i);
+            }
+        }
+        int visited = 0;
+        while (!queue.isEmpty()) {
+            int node = queue.poll();
+            visited++;
+            for (int next : adjacency.get(node)) {
+                if (--inDegree[next] == 0) {
+                    queue.add(next);
+                }
+            }
+        }
+        if (visited < n) {
+            throw new BizException("拆解结果存在循环依赖，整批拒绝；请重新触发拆解");
+        }
+    }
+
+    /**
+     * 序号→真实 id 映射回写（V27）：saveBatch 后草案 id 已由 assign_id 预填，
+     * 把 dependsOn 序号换成同批草案的真实 sub_task id 写入 depends_on 列，
+     * 并同步回填实体字段（返回给调用方的草案列表携带依赖信息）。
+     */
+    private void applyDependsOn(List<SubTask> drafts, List<PlanDraftItem> items) {
+        for (int i = 0; i < items.size(); i++) {
+            List<Integer> deps = items.get(i).getDependsOn();
+            if (deps == null || deps.isEmpty()) {
+                continue;
+            }
+            List<Long> depIds = new ArrayList<>(deps.size());
+            for (Integer dep : deps) {
+                depIds.add(drafts.get(dep - 1).getId());
+            }
+            SubTask draft = drafts.get(i);
+            subTaskService.updateDependsOn(draft.getId(), depIds);
+            draft.setDependsOn(depIds);
+        }
+    }
+
     /** 失败回退：仅当 Task 仍处 PLANNING 时回退 PENDING（避免覆盖并发确认结果）。 */
     private void rollbackToPending(Long taskId) {
         try {
@@ -409,5 +493,7 @@ public class PlannerAnalysisService {
         private String deliverable;
         private String acceptance;
         private String priority;
+        /** 依赖的同批草案序号（1-based，V27）；空/null=无依赖。 */
+        private List<Integer> dependsOn;
     }
 }

@@ -55,6 +55,18 @@ public interface SubTaskMapper extends BaseMapper<SubTask> {
                                   @Param("now") OffsetDateTime now);
 
     /**
+     * V27：写入子任务依赖 id 数组（JSON 字符串，SQL 内显式 ::jsonb 转换）。
+     *
+     * <p>专供 PlannerAnalysisService 拆解落库后做"序号→真实 id"回写；
+     * 不走 updateById 全列覆盖，避免乐观锁 version 依赖与并发冲突。</p>
+     *
+     * @return 1 = 成功写入；0 = 子任务不存在或已删除
+     */
+    int updateDependsOn(@Param("subTaskId") Long subTaskId,
+                        @Param("dependsOnJson") String dependsOnJson,
+                        @Param("now") OffsetDateTime now);
+
+    /**
      * 查询某 Agent 处于 IN_PROGRESS/ASSIGNED/REWORK 的子任务列表（按 id 升序，limit 上限）。
      */
     List<SubTask> selectInFlightByAgent(@Param("agentId") Long agentId,

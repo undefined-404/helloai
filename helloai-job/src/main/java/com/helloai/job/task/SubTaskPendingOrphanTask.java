@@ -129,6 +129,7 @@ public class SubTaskPendingOrphanTask {
             int recovered = 0;
             int failed = 0;
             int skipStatusChanged = 0;
+            int skipNotReady = 0;
 
             for (Long subTaskId : orphanIds) {
                 try {
@@ -143,6 +144,14 @@ public class SubTaskPendingOrphanTask {
                         skipStatusChanged++;
                         log.debug("跳过：状态已变更: subTaskId={}, currentStatus={}",
                                 subTaskId, latest.getStatus());
+                        continue;
+                    }
+                    // V27: 依赖未就绪的节点不触发分发（保持 PENDING 等上游 DONE 后解锁），
+                    // 避免孤儿扫描误伤依赖编排中的合法阻塞节点
+                    if (!subTaskService.isReady(latest)) {
+                        skipNotReady++;
+                        log.debug("跳过：依赖未就绪: subTaskId={}, dependsOn={}",
+                                subTaskId, latest.dependsOnIdList());
                         continue;
                     }
 
@@ -164,9 +173,9 @@ public class SubTaskPendingOrphanTask {
                 }
             }
 
-            if (recovered > 0 || failed > 0 || skipStatusChanged > 0) {
-                log.info("PENDING 孤儿巡检完成: 扫描={}, 重派={}, 跳过（状态冲突）={}, 失败={}",
-                        orphanIds.size(), recovered, skipStatusChanged, failed);
+            if (recovered > 0 || failed > 0 || skipStatusChanged > 0 || skipNotReady > 0) {
+                log.info("PENDING 孤儿巡检完成: 扫描={}, 重派={}, 跳过（状态冲突）={}, 跳过（依赖未就绪）={}, 失败={}",
+                        orphanIds.size(), recovered, skipStatusChanged, skipNotReady, failed);
             }
 
         } catch (Exception e) {

@@ -8,6 +8,8 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 @Data
@@ -61,4 +63,38 @@ public class SubTask extends BaseEntity {
      * 子任务将被直接标记为 CANCELLED，不再进入重分配链，防止无限重试死循环。</p>
      */
     private Integer reassignAttemptCount;
+
+    /**
+     * 依赖的子任务 id 数组（V27 新增）：同 Task 内的前置子任务，
+     * 全部 DONE 后本任务才可被分发（ready 语义）；空数组=无依赖。
+     *
+     * <p>注意：JacksonTypeHandler 反序列化 JSON 数组数字默认是 Integer，
+     * 读取依赖 id 时必须走 {@link #dependsOnIdList()} 做 Long 归一化，
+     * 不要直接遍历本字段强转 Long。</p>
+     */
+    @TableField(typeHandler = JacksonTypeHandler.class)
+    private List<Long> dependsOn;
+
+    /**
+     * 依赖 id 归一化读取：把 Jackson 反序列化出的 Integer/Long/String 统一转为 Long。
+     * 永不返回 null（空依赖返回空列表）。
+     *
+     * <p>String 分支的来源：全局 ObjectMapper 注册了 Long→String 序列化
+     * （JacksonConfig，防前端精度丢失），历史数据的 depends_on 可能存成
+     * 字符串数组，必须兼容读取，否则 ready 守卫会把有依赖节点误判为就绪。</p>
+     */
+    public List<Long> dependsOnIdList() {
+        if (dependsOn == null || dependsOn.isEmpty()) {
+            return new ArrayList<>();
+        }
+        List<Long> ids = new ArrayList<>(dependsOn.size());
+        for (Object item : (List<?>) (List<?>) dependsOn) {
+            if (item instanceof Number) {
+                ids.add(((Number) item).longValue());
+            } else if (item instanceof String str && !str.isBlank()) {
+                ids.add(Long.parseLong(str.trim()));
+            }
+        }
+        return ids;
+    }
 }

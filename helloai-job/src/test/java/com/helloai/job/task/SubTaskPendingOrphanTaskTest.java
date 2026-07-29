@@ -80,6 +80,8 @@ class SubTaskPendingOrphanTaskTest {
         when(redis.opsForValue()).thenReturn(valueOps);
         // 默认让 tryLock 成功；个别用例按需覆盖
         when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any())).thenReturn(true);
+        // V27 孤儿扫描前置依赖检查：默认无依赖即就绪，避免既有用例被 ready 守卫拦截
+        when(subTaskService.isReady(any(SubTask.class))).thenReturn(true);
 
         task = new SubTaskPendingOrphanTask(
                 subTaskMapper, subTaskService, subTaskDispatchService,

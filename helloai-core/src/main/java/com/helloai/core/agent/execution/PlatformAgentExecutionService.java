@@ -94,6 +94,15 @@ public class PlatformAgentExecutionService {
         } catch (Exception ignore) {
         }
     }
+
+    /** 埋点参数构造：允许 null 值（Map.of 遇 null 会 NPE，拆解等无 subTaskId 场景会踩中）。 */
+    private static Map<String, Object> dbgMap(Object... kv) {
+        Map<String, Object> m = new HashMap<>();
+        for (int i = 0; i + 1 < kv.length; i += 2) {
+            m.put(String.valueOf(kv[i]), kv[i + 1]);
+        }
+        return m;
+    }
     // #endregion debug-point redispatch-stuck-blocked
 
     /**
@@ -111,12 +120,12 @@ public class PlatformAgentExecutionService {
      * 按 Agent 实体路由并执行。
      */
     public AgentResult execute(Agent agent, AgentTask task) {
-        dbg("platform_execute_enter", Map.of(
+        dbg("platform_execute_enter", dbgMap(
                 "agentId", agent != null ? agent.getId() : null,
                 "subTaskId", task != null ? task.getSubTaskId() : null
         ));
         AgentExecutor executor = agentExecutorRouter.route(agent);
-        dbg("platform_execute_routed", Map.of(
+        dbg("platform_execute_routed", dbgMap(
                 "agentId", agent.getId(),
                 "subTaskId", task.getSubTaskId(),
                 "executor", executor.getName()
@@ -125,16 +134,16 @@ public class PlatformAgentExecutionService {
             throw new BizException("Agent 能力不足: agentId=" + agent.getId()
                     + ", executor=" + executor.getName());
         }
-        dbg("platform_execute_before_active", Map.of(
+        dbg("platform_execute_before_active", dbgMap(
                 "agentId", agent.getId(),
                 "subTaskId", task.getSubTaskId()
         ));
         heartbeatService.active(agent.getId());
-        dbg("platform_execute_after_active", Map.of(
+        dbg("platform_execute_after_active", dbgMap(
                 "agentId", agent.getId(),
                 "subTaskId", task.getSubTaskId()
         ));
-        dbg("platform_execute_before_executor", Map.of(
+        dbg("platform_execute_before_executor", dbgMap(
                 "agentId", agent.getId(),
                 "subTaskId", task.getSubTaskId()
         ));

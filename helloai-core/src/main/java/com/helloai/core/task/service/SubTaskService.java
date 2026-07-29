@@ -11,6 +11,7 @@ import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.ReviewRecord;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.shared.event.SubTaskAssignedEvent;
+import com.helloai.core.shared.event.SubTaskCompletedEvent;
 import com.helloai.core.agent.observability.HeartbeatService;
 import com.helloai.core.task.mapper.ReviewRecordMapper;
 import com.helloai.core.task.mapper.SubTaskMapper;
@@ -106,6 +107,53 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
                 .eq(SubTask::getId, subTaskId)
                 .last("FOR UPDATE")
                 .one();
+    }
+
+    /**
+     * ready 语义判定（V27 内循环依赖编排）：{@code depends_on} 中所有前置子任务
+     * 均为 DONE 才允许分发；空依赖直接就绪（旧数据行为与现状完全一致）。
+     *
+     * <p>分发链两处复用：{@code SubTaskDispatchService.dispatchPendingSubTaskAuto}
+     * 与 {@code SubTaskPendingOrphanTask} 孤儿扫描，依赖检查逻辑收敛在本方法。</p>
+     */
+    public boolean isReady(SubTask subTask) {
+        if (subTask == null) {
+            return false;
+        }
+        List<Long> deps = subTask.dependsOnIdList();
+        if (deps.isEmpty()) {
+            return true;
+        }
+        long doneCount = lambdaQuery()
+                .in(SubTask::getId, deps)
+                .eq(SubTask::getStatus, SubTaskStatus.DONE)
+                .count();
+        return doneCount >= deps.size();
+    }
+
+    /**
+     * 写入依赖 id 数组（V27）：手工拼 JSON 数字数组后走专用 Mapper SQL（::jsonb），
+     * 不走 updateById 全列覆盖，避免乐观锁 version 参数依赖。
+     * 专供 PlannerAnalysisService 拆解落库后的"序号→真实 id"回写。
+     *
+     * <p>不能用全局 ObjectMapper 序列化：它注册了 Long→String（JacksonConfig，
+     * 防前端精度丢失），会把依赖 id 写成字符串数组，导致 ready 守卫读取时
+     * 归一化失败、有依赖节点被误判为就绪。</p>
+     */
+    public void updateDependsOn(Long subTaskId, List<Long> dependsOnIds) {
+        List<Long> ids = dependsOnIds != null ? dependsOnIds : Collections.emptyList();
+        StringBuilder json = new StringBuilder("[");
+        for (int i = 0; i < ids.size(); i++) {
+            if (i > 0) {
+                json.append(',');
+            }
+            json.append(ids.get(i));
+        }
+        json.append(']');
+        int updated = baseMapper.updateDependsOn(subTaskId, json.toString(), OffsetDateTime.now());
+        if (updated == 0) {
+            throw new BizException("子任务不存在或已删除，无法写入依赖: " + subTaskId);
+        }
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -228,6 +276,10 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
 
         updateById(subTask);
         agentOutboxService.createEvent(subTask, SubTaskStatus.DONE);
+
+        // V27 闭环收尾：事务提交后异步解锁下游依赖节点 + 尝试 Task 自动收尾
+        // （AFTER_COMMIT 监听在 SubTaskCompletionListener，避免与分发服务形成循环依赖）
+        applicationEventPublisher.publishEvent(new SubTaskCompletedEvent(subTaskId, subTask.getTaskId()));
         log.info("子任务审查通过: subTaskId={}", subTaskId);
     }
 

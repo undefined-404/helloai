@@ -66,6 +66,23 @@ public class AgentDispatchProperties {
      */
     private int assignedTimeoutMinutes = 10;
 
+    /**
+     * V27：是否启用子任务提交后的 LLM 自动核验（REVIEW 门控）。
+     *
+     * <p>开启后执行成功提交（→REVIEW）会在事务提交后异步触发
+     * SubTaskReviewService 按验收标准自动判定；关闭后子任务停留 REVIEW
+     * 等人工审查（行为与现状一致）。默认 true。</p>
+     */
+    private boolean autoReviewEnabled = true;
+
+    /**
+     * V27：自动核验驳回次数上限（沿用 sub_task.rework_count 计数）。
+     *
+     * <p>reworkCount 达到本阈值后自动核验不再打回，子任务停留 REVIEW
+     * 等人工处理，避免"执行→驳回→重执行"无限循环。默认 3 次。</p>
+     */
+    private int autoReviewMaxRework = 3;
+
     // 注：原 heartbeatFreshMinutes 字段（v2.6 §4.1 2026-07-20）已迁移至
     //     AgentHealthProperties.offlineMinutes，作为 Selector / Reconcile / SQL 回退候选
     //     共用的单一心跳阈值来源。详见 com.helloai.common.config.AgentHealthProperties。

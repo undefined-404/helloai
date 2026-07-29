@@ -3,6 +3,37 @@
 <mapper namespace="com.helloai.core.task.mapper.SubTaskMapper">
 
     <!--
+        覆盖 BaseMapper.insert：PostgreSQL 的 JSONB 列不接受未指定类型的字符串参数，
+        这里显式用 ::jsonb 进行类型转换，避免 "column context is of type jsonb but expression is of type character varying"。
+        修复 V27 PlannerAnalysisService 拆解落库（saveBatch 写入带 context 审计信息的草案）时的报错；
+        此前 sub_task 插入时 context/score_factors 恒为 null 才未暴露。
+        NOT NULL 且带数据库默认值的列用 COALESCE 兜底，保持与表默认值语义一致。
+    -->
+    <insert id="insert" parameterType="com.helloai.core.task.entity.SubTask">
+        INSERT INTO sub_task (
+            id, task_id, module_id, title, deliverable, acceptance, priority, status,
+            assigned_agent_id, content, context, score_factors,
+            composite_score, score_grade, deadline, rework_count, complete_time,
+            version, timeout_count, external_fallback_count, reassign_attempt_count,
+            depends_on,
+            deleted, create_by, update_by, create_time, update_time, remark
+        ) VALUES (
+            #{id}, #{taskId}, #{moduleId}, #{title}, #{deliverable}, #{acceptance},
+            COALESCE(#{priority}, 'MEDIUM'), COALESCE(#{status}, 'PENDING'),
+            #{assignedAgentId}, #{content},
+            #{context,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
+            #{scoreFactors,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
+            #{compositeScore}, #{scoreGrade}, #{deadline},
+            COALESCE(#{reworkCount}, 0), #{completeTime},
+            COALESCE(#{version}, 0), COALESCE(#{timeoutCount}, 0),
+            COALESCE(#{externalFallbackCount}, 0), COALESCE(#{reassignAttemptCount}, 0),
+            COALESCE(#{dependsOn,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb, '[]'::jsonb),
+            COALESCE(#{deleted}, 0), COALESCE(#{createBy}, ''), COALESCE(#{updateBy}, ''),
+            COALESCE(#{createTime}, CURRENT_TIMESTAMP), COALESCE(#{updateTime}, CURRENT_TIMESTAMP), #{remark}
+        )
+    </insert>
+
+    <!--
         覆盖 BaseMapper.updateById：PostgreSQL 的 JSONB 列不接受未指定类型的字符串参数，
         这里显式用 ::jsonb 进行类型转换，避免 "column score_factors is of type jsonb but expression is of type character varying"。
         修复 ReviewService 走 complete() 后写入 5 因子评分时的更新报错。
@@ -26,6 +57,7 @@
             score_grade = #{et.scoreGrade},
             deadline = #{et.deadline},
             rework_count = #{et.reworkCount},
+            depends_on = #{et.dependsOn,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
             complete_time = #{et.completeTime},
             version = #{et.version},
             timeout_count = #{et.timeoutCount},
@@ -147,6 +179,19 @@
     <update id="resetReassignAttemptCount">
         UPDATE sub_task
         SET reassign_attempt_count = 0,
+            update_time = #{now}
+        WHERE id = #{subTaskId}
+          AND deleted = 0
+    </update>
+
+    <!--
+        V27 内循环依赖编排：写入依赖 id 数组（JSON 字符串 + ::jsonb 显式转换）。
+        专供拆解落库后的"序号→真实 id"回写；不走 updateById 全列覆盖，
+        避免乐观锁 version 参数依赖（本 XML 的 updateById 硬依赖 MP_OPTLOCK_VERSION_ORIGINAL）。
+    -->
+    <update id="updateDependsOn">
+        UPDATE sub_task
+        SET depends_on = #{dependsOnJson}::jsonb,
             update_time = #{now}
         WHERE id = #{subTaskId}
           AND deleted = 0

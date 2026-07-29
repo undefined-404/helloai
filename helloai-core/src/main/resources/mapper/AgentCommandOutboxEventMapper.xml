@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.helloai.core.agent.mapper.AgentCommandOutboxEventMapper">
+
+    <!--
+        覆盖 BaseMapper 默认的 insert：
+        PostgreSQL 的 JSONB 列不接受未指定类型的字符串参数，
+        这里显式用 ::jsonb 进行类型转换，避免 "column payload is of type jsonb but expression is of type character varying"。
+        （V27 真实链路 E2E 发现：该报错导致 createAssignedCommand 事务整体回滚，
+        执行命令静默丢失，子任务停留在 ASSIGNED 直至看门狗回收。）
+        NOT NULL 且带默认值的列用 COALESCE 兜底，保持与表定义一致。
+    -->
+    <insert id="insert" parameterType="com.helloai.core.agent.entity.AgentCommandOutboxEvent" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO agent_command_outbox (
+            id, event_id, aggregate_type, aggregate_id, payload,
+            status, retry_count, next_retry_time,
+            last_sent_time, confirmed_time, error_msg, deleted,
+            create_by, update_by, create_time, update_time
+        ) VALUES (
+            #{id},
+            #{eventId},
+            COALESCE(#{aggregateType}, 'EXECUTION_COMMAND'),
+            #{aggregateId},
+            #{payload,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
+            #{status},
+            COALESCE(#{retryCount}, 0),
+            COALESCE(#{nextRetryTime}, CURRENT_TIMESTAMP),
+            #{lastSentTime},
+            #{confirmedTime},
+            #{errorMsg},
+            COALESCE(#{deleted}, 0),
+            COALESCE(#{createBy}, 'system'),
+            COALESCE(#{updateBy}, 'system'),
+            COALESCE(#{createTime}, CURRENT_TIMESTAMP),
+            COALESCE(#{updateTime}, CURRENT_TIMESTAMP)
+        )
+    </insert>
+
+</mapper>

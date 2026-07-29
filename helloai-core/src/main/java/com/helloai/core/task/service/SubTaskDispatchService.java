@@ -102,6 +102,15 @@ public class SubTaskDispatchService {
      * @return 实际采用的首选 Agent ID（注意：若首选 fast-fail，最终可能由 fallback 选择其他 Agent）
      */
     public Long dispatchPendingSubTaskAuto(Long subTaskId, AgentRole role) {
+        // V27: 依赖 ready 守卫必须在熔断计数之前 —— 未就绪的 PENDING 子任务
+        // 会被定时兜底任务反复扫描，若先累加 reassign_attempt_count 会被误推入死信
+        SubTask readyCheck = subTaskService.getById(subTaskId);
+        if (readyCheck != null && readyCheck.getStatus() == SubTaskStatus.PENDING
+                && !subTaskService.isReady(readyCheck)) {
+            log.debug("子任务依赖未就绪，跳过分发（保持 PENDING）: subTaskId={}, dependsOn={}",
+                    subTaskId, readyCheck.dependsOnIdList());
+            return null;
+        }
         // V25: 重分配熔断检查 —— 封堵定时兜底任务（PendingOrphan / recoverPendingUnassigned /
         // HealthCheck 二次选人）经本入口无限改派的旁路
         if (checkReassignCircuitBreaker(subTaskId)) {
