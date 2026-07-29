@@ -1,6 +1,9 @@
 package com.helloai.core.agent.service;
 
+import com.helloai.common.constant.AgentAccessType;
+import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentInbox;
+import com.helloai.core.agent.mapper.AgentMapper;
 import com.helloai.core.shared.event.InboxMessageCreatedEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -16,6 +19,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import org.mockito.ArgumentCaptor;
 
 /**
@@ -24,17 +28,26 @@ import org.mockito.ArgumentCaptor;
  * <p>只聚焦 PR-2 新增行为：收件箱首次落库成功后发布 {@link InboxMessageCreatedEvent}，
  * 幂等重复投递（{@link DuplicateKeyException}）不发事件。用 spy 桩掉
  * {@code ServiceImpl.save()}，隔离 MyBatis-Plus / 数据库。</p>
+ *
+ * <p>本轮新增：投递前守卫——API_KEY_LLM / 不存在的 Agent 跳过写入与响铃。</p>
  */
 @DisplayName("AgentInboxService 门铃响铃接线")
 class AgentInboxServiceTest {
 
     private ApplicationEventPublisher eventPublisher;
+    private AgentMapper agentMapper;
     private AgentInboxService service;
 
     @BeforeEach
     void setUp() {
         eventPublisher = mock(ApplicationEventPublisher.class);
-        service = spy(new AgentInboxService(eventPublisher));
+        agentMapper = mock(AgentMapper.class);
+        service = spy(new AgentInboxService(eventPublisher, agentMapper));
+        // 默认投递目标为 CLI_CLIENT，保持既有用例行为；守卫用例单独覆盖 stub
+        Agent cliAgent = new Agent();
+        cliAgent.setId(7L);
+        cliAgent.setAccessType(AgentAccessType.CLI_CLIENT);
+        when(agentMapper.selectById(7L)).thenReturn(cliAgent);
     }
 
     @Test
@@ -64,6 +77,33 @@ class AgentInboxServiceTest {
         service.send(7L, "evt-dup", "sub_task.assigned",
                 "新任务已分配", "交付物: xxx", "sub_task", 66L, "NORMAL");
 
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    @DisplayName("API_KEY_LLM Agent 跳过投递：不落库、不响铃")
+    void shouldSkipApiKeyLlmAgent() {
+        Agent llmAgent = new Agent();
+        llmAgent.setId(8L);
+        llmAgent.setAccessType(AgentAccessType.API_KEY_LLM);
+        when(agentMapper.selectById(8L)).thenReturn(llmAgent);
+
+        service.send(8L, "evt-llm", "sub_task.assigned",
+                "新任务已分配", "交付物: xxx", "sub_task", 66L, "HIGH");
+
+        verify(service, never()).save(any(AgentInbox.class));
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    @DisplayName("Agent 不存在跳过投递（防御）：不落库、不响铃")
+    void shouldSkipWhenAgentNotFound() {
+        when(agentMapper.selectById(999L)).thenReturn(null);
+
+        service.send(999L, "evt-ghost", "sub_task.assigned",
+                "新任务已分配", "交付物: xxx", "sub_task", 66L, "HIGH");
+
+        verify(service, never()).save(any(AgentInbox.class));
         verify(eventPublisher, never()).publishEvent(any());
     }
 }

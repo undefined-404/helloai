@@ -67,13 +67,14 @@ $adminHeaders = @{ "X-Admin-Token" = $loginResp.data.token }
 
 $ts = [DateTime]::UtcNow.ToString("yyyyMMddHHmmss")
 
-Write-Host "STEP2: register platform planner agent (API_KEY_LLM)"
+Write-Host "STEP2: register platform planner agent (API_KEY_LLM, idempotent fixed name)"
 $plannerResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/agents/register") -Body @{
-    name = "planner-decompose-" + $ts
+    name = "planner-decompose"
     role = "PLANNER"
     description = "verify-planner-decompose"
     accessType = "API_KEY_LLM"
     modelType = $PlannerModelType
+    idempotent = $true
 } -Headers @{}
 Assert-True ($plannerResp.code -eq 200) ("register planner code=" + $plannerResp.code + " msg=" + $plannerResp.msg)
 $plannerAgentId = [string]$plannerResp.data.id

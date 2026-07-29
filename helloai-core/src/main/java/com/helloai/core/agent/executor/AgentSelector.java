@@ -11,6 +11,7 @@ import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
+import com.helloai.core.system.service.CredentialVaultService;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import lombok.RequiredArgsConstructor;
@@ -40,6 +41,7 @@ public class AgentSelector {
     private final AgentDispatchProperties agentDispatchProperties;
     private final AgentHealthProperties agentHealthProperties;
     private final AgentDutyLeaseService agentDutyLeaseService;
+    private final CredentialVaultService credentialVaultService;
 
     /**
      * 从指定角色的 Agent 中选取首选执行器（用于初始分配）。
@@ -72,6 +74,7 @@ public class AgentSelector {
      *       防止选人拿到“刚被死但还未来得及被 Reconcile 标 OFFLINE”的 Agent。
      *       API_KEY_LLM 始终视为新鲜（不需要运行时心跳）。</li>
      *   <li>跳过 status != ACTIVE（已禁用的 Agent）</li>
+     *   <li>跳过无启用态托管凭证的 API_KEY_LLM Agent（封堵双重豁免下的无凭证劫持）</li>
      *   <li>跳过熔断器已打开的 Agent（per-agent 维度）</li>
      *   <li>N12 P1 STRICT 独占报锁：跳过当前以 STRICT 模式在岗的 Agent
      *       （不参与他人失败后的替补池，但可被初始/直接分配的任务命中）</li>
@@ -103,6 +106,7 @@ public class AgentSelector {
                 .filter(this::isHeartbeatFresh)
                 .filter(a -> !agentDispatchProperties.isRequireIdle() || agentService.inProgressCount(a.getId()) == 0)
                 .filter(a -> a.getStatus() == AgentStatus.ACTIVE)
+                .filter(this::hasUsableCredential)
                 .filter(a -> !isOnStrictDuty(a.getId()))
                 .filter(this::isCircuitClosed)
                 .max(resolveComparator())
@@ -151,6 +155,30 @@ public class AgentSelector {
             return lastSeen.isAfter(cutoff);
         } catch (Exception e) {
             log.debug("isHeartbeatFresh fallback to false for agent {}: {}",
+                    agent.getId(), e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 凭证可用性检查：API_KEY_LLM 候选必须在 credential_vault 中有启用态凭证。
+     *
+     * <p>API_KEY_LLM 享有心跳/OFFLINE 双重豁免，若不校验凭证，历史遗留的无凭证 Agent
+     * 永远是合格候选，选中即执行 500。其它 accessType 不依赖 vault，直接放行。
+     * 防御式：查询异常降级为排除（选中无凭证 Agent 必败，排除更安全）。</p>
+     */
+    private boolean hasUsableCredential(Agent agent) {
+        if (agent == null || agent.getAccessType() != AgentAccessType.API_KEY_LLM) {
+            return true;
+        }
+        try {
+            boolean has = credentialVaultService.hasActiveAgentCredential(agent.getId());
+            if (!has) {
+                log.debug("Agent {} 无启用态托管凭证，跳过选人", agent.getId());
+            }
+            return has;
+        } catch (Exception e) {
+            log.debug("hasUsableCredential fallback to false for agent {}: {}",
                     agent.getId(), e.getMessage());
             return false;
         }

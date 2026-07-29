@@ -1,6 +1,10 @@
 package com.helloai.core.agent.service;
 
+import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapper;
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.AgentOnlineStatus;
+import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentDutyLeaseMapper;
 import com.helloai.core.agent.mapper.AgentInboxMapper;
@@ -22,7 +26,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -94,5 +101,90 @@ class AgentServiceTest {
         assertThatThrownBy(() -> service.getRelatedCounts(999L))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("Agent 不存在");
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  registerOrGet（name 幂等复用）
+    // ════════════════════════════════════════════════════════════
+
+    @SuppressWarnings("unchecked")
+    private AgentService serviceWithNameQuery(Agent existing) {
+        AgentService service = newSpyService();
+        LambdaQueryChainWrapper<Agent> chain = mock(LambdaQueryChainWrapper.class);
+        doReturn(chain).when(service).lambdaQuery();
+        when(chain.eq(any(), any())).thenReturn(chain);
+        when(chain.one()).thenReturn(existing);
+        return service;
+    }
+
+    @Test
+    @DisplayName("registerOrGet：同名同角色已存在 → 复用并归位 ACTIVE/OFFLINE，不重新创建")
+    void shouldReuseExistingAgentAndReset() {
+        Agent existing = new Agent();
+        existing.setId(11L);
+        existing.setName("inner-loop-executor");
+        existing.setRole(AgentRole.EXECUTOR);
+        existing.setStatus(AgentStatus.DISABLED);
+        existing.setOnlineStatus(AgentOnlineStatus.SLEEPING);
+
+        AgentService service = serviceWithNameQuery(existing);
+        doReturn(true).when(service).updateById(any(Agent.class));
+
+        Agent result = service.registerOrGet("inner-loop-executor", AgentRole.EXECUTOR, "desc");
+
+        assertThat(result.getId()).isEqualTo(11L);
+        assertThat(result.getStatus()).isEqualTo(AgentStatus.ACTIVE);
+        assertThat(result.getOnlineStatus()).isEqualTo(AgentOnlineStatus.OFFLINE);
+        verify(service).updateById(existing);
+        verify(service, never()).save(any(Agent.class));
+    }
+
+    @Test
+    @DisplayName("registerOrGet：已归位的同名 Agent → 直接返回不落库")
+    void shouldReuseWithoutUpdateWhenAlreadyNormalized() {
+        Agent existing = new Agent();
+        existing.setId(12L);
+        existing.setName("inner-loop-planner");
+        existing.setRole(AgentRole.PLANNER);
+        existing.setStatus(AgentStatus.ACTIVE);
+        existing.setOnlineStatus(AgentOnlineStatus.OFFLINE);
+
+        AgentService service = serviceWithNameQuery(existing);
+
+        Agent result = service.registerOrGet("inner-loop-planner", AgentRole.PLANNER, "desc");
+
+        assertThat(result).isSameAs(existing);
+        verify(service, never()).updateById(any(Agent.class));
+        verify(service, never()).save(any(Agent.class));
+    }
+
+    @Test
+    @DisplayName("registerOrGet：同名但角色不一致 → 抛 BizException")
+    void shouldThrowWhenRoleMismatch() {
+        Agent existing = new Agent();
+        existing.setId(13L);
+        existing.setName("inner-loop-reviewer");
+        existing.setRole(AgentRole.REVIEWER);
+        existing.setStatus(AgentStatus.ACTIVE);
+
+        AgentService service = serviceWithNameQuery(existing);
+
+        assertThatThrownBy(() -> service.registerOrGet("inner-loop-reviewer", AgentRole.EXECUTOR, "desc"))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("无法以");
+    }
+
+    @Test
+    @DisplayName("registerOrGet：不存在 → 委派 register 创建")
+    void shouldDelegateToRegisterWhenNotFound() {
+        AgentService service = serviceWithNameQuery(null);
+        Agent created = new Agent();
+        created.setId(14L);
+        doReturn(created).when(service).register("brand-new", AgentRole.EXECUTOR, "desc");
+
+        Agent result = service.registerOrGet("brand-new", AgentRole.EXECUTOR, "desc");
+
+        assertThat(result).isSameAs(created);
+        verify(service).register("brand-new", AgentRole.EXECUTOR, "desc");
     }
 }

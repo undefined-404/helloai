@@ -55,6 +55,7 @@ function Register-Agent([string]$Name, [string]$RoleValue, [string]$AccessType, 
         role = $RoleValue
         description = "verify-subtask-deadletter"
         accessType = $AccessType
+        idempotent = $true
     }
     if (-not [string]::IsNullOrWhiteSpace($ModelType)) {
         $body.modelType = $ModelType
@@ -86,13 +87,13 @@ $adminToken = $loginResp.data.token
 
 $ts = [DateTime]::UtcNow.ToString("yyyyMMddHHmmss")
 
-Write-Host "STEP2: register source CLI agent (never heartbeats -> stale)"
-$source = Register-Agent -Name ("deadletter-source-" + $ts) -RoleValue $Role -AccessType "CLI_CLIENT" -ModelType ""
+Write-Host "STEP2: register source CLI agent (never heartbeats -> stale, idempotent fixed name)"
+$source = Register-Agent -Name "deadletter-source" -RoleValue $Role -AccessType "CLI_CLIENT" -ModelType ""
 $sourceAgentId = [string]$source.id
 Write-Host ("sourceAgentId=" + $sourceAgentId)
 
-Write-Host "STEP3: register manual target agent"
-$target = Register-Agent -Name ("deadletter-target-" + $ts) -RoleValue $Role -AccessType "API_KEY_LLM" -ModelType "deepseek:deepseek-chat"
+Write-Host "STEP3: register manual target agent (idempotent fixed name)"
+$target = Register-Agent -Name "deadletter-target" -RoleValue $Role -AccessType "API_KEY_LLM" -ModelType "deepseek:deepseek-chat"
 $targetAgentId = [string]$target.id
 Write-Host ("targetAgentId=" + $targetAgentId)
 

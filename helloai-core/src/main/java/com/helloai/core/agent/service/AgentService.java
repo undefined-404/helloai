@@ -82,6 +82,39 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
         return agent;
     }
 
+    /**
+     * name 幂等注册（get-or-create）。
+     *
+     * <p>同名 Agent 已存在时复用而非报错：校验 role 一致后将其归位
+     * （status 置回 ACTIVE、SLEEPING 置回 OFFLINE）并直接返回，不重发 consumerToken。
+     * 供 E2E 脚本等可重入场景使用，收敛时间戳注册导致的 Agent 膨胀；
+     * 人工注册仍走 {@link #register} 保留严格重名报错。</p>
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public Agent registerOrGet(String name, AgentRole role, String description) {
+        Agent existing = lambdaQuery().eq(Agent::getName, name).one();
+        if (existing == null) {
+            return register(name, role, description);
+        }
+        if (existing.getRole() != role) {
+            throw new BizException("名称 '" + name + "' 已被角色 " + existing.getRole() + " 注册，无法以 " + role + " 复用");
+        }
+        boolean changed = false;
+        if (existing.getStatus() != AgentStatus.ACTIVE) {
+            existing.setStatus(AgentStatus.ACTIVE);
+            changed = true;
+        }
+        if (existing.getOnlineStatus() == AgentOnlineStatus.SLEEPING) {
+            existing.setOnlineStatus(AgentOnlineStatus.OFFLINE);
+            changed = true;
+        }
+        if (changed) {
+            updateById(existing);
+        }
+        log.info("Agent 幂等复用: name={}, role={}, id={}, 归位={}", name, role, existing.getId(), changed);
+        return existing;
+    }
+
     public Agent getByApiKey(String apiKey) {
         return lambdaQuery().eq(Agent::getApiKey, apiKey).one();
     }

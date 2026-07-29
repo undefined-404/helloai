@@ -33,6 +33,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
+import com.helloai.core.system.service.CredentialVaultService;
 
 /**
  * AgentSelector 单元测试（v2.4 §4.10）。
@@ -54,6 +55,9 @@ class AgentSelectorTest {
     @Mock
     private AgentDutyLeaseService agentDutyLeaseService;
 
+    @Mock
+    private CredentialVaultService credentialVaultService;
+
     private AgentSelector agentSelector;
 
     @BeforeEach
@@ -67,8 +71,11 @@ class AgentSelectorTest {
         // 防御式默认 stub：仅在多候选 comparator 排序时被 dutyRank 调用，
         // 单候选用例不会走到，用 lenient() 避开 STRICT_STUBS 下的 UnnecessaryStubbing。
         lenient().when(agentDutyLeaseService.isOnDuty(anyLong())).thenReturn(false);
+        // 默认所有候选均有有效凭证，避免 API_KEY_LLM 用例被 hasUsableCredential 过滤；
+        // 无凭证用例请单独 stub 返回 false
+        lenient().when(credentialVaultService.hasActiveAgentCredential(anyLong())).thenReturn(true);
         agentSelector = new AgentSelector(
-                agentService, circuitBreakerRegistry, props, health, agentDutyLeaseService);
+                agentService, circuitBreakerRegistry, props, health, agentDutyLeaseService, credentialVaultService);
     }
 
     // ════════════════════════════════════════════════════════════
@@ -431,7 +438,7 @@ class AgentSelectorTest {
             AgentHealthProperties policyHealth = new AgentHealthProperties();
             policyHealth.setOfflineMinutes(5);
             policySelector = new AgentSelector(
-                    agentService, circuitBreakerRegistry, policyProps, policyHealth, agentDutyLeaseService);
+                    agentService, circuitBreakerRegistry, policyProps, policyHealth, agentDutyLeaseService, credentialVaultService);
         }
 
         private Agent agentWith(Long id, Integer score,
@@ -483,7 +490,7 @@ class AgentSelectorTest {
             forceHealth.setOfflineMinutes(5);
             AgentSelector forceSelector =
                     new AgentSelector(
-                            agentService, circuitBreakerRegistry, forceProps, forceHealth, agentDutyLeaseService);
+                            agentService, circuitBreakerRegistry, forceProps, forceHealth, agentDutyLeaseService, credentialVaultService);
 
             when(agentService.listByRole(AgentRole.EXECUTOR))
                     .thenReturn(List.of(cli, api));
@@ -637,7 +644,7 @@ class AgentSelectorTest {
             AgentHealthProperties zeroHealth = new AgentHealthProperties();
             zeroHealth.setOfflineMinutes(0);
             AgentSelector zeroSelector = new AgentSelector(
-                    agentService, circuitBreakerRegistry, zeroProps, zeroHealth, agentDutyLeaseService);
+                    agentService, circuitBreakerRegistry, zeroProps, zeroHealth, agentDutyLeaseService, credentialVaultService);
 
             Agent stale = agentWithHeartbeat(2L, 90, AgentOnlineStatus.ONLINE,
                     AgentStatus.ACTIVE, 120L);  // 2 小时前
@@ -660,7 +667,7 @@ class AgentSelectorTest {
             AgentHealthProperties customHealth = new AgentHealthProperties();
             customHealth.setOfflineMinutes(3);
             AgentSelector customSelector = new AgentSelector(
-                    agentService, circuitBreakerRegistry, customProps, customHealth, agentDutyLeaseService);
+                    agentService, circuitBreakerRegistry, customProps, customHealth, agentDutyLeaseService, credentialVaultService);
 
             Agent stale = agentWithHeartbeat(2L, 90, AgentOnlineStatus.ONLINE,
                     AgentStatus.ACTIVE, 9L);  // 9 分钟前 > 3 分钟阈值
@@ -670,6 +677,70 @@ class AgentSelectorTest {
             Agent result = customSelector.pickAlternative(1L, AgentRole.EXECUTOR);
 
             assertThat(result).isNull();
+        }
+    }
+
+    @Nested
+    @DisplayName("凭证可用性过滤（API_KEY_LLM）")
+    class CredentialFilter {
+
+        private Agent apiAgent(Long id, Integer score) {
+            Agent a = agent(id, score, AgentOnlineStatus.OFFLINE, AgentStatus.ACTIVE);
+            a.setAccessType(AgentAccessType.API_KEY_LLM);
+            return a;
+        }
+
+        @Test
+        @DisplayName("API_KEY_LLM 无启用态凭证 → 被过滤（封堵无凭证劫持）")
+        void shouldFilterOutApiAgentWithoutCredential() {
+            Agent api = apiAgent(2L, 100);
+            when(agentService.listByRole(AgentRole.EXECUTOR)).thenReturn(List.of(api));
+            when(credentialVaultService.hasActiveAgentCredential(2L)).thenReturn(false);
+
+            Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNull();
+        }
+
+        @Test
+        @DisplayName("API_KEY_LLM 有启用态凭证 → 入选")
+        void shouldSelectApiAgentWithCredential() {
+            Agent api = apiAgent(2L, 100);
+            when(agentService.listByRole(AgentRole.EXECUTOR)).thenReturn(List.of(api));
+            when(credentialVaultService.hasActiveAgentCredential(2L)).thenReturn(true);
+            when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
+
+            Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(2L);
+        }
+
+        @Test
+        @DisplayName("凭证查询异常 → 防御式降级为排除")
+        void shouldExcludeWhenCredentialQueryThrows() {
+            Agent api = apiAgent(2L, 100);
+            when(agentService.listByRole(AgentRole.EXECUTOR)).thenReturn(List.of(api));
+            when(credentialVaultService.hasActiveAgentCredential(2L))
+                    .thenThrow(new RuntimeException("vault down"));
+
+            Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNull();
+        }
+
+        @Test
+        @DisplayName("CLI_CLIENT 不受凭证校验影响（不查 vault）")
+        void shouldNotApplyCredentialFilterToCliClient() {
+            Agent cli = agent(2L, 80, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            when(agentService.listByRole(AgentRole.EXECUTOR)).thenReturn(List.of(cli));
+            when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
+
+            Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(2L);
+            verify(credentialVaultService, never()).hasActiveAgentCredential(2L);
         }
     }
 }

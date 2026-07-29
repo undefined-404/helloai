@@ -50,9 +50,12 @@ public class AgentController {
         String name = (String) body.get("name");
         AgentRole role = AgentRole.valueOf(((String) body.get("role")).toUpperCase());
         String description = (String) body.getOrDefault("description", "");
-        Agent agent = agentService.register(name, role, description);
+        boolean idempotent = Boolean.TRUE.equals(body.get("idempotent"));
+        Agent agent = idempotent
+                ? agentService.registerOrGet(name, role, description)
+                : agentService.register(name, role, description);
         applyRegistrationExtras(agent, body);
-        log.info("Agent 手动注册成功: name={}, role={}, id={}", name, role, agent.getId());
+        log.info("Agent 手动注册成功: name={}, role={}, id={}, idempotent={}", name, role, agent.getId(), idempotent);
         return R.ok(toRegistrationResponse(agent));
     }
 
@@ -71,7 +74,10 @@ public class AgentController {
         String roleStr = (String) body.get("role");
         String description = (String) body.getOrDefault("description", "");
         AgentRole role = AgentRole.valueOf(roleStr.toUpperCase());
-        Agent agent = agentService.register(name, role, description);
+        boolean idempotent = Boolean.TRUE.equals(body.get("idempotent"));
+        Agent agent = idempotent
+                ? agentService.registerOrGet(name, role, description)
+                : agentService.register(name, role, description);
         applyRegistrationExtras(agent, body);
 
         log.info("Agent 自助注册成功: name={}, role={}, id={}, accessType={}",
@@ -80,10 +86,10 @@ public class AgentController {
     }
 
     /**
-     * 处理注册入参的可选扩展字段：accessType / specializationSlug / capabilities / labels。
+     * 处理注册入参的可选扩展字段：accessType / specializationSlug / capabilities / labels / modelType。
      *
      * <p>accessType 默认 CLI_CLIENT；capabilities 按 accessType 默认值填充后允许调用方覆盖；
-     * labels 直接存储。</p>
+     * labels 直接存储；modelType 供 API_KEY_LLM Agent 指定 provider:model（缺省走平台默认 provider）。</p>
      */
     @SuppressWarnings("unchecked")
     private void applyRegistrationExtras(Agent agent, Map<String, Object> body) {
@@ -91,6 +97,12 @@ public class AgentController {
         String specializationSlug = (String) body.get("specializationSlug");
         if (specializationSlug != null && !specializationSlug.isBlank()) {
             agent.setSpecializationSlug(specializationSlug);
+        }
+
+        // 1.5) modelType（V27：之前被丢弃，导致 API_KEY_LLM Agent 只能用默认 provider）
+        String modelType = (String) body.get("modelType");
+        if (modelType != null && !modelType.isBlank()) {
+            agent.setModelType(modelType);
         }
 
         // 2) accessType（默认 CLI_CLIENT）

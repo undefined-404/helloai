@@ -158,6 +158,7 @@ function Register-Agent([string]$Name, [string]$RoleValue, [string]$AccessType, 
         role = $RoleValue
         description = $Description
         accessType = $AccessType
+        idempotent = $true
     }
     if (-not [string]::IsNullOrWhiteSpace($ModelType)) {
         $body.modelType = $ModelType
@@ -261,16 +262,16 @@ $adminToken = $loginResp.data.token
 
 $ts = [DateTime]::UtcNow.ToString("yyyyMMddHHmmss")
 
-Write-Host "STEP2: register source CLI agent"
-$source = Register-Agent -Name ("redispatch-source-" + $Scenario + "-" + $ts) -RoleValue $Role -AccessType "CLI_CLIENT" -Description "redispatch source" -ModelType ""
+Write-Host "STEP2: register source CLI agent (idempotent fixed name per scenario)"
+$source = Register-Agent -Name ("redispatch-source-" + $Scenario) -RoleValue $Role -AccessType "CLI_CLIENT" -Description "redispatch source" -ModelType ""
 $sourceAgentId = [string]$source.id
 $sourceAgentApiKey = [string]$source.apiKey
 Assert-True (-not [string]::IsNullOrWhiteSpace($sourceAgentId)) "source agent id empty"
 Assert-True (-not [string]::IsNullOrWhiteSpace($sourceAgentApiKey)) "source agent apiKey empty"
 Write-Host ("sourceAgentId=" + $sourceAgentId)
 
-Write-Host "STEP3: register target API agent"
-$target = Register-Agent -Name ("redispatch-target-" + $Scenario + "-" + $ts) -RoleValue $Role -AccessType "API_KEY_LLM" -Description "redispatch target" -ModelType "deepseek:deepseek-chat"
+Write-Host "STEP3: register target API agent (idempotent fixed name per scenario)"
+$target = Register-Agent -Name ("redispatch-target-" + $Scenario) -RoleValue $Role -AccessType "API_KEY_LLM" -Description "redispatch target" -ModelType "deepseek:deepseek-chat"
 $targetAgentId = [string]$target.id
 Assert-True (-not [string]::IsNullOrWhiteSpace($targetAgentId)) "target agent id empty"
 Write-Host ("targetAgentId=" + $targetAgentId)

@@ -70,14 +70,15 @@ Assert-True ($loginResp.data -ne $null) "login data is null"
 Assert-True (-not [string]::IsNullOrWhiteSpace($loginResp.data.token)) "admin token is empty"
 $adminToken = $loginResp.data.token
 
-Write-Host "STEP2: register API_KEY_LLM agent"
-$name = "T7-connectivity-" + [DateTime]::UtcNow.ToString("yyyyMMddHHmmss")
+Write-Host "STEP2: register API_KEY_LLM agent (idempotent fixed name)"
+$name = "T7-connectivity"
 $regResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/agents/register") -Body @{
     name = $name
     role = "EXECUTOR"
     description = "llm connectivity probe"
     accessType = "API_KEY_LLM"
     modelType = "deepseek:deepseek-chat"
+    idempotent = $true
 } -Headers @{}
 
 Assert-True ($regResp.code -eq 200) ("register code=" + $regResp.code + " msg=" + $regResp.msg)

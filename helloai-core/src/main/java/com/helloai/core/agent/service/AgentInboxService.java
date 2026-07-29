@@ -2,9 +2,12 @@ package com.helloai.core.agent.service;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.AgentAccessType;
+import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentInbox;
 import com.helloai.core.shared.event.InboxMessageCreatedEvent;
 import com.helloai.core.agent.mapper.AgentInboxMapper;
+import com.helloai.core.agent.mapper.AgentMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -20,6 +23,10 @@ import java.util.List;
  * 负责将 MQ 事件投递到各 Agent 的持久化收件箱，支持离线积攒、上线补处理。
  *
  * 核心设计：同一 (eventId, agentId) 最多投递一次（利用联合唯一约束）。
+ *
+ * <p>投递范围收口：API_KEY_LLM Agent 的消费链路走 outbox → MQ（后端进程内代消费），
+ * 收件箱消息对其永远无人拉取，因此在 {@link #send} 咽喉点统一跳过写入，
+ * 覆盖所有调用方（SubTaskService / TaskController / TaskService / NotificationConsumer）。</p>
  */
 @Slf4j
 @Service
@@ -27,6 +34,8 @@ import java.util.List;
 public class AgentInboxService extends ServiceImpl<AgentInboxMapper, AgentInbox> {
 
     private final ApplicationEventPublisher eventPublisher;
+    // 直接注入 Mapper 而非 AgentService，避免 service 层依赖环
+    private final AgentMapper agentMapper;
 
     /**
      * 向指定 Agent 投递收件箱消息。幂等。
@@ -44,6 +53,17 @@ public class AgentInboxService extends ServiceImpl<AgentInboxMapper, AgentInbox>
     public void send(Long agentId, String eventId, String eventType,
                      String title, String summary,
                      String refType, Long refId, String priority) {
+        // 投递前守卫：Agent 不存在（防御）或 API_KEY_LLM（消费链路走 outbox→MQ，收件箱无人读）时跳过
+        Agent target = agentMapper.selectById(agentId);
+        if (target == null) {
+            log.debug("收件箱跳过投递: agent 不存在, agentId={}, eventId={}", agentId, eventId);
+            return;
+        }
+        if (target.getAccessType() == AgentAccessType.API_KEY_LLM) {
+            log.debug("收件箱跳过投递: API_KEY_LLM 不消费收件箱, agentId={}, eventId={}", agentId, eventId);
+            return;
+        }
+
         AgentInbox inbox = new AgentInbox();
         inbox.setAgentId(agentId);
         inbox.setEventId(eventId);
