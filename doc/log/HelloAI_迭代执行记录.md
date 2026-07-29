@@ -2860,3 +2860,114 @@ Planner 角色此前只有枚举定义与一份约 60 行的纯 REST 版 SKILL.m
 - TTL 8h 目前为代码常量，如需环境差异化再外置 `application.yml`
 
 ---
+
+### 6.18 内循环最小流程改造（V27 依赖编排 + LLM 自动核验 + 闭环收尾，2026-07-28~29）
+
+#### 1. 背景
+
+对照 AgentTeams-main 的"拆解 → 分发 → 执行 → 核验"内循环，V26 的 Planner 拆解闭环仍缺三块：①子任务间无依赖编排（草案确认后全部同时分发，无拓扑序）；②执行完成后无自动核验（REVIEW 态需人工推进）；③全部子任务完成后 Task 不自动收尾。用户决策：执行者收敛为平台内 API_KEY_LLM Agent 直接执行，核验采用 LLM 自动核验 + 人工兜底。本轮在既有分发/执行链上补齐依赖 DAG、自动核验门控、闭环收尾三件事。
+
+#### 2. 实际落地
+
+- **依赖编排**：Flyway `V27__sub_task_depends_on.sql` 给 `sub_task` 加 `depends_on jsonb NOT NULL DEFAULT '[]'`；`SubTask` 实体加 `dependsOn`（JacksonTypeHandler）+ `dependsOnIdList()` 归一化（Number/String 双分支）；拆解 Prompt 升级要求输出 `dependsOn` 序号数组，`PlanDraftItem` 承载；`confirmPlan` 做序号→真实 ID 映射 + DFS 环校验（成环拒绝确认）；`SubTaskService.isReady`（依赖全 DONE 才放行）挂入 `dispatchPendingSubTaskAuto` 分发守卫与孤儿扫描过滤
+- **自动核验门控**：新增 `SubTaskReviewService`，子任务进 REVIEW 后 AFTER_COMMIT 异步触发 LLM 核验（REVIEWER 角色 Agent + 验收标准 Prompt），通过→complete、不通过→打回 PENDING 携核验意见；timeline 记 `auto_review_*` 证据
+- **闭环收尾**：complete 后扫描解锁下游 ready 子任务自动分发；全部子任务 DONE/CANCELLED 后 Task 自动收尾 DONE
+- **前端**：`types/index.ts` 同步 `dependsOn` 字段
+- **真实链路发现并修复的 7 个 bug（全部为 mock 单测测不出）**：①`Map.of` null 值 NPE；②register 丢 `modelType`；③E2E 旧 Agent 无凭证劫持选人（脚本先休眠 stale agents）；④`SubTaskMapper` 缺 insert 的 `::jsonb` 覆盖；⑤`confirmPlan` 分发门控条件写反（确认后不分发）；⑥**全局 JacksonConfig 的 Long→ToStringSerializer 污染 DB 写入**——`updateDependsOn` 用全局 ObjectMapper 把 `depends_on` 写成字符串数组，`dependsOnIdList()` 只认 Number → 依赖守卫恒放行；改为手工拼 JSON 数字数组 + 读侧加 String 归一化兼容存量；⑦`agent_command_outbox.payload` jsonb 无 XML insert 覆盖 → `createAssignedCommand` 整事务回滚且异常被 dispatcher catch 吞掉 → ASSIGNED 后静默不执行、10 分钟被看门狗回收；新增 `AgentCommandOutboxEventMapper.xml` 覆盖 insert（`::jsonb` + COALESCE 默认值兜底）
+
+#### 3. 测试与验证
+
+- 单测：`SubTaskServiceIsReadyTest`（6 用例含 Integer/String 归一化）、`PlannerAnalysisServiceTest` 扩至 16 用例（依赖映射/环校验/回滚路径）、`SubTaskReviewService` 7 用例；`mvn -pl helloai-core -am test` → **269 全绿 BUILD SUCCESS**
+- 真实链路 `scripts/powershell/verify-inner-loop-e2e.ps1`（9 步：登录 → 休眠 stale agents → 注册 PLANNER/EXECUTOR/REVIEWER 三平台 Agent + vault 绑 deepseek 凭证 → 建任务 → LLM 拆解出 3 草案完整依赖链 → confirm（环校验+序号映射）→ 断言确认后依赖门控 gated=3 → 轮询内循环 → 断言 auto-review timeline 证据 → 断言 Task 自动 DONE）→ **run7 全绿**；DB 复核 `depends_on` 为数字数组、执行严格拓扑序 706→707→708（每步执行+核验+解锁约 3s）
+- 本轮验证方式按用户要求转向"启动后端 + 登录 + 走 DB 真实链路"的脚本测试；7 个 bug 均由真实链路发现，印证 mock 单测局限
+
+#### 4. 影响
+
+- **DB 变更**：V27 `sub_task.depends_on jsonb`；无新表
+- **接口变化**：拆解草案与子任务详情携带 `dependsOn`；confirm 对成环草案返回业务异常
+- **行为变化**：有依赖的子任务在上游全 DONE 前不分发（含孤儿扫描）；REVIEW 态自动 LLM 核验；Task 全子任务完成自动 DONE；执行链默认平台内 LLM Agent 闭环
+
+#### 5. 遗留与下一步
+
+- `SubTaskAutoExecutionDispatcher.onAssigned` catch 仍只 log.error 不写 timeline，静默失败排查依赖后端日志，可补 `dispatch_failed` timeline 事件
+- 全局 Long→String 序列化对其它 jsonb 写入路径的同类污染未逐一排查（本轮只修 depends_on），后续 DB 写序列化应一律避开全局 ObjectMapper
+- 存量脏数据（run5/run6 的字符串数组 depends_on 行）靠读侧 String 归一化兼容，未做数据迁移
+- 前端规划确认页（草案依赖可视化）保持演进项
+
+---
+
+### 6.19 执行对话流与核验落库（V28，2026-07-29）
+
+#### 1. 背景
+
+V27 内循环走通后仍有三处"过程黑盒"：①执行产出只存 `sub_task.context.lastExecution` 摘要，LLM 原始全文无处可查；②自动核验只在 timeline 留 `auto_review_*` 事件与结论，核验 Prompt 与 REVIEWER 的分析过程完全不落库，人工兜底时无据可依；③自动核验结果不进 `review_record`，与人工审查无法同表对照。另有历史遗留：`conversation_message` 表自建表以来从未被写入（死表），且缺 `update_by`/`update_time` 审计列（BaseEntity 自动填充会导致 INSERT 报列不存在）。用户决策采用方案 2+3 组合：激活 `conversation_message` 作为子任务级长对话（Tier 2 工作记忆）+ 自动核验落 `review_record`；Planner 多轮对话解析明确后置。扩展任务：死信池（V25 `DEAD_LETTER` 状态池）后端接口已有但前端无菜单入口与操作，本轮补齐前端闭环。
+
+#### 2. 实际落地
+
+- **DB（Flyway `V28__conversation_message_audit_columns.sql`）**：`conversation_message` 补 `update_by VARCHAR(64) NOT NULL DEFAULT ''` + `update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP` 两列并挂 `update_update_time_column` 触发器（对齐其他表）；`conversation_archive` 保持不动；死信不建新表（维持 V25 状态池设计）
+- **核验 Prompt 与 Verdict**：`prompts/subtask-review.md` 输出 JSON 增加 `analysis` 字段，强制 LLM 逐条对照验收标准写出核验分析过程；`SubTaskReviewService.ReviewVerdict` 增加 `analysis`（`@JsonIgnoreProperties` 容忍旧格式）
+- **`ConversationService` 改造**：`addMessage` 改为 `@Transactional(propagation = REQUIRES_NEW)` 独立事务并扩展签名支持 `toolName`；所有调用点 try/catch 记 warn——对话写入失败绝不阻断主链路
+- **执行侧写入**：`ExecutionResultHandler.handleReport` 幂等检查后写入 `role=assistant, senderType=agent, content=output 全文, toolName="sub_task_execute"`；失败上报写 `sub_task_execute_failed`；INTERNAL/EXTERNAL 上报共用此入口，外部 Agent 提交同样被记录
+- **核验侧写入**：`SubTaskReviewService.reviewSubTask` LLM 返回后写两条——核验 Prompt 全文（`role=user, senderType=platform, toolName="subtask_review_prompt"`）+ LLM 原始输出全文含 analysis（`role=assistant, senderType=agent, toolName="subtask_review_verdict"`）；verdict 不可解析时同样写入原始输出（人工兜底最需要的内容）
+- **自动核验落 `review_record`**：`ReviewService` 新增 `recordAutoReview`（round 自增复用 createReview 逻辑、`remark="AUTO_REVIEW"` 标记来源），仅落记录不做状态流转不做奖励加减分（SubTaskReviewService 自己负责 complete/rework，避免双重流转）；通过/驳回分支各调一次，try/catch 不阻断；analysis 全文不进 review_record（进对话流，职责分离）；`ReviewController.toResponse` 已返回 remark，前端审查列表天然可区分
+- **查询 API（helloai-api）**：`SubTaskController` 新增薄入口 `GET /api/sub-tasks/{id}/conversation` → `ConversationService.getMessages`；新 DTO `ConversationMessageItem`（id/role/senderType/senderId/content/contentType/toolName/seq/createTime），Controller 只做实体→DTO 映射（§6.3 红线合规）
+- **前端执行对话流**：`types/index.ts` 补 `ConversationMessageItem` + `api/subTask.ts` 补 `conversation(id)`；`SubTaskDetail.vue` 详情卡与时间线之间新增"执行对话流"卡片——按 seq 顺序聊天流样式、按 toolName 打标签（执行产出/执行失败/核验请求/核验分析）、>300 字默认折叠、空态 el-empty、纳入既有 5s 轮询与终态停止逻辑
+- **前端死信池闭环**：`api/subTask.ts` 补 `redispatchDeadLetter(id, agentId)` 调既有 `POST /api/sub-tasks/dead-letter/redispatch/{id}`；`SubTaskList.vue` 对 `DEAD_LETTER` 行加红色"重新指派"按钮 + AgentSelect 弹窗，并支持读 `route.query.status` 初始化筛选与 watch 联动；`MainLayout.vue` 加"死信池"菜单项（`index="/sub-tasks?status=DEAD_LETTER"`，Warning 图标），`activeMenu` 按 `route.query.status` 区分同路由双菜单高亮；菜单徽标核实后跳过（dashboard 统计无 deadLetterCount 字段，`TaskRelatedCounts` 里的是删除预检口径，不为徽标改后端）
+
+#### 3. 测试与验证
+
+- 单测同步：`ExecutionResultHandlerIntegrationTest` / `SubTaskReviewServiceTest` 因主类构造器新增依赖编译失败（12 个 Error），补 `@Mock ConversationService`（+`@Mock ReviewService`）与构造器传参后 `mvn -pl helloai-core -am test` → **269 全绿 BUILD SUCCESS**；`npm run build` vue-tsc 0 错；`package-backend` 全模块 BUILD SUCCESS（helloai-api 编译验证 Controller/DTO）
+- 真实链路 `scripts/powershell/verify-conversation-flow-e2e.ps1`（复用 inner-loop 骨架 + STEP7 对话流断言 + STEP8 AUTO_REVIEW 断言，D8 规则纯 ASCII runtime）→ **全绿**：2 个 DONE 子任务各 3 条消息 seq 1→2→3、三类 toolName 齐备、角色/senderType 正确、AUTO_REVIEW 记录各 1 条且 DONE 子任务最后一条为 APPROVED
+- MCP postgres_helloai 真库复核：`conversation_message` 6 行，`update_by='system'` 证明 V28 审计列 + BaseEntity 自动填充生效；verdict content 含 `analysis` 字段且 LLM 确实逐条对照验收标准输出；`review_record` 2 行 `remark='AUTO_REVIEW'`/APPROVED/score=4/round=1
+- 浏览器实测（Browser subagent 8 步全过）：登录 → 死信池菜单 → 筛选自动选中 → 3 条存量死信 → 重新指派弹窗指派成功 → 死信列表消失（被指派子任务随后被自动执行链推进至 DONE，链路完整）→ DONE 子任务详情页"执行对话流"卡片 3 条带标签消息；无 console 报错
+- **环境坑（本轮最严重）**：第一次 E2E 卡 REVIEW——新 jar 启动失败（`webServerStartStop` 端口占用）但 Flyway V28 已在退出前执行成功，`wait-backend` 误报 BACKEND_UP；netstat + `Win32_Process.CommandLine` 定位 6565 被 IntelliJ Debug 模式启动的旧代码进程占用（classpath `target\classes`，`kill-backend.ps1` 只匹配 jar 命令行杀不掉）→ `taskkill /PID /F` 后重启新 jar 重跑全绿。教训：E2E 前必须确认端口归属进程的启动方式与代码版本
+
+#### 4. 影响
+
+- **接口新增**：`GET /api/sub-tasks/{id}/conversation`
+- **DB 变更**：V28 `conversation_message` 补两审计列 + 触发器；无新表；`conversation_message` 由死表转为已激活
+- **行为变化**：执行/核验全过程原文落库可追溯；自动核验与人工审查同表可查（remark 区分）；`sub_task.context.lastExecution` 写入保持不变（对话流是增量副本）；死信池前端操作闭环
+
+#### 5. 遗留与下一步
+
+- seq 并发竞争（同子任务同时写）无唯一约束，低概率重号可接受，本轮不加锁
+- `conversation_archive` 不动、Redis 热存 ContextManager 保持目标态；Planner 多轮对话解析按用户决策后置
+- 死信池菜单徽标（死信计数）待 dashboard 统计接口补 deadLetterCount 后再加
+
+---
+
+### 6.20 LLM Agent 收件箱治理 + 身份幂等复用（2026-07-29）
+
+#### 1. 背景
+
+两个真库暴露的堆积问题：①API_KEY_LLM Agent 的消费链路走 outbox→MQ（后端进程内 `LocalExecutionCommandConsumer` 消费），收件箱消息写了永远无人读——真库 164 条全未读堆积（92 sub_task.review + 26 sub_task.assigned + 46 task.created）；②E2E 脚本每轮用时间戳注册新 Agent（`inner-loop-planner-{ts}` 等），真库膨胀至 27 个 API_KEY_LLM Agent（24 个 SLEEPING 遗留），且无凭证遗留 Agent 因"API_KEY_LLM 心跳/OFFLINE 双重豁免"仍可被选人器选中（选中即 500），迫使脚本自带 sleep 历史 Agent 的 workaround（STEP2.0）。用户决策：收件箱选"不再写入"（管理员视图方案不做）；身份治理选"name 幂等复用"（get-or-create，不做按 key 指纹去重）。无 Flyway 变更、无新表。
+
+#### 2. 实际落地
+
+- **收件箱写入收口**：`AgentInboxService.send` 单一咽喉点写入前 `agentMapper.selectById` 守卫——Agent 不存在（防御）或 `accessType == API_KEY_LLM` 时 log.debug 跳过（不落库、不发 `InboxMessageCreatedEvent` 门铃）；注入 `AgentMapper` 而非 AgentService 避免 service 层依赖环；全部 4 个写入方（SubTaskService 五类事件 / TaskController task.created / TaskService republish / NotificationConsumer）零改动被覆盖，CLI_CLIENT / WEB_BROWSER 行为不变
+- **name 幂等注册**：`AgentService.registerOrGet(name, role, description)`——同名不存在委派既有 `register`；存在则校验角色一致（不一致抛 BizException），复用路径顺带归位 `status→ACTIVE`、`SLEEPING→OFFLINE`（免脚本单独 wake），返回已有 Agent 不重发 consumerToken；原 `register` 严格重名报错语义保留（人工注册防误建）
+- **Controller idempotent 参数**：`AgentController.register` / `register-with-token` body 新增可选布尔 `idempotent`，true 时改调 `registerOrGet`；复用路径仍执行 `applyRegistrationExtras`（accessType/modelType/labels/capabilities 幂等收敛到最新入参）
+- **选人凭证校验**：`AgentSelector.pickFromCandidates` 过滤链 ACTIVE 之后新增 `hasUsableCredential`——非 API_KEY_LLM 直接放行（不查 vault）；API_KEY_LLM 必须 `credentialVaultService.hasActiveAgentCredential(id)`（V14 已有方法直接复用）；查询异常防御式降级为排除（选中无凭证 Agent 必 500，排除更安全）。从根上封堵无凭证遗留 Agent 劫持选人
+- **7 个 E2E 脚本幂等化**：`verify-inner-loop-e2e` / `verify-conversation-flow-e2e` / `verify-subtask-deadletter` / `verify-subtask-redispatch-auto-execution` / `verify-planner-decompose` / `verify-agent-execution-preview` / `verify-agent-llm-connectivity` 全部改固定名（`inner-loop-planner`、`conv-flow-executor` 等，去 `$ts` 后缀）+ `idempotent = $true`；inner-loop / conv-flow 删除 STEP2.0（sleep 历史 Agent workaround，固定名复用下会误伤自身且凭证过滤已替代其作用）；vault 绑 key 保持每轮重绑（`saveAgentApiKeyCredential` 本身 upsert 幂等）；D8 规则维持（runtime 纯 ASCII）
+
+#### 3. 测试与验证
+
+- 单测：`AgentSelectorTest` 补 `@Mock CredentialVaultService`（5 处构造器 +1 参、setUp lenient 默认有凭证）+ 新增凭证过滤 @Nested 4 用例；`AgentInboxServiceTest` 构造器补 agentMapper + 新增 2 守卫用例；`AgentServiceTest` 新增 registerOrGet 4 用例（复用归位/已归位不更新/角色冲突/不存在则创建，lambdaQuery 链式 mock）；`mvn test -pl helloai-core -am` → **279 全绿 BUILD SUCCESS**（269 基线 + 10 新增）
+- 真实链路 `verify-inner-loop-e2e.ps1` 跑两遍：run1 创建固定名三 Agent 后全链路走通（1 个子任务因 LLM verdict JSON 含裸引号解析失败留 REVIEW，属 V28 既有 unparseable 兜底行为与本轮无关）；**run2 EXIT 0 全绿**（3 子任务拓扑序执行 + 自动核验 3/3 + Task 自动 DONE），且两遍 agentId 完全一致（2082388027347492866/…465/…538）——幂等复用成立
+- MCP postgres_helloai 真库复核：新 jar 后两遍 E2E `agent_inbox` **零新增** API_KEY_LLM 行；`agent` 表 API_KEY_LLM 数量 27→30（仅首次创建 3 个固定名，之后不再增长）
+- **环境坑（两个）**：①首次 `mvn package` 因运行中后端锁定 jar 致 repackage 失败，`-rf :helloai-start` 断点续打会从本地 .m2 拉**旧版**依赖 jar 打进 fat jar（表现为 /plan 404、register 500 等"幽灵旧代码"），且二次全量 package 因增量构建跳过重打（jar 时间戳不变）——必须 `mvn clean package` 强制全量重建并核对 jar LastWriteTime；②`mvn test` 不带 `-am` 时 helloai-core 用 .m2 旧版 helloai-common 报 NoSuchMethodError，同理必须带 `-am`
+
+#### 4. 影响
+
+- **接口变化**：`POST /api/agents/register` / `register-with-token` body 新增可选 `idempotent` 布尔（缺省 false 完全向后兼容）
+- **行为变化**：API_KEY_LLM Agent 不再产生收件箱消息（消费链路不受影响）；无有效托管凭证的 API_KEY_LLM Agent 永久退出自动选人候选池（人工直接指派通道不受限，deadletter 脚本 target 依旧可用）；E2E 重复执行不再膨胀 Agent 表
+- **DB 变更**：无
+
+#### 5. 遗留与下一步
+
+- 存量清理走两条手动 SQL（收件箱 164 条归档 + 时间戳测试 Agent 软禁用），由用户执行后 MCP 只读复核
+- 收件箱管理端"管理员 `_authId` 查空"口径错配不在本轮（用户已选"不再写入"策略），记入遗留
+- `NotificationConsumer` 死路径（有消费者无生产者）不动，仅被咽喉点守卫顺带覆盖
+- 存量 Agent 物理删除不做（软禁用 + 管理页级联删除能力已够）
+
+---
