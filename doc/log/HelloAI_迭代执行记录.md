@@ -2860,3 +2860,46 @@ Planner 角色此前只有枚举定义与一份约 60 行的纯 REST 版 SKILL.m
 - TTL 8h 目前为代码常量，如需环境差异化再外置 `application.yml`
 
 ---
+
+### 6.18 任务级联删除 FK 违反修复 + 拆解链前端补全（2026-07-29）
+
+#### 1. 背景
+
+两个诉求合并一轮交付：
+
+- **FK 违反 bug（用户真实环境报错）**：删除带附件子任务的任务时抛 `PSQLException: update or delete on table "sub_task" violates foreign key constraint "attachment_sub_task_id_fkey"`。取证结论：`V1__init_all.sql` 中 FK 引用 `sub_task(id)` 的表共 6 张（review_record L265、patrol_record L381、conversation_archive L541、attachment L578、agent_execution_record L627、conversation_message L828），而 §6.12 的 `TaskService.deleteTaskCascade` 只删了 execution/review 两张，遗漏 4 张——只要子任务有附件/巡检/会话数据，删任务必炸
+- **拆解链前端断链（N16 遗留收口）**：V26 后端四接口齐全，但前端触发拆解/查看草案/确认拒绝一步都没接，只能靠 API/脚本操作
+
+#### 2. 实际落地
+
+**阶段 0：FK 违反修复（helloai-core）**
+
+- `AttachmentMapper` / `PatrolRecordMapper` / `ConversationArchiveMapper` / `ConversationMessageMapper` 各补 `physicalDeleteByTaskId`，照 `ReviewRecordMapper` 既有范式：`@Delete("DELETE FROM {table} WHERE sub_task_id IN (SELECT id FROM sub_task WHERE task_id = #{taskId})")` + Javadoc 标注仅供任务级联删除使用；attachment 的 `sub_task_id` 可空，IN 子查询天然只删关联行不碰游离附件
+- `TaskService.deleteTaskCascade`：新增 4 个 Mapper 构造注入，在 `subTaskMapper.physicalDeleteByTaskId` 之前依次调用 4 个新删除，同步更新方法 Javadoc 删除顺序说明
+- `getRelatedCounts`/`TaskRelatedCounts` DTO/前端删除弹窗不动（影响面统计字段扩展非本 bug 范围，保持修复原子性）
+
+**拆解链前端补全（纯 helloai-ui，后端零改动）**
+
+- `types/index.ts`：`SubTaskStatus` 补 `PENDING_PLAN_REVIEW` + `SUB_TASK_STATUS_MAP` 补"草案待审"（顺带修复全量子任务列表遇草案态 tag 取 undefined 的隐患）；`TaskStatus` 补 `PLANNING`；新增 `TASK_STATUS_MAP` 五态中文映射；`SubTask` 接口补 `deliverable`/`acceptance`/`priority` 三个可选字段（后端已返回、前端类型缺失）
+- `api/task.ts`：`taskApi` 新增 `plan`（POST /tasks/{id}/plan，单请求覆盖 `timeout: 120_000`，LLM 拆解耗时超全局 30s）/ `planDrafts` / `confirmPlan` / `rejectPlan` 四方法
+- 新组件 `views/task/components/PlanReviewDialog.vue`（照 TaskDeleteDialog 对话框范式）：`@open` 拉草案；表格列序号/标题/内容/交付物/验收标准/优先级 tag/依赖（`dependsOn` 草案 id 映射为表内序号展示如"依赖 #1,#2"）；footer 双动作"确认并分发"（ElMessageBox 二次确认 → confirmPlan → emit done）与"拒绝重拆"（确认 → rejectPlan 回显 cancelledCount）；空草案 el-empty 兜底引导拒绝重拆
+- `TaskList.vue`：状态列废弃 `DONE?'success':'warning'` 三元硬编码改 `TASK_STATUS_MAP`；操作列按状态显示——PENDING 态"AI 拆解"（确认提示约需几十秒 → 按钮 loading → 成功后刷新并直接开审阅弹窗）、PLANNING 态"审阅草案"；"已存在子任务""并发拆解中"等错误由后端 BizException + 拦截器统一弹错，前端不重复防御
+
+#### 3. 测试与验证
+
+- `mvn -pl helloai-core -am test`（JDK 17）→ 全绿 BUILD SUCCESS（无 deleteTaskCascade 既有单测，无直接构造 TaskService 的测试，构造器变更零破坏）
+- `npx vue-tsc --noEmit` 0 错；`npm run build` 通过（chunk 体积警告为既有问题）
+- 未完成：浏览器闭环实测（新建→拆解→审阅→确认/拒绝）与带附件子任务的删除回归——本轮 6565 后端未启动，待真实环境与 `verify-planner-decompose.ps1`（N16 遗留）同一环境一次收口
+
+#### 4. 影响
+
+- **接口/DB**：零变更（纯 Mapper 方法新增 + 前端接线）
+- **行为变化**：删任务不再因子任务带附件/巡检/会话数据而炸 FK；任务列表可视化完成"新建 → AI 拆解 → 草案审阅 → 确认/拒绝 → 跟踪执行"全链，N16"前端规划确认页"遗留项收口（以列表内对话框形态交付，非独立页面）
+
+#### 5. 遗留与下一步
+
+- **孤儿文件**：attachment 行删除后对象存储里的物理文件（bucketName/objectKey）成为孤儿，文件清理需单独立项，与本次 DB 完整性修复解耦
+- 浏览器闭环实测 + `verify-planner-decompose.ps1` 回归待真实环境（6565 后端 + deepseek Provider 可用）
+- `dependsOn` 在草案审阅中只读展示不可编辑（依赖编辑属演进项）；第二步"对话式需求澄清窗口"已有概要设计，建议本轮验收后单独立项
+
+---
