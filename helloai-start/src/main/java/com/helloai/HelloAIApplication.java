@@ -13,7 +13,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @MapperScan({
         "com.helloai.core.agent.mapper",
         "com.helloai.core.task.mapper",
-        "com.helloai.core.system.mapper"
+        "com.helloai.core.system.mapper",
+        "com.helloai.core.planner.mapper"
 })
 @EnableScheduling
 @EnableAsync(proxyTargetClass = true)

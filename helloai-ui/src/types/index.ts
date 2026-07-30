@@ -21,6 +21,8 @@ export interface R<T> {
 // --- 枚举 ---
 export type SubTaskStatus = 'PENDING' | 'ASSIGNED' | 'IN_PROGRESS' | 'PAUSED'
   | 'REVIEW' | 'DONE' | 'REWORK' | 'BLOCKED' | 'CANCELLED' | 'DEAD_LETTER'
+  // V26 Planner 拆解草案态：确认后转 PENDING，拒绝后转 CANCELLED
+  | 'PENDING_PLAN_REVIEW'
 
 export type AgentRole = 'PLANNER' | 'EXECUTOR' | 'REVIEWER' | 'PATROL'
 
@@ -28,7 +30,8 @@ export type AgentStatus = 'ACTIVE' | 'DISABLED'
 
 export type ReviewResult = 'APPROVED' | 'REJECTED'
 
-export type TaskStatus = 'PENDING' | 'IN_PROGRESS' | 'DONE' | 'CANCELLED'
+// PLANNING: V26 拆解草案已生成待审阅（confirm→IN_PROGRESS / reject→回 PENDING）
+export type TaskStatus = 'PENDING' | 'PLANNING' | 'IN_PROGRESS' | 'DONE' | 'CANCELLED'
 
 export type AttachmentStatus = 'ACTIVE' | 'INACTIVE' | 'DELETED'
 
@@ -73,6 +76,10 @@ export interface SubTask {
   assignedAgent: LongId | null
   assignedAgentName?: string
   content: string
+  // V26 拆解产出字段（后端已返回，草案审阅展示用）
+  deliverable?: string | null
+  acceptance?: string | null
+  priority?: string | null
   // V27 依赖编排：前置子任务 id 列表（全部 DONE 才分发），旧数据为空数组
   dependsOn?: LongId[]
   context: Record<string, any> | null
@@ -329,7 +336,16 @@ export const SUB_TASK_STATUS_MAP: Record<SubTaskStatus, { label: string; type: '
   REWORK:      { label: '返工',     type: 'danger' },
   BLOCKED:     { label: '阻塞',     type: 'danger' },
   CANCELLED:   { label: '已取消',   type: 'info' },
-  DEAD_LETTER: { label: '死信待人工', type: 'danger' }
+  DEAD_LETTER: { label: '死信待人工', type: 'danger' },
+  PENDING_PLAN_REVIEW: { label: '草案待审', type: 'warning' }
+}
+
+export const TASK_STATUS_MAP: Record<TaskStatus, { label: string; type: '' | 'success' | 'warning' | 'danger' | 'info' | 'primary' }> = {
+  PENDING:     { label: '待规划',   type: 'info' },
+  PLANNING:    { label: '拆解中',   type: 'warning' },
+  IN_PROGRESS: { label: '进行中',   type: 'primary' },
+  DONE:        { label: '已完成',   type: 'success' },
+  CANCELLED:   { label: '已取消',   type: 'info' }
 }
 
 export const SCORE_GRADE_MAP: Record<string, { label: string; type: '' | 'success' | 'warning' | 'danger' | 'info' }> = {
@@ -411,6 +427,36 @@ export interface ConversationMessage {
   contentType: string
   seq: number
   createTime: string
+}
+
+// V29 对话式需求澄清
+export type RequirementConversationStatus = 'ACTIVE' | 'FINALIZED' | 'ABANDONED'
+
+export interface RequirementConversation {
+  id: LongId
+  title: string
+  status: RequirementConversationStatus
+  taskId: LongId | null
+  finalTitle: string | null
+  finalDescription: string | null
+  roundCount: number
+  createTime: string
+  updateTime: string
+}
+
+export interface RequirementMessage {
+  id: LongId
+  conversationId: LongId
+  role: 'user' | 'assistant'
+  content: string
+  seq: number
+  createTime: string
+}
+
+/** 会话 + 全部消息（create / send / detail 统一返回） */
+export interface ClarifyConversationDetail {
+  conversation: RequirementConversation
+  messages: RequirementMessage[]
 }
 
 export const PROMPT_CATEGORY_MAP: Record<string, string> = {
