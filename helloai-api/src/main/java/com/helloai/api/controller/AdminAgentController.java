@@ -8,11 +8,13 @@ import com.helloai.api.dto.admin.AgentUpdateRequest;
 import com.helloai.api.dto.admin.SleepBatchRequest;
 import com.helloai.api.dto.agent.*;
 import com.helloai.common.base.R;
+import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.config.AgentConfigProperties;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.chat.LlmProviderCatalogService;
 import com.helloai.core.task.entity.ActivityLog;
 import com.helloai.core.task.entity.RewardLog;
 import com.helloai.core.agent.service.AgentService;
@@ -42,6 +44,20 @@ public class AdminAgentController {
     private final AgentService agentService;
     private final PromptTemplateService promptTemplateService;
     private final AgentConfigProperties agentConfigProperties;
+    private final LlmProviderCatalogService llmProviderCatalogService;
+
+    // ══════════════════════════════════════════════════════════════
+    //  LLM Provider 目录（手动注册平台内 LLM Agent 用）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 枚举已配置的 LLM Provider 及其可用性（不含 api-key 明文）。
+     * 前端注册 API_KEY_LLM Agent 时按 available=true 过滤下拉选项。
+     */
+    @GetMapping("/llm-providers")
+    public R<List<LlmProviderCatalogService.ProviderCatalogItem>> listLlmProviders() {
+        return R.ok(llmProviderCatalogService.listProviders());
+    }
 
     // ══════════════════════════════════════════════════════════════
     //  列表（分页 + 筛选 + enrichment）
@@ -70,6 +86,7 @@ public class AdminAgentController {
             vo.setId(a.getId());
             vo.setName(a.getName());
             vo.setRole(a.getRole());
+            vo.setAccessType(a.getAccessType());
             vo.setApiKey(a.getApiKey());
             vo.setDescription(a.getRemark());
             vo.setStatus(a.getStatus());
@@ -105,6 +122,7 @@ public class AdminAgentController {
         vo.setId(agent.getId());
         vo.setName(agent.getName());
         vo.setRole(agent.getRole());
+        vo.setAccessType(agent.getAccessType());
         vo.setDescription(agent.getRemark());
         vo.setStatus(agent.getStatus());
         vo.setTotalScore(agent.getScore());
@@ -313,6 +331,10 @@ public class AdminAgentController {
         if (agent == null) {
             return R.fail("Agent 不存在");
         }
+        // 接入内容面向外部 AI Agent（CLI 接入）；内部 LLM Agent 平台密钥自动绑定，无此流程
+        if (agent.getAccessType() == AgentAccessType.API_KEY_LLM) {
+            return R.fail("内部 LLM Agent 无需接入内容（平台密钥已自动绑定）");
+        }
 
         // 1. 解析 baseUrl（优先配置，否则从请求推导）
         String baseUrl = agentConfigProperties.getBaseUrl();
@@ -358,7 +380,6 @@ public class AdminAgentController {
         vo.setReviewCount((Integer) counts.get("reviewCount"));
         vo.setRewardCount((Integer) counts.get("rewardCount"));
         vo.setActivityCount((Integer) counts.get("activityCount"));
-        vo.setPatrolCount((Integer) counts.get("patrolCount"));
         return R.ok(vo);
     }
 
@@ -380,7 +401,6 @@ public class AdminAgentController {
         vo.setReviewCount((Integer) result.get("reviewCount"));
         vo.setRewardCount((Integer) result.get("rewardCount"));
         vo.setActivityCount((Integer) result.get("activityCount"));
-        vo.setPatrolCount((Integer) result.get("patrolCount"));
         return R.ok(vo);
     }
 

@@ -132,7 +132,7 @@ const availableAgents = computed(() =>
   agents.value.filter(a => a.role === 'EXECUTOR' && a.accessType === 'CLI_CLIENT')
 )
 const ROLE_LABELS: Record<string, string> = {
-  PLANNER: '规划者', EXECUTOR: '执行者', REVIEWER: '审查者', PATROL: '巡检者'
+  PLANNER: '规划者', EXECUTOR: '执行者', REVIEWER: '审查者'
 }
 function roleLabel(role: string) { return ROLE_LABELS[role] || role }
 

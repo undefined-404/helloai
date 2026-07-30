@@ -38,7 +38,7 @@ public class TaskTimeline extends BaseEntity {
     /** 事件类型：agent_offline / task_assigned / task_completed / ... */
     private String eventType;
 
-    /** 事件产生方角色：PLANNER / EXECUTOR / REVIEWER / PATROL / SYSTEM */
+    /** 事件产生方角色：PLANNER / EXECUTOR / REVIEWER / SYSTEM */
     private AgentRole role;
 
     /** 关联 Agent ID（agent_offline 等系统级事件时记录被监控的 Agent） */

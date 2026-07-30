@@ -13,5 +13,6 @@ public class ExecutionResultReport {
     private String finishReason;
     private Object tokenUsage;
     private String output;
+    private String thinking;
     private String error;
 }

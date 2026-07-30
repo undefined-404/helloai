@@ -614,6 +614,9 @@ onBeforeUnmount(() => {
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1;
+  /* 轻微发光提升科技感：紫色为主与主色系一致，外圈极淡青色呼应右下光斑 */
+  text-shadow: 0 0 20px rgba(167, 139, 250, 0.30),
+               0 0 64px rgba(6, 182, 212, 0.12);
 }
 
 .brand-header-accent {
@@ -664,19 +667,19 @@ onBeforeUnmount(() => {
 }
 
 .panel-footer a {
-  color: rgba(255, 255, 255, 0.55);
-  font-size: 12px;
+  color: rgba(255, 255, 255, 0.40);
+  font-size: 11px;
   text-decoration: none;
   transition: color var(--ha-duration-fast);
 }
 
 .panel-footer a:hover {
-  color: rgba(255, 255, 255, 0.85);
+  color: rgba(255, 255, 255, 0.75);
 }
 
 .footer-version {
-  color: rgba(255, 255, 255, 0.35);
-  font-size: 12px;
+  color: rgba(255, 255, 255, 0.28);
+  font-size: 11px;
 }
 
 .deco-grid {
@@ -822,6 +825,8 @@ onBeforeUnmount(() => {
   border: 1px solid var(--login-accent-border);
   border-radius: var(--ha-radius-md);
   background: rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   color: rgba(255, 255, 255, 0.72);
   font-size: 13px;
   font-weight: 600;
@@ -841,8 +846,8 @@ onBeforeUnmount(() => {
 
 .entry-tab.active,
 .login-tab.active {
-  border-color: transparent;
-  background: var(--login-accent-solid);
+  border-color: rgba(196, 181, 253, 0.35);
+  background: rgba(124, 58, 237, 0.78);
   color: #FFFFFF;
   box-shadow: 0 6px 18px rgba(124, 58, 237, 0.40);
 }
@@ -993,21 +998,26 @@ onBeforeUnmount(() => {
   --el-button-active-text-color: #FFFFFF;
   --el-button-active-bg-color: transparent;
   --el-button-active-border-color: transparent;
-  background: var(--login-accent-solid);
+  /* 微透明玻璃态：半透紫 + blur + 浅紫细边框，保留主 CTA 权重 */
+  background: rgba(124, 58, 237, 0.78);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(196, 181, 253, 0.35);
   box-shadow: var(--login-accent-shadow);
   transition: all var(--ha-duration-normal) var(--ha-ease-out);
 }
 
 .login-submit:hover {
   transform: translateY(-1px);
-  background: var(--login-accent-solid-hover);
+  background: rgba(109, 40, 217, 0.88);
+  border-color: rgba(196, 181, 253, 0.50);
   box-shadow: var(--login-accent-shadow-hover);
   filter: saturate(1.04);
 }
 
 .login-submit:active {
   transform: translateY(0);
-  background: var(--login-accent-solid-active);
+  background: rgba(91, 33, 182, 0.92);
   box-shadow: 0 8px 18px rgba(124, 58, 237, 0.18);
 }
 

@@ -25,7 +25,7 @@ HelloAI 的设计不是单一来源，而是吸收多个项目中最适合当前
 
 - 多 Agent 平台的整体产品形态与后台结构
 - Agent 自动注册、onboarding、角色接入体验
-- 四角色模型（planner / executor / reviewer / patrol）
+- 角色模型（OpenMOSS 原生为 planner / executor / reviewer / patrol 四角色；HelloAI 已收敛为 planner / executor / reviewer 三角色，patrol 的兜底目标由重分配熔断、死信池与定时补偿任务覆盖）
 - Prompt 模板、Skills 组织与角色能力边界
 
 适合落到 HelloAI 的部分：
@@ -430,13 +430,13 @@ TCC 在本项目中更多作为最终一致与兜底思路参考，而不是逐�
 
 ### 5.3 第三阶段：补协作编排能力
 
-优先参考：AgentTeams-main（Team 委托 + 工作区协调）+ OpenMOSS（四角色模型）
+优先参考：AgentTeams-main（Team 委托 + 工作区协调）+ OpenMOSS（角色模型）
 
 重点工作：
 
 - 工作流模板化（2~4 角色、可嵌套 Team）
 - Team / coordinator / workflow 节点建模
-- Planner / Executor / Reviewer / Patrol 自动协作闭环
+- Planner / Executor / Reviewer 自动协作闭环
 
 ### 5.4 第四阶段：补接入与执行器扩展
 

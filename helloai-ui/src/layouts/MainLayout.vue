@@ -19,14 +19,14 @@
           <el-icon><Odometer /></el-icon>
           <span>概述</span>
         </el-menu-item>
-        <el-menu-item index="/tasks">
-          <el-icon><List /></el-icon>
-          <span>任务管理</span>
-        </el-menu-item>
-        <!-- V29 对话式需求澄清入口 -->
+        <!-- V29 对话式需求澄清入口（置于概述与任务管理之间） -->
         <el-menu-item index="/requirement-chat">
           <el-icon><ChatDotRound /></el-icon>
           <span>对话新建</span>
+        </el-menu-item>
+        <el-menu-item index="/tasks">
+          <el-icon><List /></el-icon>
+          <span>任务管理</span>
         </el-menu-item>
         <el-menu-item index="/sub-tasks">
           <el-icon><Document /></el-icon>

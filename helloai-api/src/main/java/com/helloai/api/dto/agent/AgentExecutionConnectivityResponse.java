@@ -25,6 +25,7 @@ public class AgentExecutionConnectivityResponse {
     private String stage;
     private Long latencyMs;
     private String output;
+    private String thinking;
     private String errorMessage;
     private String rootException;
     private String rootMessage;

@@ -4,7 +4,7 @@ import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.chat.AgentChatClientService;
-import com.helloai.core.agent.chat.ProviderChatClientFactory;
+import com.helloai.core.agent.chat.provider.ProviderChatClientFactory;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.executor.AgentExecutorRouter;

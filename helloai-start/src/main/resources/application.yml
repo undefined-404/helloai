@@ -21,9 +21,6 @@ spring:
         completions-path: ${DEEPSEEK_CHAT_COMPLETIONS_PATH:/v1/chat/completions}
         options:
           model: ${DEEPSEEK_CHAT_MODEL:deepseek-chat}
-      http:
-        connect-timeout-ms: ${DEEPSEEK_CONNECT_TIMEOUT_MS:5000}
-        read-timeout-ms: ${DEEPSEEK_READ_TIMEOUT_MS:60000}
   datasource:
     url: jdbc:postgresql://localhost:15432/helloai?currentSchema=public&reWriteBatchedInserts=true
     username: postgres
@@ -58,7 +55,6 @@ spring:
     locations: classpath:db/migration
     # 容忍历史迁移脚本不在 classpath（V2-V10 在历史会话中已应用但脚本文件未保留）
     validate-on-migrate: false
-    ignore-missing-migrations: true
 
 mybatis-plus:
   global-config:
@@ -77,14 +73,6 @@ springdoc:
     path: /swagger-ui.html
   api-docs:
     path: /v3/api-docs
-
-moss:
-  thread:
-    pool:
-      core-size: 8
-      max-size: 64
-      queue-capacity: 1000
-      keep-alive-seconds: 60
 
 
 # === Agent 自注册配置 ===
@@ -154,12 +142,30 @@ helloai:
       queue: helloai.execution-command.queue
       routing-key: execution.command.created
   # N9: 多Provider统一配置入口，替代各factory中散落的@Value
+  # api-key 配置后该 provider 视为"已生效"，可在前端手动注册平台内 LLM Agent 时选择；
+  # key/base-url 参考 E:\yhzx\1027\springai 的 spring.ai.* 配置。
+  # 四个 provider 均有 ProviderChatClientFactory 实现：deepseek 官方SDK，
+  # moonshot/dashscope 走 OpenAI 兼容接口，minimax 走 Anthropic 兼容接口
   providers:
     deepseek:
+      api-key: ${DEEPSEEK_API_KEY:sk-a36fdda1d4ad4e0386e78fc435be0d16}
       base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
       default-model: ${DEEPSEEK_CHAT_MODEL:deepseek-chat}
       connect-timeout-ms: ${DEEPSEEK_CONNECT_TIMEOUT_MS:5000}
       read-timeout-ms: ${DEEPSEEK_READ_TIMEOUT_MS:60000}
+    moonshot:
+      api-key: ${MOONSHOT_API_KEY:sk-1cpCOa7X7WZ2LcssVoXuA3BfUIKtTULzuvT0gQD4eIyYSmgm}
+      base-url: ${MOONSHOT_BASE_URL:https://api.moonshot.cn}
+      default-model: ${MOONSHOT_CHAT_MODEL:moonshot-v1-8k}
+    minimax:
+      api-key: ${MINIMAX_API_KEY:sk-api-22dKrEl-khvBi3EfPBHRckHi0l5byt-n1sVWgMhdKGbqh2rtbXHFIEozy0oFHxHOCj2mqvl5SB4jcYJYj6w3Gq_430fhfQfiyrb1CGkO0TeWIjxReT5x5Hc}
+      base-url: ${MINIMAX_BASE_URL:https://api.minimaxi.com/anthropic}
+      default-model: ${MINIMAX_CHAT_MODEL:MiniMax-M2.5}
+    dashscope:
+      api-key: ${DASHSCOPE_API_KEY:sk-1c192ee88d614dbbbd66af070cd768eb}
+      # OpenAI 兼容模式，实际端点为 {base-url}/v1/chat/completions
+      base-url: ${DASHSCOPE_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
+      default-model: ${DASHSCOPE_CHAT_MODEL:qwen-plus}
   security:
     credential:
       aes-key-base64: ${HELLOAI_CREDENTIAL_AES_KEY_BASE64:MEsmol1MWDTT69/lAOGeYGmDa9/a6S/lfHdfmekX0MM=}
@@ -169,13 +175,6 @@ helloai:
     # 飞书机器人 Webhook（v2.4 §4.8）。留空则不发送
     feishu-webhook-url: ""
 
-
-score:
-  time-weight: 0.25
-  quality-weight: 0.30
-  coop-weight: 0.25
-  stability-weight: 0.15
-  efficiency-weight: 0.05
 
 logging:
   level:
@@ -209,27 +208,18 @@ management:
     web:
       exposure:
         include: health,metrics,circuitbreakers
-  metrics:
-    export:
-      simple:
-        enabled: true
   endpoint:
     health:
       show-details: always
 
-# === CGLIB 缓存策略（v2.4 §3.1 M4 配套，避开 spring-boot CGLIB cache 损坏） ===
-# 默认 false，由 HelloAIApplication.main() 读取后 System.setProperty 注入到 JVM。
-# 说明：
-#   - spring-ai 1.x + spring-boot 3.4 + McpAuthFilterConfig CGLIB 增强，
-#     在 spring-boot 进程异常退出（kill -9 / OOM / 断电）后偶发导致
-#     下次启动报 "Unable to load cache item"。
-#   - 设 false 后：每次启动重新生成 CGLIB 代理类，多花 ~2 秒，但绝对稳定。
-#   - 设 true 后：启动更快，但需要保证 spring-boot 进程正常退出
-#     或者在重启前清 %TEMP%\cglib* 目录，否则会复现 cache 损坏。
-# 切换方法（无需改代码）：
+# === CGLIB 缓存策略说明（v2.4 §3.1 M4 配套） ===
+# 该开关是 JVM 系统属性 cglib.cache.classes（非 Spring 配置项，yml 写了也不生效），
+# 由 HelloAIApplication.main() 在 Spring 启动前 System.setProperty 默认置为 false：
+#   - false：每次启动重新生成 CGLIB 代理类，多花 ~2 秒，但绝对稳定（默认）。
+#   - true：启动更快，但 spring-boot 进程异常退出（kill -9 / OOM / 断电）后
+#     偶发 "Unable to load cache item"，需先清 %TEMP%\cglib* 目录。
+# 切换方法：
 #   - 命令行：java -Dcglib.cache.classes=true -jar helloai-start.jar
 #   - Docker ENV：JAVA_TOOL_OPTIONS=-Dcglib.cache.classes=true
 #   - IDEA Run Configuration VM options：-Dcglib.cache.classes=true（仅开发期）
 # 详细参见项目 memory "Spring Boot CGLIB 缓存污染诊断与修复"。
-cglib:
-  cache-classes: false

@@ -155,6 +155,7 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
             report.setFinishReason(result.getFinishReason());
             report.setTokenUsage(result.getTokenUsage());
             report.setOutput(result.getOutput());
+            report.setThinking(result.getThinking());
             report.setError(null);
             executionResultHandler.handleReport(report);
             if (command.getRecordId() != null) {

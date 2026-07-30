@@ -9,5 +9,4 @@ public class AgentDeleteResult {
     private int reviewCount;
     private int rewardCount;
     private int activityCount;
-    private int patrolCount;
 }

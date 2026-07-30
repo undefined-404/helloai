@@ -8,7 +8,6 @@ import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentDutyLeaseMapper;
 import com.helloai.core.agent.mapper.AgentInboxMapper;
-import com.helloai.core.system.mapper.PatrolRecordMapper;
 import com.helloai.core.task.mapper.ActivityLogMapper;
 import com.helloai.core.task.mapper.ReviewRecordMapper;
 import com.helloai.core.task.mapper.RewardLogMapper;
@@ -47,8 +46,6 @@ class AgentServiceTest {
     @Mock
     private ActivityLogMapper activityLogMapper;
     @Mock
-    private PatrolRecordMapper patrolRecordMapper;
-    @Mock
     private ReviewRecordMapper reviewRecordMapper;
     @Mock
     private AgentInboxMapper agentInboxMapper;
@@ -61,7 +58,7 @@ class AgentServiceTest {
 
     private AgentService newSpyService() {
         return spy(new AgentService(subTaskMapper, rewardLogMapper, activityLogMapper,
-                patrolRecordMapper, reviewRecordMapper, agentInboxMapper, agentDutyLeaseMapper,
+                reviewRecordMapper, agentInboxMapper, agentDutyLeaseMapper,
                 taskTimelineService, agentMcpServerService));
     }
 
@@ -78,18 +75,16 @@ class AgentServiceTest {
         when(reviewRecordMapper.selectCount(any())).thenReturn(2L);
         when(rewardLogMapper.selectCount(any())).thenReturn(5L);
         when(activityLogMapper.selectCount(any())).thenReturn(7L);
-        when(patrolRecordMapper.selectCount(any())).thenReturn(0L);
 
         Map<String, Object> counts = service.getRelatedCounts(1L);
 
         assertThat(counts.get("agentId")).isEqualTo(1L);
         assertThat(counts.get("agentName")).isEqualTo("agent-a");
-        // 回归断言：五个计数必须是 Integer 实例，且数值正确
+        // 回归断言：四个计数必须是 Integer 实例，且数值正确
         assertThat(counts.get("subTaskCount")).isInstanceOf(Integer.class).isEqualTo(3);
         assertThat(counts.get("reviewCount")).isInstanceOf(Integer.class).isEqualTo(2);
         assertThat(counts.get("rewardCount")).isInstanceOf(Integer.class).isEqualTo(5);
         assertThat(counts.get("activityCount")).isInstanceOf(Integer.class).isEqualTo(7);
-        assertThat(counts.get("patrolCount")).isInstanceOf(Integer.class).isEqualTo(0);
     }
 
     @Test

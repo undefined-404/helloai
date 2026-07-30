@@ -17,7 +17,6 @@
         <div class="count-row"><span>审查记录</span><strong>{{ counts.reviewCount }}</strong></div>
         <div class="count-row"><span>积分流水</span><strong>{{ counts.rewardCount }}</strong></div>
         <div class="count-row"><span>活动日志</span><strong>{{ counts.activityCount }}</strong></div>
-        <div class="count-row"><span>巡查记录</span><strong>{{ counts.patrolCount }}</strong></div>
       </div>
       <p v-else-if="!loadingCounts" style="font-size:13px;color:var(--ha-ink-secondary);margin:0">
         关联数据统计加载失败，不影响删除操作

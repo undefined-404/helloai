@@ -4,6 +4,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.core.agent.chat.AgentProviderResolver;
+import com.helloai.core.agent.chat.ChatResponseContentExtractor;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.entity.Agent;
@@ -181,9 +182,10 @@ public class ApiKeyAgentExecutor implements AgentExecutor {
                     provider,
                     vaultApiKey
             );
-            String content = response.getResult() != null && response.getResult().getOutput() != null
-                    ? response.getResult().getOutput().getText()
-                    : "";
+            // 分离正文与思考过程：推理模型（如 Minimax M2.5）的 thinking 块不混入 output
+            ChatResponseContentExtractor.ExtractedContent extracted = ChatResponseContentExtractor.extract(response);
+            String content = extracted.text();
+            String thinking = extracted.thinking().isBlank() ? null : extracted.thinking();
             Usage usage = response.getMetadata() != null ? response.getMetadata().getUsage() : null;
             Integer totalTokens = usage != null ? usage.getTotalTokens() : null;
 
@@ -194,7 +196,7 @@ public class ApiKeyAgentExecutor implements AgentExecutor {
                     "subTaskId", task.getSubTaskId(),
                     "tokens", totalTokens
             ));
-            return AgentResult.success(content, "STOP", getName(), totalTokens);
+            return AgentResult.success(content, thinking, "STOP", getName(), totalTokens);
         } catch (Exception e) {
             Throwable root = e;
             while (root.getCause() != null && root.getCause() != root) {

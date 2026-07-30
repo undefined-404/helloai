@@ -79,7 +79,8 @@
           <el-button :type="agent.status === 'ACTIVE' ? 'warning' : 'success'" @click="openToggleStatus">
             {{ agent.status === 'ACTIVE' ? '注销' : '恢复注册' }}
           </el-button>
-          <el-button type="primary" plain @click="openOnboarding">生成接入内容</el-button>
+          <!-- 内部 LLM Agent 无 CLI 接入流程，不展示接入内容入口 -->
+          <el-button v-if="agent.accessType !== 'API_KEY_LLM'" type="primary" plain @click="openOnboarding">生成接入内容</el-button>
           <el-button type="primary" @click="handleResetKey">重置 API Key</el-button>
           <el-button type="danger" @click="openDelete">删除 Agent</el-button>
         </div>
@@ -184,7 +185,7 @@ function getAgentId() {
 }
 
 const roleLabels: Record<AgentRole, string> = {
-  PLANNER: '规划者', EXECUTOR: '执行者', REVIEWER: '审查者', PATROL: '巡查者'
+  PLANNER: '规划者', EXECUTOR: '执行者', REVIEWER: '审查者'
 }
 function roleLabel(r: AgentRole) { return roleLabels[r] || r }
 

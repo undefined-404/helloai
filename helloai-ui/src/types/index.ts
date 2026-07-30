@@ -24,7 +24,7 @@ export type SubTaskStatus = 'PENDING' | 'ASSIGNED' | 'IN_PROGRESS' | 'PAUSED'
   // V26 Planner 拆解草案态：确认后转 PENDING，拒绝后转 CANCELLED
   | 'PENDING_PLAN_REVIEW'
 
-export type AgentRole = 'PLANNER' | 'EXECUTOR' | 'REVIEWER' | 'PATROL'
+export type AgentRole = 'PLANNER' | 'EXECUTOR' | 'REVIEWER'
 
 export type AgentStatus = 'ACTIVE' | 'DISABLED'
 
@@ -112,6 +112,8 @@ export interface AgentListItem {
   id: string
   name: string
   role: AgentRole
+  // 接入类型：内部 LLM Agent（API_KEY_LLM）不展示接入内容入口
+  accessType?: 'CLI_CLIENT' | 'API_KEY_LLM' | 'WEB_BROWSER' | string
   apiKey: string
   description: string
   remark?: string | null
@@ -147,7 +149,6 @@ export interface AgentRelatedCounts {
   reviewCount: number
   rewardCount: number
   activityCount: number
-  patrolCount: number
 }
 
 export interface AgentDeleteResult {
@@ -156,7 +157,6 @@ export interface AgentDeleteResult {
   reviewCount: number
   rewardCount: number
   activityCount: number
-  patrolCount: number
 }
 
 export interface ScoreLogItem {
@@ -196,7 +196,6 @@ export const ROLE_COLOR_MAP: Record<AgentRole, { bar: string; bg: string; text: 
   PLANNER:  { bar: '#7C3AED', bg: '#F5F3FF', text: '#6D28D9', border: '#EDE9FE', tagType: '' },
   EXECUTOR: { bar: '#3B82F6', bg: '#EFF6FF', text: '#2563EB', border: '#DBEAFE', tagType: 'primary' },
   REVIEWER: { bar: '#F59E0B', bg: '#FFFBEB', text: '#D97706', border: '#FEF3C7', tagType: 'warning' },
-  PATROL:   { bar: '#14B8A6', bg: '#F0FDFA', text: '#0D9488', border: '#CCFBF1', tagType: 'success' },
 }
 
 export interface ReviewRecord {
@@ -227,15 +226,6 @@ export interface ActivityLog {
   subTaskId: LongId | null
   action: string
   detail: Record<string, any> | null
-  createTime: string
-}
-
-export interface PatrolRecord {
-  id: LongId
-  subTaskId: LongId
-  patrolAgent: LongId
-  alertType: string
-  description: string | null
   createTime: string
 }
 

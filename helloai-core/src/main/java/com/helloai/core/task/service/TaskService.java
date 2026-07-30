@@ -15,7 +15,6 @@ import com.helloai.core.agent.mapper.ConversationMessageMapper;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.system.mapper.AttachmentMapper;
 import com.helloai.core.system.mapper.ModuleMapper;
-import com.helloai.core.system.mapper.PatrolRecordMapper;
 import com.helloai.core.system.entity.Module;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
@@ -50,7 +49,6 @@ public class TaskService extends ServiceImpl<TaskMapper, Task> {
     private final AgentInboxMapper agentInboxMapper;
     private final TaskTimelineMapper taskTimelineMapper;
     private final AttachmentMapper attachmentMapper;
-    private final PatrolRecordMapper patrolRecordMapper;
     private final ConversationArchiveMapper conversationArchiveMapper;
     private final ConversationMessageMapper conversationMessageMapper;
     private final AgentMapper agentMapper;
@@ -101,9 +99,9 @@ public class TaskService extends ServiceImpl<TaskMapper, Task> {
      *
      * <p>删除顺序（子查询依赖被引用行仍存在，顺序不可调换）：
      * agent_inbox（含未读“MQ 未查看消息”）→ agent_execution_record → review_record
-     * → attachment → patrol_record → conversation_archive → conversation_message
+     * → attachment → conversation_archive → conversation_message
      * → task_timeline → sub_task（含 DEAD_LETTER 死信行）→ module → task。
-     * 其中外键引用 sub_task.id 的 6 张表（execution/review/attachment/patrol/archive/message）
+     * 其中外键引用 sub_task.id 的 5 张表（execution/review/attachment/archive/message）
      * 必须全部先于 sub_task 删除，否则抛 FK 违反。</p>
      */
     @Transactional(rollbackFor = Exception.class)
@@ -119,12 +117,11 @@ public class TaskService extends ServiceImpl<TaskMapper, Task> {
 
         // 清理级联数据（物理删除：@TableLogic 会把普通 delete 改写为软删，
         // 这里走 Mapper 自定义 DELETE SQL 真删，不留残留行）。
-        // 外键引用 sub_task.id 的 6 张表与 inbox 的 SQL 均依赖 sub_task 子查询，必须先于 sub_task 删除。
+        // 外键引用 sub_task.id 的 5 张表与 inbox 的 SQL 均依赖 sub_task 子查询，必须先于 sub_task 删除。
         int inboxDeleted = agentInboxMapper.physicalDeleteByTaskRef(taskId);
         agentExecutionRecordMapper.physicalDeleteByTaskId(taskId);
         reviewRecordMapper.physicalDeleteByTaskId(taskId);
         attachmentMapper.physicalDeleteByTaskId(taskId);
-        patrolRecordMapper.physicalDeleteByTaskId(taskId);
         conversationArchiveMapper.physicalDeleteByTaskId(taskId);
         conversationMessageMapper.physicalDeleteByTaskId(taskId);
         taskTimelineMapper.physicalDeleteByTaskId(taskId);

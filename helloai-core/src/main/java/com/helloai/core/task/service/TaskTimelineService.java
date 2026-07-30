@@ -41,7 +41,7 @@ public class TaskTimelineService extends ServiceImpl<TaskTimelineMapper, TaskTim
      * @param taskId     主任务 ID（可空，用于系统级事件如 agent_offline）
      * @param subTaskId  子任务 ID（可空）
      * @param eventType  事件类型（snake_case，如 agent_offline / task_assigned）
-     * @param role       事件产生方角色（PLANNER / EXECUTOR / REVIEWER / PATROL / SYSTEM）
+     * @param role       事件产生方角色（PLANNER / EXECUTOR / REVIEWER / SYSTEM）
      * @param agentId    关联 Agent ID（可空）
      * @param payload    事件负载（可空，空时存空 Map）
      */

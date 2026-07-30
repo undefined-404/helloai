@@ -77,11 +77,47 @@
           <el-input v-model="form.name" />
         </el-form-item>
         <el-form-item label="角色" prop="role">
-          <el-select v-model="form.role" style="width:100%">
+          <el-select v-model="form.role" style="width:100%" @change="onRoleChange">
             <el-option label="规划器 PLANNER" value="PLANNER" />
             <el-option label="执行器 EXECUTOR" value="EXECUTOR" />
             <el-option label="审查器 REVIEWER" value="REVIEWER" />
-            <el-option label="巡逻 PATROL" value="PATROL" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="接入类型" prop="accessType">
+          <el-select v-model="form.accessType" style="width:100%" @change="onAccessTypeChange">
+            <el-option label="外部 AI Agent（CLI 接入）" value="CLI_CLIENT" />
+            <el-option label="内部 LLM（API Key）" value="API_KEY_LLM" />
+            <!-- 网页端 Planner 仅 PLANNER 角色可选，当前功能未开放 -->
+            <el-option v-if="form.role === 'PLANNER'" label="网页端 Planner" value="WEB_BROWSER" />
+          </el-select>
+        </el-form-item>
+        <el-alert
+          v-if="form.accessType === 'WEB_BROWSER'"
+          title="网页端 Planner 功能暂不可用，敬请期待"
+          type="warning"
+          :closable="false"
+          show-icon
+          style="margin-bottom:16px"
+        />
+        <el-form-item label="模型" prop="provider" v-if="form.accessType === 'API_KEY_LLM'">
+          <el-select
+            v-model="form.provider"
+            :loading="providersLoading"
+            placeholder="选择已配置 API Key 的 Provider"
+            style="width:100%"
+          >
+            <el-option
+              v-for="p in llmProviders"
+              :key="p.provider"
+              :label="p.provider + (p.defaultModel ? '（' + p.defaultModel + '）' : '')"
+              :value="p.provider"
+              :disabled="!p.available"
+            >
+              <span>{{ p.provider }}</span>
+              <span style="float:right;font-size:12px;color:var(--ha-muted)">
+                {{ p.available ? p.defaultModel : (p.apiKeyConfigured ? '缺少 Factory 实现' : '未配置 API Key') }}
+              </span>
+            </el-option>
           </el-select>
         </el-form-item>
         <el-form-item label="专业化" v-if="form.role === 'EXECUTOR'">
@@ -100,7 +136,12 @@
       </el-form>
       <template #footer>
         <el-button @click="registerDialog = false">取消</el-button>
-        <el-button type="primary" :loading="registering" @click="handleRegister">注册</el-button>
+        <el-button
+          type="primary"
+          :loading="registering"
+          :disabled="form.accessType === 'WEB_BROWSER'"
+          @click="handleRegister"
+        >注册</el-button>
       </template>
     </el-dialog>
 
@@ -141,7 +182,6 @@ const roleFilters = [
   { value: 'PLANNER', label: '规划者' },
   { value: 'EXECUTOR', label: '执行者' },
   { value: 'REVIEWER', label: '审查者' },
-  { value: 'PATROL', label: '巡查者' },
 ]
 
 function setFilter(v: string) {
@@ -187,28 +227,93 @@ function goDetail(id: string) {
 const registerDialog = ref(false)
 const registering = ref(false)
 const formRef = ref()
-const form = reactive({ name: '', role: 'EXECUTOR', description: '', specializationSlug: '' })
-const rules = { name: [{ required: true, message: '请输入名称', trigger: 'blur' }] }
+const form = reactive({
+  name: '',
+  role: 'EXECUTOR',
+  description: '',
+  specializationSlug: '',
+  accessType: 'CLI_CLIENT',
+  provider: ''
+})
+const rules = {
+  name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
+  provider: [{ required: true, message: '请选择模型 Provider', trigger: 'change' }]
+}
+
+// ── LLM Provider 目录（内部 LLM 注册用，按后端已生效 api-key 配置枚举）──
+interface LlmProviderItem {
+  provider: string
+  defaultModel: string | null
+  apiKeyConfigured: boolean
+  factorySupported: boolean
+  available: boolean
+}
+const llmProviders = ref<LlmProviderItem[]>([])
+const providersLoading = ref(false)
+
+async function loadLlmProviders() {
+  providersLoading.value = true
+  try {
+    llmProviders.value = await agentApi.listLlmProviders()
+  } finally {
+    providersLoading.value = false
+  }
+}
+
+function onRoleChange() {
+  // 网页端 Planner 仅 PLANNER 角色可选，切走角色后回退默认接入类型
+  if (form.role !== 'PLANNER' && form.accessType === 'WEB_BROWSER') {
+    form.accessType = 'CLI_CLIENT'
+  }
+}
+
+function onAccessTypeChange(v: string) {
+  if (v === 'WEB_BROWSER') {
+    ElMessage.warning('网页端 Planner 功能暂不可用')
+    return
+  }
+  if (v === 'API_KEY_LLM' && llmProviders.value.length === 0) {
+    loadLlmProviders()
+  }
+}
 
 async function handleRegister() {
+  if (form.accessType === 'WEB_BROWSER') {
+    ElMessage.warning('网页端 Planner 功能暂不可用')
+    return
+  }
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
   registering.value = true
   try {
+    const isLlm = form.accessType === 'API_KEY_LLM'
+    const selected = llmProviders.value.find(p => p.provider === form.provider)
     const res: any = await agentApi.register({
       name: form.name,
       role: form.role,
       description: form.description,
-      specializationSlug: form.specializationSlug || undefined
+      specializationSlug: form.specializationSlug || undefined,
+      accessType: form.accessType,
+      // 内部 LLM：modelType=provider:defaultModel，后端据此自动补绑平台密钥
+      modelType: isLlm
+        ? (selected?.defaultModel ? `${form.provider}:${selected.defaultModel}` : form.provider)
+        : undefined
     })
-    // 注册成功后关闭注册弹窗，直接打开 onboarding 弹窗
     registerDialog.value = false
-    onboardingAgentId.value = res.id
-    onboardingDialog.value = true
+    if (isLlm) {
+      // 内部 LLM Agent 无需 CLI 接入内容，注册即完成（平台密钥已自动绑定）
+      ElMessage.success('内部 LLM Agent 注册成功，平台密钥已自动绑定')
+    } else {
+      // 外部 Agent：注册成功后直接打开 onboarding 弹窗
+      onboardingAgentId.value = res.id
+      onboardingDialog.value = true
+    }
     // 重置表单
     form.name = ''
     form.description = ''
     form.specializationSlug = ''
+    form.accessType = 'CLI_CLIENT'
+    form.provider = ''
     load()
   } finally { registering.value = false }
 }

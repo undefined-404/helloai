@@ -5,23 +5,31 @@ import com.helloai.common.config.AgentProviderProperties;
 import com.helloai.core.agent.entity.Agent;
 import io.micrometer.observation.ObservationRegistry;
 import lombok.RequiredArgsConstructor;
+import org.springframework.ai.anthropic.AnthropicChatModel;
+import org.springframework.ai.anthropic.AnthropicChatOptions;
+import org.springframework.ai.anthropic.api.AnthropicApi;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.deepseek.DeepSeekChatModel;
-import org.springframework.ai.deepseek.DeepSeekChatOptions;
-import org.springframework.ai.deepseek.api.DeepSeekApi;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.retry.support.RetryTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
+/**
+ * MiniMax Provider 工厂：走 MiniMax 官方的 Anthropic 兼容接口。
+ *
+ * <p>参考 springai 项目 MinimaxClientsConfig 的接入方式（AnthropicChatModel +
+ * https://api.minimaxi.com/anthropic），AnthropicApi 在 base-url 后拼接
+ * /v1/messages。与 DeepSeek 工厂保持同款缓存 / 超时 / 重试 / 观测策略。</p>
+ */
 @Component
 @RequiredArgsConstructor
-public class DeepSeekProviderChatClientFactory implements ProviderChatClientFactory {
+public class MinimaxProviderChatClientFactory implements ProviderChatClientFactory {
 
-    private static final String PROVIDER = "deepseek";
-    private static final String DEFAULT_MODEL = "deepseek-chat";
+    private static final String PROVIDER = "minimax";
+    private static final String DEFAULT_MODEL = "MiniMax-M2.5";
+    private static final String DEFAULT_BASE_URL = "https://api.minimaxi.com/anthropic";
 
     private final ToolCallingManager toolCallingManager;
     private final RetryTemplate retryTemplate;
@@ -42,30 +50,28 @@ public class DeepSeekProviderChatClientFactory implements ProviderChatClientFact
 
         AgentProviderProperties.ProviderConfig config = providerProperties.getConfig(PROVIDER);
 
-        // N9: 按 (provider, baseUrl, apiKey) 三元组复用 ChatModel 实例，避免每次请求重
-        // 建 RestClient/连接池。idempotencyKey / 上下文 model 切换由 ChatClient 层的
-        // options/advisor 覆盖，不影响本缓存 key。
         String cacheKey = ProviderChatModelCache.buildKey(PROVIDER, apiKeyPlaintext, config.getBaseUrl());
 
         ChatModel chatModel = cache.getOrCompute(cacheKey, () -> buildChatModel(apiKeyPlaintext, config, model));
         return ChatClient.create(chatModel);
     }
 
-    /**
-     * 仅供 {@link #createChatClient} 内部缓存未命中时调用：构造并初始化 DeepSeekChatModel。
-     * 与原有逻辑等价，只是拆出来便于测试覆盖。
-     */
     private ChatModel buildChatModel(String apiKeyPlaintext,
                                      AgentProviderProperties.ProviderConfig config,
                                      String requestedModel) {
-        DeepSeekApi.Builder apiBuilder = DeepSeekApi.builder().apiKey(apiKeyPlaintext);
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout(Math.max(config.getConnectTimeoutMs(), 1));
         requestFactory.setReadTimeout(Math.max(config.getReadTimeoutMs(), 1));
-        apiBuilder.restClientBuilder(RestClient.builder().requestFactory(requestFactory));
-        if (config.getBaseUrl() != null && !config.getBaseUrl().isBlank()) {
-            apiBuilder.baseUrl(config.getBaseUrl());
-        }
+
+        String baseUrl = config.getBaseUrl() != null && !config.getBaseUrl().isBlank()
+                ? config.getBaseUrl()
+                : DEFAULT_BASE_URL;
+
+        AnthropicApi anthropicApi = AnthropicApi.builder()
+                .apiKey(apiKeyPlaintext)
+                .baseUrl(baseUrl)
+                .restClientBuilder(RestClient.builder().requestFactory(requestFactory))
+                .build();
 
         String effectiveModel = requestedModel != null && !requestedModel.isBlank()
                 ? requestedModel
@@ -73,12 +79,12 @@ public class DeepSeekProviderChatClientFactory implements ProviderChatClientFact
                         ? config.getDefaultModel()
                         : DEFAULT_MODEL);
 
-        DeepSeekChatOptions options = DeepSeekChatOptions.builder()
+        AnthropicChatOptions options = AnthropicChatOptions.builder()
                 .model(effectiveModel)
                 .build();
 
-        return DeepSeekChatModel.builder()
-                .deepSeekApi(apiBuilder.build())
+        return AnthropicChatModel.builder()
+                .anthropicApi(anthropicApi)
                 .defaultOptions(options)
                 .toolCallingManager(toolCallingManager)
                 .retryTemplate(retryTemplate)

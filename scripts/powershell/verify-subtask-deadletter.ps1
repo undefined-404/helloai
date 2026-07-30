@@ -14,7 +14,7 @@
 # ============================================================
 param(
     [string]$BaseUrl = "http://localhost:6565",
-    [string]$Role = "PATROL",
+    [string]$Role = "EXECUTOR",
     [string]$AdminUsername = "admin",
     [string]$AdminPassword = "admin123",
     [int]$MaxReassignAttempts = 5

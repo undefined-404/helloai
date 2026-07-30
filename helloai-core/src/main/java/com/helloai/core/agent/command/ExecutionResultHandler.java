@@ -57,6 +57,7 @@ public class ExecutionResultHandler {
         report.setFinishReason(result.getFinishReason());
         report.setTokenUsage(result.getTokenUsage());
         report.setOutput(result.getOutput());
+        report.setThinking(result.getThinking());
         report.setError(null);
         handleReport(report);
     }
@@ -147,6 +148,13 @@ public class ExecutionResultHandler {
         // INTERNAL/EXTERNAL 上报共用本入口；REQUIRES_NEW 独立事务 + try/catch，失败不阻断主链路
         try {
             if (report.isSuccess()) {
+                // 思考过程单独落一条消息（保留推理模型 thinking，供前端动态展示）
+                if (report.getThinking() != null && !report.getThinking().isBlank()) {
+                    conversationService.addMessage(report.getSubTaskId(), report.getAgentId(),
+                            "assistant", "agent",
+                            report.getThinking(),
+                            "sub_task_execute_thinking");
+                }
                 conversationService.addMessage(report.getSubTaskId(), report.getAgentId(),
                         "assistant", "agent",
                         report.getOutput() != null ? report.getOutput() : "",

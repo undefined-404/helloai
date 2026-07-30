@@ -2,7 +2,7 @@ package com.helloai.core.agent.chat;
 
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentRole;
-import com.helloai.core.agent.chat.ProviderChatClientFactory;
+import com.helloai.core.agent.chat.provider.ProviderChatClientFactory;
 import com.helloai.core.agent.entity.Agent;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

@@ -7,21 +7,24 @@ import io.micrometer.observation.ObservationRegistry;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.deepseek.DeepSeekChatModel;
-import org.springframework.ai.deepseek.DeepSeekChatOptions;
-import org.springframework.ai.deepseek.api.DeepSeekApi;
 import org.springframework.ai.model.tool.ToolCallingManager;
+import org.springframework.ai.openai.OpenAiChatModel;
+import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.retry.support.RetryTemplate;
-import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
-@Component
+/**
+ * OpenAI 兼容接口的 ProviderChatClientFactory 公共骨架。
+ *
+ * <p>moonshot（Kimi）与 dashscope（通义千问 compatible-mode）均暴露 OpenAI 协议的
+ * /v1/chat/completions 端点，仅 base-url 与默认模型不同，故收敛到本基类；子类只需
+ * 提供 provider 标识、默认模型与兜底 base-url。构建逻辑与
+ * {@link DeepSeekProviderChatClientFactory} 保持同构（缓存 key、超时、重试、观测）。</p>
+ */
 @RequiredArgsConstructor
-public class DeepSeekProviderChatClientFactory implements ProviderChatClientFactory {
-
-    private static final String PROVIDER = "deepseek";
-    private static final String DEFAULT_MODEL = "deepseek-chat";
+public abstract class AbstractOpenAiCompatibleProviderChatClientFactory implements ProviderChatClientFactory {
 
     private final ToolCallingManager toolCallingManager;
     private final RetryTemplate retryTemplate;
@@ -29,9 +32,18 @@ public class DeepSeekProviderChatClientFactory implements ProviderChatClientFact
     private final AgentProviderProperties providerProperties;
     private final ProviderChatModelCache cache;
 
+    /** provider 标识（与 helloai.providers 下的 key 对应，如 moonshot / dashscope）。 */
+    protected abstract String provider();
+
+    /** yml 未配置 default-model 时的兜底模型名。 */
+    protected abstract String defaultModel();
+
+    /** yml 未配置 base-url 时的兜底地址（OpenAiApi 会在其后拼接 /v1/chat/completions）。 */
+    protected abstract String defaultBaseUrl();
+
     @Override
     public boolean supports(String provider) {
-        return PROVIDER.equalsIgnoreCase(provider);
+        return provider().equalsIgnoreCase(provider);
     }
 
     @Override
@@ -40,45 +52,44 @@ public class DeepSeekProviderChatClientFactory implements ProviderChatClientFact
             throw new BizException("apiKey 不能为空");
         }
 
-        AgentProviderProperties.ProviderConfig config = providerProperties.getConfig(PROVIDER);
+        AgentProviderProperties.ProviderConfig config = providerProperties.getConfig(provider());
 
-        // N9: 按 (provider, baseUrl, apiKey) 三元组复用 ChatModel 实例，避免每次请求重
-        // 建 RestClient/连接池。idempotencyKey / 上下文 model 切换由 ChatClient 层的
-        // options/advisor 覆盖，不影响本缓存 key。
-        String cacheKey = ProviderChatModelCache.buildKey(PROVIDER, apiKeyPlaintext, config.getBaseUrl());
+        // 与 DeepSeek 工厂同款缓存策略：按 (provider, baseUrl, apiKey) 三元组复用 ChatModel
+        String cacheKey = ProviderChatModelCache.buildKey(provider(), apiKeyPlaintext, config.getBaseUrl());
 
         ChatModel chatModel = cache.getOrCompute(cacheKey, () -> buildChatModel(apiKeyPlaintext, config, model));
         return ChatClient.create(chatModel);
     }
 
-    /**
-     * 仅供 {@link #createChatClient} 内部缓存未命中时调用：构造并初始化 DeepSeekChatModel。
-     * 与原有逻辑等价，只是拆出来便于测试覆盖。
-     */
     private ChatModel buildChatModel(String apiKeyPlaintext,
                                      AgentProviderProperties.ProviderConfig config,
                                      String requestedModel) {
-        DeepSeekApi.Builder apiBuilder = DeepSeekApi.builder().apiKey(apiKeyPlaintext);
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout(Math.max(config.getConnectTimeoutMs(), 1));
         requestFactory.setReadTimeout(Math.max(config.getReadTimeoutMs(), 1));
-        apiBuilder.restClientBuilder(RestClient.builder().requestFactory(requestFactory));
-        if (config.getBaseUrl() != null && !config.getBaseUrl().isBlank()) {
-            apiBuilder.baseUrl(config.getBaseUrl());
-        }
+
+        String baseUrl = config.getBaseUrl() != null && !config.getBaseUrl().isBlank()
+                ? config.getBaseUrl()
+                : defaultBaseUrl();
+
+        OpenAiApi openAiApi = OpenAiApi.builder()
+                .apiKey(apiKeyPlaintext)
+                .baseUrl(baseUrl)
+                .restClientBuilder(RestClient.builder().requestFactory(requestFactory))
+                .build();
 
         String effectiveModel = requestedModel != null && !requestedModel.isBlank()
                 ? requestedModel
                 : (config.getDefaultModel() != null && !config.getDefaultModel().isBlank()
                         ? config.getDefaultModel()
-                        : DEFAULT_MODEL);
+                        : defaultModel());
 
-        DeepSeekChatOptions options = DeepSeekChatOptions.builder()
+        OpenAiChatOptions options = OpenAiChatOptions.builder()
                 .model(effectiveModel)
                 .build();
 
-        return DeepSeekChatModel.builder()
-                .deepSeekApi(apiBuilder.build())
+        return OpenAiChatModel.builder()
+                .openAiApi(openAiApi)
                 .defaultOptions(options)
                 .toolCallingManager(toolCallingManager)
                 .retryTemplate(retryTemplate)

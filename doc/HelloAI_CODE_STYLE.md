@@ -247,8 +247,7 @@ helloai-core/src/main/resources/
 └── skills/
     ├── planner/SKILL.md             # Planner 技能文档
     ├── executor/SKILL.md            # Executor 技能文档
-    ├── reviewer/SKILL.md            # Reviewer 技能文档
-    └── patrol/SKILL.md              # Patrol 技能文档
+    └── reviewer/SKILL.md            # Reviewer 技能文档
 ```
 
 | 目录 | 模块 | 用途 |
@@ -279,6 +278,7 @@ core 模块统一采用"业务域分包 + 域内技术分层"，禁止新增顶�
 语义边界（强制）：
 - xxx.entity = 映射数据库表的持久化实体
 - xxx.domain = 不映射表的纯内存领域对象/值对象（如 ExecutionCommand、AgentTask）
+- agent.chat = 面向业务的 ChatClient 服务层（路由入口、Provider 目录、provider/model 解析）；agent.chat.provider = Provider 接入族（Factory 契约 + 各厂商实现 + ChatModel 缓存），新增 LLM 厂商只动 chat.provider + 一段 yml，chat 父包零感知
 
 新增类的放置判断：先问"它服务哪个业务域"，再问"它在域内承担什么技术角色"。
 跨域通用设施才允许放 shared，放 shared 前需在提交说明中写明理由。
@@ -991,7 +991,7 @@ CREATE TRIGGER update_sub_task_update_time BEFORE UPDATE ON sub_task
 | 类别 | 强制规则 |
 |------|----------|
 | 时间字段 | 一律 `xxx_time`（对齐 `create_time` / `update_time`），**禁止** `_at` 后缀；DATE 类型一律 `xxx_date` |
-| 外键 / ID 引用 | 一律 `xxx_id`；同一 ID 多角色引用必须加角色前缀：`assigned_agent_id`、`reviewer_agent_id`、`patrol_agent_id` |
+| 外键 / ID 引用 | 一律 `xxx_id`；同一 ID 多角色引用必须加角色前缀：`assigned_agent_id`、`reviewer_agent_id` |
 | 状态字段 | `varchar` + 枚举字符串（不使用数字枚举） |
 | 计量字段 | 一律 `xxx_count`（如 `consecutive_failure_count`、`timeout_count`），**禁止** `total_xxx` / `num_xxx` 混用 |
 | 关键字 | 列名必须避开数据库关键字（`trigger` / `order` / `level` / `user` 等）；无法避开时使用 `xxx_type` / `xxx_source` 形式（如 `trigger_type`） |
@@ -1080,7 +1080,6 @@ DLQ:        helloai.dlx.queue
 | EXECUTOR_QUEUE | `helloai.executor.queue` |
 | REVIEWER_QUEUE | `helloai.reviewer.queue` |
 | PLANNER_QUEUE | `helloai.planner.queue` |
-| PATROL_QUEUE | `helloai.patrol.queue` |
 | DLX_QUEUE | `helloai.dlx.queue` |
 
 ### 10.2 队列配置要点
@@ -1371,7 +1370,6 @@ AgentResult result = agentExecutor.execute(task).get(120, TimeUnit.SECONDS);
 | PLANNER | Claude Opus | 强推理能力，适合任务分解 |
 | EXECUTOR | Codex | 代码生成能力最强 |
 | REVIEWER | Claude Sonnet | 代码审查，平衡性能与成本 |
-| PATROL | Claude Haiku | 低成本快速检测 |
 
 ### 15.5 上下文管理
 

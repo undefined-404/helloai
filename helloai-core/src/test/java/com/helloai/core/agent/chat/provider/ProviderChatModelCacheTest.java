@@ -1,4 +1,4 @@
-package com.helloai.core.agent.chat;
+package com.helloai.core.agent.chat.provider;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;

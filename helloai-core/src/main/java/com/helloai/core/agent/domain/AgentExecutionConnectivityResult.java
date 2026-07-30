@@ -30,6 +30,7 @@ public class AgentExecutionConnectivityResult {
     String stage;
     Long latencyMs;
     String output;
+    String thinking;
     String errorMessage;
     String rootException;
     String rootMessage;

@@ -27,7 +27,7 @@ public class TaskTimelineItem {
     /** 事件类型：agent_offline / task_assigned / task_completed 等 */
     private String eventType;
 
-    /** 事件产生方角色名（PLANNER / EXECUTOR / REVIEWER / PATROL / SYSTEM），可能为空 */
+    /** 事件产生方角色名（PLANNER / EXECUTOR / REVIEWER / SYSTEM），可能为空 */
     private String role;
 
     /** 关联 Agent ID，可能为空（系统级事件） */

@@ -13,6 +13,7 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.stereotype.Service;
 import com.helloai.core.agent.chat.AgentChatClientService;
+import com.helloai.core.agent.chat.ChatResponseContentExtractor;
 
 /**
  * Agent LLM 连通性验证服务。
@@ -92,16 +93,16 @@ public class AgentExecutionConnectivityService {
                     provider,
                     vaultApiKey
             );
-            String output = response.getResult() != null && response.getResult().getOutput() != null
-                    ? response.getResult().getOutput().getText()
-                    : "";
+            // 分离正文与思考过程：推理模型（如 Minimax M2.5）的 thinking 块不混入 output
+            ChatResponseContentExtractor.ExtractedContent extracted = ChatResponseContentExtractor.extract(response);
             Usage usage = response.getMetadata() != null ? response.getMetadata().getUsage() : null;
             Integer totalTokens = usage != null ? usage.getTotalTokens() : null;
             return builder
                     .success(true)
                     .stage("chat_ok")
                     .latencyMs(elapsedMs(startedAt))
-                    .output(output)
+                    .output(extracted.text())
+                    .thinking(extracted.thinking().isBlank() ? null : extracted.thinking())
                     .tokenUsage(totalTokens)
                     .build();
         } catch (Exception e) {

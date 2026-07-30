@@ -13,7 +13,6 @@
           <el-option label="PLANNER" value="PLANNER" />
           <el-option label="EXECUTOR" value="EXECUTOR" />
           <el-option label="REVIEWER" value="REVIEWER" />
-          <el-option label="PATROL" value="PATROL" />
         </el-select>
         <el-select v-model="filterCategory" placeholder="按分类筛选" clearable style="width:180px;margin-left:8px" @change="load">
           <el-option v-for="[k,v] in Object.entries(PROMPT_CATEGORY_MAP)" :key="k" :label="v" :value="k" />
@@ -53,7 +52,7 @@
       <el-form ref="formRef" :model="editForm" :rules="rules" label-width="90px">
         <el-row :gutter="16">
           <el-col :span="12"><el-form-item label="名称" prop="name"><el-input v-model="editForm.name" /></el-form-item></el-col>
-          <el-col :span="12"><el-form-item label="角色" prop="role"><el-select v-model="editForm.role" style="width:100%"><el-option v-for="r in ['PLANNER','EXECUTOR','REVIEWER','PATROL']" :key="r" :label="r" :value="r" /></el-select></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="角色" prop="role"><el-select v-model="editForm.role" style="width:100%"><el-option v-for="r in ['PLANNER','EXECUTOR','REVIEWER']" :key="r" :label="r" :value="r" /></el-select></el-form-item></el-col>
         </el-row>
         <el-row :gutter="16">
           <el-col :span="12"><el-form-item label="分类" prop="category"><el-select v-model="editForm.category" style="width:100%"><el-option label="角色模板" value="ROLE_TEMPLATE" /><el-option label="Agent 专业化" value="AGENT_SPECIALIZATION" /><el-option label="技能文档" value="SKILL" /></el-select></el-form-item></el-col>
@@ -103,7 +102,7 @@ const composeResult = ref('')
 const skillDialog = ref(false)
 const skillContent = ref('')
 
-const roleMap: Record<string, string> = { PLANNER: '', EXECUTOR: 'primary', REVIEWER: 'success', PATROL: 'warning' }
+const roleMap: Record<string, string> = { PLANNER: '', EXECUTOR: 'primary', REVIEWER: 'success' }
 function roleTag(role: string) { return roleMap[role] || '' }
 
 async function load() {

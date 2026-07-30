@@ -20,7 +20,6 @@ public class RabbitMQConfig {
     public static final String EXECUTOR_QUEUE = "helloai.executor.queue";
     public static final String REVIEWER_QUEUE = "helloai.reviewer.queue";
     public static final String PLANNER_QUEUE = "helloai.planner.queue";
-    public static final String PATROL_QUEUE = "helloai.patrol.queue";
     public static final String NOTIFICATION_QUEUE = "helloai.notification.queue";
     public static final String DLX_QUEUE = "helloai.dlx.queue";
 
@@ -58,14 +57,6 @@ public class RabbitMQConfig {
     @Bean
     public Queue plannerQueue() {
         return QueueBuilder.durable(PLANNER_QUEUE)
-                .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
-                .withArgument("x-dead-letter-routing-key", DLX_QUEUE)
-                .build();
-    }
-
-    @Bean
-    public Queue patrolQueue() {
-        return QueueBuilder.durable(PATROL_QUEUE)
                 .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
                 .withArgument("x-dead-letter-routing-key", DLX_QUEUE)
                 .build();
@@ -115,11 +106,6 @@ public class RabbitMQConfig {
     @Bean
     public Binding plannerBinding() {
         return BindingBuilder.bind(plannerQueue()).to(agentExchange()).with("agent.planner.*");
-    }
-
-    @Bean
-    public Binding patrolBinding() {
-        return BindingBuilder.bind(patrolQueue()).to(agentExchange()).with("agent.patrol.*");
     }
 
     @Bean

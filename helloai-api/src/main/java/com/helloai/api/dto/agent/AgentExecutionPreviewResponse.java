@@ -17,6 +17,7 @@ public class AgentExecutionPreviewResponse {
     private String executorName;
     private boolean success;
     private String output;
+    private String thinking;
     private String errorMessage;
     private String finishReason;
     private Integer tokenUsage;

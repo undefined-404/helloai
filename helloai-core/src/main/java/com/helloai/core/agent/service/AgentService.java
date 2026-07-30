@@ -43,7 +43,6 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
     private final SubTaskMapper subTaskMapper;
     private final RewardLogMapper rewardLogMapper;
     private final ActivityLogMapper activityLogMapper;
-    private final PatrolRecordMapper patrolRecordMapper;
     private final ReviewRecordMapper reviewRecordMapper;
     private final AgentInboxMapper agentInboxMapper;
     private final AgentDutyLeaseMapper agentDutyLeaseMapper;
@@ -252,8 +251,6 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
                 new LambdaQueryWrapper<RewardLog>().eq(RewardLog::getAgentId, agentId)).intValue());
         counts.put("activityCount", activityLogMapper.selectCount(
                 new LambdaQueryWrapper<ActivityLog>().eq(ActivityLog::getAgentId, agentId)).intValue());
-        counts.put("patrolCount", patrolRecordMapper.selectCount(
-                new LambdaQueryWrapper<PatrolRecord>().eq(PatrolRecord::getPatrolAgentId, agentId)).intValue());
         return counts;
     }
 
@@ -278,8 +275,6 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
                 new LambdaQueryWrapper<RewardLog>().eq(RewardLog::getAgentId, agentId)).toString());
         int activityCount = Integer.parseInt(activityLogMapper.selectCount(
                 new LambdaQueryWrapper<ActivityLog>().eq(ActivityLog::getAgentId, agentId)).toString());
-        int patrolCount = Integer.parseInt(patrolRecordMapper.selectCount(
-                new LambdaQueryWrapper<PatrolRecord>().eq(PatrolRecord::getPatrolAgentId, agentId)).toString());
 
         // unlink 子任务
         subTaskMapper.update(null,
@@ -291,7 +286,6 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
         // 这里走 Mapper 自定义 DELETE SQL 真删，不留残留行）
         rewardLogMapper.physicalDeleteByAgentId(agentId);
         activityLogMapper.physicalDeleteByAgentId(agentId);
-        patrolRecordMapper.physicalDeleteByAgentId(agentId);
         agentMcpServerService.physicalDeleteByAgentId(agentId);
         // agent_inbox / agent_duty_lease 对 agent.id 有外键约束，必须先于 agent 行删除
         agentInboxMapper.physicalDeleteByAgentId(agentId);
@@ -299,8 +293,8 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
 
         baseMapper.physicalDeleteById(agentId);
 
-        log.info("Agent 级联删除完成: id={}, name={}, reward={}, activity={}, patrol={}",
-                agentId, agent.getName(), rewardCount, activityCount, patrolCount);
+        log.info("Agent 级联删除完成: id={}, name={}, reward={}, activity={}",
+                agentId, agent.getName(), rewardCount, activityCount);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("agentName", agent.getName());
@@ -308,7 +302,6 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
         result.put("reviewCount", reviewCount);
         result.put("rewardCount", rewardCount);
         result.put("activityCount", activityCount);
-        result.put("patrolCount", patrolCount);
         return result;
     }
 

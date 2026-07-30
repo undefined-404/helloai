@@ -2953,3 +2953,239 @@ Planner 角色此前只有枚举定义与一份约 60 行的纯 REST 版 SKILL.m
 - 带附件子任务删除回归仍待造数验证（继承 §6.18 遗留）
 
 ---
+
+### 6.20 菜单调整 + Agent 注册接入分类 + LLM Provider 手动注册入口（2026-07-30）
+
+#### 1. 背景
+
+用户提出三点：①「对话新建」菜单移到「概述」下、「任务管理」上；②Agent 注册弹窗增加接入分类（外部 AI Agent / 内部 LLM / 网页端 Planner），仅 PLANNER 角色可见「网页端 Planner」选项且选中即提示功能不可用；③内部 LLM Agent 缺少手动注册入口，希望按"已生效的 api-key 配置"实现（用户原话为 pom.xml，实为 `application.yml` 的 `helloai.providers`），api-key 参考 `E:\yhzx\1027\springai` 项目的 application 配置，后续计划集成 minimax / kimi(moonshot) / 通义千问(dashscope)。调研中发现隐性 bug：`AgentProviderProperties` 用 `@ConfigurationProperties(prefix="helloai.providers")` + 字段名 `providers`，实际绑定路径为 `helloai.providers.providers.*`，yml 里的 `helloai.providers.deepseek.*` 从未绑定成功，只因 deepseek 默认值与 `DeepSeekProviderChatClientFactory` 内置默认恰好一致而未暴露。
+
+#### 2. 实际落地
+
+**后端（helloai-common + helloai-core + helloai-api + helloai-start）**
+
+- `AgentProviderProperties`：前缀 `helloai.providers` → `helloai`（修复绑定路径 bug）；`ProviderConfig` 增加 `apiKey` 字段 + `hasApiKey()`（配置了平台级 API Key 即视为该 provider "已生效"）
+- `application.yml`：`helloai.providers.deepseek` 补 `api-key`（`${DEEPSEEK_API_KEY:...}`）；预置 `moonshot` / `minimax` / `dashscope` 三段配置（key/base-url/model 取自 springai 项目，环境变量可覆盖；缺对应 Factory 实现前目录接口标记不可用）
+- 新增 `LlmProviderCatalogService`（helloai-core/agent/chat，编排收口 core 不进 Controller）：`ProviderCatalogItem` record（provider/defaultModel/apiKeyConfigured/factorySupported/available）；`listProviders()`（available = apiKeyConfigured && factorySupported，factory 判定走 `ProviderChatClientFactory.supports`）；`bindPlatformApiKeyIfAbsent`（不可用抛 BizException；已有 ACTIVE 凭证跳过不覆盖，保护脚本注册后自行绑自定义密钥的既有链路；否则 `CredentialVaultBindingService.bindAgentApiKey` 绑平台 key）；`provisionPlatformCredential(Agent)`（`AgentProviderResolver.resolveProvider` 从 modelType 解析 provider、回退 `helloai.agent.execution.provider` 默认；provider 未生效仅 log.warn 跳过不阻断注册）
+- `AgentController.applyRegistrationExtras`：末尾对 `accessType=API_KEY_LLM` 调 `provisionPlatformCredential`（尽力而为），注册即满足 `AgentSelector.hasUsableCredential` 的 ACTIVE 凭证门槛，手动注册的 LLM Agent 立即可被调度
+- `AdminAgentController`：新增 `GET /api/admin/agents/llm-providers` 目录接口（返回 ProviderCatalogItem 列表）
+
+**前端（helloai-ui）**
+
+- `MainLayout.vue`：「对话新建」（/requirement-chat）菜单项移到 /dashboard 与 /tasks 之间
+- `api/agent.ts`：`register` 参数扩展 `accessType`/`modelType`；新增 `listLlmProviders()`
+- `AgentList.vue` 注册弹窗：新增「接入类型」下拉——外部 AI Agent（CLI 接入）=CLI_CLIENT 默认 / 内部 LLM（API Key）=API_KEY_LLM / 网页端 Planner=WEB_BROWSER（仅 `form.role==='PLANNER'` 显示）；WEB_BROWSER 选中显示 el-alert「网页端 Planner 功能暂不可用」+ 注册按钮 disabled + 提交前二次校验（仅前端拦截，后端枚举通道保留与现状一致）；API_KEY_LLM 显示 provider 下拉（目录懒加载，不可用项 disabled 并标注原因「缺少 Factory 实现」/「未配置 API Key」），注册体发送 `modelType: provider:defaultModel`，成功后不开 onboarding 弹窗改为提示「平台密钥已自动绑定」；角色切走 PLANNER 时 accessType 自动回退 CLI_CLIENT
+
+#### 3. 测试与验证
+
+- 后端 `mvn -DskipTests compile` 全 reactor BUILD SUCCESS
+- 前端 `npx vue-tsc -b` EXIT=0
+- 相关单测 `mvn -pl helloai-core -am test -Dtest=AgentChatClientServiceTest,PlatformAgentExecutionServiceTest -Dsurefire.failIfNoSpecifiedTests=false`：Tests run 2 / Failures 0 / BUILD SUCCESS（坑位：`-Dtest` 过滤在 helloai-common 无匹配用例会 BUILD FAILURE，须加 `failIfNoSpecifiedTests=false`）
+
+#### 4. 影响
+
+- 新增 1 个只读接口（llm-providers 目录），注册接口 body 的 `accessType`/`modelType` 从"脚本专用"升级为前端正式语义；无 DB 变更、无 Flyway
+- `AgentProviderProperties` 前缀修复后 yml 的 providers 配置真正生效（此前静默失效吃默认值）；配置读取语义变化仅影响 `helloai.providers.*` 段
+- E2E 脚本以 idempotent=true 注册 + 自行绑 key 的既有链路不受影响（已有 ACTIVE 凭证不覆盖）
+
+#### 5. 遗留与下一步
+
+- moonshot / minimax / dashscope 仅预置了配置段，各需补一个 `ProviderChatClientFactory` 实现类后目录自动标记可用（minimax base-url 为 anthropic 兼容端点，Factory 需按对应协议实现）
+- WEB_BROWSER 执行链仍未落地（N8 维持"仅枚举预留"，本轮只做前端拦截提示）
+- 平台密钥当前明文存于 yml 默认值（环境变量可覆盖），生产化前应改为仅环境变量注入
+
+---
+
+### 6.21 moonshot / minimax / dashscope ProviderChatClientFactory 补齐（2026-07-30）
+
+#### 1. 背景
+
+闭环 §6.20 遗留第一条：前端注册内部 LLM Agent 时，moonshot / minimax / dashscope 在 provider 下拉中标记「缺少 Factory 实现」不可选。用户确认参考 `E:\yhzx\1027\springai` 项目的接入方式补齐三个 Factory。
+
+#### 2. 实际落地
+
+**依赖（helloai-core/pom.xml）**
+
+- 新增 `spring-ai-openai` + `spring-ai-anthropic`（均为非 starter 纯客户端库，无自动装配，不影响既有 deepseek starter 提供的唯一 `ChatClient.Builder`；版本由 spring-ai-bom 1.1.8 管理）
+- 未引入 spring-ai-alibaba dashscope starter：其 BOM 1.0.0.2 绑定 spring-ai 1.0.0，与本项目 1.1.8 基线有冲突风险
+
+**新增 Factory（helloai-core/agent/chat/provider，均与 DeepSeek 工厂同构：ProviderChatModelCache 三元组缓存 / 超时 / RetryTemplate / ObservationRegistry / ToolCallingManager）**
+
+- `AbstractOpenAiCompatibleChatClientFactory`：OpenAI 兼容协议公共骨架（OpenAiApi + OpenAiChatModel），子类只提供 provider 标识 / 默认模型 / 兜底 base-url
+- `MoonshotProviderChatClientFactory`：`https://api.moonshot.cn`，默认 `moonshot-v1-8k`（参考 springai KimiClientsConfig）
+- `DashScopeProviderChatClientFactory`：DashScope OpenAI 兼容模式 `https://dashscope.aliyuncs.com/compatible-mode`（拼 /v1/chat/completions），默认 `qwen-plus`
+- `MinimaxProviderChatClientFactory`：Anthropic 兼容接口 `https://api.minimaxi.com/anthropic`（AnthropicApi 拼 /v1/messages），默认 `MiniMax-M2.5`（参考 springai MinimaxClientsConfig）
+
+**配置（application.yml）**
+
+- `helloai.providers.dashscope` 补 `base-url`（`${DASHSCOPE_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}`）
+- providers 段注释更新为"四个 provider 均有 Factory 实现"
+
+#### 3. 测试与验证
+
+- `mvn -DskipTests compile` 全 reactor BUILD SUCCESS（EXIT=0）
+- `AgentProviderResolverTest` + `ProviderChatModelCacheTest` 回归通过（EXIT=0）
+- 无需改 `LlmProviderCatalogService` / 前端：目录 available 判定走 `ProviderChatClientFactory.supports`，Factory Bean 注册后三个 provider 自动亮起
+
+#### 4. 影响
+
+- 前端注册弹窗 provider 下拉中 moonshot / minimax / dashscope 变为可选，注册后自动绑平台密钥并可被调度执行
+- 纯新增类 + 配置补段，deepseek 既有链路零改动
+
+#### 5. 遗留与下一步
+
+- 三个新 provider 尚未做真实 API 连通性验证（key 有效性 / 模型名可用性），首次实际调度执行时需观察日志
+- §6.20 其余遗留不变（WEB_BROWSER 执行链、平台密钥生产化注入）
+
+---
+
+### 6.22 PATROL 角色移除：Agent 角色收敛为三角色（2026-07-30）
+
+#### 1. 背景与决策
+
+用户决策：整体角色从 4 个收敛为 3 个（PLANNER / EXECUTOR / REVIEWER），移除 PATROL 巡检角色——其兜底目标已由重分配熔断（V24）、死信池人工兜底（V25 DEAD_LETTER）、定时补偿任务覆盖。
+
+删除前核验（SearchAgent 全量引用面 + postgres_helloai MCP 查库）：
+
+- Java 代码零直接引用 `AgentRole.PATROL` / 字符串 "PATROL"（角色转换全走 `valueOf` 动态转换），无任何按 PATROL 分支的调度逻辑 / 定时任务 / 消费者
+- patrol MQ 队列 / 绑定为纯死拓扑（无生产者无消费者）
+- 数据库中 PATROL 相关数据全为 0：PATROL 角色 agent 0 个、patrol_record 0 行、task_timeline PATROL 行 0、prompt_template 仅 1 条未用种子行 → 采取彻底清理策略（连 patrol_record 表生态一起删，无需数据迁移）
+
+顺带完成上轮遗留 rename：`AbstractOpenAiCompatibleChatClientFactory` → `AbstractOpenAiCompatibleProviderChatClientFactory`（两个子类 extends 同步）。
+
+#### 2. 实施内容
+
+**后端删除**
+
+- `AgentRole`：删 PATROL 枚举值（剩 PLANNER/EXECUTOR/REVIEWER/SYSTEM）
+- `RabbitMQConfig`：删 `PATROL_QUEUE` 常量、`patrolQueue()`、`patrolBinding()` 三处死拓扑
+- 删文件：`skills/patrol/SKILL.md`、`PatrolRecord`、`PatrolRecordMapper`、`PatrolRecordService`
+- `AgentService`：删 patrolRecordMapper 注入、patrolCount 统计（getRelatedCounts / deleteAgentCascade）、级联删除链 patrol 步骤
+- `TaskService`：删 patrolRecordMapper 注入与级联删除步骤，Javadoc "6 张表" 改 "5 张表"
+- `AdminAgentController` + `AgentDeleteResult` / `AgentRelatedCounts` DTO：删 patrolCount 字段与 set
+- `AgentServiceTest`：同步删 Mock / 构造参数 / 断言
+- 注释清理：McpMcpServer（pullTasks 参数描述 + GetAgentStatusResult）、AgentMcpServerService、TaskTimelineService、TaskTimelineItem、TaskTimeline
+
+**数据库（V30__remove_patrol_role.sql，V1 历史迁移不动）**
+
+- 重建 `chk_agent_role`（三角色）与 `chk_task_timeline_role`（三角色 + SYSTEM）
+- DELETE prompt_template PATROL 种子行（id=2000000000000000004）
+- DROP TABLE patrol_record；同步更新三处 COMMENT
+
+**前端（9 文件）**
+
+- `types/index.ts`：AgentRole 联合去 PATROL、两个 DTO 去 patrolCount、颜色映射去 PATROL、删 PatrolRecord 接口
+- `PromptList.vue`（筛选/表单/标签色 3 处）、`AgentList.vue`（2 处）、`AgentCard.vue`、`AgentEditDialog.vue`、`AgentDeleteDialog.vue`（巡查记录统计行）、`AgentDetail.vue`、`AgentSelect.vue`、`QuickDispatchDialog.vue`
+
+**杂项**
+
+- `verify-subtask-deadletter.ps1` / `verify-subtask-redispatch-auto-execution.ps1` 默认 `$Role` 改 EXECUTOR
+- `cleanup-test-data.sql` 删 patrol_record（注释 + TRUNCATE 列表）
+- CODE_STYLE：skills 目录树、MQ 队列表、模型选型表去 PATROL 行、字段命名示例去 `patrol_agent_id`；基线文档删 "PATROL 自动巡检链路" 行
+- 设计文档同步：`HelloAI_架构设计参考.md`（§1.1 角色模型标注 HelloAI 已收敛三角色、§5.3 第三阶段协作闭环去 Patrol）、`HelloAI_外部项目借鉴技术细节.md`（§2.4 / §3.2 / §4.1 中描述 HelloAI 现状的行改为三角色；OpenMOSS 自身四角色事实描述保留不动）
+
+#### 3. 测试与验证
+
+- `mvn -DskipTests compile` 全 reactor BUILD SUCCESS（EXIT=0）
+- `AgentServiceTest` 回归通过（EXIT=0）
+- `vue-tsc --noEmit` 类型检查通过（EXIT=0）
+- 全仓 grep 确认：残留仅历史资产（V23 历史迁移、迭代记录历史条目、archive / 借鉴文档），代码 / 配置 / 脚本零残留
+
+#### 4. 影响
+
+- Agent 注册 / 编辑 / 筛选、提示词模板的角色选项收敛为三角色；已有三角色数据零影响
+- V30 随应用启动自动执行；执行前生产库 PATROL 数据已核验为 0，DROP 表无数据损失
+- 兼容性说明：若外部 MCP 客户端以 role=PATROL 调 pullTasks 会因 `AgentRole.valueOf` 抛异常，但库中不存在 PATROL Agent，实际无此调用方
+
+#### 5. 遗留与下一步
+
+- §6.21 遗留不变（三个新 provider 真实 API 连通性验证、WEB_BROWSER 执行链、平台密钥生产化注入）
+
+---
+
+### 6.23 chat.provider 归位重构：Provider 接入族自包含（2026-07-30）
+
+#### 1. 背景与决策
+
+用户观察到 chat 包下 Factory 与 Service 混放显乱。核查结论：`provider` 子包本身纯净（全 Factory），乱源是 chat 父包混放接口 / Service / 缓存 / 工具四种类型，且 `ProviderChatClientFactory` 契约与 `ProviderChatModelCache` 缓存的唯一消费方就是 Factory 族，存在归属错位。决策：按项目"按职责分包"惯例做一次归位（不新增包、不按类类型拆包）。
+
+#### 2. 实施内容
+
+- 移动（含 package 声明修正）：`ProviderChatClientFactory`、`ProviderChatModelCache` 从 `core.agent.chat` → `core.agent.chat.provider`；测试镜像移动 `ProviderChatModelCacheTest` 同步进 test 侧 provider 包
+- import 修正：5 个 Factory 删同包冗余 import；`AgentChatClientService`（顺带清掉 2 行同包冗余 import）、`LlmProviderCatalogService`、`AgentChatClientServiceTest`、`PlatformAgentExecutionServiceTest` 改指向新 FQN
+- 归位后语义：`chat` = 业务 ChatClient 服务层（AgentChatClientService / LlmProviderCatalogService / AgentProviderResolver）；`chat.provider` = Provider 接入族（契约 + 4 厂商实现 + 抽象基类 + ChatModel 缓存）
+- CODE_STYLE §3.x 语义边界补一条 chat / chat.provider 分界；`AgentProviderProperties` Javadoc 无 FQN 无需动
+
+#### 3. 测试与验证
+
+- 旧 FQN `agent.chat.ProviderChat*` 全仓 Java 零残留
+- `mvn -DskipTests compile` 全 reactor EXIT=0
+- `AgentChatClientServiceTest` / `ProviderChatModelCacheTest`（@Nested 13 用例）/ `PlatformAgentExecutionServiceTest` 回归全绿（surefire XML 核验 failure/error = 0）
+
+#### 4. 影响与遗留
+
+- 纯包移动零逻辑变更；后续新增 LLM 厂商只动 chat.provider 子包 + 一段 yml
+- 无新遗留；§6.21 / §6.22 遗留不变
+
+---
+
+### 6.24 三个新 Provider 真连通验证：moonshot / minimax / dashscope × 三角色（2026-07-30）
+
+#### 1. 背景
+
+闭环 §6.21 遗留项"三个新 provider（moonshot/minimax/dashscope）真实 API 连通性验证"。验证目标：平台密钥能否支撑 PLANNER / EXECUTOR / REVIEWER 三角色 Agent 的注册与真实对话。
+
+#### 2. 实施内容
+
+- 新增 `tmp/verify-three-providers.ps1`：3 provider × 3 角色共 9 组合，每组注册 API_KEY_LLM Agent（幂等，注册时经 `LlmProviderCatalogService.provisionPlatformCredential` 自动补绑平台密钥）→ 调 `/api/agent-executions/connectivity/{agentId}` 真实对话探测
+- 后端以归位重构后的新 jar 运行（16:09 重建），间接完成 §6.23 变更的运行时冒烟
+
+#### 3. 验证结果
+
+- 9/9 全通过：register=OK、chat=OK、mockMode=false，各模型真实回显探测口令（moonshot-v1-8k / MiniMax-M2.5 / qwen-plus），延迟 0.5s~2.7s
+- MiniMax-M2.5 为推理模型，output 含思考前缀文本，连通判定不受影响
+
+#### 4. 影响与遗留
+
+- §6.21 遗留项"三个新 provider 真实 API 连通性验证"关闭；WEB_BROWSER 执行链、平台密钥生产化注入两项遗留不变
+- 产生 9 个 probe-* 探测 Agent（幂等命名，可复用或后续清理）
+
+---
+
+### 6.25 内部 LLM Agent 隐藏"生成接入内容"入口（2026-07-30）
+
+用户建议：接入内容面向外部 AI Agent（CLI 接入），API_KEY_LLM Agent 注册即完成（平台密钥自动绑定），不应展示该按钮。实施：
+
+- 后端：`AgentListItemVO` 补 `accessType` 字段（`AgentDetailVO` 继承获得），`AdminAgentController` 列表/详情映射补 set；`onboarding-content` 接口对 API_KEY_LLM 直接 fail（防御绕过前端直调）
+- 前端：`AgentListItem` 类型补 `accessType?`；`AgentCard.vue`（列表卡片 hover 操作栏）与 `AgentDetail.vue`（详情操作区）的"生成接入内容"按钮加 `v-if="agent.accessType !== 'API_KEY_LLM'"`
+- 验证：`mvn compile` 全 reactor EXIT=0、`vue-tsc` EXIT=0
+
+---
+
+### 6.26 minimax 推理模型 thinking 分离修复：parseVerdict null 根因闭环（2026-07-30）
+
+#### 1. 背景与根因
+
+minimax（MiniMax-M2.5，Anthropic 协议推理模型）担任 REVIEWER 时自动核验必然 `sub_task_auto_review_unparseable`（parseVerdict 返回 null）。裸 API 探测（`tmp/probe-minimax-format.ps1`、`tmp/probe-minimax-500.ps1`）确认根因：minimax 返回 `[thinking, text]` 两个 content block，Spring AI 1.1.8 `AnthropicChatModel.toChatResponse` 把每个 block 映射为一个 Generation（thinking 块的 AssistantMessage metadata 带 `signature`，redacted_thinking 带 `data`）；我方原代码 `response.getResult()` 只取 generations[0]，拿到的是思考文本，正文 JSON 在 generations[1] 被丢弃——不是模型输出脏，是取错了 Generation。
+
+#### 2. 实施内容
+
+- 新增 `helloai-core/.../agent/chat/ChatResponseContentExtractor.java`：遍历全部 Generation，metadata 含 `signature`/`data` 归 thinking，其余拼正文；两个 ChatResponse 出口（`ApiKeyAgentExecutor`、`AgentExecutionConnectivityService`）统一改走该 extractor
+- thinking 全链路贯通保留（按用户决策，供后续前端动态展示）：`AgentResult.thinking`（5 参 success 重载）→ `ExecutionResultReport.thinking` → `ExecutionResultHandler` 落对话流消息 `sub_task_execute_thinking`；`SubTaskReviewService` 在 verdict 消息前落 `subtask_review_thinking`；connectivity/preview API 响应 DTO 补 `thinking` 字段
+- `parseVerdict` 未改（既有 `stripToJsonObject` 对干净正文足够）；unparseable 停留 REVIEW 的兜底逻辑未动——重试/降级转其他 LLM 按用户指示留待下轮
+
+#### 3. 验证结果
+
+- `mvn test` 全 reactor：Tests run 292, Failures 0, Errors 0
+- `tmp/verify-minimax-thinking.ps1`（connectivity 审查场景探测 probe-minimax-reviewer）：output=干净可解析 JSON（含 pass/score/comment）、thinking 单独返回 1170 字符，`VERIFY_RESULT=PASS`；moonshot 对照组 thinking_len=0、正文照常，OpenAI 协议无回归
+- 真实审查链路重放（`tmp/replay-submit-result.ps1` 走 MCP `submitResult` → `handleReport` → `SubTaskSubmittedForReviewEvent`）：子任务 2082747212507799554 timeline 出现 `sub_task_auto_review_passed`（此前同任务为 unparseable），verdict 为干净 JSON，状态 REVIEW→DONE 闭环
+- 环境坑记录：验证期间 6565 端口被 IDEA 旧代码进程占用，jar 启动失败但探活误报，靠启动日志 `Port 6565 was already in use` + `Get-NetTCPConnection` 查占用进程定案；用户重启 IDEA 后端后验证通过。另注：管理端 `POST /api/sub-tasks/submit/{id}` 只改状态不发核验事件，重放自动核验必须走执行结果上报路径
+
+#### 4. 影响与遗留
+
+- minimax 担任 REVIEWER 的 parseVerdict null 问题关闭；thinking 已在对话流与 API 层保留，前端动态展示待后续迭代
+- 遗留（下轮）：核验 verdict 不可解析时的重试 / 降级转其他 LLM Agent 处理策略
+- 遗留（低优先）：`MinimaxProviderChatClientFactory` 未显式设置 maxTokens（Spring AI Anthropic 默认 500），实测未触发截断，暂不改
+
+---
+

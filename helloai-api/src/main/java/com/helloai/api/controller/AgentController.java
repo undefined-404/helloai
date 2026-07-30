@@ -7,6 +7,7 @@ import com.helloai.common.config.AgentConfigProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.chat.LlmProviderCatalogService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.system.service.PromptTemplateService;
 import com.helloai.core.agent.AgentCapability;
@@ -30,6 +31,7 @@ public class AgentController {
     private final AgentService agentService;
     private final AgentConfigProperties agentConfig;
     private final PromptTemplateService promptTemplateService;
+    private final LlmProviderCatalogService llmProviderCatalogService;
 
     @GetMapping
     public R<List<AgentResponse>> list() {
@@ -144,6 +146,12 @@ public class AgentController {
 
         // 持久化所有可选字段变更
         agentService.updateById(agent);
+
+        // 5) API_KEY_LLM：注册后按 modelType/默认 provider 尝试补绑平台密钥（尽力而为，
+        //    不阻断注册；脚本注册后自行绑定自定义密钥的既有链路保持不变）
+        if (accessType == AgentAccessType.API_KEY_LLM) {
+            llmProviderCatalogService.provisionPlatformCredential(agent);
+        }
     }
 
     @GetMapping("/me/skill")

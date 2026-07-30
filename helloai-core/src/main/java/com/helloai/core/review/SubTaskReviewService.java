@@ -153,6 +153,13 @@ public class SubTaskReviewService {
         try {
             conversationService.addMessage(subTaskId, null,
                     "user", "platform", prompt, "subtask_review_prompt");
+            // 推理模型的思考过程单独落一条消息（保留 thinking，供前端动态展示）
+            if (result.getThinking() != null && !result.getThinking().isBlank()) {
+                conversationService.addMessage(subTaskId, reviewer.getId(),
+                        "assistant", "agent",
+                        result.getThinking(),
+                        "subtask_review_thinking");
+            }
             conversationService.addMessage(subTaskId, reviewer.getId(),
                     "assistant", "agent",
                     result.getOutput() != null ? result.getOutput() : "",

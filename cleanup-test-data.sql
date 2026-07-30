@@ -10,7 +10,7 @@
 --   鉴权/MCP: credential_vault / agent_mcp_server
 --   收件箱/出箱: agent_inbox / agent_outbox_event / agent_command_outbox / event_consumption_log
 --   对话/附件: conversation_archive / conversation_message / attachment
---   执行链路: review_record / reward_log / activity_log / patrol_record / request_log / rule
+--   执行链路: review_record / reward_log / activity_log / request_log / rule
 --   执行记录: agent_execution_record
 --   提示词: prompt_template
 --   值班租约: agent_duty_lease
@@ -25,7 +25,7 @@ SET session_replication_role = replica;
 TRUNCATE TABLE
     task, module, agent,
     sub_task, review_record, reward_log, activity_log,
-    patrol_record, request_log, rule,
+    request_log, rule,
     agent_inbox, agent_outbox_event,
     conversation_archive, conversation_message, attachment,
     agent_execution_record, prompt_template,

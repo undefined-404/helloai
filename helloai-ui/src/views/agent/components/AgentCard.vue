@@ -51,7 +51,8 @@
 
     <!-- Hover 操作栏 -->
     <div class="card-actions" @click.stop>
-      <el-button size="small" type="primary" plain @click="$emit('onboarding', agent)">生成接入内容</el-button>
+      <!-- 内部 LLM Agent 无 CLI 接入流程，不展示接入内容入口 -->
+      <el-button v-if="agent.accessType !== 'API_KEY_LLM'" size="small" type="primary" plain @click="$emit('onboarding', agent)">生成接入内容</el-button>
       <el-button size="small" @click="$emit('edit', agent)">编辑</el-button>
       <el-button size="small" @click="$emit('toggle-status', agent)">
         {{ agent.status === 'ACTIVE' ? '注销' : '恢复注册' }}
@@ -84,8 +85,7 @@ const roleColor = computed(() => ROLE_COLOR_MAP[props.agent.role] || ROLE_COLOR_
 const roleLabels: Record<AgentRole, string> = {
   PLANNER: '规划者',
   EXECUTOR: '执行者',
-  REVIEWER: '审查者',
-  PATROL: '巡查者'
+  REVIEWER: '审查者'
 }
 function roleLabel(role: AgentRole) {
   return roleLabels[role] || role

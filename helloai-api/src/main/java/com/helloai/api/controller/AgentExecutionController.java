@@ -54,6 +54,7 @@ public class AgentExecutionController {
         response.setStage(result.getStage());
         response.setLatencyMs(result.getLatencyMs());
         response.setOutput(result.getOutput());
+        response.setThinking(result.getThinking());
         response.setErrorMessage(result.getErrorMessage());
         response.setRootException(result.getRootException());
         response.setRootMessage(result.getRootMessage());
@@ -82,6 +83,7 @@ public class AgentExecutionController {
         response.setExecutorName(result.getExecutorName());
         response.setSuccess(result.isSuccess());
         response.setOutput(result.getOutput());
+        response.setThinking(result.getThinking());
         response.setErrorMessage(result.getErrorMessage());
         response.setFinishReason(result.getFinishReason());
         response.setTokenUsage(result.getTokenUsage());

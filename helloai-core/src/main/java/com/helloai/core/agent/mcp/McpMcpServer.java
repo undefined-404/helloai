@@ -82,7 +82,7 @@ public class McpMcpServer {
             """)
     public McpToolService.PullTasksResult pullTasks(
             @ToolParam(description = "Agent ID（v2.4 §9.1 协议字段；M4 鉴权接入后此值会被服务端覆盖为从 Authorization 解析的真实 agentId）", required = true) Long agentId,
-            @ToolParam(description = "Agent 角色（如 EXECUTOR / PLANNER / REVIEWER / PATROL）。默认 EXECUTOR", required = false) String role,
+            @ToolParam(description = "Agent 角色（如 EXECUTOR / PLANNER / REVIEWER）。默认 EXECUTOR", required = false) String role,
             @ToolParam(description = "最多返回消息数。建议 20，最大 200", required = false) Integer max,
             @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
             @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
@@ -382,7 +382,7 @@ public class McpMcpServer {
     public static class GetAgentStatusResult {
         private Long agentId;
         private String name;
-        /** AgentRole：PLANNER / EXECUTOR / REVIEWER / PATROL */
+        /** AgentRole：PLANNER / EXECUTOR / REVIEWER */
         private String role;
         /** AgentStatus（管理态）：ACTIVE / DISABLED */
         private String status;

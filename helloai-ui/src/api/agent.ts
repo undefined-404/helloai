@@ -9,8 +9,26 @@ export const agentApi = {
   getById(id: string) {
     return request.get<any, Agent>(`/agents/${id}`)
   },
-  register(data: { name: string; role: string; description?: string; specializationSlug?: string }) {
+  register(data: {
+    name: string
+    role: string
+    description?: string
+    specializationSlug?: string
+    accessType?: string
+    modelType?: string
+  }) {
     return request.post('/agents/register', data)
+  },
+
+  // ── LLM Provider 目录（手动注册 API_KEY_LLM Agent 用）──
+  listLlmProviders() {
+    return request.get<any, Array<{
+      provider: string
+      defaultModel: string | null
+      apiKeyConfigured: boolean
+      factorySupported: boolean
+      available: boolean
+    }>>('/admin/agents/llm-providers')
   },
 
   // ── 管理端分页列表（含 enrichment）──

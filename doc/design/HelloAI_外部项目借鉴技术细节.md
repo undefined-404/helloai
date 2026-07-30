@@ -293,7 +293,7 @@ Child Agent 拥有：
 ```
 
 **HelloAI 落点**：
-- 当前只有角色（PLANNER/EXECUTOR/REVIEWER/PATROL），没有层级
+- 当前只有角色（PLANNER/EXECUTOR/REVIEWER），没有层级
 - 这是第三阶段"Team 编排"中需要引入的权限模型
 
 ### 2.5 3-Tier Memory（记忆分层）
@@ -387,14 +387,13 @@ PATROL：定期扫描 → 发现异常 → 上报 BLOCKED → 通知 PLANNER
 ```
 
 **HelloAI 落点**：
-- 四角色已通过 `AgentRole` 枚举和 SKILL.md 文件建模
+- HelloAI 已收敛为三角色（PLANNER/EXECUTOR/REVIEWER，通过 `AgentRole` 枚举和 SKILL.md 文件建模）；PATROL 已移除，其兜底目标由重分配熔断、死信池与定时补偿任务覆盖
 - EXECUTOR 自动执行链路已成型
-- PLANNER 自动拆解 + REVIEWER 自动审查 + PATROL 自动巡检尚未完整闭环
+- PLANNER 自动拆解 + REVIEWER 自动审查尚未完整闭环
 
 **Prompt 模板借鉴**：OpenMOSS 的角色 Prompt 模板（上述 4 个 .md 文件）可作为 HelloAI 当前 `resources/skills/{role}/SKILL.md` 的内容参考，尤其是：
 - PLANNER 的拆解策略描述
 - REVIEWER 的审查标准分级
-- PATROL 的巡检频率与异常判定规则
 
 ### 3.3 CLI 工具模式（task-cli.py）
 
@@ -456,7 +455,7 @@ class PriorityMessageQueue:
 ```
 
 **HelloAI 落点**：
-- 当前 RabbitMQ 是按角色分队列（executor/reviewer/planner/patrol），不是按优先级
+- 当前 RabbitMQ 是按角色分队列（executor/reviewer/planner），不是按优先级
 - 要实现优先级，可在 `agent_execution_record` 或 `ExecutionCommand` 中增加 `priority` 字段
 - 消费端按优先级排序拉取（而非 FIFO）
 - 注意：不要把所有优先级消息都塞进一个队列（那会退化成 FIFO），每个优先级独立队列或消费端排序

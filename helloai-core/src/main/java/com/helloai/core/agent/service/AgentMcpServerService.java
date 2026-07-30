@@ -74,8 +74,8 @@ public class AgentMcpServerService extends ServiceImpl<AgentMcpServerMapper, Age
      * 在 {@code save(agent)} 之后调用，纳入同一事务。
      * </p>
      * <p>
-     * 注意：AgentService.register() 对 role 不做限制（PLANNER / EXECUTOR / REVIEWER /
-     * PATROL / 其他都可注册），但默认 10 工具按 EXECUTOR 业务循环 + 值班打卡最优集设计。
+     * 注意：AgentService.register() 对 role 不做限制（PLANNER / EXECUTOR / REVIEWER
+     * 均可注册），但默认 10 工具按 EXECUTOR 业务循环 + 值班打卡最优集设计。
      * 若未来 PLANNER/REVIEWER 注册需要差异化工具集，
      * 应在 AgentService.register() 之前/之后按 role 分流。
      * 当前实现统一给非 EXECUTOR 也启用 10 工具 —— 因为 ON CONFLICT + 已存在跳过不会出错，

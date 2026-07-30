@@ -1,4 +1,4 @@
-package com.helloai.core.agent.chat;
+package com.helloai.core.agent.chat.provider;
 
 import com.helloai.core.agent.entity.Agent;
 import org.springframework.ai.chat.client.ChatClient;

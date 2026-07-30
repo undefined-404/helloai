@@ -49,7 +49,8 @@ public class AgentDispatchProperties {
      *
      * <p>所有类型的重分配（离线重派、超时回收、N11回退、阻塞重试）
      * 每尝试一次累加 sub_task.reassign_attempt_count；达到本阈值后不再
-     * 重新分配，直接标记子任务为 CANCELLED，打破无限重试死循环。</p>
+     * 重新分配，转入 DEAD_LETTER 死信池待人工兜底（V25，原为 CANCELLED），
+     * 打破无限重试死循环。</p>
      *
      * <p>默认 5 次。设为 0 或负数表示禁用熔断（不推荐生产使用）。</p>
      */

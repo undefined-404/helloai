@@ -12,7 +12,7 @@ param(
     [string]$BaseUrl = "http://localhost:6565",
     [ValidateSet("blocked", "offline")]
     [string]$Scenario = "blocked",
-    [string]$Role = "PATROL",
+    [string]$Role = "EXECUTOR",
     [switch]$BindVault,
     [string]$VaultProvider = "deepseek",
     [string]$VaultApiKeyEnv = "DEEPSEEK_API_KEY",

@@ -16,7 +16,6 @@
           <el-option label="规划者 PLANNER" value="PLANNER" />
           <el-option label="执行者 EXECUTOR" value="EXECUTOR" />
           <el-option label="审查者 REVIEWER" value="REVIEWER" />
-          <el-option label="巡查者 PATROL" value="PATROL" />
         </el-select>
       </el-form-item>
       <el-form-item label="模型类型">
