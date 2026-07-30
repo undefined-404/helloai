@@ -3189,3 +3189,34 @@ minimax（MiniMax-M2.5，Anthropic 协议推理模型）担任 REVIEWER 时自�
 
 ---
 
+### 6.27 子任务详情展示优化（方案1）+ 拆解/澄清链配套 + 执行产出物化方案设计（2026-07-30）
+
+#### 1. 背景
+
+真实 AI 执行链已连通并产出正文，但子任务详情页仅平铺原始文本、时间线为开发者事件码，非开发者难读；且执行产出目前只落 `sub_task.context.lastExecution.output` 纯文本，`attachment` 表全库 0 写入，无法沉淀可下载文件。本轮先做"零后端"的展示优化（方案1），并把"后端产出物化 + 结构化多文件产出"（方案2/3）沉淀为设计文档，代码不动。
+
+#### 2. 实施内容
+
+- **前端展示优化（helloai-ui，纯前端）：**
+  - 新增 `components/MarkdownView.vue`（markdown-it + dompurify 渲染富文本，XSS 净化）与 `components/ReviewVerdictView.vue`（核验分析结构化卡片：pass/score/issues/comment 分区渲染，替代裸 JSON）；`package.json` 引入 `markdown-it` / `dompurify`。
+  - `SubTaskDetail.vue`：执行对话流按 Markdown 富文本渲染 + 超长折叠；时间线事件"人话化"（`EVENT_META` 事件码 → 中文标签 + 一句话描述，payload 折叠为"技术详情"）；Agent ID → 注册名映射（`agentNameMap`，未命中降级短 ID）；"返回列表"携带所属主任务 `taskId` 归属跳转；执行产出保留"复制/导出 .md"（前端 Blob 导出，方案1），核验请求消息剥离 HTML 注释。
+  - `SubTaskList.vue` 增补、`api/subTask.ts` / `api/clarify.ts` / `types/index.ts` 微调配套。
+- **后端配套（需求澄清/拆解链）：**
+  - `PlannerAnalysisService.orderByDependency`：新增稳定 Kahn 入度拓扑排序，草案审阅/分发按依赖正序（根节点在前，`dependsOn` 恒指向更靠前行）；仅按本批次内部依赖排序，批外/悬挂 id 视为无约束，残留成环兜底按原序追加绝不丢条目。
+  - `RequirementClarifyService.regenerate`：新增"会话已 FINALIZED 且原任务已被删除"的悬挂恢复路径——复用会话终稿重建 PENDING Task（不放开 ACTIVE 校验、不重跑 LLM，原任务仍存活时拒绝），抽出 `buildTaskFromDraft` 私有方法统一 finalize/regenerate 建任务逻辑，timeline 事件区分 `task_created_from_clarify` / `task_regenerated_from_clarify`；`RequirementConversationController` 补 regenerate 薄入口。
+- **设计文档（仅文档，代码未实现）：**
+  - 新增 `doc/design/HelloAI_执行产出物化与结构化多文件产出方案.md`：方案2（执行产出物化为真实文件 + attachment 记录 + 前端可下载）与方案3（LLM 可选 JSON manifest 结构化多文件产出）的决策完整设计草案——本地文件系统存储 + `ArtifactStorage` 抽象（config 门控 `helloai.storage`，未来可换 MinIO）、方案2 是方案3 的降级形态（统一 `ParsedOutput{displayText, files}` 解析器）、物化放 `afterCommit` best-effort 不阻断 REVIEW、下载接口 `local://` 流式改造、前端"产出附件"卡片走 axios blob 带 token；含改动清单、时序图、风险回滚、验证计划、小步实施顺序。
+- **工程：** 新增 `docker-compose.server.yml` / `nginx.server.conf` 服务器部署配置；`.gitignore` 忽略 `.tmp/`（临时验证日志 + 含明文密码的一次性 `deploy-ssh.exp`，不入库）。
+
+#### 3. 验证结果
+
+- 展示优化为纯前端改动，浏览器渲染观感对齐（Markdown 富文本 / 时间线人话化 / 核验分析卡片）；提交前 `git add` 明确排除 `scripts/shell/.tmp/`（其中 `deploy-ssh.exp` 硬编码 SSH 明文密码，属安全敏感临时产物）。
+- 后端 `orderByDependency` / `regenerate` 为既有链路增量，编译沿 helloai-core 现状（未新起真实环境跑本轮 e2e）。
+
+#### 4. 影响与遗留
+
+- 方案1（前端导出/展示）已交付；**方案2/3 仅为设计文档，后端代码一行未动**，待后续按设计文档 §11 顺序落地（届时回填 N 项状态：`attachment` 表从 0 写入 → 内置执行链产出物化）。
+- 遗留：方案2/3 实现、执行产出附件前端"产出附件"卡片；服务器部署配置（docker-compose.server.yml / nginx.server.conf）真实环境验收。
+
+---
+
