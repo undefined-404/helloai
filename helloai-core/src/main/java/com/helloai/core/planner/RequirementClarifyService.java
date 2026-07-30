@@ -131,14 +131,52 @@ public class RequirementClarifyService {
         if (conversation.getFinalTitle() == null || conversation.getFinalTitle().isBlank()) {
             throw new BizException("会话尚无终稿，请先对话至 LLM 产出终稿: conversationId=" + conversationId);
         }
+        conversation.setStatus(STATUS_FINALIZED);
+        return buildTaskFromDraft(conversation, "task_created_from_clarify");
+    }
 
+    /**
+     * 重新生成任务：会话已 FINALIZED 且原任务已被删除时，复用会话终稿重建 PENDING Task，
+     * 回填新的 task_id（会话保持 FINALIZED）。前端随后自动调 plan 拆解并打开草案审阅。
+     *
+     * <p>不放开 ACTIVE 校验，也不重跑 LLM：仅在“终稿仍在、任务已被清理”的悬挂场景下重建，
+     * 避免误覆盖仍存活的任务。</p>
+     *
+     * @return 重新创建的任务
+     */
+    public Task regenerate(Long conversationId) {
+        RequirementConversation conversation = conversationService.getById(conversationId);
+        if (conversation == null) {
+            throw new BizException("澄清会话不存在: " + conversationId);
+        }
+        if (!STATUS_FINALIZED.equals(conversation.getStatus())) {
+            throw new BizException("仅已建任务（FINALIZED）的会话可重新生成: conversationId=" + conversationId
+                    + ", status=" + conversation.getStatus());
+        }
+        if (conversation.getFinalTitle() == null || conversation.getFinalTitle().isBlank()) {
+            throw new BizException("会话缺少终稿，无法重新生成: conversationId=" + conversationId);
+        }
+        Long oldTaskId = conversation.getTaskId();
+        if (oldTaskId != null && taskService.getById(oldTaskId) != null) {
+            throw new BizException("原任务仍然存在（taskId=" + oldTaskId
+                    + "），请先在任务管理中删除后再重新生成");
+        }
+        return buildTaskFromDraft(conversation, "task_regenerated_from_clarify");
+    }
+
+    /**
+     * 复用会话终稿创建 PENDING Task、best-effort 通知全部 PLANNER、回填 task_id 并写 timeline。
+     * 会话状态沿用调用方已设置的值（finalize 置 FINALIZED，regenerate 保持 FINALIZED）。
+     */
+    private Task buildTaskFromDraft(RequirementConversation conversation, String timelineEvent) {
+        Long conversationId = conversation.getId();
         Task task = new Task();
         task.setTitle(conversation.getFinalTitle());
         task.setDescription(conversation.getFinalDescription());
         task.setStatus(TaskStatus.PENDING);
         taskService.save(task);
-        log.info("澄清终稿建任务: conversationId={}, taskId={}, title={}",
-                conversationId, task.getId(), task.getTitle());
+        log.info("澄清终稿建任务: conversationId={}, taskId={}, title={}, event={}",
+                conversationId, task.getId(), task.getTitle(), timelineEvent);
 
         // 照 TaskController.create 的通知段：best-effort 通知全部 PLANNER，失败不阻断
         try {
@@ -156,10 +194,9 @@ public class RequirementClarifyService {
         }
 
         conversation.setTaskId(task.getId());
-        conversation.setStatus(STATUS_FINALIZED);
         conversationService.updateById(conversation);
 
-        taskTimelineService.recordEvent(task.getId(), null, "task_created_from_clarify",
+        taskTimelineService.recordEvent(task.getId(), null, timelineEvent,
                 AgentRole.PLANNER, null, Map.of("conversationId", conversationId));
         return task;
     }
@@ -186,8 +223,12 @@ public class RequirementClarifyService {
         if (conversation == null) {
             throw new BizException("澄清会话不存在: " + conversationId);
         }
-        return new ClarifyConversationDetail(conversation,
+        ClarifyConversationDetail view = new ClarifyConversationDetail(conversation,
                 messageService.listByConversation(conversationId));
+        // 供前端判断 FINALIZED 会话的原任务是否已被删除（悬挂软引用），从而决定能否重新生成
+        view.setTaskExists(conversation.getTaskId() != null
+                && taskService.getById(conversation.getTaskId()) != null);
+        return view;
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -359,6 +400,8 @@ public class RequirementClarifyService {
     public static class ClarifyConversationDetail {
         private final RequirementConversation conversation;
         private final List<RequirementMessage> messages;
+        /** 会话关联任务是否仍存在（仅 detail 计算填充）；前端据此判断 FINALIZED 会话能否重新生成。 */
+        private Boolean taskExists;
     }
 
     /** LLM 结构化输出（未知字段容忍）：type=question 追问 / type=final 终稿。 */

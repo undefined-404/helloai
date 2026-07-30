@@ -31,6 +31,10 @@ export const subTaskApi = {
   redispatchDeadLetter(id: LongId, agentId: LongId) {
     return request.post(`/sub-tasks/dead-letter/redispatch/${id}`, { agentId })
   },
+  // BLOCKED 子任务重新调度（reset → PENDING 后交调度链，dispatchBlockedSubTask）
+  reassign(id: LongId, agentId: LongId) {
+    return request.post(`/sub-tasks/reassign/${id}`, { agentId })
+  },
   changeStatus(data: ChangeStatusRequest) {
     return request.post('/sub-tasks/change-status', data)
   },

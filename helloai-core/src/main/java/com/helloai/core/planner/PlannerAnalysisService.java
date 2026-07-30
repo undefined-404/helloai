@@ -172,13 +172,13 @@ public class PlannerAnalysisService {
     //  草案查看 / 确认 / 拒绝
     // ══════════════════════════════════════════════════════════════
 
-    /** 查看指定任务的草案列表（PENDING_PLAN_REVIEW）。 */
+    /** 查看指定任务的草案列表（PENDING_PLAN_REVIEW），按依赖拓扑排序为正序（根在前）。 */
     public List<SubTask> listDrafts(Long taskId) {
         if (taskService.getById(taskId) == null) {
             throw new BizException("任务不存在: " + taskId);
         }
-        return subTaskService.list(taskId, SubTaskStatus.PENDING_PLAN_REVIEW, null, null, 0)
-                .getRecords();
+        return orderByDependency(subTaskService.list(
+                taskId, SubTaskStatus.PENDING_PLAN_REVIEW, null, null, 0).getRecords());
     }
 
     /**
@@ -199,8 +199,8 @@ public class PlannerAnalysisService {
             throw new BizException("只有 PLANNING 状态的任务才能确认草案: taskId=" + taskId
                     + ", status=" + task.getStatus());
         }
-        List<SubTask> drafts = subTaskService.list(
-                taskId, SubTaskStatus.PENDING_PLAN_REVIEW, null, null, 0).getRecords();
+        List<SubTask> drafts = orderByDependency(subTaskService.list(
+                taskId, SubTaskStatus.PENDING_PLAN_REVIEW, null, null, 0).getRecords());
         if (drafts.isEmpty()) {
             throw new BizException("任务没有待确认的规划草案: taskId=" + taskId);
         }
@@ -460,6 +460,72 @@ public class PlannerAnalysisService {
             subTaskService.updateDependsOn(draft.getId(), depIds);
             draft.setDependsOn(depIds);
         }
+    }
+
+    /**
+     * 按依赖拓扑排序（稳定 Kahn 入度法）：无前置依赖的根节点排在前，
+     * 依赖项总在其依赖之后，使草案审阅与分发呈正序（1→N，dependsOn 恒指向更靠前的行），
+     * 符合多数人的阅读与执行习惯。
+     *
+     * <p>dependsOn 存真实 sub_task id，仅按本批次内部依赖排序，批外/悬挂 id 视为无约束；
+     * 同层节点保持入参原有相对顺序。decompose 阶段已做环检测，这里对残留成环兜底：
+     * 无法出队的节点按原顺序追加到末尾，绝不丢条目。</p>
+     */
+    private List<SubTask> orderByDependency(List<SubTask> drafts) {
+        int n = drafts.size();
+        if (n <= 1) {
+            return drafts;
+        }
+        Map<Long, Integer> indexById = new HashMap<>();
+        for (int i = 0; i < n; i++) {
+            indexById.put(drafts.get(i).getId(), i);
+        }
+        int[] inDegree = new int[n];
+        List<List<Integer>> adjacency = new ArrayList<>(n);
+        for (int i = 0; i < n; i++) {
+            adjacency.add(new ArrayList<>());
+        }
+        for (int i = 0; i < n; i++) {
+            List<Long> deps = drafts.get(i).getDependsOn();
+            if (deps == null) {
+                continue;
+            }
+            for (Long depId : deps) {
+                Integer depIdx = indexById.get(depId); // 仅统计本批次内部依赖
+                if (depIdx != null) {
+                    adjacency.get(depIdx).add(i); // 前置 → 后继
+                    inDegree[i]++;
+                }
+            }
+        }
+        // 稳定 Kahn：按原下标升序将入度为 0 的节点入队
+        Deque<Integer> queue = new ArrayDeque<>();
+        for (int i = 0; i < n; i++) {
+            if (inDegree[i] == 0) {
+                queue.add(i);
+            }
+        }
+        List<SubTask> ordered = new ArrayList<>(n);
+        boolean[] emitted = new boolean[n];
+        while (!queue.isEmpty()) {
+            int node = queue.poll();
+            ordered.add(drafts.get(node));
+            emitted[node] = true;
+            for (int next : adjacency.get(node)) {
+                if (--inDegree[next] == 0) {
+                    queue.add(next);
+                }
+            }
+        }
+        // 兜底：残留（异常成环/脏依赖）按原顺序补齐，绝不丢条目
+        if (ordered.size() < n) {
+            for (int i = 0; i < n; i++) {
+                if (!emitted[i]) {
+                    ordered.add(drafts.get(i));
+                }
+            }
+        }
+        return ordered;
     }
 
     /** 失败回退：仅当 Task 仍处 PLANNING 时回退 PENDING（避免覆盖并发确认结果）。 */

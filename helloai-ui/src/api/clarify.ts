@@ -25,6 +25,10 @@ export const clarifyApi = {
   finalize(id: LongId) {
     return request.post<any, Task>(`/requirement-conversations/${id}/finalize`)
   },
+  // 重新生成: FINALIZED 会话原任务已删除时，复用终稿重建任务
+  regenerate(id: LongId) {
+    return request.post<any, Task>(`/requirement-conversations/${id}/regenerate`)
+  },
   // 放弃会话: ACTIVE → ABANDONED
   abandon(id: LongId) {
     return request.post<any, void>(`/requirement-conversations/${id}/abandon`)

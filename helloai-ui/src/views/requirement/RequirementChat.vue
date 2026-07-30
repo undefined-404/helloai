@@ -75,12 +75,20 @@
                   </el-button>
                   <span class="final-tip">不满意可继续对话，让 AI 修正终稿</span>
                 </template>
-                <el-button
-                  v-else-if="conversation.status === 'FINALIZED'"
-                  type="primary"
-                  plain
-                  @click="router.push({ path: '/tasks', query: { review: String(conversation.taskId) } })"
-                >查看任务</el-button>
+                <template v-else-if="conversation.status === 'FINALIZED'">
+                  <el-button
+                    v-if="taskExists"
+                    type="primary"
+                    plain
+                    @click="router.push({ path: '/tasks', query: { review: String(conversation.taskId) } })"
+                  >查看任务</el-button>
+                  <template v-else>
+                    <el-button type="primary" :loading="finalizing" @click="handleRegenerate">
+                      重新生成任务和子任务
+                    </el-button>
+                    <span class="final-tip">原任务已删除，可用此终稿重新建任务并自动拆解</span>
+                  </template>
+                </template>
               </div>
             </div>
           </div>
@@ -139,6 +147,8 @@ const conversations = ref<RequirementConversation[]>([])
 const activeId = ref<LongId | null>(null)
 const detail = ref<ClarifyConversationDetail | null>(null)
 const conversation = computed(() => detail.value?.conversation ?? null)
+// 会话关联任务是否仍存在（仅 detail 返回）；FINALIZED 且为 false 时展示「重新生成」
+const taskExists = computed(() => detail.value?.taskExists === true)
 
 const input = ref('')
 const pendingText = ref('')
@@ -233,6 +243,31 @@ async function handleFinalize() {
       router.push('/tasks')
     }
   } catch { /* 拦截器已弹错（无终稿/非 ACTIVE 等） */ }
+  finally { finalizing.value = false }
+}
+
+async function handleRegenerate() {
+  const conv = conversation.value
+  if (!conv) return
+  try {
+    await ElMessageBox.confirm(
+      `原任务已不存在，将以终稿「${conv.finalTitle}」重新创建任务，并自动调用 LLM 做 AI 拆解（约需几十秒）。是否继续？`,
+      '重新生成任务和子任务',
+      { type: 'info', confirmButtonText: '重新生成', cancelButtonText: '取消' }
+    )
+  } catch { return }
+  finalizing.value = true
+  try {
+    const task = await clarifyApi.regenerate(conv.id)
+    ElMessage.success('任务已重新创建，正在自动拆解…')
+    try {
+      await taskApi.plan(task.id)
+      router.push({ path: '/tasks', query: { review: String(task.id) } })
+    } catch {
+      // 拦截器已弹错；任务已创建成功，跳任务列表可手动重拆
+      router.push('/tasks')
+    }
+  } catch { /* 拦截器已弹错（非 FINALIZED / 原任务仍在 / 无终稿等） */ }
   finally { finalizing.value = false }
 }
 

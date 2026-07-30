@@ -447,6 +447,8 @@ export interface RequirementMessage {
 export interface ClarifyConversationDetail {
   conversation: RequirementConversation
   messages: RequirementMessage[]
+  // 会话关联任务是否仍存在（仅 detail 返回）；FINALIZED 且为 false 时可重新生成
+  taskExists?: boolean
 }
 
 export const PROMPT_CATEGORY_MAP: Record<string, string> = {

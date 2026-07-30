@@ -61,6 +61,8 @@
               <el-button v-if="row.status==='PAUSED'" size="small" type="success" @click="handleResume(row)">恢复</el-button>
               <!-- V25 死信人工兜底：重新指派给指定 Agent（DEAD_LETTER → ASSIGNED） -->
               <el-button v-if="row.status==='DEAD_LETTER'" size="small" type="danger" @click="handleRedispatch(row)">重新指派</el-button>
+              <!-- BLOCKED 阻塞子任务：重新调度（reset → PENDING 后交调度链） -->
+              <el-button v-if="row.status==='BLOCKED'" size="small" type="warning" @click="handleReassign(row)">重新调度</el-button>
             </div>
           </template>
         </el-table-column>
@@ -101,6 +103,22 @@
         <template #footer>
           <el-button @click="redispatchDialog.visible = false">取消</el-button>
           <el-button type="primary" :loading="redispatchDialog.loading" :disabled="!redispatchDialog.agentId" @click="doRedispatch">确认指派</el-button>
+        </template>
+      </el-dialog>
+
+      <!-- BLOCKED 重新调度弹窗：选目标 Agent，后端 reset→PENDING 后重新进入调度链 -->
+      <el-dialog v-model="reassignDialog.visible" title="重新调度阻塞子任务" width="420px" top="5vh" append-to-body>
+        <el-form label-width="100px">
+          <el-form-item label="子任务">
+            <span>{{ reassignDialog.row?.title || '-' }}</span>
+          </el-form-item>
+          <el-form-item label="目标 Agent">
+            <AgentSelect v-model="reassignDialog.agentId" placeholder="选择重新调度的 Agent" />
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="reassignDialog.visible = false">取消</el-button>
+          <el-button type="primary" :loading="reassignDialog.loading" :disabled="!reassignDialog.agentId" @click="doReassign">确认重新调度</el-button>
         </template>
       </el-dialog>
 
@@ -228,6 +246,28 @@ async function doRedispatch() {
     redispatchDialog.visible = false
     load()
   } finally { redispatchDialog.loading = false }
+}
+
+// BLOCKED 阻塞子任务重新调度（后端 reset→PENDING 后交弹性调度链，受熔断计数管控）
+const reassignDialog = reactive<{ visible: boolean; loading: boolean; agentId: string | number | null; row: SubTask | null }>({
+  visible: false, loading: false, agentId: null, row: null,
+})
+
+function handleReassign(row: SubTask) {
+  reassignDialog.row = row
+  reassignDialog.agentId = null
+  reassignDialog.visible = true
+}
+
+async function doReassign() {
+  if (!reassignDialog.row || !reassignDialog.agentId) return
+  reassignDialog.loading = true
+  try {
+    await subTaskApi.reassign(reassignDialog.row.id, reassignDialog.agentId)
+    ElMessage.success('已重新调度，子任务重新进入分发链')
+    reassignDialog.visible = false
+    load()
+  } finally { reassignDialog.loading = false }
 }
 
 function getSubTaskStatusMeta(status: SubTask['status']) { return SUB_TASK_STATUS_MAP[status] }

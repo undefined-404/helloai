@@ -4,7 +4,7 @@
       <template #header>
         <div class="card-header">
           <span>子任务详情</span>
-          <el-button size="small" @click="router.push('/sub-tasks')">返回列表</el-button>
+          <el-button size="small" @click="goBackToList">返回列表</el-button>
         </div>
       </template>
 
@@ -41,16 +41,25 @@
           <div class="conv-head">
             <el-tag size="small" :type="convTagType(msg.toolName)">{{ convTagLabel(msg.toolName) }}</el-tag>
             <span class="conv-meta">
-              #{{ msg.seq }} · {{ msg.role }}/{{ msg.senderType }}<template v-if="msg.senderId"> · agent={{ msg.senderId }}</template>
+              #{{ msg.seq }} · {{ msg.role }}/{{ msg.senderType }}<template v-if="msg.senderId"> · {{ resolveAgentName(msg.senderId) }}</template>
               · {{ fmtTime(msg.createTime) }}
             </span>
+            <!-- 方案 1：仅“执行产出”保留复制/导出按钮，其余消息展开查看即可 -->
+            <div class="conv-actions" v-if="msg.toolName === 'sub_task_execute' && msg.content">
+              <el-button link size="small" @click="copyMessage(msg)">复制</el-button>
+              <el-button link size="small" type="primary" @click="exportMarkdown(msg)">导出 .md</el-button>
+            </div>
           </div>
-          <el-collapse v-if="msg.content.length > 300" class="conv-collapse">
-            <el-collapse-item :title="msg.content.slice(0, 100) + '…（展开全文 ' + msg.content.length + ' 字）'" name="c">
-              <pre class="conv-content">{{ msg.content }}</pre>
-            </el-collapse-item>
-          </el-collapse>
-          <pre v-else class="conv-content">{{ msg.content || '-' }}</pre>
+          <!-- 内容用 Markdown 渲染成带格式富文本（类 DeepSeek/Kimi 观感）；超长折叠展开 -->
+          <ReviewVerdictView v-if="msg.toolName === 'subtask_review_verdict'" :content="msg.content" />
+          <template v-else>
+            <el-collapse v-if="(msg.content?.length || 0) > 300" class="conv-collapse">
+              <el-collapse-item :title="'展开全文（' + msg.content.length + ' 字）'" name="c">
+                <MarkdownView :content="msg.content" />
+              </el-collapse-item>
+            </el-collapse>
+            <MarkdownView v-else :content="msg.content" />
+          </template>
         </div>
       </div>
     </el-card>
@@ -73,13 +82,15 @@
           :type="eventTypeColor(ev.eventType)"
         >
           <div class="tl-head">
-            <el-tag size="small" :type="eventTypeColor(ev.eventType)">{{ ev.eventType }}</el-tag>
+            <el-tag size="small" :type="eventTypeColor(ev.eventType)">{{ eventLabel(ev.eventType) }}</el-tag>
             <span class="tl-meta">
-              {{ ev.role || '-' }}<template v-if="ev.agentId"> · agent={{ ev.agentId }}</template>
+              {{ roleLabel(ev.role) }}<template v-if="ev.agentId"> · {{ resolveAgentName(ev.agentId) }}</template>
             </span>
           </div>
-          <el-collapse v-if="ev.payload && Object.keys(ev.payload).length" style="margin-top:6px">
-            <el-collapse-item title="payload" name="p">
+          <!-- 人话化：把事件类型/payload 翻译成非开发者能看懂的一句话 -->
+          <div class="tl-desc">{{ eventDescription(ev) }}</div>
+          <el-collapse v-if="ev.payload && Object.keys(ev.payload).length" class="tl-collapse">
+            <el-collapse-item title="技术详情（开发者）" name="p">
               <pre class="tl-payload">{{ JSON.stringify(ev.payload, null, 2) }}</pre>
             </el-collapse-item>
           </el-collapse>
@@ -94,6 +105,9 @@ import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { subTaskApi } from '@/api/subTask'
+import { agentApi } from '@/api/agent'
+import MarkdownView from '@/components/MarkdownView.vue'
+import ReviewVerdictView from '@/components/ReviewVerdictView.vue'
 import { SUB_TASK_STATUS_MAP, SCORE_GRADE_MAP } from '@/types'
 import { fmtTime } from '@/utils/tableConfig'
 import type { SubTask, TaskTimelineItem, ConversationMessageItem } from '@/types'
@@ -122,11 +136,113 @@ function eventTypeColor(eventType: string): '' | 'success' | 'warning' | 'danger
   return 'info'
 }
 
+// 人话化：事件类型 → （简短标签 + 一句话描述），面向非开发者
+const EVENT_META: Record<string, { label: string; desc: string }> = {
+  // 分发 / 派单
+  sub_task_dispatch_prepare: { label: '准备分发', desc: '系统开始为该子任务寻找合适的执行 Agent' },
+  sub_task_auto_execute_dispatch: { label: '自动派单', desc: '系统自动把子任务分派给执行 Agent' },
+  sub_task_auto_execute_dispatch_enter: { label: '进入派单', desc: '系统进入自动派单流程' },
+  sub_task_auto_execute_dispatch_ok: { label: '派单成功', desc: '已成功把子任务交给执行 Agent' },
+  sub_task_auto_execute_dispatch_fail: { label: '派单失败', desc: '暂时没有空闲的执行 Agent，稍后重试' },
+  sub_task_execution_command_created: { label: '生成执行指令', desc: '系统已生成执行指令，等待 Agent 领取' },
+  sub_task_execution_command_consume: { label: '领取指令', desc: '执行 Agent 已领取指令，准备开始' },
+  sub_task_execution_command_consume_skipped: { label: '跳过指令', desc: '该执行指令被跳过（可能已被处理）' },
+  sub_task_execution_command_poll_recovery: { label: '指令恢复', desc: '系统巡检恢复了一条遗漏的执行指令' },
+  // 执行
+  sub_task_execute_enter: { label: '开始执行', desc: '执行 Agent 开始处理子任务' },
+  sub_task_execute_start: { label: '开始执行', desc: '执行 Agent 开始处理子任务' },
+  sub_task_execute_before_platform: { label: '执行前准备', desc: '执行前的平台准备工作' },
+  sub_task_llm_call_start: { label: '调用大模型', desc: '执行 Agent 开始请求大模型生成内容' },
+  sub_task_llm_call_end: { label: '大模型返回', desc: '大模型已返回生成结果' },
+  sub_task_llm_call_failed: { label: '大模型失败', desc: '调用大模型失败（超时或网络异常）' },
+  sub_task_execute_thinking: { label: '思考过程', desc: '执行 Agent 的思考 / 推理过程' },
+  sub_task_execute: { label: '执行产出', desc: '执行 Agent 产出了内容' },
+  sub_task_execute_submit: { label: '提交产出', desc: '执行 Agent 提交了本次产出' },
+  sub_task_execute_success: { label: '执行成功', desc: '子任务执行成功' },
+  sub_task_execute_failed: { label: '执行失败', desc: '子任务执行失败' },
+  sub_task_execute_result_discarded: { label: '结果丢弃', desc: '本次执行结果被丢弃（可能已过期）' },
+  sub_task_report_blocked: { label: '执行受阻', desc: '子任务被标记为阻塞，需要人工介入' },
+  // 核验
+  sub_task_auto_review_passed: { label: '核验通过', desc: '自动核验通过，子任务达标' },
+  sub_task_auto_review_rejected: { label: '核验驳回', desc: '自动核验未通过，需要返工' },
+  sub_task_auto_review_unparseable: { label: '核验异常', desc: '核验结果无法解析' },
+  sub_task_auto_review_skip_max_rework: { label: '跳过核验', desc: '已达最大返工次数，跳过核验' },
+  subtask_review_prompt: { label: '核验请求', desc: '发起对产出的核验' },
+  subtask_review_verdict: { label: '核验结论', desc: '核验给出的结论' },
+  subtask_review_thinking: { label: '核验思考', desc: '核验的分析过程' },
+  // 死信 / 重派
+  sub_task_dead_letter: { label: '进入死信', desc: '多次失败，子任务进入死信池' },
+  sub_task_dead_letter_manual_assign: { label: '死信重派', desc: '人工把死信子任务重新指派给 Agent' },
+  // 任务级
+  task_plan_generated: { label: '生成拆解', desc: '已生成任务拆解草案' },
+  task_plan_confirmed: { label: '确认拆解', desc: '拆解草案已确认' },
+  task_plan_rejected: { label: '驳回拆解', desc: '拆解草案被驳回' },
+  task_plan_failed: { label: '拆解失败', desc: '任务拆解失败' },
+  task_plan_llm_call_start: { label: '拆解调模型', desc: '开始请求大模型进行任务拆解' },
+  task_auto_completed: { label: '任务完成', desc: '所有子任务完成，主任务自动收尾' }
+}
+
+const ROLE_LABEL: Record<string, string> = {
+  EXECUTOR: '执行者', PLANNER: '规划者', REVIEWER: '核验者', SYSTEM: '系统', USER: '用户'
+}
+
+const TRIGGER_LABEL: Record<string, string> = {
+  auto_assign: '自动分配', manual: '手动触发', blocked_reassign: '阻塞后重新调度',
+  dead_letter_redispatch: '死信重投', poll_recovery: '巡检恢复'
+}
+
+function eventLabel(eventType: string): string {
+  return EVENT_META[eventType]?.label || eventType
+}
+
+function roleLabel(role: string | null): string {
+  return (role && ROLE_LABEL[role]) || role || '系统'
+}
+
+// Agent ID → 注册名字映射（一次性拉取全量 Agent），展示注册名而非原始 ID
+const agentNameMap = ref<Record<string, string>>({})
+async function loadAgents() {
+  try {
+    const agents = await agentApi.list()
+    const map: Record<string, string> = {}
+    agents.forEach((a) => { map[String(a.id)] = a.name })
+    agentNameMap.value = map
+  } catch (e) {
+    // 拉取失败不阻断详情展示，降级显示短 ID
+  }
+}
+// 优先显示注册名字；未命中（如系统/已删除 Agent）降级为短 ID
+function resolveAgentName(agentId: string | number | null): string {
+  if (!agentId) return ''
+  const s = String(agentId)
+  return agentNameMap.value[s] || ('Agent #' + s.slice(-4))
+}
+
+function eventDescription(ev: TaskTimelineItem): string {
+  const base = EVENT_META[ev.eventType]?.desc || ev.eventType
+  const p = ev.payload || {}
+  const extras: string[] = []
+  if (p.trigger) extras.push('触发方式：' + (TRIGGER_LABEL[p.trigger] || p.trigger))
+  if (p.reason) extras.push('原因：' + p.reason)
+  if (p.error) extras.push('错误：' + p.error)
+  const attempt = p.attempt ?? p.reassignAttemptCount
+  if (attempt) extras.push('第 ' + attempt + ' 次尝试')
+  return extras.length ? base + '（' + extras.join('；') + '）' : base
+}
+
+// 返回列表：携带当前子任务所属主任务 taskId，回到本主任务的子任务列表
+function goBackToList() {
+  const tid = item.value?.taskId
+  router.push(tid ? { path: '/sub-tasks', query: { taskId: String(tid) } } : '/sub-tasks')
+}
+
 // V28: 对话流消息来源标签（toolName → 展示文案/颜色）
 const CONV_TAG_MAP: Record<string, { label: string; type: 'success' | 'danger' | 'info' | 'warning' }> = {
+  sub_task_execute_thinking: { label: '思考过程', type: 'info' },
   sub_task_execute: { label: '执行产出', type: 'success' },
   sub_task_execute_failed: { label: '执行失败', type: 'danger' },
   subtask_review_prompt: { label: '核验请求', type: 'info' },
+  subtask_review_thinking: { label: '核验思考', type: 'info' },
   subtask_review_verdict: { label: '核验分析', type: 'warning' }
 }
 
@@ -136,6 +252,39 @@ function convTagLabel(toolName: string | null) {
 
 function convTagType(toolName: string | null) {
   return (toolName && CONV_TAG_MAP[toolName]?.type) || 'info'
+}
+
+// 方案 1：前端导出工具（无后端、无第三方依赖，直接把已展示的产出文本落成文件）
+function sanitizeFilename(name: string): string {
+  return (name || 'subtask').replace(/[\\/:*?"<>|\r\n]/g, '_').trim().slice(0, 60) || 'subtask'
+}
+
+function downloadText(filename: string, content: string, mime: string) {
+  const blob = new Blob([content], { type: mime })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+function exportMarkdown(msg: ConversationMessageItem) {
+  const base = sanitizeFilename(item.value?.title || 'subtask')
+  const tag = convTagLabel(msg.toolName)
+  downloadText(`${base}-${tag}-#${msg.seq}.md`, msg.content || '', 'text/markdown;charset=utf-8')
+  ElMessage.success('已导出 Markdown 文件')
+}
+
+async function copyMessage(msg: ConversationMessageItem) {
+  try {
+    await navigator.clipboard.writeText(msg.content || '')
+    ElMessage.success('已复制到剪贴板')
+  } catch {
+    ElMessage.error('复制失败，请手动选择文本复制')
+  }
 }
 
 async function loadDetail(id: string) {
@@ -194,6 +343,7 @@ onMounted(async () => {
   try {
     // v1.1 修复：路由参数是 string，不要 Number() 转 LongID（>2^53 会丢精度）
     const id = String(route.params.id)
+    await loadAgents()
     await loadDetail(id)
     await loadTimeline(id)
     await loadConversation(id)
@@ -217,6 +367,8 @@ onBeforeUnmount(() => {
 .page { max-width: var(--ha-content-width); }
 .tl-head { display: flex; align-items: center; gap: 8px; }
 .tl-meta { color: var(--ha-muted); font-size: 12px; }
+.tl-desc { margin: 4px 0 0; font-size: 13px; line-height: 1.6; color: var(--ha-text, inherit); }
+.tl-collapse { margin-top: 6px; }
 .tl-payload {
   margin: 0;
   padding: 8px 12px;
@@ -232,6 +384,7 @@ onBeforeUnmount(() => {
 .conv-list { display: flex; flex-direction: column; gap: 12px; }
 .conv-item { border: 1px solid var(--ha-border, rgba(255,255,255,0.08)); border-radius: 6px; padding: 10px 12px; }
 .conv-head { display: flex; align-items: center; gap: 8px; }
+.conv-actions { margin-left: auto; display: flex; align-items: center; gap: 4px; }
 .conv-meta { color: var(--ha-muted); font-size: 12px; }
 .conv-collapse { margin-top: 6px; }
 .conv-content {

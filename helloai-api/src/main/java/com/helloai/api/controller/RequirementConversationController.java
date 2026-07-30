@@ -55,6 +55,12 @@ public class RequirementConversationController {
         return R.ok(requirementClarifyService.finalize(id));
     }
 
+    /** 重新生成：FINALIZED 会话原任务已删除时，复用终稿重建任务并回填。 */
+    @PostMapping("/{id}/regenerate")
+    public R<Task> regenerate(@PathVariable Long id) {
+        return R.ok(requirementClarifyService.regenerate(id));
+    }
+
     /** 放弃会话。 */
     @PostMapping("/{id}/abandon")
     public R<Void> abandon(@PathVariable Long id) {

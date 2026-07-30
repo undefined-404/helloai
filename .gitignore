@@ -65,4 +65,5 @@ m5-e2e-psql.log.sql
 *.out.bak
 # --- 临时调试与诊断产物（v2.6.2 2026-07-17 补充）---
 tmp/
+.tmp/
 .dbg/
