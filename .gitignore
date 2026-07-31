@@ -67,3 +67,5 @@ m5-e2e-psql.log.sql
 tmp/
 .tmp/
 .dbg/
+# --- Runtime data (ArtifactStorage 本地落盘产出物) ---
+data/

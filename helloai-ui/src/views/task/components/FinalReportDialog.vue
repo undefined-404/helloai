@@ -27,10 +27,16 @@
           : '任务完成（DONE）后才能生成整合报告'"
       />
     </div>
+    <!-- footer 不设关闭按钮（右上角 X 已承担关闭），保持四个动作按钮 -->
     <template #footer>
-      <el-button @click="visible = false">关闭</el-button>
       <el-button v-if="report?.content" @click="handleCopy">复制</el-button>
       <el-button v-if="report?.content" @click="handleExport">导出 .md</el-button>
+      <el-button
+        type="success"
+        plain
+        :loading="downloading"
+        @click="handleDownload"
+      >交付物</el-button>
       <el-button
         type="primary"
         :loading="generating"
@@ -46,6 +52,7 @@ import { ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { taskApi } from '@/api/task'
 import { fmtTime } from '@/utils/tableConfig'
+import { saveBlobResponse } from '@/utils/download'
 import MarkdownView from '@/components/MarkdownView.vue'
 import type { Task, TaskFinalReport } from '@/types'
 
@@ -86,6 +93,18 @@ async function handleGenerate() {
     ElMessage.success('整合报告生成完成')
   } catch { /* 拦截器已弹错（非 DONE / 无产出 / LLM 失败由后端 BizException 统一提示） */ }
   finally { generating.value = false }
+}
+
+// ── 交付物 zip 下载（实时聚合；报告已生成时包内含 01-最终整合报告.md）──
+const downloading = ref(false)
+async function handleDownload() {
+  if (!props.task) return
+  downloading.value = true
+  try {
+    const resp = await taskApi.downloadDeliverables(props.task.id)
+    saveBlobResponse(resp, `${props.task.title || 'task'}-交付物.zip`)
+  } catch { /* 拦截器已弹错 */ }
+  finally { downloading.value = false }
 }
 
 async function handleCopy() {

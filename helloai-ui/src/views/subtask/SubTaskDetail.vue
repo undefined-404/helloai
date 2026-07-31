@@ -23,6 +23,27 @@
           <span v-else>-</span>
         </el-descriptions-item>
         <el-descriptions-item label="创建时间" :span="2">{{ fmtTime(item.createTime) }}</el-descriptions-item>
+        <!-- V27 依赖编排可视化补全：前置依赖（全部 DONE 才会分发本任务）与被依赖（本任务完成后解锁的下游） -->
+        <el-descriptions-item label="前置依赖" :span="2">
+          <template v-if="upstreamItems.length">
+            <el-tag
+              v-for="dep in upstreamItems" :key="dep.id"
+              size="small" class="dep-tag" :type="dep.tagType"
+              @click="goSibling(dep.id)"
+            >{{ dep.text }}</el-tag>
+          </template>
+          <span v-else>无（就绪后即可分发）</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="被依赖" :span="2">
+          <template v-if="downstreamItems.length">
+            <el-tag
+              v-for="dep in downstreamItems" :key="dep.id"
+              size="small" class="dep-tag" :type="dep.tagType"
+              @click="goSibling(dep.id)"
+            >{{ dep.text }}</el-tag>
+          </template>
+          <span v-else>无</span>
+        </el-descriptions-item>
         <el-descriptions-item label="内容" :span="2">{{ item.content || '-' }}</el-descriptions-item>
       </el-descriptions>
     </el-card>
@@ -124,7 +145,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { subTaskApi } from '@/api/subTask'
@@ -135,6 +156,7 @@ import MarkdownView from '@/components/MarkdownView.vue'
 import ReviewVerdictView from '@/components/ReviewVerdictView.vue'
 import { SUB_TASK_STATUS_MAP, SCORE_GRADE_MAP } from '@/types'
 import { fmtTime } from '@/utils/tableConfig'
+import { orderByDependency } from '@/utils/subTaskDag'
 import type { SubTask, TaskTimelineItem, ConversationMessageItem, Attachment, LongId } from '@/types'
 
 const route = useRoute()
@@ -147,6 +169,58 @@ let pollTimer: number | null = null
 const timelinePolling = ref(false)
 
 const TERMINAL_STATUSES: SubTask['status'][] = ['DONE', 'CANCELLED']
+
+// ── V27 依赖编排可视化补全：同主任务兄弟子任务（前置/被依赖标签映射）──
+const siblings = ref<SubTask[]>([])
+
+async function loadSiblings(taskId: LongId | null | undefined) {
+  if (!taskId) { siblings.value = []; return }
+  try {
+    siblings.value = await subTaskApi.listAllByTask(taskId)
+  } catch {
+    // 拉取失败不阻断详情展示，依赖行降级显示"无"
+    siblings.value = []
+  }
+}
+
+// 拓扑正序全局序号（与子任务列表依赖列/依赖图的 #序号 口径一致）
+const siblingSeqMap = computed(() => {
+  const map = new Map<string, number>()
+  orderByDependency(siblings.value).forEach((s, i) => map.set(String(s.id), i + 1))
+  return map
+})
+
+interface DepDisplayItem { id: string; text: string; tagType: '' | 'success' | 'warning' | 'danger' | 'info' | 'primary' }
+
+function toDepItem(s: SubTask): DepDisplayItem {
+  const seq = siblingSeqMap.value.get(String(s.id))
+  const meta = SUB_TASK_STATUS_MAP[s.status]
+  return {
+    id: String(s.id),
+    text: '#' + (seq ?? '?') + ' ' + s.title + '（' + (meta?.label || s.status) + '）',
+    tagType: meta?.type || 'info'
+  }
+}
+
+// 前置依赖：本任务 dependsOn 指向的兄弟（全部 DONE 后才会被分发）
+const upstreamItems = computed<DepDisplayItem[]>(() => {
+  if (!item.value) return []
+  const deps = new Set((item.value.dependsOn || []).map(String))
+  return siblings.value.filter(s => deps.has(String(s.id))).map(toDepItem)
+})
+
+// 被依赖：dependsOn 包含本任务的下游兄弟（本任务完成后被解锁）
+const downstreamItems = computed<DepDisplayItem[]>(() => {
+  if (!item.value) return []
+  const myId = String(item.value.id)
+  return siblings.value.filter(s => (s.dependsOn || []).map(String).includes(myId)).map(toDepItem)
+})
+
+// 跳兄弟子任务详情（同组件复用，路由参数变化由 watch 重新加载）
+function goSibling(id: string) {
+  if (String(route.params.id) === id) return
+  router.push('/sub-tasks/' + id)
+}
 
 function getSubTaskStatusMeta(status: SubTask['status']) {
   return SUB_TASK_STATUS_MAP[status]
@@ -370,6 +444,7 @@ async function downloadAttachment(att: Attachment) {
 async function pollOnce() {
   const id = String(route.params.id)
   const fresh = await loadDetail(id)
+  await loadSiblings(fresh?.taskId)
   await loadTimeline(id)
   await loadConversation(id)
   await loadAttachments(id)
@@ -392,13 +467,15 @@ function stopPolling() {
   timelinePolling.value = false
 }
 
-onMounted(async () => {
+// 页面初始化（首次挂载与依赖标签跳兄弟子任务复用；路由参数变化时重新执行）
+async function initPage() {
   loading.value = true
+  stopPolling()
   try {
     // v1.1 修复：路由参数是 string，不要 Number() 转 LongID（>2^53 会丢精度）
     const id = String(route.params.id)
-    await loadAgents()
     await loadDetail(id)
+    await loadSiblings(item.value?.taskId)
     await loadTimeline(id)
     await loadConversation(id)
     await loadAttachments(id)
@@ -411,6 +488,16 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
+}
+
+onMounted(async () => {
+  await loadAgents()
+  await initPage()
+})
+
+// 依赖标签跳兄弟子任务是同组件路由复用，参数变化时重新加载全部数据
+watch(() => route.params.id, (nv, ov) => {
+  if (nv && nv !== ov) initPage()
 })
 
 onBeforeUnmount(() => {
@@ -420,6 +507,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .page { max-width: var(--ha-content-width); }
+.dep-tag { cursor: pointer; margin: 2px 6px 2px 0; }
 .tl-head { display: flex; align-items: center; gap: 8px; }
 .tl-meta { color: var(--ha-muted); font-size: 12px; }
 .tl-desc { margin: 4px 0 0; font-size: 13px; line-height: 1.6; color: var(--ha-text, inherit); }

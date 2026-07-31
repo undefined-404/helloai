@@ -3413,3 +3413,127 @@ minimax（MiniMax-M2.5，Anthropic 协议推理模型）担任 REVIEWER 时自�
 
 ---
 
+### 6.33 子任务依赖可视化：分层流水线 DAG 视图 + 列表/详情依赖字段补全（2026-07-31，同日第三轮）
+
+#### 1. 背景与决策
+
+V27 依赖编排（dependsOn + Kahn 拓扑 + ready 守卫）后端已闭环，但前端仅草案审阅弹窗有一处纯文本「依赖 #1,#2」，子任务列表页与详情页完全不展示依赖。用户最初提议甘特图，评审后放弃（子任务无计划工期/计划起止数据，甘特图横轴时间无意义），改为**分层流水线 DAG 视图**：横轴 = 执行批次（Kahn 入度分层，同批可并行），与调度器 isReady 语义一一对应。纯前端改动，零后端修改、零新依赖（复用已有 echarts ^5.5.0）。
+
+#### 2. 实施内容
+
+前端（helloai-ui）：
+
+- 新建 `utils/subTaskDag.ts`：`computeDagLayers`（Kahn 入度分层，跨集合脏依赖忽略、成环兜底不死循环）+ `orderByDependency`（稳定拓扑正序，供全局 #序号 展示复用）
+- 新建 `components/SubTaskDagView.vue`：echarts graph series + cartesian2d 坐标系（x 轴 category「第 N 批」置顶，y 轴隐藏批内居中），节点按 SUB_TASK_STATUS_MAP 状态着色、roundRect 128x40、edgeSymbol 箭头指向后继、emphasis 高亮邻接、tooltip 展示序号/标题/状态/负责人/前置依赖，高度随最大批次节点数自适应，节点点击 emit node-click
+- `api/subTask.ts` 加 `listAllByTask`（不传 page 走后端全量数组契约，SubTaskController L184 已支持，dependsOn 已回传）
+- `SubTaskList.vue`：taskId 过滤时 header 出现「列表/依赖图」radio 切换 + 表格新增「依赖」列（可点击 `#序号` tag 跳详情）；fullList/seqMap/depItems 基于全量数据计算，watch taskId 清空时重置
+- `SubTaskDetail.vue`：descriptions 加「前置依赖」（空时显示「无（就绪后即可分发）」）与「被依赖」两行，tag 格式 `#序号 标题（状态）`按状态着色、点击跳兄弟详情；onMounted 重构为 `initPage()` + `watch(route.params.id)` 支持同组件路由复用刷新
+
+#### 3. 验证结果
+
+- `npx vue-tsc --noEmit` 0 错；`npm run build` 通过（chunk 体积警告为既有问题）
+- 浏览器端到端实测（task_id=2083171401380065281，8 子任务真实五层依赖，admin/admin123 登录）：列表页视图切换与依赖列渲染正确；依赖图 5 批分层、DONE 全绿、箭头连线与数据一致（截图 `.dbg/dag-e2e-01/02`）；canvas 节点点击跳详情路由正确；详情页前置/被依赖两行与 API 数据逐项比对一致（`.dbg/dag-e2e-03`）
+- 兄弟跳转双向复测（0195↔0198）：route watch 重载后真实 DOM 数据均正确；期间 a11y 快照一度出现旧页面残留 tag，经真实 DOM 与 API 双重比对确认为快照陈旧节点，非代码 bug
+
+#### 4. 影响与遗留
+
+- 纯前端展示层补全，不改任何调度/分发行为；无 taskId 过滤（全量子任务列表）时不出现依赖列与切换按钮，避免跨任务序号歧义
+- 本轮明确不做：甘特图（无工期数据）、依赖编辑（拆解草案阶段已有确认/驳回流程）、DAG 视图内实时轮询刷新
+
+---
+
+### 6.34 DAG 视图交互优化：箭头不遮挡 + 状态专属色 + 活跃边流动虚线 + 完成时间（2026-07-31，同日第四轮）
+
+#### 1. 背景与决策
+
+6.33 落地后用户提四点体验优化：①箭头头部被目标节点矩形遮挡（echarts graph 内置连线按圆形半径裁剪端点，矩形节点会盖住箭头）；②tooltip 完成状态未显示完成时刻；③不同状态节点用 el-tag type 归并后同色不可辨（如 REVIEW/PAUSED 都归 warning）；④希望「进行中」的依赖边有跑马灯/流动效果提示链路推进中。
+
+#### 2. 实施内容（`components/SubTaskDagView.vue`，纯前端）
+
+- **箭头不遮挡**：弃用 graph 内置 `edgeSymbol` 连线，改 `custom` series 自绘边——贝塞尔曲线从源节点右缘画到目标节点左缘外侧，箭头三角尖端停在目标左缘外 2px、连线止于箭头底边；节点 graph series 置 `z:2`、自绘边 `z:1` 且 `silent:true`（不抢节点点击事件）
+- **状态专属色**：新增 `STATUS_COLOR`（11 个状态一对一色值），替换原「el-tag type → 色值」两级映射，PENDING 灰 / ASSIGNED 浅蓝 / IN_PROGRESS 蓝 / PAUSED 紫 / REVIEW 橙 / DONE 绿 / REWORK 浅红 / BLOCKED 红 / CANCELLED 暗灰 / DEAD_LETTER 深红 / PENDING_PLAN_REVIEW 浅橙
+- **活跃边流动虚线**：`ACTIVE_EDGE_STATUS`（ASSIGNED/IN_PROGRESS/REVIEW）的入边渲染为目标状态色虚线（`lineDash [6,5]`）+ `keyframeAnimation` 循环递减 `lineDashOffset`（0→-11，700ms loop）实现向目标方向流动的跑马灯；普通边为中性灰实线
+- **完成时间**：tooltip 中 DONE 节点状态后追加 `（HH:MM:SS）`（取 `updateTime` 时分秒，终态即完成时刻）
+
+#### 3. 验证结果
+
+- `npx vue-tsc --noEmit` 0 错；`npm run build` 通过
+- 浏览器端到端实测（task_id=2083171401380065281）：全 DONE 态截图确认箭头尖端干净落在各节点左缘、不被遮挡（`.dbg/dag-e2e-06`）；经 Vue 组件 props 注入一个 IN_PROGRESS 节点（#6）触发 deep watch 重渲染，截图确认该节点变蓝、其两条入边（#4→#6、#5→#6）为蓝色虚线（`.dbg/dag-e2e-05`），canvas 像素直方图证实绿(#67c23a)/蓝(#409eff)两色共存；tooltip 实测 DONE 节点显示「已完成（12:43:21）」、IN_PROGRESS 节点显示「执行中」无时间后缀
+- 环境注记：browser-use 视口一度被压至 185×116 致 take_screenshot 超时，属工具环境问题非代码问题，视口恢复后截图正常
+
+#### 4. 影响与遗留
+
+- 注入 IN_PROGRESS 仅为验证的客户端临时态（未落库），刷新即回真实全 DONE
+- 自绘边未做曲线避让重叠（当前批间跨度足够、无视觉交叉困扰），后续如节点密集可再引入布局避让
+
+---
+
+### 6.35 DAG 视图传递归约：冗余依赖边不画，图形更接近流程图（2026-07-31，同日第五轮）
+
+#### 1. 背景与决策
+
+用户反馈末端汇聚节点（如 #8 依赖 #3/#4/#5/#7）入边太多显乱，建议只从倒数第二个任务指过去。评审后按图论「传递归约」实现通用规则而非硬编码末节点：仅去除被更长路径完全覆盖的直连边（#4→#8、#5→#8 经 #6→#7→#8 可推导，去除）；并行分支边必须保留（#3 不在 #7 上游，#3→#8 去掉会丢失「#8 还需等 #3」的信息——同批完成先后无保证）。
+
+#### 2. 实施内容（纯前端）
+
+- `utils/subTaskDag.ts` 新增 `reduceDependencies`：记忆化 DFS 求各节点祖先集合，边 u→v 冗余判据为「存在 v 的另一前置 w，且 u ∈ anc(w)」；visiting 标记防成环死递归
+- `SubTaskDagView.vue`：画边改用归约后依赖；tooltip「前置依赖」仍显示完整直接依赖（展示层简化不失真），列表依赖列与详情页前置/被依赖不受影响（展示真实数据）
+
+#### 3. 验证结果
+
+- `npx vue-tsc --noEmit` 0 错；`npm run build` 通过
+- 浏览器实测（task_id=2083171401380065281）：#8 入边由 4 条减为 2 条（#7 主干 + #3 并行分支），冗余长线消失、无交叉，整图呈标准左右流程图形态（`.dbg/dag-e2e-07`）
+
+#### 4. 影响与遗留
+
+- 仅影响 DAG 视图画了几条线，调度语义/接口数据/其他页面依赖展示零变化
+
+---
+
+### 6.36 任务管理入口收敛：新建/编辑/交付物按钮调整 + 报告弹窗 footer 重排（2026-07-31，同日第六轮）
+
+#### 1. 背景与决策
+
+用户提出五点 UI 调整 + 两点链路诉求。经调查确认两点链路诉求 V32 已交付、无需开发：①末子任务完成→Planner 自动生成整合报告（`TaskFinalReportService.onTaskAutoCompleted`，`autoFinalReportEnabled` 默认开，失败吞异常记 warn、手动按钮兜底）；②交付物 zip 已含 `01-最终整合报告.md` 置顶条目（报告非空时收录）。本轮仅实施 UI 五点，用户已确认接受两项行为变化：任务标题/描述不再有修改入口（后端 PUT 接口保留）；交付物仅 DONE 任务可下载（入口收进报告弹窗）。
+
+#### 2. 实施内容（纯前端）
+
+- `TaskList.vue`：去掉顶部"新建"（统一走对话新建，改为 primary 样式）、操作栏"编辑"与"交付物"按钮；清理 TaskFormDialog 引用、openCreate/openEdit、handleDownload/saveBlobResponse；操作列 380→300
+- `FinalReportDialog.vue`：footer 去"关闭"（右上角 X 承担关闭），按钮定为 复制/导出.md/交付物/重新生成 四个；交付物下载逻辑（taskApi.downloadDeliverables + saveBlobResponse）自 TaskList 迁入
+- `TaskFormDialog.vue` 组件文件保留未删（后端接口在，恢复入口成本低）
+
+#### 3. 验证结果
+
+- `npx vue-tsc --noEmit` 0 错；`npm run build` 通过
+- 浏览器实测：列表页仅剩 对话新建/刷新 + AI拆解/审阅草案/报告/重新发布/删除；报告弹窗 footer 为 复制/导出 .md/交付物/重新生成、无"关闭"、X 保留
+- 链路核验（task_id=2083171401380065281）：final-report 接口返回 14887 字报告（planner-decompose 生成）；zip 实测 10 条目，`01-最终整合报告.md` 置顶
+
+#### 4. 影响与遗留
+
+- 交付物下载入口收敛后，非 DONE 任务无法下载部分产出（用户确认接受）；任务标题/描述无修改入口（接口保留）
+- 后端日志未落盘，无法追溯历史任务报告是自动还是手动触发；自动链路代码与开关均在位，如需实证可跑一个新任务观察收口后报告是否自动出现
+
+---
+
+### 6.37 子任务列表标题前拓扑序号小徽标（2026-07-31，同日第七轮）
+
+#### 1. 背景与决策
+
+用户希望在子任务列表中直观看到每条子任务在依赖关系中的序号，且不单起一列——参考电商"new"角标样式，以小徽标形式放在标题前。序号与依赖列 #N、依赖图节点 #N、草案审阅弹窗同口径（orderByDependency 拓扑正序）。仅按主任务过滤时展示（全局列表跨任务序号无意义）。
+
+#### 2. 实施内容（纯前端）
+
+- `SubTaskList.vue` 标题列：标题前插入 `.seq-badge` 小胶囊徽标（`#N`，复用已有 seqMap），`v-if="taskId && seqMap.get(...)"`
+- 样式：11px/600 白字、主题蓝实底、8px 圆角胶囊，右距 6px
+
+#### 3. 验证结果
+
+- `vue-tsc --noEmit` 0 错、`npm run build` 通过
+- 浏览器实测（task_id=2083171401380065281）：8 行标题前均带 #1~#8 徽标，序号与依赖列/依赖图一致；计算样式确认蓝底/8px 圆角/11px 生效
+
+#### 4. 追加：按主任务过滤时列表按拓扑序号正序排列
+
+同轮追加用户诉求：从主任务点入的子任务列表按 #1→#n 从上到下展示。`SubTaskList.vue` 新增 `displayList` computed——taskId 存在时对当前页按 seqMap 正序排序（seqMap 未就绪回退原序，无序号项排末尾），全局列表维持后端顺序。实测 8 行按 #1~#8 正序展示；vue-tsc/build 通过。注：排序作用于当前分页页内，拆解子任务规模（≤20/页）下等价全局有序。
+
+---
+

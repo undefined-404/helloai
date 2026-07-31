@@ -7,6 +7,10 @@ export const subTaskApi = {
   list(params: { taskId?: LongId; status?: string; page: number; pageSize?: number }) {
     return request.get<any, PageResult<SubTask>>('/sub-tasks', { params })
   },
+  // 按主任务拉全量子任务（不传 page 走后端全量数组契约；依赖图与序号映射用）
+  listAllByTask(taskId: LongId) {
+    return request.get<any, SubTask[]>('/sub-tasks', { params: { taskId } })
+  },
   // v1.1 修复: LongID 后端已全局序列化为 string，传 string 避免任何 Number() 精度丢
   getById(id: LongId) {
     return request.get<any, SubTask>(`/sub-tasks/${id}`)

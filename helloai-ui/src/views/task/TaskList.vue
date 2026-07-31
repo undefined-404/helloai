@@ -5,8 +5,7 @@
         <div class="card-header">
           <span>任务管理</span>
           <div class="header-actions">
-            <el-button size="small" type="primary" @click="openCreate">新建</el-button>
-            <el-button size="small" @click="router.push('/requirement-chat')">对话新建</el-button>
+            <el-button size="small" type="primary" @click="router.push('/requirement-chat')">对话新建</el-button>
             <el-button size="small" @click="load">刷新</el-button>
           </div>
         </div>
@@ -32,7 +31,7 @@
         <el-table-column label="创建时间" width="170">
           <template #default="{ row }">{{ fmtTime(row.createTime) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="380" fixed="right">
+        <el-table-column label="操作" width="300" fixed="right">
           <template #default="{ row }">
             <el-button
               v-if="row.status === 'PENDING'"
@@ -48,14 +47,6 @@
               type="warning"
               @click="openPlanReview(row)"
             >审阅草案</el-button>
-            <el-button size="small" @click="openEdit(row)">编辑</el-button>
-            <el-button
-              size="small"
-              type="success"
-              plain
-              :loading="downloadingId === row.id"
-              @click="handleDownload(row)"
-            >交付物</el-button>
             <el-button
               v-if="row.status === 'DONE'"
               size="small"
@@ -77,7 +68,6 @@
       <el-empty v-if="!list.length && !loading" description="暂无任务" />
     </el-card>
 
-    <TaskFormDialog v-model="formVisible" :task="editingTask" @done="load" />
     <TaskDeleteDialog v-model="deleteVisible" :task="deletingTask" @done="load" />
     <PlanReviewDialog v-model="planReviewVisible" :task="reviewingTask" @done="load" />
     <FinalReportDialog v-model="reportVisible" :task="reportTask" />
@@ -95,8 +85,6 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { taskApi } from '@/api/task'
 import { fmtTime } from '@/utils/tableConfig'
-import { saveBlobResponse } from '@/utils/download'
-import TaskFormDialog from './components/TaskFormDialog.vue'
 import TaskDeleteDialog from './components/TaskDeleteDialog.vue'
 import PlanReviewDialog from './components/PlanReviewDialog.vue'
 import FinalReportDialog from './components/FinalReportDialog.vue'
@@ -145,12 +133,6 @@ onMounted(async () => {
   }
 })
 
-// ── 新建/编辑 ──
-const formVisible = ref(false)
-const editingTask = ref<Task | null>(null)
-function openCreate() { editingTask.value = null; formVisible.value = true }
-function openEdit(row: Task) { editingTask.value = row; formVisible.value = true }
-
 // ── 重新发布 ──
 async function handleRepublish(row: Task) {
   try {
@@ -172,18 +154,7 @@ const deleteVisible = ref(false)
 const deletingTask = ref<Task | null>(null)
 function openDelete(row: Task) { deletingTask.value = row; deleteVisible.value = true }
 
-// ── 交付物 zip 下载（实时聚合，任何状态可下；无产出时包内仅概览）──
-const downloadingId = ref<LongId | null>(null)
-async function handleDownload(row: Task) {
-  downloadingId.value = row.id
-  try {
-    const resp = await taskApi.downloadDeliverables(row.id)
-    saveBlobResponse(resp, `${row.title || 'task'}-交付物.zip`)
-  } catch { /* 拦截器已弹错 */ }
-  finally { downloadingId.value = null }
-}
-
-// ── V32 最终整合报告（仅 DONE 任务展示入口，生成/重生成在弹窗内）──
+// ── V32 最终整合报告（仅 DONE 任务展示入口，生成/重生成/交付物下载在弹窗内）──
 const reportVisible = ref(false)
 const reportTask = ref<Task | null>(null)
 function openReport(row: Task) { reportTask.value = row; reportVisible.value = true }

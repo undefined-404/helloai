@@ -5,6 +5,11 @@
         <div class="card-header">
           <span>子任务列表</span>
           <div class="header-actions">
+            <!-- 按主任务过滤时提供列表/依赖图双视图切换 -->
+            <el-radio-group v-if="taskId" v-model="viewMode" size="small" style="margin-right:8px">
+              <el-radio-button value="list">列表</el-radio-button>
+              <el-radio-button value="dag">依赖图</el-radio-button>
+            </el-radio-group>
             <el-select v-model="statusFilter" placeholder="状态筛选" clearable style="width:140px;margin-right:8px" @change="load(1)">
               <el-option v-for="[k,v] in Object.entries(SUB_TASK_STATUS_MAP)" :key="k" :label="v.label" :value="k" />
             </el-select>
@@ -25,9 +30,19 @@
           <el-button link type="primary" @click="clearTaskFilter">查看全部子任务</el-button>
         </template>
       </el-alert>
-      <el-table :data="list" border stripe v-loading="loading" style="width:100%">
+      <!-- 依赖图视图：拓扑分层流水线（同批可并行），点击节点跳详情 -->
+      <SubTaskDagView
+        v-if="taskId && viewMode === 'dag'"
+        v-loading="fullListLoading"
+        :sub-tasks="fullList"
+        @node-click="goDetail"
+      />
+      <template v-else>
+      <el-table :data="displayList" border stripe v-loading="loading" style="width:100%">
         <el-table-column label="标题" min-width="200" show-overflow-tooltip>
           <template #default="{ row }">
+            <!-- 拓扑序号小徽标：与依赖列/依赖图 #序号 同口径，仅按主任务过滤时展示 -->
+            <span v-if="taskId && seqMap.get(String(row.id))" class="seq-badge">#{{ seqMap.get(String(row.id)) }}</span>
             <span class="link-cell" :title="row.title" @click="router.push('/sub-tasks/' + row.id)">{{ row.title }}</span>
           </template>
         </el-table-column>
@@ -42,6 +57,19 @@
             <el-tag :type="getSubTaskStatusMeta(row.status)?.type || 'info'" size="small">
               {{ getSubTaskStatusMeta(row.status)?.label || row.status }}
             </el-tag>
+          </template>
+        </el-table-column>
+        <!-- 按主任务过滤时展示前置依赖（可点击跳依赖项详情），序号与依赖图/草案审阅一致 -->
+        <el-table-column v-if="taskId" label="依赖" min-width="120">
+          <template #default="{ row }">
+            <template v-if="depItems(row).length">
+              <el-tag
+                v-for="dep in depItems(row)" :key="dep.id"
+                size="small" class="dep-tag" :title="dep.title"
+                @click="goDetail(dep.id)"
+              >#{{ dep.seq }}</el-tag>
+            </template>
+            <span v-else>-</span>
           </template>
         </el-table-column>
         <el-table-column label="评分" width="80">
@@ -79,6 +107,7 @@
         :total="total" :page-size="pageSize" :current-page="currentPage"
         @current-change="loadPage" style="margin-top:16px;text-align:center"
       />
+      </template>
 
       <!-- 认领弹窗 -->
       <el-dialog v-model="claimDialog.visible" title="认领子任务" width="420px" top="5vh" append-to-body>
@@ -142,9 +171,11 @@ import { subTaskApi } from '@/api/subTask'
 import { taskApi } from '@/api/task'
 import AgentSelect from '@/components/AgentSelect.vue'
 import QuickDispatchDialog from '@/components/QuickDispatchDialog.vue'
+import SubTaskDagView from '@/components/SubTaskDagView.vue'
 import { SUB_TASK_STATUS_MAP, SCORE_GRADE_MAP } from '@/types'
 import { ACTION } from '@/utils/tableConfig'
 import { fmtTime } from '@/utils/tableConfig'
+import { orderByDependency } from '@/utils/subTaskDag'
 import type { Task, SubTask, SubTaskStatus } from '@/types'
 
 const route = useRoute()
@@ -161,6 +192,52 @@ const taskId = computed(() => (route.query.taskId ? String(route.query.taskId) :
 // 路由 query 中的状态筛选（死信池菜单跳 /sub-tasks?status=DEAD_LETTER 复用本页）
 const statusQuery = computed(() => (route.query.status ? String(route.query.status) : ''))
 const parentTask = ref<Task | null>(null)
+// 列表/依赖图双视图（仅按主任务过滤时可切换）
+const viewMode = ref<'list' | 'dag'>('list')
+// 全量子任务（依赖图渲染 + 依赖列序号映射用；分页列表里依赖项可能不在当前页）
+const fullList = ref<SubTask[]>([])
+const fullListLoading = ref(false)
+
+async function loadFullList() {
+  if (!taskId.value) { fullList.value = []; return }
+  fullListLoading.value = true
+  try {
+    fullList.value = await subTaskApi.listAllByTask(taskId.value)
+  } catch {
+    // 全量拉取失败不阻断分页列表，依赖列/依赖图降级为空
+    fullList.value = []
+  } finally { fullListLoading.value = false }
+}
+
+// 拓扑正序全局序号映射（与依赖图、草案审阅弹窗的 #序号 口径一致）
+const seqMap = computed(() => {
+  const map = new Map<string, number>()
+  orderByDependency(fullList.value).forEach((s, i) => map.set(String(s.id), i + 1))
+  return map
+})
+
+// 展示列表：按主任务过滤时按拓扑序号 #1→#n 正序排列（seqMap 未就绪时保持原序），全局列表维持后端顺序
+const displayList = computed(() => {
+  if (!taskId.value) return list.value
+  const sm = seqMap.value
+  return [...list.value].sort(
+    (a, b) => (sm.get(String(a.id)) ?? Infinity) - (sm.get(String(b.id)) ?? Infinity)
+  )
+})
+
+// 行的前置依赖展示项：#序号 + 标题（悬浮提示），点击跳依赖项详情
+function depItems(row: SubTask): { id: string; seq: number; title: string }[] {
+  return (row.dependsOn || []).map(String)
+    .filter(d => seqMap.value.has(d))
+    .map(d => ({
+      id: d,
+      seq: seqMap.value.get(d)!,
+      title: fullList.value.find(s => String(s.id) === d)?.title || ''
+    }))
+    .sort((a, b) => a.seq - b.seq)
+}
+
+function goDetail(id: string) { router.push('/sub-tasks/' + id) }
 
 async function loadParentTask() {
   if (!taskId.value) { parentTask.value = null; return }
@@ -183,6 +260,8 @@ async function load(page = 1) {
     list.value = res.list
     total.value = res.total
     currentPage.value = page
+    // 按主任务过滤时同步刷新全量列表（依赖列序号/依赖图状态色保持最新）
+    if (taskId.value) loadFullList()
   } finally { loading.value = false }
 }
 function loadPage(page: number) { load(page) }
@@ -195,7 +274,11 @@ function goParentTask(row: SubTask) {
 }
 
 // 同页面内 taskId 变化（如清除筛选 / 从不同主任务进入）时联动刷新
-watch(taskId, () => { loadParentTask(); load() })
+watch(taskId, () => {
+  if (!taskId.value) { viewMode.value = 'list'; fullList.value = [] }
+  loadParentTask()
+  load()
+})
 // 同页面内 status query 变化（子任务菜单 ↔ 死信池菜单切换）时同步筛选并刷新
 watch(statusQuery, (v) => { statusFilter.value = (v as SubTaskStatus) || ''; load(1) })
 
@@ -297,4 +380,18 @@ onMounted(() => {
 .parent-task-bar :deep(.el-alert__title) { display: flex; align-items: center; justify-content: space-between; width: 100%; }
 .parent-task-title { display: flex; align-items: center; }
 .link-cell { color: var(--el-color-primary); cursor: pointer; }
+.dep-tag { cursor: pointer; margin-right: 4px; }
+/* 标题前拓扑序号小徽标：参考电商 new 角标样式（小号胶囊、实底白字） */
+.seq-badge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  color: #fff;
+  background: var(--el-color-primary);
+  border-radius: 8px;
+  vertical-align: 1px;
+}
 </style>
