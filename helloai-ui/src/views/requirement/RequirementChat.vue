@@ -130,48 +130,50 @@
 
           <div class="chat-input">
             <template v-if="!conversation || conversation.status === 'ACTIVE'">
-              <!-- 新会话：Planner 手动选择；已有会话：展示钉住的 Planner -->
-              <div v-if="activeId == null" class="planner-select">
-                <span class="planner-label">Planner</span>
-                <el-select v-model="selectedPlanner" size="small" class="planner-picker">
-                  <el-option label="系统自动（等权重，优先空闲）" value="" />
-                  <el-option
-                    v-for="opt in plannerOptions"
-                    :key="String(opt.id)"
-                    :label="plannerOptionLabel(opt)"
-                    :value="String(opt.id)"
-                    :disabled="!opt.selectable"
-                  />
-                </el-select>
-              </div>
-              <div v-else-if="pinnedPlannerName" class="planner-select">
-                <span class="planner-label">Planner</span>
-                <el-tag size="small" type="info">{{ pinnedPlannerName }}</el-tag>
-              </div>
               <el-input
                 v-model="input"
                 type="textarea"
-                :rows="2"
+                :rows="4"
                 resize="none"
                 :disabled="sending || finalizing"
                 :placeholder="activeId ? '继续补充需求，Enter 发送' : '描述你的需求，Enter 发送开启新会话'"
                 @keydown.enter.exact.prevent="handleSend"
               />
               <div class="input-actions">
-                <el-button
-                  v-if="activeId && conversation?.status === 'ACTIVE'"
-                  size="small"
-                  type="danger"
-                  plain
-                  :disabled="sending || finalizing"
-                  @click="handleAbandon"
-                >放弃会话</el-button>
-                <el-button
-                  type="primary"
-                  :loading="sending"
-                  :disabled="!input.trim() || finalizing"
-                  @click="handleSend"
-                >发送</el-button>
+                <!-- 新会话：规划者手动选择；已有会话：展示钉住的规划者 -->
+                <div v-if="activeId == null" class="planner-select">
+                  <span class="planner-label">规划者</span>
+                  <el-select v-model="selectedPlanner" size="small" class="planner-picker">
+                    <el-option label="系统自动（等权重，优先空闲）" value="__auto__" />
+                    <el-option
+                      v-for="opt in plannerOptions"
+                      :key="String(opt.id)"
+                      :label="plannerOptionLabel(opt)"
+                      :value="String(opt.id)"
+                      :disabled="!opt.selectable"
+                    />
+                  </el-select>
+                </div>
+                <div v-else-if="pinnedPlannerName" class="planner-select">
+                  <span class="planner-label">规划者</span>
+                  <el-tag size="small" type="info">{{ pinnedPlannerName }}</el-tag>
+                </div>
+                <div class="input-actions-right">
+                  <el-button
+                    v-if="activeId && conversation?.status === 'ACTIVE'"
+                    size="small"
+                    type="danger"
+                    plain
+                    :disabled="sending || finalizing"
+                    @click="handleAbandon"
+                  >放弃会话</el-button>
+                  <el-button
+                    type="primary"
+                    :loading="sending"
+                    :disabled="!input.trim() || finalizing"
+                    @click="handleSend"
+                  >发送</el-button>
+                </div>
               </div>
             </template>
             <div v-else class="chat-readonly-tip">
@@ -210,9 +212,9 @@ const sending = ref(false)
 const finalizing = ref(false)
 const streamEl = ref<HTMLElement | null>(null)
 
-// Planner 下拉选：'' = 系统自动选择（等权重，优先空闲）
+// Planner 下拉选：'__auto__' = 系统自动选择（等权重，优先空闲）
 const plannerOptions = ref<PlannerOption[]>([])
-const selectedPlanner = ref<string>('')
+const selectedPlanner = ref<string>('__auto__')
 
 // 上轮 LLM 失败后可重试：ACTIVE 且最后一条是 user 消息（数据驱动，刷新后仍可重试）
 const canRetry = computed(() => {
@@ -359,8 +361,9 @@ async function handleSend() {
   sending.value = true
   scrollToBottom()
   try {
+    const plannerId = selectedPlanner.value === '__auto__' ? null : (selectedPlanner.value || null)
     const result = activeId.value == null
-      ? await clarifyApi.create(text, selectedPlanner.value || null)
+      ? await clarifyApi.create(text, plannerId)
       : await clarifyApi.send(activeId.value, text)
     detail.value = result
     activeId.value = result.conversation.id
@@ -615,13 +618,14 @@ onMounted(() => {
 
 /* ── 输入区 ── */
 .chat-input { border-top: 1px solid var(--ha-border-light); padding-top: 10px; }
-.input-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.input-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+.input-actions-right { display: flex; gap: 8px; }
 .chat-readonly-tip { color: var(--ha-muted); font-size: 13px; text-align: center; padding: 8px 0; }
 
 /* ── Planner 选择 / 重试条 ── */
-.planner-select { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.planner-select { display: flex; align-items: center; gap: 8px; }
 .planner-label { font-size: 12px; color: var(--ha-muted); flex-shrink: 0; }
-.planner-picker { width: 300px; max-width: 100%; }
+.planner-picker { width: 260px; max-width: 100%; }
 .msg-retry { display: flex; align-items: center; gap: 10px; color: var(--ha-muted); }
 
 @media (max-width: 768px) {

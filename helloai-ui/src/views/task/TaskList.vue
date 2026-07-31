@@ -18,7 +18,7 @@
         </el-table-column>
         <el-table-column label="描述" min-width="200" show-overflow-tooltip>
           <template #default="{ row }">
-            <span class="link-cell" @click="openDesc(row)">{{ row.description || '-' }}</span>
+            <span class="link-cell" @click="openDesc(row)">{{ stripMarkdown(row.description) || '-' }}</span>
           </template>
         </el-table-column>
         <el-table-column label="状态" width="100">
@@ -74,7 +74,7 @@
 
     <!-- 描述详情弹窗 -->
     <el-dialog v-model="descVisible" :title="descTitle" width="600px" top="5vh" append-to-body :show-close="true" :close-on-click-modal="false">
-      <div class="desc-content">{{ descContent }}</div>
+      <MarkdownView :content="descContent" class="desc-md" />
     </el-dialog>
   </div>
 </template>
@@ -85,6 +85,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { taskApi } from '@/api/task'
 import { fmtTime } from '@/utils/tableConfig'
+import { stripMarkdown } from '@/utils/markdown'
+import MarkdownView from '@/components/MarkdownView.vue'
 import TaskDeleteDialog from './components/TaskDeleteDialog.vue'
 import PlanReviewDialog from './components/PlanReviewDialog.vue'
 import FinalReportDialog from './components/FinalReportDialog.vue'
@@ -120,7 +122,7 @@ const descTitle = ref('')
 const descContent = ref('')
 function openDesc(row: any) {
   descTitle.value = row.title || '任务描述'
-  descContent.value = row.description || '暂无描述'
+  descContent.value = row.description || ''
   descVisible.value = true
 }
 // V29 对话新建跳转带 ?review=taskId 时，加载后自动打开草案审阅（找不到静默忽略）
@@ -189,5 +191,8 @@ async function handlePlan(row: Task) {
 .page { max-width: var(--ha-content-width); }
 .header-actions { display: flex; gap: 8px; }
 .link-cell { color: var(--el-color-primary); cursor: pointer; }
-.desc-content { white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
+/* 描述弹窗：标题仅保上方留白，去掉下方多余空行 */
+.desc-md :deep(h2),
+.desc-md :deep(h3),
+.desc-md :deep(h4) { margin-bottom: 0; }
 </style>
