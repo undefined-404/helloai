@@ -3220,3 +3220,151 @@ minimax（MiniMax-M2.5，Anthropic 协议推理模型）担任 REVIEWER 时自�
 
 ---
 
+### 6.28 LLM 输出 JSON 非法反斜杠转义容错修复（2026-07-31）
+
+#### 1. 背景与根因
+
+需求澄清链真实报错：moonshot 返回的终稿 JSON 字符串值里含未转义的 Windows 路径（`E:\workspace\AgentTeams-main`），Jackson 严格解析遇 `\w` 非法转义直接抛"Unrecognized character escape"，澄清会话报 500。同款风险同样存在于核验链 `parseVerdict`（同为 `objectMapper.readValue` 严格解析，命中则 unparseable 停留 REVIEW）。
+
+#### 2. 实施内容
+
+- 新增 `helloai-core/.../shared/util/LlmJsonSanitizer.java`：字符扫描修复 JSON 字符串值内的非法反斜杠转义（`\w` → 字面 `\\w`，路径内容不丢）；合法转义（含 unicode 转义后接 4 位十六进制的判定）原样保留；字符串外区域透传
+- 接入两处 LLM JSON 解析出口：`RequirementClarifyService.parseReply` 与 `SubTaskReviewService.parseVerdict`，均为先 stripToJsonObject 再 fixInvalidEscapes
+- 坐标注意项：Java 编译器对注释里的 `\u` 也做 Unicode 转义预处理，Javadoc 中不可出现 `\uXXXX` 字面（本轮踩坑：首版注释引发"非法 Unicode 转义"编译错）
+
+#### 3. 验证结果
+
+- `mvn -pl helloai-core -am test`：Tests run 298（+6：LlmJsonSanitizerTest 5 例 + parseVerdict 路径场景 1 例）, Failures 0, Errors 0, BUILD SUCCESS
+
+#### 4. 影响与遗留
+
+- 澄清链/核验链对 LLM 输出 Windows 路径的容错闭环；拆解链 `PlannerAnalysisService` 解析暂未接入（拆解产出为数组且未实际报错，按需再接）
+- 遗留不变：核验不可解析时的重试/降级转其他 LLM 策略仍留待后续轮次
+
+---
+
+### 6.29 澄清对话重试按钮 + Planner 手动选择下拉选（2026-07-30）
+
+#### 1. 背景与目标
+
+用户提出两个前端可感知的改进：① 澄清对话 LLM 失败（500）后页面出现「重试」按钮（类似 DeepSeek），不必重发消息；② 对话新建页增加 Planner 手动下拉选，默认「系统自动」，选项含平台内 API_KEY_LLM PLANNER 与在班外部 Agent。已确认决策：外部 Agent 展示但置灰（无同步应答桥，暂不支持对话澄清）；手动选中的 Planner 同时用于后续任务拆解（同一 Planner 从澄清跟到拆解）。
+
+#### 2. 实施内容
+
+后端：
+
+- 新增 `helloai-core/.../planner/PlannerAgentPicker.java`：收编 `RequirementClarifyService` 与 `PlannerAnalysisService` 两处原刻意复制的 pickPlannerAgent 为共享选型器。`pick(pinnedAgentId)` pinned 有效直用、失效 log.warn 回退自动；`autoPick()` 候选（PLANNER + API_KEY_LLM + ACTIVE + 非 SLEEPING + 有启用态凭证）等权重、优先 inProgressCount 最小者；`pickForTask(taskId)` 经 requirement_conversation.task_id 软引用反查会话钉住的 Planner（不给 Task 加字段）；`validateSelectable` 供 create 严格校验；`listOptions()` 输出下拉选数据源（内部 PLANNER selectable=有凭证 + 在班外部 Agent 置灰）
+- `RequirementConversation` 新增 `plannerAgentId` 字段 + Flyway `V31__requirement_conversation_planner_agent.sql`
+- `RequirementClarifyService`：`create(firstMessage, plannerAgentId)` 非空时校验并落库钉住；新增 `retryRound(id)`（仅当最后一条消息为 user，即上轮 LLM 失败；不新增消息、不加 round_count，复用 runLlmRound）；`listPlannerOptions()`
+- `PlannerAnalysisService`：删除本地 pickPlannerAgent，改 `plannerAgentPicker.pickForTask(taskId)`（拆解跟随钉住 Planner）
+- `RequirementConversationController`：create 透传 plannerAgentId，新增 `GET /requirement-conversations/planner-options` 与 `POST /{id}/retry`
+
+前端（helloai-ui）：
+
+- `types/index.ts`：RequirementConversation 加 plannerAgentId、新增 PlannerOption 接口
+- `api/clarify.ts`：create 加 plannerAgentId 参数、新增 retry / plannerOptions
+- `RequirementChat.vue`：新会话输入区 Planner 下拉选（外部 Agent 置灰带原因）、已有会话展示钉住 Planner 标签；canRetry 数据驱动（ACTIVE 且最后一条为 user 消息，刷新后仍可重试）渲染重试条；handleSend catch 重构（create 失败按 title 找回已落库会话，避免重复建会话，条件回填输入框）
+
+#### 3. 验证结果
+
+- `mvn -pl helloai-core -am test`：Tests run 312（+14：PlannerAgentPickerTest 11 例新建 + RequirementClarifyServiceTest 新增 4 例 - 迁移收敛 1 例）, Failures 0, Errors 0, BUILD SUCCESS
+- 前端 `npx vue-tsc -b`：本轮改动三文件零错误（仅存量 MarkdownView.vue 的 markdown-it/dompurify 模块未安装报错，与本轮无关）
+- 踩坑记录：Mockito `RETURNS_SELF` 对 MyBatis-Plus `LambdaQueryChainWrapper` 泛型链式调用不生效（eq 返回 null → NPE），须逐方法 `doReturn(chain).when(chain).xxx()`，且 orderByDesc 需显式类型实参规避重载歧义；`Stream.min` 单元素不调用比较器，单候选场景 stub inProgressCount 会触发 UnnecessaryStubbing
+
+#### 4. 影响与遗留
+
+- V31 迁移与新端点需重启后端后生效（Flyway 自动执行）
+- 外部 Agent 参与对话澄清需先建同步应答桥（AgentExecutorRouter 目前仅 ApiKeyAgentExecutor），置灰文案已预留
+- 遗留不变：核验不可解析的重试/降级策略、主任务交付物打包下载（待真实数据）
+
+---
+
+### 6.30 方案2 执行产出物化 + 主任务交付物实时聚合 zip 下载（2026-07-31）
+
+#### 1. 背景与决策
+
+用户需求：任务已由多个子任务分别完成并产出交付物，期望类似 Kimi 的附件下载或资源 zip 包下载，下载结果应把各子任务产出整理在一起。依据 `doc/design/HelloAI_执行产出物化与结构化多文件产出方案.md`（§6.27 产出的设计草案）落地方案2；已确认决策：① 主任务层采用**实时聚合 zip**（下载时现场从 sub_task.context + attachment 组包，历史任务立即可下、返工后重下即最新、无存储成本、无表结构变更）；② 两层一轮落地（主任务 zip + 方案2 子任务物化）。方案3（LLM manifest 多文件协议）本轮不做，`ExecutionOutputParser` 注释已预留扩展位。
+
+#### 2. 实施内容
+
+后端（方案2 物化链）：
+
+- `helloai-common/.../config/ArtifactStorageProperties.java`（新建，仿 DoorbellProperties，prefix=`helloai.storage`，全字段默认值：enabled=true / type=local / local-base-dir=./data/artifacts / bucket=helloai-local / max-files=10 / max-file-size=5MB）+ `application.yml` 新增 storage 配置段
+- 存储抽象三件套（`core/system/storage`，新建）：`ArtifactStorage` 接口（store/load/supports，预留 minio/s3 扩展）/ `LocalArtifactStorage`（storageUrl=`local://{bucket}/{objectKey}`，objectKey=`{subTaskId}/{yyyyMMdd}/{uuid8}-{safeName}`，normalize+startsWith 路径穿越防护，文件名清洗）/ `StoredArtifact` record
+- 解析三件套（`core/agent/output`，新建）：`ExecutionOutputParser`（纯文本→单 .md，文件名取子任务标题清洗限长60；方案3 落地后在此扩展 manifest 解析）/ `ParsedOutput` / `ArtifactFile` record
+- `ExecutionArtifactService`（新建）：best-effort 物化编排——parse 空跳过、maxFiles 截断、单文件超 maxFileSize 跳过；register 固定传 `subTask.assignedAgentId`（保证归属校验必过），时间线 `sub_task_artifact_materialized` 记上报 agentId；任何异常吞掉只记日志，绝不阻断执行主链路
+- `ExecutionResultHandler` 成功分支挂接：复用 failureTracker 的 `TransactionSynchronizationManager.registerSynchronization` afterCommit 范式（行锁释放后物化，规避自死锁），构造器第 7 参注入；两个存量测试（Integration/Unit）同步
+- 附件下载流式改造：`AttachmentService` 新增 `isContentLoadable`/`loadContent`（仅 local:// 平台直读）+ detectBucketName/detectObjectKey 识别 local:// 前缀；`AttachmentController.download` local:// 流式返回（RFC 5987 中文文件名），其余仍 302 重定向
+
+后端（主任务实时聚合 zip）：
+
+- `core/shared/util/SubTaskDependencyOrder`（新建）：从 PlannerAnalysisService 私有 orderByDependency 提炼的公共稳定 Kahn 拓扑排序（统一走 `dependsOnIdList()` 归一化，成环兕底不丢条目）；PlannerAnalysisService 改为委托
+- `core/task/service/TaskDeliverableService`（新建）：`buildZip(taskId)` 内存组包（UTF-8 ZipOutputStream）——`00-任务概览.md`（任务信息 + 子任务完成情况表：状态/Agent/完成时间/最新核验结论）+ `NN-xxx` 拓扑序编号的 DONE 子任务产出；**取数规则：优先物化 local:// 附件（同名取最新一轮），无可读附件回退 context.lastExecution.output 单 .md**（兼容物化上线前的历史任务，并避免新任务重复收录）；草案/已取消不入包，非 DONE 仅概览表标注；重名自动 (2)(3) 后缀；单附件读取失败不拖垮整包
+- `TaskController` 新增 `GET /api/tasks/{id}/deliverables/download`（薄入口，任何状态可下，无产出时包内仅概览）
+
+前端（helloai-ui）：
+
+- `api/request.ts` 响应拦截器开头放行 blob（返回完整 response 供解析 Content-Disposition）；新建 `utils/download.ts`（parseDispositionFilename：filename* 优先 + saveBlobResponse）
+- `api/attachment.ts` 补 `download(id)`（blob）+ id 类型 number→LongId；`api/task.ts` 补 `downloadDeliverables(id)`（blob + 120s timeout）
+- `TaskList.vue` 操作列新增「交付物」按钮（loading 防重复点击）；`SubTaskDetail.vue` 新增「产出附件」卡片（文件名/大小/时间 + 单附件下载，无附件不展示，随 5s 轮询刷新）
+
+#### 3. 验证结果
+
+- `mvn -pl helloai-core -am test`：Tests run **333**（312 基线 +21：ExecutionOutputParserTest 5 / LocalArtifactStorageTest 6 / ExecutionArtifactServiceTest 5 / TaskDeliverableServiceTest 5）, Failures 0, Errors 0, BUILD SUCCESS
+- 前端 `npx vue-tsc -b --force`：TSC-OK（顺手修复 `tsconfig.node.json` 缺 `skipLibCheck` 导致 @types/markdown-it 第三方声明报错阻断 -b 构建）
+- 踩坑记录：Mockito 对 `LambdaQueryChainWrapper.orderByAsc(any())` 与 `AttachmentService.list(any())` 存在重载歧义，须显式类型实参 `ArgumentMatchers.<SFunction<SubTask, ?>>any()` / `anyLong()` 解歧义
+
+#### 4. 影响与遗留
+
+- 重启后端后生效（无 Flyway 变更，仅新配置段带默认值）；物化仅对新执行生效，历史任务靠 zip 的 context 回退链路覆盖
+- 方案3（LLM manifest 多文件协议）仍为遗留，落地时仅需扩展 `ExecutionOutputParser`，物化/打包/下载链路无感
+- MinIO/S3 未引入（设计文档非目标不变），`ArtifactStorage` 抽象已预留；真实环境端到端验证（下载历史任务 2083021360376172545 的 zip）待后端重启后回归
+
+---
+
+### 6.31 任务最终整合报告：Planner 整合全部子任务产出（V32，2026-07-31）
+
+#### 1. 背景与决策
+
+用户需求：交付物 zip 里各子任务产出彼此分立，希望由 Planner/Reviewer 角色的 AI Agent 把全部子任务交付物整理成一份连贯文档。已确认决策：① 触发方式＝**自动生成 + 手动重生成**（任务自动收口时异步触发，历史已 DONE 任务/不满意时手动补生成或覆盖重生成）；② 整合角色＝**Planner**（复用 pickForTask 钉住机制，澄清→拆解→整合同一 Planner 跟随）；③ 展示＝**可视化 + zip**（前端 MarkdownView 弹窗 + zip 内 `01-最终整合报告.md`）。
+
+存储选型关键决策：报告存 **task 专列 TEXT**（V32 三列：final_report / final_report_agent_id / final_report_time）而非 task 加 context JSONB——踩点发现 MyBatis-Plus 写 JSONB 列必须 XML 覆盖 insert/updateById（SubTaskMapper.xml 先例，`::jsonb` 显式转换），专列 TEXT 方案零 XML 改造。
+
+#### 2. 实施内容
+
+后端：
+
+- `V32__task_final_report.sql`（新建）：task 表加三列；`Task` 实体同步三字段；`AgentDispatchProperties` 新增 `autoFinalReportEnabled=true`（`helloai.dispatch.auto-final-report-enabled`）
+- `prompts/task-final-report.md`（新建）：占位符 TASK_TITLE/TASK_DESCRIPTION/SUB_TASK_SECTIONS，要求非简单拼接（执行摘要+重组正文+结论建议）、忠于产出不编造
+- `TaskFinalReportService`（新建，core/task/service）：`generate(taskId)` 编排——仅 DONE 可调；取数与 zip 同源（DONE+产出非空+拓扑序，单段 8000 字符截断保护上下文）；pickForTask 选 Planner → executeSync → lambdaUpdate 只写三列；timeline 记 `task_final_report_llm_call_start/generated/failed`；不加类级事务（LLM 长耗时，与 decompose 同哲学）
+- 自动触发链：新建 `TaskAutoCompletedEvent`；`SubTaskCompletionListener.tryCloseTask` CAS 赢家分支发布事件（赢家唯一天然防重复生成）；服务端 `@Async + @EventListener` 承接（发布点已无事务上下文，不能用 @TransactionalEventListener）；开关关/已有报告跳过，异常吞掉只记日志——报告是增值物非交付门槛
+- `TaskController` 新增薄端点：`GET /api/tasks/{id}/final-report`（读专列组 `TaskFinalReportResponse`，agentName 回填）/ `POST /api/tasks/{id}/final-report`（同步生成）
+- `TaskDeliverableService.buildZip`：有报告时置顶收录 `01-最终整合报告.md`，子任务产出顺延从 02- 起；无报告时维持旧编号（向后兼容）
+
+前端（helloai-ui）：
+
+- `types` 新增 `TaskFinalReport`；`api/task.ts` 新增 `getFinalReport` / `generateFinalReport`（180s timeout）
+- 新建 `FinalReportDialog.vue`：MarkdownView 渲染 + 元信息（Planner 名/生成时间）+ 空态 + 生成/重新生成（覆盖需二次确认）+ 复制 + 导出 .md
+- `TaskList.vue` 操作列新增「报告」按钮（仅 DONE 任务展示）
+
+#### 3. 验证结果
+
+- `mvn -pl helloai-core -am test`：Tests run **343**（333 基线 +10：TaskFinalReportServiceTest 8 / TaskDeliverableServiceTest 新增 2）, Failures 0, Errors 0, BUILD SUCCESS
+- 前端 `npx vue-tsc -b --force`：TSC-OK
+- 踩坑回顾：`AgentTask`/`AgentResult` 实际在 `com.helloai.core.agent.domain` 包（非 execution/executor），首次 import 写错编译报错后修正
+
+#### 4. 影响与遗留
+
+- 需重启后端使 Flyway V32 生效；历史已 DONE 任务无报告，靠弹窗内手动「生成报告」补齐
+- 自动生成仅覆盖新收口任务；手动重生成为 last-write-wins 覆盖，无历史版本保留（如需版本化另议）
+- 真实环境端到端验证（收口自动生成 + 手动重生成 + zip 含报告）待后端重启后回归
+
+#### 5. 修复补记：小上下文模型 token 超限降档重试（2026-07-31）
+
+- 真实环境首测报错：Planner 绑 moonshot（8k 上下文），13 个子任务各截 8000 字符拼 prompt 总量达 45640 token，命中 `exceeded model token limit: 8192`（逐段截断挡不住段数多的总量爆炸）
+- 修复：`SECTION_OUTPUT_LIMIT` 常量改为阶梯 `{8000, 2000, 500}`；`generate` 命中 token 超限类错误（isTokenLimitError 覆盖 moonshot/openai/deepseek 措辞）且还有更紧档位时收紧截断重试，其余错误直接失败；timeline 三类事件 payload 增记 `sectionOutputLimit`
+- 大上下文模型首档即成功、行为不变；单测 +2（降档重试成功 / 全阶梯仍失败），`mvn -pl helloai-core -am test` 345 全绿
+- 同轮第二修：Planner 换绑 minimax（Anthropic 协议推理模型）后生成报告耗时超 60s，命中 provider HTTP 读超时（`SocketTimeoutException: Read timed out`，被 Spring 误报为 content-type application/octet-stream 解析失败）。修复：`AgentProviderProperties.readTimeoutMs` 默认 60000 → 180000（四 provider 共享），yml deepseek 显式值同步 180000，前端 generateFinalReport 超时 180s → 240s 留余量；需重启后端生效（ProviderChatModelCache 重建后新超时才落地）
+
+---
+
