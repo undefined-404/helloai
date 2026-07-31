@@ -3,20 +3,19 @@ package com.helloai.core.planner;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
-import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.execution.PlatformAgentExecutionService;
-import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
 import com.helloai.core.planner.service.RequirementConversationService;
 import com.helloai.core.planner.service.RequirementMessageService;
+import com.helloai.core.shared.util.LlmJsonSanitizer;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
@@ -72,7 +71,7 @@ public class RequirementClarifyService {
     private final RequirementMessageService messageService;
     private final TaskService taskService;
     private final AgentService agentService;
-    private final AgentSelector agentSelector;
+    private final PlannerAgentPicker plannerAgentPicker;
     private final AgentInboxService agentInboxService;
     private final PlatformAgentExecutionService platformAgentExecutionService;
     private final TaskTimelineService taskTimelineService;
@@ -85,11 +84,16 @@ public class RequirementClarifyService {
     /**
      * 新建澄清会话：首条用户消息截断为标题 → 存 user 消息 → 走一轮 LLM。
      *
+     * @param plannerAgentId 手动指定的 Planner Agent ID（空=系统自动选择）；
+     *                       指定时严格校验可选性，澄清与后续拆解均跟随该 Planner
      * @return 会话 + 全部消息
      */
-    public ClarifyConversationDetail create(String firstMessage) {
+    public ClarifyConversationDetail create(String firstMessage, Long plannerAgentId) {
         if (firstMessage == null || firstMessage.isBlank()) {
             throw new BizException("首条消息不能为空");
+        }
+        if (plannerAgentId != null) {
+            plannerAgentPicker.validateSelectable(plannerAgentId);
         }
         String trimmed = firstMessage.trim();
         RequirementConversation conversation = new RequirementConversation();
@@ -97,8 +101,10 @@ public class RequirementClarifyService {
                 ? trimmed : trimmed.substring(0, TITLE_LIMIT));
         conversation.setStatus(STATUS_ACTIVE);
         conversation.setRoundCount(0);
+        conversation.setPlannerAgentId(plannerAgentId);
         conversationService.save(conversation);
-        log.info("澄清会话创建: id={}, title={}", conversation.getId(), conversation.getTitle());
+        log.info("澄清会话创建: id={}, title={}, plannerAgentId={}",
+                conversation.getId(), conversation.getTitle(), plannerAgentId);
         return doRound(conversation, trimmed);
     }
 
@@ -118,6 +124,28 @@ public class RequirementClarifyService {
                     + "，请放弃本会话并在任务管理中手动创建任务");
         }
         return doRound(conversation, message.trim());
+    }
+
+    /**
+     * 重试上一轮 LLM：仅当最后一条消息是 user（即上轮 LLM 失败、助手回复缺失）时可用；
+     * 不新增 user 消息、不加轮数（失败那轮已计入 round_count）。
+     *
+     * @return 会话 + 全部消息
+     */
+    public ClarifyConversationDetail retryRound(Long conversationId) {
+        RequirementConversation conversation = requireActive(conversationId);
+        List<RequirementMessage> messages = messageService.listByConversation(conversationId);
+        if (messages.isEmpty()
+                || !ROLE_USER.equals(messages.get(messages.size() - 1).getRole())) {
+            throw new BizException("最后一条消息已有助手回复，无需重试: conversationId=" + conversationId);
+        }
+        log.info("澄清会话重试一轮 LLM: conversationId={}", conversationId);
+        return runLlmRound(conversation);
+    }
+
+    /** Planner 下拉选数据源（平台内 PLANNER 可选 + 在班外部 Agent 置灰）。 */
+    public List<PlannerAgentPicker.PlannerOption> listPlannerOptions() {
+        return plannerAgentPicker.listOptions();
     }
 
     /**
@@ -236,8 +264,7 @@ public class RequirementClarifyService {
     // ══════════════════════════════════════════════════════════════
 
     /**
-     * 一轮澄清：存 user 消息、round_count+1 → 全量历史渲染模板 → LLM →
-     * 解析 question/final 分支落库。
+     * 一轮澄清：存 user 消息、round_count+1 → LLM 一轮（选人/渲染/解析/落库）。
      */
     private ClarifyConversationDetail doRound(RequirementConversation conversation, String userMessage) {
         Long conversationId = conversation.getId();
@@ -245,8 +272,17 @@ public class RequirementClarifyService {
         int rounds = conversation.getRoundCount() != null ? conversation.getRoundCount() : 0;
         conversation.setRoundCount(rounds + 1);
         conversationService.updateById(conversation);
+        return runLlmRound(conversation);
+    }
 
-        Agent planner = pickPlannerAgent();
+    /**
+     * LLM 一轮（不落 user 消息）：选 Planner → 全量历史渲染模板 → LLM →
+     * 解析 question/final 分支落库；doRound 与 retryRound 共用。
+     */
+    private ClarifyConversationDetail runLlmRound(RequirementConversation conversation) {
+        Long conversationId = conversation.getId();
+
+        Agent planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
         String prompt = renderPrompt(conversationId);
         AgentTask agentTask = AgentTask.builder()
                 .systemPrompt("")
@@ -289,26 +325,6 @@ public class RequirementClarifyService {
         return conversation;
     }
 
-    /**
-     * 选平台内 API_KEY_LLM Planner Agent；无可用时报错并附操作指引。
-     *
-     * <p>与 {@link PlannerAnalysisService} 的同名私有方法逐行一致（12 行）；
-     * 刻意复制不抽象：两处调用方语义独立演化，提前抽公共方法反而耦合。</p>
-     */
-    private Agent pickPlannerAgent() {
-        Agent preferred = agentSelector.pickPreferred(AgentRole.PLANNER);
-        if (preferred != null && preferred.getAccessType() == AgentAccessType.API_KEY_LLM) {
-            return preferred;
-        }
-        // 首选非平台内执行面时，从同角色候选中过滤 API_KEY_LLM
-        return agentService.listByRole(AgentRole.PLANNER).stream()
-                .filter(a -> a.getAccessType() == AgentAccessType.API_KEY_LLM)
-                .findFirst()
-                .orElseThrow(() -> new BizException(
-                        "无可用的平台内 Planner Agent（需要 role=PLANNER 且 accessType=API_KEY_LLM）；"
-                                + "请先在 Agent 管理中注册，或改用外部 Planner Agent 手工创建子任务"));
-    }
-
     /** 加载 classpath 模板并替换 {{CONVERSATION_HISTORY}}（transcript 全量历史）。 */
     private String renderPrompt(Long conversationId) {
         ClassPathResource resource = new ClassPathResource(PROMPT_TEMPLATE_PATH);
@@ -334,7 +350,7 @@ public class RequirementClarifyService {
         if (rawOutput == null || rawOutput.isBlank()) {
             throw new BizException("澄清 LLM 返回内容为空");
         }
-        String cleaned = stripToJsonObject(rawOutput);
+        String cleaned = LlmJsonSanitizer.fixInvalidEscapes(stripToJsonObject(rawOutput));
         ClarifyReply reply;
         try {
             reply = objectMapper.readValue(cleaned, ClarifyReply.class);

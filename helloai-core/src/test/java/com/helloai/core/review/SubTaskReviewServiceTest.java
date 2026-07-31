@@ -136,6 +136,16 @@ class SubTaskReviewServiceTest {
         assertThat(reviewService.parseVerdict("  ")).isNull();
     }
 
+    @Test
+    @DisplayName("parseVerdict：字符串值含未转义 Windows 路径反斜杠也能解析")
+    void shouldParseVerdictWithUnescapedWindowsPath() {
+        SubTaskReviewService.ReviewVerdict verdict = reviewService.parseVerdict(
+                "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"产出位于E:\\workspace\\out目录\"}");
+        assertThat(verdict).isNotNull();
+        assertThat(verdict.getPass()).isTrue();
+        assertThat(verdict.getComment()).isEqualTo("产出位于E:\\workspace\\out目录");
+    }
+
     // ══════════════════════════════════════════════════════════════
     //  reviewSubTask：判定后动作
     // ══════════════════════════════════════════════════════════════

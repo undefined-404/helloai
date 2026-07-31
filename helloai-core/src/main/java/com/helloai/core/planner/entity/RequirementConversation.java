@@ -33,4 +33,7 @@ public class RequirementConversation extends BaseEntity {
 
     /** 用户消息轮数（服务端硬上限防失控） */
     private Integer roundCount;
+
+    /** 手动指定的 Planner Agent ID（软引用无 FK；NULL 表示系统自动选择，V31） */
+    private Long plannerAgentId;
 }

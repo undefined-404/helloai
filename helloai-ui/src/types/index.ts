@@ -65,6 +65,16 @@ export interface TaskRelatedCounts {
   timelineCount: number
 }
 
+// V32 任务最终整合报告（对应后端 TaskFinalReportResponse）
+export interface TaskFinalReport {
+  taskId: LongId
+  // 报告正文 Markdown；null 表示尚未生成
+  content: string | null
+  agentId: LongId | null
+  agentName: string | null
+  generatedAt: string | null
+}
+
 export interface SubTask {
   id: LongId
   taskId: LongId
@@ -427,6 +437,8 @@ export interface RequirementConversation {
   title: string
   status: RequirementConversationStatus
   taskId: LongId | null
+  // 手动指定的 Planner Agent ID（null=系统自动选择）
+  plannerAgentId: LongId | null
   finalTitle: string | null
   finalDescription: string | null
   roundCount: number
@@ -449,6 +461,18 @@ export interface ClarifyConversationDetail {
   messages: RequirementMessage[]
   // 会话关联任务是否仍存在（仅 detail 返回）；FINALIZED 且为 false 时可重新生成
   taskExists?: boolean
+}
+
+/** Planner 下拉选项（selectable=false 时 disabledReason 说明置灰原因） */
+export interface PlannerOption {
+  id: LongId
+  name: string
+  role: string
+  accessType: string
+  modelType: string | null
+  onDuty: boolean
+  selectable: boolean
+  disabledReason: string | null
 }
 
 export const PROMPT_CATEGORY_MAP: Record<string, string> = {

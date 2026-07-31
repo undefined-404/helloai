@@ -50,6 +50,13 @@
               <p>描述你想做的事情，AI 需求分析师会通过追问帮你澄清边界、交付物与验收标准。</p>
               <p class="placeholder-tip">信息足够时会生成任务终稿，确认后自动创建任务并触发 AI 拆解。</p>
             </div>
+            <!-- 上轮 LLM 失败（最后一条是 user 消息）：重试条 -->
+            <div v-if="canRetry" class="msg-row from-assistant">
+              <div class="msg-bubble msg-retry">
+                <span>回复生成失败</span>
+                <el-button size="small" type="primary" plain @click="handleRetry">重试</el-button>
+              </div>
+            </div>
             <!-- 发送中占位气泡 -->
             <div v-if="sending && pendingText" class="msg-row from-user">
               <div class="msg-bubble">{{ pendingText }}</div>
@@ -95,6 +102,24 @@
 
           <div class="chat-input">
             <template v-if="!conversation || conversation.status === 'ACTIVE'">
+              <!-- 新会话：Planner 手动选择；已有会话：展示钉住的 Planner -->
+              <div v-if="activeId == null" class="planner-select">
+                <span class="planner-label">Planner</span>
+                <el-select v-model="selectedPlanner" size="small" class="planner-picker">
+                  <el-option label="系统自动（等权重，优先空闲）" value="" />
+                  <el-option
+                    v-for="opt in plannerOptions"
+                    :key="String(opt.id)"
+                    :label="plannerOptionLabel(opt)"
+                    :value="String(opt.id)"
+                    :disabled="!opt.selectable"
+                  />
+                </el-select>
+              </div>
+              <div v-else-if="pinnedPlannerName" class="planner-select">
+                <span class="planner-label">Planner</span>
+                <el-tag size="small" type="info">{{ pinnedPlannerName }}</el-tag>
+              </div>
               <el-input
                 v-model="input"
                 type="textarea"
@@ -139,7 +164,7 @@ import { Loading } from '@element-plus/icons-vue'
 import { clarifyApi } from '@/api/clarify'
 import { taskApi } from '@/api/task'
 import { fmtTime } from '@/utils/tableConfig'
-import type { ClarifyConversationDetail, RequirementConversation, RequirementConversationStatus, LongId } from '@/types'
+import type { ClarifyConversationDetail, PlannerOption, RequirementConversation, RequirementConversationStatus, LongId } from '@/types'
 
 const router = useRouter()
 
@@ -156,6 +181,24 @@ const sending = ref(false)
 const finalizing = ref(false)
 const streamEl = ref<HTMLElement | null>(null)
 
+// Planner 下拉选：'' = 系统自动选择（等权重，优先空闲）
+const plannerOptions = ref<PlannerOption[]>([])
+const selectedPlanner = ref<string>('')
+
+// 上轮 LLM 失败后可重试：ACTIVE 且最后一条是 user 消息（数据驱动，刷新后仍可重试）
+const canRetry = computed(() => {
+  if (sending.value || conversation.value?.status !== 'ACTIVE') return false
+  const msgs = detail.value?.messages ?? []
+  return msgs.length > 0 && msgs[msgs.length - 1].role === 'user'
+})
+
+const pinnedPlannerName = computed(() => {
+  const id = conversation.value?.plannerAgentId
+  if (id == null) return ''
+  const opt = plannerOptions.value.find(o => String(o.id) === String(id))
+  return opt ? opt.name : `Agent#${id}`
+})
+
 const STATUS_LABEL: Record<RequirementConversationStatus, string> = {
   ACTIVE: '进行中',
   FINALIZED: '已建任务',
@@ -169,6 +212,17 @@ function statusTag(status: RequirementConversationStatus) {
 
 async function loadList() {
   try { conversations.value = await clarifyApi.list() } catch { /* 拦截器已弹错 */ }
+}
+
+async function loadPlannerOptions() {
+  try { plannerOptions.value = await clarifyApi.plannerOptions() } catch { /* 拦截器已弹错 */ }
+}
+
+function plannerOptionLabel(opt: PlannerOption) {
+  const model = opt.accessType === 'API_KEY_LLM' ? (opt.modelType || '平台内') : '外部 Agent'
+  return opt.selectable
+    ? `${opt.name}（${model}）`
+    : `${opt.name}（${model}·${opt.disabledReason || '不可选'}）`
 }
 
 async function scrollToBottom() {
@@ -201,24 +255,47 @@ async function handleSend() {
   scrollToBottom()
   try {
     const result = activeId.value == null
-      ? await clarifyApi.create(text)
+      ? await clarifyApi.create(text, selectedPlanner.value || null)
       : await clarifyApi.send(activeId.value, text)
     detail.value = result
     activeId.value = result.conversation.id
     loadList()
     scrollToBottom()
   } catch {
-    // 拦截器已弹错；user 消息服务端已保留，刷新详情让用户看到并可继续对话
-    input.value = text
+    // 拦截器已弹错；user 消息多半已落库，刷新详情后靠重试按钮续跑
     if (activeId.value != null) {
       try { detail.value = await clarifyApi.detail(activeId.value) } catch { /* 拦截器已弹错 */ }
     } else {
-      loadList()
+      // create 失败：会话可能已落库（LLM 失败在建会之后），按标题找回以展示重试按钮
+      await loadList()
+      const title = text.length <= 50 ? text : text.slice(0, 50)
+      const found = conversations.value.find(c => c.status === 'ACTIVE' && c.title === title)
+      if (found) {
+        activeId.value = found.id
+        try { detail.value = await clarifyApi.detail(found.id) } catch { /* 拦截器已弹错 */ }
+      }
     }
+    // 消息未落库（建会前就失败/未找回会话）时回填输入框，避免丢失用户文本
+    const msgs = detail.value?.messages ?? []
+    const lastIsSameUserText = msgs.length > 0
+      && msgs[msgs.length - 1].role === 'user'
+      && msgs[msgs.length - 1].content === text
+    if (!lastIsSameUserText) input.value = text
   } finally {
     pendingText.value = ''
     sending.value = false
   }
+}
+
+async function handleRetry() {
+  if (activeId.value == null || sending.value) return
+  sending.value = true
+  scrollToBottom()
+  try {
+    detail.value = await clarifyApi.retry(activeId.value)
+    scrollToBottom()
+  } catch { /* 拦截器已弹错；保持现状可再次重试 */ }
+  finally { sending.value = false }
 }
 
 async function handleFinalize() {
@@ -286,7 +363,10 @@ async function handleAbandon() {
   } catch { /* 拦截器已弹错 */ }
 }
 
-onMounted(() => loadList())
+onMounted(() => {
+  loadList()
+  loadPlannerOptions()
+})
 </script>
 
 <style scoped>
@@ -396,6 +476,12 @@ onMounted(() => loadList())
 .chat-input { border-top: 1px solid var(--ha-border-light); padding-top: 10px; }
 .input-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 .chat-readonly-tip { color: var(--ha-muted); font-size: 13px; text-align: center; padding: 8px 0; }
+
+/* ── Planner 选择 / 重试条 ── */
+.planner-select { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.planner-label { font-size: 12px; color: var(--ha-muted); flex-shrink: 0; }
+.planner-picker { width: 300px; max-width: 100%; }
+.msg-retry { display: flex; align-items: center; gap: 10px; color: var(--ha-muted); }
 
 @media (max-width: 768px) {
   .chat-layout { flex-direction: column; height: auto; }

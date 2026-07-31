@@ -9,7 +9,6 @@ import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.execution.PlatformAgentExecutionService;
-import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.planner.entity.RequirementConversation;
@@ -37,7 +36,7 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
-import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -45,7 +44,8 @@ import static org.mockito.Mockito.when;
 /**
  * RequirementClarifyService 单元测试（LLM mock）：
  * question/final 双路径 / fence 容错 / 非 JSON 报错 / 轮数上限 /
- * finalize 无终稿拒绝、成功建任务 / 非 ACTIVE 会话拒发。
+ * finalize 无终稿拒绝、成功建任务 / 非 ACTIVE 会话拒发 /
+ * create 手动指定 Planner / retry 重试上一轮。
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("RequirementClarifyService")
@@ -66,7 +66,7 @@ class RequirementClarifyServiceTest {
     private AgentService agentService;
 
     @Mock
-    private AgentSelector agentSelector;
+    private PlannerAgentPicker plannerAgentPicker;
 
     @Mock
     private AgentInboxService agentInboxService;
@@ -84,7 +84,7 @@ class RequirementClarifyServiceTest {
         // ObjectMapper 用真实实例（JSON 解析是被测逻辑本身，不 mock）
         clarifyService = new RequirementClarifyService(
                 conversationService, messageService, taskService, agentService,
-                agentSelector, agentInboxService, platformAgentExecutionService,
+                plannerAgentPicker, agentInboxService, platformAgentExecutionService,
                 taskTimelineService, new ObjectMapper());
     }
 
@@ -115,9 +115,9 @@ class RequirementClarifyServiceTest {
         return msg;
     }
 
-    /** 打通一轮 LLM 调用所需的公共 stub。 */
+    /** 打通一轮 LLM 调用所需的公共 stub（未钉 Planner：自动选择）。 */
     private void stubLlmRound(String rawOutput) {
-        when(agentSelector.pickPreferred(AgentRole.PLANNER)).thenReturn(llmPlanner());
+        when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
         when(messageService.listByConversation(CONV_ID))
                 .thenReturn(List.of(message("user", "做一个报表", 1)));
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
@@ -259,7 +259,8 @@ class RequirementClarifyServiceTest {
         });
         stubLlmRound("{\"type\":\"question\",\"message\":\"目标是什么？\"}");
 
-        RequirementClarifyService.ClarifyConversationDetail detail = clarifyService.create(longMessage);
+        RequirementClarifyService.ClarifyConversationDetail detail =
+                clarifyService.create(longMessage, null);
 
         RequirementConversation conversation = detail.getConversation();
         assertThat(conversation.getTitle()).hasSize(50);
@@ -267,6 +268,74 @@ class RequirementClarifyServiceTest {
         assertThat(conversation.getRoundCount()).isEqualTo(1);
         verify(messageService).addMessage(CONV_ID, "user", longMessage);
         verify(messageService).addMessage(CONV_ID, "assistant", "目标是什么？");
+    }
+
+    @Test
+    @DisplayName("create：手动指定 Planner 时严格校验并钉到会话，选人按钉住的 ID 走")
+    void shouldCreateWithPinnedPlanner() {
+        when(conversationService.save(any(RequirementConversation.class))).thenAnswer(inv -> {
+            RequirementConversation c = inv.getArgument(0);
+            c.setId(CONV_ID);
+            return true;
+        });
+        when(plannerAgentPicker.pick(9L)).thenReturn(llmPlanner());
+        when(messageService.listByConversation(CONV_ID))
+                .thenReturn(List.of(message("user", "做一个报表", 1)));
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"type\":\"question\",\"message\":\"目标是什么？\"}", "stop", "llm", 100));
+
+        RequirementClarifyService.ClarifyConversationDetail detail =
+                clarifyService.create("做一个报表", 9L);
+
+        assertThat(detail.getConversation().getPlannerAgentId()).isEqualTo(9L);
+        verify(plannerAgentPicker).validateSelectable(9L);
+        verify(plannerAgentPicker).pick(9L);
+    }
+
+    @Test
+    @DisplayName("create：指定的 Planner 不可选时拒绝建会，不落库")
+    void shouldRejectCreateWhenPinnedPlannerNotSelectable() {
+        doThrow(new BizException("外部 Agent 暂不支持对话澄清，请选择平台内 Planner: cli-agent"))
+                .when(plannerAgentPicker).validateSelectable(99L);
+
+        assertThatThrownBy(() -> clarifyService.create("做一个报表", 99L))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("暂不支持对话澄清");
+        verify(conversationService, never()).save(any(RequirementConversation.class));
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  retryRound
+    // ════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("retry：最后一条是 user 消息时重跑一轮 LLM，不新增 user 消息不加轮数")
+    void shouldRetryLlmRoundWithoutNewUserMessage() {
+        RequirementConversation conversation = activeConversation();
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        stubLlmRound("{\"type\":\"question\",\"message\":\"验收标准是什么？\"}");
+
+        clarifyService.retryRound(CONV_ID);
+
+        assertThat(conversation.getRoundCount()).isEqualTo(1);
+        verify(messageService, never()).addMessage(eq(CONV_ID), eq("user"), anyString());
+        verify(messageService).addMessage(CONV_ID, "assistant", "验收标准是什么？");
+    }
+
+    @Test
+    @DisplayName("retry：最后一条已有助手回复时拒绝重试")
+    void shouldRejectRetryWhenLastMessageAnswered() {
+        when(conversationService.getById(CONV_ID)).thenReturn(activeConversation());
+        when(messageService.listByConversation(CONV_ID)).thenReturn(List.of(
+                message("user", "做一个报表", 1),
+                message("assistant", "目标是什么？", 2)));
+
+        assertThatThrownBy(() -> clarifyService.retryRound(CONV_ID))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("无需重试");
+        verify(platformAgentExecutionService, never())
+                .executeSync(any(Agent.class), any(AgentTask.class));
     }
 
     // ══════════════════════════════════════════════════════════════

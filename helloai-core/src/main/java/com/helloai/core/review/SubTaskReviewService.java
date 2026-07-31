@@ -16,6 +16,7 @@ import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.shared.event.SubTaskSubmittedForReviewEvent;
+import com.helloai.core.shared.util.LlmJsonSanitizer;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.ReviewService;
 import com.helloai.core.task.service.SubTaskService;
@@ -315,7 +316,7 @@ public class SubTaskReviewService {
         if (rawOutput == null || rawOutput.isBlank()) {
             return null;
         }
-        String cleaned = stripToJsonObject(rawOutput);
+        String cleaned = LlmJsonSanitizer.fixInvalidEscapes(stripToJsonObject(rawOutput));
         try {
             ReviewVerdict verdict = objectMapper.readValue(cleaned, ReviewVerdict.class);
             if (verdict == null || verdict.getPass() == null) {

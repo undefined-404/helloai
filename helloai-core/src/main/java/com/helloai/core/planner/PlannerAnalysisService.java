@@ -4,7 +4,6 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
-import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskStatus;
@@ -12,8 +11,7 @@ import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.execution.PlatformAgentExecutionService;
-import com.helloai.core.agent.executor.AgentSelector;
-import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.shared.util.SubTaskDependencyOrder;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.service.SubTaskDispatchService;
@@ -73,8 +71,7 @@ public class PlannerAnalysisService {
 
     private final TaskService taskService;
     private final SubTaskService subTaskService;
-    private final AgentService agentService;
-    private final AgentSelector agentSelector;
+    private final PlannerAgentPicker plannerAgentPicker;
     private final PlatformAgentExecutionService platformAgentExecutionService;
     private final TaskTimelineService taskTimelineService;
     private final SubTaskDispatchService subTaskDispatchService;
@@ -123,7 +120,7 @@ public class PlannerAnalysisService {
         }
 
         try {
-            Agent planner = pickPlannerAgent();
+            Agent planner = plannerAgentPicker.pickForTask(taskId);
             String prompt = renderPrompt(task);
 
             AgentTask agentTask = AgentTask.builder()
@@ -262,21 +259,6 @@ public class PlannerAnalysisService {
     // ══════════════════════════════════════════════════════════════
     //  内部实现
     // ══════════════════════════════════════════════════════════════
-
-    /** 选平台内 API_KEY_LLM Planner Agent；无可用时报错并附操作指引。 */
-    private Agent pickPlannerAgent() {
-        Agent preferred = agentSelector.pickPreferred(AgentRole.PLANNER);
-        if (preferred != null && preferred.getAccessType() == AgentAccessType.API_KEY_LLM) {
-            return preferred;
-        }
-        // 首选非平台内执行面时，从同角色候选中过滤 API_KEY_LLM
-        return agentService.listByRole(AgentRole.PLANNER).stream()
-                .filter(a -> a.getAccessType() == AgentAccessType.API_KEY_LLM)
-                .findFirst()
-                .orElseThrow(() -> new BizException(
-                        "无可用的平台内 Planner Agent（需要 role=PLANNER 且 accessType=API_KEY_LLM）；"
-                                + "请先在 Agent 管理中注册，或改用外部 Planner Agent 手工创建子任务"));
-    }
 
     /** 加载 classpath 模板并替换占位符。 */
     private String renderPrompt(Task task) {
@@ -467,65 +449,11 @@ public class PlannerAnalysisService {
      * 依赖项总在其依赖之后，使草案审阅与分发呈正序（1→N，dependsOn 恒指向更靠前的行），
      * 符合多数人的阅读与执行习惯。
      *
-     * <p>dependsOn 存真实 sub_task id，仅按本批次内部依赖排序，批外/悬挂 id 视为无约束；
-     * 同层节点保持入参原有相对顺序。decompose 阶段已做环检测，这里对残留成环兜底：
-     * 无法出队的节点按原顺序追加到末尾，绝不丢条目。</p>
+     * <p>实现已提炼为公共工具 {@link SubTaskDependencyOrder}（交付物 zip
+     * 聚合复用同一排序语义），本方法保留为委托入口，行为不变。</p>
      */
     private List<SubTask> orderByDependency(List<SubTask> drafts) {
-        int n = drafts.size();
-        if (n <= 1) {
-            return drafts;
-        }
-        Map<Long, Integer> indexById = new HashMap<>();
-        for (int i = 0; i < n; i++) {
-            indexById.put(drafts.get(i).getId(), i);
-        }
-        int[] inDegree = new int[n];
-        List<List<Integer>> adjacency = new ArrayList<>(n);
-        for (int i = 0; i < n; i++) {
-            adjacency.add(new ArrayList<>());
-        }
-        for (int i = 0; i < n; i++) {
-            List<Long> deps = drafts.get(i).getDependsOn();
-            if (deps == null) {
-                continue;
-            }
-            for (Long depId : deps) {
-                Integer depIdx = indexById.get(depId); // 仅统计本批次内部依赖
-                if (depIdx != null) {
-                    adjacency.get(depIdx).add(i); // 前置 → 后继
-                    inDegree[i]++;
-                }
-            }
-        }
-        // 稳定 Kahn：按原下标升序将入度为 0 的节点入队
-        Deque<Integer> queue = new ArrayDeque<>();
-        for (int i = 0; i < n; i++) {
-            if (inDegree[i] == 0) {
-                queue.add(i);
-            }
-        }
-        List<SubTask> ordered = new ArrayList<>(n);
-        boolean[] emitted = new boolean[n];
-        while (!queue.isEmpty()) {
-            int node = queue.poll();
-            ordered.add(drafts.get(node));
-            emitted[node] = true;
-            for (int next : adjacency.get(node)) {
-                if (--inDegree[next] == 0) {
-                    queue.add(next);
-                }
-            }
-        }
-        // 兜底：残留（异常成环/脏依赖）按原顺序补齐，绝不丢条目
-        if (ordered.size() < n) {
-            for (int i = 0; i < n; i++) {
-                if (!emitted[i]) {
-                    ordered.add(drafts.get(i));
-                }
-            }
-        }
-        return ordered;
+        return SubTaskDependencyOrder.orderByDependency(drafts);
     }
 
     /** 失败回退：仅当 Task 仍处 PLANNING 时回退 PENDING（避免覆盖并发确认结果）。 */

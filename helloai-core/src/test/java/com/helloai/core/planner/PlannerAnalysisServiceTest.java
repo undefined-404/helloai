@@ -13,8 +13,6 @@ import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.execution.PlatformAgentExecutionService;
-import com.helloai.core.agent.executor.AgentSelector;
-import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.service.SubTaskDispatchService;
@@ -63,10 +61,7 @@ class PlannerAnalysisServiceTest {
     private SubTaskService subTaskService;
 
     @Mock
-    private AgentService agentService;
-
-    @Mock
-    private AgentSelector agentSelector;
+    private PlannerAgentPicker plannerAgentPicker;
 
     @Mock
     private PlatformAgentExecutionService platformAgentExecutionService;
@@ -90,7 +85,7 @@ class PlannerAnalysisServiceTest {
     void setUp() {
         // ObjectMapper 用真实实例（JSON 解析是被测逻辑本身，不 mock）
         plannerAnalysisService = new PlannerAnalysisService(
-                taskService, subTaskService, agentService, agentSelector,
+                taskService, subTaskService, plannerAgentPicker,
                 platformAgentExecutionService, taskTimelineService,
                 subTaskDispatchService, new ObjectMapper());
 
@@ -151,7 +146,7 @@ class PlannerAnalysisServiceTest {
     @DisplayName("正常拆解：markdown fence 容错解析，草案落库 PENDING_PLAN_REVIEW 并记录 timeline")
     void shouldDecomposeAndPersistDrafts() {
         when(taskService.getById(TASK_ID)).thenReturn(pendingTask());
-        when(agentSelector.pickPreferred(AgentRole.PLANNER)).thenReturn(llmPlanner());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
                         ```json
@@ -182,26 +177,6 @@ class PlannerAnalysisServiceTest {
                 eq(AgentRole.PLANNER), eq(9L), anyMap());
     }
 
-    @Test
-    @DisplayName("首选 Agent 非 API_KEY_LLM 时，从同角色候选中过滤平台内执行面")
-    void shouldFallbackToApiKeyLlmCandidateWhenPreferredIsExternal() {
-        Agent external = new Agent();
-        external.setId(8L);
-        external.setName("planner-cli");
-        external.setAccessType(AgentAccessType.CLI_CLIENT);
-
-        when(taskService.getById(TASK_ID)).thenReturn(pendingTask());
-        when(agentSelector.pickPreferred(AgentRole.PLANNER)).thenReturn(external);
-        when(agentService.listByRole(AgentRole.PLANNER)).thenReturn(List.of(external, llmPlanner()));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
-                AgentResult.success("[{\"title\":\"子任务A\"}]", "stop", "llm", 10));
-
-        List<SubTask> drafts = plannerAnalysisService.decompose(TASK_ID);
-
-        assertThat(drafts).hasSize(1);
-        assertThat(drafts.get(0).getContext()).containsEntry("plannerAgentId", 9L);
-    }
-
     // ══════════════════════════════════════════════════════════════
     //  decompose：失败与拒绝路径
     // ══════════════════════════════════════════════════════════════
@@ -210,7 +185,7 @@ class PlannerAnalysisServiceTest {
     @DisplayName("JSON 解析失败：Task 回退 PENDING 并记录 task_plan_failed，不落库")
     void shouldRollbackWhenLlmOutputIsNotJson() {
         when(taskService.getById(TASK_ID)).thenReturn(pendingTask());
-        when(agentSelector.pickPreferred(AgentRole.PLANNER)).thenReturn(llmPlanner());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
                 AgentResult.success("抱歉，我无法完成拆解。", "stop", "llm", 10));
 
@@ -230,7 +205,7 @@ class PlannerAnalysisServiceTest {
     @DisplayName("LLM 调用失败：抛 BizException 并回退")
     void shouldRollbackWhenLlmCallFails() {
         when(taskService.getById(TASK_ID)).thenReturn(pendingTask());
-        when(agentSelector.pickPreferred(AgentRole.PLANNER)).thenReturn(llmPlanner());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
                 AgentResult.failure("provider timeout", "error", "llm"));
 
@@ -280,11 +255,12 @@ class PlannerAnalysisServiceTest {
     }
 
     @Test
-    @DisplayName("无 API_KEY_LLM Planner Agent 时报错并回退")
+    @DisplayName("选型器无可用 Planner 时报错并回退")
     void shouldFailWhenNoPlatformPlannerAgent() {
         when(taskService.getById(TASK_ID)).thenReturn(pendingTask());
-        when(agentSelector.pickPreferred(AgentRole.PLANNER)).thenReturn(null);
-        when(agentService.listByRole(AgentRole.PLANNER)).thenReturn(List.of());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenThrow(new BizException(
+                "无可用的平台内 Planner Agent（需要 role=PLANNER 且 accessType=API_KEY_LLM）；"
+                        + "请先在 Agent 管理中注册，或改用外部 Planner Agent 手工创建子任务"));
 
         assertThatThrownBy(() -> plannerAnalysisService.decompose(TASK_ID))
                 .isInstanceOf(BizException.class)
