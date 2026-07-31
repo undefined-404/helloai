@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.helloai.api.dto.PageResult;
 import com.helloai.api.dto.task.CreateTaskRequest;
+import com.helloai.api.dto.task.TaskFinalReportResponse;
 import com.helloai.api.dto.task.TaskRelatedCounts;
 import com.helloai.api.dto.task.UpdateTaskStatusRequest;
 import com.helloai.common.base.R;
@@ -15,12 +16,20 @@ import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.task.service.TaskDeliverableService;
+import com.helloai.core.task.service.TaskFinalReportService;
 import com.helloai.core.task.service.TaskService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 
@@ -34,6 +43,8 @@ public class TaskController {
     private final AgentService agentService;
     private final AgentInboxService agentInboxService;
     private final PlannerAnalysisService plannerAnalysisService;
+    private final TaskDeliverableService taskDeliverableService;
+    private final TaskFinalReportService taskFinalReportService;
 
     @PostMapping
     public R<Task> create(@Valid @RequestBody CreateTaskRequest req) {
@@ -142,6 +153,52 @@ public class TaskController {
     public R<Map<String, Object>> rejectPlan(@PathVariable("id") Long id) {
         int cancelled = plannerAnalysisService.rejectPlan(id);
         return R.ok(Map.of("taskId", id, "cancelledCount", cancelled));
+    }
+
+    // ══════════════════════════════════════════════════════════
+    //  交付物下载（实时聚合 zip，聚合编排全在 TaskDeliverableService）
+    // ══════════════════════════════════════════════════════════
+
+    @GetMapping("/{id}/deliverables/download")
+    public ResponseEntity<byte[]> downloadDeliverables(@PathVariable("id") Long id) {
+        TaskDeliverableService.DeliverablePackage pkg = taskDeliverableService.buildZip(id);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentDisposition(ContentDisposition.attachment()
+                .filename(pkg.fileName(), StandardCharsets.UTF_8)
+                .build());
+        headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+        return new ResponseEntity<>(pkg.content(), headers, HttpStatus.OK);
+    }
+
+    // ══════════════════════════════════════════════════════════
+    //  最终整合报告（Planner 整合全部子任务产出，编排全在 TaskFinalReportService）
+    // ══════════════════════════════════════════════════════════
+
+    @GetMapping("/{id}/final-report")
+    public R<TaskFinalReportResponse> finalReport(@PathVariable("id") Long id) {
+        Task task = taskService.getById(id);
+        if (task == null) {
+            return R.fail(404, "任务不存在: " + id);
+        }
+        return R.ok(toFinalReportResponse(task));
+    }
+
+    @PostMapping("/{id}/final-report")
+    public R<TaskFinalReportResponse> generateFinalReport(@PathVariable("id") Long id) {
+        return R.ok(toFinalReportResponse(taskFinalReportService.generate(id)));
+    }
+
+    private TaskFinalReportResponse toFinalReportResponse(Task task) {
+        TaskFinalReportResponse vo = new TaskFinalReportResponse();
+        vo.setTaskId(task.getId());
+        vo.setContent(task.getFinalReport());
+        vo.setAgentId(task.getFinalReportAgentId());
+        vo.setGeneratedAt(task.getFinalReportTime());
+        if (task.getFinalReportAgentId() != null) {
+            Agent agent = agentService.getById(task.getFinalReportAgentId());
+            vo.setAgentName(agent != null ? agent.getName() : null);
+        }
+        return vo;
     }
 
     // ══════════════════════════════════════════════════════════

@@ -27,6 +27,29 @@
       </el-descriptions>
     </el-card>
 
+    <!-- 方案 2：产出附件（执行产出物化后可单独下载；无附件时不展示卡片） -->
+    <el-card v-if="item && attachments.length" style="margin-top:16px">
+      <template #header>
+        <div class="card-header">
+          <span>产出附件</span>
+          <span style="font-size:12px;color:var(--ha-muted)">共 {{ attachments.length }} 个</span>
+        </div>
+      </template>
+      <div class="att-list">
+        <div v-for="att in attachments" :key="String(att.id)" class="att-item">
+          <span class="att-name" :title="att.fileName">{{ att.fileName }}</span>
+          <span class="att-meta">{{ fmtSize(att.fileSize) }} · {{ fmtTime(att.createTime) }}</span>
+          <el-button
+            link
+            size="small"
+            type="primary"
+            :loading="downloadingAttId === att.id"
+            @click="downloadAttachment(att)"
+          >下载</el-button>
+        </div>
+      </div>
+    </el-card>
+
     <!-- V28: 执行对话流（执行产出全文 + 核验 Prompt/分析原文） -->
     <el-card v-if="item" style="margin-top:16px">
       <template #header>
@@ -106,11 +129,13 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { subTaskApi } from '@/api/subTask'
 import { agentApi } from '@/api/agent'
+import { attachmentApi } from '@/api/attachment'
+import { saveBlobResponse } from '@/utils/download'
 import MarkdownView from '@/components/MarkdownView.vue'
 import ReviewVerdictView from '@/components/ReviewVerdictView.vue'
 import { SUB_TASK_STATUS_MAP, SCORE_GRADE_MAP } from '@/types'
 import { fmtTime } from '@/utils/tableConfig'
-import type { SubTask, TaskTimelineItem, ConversationMessageItem } from '@/types'
+import type { SubTask, TaskTimelineItem, ConversationMessageItem, Attachment, LongId } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -314,11 +339,40 @@ async function loadConversation(id: string) {
   }
 }
 
+// ── 方案 2：产出附件列表 + 单附件下载 ──
+const attachments = ref<Attachment[]>([])
+const downloadingAttId = ref<LongId | null>(null)
+
+async function loadAttachments(id: string) {
+  try {
+    attachments.value = await attachmentApi.list(id)
+  } catch (e) {
+    // 附件拉取失败不影响主流程
+  }
+}
+
+function fmtSize(bytes: number | null | undefined): string {
+  if (bytes == null || bytes < 0) return '-'
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+}
+
+async function downloadAttachment(att: Attachment) {
+  downloadingAttId.value = att.id
+  try {
+    const resp = await attachmentApi.download(att.id)
+    saveBlobResponse(resp, att.fileName || 'attachment')
+  } catch { /* 拦截器已弹错 */ }
+  finally { downloadingAttId.value = null }
+}
+
 async function pollOnce() {
   const id = String(route.params.id)
   const fresh = await loadDetail(id)
   await loadTimeline(id)
   await loadConversation(id)
+  await loadAttachments(id)
   if (fresh && TERMINAL_STATUSES.includes(fresh.status)) {
     stopPolling()
   }
@@ -347,6 +401,7 @@ onMounted(async () => {
     await loadDetail(id)
     await loadTimeline(id)
     await loadConversation(id)
+    await loadAttachments(id)
     // 进入页面时启动 5s 轮询；进入终态后停止
     if (item.value && !TERMINAL_STATUSES.includes(item.value.status)) {
       startPolling()
@@ -379,6 +434,19 @@ onBeforeUnmount(() => {
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* 方案 2：产出附件 */
+.att-list { display: flex; flex-direction: column; gap: 8px; }
+.att-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--ha-border, rgba(255,255,255,0.08));
+  border-radius: 6px;
+}
+.att-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.att-meta { color: var(--ha-muted); font-size: 12px; white-space: nowrap; }
 
 /* V28: 执行对话流 */
 .conv-list { display: flex; flex-direction: column; gap: 12px; }

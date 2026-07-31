@@ -23,6 +23,11 @@ instance.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 
 instance.interceptors.response.use(
   (response: AxiosResponse<R<any>>) => {
+    // blob 下载（交付物 zip / 附件流式）没有 R 包裹体，原样放行完整 response
+    // （调用方需读 headers 的 Content-Disposition 解析文件名）
+    if (response.config.responseType === 'blob') {
+      return response as any
+    }
     const res = response.data
     if (res.code === 200) {
       return res.data

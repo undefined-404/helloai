@@ -46,6 +46,12 @@ class ExecutionResultHandlerTest {
     @Mock
     private org.springframework.context.ApplicationEventPublisher applicationEventPublisher;
 
+    @Mock
+    private com.helloai.core.agent.service.ConversationService conversationService;
+
+    @Mock
+    private com.helloai.core.agent.output.ExecutionArtifactService executionArtifactService;
+
     @InjectMocks
     private ExecutionResultHandler executionResultHandler;
 

@@ -19,6 +19,8 @@ public class SubTaskResponse {
     private String priority;
     private SubTaskStatus status;
     private Long assignedAgent;
+    /** Agent 名称冗余字段（列表展示负责人用，由 Controller 批量回填） */
+    private String assignedAgentName;
     private String content;
     private Integer reworkCount;
     /** 依赖的子任务 id 列表（V27 新增，同 Task 内；空列表=无依赖） */

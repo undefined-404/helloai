@@ -51,8 +51,13 @@ public class AgentProviderProperties {
         private String apiKey;
         /** HTTP 连接超时毫秒数，默认 5000。 */
         private int connectTimeoutMs = 5000;
-        /** HTTP 读取超时毫秒数，默认 60000。 */
-        private int readTimeoutMs = 60000;
+        /**
+         * HTTP 读取超时毫秒数，默认 180000（3 分钟）。
+         * 按最重 LLM 场景（整合报告、推理模型长输出）对齐：旧默认 60s 实测被
+         * MiniMax-M2.5 生成整合报告时读超时掉线（SocketTimeoutException 被 Spring
+         * 误报为 content-type application/octet-stream 解析失败）。
+         */
+        private int readTimeoutMs = 180000;
 
         /** 是否已配置平台级 API Key。 */
         public boolean hasApiKey() {

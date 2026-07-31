@@ -5,6 +5,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.shared.event.SubTaskCompletedEvent;
+import com.helloai.core.shared.event.TaskAutoCompletedEvent;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.mapper.TaskMapper;
@@ -13,6 +14,7 @@ import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
@@ -44,6 +46,7 @@ public class SubTaskCompletionListener {
     private final SubTaskDispatchService subTaskDispatchService;
     private final TaskMapper taskMapper;
     private final TaskTimelineService taskTimelineService;
+    private final ApplicationEventPublisher applicationEventPublisher;
 
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
@@ -122,6 +125,9 @@ public class SubTaskCompletionListener {
             taskTimelineService.recordEvent(taskId, null, "task_auto_completed",
                     AgentRole.SYSTEM, null, Map.of("trigger", "all_sub_tasks_done"));
             log.info("Task 自动收尾完成: taskId={}", taskId);
+            // V32：CAS 赢家唯一，恰好保证整合报告只被触发一次。此处已无事务上下文，
+            // 消费方（TaskFinalReportService）用普通 @EventListener + @Async 承接。
+            applicationEventPublisher.publishEvent(new TaskAutoCompletedEvent(taskId));
         }
     }
 }

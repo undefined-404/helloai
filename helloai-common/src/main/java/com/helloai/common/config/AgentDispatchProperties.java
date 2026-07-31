@@ -84,6 +84,15 @@ public class AgentDispatchProperties {
      */
     private int autoReviewMaxRework = 3;
 
+    /**
+     * V32：任务自动收口（全部子任务 DONE/CANCELLED → Task DONE）后，
+     * 是否异步触发 Planner 生成最终整合报告。
+     *
+     * <p>关闭后仍可通过 {@code POST /api/tasks/{id}/final-report} 手动生成。
+     * 默认 true。</p>
+     */
+    private boolean autoFinalReportEnabled = true;
+
     // 注：原 heartbeatFreshMinutes 字段（v2.6 §4.1 2026-07-20）已迁移至
     //     AgentHealthProperties.offlineMinutes，作为 Selector / Reconcile / SQL 回退候选
     //     共用的单一心跳阈值来源。详见 com.helloai.common.config.AgentHealthProperties。

@@ -7,6 +7,7 @@ import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.shared.event.SubTaskSubmittedForReviewEvent;
+import com.helloai.core.agent.output.ExecutionArtifactService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.service.ExternalAgentFailureTracker;
@@ -44,6 +45,7 @@ public class ExecutionResultHandler {
     private final AgentService agentService;
     private final ApplicationEventPublisher applicationEventPublisher;
     private final ConversationService conversationService;
+    private final ExecutionArtifactService executionArtifactService;
 
     @Transactional(rollbackFor = Exception.class)
     public void handleSuccess(Long subTaskId, Long agentId, AgentResult result) {
@@ -188,6 +190,22 @@ public class ExecutionResultHandler {
             // 核验 LLM 调用不阻塞结果回报事务；是否启用由监听侧按配置判定
             applicationEventPublisher.publishEvent(
                     new SubTaskSubmittedForReviewEvent(report.getSubTaskId(), report.getAgentId()));
+            // 方案2 产出物化：仿 failureTracker 的 afterCommit 范式挂主事务提交后执行——
+            // 物化内部会调 attachmentService.register（独立事务）与本地磁盘 IO，
+            // 留在主事务内既拉长事务又有锁风险；best-effort，失败不影响 REVIEW 推进
+            final SubTask materializeTarget = subTask;
+            final Long materializeAgentId = report.getAgentId();
+            final String materializeOutput = report.getOutput();
+            if (TransactionSynchronizationManager.isSynchronizationActive()) {
+                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        executionArtifactService.materialize(materializeTarget, materializeAgentId, materializeOutput);
+                    }
+                });
+            } else {
+                executionArtifactService.materialize(materializeTarget, materializeAgentId, materializeOutput);
+            }
         } else {
             subTaskService.block(report.getSubTaskId());
             taskTimelineService.recordEvent(

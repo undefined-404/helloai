@@ -1,5 +1,6 @@
 import request from './request'
-import type { Task, TaskRelatedCounts, SubTask, LongId } from '@/types'
+import type { AxiosResponse } from 'axios'
+import type { Task, TaskRelatedCounts, TaskFinalReport, SubTask, LongId } from '@/types'
 
 export const taskApi = {
   list(params?: { status?: string }) {
@@ -45,5 +46,22 @@ export const taskApi = {
   // 拒绝草案: 草案翻 CANCELLED，Task 回 PENDING 可重拆
   rejectPlan(id: LongId) {
     return request.post<any, { taskId: string; cancelledCount: number }>(`/tasks/${id}/plan/reject`)
+  },
+  // 交付物 zip 下载: 实时聚合子任务产出（概览 + 拓扑序产出文件），
+  // blob 响应由拦截器放行返回完整 response 供解析文件名
+  downloadDeliverables(id: LongId) {
+    return request.get<any, AxiosResponse<Blob>>(`/tasks/${id}/deliverables/download`, {
+      responseType: 'blob',
+      timeout: 120_000
+    })
+  },
+  // V32 最终整合报告: 读取 task.final_report 专列（content=null 表示尚未生成）
+  getFinalReport(id: LongId) {
+    return request.get<any, TaskFinalReport>(`/tasks/${id}/final-report`)
+  },
+  // 生成/重新生成整合报告: Planner 整合全部 DONE 子任务产出，仅 DONE 任务可调；
+  // 后端 LLM 读超时 180s（provider read-timeout-ms），前端 240s 留出降档重试与传输余量
+  generateFinalReport(id: LongId) {
+    return request.post<any, TaskFinalReport>(`/tasks/${id}/final-report`, undefined, { timeout: 240_000 })
   }
 }

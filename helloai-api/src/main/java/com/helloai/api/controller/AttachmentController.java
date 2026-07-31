@@ -5,7 +5,10 @@ import com.helloai.core.system.entity.Attachment;
 import com.helloai.core.system.service.AttachmentService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -14,10 +17,11 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 /**
- * 附件 Controller — 列表 / 详情 / 下载重定向。
+ * 附件 Controller — 列表 / 详情 / 下载。
  *
  * <p>Mapper 调用已全部下沉至 {@link AttachmentService}；
  * 缺失值与"附件不存在 / 存储地址不可用"两类失败统一由 Service
@@ -48,10 +52,22 @@ public class AttachmentController {
     }
 
     /**
-     * 附件下载 — 302 重定向到对象存储 URL。
+     * 附件下载：方案2 本地物化产物（local://）由平台读取内容流式返回
+     * （Content-Disposition 用 RFC 5987 filename* 承载中文文件名）；
+     * 外部对象存储地址仍保持 302 重定向。
      */
     @GetMapping("/{id}/download")
-    public ResponseEntity<Void> download(@PathVariable("id") Long id) {
+    public ResponseEntity<byte[]> download(@PathVariable("id") Long id) {
+        Attachment attachment = attachmentService.getByIdRequired(id);
+        if (attachmentService.isContentLoadable(attachment)) {
+            byte[] content = attachmentService.loadContent(id);
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentDisposition(ContentDisposition.attachment()
+                    .filename(attachment.getFileName(), StandardCharsets.UTF_8)
+                    .build());
+            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+            return new ResponseEntity<>(content, headers, HttpStatus.OK);
+        }
         String downloadUrl = attachmentService.getStorageUrlRequired(id);
         return ResponseEntity.status(HttpStatus.FOUND)
                 .location(URI.create(downloadUrl))

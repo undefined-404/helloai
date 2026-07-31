@@ -26,10 +26,16 @@
         </template>
       </el-alert>
       <el-table :data="list" border stripe v-loading="loading" style="width:100%">
-        <el-table-column prop="title" label="标题" min-width="200" show-overflow-tooltip />
+        <el-table-column label="标题" min-width="200" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span class="link-cell" :title="row.title" @click="router.push('/sub-tasks/' + row.id)">{{ row.title }}</span>
+          </template>
+        </el-table-column>
         <!-- 未按主任务过滤时展示归属任务，避免与顶部信息条重复 -->
         <el-table-column v-if="!taskId" label="所属任务" min-width="160" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.taskTitle || '-' }}</template>
+          <template #default="{ row }">
+            <span class="link-cell" @click="goParentTask(row)">{{ row.taskTitle || '-' }}</span>
+          </template>
         </el-table-column>
         <el-table-column label="状态" width="100">
           <template #default="{ row }">
@@ -183,6 +189,11 @@ function loadPage(page: number) { load(page) }
 
 function clearTaskFilter() { router.replace('/sub-tasks') }
 
+// 所属任务点击 → 跳转任务管理页并筛选该主任务
+function goParentTask(row: SubTask) {
+  if (row.taskId) router.push('/tasks?taskId=' + row.taskId)
+}
+
 // 同页面内 taskId 变化（如清除筛选 / 从不同主任务进入）时联动刷新
 watch(taskId, () => { loadParentTask(); load() })
 // 同页面内 status query 变化（子任务菜单 ↔ 死信池菜单切换）时同步筛选并刷新
@@ -285,4 +296,5 @@ onMounted(() => {
 .parent-task-bar { margin-bottom: 12px; }
 .parent-task-bar :deep(.el-alert__title) { display: flex; align-items: center; justify-content: space-between; width: 100%; }
 .parent-task-title { display: flex; align-items: center; }
+.link-cell { color: var(--el-color-primary); cursor: pointer; }
 </style>

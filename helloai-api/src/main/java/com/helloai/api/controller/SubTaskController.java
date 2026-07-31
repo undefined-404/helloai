@@ -14,12 +14,14 @@ import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.ExecutionCommand;
+import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.ConversationMessage;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.entity.TaskTimeline;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
+import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.command.ExecutionCommandService;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
@@ -47,6 +49,7 @@ public class SubTaskController {
 
     private final SubTaskService subTaskService;
     private final TaskService taskService;
+    private final AgentService agentService;
     private final SubTaskDispatchService subTaskDispatchService;
     private final ExecutionCommandService executionCommandService;
     private final AgentExecutionRecordService agentExecutionRecordService;
@@ -177,6 +180,7 @@ public class SubTaskController {
                 .list(taskId, statusFilter, assignedAgent, page, pageSize)
                 .convert(this::toResponse);
         attachTaskTitles(result.getRecords());
+        attachAgentNames(result.getRecords());
         if (page == null || page <= 0) {
             return R.ok(result.getRecords());
         }
@@ -189,6 +193,7 @@ public class SubTaskController {
         if (subTask == null) return R.fail("子任务不存在");
         SubTaskResponse response = toResponse(subTask);
         attachTaskTitles(List.of(response));
+        attachAgentNames(List.of(response));
         return R.ok(response);
     }
 
@@ -342,6 +347,8 @@ public class SubTaskController {
                 .eq(SubTask::getAssignedAgentId, agentId)
                 .orderByDesc(SubTask::getCreateTime);
         List<SubTaskResponse> list = subTaskService.list(wrapper).stream().map(this::toResponse).toList();
+        attachTaskTitles(list);
+        attachAgentNames(list);
         return R.ok(list);
     }
 
@@ -359,6 +366,20 @@ public class SubTaskController {
             titleMap.put(task.getId(), task.getTitle());
         }
         responses.forEach(r -> r.setTaskTitle(titleMap.get(r.getTaskId())));
+    }
+
+    /** 批量回填 Agent 名称（一次 listByIds 查询，避免逐条 N+1）。 */
+    private void attachAgentNames(List<SubTaskResponse> responses) {
+        Set<Long> agentIds = responses.stream()
+                .map(SubTaskResponse::getAssignedAgent)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        if (agentIds.isEmpty()) {
+            return;
+        }
+        Map<Long, String> nameMap = new HashMap<>();
+        agentService.listByIds(agentIds).forEach(a -> nameMap.put(a.getId(), a.getName()));
+        responses.forEach(r -> r.setAssignedAgentName(nameMap.get(r.getAssignedAgent())));
     }
 
     private SubTaskResponse toResponse(SubTask subTask) {
