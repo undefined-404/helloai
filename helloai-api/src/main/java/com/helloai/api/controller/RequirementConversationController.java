@@ -37,11 +37,11 @@ public class RequirementConversationController {
         return R.ok(requirementClarifyService.listPlannerOptions());
     }
 
-    /** 追加一条用户消息并走一轮 LLM 澄清。 */
+    /** 追加一条用户消息并走一轮 LLM 澄清（可附结构化选项回答快照）。 */
     @PostMapping("/{id}/messages")
     public R<ClarifyConversationDetail> sendMessage(@PathVariable Long id,
                                                     @Valid @RequestBody ClarifyMessageRequest req) {
-        return R.ok(requirementClarifyService.sendMessage(id, req.getMessage()));
+        return R.ok(requirementClarifyService.sendMessage(id, req.getMessage(), req.getSelectedOptions()));
     }
 
     /** 重试上一轮 LLM（仅当最后一条是用户消息，即上轮 LLM 失败时可用）。 */

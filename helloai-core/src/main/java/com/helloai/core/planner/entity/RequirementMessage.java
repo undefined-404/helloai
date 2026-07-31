@@ -24,4 +24,11 @@ public class RequirementMessage extends BaseEntity {
 
     /** 会话内序号（从 1 递增） */
     private Integer seq;
+
+    /**
+     * 结构化附加数据（JSON 文本，V33）。一列两用：
+     * assistant 行存结构化问题 {@code {"mode","progress","questions":[...]}}，
+     * user 行存选择快照 {@code {"selections":[...]}}；纯文本消息为 NULL。
+     */
+    private String payload;
 }

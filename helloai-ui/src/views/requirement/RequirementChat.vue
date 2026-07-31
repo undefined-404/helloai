@@ -35,15 +35,43 @@
 
         <!-- 右栏：气泡流 + 输入框 -->
         <div class="chat-main">
+          <!-- V33 澄清进度条（LLM 自评，仅展示不做业务分支） -->
+          <div v-if="activeId != null && clarifyProgress != null" class="clarify-progress">
+            <span class="progress-label">澄清进度</span>
+            <el-progress
+              class="progress-bar"
+              :percentage="clarifyProgress"
+              :stroke-width="8"
+              :status="clarifyProgress >= 100 ? 'success' : undefined"
+            />
+          </div>
           <div ref="streamEl" class="msg-stream">
             <template v-if="detail">
-              <div
-                v-for="msg in detail.messages"
-                :key="String(msg.id)"
-                class="msg-row"
-                :class="msg.role === 'user' ? 'from-user' : 'from-assistant'"
-              >
-                <div class="msg-bubble">{{ msg.content }}</div>
+              <template v-for="row in renderMessages" :key="String(row.msg.id)">
+                <!-- 结构化追问：引导语气泡（问题正文由卡片呈现，不重复展示） -->
+                <div v-if="row.intro" class="msg-row" :class="row.msg.role === 'user' ? 'from-user' : 'from-assistant'">
+                  <div class="msg-bubble">{{ row.intro }}</div>
+                </div>
+                <!-- V33 历史结构化追问：只读卡片回显当时的选项与选择 -->
+                <div v-if="row.structured" class="msg-row from-assistant">
+                  <StructuredQuestionCard
+                    class="sq-wrap"
+                    :questions="row.structured.questions!"
+                    readonly
+                    :selections="row.selections"
+                  />
+                </div>
+              </template>
+              <!-- V33 结构化选项卡片：仅最后一条 assistant 结构化追问且会话 ACTIVE 时可交互 -->
+              <div v-if="activeStructured" class="msg-row from-assistant">
+                <StructuredQuestionCard
+                  :key="String(lastMessageId)"
+                  class="sq-wrap"
+                  :questions="activeStructured.questions!"
+                  :disabled="sending || finalizing"
+                  :loading="sending"
+                  @submit="handleStructuredSubmit"
+                />
               </div>
             </template>
             <div v-else class="chat-placeholder">
@@ -164,7 +192,8 @@ import { Loading } from '@element-plus/icons-vue'
 import { clarifyApi } from '@/api/clarify'
 import { taskApi } from '@/api/task'
 import { fmtTime } from '@/utils/tableConfig'
-import type { ClarifyConversationDetail, PlannerOption, RequirementConversation, RequirementConversationStatus, LongId } from '@/types'
+import StructuredQuestionCard from './StructuredQuestionCard.vue'
+import type { ClarifyAssistantPayload, ClarifyConversationDetail, ClarifySelection, PlannerOption, RequirementConversation, RequirementConversationStatus, RequirementMessage, LongId } from '@/types'
 
 const router = useRouter()
 
@@ -197,6 +226,82 @@ const pinnedPlannerName = computed(() => {
   if (id == null) return ''
   const opt = plannerOptions.value.find(o => String(o.id) === String(id))
   return opt ? opt.name : `Agent#${id}`
+})
+
+// ── V33 结构化澄清：payload 解析 + 卡片/进度条派生 ──
+
+function assistantPayloadOf(msg: RequirementMessage): ClarifyAssistantPayload | null {
+  if (msg.role !== 'assistant' || !msg.payload) return null
+  try {
+    const parsed = JSON.parse(msg.payload)
+    return parsed && typeof parsed === 'object' ? parsed as ClarifyAssistantPayload : null
+  } catch { return null }
+}
+
+const lastMessageId = computed(() => {
+  const msgs = detail.value?.messages ?? []
+  return msgs.length ? msgs[msgs.length - 1].id : ''
+})
+
+// 可交互的结构化追问：会话 ACTIVE 且最后一条消息是 assistant 的 structured payload
+const activeStructured = computed(() => {
+  if (conversation.value?.status !== 'ACTIVE' || sending.value) return null
+  const msgs = detail.value?.messages ?? []
+  if (!msgs.length) return null
+  const p = assistantPayloadOf(msgs[msgs.length - 1])
+  return p?.mode === 'structured' && p.questions?.length ? p : null
+})
+
+// user 消息 payload：{selections:[...]} 选择快照；非选项回答/解析失败返回 null
+function userSelectionsOf(msg: RequirementMessage): ClarifySelection[] | null {
+  if (msg.role !== 'user' || !msg.payload) return null
+  try {
+    const parsed = JSON.parse(msg.payload)
+    return Array.isArray(parsed?.selections) ? parsed.selections as ClarifySelection[] : null
+  } catch { return null }
+}
+
+// 结构化 assistant content 由后端合成（引导语 + \n1. 问题列表），卡片呈现问题时气泡只留引导语
+function introOf(content: string) {
+  const idx = content.search(/(^|\n)1\. /)
+  return idx === -1 ? content : content.slice(0, idx).trim()
+}
+
+// 消息流渲染行：结构化追问→引导语气泡 + 只读卡片（选择快照取下一条 user 消息）；
+// 最后一条 ACTIVE 结构化追问由可交互卡片承接，此处不重复出只读卡；
+// 选择已由上方只读卡高亮回显的 user 消息不再重复出文本气泡
+const renderMessages = computed(() => {
+  const msgs = detail.value?.messages ?? []
+  const rows = msgs.map((msg, i) => {
+    const p = assistantPayloadOf(msg)
+    const structured = p?.mode === 'structured' && p.questions?.length ? p : null
+    if (!structured) return { msg, structured: null, intro: msg.content, selections: null }
+    const interactive = i === msgs.length - 1 && activeStructured.value != null
+    const next = msgs[i + 1]
+    return {
+      msg,
+      structured: interactive ? null : structured,
+      intro: introOf(msg.content),
+      selections: next ? userSelectionsOf(next) : null
+    }
+  })
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i - 1].structured && rows[i - 1].selections && rows[i].msg.role === 'user') {
+      rows[i].intro = ''
+    }
+  }
+  return rows
+})
+
+// 进度：取最近一条带 progress 的 assistant payload；FINALIZED 直接 100
+const clarifyProgress = computed(() => {
+  if (conversation.value?.status === 'FINALIZED') return 100
+  const msgs = detail.value?.messages ?? []
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const p = assistantPayloadOf(msgs[i])
+    if (p?.progress != null) return Math.min(100, Math.max(0, p.progress))
+  }
+  return null
 })
 
 const STATUS_LABEL: Record<RequirementConversationStatus, string> = {
@@ -296,6 +401,27 @@ async function handleRetry() {
     scrollToBottom()
   } catch { /* 拦截器已弹错；保持现状可再次重试 */ }
   finally { sending.value = false }
+}
+
+// V33 结构化选项提交：可读文本走 content（LLM 上下文），选择快照走 payload（回显）
+async function handleStructuredSubmit(payload: { text: string; selections: ClarifySelection[] }) {
+  const id = activeId.value
+  if (id == null || sending.value) return
+  pendingText.value = payload.text
+  sending.value = true
+  scrollToBottom()
+  try {
+    const result = await clarifyApi.send(id, payload.text, payload.selections)
+    detail.value = result
+    loadList()
+    scrollToBottom()
+  } catch {
+    // 拦截器已弹错；user 消息多半已落库，刷新详情后靠重试按钮续跑
+    try { detail.value = await clarifyApi.detail(id) } catch { /* 拦截器已弹错 */ }
+  } finally {
+    pendingText.value = ''
+    sending.value = false
+  }
 }
 
 async function handleFinalize() {
@@ -415,6 +541,21 @@ onMounted(() => {
 
 /* ── 右栏气泡流 ── */
 .chat-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+/* ── V33 澄清进度条 ── */
+.clarify-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px 8px;
+  border-bottom: 1px solid var(--ha-border-light);
+  margin-bottom: 6px;
+}
+.progress-label { font-size: 12px; color: var(--ha-muted); flex-shrink: 0; }
+.progress-bar { flex: 1; }
+
+/* 结构化问题卡片宽度对齐气泡 */
+.sq-wrap { max-width: 72%; min-width: 320px; }
 
 .msg-stream { flex: 1; overflow-y: auto; padding: 4px 8px; }
 

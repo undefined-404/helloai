@@ -3368,3 +3368,48 @@ minimax（MiniMax-M2.5，Anthropic 协议推理模型）担任 REVIEWER 时自�
 
 ---
 
+### 6.32 结构化选项式需求澄清引擎（V33，2026-07-31，同日第二轮）
+
+#### 1. 背景与决策
+
+用户提出下一步计划（P0 结构化选项式澄清 / P1 多轮对话策略 / P2 浏览器检索 / P3 ASR-TTS），本轮实施 P0：澄清追问从「纯文本问答」升级为「选项点选为主、自由输入兜底」，用户面对模糊需求不再需要打字长文回答。评审阶段确认 6 处修正后落地：
+
+- **payload 一列两用**：`requirement_message` 只加一列 `payload`，assistant 行存结构化问题 JSON（`{"mode","progress","questions":[...]}`），user 行存选择快照（`{"selections":[...]}`），纯文本消息 NULL——不为两种行各开一列
+- **TEXT 而非 JSONB**：与 V32 同款约定（JSONB 写入需 JacksonTypeHandler + XML 覆盖改造），payload 只整存整取、无库内查询需求
+- **progress 仅展示**：LLM 自评 0~100 只驱动前端进度条，无任何 `if (progress >= x)` 业务分支；FINALIZED 前端直接显示 100
+- **降级 freeform 一等公民**：LLM 输出非 JSON 且不含 `"type"` 字样 → 原文作 freeform 追问落库不报错（判据 `rawOutput.contains("\"type\"")`，含 type 的破碎 JSON 仍抛 BizException 走既有 retry 链路）；structured 校验失败（无问题/无选项/label 空）→ 降级 freeform 丢弃 questions
+- **weight 留字段缓建**：`ClarifyOption.weight` 预留无业务消费，注释明示
+- **content/payload 职责分离**：content 是 LLM transcript 可读文本（structured 时由引导语+问题+选项经 `composeAssistantContent` 合成），payload 是前端渲染快照；payload 丢失不影响 LLM 上下文
+
+#### 2. 实施内容
+
+后端：
+
+- `V33__requirement_message_payload.sql`（新建）：`ADD COLUMN IF NOT EXISTS payload TEXT` + 一列两用 COMMENT；`RequirementMessage` 实体加 `payload` 字段
+- `prompts/requirement-clarify.md`（重写）：三形态输出协议——structured question（`mode/progress/message/questions[{id,text,multiple,allowCustom,customPlaceholder,options[{label,value,recommended}]}]`）/ freeform question / final（补 `progress:100`）；structured 约束（每轮 ≤2 问、每问 2~4 选项、recommended 每题最多一个、allowCustom 默认 true）；五维度自检清单（业务场景/功能范围/性能并发/安全合规/交付预算）；保留 `{{CONVERSATION_HISTORY}}` 占位符与 description 分段要求
+- `RequirementMessageService.addMessage` 4 参重载（payload 尾参，3 参委托保兼容）
+- `RequirementClarifyService`：`sendMessage(id,message,selections)` 重载（`buildSelectionPayload` 序列化快照落 user 行）；`runLlmRound` question 分支改 `composeAssistantContent` + `buildQuestionPayload` 落 assistant 行；`parseReply` 加降级分支；新增 `normalizeQuestionReply`/`isStructuredValid`/`fillStructuredDefaults`（id 缺省补 `q{idx}`、value 缺省用 label）等 6 个私有方法；`ClarifyReply` 扩展 mode/progress/questions + 新增 `ClarifyQuestion`/`ClarifyOption`/`ClarifySelection` 三个 `@Data @JsonIgnoreProperties` 嵌套类
+- `ClarifyMessageRequest` 加 `selectedOptions`；`RequirementConversationController.sendMessage` 传三参
+
+前端（helloai-ui）：
+
+- `types/index.ts` 加 `RequirementMessage.payload` + `ClarifyOption`/`ClarifyQuestion`/`ClarifyAssistantPayload`/`ClarifySelection` 四接口；`api/clarify.ts` send 加 `selectedOptions` 第三参
+- 新建 `StructuredQuestionCard.vue`：选项 chip（单选/多选 toggle + recommended 推荐标签 + 可多选 tag）+ 自定义补充输入 + 每题至少选一项或填补充才可提交 + 提交时同时产出可读文本（`问题：label、label（补充：xx）`）与 selections 快照
+- `RequirementChat.vue`：顶部澄清进度条（从后向前找最近带 progress 的 assistant payload，FINALIZED 直接 100）+ 最后一条 assistant 为 structured 时渲染卡片（`:key` 绑最后消息 ID 换轮重置选择态）+ `handleStructuredSubmit`；旧消息 payload NULL 自然走纯文本气泡向后兼容
+
+#### 3. 验证结果
+
+- `mvn -q -DskipTests compile` 全模块通过；`RequirementClarifyServiceTest` **21/21 全绿**（Mockito 对重载敏感，全部 verify 改 4 参签名；原 `shouldFailWhenOutputIsNotJson` 语义按 V33 更新为 `shouldDegradeToFreeformWhenOutputIsNotJson`；新增 4 例：structured 落库 payload 断言 / 校验失败降级 freeform / 含 type 破碎 JSON 仍报错 / 选项快照落 user payload）
+- `npx vue-tsc --noEmit` 0 错
+- `verify-requirement-clarify-structured.ps1`（新建）真实环境实测 **PASSED**：admin login → 幂等注册 PLANNER + 绑托管凭证 → 模糊需求创建会话 → assistant payload `mode=structured progress=25` 两问结构完整（硬断言 id/text/options/label/value 全非空）→ 第一题第一选项构造 selectedOptions 提交 → user payload 含 selections 快照且 questionId 一致 → abandon 清理；freeform/无 payload 走软断言路径（LLM 形态不可控，freeform 是合法一等公民）
+- 脚本踩坑修复：LLM 回包的中文选项 label 回填进请求体后，若按控制台默认编码（GBK）发送触发后端 `Invalid UTF-8 middle byte 0x5c`——`Invoke-Json` 改为 JSON 先转 UTF-8 字节数组再发（`ContentType application/json; charset=utf-8`），呼应 AGENTS.md 规则 6
+- 环境踩坑：`javapath` shim 的 java.exe 在沙箱下静默无输出导致 `start-sb.ps1` 起的进程秒退且零日志；改用 `JAVA_HOME\bin\java.exe` 显式路径启动成功（V33 Flyway 实测已生效，`flyway_schema_history` version=33 success=true）
+
+#### 4. 影响与遗留
+
+- 旧会话/旧消息（payload NULL）零迁移成本，自然走纯文本渲染分支
+- 本轮明确不做：weight 权重业务消费、多轮对话策略（P1 独立轮次）、progress 驱动业务分支、SSE 流式
+- `start-sb.ps1` 依赖 PATH 上的 javapath shim，在受限环境下可能静默失败，后续可考虑改用 JAVA_HOME 显式路径（本轮未改，避免影响既有工作流）
+
+---
+

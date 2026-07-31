@@ -23,6 +23,15 @@ public class RequirementMessageService
      * （非增量副本），失败直接抛给调用方，不需要 REQUIRES_NEW 独立事务。</p>
      */
     public RequirementMessage addMessage(Long conversationId, String role, String content) {
+        return addMessage(conversationId, role, content, null);
+    }
+
+    /**
+     * 追加带结构化附加数据的消息（V33）。
+     *
+     * @param payload JSON 文本（assistant=结构化问题，user=选择快照）；纯文本消息传 null
+     */
+    public RequirementMessage addMessage(Long conversationId, String role, String content, String payload) {
         RequirementMessage lastMsg = lambdaQuery()
                 .eq(RequirementMessage::getConversationId, conversationId)
                 .orderByDesc(RequirementMessage::getSeq)
@@ -35,6 +44,7 @@ public class RequirementMessageService
         msg.setRole(role);
         msg.setContent(content);
         msg.setSeq(nextSeq);
+        msg.setPayload(payload);
         save(msg);
 
         log.debug("澄清消息追加: conversationId={}, seq={}, role={}", conversationId, nextSeq, role);

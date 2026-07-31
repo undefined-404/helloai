@@ -452,7 +452,45 @@ export interface RequirementMessage {
   role: 'user' | 'assistant'
   content: string
   seq: number
+  // V33 结构化附加数据（JSON 文本）：assistant=结构化问题，user=选择快照；null=纯文本
+  payload?: string | null
   createTime: string
+}
+
+// V33 结构化选项式需求澄清
+export interface ClarifyOption {
+  label: string
+  value: string
+  // 权重预留字段（当前无业务消费）
+  weight?: number | null
+  recommended?: boolean | null
+}
+
+export interface ClarifyQuestion {
+  id: string
+  text: string
+  multiple?: boolean | null
+  allowCustom?: boolean | null
+  customPlaceholder?: string | null
+  options: ClarifyOption[]
+}
+
+/** assistant 消息 payload：{mode, progress, questions} */
+export interface ClarifyAssistantPayload {
+  mode: 'structured' | 'freeform'
+  // LLM 对澄清程度的 0~100 自评（仅展示）
+  progress?: number | null
+  questions?: ClarifyQuestion[]
+}
+
+/** 用户选项回答快照（user 消息 payload.selections 元素） */
+export interface ClarifySelection {
+  questionId: string
+  questionText: string
+  values: string[]
+  labels: string[]
+  custom?: boolean
+  customText?: string | null
 }
 
 /** 会话 + 全部消息（create / send / detail 统一返回） */

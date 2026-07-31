@@ -27,6 +27,8 @@ import org.springframework.stereotype.Service;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -66,6 +68,10 @@ public class RequirementClarifyService {
 
     private static final String ROLE_USER = "user";
     private static final String ROLE_ASSISTANT = "assistant";
+
+    /** 追问形态（V33 双模协议）：structured 结构化选项式 / freeform 自由文本。 */
+    private static final String MODE_STRUCTURED = "structured";
+    private static final String MODE_FREEFORM = "freeform";
 
     private final RequirementConversationService conversationService;
     private final RequirementMessageService messageService;
@@ -109,11 +115,24 @@ public class RequirementClarifyService {
     }
 
     /**
-     * 向会话追加一条用户消息并走一轮 LLM 澄清。
+     * 向会话追加一条用户消息并走一轮 LLM 澄清（纯文本，无选项快照）。
      *
      * @return 会话 + 全部消息
      */
     public ClarifyConversationDetail sendMessage(Long conversationId, String message) {
+        return sendMessage(conversationId, message, null);
+    }
+
+    /**
+     * 向会话追加一条用户消息并走一轮 LLM 澄清。
+     *
+     * @param selections 结构化选项回答快照（V33，可为 null/空=纯文本回答）；
+     *                   序列化为 {@code {"selections":[...]}} 存入 user 消息 payload，
+     *                   仅作前端回显快照，LLM 上下文仍用 content 可读文本
+     * @return 会话 + 全部消息
+     */
+    public ClarifyConversationDetail sendMessage(Long conversationId, String message,
+                                                 List<ClarifySelection> selections) {
         if (message == null || message.isBlank()) {
             throw new BizException("消息不能为空");
         }
@@ -123,7 +142,7 @@ public class RequirementClarifyService {
             throw new BizException("澄清轮数已达上限 " + MAX_ROUNDS
                     + "，请放弃本会话并在任务管理中手动创建任务");
         }
-        return doRound(conversation, message.trim());
+        return doRound(conversation, message.trim(), buildSelectionPayload(selections));
     }
 
     /**
@@ -264,11 +283,17 @@ public class RequirementClarifyService {
     // ══════════════════════════════════════════════════════════════
 
     /**
-     * 一轮澄清：存 user 消息、round_count+1 → LLM 一轮（选人/渲染/解析/落库）。
+     * 一轮澄清：存 user 消息（含可选的选择快照 payload）、round_count+1 →
+     * LLM 一轮（选人/渲染/解析/落库）。
      */
     private ClarifyConversationDetail doRound(RequirementConversation conversation, String userMessage) {
+        return doRound(conversation, userMessage, null);
+    }
+
+    private ClarifyConversationDetail doRound(RequirementConversation conversation, String userMessage,
+                                              String userPayload) {
         Long conversationId = conversation.getId();
-        messageService.addMessage(conversationId, ROLE_USER, userMessage);
+        messageService.addMessage(conversationId, ROLE_USER, userMessage, userPayload);
         int rounds = conversation.getRoundCount() != null ? conversation.getRoundCount() : 0;
         conversation.setRoundCount(rounds + 1);
         conversationService.updateById(conversation);
@@ -306,7 +331,8 @@ public class RequirementClarifyService {
             log.info("澄清会话产出终稿: conversationId={}, finalTitle={}",
                     conversationId, reply.getTitle());
         } else {
-            messageService.addMessage(conversationId, ROLE_ASSISTANT, reply.getMessage());
+            messageService.addMessage(conversationId, ROLE_ASSISTANT, composeAssistantContent(reply),
+                    buildQuestionPayload(reply));
         }
         return new ClarifyConversationDetail(conversation,
                 messageService.listByConversation(conversationId));
@@ -345,7 +371,16 @@ public class RequirementClarifyService {
         return template.replace("{{CONVERSATION_HISTORY}}", transcript.toString().trim());
     }
 
-    /** 解析 LLM 输出：strip fence 容错 + type/message 必填校验。 */
+    /**
+     * 解析 LLM 输出：strip fence 容错 + type/message 必填校验。
+     *
+     * <p>V33 降级策略（降级是一等公民路径，不是异常）：
+     * <ul>
+     *   <li>输出完全不是 JSON 且不含 {@code "type"} 字样 → 原文作 freeform 追问落库；</li>
+     *   <li>含 {@code "type"} 但解析失败 → 保持抛 BizException 走现有 retry 链路；</li>
+     *   <li>structured 追问校验不过（无问题/无选项）→ 降级 freeform。</li>
+     * </ul>
+     */
     private ClarifyReply parseReply(String rawOutput) {
         if (rawOutput == null || rawOutput.isBlank()) {
             throw new BizException("澄清 LLM 返回内容为空");
@@ -355,6 +390,14 @@ public class RequirementClarifyService {
         try {
             reply = objectMapper.readValue(cleaned, ClarifyReply.class);
         } catch (Exception e) {
+            if (!rawOutput.contains("\"type\"")) {
+                log.warn("澄清 LLM 输出非 JSON，降级为 freeform 追问: {}", summarize(rawOutput));
+                ClarifyReply fallback = new ClarifyReply();
+                fallback.setType("question");
+                fallback.setMode(MODE_FREEFORM);
+                fallback.setMessage(rawOutput.trim());
+                return fallback;
+            }
             throw new BizException("澄清 LLM 输出 JSON 解析失败: " + e.getMessage()
                     + "; 原始输出摘要: " + summarize(rawOutput));
         }
@@ -362,9 +405,7 @@ public class RequirementClarifyService {
             throw new BizException("澄清 LLM 输出缺少 type 字段; 原始输出摘要: " + summarize(rawOutput));
         }
         if ("question".equals(reply.getType())) {
-            if (reply.getMessage() == null || reply.getMessage().isBlank()) {
-                throw new BizException("澄清 LLM 追问缺少 message 字段");
-            }
+            normalizeQuestionReply(reply, rawOutput);
         } else if ("final".equals(reply.getType())) {
             if (reply.getTitle() == null || reply.getTitle().isBlank()) {
                 throw new BizException("澄清 LLM 终稿缺少 title 字段");
@@ -376,6 +417,129 @@ public class RequirementClarifyService {
             throw new BizException("澄清 LLM 输出 type 非法: " + reply.getType());
         }
         return reply;
+    }
+
+    /**
+     * 追问形态归一化：mode 缺省按 freeform；structured 校验不过降级 freeform；
+     * structured 合法时补齐缺省 id/value；freeform 形态 message 必填。
+     */
+    private void normalizeQuestionReply(ClarifyReply reply, String rawOutput) {
+        if (MODE_STRUCTURED.equals(reply.getMode())) {
+            if (isStructuredValid(reply)) {
+                fillStructuredDefaults(reply);
+                return;
+            }
+            log.warn("澄清 structured 追问校验失败，降级 freeform: {}", summarize(rawOutput));
+            reply.setQuestions(null);
+        }
+        reply.setMode(MODE_FREEFORM);
+        if (reply.getMessage() == null || reply.getMessage().isBlank()) {
+            throw new BizException("澄清 LLM 追问缺少 message 字段");
+        }
+    }
+
+    /** structured 追问最低要求：至少一题，每题有文本且至少一个带 label 的选项。 */
+    private boolean isStructuredValid(ClarifyReply reply) {
+        if (reply.getQuestions() == null || reply.getQuestions().isEmpty()) {
+            return false;
+        }
+        for (ClarifyQuestion question : reply.getQuestions()) {
+            if (question == null || question.getText() == null || question.getText().isBlank()) {
+                return false;
+            }
+            if (question.getOptions() == null || question.getOptions().isEmpty()) {
+                return false;
+            }
+            for (ClarifyOption option : question.getOptions()) {
+                if (option == null || option.getLabel() == null || option.getLabel().isBlank()) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /** structured 合法后补齐缺省值：问题 id 缺失用 q{序号}，选项 value 缺失用 label。 */
+    private void fillStructuredDefaults(ClarifyReply reply) {
+        int idx = 1;
+        for (ClarifyQuestion question : reply.getQuestions()) {
+            if (question.getId() == null || question.getId().isBlank()) {
+                question.setId("q" + idx);
+            }
+            idx++;
+            for (ClarifyOption option : question.getOptions()) {
+                if (option.getValue() == null || option.getValue().isBlank()) {
+                    option.setValue(option.getLabel());
+                }
+            }
+        }
+    }
+
+    /**
+     * assistant 消息可读正文：structured 时把引导语 + 问题/选项文本合成进 content，
+     * 保证 transcript 历史对 LLM 完整可读（payload 丢失也不影响上下文）。
+     */
+    private String composeAssistantContent(ClarifyReply reply) {
+        if (!MODE_STRUCTURED.equals(reply.getMode())
+                || reply.getQuestions() == null || reply.getQuestions().isEmpty()) {
+            return reply.getMessage();
+        }
+        StringBuilder sb = new StringBuilder();
+        if (reply.getMessage() != null && !reply.getMessage().isBlank()) {
+            sb.append(reply.getMessage().trim());
+        }
+        int idx = 1;
+        for (ClarifyQuestion question : reply.getQuestions()) {
+            if (sb.length() > 0) {
+                sb.append('\n');
+            }
+            List<String> labels = new ArrayList<>();
+            for (ClarifyOption option : question.getOptions()) {
+                labels.add(option.getLabel());
+            }
+            sb.append(idx++).append(". ").append(question.getText())
+                    .append("（选项：").append(String.join(" / ", labels)).append("）");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * assistant 消息 payload：{@code {"mode","progress","questions"}}；
+     * freeform 且无 progress 时返回 null（纯文本消息）；序列化失败降级 null 不阻断。
+     */
+    private String buildQuestionPayload(ClarifyReply reply) {
+        boolean structured = MODE_STRUCTURED.equals(reply.getMode())
+                && reply.getQuestions() != null && !reply.getQuestions().isEmpty();
+        if (!structured && reply.getProgress() == null) {
+            return null;
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("mode", structured ? MODE_STRUCTURED : MODE_FREEFORM);
+        if (reply.getProgress() != null) {
+            payload.put("progress", reply.getProgress());
+        }
+        if (structured) {
+            payload.put("questions", reply.getQuestions());
+        }
+        try {
+            return objectMapper.writeValueAsString(payload);
+        } catch (Exception e) {
+            log.warn("澄清 assistant payload 序列化失败，降级纯文本消息", e);
+            return null;
+        }
+    }
+
+    /** user 消息 payload：{@code {"selections":[...]}}；无选择时返回 null；序列化失败降级 null。 */
+    private String buildSelectionPayload(List<ClarifySelection> selections) {
+        if (selections == null || selections.isEmpty()) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(Map.of("selections", selections));
+        } catch (Exception e) {
+            log.warn("澄清选择快照序列化失败，降级纯文本消息", e);
+            return null;
+        }
     }
 
     /** 剥离 markdown 代码块围栏，并兜底截取首尾花括号之间的 JSON 对象（照 stripToJsonArray 改花括号版）。 */
@@ -420,13 +584,60 @@ public class RequirementClarifyService {
         private Boolean taskExists;
     }
 
-    /** LLM 结构化输出（未知字段容忍）：type=question 追问 / type=final 终稿。 */
+    /** LLM 结构化输出（未知字段容忍）：type=question 追问（双模） / type=final 终稿。 */
     @Data
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class ClarifyReply {
         private String type;
+        /** 追问模式：structured 结构化选项式 / freeform 自由文本（缺省按 freeform） */
+        private String mode;
+        /** LLM 对需求澄清程度的 0~100 自评（仅展示，不做任何业务分支） */
+        private Integer progress;
         private String message;
         private String title;
         private String description;
+        /** mode=structured 时的问题列表 */
+        private List<ClarifyQuestion> questions;
+    }
+
+    /** 结构化追问单题（V33）。 */
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class ClarifyQuestion {
+        private String id;
+        private String text;
+        /** 是否多选 */
+        private Boolean multiple;
+        /** 是否允许自定义文本补充 */
+        private Boolean allowCustom;
+        private String customPlaceholder;
+        private List<ClarifyOption> options;
+    }
+
+    /** 结构化追问选项（V33）。 */
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class ClarifyOption {
+        private String label;
+        private String value;
+        /** 权重预留字段：schema 容忍透传，当前无业务消费 */
+        private Integer weight;
+        /** LLM 推荐选项标记（每题最多一个） */
+        private Boolean recommended;
+    }
+
+    /** 用户结构化选项回答快照（user 消息 payload 的 selections 元素）。 */
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class ClarifySelection {
+        private String questionId;
+        private String questionText;
+        /** 选中选项的 value 列表 */
+        private List<String> values;
+        /** 选中选项的 label 列表（回显用） */
+        private List<String> labels;
+        /** 是否含自定义补充 */
+        private Boolean custom;
+        private String customText;
     }
 }

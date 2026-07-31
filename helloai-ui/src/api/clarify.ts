@@ -1,5 +1,5 @@
 import request from './request'
-import type { ClarifyConversationDetail, PlannerOption, RequirementConversation, Task, LongId } from '@/types'
+import type { ClarifyConversationDetail, ClarifySelection, PlannerOption, RequirementConversation, Task, LongId } from '@/types'
 
 // V29 对话式需求澄清: 每轮走一次 LLM，耗时远超全局 30s，create/send/retry 单请求覆盖 timeout
 export const clarifyApi = {
@@ -10,10 +10,12 @@ export const clarifyApi = {
       { message, plannerAgentId: plannerAgentId ?? null },
       { timeout: 120_000 })
   },
-  // 追加用户消息并走一轮 LLM 澄清
-  send(id: LongId, message: string) {
+  // 追加用户消息并走一轮 LLM 澄清（可附 V33 结构化选项回答快照）
+  send(id: LongId, message: string, selectedOptions?: ClarifySelection[] | null) {
     return request.post<any, ClarifyConversationDetail>(
-      `/requirement-conversations/${id}/messages`, { message }, { timeout: 120_000 })
+      `/requirement-conversations/${id}/messages`,
+      { message, selectedOptions: selectedOptions?.length ? selectedOptions : null },
+      { timeout: 120_000 })
   },
   // 重试上一轮 LLM（仅当最后一条是用户消息，即上轮 LLM 失败时可用）
   retry(id: LongId) {

@@ -144,9 +144,73 @@ class RequirementClarifyServiceTest {
 
         assertThat(detail.getConversation().getRoundCount()).isEqualTo(2);
         assertThat(detail.getConversation().getFinalTitle()).isNull();
-        verify(messageService).addMessage(CONV_ID, "user", "做一个报表");
-        verify(messageService).addMessage(CONV_ID, "assistant", "请问验收标准是什么？");
+        verify(messageService).addMessage(CONV_ID, "user", "做一个报表", null);
+        verify(messageService).addMessage(CONV_ID, "assistant", "请问验收标准是什么？", null);
         verify(conversationService, org.mockito.Mockito.times(1)).updateById(conversation);
+    }
+
+    @Test
+    @DisplayName("structured 追问：校验通过后 payload 落库，content 合成可读文本（V33）")
+    void shouldHandleStructuredQuestionReply() {
+        when(conversationService.getById(CONV_ID)).thenReturn(activeConversation());
+        stubLlmRound("{\"type\":\"question\",\"mode\":\"structured\",\"progress\":40,"
+                + "\"message\":\"帮我确认两点\",\"questions\":[{\"id\":\"q1\",\"text\":\"给谁用？\","
+                + "\"multiple\":false,\"allowCustom\":true,\"options\":["
+                + "{\"label\":\"内部员工\",\"value\":\"opt_a\",\"recommended\":true},"
+                + "{\"label\":\"外部客户\",\"value\":\"opt_b\"}]}]}");
+
+        clarifyService.sendMessage(CONV_ID, "做一个报表");
+
+        ArgumentCaptor<String> contentCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+        verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
+                contentCaptor.capture(), payloadCaptor.capture());
+        assertThat(contentCaptor.getValue())
+                .contains("帮我确认两点").contains("给谁用？").contains("内部员工");
+        assertThat(payloadCaptor.getValue())
+                .contains("\"mode\":\"structured\"")
+                .contains("\"progress\":40")
+                .contains("\"questions\"");
+    }
+
+    @Test
+    @DisplayName("structured 校验失败（选项为空）：降级 freeform，questions 丢弃（V33）")
+    void shouldDowngradeInvalidStructuredToFreeform() {
+        when(conversationService.getById(CONV_ID)).thenReturn(activeConversation());
+        stubLlmRound("{\"type\":\"question\",\"mode\":\"structured\",\"progress\":30,"
+                + "\"message\":\"你的目标是什么？\","
+                + "\"questions\":[{\"id\":\"q1\",\"text\":\"目标？\",\"options\":[]}]}");
+
+        clarifyService.sendMessage(CONV_ID, "做一个报表");
+
+        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+        verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
+                eq("你的目标是什么？"), payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue())
+                .contains("\"mode\":\"freeform\"")
+                .doesNotContain("questions");
+    }
+
+    @Test
+    @DisplayName("sendMessage 附选项快照：user 消息 payload 存 selections（V33）")
+    void shouldPersistSelectionSnapshotOnUserMessage() {
+        when(conversationService.getById(CONV_ID)).thenReturn(activeConversation());
+        stubLlmRound("{\"type\":\"question\",\"message\":\"验收标准是什么？\"}");
+
+        RequirementClarifyService.ClarifySelection selection =
+                new RequirementClarifyService.ClarifySelection();
+        selection.setQuestionId("q1");
+        selection.setQuestionText("给谁用？");
+        selection.setValues(List.of("opt_a"));
+        selection.setLabels(List.of("内部员工"));
+
+        clarifyService.sendMessage(CONV_ID, "给谁用？：内部员工", List.of(selection));
+
+        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+        verify(messageService).addMessage(eq(CONV_ID), eq("user"),
+                eq("给谁用？：内部员工"), payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue())
+                .contains("\"selections\"").contains("q1").contains("内部员工");
     }
 
     @Test
@@ -183,17 +247,32 @@ class RequirementClarifyServiceTest {
     // ══════════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("非 JSON 输出：抛 BizException，user 消息保留")
-    void shouldFailWhenOutputIsNotJson() {
+    @DisplayName("非 JSON 且不含 type 字样：降级为 freeform 追问落库，不报错（V33）")
+    void shouldDegradeToFreeformWhenOutputIsNotJson() {
         when(conversationService.getById(CONV_ID)).thenReturn(activeConversation());
         stubLlmRound("抱歉，我无法帮你澄清。");
+
+        RequirementClarifyService.ClarifyConversationDetail detail =
+                clarifyService.sendMessage(CONV_ID, "做一个报表");
+
+        assertThat(detail).isNotNull();
+        verify(messageService).addMessage(CONV_ID, "user", "做一个报表", null);
+        // 原文作 freeform 追问落库（无 progress → payload null）
+        verify(messageService).addMessage(CONV_ID, "assistant", "抱歉，我无法帮你澄清。", null);
+    }
+
+    @Test
+    @DisplayName("含 type 字样但 JSON 解析失败：仍抛 BizException 走重试链路")
+    void shouldFailWhenBrokenJsonContainsType() {
+        when(conversationService.getById(CONV_ID)).thenReturn(activeConversation());
+        stubLlmRound("{\"type\":\"question\",\"message\":");
 
         assertThatThrownBy(() -> clarifyService.sendMessage(CONV_ID, "做一个报表"))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("JSON 解析失败");
         // user 消息已落库保留，assistant 消息未落
-        verify(messageService).addMessage(CONV_ID, "user", "做一个报表");
-        verify(messageService, never()).addMessage(eq(CONV_ID), eq("assistant"), anyString());
+        verify(messageService).addMessage(CONV_ID, "user", "做一个报表", null);
+        verify(messageService, never()).addMessage(eq(CONV_ID), eq("assistant"), anyString(), any());
     }
 
     @Test
@@ -219,7 +298,7 @@ class RequirementClarifyServiceTest {
                 .hasMessageContaining("轮数已达上限");
         verify(platformAgentExecutionService, never())
                 .executeSync(any(Agent.class), any(AgentTask.class));
-        verify(messageService, never()).addMessage(anyLong(), anyString(), anyString());
+        verify(messageService, never()).addMessage(anyLong(), anyString(), anyString(), any());
     }
 
     @Test
@@ -266,8 +345,8 @@ class RequirementClarifyServiceTest {
         assertThat(conversation.getTitle()).hasSize(50);
         assertThat(conversation.getStatus()).isEqualTo(RequirementClarifyService.STATUS_ACTIVE);
         assertThat(conversation.getRoundCount()).isEqualTo(1);
-        verify(messageService).addMessage(CONV_ID, "user", longMessage);
-        verify(messageService).addMessage(CONV_ID, "assistant", "目标是什么？");
+        verify(messageService).addMessage(CONV_ID, "user", longMessage, null);
+        verify(messageService).addMessage(CONV_ID, "assistant", "目标是什么？", null);
     }
 
     @Test
@@ -319,8 +398,8 @@ class RequirementClarifyServiceTest {
         clarifyService.retryRound(CONV_ID);
 
         assertThat(conversation.getRoundCount()).isEqualTo(1);
-        verify(messageService, never()).addMessage(eq(CONV_ID), eq("user"), anyString());
-        verify(messageService).addMessage(CONV_ID, "assistant", "验收标准是什么？");
+        verify(messageService, never()).addMessage(eq(CONV_ID), eq("user"), anyString(), any());
+        verify(messageService).addMessage(CONV_ID, "assistant", "验收标准是什么？", null);
     }
 
     @Test
