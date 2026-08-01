@@ -1,6 +1,7 @@
 # helloai-ui
 node_modules/
 dist/
+dist.zip
 *.tsbuildinfo
 .env.local
 *.log
