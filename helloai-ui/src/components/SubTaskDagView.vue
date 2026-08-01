@@ -1,6 +1,9 @@
 <template>
   <el-empty v-if="!subTasks.length" description="暂无子任务" />
-  <div v-else ref="chartRef" class="dag-chart" :style="{ height: chartHeight + 'px' }" />
+  <!-- 外层横向滚动包裹：批次过多时出现滚动条；表格本体宽度与列数呈正比 -->
+  <div v-else ref="wrapperRef" class="dag-wrapper">
+    <div ref="chartRef" class="dag-chart" :style="{ height: chartHeight + 'px', width: chartWidth + 'px' }" />
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -17,6 +20,7 @@ const props = defineProps<{ subTasks: SubTask[] }>()
 const emit = defineEmits<{ 'node-click': [id: string] }>()
 
 const chartRef = ref<HTMLDivElement>()
+const wrapperRef = ref<HTMLDivElement>()
 let chartInstance: echarts.ECharts | null = null
 
 // 节点尺寸 / 箭头尺寸（px），自绘边的端点裁剪依赖这两组常量
@@ -24,6 +28,12 @@ const NODE_W = 128
 const NODE_H = 40
 const ARROW_W = 9
 const ARROW_H = 8
+
+// 每个批次（Kahn 分层一列）占用的固定像素宽度：含节点 + 两侧间隙 + 贝塞尔曲线拉伸空间。
+// 表格总宽 = 列数 × COL_GAP + 拖动双侧 padding；容器超此宽时出现横向滚动条。
+const COL_GAP = 180
+const CHART_MIN_WIDTH = 800
+const CHART_PADDING = 32
 
 // 状态 → 节点专属色（一对一，避免 el-tag type 归并导致不同状态同色不可辨）
 const STATUS_COLOR: Record<SubTask['status'], string> = {
@@ -56,6 +66,13 @@ const seqMap = computed(() => {
 const chartHeight = computed(() => {
   const maxRows = Math.max(1, ...layers.value.map(l => l.length))
   return Math.max(240, maxRows * 76 + 70)
+})
+
+// 宽度按列数 × 固定列宽撑开（10 批 = 1800px）；超出视口由 wrapper 出现横向滚动条。
+// 最小 800px 保证极少数列时仍能铺满视口，节点不会富余到拖出同心边界。
+const chartWidth = computed(() => {
+  const cols = Math.max(1, layers.value.length)
+  return Math.max(CHART_MIN_WIDTH, cols * COL_GAP + CHART_PADDING)
 })
 
 function statusColor(status: SubTask['status']): string {
@@ -100,8 +117,8 @@ function buildOption(): echarts.EChartsOption {
         return {
           value: [sp[0], sp[1], tp[0], tp[1]],
           active,
-          // 活跃边用目标节点状态色，普通边用中性灰
-          color: active ? statusColor(s.status) : '#c0c4cc'
+          // 活跃边用目标节点状态色，普通边用中性深灰（比 #c0c4cc 明显更跳）
+          color: active ? statusColor(s.status) : '#909399'
         }
       })
   )
@@ -166,8 +183,8 @@ function buildOption(): echarts.EChartsOption {
             type: 'bezierCurve',
             shape: { x1, y1, x2, y2, cpx1: x1 + dx, cpy1: y1, cpx2: x2 - dx, cpy2: y2 },
             style: {
-              stroke: edge.color, fill: null, lineWidth: edge.active ? 2 : 1.5,
-              opacity: 0.9, lineDash: edge.active ? [6, 5] : null
+              stroke: edge.color, fill: null, lineWidth: edge.active ? 2 : 1.8,
+              opacity: 0.95, lineDash: edge.active ? [6, 5] : null
             }
           }
           if (edge.active) {
@@ -236,6 +253,8 @@ function handleResize() { chartInstance?.resize() }
 watch(() => props.subTasks, render, { deep: true })
 // 高度变化后容器尺寸更新需要 resize（nextTick 等 DOM 应用新高度）
 watch(chartHeight, async () => { await nextTick(); chartInstance?.resize() })
+// 宽度变化后同样需要 resize（列数变化驱动滚动场景下画布不需要重算，只需重新适应容器）
+watch(chartWidth, async () => { await nextTick(); chartInstance?.resize() })
 
 onMounted(() => {
   render()
@@ -250,5 +269,17 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* 外层包裹：横向滚动；表格宽度由 inline style 撑开，超出视口自动出滚动条 */
+.dag-wrapper {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* 滚动条薄一些避免遮挡节点 */
+  scrollbar-width: thin;
+}
+/* WebKit 滚动条样式（被淹没时不易挡住图表主体） */
+.dag-wrapper::-webkit-scrollbar { height: 8px; }
+.dag-wrapper::-webkit-scrollbar-thumb { background: #c0c4cc; border-radius: 4px; }
+.dag-wrapper::-webkit-scrollbar-track { background: transparent; }
 .dag-chart { width: 100%; }
 </style>

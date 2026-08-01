@@ -12,6 +12,7 @@ import com.helloai.core.agent.execution.PlatformAgentExecutionService;
 import com.helloai.core.planner.PlannerAgentPicker;
 import com.helloai.core.shared.event.TaskAutoCompletedEvent;
 import com.helloai.core.shared.util.SubTaskDependencyOrder;
+import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import lombok.RequiredArgsConstructor;
@@ -260,16 +261,9 @@ public class TaskFinalReportService {
         return sb.toString();
     }
 
-    /** 读取 context.lastExecution.output（与 TaskDeliverableService.extractExecutionOutput 同款先例）。 */
+    /** 读取 context.lastExecution.output（统一走 {@link SubTaskOutputExtractor}，与 TaskDeliverableService 同一事实源）。 */
     private static String extractExecutionOutput(SubTask subTask) {
-        Map<String, Object> ctx = subTask.getContext();
-        if (ctx != null && ctx.get("lastExecution") instanceof Map<?, ?> lastExecution) {
-            Object output = lastExecution.get("output");
-            if (output instanceof String text) {
-                return text;
-            }
-        }
-        return null;
+        return SubTaskOutputExtractor.extractExecutionOutput(subTask);
     }
 
     private static String summarize(String raw) {

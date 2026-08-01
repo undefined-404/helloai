@@ -3537,3 +3537,108 @@ V27 依赖编排（dependsOn + Kahn 拓扑 + ready 守卫）后端已闭环，�
 
 ---
 
+### 6.38 对话式需求澄清联网搜索开关（V34，2026-08-01）
+
+#### 1. 背景与决策
+
+N17 澄清链路在 V29（多轮追问 + 终稿）+ V33（结构化选项 + progress）后端闭环已较为稳定，但实践暴露一个明显短板：模型在“我想做类似 Notion 的协作文档”这种行业已成型的需求上依然会反复追问“具体要哪些功能”/“目标用户是谁”/“性能要求”——本质是因为不知道行业默认边界。DeepSeek/Kimi 网页版的「联网搜索」开关正是面向这类痛点：首轮前先以用户问题为 query 拉一次行业资料，注入 Prompt 提供行业术语与默认维度参考。
+
+用户原始速记“都按照你的推荐来做吧：加 `web_search_enabled` 列；Tavily 和博查，两个都抽象成接口、默认走博查，因为我的服务器上国内的”，拍板如下五个设计取舍：
+
+- **会话级而非回合级**：开关状态由前端用户在新建会话前决定，落库到 `requirement_conversation.web_search_enabled`；后续追问不再重复检索，避免 token 浪费与上下文漂移
+- **首轮注入而非多轮**：仅在 `rounds==0` 那一轮 LLM 调用前预检索（首轮后上下文已演化，重检只会偏离）
+- **失败降级而非事务回滚**：联网是增强而非核心，搜索失败一律 warn 日志 + 返回空串，不阻断澄清流程
+- **抽象为接口 + Router**：业务侧只依赖 `WebSearchService` 接口，新增/切换供应商零业务改动
+- **默认走博查（bochaai）而非 Tavily**：用户服务器在境内，博查国内可用稳定；Tavily 仅作为配置可切换备选
+
+#### 2. 实施内容
+
+后端（helloai-common + helloai-core + helloai-start）：
+
+- `WebSearchProperties`（helloai-common/config，`@ConfigurationProperties(prefix="helloai.web-search")` + `@Component`）：`enabled=true / provider=bocha / timeout-ms=3000 / max-results=5 / max-snippet-chars=200 / query-keyword-limit=40` + `bocha{base-url,api-key}` 与 `tavily{base-url,api-key}`——Spring Boot 配置元数据承担注入校验
+- `WebSearchResult` / `WebSearchService`（helloai-core/planner/search）：供应商无关归一化模型 `title/url/snippet` + 接口契约 `provider()` + `search(query, maxResults)`
+- `BochaWebSearchService`：`@ConditionalOnProperty(name="helloai.web-search.provider", havingValue="bocha", matchIfMissing=true)`（默认激活），博查 API `https://api.bochaai.com/v1/web-search` POST，`WebClient` + 3s 超时 + 错误降级空列表
+- `TavilyWebSearchService`：`@ConditionalOnProperty(name="helloai.web-search.provider", havingValue="tavily")`，Tavily `https://api.tavily.com/search` POST，错误同样降级空列表
+- `WebSearchServiceRouter`（`@Primary implements WebSearchService`）：`ObjectProvider<WebSearchService>` 收集候选 → 按 provider 配置选 delegate，未匹配回退首候选 / 返回 null（屏蔽）；`provider()` 返回 `router-><delegate.provider()>`；`enabled=false` 短路返回空列表
+- Flyway `V34__requirement_conversation_web_search_enabled.sql`：单列 `web_search_enabled BOOLEAN` + COMMENT（明示 NULL/true=默认开启，false=关闭）
+- `RequirementConversation` 实体加 `Boolean webSearchEnabled`
+- `prompts/requirement-clarify.md`：新增「联网检索资料」节（占位符 `{{WEB_SEARCH_CONTEXT}}`）+ 引用资料三大原则（核心需求以用户描述为准 / 无资料等价于无外部信息 / 不在 JSON 字段加“参考资料”键）
+- `RequirementClarifyService`：注入 `WebSearchService` + `WebSearchProperties`；`create(message, plannerAgentId, webSearchEnabled)` 三参签名（新会话透传落库） + 二参重载保兼容（默认 NULL）；`doRound` 首轮且开关开启时调 `doWebSearch(firstUserMessage)` 算 `webSearchContext`；新增 `isWebSearchEnabled(NULL/true 视为开启)` + `doWebSearch(关键词截 40 字 + try/catch 降级)` + `renderWebSearchContext(≤5 条；空列表输出“（无可用联网资料）”` 三个私有方法；`runLlmRound` 改两参 `(conversation, webSearchContext)`；`renderPrompt` 改双占位符替换；`retryRound` 显式传空串不复用首轮预检索（避免失败路径副作用）
+- `ClarifyMessageRequest`（helloai-api/dto）：加 `Boolean webSearchEnabled` 字段（仅 create 接口生效，append 消息接口服务端忽略）
+- `RequirementConversationController.create`：透传 `req.getWebSearchEnabled()` 至 Service 三参方法
+
+前端（helloai-ui）：
+
+- `types/index.ts` `RequirementConversation` 接口加 `webSearchEnabled?: boolean | null`
+- `api/clarify.ts` `create` 加 `webSearchEnabled` 第三参（不传/null 一律透传）
+- `views/requirement/RequirementChat.vue`：仿 ima copilot——`webSearchEnabled` ref 默认 true；输入栏左侧「联网搜索」+ Connection 图标 + tooltip + `el-switch` inline-prompt（开/关）；`activeId==null` 时可改，已有 ACTIVE 会话置灰（开关仅建会话生效）；`watch(detail.conversation.webSearchEnabled)` 已存会话同步原值（不可改）；`handleSend` 新会话分支透传 `webSearchEnabled.value`
+- `vue-tsc` lint 修复两处：`watch` 补入 `import { computed, ..., watch } from 'vue'`；`watch` 回调参数 `v` 添型注解 `(v: boolean | null | undefined)`
+
+#### 3. 验证结果
+
+- 后端编译验证：`bash -n` + `zsh -n` `scripts/shell/verify-websearch-e2e.sh` 双 shell 语法 OK（BASH-OK / ZSH-OK）；`mvn -pl helloai-core -am compile` 沙箱无 mvn，需 IDE 重启后验证；单测增量（联网降级 + 占位符替换 + Provider 路由多实现解析）待补
+- 前端：`vue-tsc --noEmit` 需 IDE 验证（已修两处 lint：缺 `watch` 导入 + `v` 隐式 any）
+- 端到端：`scripts/shell/verify-websearch-e2e.sh`（新建，UTF-8 头 + `set -euo pipefail` + `curl` + `jq`）覆盖三条路径：
+  - STEP3 关路径（`webSearchEnabled:false`）→ 会话落库 `webSearchEnabled=false`，`roundCount=1`，后续 `sendMessage` 不受影响（开关仅建会话生效）
+  - STEP4 开路径（`webSearchEnabled:true`）→ 会话落库 `webSearchEnabled=true`，`roundCount=1`；服务端日志会输出 `澄清联网搜索结束: provider=<bocha|tavily>, query=<...>, results=N, costMs=...`
+  - STEP5 NULL 路径（不传 `webSearchEnabled`）→ 会话落库 `webSearchEnabled=null`（读取侧按默认开启语义处理，保老会话兼容）
+- **质化对比**（人工对终端 LLM 输出）：开启路径下模型更多会援引行业术语“在线协作 / 富文本 / 版本历史 / 企业研发团队 / 多人实时编辑”以及默认边界“个人为主 / 小中型团队 / SaaS”类推断，不再反复追问“具体要哪些功能”/“性能要求”；关闭路径保持原有纯对话行为。该质化对比带主观性，本轮不设硬阈值；后续可考虑在终稿 `progress >= 85` 后交业务采样对比。
+
+#### 4. 影响与遗留
+
+- 老会话 `web_search_enabled` 列 NULL 自动视为默认开启；开关状态与会话生命周期绑定（不实现 mid-stream toggle，已存 ACTIVE 会话不可改）
+- 首轮检索关键词取首条用户消息前 40 字（适合一句话级别需求；超长 prompt 截断保守，可由 `queryKeywordLimit` 调）
+- Provider 单实现切换（bocha↔tavily）仅改 `helloai.web-search.provider` 一行配置，业务零改动；新增供应商只需新增 `@ConditionalOnProperty` 实现类（接口 + Router 抽象的关键收益）
+- 默认激活策略：bocha 是 `matchIfMissing=true` 默认；不配 bocha api key 但配 tavily 也能自动切到 tavily（`matchIfMissing` 仅指“未配 provider 时默认”，apiKey 缺失仍要切）
+- 服务端日志副作用：每次首轮联网会增加约 1–3s 延迟上限（`timeoutMs=3000`），与 LLM 调用串行；后续可考虑并行检索 + 超时叠加
+- 本轮明确不在范围：① 每轮重新检索（首轮已含完整上下文，重检会偏离且烧 token）；② 多供应商并行 failover（增加延迟与复杂度）；③ 按用户角色区分检索策略（个人 vs 团队需求检索偏好无足够样本先验证）；④ 检索词 LLM 改写（首轮关键词足够泛化可工作中，后续如遇不命中再上）；⑤ JSON 字段注入“参考资料”序号（保持现有协议稳定，不动）
+
+---
+
+### 6.39 执行链依赖上下文注入：执行 Agent 真正参考上游产出（V35，2026-08-01，同日第二轮）
+
+#### 1. 背景与决策
+
+用户审查子任务执行时序图后发现严重缺环：子任务间 `depends_on` 依赖关系（V27）只解决了**调度排序**（解锁下游 / 拓扑排序 / ready 守卫 / 跳过分发），执行 Agent 组装 Prompt 的 `buildUserPrompt` 只含子任务自身四要素（标题/描述/交付物/验收标准），**完全不含任何上游子任务的交付结果**——依赖关系“只排序、不传上下文”。时序图上只见“领取任务、执行任务”，不见“参考依赖执行结果”。
+
+用户速记“执行2的子任务的时候，agent真的有看1任务完成后上交的内容么”，拍板如下五个设计取舍：
+
+- **执行入口注入而非调度侧传递**：在纯执行入口 `SubTaskExecutionService.executeOnce` 内装配，调度层（分发/解锁/ready 守卫）零改动，职责边界清晰
+- **按声明顺序注入直接前置**：按 `dependsOnIdList()` 声明顺序逐条渲染，与调度器 ready 语义的前置顺序一致；不做多级透传（前置的前置由各自下游消费）
+- **截断而非摘要**：单条产出超 4000 字符截断并显式标注“以已提供部分为准”，避免多依赖叠加撑爆小上下文模型；不做 LLM 摘要（增加一次调用与失败面）
+- **失败降级而非阻断执行**：依赖查询/渲染异常一律 warn + 返回空上下文，产出参考是增强信息不是交付门槛（沿用 V34 联网搜索降级哲学）；降级仍保留 `hasDeps=true` 供观测
+- **可观测先行**：声明依赖时记录新 timeline 事件 `sub_task_deps_context_loaded`（depCount/loadedCount/truncatedCount/degraded），时序图与时间线能看出“读取上游产出”环节；无依赖零噪音
+
+#### 2. 实施内容
+
+后端（helloai-core）：
+
+- `SubTaskOutputExtractor`（新，shared/util）：静态方法统一读取 `sub_task.context.lastExecution.output`（null 安全 + Map 类型守卫），消除多消费方同款先例漂移
+- `TaskFinalReportService` / `TaskDeliverableService`：各自私有 `extractExecutionOutput` 替换为调 `SubTaskOutputExtractor`（行为零变化，先例收敛）
+- `SubTaskExecutionService`：
+  - 常量 `DEP_OUTPUT_LIMIT = 4000`（单条前置产出截断上限）
+  - `loadDependencyContext(subTask)`：`dependsOnIdList()` 空 → `DependencyContext.EMPTY`；`subTaskService.listByIds` 批量查 + HashMap 映射；按声明顺序渲染 `## 上游产出参考（前置子任务的交付结果，你的工作必须建立在这些内容之上）` + `### 前置 N：标题（状态：X）` + 产出正文（超限截断标注）；DONE 无产出 → `（该前置子任务无可用产出内容）`；异常 catch → warn + `new DependencyContext(true, depIds.size(), 0, 0, "", true)` 降级
+  - `DependencyContext` 内部类（不可变，全参构造）：hasDeps/depCount/loadedCount/truncatedCount/promptSection/degraded + 静态 EMPTY
+  - `buildUserPrompt` 重载：旧签名委托 `DependencyContext.EMPTY` 保兼容，新签名四要素后追加 `depCtx.promptSection`
+  - `executeOnce`：调 `loadDependencyContext` 后装配 `AgentTask.userPrompt`；`depCtx.hasDeps` 时记录 `sub_task_deps_context_loaded` timeline 事件（AgentRole.EXECUTOR，payload 四指标）
+
+前端（helloai-ui）：
+
+- `sequenceFlow.ts`：LABEL 加 `sub_task_deps_context_loaded: '装配依赖产出'`；`classifySwimlane` EXT 分支加该事件（归执行 Agent 泳道）
+- `SubTaskDetail.vue`：EVENT_META 加同 key（`参考上游产出` + “执行 Agent 已读取前置子任务的交付结果，作为本次执行的参考”）
+
+#### 3. 验证结果
+
+- 后端：`SubTaskExecutionServiceTest` 新增 5 例（无依赖不查库 `never().listByIds` / 有依赖注入产出正文 + `sub_task_deps_context_loaded` 事件 / 前置 DONE 无产出占位 / 超长产出截断标注 / `listByIds` 抛异常降级不阻断且 payload `degraded=true`），**16/16 全绿**（ArgumentCaptor 捕获 AgentTask 断言 userPrompt；降级用例捕获 payload Map 断言 depCount/degraded）
+- 全模块 `mvn compile` SUCCESS（JDK 17 + IntelliJ 内置 maven）；`vue-tsc --noEmit` 0 错
+- 无 Flyway 无配置项，重启即生效；真实环境 E2E 回归待做（可复用既有执行链脚本 + 人工抽查 LLM 输出是否援引上游内容）
+
+#### 4. 影响与遗留
+
+- 行为兼容：无依赖子任务与旧版完全一致（EMPTY 短路 + 不查库 + 不记录事件）；依赖查询失败时执行照常，仅 warn
+- 非 DONE 前置（死信人工指派等旁路绕过 ready 守卫）也注入状态说明，执行 Agent 能感知“前置未完成”而非蒙在鼓里
+- 截断只截正文不截结构；`DEP_OUTPUT_LIMIT` 为常量，后续如需可按任务/角色配置化
+- 本轮明确不在范围：① 产出摘要化/向量化（多一次 LLM 调用与失败面）；② 跨任务依赖上下文（depends_on 限定同 Task 内）；③ 按依赖层级多级透传（各层由自己的直接前置负责）；④ 执行 Agent 主动“拉取”上游（保持注入式单向）；⑤ 问题一（planner 关键词触发拆解）未在本轮处理，另行评估
+
+---
+

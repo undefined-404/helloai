@@ -6,6 +6,7 @@ import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.shared.util.SubTaskDependencyOrder;
+import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.system.entity.Attachment;
 import com.helloai.core.system.service.AttachmentService;
 import com.helloai.core.system.storage.ArtifactStorage;
@@ -211,16 +212,9 @@ public class TaskDeliverableService {
         return agent != null && agent.getName() != null ? agent.getName() : String.valueOf(agentId);
     }
 
-    /** 读取 context.lastExecution.output（与 SubTaskReviewService.extractExecutionOutput 同款先例）。 */
+    /** 读取 context.lastExecution.output（统一走 {@link SubTaskOutputExtractor}，消除多消费方同款先例漂移）。 */
     private static String extractExecutionOutput(SubTask subTask) {
-        Map<String, Object> ctx = subTask.getContext();
-        if (ctx != null && ctx.get("lastExecution") instanceof Map<?, ?> lastExecution) {
-            Object output = lastExecution.get("output");
-            if (output instanceof String text) {
-                return text;
-            }
-        }
-        return null;
+        return SubTaskOutputExtractor.extractExecutionOutput(subTask);
     }
 
     /** Markdown 表格单元转义：竖线与换行会破坏表格结构。 */

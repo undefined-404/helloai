@@ -108,7 +108,7 @@
       </div>
     </el-card>
 
-    <!-- M4.5: 执行时间线（M5 联调可视化） -->
+    <!-- M4.5: 执行时间线（M5 联调可视化）。V35 加「执行时序图」tab：泳道式 sequence diagram，跳框重试、人工介入、熔断 全可看 -->
     <el-card v-if="item" style="margin-top:16px">
       <template #header>
         <div class="card-header">
@@ -116,30 +116,38 @@
           <span style="font-size:12px;color:var(--ha-muted)">{{ timelinePolling ? '轮询中（5s）' : '已停止' }} · 共 {{ timeline.length }} 条</span>
         </div>
       </template>
-      <el-empty v-if="!timeline.length" description="暂无时间线事件" />
-      <el-timeline v-else>
-        <el-timeline-item
-          v-for="ev in timeline"
-          :key="ev.id"
-          :timestamp="fmtTime(ev.createTime)"
-          placement="top"
-          :type="eventTypeColor(ev.eventType)"
-        >
-          <div class="tl-head">
-            <el-tag size="small" :type="eventTypeColor(ev.eventType)">{{ eventLabel(ev.eventType) }}</el-tag>
-            <span class="tl-meta">
-              {{ roleLabel(ev.role) }}<template v-if="ev.agentId"> · {{ resolveAgentName(ev.agentId) }}</template>
-            </span>
-          </div>
-          <!-- 人话化：把事件类型/payload 翻译成非开发者能看懂的一句话 -->
-          <div class="tl-desc">{{ eventDescription(ev) }}</div>
-          <el-collapse v-if="ev.payload && Object.keys(ev.payload).length" class="tl-collapse">
-            <el-collapse-item title="技术详情（开发者）" name="p">
-              <pre class="tl-payload">{{ JSON.stringify(ev.payload, null, 2) }}</pre>
-            </el-collapse-item>
-          </el-collapse>
-        </el-timeline-item>
-      </el-timeline>
+      <!-- V35: 列表 / 时序图 双视图切换 -->
+      <el-tabs v-model="timelineView" class="timeline-tabs">
+        <el-tab-pane label="时间线列表" name="list">
+          <el-empty v-if="!timeline.length" description="暂无时间线事件" />
+          <el-timeline v-else>
+            <el-timeline-item
+              v-for="ev in timeline"
+              :key="ev.id"
+              :timestamp="fmtTime(ev.createTime)"
+              placement="top"
+              :type="eventTypeColor(ev.eventType)"
+            >
+              <div class="tl-head">
+                <el-tag size="small" :type="eventTypeColor(ev.eventType)">{{ eventLabel(ev.eventType) }}</el-tag>
+                <span class="tl-meta">
+                  {{ roleLabel(ev.role) }}<template v-if="ev.agentId"> · {{ resolveAgentName(ev.agentId) }}</template>
+                </span>
+              </div>
+              <!-- 人话化：把事件类型/payload 翻译成非开发者能看懂的一句话 -->
+              <div class="tl-desc">{{ eventDescription(ev) }}</div>
+              <el-collapse v-if="ev.payload && Object.keys(ev.payload).length" class="tl-collapse">
+                <el-collapse-item title="技术详情（开发者）" name="p">
+                  <pre class="tl-payload">{{ JSON.stringify(ev.payload, null, 2) }}</pre>
+                </el-collapse-item>
+              </el-collapse>
+            </el-timeline-item>
+          </el-timeline>
+        </el-tab-pane>
+        <el-tab-pane label="执行时序图" name="seq">
+          <SubTaskSequenceFlow :events="timeline" :resolve-agent-name="resolveAgentName" />
+        </el-tab-pane>
+      </el-tabs>
     </el-card>
   </div>
 </template>
@@ -154,6 +162,7 @@ import { attachmentApi } from '@/api/attachment'
 import { saveBlobResponse } from '@/utils/download'
 import MarkdownView from '@/components/MarkdownView.vue'
 import ReviewVerdictView from '@/components/ReviewVerdictView.vue'
+import SubTaskSequenceFlow from '@/components/SubTaskSequenceFlow.vue'
 import { SUB_TASK_STATUS_MAP, SCORE_GRADE_MAP } from '@/types'
 import { fmtTime } from '@/utils/tableConfig'
 import { orderByDependency } from '@/utils/subTaskDag'
@@ -167,6 +176,8 @@ const timeline = ref<TaskTimelineItem[]>([])
 const conversation = ref<ConversationMessageItem[]>([])
 let pollTimer: number | null = null
 const timelinePolling = ref(false)
+// V35: 列表 / 时序图 tab 切换；默认列表保留原始细节，时序图供快速扫描跨角色调用链
+const timelineView = ref<'list' | 'seq'>('list')
 
 const TERMINAL_STATUSES: SubTask['status'][] = ['DONE', 'CANCELLED']
 
@@ -251,6 +262,7 @@ const EVENT_META: Record<string, { label: string; desc: string }> = {
   sub_task_execute_enter: { label: '开始执行', desc: '执行 Agent 开始处理子任务' },
   sub_task_execute_start: { label: '开始执行', desc: '执行 Agent 开始处理子任务' },
   sub_task_execute_before_platform: { label: '执行前准备', desc: '执行前的平台准备工作' },
+  sub_task_deps_context_loaded: { label: '参考上游产出', desc: '执行 Agent 已读取前置子任务的交付结果，作为本次执行的参考' },
   sub_task_llm_call_start: { label: '调用大模型', desc: '执行 Agent 开始请求大模型生成内容' },
   sub_task_llm_call_end: { label: '大模型返回', desc: '大模型已返回生成结果' },
   sub_task_llm_call_failed: { label: '大模型失败', desc: '调用大模型失败（超时或网络异常）' },
