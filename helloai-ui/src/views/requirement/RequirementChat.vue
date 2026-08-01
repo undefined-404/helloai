@@ -140,6 +140,28 @@
                 @keydown.enter.exact.prevent="handleSend"
               />
               <div class="input-actions">
+                <!-- V34 会话级联网搜索开关：ima copilot 样式（默认开启；仅新会话可改；老会话只读取会话原值） -->
+                <div class="web-search-switch">
+                  <el-tooltip
+                    :content="webSearchTooltip"
+                    placement="top"
+                    :show-after="300"
+                  >
+                    <span class="web-search-toggle">
+                      <el-icon class="web-search-icon"><Connection /></el-icon>
+                      <span>联网搜索</span>
+                    </span>
+                  </el-tooltip>
+                  <el-switch
+                    v-model="webSearchEnabled"
+                    :disabled="activeId != null && conversation?.status === 'ACTIVE'"
+                    size="small"
+                    inline-prompt
+                    active-text="开"
+                    inactive-text="关"
+                    @change="onWebSearchToggle"
+                  />
+                </div>
                 <!-- 新会话：规划者手动选择；已有会话：展示钉住的规划者 -->
                 <div v-if="activeId == null" class="planner-select">
                   <span class="planner-label">规划者</span>
@@ -187,10 +209,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Loading } from '@element-plus/icons-vue'
+import { Loading, Connection } from '@element-plus/icons-vue'
 import { clarifyApi } from '@/api/clarify'
 import { taskApi } from '@/api/task'
 import { fmtTime } from '@/utils/tableConfig'
@@ -215,6 +237,18 @@ const streamEl = ref<HTMLElement | null>(null)
 // Planner 下拉选：'__auto__' = 系统自动选择（等权重，优先空闲）
 const plannerOptions = ref<PlannerOption[]>([])
 const selectedPlanner = ref<string>('__auto__')
+
+// V34 会话级联网搜索开关：默认开启；新会话提交后跟随会话落库（老会话不能改）
+const webSearchEnabled = ref<boolean>(true)
+const webSearchTooltip = '首轮对话前预检索行业资料 / 竞品 / 技术方案，注入 Prompt 增强拆解质量；失败自动降级'
+
+// 已存在会话：下拉开关同步为会话原值（不可改）；新会话手动点击
+watch(
+  () => detail.value?.conversation?.webSearchEnabled,
+  (v: boolean | null | undefined) => { if (v != null) webSearchEnabled.value = v }
+)
+
+function onWebSearchToggle() { /* 占位：保留供后续埋点/提示扩展 */ }
 
 // 上轮 LLM 失败后可重试：ACTIVE 且最后一条是 user 消息（数据驱动，刷新后仍可重试）
 const canRetry = computed(() => {
@@ -362,8 +396,9 @@ async function handleSend() {
   scrollToBottom()
   try {
     const plannerId = selectedPlanner.value === '__auto__' ? null : (selectedPlanner.value || null)
+    // V34：仅新会话向 create 传联网搜索开关；老会话发送消息接口忽略此值
     const result = activeId.value == null
-      ? await clarifyApi.create(text, plannerId)
+      ? await clarifyApi.create(text, plannerId, webSearchEnabled.value)
       : await clarifyApi.send(activeId.value, text)
     detail.value = result
     activeId.value = result.conversation.id
@@ -621,6 +656,24 @@ onMounted(() => {
 .input-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
 .input-actions-right { display: flex; gap: 8px; }
 .chat-readonly-tip { color: var(--ha-muted); font-size: 13px; text-align: center; padding: 8px 0; }
+
+/* ── V34 联网搜索开关（仿 ima copilot 风格） ── */
+.web-search-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.web-search-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--ha-muted);
+  cursor: default;
+  user-select: none;
+}
+.web-search-icon { font-size: 14px; }
 
 /* ── Planner 选择 / 重试条 ── */
 .planner-select { display: flex; align-items: center; gap: 8px; }

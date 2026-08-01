@@ -442,6 +442,9 @@ export interface RequirementConversation {
   finalTitle: string | null
   finalDescription: string | null
   roundCount: number
+  // 会话级联网搜索开关（V34；null=默认开启 / true=开启 / false=关闭；
+  // 首轮 LLM 调用前若为开启则服务端预检索行业资料注入 Prompt）
+  webSearchEnabled?: boolean | null
   createTime: string
   updateTime: string
 }

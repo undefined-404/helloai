@@ -36,4 +36,12 @@ public class RequirementConversation extends BaseEntity {
 
     /** 手动指定的 Planner Agent ID（软引用无 FK；NULL 表示系统自动选择，V31） */
     private Long plannerAgentId;
+
+    /**
+     * 会话级联网搜索开关（Flyway V34 新增）。
+     * <p>首轮 LLM 调用前（{@code roundCount=0}）若本字段为 NULL/true，
+     * 服务端会预检索行业资料/竞品/技术方案后注入 {@code {{WEB_SEARCH_CONTEXT}}} 占位符。
+     * 失败一律降级跳过，不阻断澄清流程；老数据 NULL 视为默认开启。</p>
+     */
+    private Boolean webSearchEnabled;
 }

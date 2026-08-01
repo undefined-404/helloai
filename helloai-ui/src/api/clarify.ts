@@ -4,10 +4,10 @@ import type { ClarifyConversationDetail, ClarifySelection, PlannerOption, Requir
 // V29 对话式需求澄清: 每轮走一次 LLM，耗时远超全局 30s，create/send/retry 单请求覆盖 timeout
 export const clarifyApi = {
   // 新建会话（首条用户消息触发一轮 LLM；plannerAgentId 空=系统自动选择）
-  create(message: string, plannerAgentId?: LongId | null) {
+  create(message: string, plannerAgentId?: LongId | null, webSearchEnabled?: boolean | null) {
     return request.post<any, ClarifyConversationDetail>(
       '/requirement-conversations',
-      { message, plannerAgentId: plannerAgentId ?? null },
+      { message, plannerAgentId: plannerAgentId ?? null, webSearchEnabled: webSearchEnabled ?? null },
       { timeout: 120_000 })
   },
   // 追加用户消息并走一轮 LLM 澄清（可附 V33 结构化选项回答快照）

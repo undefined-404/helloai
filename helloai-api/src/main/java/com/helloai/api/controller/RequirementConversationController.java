@@ -25,10 +25,12 @@ public class RequirementConversationController {
 
     private final RequirementClarifyService requirementClarifyService;
 
-    /** 新建澄清会话（首条用户消息触发一轮 LLM；可选手动指定 Planner）。 */
+    /** 新建澄清会话（首条用户消息触发一轮 LLM；可选手动指定 Planner；V34 起可带联网搜索开关）。 */
     @PostMapping
     public R<ClarifyConversationDetail> create(@Valid @RequestBody ClarifyMessageRequest req) {
-        return R.ok(requirementClarifyService.create(req.getMessage(), req.getPlannerAgentId()));
+        // V34 联网搜索开关透传：NULL 走默认开启语义（与老数据兼容）
+        return R.ok(requirementClarifyService.create(
+                req.getMessage(), req.getPlannerAgentId(), req.getWebSearchEnabled()));
     }
 
     /** Planner 下拉选数据源（平台内 PLANNER 可选 + 在班外部 Agent 置灰）。 */

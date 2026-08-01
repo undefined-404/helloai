@@ -2,6 +2,7 @@ package com.helloai.core.planner;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.helloai.common.config.WebSearchProperties;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.TaskStatus;
@@ -13,6 +14,8 @@ import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
+import com.helloai.core.planner.search.WebSearchResult;
+import com.helloai.core.planner.search.WebSearchService;
 import com.helloai.core.planner.service.RequirementConversationService;
 import com.helloai.core.planner.service.RequirementMessageService;
 import com.helloai.core.shared.util.LlmJsonSanitizer;
@@ -20,8 +23,8 @@ import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import lombok.Data;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 
@@ -44,8 +47,36 @@ import java.util.Map;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class RequirementClarifyService {
+
+    /**
+     * 显式全参构造器（绕开 Lombok {@code @RequiredArgsConstructor} 在
+     * IDE 增量编译里漏抓新增 final 字段的坑：显式列为 Spring DI 唯一依据）。
+     */
+    @Autowired
+    public RequirementClarifyService(RequirementConversationService conversationService,
+                                     RequirementMessageService messageService,
+                                     TaskService taskService,
+                                     AgentService agentService,
+                                     PlannerAgentPicker plannerAgentPicker,
+                                     AgentInboxService agentInboxService,
+                                     PlatformAgentExecutionService platformAgentExecutionService,
+                                     TaskTimelineService taskTimelineService,
+                                     ObjectMapper objectMapper,
+                                     WebSearchService webSearchService,
+                                     WebSearchProperties webSearchProperties) {
+        this.conversationService = conversationService;
+        this.messageService = messageService;
+        this.taskService = taskService;
+        this.agentService = agentService;
+        this.plannerAgentPicker = plannerAgentPicker;
+        this.agentInboxService = agentInboxService;
+        this.platformAgentExecutionService = platformAgentExecutionService;
+        this.taskTimelineService = taskTimelineService;
+        this.objectMapper = objectMapper;
+        this.webSearchService = webSearchService;
+        this.webSearchProperties = webSearchProperties;
+    }
 
     /** 会话状态常量（与 V29 CHECK 约束对齐）。 */
     public static final String STATUS_ACTIVE = "ACTIVE";
@@ -82,6 +113,8 @@ public class RequirementClarifyService {
     private final PlatformAgentExecutionService platformAgentExecutionService;
     private final TaskTimelineService taskTimelineService;
     private final ObjectMapper objectMapper;
+    private final WebSearchService webSearchService;
+    private final WebSearchProperties webSearchProperties;
 
     // ══════════════════════════════════════════════════════════════
     //  会话生命周期
@@ -90,11 +123,14 @@ public class RequirementClarifyService {
     /**
      * 新建澄清会话：首条用户消息截断为标题 → 存 user 消息 → 走一轮 LLM。
      *
-     * @param plannerAgentId 手动指定的 Planner Agent ID（空=系统自动选择）；
-     *                       指定时严格校验可选性，澄清与后续拆解均跟随该 Planner
+     * @param plannerAgentId   手动指定的 Planner Agent ID（空=系统自动选择）；
+     *                         指定时严格校验可选性，澄清与后续拆解均跟随该 Planner
+     * @param webSearchEnabled 会话级联网搜索开关（V34 新增；NULL=默认开启）；
+     *                         首轮 LLM 调用前若 true 服务端会预检索行业资料并注入
+     *                         {@code {{WEB_SEARCH_CONTEXT}}} 占位符，失败降级跳过
      * @return 会话 + 全部消息
      */
-    public ClarifyConversationDetail create(String firstMessage, Long plannerAgentId) {
+    public ClarifyConversationDetail create(String firstMessage, Long plannerAgentId, Boolean webSearchEnabled) {
         if (firstMessage == null || firstMessage.isBlank()) {
             throw new BizException("首条消息不能为空");
         }
@@ -108,10 +144,17 @@ public class RequirementClarifyService {
         conversation.setStatus(STATUS_ACTIVE);
         conversation.setRoundCount(0);
         conversation.setPlannerAgentId(plannerAgentId);
+        // NULL 落库为 NULL（兼容老数据默认开启语义由读取侧判定），false/true 严格落库
+        conversation.setWebSearchEnabled(webSearchEnabled);
         conversationService.save(conversation);
-        log.info("澄清会话创建: id={}, title={}, plannerAgentId={}",
-                conversation.getId(), conversation.getTitle(), plannerAgentId);
+        log.info("澄清会话创建: id={}, title={}, plannerAgentId={}, webSearchEnabled={}",
+                conversation.getId(), conversation.getTitle(), plannerAgentId, webSearchEnabled);
         return doRound(conversation, trimmed);
+    }
+
+    /** 兼容重载：旧调用方未传开关时默认开启（NULL 代表默认开启，与老数据语义一致）。 */
+    public ClarifyConversationDetail create(String firstMessage, Long plannerAgentId) {
+        return create(firstMessage, plannerAgentId, null);
     }
 
     /**
@@ -159,7 +202,8 @@ public class RequirementClarifyService {
             throw new BizException("最后一条消息已有助手回复，无需重试: conversationId=" + conversationId);
         }
         log.info("澄清会话重试一轮 LLM: conversationId={}", conversationId);
-        return runLlmRound(conversation);
+        // 重试场景不复用首轮预检索资料：失败那轮通常与外部 API 副作用相关，重跑前重新准备
+        return runLlmRound(conversation, "");
     }
 
     /** Planner 下拉选数据源（平台内 PLANNER 可选 + 在班外部 Agent 置灰）。 */
@@ -297,18 +341,78 @@ public class RequirementClarifyService {
         int rounds = conversation.getRoundCount() != null ? conversation.getRoundCount() : 0;
         conversation.setRoundCount(rounds + 1);
         conversationService.updateById(conversation);
-        return runLlmRound(conversation);
+
+        // V34 联网搜索：仅首轮（rounds == 0）且开关开启（NULL/true 视为开启）时检索
+        String webSearchContext = "";
+        if (rounds == 0 && isWebSearchEnabled(conversation)) {
+            webSearchContext = doWebSearch(userMessage);
+        }
+        return runLlmRound(conversation, webSearchContext);
+    }
+
+    /** NULL/true 视为开启；只有严格的 false 走关闭语义。 */
+    private boolean isWebSearchEnabled(RequirementConversation conversation) {
+        Boolean v = conversation.getWebSearchEnabled();
+        return v == null || v;
+    }
+
+    /**
+     * 联网搜索一次：提取关键词 → 调用搜索服务 → 渲染为注入文本。
+     * 任一环节异常/失败降级为空串。
+     */
+    private String doWebSearch(String firstUserMessage) {
+        String query = extractQueryKeyword(firstUserMessage);
+        if (query.isBlank()) return "";
+        long t0 = System.currentTimeMillis();
+        try {
+            List<WebSearchResult> results = webSearchService.search(query, webSearchProperties.getMaxResults());
+            log.info("澄清联网搜索结束: provider={}, query={}, results={}, costMs={}",
+                    webSearchService.provider(), query, results.size(), System.currentTimeMillis() - t0);
+            return renderWebSearchContext(results);
+        } catch (Exception e) {
+            log.warn("澄清联网搜索异常降级（不动澄清主流程）: query={}, err={}", query, e.getMessage());
+            return "";
+        }
+    }
+
+    /** 关键词提取：首条用户消息前 queryKeywordLimit 字符（去两端空白）。 */
+    private String extractQueryKeyword(String s) {
+        if (s == null) return "";
+        String trimmed = s.trim();
+        int limit = webSearchProperties.getQueryKeywordLimit();
+        if (trimmed.length() <= limit) return trimmed;
+        return trimmed.substring(0, limit);
+    }
+
+    /** 联网检索结果 → Prompt 文本（≤ 5 条，每条双行）。空列表输出占位符保证 Prompt 语义节稳定。 */
+    private String renderWebSearchContext(List<WebSearchResult> results) {
+        if (results == null || results.isEmpty()) return "（无可用联网资料）";
+        StringBuilder sb = new StringBuilder();
+        sb.append("以下是联网检索到的行业资料（上限 ").append(results.size()).append(" 条，按相关性排序）：\n");
+        for (int i = 0; i < results.size(); i++) {
+            WebSearchResult r = results.get(i);
+            sb.append('[').append(i + 1).append("] ").append(r.getTitle());
+            if (r.getUrl() != null && !r.getUrl().isBlank()) {
+                sb.append("（").append(r.getUrl()).append("）");
+            }
+            sb.append('\n').append(r.getSnippet());
+            if (i < results.size() - 1) sb.append("\n\n");
+        }
+        return sb.toString();
     }
 
     /**
      * LLM 一轮（不落 user 消息）：选 Planner → 全量历史渲染模板 → LLM →
      * 解析 question/final 分支落库；doRound 与 retryRound 共用。
+     *
+     * @param webSearchContext 首轮预检索的联网资料文本（重试场景传空串）；
+     *                         已在 doRound 里根据首轮/开关限定过
      */
-    private ClarifyConversationDetail runLlmRound(RequirementConversation conversation) {
+    private ClarifyConversationDetail runLlmRound(RequirementConversation conversation, String webSearchContext) {
         Long conversationId = conversation.getId();
 
         Agent planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
-        String prompt = renderPrompt(conversationId);
+        String prompt = renderPrompt(conversationId, webSearchContext);
         AgentTask agentTask = AgentTask.builder()
                 .systemPrompt("")
                 .userPrompt(prompt)
@@ -351,8 +455,15 @@ public class RequirementClarifyService {
         return conversation;
     }
 
-    /** 加载 classpath 模板并替换 {{CONVERSATION_HISTORY}}（transcript 全量历史）。 */
-    private String renderPrompt(Long conversationId) {
+    /**
+     * 加载 classpath 模板并替换两个占位符：
+     * <ul>
+     *   <li>{@code {{CONVERSATION_HISTORY}}} — transcript 全量历史；</li>
+     *   <li>{@code {{WEB_SEARCH_CONTEXT}}} — 首轮预检索的联网资料；空串代表无资料，
+     *       渲染为"（无可用联网资料）"占位符，保证 Prompt 该节语义节稳定。</li>
+     * </ul>
+     */
+    private String renderPrompt(Long conversationId, String webSearchContext) {
         ClassPathResource resource = new ClassPathResource(PROMPT_TEMPLATE_PATH);
         if (!resource.exists()) {
             throw new BizException("未找到澄清 Prompt 模板: " + PROMPT_TEMPLATE_PATH);
@@ -368,7 +479,11 @@ public class RequirementClarifyService {
             transcript.append(ROLE_USER.equals(msg.getRole()) ? "用户：" : "助手：")
                     .append(msg.getContent()).append('\n');
         }
-        return template.replace("{{CONVERSATION_HISTORY}}", transcript.toString().trim());
+        String contextSection = (webSearchContext == null || webSearchContext.isBlank())
+                ? "（无可用联网资料）" : webSearchContext;
+        return template
+                .replace("{{CONVERSATION_HISTORY}}", transcript.toString().trim())
+                .replace("{{WEB_SEARCH_CONTEXT}}", contextSection);
     }
 
     /**
