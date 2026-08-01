@@ -19,6 +19,7 @@ import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.task.spec.TaskRunningSpecService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -36,6 +37,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -72,6 +74,9 @@ class PlannerAnalysisServiceTest {
     @Mock
     private SubTaskDispatchService subTaskDispatchService;
 
+    @Mock
+    private TaskRunningSpecService taskRunningSpecService;
+
     private PlannerAnalysisService plannerAnalysisService;
 
     // lambdaQuery / lambdaUpdate 链式 mock（项目内首例：手动 stub 链式返回自身）
@@ -87,7 +92,7 @@ class PlannerAnalysisServiceTest {
         plannerAnalysisService = new PlannerAnalysisService(
                 taskService, subTaskService, plannerAgentPicker,
                 platformAgentExecutionService, taskTimelineService,
-                subTaskDispatchService, new ObjectMapper());
+                subTaskDispatchService, taskRunningSpecService, new ObjectMapper());
 
         lenient().when(subTaskService.lambdaQuery()).thenReturn(subTaskQueryChain);
         lenient().when(subTaskQueryChain.eq(any(), any())).thenReturn(subTaskQueryChain);
@@ -98,6 +103,10 @@ class PlannerAnalysisServiceTest {
         lenient().when(taskUpdateChain.eq(any(), any())).thenReturn(taskUpdateChain);
         lenient().when(taskUpdateChain.set(any(), any())).thenReturn(taskUpdateChain);
         lenient().when(taskUpdateChain.update()).thenReturn(true);
+
+        // finishConfirm 新增的 updateById + RunningSpec 初始化
+        lenient().when(taskService.updateById(any(Task.class))).thenReturn(true);
+        lenient().doNothing().when(taskRunningSpecService).initialize(anyLong(), any());
     }
 
     private Task pendingTask() {
@@ -325,6 +334,9 @@ class PlannerAnalysisServiceTest {
 
         when(taskService.getById(TASK_ID)).thenReturn(planningTask());
         when(subTaskService.list(TASK_ID, SubTaskStatus.PENDING_PLAN_REVIEW, null, null, 0))
+                .thenReturn(pageOf(List.of()));
+        // recoverAlreadyConfirmed 会查 PENDING 子任务，未 stub 则返回 null 导致 NPE
+        when(subTaskService.list(TASK_ID, SubTaskStatus.PENDING, null, null, 0))
                 .thenReturn(pageOf(List.of()));
         assertThatThrownBy(() -> plannerAnalysisService.confirmPlan(TASK_ID))
                 .isInstanceOf(BizException.class)

@@ -26,6 +26,9 @@ import java.util.Map;
 import com.helloai.core.agent.execution.SubTaskExecutionService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.task.spec.ExecutionRecord;
+import com.helloai.core.task.spec.ExecutionRecordParser;
+import com.helloai.core.task.spec.TaskRunningSpecService;
 
 /**
  * 执行结果处理器。
@@ -46,6 +49,7 @@ public class ExecutionResultHandler {
     private final ApplicationEventPublisher applicationEventPublisher;
     private final ConversationService conversationService;
     private final ExecutionArtifactService executionArtifactService;
+    private final TaskRunningSpecService taskRunningSpecService;
 
     @Transactional(rollbackFor = Exception.class)
     public void handleSuccess(Long subTaskId, Long agentId, AgentResult result) {
@@ -143,6 +147,34 @@ public class ExecutionResultHandler {
         last.put("output", report.getOutput());
         last.put("error", report.getError());
         ctx.put("lastExecution", last);
+
+        // Task Running Spec 回填：从 executor 输出解析 EXECUTION_RECORD 块
+        try {
+            ExecutionRecord record = ExecutionRecordParser.parse(
+                    report.getOutput(), subTask.getId(), subTask.getTitle(), report.getAgentId());
+            if (record != null) {
+                taskRunningSpecService.appendExecutionRecord(subTask.getTaskId(), record);
+            } else {
+                // 解析失败：用 output 前 200 字符做 fallback summary
+                String output = report.getOutput();
+                if (output != null && !output.isBlank()) {
+                    String fallbackSummary = output.length() > 200
+                            ? output.substring(0, 200) + "..." : output;
+                    log.warn("EXECUTION_RECORD 解析失败，使用 fallback summary: subTaskId={}", subTask.getId());
+                    ExecutionRecord fallback = ExecutionRecord.builder()
+                            .subTaskId(subTask.getId())
+                            .title(subTask.getTitle())
+                            .agentId(report.getAgentId())
+                            .summary(fallbackSummary)
+                            .build();
+                    taskRunningSpecService.appendExecutionRecord(subTask.getTaskId(), fallback);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Task Running Spec 回填失败（不阻断主链路）: subTaskId={}, err={}",
+                    subTask.getId(), e.getMessage());
+        }
+
         subTask.setContext(ctx);
         subTaskService.updateById(subTask);
 

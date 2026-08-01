@@ -22,13 +22,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.agent.service.AgentService;
-import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.task.spec.TaskRunningSpecService;
 
 @Slf4j
 @Service
@@ -55,14 +54,7 @@ public class SubTaskExecutionService {
     private final PlatformAgentExecutionService platformAgentExecutionService;
     private final TaskTimelineService taskTimelineService;
     private final ExecutionResultHandler executionResultHandler;
-
-    /**
-     * 单个前置子任务产出注入执行 Prompt 的截断上限（字符）。
-     *
-     * <p>执行场景是逐条注入单条产出，比任务整合报告聚合多段（首档 8000）更紧，
-     * 避免多个依赖产出叠加后撑爆小上下文模型；截断处显式标注，执行 Agent 可知有遗漏。</p>
-     */
-    private static final int DEP_OUTPUT_LIMIT = 4000;
+    private final TaskRunningSpecService taskRunningSpecService;
 
     // #region debug-point redispatch-stuck-blocked
     private static final ObjectMapper DBG_MAPPER = new ObjectMapper();
@@ -210,16 +202,16 @@ public class SubTaskExecutionService {
                 "agentOnlineStatus", agent.getOnlineStatus() != null ? agent.getOnlineStatus().name() : null
         ));
 
-        // 依赖产出上下文装配（V35）：depends_on 中前置 DONE 子任务的产出注入 Prompt，
-        // 保证下游执行 Agent 真正参考过上游交付；无依赖/装配失败时行为与旧版完全一致
-        DependencyContext depCtx = loadDependencyContext(subTask);
+        // Task Running Spec 上下文装配：从 task.context JSONB 读取结构化运行态文档，
+        // 替代 V35 原始产出注入，避免噪声污染下游 executor 上下文
+        String promptSection = taskRunningSpecService.buildExecutorPromptSection(subTask.getTaskId());
         Map<String, Object> context = new HashMap<>();
         context.put("taskId", subTask.getTaskId());
         context.put("subTaskId", subTaskId);
         AgentTask task = AgentTask.builder()
                 .subTaskId(subTaskId)
                 .systemPrompt("")
-                .userPrompt(buildUserPrompt(subTask, depCtx))
+                .userPrompt(buildUserPrompt(subTask, promptSection))
                 .context(context)
                 .requiredCapabilities(Map.of())
                 .build();
@@ -227,16 +219,11 @@ public class SubTaskExecutionService {
                 "subTaskId", subTaskId,
                 "agentId", agent.getId()
         ));
-        // 依赖上下文装配可观测：仅当声明了依赖时记录（无依赖零噪音），
-        // 让时序图/时间线能看出“读取上游产出”环节（用户此前发现此处缺环）
-        if (depCtx.hasDeps) {
-            taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_deps_context_loaded",
+        // Task Running Spec 上下文装配可观测：有上下文段时记录 timeline 事件
+        if (promptSection != null && !promptSection.isBlank()) {
+            taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_spec_context_loaded",
                     AgentRole.EXECUTOR, agent.getId(),
-                    safeMap("agentId", agent.getId(),
-                            "depCount", depCtx.depCount,
-                            "loadedCount", depCtx.loadedCount,
-                            "truncatedCount", depCtx.truncatedCount,
-                            "degraded", depCtx.degraded));
+                    Map.of("agentId", agent.getId()));
         }
         taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_llm_call_start",
                 AgentRole.EXECUTOR, agent.getId(),
@@ -270,17 +257,27 @@ public class SubTaskExecutionService {
     }
 
     private String buildUserPrompt(SubTask subTask) {
-        return buildUserPrompt(subTask, DependencyContext.EMPTY);
+        return buildUserPrompt(subTask, "");
     }
 
     /**
-     * 组装执行 Prompt：子任务四要素 + 上游产出参考（仅当存在依赖上下文时注入）。
+     * 组装执行 Prompt：任务全局上下文 + 当前子任务四要素 + 回填要求。
      *
-     * <p>上游产出段放在任务四要素之后、输出要求之前，以独立章节明示其来源，
-     * 避免执行 Agent 把参考内容误当成自己的待办。</p>
+     * <p>全局上下文来自 Task Running Spec（Baseline + ContextSummary + 前置任务摘要），
+     * 替代 V35 原始产出注入。回填要求指导 executor 按 EXECUTION_RECORD 协议输出
+     * 结构化摘要，供后续下游 executor 消费。</p>
      */
-    private String buildUserPrompt(SubTask subTask, DependencyContext depCtx) {
+    private String buildUserPrompt(SubTask subTask, String runningSpecSection) {
         StringBuilder sb = new StringBuilder();
+
+        // 任务全局上下文（Task Running Spec）
+        if (runningSpecSection != null && !runningSpecSection.isBlank()) {
+            sb.append(runningSpecSection);
+            sb.append("\n---\n\n");
+        }
+
+        // 当前子任务四要素
+        sb.append("## 当前任务\n");
         sb.append("任务标题: ").append(subTask.getTitle()).append("\n");
         if (subTask.getContent() != null && !subTask.getContent().isBlank()) {
             sb.append("任务描述: ").append(subTask.getContent()).append("\n");
@@ -291,94 +288,23 @@ public class SubTaskExecutionService {
         if (subTask.getAcceptance() != null && !subTask.getAcceptance().isBlank()) {
             sb.append("验收标准: ").append(subTask.getAcceptance()).append("\n");
         }
-        if (depCtx.hasDeps) {
-            sb.append('\n').append(depCtx.promptSection);
-        }
-        sb.append("请输出交付结果，尽量结构化。");
+
+        // 回填要求（EXECUTION_RECORD 协议）
+        sb.append("\n---\n\n");
+        sb.append("## 产出回填要求\n");
+        sb.append("请在完成交付物输出后，在输出的最后附上以下结构化回填块：\n\n");
+        sb.append("```\n");
+        sb.append("## EXECUTION_RECORD\n");
+        sb.append("SUMMARY: <1-2句核心产出描述>\n");
+        sb.append("KEY_DECISIONS:\n");
+        sb.append("- <关键决策1>\n");
+        sb.append("DOWNSTREAM_NOTES:\n");
+        sb.append("- <下游子任务需要注意的事项>\n");
+        sb.append("DELIVERABLES:\n");
+        sb.append("- <产出文件路径>\n");
+        sb.append("```\n");
+
         return sb.toString();
     }
 
-    /**
-     * 加载前置依赖子任务的产出上下文（V35）。
-     *
-     * <p>按 {@code depends_on} 声明顺序（即调度器 ready 语义的前置顺序）逐条装配：
-     * 前置 DONE 且 {@code context.lastExecution.output} 非空 → 产出正文注入；
-     * DONE 但无产出 / 非 DONE（人工死信指派等旁路可能绕过 ready 守卫）→ 注入状态说明。
-     * 单条产出超 {@link #DEP_OUTPUT_LIMIT} 截断并显式标注。</p>
-     *
-     * <p>失败降级：依赖查询或渲染异常只 warn 并返回空上下文（hasDeps 保留 true 供观测），
-     * 不阻断执行——产出参考是增强信息，不是交付门槛（与澄清联网搜索降级哲学一致）。</p>
-     */
-    private DependencyContext loadDependencyContext(SubTask subTask) {
-        List<Long> depIds = subTask.dependsOnIdList();
-        if (depIds.isEmpty()) {
-            return DependencyContext.EMPTY;
-        }
-        try {
-            List<SubTask> deps = subTaskService.listByIds(depIds);
-            Map<Long, SubTask> byId = new HashMap<>();
-            for (SubTask dep : deps) {
-                byId.put(dep.getId(), dep);
-            }
-            StringBuilder section = new StringBuilder();
-            section.append("## 上游产出参考（前置子任务的交付结果，你的工作必须建立在这些内容之上）\n");
-            int loaded = 0;
-            int truncated = 0;
-            int idx = 1;
-            for (Long depId : depIds) {
-                SubTask dep = byId.get(depId);
-                String status = dep != null && dep.getStatus() != null ? dep.getStatus().name() : "UNKNOWN";
-                String title = dep != null && dep.getTitle() != null ? dep.getTitle() : ("子任务#" + depId);
-                section.append("### 前置 ").append(idx++).append("：").append(title)
-                        .append("（状态：").append(status).append("）\n");
-                String output = dep != null ? SubTaskOutputExtractor.extractExecutionOutput(dep) : null;
-                if (output != null && !output.isBlank()) {
-                    loaded++;
-                    if (output.length() > DEP_OUTPUT_LIMIT) {
-                        section.append(output, 0, DEP_OUTPUT_LIMIT)
-                                .append("\n\n（产出超长，已截断至 ")
-                                .append(DEP_OUTPUT_LIMIT).append(" 字符，以已提供部分为准）\n");
-                        truncated++;
-                    } else {
-                        section.append(output).append('\n');
-                    }
-                } else {
-                    section.append("（该前置子任务无可用产出内容）\n");
-                }
-            }
-            return new DependencyContext(true, depIds.size(), loaded, truncated, section.toString(), false);
-        } catch (Exception e) {
-            log.warn("依赖产出上下文装配失败，降级为无依赖上下文: subTaskId={}, deps={}, err={}",
-                    subTask.getId(), depIds, e.getMessage());
-            return new DependencyContext(true, depIds.size(), 0, 0, "", true);
-        }
-    }
-
-    /** 依赖上下文装配结果（不可变）：hasDeps=false 表示无依赖或降级为空上下文。 */
-    private static final class DependencyContext {
-        private static final DependencyContext EMPTY = new DependencyContext(false, 0, 0, 0, "", false);
-
-        /** 是否声明了依赖（用于决定是否记录 timeline 观测事件）。 */
-        private final boolean hasDeps;
-        /** 声明的依赖数量。 */
-        private final int depCount;
-        /** 成功注入产出的前置数量。 */
-        private final int loadedCount;
-        /** 被截断的前置产出数量。 */
-        private final int truncatedCount;
-        /** 注入 Prompt 的渲染文本（无依赖/降级时为空串）。 */
-        private final String promptSection;
-        /** 装配是否降级（异常兜底，非业务路径）。 */
-        private final boolean degraded;
-
-        private DependencyContext(boolean hasDeps, int depCount, int loadedCount,
-                                  int truncatedCount, String promptSection, boolean degraded) {
-            this.hasDeps = hasDeps;
-            this.depCount = depCount;
-            this.loadedCount = loadedCount;
-            this.truncatedCount = truncatedCount;
-            this.promptSection = promptSection;
-            this.degraded = degraded;
-        }
-    }
 }

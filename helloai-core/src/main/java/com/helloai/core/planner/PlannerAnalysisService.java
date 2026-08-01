@@ -18,6 +18,8 @@ import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.task.spec.TaskBaseline;
+import com.helloai.core.task.spec.TaskRunningSpecService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -75,6 +77,7 @@ public class PlannerAnalysisService {
     private final PlatformAgentExecutionService platformAgentExecutionService;
     private final TaskTimelineService taskTimelineService;
     private final SubTaskDispatchService subTaskDispatchService;
+    private final TaskRunningSpecService taskRunningSpecService;
     private final ObjectMapper objectMapper;
 
     // ══════════════════════════════════════════════════════════════
@@ -199,23 +202,59 @@ public class PlannerAnalysisService {
         List<SubTask> drafts = orderByDependency(subTaskService.list(
                 taskId, SubTaskStatus.PENDING_PLAN_REVIEW, null, null, 0).getRecords());
         if (drafts.isEmpty()) {
-            throw new BizException("任务没有待确认的规划草案: taskId=" + taskId);
+            // 幂等恢复：若 PLANNING 草案已为空但存在已确认（PENDING 且 context 含 planConfirmedAt）的子任务，
+            // 说明前次 confirmPlan 的 SubTask 状态变更已提交但 Task 状态更新未生效，允许恢复。
+            List<SubTask> alreadyConfirmed = recoverAlreadyConfirmed(taskId);
+            if (alreadyConfirmed.isEmpty()) {
+                throw new BizException("任务没有待确认的规划草案: taskId=" + taskId);
+            }
+            log.warn("检测到部分确认状态（SubTask 已转正但 Task 未推进），自动恢复: taskId={}, count={}",
+                    taskId, alreadyConfirmed.size());
+            return finishConfirm(task, alreadyConfirmed);
         }
 
         for (SubTask draft : drafts) {
             subTaskService.changeStatus(draft.getId(), SubTaskStatus.PENDING, null,
                     Map.of("planConfirmedAt", OffsetDateTime.now().toString()));
         }
+        return finishConfirm(task, drafts);
+    }
+
+    /**
+     * 完成确认收尾：推进 Task 状态、初始化 RunningSpec、记录 timeline、触发自动分发。
+     */
+    private List<SubTask> finishConfirm(Task task, List<SubTask> confirmed) {
         task.setStatus(TaskStatus.IN_PROGRESS);
-        taskService.updateById(task);
+        boolean updated = taskService.updateById(task);
+        if (!updated) {
+            throw new BizException("任务状态推进失败（updateById 返回 false），请重试: taskId=" + task.getId());
+        }
+
+        // 初始化 Task Running Spec Baseline
+        try {
+            Long plannerAgentId = extractPlannerAgentId(confirmed);
+            TaskBaseline baseline = TaskBaseline.builder()
+                    .goal(buildBaselineGoal(task))
+                    .constraints("平台约束：子任务按 DAG 依赖顺序执行，下游须参考上游产出")
+                    .raw(buildBaselineRaw(confirmed))
+                    .createdBy(plannerAgentId)
+                    .createdAt(OffsetDateTime.now().toString())
+                    .build();
+            taskRunningSpecService.initialize(task.getId(), baseline);
+        } catch (Exception e) {
+            log.warn("TaskRunningSpec Baseline 初始化失败（不阻断草案确认）: taskId={}, err={}",
+                    task.getId(), e.getMessage());
+        }
+
+        Long taskId = task.getId();
         taskTimelineService.recordEvent(taskId, null, "task_plan_confirmed",
-                AgentRole.PLANNER, null, Map.of("subTaskCount", drafts.size()));
+                AgentRole.PLANNER, null, Map.of("subTaskCount", confirmed.size()));
 
         // 事务外触发自动分发（分发链内部有独立事务与事件），单条失败不阻断其余。
         // V27：确认草案是用户显式启动内循环的动作，不受 auto-assign-on-create
         // （任务创建即分发）开关控制；否则开关关闭时只能等孤儿扫描兜底，
         // 内循环无法自动运转。ready 守卫会自动拦住依赖未就绪的节点。
-        for (SubTask draft : drafts) {
+        for (SubTask draft : confirmed) {
             try {
                 subTaskDispatchService.dispatchPendingSubTaskAuto(draft.getId(), AgentRole.EXECUTOR);
             } catch (Exception e) {
@@ -223,8 +262,21 @@ public class PlannerAnalysisService {
                         draft.getId(), e.getMessage());
             }
         }
-        log.info("任务规划草案已确认: taskId={}, subTaskCount={}", taskId, drafts.size());
-        return drafts.stream().map(d -> subTaskService.getById(d.getId())).toList();
+        log.info("任务规划草案已确认: taskId={}, subTaskCount={}", taskId, confirmed.size());
+        return confirmed.stream().map(d -> subTaskService.getById(d.getId())).toList();
+    }
+
+    /**
+     * 幂等恢复：查找已确认（PENDING 状态且 context 含 planConfirmedAt）的子任务。
+     * <p>用于处理前次 confirmPlan 的 SubTask 状态变更已提交但 Task 状态更新未生效的场景。</p>
+     */
+    private List<SubTask> recoverAlreadyConfirmed(Long taskId) {
+        List<SubTask> pending = subTaskService.list(
+                taskId, SubTaskStatus.PENDING, null, null, 0).getRecords();
+        return pending.stream()
+                .filter(st -> st.getContext() != null
+                        && st.getContext().containsKey("planConfirmedAt"))
+                .toList();
     }
 
     /**
@@ -476,6 +528,43 @@ public class PlannerAnalysisService {
         String trimmed = raw.trim();
         return trimmed.length() <= RAW_OUTPUT_SUMMARY_LIMIT
                 ? trimmed : trimmed.substring(0, RAW_OUTPUT_SUMMARY_LIMIT) + "...";
+    }
+
+    /** 构建 Baseline goal：任务标题 + 描述。 */
+    private String buildBaselineGoal(Task task) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("任务标题: ").append(task.getTitle());
+        if (task.getDescription() != null && !task.getDescription().isBlank()) {
+            sb.append("\n任务描述: ").append(task.getDescription());
+        }
+        return sb.toString();
+    }
+
+    /** 构建 Baseline raw：子任务 DAG 结构摘要。 */
+    private String buildBaselineRaw(List<SubTask> drafts) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("子任务 DAG 结构（共 ").append(drafts.size()).append(" 个）：\n");
+        for (int i = 0; i < drafts.size(); i++) {
+            SubTask d = drafts.get(i);
+            sb.append(i + 1).append(". ").append(d.getTitle());
+            if (d.getDependsOn() != null && !d.getDependsOn().isEmpty()) {
+                sb.append(" [依赖: ").append(d.getDependsOn().size()).append("个前置]");
+            }
+            sb.append("\n");
+        }
+        return sb.toString();
+    }
+
+    /** 从草案 context 中提取 Planner Agent ID。 */
+    private Long extractPlannerAgentId(List<SubTask> drafts) {
+        if (drafts.isEmpty()) {
+            return null;
+        }
+        Map<String, Object> ctx = drafts.get(0).getContext();
+        if (ctx != null && ctx.get("plannerAgentId") instanceof Number n) {
+            return n.longValue();
+        }
+        return null;
     }
 
     /** LLM 结构化输出条目（未知字段容忍，避免 LLM 多给字段导致整批失败）。 */

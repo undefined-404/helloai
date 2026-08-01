@@ -15,6 +15,7 @@ import com.helloai.core.agent.service.ExternalAgentFailureTracker;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.task.spec.TaskRunningSpecService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -73,12 +74,15 @@ class ExecutionResultHandlerIntegrationTest {
     @Mock
     private ExecutionArtifactService executionArtifactService;
 
+    @Mock
+    private TaskRunningSpecService taskRunningSpecService;
+
     private ExecutionResultHandler handler;
 
     @BeforeEach
     void setUp() {
         handler = new ExecutionResultHandler(subTaskService, taskTimelineService, failureTracker, agentService,
-                applicationEventPublisher, conversationService, executionArtifactService);
+                applicationEventPublisher, conversationService, executionArtifactService, taskRunningSpecService);
         // 模拟 Spring @Transactional 已开启（afterCommit 注册需要激活的同步管理器）
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.initSynchronization();

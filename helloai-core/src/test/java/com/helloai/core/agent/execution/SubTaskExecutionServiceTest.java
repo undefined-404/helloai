@@ -31,6 +31,7 @@ import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.task.spec.TaskRunningSpecService;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("SubTaskExecutionService")
@@ -50,6 +51,9 @@ class SubTaskExecutionServiceTest {
 
     @Mock
     private ExecutionResultHandler executionResultHandler;
+
+    @Mock
+    private TaskRunningSpecService taskRunningSpecService;
 
     @InjectMocks
     private SubTaskExecutionService subTaskExecutionService;

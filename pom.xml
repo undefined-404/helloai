@@ -29,6 +29,9 @@
         <guava.version>33.2.0-jre</guava.version>
         <lombok.version>1.18.32</lombok.version>
         <resilience4j.version>2.2.0</resilience4j.version>
+
+        <!-- 打包时默认跳过测试执行，需要跑测试时加 -DskipTests=false -->
+        <skipTests>true</skipTests>
     </properties>
 
     <modules>

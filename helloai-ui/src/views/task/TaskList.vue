@@ -98,8 +98,9 @@ const router = useRouter()
 const list = ref<any[]>([])
 const loading = ref(false)
 
-// taskId query 参数支持：从子任务页"所属任务"点击跳转时，筛选展示对应主任务
+// taskId query 参数支持：筛选展示对应主任务（来源：子任务页"所属任务"、对话页"查看任务"等）
 const taskIdQuery = ref((route.query.taskId as string) || '')
+watch(() => route.query.taskId, (v) => { taskIdQuery.value = (v as string) || ''; load() })
 
 async function load() {
   loading.value = true
@@ -125,13 +126,21 @@ function openDesc(row: any) {
   descContent.value = row.description || ''
   descVisible.value = true
 }
-// V29 对话新建跳转带 ?review=taskId 时，加载后自动打开草案审阅（找不到静默忽略）
+// V29 对话新建跳转带 ?review=taskId 时，按状态分流：
+// - PLANNING → 打开草案审阅（待用户确认/拒绝）
+// - 其他状态 → 直接跳到主任务页（筛选展示该任务）
 onMounted(async () => {
   await load()
   const review = route.query.review
   if (review) {
     const row = list.value.find(t => String(t.id) === String(review))
-    if (row) openPlanReview(row)
+    if (row) {
+      if (row.status === 'PLANNING') {
+        openPlanReview(row)
+      } else {
+        router.push('/tasks?taskId=' + row.id)
+      }
+    }
   }
 })
 

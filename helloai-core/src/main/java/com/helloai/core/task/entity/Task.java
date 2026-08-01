@@ -1,12 +1,15 @@
 package com.helloai.core.task.entity;
 
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.helloai.common.base.BaseEntity;
 import com.helloai.common.constant.TaskStatus;
+import com.helloai.core.shared.handler.PgJsonbTypeHandler;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
 import java.time.OffsetDateTime;
+import java.util.Map;
 
 @Data
 @EqualsAndHashCode(callSuper = true)
@@ -25,4 +28,14 @@ public class Task extends BaseEntity {
 
     /** 报告生成时间（V32）。 */
     private OffsetDateTime finalReportTime;
+
+    /**
+     * 任务扩展上下文（V35 新增 JSONB）。
+     *
+     * <p>当前用途：Task Running Spec（Phase A JSONB 过渡态）——
+     * {@code runningSpec.baseline} / {@code runningSpec.executionRecords} /
+     * {@code runningSpec.contextSummary}。</p>
+     */
+    @TableField(typeHandler = PgJsonbTypeHandler.class)
+    private Map<String, Object> context;
 }
