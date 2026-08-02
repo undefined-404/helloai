@@ -164,7 +164,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, reactive, computed, watch } from 'vue'
+import { ref, onMounted, onBeforeUnmount, reactive, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { subTaskApi } from '@/api/subTask'
@@ -365,11 +365,34 @@ async function doReassign() {
 }
 
 function getSubTaskStatusMeta(status: SubTask['status']) { return SUB_TASK_STATUS_MAP[status] }
+
+// step9c：按主任务过滤时 10s 自动轮询刷新依赖图（DAG 视图不点刷新就不动）
+// 最小 8 行：起停 timer + load(); 全局列表（不按主任务过滤）轮询意义不大，保持手动刷新。
+let refreshTimer: number | null = null
+function startAutoRefresh() {
+  if (refreshTimer) return
+  refreshTimer = window.setInterval(() => {
+    if (!taskId.value) return
+    load(currentPage.value)
+  }, 10000)
+}
+function stopAutoRefresh() {
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
+}
+
 onMounted(() => {
   // 带筛选跳转（死信池菜单）：先用 query.status 初始化筛选再加载
   if (statusQuery.value) statusFilter.value = statusQuery.value as SubTaskStatus
   loadParentTask()
   load()
+  if (taskId.value) startAutoRefresh()
+})
+
+// 离开页面或主任务变化时停掉旧 timer；进入新主任务再起。
+onBeforeUnmount(stopAutoRefresh)
+watch(taskId, (_v, old) => {
+  if (old) stopAutoRefresh()
+  if (taskId.value) startAutoRefresh()
 })
 </script>
 
