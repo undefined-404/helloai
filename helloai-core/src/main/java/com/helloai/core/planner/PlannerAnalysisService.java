@@ -20,6 +20,7 @@ import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import com.helloai.core.task.spec.TaskBaseline;
 import com.helloai.core.task.spec.TaskRunningSpecService;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -144,6 +145,17 @@ public class PlannerAnalysisService {
             validateDependencies(items);
             List<SubTask> drafts = buildDrafts(taskId, items, planner);
             subTaskService.saveBatch(drafts);
+            // 防御：ServiceImpl.saveBatch 的 @Transactional 边界可能导致实体 ID 未回填，
+            // 从 DB 重加载保证 applyDependsOn 拿到的是持久化后的真实 ID（Snowflake 精度）。
+            // 关键：必须按 buildDrafts/add 顺序（即 items 顺序）加载，不能 orderByAsc(SubTask::getId)，
+            // 因为 dependsOn 序号指向“本批草案中的第 N 条”而不是“按 id 排后的第 N 条”。
+            // 采用 getCreateTime asc + 同毫秒按 id asc 的二级序，与 saveBatch 顺序一致。
+            drafts = subTaskService.list(new LambdaQueryWrapper<SubTask>()
+                    .eq(SubTask::getTaskId, taskId)
+                    .eq(SubTask::getStatus, SubTaskStatus.PENDING_PLAN_REVIEW)
+                    .orderByAsc(SubTask::getCreateTime, SubTask::getId));
+            log.info("Planner 重加载草案: taskId={}, expectedCount={}, actualCount={}",
+                    taskId, items.size(), drafts.size());
             applyDependsOn(drafts, items);
 
             taskTimelineService.recordEvent(taskId, null, "task_plan_generated",
@@ -479,8 +491,25 @@ public class PlannerAnalysisService {
      * 序号→真实 id 映射回写（V27）：saveBatch 后草案 id 已由 assign_id 预填，
      * 把 dependsOn 序号换成同批草案的真实 sub_task id 写入 depends_on 列，
      * 并同步回填实体字段（返回给调用方的草案列表携带依赖信息）。
+     *
+     * <p>防御门门：drafts.size() 必须与 items.size() 一致，否则可能重加载顺序与
+     * items 顺序错位（依赖序号拿错 id），甚至漏掉某些 draft；该不变量一旦破坏，
+     * 后续 ready 守卫会把有依赖节点误判为就绪，必须报错并清表回退，不能静默写错位依赖。</p>
      */
     private void applyDependsOn(List<SubTask> drafts, List<PlanDraftItem> items) {
+        if (drafts.size() != items.size()) {
+            // 详细记下两者映射，避免后续排错看不到现场
+            StringBuilder sb = new StringBuilder();
+            sb.append("applyDependsOn 计数不匹配: drafts=").append(drafts.size())
+              .append(" items=").append(items.size()).append("; draftsIds=");
+            for (int k = 0; k < drafts.size(); k++) {
+                if (k > 0) sb.append(',');
+                sb.append(drafts.get(k).getId());
+            }
+            log.error(sb.toString());
+            throw new BizException("拆解草案重加载数量与 LLM 输出不一致: drafts=" + drafts.size()
+                    + " items=" + items.size() + "；需取消现有草案后重新拆解");
+        }
         for (int i = 0; i < items.size(); i++) {
             List<Integer> deps = items.get(i).getDependsOn();
             if (deps == null || deps.isEmpty()) {
@@ -488,9 +517,19 @@ public class PlannerAnalysisService {
             }
             List<Long> depIds = new ArrayList<>(deps.size());
             for (Integer dep : deps) {
-                depIds.add(drafts.get(dep - 1).getId());
+                Long depId = drafts.get(dep - 1).getId();
+                if (depId == null) {
+                    throw new BizException("拆解结果第 " + (i + 1) + " 条依赖指向的草案 id 为空"
+                            + "（序号=" + dep + "）；重加载可能漏取，请重试拆解");
+                }
+                depIds.add(depId);
             }
             SubTask draft = drafts.get(i);
+            if (draft.getId() == null) {
+                throw new BizException("拆解结果第 " + (i + 1) + " 条自身 id 为空；重加载可能漏取，请重试拆解");
+            }
+            log.info("applyDependsOn: taskId={}, draftSeq={}, draftId={}, seqDeps={}, realDeps={}",
+                    draft.getTaskId(), (i + 1), draft.getId(), deps, depIds);
             subTaskService.updateDependsOn(draft.getId(), depIds);
             draft.setDependsOn(depIds);
         }
