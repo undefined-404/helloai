@@ -22,6 +22,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.agent.service.AgentService;
@@ -289,6 +290,9 @@ public class SubTaskExecutionService {
             sb.append("验收标准: ").append(subTask.getAcceptance()).append("\n");
         }
 
+        // 返工上下文：上次提交被审核驳回，需参考驳回意见修正
+        appendReworkContext(sb, subTask);
+
         // 回填要求（EXECUTION_RECORD 协议）
         sb.append("\n---\n\n");
         sb.append("## 产出回填要求\n");
@@ -305,6 +309,47 @@ public class SubTaskExecutionService {
         sb.append("```\n");
 
         return sb.toString();
+    }
+
+    /**
+     * 返工上下文注入：若子任务上次提交被 REVIEWER 驳回（context.lastAutoReview），
+     * 将驳回意见（issues + comment）作为修正指引注入 Prompt，指导 executor 针对性修正。
+     */
+    @SuppressWarnings("unchecked")
+    private void appendReworkContext(StringBuilder sb, SubTask subTask) {
+        Map<String, Object> ctx = subTask.getContext();
+        if (ctx == null) {
+            return;
+        }
+        Object reviewObj = ctx.get("lastAutoReview");
+        if (!(reviewObj instanceof Map<?, ?> review)) {
+            return;
+        }
+        sb.append("\n---\n\n");
+        sb.append("## 返工修正指引（上次提交被驳回）\n");
+        sb.append("你的上一次提交未通过审核，请根据以下驳回意见修正后重新提交：\n\n");
+
+        Object issues = review.get("issues");
+        if (issues instanceof List<?> issueList && !issueList.isEmpty()) {
+            sb.append("### 审核指出的问题\n");
+            for (Object issue : issueList) {
+                sb.append("- ").append(issue).append("\n");
+            }
+        }
+
+        Object comment = review.get("comment");
+        if (comment instanceof String commentStr && !commentStr.isBlank()) {
+            sb.append("\n### 审核评语\n");
+            sb.append(commentStr).append("\n");
+        }
+
+        Object score = review.get("score");
+        if (score instanceof Number) {
+            sb.append("\n### 审核评分\n");
+            sb.append(((Number) score).intValue()).append(" / 5\n");
+        }
+
+        sb.append("\n请务必逐条修正上述问题后重新提交。\n");
     }
 
 }

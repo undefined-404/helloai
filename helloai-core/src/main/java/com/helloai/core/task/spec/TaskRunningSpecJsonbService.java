@@ -4,6 +4,7 @@ import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.service.TaskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -16,13 +17,13 @@ import java.util.Map;
 /**
  * Phase A 实现：以 {@code task.context.runningSpec} JSONB 存储 Task Running Spec。
  *
- * <p>Phase B 将替换为 {@code TaskRunningSpecTableService}（读写独立
- * {@code task_running_spec} + {@code task_execution_record} 表），
- * 接口不感知存储差异。</p>
+ * <p>Phase B（{@link TaskRunningSpecTableService}）采用独立表，
+ * 本实现保留为 fallback，通过配置切换。</p>
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
+@ConditionalOnProperty(name = "helloai.task-running-spec.storage", havingValue = "jsonb", matchIfMissing = true)
 public class TaskRunningSpecJsonbService implements TaskRunningSpecService {
 
     private static final String RUNNING_SPEC_KEY = "runningSpec";
