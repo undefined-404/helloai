@@ -3707,3 +3707,69 @@ N17 澄清链路在 V29（多轮追问 + 终稿）+ V33（结构化选项 + prog
 
 ---
 
+### 6.41 Snowflake ID 全链路字符串化 + 执行对话流按轮次展示（2026-08-02）
+
+#### 1. 背景与决策
+
+用户在"对话新建 → 终稿确认 → 查看任务/自动拆解"链路连续遇到 `400 Bad Request`：
+
+- `GET /api/requirement-conversations/2083818000152453122`
+- `/api/tasks/{id}/plan`
+
+根因是 Snowflake 长整型 ID 超出 JavaScript `Number` 安全整数范围（`2^53-1 ≈ 9e18`），前端 JSON 解析后精度截断，回传 URL 路径参数时 Spring 无法解析被截断的值。同时用户提出"执行对话流"应按"请求 → 响应"成对展示，并把审核结论、返工 Prompt 也纳入可视化，以验证关键节点 LLM 上下文。
+
+设计取舍：
+
+- **字符串化而非改造 ID 生成策略**：保持 `BIGINT` 主键与雪花算法，仅在 JSON 序列化层把 `Long` 输出为字符串；URL 路径参数仍用字符串接收（Spring 自动兼容）。
+- **基类收口**：`BaseEntity.id` 统一加 `@JsonSerialize(using = ToStringSerializer.class)`，避免逐个实体补注解。
+- **DTO 全部兜底**：关键返回 DTO 中所有 `Long` / `List<Long>` 字段显式加 `JsonSerialize`/`JsonSerialize(contentUsing)`，防止基类未覆盖的投影字段再次出错。
+- **前端 String() 防御**：所有拼接 URL、传 API 的 ID 统一 `String(id)`；Vue 路由/状态中的 ID 不再依赖 number。
+- **执行对话流按轮次分组**：`SubTaskDetail.vue` 把 `conversation_message` 按 `toolName` 分组为"执行轮次"与"核验轮次"，user prompt 与 assistant 返回成对可见，返工轮次可展开查看完整 Prompt 含历史审核意见。
+- **审核结论落库**：`SubTaskReviewService` 把结构化审核结论（通过/驳回、评分、问题、评语）写一条 `subtask_review_result` 对话消息，前端直接渲染。
+
+#### 2. 实施内容
+
+后端（helloai-common / helloai-core / helloai-api）：
+
+- `helloai-common/pom.xml`：新增 `jackson-databind` 依赖，支撑 `BaseEntity` 注解。
+- `BaseEntity.id`：加 `@JsonSerialize(using = ToStringSerializer.class)`，全局实体主键统一字符串化。
+- `RequirementConversation`：`taskId`、`plannerAgentId` 加 `@JsonSerialize(using = ToStringSerializer.class)`。
+- `RequirementMessage`：`conversationId` 加 `@JsonSerialize(using = ToStringSerializer.class)`。
+- DTO 全面加固：
+  - `TaskResponse.id`
+  - `SubTaskResponse.id` / `taskId` / `moduleId` / `assignedAgent` / `dependsOn(contentUsing)`
+  - `AgentResponse.id`
+  - `ReviewResponse.id` / `subTaskId` / `reviewerAgent`
+  - `ModuleResponse.id` / `taskId`
+  - `ConversationMessageItem.id` / `senderId`
+  - `TaskTimelineItem.id` / `agentId`
+- `SubTaskReviewService`：新增 `formatReviewResult(ReviewVerdict)` + verdict 解析成功后 `conversationService.addMessage(subTaskId, reviewer.getId(), "assistant", "agent", resultText, "subtask_review_result")`。
+
+前端（helloai-ui）：
+
+- `src/api/clarify.ts`：所有 `${id}` 改为 `${String(id)}`。
+- `src/views/requirement/RequirementChat.vue`：`activeId` 全程保持 string；所有 API 调用传 `String(id)`；跳转任务/自动拆解处加 String() 防御。
+- `src/views/task/TaskList.vue`：`row.id` 使用处加 `String()`。
+- `src/views/task/components/PlanReviewDialog.vue`、`FinalReportDialog.vue`、`TaskDeleteDialog.vue`、`TaskFormDialog.vue`：`props.task.id` 使用处加 `String()`。
+- `src/views/subtask/SubTaskDetail.vue`：
+  - 新增 `CONV_TAG_MAP`：`subtask_review_result: { label: '审核结论', type: 'warning' }`。
+  - 新增 `convRounds` computed：按执行轮次/核验轮次分组，`sub_task_execute_user_prompt` + `sub_task_execute`/`sub_task_execute_thinking` 成对；`subtask_review_prompt` + `subtask_review_result` 成对；返工轮次可展开。
+
+#### 3. 验证结果
+
+- 后端：`mvn clean compile -pl helloai-common,helloai-core,helloai-api,helloai-start -am -DskipTests` SUCCESS。
+- 前端：`npm run build` SUCCESS（无 TS 错误）。
+- 单元测试：本轮未新增单测；既有 `SubTaskExecutionServiceTest` / `SubTaskReviewServiceTest` 未引入回归。
+- 运行时：必须重启后端后 Jackson 注解才生效；前端刷新后 String() 防御生效。
+
+#### 4. 影响与遗留
+
+- 影响：新创建的任务/子任务/会话/消息 ID 在前后端间全走 string，JS 精度丢失问题消除；审核结论与执行请求在对话流中可视。
+- 兼容：后端接收 `Long` 路径参数时仍自动把 string 转 `Long`；数据库主键类型不变。
+- 遗留：
+  1. 已运行的旧会话/子任务历史数据中，前端本地缓存可能仍存 number，刷新页面后重建即可。
+  2. 其它 DTO / 临时接口中若仍有 `Long` 字段未加注解，后续遇到 400 需继续补漏。
+  3. 用户仍需在后端重启后验证"对话新建 → 查看任务"链路是否还有 400。
+
+---
+
