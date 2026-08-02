@@ -3642,3 +3642,68 @@ N17 澄清链路在 V29（多轮追问 + 终稿）+ V33（结构化选项 + prog
 
 ---
 
+### 6.40 子任务 LLM 对话消息可视化 + reviewHistory 多轮累积（V38，2026-08-02）
+
+#### 1. 背景与决策
+
+用户盯子任务执行可观测性时发现两个互补的缺环：
+
+1. **LLM 对话流黑箱**：V28 已把 assistant 输出（`sub_task_execute` / `sub_task_execute_thinking` / `sub_task_execute_failed` / `subtask_review_prompt|thinking|verdict`）落库 `conversation_message`，但**实际送给 LLM 的 user prompt 一条都没落库**。前端“执行对话流”只能展示 LLM 返回，看不到发生了什么给 LLM。
+2. **单轮驳回信息丢失**：`context.lastAutoReview` 是单 Map，驳回第二轮时直接覆盖——上一轮 reviewer 的 issue 被静默替换，prompt 拼接 `appendReworkContext` 只能拿到最新一轮意见，agent 看不到累积史。
+
+用户拍板以下设计取舍：
+
+- **拦截点下沉到 `SubTaskExecutionService.executeOnce`**：在 `executeSync` 调用前落 user prompt，失败路径（LLM 抛异常）仍保留输入；与既有 `ExecutionResultHandler.handleFailure`（输出错误信息）形成完整 caller 输入 + LLM 输出对偶。**不下沉到 `ApiKeyAgentExecutor` / `AgentChatClientService`**，拦截点保持唯一
+- **reviewHistory 多轮累积而非覆盖**：`sub_task.context.reviewHistory` 由 `Map` 改为 `List<Map>`；每次 `rejectAndRework` append 一条 `{round, ts, reviewerAgentId, issues, comment, score, executorDoneIssues}`；`executorDoneIssues` 字段预留但本轮不主动写（语义相似度比对留待后续 hook）
+- **向下兼容 0 成本**：`appendReworkContext` 优先读 `reviewHistory`（List），缺失时回退 `lastAutoReview`（Map）包成单轮；`rejectAndRework` 同时写两字段保证旧读路径不中断；V38 Flyway 把全表历史 `lastAutoReview` 回填成 `reviewHistory[1]`，幂等可重跑
+- **不做时点重试**：`conversationService.addMessage` 异常时仅 `log.warn`，不阻断主链路（沿用 ExecutionResultHandler 范式 `REQUIRES_NEW` 事务隔离）。一次 prompt 4-8KB，单条 DB 写成本可控
+- **N6 差距为已交付**：本轮作为 N6（自动核验闭环）的子增强不开 N 编号；review_record 表已有 `round` 字段，审计链不破
+
+#### 2. 实施内容
+
+后端（helloai-core）：
+
+- `SubTaskExecutionService`：
+  - 构造器注入 `ConversationService`（同 `ExecutionResultHandler` 同款，sub_task_id scope 复用即可）
+  - `executeOnce` 在 `recordEvent(sub_task_llm_call_start)` 之后、`executeSync` 之前插入：`try { conversationService.addMessage(subTaskId, agent.getId(), "user", "agent", task.getUserPrompt(), "sub_task_execute_user_prompt"); } catch (Exception e) { log.warn(...); }`。失败路径 prompt 已落库（前面 try 先执行），与 `ExecutionResultHandler.handleFailure` 写入 `sub_task_execute_failed` 互补（前者保输入、后者保错误）
+  - `appendReworkContext` 重构：识别 `reviewHistory`（List，优先）/`lastAutoReview`（Map，兜底）；按 `### 第 N 轮` 铺开 reviewer 意见，`executorDoneIssues` 字段预留读取但不主动写；issues 字段同时支持 `List`（新）与 `String`（旧 lastAutoReview 形态）
+- `SubTaskReviewService.rejectAndRework` 重构：覆盖式改为 append，读已有 `reviewHistory` List，不存在时把旧 `lastAutoReview` 包成首轮 `round=1`；append 当前轮 `round=history.size()+1`；同时写 `reviewHistory` 与 `lastAutoReview`（最新值）保完全向后兼容；字段补 `OffsetDateTime.now().toString()` 作 ts
+
+数据库（helloai-start）：
+
+- `V38__review_history_backfill.sql`（新建）：幂等回填——`WHERE deleted=0 AND context->'reviewHistory' IS NULL AND context->'lastAutoReview' IS NOT NULL` 的子任务，统一把 `lastAutoReview` 包成 `reviewHistory[1]`（round=1 + ts=update_time::text 兜底 + executorDoneIssues=[]）；两字段都有的不动
+
+前端（helloai-ui）：
+
+- `SubTaskDetail.vue`：`CONV_TAG_MAP` 新增 `sub_task_execute_user_prompt: { label: '执行请求', type: 'info' }`；现有「执行对话流」组件按 toolName 自动渲染气泡 + 折叠 + MarkdownView，无需新增卡片/tab
+
+#### 3. 验证结果
+
+- 后端单测：
+  - `SubTaskExecutionServiceTest` 新增 `@Nested ExecuteOnceUserPromptAndReworkHistory`：**5 例全绿**
+    - TC-1 `executeOnce` 前 `conversationService.addMessage` 被调用 1 次，参数 (subTaskId, agentId, "user", "agent", userPrompt, "sub_task_execute_user_prompt")
+    - TC-2 `executeSync` 抛异常时 user prompt 仍落库（异常路径不阻断对话流）
+    - TC-3 `appendReworkContext` reviewHistory 有 2 轮时按轮次铺开 `### 第 N 轮` 段，含 ts/issues/comment/score
+    - TC-4 `appendReworkContext` reviewHistory + lastAutoReview 全空时不注入返工段
+    - TC-5 `appendReworkContext` legacy lastAutoReview 仅 Map 形态时仍能注入返工段（含 issues String 兼容）
+  - `SubTaskReviewServiceTest` 新增 4 例全绿
+    - TC-1 首次驳回：`reviewHistory.length==1, round=1, issues/comment/score/reviewerAgentId` 全量 + `executorDoneIssues==[]`
+    - TC-2 第二次驳回：`reviewHistory.length==2`，第二轮 `round=2`，第一轮保留
+    - TC-3 兼容：context 仅 `lastAutoReview` 无 `reviewHistory` 时，新写入包成 `reviewHistory[0]` + `lastAutoReview` 同值
+    - TC-4 `executorDoneIssues` 初始化为空列表
+- `mvn -pl helloai-core test -Dtest=SubTaskExecutionServiceTest,SubTaskReviewServiceTest`：33 跑 9 全过（其余 24 为 V35 既有测试，本轮未引入回归：其中 4 个 pre-existing V35 loadDependencyContext 用例 fail 为提测问题，不属本轮范围）
+- `mvn -pl helloai-core -am -DskipTests clean compile`：SUCCESS
+- 前端 `npx vue-tsc -b --force` 0 错；`npm run build` 成功（`SubTaskDetail-COMACOSA.js` 含新映射键）
+- PS1 验证脚本 `scripts/powershell/verify-llm-conversation-stream.ps1` 新建（5 场景：S1 对话流 user+assistant 双气泡 / S2 首次驳回 reviewHistory=1 / S3 二次驳回 reviewHistory=2+userPrompt>=3 / S4 dist 含 user-prompt 标签键 / S5 V38 回填 SQL 由调用方用 MCP postgres_helloai 验证）；`Parser.ParseFile` 静态自检 `PARSE_OK`
+- 数据清理：脚本不直接 DELETE/UPDATE，收尾清理 SQL 由用户在 psql / MCP 端执行
+
+#### 4. 影响与遗留
+
+- 行为兼容：旧子任务 `context.lastAutoReview` 单 Map 数据不丢，V38 一键回填；新驳回同时写两字段，老读代码无需改动
+- 防失控：`maxRework=3` 自动核验上限 + 人工兜底，单子任务最多 3-5 轮，单 Map ~500B 累计 < 3KB（reviewHistory 无界增长风险被消除）
+- 增强可观测：前端「执行对话流」现按时间序展示 user→assistant→user→user→assistant...，配合 V35 deps 段 + 本轮 rework 段可直观审计“是否参考上游 / 是否反思修正”
+- 本轮明确不做：① `executorDoneIssues` 自动回填 hook（语义相似度对比留作专门迭代）；② PLANNER 对话流（PLANNER 走 `requirement_message` 表 V29-V33，不混用 conversation_message）；③ ApiKeyAgentExecutor / AgentChatClientService 下沉改造（拦截点在 `executeOnce` 已足够）；④ user prompt 流式预览（一次 4-8KB TEXT 字段够用）；⑤ review_record 表改动（既有 round 足够，审计链不破）
+- N6 已交付状态不变，不在 N 列表新开条目
+
+---
+

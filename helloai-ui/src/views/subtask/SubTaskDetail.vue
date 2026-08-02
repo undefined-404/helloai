@@ -349,6 +349,7 @@ function goBackToList() {
 
 // V28: 对话流消息来源标签（toolName → 展示文案/颜色）
 const CONV_TAG_MAP: Record<string, { label: string; type: 'success' | 'danger' | 'info' | 'warning' }> = {
+  sub_task_execute_user_prompt: { label: '执行请求', type: 'info' },
   sub_task_execute_thinking: { label: '思考过程', type: 'info' },
   sub_task_execute: { label: '执行产出', type: 'success' },
   sub_task_execute_failed: { label: '执行失败', type: 'danger' },

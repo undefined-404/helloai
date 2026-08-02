@@ -24,8 +24,10 @@ import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import com.helloai.core.task.spec.TaskRunningSpecService;
@@ -56,6 +58,7 @@ public class SubTaskExecutionService {
     private final TaskTimelineService taskTimelineService;
     private final ExecutionResultHandler executionResultHandler;
     private final TaskRunningSpecService taskRunningSpecService;
+    private final ConversationService conversationService;
 
     // #region debug-point redispatch-stuck-blocked
     private static final ObjectMapper DBG_MAPPER = new ObjectMapper();
@@ -229,6 +232,16 @@ public class SubTaskExecutionService {
         taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_llm_call_start",
                 AgentRole.EXECUTOR, agent.getId(),
                 Map.of("agentId", agent.getId(), "agentName", agent.getName()));
+        // §6.41 执行对话流 user 视角落库：实际送给 LLM 的 prompt 全量入 conversation_message
+        // 失败路径（executeSync 抛异常）prompt 已保留，与 ExecutionResultHandler 写 sub_task_execute_failed 互补
+        try {
+            conversationService.addMessage(subTaskId, agent.getId(),
+                    "user", "agent",
+                    task.getUserPrompt(),
+                    "sub_task_execute_user_prompt");
+        } catch (Exception e) {
+            log.warn("执行请求对话流写入失败（不阻断主链路）: subTaskId={}, err={}", subTaskId, e.getMessage());
+        }
         AgentResult result = platformAgentExecutionService.executeSync(agent, task);
         taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_llm_call_end",
                 AgentRole.EXECUTOR, agent.getId(),
@@ -312,8 +325,12 @@ public class SubTaskExecutionService {
     }
 
     /**
-     * 返工上下文注入：若子任务上次提交被 REVIEWER 驳回（context.lastAutoReview），
-     * 将驳回意见（issues + comment）作为修正指引注入 Prompt，指导 executor 针对性修正。
+     * 返工上下文注入（§6.41）：从 {@code sub_task.context.reviewHistory}（List<Map>）按轮次铺开
+     * REVIEWER 历史审核意见，作为修正指引注入 Prompt。
+     *
+     * <p>兼容 V36 回填前的过渡期：旧单 Map 形态的 {@code lastAutoReview} 仍可读取，
+     * 保证新老子任务的 prompt 拼接都不中断。{@code executorDoneIssues} 字段预留读取
+     * 但本轮不主动写入（执行回填 hook 留待后续轮次）。</p>
      */
     @SuppressWarnings("unchecked")
     private void appendReworkContext(StringBuilder sb, SubTask subTask) {
@@ -321,35 +338,62 @@ public class SubTaskExecutionService {
         if (ctx == null) {
             return;
         }
-        Object reviewObj = ctx.get("lastAutoReview");
-        if (!(reviewObj instanceof Map<?, ?> review)) {
+        // 优先读 reviewHistory（List），缺失时回退到 lastAutoReview（Map）作单轮兼容
+        Object historyObj = ctx.get("reviewHistory");
+        List<?> history = null;
+        if (historyObj instanceof List<?> historyList && !historyList.isEmpty()) {
+            history = historyList;
+        } else if (ctx.get("lastAutoReview") instanceof Map<?, ?> legacy) {
+            history = List.of(legacy);
+        }
+        if (history == null) {
             return;
         }
+
         sb.append("\n---\n\n");
-        sb.append("## 返工修正指引（上次提交被驳回）\n");
-        sb.append("你的上一次提交未通过审核，请根据以下驳回意见修正后重新提交：\n\n");
+        sb.append("## 返工修正指引（共 ").append(history.size()).append(" 轮历史审核）\n");
+        sb.append("你之前提交被 REVIEWER 多次驳回，请按以下历史审核意见逐轮修正：\n\n");
 
-        Object issues = review.get("issues");
-        if (issues instanceof List<?> issueList && !issueList.isEmpty()) {
-            sb.append("### 审核指出的问题\n");
-            for (Object issue : issueList) {
-                sb.append("- ").append(issue).append("\n");
+        int round = 1;
+        for (Object item : history) {
+            if (!(item instanceof Map<?, ?> review)) {
+                continue;
             }
+            sb.append("### 第 ").append(round++).append(" 轮\n");
+            Object ts = review.get("ts");
+            if (ts instanceof String tsStr && !tsStr.isBlank()) {
+                sb.append("- 时间: ").append(tsStr).append("\n");
+            }
+            Object issues = review.get("issues");
+            if (issues instanceof List<?> issueList && !issueList.isEmpty()) {
+                sb.append("- 审核问题:\n");
+                for (Object issue : issueList) {
+                    sb.append("  - ").append(issue).append("\n");
+                }
+            } else if (issues instanceof String issueStr && !issueStr.isBlank()) {
+                // 兼容旧 lastAutoReview.issues (String 形态)
+                sb.append("- 审核问题: ").append(issueStr).append("\n");
+            }
+            Object comment = review.get("comment");
+            if (comment instanceof String commentStr && !commentStr.isBlank()) {
+                sb.append("- 审核评语: ").append(commentStr).append("\n");
+            }
+            Object score = review.get("score");
+            if (score instanceof Number n) {
+                sb.append("- 审核评分: ").append(n.intValue()).append(" / 5\n");
+            }
+            // 预留字段：executorDoneIssues 本轮不主动写，仅读
+            Object done = review.get("executorDoneIssues");
+            if (done instanceof List<?> doneList && !doneList.isEmpty()) {
+                String joined = doneList.stream()
+                        .map(Object::toString)
+                        .collect(Collectors.joining("、"));
+                sb.append("- 上一轮你已自认修复: ").append(joined).append("\n");
+            }
+            sb.append("\n");
         }
 
-        Object comment = review.get("comment");
-        if (comment instanceof String commentStr && !commentStr.isBlank()) {
-            sb.append("\n### 审核评语\n");
-            sb.append(commentStr).append("\n");
-        }
-
-        Object score = review.get("score");
-        if (score instanceof Number) {
-            sb.append("\n### 审核评分\n");
-            sb.append(((Number) score).intValue()).append(" / 5\n");
-        }
-
-        sb.append("\n请务必逐条修正上述问题后重新提交。\n");
+        sb.append("请务必针对未自认修复的问题继续修正后重新提交。\n");
     }
 
 }

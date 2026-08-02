@@ -23,15 +23,21 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import com.helloai.core.task.spec.TaskRunningSpecService;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("SubTaskExecutionService")
@@ -54,6 +60,9 @@ class SubTaskExecutionServiceTest {
 
     @Mock
     private TaskRunningSpecService taskRunningSpecService;
+
+    @Mock
+    private ConversationService conversationService;  // §6.41
 
     @InjectMocks
     private SubTaskExecutionService subTaskExecutionService;
@@ -346,6 +355,133 @@ class SubTaskExecutionServiceTest {
             assertThatThrownBy(() -> subTaskExecutionService.startIfNeeded(22L, SubTaskStatus.BLOCKED))
                     .isInstanceOf(BizException.class)
                     .hasMessageContaining("不允许执行");
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  §6.41 executeOnce — 执行请求对话流 user prompt 落库 + reviewHistory 多轮铺开
+    // ══════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("executeOnce — §6.41 执行请求对话流 + reviewHistory 多轮铺开")
+    class ExecuteOnceUserPromptAndReworkHistory {
+
+        @Test
+        @DisplayName("TC-1 should write user prompt to conversation stream with sub_task_execute_user_prompt")
+        void shouldWriteUserPromptToConversationStream() {
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            Agent agent = agent();
+
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+
+            subTaskExecutionService.executeOnce(subTask, agent);
+
+            verify(conversationService).addMessage(
+                    eq(22L), eq(44L),
+                    eq("user"), eq("agent"),
+                    anyString(),
+                    eq("sub_task_execute_user_prompt"));
+        }
+
+        @Test
+        @DisplayName("TC-2 should keep user prompt in stream when executeSync throws")
+        void shouldKeepUserPromptWhenExecuteSyncThrows() {
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            Agent agent = agent();
+
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenThrow(new RuntimeException("llm down"));
+
+            assertThatThrownBy(() -> subTaskExecutionService.executeOnce(subTask, agent))
+                    .hasMessage("llm down");
+
+            // 失败路径：prompt 仍落库（先 addMessage 后 executeSync）
+            verify(conversationService).addMessage(
+                    eq(22L), eq(44L),
+                    eq("user"), eq("agent"),
+                    anyString(),
+                    eq("sub_task_execute_user_prompt"));
+        }
+
+        @Test
+        @DisplayName("TC-3 should render review history with multiple rounds")
+        void shouldRenderReviewHistoryWithMultipleRounds() {
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            Map<String, Object> ctx = new HashMap<>();
+            ctx.put("reviewHistory", List.of(
+                    Map.of("round", 1, "ts", "2026-08-01T10:00:00Z",
+                            "issues", List.of("缺端点"), "comment", "请补", "score", 2),
+                    Map.of("round", 2, "ts", "2026-08-01T11:00:00Z",
+                            "issues", List.of("格式不对", "示例缺失"), "comment", "再改", "score", 3)
+            ));
+            subTask.setContext(ctx);
+            Agent agent = agent();
+
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+
+            subTaskExecutionService.executeOnce(subTask, agent);
+
+            ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            String prompt = taskCaptor.getValue().getUserPrompt();
+            assertThat(prompt)
+                    .contains("## 返工修正指引（共 2 轮历史审核）")
+                    .contains("### 第 1 轮")
+                    .contains("- 时间: 2026-08-01T10:00:00Z")
+                    .contains("缺端点")
+                    .contains("### 第 2 轮")
+                    .contains("格式不对")
+                    .contains("示例缺失")
+                    .contains("再改")
+                    .contains("请务必针对未自认修复的问题继续修正");
+        }
+
+        @Test
+        @DisplayName("TC-4 should skip rework section when reviewHistory and lastAutoReview both empty")
+        void shouldSkipReworkSectionWhenHistoryEmpty() {
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            // 不设 context，appendReworkContext 第一行 if (ctx == null) return
+            Agent agent = agent();
+
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+
+            subTaskExecutionService.executeOnce(subTask, agent);
+
+            ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            assertThat(taskCaptor.getValue().getUserPrompt())
+                    .doesNotContain("返工修正指引");
+        }
+
+        @Test
+        @DisplayName("TC-5 should inject rework section from legacy lastAutoReview when reviewHistory absent")
+        void shouldInjectReworkFromLegacyLastAutoReview() {
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            Map<String, Object> ctx = new HashMap<>();
+            ctx.put("lastAutoReview", Map.of("issues", "缺端点", "comment", "请补", "score", 2));
+            subTask.setContext(ctx);
+            Agent agent = agent();
+
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+
+            subTaskExecutionService.executeOnce(subTask, agent);
+
+            ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            String prompt = taskCaptor.getValue().getUserPrompt();
+            assertThat(prompt)
+                    .contains("## 返工修正指引（共 1 轮历史审核）")
+                    .contains("### 第 1 轮")
+                    .contains("缺端点");
         }
     }
 

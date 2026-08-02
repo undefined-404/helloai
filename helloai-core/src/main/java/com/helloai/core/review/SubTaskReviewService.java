@@ -32,6 +32,8 @@ import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -202,12 +204,45 @@ public class SubTaskReviewService {
             SubTask fresh = subTaskService.getById(subTaskId);
             if (fresh != null) {
                 Map<String, Object> ctx = new HashMap<>(fresh.getContext() != null ? fresh.getContext() : Map.of());
-                Map<String, Object> reviewInfo = new HashMap<>();
-                reviewInfo.put("issues", verdict.getIssues());
-                reviewInfo.put("comment", verdict.getComment());
-                reviewInfo.put("score", verdict.getScore());
-                reviewInfo.put("reviewerAgentId", reviewerAgentId);
-                ctx.put("lastAutoReview", reviewInfo);
+
+                // §6.41 reviewHistory 多轮累积：读已有 List，缺失时把旧 lastAutoReview 包成首轮
+                List<Map<String, Object>> history = new ArrayList<>();
+                Object existing = ctx.get("reviewHistory");
+                if (existing instanceof List<?> existList) {
+                    for (Object o : existList) {
+                        if (o instanceof Map<?, ?> m) {
+                            // 浅拷贝防后续 current 覆盖旧轮（Map 是引用）
+                            history.add(new HashMap<>((Map<String, Object>) m));
+                        }
+                    }
+                } else if (ctx.get("lastAutoReview") instanceof Map<?, ?> legacy) {
+                    Map<String, Object> first = new HashMap<>();
+                    first.put("round", 1);
+                    first.put("ts", OffsetDateTime.now().toString());
+                    first.put("reviewerAgentId", legacy.get("reviewerAgentId"));
+                    first.put("issues", legacy.get("issues"));
+                    first.put("comment", legacy.get("comment"));
+                    first.put("score", legacy.get("score"));
+                    first.put("executorDoneIssues", List.of());
+                    history.add(first);
+                }
+
+                // append 当前轮次
+                int nextRound = history.size() + 1;
+                Map<String, Object> current = new HashMap<>();
+                current.put("round", nextRound);
+                current.put("ts", OffsetDateTime.now().toString());
+                current.put("reviewerAgentId", reviewerAgentId);
+                current.put("issues", verdict.getIssues());
+                current.put("comment", verdict.getComment());
+                current.put("score", verdict.getScore());
+                current.put("executorDoneIssues", List.of());  // 留待执行回填 hook（不在本轮范围）
+                history.add(current);
+
+                ctx.put("reviewHistory", history);
+                // 旧字段保留读，写入收敛到 reviewHistory（不删 lastAutoReview 以保完全向后兼容）
+                ctx.put("lastAutoReview", current);
+
                 fresh.setContext(ctx);
                 subTaskService.updateById(fresh);
             }

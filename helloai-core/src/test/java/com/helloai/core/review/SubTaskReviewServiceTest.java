@@ -34,6 +34,11 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import org.mockito.ArgumentCaptor;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * SubTaskReviewService 单元测试（V27 核验门控）：
@@ -236,5 +241,123 @@ class SubTaskReviewServiceTest {
         verify(subTaskService, never()).rework(anyLong(), any());
         verify(taskTimelineService, never()).recordEvent(
                 anyLong(), anyLong(), anyString(), any(), any(), anyMap());
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  §6.41 reviewHistory 多轮累积
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("§6.41 TC-1 首次驳回 → context.reviewHistory.length == 1，round=1")
+    void shouldAppendFirstRoundToReviewHistory() {
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 2, \"issues\": \"缺端点\", \"comment\": \"请补\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        ArgumentCaptor<com.helloai.core.task.entity.SubTask> captor =
+                ArgumentCaptor.forClass(com.helloai.core.task.entity.SubTask.class);
+        verify(subTaskService).updateById(captor.capture());
+        Map<String, Object> savedCtx = captor.getValue().getContext();
+        assertThat(savedCtx).isNotNull();
+        Object historyObj = savedCtx.get("reviewHistory");
+        assertThat(historyObj).isInstanceOf(List.class);
+        List<?> history = (List<?>) historyObj;
+        assertThat(history).hasSize(1);
+        Map<?, ?> first = (Map<?, ?>) history.get(0);
+        assertThat(first.get("round")).isEqualTo(1);
+        assertThat(first.get("issues")).isEqualTo("缺端点");
+        assertThat(first.get("comment")).isEqualTo("请补");
+        assertThat(first.get("score")).isEqualTo(2);
+        // executorDoneIssues 初始为空列表（预留字段）
+        assertThat((List<?>) first.get("executorDoneIssues")).isEmpty();
+        // 兼容保留 lastAutoReview
+        assertThat(savedCtx.get("lastAutoReview")).isNotNull();
+    }
+
+    @Test
+    @DisplayName("§6.41 TC-2 第二次驳回 → reviewHistory.length == 2，第二轮 round=2")
+    void shouldAppendSecondRoundToReviewHistory() {
+        SubTask subTask = reviewSubTask();
+        Map<String, Object> ctx = new HashMap<>();
+        ctx.put("reviewHistory", List.of(Map.of(
+                "round", 1, "ts", "2026-08-01T10:00:00Z",
+                "issues", "缺端点", "comment", "请补", "score", 2,
+                "executorDoneIssues", List.of())));
+        subTask.setContext(ctx);
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
+        when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 3, \"issues\": \"格式不对\", \"comment\": \"再改\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        ArgumentCaptor<SubTask> captor = ArgumentCaptor.forClass(SubTask.class);
+        verify(subTaskService).updateById(captor.capture());
+        List<?> history = (List<?>) captor.getValue().getContext().get("reviewHistory");
+        assertThat(history).hasSize(2);
+        // 第一轮保留
+        Map<?, ?> first = (Map<?, ?>) history.get(0);
+        assertThat(first.get("round")).isEqualTo(1);
+        assertThat(first.get("issues")).isEqualTo("缺端点");
+        // 第二轮新增
+        Map<?, ?> second = (Map<?, ?>) history.get(1);
+        assertThat(second.get("round")).isEqualTo(2);
+        assertThat(second.get("issues")).isEqualTo("格式不对");
+    }
+
+    @Test
+    @DisplayName("§6.41 TC-3 兼容历史：context 只有 lastAutoReview 无 reviewHistory 时，新写入包成 reviewHistory[0] + lastAutoReview 同值")
+    void shouldMigrateLegacyLastAutoReviewToReviewHistory() {
+        SubTask subTask = reviewSubTask();
+        Map<String, Object> ctx = new HashMap<>();
+        ctx.put("lastAutoReview", Map.of(
+                "reviewerAgentId", 9L,
+                "issues", "缺端点", "comment", "请补", "score", 2));
+        subTask.setContext(ctx);
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
+        when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 2, \"issues\": \"仍未达标\", \"comment\": \"\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        ArgumentCaptor<SubTask> captor = ArgumentCaptor.forClass(SubTask.class);
+        verify(subTaskService).updateById(captor.capture());
+        Map<String, Object> savedCtx = captor.getValue().getContext();
+        List<?> history = (List<?>) savedCtx.get("reviewHistory");
+        assertThat(history).hasSize(2);
+        // 首轮是兼容的旧 lastAutoReview
+        Map<?, ?> first = (Map<?, ?>) history.get(0);
+        assertThat(first.get("round")).isEqualTo(1);
+        assertThat(first.get("issues")).isEqualTo("缺端点");
+        // 第二轮是当前新写入
+        Map<?, ?> second = (Map<?, ?>) history.get(1);
+        assertThat(second.get("round")).isEqualTo(2);
+        assertThat(second.get("issues")).isEqualTo("仍未达标");
+        // lastAutoReview 收敛到 current（最新一轮），便于旧读路径兼容
+        Map<?, ?> lastReview = (Map<?, ?>) savedCtx.get("lastAutoReview");
+        assertThat(lastReview.get("issues")).isEqualTo("仍未达标");
+    }
+
+    @Test
+    @DisplayName("§6.41 TC-4 executorDoneIssues 初始为空列表（留待后续执行回填 hook）")
+    void shouldInitializeExecutorDoneIssuesAsEmptyList() {
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 2, \"issues\": \"缺端点\", \"comment\": \"\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        ArgumentCaptor<SubTask> captor = ArgumentCaptor.forClass(SubTask.class);
+        verify(subTaskService).updateById(captor.capture());
+        List<?> history = (List<?>) captor.getValue().getContext().get("reviewHistory");
+        Map<?, ?> first = (Map<?, ?>) history.get(0);
+        Object done = first.get("executorDoneIssues");
+        assertThat(done).isInstanceOf(List.class);
+        assertThat((List<?>) done).isEmpty();
     }
 }
