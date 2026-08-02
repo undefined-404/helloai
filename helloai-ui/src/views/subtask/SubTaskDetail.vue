@@ -71,39 +71,49 @@
       </div>
     </el-card>
 
-    <!-- V28: 执行对话流（执行产出全文 + 核验 Prompt/分析原文） -->
+    <!-- V28: 执行对话流（按轮次展示 Agent ↔ LLM 的完整请求/返回） -->
     <el-card v-if="item" style="margin-top:16px">
       <template #header>
         <div class="card-header">
           <span>执行对话流</span>
-          <span style="font-size:12px;color:var(--ha-muted)">共 {{ conversation.length }} 条</span>
+          <span style="font-size:12px;color:var(--ha-muted)">共 {{ conversation.length }} 条 · {{ convRounds.length }} 轮</span>
         </div>
       </template>
       <el-empty v-if="!conversation.length" description="暂无对话消息" />
-      <div v-else class="conv-list">
-        <div v-for="msg in conversation" :key="msg.id" class="conv-item">
-          <div class="conv-head">
-            <el-tag size="small" :type="convTagType(msg.toolName)">{{ convTagLabel(msg.toolName) }}</el-tag>
-            <span class="conv-meta">
-              #{{ msg.seq }} · {{ msg.role }}/{{ msg.senderType }}<template v-if="msg.senderId"> · {{ resolveAgentName(msg.senderId) }}</template>
-              · {{ fmtTime(msg.createTime) }}
-            </span>
-            <!-- 方案 1：仅“执行产出”保留复制/导出按钮，其余消息展开查看即可 -->
-            <div class="conv-actions" v-if="msg.toolName === 'sub_task_execute' && msg.content">
-              <el-button link size="small" @click="copyMessage(msg)">复制</el-button>
-              <el-button link size="small" type="primary" @click="exportMarkdown(msg)">导出 .md</el-button>
+      <div v-else class="conv-rounds">
+        <div v-for="(round, rIdx) in convRounds" :key="rIdx" class="conv-round">
+          <div class="round-header">
+            <el-tag size="small" :type="round.type === 'execute' ? 'primary' : 'warning'">
+              {{ round.type === 'execute' ? '执行轮次' : '核验轮次' }} #{{ round.roundNo }}
+            </el-tag>
+            <span class="round-meta">{{ round.messages.length }} 条消息</span>
+          </div>
+          <div class="conv-list">
+            <div v-for="msg in round.messages" :key="msg.id" class="conv-item">
+              <div class="conv-head">
+                <el-tag size="small" :type="convTagType(msg.toolName)">{{ convTagLabel(msg.toolName) }}</el-tag>
+                <span class="conv-meta">
+                  #{{ msg.seq }} · {{ msg.role }}/{{ msg.senderType }}<template v-if="msg.senderId"> · {{ resolveAgentName(msg.senderId) }}</template>
+                  · {{ fmtTime(msg.createTime) }}
+                </span>
+                <!-- 仅“执行产出”保留复制/导出按钮 -->
+                <div class="conv-actions" v-if="msg.toolName === 'sub_task_execute' && msg.content">
+                  <el-button link size="small" @click="copyMessage(msg)">复制</el-button>
+                  <el-button link size="small" type="primary" @click="exportMarkdown(msg)">导出 .md</el-button>
+                </div>
+              </div>
+              <!-- 核验结论用结构化视图；其余按 Markdown 渲染 -->
+              <ReviewVerdictView v-if="msg.toolName === 'subtask_review_verdict'" :content="msg.content" />
+              <template v-else>
+                <el-collapse v-if="(msg.content?.length || 0) > 300" class="conv-collapse">
+                  <el-collapse-item :title="'展开全文（' + msg.content.length + ' 字）'" name="c">
+                    <MarkdownView :content="msg.content" />
+                  </el-collapse-item>
+                </el-collapse>
+                <MarkdownView v-else :content="msg.content" />
+              </template>
             </div>
           </div>
-          <!-- 内容用 Markdown 渲染成带格式富文本（类 DeepSeek/Kimi 观感）；超长折叠展开 -->
-          <ReviewVerdictView v-if="msg.toolName === 'subtask_review_verdict'" :content="msg.content" />
-          <template v-else>
-            <el-collapse v-if="(msg.content?.length || 0) > 300" class="conv-collapse">
-              <el-collapse-item :title="'展开全文（' + msg.content.length + ' 字）'" name="c">
-                <MarkdownView :content="msg.content" />
-              </el-collapse-item>
-            </el-collapse>
-            <MarkdownView v-else :content="msg.content" />
-          </template>
         </div>
       </div>
     </el-card>
@@ -355,8 +365,55 @@ const CONV_TAG_MAP: Record<string, { label: string; type: 'success' | 'danger' |
   sub_task_execute_failed: { label: '执行失败', type: 'danger' },
   subtask_review_prompt: { label: '核验请求', type: 'info' },
   subtask_review_thinking: { label: '核验思考', type: 'info' },
-  subtask_review_verdict: { label: '核验分析', type: 'warning' }
+  subtask_review_verdict: { label: '核验分析', type: 'warning' },
+  subtask_review_result: { label: '核验结论', type: 'success' }
 }
+
+interface ConvRound {
+  type: 'execute' | 'review'
+  roundNo: number
+  messages: ConversationMessageItem[]
+}
+
+// 把扁平消息按「执行轮次 / 核验轮次」分组，方便看清 Agent ↔ LLM 完整请求/返回
+const convRounds = computed<ConvRound[]>(() => {
+  const rounds: ConvRound[] = []
+  let executeNo = 0
+  let reviewNo = 0
+  const current: { value: ConvRound | null } = { value: null }
+
+  const flush = () => {
+    if (current.value) {
+      rounds.push(current.value)
+      current.value = null
+    }
+  }
+  const startRound = (type: 'execute' | 'review') => {
+    flush()
+    current.value = {
+      type,
+      roundNo: type === 'execute' ? ++executeNo : ++reviewNo,
+      messages: []
+    }
+  }
+
+  for (const msg of conversation.value) {
+    const tool = msg.toolName || ''
+    const isExecute = tool === 'sub_task_execute_user_prompt' || tool === 'sub_task_execute' || tool === 'sub_task_execute_failed'
+    const isReview = tool.startsWith('subtask_review')
+    if (isExecute && (!current.value || current.value.type !== 'execute')) {
+      startRound('execute')
+    } else if (isReview && (!current.value || current.value.type !== 'review')) {
+      startRound('review')
+    }
+    if (!current.value) {
+      startRound('execute')
+    }
+    current.value!.messages.push(msg)
+  }
+  flush()
+  return rounds
+})
 
 function convTagLabel(toolName: string | null) {
   return (toolName && CONV_TAG_MAP[toolName]?.label) || toolName || '消息'
@@ -550,6 +607,22 @@ onBeforeUnmount(() => {
 .att-meta { color: var(--ha-muted); font-size: 12px; white-space: nowrap; }
 
 /* V28: 执行对话流 */
+.conv-rounds { display: flex; flex-direction: column; gap: 16px; }
+.conv-round {
+  border: 1px solid var(--ha-border, rgba(255,255,255,0.08));
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--ha-surface, rgba(255,255,255,0.02));
+}
+.round-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--ha-border, rgba(255,255,255,0.08));
+}
+.round-meta { color: var(--ha-muted); font-size: 12px; }
 .conv-list { display: flex; flex-direction: column; gap: 12px; }
 .conv-item { border: 1px solid var(--ha-border, rgba(255,255,255,0.08)); border-radius: 6px; padding: 10px 12px; }
 .conv-head { display: flex; align-items: center; gap: 8px; }

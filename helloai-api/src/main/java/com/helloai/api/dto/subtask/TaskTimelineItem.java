@@ -1,5 +1,7 @@
 package com.helloai.api.dto.subtask;
 
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import lombok.Data;
 
 import java.time.OffsetDateTime;
@@ -22,6 +24,7 @@ import java.util.Map;
 public class TaskTimelineItem {
 
     /** 时间线条目 ID（雪花 Long） */
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long id;
 
     /** 事件类型：agent_offline / task_assigned / task_completed 等 */
@@ -31,6 +34,7 @@ public class TaskTimelineItem {
     private String role;
 
     /** 关联 Agent ID，可能为空（系统级事件） */
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long agentId;
 
     /** 事件负载（JSONB Map），前端折叠展示 */

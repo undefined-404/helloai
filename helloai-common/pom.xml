@@ -23,5 +23,10 @@
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
         </dependency>
+        <!-- Jackson 注解：BaseEntity 等全局实体 Long/Snowflake ID 序列化为字符串，避免前端 JS Number 精度丢失 -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
     </dependencies>
 </project>

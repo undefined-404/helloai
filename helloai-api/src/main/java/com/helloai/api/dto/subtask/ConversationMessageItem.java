@@ -1,5 +1,7 @@
 package com.helloai.api.dto.subtask;
 
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import lombok.Data;
 
 import java.time.OffsetDateTime;
@@ -21,6 +23,7 @@ import java.time.OffsetDateTime;
 public class ConversationMessageItem {
 
     /** 消息 ID（雪花 Long） */
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long id;
 
     /** 消息角色：system/user/assistant/tool */
@@ -30,6 +33,7 @@ public class ConversationMessageItem {
     private String senderType;
 
     /** 发送者 Agent ID，可能为空（平台侧消息） */
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long senderId;
 
     /** 消息正文（执行产出/核验 Prompt/核验分析，全文不截断） */

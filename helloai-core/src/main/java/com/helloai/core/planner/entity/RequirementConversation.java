@@ -1,6 +1,8 @@
 package com.helloai.core.planner.entity;
 
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import com.helloai.common.base.BaseEntity;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -23,6 +25,7 @@ public class RequirementConversation extends BaseEntity {
     private String status;
 
     /** 终稿确认后创建的任务 ID（软引用无 FK，删任务后允许悬挂） */
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long taskId;
 
     /** LLM 最近一次终稿的任务标题（等用户确认） */
@@ -35,6 +38,7 @@ public class RequirementConversation extends BaseEntity {
     private Integer roundCount;
 
     /** 手动指定的 Planner Agent ID（软引用无 FK；NULL 表示系统自动选择，V31） */
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long plannerAgentId;
 
     /**

@@ -181,6 +181,16 @@ public class SubTaskReviewService {
             return;
         }
 
+        // 对话流：审核结果（通过/驳回 + 评分 + 问题）以可读文本单独落库，
+        // 与 verdict JSON 原文互补，方便前端直接展示结论
+        try {
+            String resultText = formatReviewResult(verdict);
+            conversationService.addMessage(subTaskId, reviewer.getId(),
+                    "assistant", "agent", resultText, "subtask_review_result");
+        } catch (Exception e) {
+            log.warn("核验结果对话流写入失败（不阻断核验）: subTaskId={}, err={}", subTaskId, e.getMessage());
+        }
+
         if (Boolean.TRUE.equals(verdict.getPass())) {
             subTaskService.complete(subTaskId);
             recordAutoReviewQuietly(subTaskId, reviewer.getId(), ReviewResult.APPROVED, verdict);
@@ -389,6 +399,26 @@ public class SubTaskReviewService {
 
     private static String nullToEmpty(String s) {
         return s != null ? s : "";
+    }
+
+    /** 把 ReviewVerdict 渲染为前端可直接阅读的中文结论。 */
+    private static String formatReviewResult(ReviewVerdict verdict) {
+        if (verdict == null) {
+            return "核验结论缺失";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("## 核验结论\n\n");
+        sb.append("- 结果: ").append(Boolean.TRUE.equals(verdict.getPass()) ? "通过" : "驳回").append("\n");
+        if (verdict.getScore() != null) {
+            sb.append("- 评分: ").append(verdict.getScore()).append(" / 5\n");
+        }
+        if (verdict.getIssues() != null && !verdict.getIssues().isBlank()) {
+            sb.append("- 问题: ").append(verdict.getIssues()).append("\n");
+        }
+        if (verdict.getComment() != null && !verdict.getComment().isBlank()) {
+            sb.append("- 评语: ").append(verdict.getComment()).append("\n");
+        }
+        return sb.toString().trim();
     }
 
     private static String summarize(String raw, int limit) {

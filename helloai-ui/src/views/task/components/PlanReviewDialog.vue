@@ -68,7 +68,7 @@ async function loadDrafts() {
   if (!props.task) return
   loadingDrafts.value = true
   drafts.value = []
-  try { drafts.value = await taskApi.planDrafts(props.task.id) }
+  try { drafts.value = await taskApi.planDrafts(String(props.task.id)) }
   catch { /* 拦截器已弹错 */ }
   finally { loadingDrafts.value = false }
 }
@@ -100,7 +100,7 @@ async function handleConfirm() {
   } catch { return }
   confirming.value = true
   try {
-    await taskApi.confirmPlan(props.task.id)
+    await taskApi.confirmPlan(String(props.task.id))
     ElMessage.success(`已确认 ${drafts.value.length} 条草案并开始分发`)
     visible.value = false
     emit('done')
@@ -119,7 +119,7 @@ async function handleReject() {
   } catch { return }
   rejecting.value = true
   try {
-    const res = await taskApi.rejectPlan(props.task.id)
+    const res = await taskApi.rejectPlan(String(props.task.id))
     ElMessage.success(`已作废 ${res.cancelledCount} 条草案，任务已回到待规划`)
     visible.value = false
     emit('done')

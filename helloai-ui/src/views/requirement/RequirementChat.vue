@@ -19,10 +19,10 @@
             :key="String(conv.id)"
             class="conv-item"
             :class="{
-              active: activeId != null && String(conv.id) === String(activeId),
+              active: activeId != null && String(conv.id) === activeId,
               abandoned: conv.status === 'ABANDONED'
             }"
-            @click="selectConversation(conv.id)"
+            @click="selectConversation(String(conv.id))"
           >
             <div class="conv-title">{{ conv.title || '(无标题)' }}</div>
             <div class="conv-meta">
@@ -373,9 +373,10 @@ async function scrollToBottom() {
 
 async function selectConversation(id: LongId) {
   if (sending.value) return
-  activeId.value = id
+  const sid = String(id)
+  activeId.value = sid
   try {
-    detail.value = await clarifyApi.detail(id)
+    detail.value = await clarifyApi.detail(sid)
     scrollToBottom()
   } catch { /* 拦截器已弹错 */ }
 }
@@ -401,7 +402,7 @@ async function handleSend() {
       ? await clarifyApi.create(text, plannerId, webSearchEnabled.value)
       : await clarifyApi.send(activeId.value, text)
     detail.value = result
-    activeId.value = result.conversation.id
+    activeId.value = String(result.conversation.id)
     loadList()
     scrollToBottom()
   } catch {
@@ -414,8 +415,9 @@ async function handleSend() {
       const title = text.length <= 50 ? text : text.slice(0, 50)
       const found = conversations.value.find(c => c.status === 'ACTIVE' && c.title === title)
       if (found) {
-        activeId.value = found.id
-        try { detail.value = await clarifyApi.detail(found.id) } catch { /* 拦截器已弹错 */ }
+        const fid = String(found.id)
+        activeId.value = fid
+        try { detail.value = await clarifyApi.detail(fid) } catch { /* 拦截器已弹错 */ }
       }
     }
     // 消息未落库（建会前就失败/未找回会话）时回填输入框，避免丢失用户文本
@@ -436,6 +438,7 @@ async function handleRetry() {
   scrollToBottom()
   try {
     detail.value = await clarifyApi.retry(activeId.value)
+    activeId.value = String(detail.value?.conversation.id ?? activeId.value)
     scrollToBottom()
   } catch { /* 拦截器已弹错；保持现状可再次重试 */ }
   finally { sending.value = false }
@@ -451,7 +454,7 @@ async function handleStructuredSubmit(payload: { text: string; selections: Clari
   try {
     const result = await clarifyApi.send(id, payload.text, payload.selections)
     detail.value = result
-    loadList()
+    activeId.value = String(result.conversation.id)
     scrollToBottom()
   } catch {
     // 拦截器已弹错；user 消息多半已落库，刷新详情后靠重试按钮续跑
@@ -477,7 +480,7 @@ async function handleFinalize() {
     const task = await clarifyApi.finalize(conv.id)
     ElMessage.success('任务已创建，正在自动拆解…')
     try {
-      await taskApi.plan(task.id)
+      await taskApi.plan(String(task.id))
       router.push({ path: '/tasks', query: { review: String(task.id) } })
     } catch {
       // 拦截器已弹错；任务已创建成功，跳任务列表可手动重拆
@@ -502,7 +505,7 @@ async function handleRegenerate() {
     const task = await clarifyApi.regenerate(conv.id)
     ElMessage.success('任务已重新创建，正在自动拆解…')
     try {
-      await taskApi.plan(task.id)
+      await taskApi.plan(String(task.id))
       router.push({ path: '/tasks', query: { review: String(task.id) } })
     } catch {
       // 拦截器已弹错；任务已创建成功，跳任务列表可手动重拆

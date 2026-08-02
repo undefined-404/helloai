@@ -65,7 +65,7 @@ async function handleSave() {
   saving.value = true
   try {
     if (props.task) {
-      await taskApi.update(props.task.id, { title: form.title, description: form.description })
+      await taskApi.update(String(props.task.id), { title: form.title, description: form.description })
       ElMessage.success('任务已更新')
     } else {
       await taskApi.create({ title: form.title, description: form.description })

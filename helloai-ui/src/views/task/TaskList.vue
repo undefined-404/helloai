@@ -115,7 +115,7 @@ async function load() {
 }
 
 // 标题点击 → 跳转子任务列表
-function goSubTasks(row: any) { router.push('/sub-tasks?taskId=' + row.id) }
+function goSubTasks(row: any) { router.push('/sub-tasks?taskId=' + String(row.id)) }
 
 // 描述点击 → 弹窗展示
 const descVisible = ref(false)
@@ -138,7 +138,7 @@ onMounted(async () => {
       if (row.status === 'PLANNING') {
         openPlanReview(row)
       } else {
-        router.push('/tasks?taskId=' + row.id)
+        router.push('/tasks?taskId=' + String(row.id))
       }
     }
   }
@@ -154,7 +154,7 @@ async function handleRepublish(row: Task) {
     )
   } catch { return }
   try {
-    await taskApi.republish(row.id)
+    await taskApi.republish(String(row.id))
     ElMessage.success('已重新发布并通知 PLANNER')
     load()
   } catch { /* 拦截器已弹错 */ }

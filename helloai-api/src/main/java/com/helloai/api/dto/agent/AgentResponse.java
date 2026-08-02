@@ -4,6 +4,8 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import lombok.Data;
 
 import java.time.OffsetDateTime;
@@ -11,6 +13,7 @@ import java.util.Map;
 
 @Data
 public class AgentResponse {
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long id;
     private String name;
     private AgentRole role;

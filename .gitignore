@@ -69,3 +69,9 @@ tmp/
 .dbg/
 # --- Runtime data (ArtifactStorage 本地落盘产出物) ---
 data/
+
+# --- Phase B 临时验证产物（一次性脚本与运行结果目录，不入仓）---
+phase-b-*.ps1
+phase-b-rs-*/
+helmet-poster-*.png
+helmet-research-*.png

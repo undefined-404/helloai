@@ -71,7 +71,7 @@ async function loadReport() {
   if (!props.task) return
   loadingReport.value = true
   report.value = null
-  try { report.value = await taskApi.getFinalReport(props.task.id) }
+  try { report.value = await taskApi.getFinalReport(String(props.task.id)) }
   catch { /* 拦截器已弹错 */ }
   finally { loadingReport.value = false }
 }
@@ -89,7 +89,7 @@ async function handleGenerate() {
   }
   generating.value = true
   try {
-    report.value = await taskApi.generateFinalReport(props.task.id)
+    report.value = await taskApi.generateFinalReport(String(props.task.id))
     ElMessage.success('整合报告生成完成')
   } catch { /* 拦截器已弹错（非 DONE / 无产出 / LLM 失败由后端 BizException 统一提示） */ }
   finally { generating.value = false }
@@ -101,7 +101,7 @@ async function handleDownload() {
   if (!props.task) return
   downloading.value = true
   try {
-    const resp = await taskApi.downloadDeliverables(props.task.id)
+    const resp = await taskApi.downloadDeliverables(String(props.task.id))
     saveBlobResponse(resp, `${props.task.title || 'task'}-交付物.zip`)
   } catch { /* 拦截器已弹错 */ }
   finally { downloading.value = false }

@@ -91,7 +91,7 @@ async function loadCounts() {
   if (!props.task) return
   loadingCounts.value = true
   counts.value = null
-  try { counts.value = await taskApi.relatedCounts(props.task.id) }
+  try { counts.value = await taskApi.relatedCounts(String(props.task.id)) }
   catch { /* 拦截器已弹错；统计加载失败不阻断删除确认 */ }
   finally { loadingCounts.value = false }
 }
@@ -101,7 +101,7 @@ async function handleDelete() {
   if (confirmInput.value !== props.task.title) { confirmError.value = true; return }
   deleting.value = true
   try {
-    await taskApi.deleteTask(props.task.id, confirmInput.value)
+    await taskApi.deleteTask(String(props.task.id), confirmInput.value)
     ElMessage.success(`已删除任务「${props.task.title}」及全部关联数据`)
     visible.value = false
     emit('done')

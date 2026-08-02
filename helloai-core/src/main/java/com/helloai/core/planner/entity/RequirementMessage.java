@@ -1,6 +1,8 @@
 package com.helloai.core.planner.entity;
 
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import com.helloai.common.base.BaseEntity;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -14,6 +16,7 @@ import lombok.EqualsAndHashCode;
 public class RequirementMessage extends BaseEntity {
 
     /** 所属澄清会话 ID */
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long conversationId;
 
     /** 消息角色: user 用户 / assistant LLM 需求分析师 */
