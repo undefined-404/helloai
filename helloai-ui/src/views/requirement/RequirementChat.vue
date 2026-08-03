@@ -3,8 +3,12 @@
     <el-card class="chat-card">
       <template #header>
         <div class="card-header">
-          <span>对话新建（需求澄清）</span>
+          <span>对话新建（AI 助手）</span>
           <div class="header-actions">
+            <!-- V39 当前会话模式徽标（null 老数据按方案澄清展示） -->
+            <el-tag v-if="conversation" :type="isChatMode ? 'info' : 'warning'" size="small">
+              {{ isChatMode ? '自由对话' : '方案澄清' }}
+            </el-tag>
             <el-button size="small" type="primary" @click="startNew">新会话</el-button>
             <el-button size="small" @click="loadList">刷新</el-button>
           </div>
@@ -27,6 +31,9 @@
             <div class="conv-title">{{ conv.title || '(无标题)' }}</div>
             <div class="conv-meta">
               <el-tag :type="statusTag(conv.status)" size="small">{{ statusLabel(conv.status) }}</el-tag>
+              <!-- V39 模式小标签：CHAT=对话 / CLARIFY 与 NULL 老数据=方案 -->
+              <el-tag v-if="conv.mode === 'CHAT'" type="info" size="small" effect="plain">对话</el-tag>
+              <el-tag v-else type="warning" size="small" effect="plain">方案</el-tag>
               <span class="conv-time">{{ fmtTime(conv.createTime) }}</span>
             </div>
           </div>
@@ -35,8 +42,8 @@
 
         <!-- 右栏：气泡流 + 输入框 -->
         <div class="chat-main">
-          <!-- V33 澄清进度条（LLM 自评，仅展示不做业务分支） -->
-          <div v-if="activeId != null && clarifyProgress != null" class="clarify-progress">
+          <!-- V33 澄清进度条（LLM 自评，仅展示不做业务分支；V39 CHAT 自由对话模式隐藏） -->
+          <div v-if="activeId != null && clarifyProgress != null && !isChatMode" class="clarify-progress">
             <span class="progress-label">澄清进度</span>
             <el-progress
               class="progress-bar"
@@ -75,8 +82,8 @@
               </div>
             </template>
             <div v-else class="chat-placeholder">
-              <p>描述你想做的事情，AI 需求分析师会通过追问帮你澄清边界、交付物与验收标准。</p>
-              <p class="placeholder-tip">信息足够时会生成任务终稿，确认后自动创建任务并触发 AI 拆解。</p>
+              <p>描述你想做的事情，或直接向 AI 助手提问——它会解答疑问、帮你梳理思路。</p>
+              <p class="placeholder-tip">说「整理成方案」可把讨论转成可落地方案；信息足够时可生成任务终稿并自动拆解。</p>
             </div>
             <!-- 上轮 LLM 失败（最后一条是 user 消息）：重试条 -->
             <div v-if="canRetry" class="msg-row from-assistant">
@@ -96,8 +103,8 @@
               </div>
             </div>
 
-            <!-- 终稿卡片（有终稿即渲染；ACTIVE 可确认，FINALIZED 只读） -->
-            <div v-if="conversation?.finalTitle" class="final-card">
+            <!-- 终稿卡片（有终稿即渲染；V39 CHAT 自由对话模式不渲染，仅 CLARIFY/老会话；ACTIVE 可确认，FINALIZED 只读） -->
+            <div v-if="conversation?.finalTitle && !isChatMode" class="final-card">
               <div class="final-card-header">
                 <el-tag type="success" size="small">终稿</el-tag>
                 <span class="final-title">{{ conversation.finalTitle }}</span>
@@ -136,10 +143,17 @@
                 :rows="4"
                 resize="none"
                 :disabled="sending || finalizing"
-                :placeholder="activeId ? '继续补充需求，Enter 发送' : '描述你的需求，Enter 发送开启新会话'"
+                :placeholder="inputPlaceholder"
                 @keydown.enter.exact.prevent="handleSend"
               />
               <div class="input-actions">
+                <!-- V39 新会话开始模式：自由对话（缺省）/ 直接方案澄清快捷直达 -->
+                <div v-if="activeId == null" class="mode-select">
+                  <el-radio-group v-model="newConversationMode" size="small">
+                    <el-radio-button value="CHAT">自由对话</el-radio-button>
+                    <el-radio-button value="CLARIFY">直接方案澄清</el-radio-button>
+                  </el-radio-group>
+                </div>
                 <!-- V34 会话级联网搜索开关：ima copilot 样式（默认开启；仅新会话可改；老会话只读取会话原值） -->
                 <div class="web-search-switch">
                   <el-tooltip
@@ -228,6 +242,22 @@ const conversation = computed(() => detail.value?.conversation ?? null)
 // 会话关联任务是否仍存在（仅 detail 返回）；FINALIZED 且为 false 时展示「重新生成」
 const taskExists = computed(() => detail.value?.taskExists === true)
 
+// V39 双模式：CHAT 自由对话 / CLARIFY 方案澄清（mode 为 null 的老数据视为 CLARIFY）
+const isChatMode = computed(() => conversation.value?.mode === 'CHAT')
+// 新会话开始模式（缺省自由对话；选「直接方案澄清」时 create 传 initialMode=CLARIFY 快捷直达）
+const newConversationMode = ref<'CHAT' | 'CLARIFY'>('CHAT')
+
+// 输入框占位文案按会话模式区分（V39；V40.2 补 /planner 斜杠命令入口提示）
+const inputPlaceholder = computed(() => {
+  if (activeId.value == null) return '描述你想做的事情，或直接提问，Enter 发送'
+  return isChatMode.value
+    ? '和 AI 助手自由对话；输入 /planner 直接进入方案整理'
+    : '继续补充需求，Enter 发送'
+})
+
+// V40.2 /planner 斜杠命令：显式进入方案澄清模式（CLARIFY）；可带附加文本（落库进上下文后再切）
+const PLANNER_COMMAND_RE = /^\/planner(?:\s+([\s\S]+))?$/i
+
 const input = ref('')
 const pendingText = ref('')
 const sending = ref(false)
@@ -279,7 +309,8 @@ const lastMessageId = computed(() => {
   return msgs.length ? msgs[msgs.length - 1].id : ''
 })
 
-// 可交互的结构化追问：会话 ACTIVE 且最后一条消息是 assistant 的 structured payload
+// 可交互的结构化追问：会话 ACTIVE 且最后一条消息是 assistant 的 structured payload；
+// V39 曾禁 CHAT 模式交互卡；V40.2 放开——CHAT 模式 LLM 追问（容错双模）同样渲染推荐卡片
 const activeStructured = computed(() => {
   if (conversation.value?.status !== 'ACTIVE' || sending.value) return null
   const msgs = detail.value?.messages ?? []
@@ -391,6 +422,12 @@ function startNew() {
 async function handleSend() {
   const text = input.value.trim()
   if (!text || sending.value) return
+  // V40.2 /planner 斜杠命令：显式进入方案澄清模式（命令前缀不落消息）
+  const cmd = text.match(PLANNER_COMMAND_RE)
+  if (cmd) {
+    handlePlannerCommand(cmd[1]?.trim() ?? '')
+    return
+  }
   input.value = ''
   pendingText.value = text
   sending.value = true
@@ -398,8 +435,9 @@ async function handleSend() {
   try {
     const plannerId = selectedPlanner.value === '__auto__' ? null : (selectedPlanner.value || null)
     // V34：仅新会话向 create 传联网搜索开关；老会话发送消息接口忽略此值
+    // V39：仅新会话向 create 传 initialMode（自由对话缺省 / 直接方案澄清快捷直达）
     const result = activeId.value == null
-      ? await clarifyApi.create(text, plannerId, webSearchEnabled.value)
+      ? await clarifyApi.create(text, plannerId, webSearchEnabled.value, newConversationMode.value)
       : await clarifyApi.send(activeId.value, text)
     detail.value = result
     activeId.value = String(result.conversation.id)
@@ -426,6 +464,33 @@ async function handleSend() {
       && msgs[msgs.length - 1].role === 'user'
       && msgs[msgs.length - 1].content === text
     if (!lastIsSameUserText) input.value = text
+  } finally {
+    pendingText.value = ''
+    sending.value = false
+  }
+}
+
+// V40.2 /planner 命令处理：新会话 initialMode=CLARIFY 直达；已有会话调 toClarifyById
+// （附加文本落库进上下文后切 CLARIFY，首轮强制 structured → 推荐卡片）
+async function handlePlannerCommand(extra: string) {
+  if (sending.value) return
+  input.value = ''
+  pendingText.value = extra || '/planner'
+  sending.value = true
+  scrollToBottom()
+  try {
+    const result = activeId.value == null
+      ? await clarifyApi.create(extra || '请帮我整理一份技术方案', selectedPlanner.value === '__auto__' ? null : selectedPlanner.value, webSearchEnabled.value, 'CLARIFY')
+      : await clarifyApi.toClarify(activeId.value, extra || null)
+    detail.value = result
+    activeId.value = String(result.conversation.id)
+    loadList()
+    scrollToBottom()
+  } catch {
+    // 拦截器已弹错；附加文本可能已落库（切换失败在 LLM 轮），刷新详情靠重试按钮续跑
+    if (activeId.value != null) {
+      try { detail.value = await clarifyApi.detail(activeId.value) } catch { /* 拦截器已弹错 */ }
+    }
   } finally {
     pendingText.value = ''
     sending.value = false
@@ -683,6 +748,9 @@ onMounted(() => {
 .planner-label { font-size: 12px; color: var(--ha-muted); flex-shrink: 0; }
 .planner-picker { width: 260px; max-width: 100%; }
 .msg-retry { display: flex; align-items: center; gap: 10px; color: var(--ha-muted); }
+
+/* ── V39 新会话开始模式选择 ── */
+.mode-select { display: flex; align-items: center; flex-shrink: 0; }
 
 @media (max-width: 768px) {
   .chat-layout { flex-direction: column; height: auto; }

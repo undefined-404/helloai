@@ -1,9 +1,11 @@
 package com.helloai.core.planner.entity;
 
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import com.helloai.common.base.BaseEntity;
+import com.helloai.core.shared.handler.SmallIntBooleanTypeHandler;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
@@ -48,4 +50,21 @@ public class RequirementConversation extends BaseEntity {
      * 失败一律降级跳过，不阻断澄清流程；老数据 NULL 视为默认开启。</p>
      */
     private Boolean webSearchEnabled;
+
+    /**
+     * 对话模式（Flyway V39 新增）：CHAT 自由对话 / CLARIFY 方案澄清。
+     * <p>NULL = 老数据兼容，读取侧按 CLARIFY 语义处理；新会话默认落库 CHAT，
+     * 创建接口可传 initialMode=CLARIFY 快捷直达。切换由用户主导
+     * （to-clarify/to-chat），CHAT 模式意图词命中时服务端自动切 CLARIFY。</p>
+     */
+    private String mode;
+
+    /**
+     * 意图词二次确认标记（Flyway V40 新增，SMALLINT 0/1）。
+     * <p>true = CHAT 模式命中意图词后等待用户确认；用户回复确认词
+     * （或再次表达意图）后转入 CLARIFY 并清零，回复其他内容则清零继续自由对话。
+     * 确认询问由服务端固定文案回复，不消耗对话轮数。</p>
+     */
+    @TableField(typeHandler = SmallIntBooleanTypeHandler.class)
+    private Boolean pendingClarifyConfirm;
 }

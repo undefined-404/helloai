@@ -1,5 +1,6 @@
 package com.helloai.core.planner;
 
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapper;
 import com.baomidou.mybatisplus.extension.conditions.update.LambdaUpdateChainWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -29,6 +30,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -165,6 +167,15 @@ class PlannerAnalysisServiceTest {
                         ]
                         ```
                         """, "stop", "llm", 100));
+        // V27 起 decompose 保存后按 items 顺序重加载草案（防御 saveBatch 实体 ID 未回填）；
+        // mock 不落库，stub list 返回带 id 与审计上下文的"重加载结果"
+        SubTask reloaded1 = draft(11L);
+        reloaded1.setPriority("HIGH");
+        reloaded1.setContext(Map.of("plannerAgentId", 9L));
+        SubTask reloaded2 = draft(12L);
+        reloaded2.setPriority("MEDIUM");
+        reloaded2.setContext(Map.of("plannerAgentId", 9L));
+        when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(reloaded1, reloaded2));
 
         List<SubTask> drafts = plannerAnalysisService.decompose(TASK_ID);
 

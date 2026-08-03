@@ -22,6 +22,7 @@ import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -33,6 +34,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -40,6 +42,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -337,7 +340,7 @@ class RequirementClarifyServiceTest {
     // ══════════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("create：标题取首条消息截断 50 字，状态 ACTIVE，随即走一轮 LLM")
+    @DisplayName("create：标题取首条消息截断 50 字，状态 ACTIVE，随即走一轮 LLM（显式 CLARIFY 快捷直达）")
     void shouldCreateConversationWithTruncatedTitle() {
         String longMessage = "字".repeat(80);
         when(conversationService.save(any(RequirementConversation.class))).thenAnswer(inv -> {
@@ -348,7 +351,7 @@ class RequirementClarifyServiceTest {
         stubLlmRound("{\"type\":\"question\",\"message\":\"目标是什么？\"}");
 
         RequirementClarifyService.ClarifyConversationDetail detail =
-                clarifyService.create(longMessage, null);
+                clarifyService.create(longMessage, null, null, RequirementClarifyService.MODE_CLARIFY);
 
         RequirementConversation conversation = detail.getConversation();
         assertThat(conversation.getTitle()).hasSize(50);
@@ -359,7 +362,7 @@ class RequirementClarifyServiceTest {
     }
 
     @Test
-    @DisplayName("create：手动指定 Planner 时严格校验并钉到会话，选人按钉住的 ID 走")
+    @DisplayName("create：手动指定 Planner 时严格校验并钉到会话，选人按钉住的 ID 走（显式 CLARIFY）")
     void shouldCreateWithPinnedPlanner() {
         when(conversationService.save(any(RequirementConversation.class))).thenAnswer(inv -> {
             RequirementConversation c = inv.getArgument(0);
@@ -374,7 +377,7 @@ class RequirementClarifyServiceTest {
                         "{\"type\":\"question\",\"message\":\"目标是什么？\"}", "stop", "llm", 100));
 
         RequirementClarifyService.ClarifyConversationDetail detail =
-                clarifyService.create("做一个报表", 9L);
+                clarifyService.create("做一个报表", 9L, null, RequirementClarifyService.MODE_CLARIFY);
 
         assertThat(detail.getConversation().getPlannerAgentId()).isEqualTo(9L);
         verify(plannerAgentPicker).validateSelectable(9L);
@@ -503,5 +506,492 @@ class RequirementClarifyServiceTest {
         assertThatThrownBy(() -> clarifyService.abandon(CONV_ID))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("会话已结束");
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  V39 ChatModeAndSwitch：CHAT 自由对话 / CLARIFY 方案澄清双模式
+    //  （外层 @BeforeEach 先执行，clarifyService 与全部 @Mock 直接复用）
+    // ══════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("V39 ChatModeAndSwitch：双模式分派与切换")
+    class ChatModeAndSwitch {
+
+        private RequirementConversation chatConversation() {
+            RequirementConversation conversation = activeConversation();
+            conversation.setMode(RequirementClarifyService.MODE_CHAT);
+            return conversation;
+        }
+
+        /** 走一轮 CHAT LLM 所需的公共 stub（纯文本输出，不经 parseReply）。 */
+        private void stubChatLlmRound(String output) {
+            when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+            when(messageService.listByConversation(CONV_ID))
+                    .thenReturn(List.of(message("user", "你好", 1)));
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.success(output, "stop", "llm", 100));
+        }
+
+        @Test
+        @DisplayName("CHAT 轮：LLM 纯文本直接落库，payload 为 NULL，round_count+1")
+        void chatRoundStoresPlainTextWithoutPayload() {
+            RequirementConversation conversation = chatConversation();
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            stubChatLlmRound("你好！请问想了解什么？");
+
+            RequirementClarifyService.ClarifyConversationDetail detail =
+                    clarifyService.sendMessage(CONV_ID, "你好");
+
+            assertThat(detail.getConversation().getRoundCount()).isEqualTo(2);
+            assertThat(conversation.getFinalTitle()).isNull();
+            verify(messageService).addMessage(CONV_ID, "user", "你好", null);
+            // payload NULL：纯文本消息，不做 JSON 协议解析
+            verify(messageService).addMessage(CONV_ID, "assistant", "你好！请问想了解什么？", null);
+            verify(conversationService, times(1)).updateById(conversation);
+        }
+
+        @Test
+        @DisplayName("CHAT 轮：使用通用助手模板（含 AI 助手角色），不含澄清五维度清单")
+        void chatRoundUsesChatPromptTemplate() {
+            RequirementConversation conversation = chatConversation();
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            stubChatLlmRound("可以，继续聊。");
+
+            clarifyService.sendMessage(CONV_ID, "你好");
+
+            ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            assertThat(taskCaptor.getValue().getUserPrompt())
+                    .contains("AI 助手")
+                    // V40.2 CHAT 模板新增「输出形态」节（追问时可输出 structured JSON）
+                    .contains("输出形态")
+                    .doesNotContain("五维度自检清单");
+        }
+
+        @Test
+        @DisplayName("老数据兼容：mode NULL 视为 CLARIFY——澄清模板 + 首轮联网搜索触发（V34 行为回归）")
+        void legacyNullModeTreatedAsClarify() {
+            RequirementConversation conversation = activeConversation();
+            conversation.setRoundCount(0);
+            conversation.setMode(null);
+            conversation.setWebSearchEnabled(null); // 默认开启
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(webSearchProperties.getQueryKeywordLimit()).thenReturn(40);
+            when(webSearchProperties.getMaxResults()).thenReturn(5);
+            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of());
+            when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+            when(messageService.listByConversation(CONV_ID))
+                    .thenReturn(List.of(message("user", "做一个报表", 1)));
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.success(
+                            "{\"type\":\"question\",\"message\":\"验收标准是什么？\"}", "stop", "llm", 100));
+
+            clarifyService.sendMessage(CONV_ID, "做一个报表");
+
+            verify(webSearchService).search(anyString(), eq(5));
+            ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            assertThat(taskCaptor.getValue().getUserPrompt()).contains("资深需求分析师");
+        }
+
+        @Test
+        @DisplayName("意图词二次确认：CHAT 消息含「整理成方案」→ 置待确认 + 回复固定确认询问（不调 LLM、不加轮数）")
+        void intentPhraseEntersPendingConfirm() {
+            RequirementConversation conversation = chatConversation();
+            conversation.setRoundCount(3);
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+
+            RequirementClarifyService.ClarifyConversationDetail detail =
+                    clarifyService.sendMessage(CONV_ID, "帮我分析一下市场，然后整理成方案");
+
+            assertThat(conversation.getMode()).isEqualTo(RequirementClarifyService.MODE_CHAT);
+            assertThat(conversation.getPendingClarifyConfirm()).isTrue();
+            // 确认询问不消耗对话轮数
+            assertThat(conversation.getRoundCount()).isEqualTo(3);
+            assertThat(detail.getConversation().getMode()).isEqualTo(RequirementClarifyService.MODE_CHAT);
+            // user 消息 + 固定确认询问落库（payload NULL），不调 LLM
+            verify(messageService).addMessage(CONV_ID, "user", "帮我分析一下市场，然后整理成方案", null);
+            verify(messageService).addMessage(CONV_ID, "assistant",
+                    RequirementClarifyService.CONFIRM_ASK_MESSAGE, null);
+            verify(platformAgentExecutionService, never())
+                    .executeSync(any(Agent.class), any(AgentTask.class));
+        }
+
+        @Test
+        @DisplayName("口语化意图词（V40.1 扩展）：「帮我整理方案吧」同样进入待确认（不调 LLM、不加轮数）")
+        void colloquialIntentPhraseEntersPendingConfirm() {
+            RequirementConversation conversation = chatConversation();
+            conversation.setRoundCount(3);
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+
+            RequirementClarifyService.ClarifyConversationDetail detail =
+                    clarifyService.sendMessage(CONV_ID, "帮我整理方案吧");
+
+            assertThat(conversation.getMode()).isEqualTo(RequirementClarifyService.MODE_CHAT);
+            assertThat(conversation.getPendingClarifyConfirm()).isTrue();
+            // 确认询问不消耗对话轮数
+            assertThat(conversation.getRoundCount()).isEqualTo(3);
+            verify(messageService).addMessage(CONV_ID, "user", "帮我整理方案吧", null);
+            verify(messageService).addMessage(CONV_ID, "assistant",
+                    RequirementClarifyService.CONFIRM_ASK_MESSAGE, null);
+            verify(platformAgentExecutionService, never())
+                    .executeSync(any(Agent.class), any(AgentTask.class));
+        }
+
+        @Test
+        @DisplayName("CHAT 首轮不触发联网搜索（V34 仅 CLARIFY 首轮）")
+        void chatRoundDoesNotTriggerWebSearch() {
+            RequirementConversation conversation = chatConversation();
+            conversation.setRoundCount(0);
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            stubChatLlmRound("你好！");
+
+            clarifyService.sendMessage(CONV_ID, "你好");
+
+            verify(webSearchService, never()).search(anyString(), anyInt());
+        }
+
+        @Test
+        @DisplayName("CHAT 轮数上限 50：49 轮正常续聊")
+        void chatRoundFortyNineAllowed() {
+            RequirementConversation conversation = chatConversation();
+            conversation.setRoundCount(49);
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            stubChatLlmRound("继续。");
+
+            clarifyService.sendMessage(CONV_ID, "继续");
+
+            assertThat(conversation.getRoundCount()).isEqualTo(50);
+        }
+
+        @Test
+        @DisplayName("CHAT 轮数上限 50：50 轮拒绝（引导转方案或新会话），不调 LLM 不落消息")
+        void chatRoundAtLimitRejected() {
+            RequirementConversation conversation = chatConversation();
+            conversation.setRoundCount(50);
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+
+            assertThatThrownBy(() -> clarifyService.sendMessage(CONV_ID, "再问一下"))
+                    .isInstanceOf(BizException.class)
+                    .hasMessageContaining("自由对话轮数已达上限");
+            verify(platformAgentExecutionService, never())
+                    .executeSync(any(Agent.class), any(AgentTask.class));
+            verify(messageService, never()).addMessage(anyLong(), anyString(), anyString(), any());
+        }
+
+        @Test
+        @DisplayName("CHAT 达上限后意图词仍放行：进入待确认（保证转方案出口不被 50 轮上限挡住）")
+        void intentAtChatLimitStillEntersPendingConfirm() {
+            RequirementConversation conversation = chatConversation();
+            conversation.setRoundCount(50);
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+
+            clarifyService.sendMessage(CONV_ID, "整理成方案");
+
+            assertThat(conversation.getMode()).isEqualTo(RequirementClarifyService.MODE_CHAT);
+            assertThat(conversation.getPendingClarifyConfirm()).isTrue();
+            verify(platformAgentExecutionService, never())
+                    .executeSync(any(Agent.class), any(AgentTask.class));
+        }
+
+        @Test
+        @DisplayName("待确认状态回复确认词「确认」→ 转入 CLARIFY 并清标记，该条消息即澄清首轮（澄清模板 LLM）")
+        void confirmPhraseSwitchesToClarifyRound() {
+            RequirementConversation conversation = chatConversation();
+            conversation.setRoundCount(3);
+            conversation.setPendingClarifyConfirm(true);
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+            when(messageService.listByConversation(CONV_ID))
+                    .thenReturn(List.of(message("user", "帮我把讨论整理成方案", 1)));
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.success(
+                            "{\"type\":\"question\",\"message\":\"验收标准是什么？\"}", "stop", "llm", 100));
+
+            clarifyService.sendMessage(CONV_ID, "确认");
+
+            assertThat(conversation.getMode()).isEqualTo(RequirementClarifyService.MODE_CLARIFY);
+            assertThat(conversation.getPendingClarifyConfirm()).isFalse();
+            // 确认条即澄清首轮：轮数 +1，走澄清模板而非 CHAT 模板
+            assertThat(conversation.getRoundCount()).isEqualTo(4);
+            verify(messageService).addMessage(CONV_ID, "user", "确认", null);
+            verify(messageService).addMessage(CONV_ID, "assistant", "验收标准是什么？", null);
+            ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            assertThat(taskCaptor.getValue().getUserPrompt()).contains("资深需求分析师");
+        }
+
+        @Test
+        @DisplayName("CHAT 达 50 轮上限后确认词仍放行：确认转 CLARIFY 不被上限挡住")
+        void confirmAtChatLimitStillSwitches() {
+            RequirementConversation conversation = chatConversation();
+            conversation.setRoundCount(50);
+            conversation.setPendingClarifyConfirm(true);
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+            when(messageService.listByConversation(CONV_ID))
+                    .thenReturn(List.of(message("user", "帮我把讨论整理成方案", 1)));
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.success(
+                            "{\"type\":\"question\",\"message\":\"验收标准是什么？\"}", "stop", "llm", 100));
+
+            clarifyService.sendMessage(CONV_ID, "确认");
+
+            assertThat(conversation.getMode()).isEqualTo(RequirementClarifyService.MODE_CLARIFY);
+            assertThat(conversation.getPendingClarifyConfirm()).isFalse();
+            assertThat(conversation.getRoundCount()).isEqualTo(51);
+        }
+
+        @Test
+        @DisplayName("待确认状态回复非确认内容 → 清标记继续自由对话（用户放弃转方案）")
+        void nonConfirmMessageClearsPendingAndContinuesChat() {
+            RequirementConversation conversation = chatConversation();
+            conversation.setRoundCount(3);
+            conversation.setPendingClarifyConfirm(true);
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            stubChatLlmRound("可以，继续聊。");
+
+            clarifyService.sendMessage(CONV_ID, "再讲讲单体架构的细节");
+
+            assertThat(conversation.getMode()).isEqualTo(RequirementClarifyService.MODE_CHAT);
+            assertThat(conversation.getPendingClarifyConfirm()).isFalse();
+            // 走正常 CHAT 轮：纯文本落库、轮数 +1
+            assertThat(conversation.getRoundCount()).isEqualTo(4);
+            verify(messageService).addMessage(CONV_ID, "assistant", "可以，继续聊。", null);
+        }
+
+        @Test
+        @DisplayName("待确认状态再次输入意图词 → 视为二次确认直接转入 CLARIFY（无需再回「确认」）")
+        void intentDuringPendingConfirmEntersClarify() {
+            RequirementConversation conversation = chatConversation();
+            conversation.setRoundCount(3);
+            conversation.setPendingClarifyConfirm(true);
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            stubLlmRound("{\"type\":\"final\",\"title\":\"搭建日报模块\","
+                    + "\"description\":\"## 背景\\n做日报\",\"message\":\"需求已清晰\"}");
+
+            RequirementClarifyService.ClarifyConversationDetail detail =
+                    clarifyService.sendMessage(CONV_ID, "整理成方案");
+
+            assertThat(conversation.getMode()).isEqualTo(RequirementClarifyService.MODE_CLARIFY);
+            assertThat(conversation.getPendingClarifyConfirm()).isFalse();
+            assertThat(detail.getConversation().getFinalTitle()).isEqualTo("搭建日报模块");
+        }
+
+        @Test
+        @DisplayName("create 首条消息含意图词 → 置待确认 + 回复固定确认询问（新会话不直接澄清、不调 LLM）")
+        void createIntentPhraseEntersPendingConfirm() {
+            when(conversationService.save(any(RequirementConversation.class))).thenAnswer(inv -> {
+                RequirementConversation c = inv.getArgument(0);
+                c.setId(CONV_ID);
+                return true;
+            });
+
+            RequirementClarifyService.ClarifyConversationDetail detail =
+                    clarifyService.create("帮我整理成方案：做一个周报工具", null);
+
+            RequirementConversation conversation = detail.getConversation();
+            assertThat(conversation.getMode()).isEqualTo(RequirementClarifyService.MODE_CHAT);
+            assertThat(conversation.getPendingClarifyConfirm()).isTrue();
+            // 确认询问不消耗对话轮数（0 轮保持）
+            assertThat(conversation.getRoundCount()).isEqualTo(0);
+            verify(messageService).addMessage(CONV_ID, "user", "帮我整理成方案：做一个周报工具", null);
+            verify(messageService).addMessage(CONV_ID, "assistant",
+                    RequirementClarifyService.CONFIRM_ASK_MESSAGE, null);
+            verify(platformAgentExecutionService, never())
+                    .executeSync(any(Agent.class), any(AgentTask.class));
+        }
+
+        @Test
+        @DisplayName("create 缺省初始模式为 CHAT（V39 产品决策：新会话默认自由对话）")
+        void createDefaultsToChatMode() {
+            when(conversationService.save(any(RequirementConversation.class))).thenAnswer(inv -> {
+                RequirementConversation c = inv.getArgument(0);
+                c.setId(CONV_ID);
+                return true;
+            });
+            stubChatLlmRound("你好！");
+
+            RequirementClarifyService.ClarifyConversationDetail detail = clarifyService.create("你好", null);
+
+            assertThat(detail.getConversation().getMode()).isEqualTo(RequirementClarifyService.MODE_CHAT);
+            verify(messageService).addMessage(CONV_ID, "assistant", "你好！", null);
+        }
+
+        @Test
+        @DisplayName("create：initialMode 非法值拒绝建会")
+        void createRejectsInvalidInitialMode() {
+            assertThatThrownBy(() -> clarifyService.create("你好", null, null, "BOGUS"))
+                    .isInstanceOf(BizException.class)
+                    .hasMessageContaining("非法的初始对话模式");
+            verify(conversationService, never()).save(any(RequirementConversation.class));
+        }
+
+        @Test
+        @DisplayName("to-clarify：置位 CLARIFY + 一轮澄清 LLM 基于全量历史产追问（澄清模板），并清除待确认标记")
+        void switchToClarifyRunsClarifyRound() {
+            RequirementConversation conversation = chatConversation();
+            conversation.setPendingClarifyConfirm(true);
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+            when(messageService.listByConversation(CONV_ID))
+                    .thenReturn(List.of(message("user", "做一个报表", 1)));
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.success(
+                            "{\"type\":\"question\",\"message\":\"验收标准是什么？\"}", "stop", "llm", 100));
+
+            clarifyService.switchToClarify(CONV_ID);
+
+            assertThat(conversation.getMode()).isEqualTo(RequirementClarifyService.MODE_CLARIFY);
+            assertThat(conversation.getPendingClarifyConfirm()).isFalse();
+            verify(messageService).addMessage(CONV_ID, "assistant", "验收标准是什么？", null);
+            ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            assertThat(taskCaptor.getValue().getUserPrompt()).contains("资深需求分析师");
+        }
+
+        @Test
+        @DisplayName("to-clarify：LLM 失败时 mode 已持久化 CLARIFY + 抛 BizException（前端可重试）")
+        void switchToClarifyPersistsModeEvenOnLlmFailure() {
+            RequirementConversation conversation = chatConversation();
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+            when(messageService.listByConversation(CONV_ID))
+                    .thenReturn(List.of(message("user", "做一个报表", 1)));
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.failure("llm down", "stop", "llm"));
+
+            assertThatThrownBy(() -> clarifyService.switchToClarify(CONV_ID))
+                    .isInstanceOf(BizException.class)
+                    .hasMessageContaining("LLM 调用失败");
+            assertThat(conversation.getMode()).isEqualTo(RequirementClarifyService.MODE_CLARIFY);
+        }
+
+        @Test
+        @DisplayName("to-clarify 带附加文本（V40.2 /planner 命令路径）：先落库 user 消息进上下文，再切 CLARIFY 跑澄清轮")
+        void switchToClarifyWithExtraMessage() {
+            RequirementConversation conversation = chatConversation();
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+            when(messageService.listByConversation(CONV_ID))
+                    .thenReturn(List.of(message("user", "做一个报表", 1)));
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.success(
+                            "{\"type\":\"question\",\"mode\":\"structured\",\"progress\":40,"
+                                    + "\"message\":\"需要确认几个关键点\","
+                                    + "\"questions\":[{\"text\":\"业务类型？\",\"options\":"
+                                    + "[{\"label\":\"企业内部工具\",\"value\":\"opt_a\",\"recommended\":true},"
+                                    + "{\"label\":\"SaaS 产品\",\"value\":\"opt_b\",\"recommended\":false}]}]}",
+                            "stop", "llm", 100));
+
+            clarifyService.switchToClarify(CONV_ID, "补充：团队 10 人，单体优先");
+
+            // 附加文本先进上下文（user 消息，无 payload），随后模式切换 + 澄清轮
+            verify(messageService).addMessage(CONV_ID, "user", "补充：团队 10 人，单体优先", null);
+            assertThat(conversation.getMode()).isEqualTo(RequirementClarifyService.MODE_CLARIFY);
+            assertThat(conversation.getPendingClarifyConfirm()).isFalse();
+            ArgumentCaptor<String> contentCaptor = ArgumentCaptor.forClass(String.class);
+            ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+            verify(messageService).addMessage(eq(CONV_ID), eq("assistant"), contentCaptor.capture(),
+                    payloadCaptor.capture());
+            // content 为可读拼接文本（进 LLM 上下文），payload 为 structured 快照（前端渲染推荐卡片）
+            assertThat(contentCaptor.getValue()).contains("业务类型？（选项：企业内部工具 / SaaS 产品）");
+            assertThat(payloadCaptor.getValue()).contains("\"mode\":\"structured\"")
+                    .contains("\"recommended\":true");
+        }
+
+        @Test
+        @DisplayName("to-clarify 附加文本为空/空白：不加 user 消息，与既有 switchToClarify 行为一致")
+        void switchToClarifyWithBlankExtraEqualsLegacy() {
+            RequirementConversation conversation = chatConversation();
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+            when(messageService.listByConversation(CONV_ID))
+                    .thenReturn(List.of(message("user", "做一个报表", 1)));
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.success(
+                            "{\"type\":\"question\",\"message\":\"验收标准是什么？\"}", "stop", "llm", 100));
+
+            clarifyService.switchToClarify(CONV_ID, "   ");
+
+            verify(messageService, never()).addMessage(CONV_ID, "user", "   ", null);
+            assertThat(conversation.getMode()).isEqualTo(RequirementClarifyService.MODE_CLARIFY);
+            verify(messageService).addMessage(CONV_ID, "assistant", "验收标准是什么？", null);
+        }
+
+        @Test
+        @DisplayName("CHAT 容错双模（V40.2）：LLM 输出 structured 追问 → payload 落库出推荐卡片，模式仍 CHAT，不触发联网搜索")
+        void chatRoundStructuredQuestionStoresPayload() {
+            RequirementConversation conversation = chatConversation();
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            stubChatLlmRound("""
+                    ```json
+                    {"type":"question","mode":"structured","message":"帮我确认两点：",
+                    "questions":[{"id":"q1","text":"业务类型？","multiple":false,"allowCustom":true,
+                    "options":[{"label":"企业内部工具","value":"opt_a","recommended":true},
+                    {"label":"SaaS 产品","value":"opt_b","recommended":false}]}]}
+                    ```
+                    """);
+
+            RequirementClarifyService.ClarifyConversationDetail detail =
+                    clarifyService.sendMessage(CONV_ID, "帮我做技术选型");
+
+            assertThat(detail.getConversation().getMode()).isEqualTo(RequirementClarifyService.MODE_CHAT);
+            ArgumentCaptor<String> contentCaptor = ArgumentCaptor.forClass(String.class);
+            ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+            verify(messageService).addMessage(eq(CONV_ID), eq("assistant"), contentCaptor.capture(),
+                    payloadCaptor.capture());
+            assertThat(contentCaptor.getValue()).contains("业务类型？（选项：企业内部工具 / SaaS 产品）");
+            assertThat(payloadCaptor.getValue()).contains("\"mode\":\"structured\"")
+                    .contains("\"recommended\":true");
+            // CHAT 自由对话不触发联网搜索（V34 仅 CLARIFY 首轮）
+            verify(webSearchService, never()).search(anyString(), anyInt());
+        }
+
+        @Test
+        @DisplayName("CHAT 容错双模（V40.2）：freeform JSON / 非结构化输出仍按纯文本落库（payload NULL，零破坏）")
+        void chatRoundFreeformJsonStillPlain() {
+            RequirementConversation conversation = chatConversation();
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            stubChatLlmRound("{\"type\":\"question\",\"mode\":\"freeform\",\"message\":\"请贴出接口文档\"}");
+
+            clarifyService.sendMessage(CONV_ID, "帮我做技术选型");
+
+            // freeform 在 CHAT 视为普通文本：原文落库、payload NULL
+            verify(messageService).addMessage(CONV_ID, "assistant",
+                    "{\"type\":\"question\",\"mode\":\"freeform\",\"message\":\"请贴出接口文档\"}", null);
+            assertThat(conversation.getMode()).isEqualTo(RequirementClarifyService.MODE_CHAT);
+        }
+
+        @Test
+        @DisplayName("to-chat：仅置位 CHAT，不调用 LLM")
+        void switchToChatFlipsModeOnly() {
+            RequirementConversation conversation = activeConversation();
+            conversation.setMode(RequirementClarifyService.MODE_CLARIFY);
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(messageService.listByConversation(CONV_ID)).thenReturn(List.of());
+
+            clarifyService.switchToChat(CONV_ID);
+
+            assertThat(conversation.getMode()).isEqualTo(RequirementClarifyService.MODE_CHAT);
+            verify(platformAgentExecutionService, never())
+                    .executeSync(any(Agent.class), any(AgentTask.class));
+        }
+
+        @Test
+        @DisplayName("FINALIZED 会话 to-clarify/to-chat 均拒绝")
+        void finalizedCannotSwitchMode() {
+            RequirementConversation conversation = activeConversation();
+            conversation.setStatus(RequirementClarifyService.STATUS_FINALIZED);
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+
+            assertThatThrownBy(() -> clarifyService.switchToClarify(CONV_ID))
+                    .isInstanceOf(BizException.class)
+                    .hasMessageContaining("会话已结束");
+            assertThatThrownBy(() -> clarifyService.switchToChat(CONV_ID))
+                    .isInstanceOf(BizException.class)
+                    .hasMessageContaining("会话已结束");
+            verify(conversationService, never()).updateById(any());
+        }
     }
 }

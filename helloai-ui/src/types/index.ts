@@ -445,6 +445,8 @@ export interface RequirementConversation {
   // 会话级联网搜索开关（V34；null=默认开启 / true=开启 / false=关闭；
   // 首轮 LLM 调用前若为开启则服务端预检索行业资料注入 Prompt）
   webSearchEnabled?: boolean | null
+  // 对话模式（V39）：CHAT=自由对话 / CLARIFY=方案澄清；null=老数据按 CLARIFY 语义
+  mode?: 'CHAT' | 'CLARIFY' | null
   createTime: string
   updateTime: string
 }

@@ -3861,3 +3861,131 @@ N17 澄清链路在 V29（多轮追问 + 终稿）+ V33（结构化选项 + prog
 - 版本编号勘误落地：§6.39"V35"标号超前于 Flyway V35 实际创建时间（2026-08-02 01:04），其"无 Flyway"记录仅对 08-01 当天成立；V35~V37 真实内容（Task Running Spec Phase A JSONB / Phase B 建表 / deleted 修复）以本节为唯一事实源。
 - 遗留（沿用 §6.39 范围外结论）：多级依赖透传（仅直接前置）、产出摘要化/向量化、跨任务依赖上下文；E2E 脚本依赖"claim 即自动执行"的环境行为，若未来关闭自动分发需同步调整脚本。
 
+### 6.44 Planner 对话双模式：CHAT 自由对话 + CLARIFY 方案澄清（V39，2026-08-03）
+
+#### 1. 背景与决策
+
+需求澄清会话此前只有单一"澄清"形态（V29 首版 → V33 结构化选项 → V34 联网搜索），用户闲聊式咨询（技术选型对比、概念解释）会被生硬拽回澄清协议。本轮把单会话升级为 Kimi/DeepSeek 式双模式：**CHAT 自由对话**（通用 AI 助手，纯文本问答）+ **CLARIFY 方案澄清**（保留既有全部行为：首轮联网搜索 + progress 自评 + JSON 三选一协议），同一会话由用户主导切换，不拆两个独立入口。
+
+关键决策：
+
+- **单会话 `mode` 字段而非双会话**：`requirement_conversation.mode`（CHAT/CLARIFY，NULL 老数据按 CLARIFY 语义读取兼容），切换只改模式不迁移消息。
+- **CHAT 是"降级协议"模式**：走通用助手模板纯文本（无 JSON 输出协议、无澄清轮自检清单、无 progress 自评），不做首轮联网搜索（阶段 2 计划再评估按需检索）；独立 `MAX_CHAT_ROUNDS=50` 上限（CLARIFY 沿用 20）。
+- **意图词自动切换（CHAT→CLARIFY 单向）**：正则命中「整理成方案/做成方案/生成方案/转为方案/变成方案/整理成任务/做成任务/落地实施/出一份方案/写个方案/方案化」即先落库切 CLARIFY 再走澄清轮（该条消息即澄清首轮）；意图词永远放行（不占 CHAT 轮数上限判定），保证"转方案"出口不被 50 轮上限挡住。
+- **切换 API 语义**：`to-clarify` = 置位落库 + 立即用澄清模板基于全量历史跑一轮 LLM（LLM 失败时 mode 已持久化，可用 retry 续跑）；`to-chat` = 仅置位不调 LLM。
+- **新会话缺省 CHAT**，创建接口 `initialMode` 可快捷直达 CLARIFY；非法值抛 BizException。
+- 明确不做：SSE 流式、CHAT 模式联网搜索（阶段 2）、意图词反向自动切换（CLARIFY→CHAT 无自动切换，避免方案进度被打断）、多轮策略优化。
+
+#### 2. 实际落地
+
+- **Flyway V39 `requirement_conversation_add_mode.sql`**：`mode VARCHAR(16)`（IF NOT EXISTS）+ 重建 `chk_requirement_conversation_mode` CHECK（NULL 或 CHAT/CLARIFY）+ 列 COMMENT + V34 同款 DO $$ 验证块（启动日志输出 `[V39] requirement_conversation.mode 列与 CHECK 约束已就位`）。
+- **`RequirementClarifyService`（helloai-core/planner）**：
+  - 常量 `MODE_CHAT/MODE_CLARIFY`、`MAX_CHAT_ROUNDS=50`、`CHAT_PROMPT_TEMPLATE_PATH=prompts/requirement-chat.md`、`INTENT_TO_CLARIFY_PATTERN` 意图词正则。
+  - `create(firstMessage, plannerAgentId, webSearchEnabled, initialMode)` 四参重载 + `normalizeInitialMode`（null/缺省→CHAT、CLARIFY 直达、非法抛 BizException）；旧三参/二参重载委托保兼容。
+  - `sendMessage` 轮数上限按模式分派：CHAT（且非意图词）超 50 抛"自由对话轮数已达上限…可输入「整理成方案」转为方案模式"；CLARIFY（含 NULL 老数据）沿用 20 上限；意图词消息跳过 CHAT 上限判定。
+  - `doRound` 意图切换：CHAT 模式下命中意图词 → `setMode(CLARIFY)` + `updateById` 落库 → 该轮即澄清轮；首轮联网搜索条件收紧为 `isClarifyMode && rounds==0 && webSearchEnabled`。
+  - `runLlmRound` 分派：`isClarifyMode` 选澄清模板（scene=requirement_clarify，JSON 协议解析）/ CHAT 选通用助手模板（scene=requirement_chat，纯文本直接落库，`addMessage` 显式 4 参 payload=NULL）。
+  - `switchToClarify`：requireActive → 置位落库 → `runLlmRound(conversation, "")`（切换轮不做首轮联网搜索，澄清模板基于全量历史直接产草案/追问；LLM 失败 mode 已持久化可 retry）；`switchToChat`：仅置位 + 返回 detail。
+- **`prompts/requirement-chat.md` 新模板**：不锁定"需求分析师"角色、无 JSON 输出协议、无澄清轮自检清单段、无 progress 自评；占位符 `{{CONVERSATION_HISTORY}}`/`{{WEB_SEARCH_CONTEXT}}` 与澄清模板同构（CHAT 当前渲染"（无可用联网资料）"）；第 4 条职责明确"用户表达转方案意图时系统自动切换，本轮只需一句话提示"。
+- **API 层**：`ClarifyMessageRequest.initialMode`；Controller `create` 透传四参 + `POST /{id}/to-clarify` + `POST /{id}/to-chat`。
+- **前端（helloai-ui）**：`types` 加 `mode?: 'CHAT'|'CLARIFY'|null`；`clarify.ts` create 加 initialMode + `toClarify/toChat`；`RequirementChat.vue`——标题"对话新建（AI 助手）"+ 模式徽标 el-tag（对话 info / 方案 warning）、conv-meta 小标签、进度条与终稿卡条件化（`!isChatMode`）、`isChatMode` computed、新会话 el-radio-group 模式选择（默认 CHAT）、「转为方案」warning 按钮（ElMessageBox.confirm 后 toClarify，失败靠重试条续跑）、输入占位随模式切换（CHAT"自由提问，可随时转为方案模式" / CLARIFY 沿用澄清引导）。
+
+#### 3. 验证结果
+
+- **单测**：`RequirementClarifyServiceTest` 新增 `@Nested ChatModeAndSwitch` 14 例全绿——chatRoundStoresPlainTextWithoutPayload（payload 显式 NULL）/ chatRoundUsesChatPromptTemplate / legacyNullModeTreatedAsClarify（老数据兼容）/ intentPhraseAutoSwitchesMode / chatRoundDoesNotTriggerWebSearch / chatRoundFortyNineAllowed / chatRoundAtLimitRejected / intentAtChatLimitStillSwitchesMode（意图词永远放行）/ createDefaultsToChatMode / createRejectsInvalidInitialMode / switchToClarifyRunsClarifyRound / switchToClarifyPersistsModeEvenOnLlmFailure / switchToChatFlipsModeOnly / finalizedCannotSwitchMode；既有 2 例 create 用例改显式传 `MODE_CLARIFY`。模块 35/35 全绿；helloai-core 全量 384 例仅 1 个 pre-existing Error（PlannerAnalysisServiceTest 拆解草案重加载，`git stash` 只 stash 本轮两个 core 文件后重跑依然失败，确认非本轮回归）。
+- **构建**：`mvn -pl helloai-start -am package -DskipTests` 产出 `helloai-start-1.0.0-SNAPSHOT.jar`（68M），启动后 Flyway 迁移日志确认 `[V39] requirement_conversation.mode 列与 CHECK 约束已就位`，`/api/health` 200；前端 `vue-tsc --noEmit` 0 错。
+- **E2E（真实环境 PASS）**：新建 `scripts/shell/verify-planner-chat-dual-mode.sh`（UTF-8 头 + set -euo pipefail + curl + jq，照 verify-requirement-clarify.sh 模板）8 步全绿——CHAT 建会（initialMode=CHAT）断言 mode=CHAT + 末条 assistant 回复 payload=NULL（纯文本）；二轮普通问题仍 CHAT（+2 消息）；to-clarify 断言 mode=CLARIFY + 新增一轮（messages 5）；推进一轮即产终稿 `finalTitle=技术选型：微服务与单体架构对比分析` → finalize 建任务 PENDING + 会话 FINALIZED + taskId 回填；意图词新会话（缺省 CHAT）首条"整理成方案…"自动切 CLARIFY；to-chat 反向切回断言仅置位不加消息。实测 chatConversationId=2084282161971728385 / intentConversationId=2084282265231298561 / taskId=2084282263423553538。
+- 脚本弹性设计：终稿未产出时降级断言"最后一条 assistant payload 为合法 JSON 且含 questions 键"（结构化追问协议），避免 LLM 输出不确定性导致脚本假失败。
+
+#### 4. 影响与遗留
+
+- 行为兼容：老数据 mode=NULL 按 CLARIFY 语义读取，既有澄清链路零改动；CLARIFY 分支代码路径与 V33/V34 一致。
+- 轮数语义变化：CHAT 会话 50 轮上限（意图词放行），CLARIFY 仍 20 轮；超限提示引导输入「整理成方案」转模式或新建会话。
+- 遗留：CHAT 模式联网搜索（阶段 2 计划，需评估按需检索时机与成本）、意图词正则覆盖度（可后续按用户话术补充）、切换轮不做首轮联网搜索（阶段 2 再评估）。
+
+### 6.45 意图词二次确认：去掉「转为方案」按钮，对话内确认转方案（V40，2026-08-03）
+
+#### 1. 背景与决策
+
+V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按钮。用户反馈：误表达/误触会直接进入方案模式，缺少确认环节。产品决策（用户明确要求，确认形态经 AskUserQuestion 选定为「对话内确认」）：**去掉「转为方案」按钮，意图词只触发二次确认**——命中意图词后不切模式、不调 LLM，服务端回复固定确认询问；用户回复确认词或再次表达意图 → 转入 CLARIFY（该条消息即澄清首轮）；回复其他内容 → 清标记继续自由对话。
+
+关键决策：
+
+- **意图词命中不再自动切 CLARIFY（V39 行为变更）**：置 `pending_clarify_confirm` 标记 + 回复固定确认询问文案（`CONFIRM_ASK_MESSAGE`，不调 LLM、不加轮数、payload NULL）。
+- **确认词正则**：`^(确认|确定|好的|可以|开始吧|开始|是的|没错|没问题|行|嗯|OK|ok|Yes|yes)([。！？!?,.;；\s]|$)`——开头命中且后随标点/空白/结尾，避免「好的，但我还想先聊聊」这类误判；**仅待确认状态生效**，普通对话不受影响。
+- **放行语义**：待确认状态的确认词（或再次意图词）跳过 CHAT 50 轮上限判定——确认消息转入 CLARIFY，不算 CHAT 轮，保证转方案出口不被上限挡住（与 V39 意图词放行同思路）。
+- **SMALLINT(0/1) 持久化**（按代码规范 §9.3 不用 BOOLEAN）：实体保持 Java `Boolean` 字段 + 自定义 `SmallIntBooleanTypeHandler`（写侧 `setInt(0/1)`、读侧 smallint→Boolean），不注册全局映射仅 `@TableField` 显式指定，避免影响 BOOLEAN 类型的 `web_search_enabled`。直接用 MyBatis 内置 BooleanTypeHandler 会报 `column is of type smallint but expression is of type boolean`。
+- **切换端点按代码规范 §8.2 整改**：V39 的 `POST /{id}/to-clarify`、`POST /{id}/to-chat` 违反「新代码必须 `POST /{action}ById/{id}`」规范，本轮一并整改为 `/toClarifyById/{id}`、`/toChatById/{id}`（前端 clarify.ts 同步；E2E 脚本同步）。
+- 前端移除「转为方案」按钮与 `handleToClarify`；`toClarify/toChat` 端点保留（无前端入口，供内部/测试用）。
+
+#### 2. 实际落地
+
+- **Flyway V40 `requirement_conversation_add_pending_clarify_confirm.sql`**：`pending_clarify_confirm SMALLINT NOT NULL DEFAULT 0`（IF NOT EXISTS + 列 COMMENT 明示 0=无待确认/1=等待确认 + V34 同款 DO $$ 验证块，启动日志输出 `[V40] ... 列与默认值已就位`）。
+- **`SmallIntBooleanTypeHandler`（helloai-core/shared/handler，新建）**：`BaseTypeHandler<Boolean>`，写侧 `ps.setInt(parameter ? 1 : 0)`、读侧 `getObject` 判 1；Javadoc 说明 §9.3 背景与不注册全局映射的原因（对齐 `PgJsonbTypeHandler` 先例）。
+- **`RequirementClarifyService`**：
+  - 常量 `CONFIRM_PHRASE_PATTERN`（确认词正则）、`CONFIRM_ASK_MESSAGE`（固定确认询问文案，public 供单测断言）、`INTENT_TO_CLARIFY_PATTERN` 注释更新为"命中即进入二次确认"。
+  - `sendMessage` 上限分派：`intent`/`confirm`（待确认 + 确认词或意图词）均放行 CHAT 上限；CLARIFY（含 NULL 老数据）沿用 20 上限。
+  - `doRound` 三段状态机（仅 CHAT 模式）：意图词且无待确认 → 置位 + updateById + user 消息落库 + assistant 落固定确认询问（payload null）+ 直接 return（不调 LLM 不加轮数）；待确认 + 确认词/再次意图词 → `setMode(CLARIFY)` + 清标记 + updateById（该条消息即澄清首轮，rounds==0 时触发首轮联网搜索）；待确认 + 其他 → 清标记继续 CHAT 轮。
+  - `switchToClarify`/`switchToChat` 均防御性 `setPendingClarifyConfirm(false)`（手动切换清残留标记）。
+  - 辅助方法 `isPendingClarifyConfirm`（仅显式 true）/`isConfirmPhrase`（trim 后正则 find）。
+- **实体 `RequirementConversation`**：`private Boolean pendingClarifyConfirm` + `@TableField(typeHandler = SmallIntBooleanTypeHandler.class)` + Javadoc 说明 V40 语义。
+- **Controller**：`@PostMapping("/toClarifyById/{id}")`、`@PostMapping("/toChatById/{id}")`（§8.2 合规整改，`@PathVariable("id")` 显式命名照 c00d15f 先例）。
+- **前端（helloai-ui）**：`clarify.ts` 路径改 `toClarifyById`/`toChatById` + 头注释 V40 说明；`RequirementChat.vue` 删除「转为方案」按钮块与 `handleToClarify` 函数（ElMessageBox 仍在 handleAbandon/handleFinalize 使用故 import 保留；`isChatMode` computed 保留用于进度条/终稿卡条件化）。
+
+#### 3. 验证结果
+
+- **单测**：`RequirementClarifyServiceTest` 的 `@Nested ChatModeAndSwitch` 14 → 19 例全绿——2 例意图词用例改为待确认语义（`intentPhraseEntersPendingConfirm` / `intentAtChatLimitStillEntersPendingConfirm`：断言 mode 仍 CHAT + 标记置位 + 轮数不变 + executeSync never）、`switchToClarifyRunsClarifyRound` 增强（前置置位 + 断言清标记）、5 例新增（`confirmPhraseSwitchesToClarifyRound` 确认词转 CLARIFY 走澄清模板 / `confirmAtChatLimitStillSwitches` 50 轮放行 / `nonConfirmMessageClearsPendingAndContinuesChat` 非确认内容清标记续 CHAT / `intentDuringPendingConfirmEntersClarify` 待确认中再次意图词直转 / `createIntentPhraseEntersPendingConfirm` 建会首条意图词即待确认）。
+- **既有测试修复**：`PlannerAnalysisServiceTest.shouldDecomposeAndPersistDrafts`（V27 依赖校验引入的重加载防御门，pre-existing Error）补 `subTaskService.list(any(Wrapper.class))` stub（返回带 id/priority/context 的"重加载结果"）——§6.44 记录的 pre-existing Error 本轮闭合。
+- **构建**：`mvn -pl helloai-core -am package -DskipTests=false` 全量 389/389 全绿；`mvn -pl helloai-start -am package -DskipTests` 产出 jar 启动后 Flyway 日志 `[V40] requirement_conversation.pending_clarify_confirm 列与默认值已就位`；前端 `vue-tsc -b` 0 错。
+- **E2E（真实环境 PASS）**：`verify-planner-chat-dual-mode.sh` 改造后 8 步全绿——STEP5 `/toClarifyById`、STEP8 `/toChatById`（规范路径）；STEP7 意图词路径改为 V40 全流程断言：建会发意图词 → mode=CHAT + `pendingClarifyConfirm=true` + roundCount=0 + 仅 2 条消息 + 末条 assistant 为固定确认询问（含「回复「确认」」）→ 回复「确认」→ mode=CLARIFY + 标记清除 + roundCount=1 + 消息 +2 走澄清轮。实测 chatConversationId=2084300744164569089 / intentConversationId=2084300858627125250 / taskId=2084300856865517569。
+- 真实环境还捕获并修复了 SMALLINT ↔ Boolean 映射问题（见 §2 TypeHandler），一次通过修复后全链路无回归。
+
+#### 4. 影响与遗留
+
+- 行为变更：意图词不再立即转方案（需对话内确认）；「转为方案」按钮移除，转方案入口收敛为意图词；CHAT 模式 50 轮上限的引导文案（"可输入「整理成方案」转为方案模式"）仍准确。
+- 老数据兼容：`pending_clarify_confirm` NULL/0 均视为无待确认（`Boolean.TRUE.equals` 判定），无迁移负担。
+- 遗留：确认词正则对「好的，开始吧」这类"确认词后直接跟内容"的话术暂不命中（需用户回短确认词，避免误判的设计取舍）；意图词/确认词正则覆盖度可后续按用户话术补充；`toClarify/toChat` 端点保留但无前端入口（V40 起语义收敛为内部/测试用）。
+
+#### 5. 同日追加优化（V40.1）：口语化意图词扩展 + 澄清首轮强制 structured
+
+用户实测反馈：发「帮我整理方案吧」后 LLM 回复"切换到方案整理模式"但页面始终无推荐选项卡片，疑为功能被删。核实代码确认 V33 structured 全链路（prompt 双模协议 / `normalizeQuestionReply` 解析 / 前端 `StructuredQuestionCard` 渲染）完整保留；根因是「帮我整理方案吧」不命中意图词正则（固定词「整理成方案」为连续子串匹配，「整理方案」缺「成」字）→ 未触发 V40 待确认状态机 → 会话仍停留 CHAT 模式（LLM 那句"切换到方案整理模式"只是 CHAT 模板第 4 条的提示话术，系统实际未切换），CHAT 为纯文本协议故无选项卡片。据此追加两项优化：
+
+- **意图词正则扩展**：`INTENT_TO_CLARIFY_PATTERN` 追加口语化话术 `整理方案|出个方案|出方案|写方案|做个方案|做方案|方案整理`（Javadoc 注明放宽理由：误触有二次确认把关，回复其他内容即继续自由对话，无额外代价）。
+- **澄清首轮强制 structured**：`prompts/requirement-clarify.md` 第 2 条追加「**首次追问必须使用 structured**（判定：对话历史中尚无任何"助手追问"记录时即为首次追问，不得用 freeform 开场）」，保证进入 CLARIFY 后的第一轮必有推荐选项卡片（LLM 可自主决定后续轮次形态）。
+
+验证：`RequirementClarifyServiceTest` 新增 `colloquialIntentPhraseEntersPendingConfirm`（「帮我整理方案吧」→ 待确认 + 固定确认询问 + 不调 LLM 不加轮数），helloai-core 全量 390/390 全绿；`verify-planner-chat-dual-mode.sh` STEP7 意图词改为口语化「帮我整理方案…」真实环境重跑 8 步 PASS（待确认 → 回复确认 → CLARIFY 链路不变）；服务已停止端口已释放。
+
+**口嗨切换治理（同日二次追加）**：用户手动会话实测「帮我整理方案吧」（V40 旧代码未命中）→ LLM 回复"切换到方案整理模式"但系统未切换（数据库实锤 mode=CHAT、payload=null），后续「帮我整理成技术方案文档吧」在新正则下也不命中（「整理成方案」为连续子串，中间隔「技术」）——LLM 反复口嗨的根源是 `requirement-chat.md` 第 4 条引导 LLM"系统会自动切换，你只需提示"，而意图词命中时系统根本不调 LLM（直接回固定确认询问），该指令只在未命中时被执行。已把第 4 条改为"系统自动处理切换，你无需提及/预告/扮演方案整理模式，正常回答即可"（prompt 每次调用经 ClassPathResource 读取，同步到 target/classes 后 IDEA 服务无需重启即生效）。同时实证：E2E 会话 2084318559537963009 的 CLARIFY 首轮 payload=`{"mode":"structured","progress":35,"questions":[2题，每题4选项，含 recommended=true]}`——V40.1 首轮强制 structured 真实生效，推荐卡片链路（prompt→服务解析→payload 落库→前端卡片）完整可用。
+
+### 6.46 /planner 斜杠命令直达方案模式 + CHAT 追问推荐卡片（V40.2，2026-08-04）
+
+#### 1. 背景与决策
+
+用户实测反馈两件事：①「帮我整理成技术方案文档吧」在 V40.1 正则下仍不命中（「整理成方案」为连续子串，中间隔「技术」，无法穷举口语话术）；② 希望所有"需要用户回答的问题"尽量以推荐卡片（structured）呈现，无论是否在 planner 模式。据此产品决策（经确认）：
+
+- **兜底入口 `/planner` 斜杠命令**（大小写不敏感）：输入框识别 `^/planner(\s+附加文本)?$`，命中即显式进入方案澄清（CLARIFY）模式——不依赖意图词命中率；命令前缀本身不落消息，附加文本（支持多行）先落库 user 消息进 LLM 上下文，再切 CLARIFY 跑一轮（V40.1 首轮强制 structured → 推荐卡片必出）。
+- **阶段 2 增强（LLM 引导型）**：CHAT 模板新增「输出形态」节——普通聊天一律纯文本，仅当需要向用户追问关键决策信息（技术选型/偏好/业务规模/可枚举场景）时输出 structured JSON（复用 CLARIFY 协议格式，每轮 ≤2 题、每题 2~4 选项、recommended 每题至多 1 个）；服务端 CHAT 轮宽松解析（解析成功且合法才落 payload 出卡片，否则原样纯文本落库，零破坏）；前端放开 CHAT 模式交互卡限制（activeStructured 不再要求非 CHAT）。
+- **明确不做**：不锁定模式（CLARIFY 状态机天然保持）、不做命令历史/提示列表 UI、无表结构变化、CHAT 联网搜索与 LLM 流式输出维持现状。
+
+#### 2. 实际落地
+
+- **后端（helloai-core + helloai-api）**：
+  - `RequirementClarifyService.switchToClarify(Long, String)` 重载：extraMessage 非空 → `addMessage(conversationId, ROLE_USER, extraMessage.trim(), null)` 落库（即入 LLM 上下文，不走意图词/确认词判定、不设 payload）→ 委托既有 `switchToClarify(Long)`（置 MODE_CLARIFY + 清 pendingClarifyConfirm + `runLlmRound(conversation, "")`，V40.1 首轮强制 structured）。既有单参重载保持不动。
+  - `RequirementConversationController.toClarify`：body 改 `@RequestBody(required = false) ClarifyMessageRequest req`（不加 @Valid），`req != null ? req.getMessage() : null` 透传；现有无 body 调用（E2E 曾传 "{}"）兼容。
+  - CHAT 轮容错双模（`runLlmRound` CHAT 分派处）：LLM 输出后 `tryParseChatStructured` 宽松提取（复用 ``` 围栏/首字符 { 处理 + `LlmJsonSanitizer`）→ 仅当 `type=question && mode=structured && isStructuredValid` 时 `composeAssistantContent` 可读拼接 + payload 落库（模式仍 CHAT、不触发联网搜索）；其余（解析失败/非 question/freeform/final/纯文本）一律原样纯文本落库（payload NULL），异常捕获返回 null 不抛——与 CLARIFY 的 parseReply 严格路径完全隔离。
+- **前端（helloai-ui）**：
+  - `clarify.ts toClarify(id, message?)`：body `{ message: message ?? null }`，注释补 V40.2 语义。
+  - `RequirementChat.vue`：常量 `PLANNER_COMMAND_RE = /^\/planner(?:\s+([\s\S]+))?$/i`；`handleSend` 开头命中 → `handlePlannerCommand(cmd[1]?.trim() ?? '')` 并 return；`handlePlannerCommand(extra)`：无 ACTIVE 会话 → `clarifyApi.create(extra || '请帮我整理一份技术方案', plannerId, webSearchEnabled, 'CLARIFY')` 新会话 initialMode=CLARIFY 直达，已有会话 → `clarifyApi.toClarify(activeId, extra || null)`，错误路径复用 handleSend 的 catch 模式（刷新详情/按标题找回）；CHAT 模式输入框 placeholder 追加「输入 /planner 可直接进入方案整理」；`activeStructured` 去掉 `isChatMode` 条件（会话 ACTIVE 且末条 assistant 为合法 structured payload 即可交互，历史只读卡逻辑不动）。
+- **Prompt**：`prompts/requirement-chat.md` 新增「输出形态（V40.2，重要）」节（普通聊天纯文本不输出 JSON；仅追问关键决策信息时优先 structured JSON 并给出协议示例与约束；无法枚举选项时 freeform）。
+
+#### 3. 验证结果
+
+- **单测**：`RequirementClarifyServiceTest` ChatModeAndSwitch 19 → 23 例全绿——新增 4 例：`switchToClarifyWithExtraMessage`（CHAT 会话 + extra → mode=CLARIFY、pending=false、user 消息落库 content=extra、roundCount+1、消息 +2、LLM stub 输出 structured 追问）/ `switchToClarifyWithBlankExtraEqualsLegacy`（extra 空/空白 → 不加消息与既有单参一致）/ `chatRoundStructuredQuestionStoresPayload`（CHAT stub 输出 structured → payload 落库 + content 可读拼接 + mode 仍 CHAT + 不触发联网搜索）/ `chatRoundFreeformJsonStillPlain`（freeform/非结构化 → payload NULL 降级）。helloai-core 全量 `mvn -pl helloai-core -am test -DskipTests=false` 394/394 全绿。
+- **前端**：`vue-tsc --noEmit` 0 错。
+- **E2E（真实环境 PASS）**：`verify-planner-chat-dual-mode.sh` 改造后全流程 PASS——STEP4.1 新增 CHAT 轮宽松断言（发「需要你问我几个问题帮我做选型」→ mode 仍 CHAT + 消息 +2；payload 非空则必须合法 structured，不强求出现）；STEP5 改造为 `toClarifyById` 传 `{"message":"补充：团队10人，单体优先"}` → 断言消息 +2（user 附加文本 + assistant 澄清轮）、附加文本确已作为 user 消息落库、mode=CLARIFY、末条 assistant；STEP6 追推终稿 → finalize 建任务 PENDING → FINALIZED + taskId 回填；STEP7/7.1/8 意图词确认流与反向 toChat 回归通过。实测 chatConversationId=2084324277456347138 / taskId=2084324405969821698。本次真实 LLM 在 STEP4.1 未输出 structured（降级纯文本，记录观察），STEP5 切 CLARIFY 后首轮仍追问、追推一轮即产终稿。
+
+#### 4. 影响与遗留
+
+- 行为变更：`/planner` 命令（含附加文本）成为显式转方案入口，不受意图词命中率影响；CHAT 轮 LLM 追问可能出推荐卡片（LLM 引导型，不保证）。
+- 兼容性：`toClarifyById` 无 body / `{}` 调用与既有语义完全一致（req 为 null 或 message 为 null 均走单参路径）；CHAT 轮解析失败一律纯文本，零行为破坏。
+- 遗留：CHAT 结构化追问输出依赖 LLM 遵循度（真实环境本次未出卡片，属可接受降级；后续可考虑 few-shot 或独立小模型，不在本轮范围）；`/planner` 无命令提示列表 UI（仅输入框识别）；意图词正则仍为有限话术集合（`/planner` 已作兜底，无需继续扩词）。

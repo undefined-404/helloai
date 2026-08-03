@@ -24,4 +24,10 @@ public class ClarifyMessageRequest {
      * false 关闭；失败一律降级跳过，不阻断澄清流程。</p>
      */
     private Boolean webSearchEnabled;
+
+    /**
+     * 初始对话模式（V39，仅新建会话生效；append 消息接口忽略）。
+     * <p>'CHAT'=自由对话（缺省）/ 'CLARIFY'=方案澄清快捷直达；非法值后端抛 BizException。</p>
+     */
+    private String initialMode;
 }

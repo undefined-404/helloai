@@ -34,6 +34,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * 对话式需求澄清编排服务（需求模糊 → 多轮追问 → 终稿 → 创建任务）。
@@ -83,8 +84,39 @@ public class RequirementClarifyService {
     public static final String STATUS_FINALIZED = "FINALIZED";
     public static final String STATUS_ABANDONED = "ABANDONED";
 
+    /** 对话模式常量（与 V39 CHECK 约束对齐）：CHAT 自由对话 / CLARIFY 方案澄清。 */
+    public static final String MODE_CHAT = "CHAT";
+    public static final String MODE_CLARIFY = "CLARIFY";
+
     /** 用户消息轮数硬上限（Prompt 侧引导尽早出终稿，服务端只做兜底）。 */
     private static final int MAX_ROUNDS = 20;
+
+    /** CHAT 自由对话轮数硬上限（独立于 CLARIFY 的 MAX_ROUNDS；达上限引导转方案或新会话）。 */
+    private static final int MAX_CHAT_ROUNDS = 50;
+
+    /** CHAT 自由对话 Prompt 模板（通用 AI 助手角色，纯文本回复，无 JSON 协议）。 */
+    private static final String CHAT_PROMPT_TEMPLATE_PATH = "prompts/requirement-chat.md";
+
+    /**
+     * CHAT → CLARIFY 意图词：用户表达"把讨论整理成可落地方案"的常见说法，正则命中即进入二次确认。
+     * V40.1 追加口语化话术（整理方案/出个方案/写方案/做个方案等），覆盖"帮我整理方案吧"这类表达；
+     * 误触有二次确认把关（回复其他内容即继续自由对话），故放宽匹配不设额外代价。
+     */
+    private static final Pattern INTENT_TO_CLARIFY_PATTERN = Pattern.compile(
+            "整理成方案|做成方案|生成方案|转为方案|变成方案|整理成任务|做成任务|落地实施|"
+                    + "出一份方案|写个方案|方案化|整理方案|出个方案|出方案|写方案|做个方案|做方案|方案整理");
+
+    /**
+     * 意图词二次确认的确认词（V40）：仅会话处于待确认状态时生效；
+     * 开头命中且后随标点/空白/结尾，避免"好的，但我还想先聊聊"这类误判。
+     */
+    private static final Pattern CONFIRM_PHRASE_PATTERN = Pattern.compile(
+            "^(确认|确定|好的|可以|开始吧|开始|是的|没错|没问题|行|嗯|OK|ok|Yes|yes)([。！？!?,.;；\\s]|$)");
+
+    /** V40 意图词命中后的固定确认询问文案（服务端直发，不调 LLM、不消耗轮数）。 */
+    public static final String CONFIRM_ASK_MESSAGE =
+            "我注意到你想把这段对话整理成方案。回复「确认」将进入方案澄清模式，"
+                    + "我会基于全部对话内容梳理需求并产出方案草案；回复其他内容则继续自由对话。";
 
     /** 会话标题取首条用户消息的截断长度。 */
     private static final int TITLE_LIMIT = 50;
@@ -131,12 +163,25 @@ public class RequirementClarifyService {
      * @return 会话 + 全部消息
      */
     public ClarifyConversationDetail create(String firstMessage, Long plannerAgentId, Boolean webSearchEnabled) {
+        return create(firstMessage, plannerAgentId, webSearchEnabled, null);
+    }
+
+    /**
+     * 新建会话（V39 双模式入口）。
+     *
+     * @param initialMode 初始对话模式（V39）：'CHAT'=自由对话（缺省）/ 'CLARIFY'=方案澄清快捷直达；
+     *                    非法值抛 BizException
+     * @return 会话 + 全部消息
+     */
+    public ClarifyConversationDetail create(String firstMessage, Long plannerAgentId, Boolean webSearchEnabled,
+                                            String initialMode) {
         if (firstMessage == null || firstMessage.isBlank()) {
             throw new BizException("首条消息不能为空");
         }
         if (plannerAgentId != null) {
             plannerAgentPicker.validateSelectable(plannerAgentId);
         }
+        String mode = normalizeInitialMode(initialMode);
         String trimmed = firstMessage.trim();
         RequirementConversation conversation = new RequirementConversation();
         conversation.setTitle(trimmed.length() <= TITLE_LIMIT
@@ -146,9 +191,11 @@ public class RequirementClarifyService {
         conversation.setPlannerAgentId(plannerAgentId);
         // NULL 落库为 NULL（兼容老数据默认开启语义由读取侧判定），false/true 严格落库
         conversation.setWebSearchEnabled(webSearchEnabled);
+        // V39：新会话默认 CHAT 自由对话；initialMode=CLARIFY 快捷直达澄清链路
+        conversation.setMode(mode);
         conversationService.save(conversation);
-        log.info("澄清会话创建: id={}, title={}, plannerAgentId={}, webSearchEnabled={}",
-                conversation.getId(), conversation.getTitle(), plannerAgentId, webSearchEnabled);
+        log.info("澄清会话创建: id={}, title={}, plannerAgentId={}, webSearchEnabled={}, mode={}",
+                conversation.getId(), conversation.getTitle(), plannerAgentId, webSearchEnabled, mode);
         return doRound(conversation, trimmed);
     }
 
@@ -181,7 +228,17 @@ public class RequirementClarifyService {
         }
         RequirementConversation conversation = requireActive(conversationId);
         int rounds = conversation.getRoundCount() != null ? conversation.getRoundCount() : 0;
-        if (rounds >= MAX_ROUNDS) {
+        // V39 轮数上限按模式分派：CHAT 用独立上限（意图词「整理成方案」永远放行，保证转方案出口）；
+        // V40 待确认状态的确认词（或再次意图词）同样放行——确认消息会转入 CLARIFY，不算 CHAT 轮；
+        // CLARIFY（含 NULL 老数据）沿用既有 20 轮上限
+        boolean intent = isIntentToClarify(message);
+        boolean confirm = isPendingClarifyConfirm(conversation) && (isConfirmPhrase(message) || intent);
+        if (isChatMode(conversation) && !intent && !confirm) {
+            if (rounds >= MAX_CHAT_ROUNDS) {
+                throw new BizException("自由对话轮数已达上限 " + MAX_CHAT_ROUNDS
+                        + "，可输入「整理成方案」转为方案模式，或新建会话");
+            }
+        } else if (isClarifyMode(conversation) && rounds >= MAX_ROUNDS) {
             throw new BizException("澄清轮数已达上限 " + MAX_ROUNDS
                     + "，请放弃本会话并在任务管理中手动创建任务");
         }
@@ -300,6 +357,58 @@ public class RequirementClarifyService {
         log.info("澄清会话已放弃: conversationId={}", conversationId);
     }
 
+    /**
+     * 切换到方案澄清模式（V40.2 斜杠命令路径）：先落库附加文本（用户消息，进 LLM 上下文），
+     * 再切 CLARIFY 并跑一轮澄清（V40.1 首轮强制 structured → 推荐卡片必出）。
+     * 附加文本不走意图词/确认词判定、不设 payload。
+     *
+     * @param extraMessage 斜杠命令后的附加文本；空/空白则不加消息（与既有 switchToClarify 等价）
+     */
+    public ClarifyConversationDetail switchToClarify(Long conversationId, String extraMessage) {
+        if (extraMessage != null && !extraMessage.isBlank()) {
+            messageService.addMessage(conversationId, ROLE_USER, extraMessage.trim(), null);
+            log.info("澄清会话斜杠命令附加文本落库: conversationId={}", conversationId);
+        }
+        return switchToClarify(conversationId);
+    }
+
+    /**
+     * 切换到方案澄清模式（V39）：置位落库 + 一轮 LLM 基于全量历史产终稿草案/结构化追问。
+     *
+     * @return 会话 + 全部消息
+     */
+    public ClarifyConversationDetail switchToClarify(Long conversationId) {
+        RequirementConversation conversation = requireActive(conversationId);
+        String from = conversation.getMode();
+        conversation.setMode(MODE_CLARIFY);
+        // V40：手动切换时一并清除意图词待确认标记，避免残留状态影响后续轮次
+        conversation.setPendingClarifyConfirm(false);
+        conversationService.updateById(conversation);
+        log.info("澄清会话切换模式: conversationId={}, from={}, to={}",
+                conversationId, from, MODE_CLARIFY);
+        // 切换轮不做首轮联网搜索（阶段 2 再评估）；澄清模板基于全量历史直接产草案/追问
+        return runLlmRound(conversation, "");
+    }
+
+    /**
+     * 切回自由对话模式（V39）：仅置位，不调用 LLM；
+     * 历史消息全部保留，后续切回 CLARIFY 时作为全量澄清上下文。
+     *
+     * @return 会话 + 全部消息
+     */
+    public ClarifyConversationDetail switchToChat(Long conversationId) {
+        RequirementConversation conversation = requireActive(conversationId);
+        String from = conversation.getMode();
+        conversation.setMode(MODE_CHAT);
+        // V40：切回 CHAT 时防御性清除意图词待确认标记（该状态仅 CHAT 模式语义存在）
+        conversation.setPendingClarifyConfirm(false);
+        conversationService.updateById(conversation);
+        log.info("澄清会话切换模式: conversationId={}, from={}, to={}",
+                conversationId, from, MODE_CHAT);
+        return new ClarifyConversationDetail(conversation,
+                messageService.listByConversation(conversationId));
+    }
+
     /** 会话列表（按创建时间倒序，LIMIT 50，首期不分页）。 */
     public List<RequirementConversation> listConversations() {
         return conversationService.lambdaQuery()
@@ -337,14 +446,43 @@ public class RequirementClarifyService {
     private ClarifyConversationDetail doRound(RequirementConversation conversation, String userMessage,
                                               String userPayload) {
         Long conversationId = conversation.getId();
+        // V40 意图词二次确认状态机（仅 CHAT 模式）：
+        //   意图词命中且无待确认 → 置位 + 回复固定确认询问（不调 LLM、不加轮数）
+        //   待确认 + 确认词/再次意图词 → 切 CLARIFY 并清标记，该条消息即澄清首轮
+        //   待确认 + 其他消息 → 清标记继续自由对话（用户放弃转方案）
+        if (isChatMode(conversation)) {
+            boolean intent = isIntentToClarify(userMessage);
+            boolean pendingConfirm = isPendingClarifyConfirm(conversation);
+            if (intent && !pendingConfirm) {
+                conversation.setPendingClarifyConfirm(true);
+                conversationService.updateById(conversation);
+                messageService.addMessage(conversationId, ROLE_USER, userMessage, userPayload);
+                messageService.addMessage(conversationId, ROLE_ASSISTANT, CONFIRM_ASK_MESSAGE, null);
+                log.info("澄清会话意图词命中，等待用户确认转方案: conversationId={}", conversationId);
+                return new ClarifyConversationDetail(conversation,
+                        messageService.listByConversation(conversationId));
+            }
+            if (pendingConfirm && (isConfirmPhrase(userMessage) || intent)) {
+                conversation.setMode(MODE_CLARIFY);
+                conversation.setPendingClarifyConfirm(false);
+                conversationService.updateById(conversation);
+                log.info("澄清会话用户确认转方案: conversationId={}, from={}, to={}",
+                        conversationId, MODE_CHAT, MODE_CLARIFY);
+            } else if (pendingConfirm) {
+                conversation.setPendingClarifyConfirm(false);
+                conversationService.updateById(conversation);
+                log.info("澄清会话确认被取消，继续自由对话: conversationId={}", conversationId);
+            }
+        }
         messageService.addMessage(conversationId, ROLE_USER, userMessage, userPayload);
         int rounds = conversation.getRoundCount() != null ? conversation.getRoundCount() : 0;
         conversation.setRoundCount(rounds + 1);
         conversationService.updateById(conversation);
 
-        // V34 联网搜索：仅首轮（rounds == 0）且开关开启（NULL/true 视为开启）时检索
+        // V34 联网搜索：仅 CLARIFY 首轮（rounds == 0）且开关开启（NULL/true 视为开启）时检索；
+        // CHAT 自由对话不触发（V39 阶段 2 再做按需检索）
         String webSearchContext = "";
-        if (rounds == 0 && isWebSearchEnabled(conversation)) {
+        if (isClarifyMode(conversation) && rounds == 0 && isWebSearchEnabled(conversation)) {
             webSearchContext = doWebSearch(userMessage);
         }
         return runLlmRound(conversation, webSearchContext);
@@ -354,6 +492,48 @@ public class RequirementClarifyService {
     private boolean isWebSearchEnabled(RequirementConversation conversation) {
         Boolean v = conversation.getWebSearchEnabled();
         return v == null || v;
+    }
+
+    /** V40 意图词二次确认标记：仅显式 true 视为待确认（老数据 NULL/0 均为无待确认）。 */
+    private boolean isPendingClarifyConfirm(RequirementConversation conversation) {
+        return Boolean.TRUE.equals(conversation.getPendingClarifyConfirm());
+    }
+
+    /** V40 确认词判定：开头命中确认词且后随标点/空白/结尾（待确认状态专用，普通对话不受影响）。 */
+    private boolean isConfirmPhrase(String message) {
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        return CONFIRM_PHRASE_PATTERN.matcher(message.trim()).find();
+    }
+
+    /** 是否方案澄清模式：NULL 老数据按 CLARIFY 兼容（V39）。 */
+    private boolean isClarifyMode(RequirementConversation conversation) {
+        return conversation.getMode() == null || MODE_CLARIFY.equals(conversation.getMode());
+    }
+
+    /** 是否自由对话模式：仅显式 CHAT（NULL 老数据不算，按 CLARIFY）。 */
+    private boolean isChatMode(RequirementConversation conversation) {
+        return MODE_CHAT.equals(conversation.getMode());
+    }
+
+    /** 是否命中 CHAT → CLARIFY 意图词（"整理成方案"等常见说法，正则子串命中即切换）。 */
+    private boolean isIntentToClarify(String message) {
+        return message != null && INTENT_TO_CLARIFY_PATTERN.matcher(message).find();
+    }
+
+    /**
+     * 初始模式归一化（V39）：缺省/显式 CHAT → CHAT（新会话默认自由对话）；
+     * 显式 CLARIFY → 快捷直达方案澄清；非法值拒绝。
+     */
+    private String normalizeInitialMode(String initialMode) {
+        if (initialMode == null || initialMode.isBlank() || MODE_CHAT.equals(initialMode)) {
+            return MODE_CHAT;
+        }
+        if (MODE_CLARIFY.equals(initialMode)) {
+            return MODE_CLARIFY;
+        }
+        throw new BizException("非法的初始对话模式: " + initialMode + "（仅支持 CHAT/CLARIFY）");
     }
 
     /**
@@ -410,18 +590,43 @@ public class RequirementClarifyService {
      */
     private ClarifyConversationDetail runLlmRound(RequirementConversation conversation, String webSearchContext) {
         Long conversationId = conversation.getId();
+        // V39 双模式分派：CLARIFY（含 NULL 老数据）走澄清模板 + JSON 协议解析；
+        // CHAT 走通用助手模板，纯文本直接落库
+        boolean clarifyMode = isClarifyMode(conversation);
 
         Agent planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
-        String prompt = renderPrompt(conversationId, webSearchContext);
+        String prompt = renderPrompt(conversationId, webSearchContext,
+                clarifyMode ? PROMPT_TEMPLATE_PATH : CHAT_PROMPT_TEMPLATE_PATH);
         AgentTask agentTask = AgentTask.builder()
                 .systemPrompt("")
                 .userPrompt(prompt)
-                .context(Map.of("conversationId", conversationId, "scene", "requirement_clarify"))
+                .context(Map.of("conversationId", conversationId,
+                        "scene", clarifyMode ? "requirement_clarify" : "requirement_chat"))
                 .requiredCapabilities(Map.of())
                 .build();
         AgentResult result = platformAgentExecutionService.executeSync(planner, agentTask);
         if (!result.isSuccess()) {
             throw new BizException("需求澄清 LLM 调用失败: " + result.getErrorMessage());
+        }
+
+        // CHAT 模式（V40.2 容错双模）：优先尝试宽松解析 structured 追问（LLM 需要用户回答
+        // 关键决策问题时输出选项卡片）；解析失败/非追问一律纯文本直落（payload NULL），零行为破坏
+        if (!clarifyMode) {
+            String output = result.getOutput();
+            if (output == null || output.isBlank()) {
+                throw new BizException("自由对话 LLM 返回内容为空");
+            }
+            ClarifyReply chatReply = tryParseChatStructured(output);
+            if (chatReply != null) {
+                messageService.addMessage(conversationId, ROLE_ASSISTANT,
+                        composeAssistantContent(chatReply), buildQuestionPayload(chatReply));
+                log.info("自由对话结构化追问落库: conversationId={}", conversationId);
+            } else {
+                messageService.addMessage(conversationId, ROLE_ASSISTANT, output.trim(), null);
+                log.info("自由对话回复落库: conversationId={}", conversationId);
+            }
+            return new ClarifyConversationDetail(conversation,
+                    messageService.listByConversation(conversationId));
         }
 
         ClarifyReply reply = parseReply(result.getOutput());
@@ -462,17 +667,19 @@ public class RequirementClarifyService {
      *   <li>{@code {{WEB_SEARCH_CONTEXT}}} — 首轮预检索的联网资料；空串代表无资料，
      *       渲染为"（无可用联网资料）"占位符，保证 Prompt 该节语义节稳定。</li>
      * </ul>
+     *
+     * @param templatePath 按会话模式选模板（CLARIFY=requirement-clarify.md / CHAT=requirement-chat.md）
      */
-    private String renderPrompt(Long conversationId, String webSearchContext) {
-        ClassPathResource resource = new ClassPathResource(PROMPT_TEMPLATE_PATH);
+    private String renderPrompt(Long conversationId, String webSearchContext, String templatePath) {
+        ClassPathResource resource = new ClassPathResource(templatePath);
         if (!resource.exists()) {
-            throw new BizException("未找到澄清 Prompt 模板: " + PROMPT_TEMPLATE_PATH);
+            throw new BizException("未找到 Prompt 模板: " + templatePath);
         }
         String template;
         try (InputStream in = resource.getInputStream()) {
             template = new String(in.readAllBytes(), StandardCharsets.UTF_8);
         } catch (Exception e) {
-            throw new BizException("读取澄清 Prompt 模板失败: " + e.getMessage());
+            throw new BizException("读取 Prompt 模板失败: " + e.getMessage());
         }
         StringBuilder transcript = new StringBuilder();
         for (RequirementMessage msg : messageService.listByConversation(conversationId)) {
@@ -653,6 +860,32 @@ public class RequirementClarifyService {
             return objectMapper.writeValueAsString(Map.of("selections", selections));
         } catch (Exception e) {
             log.warn("澄清选择快照序列化失败，降级纯文本消息", e);
+            return null;
+        }
+    }
+
+    /**
+     * CHAT 轮结构化追问宽松解析（V40.2）：仅认可 type=question 且 mode=structured 且校验合法；
+     * 其余（freeform/final/非 JSON/解析失败）一律返回 null → 调用方按纯文本落库。
+     * 不抛异常：CHAT 是自由对话，LLM 输出 JSON 仅是引导型增强（需要用户回答时出推荐卡片），
+     * 失败降级为普通聊天，与 CLARIFY 的 parseReply 严格路径完全隔离。
+     */
+    private ClarifyReply tryParseChatStructured(String rawOutput) {
+        if (rawOutput == null || rawOutput.isBlank()) {
+            return null;
+        }
+        try {
+            String cleaned = LlmJsonSanitizer.fixInvalidEscapes(stripToJsonObject(rawOutput));
+            ClarifyReply reply = objectMapper.readValue(cleaned, ClarifyReply.class);
+            if (!"question".equals(reply.getType()) || !MODE_STRUCTURED.equals(reply.getMode())) {
+                return null;
+            }
+            if (!isStructuredValid(reply)) {
+                return null;
+            }
+            fillStructuredDefaults(reply);
+            return reply;
+        } catch (Exception e) {
             return null;
         }
     }
