@@ -2,9 +2,10 @@
 
 > 适用项目：HelloAI（AI Agent 协作调度平台）  
 > 生效范围：后端单体服务 + 前端管理后台（Vue 3 / Element Plus）  
-> 版本：V1.4  
-> 最后更新：2026-07-18  
-> 本版重点：对齐 core 业务域分包重构后的代码事实——修正 3.2 启动类 @MapperScan 示例、3.x 资源文件位置、4.1 包命名示例、8.4 Flyway 规范与多版本迁移现实的冲突；补写 6.3 Controller 职责边界（含分层红线与待收口清单）；3.x 业务域分包规则补全子包清单与 outbox 归属决策；8.5 实施要点追加"变更残留检查范围"
+> 版本：V1.5  
+> 最后更新：2026-08-03  
+> 本版重点：对齐 core 业务域分包重构后的代码事实——修正 3.2 启动类 @MapperScan 示例、3.x 资源文件位置、4.1 包命名示例、9.4 Flyway 规范与多版本迁移现实的冲突；补写 6.3 Controller 职责边界（含分层红线与待收口清单）；3.x 业务域分包规则补全子包清单与 outbox 归属决策；9.5 实施要点追加"变更残留检查范围"
+> 本版重点 V1.5：新增第 8 章「接口路径规范」（8.1 描述性风格 / 8.2 路径命名规则表 / 8.3 全局 URI 清理），废弃 6.4 嵌套资源路径规范，改写 6.5 状态操作端点为 `POST /xxxById/{id}`，6.6 分页端点改为 `POST /page`；原第 8～20 章顺延为第 9～21 章；20 章（原 19 章）校验清单路径条目同步新规范
 > 致敬：Hello World! —— 每一位程序员的第一行代码
 ---
 
@@ -51,19 +52,23 @@
 6. [Controller 规范](#6-controller-规范)
 7. [Service 规范](#7-service-规范)
    - [7.6 空值与 Optional 处理规范](#76-空值与-optional-处理规范)
-8. [数据库设计规范](#8-数据库设计规范)
-9. [Outbox 事务性消息规范](#9-outbox-事务性消息规范)
-10. [消息队列编码规范](#10-消息队列编码规范)
-11. [分布式锁编码规范](#11-分布式锁编码规范)
-12. [异常处理规范](#12-异常处理规范)
-13. [日志与链路追踪规范](#13-日志与链路追踪规范)
-14. [定时任务编码规范](#14-定时任务编码规范)
-15. [Agent 驱动层编码规范](#15-agent-驱动层编码规范)
-16. [代码模板（附录）](#16-代码模板附录)
-17. [开发高频校验清单（附录）](#17-开发高频校验清单附录)
-18. [Vue 页面规范](#18-vue-页面规范)
-19. [新增代码前校验清单](#19-新增代码前校验清单)
-20. [测试规范](#20-测试规范)
+8. [接口路径规范](#8-接口路径规范)
+   - [8.1 路径命名风格](#81-路径命名风格)
+   - [8.2 路径命名规则](#82-路径命名规则)
+   - [8.3 全局 URI 清理](#83-全局-uri-清理)
+9. [数据库设计规范](#9-数据库设计规范)
+10. [Outbox 事务性消息规范](#10-outbox-事务性消息规范)
+11. [消息队列编码规范](#11-消息队列编码规范)
+12. [分布式锁编码规范](#12-分布式锁编码规范)
+13. [异常处理规范](#13-异常处理规范)
+14. [日志与链路追踪规范](#14-日志与链路追踪规范)
+15. [定时任务编码规范](#15-定时任务编码规范)
+16. [Agent 驱动层编码规范](#16-agent-驱动层编码规范)
+17. [代码模板（附录）](#17-代码模板附录)
+18. [开发高频校验清单（附录）](#18-开发高频校验清单附录)
+19. [Vue 页面规范](#19-vue-页面规范)
+20. [新增代码前校验清单](#20-新增代码前校验清单)
+21. [测试规范](#21-测试规范)
 
 ---
 
@@ -252,7 +257,7 @@ helloai-core/src/main/resources/
 
 | 目录 | 模块 | 用途 |
 |------|------|------|
-| `db/migration/` | helloai-start | Flyway 数据库迁移脚本（多版本，详见 8.4） |
+| `db/migration/` | helloai-start | Flyway 数据库迁移脚本（多版本，详见 9.4） |
 | `mapper/` | helloai-core | 需要覆盖 BaseMapper 或自定义 SQL 的 Mapper XML |
 | `scripts/` | helloai-core | 可执行脚本（Python CLI 等） |
 | `skills/` | helloai-core | 角色技能文档（SKILL.md），运行时可替换变量 |
@@ -354,7 +359,7 @@ com.helloai.{模块名}.{层}
 - JSONB 字段：`context`、`score_factors`、`detail`、`payload`
 - 布尔/状态：`status`、`deleted`、`result`
 
-> 字段命名的强制细则（时间 `xxx_time`、外键 `xxx_id`、计量 `xxx_count`、避开关键字、主键策略）以 **8.5 字段命名强制规则** 为唯一权威。
+> 字段命名的强制细则（时间 `xxx_time`、外键 `xxx_id`、计量 `xxx_count`、避开关键字、主键策略）以 **9.5 字段命名强制规则** 为唯一权威。
 
 ### 4.x 接口使用原则
 
@@ -612,13 +617,13 @@ public class SubTaskController {
         this.subTaskService = subTaskService;
     }
 
-    @PostMapping("/change-status")
-    public R<Void> changeStatus(@RequestBody ChangeStatusRequest request) {
-        subTaskService.changeStatus(request.getSubTaskId(), request.getNewStatus(), request.getAgentId());
+    @PostMapping("/changeStatusById/{id}")
+    public R<Void> changeStatus(@PathVariable Long id, @RequestBody ChangeStatusRequest request) {
+        subTaskService.changeStatus(id, request.getNewStatus(), request.getAgentId());
         return R.ok();
     }
 
-    @GetMapping("/{id}")
+    @GetMapping("/getById/{id}")
     public R<SubTaskResponse> getById(@PathVariable Long id) {
         SubTask subTask = subTaskService.getById(id);
         if (subTask == null) return R.fail("SubTask not found");
@@ -641,12 +646,13 @@ Controller 只允许做三件事：**参数接收与校验、调用 Service、�
 
 > ✅ 收口完成：6 个历史违规 Controller（ActivityController、AdminDashboardController、AgentDutyLeaseController、AttachmentController、DashboardController、FeedController）已全部迁回 Service，对应 Mapper 调用与 QueryWrapper 已下移至对应 Service 新增方法（ActivityLogService / AdminDashboardService / AgentDutyLeaseService / AttachmentService / DashboardService / FeedService）。上述四条分层红线作为硬约束持续生效，新增接口不得再次触发。
 
-### 6.4 嵌套资源路径规范
+### 6.4 嵌套资源路径规范（已废弃）
 
-父子资源关系用路径嵌套表达：`/api/{parent}/{parentId}/{child}`
+> ⚠️ **V1.5 起废弃**：嵌套资源路径风格 `/{parent}/{parentId}/{child}` 与第 8 章「接口路径规范」8.1 描述性风格冲突，**新代码禁止使用**；历史接口（如 ModuleController `/api/tasks/{taskId}/modules`）在整改计划内迁出该风格。
+> 子资源查询/设置统一改用描述性风格：查询 `GET /findXxxByYyyId/{id}`，设置 `POST /setXxxByYyyId/{id}`（见 8.2 规则表）。
 
 ```java
-// Task 下的 Module
+// 废弃写法（历史，仅存于存量代码）：RESTful 子资源嵌套
 @RestController
 @RequestMapping("/api/tasks/{taskId}/modules")
 public class ModuleController {
@@ -656,37 +662,48 @@ public class ModuleController {
     @PostMapping
     public R<Module> create(@PathVariable Long taskId, @RequestBody @Valid ModuleCreateRequest req) { ... }
 }
+
+// 现行写法（V1.5 起）：描述性风格，见 8.2
+@RestController
+@RequestMapping("/api/modules")
+public class ModuleController {
+    @GetMapping("/findModulesByTaskId/{taskId}")
+    public R<List<ModuleResponse>> findModulesByTaskId(@PathVariable Long taskId) { ... }
+
+    @PostMapping("/setModulesByTaskId/{taskId}")
+    public R<Void> setModulesByTaskId(@PathVariable Long taskId, @RequestBody @Valid SetModulesRequest req) { ... }
+}
 ```
 
 ### 6.5 状态操作端点规范
 
-状态变更使用专用动作端点，**优先**使用 `/{action}/{id}`，避免把标识参数夹在路径中间；若历史接口已对外提供 `/{id}/{action}`，可短期兼容保留，但新代码与新文档统一按前者书写。
+状态变更使用专用动作端点，统一按第 8 章 8.2 规则表书写：`POST /{action}ById/{id}`（动作动词 + `ById` + 路径参数），标识参数放在路径末尾，一个动作对应一个独立方法。历史 `/{id}/{action}`、`/{action}/{id}` 形态不再用于新代码。
 
 ```java
 // 子任务状态操作（每个动作一个独立端点）
-@PostMapping("/claim/{id}")
-public R<SubTask> claim(@PathVariable Long id, @RequestBody ClaimRequest req) { ... }
+@PostMapping("/claimById/{id}")
+public R<Void> claim(@PathVariable Long id, @RequestBody ClaimRequest req) { ... }
 
-@PostMapping("/start/{id}")
-public R<SubTask> start(@PathVariable Long id) { ... }
+@PostMapping("/startById/{id}")
+public R<Void> start(@PathVariable Long id) { ... }
 
-@PostMapping("/submit/{id}")
-public R<SubTask> submit(@PathVariable Long id) { ... }
+@PostMapping("/submitById/{id}")
+public R<Void> submit(@PathVariable Long id) { ... }
 ```
 
 ### 6.6 分页查询规范
 
-列表接口统一接收 `page` 和 `pageSize` 查询参数，默认值 `page=1, pageSize=20`。
+分页查询端点统一为 `POST /page`（见 8.2 规则表），非分页列表用 `GET /list`。分页接口统一接收 `page` 和 `pageSize` 参数，默认值 `page=1, pageSize=20`。
 当使用 `@RequestParam(defaultValue = "...")` 时，必须显式声明参数名，避免运行时因未开启参数名保留而绑定失败。
 
 ```java
-@GetMapping
-public R<PageResult<T>> list(
+@PostMapping("/page")
+public R<PageResult<T>> page(
         @RequestParam(value = "page", defaultValue = "1") int page,
         @RequestParam(value = "pageSize", defaultValue = "20") int pageSize,
         // ... 过滤参数
 ) {
-    Page<T> result = service.page(new Page<>(page, pageSize), wrapper);
+    Page<T> result = service.page(page, pageSize, /* 过滤条件 */); // 条件构造在 Service 层完成（见 6.3）
     return R.ok(PageResult.of(result));
 }
 ```
@@ -694,12 +711,12 @@ public R<PageResult<T>> list(
 如果列表接口对外返回 `Response DTO`，则在 Controller 中完成实体到 DTO 的轻量映射，推荐统一使用 `PageResult.of(page, mapper)`：
 
 ```java
-@GetMapping
-public R<PageResult<TaskResponse>> list(
+@PostMapping("/page")
+public R<PageResult<TaskResponse>> page(
         @RequestParam(value = "page", defaultValue = "1") int page,
         @RequestParam(value = "pageSize", defaultValue = "20") int pageSize
 ) {
-    Page<Task> result = taskService.page(new Page<>(page, pageSize), wrapper);
+    Page<Task> result = taskService.page(page, pageSize); // 条件构造在 Service 层完成（见 6.3）
     return R.ok(PageResult.of(result, this::toResponse));
 }
 ```
@@ -917,9 +934,52 @@ public List<SubTask> listByStatus(SubTaskStatus status) {
 > **原则**: 方法返回集合类型时，"没有数据"和"出错"是两个概念。前者返回空集合，后者抛异常。
 
 
-## 8. 数据库设计规范
+## 8. 接口路径规范
 
-### 8.1 业务表必备公共字段
+> 本章是接口路径命名的唯一权威：6.4 嵌套资源路径规范（V1.5 起废弃）、6.5 状态操作端点规范、6.6 分页查询规范均以本章为准。
+
+### 8.1 路径命名风格
+
+【必须】统一使用描述性风格：`动作 + By + 参数名 / {参数值}`。不使用 RESTful 子资源嵌套风格。
+
+```java
+@GetMapping("/list")                                // 列表
+@PostMapping("/page")                               // 分页
+@GetMapping("/getById/{id}")                        // 按 ID 查询
+@GetMapping("/listByOrg/{orgId}")                   // 按外键列表
+@GetMapping("/listByDevice/{deviceCode}")           // 按业务编码列表
+@GetMapping("/findDevicesByRouteId/{routeId}")      // 查询子资源
+@PostMapping("/setDevicesByRouteId/{routeId}")      // 设置子资源
+@PostMapping("/publishById/{id}")                   // 状态操作
+@DeleteMapping("/deleteById/{id}")                  // 删除
+```
+
+### 8.2 路径命名规则
+
+| 场景 | HTTP 方法 | 路径格式 | 示例 |
+|------|-----------|----------|------|
+| 列表 | GET | `/list` | `GET /api/tasks/list` |
+| 分页 | POST | `/page` | `POST /api/tasks/page` |
+| 按 ID 查询 | GET | `/getById/{id}` | `GET /api/tasks/getById/1001` |
+| 按外键查询列表 | GET | `/listByXxx/{xxx}` | `GET /api/sub-tasks/listByTaskId/1001` |
+| 查询子资源 | GET | `/findXxxByYyyId/{id}` | `GET /api/modules/findByTaskId/1001` |
+| 设置子资源 | POST | `/setXxxByYyyId/{id}` | `POST /api/modules/setByTaskId/1001` |
+| 状态操作 | POST | `/xxxById/{id}` | `POST /api/sub-tasks/startById/1001` |
+| 新增 | POST | `/` | `POST /api/tasks` |
+| 修改 | PUT | `/` | `PUT /api/tasks` |
+| 删除 | DELETE | `/deleteById/{id}` | `DELETE /api/tasks/deleteById/1001` |
+
+### 8.3 全局 URI 清理
+
+项目通过 `UriCleanFilter` 对请求 URI 的每个路径段自动清理首尾包围字符，兼容前端 URL 拼接误差（如末尾多余斜杠、路径段两侧多余引号/空格等），后端接口路径书写时无需额外防御。
+
+> ⚠️ **代码核查（2026-08-03）**：当前仓库（helloai-api / helloai-start）未发现 `UriCleanFilter` 实现——全仓库检索无结果，`WebMvcConfig` 仅注册 `RequestLogInterceptor` 与 `AuthInterceptor`。本节暂为契约描述/目标状态，待补实现后删除本注记。
+
+---
+
+## 9. 数据库设计规范
+
+### 9.1 业务表必备公共字段
 
 **业务数据表**必须包含以下审计字段（关系表除外，见 5.2）：
 
@@ -933,7 +993,7 @@ update_time timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,                   --
 remark      varchar(255) DEFAULT NULL                                         -- 备注
 ```
 
-### 8.2 JDBC 连接配置
+### 9.2 JDBC 连接配置
 
 ```yaml
 spring:
@@ -948,7 +1008,7 @@ spring:
       connection-timeout: 30000
 ```
 
-### 8.3 建表规范
+### 9.3 建表规范
 
 - **业务表**主键：`id bigint NOT NULL`，应用层生成雪花 ID
 - **关系表**主键：`PRIMARY KEY (fk1, fk2)`，复合主键，不需要独立 `id`
@@ -975,18 +1035,18 @@ CREATE TRIGGER update_sub_task_update_time BEFORE UPDATE ON sub_task
     FOR EACH ROW EXECUTE FUNCTION update_update_time_column();
 ```
 
-### 8.4 Flyway 迁移规范
+### 9.4 Flyway 迁移规范
 
 - 仓库实际为多版本迁移（`V1__init_all.sql` ～ `V23__field_naming_normalization.sql`），**禁止再修改已执行的 V1～V23 历史脚本**（改历史脚本会导致已有环境 checksum 校验失败）
 - 所有新增 DDL（建表、加字段、索引、种子数据、字段改名）**必须新建 `V{N+1}__<用途>.sql`**，版本号顺延，用途用小写蛇形描述
 - 所有 DDL 必须使用 `IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` / `ON CONFLICT DO NOTHING` 等幂等语法；脚本末尾附 `DO $$ ... RAISE NOTICE` 验证块（参照 V16/V17/V23 样式）
 - `application.yml` 中 Flyway 配置只保留 `enabled: true` + `locations`，**不加** `baseline-on-migrate` 和 `repair-on-migrate`
-- 字段改名类迁移必须与 entity 字段改名、XML 裸列名、Java 裸列名字符串在同一提交内完成（参照 8.5 实施要点）
+- 字段改名类迁移必须与 entity 字段改名、XML 裸列名、Java 裸列名字符串在同一提交内完成（参照 9.5 实施要点）
 
-### 8.5 字段命名强制规则
+### 9.5 字段命名强制规则
 
 > 来源：V23 字段命名规范化迁移（`helloai-start/src/main/resources/db/migration/V23__field_naming_normalization.sql`，2026-07-18 落地 20 列）。
-> 本节是字段命名的"唯一权威"，与本规范 8.1～8.4 冲突时以本节为准。
+> 本节是字段命名的"唯一权威"，与本规范 9.1～9.4 冲突时以本节为准。
 
 | 类别 | 强制规则 |
 |------|----------|
@@ -1004,14 +1064,14 @@ CREATE TRIGGER update_sub_task_update_time BEFORE UPDATE ON sub_task
 3. **MyBatis-Plus 自定义 XML 需手改两处**：SQL 裸列名 + `#{et.xxx}` OGNL 引用（IDEA Rename Field **不会**联动）。
 4. **Java 端裸列名 UpdateWrapper 字符串**也需手改（项目内唯一已知位置：`AgentHealthCheckTask` L138-139 UpdateWrapper）。
 5. **PG `RENAME COLUMN` 自动更新**引用该列的索引 / 约束定义，本项目 4 个索引（`idx_agent_command_outbox_pending_scan` / `idx_agent_command_outbox_sent_scan` / `idx_exec_record_pending_attempt` / `idx_agent_external_failure_scan`）无需重建；列注释随列保留。
-6. 迁移文件管理按 8.4 执行（历史脚本冻结、新建 `V_NN__<用途>.sql`）。
+6. 迁移文件管理按 9.4 执行（历史脚本冻结、新建 `V_NN__<用途>.sql`）。
 7. **变更残留检查范围（强制）**：字段改名 / 包重构完成后，旧名残留 grep 的检查范围 = **Java 源码 + mapper XML + `scripts/`（PowerShell 与 shell 验证脚本）+ `doc/`**。scripts 不参与编译启动，是残留高发区；消息契约除外——jsonb payload 内的键名（如 `trigger`）属域对象序列化契约，不随 DB 列改名。
 
 ---
 
-## 9. Outbox 事务性消息规范
+## 10. Outbox 事务性消息规范
 
-### 9.1 核心思路
+### 10.1 核心思路
 
 业务操作与事件写入同一本地事务，确保一致性。Outbox 表由定时任务补偿发送。
 
@@ -1042,11 +1102,11 @@ public void changeStatus(Long subTaskId, SubTaskStatus newStatus, Long agentId) 
 }
 ```
 
-### 9.2 Outbox 状态流转
+### 10.2 Outbox 状态流转
 
 `PENDING(0)` → `SUCCESS(1)` / `FAILED(2)` → 重试 → 超过最大重试次数 → 人工介入
 
-### 9.3 补偿任务
+### 10.3 补偿任务
 
 ```java
 @Scheduled(fixedRate = 15000) // 15秒
@@ -1059,9 +1119,9 @@ public void compensate() {
 
 ---
 
-## 10. 消息队列编码规范
+## 11. 消息队列编码规范
 
-### 10.1 Exchange / Queue / RoutingKey 命名
+### 11.1 Exchange / Queue / RoutingKey 命名
 
 ```
 Exchange:   helloai.{角色}.exchange
@@ -1082,7 +1142,7 @@ DLQ:        helloai.dlx.queue
 | PLANNER_QUEUE | `helloai.planner.queue` |
 | DLX_QUEUE | `helloai.dlx.queue` |
 
-### 10.2 队列配置要点
+### 11.2 队列配置要点
 
 ```java
 @Bean
@@ -1099,7 +1159,7 @@ public Queue executorQueue() {
 - Publisher Confirm + Mandatory 模式
 - Consumer ACK 模式：MANUAL（手动确认）
 
-### 10.3 幂等消费者编写规范
+### 11.3 幂等消费者编写规范
 
 所有消费者**必须继承 `AbstractIdempotentConsumer`**，提供 Redis + DB 双层去重：
 
@@ -1124,7 +1184,7 @@ public class ExecutorEventConsumer extends AbstractIdempotentConsumer {
 }
 ```
 
-### 10.4 消费顺序（防 ACK 丢失）
+### 11.4 消费顺序（防 ACK 丢失）
 
 ```java
 // 正确顺序：
@@ -1140,13 +1200,13 @@ public class ExecutorEventConsumer extends AbstractIdempotentConsumer {
 
 ---
 
-## 11. 分布式锁编码规范
+## 12. 分布式锁编码规范
 
-### 11.1 统一使用 Redis 分布式锁
+### 12.1 统一使用 Redis 分布式锁
 
 **禁止直接操作 Redis 客户端**，必须通过封装工具统一加锁。
 
-### 11.2 锁键命名规范
+### 12.2 锁键命名规范
 
 | 业务场景 | 锁键格式 |
 |----------|----------|
@@ -1158,7 +1218,7 @@ public class ExecutorEventConsumer extends AbstractIdempotentConsumer {
 | 超时巡检 | `scheduler:lock:SubTaskTimeout` |
 | 健康检查 | `scheduler:lock:AgentHealth` |
 
-### 11.3 使用方式
+### 12.3 使用方式
 
 ```java
 // 函数式（推荐）— 无返回值
@@ -1188,9 +1248,9 @@ try {
 
 ---
 
-## 12. 异常处理规范
+## 13. 异常处理规范
 
-### 12.1 异常体系
+### 13.1 异常体系
 
 ```
 RuntimeException
@@ -1199,7 +1259,7 @@ RuntimeException
     └── code = 自定义业务码
 ```
 
-### 12.2 使用方式
+### 13.2 使用方式
 
 ```java
 // 简洁形式
@@ -1215,7 +1275,7 @@ if (subTask == null) {
 }
 ```
 
-### 12.3 禁止事项
+### 13.3 禁止事项
 
 - ❌ 不要 `catch (Exception e)` 后吞掉异常不处理
 - ❌ 不要在 Controller 层手动 try-catch 返回 R.fail（交给全局异常处理器）
@@ -1225,14 +1285,14 @@ if (subTask == null) {
 
 ---
 
-## 13. 日志与链路追踪规范
+## 14. 日志与链路追踪规范
 
-### 13.1 日志框架
+### 14.1 日志框架
 
 - 使用 SLF4J + Logback
 - Logger 声明：`private static final Logger log = LoggerFactory.getLogger(当前类.class);`
 
-### 13.2 日志级别使用
+### 14.2 日志级别使用
 
 | 级别 | 场景 |
 |------|------|
@@ -1241,7 +1301,7 @@ if (subTask == null) {
 | INFO | 关键业务节点（任务创建/状态变更/审查完成/积分变动） |
 | DEBUG | 锁获取/释放、详细中间状态、Prompt 模板渲染 |
 
-### 13.3 日志内容规范
+### 14.3 日志内容规范
 
 ```java
 // ✅ 包含关键业务标识
@@ -1259,7 +1319,7 @@ log.info("任务完成");
 log.error("发送失败");
 ```
 
-### 13.4 链路追踪
+### 14.4 链路追踪
 
 - 使用 `traceId` 贯穿请求全链路
 - `RequestLogInterceptor` 生成 traceId，放入 MDC
@@ -1268,20 +1328,20 @@ log.error("发送失败");
 
 ---
 
-## 14. 定时任务编码规范
+## 15. 定时任务编码规范
 
-### 14.1 任务放置位置
+### 15.1 任务放置位置
 
 所有定时任务统一放在 `helloai-job` 模块的 `task` 包下。
 
-### 14.2 编写规范
+### 15.2 编写规范
 
 - 使用 `@Scheduled` 注解
 - 任务内加 Redis 分布式锁防并发
 - 幂等设计（重复执行不产生副作用）
 - 记录开始/结束日志
 
-### 14.3 典型场景
+### 15.3 典型场景
 
 | 任务 | 功能 | 间隔 |
 |------|------|------|
@@ -1291,7 +1351,7 @@ log.error("发送失败");
 | AgentHealthCheckTask | 检查 Agent 健康状态 | 60s |
 | **ExecutionCompensationTask** | **扫描 PENDING/RUNNING 超时执行记录** | **30s** |
 
-### 14.4 线程池参数化（关键）
+### 15.4 线程池参数化（关键）
 
 Agent 驱动层的线程池参数外置到 `application.yml`：
 
@@ -1309,9 +1369,9 @@ moss:
 
 ---
 
-## 15. Agent 驱动层编码规范
+## 16. Agent 驱动层编码规范
 
-### 15.1 模块结构
+### 16.1 模块结构
 
 ```
 helloai-core/agent/
@@ -1335,7 +1395,7 @@ helloai-core/agent/
     └── PlannerEventConsumer.java   # 消费 planner 队列
 ```
 
-### 15.2 消费顺序（强制规范）
+### 16.2 消费顺序（强制规范）
 
 ```java
 @RabbitListener(queues = EXECUTOR_QUEUE, ackMode = "MANUAL")
@@ -1352,7 +1412,7 @@ public void onMessage(Message message, Channel channel, long tag) {
 
 > ⚠️ **步骤 1 必须在 ACK 之前完成**。如果先 ACK 再插入记录，JVM 崩溃后消息丢失且无法追踪。
 
-### 15.3 AI 调用超时控制
+### 16.3 AI 调用超时控制
 
 ```java
 // 虚拟线程内同步等待（JDK 17 用平台线程池）
@@ -1363,7 +1423,7 @@ AgentResult result = agentExecutor.execute(task).get(120, TimeUnit.SECONDS);
 - 超时后：标记 execution_record 为 FAILED，触发 SubTask BLOCKED
 - 重试：指数退避，最多 3 次
 
-### 15.4 模型路由策略
+### 16.4 模型路由策略
 
 | 角色 | 模型 | 理由 |
 |------|------|------|
@@ -1371,7 +1431,7 @@ AgentResult result = agentExecutor.execute(task).get(120, TimeUnit.SECONDS);
 | EXECUTOR | Codex | 代码生成能力最强 |
 | REVIEWER | Claude Sonnet | 代码审查，平衡性能与成本 |
 
-### 15.5 上下文管理
+### 16.5 上下文管理
 
 ```java
 @Service
@@ -1395,11 +1455,11 @@ public class ContextManager {
 
 ---
 
-## 16. 代码模板（附录）
+## 17. 代码模板（附录）
 
 > **注意**: 本章为快速拷贝模板，内容与正文第 5-7 章、第 15 章有重叠。**正文规范优先于模板**——模板仅作参考，实际编码以正文规范为准。
 
-### 16.1 Entity 模板
+### 17.1 Entity 模板
 
 ```java
 package com.helloai.core.{domain}.entity;
@@ -1430,7 +1490,7 @@ public class {Name} extends BaseEntity {
 }
 ```
 
-### 16.2 DTO 模板
+### 17.2 DTO 模板
 
 ```java
 package com.helloai.api.dto.{domain};
@@ -1447,7 +1507,7 @@ public class {Name}Response {
 }
 ```
 
-### 16.3 Controller 模板
+### 17.3 Controller 模板
 
 ```java
 package com.helloai.api.controller;
@@ -1468,21 +1528,21 @@ public class {Name}Controller {
     private static final Logger log = LoggerFactory.getLogger({Name}Controller.class);
     private final {Name}Service service;
 
-    @PostMapping("/change-status")
-    public R<Void> changeStatus(@RequestBody ChangeStatusRequest request) {
-        service.changeStatus(request.getId(), request.getNewStatus(), request.getAgentId());
-        log.info("{} status changed: id={}, status={}", "{Name}", request.getId(), request.getNewStatus());
+    @PostMapping("/changeStatusById/{id}")
+    public R<Void> changeStatus(@PathVariable Long id, @RequestBody ChangeStatusRequest request) {
+        service.changeStatus(id, request.getNewStatus(), request.getAgentId());
+        log.info("{} status changed: id={}, status={}", "{Name}", id, request.getNewStatus());
         return R.ok();
     }
 
-    @GetMapping("/{id}")
+    @GetMapping("/getById/{id}")
     public R<{Name}Response> getById(@PathVariable Long id) {
         return R.ok(service.getResponseById(id));
     }
 }
 ```
 
-### 16.4 ServiceImpl 模板
+### 17.4 ServiceImpl 模板
 
 ```java
 package com.helloai.core.{domain}.service;
@@ -1514,7 +1574,7 @@ public class {Name}Service extends ServiceImpl<{Name}Mapper, {Name}> {
 }
 ```
 
-### 16.5 MQ Consumer 模板
+### 17.5 MQ Consumer 模板
 
 ```java
 package com.helloai.core.agent.mqconsumer;
@@ -1596,7 +1656,7 @@ public class {Name}EventConsumer {
 }
 ```
 
-### 16.6 状态机模板
+### 17.6 状态机模板
 
 ```java
 package com.helloai.core.task.statemachine;
@@ -1636,7 +1696,7 @@ public class SubTaskStateMachine {
 }
 ```
 
-### 16.7 定时任务模板
+### 17.7 定时任务模板
 
 ```java
 package com.helloai.job.task;
@@ -1680,11 +1740,11 @@ public class {Name}CompensationTask {
 
 ---
 
-## 17. 开发高频校验清单（附录）
+## 18. 开发高频校验清单（附录）
 
-> **用途**: 开发中的速查卡片，按类别分类，适合打印贴在显示器旁。提交前的完整 Checklist 见第 19 章。
+> **用途**: 开发中的速查卡片，按类别分类，适合打印贴在显示器旁。提交前的完整 Checklist 见第 20 章。
 
-### 17.1 后端速查
+### 18.1 后端速查
 
 | 类别 | 快速检查 | 参考章节 |
 |------|----------|----------|
@@ -1692,34 +1752,35 @@ public class {Name}CompensationTask {
 | 实体与主键 | 业务实体继承 `BaseEntity`，关系表不用；ID 使用 `Long + ASSIGN_ID` | [5. 实体类规范](#5-实体类规范) |
 | 自动填充 | 使用 `setFieldValByName`，不手动补 `createTime` / `updateTime` / `deleted` | [5.3 自动填充机制](#53-自动填充机制) |
 | 启动类 | `scanBasePackages` 保持 `"com.helloai"`，`@MapperScan` 显式列出 `core.agent/task/system` 三个 mapper 包 | [3.2 启动类配置](#32-启动类配置) |
-| 数据库连接 | JDBC URL 指向 PostgreSQL，使用 `timestamptz` | [8.2 JDBC 连接配置](#82-jdbc-连接配置) |
+| 数据库连接 | JDBC URL 指向 PostgreSQL，使用 `timestamptz` | [9.2 JDBC 连接配置](#92-jdbc-连接配置) |
 | Controller 与 Service | Controller 只做参数接收、DTO 转换、返回封装；查询默认返回 `Response DTO`；事务放在 Service 层 | [6. Controller 规范](#6-controller-规范)、[7. Service 规范](#7-service-规范) |
+| 接口路径 | 描述性风格 `动作+By+参数`，不使用嵌套子资源；列表 `GET /list`、分页 `POST /page`、按 ID `GET /getById/{id}` | [8. 接口路径规范](#8-接口路径规范) |
 | 依赖注入 | 使用构造器注入，非 `@Autowired` 字段注入 | [1. 总体原则](#1-总体原则) |
-| 状态与常量 | 禁止硬编码状态值，统一使用枚举类（`SubTaskStatus`、`AgentRole`） | [4. 命名规范](#4-命名规范)、[16.6 状态机模板](#166-状态机模板) |
-| 事务与一致性 | `@Transactional(rollbackFor = Exception.class)`；Outbox 与业务操作同一事务 | [9. Outbox 事务性消息规范](#9-outbox-事务性消息规范) |
-| MQ 与幂等 | 消费者继承 `AbstractIdempotentConsumer`，队列绑定 DLX，ACK 前插入 execution_record | [10. 消息队列编码规范](#10-消息队列编码规范)、[15.2 消费顺序](#152-消费顺序) |
-| 分布式锁 | 定时任务使用 Redis `setIfAbsent` 分布式锁 | [11. 分布式锁编码规范](#11-分布式锁编码规范) |
+| 状态与常量 | 禁止硬编码状态值，统一使用枚举类（`SubTaskStatus`、`AgentRole`） | [4. 命名规范](#4-命名规范)、[17.6 状态机模板](#176-状态机模板) |
+| 事务与一致性 | `@Transactional(rollbackFor = Exception.class)`；Outbox 与业务操作同一事务 | [10. Outbox 事务性消息规范](#10-outbox-事务性消息规范) |
+| MQ 与幂等 | 消费者继承 `AbstractIdempotentConsumer`，队列绑定 DLX，ACK 前插入 execution_record | [11. 消息队列编码规范](#11-消息队列编码规范)、[16.2 消费顺序](#162-消费顺序) |
+| 分布式锁 | 定时任务使用 Redis `setIfAbsent` 分布式锁 | [12. 分布式锁编码规范](#12-分布式锁编码规范) |
 | 乐观锁 | 使用 `@Version` + `updateById`，禁止手动写 `version = version + 1` | [1. 总体原则](#1-总体原则) |
 | JSONB 字段 | 使用 `@TableField(typeHandler = JacksonTypeHandler.class)` | [5.4 JSONB 字段规范](#54-jsonb-字段规范) |
-| 线程池 | Agent 驱动层线程池参数外置到 `application.yml` | [14.4 线程池参数化](#144-线程池参数化) |
-| 日志 | 包含关键业务标识（subTaskId、eventId、agentId） | [13.3 日志内容规范](#133-日志内容规范) |
+| 线程池 | Agent 驱动层线程池参数外置到 `application.yml` | [15.4 线程池参数化](#154-线程池参数化) |
+| 日志 | 包含关键业务标识（subTaskId、eventId、agentId） | [14.3 日志内容规范](#143-日志内容规范) |
 
-### 17.2 前端速查
+### 18.2 前端速查
 
 | 类别 | 快速检查 | 参考章节 |
 |------|----------|----------|
-| 页面骨架 | 列表页优先使用 `<el-card>`，Header 保持"标题 + 操作按钮" | [18.1 列表页标准结构](#181-列表页标准结构) |
-| 表格布局 | 表格整体流式，主体数据列 `min-width`，功能列固定 `width` | [18.1 列表页标准结构](#181-列表页标准结构) |
-| 操作列 | 统一 `fixed="right"`，宽度按按钮数量预留 | [18.1 列表页标准结构](#181-列表页标准结构) |
-| 长文本列 | 流水号、事件ID 等统一使用 `show-overflow-tooltip` | [18.1 列表页标准结构](#181-列表页标准结构) |
-| 脚本分区 | `data → computed → filters → created → methods` | [18.2 Script 结构](#182-script-结构) |
-| 样式边界 | 使用 `<style scoped>`，不额外重写页面外层布局 | [18.3 样式规范](#183-样式规范) |
+| 页面骨架 | 列表页优先使用 `<el-card>`，Header 保持"标题 + 操作按钮" | [19.1 列表页标准结构](#191-列表页标准结构) |
+| 表格布局 | 表格整体流式，主体数据列 `min-width`，功能列固定 `width` | [19.1 列表页标准结构](#191-列表页标准结构) |
+| 操作列 | 统一 `fixed="right"`，宽度按按钮数量预留 | [19.1 列表页标准结构](#191-列表页标准结构) |
+| 长文本列 | 流水号、事件ID 等统一使用 `show-overflow-tooltip` | [19.1 列表页标准结构](#191-列表页标准结构) |
+| 脚本分区 | `data → computed → filters → created → methods` | [19.2 Script 结构](#192-script-结构) |
+| 样式边界 | 使用 `<style scoped>`，不额外重写页面外层布局 | [19.3 样式规范](#193-样式规范) |
 
 ---
 
-## 18. Vue 页面规范
+## 19. Vue 页面规范
 
-### 18.1 列表页标准结构
+### 19.1 列表页标准结构
 
 前端使用 Vue 3 + Element Plus，列表页遵循以下约定：
 
@@ -1772,7 +1833,7 @@ public class {Name}CompensationTask {
 </template>
 ```
 
-### 18.2 Script 结构
+### 19.2 Script 结构
 
 `<script>` 块按固定顺序分区，导入 → 组件定义 → data → computed → filters → 生命周期 → methods：
 
@@ -1807,14 +1868,14 @@ public class {Name}CompensationTask {
 </script>
 ```
 
-### 18.3 样式规范
+### 19.3 样式规范
 
 - `<style scoped>` — 只用 scoped 样式
 - **不写**外层包装样式（`max-width` / `margin` / `padding`），由 `<el-main>` 统一控制
 - **不写**卡片圆角覆盖（`border-radius`），使用 Element UI 默认
 - 只定义弹窗、特殊布局等页面独有的样式
 
-### 18.4 要素检查清单
+### 19.4 要素检查清单
 
 | 要素 | 要求 |
 |------|------|
@@ -1831,9 +1892,9 @@ public class {Name}CompensationTask {
 
 ---
 
-## 19. 新增代码前校验清单
+## 20. 新增代码前校验清单
 
-> **用途**: 提交 PR 前的完整逐项 Checklist。开发中快速查阅用第 17 章速查卡片。
+> **用途**: 提交 PR 前的完整逐项 Checklist。开发中快速查阅用第 18 章速查卡片。
 
 - [ ] `.java` 文件为 UTF-8 without BOM
 - [ ] 业务实体继承 `BaseEntity` + `@Data` + `@TableName`；关系表不继承 `BaseEntity`，复合主键
@@ -1857,14 +1918,15 @@ public class {Name}CompensationTask {
 - [ ] 状态机转移在 Service 层明确定义 `VALID_TRANSITIONS`，不散落在各方法中
 - [ ] 跨 Service 事务调用使用 `@Transactional(rollbackFor = Exception.class)` 统一管理事务边界
 - [ ] SKILL.md 等静态资源文件放在 `resources/skills/` 下，不硬编码在 Java 代码中
-- [ ] 嵌套资源路径遵循 `/api/{parent}/{parentId}/{child}` 格式
-- [ ] 状态操作端点使用 `POST /{id}/{action}` 格式，一个动作对应一个独立方法
+- [ ] 接口路径使用描述性风格（动作+By+参数名/参数值），不使用 RESTful 子资源嵌套（见 8.1）
+- [ ] 列表用 `GET /list`、分页用 `POST /page`、按 ID 查询用 `GET /getById/{id}`（见 8.2）
+- [ ] 状态操作端点使用 `POST /{action}ById/{id}` 格式，一个动作对应一个独立方法（见 8.2）
 
 ---
 
-## 20. 测试规范
+## 21. 测试规范
 
-### 20.1 测试分层
+### 21.1 测试分层
 
 | 层级 | 类命名 | 包路径 | 工具 |
 |------|--------|--------|------|
@@ -1872,7 +1934,7 @@ public class {Name}CompensationTask {
 | 集成测试 | `XxxIntegrationTest` | `src/test/java/...` | Testcontainers (PG+Redis+RabbitMQ) |
 | API 测试 | `postman/` | 项目根目录 | Postman Collection |
 
-### 20.2 单元测试规范
+### 21.2 单元测试规范
 
 ```java
 @ExtendWith(MockitoExtension.class)
@@ -1903,7 +1965,7 @@ class SubTaskStateMachineTest {
 | Mock | 使用 `@Mock` + `@InjectMocks`，不手动 new 对象 |
 | 断言 | 优先使用 `assertThrows` / `assertDoesNotThrow`，再用 `assertEquals` |
 
-### 20.3 集成测试规范
+### 21.3 集成测试规范
 
 ```java
 @SpringBootTest
@@ -1914,7 +1976,7 @@ class NotificationConsumerIntegrationTest extends BaseIntegrationTest {
 }
 ```
 
-### 20.4 强制覆盖要求
+### 21.4 强制覆盖要求
 
 | 模块 | 行覆盖率目标 | 说明 |
 |------|:----------:|------|
@@ -1924,7 +1986,7 @@ class NotificationConsumerIntegrationTest extends BaseIntegrationTest {
 | `helloai-job/task` | ≥ 50% | 补偿任务覆盖超时/正常路径 |
 | `helloai-core/service` | ≥ 60% | 业务逻辑覆盖主流程 |
 
-### 20.5 关键测试场景
+### 21.5 关键测试场景
 
 ```
 ☐ 状态机: 所有 9 种状态的合法/非法转换全覆盖

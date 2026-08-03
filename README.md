@@ -1,89 +1,186 @@
-# HelloAI
+# HelloAI — AI Agent 协作调度平台
 
-> AI Agent 协作调度平台 — 让 AI Agent 像微服务一样被调度
+> 让多个 AI Agent 像团队一样协作，可靠、透明、可追踪
 
-#### 介绍
+<p align="center">
+  <a href="http://39.106.204.43:5173/#/login">🌐 在线体验</a> •
+  <a href="#快速开始">🚀 快速开始</a> •
+  <a href="#核心概念">📖 文档</a> •
+  <a href="#架构设计">🏗️ 架构</a>
+</p>
 
-- **HelloAI** 是一个基于 Spring AI MCP 协议的 实现多AI厂商（Qoder/Trae/Codex CLI/Claude Code 等）的跨平台任务协作的调度平台：外部 AI（Qoder、Trae、Codex CLI、Claude Code 等）一键接入后，平台像调度微服务一样向它们派发子任务，并回收执行结果。
-- 平台通过 **MCP SSE**（`/mcp/sse`）与 Agent 通信，通过**门铃 SSE 长连接**（`/api/agents/doorbell/sse`）实现任务秒级唤醒——外部 AI 收到响铃信号后主动调 MCP 工具取件，替代传统的定时轮询待办模式。
-- 项目运行时红线：**JDK 17**；不引入 Spring AI 2.0 / Spring Boot 4.0 路线（除非项目方主动开启 JDK 升级窗口）。
+---
 
-**核心能力**
+## 📌 项目介绍
 
-| 能力 | 说明 |
-|---|---|
-| 一键接入 | 外部 AI 注册后获得一键生成的 skills 说明，按说明即可完成连接、打卡、领任务全流程 |
-| 值班打卡 | `checkIn`/`checkOut` 值班租约（ACTIVE/CLOSED/EXPIRED 状态机 + 到期自动扫描），值班 Agent 优先派单 |
-| 门铃唤醒 | 服务端 → Agent 的 SSE 单向长连接，新任务秒级响铃；先打卡才允许建连，下班/租约到期自动断铃 |
-| MCP 工具协议层 | `pullTasks` / `claimSubTask` / `submitResult` / `reportBlocked` / `heartbeat` / `uploadArtifact` 等工具，工具数量以 `tools/list` 实际返回为准 |
-| 弹性调度 | 外部优先 + 空闲优先 + LLM 保底；外部 Agent 连续失败超阈值自动回退平台内 API_KEY_LLM；同角色替补 |
-| 可靠投递 | 事务性 Outbox（PENDING/SENT/CONFIRMED/FAILED 四态）+ publisher confirms + 超时回退重试 |
-| 稳定性 | Resilience4j per-agent 熔断降级、Reconcile 健康检查、执行超时补偿、三层幂等消费（DB CAS + Redis + 消费日志） |
+HelloAI 是一个面向复杂任务拆解的 **AI Agent 协作调度平台**。它不只是一个对话工具，而是一个生产级的"AI 项目经理"——能够自动理解需求、多轮澄清、拆解任务、调度多个 Agent 并行/串行执行、审核质量、最终合并输出完整报告。
 
-**支持接入的 Agent 类型**
+核心定位：**解决多 Agent 协作中的调度混乱、上下文断裂、执行不可追踪问题。**
 
-- `CLI_CLIENT`：外部 AI Agent（Qoder / Trae / Codex CLI / Claude Code 等，已实测接入）
-- `API_KEY_LLM`：平台托管的 API Key 型 Agent（自动执行链路）
-- `WEB_BROWSER`：网页版 AI（枚举预留，接入链路规划中）
+> 当前业界框架（如 CrewAI、LangGraph）侧重"如何写 Agent"，HelloAI 侧重"如何管 Agent"——调度、容错、可视化、审计。
 
-#### 软件架构
+HelloAI 基于 **Spring Boot + Spring AI MCP 协议**实现多 AI 厂商（Qoder / Trae / Codex CLI / Claude Code 等）的跨平台任务协作：外部 AI 一键接入后，平台像调度微服务一样向它们派发子任务，并回收执行结果。
 
-**技术栈**
+---
 
-| 层 | 技术 | 版本 |
-|---|---|---|
-| 运行时 | JDK | **17**（项目红线，永久锁定）|
+## ✨ 核心功能
+
+### 1. 智能任务规划（Planner）
+- **对话式需求澄清**：模糊想法先与 Planner 多轮对话收敛（追问 + 结构化选项点选 + 可选联网搜索），LLM 产出终稿后一键立项
+- **自动任务拆解**：需求确认后自动拆解为带依赖关系的子任务草案（`PENDING_PLAN_REVIEW` 草案态，不进分发链），用户确认/拒绝后进入既有分发链
+- **依赖 DAG**：子任务支持 `depends_on` 依赖，拓扑排序保证执行顺序，上游产出自动注入下游上下文
+
+### 2. 多 Agent 弹性调度（Executor）
+- **平台内 API_KEY_LLM**：平台托管的 API-Key 型 Agent（DeepSeek 等），自动执行链路，保底执行
+- **外部 CLI Agent**：Qoder / Trae / Codex CLI / Claude Code 等经 MCP 一键接入，实测可用
+- **弹性策略**：外部优先 + 空闲优先 + 值班优先（STRICT 独占）+ LLM 保底，策略可配置（`preferExternal` / `requireIdle` / `forceAccessType` / `autoAssignOnCreate`）
+- **值班打卡**：外部 Agent `checkIn`/`checkOut` 值班租约（ACTIVE/CLOSED/EXPIRED 状态机 + 到期自动扫描），值班 Agent 优先派单
+- **门铃秒级唤醒**：服务端 → Agent 的 SSE 单向长连接（`/api/agents/doorbell/sse`），新任务秒级响铃，替代传统定时轮询；下班/租约到期自动断铃
+
+### 3. 上下文连续性保障
+- 每个子任务执行时，**自动注入前置任务完成结果**（`## 上游产出参考` 独立章节）
+- 被 Reviewer 驳回后重新生成时携带：
+  - 前置任务结果
+  - 本轮任务要求
+  - 上次生成结果
+  - 全部历史驳回意见（`reviewHistory` 多轮累积）
+- 真正做到"听人话、会修改"
+
+### 4. 可视化追踪
+- **依赖图**：子任务列表按主任务过滤时切换 DAG 视图，拓扑分层流水线展示执行顺序与依赖
+- **时间线列表**：记录每一步操作的实际执行步骤（`task_timeline` 事件流）
+- **执行时序图**：泳道式 mermaid 时序图，完整展示单个子任务周期内的所有关键节点（领取/执行/返工/驳回/熔断全可看）
+
+### 5. 质量审核（Reviewer）
+- 独立 Reviewer Agent 对产出进行审核，支持多轮驳回-修正循环
+- 审核意见（`subtask_review_result`）与执行对话流一起可视化展示
+- 最终由 Planner 整合所有子任务产出，生成连贯的最终整合报告
+
+### 6. 报告生成与交付物
+- **最终整合报告**：任务收口后 Planner 将全部 DONE 子任务产出整合为一份连贯报告（执行摘要 + 重组正文 + 结论），自动触发 + 手动补生成
+- **交付物 zip 下载**：按拓扑序打包全部子任务产出（优先物化附件），单任务一键下载
+- **执行产出物化**：执行成功后的 LLM 输出自动落盘为附件（`local://` 存储抽象，流式下载）
+
+### 7. 生产级可靠性
+| 场景 | 策略 |
+|------|------|
+| 外部 Agent 连续失败（默认 3 次） | 自动回退平台内 API_KEY_LLM 保底执行（同角色替补） |
+| 调度/执行链路异常 | Resilience4j per-agent 熔断（滑动窗口 10 次 / 30% 失败率触发） |
+| 重分配达阈值（默认 5 次） | 子任务转入 `DEAD_LETTER` 死信池，人工审核后一键重新派发（`POST /api/sub-tasks/dead-letter/redispatch/{id}`） |
+| 执行命令投递 | 事务性 Outbox（PENDING/SENT/CONFIRMED/FAILED 四态）+ RabbitMQ publisher confirms + 超时回退重试 |
+| 消息重复消费 | 三层幂等：DB CAS + Redis + 消费日志 |
+| 外部 Agent 离线/超时 | Reconcile 健康检查 + 离线重分配 + 执行超时补偿（TIMEOUT/BLOCKED） |
+| 前置任务未完成 | `depends_on` 拓扑守卫：下游不提前分发，不会无效分配 Agent |
+| 在线状态判定 | 三件套：`last_seen_at` / `last_active_at` / `online_status`，`heartbeat` 工具刷新 |
+
+---
+
+## 🏗️ 架构设计
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    用户层（Vue 3 SPA）                         │
+│         需求澄清 / 计划确认 / 依赖图 / 时序图 / 报告下载         │
+└──────────────────────────────────────────────────────────────┘
+                              │ REST (/api/**)
+┌──────────────────────────────────────────────────────────────┐
+│                   调度核心层（Spring Boot）                     │
+│  ┌──────────────┐   ┌─────────────────┐   ┌──────────────┐   │
+│  │ Planner      │ → │ 拆解/草案/确认    │ → │ 弹性调度器    │   │
+│  │ 澄清/拆解     │   │ PENDING_PLAN_   │   │ 外部优先/空闲 │   │
+│  │              │   │ REVIEW → PENDING │   │ 优先/LLM保底 │   │
+│  └──────────────┘   └─────────────────┘   └──────────────┘   │
+│                              ↓                                │
+│  执行命令（Outbox → RabbitMQ）→ 执行消费 → 结果回写（幂等）      │
+│                              ↓                                │
+│   ┌────────────┐   ┌──────────┐   ┌──────────────────────┐    │
+│   │ Reviewer   │ → │ 驳回返工  │ → │ Planner 最终整合报告   │    │
+│   │ 质量审核    │   │ 多轮循环  │   │ + 交付物 zip 下载      │    │
+│   └────────────┘   └──────────┘   └──────────────────────┘    │
+└──────────────────────────────────────────────────────────────┘
+           │ MCP（/mcp/sse）            │ 门铃 SSE（秒级唤醒）
+┌───────────────────────────┐   ┌────────────────────────────┐
+│ 平台内 API_KEY_LLM Agent   │   │ 外部 CLI Agent             │
+│ （DeepSeek 等 API-Key）    │   │ Qoder / Trae / Codex / CC   │
+└───────────────────────────┘   └────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                 基础设施层（Docker Compose）                    │
+│    PostgreSQL 16.4  •  Redis 7.2  •  RabbitMQ 3.12           │
+│    MinIO（对象存储） • 本地产出物化存储（local://）              │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**关键通道口径**
+
+- MCP SSE（`/mcp/sse` + `/mcp/messages`）是外部 Agent 的唯一主协议通道；REST `tools/list` / `tools/call` 为兼容保留
+- 门铃 SSE（`/api/agents/doorbell/sse`）是服务端 → Agent 的单向唤醒信号，先打卡才允许建连；门铃丢失无损回退轮询
+- MCP 工具集：`pullTasks` / `ack` / `claimSubTask` / `heartbeat` / `uploadArtifact` / `submitResult` / `reportBlocked` / `getAgentStatus` / `checkIn` / `checkOut`，工具数量以 `tools/list` 实际返回为准
+
+---
+
+## 🛠️ 技术栈
+
+| 层级 | 技术 | 版本/说明 |
+|------|------|------|
+| 运行时 | JDK | **17**（项目红线，永久锁定） |
 | 后端框架 | Spring Boot | **3.4.10** |
-| AI 协议 | Spring AI | **1.1.8** |
-| 持久化 | PostgreSQL + MyBatis-Plus + Flyway | — |
-| 缓存 | Redis (Lettuce) | — |
-| 消息队列 | RabbitMQ（含 publisher confirms / DLX） | — |
+| AI 框架 | Spring AI | **1.1.8**（MCP Server / 多 LLM 统一接入） |
+| 持久化 | PostgreSQL + MyBatis-Plus + Flyway | 16.4 / 3.5.9 / 自动迁移 |
+| 缓存 | Redis（Lettuce） | 7.2 |
+| 消息队列 | RabbitMQ | 3.12（publisher confirms / DLX / 手动 ACK） |
+| 对象存储 | MinIO + 本地物化存储 | `local://` 抽象 |
 | 弹性 | Resilience4j CircuitBreaker | — |
-| 监控 | Spring Boot Actuator | — |
-| 前端 | Vue 3 + TypeScript + Vite + Element Plus | — |
+| 协议 | MCP（SSE）/ 门铃 SSE 长连接 | Spring AI MCP Server |
+| 前端 | Vue 3 + TypeScript + Vite + Element Plus | + ECharts / Mermaid |
+| 监控 | Spring Boot Actuator | health / metrics / circuitbreakers |
+| 部署 | Docker Compose + Nginx | 见 `docker-compose.yml` / `docker-compose.server.yml` |
 
-**项目结构**
+**项目结构**（多模块 Maven 工程）
 
 ```
-helloai/                          # 多模块 Maven 工程
-├── helloai-common/               # 公共基础（常量、枚举、异常、配置属性）
-├── helloai-mq/                   # 消息队列（RabbitMQ 配置 + 幂等消费基类）
-├── helloai-core/                 # 核心业务（业务域分包）
-│   └── com.helloai.core/
-│       ├── agent/                #   智能体域：注册/调度/执行/对话/MCP/门铃可观测
-│       ├── task/                 #   任务域：任务/子任务/评审/评分/状态机/时间线
-│       ├── system/               #   系统支撑域：用户/配置/规则/凭据/附件
-│       └── shared/               #   跨域设施：领域事件/门铃通道
-├── helloai-api/                  # REST 接口层（Controller + DTO，禁连 Mapper）
-├── helloai-job/                  # 定时任务（Outbox 中继/超时补偿/健康检查/租约过期）
-├── helloai-start/                # 启动模块（Application + application.yml + Flyway）
-├── helloai-ui/                   # 前端（Vue 3 SPA）
-├── scripts/                      # 验证脚本（powershell/ + shell/）
-└── doc/                          # 项目文档（见 doc/README.md 文档地图）
+helloai/
+├── helloai-common/   # 公共基础（常量、枚举、异常、配置属性）
+├── helloai-mq/       # 消息队列（RabbitMQ 配置 + 幂等消费基类）
+├── helloai-core/     # 核心业务（业务域分包：agent/task/system/shared/planner）
+├── helloai-api/      # REST 接口层（Controller + DTO，禁连 Mapper）
+├── helloai-job/      # 定时任务（Outbox 中继/超时补偿/健康检查/租约过期）
+├── helloai-start/    # 启动模块（Application + application.yml + Flyway 迁移）
+├── helloai-ui/       # 前端（Vue 3 SPA）
+├── scripts/          # 验证脚本（powershell/ + shell/，脚本输出即事实源）
+└── doc/              # 项目文档（见 doc/README.md 文档地图）
 ```
 
-#### 安装教程
+---
 
-**前置依赖**
+## 🚀 快速开始
 
-- JDK 17
+### 环境要求
+- JDK 17（项目红线）
 - Maven 3.8+
-- Docker + Docker Compose（基础设施）
+- Node.js 18+
+- Docker + Docker Compose（PostgreSQL / Redis / RabbitMQ / MinIO 基础设施）
 
-**步骤**
-
+### 1. 克隆项目
 ```bash
-# 1. 启动基础设施（PostgreSQL / Redis / RabbitMQ / MinIO）
-docker compose up -d
+git clone https://gitee.com/undefined_404/helloai.git
+cd helloai
+```
 
-# 2. 编译 + 启动后端（Flyway 自动执行 V1~V23 迁移）
+### 2. 启动基础设施
+```bash
+docker compose up -d
+# PostgreSQL(15432) / Redis(26379) / RabbitMQ(25672) / MinIO(29000)
+```
+
+### 3. 配置后端
+编辑 `helloai-start/src/main/resources/application.yml`（或通过环境变量覆盖）：
+- 数据库 / Redis / RabbitMQ 连接（本地 Docker 默认即可）
+- LLM API Key：`DEEPSEEK_API_KEY`（另有 `MOONSHOT_API_KEY` / `MINIMAX_API_KEY` / `DASHSCOPE_API_KEY` 可配）
+
+### 4. 启动后端（Flyway 自动执行数据库迁移）
+```bash
 mvn clean package -DskipTests
 java -jar helloai-start/target/helloai-start.jar
-
-# 3. 启动前端
-cd helloai-ui
-npm install
-npm run dev
 ```
 
 后端启动后访问：
@@ -91,56 +188,112 @@ npm run dev
 - Swagger UI: <http://localhost:6565/swagger-ui.html>
 - 健康检查: <http://localhost:6565/actuator/health>
 
-#### 使用说明
+### 5. 启动前端
+```bash
+cd helloai-ui
+npm install
+npm run dev
+```
 
-**外部 AI Agent 快速接入**
+访问 <http://localhost:5173> 即可体验。
 
-1. 管理端创建 Agent（角色 EXECUTOR，类型 CLI_CLIENT），复制一键生成的 skills 说明；
-2. 在外部 AI（如 Qoder / Trae）中粘贴执行该 skills，AI 将自动完成：注册鉴权 → MCP 连接 → `checkIn` 打卡 → 建立门铃长连接；
-3. 平台派单后 AI 收到门铃信号，按 skills 规则 `pullTasks` → `claimSubTask` → 执行 → `submitResult`；
+---
+
+## 📖 核心概念
+
+| 角色 | 职责 | 类比 |
+|------|------|------|
+| **Planner** | 需求澄清、任务拆解、草案确认、最终整合报告 | 项目经理 |
+| **Executor** | 消费子任务、调用 LLM/Agent 执行、记录执行日志 | 开发团队 |
+| **Reviewer** | 审核产出质量、提出修改意见、触发返工 | QA / 架构师 |
+| **API_KEY_LLM** | 平台托管的 API-Key 模型 Agent，保底执行 | 正式员工 |
+| **CLI_CLIENT** | 通过 MCP 接入的外部 AI（Qoder / Trae / Codex / Claude Code） | 外包人员 |
+
+### 任务生命周期
+```
+需求输入 → Planner 澄清对话（多轮追问/结构化选项/联网搜索）
+    → 终稿 → 自动拆解为子任务草案 → 用户确认草案
+    → 子任务入队分发（ASSIGNED）→ 弹性调度 Agent
+    → 执行（注入上游产出）→ 结果提交
+    → Reviewer 审核 → [通过] → Planner 整合 → 最终报告 + zip 下载
+                    → [驳回] → 携带历史驳回意见重新执行 → 再次审核
+异常路径：外部 Agent 超时/失败 → 熔断回退 API_KEY_LLM → 重分配达阈值 → DEAD_LETTER 人工兜底
+```
+
+### 外部 AI Agent 快速接入
+1. 管理端创建 Agent（角色 EXECUTOR，类型 CLI_CLIENT），复制一键生成的 SKILL 说明；
+2. 在外部 AI（如 Qoder / Trae）中粘贴执行该 SKILL，AI 将自动完成：注册鉴权 → MCP 连接 → `checkIn` 打卡 → 建立门铃长连接；
+3. 平台派单后 AI 收到门铃信号，按 SKILL 规则 `pullTasks` → `claimSubTask` → 执行 → `submitResult`；
 4. 异常路径：执行受阻调 `reportBlocked`（带证据链）；超时未提交由平台自动补偿并改派同角色值班 Agent。
 
-**验证与回归脚本**
+---
 
-所有验证脚本位于 `scripts/powershell/`（Windows）与 `scripts/shell/`（macOS），脚本输出即事实源：
+## 🖼️ 功能预览
 
-| 脚本 | 覆盖范围 |
-|---|---|
-| `verify-mcp-auth.*` | MCP 鉴权回归 |
-| `verify-mcp-e2e.*` | MCP 端到端业务循环 |
-| `verify-onboarding*.ps1` | 外部 Agent 接入五步闭环（注册/打卡/门铃/拉任务/提交） |
-| `verify-doorbell-e2e.ps1` | 门铃长连接（建连/握手/到期断连） |
-| `verify-agenthub-duty-e2e.ps1` | 值班租约（checkIn/checkOut/过期扫描/STRICT 独占） |
-| `verify-poller-e2e.ps1` | DB Poller 兜底消费 |
+> 在线演示：http://39.106.204.43:5173/#/login
 
-**MCP 通道口径**
+| 功能 | 说明 |
+|------|------|
+| 登录页 | AI 主题动态交互设计（星空背景 + 原创虚拟人物） |
+| 需求澄清对话 | 与 Planner 多轮对话，结构化选项点选 + 联网搜索，终稿一键立项 |
+| 自动拆解 | 需求确认后自动生成子任务草案，用户确认/拒绝 |
+| 依赖图 | 拓扑分层流水线，展示子任务依赖关系 |
+| 时间线 / 时序图 | 记录每一步操作详情，泳道式展示单任务执行周期 |
+| 值班看板 | 外部 Agent 值班租约列表与状态概览 |
+| 报告下载 | 最终整合报告 + 全子任务产出 zip 一键下载 |
 
-- 主通道：MCP SSE（`/mcp/sse` + `/mcp/messages`）是唯一主通道；REST `tools/list` / `tools/call` 为兼容保留
-- 心跳刷新：`last_seen_time` / 在线态刷新以 `heartbeat` 工具为主
+---
 
-**文档导航**
+## 🗺️ 路线图
+
+**已交付 ✅**
+
+- [x] 多 LLM 模型统一接入（DeepSeek 实测 + Moonshot / MiniMax / DashScope 预置）
+- [x] 对话式需求澄清（多轮追问 / 结构化选项 / 联网搜索）
+- [x] 任务自动拆解 + 草案确认（依赖 DAG / 拓扑排序 / 上游产出注入）
+- [x] 上下文连续性保障（前置结果注入 + reviewHistory 多轮累积）
+- [x] 多轮审核-修正机制
+- [x] 可视化依赖图 / 时间线 / 时序图
+- [x] 弹性调度（外部优先 + 空闲优先 + 值班优先 + LLM 保底 + 熔断降级）
+- [x] MCP 外部 Agent 接入 + 值班打卡 + 门铃秒级唤醒
+- [x] 可靠投递（Outbox 四态 + publisher confirms + 三层幂等 + 死信人工兜底）
+- [x] 报告生成与交付物（最终整合报告 + zip 下载 + 产出物化）
+
+**待办 🔜**
+
+- [ ] 领域模板市场（技术方案 / 代码审查 / 文档生成）
+- [ ] 执行层扩展（文件操作 / 联网搜索 / 工具调用，Agent 侧）
+- [ ] 浏览器型 Agent（WEB_BROWSER）真实接入链路
+- [ ] 工作流模板与 Team 编排
+- [ ] 多租户与权限隔离
+- [ ] 分布式调度扩展（多实例门铃 fanout 等）
+- [ ] 值班租约增强（动态 TTL 自适应 / concurrency 预扣）
+- [ ] 结构化多文件产出物化（方案 3：LLM manifest）
+
+---
+
+## 📚 文档导航
 
 先看 [`doc/README.md`](doc/README.md)（文档地图：每份文档的定位与事实等级），四份事实源：
 
-- 代码规范：[`doc/HelloAI_CODE_STYLE.md`](doc/HelloAI_CODE_STYLE.md)（V1.4，改代码前必读）
+- 代码规范：[`doc/HelloAI_CODE_STYLE.md`](doc/HelloAI_CODE_STYLE.md)（改代码前必读）
 - 项目基线：[`doc/HelloAI_项目基线文档.md`](doc/HelloAI_项目基线文档.md)
 - 实现差距：[`doc/HelloAI_实现差距表.md`](doc/HelloAI_实现差距表.md)
 - 当前进度：[`doc/项目进度.md`](doc/项目进度.md)
 
-其他：EXECUTOR 接入指南 [`.executor-onboarding.md`](.executor-onboarding.md) / 设计系统 [`DESIGN.md`](DESIGN.md) / 产品定义 [`PRODUCT.md`](PRODUCT.md)
+其他：EXECUTOR 接入指南 [`.executor-onboarding.md`](.executor-onboarding.md) / 设计系统 [`DESIGN.md`](DESIGN.md) / 产品定义 [`PRODUCT.md`](PRODUCT.md) / English [`README.en.md`](README.en.md)
 
-#### 参与贡献
+---
+
+## 🤝 参与贡献
 
 1. Fork 本仓库
 2. 新建 `feat_xxx` 或 `fix_xxx` 分支
 3. 改代码前必读 `doc/HelloAI_CODE_STYLE.md`；涉及调度/执行链改动需先读 `doc/design/HelloAI_调度解耦重构分析.md`
 4. 提交前跑通与改动面相关的 `scripts/` 验证脚本，PR 附上脚本输出
 
-#### 特技
+---
 
-1. English: [`README.en.md`](README.en.md)
-2. 优先读事实源文档（基线/差距/进度），历史设计文档已归档至 `doc/archive/`，不作为开发依据
+## 📄 许可证
 
-#### 许可证
-
-[LICENSE](LICENSE)
+本项目采用 [木兰宽松许可证，第2版](http://license.coscl.org.cn/MulanPSL2) 开源，详见 [LICENSE](LICENSE)。
