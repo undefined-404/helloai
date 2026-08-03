@@ -3812,3 +3812,52 @@ N17 澄清链路在 V29（多轮追问 + 终稿）+ V33（结构化选项 + prog
 
 ---
 
+### 6.43 依赖感知双轨上下文注入 + Task Running Spec 全貌补记与 V35~V37 编号勘误（2026-08-03）
+
+#### 1. 背景与决策
+
+用户本意是"前置做了什么 + 本轮任务综合分析"：下游子任务执行时，Prompt 应同时获得**直接前置**的"结构化摘要 + 完成内容本体"，与 Baseline 全局上下文、本轮任务四要素合并，供 LLM 综合分析后执行。现状存在两个缺环：
+
+- `buildExecutorPromptSection` 注入任务下**全部** executionRecords 的一句话摘要——不按依赖选择、无内容本体，且多前置时信息混杂；
+- V35（§6.39）`loadDependencyContext` 注入的是**原始 LLM 产出**（`## 上游产出参考`），无结构化收口、无摘要提炼。
+
+决策：依赖段改为**双轨**——每个直接前置同时提供 ① 结构化摘要（EXECUTION_RECORD，`findRecord` 精确取单条）② 完成内容本体（物化附件优先，`context.lastExecution.output` 回退），按 `dependsOnIdList` 声明顺序全量收集渲染，杜绝"只记录最后一次前置"。
+
+并发缺陷决策：Phase A JSONB `appendExecutionRecord` 是读-改-写非原子，多前置并行完成时后写覆盖先写（丢失更新）——本轮加 taskId 粒度分段锁锁住整段；Phase B 独立表行级天然无此问题。
+
+文档勘误背景：Task Running Spec 体系（Flyway V35~V37）此前**无任何迭代节记录**；§6.39 标号"V35"时（2026-08-01）Flyway V35 尚未创建（实际提交 2026-08-02 01:04 `ad8176f`），且 §6.39 记"无 Flyway"与 V35 迁移事实冲突——本节一并补记全貌并勘误。
+
+#### 2. 实际落地
+
+**（A）Task Running Spec 全貌补记（V35~V37 真实内容）**
+
+- **Flyway V35 `task_context_jsonb.sql`**（Phase A 存储底座）：`task` 表加 `context JSONB NOT NULL DEFAULT '{}'`；`task.context.runningSpec` 为结构化运行态文档三件套——`baseline`（Planner 拆解确认时写入的目标/约束/DAG 结构）、`executionRecords[]`（每条 executor 回填的结构化摘要）、`contextSummary`（系统自动编译的下游上下文）。领域模型：`TaskRunningSpec`（不可变，`toMap/fromMap` JSONB 序列化边界 + `toBuilder` 增量更新）、`TaskBaseline`、`ExecutionRecord`（**EXECUTION_RECORD 协议**：`subTaskId/title/agentId/summary/keyDecisions/downstreamNotes/deliverables/completedAt`，builder 强制 subTaskId+summary）。配套：`ExecutionRecordParser`（解析 executor 协议输出）、`ExecutionResultHandler`（统一回填入口）、`TaskRunningSpecJsonbService`（Phase A 实现：`initialize` 写 baseline / `appendExecutionRecord` 回填 / `compileContextSummary` 编译 / `buildExecutorPromptSection` 渲染）。
+- **Flyway V36 `task_running_spec_tables.sql`**（Phase B 前置建表，`0db1076`）：`task_running_spec`（task_id UNIQUE、version、baseline JSONB、context_summary TEXT）+ `task_execution_record` 独立表，当时仅建表为 Phase B 做准备。
+- **Flyway V37 `task_running_spec_add_deleted.sql`**（Phase B 收尾，`6eaa02c`）：Phase B 实体继承 `BaseEntity` 后 MyBatis-Plus logic-delete 全局配置（`WHERE deleted=0`）导致启动期 `BadSqlGrammarException: column "deleted" does not exist`——为两表补 `deleted SMALLINT NOT NULL DEFAULT 0`；同提交落地 `TaskRunningSpecTableService`（Phase B 独立表实现）+ `TaskRunningSpecDataMigrator`（`ApplicationRunner` 数据迁移）。Phase B 渲染复用 Phase A 的 `JsonbPromptRenderer`（`TaskRunningSpecTableService` 私有静态类），两实现 prompt 输出一致。
+
+**（B）本轮依赖双轨改造（helloai-core）**
+
+- `TaskRunningSpecService` 接口新增 `findRecord(Long taskId, Long subTaskId)`：按 (taskId, subTaskId) 精确取单条结构化摘要，无则 null；契约注明"每次调用返回一条，调用方必须按集合收集，禁止单变量复用"。
+- `TaskRunningSpecJsonbService`：`findRecord` 遍历 `executionRecords` 按 subTaskId 匹配返回；`appendExecutionRecord` / `initialize` 加 taskId 粒度分段锁（`ConcurrentHashMap<Long, Object>`，锁住"读-改-写"整段；按 subTaskId 去重——rework 覆盖旧记录、不同 subTaskId 互不覆盖全部保留；注释说明单实例安全、多实例需切 Phase B 或 Redis 锁）；`buildExecutorPromptSection` **去掉全量"前置任务摘要"段**，只保留 Baseline（总体目标/平台约束）+ ContextSummary（全局进度）。
+- `TaskRunningSpecTableService`：`findRecord` 按 taskId+subTaskId 查独立表（行级天然无覆盖竞态，无需锁）；共用 `JsonbPromptRenderer` 同步去掉全量前置段。
+- `SubTaskExecutionService` 新增 `buildDependencySection(SubTask)`：`dependsOnIdList` 空 → 返回空串（零注入）；`listByIds` 批量查前置 → HashMap 全量收集 → 按**声明顺序**循环内 append 渲染（`## 依赖产出参考（直接前置）` + 每前置 `### 前置 N：标题（状态：X）` + "产出摘要" + "内容"）；内容本体取数优先级：`AttachmentService.list` → `isContentLoadable` → `loadContent` 转 UTF-8 文本（二进制/读取失败跳过）→ 回退 `SubTaskOutputExtractor` 读 `context.lastExecution.output`；单条超 `DEP_CONTENT_MAX_CHARS=4000` 截断并显式标注；异常一律 warn + 返回空串（V34/V35 降级哲学），降级仍记录 timeline。`executeOnce`：`promptSection` = 全局段 + 依赖段；timeline `sub_task_spec_context_loaded` payload 补 depCount/loadedCount/truncatedCount/degraded；构造器注入 `AttachmentService`。
+
+**（C）前端（helloai-ui）**
+
+- `utils/sequenceFlow.ts`：LABEL 加 `sub_task_spec_context_loaded: '装配依赖产出'`，泳道归 EXT（执行 Agent）。
+- `views/subtask/SubTaskDetail.vue`：EVENT_META 加 `sub_task_spec_context_loaded`（"参考前置产出" + 描述）。
+
+#### 3. 验证结果
+
+- **单测**：`SubTaskExecutionServiceTest` 新增用例——多前置并存（2 前置各有摘要+内容，断言 prompt **同时含两条**，防"只留第二次"回归）/ 附件优先于 output / 附件读取失败回退 output / 无附件走 output / 超长截断 / 异常降级不阻断 / 无依赖零注入（never 调 listByIds）；`TaskRunningSpecJsonbServiceTest` 并发用例——顺序 append 两个不同 subTaskId 记录断言两条都在（模拟多前置回填不互覆）。全绿（除 1 个 pre-existing V35 旧 loadDependencyContext 用例，属提测问题非本轮回归）。
+- **E2E（真实环境 PASS）**：新建 `scripts/shell/verify-deps-context-e2e.sh`——建任务 + 3 子任务（sub3 依赖 sub1+sub2 双前置，SQL 直写 depends_on）→ 并行 claim sub1/sub2（API_KEY_LLM agent **claim 即自动执行**，两前置并发完成、EXECUTION_RECORD 并发回填不互覆）→ 双前置完成后 claim sub3 → 从 `conversation_message` 抓 `sub_task_execute_user_prompt`。断言全部通过：prompt 含 `## 依赖产出参考（直接前置）` 章节、`### 前置 1/前置 2` 两个块（无前置 3）、两前置产出内容**同时同现**（sub1 `## 竞品资料收集报告` 与 sub2 `## 前置二：收集用户反馈` 首行均在）；timeline `sub_task_spec_context_loaded` payload `depCount=2 / loadedCount=2 / truncatedCount=0 / degraded=false`。实测 taskId=2084259396090843138。
+- 脚本两处修正记录：① 初版假设"claim 不自动分发、需手动 execute"与真实行为不符（`SubTaskAutoExecutionDispatcher` 对 API_KEY_LLM agent 在 ASSIGNED 后自动派发，手动 execute 会命中 `hasPendingOrRunning` 报 500"已有进行中的执行记录"）→ 改为 claim 即执行、按前置顺序串行等待；② `head -c` 按字节截断 UTF-8 中文产生非法字节序列致 BSD grep 报 `illegal byte sequence` → 改先取首行再用 zsh 字符切片（多字节安全）。
+- **构建**：`mvn -pl helloai-start -am package -DskipTests` 产出 `helloai-start-1.0.0-SNAPSHOT.jar`（含全部改动），启动后端 `/api/health` 200；前端 `vue-tsc --noEmit` 0 错。
+
+#### 4. 影响与遗留
+
+- 行为兼容：无依赖子任务零注入与旧版完全一致（EMPTY 短路 + 不查库 + 不记录事件）；有依赖子任务 Prompt 新增"依赖产出参考"章节，且不再包含全量 executionRecords 摘要段。
+- Phase A 分段锁仅单实例安全；多实例部署需切换 Phase B（独立表行级安全）或升级为 Redis 锁。
+- 版本编号勘误落地：§6.39"V35"标号超前于 Flyway V35 实际创建时间（2026-08-02 01:04），其"无 Flyway"记录仅对 08-01 当天成立；V35~V37 真实内容（Task Running Spec Phase A JSONB / Phase B 建表 / deleted 修复）以本节为唯一事实源。
+- 遗留（沿用 §6.39 范围外结论）：多级依赖透传（仅直接前置）、产出摘要化/向量化、跨任务依赖上下文；E2E 脚本依赖"claim 即自动执行"的环境行为，若未来关闭自动分发需同步调整脚本。
+

@@ -7,7 +7,11 @@ import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.shared.util.SubTaskOutputExtractor;
+import com.helloai.core.system.entity.Attachment;
+import com.helloai.core.system.service.AttachmentService;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.spec.ExecutionRecord;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -18,6 +22,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
@@ -36,6 +41,11 @@ import com.helloai.core.task.spec.TaskRunningSpecService;
 @Service
 @RequiredArgsConstructor
 public class SubTaskExecutionService {
+
+    /**
+     * 单条前置产出注入的字符上限；超出部分截断并显式标注，避免依赖产出无限膨胀挤占 token。
+     */
+    private static final int DEP_CONTENT_MAX_CHARS = 4000;
 
     /**
      * 子任务执行服务。
@@ -59,6 +69,7 @@ public class SubTaskExecutionService {
     private final ExecutionResultHandler executionResultHandler;
     private final TaskRunningSpecService taskRunningSpecService;
     private final ConversationService conversationService;
+    private final AttachmentService attachmentService;
 
     // #region debug-point redispatch-stuck-blocked
     private static final ObjectMapper DBG_MAPPER = new ObjectMapper();
@@ -206,16 +217,19 @@ public class SubTaskExecutionService {
                 "agentOnlineStatus", agent.getOnlineStatus() != null ? agent.getOnlineStatus().name() : null
         ));
 
-        // Task Running Spec 上下文装配：从 task.context JSONB 读取结构化运行态文档，
-        // 替代 V35 原始产出注入，避免噪声污染下游 executor 上下文
+        // Task Running Spec 上下文装配：
+        // 1) 全局段 = Baseline（总体目标/平台约束）+ ContextSummary（全局进度），来源 task.context JSONB / 独立表
+        // 2) 依赖段 = 直接前置（dependsOnIdList）的结构化摘要 + 完成内容本体（物化附件优先、原始产出回退）
+        //    综合注入供 LLM 结合"前置做了什么 + 本轮任务要求"分析执行
         String promptSection = taskRunningSpecService.buildExecutorPromptSection(subTask.getTaskId());
+        DependencySectionResult dependencySection = buildDependencySection(subTask);
         Map<String, Object> context = new HashMap<>();
         context.put("taskId", subTask.getTaskId());
         context.put("subTaskId", subTaskId);
         AgentTask task = AgentTask.builder()
                 .subTaskId(subTaskId)
                 .systemPrompt("")
-                .userPrompt(buildUserPrompt(subTask, promptSection))
+                .userPrompt(buildUserPrompt(subTask, promptSection, dependencySection.section))
                 .context(context)
                 .requiredCapabilities(Map.of())
                 .build();
@@ -223,12 +237,14 @@ public class SubTaskExecutionService {
                 "subTaskId", subTaskId,
                 "agentId", agent.getId()
         ));
-        // Task Running Spec 上下文装配可观测：有上下文段时记录 timeline 事件
-        if (promptSection != null && !promptSection.isBlank()) {
-            taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_spec_context_loaded",
-                    AgentRole.EXECUTOR, agent.getId(),
-                    Map.of("agentId", agent.getId()));
-        }
+        // Task Running Spec 上下文装配可观测：无论有无依赖均记录一次装配事实与统计
+        taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_spec_context_loaded",
+                AgentRole.EXECUTOR, agent.getId(),
+                safeMap("agentId", agent.getId(),
+                        "depCount", dependencySection.depCount,
+                        "loadedCount", dependencySection.loadedCount,
+                        "truncatedCount", dependencySection.truncatedCount,
+                        "degraded", dependencySection.degraded));
         taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_llm_call_start",
                 AgentRole.EXECUTOR, agent.getId(),
                 Map.of("agentId", agent.getId(), "agentName", agent.getName()));
@@ -270,23 +286,26 @@ public class SubTaskExecutionService {
         throw new BizException("子任务状态不允许执行: subTaskId=" + subTaskId + ", status=" + status);
     }
 
-    private String buildUserPrompt(SubTask subTask) {
-        return buildUserPrompt(subTask, "");
-    }
-
     /**
-     * 组装执行 Prompt：任务全局上下文 + 当前子任务四要素 + 回填要求。
+     * 组装执行 Prompt：任务全局上下文 + 依赖产出参考（直接前置）+ 当前子任务四要素 + 回填要求。
      *
-     * <p>全局上下文来自 Task Running Spec（Baseline + ContextSummary + 前置任务摘要），
-     * 替代 V35 原始产出注入。回填要求指导 executor 按 EXECUTION_RECORD 协议输出
-     * 结构化摘要，供后续下游 executor 消费。</p>
+     * <p>全局上下文来自 Task Running Spec（Baseline + ContextSummary）；依赖产出参考由
+     * {@link #buildDependencySection} 按 dependsOnIdList 收集直接前置的结构化摘要与内容本体，
+     * 供 LLM 将"前置已完成的内容"与"本轮任务要求"综合分析后执行。回填要求指导 executor
+     * 按 EXECUTION_RECORD 协议输出结构化摘要，供后续下游 executor 消费。</p>
      */
-    private String buildUserPrompt(SubTask subTask, String runningSpecSection) {
+    private String buildUserPrompt(SubTask subTask, String runningSpecSection, String dependencySection) {
         StringBuilder sb = new StringBuilder();
 
         // 任务全局上下文（Task Running Spec）
         if (runningSpecSection != null && !runningSpecSection.isBlank()) {
             sb.append(runningSpecSection);
+            sb.append("\n---\n\n");
+        }
+
+        // 依赖产出参考（直接前置）：有依赖才注入，无依赖零注入
+        if (dependencySection != null && !dependencySection.isBlank()) {
+            sb.append(dependencySection);
             sb.append("\n---\n\n");
         }
 
@@ -394,6 +413,123 @@ public class SubTaskExecutionService {
         }
 
         sb.append("请务必针对未自认修复的问题继续修正后重新提交。\n");
+    }
+
+    /**
+     * 按 dependsOnIdList 收集直接前置的依赖产出参考段（双轨：结构化摘要 + 内容本体）。
+     *
+     * <p><b>多前置安全契约：</b>所有前置经 Map 全量收集后<b>按声明顺序</b>逐条渲染，
+     * 每条都在循环内 append 到 StringBuilder——禁止单变量复用覆盖，否则会丢失除最后一个
+     * 前置外的全部信息。内容本体优先取物化附件（local:// 平台直读），读取失败/无附件时
+     * 回退 {@code context.lastExecution.output} 原始产出；单条超 {@link #DEP_CONTENT_MAX_CHARS}
+     * 截断并显式标注。任何异常一律 warn 降级为不注入（不阻断执行），降级仍可观测。</p>
+     */
+    private DependencySectionResult buildDependencySection(SubTask subTask) {
+        List<Long> dependsOn = subTask.dependsOnIdList();
+        if (dependsOn == null || dependsOn.isEmpty()) {
+            return DependencySectionResult.empty();
+        }
+        try {
+            List<SubTask> deps = subTaskService.listByIds(dependsOn);
+            Map<Long, SubTask> depMap = new HashMap<>();
+            if (deps != null) {
+                for (SubTask dep : deps) {
+                    depMap.put(dep.getId(), dep);
+                }
+            }
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("## 依赖产出参考（直接前置）\n");
+            sb.append("你必须综合参考以下前置子任务已完成的内容，结合当前任务要求综合分析后执行：\n\n");
+
+            int loadedCount = 0;
+            int truncatedCount = 0;
+            int idx = 1;
+            for (Long depId : dependsOn) {
+                SubTask dep = depMap.get(depId);
+                if (dep == null) {
+                    continue;
+                }
+                ExecutionRecord record = taskRunningSpecService.findRecord(subTask.getTaskId(), depId);
+                sb.append("### 前置 ").append(idx++).append("：").append(dep.getTitle())
+                        .append("（状态：").append(dep.getStatus() != null ? dep.getStatus() : "UNKNOWN")
+                        .append("）\n");
+                if (record != null && record.summary() != null && !record.summary().isBlank()) {
+                    sb.append("**产出摘要**: ").append(record.summary()).append('\n');
+                }
+                String content = loadUpstreamContent(dep);
+                if (content == null || content.isBlank()) {
+                    sb.append("（该前置子任务无可用产出内容）\n\n");
+                    continue;
+                }
+                loadedCount++;
+                sb.append("**内容**:\n");
+                String render = content;
+                if (render.length() > DEP_CONTENT_MAX_CHARS) {
+                    render = render.substring(0, DEP_CONTENT_MAX_CHARS);
+                    truncatedCount++;
+                }
+                sb.append(render).append('\n');
+                if (render.length() < content.length()) {
+                    sb.append("\n（已截断至 ").append(DEP_CONTENT_MAX_CHARS).append(" 字符）\n");
+                }
+                sb.append('\n');
+            }
+            return new DependencySectionResult(sb.toString(), dependsOn.size(), loadedCount, truncatedCount, false);
+        } catch (Exception e) {
+            log.warn("依赖产出上下文装配失败，降级跳过注入: subTaskId={}, err={}", subTask.getId(), e.getMessage());
+            return DependencySectionResult.degraded(dependsOn.size());
+        }
+    }
+
+    /**
+     * 读取前置子任务的完成内容本体：物化附件（local:// 平台直读）优先，失败/无附件回退
+     * {@code context.lastExecution.output} 原始产出；两者均无返回 null。
+     */
+    private String loadUpstreamContent(SubTask dep) {
+        try {
+            List<Attachment> attachments = attachmentService.list(dep.getId());
+            if (attachments != null) {
+                for (Attachment attachment : attachments) {
+                    if (attachmentService.isContentLoadable(attachment)) {
+                        byte[] bytes = attachmentService.loadContent(attachment.getId());
+                        if (bytes != null && bytes.length > 0) {
+                            return new String(bytes, StandardCharsets.UTF_8);
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("读取前置物化附件内容失败，回退原始产出: subTaskId={}, err={}",
+                    dep.getId(), e.getMessage());
+        }
+        return SubTaskOutputExtractor.extractExecutionOutput(dep);
+    }
+
+    /** 依赖产出段装配结果：渲染文本 + 可观测统计（depCount/loadedCount/truncatedCount/degraded）。 */
+    private static final class DependencySectionResult {
+        private final String section;
+        private final int depCount;
+        private final int loadedCount;
+        private final int truncatedCount;
+        private final boolean degraded;
+
+        private DependencySectionResult(String section, int depCount, int loadedCount, int truncatedCount,
+                                        boolean degraded) {
+            this.section = section;
+            this.depCount = depCount;
+            this.loadedCount = loadedCount;
+            this.truncatedCount = truncatedCount;
+            this.degraded = degraded;
+        }
+
+        private static DependencySectionResult empty() {
+            return new DependencySectionResult("", 0, 0, 0, false);
+        }
+
+        private static DependencySectionResult degraded(int depCount) {
+            return new DependencySectionResult("", depCount, 0, 0, true);
+        }
     }
 
 }

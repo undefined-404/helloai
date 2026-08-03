@@ -36,15 +36,29 @@ public interface TaskRunningSpecService {
     void appendExecutionRecord(Long taskId, ExecutionRecord record);
 
     /**
-     * 构建 executor Prompt 上下文段。
+     * 构建 executor Prompt 全局上下文段。
      *
      * <p>返回 Markdown 格式的上下文章节文本，包含：Baseline 全局目标 +
-     * 已完成的执行记录摘要 + Context Summary。无内容时返回空串。</p>
+     * Context Summary（全局进度）。<b>不包含各子任务执行记录明细</b>——
+     * 依赖上下文由调用方按 {@code dependsOnIdList} 经 {@link #findRecord} 逐条收集渲染。</p>
      *
      * @param taskId 主任务 ID
      * @return Prompt 上下文段；无内容时返回空串
      */
     String buildExecutorPromptSection(Long taskId);
+
+    /**
+     * 按 (taskId, subTaskId) 精确取单条结构化执行记录摘要。
+     *
+     * <p><b>契约：</b>本方法每次调用只返回一条记录；有多个前置时调用方
+     * <b>必须按集合收集</b>（如 Map 全量收集后按声明顺序渲染），
+     * 禁止单变量复用覆盖，否则多前置场景会丢失前置信息。</p>
+     *
+     * @param taskId    主任务 ID
+     * @param subTaskId 前置子任务 ID
+     * @return 该子任务的结构化执行记录；无记录返回 null
+     */
+    ExecutionRecord findRecord(Long taskId, Long subTaskId);
 
     /**
      * 从所有 ExecutionRecords 重新编译 Context Summary。

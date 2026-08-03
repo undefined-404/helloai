@@ -42,7 +42,7 @@
 - Planner 平台内自动拆解（N16，V26）：需求 → LLM 拆解 → 草案 `PENDING_PLAN_REVIEW` → 确认/拒绝 → 进入既有分发链，草案态与执行链硬隔离
 - 对话式需求澄清（N17，V29/V31/V33/V34）：多轮追问 → 终稿 → 建任务顺路拆解；结构化选项式追问 + 进度条；联网搜索开关（默认博查）
 - 执行产出物化（方案2）+ 交付物实时聚合 zip 下载 + 任务最终整合报告（V32）：执行产出物化为真实附件，主任务收口后 Planner 整合全部子任务产出为一份连贯报告
-- 执行链依赖上下文注入（V35）：执行 Agent 按 `depends_on` 声明顺序参考直接前置产出，`sub_task_deps_context_loaded` 可观测
+- 执行链依赖上下文注入（V35 原始产出 + 2026-08-03 双轨升级）：执行 Agent 按 `depends_on` 声明顺序参考直接前置产出——先经 V35 `## 上游产出参考` 注入原始产出，2026-08-03 升级为 Task Running Spec 双轨：直接前置的**结构化摘要**（`findRecord` 精确取单条 EXECUTION_RECORD）+ **完成内容本体**（物化附件优先、`context.lastExecution.output` 回退）同现于 `## 依赖产出参考（直接前置）` 章节（多前置按声明顺序全量收集防覆盖）；Phase A JSONB 回填加 taskId 粒度分段锁防并发互覆（Phase B 独立表行级天然安全）；`sub_task_spec_context_loaded` 可观测（depCount/loadedCount/truncatedCount/degraded）。E2E 双前置场景 PASS（§6.43）
 - 执行对话流可观测（V38 + 2026-08-02）：user prompt 落库 `conversation_message`（`sub_task_execute_user_prompt`）、reviewHistory 多轮累积、审核结论消息 `subtask_review_result`、Snowflake 长 ID 全链路字符串化（`BaseEntity.id` + DTO 注解 + 前端 `String()` 防御）
 
 ---

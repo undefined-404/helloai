@@ -88,6 +88,15 @@ public class TaskRunningSpecTableService implements TaskRunningSpecService {
     }
 
     @Override
+    public ExecutionRecord findRecord(Long taskId, Long subTaskId) {
+        if (taskId == null || subTaskId == null) {
+            return null;
+        }
+        TaskExecutionRecordEntity entity = recordMapper.selectByTaskIdAndSubTaskId(taskId, subTaskId);
+        return entity != null ? fromEntity(entity) : null;
+    }
+
+    @Override
     public String buildExecutorPromptSection(Long taskId) {
         TaskRunningSpec spec = getOrCreate(taskId);
         if (spec.isEmpty()) {
@@ -208,27 +217,8 @@ public class TaskRunningSpecTableService implements TaskRunningSpecService {
                 sb.append("\n### 全局进度与关键事实\n");
                 sb.append(cs).append('\n');
             }
-            if (!spec.executionRecords().isEmpty()) {
-                sb.append("\n### 前置任务摘要\n");
-                int idx = 1;
-                for (ExecutionRecord rec : spec.executionRecords()) {
-                    String title = rec.title() != null ? rec.title() : ("子任务#" + rec.subTaskId());
-                    sb.append("#### ").append(idx++).append(". ").append(title).append('\n');
-                    if (rec.summary() != null) {
-                        sb.append("**产出**: ").append(rec.summary()).append('\n');
-                    }
-                    if (!rec.downstreamNotes().isEmpty()) {
-                        sb.append("**下游须知**:\n");
-                        for (String note : rec.downstreamNotes()) {
-                            sb.append("- ").append(note).append('\n');
-                        }
-                    }
-                    if (!rec.deliverables().isEmpty()) {
-                        sb.append("**产出文件**: ");
-                        sb.append(String.join(", ", rec.deliverables())).append('\n');
-                    }
-                }
-            }
+            // 子任务执行记录明细不在此全量铺开：依赖上下文由调用方按 dependsOnIdList
+            // 经 findRecord 逐条收集渲染（见 SubTaskExecutionService.buildDependencySection）
             return sb.toString();
         }
     }

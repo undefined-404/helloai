@@ -273,6 +273,7 @@ const EVENT_META: Record<string, { label: string; desc: string }> = {
   sub_task_execute_start: { label: '开始执行', desc: '执行 Agent 开始处理子任务' },
   sub_task_execute_before_platform: { label: '执行前准备', desc: '执行前的平台准备工作' },
   sub_task_deps_context_loaded: { label: '参考上游产出', desc: '执行 Agent 已读取前置子任务的交付结果，作为本次执行的参考' },
+  sub_task_spec_context_loaded: { label: '装配任务上下文', desc: '执行 Agent 已装配任务全局上下文与直接前置产出，作为本次执行的参考' },
   sub_task_llm_call_start: { label: '调用大模型', desc: '执行 Agent 开始请求大模型生成内容' },
   sub_task_llm_call_end: { label: '大模型返回', desc: '大模型已返回生成结果' },
   sub_task_llm_call_failed: { label: '大模型失败', desc: '调用大模型失败（超时或网络异常）' },

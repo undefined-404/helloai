@@ -68,7 +68,8 @@ export function classifySwimlane(ev: TaskTimelineItem): Swimlane {
   if (t.startsWith('subtask_review_') || t.startsWith('sub_task_auto_review_')) return 'RVW'
   // 执行 → 执行 Agent
   if (t.startsWith('sub_task_execute_') || t.startsWith('sub_task_llm_call_')
-      || t === 'sub_task_deps_context_loaded' || t === 'sub_task_execution_command_consume'
+      || t === 'sub_task_deps_context_loaded' || t === 'sub_task_spec_context_loaded'
+      || t === 'sub_task_execution_command_consume'
       || t === 'sub_task_execution_command_consume_skipped') return 'EXT'
   // 其余 SYSTEM 角色 → 调度引擎
   return 'SCH'
@@ -96,6 +97,7 @@ const LABEL: Record<string, string> = {
   sub_task_execute_start: '开始执行',
   sub_task_execute_before_platform: '执行前准备',
   sub_task_deps_context_loaded: '装配依赖产出',
+  sub_task_spec_context_loaded: '装配任务上下文',
   sub_task_llm_call_start: '调用大模型',
   sub_task_llm_call_end: '大模型返回',
   sub_task_llm_call_failed: '调用大模型失败',

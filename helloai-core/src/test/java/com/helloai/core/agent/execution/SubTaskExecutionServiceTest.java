@@ -7,7 +7,10 @@ import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.system.entity.Attachment;
+import com.helloai.core.system.service.AttachmentService;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.spec.ExecutionRecord;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -63,6 +66,9 @@ class SubTaskExecutionServiceTest {
 
     @Mock
     private ConversationService conversationService;  // §6.41
+
+    @Mock
+    private AttachmentService attachmentService;  // 依赖产出双轨：物化附件内容
 
     @InjectMocks
     private SubTaskExecutionService subTaskExecutionService;
@@ -186,7 +192,7 @@ class SubTaskExecutionServiceTest {
     }
 
     @Nested
-    @DisplayName("executeOnce — 依赖产出上下文注入（V35）")
+    @DisplayName("executeOnce — 依赖产出双轨上下文注入（Task Running Spec）")
     class ExecuteOnceDependencyContext {
 
         @Test
@@ -201,12 +207,25 @@ class SubTaskExecutionServiceTest {
 
             subTaskExecutionService.executeOnce(subTask, agent);
 
+            // 无依赖：零注入，不查前置、不查附件
             verify(subTaskService, never()).listByIds(any());
+            verify(attachmentService, never()).list(any(Long.class));
+            ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            assertThat(taskCaptor.getValue().getUserPrompt())
+                    .doesNotContain("依赖产出参考");
+            // 装配事实仍可观测：depCount=0
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(taskTimelineService).recordEvent(eq(33L), eq(22L), eq("sub_task_spec_context_loaded"),
+                    eq(AgentRole.EXECUTOR), eq(44L), payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue())
+                    .containsEntry("depCount", 0)
+                    .containsEntry("degraded", false);
         }
 
         @Test
-        @DisplayName("should inject upstream outputs into userPrompt when deps exist")
-        void shouldInjectUpstreamOutputsIntoUserPromptWhenDepsExist() {
+        @DisplayName("should inject summary and full content for single dep")
+        void shouldInjectSummaryAndContentForSingleDep() {
             SubTask upstream = subTask();
             upstream.setId(11L);
             upstream.setTitle("调研竞品");
@@ -219,6 +238,9 @@ class SubTaskExecutionServiceTest {
             Agent agent = agent();
 
             when(subTaskService.listByIds(List.of(11L))).thenReturn(List.of(upstream));
+            when(taskRunningSpecService.findRecord(33L, 11L))
+                    .thenReturn(ExecutionRecord.builder()
+                            .subTaskId(11L).title("调研竞品").summary("完成竞品调研，产出清单").build());
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenReturn(AgentResult.builder().success(true).build());
 
@@ -228,16 +250,137 @@ class SubTaskExecutionServiceTest {
             verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
             String prompt = taskCaptor.getValue().getUserPrompt();
             assertThat(prompt)
-                    .contains("## 上游产出参考")
+                    .contains("## 依赖产出参考（直接前置）")
                     .contains("### 前置 1：调研竞品（状态：DONE）")
+                    .contains("**产出摘要**: 完成竞品调研，产出清单")
+                    .contains("**内容**:")
                     .contains("竞品清单：A/B/C");
-            // 声明了依赖 → 必须记录可观测事件
-            verify(taskTimelineService).recordEvent(eq(33L), eq(22L), eq("sub_task_deps_context_loaded"),
-                    eq(AgentRole.EXECUTOR), eq(44L), any(Map.class));
+            // 声明了依赖 → 记录装配统计
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(taskTimelineService).recordEvent(eq(33L), eq(22L), eq("sub_task_spec_context_loaded"),
+                    eq(AgentRole.EXECUTOR), eq(44L), payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue())
+                    .containsEntry("depCount", 1)
+                    .containsEntry("loadedCount", 1)
+                    .containsEntry("degraded", false);
         }
 
         @Test
-        @DisplayName("should render placeholder when upstream is DONE but has no output")
+        @DisplayName("should inject BOTH predecessors when subTask has multiple deps (no overwrite)")
+        void shouldInjectBothPredecessorsWhenMultipleDeps() {
+            SubTask upstreamA = subTask();
+            upstreamA.setId(11L);
+            upstreamA.setTitle("调研竞品");
+            upstreamA.setStatus(SubTaskStatus.DONE);
+            upstreamA.setContext(Map.of("lastExecution", Map.of("output", "竞品清单：A/B/C")));
+
+            SubTask upstreamB = subTask();
+            upstreamB.setId(12L);
+            upstreamB.setTitle("调研目标用户");
+            upstreamB.setStatus(SubTaskStatus.DONE);
+            upstreamB.setContext(Map.of("lastExecution", Map.of("output", "目标用户画像：白领/学生")));
+
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            subTask.setDependsOn(List.of(11L, 12L));
+            Agent agent = agent();
+
+            when(subTaskService.listByIds(List.of(11L, 12L))).thenReturn(List.of(upstreamA, upstreamB));
+            when(taskRunningSpecService.findRecord(33L, 11L))
+                    .thenReturn(ExecutionRecord.builder().subTaskId(11L).title("调研竞品")
+                            .summary("完成竞品调研，产出清单").build());
+            when(taskRunningSpecService.findRecord(33L, 12L))
+                    .thenReturn(ExecutionRecord.builder().subTaskId(12L).title("调研目标用户")
+                            .summary("完成用户调研，产出画像").build());
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+
+            subTaskExecutionService.executeOnce(subTask, agent);
+
+            ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            String prompt = taskCaptor.getValue().getUserPrompt();
+            // 多前置并存：两条前置的内容必须同时出现在 prompt 中（防"只留最后一个"回归）
+            assertThat(prompt)
+                    .contains("### 前置 1：调研竞品（状态：DONE）")
+                    .contains("### 前置 2：调研目标用户（状态：DONE）")
+                    .contains("竞品清单：A/B/C")
+                    .contains("目标用户画像：白领/学生");
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(taskTimelineService).recordEvent(eq(33L), eq(22L), eq("sub_task_spec_context_loaded"),
+                    eq(AgentRole.EXECUTOR), eq(44L), payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue())
+                    .containsEntry("depCount", 2)
+                    .containsEntry("loadedCount", 2);
+        }
+
+        @Test
+        @DisplayName("should prefer materialized attachment content over raw output")
+        void shouldPreferAttachmentContentOverRawOutput() {
+            Attachment attachment = new Attachment();
+            attachment.setId(99L);
+
+            SubTask upstream = subTask();
+            upstream.setId(11L);
+            upstream.setTitle("调研竞品");
+            upstream.setStatus(SubTaskStatus.DONE);
+            upstream.setContext(Map.of("lastExecution", Map.of("output", "旧版原始产出")));
+
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            subTask.setDependsOn(List.of(11L));
+            Agent agent = agent();
+
+            when(subTaskService.listByIds(List.of(11L))).thenReturn(List.of(upstream));
+            when(attachmentService.list(11L)).thenReturn(List.of(attachment));
+            when(attachmentService.isContentLoadable(attachment)).thenReturn(true);
+            when(attachmentService.loadContent(99L)).thenReturn("物化附件正文：竞品对比表".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+
+            subTaskExecutionService.executeOnce(subTask, agent);
+
+            ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            assertThat(taskCaptor.getValue().getUserPrompt())
+                    .contains("物化附件正文：竞品对比表")
+                    .doesNotContain("旧版原始产出");
+        }
+
+        @Test
+        @DisplayName("should fallback to raw output when attachment read fails")
+        void shouldFallbackToRawOutputWhenAttachmentReadFails() {
+            Attachment attachment = new Attachment();
+            attachment.setId(99L);
+
+            SubTask upstream = subTask();
+            upstream.setId(11L);
+            upstream.setTitle("调研竞品");
+            upstream.setStatus(SubTaskStatus.DONE);
+            upstream.setContext(Map.of("lastExecution", Map.of("output", "回退原始产出：竞品清单")));
+
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            subTask.setDependsOn(List.of(11L));
+            Agent agent = agent();
+
+            when(subTaskService.listByIds(List.of(11L))).thenReturn(List.of(upstream));
+            when(attachmentService.list(11L)).thenReturn(List.of(attachment));
+            when(attachmentService.isContentLoadable(attachment)).thenReturn(true);
+            when(attachmentService.loadContent(99L)).thenThrow(new RuntimeException("file missing"));
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+
+            subTaskExecutionService.executeOnce(subTask, agent);
+
+            ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            assertThat(taskCaptor.getValue().getUserPrompt())
+                    .contains("回退原始产出：竞品清单");
+        }
+
+        @Test
+        @DisplayName("should render placeholder when upstream is DONE but has no content")
         void shouldRenderPlaceholderWhenUpstreamHasNoOutput() {
             SubTask upstream = subTask();
             upstream.setId(11L);
@@ -262,7 +405,7 @@ class SubTaskExecutionServiceTest {
         }
 
         @Test
-        @DisplayName("should truncate oversized upstream output with explicit mark")
+        @DisplayName("should truncate oversized upstream content with explicit mark")
         void shouldTruncateOversizedUpstreamOutput() {
             String longOutput = "X".repeat(5000);
             SubTask upstream = subTask();
@@ -286,6 +429,11 @@ class SubTaskExecutionServiceTest {
             assertThat(taskCaptor.getValue().getUserPrompt())
                     .contains("已截断至 4000 字符")
                     .doesNotContain("X".repeat(4999));
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(taskTimelineService).recordEvent(eq(33L), eq(22L), eq("sub_task_spec_context_loaded"),
+                    eq(AgentRole.EXECUTOR), eq(44L), payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue())
+                    .containsEntry("truncatedCount", 1);
         }
 
         @Test
@@ -305,11 +453,11 @@ class SubTaskExecutionServiceTest {
             assertThat(result.isSuccess()).isTrue();
             ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
             verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
-            // 降级：不注入产出段，行为与旧版一致
-            assertThat(taskCaptor.getValue().getUserPrompt()).doesNotContain("## 上游产出参考");
+            // 降级：不注入依赖段，行为与旧版一致
+            assertThat(taskCaptor.getValue().getUserPrompt()).doesNotContain("依赖产出参考");
             // 但仍需可观测：degraded=true 进 timeline
             ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
-            verify(taskTimelineService).recordEvent(eq(33L), eq(22L), eq("sub_task_deps_context_loaded"),
+            verify(taskTimelineService).recordEvent(eq(33L), eq(22L), eq("sub_task_spec_context_loaded"),
                     eq(AgentRole.EXECUTOR), eq(44L), payloadCaptor.capture());
             assertThat(payloadCaptor.getValue())
                     .containsEntry("depCount", 1)

@@ -13,6 +13,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Phase A 实现：以 {@code task.context.runningSpec} JSONB 存储 Task Running Spec。
@@ -28,7 +29,19 @@ public class TaskRunningSpecJsonbService implements TaskRunningSpecService {
 
     private static final String RUNNING_SPEC_KEY = "runningSpec";
 
+    /**
+     * taskId 粒度分段锁：JSONB 存储的 append/initialize 是"读-改-写"非原子操作，
+     * 同一任务下多个子任务（尤其多前置并行）完成时并发回填可能互相覆盖丢记录。
+     * 锁住整段保证单实例下串行；多实例部署需切 Phase B（独立表行级天然安全）或升级 Redis 锁。
+     */
+    private final ConcurrentHashMap<Long, Object> taskLocks = new ConcurrentHashMap<>();
+
     private final TaskService taskService;
+
+    /** 获取 taskId 粒度锁对象（分段锁，无锁清理——任务数有限，锁对象可复用）。 */
+    private Object lockFor(Long taskId) {
+        return taskLocks.computeIfAbsent(taskId, k -> new Object());
+    }
 
     @Override
     public TaskRunningSpec getOrCreate(Long taskId) {
@@ -42,57 +55,76 @@ public class TaskRunningSpecJsonbService implements TaskRunningSpecService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void initialize(Long taskId, TaskBaseline baseline) {
-        Task task = requireTask(taskId);
-        TaskRunningSpec current = readFromTask(task);
-        if (current.baseline() != null) {
-            log.debug("TaskRunningSpec baseline 已存在，跳过初始化: taskId={}", taskId);
-            return;
+        synchronized (lockFor(taskId)) {
+            Task task = requireTask(taskId);
+            TaskRunningSpec current = readFromTask(task);
+            if (current.baseline() != null) {
+                log.debug("TaskRunningSpec baseline 已存在，跳过初始化: taskId={}", taskId);
+                return;
+            }
+            TaskRunningSpec updated = current.toBuilder()
+                    .baseline(baseline)
+                    .build();
+            writeToTask(task, updated);
+            taskService.updateById(task);
+            log.info("TaskRunningSpec baseline 初始化完成: taskId={}", taskId);
         }
-        TaskRunningSpec updated = current.toBuilder()
-                .baseline(baseline)
-                .build();
-        writeToTask(task, updated);
-        taskService.updateById(task);
-        log.info("TaskRunningSpec baseline 初始化完成: taskId={}", taskId);
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void appendExecutionRecord(Long taskId, ExecutionRecord record) {
-        Task task = requireTask(taskId);
-        TaskRunningSpec current = readFromTask(task);
+        synchronized (lockFor(taskId)) {
+            Task task = requireTask(taskId);
+            TaskRunningSpec current = readFromTask(task);
 
-        // 按 subTaskId 去重：rework 时覆盖旧记录，避免同一子任务堆积多条记录
-        List<ExecutionRecord> deduped = new ArrayList<>();
-        boolean replaced = false;
-        for (ExecutionRecord existing : current.executionRecords()) {
-            if (existing.subTaskId().equals(record.subTaskId())) {
+            // 按 subTaskId 去重：rework 时覆盖旧记录，避免同一子任务堆积多条记录；
+            // 不同 subTaskId（多前置）互不覆盖，全部保留
+            List<ExecutionRecord> deduped = new ArrayList<>();
+            boolean replaced = false;
+            for (ExecutionRecord existing : current.executionRecords()) {
+                if (existing.subTaskId().equals(record.subTaskId())) {
+                    deduped.add(record);
+                    replaced = true;
+                    log.debug("ExecutionRecord 已覆盖（rework）: taskId={}, subTaskId={}", taskId, record.subTaskId());
+                } else {
+                    deduped.add(existing);
+                }
+            }
+            if (!replaced) {
                 deduped.add(record);
-                replaced = true;
-                log.debug("ExecutionRecord 已覆盖（rework）: taskId={}, subTaskId={}", taskId, record.subTaskId());
-            } else {
-                deduped.add(existing);
+            }
+
+            // 基于去重后的全量记录重新编译 ContextSummary
+            String newSummary = compileSummaryFromRecords(deduped);
+
+            TaskRunningSpec.Builder builder = TaskRunningSpec.builder()
+                    .version(current.version())
+                    .baseline(current.baseline());
+            for (ExecutionRecord rec : deduped) {
+                builder.addExecutionRecord(rec);
+            }
+            TaskRunningSpec updated = builder.contextSummary(newSummary).build();
+
+            writeToTask(task, updated);
+            taskService.updateById(task);
+            log.info("ExecutionRecord 已写入: taskId={}, subTaskId={}, totalRecords={}, deduped={}",
+                    taskId, record.subTaskId(), updated.executionRecords().size(), replaced);
+        }
+    }
+
+    @Override
+    public ExecutionRecord findRecord(Long taskId, Long subTaskId) {
+        if (taskId == null || subTaskId == null) {
+            return null;
+        }
+        TaskRunningSpec spec = getOrCreate(taskId);
+        for (ExecutionRecord rec : spec.executionRecords()) {
+            if (subTaskId.equals(rec.subTaskId())) {
+                return rec;
             }
         }
-        if (!replaced) {
-            deduped.add(record);
-        }
-
-        // 基于去重后的全量记录重新编译 ContextSummary
-        String newSummary = compileSummaryFromRecords(deduped);
-
-        TaskRunningSpec.Builder builder = TaskRunningSpec.builder()
-                .version(current.version())
-                .baseline(current.baseline());
-        for (ExecutionRecord rec : deduped) {
-            builder.addExecutionRecord(rec);
-        }
-        TaskRunningSpec updated = builder.contextSummary(newSummary).build();
-
-        writeToTask(task, updated);
-        taskService.updateById(task);
-        log.info("ExecutionRecord 已写入: taskId={}, subTaskId={}, totalRecords={}, deduped={}",
-                taskId, record.subTaskId(), updated.executionRecords().size(), replaced);
+        return null;
     }
 
     @Override
@@ -115,34 +147,11 @@ public class TaskRunningSpecJsonbService implements TaskRunningSpecService {
             }
         }
 
-        // Context Summary
+        // Context Summary（全局进度；子任务明细由调用方按依赖注入，不在此全量铺开）
         String cs = spec.contextSummary();
         if (cs != null && !cs.isBlank()) {
             sb.append("\n### 全局进度与关键事实\n");
             sb.append(cs).append('\n');
-        }
-
-        // 已完成的执行记录
-        if (!spec.executionRecords().isEmpty()) {
-            sb.append("\n### 前置任务摘要\n");
-            int idx = 1;
-            for (ExecutionRecord rec : spec.executionRecords()) {
-                String title = rec.title() != null ? rec.title() : ("子任务#" + rec.subTaskId());
-                sb.append("#### ").append(idx++).append(". ").append(title).append('\n');
-                if (rec.summary() != null) {
-                    sb.append("**产出**: ").append(rec.summary()).append('\n');
-                }
-                if (!rec.downstreamNotes().isEmpty()) {
-                    sb.append("**下游须知**:\n");
-                    for (String note : rec.downstreamNotes()) {
-                        sb.append("- ").append(note).append('\n');
-                    }
-                }
-                if (!rec.deliverables().isEmpty()) {
-                    sb.append("**产出文件**: ");
-                    sb.append(String.join(", ", rec.deliverables())).append('\n');
-                }
-            }
         }
         return sb.toString();
     }
