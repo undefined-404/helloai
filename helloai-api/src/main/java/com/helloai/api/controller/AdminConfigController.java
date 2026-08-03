@@ -31,7 +31,7 @@ public class AdminConfigController {
      * 获取单个配置
      */
     @GetMapping("/{key}")
-    public R<Map<String, String>> getByKey(@PathVariable String key) {
+    public R<Map<String, String>> getByKey(@PathVariable("key") String key) {
         String value = sysConfigService.getValue(key);
         return R.ok(Map.of(key, value != null ? value : ""));
     }
@@ -40,7 +40,7 @@ public class AdminConfigController {
      * 更新单个配置
      */
     @PutMapping("/{key}")
-    public R<Void> update(@PathVariable String key, @RequestBody Map<String, String> body) {
+    public R<Void> update(@PathVariable("key") String key, @RequestBody Map<String, String> body) {
         sysConfigService.setValue(key, body.get("value"));
         return R.ok();
     }

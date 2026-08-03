@@ -22,7 +22,7 @@ public class ModuleController {
     private final ModuleService moduleService;
 
     @GetMapping
-    public R<List<ModuleResponse>> list(@PathVariable Long taskId) {
+    public R<List<ModuleResponse>> list(@PathVariable("taskId") Long taskId) {
         List<Module> modules = moduleService.list(
                 new LambdaQueryWrapper<Module>()
                         .eq(Module::getTaskId, taskId)
@@ -32,7 +32,7 @@ public class ModuleController {
     }
 
     @PostMapping
-    public R<ModuleResponse> create(@PathVariable Long taskId,
+    public R<ModuleResponse> create(@PathVariable("taskId") Long taskId,
                                     @Valid @RequestBody CreateModuleRequest req) {
         // 检查任务存在
         if (moduleService.getTaskById(taskId) == null) {

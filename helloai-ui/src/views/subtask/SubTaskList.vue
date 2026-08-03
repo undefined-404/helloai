@@ -22,7 +22,7 @@
       <el-alert v-if="taskId" type="info" :closable="false" class="parent-task-bar">
         <template #title>
           <span class="parent-task-title">
-            当前主任务：<el-link type="primary" @click="goParentTaskById(taskId)">{{ parentTask?.title || taskId }}</el-link>
+            当前主任务：<span class="link-cell" :title="parentTask?.title || ('跳转到主任务 ' + taskId)" @click="goParentTaskById(taskId)">{{ parentTask?.title || taskId }}</span>
             <el-tag v-if="parentTask" :type="parentTask.status === 'DONE' ? 'success' : 'warning'" size="small" style="margin-left:8px">
               {{ parentTask.status }}
             </el-tag>
