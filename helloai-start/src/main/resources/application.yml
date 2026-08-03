@@ -116,6 +116,12 @@ helloai:
     poller-interval-ms: 1000
     poller-orphan-threshold-seconds: 60
     poller-batch-size: 20
+    # V41：PENDING 无 execution_record 孤儿巡检阈值 30min → 5min。
+    # 覆盖"依赖解锁瞬间无空闲候选导致自动分发失败"的窗口（此前 30min 无人兜底）；
+    # 循环内 isReady 守卫保证依赖未就绪的合法 PENDING 不被误伤。
+    pending-orphan-threshold-minutes: 5
+    pending-orphan-scan-interval-ms: 60000
+    pending-orphan-batch-size: 50
     # T5 起重塑语义：consumer-mode 仅描述"主消费路径由谁承担"，Poller 自身已统一降级为孤儿兜底；
     # 三种模式都对应 Poller 仅扫孤儿 PENDING（listOrphanPending），不再调用 listAllPending。
     # 主消费路径：

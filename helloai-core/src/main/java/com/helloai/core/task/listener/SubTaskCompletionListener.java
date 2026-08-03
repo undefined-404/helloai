@@ -82,8 +82,19 @@ public class SubTaskCompletionListener {
                 // ready 守卫会自动过滤依赖仍未全部 DONE 的节点，无需在此重复判定
                 subTaskDispatchService.dispatchPendingSubTaskAuto(downstream.getId(), AgentRole.EXECUTOR);
             } catch (Exception e) {
+                // V41：失败原因写 timeline，让"无可用候选/状态冲突"可见（此前仅 warn 日志，
+                // 子任务无声卡在 PENDING，用户只能靠手动排查）；孤儿巡检（5 分钟阈值）负责重试
                 log.warn("下游节点分发失败（保持 PENDING 等兜底）: subTaskId={}, err={}",
                         downstream.getId(), e.getMessage());
+                try {
+                    taskTimelineService.recordEvent(taskId, downstream.getId(), "sub_task_dispatch_deferred",
+                            AgentRole.SYSTEM, null,
+                            Map.of("reason", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName(),
+                                    "waitFor", "pending_orphan_scan"));
+                } catch (Exception timelineEx) {
+                    log.debug("记录 sub_task_dispatch_deferred 事件失败: subTaskId={}, err={}",
+                            downstream.getId(), timelineEx.getMessage());
+                }
             }
         }
     }

@@ -31,11 +31,13 @@ import java.util.concurrent.TimeUnit;
  *
  * <h3>职责</h3>
  * <ul>
- *     <li>每 60s 扫一次：{@code status='PENDING' AND create_time &lt; now - 30min
- *         AND NOT EXISTS agent_execution_record}</li>
+ *     <li>每 60s 扫一次：{@code status='PENDING' AND create_time &lt; now - 5min
+ *         AND NOT EXISTS agent_execution_record}（V41 阈值 30min → 5min）</li>
  *     <li>逐条重新触发 {@link SubTaskDispatchService#dispatchPendingSubTaskAuto}：
  *         PENDING 状态的子任务自动按角色选人并进入弹性调度链</li>
  *     <li>Redis 锁保证多实例串行，单批上限 50 条防阻塞</li>
+ *     <li>覆盖两种"无人接管"场景：① 主路径事件丢失（原始设计目标）；
+ *         ② 依赖解锁瞬间无空闲候选导致分发失败（V41 收窄阈值后 5 分钟内自动重试）</li>
  * </ul>
  *
  * <h3>与现有任务边界</h3>
@@ -59,7 +61,7 @@ import java.util.concurrent.TimeUnit;
  * <ul>
  *     <li>{@code helloai.execution.pending-orphan-enabled}（默认 true）</li>
  *     <li>{@code helloai.execution.pending-orphan-scan-interval-ms}（默认 60000）</li>
- *     <li>{@code helloai.execution.pending-orphan-threshold-minutes}（默认 30）</li>
+ *     <li>{@code helloai.execution.pending-orphan-threshold-minutes}（默认 5，V41 起）</li>
  *     <li>{@code helloai.execution.pending-orphan-batch-size}（默认 50）</li>
  * </ul>
  *

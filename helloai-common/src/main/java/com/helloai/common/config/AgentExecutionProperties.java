@@ -101,13 +101,15 @@ public class AgentExecutionProperties {
      *
      * <p>子任务 status=PENDING 且 create_time 距今超过本阈值、且尚未创建
      * {@code agent_execution_record} 记录的，视为“dispatch-mode=EVENT 主路径丢失”
-     * 的孤儿，由 {@code SubTaskPendingOrphanTask} 周期重派。默认值 30 分钟。</p>
+     * 的孤儿，由 {@code SubTaskPendingOrphanTask} 周期重派。</p>
      *
-     * <p>为什么 30 分钟比 ExecutionCompensationTask 的 5 分钟更大？因为
-     * ExecutionCommandPoller 实际上可以租 60 秒间隔扫描已建 record 的孤儿 PENDING；
-     * PENDING 但无 record 的孤儿是真正的“主路径丢失”，需要更宽阈值容许重试。</p>
+     * <p>V41（2026-08-03）默认 30 → 5：依赖解锁瞬间“无空闲候选”导致自动分发失败
+     * （pickPreferred 返回 null）的子任务同样呈现“PENDING 且无 execution_record”，
+     * 此前要等 30 分钟才被巡检重派，形成无人兜底窗口（实测依赖 DONE 后 3 分钟用户
+     * 就手动指派了）。扫描命中后循环内还有 {@code isReady} 依赖守卫——未就绪的合法
+     * PENDING 会跳过不误伤，因此收窄阈值安全，仅缩短“分发失败”的恢复时间。</p>
      */
-    private int pendingOrphanThresholdMinutes = 30;
+    private int pendingOrphanThresholdMinutes = 5;
 
     /**
      * v2.6 §4.1 新增（2026-07-20）：PENDING 孤儿巡检周期（毫秒）。默认 60000ms=1 分钟。
