@@ -1,18 +1,18 @@
 # ============================================================
-# HelloAI - 服务器部署版 Docker Compose（中间件 + 应用一体）
-# 部署位置: /home/admin/helloai/docker-compose.yml
-# 前置条件: 同目录下存在 helloai-start-1.0.0-SNAPSHOT.jar
-# 使用: docker compose up -d
+# HelloAI - Server Deployment Docker Compose (middleware + app)
+# Deploy path: /home/admin/helloai/docker-compose.yml
+# Prerequisite: helloai-start-1.0.0-SNAPSHOT.jar in same directory
+# Usage: docker compose up -d
 # ------------------------------------------------------------
-# 与本地开发版差异:
-#   1. 新增 app 服务，用 eclipse-temurin:17-jre 直接运行 jar
-#   2. app 通过 compose 内部网络以服务名连中间件（postgres/redis/rabbitmq），
-#      用 SPRING_* 环境变量覆盖 jar 内的 localhost 配置，jar 无需重新打包
-#   3. 中间件端口映射仅绑定 127.0.0.1，公网无法直连（防火墙外的第二道保险），
-#      服务器本机排查问题时仍可用 localhost:15432 等地址访问
-#   4. 新增 web 服务（nginx）：托管前端 dist + 反代 /api、/mcp 到 app，
-#      对外只暴露 80 端口；6565 仅绑定 127.0.0.1 供本机排查
-# 前置文件（与本文件同目录）:
+# Differences from local dev version:
+#   1. Added app service running jar directly with eclipse-temurin:17-jre
+#   2. App connects to middleware via compose internal network (service names),
+#      overridden by SPRING_* env vars, no jar repackaging needed
+#   3. Middleware ports bound to all interfaces (incl. public IP) for remote IDE debugging;
+#      MUST whitelist 15432/26379/25672/25673 in Alibaba Cloud security group to your IP
+#   4. Added web service (nginx): serves frontend dist + proxies /api, /mcp to app,
+#      only port 80 exposed publicly; 6565 bound to 127.0.0.1 for local troubleshooting
+# Prerequisite files (same directory as this file):
 #   helloai-start-1.0.0-SNAPSHOT.jar / dist/ / nginx.conf
 # ============================================================
 
@@ -24,7 +24,7 @@ services:
     container_name: helloai-postgres
     restart: unless-stopped
     ports:
-      - "127.0.0.1:15432:5432"
+      - "15432:5432"
     environment:
       POSTGRES_DB: helloai
       POSTGRES_USER: postgres
@@ -44,7 +44,7 @@ services:
     container_name: helloai-redis
     restart: unless-stopped
     ports:
-      - "127.0.0.1:26379:6379"
+      - "26379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -53,14 +53,14 @@ services:
       timeout: 3s
       retries: 5
 
-  # --- RabbitMQ 3.12.14 (含管理插件) ---
+  # --- RabbitMQ 3.12.14 (with management plugin) ---
   rabbitmq:
     image: rabbitmq:3.12.14-management-alpine
     container_name: helloai-rabbitmq
     restart: unless-stopped
     ports:
-      - "127.0.0.1:25672:5672"    # AMQP
-      - "127.0.0.1:25673:15672"   # 管理后台
+      - "25672:5672"    # AMQP
+      - "25673:15672"   # Management UI
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
@@ -73,7 +73,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # --- MinIO 对象存储 ---
+  # --- MinIO Object Storage ---
   minio:
     image: minio/minio:latest
     container_name: helloai-minio
@@ -94,22 +94,25 @@ services:
       timeout: 5s
       retries: 3
 
-  # --- HelloAI 应用（jar 直跑，无需构建镜像） ---
+  # --- HelloAI Application (jar, no image build needed) ---
   app:
     image: eclipse-temurin:17-jre
     container_name: helloai-app
     restart: unless-stopped
     working_dir: /app
-    # 更新 jar：替换同目录 jar 文件后执行 docker compose restart app
+    # To update jar: replace jar file then run docker compose restart app
     volumes:
       - ./helloai-start-1.0.0-SNAPSHOT.jar:/app/helloai-start.jar:ro
+      - ./logs:/app/logs              # persistent logs on host
     command: java -Xms512m -Xmx2g -jar helloai-start.jar
     ports:
-      - "127.0.0.1:6565:6565"   # 仅本机可访问，外部流量统一走 web(nginx):80
+      - "127.0.0.1:6565:6565"   # localhost only; public traffic goes through web(nginx):80
     environment:
       TZ: Asia/Shanghai
-      # 用环境变量覆盖 jar 内 application.yml 的 localhost 配置，
-      # 走 compose 内部网络（服务名:容器内端口），无需重新打包
+      # Activate dev profile, using Docker internal network config from application-dev.yml
+      SPRING_PROFILES_ACTIVE: dev
+      # SPRING_* env vars below override application-dev.yml fields,
+      # ensuring compose internal network (service-name:container-port) without repackaging
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/helloai?currentSchema=public&reWriteBatchedInserts=true
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: "6379"
@@ -123,13 +126,13 @@ services:
       rabbitmq:
         condition: service_healthy
 
-  # --- Nginx：前端静态托管 + API 反向代理（唯一公网入口） ---
+  # --- Nginx: frontend static hosting + API reverse proxy (only public entry) ---
   web:
     image: nginx:1.27-alpine
     container_name: helloai-web
     restart: unless-stopped
     ports:
-      - "5173:80"   # 对外唯一入口，与本地开发端口一致（需在轻量服务器防火墙放行 TCP 5173）
+      - "5173:80"   # Only public entry (open TCP 5173 in lightweight server firewall)
     volumes:
       - ./dist:/usr/share/nginx/html:ro
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro

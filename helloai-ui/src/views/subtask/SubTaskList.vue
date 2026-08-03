@@ -22,7 +22,7 @@
       <el-alert v-if="taskId" type="info" :closable="false" class="parent-task-bar">
         <template #title>
           <span class="parent-task-title">
-            当前主任务：{{ parentTask?.title || taskId }}
+            当前主任务：<el-link type="primary" @click="goParentTaskById(taskId)">{{ parentTask?.title || taskId }}</el-link>
             <el-tag v-if="parentTask" :type="parentTask.status === 'DONE' ? 'success' : 'warning'" size="small" style="margin-left:8px">
               {{ parentTask.status }}
             </el-tag>
@@ -268,7 +268,12 @@ function loadPage(page: number) { load(page) }
 
 function clearTaskFilter() { router.replace('/sub-tasks') }
 
-// 所属任务点击 → 跳转任务管理页并筛选该主任务
+// 顶部信息条主任务名称点击 → 跳转任务管理页并筛选该主任务
+function goParentTaskById(id: string) {
+  router.push('/tasks?taskId=' + id)
+}
+
+// 所属任务列点击 → 跳转任务管理页并筛选该主任务
 function goParentTask(row: SubTask) {
   if (row.taskId) router.push('/tasks?taskId=' + row.taskId)
 }

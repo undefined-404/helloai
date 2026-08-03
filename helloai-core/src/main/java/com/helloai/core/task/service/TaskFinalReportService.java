@@ -129,7 +129,7 @@ public class TaskFinalReportService {
                             "sectionOutputLimit", limit));
             try {
                 AgentTask agentTask = AgentTask.builder()
-                        .systemPrompt("")
+                        .systemPrompt("注意：若你生成的报告字数少于子任务总字数的50%，系统将判定为不合格并触发重写。禁止概括，必须逐字迁移每个子任务的全部技术细节。")
                         .userPrompt(prompt)
                         .context(Map.of("taskId", taskId, "scene", "task_final_report"))
                         .requiredCapabilities(Map.of())
@@ -163,8 +163,8 @@ public class TaskFinalReportService {
                 return taskService.getById(taskId);
             } catch (Exception e) {
                 String errMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
-                if (!lastTier && isTokenLimitError(errMsg)) {
-                    log.warn("整合 prompt 超出模型上下文，降档重试: taskId={}, sectionOutputLimit={} -> {}, err={}",
+                if (!lastTier && isRetryableError(e, errMsg)) {
+                    log.warn("整合 prompt 超出模型上下文或调用超时，降档重试: taskId={}, sectionOutputLimit={} -> {}, err={}",
                             taskId, limit, SECTION_OUTPUT_LIMITS[i + 1], errMsg);
                     continue;
                 }
@@ -194,6 +194,34 @@ public class TaskFinalReportService {
                 || lower.contains("maximum context")
                 || lower.contains("too many tokens")
                 || lower.contains("input is too long");
+    }
+
+    /**
+     * 判断是否可降档重试的错误：token 限制 或 读超时（大 prompt 导致 LLM 生成太慢）。
+     * 同时扫描异常消息和 cause 链中的 SocketTimeoutException。
+     */
+    private static boolean isRetryableError(Throwable e, String message) {
+        if (isTokenLimitError(message)) {
+            return true;
+        }
+        return hasCauseAssignableTo(e, java.net.SocketTimeoutException.class);
+    }
+
+    private static boolean hasCauseAssignableTo(Throwable e, Class<? extends Throwable> target) {
+        if (e == null) {
+            return false;
+        }
+        Throwable current = e;
+        while (current != null) {
+            if (target.isAssignableFrom(current.getClass())) {
+                return true;
+            }
+            if (current.getCause() == current) {
+                break;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     /** 收集有产出的 DONE 子任务，拓扑序排列（与交付物 zip 的收录顺序一致）。 */
@@ -227,12 +255,20 @@ public class TaskFinalReportService {
         } catch (Exception e) {
             throw new BizException("读取整合报告 Prompt 模板失败: " + e.getMessage());
         }
+        String sectionsText = buildSections(sections, sectionOutputLimit);
+        long totalOutputLength = sections.stream()
+                .mapToLong(st -> {
+                    String out = extractExecutionOutput(st);
+                    return out != null ? out.length() : 0;
+                })
+                .sum();
         return template
                 .replace("{{TASK_TITLE}}", task.getTitle() != null ? task.getTitle() : "")
                 .replace("{{TASK_DESCRIPTION}}",
                         task.getDescription() != null && !task.getDescription().isBlank()
                                 ? task.getDescription() : "（无补充描述）")
-                .replace("{{SUB_TASK_SECTIONS}}", buildSections(sections, sectionOutputLimit));
+                .replace("{{TOTAL_OUTPUT_LENGTH}}", String.valueOf(totalOutputLength))
+                .replace("{{SUB_TASK_SECTIONS}}", sectionsText);
     }
 
     /** 拼接各子任务四要素 + 产出正文（逐段截断保护上下文窗口，截断上限由降档阶梯传入）。 */

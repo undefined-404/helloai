@@ -1,0 +1,16 @@
+# ============================================================
+# HelloAI - local 环境配置
+# 使用本地 Docker 开发环境（docker-compose.yml）
+# 激活方式：spring.profiles.active=local（默认）
+# ============================================================
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:15432/helloai?currentSchema=public&reWriteBatchedInserts=true
+  data:
+    redis:
+      host: localhost
+      port: 26379
+  rabbitmq:
+    host: localhost
+    port: 25672

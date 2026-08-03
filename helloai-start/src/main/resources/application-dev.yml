@@ -1,0 +1,26 @@
+# ============================================================
+# HelloAI - dev 环境配置（阿里云服务器）
+# 前置条件：服务器 docker-compose.server.yml 中中间件端口已去掉 127.0.0.1 绑定限制，
+#          且阿里云安全组已将 15432/26379/25672 入方向白名单限制为本机 IP
+# 激活方式：spring.profiles.active=dev
+# ============================================================
+
+spring:
+  datasource:
+    url: jdbc:postgresql://39.106.204.43:15432/helloai?currentSchema=public&reWriteBatchedInserts=true
+  data:
+    redis:
+        host: 39.106.204.43
+    port: 26379
+  rabbitmq:
+    host: 39.106.204.43
+    port: 25672
+
+# 整合报告生成耗时长（大 prompt + 长输出），切到 deepseek-v4-pro（输出上限 384K tokens）
+helloai:
+  execution:
+    sync-timeout-seconds: 600
+  providers:
+    deepseek:
+      default-model: deepseek-v4-pro
+      read-timeout-ms: 600000

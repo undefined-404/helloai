@@ -4,6 +4,9 @@ server:
 spring:
   application:
     name: helloai
+  # === 默认激活 local 环境（本地 Docker），切换到 dev 使用 spring.profiles.active=dev ===
+  profiles:
+    active: dev
   # === MCP Server（v2.4 §3.1 / §9 spring-ai 路线 C） ===
   # spring-ai 1.0 GA 默认 sse-endpoint=/sse（短路径），与 v2.4 文档约定的 /mcp/sse 路径不一致
   # 显式覆盖到 v2.4 路径，确保 Qoder/Trae 按文档配置可直连
