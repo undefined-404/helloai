@@ -21,9 +21,11 @@
             <span class="link-cell" @click="openDesc(row)">{{ stripMarkdown(row.description) || '-' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="100">
+        <el-table-column label="状态" width="110">
           <template #default="{ row }">
-            <el-tag :type="TASK_STATUS_MAP[row.status as TaskStatus]?.type || 'info'" size="small">
+            <!-- V41: 报告生成中覆盖主状态显示（任务本体仍是 DONE） -->
+            <el-tag v-if="row.finalReportStatus === 'GENERATING'" type="primary" size="small">报告生成中</el-tag>
+            <el-tag v-else :type="TASK_STATUS_MAP[row.status as TaskStatus]?.type || 'info'" size="small">
               {{ TASK_STATUS_MAP[row.status as TaskStatus]?.label || row.status }}
             </el-tag>
           </template>
@@ -52,8 +54,10 @@
               size="small"
               type="primary"
               plain
+              :loading="row.finalReportStatus === 'GENERATING'"
+              :disabled="row.finalReportStatus === 'GENERATING'"
               @click="openReport(row)"
-            >报告</el-button>
+            >{{ row.finalReportStatus === 'GENERATING' ? '生成中' : '报告' }}</el-button>
             <el-button
               size="small"
               type="warning"

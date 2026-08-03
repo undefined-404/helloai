@@ -33,6 +33,9 @@ export type ReviewResult = 'APPROVED' | 'REJECTED'
 // PLANNING: V26 拆解草案已生成待审阅（confirm→IN_PROGRESS / reject→回 PENDING）
 export type TaskStatus = 'PENDING' | 'PLANNING' | 'IN_PROGRESS' | 'DONE' | 'CANCELLED'
 
+// V41: 任务最终整合报告生成状态（与 TaskStatus 解耦，报告生成是增值物）
+export type FinalReportStatus = 'NONE' | 'GENERATING' | 'DONE' | 'FAILED'
+
 export type AttachmentStatus = 'ACTIVE' | 'INACTIVE' | 'DELETED'
 
 // --- 实体 ---
@@ -48,6 +51,8 @@ export interface Task {
   status: TaskStatus
   createTime: string
   updateTime: string
+  // V41: 报告生成状态（生成中时列表状态列显示"报告生成中"，报告按钮禁用）
+  finalReportStatus?: FinalReportStatus
 }
 
 // 任务删除前风险提示 + 删除结果回显共用（对应后端 TaskRelatedCounts）
@@ -65,7 +70,7 @@ export interface TaskRelatedCounts {
   timelineCount: number
 }
 
-// V32 任务最终整合报告（对应后端 TaskFinalReportResponse）
+// V32 任务最终整合报告（对应后端 TaskFinalReportResponse；V41 增加生成状态）
 export interface TaskFinalReport {
   taskId: LongId
   // 报告正文 Markdown；null 表示尚未生成
@@ -73,6 +78,8 @@ export interface TaskFinalReport {
   agentId: LongId | null
   agentName: string | null
   generatedAt: string | null
+  // V41: 报告生成状态 NONE/GENERATING/DONE/FAILED
+  status?: FinalReportStatus
 }
 
 export interface SubTask {

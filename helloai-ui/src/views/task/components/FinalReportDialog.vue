@@ -22,9 +22,7 @@
       <!-- 无报告空态：任务收口会自动生成，也可在此手动补生成 -->
       <el-empty
         v-else-if="!loadingReport"
-        :description="task?.status === 'DONE'
-          ? '尚未生成整合报告，点击下方按钮由 Planner 整合全部子任务产出'
-          : '任务完成（DONE）后才能生成整合报告'"
+        :description="emptyDesc"
       />
     </div>
     <!-- footer 不设关闭按钮（右上角 X 已承担关闭），保持四个动作按钮 -->
@@ -40,15 +38,15 @@
       <el-button
         type="primary"
         :loading="generating"
-        :disabled="task?.status !== 'DONE'"
+        :disabled="task?.status !== 'DONE' || reportGenerating"
         @click="handleGenerate"
-      >{{ report?.content ? '重新生成' : '生成报告' }}</el-button>
+      >{{ reportGenerating ? '生成中…' : (report?.content ? '重新生成' : '生成报告') }}</el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { taskApi } from '@/api/task'
 import { fmtTime } from '@/utils/tableConfig'
@@ -61,23 +59,59 @@ const emit = defineEmits<{ 'update:modelValue': [v: boolean] }>()
 
 const visible = ref(props.modelValue)
 watch(() => props.modelValue, v => { visible.value = v })
-watch(visible, v => emit('update:modelValue', v))
+watch(visible, v => {
+  emit('update:modelValue', v)
+  if (!v) stopPolling()
+})
 
 const loadingReport = ref(false)
 const generating = ref(false)
 const report = ref<TaskFinalReport | null>(null)
 
+// V41: 生成中 = 本地请求在途 或 后端状态为 GENERATING（自动路径/其他窗口触发）
+const reportGenerating = computed(() => generating.value || report.value?.status === 'GENERATING')
+
+// 空态文案：按后端生成状态区分（GENERATING/FAILED/NONE）
+const emptyDesc = computed(() => {
+  if (props.task?.status !== 'DONE') return '任务完成（DONE）后才能生成整合报告'
+  if (report.value?.status === 'GENERATING') return '报告正在生成中，由 Planner 整合全部子任务产出，请稍候…'
+  if (report.value?.status === 'FAILED') return '上次生成失败，点击下方按钮重新生成'
+  return '尚未生成整合报告，点击下方按钮由 Planner 整合全部子任务产出'
+})
+
+// 生成中轮询：弹窗打开且状态为 GENERATING 时每 5s 拉取一次，直到非生成中
+let pollTimer: ReturnType<typeof setInterval> | null = null
+function startPolling() {
+  stopPolling()
+  pollTimer = setInterval(async () => {
+    if (!props.task) return
+    try {
+      const r = await taskApi.getFinalReport(String(props.task.id))
+      report.value = r
+      if (r.status !== 'GENERATING') stopPolling()
+    } catch { /* 网络异常不中断轮询 */ }
+  }, 5000)
+}
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+}
+onBeforeUnmount(stopPolling)
+
 async function loadReport() {
   if (!props.task) return
   loadingReport.value = true
   report.value = null
-  try { report.value = await taskApi.getFinalReport(String(props.task.id)) }
-  catch { /* 拦截器已弹错 */ }
+  try {
+    const r = await taskApi.getFinalReport(String(props.task.id))
+    report.value = r
+    if (r.status === 'GENERATING') startPolling()
+    else stopPolling()
+  } catch { /* 拦截器已弹错 */ }
   finally { loadingReport.value = false }
 }
 
 async function handleGenerate() {
-  if (!props.task) return
+  if (!props.task || reportGenerating.value) return
   if (report.value?.content) {
     try {
       await ElMessageBox.confirm(
@@ -88,11 +122,17 @@ async function handleGenerate() {
     } catch { return }
   }
   generating.value = true
+  // 同步列表行状态：按钮转"生成中"禁用态（即使关闭弹窗重开也能看到）
+  if (props.task) props.task.finalReportStatus = 'GENERATING'
   try {
     report.value = await taskApi.generateFinalReport(String(props.task.id))
+    if (props.task) props.task.finalReportStatus = 'DONE'
     ElMessage.success('整合报告生成完成')
-  } catch { /* 拦截器已弹错（非 DONE / 无产出 / LLM 失败由后端 BizException 统一提示） */ }
-  finally { generating.value = false }
+  } catch {
+    // 拦截器已弹错（非 DONE / 无产出 / LLM 失败由后端 BizException 统一提示）；
+    // 后端失败会置 FAILED，重拉刷新状态与文案
+    await loadReport()
+  } finally { generating.value = false }
 }
 
 // ── 交付物 zip 下载（实时聚合；报告已生成时包内含 01-最终整合报告.md）──
