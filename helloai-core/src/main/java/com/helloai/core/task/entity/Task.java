@@ -3,6 +3,7 @@ package com.helloai.core.task.entity;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.helloai.common.base.BaseEntity;
+import com.helloai.common.constant.FinalReportStatus;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.shared.handler.PgJsonbTypeHandler;
 import lombok.Data;
@@ -28,6 +29,9 @@ public class Task extends BaseEntity {
 
     /** 报告生成时间（V32）。 */
     private OffsetDateTime finalReportTime;
+
+    /** 报告生成状态（V41，NONE/GENERATING/DONE/FAILED，与任务主状态解耦）。 */
+    private FinalReportStatus finalReportStatus;
 
     /**
      * 任务扩展上下文（V35 新增 JSONB）。

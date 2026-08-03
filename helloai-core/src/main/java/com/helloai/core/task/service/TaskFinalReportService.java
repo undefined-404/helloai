@@ -1,8 +1,10 @@
 package com.helloai.core.task.service;
 
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.FinalReportStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.agent.entity.Agent;
@@ -46,6 +48,10 @@ import java.util.Map;
  *       / 报告不满意重新生成，直接覆盖旧报告）。</li>
  * </ul>
  *
+ * <p>V41：生成前 CAS 置 {@code final_report_status=GENERATING} 防重入——手动/自动两条
+ * 路径并发时只有一个赢家进入 LLM 调用，其余抛"正在生成中"；成功置 DONE、失败置 FAILED
+ * （FAILED 可手动重试，避免进程崩溃后永久卡在 GENERATING 之外留出恢复口）。</p>
+ *
  * <p>不加类级事务：LLM 调用耗时长（与 PlannerAnalysisService.decompose 同哲学）；
  * 报告写回用 lambdaUpdate 只更新三列，不做全行覆盖。选人复用
  * {@link PlannerAgentPicker#pickForTask}，澄清→拆解→整合同一 Planner 跟随。</p>
@@ -84,6 +90,11 @@ public class TaskFinalReportService {
             if (task == null) {
                 return;
             }
+            if (task.getFinalReportStatus() == FinalReportStatus.GENERATING) {
+                // 已有一次生成在途（手动端点抢先触发），自动路径不再并发触发
+                log.debug("整合报告正在生成中，自动生成跳过: taskId={}", event.getTaskId());
+                return;
+            }
             if (task.getFinalReport() != null && !task.getFinalReport().isBlank()) {
                 log.debug("整合报告已存在，自动生成跳过: taskId={}", event.getTaskId());
                 return;
@@ -98,8 +109,9 @@ public class TaskFinalReportService {
     /**
      * 生成（或重新生成）任务最终整合报告，成功后返回最新 Task。
      *
-     * <p>前置：任务必须已 DONE 且存在有产出的 DONE 子任务。重复调用直接覆盖旧报告
-     * （last-write-wins；自动触发由 CAS 收口赢家唯一保证单次）。</p>
+     * <p>前置：任务必须已 DONE 且存在有产出的 DONE 子任务。V41 起生成前先 CAS 置
+     * {@code final_report_status=GENERATING}，已有一份生成在途时直接抛错（防重入）；
+     * 成功置 DONE、最终失败置 FAILED（可重试）。</p>
      */
     public Task generate(Long taskId) {
         Task task = taskService.getById(taskId);
@@ -113,6 +125,15 @@ public class TaskFinalReportService {
         List<SubTask> sections = collectDoneSubTasksWithOutput(taskId);
         if (sections.isEmpty()) {
             throw new BizException("没有可整合的子任务产出（无 DONE 子任务或产出为空）: taskId=" + taskId);
+        }
+
+        // V41 CAS 防重入：仅当当前状态非 GENERATING 时置位成功；失败说明另一条路径正在生成
+        boolean casOk = taskService.update(new LambdaUpdateWrapper<Task>()
+                .eq(Task::getId, taskId)
+                .ne(Task::getFinalReportStatus, FinalReportStatus.GENERATING)
+                .set(Task::getFinalReportStatus, FinalReportStatus.GENERATING));
+        if (!casOk) {
+            throw new BizException("任务整合报告正在生成中，请稍候后再试: taskId=" + taskId);
         }
 
         Agent planner = plannerAgentPicker.pickForTask(taskId);
@@ -149,6 +170,7 @@ public class TaskFinalReportService {
                         .set(Task::getFinalReport, report)
                         .set(Task::getFinalReportAgentId, planner.getId())
                         .set(Task::getFinalReportTime, now)
+                        .set(Task::getFinalReportStatus, FinalReportStatus.DONE)
                         .update();
                 taskTimelineService.recordEvent(taskId, null, "task_final_report_generated",
                         AgentRole.PLANNER, planner.getId(),
@@ -172,6 +194,8 @@ public class TaskFinalReportService {
                         AgentRole.PLANNER, planner.getId(),
                         Map.of("error", errMsg, "sectionOutputLimit", limit));
                 log.warn("任务整合报告生成失败: taskId={}", taskId, e);
+                // V41：最终失败置 FAILED，允许手动重试（避免 GENERATING 卡死无恢复口）
+                markFailed(taskId, errMsg);
                 if (e instanceof BizException be) {
                     throw be;
                 }
@@ -300,6 +324,21 @@ public class TaskFinalReportService {
     /** 读取 context.lastExecution.output（统一走 {@link SubTaskOutputExtractor}，与 TaskDeliverableService 同一事实源）。 */
     private static String extractExecutionOutput(SubTask subTask) {
         return SubTaskOutputExtractor.extractExecutionOutput(subTask);
+    }
+
+    /**
+     * V41：标记报告生成最终失败（FAILED）。
+     *
+     * <p>只负责状态回写，失败不外抛（避免掩盖原始 LLM 异常）；置 FAILED 后手动端点可重试。</p>
+     */
+    private void markFailed(Long taskId, String error) {
+        try {
+            taskService.update(new LambdaUpdateWrapper<Task>()
+                    .eq(Task::getId, taskId)
+                    .set(Task::getFinalReportStatus, FinalReportStatus.FAILED));
+        } catch (Exception e) {
+            log.warn("标记整合报告生成失败状态异常: taskId={}, err={}", taskId, e.getMessage());
+        }
     }
 
     private static String summarize(String raw) {

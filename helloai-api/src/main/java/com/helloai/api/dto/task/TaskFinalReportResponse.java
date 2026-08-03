@@ -1,11 +1,12 @@
 package com.helloai.api.dto.task;
 
+import com.helloai.common.constant.FinalReportStatus;
 import lombok.Data;
 
 import java.time.OffsetDateTime;
 
 /**
- * 任务最终整合报告（V32，读取 task.final_report 专列组装）。
+ * 任务最终整合报告（V32，读取 task.final_report 专列组装；V41 增加生成状态）。
  */
 @Data
 public class TaskFinalReportResponse {
@@ -16,4 +17,6 @@ public class TaskFinalReportResponse {
     private Long agentId;
     private String agentName;
     private OffsetDateTime generatedAt;
+    /** 报告生成状态（V41：NONE/GENERATING/DONE/FAILED），前端据此禁用按钮与展示中间态 */
+    private FinalReportStatus status;
 }

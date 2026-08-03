@@ -1,5 +1,7 @@
 package com.helloai.core.task.service;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
 import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapper;
 import com.baomidou.mybatisplus.extension.conditions.update.LambdaUpdateChainWrapper;
@@ -7,6 +9,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.FinalReportStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.agent.entity.Agent;
@@ -17,6 +20,7 @@ import com.helloai.core.planner.PlannerAgentPicker;
 import com.helloai.core.shared.event.TaskAutoCompletedEvent;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -74,6 +78,17 @@ class TaskFinalReportServiceTest {
 
     private TaskFinalReportService service;
 
+    /**
+     * V41 CAS 防重入使用 {@code new LambdaUpdateWrapper<Task>()}，其 lambda 解析依赖
+     * MyBatis-Plus TableInfo 缓存；单测无 Spring 上下文，需手动注册 Task 的 TableInfo，
+     * 否则构造 wrapper 时抛 "can not find lambda cache for this entity"。
+     */
+    @BeforeAll
+    static void initTableInfo() {
+        TableInfoHelper.initTableInfo(new org.apache.ibatis.builder.MapperBuilderAssistant(
+                new MybatisConfiguration(), ""), Task.class);
+    }
+
     @BeforeEach
     void setUp() {
         service = new TaskFinalReportService(taskService, subTaskService, plannerAgentPicker,
@@ -89,6 +104,8 @@ class TaskFinalReportServiceTest {
         when(taskUpdateChain.eq(any(), any())).thenReturn(taskUpdateChain);
         when(taskUpdateChain.set(any(), any())).thenReturn(taskUpdateChain);
         when(taskUpdateChain.update()).thenReturn(true);
+        // V41 CAS 防重入：置 GENERATING 默认成功（防重入用例内单独覆盖为 false）
+        when(taskService.update(any())).thenReturn(true);
     }
 
     private Task doneTask() {
@@ -140,8 +157,8 @@ class TaskFinalReportServiceTest {
         assertThat(taskCaptor.getValue().getUserPrompt())
                 .contains("调度分析").contains("架构梳理").contains("# 架构梳理产出");
         assertThat(taskCaptor.getValue().getContext()).containsEntry("scene", "task_final_report");
-        // 写回只更新三列（final_report / agent_id / time）
-        verify(taskUpdateChain, org.mockito.Mockito.times(3)).set(any(), any());
+        // 写回只更新四列（final_report / agent_id / time / status）
+        verify(taskUpdateChain, org.mockito.Mockito.times(4)).set(any(), any());
         verify(taskUpdateChain).update();
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_final_report_generated"),
@@ -289,5 +306,54 @@ class TaskFinalReportServiceTest {
         service.onTaskAutoCompleted(new TaskAutoCompletedEvent(TASK_ID));
 
         verify(plannerAgentPicker, never()).pickForTask(any());
+    }
+
+    @Test
+    @DisplayName("防重入：已有生成在途（CAS 置 GENERATING 失败）时抛错且不调 LLM")
+    void shouldRejectWhenAlreadyGenerating() {
+        when(taskService.getById(TASK_ID)).thenReturn(doneTask());
+        when(subTaskQueryChain.list()).thenReturn(List.of(
+                doneSubTask(11L, "架构梳理", "# 架构梳理产出")));
+        when(taskService.update(any())).thenReturn(false);
+
+        assertThatThrownBy(() -> service.generate(TASK_ID))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("正在生成中");
+        verify(plannerAgentPicker, never()).pickForTask(any());
+        verify(platformAgentExecutionService, never())
+                .executeSync(any(Agent.class), any(AgentTask.class));
+    }
+
+    @Test
+    @DisplayName("LLM 最终失败：状态置 FAILED（CAS 置 GENERATING + 失败置 FAILED 共两次 update）")
+    void shouldMarkFailedStatusWhenLlmFails() {
+        when(taskService.getById(TASK_ID)).thenReturn(doneTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(planner());
+        when(subTaskQueryChain.list()).thenReturn(List.of(
+                doneSubTask(11L, "架构梳理", "# 架构梳理产出")));
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.failure("provider timeout", "error", "llm"));
+
+        assertThatThrownBy(() -> service.generate(TASK_ID))
+                .isInstanceOf(BizException.class);
+
+        // 第一次 update = CAS 置 GENERATING；第二次 = markFailed 置 FAILED
+        verify(taskService, org.mockito.Mockito.times(2)).update(any());
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_final_report_failed"),
+                eq(AgentRole.PLANNER), eq(9L), anyMap());
+    }
+
+    @Test
+    @DisplayName("自动触发：报告生成中（GENERATING）时跳过，避免与手动路径并发")
+    void shouldSkipAutoWhenGenerating() {
+        Task task = doneTask();
+        task.setFinalReportStatus(FinalReportStatus.GENERATING);
+        when(taskService.getById(TASK_ID)).thenReturn(task);
+
+        service.onTaskAutoCompleted(new TaskAutoCompletedEvent(TASK_ID));
+
+        verify(plannerAgentPicker, never()).pickForTask(any());
+        verify(taskService, never()).update(any());
     }
 }

@@ -194,6 +194,7 @@ public class TaskController {
         vo.setContent(task.getFinalReport());
         vo.setAgentId(task.getFinalReportAgentId());
         vo.setGeneratedAt(task.getFinalReportTime());
+        vo.setStatus(task.getFinalReportStatus());
         if (task.getFinalReportAgentId() != null) {
             Agent agent = agentService.getById(task.getFinalReportAgentId());
             vo.setAgentName(agent != null ? agent.getName() : null);
