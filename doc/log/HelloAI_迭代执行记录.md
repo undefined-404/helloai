@@ -3989,3 +3989,42 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 - 行为变更：`/planner` 命令（含附加文本）成为显式转方案入口，不受意图词命中率影响；CHAT 轮 LLM 追问可能出推荐卡片（LLM 引导型，不保证）。
 - 兼容性：`toClarifyById` 无 body / `{}` 调用与既有语义完全一致（req 为 null 或 message 为 null 均走单参路径）；CHAT 轮解析失败一律纯文本，零行为破坏。
 - 遗留：CHAT 结构化追问输出依赖 LLM 遵循度（真实环境本次未出卡片，属可接受降级；后续可考虑 few-shot 或独立小模型，不在本轮范围）；`/planner` 无命令提示列表 UI（仅输入框识别）；意图词正则仍为有限话术集合（`/planner` 已作兜底，无需继续扩词）。
+
+### 6.47 子任务分发失败快速兜底 + 整合报告生成状态防重（V41，2026-08-04）
+
+#### 1. 背景与决策
+
+用户实测反馈两件事：①「10人小团队企业OA系统模块化单体+微服务演进技术方案」任务的子任务 #7「部署方案验证」长时间无 agent 领取，最终用户手动选择空闲 agent 才解决，问根因与兜底办法；② planner 生成最终报告时报告按钮可重复点击、主任务状态不显示"报告生成中"，会出现重复生成报告的问题。
+
+**Q1 根因（数据库取证闭合）**：17:16:36 依赖 #3「容器化部署方案设计」DONE → `SubTaskCompletionListener.unlockDownstream` 触发 #7 分发 → ready 守卫通过 → `checkReassignCircuitBreaker` 累加 `reassign_attempt_count=1`（#7 timeline 完全无 `dispatch_prepare` 事件佐证：异常发生在写审计事件之前）→ `AgentSelector.pickPreferred` 在 `require-idle: true` 下用 `inProgressCount==0` 过滤——当时两个 EXECUTOR（executor-deps-ctx 跑 #1/#2/#4、inner-deepseek-executor 跑 #5/#6）全部在忙（#1 17:16:44、#2 17:17:05、#4 17:17:17、#5 17:16:51、#6 17:17:03 才 DONE）→ 候选为空 → `pickPreferred` 抛 BizException → 该异常在 `unlockDownstream` 逐节点 catch 中仅 warn 吞掉（无 timeline 事件）→ #7 保持 PENDING 且无 execution_record → 孤儿巡检（`SubTaskPendingOrphanTask`）30 分钟阈值未到 → 用户 17:19:29 手动指派（timeline 第一条事件即 `sub_task_auto_execute_dispatch`，走 changeStatus 不经过 dispatch 所以 count 保持 1）。本质是「瞬时全员忙碌 + 异常静默 + 兜底窗口过长」三层叠加的小概率事件。
+
+**决策（Q1）**：① 孤儿巡检阈值 30→5 分钟——`isReady` 依赖守卫保证未就绪的合法 PENDING 会被跳过不误伤，收窄阈值安全，无人兜底窗口从 30 分钟缩到 5 分钟；② `unlockDownstream` 解锁失败写 `sub_task_dispatch_deferred` timeline 事件，把"静默吞掉"变成可观测。
+
+**决策（Q2）**：报告生成状态独立成 `FinalReportStatus` 四态（NONE/GENERATING/DONE/FAILED），与 `TaskStatus`（保持 DONE 语义）解耦——"报告生成中"塞进任务状态机会破坏 DONE 语义与自动收尾判定；后端 CAS 防重入保证手动/自动两条路径并发只有一个赢家，前端按钮禁用 + "报告生成中"状态展示。
+
+#### 2. 实际落地
+
+- **后端（Q1 兜底）**：
+  - `AgentExecutionProperties.pendingOrphanThresholdMinutes` 默认 30→5，Javadoc 说明收窄安全的前提（扫描命中后循环内还有 isReady 依赖守卫）；`application.yml` execution 段显式声明 `pending-orphan-threshold-minutes: 5` 并注释两种覆盖场景。
+  - `SubTaskCompletionListener.unlockDownstream` 逐节点 catch 内写 `sub_task_dispatch_deferred` timeline 事件（payload 带 reason + waitFor=pending_orphan_scan，内层 try-catch 失败仅 log.debug，不改变既有不阻断语义）。
+- **后端（Q2 报告状态）**：
+  - `FinalReportStatus` 枚举（helloai-common/constant）：`NONE / GENERATING / DONE / FAILED`。
+  - Flyway V41 `task.final_report_status VARCHAR(16) NOT NULL DEFAULT 'NONE'` + 存量回填（`final_report` 非空 → `DONE`）+ 逐列 COMMENT。
+  - `TaskFinalReportService.generate`：生成前 CAS 防重入（`lambdaUpdate eq id + ne GENERATING + set GENERATING`，失败抛「任务整合报告正在生成中，请稍候后再试」）；成功写回 4 列（final_report/final_report_agent_id/final_report_time/final_report_status=DONE）；最终失败 `markFailed`（置 FAILED 可手动重试，避免进程崩溃后永久卡 GENERATING 无恢复口，失败不外抛）；`onTaskAutoCompleted` 在"已有报告跳过"之前加 GENERATING 跳过（自动路径不与手动路径并发触发）。
+  - `TaskController.toFinalReportResponse` 与 `TaskFinalReportResponse` 增加 `status` 透出。
+- **前端（Q2）**：
+  - `TaskList.vue`：状态列 `GENERATING` 覆盖显示「报告生成中」tag；报告按钮 `:loading/:disabled="row.finalReportStatus === 'GENERATING'"`，文案动态「生成中」/「报告」。
+  - `FinalReportDialog.vue`：`reportGenerating` computed（本地 generating || 接口 status===GENERATING）；5s 轮询（非 GENERATING 即停，onBeforeUnmount 清理）；handleGenerate 前置守卫 + 同步 `props.task.finalReportStatus`；空态文案按状态区分（GENERATING→「报告正在生成中…」/ FAILED→「上次生成失败，点击下方按钮重新生成」）。
+  - `types/index.ts`：`FinalReportStatus` 类型 + `Task.finalReportStatus` + `TaskFinalReport.status`。
+
+#### 3. 验证结果
+
+- **单测**：helloai-core 全量 `mvn -pl helloai-core -am test -DskipTests=false` 397/397 全绿——`TaskFinalReportServiceTest` 新增 3 例（`shouldRejectWhenAlreadyGenerating` CAS 拒绝 / `shouldMarkFailedStatusWhenLlmFails` 失败置 FAILED / `shouldSkipAutoWhenGenerating` 自动路径跳过），并修复单测陷阱：`new LambdaUpdateWrapper<Task>()` 的 lambda 解析需要 TableInfo 缓存，`@BeforeAll` 用 `TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), ""), Task.class)` 注册（BaseEntity 有 @TableId 注解可正常注册）。
+- **前端**：`vue-tsc --noEmit` 0 错。
+- **真实环境冒烟 PASS**：V41 迁移成功（存量报告回填 DONE）；`GET /api/tasks/{id}/final-report` 返回 `status=DONE`（content 18760）；列表接口返回 `finalReportStatus`。**并发防重全链路**：第一次 POST → 10s 后 DB=`GENERATING` → 第二次 POST 被拒 `{"code":500,"msg":"任务整合报告正在生成中，请稍候后再试: taskId=..."}` → 第一次完成 `code=200 status=DONE` content=19091（覆盖旧报告）→ DB 终态 `DONE|19091`。冒烟后已停服务释放端口。
+
+#### 4. 影响与遗留
+
+- 行为变更：孤儿 PENDING 无人兜底窗口 30 分钟→5 分钟（isReady 守卫保证不误伤）；`unlockDownstream` 分发失败不再静默（timeline `sub_task_dispatch_deferred` 可见）；报告生成期间按钮禁用 + 状态「报告生成中」，重复生成被后端 CAS 拒绝。
+- 兼容性：`final_report_status` 默认 NONE 对存量零影响；FAILED 状态可重新生成；任务 DONE 语义不变（报告状态独立维度）。
+- 遗留：「全员瞬时忙碌」时子任务仍会落入 PENDING 等待孤儿巡检（现 5 分钟），未做排队等待/延迟重试策略（可后续考虑，不属本轮）；`sub_task_dispatch_deferred` 事件无前端消费（可在派发控制台时间线查看）。
