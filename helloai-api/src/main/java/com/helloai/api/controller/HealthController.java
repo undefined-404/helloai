@@ -37,8 +37,8 @@ public class HealthController {
      * pre-flight 阶段硬断言 mock 执行是否开启，避免脚本无意中触发真实 LLM。
      * 仅暴露布尔开关与 provider/model 名称，不涉及任何密钥或凭证。</p>
      */
-    @GetMapping("/api/health/execution-mode")
-    public R<Map<String, Object>> executionMode() {
+    @GetMapping("/api/health/getExecutionMode")
+    public R<Map<String, Object>> getExecutionMode() {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("enabled", executionProperties.isEnabled());
         body.put("mockMode", executionProperties.isMockMode());

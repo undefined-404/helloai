@@ -38,7 +38,7 @@ public class AdminPromptController {
     /**
      * 获取单个模板
      */
-    @GetMapping("/{id}")
+    @GetMapping("/getById/{id}")
     public R<PromptTemplateResponse> getById(@PathVariable("id") Long id) {
         PromptTemplate template = promptTemplateService.getById(id);
         if (template == null) return R.fail("模板不存在");
@@ -56,8 +56,8 @@ public class AdminPromptController {
     /**
      * 更新模板
      */
-    @PutMapping("/{id}")
-    public R<PromptTemplateResponse> update(@PathVariable("id") Long id, @RequestBody PromptTemplate template) {
+    @PutMapping("/updateById/{id}")
+    public R<PromptTemplateResponse> updateById(@PathVariable("id") Long id, @RequestBody PromptTemplate template) {
         template.setId(id);
         return R.ok(toResponse(promptTemplateService.update(template)));
     }
@@ -65,8 +65,8 @@ public class AdminPromptController {
     /**
      * 删除模板
      */
-    @DeleteMapping("/{id}")
-    public R<Void> delete(@PathVariable("id") Long id) {
+    @DeleteMapping("/deleteById/{id}")
+    public R<Void> deleteById(@PathVariable("id") Long id) {
         promptTemplateService.removeById(id);
         return R.ok();
     }
@@ -74,8 +74,8 @@ public class AdminPromptController {
     /**
      * 获取角色的默认模板
      */
-    @GetMapping("/default")
-    public R<PromptTemplateResponse> getDefault(@RequestParam("role") String role) {
+    @GetMapping("/getDefaultByRole")
+    public R<PromptTemplateResponse> getDefaultByRole(@RequestParam("role") String role) {
         PromptTemplate template = promptTemplateService.getDefaultByRole(role);
         if (template == null) return R.fail("未找到角色 " + role + " 的默认模板");
         return R.ok(toResponse(template));

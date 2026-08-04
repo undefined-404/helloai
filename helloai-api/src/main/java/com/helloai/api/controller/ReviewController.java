@@ -59,7 +59,7 @@ public class ReviewController {
         return R.ok(reviewService.list().stream().map(this::toResponse).toList());
     }
 
-    @GetMapping("/{id}")
+    @GetMapping("/getById/{id}")
     public R<ReviewResponse> getById(@PathVariable("id") Long id) {
         ReviewRecord record = reviewService.getById(id);
         if (record == null) {

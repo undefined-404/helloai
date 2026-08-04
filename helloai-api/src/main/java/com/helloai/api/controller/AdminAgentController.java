@@ -1,6 +1,5 @@
 package com.helloai.api.controller;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.helloai.api.dto.PageResult;
 import com.helloai.api.dto.admin.AgentCreateRequest;
@@ -54,7 +53,7 @@ public class AdminAgentController {
      * 枚举已配置的 LLM Provider 及其可用性（不含 api-key 明文）。
      * 前端注册 API_KEY_LLM Agent 时按 available=true 过滤下拉选项。
      */
-    @GetMapping("/llm-providers")
+    @GetMapping("/listLlmProviders")
     public R<List<LlmProviderCatalogService.ProviderCatalogItem>> listLlmProviders() {
         return R.ok(llmProviderCatalogService.listProviders());
     }
@@ -63,7 +62,7 @@ public class AdminAgentController {
     //  列表（分页 + 筛选 + enrichment）
     // ══════════════════════════════════════════════════════════════
 
-    @GetMapping
+    @GetMapping("/list")
     public R<PageResult<AgentListItemVO>> list(
             @RequestParam(value = "page", defaultValue = "1") int page,
             @RequestParam(value = "pageSize", defaultValue = "20") int pageSize,
@@ -113,7 +112,7 @@ public class AdminAgentController {
     //  详情（enrichment）
     // ══════════════════════════════════════════════════════════════
 
-    @GetMapping("/{id}")
+    @GetMapping("/getById/{id}")
     public R<AgentDetailVO> getById(@PathVariable("id") Long id) {
         Agent agent = agentService.getAgentDetail(id);
         if (agent == null) return R.fail("Agent 不存在");
@@ -143,7 +142,7 @@ public class AdminAgentController {
         vo.setLastActivityAt(agent.getLastActiveTime());
 
         // 统计奖励/惩罚次数
-        vo.setTotalAgents( Integer.parseInt(agentService.lambdaQuery().count().toString()));
+        vo.setTotalAgents((int) agentService.countAll());
         vo.setTotalRewardRecords((int) agentService.getScoreLogs(id, 1, 1).getTotal());
         vo.setRewardCount((int) agentService.getScoreLogs(id, 1, 99999)
                 .getRecords().stream().filter(r -> r.getDelta() > 0).count());
@@ -160,11 +159,8 @@ public class AdminAgentController {
     @PostMapping
     public R<AgentRegistrationResponse> create(@RequestBody AgentCreateRequest req) {
         AgentRole role = AgentRole.valueOf(req.getRole().toUpperCase());
-        Agent agent = agentService.register(req.getName(), role, req.getRemark());
-        agent.setModelType(req.getModelType());
-        if (req.getModelConfig() != null) agent.setModelConfig(req.getModelConfig());
-        if (req.getSpecializationSlug() != null) agent.setSpecializationSlug(req.getSpecializationSlug());
-        agentService.updateById(agent);
+        Agent agent = agentService.registerWithExtras(req.getName(), role, req.getRemark(),
+                req.getModelType(), req.getModelConfig(), req.getSpecializationSlug());
 
         AgentRegistrationResponse response = new AgentRegistrationResponse();
         response.setId(agent.getId());
@@ -178,18 +174,12 @@ public class AdminAgentController {
     //  更新
     // ══════════════════════════════════════════════════════════════
 
-    @PutMapping("/{id}")
+    @PutMapping("/updateById/{id}")
     public R<Void> update(@PathVariable("id") Long id, @RequestBody AgentUpdateRequest req) {
         log.info("更新 Agent 请求: id={}, body={}", id, req);
-        Agent agent = agentService.getById(id);
-        if (agent == null) return R.fail("Agent 不存在");
-
-        if (req.getName() != null) agent.setName(req.getName());
-        if (req.getModelType() != null) agent.setModelType(req.getModelType());
-        if (req.getModelConfig() != null) agent.setModelConfig(req.getModelConfig());
-        if (req.getSpecializationSlug() != null) agent.setSpecializationSlug(req.getSpecializationSlug());
-        if (req.getRemark() != null) agent.setRemark(req.getRemark());
-        agentService.updateById(agent);
+        boolean updated = agentService.updateAgentDetail(id, req.getName(), req.getModelType(),
+                req.getModelConfig(), req.getSpecializationSlug(), req.getRemark());
+        if (!updated) return R.fail("Agent 不存在");
         return R.ok();
     }
 
@@ -197,7 +187,7 @@ public class AdminAgentController {
     //  状态
     // ══════════════════════════════════════════════════════════════
 
-    @PutMapping("/status/{id}")
+    @PostMapping("/updateStatusById/{id}")
     public R<Void> updateStatus(@PathVariable("id") Long id, @RequestBody Map<String, String> body) {
         AgentStatus status = AgentStatus.valueOf(body.get("status").toUpperCase());
         agentService.updateStatus(id, status);
@@ -215,7 +205,7 @@ public class AdminAgentController {
      * <p>设 online_status=SLEEPING，不动 AgentStatus/oldline_reason/offline_at。
      * <br>仅 X-Admin-Token 鉴权的管理员可调用（AuthInterceptor 已拦截）。
      */
-    @PutMapping("/sleep/{id}")
+    @PostMapping("/sleepById/{id}")
     public R<Map<String, Object>> sleep(@PathVariable("id") Long id,
                                          @RequestBody(required = false) Map<String, String> body,
                                          HttpServletRequest request) {
@@ -230,7 +220,7 @@ public class AdminAgentController {
      * <p>设 online_status=OFFLINE（不强行 ONLINE，让系统心跳自然计算 IDLE/ONLINE）。
      * <br>仅 X-Admin-Token 鉴权的管理员可调用。
      */
-    @PutMapping("/wake/{id}")
+    @PostMapping("/wakeById/{id}")
     public R<Map<String, Object>> wake(@PathVariable("id") Long id,
                                         @RequestBody(required = false) Map<String, String> body,
                                         HttpServletRequest request) {
@@ -246,7 +236,7 @@ public class AdminAgentController {
      * <p>支持部分成功/失败：返回结构见 {@code AgentService.sleepAgentBatch}。
      * <br>仅 X-Admin-Token 鉴权的管理员可调用。
      */
-    @PostMapping("/sleep-batch")
+    @PostMapping("/sleepBatch")
     public R<Map<String, Object>> sleepBatch(@RequestBody SleepBatchRequest req,
                                               HttpServletRequest request) {
         if (req == null || req.getAgentIds() == null || req.getAgentIds().isEmpty()) {
@@ -264,7 +254,7 @@ public class AdminAgentController {
      * @param role 可选；为空时返回所有角色的 SLEEPING Agent
      * <br>仅 X-Admin-Token 鉴权的管理员可调用。
      */
-    @GetMapping("/sleeping")
+    @GetMapping("/listSleeping")
     public R<List<SleepingAgentVO>> sleeping(
             @RequestParam(value = "role", required = false) String role) {
         AgentRole roleFilter = (role != null && !role.isBlank())
@@ -312,7 +302,7 @@ public class AdminAgentController {
     //  重置 Key
     // ══════════════════════════════════════════════════════════════
 
-    @PostMapping("/reset-key/{id}")
+    @PostMapping("/resetKeyById/{id}")
     public R<ApiKeyResponse> resetKey(@PathVariable("id") Long id) {
         String newKey = agentService.resetApiKey(id);
         ApiKeyResponse response = new ApiKeyResponse();
@@ -324,8 +314,8 @@ public class AdminAgentController {
     //  接入内容生成（管理员视角一键生成 Agent onboarding 文本）
     // ══════════════════════════════════════════════════════════════
 
-    @GetMapping("/{id}/onboarding-content")
-    public R<AgentOnboardingResponse> onboardingContent(@PathVariable("id") Long id,
+    @GetMapping("/getOnboardingContentByAgentId/{id}")
+    public R<AgentOnboardingResponse> getOnboardingContent(@PathVariable("id") Long id,
                                                         HttpServletRequest request) {
         Agent agent = agentService.getById(id);
         if (agent == null) {
@@ -370,8 +360,8 @@ public class AdminAgentController {
     //  关联数据统计（删除前风险提示）
     // ══════════════════════════════════════════════════════════════
 
-    @GetMapping("/{id}/related-counts")
-    public R<AgentRelatedCounts> relatedCounts(@PathVariable("id") Long id) {
+    @GetMapping("/listRelatedCountsByAgentId/{id}")
+    public R<AgentRelatedCounts> listRelatedCounts(@PathVariable("id") Long id) {
         Map<String, Object> counts = agentService.getRelatedCounts(id);
         AgentRelatedCounts vo = new AgentRelatedCounts();
         vo.setAgentId((Long) counts.get("agentId"));
@@ -387,7 +377,7 @@ public class AdminAgentController {
     //  级联删除
     // ══════════════════════════════════════════════════════════════
 
-    @DeleteMapping("/{id}")
+    @DeleteMapping("/deleteById/{id}")
     public R<AgentDeleteResult> delete(@PathVariable("id") Long id,
                                         @RequestBody Map<String, String> body) {
         String confirmName = body.get("confirmName");
@@ -408,8 +398,8 @@ public class AdminAgentController {
     //  积分明细（分页）
     // ══════════════════════════════════════════════════════════════
 
-    @GetMapping("/{id}/score-logs")
-    public R<PageResult<ScoreLogItem>> scoreLogs(
+    @GetMapping("/listScoreLogsByAgentId/{id}")
+    public R<PageResult<ScoreLogItem>> listScoreLogs(
             @PathVariable("id") Long id,
             @RequestParam(value = "page", defaultValue = "1") int page,
             @RequestParam(value = "pageSize", defaultValue = "20") int pageSize) {
@@ -431,8 +421,8 @@ public class AdminAgentController {
     //  活动日志（分页）
     // ══════════════════════════════════════════════════════════════
 
-    @GetMapping("/{id}/activity-logs")
-    public R<PageResult<ActivityLogItem>> activityLogs(
+    @GetMapping("/listActivityLogsByAgentId/{id}")
+    public R<PageResult<ActivityLogItem>> listActivityLogs(
             @PathVariable("id") Long id,
             @RequestParam(value = "page", defaultValue = "1") int page,
             @RequestParam(value = "pageSize", defaultValue = "20") int pageSize,

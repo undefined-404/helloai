@@ -1,6 +1,5 @@
 package com.helloai.api.controller;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.helloai.api.dto.PageResult;
 import com.helloai.api.dto.subtask.ConversationMessageItem;
@@ -101,8 +100,8 @@ public class SubTaskController {
      *
      * <p>按 id 升序返回该子任务相关的所有 TaskTimeline 事件；不含系统级事件（如 agent_offline）。</p>
      */
-    @GetMapping("/{id}/timeline")
-    public R<List<TaskTimelineItem>> timeline(@PathVariable("id") Long id) {
+    @GetMapping("/listTimelineBySubTaskId/{id}")
+    public R<List<TaskTimelineItem>> listTimeline(@PathVariable("id") Long id) {
         List<TaskTimeline> rows = taskTimelineService.listBySubTaskId(id);
         List<TaskTimelineItem> items = rows.stream().map(this::toTimelineItem).toList();
         return R.ok(items);
@@ -114,8 +113,8 @@ public class SubTaskController {
      * <p>按 seq 升序返回执行产出全文与自动核验的 Prompt / 分析原文，
      * 来源由 toolName 区分；只做实体→DTO 映射，不含编排。</p>
      */
-    @GetMapping("/{id}/conversation")
-    public R<List<ConversationMessageItem>> conversation(@PathVariable("id") Long id) {
+    @GetMapping("/listConversationBySubTaskId/{id}")
+    public R<List<ConversationMessageItem>> listConversation(@PathVariable("id") Long id) {
         List<ConversationMessage> rows = conversationService.getMessages(id);
         List<ConversationMessageItem> items = rows.stream().map(this::toConversationItem).toList();
         return R.ok(items);
@@ -168,7 +167,7 @@ public class SubTaskController {
      * 不分页调用契约；传 page 返回 {@link PageResult} 分页结构（管理台真分页）。
      * 条件构造已按 §6.3 下沉至 {@link SubTaskService#list}。</p>
      */
-    @GetMapping
+    @GetMapping("/list")
     public R<?> list(
             @RequestParam(value = "taskId", required = false) Long taskId,
             @RequestParam(value = "status", required = false) String status,
@@ -187,7 +186,7 @@ public class SubTaskController {
         return R.ok(PageResult.of(result));
     }
 
-    @GetMapping("/{id}")
+    @GetMapping("/getById/{id}")
     public R<SubTaskResponse> getById(@PathVariable("id") Long id) {
         SubTask subTask = subTaskService.getById(id);
         if (subTask == null) return R.fail("子任务不存在");
@@ -197,7 +196,7 @@ public class SubTaskController {
         return R.ok(response);
     }
 
-    @PostMapping("/change-status")
+    @PostMapping("/changeStatus")
     public R<Void> changeStatus(@RequestBody Map<String, Object> body) {
         Long subTaskId = Long.valueOf(body.get("subTaskId").toString());
         String newStatus = (String) body.get("newStatus");
@@ -218,43 +217,43 @@ public class SubTaskController {
         return R.ok();
     }
 
-    @PostMapping("/claim/{id}")
+    @PostMapping("/claimById/{id}")
     public R<Void> claim(@PathVariable("id") Long id, @RequestParam("agentId") Long agentId) {
         subTaskService.claim(id, agentId);
         return R.ok();
     }
 
-    @PostMapping("/start/{id}")
+    @PostMapping("/startById/{id}")
     public R<Void> start(@PathVariable("id") Long id) {
         subTaskService.start(id);
         return R.ok();
     }
 
-    @PostMapping("/submit/{id}")
+    @PostMapping("/submitById/{id}")
     public R<Void> submit(@PathVariable("id") Long id) {
         subTaskService.submit(id);
         return R.ok();
     }
 
-    @PostMapping("/complete/{id}")
+    @PostMapping("/completeById/{id}")
     public R<Void> complete(@PathVariable("id") Long id) {
         subTaskService.complete(id);
         return R.ok();
     }
 
-    @PostMapping("/rework/{id}")
+    @PostMapping("/reworkById/{id}")
     public R<Void> rework(@PathVariable("id") Long id, @RequestBody ReworkRequest req) {
         subTaskService.rework(id, req.getReworkAgentId());
         return R.ok();
     }
 
-    @PostMapping("/block/{id}")
+    @PostMapping("/blockById/{id}")
     public R<Void> block(@PathVariable("id") Long id) {
         subTaskService.block(id);
         return R.ok();
     }
 
-    @PostMapping("/reassign/{id}")
+    @PostMapping("/reassignById/{id}")
     public R<Void> reassign(@PathVariable("id") Long id, @Valid @RequestBody ReassignRequest req) {
         subTaskDispatchService.dispatchBlockedSubTask(id, req.getAgentId());
         return R.ok();
@@ -267,26 +266,26 @@ public class SubTaskController {
      * 由人工确认目标 Agent 后调用本接口：熔断计数清零 + 直接 ASSIGNED。
      * 死信列表复用现有列表接口按 status=DEAD_LETTER 过滤。</p>
      */
-    @PostMapping("/dead-letter/redispatch/{id}")
+    @PostMapping("/redispatchDeadLetterById/{id}")
     public R<Void> redispatchDeadLetter(@PathVariable("id") Long id,
                                         @Valid @RequestBody ReassignRequest req) {
         subTaskDispatchService.redispatchDeadLetter(id, req.getAgentId());
         return R.ok();
     }
 
-    @PostMapping("/pause/{id}")
+    @PostMapping("/pauseById/{id}")
     public R<Void> pause(@PathVariable("id") Long id) {
         subTaskService.pause(id);
         return R.ok();
     }
 
-    @PostMapping("/resume/{id}")
+    @PostMapping("/resumeById/{id}")
     public R<Void> resume(@PathVariable("id") Long id) {
         subTaskService.resume(id);
         return R.ok();
     }
 
-    @PostMapping("/execute/{id}")
+    @PostMapping("/executeById/{id}")
     public R<Map<String, Object>> execute(@PathVariable("id") Long id) {
         requireAdmin();
 
@@ -332,21 +331,15 @@ public class SubTaskController {
         }
     }
 
-    @GetMapping("/available")
-    public R<List<SubTaskResponse>> available() {
-        List<SubTask> list = subTaskService.list(
-                new LambdaQueryWrapper<SubTask>()
-                        .eq(SubTask::getStatus, SubTaskStatus.PENDING)
-                        .orderByDesc(SubTask::getCreateTime));
+    @GetMapping("/listAvailable")
+    public R<List<SubTaskResponse>> listAvailable() {
+        List<SubTask> list = subTaskService.listAvailable();
         return R.ok(list.stream().map(this::toResponse).toList());
     }
 
-    @GetMapping("/mine")
-    public R<List<SubTaskResponse>> mine(@RequestParam("agentId") Long agentId) {
-        var wrapper = new LambdaQueryWrapper<SubTask>()
-                .eq(SubTask::getAssignedAgentId, agentId)
-                .orderByDesc(SubTask::getCreateTime);
-        List<SubTaskResponse> list = subTaskService.list(wrapper).stream().map(this::toResponse).toList();
+    @GetMapping("/listMine")
+    public R<List<SubTaskResponse>> listMine(@RequestParam("agentId") Long agentId) {
+        List<SubTaskResponse> list = subTaskService.listMine(agentId).stream().map(this::toResponse).toList();
         attachTaskTitles(list);
         attachAgentNames(list);
         return R.ok(list);

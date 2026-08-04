@@ -46,7 +46,7 @@ public class AttachmentController {
     /**
      * 附件详情；不存在抛 BizException(404) 由全局异常处理返回 R.fail。
      */
-    @GetMapping("/{id}")
+    @GetMapping("/getById/{id}")
     public R<Attachment> getById(@PathVariable("id") Long id) {
         return R.ok(attachmentService.getByIdRequired(id));
     }
@@ -56,8 +56,8 @@ public class AttachmentController {
      * （Content-Disposition 用 RFC 5987 filename* 承载中文文件名）；
      * 外部对象存储地址仍保持 302 重定向。
      */
-    @GetMapping("/{id}/download")
-    public ResponseEntity<byte[]> download(@PathVariable("id") Long id) {
+    @GetMapping("/downloadById/{id}")
+    public ResponseEntity<byte[]> downloadById(@PathVariable("id") Long id) {
         Attachment attachment = attachmentService.getByIdRequired(id);
         if (attachmentService.isContentLoadable(attachment)) {
             byte[] content = attachmentService.loadContent(id);

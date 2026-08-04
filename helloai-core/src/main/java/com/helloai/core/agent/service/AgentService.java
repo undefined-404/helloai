@@ -158,6 +158,64 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
         log.info("Agent 信息更新: id={}", agentId);
     }
 
+    /**
+     * 注册 Agent 并附加可选扩展字段（modelType/modelConfig/specializationSlug）。
+     *
+     * <p>按 §6.3 分层红线从 AdminAgentController 收口；作为事务代理入口，
+     * 内部 {@link #register} 的事务注解在自调用场景不生效，由本方法统一托管。</p>
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public Agent registerWithExtras(String name, AgentRole role, String description,
+                                    String modelType, Map<String, Object> modelConfig, String specializationSlug) {
+        Agent agent = register(name, role, description);
+        agent.setModelType(modelType);
+        if (modelConfig != null) agent.setModelConfig(modelConfig);
+        if (specializationSlug != null) agent.setSpecializationSlug(specializationSlug);
+        updateById(agent);
+        return agent;
+    }
+
+    /**
+     * 更新 Agent 扩展字段；Agent 不存在时返回 false（Controller 保持原有 R.fail 语义）。
+     *
+     * <p>按 §6.3 分层红线从 AdminAgentController 收口；仅非 null 字段生效。</p>
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public boolean updateAgentDetail(Long agentId, String name, String modelType, Map<String, Object> modelConfig,
+                                     String specializationSlug, String remark) {
+        Agent agent = getById(agentId);
+        if (agent == null) return false;
+        if (name != null) agent.setName(name);
+        if (modelType != null) agent.setModelType(modelType);
+        if (modelConfig != null) agent.setModelConfig(modelConfig);
+        if (specializationSlug != null) agent.setSpecializationSlug(specializationSlug);
+        if (remark != null) agent.setRemark(remark);
+        updateById(agent);
+        log.info("Agent 信息更新: id={}", agentId);
+        return true;
+    }
+
+    /**
+     * 持久化注册后置的可选字段变更（AgentController.applyRegistrationExtras 收口）。
+     */
+    public void updateAgentExtras(Agent agent) {
+        updateById(agent);
+    }
+
+    /**
+     * Agent 总数（收口 AdminAgentController 的 lambdaQuery().count() 直调）。
+     */
+    public long countAll() {
+        return lambdaQuery().count();
+    }
+
+    /**
+     * 全量 Agent 按积分倒序（收口 ScoreController 的 lambdaQuery() 直调）。
+     */
+    public List<Agent> listAllOrderByScoreDesc() {
+        return lambdaQuery().orderByDesc(Agent::getScore).list();
+    }
+
     // ══════════════════════════════════════════════════════════════
     //  分页列表
     // ══════════════════════════════════════════════════════════════

@@ -37,16 +37,16 @@ public class AgentInboxController {
     /**
      * 未读数量
      */
-    @GetMapping("/count")
-    public R<Map<String, Object>> count(@RequestAttribute("_authId") Long agentId) {
+    @GetMapping("/getUnreadCount")
+    public R<Map<String, Object>> getUnreadCount(@RequestAttribute("_authId") Long agentId) {
         return R.ok(Map.of("total_unread", inboxService.countUnread(agentId)));
     }
 
     /**
      * 标记已读
      */
-    @PutMapping("/read/{id}")
-    public R<Void> markRead(@RequestAttribute("_authId") Long agentId,
+    @PostMapping("/markReadById/{id}")
+    public R<Void> markReadById(@RequestAttribute("_authId") Long agentId,
                             @PathVariable("id") Long id) {
         inboxService.markRead(agentId, id);
         return R.ok();
@@ -55,8 +55,8 @@ public class AgentInboxController {
     /**
      * 归档
      */
-    @PutMapping("/archive/{id}")
-    public R<Void> markArchived(@RequestAttribute("_authId") Long agentId,
+    @PostMapping("/archiveById/{id}")
+    public R<Void> archiveById(@RequestAttribute("_authId") Long agentId,
                                 @PathVariable("id") Long id) {
         inboxService.markArchived(agentId, id);
         return R.ok();

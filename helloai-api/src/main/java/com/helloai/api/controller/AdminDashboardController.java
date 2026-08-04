@@ -32,8 +32,8 @@ public class AdminDashboardController {
     /**
      * 概览统计。
      */
-    @GetMapping("/overview")
-    public R<DashboardOverview> overview() {
+    @GetMapping("/getOverview")
+    public R<DashboardOverview> getOverview() {
         Map<String, Long> raw = adminDashboardService.getOverview();
         DashboardOverview dto = new DashboardOverview();
         dto.setTotalTasks(raw.getOrDefault("totalTasks", 0L));
@@ -52,8 +52,8 @@ public class AdminDashboardController {
     /**
      * 高亮信息（阻塞 / 待审 / 低活跃）。
      */
-    @GetMapping("/highlights")
-    public R<DashboardHighlights> highlights() {
+    @GetMapping("/getHighlights")
+    public R<DashboardHighlights> getHighlights() {
         DashboardHighlights result = new DashboardHighlights();
 
         // 阻塞
@@ -103,8 +103,8 @@ public class AdminDashboardController {
     /**
      * 趋势数据（近 N 天）。
      */
-    @GetMapping("/trends")
-    public R<DashboardTrend> trends(@RequestParam(value = "days", defaultValue = "7") int days) {
+    @GetMapping("/getTrends")
+    public R<DashboardTrend> getTrends(@RequestParam(value = "days", defaultValue = "7") int days) {
         Map<String, List<?>> raw = adminDashboardService.getTrends(days);
         DashboardTrend dto = new DashboardTrend();
         dto.setDates(asStringList(raw.get("dates")));

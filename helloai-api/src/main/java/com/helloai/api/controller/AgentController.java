@@ -33,12 +33,12 @@ public class AgentController {
     private final PromptTemplateService promptTemplateService;
     private final LlmProviderCatalogService llmProviderCatalogService;
 
-    @GetMapping
+    @GetMapping("/list")
     public R<List<AgentResponse>> list() {
         return R.ok(agentService.list().stream().map(this::toResponse).toList());
     }
 
-    @GetMapping("/{id}")
+    @GetMapping("/getById/{id}")
     public R<AgentResponse> getById(@PathVariable("id") Long id) {
         Agent agent = agentService.getById(id);
         if (agent == null) {
@@ -61,7 +61,7 @@ public class AgentController {
         return R.ok(toRegistrationResponse(agent));
     }
 
-    @PostMapping("/register-with-token")
+    @PostMapping("/registerWithToken")
     public R<AgentRegistrationResponse> registerWithToken(@RequestBody Map<String, Object> body) {
         if (!agentConfig.isAllowRegistration()) {
             return R.fail(403, "Agent 自注册已关闭，请联系管理员创建");
@@ -145,7 +145,7 @@ public class AgentController {
         agent.setCapabilities(AgentCapability.mergeDefaults(accessType, override));
 
         // 持久化所有可选字段变更
-        agentService.updateById(agent);
+        agentService.updateAgentExtras(agent);
 
         // 5) API_KEY_LLM：注册后按 modelType/默认 provider 尝试补绑平台密钥（尽力而为，
         //    不阻断注册；脚本注册后自行绑定自定义密钥的既有链路保持不变）
@@ -154,8 +154,8 @@ public class AgentController {
         }
     }
 
-    @GetMapping("/me/skill")
-    public R<Map<String, Object>> getSkill(@RequestHeader("Authorization") String auth) {
+    @GetMapping("/getMySkill")
+    public R<Map<String, Object>> getMySkill(@RequestHeader("Authorization") String auth) {
         if (auth == null || !auth.startsWith("Bearer ")) {
             return R.fail(401, "认证失败");
         }

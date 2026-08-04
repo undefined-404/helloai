@@ -28,8 +28,8 @@ public class AgentExecutionController {
     private final AgentExecutionPreviewService agentExecutionPreviewService;
     private final AgentService agentService;
 
-    @PostMapping("/connectivity/{agentId}")
-    public R<AgentExecutionConnectivityResponse> connectivity(
+    @PostMapping("/checkConnectivityByAgentId/{agentId}")
+    public R<AgentExecutionConnectivityResponse> checkConnectivityByAgentId(
             @PathVariable("agentId") Long agentId,
             @RequestBody(required = false) AgentExecutionConnectivityRequest request) {
         AgentExecutionConnectivityResult result = agentExecutionConnectivityService.probe(
@@ -62,8 +62,8 @@ public class AgentExecutionController {
         return R.ok(response);
     }
 
-    @PostMapping("/{agentId}/preview")
-    public R<AgentExecutionPreviewResponse> preview(@PathVariable("agentId") Long agentId,
+    @PostMapping("/previewByAgentId/{agentId}")
+    public R<AgentExecutionPreviewResponse> previewByAgentId(@PathVariable("agentId") Long agentId,
                                                     @RequestBody AgentExecutionPreviewRequest request) {
         AgentResult result = agentExecutionPreviewService.preview(
                 agentId,

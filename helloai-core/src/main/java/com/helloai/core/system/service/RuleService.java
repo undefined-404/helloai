@@ -8,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -47,6 +48,17 @@ public class RuleService extends ServiceImpl<RuleMapper, Rule> {
         }
 
         return merged.toString();
+    }
+
+    /**
+     * 按规则类型查询规则列表（类型可选，按优先级升序）。
+     *
+     * <p>按 §6.3 分层红线从 RulesController 收口。</p>
+     */
+    public List<Rule> listByType(String ruleType) {
+        return list(new LambdaQueryWrapper<Rule>()
+                .eq(ruleType != null && !ruleType.isBlank(), Rule::getRuleType, ruleType)
+                .orderByAsc(Rule::getPriority));
     }
 
     public String getGlobalRuleContent() {

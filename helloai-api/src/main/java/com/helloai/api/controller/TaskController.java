@@ -1,7 +1,6 @@
 package com.helloai.api.controller;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.helloai.api.dto.PageResult;
 import com.helloai.api.dto.task.CreateTaskRequest;
 import com.helloai.api.dto.task.TaskFinalReportResponse;
@@ -9,6 +8,7 @@ import com.helloai.api.dto.task.TaskRelatedCounts;
 import com.helloai.api.dto.task.UpdateTaskStatusRequest;
 import com.helloai.common.base.R;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.FinalReportStatus;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.planner.PlannerAnalysisService;
@@ -48,12 +48,7 @@ public class TaskController {
 
     @PostMapping
     public R<Task> create(@Valid @RequestBody CreateTaskRequest req) {
-        Task task = new Task();
-        task.setTitle(req.getTitle());
-        task.setDescription(req.getDescription());
-        task.setStatus(TaskStatus.PENDING);
-        taskService.save(task);
-        log.info("任务创建: id={}, title={}", task.getId(), req.getTitle());
+        Task task = taskService.createTask(req.getTitle(), req.getDescription());
 
         // v1.1 修复: 创建任务后通知所有 PLANNER
         try {
@@ -73,51 +68,40 @@ public class TaskController {
         return R.ok(task);
     }
 
-    @GetMapping
+    @GetMapping("/list")
     public R<?> list(
             @RequestParam(value = "page", required = false) Integer page,
             @RequestParam(value = "pageSize", defaultValue = "20") int pageSize,
             @RequestParam(value = "status", required = false) String status) {
         TaskStatus taskStatus = (status != null && !status.isBlank()) ? TaskStatus.valueOf(status) : null;
-        var wrapper = new LambdaQueryWrapper<Task>()
-                .eq(taskStatus != null, Task::getStatus, taskStatus)
-                .orderByDesc(Task::getCreateTime);
+        IPage<Task> result = taskService.pageTasks(taskStatus, page, pageSize);
 
         // 前端直接使用列表（不传 page 时返回全部）
         if (page == null || page <= 0) {
-            List<Task> list = taskService.list(wrapper);
-            return R.ok(list);
+            return R.ok(result.getRecords());
         }
-        Page<Task> result = taskService.page(new Page<>(page, pageSize), wrapper);
         return R.ok(PageResult.of(result));
     }
 
-    @GetMapping("/{id}")
+    @GetMapping("/getById/{id}")
     public R<Task> getById(@PathVariable("id") Long id) {
         Task task = taskService.getById(id);
         if (task == null) return R.fail("任务不存在");
         return R.ok(task);
     }
 
-    @PutMapping("/status/{id}")
+    @PostMapping("/updateStatusById/{id}")
     public R<Task> updateStatus(@PathVariable("id") Long id,
                                  @Valid @RequestBody UpdateTaskStatusRequest req) {
-        Task task = taskService.getById(id);
+        Task task = taskService.updateStatus(id, TaskStatus.valueOf(req.getStatus()));
         if (task == null) return R.fail("任务不存在");
-        TaskStatus newStatus = TaskStatus.valueOf(req.getStatus());
-        task.setStatus(newStatus);
-        taskService.updateById(task);
-        log.info("任务状态变更: id={}, status={}", id, req.getStatus());
         return R.ok(task);
     }
 
-    @PutMapping("/{id}")
+    @PutMapping("/updateById/{id}")
     public R<Task> update(@PathVariable("id") Long id, @RequestBody CreateTaskRequest req) {
-        Task task = taskService.getById(id);
+        Task task = taskService.updateTask(id, req.getTitle(), req.getDescription());
         if (task == null) return R.fail("任务不存在");
-        task.setTitle(req.getTitle());
-        task.setDescription(req.getDescription());
-        taskService.updateById(task);
         return R.ok(task);
     }
 
@@ -125,7 +109,7 @@ public class TaskController {
     //  重新发布（重置 PENDING + 重新通知 PLANNER，不触碰子任务）
     // ══════════════════════════════════════════════════════════
 
-    @PostMapping("/{id}/republish")
+    @PostMapping("/republishById/{id}")
     public R<Task> republish(@PathVariable("id") Long id) {
         return R.ok(taskService.republish(id));
     }
@@ -134,22 +118,22 @@ public class TaskController {
     //  Planner 平台内拆解（草案生成 / 查看 / 确认 / 拒绝，编排全在 core）
     // ══════════════════════════════════════════════════════
 
-    @PostMapping("/{id}/plan")
+    @PostMapping("/planById/{id}")
     public R<List<SubTask>> plan(@PathVariable("id") Long id) {
         return R.ok(plannerAnalysisService.decompose(id));
     }
 
-    @GetMapping("/{id}/plan")
-    public R<List<SubTask>> planDrafts(@PathVariable("id") Long id) {
+    @GetMapping("/findPlanByTaskId/{id}")
+    public R<List<SubTask>> listPlanDrafts(@PathVariable("id") Long id) {
         return R.ok(plannerAnalysisService.listDrafts(id));
     }
 
-    @PostMapping("/{id}/plan/confirm")
+    @PostMapping("/confirmPlanByTaskId/{id}")
     public R<List<SubTask>> confirmPlan(@PathVariable("id") Long id) {
         return R.ok(plannerAnalysisService.confirmPlan(id));
     }
 
-    @PostMapping("/{id}/plan/reject")
+    @PostMapping("/rejectPlanByTaskId/{id}")
     public R<Map<String, Object>> rejectPlan(@PathVariable("id") Long id) {
         int cancelled = plannerAnalysisService.rejectPlan(id);
         return R.ok(Map.of("taskId", id, "cancelledCount", cancelled));
@@ -159,7 +143,7 @@ public class TaskController {
     //  交付物下载（实时聚合 zip，聚合编排全在 TaskDeliverableService）
     // ══════════════════════════════════════════════════════════
 
-    @GetMapping("/{id}/deliverables/download")
+    @GetMapping("/downloadDeliverablesByTaskId/{id}")
     public ResponseEntity<byte[]> downloadDeliverables(@PathVariable("id") Long id) {
         TaskDeliverableService.DeliverablePackage pkg = taskDeliverableService.buildZip(id);
         HttpHeaders headers = new HttpHeaders();
@@ -174,8 +158,8 @@ public class TaskController {
     //  最终整合报告（Planner 整合全部子任务产出，编排全在 TaskFinalReportService）
     // ══════════════════════════════════════════════════════════
 
-    @GetMapping("/{id}/final-report")
-    public R<TaskFinalReportResponse> finalReport(@PathVariable("id") Long id) {
+    @GetMapping("/findFinalReportByTaskId/{id}")
+    public R<TaskFinalReportResponse> getFinalReport(@PathVariable("id") Long id) {
         Task task = taskService.getById(id);
         if (task == null) {
             return R.fail(404, "任务不存在: " + id);
@@ -183,7 +167,7 @@ public class TaskController {
         return R.ok(toFinalReportResponse(task));
     }
 
-    @PostMapping("/{id}/final-report")
+    @PostMapping("/generateFinalReportByTaskId/{id}")
     public R<TaskFinalReportResponse> generateFinalReport(@PathVariable("id") Long id) {
         return R.ok(toFinalReportResponse(taskFinalReportService.generate(id)));
     }
@@ -206,8 +190,8 @@ public class TaskController {
     //  关联数据统计（删除前风险提示）
     // ══════════════════════════════════════════════════════════
 
-    @GetMapping("/{id}/related-counts")
-    public R<TaskRelatedCounts> relatedCounts(@PathVariable("id") Long id) {
+    @GetMapping("/listRelatedCountsByTaskId/{id}")
+    public R<TaskRelatedCounts> listRelatedCounts(@PathVariable("id") Long id) {
         return R.ok(toRelatedCounts(taskService.getRelatedCounts(id)));
     }
 
@@ -215,7 +199,7 @@ public class TaskController {
     //  级联删除（子任务/死信/收件箱未读消息一并物理清理）
     // ══════════════════════════════════════════════════════════
 
-    @DeleteMapping("/{id}")
+    @DeleteMapping("/deleteById/{id}")
     public R<TaskRelatedCounts> delete(@PathVariable("id") Long id,
                                        @RequestBody Map<String, String> body) {
         String confirmTitle = body.get("confirmTitle");

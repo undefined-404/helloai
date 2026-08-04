@@ -32,18 +32,16 @@ public class ScoreController {
     /**
      * 积分流水明细，分页查询。
      */
-    @GetMapping("/logs")
-    public R<IPage<RewardLog>> logs(
+    @GetMapping("/listLogs")
+    public R<IPage<RewardLog>> listLogs(
             @RequestParam(value = "page", defaultValue = "1") int page,
             @RequestParam(value = "pageSize", defaultValue = "20") int pageSize) {
         return R.ok(rewardService.listAllLogs(page, pageSize));
     }
 
-    @GetMapping("/leaderboard")
-    public R<List<Map<String, Object>>> leaderboard() {
-        List<Agent> agents = agentService.lambdaQuery()
-                .orderByDesc(Agent::getScore)
-                .list();
+    @GetMapping("/getLeaderboard")
+    public R<List<Map<String, Object>>> getLeaderboard() {
+        List<Agent> agents = agentService.listAllOrderByScoreDesc();
 
         List<Map<String, Object>> result = agents.stream().map(a -> Map.<String, Object>of(
                 "agentId", a.getId(),

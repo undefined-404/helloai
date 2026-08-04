@@ -3,7 +3,6 @@ package com.helloai.api.controller;
 import com.helloai.api.dto.credential.BindAgentApiKeyRequest;
 import com.helloai.api.dto.credential.CredentialInfoResponse;
 import com.helloai.common.base.R;
-import com.helloai.common.constant.CredentialOwnerType;
 import com.helloai.core.system.entity.CredentialVault;
 import com.helloai.core.system.service.CredentialVaultBindingService;
 import com.helloai.core.system.service.CredentialVaultService;
@@ -22,8 +21,8 @@ public class CredentialController {
     private final CredentialVaultService credentialVaultService;
     private final HttpServletRequest request;
 
-    @PostMapping("/agents/{agentId}/api-key")
-    public R<CredentialInfoResponse> bindAgentApiKey(@PathVariable("agentId") Long agentId,
+    @PostMapping("/bindApiKeyByAgentId/{agentId}")
+    public R<CredentialInfoResponse> bindApiKeyByAgentId(@PathVariable("agentId") Long agentId,
                                                      @RequestBody BindAgentApiKeyRequest req) {
         requireAdmin();
         CredentialVault vault = credentialVaultBindingService.bindAgentApiKey(
@@ -36,13 +35,10 @@ public class CredentialController {
         return R.ok(toInfo(vault));
     }
 
-    @GetMapping("/agents/{agentId}")
-    public R<List<CredentialInfoResponse>> listAgentCredentials(@PathVariable("agentId") Long agentId) {
+    @GetMapping("/listByAgentId/{agentId}")
+    public R<List<CredentialInfoResponse>> listByAgentId(@PathVariable("agentId") Long agentId) {
         requireAdmin();
-        List<CredentialInfoResponse> list = credentialVaultService.lambdaQuery()
-                .eq(CredentialVault::getOwnerType, CredentialOwnerType.AGENT)
-                .eq(CredentialVault::getOwnerId, agentId)
-                .list()
+        List<CredentialInfoResponse> list = credentialVaultService.listAgentCredentials(agentId)
                 .stream()
                 .map(this::toInfo)
                 .toList();

@@ -61,7 +61,7 @@ public class AgentDutyLeaseController {
      *
      * <p>"查看某 Agent 全部记录"复用 {@link #list} 的 agentId 过滤 + 分页。</p>
      */
-    @GetMapping("/by-agent")
+    @GetMapping("/listByAgent")
     public R<PageResult<DutyAgentLatestResponse>> listByAgent(
             @RequestParam(value = "page", defaultValue = "1") long page,
             @RequestParam(value = "size", defaultValue = "20") long size) {
@@ -80,8 +80,8 @@ public class AgentDutyLeaseController {
      * <p>按 Agent 维度统计：每个 Agent 只按其最新租约状态计一次，
      * 不再按历史租约条数累计。</p>
      */
-    @GetMapping("/overview")
-    public R<DutyOverviewResponse> overview() {
+    @GetMapping("/getOverview")
+    public R<DutyOverviewResponse> getOverview() {
         Map<AgentDutyLeaseStatus, Long> counts = agentDutyLeaseService.countTodayAgentsByStatus();
 
         DutyOverviewResponse resp = new DutyOverviewResponse();

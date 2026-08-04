@@ -97,6 +97,30 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
     }
 
     /**
+     * 待领取子任务列表（PENDING 状态，按创建时间倒序）。
+     *
+     * <p>按 §6.3 分层红线从 SubTaskController 收口。</p>
+     */
+    public List<SubTask> listAvailable() {
+        return lambdaQuery()
+                .eq(SubTask::getStatus, SubTaskStatus.PENDING)
+                .orderByDesc(SubTask::getCreateTime)
+                .list();
+    }
+
+    /**
+     * 指定 Agent 负责的子任务列表（按创建时间倒序）。
+     *
+     * <p>按 §6.3 分层红线从 SubTaskController 收口。</p>
+     */
+    public List<SubTask> listMine(Long assignedAgentId) {
+        return lambdaQuery()
+                .eq(SubTask::getAssignedAgentId, assignedAgentId)
+                .orderByDesc(SubTask::getCreateTime)
+                .list();
+    }
+
+    /**
      * 按子任务主键加行级锁读取。
      *
      * <p>用于命令创建等需要“读现状 + 紧接写入”原子化的路径，

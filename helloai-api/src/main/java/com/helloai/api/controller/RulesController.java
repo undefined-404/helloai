@@ -1,6 +1,5 @@
 package com.helloai.api.controller;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.helloai.common.base.R;
 import com.helloai.core.system.entity.Rule;
 import com.helloai.core.system.service.RuleService;
@@ -24,16 +23,13 @@ public class RulesController {
      */
     @GetMapping
     public R<List<Rule>> list(@RequestParam(value = "ruleType", required = false) String ruleType) {
-        var wrapper = new LambdaQueryWrapper<Rule>()
-                .eq(ruleType != null && !ruleType.isBlank(), Rule::getRuleType, ruleType)
-                .orderByAsc(Rule::getPriority);
-        return R.ok(ruleService.list(wrapper));
+        return R.ok(ruleService.listByType(ruleType));
     }
 
     /**
      * 获取单个规则
      */
-    @GetMapping("/{id}")
+    @GetMapping("/getById/{id}")
     public R<Rule> getById(@PathVariable("id") Long id) {
         Rule rule = ruleService.getById(id);
         if (rule == null) return R.fail("规则不存在");
@@ -43,7 +39,7 @@ public class RulesController {
     /**
      * 合并规则内容（原有端点保留兼容）
      */
-    @GetMapping("/merged")
+    @GetMapping("/getMergedRules")
     public R<Map<String, Object>> getMergedRules(
             @RequestParam(value = "taskId", required = false) Long taskId,
             @RequestParam(value = "subTaskId", required = false) Long subTaskId) {

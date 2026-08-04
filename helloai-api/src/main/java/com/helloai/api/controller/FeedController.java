@@ -75,7 +75,7 @@ public class FeedController {
     /**
      * Agent 摘要信息（供活动流展示）。
      */
-    @GetMapping("/agents")
+    @GetMapping("/listAgents")
     public R<List<AgentResponse>> listAgents() {
         List<Agent> agents = feedService.listAgentSummaries();
         return R.ok(agents.stream().map(this::toAgentResponse).toList());

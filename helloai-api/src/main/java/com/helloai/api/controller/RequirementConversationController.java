@@ -35,21 +35,21 @@ public class RequirementConversationController {
     }
 
     /** Planner 下拉选数据源（平台内 PLANNER 可选 + 在班外部 Agent 置灰）。 */
-    @GetMapping("/planner-options")
-    public R<List<PlannerAgentPicker.PlannerOption>> plannerOptions() {
+    @GetMapping("/listPlannerOptions")
+    public R<List<PlannerAgentPicker.PlannerOption>> listPlannerOptions() {
         return R.ok(requirementClarifyService.listPlannerOptions());
     }
 
     /** 追加一条用户消息并走一轮 LLM 澄清（可附结构化选项回答快照）。 */
-    @PostMapping("/{id}/messages")
-    public R<ClarifyConversationDetail> sendMessage(@PathVariable("id") Long id,
+    @PostMapping("/sendMessageById/{id}")
+    public R<ClarifyConversationDetail> sendMessageById(@PathVariable("id") Long id,
                                                     @Valid @RequestBody ClarifyMessageRequest req) {
         return R.ok(requirementClarifyService.sendMessage(id, req.getMessage(), req.getSelectedOptions()));
     }
 
     /** 重试上一轮 LLM（仅当最后一条是用户消息，即上轮 LLM 失败时可用）。 */
-    @PostMapping("/{id}/retry")
-    public R<ClarifyConversationDetail> retry(@PathVariable("id") Long id) {
+    @PostMapping("/retryById/{id}")
+    public R<ClarifyConversationDetail> retryById(@PathVariable("id") Long id) {
         return R.ok(requirementClarifyService.retryRound(id));
     }
 
@@ -75,26 +75,26 @@ public class RequirementConversationController {
     }
 
     /** 会话详情（含全部消息按 seq 升序）。 */
-    @GetMapping("/{id}")
-    public R<ClarifyConversationDetail> detail(@PathVariable("id") Long id) {
+    @GetMapping("/getById/{id}")
+    public R<ClarifyConversationDetail> getById(@PathVariable("id") Long id) {
         return R.ok(requirementClarifyService.detail(id));
     }
 
     /** 终稿确认：创建任务并回填会话。 */
-    @PostMapping("/{id}/finalize")
-    public R<Task> finalizeConversation(@PathVariable("id") Long id) {
+    @PostMapping("/finalizeById/{id}")
+    public R<Task> finalizeById(@PathVariable("id") Long id) {
         return R.ok(requirementClarifyService.finalize(id));
     }
 
     /** 重新生成：FINALIZED 会话原任务已删除时，复用终稿重建任务并回填。 */
-    @PostMapping("/{id}/regenerate")
-    public R<Task> regenerate(@PathVariable("id") Long id) {
+    @PostMapping("/regenerateById/{id}")
+    public R<Task> regenerateById(@PathVariable("id") Long id) {
         return R.ok(requirementClarifyService.regenerate(id));
     }
 
     /** 放弃会话。 */
-    @PostMapping("/{id}/abandon")
-    public R<Void> abandon(@PathVariable("id") Long id) {
+    @PostMapping("/abandonById/{id}")
+    public R<Void> abandonById(@PathVariable("id") Long id) {
         requirementClarifyService.abandon(id);
         return R.ok(null);
     }

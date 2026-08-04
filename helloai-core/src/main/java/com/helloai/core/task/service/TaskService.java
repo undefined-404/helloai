@@ -1,6 +1,8 @@
 package com.helloai.core.task.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentRole;
@@ -53,6 +55,81 @@ public class TaskService extends ServiceImpl<TaskMapper, Task> {
     private final ConversationMessageMapper conversationMessageMapper;
     private final AgentMapper agentMapper;
     private final AgentInboxService agentInboxService;
+
+    // ══════════════════════════════════════════════════════════════
+    //  基础 CRUD（§6.3 收口：条件构造与写操作归 Service）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 创建任务（初始状态 PENDING）。
+     *
+     * <p>按 §6.3 分层红线从 TaskController 收口：实体装配与落库归 Service，
+     * Controller 只负责参数接收与返回封装。</p>
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public Task createTask(String title, String description) {
+        Task task = new Task();
+        task.setTitle(title);
+        task.setDescription(description);
+        task.setStatus(TaskStatus.PENDING);
+        save(task);
+        log.info("任务创建: id={}, title={}", task.getId(), title);
+        return task;
+    }
+
+    /**
+     * 任务条件查询（状态过滤 + 创建时间倒序）。
+     *
+     * <p>按 §6.3 分层红线从 TaskController 收口：条件构造归 Service 层。
+     * {@code page == null || page <= 0} 时返回全量列表（包装成 IPage，便于 Controller 统一处理）。</p>
+     *
+     * @param status 任务状态，可为 null（不过滤）
+     * @param page   页码，null 或 <=0 表示不分页
+     * @param pageSize 每页条数（仅分页时生效）
+     */
+    public IPage<Task> pageTasks(TaskStatus status, Integer page, int pageSize) {
+        LambdaQueryWrapper<Task> wrapper = new LambdaQueryWrapper<Task>()
+                .eq(status != null, Task::getStatus, status)
+                .orderByDesc(Task::getCreateTime);
+        if (page == null || page <= 0) {
+            List<Task> all = list(wrapper);
+            Page<Task> full = new Page<>(1, Math.max(all.size(), 1));
+            full.setRecords(all);
+            full.setTotal(all.size());
+            return full;
+        }
+        return page(new Page<>(page, pageSize), wrapper);
+    }
+
+    /**
+     * 更新任务状态；任务不存在时返回 null（由 Controller 转 R.fail）。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public Task updateStatus(Long id, TaskStatus status) {
+        Task task = getById(id);
+        if (task == null) {
+            return null;
+        }
+        task.setStatus(status);
+        updateById(task);
+        log.info("任务状态变更: id={}, status={}", id, status);
+        return task;
+    }
+
+    /**
+     * 更新任务标题与描述；任务不存在时返回 null（由 Controller 转 R.fail）。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public Task updateTask(Long id, String title, String description) {
+        Task task = getById(id);
+        if (task == null) {
+            return null;
+        }
+        task.setTitle(title);
+        task.setDescription(description);
+        updateById(task);
+        return task;
+    }
 
     // ══════════════════════════════════════════════════════════════
     //  关联统计（删除前风险提示）

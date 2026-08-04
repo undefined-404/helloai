@@ -32,7 +32,7 @@ public class ActivityController {
      * <p>{@code page <= 0} 时返回全量列表（IPage 中只填 records），
      * 否则按分页参数返回（PageResult 包含 total/pages/current）。</p>
      */
-    @GetMapping
+    @GetMapping("/list")
     public R<?> list(
             @RequestParam(value = "agentId", required = false) Long agentId,
             @RequestParam(value = "subTaskId", required = false) Long subTaskId,

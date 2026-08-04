@@ -26,8 +26,8 @@ public class SetupController {
     /**
      * 检查初始化状态
      */
-    @GetMapping("/status")
-    public R<Map<String, Object>> status() {
+    @GetMapping("/getStatus")
+    public R<Map<String, Object>> getStatus() {
         boolean finished = sysConfigService.isSetupFinished();
         long userCount = sysUserService.count();
         return R.ok(Map.of(
@@ -73,6 +73,6 @@ public class SetupController {
      */
     @GetMapping("/check")
     public R<Map<String, Object>> check() {
-        return status();
+        return getStatus();
     }
 }

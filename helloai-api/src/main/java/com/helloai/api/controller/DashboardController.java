@@ -29,8 +29,8 @@ public class DashboardController {
      * Dashboard 统计（totalTasks / activeSubTasks / pendingReviews /
      * blockedTasks / agentRanking / throughput）。
      */
-    @GetMapping("/stats")
-    public R<Map<String, Object>> stats() {
+    @GetMapping("/getStats")
+    public R<Map<String, Object>> getStats() {
         return R.ok(dashboardService.getStats());
     }
 }

@@ -47,7 +47,7 @@ public class AuthController {
         return R.ok();
     }
 
-    @PostMapping("/change-password")
+    @PostMapping("/changePassword")
     public R<Void> changePassword(
             @Valid @RequestBody ChangePasswordRequest req,
             @RequestHeader(value = "X-Admin-Token", required = false) String token,

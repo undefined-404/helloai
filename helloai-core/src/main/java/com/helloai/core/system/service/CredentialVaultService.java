@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 
 /**
  * 凭证保险库服务。
@@ -32,6 +33,18 @@ public class CredentialVaultService extends ServiceImpl<CredentialVaultMapper, C
                 .orderByDesc(CredentialVault::getCreateTime)
                 .last("LIMIT 1")
                 .one();
+    }
+
+    /**
+     * 查询 Agent 的全部凭证记录（不含加密值明文）。
+     *
+     * <p>按 §6.3 分层红线从 CredentialController 收口。</p>
+     */
+    public List<CredentialVault> listAgentCredentials(Long agentId) {
+        return lambdaQuery()
+                .eq(CredentialVault::getOwnerType, CredentialOwnerType.AGENT)
+                .eq(CredentialVault::getOwnerId, agentId)
+                .list();
     }
 
     /**
