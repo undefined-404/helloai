@@ -155,6 +155,7 @@
 | CLI Agent 主动拉任务消费 | 已支持 | 通过 `pullTasks / ack / claimSubTask / heartbeat / reportBlocked` 等工具实现 |
 | EXECUTOR 自动执行主链 | 已支持 | 调度、命令消费、执行、结果回写、超时补偿链路均已接通 |
 | PLANNER 自动拆解任务 | 已支持 | 需求经 LLM 自动拆解为草案（`PENDING_PLAN_REVIEW`），用户确认后进入既有分发链（V26，2026-07-28 交付，详见差距表 N16） |
+| Planner 对话式需求澄清 | 已支持 | CHAT 自由对话 / CLARIFY 方案澄清双模：意图词二次确认 + `/planner` 斜杠命令直达，终稿一键立项并顺路拆解（N17，V29~V40.2，详见差距表 N17） |
 | REVIEWER 自动审查 | 部分支持 | 子任务进入 `REVIEW` 后有通知，但当前主流程仍依赖显式 review 提交 |
 | Agent 离线后同角色重分发 | 已支持 | 会重置子任务并交回弹性调度器，按同角色替补 |
 | 执行超时补偿 | 已支持 | `PENDING/RUNNING` 超时会补偿为 `TIMEOUT`，必要时推进 `BLOCKED` |
