@@ -6,7 +6,7 @@ export const reviewApi = {
     return request.get<any, ReviewRecord[]>('/reviews', { params: { subTaskId } })
   },
   getById(id: number) {
-    return request.get<any, ReviewRecord>(`/reviews/${id}`)
+    return request.get<any, ReviewRecord>(`/reviews/getById/${id}`)
   },
   create(data: CreateReviewRequest) {
     return request.post<any, ReviewRecord>('/reviews', data)

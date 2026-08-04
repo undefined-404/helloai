@@ -6,12 +6,12 @@ export const inboxApi = {
     return request.get<any, AgentInbox[]>('/agent/inbox', { params: { limit: limit || 20 } })
   },
   count() {
-    return request.get<any, { total_unread: number }>('/agent/inbox/count')
+    return request.get<any, { total_unread: number }>('/agent/inbox/getUnreadCount')
   },
   markRead(id: number) {
-    return request.put(`/agent/inbox/read/${id}`)
+    return request.post(`/agent/inbox/markReadById/${id}`)
   },
   markArchived(id: number) {
-    return request.put(`/agent/inbox/archive/${id}`)
+    return request.post(`/agent/inbox/archiveById/${id}`)
   }
 }

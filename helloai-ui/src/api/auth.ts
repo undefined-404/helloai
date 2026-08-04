@@ -15,7 +15,7 @@ export const authApi = {
     return request.post('/auth/logout')
   },
   changePassword(data: { currentPassword: string; newPassword: string }) {
-    return request.post('/auth/change-password', data)
+    return request.post('/auth/changePassword', data)
   },
   me() {
     return request.get<any, LoginResponse>('/auth/me')

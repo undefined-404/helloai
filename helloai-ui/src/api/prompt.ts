@@ -6,19 +6,19 @@ export const promptApi = {
     return request.get<any, PromptTemplate[]>('/admin/prompts', { params })
   },
   getById(id: number) {
-    return request.get<any, PromptTemplate>(`/admin/prompts/${id}`)
+    return request.get<any, PromptTemplate>(`/admin/prompts/getById/${id}`)
   },
   getDefault(role: string) {
-    return request.get<any, PromptTemplate>('/admin/prompts/default', { params: { role } })
+    return request.get<any, PromptTemplate>('/admin/prompts/getDefaultByRole', { params: { role } })
   },
   create(data: Partial<PromptTemplate>) {
     return request.post<any, PromptTemplate>('/admin/prompts', data)
   },
   update(id: number, data: Partial<PromptTemplate>) {
-    return request.put<any, PromptTemplate>(`/admin/prompts/${id}`, data)
+    return request.put<any, PromptTemplate>(`/admin/prompts/updateById/${id}`, data)
   },
   remove(id: number) {
-    return request.delete(`/admin/prompts/${id}`)
+    return request.delete(`/admin/prompts/deleteById/${id}`)
   },
   compose(role: string, agentContent?: string) {
     return request.post<any, { content: string }>('/admin/prompts/compose', { role, agentContent: agentContent || '' })

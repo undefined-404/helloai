@@ -7,11 +7,11 @@ export const attachmentApi = {
     return request.get<any, Attachment[]>('/attachments', { params: { subTaskId } })
   },
   getById(id: LongId) {
-    return request.get<any, Attachment>(`/attachments/${id}`)
+    return request.get<any, Attachment>(`/attachments/getById/${id}`)
   },
   // 下载附件：local:// 物化产物由后端流式返回；blob 响应在拦截器放行，
   // 返回完整 response 供 saveBlobResponse 解析文件名
   download(id: LongId) {
-    return request.get<any, AxiosResponse<Blob>>(`/attachments/${id}/download`, { responseType: 'blob' })
+    return request.get<any, AxiosResponse<Blob>>(`/attachments/downloadById/${id}`, { responseType: 'blob' })
   }
 }
