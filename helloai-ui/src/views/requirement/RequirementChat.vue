@@ -425,7 +425,7 @@ async function handleSend() {
   // V40.2 /planner 斜杠命令：显式进入方案澄清模式（命令前缀不落消息）
   const cmd = text.match(PLANNER_COMMAND_RE)
   if (cmd) {
-    handlePlannerCommand(cmd[1]?.trim() ?? '')
+    await handlePlannerCommand(cmd[1]?.trim() ?? '')
     return
   }
   input.value = ''
