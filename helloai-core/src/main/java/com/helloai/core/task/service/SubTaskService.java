@@ -568,4 +568,32 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
         private SubTask subTask;
         private Long assignedAgentId;
     }
+
+    /**
+     * 列出超过阈值秒数仍处于 REVIEW 且无审查记录的子任务（孤儿 REVIEW）。
+     *
+     * <p>作为 {@link com.helloai.core.review.SubTaskReviewService#onSubmittedForReview}
+     * 事件链的兜底扫描：当 AFTER_COMMIT 事务事件因线程池 / 序列化等原因丢失时，
+     * 本方法提供基于 DB 状态的二次发现能力。</p>
+     *
+     * @param thresholdSeconds 子任务 update_time 早于 now - thresholdSeconds 的才进入候选
+     * @param limit            返回上限
+     * @return REVIEW 孤儿子任务列表
+     */
+    public List<SubTask> listReviewOrphans(int thresholdSeconds, int limit) {
+        OffsetDateTime threshold = OffsetDateTime.now().minusSeconds(thresholdSeconds);
+        List<SubTask> candidates = lambdaQuery()
+                .eq(SubTask::getStatus, SubTaskStatus.REVIEW)
+                .le(SubTask::getUpdateTime, threshold)
+                .orderByAsc(SubTask::getUpdateTime)
+                .last("LIMIT " + limit)
+                .list();
+        candidates.removeIf(st -> {
+            Long cnt = reviewRecordMapper.selectCount(
+                    new LambdaQueryWrapper<ReviewRecord>()
+                            .eq(ReviewRecord::getSubTaskId, st.getId()));
+            return cnt != null && cnt > 0;
+        });
+        return candidates;
+    }
 }

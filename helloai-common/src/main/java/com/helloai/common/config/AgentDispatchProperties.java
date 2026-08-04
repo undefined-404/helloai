@@ -85,6 +85,20 @@ public class AgentDispatchProperties {
     private int autoReviewMaxRework = 3;
 
     /**
+     * V27 兜底：REVIEW 孤儿扫描阈值（秒）。
+     *
+     * <p>子任务进入 REVIEW 超过此秒数且无 review_record 时，
+     * SubTaskReviewService 的 @Scheduled 兜底扫描会触发核验。
+     * 作为 AFTER_COMMIT 事件链丢失时的二次确保。默认 60s。</p>
+     */
+    private int reviewOrphanThresholdSeconds = 60;
+
+    /**
+     * V27 兜底：REVIEW 孤儿扫描每批上限。默认 10。</p>
+     */
+    private int reviewOrphanBatchSize = 10;
+
+    /**
      * V32：任务自动收口（全部子任务 DONE/CANCELLED → Task DONE）后，
      * 是否异步触发 Planner 生成最终整合报告。
      *

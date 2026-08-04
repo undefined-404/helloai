@@ -26,6 +26,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.scheduling.annotation.Async;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
@@ -91,6 +92,39 @@ public class SubTaskReviewService {
         } catch (Exception e) {
             log.warn("自动核验异常，子任务停留 REVIEW 等人工兜底: subTaskId={}, err={}",
                     event.getSubTaskId(), e.getMessage());
+        }
+    }
+
+    /**
+     * REVIEW 孤儿兜底扫描：当 AFTER_COMMIT 事件链因线程池 / 序列化丢失时，
+     * 基于 DB 状态的定期扫描作为二次确保。
+     *
+     * <p>扫描间隔可通过 {@code helloai.dispatch.review-orphan-scan-interval-ms} 配置（默认 30s），
+     * 扫描阈值通过 {@code helloai.dispatch.review-orphan-threshold-seconds} 配置（默认 60s），
+     * 表示子任务进入 REVIEW 超过该时间且无审查记录时才触发兜底核验。</p>
+     */
+    @Scheduled(fixedDelayString = "${helloai.dispatch.review-orphan-scan-interval-ms:30000}")
+    public void scanReviewOrphans() {
+        if (!dispatchProperties.isAutoReviewEnabled()) {
+            return;
+        }
+        int threshold = dispatchProperties.getReviewOrphanThresholdSeconds() > 0
+                ? dispatchProperties.getReviewOrphanThresholdSeconds() : 60;
+        int batchSize = dispatchProperties.getReviewOrphanBatchSize() > 0
+                ? dispatchProperties.getReviewOrphanBatchSize() : 10;
+
+        List<SubTask> orphans = subTaskService.listReviewOrphans(threshold, batchSize);
+        if (orphans.isEmpty()) {
+            return;
+        }
+        log.info("REVIEW 孤儿扫描发现 {} 条候选: threshold={}s, batchSize={}",
+                orphans.size(), threshold, batchSize);
+        for (SubTask st : orphans) {
+            try {
+                reviewSubTask(st.getId(), st.getAssignedAgentId());
+            } catch (Exception e) {
+                log.warn("REVIEW 孤儿兜底核验异常: subTaskId={}, err={}", st.getId(), e.getMessage());
+            }
         }
     }
 
