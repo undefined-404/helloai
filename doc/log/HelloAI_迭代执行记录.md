@@ -4028,3 +4028,61 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 - 行为变更：孤儿 PENDING 无人兜底窗口 30 分钟→5 分钟（isReady 守卫保证不误伤）；`unlockDownstream` 分发失败不再静默（timeline `sub_task_dispatch_deferred` 可见）；报告生成期间按钮禁用 + 状态「报告生成中」，重复生成被后端 CAS 拒绝。
 - 兼容性：`final_report_status` 默认 NONE 对存量零影响；FAILED 状态可重新生成；任务 DONE 语义不变（报告状态独立维度）。
 - 遗留：「全员瞬时忙碌」时子任务仍会落入 PENDING 等待孤儿巡检（现 5 分钟），未做排队等待/延迟重试策略（可后续考虑，不属本轮）；`sub_task_dispatch_deferred` 事件无前端消费（可在派发控制台时间线查看）。
+
+### 6.48 /planner 命令缺失 await 修复（2026-08-03）
+
+#### 1. 背景与决策
+
+用户报告 `/planner` 斜杠命令在需求澄清对话框中报错。追踪全链路：`RequirementChat.vue` `handleSend()` → `handlePlannerCommand()` → `clarifyApi.toClarify()` → 后端 `switchToClarify()` → LLM 轮。定位到 `handleSend()` 中匹配 `/planner` 命令后调用 `handlePlannerCommand(cmd[1]?.trim() ?? '')` **缺少 `await`**，导致异步操作 fire-and-forget：`handleSend` 在异步完成前立即返回，`sending` 状态未及时置位，`finally` 清理逻辑跳过，并发重入风险。
+
+注意：PLANNER Agent 为 inner API_KEY_LLM 类型（类比线程池核心线程），无在线/离线状态概念，OFFLINE 状态不是问题原因。
+
+#### 2. 实际落地
+
+- 前端 `RequirementChat.vue` L428：`handlePlannerCommand(cmd[1]?.trim() ?? '')` 改为 `await handlePlannerCommand(cmd[1]?.trim() ?? '')`，纳入正常 await 链路。
+
+#### 3. 验证结果
+
+- 代码审查确认：`handlePlannerCommand` 返回 Promise（async 函数内调 `clarifyApi.toClarify` / `clarifyApi.create`），缺失 await 导致 fire-and-forget。
+- 修复后 `/planner` 命令应正常走完创建/切换→LLM 调用→前端刷新全流程。
+
+#### 4. 影响与遗留
+
+- 行为修复：`/planner` 命令不再因并发状态竞态引发 sending 未置位、重复发送等问题。
+- 无新增依赖或配置变更。
+
+### 6.49 REVIEW 孤儿扫描兜底（2026-08-03）
+
+#### 1. 背景与决策
+
+用户报告任务「内部周报自动汇总工具开发」的两个子任务（#1 企业微信API对接、#2 需求分析与规划）卡在"审查中"（REVIEW）状态，reviewer agent（`inner-kimi-reviewer`）未被调用。
+
+数据库取证（dev 环境）：
+- `sub_task` 表：2 条 REVIEW 子任务（`update_time` 07:55）
+- `review_record` 表：EMPTY（无任何核验记录）
+- `agent_inbox` 表：EMPTY（inner API_KEY_LLM Agent 不走 inbox，符合设计）
+- `agent_outbox_event` 表：2 条 `sub_task.review` 事件已发布（routing_key=`agent.reviewer.assigned`），但无 consumer 消费
+- `task_timeline` 表：只有 `sub_task_execute_submit`，没有 `sub_task_auto_review_*` 事件
+- `event_consumption_log` 表：所有 consumer 均为 `MqExecutionCommandConsumer`，无 reviewer consumer
+
+**根因**：L1 主路径 `SubTaskSubmittedForReviewEvent` → `@TransactionalEventListener(phase=AFTER_COMMIT)` + `@Async` 未触发（timeline 无 `sub_task_auto_review_*` 证据）；L2 MQ 备份路径 `agent.reviewer.assigned` 路由已绑定 `reviewerQueue`，但代码库无 `MqReviewCommandConsumer` 消费端。双路径均断裂，子任务永久卡 REVIEW。
+
+**决策**：不新增 MQ 消费者（涉及队列/交换机/幂等/确认等全套基建），而是走 L3 DB 状态扫描兜底——`@Scheduled` 定时扫描 REVIEW 状态且无 `review_record` 的孤儿子任务，直接调用既有 `reviewSubTask()` 触发核验。与 ExecutionCommandPoller 孤儿扫描（§6.32 T5）同款"主路径 + 兜底扫描"冗余容错哲学。
+
+#### 2. 实际落地
+
+- **`AgentDispatchProperties`**（helloai-common/config）：新增两项配置——`reviewOrphanThresholdSeconds`（默认 60s，子任务进入 REVIEW 超过此阈值且无 review_record 视为孤儿）/ `reviewOrphanBatchSize`（默认 10，每轮扫描上限）。
+- **`SubTaskService.listReviewOrphans`**（helloai-core）：查询 REVIEW 子任务（`status=REVIEW AND update_time <= threshold`，按时间升序 LIMIT batchSize），逐条 `reviewRecordMapper.selectCount` 检查是否已有 review_record，过滤掉已有记录的（防止重复触发）。
+- **`SubTaskReviewService.scanReviewOrphans`**（helloai-core）：`@Scheduled(fixedDelayString=30_000)`，30s 间隔扫描。开关 `autoReviewEnabled` 关闭时跳过；调 `subTaskService.listReviewOrphans` 取候选 → 逐条 `reviewSubTask(st.getId(), st.getAssignedAgentId())`（pickReviewerAgent 选同角色 REVIEWER → 调 LLM → parseVerdict → completeOrRejectAndRework）。异常单条捕获不影响批次内其他候选。
+
+#### 3. 验证结果
+
+- `mvn compile -pl helloai-common,helloai-core -am -DskipTests` BUILD SUCCESS。
+- 代码审查确认：`scanReviewOrphans` 与 `ExecutionCommandPoller` 兜底模式一致，30s 间隔 + 60s 阈值确保不误伤正常流程。
+
+#### 4. 影响与遗留
+
+- 三级容错架构成型：L1 `@TransactionalEventListener(AFTER_COMMIT)` 主路径 → L2 MQ `agent.reviewer.assigned`（无 consumer，待后续补齐）→ L3 `@Scheduled` DB 孤儿扫描兜底。
+- 行为变更：REVIEW 子任务最多等待 60s（阈值）+ 30s（扫描间隔）= 90s 即可被兜底扫描捕获并核验。
+- 遗留：L2 MQ reviewer consumer 仍缺失——当前 L3 兜底已足够（inner reviewer 无离线概念），MQ 路径待后续 If-needed 补齐。
+- 部署提示：重启后端后生效；已卡住的子任务需等待 60s 阈值窗口到达后首次扫描核验（或手动 SQL 重置状态触发即时流程）。
