@@ -20,6 +20,7 @@ import com.helloai.core.planner.PlannerAgentPicker;
 import com.helloai.core.shared.event.TaskAutoCompletedEvent;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.service.TaskIterationService;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -67,6 +68,8 @@ class TaskFinalReportServiceTest {
     private PlatformAgentExecutionService platformAgentExecutionService;
     @Mock
     private TaskTimelineService taskTimelineService;
+    @Mock
+    private TaskIterationService taskIterationService;
 
     private final AgentDispatchProperties dispatchProperties = new AgentDispatchProperties();
 
@@ -92,7 +95,8 @@ class TaskFinalReportServiceTest {
     @BeforeEach
     void setUp() {
         service = new TaskFinalReportService(taskService, subTaskService, plannerAgentPicker,
-                platformAgentExecutionService, taskTimelineService, dispatchProperties);
+                platformAgentExecutionService, taskTimelineService, dispatchProperties,
+                taskIterationService);
 
         when(subTaskService.lambdaQuery()).thenReturn(subTaskQueryChain);
         when(subTaskQueryChain.eq(any(), any())).thenReturn(subTaskQueryChain);
