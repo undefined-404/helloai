@@ -82,6 +82,34 @@ export interface TaskFinalReport {
   status?: FinalReportStatus
 }
 
+// V42 任务执行迭代记录
+export interface TaskIteration {
+  id: LongId
+  taskId: LongId
+  taskCode: string         // #1, #2 ...
+  taskName: string
+  taskType: string         // DEVELOPMENT / TESTING / PLANNING / OTHER
+  parentTaskId: LongId | null
+  dependsOn: LongId[] | null
+  roundNum: number
+  prevTaskResult: string | null
+  currentRequirement: string | null
+  outputSummary: string | null  // V44 执行摘要（≤200 字）
+  lastResult: string | null
+  rejectionHistory: TaskIterationRejection[] | null
+  llmResponse: string | null
+  reviewResult: string | null  // PASSED / REJECTED / null
+  executorAgent: string | null
+  createTime: string
+}
+
+export interface TaskIterationRejection {
+  round: number
+  comment: string
+  issues: string
+  score: number
+}
+
 export interface SubTask {
   id: LongId
   taskId: LongId

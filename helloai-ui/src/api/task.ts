@@ -1,6 +1,6 @@
 import request from './request'
 import type { AxiosResponse } from 'axios'
-import type { Task, TaskRelatedCounts, TaskFinalReport, SubTask, LongId } from '@/types'
+import type { Task, TaskRelatedCounts, TaskFinalReport, TaskIteration, SubTask, LongId } from '@/types'
 
 export const taskApi = {
   list(params?: { status?: string }) {
@@ -63,5 +63,13 @@ export const taskApi = {
   // 后端 LLM 读超时 180s（provider read-timeout-ms），前端 240s 留出降档重试与传输余量
   generateFinalReport(id: LongId) {
     return request.post<any, TaskFinalReport>(`/tasks/generateFinalReportByTaskId/${id}`, undefined, { timeout: 240_000 })
+  },
+  // V42 任务执行迭代记录
+  findTaskIterationsByTaskId(id: LongId) {
+    return request.get<any, TaskIteration[]>(`/tasks/findTaskIterationsByTaskId/${id}`)
+  },
+  // V42 触发历史迭代记录回填（一次性，幂等）
+  backfillTaskIterations() {
+    return request.post<any, { backfilledCount: number }>('/tasks/backfillTaskIterations')
   }
 }

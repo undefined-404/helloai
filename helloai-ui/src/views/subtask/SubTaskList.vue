@@ -9,6 +9,7 @@
             <el-radio-group v-if="taskId" v-model="viewMode" size="small" style="margin-right:8px">
               <el-radio-button value="list">列表</el-radio-button>
               <el-radio-button value="dag">依赖图</el-radio-button>
+              <el-radio-button value="iter">执行迭代</el-radio-button>
             </el-radio-group>
             <el-select v-model="statusFilter" placeholder="状态筛选" clearable style="width:140px;margin-right:8px" @change="load(1)">
               <el-option v-for="[k,v] in Object.entries(SUB_TASK_STATUS_MAP)" :key="k" :label="v.label" :value="k" />
@@ -36,6 +37,13 @@
         v-loading="fullListLoading"
         :sub-tasks="fullList"
         @node-click="goDetail"
+      />
+      <TaskIterationView
+        v-if="taskId && viewMode === 'iter'"
+        :items="iterations"
+        :loading="iterLoading"
+        :backfilling="backfilling"
+        @backfill="handleBackfillIterations"
       />
       <template v-else>
       <el-table :data="displayList" border stripe v-loading="loading" style="width:100%">
@@ -172,11 +180,12 @@ import { taskApi } from '@/api/task'
 import AgentSelect from '@/components/AgentSelect.vue'
 import QuickDispatchDialog from '@/components/QuickDispatchDialog.vue'
 import SubTaskDagView from '@/components/SubTaskDagView.vue'
+import TaskIterationView from '@/components/TaskIterationView.vue'
 import { SUB_TASK_STATUS_MAP, SCORE_GRADE_MAP } from '@/types'
 import { ACTION } from '@/utils/tableConfig'
 import { fmtTime } from '@/utils/tableConfig'
 import { orderByDependency } from '@/utils/subTaskDag'
-import type { Task, SubTask, SubTaskStatus } from '@/types'
+import type { Task, SubTask, SubTaskStatus, TaskIteration } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -192,11 +201,15 @@ const taskId = computed(() => (route.query.taskId ? String(route.query.taskId) :
 // 路由 query 中的状态筛选（死信池菜单跳 /sub-tasks?status=DEAD_LETTER 复用本页）
 const statusQuery = computed(() => (route.query.status ? String(route.query.status) : ''))
 const parentTask = ref<Task | null>(null)
-// 列表/依赖图双视图（仅按主任务过滤时可切换）
-const viewMode = ref<'list' | 'dag'>('list')
+// 列表/依赖图/执行迭代三视图（仅按主任务过滤时可切换）
+const viewMode = ref<'list' | 'dag' | 'iter'>('list')
 // 全量子任务（依赖图渲染 + 依赖列序号映射用；分页列表里依赖项可能不在当前页）
 const fullList = ref<SubTask[]>([])
 const fullListLoading = ref(false)
+// V42 迭代记录
+const iterations = ref<TaskIteration[]>([])
+const iterLoading = ref(false)
+const backfilling = ref(false)
 
 async function loadFullList() {
   if (!taskId.value) { fullList.value = []; return }
@@ -207,6 +220,27 @@ async function loadFullList() {
     // 全量拉取失败不阻断分页列表，依赖列/依赖图降级为空
     fullList.value = []
   } finally { fullListLoading.value = false }
+}
+
+async function loadIterations() {
+  if (!taskId.value) { iterations.value = []; return }
+  iterLoading.value = true
+  try {
+    iterations.value = await taskApi.findTaskIterationsByTaskId(taskId.value)
+  } catch {
+    iterations.value = []
+  } finally { iterLoading.value = false }
+}
+
+async function handleBackfillIterations() {
+  backfilling.value = true
+  try {
+    const res = await taskApi.backfillTaskIterations()
+    ElMessage.success('回填完成，共 ' + res.backfilledCount + ' 个任务')
+    await loadIterations()
+  } catch {
+    ElMessage.error('回填失败')
+  } finally { backfilling.value = false }
 }
 
 // 拓扑正序全局序号映射（与依赖图、草案审阅弹窗的 #序号 口径一致）
@@ -261,7 +295,7 @@ async function load(page = 1) {
     total.value = res.total
     currentPage.value = page
     // 按主任务过滤时同步刷新全量列表（依赖列序号/依赖图状态色保持最新）
-    if (taskId.value) loadFullList()
+    if (taskId.value) { loadFullList(); loadIterations() }
   } finally { loading.value = false }
 }
 function loadPage(page: number) { load(page) }
@@ -280,7 +314,7 @@ function goParentTask(row: SubTask) {
 
 // 同页面内 taskId 变化（如清除筛选 / 从不同主任务进入）时联动刷新
 watch(taskId, () => {
-  if (!taskId.value) { viewMode.value = 'list'; fullList.value = [] }
+  if (!taskId.value) { viewMode.value = 'list'; fullList.value = []; iterations.value = [] }
   loadParentTask()
   load()
 })
@@ -371,13 +405,21 @@ async function doReassign() {
 
 function getSubTaskStatusMeta(status: SubTask['status']) { return SUB_TASK_STATUS_MAP[status] }
 
-// step9c：按主任务过滤时 10s 自动轮询刷新依赖图（DAG 视图不点刷新就不动）
-// 最小 8 行：起停 timer + load(); 全局列表（不按主任务过滤）轮询意义不大，保持手动刷新。
+// step9c：按主任务过滤时 10s 自动轮询刷新依赖图。
+// 限制条件：
+//   - 仅在 viewMode === 'dag' 时轮询（列表/执行迭代不自动刷新）
+//   - 当 fullList 全部 DONE 时自动停止（任务已终结，无新数据）
 let refreshTimer: number | null = null
 function startAutoRefresh() {
   if (refreshTimer) return
   refreshTimer = window.setInterval(() => {
     if (!taskId.value) return
+    if (viewMode.value !== 'dag') return
+    // 所有子任务 DONE → 停止轮询
+    if (fullList.value.length > 0 && fullList.value.every(s => s.status === 'DONE')) {
+      stopAutoRefresh()
+      return
+    }
     load(currentPage.value)
   }, 10000)
 }

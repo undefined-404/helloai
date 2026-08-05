@@ -14,10 +14,12 @@ import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.planner.PlannerAnalysisService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.entity.TaskIteration;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.service.TaskDeliverableService;
 import com.helloai.core.task.service.TaskFinalReportService;
+import com.helloai.core.task.service.TaskIterationService;
 import com.helloai.core.task.service.TaskService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -45,6 +47,7 @@ public class TaskController {
     private final PlannerAnalysisService plannerAnalysisService;
     private final TaskDeliverableService taskDeliverableService;
     private final TaskFinalReportService taskFinalReportService;
+    private final TaskIterationService taskIterationService;
 
     @PostMapping
     public R<Task> create(@Valid @RequestBody CreateTaskRequest req) {
@@ -170,6 +173,21 @@ public class TaskController {
     @PostMapping("/generateFinalReportByTaskId/{id}")
     public R<TaskFinalReportResponse> generateFinalReport(@PathVariable("id") Long id) {
         return R.ok(toFinalReportResponse(taskFinalReportService.generate(id)));
+    }
+
+    // ══════════════════════════════════════════════════════════
+    //  V42：历史任务迭代记录回填（一次性，按需触发）
+    // ══════════════════════════════════════════════════════════
+
+    @PostMapping("/backfillTaskIterations")
+    public R<Map<String, Object>> backfillTaskIterations() {
+        int count = taskIterationService.backfillHistory();
+        return R.ok(Map.of("backfilledCount", count));
+    }
+
+    @GetMapping("/findTaskIterationsByTaskId/{id}")
+    public R<List<TaskIteration>> findTaskIterationsByTaskId(@PathVariable("id") Long id) {
+        return R.ok(taskIterationService.listByTaskId(id));
     }
 
     private TaskFinalReportResponse toFinalReportResponse(Task task) {

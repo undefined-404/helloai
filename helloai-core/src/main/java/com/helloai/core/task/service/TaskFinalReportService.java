@@ -76,6 +76,7 @@ public class TaskFinalReportService {
     private final PlatformAgentExecutionService platformAgentExecutionService;
     private final TaskTimelineService taskTimelineService;
     private final AgentDispatchProperties dispatchProperties;
+    private final TaskIterationService taskIterationService;
 
     /** 任务自动收口后异步生成报告；已有报告或开关关闭时跳过，异常吞掉（手动端点兜底）。 */
     @Async
@@ -182,6 +183,8 @@ public class TaskFinalReportService {
                                 "reportSummary", summarize(report)));
                 log.info("任务整合报告生成完成: taskId={}, plannerAgentId={}, reportLength={}, sectionOutputLimit={}",
                         taskId, planner.getId(), report.length(), limit);
+                // V42：回填 task_iteration 表（失败不阻断报告生成）
+                backfillIterationsQuietly(taskId, sections, planner);
                 return taskService.getById(taskId);
             } catch (Exception e) {
                 String errMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
@@ -348,5 +351,23 @@ public class TaskFinalReportService {
         String trimmed = raw.trim();
         return trimmed.length() <= TIMELINE_SUMMARY_LIMIT
                 ? trimmed : trimmed.substring(0, TIMELINE_SUMMARY_LIMIT) + "...";
+    }
+
+    /**
+     * V42：回填 task_iteration 表（静默失败，不阻断报告生成主流程）。
+     *
+     * <p>报告生成成功后调用，把全部 DONE 子任务的执行迭代数据一次性固化到
+     * task_iteration 表。回填失败仅记 timeline + 日志，不影响报告生成结果。</p>
+     */
+    private void backfillIterationsQuietly(Long taskId, List<SubTask> sections, Agent planner) {
+        try {
+            taskIterationService.backfillForTask(taskId, sections, planner);
+        } catch (Exception e) {
+            log.warn("task_iteration 回填失败（不影响报告生成）: taskId={}, err={}",
+                    taskId, e.getMessage());
+            taskTimelineService.recordEvent(taskId, null, "task_iteration_backfill_failed",
+                    AgentRole.PLANNER, planner != null ? planner.getId() : null,
+                    Map.of("error", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
+        }
     }
 }
