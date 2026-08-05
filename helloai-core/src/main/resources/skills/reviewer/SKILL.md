@@ -12,7 +12,7 @@
 每次唤醒时按顺序执行：
 
 1. **查收件箱** → `GET {{BASE_URL}}/api/agent/inbox`
-2. **获取最新规则** → `GET {{BASE_URL}}/api/rules/merged`（必须执行）
+2. **获取最新规则** → `GET {{BASE_URL}}/api/rules/getMergedRules`（必须执行）
 3. **按任务计划节点回看参考实现**：涉及调度、执行链、结果回写时，回看 `E:\workspace\AgentTeams-main` 相关源码，确保没有偏离开发初衷
 4. **查看待审查子任务** → `GET {{BASE_URL}}/api/sub-tasks?status=REVIEW`
 5. **无待审查任务** → 本次唤醒结束
@@ -39,13 +39,13 @@
 ### 收件箱
 ```bash
 curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox
-curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox/count
-curl -X PUT -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox/read/<消息ID>
+curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox/getUnreadCount
+curl -X POST -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox/markReadById/<消息ID>
 ```
 
 ### 规则
 ```bash
-curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/rules/merged
+curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/rules/getMergedRules
 ```
 
 ### 子任务查看
@@ -54,7 +54,7 @@ curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/rules/merged
 curl -H "Authorization: Bearer <API_KEY>" "{{BASE_URL}}/api/sub-tasks?status=REVIEW"
 
 # 查看子任务详情（含交付物、验收标准）
-curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/<子任务ID>
+curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/getById/<子任务ID>
 ```
 
 ### 审查操作
@@ -78,7 +78,7 @@ curl -H "Authorization: Bearer <API_KEY>" "{{BASE_URL}}/api/reviews?subTaskId=<�
 ### 积分
 ```bash
 curl -H "Authorization: Bearer <API_KEY>" "{{BASE_URL}}/api/scores/me?agentId=<你的ID>"
-curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/scores/leaderboard
+curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/scores/getLeaderboard
 
 # 手动调整积分
 curl -X POST -H "Authorization: Bearer <API_KEY>" \
