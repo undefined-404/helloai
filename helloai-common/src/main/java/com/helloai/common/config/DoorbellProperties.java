@@ -7,6 +7,11 @@ import org.springframework.stereotype.Component;
 /**
  * 长连接门铃通知通道配置（AgentHub V3 门铃内核 PR-1）。
  *
+ * <p><b>状态注记（2026-08-07）</b>：门铃通道已搁置。技术瓶颈——外部 AI Agent
+ * （安装版 / CLI 版）均为单向执行器，无法处理平台推送的门铃信号，且 Agent 端代码
+ * 不可修改；任务感知一律由 pullTasks 轮询承担。本配置保留，待未来 Agent 端
+ * 常驻 daemon（官方插件 / CLI 包装器）落地后可复用本通道。</p>
+ *
  * <p>门铃是"服务端 → 外部 Agent"的单向 SSE 长连接，只推送轻量唤醒信号，
  * 不承载任务正文，详见 {@code doc/HelloAI_门铃通知通道设计.md}。</p>
  *

@@ -164,7 +164,7 @@ public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, Age
                 OffsetDateTime.now());
         if (closed > 0) {
             log.info("Agent {} 值班租约已关闭: reason={}, affected={}", agentId, reason, closed);
-            // 签退（checkOut）→ 事务提交后主动断门铃（离岗即挂电话，设计 §6.4）
+            // 签退（checkOut）→ 事务提交后发布租约关闭事件（原门铃断连监听已随门铃通道搁置 2026-08-07，事件保留供未来复用）
             eventPublisher.publishEvent(new DutyLeaseClosedEvent(agentId, reason));
         }
         return closed;
@@ -228,7 +228,7 @@ public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, Age
                 total += rows;
                 log.info("值班租约到期已翻为 EXPIRED: agentId={}, leaseId={}, expiresAt={}",
                         lease.getAgentId(), lease.getId(), lease.getExpireTime());
-                // 租约到期 → 事务提交后主动断门铃（与 checkOut 同一条断连路径）
+                // 租约到期 → 事务提交后发布租约关闭事件（与 checkOut 同一条事件路径）
                 eventPublisher.publishEvent(new DutyLeaseClosedEvent(lease.getAgentId(), "lease_expired"));
             }
         }

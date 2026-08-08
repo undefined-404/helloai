@@ -13,6 +13,11 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 /**
  * 门铃服务（AgentHub V3 门铃内核 PR-1）。
  *
+ * <p><b>状态注记（2026-08-07）</b>：门铃通道已搁置。技术瓶颈——外部 AI Agent
+ * （安装版 / CLI 版）均为单向执行器，无法处理平台推送的门铃信号，且 Agent 端代码
+ * 不可修改；任务感知一律由 pullTasks 轮询承担。本代码保留运行，待未来 Agent 端
+ * 常驻 daemon（官方插件 / CLI 包装器）落地后可复用本通道。</p>
+ *
  * <p>门铃通道的统一入口，封装建连、响铃、断连三件事，屏蔽 {@link SseEmitter} 细节：</p>
  * <ul>
  *   <li>{@link #connect(Long)}：为 Agent 建立 SSE 门铃连接并回推握手信号；</li>

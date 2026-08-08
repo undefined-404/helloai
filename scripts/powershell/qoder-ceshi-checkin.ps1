@@ -5,6 +5,7 @@
 #   3) POST notifications/initialized
 #   4) POST tools/call checkIn (workMode=AUTO, maxConcurrent=3, ttlMinutes=30, sessionId=xxx)
 #   5) GET /api/agents/doorbell/sse 验证门铃连通（5 秒探针）
+# 注：门铃已搁置（技术瓶颈，2026-08-07），门铃探针步骤仅作历史链路验证参考
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 

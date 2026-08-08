@@ -25,10 +25,12 @@ public class AgentMcpServerService extends ServiceImpl<AgentMcpServerMapper, Age
     /**
      * EXECUTOR 默认启用的 10 个 MCP 工具清单（外部 Agent 一键接入即拿全套能力）。
      * <p>
-     * 设计原则（见 doc/HelloAI_门铃通知通道设计.md）：一键注册应交付外部 Agent
+     * 设计原则：一键注册应交付外部 Agent
      * 使用 HelloAI 调度平台的<b>完整工具集</b>——用哪些、何时用是外部 Agent 的决策，
      * 平台的责任是「给全」。故值班打卡 checkIn/checkOut 亦纳入默认授权，
-     * 否则外部 Agent 无法上岗（isOnDuty=false），门铃长连接建不起来。
+     * 否则外部 Agent 无法上岗（isOnDuty=false）。
+     * （注：门铃通道已搁置 2026-08-07——外部 Agent 无法处理平台推送的门铃信号，
+     * 任务感知一律走 pullTasks 轮询，详见 {@code DoorbellService} 状态注记。）
      * </p>
      * <p>
      * 注：EchoMcpTool.echo 是平台内置连通性诊断工具，不挂在 Agent 维度，
@@ -43,7 +45,7 @@ public class AgentMcpServerService extends ServiceImpl<AgentMcpServerMapper, Age
      *   <li>{@code submitResult}   —— 上交子任务执行结果（v2.5 M5）</li>
      *   <li>{@code reportBlocked}  —— 上报任务阻塞（v2.5 补齐）</li>
      *   <li>{@code getAgentStatus} —— 查询 Agent 自身状态（v2.4 §9.1 helloai 此前缺失补齐）</li>
-     *   <li>{@code checkIn}        —— 值班打卡上班，建 ACTIVE 租约（AgentHub V1 P0-A；门铃长连接前置）</li>
+     *   <li>{@code checkIn}        —— 值班打卡上班，建 ACTIVE 租约（AgentHub V1 P0-A；在岗状态与租约入口）</li>
      *   <li>{@code checkOut}       —— 值班打卡下班，关闭 ACTIVE 租约（AgentHub V1 P0-A）</li>
      * </ul>
      */

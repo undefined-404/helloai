@@ -1,5 +1,7 @@
 # HelloAI 长连接门铃通知通道最小技术设计
 
+> **状态注记（2026-08-07）**：本设计已**搁置**。技术瓶颈——外部 AI Agent（安装版 / CLI 版）均为“单向执行器”，无法处理平台推送的门铃信号，且 Agent 端代码不可修改；任务感知一律由 `pullTasks` 轮询承担。Java 代码全部保留运行（含 REST 端点 `/api/agents/doorbell/sse`），SKILL.md / 脚本已下线门铃内容。若未来 Agent 端常驻 daemon（官方插件 / CLI 包装器）落地，可复用本设计。
+
 > 文档定位
 >
 > - 本文档是对 `doc/HelloAI_agenthub.md` §8（V3 门铃通知通道）与 `doc/HelloAI_架构设计参考.md` §5.0（外部 Agent 实时协作闭环最高优先级）的**技术落地细化**。

@@ -2,6 +2,7 @@
 # HelloAI EXECUTOR outer_trae_executor (2084920580641759234)
 # Usage:
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\powershell\outer-trae-daemon.ps1
+# 注：门铃已搁置（技术瓶颈，2026-08-07），门铃 SSE 监听逻辑仅作历史参考，值守请改用纯轮询（heartbeat + pullTasks）
 # UTF-8 encoding header
 # ------------------------------------------------------------
 $script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
