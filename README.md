@@ -177,7 +177,8 @@ docker compose up -d
 ### 3. 配置后端
 编辑 `helloai-start/src/main/resources/application.yml`（或通过环境变量覆盖）：
 - 数据库 / Redis / RabbitMQ 连接（本地 Docker 默认即可）
-- LLM API Key：`DEEPSEEK_API_KEY`（另有 `MOONSHOT_API_KEY` / `MINIMAX_API_KEY` / `DASHSCOPE_API_KEY` 可配）
+- **唯一必需的部署配置**：`HELLOAI_CREDENTIAL_AES_KEY_BASE64`（凭证加密密钥，AES-GCM；yml 内默认值仅供开发环境）
+- LLM Provider 的 API Key **无需在部署前配置**（先启动后配置）：启动后管理员登录 "系统设置 → 模型配置（LLM Provider）" 页填写/轮换，加密写入 `credential_vault`，实时生效无需重启；yml 中 `helloai.providers.<name>.api-key` 已置空，仅作为环境变量兜底（`DEEPSEEK_API_KEY` / `MOONSHOT_API_KEY` / `MINIMAX_API_KEY` / `DASHSCOPE_API_KEY`）
 
 ### 4. 启动后端（Flyway 自动执行数据库迁移）
 ```bash

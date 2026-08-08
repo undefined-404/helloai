@@ -2,7 +2,7 @@ package com.helloai.core.agent.chat;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentExecutionProperties;
-import com.helloai.core.agent.chat.provider.ProviderChatClientFactory;
+import com.helloai.core.agent.chat.provider.LlmProviderChatClientFactoryRegistry;
 import com.helloai.core.agent.entity.Agent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.ObjectProvider;
@@ -31,7 +31,7 @@ public class AgentChatClientService {
 
     private final AgentExecutionProperties executionProperties;
     private final ObjectProvider<ChatClient.Builder> chatClientBuilderProvider;
-    private final ObjectProvider<java.util.List<ProviderChatClientFactory>> providerChatClientFactoriesProvider;
+    private final LlmProviderChatClientFactoryRegistry providerRegistry;
 
     /**
      * 使用 Spring AI ChatClient 生成回复。
@@ -57,13 +57,7 @@ public class AgentChatClientService {
                 String effectiveProvider = provider != null && !provider.isBlank()
                         ? provider : executionProperties.getProvider();
                 String model = AgentProviderResolver.resolveModel(agent, null);
-                java.util.List<ProviderChatClientFactory> factories =
-                        providerChatClientFactoriesProvider.getIfAvailable(java.util.List::of);
-                ProviderChatClientFactory factory = factories.stream()
-                        .filter(f -> f.supports(effectiveProvider))
-                        .findFirst()
-                        .orElseThrow(() -> new BizException("未找到 ProviderChatClientFactory: " + effectiveProvider));
-                chatClient = factory.createChatClient(apiKeyPlaintext, agent, model);
+                chatClient = providerRegistry.createChatClient(effectiveProvider, apiKeyPlaintext, agent, model);
             } else {
                 ChatClient.Builder builder = chatClientBuilderProvider.getIfAvailable();
                 if (builder == null) {

@@ -99,19 +99,37 @@ public class ProviderChatModelCache {
     }
 
     /**
-     * 构造缓存 key。
+     * 构造缓存 key（兼容旧签名，protocolType 默认为 {@code openai-compatible}）。
      *
      * @param provider provider 名（大小写不敏感）
      * @param apiKey   明文 apiKey（仅用于 hash，不存储）
      * @param baseUrl  base url（允许 null，对应 null safeHash）
      */
     public static String buildKey(String provider, String apiKey, String baseUrl) {
+        return buildKey(provider, apiKey, baseUrl, "openai-compatible");
+    }
+
+    /**
+     * 构造缓存 key（方案B扩展，包含 protocolType 以隔离 OpenAI / Anthropic 协议的 ChatModel）。
+     *
+     * <p>OpenAI 兼容与 Anthropic 兼容使用不同的 ChatModel 实现（OpenAiChatModel /
+     * AnthropicChatModel），不能复用同一实例，故缓存 key 需包含 protocolType。</p>
+     *
+     * @param provider     provider 名（大小写不敏感）
+     * @param apiKey       明文 apiKey（仅用于 hash，不存储）
+     * @param baseUrl      base url（允许 null，对应 null safeHash）
+     * @param protocolType 协议类型（OPENAI_COMPATIBLE / ANTHROPIC_COMPATIBLE / deepseek 等）
+     */
+    public static String buildKey(String provider, String apiKey, String baseUrl, String protocolType) {
         String normalizedProvider = provider != null ? provider.toLowerCase(Locale.ROOT) : "unknown";
+        String protocolSegment = protocolType != null && !protocolType.isBlank()
+                ? protocolType.toLowerCase(Locale.ROOT)
+                : "default";
         String apiKeyFingerprint = sha256Prefix8(apiKey);
         String baseUrlFingerprint = baseUrl != null && !baseUrl.isBlank()
                 ? Integer.toHexString(baseUrl.hashCode())
                 : "default";
-        return normalizedProvider + "::" + baseUrlFingerprint + "::" + apiKeyFingerprint;
+        return protocolSegment + "::" + normalizedProvider + "::" + baseUrlFingerprint + "::" + apiKeyFingerprint;
     }
 
     private static String sha256Prefix8(String input) {

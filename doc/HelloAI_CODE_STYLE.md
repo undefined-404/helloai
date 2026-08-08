@@ -2,10 +2,11 @@
 
 > 适用项目：HelloAI（AI Agent 协作调度平台）  
 > 生效范围：后端单体服务 + 前端管理后台（Vue 3 / Element Plus）  
-> 版本：V1.5  
-> 最后更新：2026-08-03  
+> 版本：V1.6  
+> 最后更新：2026-08-07  
 > 本版重点：对齐 core 业务域分包重构后的代码事实——修正 3.2 启动类 @MapperScan 示例、3.x 资源文件位置、4.1 包命名示例、9.4 Flyway 规范与多版本迁移现实的冲突；补写 6.3 Controller 职责边界（含分层红线与待收口清单）；3.x 业务域分包规则补全子包清单与 outbox 归属决策；9.5 实施要点追加"变更残留检查范围"
 > 本版重点 V1.5：新增第 8 章「接口路径规范」（8.1 描述性风格 / 8.2 路径命名规则表 / 8.3 全局 URI 清理），废弃 6.4 嵌套资源路径规范，改写 6.5 状态操作端点为 `POST /xxxById/{id}`，6.6 分页端点改为 `POST /page`；原第 8～20 章顺延为第 9～21 章；20 章（原 19 章）校验清单路径条目同步新规范
+> 本版重点 V1.6：3.x 业务域分包规则补充 `system` 域「LLM Provider」职责补丁（`llm_provider` 表及 `LlmProviderQueryService` 归属 `system`；ChatClient 路由分发仍走 `agent.chat.provider` 的 `LlmProviderChatClientFactoryRegistry`）；同步注脚 chat.provider 责任与新增 LLM 厂商的动限范围
 > 致敬：Hello World! —— 每一位程序员的第一行代码
 ---
 
@@ -262,7 +263,7 @@ helloai-core/src/main/resources/
 | `scripts/` | helloai-core | 可执行脚本（Python CLI 等） |
 | `skills/` | helloai-core | 角色技能文档（SKILL.md），运行时可替换变量 |
 
-> **强制**: 所有资源文件**必须通过 `ClassPathResource` 读取**，禁止硬编码绝对路径。
+> **强制**：所有资源文件**必须通过 `ClassPathResource` 读取**，禁止硬编码绝对路径。
 
 ### 3.x 业务域分包规则
 
@@ -270,7 +271,7 @@ core 模块统一采用"业务域分包 + 域内技术分层"，禁止新增顶�
 
 - com.helloai.core.agent   智能体域（注册、调度、执行、对话、MCP、可观测）
 - com.helloai.core.task    任务域（任务、子任务、评审、评分、时间线、状态机）
-- com.helloai.core.system  系统支撑域（用户、配置、规则、模块、凭据、附件）
+- com.helloai.core.system  系统支撑域（用户、配置、规则、模块、凭据、附件、 **LLM Provider**）
 - com.helloai.core.shared  跨域基础设施（event、doorbell）
 
 每个域内固定子包：entity / mapper / service；按域需要可扩展。当前各域完整子包：
@@ -283,7 +284,7 @@ core 模块统一采用"业务域分包 + 域内技术分层"，禁止新增顶�
 语义边界（强制）：
 - xxx.entity = 映射数据库表的持久化实体
 - xxx.domain = 不映射表的纯内存领域对象/值对象（如 ExecutionCommand、AgentTask）
-- agent.chat = 面向业务的 ChatClient 服务层（路由入口、Provider 目录、provider/model 解析）；agent.chat.provider = Provider 接入族（Factory 契约 + 各厂商实现 + ChatModel 缓存），新增 LLM 厂商只动 chat.provider + 一段 yml，chat 父包零感知
+- agent.chat = 面向业务的 ChatClient 服务层（路由入口、Provider 目录、provider/model 解析）；agent.chat.provider = Provider 接入族（Factory 契约 + 各厂商实现 + ChatModel 缓存 + LlmProviderChatClientFactoryRegistry 路由分发）。**新增 LLM 厂商或调整 Provider 协议仅动 `llm_provider` 表 + chat.provider；`system.entity.LlmProvider` 是平台级 Provider 配置的持久化载体（不是 chat 域的事），全表送 `LlmProviderQueryService`、套餐 ChatClient 路由仍走 chat.provider；chat 父包零感知**
 
 新增类的放置判断：先问"它服务哪个业务域"，再问"它在域内承担什么技术角色"。
 跨域通用设施才允许放 shared，放 shared 前需在提交说明中写明理由。

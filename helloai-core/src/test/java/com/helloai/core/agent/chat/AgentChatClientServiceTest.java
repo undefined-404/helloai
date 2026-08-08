@@ -2,7 +2,7 @@ package com.helloai.core.agent.chat;
 
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentRole;
-import com.helloai.core.agent.chat.provider.ProviderChatClientFactory;
+import com.helloai.core.agent.chat.provider.LlmProviderChatClientFactoryRegistry;
 import com.helloai.core.agent.entity.Agent;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -10,13 +10,11 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.beans.factory.ObjectProvider;
 
-import java.util.List;
-
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
 /**
- * AgentChatClientService 单元测试。
+ * AgentChatClientService 单元测试。覆盖：mock 模式 / 空 systemPrompt 也能走通。
  */
 @DisplayName("AgentChatClientService")
 class AgentChatClientServiceTest {
@@ -32,8 +30,8 @@ class AgentChatClientServiceTest {
         properties.setMockResponsePrefix("[mock-executor]");
 
         ObjectProvider<ChatClient.Builder> builderProvider = mock(ObjectProvider.class);
-        ObjectProvider<List<ProviderChatClientFactory>> factoriesProvider = mock(ObjectProvider.class);
-        AgentChatClientService service = new AgentChatClientService(properties, builderProvider, factoriesProvider);
+        LlmProviderChatClientFactoryRegistry registry = mock(LlmProviderChatClientFactoryRegistry.class);
+        AgentChatClientService service = new AgentChatClientService(properties, builderProvider, registry);
 
         Agent agent = new Agent();
         agent.setId(101L);

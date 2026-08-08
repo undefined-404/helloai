@@ -6,12 +6,12 @@ import com.helloai.api.dto.admin.AgentCreateRequest;
 import com.helloai.api.dto.admin.AgentUpdateRequest;
 import com.helloai.api.dto.admin.SleepBatchRequest;
 import com.helloai.api.dto.agent.*;
+import com.helloai.api.support.AgentBaseUrlResolver;
 import com.helloai.common.base.R;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
-import com.helloai.common.config.AgentConfigProperties;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.chat.LlmProviderCatalogService;
 import com.helloai.core.task.entity.ActivityLog;
@@ -42,8 +42,8 @@ public class AdminAgentController {
 
     private final AgentService agentService;
     private final PromptTemplateService promptTemplateService;
-    private final AgentConfigProperties agentConfigProperties;
     private final LlmProviderCatalogService llmProviderCatalogService;
+    private final AgentBaseUrlResolver agentBaseUrlResolver;
 
     // ══════════════════════════════════════════════════════════════
     //  LLM Provider 目录（手动注册平台内 LLM Agent 用）
@@ -326,13 +326,8 @@ public class AdminAgentController {
             return R.fail("内部 LLM Agent 无需接入内容（平台密钥已自动绑定）");
         }
 
-        // 1. 解析 baseUrl（优先配置，否则从请求推导）
-        String baseUrl = agentConfigProperties.getBaseUrl();
-        if (baseUrl == null || baseUrl.isBlank()) {
-            baseUrl = request.getScheme() + "://"
-                    + request.getServerName() + ":"
-                    + request.getServerPort();
-        }
+        // 1. 解析 baseUrl（外网地址统一解析：sys_config > yml > 请求推导 > localhost 兜底）
+        String baseUrl = agentBaseUrlResolver.resolve(request);
 
         // 2. 获取纯 SKILL 内容（变量已替换）
         String skillContent = promptTemplateService.getSkillForAgent(

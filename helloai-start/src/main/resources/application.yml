@@ -4,9 +4,16 @@ server:
 spring:
   application:
     name: helloai
+  # 排除 DeepSeekChatAutoConfiguration：spring.ai.deepseek.api-key 已置空（平台级 Key
+  # 改由 credential_vault PLATFORM 级凭证供给，见 helloai.providers.*），保留该 autoconfig
+  # 会在启动期 fail-fast（Assert: DeepSeek API key must be set）。Agent 执行链路已 100%
+  # 走 DeepSeekProviderChatClientFactory（程序化构建 DeepSeekApi，自带 apiKey），
+  # 该 autoconfig 仅剩 ChatClient.Builder 兜底（ObjectProvider.getIfAvailable，缺失不阻断启动）
+  autoconfigure:
+    exclude: org.springframework.ai.model.deepseek.autoconfigure.DeepSeekChatAutoConfiguration
   # === 默认激活 local 环境（本地 Docker），切换到 dev 使用 spring.profiles.active=dev ===
   profiles:
-    active: dev
+    active: local
   # === MCP Server（v2.4 §3.1 / §9 spring-ai 路线 C） ===
   # spring-ai 1.0 GA 默认 sse-endpoint=/sse（短路径），与 v2.4 文档约定的 /mcp/sse 路径不一致
   # 显式覆盖到 v2.4 路径，确保 Qoder/Trae 按文档配置可直连
@@ -18,7 +25,8 @@ spring:
         sse-endpoint: /mcp/sse         # v2.4 §9.3 验收：对齐文档路径
         sse-message-endpoint: /mcp/messages  # 标准 message endpoint（v2.4 协议约定）
     deepseek:
-      api-key: ${DEEPSEEK_API_KEY:sk-a36fdda1d4ad4e0386e78fc435be0d16}
+      # 该链路仅剩 chatClientBuilderProvider 兜底，Agent 执行已不走它；平台级 Key 在系统设置页配置
+      api-key: ${DEEPSEEK_API_KEY:}
       base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
       chat:
         completions-path: ${DEEPSEEK_CHAT_COMPLETIONS_PATH:/v1/chat/completions}
@@ -151,28 +159,30 @@ helloai:
       queue: helloai.execution-command.queue
       routing-key: execution.command.created
   # N9: 多Provider统一配置入口，替代各factory中散落的@Value
-  # api-key 配置后该 provider 视为"已生效"，可在前端手动注册平台内 LLM Agent 时选择；
+  # 平台级 API Key 可在"系统设置"页动态配置/轮换（写入 credential_vault，实时生效无需重启），
+  # 此处 api-key 为空时 provider 未生效（目录不可选、注册平台内 LLM Agent 被拒）；
+  # base-url / default-model 作为默认值保留（可被系统设置页覆盖）。
   # key/base-url 参考 E:\yhzx\1027\springai 的 spring.ai.* 配置。
   # 四个 provider 均有 ProviderChatClientFactory 实现：deepseek 官方SDK，
   # moonshot/dashscope 走 OpenAI 兼容接口，minimax 走 Anthropic 兼容接口
   providers:
     deepseek:
-      api-key: ${DEEPSEEK_API_KEY:sk-a36fdda1d4ad4e0386e78fc435be0d16}
+      api-key: ${DEEPSEEK_API_KEY:}
       base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
       default-model: ${DEEPSEEK_CHAT_MODEL:deepseek-chat}
       connect-timeout-ms: ${DEEPSEEK_CONNECT_TIMEOUT_MS:5000}
       # 读超时与 AgentProviderProperties 默认值对齐（3 分钟，覆盖整合报告/推理模型长输出）
       read-timeout-ms: ${DEEPSEEK_READ_TIMEOUT_MS:180000}
     moonshot:
-      api-key: ${MOONSHOT_API_KEY:sk-1cpCOa7X7WZ2LcssVoXuA3BfUIKtTULzuvT0gQD4eIyYSmgm}
+      api-key: ${MOONSHOT_API_KEY:}
       base-url: ${MOONSHOT_BASE_URL:https://api.moonshot.cn}
       default-model: ${MOONSHOT_CHAT_MODEL:moonshot-v1-8k}
     minimax:
-      api-key: ${MINIMAX_API_KEY:sk-api-22dKrEl-khvBi3EfPBHRckHi0l5byt-n1sVWgMhdKGbqh2rtbXHFIEozy0oFHxHOCj2mqvl5SB4jcYJYj6w3Gq_430fhfQfiyrb1CGkO0TeWIjxReT5x5Hc}
+      api-key: ${MINIMAX_API_KEY:}
       base-url: ${MINIMAX_BASE_URL:https://api.minimaxi.com/anthropic}
       default-model: ${MINIMAX_CHAT_MODEL:MiniMax-M2.5}
     dashscope:
-      api-key: ${DASHSCOPE_API_KEY:sk-1c192ee88d614dbbbd66af070cd768eb}
+      api-key: ${DASHSCOPE_API_KEY:}
       # OpenAI 兼容模式，实际端点为 {base-url}/v1/chat/completions
       base-url: ${DASHSCOPE_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
       default-model: ${DASHSCOPE_CHAT_MODEL:qwen-plus}

@@ -24,15 +24,46 @@ public class CredentialVaultService extends ServiceImpl<CredentialVaultMapper, C
      * 查询 Agent 的当前启用 API Key 凭证。
      */
     public CredentialVault getActiveAgentApiKey(Long agentId, String provider) {
+        return getActiveApiKey(CredentialOwnerType.AGENT, agentId, provider);
+    }
+
+    /**
+     * 查询平台级（PLATFORM/ownerId=0）的当前启用 API Key 凭证。
+     *
+     * <p>平台级凭证按 provider 唯一（owner_type=PLATFORM、owner_id=0），
+     * 由 {@code PlatformProviderConfigService} 读取，替代 yml 启动期一次性绑定。</p>
+     */
+    public CredentialVault getActivePlatformApiKey(String provider) {
+        return getActiveApiKey(CredentialOwnerType.PLATFORM, 0L, provider);
+    }
+
+    private CredentialVault getActiveApiKey(CredentialOwnerType ownerType, Long ownerId, String provider) {
         return lambdaQuery()
-                .eq(CredentialVault::getOwnerType, CredentialOwnerType.AGENT)
-                .eq(CredentialVault::getOwnerId, agentId)
+                .eq(CredentialVault::getOwnerType, ownerType)
+                .eq(CredentialVault::getOwnerId, ownerId)
                 .eq(provider != null && !provider.isBlank(), CredentialVault::getProvider, provider)
                 .eq(CredentialVault::getCredentialType, CredentialType.API_KEY)
                 .eq(CredentialVault::getStatus, CredentialStatus.ACTIVE)
                 .orderByDesc(CredentialVault::getCreateTime)
                 .last("LIMIT 1")
                 .one();
+    }
+
+    /**
+     * 查询平台级全部凭证记录（不含加密值明文），供管理端脱敏展示。
+     */
+    public List<CredentialVault> listPlatformCredentials() {
+        return lambdaQuery()
+                .eq(CredentialVault::getOwnerType, CredentialOwnerType.PLATFORM)
+                .eq(CredentialVault::getOwnerId, 0L)
+                .list();
+    }
+
+    /**
+     * 判断平台级是否已配置启用态凭证。
+     */
+    public boolean hasActivePlatformCredential(String provider) {
+        return getActivePlatformApiKey(provider) != null;
     }
 
     /**
@@ -68,9 +99,29 @@ public class CredentialVaultService extends ServiceImpl<CredentialVaultMapper, C
                                                      String encryptedValue, String secretRef,
                                                      OffsetDateTime expiresAt,
                                                      String remark) {
+        return saveApiKeyCredential(CredentialOwnerType.AGENT, agentId, provider,
+                encryptedValue, secretRef, expiresAt, remark);
+    }
+
+    /**
+     * 以最小 upsert 方式保存平台级 API Key 凭证（ownerId 固定占位 0）。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public CredentialVault savePlatformApiKeyCredential(String provider,
+                                                        String encryptedValue, String secretRef,
+                                                        String remark) {
+        return saveApiKeyCredential(CredentialOwnerType.PLATFORM, 0L, provider,
+                encryptedValue, secretRef, null, remark);
+    }
+
+    private CredentialVault saveApiKeyCredential(CredentialOwnerType ownerType, Long ownerId,
+                                                 String provider,
+                                                 String encryptedValue, String secretRef,
+                                                 OffsetDateTime expiresAt,
+                                                 String remark) {
         lambdaUpdate()
-                .eq(CredentialVault::getOwnerType, CredentialOwnerType.AGENT)
-                .eq(CredentialVault::getOwnerId, agentId)
+                .eq(CredentialVault::getOwnerType, ownerType)
+                .eq(CredentialVault::getOwnerId, ownerId)
                 .eq(CredentialVault::getProvider, provider)
                 .eq(CredentialVault::getCredentialType, CredentialType.API_KEY)
                 .eq(CredentialVault::getStatus, CredentialStatus.ACTIVE)
@@ -78,8 +129,8 @@ public class CredentialVaultService extends ServiceImpl<CredentialVaultMapper, C
                 .update();
 
         CredentialVault vault = new CredentialVault();
-        vault.setOwnerType(CredentialOwnerType.AGENT);
-        vault.setOwnerId(agentId);
+        vault.setOwnerType(ownerType);
+        vault.setOwnerId(ownerId);
         vault.setProvider(provider);
         vault.setCredentialType(CredentialType.API_KEY);
         vault.setEncryptedValue(encryptedValue);
@@ -120,7 +171,26 @@ public class CredentialVaultService extends ServiceImpl<CredentialVaultMapper, C
     public CredentialVault rotateAgentApiKey(Long agentId, String provider,
                                              String encryptedValue, String secretRef,
                                              String remark) {
-        CredentialVault oldVault = getActiveAgentApiKey(agentId, provider);
+        return rotateApiKey(CredentialOwnerType.AGENT, agentId, provider,
+                encryptedValue, secretRef, remark);
+    }
+
+    /**
+     * 轮换平台级 API Key 凭证（旧凭证 → EXPIRED，新凭证 → ACTIVE），ownerId 固定占位 0。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public CredentialVault rotatePlatformApiKey(String provider,
+                                                String encryptedValue, String secretRef,
+                                                String remark) {
+        return rotateApiKey(CredentialOwnerType.PLATFORM, 0L, provider,
+                encryptedValue, secretRef, remark);
+    }
+
+    private CredentialVault rotateApiKey(CredentialOwnerType ownerType, Long ownerId,
+                                         String provider,
+                                         String encryptedValue, String secretRef,
+                                         String remark) {
+        CredentialVault oldVault = getActiveApiKey(ownerType, ownerId, provider);
 
         if (oldVault != null) {
             lambdaUpdate()
@@ -138,8 +208,8 @@ public class CredentialVaultService extends ServiceImpl<CredentialVaultMapper, C
         }
 
         CredentialVault newVault = new CredentialVault();
-        newVault.setOwnerType(CredentialOwnerType.AGENT);
-        newVault.setOwnerId(agentId);
+        newVault.setOwnerType(ownerType);
+        newVault.setOwnerId(ownerId);
         newVault.setProvider(provider);
         newVault.setCredentialType(CredentialType.API_KEY);
         newVault.setEncryptedValue(encryptedValue);

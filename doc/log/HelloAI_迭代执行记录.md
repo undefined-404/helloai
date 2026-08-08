@@ -4086,3 +4086,135 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 - 行为变更：REVIEW 子任务最多等待 60s（阈值）+ 30s（扫描间隔）= 90s 即可被兜底扫描捕获并核验。
 - 遗留：L2 MQ reviewer consumer 仍缺失——当前 L3 兜底已足够（inner reviewer 无离线概念），MQ 路径待后续 If-needed 补齐。
 - 部署提示：重启后端后生效；已卡住的子任务需等待 60s 阈值窗口到达后首次扫描核验（或手动 SQL 重置状态触发即时流程）。
+
+### 6.50 门铃搁置下线：外部 Agent 单向执行器无法消费平台推送（2026-08-07）
+
+#### 1. 背景与决策
+
+基于对外部 AI Agent（安装版 REPL / CLI 版 Headless）的调研结论：两类 Agent 均为"单向执行器"——无平台双向交互能力，任务派发/完成依赖平台 MQ 内部链路，且 Agent 端代码不可修改（无法增加推送消费逻辑）。平台门铃（AgentHub V3 SSE 推送）虽已完整交付（PR-1~PR-4，E2E 实测通过），但**没有任何 Agent 端消费者**，属于"平台能推、Agent 收不到"的技术瓶颈。
+
+**决策**（用户拍板）：
+- **任务感知方案定稿（方案 A）**：Agent 定时轮询收件箱（`pullTasks`，建议 30s 一次）。平台内部 MQ 链路（Outbox → AGENT_TOPIC_EXCHANGE → notificationQueue → NotificationConsumer → agent_inbox）保持不动，不暴露给 Agent；"Agent 直接消费 MQ"记为远期演进项，本轮不实现。
+- **门铃处置**：Java 代码（DoorbellService/Ringer/Properties、REST 端点 `/api/agents/doorbell/sse`）全部保留运行，仅加类注释说明搁置原因；SKILL.md（executor/planner）与 PowerShell 脚本（qoder-ceshi-checkin/daemon、outer-trae-daemon）下线门铃内容（脚本仅加头部注释，功能不动）。
+- **双通道保留**：MCP（标准接入：保活 + 全套工具）与 REST（脚本轮询兜底）职责分工不变。
+
+#### 2. 实际落地
+
+- **Java 注释（不改业务逻辑）**：`DoorbellService` / `DoorbellRinger` / `DoorbellProperties` 类 Javadoc 追加"状态注记（2026-08-07）"搁置说明；`AgentMcpServerService` 设计原则注释与 checkIn 工具描述同步修正（去掉"门铃长连接前置"表述）；`AgentDutyLeaseService` 两处门铃断连注释加"门铃已搁置"注记。
+- **SKILL.md 改写（executor + planner）**：接入方式表删除"门铃长连接"，改为"MCP 纯工具调用 / REST 轮询兜底"两段式；`checkIn`/`pullTasks` 工具描述去门铃语义（pullTasks 定为"唯一任务感知通道"）；§1.3 工作循环改为纯轮询循环（getAgentStatus → checkIn → 30s heartbeat + 30s pullTasks → claim → 执行 → submitResult → checkOut）；§1.5 常驻打卡协议整节改写为"轮询值守协议"（两件套：heartbeat + pullTasks，TTL 到期前 60s 重做 checkIn，删门铃三件套/断连重连/daemon 脚本引用）；§2 门铃长连接整节替换为"已搁置"说明；§1.4(4)"门铃连上≠进程健康"改为"心跳是唯一的在线证明"（强调业务调用只刷 last_active_time 不维持在线）；REST 段收敛（删积分/活动日志，保留收件箱/规则/子任务/审查）；错误码速查表删门铃语义（500 行原因改"未 checkIn 就调用依赖在岗状态的能力"）。
+- **脚本头部注释（3 个 ps1）**：`qoder-ceshi-checkin.ps1` 追加"门铃探针步骤仅作历史链路验证参考"；`qoder-ceshi-daemon.ps1` / `outer-trae-daemon.ps1` 追加"门铃 SSE 监听逻辑仅作历史参考，值守请改用纯轮询（heartbeat + pullTasks）"。仅改 `#` 注释行，业务代码不动，保持 UTF-8 with BOM。
+- **文档回填**：`doc/archive/HelloAI_门铃通知通道设计.md` 头部加"已搁置"状态注记；`doc/HelloAI_实现差距表.md` N13 条目状态改"已搁置"并注明原因。
+
+#### 3. 验证结果
+
+- `mvn -pl helloai-core -am compile -q` BUILD SUCCESS（Java 注释改动）。
+- PowerShell Parser 对 3 个改动脚本静态语法自检 0 error。
+- Grep 检查 `resources/skills/` 下门铃字样：仅保留"已搁置"说明句，无操作语义残留。
+- 未运行后端服务（无行为变更）。
+
+#### 4. 影响与遗留
+
+- 任务感知时延从"秒级（门铃）"回归"轮询级（30s）"，外部 Agent 感知新任务最坏延迟约一个轮询周期。
+- 平台端 MQ 内部链路、门铃 Java 代码、REST 端点全部保留，未来 Agent 端常驻 daemon（官方插件 / CLI 包装器）落地后可复用门铃通道。
+- "Agent 直接消费 MQ"记为远期演进项（优先级最后）；CLI 版免保活（Headless 单次执行无值守）为新需求，待单独设计。
+
+### 6.51 平台配置动态化：先启动后配置 API Key + 外网地址断层修复（2026-08-07）
+
+#### 1. 背景与决策
+
+- **目标态**：第一次部署只需环境变量 `HELLOAI_CREDENTIAL_AES_KEY_BASE64`（凭证加密密钥，唯一无法入库的部署配置），数据库由 Flyway 自动初始化、admin 账号由 AdminInitializer 自动创建，平台即可启动；LLM Provider 的 API Key 由管理员登录后在"系统设置"页填写/轮换，写入 `credential_vault`（AES-GCM 加密，PLATFORM 级），实时生效无需重启。
+- **现状问题**：yml `helloai.providers.<name>.api-key` 启动绑定一次、运行期不可变，且写死真实默认 key（隐式预置 + 明文风险）；`spring.ai.deepseek.api-key` 置空后 `DeepSeekChatAutoConfiguration` 启动期 fail-fast（实测发现，计划外问题，见 §2 修复）；外网地址断层——Settings.vue 能写 `helloai.base-url` 到 sys_config，但 `AgentController.getMySkill` / `AdminAgentController.onboarding` 的 baseUrl 解析不读 sys_config，SKILL 生成仍 fallback `localhost:6565`。
+- **决策**（用户拍板）：平台级密钥存 credential_vault 加密存储（非 sys_config 明文）；UI 扩展现有"系统设置"页（非新菜单）；本轮包含外网地址断层修复。明确不做：SetupWizard 加 API Key 步骤、超时参数动态化、SKILL.md 内容修改、Spring Cloud Config / Actuator refresh 新依赖、独立"模型配置"菜单页、SetupController 修改。
+
+#### 2. 实际落地
+
+- **DB 迁移**：`V45__credential_vault_platform_owner.sql`（沿用 V1/V14 同名约束，先 DROP IF EXISTS 再 ADD）放开 `chk_credential_vault_owner_type` CHECK（`'AGENT'` → `'AGENT','PLATFORM'`）+ 列 COMMENT 说明 PLATFORM 级 owner_id 固定占位 0、按 provider 唯一；索引不动（V14 uk 索引名历史遗留）。
+- **枚举与凭证服务扩展**：`CredentialOwnerType` 新增 `PLATFORM`；`CredentialVaultService` 抽出私有泛化方法（getActiveApiKey / saveApiKeyCredential / rotateApiKey），Agent 版方法全部委托私有方法，新增 5 个平台级方法（getActivePlatformApiKey / listPlatformCredentials / hasActivePlatformCredential / savePlatformApiKeyCredential / rotatePlatformApiKey）。
+- **新增 `PlatformProviderConfigService`**（core/agent/chat）：getApiKey（vault PLATFORM 级 ACTIVE 凭证解密明文 > yml > null，支持 secretRef）/ getBaseUrl / getDefaultModel（sys_config `llm.provider.<name>.*` > yml > Factory 内置默认）/ saveApiKey（AES 加密 → vault rotate → `ProviderChatModelCache.clear()` 实时生效）/ saveSettings（写 sys_config）/ isApiKeyConfigured / maskApiKey（仅尾 4 位）/ isApiKeyFromVault；参数校验统一 BizException。
+- **后端接线**：`LlmProviderCatalogService` 三处改造（`listProviders()` 的 apiKeyConfigured 改调配置服务、`bindPlatformApiKeyIfAbsent` 平台 key 来源改 `getApiKey(provider)`、provisionPlatformCredential 不变）；DeepSeek / Minimax / AbstractOpenAiCompatible 三个 Factory 的 buildChatModel 内 baseUrl/defaultModel 改走配置服务（缓存 key 含 baseUrl 指纹不变），Moonshot / DashScope 构造器同步补参；`AgentChatClientService` / `ApiKeyAgentExecutor` / `AgentExecutionConnectivityService` 不改（Agent 级 vault 链路已动态化）。
+- **外网地址断层修复**：新增 `AgentBaseUrlResolver`（helloai-api/support），解析优先级 `sys_config["helloai.base-url"]`（设置页可写）> yml `helloai.agent.base-url` > 请求推导（scheme://serverName:port）> `http://localhost:6565`；`AgentController.getMySkill` 与 `AdminAgentController.getOnboardingContent` 改调 resolver。
+- **管理接口**：新增 `AdminProviderConfigController`（`/api/admin/platform/providers`，鉴权沿用 AuthInterceptor 对 `/api/**` 的统一保护，与 AdminConfigController 同等水平）：`GET /list`（name / defaultModel / baseUrl / apiKeyConfigured / apiKeyMasked / available / apiKeyFromVault）、`PUT /{provider}/api-key`（body {apiKey}）、`PUT /{provider}/settings`（body {baseUrl, defaultModel} 均可选，传空清除覆盖回 yml 默认）；配套 3 个 DTO（ProviderConfigItem / ProviderApiKeyRequest / ProviderSettingsRequest）。
+- **yml 清理（关键安全项）**：4 个 provider 的 api-key 与 `spring.ai.deepseek.api-key` 全部置空为 `${XXX_API_KEY:}`；新增 `spring.autoconfigure.exclude: DeepSeekChatAutoConfiguration`（修复置空后启动 fail-fast——Agent 执行链已 100% 走 Factory 程序化构建 DeepSeekApi，该 autoconfig 仅剩 ChatClient.Builder 兜底且 `ObjectProvider.getIfAvailable` 缺失不阻断启动）；base-url / default-model / 超时保留为默认值；providers 段注释更新标注"可在系统设置页动态配置，api-key 为空时 provider 未生效"。
+- **前端**：`helloai-ui/src/api/settings.ts` 新增 listProviders / saveProviderApiKey / saveProviderSettings + ProviderConfigItem 接口；`Settings.vue` 在"基础配置"与"通知配置"之间新增"模型配置（LLM Provider）"区块（el-table：Provider / 默认模型 / Base URL / API Key 脱敏或黄色"未配置" / 状态 / 操作）+ "配置 Key"对话框（password 输入，placeholder 提示可覆盖旧 Key）+ "编辑"对话框（baseUrl / defaultModel 均可选），保存后提示"配置已生效，无需重启"并刷新列表。
+
+#### 3. 验证结果
+
+- 单测 `PlatformProviderConfigServiceTest` 10/10 全绿（DB 优先 / yml 兜底 / 轮换幂等 + 缓存 clear / 脱敏 / 可用性判定，纯 Mockito 无 Spring 上下文）。
+- `mvn -pl helloai-core,helloai-api -am compile -q` 与 `mvn -pl helloai-start -am package -DskipTests=true` BUILD SUCCESS；`npx vue-tsc -b` 0 错。
+- **local profile 启动冒烟**（`--spring.profiles.active=local`，连本机 docker 中间件）：后端启动成功 `/api/health` 200，Flyway 自动应用 V45 成功（日志 "Successfully applied 7 migrations to schema public, now at version v45"）。
+- `scripts/powershell/verify-platform-config.ps1 -ReadOnly`（复用运行中后端）PASS 4 / FAIL 0：admin 登录 OK；4 个 provider 列表全部 `apiKeyConfigured=false / apiKeyMasked=null / available=false`（yml 置空生效）；`listLlmProviders` 目录同步正常（factorySupported=true、available=false）；脚本遵循规则 6（UTF-8 with BOM + 编码强制头 + 单引号拼接），`Parser.ParseFile` 静态自检 0 error；-ReadOnly 模式不写库（S3 写 Key 前退出）。
+- **e2e 完整写库链路实测（local profile，用户将 `spring.profiles.active` 切为 local 后执行）**：`scripts/powershell/verify-platform-config.ps1` 由脚本自拉起 jar（不重启进程）**PASS 22 / FAIL 0，ALL PASSED**：S2 初始 4 provider 全部未配置（yml 置空生效）→ S3 PUT api-key 写入测试 key → S4 实时生效（available=true / apiKeyFromVault=true / 脱敏 `****0001`）→ S5 目录同步（listLlmProviders available=true）→ S6 注册 API_KEY_LLM Agent → S7 AGENT 级 ACTIVE 凭证自动补绑（hasEncryptedValue=true）→ S8 sys_config 写 `helloai.base-url` 后 getMySkill SKILL 内容立即包含该地址（不重启）并写回空串还原。全程单进程实时生效，无重启。
+  - **⚠ 首轮运行环境纠偏（重要事实链）**：首次手动执行（15:12）与第二轮复跑（15:16）时，jar 内打包的 `application.yml` 仍为 `active: dev`（src 已改 local，但改后未重新 `mvn package`；IDEA 自动构建只同步了 `target/classes` 不重打 jar），后端实际连服务器库 `39.106.204.43:15432`，两轮 S3-S8 均写入服务器共享库（PLATFORM/AGENT 级测试凭证 + `platform-config-e2e` agent，sys_config 已还原）。第三轮（15:25）重新 `mvn package`（jar 内 `active: local`）后连本机 docker local 库（localhost:15432，干净库）实现**真正的 local 全链路 22 PASS / 0 FAIL**（agentId=2085628380873048065，与服务器库残留 2085625109789908994 区分）。服务器库残留清理 SQL 已提供给用户执行（UPDATE 软删 credential_vault PLATFORM×2 / AGENT×1 + agent×1）。
+  - **教训**：修改 resources 下配置（如 `application.yml` 的 profile/key）后必须重新 `mvn package` 再验证，IDE 自动构建的 `target/classes` 同步不能代表 jar 产物；e2e 脚本启动 jar 前可加一步 jar 内配置校验（如对比 jar 内 application.yml 与 src 的 `profiles.active`）。
+- **待实测项已清空**：唯一未在真实环境回归的是"写库后真实 LLM 调用"（Factory 用测试 key 无法真连 DeepSeek），属既有 verify-agent-llm-connectivity 范畴，不阻塞本轮。
+
+#### 4. 影响与遗留
+
+- 老环境兼容：yml 已配 key 且 vault 无 PLATFORM 记录时 getApiKey 回退 yml，行为与现状完全一致；删除 vault PLATFORM 记录即回到 yml 配置行为。
+- 新环境：yml 空时 provider 标记"未配置"，注册平台内 LLM Agent 下拉禁用（现有前端逻辑），不阻断平台其他功能。
+- Agent 级 vault 凭证不受影响（owner_type 区分，唯一索引按 (owner_type, owner_id, provider, credential_type) 隔离）。
+- `ProviderChatModelCache.clear()` 全清：正在执行的调用持有旧实例引用不受影响，完成后旧实例无引用即被 GC；可接受。
+- 遗留：平台级凭证暂无删除接口（轮换可覆盖）；管理端鉴权与 /api/admin/* 同等水平（AuthInterceptor 统一保护，不强加新权限体系）；本地 e2e 写库实测待用户确认后执行。
+
+---
+
+### 6.52 LLM Provider 动态化方案B（V46，N9 §6.51 后续）（2026-08-07）
+
+#### 1. 背景与决策
+
+- **目标态**：LLM Provider 全部配置（`protocol_type / base_url / default_model / enabled / sort_order / extra_config`）从 `llm_provider` 表读取，运行时数据库为唯一事实源；管理员在“系统设置”页可动态添加 / 修改 / 启用-禁用 / 删除平台供应商（仅 OpenAI 兼容与 Anthropic 兼容两种 protocol，后续按需扩展）；API Key 走 credential_vault 仍不变（§6.51 闭环）；外部访问地址 `sys_config["helloai.base-url"]` 不动，本轮明确其用途从“系统基本配置”调整为“生成 SKILL 接入地址”。
+- **决策**（用户拍板）：DB 驱动的 Provider 配置，全表 `llm_provider`，不拆多表；deepseek 保留专用 Factory（官方 SDK，`DeepSeekChatModel`），其他三家（moonshot/dashscope/minimax）全部走通用 ProtocolFactory；兼容协议本轮仅限 `OPENAI_COMPATIBLE / ANTHROPIC_COMPATIBLE` 两种；老 yml `helloai.providers.*` 保留兜底（`AgentProviderProperties` 不动），migration 一次性把 4 家 INSERT 为 builtin 记录；旧 `AdminProviderConfigController` 兼容保留 / 新 `AdminLlmProviderController` 为正主；拖拽排序前端不实现（仅占位 `sort_order` 字段、后端 ready）；`from external import` 第三方批量导入 UI 不做。明确不做：API Key 动态化（已在 §6.51 闭合）、拖拽排序前端、Provider 粒度限流 / 配额、事件总线配置变更广播、第三方批量导入、Provider 配置变更审批流。
+
+#### 2. 实际落地
+
+- **DB 迁移**：Flyway `helloai-start/src/main/resources/db/migration/V46__llm_provider_table.sql`（71 行）——`CREATE TABLE llm_provider`（10 业务列 + `chk` 不需要走 §9.3 因为全部为 NOT NULL 或带 DEFAULT，加雪路 Id `IdType.ASSIGN_ID`）+ `idx_llm_provider_enabled` 部分索引 WHERE deleted=0 + `update_update_time` 触发器 + 幂等 `INSERT ... ON CONFLICT (provider_code) DO NOTHING` 4 家 builtin（deepseek/moonshot/minimax/dashscope；minimax 走 ANTHROPIC_COMPATIBLE，其他三家 OPENAI_COMPATIBLE）+ `setval` 序列同步。
+- **实体 / Mapper / Service**：`core/system/entity/LlmProvider` 继承 `BaseEntity`，`provider_code / provider_name / protocol_type / base_url / default_model / enabled / builtin / sort_order / extra_config`，`extra_config` 由 `JacksonTypeHandler` 处理 JSONB；`LlmProviderMapper extends BaseMapper<LlmProvider>`；`LlmProviderService extends ServiceImpl<LlmProviderMapper, LlmProvider>`，`create()` 先 `toLowerCase` 归一化后 `validateCode`（正则 `[a-z0-9][a-z0-9-]{1,63}`）+ `validateProtocol`（仅两协议之二）+ 去重，`update()` 局部 patch（仅非 null 字段覆盖）+ `builtin` 不可改 `provider_code`，`deleteById()` 拒绝 `builtin=1`；`LlmProviderQueryService` 提供 `findByCode / listEnabled / listAll / getBaseUrlWithFallback`，仅读作 hot path 读取入口。
+- **ProtocolFactory 族 + Registry**：`OpenAiCompatibleProtocolFactory`（原 MoonshotProviderChatClientFactory + DashScopeProviderChatClientFactory 抽取后通用化，从 `ProviderChatModelCache.getOrCompute` 建 ChatModel，连接超时 5s / 读超时 180s；baseUrl/effectiveModel 三层 fallback DB > provider > PlatformProviderConfigService）+ `AnthropicCompatibleProtocolFactory`（`AnthropicApi` 拼 /v1/messages，原 Minimax 抽出）+ `LlmProviderChatClientFactoryRegistry`（按 `provider.protocolType` 分发，深码 `deepseek` 走官方 SDK 优先匹配）。`ProviderChatModelCache.buildKey` 从 3 参数扩展为 `(provider, baseUrl, apiKey, protocolType)` 4 参数，保证 OpenAI / Anthropic 协议不串实例；DeepSeek factory 同步刷新为 4 参数版本。删除 `MoonshotProviderChatClientFactory / DashScopeProviderChatClientFactory / MinimaxProviderChatClientFactory / AbstractOpenAiCompatibleProviderChatClientFactory` 4 个文件（默认 yml 保留介 `AgentProviderProperties` 兌底读取）。
+- **业务服务坊接**：`LlmProviderCatalogService` 从 `LlmProviderQueryService.listAll` 枚举；`PlatformProviderConfigService` baseUrl/defaultModel 读服务改为 `LlmProviderQueryService.getBaseUrlWithFallback(providerCode, ymlFallback)` 三层 fallback；`AgentChatClientService` 构造器由 `ObjectProvider<List<ProviderChatClientFactory>>` 改为 `LlmProviderChatClientFactoryRegistry`，`generate(...)` 一行改为 `registry.createChatClient(providerCode, apiKey, agent, model)`；`AgentExecutionConnectivityService / ApiKeyAgentExecutor / ChatClient.Builder Bean` 不动。
+- **Controller**：`helloai-api/.../controller/AdminLlmProviderController`（`@RequestMapping("/api/admin/llm-providers")`）8 端点：`GET /list` / `GET /getById/{id}` / `POST /`（`CreateLlmProviderRequest`） / `PUT /updateById/{id}`（`UpdateLlmProviderRequest`） / `PUT /toggleById/{id}` / `DELETE /deleteById/{id}` / `PUT /{id}/api-key`（vault） / `GET /{id}/api-key` mask 脱敏；`LlmProviderResponse` 含 `apiKeyConfigured / apiKeyMasked / apiKeyFromVault`。**旧 `AdminProviderConfigController` 保留不动**作为迁移期兼容入口。3 个 DTO：`CreateLlmProviderRequest / UpdateLlmProviderRequest / LlmProviderResponse`（全部贴 §10.2 事务边界 + §6.3 不注入 Mapper）。
+- **前端**：`helloai-ui/src/api/settings.ts` 增 `LlmProviderResponse / CreateLlmProviderRequest` 接口 + `llmProviderApi.{list / getById / create / update / delete / toggle / saveApiKey}`；`Settings.vue` 重写为 Codex++ 风格（约 375 行）——顶部「基础配置」区（平台名 + 外网访问地址 + 用途文案“生成 SKILL 接入内容” ）+ 中部「LLM 供应商」区左侧列表 + 右侧详情面板 + 「+ 添加供应商」对话框（名称 / 协议下拉 / Base URL / 默认模型 / 可选 API Key）；内置 Provider 绝不可改，代号不可变，刪除隐藏；自定义 Provider 可启停 / 改 / 删；API Key 输入走 el-dialog，保存后“实时生效，无需重启”提示。
+- **设计备忘**：`LlmProvider` 实体明确定位为平台级 Provider 配置 (`system.entity`)，不是 chat 域的事；ChatClient 路由分发仍走 chat.provider。`LlmProviderChatClientFactoryRegistry` 仅中介按 protocolType 路由，具体怎么建 ChatModel 由 ProtocolFactory 实现。
+- **代理 Provider 创建场景验证**（设计意图）：管理员手工填 `protocol_type=OPENAI_COMPATIBLE / provider_code=gpt-4-mini / base_url=https://api.openai.com/v1 / api_key=...` 添加 → 注册 API_KEY_LLM Agent 、选该 provider 、调外部 OpenAI → 期望 200。
+
+#### 3. 验证结果
+
+- `mvn clean package -DskipTests` 7 模块全 SUCCESS（HelloAI Common/MQ/Core/Job/API/Start + Root）。
+- `mvn -pl helloai-core test` 416/416 全绿（含本轮新增 / 改造 9 例的 `LlmProviderServiceTest`：`shouldCreateWithNormalizedFields / shouldRejectDuplicateCode / shouldRejectInvalidCode / shouldRejectInvalidProtocol / shouldForbidBuiltinCodeChange / shouldAllowBuiltinUpdateOtherFields / shouldOnlyOverwriteNonNullFields / shouldForbidBuiltinDeletion / shouldAllowCustomDeletion`）。重点修补點：
+  - **`ServiceImpl.baseMapper` 问题**：单测中 `ServiceImpl` 父类 `baseMapper` 字段需要由 Spring 自动注入，`mvn test` 下 Spring 未启动；用 `ReflectionTestUtils.setField(service, "baseMapper", mapper)` 手动注入（**不传 type 参数**，因为 `baseMapper` 擦除类型为 `BaseMapper` 不是 `LlmProviderMapper`，传了会被 `ReflectionTestUtils` 报 "field of type [interface ...LlmProviderMapper] not found on target"）。后续测试如需调 ServiceImpl 方法仍遵此范例。
+  - **代码归一化路径**：`service.create()` 原本将 `validateCode` 放在 `toLowerCase` 之前 → “Custom-GPT-4” 永远会被判为非法。现改为先归一化后 validate，单元测试验证三点：(1) “null/空白” → “provider_code 不能为空”；(2) “MIXED-Case” 归一化为 “mixed-case”；(3) “a” 长度不足 2 / “Bad@Code” 含非法字符 → 两段独立失败。`Production` 路径·Controller 也调 `toLowerCase` 双重防御。
+- 残留检查：`grep "MoonshotProviderChatClientFactory|DashScopeProviderChatClientFactory|MinimaxProviderChatClientFactory|AbstractOpenAiCompatibleProviderChatClientFactory"` —— 只剩 OpenAiCompatibleProtocolFactory / AnthropicCompatibleProtocolFactory 类注释中“取代原 XxxFactory”说明 + doc/log/HelloAI_迭代执行记录.md 历史足迹。零代码引用。
+- `npx vue-tsc -b` 0 错。
+- **未实测项**（高优，建访重环境上修）：验 `AdminLlmProviderController` 8 端点真实调用、新增自定义 OpenAI 兼容 provider 在真实 LLM 环境下调成功、`AdminProviderConfigController` 旧入口迁移期走通。这三件均依赖 API Key / DB 环境，沙箱不能复现。
+
+#### 4. 影响与遗留
+
+- **仃能推进**：本轮 N9 由“仅 Provider API Key 动态化”升级为“Provider 全零态动态化”；后续 Agent / 执行链 / 调度反射者只需重发表 `llm_provider` 表，`LlmProviderChatClientFactoryRegistry` 会自动热刷该 provider 的 ChatModel。cache key 的 protocolType 维度使 OpenAI 与 Anthropic 实例不会错位。
+- **老环境兼容**：V46 幂等 INSERT 4 家 builtin，老 yml 定义 (用过6.51 后 API Key 在空) 与本轮变更零冲突；Codex++ 风格 UI 不變老行为，仅在“系统设置”页多一个「LLM 供应商」区块。
+- **明确不做**：拖拽排序前端、Provider 粒度限流 / 配额、`from external import` 第三方批量导入、事件总线配置变更广播（手动 `ProviderChatModelCache.clear()` 调用已够用）、Provider 配置变更审批流。
+- **遗留**（下一轮处理优先级建议）：① 真实环境 E2E 验证（3 场景如上）；② 旧 `/api/admin/platform/providers/...` 调用方补调迁告；③ Provider 变更后分发未存 `ProviderChatModelCache.clear()` 补正（现仅在 API Key 变更处调用，baseUrl / defaultModel 变更靠 ChatModel 新 key 自动重建）；④ 聊天协议多协议扩展点（如未来需 Gemini / Cohere）。
+
+### 6.53 「保存设置」500 NPE 修复（与方案B 无关的历史 bug 顺手清）（2026-08-08）
+
+#### 1. 背景与决策
+
+- 现象：系统设置 → “保存设置”点击后 `PUT /api/admin/config/batch` 返 500。
+- 根因：`helloai-ui/src/api/settings.ts:79` `batchUpdateConfig` 直接把 `Record<string,string>` flat map 作为请求体发出去；后端 `ConfigBatchRequest` 期待 wrapper 结构 `{config:{...}}`。`req.getConfig()` 为 null → `SysConfigService.batchUpdate` 调 `configMap.forEach(...)` → `NullPointerException`。
+- 业务间：这个问题早在方案B 之前就存在；只是 `Settings.vue` 改造后 Provider 区域加了 API Key 表单，第一次在真实环境点了“保存设置”才被谁发现。
+- 决策：按用户意愿**只改前端**，不动后端。后端 DTO 契约与 NullPointerException 裸露后续可以一起收（拆 demand 到独立 bug 表）。
+
+#### 2. 实际落地
+
+- 改 `helloai-ui/src/api/settings.ts`：`batchUpdateConfig(map)` → `request.put('/admin/config/batch', { config: map })`，调个调用点加 1 行注释说明“后端期待 wrapper，不能发 flat map”。
+- 不动后端、不动数据库、不动迁移。
+
+#### 3. 验证结果
+
+- `npx vue-tsc --noEmit -p tsconfig.json` 0 错（项目本地 `.\node_modules\.bin\vue-tsc.cmd`，不走 npx 拉不同版本的 typescript）。
+- `mvn -DskipTests -pl helloai-api,helloai-core,helloai-common -am compile` 0 错（虽未动后端代码，但确认前端改造不影响后端编译）。
+- 真机口验：`保存设置` 走通，`system.name` / `helloai.base-url` 都写入 `sys_config`（用户可见 200 响应 + “保存成功”提示）。
+
+#### 4. 影响与遗留
+
+- 影响：解决了本轮 Settings.vue 改造后唯一遗留的真实可见 bug；前端 `/api/admin/config/batch` 调用语义与后端 DTO 对齐。
+- 遗留：后端 `SysConfigService.batchUpdate` 依然裸露 NPE（controller 未做空校验、service 未加 null guard）。下一轮建议顺手加 `if (req == null || req.getConfig() == null) return;` 避免类似改动进一步产生 500。可独立 demand，不需绑回方案B。
+

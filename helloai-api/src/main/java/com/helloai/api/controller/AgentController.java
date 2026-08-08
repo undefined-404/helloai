@@ -2,6 +2,7 @@ package com.helloai.api.controller;
 
 import com.helloai.api.dto.agent.AgentRegistrationResponse;
 import com.helloai.api.dto.agent.AgentResponse;
+import com.helloai.api.support.AgentBaseUrlResolver;
 import com.helloai.common.base.R;
 import com.helloai.common.config.AgentConfigProperties;
 import com.helloai.common.constant.AgentAccessType;
@@ -11,6 +12,7 @@ import com.helloai.core.agent.chat.LlmProviderCatalogService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.system.service.PromptTemplateService;
 import com.helloai.core.agent.AgentCapability;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
@@ -32,6 +34,7 @@ public class AgentController {
     private final AgentConfigProperties agentConfig;
     private final PromptTemplateService promptTemplateService;
     private final LlmProviderCatalogService llmProviderCatalogService;
+    private final AgentBaseUrlResolver agentBaseUrlResolver;
 
     @GetMapping("/list")
     public R<List<AgentResponse>> list() {
@@ -155,7 +158,8 @@ public class AgentController {
     }
 
     @GetMapping("/getMySkill")
-    public R<Map<String, Object>> getMySkill(@RequestHeader("Authorization") String auth) {
+    public R<Map<String, Object>> getMySkill(@RequestHeader("Authorization") String auth,
+                                             HttpServletRequest request) {
         if (auth == null || !auth.startsWith("Bearer ")) {
             return R.fail(401, "认证失败");
         }
@@ -166,8 +170,8 @@ public class AgentController {
         }
 
         String role = agent.getRole().name().toLowerCase();
-        String baseUrl = agentConfig.getBaseUrl() != null && !agentConfig.getBaseUrl().isBlank()
-                ? agentConfig.getBaseUrl() : "http://localhost:6565";
+        // 外网地址统一解析：sys_config（设置页可写）> yml > 请求推导 > localhost 兜底
+        String baseUrl = agentBaseUrlResolver.resolve(request);
 
         // 从文件系统读取 SKILL 内容
         try {

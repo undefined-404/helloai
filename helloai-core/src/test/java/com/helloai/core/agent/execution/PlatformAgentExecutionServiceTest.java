@@ -4,7 +4,7 @@ import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.chat.AgentChatClientService;
-import com.helloai.core.agent.chat.provider.ProviderChatClientFactory;
+import com.helloai.core.agent.chat.provider.LlmProviderChatClientFactoryRegistry;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.executor.AgentExecutorRouter;
@@ -59,8 +59,8 @@ class PlatformAgentExecutionServiceTest {
         properties.setMockResponsePrefix("[mock-executor]");
 
         ObjectProvider<ChatClient.Builder> builderProvider = Mockito.mock(ObjectProvider.class);
-        ObjectProvider<List<ProviderChatClientFactory>> factoriesProvider = Mockito.mock(ObjectProvider.class);
-        AgentChatClientService chatClientService = new AgentChatClientService(properties, builderProvider, factoriesProvider);
+        LlmProviderChatClientFactoryRegistry registry = Mockito.mock(LlmProviderChatClientFactoryRegistry.class);
+        AgentChatClientService chatClientService = new AgentChatClientService(properties, builderProvider, registry);
         ApiKeyAgentExecutor apiKeyAgentExecutor =
                 new ApiKeyAgentExecutor(chatClientService, credentialVaultBindingService, properties);
         AgentExecutorRouter router = new AgentExecutorRouter(List.of(apiKeyAgentExecutor));

@@ -2,6 +2,7 @@ package com.helloai.core.agent.chat.provider;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentProviderProperties;
+import com.helloai.core.agent.chat.PlatformProviderConfigService;
 import com.helloai.core.agent.entity.Agent;
 import io.micrometer.observation.ObservationRegistry;
 import lombok.RequiredArgsConstructor;
@@ -28,6 +29,7 @@ public class DeepSeekProviderChatClientFactory implements ProviderChatClientFact
     private final ObservationRegistry observationRegistry;
     private final AgentProviderProperties providerProperties;
     private final ProviderChatModelCache cache;
+    private final PlatformProviderConfigService platformProviderConfigService;
 
     @Override
     public boolean supports(String provider) {
@@ -41,13 +43,16 @@ public class DeepSeekProviderChatClientFactory implements ProviderChatClientFact
         }
 
         AgentProviderProperties.ProviderConfig config = providerProperties.getConfig(PROVIDER);
+        // baseUrl 动态化：sys_config > yml > null（null 时 DeepSeekApi 走官方默认）
+        String baseUrl = platformProviderConfigService.getBaseUrl(PROVIDER);
 
-        // N9: 按 (provider, baseUrl, apiKey) 三元组复用 ChatModel 实例，避免每次请求重
+        // N9: 按 (provider, baseUrl, apiKey, protocolType) 四元组复用 ChatModel 实例，避免每次请求重
         // 建 RestClient/连接池。idempotencyKey / 上下文 model 切换由 ChatClient 层的
-        // options/advisor 覆盖，不影响本缓存 key。
-        String cacheKey = ProviderChatModelCache.buildKey(PROVIDER, apiKeyPlaintext, config.getBaseUrl());
+        // options/advisor 覆盖，不影响本缓存 key。protocolType=deepseek 是一个独立桶，与
+        // OpenAI 兼容 / Anthropic 兼容 ChatModel 隔离。
+        String cacheKey = ProviderChatModelCache.buildKey(PROVIDER, apiKeyPlaintext, baseUrl, PROVIDER);
 
-        ChatModel chatModel = cache.getOrCompute(cacheKey, () -> buildChatModel(apiKeyPlaintext, config, model));
+        ChatModel chatModel = cache.getOrCompute(cacheKey, () -> buildChatModel(apiKeyPlaintext, config, baseUrl, model));
         return ChatClient.create(chatModel);
     }
 
@@ -57,20 +62,23 @@ public class DeepSeekProviderChatClientFactory implements ProviderChatClientFact
      */
     private ChatModel buildChatModel(String apiKeyPlaintext,
                                      AgentProviderProperties.ProviderConfig config,
+                                     String baseUrl,
                                      String requestedModel) {
         DeepSeekApi.Builder apiBuilder = DeepSeekApi.builder().apiKey(apiKeyPlaintext);
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout(Math.max(config.getConnectTimeoutMs(), 1));
         requestFactory.setReadTimeout(Math.max(config.getReadTimeoutMs(), 1));
         apiBuilder.restClientBuilder(RestClient.builder().requestFactory(requestFactory));
-        if (config.getBaseUrl() != null && !config.getBaseUrl().isBlank()) {
-            apiBuilder.baseUrl(config.getBaseUrl());
+        if (baseUrl != null && !baseUrl.isBlank()) {
+            apiBuilder.baseUrl(baseUrl);
         }
 
+        // defaultModel 动态化：sys_config > yml > 内置默认
+        String dynamicDefaultModel = platformProviderConfigService.getDefaultModel(PROVIDER);
         String effectiveModel = requestedModel != null && !requestedModel.isBlank()
                 ? requestedModel
-                : (config.getDefaultModel() != null && !config.getDefaultModel().isBlank()
-                        ? config.getDefaultModel()
+                : (dynamicDefaultModel != null && !dynamicDefaultModel.isBlank()
+                        ? dynamicDefaultModel
                         : DEFAULT_MODEL);
 
         DeepSeekChatOptions options = DeepSeekChatOptions.builder()
