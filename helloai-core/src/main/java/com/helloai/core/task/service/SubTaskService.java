@@ -413,6 +413,39 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
         log.info("子任务驳回返工: subTaskId={}, reworkCount={}", subTaskId, subTask.getReworkCount());
     }
 
+    /**
+     * §6.52 人工介入标记：写入子任务 context.manualIntervention。
+     *
+     * <p>自动链路（返工达上限、降级能力不匹配）不再继续打回/重派时调用，
+     * 标记该子任务等待人工处置；前端据此展示"人工介入"面板，
+     * 由用户选择 agent 驳回改派或直接通过。幂等覆盖写入，失败不抛异常。</p>
+     *
+     * @param subTaskId 子任务 ID
+     * @param reason    触发原因（rework_limit / fallback_skip_execution_dense 等）
+     * @param extra     附加信息（reworkCount / maxRework / failedAgentId 等，可空）
+     */
+    public void markManualIntervention(Long subTaskId, String reason, Map<String, Object> extra) {
+        try {
+            SubTask fresh = getById(subTaskId);
+            if (fresh == null) {
+                return;
+            }
+            Map<String, Object> ctx = new HashMap<>(fresh.getContext() != null ? fresh.getContext() : Map.of());
+            Map<String, Object> mark = new HashMap<>();
+            mark.put("reason", reason);
+            mark.put("ts", OffsetDateTime.now().toString());
+            if (extra != null) {
+                mark.putAll(extra);
+            }
+            ctx.put("manualIntervention", mark);
+            fresh.setContext(ctx);
+            updateById(fresh);
+            log.info("人工介入标记已写入: subTaskId={}, reason={}", subTaskId, reason);
+        } catch (Exception e) {
+            log.warn("人工介入标记写入失败（不影响主链路）: subTaskId={}, err={}", subTaskId, e.getMessage());
+        }
+    }
+
     @Transactional(rollbackFor = Exception.class)
     public void block(Long subTaskId) {
         block(subTaskId, null, null);
@@ -570,11 +603,16 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
     }
 
     /**
-     * 列出超过阈值秒数仍处于 REVIEW 且无审查记录的子任务（孤儿 REVIEW）。
+     * 列出超过阈值秒数仍处于 REVIEW 且未被人工介入的子任务（孤儿 REVIEW）。
      *
      * <p>作为 {@link com.helloai.core.review.SubTaskReviewService#onSubmittedForReview}
      * 事件链的兜底扫描：当 AFTER_COMMIT 事务事件因线程池 / 序列化等原因丢失时，
      * 本方法提供基于 DB 状态的二次发现能力。</p>
+     *
+     * <p>§6.52 修复：不能以"已有审查记录"排除候选——返工达上限的任务同样持有
+     * review_record，若事件链丢失，这类任务将永远不被兜底扫描，永久卡死 REVIEW
+     * （前端人工介入面板依赖本扫描写入 manualIntervention 标记）。改为排除
+     * 已标记人工介入的任务（人工处置中，不再自动打扰）。</p>
      *
      * @param thresholdSeconds 子任务 update_time 早于 now - thresholdSeconds 的才进入候选
      * @param limit            返回上限
@@ -589,10 +627,8 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
                 .last("LIMIT " + limit)
                 .list();
         candidates.removeIf(st -> {
-            Long cnt = reviewRecordMapper.selectCount(
-                    new LambdaQueryWrapper<ReviewRecord>()
-                            .eq(ReviewRecord::getSubTaskId, st.getId()));
-            return cnt != null && cnt > 0;
+            Map<String, Object> ctx = st.getContext();
+            return ctx != null && ctx.get("manualIntervention") != null;
         });
         return candidates;
     }

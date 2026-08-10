@@ -24,7 +24,9 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
 import java.time.OffsetDateTime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -236,6 +238,24 @@ class ExternalAgentFallbackTaskTest {
                     .dispatchPendingSubTaskAuto(eq(5001L), eq(AgentRole.EXECUTOR));
             verify(subTaskDispatchService, times(1))
                     .dispatchPendingSubTaskAuto(eq(5002L), eq(AgentRole.EXECUTOR));
+        }
+
+        @Test
+        @DisplayName("V27.1: 已标记人工介入 → 跳过不自动重派")
+        void shouldSkipWhenManualInterventionMarked() {
+            when(failureTracker.findFallbackCandidates()).thenReturn(List.of());
+            when(subTaskMapper.selectPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
+                    .thenReturn(List.of(5001L));
+            SubTask marked = pendingUnassignedTask(5001L);
+            Map<String, Object> ctx = new HashMap<>();
+            ctx.put("manualIntervention", Map.of("reason", "dispatch_skip_execution_dense"));
+            marked.setContext(ctx);
+            when(subTaskService.getById(5001L)).thenReturn(marked);
+
+            task.scan();
+
+            verify(subTaskDispatchService, never())
+                    .dispatchPendingSubTaskAuto(anyLong(), any());
         }
 
         @Test

@@ -19,6 +19,7 @@ import com.helloai.core.shared.event.SubTaskSubmittedForReviewEvent;
 import com.helloai.core.shared.util.LlmJsonSanitizer;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.ReviewService;
+import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import lombok.Data;
@@ -154,7 +155,30 @@ public class SubTaskReviewService {
             taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId,
                     "sub_task_auto_review_skip_max_rework", AgentRole.REVIEWER, null,
                     Map.of("reworkCount", reworkCount, "maxRework", maxRework));
+            // §6.52 人工介入标记：前端据此展示"人工介入"面板（用户选 agent 驳回改派 / 直接通过）
+            subTaskService.markManualIntervention(subTaskId, "rework_limit",
+                    Map.of("reworkCount", reworkCount, "maxRework", maxRework));
             return;
+        }
+
+        // V27.1 执行密集无能力提交者预检：提交者无本机执行能力时，产出可信度存疑，
+        // 跳过自动核验（避免核验 LLM 无法辨别幻觉证据而放行），打人工介入标记等人工处置。
+        Long submitterId = executorAgentId != null ? executorAgentId : subTask.getAssignedAgentId();
+        if (dispatchProperties.isFallbackSkipExecutionDense()
+                && SubTaskDispatchService.isExecutionDense(subTask)
+                && submitterId != null) {
+            Agent submitter = agentService.getById(submitterId);
+            if (!SubTaskDispatchService.hasLocalExecutionCapability(submitter)) {
+                log.warn("自动核验跳过：执行密集任务由无本机能力 Agent 提交, subTaskId={}, submitterAgentId={}",
+                        subTaskId, submitterId);
+                taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId,
+                        "sub_task_review_skip_no_capability", AgentRole.REVIEWER, submitterId,
+                        Map.of("reason", "execution_dense_submitter_no_local_capability",
+                                "submitterAgentId", submitterId));
+                subTaskService.markManualIntervention(subTaskId, "review_skip_execution_dense_no_capability",
+                        Map.of("submitterAgentId", submitterId));
+                return;
+            }
         }
 
         Agent reviewer = pickReviewerAgent();
@@ -375,19 +399,44 @@ public class SubTaskReviewService {
                 .replace("{{SUB_TASK_CONTENT}}", nullToEmpty(subTask.getContent()))
                 .replace("{{DELIVERABLE}}", nullToEmpty(subTask.getDeliverable()))
                 .replace("{{ACCEPTANCE}}", nullToEmpty(subTask.getAcceptance()))
-                .replace("{{EXECUTION_OUTPUT}}", extractExecutionOutput(subTask));
+                .replace("{{EXECUTION_OUTPUT}}", extractExecutionOutput(subTask))
+                .replace("{{VERIFICATION_SIGNAL}}", verificationSignal(extractRawOutput(subTask)));
     }
 
     /** 从 context.lastExecution.output 提取执行产出，缺失时给出占位说明。 */
     private String extractExecutionOutput(SubTask subTask) {
+        String raw = extractRawOutput(subTask);
+        if (!raw.isBlank()) {
+            return summarize(raw, OUTPUT_SUMMARY_LIMIT);
+        }
+        return "（执行产出为空或缺失，请据交付物/验收标准审慎判定）";
+    }
+
+    /** 取执行产出原文（不截断），供围栏证据信号检测使用。 */
+    private String extractRawOutput(SubTask subTask) {
         Map<String, Object> ctx = subTask.getContext();
         if (ctx != null && ctx.get("lastExecution") instanceof Map<?, ?> lastExecution) {
             Object output = lastExecution.get("output");
-            if (output != null && !output.toString().isBlank()) {
-                return summarize(output.toString(), OUTPUT_SUMMARY_LIMIT);
+            if (output != null) {
+                return output.toString();
             }
         }
-        return "（执行产出为空或缺失，请据交付物/验收标准审慎判定）";
+        return "";
+    }
+
+    /**
+     * 围栏证据信号：检测提交是否携带 VERIFICATION 段（基于截断前原文）。
+     *
+     * <p>仅检测不拦截——无证据提交不拒收，但注入"从严核验"指令，
+     * 与 executor SKILL 的 fail-close 条款形成闭环。</p>
+     */
+    private String verificationSignal(String rawOutput) {
+        boolean hasEvidence = rawOutput != null && rawOutput.contains("VERIFICATION:");
+        return hasEvidence
+                ? "该提交携带验证证据（VERIFICATION 段）：请核对证据中命令/输出/结论与交付物的一致性，"
+                        + "证据与结论矛盾或明显伪造的按不达标处理。"
+                : "该提交未携带验证证据（无 VERIFICATION 段）：请从严核验、评分保守；"
+                        + "仅凭产出文本无法确认满足验收标准时不得判 pass=true。";
     }
 
     /** 解析核验判定 JSON；不可解析返回 null（调用方据此停留 REVIEW）。 */

@@ -48,6 +48,43 @@
       </el-descriptions>
     </el-card>
 
+    <!-- §6.52 人工介入：返工达上限 / 降级能力不匹配时，用户自主选择 agent 驳回改派或直接通过 -->
+    <el-card v-if="item && needsManualIntervention" style="margin-top:16px" class="manual-card">
+      <template #header>
+        <div class="card-header">
+          <span style="color:var(--el-color-warning)">人工介入</span>
+          <span style="font-size:12px;color:var(--ha-muted)">自动链路已停止，需人工处置（前端面板 + 后端 review API）</span>
+        </div>
+      </template>
+      <div class="manual-body">
+        <div class="manual-reason">
+          <el-tag type="warning" size="small">{{ manualReasonText }}</el-tag>
+          <span class="manual-current">当前负责人：{{ item.assignedAgentName || resolveAgentName(item.assignedAgent) }}</span>
+        </div>
+        <div class="manual-actions">
+          <div class="manual-row">
+            <span class="manual-label">改派给</span>
+            <el-select v-model="manualTargetAgentId" placeholder="选择执行 Agent（外部/内部均可）" filterable style="width:320px">
+              <el-option
+                v-for="a in manualCandidates" :key="String(a.id)"
+                :label="a.name + '（' + accessTypeLabel(a.accessType) + (a.onlineStatus ? ' · ' + a.onlineStatus : '') + '）'"
+                :value="String(a.id)"
+              />
+            </el-select>
+            <el-button type="warning" :loading="manualSubmitting" :disabled="!manualTargetAgentId" @click="submitManualRework">
+              驳回并改派
+            </el-button>
+          </div>
+          <div class="manual-row">
+            <span class="manual-label">或</span>
+            <el-button type="success" :loading="manualSubmitting" @click="submitManualApprove">
+              直接通过（人工验收）
+            </el-button>
+          </div>
+        </div>
+      </div>
+    </el-card>
+
     <!-- 方案 2：产出附件（执行产出物化后可单独下载；无附件时不展示卡片） -->
     <el-card v-if="item && attachments.length" style="margin-top:16px">
       <template #header>
@@ -168,6 +205,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { subTaskApi } from '@/api/subTask'
 import { agentApi } from '@/api/agent'
+import { reviewApi } from '@/api/review'
 import { attachmentApi } from '@/api/attachment'
 import { saveBlobResponse } from '@/utils/download'
 import MarkdownView from '@/components/MarkdownView.vue'
@@ -176,7 +214,7 @@ import SubTaskSequenceFlow from '@/components/SubTaskSequenceFlow.vue'
 import { SUB_TASK_STATUS_MAP, SCORE_GRADE_MAP } from '@/types'
 import { fmtTime } from '@/utils/tableConfig'
 import { orderByDependency } from '@/utils/subTaskDag'
-import type { SubTask, TaskTimelineItem, ConversationMessageItem, Attachment, LongId } from '@/types'
+import type { SubTask, TaskTimelineItem, ConversationMessageItem, Attachment, LongId, Agent } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -323,11 +361,14 @@ function roleLabel(role: string | null): string {
 
 // Agent ID → 注册名字映射（一次性拉取全量 Agent），展示注册名而非原始 ID
 const agentNameMap = ref<Record<string, string>>({})
+// §6.52 人工介入面板：全量 Agent 候选（改派目标选择器数据源）
+const agents = ref<Agent[]>([])
 async function loadAgents() {
   try {
-    const agents = await agentApi.list()
+    const list = await agentApi.list()
+    agents.value = list
     const map: Record<string, string> = {}
-    agents.forEach((a) => { map[String(a.id)] = a.name })
+    list.forEach((a) => { map[String(a.id)] = a.name })
     agentNameMap.value = map
   } catch (e) {
     // 拉取失败不阻断详情展示，降级显示短 ID
@@ -356,6 +397,90 @@ function eventDescription(ev: TaskTimelineItem): string {
 function goBackToList() {
   const tid = item.value?.taskId
   router.push(tid ? { path: '/sub-tasks', query: { taskId: String(tid) } } : '/sub-tasks')
+}
+
+// ── §6.52 人工介入：返工达上限 / 降级能力不匹配时，用户自主选择 agent 改派或直接通过 ──
+const manualTargetAgentId = ref<string>('')
+const manualSubmitting = ref(false)
+
+// REVIEW 卡死判定：context 有人工介入标记，或返工次数已达后端默认上限
+// （autoReviewMaxRework=3，兼容标记落库前的存量卡死任务）
+const needsManualIntervention = computed(() => {
+  if (!item.value || item.value.status !== 'REVIEW') return false
+  if (item.value.context?.manualIntervention) return true
+  return item.value.reworkCount >= 3
+})
+
+const manualReasonText = computed(() => {
+  const mark = item.value?.context?.manualIntervention as Record<string, any> | undefined
+  if (mark?.reason === 'fallback_skip_execution_dense') {
+    return '降级能力不匹配：执行密集任务未自动回退给无本机能力的 LLM Agent'
+  }
+  return '返工已达上限（' + (item.value?.reworkCount ?? 0) + ' 次），自动核验已停止'
+})
+
+// 改派候选：EXECUTOR 角色 + ACTIVE，排除当前负责人，在线优先（外部/内部 Agent 均可选）
+const manualCandidates = computed(() => {
+  if (!item.value) return []
+  const current = item.value.assignedAgent != null ? String(item.value.assignedAgent) : ''
+  return agents.value
+    .filter(a => a.role === 'EXECUTOR' && a.status === 'ACTIVE' && String(a.id) !== current)
+    .sort((a, b) => {
+      const rank = (x: Agent) => (x.onlineStatus === 'IDLE' || x.onlineStatus === 'ONLINE' ? 0 : 1)
+      return rank(a) - rank(b)
+    })
+})
+
+function accessTypeLabel(t: string | undefined): string {
+  if (t === 'CLI_CLIENT') return '外部 CLI'
+  if (t === 'WEB_BROWSER') return '浏览器'
+  if (t === 'API_KEY_LLM') return '内部 LLM'
+  return t || '未知'
+}
+
+// 驳回并改派：REVIEW → REWORK + 换 assignedAgent（后端 createReview REJECTED + reworkAgentId）
+async function submitManualRework() {
+  if (!item.value || !manualTargetAgentId.value) return
+  manualSubmitting.value = true
+  try {
+    await reviewApi.create({
+      subTaskId: item.value.id,
+      result: 'REJECTED',
+      score: 1,
+      issues: '人工介入：自动链路已停止（返工达上限/能力不匹配），改派 Agent ' + manualTargetAgentId.value + ' 重新执行',
+      comment: '人工驳回改派（平台管理员）',
+      reworkAgentId: manualTargetAgentId.value
+    })
+    ElMessage.success('已驳回并改派，等待新 Agent 认领执行')
+    manualTargetAgentId.value = ''
+    await pollOnce()
+  } catch {
+    // 拦截器已弹错误提示
+  } finally {
+    manualSubmitting.value = false
+  }
+}
+
+// 直接通过：人工验收（APPROVED 不受返工上限限制，必然能收尾）
+async function submitManualApprove() {
+  if (!item.value) return
+  manualSubmitting.value = true
+  try {
+    await reviewApi.create({
+      subTaskId: item.value.id,
+      result: 'APPROVED',
+      score: 4,
+      issues: '',
+      comment: '人工验收通过（平台管理员）',
+      reworkAgentId: null
+    })
+    ElMessage.success('已人工验收通过，子任务完成')
+    await pollOnce()
+  } catch {
+    // 拦截器已弹错误提示
+  } finally {
+    manualSubmitting.value = false
+  }
 }
 
 // V28: 对话流消息来源标签（toolName → 展示文案/颜色）
@@ -579,6 +704,14 @@ onBeforeUnmount(() => {
 <style scoped>
 .page { max-width: var(--ha-content-width); }
 .dep-tag { cursor: pointer; margin: 2px 6px 2px 0; }
+
+/* §6.52 人工介入面板 */
+.manual-body { display: flex; flex-direction: column; gap: 12px; }
+.manual-reason { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.manual-current { color: var(--ha-muted); font-size: 12px; }
+.manual-actions { display: flex; flex-direction: column; gap: 10px; }
+.manual-row { display: flex; align-items: center; gap: 10px; }
+.manual-label { width: 44px; color: var(--ha-muted); font-size: 12px; flex-shrink: 0; }
 .tl-head { display: flex; align-items: center; gap: 8px; }
 .tl-meta { color: var(--ha-muted); font-size: 12px; }
 .tl-desc { margin: 4px 0 0; font-size: 13px; line-height: 1.6; color: var(--ha-text, inherit); }

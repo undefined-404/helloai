@@ -2,6 +2,7 @@ package com.helloai.core.agent.dispatcher;
 
 import com.helloai.common.base.AgentUnavailableException;
 import com.helloai.common.base.BizException;
+import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
@@ -15,7 +16,12 @@ import org.springframework.stereotype.Service;
 import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.observability.CircuitBreakerEventRecorder;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskTimelineService;
+
+import java.util.Map;
 
 /**
  * 弹性调度器（v2.4 §4.5）。
@@ -27,6 +33,9 @@ import com.helloai.core.task.service.SubTaskService;
  *       以 agentDispatch 实例配置为模板，实现按 Agent 维度熔断</li>
  *   <li>降级：熔断打开或执行失败时，通过 {@link AgentSelector#pickAlternative}
  *       在同角色 Agent 中选择替代者重新分配</li>
+ *   <li>V27.1：分配前执行密集能力预检——执行密集任务（需本机 shell/文件/服务操作）
+ *       不分配给无本机执行能力的 Agent，避免"无能力执行 → 幻觉交付 → 审核放行"，
+ *       覆盖初始分配 / 离线重分配 / ASSIGNED 超时 / 熔断降级等所有入口</li>
  * </ul>
  *
  * <p>熔断参数（application.yml）：
@@ -49,6 +58,8 @@ public class ResilientDispatcher {
     private final SubTaskService subTaskService;
     private final AgentService agentService;
     private final AgentSelector agentSelector;
+    private final AgentDispatchProperties agentDispatchProperties;
+    private final TaskTimelineService taskTimelineService;
 
     private static final String DISPATCH_CB_NAME = "agentDispatch";
 
@@ -60,6 +71,7 @@ public class ResilientDispatcher {
      *   <li>外层 @CircuitBreaker 保护整体调度</li>
      *   <li>按 agentId 获取/创建 per-agent 熔断器</li>
      *   <li>校验 Agent 在线状态（SLEEPING/OFFLINE 立即 fast-fail）</li>
+     *   <li>V27.1 执行密集能力预检（不匹配 → 标记人工介入并 fast-fail 走 fallback）</li>
      *   <li>调用 {@link SubTaskService#assignNext} 执行分配</li>
      *   <li>失败/熔断打开 → fallback 选取替代 Agent</li>
      * </ol>
@@ -98,11 +110,44 @@ public class ResilientDispatcher {
             if (!agentSelector.isHeartbeatFresh(agent)) {
                 throw new AgentUnavailableException("Agent 心跳已陈旧（疑似失联），不可分配: " + agentId, agentId);
             }
+            // V27.1：执行密集能力预检（覆盖所有分配入口）——不匹配时标记人工介入，
+            // 抛 AgentUnavailableException 走 fallback 尝试同角色替代；替代也需通过预检。
+            if (isExecutionDenseMismatch(agentId, subTaskId, agent)) {
+                throw new AgentUnavailableException(
+                        "执行密集任务不匹配无本机能力 Agent: agentId=" + agentId + ", subTaskId=" + subTaskId, agentId);
+            }
 
             log.info("弹性调度分配: agentId={}, subTaskId={}, onlineStatus={}",
                     agentId, subTaskId, onlineStatus);
             subTaskService.assignNext(agentId, subTaskId);
         }).run();
+    }
+
+    /**
+     * V27.1 执行密集能力预检：执行密集任务分配给无本机能力 Agent 时，
+     * 记 timeline + 幂等标记人工介入，返回 true 表示不匹配（应拒绝分配）。
+     */
+    private boolean isExecutionDenseMismatch(Long agentId, Long subTaskId, Agent agent) {
+        if (!agentDispatchProperties.isFallbackSkipExecutionDense()) {
+            return false;
+        }
+        SubTask subTask = subTaskService.getById(subTaskId);
+        if (subTask == null || !SubTaskDispatchService.isExecutionDense(subTask)) {
+            return false;
+        }
+        if (SubTaskDispatchService.hasLocalExecutionCapability(agent)) {
+            return false;
+        }
+        taskTimelineService.recordEvent(subTask.getTaskId(), subTask.getId(),
+                "sub_task_dispatch_skip_no_capability", AgentRole.SYSTEM, agentId,
+                Map.of("reason", "execution_dense_no_local_capability",
+                        "agentId", agentId,
+                        "subTaskId", subTaskId));
+        subTaskService.markManualIntervention(subTaskId, "dispatch_skip_execution_dense",
+                Map.of("agentId", agentId));
+        log.warn("V27.1 分配跳过：执行密集任务不可分配给无本机能力 Agent, subTaskId={}, agentId={}",
+                subTaskId, agentId);
+        return true;
     }
 
     private io.github.resilience4j.circuitbreaker.CircuitBreaker resolvePerAgentCircuitBreaker(Long agentId) {
@@ -146,6 +191,14 @@ public class ResilientDispatcher {
                     "无可用替代 Agent: excludeAgentId=%d, role=%s", agentId, role);
             log.error(msg);
             throw new BizException(msg);
+        }
+
+        // V27.1：替代 Agent 同样必须通过执行密集能力预检。
+        // 不匹配时已标记人工介入，任务保持 PENDING 由人工处置，不再抛异常冒泡。
+        if (isExecutionDenseMismatch(alternative.getId(), subTaskId, alternative)) {
+            log.warn("熔断降级替代 Agent 也无本机执行能力，放弃分配: subTaskId={}, alternativeAgentId={}",
+                    subTaskId, alternative.getId());
+            return;
         }
 
         log.info("熔断降级成功: originalAgentId={} → alternativeAgentId={}, subTaskId={}",

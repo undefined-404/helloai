@@ -19,10 +19,15 @@ import java.util.regex.Pattern;
  * - 登录接口路径: POST /api/auth/login
  * DELIVERABLES:
  * - src/main/java/.../AuthController.java
+ * VERIFICATION:
+ * - 命令: mvn -pl helloai-core -am compile
+ * - 输出: BUILD SUCCESS
+ * - 结论: 通过
  * ---
  * </pre>
  *
- * <p>解析失败（未找到块/格式不完整）返回 null，不阻断主链路。</p>
+ * <p>解析失败（未找到块/格式不完整）返回 null，不阻断主链路。
+ * VERIFICATION 段为围栏协议证据字段：缺失时记录为空串并打 debug 日志，仅检测不拦截。</p>
  */
 @Slf4j
 public final class ExecutionRecordParser {
@@ -33,6 +38,9 @@ public final class ExecutionRecordParser {
     /** EXECUTION_RECORD 块分隔符。 */
     private static final String BLOCK_START = "## EXECUTION_RECORD";
     private static final String BLOCK_END = "---";
+
+    /** VERIFICATION 段标记（围栏协议证据段）。 */
+    private static final String VERIFICATION_MARKER = "VERIFICATION:";
 
     /** 各段标题匹配。 */
     private static final Pattern SUMMARY_PATTERN = Pattern.compile("^SUMMARY:\\s*(.+)$", Pattern.MULTILINE);
@@ -100,6 +108,15 @@ public final class ExecutionRecordParser {
         Matcher dlMatcher = DELIVERABLES_PATTERN.matcher(block);
         if (dlMatcher.find()) {
             parseListItems(dlMatcher.group(1), builder::addDeliverable);
+        }
+
+        // VERIFICATION（可选，围栏协议）：协议约定为块内最后一段，直接截取到块尾
+        int vfIdx = block.indexOf(VERIFICATION_MARKER);
+        if (vfIdx >= 0) {
+            String verification = block.substring(vfIdx + VERIFICATION_MARKER.length()).trim();
+            builder.verification(verification);
+        } else {
+            log.debug("EXECUTION_RECORD 块缺少 VERIFICATION（围栏证据信号）: subTaskId={}", subTaskId);
         }
 
         return builder.build();

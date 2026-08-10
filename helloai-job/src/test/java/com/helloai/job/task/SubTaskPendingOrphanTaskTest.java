@@ -23,7 +23,9 @@ import org.springframework.data.redis.core.script.RedisScript;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -195,6 +197,38 @@ class SubTaskPendingOrphanTaskTest {
 
             verify(subTaskDispatchService, never())
                     .dispatchPendingSubTaskAuto(anyLong(), any());
+        }
+
+        @Test
+        @DisplayName("V27.1: 已标记人工介入 → skip 不自动重派")
+        void shouldSkipWhenManualInterventionMarked() {
+            when(subTaskMapper.selectStalePendingWithoutExecutionRecord(any(), anyInt()))
+                    .thenReturn(List.of(1L));
+            SubTask st = pendingSubTask(1L);
+            Map<String, Object> ctx = new HashMap<>();
+            ctx.put("manualIntervention", Map.of("reason", "fallback_skip_execution_dense"));
+            st.setContext(ctx);
+            when(subTaskService.getById(1L)).thenReturn(st);
+
+            task.scan();
+
+            verify(subTaskDispatchService, never())
+                    .dispatchPendingSubTaskAuto(anyLong(), any());
+        }
+
+        @Test
+        @DisplayName("V27.1: 未标记人工介入但带其它 context → 仍正常重派")
+        void shouldRedispatchWhenContextWithoutManualIntervention() {
+            when(subTaskMapper.selectStalePendingWithoutExecutionRecord(any(), anyInt()))
+                    .thenReturn(List.of(1L));
+            SubTask st = pendingSubTask(1L);
+            st.setContext(Map.of("someKey", "someValue"));
+            when(subTaskService.getById(1L)).thenReturn(st);
+
+            task.scan();
+
+            verify(subTaskDispatchService, times(1))
+                    .dispatchPendingSubTaskAuto(eq(1L), eq(AgentRole.EXECUTOR));
         }
 
         @Test

@@ -85,6 +85,15 @@ public class AgentDispatchProperties {
     private int autoReviewMaxRework = 3;
 
     /**
+     * §6.52：N11 外部回退时是否跳过"执行密集"任务的自动降级。
+     *
+     * <p>执行密集任务（需本机 shell/文件/服务操作）回退给无本机能力的 API_KEY_LLM
+     * 会导致交付物永远不达标、返工循环、最终卡死审核；开启后此类任务不自动回退，
+     * 停留原状态并标记人工介入（用户在前端自主选择 agent 改派）。默认 true。</p>
+     */
+    private boolean fallbackSkipExecutionDense = true;
+
+    /**
      * V27 兜底：REVIEW 孤儿扫描阈值（秒）。
      *
      * <p>子任务进入 REVIEW 超过此秒数且无 review_record 时，

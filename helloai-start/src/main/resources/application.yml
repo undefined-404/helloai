@@ -105,6 +105,10 @@ helloai:
     # V25：ASSIGNED 超时未 claim 回收阈值（分钟），原为硬编码 10 分钟
     # 联调时可缩短以加快"未接单→回收→改派"的观察周期
     assigned-timeout-minutes: 10
+    # §6.52：N11 外部回退时跳过"执行密集"任务自动降级（默认 true）
+    # 执行密集任务（需本机 shell/文件/服务操作）不自动回退给无本机能力的 API_KEY_LLM，
+    # 停留原状态并标记人工介入，避免"无能力执行→交付物不达标→返工循环→卡死审核"。
+    fallback-skip-execution-dense: true
     # Phase 2C N11：外部 Agent 连续失败阈值后自动回退到平台内 API_KEY_LLM
     fallback:
       enabled: true

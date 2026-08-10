@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 import java.time.OffsetDateTime;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 import com.helloai.core.agent.dispatcher.ResilientDispatcher;
 
 /**
@@ -68,6 +69,11 @@ public class SubTaskDispatchService {
      *
      * <p>这里故意把离线 Agent 作为首选目标交给 {@link ResilientDispatcher}，
      * 由其 fast-fail + fallback 选择替代 Agent，保持角色与熔断逻辑一致。</p>
+     *
+     * <p>V27.1 依赖守卫：与 {@link #dispatchPendingSubTaskAuto} 对齐——离线重分配
+     * 曾绕过依赖检查，导致"依赖未 DONE 的子任务被直接重派执行"（实测：trae 离线
+     * 时依赖 REVIEW 的子任务被直接分给无本机能力的 inner 执行）。未就绪时保持
+     * PENDING，等依赖 DONE 后由正常自动分发链接管。</p>
      */
     public void redispatchOfflineSubTask(Long subTaskId, Long offlineAgentId) {
         // V24: 重分配熔断检查
@@ -76,6 +82,25 @@ public class SubTaskDispatchService {
         }
         SubTask subTask = subTaskService.resetToPendingForDispatch(
                 subTaskId, Set.of(SubTaskStatus.ASSIGNED, SubTaskStatus.IN_PROGRESS));
+        if (subTask == null) {
+            throw new BizException("子任务不存在: " + subTaskId);
+        }
+        // V27.1: 依赖 ready 守卫 —— 未就绪的离线遗留任务不重派，保持 PENDING
+        // 等依赖 DONE 后由 SubTaskPendingOrphanTask / 自动分发链再次触发
+        if (!subTaskService.isReady(subTask)) {
+            taskTimelineService.recordEvent(
+                    subTask.getTaskId(),
+                    subTask.getId(),
+                    "sub_task_dispatch_skip_dependency",
+                    AgentRole.SYSTEM,
+                    offlineAgentId,
+                    Map.of("trigger", "agent_offline",
+                            "reason", "dependency_not_ready",
+                            "dependsOn", subTask.dependsOnIdList()));
+            log.info("离线子任务依赖未就绪，保持 PENDING 等待依赖完成: subTaskId={}, dependsOn={}",
+                    subTaskId, subTask.dependsOnIdList());
+            return;
+        }
         taskTimelineService.recordEvent(
                 subTask.getTaskId(),
                 subTask.getId(),
@@ -255,6 +280,29 @@ public class SubTaskDispatchService {
             throw new BizException(msg);
         }
 
+        // §6.52 能力预检：执行密集任务（需本机 shell/文件/服务操作）不自动回退给无本机能力的
+        // API_KEY_LLM，避免"无能力执行 → 交付物不达标 → 返工循环 → 卡死审核"。改停留原状态
+        // 并标记人工介入：外部 agent 回线后可由既有重调度/claim 路径接回，或用户在前端人工改派。
+        if (agentDispatchProperties.isFallbackSkipExecutionDense() && isExecutionDense(subTask)) {
+            if (isManualInterventionMarked(subTask)) {
+                log.debug("人工介入标记已存在，跳过重复回退: subTaskId={}", subTaskId);
+                return null;
+            }
+            if (!hasLocalExecutionCapability(fallbackAgent)) {
+                taskTimelineService.recordEvent(subTask.getTaskId(), subTask.getId(),
+                        "sub_task_fallback_skip_need_human", AgentRole.SYSTEM, fallbackAgent.getId(),
+                        Map.of("reason", "execution_dense_no_local_capability",
+                                "fallbackAgentId", fallbackAgent.getId(),
+                                "previousAgentId", failedAgentId));
+                subTaskService.markManualIntervention(subTaskId, "fallback_skip_execution_dense",
+                        Map.of("failedAgentId", failedAgentId == null ? "" : failedAgentId,
+                                "fallbackAgentId", fallbackAgent.getId()));
+                log.warn("N11 回退跳过：执行密集任务不可回退给无本机能力 Agent, subTaskId={}, fallbackAgentId={}",
+                        subTaskId, fallbackAgent.getId());
+                return null;
+            }
+        }
+
         taskTimelineService.recordEvent(
                 subTask.getTaskId(),
                 subTask.getId(),
@@ -293,6 +341,42 @@ public class SubTaskDispatchService {
                 .max(java.util.Comparator.comparing(
                         Agent::getScore, java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())))
                 .orElse(null);
+    }
+
+    /**
+     * §6.52 执行密集信号：内容/验收/交付物含本机操作关键词（脚本、服务启动、容器等）。
+     *
+     * <p>V27.1 起为 public static：供 {@code ResilientDispatcher}（分配入口统一预检）
+     * 与 {@code SubTaskReviewService}（审核侧兜底）复用，避免各入口各自实现导致判定不一致。</p>
+     */
+    private static final Pattern EXECUTION_DENSE_PATTERN = Pattern.compile(
+            "(?i)(\\.ps1|\\.sh|\\.bat|\\.py|\\.jar)\\b|docker|kubectl|npm run|mvn |gradle "
+                    + "|启动服务|启动应用|执行脚本|运行脚本|部署");
+
+    /** §6.52 执行密集任务判定：内容/验收/交付物含本机操作信号时视为需要本机能力。 */
+    public static boolean isExecutionDense(SubTask subTask) {
+        String text = String.join("\n",
+                nvl(subTask.getContent()), nvl(subTask.getAcceptance()), nvl(subTask.getDeliverable()));
+        return EXECUTION_DENSE_PATTERN.matcher(text).find();
+    }
+
+    /** §6.52 本机执行能力判定：CLI_CLIENT/WEB_BROWSER 天然可本机操作；API_KEY_LLM 需 capabilities.supportsMCP=true。 */
+    public static boolean hasLocalExecutionCapability(Agent agent) {
+        if (agent == null || agent.getAccessType() != AgentAccessType.API_KEY_LLM) {
+            return true;
+        }
+        Object supportsMcp = agent.getCapabilities() != null
+                ? agent.getCapabilities().get("supportsMCP") : null;
+        return Boolean.TRUE.equals(supportsMcp);
+    }
+
+    /** §6.52 是否已有人工介入标记（防定时兜底反复触发回退）。 */
+    public static boolean isManualInterventionMarked(SubTask subTask) {
+        return subTask.getContext() != null && subTask.getContext().containsKey("manualIntervention");
+    }
+
+    private static String nvl(String s) {
+        return s != null ? s : "";
     }
 
     /**

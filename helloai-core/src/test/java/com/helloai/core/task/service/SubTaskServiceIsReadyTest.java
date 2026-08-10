@@ -1,5 +1,6 @@
 package com.helloai.core.task.service;
 
+import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
 import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapper;
 import com.helloai.core.agent.observability.HeartbeatService;
 import com.helloai.core.agent.service.AgentInboxService;
@@ -16,15 +17,18 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * SubTaskService.isReady 依赖判定单元测试（V27 内循环依赖编排）：
@@ -52,6 +56,11 @@ class SubTaskServiceIsReadyTest {
         lenient().doReturn(queryChain).when(subTaskService).lambdaQuery();
         lenient().when(queryChain.in(any(), any(List.class))).thenReturn(queryChain);
         lenient().when(queryChain.eq(any(), any())).thenReturn(queryChain);
+        lenient().when(queryChain.le(any(), any())).thenReturn(queryChain);
+        // orderByAsc 在本版本为单 SFunction 参数：显式类型匹配
+        lenient().when(queryChain.orderByAsc(any(SFunction.class))).thenReturn(queryChain);
+        lenient().when(queryChain.last(anyString())).thenReturn(queryChain);
+        lenient().when(queryChain.list()).thenReturn(List.of());
     }
 
     private SubTask withDeps(List<Long> deps) {
@@ -108,5 +117,43 @@ class SubTaskServiceIsReadyTest {
         // ObjectMapper 写库，depends_on 存成字符串数组
         subTask.setDependsOn((List) List.of("2082308539519516674", "5"));
         assertThat(subTask.dependsOnIdList()).containsExactly(2082308539519516674L, 5L);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  §6.52 孤儿扫描：返工达上限卡死任务必须能被兜底发现
+    //  ══════════════════════════════════════════════════════════════
+
+    private SubTask reviewTask(Long id, Map<String, Object> context) {
+        SubTask subTask = new SubTask();
+        subTask.setId(id);
+        subTask.setContext(context);
+        return subTask;
+    }
+
+    @Test
+    @DisplayName("§6.52: 有 review_record 但无人工介入标记的 REVIEW 任务不被排除（返工上限卡死可被兜底）")
+    void shouldKeepReviewTaskWithReviewRecordButNoManualMark() {
+        // 返工达上限的卡死任务：context 仅含历史核验意见，无 manualIntervention
+        SubTask stuck = reviewTask(11L, Map.of("lastAutoReview", Map.of("round", 3)));
+        // 已人工介入的任务：应被排除
+        SubTask intervened = reviewTask(12L, Map.of("manualIntervention", Map.of("reason", "rework_limit")));
+        // 可变列表：listReviewOrphans 内部会 removeIf
+        when(queryChain.list()).thenReturn(new java.util.ArrayList<>(List.of(stuck, intervened)));
+
+        List<SubTask> orphans = subTaskService.listReviewOrphans(60, 10);
+
+        assertThat(orphans).extracting(SubTask::getId).containsExactly(11L);
+    }
+
+    @Test
+    @DisplayName("§6.52: 无人工介入标记的纯孤儿 REVIEW 任务正常保留")
+    void shouldKeepPlainOrphanReview() {
+        SubTask plain = reviewTask(13L, null);
+        // 可变列表：listReviewOrphans 内部会 removeIf
+        when(queryChain.list()).thenReturn(new java.util.ArrayList<>(List.of(plain)));
+
+        List<SubTask> orphans = subTaskService.listReviewOrphans(60, 10);
+
+        assertThat(orphans).extracting(SubTask::getId).containsExactly(13L);
     }
 }

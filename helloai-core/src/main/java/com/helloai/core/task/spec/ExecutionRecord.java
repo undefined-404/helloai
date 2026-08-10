@@ -25,6 +25,8 @@ public final class ExecutionRecord {
     private final List<String> keyDecisions;
     private final List<String> downstreamNotes;
     private final List<String> deliverables;
+    /** 验证证据原文（VERIFICATION 段，围栏协议）；缺失时为空串，仅检测不拦截。 */
+    private final String verification;
     private final String completedAt;
 
     private ExecutionRecord(Builder builder) {
@@ -38,6 +40,7 @@ public final class ExecutionRecord {
                 new ArrayList<>(builder.downstreamNotes != null ? builder.downstreamNotes : List.of()));
         this.deliverables = Collections.unmodifiableList(
                 new ArrayList<>(builder.deliverables != null ? builder.deliverables : List.of()));
+        this.verification = builder.verification != null ? builder.verification : "";
         this.completedAt = builder.completedAt;
     }
 
@@ -50,6 +53,9 @@ public final class ExecutionRecord {
     public List<String> keyDecisions() { return keyDecisions; }
     public List<String> downstreamNotes() { return downstreamNotes; }
     public List<String> deliverables() { return deliverables; }
+    public String verification() { return verification; }
+    /** 提交是否携带验证证据（VERIFICATION 段非空）。 */
+    public boolean hasVerification() { return verification != null && !verification.isBlank(); }
     public String completedAt() { return completedAt; }
 
     // ──────────────── JSONB 序列化边界 ────────────────
@@ -63,6 +69,7 @@ public final class ExecutionRecord {
         if (!keyDecisions.isEmpty()) m.put("keyDecisions", keyDecisions);
         if (!downstreamNotes.isEmpty()) m.put("downstreamNotes", downstreamNotes);
         if (!deliverables.isEmpty()) m.put("deliverables", deliverables);
+        if (!verification.isBlank()) m.put("verification", verification);
         if (completedAt != null) m.put("completedAt", completedAt);
         return m;
     }
@@ -99,6 +106,8 @@ public final class ExecutionRecord {
                 if (item instanceof String str) b.addDeliverable(str);
             }
         }
+        Object vf = map.get("verification");
+        if (vf instanceof String str) b.verification(str);
         Object ca = map.get("completedAt");
         if (ca instanceof String str) b.completedAt(str);
         return b.build();
@@ -118,6 +127,7 @@ public final class ExecutionRecord {
         private List<String> keyDecisions = new ArrayList<>();
         private List<String> downstreamNotes = new ArrayList<>();
         private List<String> deliverables = new ArrayList<>();
+        private String verification;
         private String completedAt;
 
         public Builder subTaskId(Long v) { this.subTaskId = v; return this; }
@@ -127,6 +137,7 @@ public final class ExecutionRecord {
         public Builder addKeyDecision(String v) { this.keyDecisions.add(v); return this; }
         public Builder addDownstreamNote(String v) { this.downstreamNotes.add(v); return this; }
         public Builder addDeliverable(String v) { this.deliverables.add(v); return this; }
+        public Builder verification(String v) { this.verification = v; return this; }
         public Builder completedAt(String v) { this.completedAt = v; return this; }
 
         public ExecutionRecord build() {

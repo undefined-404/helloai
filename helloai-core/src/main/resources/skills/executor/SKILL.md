@@ -360,6 +360,10 @@ DOWNSTREAM_NOTES:
 - <后继子任务需要注意的事项>
 DELIVERABLES:
 - <你交付的具体文件路径>
+VERIFICATION:
+- 命令: <你实际执行的验证命令（编译/测试/启动/接口调用/数据库查询）>
+- 输出: <关键输出片段，原样粘贴，禁止转述、禁止概括>
+- 结论: 通过 / 失败 / 未验证（未验证必须说明原因）
 ```
 
 **示例：**
@@ -375,18 +379,29 @@ DOWNSTREAM_NOTES:
 DELIVERABLES:
 - src/main/java/.../UserController.java
 - src/main/java/.../UserService.java
+VERIFICATION:
+- 命令: mvn -pl helloai-core -am compile && mvn test -Dtest=UserControllerTest
+- 输出: BUILD SUCCESS / Tests run: 6, Failures: 0, Errors: 0
+- 结论: 通过
 ```
 
 > 🔴 **这是强制格式**。`SUMMARY` 行必须有内容，否则平台解析失败（fallback 用产出前 200 字做摘要）。
 > 前置任务的后继 Agent 会读到你的 EXECUTION_RECORD，所以你的 SUMMARY 和 DOWNSTREAM_NOTES 直接影响下一个人的执行质量。
+
+> 🔴 **VERIFICATION 验证围栏（fail-close）**：
+> - 提交前必须对每条验收标准做至少一项**实际验证**（跑命令、开文件、调接口、查数据），并把真实输出原样写进 `VERIFICATION` 段。
+> - **验证失败或未验证时，禁止声明完成**——要么 `reportBlocked` 上报阻塞，要么在 `VERIFICATION.结论` 如实写"未验证（原因）"；用"应该没问题""看起来正常"交差视为交付不合格，审查会从严处理。
+> - 平台会自动检测产出是否携带 VERIFICATION 证据：无证据的提交进入从严核验，评分保守。
 
 ### 4.5 依赖链执行检查清单
 
 在 `submitResult` 之前，自检：
 - [ ] 本任务的 `dependsOn` 是否已逐条读完？
 - [ ] 前置产出内容是否已拼入我的执行 Prompt？
+- [ ] 每条验收标准是否都对应了一项实际验证（跑命令/开文件/调接口/查数据）？
 - [ ] 我的产出末尾是否包含完整的 `EXECUTION_RECORD` 块？
 - [ ] `SUMMARY` 是否非空？（否则下游 Agent 看不到我的产出摘要）
+- [ ] `VERIFICATION` 段是否已填写真实命令与输出？（验证失败/未验证必须如实标注，禁止声明完成）
 
 ---
 

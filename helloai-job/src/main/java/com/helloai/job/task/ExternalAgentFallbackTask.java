@@ -236,6 +236,13 @@ public class ExternalAgentFallbackTask {
                     skipped++;
                     continue;
                 }
+                // V27.1: 有人工介入标记的 PENDING 不自动重派（等人工处置），
+                // 避免兜底链路把"无能力/返工超限"等人工场景反复打回调度链
+                if (SubTaskDispatchService.isManualInterventionMarked(latest)) {
+                    log.debug("调度链遗留任务已标记人工介入，跳过: subTaskId={}", subTaskId);
+                    skipped++;
+                    continue;
+                }
                 // 仍为 PENDING 且未指派，按 EXECUTOR 角色重新选人
                 subTaskDispatchService.dispatchPendingSubTaskAuto(
                         subTaskId, AgentRole.EXECUTOR);

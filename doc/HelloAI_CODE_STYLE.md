@@ -2,8 +2,9 @@
 
 > 适用项目：HelloAI（AI Agent 协作调度平台）  
 > 生效范围：后端单体服务 + 前端管理后台（Vue 3 / Element Plus）  
-> 版本：V1.6  
-> 最后更新：2026-08-07  
+> 版本：V1.7  
+> 最后更新：2026-08-10  
+> 本版重点 V1.7：第 8 章「接口路径规范」重写为**内外双轨制**——对内平台轨 `/api/**` 维持描述性驼峰（原 8.1/8.2 规则原样保留），新增开放轨 `/open/**` 强制 kebab-case（服务手机端与第三方集成）；Agent 接入面路径契约冻结不迁；新增 8.4 审查红线与 AI 判定流程；20 章校验清单同步双轨条目
 > 本版重点：对齐 core 业务域分包重构后的代码事实——修正 3.2 启动类 @MapperScan 示例、3.x 资源文件位置、4.1 包命名示例、9.4 Flyway 规范与多版本迁移现实的冲突；补写 6.3 Controller 职责边界（含分层红线与待收口清单）；3.x 业务域分包规则补全子包清单与 outbox 归属决策；9.5 实施要点追加"变更残留检查范围"
 > 本版重点 V1.5：新增第 8 章「接口路径规范」（8.1 描述性风格 / 8.2 路径命名规则表 / 8.3 全局 URI 清理），废弃 6.4 嵌套资源路径规范，改写 6.5 状态操作端点为 `POST /xxxById/{id}`，6.6 分页端点改为 `POST /page`；原第 8～20 章顺延为第 9～21 章；20 章（原 19 章）校验清单路径条目同步新规范
 > 本版重点 V1.6：3.x 业务域分包规则补充 `system` 域「LLM Provider」职责补丁（`llm_provider` 表及 `LlmProviderQueryService` 归属 `system`；ChatClient 路由分发仍走 `agent.chat.provider` 的 `LlmProviderChatClientFactoryRegistry`）；同步注脚 chat.provider 责任与新增 LLM 厂商的动限范围
@@ -53,10 +54,12 @@
 6. [Controller 规范](#6-controller-规范)
 7. [Service 规范](#7-service-规范)
    - [7.6 空值与 Optional 处理规范](#76-空值与-optional-处理规范)
-8. [接口路径规范](#8-接口路径规范)
-   - [8.1 路径命名风格](#81-路径命名风格)
-   - [8.2 路径命名规则](#82-路径命名规则)
-   - [8.3 全局 URI 清理](#83-全局-uri-清理)
+8. [接口路径规范（内外双轨制）](#8-接口路径规范内外双轨制)
+   - [8.1 双轨总览](#81-双轨总览)
+   - [8.2 对内平台轨 /api/**](#82-对内平台轨-api)
+   - [8.3 开放轨 /open/**](#83-开放轨-open)
+   - [8.4 审查红线与 AI 判定流程](#84-审查红线与-ai-判定流程)
+   - [8.5 全局 URI 清理](#85-全局-uri-清理)
 9. [数据库设计规范](#9-数据库设计规范)
 10. [Outbox 事务性消息规范](#10-outbox-事务性消息规范)
 11. [消息队列编码规范](#11-消息队列编码规范)
@@ -649,7 +652,7 @@ Controller 只允许做三件事：**参数接收与校验、调用 Service、�
 
 ### 6.4 嵌套资源路径规范（已废弃）
 
-> ⚠️ **V1.5 起废弃**：嵌套资源路径风格 `/{parent}/{parentId}/{child}` 与第 8 章「接口路径规范」8.1 描述性风格冲突，**新代码禁止使用**；历史接口（如 ModuleController `/api/tasks/{taskId}/modules`）在整改计划内迁出该风格。
+> ⚠️ **V1.5 起废弃**：嵌套资源路径风格 `/{parent}/{parentId}/{child}` 与第 8 章「接口路径规范」对内平台轨（8.2）的描述性风格冲突，**对内轨新代码禁止使用**（开放轨 `/open/**` 的资源+动作后缀风格不受此限，见 8.3）；历史接口（如 ModuleController `/api/tasks/{taskId}/modules`）在整改计划内迁出该风格。
 > 子资源查询/设置统一改用描述性风格：查询 `GET /findXxxByYyyId/{id}`，设置 `POST /setXxxByYyyId/{id}`（见 8.2 规则表）。
 
 ```java
@@ -935,13 +938,27 @@ public List<SubTask> listByStatus(SubTaskStatus status) {
 > **原则**: 方法返回集合类型时，"没有数据"和"出错"是两个概念。前者返回空集合，后者抛异常。
 
 
-## 8. 接口路径规范
+## 8. 接口路径规范（内外双轨制）
 
 > 本章是接口路径命名的唯一权威：6.4 嵌套资源路径规范（V1.5 起废弃）、6.5 状态操作端点规范、6.6 分页查询规范均以本章为准。
+> **V1.7 起实行"内外双轨"**：两条轨道以路径前缀物理隔离，每轨强制单一命名风格，禁止混写、禁止同一接口双轨双发。
 
-### 8.1 路径命名风格
+### 8.1 双轨总览
 
-【必须】统一使用描述性风格：`动作 + By + 参数名 / {参数值}`。不使用 RESTful 子资源嵌套风格。
+| 轨道 | 路径前缀 | 命名风格 | 消费方 | 现状 |
+|------|----------|----------|--------|------|
+| A 对内平台轨 | `/api/**` | 描述性驼峰（动作 + By + 参数） | Vue 管理前端、平台内部调用 | 存量全量接口，维持现状 |
+| B 开放轨 | `/open/**` | kebab-case（全小写 + 短横线） | 手机端、第三方系统集成 | V1.7 设立，首批端点随手机端需求落地 |
+
+强制边界：
+
+- **Agent 接入面不属开放轨**：`/api/mcp/**`、`/api/agents/register`、`/mcp/` SSE 等是已对外暴露的**存量契约**（SKILL.md / task-cli.py 引用），路径冻结不迁；Agent 侧新能力继续走 MCP 协议扩展。
+- **禁止双发**：同一接口不允许同时提供两套 URL（维护成本翻倍）；跨轨复用能力时，两轨 Controller 各自定义路径与 DTO，调用同一个 Service。
+- **禁止混写**：任何 Controller 内部不得混用两种风格；新增对外端点一律进 `/open/**`，不得再往 `/api/**` 添加面向外部消费方的接口。
+
+### 8.2 对内平台轨 `/api/**`
+
+【必须】统一使用描述性风格：`动作 + By + 参数名 / {参数值}`。不使用 RESTful 子资源嵌套风格。多词资源名允许短横线（如 `/api/sub-tasks`），动作段必须驼峰。
 
 ```java
 @GetMapping("/list")                                // 列表
@@ -955,7 +972,7 @@ public List<SubTask> listByStatus(SubTaskStatus status) {
 @DeleteMapping("/deleteById/{id}")                  // 删除
 ```
 
-### 8.2 路径命名规则
+路径命名规则：
 
 | 场景 | HTTP 方法 | 路径格式 | 示例 |
 |------|-----------|----------|------|
@@ -970,9 +987,54 @@ public List<SubTask> listByStatus(SubTaskStatus status) {
 | 修改 | PUT | `/` | `PUT /api/tasks` |
 | 删除 | DELETE | `/deleteById/{id}` | `DELETE /api/tasks/deleteById/1001` |
 
-### 8.3 全局 URI 清理
+### 8.3 开放轨 `/open/**`
 
-项目通过 `UriCleanFilter` 对请求 URI 的每个路径段自动清理首尾包围字符，兼容前端 URL 拼接误差（如末尾多余斜杠、路径段两侧多余引号/空格等），后端接口路径书写时无需额外防御。
+【必须】路径全小写，单词间短横线分隔，资源名用复数名词；**严禁出现大写字母、下划线与驼峰**。风格以 RESTful 资源为主、动作为后缀：
+
+| 场景 | HTTP 方法 | 路径格式 | 示例 |
+|------|-----------|----------|------|
+| 列表 / 筛选 | GET | `/{resources}?查询参数` | `GET /open/tasks?status=PENDING&page=1&page-size=20` |
+| 按 ID 查询 | GET | `/{resources}/{id}` | `GET /open/tasks/1001` |
+| 新增 | POST | `/{resources}` | `POST /open/tasks`（手机端创建任务） |
+| 修改 | PUT/PATCH | `/{resources}/{id}` | `PUT /open/tasks/1001` |
+| 删除 | DELETE | `/{resources}/{id}` | `DELETE /open/tasks/1001` |
+| 状态操作 | POST | `/{resources}/{id}/{action}` | `POST /open/tasks/1001/dispatch`（分发）、`POST /open/tasks/1001/cancel` |
+
+补充规则：
+
+- 查询参数名同样 kebab-case（`page-size`，非 `pageSize`）。
+- 路径变量占位符（`{taskId}`）不参与风格检查，但同一 Controller 内写法保持统一。
+- 动作后缀只允许单个小写动词（`dispatch` / `cancel` / `start`），禁止动宾短语堆叠。
+- **版本化**：未来不兼容变更启用新前缀 `/open/v2/**`，禁止原地修改已发布路径语义。
+- 鉴权策略按前缀独立声明（`/open/**` 不走 admin token，另行定义 API Key / 签名机制），不与 `/api/**` 共用会话。
+
+内外语义对照（同一 Service 能力在两轨的写法）：
+
+| 对内 `/api/**` | 对外 `/open/**` |
+|----------------|-----------------|
+| `POST /api/tasks` | `POST /open/tasks` |
+| `GET /api/tasks/getById/{id}` | `GET /open/tasks/{id}` |
+| `GET /api/tasks/list` | `GET /open/tasks` |
+| `POST /api/sub-tasks/startById/{id}` | `POST /open/sub-tasks/{id}/start` |
+
+### 8.4 审查红线与 AI 判定流程
+
+AI / Reviewer 审查接口路径时**先判前缀，再套规则**：
+
+1. 路径以 `/api/` 开头 → 按 8.2 审查：动作段必须描述性驼峰（`getById`、`changeStatusById`），出现 kebab-case 动作段（`get-by-id`）或 snake_case（`get_by_id`）为错误；多词资源名短横线（`sub-tasks`）合法。
+2. 路径以 `/open/` 开头 → 按 8.3 审查：出现任何大写字母、下划线、驼峰为错误。
+3. 路径以 `/api/mcp/`、`/api/agents/` 开头 → 存量 Agent 契约，冻结不审风格，只审是否破坏既有路径。
+
+Blocker 级红线（一律必须修复）：
+
+- `/open/**` 下出现驼峰或下划线；
+- `/api/**` 下新增面向外部消费方（手机端 / 第三方）的端点；
+- 同一接口双轨双发（两套 URL 指向同一端点）；
+- `/open/**` 已发布路径发生语义变更而未启用新版本前缀。
+
+### 8.5 全局 URI 清理
+
+项目通过 `UriCleanFilter` 对请求 URI 的每个路径段自动清理首尾包围字符，兼容前端 URL 拼接误差（如末尾多余斜杠、路径段两侧多余引号/空格等），后端接口路径书写时无需额外防御。双轨均适用。
 
 > ⚠️ **代码核查（2026-08-03）**：当前仓库（helloai-api / helloai-start）未发现 `UriCleanFilter` 实现——全仓库检索无结果，`WebMvcConfig` 仅注册 `RequestLogInterceptor` 与 `AuthInterceptor`。本节暂为契约描述/目标状态，待补实现后删除本注记。
 
@@ -1755,7 +1817,7 @@ public class {Name}CompensationTask {
 | 启动类 | `scanBasePackages` 保持 `"com.helloai"`，`@MapperScan` 显式列出 `core.agent/task/system` 三个 mapper 包 | [3.2 启动类配置](#32-启动类配置) |
 | 数据库连接 | JDBC URL 指向 PostgreSQL，使用 `timestamptz` | [9.2 JDBC 连接配置](#92-jdbc-连接配置) |
 | Controller 与 Service | Controller 只做参数接收、DTO 转换、返回封装；查询默认返回 `Response DTO`；事务放在 Service 层 | [6. Controller 规范](#6-controller-规范)、[7. Service 规范](#7-service-规范) |
-| 接口路径 | 描述性风格 `动作+By+参数`，不使用嵌套子资源；列表 `GET /list`、分页 `POST /page`、按 ID `GET /getById/{id}` | [8. 接口路径规范](#8-接口路径规范) |
+| 接口路径 | 内外双轨：`/api/**` 描述性驼峰（`GET /list`、`POST /page`、`GET /getById/{id}`），`/open/**` kebab-case 资源风；先判前缀再套规则 | [8. 接口路径规范](#8-接口路径规范内外双轨制) |
 | 依赖注入 | 使用构造器注入，非 `@Autowired` 字段注入 | [1. 总体原则](#1-总体原则) |
 | 状态与常量 | 禁止硬编码状态值，统一使用枚举类（`SubTaskStatus`、`AgentRole`） | [4. 命名规范](#4-命名规范)、[17.6 状态机模板](#176-状态机模板) |
 | 事务与一致性 | `@Transactional(rollbackFor = Exception.class)`；Outbox 与业务操作同一事务 | [10. Outbox 事务性消息规范](#10-outbox-事务性消息规范) |
@@ -1919,9 +1981,10 @@ public class {Name}CompensationTask {
 - [ ] 状态机转移在 Service 层明确定义 `VALID_TRANSITIONS`，不散落在各方法中
 - [ ] 跨 Service 事务调用使用 `@Transactional(rollbackFor = Exception.class)` 统一管理事务边界
 - [ ] SKILL.md 等静态资源文件放在 `resources/skills/` 下，不硬编码在 Java 代码中
-- [ ] 接口路径使用描述性风格（动作+By+参数名/参数值），不使用 RESTful 子资源嵌套（见 8.1）
-- [ ] 列表用 `GET /list`、分页用 `POST /page`、按 ID 查询用 `GET /getById/{id}`（见 8.2）
-- [ ] 状态操作端点使用 `POST /{action}ById/{id}` 格式，一个动作对应一个独立方法（见 8.2）
+- [ ] 接口路径先判前缀再套规则：`/api/**` 用描述性驼峰（动作+By+参数名/参数值），`/open/**` 用 kebab-case，两轨禁止混写与双发（见 8.1、8.4）
+- [ ] 对内轨列表用 `GET /list`、分页用 `POST /page`、按 ID 查询用 `GET /getById/{id}`（见 8.2）
+- [ ] 对内轨状态操作端点使用 `POST /{action}ById/{id}` 格式，一个动作对应一个独立方法（见 8.2）
+- [ ] 面向手机端 / 第三方的新增端点一律放 `/open/**`（资源名词复数 + 动作后缀，如 `POST /open/tasks/{id}/dispatch`），不在 `/api/**` 新增对外端点（见 8.3）
 
 ---
 

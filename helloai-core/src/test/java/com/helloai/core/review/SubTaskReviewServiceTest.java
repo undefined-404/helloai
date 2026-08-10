@@ -225,6 +225,56 @@ class SubTaskReviewServiceTest {
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_auto_review_skip_max_rework"),
                 eq(AgentRole.REVIEWER), any(), anyMap());
+        // §6.52：返工达上限须写入人工介入标记（前端面板据此展示）
+        verify(subTaskService).markManualIntervention(eq(SUB_TASK_ID), eq("rework_limit"), anyMap());
+    }
+
+    @Test
+    @DisplayName("V27.1: 执行密集任务 + 提交者无本机能力 → 跳过自动核验 + 标记人工介入")
+    void shouldSkipReviewWhenExecutionDenseSubmitterLacksCapability() {
+        when(dispatchProperties.isFallbackSkipExecutionDense()).thenReturn(true);
+        SubTask dense = reviewSubTask();
+        dense.setContent("编写 verify-order-expire.ps1 脚本并执行验证");
+        dense.setDeliverable("verify-order-expire.ps1");
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(dense);
+        // 提交者：API_KEY_LLM 且无 supportsMCP（inner-loop 场景）
+        when(agentService.getById(EXECUTOR_ID)).thenReturn(llmAgent(EXECUTOR_ID, AgentRole.EXECUTOR));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
+        verify(subTaskService, never()).complete(anyLong());
+        verify(subTaskService, never()).rework(anyLong(), any());
+        verify(subTaskService).markManualIntervention(
+                eq(SUB_TASK_ID), eq("review_skip_execution_dense_no_capability"), anyMap());
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_review_skip_no_capability"),
+                eq(AgentRole.REVIEWER), eq(EXECUTOR_ID), anyMap());
+    }
+
+    @Test
+    @DisplayName("V27.1: 执行密集任务 + 提交者有本机能力 → 正常自动核验")
+    void shouldReviewWhenExecutionDenseSubmitterHasLocalCapability() {
+        when(dispatchProperties.isFallbackSkipExecutionDense()).thenReturn(true);
+        SubTask dense = reviewSubTask();
+        dense.setContent("编写 verify-order-expire.ps1 脚本并执行验证");
+        dense.setDeliverable("verify-order-expire.ps1");
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(dense);
+        // 提交者：CLI_CLIENT（天然具备本机执行能力）
+        Agent submitter = new Agent();
+        submitter.setId(EXECUTOR_ID);
+        submitter.setRole(AgentRole.EXECUTOR);
+        submitter.setAccessType(AgentAccessType.CLI_CLIENT);
+        when(agentService.getById(EXECUTOR_ID)).thenReturn(submitter);
+        when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        verify(subTaskService).complete(SUB_TASK_ID);
+        verify(subTaskService, never()).markManualIntervention(anyLong(), anyString(), anyMap());
     }
 
     @Test

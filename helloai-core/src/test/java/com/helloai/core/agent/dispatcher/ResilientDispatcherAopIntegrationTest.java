@@ -1,6 +1,7 @@
 package com.helloai.core.agent.dispatcher;
 
 import com.helloai.common.base.AgentUnavailableException;
+import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
@@ -9,6 +10,7 @@ import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskTimelineService;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.springboot3.circuitbreaker.autoconfigure.CircuitBreakerAutoConfiguration;
@@ -80,6 +82,12 @@ class ResilientDispatcherAopIntegrationTest {
 
     @MockBean
     private com.helloai.core.agent.observability.CircuitBreakerEventRecorder circuitBreakerEventRecorder;
+
+    @MockBean
+    private AgentDispatchProperties agentDispatchProperties;
+
+    @MockBean
+    private TaskTimelineService taskTimelineService;
 
     @Test
     @DisplayName("Bean 是 Spring AOP 代理（不是原生对象）")

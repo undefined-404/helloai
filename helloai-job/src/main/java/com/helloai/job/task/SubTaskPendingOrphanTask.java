@@ -132,6 +132,7 @@ public class SubTaskPendingOrphanTask {
             int failed = 0;
             int skipStatusChanged = 0;
             int skipNotReady = 0;
+            int skipManualIntervention = 0;
 
             for (Long subTaskId : orphanIds) {
                 try {
@@ -156,6 +157,13 @@ public class SubTaskPendingOrphanTask {
                                 subTaskId, latest.dependsOnIdList());
                         continue;
                     }
+                    // V27.1: 有人工介入标记的 PENDING 不自动重派（等人工处置），
+                    // 避免兜底巡检把"无能力/返工超限"等人工场景反复打回调度链
+                    if (SubTaskDispatchService.isManualInterventionMarked(latest)) {
+                        skipManualIntervention++;
+                        log.debug("跳过：已标记人工介入: subTaskId={}", subTaskId);
+                        continue;
+                    }
 
                     // PENDING 孤儿重派：默认按 EXECUTOR 角色选人
                     // —— 因为 PENDING 子任务通常还未指定角色，Module.role 在更上层传入；
@@ -175,9 +183,9 @@ public class SubTaskPendingOrphanTask {
                 }
             }
 
-            if (recovered > 0 || failed > 0 || skipStatusChanged > 0 || skipNotReady > 0) {
-                log.info("PENDING 孤儿巡检完成: 扫描={}, 重派={}, 跳过（状态冲突）={}, 跳过（依赖未就绪）={}, 失败={}",
-                        orphanIds.size(), recovered, skipStatusChanged, skipNotReady, failed);
+            if (recovered > 0 || failed > 0 || skipStatusChanged > 0 || skipNotReady > 0 || skipManualIntervention > 0) {
+                log.info("PENDING 孤儿巡检完成: 扫描={}, 重派={}, 跳过（状态冲突）={}, 跳过（依赖未就绪）={}, 跳过（人工介入）={}, 失败={}",
+                        orphanIds.size(), recovered, skipStatusChanged, skipNotReady, skipManualIntervention, failed);
             }
 
         } catch (Exception e) {

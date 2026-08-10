@@ -151,6 +151,8 @@ export interface Agent {
   score: number
   remark: string | null
   createTime: string
+  // §6.52 人工介入面板：在线状态（ONLINE/IDLE/OFFLINE/SLEEPING，后端可能不返回则缺省）
+  onlineStatus?: string | null
 }
 
 export interface AgentListItem {

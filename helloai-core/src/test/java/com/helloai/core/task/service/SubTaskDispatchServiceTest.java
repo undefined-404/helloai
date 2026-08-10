@@ -30,6 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -102,6 +103,8 @@ class SubTaskDispatchServiceTest {
 
         when(subTaskService.resetToPendingForDispatch(22L, Set.of(SubTaskStatus.ASSIGNED, SubTaskStatus.IN_PROGRESS)))
                 .thenReturn(subTask);
+        // V27.1: 依赖 ready 守卫 —— 默认依赖就绪才继续重派
+        when(subTaskService.isReady(subTask)).thenReturn(true);
 
         subTaskDispatchService.redispatchOfflineSubTask(22L, 12L);
 
@@ -113,6 +116,30 @@ class SubTaskDispatchServiceTest {
                 12L,
                 Map.of("trigger", "agent_offline", "preferredAgentId", 12L, "previousAgentId", 12L));
         verify(resilientDispatcher).assignNext(12L, 22L);
+    }
+
+    @Test
+    @DisplayName("V27.1: 离线重分配时依赖未就绪 → 不重派保持 PENDING + 记 skip 事件")
+    void shouldSkipOfflineRedispatchWhenDependencyNotReady() {
+        SubTask subTask = new SubTask();
+        subTask.setId(22L);
+        subTask.setTaskId(32L);
+
+        when(subTaskService.resetToPendingForDispatch(22L, Set.of(SubTaskStatus.ASSIGNED, SubTaskStatus.IN_PROGRESS)))
+                .thenReturn(subTask);
+        when(subTaskService.isReady(subTask)).thenReturn(false);
+
+        subTaskDispatchService.redispatchOfflineSubTask(22L, 12L);
+
+        verify(taskTimelineService).recordEvent(
+                32L,
+                22L,
+                "sub_task_dispatch_skip_dependency",
+                AgentRole.SYSTEM,
+                12L,
+                Map.of("trigger", "agent_offline", "reason", "dependency_not_ready",
+                        "dependsOn", subTask.dependsOnIdList()));
+        verify(resilientDispatcher, never()).assignNext(anyLong(), anyLong());
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -213,6 +240,113 @@ class SubTaskDispatchServiceTest {
 
         verify(resilientDispatcher, never())
                 .assignNext(any(), any());
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  §6.52 人工介入：执行密集任务不自动回退给无本机能力的 API_KEY_LLM
+    //  ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("§6.52: 执行密集任务 + 候选无本机能力 → 跳过回退并标记人工介入")
+    void shouldSkipFallbackWhenExecutionDenseAndNoLocalCapability() {
+        SubTask subTask = new SubTask();
+        subTask.setId(44L);
+        subTask.setTaskId(54L);
+        subTask.setContent("实现 verify-order-expire.ps1 超时取消校验脚本，需启动服务执行");
+
+        Agent failedAgent = new Agent();
+        failedAgent.setId(11L);
+        failedAgent.setRole(AgentRole.EXECUTOR);
+
+        Agent fallbackAgent = new Agent();
+        fallbackAgent.setId(99L);
+        fallbackAgent.setRole(AgentRole.EXECUTOR);
+        fallbackAgent.setAccessType(AgentAccessType.API_KEY_LLM);
+        fallbackAgent.setStatus(AgentStatus.ACTIVE);
+        fallbackAgent.setOnlineStatus(AgentOnlineStatus.ONLINE);
+        fallbackAgent.setScore(100);
+        fallbackAgent.setCapabilities(Map.of("supportsMCP", false));
+
+        when(agentDispatchProperties.isFallbackSkipExecutionDense()).thenReturn(true);
+        when(subTaskService.resetToPendingForDispatch(any(), any())).thenReturn(subTask);
+        when(agentService.getById(11L)).thenReturn(failedAgent);
+        when(agentService.listActive()).thenReturn(List.of(fallbackAgent));
+
+        Long newAgentId = subTaskDispatchService.redispatchForFallback(44L, 11L, "consecutive_failure=5");
+
+        assertThat(newAgentId).isNull();
+        verify(taskTimelineService).recordEvent(
+                54L, 44L, "sub_task_fallback_skip_need_human", AgentRole.SYSTEM, 99L,
+                Map.of("reason", "execution_dense_no_local_capability",
+                        "fallbackAgentId", 99L, "previousAgentId", 11L));
+        verify(subTaskService).markManualIntervention(
+                eq(44L), eq("fallback_skip_execution_dense"), anyMap());
+        verify(resilientDispatcher, never()).assignNext(any(), any());
+    }
+
+    @Test
+    @DisplayName("§6.52: 执行密集任务但候选 supportsMCP=true → 正常回退")
+    void shouldFallbackWhenExecutionDenseButAgentHasMcp() {
+        SubTask subTask = new SubTask();
+        subTask.setId(45L);
+        subTask.setTaskId(55L);
+        subTask.setContent("启动服务并执行 .ps1 脚本");
+
+        Agent failedAgent = new Agent();
+        failedAgent.setId(11L);
+        failedAgent.setRole(AgentRole.EXECUTOR);
+
+        Agent fallbackAgent = new Agent();
+        fallbackAgent.setId(99L);
+        fallbackAgent.setRole(AgentRole.EXECUTOR);
+        fallbackAgent.setAccessType(AgentAccessType.API_KEY_LLM);
+        fallbackAgent.setStatus(AgentStatus.ACTIVE);
+        fallbackAgent.setOnlineStatus(AgentOnlineStatus.ONLINE);
+        fallbackAgent.setScore(100);
+        fallbackAgent.setCapabilities(Map.of("supportsMCP", true));
+
+        when(agentDispatchProperties.isFallbackSkipExecutionDense()).thenReturn(true);
+        when(subTaskService.resetToPendingForDispatch(any(), any())).thenReturn(subTask);
+        when(agentService.getById(11L)).thenReturn(failedAgent);
+        when(agentService.listActive()).thenReturn(List.of(fallbackAgent));
+
+        Long newAgentId = subTaskDispatchService.redispatchForFallback(45L, 11L, "reason");
+
+        assertThat(newAgentId).isEqualTo(99L);
+        verify(subTaskService, never()).markManualIntervention(any(), any(), any());
+        verify(resilientDispatcher).assignNext(99L, 45L);
+    }
+
+    @Test
+    @DisplayName("§6.52: 非执行密集任务不受预检影响，正常回退")
+    void shouldFallbackWhenNotExecutionDense() {
+        SubTask subTask = new SubTask();
+        subTask.setId(46L);
+        subTask.setTaskId(56L);
+        subTask.setContent("整理需求文档并输出分析结论");
+
+        Agent failedAgent = new Agent();
+        failedAgent.setId(11L);
+        failedAgent.setRole(AgentRole.EXECUTOR);
+
+        Agent fallbackAgent = new Agent();
+        fallbackAgent.setId(99L);
+        fallbackAgent.setRole(AgentRole.EXECUTOR);
+        fallbackAgent.setAccessType(AgentAccessType.API_KEY_LLM);
+        fallbackAgent.setStatus(AgentStatus.ACTIVE);
+        fallbackAgent.setOnlineStatus(AgentOnlineStatus.ONLINE);
+        fallbackAgent.setScore(100);
+
+        when(agentDispatchProperties.isFallbackSkipExecutionDense()).thenReturn(true);
+        when(subTaskService.resetToPendingForDispatch(any(), any())).thenReturn(subTask);
+        when(agentService.getById(11L)).thenReturn(failedAgent);
+        when(agentService.listActive()).thenReturn(List.of(fallbackAgent));
+
+        Long newAgentId = subTaskDispatchService.redispatchForFallback(46L, 11L, "reason");
+
+        assertThat(newAgentId).isEqualTo(99L);
+        verify(subTaskService, never()).markManualIntervention(any(), any(), any());
+        verify(resilientDispatcher).assignNext(99L, 46L);
     }
 
     // ══════════════════════════════════════════════════════════════

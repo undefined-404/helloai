@@ -4218,3 +4218,82 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 - 影响：解决了本轮 Settings.vue 改造后唯一遗留的真实可见 bug；前端 `/api/admin/config/batch` 调用语义与后端 DTO 对齐。
 - 遗留：后端 `SysConfigService.batchUpdate` 依然裸露 NPE（controller 未做空校验、service 未加 null guard）。下一轮建议顺手加 `if (req == null || req.getConfig() == null) return;` 避免类似改动进一步产生 500。可独立 demand，不需绑回方案B。
 
+### 6.54 验证链围栏落地（三角色 SKILL 围栏 + 自动核验证据信号）（2026-08-10）
+
+#### 1. 背景与决策
+
+- **来源**：用户引入两篇外部方法论——「AI 围栏五层」（L1 输出自检 / L2 事实来源 / L3 执行验证 / L4 独立复核 / L5 评审挑刺）与 `E:\workspace\verify-chain-master` 验证链（Critic 断言提取 → Verifier 逐条核查 → Repairer 最小修复，四态结论 ✅⚠️❌❓）。分析结论：HelloAI 外部 Agent 架构下"假成功"是结构性风险（平台看不到执行过程，只见 submitResult 文本），值得选择性融入。
+- **决策**（用户拍板，计划《验证链围栏落地》）：分两阶段——①提示词软围栏（三个 SKILL.md，零风险立即生效）；②代码硬围栏检测版（Parser 解析 VERIFICATION + 自动核验 prompt 注入证据信号，**只检测不拦截**，不加 DB 迁移，存量外部 Agent 零破坏）。明确不做：VERIFICATION 缺失硬拒收、DB 持久化 verification 列（留待观察一轮后再议）、Reviewer 并行 SubAgent（外部 Agent 无子代理机制）。
+- **联网搜索分流**（用户补充需求，融入 Planner 层）：拆解前「关键前提核查」分两类——内部前提（本项目接口/字段/机制）必须读代码/查库核实；外部前提（第三方库/外部服务/框架兼容性）条件允许时联网搜索并注明来源；无法核实的标注【前提未核实】写入子任务 content，禁止把未核实假设当已确认事实。
+
+#### 2. 实际落地
+
+- **executor SKILL.md**（执行围栏 + fail-close）：EXECUTION_RECORD 协议新增 `VERIFICATION:` 段（命令/输出/结论三行，输出须原样粘贴）；新增 fail-close 硬条款（验证失败或未验证禁止声明完成，须 reportBlocked 或如实标注"未验证"）；§4.5 提交前自检清单追加 2 项；示例块同步更新。
+- **planner SKILL.md**（前提核查 + 合规自检）：§2.1 拆解前新增「关键前提核查」步骤（3~5 条，内/外部前提分流表，引用门铃推送历史教训）；验收标准字段改为硬要求（禁止"功能正常""质量合格"类模糊表述，附正/反例）；新增「创建合规自检清单」5 项（四要素/可检查/前提已核/无重复拆分/数量与依赖序）。
+- **reviewer SKILL.md**（断言式三段审查法 + 有罪推定）：工作流程第 6 步改为——①提取断言（5~15 条，按类标注，聚焦"一错就全错"硬断言）→ ②逐条核查（读文件/跑命令/查日志，四态结论逐条附证据）→ ③汇总裁决（❌驳回列证据 / 仅⚠️按严重度评分 / ❓不替执行者背书）→ ④证据复核（交付物携带 VERIFICATION 时复核命令/输出/结论真实性，防伪造证据）→ ⑤先记后改；审查原则新增"有罪推定""只认证据"两条。
+- **ExecutionRecord / ExecutionRecordParser**：`ExecutionRecord` 新增 `verification` 字段 + `hasVerification()` + toMap/fromMap 往返（无证据时不写键）；Parser 按协议约定截取块内 `VERIFICATION:` 段原文，缺失时 debug 日志 + 空串，**解析仍成功不拦截**。
+- **SubTaskReviewService + subtask-review.md**：新增 `extractRawOutput`（截断前原文）与 `verificationSignal`（检测 `VERIFICATION:` 存在性），模板新增 `{{VERIFICATION_SIGNAL}}` 占位符与「验证证据信号」章节；核验要求新增第 6~8 条（有证据核对一致性防伪造 / 无证据从严评分保守 / 无法确定不得判 pass=true，fail-close）。
+
+#### 3. 验证结果
+
+- `mvn -pl helloai-core -am test`：**17/17 全绿**——新增 `ExecutionRecordParserTest` 5 例（携带 VERIFICATION 完整解析 / 缺失仅检测不拦截 / 缺 SUMMARY 返回 null 维持 fallback 语义 / toMap-fromMap 往返不丢失 / 无证据不写键）+ 回归 `SubTaskReviewServiceTest` 12/12 无破坏。BUILD SUCCESS。
+- 三个 SKILL.md 由外部 Agent 经 SKILL 拉取通道动态获取，改文件即对后续上岗 Agent 生效，无需重启契约。
+- **待人工实测**（用户执行）：本地启动项目 → 真实请求走完"创建任务 → Planner 拆解（看前提核查痕迹）→ Executor 提交带 VERIFICATION 的 output → 自动核验"链路，并用只读 SQL 核对 `review_record` / `sub_task` / Task Running Spec 记录。
+
+#### 4. 影响与遗留
+
+- 影响：无 DB 迁移、无状态机变更、无契约破坏；硬围栏仅作用于自动核验 prompt 注入，人工审查链路不受影响。
+- 遗留（观察一轮后再议）：① VERIFICATION 缺失硬拒收；② `task_execution_record` 表持久化 verification 列（Flyway 迁移）；③ 无证据提交占比数据积累后决定是否升级为结构性拦截。
+
+### 6.55 人工介入兜底：返工达上限/降级能力不匹配时用户自主选择 Agent（2026-08-10）
+
+#### 1. 背景与决策
+
+- **真实事故**：子任务「实现订单超时取消校验脚本 verify-order-expire.ps1」因 trae 打卡超时离线被 inner-loop-executor（API_KEY_LLM）领取；inner 无本机执行能力，反复提交"文档化产出"而非可执行脚本，3 次驳回达 `auto-review-max-rework=3` 上限后卡死 REVIEW。日志证实 15:54:06 记录了 `sub_task_auto_review_skip_max_rework`，但当时代码只写 timeline 不写人工介入标记；叠加 `listReviewOrphans` 把"已有 review_record"的任务排除（该任务有 3 条历史驳回记录），事件链丢失后孤儿扫描永远扫不到 → **永久卡死 REVIEW，无任何自动/人工入口**。
+- **决策**（用户拍板）：返工达上限 / 降级能力不匹配时写 `context.manualIntervention` 标记；前端 REVIEW 详情页展示「人工介入」面板——全量 Agent 选择器（外部 CLI_CLIENT 如 trae/qoder/claudecode + 内部 API_KEY_LLM 均可选，在线优先）+ 「驳回并改派」（REJECTED + reworkAgentId 走正规 review API，触发 outbox 推送）/「直接通过」（人工验收 APPROVED 不受返工上限限制）。明确不做：自动挑选"下一个最优 Agent"（返工达上限必须人工拍板，避免再进循环）。
+
+#### 2. 实际落地
+
+- **SubTaskService.markManualIntervention**：幂等写 `context.manualIntervention{reason, ts, extra}`（rework_limit / fallback_skip_execution_dense），失败不抛异常。
+- **SubTaskReviewService.reviewSubTask**：`reworkCount >= autoReviewMaxRework` 时记 timeline + 打人工介入标记后 return（不再自动打回）。
+- **SubTaskDispatchService.redispatchForFallback**（§6.52 能力预检）：执行密集任务（内容/验收/交付物含 `.ps1/.sh/.jar`、docker、启动服务等关键词）不回退给无本机能力的 API_KEY_LLM，停留原状态 + 标记人工介入；`fallback-skip-execution-dense` 默认 true。
+- **SubTaskService.listReviewOrphans（关键修复）**：排除条件从「有 review_record」改为「有 manualIntervention 标记」——返工达上限任务同样持有 review_record，旧逻辑导致事件链丢失时永远无法兜底；新逻辑保证这类卡死任务能被孤儿扫描发现并补写标记。
+- **前端 SubTaskDetail.vue**：`needsManualIntervention`（context 有标记 或 REVIEW 且 reworkCount>=3 双兜底）+ 人工介入卡片（reason 标签 + 当前负责人 + Agent 选择器 + 驳回改派/直接通过按钮），提交走 `reviewApi.create`（REJECTED 带 reworkAgentId / APPROVED）。
+
+#### 3. 验证结果
+
+- `mvn -pl helloai-core -am test`：**426/426 全绿**（新增 `SubTaskServiceIsReadyTest` 2 例孤儿扫描回归：有 review_record 无标记的任务保留可兜底 / 有标记任务排除；含已存在的 `SubTaskReviewServiceTest` 超限打标记 + `SubTaskDispatchServiceTest` 能力预检用例）。BUILD SUCCESS。
+- `vue-tsc -b --force`：TSC-OK 0 error。
+- **存量卡死任务处置（真实事故闭环）**：子任务 2086720079347281924（REVIEW/reworkCount=3）经 `POST /api/reviews` 人工驳回改派 trae-executor（2086711950328950786）：`REJECTED score=1 + reworkAgentId` → 状态 REWORK、assigned_agent 切换、`agent_outbox_event` 生成 `sub_task.rework`（status=1 已投递）；review_record round=4 的 issues/comment 中文乱码（PS 5.1 按 GBK 解析 no-BOM 源文件所致）已用 UTF-8 字节流直写修正。
+
+#### 4. 影响与遗留
+
+- 影响：无 DB 迁移（标记内嵌 context）；后端需重新打包部署后新逻辑生效；存量卡死任务可被孤儿扫描自动补标（部署后 ≤60s），前端 reworkCount>=3 兜底已可先行展示面板。
+- 遗留：① 人工介入面板仅出现在子任务详情页，主任务视图无聚合告警；② 改派后无"未认领提醒"（依赖外部 Agent 轮询 outbox）；③ 执行密集判定目前为关键词启发式，误判率观察后再议。
+
+### 6.56 依赖守卫 + 执行密集能力预检全链路下沉：修复"依赖未完成的任务被重派给无能力 Agent 假完成"（2026-08-10）
+
+#### 1. 背景与决策
+
+- **真实事故 2（承 §6.52/6.55 同源）**：子任务 2086720079347281925「冷启完整环境并串行执行三个验证脚本」依赖 1924（verify-order-expire.ps1）与 1922/1923，但 1924 仍 REVIEW 时 1925 被标 DONE。时间线：trae 16:33 提交 1924（第二次 `sub_task_auto_review_skip_max_rework`）→ 16:38:37 trae 心跳离线 → `agent_offline` 巡检把 1925 重派给 inner-loop-executor（API_KEY_LLM，capabilities 全 false 无本机能力）→ inner 19 秒"幻觉执行"（编造 docker ps / netstat / 三脚本 PASS=32 的日志与订单号，全部不存在）→ probe-moonshot-reviewer 审核 APPROVED → 1925 DONE，依赖它的下游被解锁。
+- **明确结论**：不是"重新分配给 trae 的任务超过重试最大次数默认完成"——1924 至今仍 REVIEW（重试上限只做 skip_max_rework 打标记，系统无任何"默认完成"逻辑）。
+- **根因三环节叠加**：① `redispatchOfflineSubTask`（agent_offline 重分配）无 `isReady` 依赖守卫（`dispatchPendingSubTaskAuto` 有守卫、离线路径没有）；② §6.52 能力预检只挂在 `redispatchForFallback`，`ResilientDispatcher.assignNext`/fallback 选人环节不查 capabilities；③ 审核侧无"提交者能力"校验，核验 LLM 无法辨别无能力 Agent 的幻觉证据。
+- **决策**（用户拍板修复三处缺陷）：离线重分配补依赖守卫；能力预检下沉到 ResilientDispatcher 分配主路径 + fallback 替代选人；审核侧对"执行密集 + 无能力提交者"跳过自动核验打人工介入标记；两条 PENDING 兜底巡检跳过带人工介入标记的任务。
+
+#### 2. 实际落地
+
+- **SubTaskDispatchService**：`isExecutionDense` / `hasLocalExecutionCapability` / `isManualInterventionMarked` 由 private 改 **public static**（供 ResilientDispatcher / SubTaskReviewService / job 兜底任务复用，避免各入口各自实现判定发散）；`redispatchOfflineSubTask` 在 reset 后补 `isReady` 依赖守卫——未就绪保持 PENDING，记 `sub_task_dispatch_skip_dependency`（trigger=agent_offline），等依赖 DONE 后由 SubTaskPendingOrphanTask / 自动分发链再次触发。
+- **ResilientDispatcher**（构造器新增 AgentDispatchProperties + TaskTimelineService）：`assignNext` 主路径在心跳 fast-fail 后加 `isExecutionDenseMismatch` 预检——执行密集任务命中无本机能力 Agent（API_KEY_LLM 且 capabilities.supportsMCP != true）时记 `sub_task_dispatch_skip_no_capability` + `markManualIntervention("dispatch_skip_execution_dense")` + 抛 AgentUnavailableException 走 fallback；`assignNextFallback` 对替代 Agent 同样预检，不匹配则放弃分配（任务停留 PENDING 人工处置，不再抛异常冒泡）。开关沿用 `fallback-skip-execution-dense`（默认 true）。
+- **SubTaskReviewService.reviewSubTask**：`skip_max_rework` 分支之后、选 reviewer 之前加提交者预检——执行密集任务 + 提交者（executorAgentId 回退 assignedAgentId）无本机能力时跳过自动核验，记 `sub_task_review_skip_no_capability` + `markManualIntervention("review_skip_execution_dense_no_capability")`。
+- **SubTaskPendingOrphanTask / ExternalAgentFallbackTask.recoverPendingUnassigned**：两条 PENDING 兜底循环均跳过 `isManualInterventionMarked` 的任务（防"无能力/返工超限"人工场景被兜底链反复打回调度链）。
+
+#### 3. 验证结果
+
+- `mvn -pl helloai-core,helloai-job -am test -DskipTests=false`：**BUILD SUCCESS**。core 全量 + job 全量通过；新增回归用例 10 个：ResilientDispatcherTest +4（主路径拒绝/有 MCP 放行/fallback 替代拒绝/替代放行）、SubTaskDispatchServiceTest +1（离线重派依赖未就绪不重派）、SubTaskReviewServiceTest +2（无能力提交者跳过核验/有能力正常核验）、SubTaskPendingOrphanTaskTest +2（有标记跳过/无标记正常）、ExternalAgentFallbackTaskTest +1（有标记跳过）。`ResilientDispatcherAopIntegrationTest` 补 AgentDispatchProperties/TaskTimelineService 两个 @MockBean 后 3/3 恢复。
+- **测试坑位**：根 pom 默认 `<skipTests>true</skipTests>`，跑测试必须显式 `-DskipTests=false`；PowerShell 下 `-Dtest=A,B` 与 `-Dsurefire.failIfNoSpecifiedTests=false` 需整体加引号。
+
+#### 4. 影响与遗留
+
+- 影响：无 DB 迁移；ResilientDispatcher 构造器新增 2 依赖（Spring 自动注入无配置变更）；行为变化——执行密集任务不会再被分给无本机能力 Agent（含 fallback 替代），审核侧不再自动核验无能力提交者的执行密集产出，两条兜底巡检不再重派带人工标记的 PENDING。
+- 遗留：① 存量卡死任务 1924/1926（REVIEW）需部署新代码后由孤儿扫描补标（≤60s），前端人工介入面板处置；② inner 幻觉执行的审核辨别仍依赖证据信号从严条款（§6.54），本修复从"源头不派"层面消除无能力执行；③ `SubTaskDispatchService.isExecutionDense` 关键词启发式误判率观察后再议（承 §6.55 遗留③）。
+
