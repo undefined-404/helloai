@@ -414,6 +414,40 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
     }
 
     /**
+     * §6.57 人工驳回重置：返工计数归零并清除人工介入标记，开启新一轮执行。
+     *
+     * <p>与 {@link #rework} 的分工：rework 供自动核验驳回使用（reworkCount 累加，
+     * 达 {@code auto-review-max-rework} 后停留 REVIEW 等人工）；人工审查（review API）
+     * 驳回代表用户拍板开启新一轮，必须重置计数并清除 manualIntervention 标记，
+     * 否则新执行者提交后仍命中 skip_max_rework 跳过自动核验、任务无节点流转。</p>
+     *
+     * @param subTaskId      子任务 ID
+     * @param reworkAgentId  改派目标 Agent（可空：驳回原执行者重做，执行者保持不变）
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void reworkFresh(Long subTaskId, Long reworkAgentId) {
+        SubTask subTask = getById(subTaskId);
+        if (subTask == null) throw new BizException("子任务不存在: " + subTaskId);
+        SubTaskStateMachine.validate(subTask.getStatus(), SubTaskStatus.REWORK);
+        subTask.setStatus(SubTaskStatus.REWORK);
+        subTask.setReworkCount(0);
+        if (reworkAgentId != null) {
+            subTask.setAssignedAgentId(reworkAgentId);
+        }
+        // 人工已拍板：清除人工介入标记，避免前端面板残留、PENDING 兜底巡检继续跳过
+        Map<String, Object> ctx = new HashMap<>(subTask.getContext() != null ? subTask.getContext() : Map.of());
+        if (ctx.remove("manualIntervention") != null) {
+            subTask.setContext(ctx);
+        }
+        updateById(subTask);
+        agentOutboxService.createEvent(subTask, SubTaskStatus.REWORK);
+        taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId,
+                "sub_task_manual_rework_reset", AgentRole.SYSTEM, reworkAgentId,
+                Map.of("reworkCountReset", "true", "reworkAgentId", reworkAgentId));
+        log.info("人工驳回重置返工计数: subTaskId={}, reworkCount=0, reworkAgentId={}", subTaskId, reworkAgentId);
+    }
+
+    /**
      * §6.52 人工介入标记：写入子任务 context.manualIntervention。
      *
      * <p>自动链路（返工达上限、降级能力不匹配）不再继续打回/重派时调用，

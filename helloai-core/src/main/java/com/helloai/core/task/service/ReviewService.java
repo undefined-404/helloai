@@ -71,8 +71,9 @@ public class ReviewService extends ServiceImpl<ReviewRecordMapper, ReviewRecord>
             // v1.1 修复: APPROVED 走 complete() 触发 5 因子隐式评分（score_factors/composite_score/score_grade/completed_at + reward_log）
             subTaskService.complete(subTaskId);
         } else {
-            subTaskService.changeStatus(subTaskId, SubTaskStatus.REWORK,
-                    reworkAgentId != null ? reworkAgentId : executorAgentId);
+            // §6.57 人工驳回 = 用户拍板开启新一轮：reworkFresh 重置返工计数并清除人工介入标记，
+            // 避免改派后的新执行者提交时仍命中 skip_max_rework 跳过自动核验、无节点流转
+            subTaskService.reworkFresh(subTaskId, reworkAgentId);
         }
 
         // 简易奖励（与原 v1.0 行为兼容：按 review.score 直接加减固定分）
