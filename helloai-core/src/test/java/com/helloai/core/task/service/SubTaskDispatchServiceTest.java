@@ -11,6 +11,7 @@ import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -63,6 +64,9 @@ class SubTaskDispatchServiceTest {
     @Mock
     private AgentDispatchProperties agentDispatchProperties;
 
+    @Mock
+    private TaskService taskService;
+
     @InjectMocks
     private SubTaskDispatchService subTaskDispatchService;
 
@@ -91,7 +95,7 @@ class SubTaskDispatchServiceTest {
                 AgentRole.PLANNER,
                 11L,
                 Map.of("trigger", "blocked_reassign", "preferredAgentId", 11L));
-        verify(resilientDispatcher).assignNext(11L, 21L);
+        verify(resilientDispatcher).assignNext(11L, 21L, null);
     }
 
     @Test
@@ -115,7 +119,7 @@ class SubTaskDispatchServiceTest {
                 AgentRole.SYSTEM,
                 12L,
                 Map.of("trigger", "agent_offline", "preferredAgentId", 12L, "previousAgentId", 12L));
-        verify(resilientDispatcher).assignNext(12L, 22L);
+        verify(resilientDispatcher).assignNext(12L, 22L, null);
     }
 
     @Test
@@ -139,7 +143,7 @@ class SubTaskDispatchServiceTest {
                 12L,
                 Map.of("trigger", "agent_offline", "reason", "dependency_not_ready",
                         "dependsOn", subTask.dependsOnIdList()));
-        verify(resilientDispatcher, never()).assignNext(anyLong(), anyLong());
+        verify(resilientDispatcher, never()).assignNext(anyLong(), anyLong(), any());
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -281,7 +285,7 @@ class SubTaskDispatchServiceTest {
                         "fallbackAgentId", 99L, "previousAgentId", 11L));
         verify(subTaskService).markManualIntervention(
                 eq(44L), eq("fallback_skip_execution_dense"), anyMap());
-        verify(resilientDispatcher, never()).assignNext(any(), any());
+        verify(resilientDispatcher, never()).assignNext(any(), any(), any());
     }
 
     @Test
@@ -367,14 +371,14 @@ class SubTaskDispatchServiceTest {
 
         when(subTaskService.resetToPendingForDispatch(61L, Set.of(SubTaskStatus.ASSIGNED)))
                 .thenReturn(subTask);
-        when(agentSelector.pickAlternative(11L, AgentRole.EXECUTOR)).thenReturn(newAgent);
+        when(agentSelector.pickAlternative(11L, AgentRole.EXECUTOR, null)).thenReturn(newAgent);
 
         subTaskDispatchService.redispatchAssignedTimeout(61L, 11L, AgentRole.EXECUTOR);
 
         // 必须用 pickAlternative(originalAgentId, role)，而不是 pickPreferred(role)
-        verify(agentSelector).pickAlternative(11L, AgentRole.EXECUTOR);
-        verify(agentSelector, never()).pickPreferred(any());
-        verify(resilientDispatcher).assignNext(99L, 61L);
+        verify(agentSelector).pickAlternative(11L, AgentRole.EXECUTOR, null);
+        verify(agentSelector, never()).pickPreferred(any(), any());
+        verify(resilientDispatcher).assignNext(99L, 61L, null);
     }
 
     @Test
@@ -387,12 +391,12 @@ class SubTaskDispatchServiceTest {
         when(subTaskService.resetToPendingForDispatch(62L, Set.of(SubTaskStatus.ASSIGNED)))
                 .thenReturn(subTask);
         // pickAlternative 返回 null（只有原 Agent 一个候选）
-        when(agentSelector.pickAlternative(11L, AgentRole.EXECUTOR)).thenReturn(null);
+        when(agentSelector.pickAlternative(11L, AgentRole.EXECUTOR, null)).thenReturn(null);
 
         subTaskDispatchService.redispatchAssignedTimeout(62L, 11L, AgentRole.EXECUTOR);
 
-        verify(agentSelector).pickAlternative(11L, AgentRole.EXECUTOR);
-        verify(resilientDispatcher, never()).assignNext(any(), any());
+        verify(agentSelector).pickAlternative(11L, AgentRole.EXECUTOR, null);
+        verify(resilientDispatcher, never()).assignNext(any(), any(), any());
     }
 
     // ══════════════════════════════════════════════════════════
@@ -429,8 +433,8 @@ class SubTaskDispatchServiceTest {
                 Map.of("reason", "reassign_attempt_exceeded",
                         "reassign_attempt_count", 5,
                         "max_reassign_attempts", 5));
-        verify(agentSelector, never()).pickPreferred(any());
-        verify(resilientDispatcher, never()).assignNext(any(), any());
+        verify(agentSelector, never()).pickPreferred(any(), any());
+        verify(resilientDispatcher, never()).assignNext(any(), any(), any());
     }
 
     @Test
@@ -449,14 +453,14 @@ class SubTaskDispatchServiceTest {
 
         Agent preferred = new Agent();
         preferred.setId(99L);
-        when(agentSelector.pickPreferred(AgentRole.EXECUTOR)).thenReturn(preferred);
+        when(agentSelector.pickPreferred(AgentRole.EXECUTOR, null)).thenReturn(preferred);
 
         Long result = subTaskDispatchService.dispatchPendingSubTaskAuto(82L, AgentRole.EXECUTOR);
 
         assertThat(result).isEqualTo(99L);
         verify(subTaskMapper).incrementReassignAttemptCount(eq(82L), any(OffsetDateTime.class));
         verify(subTaskService, never()).changeStatus(anyLong(), any(), any(), any());
-        verify(resilientDispatcher).assignNext(99L, 82L);
+        verify(resilientDispatcher).assignNext(99L, 82L, null);
     }
 
     @Test
@@ -503,5 +507,128 @@ class SubTaskDispatchServiceTest {
 
         verify(subTaskMapper, never()).resetReassignAttemptCount(anyLong(), any());
         verify(subTaskService, never()).changeStatus(anyLong(), any(), anyLong());
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  V47 §6.58 P1：任务级回退策略约束（fallbackPolicy / difficulty）
+    //  ══════════════════════════════════════════════════════════════
+
+    private SubTask subTaskWithTaskId(long subTaskId, long taskId) {
+        SubTask subTask = new SubTask();
+        subTask.setId(subTaskId);
+        subTask.setTaskId(taskId);
+        return subTask;
+    }
+
+    private Agent failedExecutor(long id) {
+        Agent failedAgent = new Agent();
+        failedAgent.setId(id);
+        failedAgent.setRole(AgentRole.EXECUTOR);
+        return failedAgent;
+    }
+
+    private Agent llmExecutor(long id) {
+        Agent fallbackAgent = new Agent();
+        fallbackAgent.setId(id);
+        fallbackAgent.setRole(AgentRole.EXECUTOR);
+        fallbackAgent.setAccessType(AgentAccessType.API_KEY_LLM);
+        fallbackAgent.setStatus(AgentStatus.ACTIVE);
+        fallbackAgent.setOnlineStatus(AgentOnlineStatus.ONLINE);
+        fallbackAgent.setScore(100);
+        return fallbackAgent;
+    }
+
+    @Test
+    @DisplayName("V47: fallbackPolicy=NONE → 跳过 N11 回退并标记人工介入，不落 LLM")
+    void shouldSkipFallbackWhenPolicyNone() {
+        SubTask subTask = subTaskWithTaskId(47L, 57L);
+        Task task = new Task();
+        task.setId(57L);
+        task.setAgentPolicy(TaskAgentPolicy.build(null, null, null,
+                TaskAgentPolicy.FallbackPolicy.NONE, null));
+        when(taskService.getById(57L)).thenReturn(task);
+        when(subTaskService.resetToPendingForDispatch(any(), any())).thenReturn(subTask);
+        when(agentService.getById(11L)).thenReturn(failedExecutor(11L));
+
+        Long newAgentId = subTaskDispatchService.redispatchForFallback(47L, 11L, "consecutive_failure=5");
+
+        assertThat(newAgentId).isNull();
+        verify(taskTimelineService).recordEvent(
+                57L, 47L, "sub_task_fallback_skip_policy", AgentRole.SYSTEM, 11L,
+                Map.of("reason", "fallback_policy_forbidden",
+                        "fallbackPolicy", "NONE",
+                        "difficulty", "MEDIUM",
+                        "previousAgentId", 11L));
+        verify(subTaskService).markManualIntervention(
+                eq(47L), eq("fallback_skip_policy"), anyMap());
+        verify(agentService, never()).listActive();
+        verify(resilientDispatcher, never()).assignNext(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("V47: difficulty=HIGH → 跳过 N11 回退并标记人工介入，不落 LLM")
+    void shouldSkipFallbackWhenDifficultyHigh() {
+        SubTask subTask = subTaskWithTaskId(48L, 58L);
+        Task task = new Task();
+        task.setId(58L);
+        task.setAgentPolicy(TaskAgentPolicy.build(null, null, null,
+                null, TaskAgentPolicy.Difficulty.HIGH));
+        when(taskService.getById(58L)).thenReturn(task);
+        when(subTaskService.resetToPendingForDispatch(any(), any())).thenReturn(subTask);
+        when(agentService.getById(11L)).thenReturn(failedExecutor(11L));
+
+        Long newAgentId = subTaskDispatchService.redispatchForFallback(48L, 11L, "consecutive_failure=5");
+
+        assertThat(newAgentId).isNull();
+        verify(subTaskService).markManualIntervention(
+                eq(48L), eq("fallback_skip_policy"), anyMap());
+        verify(agentService, never()).listActive();
+        verify(resilientDispatcher, never()).assignNext(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("V47: fallbackPolicy=RESTRICTED 且回退目标不在白名单 → 跳过并标记人工介入")
+    void shouldSkipFallbackWhenRestrictedTargetOutsideWhitelist() {
+        SubTask subTask = subTaskWithTaskId(49L, 59L);
+        Task task = new Task();
+        task.setId(59L);
+        task.setAgentPolicy(TaskAgentPolicy.build(null, List.of(7L), null,
+                TaskAgentPolicy.FallbackPolicy.RESTRICTED, null));
+        when(taskService.getById(59L)).thenReturn(task);
+        when(subTaskService.resetToPendingForDispatch(any(), any())).thenReturn(subTask);
+        when(agentService.getById(11L)).thenReturn(failedExecutor(11L));
+        // 同角色 API_KEY_LLM 候选分数最高者为 99L，但不在白名单 [7L] 内
+        when(agentService.listActive()).thenReturn(List.of(llmExecutor(99L)));
+
+        Long newAgentId = subTaskDispatchService.redispatchForFallback(49L, 11L, "reason");
+
+        assertThat(newAgentId).isNull();
+        verify(taskTimelineService).recordEvent(
+                59L, 49L, "sub_task_fallback_skip_policy", AgentRole.SYSTEM, 99L,
+                Map.of("reason", "fallback_policy_restricted_not_in_whitelist",
+                        "fallbackAgentId", 99L, "previousAgentId", 11L));
+        verify(subTaskService).markManualIntervention(
+                eq(49L), eq("fallback_skip_policy_restricted"), anyMap());
+        verify(resilientDispatcher, never()).assignNext(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("V47: fallbackPolicy=RESTRICTED 且回退目标在白名单 → 正常回退")
+    void shouldFallbackWhenRestrictedTargetInWhitelist() {
+        SubTask subTask = subTaskWithTaskId(50L, 60L);
+        Task task = new Task();
+        task.setId(60L);
+        task.setAgentPolicy(TaskAgentPolicy.build(null, List.of(99L), null,
+                TaskAgentPolicy.FallbackPolicy.RESTRICTED, null));
+        when(taskService.getById(60L)).thenReturn(task);
+        when(subTaskService.resetToPendingForDispatch(any(), any())).thenReturn(subTask);
+        when(agentService.getById(11L)).thenReturn(failedExecutor(11L));
+        when(agentService.listActive()).thenReturn(List.of(llmExecutor(99L)));
+
+        Long newAgentId = subTaskDispatchService.redispatchForFallback(50L, 11L, "reason");
+
+        assertThat(newAgentId).isEqualTo(99L);
+        verify(subTaskService, never()).markManualIntervention(any(), any(), any());
+        verify(resilientDispatcher).assignNext(99L, 50L);
     }
 }

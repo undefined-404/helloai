@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.command.ExecutionCommandService;
@@ -18,9 +19,12 @@ import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.shared.event.SubTaskSubmittedForReviewEvent;
 import com.helloai.core.shared.util.LlmJsonSanitizer;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.service.ReviewService;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskAgentPolicy;
+import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
@@ -79,6 +83,7 @@ public class SubTaskReviewService {
     private final ObjectMapper objectMapper;
     private final ConversationService conversationService;
     private final ReviewService reviewService;
+    private final TaskService taskService;
 
     /** AFTER_COMMIT 异步监听：结果回报事务提交后触发自动核验。 */
     @Async
@@ -181,7 +186,7 @@ public class SubTaskReviewService {
             }
         }
 
-        Agent reviewer = pickReviewerAgent();
+        Agent reviewer = pickReviewerAgent(subTask);
         if (reviewer == null) {
             log.warn("自动核验跳过：无可用平台内核验 Agent（REVIEWER/PLANNER 且 API_KEY_LLM），"
                     + "子任务停留 REVIEW 等人工: subTaskId={}", subTaskId);
@@ -361,8 +366,35 @@ public class SubTaskReviewService {
         }
     }
 
-    /** 选平台内核验 Agent：优先 REVIEWER，回退 PLANNER；均要求 API_KEY_LLM，无则返回 null。 */
-    private Agent pickReviewerAgent() {
+    /**
+     * 选平台内核验 Agent（V47 §6.58 P1 指定语义）：
+     * <ol>
+     *   <li>任务级 {@code task.agent_policy.reviewerAgentId} 优先——指定 Agent
+     *       可用（存在且 ACTIVE 且 API_KEY_LLM）时直接采用；失效时记录告警并回退；</li>
+     *   <li>回退链：AgentSelector 优先 REVIEWER（API_KEY_LLM）→ 同角色 API_KEY_LLM
+     *       → PLANNER 角色 API_KEY_LLM；均无则返回 null。</li>
+     * </ol>
+     */
+    private Agent pickReviewerAgent(SubTask subTask) {
+        // V47：任务级指定 reviewerAgentId 优先
+        if (subTask != null && subTask.getTaskId() != null) {
+            try {
+                Task task = taskService.getById(subTask.getTaskId());
+                Long policyReviewerId = TaskAgentPolicy.reviewerAgentId(
+                        task != null ? task.getAgentPolicy() : null);
+                if (policyReviewerId != null) {
+                    Agent pinned = agentService.getById(policyReviewerId);
+                    if (isUsableReviewer(pinned)) {
+                        return pinned;
+                    }
+                    log.warn("指定的核验 Agent 不可用，回退自动选择: agentId={}, subTaskId={}",
+                            policyReviewerId, subTask.getId());
+                }
+            } catch (Exception e) {
+                log.debug("读取任务核验指定失败（按未指定处理）: taskId={}, err={}",
+                        subTask.getTaskId(), e.getMessage());
+            }
+        }
         Agent preferred = agentSelector.pickPreferred(AgentRole.REVIEWER);
         if (preferred != null && preferred.getAccessType() == AgentAccessType.API_KEY_LLM) {
             return preferred;
@@ -372,6 +404,13 @@ public class SubTaskReviewService {
             return reviewer;
         }
         return firstApiKeyLlm(AgentRole.PLANNER);
+    }
+
+    /** 指定的核验 Agent 可用性校验（比创建时宽松失败：不抛错，回退自动）。 */
+    private boolean isUsableReviewer(Agent agent) {
+        return agent != null
+                && agent.getStatus() == AgentStatus.ACTIVE
+                && agent.getAccessType() == AgentAccessType.API_KEY_LLM;
     }
 
     private Agent firstApiKeyLlm(AgentRole role) {

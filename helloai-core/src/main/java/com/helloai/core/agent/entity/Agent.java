@@ -8,10 +8,12 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
+import com.helloai.core.shared.handler.PgJsonbTypeHandler;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -73,6 +75,16 @@ public class Agent extends BaseEntity {
     /** 标签（specialty / runtime / region 等，调度标签过滤用） */
     @TableField(typeHandler = JacksonTypeHandler.class)
     private Map<String, Object> labels;
+
+    /**
+     * 能力声明列表（V47 新增 JSONB[]，§6.58 P1）。
+     *
+     * <p>注册时按接入方式声明（如 shell / docker / code-review / web-search），
+     * 供任务 {@code required_skills} 匹配（AND 语义）；默认 {@code []}，
+     * 未声明能力的 Agent 不会被要求技能的 task 选中。</p>
+     */
+    @TableField(typeHandler = PgJsonbTypeHandler.class)
+    private List<String> skills;
 
     // ============================================================
     // 阶段 4 三件套心跳 + 计算态在线状态

@@ -13,6 +13,9 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.service.RequirementConversationService;
 import com.helloai.core.system.service.CredentialVaultService;
+import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.service.TaskAgentPolicy;
+import com.helloai.core.task.service.TaskService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -58,12 +61,15 @@ class PlannerAgentPickerTest {
     @Mock
     private CredentialVaultService credentialVaultService;
 
+    @Mock
+    private TaskService taskService;
+
     private PlannerAgentPicker picker;
 
     @BeforeEach
     void setUp() {
         picker = new PlannerAgentPicker(agentService, conversationService,
-                agentDutyLeaseService, credentialVaultService);
+                agentDutyLeaseService, credentialVaultService, taskService);
         // 默认：全部凭证可用（单测按需覆盖）
         lenient().when(credentialVaultService.hasActiveAgentCredential(any())).thenReturn(true);
     }
@@ -207,6 +213,38 @@ class PlannerAgentPickerTest {
         when(agentService.listByRole(AgentRole.PLANNER)).thenReturn(List.of(auto));
 
         assertThat(picker.pickForTask(TASK_ID).getId()).isEqualTo(10L);
+    }
+
+    @Test
+    @DisplayName("pickForTask：任务级 agent_policy.plannerAgentId 优先于会话钉住（V47）")
+    void shouldPreferPolicyPlannerOverConversationPinned() {
+        Task task = new Task();
+        task.setId(TASK_ID);
+        task.setAgentPolicy(TaskAgentPolicy.build(9L, null, null, null, null));
+        when(taskService.getById(TASK_ID)).thenReturn(task);
+        Agent policyPlanner = llmPlanner(9L);
+        when(agentService.getById(9L)).thenReturn(policyPlanner);
+
+        assertThat(picker.pickForTask(TASK_ID)).isSameAs(policyPlanner);
+        // 会话即使钉住其他 Planner 也不应被查询——policy 指定优先
+        verify(conversationService, never()).lambdaQuery();
+    }
+
+    @Test
+    @DisplayName("pickForTask：policy 指定 Planner 失效（禁用）时回退自动选择（V47）")
+    void shouldFallbackToAutoWhenPolicyPlannerDisabled() {
+        Task task = new Task();
+        task.setId(TASK_ID);
+        task.setAgentPolicy(TaskAgentPolicy.build(9L, null, null, null, null));
+        when(taskService.getById(TASK_ID)).thenReturn(task);
+        Agent disabled = llmPlanner(9L);
+        disabled.setStatus(AgentStatus.DISABLED);
+        when(agentService.getById(9L)).thenReturn(disabled);
+        Agent auto = llmPlanner(10L);
+        when(agentService.listByRole(AgentRole.PLANNER)).thenReturn(List.of(auto));
+
+        assertThat(picker.pickForTask(TASK_ID)).isSameAs(auto);
+        verify(conversationService, never()).lambdaQuery();
     }
 
     // ══════════════════════════════════════════════════════════════

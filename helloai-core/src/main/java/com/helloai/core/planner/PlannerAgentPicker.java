@@ -11,6 +11,9 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.service.RequirementConversationService;
 import com.helloai.core.system.service.CredentialVaultService;
+import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.service.TaskAgentPolicy;
+import com.helloai.core.task.service.TaskService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -43,6 +46,7 @@ public class PlannerAgentPicker {
     private final RequirementConversationService conversationService;
     private final AgentDutyLeaseService agentDutyLeaseService;
     private final CredentialVaultService credentialVaultService;
+    private final TaskService taskService;
 
     /**
      * 按会话钉住的 Planner 选人；pinnedAgentId 为空或失效时走自动选择。
@@ -59,10 +63,29 @@ public class PlannerAgentPicker {
     }
 
     /**
-     * 拆解链入口：按 taskId 反查澄清会话钉住的 Planner（澄清→拆解同一 Planner 跟随），
-     * 无会话或未钉住时走自动选择。
+     * 拆解链入口：按 taskId 选 Planner（§6.58 P1 指定语义）。
+     *
+     * <p>优先级：
+     * <ol>
+     *   <li>任务级 {@code task.agent_policy.plannerAgentId}（V47）——任务创建时
+     *       显式指定的 Planner，优先于会话记录；失效（删除/禁用）时由
+     *       {@link #pick(Long)} 回退自动选择；</li>
+     *   <li>澄清会话钉住的 Planner（澄清→拆解同一 Planner 跟随）；</li>
+     *   <li>无会话或未钉住时走自动选择。</li>
+     * </ol>
+     * </p>
      */
     public Agent pickForTask(Long taskId) {
+        // V47：任务级 agent_policy.plannerAgentId 优先
+        if (taskId != null) {
+            Task task = taskService.getById(taskId);
+            if (task != null) {
+                Long policyPlannerId = TaskAgentPolicy.plannerAgentId(task.getAgentPolicy());
+                if (policyPlannerId != null) {
+                    return pick(policyPlannerId);
+                }
+            }
+        }
         Long pinnedAgentId = null;
         if (taskId != null) {
             RequirementConversation conversation = conversationService.lambdaQuery()

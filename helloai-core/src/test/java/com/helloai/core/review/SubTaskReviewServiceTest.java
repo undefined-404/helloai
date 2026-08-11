@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.command.ExecutionCommandService;
 import com.helloai.core.agent.domain.AgentResult;
@@ -14,8 +15,11 @@ import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.service.ReviewService;
 import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskAgentPolicy;
+import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -79,6 +83,9 @@ class SubTaskReviewServiceTest {
     @Mock
     private ReviewService recordReviewService;
 
+    @Mock
+    private TaskService taskService;
+
     private SubTaskReviewService reviewService;
 
     @BeforeEach
@@ -87,7 +94,7 @@ class SubTaskReviewServiceTest {
         reviewService = new SubTaskReviewService(
                 subTaskService, agentSelector, agentService, platformAgentExecutionService,
                 taskTimelineService, executionCommandService, dispatchProperties, new ObjectMapper(),
-                conversationService, recordReviewService);
+                conversationService, recordReviewService, taskService);
         lenient().when(dispatchProperties.getAutoReviewMaxRework()).thenReturn(3);
     }
 
@@ -409,5 +416,60 @@ class SubTaskReviewServiceTest {
         Object done = first.get("executorDoneIssues");
         assertThat(done).isInstanceOf(List.class);
         assertThat((List<?>) done).isEmpty();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  V47 §6.58 P1：任务级 policy 指定 Reviewer
+    //  ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("V47 §6.58: policy 指定 reviewerAgentId 优先于自动选择")
+    void shouldUsePolicyReviewerWhenSpecified() {
+        Task task = new Task();
+        task.setId(TASK_ID);
+        task.setAgentPolicy(TaskAgentPolicy.build(null, null, 99L, null, null));
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(taskService.getById(TASK_ID)).thenReturn(task);
+        Agent pinned = llmAgent(99L, AgentRole.REVIEWER);
+        pinned.setStatus(AgentStatus.ACTIVE);
+        when(agentService.getById(99L)).thenReturn(pinned);
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        // 指定可用 → 不再走自动选择链
+        verify(agentSelector, never()).pickPreferred(any());
+        verify(agentSelector, never()).pickPreferred(any(), any());
+        verify(subTaskService).complete(SUB_TASK_ID);
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_auto_review_passed"),
+                eq(AgentRole.REVIEWER), eq(99L), anyMap());
+    }
+
+    @Test
+    @DisplayName("V47 §6.58: 指定 reviewer 不可用（DISABLED）→ 回退自动选择")
+    void shouldFallbackToAutoWhenPolicyReviewerUnusable() {
+        Task task = new Task();
+        task.setId(TASK_ID);
+        task.setAgentPolicy(TaskAgentPolicy.build(null, null, 99L, null, null));
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(taskService.getById(TASK_ID)).thenReturn(task);
+        Agent disabled = llmAgent(99L, AgentRole.REVIEWER);
+        disabled.setStatus(AgentStatus.DISABLED);
+        when(agentService.getById(99L)).thenReturn(disabled);
+        when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        // 指定失效 → 走自动选择链的 REVIEWER
+        verify(subTaskService).complete(SUB_TASK_ID);
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_auto_review_passed"),
+                eq(AgentRole.REVIEWER), eq(9L), anyMap());
     }
 }

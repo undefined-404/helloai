@@ -7,15 +7,18 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.executor.AgentSelector;
+import com.helloai.core.agent.executor.AgentSelector.AgentSelectionConstraints;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -40,6 +43,7 @@ public class SubTaskDispatchService {
     private final AgentService agentService;
     private final SubTaskMapper subTaskMapper;
     private final AgentDispatchProperties agentDispatchProperties;
+    private final TaskService taskService;
 
     /**
      * 对 BLOCKED 子任务执行重新调度。
@@ -60,7 +64,7 @@ public class SubTaskDispatchService {
                 Map.of(
                         "trigger", "blocked_reassign",
                         "preferredAgentId", preferredAgentId));
-        resilientDispatcher.assignNext(preferredAgentId, subTaskId);
+        resilientDispatcher.assignNext(preferredAgentId, subTaskId, resolveConstraints(subTask));
         log.info("阻塞子任务重新进入调度: subTaskId={}, preferredAgentId={}", subTaskId, preferredAgentId);
     }
 
@@ -111,7 +115,7 @@ public class SubTaskDispatchService {
                         "trigger", "agent_offline",
                         "preferredAgentId", offlineAgentId,
                         "previousAgentId", offlineAgentId));
-        resilientDispatcher.assignNext(offlineAgentId, subTaskId);
+        resilientDispatcher.assignNext(offlineAgentId, subTaskId, resolveConstraints(subTask));
         log.info("离线子任务重新进入调度: subTaskId={}, offlineAgentId={}", subTaskId, offlineAgentId);
     }
 
@@ -149,7 +153,9 @@ public class SubTaskDispatchService {
             throw new BizException("只有 PENDING 状态的子任务才能自动分配: subTaskId=" + subTaskId + ", status=" + subTask.getStatus());
         }
 
-        var preferred = agentSelector.pickPreferred(role);
+        // V47：任务级选人约束（executorAgentIds 白名单 + required_skills 技能 AND 匹配）
+        AgentSelectionConstraints constraints = resolveConstraints(subTask);
+        var preferred = agentSelector.pickPreferred(role, constraints);
         if (preferred == null) {
             throw new BizException("无可用候选 Agent: role=" + role);
         }
@@ -165,7 +171,7 @@ public class SubTaskDispatchService {
                         "preferredAgentId", preferred.getId(),
                         "role", role != null ? role.name() : "null"));
 
-        resilientDispatcher.assignNext(preferred.getId(), subTaskId);
+        resilientDispatcher.assignNext(preferred.getId(), subTaskId, constraints);
         log.info("子任务自动分配进入调度链: subTaskId={}, preferredAgentId={}, role={}",
                 subTaskId, preferred.getId(), role);
         return preferred.getId();
@@ -270,6 +276,30 @@ public class SubTaskDispatchService {
         Agent failedAgent = failedAgentId != null ? agentService.getById(failedAgentId) : null;
         final AgentRole role = (failedAgent != null && failedAgent.getRole() != null)
                 ? failedAgent.getRole() : AgentRole.EXECUTOR;
+
+        // V47（§6.58 P1）：任务级回退策略约束——fallbackPolicy=NONE 或 difficulty=HIGH
+        // 时禁止 N11 自动回退，改打人工介入标记等人工处置，避免高风险任务被静默换人。
+        Map<String, Object> agentPolicy = loadAgentPolicy(subTask);
+        if (TaskAgentPolicy.isFallbackForbidden(agentPolicy)) {
+            if (isManualInterventionMarked(subTask)) {
+                log.debug("人工介入标记已存在，跳过重复回退: subTaskId={}", subTaskId);
+                return null;
+            }
+            taskTimelineService.recordEvent(subTask.getTaskId(), subTask.getId(),
+                    "sub_task_fallback_skip_policy", AgentRole.SYSTEM, failedAgentId,
+                    Map.of("reason", "fallback_policy_forbidden",
+                            "fallbackPolicy", TaskAgentPolicy.fallbackPolicy(agentPolicy).name(),
+                            "difficulty", TaskAgentPolicy.difficulty(agentPolicy).name(),
+                            "previousAgentId", failedAgentId));
+            subTaskService.markManualIntervention(subTaskId, "fallback_skip_policy",
+                    Map.of("failedAgentId", failedAgentId == null ? "" : failedAgentId,
+                            "fallbackPolicy", TaskAgentPolicy.fallbackPolicy(agentPolicy).name(),
+                            "difficulty", TaskAgentPolicy.difficulty(agentPolicy).name()));
+            log.warn("N11 回退跳过：任务级策略禁止自动回退, subTaskId={}, fallbackPolicy={}, difficulty={}",
+                    subTaskId, TaskAgentPolicy.fallbackPolicy(agentPolicy),
+                    TaskAgentPolicy.difficulty(agentPolicy));
+            return null;
+        }
         Agent fallbackAgent = pickApiKeyLlmAgent(role);
 
         if (fallbackAgent == null) {
@@ -278,6 +308,25 @@ public class SubTaskDispatchService {
                     role, subTaskId);
             log.error(msg);
             throw new BizException(msg);
+        }
+
+        // V47：RESTRICTED 回退——仅允许回退到 executorAgentIds 内的 API_KEY_LLM Agent；
+        // 集合为空或回退目标不在集合内时等同 NONE，打人工介入标记。
+        if (TaskAgentPolicy.fallbackPolicy(agentPolicy) == TaskAgentPolicy.FallbackPolicy.RESTRICTED) {
+            List<Long> allowed = TaskAgentPolicy.executorAgentIds(agentPolicy);
+            if (allowed.isEmpty() || !allowed.contains(fallbackAgent.getId())) {
+                taskTimelineService.recordEvent(subTask.getTaskId(), subTask.getId(),
+                        "sub_task_fallback_skip_policy", AgentRole.SYSTEM, fallbackAgent.getId(),
+                        Map.of("reason", "fallback_policy_restricted_not_in_whitelist",
+                                "fallbackAgentId", fallbackAgent.getId(),
+                                "previousAgentId", failedAgentId));
+                subTaskService.markManualIntervention(subTaskId, "fallback_skip_policy_restricted",
+                        Map.of("failedAgentId", failedAgentId == null ? "" : failedAgentId,
+                                "fallbackAgentId", fallbackAgent.getId()));
+                log.warn("N11 回退跳过：RESTRICTED 策略下回退目标不在执行者白名单, subTaskId={}, fallbackAgentId={}",
+                        subTaskId, fallbackAgent.getId());
+                return null;
+            }
         }
 
         // §6.52 能力预检：执行密集任务（需本机 shell/文件/服务操作）不自动回退给无本机能力的
@@ -418,16 +467,59 @@ public class SubTaskDispatchService {
         // 必须排除 originalAgentId：原 Agent 可能仍在线但静默丢弃，
         // 重分回它只是原地打转。使用 pickAlternative(excludeAgentId, role)
         // 走 AgentSelector 已有的"同角色排除指定 Agent"选人逻辑。
-        var preferred = agentSelector.pickAlternative(originalAgentId, role);
+        // V47：任务级约束（executorAgentIds / required_skills）同样作用于重分配。
+        AgentSelectionConstraints constraints = resolveConstraints(subTask);
+        var preferred = agentSelector.pickAlternative(originalAgentId, role, constraints);
         if (preferred == null) {
             log.warn("ASSIGNED超时回收：无可用候选 Agent: subTaskId={}, role={}, excludeAgentId={}",
                     subTaskId, role != null ? role : "null", originalAgentId);
             return;
         }
 
-        resilientDispatcher.assignNext(preferred.getId(), subTaskId);
+        resilientDispatcher.assignNext(preferred.getId(), subTaskId, constraints);
         log.info("ASSIGNED超时已回收: subTaskId={}, originalAgentId={}, newPreferredAgentId={}",
                 subTaskId, originalAgentId, preferred.getId());
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  V47（§6.58 P1）：任务级选人约束解析
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 从子任务所在 Task 构建任务级选人约束（executorAgentIds 白名单 + required_skills 技能）。
+     *
+     * <p>两者均未声明时返回 null（与旧行为一致，不约束选人）。</p>
+     */
+    private AgentSelectionConstraints resolveConstraints(SubTask subTask) {
+        Task task = loadTask(subTask);
+        if (task == null) {
+            return null;
+        }
+        List<Long> executorAgentIds = TaskAgentPolicy.executorAgentIds(task.getAgentPolicy());
+        List<String> requiredSkills = task.getRequiredSkills();
+        if ((executorAgentIds == null || executorAgentIds.isEmpty())
+                && (requiredSkills == null || requiredSkills.isEmpty())) {
+            return null;
+        }
+        return AgentSelectionConstraints.of(executorAgentIds, requiredSkills);
+    }
+
+    /** 加载子任务所属 Task 的 agent_policy；Task 不存在返回 null（防御式，与旧行为一致）。 */
+    private Map<String, Object> loadAgentPolicy(SubTask subTask) {
+        Task task = loadTask(subTask);
+        return task != null ? task.getAgentPolicy() : null;
+    }
+
+    private Task loadTask(SubTask subTask) {
+        if (subTask == null || subTask.getTaskId() == null) {
+            return null;
+        }
+        try {
+            return taskService.getById(subTask.getTaskId());
+        } catch (Exception e) {
+            log.debug("加载 Task 失败（按无约束处理）: taskId={}, err={}", subTask.getTaskId(), e.getMessage());
+            return null;
+        }
     }
 
     // ══════════════════════════════════════════════════════════════

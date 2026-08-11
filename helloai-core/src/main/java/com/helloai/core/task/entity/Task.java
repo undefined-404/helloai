@@ -10,6 +10,7 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Map;
 
 @Data
@@ -42,4 +43,29 @@ public class Task extends BaseEntity {
      */
     @TableField(typeHandler = PgJsonbTypeHandler.class)
     private Map<String, Object> context;
+
+    /**
+     * 任务级 Agent 指定策略（V47 新增 JSONB，§6.58 P1）。
+     *
+     * <p>键说明（解析统一走 {@code TaskAgentPolicy} 静态工具类）：
+     * <ul>
+     *   <li>{@code plannerAgentId}：指定拆解/澄清 Planner（失效回退自动选择）；</li>
+     *   <li>{@code executorAgentIds[]}：执行者白名单（为空=不限定）；</li>
+     *   <li>{@code reviewerAgentId}：指定自动核验 Reviewer（失效回退自动选择）；</li>
+     *   <li>{@code fallbackPolicy}：AUTO / RESTRICTED / NONE（N11 回退约束）；</li>
+     *   <li>{@code difficulty}：LOW / MEDIUM / HIGH（HIGH 视为禁止 N11 自动回退）。</li>
+     * </ul>
+     * 默认 {@code {}}：旧数据行为与现状完全一致。</p>
+     */
+    @TableField(typeHandler = PgJsonbTypeHandler.class)
+    private Map<String, Object> agentPolicy;
+
+    /**
+     * 任务要求的能力列表（V47 新增 JSONB[]，§6.58 P1）。
+     *
+     * <p>非空时执行者必须全部具备（AND 语义）；默认 {@code []} 不限制，
+     * 与旧数据行为完全一致。</p>
+     */
+    @TableField(typeHandler = PgJsonbTypeHandler.class)
+    private List<String> requiredSkills;
 }

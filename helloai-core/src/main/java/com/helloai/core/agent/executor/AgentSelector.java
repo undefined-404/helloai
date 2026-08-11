@@ -14,6 +14,7 @@ import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.system.service.CredentialVaultService;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -50,13 +51,28 @@ public class AgentSelector {
      * 分配与熔断降级应由 {@link com.helloai.core.agent.dispatcher.ResilientDispatcher} 统一完成。</p>
      */
     public Agent pickPreferred(AgentRole role) {
+        return pickPreferred(role, null);
+    }
+
+    /**
+     * V47（§6.58 P1）：带任务级约束的首选选人。
+     *
+     * <p>在 {@link #pickPreferred(AgentRole)} 基础上追加
+     * {@link AgentSelectionConstraints} 过滤（执行者白名单 + 技能 AND 匹配），
+     * 供任务指定 executorAgentIds / required_skills 时约束初始分配。</p>
+     *
+     * @param role        Agent 角色；为 null 时不限定角色
+     * @param constraints 任务级选人约束；null 表示不约束（与旧行为一致）
+     * @return 首选 Agent，无可选时返回 null
+     */
+    public Agent pickPreferred(AgentRole role, AgentSelectionConstraints constraints) {
         List<Agent> candidates;
         if (role != null) {
             candidates = agentService.listByRole(role);
         } else {
             candidates = agentService.listActive();
         }
-        return pickFromCandidates(candidates, null);
+        return pickFromCandidates(candidates, null, constraints);
     }
 
     /**
@@ -65,6 +81,8 @@ public class AgentSelector {
      * <p>过滤规则（按优先级）：
      * <ol>
      *   <li>跳过 excludeAgentId（被熔断或不可用的原 Agent）</li>
+     *   <li>V47：跳过不满足任务级约束的 Agent（{@link AgentSelectionConstraints}——
+     *       执行者白名单外、或未声明 required_skills 全部技能的 Agent）</li>
      *   <li>跳过 SLEEPING 状态</li>
      *   <li>跳过 OFFLINE 状态（v2.6 §4.1 由 markOfflineIfStale + Reconcile保证唯一性，
      *       API_KEY_LLM 豁免）</li>
@@ -86,18 +104,36 @@ public class AgentSelector {
      * @return 可用替代 Agent，无可选时返回 null
      */
     public Agent pickAlternative(Long excludeAgentId, AgentRole role) {
+        return pickAlternative(excludeAgentId, role, null);
+    }
+
+    /**
+     * V47（§6.58 P1）：带任务级约束的替代选人。
+     *
+     * <p>在 {@link #pickAlternative(Long, AgentRole)} 基础上追加
+     * {@link AgentSelectionConstraints} 过滤（执行者白名单 + 技能 AND 匹配），
+     * 供任务指定 executorAgentIds / required_skills 时约束重分配链（含熔断降级替代）。</p>
+     *
+     * @param excludeAgentId 需要排除的 Agent ID（原分配目标）
+     * @param role           Agent 角色；为 null 时不限定角色
+     * @param constraints    任务级选人约束；null 表示不约束（与旧行为一致）
+     * @return 可用替代 Agent，无可选时返回 null
+     */
+    public Agent pickAlternative(Long excludeAgentId, AgentRole role, AgentSelectionConstraints constraints) {
         List<Agent> candidates;
         if (role != null) {
             candidates = agentService.listByRole(role);
         } else {
             candidates = agentService.listActive();
         }
-        return pickFromCandidates(candidates, excludeAgentId);
+        return pickFromCandidates(candidates, excludeAgentId, constraints);
     }
 
-    private Agent pickFromCandidates(List<Agent> candidates, Long excludeAgentId) {
+    private Agent pickFromCandidates(List<Agent> candidates, Long excludeAgentId,
+                                     AgentSelectionConstraints constraints) {
         return candidates.stream()
                 .filter(a -> excludeAgentId == null || !a.getId().equals(excludeAgentId))
+                .filter(a -> constraints == null || constraints.allows(a))
                 .filter(a -> agentDispatchProperties.getForceAccessType() == null
                         || (a.getAccessType() != null && a.getAccessType() == agentDispatchProperties.getForceAccessType()))
                 .filter(a -> a.getOnlineStatus() != AgentOnlineStatus.SLEEPING)
@@ -274,6 +310,53 @@ public class AgentSelector {
     private static class CircuitOpenException extends RuntimeException {
         CircuitOpenException(String cbName) {
             super("CircuitBreaker OPEN: " + cbName);
+        }
+    }
+
+    /**
+     * 任务级选人约束（V47，§6.58 P1）。
+     *
+     * <p>由任务 {@code agent_policy.executorAgentIds} 与 {@code required_skills}
+     * 构建，注入选人链：白名单限定 + 技能 AND 匹配。约束为 null 或字段为空时
+     * 一律不限制，与旧行为完全一致。</p>
+     */
+    @Data
+    public static class AgentSelectionConstraints {
+
+        /** 执行者白名单；null/空 = 不限定；非空 = 只允许集合内的 Agent。 */
+        private List<Long> allowedAgentIds;
+
+        /** 任务要求技能；null/空 = 不限定；非空 = Agent.skills 必须全部包含（AND 语义）。 */
+        private List<String> requiredSkills;
+
+        public static AgentSelectionConstraints of(List<Long> allowedAgentIds, List<String> requiredSkills) {
+            AgentSelectionConstraints constraints = new AgentSelectionConstraints();
+            constraints.setAllowedAgentIds(allowedAgentIds);
+            constraints.setRequiredSkills(requiredSkills);
+            return constraints;
+        }
+
+        /** 无限制约束（等价于传 null，供调用方语义化表达"不约束"）。 */
+        public static AgentSelectionConstraints unrestricted() {
+            return new AgentSelectionConstraints();
+        }
+
+        /** 候选是否满足约束：白名单内（若有）且技能全匹配（若有）。防御式：agent 为 null 直接拒绝。 */
+        public boolean allows(Agent agent) {
+            if (agent == null) {
+                return false;
+            }
+            if (allowedAgentIds != null && !allowedAgentIds.isEmpty()
+                    && (agent.getId() == null || !allowedAgentIds.contains(agent.getId()))) {
+                return false;
+            }
+            if (requiredSkills != null && !requiredSkills.isEmpty()) {
+                List<String> skills = agent.getSkills();
+                if (skills == null || skills.isEmpty() || !skills.containsAll(requiredSkills)) {
+                    return false;
+                }
+            }
+            return true;
         }
     }
 }

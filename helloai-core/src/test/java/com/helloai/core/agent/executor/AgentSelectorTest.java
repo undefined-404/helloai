@@ -743,4 +743,119 @@ class AgentSelectorTest {
             verify(credentialVaultService, never()).hasActiveAgentCredential(2L);
         }
     }
+
+    @Nested
+    @DisplayName("任务级约束过滤（V47 §6.58 P1）")
+    class TaskLevelConstraints {
+
+        private Agent agentWithSkills(Long id, Integer score, List<String> skills) {
+            Agent a = agent(id, score, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            a.setSkills(skills);
+            return a;
+        }
+
+        @Test
+        @DisplayName("allowedAgentIds 白名单：名单外 Agent 被过滤，名单内高分者入选")
+        void shouldFilterOutAgentsOutsideWhitelist() {
+            Agent outside = agentWithSkills(2L, 100, List.of("shell"));
+            Agent insideLow = agentWithSkills(3L, 60, List.of("shell"));
+            Agent insideHigh = agentWithSkills(4L, 95, List.of("shell"));
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(outside, insideLow, insideHigh));
+            when(circuitBreakerRegistry.find("agentDispatch-3")).thenReturn(Optional.empty());
+            when(circuitBreakerRegistry.find("agentDispatch-4")).thenReturn(Optional.empty());
+
+            Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR,
+                    AgentSelector.AgentSelectionConstraints.of(List.of(3L, 4L), null));
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(4L);
+        }
+
+        @Test
+        @DisplayName("allowedAgentIds 白名单：名单内无候选时返回 null")
+        void shouldReturnNullWhenNoCandidateInWhitelist() {
+            Agent outside = agentWithSkills(2L, 100, List.of("shell"));
+            when(agentService.listByRole(AgentRole.EXECUTOR)).thenReturn(List.of(outside));
+
+            Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR,
+                    AgentSelector.AgentSelectionConstraints.of(List.of(99L), null));
+
+            assertThat(result).isNull();
+        }
+
+        @Test
+        @DisplayName("requiredSkills：Agent 必须全部具备（AND 语义），缺任一技能被过滤")
+        void shouldRequireAllSkills() {
+            Agent hasShellOnly = agentWithSkills(2L, 100, List.of("shell"));
+            Agent hasAll = agentWithSkills(3L, 60, List.of("shell", "docker"));
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(hasShellOnly, hasAll));
+            when(circuitBreakerRegistry.find("agentDispatch-3")).thenReturn(Optional.empty());
+
+            Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR,
+                    AgentSelector.AgentSelectionConstraints.of(null, List.of("shell", "docker")));
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(3L);
+        }
+
+        @Test
+        @DisplayName("requiredSkills：Agent 未声明任何技能（旧数据）时被过滤")
+        void shouldFilterOutAgentWithoutDeclaredSkills() {
+            Agent noSkills = agent(2L, 100, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            Agent withSkill = agentWithSkills(3L, 60, List.of("shell"));
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(noSkills, withSkill));
+            when(circuitBreakerRegistry.find("agentDispatch-3")).thenReturn(Optional.empty());
+
+            Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR,
+                    AgentSelector.AgentSelectionConstraints.of(null, List.of("shell")));
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(3L);
+        }
+
+        @Test
+        @DisplayName("空约束字段 = 不限制（技能空列表不产生过滤）")
+        void shouldNotRestrictWhenConstraintFieldsEmpty() {
+            Agent plain = agentWithSkills(2L, 80, List.of());
+            when(agentService.listByRole(AgentRole.EXECUTOR)).thenReturn(List.of(plain));
+            when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
+
+            Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR,
+                    AgentSelector.AgentSelectionConstraints.of(List.of(), List.of()));
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(2L);
+        }
+
+        @Test
+        @DisplayName("pickPreferred 带约束：初始分配同样受白名单限定")
+        void shouldApplyConstraintsOnPickPreferred() {
+            Agent outside = agentWithSkills(2L, 100, List.of("shell"));
+            Agent inside = agentWithSkills(3L, 70, List.of("shell"));
+
+            when(agentService.listByRole(AgentRole.EXECUTOR)).thenReturn(List.of(outside, inside));
+            when(circuitBreakerRegistry.find("agentDispatch-3")).thenReturn(Optional.empty());
+
+            Agent result = agentSelector.pickPreferred(AgentRole.EXECUTOR,
+                    AgentSelector.AgentSelectionConstraints.of(List.of(3L), null));
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(3L);
+        }
+
+        @Test
+        @DisplayName("allows：agent 为 null 时直接拒绝（防御式）")
+        void shouldRejectNullAgentInAllows() {
+            AgentSelector.AgentSelectionConstraints constraints =
+                    AgentSelector.AgentSelectionConstraints.unrestricted();
+
+            assertThat(constraints.allows(null)).isFalse();
+        }
+    }
 }

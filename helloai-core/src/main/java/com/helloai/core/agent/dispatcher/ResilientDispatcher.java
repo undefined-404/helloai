@@ -7,6 +7,7 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.executor.AgentSelector.AgentSelectionConstraints;
 import io.github.resilience4j.core.ConfigurationNotFoundException;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
@@ -81,6 +82,26 @@ public class ResilientDispatcher {
      */
     @CircuitBreaker(name = "agentDispatch", fallbackMethod = "assignNextFallback")
     public void assignNext(Long agentId, Long subTaskId) {
+        doAssignNext(agentId, subTaskId, null);
+    }
+
+    /**
+     * V47（§6.58 P1）：带任务级约束的弹性分配。
+     *
+     * <p>在 {@link #assignNext(Long, Long)} 基础上贯穿任务级选人约束
+     * （执行者白名单 + 技能 AND 匹配）：首选 fast-fail 后，fallback 替代选人
+     * 同样受约束，保证整条分配链不选到任务指定范围外的 Agent。</p>
+     *
+     * @param agentId     目标 Agent ID
+     * @param subTaskId   待分配的子任务 ID
+     * @param constraints 任务级选人约束；null 表示不约束（与旧行为一致）
+     */
+    @CircuitBreaker(name = "agentDispatch", fallbackMethod = "assignNextFallbackWithConstraints")
+    public void assignNext(Long agentId, Long subTaskId, AgentSelectionConstraints constraints) {
+        doAssignNext(agentId, subTaskId, constraints);
+    }
+
+    private void doAssignNext(Long agentId, Long subTaskId, AgentSelectionConstraints constraints) {
         // 按 agentId 维度获取独立熔断器（以 agentDispatch 配置为模板）
         io.github.resilience4j.circuitbreaker.CircuitBreaker perAgentCb = resolvePerAgentCircuitBreaker(agentId);
 
@@ -91,6 +112,13 @@ public class ResilientDispatcher {
             Agent agent = agentService.getById(agentId);
             if (agent == null) {
                 throw new BizException("Agent 不存在: " + agentId);
+            }
+
+            // V47：首选 Agent 必须满足任务级约束（防御调用方直接指定白名单外/无技能
+            // Agent）；不满足时 fast-fail 走 fallback，由受约束的替代选人兜底。
+            if (constraints != null && !constraints.allows(agent)) {
+                throw new AgentUnavailableException(
+                        "首选 Agent 不满足任务级选人约束: agentId=" + agentId + ", subTaskId=" + subTaskId, agentId);
             }
 
             // 快速失败：跳过明显不可用的 Agent（抛 AgentUnavailableException，不计入熔断统计）
@@ -176,6 +204,18 @@ public class ResilientDispatcher {
      */
     @SuppressWarnings("unused")
     private void assignNextFallback(Long agentId, Long subTaskId, Throwable t) {
+        doAssignNextFallback(agentId, subTaskId, null, t);
+    }
+
+    /** V47：带任务级约束的熔断降级（替代选人同样受约束，见 {@link #assignNext(Long, Long, AgentSelectionConstraints)}）。 */
+    @SuppressWarnings("unused")
+    private void assignNextFallbackWithConstraints(Long agentId, Long subTaskId,
+                                                   AgentSelectionConstraints constraints, Throwable t) {
+        doAssignNextFallback(agentId, subTaskId, constraints, t);
+    }
+
+    private void doAssignNextFallback(Long agentId, Long subTaskId,
+                                      AgentSelectionConstraints constraints, Throwable t) {
         log.warn("调度降级触发: agentId={}, subTaskId={}, reason={}",
                 agentId, subTaskId, t.getMessage());
 
@@ -183,8 +223,8 @@ public class ResilientDispatcher {
         Agent originalAgent = agentService.getById(agentId);
         AgentRole role = originalAgent != null ? originalAgent.getRole() : null;
 
-        // 选取替代 Agent
-        Agent alternative = agentSelector.pickAlternative(agentId, role);
+        // 选取替代 Agent（V47：任务级约束贯穿 fallback，选人不越出白名单/技能范围）
+        Agent alternative = agentSelector.pickAlternative(agentId, role, constraints);
 
         if (alternative == null) {
             String msg = String.format(
