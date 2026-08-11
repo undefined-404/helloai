@@ -4368,3 +4368,28 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 - 影响：V47 迁移三列（纯增量，默认值兼容旧数据）；行为变化——任务创建入口可写 policy / required_skills（当前由任务创建侧写库，平台侧提供 build 工具类）；N11 回退受任务策略约束。
 - 遗留：① 任务创建/编辑前端暂未暴露 policy 编辑 UI（API 层与工具类已就绪，留待前端迭代）；② `agent.skills` 暂由注册侧/管理员维护，未做 Agent 能力自动推导；③ required_skills 技能匹配为精确字符串全匹配（AND），未做同义词/层级归一。
 
+### 6.60 改派/抢占撤销通知（A0-1：trae 实战反馈一.1「任务改派后旧 agent 无撤销事件」）（2026-08-11）
+
+#### 1. 背景与结论
+
+- **实战痛点（trae 1925）**：任务改派/抢占后旧 agent 只收到「分配」通知，无「改派/撤销」事件，误以为任务仍在名下继续干活（冷启动白做）。
+- **入口梳理结论**：全部改派入口（dispatchBlockedSubTask / redispatchOfflineSubTask / redispatchForFallback / redispatchAssignedTimeout / redispatchDeadLetter）共用 `resetToPendingForDispatch`（直接 updateById 清空 assignedAgentId，无任何通知）；重新 ASSIGNED 只通知新 agent——旧 agent 完全感知不到任务转移。人工改派/人工驳回换派走 changeStatus / reworkFresh，同样无撤销事件。
+- **收口设计**：不在 4 个改派入口各自补发（易漏），而在 `SubTaskService` 咽喉点 `changeStatus` + `rework` + `reworkFresh` 内做换人检测（oldAgentId != null && != newAgentId），一处覆盖全部路径（含人工改派、reworkFresh 换派、dead-letter 重派）；dead-letter 路径（changeStatus(DEAD_LETTER, null) 保留原执行者 → old==new 不触发，redispatchDeadLetter 换人时触发 reassigned）。
+
+#### 2. 实现要点
+
+- **SubTaskService.notifyAgentHandover**（新增私有方法）：换人（newAgentId != null）→ 旧执行者收 `sub_task.reassigned`（「任务已改派，请立即停止执行」）；回收（newAgentId == null）→ `sub_task.unassigned`（「任务已回收」）；初始分配（old == null）与原地保留（old == new）不通知；eventId `subtask.{id}.handover.{ts}` 保证幂等；复用 AgentInboxService.send（API_KEY_LLM 旧执行者由内部守卫跳过，消费链走 outbox→MQ）。
+- **changeStatus**：变更前快照 oldAgentId，updateById 后调用 notifyAgentHandover；**rework / reworkFresh**：同样快照 + 通知（reworkFresh 换派场景旧执行者收 reassigned，不换派不发）。
+- **McpToolService.pullTasks**：sub_task 消息若子任务当前执行者 ≠ 本 agent（含已回收 null）→ 消息带 `reassigned=true` + `currentAgentId`（回收时仅 true，currentAgentId 为 null）。
+- **executor SKILL.md**：新增 §1.5.1.bis 收件箱消息类型与撤销语义表（reassigned / unassigned 收到即停止执行）。
+- **顺带修复真实 bug**：reworkFresh 人工驳回不换派（reworkAgentId=null）时 `Map.of("reworkAgentId", null)` 抛 NPE——改用 HashMap（此前不换派驳回会 500）。
+
+#### 3. 验证结果
+
+- `mvn -pl helloai-core -am test -DskipTests=false -Dtest=SubTaskServiceHandoverTest,McpToolServiceTest,SubTaskServiceIsReadyTest`：**全部通过**（SubTaskServiceHandoverTest 7 用例：改派双通知 unassigned+assigned / 回收 unassigned / 初始分配不发 / 原地保留不发 / reworkFresh 换派 / reworkFresh 不换派 / rework 换人；McpToolServiceTest 3 用例：已转移打标 / 未转移不打标 / 回收打标 currentAgentId 空；SubTaskServiceIsReadyTest 8 回归）。
+
+#### 4. 影响与遗留
+
+- 影响：无 DB 迁移；行为变化——改派/回收后旧执行者一个轮询周期内（pullTasks 30s）可感知任务已转移；SKILL 同步消息类型语义。
+- 遗留：无（验收达成：改派后旧 agent 一个轮询周期内可感知任务已转移）。
+

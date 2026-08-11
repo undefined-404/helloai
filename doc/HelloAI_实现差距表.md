@@ -14,7 +14,7 @@
 
 ## 2. 当前总体结论
 
-- 已交付闭环：MCP SSE 接入、鉴权、核心工具链路、在线状态三件套、熔断降级、Reconcile 健康检查、AgentHub V3 门铃通知通道（PR-1/2/3 + 运行时 E2E 实测 ALL PASSED + PR-4 保活帧/双心跳；**2026-08-07 已搁置**——外部 Agent 无法处理平台推送，见 N13）、外部 Agent 一键接入全套化（checkIn/checkOut 纳入默认授权 + executor SKILL 升级为含 MCP 全套工具/打卡/门铃的完整说明书）
+- 已交付闭环：MCP SSE 接入、鉴权、核心工具链路、在线状态三件套、熔断降级、Reconcile 健康检查、AgentHub V3 门铃通知通道（PR-1/2/3 + 运行时 E2E 实测 ALL PASSED + PR-4 保活帧/双心跳；**2026-08-07 已搁置**——外部 Agent 无法处理平台推送，见 N13）、外部 Agent 一键接入全套化（checkIn/checkOut 纳入默认授权 + executor SKILL 升级为含 MCP 全套工具/打卡/门铃的完整说明书）、**改派/抢占撤销通知（A0-1，§6.60：改派/回收后旧执行者收 sub_task.reassigned / sub_task.unassigned + pullTasks 消息 reassigned 标记，一个轮询周期内可感知任务已转移）**
 - 文档失真：历史路线图、技术方案与部分说明文档曾混入过时事实或实施日志
 - 部分落地：执行命令主链、Provider 配置复用、工牌模式与 `credential_vault`
 - 未落地：工作流模板、浏览器型 Agent 真实接入链路
