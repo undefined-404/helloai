@@ -265,8 +265,26 @@ class AgentHealthCheckTaskTest {
         }
 
         @Test
-        @DisplayName("CAS 标 OFFLINE 返回 1 → 调用 reassignStaleTasks + 写 timeline + recordFailure")
+        @DisplayName("CAS 标 OFFLINE 返回 1 + 有在跑任务 → 重派 + 写 timeline + recordFailure")
         void shouldProcessWhenCasSucceeds() {
+            Agent stale = cliAgent(101L, AgentRole.EXECUTOR);
+            stale.setLastSeenTime(OffsetDateTime.now().minusMinutes(10));
+            when(agentMapper.selectByLastSeenBefore(any(OffsetDateTime.class))).thenReturn(List.of(stale));
+            when(agentMapper.markOfflineIfStale(any(), any(), anyString(), anyString(), any()))
+                    .thenReturn(1);  // CAS 成功
+            when(subTaskMapper.selectList(any(LambdaQueryWrapper.class)))
+                    .thenReturn(List.of(assignedSubTask(11L, 101L)));
+
+            task.checkHealth();
+
+            verify(taskTimelineService, times(1)).recordEvent(
+                    any(), any(), eq("agent_offline"), eq(AgentRole.EXECUTOR), eq(101L), any());
+            verify(failureTracker, times(1)).recordFailure(101L);
+        }
+
+        @Test
+        @DisplayName("CAS 标 OFFLINE 返回 1 + 无在跑任务（提交后静默待命）→ 不 recordFailure")
+        void shouldNotRecordFailureWhenNoInFlightTasks() {
             Agent stale = cliAgent(101L, AgentRole.EXECUTOR);
             stale.setLastSeenTime(OffsetDateTime.now().minusMinutes(10));
             when(agentMapper.selectByLastSeenBefore(any(OffsetDateTime.class))).thenReturn(List.of(stale));
@@ -276,9 +294,11 @@ class AgentHealthCheckTaskTest {
 
             task.checkHealth();
 
+            // 语义修正（§6.58）：心跳丢失但无在跑任务不视为执行失败，
+            // 避免"提交后停止心跳"的客户端每完成一个任务就被计 1 次失败
             verify(taskTimelineService, times(1)).recordEvent(
                     any(), any(), eq("agent_offline"), eq(AgentRole.EXECUTOR), eq(101L), any());
-            verify(failureTracker, times(1)).recordFailure(101L);
+            verify(failureTracker, never()).recordFailure(anyLong());
         }
 
         @Test

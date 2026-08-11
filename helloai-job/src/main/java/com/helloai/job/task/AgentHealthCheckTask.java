@@ -131,8 +131,8 @@ public class AgentHealthCheckTask {
         log.warn("Agent 标 OFFLINE: agentId={}, name={}, role={}, lastSeen={}",
                 agent.getId(), agent.getName(), agent.getRole(), agent.getLastSeenTime());
 
-        // 3) 重新分配任务（v1.1 占位：阶段 4.6 AgentSelector.pickAlternative() 完成后再实装）
-        reassignStaleTasks(agent);
+        // 3) 重新分配任务（返回发现的在跑任务数；无在跑任务不视为执行失败）
+        int inFlightCount = reassignStaleTasks(agent);
 
         // 4) 写 task_timeline 审计
         AgentRole role = agent.getRole() != null ? agent.getRole() : AgentRole.EXECUTOR;
@@ -150,9 +150,14 @@ public class AgentHealthCheckTask {
                         "agent_name", agent.getName() != null ? agent.getName() : "unknown"
                 ));
 
-        // 5) N11 阈值回退计数：心跳丢失 / 离线被视为执行失败。
-        // 已被 SQL 条件限定 access_type=CLI_CLIENT（API_KEY_LLM/WEB_BROWSER 不会写库）。
-        failureTracker.recordFailure(agent.getId());
+        // 5) N11 阈值回退计数（§6.58 语义修正）：仅当离线时有在跑任务（ASSIGNED/IN_PROGRESS）
+        //    才视为执行失败——心跳丢失导致任务中断，语义成立；无在跑任务说明客户端只是
+        //    "提交后停止心跳"的静默待命（trae 实测形态），若计入失败会把干活的 agent
+        //    每完成一个任务就计 1 次失败，误伤 N11 阈值回退。
+        //    已被 SQL 条件限定 access_type=CLI_CLIENT（API_KEY_LLM/WEB_BROWSER 不会写库）。
+        if (inFlightCount > 0) {
+            failureTracker.recordFailure(agent.getId());
+        }
     }
 
     /**
@@ -193,10 +198,11 @@ public class AgentHealthCheckTask {
      * 日志区分“弹性 fallback 成功”“自动重新选人成功”“两层均失败”。</p>
      *
      * @param staleAgent 离线 Agent 实体（传递实体以获取 role，避免二次查库）
+     * @return 发现的在跑任务数（ASSIGNED/IN_PROGRESS），调用方据此决定是否计入失败
      */
-    private void reassignStaleTasks(Agent staleAgent) {
+    private int reassignStaleTasks(Agent staleAgent) {
         if (staleAgent == null || staleAgent.getId() == null) {
-            return;
+            return 0;
         }
         Long agentId = staleAgent.getId();
         AgentRole fallbackRole = staleAgent.getRole() != null
@@ -210,7 +216,7 @@ public class AgentHealthCheckTask {
 
         if (staleTasks.isEmpty()) {
             log.info("Agent {} 离线，无待重分配任务", agentId);
-            return;
+            return 0;
         }
 
         log.warn("Agent {} 离线，待重分配任务数: {}", agentId, staleTasks.size());
@@ -249,6 +255,7 @@ public class AgentHealthCheckTask {
 
         log.info("Agent {} 离线任务重分配完成: total={}, fallback={}, autoReselect={}, failed={}",
                 agentId, staleTasks.size(), reassignedByFallback, reassignedByAuto, failed);
+        return staleTasks.size();
     }
 
     private boolean tryLock() {
