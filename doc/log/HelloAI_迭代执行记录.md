@@ -4320,3 +4320,51 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 - 影响：无 DB 迁移；行为变化——人工驳回后 reworkCount 归零（新执行者有完整 3 次机会）、manualIntervention 清除（前端面板自动隐藏、PENDING 兜底巡检恢复对该任务可见）；自动驳回路径不变。
 - 遗留：① 存量卡死任务 1924/1926 部署新代码后：1924 的 trae 产出实际合格（PASS=12 FAIL=0），前端面板"直接通过"即可闭环；或"驳回改派"后新执行者正常走审核；1926 需人工处置；② trae-executor `consecutive_failure_count=2` 疑似把"系统跳过审核"计为外部 agent 失败，观察 ExternalAgentFailureTracker 是否把 skip 类事件计入失败（待确认，不在本次范围）。
 
+### 6.58 AgentHealthCheckTask 语义修正：无在跑子任务不记 N11 失败 + executor SKILL 心跳强化（2026-08-11）
+
+#### 1. 背景与决策
+
+- **真实形态**：trae-executor 等外部 Agent"提交产出后静默待命"（不再发心跳但也不下线）——按旧逻辑 `handleAgentOffline` 无条件 `failureTracker.recordFailure(agent.getId())`，每完成一个任务就累计 1 次失败，叠加到 N11 阈值后触发误回退（干活的 Agent 被错误替换）。
+- **决策**：离线时仅当存在在跑任务（ASSIGNED/IN_PROGRESS）才视为执行失败——心跳丢失导致任务中断，失败语义成立；无在跑任务说明客户端只是"提交后停止心跳"的静默待命，不计失败。
+
+#### 2. 实际落地
+
+- **AgentHealthCheckTask**：`reassignStaleTasks` 由 void 改为返回在跑任务数（staleTasks.size()，空则 0）；`handleAgentOffline` 中 `int inFlightCount = reassignStaleTasks(agent)`，仅 `inFlightCount > 0` 时 `failureTracker.recordFailure`，其余路径（agent 为 null / 无待重分配任务）一律返回 0 不计失败。
+- **executor SKILL.md**：§1.3 心跳节拍前新增"提交不等于下班"警示块——`submitResult` / `ack` 后必须回到步骤 3 继续心跳轮询等待下一单；提交后静默退出会在 5 分钟内被判 OFFLINE（即使产出合格）且后续任务被重派；只有确认下线才走「下线清理剧本」。
+
+#### 3. 验证结果
+
+- `AgentHealthCheckTaskTest` 12 用例全绿（含"无在跑任务离线不计失败"新增断言）。
+
+#### 4. 影响与遗留
+
+- 影响：无 DB 迁移；N11 失败计数只统计"离线时确有在跑任务"的场景，静默待命 Agent 不再被误伤。
+- 遗留：无。
+
+### 6.59 任务级 agentPolicy + 能力声明落地（V47）：Planner/Executor/Reviewer 指定语义 + N11 回退策略约束 + 技能匹配（2026-08-11）
+
+#### 1. 背景与决策
+
+- **对齐目标态**：架构参考 §4.8 目标态八「Agent 能力满足当前子任务要求」——任务可显式指定执行/拆解/核验角色，且选人链按任务要求过滤 Agent 能力，防止"无能力 Agent 被自动选中 → 返工循环"。
+- **决策**（用户拍板完整方案 P1）：任务级 `agent_policy` JSONB（plannerAgentId / executorAgentIds[] / reviewerAgentId / fallbackPolicy AUTO·RESTRICTED·NONE / difficulty LOW·MEDIUM·HIGH）+ 任务 `required_skills`（AND 语义）+ Agent `skills`，选人链贯穿约束；N11 回退按策略约束（NONE / HIGH 禁止自动回退改人工介入；RESTRICTED 仅回退白名单内 API_KEY_LLM）。
+
+#### 2. 实际落地
+
+- **Flyway V47**：`task.agent_policy`（JSONB 默认 `{}`）、`task.required_skills`（JSONB 默认 `[]`）、`agent.skills`（JSONB 默认 `[]`）三列 + COMMENT + DO 验证块；旧数据行为与默认值完全一致（防御式回落默认）。
+- **TaskAgentPolicy**（core/task/service 静态工具类）：全部 policy 读取/判定收口——plannerAgentId / executorAgentIds（List 防御转换）/ reviewerAgentId / fallbackPolicy（非法回落 AUTO）/ difficulty（非法回落 MEDIUM）/ isFallbackForbidden（NONE 或 HIGH）/ build（null 与空键不写入，测试与写库入口复用）。
+- **AgentSelector 约束链**：新增嵌套类 `AgentSelectionConstraints`（allowedAgentIds 空=不限制 + requiredSkills 非空=全匹配 AND，agent null 直接拒绝）；`pickPreferred` / `pickAlternative` 增加 3 参重载，`pickFromCandidates` 在 exclude 过滤后追加约束过滤环（集合限定 + 技能匹配）。
+- **ResilientDispatcher 3 参重载**：`assignNext(agentId, subTaskId, constraints)` + 独立 fallbackMethod（规避 Spring AOP 同类内部委托失效）；`doAssignNext` 内首选不满足约束 fast-fail 抛 AgentUnavailableException → 走受约束 fallback（`pickAlternative(agentId, role, constraints)`），保证 fallback 不越出白名单/技能范围。
+- **Planner 指定语义**（PlannerAgentPicker.pickForTask）：`task.agent_policy.plannerAgentId` 优先于会话钉住；失效（删除/禁用）回退自动选择（由 pick 内置），不阻断拆解。
+- **Executor 五入口接约束**（SubTaskDispatchService）：dispatchBlockedSubTask / redispatchOfflineSubTask / dispatchPendingSubTaskAuto / redispatchAssignedTimeout 均解析任务 policy → `AgentSelectionConstraints` 传入选人与派发；`resolveConstraints` / `loadAgentPolicy` / `loadTask` 辅助方法防御式读取（task 缺失按无约束处理）。
+- **N11 回退策略约束**（redispatchForFallback）：`isFallbackForbidden`（fallbackPolicy=NONE 或 difficulty=HIGH）→ 跳过回退 + timeline `sub_task_fallback_skip_policy` + `markManualIntervention("fallback_skip_policy")`，不落 LLM；RESTRICTED → 仅回退 executorAgentIds 内 API_KEY_LLM，目标不在集合（或集合空）等同 NONE 打人工介入标记。
+- **Reviewer 指定语义**（SubTaskReviewService.pickReviewerAgent）：`task.agent_policy.reviewerAgentId` 优先——指定 Agent 可用（存在且 ACTIVE 且 API_KEY_LLM）直接采用；失效 log.warn 后回退原自动链（pickPreferred REVIEWER → 同角色 API_KEY_LLM → PLANNER 角色 API_KEY_LLM）。
+
+#### 3. 验证结果
+
+- `mvn -pl helloai-core -am test -DskipTests=false -Dtest=TaskAgentPolicyTest,AgentSelectorTest,PlannerAgentPickerTest,SubTaskDispatchServiceTest,SubTaskReviewServiceTest`：**Tests run: 90, Failures: 0, Errors: 0**（TaskAgentPolicyTest 5 / AgentSelectorTest 37 含 TaskLevelConstraints 7 用例 / PlannerAgentPickerTest 13 / SubTaskDispatchServiceTest 19 含 V47 四用例 / SubTaskReviewServiceTest 16 含指定优先与失效回退两用例）。
+
+#### 4. 影响与遗留
+
+- 影响：V47 迁移三列（纯增量，默认值兼容旧数据）；行为变化——任务创建入口可写 policy / required_skills（当前由任务创建侧写库，平台侧提供 build 工具类）；N11 回退受任务策略约束。
+- 遗留：① 任务创建/编辑前端暂未暴露 policy 编辑 UI（API 层与工具类已就绪，留待前端迭代）；② `agent.skills` 暂由注册侧/管理员维护，未做 Agent 能力自动推导；③ required_skills 技能匹配为精确字符串全匹配（AND），未做同义词/层级归一。
+
