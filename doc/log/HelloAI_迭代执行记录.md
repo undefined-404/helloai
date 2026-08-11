@@ -4297,3 +4297,26 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 - 影响：无 DB 迁移；ResilientDispatcher 构造器新增 2 依赖（Spring 自动注入无配置变更）；行为变化——执行密集任务不会再被分给无本机能力 Agent（含 fallback 替代），审核侧不再自动核验无能力提交者的执行密集产出，两条兜底巡检不再重派带人工标记的 PENDING。
 - 遗留：① 存量卡死任务 1924/1926（REVIEW）需部署新代码后由孤儿扫描补标（≤60s），前端人工介入面板处置；② inner 幻觉执行的审核辨别仍依赖证据信号从严条款（§6.54），本修复从"源头不派"层面消除无能力执行；③ `SubTaskDispatchService.isExecutionDense` 关键词启发式误判率观察后再议（承 §6.55 遗留③）。
 
+### 6.57 人工驳回重置返工计数：修复"改派后新执行者提交仍命中 skip_max_rework 跳过审核、无节点流转"（2026-08-11）
+
+#### 1. 背景与决策
+
+- **真实事故 3（承 §6.52/6.55/6.56 同源 1924/1926）**：用户反馈"内部 LLM 接任务完成反馈不佳、驳回 3 次直接跳过验证，人工介入重新分配其他外部/内部 agent 后失败次数未重新计算，review 角色审核时出现跳过审核、无节点流转"。**数据库实证（helloai 库）**：1924「verify-order-expire.ps1」07:51 inner-loop-executor（API_KEY_LLM 无本机能力）执行 → 07:52-07:54 自动驳回 3 轮（review_record round 1-3）→ 07:54:06 `sub_task_auto_review_skip_max_rework` 停 REVIEW → 08:15 人工改派 trae-executor（round 4 REJECTED）→ 08:31-08:33 trae **真实执行完成**（context.lastExecution：脚本落地并实际运行 PASS=12 FAIL=0 全绿）→ 08:33:22 提交后**再次** `sub_task_auto_review_skip_max_rework`（reworkCount 仍是 3）→ 此后无任何事件，**合格产出无人审核、永久卡 REVIEW**。1926「生成验证报告」同构卡死（08:41:07 skip 后无人工处置记录）。
+- **根因**：自动驳回走 `SubTaskService.rework()` 累加 reworkCount，而人工驳回（`ReviewService.createReview` REJECTED）只走 `changeStatus` 不重置计数——改派后 reworkCount 残留 3，新执行者提交即命中 `reworkCount >= autoReviewMaxRework` 跳过自动核验；且 `manualIntervention` 标记在人工拍板后不清除，前端面板残留、PENDING 兜底巡检持续跳过。
+- **决策**（用户拍板"所有人工驳回都重置"）：人工驳回 = 用户拍板开启新一轮，无论是否换 agent 都重置计数并清除标记；自动驳回仍累加（3 次后停），两条路径语义分工。
+
+#### 2. 实际落地
+
+- **SubTaskService.reworkFresh**（新增，与 `rework` 并列）：REVIEW→REWORK 状态校验 + `reworkCount=0` + `assignedAgentId` 换派（可空则保持原执行者）+ 清除 `context.manualIntervention` + outbox 事件 + timeline `sub_task_manual_rework_reset`。
+- **ReviewService.createReview**：REJECTED 分支由 `changeStatus` 改走 `reworkFresh`——人工驳回统一重置计数并清除介入标记，改派后的新执行者从 0 开始计数，提交后走正常自动核验链路。
+
+#### 3. 验证结果
+
+- `mvn -pl helloai-core -am test -DskipTests=false -Dtest=ReviewServiceTest,SubTaskReviewServiceTest`：**全部通过**。新增 `ReviewServiceTest` 4 用例（人工驳回改派走 reworkFresh / 不改派同样重置 / 人工通过走 complete 不触发重置 / 驳回缺 issues 抛 BizException）；`SubTaskReviewServiceTest` 14 用例无回归。
+- **数据库旁证**：1924 改派后 trae 提交（execute_submit 08:33:22）→ 08:33:22.773 skip_max_rework，两次 skip 间隔内无任何 review_record 写入——实证"跳过审核 + 无节点流转"。
+
+#### 4. 影响与遗留
+
+- 影响：无 DB 迁移；行为变化——人工驳回后 reworkCount 归零（新执行者有完整 3 次机会）、manualIntervention 清除（前端面板自动隐藏、PENDING 兜底巡检恢复对该任务可见）；自动驳回路径不变。
+- 遗留：① 存量卡死任务 1924/1926 部署新代码后：1924 的 trae 产出实际合格（PASS=12 FAIL=0），前端面板"直接通过"即可闭环；或"驳回改派"后新执行者正常走审核；1926 需人工处置；② trae-executor `consecutive_failure_count=2` 疑似把"系统跳过审核"计为外部 agent 失败，观察 ExternalAgentFailureTracker 是否把 skip 类事件计入失败（待确认，不在本次范围）。
+
