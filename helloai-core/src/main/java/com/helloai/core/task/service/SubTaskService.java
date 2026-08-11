@@ -193,6 +193,8 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
         }
 
         SubTaskStatus oldStatus = subTask.getStatus();
+        // A0-1（§6.60）：变更前执行者快照——换人/回收时需告知旧执行者任务已转移
+        Long oldAgentId = subTask.getAssignedAgentId();
         SubTaskStateMachine.validate(oldStatus, newStatus);
 
         if (contextPatch != null && !contextPatch.isEmpty()) {
@@ -217,6 +219,8 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
 
         // v1.1: 投递收件箱通知
         sendInboxNotification(subTask, newStatus, oldStatus);
+        // A0-1（§6.60）：执行者变更（换人/回收）时告知旧执行者，防止误以为任务仍在名下继续干活
+        notifyAgentHandover(subTask, oldAgentId);
         publishAssignmentEvent(subTask, newStatus);
         if (subTask.getAssignedAgentId() != null
                 && (newStatus == SubTaskStatus.IN_PROGRESS || newStatus == SubTaskStatus.REVIEW)) {
@@ -390,6 +394,39 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
         }
     }
 
+    /**
+     * A0-1（§6.60）执行者变更撤销通知：旧执行者收不到"任务已转移"事件时，
+     * 会误以为任务仍在名下继续干活（trae 1925 冷启动白做）。
+     *
+     * <p>在换人（旧执行者 A → 新执行者 B）或回收（执行者被清空）时，向旧执行者
+     * 补发 {@code sub_task.reassigned} / {@code sub_task.unassigned} 收件箱通知：
+     * <ul>
+     *   <li>换人（newAgentId != null）：任务已改派给其他 Agent，立即停止执行；</li>
+     *   <li>回收（newAgentId == null）：任务已从名下回收（回 PENDING / 死信），停止执行。</li>
+     * </ul>
+     * 初始分配（oldAgentId == null）与原地保留（old == new）不通知。
+     * API_KEY_LLM 旧执行者由 {@link AgentInboxService#send} 内部守卫跳过（其消费链走 outbox→MQ）。</p>
+     */
+    private void notifyAgentHandover(SubTask subTask, Long oldAgentId) {
+        Long newAgentId = subTask.getAssignedAgentId();
+        if (oldAgentId == null || oldAgentId.equals(newAgentId)) {
+            return;
+        }
+        String eventId = "subtask." + subTask.getId() + ".handover." + System.currentTimeMillis();
+        String title = subTask.getTitle();
+        if (newAgentId != null) {
+            agentInboxService.send(oldAgentId, eventId, "sub_task.reassigned",
+                    "任务已改派: " + title,
+                    "该任务已改派给其他 Agent，请立即停止执行并等待新任务",
+                    "sub_task", subTask.getId(), "HIGH");
+        } else {
+            agentInboxService.send(oldAgentId, eventId, "sub_task.unassigned",
+                    "任务已回收: " + title,
+                    "该任务已从你名下回收，请立即停止执行并等待新任务",
+                    "sub_task", subTask.getId(), "HIGH");
+        }
+    }
+
     private void publishAssignmentEvent(SubTask subTask, SubTaskStatus newStatus) {
         if (newStatus != SubTaskStatus.ASSIGNED || subTask.getAssignedAgentId() == null) {
             return;
@@ -403,12 +440,16 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
         SubTask subTask = getById(subTaskId);
         if (subTask == null) throw new BizException("子任务不存在: " + subTaskId);
         SubTaskStateMachine.validate(subTask.getStatus(), SubTaskStatus.REWORK);
+        // A0-1（§6.60）：变更前执行者快照（自动驳回一般保持原执行者，防御性兼容换人）
+        Long oldAgentId = subTask.getAssignedAgentId();
         subTask.setStatus(SubTaskStatus.REWORK);
         subTask.setReworkCount(subTask.getReworkCount() != null ? subTask.getReworkCount() + 1 : 1);
         if (reworkAgentId != null) {
             subTask.setAssignedAgentId(reworkAgentId);
         }
         updateById(subTask);
+        // A0-1（§6.60）：执行者变更（换人/回收）时告知旧执行者
+        notifyAgentHandover(subTask, oldAgentId);
         agentOutboxService.createEvent(subTask, SubTaskStatus.REWORK);
         log.info("子任务驳回返工: subTaskId={}, reworkCount={}", subTaskId, subTask.getReworkCount());
     }
@@ -429,6 +470,8 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
         SubTask subTask = getById(subTaskId);
         if (subTask == null) throw new BizException("子任务不存在: " + subTaskId);
         SubTaskStateMachine.validate(subTask.getStatus(), SubTaskStatus.REWORK);
+        // A0-1（§6.60）：变更前执行者快照——人工驳回改派时需告知旧执行者任务已转移
+        Long oldAgentId = subTask.getAssignedAgentId();
         subTask.setStatus(SubTaskStatus.REWORK);
         subTask.setReworkCount(0);
         if (reworkAgentId != null) {
@@ -440,10 +483,15 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
             subTask.setContext(ctx);
         }
         updateById(subTask);
+        // A0-1（§6.60）：执行者变更（换人/回收）时告知旧执行者
+        notifyAgentHandover(subTask, oldAgentId);
         agentOutboxService.createEvent(subTask, SubTaskStatus.REWORK);
+        // 注意：Map.of 不接受 null 值，reworkAgentId 可能为 null（不换派原执行者重做），必须用 HashMap
+        Map<String, Object> extra = new HashMap<>();
+        extra.put("reworkCountReset", "true");
+        extra.put("reworkAgentId", reworkAgentId);
         taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId,
-                "sub_task_manual_rework_reset", AgentRole.SYSTEM, reworkAgentId,
-                Map.of("reworkCountReset", "true", "reworkAgentId", reworkAgentId));
+                "sub_task_manual_rework_reset", AgentRole.SYSTEM, reworkAgentId, extra);
         log.info("人工驳回重置返工计数: subTaskId={}, reworkCount=0, reworkAgentId={}", subTaskId, reworkAgentId);
     }
 

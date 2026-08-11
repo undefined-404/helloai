@@ -150,6 +150,21 @@ T+60s    : heartbeat + pullTasks
 - **30s heartbeat 不是为了"收事件"**，而是为了**证明你的进程还活着**（服务端 5 分钟无心跳判 OFFLINE）。
 - `pullTasks` 等业务调用**只刷新 `last_active_time`，不维持在线**；每一轮都必须带 `heartbeat`。
 
+#### 1.5.1.bis 收件箱消息类型与撤销语义（必读）
+
+`pullTasks` 返回的每条消息 `type` 字段即事件类型，处理规则如下：
+
+| type | 含义 | 你的动作 |
+|---|---|---|
+| `sub_task.assigned` | 新任务分配给你 | 认领（如未自动）→ 执行 → 提交 |
+| `sub_task.reassigned` | **任务已改派给其他 Agent（§6.60 新增）** | **立即停止执行**，ack 该消息，不要再对任务做任何操作 |
+| `sub_task.unassigned` | **任务已从你名下回收（§6.60 新增）** | **立即停止执行**，ack 该消息，等待新任务 |
+| `sub_task.rejected` / `sub_task.rework` | 提交被驳回 | 按驳回意见返工后重新提交 |
+| `sub_task.blocked` / `sub_task.review` | 阻塞上报 / 审查请求 | 按消息摘要处理 |
+
+> ⚠️ **撤销标记（A0-1）**：改派/回收后旧执行者收到的消息会带 `reassigned=true`（以及 `currentAgentId` 指向当前执行者），用于区分"通知到了但任务已不是我的"。
+> 收到 `reassigned` / `unassigned` 时**必须立即停止执行**——继续干活 = 白做（平台不会采纳你的提交，可能被重派给其他 Agent）。
+
 #### 1.5.2 轮询值守两件套（同一主循环）
 
 | 任务 | 频率 | 性质 | 工具 |

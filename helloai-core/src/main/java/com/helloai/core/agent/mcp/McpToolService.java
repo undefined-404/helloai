@@ -80,6 +80,16 @@ public class McpToolService {
                 if (subTask != null) {
                     msg.setTaskId(subTask.getTaskId());
                     msg.setDeadline(subTask.getDeadline() != null ? subTask.getDeadline().toString() : null);
+                    // A0-1（§6.60）：曾分配给我但已转移的子任务打标记（配合 sub_task.reassigned / unassigned
+                    // 撤销通知），让 Agent 明确知道"这条消息对应的任务已不在我名下"，避免误继续干活；
+                    // 执行者已清空（回收）同样打标，currentAgentId 保持 null
+                    Long currentAgentId = subTask.getAssignedAgentId();
+                    if (currentAgentId == null || !currentAgentId.equals(agentId)) {
+                        msg.setReassigned(true);
+                        if (currentAgentId != null) {
+                            msg.setCurrentAgentId(currentAgentId);
+                        }
+                    }
                 }
             }
 
@@ -495,6 +505,10 @@ public class McpToolService {
             private String title;
             private String priority;
             private String deadline;
+            /** A0-1（§6.60）：消息对应子任务已转移给其他 Agent（当前执行者非本 Agent）。 */
+            private Boolean reassigned;
+            /** A0-1（§6.60）：子任务当前实际执行者 Agent ID（配合 reassigned 使用）。 */
+            private Long currentAgentId;
         }
     }
 
