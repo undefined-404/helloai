@@ -4393,3 +4393,36 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 - 影响：无 DB 迁移；行为变化——改派/回收后旧执行者一个轮询周期内（pullTasks 30s）可感知任务已转移；SKILL 同步消息类型语义。
 - 遗留：无（验收达成：改派后旧 agent 一个轮询周期内可感知任务已转移）。
 
+### 6.61 MCP 接入体验：Session 生命周期核验 + REST 别名同步通道 + 404 修复提示（A0-2：trae 实战反馈二.1/2/4「Session 复用 / 同步响应 / Schema 与错误信息」）（2026-08-11）
+
+#### 1. 背景与结论
+
+- **实战痛点（trae 两轮实战）**：① MCP session 几十分钟就失效（Session not found），每次调用重新 4 步握手；② `tools/call` 响应只经 SSE 推流、POST 静默，提交成功与否只能查库；③ `tools/list` 无参数 Schema、错误无修复提示。
+- **SDK 生命周期核验（反编译 io.modelcontextprotocol 0.18.3 + WebMvcSseServerTransportProvider）**：
+  - session 由 `POST /mcp/messages?sessionId=` 入参解析，**严格绑定 SSE 长连接**（WebMvcMcpSessionTransport 持有 sseBuilder，onComplete/onTimeout 后从 sessions map 移除）；断开即回收是协议行为，无「保留窗口」可配置。
+  - `handleMessage` 为同步执行（`McpServerSession.handle().block()`）：session==null → 同步返回 **HTTP 404 + body "Session not found: xxx"**（Jackson 序列化的 McpError 对象）；sessionId 缺失 → 400；JSON 解析失败 → 400。
+  - **关键发现（exchangeSink 串行化）**：`handleIncomingRequest` 非 initialize 请求必须等待 `exchangeSink.asMono()`（Sinks.One）信号；该信号由 `notifications/initialized` 通知触发（`handleIncomingNotification` 完成 exchangeSink）。**未发 initialized 通知就 tools/call → 永久挂死（HTTP 不返回，实测 20s+ 超时）**——协议 4 步握手缺一不可。
+  - **断开回收有延迟窗口**：实测断连后 +2s 旧 session 仍可调用（200），回收并非即时；且断连后第二个请求偶发挂死（exchangeSink 单次发射语义疑点，未完全定性，属 SDK 内部行为）。
+- **复用决策**：SDK 不可配置保留窗口 → **不做 transport 层改造**（改造成本高、协议兼容风险大），由**无状态 REST 别名通道 `POST /api/mcp/jsonrpc` 承担免握手复用**；SESSION_AUTH（120min TTL）与 SDK session 生命周期脱节 → **404 时联动 evict**，避免鉴权缓存残留。
+
+#### 2. 实现要点
+
+- **McpAuthFilter 增强（核心）**：
+  - `BufferedResponseWrapper`：缓冲 SDK RouterFunction 直写 body（setContentLength/flushBuffer 改 no-op 防提前 commit），doFilter 返回后 `flushToUnderlying()` 写回底层 response——真实 Tomcat 验证无损。
+  - `afterMessageHandled`：SDK 返回 404 时① `McpAuthContext.evict(sessionId)` 联动清理 SESSION_AUTH；② body 含 "Session not found" 时 JSON 解析附 `fixHint`（「重新 GET /mcp/sse 握手拿新 sessionId；或改用无状态 REST 别名 POST /api/mcp/jsonrpc」）。
+- **REST 别名同步通道**：`McpController.postJsonrpc`（@Deprecated 但承载 A0-2）——无状态（agentId 取自 request attribute _authId，无需 MCP session）、同步返回完整 `{"jsonrpc":"2.0","result":{...},"id":...}`（tools/call 直接返回工具结果而非空 body）；10 工具矩阵与 MCP 通道完全对齐（checkIn/checkOut/getAgentStatus 全部可用）。
+- **McpToolService.getAgentStatus 业务下沉**：REST 别名与 MCP 通道共用（McpMcpServer 改为委托）。
+- **tools/list Schema 确认**：spring-ai 按 `@ToolParam` 声明自动生成 JSON Schema（properties + type），无需补——verify 脚本逐工具断言 inputSchema 非空通过。
+- **executor SKILL.md §1.4**：四步握手避坑强化（缺 initialized 直接 tools/call 会挂死）+ Session 失效双修复路径（重握手 / REST 别名兜底）+ REST 别名通道调用示例。
+
+#### 3. 验证结果
+
+- 单测：`McpAuthFilterTest` 6 用例（404 evict + fixHint 改写 + 非 404 不改写 + 401 路径等）、`McpControllerJsonrpcTest` 8 用例（tools/list 10 工具 + Schema / submitResult 同步回执 / checkIn 租约 / heartbeat / -32601 / -32000 等）**全绿**。
+- 真实环境：`POST /mcp/messages?sessionId=no-such-xxx` → **HTTP 404 + body 含 fixHint + 日志 SESSION_AUTH 联动清理**（wrapper 在 Tomcat 下无损）。
+- **verify-mcp-session-e2e.ps1（PASS=17 FAIL=0）**：S1 SSE 握手 → S2a initialize → S2b notifications/initialized → S2 tools/call heartbeat（POST 200 + SSE 推流 isError:false）→ S3/S4 未知 sessionId 404 + fixHint（含 /mcp/sse 与 /api/mcp/jsonrpc 指引）→ S5 REST tools/list 10 工具 + inputSchema → S6 REST heartbeat 同步 result → S7 checkIn/checkOut 同步租约回执（leaseId + expiresAt）；断连后复用旧 session 为观察项（SDK 保留窗口内 200，不做硬断言）。
+
+#### 4. 影响与遗留
+
+- 影响：MCP SSE 通道行为不变（协议标准）；REST 别名通道新增免握手同步能力；404 响应体附 fixHint 且 SESSION_AUTH 联动清理（无 DB 迁移）。
+- 遗留：① SDK 断连回收延迟窗口（保留窗口内旧 session 仍可调用）与断连后第二请求挂死为 SDK 内部行为，未处理（外部 agent 遇 404 即切 REST 别名，无需感知）；② 若未来仍需「同一 session 跨连接复用」，需自定义 McpServerTransport 或升级 spring-ai 版本，留作专门迭代；③ a02 验收达成：外部 agent 一次 REST 调用即可免握手复用，提交有同步回执（accepted/resultId/status），错误信息可操作（fixHint 指引）。
+
