@@ -163,7 +163,9 @@ public final class McpAuthContext {
         }
         AuthContext auth = SESSION_AUTH.get(sessionId);
         if (auth == null) {
-            throw new BizException(401, "MCP 鉴权失败：session 未鉴权或已过期，sessionId=" + sessionId);
+            // A0-2（§6.61）：错误带修复提示——SSE 断开后 session 即失效，需重新握手或改走 REST 别名通道
+            throw new BizException(401, "MCP 鉴权失败：session 未鉴权或已过期，sessionId=" + sessionId
+                    + "。修复：重新 GET /mcp/sse 握手拿新 sessionId；或改用无状态 REST 别名 POST /api/mcp/jsonrpc（无需 session）");
         }
         SESSION_AUTH.put(sessionId, new AuthContext(auth.id(), auth.name(), auth.type(), System.currentTimeMillis()));
         return auth.id();

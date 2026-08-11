@@ -1,6 +1,7 @@
 package com.helloai.core.agent.mcp;
 
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.WorkMode;
 import com.helloai.core.agent.entity.AgentDutyLease;
@@ -454,6 +455,63 @@ public class McpToolService {
         result.setClosedCount(closed);
         result.setReason(closeReason);
         return result;
+    }
+
+    // ================================================================
+    // getAgentStatus（A0-2 §6.61：原实现自 McpMcpServer 收口，REST 别名通道可复用）
+    // ================================================================
+
+    /**
+     * 查询 Agent 自身状态（管理态 + DB 持久在线态 + 实时计算态）。
+     *
+     * <p>A0-2（§6.61）收口：该工具此前仅存在于 MCP SSE 通道（McpMcpServer @Tool），
+     * REST 别名通道无法调用；现将业务逻辑下沉到 {@link McpToolService}，
+     * 使两条通道工具矩阵完全对齐（10 工具）。</p>
+     */
+    public GetAgentStatusResult getAgentStatus(Long agentId) {
+        assertAgentActive(agentId);
+        assertToolEnabled(agentId, "getAgentStatus");
+
+        Agent agent = agentService.getById(agentId);
+        if (agent == null) {
+            throw new BizException("Agent 不存在: " + agentId);
+        }
+        AgentOnlineStatus computed = heartbeatService.checkOnlineStatus(agent);
+
+        GetAgentStatusResult r = new GetAgentStatusResult();
+        r.setAgentId(agentId);
+        r.setName(agent.getName());
+        r.setRole(agent.getRole() != null ? agent.getRole().name() : null);
+        r.setStatus(agent.getStatus() != null ? agent.getStatus().name() : null);
+        r.setDbOnlineStatus(agent.getOnlineStatus() != null ? agent.getOnlineStatus().name() : null);
+        r.setComputedOnlineStatus(computed != null ? computed.name() : null);
+        r.setLastSeenAt(agent.getLastSeenTime() != null ? agent.getLastSeenTime().toString() : null);
+        r.setLastActiveAt(agent.getLastActiveTime() != null ? agent.getLastActiveTime().toString() : null);
+        r.setOfflineReason(agent.getOfflineReason());
+        r.setOfflineAt(agent.getOfflineTime() != null ? agent.getOfflineTime().toString() : null);
+        r.setServerTime(java.time.OffsetDateTime.now().toString());
+        return r;
+    }
+
+    @lombok.Data
+    public static class GetAgentStatusResult {
+        private Long agentId;
+        private String name;
+        /** AgentRole：PLANNER / EXECUTOR / REVIEWER */
+        private String role;
+        /** AgentStatus（管理态）：ACTIVE / DISABLED */
+        private String status;
+        /** AgentOnlineStatus（DB 持久值，可能滞后）：ONLINE / IDLE / OFFLINE / SLEEPING */
+        private String dbOnlineStatus;
+        /** AgentOnlineStatus（实时按 last_seen_at/last_active_at 推算） */
+        private String computedOnlineStatus;
+        private String lastSeenAt;
+        private String lastActiveAt;
+        /** 仅 OFFLINE 时非空 */
+        private String offlineReason;
+        /** 仅 OFFLINE 时非空 */
+        private String offlineAt;
+        private String serverTime;
     }
 
     // ================================================================

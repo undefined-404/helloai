@@ -28,9 +28,9 @@
 
 > ⚠️ **给 AI 客户端的第一提醒：门铃推送通道已搁置（技术瓶颈，外部 Agent 无法处理平台推送的门铃信号），任务感知一律靠 `pullTasks` 轮询，不要尝试连接任何推送通道。**
 > - 上线后**第一步必须用 MCP 工具 `checkIn` 打卡**（拿到 ACTIVE 打卡租约，在岗状态与租约入口）。
-> - `checkIn` / `checkOut` **只存在于 MCP SSE 通道**（`{{BASE_URL}}/mcp/sse` + `{{BASE_URL}}/mcp/messages`，共 10 个工具）。
-> - REST 端 `GET {{BASE_URL}}/api/mcp/tools` **只有 7 个工具，没有 `checkIn`/`checkOut`**——那是给非 MCP 客户端的降级视图，不要据此判断"没有 checkIn 就没有 MCP 客户端"。
-> - 若确实没有 MCP 通道，可用 REST 轮询兜底（见第三节），但优先走 MCP。
+> - `checkIn` / `checkOut` 的 MCP 工具**只存在于 MCP SSE 通道**（`{{BASE_URL}}/mcp/sse` + `{{BASE_URL}}/mcp/messages`，共 10 个工具）。
+> - **REST 别名通道（A0-2 新增）**：`POST {{BASE_URL}}/api/mcp/jsonrpc` 也已补齐全部 10 工具（含 `checkIn`/`checkOut`/`getAgentStatus`），**无状态、同步响应、不依赖 MCP session**——SSE 断开（Session not found）时用它兜底，无需重新 4 步握手。
+> - 若确实没有 MCP 客户端，可用 REST 轮询兜底（见第三节），但优先走 MCP。
 
 ### 1.1 连接配置
 - SSE 端点：`{{BASE_URL}}/mcp/sse`
@@ -115,16 +115,18 @@ T+(ttl-1)m : 主动重做 checkIn 续约，避免被判 OFFLINE
 3. POST {{BASE_URL}}/mcp/messages?sessionId=<sid>  # method=notifications/initialized
 4. POST {{BASE_URL}}/mcp/messages?sessionId=<sid>  # method=tools/call（到此才能调 checkIn 等工具）
 ```
-标准 MCP 客户端（Trae / Qoder）配好 SSE 端点 + Bearer 头后会自动完成前 3 步；若你手写客户端，必须自己走完四步，直接 `tools/call` 会失败。
+标准 MCP 客户端（Trae / Qoder）配好 SSE 端点 + Bearer 头后会自动完成前 3 步；若你手写客户端，必须自己走完四步——**跳过第 3 步直接 `tools/call` 会永久挂死**（服务端 exchangeSink 等待 initialized 信号，HTTP 请求永不返回，实测 20s+ 超时），不是报错而是无响应，务必按序握手。
 
 **(2) 每个工具调用都要在 arguments 里显式传 `sessionId`**
 - spring-ai 1.1.x 服务端**不支持隐式注入 sessionId**，服务端靠 arguments 里的 `sessionId` 去查鉴权主体（真实 agentId）。
 - 漏传会报 **“sessionId 不能为空”**：把第 1 步拿到的 sessionId **既拼在 URL query（`?sessionId=`）也放进 tool 的 arguments**（字段名 `sessionId`；旧客户端兼容 `_sessionId`）。
 - 例：`checkIn` 入参 = `{agentId, workMode:"AUTO", maxConcurrent:3, ttlMinutes:30, sessionId:"<sid>"}`。
 
-**(3) 不要走 `/api/mcp/jsonrpc` 旧 REST 通道**
-- 那是 v2.4 早期实现，**dispatch 不含 `checkIn`/`checkOut`**，调会报 `Unknown tool: checkIn`。
-- 打卡类工具**只能走 spring-ai SSE 通道**（`/mcp/sse` + `/mcp/messages`）。
+**(3) Session 失效（Session not found）与 REST 别名兜底（A0-2）**
+- spring-ai 的 MCP session **严格绑定 SSE 长连接**：连接断开/超时（网络抖动、客户端重启、空闲超时）即失效，之后 `POST /mcp/messages?sessionId=<旧sid>` 会报 **404 Session not found**——这是服务端协议行为，旧 sessionId 无法复活。
+- **修复路径 A（推荐）**：重新走四步握手（重新 GET /mcp/sse 拿新 sessionId）。
+- **修复路径 B（免握手）**：改走 **REST 别名通道 `POST {{BASE_URL}}/api/mcp/jsonrpc`**——A0-2 起已补齐全部 10 工具（含 `checkIn`/`checkOut`/`getAgentStatus`），**无状态、同步响应**，只带 `Authorization: Bearer <API_KEY>` 即可，不依赖任何 session。请求格式：`{"jsonrpc":"2.0","method":"tools/call","params":{"name":"checkIn","arguments":{"workMode":"AUTO"}},"id":1}`；工具清单与参数 Schema 可先调 `tools/list` 获取。
+- 推荐节奏：优先 MCP SSE 通道；一旦遇到 `Session not found` / `session 未鉴权或已过期`，切 REST 别名通道继续本轮轮询，不必中断任务。
 
 **(4) 心跳是唯一的在线证明**
 - `pullTasks` / `submitResult` 等业务调用**只刷新 `last_active_time`，不会维持在线**；必须**周期调 `heartbeat`**（建议 30 秒一次）刷新 `last_seen_time`，超 5 分钟无心跳会被判 OFFLINE。

@@ -1,14 +1,6 @@
 package com.helloai.core.agent.mcp;
 
-import com.helloai.common.base.BizException;
-import com.helloai.common.constant.AgentOnlineStatus;
-import com.helloai.common.constant.AgentRole;
-import com.helloai.common.constant.AgentStatus;
-import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.agent.service.AgentService;
-import com.helloai.core.agent.observability.HeartbeatService;
 import com.helloai.core.agent.mcp.McpToolService;
-import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ToolContext;
@@ -54,8 +46,6 @@ import org.springframework.stereotype.Component;
 public class McpMcpServer {
 
     private final McpToolService mcpToolService;
-    private final AgentService agentService;
-    private final HeartbeatService heartbeatService;
 
     /**
      * 从 _sessionId 参数直接拿 sessionId → 查 SESSION_AUTH → 返鉴权主体 ID。
@@ -287,7 +277,7 @@ public class McpMcpServer {
             - 客户端拿到的字段会反映当前心跳是否在线
             【相关工具】heartbeat
             """)
-    public GetAgentStatusResult getAgentStatus(
+    public McpToolService.GetAgentStatusResult getAgentStatus(
             @ToolParam(description = "Agent ID（v2.4 §9.1 协议字段；M4 鉴权后会被服务端覆盖）", required = true) Long agentId,
             @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
             @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
@@ -296,26 +286,8 @@ public class McpMcpServer {
         if (agentId == null || !authAgentId.equals(agentId)) {
             log.warn("MCP getAgentStatus: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
         }
-        agentId = authAgentId;
-        Agent agent = agentService.getById(agentId);
-        if (agent == null) {
-            throw new BizException("Agent 不存在: " + agentId);
-        }
-        AgentOnlineStatus computed = heartbeatService.checkOnlineStatus(agent);
-
-        GetAgentStatusResult r = new GetAgentStatusResult();
-        r.setAgentId(agentId);
-        r.setName(agent.getName());
-        r.setRole(agent.getRole() != null ? agent.getRole().name() : null);
-        r.setStatus(agent.getStatus() != null ? agent.getStatus().name() : null);
-        r.setDbOnlineStatus(agent.getOnlineStatus() != null ? agent.getOnlineStatus().name() : null);
-        r.setComputedOnlineStatus(computed != null ? computed.name() : null);
-        r.setLastSeenAt(agent.getLastSeenTime() != null ? agent.getLastSeenTime().toString() : null);
-        r.setLastActiveAt(agent.getLastActiveTime() != null ? agent.getLastActiveTime().toString() : null);
-        r.setOfflineReason(agent.getOfflineReason());
-        r.setOfflineAt(agent.getOfflineTime() != null ? agent.getOfflineTime().toString() : null);
-        r.setServerTime(java.time.OffsetDateTime.now().toString());
-        return r;
+        // A0-2（§6.61）：业务逻辑下沉到 McpToolService，REST 别名通道与 MCP 通道共用
+        return mcpToolService.getAgentStatus(authAgentId);
     }
 
     // ================================================================
@@ -376,26 +348,5 @@ public class McpMcpServer {
         // 优先 closeReason（主字段名），缺失时回退 reason（兼容旧客户端）
         String effectiveReason = (closeReason != null && !closeReason.isBlank()) ? closeReason : reason;
         return mcpToolService.checkOut(agentId, effectiveReason);
-    }
-
-    @Data
-    public static class GetAgentStatusResult {
-        private Long agentId;
-        private String name;
-        /** AgentRole：PLANNER / EXECUTOR / REVIEWER */
-        private String role;
-        /** AgentStatus（管理态）：ACTIVE / DISABLED */
-        private String status;
-        /** AgentOnlineStatus（DB 持久值，可能滞后）：ONLINE / IDLE / OFFLINE / SLEEPING */
-        private String dbOnlineStatus;
-        /** AgentOnlineStatus（实时按 last_seen_at/last_active_at 推算） */
-        private String computedOnlineStatus;
-        private String lastSeenAt;
-        private String lastActiveAt;
-        /** 仅 OFFLINE 时非空 */
-        private String offlineReason;
-        /** 仅 OFFLINE 时非空 */
-        private String offlineAt;
-        private String serverTime;
     }
 }

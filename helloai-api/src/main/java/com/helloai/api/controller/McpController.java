@@ -44,10 +44,10 @@ public class McpController {
     // REST 通道 — 6 个工具
     // ================================================================
 
-    /** GET /api/mcp/tools — 列出当前 Agent 可用的工具 */
+    /** GET /api/mcp/tools — 列出当前 Agent 可用的工具（A0-2 §6.61：补齐至 10 工具与 MCP 通道对齐） */
     @GetMapping("/tools")
     public R<?> listTools(@RequestAttribute("_authId") Long agentId) {
-        return R.ok(java.util.List.of("pullTasks", "ack", "claimSubTask", "heartbeat", "uploadArtifact", "submitResult", "reportBlocked"));
+        return R.ok(java.util.List.of("pullTasks", "ack", "claimSubTask", "heartbeat", "uploadArtifact", "submitResult", "reportBlocked", "getAgentStatus", "checkIn", "checkOut"));
     }
 
     /** POST /api/mcp/tools/pullTasks */
@@ -163,13 +163,39 @@ public class McpController {
         // 支持 tools/list 和 tools/call
         if ("tools/list".equals(method)) {
             return jsonrpcOk(id, Map.of("tools", java.util.List.of(
-                    Map.of("name", "pullTasks", "description", "拉取待处理收件箱消息"),
-                    Map.of("name", "ack", "description", "确认消息已处理"),
-                    Map.of("name", "claimSubTask", "description", "原子认领子任务"),
-                    Map.of("name", "heartbeat", "description", "心跳上报"),
-                    Map.of("name", "uploadArtifact", "description", "注册产物附件元数据"),
-                    Map.of("name", "submitResult", "description", "上交子任务执行结果"),
-                    Map.of("name", "reportBlocked", "description", "上报任务阻塞")
+                    Map.of("name", "pullTasks", "description", "拉取待处理收件箱消息",
+                            "inputSchema", Map.of("type", "object", "properties", Map.of(
+                                    "role", Map.of("type", "string"), "max", Map.of("type", "integer")))),
+                    Map.of("name", "ack", "description", "确认消息已处理",
+                            "inputSchema", Map.of("type", "object", "properties", Map.of(
+                                    "messageId", Map.of("type", "string")))),
+                    Map.of("name", "claimSubTask", "description", "原子认领子任务",
+                            "inputSchema", Map.of("type", "object", "properties", Map.of(
+                                    "subTaskId", Map.of("type", "integer")))),
+                    Map.of("name", "heartbeat", "description", "心跳上报",
+                            "inputSchema", Map.of("type", "object", "properties", Map.of())),
+                    Map.of("name", "uploadArtifact", "description", "注册产物附件元数据",
+                            "inputSchema", Map.of("type", "object", "properties", Map.of(
+                                    "subTaskId", Map.of("type", "integer"), "fileName", Map.of("type", "string"),
+                                    "mimeType", Map.of("type", "string"), "fileSize", Map.of("type", "integer"),
+                                    "storageUrl", Map.of("type", "string")))),
+                    Map.of("name", "submitResult", "description", "上交子任务执行结果（同步返回 accepted/status）",
+                            "inputSchema", Map.of("type", "object", "properties", Map.of(
+                                    "subTaskId", Map.of("type", "integer"), "resultId", Map.of("type", "string"),
+                                    "success", Map.of("type", "boolean"), "output", Map.of("type", "string"),
+                                    "error", Map.of("type", "string"), "finishReason", Map.of("type", "string")))),
+                    Map.of("name", "reportBlocked", "description", "上报任务阻塞",
+                            "inputSchema", Map.of("type", "object", "properties", Map.of(
+                                    "subTaskId", Map.of("type", "integer"), "reason", Map.of("type", "string")))),
+                    Map.of("name", "getAgentStatus", "description", "查询 Agent 自身状态（管理态/在线态/实时计算态）",
+                            "inputSchema", Map.of("type", "object", "properties", Map.of())),
+                    Map.of("name", "checkIn", "description", "打卡上班，获取 ACTIVE 打卡租约（无状态，无需 MCP session）",
+                            "inputSchema", Map.of("type", "object", "properties", Map.of(
+                                    "workMode", Map.of("type", "string"), "maxConcurrent", Map.of("type", "integer"),
+                                    "ttlMinutes", Map.of("type", "integer")))),
+                    Map.of("name", "checkOut", "description", "打卡下班，关闭当前 ACTIVE 打卡租约（幂等）",
+                            "inputSchema", Map.of("type", "object", "properties", Map.of(
+                                    "closeReason", Map.of("type", "string"), "reason", Map.of("type", "string"))))
             )));
         }
 
@@ -248,6 +274,21 @@ public class McpController {
                 if (subTaskId == null) throw new BizException("subTaskId is required");
                 if (reason == null || reason.isBlank()) throw new BizException("reason is required");
                 yield mcpToolService.reportBlocked(agentId, subTaskId, reason);
+            }
+            // A0-2（§6.61）：REST 别名通道补齐打卡/状态工具——无状态同步响应，不依赖 MCP session
+            case "getAgentStatus" -> mcpToolService.getAgentStatus(agentId);
+            case "checkIn" -> {
+                String workMode = (String) args.get("workMode");
+                Integer maxConcurrent = args.get("maxConcurrent") instanceof Number n ? n.intValue() : null;
+                Integer ttlMinutes = args.get("ttlMinutes") instanceof Number n ? n.intValue() : null;
+                yield mcpToolService.checkIn(agentId, workMode, maxConcurrent, ttlMinutes);
+            }
+            case "checkOut" -> {
+                String closeReason = (String) args.get("closeReason");
+                if (closeReason == null || closeReason.isBlank()) {
+                    closeReason = (String) args.get("reason");
+                }
+                yield mcpToolService.checkOut(agentId, closeReason);
             }
             default -> throw new BizException("Unknown tool: " + toolName);
         };

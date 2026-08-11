@@ -126,4 +126,28 @@ class McpToolServiceTest {
         assertThat(msg.getReassigned()).isTrue();
         assertThat(msg.getCurrentAgentId()).isNull();
     }
+
+    // ══════════════════════════════════════════════════════════════
+    //  A0-2（§6.61）getAgentStatus：REST 别名通道工具对齐
+    //  ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("getAgentStatus：返回管理态/在线态字段（A0-2 REST 别名复用）")
+    void shouldReturnAgentStatus() {
+        Agent agent = new Agent();
+        agent.setId(AGENT_ID);
+        agent.setName("测试Agent");
+        agent.setStatus(AgentStatus.ACTIVE);
+        when(agentService.getById(AGENT_ID)).thenReturn(agent);
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("getAgentStatus"))).thenReturn(true);
+        when(heartbeatService.checkOnlineStatus(agent)).thenReturn(com.helloai.common.constant.AgentOnlineStatus.ONLINE);
+
+        McpToolService.GetAgentStatusResult result = mcpToolService.getAgentStatus(AGENT_ID);
+
+        assertThat(result.getAgentId()).isEqualTo(AGENT_ID);
+        assertThat(result.getName()).isEqualTo("测试Agent");
+        assertThat(result.getStatus()).isEqualTo("ACTIVE");
+        assertThat(result.getComputedOnlineStatus()).isEqualTo("ONLINE");
+        assertThat(result.getServerTime()).isNotNull();
+    }
 }
