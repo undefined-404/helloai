@@ -106,6 +106,20 @@ public class AgentInboxService extends ServiceImpl<AgentInboxMapper, AgentInbox>
     }
 
     /**
+     * A0-4（§6.63）：查询 Agent 最近已读消息列表（按 read_time 倒序），
+     * 供 pullTasks(includeRead=true) 在未读之外附带已读历史。
+     */
+    public List<AgentInbox> getRecentRead(Long agentId, int limit) {
+        return lambdaQuery()
+                .eq(AgentInbox::getAgentId, agentId)
+                .eq(AgentInbox::getIsRead, 1)
+                .eq(AgentInbox::getIsArchived, 0)
+                .orderByDesc(AgentInbox::getReadTime)
+                .last("LIMIT " + Math.min(limit, 500))
+                .list();
+    }
+
+    /**
      * 未读消息数量
      */
     public long countUnread(Long agentId) {

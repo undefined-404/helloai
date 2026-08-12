@@ -11,9 +11,9 @@ import org.springframework.stereotype.Component;
 /**
  * helloai MCP Server 业务工具集（v2.4 §3.1 / §9 路线 C 标准化）。
  * <p>
- * 暴露给外部 MCP Client（如 Qoder / Trae / MCP Inspector）的 8 个工具：
+ * 暴露给外部 MCP Client（如 Qoder / Trae / MCP Inspector）的 9 个工具：
  * <ol>
- *   <li>{@code pullTasks} —— 拉取 Agent 待处理收件箱（v2.4 §9.1）</li>
+ *   <li>{@code pullTasks} —— 拉取 Agent 待处理收件箱（v2.4 §9.1；A0-4 增加 includeRead/read/summary）</li>
  *   <li>{@code ack} —— 确认收件箱消息已处理（v2.4 §9.1）</li>
  *   <li>{@code claimSubTask} —— 原子认领子任务（v2.4 §9.1，并发互斥）</li>
  *   <li>{@code heartbeat} —— 心跳上报（v2.4 §9.1，refresh last_seen_at）</li>
@@ -21,6 +21,7 @@ import org.springframework.stereotype.Component;
  *   <li>{@code submitResult} —— 上交子任务执行结果（v2.5 补齐，进入统一回写入口）</li>
  *   <li>{@code reportBlocked} —— 上报任务阻塞（自动通知所有 PLANNER 排障）</li>
  *   <li>{@code getAgentStatus} —— 查询 Agent 自身状态（v2.4 §9.1 协议列，helloai 此前缺失，本类新增）</li>
+ *   <li>{@code getDepsSummary} —— 主动拉取前置产出摘要（A0-4 新增，数据口径与执行链 buildDependencySection 同源）</li>
  * </ol>
  * <p>
  * 设计原则：业务逻辑 <b>完全委托</b>给现有 {@link McpToolService}，本类只承担
@@ -68,12 +69,16 @@ public class McpMcpServer {
             - max 参数上限 200（含 agent_mcp_server.param_constraints.max 二次约束），超出将截断
             - 返回空 messages 数组表示当前无待处理任务，不是错误
             - 不标记消息已读；客户端 pull 后崩溃不会丢失消息，下次 pull 仍能看到
+            - A0-4：每条消息带 read 状态位（false=未读待 ack，true=已 ack）；includeRead=true 时在未读之外
+              附带最近已读消息（read_time 倒序补齐配额），供轮询时区分新消息与历史，false 保持仅未读
+            - A0-4：sub_task.rejected / sub_task.approved 消息的 summary 字段携带最近 review 评分与评语摘要
             【相关工具】ack、claimSubTask、heartbeat
             """)
     public McpToolService.PullTasksResult pullTasks(
             @ToolParam(description = "Agent ID（v2.4 §9.1 协议字段；M4 鉴权接入后此值会被服务端覆盖为从 Authorization 解析的真实 agentId）", required = true) Long agentId,
             @ToolParam(description = "Agent 角色（如 EXECUTOR / PLANNER / REVIEWER）。默认 EXECUTOR", required = false) String role,
             @ToolParam(description = "最多返回消息数。建议 20，最大 200", required = false) Integer max,
+            @ToolParam(description = "A0-4：是否附带最近已读消息（未读优先，默认 false）", required = false) Boolean includeRead,
             @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
             @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
         // M4 鉴权：强制用 token 解析的 agentId 覆盖客户端传值，防止越权
@@ -83,7 +88,8 @@ public class McpMcpServer {
         }
         agentId = authAgentId;
         int effectiveMax = max == null ? 20 : Math.max(1, Math.min(max, 200));
-        return mcpToolService.pullTasks(agentId, role == null || role.isBlank() ? "EXECUTOR" : role, effectiveMax);
+        return mcpToolService.pullTasks(agentId, role == null || role.isBlank() ? "EXECUTOR" : role, effectiveMax,
+                includeRead != null && includeRead);
     }
 
     // ================================================================
@@ -288,6 +294,34 @@ public class McpMcpServer {
         }
         // A0-2（§6.61）：业务逻辑下沉到 McpToolService，REST 别名通道与 MCP 通道共用
         return mcpToolService.getAgentStatus(authAgentId);
+    }
+
+    // ================================================================
+    // 8bis. getDepsSummary（A0-4 §6.63：外部 Agent 主动获取前置产出摘要）
+    // ================================================================
+
+    @Tool(name = "getDepsSummary", description = """
+            【何时使用】执行依赖当前子任务的前置子任务（depends_on）时，开工前主动拉取前置产出摘要，避免重复调研或遗漏上游结论。
+            【调用频率】每个依赖当前子任务开工前调一次；调试期间可重复调用。
+            【效果】返回结构化依赖产出：每条前置的标题/状态/执行摘要（Task Running Spec）/内容本体（物化附件优先，回退执行输出）。
+            【Gotchas】
+            - 无依赖时返回 depCount=0, deps=[]，不是错误
+            - 单条内容超过 4000 字符会被截断并打标 truncated=true
+            - 收集异常时降级返回 degraded=true（deps 为空），不阻断后续执行
+            - 内容本体可能与执行时注入 Prompt 的依赖段同源（buildDependencySection），先看 summary 再看 content
+            【相关工具】pullTasks、claimSubTask
+            """)
+    public McpToolService.GetDepsSummaryResult getDepsSummary(
+            @ToolParam(description = "Agent ID（v2.4 §9.1 协议字段；M4 鉴权后会被服务端覆盖）", required = true) Long agentId,
+            @ToolParam(description = "子任务 ID（查询其直接前置产出）", required = true) Long subTaskId,
+            @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
+            @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
+        // M4 鉴权：强制覆盖（与客户端传值无关，永远查 token 解析的 agent）
+        Long authAgentId = requireAuthId(sessionId, _sessionId);
+        if (agentId == null || !authAgentId.equals(agentId)) {
+            log.warn("MCP getDepsSummary: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
+        }
+        return mcpToolService.getDepsSummary(authAgentId, subTaskId);
     }
 
     // ================================================================

@@ -18,11 +18,15 @@ import com.helloai.core.agent.service.AgentMcpServerService;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.system.service.AttachmentService;
+import com.helloai.core.task.spec.TaskRunningSpecService;
+import com.helloai.core.task.spec.ExecutionRecord;
+import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import com.helloai.core.agent.observability.HeartbeatService;
 
@@ -44,6 +48,13 @@ public class McpToolService {
     private final AttachmentService attachmentService;
     private final ExecutionResultHandler executionResultHandler;
     private final AgentDutyLeaseService agentDutyLeaseService;
+    private final TaskRunningSpecService taskRunningSpecService;
+
+    /** 依赖产出单条内容截断上限（与 SubTaskExecutionService.DEP_CONTENT_MAX_CHARS 对齐，避免两处口径漂移）。 */
+    private static final int DEP_CONTENT_MAX_CHARS = 4000;
+
+    /** 通知/评语摘要截断上限（收件箱 summary、review 摘要等）。 */
+    private static final int SUMMARY_MAX_CHARS = 200;
 
     // ================================================================
     // pullTasks
@@ -54,6 +65,18 @@ public class McpToolService {
      * 只读，不标记已读。ack 才标记已读。
      */
     public PullTasksResult pullTasks(Long agentId, String role, int max) {
+        return pullTasks(agentId, role, max, false);
+    }
+
+    /**
+     * 拉取 Agent 的收件箱消息。
+     * 只读，不标记已读。ack 才标记已读。
+     *
+     * @param includeRead A0-4（§6.63）：true 时在未读之外附带最近已读消息（未读优先，已读按 read_time 倒序
+     *                    补齐配额），每条消息带 read 状态位，供外部 Agent 轮询时区分新消息与已 ack 历史；
+     *                    false（默认）保持原语义仅返回未读。
+     */
+    public PullTasksResult pullTasks(Long agentId, String role, int max, boolean includeRead) {
         assertAgentActive(agentId);
         assertToolEnabled(agentId, "pullTasks");
 
@@ -64,7 +87,14 @@ public class McpToolService {
         }
         max = Math.max(1, Math.min(max, 200));
 
-        List<AgentInbox> inboxes = agentInboxService.getUnread(agentId, max);
+        List<AgentInbox> inboxes = new ArrayList<>(agentInboxService.getUnread(agentId, max));
+        if (includeRead) {
+            // 未读优先（保持既有排序），已读按 read_time 倒序补齐剩余配额
+            int readQuota = max - inboxes.size();
+            if (readQuota > 0) {
+                inboxes.addAll(agentInboxService.getRecentRead(agentId, readQuota));
+            }
+        }
 
         List<PullTasksResult.Message> messages = new ArrayList<>();
         for (AgentInbox inbox : inboxes) {
@@ -74,6 +104,10 @@ public class McpToolService {
             msg.setSubTaskId(inbox.getRefId());
             msg.setTitle(inbox.getTitle());
             msg.setPriority(inbox.getPriority());
+            // A0-4（§6.63）：透传收件箱摘要（sub_task.rejected/approved 消息携带 review 评分与评语摘要）
+            msg.setSummary(inbox.getSummary());
+            // A0-4（§6.63）：未读/已读状态位（false=未读待 ack，true=已 ack）
+            msg.setRead(inbox.getIsRead() != null && inbox.getIsRead() == 1);
 
             // 如果 refType=sub_task，补充 taskId 和 deadline
             if ("sub_task".equals(inbox.getRefType()) && inbox.getRefId() != null) {
@@ -493,6 +527,147 @@ public class McpToolService {
         return r;
     }
 
+    // ================================================================
+    // getDepsSummary（A0-4 §6.63：外部 Agent 主动获取前置产出摘要）
+    // ================================================================
+
+    /**
+     * 获取指定子任务的直接前置产出摘要（结构化）。
+     *
+     * <p>A0-4（§6.63）：执行链在 executeOnce 时已把依赖产出注入 Prompt（V35 buildDependencySection），
+     * 但外部 Agent 开工前无法主动查看——本工具补齐接口层能力，数据口径与执行链同源：
+     * 执行记录摘要（TaskRunningSpec）优先 + 内容本体（物化附件 local:// 平台直读，回退
+     * {@code context.lastExecution.output}），单条超 {@link #DEP_CONTENT_MAX_CHARS} 字符截断并打标；
+     * 任何异常降级为 degraded（deps 为空，不阻断调用），与执行链降级哲学一致。</p>
+     */
+    public GetDepsSummaryResult getDepsSummary(Long agentId, Long subTaskId) {
+        assertAgentActive(agentId);
+        assertToolEnabled(agentId, "getDepsSummary");
+
+        SubTask subTask = subTaskService.getById(subTaskId);
+        if (subTask == null) {
+            throw new BizException("子任务不存在: " + subTaskId);
+        }
+
+        List<Long> dependsOn = subTask.dependsOnIdList();
+        GetDepsSummaryResult result = new GetDepsSummaryResult();
+        result.setSubTaskId(subTaskId);
+        result.setTaskId(subTask.getTaskId());
+        result.setDegraded(false);
+        if (dependsOn == null || dependsOn.isEmpty()) {
+            result.setDepCount(0);
+            result.setLoadedCount(0);
+            result.setTruncatedCount(0);
+            result.setDeps(Collections.emptyList());
+            return result;
+        }
+
+        try {
+            List<SubTask> deps = subTaskService.listByIds(dependsOn);
+            Map<Long, SubTask> depMap = new HashMap<>();
+            if (deps != null) {
+                for (SubTask dep : deps) {
+                    depMap.put(dep.getId(), dep);
+                }
+            }
+
+            List<GetDepsSummaryResult.DepItem> items = new ArrayList<>();
+            int loadedCount = 0;
+            int truncatedCount = 0;
+            for (Long depId : dependsOn) {
+                SubTask dep = depMap.get(depId);
+                if (dep == null) {
+                    continue;
+                }
+                GetDepsSummaryResult.DepItem item = new GetDepsSummaryResult.DepItem();
+                item.setSubTaskId(dep.getId());
+                item.setTitle(dep.getTitle());
+                item.setStatus(dep.getStatus() != null ? dep.getStatus().name() : null);
+                ExecutionRecord record = taskRunningSpecService.findRecord(subTask.getTaskId(), depId);
+                if (record != null && record.summary() != null && !record.summary().isBlank()) {
+                    item.setSummary(record.summary());
+                }
+                String content = loadUpstreamContent(dep);
+                if (content != null && !content.isBlank()) {
+                    if (content.length() > DEP_CONTENT_MAX_CHARS) {
+                        content = content.substring(0, DEP_CONTENT_MAX_CHARS);
+                        item.setTruncated(true);
+                        truncatedCount++;
+                    }
+                    item.setContent(content);
+                    loadedCount++;
+                }
+                items.add(item);
+            }
+            result.setDeps(items);
+            result.setDepCount(dependsOn.size());
+            result.setLoadedCount(loadedCount);
+            result.setTruncatedCount(truncatedCount);
+            return result;
+        } catch (Exception e) {
+            log.warn("getDepsSummary 收集失败，降级返回: subTaskId={}, err={}", subTaskId, e.getMessage());
+            result.setDeps(Collections.emptyList());
+            result.setDepCount(dependsOn.size());
+            result.setLoadedCount(0);
+            result.setTruncatedCount(0);
+            result.setDegraded(true);
+            return result;
+        }
+    }
+
+    /**
+     * 读取前置子任务的完成内容本体：物化附件（local:// 平台直读）优先，失败/无附件回退
+     * {@code context.lastExecution.output} 原始产出；两者均无返回 null。
+     * 与 SubTaskExecutionService.loadUpstreamContent 同源实现（消费方隔离，避免渲染逻辑耦合）。
+     */
+    private String loadUpstreamContent(SubTask dep) {
+        try {
+            List<Attachment> attachments = attachmentService.list(dep.getId());
+            if (attachments != null) {
+                for (Attachment attachment : attachments) {
+                    if (attachmentService.isContentLoadable(attachment)) {
+                        byte[] bytes = attachmentService.loadContent(attachment.getId());
+                        if (bytes != null && bytes.length > 0) {
+                            return new String(bytes, StandardCharsets.UTF_8);
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("读取前置物化附件内容失败，回退原始产出: subTaskId={}, err={}", dep.getId(), e.getMessage());
+        }
+        return SubTaskOutputExtractor.extractExecutionOutput(dep);
+    }
+
+    @lombok.Data
+    public static class GetDepsSummaryResult {
+        private Long subTaskId;
+        private Long taskId;
+        /** 声明的前置数（dependsOnIdList 长度，含缺失项）。 */
+        private Integer depCount;
+        /** 实际读到内容的前置数。 */
+        private Integer loadedCount;
+        /** 内容超限被截断的前置数。 */
+        private Integer truncatedCount;
+        /** true=收集异常降级（deps 为空），不阻断调用。 */
+        private Boolean degraded;
+        private List<DepItem> deps;
+
+        @lombok.Data
+        public static class DepItem {
+            private Long subTaskId;
+            private String title;
+            /** SubTaskStatus：DONE / IN_PROGRESS / ... */
+            private String status;
+            /** 执行记录摘要（Task Running Spec），可能为 null。 */
+            private String summary;
+            /** 产出内容本体（物化附件优先，回退 context.lastExecution.output），可能为 null。 */
+            private String content;
+            /** true=内容超过 4000 字符被截断。 */
+            private Boolean truncated;
+        }
+    }
+
     @lombok.Data
     public static class GetAgentStatusResult {
         private Long agentId;
@@ -563,6 +738,10 @@ public class McpToolService {
             private String title;
             private String priority;
             private String deadline;
+            /** A0-4（§6.63）：收件箱通知摘要（sub_task.rejected/approved 携带 review 评分与评语摘要）。 */
+            private String summary;
+            /** A0-4（§6.63）：未读/已读状态位（false=未读待 ack，true=已 ack；includeRead=true 时才可能为 true）。 */
+            private Boolean read;
             /** A0-1（§6.60）：消息对应子任务已转移给其他 Agent（当前执行者非本 Agent）。 */
             private Boolean reassigned;
             /** A0-1（§6.60）：子任务当前实际执行者 Agent ID（配合 reassigned 使用）。 */

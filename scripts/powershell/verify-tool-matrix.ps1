@@ -2,8 +2,8 @@
 # ============================================================
 # helloai A0-3 tool surface consistency verifier
 # 用途：验证三通道工具面一致性 + SKILL 动作清单与服务器声明 diff（防漂移）：
-#   S1) REST alias POST /api/mcp/jsonrpc tools/list -> 10 tools + inputSchema
-#   S2) GET /api/mcp/tools (REST direct) -> 10 tools, same name set as tools/list
+#   S1) REST alias POST /api/mcp/jsonrpc tools/list -> 11 tools + inputSchema
+#   S2) GET /api/mcp/tools (REST direct) -> 11 tools, same name set as tools/list
 #   S3) REST direct /api/mcp/tools/getAgentStatus probe (POST + Bearer -> 200)
 #   S4) SKILL.md 0.1 table tool names == server tools/list names (diff guard)
 #   S5) SKILL.md 0.2 table REST endpoint paths -> probe each (route existence)
@@ -153,7 +153,7 @@ Write-Output "agentApiKey = $agentApiKey"
 Write-Output ""
 
 # ============================================================
-# STEP S1: REST alias tools/list -> 10 tools + inputSchema
+# STEP S1: REST alias tools/list -> 11 tools + inputSchema
 # ============================================================
 Write-Output "=== [S1] REST alias POST /api/mcp/jsonrpc tools/list ==="
 $s1Body = '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
@@ -168,7 +168,7 @@ if ($s1Obj -ne $null -and $s1Obj.result -ne $null -and $s1Obj.result.tools -ne $
     foreach ($t in $s1Obj.result.tools) {
         if ($t.inputSchema -eq $null -or $t.inputSchema.type -ne "object") { $schemaOk = $false }
     }
-    Assert-True ($s1Names.Count -eq 10) "S1 REST alias tools/list: 10 tools declared (got $($s1Names.Count))"
+    Assert-True ($s1Names.Count -eq 11) "S1 REST alias tools/list: 11 tools declared (got $($s1Names.Count))"
     Assert-True $schemaOk "S1 REST alias tools/list: every tool has inputSchema (type=object)"
 } else {
     Assert-True $false "S1 REST alias tools/list: parse failed or no result (HTTP $($s1Resp.Code))"
@@ -188,7 +188,7 @@ $s2Names = @()
 if ($s2Obj -ne $null -and $s2Obj.data -ne $null) {
     $s2Names = @($s2Obj.data | ForEach-Object { [string]$_ })
     $diff = Compare-Object $s1Names $s2Names
-    Assert-True ($diff -eq $null -and $s2Names.Count -eq 10) "S2 GET /api/mcp/tools: 10 tools, same name set as REST alias (got $($s2Names.Count))"
+    Assert-True ($diff -eq $null -and $s2Names.Count -eq 11) "S2 GET /api/mcp/tools: 11 tools, same name set as REST alias (got $($s2Names.Count))"
 } else {
     Assert-True $false "S2 GET /api/mcp/tools: parse failed (HTTP $($s2Resp.Code))"
 }

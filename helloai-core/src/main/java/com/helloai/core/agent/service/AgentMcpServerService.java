@@ -58,6 +58,7 @@ public class AgentMcpServerService extends ServiceImpl<AgentMcpServerMapper, Age
             "submitResult",
             "reportBlocked",
             "getAgentStatus",
+            "getDepsSummary",
             "checkIn",
             "checkOut"
     );

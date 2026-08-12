@@ -34,6 +34,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -304,6 +305,9 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
 
         updateById(subTask);
         agentOutboxService.createEvent(subTask, SubTaskStatus.DONE);
+        // A0-4（§6.63）：审查通过补发收件箱通知（携带最新一轮 review 评分/评语），
+        // 外部 Agent 轮询 pullTasks 即可感知交付结果反馈
+        sendApprovedInboxNotification(subTask);
 
         // V27 闭环收尾：事务提交后异步解锁下游依赖节点 + 尝试 Task 自动收尾
         // （AFTER_COMMIT 监听在 SubTaskCompletionListener，避免与分发服务形成循环依赖）
@@ -319,6 +323,113 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
     @Transactional(rollbackFor = Exception.class)
     public void resume(Long subTaskId) {
         changeStatus(subTaskId, SubTaskStatus.IN_PROGRESS, null);
+    }
+
+    /**
+     * A0-4（§6.63）：驳回统一补发收件箱通知（自动核验 rejectAndRework 与人工驳回 rework/reworkFresh 共用），
+     * 摘要携带最近一轮 review 结果（评分/评语/问题），外部 Agent 轮询 pullTasks 即可感知返工原因。
+     * 发送失败只 warn 不阻断（返工主链路优先）。
+     */
+    private void sendReworkInboxNotification(SubTask subTask) {
+        try {
+            Long agentId = subTask.getAssignedAgentId();
+            if (agentId == null) {
+                return;
+            }
+            String eventId = "subtask." + subTask.getId() + ".rejected." + System.currentTimeMillis();
+            agentInboxService.send(agentId, eventId, "sub_task.rejected",
+                    "任务需返工: " + subTask.getTitle(),
+                    buildReworkSummary(subTask),
+                    "sub_task", subTask.getId(), "HIGH");
+        } catch (Exception e) {
+            log.warn("驳回收件箱通知发送失败（不阻断返工）: subTaskId={}, err={}", subTask.getId(), e.getMessage());
+        }
+    }
+
+    /**
+     * 从 context.reviewHistory 最新一轮（V38 格式 {round,ts,reviewerAgentId,issues,comment,score,...}）
+     * 提取驳回摘要；无历史（如人工直接驳回）时回退默认文案。
+     */
+    @SuppressWarnings("unchecked")
+    private String buildReworkSummary(SubTask subTask) {
+        Map<String, Object> ctx = subTask.getContext();
+        if (ctx != null && ctx.get("reviewHistory") instanceof List<?> history && !history.isEmpty()) {
+            Object last = history.get(history.size() - 1);
+            if (last instanceof Map<?, ?> m) {
+                StringBuilder sb = new StringBuilder("审查未通过");
+                Object score = m.get("score");
+                if (score instanceof Number n) {
+                    sb.append("，评分 ").append(n.intValue()).append("/5");
+                }
+                Object comment = m.get("comment");
+                if (comment instanceof String c && !c.isBlank()) {
+                    sb.append("；评语: ").append(clip(c, 150));
+                }
+                Object issues = m.get("issues");
+                if (issues instanceof List<?> issueList && !issueList.isEmpty()) {
+                    String joined = issueList.stream().map(Object::toString).collect(Collectors.joining("、"));
+                    sb.append("；问题: ").append(clip(joined, 150));
+                } else if (issues instanceof String issueStr && !issueStr.isBlank()) {
+                    sb.append("；问题: ").append(clip(issueStr, 150));
+                }
+                return sb.toString();
+            }
+        }
+        return "请查审查记录了解具体问题";
+    }
+
+    /**
+     * A0-4（§6.63）：审查通过补发收件箱通知（携带最新一轮 review 评分/评语），
+     * 外部 Agent 轮询 pullTasks 即可感知交付结果反馈。发送失败只 warn 不阻断。
+     */
+    private void sendApprovedInboxNotification(SubTask subTask) {
+        try {
+            Long agentId = subTask.getAssignedAgentId();
+            if (agentId == null) {
+                return;
+            }
+            String eventId = "subtask." + subTask.getId() + ".approved." + System.currentTimeMillis();
+            agentInboxService.send(agentId, eventId, "sub_task.approved",
+                    "任务审查通过: " + subTask.getTitle(),
+                    buildApprovedSummary(subTask),
+                    "sub_task", subTask.getId(), "NORMAL");
+        } catch (Exception e) {
+            log.warn("审查通过收件箱通知发送失败（不阻断完成）: subTaskId={}, err={}", subTask.getId(), e.getMessage());
+        }
+    }
+
+    /**
+     * 从 review_record 取最新一轮（round 最大）的评分/评语拼摘要；无记录时回退默认文案。
+     */
+    private String buildApprovedSummary(SubTask subTask) {
+        try {
+            List<ReviewRecord> reviews = reviewRecordMapper.selectList(
+                    new LambdaQueryWrapper<ReviewRecord>()
+                            .eq(ReviewRecord::getSubTaskId, subTask.getId())
+                            .orderByDesc(ReviewRecord::getRound)
+                            .last("LIMIT 1"));
+            if (reviews != null && !reviews.isEmpty()) {
+                ReviewRecord latest = reviews.get(0);
+                StringBuilder sb = new StringBuilder("审查通过");
+                if (latest.getScore() != null) {
+                    sb.append("，评分 ").append(latest.getScore()).append("/5");
+                }
+                if (latest.getComment() != null && !latest.getComment().isBlank()) {
+                    sb.append("；评语: ").append(clip(latest.getComment(), 150));
+                }
+                return sb.toString();
+            }
+        } catch (Exception e) {
+            log.debug("审查通过摘要读取失败，回退默认: subTaskId={}, err={}", subTask.getId(), e.getMessage());
+        }
+        return "审查通过，请查看详情";
+    }
+
+    private String clip(String s, int max) {
+        if (s == null || s.length() <= max) {
+            return s;
+        }
+        return s.substring(0, max) + "...";
     }
 
     /**
@@ -450,6 +561,9 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
         updateById(subTask);
         // A0-1（§6.60）：执行者变更（换人/回收）时告知旧执行者
         notifyAgentHandover(subTask, oldAgentId);
+        // A0-4（§6.63）：驳回统一补发收件箱通知（自动核验 rejectAndRework 与人工 reworkById 共用本入口），
+        // 摘要携带最近一轮 review 结果（评分/评语/问题），外部 Agent 轮询 pullTasks 即可感知返工原因
+        sendReworkInboxNotification(subTask);
         agentOutboxService.createEvent(subTask, SubTaskStatus.REWORK);
         log.info("子任务驳回返工: subTaskId={}, reworkCount={}", subTaskId, subTask.getReworkCount());
     }
@@ -485,6 +599,8 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
         updateById(subTask);
         // A0-1（§6.60）：执行者变更（换人/回收）时告知旧执行者
         notifyAgentHandover(subTask, oldAgentId);
+        // A0-4（§6.63）：人工驳回同样补发收件箱通知（携带 review 摘要，无历史时回退默认文案）
+        sendReworkInboxNotification(subTask);
         agentOutboxService.createEvent(subTask, SubTaskStatus.REWORK);
         // 注意：Map.of 不接受 null 值，reworkAgentId 可能为 null（不换派原执行者重做），必须用 HashMap
         Map<String, Object> extra = new HashMap<>();

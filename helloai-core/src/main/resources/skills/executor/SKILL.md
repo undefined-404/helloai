@@ -26,25 +26,26 @@
 
 ## 〇、工具与动作速查总表（A0-3 新增，机器可解析）
 
-> 全平台**三通道工具面已对齐为 10 个执行工具**（A0-3 起 REST 直通补齐 `checkIn`/`checkOut`/`getAgentStatus`，
-> 与 MCP SSE、REST 别名 `POST /api/mcp/jsonrpc` 完全一致）。
+> 全平台**三通道工具面已对齐为 11 个执行工具**（A0-3 起 REST 直通补齐 `checkIn`/`checkOut`/`getAgentStatus`，
+> A0-4 新增 `getDepsSummary`，与 MCP SSE、REST 别名 `POST /api/mcp/jsonrpc` 完全一致）。
 > 下表是**权威动作清单**：`scripts/powershell/verify-tool-matrix.ps1` 会把它与服务器 `tools/list` 实时 diff，防再次漂移。
 > 所有请求都带 `Authorization: Bearer <API_KEY>`；REST 直通/别名的响应是 `R` 包装 `{code, msg, data}`，MCP 返回原始 result。
 
-### 0.1 三通道执行工具（10 个，与 tools/list 同名集合一致）
+### 0.1 三通道执行工具（11 个，与 tools/list 同名集合一致）
 
 | 工具 | MCP SSE | REST 别名 jsonrpc | REST 直通 /api/mcp/tools/* | 请求体（JSON） | 返回要点（data/result） |
 |---|---|---|---|---|---|
 | `checkIn` | ✓ | ✓ | `POST .../checkIn` | `{"workMode":"AUTO","maxConcurrent":3,"ttlMinutes":30}` | `{ok, leaseId, sessionId, workMode, maxConcurrent, expiresAt}` |
 | `checkOut` | ✓ | ✓ | `POST .../checkOut` | `{"closeReason":"shutdown"}`（兼容 `{"reason":...}`） | `{ok, closedCount, reason}` |
 | `getAgentStatus` | ✓ | ✓ | `POST .../getAgentStatus` | `{}` | `{status, dbOnlineStatus, computedOnlineStatus, lastSeenAt, lastActiveAt, offlineReason, offlineAt, serverTime}` |
-| `pullTasks` | ✓ | ✓ | `POST .../pullTasks` | `{"role":"EXECUTOR","max":20}` | `{messages:[{messageId, type, subTaskId, taskId, title, priority, deadline, reassigned, currentAgentId}]}` |
+| `pullTasks` | ✓ | ✓ | `POST .../pullTasks` | `{"role":"EXECUTOR","max":20,"includeRead":false}` | `{messages:[{messageId, type, subTaskId, taskId, title, priority, deadline, summary, read, reassigned, currentAgentId}]}` |
 | `ack` | ✓ | ✓ | `POST .../ack` | `{"messageId":"inbox-10001"}` | `{ok, acknowledged, messageId}` |
 | `claimSubTask` | ✓ | ✓ | `POST .../claimSubTask` | `{"subTaskId":123}` | `{ok, claimed, reason, assignedAgent, subTaskId, version}` |
 | `heartbeat` | ✓ | ✓ | `POST .../heartbeat` | `{}` | `{ok, agentId, serverTime}` |
 | `uploadArtifact` | ✓ | ✓ | `POST .../uploadArtifact` | `{"subTaskId":123,"fileName":"a.md","mimeType":"text/markdown","fileSize":1024,"storageUrl":"local://..."}` | `{ok, attachmentId, storageUrl}` |
 | `submitResult` | ✓ | ✓ | `POST .../submitResult` | `{"subTaskId":123,"resultId":"r-1","success":true,"output":"...","finishReason":"completed"}` | `{ok, accepted, idempotent, status, reason, subTaskId, resultId}` |
 | `reportBlocked` | ✓ | ✓ | `POST .../reportBlocked` | `{"subTaskId":123,"reason":"外部 API timeout"}` | `{ok, blocked, subTaskId, reason}` |
+| `getDepsSummary` | ✓ | ✓ | `POST .../getDepsSummary` | `{"subTaskId":123}` | `{subTaskId, taskId, depCount, loadedCount, truncatedCount, degraded, deps:[{subTaskId, title, status, summary, content, truncated}]}` |
 
 > 通道选择：MCP SSE 是标准协议（需 4 步握手，session 绑定长连接）；REST 别名与 REST 直通**免 session、同步返回**，断连后仍可用。
 > MCP 通道的 `arguments` 里需额外带 `agentId` 与 `sessionId`（§1.4(2)）；REST 通道不需要（鉴权取自 Bearer 头）。
@@ -74,7 +75,7 @@
 > ⚠️ **给 AI 客户端的第一提醒：门铃推送通道已搁置（技术瓶颈，外部 Agent 无法处理平台推送的门铃信号），任务感知一律靠 `pullTasks` 轮询，不要尝试连接任何推送通道。**
 > - 上线后**第一步必须用 MCP 工具 `checkIn` 打卡**（拿到 ACTIVE 打卡租约，在岗状态与租约入口）。
 > - **三通道工具面已对齐**：`checkIn` / `checkOut` / `getAgentStatus` 在 MCP SSE、REST 别名 `POST /api/mcp/jsonrpc`、REST 直通 `POST /api/mcp/tools/*` 均可调用（A0-3 起，§0.1 总表）。
-> - **REST 别名通道（A0-2 新增）**：`POST {{BASE_URL}}/api/mcp/jsonrpc` 已补齐全部 10 工具（含 `checkIn`/`checkOut`/`getAgentStatus`），**无状态、同步响应、不依赖 MCP session**——SSE 断开（Session not found）时用它兜底，无需重新 4 步握手。
+> - **REST 别名通道（A0-2 新增）**：`POST {{BASE_URL}}/api/mcp/jsonrpc` 已补齐全部 11 工具（含 `checkIn`/`checkOut`/`getAgentStatus`/`getDepsSummary`），**无状态、同步响应、不依赖 MCP session**——SSE 断开（Session not found）时用它兜底，无需重新 4 步握手。
 > - 若确实没有 MCP 客户端，可用 REST 轮询兜底（见第三节），但优先走 MCP。
 
 ### 1.1 连接配置
@@ -84,21 +85,28 @@
 
 在 Trae / Qoder 等 MCP 客户端里把上述 SSE 端点与 Bearer 头配好，即可自动发现下列工具（`tools/list`）。
 
-### 1.2 全套 MCP 工具（10 个）
-你注册后这 10 个工具**默认全部授权**，参数 schema 由 MCP 客户端 `tools/list` 自动获取：
+### 1.2 全套 MCP 工具（11 个）
+你注册后这 11 个工具**默认全部授权**，参数 schema 由 MCP 客户端 `tools/list` 自动获取：
 
 | 工具 | 何时使用 |
 |---|---|
 | `checkIn` | **上线后先打卡上班**，获取一份打卡租约（ACTIVE），维持"在岗"状态参与调度 |
 | `checkOut` | 会话结束 / 主动下线时打卡下班，关闭当前租约 |
 | `getAgentStatus` | 启动后查询自身状态，确认鉴权与在线状态后再接活 |
-| `pullTasks` | 查询分配给自己的待处理收件箱（建议每 30 秒轮询一次；唯一的任务感知通道，门铃已搁置） |
-| `ack` | 每条收件箱消息处理完毕后确认 |
+| `pullTasks` | 查询分配给自己的待处理收件箱（建议每 30 秒轮询一次；唯一的任务感知通道，门铃已搁置）；`includeRead=true` 可附带最近已读消息，每条消息带 `read` 状态位与 `summary` 摘要（`sub_task.rejected`/`sub_task.approved` 携带最近 review 评分/评语） |
+| `ack` | 每条收件箱消息处理完毕后确认（把 `read` 置为 true；未 ack 的消息下次 pull 仍会出现） |
 | `claimSubTask` | 主动原子认领一个 PENDING 子任务（同角色竞争，抢到才执行） |
 | `heartbeat` | 周期上报心跳维持在线（建议 30 秒一次，超过 5 分钟无心跳会被判 OFFLINE） |
 | `uploadArtifact` | 执行完子任务后登记产物附件元数据 |
 | `submitResult` | 完成子任务后上交执行结果（成功或失败）；重复提交须带相同 `resultId` 保证幂等 |
 | `reportBlocked` | 遇到外部依赖不可用 / 环境缺失等无法自行解决的阻塞时上报 |
+| `getDepsSummary` | 开工前主动拉取前置产出摘要（每条前置的标题/状态/执行摘要/内容本体），避免重复调研或遗漏上游结论；无依赖时 `depCount=0` |
+
+> 🧭 **ack 语义（A0-4 澄清，实测必看）**
+> - `pullTasks` **不会**自动标记已读；客户端 pull 后崩溃不会丢消息，未 ack 的消息下次 pull 仍能看到（`read=false`）。
+> - 处理完消息后必须显式 `ack`，该消息才会翻为已读（`read=true`）。
+> - 需要回看历史时用 `includeRead=true` 拉最近已读消息（未读优先，已读按 `read_time` 倒序补齐配额）；`read=false` 表示待处理，`read=true` 表示已处理过。
+> - 重复 `ack` 幂等，返回成功且 `is_read` 保持 1。
 
 > 🧭 **`checkIn` 租约机制（实测必看）**
 > - 租约是**一次性签发**：`expires_at = now + ttlMinutes`，默认 30 分钟；到点直接 EXPIRED，**不会自动续约**。
@@ -170,7 +178,7 @@ T+(ttl-1)m : 主动重做 checkIn 续约，避免被判 OFFLINE
 **(3) Session 失效（Session not found）与 REST 别名兜底（A0-2）**
 - spring-ai 的 MCP session **严格绑定 SSE 长连接**：连接断开/超时（网络抖动、客户端重启、空闲超时）即失效，之后 `POST /mcp/messages?sessionId=<旧sid>` 会报 **404 Session not found**——这是服务端协议行为，旧 sessionId 无法复活。
 - **修复路径 A（推荐）**：重新走四步握手（重新 GET /mcp/sse 拿新 sessionId）。
-- **修复路径 B（免握手）**：改走 **REST 别名通道 `POST {{BASE_URL}}/api/mcp/jsonrpc`**——A0-2 起已补齐全部 10 工具（含 `checkIn`/`checkOut`/`getAgentStatus`），**无状态、同步响应**，只带 `Authorization: Bearer <API_KEY>` 即可，不依赖任何 session。请求格式：`{"jsonrpc":"2.0","method":"tools/call","params":{"name":"checkIn","arguments":{"workMode":"AUTO"}},"id":1}`；工具清单与参数 Schema 可先调 `tools/list` 获取。
+- **修复路径 B（免握手）**：改走 **REST 别名通道 `POST {{BASE_URL}}/api/mcp/jsonrpc`**——A0-2 起已补齐全部 11 工具（含 `checkIn`/`checkOut`/`getAgentStatus`/`getDepsSummary`），**无状态、同步响应**，只带 `Authorization: Bearer <API_KEY>` 即可，不依赖任何 session。请求格式：`{"jsonrpc":"2.0","method":"tools/call","params":{"name":"checkIn","arguments":{"workMode":"AUTO"}},"id":1}`；工具清单与参数 Schema 可先调 `tools/list` 获取。
 - 推荐节奏：优先 MCP SSE 通道；一旦遇到 `Session not found` / `session 未鉴权或已过期`，切 REST 别名通道继续本轮轮询，不必中断任务。
 
 **(4) 心跳是唯一的在线证明**
@@ -524,6 +532,6 @@ python task-cli.py --key <API_KEY> update        # 更新 CLI + SKILL
 | 405 | GET `startById` | 开始执行是 POST 端点 | 用 `POST /api/sub-tasks/startById/{id}`（无 body） |
 | 500 | `Agent 未在岗（无 ACTIVE 打卡租约）` | 未 checkIn 就调用依赖在岗状态的能力 | 先调 `checkIn`（MCP / REST 别名 / REST 直通均可）再调用 |
 | 500 | `sessionId 不能为空` | tool arguments 漏 `sessionId` 字段 | 把 SSE endpoint 帧拿到的 sid **同时**拼进 URL `?sessionId=` 与 arguments `sessionId` |
-| 500 | `Unknown tool: xxx` | 工具名拼错 | 先 `tools/list`（或 `GET /api/mcp/tools`）拿权威清单（§0.1 三通道 10 工具） |
+| 500 | `Unknown tool: xxx` | 工具名拼错 | 先 `tools/list`（或 `GET /api/mcp/tools`）拿权威清单（§0.1 三通道 11 工具） |
 
 > **建议**：优先走 MCP（全套工具 + 统一心跳/租约语义）；无 MCP 客户端时用 REST curl 轮询兜底；CLI 仅覆盖 poll/submit/status 三个高频操作。
