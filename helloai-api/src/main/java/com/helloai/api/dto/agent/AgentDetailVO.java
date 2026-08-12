@@ -12,5 +12,4 @@ public class AgentDetailVO extends AgentListItemVO {
     private int totalRewardRecords;
     private String apiKey;
     private String modelType;
-    private String specializationSlug;
 }

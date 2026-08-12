@@ -10,6 +10,5 @@ public class AgentCreateRequest {
     private String role;
     private String modelType;
     private Map<String, Object> modelConfig;
-    private String specializationSlug;
     private String remark;
 }

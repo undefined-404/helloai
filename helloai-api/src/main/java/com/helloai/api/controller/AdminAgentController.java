@@ -90,6 +90,8 @@ public class AdminAgentController {
             vo.setDescription(a.getRemark());
             vo.setStatus(a.getStatus());
             vo.setTotalScore(a.getScore());
+            // V47/A2: 能力声明列表（任务 required_skills 匹配用，前端编辑弹窗回显）
+            vo.setSkills(a.getSkills());
 
             // enrichment
             Map<String, Integer> wl = agentService.workloadStats(a.getId());
@@ -127,7 +129,6 @@ public class AdminAgentController {
         vo.setTotalScore(agent.getScore());
         vo.setApiKey(agent.getApiKey());
         vo.setModelType(agent.getModelType());
-        vo.setSpecializationSlug(agent.getSpecializationSlug());
 
         Map<String, Integer> wl = agentService.workloadStats(id);
         vo.setAssignedCount(wl.getOrDefault("assignedCount", 0));
@@ -160,7 +161,7 @@ public class AdminAgentController {
     public R<AgentRegistrationResponse> create(@RequestBody AgentCreateRequest req) {
         AgentRole role = AgentRole.valueOf(req.getRole().toUpperCase());
         Agent agent = agentService.registerWithExtras(req.getName(), role, req.getRemark(),
-                req.getModelType(), req.getModelConfig(), req.getSpecializationSlug());
+                req.getModelType(), req.getModelConfig());
 
         AgentRegistrationResponse response = new AgentRegistrationResponse();
         response.setId(agent.getId());
@@ -178,7 +179,7 @@ public class AdminAgentController {
     public R<Void> update(@PathVariable("id") Long id, @RequestBody AgentUpdateRequest req) {
         log.info("更新 Agent 请求: id={}, body={}", id, req);
         boolean updated = agentService.updateAgentDetail(id, req.getName(), req.getModelType(),
-                req.getModelConfig(), req.getSpecializationSlug(), req.getRemark());
+                req.getModelConfig(), req.getRemark(), req.getSkills());
         if (!updated) return R.fail("Agent 不存在");
         return R.ok();
     }

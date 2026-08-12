@@ -10,6 +10,7 @@ import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.core.agent.AgentSkillDeriver;
 import com.helloai.core.agent.entity.*;
 import com.helloai.core.task.entity.*;
 import com.helloai.core.system.entity.*;
@@ -159,18 +160,17 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
     }
 
     /**
-     * 注册 Agent 并附加可选扩展字段（modelType/modelConfig/specializationSlug）。
+     * 注册 Agent 并附加可选扩展字段（modelType/modelConfig）。
      *
      * <p>按 §6.3 分层红线从 AdminAgentController 收口；作为事务代理入口，
      * 内部 {@link #register} 的事务注解在自调用场景不生效，由本方法统一托管。</p>
      */
     @Transactional(rollbackFor = Exception.class)
     public Agent registerWithExtras(String name, AgentRole role, String description,
-                                    String modelType, Map<String, Object> modelConfig, String specializationSlug) {
+                                    String modelType, Map<String, Object> modelConfig) {
         Agent agent = register(name, role, description);
         agent.setModelType(modelType);
         if (modelConfig != null) agent.setModelConfig(modelConfig);
-        if (specializationSlug != null) agent.setSpecializationSlug(specializationSlug);
         updateById(agent);
         return agent;
     }
@@ -182,14 +182,14 @@ public class AgentService extends ServiceImpl<AgentMapper, Agent> {
      */
     @Transactional(rollbackFor = Exception.class)
     public boolean updateAgentDetail(Long agentId, String name, String modelType, Map<String, Object> modelConfig,
-                                     String specializationSlug, String remark) {
+                                     String remark, List<String> skills) {
         Agent agent = getById(agentId);
         if (agent == null) return false;
         if (name != null) agent.setName(name);
         if (modelType != null) agent.setModelType(modelType);
         if (modelConfig != null) agent.setModelConfig(modelConfig);
-        if (specializationSlug != null) agent.setSpecializationSlug(specializationSlug);
         if (remark != null) agent.setRemark(remark);
+        if (skills != null) agent.setSkills(AgentSkillDeriver.clean(skills));
         updateById(agent);
         log.info("Agent 信息更新: id={}", agentId);
         return true;

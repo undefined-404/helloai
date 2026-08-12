@@ -70,17 +70,6 @@ public class PromptTemplateService extends ServiceImpl<PromptTemplateMapper, Pro
     }
 
     /**
-     * 按 slug 获取 Agent 专业化配置
-     */
-    public PromptTemplate getBySlug(String slug) {
-        return lambdaQuery()
-                .eq(PromptTemplate::getSlug, slug)
-                .eq(PromptTemplate::getCategory, "AGENT_SPECIALIZATION")
-                .last("LIMIT 1")
-                .one();
-    }
-
-    /**
      * 创建模板
      */
     @Transactional(rollbackFor = Exception.class)
@@ -123,7 +112,7 @@ public class PromptTemplateService extends ServiceImpl<PromptTemplateMapper, Pro
 
     /**
      * 组合最终提示词。
-     * 合并: 角色模板 + Agent 专业化(slug) + 全局规则
+     * 合并: 角色模板 + Agent 特定内容 + 全局规则
      */
     public String compose(String role, String agentSpecificContent) {
         PromptTemplate defaultTemplate = getDefaultByRole(role);
@@ -144,17 +133,6 @@ public class PromptTemplateService extends ServiceImpl<PromptTemplateMapper, Pro
         }
 
         return sb.toString();
-    }
-
-    /**
-     * 按专业化 slug 组合完整 Prompt（角色模板 + 专业化配置 + 全局规则）
-     */
-    public String composeBySlug(String slug) {
-        PromptTemplate specialization = getBySlug(slug);
-        if (specialization == null) {
-            throw new BizException("未找到 Agent 配置: " + slug);
-        }
-        return compose(specialization.getRole(), specialization.getContent());
     }
 
     /**

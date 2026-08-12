@@ -12,6 +12,7 @@ import com.helloai.core.agent.chat.LlmProviderCatalogService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.system.service.PromptTemplateService;
 import com.helloai.core.agent.AgentCapability;
+import com.helloai.core.agent.AgentSkillDeriver;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -91,20 +92,16 @@ public class AgentController {
     }
 
     /**
-     * 处理注册入参的可选扩展字段：accessType / specializationSlug / capabilities / labels / modelType。
+     * 处理注册入参的可选扩展字段：accessType / capabilities / labels / modelType / skills。
      *
      * <p>accessType 默认 CLI_CLIENT；capabilities 按 accessType 默认值填充后允许调用方覆盖；
-     * labels 直接存储；modelType 供 API_KEY_LLM Agent 指定 provider:model（缺省走平台默认 provider）。</p>
+     * labels 直接存储；modelType 供 API_KEY_LLM Agent 指定 provider:model（缺省走平台默认 provider）；
+     * skills（A2）显式传入则使用显式值，否则已有技能为空时按 accessType + 名称/描述关键词 best-effort 推导，
+     * 幂等复用（已有技能）不被推导覆盖。</p>
      */
     @SuppressWarnings("unchecked")
     private void applyRegistrationExtras(Agent agent, Map<String, Object> body) {
-        // 1) specializationSlug（已有逻辑）
-        String specializationSlug = (String) body.get("specializationSlug");
-        if (specializationSlug != null && !specializationSlug.isBlank()) {
-            agent.setSpecializationSlug(specializationSlug);
-        }
-
-        // 1.5) modelType（V27：之前被丢弃，导致 API_KEY_LLM Agent 只能用默认 provider）
+        // 1) modelType（V27：之前被丢弃，导致 API_KEY_LLM Agent 只能用默认 provider）
         String modelType = (String) body.get("modelType");
         if (modelType != null && !modelType.isBlank()) {
             agent.setModelType(modelType);
@@ -147,10 +144,25 @@ public class AgentController {
         }
         agent.setCapabilities(AgentCapability.mergeDefaults(accessType, override));
 
+        // 5) skills（A2，V47 技能匹配的数据源）：显式传入优先；否则已有技能为空时 best-effort 推导
+        List<String> explicitSkills = null;
+        Object skillsObj = body.get("skills");
+        if (skillsObj instanceof List<?> rawSkills) {
+            explicitSkills = new java.util.ArrayList<>();
+            for (Object s : rawSkills) {
+                explicitSkills.add(String.valueOf(s));
+            }
+        }
+        if (explicitSkills != null) {
+            agent.setSkills(AgentSkillDeriver.clean(explicitSkills));
+        } else if (agent.getSkills() == null || agent.getSkills().isEmpty()) {
+            agent.setSkills(AgentSkillDeriver.derive(accessType, agent.getName(), agent.getRemark(), null));
+        }
+
         // 持久化所有可选字段变更
         agentService.updateAgentExtras(agent);
 
-        // 5) API_KEY_LLM：注册后按 modelType/默认 provider 尝试补绑平台密钥（尽力而为，
+        // 6) API_KEY_LLM：注册后按 modelType/默认 provider 尝试补绑平台密钥（尽力而为，
         //    不阻断注册；脚本注册后自行绑定自定义密钥的既有链路保持不变）
         if (accessType == AgentAccessType.API_KEY_LLM) {
             llmProviderCatalogService.provisionPlatformCredential(agent);
@@ -215,7 +227,6 @@ public class AgentController {
         response.setApiKey(agent.getApiKey());
         response.setModelType(agent.getModelType());
         response.setModelConfig(agent.getModelConfig());
-        response.setSpecializationSlug(agent.getSpecializationSlug());
         response.setStatus(agent.getStatus());
         response.setScore(agent.getScore());
         response.setRemark(agent.getRemark());
@@ -225,6 +236,7 @@ public class AgentController {
         response.setAccessType(agent.getAccessType());
         response.setCapabilities(agent.getCapabilities());
         response.setLabels(agent.getLabels());
+        response.setSkills(agent.getSkills());
         response.setLastSeenAt(agent.getLastSeenTime());
         response.setLastActiveAt(agent.getLastActiveTime());
         response.setOnlineStatus(agent.getOnlineStatus());

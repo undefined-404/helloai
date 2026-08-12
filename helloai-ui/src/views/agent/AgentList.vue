@@ -99,36 +99,25 @@
           show-icon
           style="margin-bottom:16px"
         />
-        <el-form-item label="模型" prop="provider" v-if="form.accessType === 'API_KEY_LLM'">
+        <!-- §6.74: 模型选择已移除——内部 LLM 统一走系统配置默认 provider+default-model，后端自动补绑平台密钥 -->
+        <el-form-item label="技能">
           <el-select
-            v-model="form.provider"
-            :loading="providersLoading"
-            placeholder="选择已配置 API Key 的 Provider"
+            v-model="form.skills"
+            multiple
+            filterable
+            allow-create
+            default-first-option
+            placeholder="选择或输入技能（回车可自定义）"
             style="width:100%"
           >
             <el-option
-              v-for="p in llmProviders"
-              :key="p.provider"
-              :label="p.provider + (p.defaultModel ? '（' + p.defaultModel + '）' : '')"
-              :value="p.provider"
-              :disabled="!p.available"
-            >
-              <span>{{ p.provider }}</span>
-              <span style="float:right;font-size:12px;color:var(--ha-muted)">
-                {{ p.available ? p.defaultModel : (p.apiKeyConfigured ? '缺少 Factory 实现' : '未配置 API Key') }}
-              </span>
-            </el-option>
+              v-for="opt in skillOptions"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
           </el-select>
-        </el-form-item>
-        <el-form-item label="专业化" v-if="form.role === 'EXECUTOR'">
-          <el-select v-model="form.specializationSlug" clearable placeholder="选择 Agent 专业化配置" style="width:100%">
-            <el-option label="无 (默认)" value="" />
-            <el-option label="AI酱瓜-后端" value="executor-backend" />
-            <el-option label="AI小珂-前端" value="executor-frontend" />
-            <el-option label="AI小云-运维" value="executor-devops" />
-            <el-option label="AI小吴-调研" value="executor-researcher" />
-            <el-option label="AI小安-测试" value="executor-tester" />
-          </el-select>
+          <div class="field-hint">能力声明，任务「要求技能」按 AND 语义匹配；不填则按名称/描述自动推导</div>
         </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="form.description" type="textarea" :rows="2" />
@@ -165,12 +154,15 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Search, Refresh } from '@element-plus/icons-vue'
 import { agentApi } from '@/api/agent'
+import { AGENT_SKILL_OPTIONS } from '@/constants/agentSkills'
 import type { AgentListItem, AgentRole } from '@/types'
 import AgentCard from './components/AgentCard.vue'
 import AgentEditDialog from './components/AgentEditDialog.vue'
 import AgentStatusDialog from './components/AgentStatusDialog.vue'
 import AgentDeleteDialog from './components/AgentDeleteDialog.vue'
 import AgentOnboardingDialog from './components/AgentOnboardingDialog.vue'
+
+const skillOptions = AGENT_SKILL_OPTIONS
 
 const router = useRouter()
 
@@ -231,34 +223,16 @@ const form = reactive({
   name: '',
   role: 'EXECUTOR',
   description: '',
-  specializationSlug: '',
+  // §6.74: 专业化/模型选择已移除；skills 注册即填写（A2 显式技能优先）
   accessType: 'CLI_CLIENT',
-  provider: ''
+  skills: [] as string[]
 })
 const rules = {
-  name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
-  provider: [{ required: true, message: '请选择模型 Provider', trigger: 'change' }]
+  name: [{ required: true, message: '请输入名称', trigger: 'blur' }]
 }
 
 // ── LLM Provider 目录（内部 LLM 注册用，按后端已生效 api-key 配置枚举）──
-interface LlmProviderItem {
-  provider: string
-  defaultModel: string | null
-  apiKeyConfigured: boolean
-  factorySupported: boolean
-  available: boolean
-}
-const llmProviders = ref<LlmProviderItem[]>([])
-const providersLoading = ref(false)
-
-async function loadLlmProviders() {
-  providersLoading.value = true
-  try {
-    llmProviders.value = await agentApi.listLlmProviders()
-  } finally {
-    providersLoading.value = false
-  }
-}
+// §6.74: 已移除模型选择——内部 LLM 统一走系统配置默认 provider+default-model
 
 function onRoleChange() {
   // 网页端 Planner 仅 PLANNER 角色可选，切走角色后回退默认接入类型
@@ -270,10 +244,6 @@ function onRoleChange() {
 function onAccessTypeChange(v: string) {
   if (v === 'WEB_BROWSER') {
     ElMessage.warning('网页端 Planner 功能暂不可用')
-    return
-  }
-  if (v === 'API_KEY_LLM' && llmProviders.value.length === 0) {
-    loadLlmProviders()
   }
 }
 
@@ -287,17 +257,13 @@ async function handleRegister() {
   registering.value = true
   try {
     const isLlm = form.accessType === 'API_KEY_LLM'
-    const selected = llmProviders.value.find(p => p.provider === form.provider)
     const res: any = await agentApi.register({
       name: form.name,
       role: form.role,
       description: form.description,
-      specializationSlug: form.specializationSlug || undefined,
       accessType: form.accessType,
-      // 内部 LLM：modelType=provider:defaultModel，后端据此自动补绑平台密钥
-      modelType: isLlm
-        ? (selected?.defaultModel ? `${form.provider}:${selected.defaultModel}` : form.provider)
-        : undefined
+      // 注册即填写技能（A2 显式优先）；§6.74: 不再传 modelType，内部 LLM 由后端按系统默认 provider+default-model 补绑
+      skills: form.skills.length > 0 ? form.skills : undefined
     })
     registerDialog.value = false
     if (isLlm) {
@@ -311,9 +277,8 @@ async function handleRegister() {
     // 重置表单
     form.name = ''
     form.description = ''
-    form.specializationSlug = ''
     form.accessType = 'CLI_CLIENT'
-    form.provider = ''
+    form.skills = []
     load()
   } finally { registering.value = false }
 }

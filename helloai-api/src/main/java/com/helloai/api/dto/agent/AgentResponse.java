@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import lombok.Data;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Map;
 
 @Data
@@ -20,7 +21,6 @@ public class AgentResponse {
     private String apiKey;
     private String modelType;
     private Map<String, Object> modelConfig;
-    private String specializationSlug;
     private AgentStatus status;
     private Integer score;
     private String remark;
@@ -31,6 +31,7 @@ public class AgentResponse {
     private AgentAccessType accessType;
     private Map<String, Object> capabilities;
     private Map<String, Object> labels;
+    private List<String> skills;
     private OffsetDateTime lastSeenAt;
     private OffsetDateTime lastActiveAt;
     private AgentOnlineStatus onlineStatus;
