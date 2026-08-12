@@ -857,5 +857,49 @@ class AgentSelectorTest {
 
             assertThat(constraints.allows(null)).isFalse();
         }
+
+        @Test
+        @DisplayName("A3 同义词：requiredSkills=powershell 命中 skills=shell 的 Agent")
+        void shouldMatchSynonymSkill() {
+            Agent hasShell = agentWithSkills(2L, 100, List.of("shell"));
+
+            AgentSelector.AgentSelectionConstraints constraints =
+                    AgentSelector.AgentSelectionConstraints.of(null, List.of("powershell"));
+
+            assertThat(constraints.allows(hasShell)).isTrue();
+        }
+
+        @Test
+        @DisplayName("A3 同义词：requiredSkills=[bash, 容器] 命中 skills=[shell, docker]（中英文交叉 AND）")
+        void shouldMatchMixedSynonymSkills() {
+            Agent hasShellDocker = agentWithSkills(2L, 100, List.of("shell", "docker"));
+
+            AgentSelector.AgentSelectionConstraints constraints =
+                    AgentSelector.AgentSelectionConstraints.of(null, List.of("bash", "容器"));
+
+            assertThat(constraints.allows(hasShellDocker)).isTrue();
+        }
+
+        @Test
+        @DisplayName("A3 同义词：requiredSkills=Python 命中 skills=python（大小写归一）")
+        void shouldMatchCaseInsensitiveSkill() {
+            Agent hasPython = agentWithSkills(2L, 100, List.of("python"));
+
+            AgentSelector.AgentSelectionConstraints constraints =
+                    AgentSelector.AgentSelectionConstraints.of(null, List.of("Python"));
+
+            assertThat(constraints.allows(hasPython)).isTrue();
+        }
+
+        @Test
+        @DisplayName("A3 同义词：归一化后仍缺技能则不命中（AND 语义不放松）")
+        void shouldNotMatchWhenStillMissingRequiredSkill() {
+            Agent hasShellOnly = agentWithSkills(2L, 100, List.of("shell"));
+
+            AgentSelector.AgentSelectionConstraints constraints =
+                    AgentSelector.AgentSelectionConstraints.of(null, List.of("shell", "web-search"));
+
+            assertThat(constraints.allows(hasShellOnly)).isFalse();
+        }
     }
 }

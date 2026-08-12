@@ -13,22 +13,12 @@ export const agentApi = {
     name: string
     role: string
     description?: string
-    specializationSlug?: string
     accessType?: string
     modelType?: string
+    // V47/A2: 显式技能优先，不传则按接入类型+名称/描述关键词自动推导
+    skills?: string[]
   }) {
     return request.post('/agents/register', data)
-  },
-
-  // ── LLM Provider 目录（手动注册 API_KEY_LLM Agent 用）──
-  listLlmProviders() {
-    return request.get<any, Array<{
-      provider: string
-      defaultModel: string | null
-      apiKeyConfigured: boolean
-      factorySupported: boolean
-      available: boolean
-    }>>('/admin/agents/listLlmProviders')
   },
 
   // ── 管理端分页列表（含 enrichment）──
@@ -50,7 +40,8 @@ export const agentApi = {
   },
 
   // ── 更新 Agent 信息 ──
-  updateProfile(id: string, data: { name?: string; modelType?: string; specializationSlug?: string; remark?: string }) {
+  // V47/A2: skills 显式传入整体替换；不传（undefined）则后端保持现状
+  updateProfile(id: string, data: { name?: string; remark?: string; skills?: string[] }) {
     return request.put<any, void>(`/admin/agents/updateById/${id}`, data)
   },
 

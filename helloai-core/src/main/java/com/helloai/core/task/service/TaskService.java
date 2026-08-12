@@ -64,16 +64,55 @@ public class TaskService extends ServiceImpl<TaskMapper, Task> {
      * 创建任务（初始状态 PENDING）。
      *
      * <p>按 §6.3 分层红线从 TaskController 收口：实体装配与落库归 Service，
-     * Controller 只负责参数接收与返回封装。</p>
+     * Controller 只负责参数接收与返回封装。等价于 {@code createTask(title, description, null, null, null)}。</p>
      */
     @Transactional(rollbackFor = Exception.class)
     public Task createTask(String title, String description) {
+        return createTask(title, description, null);
+    }
+
+    /**
+     * 创建任务（初始状态 PENDING），可指定任务级 SLA 分钟数（A0-7 新增，V48）。
+     *
+     * <p>{@code slaMinutes} 可空：null=无时限；非 null 时在计划确认（confirmPlan）
+     * 阶段按 {@code 确认时刻 + slaMinutes} 下发各子任务 {@code deadline}，
+     * 外部 Agent 经 pullTasks 的 {@code deadline} 字段感知时限。
+     * 等价于 {@code createTask(title, description, slaMinutes, null, null)}。</p>
+     *
+     * @param title       任务标题
+     * @param description 任务描述
+     * @param slaMinutes  任务 SLA 分钟数，null=无时限
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public Task createTask(String title, String description, Integer slaMinutes) {
+        return createTask(title, description, slaMinutes, null, null);
+    }
+
+    /**
+     * 创建任务（初始状态 PENDING），可指定任务级 SLA 与执行策略（A1 新增，V47 收尾）。
+     *
+     * <p>{@code agentPolicy} / {@code requiredSkills} 可空：null=不设置，落库走 DB 默认值
+     * {@code {}} / {@code []}，与旧数据行为完全一致。policy 键结构见 {@code TaskAgentPolicy}。</p>
+     *
+     * @param title          任务标题
+     * @param description    任务描述
+     * @param slaMinutes     任务 SLA 分钟数，null=无时限
+     * @param agentPolicy    任务级 Agent 指定策略，null=不设置
+     * @param requiredSkills 任务要求的能力列表，null=不设置
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public Task createTask(String title, String description, Integer slaMinutes,
+                           Map<String, Object> agentPolicy, List<String> requiredSkills) {
         Task task = new Task();
         task.setTitle(title);
         task.setDescription(description);
+        task.setSlaMinutes(slaMinutes);
+        task.setAgentPolicy(agentPolicy);
+        task.setRequiredSkills(requiredSkills);
         task.setStatus(TaskStatus.PENDING);
         save(task);
-        log.info("任务创建: id={}, title={}", task.getId(), title);
+        log.info("任务创建: id={}, title={}, slaMinutes={}, agentPolicy={}, requiredSkills={}",
+                task.getId(), title, slaMinutes, agentPolicy, requiredSkills);
         return task;
     }
 
@@ -118,16 +157,45 @@ public class TaskService extends ServiceImpl<TaskMapper, Task> {
 
     /**
      * 更新任务标题与描述；任务不存在时返回 null（由 Controller 转 R.fail）。
+     * 等价于 {@code updateTask(id, title, description, null, null, null)}。
      */
     @Transactional(rollbackFor = Exception.class)
     public Task updateTask(Long id, String title, String description) {
+        return updateTask(id, title, description, null, null, null);
+    }
+
+    /**
+     * 更新任务基本信息、SLA 与执行策略（A1 新增，V47 收尾）；任务不存在时返回 null。
+     *
+     * <p>更新语义：null 字段不 set（保持现状，不进入 UPDATE 语句）；
+     * {@code agentPolicy} 传空 Map / {@code requiredSkills} 传空列表表示显式清空
+     * （写回 {@code {}} / {@code []}）。policy 键结构见 {@code TaskAgentPolicy}。</p>
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public Task updateTask(Long id, String title, String description, Integer slaMinutes,
+                           Map<String, Object> agentPolicy, List<String> requiredSkills) {
         Task task = getById(id);
         if (task == null) {
             return null;
         }
-        task.setTitle(title);
-        task.setDescription(description);
+        if (title != null) {
+            task.setTitle(title);
+        }
+        if (description != null) {
+            task.setDescription(description);
+        }
+        if (slaMinutes != null) {
+            task.setSlaMinutes(slaMinutes);
+        }
+        if (agentPolicy != null) {
+            task.setAgentPolicy(agentPolicy);
+        }
+        if (requiredSkills != null) {
+            task.setRequiredSkills(requiredSkills);
+        }
         updateById(task);
+        log.info("任务更新: id={}, slaMinutes={}, agentPolicy={}, requiredSkills={}",
+                id, slaMinutes, agentPolicy, requiredSkills);
         return task;
     }
 

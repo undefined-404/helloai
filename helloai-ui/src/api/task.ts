@@ -1,6 +1,15 @@
 import request from './request'
 import type { AxiosResponse } from 'axios'
-import type { Task, TaskRelatedCounts, TaskFinalReport, TaskIteration, SubTask, LongId } from '@/types'
+import type { Task, TaskAgentPolicy, TaskRelatedCounts, TaskFinalReport, TaskIteration, SubTask, LongId } from '@/types'
+
+// A1: 任务创建/编辑公共载荷（SLA + V47 执行策略/技能；update 时 null 字段后端不更新、空集合=清空）
+export interface TaskFormPayload {
+  title: string
+  description?: string
+  slaMinutes?: number | null
+  agentPolicy?: TaskAgentPolicy | null
+  requiredSkills?: string[]
+}
 
 export const taskApi = {
   list(params?: { status?: string }) {
@@ -10,12 +19,12 @@ export const taskApi = {
   getById(id: LongId) {
     return request.get<any, Task>(`/tasks/getById/${id}`)
   },
-  // M4.5: 派发控制台新建任务入口
-  create(data: { title: string; description?: string }) {
+  // M4.5: 派发控制台新建任务入口（A1: 支持 SLA/执行策略/技能透传）
+  create(data: TaskFormPayload) {
     return request.post<any, Task>('/tasks', data)
   },
-  // 任务管理 CRUD: 编辑基本信息
-  update(id: LongId, data: { title: string; description?: string }) {
+  // 任务管理 CRUD: 编辑基本信息（A1: 扩展 SLA/执行策略/技能）
+  update(id: LongId, data: TaskFormPayload) {
     return request.put<any, Task>(`/tasks/updateById/${id}`, data)
   },
   // 重新发布: 重置 PENDING + 重新通知全部 PLANNER（DONE 不允许）

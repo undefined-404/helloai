@@ -7,6 +7,7 @@ import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.WorkMode;
+import com.helloai.core.agent.SkillNormalizer;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
 import com.helloai.core.agent.service.AgentService;
@@ -326,7 +327,7 @@ public class AgentSelector {
         /** 执行者白名单；null/空 = 不限定；非空 = 只允许集合内的 Agent。 */
         private List<Long> allowedAgentIds;
 
-        /** 任务要求技能；null/空 = 不限定；非空 = Agent.skills 必须全部包含（AND 语义）。 */
+        /** 任务要求技能；null/空 = 不限定；非空 = Agent.skills 归一化后必须全部包含（AND 语义，A3 同义词互命中）。 */
         private List<String> requiredSkills;
 
         public static AgentSelectionConstraints of(List<Long> allowedAgentIds, List<String> requiredSkills) {
@@ -352,7 +353,8 @@ public class AgentSelector {
             }
             if (requiredSkills != null && !requiredSkills.isEmpty()) {
                 List<String> skills = agent.getSkills();
-                if (skills == null || skills.isEmpty() || !skills.containsAll(requiredSkills)) {
+                // A3：匹配前归一化（trim + 小写 + 同义词归并），"powershell"/"bash" 与 "shell" 互相命中
+                if (skills == null || skills.isEmpty() || !SkillNormalizer.matches(skills, requiredSkills)) {
                     return false;
                 }
             }

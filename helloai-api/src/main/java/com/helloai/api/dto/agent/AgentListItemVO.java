@@ -6,6 +6,7 @@ import com.helloai.common.constant.AgentStatus;
 import lombok.Data;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 
 @Data
 public class AgentListItemVO {
@@ -19,6 +20,9 @@ public class AgentListItemVO {
     private AgentStatus status;
     private Integer totalScore;
     private Integer rank;
+
+    /** V47/A2: 能力声明列表（shell / docker / code-review / web-search 等，任务 required_skills 匹配用，前端编辑弹窗回显） */
+    private List<String> skills;
 
     /* workload */
     private int assignedCount;

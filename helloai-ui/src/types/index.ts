@@ -53,6 +53,26 @@ export interface Task {
   updateTime: string
   // V41: 报告生成状态（生成中时列表状态列显示"报告生成中"，报告按钮禁用）
   finalReportStatus?: FinalReportStatus
+  // A0-7: 任务 SLA 分钟数（null=无时限；confirmPlan 时按确认时刻+SLA 下发子任务 deadline）
+  slaMinutes?: number | null
+  // V47: 任务级 Agent 指定策略（A1 起前端可编辑；键缺省即回落默认）
+  agentPolicy?: TaskAgentPolicy | null
+  // V47: 任务要求的能力列表（AND 语义；空=不限制）
+  requiredSkills?: string[]
+}
+
+// V47 任务级 Agent 指定策略（task.agent_policy JSONB；全空=不指定，各键缺省即回落默认）
+export interface TaskAgentPolicy {
+  // 指定拆解/澄清 Planner（失效回退自动选择）
+  plannerAgentId?: LongId | null
+  // 执行者白名单（为空=不限定）
+  executorAgentIds?: LongId[]
+  // 指定自动核验 Reviewer（失效回退自动选择）
+  reviewerAgentId?: LongId | null
+  // N11 回退策略：AUTO（默认）/ RESTRICTED / NONE
+  fallbackPolicy?: 'AUTO' | 'RESTRICTED' | 'NONE' | null
+  // 任务难度：LOW / MEDIUM（默认）/ HIGH（HIGH 视为禁止 N11 自动回退）
+  difficulty?: 'LOW' | 'MEDIUM' | 'HIGH' | null
 }
 
 // 任务删除前风险提示 + 删除结果回显共用（对应后端 TaskRelatedCounts）
@@ -146,13 +166,14 @@ export interface Agent {
   accessType?: 'CLI_CLIENT' | 'API_KEY_LLM' | 'WEB_BROWSER' | string
   modelType: string | null
   modelConfig: Record<string, any> | null
-  specializationSlug: string | null
   status: AgentStatus
   score: number
   remark: string | null
   createTime: string
   // §6.52 人工介入面板：在线状态（ONLINE/IDLE/OFFLINE/SLEEPING，后端可能不返回则缺省）
   onlineStatus?: string | null
+  // V47: 能力声明列表（shell / docker / code-review / web-search 等，任务 required_skills 匹配用）
+  skills?: string[]
 }
 
 export interface AgentListItem {
@@ -173,6 +194,8 @@ export interface AgentListItem {
   doneCount: number
   blockedCount: number
   reviewCount: number
+  // V47/A2: 能力声明列表（任务 required_skills 匹配用，编辑弹窗回显）
+  skills?: string[]
   // timeline
   lastRequestAt: string | null
   lastActivityAt: string | null
@@ -186,7 +209,6 @@ export interface AgentDetail extends AgentListItem {
   totalRewardRecords: number
   apiKey: string
   modelType: string | null
-  specializationSlug: string | null
 }
 
 export interface AgentRelatedCounts {

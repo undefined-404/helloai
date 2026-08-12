@@ -18,25 +18,31 @@
           <el-option label="审查者 REVIEWER" value="REVIEWER" />
         </el-select>
       </el-form-item>
-      <el-form-item label="模型类型">
-        <el-input v-model="form.modelType" placeholder="如: gpt-4, claude-3" />
-      </el-form-item>
-      <el-form-item label="专业化" v-if="form.role === 'EXECUTOR'">
-        <el-select v-model="form.specializationSlug" clearable placeholder="选择 Agent 专业化" style="width:100%">
-          <el-option label="无 (默认)" value="" />
-          <el-option label="AI酱瓜-后端" value="executor-backend" />
-          <el-option label="AI小珂-前端" value="executor-frontend" />
-          <el-option label="AI小云-运维" value="executor-devops" />
-          <el-option label="AI小吴-调研" value="executor-researcher" />
-          <el-option label="AI小安-测试" value="executor-tester" />
-        </el-select>
-      </el-form-item>
       <el-form-item label="API Key">
         <el-input :model-value="form.apiKey" readonly>
           <template #append>
             <el-button @click="copyApiKey">复制</el-button>
           </template>
         </el-input>
+      </el-form-item>
+      <el-form-item label="技能">
+        <el-select
+          v-model="form.skills"
+          multiple
+          filterable
+          allow-create
+          default-first-option
+          placeholder="选择或输入技能（回车可自定义）"
+          style="width:100%"
+        >
+          <el-option
+            v-for="opt in skillOptions"
+            :key="opt.value"
+            :label="opt.label"
+            :value="opt.value"
+          />
+        </el-select>
+        <div class="field-hint">能力声明，任务「要求技能」按 AND 语义匹配；保存即整体替换</div>
       </el-form-item>
       <el-form-item label="描述">
         <el-input v-model="form.remark" type="textarea" :rows="2" placeholder="职责简要" />
@@ -53,7 +59,10 @@
 import { ref, watch, reactive } from 'vue'
 import { ElMessage } from 'element-plus'
 import { agentApi } from '@/api/agent'
+import { AGENT_SKILL_OPTIONS } from '@/constants/agentSkills'
 import type { AgentListItem } from '@/types'
+
+const skillOptions = AGENT_SKILL_OPTIONS
 
 const props = defineProps<{ modelValue: boolean; agent: AgentListItem | null }>()
 const emit = defineEmits<{ 'update:modelValue': [v: boolean]; close: []; saved: [] }>()
@@ -64,17 +73,18 @@ watch(visible, v => emit('update:modelValue', v))
 
 const saving = ref(false)
 const formRef = ref()
-const form = reactive({ name: '', role: 'EXECUTOR', modelType: '', specializationSlug: '', remark: '', apiKey: '' })
+// V47/A2: skills 为能力声明列表（多选下拉 + 自定义，回显后整体替换提交；删光 = 清空）
+// §6.74: 模型类型/专业化已移除——外部 AI Agent 用自身模型、内部 LLM 统一走系统配置默认模型
+const form = reactive({ name: '', role: 'EXECUTOR', remark: '', apiKey: '', skills: [] as string[] })
 const rules = { name: [{ required: true, message: '请输入名称', trigger: 'blur' }] }
 
 watch(() => props.agent, (a) => {
   if (a) {
     form.name = a.name
     form.role = a.role
-    form.modelType = ''
-    form.specializationSlug = ''
     form.remark = a.description || ''
     form.apiKey = a.apiKey || ''
+    form.skills = Array.isArray(a.skills) ? [...a.skills] : []
   }
 }, { immediate: true })
 
@@ -90,9 +100,8 @@ async function handleSave() {
   try {
     await agentApi.updateProfile(props.agent.id, {
       name: form.name,
-      modelType: form.modelType || undefined,
-      specializationSlug: form.specializationSlug || undefined,
-      remark: form.remark
+      remark: form.remark,
+      skills: form.skills
     })
     ElMessage.success('更新成功')
     visible.value = false
@@ -100,3 +109,7 @@ async function handleSave() {
   } finally { saving.value = false }
 }
 </script>
+
+<style scoped>
+.field-hint { width: 100%; margin-top: 4px; color: var(--ha-muted); font-size: 12px; line-height: 1.5; }
+</style>

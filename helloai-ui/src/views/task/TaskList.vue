@@ -5,6 +5,8 @@
         <div class="card-header">
           <span>任务管理</span>
           <div class="header-actions">
+            <!-- A1: 表单直建入口（含 V47 执行策略） -->
+            <el-button size="small" type="primary" @click="openCreate">新建任务</el-button>
             <el-button size="small" type="primary" @click="router.push('/requirement-chat')">对话新建</el-button>
             <el-button size="small" @click="load">刷新</el-button>
           </div>
@@ -35,6 +37,12 @@
         </el-table-column>
         <el-table-column label="操作" width="300" fixed="right">
           <template #default="{ row }">
+            <el-button
+              size="small"
+              plain
+              :disabled="row.status === 'DONE'"
+              @click="openEdit(row)"
+            >编辑</el-button>
             <el-button
               v-if="row.status === 'PENDING'"
               size="small"
@@ -75,6 +83,8 @@
     <TaskDeleteDialog v-model="deleteVisible" :task="deletingTask" @done="load" />
     <PlanReviewDialog v-model="planReviewVisible" :task="reviewingTask" @done="load" />
     <FinalReportDialog v-model="reportVisible" :task="reportTask" />
+    <!-- A1: 新建/编辑任务（含 V47 执行策略与 SLA） -->
+    <TaskFormDialog v-model="formVisible" :task="editingTask" @done="load" />
 
     <!-- 描述详情弹窗 -->
     <el-dialog v-model="descVisible" :title="descTitle" width="600px" top="5vh" append-to-body :show-close="true" :close-on-click-modal="false">
@@ -94,6 +104,7 @@ import MarkdownView from '@/components/MarkdownView.vue'
 import TaskDeleteDialog from './components/TaskDeleteDialog.vue'
 import PlanReviewDialog from './components/PlanReviewDialog.vue'
 import FinalReportDialog from './components/FinalReportDialog.vue'
+import TaskFormDialog from './components/TaskFormDialog.vue'
 import { TASK_STATUS_MAP } from '@/types'
 import type { Task, TaskStatus, LongId } from '@/types'
 
@@ -163,6 +174,12 @@ async function handleRepublish(row: Task) {
     load()
   } catch { /* 拦截器已弹错 */ }
 }
+
+// ── A1 新建/编辑任务（task=null 新建，否则编辑；编辑态回显 SLA/执行策略/技能）──
+const formVisible = ref(false)
+const editingTask = ref<Task | null>(null)
+function openCreate() { editingTask.value = null; formVisible.value = true }
+function openEdit(row: Task) { editingTask.value = row; formVisible.value = true }
 
 // ── 删除 ──
 const deleteVisible = ref(false)
