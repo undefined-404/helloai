@@ -42,7 +42,7 @@
 | `ack` | ✓ | ✓ | `POST .../ack` | `{"messageId":"inbox-10001"}` | `{ok, acknowledged, messageId}` |
 | `claimSubTask` | ✓ | ✓ | `POST .../claimSubTask` | `{"subTaskId":123}` | `{ok, claimed, reason, assignedAgent, subTaskId, version}` |
 | `heartbeat` | ✓ | ✓ | `POST .../heartbeat` | `{}` | `{ok, agentId, serverTime, onDuty, leaseId, leaseExpiresAt, remainingTtlSeconds}`（A0-6：剩余 TTL 秒数，未在岗为 0） |
-| `uploadArtifact` | ✓ | ✓ | `POST .../uploadArtifact` | `{"subTaskId":123,"fileName":"a.md","mimeType":"text/markdown","fileSize":1024,"storageUrl":"local://..."}` | `{ok, attachmentId, storageUrl}` |
+| `uploadArtifact` | ✓ | ✓ | `POST .../uploadArtifact` | `{"subTaskId":123,"fileName":"a.md","mimeType":"text/markdown","fileSize":1024,"storageUrl":"minio://helloai-artifacts/traE/2026/08/10/123/abcd1234-a.md"}` | `{ok, attachmentId, storageUrl}` |
 | `submitResult` | ✓ | ✓ | `POST .../submitResult` | `{"subTaskId":123,"resultId":"r-1","success":true,"output":"...","finishReason":"completed"}` | `{ok, accepted, idempotent, status, reason, subTaskId, resultId}` |
 | `reportBlocked` | ✓ | ✓ | `POST .../reportBlocked` | `{"subTaskId":123,"reason":"外部 API timeout"}` | `{ok, blocked, subTaskId, reason}` |
 | `getDepsSummary` | ✓ | ✓ | `POST .../getDepsSummary` | `{"subTaskId":123}` | `{subTaskId, taskId, depCount, loadedCount, truncatedCount, degraded, deps:[{subTaskId, title, status, summary, content, truncated}]}` |
@@ -112,7 +112,7 @@
 | `ack` | 每条收件箱消息处理完毕后确认（把 `read` 置为 true；未 ack 的消息下次 pull 仍会出现） |
 | `claimSubTask` | 主动原子认领一个 PENDING 子任务（同角色竞争，抢到才执行） |
 | `heartbeat` | 周期上报心跳维持在线（建议 30 秒一次，超过 5 分钟无心跳会被判 OFFLINE） |
-| `uploadArtifact` | 执行完子任务后登记产物附件元数据 |
+| `uploadArtifact` | 执行完子任务后登记产物附件元数据（v2.7：平台可直读 `minio://` 附件，支持证据核验与流式下载；文件先 PUT 到 MinIO，`storageUrl` 按 `{自身注册名}/{yyyy}/{MM}/{taskId}/{subTaskId}/{文件名}` 组织） |
 | `submitResult` | 完成子任务后上交执行结果（成功或失败）；重复提交须带相同 `resultId` 保证幂等 |
 | `reportBlocked` | 遇到外部依赖不可用 / 环境缺失等无法自行解决的阻塞时上报 |
 | `getDepsSummary` | 开工前主动拉取前置产出摘要（每条前置的标题/状态/执行摘要/内容本体），避免重复调研或遗漏上游结论；无依赖时 `depCount=0` |

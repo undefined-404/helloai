@@ -310,6 +310,8 @@ public class McpToolService {
     /**
      * 上传产物附件元数据。实际文件内容由客户端直接上传到 MinIO/对象存储，
      * 本工具只注册 DB 元数据记录。
+     * v2.7 起平台可直读 minio:// 附件（下载与执行证据核验），
+     * storageUrl 建议按 {注册名}/{yyyy}/{MM}/{taskId}/{subTaskId}/ 组织。
      */
     @Transactional(rollbackFor = Exception.class)
     public UploadArtifactResult uploadArtifact(Long agentId, Long subTaskId,

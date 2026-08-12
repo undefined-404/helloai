@@ -2,6 +2,8 @@ package com.helloai.core.agent.output;
 
 import com.helloai.common.config.ArtifactStorageProperties;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.system.entity.Attachment;
 import com.helloai.core.system.service.AttachmentService;
 import com.helloai.core.system.storage.ArtifactStorage;
@@ -16,7 +18,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -38,6 +39,8 @@ class ExecutionArtifactServiceTest {
     private AttachmentService attachmentService;
     @Mock
     private TaskTimelineService taskTimelineService;
+    @Mock
+    private AgentService agentService;
 
     private ArtifactStorageProperties properties;
     private ExecutionArtifactService service;
@@ -46,7 +49,7 @@ class ExecutionArtifactServiceTest {
     void setUp() {
         properties = new ArtifactStorageProperties();
         service = new ExecutionArtifactService(properties, new ExecutionOutputParser(),
-                artifactStorage, attachmentService, taskTimelineService);
+                artifactStorage, attachmentService, taskTimelineService, agentService);
     }
 
     private SubTask subTask() {
@@ -59,10 +62,14 @@ class ExecutionArtifactServiceTest {
     }
 
     @Test
-    @DisplayName("正常产出：落盘 + register（归属传 assignedAgentId）+ 时间线（记上报 agentId）")
+    @DisplayName("正常产出：落盘（归属目录用 Agent 注册名）+ register（归属传 assignedAgentId）+ 时间线（记上报 agentId）")
     void shouldMaterializeAndRecordTimeline() {
-        StoredArtifact stored = new StoredArtifact("local://b/100/x-调度分析.md", "b", "100/x-调度分析.md", 12L);
-        when(artifactStorage.store(eq(100L), eq("调度分析.md"), any())).thenReturn(stored);
+        StoredArtifact stored = new StoredArtifact("local://b/tester/2026/08/10/100/x-调度分析.md", "b", "tester/2026/08/10/100/x-调度分析.md", 12L);
+        Agent agent = new Agent();
+        agent.setId(7L);
+        agent.setName("tester");
+        when(agentService.getById(7L)).thenReturn(agent);
+        when(artifactStorage.store(eq("tester"), eq(10L), eq(100L), eq("调度分析.md"), any())).thenReturn(stored);
         Attachment attachment = new Attachment();
         attachment.setId(555L);
         when(attachmentService.register(eq(7L), eq(100L), eq("调度分析.md"),
@@ -96,7 +103,7 @@ class ExecutionArtifactServiceTest {
     @DisplayName("存储异常被吞掉（best-effort），不抛出、不注册附件")
     void shouldSwallowStorageException() {
         doThrow(new RuntimeException("disk full"))
-                .when(artifactStorage).store(anyLong(), anyString(), any());
+                .when(artifactStorage).store(anyString(), any(), any(), anyString(), any());
 
         service.materialize(subTask(), 99L, "# 报告内容");
 

@@ -84,6 +84,11 @@
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-anthropic</artifactId>
         </dependency>
+        <!-- MinIO 对象存储 SDK（v2.7：附件存储后端，storageUrl=minio://{bucket}/{objectKey}） -->
+        <dependency>
+            <groupId>io.minio</groupId>
+            <artifactId>minio</artifactId>
+        </dependency>
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-core</artifactId>

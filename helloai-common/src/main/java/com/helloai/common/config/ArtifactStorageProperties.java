@@ -22,7 +22,7 @@ public class ArtifactStorageProperties {
     /** 是否启用执行产出物化。关闭时执行链不再自动生成附件，仅保留 context.lastExecution。 */
     private boolean enabled = true;
 
-    /** 存储类型。当前仅实现 local（本地磁盘）；预留 minio/s3 扩展位。 */
+    /** 存储类型：local（本地磁盘）/ minio（对象存储），对应 ArtifactStorage 实现的主路由选择。 */
     private String type = "local";
 
     /**
@@ -33,6 +33,18 @@ public class ArtifactStorageProperties {
 
     /** local 存储的逻辑 bucket 名，参与 storageUrl（local://{bucket}/{objectKey}）与附件元数据。 */
     private String bucket = "helloai-local";
+
+    /** MinIO endpoint（type=minio 时生效），本地 docker compose 默认 29000 端口。 */
+    private String minioEndpoint = "http://localhost:29000";
+
+    /** MinIO access key（type=minio 时生效）。 */
+    private String minioAccessKey = "minioadmin";
+
+    /** MinIO secret key（type=minio 时生效）。 */
+    private String minioSecretKey = "minioadmin123";
+
+    /** MinIO bucket 名（type=minio 时生效），参与 storageUrl（minio://{bucket}/{objectKey}）与附件元数据。 */
+    private String minioBucket = "helloai-artifacts";
 
     /** 单次执行物化的最大文件数，超出部分丢弃并记日志（防解析异常导致附件爆炸）。 */
     private int maxFiles = 10;

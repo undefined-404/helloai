@@ -194,13 +194,21 @@ helloai:
     credential:
       aes-key-base64: ${HELLOAI_CREDENTIAL_AES_KEY_BASE64:MEsmol1MWDTT69/lAOGeYGmDa9/a6S/lfHdfmekX0MM=}
   # 执行产出物化存储（方案2）：执行成功后把 lastExecution.output 物化为附件文件，
-  # local 类型落到本地磁盘，storageUrl 形如 local://{bucket}/{objectKey}，
-  # 下载由 AttachmentController 流式返回。详见 doc/design/HelloAI_执行产出物化与结构化多文件产出方案.md
+  # type=local 落到本地磁盘（storageUrl=local://{bucket}/{objectKey}），
+  # type=minio 落到对象存储（storageUrl=minio://{bucket}/{objectKey}）；
+  # objectKey 统一按 {ownerName}/{yyyy}/{MM}/{taskId}/{subTaskId}/{uuid8}-{safeName} 组织，
+  # 下载由 AttachmentController 流式返回（v2.7 起 minio:// 附件平台可直读）。
+  # 详见 doc/design/HelloAI_执行产出物化与结构化多文件产出方案.md
   storage:
     enabled: true
-    type: local
+    type: minio
     local-base-dir: ./data/artifacts
     bucket: helloai-local
+    # --- MinIO（type=minio 时生效；本地 docker compose 默认账号见 docker-compose.yml）---
+    minio-endpoint: ${MINIO_ENDPOINT:http://localhost:29000}
+    minio-access-key: ${MINIO_ACCESS_KEY:minioadmin}
+    minio-secret-key: ${MINIO_SECRET_KEY:minioadmin123}
+    minio-bucket: ${MINIO_BUCKET:helloai-artifacts}
     max-files: 10
     max-file-size: 5242880
   alert:

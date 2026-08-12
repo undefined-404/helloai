@@ -34,17 +34,28 @@ class LocalArtifactStorageTest {
     }
 
     @Test
-    @DisplayName("store 后 load 往返一致，storageUrl 为 local://{bucket}/{objectKey}")
+    @DisplayName("store 后 load 往返一致，storageUrl 为 local://{bucket}/{objectKey}，目录按 ownerName/年/月/taskId/subTaskId 组织")
     void shouldStoreAndLoadRoundTrip() {
         byte[] content = "# 产出内容".getBytes(StandardCharsets.UTF_8);
 
-        StoredArtifact stored = storage.store(123L, "报告.md", content);
+        StoredArtifact stored = storage.store("tester", 7L, 123L, "报告.md", content);
 
-        assertThat(stored.storageUrl()).startsWith("local://test-bucket/123/");
+        assertThat(stored.storageUrl()).startsWith("local://test-bucket/tester/");
         assertThat(stored.bucketName()).isEqualTo("test-bucket");
-        assertThat(stored.objectKey()).startsWith("123/").endsWith("-报告.md");
+        assertThat(stored.objectKey()).startsWith("tester/")
+                .containsPattern("\\d{4}/\\d{2}/7/123/")
+                .endsWith("-报告.md");
         assertThat(stored.fileSize()).isEqualTo(content.length);
         assertThat(storage.load(stored.storageUrl())).isEqualTo(content);
+    }
+
+    @Test
+    @DisplayName("ownerName 为空或含路径分隔符时清洗为安全目录段")
+    void shouldSanitizeOwnerNameInObjectKey() {
+        StoredArtifact stored = storage.store("../evil\\name", 7L, 123L, "a.md", new byte[]{1});
+
+        assertThat(stored.objectKey()).startsWith("_evil_name/");
+        assertThat(storage.supports(stored.storageUrl())).isTrue();
     }
 
     @Test
@@ -65,7 +76,7 @@ class LocalArtifactStorageTest {
     @Test
     @DisplayName("load 文件不存在抛 BizException")
     void shouldThrowWhenFileMissing() {
-        assertThatThrownBy(() -> storage.load("local://test-bucket/999/20260101/none-x.md"))
+        assertThatThrownBy(() -> storage.load("local://test-bucket/unknown/2026/01/9/999/none-x.md"))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("不存在");
     }
@@ -82,13 +93,23 @@ class LocalArtifactStorageTest {
     @Test
     @DisplayName("文件名清洗：保留字符替换、点前缀剥离、空白兜底、超长截断保扩展名")
     void shouldSanitizeFileName() {
-        assertThat(LocalArtifactStorage.sanitizeFileName("a/b\\c:d.md")).isEqualTo("a_b_c_d.md");
-        assertThat(LocalArtifactStorage.sanitizeFileName("..\\..\\evil.md")).isEqualTo("_.._evil.md");
-        assertThat(LocalArtifactStorage.sanitizeFileName("...hidden.md")).isEqualTo("hidden.md");
-        assertThat(LocalArtifactStorage.sanitizeFileName(null)).isEqualTo("output.md");
-        assertThat(LocalArtifactStorage.sanitizeFileName("  ")).isEqualTo("output.md");
+        assertThat(ArtifactStorage.sanitizeFileName("a/b\\c:d.md")).isEqualTo("a_b_c_d.md");
+        assertThat(ArtifactStorage.sanitizeFileName("..\\..\\evil.md")).isEqualTo("_.._evil.md");
+        assertThat(ArtifactStorage.sanitizeFileName("...hidden.md")).isEqualTo("hidden.md");
+        assertThat(ArtifactStorage.sanitizeFileName(null)).isEqualTo("output.md");
+        assertThat(ArtifactStorage.sanitizeFileName("  ")).isEqualTo("output.md");
         String longName = "n".repeat(120) + ".md";
-        String sanitized = LocalArtifactStorage.sanitizeFileName(longName);
+        String sanitized = ArtifactStorage.sanitizeFileName(longName);
         assertThat(sanitized).hasSizeLessThanOrEqualTo(100).endsWith(".md");
+    }
+
+    @Test
+    @DisplayName("ownerName 清洗：路径分隔符替换、点前缀剥离、空白兜底、超长截断")
+    void shouldSanitizeOwnerName() {
+        assertThat(ArtifactStorage.sanitizeOwnerName("../evil/name")).isEqualTo("_evil_name");
+        assertThat(ArtifactStorage.sanitizeOwnerName("...hidden")).isEqualTo("hidden");
+        assertThat(ArtifactStorage.sanitizeOwnerName("  ")).isEqualTo("unknown");
+        assertThat(ArtifactStorage.sanitizeOwnerName(null)).isEqualTo("unknown");
+        assertThat(ArtifactStorage.sanitizeOwnerName("n".repeat(100))).hasSize(64);
     }
 }

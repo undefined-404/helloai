@@ -18,8 +18,8 @@ import java.util.List;
 
 /**
  * 附件服务 — 管理 SubTask 的产物附件元数据。
- * 外部对象存储（MinIO/S3）只管元数据；方案2 本地物化产物（local://）
- * 可通过 {@link #loadContent(Long)} 直接读取内容供流式下载。
+ * v2.7 起平台可直读 local:// 与 minio:// 两类产物（附件物化存储与对象存储
+ * 均经 {@link #loadContent(Long)} 直接读取内容供流式下载与证据核验）。
  */
 @Slf4j
 @Service
@@ -111,7 +111,7 @@ public class AttachmentService extends ServiceImpl<AttachmentMapper, Attachment>
     }
 
     /**
-     * 判断附件是否可由平台直接读取内容（local:// 产物）；
+     * 判断附件是否可由平台直接读取内容（local:// 或 minio:// 产物）；
      * 不可读时下载链路回退 302 重定向到外部存储地址。
      */
     public boolean isContentLoadable(Attachment attachment) {
@@ -119,11 +119,11 @@ public class AttachmentService extends ServiceImpl<AttachmentMapper, Attachment>
     }
 
     /**
-     * 读取附件内容字节（仅限 {@link #isContentLoadable} 的 local:// 产物）。
+     * 读取附件内容字节（仅限 {@link #isContentLoadable} 的平台可读产物）。
      *
      * @param id 附件主键
      * @return 文件内容
-     * @throws BizException 附件不存在 / 地址非 local 存储 / 文件缺失
+     * @throws BizException 附件不存在 / 地址不可读 / 文件缺失
      */
     public byte[] loadContent(Long id) {
         Attachment attachment = getByIdRequired(id);

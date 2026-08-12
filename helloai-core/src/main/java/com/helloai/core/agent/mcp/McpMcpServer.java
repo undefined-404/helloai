@@ -184,6 +184,7 @@ public class McpMcpServer {
             【调用频率】每份产物调一次。
             【Gotchas】
             - 本工具只注册 DB 元数据记录（attachment 表）；实际文件请先 PUT 到 MinIO 再把 storageUrl 传进来
+            - v2.7 起平台可直读 minio:// 附件（下载、执行证据核验均可直读）；storageUrl 建议按 {自身注册名}/{yyyy}/{MM}/{taskId}/{subTaskId}/{文件名} 组织
             - fileName 必填且非空；storageUrl 必填；mimeType / fileSize 选填
             - 只有自身分配的子任务（assigned_agent=agentId）才能成功上传
             - 参数约束（如 fileSize max）由 agent_mcp_server.param_constraints 强制

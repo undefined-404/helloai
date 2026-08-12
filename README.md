@@ -108,7 +108,7 @@ HelloAI 基于 **Spring Boot + Spring AI MCP 协议**实现多 AI 厂商（Qoder
 ┌──────────────────────────────────────────────────────────────┐
 │                 基础设施层（Docker Compose）                    │
 │    PostgreSQL 16.4  •  Redis 7.2  •  RabbitMQ 3.12           │
-│    MinIO（对象存储） • 本地产出物化存储（local://）              │
+│    MinIO（对象存储）• 本地物化存储兜底（local:// / minio://）      │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -130,7 +130,7 @@ HelloAI 基于 **Spring Boot + Spring AI MCP 协议**实现多 AI 厂商（Qoder
 | 持久化 | PostgreSQL + MyBatis-Plus + Flyway | 16.4 / 3.5.9 / 自动迁移 |
 | 缓存 | Redis（Lettuce） | 7.2 |
 | 消息队列 | RabbitMQ | 3.12（publisher confirms / DLX / 手动 ACK） |
-| 对象存储 | MinIO + 本地物化存储 | `local://` 抽象 |
+| 对象存储 | MinIO + 本地物化存储 | `minio://` 默认 / `local://` 兜底（v2.7 起 minio:// 附件平台可直读） |
 | 弹性 | Resilience4j CircuitBreaker | — |
 | 协议 | MCP（SSE）/ 门铃 SSE 长连接 | Spring AI MCP Server |
 | 前端 | Vue 3 + TypeScript + Vite + Element Plus | + ECharts / Mermaid |

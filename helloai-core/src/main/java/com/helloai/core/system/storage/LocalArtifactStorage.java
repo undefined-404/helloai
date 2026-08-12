@@ -17,9 +17,10 @@ import java.util.UUID;
  * 本地磁盘产物存储：storageUrl 形如 {@code local://{bucket}/{objectKey}}，
  * 实际文件位于 {@code {local-base-dir}/{objectKey}}。
  *
- * <p>objectKey 组织为 {@code {subTaskId}/{yyyyMMdd}/{uuid8}-{safeName}}，
- * 同名产物天然不冲突；load 时对解析出的路径做归一化校验，
- * 拒绝越出根目录的路径穿越。</p>
+ * <p>objectKey 组织为
+ * {@code {ownerName}/{yyyy}/{MM}/{taskId}/{subTaskId}/{uuid8}-{safeName}}，
+ * 与 {@link MinioArtifactStorage} 保持一致的目录分层；load 时对解析出的路径
+ * 做归一化校验，拒绝越出根目录的路径穿越。</p>
  */
 @Slf4j
 @Component
@@ -28,16 +29,20 @@ public class LocalArtifactStorage implements ArtifactStorage {
 
     static final String URL_PREFIX = "local://";
 
-    private static final DateTimeFormatter DATE_DIR = DateTimeFormatter.ofPattern("yyyyMMdd");
+    private static final DateTimeFormatter YEAR_DIR = DateTimeFormatter.ofPattern("yyyy");
+    private static final DateTimeFormatter MONTH_DIR = DateTimeFormatter.ofPattern("MM");
 
     private final ArtifactStorageProperties properties;
 
     @Override
-    public StoredArtifact store(Long subTaskId, String fileName, byte[] content) {
-        String safeName = sanitizeFileName(fileName);
-        String objectKey = (subTaskId != null ? subTaskId : 0L)
-                + "/" + LocalDate.now().format(DATE_DIR)
-                + "/" + UUID.randomUUID().toString().substring(0, 8) + "-" + safeName;
+    public String storageType() {
+        return "local";
+    }
+
+    @Override
+    public StoredArtifact store(String ownerName, Long taskId, Long subTaskId, String fileName, byte[] content) {
+        String safeName = ArtifactStorage.sanitizeFileName(fileName);
+        String objectKey = buildObjectKey(ownerName, taskId, subTaskId, safeName);
         Path baseDir = baseDir();
         Path target = baseDir.resolve(objectKey).normalize();
         if (!target.startsWith(baseDir)) {
@@ -94,20 +99,13 @@ public class LocalArtifactStorage implements ArtifactStorage {
         return Path.of(properties.getLocalBaseDir()).toAbsolutePath().normalize();
     }
 
-    /** 文件名安全清洗：去路径分隔与控制字符，空白兜底 output.md，超长截断。 */
-    static String sanitizeFileName(String fileName) {
-        String name = fileName != null ? fileName.trim() : "";
-        name = name.replaceAll("[\\\\/:*?\"<>|\\r\\n\\t]", "_");
-        // 防 "..\" 之类残留：清洗后再去掉所有连续点前缀
-        name = name.replaceAll("^\\.+", "");
-        if (name.isBlank()) {
-            name = "output.md";
-        }
-        if (name.length() > 100) {
-            int dot = name.lastIndexOf('.');
-            String ext = dot > 0 ? name.substring(dot) : "";
-            name = name.substring(0, Math.min(100 - ext.length(), name.length())) + ext;
-        }
-        return name;
+    private String buildObjectKey(String ownerName, Long taskId, Long subTaskId, String safeName) {
+        LocalDate now = LocalDate.now();
+        return ArtifactStorage.sanitizeOwnerName(ownerName)
+                + "/" + now.format(YEAR_DIR)
+                + "/" + now.format(MONTH_DIR)
+                + "/" + (taskId != null ? taskId : 0L)
+                + "/" + (subTaskId != null ? subTaskId : 0L)
+                + "/" + UUID.randomUUID().toString().substring(0, 8) + "-" + safeName;
     }
 }

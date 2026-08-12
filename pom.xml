@@ -29,6 +29,7 @@
         <guava.version>33.2.0-jre</guava.version>
         <lombok.version>1.18.32</lombok.version>
         <resilience4j.version>2.2.0</resilience4j.version>
+        <minio.version>8.5.12</minio.version>
 
         <!-- 打包时默认跳过测试执行，需要跑测试时加 -DskipTests=false -->
         <skipTests>true</skipTests>
@@ -134,6 +135,12 @@
                 <groupId>io.github.resilience4j</groupId>
                 <artifactId>resilience4j-spring-boot3</artifactId>
                 <version>${resilience4j.version}</version>
+            </dependency>
+            <!-- MinIO 对象存储 SDK（附件存储后端，v2.7 引入；okhttp 传递依赖） -->
+            <dependency>
+                <groupId>io.minio</groupId>
+                <artifactId>minio</artifactId>
+                <version>${minio.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

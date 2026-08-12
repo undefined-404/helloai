@@ -230,7 +230,7 @@ public class McpController {
                                     "subTaskId", Map.of("type", "integer")))),
                     Map.of("name", "heartbeat", "description", "心跳上报",
                             "inputSchema", Map.of("type", "object", "properties", Map.of())),
-                    Map.of("name", "uploadArtifact", "description", "注册产物附件元数据",
+                    Map.of("name", "uploadArtifact", "description", "注册产物附件元数据（v2.7：平台可直读 minio:// 附件；storageUrl 按 {注册名}/{yyyy}/{MM}/{taskId}/{subTaskId}/ 组织）",
                             "inputSchema", Map.of("type", "object", "properties", Map.of(
                                     "subTaskId", Map.of("type", "integer"), "fileName", Map.of("type", "string"),
                                     "mimeType", Map.of("type", "string"), "fileSize", Map.of("type", "integer"),

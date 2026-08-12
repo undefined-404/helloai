@@ -2,6 +2,8 @@ package com.helloai.core.agent.output;
 
 import com.helloai.common.config.ArtifactStorageProperties;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.system.entity.Attachment;
 import com.helloai.core.system.service.AttachmentService;
 import com.helloai.core.system.storage.ArtifactStorage;
@@ -36,6 +38,7 @@ public class ExecutionArtifactService {
     private final ArtifactStorage artifactStorage;
     private final AttachmentService attachmentService;
     private final TaskTimelineService taskTimelineService;
+    private final AgentService agentService;
 
     /**
      * 物化执行产出为附件（best-effort，任何异常吞掉只记日志）。
@@ -70,6 +73,8 @@ public class ExecutionArtifactService {
         }
         // register 归属校验要求 agentId == assignedAgentId，内置链路固定传 assignedAgentId
         Long ownerAgentId = subTask.getAssignedAgentId();
+        // objectKey 首层目录使用执行 Agent 注册名（username 维度），便于按归属者检索
+        String ownerName = resolveOwnerName(ownerAgentId);
         List<Long> attachmentIds = new ArrayList<>();
         List<String> fileNames = new ArrayList<>();
         for (ArtifactFile file : files) {
@@ -79,7 +84,8 @@ public class ExecutionArtifactService {
                         subTask.getId(), file.fileName(), bytes.length, properties.getMaxFileSize());
                 continue;
             }
-            StoredArtifact stored = artifactStorage.store(subTask.getId(), file.fileName(), bytes);
+            StoredArtifact stored = artifactStorage.store(
+                    ownerName, subTask.getTaskId(), subTask.getId(), file.fileName(), bytes);
             Attachment attachment = attachmentService.register(
                     ownerAgentId, subTask.getId(),
                     file.fileName(), file.mimeType(), stored.fileSize(), stored.storageUrl());
@@ -96,5 +102,16 @@ public class ExecutionArtifactService {
         taskTimelineService.recordEvent(subTask.getTaskId(), subTask.getId(),
                 "sub_task_artifact_materialized", AgentRole.EXECUTOR, agentId, payload);
         log.info("执行产出物化完成: subTaskId={}, attachmentIds={}", subTask.getId(), attachmentIds);
+    }
+
+    /** 解析执行 Agent 注册名作为附件归属目录；Agent 不存在时兜底 agent-{id}。 */
+    private String resolveOwnerName(Long ownerAgentId) {
+        if (ownerAgentId != null) {
+            Agent agent = agentService.getById(ownerAgentId);
+            if (agent != null && agent.getName() != null && !agent.getName().isBlank()) {
+                return agent.getName();
+            }
+        }
+        return "agent-" + (ownerAgentId != null ? ownerAgentId : "unknown");
     }
 }
