@@ -81,33 +81,12 @@
             </div>
             <el-form :model="form" label-width="0" size="large" class="login-form" @keyup.enter="handleLogin">
               <div class="section-stack">
-                <div class="login-tabs" role="tablist" aria-label="登录方式">
-                  <button
-                    type="button"
-                    role="tab"
-                    :aria-selected="form.type === 'admin'"
-                    :class="['login-tab', { active: form.type === 'admin' }]"
-                    @click="setLoginMode('admin')"
-                  >
-                    账号密码登录
-                  </button>
-                  <button
-                    type="button"
-                    role="tab"
-                    :aria-selected="form.type === 'agent'"
-                    :class="['login-tab', { active: form.type === 'agent' }]"
-                    @click="setLoginMode('agent')"
-                  >
-                    API Key 登录
-                  </button>
-                </div>
-
                 <div class="mode-context">
-                  <p class="mode-context-title">{{ modeTitle }}</p>
-                  <p class="mode-context-desc">{{ modeDescription }}</p>
+                  <p class="mode-context-title">账号密码登录</p>
+                  <p class="mode-context-desc">适用于平台管理员处理任务、规则配置、审查与系统设置。</p>
                 </div>
 
-                <el-form-item v-if="form.type === 'admin'">
+                <el-form-item>
                   <el-input
                     v-model="form.username"
                     placeholder="管理员用户名"
@@ -123,16 +102,16 @@
                   <div class="password-field">
                     <el-input
                       v-model="form.credential"
-                      :placeholder="form.type === 'admin' ? '登录密码' : 'Agent API Key'"
-                      :type="showPassword && form.type === 'admin' ? 'text' : 'password'"
-                      :prefix-icon="form.type === 'admin' ? Lock : Key"
+                      placeholder="登录密码"
+                      :type="showPassword ? 'text' : 'password'"
+                      :prefix-icon="Lock"
                       clearable
                       @focus="onFocus('password')"
                       @blur="onBlur"
                       @input="onInput"
                     />
                     <button
-                      v-if="form.credential && form.type === 'admin'"
+                      v-if="form.credential"
                       type="button"
                       class="toggle-pwd-btn"
                       :aria-label="showPassword ? '隐藏密码' : '显示密码'"
@@ -144,21 +123,8 @@
                 </el-form-item>
 
                 <div class="helper-links">
-                  <button
-                    v-if="form.type === 'admin'"
-                    type="button"
-                    class="helper-link"
-                    @click="openSupport('password')"
-                  >
+                  <button type="button" class="helper-link" @click="openSupport('password')">
                     找回密码
-                  </button>
-                  <button
-                    v-else
-                    type="button"
-                    class="helper-link"
-                    @click="openSupport('apiKey')"
-                  >
-                    获取 API Key
                   </button>
                   <button type="button" class="helper-link" @click="openSupport('contact')">
                     联系管理员
@@ -166,7 +132,7 @@
                 </div>
 
                 <el-button type="primary" :loading="loading" class="login-submit" @click="handleLogin">
-                  {{ submitLabel }}
+                  使用账号密码登录
                 </el-button>
 
                 <transition name="msg-fade">
@@ -216,29 +182,12 @@
                 >
                   联系管理员开通
                 </el-button>
-                <el-button text @click="goToLogin('admin')">已有账号</el-button>
-              </div>
-            </div>
-
-            <div class="register-card">
-              <div class="register-card-header">
-                <div>
-                  <p class="register-card-title">Agent API Key</p>
-                  <p class="register-card-desc">
-                    由管理员分配，用于 Agent 接入与调试。
-                  </p>
-                </div>
-                <span class="register-badge">Agent</span>
-              </div>
-
-              <div class="register-card-actions">
-                <el-button type="primary" plain @click="openSupport('apiKey')">获取 API Key</el-button>
-                <el-button text @click="goToLogin('agent')">已有 API Key</el-button>
+                <el-button text @click="goToLogin()">已有账号</el-button>
               </div>
             </div>
 
             <p class="register-tip">
-              没有统一自助注册接口时，不再让“管理员登录”和“API Key 登录”彼此混淆，而是先区分“我要登录”还是“我要开通访问”。
+              账号由平台管理员统一开通；首次部署时可通过「前往初始化」创建首个管理员账号。
             </p>
           </div>
         </div>
@@ -289,15 +238,14 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Key, Lock, User, View } from '@element-plus/icons-vue'
+import { Lock, User, View } from '@element-plus/icons-vue'
 import { authApi } from '@/api/auth'
 import { settingsApi } from '@/api/settings'
 import AnimatedCharacter from '@/components/AnimatedCharacter.vue'
 import StarfieldBackground from '@/components/StarfieldBackground.vue'
 
 type EntryMode = 'login' | 'register'
-type LoginMode = 'admin' | 'agent'
-type SupportKind = 'password' | 'contact' | 'apiKey'
+type SupportKind = 'password' | 'contact'
 
 const router = useRouter()
 const loading = ref(false)
@@ -321,7 +269,6 @@ const setupStatus = reactive({
 })
 
 const form = reactive({
-  type: 'admin' as LoginMode,
   username: '',
   credential: ''
 })
@@ -332,17 +279,10 @@ const pageTitle = computed(() => {
   return '欢迎回来'
 })
 const pageHint = computed(() => {
-  if (entryMode.value === 'login') return '先选择登录方式，再输入对应凭证。'
-  if (entryMode.value === 'register') return '先区分开通场景，再进入对应的登录方式。'
+  if (entryMode.value === 'login') return '使用管理员账号与密码登录。'
+  if (entryMode.value === 'register') return '账号由平台管理员统一开通，或首次部署时前往初始化。'
   return '先选择访问入口，再进入对应流程。'
 })
-const modeTitle = computed(() => form.type === 'admin' ? '账号密码登录' : 'API Key 登录')
-const modeDescription = computed(() => (
-  form.type === 'admin'
-    ? '适用于平台管理员处理任务、规则配置、审查与系统设置。'
-    : '适用于已注册 Agent 接入平台、查看收件箱和回传执行结果。'
-))
-const submitLabel = computed(() => form.type === 'admin' ? '使用账号密码登录' : '使用 API Key 登录')
 
 const supportContent = computed(() => {
   if (supportKind.value === 'password') {
@@ -371,28 +311,15 @@ const supportContent = computed(() => {
     }
   }
 
-  if (supportKind.value === 'apiKey') {
-    return {
-      title: '获取 API Key',
-      intro: 'API Key 适用于 Agent 接入，不应该和管理员密码登录并列成同一认知层级。',
-      steps: [
-        '联系平台管理员，在“Agent 管理”中创建或确认你的 Agent。',
-        '由管理员复制该 Agent 的 API Key 给你。',
-        '回到登录页，切换到“API Key 登录”后粘贴使用。'
-      ],
-      template: `你好，我需要申请 Hello AI Agent API Key。\nAgent 名称：${form.username || '[请填写 Agent 名称]'}\n用途：接入平台 / 调试 / 收件箱处理\n期望开通时间：${new Date().toLocaleString()}`
-    }
-  }
-
   return {
     title: '联系管理员',
     intro: '当前版本还没有配置统一客服通道，先给你一份可直接转发的联系模板。',
     steps: [
       '复制下面模板，通过企业微信、邮件或内部 IM 发送给平台管理员。',
-      '说明你的身份、访问场景，以及需要账号、重置密码还是 API Key。',
-      '收到反馈后，再回到对应入口登录。'
+      '说明你的身份、访问场景，以及需要账号还是重置密码。',
+      '收到反馈后，再回到登录页使用账号密码登录。'
     ],
-    template: `你好，我需要处理 Hello AI 访问权限。\n申请类型：${form.type === 'agent' ? '申请 API Key' : '开通账号 / 重置密码'}\n身份说明：[请填写]\n使用场景：[请填写]\n联系方式：[请填写]`
+    template: `你好，我需要处理 Hello AI 访问权限。\n申请类型：开通账号 / 重置密码\n身份说明：[请填写]\n使用场景：[请填写]\n联系方式：[请填写]`
   }
 })
 
@@ -418,17 +345,8 @@ function resetEntryMode() {
   onBlur()
 }
 
-function setLoginMode(mode: LoginMode) {
-  form.type = mode
-  form.credential = ''
-  errorMsg.value = ''
-  showPassword.value = false
-  onBlur()
-}
-
-function goToLogin(mode: LoginMode) {
+function goToLogin() {
   setEntryMode('login')
-  setLoginMode(mode)
 }
 
 function goToSetup() {
@@ -487,13 +405,13 @@ async function handleLogin() {
   const username = form.username.trim()
   const credential = form.credential.trim()
 
-  if (form.type === 'admin' && !username) {
+  if (!username) {
     errorMsg.value = '请输入管理员用户名'
     return
   }
 
   if (!credential) {
-    errorMsg.value = form.type === 'admin' ? '请输入登录密码' : '请输入 Agent API Key'
+    errorMsg.value = '请输入登录密码'
     return
   }
 
@@ -502,26 +420,17 @@ async function handleLogin() {
 
   try {
     const res = await authApi.login({
-      type: form.type,
-      username: form.type === 'admin' ? username : undefined,
+      type: 'admin',
+      username,
       credential
     })
 
     clearAuthStorage()
     sessionStorage.setItem('loginType', res.type)
-
-    if (res.type === 'admin') {
-      sessionStorage.setItem('adminToken', res.token)
-      sessionStorage.setItem('adminUser', res.displayName || username || 'Admin')
-      ElMessage.success('登录成功')
-      router.push('/dashboard')
-      return
-    }
-
-    sessionStorage.setItem('agentKey', res.token)
-    sessionStorage.setItem('agentName', res.displayName || 'Agent')
-    ElMessage.success('API Key 验证通过')
-    router.push('/inbox')
+    sessionStorage.setItem('adminToken', res.token)
+    sessionStorage.setItem('adminUser', res.displayName || username || 'Admin')
+    ElMessage.success('登录成功')
+    router.push('/dashboard')
   } catch (e: any) {
     errorMsg.value = e?.message || '登录失败，请检查账号或凭证'
   } finally {
