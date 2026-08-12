@@ -4426,3 +4426,31 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 - 影响：MCP SSE 通道行为不变（协议标准）；REST 别名通道新增免握手同步能力；404 响应体附 fixHint 且 SESSION_AUTH 联动清理（无 DB 迁移）。
 - 遗留：① SDK 断连回收延迟窗口（保留窗口内旧 session 仍可调用）与断连后第二请求挂死为 SDK 内部行为，未处理（外部 agent 遇 404 即切 REST 别名，无需感知）；② 若未来仍需「同一 session 跨连接复用」，需自定义 McpServerTransport 或升级 spring-ai 版本，留作专门迭代；③ a02 验收达成：外部 agent 一次 REST 调用即可免握手复用，提交有同步回执（accepted/resultId/status），错误信息可操作（fixHint 指引）。
 
+### 6.62 工具面统一 + SKILL 逐动作速查表 + 405 语义修复（A0-3：三通道 10 工具对齐 / SKILL 双通道分工表 / verify-tool-matrix 防漂移 / MethodNotSupported→405）（2026-08-11~12）
+
+#### 1. 背景与结论
+
+- **盘点结论（A0-3-1）**：MCP SSE 通道 10 工具 ✓、REST 别名 `POST /api/mcp/jsonrpc` 10 工具 ✓（A0-2 补齐）、**REST 直通 `/api/mcp/tools/*` 声明 10 个但只有 7 个实现**（getAgentStatus / checkIn / checkOut 缺失，调 `/api/mcp/tools/checkIn` 会 404）——`GET /api/mcp/tools` 列表与真实可调路由不一致，外部 agent 按声明调用会踩空。
+- **SKILL.md 漂移盘点**：3 处错误路径（下线剧本 `/api/agents/<id>`、注意事项 `/api/rules/merged`、错误码表 404/Unknown tool 行过时）；全文无「动作 → 方法 + 路径 + 请求体 + 返回结构」的机器可解析速查表，agent 需在多章节间拼凑调用姿势。
+- **统一策略决策**：不补 MCP 工具（startById 等维持 REST 业务端点语义，避免 MCP 工具面膨胀）→ ① 补 REST 直通 3 个缺失端点（三通道 10 工具完全对齐，listTools 不再撒谎）；② SKILL 新增「〇、工具与动作速查总表」（0.1 三通道执行工具表 + 0.2 REST 业务端点表，机器可解析）；③ `verify-tool-matrix.ps1` 校验脚本做声明 vs 文档 diff（防漂移）。
+
+#### 2. 实现要点
+
+- **McpController**：新增 `TOOL_NAMES` 常量（10 工具唯一事实源，防声明与实现漂移）+ 3 个直通端点 `POST /api/mcp/tools/getAgentStatus`（无 body）/ `checkIn`（可选 workMode / maxConcurrent / ttlMinutes）/ `checkOut`（closeReason 兼容 reason 回退），全部委托 McpToolService。
+- **executor SKILL.md**：新增「## 〇、工具与动作速查总表（A0-3 新增，机器可解析）」——0.1 三通道执行工具表（列：工具 | MCP SSE | REST 别名 jsonrpc | REST 直通 | 请求体 JSON | 返回要点）+ 0.2 REST 业务端点表 13 条（动作 | 方法+路径 | 参数 | 返回要点）；L31 三通道表述修正；第三节 REST 参考逐动作 curl 重写（含「startById 必须 POST，GET 会 405」「submitById 无 body 不带产出，产出走 submitResult」等避坑）；下线剧本 2 处 `/api/agents/<id>` → `/api/agents/getById/<id>`；注意事项 `/api/rules/merged` → `/api/rules/getMergedRules`；错误码表更新（404 Session not found + fixHint / 404 旧路径 / 405 startById / 500 Unknown tool 三通道 10 工具）。
+- **GlobalExceptionHandler（顺带修复真实缺陷）**：补 `HttpRequestMethodNotSupportedException` → **HTTP 405**（此前被 Exception 兜底成 500——GET 打 POST-only 路由返回 500「服务内部错误」，与 SKILL 错误码表「405 startById」表述不一致；修复与 NoResourceFoundException→404 同模式）。
+- **verify-tool-matrix.ps1（A0-3-3）**：S1 REST 别名 tools/list 10 工具 + 逐工具 inputSchema(type=object)；S2 `GET /api/mcp/tools` 与 S1 集合 Compare-Object diff 空；S3 直通 getAgentStatus 探活；S4 SKILL 0.1 表工具名（区域限定 `### 0.1`~`### 0.2` 排除 1.2 表 + 错误码表）与服务器 tools/list diff 空；S5 SKILL 0.2 表 13 条路径探活（GET 期望 200；POST-only 路由 GET 探期望 405 = 路由存在）；S6 SKILL 旧路径检查（豁免错误码表教学区——旧路径作为「错误示例」刻意保留）；S7 直通 checkIn→checkOut 真实调用（同步租约回执）。
+  - 正则落地避坑（PS 5.1）：`(?m)` 行首锚点（Get-Content -Raw 多行串 `^` 默认不匹配行首）；正则与断言字符串**禁用非 ASCII**（✓ 等字符经 GBK 解析 .ps1 会破坏正则字面量）；区域锚点用纯 ASCII（`### 0.1` / `\n## `——注意 `## ` 会匹配 `### 0.2` 标题自身字符 2-4，必须带换行前缀）。
+- **测试修复（V47 遗留，与 A0-3 无关但顺带闭环）**：全量测试发现 5 个失败（ResilientDispatcherTest 4 + ResilientDispatcherAopIntegrationTest 1）——V47 将 `AgentSelector.pickAlternative` 增加 3 参（constraints 贯穿 fallback）且主代码已切 3 参调用，但 6 处测试 stub/verify 仍 mock 2 参 → Mockito stub 失效返回 null → 抛「无可用替代 Agent」。已全部补第 3 参 `any()`。
+
+#### 3. 验证结果
+
+- 单测：`McpControllerJsonrpcTest` 12 用例全绿（8 原有 JSON-RPC + 4 新增直通：listTools 10 工具断言 / getAgentStatus 委托 / checkIn 租约 workMode+leaseId / checkOut closeReason 回退 + closedCount）；全量 `mvn -pl helloai-api -am test -DskipTests=false`：**Tests run: 486（474 core + 12 api），Failures: 0, Errors: 0**。
+- 真实环境：**verify-tool-matrix.ps1 PASS=23 FAIL=0 ALL PASSED**（S1~S7 全绿：三通道 10 工具同名集合、SKILL 0.1 表 diff 空、SKILL 0.2 表 13 条路由全部存在、旧路径 0 残留、checkIn/checkOut 同步回执）。
+- 405 修复实证：GET `/api/sub-tasks/startById/1` 由修复前 HTTP 500「服务内部错误」→ 修复后 HTTP 405（body code=405「请求方法不支持」），与 SKILL 错误码表表述一致。
+
+#### 4. 影响与遗留
+
+- 影响：REST 直通补齐 3 端点（三通道 10 工具完全对齐）；405 语义修复影响所有「路径存在但方法不支持」请求（此前 500，属正确性修复）；SKILL §0.1/§0.2 速查表成为外部 agent 的唯一动作依据（验收：只读 SKILL 即可零试错调用）。
+- 遗留：无（a03 验收达成：外部 agent 只读 SKILL §0.1/§0.2 即可正确调用，零试错；校验脚本已入库可重复执行防漂移）。
+
