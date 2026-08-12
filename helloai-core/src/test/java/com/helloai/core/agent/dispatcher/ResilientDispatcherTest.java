@@ -260,7 +260,7 @@ class ResilientDispatcherTest {
             when(agentService.getById(1L)).thenReturn(null);
 
             Agent alternative = onlineAgent(2L);
-            when(agentSelector.pickAlternative(eq(1L), eq(null)))
+            when(agentSelector.pickAlternative(eq(1L), eq(null), any()))
                     .thenReturn(alternative);
 
             invokeFallback(1L, 100L, new BizException("Agent 不存在: 1"));
@@ -272,7 +272,7 @@ class ResilientDispatcherTest {
         @DisplayName("无替代 Agent → fallback 抛 BizException")
         void shouldThrowWhenNoAlternative() {
             when(agentService.getById(1L)).thenReturn(null);
-            when(agentSelector.pickAlternative(eq(1L), eq(null)))
+            when(agentSelector.pickAlternative(eq(1L), eq(null), any()))
                     .thenReturn(null);
 
             assertThatThrownBy(() ->
@@ -328,7 +328,7 @@ class ResilientDispatcherTest {
             when(agentService.getById(1L)).thenReturn(null);
 
             Agent alternative = apiKeyLlmAgent(2L, false);
-            when(agentSelector.pickAlternative(eq(1L), eq(null)))
+            when(agentSelector.pickAlternative(eq(1L), eq(null), any()))
                     .thenReturn(alternative);
 
             invokeFallback(1L, 100L, new BizException("Agent 不存在: 1"));
@@ -346,7 +346,7 @@ class ResilientDispatcherTest {
             when(agentService.getById(1L)).thenReturn(null);
 
             Agent alternative = apiKeyLlmAgent(2L, true);
-            when(agentSelector.pickAlternative(eq(1L), eq(null)))
+            when(agentSelector.pickAlternative(eq(1L), eq(null), any()))
                     .thenReturn(alternative);
 
             invokeFallback(1L, 100L, new BizException("Agent 不存在: 1"));

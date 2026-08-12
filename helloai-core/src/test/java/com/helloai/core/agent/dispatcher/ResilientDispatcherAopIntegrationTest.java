@@ -131,14 +131,14 @@ class ResilientDispatcherAopIntegrationTest {
         when(agentService.getById(101L)).thenReturn(offlineAgent);
         when(agentService.getById(202L)).thenReturn(alternativeAgent);
 
-        // 模拟：pickAlternative 排除原 Agent 后选出替代 Agent
-        when(agentSelector.pickAlternative(eq(101L), any())).thenReturn(alternativeAgent);
+        // 模拟：pickAlternative 排除原 Agent 后选出替代 Agent（V47 起为 3 参：约束贯穿 fallback）
+        when(agentSelector.pickAlternative(eq(101L), any(), any())).thenReturn(alternativeAgent);
 
         // 调用受保护的方法：触发 fallback
         resilientDispatcher.assignNext(101L, 999L);
 
         // 断言 1：fallback 中调用的 subTaskService.assignNext 是替代 Agent ID
-        verify(agentSelector, times(1)).pickAlternative(eq(101L), any());
+        verify(agentSelector, times(1)).pickAlternative(eq(101L), any(), any());
         verify(subTaskService, times(1)).assignNext(eq(202L), eq(999L));
         // 断言 2：原 OFFLINE Agent 的 subTaskService.assignNext 没有被调用
         //         （因为它在 fast-fail 阶段抛出 AgentUnavailableException，根本走不到 assignNext）
