@@ -4800,3 +4800,97 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - 影响：Agent 管理链路去掉无效的专业化选择（executor 专业化下拉、编辑模型类型字段），内部 LLM 注册简化——不再选 provider，模型统一由系统配置决定；技能在注册时即可填写（显式优先，不填仍按接入类型+关键词自动推导）。
 - 遗留：① DB 列 specialization_slug 与实体字段保留但已无任何业务消费，可随大版本迁移一并清理；② prompt_template 的 AGENT_SPECIALIZATION 分类仍可创建但 Agent 侧不再消费（模板管理页保留）；③ §6.72 遗留① AgentDetailVO 仍未映射 skills，本轮未扩散；④ 内部 LLM 注册不再展示实际生效的 provider/模型，如需可在详情页补只读展示（未做）。
+### 6.75 MinIO 附件存储集成 + 附件目录路径规范（A0-5 遗留②收口）（2026-08-12）
+
+#### 1. 背景与结论
+
+- **背景**：用户拍板把 MinIO 用起来——① A0-5 遗留②「minio:// 外部存储附件平台不可直读（isContentLoadable=false），即使真实存在也被当作无证据」要求收口，agent 返回结果需要平台侧验证附件文件或脚本；② 附件管理此前无明确路径要求，要求以后生成的附件按「归属者 username → 年 → 月 → 主任务」分文件夹组织，便于按规律检索哪些文件属于哪些主任务。
+- **勘察结论**：MinIO 早已进 docker-compose（29000 S3 API / 29001 Console），`ArtifactStorage` 抽象在 §6.30 已预留 minio 扩展位；attachment 元数据表 `detectBucketName/detectObjectKey` 已支持 minio:// 前缀解析；本地物化链（local://）objectKey 原为 `{subTaskId}/{yyyyMMdd}/{uuid8}-{safeName}`，无归属者/主任务维度。
+- **落地决策**：① 引入 `io.minio:minio:8.5.12`（版本集中管理在根 pom），实现 `MinioArtifactStorage`（storageUrl=`minio://{bucket}/{objectKey}`，懒创建客户端 + 首次写入自动 makeBucketIfNotExists）；② 新增 `CompositeArtifactStorage`（@Primary 路由，ObjectProvider 懒解析避免自引用循环）：store 按 `helloai.storage.type` 路由主存储，load/supports 按协议前缀分派——存量 local:// 附件与新 minio:// 附件同时可读/可下载/可作执行证据；③ objectKey 统一规范为 `{ownerName}/{yyyy}/{MM}/{taskId}/{subTaskId}/{uuid8}-{safeName}`（Local 与 Minio 双实现一致），归属者目录取执行 Agent 注册名（agent.name，接口 static 方法清洗防路径穿越）；④ 默认 `helloai.storage.type` 切为 minio（bucket=helloai-artifacts，端点/凭证走环境变量兜底）。
+- **边界**：外部 Agent 自己 PUT 到 MinIO 的路径不由平台强制（SKILL 建议按规范组织）；存量 local:// 附件不迁移；agent.name 无唯一索引，重名 Agent 的目录会合并（uuid 前缀保证文件不冲突）。
+
+#### 2. 实现要点
+
+- **依赖**：根 pom 加 `minio.version=8.5.12` + dependencyManagement 条目；helloai-core 引用。
+- **配置**：`ArtifactStorageProperties` 扩展 `minioEndpoint/minioAccessKey/minioSecretKey/minioBucket` 四字段（带默认值，yml 未配置可跑）；`application.yml` storage 段重写（type=minio + `${MINIO_*}` 环境变量兜底 + 注释说明目录规范）。
+- **存储层（helloai-core/system/storage）**：`ArtifactStorage` 接口加 `storageType()` 默认方法 + `sanitizeOwnerName/sanitizeFileName` 两个 static 清洗方法（原 Local 的 sanitizeFileName 上移共用）+ store 签名扩展为 `store(ownerName, taskId, subTaskId, fileName, content)`；`LocalArtifactStorage` objectKey 改新规范；`MinioArtifactStorage` 新建（putObject/getObject、bucket ensure、contentType 探测、包级测试构造器注入 mock client）；`CompositeArtifactStorage` 新建（@Primary，store 路由主存储，load/supports 前缀分派）。
+- **物化链**：`ExecutionArtifactService` 注入 `AgentService`，`resolveOwnerName` 取 assignedAgentId 对应 Agent 注册名（缺失兜底 `agent-{id}`），store 传 `(ownerName, subTask.getTaskId(), subTask.getId(), ...)`。
+- **直读链路**：`AttachmentService.isContentLoadable/loadContent` 经 Composite 路由天然支持 minio://（下载流式返回 + A0-5 证据检查生效），类注释同步更新；`McpMcpServer` uploadArtifact Gotchas 与 `McpToolService` 注释补「v2.7 起平台可直读 minio:// 附件 + 建议路径规范」。
+- **SKILL 同步**：executor/planner SKILL.md 的 uploadArtifact 行更新（storageUrl 示例改 minio://、说明平台可直读与 `{注册名}/{yyyy}/{MM}/{taskId}/{subTaskId}/` 目录规范）。
+- **验收脚本**：新建 `scripts/powershell/verify-minio-artifact.ps1`（UTF-8 头 + 单引号输出，规则 6 合规）：G1 MinIO health / G2 附件列表存在 minio:// 且 objectKey 符合目录规范 / G3 minio:// 附件下载 200 + 非空 + 未 302 重定向（无 minio 附件时输出 SKIP 与产生指引）。
+
+#### 3. 验证结果
+
+- 单测：`LocalArtifactStorageTest` 更新（新 store 签名 + 目录规范断言 + ownerName 清洗用例）；新建 `MinioArtifactStorageTest`（store 上传参数/URL 协议/objectKey 分层/load 读取/supports）与 `CompositeArtifactStorageTest`（store 路由 local/minio、未知类型抛错、load/supports 前缀分派）；`ExecutionArtifactServiceTest` 适配新构造器与 store 签名。`mvn -pl helloai-core -am test` 全量 **551 个测试全绿**（含修复 4 个新测试自身缺陷：mock Stream 单次消费需 thenAnswer 重建、mock GetObjectResponse 需 stub readAllBytes、verifyNoInteractions 与 stubbing 调用冲突改 never() 验证）。
+- 真实环境：未重启后端，MinIO 实链（物化落桶 + 下载直读 + 证据核验）待 `verify-minio-artifact.ps1` 实测（G2/G3 需先有 minio:// 附件，可跑一次执行任务产生）。
+
+#### 4. 影响与遗留
+
+- 影响：① A0-5 遗留②关闭——minio:// 附件平台可直读，`SubTaskReviewService.checkEvidence` 与 `TaskDeliverableService` zip 打包对 MinIO 附件生效；② 附件目录统一「归属者/年/月/主任务/子任务」五层规范（local 与 minio 一致），MinIO Console 可按路径规律直接检索；③ 默认存储切 minio 后，未启动 MinIO 的环境物化失败仅记日志（best-effort 不阻断主链路），可改 `type: local` 回退。
+- 遗留：① agent.name 无唯一索引，重名 Agent 目录合并（可后续加唯一约束或目录后缀 agentId）；② 外部 Agent uploadArtifact 的 storageUrl 路径靠 SKILL 约定不强制；③ 存量 local:// 附件保留可读不迁移；④ 真实环境 MinIO E2E 回归（verify-minio-artifact.ps1 G2/G3）待后端重启后执行。
+### 6.76 登录链路脚本化验证 + MinioArtifactStorage 启动缺陷修复（2026-08-12）
+
+#### 1. 背景与结论
+
+- **背景**：用户拍板登录页去掉 api 登录（系统以「注册 + 账号密码登录」为主），登录页已改造为「登录/注册」双入口且登录类型固定 admin；用户要求不再用浏览器手动点，改为脚本模拟登录做验证。
+- **勘察结论**：`POST /api/auth/login`（type=admin 账号密码 / type=agent API Key）仍保留 agent 通道（MCP/CLI 依赖），前端已不再暴露；`/api/auth/me`、`/api/auth/logout` 提供登录态校验与登出；业务异常码 4xx/5xx 由 `GlobalExceptionHandler` 映射为 HTTP 状态码（500 业务失败 = HTTP 500，401 会话过期 = HTTP 401）。
+- **顺带发现并修复启动缺陷**：真实环境 jar 启动报 `BeanInstantiationException: No default constructor found`——`MinioArtifactStorage` 里手写的包级测试构造器（properties, client）导致 Lombok `@RequiredArgsConstructor` 被跳过（Lombok 规则：类中已存在任何构造器即不再生成），Spring 无法实例化。该缺陷在 v2.7（§6.75）引入，单测直接调用包级构造器所以没暴露。
+
+#### 2. 实现要点
+
+- **验收脚本**：新建 `scripts/shell/verify-login-e2e.sh`（macOS zsh 风格 + UTF-8 声明 + 单引号输出，规则 6 合规；`ADMIN_USER/ADMIN_PASSWORD` 环境变量可覆盖，默认 admin/admin123），11 项用例：0 健康检查 / 1 空用户名拒绝 / 2 空密码拒绝 / 3 未知用户（HTTP 500 + 用户不存在或已禁用）/ 4 错误密码（HTTP 500 + 密码错误）/ 5 非法登录类型 apikey（HTTP 200 + 登录类型无效，验证旧 api 入口服务端拒绝）/ 6 账号密码登录成功（token+type=admin+role）/ 7 /me 带 token 返回身份（type=admin + displayName 非空）/ 8 /me 无 token 返回 code=401 / 9 logout / 10 登出后旧 token 被 401 拒绝。
+- **启动缺陷修复**：`MinioArtifactStorage.java` 删除包级测试构造器（恢复 Lombok 生成 public 单参构造器，Spring 构造器注入生效）；`MinioArtifactStorageTest` 改为同包直接注入包级 `client` 字段（跳过懒创建），保持 mock 语义。
+
+#### 3. 验证结果
+
+- 真实环境：JDK 17 + `mvn -pl helloai-start -am package -DskipTests` 构建，`java -jar helloai-start-1.0.0-SNAPSHOT.jar` 启动 6565 成功后，`verify-login-e2e.sh` **11/11 全 PASS**。
+- 回归：`MinioArtifactStorageTest/CompositeArtifactStorageTest/LocalArtifactStorageTest` BUILD SUCCESS，存储层无回归。
+
+#### 4. 影响与遗留
+
+- 影响：① v2.7 引入的应用启动缺陷关闭（此前 jar 无法启动，minio 存储链路实际不可用）；② 登录链路（注册入口 + 账号密码登录 → /me 鉴权 → 登出失效）获得脚本化回归保障，后续改动可直接跑脚本。
+- 遗留：空用户名/空密码的参数校验异常（`@Valid` 失败）被 `GlobalExceptionHandler` 兜底为 HTTP 500 而非 400，语义不准确，本轮未修；`type=agent` 通道保留供 MCP/CLI 使用，登录页已不暴露。
+### 6.77 MinIO 附件 E2E 真实环境验证 + 登录页前端构建验证（2026-08-12）
+
+#### 1. 背景与结论
+
+- **背景**：§6.76 收口后遗留两件事——① 前端登录页改造（去 api 登录）未做构建验证；② §6.75 遗留④「真实环境 MinIO E2E（verify-minio-artifact.ps1 G2/G3）待后端重启后执行」，且该脚本是 PowerShell，macOS 无 pwsh 跑不了。用户要求：跑前端构建 + 移植 zsh 版并触发最小执行任务产生附件，验证物化落桶与直读下载。
+- **勘察结论**：平台 4 个 LLM provider 全部 `apiKeyConfigured=false`（credential_vault 无平台级凭证），**内部 LLM 执行链不可行**；但物化链 `ExecutionResultHandler` 由 `submitResult`（外部 Agent REST 直通即可调用，无需 LLM）触发——success=true 时 afterCommit 调 `ExecutionArtifactService.materialize` → `artifactStorage.store` 写入主存储（minio），output 非空即解析为单个 .md 文件。由此确定「最小执行物化」路径：建 Agent → 建任务 → 建子任务（指派）→ claim → submitResult(output 非空)。
+
+#### 2. 实现要点
+
+- **前端构建**：`npx vue-tsc --noEmit` 0 错误 + `npm run build` 成功（5.82s，仅 chunk 体积提示，无类型/构建错误），登录页改造（入口双 tab：登录/注册，type 固定 admin）构建侧通过。
+- **验收脚本**：新建 `scripts/shell/verify-minio-artifact.sh`（macOS zsh 版，UTF-8 声明 + 单引号输出，规则 6 合规；`ADMIN_USER/ADMIN_PASSWORD` 可覆盖）——自动完成：G1 MinIO health → admin 登录 → 建 EXECUTOR Agent → 建任务 → batch 建子任务并指派 → agent claim（Bearer apiKey）→ submitResult 触发物化 → 等待 afterCommit 异步落桶 → G2 附件列表存在 minio:// 且 objectKey 匹配 `归属者/年/月/taskId/subTaskId/uuid8-文件名` → G3 下载 200 + 非空 + Content-Disposition attachment + 未 302。每次运行新建独立 Agent（名带时间戳），与既有数据零冲突。
+- **实现细节**：claim/submit 走 REST 直通 `POST /api/mcp/tools/*`（免 MCP 握手）；submit 的 output 用单行字符串构造 JSON（多行字符串在 zsh 命令替换中解析会失败，踩坑后改单行规避）。
+
+#### 3. 验证结果
+
+- 真实环境（jar 启动 6565 + docker MinIO）**9/9 全 PASS**：G1 健康 ✓ / P1 建 Agent ✓ / P2 claim ✓ / P3 submit 触发物化 ✓ / G2 附件落库（minio:// 1 条，objectKey=`minio-e2e-executor-{ts}/2026/08/{taskId}/{subTaskId}/d0173465-MinIO 附件物化验证子任务.md` 完全符合规范）✓ / G3 下载 200 + 90 字节 + Content-Disposition ✓。
+- 桶内实证：`docker exec helloai-minio mc ls -r local/helloai-artifacts/` 确认对象真实存在（89B，路径与附件元数据一致）——**物化落桶全链路闭环**。
+
+#### 4. 影响与遗留
+
+- 影响：① A0-5 遗留②完整闭环——minio:// 附件平台直读下载在真实环境实测通过，§6.75 遗留④关闭；② 获得可重复执行的 MinIO 附件回归脚本（macOS zsh 版），无需 LLM 凭证即可触发物化链。
+- 遗留：① 内部 LLM 执行物化（平台级凭证）未实测——配置任一 provider API Key 后可跑真实 LLM 执行任务复核；② 脚本每次运行会新增测试 Agent/任务/子任务（幂等设计，无清理动作）；③ 空表单校验异常 HTTP 500 语义问题（§6.76 遗留，未扩散）。
+### 6.78 参数校验异常语义修复：@Valid 校验失败 500 → 400（2026-08-12）
+
+#### 1. 背景与结论
+
+- **背景**：§6.76/6.77 遗留③——`@Valid @RequestBody` 校验失败（如登录空密码）抛 `MethodArgumentNotValidException`，此前无专门 handler，被 `GlobalExceptionHandler` 的 `@ExceptionHandler(Exception.class)` 兜底为 HTTP 500，语义不准确（客户端参数问题不是服务端错误）。用户确认修复。
+- **勘察结论**：前端 `request.ts` 拦截器完全基于 body.code 判断（200 成功 / 401、403 特殊处理 / 其余 ElMessage.error(res.msg)），400 与 500 走同一分支——**HTTP 状态码变更对前端行为零影响**，且校验消息会直接展示（体验更准确）。项目未使用 `@Validated` 类级校验（无 ConstraintViolationException 场景），只需处理 MethodArgumentNotValidException。
+
+#### 2. 实现要点
+
+- `GlobalExceptionHandler` 新增 `@ExceptionHandler(MethodArgumentNotValidException.class)`：HTTP 400 + `R.fail(400, 首条字段错误消息)`（取 FieldError.getDefaultMessage，如「凭证不能为空」；无字段错误时兜底「参数校验失败」）。
+- 同步更新 `scripts/shell/verify-login-e2e.sh`：[2] 空密码由宽松断言改为明确断言 HTTP 400 + body.code=400 + 消息含「凭证」；[1] 空用户名明确为 HTTP 500（username 字段无校验注解，仅 type/credential 必填，空用户名走业务层「用户不存在或已禁用」——脚本注释说明字段注解边界，防止误判）。
+
+#### 3. 验证结果
+
+- 手动验证：空密码 → HTTP 400 + `{"code":400,"msg":"凭证不能为空"}`；空 type → HTTP 400。
+- 回归：`verify-login-e2e.sh` 11 项全 PASS（[2] 新断言生效）；`verify-minio-artifact.sh` 9/9 全 PASS（物化链无回归，minio:// 附件累积 5 条 objectKey 均符合规范）。
+- 测试代码无依赖旧 500 行为的断言（grep 确认）。
+
+#### 4. 影响与遗留
+
+- 影响：全站 `@Valid` 校验失败统一返回 HTTP 400 + 具体字段消息（此前 500 + 兜底文案），错误语义与前端提示同时改善；日志从 error 级兜底变为 debug 级字段消息。
+- 遗留：无新增。§6.76/6.77 遗留③关闭；IllegalArgumentException handler 返回体 code=500 但 HTTP 400（body.code 与状态码不一致）为既有行为，未扩散。
