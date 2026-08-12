@@ -4484,3 +4484,319 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 - 影响：无 DB 迁移；工具面 10→11（三通道对齐）；收件箱消息新增 `read` 状态位（历史消息按未读处理）；新增 rejected/approved 两种通知类型（summary 携带评分反馈）；REST 别名通道 tools/list 与 TOOL_NAMES 重新对齐（消除声明漂移）。
 - 遗留：① MCP SSE 通道未做实连验证（@Tool 签名与单测覆盖，三通道共用 McpToolService 同一实现，差异仅在参数绑定）；② 人工驳回（无 reviewHistory）时 rejected 摘要回退默认文案，自动核验链（SubTaskReviewService 写 reviewHistory）才有完整评分摘要；③ a04 验收达成：外部 agent 可主动拉前置产出摘要（getDepsSummary）与评分反馈（rejected/approved summary），轮询无需自行过滤（read 状态位区分未读/已读）。
 
+### 6.64 审核真实性核验：自动核验证据硬检查 + 物化附件清单注入（A0-5：trae 实战反馈一.1「审核真实性」）（2026-08-12）
+
+#### 1. 背景与结论
+
+- **盘点结论（A0-5）**：AUTO_REVIEW 只比对子任务文字描述（如「文件 203 行 errors=0」），不验证产出是否真实存在——编造证据也能通过初筛（trae 1923 案例：声称写了脚本但无实际文件）；且 LLM 核验 prompt 不含真实附件信息，无法核对「声称的交付物 ↔ 实际物化产物」。
+- **落地决策**：① `reviewSubTask` 在能力预检之后插入**服务端证据硬检查**——复用 §6.30 ArtifactStorage 物化链（`ExecutionArtifactService` 产出物化 + `AttachmentService` 注册），无产出支撑直接跳过自动核验并打人工介入，不再调 LLM 初筛；② `subtask-review.md` prompt 注入**物化附件清单**，LLM 按清单逐项核对声称交付物，文件类交付物无对应附件即使文字声称「203 行 errors=0」也判 pass=false；③ 与 §6.56 能力预检衔接：预检在前拦「无本机能力的提交者」，证据检查在后拦「有能力但编造产出的提交」。
+- **边界**：仅「空产出（无 output 且无附件）」与「执行密集 + 无可读附件」两类被硬拦；非执行密集任务有 output 文字产出即视为产出支撑放行（避免误伤文档类任务）。
+
+#### 2. 实现要点
+
+- **`AgentDispatchProperties.reviewEvidenceCheckWaitMs`（默认 1000ms）**：物化与核验竞态补偿——产出物化在结果回报事务 afterCommit 同步执行，自动核验在 AFTER_COMMIT 异步线程启动，两者存在毫秒级竞态；执行密集任务证据检查未发现可读附件时先等待本窗口再重查一次，避免物化未完成被误判为无证据。0 表示不等待（测试/联调可关闭）。
+- **`SubTaskReviewService.checkEvidence(subTask)`**：`attachmentService.list` + `isContentLoadable` 过滤出平台可读附件（local:// 物化产物；minio:// 等外部存储不可直读，不算证据）；产出文本取 `SubTaskOutputExtractor.extractExecutionOutput`。拦截原因两类：`no_output_no_attachment`（无产出文本且无附件）、`execution_dense_no_attachment`（执行密集 + 无可读附件，仅文字描述）。
+- **拦截动作**：`taskTimelineService.recordEvent(sub_task_review_skip_no_evidence)`（payload：reason/submitterAgentId/attachmentCount/outputPresent）+ `subTaskService.markManualIntervention(subTaskId, "review_skip_no_evidence", ...)`，子任务停留 REVIEW 等人工介入面板处理，不进入 LLM 初筛。
+- **附件清单注入**：`buildAttachmentList(subTask)` 逐行生成 `- fileName（type, size bytes, 平台可直读/外部存储（平台不可直读））`，空则「（无物化附件）」；`renderPrompt` 注入 `{{ATTACHMENT_LIST}}`；`subtask-review.md` 新增「## 物化附件清单」章节 + 核验要求第 9 条（声称交付物与附件清单对应；文件类交付物无附件即使声称「203 行 errors=0」也判 pass=false；外部存储标注不可作为可验证证据）。
+- **§6.56 衔接**：能力预检（`isExecutionDense` + `hasLocalExecutionCapability`，跳过时 `review_skip_execution_dense_no_capability`）仍在证据检查之前，两者各自独立记录 timeline 与人工介入，互不覆盖。
+
+#### 3. 验证结果
+
+- 单测：`SubTaskReviewServiceTest` **20/20 全绿**（新增 4 用例：① 无 output 无附件 → skip + `markManualIntervention(review_skip_no_evidence, reason=no_output_no_attachment)` + timeline；② 执行密集仅文字描述 + external 附件不可读 → skip（execution_dense_no_attachment）；③ 执行密集无附件 + waitMs=5 重查路径（`attachmentService.list` 调用 2 次）；④ prompt 注入断言（`AgentTask.userPrompt` 含「## 物化附件清单」/「平台可直读」/「声称的交付物必须与**物化附件清单**对应」）；存量 16 用例全部适配（helper 默认携带 output，执行密集用例补附件 mock））。
+- 全量回归：`mvn -pl helloai-api -am test -DskipTests=false` **Tests run: 507（core 491 + api 16），Failures: 0, Errors: 0**。
+- 真实环境（后端重启加载新代码，`verify-a05.ps1`）：
+  - **S1 空产出拦截**：普通任务子任务 → claim/start → `submitResult`（success=true，**无 output 无附件**的编造提交）→ 6s 后子任务停留 **REVIEW**（未自动 DONE）；timeline 出现 `sub_task_review_skip_no_evidence`（payload: reason=no_output_no_attachment, outputPresent=false, attachmentCount=0）；`context.manualIntervention` 落库（reason=no_output_no_attachment, submitterAgentId, ts）；后端日志 `自动核验跳过：无产出证据支撑` + `人工介入标记写入: reason=review_skip_no_evidence`。
+  - **S2 有附件通过**：`uploadArtifact` 注册 `local://helloai-local/1/api-docs.md` → `submitResult`（success=true + output）→ 10s 后**无** `sub_task_review_skip_no_evidence`（证据检查放行），LLM 正常核验出 `sub_task_auto_review_rejected`（reviewer 判定不达标 → REWORK）——证据硬检查无误伤。
+  - 验证数据为独立测试任务（S1/S2 各一），验证后已按 taskId 精准清理（task/sub_task/task_timeline/attachment/review_record/agent_inbox/conversation_message 共 18 行），与 A0-4 先例一致。
+
+#### 4. 影响与遗留
+
+- 影响：无 DB 迁移；新增配置 `reviewEvidenceCheckWaitMs`（默认 1000ms）；自动核验链新增证据硬检查（空产出/执行密集无附件两类拦截，均转人工介入）；`subtask-review.md` prompt 结构变化（新增附件清单章节与核验要求第 9 条）；自动核验不再对无证据提交调 LLM，减少无效调用成本。
+- 遗留：① 非执行密集任务「有 output 无附件」仍放行（output 文字视为产出支撑），若需严格化可按 deliverable 类型（脚本/文件类）加强为必须附件；② `minio://` 外部存储附件平台不可直读，即使真实存在也被当作无证据（`isContentLoadable=false`），靠人工介入兜底；③ a05 验收达成：无附件支撑的编造提交不再自动通过初筛（S1 实测拦截），有物化附件/产出支撑的提交正常进入 LLM 核验（S2 实测放行）。
+
+### 6.65 值班/心跳语义对称：三工具返回体语义完整 + Agent 可自检续约（A0-6：trae 实战反馈二.5/6）（2026-08-12）
+
+#### 1. 背景与结论
+
+- **盘点结论（A0-6）**：① `checkIn` 已返回 `leaseId`/`sessionId`/`workMode`/`maxConcurrent`/`expiresAt`（子任务 1 已满足，仅缺单测锁定）；② `checkOut` 对「无 ACTIVE 租约」只回 `closedCount=0`，无法区分「已过期无需签退」与「从未打卡」，Agent 无法自检；③ `heartbeat` 只回 `serverTime`，不暴露租约剩余时间，「续约是否生效/还剩多久」不可见；④ SKILL.md 未说明租约 `session_id` 与 MCP transport session 的映射关系，断连重连后 Agent 无法判断租约是否仍有效。
+- **落地决策**：① `heartbeat` 增强为返回 `onDuty`/`leaseId`/`leaseExpiresAt`/`remainingTtlSeconds`（有 ACTIVE 租约时计算 `Duration.between(now, expireTime)` 剩余秒数，无租约返回 `onDuty=false, remainingTtlSeconds=0`）——每次心跳即一次租约自检，Agent 据此在到期前自行重做 `checkIn` 续约；② `checkOut` 增强为幂等返回当前状态：`closeLease` 后经新增的 `getLatestLease(agentId)` 取最近一条租约，`currentStatus` = `CLOSED`（刚签退）/ `EXPIRED`（已过期无需签退）/ `NONE`（从未打卡），并附带 `latestLeaseId`/`latestLeaseExpiresAt`/`latestLeaseCloseReason`；③ SKILL.md 澄清租约 `session_id`（平台签发、标识租约）与 MCP transport session（SSE 长连接）相互独立，断连不失效租约，重连后用 `getAgentStatus`/`heartbeat` 自检。
+- **边界**：不改租约生命周期本身（仍为一次性签发、到点 EXPIRED、续约=先 checkOut 再 checkIn）；不引入自动续约；`renewLease()` 保持无调用方（仅作为能力预埋）。
+
+#### 2. 实现要点
+
+- **`McpToolService.heartbeat()` 增强**：`heartbeatService.seen` 刷在线态不变；追加 `getActiveLease(agentId)` 查询 ACTIVE 租约，命中时返回 `onDuty=true` + `leaseId` + `leaseExpiresAt`（ISO8601）+ `remainingTtlSeconds`（`Duration.between` 计算，≤0 归 0），未命中返回 `onDuty=false` + `remainingTtlSeconds=0`（`leaseId`/`leaseExpiresAt` 为 null）。
+- **`McpToolService.checkOut()` 增强**：`closeLease` 语义不变；追加 `agentDutyLeaseService.getLatestLease(agentId)`（按 `start_time` 倒序取最近一条，`AgentDutyLeaseService` 新增方法）填充 `currentStatus`/`latestLeaseId`/`latestLeaseExpiresAt`/`latestLeaseCloseReason`，无任何租约时 `currentStatus="NONE"`。三态自检语义：CLOSED=刚签退成功 / EXPIRED=租约早已到期无需再签（closedCount=0 的原因可解释）/ NONE=从未打卡。
+- **Result 类扩展**：`HeartbeatResult` 新增 `onDuty`/`leaseId`/`leaseExpiresAt`/`remainingTtlSeconds`；`CheckOutResult` 新增 `currentStatus`/`latestLeaseId`/`latestLeaseExpiresAt`/`latestLeaseCloseReason`（均 `@lombok.Data` 自动生成访问器）。三通道（MCP SSE / REST 别名 jsonrpc / REST 直通）共用同一 `McpToolService`，一处改动三通道一致。
+- **SKILL.md 文档**：§0.1 总表更新 `checkOut`/`heartbeat` 返回要点；§1.2 租约机制块新增三条 A0-6 澄清——租约 `session_id` 与 MCP transport session 相互独立（SSE 断连不失效租约，重连后自检再决定续约或重新 checkIn）、心跳可自检续约（`remainingTtlSeconds` 到期前 1 分钟重做 checkIn）、checkOut 幂等三态自检。
+
+#### 3. 验证结果
+
+- 单测：`McpToolServiceTest` **17/17 全绿**（新增 6 用例：① checkIn 基线——`leaseId`/`sessionId`/`workMode`/`maxConcurrent`/`expiresAt` 同步返回；② checkOut 正常签退 → `currentStatus=CLOSED` + 租约事实；③ checkOut 幂等（租约 EXPIRED）→ `currentStatus=EXPIRED` + `latestLeaseCloseReason=lease_expired`；④ checkOut 幂等（从未打卡）→ `currentStatus=NONE`；⑤ heartbeat 持有 ACTIVE → `onDuty=true` + `remainingTtlSeconds` ∈ (540,600]；⑥ heartbeat 无 ACTIVE → `onDuty=false` + `remainingTtlSeconds=0`）。
+- 全量回归：`mvn -pl helloai-api -am test -DskipTests=false` **Tests run: 513（core 497 + api 16），Failures: 0, Errors: 0**。
+- 真实环境（后端重启加载新代码 PID 33660，`verify-a06.ps1` 六场景全过）：
+  - **S1**：`checkIn`（ttlMinutes=1）返回 `leaseId`/`sessionId`（UUID）/`workMode=AUTO`/`maxConcurrent=3`/`expiresAt` ISO8601。
+  - **S2**：`heartbeat` 返回 `onDuty=true`、`leaseId` 与 checkIn 一致、`remainingTtlSeconds=59`（1 分钟 TTL 实测剩余）。
+  - **S3**：`checkOut`（reason=verify-a06）→ `closedCount=1`、`currentStatus=CLOSED`、`latestLeaseCloseReason=verify-a06`。
+  - **S4**：重复 `checkOut` → `closedCount=0`、`currentStatus=CLOSED`（幂等，最近租约仍为已关闭）。
+  - **S5**：psql 将租约翻 `EXPIRED` 后 `checkOut` → `closedCount=0`、`currentStatus=EXPIRED`、`latestLeaseCloseReason=lease_expired`。
+  - **S6**：从未打卡的 `inner-loop-executor` 调 `checkOut` → `closedCount=0`、`currentStatus=NONE`、`latestLeaseId=null`。
+  - 验证产生的 2 条测试租约（close_reason=verify-a06 / lease_expired）验证后已精准删除。
+
+#### 4. 影响与遗留
+
+- 影响：无 DB 迁移、无配置新增；三工具返回体向后兼容扩展（仅新增字段，不改既有字段语义）；`AgentDutyLeaseService` 新增只读方法 `getLatestLease`；SKILL.md 为 Agent 补充租约自检指引（心跳 TTL + checkOut 三态 + sessionId 映射澄清）。
+- 遗留：① `renewLease()` 仍无调用方——当前续约范式是「先 checkOut 再 checkIn」（DB 唯一索引约束），若未来需要原位续约可在 heartbeat 侧接入 `renewLease` 并同步扩展返回体；② 租约 `expiresAt` 在 checkIn（新对象，+08:00 表示）与 heartbeat/checkOut（DB 读回，UTC 表示）的时区表示不同，语义一致均为同一时刻，客户端按 ISO8601 解析不受影响；③ a06 验收达成：三工具返回体语义完整（checkIn 租约信息 / checkOut 幂等三态 / heartbeat 剩余 TTL），Agent 可凭 heartbeat 的 `remainingTtlSeconds` 自检续约，断连重连后用 `getAgentStatus`/`heartbeat` 自检租约有效性。
+
+### 6.66 时区与 SLA：deadline 全链路下发 + ISO8601 带时区说明（A0-7：反馈一.6，低）（2026-08-12）
+
+#### 1. 背景与结论
+
+- **盘点结论（A0-7）**：① 全链路实体/DTO 均为 `OffsetDateTime`（无 `LocalDateTime`），Jackson 默认序列化 ISO8601 带 offset——技术面已满足「统一带时区」，真实痛点是文档缺失 + PostgreSQL timestamptz 读回 UTC（`Z`）与新建对象本地偏移（`+08:00`）的双字面表示，外部 Agent 按字符串字面比较会误判（§6.65 遗留②即此问题）；② `sub_task.deadline` 列自 V1 起存在但 `setDeadline()` 零调用——恒为 null，外部 Agent 无法感知任务时限，`ImplicitScoreCalculator` 只能走 `max(actualMs*2, 60000)` 兜底。
+- **落地决策**：① 子任务 1 不做全局转换——ISO8601 带 offset 本身无歧义，采用「文档明示 + 单测锁定格式」（SKILL.md §0.3 时间与 SLA 语义：`Z` 与 `±HH:MM` 等价按绝对时刻解析、服务器时区 Asia/Shanghai）；② 子任务 2 落地 SLA 链路：任务创建可填 `slaMinutes`（V48 新列 `task.sla_minutes`）→ confirmPlan 按 **确认时刻 + slaMinutes** 下发各子任务 `deadline` → pullTasks 已有透传（补格式断言锁定）。
+- **边界**：deadline 从「计划确认时刻」起算（规划耗时不计入执行 SLA）；`recoverAlreadyConfirmed` 恢复路径不补写 deadline；手工创建子任务路径不动（控制范围）；`slaMinutes` 可空（null=无时限，旧行为完全不变）。
+
+#### 2. 实现要点
+
+- **Flyway V48**：`task` 表新增 `sla_minutes INT`（可空，null=无时限），COMMENT 说明 confirmPlan 下发语义。
+- **`TaskService.createTask` 3 参重载**：`createTask(title, description, slaMinutes)` 落 `slaMinutes`；原 2 参委托 3 参（null），既有调用方零改动。
+- **`CreateTaskRequest.slaMinutes`**：可选字段，向后兼容；`TaskController.create` 透传。
+- **`PlannerAnalysisService.confirmPlan` 下发**：主循环内先 `if (slaMinutes > 0) { draft.setDeadline(now.plusMinutes(slaMinutes)); subTaskService.updateById(draft); }` 再 `changeStatus`——因 `changeStatus` 内部按 id 重查库后全字段 `updateById`，未落库的 deadline 会被覆盖丢失（必须先持久化再转正）。
+- **SKILL.md §0.3**：新增「时间与 SLA 语义」块——所有时间字段 ISO8601 带时区偏移、`Z` 与 `±HH:MM` 按绝对时刻解析（DB 读回 `Z` / 新建 `+08:00` 双表示等价）、`deadline` 来源（slaMinutes → confirmPlan 下发）与超时处置（`reportBlocked` 说明原因，不静默拖延）。
+
+#### 3. 验证结果
+
+- 单测：`PlannerAnalysisServiceTest` **16/16 全绿**（新增 confirmPlan deadline 下发用例：`ArgumentCaptor` 断言 `updateById` 的 SubTask 参数 deadline 落在 `[now+59min, now+60min]`、序列化 ISO8601 带 offset、且 changeStatus 照常逐条转正）；`McpToolServiceTest` **18/18 全绿**（新增 pullTasks deadline 透传用例：非 null 时 ISO8601 带 offset 正则匹配，无 deadline 透传 null）。
+- 全量回归：`mvn -pl helloai-api -am test -DskipTests=false` **Tests run: 515（core 499 + api 16），Failures: 0, Errors: 0**。
+- 真实环境（后端重启加载新代码 PID 17736，V48 自动迁移「now at version v48」成功，`verify-a07.ps1` 六场景全过）：
+  - **S1**：`POST /api/tasks` 带 `slaMinutes=60` → 响应 `slaMinutes=60` + `task.sla_minutes=60` 落库；
+  - **S2/S3**：造 PLANNING + 2 条 `PENDING_PLAN_REVIEW` 草稿 → confirmPlan 返回子任务 `deadline` 非 null 且 ISO8601 带 offset（实测 `2026-08-12T04:22:24.938325Z` = 确认时刻 11:22+08:00 + 60min，换算正确），DB 全部持久化；
+  - **S4**：executor `pullTasks` 消息 `deadline=2026-08-12T04:22:24.938325Z`（ISO8601 带 offset）；DB 字面 `2026-08-12 04:22:24.938325+00` 与 API 字面解析为**同一绝对时刻**——双表示等价实测闭环（`[DateTimeOffset]` 换算断言通过）；
+  - **S5**：无 SLA 对照任务 confirmPlan 后 `deadline` 保持 null（=无时限语义）；
+  - **S6**：验证数据按 taskId 全引用表链清理（agent_inbox/task_timeline/task_execution_record/task_running_spec/task_iteration/agent_execution_record/review_record/activity_log/attachment/conversation_message/reward_log/sub_task/task 等 15 表，含自动分发产生的 `agent_execution_record` 外键引用，需先删子表再删主表）。
+
+#### 4. 影响与遗留
+
+- 影响：1 个新 DB 列（`task.sla_minutes`，可空，向后兼容）；`createTask` 3 参重载（2 参兼容）；confirmPlan 仅对带 SLA 任务多一次 `updateById` 批量写入（无 SLA 任务零开销）；SKILL.md 新增时间语义说明（外部 Agent 不再误判 deadline）；`ImplicitScoreCalculator` 时间分在 deadline 下发后真实生效（此前恒走兜底分支）。
+- 遗留：① 超时后的自动处理（超时重派/告警）不在本项范围，deadline 仅作为感知字段下发，超时处置依赖后续轮次（`reportBlocked` 语义已具备）；② REST 详情端点（`getById` 等）时间字段同为 ISO8601，SKILL.md §0.3 已统一定义；③ a07 验收达成：任务创建可填 SLA，confirmPlan 统一下发子任务 deadline，pullTasks 透传 ISO8601 带时区偏移，外部 Agent 按绝对时刻解析不再误判。
+
+### 6.67 长任务 TTL 自动续租：工具调用即保活（A0-8：反馈四.2，顺带）（2026-08-12）
+
+#### 1. 背景与结论
+
+- **背景（反馈四.2）**：trae-executor 冷启动 10+ 分钟 / 串行验证 5 分钟，任务周期接近租约 TTL（默认 30min）时，无内建续约线程的外部 Agent 会因租约到期被 `DutyLeaseExpirationTask`（30s 周期）翻 EXPIRED 而掉线；旧范式要求 Agent「TTL 到期前主动重做 checkIn」，依赖 Agent 自身纪律。
+- **勘察结论**：在线态（`HeartbeatService.seen/active`，刷 Redis TTL + `last_seen_time` + 三态）与**值班租约**（`agent_duty_lease.expire_time`）是两套机制——工具调用此前只刷在线态、不续租约；`AgentDutyLeaseService.renewLease(agentId, ttlMinutes)`（A0-6 预埋：延长 ACTIVE 租约 `expire_time`，无租约返回 null）自预埋起**零调用方**，A0-8 正是其接入点。
+- **落地决策**：选 plan 子任务 1（工具调用自动续租）——除 `checkIn`（签发新租约）/`checkOut`（结束租约）外，任一工具调用顺带 `renewLease`；**不做**子任务 2（difficulty 放宽 TTL）——与 E1「动态 TTL 自适应」（差距表 A2 第 2 段，§6.3 为设计参考）重叠，留待其完整设计，避免重复建设；子任务 1 已满足验收「长任务执行期间工具调用即可保活」。
+- **边界**：无 ACTIVE 租约时不自动打卡（保持 checkIn 的打卡语义）；续租窗口沿用租约原 TTL（`start_time→expire_time` 推算），异常兜底 30min，上限 7 天防异常大 TTL；续租失败仅告警不阻断工具调用（顺带动作）。
+
+#### 2. 实现要点
+
+- **`McpToolService.refreshDutyLease(agentId)` 私有 helper**：`getActiveLease` 判空 → 推算原 TTL → `renewLease`；整体 try-catch（续租失败 log.warn，不影响主操作）。
+- **9 个工具方法接入**（assert 鉴权后首行）：`pullTasks` / `ack` / `claimSubTask` / `heartbeat` / `uploadArtifact` / `submitResult` / `reportBlocked` / `getAgentStatus` / `getDepsSummary`；`checkIn` / `checkOut` 不接入（前者签发新租约，后者结束租约）。
+- **heartbeat 语义微调**：心跳顺带续租后返回 `remainingTtlSeconds` 为**续租后**的剩余 TTL——外部 Agent 只要保持轮询 heartbeat 即可持续在岗；A0-6 的自检语义保留（返回体字段不变，仅数值口径为续租后）。
+- **`McpMcpServer` checkIn 工具描述**：新增 A0-8 说明（任一工具调用自动续约，长任务执行期间正常调用工具即可保活，无需周期性重做 checkIn）。
+
+#### 3. 验证结果
+
+- 单测：`McpToolServiceTest` **22/22 全绿**（新增 4 用例：pullTasks 按原 TTL=90min 续租 / heartbeat 续租 60min 且返回续租后 TTL / 无 ACTIVE 租约不调 renewLease / renewLease 抛异常不阻断工具调用）。
+- 全量回归：`mvn -pl helloai-core,helloai-api -am test -DskipTests=false` **Tests run: 519（core 503 + api 16），Failures: 0, Errors: 0**。
+- 真实环境（后端重启加载新代码 PID 36440，`verify-a08.ps1` 六场景 ALL PASSED）：
+  - **S1**：checkIn ttl=1min → ACTIVE 租约，DB `expire_time` E0=12:09:06+08:00；
+  - **S2**：sleep 20s 后 pullTasks → DB `expire_time` 推至 12:09:26（=调用时刻+60s，剩余 60s）——续租生效实测；
+  - **S3**：heartbeat → `onDuty=true` + `remainingTtlSeconds=59`（续租后剩余）；
+  - **S4**：sleep 50s（累计 70s > 原 60s TTL，跨过原过期点 12:09:06）→ heartbeat → `onDuty=true` + `expire_time` 刷新至 12:10:17（≈now+60s）——**跨过期点仍保活，A0-8 验收闭环**；
+  - **S5**：checkOut → `closedCount=1` + `currentStatus=CLOSED`；
+  - **S6**：清理测试租约行（DELETE 1）。
+
+#### 4. 影响与遗留
+
+- 影响：9 个工具每次调用多 1 次 `getActiveLease` 查询 + 有租约时 1 次 `expire_time` 单行 UPDATE（低频轮询场景可忽略）；SKILL.md 租约机制段重写（「一次性签发 / 不会自动续约 / 需 checkOut 再 checkIn」→「工具调用自动续约」，外部 Agent 无需再手动重做 checkIn）；heartbeat 返回 `remainingTtlSeconds` 口径变为续租后剩余。
+- 遗留：① 动态 TTL（按任务在跑/空闲调整，E1）与 difficulty 放宽不做——与 A0-8 自动续租互补但范围独立，留待 E1 完整设计；② 极端高频工具调用会让租约持续延长（活跃即保活，语义与心跳一致，恶意死循环拉取需靠外部机制约束）；③ 租约「逻辑过期但未被扫描翻」窗口内（≤30s）工具调用仍可复活租约——对保活更友好，属预期行为。
+
+### 6.68 SKILL 模板与交付编码规范：EXECUTION_RECORD 字段说明 + 交付编码约定（A0-9：反馈三.2/5，中低）（2026-08-12）
+
+#### 1. 背景与结论
+
+- **背景（反馈三.2/5）**：EXECUTION_RECORD 五块此前无模板无示例（trae 1921/1922 首轮产出为空被驳，1923 二次提交才补全）；交付物编码规范缺失——外部 Agent 交付的 PowerShell 脚本踩「双重 BOM 坑」（文件头 `EF BB BF EF BB BF`），而验收标准要求「UTF-8 声明」，声明与实际字节不符导致解析失败。
+- **勘察结论**：SKILL.md §4.4 已有基础模板 + 1 个 Java 示例，但缺「每字段 1 句说明」（仅模板占位符）；交付编码全套约定（规则 6 五子项）只沉淀在 helloai-preflight skill（开发者侧），executor SKILL.md（外部 Agent 侧）完全缺失；`ExecutionRecordParser` 五块解析规则（SUMMARY 必填、列表段须「标题行+换行+`- `列表」、VERIFICATION 必须块尾）与文档模板之间无绑定关系，示例漂移无感知。
+- **落地决策**：只改 executor SKILL.md + 解析器单测绑定，**不动 Java 解析逻辑**（解析规则已正确，缺的是文档）；不新增独立文档（避免文档碎片化）。
+- **边界**：planner SKILL.md 不同步（EXECUTION_RECORD 是 executor 产出协议，planner 不产出）；Python/JS 等脚本编码约定不在本轮（先覆盖 PowerShell/bash 两个实际交付形态）。
+
+#### 2. 实现要点
+
+- **SKILL.md §4.4 增强**：模板后新增「字段说明」表——5 字段每字段 1 句说明 + 解析约束（SUMMARY 必填缺失即整块解析失败 / 三个列表段须换行 + `- ` 项 / VERIFICATION 必须块尾且其后内容全部视为证据），逐条对齐 `ExecutionRecordParser` 正则实现；新增第 2 个示例（PowerShell 交付场景，与 §4.5 编码约定联动展示）。
+- **SKILL.md 新增 §4.5 交付物编码与环境约定（A0-9 新增）**：统一 UTF-8；含中文 `.ps1` 必须 **UTF-8 with BOM**（PS 5.1 按 GBK 解析 no-BOM 文件的中文会抛 `字符串缺少终止符`）；**单 BOM 限制**（二次写 BOM 得 `EF BB BF EF BB BF` 双重 BOM，解析直接失败，交付前十六进制确认文件头）；PowerShell 强制编码头模板（`[Console]::OutputEncoding` + `$OutputEncoding`）；`Parser.ParseFile` 语法自检命令（0 error 才提交）；单引号 + `+` 拼接输出风格（PS 5.1 双引号嵌中文提前闭合字符串坑）；Bash 脚本 `LANG/LC_ALL` 声明 + `bash -n` 自检。
+- **原 §4.5 依赖链检查清单顺延为 §4.6**，追加 1 条「交付物编码是否按 §4.5 约定」自检项。
+- **`ExecutionRecordParserTest` 新增 2 用例（7/7）**：SKILL.md §4.4 两个官方示例原文（Java + PowerShell）作为解析输入，断言五块字段与文档示例完全一致——**文档示例与解析器行为绑定，示例一旦漂移立即红测**（防再漂移机制，同 A0-3 verify-tool-matrix 的 diff 思想）。
+
+#### 3. 验证结果
+
+- 单测：`ExecutionRecordParserTest` **7/7 全绿**（原 5 + 新 2：Java 示例五块完整解析 / PowerShell 示例五块完整解析）。
+- 全量回归：`mvn -pl helloai-core,helloai-api -am test -DskipTests=false` → **Tests run: 521（core 505 + api 16），Failures: 0, Errors: 0**（较 A0-8 的 519 +2）。
+- `verify-tool-matrix.ps1` 真实环境 **PASS 23 / FAIL 0，ALL PASSED**（S4 SKILL 0.1 表 == tools/list 11 工具 / S5 0.2 端点 13 路由 / S6 禁用旧路径 / S7 checkIn-checkOut 实测）——SKILL 结构编辑未破坏工具矩阵契约。
+- SKILL.md 文件完整性：UTF-8 no-BOM + LF 行尾保持（编辑前后字节级一致），615 行（+59）。
+
+#### 4. 影响与遗留
+
+- 影响：外部 Agent 首轮提交即可读到完整模板 + 逐字段说明 + 两个填充示例 + 交付编码约定与自检命令，预期降低「产出格式不合格」与「编码不符」导致的 REJECTED 轮次（A0-9 验收口径）；SKILL.md §4.4 文档示例已与解析器单测绑定，后续改示例会红测提醒同步。
+- 遗留：① 编码约定暂覆盖 PowerShell/bash，Python/JS 等脚本可后续按需补充；② SKILL.md 持续增长（615 行），若外部 Agent 上下文窗口受限可考虑拆「快速开始 + 完整手册」；③ `EXECUTION_RECORD` 示例与解析器绑定仅限 core 单测层，运行期无校验（示例仅文档用途，符合预期）。
+
+### 6.69 任务执行策略前端编辑：TaskFormDialog 执行策略折叠区块 + 创建/编辑全链透传（A1：V47 收尾，优先级最高）（2026-08-12）
+
+#### 1. 背景与结论
+
+- **背景（V47 遗留①）**：V47 已落地 `task.agent_policy`/`task.required_skills`/`agent.skills` 三列与 `TaskAgentPolicy` 工具类、选人链约束（拆解/分发/核验/回退），但任务创建/编辑**前端未暴露 policy 表单**——创建/编辑接口不透传 policy，平台内只能靠 RequirementChat 的 planner 钉住机制（V31）间接指定，executor 白名单/reviewer 指定/回退策略/技能要求全部不可配。
+- **勘察结论**：后端缺口——`CreateTaskRequest` 仅 title/description/slaMinutes 三字段，`TaskService.createTask`（三参）/`updateTask`（三参，且不更新 slaMinutes）均不写 policy/requiredSkills；前端缺口——`TaskFormDialog.vue` 是孤儿组件（仓库内无引用），`TaskList.vue` 无新建/编辑入口，`types.Task`/`types.Agent` 缺 V47 字段。
+- **落地决策**：DTO/Service/Controller 全链透传（缺则补）；`updateTask` 采用「null 字段不 set（保持现状）+ 空 Map/空列表显式清空」语义（初次实现直接 set 会把实体原值覆盖为 null，单测暴露后改为防御式）；前端复用 `listPlannerOptions`（V31 在班/可选判定）作为 planner 数据源。
+- **边界**：不做 LLM 拆解真实链路验证（deepseek 密钥可用性不确定；planner/executor/reviewer 三链的 policy 指定语义已由 V47 既有单测 `PlannerAgentPickerTest`/`AgentSelectorTest` 覆盖）；`slaMinutes` 编辑语义为「null=不更新」，暂无「显式清除 SLA」入口（已知限制）。
+
+#### 2. 实现要点
+
+- **后端透传链**：`CreateTaskRequest` 新增 `agentPolicy`（Map，键结构见 `TaskAgentPolicy`）/`requiredSkills`（List）；`TaskService` 新增 `createTask(title, description, slaMinutes, agentPolicy, requiredSkills)` 五参重载（原三参委托，null=不设置落库走 DB 默认 `{}`/`[]`）与 `updateTask(id, title, description, slaMinutes, agentPolicy, requiredSkills)` 六参（null 不 set、空集合=清空）；`TaskController.create/update` 透传。
+- **前端**：`types` 扩展——`Task` 加 `slaMinutes/agentPolicy/requiredSkills`、`Agent` 加 `skills`、新增 `TaskAgentPolicy` 接口；`taskApi` 新增公共载荷类型 `TaskFormPayload`；**TaskFormDialog 重写**——「执行策略（V47，可选）」`el-collapse` 折叠区块：拆解 Planner 下拉（`listPlannerOptions`，selectable=false 置灰）/ 核验 Reviewer 下拉（按角色拉取）/ 执行白名单多选 / 回退策略与任务难度单选（可清空，缺省回落默认）/ 要求技能 `el-tag` 标签输入（回车添加、关闭删除）/ SLA 分钟 `el-input-number`；编辑态回显（`initForm` 从 `task.agentPolicy/requiredSkills/slaMinutes` 填充）；提交时仅组装非空键（全空返回 null）。**TaskList.vue 接入**——header「新建任务」按钮 + 操作列「编辑」（DONE 禁用）。
+- **新增单测**：`TaskServiceTest`（core，5 用例）——五参创建 policy/技能/SLA 落库、三参旧入口不设置、空集合显式清空、null 字段保持现状、任务不存在返回 null 不落库。
+
+#### 3. 验证结果
+
+- 单测：`TaskServiceTest` **5/5 全绿**（首跑 2 失败——updateTask 直接 set null 覆盖实体原值，改防御式 null 不 set 后通过，测试先行捕获设计缺陷）。
+- 全量回归：`mvn -pl helloai-core,helloai-api -am test -DskipTests=false` → **Tests run: 526（core 510 + api 16），Failures: 0, Errors: 0**（较 A0-9 的 521 +5）。
+- 前端：`vue-tsc --noEmit` **exit 0**；`npm run build` 成功（chunk >500kB 警告为既有现象）。
+- 真实环境：重新打包启动后端（PID 46888）后 `verify-a1-task-policy.ps1` **7 步全 PASS**——S3 创建带五键 policy + 技能 + SLA 任务回显断言 / S4 getById 回显（DB 落库证明）/ S5 编辑整体替换（planner 保留、fallback/difficulty 更新、executorAgentIds 移除、技能替换）/ S6 空集合清空（policy 回 `{}`、skills 回 `[]`、省略的 sla 保持 120）/ S7 级联删除清理。
+- 脚本自修：S6 断言首跑失败——PS 5.1 空 `PSCustomObject` 的 `PSObject.Properties.Count` 返回 `$null` 而非 0（`$null -eq 0` 为 false），改 `@(...).Count` 包装后通过（后端行为本就正确）。
+
+#### 4. 影响与遗留
+
+- 影响：V47 遗留①关闭——任务创建/编辑全链透传 policy 五键 + requiredSkills + SLA，平台内可表单直建「指定拆解 Planner / 执行白名单 / 指定核验 Reviewer / 回退策略 / 难度 / 技能要求」任务；TaskFormDialog 从孤儿组件转为 TaskList 正式入口；`updateTask` 六参的「null=不更新、空集合=清空」语义与前端表单行为（仅组装非空键）一致。
+- 遗留：① LLM 真实拆解链验证未做（密钥可用性），planner/executor/reviewer 三链 policy 指定语义依赖 V47 既有单测覆盖，后续有密钥可补 `verify-a1` 扩展步；② slaMinutes 无「显式清除」入口（null=不更新），如需清除需加独立开关；③ 脚本注册的固定名 Agent（a1-policy-*）幂等保留在库，供后续 A1 相关验证复用。
+
+### 6.70 agent.skills 自动推导：注册/管理端保存链路 best-effort 补全（A2：V47 收尾，优先级最高）（2026-08-12）
+
+#### 1. 背景与结论
+
+- **背景（V47 遗留②）**：V47 已落地 `agent.skills`（JSONB[] NOT NULL DEFAULT '[]'）与任务 `required_skills` 的 AND 匹配（`AgentSelectionConstraints.allows()` 的 `skills.containsAll(requiredSkills)`），但 **agent.skills 存在零写入路径**——注册/管理端保存 Agent 均不写 skills（entity 注释「注册时按接入方式声明」是未实现目标态），能力声明全靠手工 DB 维护，技能匹配形同虚设。
+- **勘察结论**：`AgentService.register` 不 setSkills（全仓库 0 处 setSkills 调用）；`AgentController.register` 走 Map body + `applyRegistrationExtras`（处理 accessType/specializationSlug/modelType/labels/capabilities，**无 skills**）；管理端 `AgentUpdateRequest` 无 skills → `AdminAgentController.update` → `AgentService.updateAgentDetail` 六参（null 不 set 防御式）；`AgentResponse` 无 skills 字段；`AgentCapability.mergeDefaults`（「默认值+覆盖值」模式）与 `AgentAccessType.defaultCapabilities`（CLI_CLIENT/API_KEY_LLM/WEB_BROWSER 三型）是推导范本。
+- **落地决策**：新建 `AgentSkillDeriver` 静态工具类，实现「显式值优先 → 否则 accessType 基础技能 + 名称/描述关键词命中合并」的 best-effort 推导，注册与管理端保存链路接入；**显式手工值/已有技能不被推导覆盖**（幂等复用）。
+- **边界**：不做「执行历史产出类型」第三信号源（A2 定义中的推导信号之一，本轮只落地 accessType + 名称/描述关键词两个信号）；不做存量 Agent skills 批量回填（如需可脚本补）。
+
+#### 2. 实现要点
+
+- **`AgentSkillDeriver`（core/agent 新建）**：`derive(accessType, name, description, explicitSkills)`——显式技能 clean 后非空直接返回；否则 `BASE_SKILLS`（CLI_CLIENT→shell / API_KEY_LLM→code-review / WEB_BROWSER→web-search）+ `KEYWORD_SKILLS` 19 组关键词（docker/容器、python、java、sql/数据库、shell/bash/powershell/脚本、cli、web/search/搜索、浏览器、爬虫、review/审查/评审）命中合并，LinkedHashSet 去重保序；`clean(raw)` 统一 trim/过滤空白/去重。
+- **注册链路**：`AgentController.applyRegistrationExtras` 新增第 5 步——body 显式传 skills 则 `clean` 落库；否则已有技能为空时 `derive` 推导落库（幂等复用路径因「已有技能非空」天然不被覆盖）。
+- **管理端链路**：`AgentUpdateRequest` +skills（List，显式传入整体替换 / null 保持现状）→ `AdminAgentController.update` 透传 → `AgentService.updateAgentDetail` 六参改七参（skills 非 null 时 `AgentSkillDeriver.clean` 后整体替换，null 不 set）。
+- **响应补全**：`AgentResponse` +skills 字段，`toResponse` 回填（前端详情/验证脚本可见）。
+- **关键缺陷修复（真实环境验证暴露）**：`AgentMapper.xml` 自定义 `insert`/`updateById`（覆盖 BaseMapper 处理 PG JSONB 字段）列清单**写死且未含 V47 新增 skills 列**——无论 entity 怎么 setSkills，UPDATE/INSERT SQL 都不含 skills 列，DB skills 恒为 `[]`。对比实验：Task 走 MP 默认 `updateById`（含 `required_skills` 列，风格 `title=?`）与 Agent（`name = ?` 风格）SQL 来源不同，读 Mapper 源码确认。修复：两处 SQL 补 `skills` 列，用 `PgJsonbTypeHandler` + `COALESCE(#{...skills...}::jsonb, '[]'::jsonb)` 兜底 NOT NULL 约束（register 等路径实体 skills 为 null 时不炸库）。
+
+#### 3. 验证结果
+
+- 单测：`AgentSkillDeriverTest` **11/11 全绿**——显式优先 / 三 accessType 基础技能 / 关键词合并去重（"devbox"+"擅长 Python 脚本与 Docker 容器"→[shell, docker, python]）/ 大小写归一 / 名称描述双扫描同标签去重 / 空显式走推导 / clean trim+空白过滤+去重 / null 防御。
+- 全量回归：`mvn -pl helloai-core,helloai-api -am test -DskipTests=false` → **Tests run: 537（core 521 + api 16），Failures: 0, Errors: 0**（较 A1 的 526 +11）。
+- 真实环境：重新打包启动后 `verify-a2-skill-derive.ps1` **7 步全 PASS**——S2 CLI_CLIENT 无关键词注册 skills 恰为 [shell]（验收点）/ S3 API_KEY_LLM "Docker 审查专家" → [code-review, docker] / S4 显式 [kubernetes, golang] 恰好 2 项 / S5 幂等复用保持显式技能 / S6 管理端 PUT 整体替换 + 只改 remark 保持 / S7 级联删除清理。
+- 调试过程沉淀：skills 不落库根因为 AgentMapper.xml 自定义 SQL 缺列（见实现要点），修复后首跑即全 PASS；调试残留（agent `a2-dbg-cli`、task `a2-skill-dbg-task`）已走级联删除接口清理，库中无 a2 前缀残留。
+
+#### 4. 影响与遗留
+
+- 影响：V47 遗留②关闭——**新注册外部 Agent 自动带基础技能标签，`required_skills` 技能过滤开始有实际效果**；管理端详情编辑可整体替换 skills（null 保持）；AgentResponse 暴露 skills 供前端展示/脚本断言。
+- 遗留：① 执行历史产出类型推导（第三信号源）未做，后续如需可按 sub_task 产出物类型反推技能；② 存量 Agent skills 仍为空（`[]`），如需让旧 Agent 参与技能匹配可补一次性回填脚本；③ 技能词典（19 组关键词）为静态 Map，后续可外置配置。
+
+### 6.71 required_skills 技能同义词归一：匹配前归一化，同义词技能互相命中（A3：V47 收尾，优先级最高）（2026-08-12）
+
+#### 1. 背景与结论
+
+- **背景（V47 遗留③衔接）**：V47 的技能 AND 匹配（`AgentSelectionConstraints.allows()` 的 `containsAll`）是**精确字符串全匹配**——任务 `required_skills=["powershell"]` 无法命中声明 `skills=["shell"]` 的 Agent，"shell 脚本"与"powershell"被视为不同技能；A2 解决了技能**声明侧**（注册自动推导），A3 解决**匹配侧**（匹配前归一化）。
+- **勘察结论**：技能匹配唯一入口为 `AgentSelector.AgentSelectionConstraints.allows()`（全仓库 `getSkills()` 仅此一处消费）；调用链为 `SubTaskDispatchService.resolveConstraints()`（初始分配 + ASSIGNED 超时重分配）与 `ResilientDispatcher`（熔断降级替代），全部经 `pickPreferred/pickAlternative` → `allows()`；`TaskAgentPolicy` 只解析 policy 键（planner/executor/reviewer/fallback/difficulty），不承担技能判定（计划子任务 2 的"TaskAgentPolicy 技能判定接入"按代码事实校正为 `AgentSelectionConstraints` 接入点）；executor SKILL.md 无技能匹配语义说明（grep 确认），无需同步文档。
+- **落地决策**：新建 `SkillNormalizer` 静态工具类（`core/agent`，与 `AgentSkillDeriver` 同域同风格），内置同义词映射，`allows()` 匹配前对双方技能标签归一化（trim + 小写 + 同义词归并）；AND 语义不放松（归一化后仍缺技能照常过滤）。
+- **边界**：不做技能词典 DB 表（维持内置静态 Map，A2 遗留③的外置配置化仍留后续）；不做多级层级体系（如"编程语言归脚本类"多级分类）；不改 `AgentSkillDeriver` 推导逻辑（其产出已是规范标签，无需归一）；不做存量数据回填。
+
+#### 2. 实现要点
+
+- **`SkillNormalizer`（core/agent 新建）**：`SYNONYMS` 14 组同义词映射（bash/powershell/脚本/cli→shell、容器→docker、数据库→sql、web/search/搜索/浏览器/爬虫→web-search、review/审查/评审→code-review，与 `AgentSkillDeriver.KEYWORD_SKILLS` 非恒等项语义对齐）；`normalize(String)`——null/空白→null，trim + `toLowerCase(Locale.ROOT)` 后命中同义词表返回规范标签，未命中原样小写返回（自定义技能 kubernetes/golang 保持可精确匹配）；`normalizeAll(List)`——逐项归一 + LinkedHashSet 去重保序；`matches(agentSkills, requiredSkills)`——归一后 `containsAll`，requiredSkills 空/null 视为不约束（与调用方"空=不限定"语义一致）。
+- **`AgentSelectionConstraints.allows()` 改造**：`skills.containsAll(requiredSkills)` 替换为 `SkillNormalizer.matches(skills, requiredSkills)`；字段注释与行内注释同步补充归一化语义（"A3：匹配前归一化，powershell/bash 与 shell 互相命中"）。
+- **新增单测**：`SkillNormalizerTest`（core/agent，13 用例）——英文/中文同义词归一、大小写与 trim 归一、未命中自定义技能原样、归一幂等、normalizeAll 去重保序与 null/空白防御、matches 同义词交叉命中（powershell↔shell 双向）、中英文混合 AND、缺技能不命中、空约束语义；`AgentSelectorTest.TaskLevelConstraints` 新增 4 用例——requiredSkills=powershell 命中 skills=shell、[bash, 容器] 命中 [shell, docker]（中英文交叉）、Python 命中 python（大小写）、归一化后仍缺技能不命中（AND 不放松）。
+
+#### 3. 验证结果
+
+- 单测：`SkillNormalizerTest` **13/13 全绿**（首跑 1 失败为测试自身 bug——`List.of("  ", null)` 的不可变列表工厂禁止 null 元素，改 `Arrays.asList` 后通过，被测代码零改动）；`AgentSelectorTest` 含新增 4 用例全绿。
+- 全量回归：`mvn -pl helloai-core,helloai-api -am test -DskipTests=false` → **Tests run: 554（core 538 + api 16），Failures: 0, Errors: 0**（较 A2 的 537 +17，即 SkillNormalizerTest 13 + AgentSelectorTest 4）。
+- A3 验收达成：**同义词技能可命中**（任务要求 powershell/bash/容器/搜索/审查 等可命中声明 shell/docker/web-search/code-review 的 Agent），判定逻辑有单测（13+4 用例锁定）。
+
+#### 4. 影响与遗留
+
+- 影响：`required_skills` 技能过滤从"精确字符串"升级为"规范化字符串"——任务创建侧与 Agent 声明侧只要一方使用同义词即可互相命中，A2 推导的规范标签（shell/code-review/web-search 等）与手工声明的同义写法（powershell/审查/搜索 等）不再互相排斥；自定义技能（kubernetes/golang 等）归一后小写精确匹配，行为不变；AND 语义不放松（缺技能仍过滤，既有 5 个 V47 精确匹配用例全部保持通过，向后兼容）。
+- 遗留：① 同义词词典与 A2 关键词表均为静态 Map 且独立维护（内容语义对齐），后续外置配置化时应合并为单一数据源，避免两处漂移；② 层级归一（多级技能分类）未做，当前仅单层同义词归并；③ 未做真实环境 e2e 验证（技能匹配是选人链内部逻辑，`AgentSelectorTest` 4 个真实候选场景用例已等价覆盖，真实分发链路需造数走完整拆解链，留待有密钥时与 A1 扩展步一并验证）。
+
+### 6.72 Agent 编辑弹窗技能编辑：管理端列表回显 skills + 标签增删保存整体替换（A3B：V47 前端缺口补齐）（2026-08-12）
+
+#### 1. 背景与结论
+
+- **背景**：A2 已打通管理端 `PUT /admin/agents/updateById/{id}` 的 skills 整体替换（`AgentUpdateRequest.skills`，null 保持现状）与 `AgentResponse.skills` 回填，但前端消费不全——`AgentEditDialog.vue` 无技能编辑项，且管理端分页列表返回的 `AgentListItemVO` 未映射 skills 字段（前端 `AgentListItem` 类型也没有该字段），编辑弹窗打开时无法回显已有技能；上次合规检查时识别为可选小补齐，用户确认补上。
+- **勘察结论**：`agentApi.updateProfile` 实际已指向管理端 `updateById` 端点（仅类型定义未含 skills）；`AdminAgentController.list` 返回 `AgentListItemVO`（与 `AgentResponse` 不同 DTO），映射代码未 setSkills；`AgentListItem` 类型缺 skills 字段；`updateProfile` 全仓库仅 `AgentEditDialog` 一处调用，类型扩展无破坏面。
+- **落地决策**：最小闭环三件套——后端 VO 补字段映射（一行）、前端类型补字段（types + api 定义）、编辑弹窗加技能标签编辑（回显/回车添加/标签删除/保存整体替换），交互完全复用任务表单「要求技能」的既有模式（TaskFormDialog 同款 skills-box/skill-tag/skill-input + addSkill/removeSkill）。
+- **边界**：不做 AgentDetail 详情页技能展示（列表页可编辑已满足管理诉求）；不动 role 下拉的既有保存语义（`AgentUpdateRequest` 无 role 字段，编辑不生效为既有行为，不在本轮范围）；不改后端 updateAgentDetail 逻辑（A2 已实现整体替换 + null 保持，前端仅消费）。
+
+#### 2. 实现要点
+
+- **后端 `AgentListItemVO`**：新增 `List<String> skills` 字段（带 V47/A2 注释）；`AdminAgentController.list` 映射补 `vo.setSkills(a.getSkills())`。
+- **前端类型**：`types/index.ts` `AgentListItem` 补 `skills?: string[]`（注释同 V47/A2）；`api/agent.ts` `updateProfile` 请求类型补 `skills?: string[]`（注释：显式传入整体替换，不传则后端保持现状）。
+- **`AgentEditDialog.vue`**：表单加 `skills: string[]` 与 `newSkill` 输入；打开弹窗回显 `Array.isArray(a.skills) ? [...a.skills] : []`；「技能」form-item 置于「描述」之前，el-tag 标签 + 小输入框（回车添加、防重复、可删除），样式与任务表单完全同款；保存 payload 始终传 `skills: form.skills`（回显保证表单值初始等于当前值，用户所见即所得：没动 = 传回原值等效保持，删光 = `[]` 清空技能）。
+- **验收脚本**：新建 `scripts/powershell/verify-a3b-agent-edit-skills.ps1`（UTF-8 with BOM + 单引号输出 + ASCII 运行时字面量，规则 6 合规），覆盖列表回显 / 整体替换 / 清空 / null 保持 / 级联清理。
+
+#### 3. 验证结果
+
+- 静态检查：`vue-tsc --noEmit` 无类型错误；`mvn -pl helloai-api -am compile -DskipTests` 编译通过。
+- 全量打包：`mvn -pl helloai-start -am -DskipTests package` 成功（71.5MB jar）；`npm run build` 成功（18.57s）。
+- 真实环境：重新打包重启（PID 23048，6565 就绪）后 `verify-a3b-agent-edit-skills.ps1` **14/14 全 PASS**——S3 adminList 记录含 skills（kubernetes,golang 原样回显，VO 映射生效）/ S4 PUT 整体替换为 [shell, docker] / S5 传 `[]` 清空 / S6 不传 skills 只改 remark 保持 / S7 级联删除清理。首跑 3 失败为脚本自身字段名写错（`PageResult.records` → 实际为 `list`，与前端类型一致），修正后全绿，被测代码零改动。
+- 环境备注：本次重启踩到 start-sb.ps1 两个沙箱环境问题——① 脚本内 `mvn` 在受限环境「拒绝访问」（改为 Node fallback 直接执行 mvn package）；② `Start-Process -FilePath 'java'` 依赖 PATH，受限 PowerShell PATH 无 java（改为 `$env:JAVA_HOME\bin\java.exe` 完整路径启动并写 PID 文件）。
+
+#### 4. 影响与遗留
+
+- 影响：V47 前端缺口补齐——管理端 Agent 列表 → 编辑弹窗现在可查看/增删技能标签并保存，保存走 A2 已就绪的 `updateById` skills 整体替换语义（删光 = 清空，不传 = 保持），与任务表单「要求技能」同交互同视觉；技能声明侧的前端闭环完成（注册自动推导 → 列表回显 → 编辑维护 → required_skills 归一匹配）。
+- 遗留：① `AgentDetailVO`（管理端 getById 详情）仍未映射 skills，详情页若要展示技能需再补一行映射（本轮未做）；② AgentEditDialog 的 modelType/specializationSlug 回显仍为空（`AgentListItem` 无这两个字段，保存时传 undefined 后端保持现状，行为安全但编辑态观感不完整），与 role 下拉不生效同属既有缺口，未在本轮扩散；③ 新增验收脚本未纳入 CI，与既有 verify-*.ps1 一致为手动/按需执行。
+
+### 6.73 技能输入交互升级：规范标签多选下拉 + 自定义回车（A3B 用户反馈微调）（2026-08-12）
+
+#### 1. 背景与结论
+
+- **背景**：A3B 交付后用户核验反馈——技能标签手动输入（el-tag + 输入框）体验一般，建议改为可多选的下拉选项；平台技能本质是「规范词表（6+1 个标签）+ 自定义技能（kubernetes/golang 等）」双层语义，不能退化成纯枚举多选。
+- **落地决策**：`el-select multiple + filterable + allow-create + default-first-option`——下拉多选规范标签、可搜索过滤、输入不在选项中的词按回车创建自定义标签，两全其美；技能选项抽为共享常量供两处消费端复用。
+- **边界**：不改后端（词表仍在后端静态 Map，前端常量与后端注释对齐，遗留的外置配置化同时覆盖两端）；仅改 UI 交互，数据模型（string[] 整体替换语义）不变。
+
+#### 2. 实现要点
+
+- **`src/constants/agentSkills.ts` 新建**：`AGENT_SKILL_OPTIONS` 常量——7 项规范标签（shell/docker/sql/web-search/code-review/python/java，带中文说明 label），注释标明与后端 `AgentSkillDeriver.KEYWORD_SKILLS` / `SkillNormalizer.SYNONYMS` 规范标签对齐。
+- **`AgentEditDialog.vue`**：技能区 el-tag+输入框 → el-select multiple 多选下拉；移除 addSkill/removeSkill/newSkill 与 skills-box 样式；回显/保存语义不变（string[] 整体替换，删光 = 清空）。
+- **`TaskFormDialog.vue`**：「要求技能」同构改造（同一套词的另一消费端，保持一致交互）；移除手动输入逻辑与样式。
+- 保留 `field-hint` 说明文案（AND 语义提示）。
+
+#### 3. 验证结果
+
+- `vue-tsc --noEmit` 无类型错误；`npm run build` 成功（18.69s）。
+- 纯前端改动，后端无变更；UI 交互（下拉多选/搜索/自定义回车）留待用户浏览器核验。
+
+#### 4. 影响与遗留
+
+- 影响：技能输入从"自由手填"升级为"规范标签多选 + 自定义兜底"——Agent 技能区与任务要求技能区交互统一，规范标签带中文说明降低填错概率（如 web-search 不再手打成 web_search）；自定义能力保留（回车创建任意标签）。
+- 遗留：① 前端选项常量与后端词表为两处独立维护（与 A2 遗留③同源），外置配置化时应前后端统一收口；② 选项仅覆盖当前 7 个规范标签，未来后端词表扩展时前端常量需同步；③ 下拉「选择或输入」模式下，自定义标签的大小写/空白由保存链路 trim 兜底（A2 clean），无额外校验。
+
+### 6.74 移除 executor 专业化下拉与模型选择：specializationSlug 全链路清理（用户拍板）（2026-08-12）
+
+#### 1. 背景与结论
+
+- **背景**：用户核验 A3B 后拍板三点——① executor 角色的「专业化」下拉没有实际用处，专业化 prompt（AGENT_SPECIALIZATION 模板机制）实际未接入任何链路，要求连代码一起全量移除；② 外部 AI agent（CLI 接入）注册后再编辑不需要填模型类型（模型取决于外部 agent 自身正在使用的模型），内部 LLM 注册的模型统一按系统配置（llm_provider > sys_config > yml 的 default-model 三级兜底）决定；③ 技能在新建 Agent 时就能填写（注册表单加技能多选）。
+- **勘察结论**：`PromptTemplateService.getBySlug/composeBySlug`（AGENT_SPECIALIZATION 机制）全仓库仅定义无调用，确认为死代码，用户判断正确；specializationSlug 剩余消费点仅注册/编辑表单 UI 与 VO/DTO/Controller 透传；模型缺省链已就绪——`AgentProviderResolver.resolveProvider(agent, fallback)` 在 modelType 为空时回退系统默认 provider，各 Provider Factory 的 defaultModel 有 DB > sys_config > yml 三级兜底，`LlmProviderCatalogService.provisionPlatformCredential` 按解析出的 provider 自动补绑平台密钥，注册表单去掉模型选择后内部 LLM 链路依然闭环。
+- **落地决策**：后端删除 specializationSlug 的 DTO/VO/Controller 透传与 composeBySlug/getBySlug 死代码方法；前端删除 AgentEditDialog 模型类型+专业化、AgentList 注册表单专业化下拉+模型 provider 下拉（内部 LLM 不再选 provider，统一走系统默认），注册表单新增技能多选（复用 §6.73 的 AGENT_SKILL_OPTIONS）。
+- **边界**：DB 列 specialization_slug 与实体字段保留（历史数据兼容，不做迁移）；prompt_template 的 AGENT_SPECIALIZATION 分类保留（模板管理页通用功能，不扩散）；后端 `/admin/agents/listLlmProviders` 端点保留（对外 API 面不收缩，仅前端消费移除）。
+
+#### 2. 实现要点
+
+- **后端（5 文件）**：`AgentService.registerWithExtras/updateAgentDetail` 去 specializationSlug 参数；`AgentCreateRequest`/`AgentUpdateRequest`/`AgentResponse`/`AgentDetailVO` 删字段；`AdminAgentController`/`AgentController` 删 `setSpecializationSlug` 调用与 `applyRegistrationExtras` 中读取逻辑；`PromptTemplateService` 删 `getBySlug`/`composeBySlug` 死代码方法（compose() 保留，ROLE_TEMPLATE 角色模板链路不受影响）。
+- **前端（3 文件）**：`api/agent.ts` 删 `listLlmProviders`（注册表单不再用）；`AgentEditDialog.vue` 删模型类型输入与专业化下拉（form/回显/保存全链路移除，保存 payload 仅 name/remark/skills）；`AgentList.vue` 注册表单删专业化下拉与模型 provider 下拉（含 LlmProviderItem/loadLlmProviders/onAccessTypeChange 相关逻辑），新增技能多选（AGENT_SKILL_OPTIONS 复用，注册即填写，A2 显式技能优先），提交不再传 modelType（内部 LLM 后端按系统默认 provider+default-model 补绑）。
+- **验收脚本**：新建 `scripts/powershell/verify-674-remove-specialization.ps1`（UTF-8 with BOM + 单引号输出，规则 6 合规），覆盖响应契约无 specializationSlug 字段 / 注册带 skills / 编辑不带 modelType / 内部 LLM 注册缺省 modelType 为 null / 级联清理。
+
+#### 3. 验证结果
+
+- 静态检查：`mvn -pl helloai-api -am compile -DskipTests` BUILD SUCCESS（改造后全量 `mvn -pl helloai-start -am package` 29s 成功）；`vue-tsc --noEmit` 无类型错误；`npm run build` 成功（18.00s）。
+- 真实环境：重新打包重启（PID 17124，6565 就绪）后 `verify-674-remove-specialization.ps1` **16/16 全 PASS**——列表/详情/注册响应均无 specializationSlug 字段（契约层面确认移除）/ 注册带 skills 显式生效 / 编辑不带 modelType 更新成功 / 内部 LLM 注册缺省 modelType=null（系统默认 provider 兜底）。
+
+#### 4. 影响与遗留
+
+- 影响：Agent 管理链路去掉无效的专业化选择（executor 专业化下拉、编辑模型类型字段），内部 LLM 注册简化——不再选 provider，模型统一由系统配置决定；技能在注册时即可填写（显式优先，不填仍按接入类型+关键词自动推导）。
+- 遗留：① DB 列 specialization_slug 与实体字段保留但已无任何业务消费，可随大版本迁移一并清理；② prompt_template 的 AGENT_SPECIALIZATION 分类仍可创建但 Agent 侧不再消费（模板管理页保留）；③ §6.72 遗留① AgentDetailVO 仍未映射 skills，本轮未扩散；④ 内部 LLM 注册不再展示实际生效的 provider/模型，如需可在详情页补只读展示（未做）。
