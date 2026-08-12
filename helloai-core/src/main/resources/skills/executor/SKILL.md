@@ -24,12 +24,57 @@
 
 ---
 
+## 〇、工具与动作速查总表（A0-3 新增，机器可解析）
+
+> 全平台**三通道工具面已对齐为 10 个执行工具**（A0-3 起 REST 直通补齐 `checkIn`/`checkOut`/`getAgentStatus`，
+> 与 MCP SSE、REST 别名 `POST /api/mcp/jsonrpc` 完全一致）。
+> 下表是**权威动作清单**：`scripts/powershell/verify-tool-matrix.ps1` 会把它与服务器 `tools/list` 实时 diff，防再次漂移。
+> 所有请求都带 `Authorization: Bearer <API_KEY>`；REST 直通/别名的响应是 `R` 包装 `{code, msg, data}`，MCP 返回原始 result。
+
+### 0.1 三通道执行工具（10 个，与 tools/list 同名集合一致）
+
+| 工具 | MCP SSE | REST 别名 jsonrpc | REST 直通 /api/mcp/tools/* | 请求体（JSON） | 返回要点（data/result） |
+|---|---|---|---|---|---|
+| `checkIn` | ✓ | ✓ | `POST .../checkIn` | `{"workMode":"AUTO","maxConcurrent":3,"ttlMinutes":30}` | `{ok, leaseId, sessionId, workMode, maxConcurrent, expiresAt}` |
+| `checkOut` | ✓ | ✓ | `POST .../checkOut` | `{"closeReason":"shutdown"}`（兼容 `{"reason":...}`） | `{ok, closedCount, reason}` |
+| `getAgentStatus` | ✓ | ✓ | `POST .../getAgentStatus` | `{}` | `{status, dbOnlineStatus, computedOnlineStatus, lastSeenAt, lastActiveAt, offlineReason, offlineAt, serverTime}` |
+| `pullTasks` | ✓ | ✓ | `POST .../pullTasks` | `{"role":"EXECUTOR","max":20}` | `{messages:[{messageId, type, subTaskId, taskId, title, priority, deadline, reassigned, currentAgentId}]}` |
+| `ack` | ✓ | ✓ | `POST .../ack` | `{"messageId":"inbox-10001"}` | `{ok, acknowledged, messageId}` |
+| `claimSubTask` | ✓ | ✓ | `POST .../claimSubTask` | `{"subTaskId":123}` | `{ok, claimed, reason, assignedAgent, subTaskId, version}` |
+| `heartbeat` | ✓ | ✓ | `POST .../heartbeat` | `{}` | `{ok, agentId, serverTime}` |
+| `uploadArtifact` | ✓ | ✓ | `POST .../uploadArtifact` | `{"subTaskId":123,"fileName":"a.md","mimeType":"text/markdown","fileSize":1024,"storageUrl":"local://..."}` | `{ok, attachmentId, storageUrl}` |
+| `submitResult` | ✓ | ✓ | `POST .../submitResult` | `{"subTaskId":123,"resultId":"r-1","success":true,"output":"...","finishReason":"completed"}` | `{ok, accepted, idempotent, status, reason, subTaskId, resultId}` |
+| `reportBlocked` | ✓ | ✓ | `POST .../reportBlocked` | `{"subTaskId":123,"reason":"外部 API timeout"}` | `{ok, blocked, subTaskId, reason}` |
+
+> 通道选择：MCP SSE 是标准协议（需 4 步握手，session 绑定长连接）；REST 别名与 REST 直通**免 session、同步返回**，断连后仍可用。
+> MCP 通道的 `arguments` 里需额外带 `agentId` 与 `sessionId`（§1.4(2)）；REST 通道不需要（鉴权取自 Bearer 头）。
+
+### 0.2 REST 业务端点（查询/兜底，非执行工具）
+
+| 动作 | 方法 + 路径 | 请求体/参数 | 返回要点（data） |
+|---|---|---|---|
+| 查收件箱 | `GET /api/agent/inbox?limit=20` | 无 body | `[AgentInbox...]`（未读优先） |
+| 未读数 | `GET /api/agent/inbox/getUnreadCount` | 无 body | `{total_unread: N}` |
+| 标记已读 | `POST /api/agent/inbox/markReadById/{id}` | 无 body | `{}` |
+| 归档 | `POST /api/agent/inbox/archiveById/{id}` | 无 body | `{}` |
+| 合并规则 | `GET /api/rules/getMergedRules?taskId=&subTaskId=` | 无 body | `{content: "..."}` |
+| 我的子任务 | `GET /api/sub-tasks/listMine?agentId={id}` | 无 body | `[SubTask...]` |
+| 可认领列表 | `GET /api/sub-tasks/listAvailable` | 无 body | `[SubTask...]` |
+| 认领 | `POST /api/sub-tasks/claimById/{id}?agentId={id}` | 无 body | `{}` |
+| 开始执行 | `POST /api/sub-tasks/startById/{id}` | 无 body（**必须 POST，GET 会 405**） | `{}` |
+| 详情 | `GET /api/sub-tasks/getById/{id}` | 无 body | `SubTask`（含 dependsOn/deliverable/acceptance） |
+| 提交 | `POST /api/sub-tasks/submitById/{id}` | 无 body（产出请走 `submitResult` 工具） | `{}` |
+| 审查记录 | `GET /api/reviews?subTaskId={id}` | 无 body | `[Review...]`（含 issues/comment/score） |
+| 我的状态 | `GET /api/agents/getById/{id}` | 无 body | `Agent`（含 onlineStatus，下线验证用） |
+
+---
+
 ## 一、MCP 接入（推荐）
 
 > ⚠️ **给 AI 客户端的第一提醒：门铃推送通道已搁置（技术瓶颈，外部 Agent 无法处理平台推送的门铃信号），任务感知一律靠 `pullTasks` 轮询，不要尝试连接任何推送通道。**
 > - 上线后**第一步必须用 MCP 工具 `checkIn` 打卡**（拿到 ACTIVE 打卡租约，在岗状态与租约入口）。
-> - `checkIn` / `checkOut` 的 MCP 工具**只存在于 MCP SSE 通道**（`{{BASE_URL}}/mcp/sse` + `{{BASE_URL}}/mcp/messages`，共 10 个工具）。
-> - **REST 别名通道（A0-2 新增）**：`POST {{BASE_URL}}/api/mcp/jsonrpc` 也已补齐全部 10 工具（含 `checkIn`/`checkOut`/`getAgentStatus`），**无状态、同步响应、不依赖 MCP session**——SSE 断开（Session not found）时用它兜底，无需重新 4 步握手。
+> - **三通道工具面已对齐**：`checkIn` / `checkOut` / `getAgentStatus` 在 MCP SSE、REST 别名 `POST /api/mcp/jsonrpc`、REST 直通 `POST /api/mcp/tools/*` 均可调用（A0-3 起，§0.1 总表）。
+> - **REST 别名通道（A0-2 新增）**：`POST {{BASE_URL}}/api/mcp/jsonrpc` 已补齐全部 10 工具（含 `checkIn`/`checkOut`/`getAgentStatus`），**无状态、同步响应、不依赖 MCP session**——SSE 断开（Session not found）时用它兜底，无需重新 4 步握手。
 > - 若确实没有 MCP 客户端，可用 REST 轮询兜底（见第三节），但优先走 MCP。
 
 ### 1.1 连接配置
@@ -101,7 +146,7 @@ T+(ttl-1)m : 主动重做 checkIn 续约，避免被判 OFFLINE
 1. 停止本机所有 pullTasks / heartbeat 定时器（轮询主循环退出即可）
 2. MCP tools/call checkOut（关 ACTIVE 租约）
 3. close /mcp/sse 长连接（kill 后台 curl PID）
-4. 验证 dashboard 或 GET /api/agents/<你的ID> 显示 OFFLINE
+4. 验证 dashboard 或 GET /api/agents/getById/<你的ID> 显示 OFFLINE
 ```
 
 ### 1.4 MCP SSE 握手与 sessionId 透传（关键·避坑）
@@ -194,7 +239,7 @@ T+30m       : 旧租约 expires_at 到点即 EXPIRED（离岗）；提前 60s �
 1. 停本机所有 pullTasks / heartbeat 定时器（轮询主循环退出即可）
 2. MCP tools/call checkOut(agentId=<你的ID>, sessionId=<sid>)    # 关 ACTIVE 租约，否则 30 分钟内不会真正 OFFLINE
 3. kill /mcp/sse 后台 curl.exe 进程
-4. GET /api/agents/<你的ID> 验证显示 OFFLINE（可选，dashboard 也行）
+4. GET /api/agents/getById/<你的ID> 验证显示 OFFLINE（可选，dashboard 也行）
 ```
 
 > 漏步骤 2 会导致租约残留在 DB 30 分钟内继续占据"在岗"状态，影响派单。漏步骤 3 不会立即出错，但会留下幽灵进程。
@@ -243,50 +288,66 @@ while true; do pullTasks; sleep 30; done
 
 ## 三、REST API 参考（无 MCP 时的兜底通道）
 
-每次唤醒时按顺序执行：查收件箱 → 获取最新规则 → 查我的子任务 → 按优先级处理（REWORK > ASSIGNED > IN_PROGRESS）→ 无任务则认领 → 完成后提交并写日志。
+> 本节的每个动作在 §0.2 速查表都有「方法 + 路径 + 请求体 + 返回要点」一行；下面给出可直接粘贴的 curl。
+> 响应统一是 `R` 包装 `{"code":200,"msg":"success","data":...}`；**所有请求都必须带 `Authorization: Bearer <API_KEY>`**。
 
 ### 收件箱
-```bash
-# 查收件箱
-curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox
 
-# 未读数量
+```bash
+# 查收件箱（未读优先；limit 可选，默认 20）
+curl -H "Authorization: Bearer <API_KEY>" "{{BASE_URL}}/api/agent/inbox?limit=20"
+
+# 未读数量 -> data: {"total_unread": N}
 curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox/getUnreadCount
 
-# 标记已读
+# 标记已读（POST 无 body）
 curl -X POST -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox/markReadById/<消息ID>
+
+# 归档（POST 无 body）
+curl -X POST -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agent/inbox/archiveById/<消息ID>
 ```
 
 ### 规则
+
 ```bash
-curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/rules/getMergedRules
+# 合并规则（taskId / subTaskId 可选）-> data: {"content": "..."}
+curl -H "Authorization: Bearer <API_KEY>" "{{BASE_URL}}/api/rules/getMergedRules?taskId=&subTaskId="
 ```
 
 ### 子任务
+
 ```bash
-# 查看我的子任务
+# 查看我的子任务 -> data: [SubTask...]
 curl -H "Authorization: Bearer <API_KEY>" "{{BASE_URL}}/api/sub-tasks/listMine?agentId=<你的ID>"
 
-# 查看可认领的子任务
+# 查看可认领的子任务 -> data: [SubTask...]（PENDING + 符合本角色）
 curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/listAvailable
 
-# 认领子任务
+# 认领子任务（POST 无 body，agentId 在 query）
 curl -X POST -H "Authorization: Bearer <API_KEY>" "{{BASE_URL}}/api/sub-tasks/claimById/<子任务ID>?agentId=<你的ID>"
 
-# 开始执行
+# 开始执行（POST 无 body；**GET 会 405**，不要用 GET 试）
 curl -X POST -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/startById/<子任务ID>
 
-# 查看子任务详情（含交付物要求、验收标准）
+# 查看子任务详情（含 dependsOn 前置列表、交付物要求、验收标准）
 curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/getById/<子任务ID>
 
-# 提交成果
+# 提交成果（POST 无 body；**本端点不带产出文本**，产出请走 MCP/REST 别名 submitResult 工具）
 curl -X POST -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/submitById/<子任务ID>
 ```
 
 ### 审查记录（返工时使用）
+
 ```bash
-# 查看返工原因
+# 查看返工原因 -> data: [Review...]（含 issues / comment / score）
 curl -H "Authorization: Bearer <API_KEY>" "{{BASE_URL}}/api/reviews?subTaskId=<子任务ID>"
+```
+
+### 状态验证（下线剧本用）
+
+```bash
+# 查看自身状态（确认 OFFLINE / 在线计算态）-> data: Agent（含 onlineStatus）
+curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agents/getById/<你的ID>
 ```
 
 > 其余低频接口（积分 / 活动日志等）按需用 `task-cli.py` 或参考平台 REST 文档，此处不展开。
@@ -428,7 +489,7 @@ VERIFICATION:
 
 ## 注意事项
 - 上线先 `checkIn` 拿租约；会话结束 `checkOut` 关租约。
-- 每次执行前**必须先查收件箱和获取规则**（`/api/rules/merged`）。
+- 每次执行前**必须先查收件箱和获取规则**（`GET /api/rules/getMergedRules`，见 §0.2/§三）。
 - 收到返工（REWORK）时，先查 `/api/reviews?subTaskId=<id>` 了解具体问题再修复。
 - 所有产出物放在子任务对应的工作目录下；提交前确认符合验收标准。
 - 不要操作不属于自己的子任务。
@@ -458,9 +519,11 @@ python task-cli.py --key <API_KEY> update        # 更新 CLI + SKILL
 |---|---|---|---|
 | 400 | `Invalid message format` | POST `/mcp/messages` 缺 `charset=utf-8` | 用 `StringContent(..., UTF8, 'application/json')` 让容器自动追加 charset |
 | 401 | `Unauthorized` | Bearer 头错 | 检查 API Key 前缀 `ak_` 与拼写 |
-| 404 | `/api/mcp/tools` 只列 7 个工具 | 这是 v2.4 降级视图，没含 `checkIn`/`checkOut` | 改走 SSE 通道 `/mcp/sse` 调 `tools/list` 拿全 10 个工具 |
-| 500 | `Agent 未在岗（无 ACTIVE 打卡租约）` | 未 checkIn 就调用依赖在岗状态的能力 | 先 MCP `tools/call checkIn` 再调用 |
+| 404 | `Session not found` | SSE 连接断开/超时，session 已被服务端回收（A0-2 起响应体附 `fixHint`） | 重新 GET /mcp/sse 四步握手；或切 REST 别名 `POST /api/mcp/jsonrpc`（免 session） |
+| 404 | `GET /api/agents/<id>` 或 `/api/rules/merged` | 路径拼错（SKILL 旧写法） | 用 §0.2 速查表的准确路径：`/api/agents/getById/{id}`、`/api/rules/getMergedRules` |
+| 405 | GET `startById` | 开始执行是 POST 端点 | 用 `POST /api/sub-tasks/startById/{id}`（无 body） |
+| 500 | `Agent 未在岗（无 ACTIVE 打卡租约）` | 未 checkIn 就调用依赖在岗状态的能力 | 先调 `checkIn`（MCP / REST 别名 / REST 直通均可）再调用 |
 | 500 | `sessionId 不能为空` | tool arguments 漏 `sessionId` 字段 | 把 SSE endpoint 帧拿到的 sid **同时**拼进 URL `?sessionId=` 与 arguments `sessionId` |
-| 500 | `Unknown tool: checkIn`（走 REST JSON-RPC） | 走了 `/api/mcp/jsonrpc` 旧通道，dispatch switch 不含 checkIn | 换 `/mcp/sse` + `/mcp/messages` 通道 |
+| 500 | `Unknown tool: xxx` | 工具名拼错 | 先 `tools/list`（或 `GET /api/mcp/tools`）拿权威清单（§0.1 三通道 10 工具） |
 
 > **建议**：优先走 MCP（全套工具 + 统一心跳/租约语义）；无 MCP 客户端时用 REST curl 轮询兜底；CLI 仅覆盖 poll/submit/status 三个高频操作。

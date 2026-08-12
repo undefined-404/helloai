@@ -5,6 +5,7 @@ import com.helloai.common.base.R;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -36,6 +37,13 @@ public class GlobalExceptionHandler {
     public R<Void> handleNotFound(NoResourceFoundException e) {
         log.debug("资源不存在: {}", e.getMessage());
         return R.fail(404, "请求的接口不存在");
+    }
+
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    @ResponseStatus(HttpStatus.METHOD_NOT_ALLOWED)
+    public R<Void> handleMethodNotSupported(HttpRequestMethodNotSupportedException e) {
+        log.debug("请求方法不支持: {}", e.getMessage());
+        return R.fail(405, "请求方法不支持");
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

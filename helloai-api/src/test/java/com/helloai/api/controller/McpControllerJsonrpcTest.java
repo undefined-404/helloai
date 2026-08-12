@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
 import com.helloai.core.agent.mcp.McpToolService;
 import com.helloai.core.agent.mcp.McpToolService.CheckInResult;
+import com.helloai.core.agent.mcp.McpToolService.CheckOutResult;
+import com.helloai.core.agent.mcp.McpToolService.GetAgentStatusResult;
 import com.helloai.core.agent.mcp.McpToolService.HeartbeatResult;
 import com.helloai.core.agent.mcp.McpToolService.SubmitResultResult;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,6 +30,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -236,5 +239,94 @@ class McpControllerJsonrpcTest {
 
         assertEquals(-32000, root.get("error").get("code").asInt());
         assertTrue(root.get("error").get("message").asText().contains("ACTIVE"));
+    }
+
+    // ================================================================
+    // REST 直通端点 /api/mcp/tools/*（A0-3：三通道 10 工具对齐，声明与实现一致）
+    // ================================================================
+
+    @Test
+    @DisplayName("GET /api/mcp/tools：声明 10 个工具且与 JSON-RPC tools/list 同名集合一致")
+    void listTools_declaresAllTenMatchingJsonrpc() throws Exception {
+        MvcResult result = mockMvc.perform(get("/api/mcp/tools")
+                        .requestAttr("_authId", AGENT_ID))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode root = MAPPER.readTree(result.getResponse().getContentAsString());
+        assertEquals(200, root.get("code").asInt(), "R.ok 应返回 code=200");
+        assertNotNull(root.get("data"), "R.ok 应携带 data");
+
+        List<String> declared = new java.util.ArrayList<>();
+        for (JsonNode t : root.get("data")) {
+            declared.add(t.asText());
+        }
+        List<String> expected = List.of(
+                "pullTasks", "ack", "claimSubTask", "heartbeat", "uploadArtifact",
+                "submitResult", "reportBlocked", "getAgentStatus", "checkIn", "checkOut");
+        assertEquals(expected, declared, "GET /api/mcp/tools 声明应与三通道统一清单一致");
+    }
+
+    @Test
+    @DisplayName("POST /api/mcp/tools/getAgentStatus：直通端点委托 McpToolService（无 body 可用）")
+    void directGetAgentStatus_delegates() throws Exception {
+        GetAgentStatusResult status = new GetAgentStatusResult();
+        status.setAgentId(AGENT_ID);
+        status.setStatus("ACTIVE");
+        status.setComputedOnlineStatus("ONLINE");
+        when(mcpToolService.getAgentStatus(AGENT_ID)).thenReturn(status);
+
+        MvcResult result = mockMvc.perform(post("/api/mcp/tools/getAgentStatus")
+                        .requestAttr("_authId", AGENT_ID)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode root = MAPPER.readTree(result.getResponse().getContentAsString());
+        assertEquals("ACTIVE", root.get("data").get("status").asText());
+        assertEquals("ONLINE", root.get("data").get("computedOnlineStatus").asText());
+    }
+
+    @Test
+    @DisplayName("POST /api/mcp/tools/checkIn：直通端点透传 workMode/ttlMinutes 并同步返回租约")
+    void directCheckIn_passesBodyAndReturnsLease() throws Exception {
+        CheckInResult lease = new CheckInResult();
+        lease.setOk(true);
+        lease.setAgentId(AGENT_ID);
+        lease.setLeaseId(88L);
+        lease.setWorkMode("AUTO");
+        lease.setMaxConcurrent(2);
+        lease.setExpiresAt("2026-08-11T20:00:00");
+        when(mcpToolService.checkIn(AGENT_ID, "AUTO", null, 45)).thenReturn(lease);
+
+        MvcResult result = mockMvc.perform(post("/api/mcp/tools/checkIn")
+                        .requestAttr("_authId", AGENT_ID)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(MAPPER.writeValueAsString(Map.of("workMode", "AUTO", "ttlMinutes", 45))))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode root = MAPPER.readTree(result.getResponse().getContentAsString());
+        assertEquals(88L, root.get("data").get("leaseId").asLong());
+        assertEquals("AUTO", root.get("data").get("workMode").asText());
+    }
+
+    @Test
+    @DisplayName("POST /api/mcp/tools/checkOut：直通端点 closeReason 缺失时回退 reason（兼容旧字段）")
+    void directCheckOut_fallsBackToReason() throws Exception {
+        CheckOutResult out = new CheckOutResult();
+        out.setOk(true);
+        out.setAgentId(AGENT_ID);
+        out.setClosedCount(1);
+        out.setReason("shutdown");
+        when(mcpToolService.checkOut(AGENT_ID, "shutdown")).thenReturn(out);
+
+        MvcResult result = mockMvc.perform(post("/api/mcp/tools/checkOut")
+                        .requestAttr("_authId", AGENT_ID)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(MAPPER.writeValueAsString(Map.of("reason", "shutdown"))))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode root = MAPPER.readTree(result.getResponse().getContentAsString());
+        assertEquals(1, root.get("data").get("closedCount").asInt());
+        assertEquals("shutdown", root.get("data").get("reason").asText());
     }
 }

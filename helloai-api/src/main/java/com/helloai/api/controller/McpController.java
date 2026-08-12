@@ -8,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -41,13 +42,19 @@ public class McpController {
     private final McpToolService mcpToolService;
 
     // ================================================================
-    // REST 通道 — 6 个工具
+    // REST 通道 — 10 个工具（A0-3：补齐 getAgentStatus/checkIn/checkOut，
+    // 与 MCP SSE / JSON-RPC 三通道工具面完全对齐）
     // ================================================================
 
-    /** GET /api/mcp/tools — 列出当前 Agent 可用的工具（A0-2 §6.61：补齐至 10 工具与 MCP 通道对齐） */
+    /** 三通道统一工具清单（MCP SSE / REST 别名 jsonrpc / REST 直通 tools/*），防声明与实现漂移。 */
+    private static final List<String> TOOL_NAMES = List.of(
+            "pullTasks", "ack", "claimSubTask", "heartbeat", "uploadArtifact",
+            "submitResult", "reportBlocked", "getAgentStatus", "checkIn", "checkOut");
+
+    /** GET /api/mcp/tools — 列出当前 Agent 可用的工具（与 MCP SSE / JSON-RPC 通道一致，10 个） */
     @GetMapping("/tools")
     public R<?> listTools(@RequestAttribute("_authId") Long agentId) {
-        return R.ok(java.util.List.of("pullTasks", "ack", "claimSubTask", "heartbeat", "uploadArtifact", "submitResult", "reportBlocked", "getAgentStatus", "checkIn", "checkOut"));
+        return R.ok(TOOL_NAMES);
     }
 
     /** POST /api/mcp/tools/pullTasks */
@@ -140,6 +147,39 @@ public class McpController {
         if (reason == null || reason.isBlank()) return R.fail("reason 不能为空");
 
         return R.ok(mcpToolService.reportBlocked(agentId, subTaskId, reason));
+    }
+
+    /** POST /api/mcp/tools/getAgentStatus（A0-3：补齐直通端点，与 REST 别名 / MCP SSE 通道对齐；无 body 即可） */
+    @PostMapping("/tools/getAgentStatus")
+    public R<GetAgentStatusResult> getAgentStatus(
+            @RequestAttribute("_authId") Long agentId,
+            @RequestBody(required = false) Map<String, Object> body) {
+        return R.ok(mcpToolService.getAgentStatus(agentId));
+    }
+
+    /** POST /api/mcp/tools/checkIn（A0-3：补齐直通端点；body 可选 workMode / maxConcurrent / ttlMinutes） */
+    @PostMapping("/tools/checkIn")
+    public R<CheckInResult> checkIn(
+            @RequestAttribute("_authId") Long agentId,
+            @RequestBody(required = false) Map<String, Object> body) {
+        Map<String, Object> args = body == null ? Map.of() : body;
+        String workMode = (String) args.get("workMode");
+        Integer maxConcurrent = args.get("maxConcurrent") instanceof Number n ? n.intValue() : null;
+        Integer ttlMinutes = args.get("ttlMinutes") instanceof Number n ? n.intValue() : null;
+        return R.ok(mcpToolService.checkIn(agentId, workMode, maxConcurrent, ttlMinutes));
+    }
+
+    /** POST /api/mcp/tools/checkOut（A0-3：补齐直通端点；body 可选 closeReason / reason） */
+    @PostMapping("/tools/checkOut")
+    public R<CheckOutResult> checkOut(
+            @RequestAttribute("_authId") Long agentId,
+            @RequestBody(required = false) Map<String, Object> body) {
+        Map<String, Object> args = body == null ? Map.of() : body;
+        String closeReason = (String) args.get("closeReason");
+        if (closeReason == null || closeReason.isBlank()) {
+            closeReason = (String) args.get("reason");
+        }
+        return R.ok(mcpToolService.checkOut(agentId, closeReason));
     }
 
     // ================================================================
