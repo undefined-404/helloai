@@ -108,6 +108,16 @@ public class AgentDispatchProperties {
     private int reviewOrphanBatchSize = 10;
 
     /**
+     * A0-5：自动核验证据硬检查的附件补偿等待（毫秒）。
+     *
+     * <p>产出物化在结果回报事务 afterCommit 同步执行，自动核验在 AFTER_COMMIT
+     * 异步线程启动，两者存在毫秒级竞态；执行密集任务证据检查未发现可读附件时
+     * 先等待本窗口再重查一次，避免物化未完成被误判为无证据。默认 1000ms，
+     * 0 表示不等待（测试/联调可关闭）。</p>
+     */
+    private int reviewEvidenceCheckWaitMs = 1000;
+
+    /**
      * V32：任务自动收口（全部子任务 DONE/CANCELLED → Task DONE）后，
      * 是否异步触发 Planner 生成最终整合报告。
      *

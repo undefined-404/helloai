@@ -29,6 +29,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -44,6 +45,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -333,6 +335,35 @@ class PlannerAnalysisServiceTest {
 
         assertThat(confirmed).hasSize(2);
         verify(subTaskDispatchService).dispatchPendingSubTaskAuto(2L, AgentRole.EXECUTOR);
+    }
+
+    @Test
+    @DisplayName("confirm：任务带 SLA 时按 确认时刻+slaMinutes 下发子任务 deadline，先持久化再转正")
+    void shouldAssignDeadlineFromTaskSlaWhenConfirming() {
+        Task task = planningTask();
+        task.setSlaMinutes(60);
+        when(taskService.getById(TASK_ID)).thenReturn(task);
+        List<SubTask> drafts = List.of(draft(1L), draft(2L));
+        when(subTaskService.list(TASK_ID, SubTaskStatus.PENDING_PLAN_REVIEW, null, null, 0))
+                .thenReturn(pageOf(drafts));
+        when(subTaskService.getById(anyLong())).thenAnswer(inv -> draft(inv.getArgument(0)));
+
+        OffsetDateTime before = OffsetDateTime.now();
+        plannerAnalysisService.confirmPlan(TASK_ID);
+        OffsetDateTime after = OffsetDateTime.now();
+
+        // A0-7：deadline 必须在 changeStatus 前落库（changeStatus 内部重查库后全字段更新，
+        // 未落库的 deadline 会被覆盖丢失），取值区间 [now, now+60min]，序列化 ISO8601 带时区偏移
+        ArgumentCaptor<SubTask> captor = ArgumentCaptor.forClass(SubTask.class);
+        verify(subTaskService, times(2)).updateById(captor.capture());
+        assertThat(captor.getAllValues()).allSatisfy(st -> {
+            assertThat(st.getDeadline()).isNotNull();
+            assertThat(st.getDeadline()).isBetween(before.plusMinutes(59), after.plusMinutes(60));
+            assertThat(st.getDeadline().toString()).matches(".*(Z|[+-]\\d{2}:\\d{2})$");
+        });
+        // 转正仍逐条执行，与 deadline 下发互不干扰
+        verify(subTaskService).changeStatus(eq(1L), eq(SubTaskStatus.PENDING), isNull(), anyMap());
+        verify(subTaskService).changeStatus(eq(2L), eq(SubTaskStatus.PENDING), isNull(), anyMap());
     }
 
     @Test

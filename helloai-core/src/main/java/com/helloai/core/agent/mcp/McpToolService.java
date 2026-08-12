@@ -27,6 +27,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.OffsetDateTime;
 import java.util.*;
 import com.helloai.core.agent.observability.HeartbeatService;
 
@@ -56,6 +58,11 @@ public class McpToolService {
     /** 通知/评语摘要截断上限（收件箱 summary、review 摘要等）。 */
     private static final int SUMMARY_MAX_CHARS = 200;
 
+    /** 工具调用自动续租（A0-8）：原 TTL 推算异常/缺失时的兜底续约窗口（分钟，与 checkIn 默认一致）。 */
+    private static final int DEFAULT_RENEW_MINUTES = 30;
+    /** 工具调用自动续租（A0-8）：单次续约窗口上限（分钟，7 天），防异常大 TTL 无限续约。 */
+    private static final int MAX_RENEW_MINUTES = 7 * 24 * 60;
+
     // ================================================================
     // pullTasks
     // ================================================================
@@ -79,6 +86,7 @@ public class McpToolService {
     public PullTasksResult pullTasks(Long agentId, String role, int max, boolean includeRead) {
         assertAgentActive(agentId);
         assertToolEnabled(agentId, "pullTasks");
+        refreshDutyLease(agentId); // A0-8：轮询工具顺带续租，轮询期即保活期
 
         // 应用参数约束（agent_mcp_server.param_constraints.max 优先）
         Map<String, Object> constraints = agentMcpServerService.getParamConstraints(agentId, "pullTasks");
@@ -150,6 +158,7 @@ public class McpToolService {
     public AckResult ack(Long agentId, String messageId) {
         assertAgentActive(agentId);
         assertToolEnabled(agentId, "ack");
+        refreshDutyLease(agentId); // A0-8：处理收件箱消息顺带续租
 
         Long inboxId = parseInboxId(messageId);
         try {
@@ -179,6 +188,7 @@ public class McpToolService {
     public ClaimSubTaskResult claimSubTask(Long agentId, Long subTaskId) {
         assertAgentActive(agentId);
         assertToolEnabled(agentId, "claimSubTask");
+        refreshDutyLease(agentId); // A0-8：认领/开工顺带续租，长任务执行期保活
 
         SubTask subTask = subTaskService.getById(subTaskId);
         if (subTask == null) {
@@ -252,17 +262,44 @@ public class McpToolService {
     /**
      * 心跳上报。刷新 Agent 的 last_seen_at，维持在线状态。
      * 幂等，频繁调用无副作用。
+     *
+     * <p>A0-6（§6.65）：响应附带当前值班租约状态（onDuty / leaseId / leaseExpiresAt /
+     * remainingTtlSeconds），供 Agent 每次心跳自检续约——租约剩余时间不足时可主动
+     * 重新 checkIn，避免被静默切到离岗。</p>
+     *
+     * <p>A0-8（§6.67）：心跳顺带自动续租——有 ACTIVE 租约时按原 TTL 窗口延长
+     * expire_time，remainingTtlSeconds 为续租后的剩余 TTL；外部 Agent 只要保持
+     * 轮询本工具即可持续在岗，无需手动重做 checkIn。</p>
      */
     public HeartbeatResult heartbeat(Long agentId) {
         assertAgentActive(agentId);
         assertToolEnabled(agentId, "heartbeat");
 
         heartbeatService.seen(agentId);
+        // A0-8：心跳顺带续租——返回的 remainingTtlSeconds 为续租后的剩余 TTL，
+        // 外部 Agent 只要保持轮询 heartbeat 即可持续在岗，无需手动重做 checkIn。
+        refreshDutyLease(agentId);
 
+        OffsetDateTime now = OffsetDateTime.now();
         HeartbeatResult result = new HeartbeatResult();
         result.setOk(true);
         result.setAgentId(agentId);
-        result.setServerTime(java.time.OffsetDateTime.now().toString());
+        result.setServerTime(now.toString());
+
+        AgentDutyLease active = agentDutyLeaseService.getActiveLease(agentId);
+        if (active != null) {
+            result.setOnDuty(true);
+            result.setLeaseId(active.getId());
+            result.setLeaseExpiresAt(active.getExpireTime() != null ? active.getExpireTime().toString() : null);
+            long remainSeconds = 0L;
+            if (active.getExpireTime() != null) {
+                remainSeconds = Duration.between(now, active.getExpireTime()).getSeconds();
+            }
+            result.setRemainingTtlSeconds(remainSeconds > 0 ? remainSeconds : 0L);
+        } else {
+            result.setOnDuty(false);
+            result.setRemainingTtlSeconds(0L);
+        }
         return result;
     }
 
@@ -280,6 +317,7 @@ public class McpToolService {
                                                 Long fileSize, String storageUrl) {
         assertAgentActive(agentId);
         assertToolEnabled(agentId, "uploadArtifact");
+        refreshDutyLease(agentId); // A0-8：产物登记顺带续租
 
         if (fileName == null || fileName.isBlank()) {
             throw new BizException("fileName 不能为空");
@@ -307,6 +345,7 @@ public class McpToolService {
                                           Boolean success, String output, String error, String finishReason) {
         assertAgentActive(agentId);
         assertToolEnabled(agentId, "submitResult");
+        refreshDutyLease(agentId); // A0-8：结果提交顺带续租
 
         if (subTaskId == null) {
             SubmitResultResult r = new SubmitResultResult();
@@ -389,6 +428,7 @@ public class McpToolService {
     public ReportBlockedResult reportBlocked(Long agentId, Long subTaskId, String reason) {
         assertAgentActive(agentId);
         assertToolEnabled(agentId, "reportBlocked");
+        refreshDutyLease(agentId); // A0-8：阻塞上报顺带续租
 
         if (reason == null || reason.isBlank()) {
             throw new BizException("reason 不能为空");
@@ -470,7 +510,9 @@ public class McpToolService {
      * 触发重分配）由既有 {@code SubTaskDispatchService.redispatchAssignedTimeout} 通过
      * 常规超时兜底路径完成，checkOut 工具不直接触发。</p>
      *
-     * <p>幂等：Agent 当前无 ACTIVE 租约时返回 ok=true, closedCount=0。</p>
+     * <p>幂等（A0-6）：Agent 当前无 ACTIVE 租约时返回 ok=true, closedCount=0，并附带
+     * 最近一条租约的当前状态（currentStatus=EXPIRED 表示租约已过期无需签退 / NONE 表示
+     * 从未打卡），供 Agent 自检。</p>
      *
      * @param agentId Agent ID（M4 鉴权后由服务端强制覆盖）
      * @param reason  关闭原因，可为 null（默认 manual_close）
@@ -488,6 +530,17 @@ public class McpToolService {
         result.setAgentId(agentId);
         result.setClosedCount(closed);
         result.setReason(closeReason);
+
+        // A0-6：幂等返回当前状态——最近一条租约的状态（ACTIVE 已关为 CLOSED / 已过期 EXPIRED / 从未打卡 NONE）
+        AgentDutyLease latest = agentDutyLeaseService.getLatestLease(agentId);
+        if (latest != null) {
+            result.setCurrentStatus(latest.getStatus() != null ? latest.getStatus().name() : null);
+            result.setLatestLeaseId(latest.getId());
+            result.setLatestLeaseExpiresAt(latest.getExpireTime() != null ? latest.getExpireTime().toString() : null);
+            result.setLatestLeaseCloseReason(latest.getCloseReason());
+        } else {
+            result.setCurrentStatus("NONE");
+        }
         return result;
     }
 
@@ -505,6 +558,7 @@ public class McpToolService {
     public GetAgentStatusResult getAgentStatus(Long agentId) {
         assertAgentActive(agentId);
         assertToolEnabled(agentId, "getAgentStatus");
+        refreshDutyLease(agentId); // A0-8：状态自检顺带续租
 
         Agent agent = agentService.getById(agentId);
         if (agent == null) {
@@ -543,6 +597,7 @@ public class McpToolService {
     public GetDepsSummaryResult getDepsSummary(Long agentId, Long subTaskId) {
         assertAgentActive(agentId);
         assertToolEnabled(agentId, "getDepsSummary");
+        refreshDutyLease(agentId); // A0-8：前置产出拉取顺带续租
 
         SubTask subTask = subTaskService.getById(subTaskId);
         if (subTask == null) {
@@ -709,6 +764,34 @@ public class McpToolService {
         }
     }
 
+    /**
+     * 工具调用自动续租（A0-8 §6.67）：有 ACTIVE 租约时按原 TTL 窗口顺带延长
+     * {@code expire_time}，长任务执行期间任何工具调用即可保活，无需 Agent 主动
+     * 重做 checkIn；无 ACTIVE 租约时跳过（不自动打卡，保持 checkIn 的打卡语义）。
+     *
+     * <p>原 TTL 由 {@code start_time→expire_time} 推算，异常/缺失时兜底 30 分钟；
+     * 续约失败仅告警不阻断工具调用（顺带动作）。checkIn/checkOut 不接入本方法：
+     * 前者签发新租约，后者结束租约。</p>
+     */
+    private void refreshDutyLease(Long agentId) {
+        if (agentId == null) {
+            return;
+        }
+        try {
+            AgentDutyLease active = agentDutyLeaseService.getActiveLease(agentId);
+            if (active == null || active.getStartTime() == null || active.getExpireTime() == null) {
+                return;
+            }
+            long originalTtl = Duration.between(active.getStartTime(), active.getExpireTime()).toMinutes();
+            int ttlMinutes = originalTtl > 0
+                    ? (int) Math.min(originalTtl, MAX_RENEW_MINUTES)
+                    : DEFAULT_RENEW_MINUTES;
+            agentDutyLeaseService.renewLease(agentId, ttlMinutes);
+        } catch (Exception e) {
+            log.warn("工具调用自动续租失败（不影响主操作）: agentId={}, err={}", agentId, e.getMessage());
+        }
+    }
+
     private Long parseInboxId(String messageId) {
         if (messageId == null || messageId.isBlank()) {
             throw new BizException("messageId 不能为空");
@@ -771,6 +854,14 @@ public class McpToolService {
         private boolean ok;
         private Long agentId;
         private String serverTime;
+        /** A0-6：当前是否持有 ACTIVE 值班租约（false = 未打卡或租约已过期）。 */
+        private Boolean onDuty;
+        /** A0-6：当前 ACTIVE 租约 ID；未在岗时为 null。 */
+        private Long leaseId;
+        /** A0-6：当前 ACTIVE 租约过期时间（ISO8601）；未在岗时为 null。 */
+        private String leaseExpiresAt;
+        /** A0-6：当前 ACTIVE 租约剩余 TTL（秒）；未在岗为 0。 */
+        private Long remainingTtlSeconds;
     }
 
     @lombok.Data
@@ -816,5 +907,13 @@ public class McpToolService {
         private Long agentId;
         private int closedCount;
         private String reason;
+        /** A0-6：签退后最近一条租约的当前状态（CLOSED=刚签退 / EXPIRED=已过期无需签退 / NONE=从未打卡）。 */
+        private String currentStatus;
+        /** A0-6：最近一条租约 ID；从未打卡为 null。 */
+        private Long latestLeaseId;
+        /** A0-6：最近一条租约过期时间（ISO8601）；从未打卡为 null。 */
+        private String latestLeaseExpiresAt;
+        /** A0-6：最近一条租约关闭原因（仅 CLOSED/EXPIRED 时填写）。 */
+        private String latestLeaseCloseReason;
     }
 }

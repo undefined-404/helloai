@@ -337,6 +337,8 @@ public class McpMcpServer {
             - AgentSelector 会将“当前是否在岗（已打卡）”作为软优先级最高一档（平手时已打卡 Agent 优先）。
             - ttlMinutes 建议与 Agent 自身 renew 周期匹配，默认 30 分钟；到期后会被 DutyLeaseExpirationTask
               自动翻为 EXPIRED，不会阀到商业逻辑。
+            - A0-8：除 checkIn/checkOut 外，任一工具调用（含 heartbeat）都会按原 TTL 自动续约——
+              长任务执行期间正常调用工具即可保活，无需周期性重做 checkIn。
             【相关工具】checkOut、heartbeat
             """)
     public McpToolService.CheckInResult checkIn(

@@ -68,4 +68,13 @@ public class Task extends BaseEntity {
      */
     @TableField(typeHandler = PgJsonbTypeHandler.class)
     private List<String> requiredSkills;
+
+    /**
+     * 任务 SLA 分钟数（A0-7 新增，V48；null=无时限）。
+     *
+     * <p>计划确认（confirmPlan）时按 {@code now + slaMinutes} 下发各子任务
+     * {@code deadline}，外部 Agent 经 pullTasks 的 {@code deadline} 字段感知时限；
+     * 子任务完成后 ImplicitScoreCalculator 依据 deadline 计算时间分。</p>
+     */
+    private Integer slaMinutes;
 }

@@ -100,6 +100,25 @@ public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, Age
     }
 
     /**
+     * 查询 Agent 最近一条值班租约（任意状态，按开始时间倒序取第一条）。
+     *
+     * <p>A0-6（§6.65）：checkOut 幂等返回当前状态时使用——租约已过期或从未打卡时
+     * 也能给出可自检的语义（EXPIRED / NONE），而不是只给 closedCount=0。</p>
+     *
+     * @return null 如果该 Agent 从未有过租约
+     */
+    public AgentDutyLease getLatestLease(Long agentId) {
+        if (agentId == null) {
+            return null;
+        }
+        return lambdaQuery()
+                .eq(AgentDutyLease::getAgentId, agentId)
+                .orderByDesc(AgentDutyLease::getStartTime)
+                .last("LIMIT 1")
+                .one();
+    }
+
+    /**
      * 为 Agent 开启新的值班租约（打卡上班）。
      *
      * <p>事务内先关闭该 Agent 的所有旧 ACTIVE 租约（防御性），再新建一条。</p>

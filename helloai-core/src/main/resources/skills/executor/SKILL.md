@@ -36,12 +36,12 @@
 | 工具 | MCP SSE | REST 别名 jsonrpc | REST 直通 /api/mcp/tools/* | 请求体（JSON） | 返回要点（data/result） |
 |---|---|---|---|---|---|
 | `checkIn` | ✓ | ✓ | `POST .../checkIn` | `{"workMode":"AUTO","maxConcurrent":3,"ttlMinutes":30}` | `{ok, leaseId, sessionId, workMode, maxConcurrent, expiresAt}` |
-| `checkOut` | ✓ | ✓ | `POST .../checkOut` | `{"closeReason":"shutdown"}`（兼容 `{"reason":...}`） | `{ok, closedCount, reason}` |
+| `checkOut` | ✓ | ✓ | `POST .../checkOut` | `{"closeReason":"shutdown"}`（兼容 `{"reason":...}`） | `{ok, closedCount, reason, currentStatus, latestLeaseId, latestLeaseExpiresAt, latestLeaseCloseReason}`（A0-6：幂等，`currentStatus` = CLOSED 刚签退 / EXPIRED 已过期无需签退 / NONE 从未打卡） |
 | `getAgentStatus` | ✓ | ✓ | `POST .../getAgentStatus` | `{}` | `{status, dbOnlineStatus, computedOnlineStatus, lastSeenAt, lastActiveAt, offlineReason, offlineAt, serverTime}` |
 | `pullTasks` | ✓ | ✓ | `POST .../pullTasks` | `{"role":"EXECUTOR","max":20,"includeRead":false}` | `{messages:[{messageId, type, subTaskId, taskId, title, priority, deadline, summary, read, reassigned, currentAgentId}]}` |
 | `ack` | ✓ | ✓ | `POST .../ack` | `{"messageId":"inbox-10001"}` | `{ok, acknowledged, messageId}` |
 | `claimSubTask` | ✓ | ✓ | `POST .../claimSubTask` | `{"subTaskId":123}` | `{ok, claimed, reason, assignedAgent, subTaskId, version}` |
-| `heartbeat` | ✓ | ✓ | `POST .../heartbeat` | `{}` | `{ok, agentId, serverTime}` |
+| `heartbeat` | ✓ | ✓ | `POST .../heartbeat` | `{}` | `{ok, agentId, serverTime, onDuty, leaseId, leaseExpiresAt, remainingTtlSeconds}`（A0-6：剩余 TTL 秒数，未在岗为 0） |
 | `uploadArtifact` | ✓ | ✓ | `POST .../uploadArtifact` | `{"subTaskId":123,"fileName":"a.md","mimeType":"text/markdown","fileSize":1024,"storageUrl":"local://..."}` | `{ok, attachmentId, storageUrl}` |
 | `submitResult` | ✓ | ✓ | `POST .../submitResult` | `{"subTaskId":123,"resultId":"r-1","success":true,"output":"...","finishReason":"completed"}` | `{ok, accepted, idempotent, status, reason, subTaskId, resultId}` |
 | `reportBlocked` | ✓ | ✓ | `POST .../reportBlocked` | `{"subTaskId":123,"reason":"外部 API timeout"}` | `{ok, blocked, subTaskId, reason}` |
@@ -67,6 +67,21 @@
 | 提交 | `POST /api/sub-tasks/submitById/{id}` | 无 body（产出请走 `submitResult` 工具） | `{}` |
 | 审查记录 | `GET /api/reviews?subTaskId={id}` | 无 body | `[Review...]`（含 issues/comment/score） |
 | 我的状态 | `GET /api/agents/getById/{id}` | 无 body | `Agent`（含 onlineStatus，下线验证用） |
+
+### 0.3 时间与 SLA 语义（A0-7 新增）
+
+> 平台所有时间字段（`deadline` / `expiresAt` / `lastSeenAt` / `serverTime` 等）统一为
+> **ISO8601 带时区偏移**（如 `2026-08-12T10:51:52+08:00`，UTC 写作 `...Z`）。
+> **`Z` 与 `±HH:MM` 两种字面量表示同一绝对时刻，必须按绝对时刻解析，不要按字符串字面量比较**——
+> 同一时刻在新建对象时为本地偏移（`+08:00`），从数据库读回时为 UTC（`Z`），字面不同但时刻相同。
+
+- **`deadline`（pullTasks 消息字段）**：子任务截止时刻；`null` = 无时限。
+  - 来源：任务创建时可填 `slaMinutes`（分钟数），在计划确认（confirmPlan）时按
+    **确认时刻 + slaMinutes** 统一下发给该任务的全部子任务。
+  - 判断：`deadline` 非空且已过 ⇒ 子任务已超时，应优先处理；若确实无法按时完成，
+    用 `reportBlocked` 说明原因，不要静默拖延。
+- **`expiresAt`（checkIn）**：在岗租约到期时刻，配合 `heartbeat` 的 `remainingTtlSeconds` 决定是否续约。
+- 平台服务器时区为 **Asia/Shanghai（UTC+8）**；跨时区 Agent 先换算到自身时区再决策。
 
 ---
 
@@ -109,10 +124,13 @@
 > - 重复 `ack` 幂等，返回成功且 `is_read` 保持 1。
 
 > 🧭 **`checkIn` 租约机制（实测必看）**
-> - 租约是**一次性签发**：`expires_at = now + ttlMinutes`，默认 30 分钟；到点直接 EXPIRED，**不会自动续约**。
-> - DB 部分唯一索引 `uk_duty_lease_agent_active` 阻止同一 Agent 多条 ACTIVE 行；如需"续约"必须先 `checkOut` 旧租约，再 `checkIn` 一次。
-> - 租约 EXPIRED 后即视为离岗（不在调度候选），需要重新 `checkIn` 拿新租约。
-> - **建议节奏**：在 ttlMinutes 到期前 1 分钟主动重做一次 checkIn，避免被静默切到 OFFLINE。
+> - 租约签发：`expires_at = now + ttlMinutes`，默认 30 分钟；到期后被 `DutyLeaseExpirationTask`（30s 周期）翻为 EXPIRED，即视为离岗（不在调度候选），需重新 `checkIn` 拿新租约。
+> - **工具调用自动续约（A0-8）**：除 `checkIn`/`checkOut` 外，任一工具调用（`pullTasks` / `heartbeat` / `claimSubTask` / `submitResult` / `reportBlocked` / `uploadArtifact` / `ack` / `getAgentStatus` / `getDepsSummary`）都会把当前 ACTIVE 租约按**原 TTL 窗口**顺带延长（`expires_at = 调用时刻 + 原TTL`）。**长任务执行期间正常调用工具即可保活，无需周期性重做 checkIn**；只有超过 TTL 无任何工具调用才会掉线。
+> - DB 部分唯一索引 `uk_duty_lease_agent_active` 阻止同一 Agent 多条 ACTIVE 行；需要更换 TTL / 工作模式等参数时，仍可 `checkOut` 旧租约后再 `checkIn` 一次。
+> - **建议节奏**：任务执行期间按 30 秒~1 分钟节奏 `pullTasks` 轮询 + 关键节点 `heartbeat` 自检即可持续在岗，TTL 用尽前无需手动重做 checkIn。
+> - **租约 sessionId 与 MCP session 是两回事（A0-6 澄清）**：`agent_duty_lease.session_id` 是平台签发的**租约会话标识**（UUID，checkIn 返回，仅标识这份租约）；MCP transport session 是 **SSE 长连接的传输会话**（4 步握手建立）。两者相互独立——SSE 断开/重连不失效租约，租约过期也不影响重连。断连重连后先用 `getAgentStatus` / `heartbeat` 自检租约是否仍 ACTIVE，再决定是继续值班还是重新 `checkIn`。
+> - **心跳自检 + 自动续约（A0-6/A0-8）**：`heartbeat` 每次返回 `onDuty` + `leaseId` + `leaseExpiresAt` + `remainingTtlSeconds`（剩余秒数）；**heartbeat 本身也会自动续约**，返回的剩余 TTL 是续租后的值，Agent 据此确认租约仍在有效期内，无需依赖任何推送。
+> - **checkOut 幂等（A0-6）**：重复签退 / 对已过期租约签退都返回成功，且带 `currentStatus` 说明当前租约事实（`CLOSED`=刚签退 / `EXPIRED`=已过期无需再签 / `NONE`=从未打卡），Agent 可自检无需人工猜测。
 
 ### 1.3 推荐工作循环（轮询值守模式）
 
@@ -456,7 +474,17 @@ VERIFICATION:
 - 结论: 通过 / 失败 / 未验证（未验证必须说明原因）
 ```
 
-**示例：**
+**字段说明（每字段 1 句，与平台解析器规则一致）：**
+
+| 字段 | 说明 | 解析约束 |
+|---|---|---|
+| `SUMMARY` | 1-2 句说清「做了什么、产出什么」，是下游 Agent 与审查读到的核心摘要 | **必填**；缺失或为空 → 整块解析失败 |
+| `KEY_DECISIONS` | 关键设计/取舍决策，帮助后继者理解「为什么这么做」（可选） | 标题行后必须换行，每行一个 `- 内容` |
+| `DOWNSTREAM_NOTES` | 留给后继 Agent 的注意事项：接口路径、坑位、口径（可选） | 同上（换行 + `- ` 列表） |
+| `DELIVERABLES` | 交付文件路径清单，审查核验物化附件的依据（可选） | 同上 |
+| `VERIFICATION` | 验证证据原文：命令/输出/结论，**原样粘贴禁止转述**（可选但强烈建议） | **必须放在块的最后**（其后所有内容均视为证据）；块以 `---` 或全文末尾截止 |
+
+**示例（Java 交付场景）：**
 ```
 ## EXECUTION_RECORD
 SUMMARY: 实现了 RESTful 用户管理接口，含分页查询、新增、删除、参数校验
@@ -475,6 +503,22 @@ VERIFICATION:
 - 结论: 通过
 ```
 
+**示例（PowerShell 交付场景）：**
+```
+## EXECUTION_RECORD
+SUMMARY: 编写了验证脚本 verify-x.ps1 并实测通过，六场景 ALL PASSED
+KEY_DECISIONS:
+- 遵循编码约定：脚本存 UTF-8 with BOM，运行时输出用单引号拼接保持 ASCII
+DOWNSTREAM_NOTES:
+- 运行前需后端已启动（端口 6565）且 docker postgres 就绪
+DELIVERABLES:
+- scripts/powershell/verify-x.ps1
+VERIFICATION:
+- 命令: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/powershell/verify-x.ps1
+- 输出: 六场景全 PASS，末行 ALL PASSED
+- 结论: 通过
+```
+
 > 🔴 **这是强制格式**。`SUMMARY` 行必须有内容，否则平台解析失败（fallback 用产出前 200 字做摘要）。
 > 前置任务的后继 Agent 会读到你的 EXECUTION_RECORD，所以你的 SUMMARY 和 DOWNSTREAM_NOTES 直接影响下一个人的执行质量。
 
@@ -483,7 +527,39 @@ VERIFICATION:
 > - **验证失败或未验证时，禁止声明完成**——要么 `reportBlocked` 上报阻塞，要么在 `VERIFICATION.结论` 如实写"未验证（原因）"；用"应该没问题""看起来正常"交差视为交付不合格，审查会从严处理。
 > - 平台会自动检测产出是否携带 VERIFICATION 证据：无证据的提交进入从严核验，评分保守。
 
-### 4.5 依赖链执行检查清单
+### 4.5 交付物编码与环境约定（A0-9 新增）
+
+> 平台验收脚本与审查在**中文 Windows（GBK 码页）**环境下读取交付文本文件；未按本节约定的文件
+> 会被误读成乱码或直接解析失败——编码问题导致的 REJECTED 与内容质量无关，交付前务必自检。
+
+**编码约定（所有交付文件）**：
+- 统一 **UTF-8**。含中文的 PowerShell 脚本（`.ps1`）必须存为 **UTF-8 with BOM**（文件头 3 字节 `EF BB BF`）：
+  PS 5.1 对无 BOM 文件按 GBK 解析源码，中文字符会被误判为字符串边界，抛 `字符串缺少终止符` 解析错。
+- **只允许一个 BOM**：对已带 BOM 的文件二次写入 BOM 会得到 `EF BB BF EF BB BF`（双重 BOM），解析直接失败；
+  交付前用十六进制查看器确认文件头只有 3 个字节的 BOM。
+- Bash 脚本（`.sh`）：`#!/usr/bin/env bash` 后声明 `export LANG=zh_CN.UTF-8` 与 `export LC_ALL=zh_CN.UTF-8`。
+
+**PowerShell 脚本强制模板**（注释头之后、业务逻辑之前）：
+```powershell
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+```
+
+**PowerShell 语法自检命令**（交付前必须执行，0 error 才提交）：
+```powershell
+$tokens = $null; $errs = $null
+[System.Management.Automation.Language.Parser]::ParseFile('.\verify-x.ps1', [ref]$tokens, [ref]$errs) | Out-Null
+if ($errs.Count -eq 0) { 'PARSE-OK' } else { $errs | ForEach-Object { $_.Message } }
+```
+
+**输出风格（PS 5.1 避坑）**：
+- 脚本打印**不要**在双引号字符串里嵌中文（解析器可能提前闭合字符串，抛 `Unexpected token '}'`）；
+  用单引号 + `+` 拼接变量，运行时输出保持纯 ASCII，中文只放 `#` 注释。
+- Bash 脚本自检：`bash -n verify-x.sh`（语法）通过后实际执行一次再提交。
+
+> 验收标准要求「UTF-8 声明」时，文件**实际字节编码**必须与声明一致——声明了 UTF-8 却按 GBK 保存同样会被驳回。
+
+### 4.6 依赖链执行检查清单
 
 在 `submitResult` 之前，自检：
 - [ ] 本任务的 `dependsOn` 是否已逐条读完？
@@ -492,6 +568,7 @@ VERIFICATION:
 - [ ] 我的产出末尾是否包含完整的 `EXECUTION_RECORD` 块？
 - [ ] `SUMMARY` 是否非空？（否则下游 Agent 看不到我的产出摘要）
 - [ ] `VERIFICATION` 段是否已填写真实命令与输出？（验证失败/未验证必须如实标注，禁止声明完成）
+- [ ] 交付物编码是否按 §4.5 约定？（UTF-8 / `.ps1` 带 BOM / 语法自检 0 error）
 
 ---
 

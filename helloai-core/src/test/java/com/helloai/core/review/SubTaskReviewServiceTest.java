@@ -14,6 +14,8 @@ import com.helloai.core.agent.execution.PlatformAgentExecutionService;
 import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConversationService;
+import com.helloai.core.system.entity.Attachment;
+import com.helloai.core.system.service.AttachmentService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.service.ReviewService;
@@ -33,6 +35,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -86,6 +89,9 @@ class SubTaskReviewServiceTest {
     @Mock
     private TaskService taskService;
 
+    @Mock
+    private AttachmentService attachmentService;
+
     private SubTaskReviewService reviewService;
 
     @BeforeEach
@@ -94,8 +100,9 @@ class SubTaskReviewServiceTest {
         reviewService = new SubTaskReviewService(
                 subTaskService, agentSelector, agentService, platformAgentExecutionService,
                 taskTimelineService, executionCommandService, dispatchProperties, new ObjectMapper(),
-                conversationService, recordReviewService, taskService);
+                conversationService, recordReviewService, taskService, attachmentService);
         lenient().when(dispatchProperties.getAutoReviewMaxRework()).thenReturn(3);
+        lenient().when(dispatchProperties.getReviewEvidenceCheckWaitMs()).thenReturn(0);
     }
 
     private SubTask reviewSubTask() {
@@ -108,6 +115,10 @@ class SubTaskReviewServiceTest {
         subTask.setDeliverable("接口文档");
         subTask.setAcceptance("覆盖全部端点");
         subTask.setReworkCount(0);
+        // A0-5 证据检查：默认携带可读产出（非执行密集任务 output 即产出支撑）
+        Map<String, Object> ctx = new HashMap<>();
+        ctx.put("lastExecution", Map.of("output", "接口清单已整理完毕，覆盖全部端点。"));
+        subTask.setContext(ctx);
         return subTask;
     }
 
@@ -266,6 +277,8 @@ class SubTaskReviewServiceTest {
         SubTask dense = reviewSubTask();
         dense.setContent("编写 verify-order-expire.ps1 脚本并执行验证");
         dense.setDeliverable("verify-order-expire.ps1");
+        dense.setContext(Map.of("lastExecution",
+                Map.of("output", "脚本执行完成: PASS=12 FAIL=0 全绿\nVERIFICATION:\n命令: ./verify-order-expire.ps1\n输出: PASS=12 FAIL=0\n结论: 脚本真实执行通过")));
         when(subTaskService.getById(SUB_TASK_ID)).thenReturn(dense);
         // 提交者：CLI_CLIENT（天然具备本机执行能力）
         Agent submitter = new Agent();
@@ -273,6 +286,16 @@ class SubTaskReviewServiceTest {
         submitter.setRole(AgentRole.EXECUTOR);
         submitter.setAccessType(AgentAccessType.CLI_CLIENT);
         when(agentService.getById(EXECUTOR_ID)).thenReturn(submitter);
+        // A0-5 证据检查：执行密集任务需有可读物化附件支撑
+        Attachment attachment = new Attachment();
+        attachment.setId(100L);
+        attachment.setSubTaskId(SUB_TASK_ID);
+        attachment.setFileName("verify-order-expire.ps1");
+        attachment.setFileType("other");
+        attachment.setFileSize(2048L);
+        attachment.setStorageUrl("local://helloai-local/1/verify-order-expire.ps1");
+        when(attachmentService.list(SUB_TASK_ID)).thenReturn(List.of(attachment));
+        when(attachmentService.isContentLoadable(attachment)).thenReturn(true);
         when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
@@ -339,6 +362,7 @@ class SubTaskReviewServiceTest {
     void shouldAppendSecondRoundToReviewHistory() {
         SubTask subTask = reviewSubTask();
         Map<String, Object> ctx = new HashMap<>();
+        ctx.put("lastExecution", Map.of("output", "接口清单已整理完毕，覆盖全部端点。"));
         ctx.put("reviewHistory", List.of(Map.of(
                 "round", 1, "ts", "2026-08-01T10:00:00Z",
                 "issues", "缺端点", "comment", "请补", "score", 2,
@@ -370,6 +394,7 @@ class SubTaskReviewServiceTest {
     void shouldMigrateLegacyLastAutoReviewToReviewHistory() {
         SubTask subTask = reviewSubTask();
         Map<String, Object> ctx = new HashMap<>();
+        ctx.put("lastExecution", Map.of("output", "接口清单已整理完毕，覆盖全部端点。"));
         ctx.put("lastAutoReview", Map.of(
                 "reviewerAgentId", 9L,
                 "issues", "缺端点", "comment", "请补", "score", 2));
@@ -471,5 +496,113 @@ class SubTaskReviewServiceTest {
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_auto_review_passed"),
                 eq(AgentRole.REVIEWER), eq(9L), anyMap());
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  A0-5 证据硬检查：伪造证据不通过 / 有附件通过
+    //  ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("A0-5: 无产出本体（output 与附件皆空）→ 跳过自动核验 + 人工介入标记")
+    void shouldSkipReviewWhenNoOutputAndNoAttachment() {
+        SubTask fake = reviewSubTask();
+        fake.setContext(null); // 编造提交：连产出文本都没有
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(fake);
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
+        verify(subTaskService, never()).complete(anyLong());
+        verify(subTaskService, never()).rework(anyLong(), any());
+        verify(subTaskService).markManualIntervention(
+                eq(SUB_TASK_ID), eq("review_skip_no_evidence"),
+                argThat(m -> "no_output_no_attachment".equals(m.get("reason"))));
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_review_skip_no_evidence"),
+                eq(AgentRole.REVIEWER), eq(EXECUTOR_ID), anyMap());
+    }
+
+    @Test
+    @DisplayName("A0-5: 执行密集任务仅文字描述产出、无可读物化附件 → 跳过自动核验")
+    void shouldSkipReviewWhenExecutionDenseWithoutReadableAttachment() {
+        SubTask dense = reviewSubTask();
+        dense.setContent("编写 verify-order-expire.ps1 脚本并执行验证");
+        dense.setDeliverable("verify-order-expire.ps1");
+        dense.setContext(Map.of("lastExecution",
+                Map.of("output", "脚本已完成并执行通过: 文件 203 行 errors=0"))); // 仅文字声称，无真实附件
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(dense);
+        // 附件存在但平台不可直读（外部存储）→ 不算可验证证据
+        Attachment external = new Attachment();
+        external.setId(100L);
+        external.setSubTaskId(SUB_TASK_ID);
+        external.setFileName("verify-order-expire.ps1");
+        external.setStorageUrl("minio://bucket/obj");
+        when(attachmentService.list(SUB_TASK_ID)).thenReturn(List.of(external));
+        when(attachmentService.isContentLoadable(external)).thenReturn(false);
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
+        verify(subTaskService, never()).complete(anyLong());
+        verify(subTaskService).markManualIntervention(
+                eq(SUB_TASK_ID), eq("review_skip_no_evidence"),
+                argThat(m -> "execution_dense_no_attachment".equals(m.get("reason"))));
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_review_skip_no_evidence"),
+                eq(AgentRole.REVIEWER), eq(EXECUTOR_ID), anyMap());
+    }
+
+    @Test
+    @DisplayName("A0-5: 执行密集任务无可读附件（重查窗口后仍无）→ 跳过自动核验")
+    void shouldSkipReviewWhenExecutionDenseNoAttachmentAfterRetry() {
+        // 覆盖 setUp 的 0：给一个真实等待窗口，验证物化竞态补偿路径（等待→重查→仍无→拦截）
+        when(dispatchProperties.getReviewEvidenceCheckWaitMs()).thenReturn(5);
+        SubTask dense = reviewSubTask();
+        dense.setContent("编写 verify-order-expire.ps1 脚本并执行验证");
+        dense.setDeliverable("verify-order-expire.ps1");
+        dense.setContext(Map.of("lastExecution",
+                Map.of("output", "脚本执行完成: PASS=12 FAIL=0 全绿")));
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(dense);
+        // 无任何附件（物化缺失/失败场景，重查后仍无）
+        when(attachmentService.list(SUB_TASK_ID)).thenReturn(List.of());
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        verify(attachmentService, org.mockito.Mockito.times(2)).list(SUB_TASK_ID);
+        verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
+        verify(subTaskService).markManualIntervention(
+                eq(SUB_TASK_ID), eq("review_skip_no_evidence"),
+                argThat(m -> "execution_dense_no_attachment".equals(m.get("reason"))));
+    }
+
+    @Test
+    @DisplayName("A0-5: 核验 Prompt 注入物化附件清单（有附件列文件名 / 无附件占位）")
+    void shouldInjectAttachmentListIntoReviewPrompt() {
+        // 有可读附件：prompt 应含附件清单章节与文件名
+        SubTask subTask = reviewSubTask();
+        Attachment attachment = new Attachment();
+        attachment.setId(100L);
+        attachment.setSubTaskId(SUB_TASK_ID);
+        attachment.setFileName("api-docs.md");
+        attachment.setFileType("markdown");
+        attachment.setFileSize(1024L);
+        attachment.setStorageUrl("local://helloai-local/1/api-docs.md");
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
+        when(attachmentService.list(SUB_TASK_ID)).thenReturn(List.of(attachment));
+        when(attachmentService.isContentLoadable(attachment)).thenReturn(true);
+        when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 4, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+        verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+        String prompt = taskCaptor.getValue().getUserPrompt();
+        assertThat(prompt).contains("## 物化附件清单");
+        assertThat(prompt).contains("api-docs.md");
+        assertThat(prompt).contains("平台可直读");
+        assertThat(prompt).contains("声称的交付物必须与**物化附件清单**对应");
     }
 }

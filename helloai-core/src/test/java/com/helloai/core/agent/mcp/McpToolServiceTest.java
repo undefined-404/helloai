@@ -1,5 +1,6 @@
 package com.helloai.core.agent.mcp;
 
+import com.helloai.common.constant.AgentDutyLeaseStatus;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.command.ExecutionResultHandler;
@@ -25,21 +26,30 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
  * A0-1（§6.60）pullTasks 撤销标记单元测试：
  * 曾分配给我但已转移的子任务打 reassigned=true + currentAgentId，未转移不打标。
  * <p>A0-4（§6.63）：pullTasks includeRead/summary/read 透传 + getDepsSummary 依赖产出摘要。</p>
+ * <p>A0-6（§6.65）：checkIn 租约信息透传 / checkOut 幂等三态（CLOSED/EXPIRED/NONE）/ heartbeat 剩余 TTL。</p>
+ * <p>A0-7（§6.66）：pullTasks deadline 透传为 ISO8601 带时区偏移（Z 或 ±HH:MM），null=无时限。</p>
+ * <p>A0-8（§6.67）：除 checkIn/checkOut 外任一工具调用自动续租——有 ACTIVE 租约时按原 TTL
+ * 延长 expire_time（renewLease），无租约不自动打卡；续租失败不阻断工具调用。</p>
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("McpToolService.pullTasks 撤销标记（A0-1）")
+@DisplayName("McpToolService 值班租约与收件箱工具（A0-1/A0-4/A0-6）")
 class McpToolServiceTest {
 
     private static final long AGENT_ID = 1L;
@@ -74,6 +84,9 @@ class McpToolServiceTest {
         lenient().when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("pullTasks"))).thenReturn(true);
         lenient().when(agentMcpServerService.getParamConstraints(eq(AGENT_ID), eq("pullTasks"))).thenReturn(null);
         lenient().when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("getDepsSummary"))).thenReturn(true);
+        lenient().when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("checkIn"))).thenReturn(true);
+        lenient().when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("checkOut"))).thenReturn(true);
+        lenient().when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("heartbeat"))).thenReturn(true);
     }
 
     private AgentInbox subTaskInbox(Long refId) {
@@ -209,6 +222,27 @@ class McpToolServiceTest {
         assertThat(second.getSummary()).isEqualTo("审查通过，评分 5/5");
     }
 
+    @Test
+    @DisplayName("pullTasks：deadline 透传为 ISO8601 带时区偏移，无 deadline 透传 null")
+    void shouldPassDeadlineWithIsoOffset() {
+        SubTask withDeadline = subTask(AGENT_ID);
+        withDeadline.setDeadline(OffsetDateTime.now().plusHours(2));
+        when(agentInboxService.getUnread(AGENT_ID, 10)).thenReturn(List.of(subTaskInbox(SUB_TASK_ID)));
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(withDeadline);
+
+        McpToolService.PullTasksResult result = mcpToolService.pullTasks(AGENT_ID, "EXECUTOR", 10);
+
+        McpToolService.PullTasksResult.Message msg = result.getMessages().get(0);
+        assertThat(msg.getDeadline()).isNotNull();
+        // A0-7：ISO8601 带时区偏移（Z 或 ±HH:MM 后缀），外部 Agent 按绝对时刻解析不误判
+        assertThat(msg.getDeadline()).matches("\\d{4}-\\d{2}-\\d{2}T.*(Z|[+-]\\d{2}:\\d{2})$");
+
+        // 无 deadline 时透传 null（=无时限）
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask(AGENT_ID));
+        McpToolService.PullTasksResult noSla = mcpToolService.pullTasks(AGENT_ID, "EXECUTOR", 10);
+        assertThat(noSla.getMessages().get(0).getDeadline()).isNull();
+    }
+
     // ══════════════════════════════════════════════════════════════
     //  A0-4（§6.63）getDepsSummary 前置产出摘要
     //  ══════════════════════════════════════════════════════════════
@@ -320,5 +354,184 @@ class McpToolServiceTest {
 
         assertThat(result.getLoadedCount()).isEqualTo(1);
         assertThat(result.getDeps().get(0).getContent()).contains("执行输出摘要");
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  A0-6（§6.65）checkIn/checkOut/heartbeat 值班租约语义对称
+    //  ══════════════════════════════════════════════════════════════
+
+    private AgentDutyLease lease(Long id, AgentDutyLeaseStatus status, OffsetDateTime expireTime, String sessionId) {
+        AgentDutyLease lease = new AgentDutyLease();
+        lease.setId(id);
+        lease.setAgentId(AGENT_ID);
+        lease.setSessionId(sessionId);
+        lease.setWorkMode("AUTO");
+        lease.setMaxConcurrent(3);
+        lease.setStatus(status);
+        lease.setExpireTime(expireTime);
+        return lease;
+    }
+
+    @Test
+    @DisplayName("checkIn：leaseId/sessionId/workMode/maxConcurrent/expiresAt 同步返回（A0-6 子任务1）")
+    void shouldReturnLeaseInfoOnCheckIn() {
+        OffsetDateTime expiresAt = OffsetDateTime.now().plusMinutes(30);
+        AgentDutyLease lease = lease(11L, AgentDutyLeaseStatus.ACTIVE, expiresAt, "uuid-abc");
+        when(agentDutyLeaseService.startLease(eq(AGENT_ID), eq("AUTO"), eq(3), eq(30))).thenReturn(lease);
+
+        McpToolService.CheckInResult result = mcpToolService.checkIn(AGENT_ID, "AUTO", 3, 30);
+
+        assertThat(result.isOk()).isTrue();
+        assertThat(result.getLeaseId()).isEqualTo(11L);
+        assertThat(result.getSessionId()).isEqualTo("uuid-abc");
+        assertThat(result.getWorkMode()).isEqualTo("AUTO");
+        assertThat(result.getMaxConcurrent()).isEqualTo(3);
+        assertThat(result.getExpiresAt()).isEqualTo(expiresAt.toString());
+    }
+
+    @Test
+    @DisplayName("checkOut：正常签退后 currentStatus=CLOSED 且带租约事实（A0-6 子任务2）")
+    void shouldReturnClosedStatusOnCheckOut() {
+        when(agentDutyLeaseService.closeLease(eq(AGENT_ID), eq("shutdown"))).thenReturn(1);
+        OffsetDateTime expiresAt = OffsetDateTime.now().plusMinutes(30);
+        AgentDutyLease latest = lease(11L, AgentDutyLeaseStatus.CLOSED, expiresAt, "uuid-abc");
+        latest.setCloseReason("shutdown");
+        when(agentDutyLeaseService.getLatestLease(AGENT_ID)).thenReturn(latest);
+
+        McpToolService.CheckOutResult result = mcpToolService.checkOut(AGENT_ID, "shutdown");
+
+        assertThat(result.isOk()).isTrue();
+        assertThat(result.getClosedCount()).isEqualTo(1);
+        assertThat(result.getCurrentStatus()).isEqualTo("CLOSED");
+        assertThat(result.getLatestLeaseId()).isEqualTo(11L);
+        assertThat(result.getLatestLeaseExpiresAt()).isEqualTo(expiresAt.toString());
+        assertThat(result.getLatestLeaseCloseReason()).isEqualTo("shutdown");
+    }
+
+    @Test
+    @DisplayName("checkOut 幂等：租约已过期返回 currentStatus=EXPIRED（A0-6 子任务2）")
+    void shouldReturnExpiredStatusWhenLeaseExpired() {
+        when(agentDutyLeaseService.closeLease(eq(AGENT_ID), eq("shutdown"))).thenReturn(0);
+        AgentDutyLease latest = lease(22L, AgentDutyLeaseStatus.EXPIRED,
+                OffsetDateTime.now().minusMinutes(5), "uuid-expired");
+        latest.setCloseReason("lease_expired");
+        when(agentDutyLeaseService.getLatestLease(AGENT_ID)).thenReturn(latest);
+
+        McpToolService.CheckOutResult result = mcpToolService.checkOut(AGENT_ID, "shutdown");
+
+        assertThat(result.isOk()).isTrue();
+        assertThat(result.getClosedCount()).isZero();
+        assertThat(result.getCurrentStatus()).isEqualTo("EXPIRED");
+        assertThat(result.getLatestLeaseId()).isEqualTo(22L);
+        assertThat(result.getLatestLeaseCloseReason()).isEqualTo("lease_expired");
+    }
+
+    @Test
+    @DisplayName("checkOut 幂等：从未打卡返回 currentStatus=NONE（A0-6 子任务2）")
+    void shouldReturnNoneWhenNeverCheckedIn() {
+        when(agentDutyLeaseService.closeLease(eq(AGENT_ID), eq("manual_close"))).thenReturn(0);
+        when(agentDutyLeaseService.getLatestLease(AGENT_ID)).thenReturn(null);
+
+        McpToolService.CheckOutResult result = mcpToolService.checkOut(AGENT_ID, null);
+
+        assertThat(result.isOk()).isTrue();
+        assertThat(result.getClosedCount()).isZero();
+        assertThat(result.getCurrentStatus()).isEqualTo("NONE");
+        assertThat(result.getLatestLeaseId()).isNull();
+        assertThat(result.getLatestLeaseExpiresAt()).isNull();
+    }
+
+    @Test
+    @DisplayName("heartbeat：持有 ACTIVE 租约时返回 onDuty/leaseId/leaseExpiresAt/remainingTtlSeconds（A0-6 子任务3）")
+    void shouldReturnRemainingTtlWhenActiveLease() {
+        OffsetDateTime expiresAt = OffsetDateTime.now().plusMinutes(10);
+        AgentDutyLease active = lease(33L, AgentDutyLeaseStatus.ACTIVE, expiresAt, "uuid-active");
+        when(agentDutyLeaseService.getActiveLease(AGENT_ID)).thenReturn(active);
+
+        McpToolService.HeartbeatResult result = mcpToolService.heartbeat(AGENT_ID);
+
+        assertThat(result.isOk()).isTrue();
+        assertThat(result.getOnDuty()).isTrue();
+        assertThat(result.getLeaseId()).isEqualTo(33L);
+        assertThat(result.getLeaseExpiresAt()).isEqualTo(expiresAt.toString());
+        // plusMinutes(10) 后剩余 TTL 应落在 (540, 600] 秒区间
+        assertThat(result.getRemainingTtlSeconds()).isGreaterThan(540L).isLessThanOrEqualTo(600L);
+    }
+
+    @Test
+    @DisplayName("heartbeat：无 ACTIVE 租约时 onDuty=false 且 remainingTtlSeconds=0（A0-6 子任务3）")
+    void shouldReturnOffDutyWhenNoActiveLease() {
+        when(agentDutyLeaseService.getActiveLease(AGENT_ID)).thenReturn(null);
+
+        McpToolService.HeartbeatResult result = mcpToolService.heartbeat(AGENT_ID);
+
+        assertThat(result.isOk()).isTrue();
+        assertThat(result.getOnDuty()).isFalse();
+        assertThat(result.getLeaseId()).isNull();
+        assertThat(result.getLeaseExpiresAt()).isNull();
+        assertThat(result.getRemainingTtlSeconds()).isZero();
+    }
+
+    @Test
+    @DisplayName("A0-8：业务工具调用（pullTasks）按原 TTL 自动续租（90 分钟窗口）")
+    void shouldAutoRenewLeaseOnBusinessToolCall() {
+        OffsetDateTime start = OffsetDateTime.now().minusMinutes(60);
+        OffsetDateTime expire = OffsetDateTime.now().plusMinutes(30);
+        AgentDutyLease active = lease(33L, AgentDutyLeaseStatus.ACTIVE, expire, "uuid-active");
+        active.setStartTime(start);
+        when(agentDutyLeaseService.getActiveLease(AGENT_ID)).thenReturn(active);
+        when(agentInboxService.getUnread(AGENT_ID, 10)).thenReturn(List.of());
+
+        mcpToolService.pullTasks(AGENT_ID, "EXECUTOR", 10);
+
+        // 原 TTL = start→expire = 90 分钟，续租窗口沿用（而非固定 30）
+        verify(agentDutyLeaseService).renewLease(eq(AGENT_ID), eq(90));
+    }
+
+    @Test
+    @DisplayName("A0-8：heartbeat 顺带续租，返回续租后剩余 TTL")
+    void shouldAutoRenewLeaseOnHeartbeatAndReportPostRenewTtl() {
+        OffsetDateTime start = OffsetDateTime.now().minusMinutes(30);
+        OffsetDateTime expire = OffsetDateTime.now().plusMinutes(30);
+        AgentDutyLease active = lease(33L, AgentDutyLeaseStatus.ACTIVE, expire, "uuid-active");
+        active.setStartTime(start);
+        when(agentDutyLeaseService.getActiveLease(AGENT_ID)).thenReturn(active);
+
+        McpToolService.HeartbeatResult result = mcpToolService.heartbeat(AGENT_ID);
+
+        verify(agentDutyLeaseService).renewLease(eq(AGENT_ID), eq(60));
+        assertThat(result.isOk()).isTrue();
+        assertThat(result.getOnDuty()).isTrue();
+        // 续租窗口 30 分钟 → 剩余 TTL 应接近 1800s
+        assertThat(result.getRemainingTtlSeconds()).isGreaterThan(1700L).isLessThanOrEqualTo(1800L);
+    }
+
+    @Test
+    @DisplayName("A0-8：无 ACTIVE 租约时工具调用不自动打卡（renewLease 不被调用）")
+    void shouldNotRenewLeaseWithoutActiveLease() {
+        when(agentDutyLeaseService.getActiveLease(AGENT_ID)).thenReturn(null);
+        when(agentInboxService.getUnread(AGENT_ID, 10)).thenReturn(List.of());
+
+        mcpToolService.pullTasks(AGENT_ID, "EXECUTOR", 10);
+
+        verify(agentDutyLeaseService, never()).renewLease(anyLong(), anyInt());
+    }
+
+    @Test
+    @DisplayName("A0-8：续租异常不阻断工具调用（pullTasks 仍正常返回）")
+    void shouldKeepToolResultWhenRenewFails() {
+        OffsetDateTime start = OffsetDateTime.now().minusMinutes(60);
+        OffsetDateTime expire = OffsetDateTime.now().plusMinutes(30);
+        AgentDutyLease active = lease(33L, AgentDutyLeaseStatus.ACTIVE, expire, "uuid-active");
+        active.setStartTime(start);
+        when(agentDutyLeaseService.getActiveLease(AGENT_ID)).thenReturn(active);
+        when(agentDutyLeaseService.renewLease(anyLong(), anyInt())).thenThrow(new RuntimeException("renew failed"));
+        when(agentInboxService.getUnread(AGENT_ID, 10)).thenReturn(List.of(subTaskInbox(SUB_TASK_ID)));
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask(AGENT_ID));
+
+        McpToolService.PullTasksResult result = mcpToolService.pullTasks(AGENT_ID, "EXECUTOR", 10);
+
+        assertThat(result.getMessages()).hasSize(1);
+        assertThat(result.getMessages().get(0).getMessageId()).isEqualTo("inbox-" + SUB_TASK_ID);
     }
 }

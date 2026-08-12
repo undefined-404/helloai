@@ -18,6 +18,9 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.shared.event.SubTaskSubmittedForReviewEvent;
 import com.helloai.core.shared.util.LlmJsonSanitizer;
+import com.helloai.core.shared.util.SubTaskOutputExtractor;
+import com.helloai.core.system.entity.Attachment;
+import com.helloai.core.system.service.AttachmentService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.service.ReviewService;
@@ -84,6 +87,7 @@ public class SubTaskReviewService {
     private final ConversationService conversationService;
     private final ReviewService reviewService;
     private final TaskService taskService;
+    private final AttachmentService attachmentService;
 
     /** AFTER_COMMIT 异步监听：结果回报事务提交后触发自动核验。 */
     @Async
@@ -184,6 +188,24 @@ public class SubTaskReviewService {
                         Map.of("submitterAgentId", submitterId));
                 return;
             }
+        }
+
+        // A0-5 证据硬检查（承 V27.1 预检之后）：声称的交付物必须有物化附件/可读产出支撑。
+        // 无任何产出本体（output 与附件皆空）或执行密集任务无可读物化附件时，
+        // 跳过自动核验并打人工介入标记——杜绝"编造文字证据也能过初筛"（trae 1923）
+        EvidenceCheckResult evidence = checkEvidence(subTask);
+        if (!evidence.ok()) {
+            log.warn("自动核验跳过：无产出证据支撑, subTaskId={}, reason={}", subTaskId, evidence.reason());
+            taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId,
+                    "sub_task_review_skip_no_evidence", AgentRole.REVIEWER, submitterId,
+                    Map.of("reason", evidence.reason(), "submitterAgentId", submitterId,
+                            "attachmentCount", evidence.attachmentCount(),
+                            "outputPresent", evidence.outputPresent()));
+            subTaskService.markManualIntervention(subTaskId, "review_skip_no_evidence",
+                    Map.of("reason", evidence.reason(), "submitterAgentId", submitterId,
+                            "attachmentCount", evidence.attachmentCount(),
+                            "outputPresent", evidence.outputPresent()));
+            return;
         }
 
         Agent reviewer = pickReviewerAgent(subTask);
@@ -439,6 +461,7 @@ public class SubTaskReviewService {
                 .replace("{{DELIVERABLE}}", nullToEmpty(subTask.getDeliverable()))
                 .replace("{{ACCEPTANCE}}", nullToEmpty(subTask.getAcceptance()))
                 .replace("{{EXECUTION_OUTPUT}}", extractExecutionOutput(subTask))
+                .replace("{{ATTACHMENT_LIST}}", buildAttachmentList(subTask))
                 .replace("{{VERIFICATION_SIGNAL}}", verificationSignal(extractRawOutput(subTask)));
     }
 
@@ -476,6 +499,94 @@ public class SubTaskReviewService {
                         + "证据与结论矛盾或明显伪造的按不达标处理。"
                 : "该提交未携带验证证据（无 VERIFICATION 段）：请从严核验、评分保守；"
                         + "仅凭产出文本无法确认满足验收标准时不得判 pass=true。";
+    }
+
+    /**
+     * A0-5 证据硬检查：子任务声称的交付物必须有物化附件/可读产出支撑（fail-close）。
+     *
+     * <p>判定规则：</p>
+     * <ul>
+     *   <li>无可读附件且执行产出为空 → {@code no_output_no_attachment}：连产出本体
+     *       都没有的编造提交，直接拦截；</li>
+     *   <li>执行密集任务（交付物声明为脚本/程序/文件）无可读物化附件 →
+     *       {@code execution_dense_no_attachment}：产出文本仅为描述性文字，无真实
+     *       物化产物支撑，拦截（fail-close——宁可人工介入，不放行存疑产出）；</li>
+     *   <li>其余（可读附件存在，或非执行密集任务有文本产出）→ 放行，附件清单注入
+     *       核验 Prompt 由 LLM 核对声称交付物与附件的对应关系。</li>
+     * </ul>
+     *
+     * <p>物化在结果回报事务 afterCommit 同步执行、自动核验异步启动，两者存在毫秒级
+     * 竞态；执行密集任务未发现可读附件时等待 {@code reviewEvidenceCheckWaitMs} 后重查
+     * 一次，避免物化未完成被误判为无证据。</p>
+     */
+    EvidenceCheckResult checkEvidence(SubTask subTask) {
+        List<Attachment> readable = readableAttachments(subTask.getId());
+        String output = SubTaskOutputExtractor.extractExecutionOutput(subTask);
+        boolean hasOutput = output != null && !output.isBlank();
+        boolean isDense = SubTaskDispatchService.isExecutionDense(subTask);
+
+        if (readable.isEmpty()) {
+            // 竞态补偿：执行密集 + 有产出文本时等待窗口重查（物化在 afterCommit 同步完成）
+            if (isDense && hasOutput) {
+                int waitMs = dispatchProperties.getReviewEvidenceCheckWaitMs();
+                if (waitMs > 0) {
+                    try {
+                        Thread.sleep(waitMs);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    readable = readableAttachments(subTask.getId());
+                }
+            }
+            if (readable.isEmpty()) {
+                if (!hasOutput) {
+                    return new EvidenceCheckResult(false, "no_output_no_attachment", 0, false);
+                }
+                if (isDense) {
+                    return new EvidenceCheckResult(false, "execution_dense_no_attachment",
+                            readable.size(), true);
+                }
+            }
+        }
+        return new EvidenceCheckResult(true, null, readable.size(), hasOutput);
+    }
+
+    /** 子任务可读附件列表（local:// 平台直读产物；list 返回 null 防御按空处理）。 */
+    private List<Attachment> readableAttachments(Long subTaskId) {
+        List<Attachment> attachments = attachmentService.list(subTaskId);
+        if (attachments == null) {
+            return List.of();
+        }
+        return attachments.stream()
+                .filter(attachmentService::isContentLoadable)
+                .toList();
+    }
+
+    /**
+     * A0-5 附件清单：核验 Prompt 注入子任务全部附件（可读 local:// 产物标注平台直读，
+     * 外部存储标注不可直读），供核验 LLM 核对"声称交付物 ↔ 真实附件"的对应关系——
+     * 声称"文件 203 行 errors=0"但附件清单无对应文件时判不达标。
+     */
+    private String buildAttachmentList(SubTask subTask) {
+        List<Attachment> attachments = attachmentService.list(subTask.getId());
+        if (attachments == null || attachments.isEmpty()) {
+            return "（无物化附件）";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (Attachment att : attachments) {
+            String size = att.getFileSize() != null ? att.getFileSize() + " bytes" : "?";
+            String readable = attachmentService.isContentLoadable(att)
+                    ? "平台可直读" : "外部存储（平台不可直读）";
+            String type = att.getFileType() != null ? att.getFileType() : "other";
+            sb.append("- ").append(att.getFileName())
+                    .append("（").append(type).append(", ").append(size).append(", ")
+                    .append(readable).append("）\n");
+        }
+        return sb.toString().trim();
+    }
+
+    /** A0-5 证据检查结果。 */
+    record EvidenceCheckResult(boolean ok, String reason, int attachmentCount, boolean outputPresent) {
     }
 
     /** 解析核验判定 JSON；不可解析返回 null（调用方据此停留 REVIEW）。 */

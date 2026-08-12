@@ -226,6 +226,12 @@ public class PlannerAnalysisService {
         }
 
         for (SubTask draft : drafts) {
+            // A0-7（§6.66）：任务级 SLA 下发 deadline。必须先持久化再 changeStatus——
+            // changeStatus 内部按 id 重查库后全字段 updateById，未落库的 deadline 会被覆盖丢失。
+            if (task.getSlaMinutes() != null && task.getSlaMinutes() > 0) {
+                draft.setDeadline(OffsetDateTime.now().plusMinutes(task.getSlaMinutes()));
+                subTaskService.updateById(draft);
+            }
             subTaskService.changeStatus(draft.getId(), SubTaskStatus.PENDING, null,
                     Map.of("planConfirmedAt", OffsetDateTime.now().toString()));
         }
