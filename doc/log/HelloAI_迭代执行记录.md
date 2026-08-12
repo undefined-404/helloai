@@ -4454,3 +4454,33 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 - 影响：REST 直通补齐 3 端点（三通道 10 工具完全对齐）；405 语义修复影响所有「路径存在但方法不支持」请求（此前 500，属正确性修复）；SKILL §0.1/§0.2 速查表成为外部 agent 的唯一动作依据（验收：只读 SKILL 即可零试错调用）。
 - 遗留：无（a03 验收达成：外部 agent 只读 SKILL §0.1/§0.2 即可正确调用，零试错；校验脚本已入库可重复执行防漂移）。
 
+### 6.63 外部 Agent 信息获取能力补齐：getDepsSummary 主动拉依赖摘要 + review 反馈通知 + 未读/已读状态位（A0-4）（2026-08-12）
+
+#### 1. 背景与结论
+
+- **盘点结论（A0-4-1）**：① 外部 agent 无法主动拉前置产出摘要——依赖摘要只在执行链 `buildDependencySection` 内部消费，agent 侧无工具可取；② 评分反馈缺口——`rework()`/`complete()` 不产生收件箱通知，驳回/通过只能另查 review 接口；③ `pullTasks` 不区分未读/已读，ack 语义对轮询 agent 不透明，轮询逻辑需自行过滤。
+- **落地决策**：① 新增 MCP 工具 `getDepsSummary`（复用 buildDependencySection 摘要逻辑，数据口径与执行链同源）；② `rework()`/`reworkFresh()` 统一补发 `sub_task.rejected`、`complete()` 补发 `sub_task.approved`（summary 携带最近一轮 review 评分/评语）；③ `pullTasks` 消息带 `read` 状态位 + `includeRead` 参数（未读优先，已读按 read_time 倒序补齐配额）。
+- **过程中发现新缺口**：McpController JSON-RPC 别名通道 `tools/list` 是**独立硬编码声明**（10 个），与 `TOOL_NAMES` 漂移——A0-4 同步补齐 `getDepsSummary` 声明 + `pullTasks.includeRead` 参数 + dispatch 分支，三通道（MCP SSE / REST 别名 / REST 直通）真正 11 工具对齐。
+
+#### 2. 实现要点
+
+- **McpToolService.getDepsSummary(agentId, subTaskId)**：`dependsOnIdList → listByIds → taskRunningSpecService.findRecord(taskId, depId).summary() → loadUpstreamContent`（物化附件 local:// 优先，回退 `SubTaskOutputExtractor.extractExecutionOutput`）；`DEP_CONTENT_MAX_CHARS=4000` 截断 + `truncated` 标记；收集失败降级 `degraded=true` 不阻断返回。
+- **pullTasks 4 参重载 + includeRead**：未读优先，已读按 read_time 倒序补齐配额；Message 带 `read` 状态位（false=未读待 ack，true=已 ack）；`AgentInboxService.getRecentRead`（is_read=1 & is_archived=0，orderByDesc read_time，LIMIT min(limit,500)）。
+- **SubTaskService 通知补发**：`rework()`/`reworkFresh()` 补发 `sub_task.rejected`（`buildReworkSummary` 从 `context.reviewHistory` 最新轮提取 score/comment/issues，无历史回退「请查审查记录了解具体问题」）；`complete()` 补发 `sub_task.approved`（`buildApprovedSummary` 从 review_record 按 round desc LIMIT 1 取 score/comment）。
+- **三通道同步**：`McpMcpServer` @Tool `getDepsSummary` + `pullTasks.includeRead`（MCP SSE）；`McpController` `TOOL_NAMES` 11 + JSON-RPC tools/list 11 + dispatch `getDepsSummary` case / pullTasks 4 参（REST 别名）；REST 直通 `/api/mcp/tools/getDepsSummary` + pullTasks includeRead（直通上一轮已补，本轮保持对齐）；`AgentMcpServerService.DEFAULT_EXECUTOR_TOOLS` 11（新工具默认启用，isToolEnabled 自动建行）。
+- **executor SKILL.md**：0.1 表 11 工具 + `getDepsSummary` 行（请求/返回结构）+ pullTasks 行补 `includeRead`/`read`/`summary` 要点 + §1.2 后新增「🧭 ack 语义（A0-4 澄清）」块；`verify-tool-matrix.ps1` S1/S2 断言 10→11。
+
+#### 3. 验证结果
+
+- 单测：全量 `mvn -pl helloai-api -am test -DskipTests=false` **Tests run: 503（core 487 + api 16），Failures: 0, Errors: 0**（McpToolServiceTest 6 新用例：默认未读 / includeRead 合并 / 无依赖 / 摘要+内容加载 / 4000 截断 / 降级与回退；SubTaskServiceHandoverTest 4 新用例：rejected 补发 / 回退文案 / reviewHistory 摘要提取 / approved 补发；AgentInboxServiceTest 2 用例：倒序返回 / limit 500；McpControllerJsonrpcTest 4 新用例：includeRead 透传与缺省 / getDepsSummary 委托与缺参 + 工具数断言 10→11）。
+- 真实环境 `verify-tool-matrix.ps1` **PASS=23 FAIL=0 ALL PASSED**（S1/S2 11 工具同名集合、S4 SKILL 0.1 表 diff 空，含 getDepsSummary）。
+- **getDepsSummary 直通 + JSON-RPC 别名**：子任务 2087076796930322438（3 依赖）返回 `depCount=3 loadedCount=3 truncatedCount=0 degraded=false`，每依赖带 title/status/summary/content（完整执行摘要 + 内容本体）；缺 subTaskId → R.fail「subTaskId 不能为空」。
+- **pullTasks 未读/已读**：默认只回未读（read=false）；ack 一条后 `includeRead=true` 返回未读 4 + 已读 1（read=true）——未读优先、已读倒序补齐，REST 直通与 JSON-RPC 别名结果一致。
+- **完整 review 闭环（真实链路）**：新建测试任务→子任务（assigned A03-test-executor）→start→submit→人工驳回 REJECTED（score=2）→ pullTasks 拉到 `sub_task.rejected`（read=false，summary 回退文案「请查审查记录了解具体问题」——人工驳回无 reviewHistory，符合预期）→ rework 循环 start→submit→APPROVED（score=5）→ pullTasks 拉到 `sub_task.approved`（read=false，**summary=「审查通过，评分 5/5；评语: A0-4 e2e approve verification」**）。
+- 测试数据已清理（task/sub_task/review_record/agent_inbox/reward_log + agent.score 回滚）。
+
+#### 4. 影响与遗留
+
+- 影响：无 DB 迁移；工具面 10→11（三通道对齐）；收件箱消息新增 `read` 状态位（历史消息按未读处理）；新增 rejected/approved 两种通知类型（summary 携带评分反馈）；REST 别名通道 tools/list 与 TOOL_NAMES 重新对齐（消除声明漂移）。
+- 遗留：① MCP SSE 通道未做实连验证（@Tool 签名与单测覆盖，三通道共用 McpToolService 同一实现，差异仅在参数绑定）；② 人工驳回（无 reviewHistory）时 rejected 摘要回退默认文案，自动核验链（SubTaskReviewService 写 reviewHistory）才有完整评分摘要；③ a04 验收达成：外部 agent 可主动拉前置产出摘要（getDepsSummary）与评分反馈（rejected/approved summary），轮询无需自行过滤（read 状态位区分未读/已读）。
+
