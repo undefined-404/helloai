@@ -1,6 +1,7 @@
 package com.helloai.core.agent.mcp;
 
 import com.helloai.common.constant.AgentStatus;
+import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
@@ -10,10 +11,13 @@ import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentMcpServerService;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.system.entity.Attachment;
 import com.helloai.core.system.service.AttachmentService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.spec.ExecutionRecord;
+import com.helloai.core.task.spec.TaskRunningSpecService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -22,6 +26,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -31,6 +36,7 @@ import static org.mockito.Mockito.when;
 /**
  * A0-1（§6.60）pullTasks 撤销标记单元测试：
  * 曾分配给我但已转移的子任务打 reassigned=true + currentAgentId，未转移不打标。
+ * <p>A0-4（§6.63）：pullTasks includeRead/summary/read 透传 + getDepsSummary 依赖产出摘要。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("McpToolService.pullTasks 撤销标记（A0-1）")
@@ -49,6 +55,7 @@ class McpToolServiceTest {
     @Mock private AttachmentService attachmentService;
     @Mock private ExecutionResultHandler executionResultHandler;
     @Mock private AgentDutyLeaseService agentDutyLeaseService;
+    @Mock private TaskRunningSpecService taskRunningSpecService;
 
     private McpToolService mcpToolService;
 
@@ -57,7 +64,8 @@ class McpToolServiceTest {
         mcpToolService = new McpToolService(
                 agentService, agentInboxService, agentMcpServerService,
                 subTaskService, subTaskMapper, heartbeatService,
-                attachmentService, executionResultHandler, agentDutyLeaseService);
+                attachmentService, executionResultHandler, agentDutyLeaseService,
+                taskRunningSpecService);
 
         Agent agent = new Agent();
         agent.setId(AGENT_ID);
@@ -65,6 +73,7 @@ class McpToolServiceTest {
         lenient().when(agentService.getById(AGENT_ID)).thenReturn(agent);
         lenient().when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("pullTasks"))).thenReturn(true);
         lenient().when(agentMcpServerService.getParamConstraints(eq(AGENT_ID), eq("pullTasks"))).thenReturn(null);
+        lenient().when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("getDepsSummary"))).thenReturn(true);
     }
 
     private AgentInbox subTaskInbox(Long refId) {
@@ -149,5 +158,167 @@ class McpToolServiceTest {
         assertThat(result.getStatus()).isEqualTo("ACTIVE");
         assertThat(result.getComputedOnlineStatus()).isEqualTo("ONLINE");
         assertThat(result.getServerTime()).isNotNull();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  A0-4（§6.63）pullTasks includeRead/summary/read 透传
+    //  ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("pullTasks 默认（3 参）：仅未读，summary/read 透传且 read=false")
+    void shouldReturnUnreadOnlyByDefault() {
+        AgentInbox inbox = subTaskInbox(SUB_TASK_ID);
+        inbox.setSummary("审查未通过，评分 3/5");
+        inbox.setIsRead(0);
+        when(agentInboxService.getUnread(AGENT_ID, 10)).thenReturn(List.of(inbox));
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask(AGENT_ID));
+
+        McpToolService.PullTasksResult result = mcpToolService.pullTasks(AGENT_ID, "EXECUTOR", 10);
+
+        McpToolService.PullTasksResult.Message msg = result.getMessages().get(0);
+        assertThat(msg.getSummary()).isEqualTo("审查未通过，评分 3/5");
+        assertThat(msg.getRead()).isFalse();
+        // includeRead=false 不触发已读查询
+        org.mockito.Mockito.verify(agentInboxService, org.mockito.Mockito.never())
+                .getRecentRead(eq(AGENT_ID), org.mockito.ArgumentMatchers.anyInt());
+    }
+
+    @Test
+    @DisplayName("pullTasks includeRead=true：未读优先 + 已读按 read_time 倒序补齐配额，read=true 打标")
+    void shouldAppendRecentReadWhenIncludeRead() {
+        AgentInbox unread = subTaskInbox(SUB_TASK_ID);
+        unread.setSummary("审查未通过，评分 2/5");
+        unread.setIsRead(0);
+        AgentInbox read = subTaskInbox(6L);
+        read.setSummary("审查通过，评分 5/5");
+        read.setIsRead(1);
+        when(agentInboxService.getUnread(AGENT_ID, 5)).thenReturn(List.of(unread));
+        when(agentInboxService.getRecentRead(AGENT_ID, 4)).thenReturn(List.of(read));
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask(AGENT_ID));
+        when(subTaskService.getById(6L)).thenReturn(subTask(AGENT_ID));
+
+        McpToolService.PullTasksResult result = mcpToolService.pullTasks(AGENT_ID, "EXECUTOR", 5, true);
+
+        assertThat(result.getMessages()).hasSize(2);
+        McpToolService.PullTasksResult.Message first = result.getMessages().get(0);
+        assertThat(first.getMessageId()).isEqualTo("inbox-" + SUB_TASK_ID);
+        assertThat(first.getRead()).isFalse();
+        McpToolService.PullTasksResult.Message second = result.getMessages().get(1);
+        assertThat(second.getMessageId()).isEqualTo("inbox-6");
+        assertThat(second.getRead()).isTrue();
+        assertThat(second.getSummary()).isEqualTo("审查通过，评分 5/5");
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  A0-4（§6.63）getDepsSummary 前置产出摘要
+    //  ══════════════════════════════════════════════════════════════
+
+    private SubTask taskWithDeps(Long id, List<Long> deps) {
+        SubTask subTask = new SubTask();
+        subTask.setId(id);
+        subTask.setTaskId(100L);
+        subTask.setTitle("当前任务");
+        subTask.setDependsOn(deps);
+        return subTask;
+    }
+
+    @Test
+    @DisplayName("getDepsSummary：无依赖返回 depCount=0 非错误")
+    void shouldReturnEmptyWhenNoDeps() {
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(taskWithDeps(SUB_TASK_ID, List.of()));
+
+        McpToolService.GetDepsSummaryResult result = mcpToolService.getDepsSummary(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(result.getDepCount()).isZero();
+        assertThat(result.getDeps()).isEmpty();
+        assertThat(result.getDegraded()).isFalse();
+    }
+
+    @Test
+    @DisplayName("getDepsSummary：有依赖时返回执行记录摘要 + 物化附件内容，loadedCount 正确")
+    void shouldLoadDepSummaryAndContent() {
+        SubTask current = taskWithDeps(SUB_TASK_ID, List.of(11L));
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(current);
+
+        SubTask dep = new SubTask();
+        dep.setId(11L);
+        dep.setTitle("前置任务A");
+        dep.setStatus(SubTaskStatus.DONE);
+        when(subTaskService.listByIds(List.of(11L))).thenReturn(List.of(dep));
+
+        ExecutionRecord record = ExecutionRecord.builder().subTaskId(11L).summary("已交付接口契约").build();
+        when(taskRunningSpecService.findRecord(100L, 11L)).thenReturn(record);
+
+        Attachment attachment = new Attachment();
+        attachment.setId(21L);
+        when(attachmentService.list(11L)).thenReturn(List.of(attachment));
+        when(attachmentService.isContentLoadable(attachment)).thenReturn(true);
+        when(attachmentService.loadContent(21L)).thenReturn("物化产出内容".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        McpToolService.GetDepsSummaryResult result = mcpToolService.getDepsSummary(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(result.getDepCount()).isEqualTo(1);
+        assertThat(result.getLoadedCount()).isEqualTo(1);
+        assertThat(result.getTruncatedCount()).isZero();
+        McpToolService.GetDepsSummaryResult.DepItem item = result.getDeps().get(0);
+        assertThat(item.getSubTaskId()).isEqualTo(11L);
+        assertThat(item.getTitle()).isEqualTo("前置任务A");
+        assertThat(item.getStatus()).isEqualTo("DONE");
+        assertThat(item.getSummary()).isEqualTo("已交付接口契约");
+        assertThat(item.getContent()).isEqualTo("物化产出内容");
+        assertThat(item.getTruncated()).isNull();
+    }
+
+    @Test
+    @DisplayName("getDepsSummary：单条内容超 4000 字符截断并打标 truncated=true")
+    void shouldTruncateLongContent() {
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(taskWithDeps(SUB_TASK_ID, List.of(11L)));
+        SubTask dep = new SubTask();
+        dep.setId(11L);
+        dep.setTitle("前置任务B");
+        when(subTaskService.listByIds(List.of(11L))).thenReturn(List.of(dep));
+
+        Attachment attachment = new Attachment();
+        attachment.setId(22L);
+        when(attachmentService.list(11L)).thenReturn(List.of(attachment));
+        when(attachmentService.isContentLoadable(attachment)).thenReturn(true);
+        when(attachmentService.loadContent(22L)).thenReturn("x".repeat(5000).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        McpToolService.GetDepsSummaryResult result = mcpToolService.getDepsSummary(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(result.getTruncatedCount()).isEqualTo(1);
+        McpToolService.GetDepsSummaryResult.DepItem item = result.getDeps().get(0);
+        assertThat(item.getTruncated()).isTrue();
+        assertThat(item.getContent()).hasSize(4000);
+    }
+
+    @Test
+    @DisplayName("getDepsSummary：收集异常降级返回 degraded=true，不阻断调用")
+    void shouldDegradeOnCollectFailure() {
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(taskWithDeps(SUB_TASK_ID, List.of(11L)));
+        when(subTaskService.listByIds(List.of(11L))).thenThrow(new RuntimeException("db down"));
+
+        McpToolService.GetDepsSummaryResult result = mcpToolService.getDepsSummary(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(result.getDegraded()).isTrue();
+        assertThat(result.getDeps()).isEmpty();
+        assertThat(result.getDepCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("getDepsSummary：无物化附件时回退 context.lastExecution.output 原始产出")
+    void shouldFallbackToExecutionOutput() {
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(taskWithDeps(SUB_TASK_ID, List.of(11L)));
+        SubTask dep = new SubTask();
+        dep.setId(11L);
+        dep.setTitle("前置任务C");
+        dep.setContext(Map.of("lastExecution", Map.of("output", "执行输出摘要")));
+        when(subTaskService.listByIds(List.of(11L))).thenReturn(List.of(dep));
+        when(attachmentService.list(11L)).thenReturn(List.of());
+
+        McpToolService.GetDepsSummaryResult result = mcpToolService.getDepsSummary(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(result.getLoadedCount()).isEqualTo(1);
+        assertThat(result.getDeps().get(0).getContent()).contains("执行输出摘要");
     }
 }

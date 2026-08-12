@@ -1,5 +1,7 @@
 package com.helloai.core.agent.service;
 
+import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
+import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapper;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentInbox;
@@ -11,10 +13,14 @@ import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DuplicateKeyException;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
@@ -105,5 +111,46 @@ class AgentInboxServiceTest {
 
         verify(service, never()).save(any(AgentInbox.class));
         verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  A0-4（§6.63）getRecentRead：已读消息按 read_time 倒序拉取
+    //  ══════════════════════════════════════════════════════════════
+
+    @SuppressWarnings("unchecked")
+    private final LambdaQueryChainWrapper<AgentInbox> queryChain = mock(LambdaQueryChainWrapper.class);
+
+    private void stubQueryChain(List<AgentInbox> result) {
+        lenient().doReturn(queryChain).when(service).lambdaQuery();
+        lenient().when(queryChain.eq(any(), any())).thenReturn(queryChain);
+        lenient().when(queryChain.orderByDesc(any(SFunction.class))).thenReturn(queryChain);
+        lenient().when(queryChain.last(anyString())).thenReturn(queryChain);
+        lenient().when(queryChain.list()).thenReturn(result);
+    }
+
+    @Test
+    @DisplayName("getRecentRead：仅查 isRead=1 且未归档，按 read_time 倒序返回")
+    void shouldReturnRecentReadOnly() {
+        AgentInbox read = new AgentInbox();
+        read.setId(10L);
+        read.setAgentId(7L);
+        read.setIsRead(1);
+        read.setIsArchived(0);
+        stubQueryChain(List.of(read));
+
+        List<AgentInbox> result = service.getRecentRead(7L, 10);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getId()).isEqualTo(10L);
+    }
+
+    @Test
+    @DisplayName("getRecentRead：limit 上限 500（防止单次拉爆）")
+    void shouldCapLimitAt500() {
+        stubQueryChain(List.of());
+
+        service.getRecentRead(7L, 5000);
+
+        verify(queryChain).last("LIMIT 500");
     }
 }

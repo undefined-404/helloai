@@ -4,6 +4,7 @@ import com.helloai.core.agent.observability.HeartbeatService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.task.entity.ReviewRecord;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.ReviewRecordMapper;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
@@ -18,9 +19,11 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -29,6 +32,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.when;
 
 /**
  * A0-1（§6.60）执行者变更撤销通知单元测试：
@@ -155,19 +159,61 @@ class SubTaskServiceHandoverTest {
     }
 
     @Test
-    @DisplayName("人工驳回不换派（reworkFresh 保持原执行者）：不发任何通知")
-    void shouldNotNotifyWhenReworkFreshKeepsAgent() {
+    @DisplayName("人工驳回不换派（reworkFresh 保持原执行者）：仅补发 sub_task.rejected 返工通知（A0-4）")
+    void shouldNotifyReworkWhenReworkFreshKeepsAgent() {
         doReturn(subTask(SubTaskStatus.REVIEW, OLD_AGENT))
                 .when(subTaskService).getById(SUB_TASK_ID);
 
         subTaskService.reworkFresh(SUB_TASK_ID, null);
 
+        // A0-1 撤销通知：执行者未变不触发
         verify(agentInboxService, never()).send(
-                any(), any(), any(), any(), any(), any(), any(), any());
+                any(), any(), eq("sub_task.reassigned"), any(), any(), any(), any(), any());
+        verify(agentInboxService, never()).send(
+                any(), any(), eq("sub_task.unassigned"), any(), any(), any(), any(), any());
+        // A0-4 返工通知：保持原执行者时发给原执行者
+        verify(agentInboxService).send(eq(OLD_AGENT), anyString(), eq("sub_task.rejected"),
+                anyString(), anyString(), eq("sub_task"), eq(SUB_TASK_ID), eq("HIGH"));
     }
 
     @Test
-    @DisplayName("自动驳回换人（rework 防御性兼容）：旧执行者收到 sub_task.reassigned")
+    @DisplayName("人工驳回不换派：无 review 历史时摘要回退默认文案（A0-4）")
+    void shouldFallbackSummaryWhenNoReviewHistory() {
+        doReturn(subTask(SubTaskStatus.REVIEW, OLD_AGENT))
+                .when(subTaskService).getById(SUB_TASK_ID);
+
+        subTaskService.reworkFresh(SUB_TASK_ID, null);
+
+        ArgumentCaptor<String> summaryCaptor = ArgumentCaptor.forClass(String.class);
+        verify(agentInboxService).send(eq(OLD_AGENT), anyString(), eq("sub_task.rejected"),
+                anyString(), summaryCaptor.capture(), eq("sub_task"), eq(SUB_TASK_ID), eq("HIGH"));
+        assertThat(summaryCaptor.getValue()).contains("请查审查记录");
+    }
+
+    @Test
+    @DisplayName("驳回补发通知：从 context.reviewHistory 最新一轮提取评分/评语/问题摘要（A0-4）")
+    void shouldExtractReworkSummaryFromReviewHistory() {
+        SubTask reviewTask = subTask(SubTaskStatus.REVIEW, OLD_AGENT);
+        reviewTask.setContext(Map.of("reviewHistory", List.of(
+                Map.of("round", 1, "score", 2, "comment", "实现不完整",
+                        "issues", List.of("缺异常处理", "无单测"))
+        )));
+        doReturn(reviewTask).when(subTaskService).getById(SUB_TASK_ID);
+
+        subTaskService.rework(SUB_TASK_ID, null);
+
+        ArgumentCaptor<String> summaryCaptor = ArgumentCaptor.forClass(String.class);
+        verify(agentInboxService).send(eq(OLD_AGENT), anyString(), eq("sub_task.rejected"),
+                anyString(), summaryCaptor.capture(), eq("sub_task"), eq(SUB_TASK_ID), eq("HIGH"));
+        String summary = summaryCaptor.getValue();
+        assertThat(summary).contains("审查未通过")
+                .contains("评分 2/5")
+                .contains("实现不完整")
+                .contains("缺异常处理");
+    }
+
+    @Test
+    @DisplayName("自动驳回换人（rework 防御性兼容）：旧执行者收到 sub_task.reassigned，新执行者收到 sub_task.rejected（A0-4）")
     void shouldNotifyOldAgentWhenReworkSwitchesAgent() {
         doReturn(subTask(SubTaskStatus.REVIEW, OLD_AGENT))
                 .when(subTaskService).getById(SUB_TASK_ID);
@@ -176,5 +222,62 @@ class SubTaskServiceHandoverTest {
 
         verify(agentInboxService).send(eq(OLD_AGENT), anyString(), eq("sub_task.reassigned"),
                 anyString(), anyString(), eq("sub_task"), eq(SUB_TASK_ID), anyString());
+        // A0-4：返工通知发给改派后的新执行者（reworkAgentId 非空时）
+        verify(agentInboxService).send(eq(NEW_AGENT), anyString(), eq("sub_task.rejected"),
+                anyString(), anyString(), eq("sub_task"), eq(SUB_TASK_ID), eq("HIGH"));
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  complete（A0-4 §6.63）：审查通过补发 sub_task.approved
+    //  ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("审查通过（complete）：向执行者补发 sub_task.approved，摘要取 review_record 最新一轮评分/评语")
+    void shouldNotifyApprovedOnComplete() {
+        SubTask done = subTask(SubTaskStatus.REVIEW, OLD_AGENT);
+        doReturn(done).when(subTaskService).getById(SUB_TASK_ID);
+        stubImplicitScore();
+        ReviewRecord latest = new ReviewRecord();
+        latest.setSubTaskId(SUB_TASK_ID);
+        latest.setRound(2);
+        latest.setScore(5);
+        latest.setComment("质量优秀");
+        when(reviewRecordMapper.selectList(any())).thenReturn(List.of(latest));
+
+        subTaskService.complete(SUB_TASK_ID);
+
+        ArgumentCaptor<String> summaryCaptor = ArgumentCaptor.forClass(String.class);
+        verify(agentInboxService).send(eq(OLD_AGENT), anyString(), eq("sub_task.approved"),
+                anyString(), summaryCaptor.capture(), eq("sub_task"), eq(SUB_TASK_ID), eq("NORMAL"));
+        assertThat(summaryCaptor.getValue()).contains("审查通过")
+                .contains("评分 5/5")
+                .contains("质量优秀");
+    }
+
+    @Test
+    @DisplayName("审查通过（complete）：无 review_record 时摘要回退默认文案")
+    void shouldFallbackApprovedSummaryWhenNoReview() {
+        doReturn(subTask(SubTaskStatus.REVIEW, OLD_AGENT))
+                .when(subTaskService).getById(SUB_TASK_ID);
+        stubImplicitScore();
+        when(reviewRecordMapper.selectList(any())).thenReturn(List.of());
+
+        subTaskService.complete(SUB_TASK_ID);
+
+        ArgumentCaptor<String> summaryCaptor = ArgumentCaptor.forClass(String.class);
+        verify(agentInboxService).send(eq(OLD_AGENT), anyString(), eq("sub_task.approved"),
+                anyString(), summaryCaptor.capture(), eq("sub_task"), eq(SUB_TASK_ID), eq("NORMAL"));
+        assertThat(summaryCaptor.getValue()).contains("审查通过，请查看详情");
+    }
+
+    /** 桩掉 complete() 内隐式评分（避免 mock 返回 null 触发 NPE 打 ERROR 日志）。 */
+    private void stubImplicitScore() {
+        when(implicitScoreCalculator.calculate(any(), any(), anyInt(), anyInt())).thenReturn(
+                ImplicitScoreCalculator.ScoreResult.builder()
+                        .factors(new ImplicitScoreCalculator.ScoreFactors())
+                        .compositeScore(80)
+                        .grade("B")
+                        .rewardDelta(0)
+                        .build());
     }
 }

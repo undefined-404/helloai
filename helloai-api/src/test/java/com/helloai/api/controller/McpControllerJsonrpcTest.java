@@ -7,7 +7,9 @@ import com.helloai.core.agent.mcp.McpToolService;
 import com.helloai.core.agent.mcp.McpToolService.CheckInResult;
 import com.helloai.core.agent.mcp.McpToolService.CheckOutResult;
 import com.helloai.core.agent.mcp.McpToolService.GetAgentStatusResult;
+import com.helloai.core.agent.mcp.McpToolService.GetDepsSummaryResult;
 import com.helloai.core.agent.mcp.McpToolService.HeartbeatResult;
+import com.helloai.core.agent.mcp.McpToolService.PullTasksResult;
 import com.helloai.core.agent.mcp.McpToolService.SubmitResultResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -29,6 +31,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -40,7 +44,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <ul>
  *   <li>同步响应：tools/call 返回 JSON-RPC result（含 accepted/resultId/status），不再像
  *       SSE 通道 POST 那样静默 200 空 body</li>
- *   <li>tools/list：10 工具声明齐全且每个工具都带 JSON Schema（inputSchema）</li>
+ *   <li>tools/list：11 工具声明齐全且每个工具都带 JSON Schema（inputSchema）</li>
  *   <li>无状态复用：不依赖 MCP session（无 sessionId 参数），会话过期/断连后仍可调用</li>
  *   <li>错误语义：未知 method -32601、未知工具/参数缺失 -32000（BizException）</li>
  * </ul>
@@ -75,7 +79,7 @@ class McpControllerJsonrpcTest {
     }
 
     @Test
-    @DisplayName("tools/list：10 工具齐全且每个工具带 inputSchema（无状态 Schema 声明）")
+    @DisplayName("tools/list：11 工具齐全且每个工具带 inputSchema（无状态 Schema 声明）")
     void toolsList_hasAllTenToolsWithSchema() throws Exception {
         MvcResult result = postJsonrpc(Map.of("jsonrpc", "2.0", "method", "tools/list", "id", 1));
         JsonNode root = MAPPER.readTree(result.getResponse().getContentAsString());
@@ -85,11 +89,12 @@ class McpControllerJsonrpcTest {
 
         JsonNode tools = root.get("result").get("tools");
         assertNotNull(tools, "tools 数组不应为空");
-        assertEquals(10, tools.size(), "应声明 10 个工具（与 MCP SSE 通道对齐）");
+        assertEquals(11, tools.size(), "应声明 11 个工具（与 MCP SSE 通道对齐，A0-4 新增 getDepsSummary）");
 
         List<String> expectedNames = List.of(
                 "pullTasks", "ack", "claimSubTask", "heartbeat", "uploadArtifact",
-                "submitResult", "reportBlocked", "getAgentStatus", "checkIn", "checkOut");
+                "submitResult", "reportBlocked", "getAgentStatus", "getDepsSummary",
+                "checkIn", "checkOut");
         for (String name : expectedNames) {
             JsonNode tool = null;
             for (JsonNode t : tools) {
@@ -227,7 +232,7 @@ class McpControllerJsonrpcTest {
     @Test
     @DisplayName("业务失败（BizException）：-32000 且携带业务错误信息")
     void bizException_returns32000WithMessage() throws Exception {
-        when(mcpToolService.pullTasks(AGENT_ID, "EXECUTOR", 20))
+        when(mcpToolService.pullTasks(AGENT_ID, "EXECUTOR", 20, false))
                 .thenThrow(new BizException("agent 不在 ACTIVE 状态"));
 
         MvcResult result = postJsonrpc(Map.of(
@@ -242,11 +247,11 @@ class McpControllerJsonrpcTest {
     }
 
     // ================================================================
-    // REST 直通端点 /api/mcp/tools/*（A0-3：三通道 10 工具对齐，声明与实现一致）
+    // REST 直通端点 /api/mcp/tools/*（A0-3：三通道 10 工具对齐；A0-4：11 工具 + getDepsSummary）
     // ================================================================
 
     @Test
-    @DisplayName("GET /api/mcp/tools：声明 10 个工具且与 JSON-RPC tools/list 同名集合一致")
+    @DisplayName("GET /api/mcp/tools：声明 11 个工具且与 JSON-RPC tools/list 同名集合一致")
     void listTools_declaresAllTenMatchingJsonrpc() throws Exception {
         MvcResult result = mockMvc.perform(get("/api/mcp/tools")
                         .requestAttr("_authId", AGENT_ID))
@@ -262,7 +267,8 @@ class McpControllerJsonrpcTest {
         }
         List<String> expected = List.of(
                 "pullTasks", "ack", "claimSubTask", "heartbeat", "uploadArtifact",
-                "submitResult", "reportBlocked", "getAgentStatus", "checkIn", "checkOut");
+                "submitResult", "reportBlocked", "getAgentStatus", "getDepsSummary",
+                "checkIn", "checkOut");
         assertEquals(expected, declared, "GET /api/mcp/tools 声明应与三通道统一清单一致");
     }
 
@@ -284,6 +290,72 @@ class McpControllerJsonrpcTest {
         JsonNode root = MAPPER.readTree(result.getResponse().getContentAsString());
         assertEquals("ACTIVE", root.get("data").get("status").asText());
         assertEquals("ONLINE", root.get("data").get("computedOnlineStatus").asText());
+    }
+
+    @Test
+    @DisplayName("POST /api/mcp/tools/pullTasks：includeRead=true 透传 4 参（A0-4）")
+    void directPullTasks_passesIncludeRead() throws Exception {
+        PullTasksResult pull = new PullTasksResult();
+        pull.setMessages(List.of());
+        when(mcpToolService.pullTasks(AGENT_ID, "EXECUTOR", 20, true)).thenReturn(pull);
+
+        mockMvc.perform(post("/api/mcp/tools/pullTasks")
+                        .requestAttr("_authId", AGENT_ID)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"role\":\"EXECUTOR\",\"max\":20,\"includeRead\":true}"))
+                .andExpect(status().isOk());
+
+        verify(mcpToolService).pullTasks(AGENT_ID, "EXECUTOR", 20, true);
+    }
+
+    @Test
+    @DisplayName("POST /api/mcp/tools/pullTasks：includeRead 缺省为 false（3 参语义保持）")
+    void directPullTasks_defaultsIncludeReadFalse() throws Exception {
+        PullTasksResult pull = new PullTasksResult();
+        pull.setMessages(List.of());
+        when(mcpToolService.pullTasks(AGENT_ID, "EXECUTOR", 20, false)).thenReturn(pull);
+
+        mockMvc.perform(post("/api/mcp/tools/pullTasks")
+                        .requestAttr("_authId", AGENT_ID)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"role\":\"EXECUTOR\",\"max\":20}"))
+                .andExpect(status().isOk());
+
+        verify(mcpToolService).pullTasks(AGENT_ID, "EXECUTOR", 20, false);
+    }
+
+    @Test
+    @DisplayName("POST /api/mcp/tools/getDepsSummary：直通端点委托 McpToolService（A0-4）")
+    void directGetDepsSummary_delegates() throws Exception {
+        GetDepsSummaryResult summary = new GetDepsSummaryResult();
+        summary.setSubTaskId(123L);
+        summary.setDepCount(0);
+        summary.setDeps(List.of());
+        when(mcpToolService.getDepsSummary(AGENT_ID, 123L)).thenReturn(summary);
+
+        MvcResult result = mockMvc.perform(post("/api/mcp/tools/getDepsSummary")
+                        .requestAttr("_authId", AGENT_ID)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"subTaskId\":123}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode root = MAPPER.readTree(result.getResponse().getContentAsString());
+        assertEquals(123, root.get("data").get("subTaskId").asLong());
+        assertEquals(0, root.get("data").get("depCount").asInt());
+    }
+
+    @Test
+    @DisplayName("POST /api/mcp/tools/getDepsSummary：缺 subTaskId 返回 R.fail 不抛异常")
+    void directGetDepsSummary_requiresSubTaskId() throws Exception {
+        MvcResult result = mockMvc.perform(post("/api/mcp/tools/getDepsSummary")
+                        .requestAttr("_authId", AGENT_ID)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode root = MAPPER.readTree(result.getResponse().getContentAsString());
+        assertEquals(500, root.get("code").asInt(), "R.fail 应返回 code=500");
+        assertTrue(root.get("msg").asText().contains("subTaskId"));
     }
 
     @Test
