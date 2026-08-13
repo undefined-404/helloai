@@ -4,6 +4,9 @@ import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.agent.service.ConcurrencyQuotaService;
+import com.helloai.core.agent.mapper.AgentMapper;
+import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.core.task.entity.ReviewRecord;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.ReviewRecordMapper;
@@ -56,15 +59,20 @@ class SubTaskServiceHandoverTest {
     @Mock private RewardService rewardService;
     @Mock private ApplicationEventPublisher applicationEventPublisher;
     @Mock private TaskTimelineService taskTimelineService;
+    @Mock private AgentMapper agentMapper;
+    @Mock private ConcurrencyQuotaService concurrencyQuotaService;
 
     private SubTaskService subTaskService;
 
     @BeforeEach
     void setUp() {
+        AgentDispatchProperties dispatchProps = new AgentDispatchProperties();
+        dispatchProps.setEnforceMaxConcurrent(true);
         subTaskService = spy(new SubTaskServiceImpl(
                 agentOutboxService, agentInboxService, agentService,
                 heartbeatService, reviewRecordMapper, implicitScoreCalculator,
-                rewardService, applicationEventPublisher, taskTimelineService));
+                rewardService, applicationEventPublisher, taskTimelineService,
+                agentMapper, dispatchProps, concurrencyQuotaService));
         doReturn(true).when(subTaskService).updateById(any(SubTask.class));
     }
 

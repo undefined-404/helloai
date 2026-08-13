@@ -105,6 +105,9 @@ helloai:
     auto-assign-on-create: false
     prefer-external: false
     require-idle: true
+    # E2：并发额度强制开关——有值班租约/显式声明 maxConcurrentTasks 的 Agent
+    # 满额时选人链跳过、落库前拒派（false 关闭即 E2 前行为）
+    enforce-max-concurrent: true
     # V24：子任务重分配最大尝试次数（熔断阈值）
     # 所有类型的重分配（离线重派、超时回收、N11回退、阻塞重试、定时兜底自动选人）
     # 每尝试一次累加 sub_task.reassign_attempt_count；达到阈值后转入 DEAD_LETTER 死信池

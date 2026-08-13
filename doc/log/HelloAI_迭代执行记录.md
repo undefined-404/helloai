@@ -5094,3 +5094,30 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 - 影响：① 附件管理从单层表格升级为存储类型可感知的层级浏览，MinIO 产物可逐级定位下载；② 任务/子任务目录回显标题 + ID 副文本，与 §6.75 objectKey 规范（ID 锚点）互补；③ 下载路径 bug 闭环。
 - 遗留：① 真实环境页面效果待用户验证（后端需重启加载新 list 回填逻辑）；② b6 全量回归时一并回归附件相关用例；③ 本轮代码与本文档未 git 提交，待用户确认后提交。
 
+
+### 6.86 E2 并发额度派发即占用：ConcurrencyQuotaService + 选人链/落库双防线（2026-08-13）
+
+#### 1. 范围
+
+- **背景**：N12 A2 第 3 段（E2）——checkIn 声明的 maxConcurrent 仅记录在租约上，派发链从不读取，Agent 可被无限并发派发。目标语义：派发即占用额度、完成/改派/回收自动释放、选人跳过满额 Agent。方案经多轮论证收敛为"DB 实时统计一条线"（额度判定属写时判定数据，不建缓存、不双删、不引入 Redis/分布式锁；企业版 Redis 预扣留接口位）。
+- **明确不做**：Redis/Redisson 实现（仅留 `ConcurrencyQuotaService` 接口位）；死信人工指派不受额度约束（人工兜底例外）；前端展示；b6 全量回归。
+
+#### 2. 实际落地
+
+- **接口**：`ConcurrencyQuotaService`（agent/service）——`inFlightCount`（在飞占用）/ `resolveQuota`（额度，null=不限制）/ `canAccept` 默认判定。
+- **默认实现**：`InFlightDbQuotaService`（agent/service/impl）——占用 = `SubTaskMapper.countInFlightByAgent`（ASSIGNED/IN_PROGRESS/REWORK，与 E1 租约在飞同口径）；额度优先级：ACTIVE 租约 maxConcurrent（值班承诺）> capabilities 显式 `maxConcurrentTasks`（能力声明，无租约时生效）> null（不限制，与 E2 前行为完全兼容）。
+- **Mapper**：`SubTaskMapper.countInFlightByAgent`（COUNT 变体）；`AgentMapper.selectByIdForUpdate`（FOR UPDATE 行锁）。
+- **选人链**：`AgentSelector.pickFromCandidates` 过滤链新增额度过滤（requireIdle 之后、ACTIVE 之前），满额 Agent 跳过；`enforceMaxConcurrent=false` 跳过本检查。
+- **落库原子防线**：`SubTaskServiceImpl.assignNext` 在状态校验后、changeStatus 前 `selectByIdForUpdate(agentId)` 锁 agent 行 → 同一 Agent 并发派发在 PostgreSQL 行锁上串行化（多实例同样成立）→ 锁内重新 `canAccept` 判定，满额抛 `AgentUnavailableException`（不计熔断统计，ResilientDispatcher 走 fallback 换人；并发窗口下 fallback 内仍满额则异常冒泡，任务保持 PENDING 由定时兜底重试）。
+- **配置**：`AgentDispatchProperties.enforceMaxConcurrent`（默认 true）+ yml `dispatch.enforce-max-concurrent: true`。
+- **释放语义**：DB 实时统计天然覆盖——完成/取消/死信（终态不占）、回收（`resetToPendingForDispatch` 清 assigned_agent_id）、改派（assigned_agent_id 迁移）、租约过期（resolveQuota 回退 capabilities/null），无需显式 release 钩子。
+
+#### 3. 验证结果
+
+- `mvn -pl helloai-core -am test -DskipTests=false -Dtest=...` 5 测试类 **78 tests 全过**：新增 `InFlightDbQuotaServiceTest`（11 例：租约优先/capabilities 数字/字符串/未声明/agent 不存在/非数字 + 占用边界）、`SubTaskServiceQuotaTest`（4 例：满额拒派不落库/未满正常 ASSIGNED/开关关闭放行/状态校验先于加锁）、`AgentSelectorTest` 补 E2 额度过滤 3 例（满额跳过/未满选中/开关关闭）；HandoverTest 11 + IsReadyTest 8 回归。
+- 踩坑：pom 默认 `skipTests=true`，跑测试需 `-DskipTests=false`；surefire 3.2.5 多模块指定 `-Dtest` 需 `-Dsurefire.failIfNoSpecifiedTests=false`；Mockito STRICT_STUBS 下 setUp 公共 stub 需移入实际用到的用例（UnnecessaryStubbingException）。
+
+#### 4. 影响与遗留
+
+- 影响：① 有租约 Agent 的 maxConcurrent 从"记录"变为"强制"（选人跳过 + 落库拒派双防线）；② 无租约且未显式声明 maxConcurrentTasks 的 Agent 行为完全不变（向后兼容）；③ 企业版可替换 Redis 预扣实现而不动调用方。
+- 遗留：① 并发窗口下 fallback 内仍满额时异常冒泡边界（任务留 PENDING 由定时兜底，可接受，已注释标注）；② b6 全量回归待做（本轮已跑 5 测试类定向回归）；③ 本轮代码与本文档未 git 提交，待用户确认后提交。

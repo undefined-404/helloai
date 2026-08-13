@@ -114,6 +114,18 @@
     </select>
 
     <!--
+        统计某 Agent 在飞子任务数（E2 并发额度占用口径）。
+        与 selectInFlightByAgent 同一状态口径，供 InFlightDbQuotaService
+        实时统计占用；任务进入终态后自动减一，无需显式释放。
+    -->
+    <select id="countInFlightByAgent" resultType="int">
+        SELECT COUNT(*) FROM sub_task
+        WHERE assigned_agent_id = #{agentId}
+          AND status IN ('ASSIGNED', 'IN_PROGRESS', 'REWORK')
+          AND deleted = 0
+    </select>
+
+    <!--
         ASSIGNED 超时巡检：查询 status=ASSIGNED 且 update_time 早于 deadline 的记录。
         用于 AssignedSubTaskTimeoutTask 回收长时间无人 claim 的子任务。
         按 update_time 升序（最早超时的优先处理），limit 防止单轮扫描过多。

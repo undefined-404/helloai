@@ -6,6 +6,9 @@ import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.agent.service.ConcurrencyQuotaService;
+import com.helloai.core.agent.mapper.AgentMapper;
+import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.ReviewRecordMapper;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
@@ -51,7 +54,8 @@ class SubTaskServiceIsReadyTest {
                 mock(AgentService.class), mock(HeartbeatService.class),
                 mock(ReviewRecordMapper.class), mock(ImplicitScoreCalculator.class),
                 mock(RewardService.class), mock(ApplicationEventPublisher.class),
-                mock(TaskTimelineService.class));
+                mock(TaskTimelineService.class), mock(AgentMapper.class),
+                new AgentDispatchProperties(), mock(ConcurrencyQuotaService.class));
         subTaskService = spy(real);
         // lambdaQuery 链式 mock：绕开无 Spring 上下文时的 baseMapper 依赖
         lenient().doReturn(queryChain).when(subTaskService).lambdaQuery();

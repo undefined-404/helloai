@@ -33,6 +33,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
+import com.helloai.core.agent.service.ConcurrencyQuotaService;
 import com.helloai.core.system.service.CredentialVaultService;
 
 /**
@@ -58,6 +59,9 @@ class AgentSelectorTest {
     @Mock
     private CredentialVaultService credentialVaultService;
 
+    @Mock
+    private ConcurrencyQuotaService concurrencyQuotaService;
+
     private AgentSelector agentSelector;
 
     @BeforeEach
@@ -74,8 +78,11 @@ class AgentSelectorTest {
         // 默认所有候选均有有效凭证，避免 API_KEY_LLM 用例被 hasUsableCredential 过滤；
         // 无凭证用例请单独 stub 返回 false
         lenient().when(credentialVaultService.hasActiveAgentCredential(anyLong())).thenReturn(true);
+        // E2 默认所有候选额度未满；满额用例请单独 stub 返回 false
+        lenient().when(concurrencyQuotaService.canAccept(anyLong())).thenReturn(true);
         agentSelector = new AgentSelector(
-                agentService, circuitBreakerRegistry, props, health, agentDutyLeaseService, credentialVaultService);
+                agentService, circuitBreakerRegistry, props, health, agentDutyLeaseService,
+                credentialVaultService, concurrencyQuotaService);
     }
 
     // ════════════════════════════════════════════════════════════
@@ -438,7 +445,8 @@ class AgentSelectorTest {
             AgentHealthProperties policyHealth = new AgentHealthProperties();
             policyHealth.setOfflineMinutes(5);
             policySelector = new AgentSelector(
-                    agentService, circuitBreakerRegistry, policyProps, policyHealth, agentDutyLeaseService, credentialVaultService);
+                    agentService, circuitBreakerRegistry, policyProps, policyHealth, agentDutyLeaseService,
+                    credentialVaultService, concurrencyQuotaService);
         }
 
         private Agent agentWith(Long id, Integer score,
@@ -490,7 +498,8 @@ class AgentSelectorTest {
             forceHealth.setOfflineMinutes(5);
             AgentSelector forceSelector =
                     new AgentSelector(
-                            agentService, circuitBreakerRegistry, forceProps, forceHealth, agentDutyLeaseService, credentialVaultService);
+                            agentService, circuitBreakerRegistry, forceProps, forceHealth, agentDutyLeaseService,
+                            credentialVaultService, concurrencyQuotaService);
 
             when(agentService.listByRole(AgentRole.EXECUTOR))
                     .thenReturn(List.of(cli, api));
@@ -644,7 +653,8 @@ class AgentSelectorTest {
             AgentHealthProperties zeroHealth = new AgentHealthProperties();
             zeroHealth.setOfflineMinutes(0);
             AgentSelector zeroSelector = new AgentSelector(
-                    agentService, circuitBreakerRegistry, zeroProps, zeroHealth, agentDutyLeaseService, credentialVaultService);
+                    agentService, circuitBreakerRegistry, zeroProps, zeroHealth, agentDutyLeaseService,
+                    credentialVaultService, concurrencyQuotaService);
 
             Agent stale = agentWithHeartbeat(2L, 90, AgentOnlineStatus.ONLINE,
                     AgentStatus.ACTIVE, 120L);  // 2 小时前
@@ -667,7 +677,8 @@ class AgentSelectorTest {
             AgentHealthProperties customHealth = new AgentHealthProperties();
             customHealth.setOfflineMinutes(3);
             AgentSelector customSelector = new AgentSelector(
-                    agentService, circuitBreakerRegistry, customProps, customHealth, agentDutyLeaseService, credentialVaultService);
+                    agentService, circuitBreakerRegistry, customProps, customHealth, agentDutyLeaseService,
+                    credentialVaultService, concurrencyQuotaService);
 
             Agent stale = agentWithHeartbeat(2L, 90, AgentOnlineStatus.ONLINE,
                     AgentStatus.ACTIVE, 9L);  // 9 分钟前 > 3 分钟阈值
@@ -900,6 +911,63 @@ class AgentSelectorTest {
                     AgentSelector.AgentSelectionConstraints.of(null, List.of("shell", "web-search"));
 
             assertThat(constraints.allows(hasShellOnly)).isFalse();
+        }
+    }
+
+    @Nested
+    @DisplayName("E2 并发额度过滤")
+    class ConcurrencyQuotaFilterTest {
+
+        private Agent agent;
+
+        @BeforeEach
+        void setUp() {
+            agent = agent(2L, 90, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            when(agentService.listByRole(AgentRole.EXECUTOR)).thenReturn(List.of(agent));
+        }
+
+        @Test
+        @DisplayName("额度已满（canAccept=false）的 Agent 被跳过，返回 null")
+        void shouldSkipFullAgent() {
+            when(concurrencyQuotaService.canAccept(2L)).thenReturn(false);
+
+            Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNull();
+            verify(concurrencyQuotaService).canAccept(2L);
+        }
+
+        @Test
+        @DisplayName("额度未满（canAccept=true）正常选中")
+        void shouldPickAgentWithCapacity() {
+            when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
+            when(concurrencyQuotaService.canAccept(2L)).thenReturn(true);
+
+            Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(2L);
+        }
+
+        @Test
+        @DisplayName("enforceMaxConcurrent=false 时满额 Agent 仍可选（E2 前行为）")
+        void shouldIgnoreQuotaWhenDisabled() {
+            when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
+            AgentDispatchProperties disabledProps = new AgentDispatchProperties();
+            disabledProps.setPreferExternal(false);
+            disabledProps.setRequireIdle(false);
+            disabledProps.setEnforceMaxConcurrent(false);
+            AgentHealthProperties health = new AgentHealthProperties();
+            health.setOfflineMinutes(5);
+            AgentSelector disabledSelector = new AgentSelector(
+                    agentService, circuitBreakerRegistry, disabledProps, health,
+                    agentDutyLeaseService, credentialVaultService, concurrencyQuotaService);
+
+            Agent result = disabledSelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(2L);
+            verify(concurrencyQuotaService, never()).canAccept(anyLong());
         }
     }
 }

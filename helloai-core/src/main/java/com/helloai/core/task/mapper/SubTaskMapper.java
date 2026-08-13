@@ -73,6 +73,18 @@ public interface SubTaskMapper extends BaseMapper<SubTask> {
                                         @Param("limit") int limit);
 
     /**
+     * 统计某 Agent 在飞子任务数（E2 并发额度占用口径）。
+     *
+     * <p>与 {@link #selectInFlightByAgent} 同一口径：
+     * ASSIGNED / IN_PROGRESS / REWORK 且 deleted = 0，供
+     * {@code InFlightDbQuotaService} 实时统计占用，完成/改派/回收后自然释放。</p>
+     *
+     * @param agentId Agent ID
+     * @return 在飞任务数（&gt;= 0）
+     */
+    int countInFlightByAgent(@Param("agentId") Long agentId);
+
+    /**
      * 查询 ASSIGNED 超时未 claim 的子任务（按 update_time 升序，limit 上限）。
      *
      * <p>只查 status=ASSIGNED 且 update_time 早于 deadline 的记录。

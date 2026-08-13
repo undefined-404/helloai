@@ -4,14 +4,18 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.helloai.common.base.AgentUnavailableException;
 import com.helloai.common.base.BizException;
+import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.mapper.AgentMapper;
 import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.agent.service.ConcurrencyQuotaService;
 import com.helloai.core.shared.event.SubTaskAssignedEvent;
 import com.helloai.core.shared.event.SubTaskCompletedEvent;
 import com.helloai.core.task.entity.ReviewRecord;
@@ -56,6 +60,9 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     private final RewardService rewardService;
     private final ApplicationEventPublisher applicationEventPublisher;
     private final TaskTimelineService taskTimelineService;
+    private final AgentMapper agentMapper;
+    private final AgentDispatchProperties agentDispatchProperties;
+    private final ConcurrencyQuotaService concurrencyQuotaService;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -660,6 +667,16 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         if (subTask == null) throw new BizException("子任务不存在: " + subTaskId);
         if (subTask.getStatus() != SubTaskStatus.PENDING) {
             throw new BizException("只有 PENDING 状态的子任务才能分配，当前状态: " + subTask.getStatus());
+        }
+        // E2：并发额度原子防线——FOR UPDATE 锁 agent 行，串行化同一 Agent 的并发派发；
+        // 锁内重新统计在飞数判定额度（选人通过 ≠ 落库安全，杜绝并发超发窗口）。
+        // 满额抛 AgentUnavailableException：不计入熔断统计，由 ResilientDispatcher
+        // 走 fallback 换人；并发窗口下 fallback 内仍满额则异常冒泡，任务保持 PENDING 由定时兜底重试。
+        agentMapper.selectByIdForUpdate(agentId);
+        if (agentDispatchProperties.isEnforceMaxConcurrent()
+                && !concurrencyQuotaService.canAccept(agentId)) {
+            throw new AgentUnavailableException(
+                    "Agent 并发额度已满: agentId=" + agentId + ", subTaskId=" + subTaskId, agentId);
         }
         changeStatus(subTaskId, SubTaskStatus.ASSIGNED, agentId);
     }

@@ -24,6 +24,18 @@ import java.util.List;
 public interface AgentMapper extends BaseMapper<Agent> {
 
     /**
+     * 行锁读取 Agent（E2 并发额度原子防线）。
+     *
+     * <p>{@code SELECT ... FOR UPDATE} 锁定 agent 行，使同一 Agent 的并发派发
+     * （{@code SubTaskService.assignNext}）在 PostgreSQL 行锁上串行化，
+     * 锁内重新统计在飞数判定额度，杜绝"选人通过但落库前被并发占满"的超发窗口。</p>
+     *
+     * @param agentId Agent ID
+     * @return Agent；不存在或已删除时返回 null
+     */
+    Agent selectByIdForUpdate(@Param("agentId") Long agentId);
+
+    /**
      * 把超时的 Agent 标 OFFLINE（CAS UPDATE，防止 seen() 刷新覆盖）。
      *
      * <p>CAS 条件：

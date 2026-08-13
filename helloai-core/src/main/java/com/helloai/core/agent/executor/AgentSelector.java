@@ -12,6 +12,7 @@ import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
+import com.helloai.core.agent.service.ConcurrencyQuotaService;
 import com.helloai.core.system.service.CredentialVaultService;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
@@ -44,6 +45,7 @@ public class AgentSelector {
     private final AgentHealthProperties agentHealthProperties;
     private final AgentDutyLeaseService agentDutyLeaseService;
     private final CredentialVaultService credentialVaultService;
+    private final ConcurrencyQuotaService concurrencyQuotaService;
 
     /**
      * 从指定角色的 Agent 中选取首选执行器（用于初始分配）。
@@ -97,6 +99,8 @@ public class AgentSelector {
      *   <li>跳过熔断器已打开的 Agent（per-agent 维度）</li>
      *   <li>N12 P1 STRICT 独占报锁：跳过当前以 STRICT 模式在岗的 Agent
      *       （不参与他人失败后的替补池，但可被初始/直接分配的任务命中）</li>
+     *   <li>E2：跳过并发额度已满的 Agent（当前占用 &gt;= 声明额度时不再接收新任务；
+     *       {@code enforceMaxConcurrent=false} 时跳过本检查，与 E2 前行为一致）</li>
      *   <li>按 score DESC 排序，选最高分</li>
      * </ol>
      *
@@ -142,6 +146,8 @@ public class AgentSelector {
                         || (a.getAccessType() != null && !a.getAccessType().requiresRuntimeLiveness()))
                 .filter(this::isHeartbeatFresh)
                 .filter(a -> !agentDispatchProperties.isRequireIdle() || agentService.inProgressCount(a.getId()) == 0)
+                .filter(a -> !agentDispatchProperties.isEnforceMaxConcurrent()
+                        || concurrencyQuotaService.canAccept(a.getId()))
                 .filter(a -> a.getStatus() == AgentStatus.ACTIVE)
                 .filter(this::hasUsableCredential)
                 .filter(a -> !isOnStrictDuty(a.getId()))

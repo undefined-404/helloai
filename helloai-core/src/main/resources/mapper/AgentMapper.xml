@@ -73,6 +73,18 @@
     </update>
 
     <!--
+        行锁读取 Agent（E2 并发额度原子防线）：SELECT ... FOR UPDATE 锁定 agent 行，
+        使同一 Agent 的并发派发（SubTaskService.assignNext）在 PostgreSQL 行锁上串行化，
+        锁内重新统计在飞数判定额度，杜绝"选人通过但落库前被并发占满"的超发窗口。
+    -->
+    <select id="selectByIdForUpdate" resultType="com.helloai.core.agent.entity.Agent">
+        SELECT * FROM agent
+        WHERE id = #{agentId}
+          AND deleted = 0
+        FOR UPDATE
+    </select>
+
+    <!--
         阶段 4 Reconcile：CAS UPDATE 标 OFFLINE。
         只有同时满足以下条件的 Agent 才会被标离线：
           1) id 匹配

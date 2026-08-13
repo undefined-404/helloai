@@ -30,6 +30,19 @@ public class AgentDispatchProperties {
     private boolean requireIdle = true;
 
     /**
+     * E2：是否强制并发额度（maxConcurrent 派发即占用）。
+     *
+     * <p>默认 true。开启后：
+     * <ul>
+     *   <li>选人链：当前占用 &gt;= 额度的 Agent 被跳过（{@code AgentSelector}）</li>
+     *   <li>落库前：{@code SubTaskService.assignNext} 锁 agent 行后重新判定，超发直接拒派</li>
+     * </ul>
+     * 额度来源：ACTIVE 值班租约 maxConcurrent；无租约时仅 capabilities 显式声明
+     * {@code maxConcurrentTasks} 才约束（未声明不限制，与 E2 前行为一致）。</p>
+     */
+    private boolean enforceMaxConcurrent = true;
+
+    /**
      * 强制仅在指定接入类型内选人（回归/演练开关）。
      *
      * <p>典型用法：设置为 {@code API_KEY_LLM}，可实现“纯 LLM 保底测试”不被外部 Agent 抢占。</p>
