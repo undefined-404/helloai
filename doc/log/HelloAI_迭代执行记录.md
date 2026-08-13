@@ -5121,3 +5121,27 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - 影响：① 有租约 Agent 的 maxConcurrent 从"记录"变为"强制"（选人跳过 + 落库拒派双防线）；② 无租约且未显式声明 maxConcurrentTasks 的 Agent 行为完全不变（向后兼容）；③ 企业版可替换 Redis 预扣实现而不动调用方。
 - 遗留：① 并发窗口下 fallback 内仍满额时异常冒泡边界（任务留 PENDING 由定时兜底，可接受，已注释标注）；② b6 全量回归待做（本轮已跑 5 测试类定向回归）；③ 本轮代码与本文档未 git 提交，待用户确认后提交。
+
+### 6.87 E2 b6 全量回归脚本落地：PS 版补 S8 场景 + shell 全量版（2026-08-13）
+
+#### 1. 范围
+
+- **背景**：b6 全量回归（E2 并发额度场景）此前只有 PS 版 S1-S7，缺 S8（并发额度派发即占用）；且无 macOS/Linux 可跑的 shell 版。本轮：① PS 版补 S8 场景；② 新建 `scripts/shell/verify-agenthub-duty-e2e.sh`（S1-S8 全量 zsh 版），与 §6.86 的 E2 实现配套。
+- **明确不做**：真实 AI 接入（脚本用模拟 CLI_CLIENT Agent，无需外部 AI）；非 b6 场景的其他回归项。
+
+#### 2. 实际落地
+
+- **PS 版**（`verify-agenthub-duty-e2e.ps1`）：① `Invoke-Json` 扩展 DELETE 带 body（`SendAsync(HttpRequestMessage)` 兼容 PS 5.1，因 HttpClient 无 `DeleteAsync(Uri, HttpContent)` 重载）——任务级联删除接口需 `confirmTitle`；② S7 后插入 S8 段落（S8.0 残留清理 → S8.1 checkIn(maxConcurrent=1) → S8.2 建 t1 白名单自动派发（含 auto-assign-on-create 行为自检）→ S8.3 建 t2 断言满额保持 PENDING → S8.4 submitResult 释放后建 t3 断言重派回 → S8.5 并发建 t4/t5（Start-Job）断言在飞数 <=1 → S8.6 checkOut + 任务级联删除）；③ teardown 与头部注释同步更新。
+- **shell 版**（新建 `verify-agenthub-duty-e2e.sh`，632 行）：S1-S8 全量 zsh 迁移（UTF-8 编码头 + `set -euo pipefail` + jq 解析 + `run_psql_one_row` eval 导出换行字段数组 + `http_request` 全局 HTTP_CODE/HTTP_BODY + 后台 curl 并发 + trap cleanup），风格对齐 `verify-dashboard-duty-leases.sh`。
+- **S8 关键设计**：① 白名单隔离——任务 body 带 `agentPolicy.executorAgentIds=[本 agent]`，选人链只在白名单内，环境其他 ACTIVE Agent 不干扰断言；② 前置条件 `auto-assign-on-create=true`（默认 false）+ 脚本行为自检（t1 创建 2s 未派发则报错提示改配置）；③ 断言以 DB 为准（满额时 pickPreferred 返回 null 抛 BizException，HTTP 可能 500）；④ S8.0 残留清理用 COALESCE 子查询保证 psql 恒返回一行。
+
+#### 3. 验证结果
+
+- shell：`zsh -n` 语法通过；`chmod +x` 已设。
+- PS：无 pwsh 环境（macOS），做 UTF-8 with BOM + 编码强制头 + 去字符串后括号配对粗检（{} / () / [] 全配对），完整语法需 Windows/pwsh 实测时确认。
+- 真实环境实测（docker 中间件 + IDEA 后端 + `auto-assign-on-create=true`）留待用户执行。
+
+#### 4. 影响与遗留
+
+- 影响：① b6 全量回归（S1-S8）在 Windows 与 macOS/Linux 均有脚本可跑；② E2 并发额度场景具备可重复、环境无关的回归验证手段。
+- 遗留：① 真实环境实测待用户执行（PS 版需 Windows/pwsh，shell 版 macOS/Linux 直接 `./verify-agenthub-duty-e2e.sh`）；② 本轮代码与本文档未 git 提交，待用户确认后提交。

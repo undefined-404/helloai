@@ -15,6 +15,12 @@
 #        S7.1 score=0（低表现）-> expire_time 距 now 约 min(5min) 短窗口
 #        S7.2 score=100（高表现）-> expire_time 距 now 约 max(240min) 长窗口
 #        S7.3 cleanup: checkOut + score 复位 0
+#   S8  E2 并发额度预扣（N12 A2 第 3 段）：checkIn(maxConcurrent=1) 派发即占用
+#        S8.1 checkIn(maxConcurrent=1) -> 租约 quota=1
+#        S8.2 建 t1（白名单）自动派发选中 -> S8.3 建 t2 满额被跳过（保持 PENDING）
+#        S8.4 submitResult 释放 -> 建 t3 重派成功 -> S8.5 并发建 t4/t5 在飞数 <=1
+#        S8.6 cleanup checkOut + 任务级联删除
+#        （前置条件：helloai.dispatch.auto-assign-on-create=true，脚本有行为自检）
 #
 # Pre-conditions:
 #   - docker compose up -d (helloai-postgres:15432)
@@ -75,12 +81,21 @@ function Invoke-Json {
         $client.DefaultRequestHeaders.Add($k, $Headers[$k]) | Out-Null
     }
     $content = $null
-    if ($Method -ne "GET" -and $Method -ne "DELETE") {
+    if ($Method -ne "GET") {
         $content = [System.Net.Http.StringContent]::new($Body, [System.Text.Encoding]::UTF8, "application/json")
     }
     try {
         if ($Method -eq "GET")        { $resp = $client.GetAsync($Uri).Result }
-        elseif ($Method -eq "DELETE") { $resp = $client.DeleteAsync($Uri).Result }
+        elseif ($Method -eq "DELETE") {
+            # S8: DELETE 带 body（任务级联删除需 confirmTitle）——SendAsync 保证跨 .NET 版本兼容
+            if ($Body) {
+                $req = [System.Net.Http.HttpRequestMessage]::new('DELETE', $Uri)
+                $req.Content = $content
+                $resp = $client.SendAsync($req).Result
+            } else {
+                $resp = $client.DeleteAsync($Uri).Result
+            }
+        }
         elseif ($Method -eq "POST")   { $resp = $client.PostAsync($Uri, $content).Result }
         elseif ($Method -eq "PUT")    { $resp = $client.PutAsync($Uri, $content).Result }
         return @{ Code = [int]$resp.StatusCode; Body = $resp.Content.ReadAsStringAsync().Result }
@@ -614,6 +629,200 @@ Write-Output 'S7 OK: dynamic TTL by score (low ~5min / high ~240min) both green'
 Write-Output ""
 
 # ============================================================
+# STEP S8: E2 并发额度预扣（N12 A2 第 3 段，§6.86）
+#   - S8.0 残留清理：同名 task（e2e-quota-verify-task）残留先级联删除（幂等起点）
+#   - S8.1 checkIn(maxConcurrent=1) -> DB 断言 ACTIVE + max_concurrent=1
+#   - S8.2 建 task（agentPolicy.executorAgentIds=[本 agent] 白名单）+ t1
+#         -> 自动派发 -> 断言 t1.assigned_agent_id=本 agent（额度内选中）
+#   - S8.3 建 t2 -> 自动派发 -> 断言 t2 保持 PENDING（满额被选人链跳过，不超发）
+#   - S8.4 submitResult(t1) 释放额度 -> 建 t3 -> 断言 t3.assigned_agent_id=本 agent（释放重派）
+#   - S8.5 并发窗口：submitResult(t3) 释放 -> 并发建 t4/t5
+#         -> 断言本 agent 在飞数 <= 1（FOR UPDATE 原子防线防并发超发）
+#   - S8.6 cleanup: checkOut + DELETE task 级联删除
+#
+# 前置条件：helloai.dispatch.auto-assign-on-create=true（application.yml dispatch 段；
+#           脚本行为自检：t1 创建后 2s 未派发 -> 报错提示改配置）
+# 隔离策略：任务级 agentPolicy 白名单（V47）把选人限定在本 agent——环境里其他 ACTIVE
+#           Agent 不参与，断言环境无关、可重复回归
+# ============================================================
+Write-Output '=== [S8] E2 concurrency quota (maxConcurrent=1 dispatch-occupies) ==='
+$quotaTaskTitle = 'e2e-quota-verify-task'
+
+# ---------- S8.0 残留清理（幂等起点） ----------
+$s80FindSql = "SELECT id FROM task WHERE title = '$quotaTaskTitle' AND deleted = 0 LIMIT 1;"
+$s80FindFile = Join-Path $scriptDir 'verify-agenthub-duty-e2e-s8-0-find.out'
+$rc = Run-Psql -Sql $s80FindSql -OutFile $s80FindFile
+$s80Line = Get-PsqlFields -Path $s80FindFile
+if ($s80Line -and $s80Line.Split('|')[0]) {
+    $residualTaskId = $s80Line.Split('|')[0]
+    Write-Output "S8.0 cleanup residual task id=$residualTaskId"
+    $s80DelBody = "{`"confirmTitle`":`"$quotaTaskTitle`"}"
+    $null = Invoke-Json -Method DELETE -Uri "$base/api/tasks/deleteById/$residualTaskId" -Body $s80DelBody -Headers @{ "X-Admin-Token" = $adminToken }
+}
+
+# ---------- S8.1 checkIn(maxConcurrent=1) ----------
+$s81Body = '{"jsonrpc":"2.0","id":81,"method":"tools/call","params":{"name":"checkIn","arguments":{"agentId":' + $agentId + ',"workMode":"AUTO","maxConcurrent":1,"ttlMinutes":10,"sessionId":"' + $sid + '"}}}'
+$s81Resp = Send-Mcp -Sid $sid -Body $s81Body -Label 'S8.1 checkIn maxConcurrent=1' -Headers @{ 'Authorization' = 'Bearer ' + $agentApiKey }
+if ($s81Resp.Code -ne 200) {
+    Write-Error ('S8.1 FAIL: HTTP=' + $s81Resp.Code + ' body=' + $s81Resp.Body)
+    exit 1
+}
+$s81AssertSql = "SELECT status, max_concurrent FROM agent_duty_lease WHERE agent_id = $agentId AND status = 'ACTIVE' AND deleted = 0 ORDER BY id DESC LIMIT 1;"
+$s81AssertFile = Join-Path $scriptDir 'verify-agenthub-duty-e2e-s8-1.out'
+$rc = Run-Psql -Sql $s81AssertSql -OutFile $s81AssertFile
+$s81Line = Get-PsqlFields -Path $s81AssertFile
+if (-not $s81Line) { Write-Error 'S8.1 FAIL: no ACTIVE lease row'; exit 1 }
+$s81Fields = $s81Line.Split('|')
+if ($s81Fields[0] -ne 'ACTIVE') { Write-Error ('S8.1 FAIL: status != ACTIVE (got ' + $s81Fields[0] + ')'); exit 1 }
+if ($s81Fields[1] -ne '1') { Write-Error ('S8.1 FAIL: max_concurrent != 1 (got ' + $s81Fields[1] + ')'); exit 1 }
+Write-Output 'S8.1 OK: checkIn(maxConcurrent=1) -> lease ACTIVE, quota=1'
+
+# ---------- S8.2 建 task（白名单）+ t1 -> 自动派发选中 ----------
+$s82TaskBody = '{"title":"' + $quotaTaskTitle + '","description":"E2 concurrency quota verify task","agentPolicy":{"executorAgentIds":[' + $agentId + ']}}'
+$s82TaskResp = Invoke-Json -Method POST -Uri "$base/api/tasks" -Body $s82TaskBody -Headers @{ "X-Admin-Token" = $adminToken }
+if ($s82TaskResp.Code -ne 200) { Write-Error ('S8.2 create task HTTP=' + $s82TaskResp.Code + ' body=' + $s82TaskResp.Body); exit 1 }
+$s82TaskJson = $s82TaskResp.Body | ConvertFrom-Json
+if ($s82TaskJson.code -ne 200) { Write-Error ('S8.2 create task biz-fail: ' + $s82TaskJson.msg); exit 1 }
+$s82TaskId = $s82TaskJson.data.id
+Write-Output ('S8.2 taskId=' + $s82TaskId)
+
+$s82StBody = '{"taskId":' + $s82TaskId + ',"title":"e2e-quota-t1","description":"first task within quota","deliverable":"E2 quota proof"}'
+$s82StResp = Invoke-Json -Method POST -Uri "$base/api/sub-tasks" -Body $s82StBody -Headers @{ "X-Admin-Token" = $adminToken }
+Write-Output ('S8.2 create t1 HTTP=' + $s82StResp.Code + ' body=' + $s82StResp.Body)
+$s82StJson = $null
+try { $s82StJson = $s82StResp.Body | ConvertFrom-Json } catch { }
+$s82T1Id = if ($s82StJson -and $s82StJson.data.id) { $s82StJson.data.id } else { $null }
+if (-not $s82T1Id) { Write-Error 'S8.2 FAIL: t1 id missing from create response'; exit 1 }
+Start-Sleep -Seconds 2
+$s82CheckSql = "SELECT status, COALESCE(assigned_agent_id::text, '0') FROM sub_task WHERE id = $s82T1Id AND deleted = 0;"
+$s82CheckFile = Join-Path $scriptDir 'verify-agenthub-duty-e2e-s8-2.out'
+$rc = Run-Psql -Sql $s82CheckSql -OutFile $s82CheckFile
+$s82Line = Get-PsqlFields -Path $s82CheckFile
+if (-not $s82Line) { Write-Error 'S8.2 FAIL: t1 row missing'; exit 1 }
+$s82Fields = $s82Line.Split('|')
+if ($s82Fields[1] -ne "$agentId") {
+    if ($s82Fields[1] -eq '0') {
+        Write-Error 'S8.2 FAIL: t1 not dispatched (still PENDING). Check application.yml helloai.dispatch.auto-assign-on-create=true'
+    } else {
+        Write-Error ('S8.2 FAIL: t1 assigned to agent ' + $s82Fields[1] + ' (whitelist broken?)')
+    }
+    exit 1
+}
+Write-Output 'S8.2 OK: t1 auto-dispatched to whitelist agent (within quota)'
+
+# ---------- S8.3 建 t2 -> 满额被选人链跳过（保持 PENDING，不超发） ----------
+$s83StBody = '{"taskId":' + $s82TaskId + ',"title":"e2e-quota-t2","description":"second task over quota","deliverable":"E2 quota skip proof"}'
+$s83StResp = Invoke-Json -Method POST -Uri "$base/api/sub-tasks" -Body $s83StBody -Headers @{ "X-Admin-Token" = $adminToken }
+# 满额时 pickPreferred 白名单内无候选 -> BizException（HTTP 500/业务错误）；不依赖响应码，DB 断言为准
+Write-Output ('S8.3 create t2 HTTP=' + $s83StResp.Code + ' body=' + $s83StResp.Body)
+Start-Sleep -Seconds 2
+$s83CheckSql = "SELECT status, COALESCE(assigned_agent_id::text, 'NULL') FROM sub_task WHERE title = 'e2e-quota-t2' AND task_id = $s82TaskId AND deleted = 0 LIMIT 1;"
+$s83CheckFile = Join-Path $scriptDir 'verify-agenthub-duty-e2e-s8-3.out'
+$rc = Run-Psql -Sql $s83CheckSql -OutFile $s83CheckFile
+$s83Line = Get-PsqlFields -Path $s83CheckFile
+if (-not $s83Line) { Write-Error 'S8.3 FAIL: t2 row missing'; exit 1 }
+$s83Fields = $s83Line.Split('|')
+if ($s83Fields[1] -ne 'NULL') { Write-Error ('S8.3 FAIL: t2 was assigned to agent ' + $s83Fields[1] + ' while quota full (selector soft-filter broken)'); exit 1 }
+Write-Output 'S8.3 OK: t2 skipped by selector while quota full (kept PENDING, no over-dispatch)'
+
+# ---------- S8.4 submitResult(t1) 释放额度 -> 建 t3 -> 重派成功 ----------
+$s84ResultId = 'e2e-quota-submit-' + (Get-Date -Format 'yyyyMMddHHmmssfff')
+$s84SrBody = '{"subTaskId":' + $s82T1Id + ',"success":true,"output":"e2e quota release proof","finishReason":"completed","resultId":"' + $s84ResultId + '"}'
+$s84SrResp = Invoke-Json -Method POST -Uri "$base/api/mcp/tools/submitResult" -Body $s84SrBody -Headers @{ "Authorization" = "Bearer $agentApiKey" }
+Write-Output ('S8.4 submitResult HTTP=' + $s84SrResp.Code + ' body=' + $s84SrResp.Body)
+if ($s84SrResp.Code -ne 200) { Write-Error 'S8.4 FAIL: submitResult HTTP != 200'; exit 1 }
+$s84SrJson = $s84SrResp.Body | ConvertFrom-Json
+if ($s84SrJson.code -ne 200 -or $s84SrJson.data.ok -ne $true) { Write-Error ('S8.4 FAIL: submitResult not accepted: ' + $s84SrResp.Body); exit 1 }
+Start-Sleep -Seconds 1
+# t1 已流转 REVIEW（不在占用口径 ASSIGNED/IN_PROGRESS/REWORK -> 额度释放）
+$s84T1Sql = "SELECT status FROM sub_task WHERE id = $s82T1Id AND deleted = 0;"
+$s84T1File = Join-Path $scriptDir 'verify-agenthub-duty-e2e-s8-4-t1.out'
+$rc = Run-Psql -Sql $s84T1Sql -OutFile $s84T1File
+$s84T1Line = Get-PsqlFields -Path $s84T1File
+if (-not $s84T1Line) { Write-Error 'S8.4 FAIL: t1 row missing'; exit 1 }
+$s84T1Status = $s84T1Line.Split('|')[0]
+Write-Output ('S8.4 t1 status=' + $s84T1Status)
+if ($s84T1Status -notin @('REVIEW', 'DONE')) { Write-Error ('S8.4 FAIL: t1 not released after submit (status=' + $s84T1Status + ')'); exit 1 }
+
+$s84StBody = '{"taskId":' + $s82TaskId + ',"title":"e2e-quota-t3","description":"third task after release","deliverable":"E2 quota release proof"}'
+$s84StResp = Invoke-Json -Method POST -Uri "$base/api/sub-tasks" -Body $s84StBody -Headers @{ "X-Admin-Token" = $adminToken }
+Write-Output ('S8.4 create t3 HTTP=' + $s84StResp.Code)
+Start-Sleep -Seconds 2
+$s84CheckSql = "SELECT COALESCE(assigned_agent_id::text, 'NULL') FROM sub_task WHERE title = 'e2e-quota-t3' AND task_id = $s82TaskId AND deleted = 0 LIMIT 1;"
+$s84CheckFile = Join-Path $scriptDir 'verify-agenthub-duty-e2e-s8-4.out'
+$rc = Run-Psql -Sql $s84CheckSql -OutFile $s84CheckFile
+$s84Line = Get-PsqlFields -Path $s84CheckFile
+if (-not $s84Line) { Write-Error 'S8.4 FAIL: t3 row missing'; exit 1 }
+$s84Assigned = $s84Line.Split('|')[0]
+if ($s84Assigned -ne "$agentId") { Write-Error ('S8.4 FAIL: t3 not re-dispatched after release (assigned=' + $s84Assigned + ')'); exit 1 }
+Write-Output 'S8.4 OK: submit released quota -> t3 dispatched to same agent'
+
+# ---------- S8.5 并发窗口：释放后并发建 t4/t5 -> 原子防线防超发 ----------
+$s85T3Sql = "SELECT id FROM sub_task WHERE title = 'e2e-quota-t3' AND task_id = $s82TaskId AND deleted = 0 LIMIT 1;"
+$s85T3File = Join-Path $scriptDir 'verify-agenthub-duty-e2e-s8-5-t3id.out'
+$rc = Run-Psql -Sql $s85T3Sql -OutFile $s85T3File
+$s85T3Line = Get-PsqlFields -Path $s85T3File
+if (-not $s85T3Line) { Write-Error 'S8.5 FAIL: t3 id missing'; exit 1 }
+$s85T3Id = $s85T3Line.Split('|')[0]
+$s85ResultId = 'e2e-quota-submit-' + (Get-Date -Format 'yyyyMMddHHmmssfff')
+$s85SrBody = '{"subTaskId":' + $s85T3Id + ',"success":true,"output":"e2e quota concurrency release","finishReason":"completed","resultId":"' + $s85ResultId + '"}'
+$null = Invoke-Json -Method POST -Uri "$base/api/mcp/tools/submitResult" -Body $s85SrBody -Headers @{ "Authorization" = "Bearer $agentApiKey" }
+Start-Sleep -Seconds 1
+
+$s85Body4 = '{"taskId":' + $s82TaskId + ',"title":"e2e-quota-t4","description":"concurrent a","deliverable":"E2 quota atomic proof"}'
+$s85Body5 = '{"taskId":' + $s82TaskId + ',"title":"e2e-quota-t5","description":"concurrent b","deliverable":"E2 quota atomic proof"}'
+$s85Url = "$base/api/sub-tasks"
+# 两个 Start-Job 并发 POST：选人通过 vs 落库满额的冲突窗口由 agent 行锁串行化，
+# 后到者在锁内 canAccept=false -> AgentUnavailableException -> 白名单内无替代 -> 冒泡 PENDING
+$s85Job4 = Start-Job -ScriptBlock {
+    param($u, $b, $token)
+    $c = [System.Net.Http.HttpClient]::new()
+    $c.Timeout = [TimeSpan]::FromSeconds(30)
+    $c.DefaultRequestHeaders.Add('X-Admin-Token', $token) | Out-Null
+    $content = [System.Net.Http.StringContent]::new($b, [System.Text.Encoding]::UTF8, 'application/json')
+    $r = $c.PostAsync($u, $content).Result
+    return ('code=' + [int]$r.StatusCode)
+} -ArgumentList $s85Url, $s85Body4, $adminToken
+$s85Job5 = Start-Job -ScriptBlock {
+    param($u, $b, $token)
+    $c = [System.Net.Http.HttpClient]::new()
+    $c.Timeout = [TimeSpan]::FromSeconds(30)
+    $c.DefaultRequestHeaders.Add('X-Admin-Token', $token) | Out-Null
+    $content = [System.Net.Http.StringContent]::new($b, [System.Text.Encoding]::UTF8, 'application/json')
+    $r = $c.PostAsync($u, $content).Result
+    return ('code=' + [int]$r.StatusCode)
+} -ArgumentList $s85Url, $s85Body5, $adminToken
+$s85R4 = Receive-Job -Wait $s85Job4 -AutoRemoveJob
+$s85R5 = Receive-Job -Wait $s85Job5 -AutoRemoveJob
+Write-Output ('S8.5 concurrent create t4/t5: ' + $s85R4 + ' / ' + $s85R5)
+Start-Sleep -Seconds 3
+$s85CheckSql = "SELECT COUNT(*) FROM sub_task WHERE assigned_agent_id = $agentId AND status IN ('ASSIGNED','IN_PROGRESS','REWORK') AND deleted = 0;"
+$s85CheckFile = Join-Path $scriptDir 'verify-agenthub-duty-e2e-s8-5.out'
+$rc = Run-Psql -Sql $s85CheckSql -OutFile $s85CheckFile
+$s85Line = Get-PsqlFields -Path $s85CheckFile
+if (-not $s85Line) { Write-Error 'S8.5 FAIL: in-flight count query empty'; exit 1 }
+$s85InFlight = $s85Line.Split('|')[0]
+if ([int]$s85InFlight -gt 1) { Write-Error ('S8.5 FAIL: in-flight count ' + $s85InFlight + ' > quota 1 (atomic guard broken)'); exit 1 }
+Write-Output ('S8.5 OK: concurrent dispatch kept in-flight count at ' + $s85InFlight + ' (<= quota 1)')
+
+# ---------- S8.6 cleanup: checkOut + 任务级联删除 ----------
+$s86OutBody = '{"jsonrpc":"2.0","id":86,"method":"tools/call","params":{"name":"checkOut","arguments":{"agentId":' + $agentId + ',"closeReason":"s8_final_cleanup","sessionId":"' + $sid + '"}}}'
+$null = Send-Mcp -Sid $sid -Body $s86OutBody -Label 'S8.6 final checkOut' -Headers @{ 'Authorization' = 'Bearer ' + $agentApiKey }
+$s86DelBody = "{`"confirmTitle`":`"$quotaTaskTitle`"}"
+$s86DelResp = Invoke-Json -Method DELETE -Uri "$base/api/tasks/deleteById/$s82TaskId" -Body $s86DelBody -Headers @{ "X-Admin-Token" = $adminToken }
+Write-Output ('S8.6 delete task HTTP=' + $s86DelResp.Code + ' body=' + $s86DelResp.Body)
+$s86VerifySql = "SELECT COUNT(*) FROM sub_task WHERE task_id = $s82TaskId AND deleted = 0;"
+$s86VerifyFile = Join-Path $scriptDir 'verify-agenthub-duty-e2e-s8-6.out'
+$rc = Run-Psql -Sql $s86VerifySql -OutFile $s86VerifyFile
+$s86Line = Get-PsqlFields -Path $s86VerifyFile
+if (-not $s86Line) { Write-Error 'S8.6 FAIL: verify query empty'; exit 1 }
+$s86Left = $s86Line.Split('|')[0]
+if ($s86Left -ne '0') { Write-Error ('S8.6 FAIL: residual sub_tasks ' + $s86Left + ' after cascade delete'); exit 1 }
+Write-Output 'S8.6 OK: checkOut + task cascade delete (zero residual sub_tasks)'
+Write-Output 'S8 OK: E2 concurrency quota all green (dispatch-occupies / soft-skip / release / atomic-guard)'
+Write-Output ""
+
+# ============================================================
 # Cleanup SSE job
 # ============================================================
 Write-Output "=== teardown ==="
@@ -626,6 +835,7 @@ Write-Output "S2 out:     $(Join-Path $scriptDir 'verify-agenthub-duty-e2e-s2.ou
 Write-Output "S3 out:     $(Join-Path $scriptDir 'verify-agenthub-duty-e2e-s3.out')"
 Write-Output "S6 out:     $(Join-Path $scriptDir 'verify-agenthub-duty-e2e-s6-*.out')"
 Write-Output "S7 out:     $(Join-Path $scriptDir 'verify-agenthub-duty-e2e-s7-*.out')"
+Write-Output "S8 out:     $(Join-Path $scriptDir 'verify-agenthub-duty-e2e-s8-*.out')"
 Write-Output ""
-Write-Output "ALL PASSED: S1 checkIn / S2 checkOut / S3 DutyLeaseExpirationTask / S6 N12-P1 STRICT / S7 E1 dynamic TTL"
+Write-Output "ALL PASSED: S1 checkIn / S2 checkOut / S3 DutyLeaseExpirationTask / S6 N12-P1 STRICT / S7 E1 dynamic TTL / S8 E2 concurrency quota"
 Write-Output "如需反复回归，可先跑 -Cleanup 清空 lease/inbox，再重跑此脚本"
