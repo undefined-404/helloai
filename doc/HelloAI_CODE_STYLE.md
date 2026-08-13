@@ -274,20 +274,29 @@ core 模块统一采用"业务域分包 + 域内技术分层"，禁止新增顶�
 
 - com.helloai.core.agent   智能体域（注册、调度、执行、对话、MCP、可观测）
 - com.helloai.core.task    任务域（任务、子任务、评审、评分、时间线、状态机）
-- com.helloai.core.system  系统支撑域（用户、配置、规则、模块、凭据、附件、 **LLM Provider**）
-- com.helloai.core.shared  跨域基础设施（event、doorbell）
+- com.helloai.core.planner 规划域（需求澄清、自动拆解、联网搜索、Planner 选型）
+- com.helloai.core.review  核验域（自动审查、返工闭环、MQ 消费）
+- com.helloai.core.system  系统支撑域（用户、配置、规则、模块、凭据、附件、存储、 **LLM Provider**）
+- com.helloai.core.shared  跨域基础设施（event、doorbell、handler、util）
 
-每个域内固定子包：entity / mapper / service；按域需要可扩展。当前各域完整子包：
+每个域内固定子包：entity / mapper / service / service.impl；按域需要可扩展。当前各域完整子包（v2.8 拆分后实际结构）：
 
-- **agent**：entity / mapper / service / domain / chat / command / dispatcher / execution / executor / mqconsumer / mcp / observability
-- **task**：entity / mapper / service / statemachine / score
-- **system**：entity / mapper / service
-- **shared**：event / doorbell
+- **agent**：entity / mapper / service / service.impl / domain / chat / command / dispatcher / execution / executor / mqconsumer / mcp / observability / output
+- **task**：entity / mapper / service / service.impl / policy / spec / statemachine / score / listener
+- **planner**：entity / mapper / service / service.impl / picker / search
+- **review**：service / service.impl / mqconsumer
+- **system**：entity / mapper / service / service.impl / storage
+- **shared**：event / doorbell / handler / util
+
+> **v2.8 起（2026-08 批次 b0-b4）：Service 层统一"接口 + impl"成对拆分**——业务 Service 一律拆为接口 `XxxService`（放 `{domain}.service`，继承 `IService<Entity>`）+ 实现 `XxxServiceImpl`（放 `{domain}.service.impl`，继承 `ServiceImpl<Mapper, Entity>`）；跨域引用、Controller 一律只依赖接口。已拆分域：agent（10 个移入拆）、task（11 + spec 3 拆）、planner（4 拆 + search 迁移）、review（1 拆）、system（13 拆）；策略/选型类归位专用子包（task/policy、planner/picker）。批次详情见迭代记录 §6.84。
 
 语义边界（强制）：
 - xxx.entity = 映射数据库表的持久化实体
 - xxx.domain = 不映射表的纯内存领域对象/值对象（如 ExecutionCommand、AgentTask）
+- xxx.service.impl = Service 接口实现（`@Service` + `@RequiredArgsConstructor` + 构造器注入，**禁止**在 impl 之外书写业务逻辑类）
 - agent.chat = 面向业务的 ChatClient 服务层（路由入口、Provider 目录、provider/model 解析）；agent.chat.provider = Provider 接入族（Factory 契约 + 各厂商实现 + ChatModel 缓存 + LlmProviderChatClientFactoryRegistry 路由分发）。**新增 LLM 厂商或调整 Provider 协议仅动 `llm_provider` 表 + chat.provider；`system.entity.LlmProvider` 是平台级 Provider 配置的持久化载体（不是 chat 域的事），全表送 `LlmProviderQueryService`、套餐 ChatClient 路由仍走 chat.provider；chat 父包零感知**
+- task.policy = 任务级策略的纯静态工具类（如 `TaskAgentPolicy` 解析 `task.agent_policy` JSONB，防御式回落默认）
+- planner.picker = Planner 选型职责（如 `PlannerAgentPicker`，会话钉住 / 任务指定 / 自动选择三级决策）
 
 新增类的放置判断：先问"它服务哪个业务域"，再问"它在域内承担什么技术角色"。
 跨域通用设施才允许放 shared，放 shared 前需在提交说明中写明理由。
@@ -309,10 +318,12 @@ com.helloai.{模块名}.{层}
 示例：
 - `com.helloai.common.base`
 - `com.helloai.common.constant`
-- `com.helloai.core.agent.entity` / `com.helloai.core.agent.mapper` / `com.helloai.core.agent.service`
+- `com.helloai.core.agent.entity` / `com.helloai.core.agent.mapper` / `com.helloai.core.agent.service` / `com.helloai.core.agent.service.impl`
 - `com.helloai.core.agent.executor` / `com.helloai.core.agent.mqconsumer` / `com.helloai.core.agent.mcp`
-- `com.helloai.core.task.entity` / `com.helloai.core.task.statemachine` / `com.helloai.core.task.score`
-- `com.helloai.core.system.entity` / `com.helloai.core.system.service`
+- `com.helloai.core.task.entity` / `com.helloai.core.task.statemachine` / `com.helloai.core.task.score` / `com.helloai.core.task.policy`
+- `com.helloai.core.planner.entity` / `com.helloai.core.planner.service` / `com.helloai.core.planner.service.impl` / `com.helloai.core.planner.picker`
+- `com.helloai.core.review.service` / `com.helloai.core.review.service.impl`
+- `com.helloai.core.system.entity` / `com.helloai.core.system.service` / `com.helloai.core.system.service.impl` / `com.helloai.core.system.storage`
 - `com.helloai.core.shared.event` / `com.helloai.core.shared.doorbell`
 - `com.helloai.api.controller` / `com.helloai.api.dto` / `com.helloai.api.config`
 - `com.helloai.job.task`
@@ -327,7 +338,7 @@ com.helloai.{模块名}.{层}
 | 实体 | `{Name}` | `Task`、`SubTask`、`Agent`、`ReviewRecord` |
 | Mapper | `{Entity}Mapper` | `SubTaskMapper`、`AgentMapper` |
 | Service 接口 | `{Name}Service` | `SubTaskService`、`ReviewService` |
-| Service 实现 | `{Name}ServiceImpl` | `SubTaskServiceImpl`（当前项目可直接用类，不强制接口） |
+| Service 实现 | `{Name}ServiceImpl` | `SubTaskServiceImpl`（v2.8 起 Service 层强制接口 + impl 拆分，见 §4.x 接口使用原则） |
 | Controller | `{Name}Controller` | `SubTaskController`、`AgentController` |
 | DTO | `{Action}Request` / `{Action}Response` | `CreateTaskRequest`、`TaskResponse` |
 | MQ 消费者 | `{Name}Consumer` | `ExecutorEventConsumer`、`ReviewerEventConsumer` |
@@ -369,12 +380,12 @@ com.helloai.{模块名}.{层}
 
 | 场景 | 是否强制接口 | 说明 |
 |------|:----------:|------|
-| Service 层 | **不强制** | 单一实现时直接写 `XxxService` 类即可；存在多实现（如多数据源、Mock）时才提取接口 |
+| Service 层 | **强制**（v2.8 起） | 一律拆为 `{Name}Service` 接口（`{domain}.service`，继承 `IService<Entity>`）+ `{Name}ServiceImpl` 实现（`{domain}.service.impl`，继承 `ServiceImpl<Mapper, Entity>`）；跨域引用与 Controller 只依赖接口（单一实现也要拆，为分层契约与可测试性，见 §3.x v2.8 说明） |
 | Mapper 层 | 不强制 | MyBatis-Plus `BaseMapper` 已满足，自定义方法直接写在 Mapper 接口中即可 |
 | 策略模式 | **强制** | 如 `AgentExecutor`（Claude/Codex/Local 三实现），必须有接口 |
 | Feign 客户端 | **强制** | 未来微服务化时 API 层必须定义接口 |
 
-> **原则**: 不要为了"面向接口编程"而制造空接口。接口是抽象边界的产物，不是代码模板的填充物。
+> **原则**: 接口是抽象边界的产物，不是代码模板的填充物。v2.8 拆分后，Service 接口应保持"业务契约视角"——只声明对外提供的能力，不把内部实现细节（Mapper、私有方法、静态工具）泄漏到接口上。
 
 ### 4.x 常量与枚举命名
 
@@ -784,8 +795,8 @@ public class PageResult<T> {
 
 ### 7.1 基本规则
 
-- `@Service` 注解
-- 构造器注入所有依赖
+- **接口 + impl 成对拆分（v2.8 起强制）**：接口 `XxxService` 放 `{domain}.service`（继承 `IService<Entity>`），实现 `XxxServiceImpl` 放 `{domain}.service.impl`（继承 `ServiceImpl<Mapper, Entity>`）；Controller 与跨域引用一律只依赖接口
+- 实现类 `@Service` + `@RequiredArgsConstructor`，构造器注入所有依赖
 - 方法级 `@Transactional(rollbackFor = Exception.class)`
 - 使用 LambdaQueryWrapper / LambdaUpdateWrapper
 - `ServiceImpl` 可以注入多个 Mapper，但仅限当前模块所属 Mapper
@@ -794,14 +805,24 @@ public class PageResult<T> {
 ### 7.2 标准编写模式
 
 ```java
+// 接口（{domain}.service.XxxService）
+public interface SubTaskService extends IService<SubTask> {
+
+    void changeStatus(Long subTaskId, SubTaskStatus newStatus, Long agentId);
+
+    List<SubTask> listByStatus(SubTaskStatus status);
+}
+
+// 实现（{domain}.service.impl.SubTaskServiceImpl）
 @Service
 @RequiredArgsConstructor
-public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
+public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask> implements SubTaskService {
 
     private final AgentOutboxService agentOutboxService;
     private final AgentExecutionRecordService executionRecordService;
 
     @Transactional(rollbackFor = Exception.class)
+    @Override
     public void changeStatus(Long subTaskId, SubTaskStatus newStatus, Long agentId) {
         // 1. 查询
         SubTask subTask = getById(subTaskId);
@@ -823,6 +844,12 @@ public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
 
         // 4. 同事务写入 Outbox
         agentOutboxService.createEvent(subTask, newStatus);
+    }
+
+    @Override
+    public List<SubTask> listByStatus(SubTaskStatus status) {
+        List<SubTask> list = lambdaQuery().eq(SubTask::getStatus, status).list();
+        return list != null ? list : Collections.emptyList();
     }
 }
 ```
@@ -858,7 +885,7 @@ subTaskMapper.update(null,
 复杂状态流转（如子任务状态机）需要在 Service 层明确定义合法转移表：
 
 ```java
-public class SubTaskService extends ServiceImpl<SubTaskMapper, SubTask> {
+public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask> implements SubTaskService {
 
     private static final Map<SubTaskStatus, Set<SubTaskStatus>> VALID_TRANSITIONS = Map.of(
         SubTaskStatus.PENDING,     Set.of(SubTaskStatus.ASSIGNED),
@@ -1966,6 +1993,7 @@ public class {Name}CompensationTask {
 - [ ] 乐观锁使用 `@Version`，禁止手动写 `version = version + 1`
 - [ ] Controller 返回 `R<T>`，Logger 有实际使用
 - [ ] Service 写操作加 `@Transactional(rollbackFor = Exception.class)`
+- [ ] Service 层接口 + impl 成对拆分（`{Name}Service` 在 `{domain}.service`，`{Name}ServiceImpl` 在 `{domain}.service.impl`），跨域/Controller 只依赖接口（v2.8 起）
 - [ ] 使用构造器注入，非 `@Autowired` 字段注入
 - [ ] 启动类 `scanBasePackages = "com.helloai"`
 - [ ] JDBC URL 指向 PostgreSQL，使用 `timestamptz`
@@ -2023,11 +2051,12 @@ class SubTaskStateMachineTest {
 
 | 规则 | 说明 |
 |------|------|
-| 测试类命名 | `被测类名 + Test` |
+| 测试类命名 | `被测类名 + Test`（测 impl 时为 `{Name}ServiceImplTest`） |
 | 测试方法命名 | `方法名_场景_预期结果`（英文下划线） |
 | `@DisplayName` | 写中文描述，清晰表达测试意图 |
 | Mock | 使用 `@Mock` + `@InjectMocks`，不手动 new 对象 |
 | 断言 | 优先使用 `assertThrows` / `assertDoesNotThrow`，再用 `assertEquals` |
+| Service 实现测试 | 依赖注入用 `@Mock` 依赖 + `@InjectMocks`；需 stub `lambdaQuery()` 链时参照先例 `doReturn(chain).when(service).lambdaQuery()`（LambdaQueryChainWrapper 用 `com.baomidou.mybatisplus.extension.conditions.query` 包），`orderByDesc` 等泛型方法用 `ArgumentMatchers.<SFunction<T, ?>>any()` 消歧义 |
 
 ### 21.3 集成测试规范
 

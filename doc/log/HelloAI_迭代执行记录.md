@@ -5039,3 +5039,58 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - 影响：① 批次 E1 收口，a0-plan 剩余批次 E2~H；② checkIn 动态窗口 + 续约自适应——低表现 Agent 5min 短窗口快速回收值班态，高表现 Agent 240min 长窗口减少续约开销；③ 续约语义由「固定 30min」升级为「score/在跑任务自适应」，A0-8 工具调用自动续租链路无感知兼容。
 - 遗留：① score→TTL 映射为线性纯函数未落策略表（plan 未要求，可后续演进）；② 本轮代码（AgentDutyLeaseProperties 新建 + AgentDutyLeaseService/McpToolService 修改 + yml + 单测 + 脚本）与 §6.83 文档未 git 提交，待用户确认后提交；③ A2 第 3 段（concurrency 预扣）为 a0-plan E2，待续；④ RabbitMQ 若再次出现旧格式积压消息（如重放历史测试消息），需先停消费者再 purge，无法在线清 in-flight。
+
+---
+
+### 6.84 批次 b0-b4：Service 接口/impl 分层拆分重构（2026-08-13）
+
+#### 1. 范围
+
+- **背景**：core 域 Service 层长期"类即服务"（`XxxService` 直接是 `@Service` 类，不拆接口），跨域引用与 Controller 直接依赖具体类，测试只能 mock 类本身。按分层契约与可测试性目标，启动 Service 层"接口 + impl"成对拆分（CODE_STYLE §4.x/§7.1 v2.8 起强制）。
+- **批次规划**：b0 盘点引用点 + 组件扫描范围 + 测试结构；b1 system 域 13 拆；b2 task 域（11 + spec 3 拆、policy/migrator 归位）；b3 planner+review 域（4 拆、picker/router 归位、search 迁移）；b4 agent 域（10 移入拆 + 10 现有拆 + 3 归位）。
+- 明确不做：本次不新增任何业务功能、不改数据库结构；b4 的"10 现有拆"与 b5（shared DoorbellService + mq MessageDeduplicationService 拆）留待后续批次。
+
+#### 2. 实际落地
+
+- **拆分形态**（统一范式）：接口 `XxxService` 放 `{domain}.service`（继承 `IService<Entity>`），实现 `XxxServiceImpl` 放 `{domain}.service.impl`（继承 `ServiceImpl<Mapper, Entity>`，`@Service` + `@RequiredArgsConstructor` 构造器注入）；Controller 与跨域引用全部改依赖接口。
+- **b1 system 域 13 拆**：AdminDashboard / Attachment / Auth / CredentialVaultBinding / CredentialVault / Dashboard / LlmProviderQuery / LlmProvider / Module / PromptTemplate / Rule / SysConfig / SysUser 全部拆接口 + impl。
+- **b2 task 域（11 + spec 3 拆 + 归位）**：ActivityLog / Feed / Review / Reward / SubTaskDispatch / SubTask / TaskDeliverable / TaskFinalReport / TaskIteration / Task / TaskTimeline 11 个拆接口 + impl；`task/spec` 下 TaskRunningSpecService / TaskRunningSpecJsonbService / TaskRunningSpecTableService 三拆合一迁至 `task/service`（`TaskRunningSpecService` 接口 + 2 个 impl）；`TaskAgentPolicy` 从 `task/service` 归位 `task/policy`（纯静态策略工具类，测试类同步随迁）。
+- **b3 planner + review 域**：PlannerAnalysis / RequirementClarify / WebSearch / WebSearchServiceRouter 4 拆（`planner/service` + impl）；search 两实现 BochaWebSearch / TavilyWebSearch 迁移至 `planner/service/impl`（`planner/search` 仅剩 WebSearchResult 值对象）；RequirementConversation / RequirementMessage 2 个已接口化 service 补 impl；PlannerAgentPicker 归位 `planner/picker`；SubTaskReviewService 归位 `review/service` + impl。
+- **b4 agent 域 10 移入拆**：从 chat（AgentChatClient / LlmProviderCatalog / PlatformProviderConfig）、command（ExecutionCommand）、execution（PlatformAgentExecution / SubTaskExecution）、observability（CircuitBreakerAlert / Heartbeat）、output（ExecutionArtifact）、mcp（McpTool）六个散包子包统一移入 `agent/service` + impl，与 agent/service 既有 11 个接口汇合，业务引用全部改接口。
+- **测试调整**：全部相关测试 import 迁移 + `spy(new XxxServiceImpl(...))` 构造改接口依赖；task/policy 测试随迁；新增 `AttachmentServiceImplTest`（§6.85）。
+
+#### 3. 验证结果
+
+- `mvn -q compile -pl helloai-start -am -DskipTests` 7 模块 EXITCODE=0 全绿。
+- 批次 4b import 修复闭环定向 **201 tests 全过**（含 lambdaQuery 链式 mock 先例：`doReturn(chain).when(service).lambdaQuery()` + `orderByDesc` 用 `ArgumentMatchers.<SFunction<T, ?>>any()` 消歧义）。
+- 全量回归（b6，341/609 级）留待 b4 剩余 + b5 完成后一并执行。
+
+#### 4. 影响与遗留
+
+- 影响：① Service 层分层契约落地——跨域引用与 Controller 只依赖接口，impl 可独立测试（mock 接口而非 mock 类）；② 代码结构收口——`{domain}.service.impl` 成为唯一业务逻辑实现位，chat/command/execution/observability/output 散包子包的 Service 全部归位；③ CODE_STYLE v2.8 同步：§3.x 业务域分包（6 域实际子包 + service.impl 语义）、§4.1 包命名、§4.2 类命名、§4.x 接口使用原则（Service 层改为强制）、§7.1/7.2 标准编写模式、§20 校验清单、§21.2 Service 实现测试规则。
+- 遗留：① b4 剩余"10 现有拆"（agent/service 既有单类形态 Service：AgentExecutionConnectivityService / AgentExecutionPreviewService 等 11 个中的 10 个）与"3 归位"未做，b4 批次未完全收口；② b5（shared DoorbellService + mq MessageDeduplicationService 拆）待续；③ b6 全量回归待 b4/b5 完成后执行；④ 本轮代码与本文档未 git 提交，待用户确认后提交。
+
+### 6.85 附件管理双分类逐级下钻：MinIO/本地两类文件夹 + 任务/子任务标题回显（2026-08-13）
+
+#### 1. 范围
+
+- **背景**：附件管理页原为单层表格，无法按存储类型浏览 MinIO 产物层级（A0-5 遗留②的浏览侧缺口）。用户拍板方案：附件分两类顶级文件夹（MinIO 附件 / 本地附件），逐级下钻（Windows 资源管理器式点击跳转，非树展开），主任务/子任务目录虽按 ID 存储、回显用标题（name）。
+- **明确不做**：MinIO 浏览器方案（已否决）、附件删除/移动、存储类型迁移。
+
+#### 2. 实际落地
+
+- **后端**：`Attachment` 实体 +3 transient 回填字段（`taskId` / `taskTitle` / `subTaskTitle`，`@TableField(exist=false)` 不落库）；`AttachmentServiceImpl.list` 批量回填——listByIds 查 SubTask（Set 去重）→ 再 listByIds 查 Task，Map 装配标题，无 N+1，子任务已删容错留空；新增 `AttachmentServiceImplTest` 3 例（空列表不查询 / 标题回填断言 / 子任务已删容错）。
+- **前端**：`types/index.ts` Attachment +3 可选字段；`AttachmentList.vue` 重写为面包屑 + 逐级下钻——根视图「MinIO 附件 / 本地附件」两固定文件夹（按 storageUrl 前缀计数，无数据不显示）→ agent → 年月 → 任务标题（ID 灰色副文本）→ 子任务标题（ID 灰色副文本）→ 文件行下载；兼容 minio 6 段新格式与 local 3 段老格式 objectKey；文件夹显示计数。
+- **顺带修复**：下载 404 旧 bug——原 `/api/attachments/{id}/download` 后端实际端点只有 `/downloadById/{id}`，已改正确路径 + `saveBlobResponse` 落盘。
+
+#### 3. 验证结果
+
+- 后端：`mvn -pl helloai-core -am test -Dtest=AttachmentServiceImplTest` **Tests run: 3, Failures: 0, Errors: 0**（踩坑：`service.list(null)` 重载歧义需 `(Long) null` 强转；`orderByDesc` 需显式 SFunction 泛型；stub 参数 List 与实现实参 Set equals 恒 false 需 `any()`）。
+- 前端：`npx vue-tsc -b --force` 0 错误。
+- 真实环境：用户 IDEA 重启后端后刷新附件管理页验证（标题回显依赖新代码生效）。
+
+#### 4. 影响与遗留
+
+- 影响：① 附件管理从单层表格升级为存储类型可感知的层级浏览，MinIO 产物可逐级定位下载；② 任务/子任务目录回显标题 + ID 副文本，与 §6.75 objectKey 规范（ID 锚点）互补；③ 下载路径 bug 闭环。
+- 遗留：① 真实环境页面效果待用户验证（后端需重启加载新 list 回填逻辑）；② b6 全量回归时一并回归附件相关用例；③ 本轮代码与本文档未 git 提交，待用户确认后提交。
+
