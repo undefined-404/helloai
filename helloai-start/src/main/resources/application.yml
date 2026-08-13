@@ -91,6 +91,15 @@ helloai:
   agent:
     registration-token: "helloai-reg-2024"
     allow-registration: true
+    # E1 动态 TTL 自适应（N12 A2 第 2 段）：租约 TTL 不再静态固定
+    # checkIn 未显式传 TTL 时按 Agent 表现动态推断（低分短窗口快速回收、高分长窗口减少续约）；
+    # 续约路径按"是否有在跑子任务"拉长/缩短窗口（任务在跑延长、空闲缩短）。
+    duty-lease:
+      adaptive-ttl-enabled: true
+      min-ttl-minutes: 5
+      max-ttl-minutes: 240
+      default-ttl-minutes: 30
+      full-score: 100
   # Phase 2B 调度策略 3：外部优先 / 空闲优先 / 平台内 LLM 保底
   dispatch:
     auto-assign-on-create: false

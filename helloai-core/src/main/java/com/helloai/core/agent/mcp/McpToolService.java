@@ -58,11 +58,6 @@ public class McpToolService {
     /** 通知/评语摘要截断上限（收件箱 summary、review 摘要等）。 */
     private static final int SUMMARY_MAX_CHARS = 200;
 
-    /** 工具调用自动续租（A0-8）：原 TTL 推算异常/缺失时的兜底续约窗口（分钟，与 checkIn 默认一致）。 */
-    private static final int DEFAULT_RENEW_MINUTES = 30;
-    /** 工具调用自动续租（A0-8）：单次续约窗口上限（分钟，7 天），防异常大 TTL 无限续约。 */
-    private static final int MAX_RENEW_MINUTES = 7 * 24 * 60;
-
     // ================================================================
     // pullTasks
     // ================================================================
@@ -467,17 +462,21 @@ public class McpToolService {
      * <p>幂等语义：重复 checkIn 不会失败，旧 ACTIVE 租约会被关闭为 CLOSED（reason=new_lease_start），
      * 新的 sessionId 会覆盖返回。</p>
      *
+     * <p>E1 动态 TTL：ttlMinutes 为 null 时不再固定 30 分钟，改由
+     * {@link AgentDutyLeaseService#resolveTtlMinutes} 按 Agent 表现动态推断
+     * （低分短窗口快速回收、高分长窗口减少续约）。</p>
+     *
      * @param agentId       Agent ID（M4 鉴权后由服务端强制覆盖）
      * @param workMode      工作模式（如 AUTO），null 时保持数据库默认
      * @param maxConcurrent 最大并发子任务数，null 默认 1
-     * @param ttlMinutes    租约有效期（分钟），null 默认 30
+     * @param ttlMinutes    租约有效期（分钟），null 时按 Agent 表现动态推断
      */
     @Transactional(rollbackFor = Exception.class)
     public CheckInResult checkIn(Long agentId, String workMode, Integer maxConcurrent, Integer ttlMinutes) {
         assertAgentActive(agentId);
         assertToolEnabled(agentId, "checkIn");
 
-        int ttl = (ttlMinutes == null || ttlMinutes <= 0) ? 30 : ttlMinutes;
+        int ttl = agentDutyLeaseService.resolveTtlMinutes(agentId, ttlMinutes);
         // N12 P1 STRICT 独占报锁：严格校验入参，非法值立即拒绝（不被默默降级为 AUTO）。
         WorkMode mode;
         try {
@@ -767,28 +766,21 @@ public class McpToolService {
     }
 
     /**
-     * 工具调用自动续租（A0-8 §6.67）：有 ACTIVE 租约时按原 TTL 窗口顺带延长
+     * 工具调用自动续租（A0-8 §6.67 + E1 动态 TTL 自适应）：有 ACTIVE 租约时顺带延长
      * {@code expire_time}，长任务执行期间任何工具调用即可保活，无需 Agent 主动
      * 重做 checkIn；无 ACTIVE 租约时跳过（不自动打卡，保持 checkIn 的打卡语义）。
      *
-     * <p>原 TTL 由 {@code start_time→expire_time} 推算，异常/缺失时兜底 30 分钟；
-     * 续约失败仅告警不阻断工具调用（顺带动作）。checkIn/checkOut 不接入本方法：
-     * 前者签发新租约，后者结束租约。</p>
+     * <p>续约窗口由 {@code AgentDutyLeaseService.adaptiveRenew} 按当前状态动态计算：
+     * 有在跑子任务用最大窗口（任务执行期稳定保活），空闲按表现分动态窗口
+     * （低分短、高分长）；续约失败仅告警不阻断工具调用（顺带动作）。
+     * checkIn/checkOut 不接入本方法：前者签发新租约，后者结束租约。</p>
      */
     private void refreshDutyLease(Long agentId) {
         if (agentId == null) {
             return;
         }
         try {
-            AgentDutyLease active = agentDutyLeaseService.getActiveLease(agentId);
-            if (active == null || active.getStartTime() == null || active.getExpireTime() == null) {
-                return;
-            }
-            long originalTtl = Duration.between(active.getStartTime(), active.getExpireTime()).toMinutes();
-            int ttlMinutes = originalTtl > 0
-                    ? (int) Math.min(originalTtl, MAX_RENEW_MINUTES)
-                    : DEFAULT_RENEW_MINUTES;
-            agentDutyLeaseService.renewLease(agentId, ttlMinutes);
+            agentDutyLeaseService.adaptiveRenew(agentId);
         } catch (Exception e) {
             log.warn("工具调用自动续租失败（不影响主操作）: agentId={}, err={}", agentId, e.getMessage());
         }

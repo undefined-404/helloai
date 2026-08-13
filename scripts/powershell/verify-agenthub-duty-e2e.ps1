@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # helloai AgentHub V1 P0 (checkIn / checkOut / DutyLeaseExpiration) real-env e2e
 # Ref:
 #   doc/HelloAI_迭代执行记录.md  (AgentHub V1 P0)
@@ -11,6 +11,10 @@
 #   S3  手工 INSERT 一条 expire_time 已过期的 ACTIVE 租约（独立 test agent）
 #        -> 等 35s，DutyLeaseExpirationTask (@Scheduled fixedRate=30s) 巡检
 #        -> DB 校验 status='EXPIRED', close_reason='lease_expired'
+#   S7  E1 动态 TTL 自适应（N12 A2 第 2 段）：checkIn 不带 ttlMinutes
+#        S7.1 score=0（低表现）-> expire_time 距 now 约 min(5min) 短窗口
+#        S7.2 score=100（高表现）-> expire_time 距 now 约 max(240min) 长窗口
+#        S7.3 cleanup: checkOut + score 复位 0
 #
 # Pre-conditions:
 #   - docker compose up -d (helloai-postgres:15432)
@@ -212,7 +216,7 @@ Write-Output ""
 # STEP B: create or reuse test agent
 # ============================================================
 Write-Output "=== [B] create or reuse $agentName ==="
-$lookupResp = Invoke-Json -Method GET -Uri "$base/api/admin/agents?pageSize=50" -Headers @{ "X-Admin-Token" = $adminToken }
+$lookupResp = Invoke-Json -Method GET -Uri "$base/api/admin/agents/list?pageSize=50" -Headers @{ "X-Admin-Token" = $adminToken }
 if ($lookupResp.Code -ne 200) {
     Write-Output "lookup HTTP=$($lookupResp.Code)"
     Write-Output "lookup body: $($lookupResp.Body)"
@@ -427,7 +431,7 @@ Write-Output ""
 Write-Output "=== [S6] N12 P1 STRICT 独占报锁 (AgentSelector pickAlternative 过滤验证) ==="
 
 $strictAgentName = 'duty-e2e-strict-agent-v1'
-$strictLookupResp = Invoke-Json -Method GET -Uri "$base/api/admin/agents?pageNum=1&pageSize=200" -Headers @{ "X-Admin-Token" = $adminToken }
+$strictLookupResp = Invoke-Json -Method GET -Uri "$base/api/admin/agents/list?page=1&pageSize=200" -Headers @{ "X-Admin-Token" = $adminToken }
 $strictLookupJson = $strictLookupResp.Body | ConvertFrom-Json
 $strictAgentId = $null
 $strictAgentApiKey = $null
@@ -545,6 +549,71 @@ Write-Output 'S6 OK: STRICT persisted / case-insensitive / invalid-rejected thre
 Write-Output ""
 
 # ============================================================
+# STEP S7: E1 动态 TTL 自适应（N12 A2 第 2 段）
+#   - S7.0 score 复位 0（幂等起点）
+#   - S7.1 score=0（低表现）checkIn 不带 ttlMinutes -> 约 min(5min) 短窗口
+#   - S7.2 score=100（高表现）checkIn 不带 ttlMinutes -> 约 max(240min) 长窗口
+#   - S7.3 cleanup: checkOut + score 复位 0
+# 复用主 test agent（$agentId），与 S1-S3/S6 互不干扰（每步前清理 ACTIVE）
+# ============================================================
+Write-Output '=== [S7] E1 dynamic TTL (adaptive window by agent score) ==='
+
+# ---------- S7.0 复位 score=0（幂等起点） ----------
+$s70ScoreSql = "UPDATE agent SET score = 0 WHERE id = $agentId AND deleted = 0;"
+$s70ScoreFile = Join-Path $scriptDir 'verify-agenthub-duty-e2e-s7-0-score.out'
+$null = Run-Psql -Sql $s70ScoreSql -OutFile $s70ScoreFile
+
+# ---------- S7.1 低分 Agent：checkIn 不带 ttl -> 短窗口 ----------
+$s71Body = '{"jsonrpc":"2.0","id":71,"method":"tools/call","params":{"name":"checkIn","arguments":{"agentId":' + $agentId + ',"workMode":"AUTO","maxConcurrent":1,"sessionId":"' + $sid + '"}}}'
+$s71Resp = Send-Mcp -Sid $sid -Body $s71Body -Label 'S7.1 checkIn no-ttl low-score' -Headers @{ 'Authorization' = 'Bearer ' + $agentApiKey }
+if ($s71Resp.Code -ne 200) {
+    Write-Error ('S7.1 FAIL: HTTP=' + $s71Resp.Code + ' body=' + $s71Resp.Body)
+    exit 1
+}
+$s71TtlSql = "SELECT ROUND(EXTRACT(EPOCH FROM (expire_time - now())) / 60)::int FROM agent_duty_lease WHERE agent_id = $agentId AND status = 'ACTIVE' AND deleted = 0 ORDER BY id DESC LIMIT 1;"
+$s71TtlFile = Join-Path $scriptDir 'verify-agenthub-duty-e2e-s7-1-ttl.out'
+$rc = Run-Psql -Sql $s71TtlSql -OutFile $s71TtlFile
+if ($rc -ne 0) { Write-Error ('S7.1 psql rc=' + $rc); exit 1 }
+$s71Line = Get-PsqlFields -Path $s71TtlFile
+if (-not $s71Line) { Write-Error 'S7.1 FAIL: no ACTIVE lease row'; exit 1 }
+$s71Ttl = [int]$s71Line.Split('|')[0]
+Write-Output ('S7.1 ttl-minutes=' + $s71Ttl)
+if ($s71Ttl -lt 3 -or $s71Ttl -gt 8) { Write-Error ('S7.1 FAIL: expected ~5min window, got ' + $s71Ttl); exit 1 }
+Write-Output 'S7.1 OK: score=0 checkIn -> short window (~5min)'
+
+# ---------- S7.2 高分 Agent：score=100 -> checkIn 不带 ttl -> 长窗口 ----------
+$s72ScoreSql = "UPDATE agent SET score = 100 WHERE id = $agentId AND deleted = 0;"
+$s72ScoreFile = Join-Path $scriptDir 'verify-agenthub-duty-e2e-s7-2-score.out'
+$null = Run-Psql -Sql $s72ScoreSql -OutFile $s72ScoreFile
+$s72OutBody = '{"jsonrpc":"2.0","id":72,"method":"tools/call","params":{"name":"checkOut","arguments":{"agentId":' + $agentId + ',"closeReason":"s7_before_recheckin","sessionId":"' + $sid + '"}}}'
+$null = Send-Mcp -Sid $sid -Body $s72OutBody -Label 'S7.2 pre checkOut' -Headers @{ 'Authorization' = 'Bearer ' + $agentApiKey }
+$s72Body = '{"jsonrpc":"2.0","id":73,"method":"tools/call","params":{"name":"checkIn","arguments":{"agentId":' + $agentId + ',"workMode":"AUTO","maxConcurrent":1,"sessionId":"' + $sid + '"}}}'
+$s72Resp = Send-Mcp -Sid $sid -Body $s72Body -Label 'S7.2 checkIn no-ttl high-score' -Headers @{ 'Authorization' = 'Bearer ' + $agentApiKey }
+if ($s72Resp.Code -ne 200) {
+    Write-Error ('S7.2 FAIL: HTTP=' + $s72Resp.Code + ' body=' + $s72Resp.Body)
+    exit 1
+}
+$s72TtlSql = "SELECT ROUND(EXTRACT(EPOCH FROM (expire_time - now())) / 60)::int FROM agent_duty_lease WHERE agent_id = $agentId AND status = 'ACTIVE' AND deleted = 0 ORDER BY id DESC LIMIT 1;"
+$s72TtlFile = Join-Path $scriptDir 'verify-agenthub-duty-e2e-s7-2-ttl.out'
+$rc = Run-Psql -Sql $s72TtlSql -OutFile $s72TtlFile
+if ($rc -ne 0) { Write-Error ('S7.2 psql rc=' + $rc); exit 1 }
+$s72Line = Get-PsqlFields -Path $s72TtlFile
+if (-not $s72Line) { Write-Error 'S7.2 FAIL: no ACTIVE lease row'; exit 1 }
+$s72Ttl = [int]$s72Line.Split('|')[0]
+Write-Output ('S7.2 ttl-minutes=' + $s72Ttl)
+if ($s72Ttl -lt 236 -or $s72Ttl -gt 244) { Write-Error ('S7.2 FAIL: expected ~240min window, got ' + $s72Ttl); exit 1 }
+Write-Output 'S7.2 OK: score=100 checkIn -> long window (~240min)'
+
+# ---------- S7.3 cleanup: checkOut + score 复位 0 ----------
+$s73OutBody = '{"jsonrpc":"2.0","id":74,"method":"tools/call","params":{"name":"checkOut","arguments":{"agentId":' + $agentId + ',"closeReason":"s7_final_cleanup","sessionId":"' + $sid + '"}}}'
+$null = Send-Mcp -Sid $sid -Body $s73OutBody -Label 'S7.3 final checkOut' -Headers @{ 'Authorization' = 'Bearer ' + $agentApiKey }
+$s73ScoreSql = "UPDATE agent SET score = 0 WHERE id = $agentId AND deleted = 0;"
+$s73ScoreFile = Join-Path $scriptDir 'verify-agenthub-duty-e2e-s7-3-score.out'
+$null = Run-Psql -Sql $s73ScoreSql -OutFile $s73ScoreFile
+Write-Output 'S7 OK: dynamic TTL by score (low ~5min / high ~240min) both green'
+Write-Output ""
+
+# ============================================================
 # Cleanup SSE job
 # ============================================================
 Write-Output "=== teardown ==="
@@ -556,6 +625,7 @@ Write-Output "S1 out:     $(Join-Path $scriptDir 'verify-agenthub-duty-e2e-s1.ou
 Write-Output "S2 out:     $(Join-Path $scriptDir 'verify-agenthub-duty-e2e-s2.out')"
 Write-Output "S3 out:     $(Join-Path $scriptDir 'verify-agenthub-duty-e2e-s3.out')"
 Write-Output "S6 out:     $(Join-Path $scriptDir 'verify-agenthub-duty-e2e-s6-*.out')"
+Write-Output "S7 out:     $(Join-Path $scriptDir 'verify-agenthub-duty-e2e-s7-*.out')"
 Write-Output ""
-Write-Output "ALL PASSED: S1 checkIn / S2 checkOut / S3 DutyLeaseExpirationTask / S6 N12-P1 STRICT"
+Write-Output "ALL PASSED: S1 checkIn / S2 checkOut / S3 DutyLeaseExpirationTask / S6 N12-P1 STRICT / S7 E1 dynamic TTL"
 Write-Output "如需反复回归，可先跑 -Cleanup 清空 lease/inbox，再重跑此脚本"

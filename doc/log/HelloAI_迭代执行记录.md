@@ -5007,3 +5007,35 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - 影响：① 批次 D 收口，a0-plan 剩余批次 E~H；② 三级容错 L2 补齐——L1 事件链丢失时 Outbox 补偿投递（15s）即触发核验，不再等 L3 的 60s 阈值窗口；③ 核验互斥锁覆盖 L1/L2/L3 三路，消除 LLM 双审竞态；④ eventId 幂等键使同事件重投不重复消费、同子任务多轮 REVIEW（返工后再次提交）各自独立核验。
 - 遗留：① reviewerQueue 绑定 `agent.reviewer.*` 通配符，未来若新增其他 reviewer 路由消息需评估消费语义；② 锁 TTL 120s 与 LLM 调用超时（sync-timeout-seconds 600s）不匹配——LLM 调用超 120s 时锁提前过期，极端场景仍可能双审（后续可把锁 TTL 提到与超时同量级）；③ 本轮代码（AgentOutboxService 1 处 + MqReviewCommandConsumer 新建 + SubTaskReviewService 互斥锁 + yml + 2 测试文件）与 §6.82 文档未 git 提交，待用户确认后提交；④ 真实环境 MQ 链路（reviewerQueue 消费 + event_consumption_log 记录）待后端重启后实测。
+
+---
+
+### 6.83 批次 E1 动态 TTL 自适应：AgentDutyLeaseProperties + resolveTtlMinutes/adaptiveRenew + S7 实测（2026-08-13）
+
+#### 1. 范围
+
+- a0-plan 批次 E1（N12 A2 第 2 段）：租约 TTL 不再静态固定，按 Agent 表现与在跑任务动态调整；配置化开关。
+- 明确不做：策略落库（plan 未要求，score→TTL 映射为确定性纯函数）；TTL 变更落审计（沿用租约表原有字段）。
+
+#### 2. 实际落地
+
+- **配置**：新建 `AgentDutyLeaseProperties`（`helloai-common/config/`，prefix=`helloai.agent.duty-lease`）——adaptive-ttl-enabled（默认 true）/ min-ttl-minutes=5 / max-ttl-minutes=240 / default-ttl-minutes=30 / full-score=100；application.yml `helloai.agent` 下新增 `duty-lease` 配置段。
+- **服务**：`AgentDutyLeaseService` 新增两个方法：
+  - `resolveTtlMinutes(agentId, explicitTtlMinutes)`：显式 TTL 优先；否则按 agent.score 线性映射 [0,fullScore]→[min,max]；无 score 用 consecutive_failure_count×20 折算表现分；开关关闭 / agent 缺失回退 default。
+  - `adaptiveRenew(agentId)`：无 ACTIVE 租约返回 null；有在跑子任务（`SubTaskMapper.selectInFlightByAgent`，ASSIGNED/IN_PROGRESS/REWORK）→ 最大窗口（任务在跑延长）；空闲 → `resolveTtlMinutes` 动态窗口（空闲缩短）。
+- **MCP 联动**：`McpToolService.checkIn` 未传 ttlMinutes 时改走 `resolveTtlMinutes`（不再固定 30）；A0-8 工具自动续租 `refreshDutyLease` 改调 `adaptiveRenew`，删除 `DEFAULT_RENEW_MINUTES`/`MAX_RENEW_MINUTES` 常量。
+- **脚本**：`verify-agenthub-duty-e2e.ps1` 追加 S7 场景（S7.0 score 复位起点 / S7.1 score=0 → 断言窗口 [3,8]min / S7.2 score=100 → 断言窗口 [236,244]min / S7.3 checkOut + score 复位）；顺带修复 admin agents 列表接口失配（`GET /api/admin/agents` → `GET /api/admin/agents/list`，`pageNum` → `page`）。
+
+#### 3. 验证结果
+
+- 单测：新建 `AgentDutyLeaseAdaptiveTtlTest` **12/12 全绿**（显式 TTL 优先 / score=100→240 / score=0→5 / score=50→122 / 无 score 零失败→240 / 无 score 失败 5 次→5 / 开关关→30 / agent 缺失→30 / 无 ACTIVE→null / 在跑→240 / 空闲高分→240 / 空闲低分→5）；`McpToolServiceTest` A0-8 用例适配 adaptiveRenew 语义后 **22/22 全绿**。
+- 全量回归：`mvn test -DskipTests=false` **341/341 全绿**（70 个测试类，FAIL=0 ERROR=0）。
+- 真实环境：`verify-agenthub-duty-e2e.ps1` **ALL PASSED**（S1 checkIn / S2 checkOut / S3 DutyLeaseExpirationTask / S6 N12-P1 STRICT 回归 / **S7 动态 TTL：score=0 → ~5min 短窗口、score=100 → ~240min 长窗口**）。
+- 踩坑记录：
+  - 脚本 lookup 405：列表接口早已迁至 `/api/admin/agents/list`，脚本仍调根路径 GET → 修正两处 URL 后通过。
+  - RabbitMQ 积压历史 Java 序列化消息（Phase 2F 修正前 `convertAndSend(POJO)` 产物）导致新进程启动即 `SecurityException: Attempt to deserialize unauthorized class java.util.LinkedHashMap` 无限 requeue 循环——该异常发生在消息转换层（listener 方法体之前），代码内「坏消息直接 ACK」兜底接不住；处理：停消费者 → purge 积压队列（reviewer 155 / executor 599 / planner 186 / dlx 1）→ 重启，队列全清零。
+
+#### 4. 影响与遗留
+
+- 影响：① 批次 E1 收口，a0-plan 剩余批次 E2~H；② checkIn 动态窗口 + 续约自适应——低表现 Agent 5min 短窗口快速回收值班态，高表现 Agent 240min 长窗口减少续约开销；③ 续约语义由「固定 30min」升级为「score/在跑任务自适应」，A0-8 工具调用自动续租链路无感知兼容。
+- 遗留：① score→TTL 映射为线性纯函数未落策略表（plan 未要求，可后续演进）；② 本轮代码（AgentDutyLeaseProperties 新建 + AgentDutyLeaseService/McpToolService 修改 + yml + 单测 + 脚本）与 §6.83 文档未 git 提交，待用户确认后提交；③ A2 第 3 段（concurrency 预扣）为 a0-plan E2，待续；④ RabbitMQ 若再次出现旧格式积压消息（如重放历史测试消息），需先停消费者再 purge，无法在线清 in-flight。

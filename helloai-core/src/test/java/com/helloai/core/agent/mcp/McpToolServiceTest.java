@@ -45,8 +45,9 @@ import static org.mockito.Mockito.when;
  * <p>A0-4（§6.63）：pullTasks includeRead/summary/read 透传 + getDepsSummary 依赖产出摘要。</p>
  * <p>A0-6（§6.65）：checkIn 租约信息透传 / checkOut 幂等三态（CLOSED/EXPIRED/NONE）/ heartbeat 剩余 TTL。</p>
  * <p>A0-7（§6.66）：pullTasks deadline 透传为 ISO8601 带时区偏移（Z 或 ±HH:MM），null=无时限。</p>
- * <p>A0-8（§6.67）：除 checkIn/checkOut 外任一工具调用自动续租——有 ACTIVE 租约时按原 TTL
- * 延长 expire_time（renewLease），无租约不自动打卡；续租失败不阻断工具调用。</p>
+ * <p>A0-8（§6.67）+ E1（§6.83）：除 checkIn/checkOut 外任一工具调用自动续租——
+ * 有 ACTIVE 租约时调 adaptiveRenew 按当前状态动态计算续租窗口（在跑任务最大窗口、
+ * 空闲按表现分动态窗口），无租约不自动打卡；续租失败不阻断工具调用。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("McpToolService 值班租约与收件箱工具（A0-1/A0-4/A0-6）")
@@ -377,6 +378,7 @@ class McpToolServiceTest {
     void shouldReturnLeaseInfoOnCheckIn() {
         OffsetDateTime expiresAt = OffsetDateTime.now().plusMinutes(30);
         AgentDutyLease lease = lease(11L, AgentDutyLeaseStatus.ACTIVE, expiresAt, "uuid-abc");
+        when(agentDutyLeaseService.resolveTtlMinutes(eq(AGENT_ID), eq(30))).thenReturn(30);
         when(agentDutyLeaseService.startLease(eq(AGENT_ID), eq("AUTO"), eq(3), eq(30))).thenReturn(lease);
 
         McpToolService.CheckInResult result = mcpToolService.checkIn(AGENT_ID, "AUTO", 3, 30);
@@ -473,23 +475,18 @@ class McpToolServiceTest {
     }
 
     @Test
-    @DisplayName("A0-8：业务工具调用（pullTasks）按原 TTL 自动续租（90 分钟窗口）")
+    @DisplayName("A0-8/E1：业务工具调用（pullTasks）触发自适应续约")
     void shouldAutoRenewLeaseOnBusinessToolCall() {
-        OffsetDateTime start = OffsetDateTime.now().minusMinutes(60);
-        OffsetDateTime expire = OffsetDateTime.now().plusMinutes(30);
-        AgentDutyLease active = lease(33L, AgentDutyLeaseStatus.ACTIVE, expire, "uuid-active");
-        active.setStartTime(start);
-        when(agentDutyLeaseService.getActiveLease(AGENT_ID)).thenReturn(active);
         when(agentInboxService.getUnread(AGENT_ID, 10)).thenReturn(List.of());
 
         mcpToolService.pullTasks(AGENT_ID, "EXECUTOR", 10);
 
-        // 原 TTL = start→expire = 90 分钟，续租窗口沿用（而非固定 30）
-        verify(agentDutyLeaseService).renewLease(eq(AGENT_ID), eq(90));
+        // E1 起续租窗口由 adaptiveRenew 动态计算（在跑/空闲 + 表现分），不再沿用原 TTL
+        verify(agentDutyLeaseService).adaptiveRenew(AGENT_ID);
     }
 
     @Test
-    @DisplayName("A0-8：heartbeat 顺带续租，返回续租后剩余 TTL")
+    @DisplayName("A0-8/E1：heartbeat 顺带自适应续约，返回续租后剩余 TTL")
     void shouldAutoRenewLeaseOnHeartbeatAndReportPostRenewTtl() {
         OffsetDateTime start = OffsetDateTime.now().minusMinutes(30);
         OffsetDateTime expire = OffsetDateTime.now().plusMinutes(30);
@@ -499,7 +496,7 @@ class McpToolServiceTest {
 
         McpToolService.HeartbeatResult result = mcpToolService.heartbeat(AGENT_ID);
 
-        verify(agentDutyLeaseService).renewLease(eq(AGENT_ID), eq(60));
+        verify(agentDutyLeaseService).adaptiveRenew(AGENT_ID);
         assertThat(result.isOk()).isTrue();
         assertThat(result.getOnDuty()).isTrue();
         // 续租窗口 30 分钟 → 剩余 TTL 应接近 1800s
@@ -507,27 +504,25 @@ class McpToolServiceTest {
     }
 
     @Test
-    @DisplayName("A0-8：无 ACTIVE 租约时工具调用不自动打卡（renewLease 不被调用）")
+    @DisplayName("A0-8/E1：无 ACTIVE 租约时续租路径安全 no-op（adaptiveRenew 返回 null，工具调用不受影响）")
     void shouldNotRenewLeaseWithoutActiveLease() {
-        when(agentDutyLeaseService.getActiveLease(AGENT_ID)).thenReturn(null);
+        // 无租约不自动打卡的语义由 adaptiveRenew 内部保证（返回 null 不续约），
+        // McpToolService 只负责顺带调用，不自行判断租约存在性
+        when(agentDutyLeaseService.adaptiveRenew(AGENT_ID)).thenReturn(null);
         when(agentInboxService.getUnread(AGENT_ID, 10)).thenReturn(List.of());
 
-        mcpToolService.pullTasks(AGENT_ID, "EXECUTOR", 10);
+        McpToolService.PullTasksResult result = mcpToolService.pullTasks(AGENT_ID, "EXECUTOR", 10);
 
-        verify(agentDutyLeaseService, never()).renewLease(anyLong(), anyInt());
+        assertThat(result.getMessages()).isEmpty();
+        verify(agentDutyLeaseService).adaptiveRenew(AGENT_ID);
     }
 
     @Test
-    @DisplayName("A0-8：续租异常不阻断工具调用（pullTasks 仍正常返回）")
+    @DisplayName("A0-8/E1：续租异常不阻断工具调用（pullTasks 仍正常返回）")
     void shouldKeepToolResultWhenRenewFails() {
-        OffsetDateTime start = OffsetDateTime.now().minusMinutes(60);
-        OffsetDateTime expire = OffsetDateTime.now().plusMinutes(30);
-        AgentDutyLease active = lease(33L, AgentDutyLeaseStatus.ACTIVE, expire, "uuid-active");
-        active.setStartTime(start);
-        when(agentDutyLeaseService.getActiveLease(AGENT_ID)).thenReturn(active);
-        when(agentDutyLeaseService.renewLease(anyLong(), anyInt())).thenThrow(new RuntimeException("renew failed"));
         when(agentInboxService.getUnread(AGENT_ID, 10)).thenReturn(List.of(subTaskInbox(SUB_TASK_ID)));
         when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask(AGENT_ID));
+        when(agentDutyLeaseService.adaptiveRenew(AGENT_ID)).thenThrow(new RuntimeException("renew failed"));
 
         McpToolService.PullTasksResult result = mcpToolService.pullTasks(AGENT_ID, "EXECUTOR", 10);
 

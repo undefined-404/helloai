@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
+import com.helloai.common.config.AgentDutyLeaseProperties;
 import com.helloai.common.constant.AgentDutyLeaseStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
@@ -12,6 +13,8 @@ import com.helloai.core.agent.entity.AgentDutyLeaseLatestRow;
 import com.helloai.core.shared.event.DutyLeaseClosedEvent;
 import com.helloai.core.agent.mapper.AgentDutyLeaseMapper;
 import com.helloai.core.agent.mapper.AgentMapper;
+import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.mapper.SubTaskMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -49,6 +52,8 @@ public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, Age
 
     private final ApplicationEventPublisher eventPublisher;
     private final AgentMapper agentMapper;
+    private final SubTaskMapper subTaskMapper;
+    private final AgentDutyLeaseProperties dutyLeaseProperties;
 
     /**
      * 按 ID 批量查询 Agent 名称（用于值班租约报表面板填充 agentName）。
@@ -212,6 +217,83 @@ public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, Age
         updateById(active);
         log.info("Agent {} 值班租约已续约: expiresAt={}", agentId, active.getExpireTime());
         return active;
+    }
+
+    /**
+     * 解析租约 TTL 窗口（E1 动态 TTL 自适应，N12 A2 第 2 段）。
+     *
+     * <p>显式入参（checkIn 传了 ttlMinutes）永远优先；否则按 Agent 表现动态推断：
+     * <ul>
+     *   <li>有 {@code agent.score} → 线性映射 [0, fullScore] → [min, max]，
+     *       低分 Agent 窗口短（快速回收），高分 Agent 窗口长（减少续约开销）</li>
+     *   <li>无 score → 用 {@code consecutive_failure_count} 折算表现分（每次失败 -20，下限 0），
+     *       连续失败越多窗口越短</li>
+     *   <li>自适应开关关闭 / agentId 为空 / Agent 记录不存在 → defaultTtlMinutes 兜底</li>
+     * </ul></p>
+     *
+     * @param agentId             Agent ID
+     * @param explicitTtlMinutes  checkIn 显式传入的 TTL（分钟）；null 或 &lt;=0 表示走动态推断
+     * @return 解析后的租约窗口（分钟），恒 &gt; 0
+     */
+    public int resolveTtlMinutes(Long agentId, Integer explicitTtlMinutes) {
+        if (explicitTtlMinutes != null && explicitTtlMinutes > 0) {
+            return explicitTtlMinutes;
+        }
+        if (agentId == null || !dutyLeaseProperties.isAdaptiveTtlEnabled()) {
+            return dutyLeaseProperties.getDefaultTtlMinutes();
+        }
+        Agent agent = agentMapper.selectById(agentId);
+        if (agent == null) {
+            return dutyLeaseProperties.getDefaultTtlMinutes();
+        }
+        int fullScore = Math.max(dutyLeaseProperties.getFullScore(), 1);
+        int performanceScore;
+        if (agent.getScore() != null) {
+            performanceScore = agent.getScore();
+        } else {
+            int failures = agent.getConsecutiveFailureCount() != null ? agent.getConsecutiveFailureCount() : 0;
+            performanceScore = fullScore - failures * 20;
+        }
+        performanceScore = Math.max(0, Math.min(fullScore, performanceScore));
+        int min = Math.max(dutyLeaseProperties.getMinTtlMinutes(), 1);
+        int max = Math.max(dutyLeaseProperties.getMaxTtlMinutes(), min);
+        return min + (max - min) * performanceScore / fullScore;
+    }
+
+    /**
+     * 自适应续约（E1 动态 TTL 自适应）：按 Agent 当前状态动态计算续约窗口。
+     *
+     * <p>有在跑子任务（ASSIGNED / IN_PROGRESS / REWORK）→ 用最大窗口，任务执行期稳定保活；
+     * 空闲 → 按表现分动态窗口（低分短、高分长）。无 ACTIVE 租约时返回 null，
+     * 不自动打卡（保持 checkIn 的打卡语义）。供工具调用自动续租路径
+     * （{@code McpToolService.refreshDutyLease}）使用。</p>
+     *
+     * @param agentId Agent ID
+     * @return 续约后的租约；当前无 ACTIVE 租约返回 null
+     */
+    public AgentDutyLease adaptiveRenew(Long agentId) {
+        AgentDutyLease active = getActiveLease(agentId);
+        if (active == null) {
+            return null;
+        }
+        int ttlMinutes = hasInFlightSubTask(agentId)
+                ? Math.max(dutyLeaseProperties.getMaxTtlMinutes(), dutyLeaseProperties.getMinTtlMinutes())
+                : resolveTtlMinutes(agentId, null);
+        return renewLease(agentId, ttlMinutes);
+    }
+
+    /**
+     * 判断 Agent 是否存在在跑子任务（ASSIGNED / IN_PROGRESS / REWORK）。
+     *
+     * <p>复用 {@code SubTaskMapper.selectInFlightByAgent} 的在跑语义；
+     * REVIEW（审核中）与 DONE 等状态视为已交付，不再计入执行期保活。</p>
+     */
+    private boolean hasInFlightSubTask(Long agentId) {
+        if (agentId == null) {
+            return false;
+        }
+        List<SubTask> inFlight = subTaskMapper.selectInFlightByAgent(agentId, 1);
+        return inFlight != null && !inFlight.isEmpty();
     }
 
     /**
