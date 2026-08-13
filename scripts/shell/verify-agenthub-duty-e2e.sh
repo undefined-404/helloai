@@ -72,6 +72,8 @@ log() {
 
 fail() {
   log "ERROR: $*"
+  # 命令替换内 fail 时 stdout 被捕获，必须同时写 stderr 才能在外层日志可见
+  print -r -- "ERROR: $*" >&2
   exit 1
 }
 
@@ -507,8 +509,8 @@ QUOTA_TASK_TITLE='e2e-quota-verify-task'
 log "=== [S8] E2 concurrency quota (maxConcurrent=1 dispatch-occupies) ==="
 
 # ---------- S8.0 残留清理（幂等起点） ----------
-s80_find="$(psql_field 1 "SELECT COALESCE((SELECT id::text FROM task WHERE title = '$QUOTA_TASK_TITLE' AND deleted = 0 LIMIT 1), '');")"
-if [[ -n "$s80_find" ]]; then
+s80_find="$(psql_field 1 "SELECT COALESCE((SELECT id::text FROM task WHERE title = '$QUOTA_TASK_TITLE' AND deleted = 0 LIMIT 1), 'NONE');")"
+if [[ "$s80_find" != "NONE" ]]; then
   log "S8.0 cleanup residual task id=$s80_find"
   s80_del_body="$(jq -cn --arg t "$QUOTA_TASK_TITLE" '{confirmTitle:$t}')"
   http_request DELETE "$BASE_URL/api/tasks/deleteById/$s80_find" "$s80_del_body" "X-Admin-Token: $ADMIN_TOKEN"

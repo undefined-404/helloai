@@ -5139,9 +5139,10 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - shell：`zsh -n` 语法通过；`chmod +x` 已设。
 - PS：无 pwsh 环境（macOS），做 UTF-8 with BOM + 编码强制头 + 去字符串后括号配对粗检（{} / () / [] 全配对），完整语法需 Windows/pwsh 实测时确认。
-- 真实环境实测（docker 中间件 + IDEA 后端 + `auto-assign-on-create=true`）留待用户执行。
+- **真实环境实测（2026-08-13）**：docker 中间件 + fat jar 启动后端（`--helloai.dispatch.auto-assign-on-create=true` 启动参数覆盖，未改配置文件）→ `./scripts/shell/verify-agenthub-duty-e2e.sh` **ALL PASSED**（S1 checkIn / S2 checkOut / S3 DutyLeaseExpirationTask / S6 N12-P1 STRICT / S7 E1 dynamic TTL / S8 E2 concurrency quota，17 项断言 0 错误）。S8 关键验证点全绿：t1 白名单自动派发、t2 满额保持 PENDING（选人链软跳过）、submitResult 释放后 t3 重派、并发 t4/t5 双请求 HTTP 500 但 DB 在飞数恒 ≤1（FOR UPDATE 原子防线）。
+- **实测发现的 shell 版 bug（已修）**：S8.0 残留清理的 COALESCE 空串技巧失效——无残留时 psql 输出空行，被 `run_psql_one_row` 的 `awk 'NF && ...'` 过滤成"无结果"导致 `fail "psql returned empty result"`。修复：COALESCE 改哨兵值 `'NONE'`（PS 版用 `if ($s80Line)` 判空无此问题，未改）；另 `fail()` 增加 `print ... >&2`——命令替换内 fail 时 stdout 被捕获，只有写 stderr 外层日志才可见（本次排错盲区的根因）。
 
 #### 4. 影响与遗留
 
-- 影响：① b6 全量回归（S1-S8）在 Windows 与 macOS/Linux 均有脚本可跑；② E2 并发额度场景具备可重复、环境无关的回归验证手段。
-- 遗留：① 真实环境实测待用户执行（PS 版需 Windows/pwsh，shell 版 macOS/Linux 直接 `./verify-agenthub-duty-e2e.sh`）；② 本轮代码与本文档未 git 提交，待用户确认后提交。
+- 影响：① b6 全量回归（S1-S8）在 Windows 与 macOS/Linux 均有脚本可跑；② E2 并发额度场景具备可重复、环境无关的回归验证手段；③ 实测确认 E2 双防线（选人链软跳过 + FOR UPDATE 原子防线）在真实环境行为与单测一致。
+- 遗留：① PS 版真实环境实测待有 Windows/pwsh 环境时执行；② 本轮代码与本文档未 git 提交，待用户确认后提交。
