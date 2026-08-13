@@ -4972,3 +4972,38 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - 影响：① 批次 C 全部收口（C1 §6.80 + C2 本轮），a0-plan 剩余批次为 D~H；② N10 由「部分落地」推进为「已收口」——迁移无需做（无明文存量，双活已实现且单测锁定）、权限颗粒度审计闭环（admin-only + owner 隔离 + MCP 零暴露）、存量治理交付清理 SQL；③ vault 读取优先级从此有 17 例回归护栏（Agent 级无兜底 / 平台级 vault > yml）。
 - 遗留：① **清理 SQL 待用户执行**（61 条孤儿凭证逻辑删除，SQL 见差距表 N10 增量条目/汇报）；② 现存 agent 的 2 条 DISABLED 轮换残留保留（审计链语义）；③ 本轮新增 2 个测试文件与 §6.81 文档未 git 提交，与 C1（§6.79/§6.80）一并待用户确认后提交；④ 后端实例仍在运行（6565），用户可直接使用。
+
+### 6.82 批次 D REVIEWER 自动审查 L2 MQ consumer 补齐：MqReviewCommandConsumer + 核验互斥锁防双审（2026-08-13）
+
+#### 1. 背景与结论
+
+- **背景**：a0-plan 批次 D「REVIEWER 自动审查 L2 MQ consumer（M9 遗留）」。审查链三级容错（§6.40 架构）——L1 `SubTaskSubmittedForReviewEvent` AFTER_COMMIT + @Async 主路径、L2 MQ `agent.reviewer.assigned` → `reviewerQueue`（§6.49 遗留：无 consumer）、L3 `@Scheduled` DB 孤儿扫描兜底；L2 缺失使 MQ 备份路径悬空，L1 事件链丢失时只能等 L3 的 60s 阈值窗口。
+- **勘察结论**：
+  - 生产侧已存在：`AgentOutboxService.createEvent`（REVIEW → routing_key=`agent.reviewer.assigned`）→ `AgentEventCompensationTask`（helloai-job，15s 轮询 + Redis 锁）→ `DomainEventPublisher` → `agentExchange`；`reviewerQueue` 已绑定 `agent.reviewer.*` 通配符 + DLX 死信（`RabbitMQConfig`），消费侧零代码（全库无 MqReviewCommandConsumer）。
+  - **生产侧缺口**：payload 无 eventId（仅 subTaskId/taskId/status/agentId），无法支撑「同事件重投不重复消费、同子任务多轮 REVIEW 各自独立」的消息级幂等。
+  - **双审风险**：L1/L2/L3 三路并发触发同一子任务核验时，`reviewSubTask` 的「getById 读状态」防重在 LLM 调用窗口（数秒）内不互斥，并发下可能双审（双 LLM 调用 + 判定竞态）。
+- **结论**：补 L2 consumer + 生产侧 eventId 幂等键 + 核验互斥锁，三级容错闭环。
+
+#### 2. 实际落地
+
+- **生产侧**：`AgentOutboxService.createEvent` payload 补 `eventId`（1 处，向后兼容——老消息无 eventId 时消费侧回退幂等键）。
+- **消费侧**：新建 `helloai-core/.../review/mqconsumer/MqReviewCommandConsumer`（145 行，`@ConditionalOnProperty("helloai.mq.review.consumer-enabled")`，yml 默认 true）：
+  - `@RabbitListener(queues=REVIEWER_QUEUE, ackMode="MANUAL")` 解析 payload Map → `tryConsume(messageId, "MqReviewCommandConsumer", () -> subTaskReviewService.reviewSubTask(subTaskId, agentId))`；
+  - 幂等键：payload.eventId 优先（新消息），回退 `sub_task.review:{subTaskId}`（老消息）；
+  - MANUAL ACK 语义同 `MqExecutionCommandConsumer`：解析失败/缺 subTaskId → ACK；消费失败 → NACK(requeue=false) 走 DLX；
+  - agentId=0（null 占位）归一为 null；Jackson 反序列化小整数统一 toLong。
+- **防双审**：`SubTaskReviewService.reviewSubTask` 拆壳 + `doReview` 主体，入口 Redis `setIfAbsent("review:lock:"+subTaskId, ttl=120s)` 互斥，finally 释放——L1/L2/L3 三路并发仅一路进入 LLM 核验窗口（TTL 兜底崩溃残留）。
+- **配置**：application.yml `helloai.mq.review.consumer-enabled: true`（默认开启，对齐 execution-command 范式）。
+
+#### 3. 验证结果
+
+- 定向：`mvn test -pl helloai-core -am -DskipTests=false -Dtest=MqReviewCommandConsumerTest,SubTaskReviewServiceTest` **30/30 全绿**（MqReviewCommandConsumerTest 7 + SubTaskReviewServiceTest 23）。
+  - `MqReviewCommandConsumerTest` 7 例：正常消息（eventId 幂等键 + reviewSubTask(11,22) + ACK）/ 老消息回退幂等键 / agentId=0 归一 null / 坏 JSON ACK / 缺 subTaskId ACK / 幂等命中直接 ACK / 核验异常 NACK→DLX。
+  - `SubTaskReviewServiceTest` 新增 3 例：锁占用跳过（不调 LLM/getById/complete + 不删他人锁）/ 正常核验 finally 释放锁 / LLM 异常锁仍释放。
+- 全量回归：`mvn test -pl helloai-core -am -DskipTests=false` **609/609 全绿**（C2 599 + D 新增 10）。
+- 踩坑记录：锁占用用例首版 stub 了 `subTaskService.getById` 触发 UnnecessaryStubbing（锁未持有成功根本不读子任务）→ 删 stub + 补 `verify(subTaskService, never()).getById(anyLong())` 正向断言。
+
+#### 4. 影响与遗留
+
+- 影响：① 批次 D 收口，a0-plan 剩余批次 E~H；② 三级容错 L2 补齐——L1 事件链丢失时 Outbox 补偿投递（15s）即触发核验，不再等 L3 的 60s 阈值窗口；③ 核验互斥锁覆盖 L1/L2/L3 三路，消除 LLM 双审竞态；④ eventId 幂等键使同事件重投不重复消费、同子任务多轮 REVIEW（返工后再次提交）各自独立核验。
+- 遗留：① reviewerQueue 绑定 `agent.reviewer.*` 通配符，未来若新增其他 reviewer 路由消息需评估消费语义；② 锁 TTL 120s 与 LLM 调用超时（sync-timeout-seconds 600s）不匹配——LLM 调用超 120s 时锁提前过期，极端场景仍可能双审（后续可把锁 TTL 提到与超时同量级）；③ 本轮代码（AgentOutboxService 1 处 + MqReviewCommandConsumer 新建 + SubTaskReviewService 互斥锁 + yml + 2 测试文件）与 §6.82 文档未 git 提交，待用户确认后提交；④ 真实环境 MQ 链路（reviewerQueue 消费 + event_consumption_log 记录）待后端重启后实测。

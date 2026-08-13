@@ -29,6 +29,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -46,6 +48,7 @@ import org.mockito.ArgumentCaptor;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 /**
  * SubTaskReviewService 单元测试（V27 核验门控）：
@@ -92,6 +95,12 @@ class SubTaskReviewServiceTest {
     @Mock
     private AttachmentService attachmentService;
 
+    @Mock
+    private StringRedisTemplate redisTemplate;
+
+    @Mock
+    private ValueOperations<String, String> valueOperations;
+
     private SubTaskReviewService reviewService;
 
     @BeforeEach
@@ -100,9 +109,13 @@ class SubTaskReviewServiceTest {
         reviewService = new SubTaskReviewService(
                 subTaskService, agentSelector, agentService, platformAgentExecutionService,
                 taskTimelineService, executionCommandService, dispatchProperties, new ObjectMapper(),
-                conversationService, recordReviewService, taskService, attachmentService);
+                conversationService, recordReviewService, taskService, attachmentService, redisTemplate);
         lenient().when(dispatchProperties.getAutoReviewMaxRework()).thenReturn(3);
         lenient().when(dispatchProperties.getReviewEvidenceCheckWaitMs()).thenReturn(0);
+        // §6.82 核验互斥锁：默认可获取（所有既有用例走完整核验链路）；锁用例单独 stub 为 false
+        lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        lenient().when(valueOperations.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class)))
+                .thenReturn(true);
     }
 
     private SubTask reviewSubTask() {
@@ -604,5 +617,54 @@ class SubTaskReviewServiceTest {
         assertThat(prompt).contains("api-docs.md");
         assertThat(prompt).contains("平台可直读");
         assertThat(prompt).contains("声称的交付物必须与**物化附件清单**对应");
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  §6.82 批次 D：核验互斥锁（防 L1/L2/L3 三路并发双审）
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("§6.82: 已有核验进行中（锁被占用）→ 跳过，不调 LLM、不改状态、不释放他人锁")
+    void shouldSkipWhenReviewLockHeld() {
+        when(valueOperations.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class)))
+                .thenReturn(false);
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        verify(subTaskService, never()).getById(anyLong());
+        verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
+        verify(subTaskService, never()).complete(anyLong());
+        verify(subTaskService, never()).rework(anyLong(), any());
+        // 锁未持有成功，不得删除他人持有的锁
+        verify(redisTemplate, never()).delete(anyString());
+    }
+
+    @Test
+    @DisplayName("§6.82: 核验正常完成 → finally 释放互斥锁")
+    void shouldReleaseLockAfterReview() {
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success("{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        verify(subTaskService).complete(SUB_TASK_ID);
+        verify(redisTemplate).delete("review:lock:" + SUB_TASK_ID);
+    }
+
+    @Test
+    @DisplayName("§6.82: LLM 调用异常 → 锁仍释放（finally 兜底）")
+    void shouldReleaseLockEvenOnException() {
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenThrow(new RuntimeException("llm down"));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        verify(redisTemplate).delete("review:lock:" + SUB_TASK_ID);
+        verify(subTaskService, never()).complete(anyLong());
+        verify(subTaskService, never()).rework(anyLong(), any());
     }
 }

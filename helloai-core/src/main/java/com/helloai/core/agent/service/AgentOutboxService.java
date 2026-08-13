@@ -30,6 +30,9 @@ public class AgentOutboxService extends ServiceImpl<AgentOutboxEventMapper, Agen
         event.setEventType("sub_task." + newStatus.name().toLowerCase());
         event.setRoutingKey(resolveRoutingKey(subTask, newStatus));
         Map<String, Object> payload = new HashMap<>(Map.of(
+                // §6.82 批次 D：eventId 随 payload 下发，MQ 消费者（MqReviewCommandConsumer）
+                // 以 eventId 为消息幂等键（同一事件重投不重复消费；同子任务多轮 REVIEW 各自独立）
+                "eventId", event.getEventId(),
                 "subTaskId", subTask.getId(),
                 "taskId", subTask.getTaskId(),
                 "status", newStatus.name(),

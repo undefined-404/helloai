@@ -162,6 +162,11 @@ helloai:
       exchange: helloai.execution-command.exchange
       queue: helloai.execution-command.queue
       routing-key: execution.command.created
+    # 批次 D（§6.82）：REVIEWER 自动审查 L2 MQ consumer 开关（三级容错 L2 补齐）
+    #   consumer-enabled=true 时 MqReviewCommandConsumer 才会注册（默认开启，L1 事件链丢失时由
+    #   Outbox 补偿投递补位；与 L1 AFTER_COMMIT / L3 孤儿扫描由核验互斥锁防双审）
+    review:
+      consumer-enabled: true
   # N9: 多Provider统一配置入口，替代各factory中散落的@Value
   # 平台级 API Key 可在"系统设置"页动态配置/轮换（写入 credential_vault，实时生效无需重启），
   # 此处 api-key 为空时 provider 未生效（目录不可选、注册平台内 LLM Agent 被拒）；

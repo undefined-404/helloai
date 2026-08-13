@@ -33,6 +33,7 @@ import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -46,6 +47,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 子任务 LLM 自动核验服务（V27 内循环核验门控，与 PlannerAnalysisService 平级）。
@@ -76,6 +78,11 @@ public class SubTaskReviewService {
     private static final String PROMPT_TEMPLATE_PATH = "prompts/subtask-review.md";
     private static final int OUTPUT_SUMMARY_LIMIT = 4000;
 
+    /** §6.82 批次 D：核验互斥锁（防 L1/L2/L3 三路并发双审），key = review:lock:{subTaskId} */
+    private static final String REVIEW_LOCK_PREFIX = "review:lock:";
+    /** 锁 TTL 兜底：覆盖 LLM 调用超时窗口，崩溃残留自动过期 */
+    private static final long REVIEW_LOCK_TTL_SECONDS = 120;
+
     private final SubTaskService subTaskService;
     private final AgentSelector agentSelector;
     private final AgentService agentService;
@@ -88,6 +95,7 @@ public class SubTaskReviewService {
     private final ReviewService reviewService;
     private final TaskService taskService;
     private final AttachmentService attachmentService;
+    private final StringRedisTemplate redis;
 
     /** AFTER_COMMIT 异步监听：结果回报事务提交后触发自动核验。 */
     @Async
@@ -143,8 +151,31 @@ public class SubTaskReviewService {
      *
      * <p>不加类级事务：LLM 调用耗时较长；complete/rework 各自内部事务原子提交，
      * 判定失败/不可解析时不改状态（子任务停留 REVIEW）。</p>
+     *
+     * <p>§6.82 批次 D 防双审互斥锁：L1 AFTER_COMMIT 事件 / L2 MQ consumer / L3 孤儿扫描
+     * 三路可能并发触发同一子任务核验，Redis setIfAbsent 保证 LLM 调用窗口内仅一路进入
+     * （其他路直接跳过），TTL 兜底崩溃残留，finally 释放。</p>
      */
     public void reviewSubTask(Long subTaskId, Long executorAgentId) {
+        if (subTaskId == null) {
+            log.debug("自动核验跳过：subTaskId 为空");
+            return;
+        }
+        Boolean locked = redis.opsForValue().setIfAbsent(
+                REVIEW_LOCK_PREFIX + subTaskId, "1", REVIEW_LOCK_TTL_SECONDS, TimeUnit.SECONDS);
+        if (!Boolean.TRUE.equals(locked)) {
+            log.debug("自动核验跳过：已有核验进行中（防双审）, subTaskId={}", subTaskId);
+            return;
+        }
+        try {
+            doReview(subTaskId, executorAgentId);
+        } finally {
+            redis.delete(REVIEW_LOCK_PREFIX + subTaskId);
+        }
+    }
+
+    /** 核验主体（互斥锁内执行，入口见 {@link #reviewSubTask(Long, Long)}）。 */
+    private void doReview(Long subTaskId, Long executorAgentId) {
         SubTask subTask = subTaskService.getById(subTaskId);
         if (subTask == null) {
             log.warn("自动核验跳过：子任务不存在, subTaskId={}", subTaskId);
