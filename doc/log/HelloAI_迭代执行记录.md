@@ -4894,3 +4894,81 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - 影响：全站 `@Valid` 校验失败统一返回 HTTP 400 + 具体字段消息（此前 500 + 兜底文案），错误语义与前端提示同时改善；日志从 error 级兜底变为 debug 级字段消息。
 - 遗留：无新增。§6.76/6.77 遗留③关闭；IllegalArgumentException handler 返回体 code=500 但 HTTP 400（body.code 与状态码不一致）为既有行为，未扩散。
+### 6.79 批次 B 收口：N11 失败计数语义确认 + isExecutionDense 误判率观察（2026-08-13）
+
+#### 1. 背景与结论
+
+- **背景**：a0-plan 批次 B 两项观察项——B1 疑点「trae-executor consecutive_failure_count=2 疑似把系统跳过审核计为外部 agent 失败」（§6.56/6.57 遗留）；B2 §6.52 引入的关键词启发式 `isExecutionDense` 误判率观察（误判会影响能力预检与回退方向）。
+- **B1 勘察结论（代码层）**：`recordFailure/recordSuccess` 全仓库唯一调用点是 `ExecutionResultHandler.applyFailureTracking`（按 `report.isSuccess()` 分支，success=false 时 block + recordFailure）。skip 类事件——`sub_task_auto_review_skip_max_rework`（SubTaskReviewService 审核侧）、`sub_task_fallback_skip_policy` / `sub_task_fallback_skip_need_human`（SubTaskDispatchService N11 回退侧）、`sub_task_dispatch_skip_no_capability`（ResilientDispatcher 分配预检侧）——分别产生于三个不同模块，均不经过 ExecutionResultHandler 入口，**系统决策类事件不计入失败计数**，plan 疑点从代码路径上证伪。
+- **B1 数据实证（MCP 查库只读，2026-08-13）**：① `sub_task_auto_review_skip_max_rework` 全库 2 条（2026-08-02/08-11 同一子任务），agent_id 均为 null（系统 REVIEWER 侧，无 agent 归属）；② trae-executor（2086711950328950786）名下 timeline 零 `sub_task_execute_failed` / `sub_task_execute_result_discarded` 事件，全库 `execute_failed` 最新仅 2026-07-16 历史测试数据（8 月无任何执行失败事件）；③ 8-10~8-11 仅 1 个实战任务（trade-cloud E2E，2087076754479771649），事件流全程成功（plan_generated→plan_confirmed→5×dispatch_prepare→5×execute_submit→5×auto_review_passed→5×artifact_materialized→task_auto_completed→final_report），trae-executor 5 次成功提交触发 recordSuccess 归零，当前 `consecutive_failure_count=0 / last_failure_time=null`；④ plan 疑点「计数=2」的历史来源已不可复现（现库无对应失败事件），与 skip 审核无因果关系。
+- **B2 勘察结论**：`isExecutionDense` 共 4 个调用点（ResilientDispatcher 分配预检 / SubTaskDispatchService N11 回退预检 / SubTaskReviewService 提交者预检 + checkEvidence 竞态补偿等待窗口），判定文本 = content/acceptance/deliverable 拼接，EXECUTION_DENSE_PATTERN 共 15 个关键词（`.ps1/.sh/.bat/.py/.jar` 词边界 + docker/kubectl/npm run/mvn /gradle + 五个中文词）。
+- **B2 数据实证**：全库 65 个子任务仅 2 条命中（3.1%）：①「环境冷启与基线确认」（2087076796930322434）命中 docker——**判定正确**（真实需本机 docker-compose 操作的任务；8-11 的 2 条 `sub_task_dispatch_skip_no_capability` 全部针对它，inner-loop-executor/probe-moonshot（API_KEY_LLM 无本机能力）被正确跳过，最终由 trae-executor（CLI_CLIENT）接手完成，链路符合设计意图）；②「编写README文档」（2083857076507279366）命中「启动服务」——**理论误判面**（验收文案是描述性文本，本质文档写作任务），但该任务 8-02 创建、在 §6.52 预检上线前已完成分配（assigned inner-loop-executor 并 DONE），未产生实际影响。
+- **落地决策**：两项均无需代码修复。B1 疑点证伪（skip 类不计入失败，计数语义与代码路径一致）；B2 真实样本判定正确、误判样本未产生实际影响，不加白/黑名单、不改配置化，保留观察。
+
+#### 2. 实现要点
+
+- 纯勘察 + MCP 查库（只读），零代码改动；全程 9 条只读 SQL（agent / task_timeline / task / information_schema）。
+- 结论回填：本迭代记录 + a0-plan.md 勾除 B1/B2。
+
+#### 3. 验证结果
+
+- 代码层：`recordFailure/recordSuccess` grep 全仓库唯一调用点确认（ExternalAgentFailureTracker L57/L80 仅 ExecutionResultHandler L313/L315 调用）；`isExecutionDense` 4 个调用点与事件名确认。
+- 数据层：skip 事件 agent_id=null 实证、trae-executor 零失败事件、计数归零与成功事件一一对应、dense 命中样本全部人工核验——证据链完整闭环。
+
+#### 4. 影响与遗留
+
+- 影响：① 批次 B 收口，a0-plan 剩余批次变为 C~H；② N11 失败计数语义明确——仅「执行结果 success=false」计入失败，平台自身决策（跳过审核/跳过回退/能力预检跳过）不计入，外部 agent 不会被系统决策误伤触发阈值回退。
+- 遗留：① B2 理论误判面（描述性文本含「启动服务/部署/docker」等词）仍在，样本量增大后如出现实际误伤，可用配置化白/黑名单处置；② trae-executor 历史「计数=2」来源已不可复现（现库无对应失败事件），若再观察到计数与事件不匹配，需排查 recordFailure 调用链外来源（如直改 DB/旧版本残留）；③ 批次 B 结论未入差距表（观察类项，差距表无对应行）。
+
+### 6.80 C1 Provider 生态补全收口：协议工厂/Registry/目录服务单测 41 例 + 路由大小写归一修复（2026-08-13）
+
+#### 1. 背景与结论
+
+- **背景**：a0-plan 批次 C1「moonshot/minimax/dashscope Provider Factory」——plan 原假设「yml 已预置三 provider 配置段但缺 Factory 实现，目录接口标记不可用」。预检发现该假设已被 §6.52 方案 B（V46）取代：OpenAiCompatibleProtocolFactory / AnthropicCompatibleProtocolFactory 通用协议工厂已落地（Moonshot/DashScope/Minimax 三个专用 Factory 已删除），llm_provider 表 4 provider 配置齐全，目录接口早已可用——**C1 子任务 1/2 为过时项**，真实缺口是 Provider 域零单测覆盖（协议工厂 / Registry 路由 / CatalogService 均无测试）。
+- **顺带修复判定不一致缺陷**：`LlmProviderChatClientFactoryRegistry` 路由侧对 protocol_type 精确匹配（`Collectors.toMap(ProtocolFactory::protocolType)`），而 `LlmProviderCatalogService.isFactorySupported` 已 toUpperCase——DB 若写入小写协议类型会出现「目录显示可用、路由实际失败」的判定不一致。修复：Registry 新增 `normalizeProtocolType`（null 安全 + Locale.ROOT 归一），路由与目录判定口径统一为大小写不敏感。
+
+#### 2. 实现要点
+
+- 代码修复 1 处：`LlmProviderChatClientFactoryRegistry` 路由改用 `protocolFactoryMap().get(normalizeProtocolType(provider.getProtocolType()))`。
+- 新增 4 个测试文件共 41 用例（JUnit5 + @Nested + @DisplayName + AssertJ + Mockito，项目范式）：
+  - `OpenAiCompatibleProtocolFactoryTest` 9 例：apiKey null/空白拒绝（BizException）；ChatClient 创建成功（OpenAiChatModel 类型断言 + model 三级兜底：请求值 > llm_provider.defaultModel > sys_config，verify 兜底层不触发）；平台 baseUrl 缺失回退 llm_provider.baseUrl 不抛错；yml 配置段缺失走默认超时；同四元组缓存复用（ChatModel 同实例，ChatClient 包装每次新建）+ apiKey 隔离（size=2）。
+  - `AnthropicCompatibleProtocolFactoryTest` 9 例：同构（minimax，AnthropicChatModel 断言）。
+  - `LlmProviderChatClientFactoryRegistryTest` 6 例：provider 未找到抛 BizException；未知协议（GEMINI_NATIVE）抛 BizException；deepseek 专用 Factory 优先（协议工厂 verify never）；OPENAI_COMPATIBLE / ANTHROPIC_COMPATIBLE 分发到对应工厂；小写协议类型仍可路由（归一修复的直接验证）。
+  - `LlmProviderCatalogServiceTest` 17 例：listProviders factorySupported（deepseek code 特判 / 已知协议 / 未知协议 / protocolType null 拦截 / providerCode 小写归一）；available = enabled && apiKeyConfigured && factorySupported 组合（enabled=0、key 未配置两分支）；isProviderAvailable（null/blank 拒绝、大小写不敏感匹配、不可用返回 false）；bindPlatformApiKeyIfAbsent 四分支（不可用抛错 / 已有 ACTIVE 凭证幂等 false / 平台 Key 缺失抛错 / 正常绑定 verify bindAgentApiKey 五参含 remark）；provisionPlatformCredential（modelType 空回退 execution.provider / modelType 前缀解析 / 不可用静默跳过不抛错）。
+- 顺带修复 §6.75 用户 MinIO 改动引入的既有测试回归：`CompositeArtifactStorageTest.shouldDispatchLoadByPrefix` 未 stub `supports()`（实现改为按 supports 分派后 mock 默认 false 导致「无存储实例支持该地址」）→ 补 2 行 supports stub。
+
+#### 3. 验证结果
+
+- `mvn test -pl helloai-core -am -DskipTests=false`：**592/592 全绿**（C1 新增 41 + 既有 551 回归，含 §6.75~6.78 存储/登录相关测试）；注意根 pom 默认 `skipTests=true`，跑测试需显式 `-DskipTests=false`；本机 helloai-common 需 `-am` 从源码构建（本地仓库 jar 未 install，直接 `-pl helloai-core` 会引用旧 common 报 12 个编译错误）。
+- 真实环境（java -jar 启动 6565，profile=local）：登录 admin 后 `GET /api/admin/agents/listLlmProviders` 实测 4 provider 全部返回——deepseek/moonshot/dashscope（OPENAI_COMPATIBLE）+ minimax（ANTHROPIC_COMPATIBLE），**factorySupported=true、available=true 各 4/4**；apiKeyConfigured 已全部 true（平台级 Key 已配置，优于勘察时「全部未配置」预期，可用性全绿）。
+
+#### 4. 影响与遗留
+
+- 影响：① 批次 C 的 C1 收口，a0-plan C1 标记已收口（子任务 1/2 标注过时项）；② Registry 路由与目录可用性判定口径统一（协议类型大小写不敏感，消除 DB 小写写入的隐性不一致）；③ Provider 域单测从 0 到 41，后续新增厂商/改协议路由有回归护栏。
+- 遗留：① plan C1 子任务 1/2（「补三个 Factory」）为过时项，由 §6.52 方案 B 交付，不重复建设；② `LlmProviderChatClientFactoryRegistry.protocolFactoryMap` 为 volatile 懒初始化，极端并发首路由存在重复构建（结果一致、无业务影响），后续可改初始化钩子；③ 本轮代码（Registry 修复 + 4 测试 + 1 测试修复）与 §6.79/§6.80 文档未 git 提交，待用户确认后提交；④ 后端实例已由本轮回填验证启动（6565），用户可直接使用。
+
+### 6.81 C2 credential_vault 迁移收口：盘点/读取优先级单测 17 例 + 权限颗粒度审计 + 孤儿凭证清理 SQL（2026-08-13）
+
+#### 1. 背景与结论
+
+- **背景**：a0-plan 批次 C2「credential_vault 迁移收口」——N10 部分落地（最小模型/绑定/托管已具备），迁移、过渡期双活策略与权限颗粒度未收口。
+- **盘点结论（代码 + MCP 查库实证）**：① **无明文密钥存量需迁移**——`agent.api_key` 自 V1 起就是工牌 consumerToken（`AgentService.register` 自动签发，V1 列注释「API_KEY_LLM 不存真实 LLM 凭证」），`sys_config` 无 llm/provider/api 键，真实 LLM Key 全部 AES-GCM 加密存于 `credential_vault`（无散落明文）；② **读取路径已全量 vault 化**——`ApiKeyAgentExecutor` / `AgentExecutionConnectivityService` 走 `CredentialVaultBindingService.getAgentApiKeyPlaintext`（secretRef 环境变量优先 > encrypted_value 解密，无 vault 返回 null，`requireVault=true` 时直接拒绝，**无 agent.api_key 回退**）；`AgentSelector` / `PlannerAgentPicker` 用 `hasActiveAgentCredential` 过滤候选；③ **过渡期双活仅存在于平台级**——`PlatformProviderConfigService.getApiKey` = vault PLATFORM 级 ACTIVE 凭证（secretRef > encrypted_value）> yml 兜底 > null（§6.52 已实现）；④ **存量凭证 77 条**（deleted=0）：PLATFORM 4 ACTIVE（4 provider 系统设置页写入）+ AGENT 73（ACTIVE 44 + DISABLED 29）；⑤ **孤儿凭证 61 条**（34 ACTIVE + 27 DISABLED，owner 已物理删除未清理，多为 verify-* e2e 临时 agent 与历史轮换链残留）——本轮治理项；⑥ 现存 agent 凭证 12 条（10 ACTIVE 覆盖全部 10 个 API_KEY_LLM agent + 2 DISABLED 轮换残留），**无「API_KEY_LLM 无 vault」执行缺口**。
+
+#### 2. 实现要点
+
+- **读取优先级单测 17 例**（锁定 C2 验收「读取路径单测覆盖优先级」）：
+  - `CredentialVaultBindingServiceTest` 6 例（Agent 级读取语义）：无 ACTIVE vault 返回 null 不回落兜底；secretRef 环境变量优先（用系统必然存在的 PATH 验证，Mockito 禁止 mock System 静态方法）；secretRef 空环境变量抛 BizException（fail-close 不回退 encrypted_value）；encrypted_value 解密路径；vault 缺双值抛错；bindAgentApiKey 加密 + 五参透传。
+  - `PlatformProviderConfigServiceTest` 11 例（平台级过渡期双活）：vault encrypted_value 优先于 yml；vault secretRef 环境变量优先；vault secretRef 空环境变量回退 yml 不抛错；无 vault 回退 yml（老环境平滑迁移）；双无返回 null；isApiKeyConfigured 三态；isApiKeyFromVault；maskApiKey 尾 4 位脱敏 / null。
+- **权限颗粒度审计收口**（结论性，不新开接口）：`/api/**` 全量鉴权（AuthInterceptor：admin token 或 agent Bearer，无凭证 401）；`CredentialController`（bind/listByAgentId）全部 `requireAdmin()`；平台级凭证管理（AdminLlmProviderController / AdminProviderConfigController）走 admin 拦截器；**MCP 工具集零凭证接口**（外部 agent 无密钥读写通道）；执行链内部读取按 owner 隔离（`getActiveAgentApiKey(agentId, provider)` 仅查本 owner）；API_KEY_LLM 自助注册仅触发平台 key 副本绑定（`provisionPlatformCredential`，托管语义，agent 不拿明文）。结论：vault 读写权限已按「仅管理员 + 执行链 owner 维度」收口，无 agent 侧越权通道；「按 owner/角色开放自助管理」明确不做（托管语义，防明文外流）。
+- **孤儿凭证清理 SQL**（写操作，交付用户执行，AI 不代执行）：逻辑删除 61 条孤儿凭证（NOT EXISTS agent 表，owner_type=AGENT），清理后剩余 12 条现存 agent 凭证（10 ACTIVE + 2 DISABLED 轮换链，保留审计）。
+
+#### 3. 验证结果
+
+- 定向：`mvn test -pl helloai-core -am -DskipTests=false -Dtest=CredentialVaultBindingServiceTest,PlatformProviderConfigServiceTest` **17/17 全绿**。
+- 全量回归：`mvn test -pl helloai-core -am -DskipTests=false` **599/599 全绿**（新增 17 例 + 既有 582 回归，含 C1 的 41 例 Provider 域用例）。
+- 踩坑记录：① Mockito **禁止 mockStatic(System.class)**（class loading 冲突报 infinite loops），secretRef 用例改用系统必然存在的 PATH 环境变量断言；② Node fallback shell 下带点号的 `-Dsurefire.failIfNoSpecifiedTests=false` 必须整体加引号，否则被 PowerShell 拆成未知 lifecycle phase。
+
+#### 4. 影响与遗留
+
+- 影响：① 批次 C 全部收口（C1 §6.80 + C2 本轮），a0-plan 剩余批次为 D~H；② N10 由「部分落地」推进为「已收口」——迁移无需做（无明文存量，双活已实现且单测锁定）、权限颗粒度审计闭环（admin-only + owner 隔离 + MCP 零暴露）、存量治理交付清理 SQL；③ vault 读取优先级从此有 17 例回归护栏（Agent 级无兜底 / 平台级 vault > yml）。
+- 遗留：① **清理 SQL 待用户执行**（61 条孤儿凭证逻辑删除，SQL 见差距表 N10 增量条目/汇报）；② 现存 agent 的 2 条 DISABLED 轮换残留保留（审计链语义）；③ 本轮新增 2 个测试文件与 §6.81 文档未 git 提交，与 C1（§6.79/§6.80）一并待用户确认后提交；④ 后端实例仍在运行（6565），用户可直接使用。

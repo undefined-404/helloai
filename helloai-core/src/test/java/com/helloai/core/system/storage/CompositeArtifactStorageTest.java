@@ -75,6 +75,8 @@ class CompositeArtifactStorageTest {
     @DisplayName("load 按协议前缀分派到对应实现（存量 local 与新 minio 同时可读）")
     void shouldDispatchLoadByPrefix() {
         CompositeArtifactStorage composite = composite("minio");
+        when(minio.supports("minio://b/k")).thenReturn(true);
+        when(local.supports("local://b/k")).thenReturn(true);
         when(minio.load("minio://b/k")).thenReturn(new byte[]{1});
         when(local.load("local://b/k")).thenReturn(new byte[]{2});
 

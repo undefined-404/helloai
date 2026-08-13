@@ -74,12 +74,21 @@ public class LlmProviderChatClientFactoryRegistry {
             return deepSeekFactory.createChatClient(apiKeyPlaintext, agent, model);
         }
 
-        ProtocolFactory factory = protocolFactoryMap().get(provider.getProtocolType());
+        ProtocolFactory factory = protocolFactoryMap().get(normalizeProtocolType(provider.getProtocolType()));
         if (factory == null) {
             throw new BizException("不支持的 protocol_type: " + provider.getProtocolType()
                     + "（provider=" + provider.getProviderCode() + "）");
         }
         return factory.createChatClient(provider, apiKeyPlaintext, agent, model);
+    }
+
+    /**
+     * 协议类型大小写归一：与 {@code LlmProviderCatalogService#isFactorySupported} 的判定
+     * 保持一致（该处已 toUpperCase），避免 DB 写入小写协议类型时"目录显示可用、路由实际失败"
+     * 的判定不一致。
+     */
+    private static String normalizeProtocolType(String protocolType) {
+        return protocolType == null ? null : protocolType.toUpperCase(java.util.Locale.ROOT);
     }
 
     /**
