@@ -439,6 +439,10 @@ export interface Attachment {
   previewUrl: string | null
   status: AttachmentStatus
   createTime: string
+  // 回填字段：主任务 ID/标题、子任务标题（附件管理层级浏览展示用）
+  taskId?: LongId | null
+  taskTitle?: string | null
+  subTaskTitle?: string | null
 }
 
 // --- v1.1 新增类型 ---

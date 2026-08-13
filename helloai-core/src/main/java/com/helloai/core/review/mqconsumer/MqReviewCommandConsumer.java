@@ -1,7 +1,7 @@
 package com.helloai.core.review.mqconsumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.helloai.core.review.SubTaskReviewService;
+import com.helloai.core.review.service.SubTaskReviewService;
 import com.helloai.mq.config.RabbitMQConfig;
 import com.helloai.mq.consumer.AbstractIdempotentConsumer;
 import com.helloai.mq.service.MessageDeduplicationService;

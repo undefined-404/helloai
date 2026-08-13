@@ -13,6 +13,7 @@ import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.mapper.ReviewRecordMapper;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.mapper.TaskTimelineMapper;
+import com.helloai.core.task.service.impl.TaskServiceImpl;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -69,7 +70,7 @@ class TaskServiceTest {
     private AgentInboxService agentInboxService;
 
     private TaskService newSpyService() {
-        return spy(new TaskService(subTaskMapper, moduleMapper, reviewRecordMapper,
+        return spy(new TaskServiceImpl(subTaskMapper, moduleMapper, reviewRecordMapper,
                 agentExecutionRecordMapper, agentInboxMapper, taskTimelineMapper,
                 attachmentMapper, conversationArchiveMapper, conversationMessageMapper,
                 agentMapper, agentInboxService));

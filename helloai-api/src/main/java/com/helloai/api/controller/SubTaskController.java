@@ -21,7 +21,7 @@ import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.entity.TaskTimeline;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;
-import com.helloai.core.agent.command.ExecutionCommandService;
+import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;

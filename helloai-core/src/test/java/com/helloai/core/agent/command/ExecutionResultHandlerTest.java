@@ -50,7 +50,7 @@ class ExecutionResultHandlerTest {
     private com.helloai.core.agent.service.ConversationService conversationService;
 
     @Mock
-    private com.helloai.core.agent.output.ExecutionArtifactService executionArtifactService;
+    private com.helloai.core.agent.service.ExecutionArtifactService executionArtifactService;
 
     @InjectMocks
     private ExecutionResultHandler executionResultHandler;

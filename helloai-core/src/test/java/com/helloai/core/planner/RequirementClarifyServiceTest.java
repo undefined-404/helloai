@@ -8,13 +8,16 @@ import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.agent.execution.PlatformAgentExecutionService;
+import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.common.config.WebSearchProperties;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
-import com.helloai.core.planner.search.WebSearchService;
+import com.helloai.core.planner.service.WebSearchService;
+import com.helloai.core.planner.picker.PlannerAgentPicker;
+import com.helloai.core.planner.service.RequirementClarifyService;
+import com.helloai.core.planner.service.impl.RequirementClarifyServiceImpl;
 import com.helloai.core.planner.service.RequirementConversationService;
 import com.helloai.core.planner.service.RequirementMessageService;
 import com.helloai.core.task.entity.Task;
@@ -93,7 +96,7 @@ class RequirementClarifyServiceTest {
     @BeforeEach
     void setUp() {
         // ObjectMapper 用真实实例（JSON 解析是被测逻辑本身，不 mock）
-        clarifyService = new RequirementClarifyService(
+        clarifyService = new RequirementClarifyServiceImpl(
                 conversationService, messageService, taskService, agentService,
                 plannerAgentPicker, agentInboxService, platformAgentExecutionService,
                 taskTimelineService, new ObjectMapper(),

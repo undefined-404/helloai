@@ -1,82 +1,40 @@
 package com.helloai.core.task.service;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.helloai.common.base.BizException;
-import com.helloai.core.agent.entity.Agent;
+import com.baomidou.mybatisplus.extension.service.IService;
 import com.helloai.core.task.entity.RewardLog;
-import com.helloai.core.task.mapper.RewardLogMapper;
-import com.helloai.core.agent.service.AgentService;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
-import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
-@Slf4j
-@Service
-@RequiredArgsConstructor
-public class RewardService extends ServiceImpl<RewardLogMapper, RewardLog> {
+/**
+ * 积分奖励服务接口：积分流水写入、查询与 Agent 积分摘要。
+ */
+public interface RewardService extends IService<RewardLog> {
 
-    private final AgentService agentService;
-
-    @Transactional(rollbackFor = Exception.class)
-    public void addReward(Long agentId, String reason, int delta, Long subTaskId) {
-        Agent agent = agentService.getById(agentId);
-        if (agent == null) {
-            throw new BizException("Agent 不存在: " + agentId);
-        }
-
-        int newBalance = agent.getScore() + delta;
-
-        RewardLog logEntity = new RewardLog();
-        logEntity.setAgentId(agentId);
-        logEntity.setSubTaskId(subTaskId);
-        logEntity.setReason(reason);
-        logEntity.setDelta(delta);
-        logEntity.setBalance(newBalance);
-        save(logEntity);
-
-        agent.setScore(newBalance);
-        agentService.updateById(agent);
-
-        log.info("积分变动: agentId={}, delta={}, balance={}, reason={}",
-                agentId, delta, newBalance, reason);
-    }
+    /**
+     * 给 Agent 加减积分并落流水，同时回写 Agent 总分。
+     *
+     * @param agentId  Agent ID
+     * @param reason   变动原因
+     * @param delta    积分增量（可为负）
+     * @param subTaskId 关联子任务 ID，可空
+     */
+    void addReward(Long agentId, String reason, int delta, Long subTaskId);
 
     /**
      * 分页查询全局积分流水，按创建时间倒序。
+     *
+     * @param page     页码
+     * @param pageSize 每页条数
+     * @return 分页结果
      */
-    public IPage<RewardLog> listAllLogs(int page, int pageSize) {
-        return lambdaQuery()
-                .orderByDesc(RewardLog::getCreateTime)
-                .page(new Page<>(page, pageSize));
-    }
+    IPage<RewardLog> listAllLogs(int page, int pageSize);
 
-    public Map<String, Object> getAgentScoreSummary(Long agentId) {
-        Agent agent = agentService.getById(agentId);
-        if (agent == null) {
-            throw new BizException("Agent 不存在: " + agentId);
-        }
-
-        List<RewardLog> logs = lambdaQuery()
-                .eq(RewardLog::getAgentId, agentId)
-                .list();
-
-        long rewardCount = logs.stream().filter(l -> l.getDelta() > 0).count();
-        long penaltyCount = logs.stream().filter(l -> l.getDelta() < 0).count();
-
-        Map<String, Object> result = new HashMap<>();
-        result.put("agentId", agentId);
-        result.put("agentName", agent.getName());
-        result.put("totalScore", agent.getScore());
-        result.put("rewardCount", rewardCount);
-        result.put("penaltyCount", penaltyCount);
-        result.put("totalRecords", logs.size());
-        return result;
-    }
+    /**
+     * 查询指定 Agent 的积分摘要（总分、奖励/惩罚次数、流水总数）。
+     *
+     * @param agentId Agent ID
+     * @return 摘要 Map
+     */
+    Map<String, Object> getAgentScoreSummary(Long agentId);
 }

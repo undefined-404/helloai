@@ -3,6 +3,7 @@ package com.helloai.core.agent.command;
 import com.helloai.common.config.AgentCommandOutboxRelayProperties;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.config.MqExecutionCommandProperties;
+import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.mq.config.RabbitMQConfig;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;

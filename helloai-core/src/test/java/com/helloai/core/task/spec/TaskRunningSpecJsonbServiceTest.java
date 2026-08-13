@@ -2,6 +2,7 @@ package com.helloai.core.task.spec;
 
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.service.TaskService;
+import com.helloai.core.task.service.impl.TaskRunningSpecJsonbServiceImpl;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -23,7 +24,7 @@ class TaskRunningSpecJsonbServiceTest {
     private TaskService taskService;
 
     @InjectMocks
-    private TaskRunningSpecJsonbService jsonbService;
+    private TaskRunningSpecJsonbServiceImpl jsonbService;
 
     @Test
     @DisplayName("should keep both records when two predecessors append sequentially (multi-dep no overwrite)")

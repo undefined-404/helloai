@@ -13,14 +13,17 @@ import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.agent.execution.PlatformAgentExecutionService;
+import com.helloai.core.agent.service.PlatformAgentExecutionService;
+import com.helloai.core.planner.picker.PlannerAgentPicker;
+import com.helloai.core.planner.service.PlannerAnalysisService;
+import com.helloai.core.planner.service.impl.PlannerAnalysisServiceImpl;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
-import com.helloai.core.task.spec.TaskRunningSpecService;
+import com.helloai.core.task.service.TaskRunningSpecService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -93,7 +96,7 @@ class PlannerAnalysisServiceTest {
     @BeforeEach
     void setUp() {
         // ObjectMapper 用真实实例（JSON 解析是被测逻辑本身，不 mock）
-        plannerAnalysisService = new PlannerAnalysisService(
+        plannerAnalysisService = new PlannerAnalysisServiceImpl(
                 taskService, subTaskService, plannerAgentPicker,
                 platformAgentExecutionService, taskTimelineService,
                 subTaskDispatchService, taskRunningSpecService, new ObjectMapper());

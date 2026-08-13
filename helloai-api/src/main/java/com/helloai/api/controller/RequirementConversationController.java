@@ -2,9 +2,9 @@ package com.helloai.api.controller;
 
 import com.helloai.api.dto.requirement.ClarifyMessageRequest;
 import com.helloai.common.base.R;
-import com.helloai.core.planner.PlannerAgentPicker;
-import com.helloai.core.planner.RequirementClarifyService;
-import com.helloai.core.planner.RequirementClarifyService.ClarifyConversationDetail;
+import com.helloai.core.planner.picker.PlannerAgentPicker;
+import com.helloai.core.planner.service.RequirementClarifyService;
+import com.helloai.core.planner.service.RequirementClarifyService.ClarifyConversationDetail;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.task.entity.Task;
 import jakarta.validation.Valid;

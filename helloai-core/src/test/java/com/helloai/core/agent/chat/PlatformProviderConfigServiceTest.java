@@ -6,6 +6,8 @@ import com.helloai.core.system.entity.CredentialVault;
 import com.helloai.core.system.service.CredentialVaultService;
 import com.helloai.core.system.service.LlmProviderQueryService;
 import com.helloai.core.system.service.SysConfigService;
+import com.helloai.core.agent.service.PlatformProviderConfigService;
+import com.helloai.core.agent.service.impl.PlatformProviderConfigServiceImpl;
 import com.helloai.core.agent.chat.provider.ProviderChatModelCache;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -47,7 +49,7 @@ class PlatformProviderConfigServiceTest {
 
     @BeforeEach
     void setUp() {
-        configService = new PlatformProviderConfigService(
+        configService = new PlatformProviderConfigServiceImpl(
                 credentialVaultService, credentialCryptoService, sysConfigService,
                 providerProperties, providerChatModelCache, llmProviderQueryService);
     }

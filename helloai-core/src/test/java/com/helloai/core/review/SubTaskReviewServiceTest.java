@@ -6,11 +6,13 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.SubTaskStatus;
-import com.helloai.core.agent.command.ExecutionCommandService;
+import com.helloai.core.review.service.SubTaskReviewService;
+import com.helloai.core.review.service.impl.SubTaskReviewServiceImpl;
+import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.agent.execution.PlatformAgentExecutionService;
+import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConversationService;
@@ -20,7 +22,7 @@ import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.service.ReviewService;
 import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.service.TaskAgentPolicy;
+import com.helloai.core.task.policy.TaskAgentPolicy;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import org.junit.jupiter.api.BeforeEach;
@@ -106,7 +108,7 @@ class SubTaskReviewServiceTest {
     @BeforeEach
     void setUp() {
         // ObjectMapper 用真实实例（JSON 解析是被测逻辑本身，不 mock）
-        reviewService = new SubTaskReviewService(
+        reviewService = new SubTaskReviewServiceImpl(
                 subTaskService, agentSelector, agentService, platformAgentExecutionService,
                 taskTimelineService, executionCommandService, dispatchProperties, new ObjectMapper(),
                 conversationService, recordReviewService, taskService, attachmentService, redisTemplate);

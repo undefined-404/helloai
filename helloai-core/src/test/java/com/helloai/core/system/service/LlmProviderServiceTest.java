@@ -3,6 +3,7 @@ package com.helloai.core.system.service;
 import com.helloai.common.base.BizException;
 import com.helloai.core.system.entity.LlmProvider;
 import com.helloai.core.system.mapper.LlmProviderMapper;
+import com.helloai.core.system.service.impl.LlmProviderServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -38,13 +39,13 @@ class LlmProviderServiceTest {
     @Mock
     private LlmProviderQueryService queryService;
 
-    private LlmProviderService service;
+    private LlmProviderServiceImpl service;
 
     @BeforeEach
     void setUp() {
         // 构造注入 queryService，再通过反射把 mock 注入到父类 ServiceImpl.baseMapper 字段
         // ServiceImpl.baseMapper 擦除类型为 BaseMapper，不带 type 参数避免类型不匹配
-        service = new LlmProviderService(queryService);
+        service = new LlmProviderServiceImpl(queryService);
         ReflectionTestUtils.setField(service, "baseMapper", mapper);
     }
 

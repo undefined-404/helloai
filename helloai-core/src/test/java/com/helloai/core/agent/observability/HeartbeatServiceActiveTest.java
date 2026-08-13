@@ -6,6 +6,8 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentMapper;
+import com.helloai.core.agent.service.HeartbeatService;
+import com.helloai.core.agent.service.impl.HeartbeatServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -68,7 +70,7 @@ class HeartbeatServiceActiveTest {
 
     @BeforeEach
     void setUp() {
-        heartbeatService = new HeartbeatService(agentMapper, redis);
+        heartbeatService = new HeartbeatServiceImpl(agentMapper, redis);
         // LENIENT 模式：部分用例不调 redis，此 stubbing 不是"未使用"而是被跳过
         when(redis.opsForValue()).thenReturn(valueOps);
     }

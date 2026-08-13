@@ -34,9 +34,11 @@ import static org.mockito.Mockito.when;
 import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConversationService;
+import com.helloai.core.agent.service.PlatformAgentExecutionService;
+import com.helloai.core.agent.service.impl.SubTaskExecutionServiceImpl;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
-import com.helloai.core.task.spec.TaskRunningSpecService;
+import com.helloai.core.task.service.TaskRunningSpecService;
 
 import java.util.HashMap;
 import java.util.List;
@@ -71,7 +73,7 @@ class SubTaskExecutionServiceTest {
     private AttachmentService attachmentService;  // 依赖产出双轨：物化附件内容
 
     @InjectMocks
-    private SubTaskExecutionService subTaskExecutionService;
+    private SubTaskExecutionServiceImpl subTaskExecutionService;
 
     @Nested
     @DisplayName("executeOnce — 纯执行入口")

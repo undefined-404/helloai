@@ -2,7 +2,7 @@ package com.helloai.core.agent.chat.provider;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentProviderProperties;
-import com.helloai.core.agent.chat.PlatformProviderConfigService;
+import com.helloai.core.agent.service.PlatformProviderConfigService;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.system.entity.LlmProvider;
 import io.micrometer.observation.ObservationRegistry;

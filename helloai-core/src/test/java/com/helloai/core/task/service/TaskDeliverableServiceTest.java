@@ -15,6 +15,7 @@ import com.helloai.core.task.entity.ReviewRecord;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.mapper.ReviewRecordMapper;
+import com.helloai.core.task.service.impl.TaskDeliverableServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -70,7 +71,7 @@ class TaskDeliverableServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new TaskDeliverableService(taskService, subTaskService, agentService,
+        service = new TaskDeliverableServiceImpl(taskService, subTaskService, agentService,
                 attachmentService, artifactStorage, reviewRecordMapper);
         // lambdaQuery 链式 mock（项目内先例：PlannerAnalysisServiceTest）
         when(subTaskService.lambdaQuery()).thenReturn(subTaskChain);

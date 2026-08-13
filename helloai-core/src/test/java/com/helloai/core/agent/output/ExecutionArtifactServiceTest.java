@@ -4,6 +4,8 @@ import com.helloai.common.config.ArtifactStorageProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.agent.service.ExecutionArtifactService;
+import com.helloai.core.agent.service.impl.ExecutionArtifactServiceImpl;
 import com.helloai.core.system.entity.Attachment;
 import com.helloai.core.system.service.AttachmentService;
 import com.helloai.core.system.storage.ArtifactStorage;
@@ -48,7 +50,7 @@ class ExecutionArtifactServiceTest {
     @BeforeEach
     void setUp() {
         properties = new ArtifactStorageProperties();
-        service = new ExecutionArtifactService(properties, new ExecutionOutputParser(),
+        service = new ExecutionArtifactServiceImpl(properties, new ExecutionOutputParser(),
                 artifactStorage, attachmentService, taskTimelineService, agentService);
     }
 

@@ -8,7 +8,7 @@ import com.helloai.common.config.AgentConfigProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.agent.chat.LlmProviderCatalogService;
+import com.helloai.core.agent.service.LlmProviderCatalogService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.system.service.PromptTemplateService;
 import com.helloai.core.agent.AgentCapability;

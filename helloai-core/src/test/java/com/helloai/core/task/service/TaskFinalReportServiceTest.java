@@ -15,12 +15,13 @@ import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
-import com.helloai.core.agent.execution.PlatformAgentExecutionService;
-import com.helloai.core.planner.PlannerAgentPicker;
+import com.helloai.core.agent.service.PlatformAgentExecutionService;
+import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.shared.event.TaskAutoCompletedEvent;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.service.TaskIterationService;
+import com.helloai.core.task.service.impl.TaskFinalReportServiceImpl;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -94,7 +95,7 @@ class TaskFinalReportServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new TaskFinalReportService(taskService, subTaskService, plannerAgentPicker,
+        service = new TaskFinalReportServiceImpl(taskService, subTaskService, plannerAgentPicker,
                 platformAgentExecutionService, taskTimelineService, dispatchProperties,
                 taskIterationService);
 

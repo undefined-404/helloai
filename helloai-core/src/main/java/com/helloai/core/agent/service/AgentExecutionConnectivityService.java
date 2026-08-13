@@ -12,7 +12,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.stereotype.Service;
-import com.helloai.core.agent.chat.AgentChatClientService;
+import com.helloai.core.agent.service.AgentChatClientService;
 import com.helloai.core.agent.chat.ChatResponseContentExtractor;
 
 /**

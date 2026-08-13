@@ -2,8 +2,8 @@ package com.helloai.api.controller;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.base.R;
-import com.helloai.core.agent.mcp.McpToolService;
-import com.helloai.core.agent.mcp.McpToolService.*;
+import com.helloai.core.agent.service.McpToolService;
+import com.helloai.core.agent.service.McpToolService.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;

@@ -7,12 +7,15 @@ import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.core.agent.dispatcher.ResilientDispatcher;
 import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.mapper.SubTaskMapper;
+import com.helloai.core.task.policy.TaskAgentPolicy;
+import com.helloai.core.task.service.impl.SubTaskDispatchServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -37,7 +40,6 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import com.helloai.core.agent.dispatcher.ResilientDispatcher;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("SubTaskDispatchService")
@@ -68,7 +70,7 @@ class SubTaskDispatchServiceTest {
     private TaskService taskService;
 
     @InjectMocks
-    private SubTaskDispatchService subTaskDispatchService;
+    private SubTaskDispatchServiceImpl subTaskDispatchService;
 
     @BeforeEach
     void setUp() {

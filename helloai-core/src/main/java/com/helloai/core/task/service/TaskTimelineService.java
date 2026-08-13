@@ -1,15 +1,9 @@
 package com.helloai.core.task.service;
 
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.baomidou.mybatisplus.extension.service.IService;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.task.entity.TaskTimeline;
-import com.helloai.core.task.mapper.TaskTimelineMapper;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -30,10 +24,7 @@ import java.util.Map;
  * </ul>
  * </p>
  */
-@Slf4j
-@Service
-@RequiredArgsConstructor
-public class TaskTimelineService extends ServiceImpl<TaskTimelineMapper, TaskTimeline> {
+public interface TaskTimelineService extends IService<TaskTimeline> {
 
     /**
      * 记录一条任务事件。
@@ -45,23 +36,12 @@ public class TaskTimelineService extends ServiceImpl<TaskTimelineMapper, TaskTim
      * @param agentId    关联 Agent ID（可空）
      * @param payload    事件负载（可空，空时存空 Map）
      */
-    @Transactional(rollbackFor = Exception.class)
-    public void recordEvent(Long taskId,
-                            Long subTaskId,
-                            String eventType,
-                            AgentRole role,
-                            Long agentId,
-                            Map<String, Object> payload) {
-        TaskTimeline timeline = new TaskTimeline();
-        timeline.setTaskId(taskId);
-        timeline.setSubTaskId(subTaskId);
-        timeline.setEventType(eventType);
-        timeline.setRole(role);
-        timeline.setAgentId(agentId);
-        timeline.setPayload(payload != null ? payload : Map.of());
-        save(timeline);
-        log.debug("TaskTimeline event recorded: type={}, agentId={}, role={}", eventType, agentId, role);
-    }
+    void recordEvent(Long taskId,
+                     Long subTaskId,
+                     String eventType,
+                     AgentRole role,
+                     Long agentId,
+                     Map<String, Object> payload);
 
     /**
      * 查询指定子任务的时间线条目，按 id 升序（v2.5 M4.5 派发控制台联调）。
@@ -72,13 +52,5 @@ public class TaskTimelineService extends ServiceImpl<TaskTimelineMapper, TaskTim
      * @param subTaskId 子任务 ID；为空时返回空集合
      * @return 时间线条目列表（按 id 升序）；不存在子任务时返回空集合
      */
-    public List<TaskTimeline> listBySubTaskId(Long subTaskId) {
-        if (subTaskId == null) {
-            return Collections.emptyList();
-        }
-        return lambdaQuery()
-                .eq(TaskTimeline::getSubTaskId, subTaskId)
-                .orderByAsc(TaskTimeline::getId)
-                .list();
-    }
+    List<TaskTimeline> listBySubTaskId(Long subTaskId);
 }

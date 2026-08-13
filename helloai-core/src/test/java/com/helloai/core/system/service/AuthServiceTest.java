@@ -6,6 +6,7 @@ import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentMapper;
 import com.helloai.core.system.entity.SysUser;
 import com.helloai.core.system.mapper.SysUserMapper;
+import com.helloai.core.system.service.impl.AuthServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -60,11 +61,11 @@ class AuthServiceTest {
     @Mock
     private ValueOperations<String, String> valueOps;
 
-    private AuthService authService;
+    private AuthServiceImpl authService;
 
     @BeforeEach
     void setUp() {
-        authService = new AuthService(sysUserMapper, agentMapper, redis);
+        authService = new AuthServiceImpl(sysUserMapper, agentMapper, redis);
         // LENIENT 模式：部分用例不触 Redis，此 stubbing 不是"未使用"而是被跳过
         when(redis.opsForValue()).thenReturn(valueOps);
     }

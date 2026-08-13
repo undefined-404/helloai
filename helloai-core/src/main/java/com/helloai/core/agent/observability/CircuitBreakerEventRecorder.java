@@ -12,6 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import com.helloai.core.agent.service.CircuitBreakerAlertService;
 import com.helloai.core.task.service.TaskTimelineService;
 
 /**

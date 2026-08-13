@@ -1,6 +1,6 @@
 package com.helloai.core.agent.mcp;
 
-import com.helloai.core.agent.mcp.McpToolService;
+import com.helloai.core.agent.service.McpToolService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ToolContext;

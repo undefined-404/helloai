@@ -7,7 +7,7 @@ import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.shared.event.SubTaskSubmittedForReviewEvent;
-import com.helloai.core.agent.output.ExecutionArtifactService;
+import com.helloai.core.agent.service.ExecutionArtifactService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.service.ExternalAgentFailureTracker;
@@ -23,12 +23,12 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.Map;
-import com.helloai.core.agent.execution.SubTaskExecutionService;
+import com.helloai.core.agent.service.SubTaskExecutionService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import com.helloai.core.task.spec.ExecutionRecord;
 import com.helloai.core.task.spec.ExecutionRecordParser;
-import com.helloai.core.task.spec.TaskRunningSpecService;
+import com.helloai.core.task.service.TaskRunningSpecService;
 
 /**
  * 执行结果处理器。

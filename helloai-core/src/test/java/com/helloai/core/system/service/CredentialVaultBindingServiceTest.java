@@ -3,6 +3,7 @@ package com.helloai.core.system.service;
 import com.helloai.common.base.BizException;
 import com.helloai.common.crypto.CredentialCryptoService;
 import com.helloai.core.system.entity.CredentialVault;
+import com.helloai.core.system.service.impl.CredentialVaultBindingServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -40,11 +41,11 @@ class CredentialVaultBindingServiceTest {
     @Mock
     private CredentialCryptoService credentialCryptoService;
 
-    private CredentialVaultBindingService bindingService;
+    private CredentialVaultBindingServiceImpl bindingService;
 
     @BeforeEach
     void setUp() {
-        bindingService = new CredentialVaultBindingService(
+        bindingService = new CredentialVaultBindingServiceImpl(
                 credentialVaultService, credentialCryptoService);
     }
 

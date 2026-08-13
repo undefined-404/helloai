@@ -21,7 +21,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.HashMap;
-import com.helloai.core.agent.command.ExecutionCommandService;
+import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;

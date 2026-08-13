@@ -13,7 +13,7 @@ import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.agent.chat.LlmProviderCatalogService;
+import com.helloai.core.agent.service.LlmProviderCatalogService;
 import com.helloai.core.task.entity.ActivityLog;
 import com.helloai.core.task.entity.RewardLog;
 import com.helloai.core.agent.service.AgentService;

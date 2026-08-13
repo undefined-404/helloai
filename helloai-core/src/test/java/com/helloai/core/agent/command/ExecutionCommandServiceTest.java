@@ -13,6 +13,8 @@ import com.helloai.core.shared.event.ExecutionCommandCreatedEvent;
 import com.helloai.core.agent.service.AgentCommandOutboxService;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.agent.service.ExecutionCommandService;
+import com.helloai.core.agent.service.impl.ExecutionCommandServiceImpl;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import org.junit.jupiter.api.BeforeEach;
@@ -76,7 +78,7 @@ class ExecutionCommandServiceTest {
 
     @BeforeEach
     void setUp() {
-        executionCommandService = new ExecutionCommandService(
+        executionCommandService = new ExecutionCommandServiceImpl(
                 subTaskService, agentService, agentExecutionRecordService, taskTimelineService,
                 applicationEventPublisher, executionProperties, agentCommandOutboxService);
     }

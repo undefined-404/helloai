@@ -11,7 +11,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.FinalReportStatus;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.planner.PlannerAnalysisService;
+import com.helloai.core.planner.service.PlannerAnalysisService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.entity.TaskIteration;

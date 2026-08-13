@@ -3,6 +3,8 @@ package com.helloai.core.agent.chat;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.chat.provider.LlmProviderChatClientFactoryRegistry;
+import com.helloai.core.agent.service.AgentChatClientService;
+import com.helloai.core.agent.service.impl.AgentChatClientServiceImpl;
 import com.helloai.core.agent.entity.Agent;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -31,7 +33,7 @@ class AgentChatClientServiceTest {
 
         ObjectProvider<ChatClient.Builder> builderProvider = mock(ObjectProvider.class);
         LlmProviderChatClientFactoryRegistry registry = mock(LlmProviderChatClientFactoryRegistry.class);
-        AgentChatClientService service = new AgentChatClientService(properties, builderProvider, registry);
+        AgentChatClientService service = new AgentChatClientServiceImpl(properties, builderProvider, registry);
 
         Agent agent = new Agent();
         agent.setId(101L);

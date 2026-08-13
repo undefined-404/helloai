@@ -1,6 +1,6 @@
 package com.helloai.core.task.service;
 
-import com.helloai.core.agent.observability.HeartbeatService;
+import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.agent.service.AgentService;
@@ -8,6 +8,7 @@ import com.helloai.core.task.entity.ReviewRecord;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.ReviewRecordMapper;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
+import com.helloai.core.task.service.impl.SubTaskServiceImpl;
 import com.helloai.common.constant.SubTaskStatus;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -60,7 +61,7 @@ class SubTaskServiceHandoverTest {
 
     @BeforeEach
     void setUp() {
-        subTaskService = spy(new SubTaskService(
+        subTaskService = spy(new SubTaskServiceImpl(
                 agentOutboxService, agentInboxService, agentService,
                 heartbeatService, reviewRecordMapper, implicitScoreCalculator,
                 rewardService, applicationEventPublisher, taskTimelineService));

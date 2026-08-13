@@ -1,99 +1,39 @@
 package com.helloai.core.task.service;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.helloai.common.base.BizException;
+import com.baomidou.mybatisplus.extension.service.IService;
 import com.helloai.common.constant.ReviewResult;
-import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.task.entity.ReviewRecord;
-import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.mapper.ReviewRecordMapper;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
-import java.util.Map;
 
-@Slf4j
-@Service
-@RequiredArgsConstructor
-public class ReviewService extends ServiceImpl<ReviewRecordMapper, ReviewRecord> {
+/**
+ * 审查服务接口：人工审查、自动核验落库与审查记录查询。
+ */
+public interface ReviewService extends IService<ReviewRecord> {
 
-    private final SubTaskService subTaskService;
-    private final RewardService rewardService;
+    /**
+     * 人工审查子任务：校验状态与参数后落库，并按结果驱动子任务流转与评分奖励。
+     *
+     * @param subTaskId       子任务 ID
+     * @param reviewerAgentId 审查 Agent ID
+     * @param result          审查结论（APPROVED / REJECTED）
+     * @param score           评分 1-5
+     * @param issues          驳回时的问题描述（必填）
+     * @param comment         审查意见，可空
+     * @param reworkAgentId   驳回后的返工 Agent ID，可空
+     * @return 已持久化的 ReviewRecord
+     */
+    ReviewRecord createReview(Long subTaskId, Long reviewerAgentId,
+                              ReviewResult result, int score,
+                              String issues, String comment, Long reworkAgentId);
 
-    private static final Map<Integer, Integer> SCORE_RULES = Map.of(
-            5, 5,   // 超出预期
-            4, 5,   // 完全达标
-            3, 0,   // 基本达标
-            2, -5,  // 部分不足
-            1, -5   // 严重不足
-    );
-
-    @Transactional(rollbackFor = Exception.class)
-    public ReviewRecord createReview(Long subTaskId, Long reviewerAgentId,
-                                      ReviewResult result, int score,
-                                      String issues, String comment, Long reworkAgentId) {
-
-        if (result == ReviewResult.REJECTED && (issues == null || issues.isBlank())) {
-            throw new BizException("驳回时必须填写问题描述（issues）");
-        }
-        if (score < 1 || score > 5) {
-            throw new BizException("评分必须 1-5，当前: " + score);
-        }
-
-        SubTask subTask = subTaskService.getById(subTaskId);
-        if (subTask == null) {
-            throw new BizException("子任务不存在: " + subTaskId);
-        }
-        if (subTask.getStatus() != SubTaskStatus.REVIEW) {
-            throw new BizException("子任务状态为 " + subTask.getStatus() + "，只有 REVIEW 状态才能审查");
-        }
-
-        Long executorAgentId = subTask.getAssignedAgentId();
-
-        long round = count(new LambdaQueryWrapper<ReviewRecord>()
-                .eq(ReviewRecord::getSubTaskId, subTaskId)) + 1;
-
-        ReviewRecord record = new ReviewRecord();
-        record.setSubTaskId(subTaskId);
-        record.setReviewerAgentId(reviewerAgentId);
-        record.setResult(result);
-        record.setScore(score);
-        record.setIssues(issues);
-        record.setComment(comment);
-        record.setRound((int) round);
-        save(record);
-
-        if (result == ReviewResult.APPROVED) {
-            // v1.1 修复: APPROVED 走 complete() 触发 5 因子隐式评分（score_factors/composite_score/score_grade/completed_at + reward_log）
-            subTaskService.complete(subTaskId);
-        } else {
-            // §6.57 人工驳回 = 用户拍板开启新一轮：reworkFresh 重置返工计数并清除人工介入标记，
-            // 避免改派后的新执行者提交时仍命中 skip_max_rework 跳过自动核验、无节点流转
-            subTaskService.reworkFresh(subTaskId, reworkAgentId);
-        }
-
-        // 简易奖励（与原 v1.0 行为兼容：按 review.score 直接加减固定分）
-        if (executorAgentId != null) {
-            Integer delta = SCORE_RULES.get(score);
-            if (delta != null && delta != 0) {
-                rewardService.addReward(executorAgentId, "审查评分 " + score + " 分", delta, subTaskId);
-            }
-        }
-
-        log.info("审查完成: subTaskId={}, result={}, score={}, round={}",
-                subTaskId, result.name(), score, round);
-        return record;
-    }
-
-    public List<ReviewRecord> getBySubTaskId(Long subTaskId) {
-        return list(new LambdaQueryWrapper<ReviewRecord>()
-                .eq(ReviewRecord::getSubTaskId, subTaskId)
-                .orderByAsc(ReviewRecord::getRound));
-    }
+    /**
+     * 查询指定子任务的全部审查记录，按轮次升序。
+     *
+     * @param subTaskId 子任务 ID
+     * @return 审查记录列表；不存在时返回空列表
+     */
+    List<ReviewRecord> getBySubTaskId(Long subTaskId);
 
     /**
      * 自动核验落库（仅记录，不做状态流转、不做奖励加减分）。
@@ -101,27 +41,16 @@ public class ReviewService extends ServiceImpl<ReviewRecordMapper, ReviewRecord>
      * <p>与 {@link #createReview} 的分工：自动核验链路由 SubTaskReviewService
      * 自己负责 complete/rework，本方法只把判定结果写进 review_record，
      * 使自动核验与人工审查同表可查；{@code remark="AUTO_REVIEW"} 标记来源。</p>
+     *
+     * @param subTaskId       子任务 ID
+     * @param reviewerAgentId 审查 Agent ID
+     * @param result          审查结论
+     * @param score           评分 1-5
+     * @param issues          问题描述，可空
+     * @param comment         审查意见，可空
+     * @return 已持久化的 ReviewRecord
      */
-    @Transactional(rollbackFor = Exception.class)
-    public ReviewRecord recordAutoReview(Long subTaskId, Long reviewerAgentId,
-                                          ReviewResult result, int score,
-                                          String issues, String comment) {
-        long round = count(new LambdaQueryWrapper<ReviewRecord>()
-                .eq(ReviewRecord::getSubTaskId, subTaskId)) + 1;
-
-        ReviewRecord record = new ReviewRecord();
-        record.setSubTaskId(subTaskId);
-        record.setReviewerAgentId(reviewerAgentId);
-        record.setResult(result);
-        record.setScore(score);
-        record.setIssues(issues);
-        record.setComment(comment);
-        record.setRound((int) round);
-        record.setRemark("AUTO_REVIEW");
-        save(record);
-
-        log.info("自动核验落库: subTaskId={}, result={}, score={}, round={}",
-                subTaskId, result.name(), score, round);
-        return record;
-    }
+    ReviewRecord recordAutoReview(Long subTaskId, Long reviewerAgentId,
+                                  ReviewResult result, int score,
+                                  String issues, String comment);
 }

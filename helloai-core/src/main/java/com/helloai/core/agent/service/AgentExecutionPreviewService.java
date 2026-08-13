@@ -8,7 +8,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;
-import com.helloai.core.agent.execution.PlatformAgentExecutionService;
+import com.helloai.core.agent.service.PlatformAgentExecutionService;
 
 /**
  * Agent 执行预览服务。

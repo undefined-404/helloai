@@ -1,20 +1,11 @@
 package com.helloai.core.task.service;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.agent.mapper.AgentMapper;
 import com.helloai.core.task.entity.ActivityLog;
-import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Service;
 
-import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
  * Feed 聚合服务（前端活动流 {@code /api/feed} 数据源）。
@@ -22,12 +13,7 @@ import java.util.stream.Collectors;
  * <p>聚合 ActivityLog 与 Agent 两张表的活动日志分页列表与 Agent 摘要列表，
  * 为避免在 Controller 直接注入 Mapper，将查询与名称解析下移至本服务。</p>
  */
-@Service
-@RequiredArgsConstructor
-public class FeedService {
-
-    private final ActivityLogService activityLogService;
-    private final AgentMapper agentMapper;
+public interface FeedService {
 
     /**
      * 分页查询活动日志（按创建时间倒序）。
@@ -38,13 +24,7 @@ public class FeedService {
      * @param source   可选 source 过滤；null/空表示不限
      * @return MyBatis-Plus Page 包装的活动日志（绝不返回 null）
      */
-    public Page<ActivityLog> listActivityLogs(int page, int pageSize, String level, String source) {
-        LambdaQueryWrapper<ActivityLog> wrapper = new LambdaQueryWrapper<ActivityLog>()
-                .eq(level != null && !level.isBlank(), ActivityLog::getLevel, level)
-                .eq(source != null && !source.isBlank(), ActivityLog::getSource, source)
-                .orderByDesc(ActivityLog::getCreateTime);
-        return activityLogService.page(new Page<>(page, pageSize), wrapper);
-    }
+    Page<ActivityLog> listActivityLogs(int page, int pageSize, String level, String source);
 
     /**
      * 按日志 agentId 批量查询 Agent 名称，返回 id → name 映射；
@@ -53,29 +33,7 @@ public class FeedService {
      * @param logs 活动日志列表
      * @return agentId → agentName 映射（绝不返回 null）
      */
-    public Map<Long, String> resolveAgentNames(List<ActivityLog> logs) {
-        if (logs == null || logs.isEmpty()) {
-            return Collections.emptyMap();
-        }
-        Set<Long> ids = logs.stream()
-                .map(ActivityLog::getAgentId)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toSet());
-        if (ids.isEmpty()) {
-            return Collections.emptyMap();
-        }
-        List<Agent> agents = agentMapper.selectBatchIds(ids);
-        if (agents == null || agents.isEmpty()) {
-            return Collections.emptyMap();
-        }
-        Map<Long, String> result = new LinkedHashMap<>();
-        for (Agent a : agents) {
-            if (a.getId() != null && a.getName() != null) {
-                result.put(a.getId(), a.getName());
-            }
-        }
-        return result;
-    }
+    Map<Long, String> resolveAgentNames(List<ActivityLog> logs);
 
     /**
      * Agent 摘要列表（用于活动流右侧 Agent 选择下拉框）。
@@ -85,11 +43,5 @@ public class FeedService {
      *
      * @return Agent 列表（绝不返回 null）
      */
-    public List<Agent> listAgentSummaries() {
-        List<Agent> list = agentMapper.selectList(
-                new LambdaQueryWrapper<Agent>()
-                        .select(Agent::getId, Agent::getName, Agent::getRole, Agent::getStatus, Agent::getScore)
-                        .eq(Agent::getDeleted, 0));
-        return list != null ? list : Collections.emptyList();
-    }
+    List<Agent> listAgentSummaries();
 }

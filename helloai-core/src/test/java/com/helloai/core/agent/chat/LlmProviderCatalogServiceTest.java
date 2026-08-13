@@ -4,6 +4,9 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.core.agent.chat.provider.LlmProviderChatClientFactoryRegistry;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.service.LlmProviderCatalogService;
+import com.helloai.core.agent.service.PlatformProviderConfigService;
+import com.helloai.core.agent.service.impl.LlmProviderCatalogServiceImpl;
 import com.helloai.core.system.entity.CredentialVault;
 import com.helloai.core.system.entity.LlmProvider;
 import com.helloai.core.system.service.CredentialVaultBindingService;
@@ -54,7 +57,7 @@ class LlmProviderCatalogServiceTest {
         credentialVaultService = mock(CredentialVaultService.class);
         credentialVaultBindingService = mock(CredentialVaultBindingService.class);
         platformProviderConfigService = mock(PlatformProviderConfigService.class);
-        catalogService = new LlmProviderCatalogService(queryService, executionProperties,
+        catalogService = new LlmProviderCatalogServiceImpl(queryService, executionProperties,
                 factoryRegistry, credentialVaultService, credentialVaultBindingService,
                 platformProviderConfigService);
     }

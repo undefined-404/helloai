@@ -5,6 +5,7 @@ import com.helloai.common.constant.ReviewResult;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.ReviewRecordMapper;
+import com.helloai.core.task.service.impl.ReviewServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -53,7 +54,7 @@ class ReviewServiceTest {
 
     @BeforeEach
     void setUp() {
-        reviewService = new ReviewService(subTaskService, rewardService);
+        reviewService = new ReviewServiceImpl(subTaskService, rewardService);
         // createReview 内部 round 计数与 record 落库依赖父类 baseMapper；
         // lenient：校验失败路径（如 issues 为空）在 count 之前就返回，stub 不必然被消费
         ReflectionTestUtils.setField(reviewService, "baseMapper", reviewRecordMapper);

@@ -4,7 +4,7 @@ import com.helloai.api.dto.admin.CreateLlmProviderRequest;
 import com.helloai.api.dto.admin.LlmProviderResponse;
 import com.helloai.api.dto.admin.UpdateLlmProviderRequest;
 import com.helloai.common.base.R;
-import com.helloai.core.agent.chat.PlatformProviderConfigService;
+import com.helloai.core.agent.service.PlatformProviderConfigService;
 import com.helloai.core.system.entity.LlmProvider;
 import com.helloai.core.system.service.LlmProviderQueryService;
 import com.helloai.core.system.service.LlmProviderService;

@@ -7,8 +7,10 @@ import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
 import com.helloai.core.agent.entity.AgentInbox;
-import com.helloai.core.agent.observability.HeartbeatService;
+import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
+import com.helloai.core.agent.service.McpToolService;
+import com.helloai.core.agent.service.impl.McpToolServiceImpl;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentMcpServerService;
 import com.helloai.core.agent.service.AgentService;
@@ -18,7 +20,7 @@ import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.spec.ExecutionRecord;
-import com.helloai.core.task.spec.TaskRunningSpecService;
+import com.helloai.core.task.service.TaskRunningSpecService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -72,7 +74,7 @@ class McpToolServiceTest {
 
     @BeforeEach
     void setUp() {
-        mcpToolService = new McpToolService(
+        mcpToolService = new McpToolServiceImpl(
                 agentService, agentInboxService, agentMcpServerService,
                 subTaskService, subTaskMapper, heartbeatService,
                 attachmentService, executionResultHandler, agentDutyLeaseService,
@@ -407,7 +409,7 @@ class McpToolServiceTest {
         assertThat(result.getCurrentStatus()).isEqualTo("CLOSED");
         assertThat(result.getLatestLeaseId()).isEqualTo(11L);
         assertThat(result.getLatestLeaseExpiresAt()).isEqualTo(expiresAt.toString());
-        assertThat(result.getLatestLeaseCloseReason()).isEqualTo("shutdown");
+        assertThat(result.getLatestLeaseClosedReason()).isEqualTo("shutdown");
     }
 
     @Test
@@ -425,7 +427,7 @@ class McpToolServiceTest {
         assertThat(result.getClosedCount()).isZero();
         assertThat(result.getCurrentStatus()).isEqualTo("EXPIRED");
         assertThat(result.getLatestLeaseId()).isEqualTo(22L);
-        assertThat(result.getLatestLeaseCloseReason()).isEqualTo("lease_expired");
+        assertThat(result.getLatestLeaseClosedReason()).isEqualTo("lease_expired");
     }
 
     @Test

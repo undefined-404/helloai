@@ -1,6 +1,6 @@
 package com.helloai.api.dto.requirement;
 
-import com.helloai.core.planner.RequirementClarifyService;
+import com.helloai.core.planner.service.RequirementClarifyService;
 import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 

@@ -3,7 +3,7 @@ package com.helloai.core.agent.execution;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
-import com.helloai.core.agent.chat.AgentChatClientService;
+import com.helloai.core.agent.service.AgentChatClientService;
 import com.helloai.core.agent.chat.provider.LlmProviderChatClientFactoryRegistry;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
@@ -25,8 +25,11 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verify;
-import com.helloai.core.agent.observability.HeartbeatService;
+import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.agent.service.PlatformAgentExecutionService;
+import com.helloai.core.agent.service.impl.AgentChatClientServiceImpl;
+import com.helloai.core.agent.service.impl.PlatformAgentExecutionServiceImpl;
 import com.helloai.core.system.service.CredentialVaultBindingService;
 
 /**
@@ -60,11 +63,11 @@ class PlatformAgentExecutionServiceTest {
 
         ObjectProvider<ChatClient.Builder> builderProvider = Mockito.mock(ObjectProvider.class);
         LlmProviderChatClientFactoryRegistry registry = Mockito.mock(LlmProviderChatClientFactoryRegistry.class);
-        AgentChatClientService chatClientService = new AgentChatClientService(properties, builderProvider, registry);
+        AgentChatClientService chatClientService = new AgentChatClientServiceImpl(properties, builderProvider, registry);
         ApiKeyAgentExecutor apiKeyAgentExecutor =
                 new ApiKeyAgentExecutor(chatClientService, credentialVaultBindingService, properties);
         AgentExecutorRouter router = new AgentExecutorRouter(List.of(apiKeyAgentExecutor));
-        platformAgentExecutionService = new PlatformAgentExecutionService(
+        platformAgentExecutionService = new PlatformAgentExecutionServiceImpl(
                 agentService, router, heartbeatService, properties);
     }
 

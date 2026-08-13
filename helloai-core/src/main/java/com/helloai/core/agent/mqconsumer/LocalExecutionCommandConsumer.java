@@ -11,7 +11,7 @@ import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.agent.command.ExecutionResultReport;
-import com.helloai.core.agent.execution.SubTaskExecutionService;
+import com.helloai.core.agent.service.SubTaskExecutionService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import lombok.RequiredArgsConstructor;

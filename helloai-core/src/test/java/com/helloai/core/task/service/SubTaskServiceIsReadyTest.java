@@ -2,13 +2,14 @@ package com.helloai.core.task.service;
 
 import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
 import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapper;
-import com.helloai.core.agent.observability.HeartbeatService;
+import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.ReviewRecordMapper;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
+import com.helloai.core.task.service.impl.SubTaskServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -45,7 +46,7 @@ class SubTaskServiceIsReadyTest {
 
     @BeforeEach
     void setUp() {
-        SubTaskService real = new SubTaskService(
+        SubTaskService real = new SubTaskServiceImpl(
                 mock(AgentOutboxService.class), mock(AgentInboxService.class),
                 mock(AgentService.class), mock(HeartbeatService.class),
                 mock(ReviewRecordMapper.class), mock(ImplicitScoreCalculator.class),
