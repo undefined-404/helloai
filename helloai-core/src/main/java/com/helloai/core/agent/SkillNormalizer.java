@@ -83,11 +83,16 @@ public final class SkillNormalizer {
         map.put("web", "web-search");
         map.put("search", "web-search");
         map.put("搜索", "web-search");
+        map.put("检索", "web-search");
+        map.put("联网", "web-search");
         map.put("浏览器", "web-search");
         map.put("爬虫", "web-search");
         map.put("review", "code-review");
         map.put("审查", "code-review");
         map.put("评审", "code-review");
+        map.put("思考", "thinking");
+        map.put("推理", "thinking");
+        map.put("深度思考", "thinking");
         return map;
     }
 }

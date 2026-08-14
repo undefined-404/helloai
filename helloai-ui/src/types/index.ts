@@ -182,6 +182,8 @@ export interface AgentListItem {
   role: AgentRole
   // 接入类型：内部 LLM Agent（API_KEY_LLM）不展示接入内容入口
   accessType?: 'CLI_CLIENT' | 'API_KEY_LLM' | 'WEB_BROWSER' | string
+  // V52: 内部 LLM Agent 绑定的 provider:model（编辑弹窗技能区按模型能力渲染），外部 Agent 为 null
+  modelType?: string | null
   apiKey: string
   description: string
   remark?: string | null

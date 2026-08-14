@@ -2,24 +2,30 @@ package com.helloai.core.agent.service;
 
 import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapper;
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentDutyLeaseMapper;
 import com.helloai.core.agent.mapper.AgentInboxMapper;
+import com.helloai.core.agent.service.impl.AgentServiceImpl;
+import com.helloai.core.system.entity.LlmProviderModel;
 import com.helloai.core.task.mapper.ActivityLogMapper;
 import com.helloai.core.task.mapper.ReviewRecordMapper;
 import com.helloai.core.task.mapper.RewardLogMapper;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.system.service.LlmProviderModelQueryService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -55,11 +61,13 @@ class AgentServiceTest {
     private TaskTimelineService taskTimelineService;
     @Mock
     private AgentMcpServerService agentMcpServerService;
+    @Mock
+    private LlmProviderModelQueryService llmProviderModelQueryService;
 
     private AgentService newSpyService() {
-        return spy(new AgentService(subTaskMapper, rewardLogMapper, activityLogMapper,
+        return spy(new AgentServiceImpl(subTaskMapper, rewardLogMapper, activityLogMapper,
                 reviewRecordMapper, agentInboxMapper, agentDutyLeaseMapper,
-                taskTimelineService, agentMcpServerService));
+                taskTimelineService, agentMcpServerService, llmProviderModelQueryService));
     }
 
     @Test
@@ -181,5 +189,111 @@ class AgentServiceTest {
 
         assertThat(result).isSameAs(created);
         verify(service).register("brand-new", AgentRole.EXECUTOR, "desc");
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  validateAgentSkills / deriveSkillsForRegistration（V52 能力驱动）
+    // ════════════════════════════════════════════════════════════
+
+    private LlmProviderModel capability(String modelType, List<String> capability, List<String> available) {
+        String[] parts = modelType.split(":", 2);
+        LlmProviderModel m = new LlmProviderModel();
+        m.setProviderCode(parts[0]);
+        m.setModelName(parts[1]);
+        m.setCapabilitySkills(capability);
+        m.setAvailableOptionalSkills(available);
+        return m;
+    }
+
+    @Test
+    @DisplayName("validateAgentSkills：标准技能超出模型白名单 → 抛 BizException")
+    void validateSkills_standardSkillOutOfWhitelist_throws() {
+        AgentService service = newSpyService();
+        when(llmProviderModelQueryService.findCapabilityByModelType("deepseek:deepseek-v4-flash"))
+                .thenReturn(Optional.of(capability("deepseek:deepseek-v4-flash",
+                        List.of("thinking"), List.of("shell", "code-review"))));
+
+        assertThatThrownBy(() -> service.validateAgentSkills(
+                "deepseek:deepseek-v4-flash", List.of("python", "shell")))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("不支持技能")
+                .hasMessageContaining("python");
+    }
+
+    @Test
+    @DisplayName("validateAgentSkills：白名单内标准技能 + 自定义技能 → 通过")
+    void validateSkills_whitelistAndCustom_pass() {
+        AgentService service = newSpyService();
+        when(llmProviderModelQueryService.findCapabilityByModelType("deepseek:deepseek-v4-flash"))
+                .thenReturn(Optional.of(capability("deepseek:deepseek-v4-flash",
+                        List.of("thinking"), List.of("shell", "code-review"))));
+
+        service.validateAgentSkills("deepseek:deepseek-v4-flash",
+                List.of("thinking", "shell", "kubernetes"));
+    }
+
+    @Test
+    @DisplayName("validateAgentSkills：未识别模型 / modelType 为空 / skills 为空 → 直接放行")
+    void validateSkills_unknownOrEmpty_pass() {
+        AgentService service = newSpyService();
+        when(llmProviderModelQueryService.findCapabilityByModelType("legacy:old-model"))
+                .thenReturn(Optional.empty());
+
+        service.validateAgentSkills("legacy:old-model", List.of("python"));   // 未识别模型放行
+        service.validateAgentSkills(null, List.of("python"));                 // modelType 空放行
+        service.validateAgentSkills("  ", List.of("python"));
+        service.validateAgentSkills("deepseek:deepseek-v4-flash", null);       // skills 空放行
+        service.validateAgentSkills("deepseek:deepseek-v4-flash", List.of(" "));
+    }
+
+    @Test
+    @DisplayName("deriveSkillsForRegistration：API_KEY_LLM + 已识别模型 → 能力驱动（thinking 锁定 + 白名单过滤）")
+    void deriveSkills_capabilityDriven() {
+        AgentService service = newSpyService();
+        when(llmProviderModelQueryService.findCapabilityByModelType("deepseek:deepseek-v4-flash"))
+                .thenReturn(Optional.of(capability("deepseek:deepseek-v4-flash",
+                        List.of("thinking"), List.of("shell", "code-review"))));
+
+        Agent agent = new Agent();
+        agent.setAccessType(AgentAccessType.API_KEY_LLM);
+        agent.setName("planner");
+        agent.setRemark("计划编排");
+        agent.setModelType("deepseek:deepseek-v4-flash");
+
+        List<String> skills = service.deriveSkillsForRegistration(agent, List.of("thinking", "python", "shell"));
+
+        assertThat(skills).containsExactly("thinking", "code-review", "shell");
+    }
+
+    @Test
+    @DisplayName("deriveSkillsForRegistration：API_KEY_LLM + 未识别模型 → A2 原推导（code-review 兜底）")
+    void deriveSkills_unknownModel_fallsBackToDerive() {
+        AgentService service = newSpyService();
+        when(llmProviderModelQueryService.findCapabilityByModelType("legacy:old-model"))
+                .thenReturn(Optional.empty());
+
+        Agent agent = new Agent();
+        agent.setAccessType(AgentAccessType.API_KEY_LLM);
+        agent.setName("legacy");
+        agent.setModelType("legacy:old-model");
+
+        List<String> skills = service.deriveSkillsForRegistration(agent, List.of("python"));
+
+        // 显式优先（A2 语义）：非空显式值原样返回
+        assertThat(skills).containsExactly("python");
+    }
+
+    @Test
+    @DisplayName("deriveSkillsForRegistration：非 API_KEY_LLM 走 A2 原推导；agent 为 null 返回空")
+    void deriveSkills_cliClientAndNull() {
+        AgentService service = newSpyService();
+
+        Agent cli = new Agent();
+        cli.setAccessType(AgentAccessType.CLI_CLIENT);
+        cli.setName("executor");
+
+        assertThat(service.deriveSkillsForRegistration(cli, null))
+                .containsExactly("shell");   // CLI_CLIENT 基础技能
+        assertThat(service.deriveSkillsForRegistration(null, List.of("docker"))).isEmpty();
     }
 }

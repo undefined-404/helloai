@@ -86,6 +86,8 @@ public class AdminAgentController {
             vo.setName(a.getName());
             vo.setRole(a.getRole());
             vo.setAccessType(a.getAccessType());
+            // V52: modelType 供编辑弹窗技能区按模型能力渲染
+            vo.setModelType(a.getModelType());
             vo.setApiKey(a.getApiKey());
             vo.setDescription(a.getRemark());
             vo.setStatus(a.getStatus());
@@ -129,6 +131,8 @@ public class AdminAgentController {
         vo.setTotalScore(agent.getScore());
         vo.setApiKey(agent.getApiKey());
         vo.setModelType(agent.getModelType());
+        // V47: 详情回显能力声明列表（编辑弹窗整体替换用；此前遗漏导致 getById skills 恒为空）
+        vo.setSkills(agent.getSkills());
 
         Map<String, Integer> wl = agentService.workloadStats(id);
         vo.setAssignedCount(wl.getOrDefault("assignedCount", 0));
@@ -161,7 +165,7 @@ public class AdminAgentController {
     public R<AgentRegistrationResponse> create(@RequestBody AgentCreateRequest req) {
         AgentRole role = AgentRole.valueOf(req.getRole().toUpperCase());
         Agent agent = agentService.registerWithExtras(req.getName(), role, req.getRemark(),
-                req.getModelType(), req.getModelConfig());
+                req.getModelType(), req.getModelConfig(), req.getSkills());
 
         AgentRegistrationResponse response = new AgentRegistrationResponse();
         response.setId(agent.getId());

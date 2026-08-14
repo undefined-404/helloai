@@ -99,4 +99,60 @@ class AgentSkillDeriverTest {
         List<String> result = AgentSkillDeriver.derive(null, null, null, null);
         assertThat(result).isEmpty();
     }
+
+    @Test
+    @DisplayName("deriveWithCapabilities：能力锁定始终追加，即使 explicitSkills 为空")
+    void withCapabilities_lockedSkillAlwaysPresent() {
+        List<String> result = AgentSkillDeriver.deriveWithCapabilities(
+                AgentAccessType.API_KEY_LLM, "planner", "计划编排", null,
+                List.of("thinking"), List.of("shell", "code-review"));
+        assertThat(result).contains("thinking");
+        assertThat(result).contains("code-review");
+    }
+
+    @Test
+    @DisplayName("deriveWithCapabilities：标准技能按白名单过滤，越界项被丢弃")
+    void withCapabilities_standardSkillOutOfWhitelistDropped() {
+        List<String> result = AgentSkillDeriver.deriveWithCapabilities(
+                AgentAccessType.API_KEY_LLM, "deepseek", "通用", List.of("thinking", "python", "shell"),
+                List.of("thinking"), List.of("shell", "code-review"));
+        assertThat(result).containsExactly("thinking", "code-review", "shell");
+    }
+
+    @Test
+    @DisplayName("deriveWithCapabilities：自定义技能豁免放行（D2=A）")
+    void withCapabilities_customSkillExempted() {
+        List<String> result = AgentSkillDeriver.deriveWithCapabilities(
+                AgentAccessType.API_KEY_LLM, "k8s-ops", "Kubernetes 运维", List.of("kubernetes", "shell"),
+                List.of("thinking"), List.of("shell", "code-review"));
+        assertThat(result).contains("kubernetes", "thinking", "shell");
+    }
+
+    @Test
+    @DisplayName("deriveWithCapabilities：关键词命中越界被净化（deepseek 描述含搜索不推导 web-search）")
+    void withCapabilities_keywordOutOfWhitelistPurged() {
+        List<String> result = AgentSkillDeriver.deriveWithCapabilities(
+                AgentAccessType.API_KEY_LLM, "search-bot", "擅长联网搜索与浏览器", null,
+                List.of("thinking"), List.of("shell", "code-review"));
+        assertThat(result).doesNotContain("web-search");
+        assertThat(result).contains("thinking", "code-review");
+    }
+
+    @Test
+    @DisplayName("deriveWithCapabilities：未识别模型（白名单空）不净化，保留 A2 关键词兜底行为")
+    void withCapabilities_unknownModelKeepsKeywordFallback() {
+        List<String> result = AgentSkillDeriver.deriveWithCapabilities(
+                AgentAccessType.API_KEY_LLM, "search-bot", "擅长联网搜索", null,
+                null, null);
+        assertThat(result).contains("web-search", "code-review");
+    }
+
+    @Test
+    @DisplayName("deriveWithCapabilities：联网模型白名单放行 web-search")
+    void withCapabilities_webSearchAllowedForOnlineModels() {
+        List<String> result = AgentSkillDeriver.deriveWithCapabilities(
+                AgentAccessType.API_KEY_LLM, "kimi", "搜索专家", List.of("web-search"),
+                List.of("thinking"), List.of("shell", "code-review", "web-search"));
+        assertThat(result).contains("web-search", "thinking");
+    }
 }

@@ -1,626 +1,216 @@
 package com.helloai.core.agent.service;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.helloai.common.base.BizException;
-import com.helloai.common.constant.AgentAccessType;
-import com.helloai.common.constant.AgentOnlineStatus;
+import com.baomidou.mybatisplus.extension.service.IService;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
-import com.helloai.common.constant.SubTaskStatus;
-import com.helloai.core.agent.AgentSkillDeriver;
-import com.helloai.core.agent.entity.*;
-import com.helloai.core.task.entity.*;
-import com.helloai.core.system.entity.*;
-import com.helloai.core.agent.mapper.*;
-import com.helloai.core.task.mapper.*;
-import com.helloai.core.system.mapper.*;
-import com.helloai.core.task.service.TaskTimelineService;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.task.entity.ActivityLog;
+import com.helloai.core.task.entity.RewardLog;
 
-import java.security.SecureRandom;
-import java.time.OffsetDateTime;
-import java.util.*;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Agent 核心服务。负责 Agent 注册、CRUD、enrichment 查询、级联删除。
  * 为避免循环依赖，本 Service 直接注入 Mapper 而非依赖其他 Service。
  *
  * @see Agent
- * @see AgentMapper
  */
-@Slf4j
-@Service
-@RequiredArgsConstructor
-public class AgentService extends ServiceImpl<AgentMapper, Agent> {
-
-    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
-
-    private final SubTaskMapper subTaskMapper;
-    private final RewardLogMapper rewardLogMapper;
-    private final ActivityLogMapper activityLogMapper;
-    private final ReviewRecordMapper reviewRecordMapper;
-    private final AgentInboxMapper agentInboxMapper;
-    private final AgentDutyLeaseMapper agentDutyLeaseMapper;
-    private final TaskTimelineService taskTimelineService;
-    private final AgentMcpServerService agentMcpServerService;
-
-    // ══════════════════════════════════════════════════════════════
-    //  注册 / 基础 CRUD（不变）
-    // ══════════════════════════════════════════════════════════════
-
-    @Transactional(rollbackFor = Exception.class)
-    public Agent register(String name, AgentRole role, String description) {
-        var existing = lambdaQuery().eq(Agent::getName, name).one();
-        if (existing != null) {
-            throw new BizException("名称 '" + name + "' 已被注册");
-        }
-        Agent agent = new Agent();
-        agent.setName(name);
-        agent.setRole(role);
-        agent.setApiKey(issueConsumerToken());
-        agent.setStatus(AgentStatus.ACTIVE);
-        agent.setScore(0);
-        agent.setRemark(description);
-        // 阶段 0 补全默认值
-        agent.setAccessType(AgentAccessType.CLI_CLIENT);
-        agent.setCapabilities(new java.util.HashMap<>());
-        agent.setLabels(new java.util.HashMap<>());
-        agent.setOnlineStatus(AgentOnlineStatus.OFFLINE);
-        save(agent);
-        log.info("Agent 注册成功: name={}, role={}, id={}, accessType={}, consumerTokenIssued={}",
-                name, role, agent.getId(), agent.getAccessType(), agent.getApiKey() != null);
-        if (role == AgentRole.EXECUTOR) {
-            agentMcpServerService.enableDefaultsForAgent(agent.getId());
-        }
-
-        return agent;
-    }
+public interface AgentService extends IService<Agent> {
 
     /**
-     * name 幂等注册（get-or-create）。
-     *
-     * <p>同名 Agent 已存在时复用而非报错：校验 role 一致后将其归位
-     * （status 置回 ACTIVE、SLEEPING 置回 OFFLINE）并直接返回，不重发 consumerToken。
-     * 供 E2E 脚本等可重入场景使用，收敛时间戳注册导致的 Agent 膨胀；
-     * 人工注册仍走 {@link #register} 保留严格重名报错。</p>
+     * 注册 Agent（重名报错），EXECUTOR 角色额外启用默认 MCP 工具。
      */
-    @Transactional(rollbackFor = Exception.class)
-    public Agent registerOrGet(String name, AgentRole role, String description) {
-        Agent existing = lambdaQuery().eq(Agent::getName, name).one();
-        if (existing == null) {
-            return register(name, role, description);
-        }
-        if (existing.getRole() != role) {
-            throw new BizException("名称 '" + name + "' 已被角色 " + existing.getRole() + " 注册，无法以 " + role + " 复用");
-        }
-        boolean changed = false;
-        if (existing.getStatus() != AgentStatus.ACTIVE) {
-            existing.setStatus(AgentStatus.ACTIVE);
-            changed = true;
-        }
-        if (existing.getOnlineStatus() == AgentOnlineStatus.SLEEPING) {
-            existing.setOnlineStatus(AgentOnlineStatus.OFFLINE);
-            changed = true;
-        }
-        if (changed) {
-            updateById(existing);
-        }
-        log.info("Agent 幂等复用: name={}, role={}, id={}, 归位={}", name, role, existing.getId(), changed);
-        return existing;
-    }
-
-    public Agent getByApiKey(String apiKey) {
-        return lambdaQuery().eq(Agent::getApiKey, apiKey).one();
-    }
-
-    public List<Agent> listByRole(AgentRole role) {
-        return lambdaQuery().eq(Agent::getRole, role).list();
-    }
-
-    public List<Agent> listActive() {
-        return lambdaQuery().eq(Agent::getStatus, AgentStatus.ACTIVE)
-                .orderByDesc(Agent::getScore).list();
-    }
-
-    @Transactional(rollbackFor = Exception.class)
-    public void updateStatus(Long agentId, AgentStatus status) {
-        Agent agent = getById(agentId);
-        if (agent == null) throw new BizException("Agent 不存在: " + agentId);
-        agent.setStatus(status);
-        updateById(agent);
-        log.info("Agent 状态变更: id={}, status={}", agentId, status);
-    }
-
-    @Transactional(rollbackFor = Exception.class)
-    public String resetApiKey(Long agentId) {
-        Agent agent = getById(agentId);
-        if (agent == null) throw new BizException("Agent 不存在: " + agentId);
-        String newKey = issueConsumerToken();
-        agent.setApiKey(newKey);
-        updateById(agent);
-        log.info("Agent 工牌 consumerToken 重置: id={}", agentId);
-        return newKey;
-    }
-
-    @Transactional(rollbackFor = Exception.class)
-    public void updateAgent(Long agentId, String name, String modelType, String remark) {
-        Agent agent = getById(agentId);
-        if (agent == null) throw new BizException("Agent 不存在: " + agentId);
-        if (name != null) agent.setName(name);
-        if (modelType != null) agent.setModelType(modelType);
-        if (remark != null) agent.setRemark(remark);
-        updateById(agent);
-        log.info("Agent 信息更新: id={}", agentId);
-    }
+    Agent register(String name, AgentRole role, String description);
 
     /**
-     * 注册 Agent 并附加可选扩展字段（modelType/modelConfig）。
+     * name 幂等注册（get-or-create）：同名已存在且 role 一致时归位复用，不重发 consumerToken。
+     */
+    Agent registerOrGet(String name, AgentRole role, String description);
+
+    /**
+     * 校验 modelType 格式、可用性及角色唯一性（V49）。
+     *
+     * <p>格式：providerCode:modelName；模型须启用；同模型在同一角色下只能被一个
+     * API_KEY_LLM Agent 使用。null/blank 时跳过校验。注册前预校验用，避免校验失败
+     * 留下已创建的无 modelType Agent。</p>
+     *
+     * @param modelType       待校验的 modelType，null/blank 时跳过
+     * @param role            Agent 角色
+     * @param excludeAgentId  排除的 Agent ID（编辑自身时排除；新增时传 null）
+     * @throws com.helloai.common.base.BizException 格式错误 / 模型不可用 / 角色内模型已被占用时
+     */
+    void validateModelType(String modelType, AgentRole role, Long excludeAgentId);
+
+    /**
+     * 校验 Agent skills 不超出模型能力（plan 2182376f 完善版 V52 新增）。
+     *
+     * <p>规则（D2=A 标准校验 + 自定义豁免）：仅标准技能标签（{@code AgentSkillDeriver.STANDARD_SKILLS}）
+     * 查模型白名单（capabilitySkills ∪ availableOptionalSkills）；非标准项视为自定义技能豁免；
+     * modelType 为 null/blank 或模型未识别（表中不存在）时直接通过（降级兼容）。</p>
+     *
+     * @param modelType 形如 providerCode:modelName，null/blank 时跳过
+     * @param skills    Agent 待校验技能（null/空时跳过）
+     * @throws com.helloai.common.base.BizException 标准技能超出模型白名单时
+     */
+    void validateAgentSkills(String modelType, List<String> skills);
+
+    /**
+     * 收口技能落库推导（plan 2182376f 完善版 V52 新增）。
+     *
+     * <p>API_KEY_LLM 且 modelType 已识别 → 能力驱动推导
+     * （{@code AgentSkillDeriver.deriveWithCapabilities}，能力锁定 + 白名单过滤 + 自定义豁免）；
+     * 其他接入类型或未识别模型 → 走 A2 原推导（{@code AgentSkillDeriver.derive}）。</p>
+     *
+     * @param agent          注册/编辑中的 Agent（accessType/name/remark/modelType 参与推导）
+     * @param explicitSkills 用户显式传入的技能（可为 null/空）
+     * @return 清洗后的技能列表（非 null）
+     */
+    List<String> deriveSkillsForRegistration(Agent agent, List<String> explicitSkills);
+
+    /**
+     * 按 consumerToken（api_key）查询 Agent。
+     */
+    Agent getByApiKey(String apiKey);
+
+    /**
+     * 按角色查询 Agent 列表。
+     */
+    List<Agent> listByRole(AgentRole role);
+
+    /**
+     * 查询全部 ACTIVE Agent（按积分倒序）。
+     */
+    List<Agent> listActive();
+
+    /**
+     * 更新 Agent 状态。
+     */
+    void updateStatus(Long agentId, AgentStatus status);
+
+    /**
+     * 重置 Agent 工牌 consumerToken。
+     */
+    String resetApiKey(Long agentId);
+
+    /**
+     * 更新 Agent 基础字段（name/modelType/remark，非 null 生效）。
+     */
+    void updateAgent(Long agentId, String name, String modelType, String remark);
+
+    /**
+     * 注册 Agent 并附加可选扩展字段（modelType/modelConfig/skills）。
      *
      * <p>按 §6.3 分层红线从 AdminAgentController 收口；作为事务代理入口，
-     * 内部 {@link #register} 的事务注解在自调用场景不生效，由本方法统一托管。</p>
+     * 内部 {@link #register} 的事务注解在自调用场景不生效，由本方法统一托管。<br>
+     * V52：skills 按能力驱动落库（API_KEY_LLM + 已识别模型时 thinking 锁定、
+     * 白名单过滤、自定义豁免），未传显式技能时同样推导（能力锁定不缺席）。</p>
      */
-    @Transactional(rollbackFor = Exception.class)
-    public Agent registerWithExtras(String name, AgentRole role, String description,
-                                    String modelType, Map<String, Object> modelConfig) {
-        Agent agent = register(name, role, description);
-        agent.setModelType(modelType);
-        if (modelConfig != null) agent.setModelConfig(modelConfig);
-        updateById(agent);
-        return agent;
-    }
+    Agent registerWithExtras(String name, AgentRole role, String description,
+                             String modelType, Map<String, Object> modelConfig,
+                             List<String> skills);
 
     /**
      * 更新 Agent 扩展字段；Agent 不存在时返回 false（Controller 保持原有 R.fail 语义）。
      *
      * <p>按 §6.3 分层红线从 AdminAgentController 收口；仅非 null 字段生效。</p>
      */
-    @Transactional(rollbackFor = Exception.class)
-    public boolean updateAgentDetail(Long agentId, String name, String modelType, Map<String, Object> modelConfig,
-                                     String remark, List<String> skills) {
-        Agent agent = getById(agentId);
-        if (agent == null) return false;
-        if (name != null) agent.setName(name);
-        if (modelType != null) agent.setModelType(modelType);
-        if (modelConfig != null) agent.setModelConfig(modelConfig);
-        if (remark != null) agent.setRemark(remark);
-        if (skills != null) agent.setSkills(AgentSkillDeriver.clean(skills));
-        updateById(agent);
-        log.info("Agent 信息更新: id={}", agentId);
-        return true;
-    }
+    boolean updateAgentDetail(Long agentId, String name, String modelType, Map<String, Object> modelConfig,
+                              String remark, List<String> skills);
 
     /**
      * 持久化注册后置的可选字段变更（AgentController.applyRegistrationExtras 收口）。
      */
-    public void updateAgentExtras(Agent agent) {
-        updateById(agent);
-    }
+    void updateAgentExtras(Agent agent);
 
     /**
      * Agent 总数（收口 AdminAgentController 的 lambdaQuery().count() 直调）。
      */
-    public long countAll() {
-        return lambdaQuery().count();
-    }
+    long countAll();
 
     /**
      * 全量 Agent 按积分倒序（收口 ScoreController 的 lambdaQuery() 直调）。
      */
-    public List<Agent> listAllOrderByScoreDesc() {
-        return lambdaQuery().orderByDesc(Agent::getScore).list();
-    }
-
-    // ══════════════════════════════════════════════════════════════
-    //  分页列表
-    // ══════════════════════════════════════════════════════════════
-
-    public Page<Agent> listAgentsPaged(int pageNum, int pageSize, AgentRole role, AgentStatus status,
-                                       String keyword, String sortBy, String sortOrder) {
-        var wrapper = new LambdaQueryWrapper<Agent>()
-                .eq(role != null, Agent::getRole, role)
-                .eq(status != null, Agent::getStatus, status)
-                .and(keyword != null && !keyword.isBlank(), w -> w
-                        .like(Agent::getName, keyword)
-                        .or().like(Agent::getRemark, keyword));
-        if ("score".equals(sortBy)) {
-            wrapper.orderBy(true, "asc".equalsIgnoreCase(sortOrder), Agent::getScore);
-        } else {
-            wrapper.orderBy(true, "asc".equalsIgnoreCase(sortOrder), Agent::getCreateTime);
-        }
-        return page(new Page<>(pageNum, pageSize), wrapper);
-    }
-
-    // ══════════════════════════════════════════════════════════════
-    //  Workload
-    // ══════════════════════════════════════════════════════════════
-
-    public Map<String, Integer> workloadStats(Long agentId) {
-        Map<String, Integer> m = new LinkedHashMap<>();
-        m.put("assignedCount", 0);
-        m.put("inProgressCount", 0);
-        m.put("doneCount", 0);
-        m.put("blockedCount", 0);
-        m.put("reviewCount", 0);
-        if (agentId == null) return m;
-
-        List<SubTask> subs = subTaskMapper.selectList(
-                new LambdaQueryWrapper<SubTask>()
-                        .eq(SubTask::getAssignedAgentId, agentId)
-                        .select(SubTask::getStatus));
-
-        for (SubTask s : subs) {
-            if (s.getStatus() == SubTaskStatus.DONE) m.merge("doneCount", 1, Integer::sum);
-            else if (s.getStatus() == SubTaskStatus.IN_PROGRESS) m.merge("inProgressCount", 1, Integer::sum);
-            else if (s.getStatus() == SubTaskStatus.BLOCKED) m.merge("blockedCount", 1, Integer::sum);
-            else if (s.getStatus() == SubTaskStatus.REVIEW) m.merge("reviewCount", 1, Integer::sum);
-            else m.merge("assignedCount", 1, Integer::sum);
-        }
-        return m;
-    }
-
-    public int inProgressCount(Long agentId) {
-        if (agentId == null) return 0;
-        return Integer.parseInt(subTaskMapper.selectCount(
-                new LambdaQueryWrapper<SubTask>()
-                        .eq(SubTask::getAssignedAgentId, agentId)
-                        .eq(SubTask::getStatus, SubTaskStatus.IN_PROGRESS)
-                        .eq(SubTask::getDeleted, 0)).toString());
-    }
-
-    public int scoreRank(Long agentId) {
-        Agent self = getById(agentId);
-        if (self == null || self.getScore() == null) return 0;
-        long higher = lambdaQuery().gt(Agent::getScore, self.getScore()).count();
-        return (int) (higher + 1);
-    }
-
-    // ══════════════════════════════════════════════════════════════
-    //  详情
-    // ══════════════════════════════════════════════════════════════
-
-    public Agent getAgentDetail(Long agentId) {
-        Agent agent = getById(agentId);
-        if (agent == null) throw new BizException("Agent 不存在: " + agentId);
-        return agent;
-    }
-
-    // ══════════════════════════════════════════════════════════════
-    //  关联统计
-    // ══════════════════════════════════════════════════════════════
-
-    public Map<String, Object> getRelatedCounts(Long agentId) {
-        Agent agent = getById(agentId);
-        if (agent == null) throw new BizException("Agent 不存在: " + agentId);
-
-        Map<String, Object> counts = new LinkedHashMap<>();
-        counts.put("agentId", agentId);
-        counts.put("agentName", agent.getName());
-        counts.put("subTaskCount", subTaskMapper.selectCount(
-                new LambdaQueryWrapper<SubTask>().eq(SubTask::getAssignedAgentId, agentId)).intValue());
-        counts.put("reviewCount", reviewRecordMapper.selectCount(
-                new LambdaQueryWrapper<ReviewRecord>().eq(ReviewRecord::getReviewerAgentId, agentId)).intValue());
-        counts.put("rewardCount", rewardLogMapper.selectCount(
-                new LambdaQueryWrapper<RewardLog>().eq(RewardLog::getAgentId, agentId)).intValue());
-        counts.put("activityCount", activityLogMapper.selectCount(
-                new LambdaQueryWrapper<ActivityLog>().eq(ActivityLog::getAgentId, agentId)).intValue());
-        return counts;
-    }
-
-    // ══════════════════════════════════════════════════════════════
-    //  级联删除
-    // ══════════════════════════════════════════════════════════════
-
-    @Transactional(rollbackFor = Exception.class)
-    public Map<String, Object> deleteAgentCascade(Long agentId, String confirmName) {
-        Agent agent = getById(agentId);
-        if (agent == null) throw new BizException("Agent 不存在: " + agentId);
-        if (!agent.getName().equals(confirmName)) {
-            throw new BizException("名称不匹配，请确认后重试");
-        }
-
-        // 先统计
-        int subTaskCount = Integer.parseInt(subTaskMapper.selectCount(
-                new LambdaQueryWrapper<SubTask>().eq(SubTask::getAssignedAgentId, agentId)).toString());
-        int reviewCount = Integer.parseInt(reviewRecordMapper.selectCount(
-                new LambdaQueryWrapper<ReviewRecord>().eq(ReviewRecord::getReviewerAgentId, agentId)).toString());
-        int rewardCount = Integer.parseInt(rewardLogMapper.selectCount(
-                new LambdaQueryWrapper<RewardLog>().eq(RewardLog::getAgentId, agentId)).toString());
-        int activityCount = Integer.parseInt(activityLogMapper.selectCount(
-                new LambdaQueryWrapper<ActivityLog>().eq(ActivityLog::getAgentId, agentId)).toString());
-
-        // unlink 子任务
-        subTaskMapper.update(null,
-                new LambdaUpdateWrapper<SubTask>()
-                        .eq(SubTask::getAssignedAgentId, agentId)
-                        .set(SubTask::getAssignedAgentId, null));
-
-        // 清理级联数据（物理删除：@TableLogic 会把普通 delete 改写为 UPDATE deleted=1，
-        // 这里走 Mapper 自定义 DELETE SQL 真删，不留残留行）
-        rewardLogMapper.physicalDeleteByAgentId(agentId);
-        activityLogMapper.physicalDeleteByAgentId(agentId);
-        agentMcpServerService.physicalDeleteByAgentId(agentId);
-        // agent_inbox / agent_duty_lease 对 agent.id 有外键约束，必须先于 agent 行删除
-        agentInboxMapper.physicalDeleteByAgentId(agentId);
-        agentDutyLeaseMapper.physicalDeleteByAgentId(agentId);
-
-        baseMapper.physicalDeleteById(agentId);
-
-        log.info("Agent 级联删除完成: id={}, name={}, reward={}, activity={}",
-                agentId, agent.getName(), rewardCount, activityCount);
-
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("agentName", agent.getName());
-        result.put("subTaskCount", subTaskCount);
-        result.put("reviewCount", reviewCount);
-        result.put("rewardCount", rewardCount);
-        result.put("activityCount", activityCount);
-        return result;
-    }
-
-    // ══════════════════════════════════════════════════════════════
-    //  积分明细 / 活动日志
-    // ══════════════════════════════════════════════════════════════
-
-    public Page<RewardLog> getScoreLogs(Long agentId, int pageNum, int pageSize) {
-        return rewardLogMapper.selectPage(
-                new Page<>(pageNum, pageSize),
-                new LambdaQueryWrapper<RewardLog>()
-                        .eq(RewardLog::getAgentId, agentId)
-                        .orderByDesc(RewardLog::getCreateTime));
-    }
-
-    public Page<ActivityLog> getActivityLogs(Long agentId, int pageNum, int pageSize, String action) {
-        return activityLogMapper.selectPage(
-                new Page<>(pageNum, pageSize),
-                new LambdaQueryWrapper<ActivityLog>()
-                        .eq(ActivityLog::getAgentId, agentId)
-                        .eq(action != null && !action.isBlank(), ActivityLog::getAction, action)
-                        .orderByDesc(ActivityLog::getCreateTime));
-    }
-
-    // ══════════════════════════════════════════════════════════════
-    //  阶段 4.3 SLEEPING 状态管理（v2.4 §4.3）
-    //  - sleep：管理员手动暂停 Agent，系统不自动设 SLEEPING
-    //  - wake：恢复后设 OFFLINE（让系统心跳自然计算 IDLE/ONLINE，不强行 ONLINE）
-    //  - SLEEPING 不写 offline_reason/offline_at（v2.4 行 419）
-    //  - 每次操作都写 task_timeline 审计（event_type=agent_sleep/agent_wake, role=SYSTEM）
-    // ══════════════════════════════════════════════════════════════
+    List<Agent> listAllOrderByScoreDesc();
 
     /**
-     * 管理员手动暂停 Agent（v2.4 §4.3）。
-     *
-     * <p>行为：
-     * <ol>
-     *   <li>校验当前状态不能是 SLEEPING（避免重复 sleep）</li>
-     *   <li>设 online_status=SLEEPING + update_by=operator</li>
-     *   <li><b>不动</b> offline_reason/offline_at（v2.4 行 419：SLEEPING 不写此字段）</li>
-     *   <li>写 task_timeline 审计（event_type=agent_sleep, role=SYSTEM）</li>
-     * </ol>
-     *
-     * <p>SLEEPING 防护（已实现，本方法不重复校验）：
-     * <ul>
-     *   <li>HeartbeatService.seen/active 检测到 SLEEPING 不会覆盖 online_status</li>
-     *   <li>AgentHealthCheckTask 扫描时跳过 SLEEPING（IS DISTINCT FROM 'SLEEPING'）</li>
-     *   <li>AgentMapper.markOfflineIfStale CAS 条件中也防护 SLEEPING</li>
-     * </ul>
+     * 分页查询 Agent（支持 role/status 过滤、名称/备注关键字、score/createTime 排序）。
      */
-    @Transactional(rollbackFor = Exception.class)
-    public Agent sleepAgent(Long agentId, String operator, String reason) {
-        Agent agent = getById(agentId);
-        if (agent == null) throw new BizException("Agent 不存在: " + agentId);
-
-        AgentOnlineStatus prev = agent.getOnlineStatus();
-        if (prev == AgentOnlineStatus.SLEEPING) {
-            throw new BizException("Agent 已经是 SLEEPING 状态，无需重复暂停: id=" + agentId);
-        }
-
-        applySleepToAgent(agent, prev, operator, reason);
-        return agent;
-    }
+    Page<Agent> listAgentsPaged(int pageNum, int pageSize, AgentRole role, AgentStatus status,
+                                String keyword, String sortBy, String sortOrder);
 
     /**
-     * 实际写入 SLEEPING 状态 + task_timeline 审计（v2.4 §4.3）。
-     *
-     * <p>被 {@link #sleepAgent(Long, String, String)} 与 {@link #sleepAgentBatch(java.util.List, String, String)}
-     * 共用：单 agent 走外层事务，批量时每条 autoCommit 独立生效。</p>
-     *
-     * @param agent   已读取的 Agent 实体（避免再次 getById）
-     * @param prev    调用方读取时的 online_status（用于审计 payload.prev_status）
-     * @param operator 操作人；空时回退 "admin"
-     * @param reason  可选原因，写入 task_timeline.payload
+     * Agent 工作量统计（assigned/inProgress/done/blocked/review 计数）。
      */
-    private void applySleepToAgent(Agent agent, AgentOnlineStatus prev,
-                                   String operator, String reason) {
-        // 业务操作人：空值回退 "admin"；用于审计 payload.operator
-        String effectiveOperator = operator != null && !operator.isBlank() ? operator : "admin";
-
-        agent.setOnlineStatus(AgentOnlineStatus.SLEEPING);
-        agent.setUpdateBy(effectiveOperator); // MetaObjectHandler.updateFill 仍会覆盖为 "system"，无影响
-        updateById(agent);
-
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("operator", effectiveOperator); // 用业务操作人，不用 agent.getUpdateBy()
-        if (reason != null && !reason.isBlank()) payload.put("reason", reason);
-        payload.put("prev_status", prev != null ? prev.name() : "UNKNOWN");
-        payload.put("new_status", AgentOnlineStatus.SLEEPING.name());
-        payload.put("at", OffsetDateTime.now().toString());
-
-        taskTimelineService.recordEvent(
-                null, null, "agent_sleep", AgentRole.SYSTEM, agent.getId(), payload);
-
-        log.info("Agent 手动暂停: id={}, prev={}, operator={}, reason={}",
-                agent.getId(), prev, effectiveOperator, reason);
-    }
+    Map<String, Integer> workloadStats(Long agentId);
 
     /**
-     * 批量暂停 Agent（v2.4 §4.3 批次 3）。
-     *
-     * <p><b>行为契约：</b>
-     * <ul>
-     *   <li><b>部分成功</b>：逐个处理，单个失败不影响其他 Agent</li>
-     *   <li><b>不抛 BizException</b>：所有失败收集到 failed 列表，整体返回 200</li>
-     *   <li><b>无外层事务</b>：每条 agent 的 sleep SQL autoCommit 独立生效（自调用不触发代理，
-     *       且批量场景不应让一条失败回滚整批）</li>
-     * </ul>
-     *
-     * <p><b>响应结构：</b>
-     * <pre>
-     * {
-     *   "total": 3,
-     *   "successCount": 2,
-     *   "failedCount": 1,
-     *   "succeeded": [{"agentId":1,"agentName":"alice","onlineStatus":"SLEEPING"},
-     *                 {"agentId":2,"agentName":"bob","onlineStatus":"SLEEPING"}],
-     *   "failed":    [{"agentId":3,"agentName":"carol","reason":"Agent 已是 SLEEPING 状态"}]
-     * }
-     * </pre>
-     *
-     * @return 永远非 null；total = agentIds.size()（输入维度，便于 UI 直接展示进度）
+     * Agent 进行中的子任务数。
      */
-    public Map<String, Object> sleepAgentBatch(List<Long> agentIds, String operator, String reason) {
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("total", agentIds == null ? 0 : agentIds.size());
-
-        List<Map<String, Object>> succeeded = new ArrayList<>();
-        List<Map<String, Object>> failed = new ArrayList<>();
-
-        if (agentIds == null || agentIds.isEmpty()) {
-            result.put("successCount", 0);
-            result.put("failedCount", 0);
-            result.put("succeeded", succeeded);
-            result.put("failed", failed);
-            return result;
-        }
-
-        for (Long agentId : agentIds) {
-            Map<String, Object> item = new LinkedHashMap<>();
-            item.put("agentId", agentId);
-
-            try {
-                Agent agent = getById(agentId);
-                if (agent == null) {
-                    item.put("reason", "Agent 不存在");
-                    failed.add(item);
-                    continue;
-                }
-
-                AgentOnlineStatus prev = agent.getOnlineStatus();
-                if (prev == AgentOnlineStatus.SLEEPING) {
-                    item.put("agentName", agent.getName());
-                    item.put("currentStatus", prev.name());
-                    item.put("reason", "Agent 已是 SLEEPING 状态");
-                    failed.add(item);
-                    continue;
-                }
-
-                applySleepToAgent(agent, prev, operator, reason);
-
-                item.put("agentName", agent.getName());
-                item.put("onlineStatus", agent.getOnlineStatus().name());
-                succeeded.add(item);
-
-            } catch (Exception e) {
-                log.error("Agent 批量暂停失败: agentId={}", agentId, e);
-                item.put("reason", "处理异常: " + e.getMessage());
-                failed.add(item);
-            }
-        }
-
-        result.put("successCount", succeeded.size());
-        result.put("failedCount", failed.size());
-        result.put("succeeded", succeeded);
-        result.put("failed", failed);
-
-        log.info("Agent 批量暂停汇总: total={}, success={}, failed={}, operator={}, reason={}",
-                result.get("total"), succeeded.size(), failed.size(), operator, reason);
-        return result;
-    }
+    int inProgressCount(Long agentId);
 
     /**
-     * 查询当前 SLEEPING 状态的 Agent（v2.4 §4.3 批次 3）。
-     *
-     * @param role 可选；为 null 时返回所有角色的 SLEEPING Agent
-     * @return 按 update_time DESC 排序（最近操作的在前）
+     * Agent 积分排名（并列按同分取同一名次）。
      */
-    public List<Agent> findSleepingByRole(AgentRole role) {
-        return lambdaQuery()
-                .eq(Agent::getOnlineStatus, AgentOnlineStatus.SLEEPING)
-                .eq(role != null, Agent::getRole, role)
-                .orderByDesc(Agent::getUpdateTime)
-                .list();
-    }
+    int scoreRank(Long agentId);
 
     /**
-     * 管理员手动恢复 Agent（v2.4 §4.3）。
-     *
-     * <p>行为：
-     * <ol>
-     *   <li>校验当前状态必须是 SLEEPING（避免错误恢复）</li>
-     *   <li>设 online_status=OFFLINE + update_by=operator（不强行 ONLINE，让系统下次心跳计算）</li>
-     *   <li>保持 offline_reason/offline_at 不变（v2.4 行 419）</li>
-     *   <li>写 task_timeline 审计（event_type=agent_wake, role=SYSTEM）</li>
-     * </ol>
-     *
-     * <p>为什么 wake 后设 OFFLINE 而不是 ONLINE：v2.4 §4.1 设计原则，三态由 last_seen_at/last_active_at
-     * 计算，避免 Agent 还未发送心跳就误判为 ONLINE。下次 heartbeat 调用时 HeartbeatService
-     * 会计算为 IDLE/ONLINE。</p>
+     * Agent 详情（不存在抛 BizException）。
      */
-    @Transactional(rollbackFor = Exception.class)
-    public Agent wakeAgent(Long agentId, String operator, String reason) {
-        Agent agent = getById(agentId);
-        if (agent == null) throw new BizException("Agent 不存在: " + agentId);
-
-        AgentOnlineStatus prev = agent.getOnlineStatus();
-        if (prev != AgentOnlineStatus.SLEEPING) {
-            throw new BizException("Agent 不是 SLEEPING 状态，无法唤醒: id=" + agentId + ", current=" + prev);
-        }
-
-        agent.setOnlineStatus(AgentOnlineStatus.OFFLINE);
-        String effectiveOperator = operator != null && !operator.isBlank() ? operator : "admin";
-        agent.setUpdateBy(effectiveOperator);
-        updateById(agent);
-
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("operator", effectiveOperator);
-        if (reason != null && !reason.isBlank()) payload.put("reason", reason);
-        payload.put("prev_status", prev.name());
-        payload.put("new_status", AgentOnlineStatus.OFFLINE.name());
-        payload.put("at", OffsetDateTime.now().toString());
-
-        taskTimelineService.recordEvent(
-                null, null, "agent_wake", AgentRole.SYSTEM, agentId, payload);
-
-        log.info("Agent 手动唤醒: id={}, operator={}, reason={}", agentId, effectiveOperator, reason);
-        return agent;
-    }
-
-    // ══════════════════════════════════════════════════════════════
-    //  Util
-    // ══════════════════════════════════════════════════════════════
+    Agent getAgentDetail(Long agentId);
 
     /**
-     * 下发 Agent 工牌 consumerToken。
-     *
-     * <p>T2 语义收口后，`agent.api_key` 保持字段名不变，但含义升级为 consumerToken。
-     * 真实 LLM 凭证不得再落在该字段。</p>
+     * Agent 关联数据计数（subTask/review/reward/activity）。
      */
-    private String issueConsumerToken() {
-        return "ak_" + generateRandomHex(32);
-    }
+    Map<String, Object> getRelatedCounts(Long agentId);
 
-    private String generateRandomHex(int length) {
-        byte[] bytes = new byte[length / 2];
-        SECURE_RANDOM.nextBytes(bytes);
-        StringBuilder sb = new StringBuilder();
-        for (byte b : bytes) {
-            sb.append(String.format("%02x", b));
-        }
-        return sb.toString();
-    }
+    /**
+     * 级联删除 Agent（校验名称确认后 unlink 子任务并物理清理关联数据）。
+     */
+    Map<String, Object> deleteAgentCascade(Long agentId, String confirmName);
+
+    /**
+     * Agent 积分明细分页。
+     */
+    Page<RewardLog> getScoreLogs(Long agentId, int pageNum, int pageSize);
+
+    /**
+     * Agent 活动日志分页（可按 action 过滤）。
+     */
+    Page<ActivityLog> getActivityLogs(Long agentId, int pageNum, int pageSize, String action);
+
+    /**
+     * 管理员手动暂停 Agent（v2.4 §4.3）：校验非 SLEEPING 后写入 SLEEPING + task_timeline 审计。
+     */
+    Agent sleepAgent(Long agentId, String operator, String reason);
+
+    /**
+     * 批量暂停 Agent（v2.4 §4.3 批次 3）：部分成功语义，单个失败不影响其他 Agent。
+     */
+    Map<String, Object> sleepAgentBatch(List<Long> agentIds, String operator, String reason);
+
+    /**
+     * 查询当前 SLEEPING 状态的 Agent（可按 role 过滤，按 update_time DESC 排序）。
+     */
+    List<Agent> findSleepingByRole(AgentRole role);
+
+    /**
+     * 管理员手动恢复 Agent（v2.4 §4.3）：校验 SLEEPING 后置 OFFLINE（不强行 ONLINE）+ task_timeline 审计。
+     */
+    Agent wakeAgent(Long agentId, String operator, String reason);
+
+    /**
+     * 校验同一模型在同一角色下唯一（V49 新增）。
+     *
+     * <p>规则：deepseek-v4-flash 和 kimi-k3 可同时注册为 Planner；
+     * 但 deepseek-v4-flash 不能注册两个 Planner。</p>
+     *
+     * @param providerCode Provider Code（如 deepseek）
+     * @param modelName    模型名称（如 deepseek-v4-flash）
+     * @param role         Agent 角色
+     * @param excludeAgentId 排除的 Agent ID（编辑时排除自身）
+     * @throws com.helloai.common.base.BizException 当同一角色已存在使用该模型的 Agent 时
+     */
+    void validateModelUniqueInRole(String providerCode, String modelName, AgentRole role, Long excludeAgentId);
 }
