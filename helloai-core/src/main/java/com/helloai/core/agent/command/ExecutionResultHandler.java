@@ -10,7 +10,7 @@ import com.helloai.core.shared.event.SubTaskSubmittedForReviewEvent;
 import com.helloai.core.agent.service.ExecutionArtifactService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConversationService;
-import com.helloai.core.agent.service.ExternalAgentFailureTracker;
+import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

@@ -11,7 +11,7 @@ import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.ExecutionArtifactService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConversationService;
-import com.helloai.core.agent.service.ExternalAgentFailureTracker;
+import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;

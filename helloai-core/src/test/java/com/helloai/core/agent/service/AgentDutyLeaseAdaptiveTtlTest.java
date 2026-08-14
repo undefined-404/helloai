@@ -5,6 +5,7 @@ import com.helloai.common.constant.AgentDutyLeaseStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
 import com.helloai.core.agent.mapper.AgentMapper;
+import com.helloai.core.agent.service.impl.AgentDutyLeaseServiceImpl;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -59,7 +60,7 @@ class AgentDutyLeaseAdaptiveTtlTest {
         props.setMaxTtlMinutes(240);
         props.setDefaultTtlMinutes(30);
         props.setFullScore(100);
-        service = spy(new AgentDutyLeaseService(
+        service = spy(new AgentDutyLeaseServiceImpl(
                 mock(ApplicationEventPublisher.class), agentMapper, subTaskMapper, props));
     }
 

@@ -1,7 +1,7 @@
-package com.helloai.core.planner.service;
+package com.helloai.core.planner.search;
 
 import com.helloai.common.config.WebSearchProperties;
-import com.helloai.core.planner.search.WebSearchResult;
+import com.helloai.core.planner.service.WebSearchService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Primary;

@@ -46,7 +46,7 @@ class DoorbellServiceTest {
         heartbeatService = mock(HeartbeatService.class);
         // 默认在岗，个别用例再单独覆盖为未在岗
         when(dutyLeaseService.isOnDuty(anyLong())).thenReturn(true);
-        service = new DoorbellService(properties, registry, dutyLeaseService, heartbeatService);
+        service = new DoorbellServiceImpl(properties, registry, dutyLeaseService, heartbeatService);
     }
 
     @Test

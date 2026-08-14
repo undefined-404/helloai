@@ -13,7 +13,7 @@ import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.agent.mapper.AgentMapper;
 import com.helloai.core.agent.service.AgentService;
-import com.helloai.core.agent.service.ExternalAgentFailureTracker;
+import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.TaskTimelineService;
 import org.junit.jupiter.api.BeforeEach;

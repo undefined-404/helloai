@@ -1,36 +1,13 @@
 package com.helloai.core.agent.service;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.helloai.common.base.BizException;
-import com.helloai.common.config.AgentDutyLeaseProperties;
+import com.baomidou.mybatisplus.extension.service.IService;
 import com.helloai.common.constant.AgentDutyLeaseStatus;
-import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
 import com.helloai.core.agent.entity.AgentDutyLeaseLatestRow;
-import com.helloai.core.shared.event.DutyLeaseClosedEvent;
-import com.helloai.core.agent.mapper.AgentDutyLeaseMapper;
-import com.helloai.core.agent.mapper.AgentMapper;
-import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.mapper.SubTaskMapper;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
-import java.time.OffsetDateTime;
 import java.util.Collection;
-import java.util.Collections;
-import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-import java.util.UUID;
-import java.util.stream.Collectors;
 
 /**
  * Agent 值班租约服务。
@@ -45,64 +22,31 @@ import java.util.stream.Collectors;
  * </ul>
  * 本轮不做：checkIn/checkOut、selector 接入、dashboard。</p>
  */
-@Slf4j
-@Service
-@RequiredArgsConstructor
-public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, AgentDutyLease> {
-
-    private final ApplicationEventPublisher eventPublisher;
-    private final AgentMapper agentMapper;
-    private final SubTaskMapper subTaskMapper;
-    private final AgentDutyLeaseProperties dutyLeaseProperties;
+public interface AgentDutyLeaseService extends IService<AgentDutyLease> {
 
     /**
      * 按 ID 批量查询 Agent 名称（用于值班租约报表面板填充 agentName）。
      *
-     * <p>为避免 N+1，本方法走 {@code AgentMapper.selectBatchIds} 一次性查询。
-     * 入参中的 null 元素会被跳过；返回 Map 键为 Agent ID，值为 Agent 名称（无记录的 ID 不在 Map 中）。</p>
+     * <p>为避免 N+1，走 {@code AgentMapper.selectBatchIds} 一次性查询；
+     * 入参中的 null 元素会被跳过；返回 Map 键为 Agent ID，值为 Agent 名称
+     * （无记录的 ID 不在 Map 中）。</p>
      *
      * @param agentIds 待查询的 Agent ID 集合（可为 null 或空集合）
      * @return id → name 映射；输入为空时返回空 Map
      */
-    public Map<Long, String> getAgentNamesByIds(Collection<Long> agentIds) {
-        if (agentIds == null || agentIds.isEmpty()) {
-            return Collections.emptyMap();
-        }
-        Set<Long> idSet = agentIds.stream().filter(Objects::nonNull).collect(Collectors.toSet());
-        if (idSet.isEmpty()) {
-            return Collections.emptyMap();
-        }
-        List<Agent> agents = agentMapper.selectBatchIds(idSet);
-        if (agents == null || agents.isEmpty()) {
-            return Collections.emptyMap();
-        }
-        Map<Long, String> result = new LinkedHashMap<>();
-        for (Agent a : agents) {
-            if (a.getId() != null && a.getName() != null) {
-                result.put(a.getId(), a.getName());
-            }
-        }
-        return result;
-    }
+    Map<Long, String> getAgentNamesByIds(Collection<Long> agentIds);
 
     /**
      * 查询 Agent 当前有效的值班租约。
      *
      * @return null 如果当前没有 ACTIVE 租约
      */
-    public AgentDutyLease getActiveLease(Long agentId) {
-        if (agentId == null) {
-            return null;
-        }
-        return baseMapper.selectActiveByAgentId(agentId);
-    }
+    AgentDutyLease getActiveLease(Long agentId);
 
     /**
      * 判断 Agent 当前是否处于值班态（有 ACTIVE 租约）。
      */
-    public boolean isOnDuty(Long agentId) {
-        return getActiveLease(agentId) != null;
-    }
+    boolean isOnDuty(Long agentId);
 
     /**
      * 查询 Agent 最近一条值班租约（任意状态，按开始时间倒序取第一条）。
@@ -112,16 +56,7 @@ public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, Age
      *
      * @return null 如果该 Agent 从未有过租约
      */
-    public AgentDutyLease getLatestLease(Long agentId) {
-        if (agentId == null) {
-            return null;
-        }
-        return lambdaQuery()
-                .eq(AgentDutyLease::getAgentId, agentId)
-                .orderByDesc(AgentDutyLease::getStartTime)
-                .last("LIMIT 1")
-                .one();
-    }
+    AgentDutyLease getLatestLease(Long agentId);
 
     /**
      * 为 Agent 开启新的值班租约（打卡上班）。
@@ -134,39 +69,8 @@ public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, Age
      * @param ttlMinutes    租约有效期（分钟）
      * @return 新建的租约
      */
-    @Transactional(rollbackFor = Exception.class)
-    public AgentDutyLease startLease(Long agentId, String workMode,
-                                     Integer maxConcurrent, int ttlMinutes) {
-        if (agentId == null) {
-            throw new BizException("agentId 不能为空");
-        }
-
-        // 防御性关闭旧租约
-        int closed = baseMapper.closeActiveLeases(
-                agentId,
-                AgentDutyLeaseStatus.CLOSED.name(),
-                "new_lease_start",
-                OffsetDateTime.now());
-        if (closed > 0) {
-            log.info("关闭 Agent {} 的旧租约 {} 条", agentId, closed);
-        }
-
-        OffsetDateTime now = OffsetDateTime.now();
-        AgentDutyLease lease = new AgentDutyLease();
-        lease.setAgentId(agentId);
-        lease.setSessionId(UUID.randomUUID().toString());
-        lease.setWorkMode(workMode);
-        lease.setMaxConcurrent(maxConcurrent != null ? maxConcurrent : 1);
-        lease.setStatus(AgentDutyLeaseStatus.ACTIVE);
-        lease.setStartTime(now);
-        lease.setLastRenewTime(now);
-        lease.setExpireTime(now.plusMinutes(ttlMinutes));
-        save(lease);
-
-        log.info("Agent {} 值班租约已创建: sessionId={}, expiresAt={}",
-                agentId, lease.getSessionId(), lease.getExpireTime());
-        return lease;
-    }
+    AgentDutyLease startLease(Long agentId, String workMode,
+                              Integer maxConcurrent, int ttlMinutes);
 
     /**
      * 关闭 Agent 当前有效的值班租约（签退）。
@@ -175,24 +79,7 @@ public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, Age
      * @param closeReason 关闭原因
      * @return 关闭的租约条数（0 = 没有需要关闭的 ACTIVE 租约）
      */
-    @Transactional(rollbackFor = Exception.class)
-    public int closeLease(Long agentId, String closeReason) {
-        if (agentId == null) {
-            return 0;
-        }
-        String reason = closeReason != null ? closeReason : "manual_close";
-        int closed = baseMapper.closeActiveLeases(
-                agentId,
-                AgentDutyLeaseStatus.CLOSED.name(),
-                reason,
-                OffsetDateTime.now());
-        if (closed > 0) {
-            log.info("Agent {} 值班租约已关闭: reason={}, affected={}", agentId, reason, closed);
-            // 签退（checkOut）→ 事务提交后发布租约关闭事件（原门铃断连监听已随门铃通道搁置 2026-08-07，事件保留供未来复用）
-            eventPublisher.publishEvent(new DutyLeaseClosedEvent(agentId, reason));
-        }
-        return closed;
-    }
+    int closeLease(Long agentId, String closeReason);
 
     /**
      * 续约：延长当前 ACTIVE 租约的 expires_at 和 last_renewed_at。
@@ -204,61 +91,21 @@ public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, Age
      * @param ttlMinutes 续约时长（分钟）
      * @return 续约后的租约；如果无 ACTIVE 租约则返回 null
      */
-    @Transactional(rollbackFor = Exception.class)
-    public AgentDutyLease renewLease(Long agentId, int ttlMinutes) {
-        AgentDutyLease active = getActiveLease(agentId);
-        if (active == null) {
-            log.warn("Agent {} 续约失败：当前无 ACTIVE 租约", agentId);
-            return null;
-        }
-        OffsetDateTime now = OffsetDateTime.now();
-        active.setLastRenewTime(now);
-        active.setExpireTime(now.plusMinutes(ttlMinutes));
-        updateById(active);
-        log.info("Agent {} 值班租约已续约: expiresAt={}", agentId, active.getExpireTime());
-        return active;
-    }
+    AgentDutyLease renewLease(Long agentId, int ttlMinutes);
 
     /**
      * 解析租约 TTL 窗口（E1 动态 TTL 自适应，N12 A2 第 2 段）。
      *
      * <p>显式入参（checkIn 传了 ttlMinutes）永远优先；否则按 Agent 表现动态推断：
-     * <ul>
-     *   <li>有 {@code agent.score} → 线性映射 [0, fullScore] → [min, max]，
-     *       低分 Agent 窗口短（快速回收），高分 Agent 窗口长（减少续约开销）</li>
-     *   <li>无 score → 用 {@code consecutive_failure_count} 折算表现分（每次失败 -20，下限 0），
-     *       连续失败越多窗口越短</li>
-     *   <li>自适应开关关闭 / agentId 为空 / Agent 记录不存在 → defaultTtlMinutes 兜底</li>
-     * </ul></p>
+     * 有 score → 线性映射 [0, fullScore] → [min, max]；无 score →
+     * 用 consecutive_failure_count 折算表现分（每次失败 -20，下限 0）；
+     * 自适应开关关闭 / agentId 为空 / Agent 记录不存在 → defaultTtlMinutes 兜底。</p>
      *
      * @param agentId             Agent ID
      * @param explicitTtlMinutes  checkIn 显式传入的 TTL（分钟）；null 或 &lt;=0 表示走动态推断
      * @return 解析后的租约窗口（分钟），恒 &gt; 0
      */
-    public int resolveTtlMinutes(Long agentId, Integer explicitTtlMinutes) {
-        if (explicitTtlMinutes != null && explicitTtlMinutes > 0) {
-            return explicitTtlMinutes;
-        }
-        if (agentId == null || !dutyLeaseProperties.isAdaptiveTtlEnabled()) {
-            return dutyLeaseProperties.getDefaultTtlMinutes();
-        }
-        Agent agent = agentMapper.selectById(agentId);
-        if (agent == null) {
-            return dutyLeaseProperties.getDefaultTtlMinutes();
-        }
-        int fullScore = Math.max(dutyLeaseProperties.getFullScore(), 1);
-        int performanceScore;
-        if (agent.getScore() != null) {
-            performanceScore = agent.getScore();
-        } else {
-            int failures = agent.getConsecutiveFailureCount() != null ? agent.getConsecutiveFailureCount() : 0;
-            performanceScore = fullScore - failures * 20;
-        }
-        performanceScore = Math.max(0, Math.min(fullScore, performanceScore));
-        int min = Math.max(dutyLeaseProperties.getMinTtlMinutes(), 1);
-        int max = Math.max(dutyLeaseProperties.getMaxTtlMinutes(), min);
-        return min + (max - min) * performanceScore / fullScore;
-    }
+    int resolveTtlMinutes(Long agentId, Integer explicitTtlMinutes);
 
     /**
      * 自适应续约（E1 动态 TTL 自适应）：按 Agent 当前状态动态计算续约窗口。
@@ -271,30 +118,7 @@ public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, Age
      * @param agentId Agent ID
      * @return 续约后的租约；当前无 ACTIVE 租约返回 null
      */
-    public AgentDutyLease adaptiveRenew(Long agentId) {
-        AgentDutyLease active = getActiveLease(agentId);
-        if (active == null) {
-            return null;
-        }
-        int ttlMinutes = hasInFlightSubTask(agentId)
-                ? Math.max(dutyLeaseProperties.getMaxTtlMinutes(), dutyLeaseProperties.getMinTtlMinutes())
-                : resolveTtlMinutes(agentId, null);
-        return renewLease(agentId, ttlMinutes);
-    }
-
-    /**
-     * 判断 Agent 是否存在在跑子任务（ASSIGNED / IN_PROGRESS / REWORK）。
-     *
-     * <p>复用 {@code SubTaskMapper.selectInFlightByAgent} 的在跑语义；
-     * REVIEW（审核中）与 DONE 等状态视为已交付，不再计入执行期保活。</p>
-     */
-    private boolean hasInFlightSubTask(Long agentId) {
-        if (agentId == null) {
-            return false;
-        }
-        List<SubTask> inFlight = subTaskMapper.selectInFlightByAgent(agentId, 1);
-        return inFlight != null && !inFlight.isEmpty();
-    }
+    AgentDutyLease adaptiveRenew(Long agentId);
 
     /**
      * 扫描到期的 ACTIVE 租约并批量翻为 EXPIRED（AgentHub V1 P0-C）。
@@ -303,38 +127,10 @@ public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, Age
      * 每个 Agent 的翻转单独一条 UPDATE，沿用 {@link #closeLease} 相同的
      * 原子条件更新 SQL，仅将 status 从 'ACTIVE' 改为 'EXPIRED'，close_reason 为 'lease_expired'。</p>
      *
-     * <p>安全兵：若同一个 Agent 的旧 lease 已被 checkIn 新建时关闭、新建不到期，
-     * closeActiveLeases 也只会影响新的 ACTIVE 行（旧行已非 ACTIVE）；但因为新行不在
-     * selectExpiredLeases 结果中，不会被作为“到期”代入本方法。</p>
-     *
      * @param batchLimit 单轮扫描上限，建议 100～500
      * @return 成功翻为 EXPIRED 的行数
      */
-    @Transactional(rollbackFor = Exception.class)
-    public int expireLeases(int batchLimit) {
-        int limit = batchLimit > 0 ? batchLimit : 100;
-        OffsetDateTime now = OffsetDateTime.now();
-        List<AgentDutyLease> expired = baseMapper.selectExpiredLeases(now, limit);
-        if (expired == null || expired.isEmpty()) {
-            return 0;
-        }
-        int total = 0;
-        for (AgentDutyLease lease : expired) {
-            int rows = baseMapper.closeActiveLeases(
-                    lease.getAgentId(),
-                    AgentDutyLeaseStatus.EXPIRED.name(),
-                    "lease_expired",
-                    now);
-            if (rows > 0) {
-                total += rows;
-                log.info("值班租约到期已翻为 EXPIRED: agentId={}, leaseId={}, expiresAt={}",
-                        lease.getAgentId(), lease.getId(), lease.getExpireTime());
-                // 租约到期 → 事务提交后发布租约关闭事件（与 checkOut 同一条事件路径）
-                eventPublisher.publishEvent(new DutyLeaseClosedEvent(lease.getAgentId(), "lease_expired"));
-            }
-        }
-        return total;
-    }
+    int expireLeases(int batchLimit);
 
     /**
      * 分页查询值班租约（AgentHub V1 P1 值班报表数据源，只读）。
@@ -348,14 +144,8 @@ public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, Age
      * @param pageSize 每页条数
      * @return 分页结果，绝不返回 null
      */
-    public IPage<AgentDutyLease> listLeases(Long agentId, AgentDutyLeaseStatus status,
-                                            long pageNum, long pageSize) {
-        LambdaQueryWrapper<AgentDutyLease> wrapper = new LambdaQueryWrapper<AgentDutyLease>()
-                .eq(agentId != null, AgentDutyLease::getAgentId, agentId)
-                .eq(status != null, AgentDutyLease::getStatus, status)
-                .orderByDesc(AgentDutyLease::getStartTime);
-        return page(new Page<>(pageNum, pageSize), wrapper);
-    }
+    IPage<AgentDutyLease> listLeases(Long agentId, AgentDutyLeaseStatus status,
+                                     long pageNum, long pageSize);
 
     /**
      * Agent 维度分页：每个 Agent 只返回最新一条租约 + 该 Agent 租约总数（只读）。
@@ -368,18 +158,7 @@ public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, Age
      * @param pageSize 每页 Agent 数
      * @return 分页结果，绝不返回 null
      */
-    public IPage<AgentDutyLeaseLatestRow> listLatestPerAgent(long pageNum, long pageSize) {
-        long safePageNum = Math.max(pageNum, 1);
-        long safePageSize = Math.max(pageSize, 1);
-        long total = baseMapper.countDistinctAgents();
-        Page<AgentDutyLeaseLatestRow> page = new Page<>(safePageNum, safePageSize, total);
-        if (total == 0) {
-            page.setRecords(Collections.emptyList());
-            return page;
-        }
-        page.setRecords(baseMapper.selectLatestPerAgent((safePageNum - 1) * safePageSize, safePageSize));
-        return page;
-    }
+    IPage<AgentDutyLeaseLatestRow> listLatestPerAgent(long pageNum, long pageSize);
 
     /**
      * 今日打卡概览：按 Agent 维度统计各状态的 Agent 数（只读）。
@@ -391,23 +170,5 @@ public class AgentDutyLeaseService extends ServiceImpl<AgentDutyLeaseMapper, Age
      *
      * @return 状态 → Agent 数（顺序稳定），绝不返回 null
      */
-    public Map<AgentDutyLeaseStatus, Long> countTodayAgentsByStatus() {
-        OffsetDateTime todayStart = OffsetDateTime.now()
-                .withHour(0).withMinute(0).withSecond(0).withNano(0);
-        List<String> statuses = baseMapper.selectTodayLatestStatusPerAgent(todayStart);
-
-        Map<AgentDutyLeaseStatus, Long> counts = new LinkedHashMap<>();
-        for (AgentDutyLeaseStatus s : AgentDutyLeaseStatus.values()) {
-            counts.put(s, 0L);
-        }
-        for (String status : statuses) {
-            for (AgentDutyLeaseStatus s : AgentDutyLeaseStatus.values()) {
-                if (s.name().equals(status)) {
-                    counts.merge(s, 1L, Long::sum);
-                    break;
-                }
-            }
-        }
-        return counts;
-    }
+    Map<AgentDutyLeaseStatus, Long> countTodayAgentsByStatus();
 }

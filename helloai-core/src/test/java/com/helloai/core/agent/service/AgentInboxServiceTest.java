@@ -6,6 +6,7 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentInbox;
 import com.helloai.core.agent.mapper.AgentMapper;
+import com.helloai.core.agent.service.impl.AgentInboxServiceImpl;
 import com.helloai.core.shared.event.InboxMessageCreatedEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -48,7 +49,7 @@ class AgentInboxServiceTest {
     void setUp() {
         eventPublisher = mock(ApplicationEventPublisher.class);
         agentMapper = mock(AgentMapper.class);
-        service = spy(new AgentInboxService(eventPublisher, agentMapper));
+        service = spy(new AgentInboxServiceImpl(eventPublisher, agentMapper));
         // 默认投递目标为 CLI_CLIENT，保持既有用例行为；守卫用例单独覆盖 stub
         Agent cliAgent = new Agent();
         cliAgent.setId(7L);

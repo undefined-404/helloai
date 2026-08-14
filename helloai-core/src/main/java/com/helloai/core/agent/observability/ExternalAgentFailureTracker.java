@@ -1,4 +1,4 @@
-package com.helloai.core.agent.service;
+package com.helloai.core.agent.observability;
 
 import com.helloai.common.config.AgentFallbackProperties;
 import com.helloai.common.config.AgentHealthProperties;
