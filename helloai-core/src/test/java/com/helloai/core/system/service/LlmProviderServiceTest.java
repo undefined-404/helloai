@@ -39,13 +39,16 @@ class LlmProviderServiceTest {
     @Mock
     private LlmProviderQueryService queryService;
 
+    @Mock
+    private LlmProviderModelService llmProviderModelService;
+
     private LlmProviderServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        // 构造注入 queryService，再通过反射把 mock 注入到父类 ServiceImpl.baseMapper 字段
+        // 构造注入 queryService / llmProviderModelService，再通过反射把 mock 注入到父类 ServiceImpl.baseMapper 字段
         // ServiceImpl.baseMapper 擦除类型为 BaseMapper，不带 type 参数避免类型不匹配
-        service = new LlmProviderServiceImpl(queryService);
+        service = new LlmProviderServiceImpl(queryService, llmProviderModelService);
         ReflectionTestUtils.setField(service, "baseMapper", mapper);
     }
 

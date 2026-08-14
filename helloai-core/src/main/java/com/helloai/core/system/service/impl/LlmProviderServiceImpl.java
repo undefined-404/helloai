@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.core.system.entity.LlmProvider;
 import com.helloai.core.system.mapper.LlmProviderMapper;
+import com.helloai.core.system.service.LlmProviderModelService;
 import com.helloai.core.system.service.LlmProviderQueryService;
 import com.helloai.core.system.service.LlmProviderService;
 import lombok.RequiredArgsConstructor;
@@ -16,6 +17,8 @@ import java.util.Objects;
 
 /**
  * LlmProvider 业务服务实现（CRUD + 启用/禁用）。
+ *
+ * <p>V49 扩展：保存 Provider 时校验必须配置可用模型（关联 llm_provider_model 表）。</p>
  */
 @Slf4j
 @Service
@@ -23,6 +26,7 @@ import java.util.Objects;
 public class LlmProviderServiceImpl extends ServiceImpl<LlmProviderMapper, LlmProvider> implements LlmProviderService {
 
     private final LlmProviderQueryService llmProviderQueryService;
+    private final LlmProviderModelService llmProviderModelService;
 
     /**
      * 新增 Provider。
@@ -92,8 +96,10 @@ public class LlmProviderServiceImpl extends ServiceImpl<LlmProviderMapper, LlmPr
     /**
      * 删除 Provider。
      *
-     * <p>内置 Provider 拒绝删除；调用方需自行清理由 PlatformProviderConfigService#saveApiKey
-     * 写入的 PLATFORM 级 credential_vault 凭证（保留 vault 凭证不会自动清理）。</p>
+     * <p>内置 Provider 拒绝删除；删除时级联物理清理该 Provider 的模型配置
+     * （llm_provider_model，V51 起软删 Provider 不触发 FK 级联，需应用层补齐）；
+     * 调用方需自行清理由 PlatformProviderConfigService#saveApiKey 写入的 PLATFORM 级
+     * credential_vault 凭证（保留 vault 凭证不会自动清理）。</p>
      */
     @Transactional(rollbackFor = Exception.class)
     @Override
@@ -105,6 +111,8 @@ public class LlmProviderServiceImpl extends ServiceImpl<LlmProviderMapper, LlmPr
         if (Integer.valueOf(1).equals(existing.getBuiltin())) {
             throw new BizException("内置 Provider 不可删除");
         }
+        // 级联物理清理模型配置，避免残留记录让 isModelAvailable 误判已删 Provider 的模型可用
+        llmProviderModelService.deleteAllPhysicalByProviderId(id);
         removeById(id);
         log.info("LLM Provider 已删除: id={}, code={}", id, existing.getProviderCode());
     }
@@ -122,6 +130,16 @@ public class LlmProviderServiceImpl extends ServiceImpl<LlmProviderMapper, LlmPr
         if (!"OPENAI_COMPATIBLE".equals(protocol) && !"ANTHROPIC_COMPATIBLE".equals(protocol)) {
             throw new BizException("protocol_type 仅支持 OPENAI_COMPATIBLE / ANTHROPIC_COMPATIBLE");
         }
+    }
+
+    /**
+     * 校验 Provider 是否有至少一个启用模型（V49 新增）。
+     *
+     * <p>委托给 LlmProviderModelService 执行具体校验逻辑。</p>
+     */
+    @Override
+    public void validateProviderHasEnabledModels(Long providerId) {
+        llmProviderModelService.validateProviderHasEnabledModels(providerId);
     }
 }
 

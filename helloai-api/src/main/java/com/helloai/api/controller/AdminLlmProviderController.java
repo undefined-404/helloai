@@ -1,11 +1,15 @@
 package com.helloai.api.controller;
 
 import com.helloai.api.dto.admin.CreateLlmProviderRequest;
+import com.helloai.api.dto.admin.LlmProviderModelResponse;
 import com.helloai.api.dto.admin.LlmProviderResponse;
 import com.helloai.api.dto.admin.UpdateLlmProviderRequest;
 import com.helloai.common.base.R;
 import com.helloai.core.agent.service.PlatformProviderConfigService;
 import com.helloai.core.system.entity.LlmProvider;
+import com.helloai.core.system.entity.LlmProviderModel;
+import com.helloai.core.system.service.LlmProviderModelQueryService;
+import com.helloai.core.system.service.LlmProviderModelService;
 import com.helloai.core.system.service.LlmProviderQueryService;
 import com.helloai.core.system.service.LlmProviderService;
 import jakarta.validation.Valid;
@@ -20,8 +24,11 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
@@ -36,6 +43,12 @@ import java.util.stream.Collectors;
  *   <li>DELETE /api/admin/llm-providers/deleteById/{id} 删除（内置不可）</li>
  *   <li>PUT    /api/admin/llm-providers/toggleById/{id} 启用 / 禁用</li>
  *   <li>PUT    /api/admin/llm-providers/{id}/api-key  写入 API Key（走 credential_vault）</li>
+ *   <li>GET    /api/admin/llm-providers/{id}/models/list           模型列表（含禁用）</li>
+ *   <li>POST   /api/admin/llm-providers/{id}/models               添加模型</li>
+ *   <li>PUT    /api/admin/llm-providers/{id}/models/saveAll       批量保存模型配置</li>
+ *   <li>DELETE /api/admin/llm-providers/{id}/models/deleteByName/{modelName} 删除模型</li>
+ *   <li>PUT    /api/admin/llm-providers/{id}/models/toggleByName/{modelName} 启用/禁用模型</li>
+ *   <li>PUT    /api/admin/llm-providers/{id}/models/setDefaultByName/{modelName} 设为默认模型</li>
  * </ul>
  *
  * <p>与 {@link AdminProviderConfigController}（旧 /api/admin/platform/providers）共存，
@@ -50,6 +63,8 @@ public class AdminLlmProviderController {
     private final LlmProviderService providerService;
     private final LlmProviderQueryService queryService;
     private final PlatformProviderConfigService platformProviderConfigService;
+    private final LlmProviderModelService llmProviderModelService;
+    private final LlmProviderModelQueryService llmProviderModelQueryService;
 
     @GetMapping("/list")
     public R<List<LlmProviderResponse>> list() {
@@ -68,7 +83,7 @@ public class AdminLlmProviderController {
         return R.ok(toResponse(p));
     }
 
-    @PostMapping("/")
+    @PostMapping
     public R<LlmProviderResponse> create(@RequestBody @Valid CreateLlmProviderRequest req) {
         LlmProvider entity = new LlmProvider();
         entity.setProviderCode(req.getProviderCode().toLowerCase(Locale.ROOT));
@@ -141,6 +156,144 @@ public class AdminLlmProviderController {
         log.info("管理员配置平台级 API Key 已生效: id={}, provider={}",
                 id, p.getProviderCode());
         return R.ok();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  模型管理端点（V49 新增）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 查询 Provider 的模型列表（含禁用）。
+     */
+    @GetMapping("/{id}/models/list")
+    public R<List<LlmProviderModelResponse>> listModels(@PathVariable("id") Long id) {
+        LlmProvider p = providerService.getById(id);
+        if (p == null) {
+            return R.fail("Provider 不存在");
+        }
+        List<LlmProviderModelResponse> items = llmProviderModelQueryService.listByProviderId(id).stream()
+                .map(this::toModelResponse)
+                .collect(Collectors.toList());
+        return R.ok(items);
+    }
+
+    /**
+     * 添加单个模型到 Provider。
+     */
+    @PostMapping("/{id}/models")
+    public R<LlmProviderModelResponse> addModel(@PathVariable("id") Long id,
+                                                 @RequestBody Map<String, Object> body) {
+        LlmProvider p = providerService.getById(id);
+        if (p == null) {
+            return R.fail("Provider 不存在");
+        }
+        String modelName = (String) body.get("modelName");
+        Boolean isDefault = (Boolean) body.getOrDefault("isDefault", false);
+        LlmProviderModel saved = llmProviderModelService.addModel(id, p.getProviderCode(), modelName, isDefault);
+        return R.ok(toModelResponse(saved));
+    }
+
+    /**
+     * 批量保存 Provider 的模型配置（多选）。
+     */
+    @PutMapping("/{id}/models/saveAll")
+    public R<Void> saveAllModels(@PathVariable("id") Long id,
+                                  @RequestBody Map<String, Object> body) {
+        LlmProvider p = providerService.getById(id);
+        if (p == null) {
+            return R.fail("Provider 不存在");
+        }
+        @SuppressWarnings("unchecked")
+        List<String> modelNames = (List<String>) body.get("modelNames");
+        String defaultModel = (String) body.get("defaultModel");
+        llmProviderModelService.saveProviderModels(id, p.getProviderCode(), modelNames, defaultModel);
+        return R.ok();
+    }
+
+    /**
+     * 删除模型。
+     */
+    @DeleteMapping("/{id}/models/deleteByName/{modelName}")
+    public R<Void> deleteModel(@PathVariable("id") Long id,
+                                @PathVariable("modelName") String modelName) {
+        LlmProvider p = providerService.getById(id);
+        if (p == null) {
+            return R.fail("Provider 不存在");
+        }
+        llmProviderModelService.deleteModel(id, modelName);
+        return R.ok();
+    }
+
+    /**
+     * 启用/禁用模型。
+     */
+    @PutMapping("/{id}/models/toggleByName/{modelName}")
+    public R<Void> toggleModel(@PathVariable("id") Long id,
+                                @PathVariable("modelName") String modelName,
+                                @RequestBody Map<String, Boolean> body) {
+        LlmProvider p = providerService.getById(id);
+        if (p == null) {
+            return R.fail("Provider 不存在");
+        }
+        Boolean enabled = body.get("enabled");
+        if (enabled == null) {
+            return R.fail("enabled 不能为空");
+        }
+        llmProviderModelService.toggleModel(id, modelName, enabled);
+        return R.ok();
+    }
+
+    /**
+     * 设置默认模型。
+     */
+    @PutMapping("/{id}/models/setDefaultByName/{modelName}")
+    public R<Void> setDefaultModel(@PathVariable("id") Long id,
+                                    @PathVariable("modelName") String modelName) {
+        LlmProvider p = providerService.getById(id);
+        if (p == null) {
+            return R.fail("Provider 不存在");
+        }
+        llmProviderModelService.setDefaultModel(id, modelName);
+        return R.ok();
+    }
+
+    /**
+     * 查询指定 modelType 的技能选项（V52 新增，plan 2182376f 完善版）。
+     *
+     * <p>供 Agent 注册/编辑弹窗技能区三段式渲染：{@code capabilitySkills}（模型能力锁定，
+     * 不可取消）+ {@code availableOptionalSkills}（可扩展白名单）。modelType 形如
+     * {@code deepseek:deepseek-v4-flash}（URL 中冒号需 {@code encodeURIComponent}）；
+     * 模型未识别（表中不存在/已删除）时返回降级默认值并标注 {@code degraded=true}，
+     * 前端提示「模型未上架，建议使用已上架模型」。</p>
+     */
+    @GetMapping("/{modelType}/skill-options")
+    public R<Map<String, Object>> skillOptions(@PathVariable("modelType") String modelType) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("modelType", modelType);
+        Optional<LlmProviderModel> capability = llmProviderModelQueryService.findCapabilityByModelType(modelType);
+        if (capability.isEmpty()) {
+            // 降级：返回 Phase 2 默认可选项，前端提示使用已上架模型
+            body.put("capabilitySkills", List.of());
+            body.put("availableOptionalSkills", List.of("shell", "code-review"));
+            body.put("degraded", true);
+            return R.ok(body);
+        }
+        body.put("capabilitySkills", capability.get().getCapabilitySkills() != null
+                ? capability.get().getCapabilitySkills() : List.of());
+        body.put("availableOptionalSkills", capability.get().getAvailableOptionalSkills() != null
+                ? capability.get().getAvailableOptionalSkills() : List.of());
+        body.put("degraded", false);
+        return R.ok(body);
+    }
+
+    private LlmProviderModelResponse toModelResponse(LlmProviderModel m) {
+        LlmProviderModelResponse r = new LlmProviderModelResponse();
+        r.setId(m.getId());
+        r.setModelName(m.getModelName());
+        r.setIsDefault(m.getIsDefault());
+        r.setEnabled(m.getEnabled());
+        r.setSortOrder(m.getSortOrder());
+        return r;
     }
 
     private LlmProviderResponse toResponse(LlmProvider p) {

@@ -54,6 +54,21 @@ export interface UpdateLlmProviderRequest {
   extraConfig?: Record<string, any>
 }
 
+/** LLM Provider 模型项（V49，对应 /api/admin/llm-providers/{id}/models/list）。 */
+export interface LlmProviderModelResponse {
+  id: number
+  modelName: string
+  isDefault: number
+  enabled: number
+  sortOrder: number
+}
+
+/** 批量保存 Provider 模型配置请求体（saveAll）。 */
+export interface SaveProviderModelsRequest {
+  modelNames: string[]
+  defaultModel: string
+}
+
 /** 协议类型选项（前端下拉）。 */
 export const PROTOCOL_OPTIONS: { label: string; value: ProtocolType }[] = [
   { label: 'OpenAI 兼容', value: 'OPENAI_COMPATIBLE' },
@@ -118,5 +133,29 @@ export const settingsApi = {
     return request.put(`/admin/llm-providers/${id}/api-key`, apiKey, {
       headers: { 'Content-Type': 'text/plain' }
     })
+  },
+  // ---- 模型管理（V49，模型多选配置）----
+  listProviderModels(id: number) {
+    return request.get<any, LlmProviderModelResponse[]>(`/admin/llm-providers/${id}/models/list`)
+  },
+  addProviderModel(id: number, modelName: string, isDefault: boolean) {
+    return request.post<any, LlmProviderModelResponse>(`/admin/llm-providers/${id}/models`, {
+      modelName,
+      isDefault
+    })
+  },
+  saveAllProviderModels(id: number, data: SaveProviderModelsRequest) {
+    return request.put(`/admin/llm-providers/${id}/models/saveAll`, data)
+  },
+  deleteProviderModel(id: number, modelName: string) {
+    return request.delete(`/admin/llm-providers/${id}/models/deleteByName/${encodeURIComponent(modelName)}`)
+  },
+  toggleProviderModel(id: number, modelName: string, enabled: boolean) {
+    return request.put(`/admin/llm-providers/${id}/models/toggleByName/${encodeURIComponent(modelName)}`, {
+      enabled
+    })
+  },
+  setDefaultProviderModel(id: number, modelName: string) {
+    return request.put(`/admin/llm-providers/${id}/models/setDefaultByName/${encodeURIComponent(modelName)}`, {})
   }
 }

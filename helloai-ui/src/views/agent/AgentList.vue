@@ -99,8 +99,42 @@
           show-icon
           style="margin-bottom:16px"
         />
-        <!-- §6.74: 模型选择已移除——内部 LLM 统一走系统配置默认 provider+default-model，后端自动补绑平台密钥 -->
+        <!-- 内部 LLM 注册：V49 模型选择（可用 Provider + 启用模型分组下拉）；留空走系统默认 provider+default-model -->
+        <el-form-item v-if="form.accessType === 'API_KEY_LLM'" label="模型">
+          <el-select
+            v-model="form.modelType"
+            placeholder="选择模型（留空使用平台默认）"
+            clearable
+            filterable
+            :loading="modelsLoading"
+            style="width:100%"
+          >
+            <el-option-group v-for="g in availableModels" :key="g.providerCode" :label="g.providerName">
+              <el-option v-for="m in g.models" :key="m" :label="m" :value="g.providerCode + ':' + m" />
+            </el-option-group>
+          </el-select>
+          <div class="field-hint">内部 LLM 使用平台密钥；留空则按系统默认 provider+default-model 绑定</div>
+        </el-form-item>
         <el-form-item label="技能">
+          <!-- V52 三段式：模型能力锁定 tag（不可取消，自动并入） -->
+          <div v-if="form.accessType === 'API_KEY_LLM' && form.modelType && !skillDegraded" class="skill-cap-row">
+            <el-tag
+              v-for="s in skillCap"
+              :key="s"
+              size="small"
+              type="primary"
+              effect="plain"
+              disable-transitions
+            >{{ skillLabel(s) }}（模型能力）</el-tag>
+          </div>
+          <el-alert
+            v-if="form.accessType === 'API_KEY_LLM' && form.modelType && skillDegraded"
+            title="模型未上架，建议使用已上架模型；技能将按默认规则处理"
+            type="warning"
+            :closable="false"
+            show-icon
+            style="margin-bottom:8px"
+          />
           <el-select
             v-model="form.skills"
             multiple
@@ -109,12 +143,15 @@
             default-first-option
             placeholder="选择或输入技能（回车可自定义）"
             style="width:100%"
+            :loading="skillOptionsLoading"
           >
             <el-option
-              v-for="opt in skillOptions"
+              v-for="opt in skillSelectOptions"
               :key="opt.value"
               :label="opt.label"
               :value="opt.value"
+              :disabled="opt.disabled"
+              :title="opt.disabled ? '该模型不支持此技能' : ''"
             />
           </el-select>
           <div class="field-hint">能力声明，任务「要求技能」按 AND 语义匹配；不填则按名称/描述自动推导</div>
@@ -149,11 +186,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, reactive } from 'vue'
+import { ref, computed, onMounted, reactive, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Search, Refresh } from '@element-plus/icons-vue'
 import { agentApi } from '@/api/agent'
+import type { AvailableModelGroup } from '@/api/agent'
 import { AGENT_SKILL_OPTIONS } from '@/constants/agentSkills'
 import type { AgentListItem, AgentRole } from '@/types'
 import AgentCard from './components/AgentCard.vue'
@@ -161,8 +199,6 @@ import AgentEditDialog from './components/AgentEditDialog.vue'
 import AgentStatusDialog from './components/AgentStatusDialog.vue'
 import AgentDeleteDialog from './components/AgentDeleteDialog.vue'
 import AgentOnboardingDialog from './components/AgentOnboardingDialog.vue'
-
-const skillOptions = AGENT_SKILL_OPTIONS
 
 const router = useRouter()
 
@@ -223,16 +259,38 @@ const form = reactive({
   name: '',
   role: 'EXECUTOR',
   description: '',
-  // §6.74: 专业化/模型选择已移除；skills 注册即填写（A2 显式技能优先）
+  // §6.74: 专业化已移除；skills 注册即填写（A2 显式技能优先）
+  // V49: 内部 LLM（API_KEY_LLM）注册可显式选择模型，留空走系统默认 provider+default-model
   accessType: 'CLI_CLIENT',
+  modelType: '',
   skills: [] as string[]
 })
 const rules = {
   name: [{ required: true, message: '请输入名称', trigger: 'blur' }]
 }
 
-// ── LLM Provider 目录（内部 LLM 注册用，按后端已生效 api-key 配置枚举）──
-// §6.74: 已移除模型选择——内部 LLM 统一走系统配置默认 provider+default-model
+// ── 可用模型目录（内部 LLM 注册选模型用，V49 /agents/listAvailableModels）──
+const availableModels = ref<AvailableModelGroup[]>([])
+const modelsLoading = ref(false)
+
+async function loadAvailableModels() {
+  modelsLoading.value = true
+  try {
+    availableModels.value = await agentApi.listAvailableModels()
+  } catch (e: any) {
+    // 目录拉取失败不阻断注册（留空走默认），仅提示
+    ElMessage.warning('模型目录加载失败：' + (e?.message || '未知错误'))
+    availableModels.value = []
+  } finally {
+    modelsLoading.value = false
+  }
+}
+
+watch(registerDialog, (open) => {
+  if (open) {
+    loadAvailableModels()
+  }
+})
 
 function onRoleChange() {
   // 网页端 Planner 仅 PLANNER 角色可选，切走角色后回退默认接入类型
@@ -246,6 +304,60 @@ function onAccessTypeChange(v: string) {
     ElMessage.warning('网页端 Planner 功能暂不可用')
   }
 }
+
+// ── V52 技能区三段式：模型能力锁定 + 可选项白名单 + 降级提示 ──
+const skillCap = ref<string[]>([])       // capabilitySkills（模型能力锁定，自动并入 form.skills）
+const skillAvailable = ref<string[]>([]) // availableOptionalSkills（可扩展白名单）
+const skillDegraded = ref(false)         // 模型未识别：降级为全量可编辑 + 提示
+const skillOptionsLoading = ref(false)
+
+function skillLabel(v: string) {
+  return AGENT_SKILL_OPTIONS.find(o => o.value === v)?.label || v
+}
+
+async function loadSkillOptions(modelType: string) {
+  skillOptionsLoading.value = true
+  try {
+    const res = await agentApi.skillOptions(modelType)
+    skillCap.value = res.capabilitySkills || []
+    skillAvailable.value = res.availableOptionalSkills || []
+    skillDegraded.value = !!res.degraded
+    // 能力锁定项强制并入（不可取消）
+    for (const s of skillCap.value) {
+      if (!form.skills.includes(s)) form.skills.push(s)
+    }
+  } catch {
+    skillDegraded.value = true
+  } finally {
+    skillOptionsLoading.value = false
+  }
+}
+
+watch(() => form.modelType, (mt) => {
+  // 切模型/清空：先移除旧能力锁定项，避免残留不可用技能
+  for (const s of skillCap.value) {
+    const idx = form.skills.indexOf(s)
+    if (idx >= 0) form.skills.splice(idx, 1)
+  }
+  skillCap.value = []
+  skillAvailable.value = []
+  skillDegraded.value = false
+  if (form.accessType === 'API_KEY_LLM' && mt) {
+    loadSkillOptions(mt)
+  }
+})
+
+const skillSelectOptions = computed(() => {
+  const isDriven = form.accessType === 'API_KEY_LLM' && !!form.modelType && !skillDegraded.value
+  if (!isDriven) {
+    // 外部 Agent / 模型留空 / 未识别降级：全量可编辑
+    return AGENT_SKILL_OPTIONS.map(o => ({ ...o, disabled: false }))
+  }
+  // 能力驱动：锁定项由 tag 展示（下拉剔除），白名单可编辑，其余标准技能置灰（自定义仍可输入）
+  return AGENT_SKILL_OPTIONS
+    .filter(o => !skillCap.value.includes(o.value))
+    .map(o => ({ ...o, disabled: !skillAvailable.value.includes(o.value) }))
+})
 
 async function handleRegister() {
   if (form.accessType === 'WEB_BROWSER') {
@@ -262,7 +374,9 @@ async function handleRegister() {
       role: form.role,
       description: form.description,
       accessType: form.accessType,
-      // 注册即填写技能（A2 显式优先）；§6.74: 不再传 modelType，内部 LLM 由后端按系统默认 provider+default-model 补绑
+      // V49: 内部 LLM 注册可选模型（providerCode:modelName）；留空由后端按系统默认 provider+default-model 补绑
+      modelType: form.modelType || undefined,
+      // 注册即填写技能（A2 显式优先）
       skills: form.skills.length > 0 ? form.skills : undefined
     })
     registerDialog.value = false
@@ -278,6 +392,7 @@ async function handleRegister() {
     form.name = ''
     form.description = ''
     form.accessType = 'CLI_CLIENT'
+    form.modelType = ''
     form.skills = []
     load()
   } finally { registering.value = false }
@@ -379,6 +494,15 @@ onMounted(() => load())
 .page-info {
   font-size: 13px;
   color: var(--ha-muted);
+}
+
+/* V52 技能区：模型能力锁定 tag 行 */
+.skill-cap-row {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
 }
 
 @media (max-width: 768px) {

@@ -47,7 +47,9 @@ instance.interceptors.response.use(
     return Promise.reject(new Error(res.msg))
   },
   (error) => {
-    ElMessage.error(error.message || '网络错误')
+    // 后端业务异常（BizException）以 HTTP 4xx/5xx 返回时，优先展示 R 包裹体里的中文 msg（如注册模型唯一性校验）
+    const data = error.response?.data
+    ElMessage.error(data?.msg || error.message || '网络错误')
     return Promise.reject(error)
   }
 )

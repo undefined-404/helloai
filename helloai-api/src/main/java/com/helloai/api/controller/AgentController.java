@@ -10,9 +10,10 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.LlmProviderCatalogService;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.system.entity.LlmProviderModel;
+import com.helloai.core.system.service.LlmProviderModelQueryService;
 import com.helloai.core.system.service.PromptTemplateService;
 import com.helloai.core.agent.AgentCapability;
-import com.helloai.core.agent.AgentSkillDeriver;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -35,6 +36,7 @@ public class AgentController {
     private final AgentConfigProperties agentConfig;
     private final PromptTemplateService promptTemplateService;
     private final LlmProviderCatalogService llmProviderCatalogService;
+    private final LlmProviderModelQueryService llmProviderModelQueryService;
     private final AgentBaseUrlResolver agentBaseUrlResolver;
 
     @GetMapping("/list")
@@ -57,6 +59,8 @@ public class AgentController {
         AgentRole role = AgentRole.valueOf(((String) body.get("role")).toUpperCase());
         String description = (String) body.getOrDefault("description", "");
         boolean idempotent = Boolean.TRUE.equals(body.get("idempotent"));
+        // V49：注册前预校验 modelType（格式/可用性/角色唯一性），失败时不创建 Agent，避免留下无 modelType 的脏 Agent
+        agentService.validateModelType((String) body.get("modelType"), role, null);
         Agent agent = idempotent
                 ? agentService.registerOrGet(name, role, description)
                 : agentService.register(name, role, description);
@@ -81,6 +85,8 @@ public class AgentController {
         String description = (String) body.getOrDefault("description", "");
         AgentRole role = AgentRole.valueOf(roleStr.toUpperCase());
         boolean idempotent = Boolean.TRUE.equals(body.get("idempotent"));
+        // V49：注册前预校验 modelType（格式/可用性/角色唯一性），失败时不创建 Agent，避免留下无 modelType 的脏 Agent
+        agentService.validateModelType((String) body.get("modelType"), role, null);
         Agent agent = idempotent
                 ? agentService.registerOrGet(name, role, description)
                 : agentService.register(name, role, description);
@@ -101,9 +107,22 @@ public class AgentController {
      */
     @SuppressWarnings("unchecked")
     private void applyRegistrationExtras(Agent agent, Map<String, Object> body) {
-        // 1) modelType（V27：之前被丢弃，导致 API_KEY_LLM Agent 只能用默认 provider）
+        // 1) modelType（V49：校验 provider:model 格式及模型可用性）
         String modelType = (String) body.get("modelType");
         if (modelType != null && !modelType.isBlank()) {
+            int colonIdx = modelType.indexOf(':');
+            if (colonIdx <= 0 || colonIdx == modelType.length() - 1) {
+                throw new com.helloai.common.base.BizException(
+                        "modelType 格式错误，应为 providerCode:modelName，例如 deepseek:deepseek-v4-flash");
+            }
+            String providerCode = modelType.substring(0, colonIdx);
+            String modelName = modelType.substring(colonIdx + 1);
+            if (!llmProviderModelQueryService.isModelAvailable(providerCode, modelName)) {
+                throw new com.helloai.common.base.BizException(
+                        "模型不可用或已禁用: " + modelType);
+            }
+            // V49：同一模型在同一角色下全局唯一（与 registerWithExtras 路径的 validateModelType 对齐）
+            agentService.validateModelUniqueInRole(providerCode, modelName, agent.getRole(), null);
             agent.setModelType(modelType);
         }
 
@@ -144,7 +163,7 @@ public class AgentController {
         }
         agent.setCapabilities(AgentCapability.mergeDefaults(accessType, override));
 
-        // 5) skills（A2，V47 技能匹配的数据源）：显式传入优先；否则已有技能为空时 best-effort 推导
+        // 5) skills（A2 + V52 能力驱动）：显式传入优先；否则已有技能为空时按 accessType + 模型能力推导
         List<String> explicitSkills = null;
         Object skillsObj = body.get("skills");
         if (skillsObj instanceof List<?> rawSkills) {
@@ -154,9 +173,13 @@ public class AgentController {
             }
         }
         if (explicitSkills != null) {
-            agent.setSkills(AgentSkillDeriver.clean(explicitSkills));
+            // V52：先按模型能力校验（标准技能查白名单、自定义豁免、未识别模型放行），
+            // 再按能力驱动落库（API_KEY_LLM + 已识别模型时 thinking 锁定不回退）
+            agentService.validateAgentSkills(agent.getModelType(), explicitSkills);
+            agent.setSkills(agentService.deriveSkillsForRegistration(agent, explicitSkills));
         } else if (agent.getSkills() == null || agent.getSkills().isEmpty()) {
-            agent.setSkills(AgentSkillDeriver.derive(accessType, agent.getName(), agent.getRemark(), null));
+            // 无显式技能：走能力驱动推导（未识别模型降级为 A2 推导）
+            agent.setSkills(agentService.deriveSkillsForRegistration(agent, null));
         }
 
         // 持久化所有可选字段变更
@@ -167,6 +190,35 @@ public class AgentController {
         if (accessType == AgentAccessType.API_KEY_LLM) {
             llmProviderCatalogService.provisionPlatformCredential(agent);
         }
+    }
+
+    /**
+     * 查询所有可用的 Provider 及其启用模型列表（供 Agent 注册时选择模型，V49 新增）。
+     *
+     * <p>供 Agent 注册/编辑弹窗调用，返回结构：[{providerCode, providerName, defaultModel, models: [modelName, ...]}]。
+     * 仅返回 available=true 的 Provider，且只列出 enabled=1 的模型。</p>
+     */
+    @GetMapping("/listAvailableModels")
+    public R<List<Map<String, Object>>> listAvailableModels() {
+        List<Map<String, Object>> result = new java.util.ArrayList<>();
+        for (LlmProviderCatalogService.ProviderCatalogItem item
+                : llmProviderCatalogService.listProviders()) {
+            if (!item.available()) {
+                continue;
+            }
+            List<LlmProviderModel> models =
+                    llmProviderModelQueryService.listEnabledByProviderCode(item.provider());
+            if (models.isEmpty()) {
+                continue;
+            }
+            Map<String, Object> entry = new java.util.LinkedHashMap<>();
+            entry.put("providerCode", item.provider());
+            entry.put("providerName", item.providerName());
+            entry.put("defaultModel", item.defaultModel());
+            entry.put("models", models.stream().map(LlmProviderModel::getModelName).toList());
+            result.add(entry);
+        }
+        return R.ok(result);
     }
 
     @GetMapping("/getMySkill")

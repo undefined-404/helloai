@@ -73,7 +73,7 @@
                 {{ selectedProvider.baseUrl || '-' }}
               </el-descriptions-item>
               <el-descriptions-item label="默认模型">
-                {{ selectedProvider.defaultModel || '-' }}
+                {{ selectedProviderDefaultModel || selectedProvider.defaultModel || '-' }}
               </el-descriptions-item>
               <el-descriptions-item label="API Key">
                 <span v-if="selectedProvider.apiKeyConfigured">{{ selectedProvider.apiKeyMasked }}</span>
@@ -86,6 +86,48 @@
                 <el-tag v-else type="info" size="small">已禁用</el-tag>
               </el-descriptions-item>
             </el-descriptions>
+            <div class="model-section">
+              <div class="model-section-header">
+                <span class="model-section-title">模型配置</span>
+                <div class="model-section-actions">
+                  <template v-if="!isBuiltinSelected">
+                    <el-button size="small" :disabled="!providerModels.length" @click="selectAllModels">全选</el-button>
+                    <el-button size="small" :disabled="!providerModels.length" @click="checkedModels = []">清空</el-button>
+                  </template>
+                  <el-button v-if="!isBuiltinSelected" size="small" type="primary" :loading="modelSaving"
+                    @click="handleSaveModels">保存模型配置</el-button>
+                </div>
+              </div>
+
+              <el-checkbox-group v-model="checkedModels" class="model-checkbox-group">
+                <el-checkbox v-for="m in providerModels" :key="m.modelName" :label="m.modelName"
+                  :disabled="isBuiltinSelected">
+                  {{ m.modelName }}
+                  <el-tag v-if="m.isDefault === 1" type="warning" size="small" class="model-tag">默认</el-tag>
+                  <el-tag v-if="m.enabled !== 1" type="info" size="small" class="model-tag">已禁用</el-tag>
+                </el-checkbox>
+              </el-checkbox-group>
+              <el-empty v-if="!providerModels.length" description="该 Provider 还没有配置模型" :image-size="48" />
+
+              <div v-if="!isBuiltinSelected" class="custom-model-row">
+                <el-input v-model="customModelInput" placeholder="输入自定义模型名称，回车添加" class="custom-model-input"
+                  @keyup.enter="addCustomModel" />
+                <el-button size="small" @click="addCustomModel">添加</el-button>
+              </div>
+
+              <div class="default-model-row">
+                <span class="default-model-label">默认模型</span>
+                <el-select v-if="!isBuiltinSelected" v-model="selectedDefaultModel" placeholder="从已选模型中选择"
+                  style="width: 240px">
+                  <el-option v-for="m in checkedModels" :key="m" :label="m" :value="m" />
+                </el-select>
+                <el-tag v-else type="warning">{{ selectedProviderDefaultModel || '-' }}</el-tag>
+              </div>
+
+              <div class="form-hint">
+                每个 Provider 必须至少配置一个启用模型并指定默认模型；内置供应商的预设模型固定不可修改。
+              </div>
+            </div>
             <div class="detail-hint">
               <el-alert type="info" :closable="false" show-icon>
                 <template #title>
@@ -140,9 +182,6 @@
         <el-form-item label="Base URL" prop="baseUrl">
           <el-input v-model="formDraft.baseUrl" placeholder="如 https://api.openai.com/v1" />
         </el-form-item>
-        <el-form-item label="默认模型">
-          <el-input v-model="formDraft.defaultModel" placeholder="如 gpt-4o-mini（可选）" />
-        </el-form-item>
         <el-form-item v-if="formDialogMode === 'create'" label="API Key">
           <el-input v-model="formDraft.apiKey" type="password" show-password
             placeholder="新增时可一并填写；也可稍后单独配置" />
@@ -157,12 +196,13 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, onMounted, computed } from 'vue'
+import { reactive, ref, onMounted, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox, FormInstance, FormRules } from 'element-plus'
 import { Plus, CircleCheckFilled, CircleCloseFilled } from '@element-plus/icons-vue'
 import {
   settingsApi,
   LlmProviderResponse,
+  LlmProviderModelResponse,
   CreateLlmProviderRequest,
   ProtocolType,
   PROTOCOL_OPTIONS
@@ -183,6 +223,25 @@ const selectedProvider = computed<LlmProviderResponse | null>(
   () => providers.value.find(p => p.id === selectedId.value) || null
 )
 
+// ---- 模型配置（V49）----
+const providerModels = ref<LlmProviderModelResponse[]>([])
+const checkedModels = ref<string[]>([])
+const selectedDefaultModel = ref('')
+const customModelInput = ref('')
+const modelSaving = ref(false)
+
+/** 内置 Provider 的预设模型固定不可修改。 */
+const isBuiltinSelected = computed(() => selectedProvider.value?.builtin === 1)
+
+/** 模型配置区的默认模型（以 llm_provider_model 表为准）。 */
+const selectedProviderDefaultModel = computed(
+  () => providerModels.value.find(m => m.isDefault === 1)?.modelName || ''
+)
+
+watch(selectedProvider, () => {
+  loadModels()
+})
+
 const keyDialogVisible = ref(false)
 const keyDialogProvider = ref<LlmProviderResponse | null>(null)
 const newApiKey = ref('')
@@ -195,7 +254,6 @@ const formDraft = reactive<CreateLlmProviderRequest & { apiKey?: string }>({
   providerName: '',
   protocolType: 'OPENAI_COMPATIBLE' as ProtocolType,
   baseUrl: '',
-  defaultModel: '',
   apiKey: ''
 })
 
@@ -244,6 +302,77 @@ async function loadProviders() {
   }
 }
 
+/** 加载当前选中 Provider 的模型列表（启用模型默认勾选）。 */
+async function loadModels() {
+  if (!selectedId.value) {
+    providerModels.value = []
+    checkedModels.value = []
+    selectedDefaultModel.value = ''
+    return
+  }
+  try {
+    const list = (await settingsApi.listProviderModels(selectedId.value)) || []
+    providerModels.value = list
+    checkedModels.value = list.filter(m => m.enabled === 1).map(m => m.modelName)
+    selectedDefaultModel.value = list.find(m => m.isDefault === 1)?.modelName || ''
+  } catch (e: any) {
+    providerModels.value = []
+    checkedModels.value = []
+    selectedDefaultModel.value = ''
+    ElMessage.error('加载模型列表失败')
+  }
+}
+
+function selectAllModels() {
+  checkedModels.value = providerModels.value.map(m => m.modelName)
+}
+
+/** 添加自定义模型（仅自定义 Provider；回车或点击添加）。 */
+function addCustomModel() {
+  const name = customModelInput.value?.trim()
+  if (!name) return
+  if (providerModels.value.some(m => m.modelName === name)) {
+    ElMessage.warning('模型已存在')
+    customModelInput.value = ''
+    return
+  }
+  providerModels.value.push({
+    id: 0,
+    modelName: name,
+    isDefault: 0,
+    enabled: 1,
+    sortOrder: 100
+  })
+  checkedModels.value = [...checkedModels.value, name]
+  customModelInput.value = ''
+}
+
+async function handleSaveModels() {
+  if (!selectedId.value) return
+  if (!checkedModels.value.length) {
+    ElMessage.warning('请至少选择一个可用模型')
+    return
+  }
+  if (!selectedDefaultModel.value || !checkedModels.value.includes(selectedDefaultModel.value)) {
+    ElMessage.warning('默认模型必须在已选模型列表中')
+    return
+  }
+  modelSaving.value = true
+  try {
+    await settingsApi.saveAllProviderModels(selectedId.value, {
+      modelNames: checkedModels.value,
+      defaultModel: selectedDefaultModel.value
+    })
+    ElMessage.success('模型配置已保存')
+    await loadModels()
+    await loadProviders()
+  } catch (e: any) {
+    ElMessage.error('保存失败')
+  } finally {
+    modelSaving.value = false
+  }
+}
+
 async function handleSave() {
   try {
     await settingsApi.batchUpdateConfig({
@@ -286,7 +415,6 @@ function openCreateDialog() {
   formDraft.providerName = ''
   formDraft.protocolType = 'OPENAI_COMPATIBLE'
   formDraft.baseUrl = ''
-  formDraft.defaultModel = ''
   formDraft.apiKey = ''
   formDialogVisible.value = true
   formDialogRef.value?.clearValidate()
@@ -298,7 +426,6 @@ function openEditDialog(row: LlmProviderResponse) {
   formDraft.providerName = row.providerName
   formDraft.protocolType = row.protocolType
   formDraft.baseUrl = row.baseUrl || ''
-  formDraft.defaultModel = row.defaultModel || ''
   formDraft.apiKey = ''
   formDialogVisible.value = true
   formDialogRef.value?.clearValidate()
@@ -318,13 +445,14 @@ async function handleSubmitForm() {
         providerName: formDraft.providerName.trim(),
         protocolType: formDraft.protocolType,
         baseUrl: formDraft.baseUrl.trim(),
-        defaultModel: formDraft.defaultModel?.trim() || undefined,
         enabled: 1
       }
       const created = await settingsApi.createLlmProvider(payload)
       if (formDraft.apiKey && formDraft.apiKey.trim()) {
         await settingsApi.saveLlmProviderApiKey(created.id, formDraft.apiKey.trim())
       }
+      // 自动选中新 Provider，便于直接配置模型
+      selectedId.value = created.id
       ElMessage.success('供应商已添加')
     } else {
       // 编辑：定位当前选中 id
@@ -333,8 +461,7 @@ async function handleSubmitForm() {
       await settingsApi.updateLlmProvider(id, {
         providerName: formDraft.providerName.trim(),
         protocolType: formDraft.protocolType,
-        baseUrl: formDraft.baseUrl.trim(),
-        defaultModel: formDraft.defaultModel?.trim() || ''
+        baseUrl: formDraft.baseUrl.trim()
       })
       ElMessage.success('已更新')
     }
@@ -484,6 +611,56 @@ onMounted(() => {
 }
 .detail-hint {
   margin-top: 12px;
+}
+
+.model-section {
+  margin-top: 16px;
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+  padding: 12px 16px;
+  background: #fafbfc;
+}
+.model-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.model-section-title {
+  font-weight: 600;
+  color: #303133;
+}
+.model-section-actions {
+  display: flex;
+  gap: 8px;
+}
+.model-checkbox-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.model-tag {
+  margin-left: 6px;
+}
+.custom-model-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.custom-model-input {
+  width: 320px;
+}
+.default-model-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.default-model-label {
+  color: #606266;
+  font-size: 14px;
+  white-space: nowrap;
 }
 .key-missing {
   color: #e6a23c;
