@@ -5146,3 +5146,146 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - 影响：① b6 全量回归（S1-S8）在 Windows 与 macOS/Linux 均有脚本可跑；② E2 并发额度场景具备可重复、环境无关的回归验证手段；③ 实测确认 E2 双防线（选人链软跳过 + FOR UPDATE 原子防线）在真实环境行为与单测一致。
 - 遗留：① PS 版真实环境实测待有 Windows/pwsh 环境时执行；② 本轮代码与本文档未 git 提交，待用户确认后提交。
+
+### 6.88 批次 b4 收口 + b5：agent 域 10 现有拆 + 3 归位 + shared/mq 2 拆 + b6 全量回归（2026-08-14）
+
+#### 1. 范围
+
+- **背景**：§6.84 遗留①（b4 剩余"10 现有拆"与"3 归位"）与 b5（shared DoorbellService + mq MessageDeduplicationService 拆）本轮全部收口，b4 批次完全关闭；b6 全量回归补跑（此前 §6.84/6.85 仅做了模块编译与定向测试，全量测试因 pom 默认 `skipTests=true` 未真正执行）。
+- **明确不做**：不新增任何业务功能、不改数据库结构；不处理 §6.86 已交付的 `InFlightDbQuotaService` 命名形态（既有事实，保持不动）。
+
+#### 2. 实际落地
+
+- **b4 剩余 10 拆**（agent/service 既有单类形态 Service 全部拆接口 + impl）：AgentService / AgentOutboxService / AgentCommandOutboxService / AgentInboxService / AgentExecutionRecordService / AgentDutyLeaseService / AgentMcpServerService / ConversationService / AgentExecutionConnectivityService / AgentExecutionPreviewService。统一范式同 §6.84：接口放 `agent/service`（实体型 extends `IService<Entity>`，编排型不继承），impl 放 `agent/service/impl`（实体型 extends `ServiceImpl<Mapper, Entity>`，`@Service` + `@RequiredArgsConstructor`，方法级 `@Override` + `@Transactional` 保留在 impl）。
+  - AgentService 为最大拆分（接口 26 方法 / impl 662 行），构造注入 8 依赖：SubTaskMapper / RewardLogMapper / ActivityLogMapper / ReviewRecordMapper / AgentInboxMapper / AgentDutyLeaseMapper / TaskTimelineService / AgentMcpServerService；保留"直接注入 Mapper 避免循环依赖"类注释；3 个 task 域 Mapper（RewardLog / ActivityLog / ReviewRecord）实际包路径为 `com.helloai.core.task.mapper`（非 agent.mapper，import 已修正）。
+  - AgentMcpServerService.DEFAULT_EXECUTOR_TOOLS 收为 `private static final`（grep 确认全仓无外部引用）。
+  - AgentCommandOutboxService 接口 9 方法（含 Phase 2H ②b 的 CONFIRMED 扩展：createPending / listReadyForRelay / listExpiredSentForRetry / markSent / markConfirmed / markFailed / markFailedFromSent / markFinalFailed / markFinalFailedFromSent），createPending 不加 @Transactional 的契约注释保留。
+- **b4 3 归位**：
+  - `ExternalAgentFailureTracker`：agent/service → `agent/observability`（与 CircuitBreakerEventRecorder 同包），9 个引用点 import 更新（4 main + 5 test）。
+  - `WebSearchServiceRouter`：planner/service → `planner/search`（与 WebSearchResult 值对象同包），补 `import planner.service.WebSearchService` 接口，无外部引用。
+  - `TaskRunningSpecDataMigrator`：确认 `task/spec` 为合法完整子域包（与 ExecutionRecord / TaskRunningSpec / TaskBaseline 同包协作），无需移动。
+- **b5 2 拆**：
+  - `DoorbellService`（shared/doorbell）拆接口（5 方法：connect / ring / disconnect / connectionCount / broadcastKeepalive）+ `DoorbellServiceImpl`（170 行，注入 DoorbellProperties / DoorbellRegistry / AgentDutyLeaseService / HeartbeatService，私有 refreshSeen / doSend）。
+  - `MessageDeduplicationService`（helloai-mq）拆接口（3 方法：isDuplicate / markConsumed / markFailed）+ `MessageDeduplicationServiceImpl`（85 行，显式构造器与 DEDUP_KEY_PREFIX / DEDUP_TTL 常量保留）。
+- **测试适配**：4 处构造点 `new XxxService(...)` → `new XxxServiceImpl(...)`（DoorbellServiceTest / AgentDutyLeaseAdaptiveTtlTest / AgentInboxServiceTest / AgentServiceTest）+ import 迁移；grep 全仓库确认无残留单类形态构造点。
+
+#### 3. 验证结果
+
+- 全量编译：`mvn compile` 7 模块（common / mq / core / job / api / start + 父 pom）**BUILD SUCCESS**。
+- 全量测试：`mvn test -pl helloai-core,helloai-mq,helloai-job -DskipTests=false` **全绿**——core 全部测试类 + job 60 tests，Failures=0 / Errors=0 / Skipped=0；关键回归：DoorbellServiceTest 12 / DoorbellRegistryTest 7 / DoorbellRingerTest 4 / DoorbellDutyListenerTest 4 / DoorbellKeepaliveTaskTest 4 / AgentInboxServiceTest 6 / AgentServiceTest 6 / AgentDutyLeaseAdaptiveTtlTest 12 / ExternalAgentFailureTrackerTest 0（无测试方法，编译通过）/ ExecutionResultHandlerTest 4 + IntegrationTest 5 / AttachmentServiceImplTest 3（§6.85 附件单测一并回归）。
+- 踩坑：① pom 默认 `skipTests=true`（§6.86 已记录），直接 `mvn test` 输出 "Tests are skipped." 假绿，必须 `-DskipTests=false`；② IDE 报"程序包 com.helloai.mq.service 不存在"为 Maven 项目模型未刷新（Maven 侧 test-compile 实际全绿），`mvn install -pl helloai-mq -am -DskipTests` 同步本地仓库后 IDE 可解析。
+
+#### 4. 影响与遗留
+
+- 影响：① b4 批次完全收口——agent/service 现为 21 接口 + 21 impl 完全成对，`{domain}.service.impl` 成为唯一业务逻辑实现位；② 3 归位完成——observability / planner/search 语义包纯净，无跨域残留；③ b5 完成——shared 与 mq 模块也纳入接口 + impl 范式；④ 全仓库无 `new XxxService(` 测试构造残留，测试全部依赖接口或 Impl 构造。
+- 遗留：① §6.85 附件管理真实环境页面效果仍待用户验证（后端需重启加载新 list 回填逻辑）；② 本轮代码与本文档未 git 提交，待用户确认后提交。
+
+### 6.89 LLM 供应商模型多选配置重构收口：V49 模型表 + 前后端多选配置 + e2e 38/38（2026-08-14）
+
+#### 1. 范围
+
+- **背景**：实施计划《LLM供应商模型多选配置重构》收口。需求：每个 Provider 可配置多个可用模型（Trae 式），必须有一个默认模型；内置 Provider 模型只可选不可改，自定义 Provider 支持任意模型名；同一模型在同一角色下全局唯一（跨 Provider 不冲突）。
+- **本轮内容**：V49 迁移（模型表 + 内置种子 + 老 default_model 迁移）、后端模型管理全套（实体/Mapper/双 Service/QueryService + Admin 端点 + Agent 注册校验）、前端 Settings.vue 模型多选 UI（内置只读 + 自定义 + 默认模型下拉）、Agent 可用模型接口、单测补齐、e2e 脚本真实环境回归。
+- **明确不做**：实施计划 4.4 连通性测试按钮（test-connection 端点）；4.3 前端注册弹窗的实时唯一性提示（后端强制校验兜底，前端仅展示服务端错误）；Agent 注册弹窗模型下拉本身沿用既有能力（§6.51 已交付的 Provider 选择链）。
+
+#### 2. 实际落地
+
+- **V49 `llm_provider_model` 表**：id/deleted/审计列 + provider_id/provider_code/model_name/is_default/enabled/sort_order；`uk_provider_model UNIQUE(provider_id, model_name)` + FK `ON DELETE CASCADE`（设计意图：删 Provider 级联删模型，但应用层逻辑删除下 FK 不触发，见 §3 修复③）+ 三个部分索引（enabled / default / code 查询）；内置种子 4 厂商 11 模型（deepseek-v4-flash/pro、kimi-k3~k2.5、qwen3.8-Max~3.6-Flash、MiniMax-M2.5，2026-08-14 官网口径）；老数据迁移：无模型记录的 Provider 将 `default_model` 迁为默认模型；`ON CONFLICT DO NOTHING` 保证幂等。
+- **后端模型管理全套**：`LlmProviderModel` 实体（extends BaseEntity）+ `LlmProviderModelMapper`（含 `@Delete` 物理清理方法）+ `LlmProviderModelService/Impl`（saveProviderModels 批量多选 / setDefaultModel / addModel / deleteModel / toggleModel / validateProviderHasEnabledModels）+ `LlmProviderModelQueryService/Impl`（listByProviderId / listEnabledByProviderCode / isModelAvailable / findModelType）；`AdminLlmProviderController` 六个模型端点：`GET /{id}/models/list`、`POST /{id}/models`、`PUT /{id}/models/saveAll`、`DELETE /{id}/models/deleteByName/{modelName}`、`PUT /{id}/models/toggleByName/{modelName}`、`PUT /{id}/models/setDefaultByName/{modelName}`（实施计划 3.5 端点按 CODE_STYLE §8 动词形式落地）；`AgentController` 新增 `GET /api/agents/listAvailableModels`（目录接口过滤 available 厂商 + 有启用模型的 Provider，Agent 注册下拉用）；注册/编辑链路接入 `validateModelUniqueInRole`（实施计划 3.4：同 provider:model 同角色全局唯一，`AgentService.validateModelType` 提升为接口方法，格式/可用性/角色唯一性三段校验）。
+- **前端**：`settings.ts` 新增模型管理 API + 类型（listModels / saveAllModels / addModel / deleteModel / toggleModel / setDefaultModel）；`Settings.vue` 模型多选区块——内置 Provider 模型 Checkbox 只读（仅展示预设模型）、自定义 Provider 支持输入回车添加任意模型、默认模型从已选模型单选、校验规则对齐实施计划六（至少一个模型 + 必有默认模型 + 内置只读）；Agent 注册相关类型 `modelType` 沿用。
+- **单测**：`LlmProviderModelServiceImplTest`（saveProviderModels 空列表/默认不在列表/正常保存、setDefaultModel 未启用拒绝、addModel、deleteModel 默认/最后一个拒绝、toggleModel 含最后启用保护）+ `LlmProviderModelQueryServiceImplTest` + `LlmProviderServiceTest` 补模型校验 + `AgentServiceTest` 补 validateModelUniqueInRole；共 48 个全部通过。
+- **e2e 脚本**：`scripts/powershell/verify-llm-provider-models.ps1`（S0-S11：列表/创建/模型增删改/默认模型/启用禁用/角色唯一性/脏注册拒绝/saveAll 幂等/Provider 重建），遵循规则 6 UTF-8 with BOM + 单引号拼接 + `Parser.ParseFile` 自检。
+
+#### 3. 验证结果
+
+- 后端 `mvn test -DskipTests=false` 相关测试类全绿（48 个），前端 `vue-tsc` 0 error；重启后端后 ps1 脚本 **38 PASS / 0 FAIL ALL PASSED**（S0-S11 全场景，含重跑幂等验证）。
+- 本轮修复 6 个缺陷：
+  ① **404 尾斜杠**：`AdminLlmProviderController` `@PostMapping("/")` 在 Spring 6 PathPatternParser 下只匹配带斜杠路径 → 改 `@PostMapping`，手动 POST 验证 CREATE_OK；
+  ② **物理唯一约束 vs 逻辑删除**（V50）：`uk_provider_model UNIQUE(provider_id, model_name)` 与 MyBatis-Plus 逻辑删除冲突——软删模型后重建同名 INSERT duplicate key 500 → 删约束改部分唯一索引 `uk_provider_model_active ... WHERE deleted = 0`（saveAll 幂等重跑安全）；
+  ③ **同源修复**（V51）：`uk_llm_provider_code` 同样冲突（软删 Provider 无法重建同 code）→ 部分唯一索引 `uk_llm_provider_code_active ... WHERE deleted = 0`；
+  ④ **注册脏数据**：registerOrGet 先创建 Agent 再 applyRegistrationExtras 校验，modelType 校验失败留脏 Agent → `validateModelType` 接口化 + AgentController 注册前预校验；
+  ⑤ **toggleModel 保护漏洞**：原只保护默认模型，不禁用非默认的最后一个启用模型 → 改为通用“最后一个启用模型”检查（与 deleteModel 语义一致）+ 单测补 1 例；
+  ⑥ **deleteById 级联**：Provider 软删不触发 FK CASCADE（逻辑删除是 UPDATE），模型记录残留导致 `isModelAvailable` 误判 → `deletePhysicalByProviderId` 物理清理 + 单测覆盖。
+
+#### 4. 影响与遗留
+
+- 影响：① Provider 模型从单 default_model 升级为多选关联表，Agent 注册/编辑与平台模型配置共用 `llm_provider_model` 口径；② 内置 Provider 模型列表由 V49 种子固定（后续官网更新走新迁移，与实施计划八风险缓解一致）；③ 角色模型唯一性收紧为服务端强制校验（注册/编辑两条入口）。
+- 遗留：① e2e 脚本产生的 probe 残留数据（probe-404-check / probe-addmodel-debug / probe-saveall-idem 等软删记录）待用户执行清理 SQL（本轮已交付）；② 本轮代码与本文档未 git 提交，待用户确认后提交。
+
+### 6.90 MQ 消息格式链路修复：Java 序列化 → 显式 JSON + NotificationConsumer 手动 ACK（2026-08-14）
+
+#### 1. 范围
+
+- **背景**：启动后 RabbitMQ 消费者持续报 `ListenerExecutionFailedException: Failed to convert message`，根因是队列积压旧格式 Java 序列化消息（Phase 2F 前 `convertAndSend(POJO/Map)` 遗留，body 为 `LinkedHashMap` 的 `application/x-java-serialized-object`），当前消费端反序列化被安全白名单拦截（`SecurityException: Attempt to deserialize unauthorized class java.util.LinkedHashMap`），listener 转换层即失败（方法体不执行、代码内 ACK 兜底无效）→ 无限 requeue 刷日志 → 30 分钟 ack 超时后 channel 被 broker 关闭。
+- **本轮内容**：① 停应用 → `rabbitmqctl purge_queue` 清理 reviewer/executor/planner 三队列积压旧消息 → 命令行重启；② 排查发现当前代码仍存在两条 Java 序列化/ack 缺陷路径，一并修复（见 §2）；③ 修复后完整闭环验证（生产端 JSON 发出 → 消费端解析 → 幂等 → 手动 ACK → 队列清零）。
+- **明确不做**：不动全局 RabbitTemplate converter（避免波及其他 RabbitListener，与 Phase 2F 修正原则一致）；不改 reviewer/executor/planner 消费端（已按 JSON 解析，天然兼容）；不改调度/执行链逻辑。
+
+#### 2. 实际落地
+
+- **清理**：`rabbitmqctl purge_queue` 清空 `helloai.reviewer.queue`（7 条）/ `helloai.executor.queue`（6 条）/ `helloai.planner.queue`（7 条）积压；后端以 `~/.jdks/ms-17.0.19/bin/java.exe -jar` 全路径重启（系统 PATH java 为失效 stub）。
+- **修复①生产端 `DomainEventPublisher`**：原 `convertAndSend(Map)` 走 SimpleMessageConverter Java 序列化 → 改为显式 `ObjectMapper.writeValueAsBytes` + `RabbitTemplate.send` + ContentType JSON + PERSISTENT（与 Phase 2F `ExecutionCommandMqPublisher` 修正同款，Javadoc 注明修正原因）；调用方 `AgentEventCompensationTask` 签名不变。
+- **修复②消费端 `NotificationConsumer`**：原 `onNotification(Map)` 方法签名依赖 SimpleMessageConverter 反序列化（Java 序列化），且未显式 ackMode 继承全局 `spring.rabbitmq.listener.simple.acknowledge-mode: manual`（application.yml）却从不调 `basicAck` → 消息永久 unacked（此前队列无消息未暴露）→ 改为 `(Message, Channel, @Header DELIVERY_TAG)` + `ackMode = "MANUAL"` + JSON 解析（解析失败/缺 eventId 直接 ACK，消费失败 NACK 不重投走 DLX，与 `MqReviewCommandConsumer` 同款）。
+
+#### 3. 验证结果
+
+- 重启后 `GET /api/health` 200；日志无任何 `Failed to convert message` / `SecurityException`；全队列 0 积压、消费者在线（reviewer/execution-command/notification 各 5）。
+- 闭环验证（真实链路）：向 `agent_outbox_event` 插入 PENDING 测试行（routing_key=`agent.notification.test`）→ 补偿任务 15s 轮询发出 JSON（日志 `Publishing event ... bodyBytes=69`）→ `NotificationConsumer` 消费（elapsed=7ms）→ outbox 行 status=SUCCESS → 队列 unacked=0（ACK 生效）。幂等验证：重启后旧 unacked 消息 requeue 再消费被幂等跳过并 ACK。测试数据（outbox 行 + event_consumption_log 记录）已清理。
+- 打包验证：`mvn -pl helloai-mq,helloai-job,helloai-start -am -DskipTests package` 通过（编译期即暴露 NotificationConsumer 残留声明，修复后 0 error）。
+
+#### 4. 影响与遗留
+
+- 影响：① 领域事件生产端统一 JSON 序列化，消费端全部按 JSON 解析，消除 SecurityException 复发路径（outbox PENDING 再出现也不复发）；② NotificationConsumer 补齐手动 ACK，消除 unacked 累积；③ 消费失败语义对齐：坏消息 ACK 不阻塞队列、业务失败 NACK 走 DLX。
+- 遗留：① 历史 FAILED outbox 残留（agent_outbox_event status=2 与 agent_command_outbox status=3 共百余条）未清理，属历史失败快照，不影响链路；② executor/planner 队列当前无消费者（历史 agent.exchange 绑定），本轮只清积压未改拓扑；③ 本轮代码与本文档未 git 提交，待用户确认后提交。
+
+### 6.91 版本测试准备：注册选模型前端最小改动 + 同角色同模型唯一性实测 + 全量清理 SQL 交付（2026-08-14）
+
+#### 1. 范围
+
+- **背景**：用户计划进行一次版本测试，需先清理全部业务数据（但不包括 credential_vault 的 api-key 信息与 sys_user 表 admin 信息）；同时补齐注册新 Agent 的前端功能——内部 LLM（API_KEY_LLM）注册时必须能选择模型，且同一角色同一模型不能重复注册（如 deepseek-v4-flash 不能出现两个 PLANNER，但可同时存在 deepseek-v4-flash 与 deepseek-v4-pro 的 PLANNER）。
+- **本轮内容**：① 前端注册弹窗模型分组下拉（最小改动，后端 V49 链路零改动）；② 同角色同模型唯一性约束实测确认（后端 V49 `validateModelUniqueInRole` 已实现，本轮实测验证）；③ 注册失败业务提示前端修复（BizException 以 HTTP 500 返回时拦截器只显示笼统错误）；④ 版本测试全量清理 SQL 交付。
+- **明确不做**：不动后端注册链路（V49 已完整）；不做编辑弹窗模型选择、连通性测试按钮、Settings 模型管理页改动；不代执行数据库写操作（清理 SQL 由用户执行）。
+
+#### 2. 实际落地
+
+- **agent.ts**：新增 `AvailableModelGroup` 接口（providerCode/providerName/defaultModel/models）+ `listAvailableModels()`，对接后端 V49 既有 `GET /api/agents/listAvailableModels`。
+- **AgentList.vue**：注册弹窗在 `accessType === 'API_KEY_LLM'` 时显示模型分组下拉（`el-option-group` 按 Provider 分组，value 为 `providerCode:modelName`，clearable + filterable，留空走系统默认 provider+default-model，兼容 §6.74 口径）；`watch(registerDialog)` 打开时加载模型目录；`handleRegister` 传 `modelType`；表单重置补 `modelType=''`。
+- **request.ts**：response 拦截器 error 分支补 `error.response?.data?.msg` 提取——后端业务异常（BizException）以 HTTP 4xx/5xx 返回时优先展示 R 包裹体里的中文 msg（此前只显示 `Request failed with status code 500`，注册模型唯一性校验提示不可见）。
+- **同角色同模型唯一性（确认已有，零改动）**：`AgentServiceImpl.validateModelUniqueInRole`（V49）按 `role + accessType=API_KEY_LLM + modelType + deleted=0` 查重，命中抛 `角色 X 已存在使用模型 Y 的Agent，同一模型在同一角色下只能注册一个`；`AgentController.register` L64 创建前预校验（失败不落脏数据）+ `applyRegistrationExtras` 兜底，语义与用户要求完全一致（同角色同模型唯一、同角色不同模型允许）。
+- **清理 SQL**：`tmp/cleanup-business-data-20260814.sql` 事务包裹 21 表 ~5900 行（任务域 12 表 / Agent 域 4 表 / 需求对话 2 表 / MQ 流水 3 表），按外键依赖排序；**保留** credential_vault 全部 79 条（AGENT 74 + PLATFORM 5，版本测试需要 api-key）+ sys_user admin + llm_provider/llm_provider_model/sys_config。
+
+#### 3. 验证结果
+
+- `npm run build` 通过（vue-tsc 0 error + vite build 23.75s）。
+- API 实测 `GET /api/agents/listAvailableModels`：4 供应商 11 模型（deepseek 2 / moonshot 5 / minimax 1 / dashscope 3）。
+- 角色模型唯一性实测（`.tmp/verify-role-model-unique2.ps1`，curl + body 文件规避 PS 5.1 引号剥离）：S1 第二个 PLANNER+deepseek-v4-flash 被拒（msg=`角色 PLANNER 已存在使用模型 deepseek-v4-flash 的Agent...`）✅；S2 PLANNER+deepseek-v4-pro 注册成功（同角色不同模型允许）✅；S3 第二个 PLANNER+deepseek-v4-pro 被拒 ✅。
+- 实测产生的 2 条 probe-uq-* agent（PLANNER+flash / PLANNER+pro）已确认落库，随清理 SQL 一并清除。
+
+#### 4. 影响与遗留
+
+- 影响：① 前端注册内部 LLM 可选模型，留空仍走系统默认（与 §6.74 兼容）；② 同角色同模型唯一性为服务端强制校验（注册/编辑两入口），前端通过拦截器修复可见完整中文提示；③ 版本测试前清理 SQL 已就绪，用户执行后即可从零态冒烟。
+- 遗留：① 清理 SQL 待用户执行（`docker cp` + `docker exec psql -f`，执行后 DELETE 计数反馈即开始完结校验：数据库空态 → 后端健康 → MQ 队列归零 → 从零链路冒烟）；② 本轮代码与本文档未 git 提交，待用户确认后提交。
+
+### 6.92 V52 技能能力校验 e2e 收口：getById skills 修复 + e2e 脚本 UTF-8 body 编码修复（2026-08-14）
+
+#### 1. 范围
+
+- **背景**：V52 技能能力驱动校验链路（显式技能白名单 / 自定义豁免 / 未识别模型放行 / 关键词兜底）此前已有实现与 e2e 脚本，但 e2e 存在两处未闭环：① `AdminAgentController.getById` 未回填 `skills`（V52 引入后 getById 返回空，脚本被迫走列表接口 fallback）；② 脚本 `Invoke-Api` 用 PS 5.1 字符串直接作 `-Body` 发送，中文 body（如描述"负责代码审查与联网检索"）被按 ANSI 编码转换，后端收到 `??` 乱码，关键词兜底永不命中，S5 断言必败。
+- **本轮内容**：① getById 回填 skills；② 脚本发送中文 body 改为 UTF-8 字节数组；③ 词表补"检索/联网"（与"搜索"同义映射 web-search，原词表已有"搜索"即可满足，补词仅为更完整）。
+- **明确不做**：不动 `deriveWithCapabilities` 推导逻辑与校验语义；不改前端；不做数据库变更。
+
+#### 2. 实际落地
+
+- **AdminAgentController.getById / AgentListItemVO**：`getById` 组装响应时 `setSkills(agent.getSkills())`（此前字段未回填导致 getById 恒为空，列表接口 skill 字段正常）。修复后 e2e 的 `Get-AgentSkills` 直读 getById，删除 fallback 依赖。
+- **AgentSkillDeriver.keywordSkills()**：新增 `map.put("检索", "web-search")`、`map.put("联网", "web-search")`。
+- **verify-agent-skill-capability.ps1**：`Invoke-Api` 中 body 改为 `$script:Utf8NoBom.GetBytes($BodyJson)` 字节数组发送（`Utf8NoBom = New-Object System.Text.UTF8Encoding($false)`），头部按规则 6 补 `[Console]::InputEncoding` 与 `$OutputEncoding = Utf8NoBom`。
+
+#### 3. 验证结果
+
+- 定位过程关键证据：getById 修复生效（skills 非空）但纯中文描述仍未推导 → 用"只做search联网"探测，getById 显示 `description:"??search??"` + `skills:[thinking,code-review,web-search]` → 坐实脚本发送层中文损坏（`??`），非后端逻辑问题；`javap` 反编译 `AgentSkillDeriver.class` 确认运行类含"检索/搜索/联网"词条与 `deriveWithCapabilities`（含净化 lambda），排除编译产物陈旧。
+- 修复后 e2e 重跑：**28/28 ALL PASSED**（S0 登录 / S1 deepseek+shell / S2 kimi+web-search / S3 deepseek+web-search 拒绝 / S4 自定义技能豁免 / S5 kimi 无显式技能 → 描述"负责代码审查与联网检索"推导出 thinking,code-review,web-search / S6 编辑拒绝 / S7 换模型+双技能 / S8 清理）。
+- 控制台仍见 `不支持技?` 尾字显示乱码（PS 5.1 管道重定向层 artifact，断言基于内存字符串匹配已通过，不影响判定）。
+
+#### 4. 影响与遗留
+
+- 影响：① getById 返回 skills 后，管理端详情展示与脚本断言均可直读；② e2e 脚本对含中文 body 的请求统一走 UTF-8 字节发送（规则 6 在 HTTP 发送层的落地，与 verify-agenthub-duty-e2e.ps1 的 Run-Psql 剥离 BOM 范式互补）；③ 词表"检索/联网"补齐后描述含这些词即可推导 web-search。
+- 遗留：① 本轮代码与本文档未 git 提交，待用户确认后提交；② 其余 verify-*.ps1 若仍以字符串 -Body 发送中文，后续遇到同类"后端收到乱码"问题应优先按本轮范式修复。
