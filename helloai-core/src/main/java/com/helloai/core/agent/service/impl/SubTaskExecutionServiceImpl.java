@@ -342,6 +342,20 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
         sb.append("- <产出文件路径>\n");
         sb.append("```\n");
 
+        // 可选：LLM manifest 多文件产出协议（方案3）——命中时多文件物化，未命中降级纯文本单 .md，零影响
+        sb.append("\n你也可以选择用如下 JSON 结构返回多文件产出（放在 ```json 代码块中，位于 EXECUTION_RECORD 块之前）：\n\n");
+        sb.append("```json\n");
+        sb.append("{\n");
+        sb.append("  \"summary\": \"本次产出的简要说明\",\n");
+        sb.append("  \"files\": [\n");
+        sb.append("    { \"name\": \"README.md\", \"type\": \"text/markdown\", \"content\": \"...\" },\n");
+        sb.append("    { \"name\": \"main.py\", \"type\": \"text/x-python\", \"content\": \"...\" }\n");
+        sb.append("  ]\n");
+        sb.append("}\n");
+        sb.append("```\n");
+        sb.append("若无需拆分文件，直接输出正文即可；若选择该结构，请把正文按文件拆分放入 files，"
+                + "summary 概括本次产出，并在文件概览后保留 EXECUTION_RECORD 回填块。\n");
+
         return sb.toString();
     }
 

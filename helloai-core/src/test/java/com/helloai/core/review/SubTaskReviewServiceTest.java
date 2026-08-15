@@ -47,6 +47,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import org.mockito.ArgumentCaptor;
 
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -114,6 +115,8 @@ class SubTaskReviewServiceTest {
                 conversationService, recordReviewService, taskService, attachmentService, redisTemplate);
         lenient().when(dispatchProperties.getAutoReviewMaxRework()).thenReturn(3);
         lenient().when(dispatchProperties.getReviewEvidenceCheckWaitMs()).thenReturn(0);
+        // 方案3 F2 附件内容注入：默认开启（开关用例单独 stub 为 false）
+        lenient().when(dispatchProperties.isAttachmentContentEnabled()).thenReturn(true);
         // §6.82 核验互斥锁：默认可获取（所有既有用例走完整核验链路）；锁用例单独 stub 为 false
         lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         lenient().when(valueOperations.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class)))
@@ -668,5 +671,139 @@ class SubTaskReviewServiceTest {
         verify(redisTemplate).delete("review:lock:" + SUB_TASK_ID);
         verify(subTaskService, never()).complete(anyLong());
         verify(subTaskService, never()).rework(anyLong(), any());
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  方案3 F2：核验 Prompt 附件内容注入（Reviewer 内容级核验）
+    // ══════════════════════════════════════════════════════════════
+
+    private Attachment readableAttachment(Long id, String name, String type, long size, byte[] content) {
+        Attachment att = new Attachment();
+        att.setId(id);
+        att.setFileName(name);
+        att.setFileType(type);
+        att.setFileSize(size);
+        when(attachmentService.list(SUB_TASK_ID)).thenReturn(List.of(att));
+        when(attachmentService.isContentLoadable(att)).thenReturn(true);
+        when(attachmentService.loadContent(id)).thenReturn(content);
+        return att;
+    }
+
+    private String captureReviewPrompt() {
+        ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+        verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+        return taskCaptor.getValue().getUserPrompt();
+    }
+
+    private void stubReviewerPass() {
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success("{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
+    }
+
+    @Test
+    @DisplayName("方案3 F2: 可直读附件正文注入核验 Prompt（标题+正文），核验链放行")
+    void shouldInjectReadableAttachmentContentIntoPrompt() {
+        readableAttachment(501L, "main.sh", "text/x-shellscript", 12L,
+                "#!/bin/bash\necho hello\n# 校验通过".getBytes(StandardCharsets.UTF_8));
+        stubReviewerPass();
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        String prompt = captureReviewPrompt();
+        assertThat(prompt).contains("## 物化附件内容");
+        assertThat(prompt).contains("### main.sh（text/x-shellscript，12 bytes）");
+        assertThat(prompt).contains("echo hello");
+        assertThat(prompt).doesNotContain("已截断");
+        verify(subTaskService).complete(SUB_TASK_ID);
+    }
+
+    @Test
+    @DisplayName("方案3 F2: 附件正文超过每附件限额（8000）时截断并标注")
+    void shouldTruncateOversizedAttachmentContent() {
+        String longContent = "行".repeat(12000);
+        readableAttachment(502L, "big.log", "text/plain", 24000L, longContent.getBytes(StandardCharsets.UTF_8));
+        stubReviewerPass();
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        String prompt = captureReviewPrompt();
+        assertThat(prompt).contains("部分附件内容已截断至限额");
+        assertThat(prompt).contains("行".repeat(8000));
+        assertThat(prompt).doesNotContain("行".repeat(8001));
+    }
+
+    @Test
+    @DisplayName("方案3 F2: 多个附件总计超限（24000）时停止注入后续附件正文")
+    void shouldStopWhenTotalLimitExceeded() {
+        // 4 个 10000 字符附件：前 3 个吃满总限 24000，第 4 个不再注入正文
+        Attachment a = attachmentWithId(503L, "a.log");
+        Attachment b = attachmentWithId(504L, "b.log");
+        Attachment c = attachmentWithId(505L, "c.log");
+        Attachment d = attachmentWithId(506L, "d.log");
+        when(attachmentService.list(SUB_TASK_ID)).thenReturn(List.of(a, b, c, d));
+        for (Attachment att : List.of(a, b, c, d)) {
+            when(attachmentService.isContentLoadable(att)).thenReturn(true);
+        }
+        when(attachmentService.loadContent(503L)).thenReturn("A".repeat(10000).getBytes(StandardCharsets.UTF_8));
+        when(attachmentService.loadContent(504L)).thenReturn("B".repeat(10000).getBytes(StandardCharsets.UTF_8));
+        when(attachmentService.loadContent(505L)).thenReturn("C".repeat(10000).getBytes(StandardCharsets.UTF_8));
+        when(attachmentService.loadContent(506L)).thenReturn("D".repeat(10000).getBytes(StandardCharsets.UTF_8));
+        stubReviewerPass();
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        String prompt = captureReviewPrompt();
+        assertThat(prompt).contains("附件内容总计超出限额，后续附件仅见清单");
+        assertThat(prompt).contains("### a.log").contains("### b.log").contains("### c.log");
+        // 清单仍全量展示 d.log，但内容段不注入其正文
+        assertThat(prompt).contains("- d.log");
+        assertThat(prompt).doesNotContain("### d.log");
+    }
+
+    @Test
+    @DisplayName("方案3 F2: 不可直读附件仅见清单，内容段标注不可读")
+    void shouldMarkUnreadableAttachment() {
+        Attachment external = new Attachment();
+        external.setId(505L);
+        external.setFileName("out.zip");
+        external.setFileType("application/zip");
+        when(attachmentService.list(SUB_TASK_ID)).thenReturn(List.of(external));
+        when(attachmentService.isContentLoadable(external)).thenReturn(false);
+        stubReviewerPass();
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        String prompt = captureReviewPrompt();
+        assertThat(prompt).contains("无平台可直读附件，无法核对文件正文");
+        verify(attachmentService, never()).loadContent(anyLong());
+    }
+
+    @Test
+    @DisplayName("方案3 F2: 开关关闭时退化为仅清单，不读取附件内容")
+    void shouldSkipContentWhenSwitchDisabled() {
+        when(dispatchProperties.isAttachmentContentEnabled()).thenReturn(false);
+        Attachment att = new Attachment();
+        att.setId(507L);
+        att.setFileName("main.sh");
+        att.setFileType("text/x-shellscript");
+        when(attachmentService.list(SUB_TASK_ID)).thenReturn(List.of(att));
+        when(attachmentService.isContentLoadable(att)).thenReturn(true);
+        stubReviewerPass();
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        String prompt = captureReviewPrompt();
+        assertThat(prompt).contains("附件内容注入已关闭，仅见清单");
+        verify(attachmentService, never()).loadContent(anyLong());
+    }
+
+    /** 构造仅含 id/name 的附件（配合 list 覆盖 stub 使用）。 */
+    private Attachment attachmentWithId(Long id, String name) {
+        Attachment att = new Attachment();
+        att.setId(id);
+        att.setFileName(name);
+        return att;
     }
 }

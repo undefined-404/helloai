@@ -56,16 +56,37 @@ public class ExecutionArtifactServiceImpl implements ExecutionArtifactService {
             return;
         }
         try {
-            doMaterialize(subTask, agentId, output);
+            materializeParsed(subTask, agentId, executionOutputParser.parse(subTask.getTitle(), output));
         } catch (Exception e) {
             log.warn("执行产出物化失败（不阻断主链路）: subTaskId={}, err={}",
                     subTask.getId(), e.getMessage());
         }
     }
 
-    private void doMaterialize(SubTask subTask, Long agentId, String output) {
-        ParsedOutput parsed = executionOutputParser.parse(subTask.getTitle(), output);
-        if (parsed.isEmpty()) {
+    /**
+     * 物化已解析结果（方案3：调用方已解析，物化侧不再重复解析）。
+     *
+     * @param parsed 调用方已解析的产出（含 files 与 displayText）
+     */
+    public void materialize(SubTask subTask, Long agentId, ParsedOutput parsed) {
+        if (!properties.isEnabled() || subTask == null) {
+            return;
+        }
+        try {
+            materializeParsed(subTask, agentId, parsed);
+        } catch (Exception e) {
+            log.warn("执行产出物化失败（不阻断主链路）: subTaskId={}, err={}",
+                    subTask.getId(), e.getMessage());
+        }
+    }
+
+    @Override
+    public boolean isEnabled() {
+        return properties.isEnabled();
+    }
+
+    private void materializeParsed(SubTask subTask, Long agentId, ParsedOutput parsed) {
+        if (parsed == null || parsed.isEmpty()) {
             log.debug("执行产出为空，跳过物化: subTaskId={}", subTask.getId());
             return;
         }

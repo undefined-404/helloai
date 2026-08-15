@@ -131,6 +131,14 @@ public class AgentDispatchProperties {
     private int reviewEvidenceCheckWaitMs = 1000;
 
     /**
+     * 核验侧附件内容注入开关（方案3 F2）：开启后核验 Prompt 注入可直读物化附件正文
+     * （每附件 8000 字符、总计 24000 字符截断），Reviewer 基于真实文件内容核对
+     * "声称交付物 ↔ 文件正文 ↔ 验收标准"；关闭时仅注入附件清单（与开关引入前行为一致）。
+     * 默认 true。
+     */
+    private boolean attachmentContentEnabled = true;
+
+    /**
      * V32：任务自动收口（全部子任务 DONE/CANCELLED → Task DONE）后，
      * 是否异步触发 Planner 生成最终整合报告。
      *

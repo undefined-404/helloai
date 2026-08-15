@@ -5,6 +5,8 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.output.ExecutionOutputParser;
+import com.helloai.core.agent.output.ParsedOutput;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.shared.event.SubTaskSubmittedForReviewEvent;
 import com.helloai.core.agent.service.ExecutionArtifactService;
@@ -50,6 +52,7 @@ public class ExecutionResultHandler {
     private final ConversationService conversationService;
     private final ExecutionArtifactService executionArtifactService;
     private final TaskRunningSpecService taskRunningSpecService;
+    private final ExecutionOutputParser executionOutputParser;
 
     @Transactional(rollbackFor = Exception.class)
     public void handleSuccess(Long subTaskId, Long agentId, AgentResult result) {
@@ -144,7 +147,15 @@ public class ExecutionResultHandler {
         last.put("executor", report.getExecutorName());
         last.put("finishReason", report.getFinishReason());
         last.put("tokens", report.getTokenUsage());
-        last.put("output", report.getOutput());
+        // 方案3 displayText：物化开启时 output/对话流写摘要+文件概览+尾部（EXECUTION_RECORD 保留），
+        // 避免 manifest JSON 全文刷屏；物化关闭/降级时保持原文，与现状一致
+        ParsedOutput parsedOutput = executionOutputParser.parse(subTask.getTitle(), report.getOutput());
+        String outputText = report.getOutput();
+        if (!parsedOutput.isEmpty() && parsedOutput.displayText() != null
+                && executionArtifactService.isEnabled()) {
+            outputText = parsedOutput.displayText();
+        }
+        last.put("output", outputText);
         last.put("error", report.getError());
         ctx.put("lastExecution", last);
 
@@ -191,7 +202,7 @@ public class ExecutionResultHandler {
                 }
                 conversationService.addMessage(report.getSubTaskId(), report.getAgentId(),
                         "assistant", "agent",
-                        report.getOutput() != null ? report.getOutput() : "",
+                        outputText,
                         "sub_task_execute");
             } else {
                 conversationService.addMessage(report.getSubTaskId(), report.getAgentId(),
@@ -227,16 +238,16 @@ public class ExecutionResultHandler {
             // 留在主事务内既拉长事务又有锁风险；best-effort，失败不影响 REVIEW 推进
             final SubTask materializeTarget = subTask;
             final Long materializeAgentId = report.getAgentId();
-            final String materializeOutput = report.getOutput();
+            final ParsedOutput materializeParsed = parsedOutput;
             if (TransactionSynchronizationManager.isSynchronizationActive()) {
                 TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                     @Override
                     public void afterCommit() {
-                        executionArtifactService.materialize(materializeTarget, materializeAgentId, materializeOutput);
+                        executionArtifactService.materialize(materializeTarget, materializeAgentId, materializeParsed);
                     }
                 });
             } else {
-                executionArtifactService.materialize(materializeTarget, materializeAgentId, materializeOutput);
+                executionArtifactService.materialize(materializeTarget, materializeAgentId, materializeParsed);
             }
         } else {
             subTaskService.block(report.getSubTaskId());

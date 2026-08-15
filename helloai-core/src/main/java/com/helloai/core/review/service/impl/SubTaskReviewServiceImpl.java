@@ -78,6 +78,10 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
 
     private static final String PROMPT_TEMPLATE_PATH = "prompts/subtask-review.md";
     private static final int OUTPUT_SUMMARY_LIMIT = 4000;
+    /** 附件内容注入限额（方案3 F2）：每附件 8000 字符，超限截断并标注。 */
+    private static final int ATTACHMENT_CONTENT_PER_FILE_LIMIT = 8000;
+    /** 附件内容注入限额（方案3 F2）：总计 24000 字符，超限停止注入后续附件正文。 */
+    private static final int ATTACHMENT_CONTENT_TOTAL_LIMIT = 24000;
 
     /** §6.82 批次 D：核验互斥锁（防 L1/L2/L3 三路并发双审），key = review:lock:{subTaskId} */
     private static final String REVIEW_LOCK_PREFIX = "review:lock:";
@@ -497,6 +501,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                 .replace("{{ACCEPTANCE}}", nullToEmpty(subTask.getAcceptance()))
                 .replace("{{EXECUTION_OUTPUT}}", extractExecutionOutput(subTask))
                 .replace("{{ATTACHMENT_LIST}}", buildAttachmentList(subTask))
+                .replace("{{ATTACHMENT_CONTENT}}", buildAttachmentContent(subTask))
                 .replace("{{VERIFICATION_SIGNAL}}", verificationSignal(extractRawOutput(subTask)));
     }
 
@@ -622,6 +627,83 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
 
     /** A0-5 证据检查结果。 */
     record EvidenceCheckResult(boolean ok, String reason, int attachmentCount, boolean outputPresent) {
+    }
+
+    /**
+     * 核验侧附件内容注入（方案3 F2）：把可直读物化附件（local:// 与 minio://）正文截断后
+     * 注入核验 Prompt，让 Reviewer 基于真实文件内容核对"声称交付物 ↔ 文件正文 ↔ 验收标准"，
+     * 而非仅凭文件名猜测（消除"Reviewer 审查靠摘要+文件名"的幻觉缺口）。
+     *
+     * <p>限额策略：每附件 8000 字符、总计 24000 字符，超限截断并标注；不可直读/读取失败/
+     * 空内容附件不注入正文（清单仍全量展示）；开关 {@code helloai.dispatch.attachment-content-enabled}
+     * 关闭时退化为仅清单（与开关引入前行为一致）。</p>
+     */
+    private String buildAttachmentContent(SubTask subTask) {
+        if (!dispatchProperties.isAttachmentContentEnabled()) {
+            return "（附件内容注入已关闭，仅见清单）";
+        }
+        List<Attachment> attachments = readableAttachments(subTask.getId());
+        if (attachments.isEmpty()) {
+            return "（无平台可直读附件，无法核对文件正文）";
+        }
+        StringBuilder sb = new StringBuilder();
+        int totalChars = 0;
+        boolean truncated = false;
+        boolean totalExceeded = false;
+        for (Attachment att : attachments) {
+            String content = readAttachmentContent(att);
+            if (content == null) {
+                sb.append("### ").append(att.getFileName())
+                        .append("（").append(att.getFileType() != null ? att.getFileType() : "other")
+                        .append("，内容不可读/为空）\n");
+                continue;
+            }
+            if (content.length() > ATTACHMENT_CONTENT_PER_FILE_LIMIT) {
+                content = content.substring(0, ATTACHMENT_CONTENT_PER_FILE_LIMIT);
+                truncated = true;
+            }
+            if (totalChars + content.length() > ATTACHMENT_CONTENT_TOTAL_LIMIT) {
+                int remaining = ATTACHMENT_CONTENT_TOTAL_LIMIT - totalChars;
+                if (remaining > 0) {
+                    appendAttachmentContent(sb, att, content.substring(0, remaining));
+                    truncated = true;
+                }
+                totalExceeded = true;
+                break;
+            }
+            totalChars += content.length();
+            appendAttachmentContent(sb, att, content);
+        }
+        if (truncated) {
+            sb.append("（部分附件内容已截断至限额）\n");
+        }
+        if (totalExceeded) {
+            sb.append("（附件内容总计超出限额，后续附件仅见清单）");
+        }
+        return sb.toString().trim();
+    }
+
+    /** 单附件内容段：标题行（文件名/类型/大小）+ 正文。 */
+    private void appendAttachmentContent(StringBuilder sb, Attachment att, String content) {
+        String size = att.getFileSize() != null ? att.getFileSize() + " bytes" : "?";
+        String type = att.getFileType() != null ? att.getFileType() : "other";
+        sb.append("### ").append(att.getFileName())
+                .append("（").append(type).append("，").append(size).append("）\n")
+                .append(content).append("\n");
+    }
+
+    /** 读取可直读附件正文；不可读/为空返回 null（注入"内容不可读"标注，不中断整体注入）。 */
+    private String readAttachmentContent(Attachment att) {
+        try {
+            byte[] bytes = attachmentService.loadContent(att.getId());
+            if (bytes == null || bytes.length == 0) {
+                return null;
+            }
+            return new String(bytes, StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            log.debug("附件内容读取失败，仅注入清单: attachmentId={}, err={}", att.getId(), e.getMessage());
+            return null;
+        }
     }
 
     /**
