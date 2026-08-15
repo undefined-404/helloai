@@ -1,7 +1,7 @@
 # HelloAI 执行产出物化与结构化多文件产出方案（方案2 / 方案3）
 
 > 编写日期：2026-07-30
-> 状态：方案2（执行产出物化）+ 主任务交付物实时聚合 zip 下载已于 2026-07-31 实现（迭代记录 §6.30）；同日后续补齐任务最终整合报告（V32，Planner 整合全部子任务产出，zip 内置顶 `01-最终整合报告.md`，迭代记录 §6.31）；方案3（LLM manifest 结构化多文件协议，§5）仍为设计遗留，`ExecutionOutputParser` 已预留扩展位
+> 状态：方案2（执行产出物化）+ 主任务交付物实时聚合 zip 下载已于 2026-07-31 实现（迭代记录 §6.30）；同日后续补齐任务最终整合报告（V32，Planner 整合全部子任务产出，zip 内置顶 `01-最终整合报告.md`，迭代记录 §6.31）；方案3（LLM manifest 结构化多文件协议，§5）已于 2026-08-14 实现（迭代记录 §6.93）：`Manifest`/`ManifestFile` DTO + `ExecutionOutputParser.parse` 扩展（```json 围栏提取 → 多文件物化，未命中无损降级）+ `ParsedOutput(files, displayText)` + `buildUserPrompt` 追加可选 manifest 协议指令 + `ExecutionResultHandler` 挂接 displayText；核验侧同步补内容级核验（§5.4）：`SubTaskReviewServiceImpl.buildAttachmentContent`（每附件 8000 / 总计 24000 字符限额）+ `prompts/subtask-review.md`「## 物化附件内容」节与 `{{ATTACHMENT_CONTENT}}` 占位 + 三者一致性判定规则；e2e `scripts/powershell/verify-artifact-content-review.ps1` 真实环境 PASS=23 FAIL=0 SKIP=1 ALL PASSED
 > 目标：把子任务执行产出从"仅纯文本落 `sub_task.context.lastExecution.output`"升级为"真实文件 + attachment 记录 + 前端可下载"，并预留 LLM 结构化多文件产出协议。
 > 关联诉求：前端子任务详情页"方案1 前端导出"已交付；本文档规划其后端侧的方案2（产出物化）与方案3（结构化多文件产出）。
 
@@ -255,18 +255,27 @@ int materialize(SubTask subTask, List<ArtifactFile> files);
 > }
 > ```
 
-### 5.2 解析：ExecutionOutputParser 扩展
+### 5.2 解析：ExecutionOutputParser 扩展（已实现，2026-08-14）
 
-- 复用核验链 `SubTaskReviewService.stripToJsonObject` 的代码块围栏剥离思路，尝试从 raw 中提取 JSON 对象。
+- 新增 `Manifest`（summary + files）/ `ManifestFile`（name/type/content）record（`agent/output`）；`ExecutionOutputParser.parse` 复用核验链 `SubTaskReviewService.stripToJsonObject` 的代码块围栏剥离思路，尝试从 raw 中提取 ```json 围栏内 JSON 对象。
 - 命中且含非空 `files` 数组 → 结构化形态：
-  - `files` 逐项映射为 `ArtifactFile`（`name` 缺失用序号兜底；`type` 缺失按后缀推断）。
-  - `displayText = summary + "\n\n" + 各文件 "### {name}\n(已作为附件产出)" section 概览`（不把全部文件内容塞进对话流，避免刷屏；完整内容在附件里）。
-- 未命中/`files` 空/JSON 非法 → 降级纯文本形态（§4.3）。
-- 使用 `@JsonIgnoreProperties(ignoreUnknown=true)` 容忍多余字段。
+  - `files` 逐项映射为 `ArtifactFile`（`name` 缺失用序号兜底；`type` 缺失按后缀推断；`@JsonIgnoreProperties(ignoreUnknown=true)` 容忍多余字段）。
+  - `displayText = summary + "## 产出文件概览" + "- {name}" 逐行 + JSON 块之后尾部文本`（EXECUTION_RECORD 回填块保留；不把全部文件内容塞进对话流，避免刷屏；完整内容在附件里）。
+- 未命中/`files` 空/JSON 非法 → 降级纯文本形态（§4.3），`displayText = raw`。
+- `ParsedOutput` 重构为 `(files, displayText)` 双字段；`ExecutionResultHandler` 注入 parser，物化开启（`helloai.storage.enabled`）时 `lastExecution.output` 与对话流 `sub_task_execute` 写 displayText，关闭时保持原文。
 
 ### 5.3 与方案2 的关系
 
-方案3 只改 `ExecutionOutputParser.parse` 一处；`ExecutionArtifactService`、挂接点、下载、前端全部复用方案2 成果。因此实施上**方案2 与方案3 可一次性合并落地**，方案3 不新增文件。
+方案3 只改 `ExecutionOutputParser.parse` 一处；`ExecutionArtifactService`、挂接点、下载、前端全部复用方案2 成果。因此实施上**方案2 与方案3 可一次性合并落地**，方案3 不新增文件。已按此落地（2026-08-14，迭代记录 §6.93）。
+
+### 5.4 Reviewer 附件内容级核验（已实现，2026-08-14）
+
+方案2/3 物化后，核验侧同步升级为"内容级核验"——Reviewer 的核验 Prompt 注入可直读物化附件正文，以"声称交付物 ↔ 文件正文 ↔ 验收标准"三者一致性作为判定依据：
+
+- `SubTaskReviewServiceImpl.buildAttachmentContent(subTask)`：按 `sub_task_id` 查 `attachment` 表可直读附件（`isContentLoadable`），逐附件输出 `### {fileName}` 节 + 正文；限额：**每附件 8000 字符**截断并标注、**总计 24000 字符**停止注入后续附件正文；不可直读 / 读取失败 / 为空 → 显式标注"内容不可读/为空"（Reviewer 不得臆断文件内容）。
+- `prompts/subtask-review.md` 新增「## 物化附件内容（平台直读，已按限额截断）」节 + `{{ATTACHMENT_CONTENT}}` 占位符（服务端组装时替换）+ 第 10 条判定规则（附件正文与声称结论矛盾 → pass=false 并在 issues 指出差异）。
+- 核验 Prompt 在 LLM 调用成功后落库 `conversation_message`（`tool_name='subtask_review_prompt'`），供审计与 e2e 断言。
+- 触发前提不变：`dispatch.auto-review-enabled` + REVIEWER/PLANNER agent + `API_KEY_LLM` + `credential_vault` 绑定（owner_type='AGENT'/status='ACTIVE'）；checkEvidence 对非执行密集 + 有 output 直接放行。
 
 ---
 
@@ -339,20 +348,20 @@ flowchart TD
 
 ## 9. 验证计划（实施时执行）
 
-1. `mvn -q -pl helloai-common,helloai-core,helloai-api -am compile` 通过；前端 `vue-tsc` 通过。
-2. 触发一次真实子任务执行（纯文本产出）→ 断言 `attachment` 新增 1 条 `local://` 记录，前端卡片可下载且内容正确。
-3. 构造/诱导一次 manifest 产出 → 断言物化多文件，`displayText` 为 summary+概览，附件各自可下载。
-4. 关闭 `helloai.storage.enabled` → 断言执行链正常、不产生附件。
-5. 下载接口对非 `local://`（如 mock 的 minio://）仍返回 302。
-6. 新增 `verify-execution-artifact-e2e.ps1`（遵守 UTF-8 头模板）覆盖上述路径。
+1. `mvn -q -pl helloai-common,helloai-core,helloai-api -am compile` 通过；前端 `vue-tsc` 通过。 ✅（2026-08-14：test-compile + package BUILD SUCCESS）
+2. 触发一次真实子任务执行（纯文本产出）→ 断言 `attachment` 新增 1 条 `local://` 记录，前端卡片可下载且内容正确。 ✅（S8 降级回归：单 .md 物化 + output 原样）
+3. 构造/诱导一次 manifest 产出 → 断言物化多文件，`displayText` 为 summary+概览，附件各自可下载。 ✅（S6：2 附件 mime/size/minio:// + 下载正文匹配 + displayText 概览无 JSON 泄漏）
+4. 关闭 `helloai.storage.enabled` → 断言执行链正常、不产生附件。 ⚠️ 运行中静态配置不可改，由 S8 降级回归（纯文本 → 单 .md）等价替代；关闭验证需重启后端手动执行。
+5. 下载接口对非 `local://`（如 mock 的 minio://）仍返回 302。 ✅（§6.77 verify-minio-artifact.sh G3 已覆盖；本轮下载走 `isContentLoadable` 流式分支）
+6. 新增 `verify-execution-artifact-e2e.ps1`（遵守 UTF-8 头模板）覆盖上述路径。 ✅ 实际落地为 `scripts/powershell/verify-artifact-content-review.ps1`，真实环境 **PASS=23 FAIL=0 SKIP=1 ALL PASSED**（S7 核验 Prompt 断言：环境无绑定 vault 的 REVIEWER/PLANNER agent 时自检 SKIP 兜底，绑定后自动执行）
 
 ---
 
 ## 10. 文档回填计划（实施完成后执行）
 
-- `doc/HelloAI_实现差距表.md`：记录"attachment 表从 0 写入 → 内置执行链产出物化"的状态变化，新增方案2/3 对应条目。
-- `doc/log/HelloAI_迭代执行记录.md`：新增一节记录方案2/3 落地（本地存储抽象、manifest 协议、下载改造、前端产出附件卡片）。
-- 本设计文档标注为"已实现"并回链迭代记录章节。
+- `doc/HelloAI_实现差距表.md`：记录"attachment 表从 0 写入 → 内置执行链产出物化"的状态变化，新增方案2/3 对应条目。 ✅（2026-07-31 方案2 条目 + 2026-08-14 方案3/内容级核验条目）
+- `doc/log/HelloAI_迭代执行记录.md`：新增一节记录方案2/3 落地（本地存储抽象、manifest 协议、下载改造、前端产出附件卡片）。 ✅（§6.30 方案2 + §6.93 方案3/内容级核验）
+- 本设计文档标注为"已实现"并回链迭代记录章节。 ✅（2026-08-14，见头部状态行）
 
 ---
 

@@ -5289,3 +5289,97 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - 影响：① getById 返回 skills 后，管理端详情展示与脚本断言均可直读；② e2e 脚本对含中文 body 的请求统一走 UTF-8 字节发送（规则 6 在 HTTP 发送层的落地，与 verify-agenthub-duty-e2e.ps1 的 Run-Psql 剥离 BOM 范式互补）；③ 词表"检索/联网"补齐后描述含这些词即可推导 web-search。
 - 遗留：① 本轮代码与本文档未 git 提交，待用户确认后提交；② 其余 verify-*.ps1 若仍以字符串 -Body 发送中文，后续遇到同类"后端收到乱码"问题应优先按本轮范式修复。
+
+### 6.93 执行产出物化方案3 + Reviewer 附件内容级核验（F1-F3 全链路收口，2026-08-14）
+
+#### 1. 范围
+
+- **背景**：执行产出物化设计文档（§6.27 编写）的方案2 已于 2026-07-31 落地（§6.30），方案3（LLM manifest 结构化多文件协议）与核验侧"Reviewer 只看产出文本、看不到物化附件正文"一直是遗留缺口——Reviewer 的核验 Prompt 不含附件内容，无法做"声称交付物 ↔ 文件正文 ↔ 验收标准"的内容级核验。
+- **本轮内容**（按 .qoder/plans/产出物化方案3与Reviewer内容级核验_a4f2c9d7.md 依次执行）：① F1 交付侧——manifest DTO + `ExecutionOutputParser` 扩展 + `ParsedOutput.displayText` + `buildUserPrompt` 追加 manifest 协议指令 + `ExecutionResultHandler` 挂接 displayText；② F2 核验侧——`buildAttachmentContent` + Prompt 模板占位 + 每附件 8000 / 总计 24000 字符限额 + 核验 Prompt 组装接线核验；③ F3 收口——e2e 脚本 `verify-artifact-content-review.ps1` 真实环境全绿 + 本文档回填。
+- **明确不做**：物化存储链不动（沿用 §6.30 物化 + §6.75 MinIO 主存储 + §6.77 e2e）；不改核验触发条件与 checkEvidence 判定语义；不改 `attachment` 表结构；不做前端改动。
+
+#### 2. 实际落地
+
+- **F1.1 manifest DTO + 解析扩展**：`Manifest`（summary + files）/ `ManifestFile`（name/type/content）record 放 `agent/output`；`ExecutionOutputParser.parse` 扩展——从 raw 提取 ```json 围栏内 JSON 对象（复用 `SubTaskReviewService.stripToJsonObject` 同款剥离思路，`@JsonIgnoreProperties(ignoreUnknown=true)` 容忍多余字段），命中且 files 非空 → 多文件结构化形态；未命中 / files 空 / JSON 非法 → 降级纯文本单 .md（方案2 形态不变）。`ParsedOutput` 重构为 `(files, displayText)` 双字段：结构化时 `displayText = summary + "## 产出文件概览" + "- {name}" 逐行 + JSON 块之后尾部文本（EXECUTION_RECORD 回填块保留）`，纯文本时 `displayText = raw`。
+- **F1.2 Prompt 协议指令**：`SubTaskExecutionServiceImpl.buildUserPrompt` 在"产出回填要求"段后追加**可选**指令——"可以用如下 JSON 结构返回多文件产出（放在 ```json 代码块中，位于 EXECUTION_RECORD 块之前）；若无需拆分文件，直接输出正文即可"；共存格式约定 manifest JSON 块在前、EXECUTION_RECORD 回填块在后（既有回填要求不变）。
+- **F1.3 挂接 displayText**：`ExecutionResultHandler` 构造器注入 `ExecutionOutputParser`，物化开启（`helloai.storage.enabled`）时 `lastExecution.output` 与对话流 `sub_task_execute` 写 displayText（对话流不刷文件正文），关闭时保持原文；afterCommit 物化链不变（`ExecutionArtifactServiceImpl.materialize` 内部走 parser，多文件自动逐条物化）。
+- **F2.1 附件内容注入**：`SubTaskReviewServiceImpl.buildAttachmentContent(subTask)`——按 sub_task_id 查可直读附件（attachment 表，isContentLoadable），逐附件输出 `### {fileName}` 节 + 正文，每附件 8000 字符截断标注、总计 24000 字符停止注入后续附件正文；不可直读 / 读取失败 / 为空 → 显式标注"内容不可读/为空"（不臆断）。`prompts/subtask-review.md` 新增「## 物化附件内容（平台直读，已按限额截断）」节 + `{{ATTACHMENT_CONTENT}}` 占位符 + 第 10 条判定规则："声称交付物 ↔ 文件正文 ↔ 验收标准"三者一致性是判定依据，附件正文与声称结论矛盾或标注不可读时不得臆断。
+- **F2.2 接线核验**：核验 Prompt 组装处 `{{ATTACHMENT_CONTENT}}` 由 `buildAttachmentContent(subTask)` 替换；核验 Prompt 在 LLM 调用成功后落库 `conversation_message`（tool_name=`subtask_review_prompt`），供审计与 e2e 断言。
+- **F3.1 e2e 脚本**：`scripts/powershell/verify-artifact-content-review.ps1`（规则 6 UTF-8 头模板 + `Add-Type -AssemblyName System.Net.Http` + HttpClient；S0 pre-flight → S1 admin 登录 → S2 agent 复用 → S3 task+t1 幂等清理 → S4 claim → S5 submitResult manifest 产出 → S6 多附件物化断言（2 附件 / mime / size / minio:// / 各自可下载且内容匹配 / displayText 含概览不含 JSON 与文件体）→ S7 核验 Prompt 断言（环境无绑定 vault 的 REVIEWER/PLANNER agent 时 SKIP 兜底）→ S8 纯文本降级回归（单 .md + output 原样）→ S9 teardown 级联删除）。
+
+#### 3. 验证结果
+
+- 单测/编译：`ExecutionResultHandlerIntegrationTest` 补 `new ExecutionOutputParser()` 构造器参数后全量 test-compile BUILD SUCCESS + package BUILD SUCCESS。
+- 后端启动链：PATH 的 `javapath` 转发器在沙箱下崩溃（0xC0000409），改用 `JAVA_HOME`（`~/.jdks/ms-17.0.19`）完整路径 `java.exe -jar` 启动成功，health 200。
+- e2e 真实环境重跑（runTag 20260814）：**PASS=23 FAIL=0 SKIP=1 ALL PASSED**——S6 manifest 多文件物化全过（README.md text/markdown size=39 + main.py text/x-python，storage_url 均 `minio://helloai-artifacts/{owner}/{yyyy}/{MM}/{taskId}/{subTaskId}/{uuid8}-{name}`，下载 200 且正文含 'echo hello from readme' / 'hello from main'，displayText 含 '## 产出文件概览' + '- README.md' + '- main.py' + EXECUTION_RECORD 尾、不含原始 JSON 与文件体）；S7 SKIP（当前环境无绑定 vault 凭证的 REVIEWER/PLANNER agent，脚本自检 SQL 判 SKIP 兜底，绑定后重跑可断言 Prompt 注入）；S8 降级回归全过（纯文本 → 1 个 `{title}.md` text/markdown + 对话流 output 原样无概览）；S9 级联删除后 sub_task 残留 0。
+- 调试要点（沉淀）：① 子任务详情接口是 `GET /api/sub-tasks/getById/{id}`（`/api/sub-tasks/{id}` 返回 404 非 401，带 token 复现确认）；② `downloadById` 返回 `application/octet-stream`，PS 5.1 `Invoke-WebRequest` 的 `Content` 是 byte[]，须 `[System.Text.Encoding]::UTF8.GetString` 后再断言（直接 `.Contains(string)` 恒 false）；③ 外层 shell 执行 `-Command` 会吞 `$` 变量，调试一律走脚本文件。
+
+#### 4. 影响与遗留
+
+- 影响：① LLM 可按 manifest 协议一次产出多文件（README/main.py/config.json 等），平台物化多附件、各自可下载；② Reviewer 核验 Prompt 注入物化附件正文（限额截断），内容级核验（声称交付物 ↔ 文件正文 ↔ 验收标准）具备事实基础；③ 对话流不再刷 manifest JSON 与文件正文（displayText 概览）。
+- 遗留：① S7 核验 Prompt 内容断言待绑定 REVIEWER/PLANNER agent 的 vault 凭证（API_KEY_LLM + ACTIVE）后实测（脚本自检 SQL 命中即自动执行断言，无需改脚本）；② 本轮代码与本文档未 git 提交，待用户确认后提交；③ tmp 调试脚本（debug-*.ps1 / check-parse.ps1）与 e2e 日志为临时资产，可清理。
+
+### 6.94 M5 场景 1：happy path 真实 AI 自主闭环（2026-08-14）
+
+#### 1. 范围
+
+- **背景**：差距表 N14 / M5 场景矩阵场景 1（happy path）——「真实外部 AI 自主理解 SKILL.md、按规则完成注册→值班→感知→认领→执行→提交→签退全环」一直未实测：此前均为脚本化闭环（verify-onboarding-submit.ps1 / verify-mcp-e2e.ps1 固定步骤）或仅打卡链路（M4），缺真实 AI 在协议细节上的自主决策实证。
+- **本次落地**：本会话 AI（Qoder）作为真实 EXECUTOR，通读 `helloai-core/src/main/resources/skills/executor/SKILL.md` 后按 §1.3 推荐工作循环逐步决策、逐步调用真实接口完成全环；管理员侧仅建任务与 PENDING 子任务（不指派），执行侧全部自主。
+- **明确不做**：不写新代码、不改后端行为（纯协议链实证）；不做 blocked / 超时替补 / 附件 / 双值班场景（场景 2~5 留待后续）；不启动外部 LLM 核验（REVIEW 流转即可，核验链另见 §6.93）。
+
+#### 2. 实际落地（执行链实录）
+
+- **S0 管理员登录**：`POST /api/auth/login`（admin/admin123）→ adminToken。
+- **S1 自助注册**：`POST /api/agents/register`（body `{name:h1-qoder-executor, role:EXECUTOR, description}`）→ `data.id=2088261489367584770` + `data.apiKey`（注册返回即 apiKey，无需二次签发）。
+- **S2 getAgentStatus 自检**（SKILL.md 1.3 step 1）：`ACTIVE` 账户 + `dbOnlineStatus=OFFLINE`（未打卡，符合预期）→ 决策：先打卡。
+- **S3 checkIn 打卡**（1.3 step 2）：`{workMode:AUTO, maxConcurrent:3, ttlMinutes:30}` → `ok=true`，`leaseId=2088261655818539009`，`expiresAt=21:49:11+30min`（ACTIVE 租约）。
+- **S4 pullTasks 值守（1）**：`messages:[]`（空收件箱，值守中）。
+- **S5 管理员建任务 + 子任务**：taskId=2088261744993636353（agentPolicy.executorAgentIds 白名单）；subTaskId=2088261745186574337（**PENDING + assignedAgentId=null，不指派**）。
+- **S6 pullTasks 值守（2）**：仍 `messages:[]` → **自主决策**：PENDING 未指派任务不进收件箱，改走 SKILL.md §0.2 可认领通道：`GET /api/sub-tasks/listAvailable` 确认子任务可见 → `claimSubTask` 原子认领。
+- **S7 claimSubTask**：`{ok:true, claimed:true, assignedAgent:本人, version:1}`（PENDING→ASSIGNED）。
+- **S8 getDepsSummary**：`depCount=0`（无前置，无需拉上游产出）。
+- **S9 heartbeat + uploadArtifact**：heartbeat `onDuty=true` 且 **remainingTtlSeconds=14399（≈4h）**——实证 E1 动态 TTL + A0-8 自动续约：认领在跑子任务后 `adaptiveRenew` 取 `maxTtlMinutes=240` 长窗口（`AgentDutyLeaseServiceImpl.hasInFlightSubTask` 分支），执行期无需手动重打卡；uploadArtifact 登记 `execution-notes.md` 元数据（attachmentId=2088262013366177793）。
+- **S10 submitResult（manifest 多文件）**：`{accepted:true, resultId:h1-happy-20260814215116123}` → 状态机流转 **REVIEW**，afterCommit 物化 2 附件：protocol-notes.md（152B）+ sample.py（85B），objectKey 按 `{owner}/{yyyy}/{MM}/{taskId}/{subTaskId}/{uuid8}-{name}` 组织。
+- **S11 checkOut 签退**（1.3 结束）：`{ok:true, closedCount:1, currentStatus:CLOSED}`，租约 DB 行 status=CLOSED（close_reason=shutdown）。
+- **S12 teardown**：`DELETE /api/tasks/deleteById/{taskId}` 级联删除（subTaskCount=1 / timelineCount=2 清理，0 残留）。
+
+#### 3. 验证结果
+
+- **状态机全链**：PENDING →（claimSubTask）→ ASSIGNED →（submitResult）→ REVIEW；sub_task 行 version=4、assigned_agent_id=2088261489367584770、rework_count=0。
+- **物化证据**：2 附件下载 200 且内容逐字匹配（protocol-notes.md 含 'pullTasks is the only task sensing channel'；sample.py 含 'h1 happy path sample'）；对话流 `sub_task_execute` displayText = summary + '## 产出文件概览' + '- protocol-notes.md' + '- sample.py' + EXECUTION_RECORD 尾部（不刷 manifest JSON 与文件正文，与 §6.93 F1 一致）。
+- **时间线事件**：`sub_task_execute_submit`（payload 含 idempotencyKey=h1-happy-20260814215116123、source=EXTERNAL）+ `sub_task_artifact_materialized`（count=2、fileNames 列表）。
+- **在线与租约**：agent 行 `online_status=ONLINE`、last_seen_time/last_active_time 随工具调用刷新（HeartbeatServiceImpl 双写契约）；租约 ACTIVE 期间 expire_time 随 heartbeat 续延。
+- **协议事实（复验确认，非 bug）**：① 自主认领走 `claimAtomic` 原子 SQL 直改状态，**不触发 `notifyStatusChange` 的 `sub_task.assigned` 收件箱消息**——pullTasks 在 claim 前后均空为预期行为，ack 步骤仅适用于管理员指派通道；② submitResult→REVIEW 时平台向全部 PLANNER 发 `sub_task.review` 通知（本环境 1 个 PLANNER agent：v52-e2e-ds-bad，teardown unreadInboxCount 计数佐证）；③ 任务感知双通道：指派消息走 inbox+pullTasks，自主认领走 listAvailable+claimSubTask。
+
+#### 4. 影响与遗留
+
+- 影响：① 场景 1 已勾除，「真实 AI 自主理解 SKILL.md 按规则执行」实证成立（含空收件箱→切换 listAvailable 通道、无消息跳过 ack、无依赖跳过依赖注入三处自主决策）；② E1 动态 TTL 执行期长窗口与 A0-8 自动续约在真实调用链上得到佐证；③ SKILL.md 协议文档与代码行为在「自主认领无收件箱消息」点上存在文档口径差异（SKILL.md 将 pullTasks 描述为唯一任务感知通道），已在本节记录协议事实，SKILL.md 口径优化留待后续批次。
+- 遗留：① 场景 2 blocked path / 3 超时替补 / 4 附件 path / 5 双 Agent 值班未开始；② 本轮无代码改动，仅文档回填（项目进度 M5、差距表 N14、本条目），未 git 提交；③ tmp 驱动脚本（h1-happy-path.ps1 / h1-recheck-inbox.ps1 / h1-state.json / q-agent-status.ps1）为临时资产，已清理。
+
+### 6.95 购物车任务实战复盘：Reviewer 内容级核验真实读取附件实证（2026-08-16）
+
+#### 1. 范围
+
+- **背景**：2026-08-15 用户以 Trae 作为真实外部 EXECUTOR（agent=trae-excutor，CLI_CLIENT，人工注册）开定时任务自主轮询完成真实任务「修复购物车页面进入时仅选中第一个商品的 bug」（taskId=2088630823147409409），5 子任务全 DONE；2026-08-16 应要求整体复盘，重点核查「REVIEW 角色审查任务时是否真正读取了附件」——即 §6.93 方案3 F2 内容级核验在真实任务中的实战验证。
+- **本次落地**：只读取证（DB 查询 + conversation_message 核验 Prompt 原文比对 + downloadById 实测），无代码改动。
+- **明确不做**：不修改代码与协议行为；不启动 M5 场景 2~5（blocked / 超时替补 / 附件 / 双值班）。
+
+#### 2. 实际落地（取证链）
+
+- **任务全链**：5 子任务（2088631218330537986~90）全 DONE，执行者 trae-excutor；审查者 inner-deepseek-pro-reviewer（REVIEWER / API_KEY_LLM / deepseek:deepseek-v4-pro）；review_record 7 条（2 REJECTED + 5 APPROVED）；task_timeline 33 事件全链无断链（clarify → plan → 5×submit/物化/审查 → task_auto_completed → final_report 27722 字符/5 段）；attachment 21 条（物化链 .md ×7 + uploadArtifact 登记 ×14）。
+- **四层证据链（Reviewer 确实读取附件内容）**：
+  1. 代码链路：`SubTaskReviewServiceImpl.buildAttachmentContent` → `readAttachmentContent` → `attachmentService.loadContent(id)` → `artifactStorage.load(storageUrl)`——真实读 MinIO 字节后注入核验 Prompt（每附件 8000 / 总计 24000 字符限额），非文件名/摘要臆断；
+  2. Round1 核验 Prompt 原文（conversation_message，content_type=text，platform 来源）：物化 `.md` 正文完整注入（EXECUTION_RECORD + VERIFICATION 验证输出 + 前端构建日志），而 cart-index.vue / cart-init-selection-fix.patch / 两个验证脚本**均标注「内容不可读/为空」**；
+  3. Round1 verdict（inner-deepseek-pro-reviewer）：「关键交付物 cart-index.vue 和 cart-init-selection-fix.patch 的物化附件均标注为“内容不可读/为空”，两个验证脚本也无法读取。无法核对初始化逻辑是否覆盖全部商品、修改范围是否仅限购物车」→ **REJECTED score=2**——完全符合 Prompt 模板规则 10（附件标注不可读时不得臆断文件内容、从严判定）；
+  4. Round2 Prompt 原文：cart-index.vue **完整源码注入**（`<template><el-card>…我的购物车`）+ 物化 md 含 **git diff 原文**（`created() { this._syncing = false …`、`syncTableSelection() … _syncing = true`）；verdict analysis 引用 diff 细节（「diff 显示 syncTableSelection() 改为先 clearSelection…」）→ **APPROVED score=4**；downloadById 实测 6 附件现全部 HTTP 200（对象已补传，与 Reviewer 同一条 loadContent 链路）。
+- **实战拦截案例**：子任务 2088631218330537988 Round1 的 4 个文件为 `uploadArtifact` **纯登记**（storage_url=minio:// 但 MinIO 对象当时未上传，物化事件仅含 .md），Reviewer 读不到内容即驳回；Trae 补传对象 + 补交物化 md（含完整 diff）后 Round2 通过——A0-5 fail-close 在真实任务中拦截「声称有附件但内容读不到」的提交。
+
+#### 3. 验证结果
+
+- **Reviewer 内容级核验链路真实生效**：真实读取附件字节；读不到的明确标注并拒绝放行（不得臆断），读到的用于逐条核对（verdict analysis 引用文件正文与 diff 细节）。
+- **整体检查**：任务 DONE + final report 生成；5 子任务全 DONE；2 次返工闭环（7986 声称交付 verify-cart-selection.js 但附件仅 .md → 驳回补交 → 通过；7988 附件内容不可读 → 补传+补交 → 通过）；时间线无断链；review_record 与 timeline 一致。
+
+#### 4. 影响与遗留
+
+- 影响：① 方案3 F2 + A0-5 在真实外部 AI 任务上完成实战闭环验证（§6.93 e2e 之外的活体案例，且首次实测 inner-deepseek-pro-reviewer 真实审查）；② uploadArtifact「纯登记、不校验 MinIO 对象存在」语义被内容级核验正确兜住（fail-close 实战价值）；③ 观察项（非 bug）：附件清单「平台可直读」（isContentLoadable 仅查 storageUrl scheme）与正文「内容不可读/为空」并存，对执行者略有误导——Reviewer 判定正确，可选优化为清单标注区分「可直读-已验证」。
+- 遗留：① M5 场景 2 blocked / 3 超时替补 / 4 附件 path / 5 双值班未测；② 本轮无代码改动，文档回填（本条目 + 差距表 N14 + 项目进度 M5）随 F 批次（§6.93 代码）一并 git 提交（含上轮 §6.94 未提交的文档改动）；③ 场景 2 预置脚本 tmp/prepare-scene2.ps1 为临时资产（已登记 agent 凭证，未提交）。
