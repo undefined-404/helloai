@@ -6,8 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
+    "build:nocheck": "vite build",
     "preview": "vite preview",
-    "lint": "eslint . --ext .vue,.ts --fix"
+    "type-check": "vue-tsc --noEmit -p tsconfig.json",
+    "lint": "eslint . --ext .vue,.ts --fix",
+    "lint:check": "eslint . --ext .vue,.ts"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.0",

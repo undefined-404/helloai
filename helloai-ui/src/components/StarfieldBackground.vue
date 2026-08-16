@@ -1,5 +1,9 @@
 <template>
-  <canvas ref="canvasRef" class="starfield-canvas" aria-hidden="true" />
+  <canvas
+    ref="canvasRef"
+    class="starfield-canvas"
+    aria-hidden="true"
+  />
 </template>
 
 <script setup lang="ts">

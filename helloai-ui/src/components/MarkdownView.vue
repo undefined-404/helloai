@@ -1,6 +1,9 @@
 <template>
   <!-- Markdown 渲染视图：把执行产出/对话内容渲染成带格式的富文本（类 DeepSeek/Kimi 聊天样式） -->
-  <div class="md-view" v-html="html"></div>
+  <div
+    class="md-view"
+    v-html="html"
+  />
 </template>
 
 <script setup lang="ts">

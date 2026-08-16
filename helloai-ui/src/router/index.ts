@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import MainLayout from '@/layouts/MainLayout.vue'
+import { useAuthStore } from '@/stores/auth'
 
 const routes = [
   {
@@ -43,8 +44,10 @@ const router = createRouter({
 })
 
 router.beforeEach((to) => {
-  const hasAdminToken = !!sessionStorage.getItem('adminToken')
-  const hasAgentKey = !!sessionStorage.getItem('agentKey')
+  // 单一来源：从 store 读登录态，store 已镜像 sessionStorage
+  const auth = useAuthStore()
+  const hasAdminToken = !!auth.adminToken
+  const hasAgentKey = !!auth.agentKey
 
   if (to.path !== '/login' && to.path !== '/setup' && !hasAdminToken && !hasAgentKey) {
     return '/login'

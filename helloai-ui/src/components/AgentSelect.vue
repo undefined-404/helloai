@@ -1,13 +1,13 @@
 <template>
   <el-select
     :model-value="modelValue"
-    @update:model-value="$emit('update:modelValue', $event)"
     filterable
     clearable
     :placeholder="placeholder"
     :disabled="disabled"
     :loading="loading"
     style="width:100%"
+    @update:model-value="$emit('update:modelValue', $event)"
   >
     <el-option
       v-for="a in agents"

@@ -18,6 +18,15 @@ link.rel = 'stylesheet'
 link.href = 'https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&display=swap'
 document.head.appendChild(link)
 
+/* ---- Dev-only: impeccable live reload bridge ----
+ * 仅在 `vite dev` 模式下注入；构建产物（vite build）不会执行 import.meta.env.DEV 为 true 的分支。
+ * 提供 `live.js` 用于本地 UI 调优回放，不参与生产环境。 */
+if (import.meta.env.DEV) {
+  const live = document.createElement('script')
+  live.src = 'http://localhost:8400/live.js'
+  document.body.appendChild(live)
+}
+
 const app = createApp(App)
 
 for (const [key, component] of Object.entries(ElementPlusIconsVue)) {

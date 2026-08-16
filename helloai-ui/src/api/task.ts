@@ -1,4 +1,4 @@
-import request from './request'
+import request, { TIMEOUT } from './request'
 import type { AxiosResponse } from 'axios'
 import type { Task, TaskAgentPolicy, TaskRelatedCounts, TaskFinalReport, TaskIteration, SubTask, LongId } from '@/types'
 
@@ -40,9 +40,9 @@ export const taskApi = {
     return request.delete<any, TaskRelatedCounts>(`/tasks/deleteById/${id}`, { data: { confirmTitle } })
   },
   // V26 触发 AI 拆解: 仅 PENDING 可调，成功后 Task 停 PLANNING、草案落库 PENDING_PLAN_REVIEW
-  // LLM 拆解耗时远超全局 30s，单请求覆盖 timeout
+  // LLM 拆解耗时远超全局 30s，单请求覆盖 timeout（参考 request.ts TIMEOUT.llm 档位）
   plan(id: LongId) {
-    return request.post<any, SubTask[]>(`/tasks/planById/${id}`, undefined, { timeout: 120_000 })
+    return request.post<any, SubTask[]>(`/tasks/planById/${id}`, undefined, { timeout: TIMEOUT.llm })
   },
   // 查看待审阅草案列表
   planDrafts(id: LongId) {
@@ -61,7 +61,7 @@ export const taskApi = {
   downloadDeliverables(id: LongId) {
     return request.get<any, AxiosResponse<Blob>>(`/tasks/downloadDeliverablesByTaskId/${id}`, {
       responseType: 'blob',
-      timeout: 120_000
+      timeout: TIMEOUT.llm
     })
   },
   // V32 最终整合报告: 读取 task.final_report 专列（content=null 表示尚未生成）
@@ -69,9 +69,9 @@ export const taskApi = {
     return request.get<any, TaskFinalReport>(`/tasks/findFinalReportByTaskId/${id}`)
   },
   // 生成/重新生成整合报告: Planner 整合全部 DONE 子任务产出，仅 DONE 任务可调；
-  // 后端 LLM 读超时 180s（provider read-timeout-ms），前端 240s 留出降档重试与传输余量
+  // 后端 LLM 读超时 180s（provider read-timeout-ms），前端用 longReport 档位留出降档重试与传输余量
   generateFinalReport(id: LongId) {
-    return request.post<any, TaskFinalReport>(`/tasks/generateFinalReportByTaskId/${id}`, undefined, { timeout: 240_000 })
+    return request.post<any, TaskFinalReport>(`/tasks/generateFinalReportByTaskId/${id}`, undefined, { timeout: TIMEOUT.longReport })
   },
   // V42 任务执行迭代记录
   findTaskIterationsByTaskId(id: LongId) {
