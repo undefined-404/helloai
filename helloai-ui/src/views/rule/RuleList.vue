@@ -4,51 +4,157 @@
       <template #header>
         <div class="card-header">
           <span>规则配置</span>
-          <el-button size="small" type="primary" @click="openCreate">新建规则</el-button>
+          <el-button
+            size="small"
+            type="primary"
+            @click="openCreate"
+          >
+            新建规则
+          </el-button>
         </div>
       </template>
-      <el-table :data="list" border stripe v-loading="loading" style="width:100%">
-        <el-table-column prop="name" label="名称" min-width="180" show-overflow-tooltip />
-        <el-table-column label="类型" width="100">
+      <el-table
+        v-loading="loading"
+        :data="list"
+        border
+        stripe
+        style="width:100%"
+      >
+        <el-table-column
+          prop="name"
+          label="名称"
+          min-width="180"
+          show-overflow-tooltip
+        />
+        <el-table-column
+          label="类型"
+          width="100"
+        >
           <template #default="{ row }">
-            <el-tag size="small" :type="row.ruleType==='global'?'danger':row.ruleType==='module'?'warning':''">{{ row.ruleType }}</el-tag>
+            <el-tag
+              size="small"
+              :type="row.ruleType==='global'?'danger':row.ruleType==='module'?'warning':''"
+            >
+              {{ row.ruleType }}
+            </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="priority" label="优先级" width="80" />
-        <el-table-column label="更新时间" width="170">
-          <template #default="{ row }">{{ fmtTime(row.updateTime) }}</template>
-        </el-table-column>
-        <el-table-column label="操作" width="160" fixed="right">
+        <el-table-column
+          prop="priority"
+          label="优先级"
+          width="80"
+        />
+        <el-table-column
+          label="更新时间"
+          width="170"
+        >
           <template #default="{ row }">
-            <el-button size="small" @click="openEdit(row)">编辑</el-button>
-            <el-button size="small" type="danger" @click="handleDelete(row)">删除</el-button>
+            {{ fmtTime(row.updateTime) }}
+          </template>
+        </el-table-column>
+        <el-table-column
+          label="操作"
+          width="160"
+          fixed="right"
+        >
+          <template #default="{ row }">
+            <el-button
+              size="small"
+              @click="openEdit(row)"
+            >
+              编辑
+            </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              @click="handleDelete(row)"
+            >
+              删除
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-if="!list.length && !loading" description="暂无规则" />
+      <el-empty
+        v-if="!list.length && !loading"
+        description="暂无规则"
+      />
 
-      <el-dialog v-model="editDialog" :title="editing.id ? '编辑规则' : '新建规则'" width="650px" top="5vh" append-to-body>
-        <el-form ref="formRef" :model="editForm" :rules="rules" label-width="80px">
+      <el-dialog
+        v-model="editDialog"
+        :title="editing.id ? '编辑规则' : '新建规则'"
+        width="650px"
+        top="5vh"
+        append-to-body
+      >
+        <el-form
+          ref="formRef"
+          :model="editForm"
+          :rules="rules"
+          label-width="80px"
+        >
           <el-row :gutter="16">
             <el-col :span="12">
-              <el-form-item label="名称" prop="name"><el-input v-model="editForm.name" /></el-form-item>
+              <el-form-item
+                label="名称"
+                prop="name"
+              >
+                <el-input v-model="editForm.name" />
+              </el-form-item>
             </el-col>
             <el-col :span="12">
-              <el-form-item label="类型" prop="ruleType">
-                <el-select v-model="editForm.ruleType" style="width:100%">
-                  <el-option label="全局" value="global" />
-                  <el-option label="模块" value="module" />
-                  <el-option label="Agent" value="agent" />
+              <el-form-item
+                label="类型"
+                prop="ruleType"
+              >
+                <el-select
+                  v-model="editForm.ruleType"
+                  style="width:100%"
+                >
+                  <el-option
+                    label="全局"
+                    value="global"
+                  />
+                  <el-option
+                    label="模块"
+                    value="module"
+                  />
+                  <el-option
+                    label="Agent"
+                    value="agent"
+                  />
                 </el-select>
               </el-form-item>
             </el-col>
           </el-row>
-          <el-form-item label="优先级"><el-input-number v-model="editForm.priority" :min="0" :max="100" /></el-form-item>
-          <el-form-item label="内容" prop="content"><el-input v-model="editForm.content" type="textarea" :rows="12" /></el-form-item>
+          <el-form-item label="优先级">
+            <el-input-number
+              v-model="editForm.priority"
+              :min="0"
+              :max="100"
+            />
+          </el-form-item>
+          <el-form-item
+            label="内容"
+            prop="content"
+          >
+            <el-input
+              v-model="editForm.content"
+              type="textarea"
+              :rows="12"
+            />
+          </el-form-item>
         </el-form>
         <template #footer>
-          <el-button @click="editDialog=false">取消</el-button>
-          <el-button type="primary" :loading="saving" @click="handleSave">保存</el-button>
+          <el-button @click="editDialog=false">
+            取消
+          </el-button>
+          <el-button
+            type="primary"
+            :loading="saving"
+            @click="handleSave"
+          >
+            保存
+          </el-button>
         </template>
       </el-dialog>
     </el-card>

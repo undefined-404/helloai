@@ -8,11 +8,28 @@
     @open="initForm"
     @close="$emit('close')"
   >
-    <el-form ref="formRef" :model="form" :rules="rules" label-width="90px" v-loading="loading">
-      <el-form-item label="标题" prop="title">
-        <el-input v-model="form.title" placeholder="任务标题" maxlength="200" show-word-limit />
+    <el-form
+      ref="formRef"
+      v-loading="loading"
+      :model="form"
+      :rules="rules"
+      label-width="90px"
+    >
+      <el-form-item
+        label="标题"
+        prop="title"
+      >
+        <el-input
+          v-model="form.title"
+          placeholder="任务标题"
+          maxlength="200"
+          show-word-limit
+        />
       </el-form-item>
-      <el-form-item label="描述" prop="description">
+      <el-form-item
+        label="描述"
+        prop="description"
+      >
         <el-input
           v-model="form.description"
           type="textarea"
@@ -21,15 +38,33 @@
         />
       </el-form-item>
       <el-form-item label="SLA 分钟">
-        <el-input-number v-model="form.slaMinutes" :min="1" :max="100000" controls-position="right" placeholder="无时限" style="width:180px" />
-        <div class="field-hint">空=无时限；计划确认时按「确认时刻+SLA」下发子任务 deadline</div>
+        <el-input-number
+          v-model="form.slaMinutes"
+          :min="1"
+          :max="100000"
+          controls-position="right"
+          placeholder="无时限"
+          style="width:180px"
+        />
+        <div class="field-hint">
+          空=无时限；计划确认时按「确认时刻+SLA」下发子任务 deadline
+        </div>
       </el-form-item>
 
       <!-- V47/A1: 执行策略折叠区块（缺省即回落默认，全空=不指定） -->
       <el-collapse class="policy-collapse">
-        <el-collapse-item title="执行策略（V47，可选）" name="policy">
+        <el-collapse-item
+          title="执行策略（V47，可选）"
+          name="policy"
+        >
           <el-form-item label="拆解 Planner">
-            <el-select v-model="form.plannerAgentId" clearable filterable placeholder="不指定（自动选择）" style="width:100%">
+            <el-select
+              v-model="form.plannerAgentId"
+              clearable
+              filterable
+              placeholder="不指定（自动选择）"
+              style="width:100%"
+            >
               <el-option
                 v-for="o in plannerOptions"
                 :key="String(o.id)"
@@ -38,10 +73,18 @@
                 :disabled="!o.selectable"
               />
             </el-select>
-            <div class="field-hint">指定后拆解/澄清固定由该 Planner 承担；失效时自动回退</div>
+            <div class="field-hint">
+              指定后拆解/澄清固定由该 Planner 承担；失效时自动回退
+            </div>
           </el-form-item>
           <el-form-item label="核验 Reviewer">
-            <el-select v-model="form.reviewerAgentId" clearable filterable placeholder="不指定（自动选择）" style="width:100%">
+            <el-select
+              v-model="form.reviewerAgentId"
+              clearable
+              filterable
+              placeholder="不指定（自动选择）"
+              style="width:100%"
+            >
               <el-option
                 v-for="a in reviewerAgents"
                 :key="a.id"
@@ -49,10 +92,19 @@
                 :value="a.id"
               />
             </el-select>
-            <div class="field-hint">指定后子任务自动核验固定由该 Reviewer 承担；失效时自动回退</div>
+            <div class="field-hint">
+              指定后子任务自动核验固定由该 Reviewer 承担；失效时自动回退
+            </div>
           </el-form-item>
           <el-form-item label="执行白名单">
-            <el-select v-model="form.executorAgentIds" multiple clearable filterable placeholder="不限定（全部 EXECUTOR 可选）" style="width:100%">
+            <el-select
+              v-model="form.executorAgentIds"
+              multiple
+              clearable
+              filterable
+              placeholder="不限定（全部 EXECUTOR 可选）"
+              style="width:100%"
+            >
               <el-option
                 v-for="a in executorAgents"
                 :key="a.id"
@@ -60,20 +112,50 @@
                 :value="a.id"
               />
             </el-select>
-            <div class="field-hint">仅选中的 EXECUTOR 可承接本任务子任务；空=不限定</div>
+            <div class="field-hint">
+              仅选中的 EXECUTOR 可承接本任务子任务；空=不限定
+            </div>
           </el-form-item>
           <el-form-item label="回退策略">
-            <el-select v-model="form.fallbackPolicy" clearable placeholder="AUTO（默认）" style="width:100%">
-              <el-option label="AUTO：外部 Agent 失败正常回退 API_KEY_LLM 保底" value="AUTO" />
-              <el-option label="RESTRICTED：仅回退白名单内的 API_KEY_LLM" value="RESTRICTED" />
-              <el-option label="NONE：禁止自动回退，改打人工介入标记" value="NONE" />
+            <el-select
+              v-model="form.fallbackPolicy"
+              clearable
+              placeholder="AUTO（默认）"
+              style="width:100%"
+            >
+              <el-option
+                label="AUTO：外部 Agent 失败正常回退 API_KEY_LLM 保底"
+                value="AUTO"
+              />
+              <el-option
+                label="RESTRICTED：仅回退白名单内的 API_KEY_LLM"
+                value="RESTRICTED"
+              />
+              <el-option
+                label="NONE：禁止自动回退，改打人工介入标记"
+                value="NONE"
+              />
             </el-select>
           </el-form-item>
           <el-form-item label="任务难度">
-            <el-select v-model="form.difficulty" clearable placeholder="MEDIUM（默认）" style="width:100%">
-              <el-option label="LOW" value="LOW" />
-              <el-option label="MEDIUM" value="MEDIUM" />
-              <el-option label="HIGH（视为禁止自动回退）" value="HIGH" />
+            <el-select
+              v-model="form.difficulty"
+              clearable
+              placeholder="MEDIUM（默认）"
+              style="width:100%"
+            >
+              <el-option
+                label="LOW"
+                value="LOW"
+              />
+              <el-option
+                label="MEDIUM"
+                value="MEDIUM"
+              />
+              <el-option
+                label="HIGH（视为禁止自动回退）"
+                value="HIGH"
+              />
             </el-select>
           </el-form-item>
           <el-form-item label="要求技能">
@@ -93,14 +175,22 @@
                 :value="opt.value"
               />
             </el-select>
-            <div class="field-hint">非空时执行者必须全部具备（AND 语义）；空=不限制</div>
+            <div class="field-hint">
+              非空时执行者必须全部具备（AND 语义）；空=不限制
+            </div>
           </el-form-item>
         </el-collapse-item>
       </el-collapse>
     </el-form>
     <template #footer>
-      <el-button @click="visible = false">取消</el-button>
-      <el-button type="primary" :loading="saving" @click="handleSave">
+      <el-button @click="visible = false">
+        取消
+      </el-button>
+      <el-button
+        type="primary"
+        :loading="saving"
+        @click="handleSave"
+      >
         {{ isEdit ? '保存' : '创建' }}
       </el-button>
     </template>

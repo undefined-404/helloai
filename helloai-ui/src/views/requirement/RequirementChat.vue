@@ -6,11 +6,26 @@
           <span>对话新建（AI 助手）</span>
           <div class="header-actions">
             <!-- V39 当前会话模式徽标（null 老数据按方案澄清展示） -->
-            <el-tag v-if="conversation" :type="isChatMode ? 'info' : 'warning'" size="small">
+            <el-tag
+              v-if="conversation"
+              :type="isChatMode ? 'info' : 'warning'"
+              size="small"
+            >
               {{ isChatMode ? '自由对话' : '方案澄清' }}
             </el-tag>
-            <el-button size="small" type="primary" @click="startNew">新会话</el-button>
-            <el-button size="small" @click="loadList">刷新</el-button>
+            <el-button
+              size="small"
+              type="primary"
+              @click="startNew"
+            >
+              新会话
+            </el-button>
+            <el-button
+              size="small"
+              @click="loadList"
+            >
+              刷新
+            </el-button>
           </div>
         </div>
       </template>
@@ -28,22 +43,50 @@
             }"
             @click="selectConversation(String(conv.id))"
           >
-            <div class="conv-title">{{ conv.title || '(无标题)' }}</div>
+            <div class="conv-title">
+              {{ conv.title || '(无标题)' }}
+            </div>
             <div class="conv-meta">
-              <el-tag :type="statusTag(conv.status)" size="small">{{ statusLabel(conv.status) }}</el-tag>
+              <el-tag
+                :type="statusTag(conv.status)"
+                size="small"
+              >
+                {{ statusLabel(conv.status) }}
+              </el-tag>
               <!-- V39 模式小标签：CHAT=对话 / CLARIFY 与 NULL 老数据=方案 -->
-              <el-tag v-if="conv.mode === 'CHAT'" type="info" size="small" effect="plain">对话</el-tag>
-              <el-tag v-else type="warning" size="small" effect="plain">方案</el-tag>
+              <el-tag
+                v-if="conv.mode === 'CHAT'"
+                type="info"
+                size="small"
+                effect="plain"
+              >
+                对话
+              </el-tag>
+              <el-tag
+                v-else
+                type="warning"
+                size="small"
+                effect="plain"
+              >
+                方案
+              </el-tag>
               <span class="conv-time">{{ fmtTime(conv.createTime) }}</span>
             </div>
           </div>
-          <el-empty v-if="!conversations.length" description="暂无会话" :image-size="60" />
+          <el-empty
+            v-if="!conversations.length"
+            description="暂无会话"
+            :image-size="60"
+          />
         </div>
 
         <!-- 右栏：气泡流 + 输入框 -->
         <div class="chat-main">
           <!-- V33 澄清进度条（LLM 自评，仅展示不做业务分支；V39 CHAT 自由对话模式隐藏） -->
-          <div v-if="activeId != null && clarifyProgress != null && !isChatMode" class="clarify-progress">
+          <div
+            v-if="activeId != null && clarifyProgress != null && !isChatMode"
+            class="clarify-progress"
+          >
             <span class="progress-label">澄清进度</span>
             <el-progress
               class="progress-bar"
@@ -52,15 +95,30 @@
               :status="clarifyProgress >= 100 ? 'success' : undefined"
             />
           </div>
-          <div ref="streamEl" class="msg-stream">
+          <div
+            ref="streamEl"
+            class="msg-stream"
+          >
             <template v-if="detail">
-              <template v-for="row in renderMessages" :key="String(row.msg.id)">
+              <template
+                v-for="row in renderMessages"
+                :key="String(row.msg.id)"
+              >
                 <!-- 结构化追问：引导语气泡（问题正文由卡片呈现，不重复展示） -->
-                <div v-if="row.intro" class="msg-row" :class="row.msg.role === 'user' ? 'from-user' : 'from-assistant'">
-                  <div class="msg-bubble">{{ row.intro }}</div>
+                <div
+                  v-if="row.intro"
+                  class="msg-row"
+                  :class="row.msg.role === 'user' ? 'from-user' : 'from-assistant'"
+                >
+                  <div class="msg-bubble">
+                    {{ row.intro }}
+                  </div>
                 </div>
                 <!-- V33 历史结构化追问：只读卡片回显当时的选项与选择 -->
-                <div v-if="row.structured" class="msg-row from-assistant">
+                <div
+                  v-if="row.structured"
+                  class="msg-row from-assistant"
+                >
                   <StructuredQuestionCard
                     class="sq-wrap"
                     :questions="row.structured.questions!"
@@ -70,7 +128,10 @@
                 </div>
               </template>
               <!-- V33 结构化选项卡片：仅最后一条 assistant 结构化追问且会话 ACTIVE 时可交互 -->
-              <div v-if="activeStructured" class="msg-row from-assistant">
+              <div
+                v-if="activeStructured"
+                class="msg-row from-assistant"
+              >
                 <StructuredQuestionCard
                   :key="String(lastMessageId)"
                   class="sq-wrap"
@@ -81,38 +142,75 @@
                 />
               </div>
             </template>
-            <div v-else class="chat-placeholder">
+            <div
+              v-else
+              class="chat-placeholder"
+            >
               <p>描述你想做的事情，或直接向 AI 助手提问——它会解答疑问、帮你梳理思路。</p>
-              <p class="placeholder-tip">说「整理成方案」可把讨论转成可落地方案；信息足够时可生成任务终稿并自动拆解。</p>
+              <p class="placeholder-tip">
+                说「整理成方案」可把讨论转成可落地方案；信息足够时可生成任务终稿并自动拆解。
+              </p>
             </div>
             <!-- 上轮 LLM 失败（最后一条是 user 消息）：重试条 -->
-            <div v-if="canRetry" class="msg-row from-assistant">
+            <div
+              v-if="canRetry"
+              class="msg-row from-assistant"
+            >
               <div class="msg-bubble msg-retry">
                 <span>回复生成失败</span>
-                <el-button size="small" type="primary" plain @click="handleRetry">重试</el-button>
+                <el-button
+                  size="small"
+                  type="primary"
+                  plain
+                  @click="handleRetry"
+                >
+                  重试
+                </el-button>
               </div>
             </div>
             <!-- 发送中占位气泡 -->
-            <div v-if="sending && pendingText" class="msg-row from-user">
-              <div class="msg-bubble">{{ pendingText }}</div>
+            <div
+              v-if="sending && pendingText"
+              class="msg-row from-user"
+            >
+              <div class="msg-bubble">
+                {{ pendingText }}
+              </div>
             </div>
-            <div v-if="sending" class="msg-row from-assistant">
+            <div
+              v-if="sending"
+              class="msg-row from-assistant"
+            >
               <div class="msg-bubble msg-loading">
-                <el-icon class="is-loading"><Loading /></el-icon>
+                <el-icon class="is-loading">
+                  <Loading />
+                </el-icon>
                 思考中…
               </div>
             </div>
 
             <!-- 终稿卡片（有终稿即渲染；V39 CHAT 自由对话模式不渲染，仅 CLARIFY/老会话；ACTIVE 可确认，FINALIZED 只读） -->
-            <div v-if="conversation?.finalTitle && !isChatMode" class="final-card">
+            <div
+              v-if="conversation?.finalTitle && !isChatMode"
+              class="final-card"
+            >
               <div class="final-card-header">
-                <el-tag type="success" size="small">终稿</el-tag>
+                <el-tag
+                  type="success"
+                  size="small"
+                >
+                  终稿
+                </el-tag>
                 <span class="final-title">{{ conversation.finalTitle }}</span>
               </div>
               <pre class="final-desc">{{ conversation.finalDescription }}</pre>
               <div class="final-actions">
                 <template v-if="conversation.status === 'ACTIVE'">
-                  <el-button type="primary" :loading="finalizing" @click="handleFinalize">
+                  <el-button
+                    type="primary"
+                    :loading="finalizing"
+                    @click="handleFinalize"
+                  >
                     创建任务并自动拆解
                   </el-button>
                   <span class="final-tip">不满意可继续对话，让 AI 修正终稿</span>
@@ -123,9 +221,15 @@
                     type="primary"
                     plain
                     @click="router.push({ path: '/tasks', query: { review: String(conversation.taskId) } })"
-                  >查看任务</el-button>
+                  >
+                    查看任务
+                  </el-button>
                   <template v-else>
-                    <el-button type="primary" :loading="finalizing" @click="handleRegenerate">
+                    <el-button
+                      type="primary"
+                      :loading="finalizing"
+                      @click="handleRegenerate"
+                    >
                       重新生成任务和子任务
                     </el-button>
                     <span class="final-tip">原任务已删除，可用此终稿重新建任务并自动拆解</span>
@@ -148,10 +252,20 @@
               />
               <div class="input-actions">
                 <!-- V39 新会话开始模式：自由对话（缺省）/ 直接方案澄清快捷直达 -->
-                <div v-if="activeId == null" class="mode-select">
-                  <el-radio-group v-model="newConversationMode" size="small">
-                    <el-radio-button value="CHAT">自由对话</el-radio-button>
-                    <el-radio-button value="CLARIFY">直接方案澄清</el-radio-button>
+                <div
+                  v-if="activeId == null"
+                  class="mode-select"
+                >
+                  <el-radio-group
+                    v-model="newConversationMode"
+                    size="small"
+                  >
+                    <el-radio-button value="CHAT">
+                      自由对话
+                    </el-radio-button>
+                    <el-radio-button value="CLARIFY">
+                      直接方案澄清
+                    </el-radio-button>
                   </el-radio-group>
                 </div>
                 <!-- V34 会话级联网搜索开关：ima copilot 样式（默认开启；仅新会话可改；老会话只读取会话原值） -->
@@ -177,10 +291,20 @@
                   />
                 </div>
                 <!-- 新会话：规划者手动选择；已有会话：展示钉住的规划者 -->
-                <div v-if="activeId == null" class="planner-select">
+                <div
+                  v-if="activeId == null"
+                  class="planner-select"
+                >
                   <span class="planner-label">规划者</span>
-                  <el-select v-model="selectedPlanner" size="small" class="planner-picker">
-                    <el-option label="系统自动（等权重，优先空闲）" value="__auto__" />
+                  <el-select
+                    v-model="selectedPlanner"
+                    size="small"
+                    class="planner-picker"
+                  >
+                    <el-option
+                      label="系统自动（等权重，优先空闲）"
+                      value="__auto__"
+                    />
                     <el-option
                       v-for="opt in plannerOptions"
                       :key="String(opt.id)"
@@ -190,9 +314,17 @@
                     />
                   </el-select>
                 </div>
-                <div v-else-if="pinnedPlannerName" class="planner-select">
+                <div
+                  v-else-if="pinnedPlannerName"
+                  class="planner-select"
+                >
                   <span class="planner-label">规划者</span>
-                  <el-tag size="small" type="info">{{ pinnedPlannerName }}</el-tag>
+                  <el-tag
+                    size="small"
+                    type="info"
+                  >
+                    {{ pinnedPlannerName }}
+                  </el-tag>
                 </div>
                 <div class="input-actions-right">
                   <el-button
@@ -202,17 +334,24 @@
                     plain
                     :disabled="sending || finalizing"
                     @click="handleAbandon"
-                  >放弃会话</el-button>
+                  >
+                    放弃会话
+                  </el-button>
                   <el-button
                     type="primary"
                     :loading="sending"
                     :disabled="!input.trim() || finalizing"
                     @click="handleSend"
-                  >发送</el-button>
+                  >
+                    发送
+                  </el-button>
                 </div>
               </div>
             </template>
-            <div v-else class="chat-readonly-tip">
+            <div
+              v-else
+              class="chat-readonly-tip"
+            >
               会话已{{ conversation.status === 'FINALIZED' ? '生成任务' : '放弃' }}，只读展示；点击「新会话」开始新的需求澄清。
             </div>
           </div>

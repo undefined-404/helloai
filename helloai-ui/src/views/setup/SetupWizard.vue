@@ -2,28 +2,74 @@
   <div class="setup-page">
     <div class="setup-card">
       <div class="setup-header">
-        <el-icon :size="40" :color="'var(--ha-primary)'"><MagicStick /></el-icon>
+        <el-icon
+          :size="40"
+          :color="'var(--ha-primary)'"
+        >
+          <MagicStick />
+        </el-icon>
         <h2>HelloAI 初始化向导</h2>
         <p>首次启动，请配置平台基本信息</p>
       </div>
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="110px" size="large">
-        <el-form-item label="管理员密码" prop="adminPassword">
-          <el-input v-model="form.adminPassword" type="password" show-password placeholder="至少6位" />
+      <el-form
+        ref="formRef"
+        :model="form"
+        :rules="rules"
+        label-width="110px"
+        size="large"
+      >
+        <el-form-item
+          label="管理员密码"
+          prop="adminPassword"
+        >
+          <el-input
+            v-model="form.adminPassword"
+            type="password"
+            show-password
+            placeholder="至少6位"
+          />
         </el-form-item>
-        <el-form-item label="确认密码" prop="confirmPassword">
-          <el-input v-model="form.confirmPassword" type="password" show-password />
+        <el-form-item
+          label="确认密码"
+          prop="confirmPassword"
+        >
+          <el-input
+            v-model="form.confirmPassword"
+            type="password"
+            show-password
+          />
         </el-form-item>
-        <el-form-item label="项目名称" prop="systemName">
-          <el-input v-model="form.systemName" placeholder="如 HelloAI" />
+        <el-form-item
+          label="项目名称"
+          prop="systemName"
+        >
+          <el-input
+            v-model="form.systemName"
+            placeholder="如 HelloAI"
+          />
         </el-form-item>
         <el-form-item label="管理员账号">
-          <el-input v-model="form.adminUsername" placeholder="默认 admin" />
+          <el-input
+            v-model="form.adminUsername"
+            placeholder="默认 admin"
+          />
         </el-form-item>
         <el-form-item label="项目描述">
-          <el-input v-model="form.systemDescription" type="textarea" :rows="2" />
+          <el-input
+            v-model="form.systemDescription"
+            type="textarea"
+            :rows="2"
+          />
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" :loading="submitting" @click="handleSubmit" style="width:100%">完成初始化</el-button>
+          <el-button
+            type="primary"
+            :loading="submitting"
+            style="width:100%"
+            @click="handleSubmit"
+          >
+            完成初始化
+          </el-button>
         </el-form-item>
       </el-form>
     </div>
@@ -44,7 +90,8 @@ const form = reactive({
   systemName: 'HelloAI', systemDescription: ''
 })
 
-const validateConfirm = (_rule: any, value: string, callback: Function) => {
+type FormRuleValidator = (_rule: unknown, value: string, callback: (err?: Error | string) => void) => void
+const validateConfirm: FormRuleValidator = (_rule, value, callback) => {
   if (value !== form.adminPassword) callback(new Error('两次输入的密码不一致'))
   else callback()
 }

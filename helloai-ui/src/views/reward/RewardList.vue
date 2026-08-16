@@ -5,47 +5,121 @@
         <div class="card-header">
           <span>积分流水</span>
           <div>
-            <el-button size="small" type="primary" @click="adjustDialog=true">手动调整</el-button>
-            <el-button size="small" @click="load">刷新</el-button>
+            <el-button
+              size="small"
+              type="primary"
+              @click="adjustDialog=true"
+            >
+              手动调整
+            </el-button>
+            <el-button
+              size="small"
+              @click="load"
+            >
+              刷新
+            </el-button>
           </div>
         </div>
       </template>
-      <el-table :data="list" border stripe v-loading="loading" style="width:100%">
-        <el-table-column prop="reason" label="原因" min-width="200" show-overflow-tooltip />
-        <el-table-column label="变动" width="100">
+      <el-table
+        v-loading="loading"
+        :data="list"
+        border
+        stripe
+        style="width:100%"
+      >
+        <el-table-column
+          prop="reason"
+          label="原因"
+          min-width="200"
+          show-overflow-tooltip
+        />
+        <el-table-column
+          label="变动"
+          width="100"
+        >
           <template #default="{ row }">
             <span :style="{ color: row.delta > 0 ? 'var(--ha-success)' : 'var(--ha-danger)', fontWeight:'600' }">
               {{ row.delta > 0 ? '+' : '' }}{{ row.delta }}
             </span>
           </template>
         </el-table-column>
-        <el-table-column prop="balance" label="余额" width="80" />
-        <el-table-column label="时间" width="170">
-          <template #default="{ row }">{{ fmtTime(row.createTime) }}</template>
+        <el-table-column
+          prop="balance"
+          label="余额"
+          width="80"
+        />
+        <el-table-column
+          label="时间"
+          width="170"
+        >
+          <template #default="{ row }">
+            {{ fmtTime(row.createTime) }}
+          </template>
         </el-table-column>
       </el-table>
-      <el-empty v-if="!list.length && !loading" description="暂无积分记录" />
-
-      <el-pagination
-        v-if="total > 0" background layout="prev, pager, next"
-        :total="total" :page-size="pageSize" @current-change="load" style="margin-top:16px;text-align:center"
+      <el-empty
+        v-if="!list.length && !loading"
+        description="暂无积分记录"
       />
 
-      <el-dialog v-model="adjustDialog" title="手动调整积分" width="480px" top="5vh" append-to-body>
-        <el-form ref="adjustFormRef" :model="adjustForm" :rules="adjustRules" label-width="100px">
-          <el-form-item label="Agent ID" prop="agentId">
+      <el-pagination
+        v-if="total > 0"
+        background
+        layout="prev, pager, next"
+        :total="total"
+        :page-size="pageSize"
+        style="margin-top:16px;text-align:center"
+        @current-change="load"
+      />
+
+      <el-dialog
+        v-model="adjustDialog"
+        title="手动调整积分"
+        width="480px"
+        top="5vh"
+        append-to-body
+      >
+        <el-form
+          ref="adjustFormRef"
+          :model="adjustForm"
+          :rules="adjustRules"
+          label-width="100px"
+        >
+          <el-form-item
+            label="Agent ID"
+            prop="agentId"
+          >
             <AgentSelect v-model="adjustForm.agentId" />
           </el-form-item>
-          <el-form-item label="调整分数" prop="scoreDelta">
-            <el-input-number v-model="adjustForm.scoreDelta" :min="-100" :max="100" />
+          <el-form-item
+            label="调整分数"
+            prop="scoreDelta"
+          >
+            <el-input-number
+              v-model="adjustForm.scoreDelta"
+              :min="-100"
+              :max="100"
+            />
           </el-form-item>
-          <el-form-item label="原因" prop="reason">
+          <el-form-item
+            label="原因"
+            prop="reason"
+          >
             <el-input v-model="adjustForm.reason" />
           </el-form-item>
         </el-form>
         <template #footer>
-          <el-button @click="adjustDialog=false">取消</el-button>
-          <el-button type="primary" :loading="adjusting" @click="handleAdjust">确认</el-button>
+          <el-button @click="adjustDialog=false">
+            取消
+          </el-button>
+          <el-button
+            type="primary"
+            :loading="adjusting"
+            @click="handleAdjust"
+          >
+            确认
+          </el-button>
         </template>
       </el-dialog>
     </el-card>

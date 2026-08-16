@@ -12,20 +12,65 @@
       <p style="font-size:14px;color:var(--ha-ink);margin:0 0 12px">
         任务「{{ task?.title }}」的 AI 拆解草案，确认后草案转正为待分配子任务并按配置自动分发。
       </p>
-      <el-table v-if="drafts.length" :data="drafts" border stripe size="small" style="width:100%">
-        <el-table-column type="index" label="#" width="48" />
-        <el-table-column prop="title" label="标题" min-width="160" show-overflow-tooltip />
-        <el-table-column prop="content" label="内容" min-width="220" show-overflow-tooltip />
-        <el-table-column prop="deliverable" label="交付物" min-width="140" show-overflow-tooltip />
-        <el-table-column prop="acceptance" label="验收标准" min-width="140" show-overflow-tooltip />
-        <el-table-column label="优先级" width="80">
+      <el-table
+        v-if="drafts.length"
+        :data="drafts"
+        border
+        stripe
+        size="small"
+        style="width:100%"
+      >
+        <el-table-column
+          type="index"
+          label="#"
+          width="48"
+        />
+        <el-table-column
+          prop="title"
+          label="标题"
+          min-width="160"
+          show-overflow-tooltip
+        />
+        <el-table-column
+          prop="content"
+          label="内容"
+          min-width="220"
+          show-overflow-tooltip
+        />
+        <el-table-column
+          prop="deliverable"
+          label="交付物"
+          min-width="140"
+          show-overflow-tooltip
+        />
+        <el-table-column
+          prop="acceptance"
+          label="验收标准"
+          min-width="140"
+          show-overflow-tooltip
+        />
+        <el-table-column
+          label="优先级"
+          width="80"
+        >
           <template #default="{ row }">
-            <el-tag v-if="row.priority" :type="priorityTagType(row.priority)" size="small">{{ row.priority }}</el-tag>
+            <el-tag
+              v-if="row.priority"
+              :type="priorityTagType(row.priority)"
+              size="small"
+            >
+              {{ row.priority }}
+            </el-tag>
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column label="依赖" width="110">
-          <template #default="{ row }">{{ fmtDepends(row.dependsOn) }}</template>
+        <el-table-column
+          label="依赖"
+          width="110"
+        >
+          <template #default="{ row }">
+            {{ fmtDepends(row.dependsOn) }}
+          </template>
         </el-table-column>
       </el-table>
       <el-empty
@@ -34,14 +79,25 @@
       />
     </div>
     <template #footer>
-      <el-button @click="visible = false">取消</el-button>
-      <el-button type="danger" plain :loading="rejecting" @click="handleReject">拒绝重拆</el-button>
+      <el-button @click="visible = false">
+        取消
+      </el-button>
+      <el-button
+        type="danger"
+        plain
+        :loading="rejecting"
+        @click="handleReject"
+      >
+        拒绝重拆
+      </el-button>
       <el-button
         type="primary"
         :loading="confirming"
         :disabled="!drafts.length"
         @click="handleConfirm"
-      >确认并分发</el-button>
+      >
+        确认并分发
+      </el-button>
     </template>
   </el-dialog>
 </template>

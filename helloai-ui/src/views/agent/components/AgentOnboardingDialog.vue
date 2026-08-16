@@ -1,27 +1,42 @@
 <template>
   <el-dialog
     :model-value="modelValue"
-    @update:model-value="$emit('update:modelValue', $event)"
     :title="data?.title || '生成接入内容'"
     width="880px"
     top="3vh"
     append-to-body
     :close-on-click-modal="false"
+    @update:model-value="$emit('update:modelValue', $event)"
     @opened="handleOpened"
   >
     <div v-loading="loading">
       <!-- Agent 摘要 -->
-      <el-descriptions v-if="data" :column="2" border size="small" style="margin-bottom:16px">
-        <el-descriptions-item label="Agent">{{ data.agentName }}</el-descriptions-item>
-        <el-descriptions-item label="角色">{{ data.role }}</el-descriptions-item>
+      <el-descriptions
+        v-if="data"
+        :column="2"
+        border
+        size="small"
+        style="margin-bottom:16px"
+      >
+        <el-descriptions-item label="Agent">
+          {{ data.agentName }}
+        </el-descriptions-item>
+        <el-descriptions-item label="角色">
+          {{ data.role }}
+        </el-descriptions-item>
         <el-descriptions-item label="API Key">
           <code>{{ data.apiKey && data.apiKey.length > 12 ? data.apiKey.substring(0, 12) + '...' : data.apiKey }}</code>
         </el-descriptions-item>
-        <el-descriptions-item label="服务地址">{{ data.baseUrl }}</el-descriptions-item>
+        <el-descriptions-item label="服务地址">
+          {{ data.baseUrl }}
+        </el-descriptions-item>
       </el-descriptions>
 
       <!-- 内容区 -->
-      <div v-if="data" style="margin-bottom:8px;font-size:12px;color:var(--ha-muted)">
+      <div
+        v-if="data"
+        style="margin-bottom:8px;font-size:12px;color:var(--ha-muted)"
+      >
         以下是 HelloAI 平台为该 Agent 生成的接入内容。请按需使用底部按钮：
         <strong>复制全部</strong> 用于人工交接；
         <strong style="color:var(--el-color-success)">下载 hello_ai_skills.md</strong> 用于保存到 IDE 的 skills 目录；
@@ -39,11 +54,34 @@
     </div>
 
     <template #footer>
-      <el-button type="primary" @click="copyContent">📋 复制全部</el-button>
-      <el-button type="success" @click="downloadSkill">⬇️ 下载 hello_ai_skills.md</el-button>
-      <el-button type="info" :loading="daemonLoading" @click="downloadDaemon">⬇️ 下载常驻打卡脚本（PowerShell）</el-button>
-      <el-button type="warning" @click="copyActivation">🚀 一键上班口令</el-button>
-      <el-button @click="close">关闭</el-button>
+      <el-button
+        type="primary"
+        @click="copyContent"
+      >
+        📋 复制全部
+      </el-button>
+      <el-button
+        type="success"
+        @click="downloadSkill"
+      >
+        ⬇️ 下载 hello_ai_skills.md
+      </el-button>
+      <el-button
+        type="info"
+        :loading="daemonLoading"
+        @click="downloadDaemon"
+      >
+        ⬇️ 下载常驻打卡脚本（PowerShell）
+      </el-button>
+      <el-button
+        type="warning"
+        @click="copyActivation"
+      >
+        🚀 一键上班口令
+      </el-button>
+      <el-button @click="close">
+        关闭
+      </el-button>
     </template>
   </el-dialog>
 </template>

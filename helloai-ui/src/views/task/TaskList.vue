@@ -6,43 +6,105 @@
           <span>任务管理</span>
           <div class="header-actions">
             <!-- A1: 表单直建入口（含 V47 执行策略） -->
-            <el-button size="small" type="primary" @click="openCreate">新建任务</el-button>
-            <el-button size="small" type="primary" @click="router.push('/requirement-chat')">对话新建</el-button>
-            <el-button size="small" @click="load">刷新</el-button>
+            <el-button
+              size="small"
+              type="primary"
+              @click="openCreate"
+            >
+              新建任务
+            </el-button>
+            <el-button
+              size="small"
+              type="primary"
+              @click="router.push('/requirement-chat')"
+            >
+              对话新建
+            </el-button>
+            <el-button
+              size="small"
+              @click="load"
+            >
+              刷新
+            </el-button>
           </div>
         </div>
       </template>
-      <el-table :data="list" border stripe v-loading="loading" style="width:100%">
-        <el-table-column label="标题" min-width="200" show-overflow-tooltip>
+      <el-table
+        v-loading="loading"
+        :data="list"
+        border
+        stripe
+        style="width:100%"
+      >
+        <el-table-column
+          label="标题"
+          min-width="200"
+          show-overflow-tooltip
+        >
           <template #default="{ row }">
-            <span class="link-cell" :title="row.title" @click="goSubTasks(row)">{{ row.title }}</span>
+            <span
+              class="link-cell"
+              :title="row.title"
+              @click="goSubTasks(row)"
+            >{{ row.title }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="描述" min-width="200" show-overflow-tooltip>
+        <el-table-column
+          label="描述"
+          min-width="200"
+          show-overflow-tooltip
+        >
           <template #default="{ row }">
-            <span class="link-cell" @click="openDesc(row)">{{ stripMarkdown(row.description) || '-' }}</span>
+            <span
+              class="link-cell"
+              @click="openDesc(row)"
+            >{{ stripMarkdown(row.description) || '-' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="110">
+        <el-table-column
+          label="状态"
+          width="110"
+        >
           <template #default="{ row }">
             <!-- V41: 报告生成中覆盖主状态显示（任务本体仍是 DONE） -->
-            <el-tag v-if="row.finalReportStatus === 'GENERATING'" type="primary" size="small">报告生成中</el-tag>
-            <el-tag v-else :type="TASK_STATUS_MAP[row.status as TaskStatus]?.type || 'info'" size="small">
+            <el-tag
+              v-if="row.finalReportStatus === 'GENERATING'"
+              type="primary"
+              size="small"
+            >
+              报告生成中
+            </el-tag>
+            <el-tag
+              v-else
+              :type="TASK_STATUS_MAP[row.status as TaskStatus]?.type || 'info'"
+              size="small"
+            >
               {{ TASK_STATUS_MAP[row.status as TaskStatus]?.label || row.status }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="创建时间" width="170">
-          <template #default="{ row }">{{ fmtTime(row.createTime) }}</template>
+        <el-table-column
+          label="创建时间"
+          width="170"
+        >
+          <template #default="{ row }">
+            {{ fmtTime(row.createTime) }}
+          </template>
         </el-table-column>
-        <el-table-column label="操作" width="300" fixed="right">
+        <el-table-column
+          label="操作"
+          width="300"
+          fixed="right"
+        >
           <template #default="{ row }">
             <el-button
               size="small"
               plain
               :disabled="row.status === 'DONE'"
               @click="openEdit(row)"
-            >编辑</el-button>
+            >
+              编辑
+            </el-button>
             <el-button
               v-if="row.status === 'PENDING'"
               size="small"
@@ -50,13 +112,17 @@
               plain
               :loading="planningId === row.id"
               @click="handlePlan(row)"
-            >AI 拆解</el-button>
+            >
+              AI 拆解
+            </el-button>
             <el-button
               v-if="row.status === 'PLANNING'"
               size="small"
               type="warning"
               @click="openPlanReview(row)"
-            >审阅草案</el-button>
+            >
+              审阅草案
+            </el-button>
             <el-button
               v-if="row.status === 'DONE'"
               size="small"
@@ -65,30 +131,71 @@
               :loading="row.finalReportStatus === 'GENERATING'"
               :disabled="row.finalReportStatus === 'GENERATING'"
               @click="openReport(row)"
-            >{{ row.finalReportStatus === 'GENERATING' ? '生成中' : '报告' }}</el-button>
+            >
+              {{ row.finalReportStatus === 'GENERATING' ? '生成中' : '报告' }}
+            </el-button>
             <el-button
               size="small"
               type="warning"
               plain
               :disabled="row.status === 'DONE'"
               @click="handleRepublish(row)"
-            >重新发布</el-button>
-            <el-button size="small" type="danger" plain @click="openDelete(row)">删除</el-button>
+            >
+              重新发布
+            </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              plain
+              @click="openDelete(row)"
+            >
+              删除
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-if="!list.length && !loading" description="暂无任务" />
+      <el-empty
+        v-if="!list.length && !loading"
+        description="暂无任务"
+      />
     </el-card>
 
-    <TaskDeleteDialog v-model="deleteVisible" :task="deletingTask" @done="load" />
-    <PlanReviewDialog v-model="planReviewVisible" :task="reviewingTask" @done="load" />
-    <FinalReportDialog v-model="reportVisible" :task="reportTask" />
+    <TaskDeleteDialog
+      v-model="deleteVisible"
+      :task="deletingTask"
+      @done="load"
+    />
+    <PlanReviewDialog
+      v-model="planReviewVisible"
+      :task="reviewingTask"
+      @done="load"
+    />
+    <FinalReportDialog
+      v-model="reportVisible"
+      :task="reportTask"
+      @status-change="onReportStatusChange"
+    />
     <!-- A1: 新建/编辑任务（含 V47 执行策略与 SLA） -->
-    <TaskFormDialog v-model="formVisible" :task="editingTask" @done="load" />
+    <TaskFormDialog
+      v-model="formVisible"
+      :task="editingTask"
+      @done="load"
+    />
 
     <!-- 描述详情弹窗 -->
-    <el-dialog v-model="descVisible" :title="descTitle" width="600px" top="5vh" append-to-body :show-close="true" :close-on-click-modal="false">
-      <MarkdownView :content="descContent" class="desc-md" />
+    <el-dialog
+      v-model="descVisible"
+      :title="descTitle"
+      width="600px"
+      top="5vh"
+      append-to-body
+      :show-close="true"
+      :close-on-click-modal="false"
+    >
+      <MarkdownView
+        :content="descContent"
+        class="desc-md"
+      />
     </el-dialog>
   </div>
 </template>
@@ -100,6 +207,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { taskApi } from '@/api/task'
 import { fmtTime } from '@/utils/tableConfig'
 import { stripMarkdown } from '@/utils/markdown'
+import { queryString } from '@/utils/queryParam'
 import MarkdownView from '@/components/MarkdownView.vue'
 import TaskDeleteDialog from './components/TaskDeleteDialog.vue'
 import PlanReviewDialog from './components/PlanReviewDialog.vue'
@@ -114,8 +222,11 @@ const list = ref<any[]>([])
 const loading = ref(false)
 
 // taskId query 参数支持：筛选展示对应主任务（来源：子任务页"所属任务"、对话页"查看任务"等）
-const taskIdQuery = ref((route.query.taskId as string) || '')
-watch(() => route.query.taskId, (v) => { taskIdQuery.value = (v as string) || ''; load() })
+const taskIdQuery = ref(queryString(route.query, 'taskId') || '')
+watch(
+  () => route.query.taskId,
+  () => { taskIdQuery.value = queryString(route.query, 'taskId') || ''; load() }
+)
 
 async function load() {
   loading.value = true
@@ -190,6 +301,13 @@ function openDelete(row: Task) { deletingTask.value = row; deleteVisible.value =
 const reportVisible = ref(false)
 const reportTask = ref<Task | null>(null)
 function openReport(row: Task) { reportTask.value = row; reportVisible.value = true }
+// FinalReportDialog 把报告生成状态广播出来，我们只 patch list 里对应行的 finalReportStatus，
+// 不重拉整个列表（避免打断用户当前操作 / 滚动位置）。
+function onReportStatusChange(status: string) {
+  if (!reportTask.value) return
+  const target = list.value.find(t => String(t.id) === String(reportTask.value!.id))
+  if (target) (target as any).finalReportStatus = status
+}
 
 // ── V26 AI 拆解 + 草案审阅 ──
 const planningId = ref<LongId | null>(null)

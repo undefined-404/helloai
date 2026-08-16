@@ -1,17 +1,53 @@
 <template>
-  <el-empty v-if="!events.length" description="暂无时间线条目" />
-  <div v-else class="seq-wrapper">
+  <el-empty
+    v-if="!events.length"
+    description="暂无时间线条目"
+  />
+  <div
+    v-else
+    class="seq-wrapper"
+  >
     <!-- 顶部说明条：事件数 / 持续时长 / 失败次数摘要 -->
     <div class="seq-summary">
-      <el-tag size="small" type="info">共 {{ events.length }} 条事件</el-tag>
-      <el-tag size="small">跨度 {{ summarySpan }}</el-tag>
-      <el-tag v-if="failureCount > 0" size="small" type="danger">{{ failureCount }} 次失败</el-tag>
-      <el-tag v-if="retryCount > 0" size="small" type="warning">重派 {{ retryCount }} 次</el-tag>
-      <el-tag v-if="hasManual" size="small" type="primary">有人工介入</el-tag>
+      <el-tag
+        size="small"
+        type="info"
+      >
+        共 {{ events.length }} 条事件
+      </el-tag>
+      <el-tag size="small">
+        跨度 {{ summarySpan }}
+      </el-tag>
+      <el-tag
+        v-if="failureCount > 0"
+        size="small"
+        type="danger"
+      >
+        {{ failureCount }} 次失败
+      </el-tag>
+      <el-tag
+        v-if="retryCount > 0"
+        size="small"
+        type="warning"
+      >
+        重派 {{ retryCount }} 次
+      </el-tag>
+      <el-tag
+        v-if="hasManual"
+        size="small"
+        type="primary"
+      >
+        有人工介入
+      </el-tag>
       <span class="seq-hint">红色虚线=响应/失败 · 蓝色实线=主动行为 · 黄色 Note=耗时与原因</span>
     </div>
     <!-- mermaid 渲染容器：每次 events 变化重新 init 防止 HMR 残留 -->
-    <div v-if="mermaidSyntax" ref="chartRef" class="seq-chart" :class="{ 'seq-loading': rendering }" />
+    <div
+      v-if="mermaidSyntax"
+      ref="chartRef"
+      class="seq-chart"
+      :class="{ 'seq-loading': rendering }"
+    />
     <el-alert
       v-if="renderError"
       :title="renderError"
@@ -21,7 +57,10 @@
     />
     <!-- 语法查看：调试用，默认折叠 -->
     <el-collapse class="seq-syntax-collapse">
-      <el-collapse-item title="查看 Mermaid 源代码（开发者调试）" name="syntax">
+      <el-collapse-item
+        title="查看 Mermaid 源代码（开发者调试）"
+        name="syntax"
+      >
         <pre class="seq-syntax">{{ mermaidSyntax }}</pre>
       </el-collapse-item>
     </el-collapse>

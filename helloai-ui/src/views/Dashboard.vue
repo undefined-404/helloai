@@ -1,5 +1,8 @@
 ﻿<template>
-  <div class="page ha-entrance-up" v-loading="loading">
+  <div
+    v-loading="loading"
+    class="page ha-entrance-up"
+  >
     <!-- Stats Cards -->
     <div class="stats-grid ha-stagger-entrance">
       <div
@@ -7,10 +10,18 @@
         :key="stat.label"
         class="stat-card"
       >
-        <div class="stat-dot" :class="stat.color" aria-hidden="true" />
+        <div
+          class="stat-dot"
+          :class="stat.color"
+          aria-hidden="true"
+        />
         <div class="stat-body">
-          <div class="stat-label">{{ stat.label }}</div>
-          <div class="stat-value">{{ stat.value }}</div>
+          <div class="stat-label">
+            {{ stat.label }}
+          </div>
+          <div class="stat-value">
+            {{ stat.value }}
+          </div>
         </div>
       </div>
     </div>
@@ -26,54 +37,118 @@
     />
 
     <!-- Charts -->
-    <div v-if="!errorMsg" class="charts-grid">
-      <div class="chart-card ha-entrance-up" style="animation-delay: 100ms">
+    <div
+      v-if="!errorMsg"
+      class="charts-grid"
+    >
+      <div
+        class="chart-card ha-entrance-up"
+        style="animation-delay: 100ms"
+      >
         <div class="chart-header">
-          <el-icon color="#7C3AED"><User /></el-icon>
+          <el-icon color="#7C3AED">
+            <User />
+          </el-icon>
           <span>Agent 积分排行</span>
         </div>
-        <div v-if="hasRankData" ref="rankChart" class="chart-body" />
-        <el-empty v-else description="暂无可排行 Agent" :image-size="80" />
+        <div
+          v-if="hasRankData"
+          ref="rankChart"
+          class="chart-body"
+        />
+        <el-empty
+          v-else
+          description="暂无可排行 Agent"
+          :image-size="80"
+        />
       </div>
-      <div class="chart-card ha-entrance-up" style="animation-delay: 200ms">
+      <div
+        class="chart-card ha-entrance-up"
+        style="animation-delay: 200ms"
+      >
         <div class="chart-header">
-          <el-icon color="#10B981"><DataLine /></el-icon>
+          <el-icon color="#10B981">
+            <DataLine />
+          </el-icon>
           <span>任务吞吐量</span>
         </div>
-        <div v-if="hasThroughputData" ref="throughputChart" class="chart-body" />
-        <el-empty v-else description="暂无吞吐量数据" :image-size="80" />
+        <div
+          v-if="hasThroughputData"
+          ref="throughputChart"
+          class="chart-body"
+        />
+        <el-empty
+          v-else
+          description="暂无吞吐量数据"
+          :image-size="80"
+        />
       </div>
     </div>
 
     <!-- AgentHub V1 P1 今日打卡概览（Agent 维度：每个 Agent 只按最新状态计一次） -->
-    <div v-if="!errorMsg" class="duty-section ha-entrance-up" style="animation-delay: 300ms">
+    <div
+      v-if="!errorMsg"
+      class="duty-section ha-entrance-up"
+      style="animation-delay: 300ms"
+    >
       <div class="section-header">
         <div class="section-title">
-          <el-icon color="#0EA5E9"><Clock /></el-icon>
+          <el-icon color="#0EA5E9">
+            <Clock />
+          </el-icon>
           <span>今日打卡概览</span>
         </div>
-        <router-link to="/duty-leases" class="section-link">查看全部打卡记录 →</router-link>
+        <router-link
+          to="/duty-leases"
+          class="section-link"
+        >
+          查看全部打卡记录 →
+        </router-link>
       </div>
       <div class="stats-grid duty-grid">
-        <div class="stat-card" :class="dutyLoading ? 'is-loading' : ''">
-          <div class="stat-dot success" aria-hidden="true" />
+        <div
+          class="stat-card"
+          :class="dutyLoading ? 'is-loading' : ''"
+        >
+          <div
+            class="stat-dot success"
+            aria-hidden="true"
+          />
           <div class="stat-body">
-            <div class="stat-label">在线</div>
-            <div class="stat-value">{{ dutyOverview.activeCount }}</div>
+            <div class="stat-label">
+              在线
+            </div>
+            <div class="stat-value">
+              {{ dutyOverview.activeCount }}
+            </div>
           </div>
         </div>
         <div class="stat-card">
-          <div class="stat-dot primary" aria-hidden="true" />
+          <div
+            class="stat-dot primary"
+            aria-hidden="true"
+          />
           <div class="stat-body">
-            <div class="stat-label">下班</div>
-            <div class="stat-value">{{ dutyOverview.closedCount }}</div>
+            <div class="stat-label">
+              下班
+            </div>
+            <div class="stat-value">
+              {{ dutyOverview.closedCount }}
+            </div>
           </div>
         </div>
         <div class="stat-card">
-          <div class="stat-dot warning" aria-hidden="true" />
+          <div
+            class="stat-dot warning"
+            aria-hidden="true"
+          />
           <div class="stat-body">
-            <div class="stat-label">超时</div>
-            <div class="stat-value">{{ dutyOverview.expiredCount }}</div>
+            <div class="stat-label">
+              超时
+            </div>
+            <div class="stat-value">
+              {{ dutyOverview.expiredCount }}
+            </div>
           </div>
         </div>
       </div>
@@ -84,6 +159,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, nextTick, onUnmounted } from 'vue'
 import * as echarts from 'echarts'
+import type { ECharts } from 'echarts'
 import { dashboardApi } from '@/api/dashboard'
 import { dutyApi } from '@/api/duty'
 import type { DutyOverviewResponse } from '@/types/duty'
@@ -125,8 +201,20 @@ const hasThroughputData = computed(() => {
 
 const rankChart = ref<HTMLDivElement>()
 const throughputChart = ref<HTMLDivElement>()
-let rankInstance: any = null
-let throughputInstance: any = null
+// 实例引用：定义明确类型 + null 兜底，避免 unmounted/dispose 时访问空对象
+let rankInstance: ECharts | null = null
+let throughputInstance: ECharts | null = null
+
+function disposeCharts() {
+  if (rankInstance) {
+    rankInstance.dispose()
+    rankInstance = null
+  }
+  if (throughputInstance) {
+    throughputInstance.dispose()
+    throughputInstance = null
+  }
+}
 
 function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
@@ -134,6 +222,11 @@ function cssVar(name: string): string {
 
 function initRankChart(data: any) {
   if (!rankChart.value) return
+  // 重复初始化前先释放老实例，避免 ECharts 内部容器泄漏
+  if (rankInstance) {
+    rankInstance.dispose()
+    rankInstance = null
+  }
   const axisLabelColor = cssVar('--ha-muted')
   const splitLineColor = cssVar('--ha-border-light')
   const primaryColor = cssVar('--ha-primary')
@@ -184,6 +277,10 @@ function initRankChart(data: any) {
 
 function initThroughputChart(data: any) {
   if (!throughputChart.value) return
+  if (throughputInstance) {
+    throughputInstance.dispose()
+    throughputInstance = null
+  }
   const axisLabelColor = cssVar('--ha-muted')
   const splitLineColor = cssVar('--ha-border-light')
   const successColor = cssVar('--ha-success')
@@ -281,10 +378,7 @@ onMounted(() => {
   loadDutyOverview()
 })
 
-onUnmounted(() => {
-  rankInstance?.dispose()
-  throughputInstance?.dispose()
-})
+onUnmounted(disposeCharts)
 </script>
 
 <style scoped>

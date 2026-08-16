@@ -1,55 +1,107 @@
 <template>
-  <div class="page ha-entrance-up" v-loading="loading">
+  <div
+    v-loading="loading"
+    class="page ha-entrance-up"
+  >
     <el-card v-if="item">
       <template #header>
         <div class="card-header">
           <span>子任务详情</span>
-          <el-button size="small" @click="goBackToList">返回列表</el-button>
+          <el-button
+            size="small"
+            @click="goBackToList"
+          >
+            返回列表
+          </el-button>
         </div>
       </template>
 
-      <el-descriptions :column="2" border>
-        <el-descriptions-item label="标题">{{ item.title }}</el-descriptions-item>
+      <el-descriptions
+        :column="2"
+        border
+      >
+        <el-descriptions-item label="标题">
+          {{ item.title }}
+        </el-descriptions-item>
         <el-descriptions-item label="状态">
-          <el-tag :type="getSubTaskStatusMeta(item.status)?.type || 'info'" size="small">
+          <el-tag
+            :type="getSubTaskStatusMeta(item.status)?.type || 'info'"
+            size="small"
+          >
             {{ getSubTaskStatusMeta(item.status)?.label || item.status }}
           </el-tag>
         </el-descriptions-item>
-        <el-descriptions-item label="负责人">{{ item.assignedAgentName || item.assignedAgent || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="负责人">
+          {{ item.assignedAgentName || item.assignedAgent || '-' }}
+        </el-descriptions-item>
         <el-descriptions-item label="评分">
-          <el-tag v-if="item.scoreGrade" :type="SCORE_GRADE_MAP[item.scoreGrade]?.type || 'info'" size="small">
+          <el-tag
+            v-if="item.scoreGrade"
+            :type="SCORE_GRADE_MAP[item.scoreGrade]?.type || 'info'"
+            size="small"
+          >
             {{ SCORE_GRADE_MAP[item.scoreGrade]?.label || item.scoreGrade }}
           </el-tag>
           <span v-else>-</span>
         </el-descriptions-item>
-        <el-descriptions-item label="创建时间" :span="2">{{ fmtTime(item.createTime) }}</el-descriptions-item>
+        <el-descriptions-item
+          label="创建时间"
+          :span="2"
+        >
+          {{ fmtTime(item.createTime) }}
+        </el-descriptions-item>
         <!-- V27 依赖编排可视化补全：前置依赖（全部 DONE 才会分发本任务）与被依赖（本任务完成后解锁的下游） -->
-        <el-descriptions-item label="前置依赖" :span="2">
+        <el-descriptions-item
+          label="前置依赖"
+          :span="2"
+        >
           <template v-if="upstreamItems.length">
             <el-tag
-              v-for="dep in upstreamItems" :key="dep.id"
-              size="small" class="dep-tag" :type="dep.tagType"
+              v-for="dep in upstreamItems"
+              :key="dep.id"
+              size="small"
+              class="dep-tag"
+              :type="dep.tagType"
               @click="goSibling(dep.id)"
-            >{{ dep.text }}</el-tag>
+            >
+              {{ dep.text }}
+            </el-tag>
           </template>
           <span v-else>无（就绪后即可分发）</span>
         </el-descriptions-item>
-        <el-descriptions-item label="被依赖" :span="2">
+        <el-descriptions-item
+          label="被依赖"
+          :span="2"
+        >
           <template v-if="downstreamItems.length">
             <el-tag
-              v-for="dep in downstreamItems" :key="dep.id"
-              size="small" class="dep-tag" :type="dep.tagType"
+              v-for="dep in downstreamItems"
+              :key="dep.id"
+              size="small"
+              class="dep-tag"
+              :type="dep.tagType"
               @click="goSibling(dep.id)"
-            >{{ dep.text }}</el-tag>
+            >
+              {{ dep.text }}
+            </el-tag>
           </template>
           <span v-else>无</span>
         </el-descriptions-item>
-        <el-descriptions-item label="内容" :span="2">{{ item.content || '-' }}</el-descriptions-item>
+        <el-descriptions-item
+          label="内容"
+          :span="2"
+        >
+          {{ item.content || '-' }}
+        </el-descriptions-item>
       </el-descriptions>
     </el-card>
 
     <!-- §6.52 人工介入：返工达上限 / 降级能力不匹配时，用户自主选择 agent 驳回改派或直接通过 -->
-    <el-card v-if="item && needsManualIntervention" style="margin-top:16px" class="manual-card">
+    <el-card
+      v-if="item && needsManualIntervention"
+      style="margin-top:16px"
+      class="manual-card"
+    >
       <template #header>
         <div class="card-header">
           <span style="color:var(--el-color-warning)">人工介入</span>
@@ -58,26 +110,46 @@
       </template>
       <div class="manual-body">
         <div class="manual-reason">
-          <el-tag type="warning" size="small">{{ manualReasonText }}</el-tag>
+          <el-tag
+            type="warning"
+            size="small"
+          >
+            {{ manualReasonText }}
+          </el-tag>
           <span class="manual-current">当前负责人：{{ item.assignedAgentName || resolveAgentName(item.assignedAgent) }}</span>
         </div>
         <div class="manual-actions">
           <div class="manual-row">
             <span class="manual-label">改派给</span>
-            <el-select v-model="manualTargetAgentId" placeholder="选择执行 Agent（外部/内部均可）" filterable style="width:320px">
+            <el-select
+              v-model="manualTargetAgentId"
+              placeholder="选择执行 Agent（外部/内部均可）"
+              filterable
+              style="width:320px"
+            >
               <el-option
-                v-for="a in manualCandidates" :key="String(a.id)"
+                v-for="a in manualCandidates"
+                :key="String(a.id)"
                 :label="a.name + '（' + accessTypeLabel(a.accessType) + (a.onlineStatus ? ' · ' + a.onlineStatus : '') + '）'"
                 :value="String(a.id)"
               />
             </el-select>
-            <el-button type="warning" :loading="manualSubmitting" :disabled="!manualTargetAgentId" @click="submitManualRework">
+            <el-button
+              type="warning"
+              :loading="manualSubmitting"
+              :disabled="!manualTargetAgentId"
+              @click="submitManualRework"
+            >
               驳回并改派
             </el-button>
           </div>
           <div class="manual-row">
             <span class="manual-label">或</span>
-            <el-button type="success" :loading="manualSubmitting" @click="submitManualApprove">
+            <el-button
+              type="success"
+              :loading="manualSubmitting"
+              @click="submitManualApprove"
+            >
               直接通过（人工验收）
             </el-button>
           </div>
@@ -86,7 +158,10 @@
     </el-card>
 
     <!-- 方案 2：产出附件（执行产出物化后可单独下载；无附件时不展示卡片） -->
-    <el-card v-if="item && attachments.length" style="margin-top:16px">
+    <el-card
+      v-if="item && attachments.length"
+      style="margin-top:16px"
+    >
       <template #header>
         <div class="card-header">
           <span>产出附件</span>
@@ -94,8 +169,15 @@
         </div>
       </template>
       <div class="att-list">
-        <div v-for="att in attachments" :key="String(att.id)" class="att-item">
-          <span class="att-name" :title="att.fileName">{{ att.fileName }}</span>
+        <div
+          v-for="att in attachments"
+          :key="String(att.id)"
+          class="att-item"
+        >
+          <span
+            class="att-name"
+            :title="att.fileName"
+          >{{ att.fileName }}</span>
           <span class="att-meta">{{ fmtSize(att.fileSize) }} · {{ fmtTime(att.createTime) }}</span>
           <el-button
             link
@@ -103,51 +185,106 @@
             type="primary"
             :loading="downloadingAttId === att.id"
             @click="downloadAttachment(att)"
-          >下载</el-button>
+          >
+            下载
+          </el-button>
         </div>
       </div>
     </el-card>
 
     <!-- V28: 执行对话流（按轮次展示 Agent ↔ LLM 的完整请求/返回） -->
-    <el-card v-if="item" style="margin-top:16px">
+    <el-card
+      v-if="item"
+      style="margin-top:16px"
+    >
       <template #header>
         <div class="card-header">
           <span>执行对话流</span>
           <span style="font-size:12px;color:var(--ha-muted)">共 {{ conversation.length }} 条 · {{ convRounds.length }} 轮</span>
         </div>
       </template>
-      <el-empty v-if="!conversation.length" description="暂无对话消息" />
-      <div v-else class="conv-rounds">
-        <div v-for="(round, rIdx) in convRounds" :key="rIdx" class="conv-round">
+      <el-empty
+        v-if="!conversation.length"
+        description="暂无对话消息"
+      />
+      <div
+        v-else
+        class="conv-rounds"
+      >
+        <div
+          v-for="(round, rIdx) in convRounds"
+          :key="rIdx"
+          class="conv-round"
+        >
           <div class="round-header">
-            <el-tag size="small" :type="round.type === 'execute' ? 'primary' : 'warning'">
+            <el-tag
+              size="small"
+              :type="round.type === 'execute' ? 'primary' : 'warning'"
+            >
               {{ round.type === 'execute' ? '执行轮次' : '核验轮次' }} #{{ round.roundNo }}
             </el-tag>
             <span class="round-meta">{{ round.messages.length }} 条消息</span>
           </div>
           <div class="conv-list">
-            <div v-for="msg in round.messages" :key="msg.id" class="conv-item">
+            <div
+              v-for="msg in round.messages"
+              :key="msg.id"
+              class="conv-item"
+            >
               <div class="conv-head">
-                <el-tag size="small" :type="convTagType(msg.toolName)">{{ convTagLabel(msg.toolName) }}</el-tag>
+                <el-tag
+                  size="small"
+                  :type="convTagType(msg.toolName)"
+                >
+                  {{ convTagLabel(msg.toolName) }}
+                </el-tag>
                 <span class="conv-meta">
                   #{{ msg.seq }} · {{ msg.role }}/{{ msg.senderType }}<template v-if="msg.senderId"> · {{ resolveAgentName(msg.senderId) }}</template>
                   · {{ fmtTime(msg.createTime) }}
                 </span>
                 <!-- 仅“执行产出”保留复制/导出按钮 -->
-                <div class="conv-actions" v-if="msg.toolName === 'sub_task_execute' && msg.content">
-                  <el-button link size="small" @click="copyMessage(msg)">复制</el-button>
-                  <el-button link size="small" type="primary" @click="exportMarkdown(msg)">导出 .md</el-button>
+                <div
+                  v-if="msg.toolName === 'sub_task_execute' && msg.content"
+                  class="conv-actions"
+                >
+                  <el-button
+                    link
+                    size="small"
+                    @click="copyMessage(msg)"
+                  >
+                    复制
+                  </el-button>
+                  <el-button
+                    link
+                    size="small"
+                    type="primary"
+                    @click="exportMarkdown(msg)"
+                  >
+                    导出 .md
+                  </el-button>
                 </div>
               </div>
               <!-- 核验结论用结构化视图；其余按 Markdown 渲染 -->
-              <ReviewVerdictView v-if="msg.toolName === 'subtask_review_verdict'" :content="msg.content" />
+              <ReviewVerdictView
+                v-if="msg.toolName === 'subtask_review_verdict'"
+                :content="msg.content"
+              />
               <template v-else>
-                <el-collapse v-if="(msg.content?.length || 0) > 300" class="conv-collapse">
-                  <el-collapse-item :title="'展开全文（' + msg.content.length + ' 字）'" name="c">
+                <el-collapse
+                  v-if="(msg.content?.length || 0) > 300"
+                  class="conv-collapse"
+                >
+                  <el-collapse-item
+                    :title="'展开全文（' + msg.content.length + ' 字）'"
+                    name="c"
+                  >
                     <MarkdownView :content="msg.content" />
                   </el-collapse-item>
                 </el-collapse>
-                <MarkdownView v-else :content="msg.content" />
+                <MarkdownView
+                  v-else
+                  :content="msg.content"
+                />
               </template>
             </div>
           </div>
@@ -156,7 +293,10 @@
     </el-card>
 
     <!-- M4.5: 执行时间线（M5 联调可视化）。V35 加「执行时序图」tab：泳道式 sequence diagram，跳框重试、人工介入、熔断 全可看 -->
-    <el-card v-if="item" style="margin-top:16px">
+    <el-card
+      v-if="item"
+      style="margin-top:16px"
+    >
       <template #header>
         <div class="card-header">
           <span>执行时间线</span>
@@ -164,9 +304,18 @@
         </div>
       </template>
       <!-- V35: 列表 / 时序图 双视图切换 -->
-      <el-tabs v-model="timelineView" class="timeline-tabs">
-        <el-tab-pane label="时间线列表" name="list">
-          <el-empty v-if="!timeline.length" description="暂无时间线事件" />
+      <el-tabs
+        v-model="timelineView"
+        class="timeline-tabs"
+      >
+        <el-tab-pane
+          label="时间线列表"
+          name="list"
+        >
+          <el-empty
+            v-if="!timeline.length"
+            description="暂无时间线事件"
+          />
           <el-timeline v-else>
             <el-timeline-item
               v-for="ev in timeline"
@@ -176,23 +325,42 @@
               :type="eventTypeColor(ev.eventType)"
             >
               <div class="tl-head">
-                <el-tag size="small" :type="eventTypeColor(ev.eventType)">{{ eventLabel(ev.eventType) }}</el-tag>
+                <el-tag
+                  size="small"
+                  :type="eventTypeColor(ev.eventType)"
+                >
+                  {{ eventLabel(ev.eventType) }}
+                </el-tag>
                 <span class="tl-meta">
                   {{ roleLabel(ev.role) }}<template v-if="ev.agentId"> · {{ resolveAgentName(ev.agentId) }}</template>
                 </span>
               </div>
               <!-- 人话化：把事件类型/payload 翻译成非开发者能看懂的一句话 -->
-              <div class="tl-desc">{{ eventDescription(ev) }}</div>
-              <el-collapse v-if="ev.payload && Object.keys(ev.payload).length" class="tl-collapse">
-                <el-collapse-item title="技术详情（开发者）" name="p">
+              <div class="tl-desc">
+                {{ eventDescription(ev) }}
+              </div>
+              <el-collapse
+                v-if="ev.payload && Object.keys(ev.payload).length"
+                class="tl-collapse"
+              >
+                <el-collapse-item
+                  title="技术详情（开发者）"
+                  name="p"
+                >
                   <pre class="tl-payload">{{ JSON.stringify(ev.payload, null, 2) }}</pre>
                 </el-collapse-item>
               </el-collapse>
             </el-timeline-item>
           </el-timeline>
         </el-tab-pane>
-        <el-tab-pane label="执行时序图" name="seq">
-          <SubTaskSequenceFlow :events="timeline" :resolve-agent-name="resolveAgentName" />
+        <el-tab-pane
+          label="执行时序图"
+          name="seq"
+        >
+          <SubTaskSequenceFlow
+            :events="timeline"
+            :resolve-agent-name="resolveAgentName"
+          />
         </el-tab-pane>
       </el-tabs>
     </el-card>

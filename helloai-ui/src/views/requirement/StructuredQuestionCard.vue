@@ -1,9 +1,20 @@
 <template>
   <div class="sq-card">
-    <div v-for="q in questions" :key="q.id" class="sq-question">
+    <div
+      v-for="q in questions"
+      :key="q.id"
+      class="sq-question"
+    >
       <div class="sq-question-text">
         {{ q.text }}
-        <el-tag v-if="q.multiple" size="small" type="info" class="sq-multi-tag">可多选</el-tag>
+        <el-tag
+          v-if="q.multiple"
+          size="small"
+          type="info"
+          class="sq-multi-tag"
+        >
+          可多选
+        </el-tag>
         <el-button
           v-if="!readonly && hasRecommended(q)"
           class="sq-rec-btn"
@@ -12,7 +23,9 @@
           plain
           :disabled="disabled"
           @click="pickRecommended(q)"
-        >推荐</el-button>
+        >
+          推荐
+        </el-button>
       </div>
       <div class="sq-options">
         <div
@@ -23,7 +36,14 @@
           @click="toggle(q, opt)"
         >
           <span class="sq-option-label">{{ opt.label }}</span>
-          <el-tag v-if="opt.recommended" size="small" type="warning" effect="plain">推荐</el-tag>
+          <el-tag
+            v-if="opt.recommended"
+            size="small"
+            type="warning"
+            effect="plain"
+          >
+            推荐
+          </el-tag>
         </div>
       </div>
       <el-input
@@ -34,16 +54,26 @@
         :placeholder="q.customPlaceholder || '其他情况可补充说明（选填）'"
         class="sq-custom"
       />
-      <div v-else-if="readonly && roCustomOf(q.id)" class="sq-custom-ro">补充：{{ roCustomOf(q.id) }}</div>
+      <div
+        v-else-if="readonly && roCustomOf(q.id)"
+        class="sq-custom-ro"
+      >
+        补充：{{ roCustomOf(q.id) }}
+      </div>
     </div>
-    <div v-if="!readonly" class="sq-actions">
+    <div
+      v-if="!readonly"
+      class="sq-actions"
+    >
       <el-button
         type="primary"
         size="small"
         :disabled="disabled || !canSubmit"
         :loading="loading"
         @click="submit"
-      >提交选择</el-button>
+      >
+        提交选择
+      </el-button>
       <span class="sq-tip">也可以直接在下方输入框自由回复</span>
     </div>
   </div>

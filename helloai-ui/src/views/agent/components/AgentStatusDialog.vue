@@ -12,12 +12,18 @@
         {{ agent?.status === 'ACTIVE' ? '确定要注销此 Agent？' : '确定要恢复此 Agent 的注册？' }}
       </p>
       <p style="font-size:13px;color:var(--ha-muted);margin:8px 0 0">
-        <template v-if="agent?.status === 'ACTIVE'">注销后该 Agent 将无法接收任务和调用 API。</template>
-        <template v-else>恢复注册后该 Agent 将恢复正常工作。</template>
+        <template v-if="agent?.status === 'ACTIVE'">
+          注销后该 Agent 将无法接收任务和调用 API。
+        </template>
+        <template v-else>
+          恢复注册后该 Agent 将恢复正常工作。
+        </template>
       </p>
     </div>
     <template #footer>
-      <el-button @click="visible = false">取消</el-button>
+      <el-button @click="visible = false">
+        取消
+      </el-button>
       <el-button
         :type="agent?.status === 'ACTIVE' ? 'warning' : 'success'"
         :loading="loading"

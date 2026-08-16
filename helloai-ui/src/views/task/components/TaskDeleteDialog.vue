@@ -12,16 +12,36 @@
       <p style="font-size:14px;color:var(--ha-ink);margin:0 0 12px">
         此操作不可撤销。将级联物理清理以下关联数据：
       </p>
-      <div class="delete-counts" v-if="counts">
-        <div class="count-row"><span>子任务（含死信）</span><strong>{{ counts.subTaskCount }}</strong></div>
-        <div class="count-row"><span>死信子任务</span><strong>{{ counts.deadLetterCount }}</strong></div>
-        <div class="count-row"><span>模块</span><strong>{{ counts.moduleCount }}</strong></div>
-        <div class="count-row"><span>审查记录</span><strong>{{ counts.reviewCount }}</strong></div>
-        <div class="count-row"><span>执行记录</span><strong>{{ counts.executionCount }}</strong></div>
-        <div class="count-row"><span>未读收件箱消息</span><strong>{{ counts.unreadInboxCount }}</strong></div>
-        <div class="count-row"><span>时间线事件</span><strong>{{ counts.timelineCount }}</strong></div>
+      <div
+        v-if="counts"
+        class="delete-counts"
+      >
+        <div class="count-row">
+          <span>子任务（含死信）</span><strong>{{ counts.subTaskCount }}</strong>
+        </div>
+        <div class="count-row">
+          <span>死信子任务</span><strong>{{ counts.deadLetterCount }}</strong>
+        </div>
+        <div class="count-row">
+          <span>模块</span><strong>{{ counts.moduleCount }}</strong>
+        </div>
+        <div class="count-row">
+          <span>审查记录</span><strong>{{ counts.reviewCount }}</strong>
+        </div>
+        <div class="count-row">
+          <span>执行记录</span><strong>{{ counts.executionCount }}</strong>
+        </div>
+        <div class="count-row">
+          <span>未读收件箱消息</span><strong>{{ counts.unreadInboxCount }}</strong>
+        </div>
+        <div class="count-row">
+          <span>时间线事件</span><strong>{{ counts.timelineCount }}</strong>
+        </div>
       </div>
-      <p v-else-if="!loadingCounts" style="font-size:13px;color:var(--ha-ink-secondary);margin:0">
+      <p
+        v-else-if="!loadingCounts"
+        style="font-size:13px;color:var(--ha-ink-secondary);margin:0"
+      >
         关联数据统计加载失败，不影响删除操作
       </p>
       <el-alert
@@ -41,14 +61,24 @@
           placeholder="输入标题确认"
           :class="{ 'is-error': confirmError }"
         />
-        <el-button plain @click="fillConfirm">一键填入</el-button>
+        <el-button
+          plain
+          @click="fillConfirm"
+        >
+          一键填入
+        </el-button>
       </div>
-      <p v-if="confirmError" style="color:var(--ha-danger);font-size:12px;margin:4px 0 0">
+      <p
+        v-if="confirmError"
+        style="color:var(--ha-danger);font-size:12px;margin:4px 0 0"
+      >
         标题不匹配
       </p>
     </div>
     <template #footer>
-      <el-button @click="visible = false">取消</el-button>
+      <el-button @click="visible = false">
+        取消
+      </el-button>
       <el-button
         type="danger"
         :loading="deleting"

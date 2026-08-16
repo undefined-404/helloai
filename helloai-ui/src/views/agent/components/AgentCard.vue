@@ -13,7 +13,10 @@
     <div class="card-body">
       <!-- 头 -->
       <div class="card-head">
-        <span class="card-name" :title="agent.name">{{ agent.name }}</span>
+        <span
+          class="card-name"
+          :title="agent.name"
+        >{{ agent.name }}</span>
         <span
           class="status-dot"
           :class="agent.status === 'ACTIVE' ? 'active' : 'disabled'"
@@ -34,7 +37,9 @@
       </span>
 
       <!-- 描述 -->
-      <p class="card-desc">{{ agent.description || agent.remark || '暂无描述' }}</p>
+      <p class="card-desc">
+        {{ agent.description || agent.remark || '暂无描述' }}
+      </p>
 
       <!-- 统计 -->
       <div class="card-stats">
@@ -50,14 +55,39 @@
     </div>
 
     <!-- Hover 操作栏 -->
-    <div class="card-actions" @click.stop>
+    <div
+      class="card-actions"
+      @click.stop
+    >
       <!-- 内部 LLM Agent 无 CLI 接入流程，不展示接入内容入口 -->
-      <el-button v-if="agent.accessType !== 'API_KEY_LLM'" size="small" type="primary" plain @click="$emit('onboarding', agent)">生成接入内容</el-button>
-      <el-button size="small" @click="$emit('edit', agent)">编辑</el-button>
-      <el-button size="small" @click="$emit('toggle-status', agent)">
+      <el-button
+        v-if="agent.accessType !== 'API_KEY_LLM'"
+        size="small"
+        type="primary"
+        plain
+        @click="$emit('onboarding', agent)"
+      >
+        生成接入内容
+      </el-button>
+      <el-button
+        size="small"
+        @click="$emit('edit', agent)"
+      >
+        编辑
+      </el-button>
+      <el-button
+        size="small"
+        @click="$emit('toggle-status', agent)"
+      >
         {{ agent.status === 'ACTIVE' ? '注销' : '恢复注册' }}
       </el-button>
-      <el-button size="small" type="danger" @click="$emit('delete', agent)">删除</el-button>
+      <el-button
+        size="small"
+        type="danger"
+        @click="$emit('delete', agent)"
+      >
+        删除
+      </el-button>
     </div>
   </div>
 </template>

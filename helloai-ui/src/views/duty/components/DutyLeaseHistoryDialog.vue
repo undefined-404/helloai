@@ -9,35 +9,77 @@
     @close="$emit('close')"
   >
     <el-table
+      v-loading="loading"
       :data="list"
       border
       stripe
-      v-loading="loading"
       style="width: 100%"
       empty-text="暂无打卡记录"
     >
-      <el-table-column prop="id" label="记录 ID" width="120" />
-      <el-table-column prop="sessionId" label="会话" min-width="180" show-overflow-tooltip />
-      <el-table-column prop="workMode" label="模式" width="90" />
-      <el-table-column label="状态" width="100">
+      <el-table-column
+        prop="id"
+        label="记录 ID"
+        width="120"
+      />
+      <el-table-column
+        prop="sessionId"
+        label="会话"
+        min-width="180"
+        show-overflow-tooltip
+      />
+      <el-table-column
+        prop="workMode"
+        label="模式"
+        width="90"
+      />
+      <el-table-column
+        label="状态"
+        width="100"
+      >
         <template #default="{ row }: { row: DutyLeaseResponse }">
-          <el-tag :type="DUTY_LEASE_STATUS_MAP[row.status]?.type || 'info'" size="small">
+          <el-tag
+            :type="DUTY_LEASE_STATUS_MAP[row.status]?.type || 'info'"
+            size="small"
+          >
             {{ DUTY_LEASE_STATUS_MAP[row.status]?.label || row.status }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="上班时间" width="160">
-        <template #default="{ row }">{{ fmtTime(row.startedAt) }}</template>
-      </el-table-column>
-      <el-table-column label="续约时间" width="160">
-        <template #default="{ row }">{{ fmtTime(row.lastRenewedAt) }}</template>
-      </el-table-column>
-      <el-table-column label="超时时间" width="160">
-        <template #default="{ row }">{{ fmtTime(row.expiresAt) }}</template>
-      </el-table-column>
-      <el-table-column prop="closeReason" label="关闭原因" min-width="140" show-overflow-tooltip>
+      <el-table-column
+        label="上班时间"
+        width="160"
+      >
         <template #default="{ row }">
-          <span v-if="!row.closeReason" class="muted">—</span>
+          {{ fmtTime(row.startedAt) }}
+        </template>
+      </el-table-column>
+      <el-table-column
+        label="续约时间"
+        width="160"
+      >
+        <template #default="{ row }">
+          {{ fmtTime(row.lastRenewedAt) }}
+        </template>
+      </el-table-column>
+      <el-table-column
+        label="超时时间"
+        width="160"
+      >
+        <template #default="{ row }">
+          {{ fmtTime(row.expiresAt) }}
+        </template>
+      </el-table-column>
+      <el-table-column
+        prop="closeReason"
+        label="关闭原因"
+        min-width="140"
+        show-overflow-tooltip
+      >
+        <template #default="{ row }">
+          <span
+            v-if="!row.closeReason"
+            class="muted"
+          >—</span>
           <span v-else>{{ row.closeReason }}</span>
         </template>
       </el-table-column>
@@ -49,8 +91,8 @@
       :total="total"
       :page-size="pageSize"
       :current-page="currentPage"
-      @current-change="load"
       style="margin-top: 16px; justify-content: center"
+      @current-change="load"
     />
   </el-dialog>
 </template>

@@ -12,13 +12,27 @@
       <p style="font-size:14px;color:var(--ha-ink);margin:0 0 12px">
         此操作不可撤销。将级联清理以下关联数据：
       </p>
-      <div class="delete-counts" v-if="counts">
-        <div class="count-row"><span>子任务</span><strong>{{ counts.subTaskCount }}</strong></div>
-        <div class="count-row"><span>审查记录</span><strong>{{ counts.reviewCount }}</strong></div>
-        <div class="count-row"><span>积分流水</span><strong>{{ counts.rewardCount }}</strong></div>
-        <div class="count-row"><span>活动日志</span><strong>{{ counts.activityCount }}</strong></div>
+      <div
+        v-if="counts"
+        class="delete-counts"
+      >
+        <div class="count-row">
+          <span>子任务</span><strong>{{ counts.subTaskCount }}</strong>
+        </div>
+        <div class="count-row">
+          <span>审查记录</span><strong>{{ counts.reviewCount }}</strong>
+        </div>
+        <div class="count-row">
+          <span>积分流水</span><strong>{{ counts.rewardCount }}</strong>
+        </div>
+        <div class="count-row">
+          <span>活动日志</span><strong>{{ counts.activityCount }}</strong>
+        </div>
       </div>
-      <p v-else-if="!loadingCounts" style="font-size:13px;color:var(--ha-ink-secondary);margin:0">
+      <p
+        v-else-if="!loadingCounts"
+        style="font-size:13px;color:var(--ha-ink-secondary);margin:0"
+      >
         关联数据统计加载失败，不影响删除操作
       </p>
       <p style="font-size:13px;color:var(--ha-danger);margin:12px 0 0">
@@ -30,14 +44,24 @@
           placeholder="输入名称确认"
           :class="{ 'is-error': confirmError }"
         />
-        <el-button plain @click="fillConfirm">一键填入</el-button>
+        <el-button
+          plain
+          @click="fillConfirm"
+        >
+          一键填入
+        </el-button>
       </div>
-      <p v-if="confirmError" style="color:var(--ha-danger);font-size:12px;margin:4px 0 0">
+      <p
+        v-if="confirmError"
+        style="color:var(--ha-danger);font-size:12px;margin:4px 0 0"
+      >
         名称不匹配
       </p>
     </div>
     <template #footer>
-      <el-button @click="visible = false">取消</el-button>
+      <el-button @click="visible = false">
+        取消
+      </el-button>
       <el-button
         type="danger"
         :loading="deleting"

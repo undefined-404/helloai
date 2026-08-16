@@ -6,29 +6,84 @@
           <span>子任务列表</span>
           <div class="header-actions">
             <!-- 按主任务过滤时提供列表/依赖图双视图切换 -->
-            <el-radio-group v-if="taskId" v-model="viewMode" size="small" style="margin-right:8px">
-              <el-radio-button value="list">列表</el-radio-button>
-              <el-radio-button value="dag">依赖图</el-radio-button>
-              <el-radio-button value="iter">执行迭代</el-radio-button>
+            <el-radio-group
+              v-if="taskId"
+              v-model="viewMode"
+              size="small"
+              style="margin-right:8px"
+            >
+              <el-radio-button value="list">
+                列表
+              </el-radio-button>
+              <el-radio-button value="dag">
+                依赖图
+              </el-radio-button>
+              <el-radio-button value="iter">
+                执行迭代
+              </el-radio-button>
             </el-radio-group>
-            <el-select v-model="statusFilter" placeholder="状态筛选" clearable style="width:140px;margin-right:8px" @change="load(1)">
-              <el-option v-for="[k,v] in Object.entries(SUB_TASK_STATUS_MAP)" :key="k" :label="v.label" :value="k" />
+            <el-select
+              v-model="statusFilter"
+              placeholder="状态筛选"
+              clearable
+              style="width:140px;margin-right:8px"
+              @change="load(1)"
+            >
+              <el-option
+                v-for="[k,v] in Object.entries(SUB_TASK_STATUS_MAP)"
+                :key="k"
+                :label="v.label"
+                :value="k"
+              />
             </el-select>
-            <el-button size="small" type="primary" style="margin-right:8px" @click="dispatchVisible = true">快速派发</el-button>
-            <el-button size="small" type="primary" @click="load(currentPage)">刷新</el-button>
+            <el-button
+              size="small"
+              type="primary"
+              style="margin-right:8px"
+              @click="dispatchVisible = true"
+            >
+              快速派发
+            </el-button>
+            <el-button
+              size="small"
+              type="primary"
+              @click="load(currentPage)"
+            >
+              刷新
+            </el-button>
           </div>
         </div>
       </template>
       <!-- 主任务信息条：从任务管理页携带 taskId 跳转时展示归属主任务，并可清除筛选 -->
-      <el-alert v-if="taskId" type="info" :closable="false" class="parent-task-bar">
+      <el-alert
+        v-if="taskId"
+        type="info"
+        :closable="false"
+        class="parent-task-bar"
+      >
         <template #title>
           <span class="parent-task-title">
-            当前主任务：<span class="link-cell" :title="parentTask?.title || ('跳转到主任务 ' + taskId)" @click="goParentTaskById(taskId)">{{ parentTask?.title || taskId }}</span>
-            <el-tag v-if="parentTask" :type="parentTask.status === 'DONE' ? 'success' : 'warning'" size="small" style="margin-left:8px">
+            当前主任务：<span
+              class="link-cell"
+              :title="parentTask?.title || ('跳转到主任务 ' + taskId)"
+              @click="goParentTaskById(taskId)"
+            >{{ parentTask?.title || taskId }}</span>
+            <el-tag
+              v-if="parentTask"
+              :type="parentTask.status === 'DONE' ? 'success' : 'warning'"
+              size="small"
+              style="margin-left:8px"
+            >
               {{ parentTask.status }}
             </el-tag>
           </span>
-          <el-button link type="primary" @click="clearTaskFilter">查看全部子任务</el-button>
+          <el-button
+            link
+            type="primary"
+            @click="clearTaskFilter"
+          >
+            查看全部子任务
+          </el-button>
         </template>
       </el-alert>
       <!-- 依赖图视图：拓扑分层流水线（同批可并行），点击节点跳详情 -->
@@ -46,133 +101,299 @@
         @backfill="handleBackfillIterations"
       />
       <template v-else>
-      <el-table :data="displayList" border stripe v-loading="loading" style="width:100%">
-        <el-table-column label="标题" min-width="200" show-overflow-tooltip>
-          <template #default="{ row }">
-            <!-- 拓扑序号小徽标：与依赖列/依赖图 #序号 同口径，仅按主任务过滤时展示 -->
-            <span v-if="taskId && seqMap.get(String(row.id))" class="seq-badge">#{{ seqMap.get(String(row.id)) }}</span>
-            <span class="link-cell" :title="row.title" @click="router.push('/sub-tasks/' + row.id)">{{ row.title }}</span>
-          </template>
-        </el-table-column>
-        <!-- 未按主任务过滤时展示归属任务，避免与顶部信息条重复 -->
-        <el-table-column v-if="!taskId" label="所属任务" min-width="160" show-overflow-tooltip>
-          <template #default="{ row }">
-            <span class="link-cell" @click="goParentTask(row)">{{ row.taskTitle || '-' }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" width="100">
-          <template #default="{ row }">
-            <el-tag :type="getSubTaskStatusMeta(row.status)?.type || 'info'" size="small">
-              {{ getSubTaskStatusMeta(row.status)?.label || row.status }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <!-- 按主任务过滤时展示前置依赖（可点击跳依赖项详情），序号与依赖图/草案审阅一致 -->
-        <el-table-column v-if="taskId" label="依赖" min-width="120">
-          <template #default="{ row }">
-            <template v-if="depItems(row).length">
-              <el-tag
-                v-for="dep in depItems(row)" :key="dep.id"
-                size="small" class="dep-tag" :title="dep.title"
-                @click="goDetail(dep.id)"
-              >#{{ dep.seq }}</el-tag>
+        <el-table
+          v-loading="loading"
+          :data="displayList"
+          border
+          stripe
+          style="width:100%"
+        >
+          <el-table-column
+            label="标题"
+            min-width="200"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">
+              <!-- 拓扑序号小徽标：与依赖列/依赖图 #序号 同口径，仅按主任务过滤时展示 -->
+              <span
+                v-if="taskId && seqMap.get(String(row.id))"
+                class="seq-badge"
+              >#{{ seqMap.get(String(row.id)) }}</span>
+              <span
+                class="link-cell"
+                :title="row.title"
+                @click="router.push('/sub-tasks/' + row.id)"
+              >{{ row.title }}</span>
             </template>
-            <span v-else>-</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="评分" width="80">
-          <template #default="{ row }">
-            <el-tag v-if="row.scoreGrade" :type="SCORE_GRADE_MAP[row.scoreGrade]?.type || 'info'" size="small">
-              {{ SCORE_GRADE_MAP[row.scoreGrade]?.label || row.scoreGrade }}
-            </el-tag>
-            <span v-else>-</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="负责人" min-width="100">
-          <template #default="{ row }">{{ row.assignedAgentName || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="创建时间" width="170">
-          <template #default="{ row }">{{ fmtTime(row.createTime) }}</template>
-        </el-table-column>
-        <el-table-column label="操作" :width="ACTION.THREE" fixed="right">
-          <template #default="{ row }">
-            <div class="action-cell">
-              <el-button size="small" @click="router.push('/sub-tasks/' + row.id)">详情</el-button>
-              <el-button v-if="row.status==='PENDING'" size="small" type="primary" @click="handleClaim(row)">认领</el-button>
-              <el-button v-if="row.status==='IN_PROGRESS'" size="small" type="warning" @click="handlePause(row)">暂停</el-button>
-              <el-button v-if="row.status==='PAUSED'" size="small" type="success" @click="handleResume(row)">恢复</el-button>
-              <!-- V25 死信人工兜底：重新指派给指定 Agent（DEAD_LETTER → ASSIGNED） -->
-              <el-button v-if="row.status==='DEAD_LETTER'" size="small" type="danger" @click="handleRedispatch(row)">重新指派</el-button>
-              <!-- BLOCKED 阻塞子任务：重新调度（reset → PENDING 后交调度链） -->
-              <el-button v-if="row.status==='BLOCKED'" size="small" type="warning" @click="handleReassign(row)">重新调度</el-button>
-            </div>
-          </template>
-        </el-table-column>
-      </el-table>
-      <el-empty v-if="!list.length && !loading" description="暂无子任务" />
-      <el-pagination
-        v-if="total > 0" background layout="prev, pager, next"
-        :total="total" :page-size="pageSize" :current-page="currentPage"
-        @current-change="loadPage" style="margin-top:16px;text-align:center"
-      />
+          </el-table-column>
+          <!-- 未按主任务过滤时展示归属任务，避免与顶部信息条重复 -->
+          <el-table-column
+            v-if="!taskId"
+            label="所属任务"
+            min-width="160"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">
+              <span
+                class="link-cell"
+                @click="goParentTask(row)"
+              >{{ row.taskTitle || '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column
+            label="状态"
+            width="100"
+          >
+            <template #default="{ row }">
+              <el-tag
+                :type="getSubTaskStatusMeta(row.status)?.type || 'info'"
+                size="small"
+              >
+                {{ getSubTaskStatusMeta(row.status)?.label || row.status }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <!-- 按主任务过滤时展示前置依赖（可点击跳依赖项详情），序号与依赖图/草案审阅一致 -->
+          <el-table-column
+            v-if="taskId"
+            label="依赖"
+            min-width="120"
+          >
+            <template #default="{ row }">
+              <template v-if="depItems(row).length">
+                <el-tag
+                  v-for="dep in depItems(row)"
+                  :key="dep.id"
+                  size="small"
+                  class="dep-tag"
+                  :title="dep.title"
+                  @click="goDetail(dep.id)"
+                >
+                  #{{ dep.seq }}
+                </el-tag>
+              </template>
+              <span v-else>-</span>
+            </template>
+          </el-table-column>
+          <el-table-column
+            label="评分"
+            width="80"
+          >
+            <template #default="{ row }">
+              <el-tag
+                v-if="row.scoreGrade"
+                :type="SCORE_GRADE_MAP[row.scoreGrade]?.type || 'info'"
+                size="small"
+              >
+                {{ SCORE_GRADE_MAP[row.scoreGrade]?.label || row.scoreGrade }}
+              </el-tag>
+              <span v-else>-</span>
+            </template>
+          </el-table-column>
+          <el-table-column
+            label="负责人"
+            min-width="100"
+          >
+            <template #default="{ row }">
+              {{ row.assignedAgentName || '-' }}
+            </template>
+          </el-table-column>
+          <el-table-column
+            label="创建时间"
+            width="170"
+          >
+            <template #default="{ row }">
+              {{ fmtTime(row.createTime) }}
+            </template>
+          </el-table-column>
+          <el-table-column
+            label="操作"
+            :width="ACTION.THREE"
+            fixed="right"
+          >
+            <template #default="{ row }">
+              <div class="action-cell">
+                <el-button
+                  size="small"
+                  @click="router.push('/sub-tasks/' + row.id)"
+                >
+                  详情
+                </el-button>
+                <el-button
+                  v-if="row.status==='PENDING'"
+                  size="small"
+                  type="primary"
+                  @click="handleClaim(row)"
+                >
+                  认领
+                </el-button>
+                <el-button
+                  v-if="row.status==='IN_PROGRESS'"
+                  size="small"
+                  type="warning"
+                  @click="handlePause(row)"
+                >
+                  暂停
+                </el-button>
+                <el-button
+                  v-if="row.status==='PAUSED'"
+                  size="small"
+                  type="success"
+                  @click="handleResume(row)"
+                >
+                  恢复
+                </el-button>
+                <!-- V25 死信人工兜底：重新指派给指定 Agent（DEAD_LETTER → ASSIGNED） -->
+                <el-button
+                  v-if="row.status==='DEAD_LETTER'"
+                  size="small"
+                  type="danger"
+                  @click="handleRedispatch(row)"
+                >
+                  重新指派
+                </el-button>
+                <!-- BLOCKED 阻塞子任务：重新调度（reset → PENDING 后交调度链） -->
+                <el-button
+                  v-if="row.status==='BLOCKED'"
+                  size="small"
+                  type="warning"
+                  @click="handleReassign(row)"
+                >
+                  重新调度
+                </el-button>
+              </div>
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-empty
+          v-if="!list.length && !loading"
+          description="暂无子任务"
+        />
+        <el-pagination
+          v-if="total > 0"
+          background
+          layout="prev, pager, next"
+          :total="total"
+          :page-size="pageSize"
+          :current-page="currentPage"
+          style="margin-top:16px;text-align:center"
+          @current-change="loadPage"
+        />
       </template>
 
       <!-- 认领弹窗 -->
-      <el-dialog v-model="claimDialog.visible" title="认领子任务" width="420px" top="5vh" append-to-body>
+      <el-dialog
+        v-model="claimDialog.visible"
+        title="认领子任务"
+        width="420px"
+        top="5vh"
+        append-to-body
+      >
         <el-form label-width="100px">
           <el-form-item label="子任务">
             <span>{{ claimDialog.row?.title || '-' }}</span>
           </el-form-item>
           <el-form-item label="认领 Agent">
-            <AgentSelect v-model="claimDialog.agentId" placeholder="选择认领的 Agent" />
+            <AgentSelect
+              v-model="claimDialog.agentId"
+              placeholder="选择认领的 Agent"
+            />
           </el-form-item>
         </el-form>
         <template #footer>
-          <el-button @click="claimDialog.visible = false">取消</el-button>
-          <el-button type="primary" :loading="claimDialog.loading" :disabled="!claimDialog.agentId" @click="doClaim">确认认领</el-button>
+          <el-button @click="claimDialog.visible = false">
+            取消
+          </el-button>
+          <el-button
+            type="primary"
+            :loading="claimDialog.loading"
+            :disabled="!claimDialog.agentId"
+            @click="doClaim"
+          >
+            确认认领
+          </el-button>
         </template>
       </el-dialog>
 
       <!-- 死信重新指派弹窗：复用 AgentSelect 选目标 Agent -->
-      <el-dialog v-model="redispatchDialog.visible" title="死信重新指派" width="420px" top="5vh" append-to-body>
+      <el-dialog
+        v-model="redispatchDialog.visible"
+        title="死信重新指派"
+        width="420px"
+        top="5vh"
+        append-to-body
+      >
         <el-form label-width="100px">
           <el-form-item label="子任务">
             <span>{{ redispatchDialog.row?.title || '-' }}</span>
           </el-form-item>
           <el-form-item label="目标 Agent">
-            <AgentSelect v-model="redispatchDialog.agentId" placeholder="选择重新指派的 Agent" />
+            <AgentSelect
+              v-model="redispatchDialog.agentId"
+              placeholder="选择重新指派的 Agent"
+            />
           </el-form-item>
         </el-form>
         <template #footer>
-          <el-button @click="redispatchDialog.visible = false">取消</el-button>
-          <el-button type="primary" :loading="redispatchDialog.loading" :disabled="!redispatchDialog.agentId" @click="doRedispatch">确认指派</el-button>
+          <el-button @click="redispatchDialog.visible = false">
+            取消
+          </el-button>
+          <el-button
+            type="primary"
+            :loading="redispatchDialog.loading"
+            :disabled="!redispatchDialog.agentId"
+            @click="doRedispatch"
+          >
+            确认指派
+          </el-button>
         </template>
       </el-dialog>
 
       <!-- BLOCKED 重新调度弹窗：选目标 Agent，后端 reset→PENDING 后重新进入调度链 -->
-      <el-dialog v-model="reassignDialog.visible" title="重新调度阻塞子任务" width="420px" top="5vh" append-to-body>
+      <el-dialog
+        v-model="reassignDialog.visible"
+        title="重新调度阻塞子任务"
+        width="420px"
+        top="5vh"
+        append-to-body
+      >
         <el-form label-width="100px">
           <el-form-item label="子任务">
             <span>{{ reassignDialog.row?.title || '-' }}</span>
           </el-form-item>
           <el-form-item label="目标 Agent">
-            <AgentSelect v-model="reassignDialog.agentId" placeholder="选择重新调度的 Agent" />
+            <AgentSelect
+              v-model="reassignDialog.agentId"
+              placeholder="选择重新调度的 Agent"
+            />
           </el-form-item>
         </el-form>
         <template #footer>
-          <el-button @click="reassignDialog.visible = false">取消</el-button>
-          <el-button type="primary" :loading="reassignDialog.loading" :disabled="!reassignDialog.agentId" @click="doReassign">确认重新调度</el-button>
+          <el-button @click="reassignDialog.visible = false">
+            取消
+          </el-button>
+          <el-button
+            type="primary"
+            :loading="reassignDialog.loading"
+            :disabled="!reassignDialog.agentId"
+            @click="doReassign"
+          >
+            确认重新调度
+          </el-button>
         </template>
       </el-dialog>
 
       <!-- M4.5: 快速派发对话框 -->
-      <QuickDispatchDialog v-model="dispatchVisible" @done="load(1)" />
+      <QuickDispatchDialog
+        v-model="dispatchVisible"
+        @done="load(1)"
+      />
     </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, reactive, computed, watch } from 'vue'
+import { ref, onMounted, reactive, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { subTaskApi } from '@/api/subTask'
@@ -185,6 +406,8 @@ import { SUB_TASK_STATUS_MAP, SCORE_GRADE_MAP } from '@/types'
 import { ACTION } from '@/utils/tableConfig'
 import { fmtTime } from '@/utils/tableConfig'
 import { orderByDependency } from '@/utils/subTaskDag'
+import { queryString } from '@/utils/queryParam'
+import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import type { Task, SubTask, SubTaskStatus, TaskIteration } from '@/types'
 
 const route = useRoute()
@@ -197,9 +420,9 @@ const loading = ref(false)
 const statusFilter = ref<SubTaskStatus | ''>('')
 const dispatchVisible = ref(false)
 // 路由 query 中的主任务 ID（LongId 保持 string，不转 Number 防精度丢）
-const taskId = computed(() => (route.query.taskId ? String(route.query.taskId) : ''))
+const taskId = computed(() => queryString(route.query, 'taskId') || '')
 // 路由 query 中的状态筛选（死信池菜单跳 /sub-tasks?status=DEAD_LETTER 复用本页）
-const statusQuery = computed(() => (route.query.status ? String(route.query.status) : ''))
+const statusQuery = computed(() => queryString(route.query, 'status') || '')
 const parentTask = ref<Task | null>(null)
 // 列表/依赖图/执行迭代三视图（仅按主任务过滤时可切换）
 const viewMode = ref<'list' | 'dag' | 'iter'>('list')
@@ -319,7 +542,16 @@ watch(taskId, () => {
   load()
 })
 // 同页面内 status query 变化（子任务菜单 ↔ 死信池菜单切换）时同步筛选并刷新
-watch(statusQuery, (v) => { statusFilter.value = (v as SubTaskStatus) || ''; load(1) })
+watch(statusQuery, (v) => {
+  // 防御：仅在合法 SubTaskStatus 范围内赋值，避免后端不识别枚举值
+  const validStatuses: SubTaskStatus[] = [
+    'PENDING', 'ASSIGNED', 'IN_PROGRESS', 'PAUSED', 'REVIEW',
+    'DONE', 'REWORK', 'BLOCKED', 'CANCELLED', 'DEAD_LETTER',
+    'PENDING_PLAN_REVIEW'
+  ]
+  statusFilter.value = (validStatuses as string[]).includes(v) ? (v as SubTaskStatus) : ''
+  load(1)
+})
 
 const claimDialog = reactive<{ visible: boolean; loading: boolean; agentId: string | number | null; row: SubTask | null }>({
   visible: false, loading: false, agentId: null, row: null,
@@ -405,41 +637,30 @@ async function doReassign() {
 
 function getSubTaskStatusMeta(status: SubTask['status']) { return SUB_TASK_STATUS_MAP[status] }
 
-// step9c：按主任务过滤时 10s 自动轮询刷新依赖图。
-// 限制条件：
-//   - 仅在 viewMode === 'dag' 时轮询（列表/执行迭代不自动刷新）
-//   - 当 fullList 全部 DONE 时自动停止（任务已终结，无新数据）
-let refreshTimer: number | null = null
-function startAutoRefresh() {
-  if (refreshTimer) return
-  refreshTimer = window.setInterval(() => {
-    if (!taskId.value) return
-    if (viewMode.value !== 'dag') return
-    // 所有子任务 DONE → 停止轮询
-    if (fullList.value.length > 0 && fullList.value.every(s => s.status === 'DONE')) {
-      stopAutoRefresh()
-      return
-    }
-    load(currentPage.value)
-  }, 10000)
-}
-function stopAutoRefresh() {
-  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
-}
+// step9c：按主任务过滤时 10s 自动轮询刷新依赖图（限定条件由 useAutoRefresh 内部判断）。
+// 退出页面 / 主任务切换时由 composable 自动停 timer，无需手写 onBeforeUnmount。
+const isDagMode = computed(() => viewMode.value === 'dag')
+const allDone = computed(
+  () => fullList.value.length > 0 && fullList.value.every((s) => s.status === 'DONE')
+)
+useAutoRefresh(() => { load(currentPage.value) }, {
+  intervalMs: 10_000,
+  shouldRun: computed(() => isDagMode.value && !!taskId.value && !allDone.value),
+  key: computed(() => taskId.value || ''),
+  autoStart: true
+})
 
 onMounted(() => {
   // 带筛选跳转（死信池菜单）：先用 query.status 初始化筛选再加载
-  if (statusQuery.value) statusFilter.value = statusQuery.value as SubTaskStatus
+  const initStatus = statusQuery.value
+  const validStatuses: SubTaskStatus[] = [
+    'PENDING', 'ASSIGNED', 'IN_PROGRESS', 'PAUSED', 'REVIEW',
+    'DONE', 'REWORK', 'BLOCKED', 'CANCELLED', 'DEAD_LETTER',
+    'PENDING_PLAN_REVIEW'
+  ]
+  statusFilter.value = (validStatuses as string[]).includes(initStatus) ? (initStatus as SubTaskStatus) : ''
   loadParentTask()
   load()
-  if (taskId.value) startAutoRefresh()
-})
-
-// 离开页面或主任务变化时停掉旧 timer；进入新主任务再起。
-onBeforeUnmount(stopAutoRefresh)
-watch(taskId, (_v, old) => {
-  if (old) stopAutoRefresh()
-  if (taskId.value) startAutoRefresh()
 })
 </script>
 

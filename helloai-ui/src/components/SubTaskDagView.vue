@@ -1,8 +1,19 @@
 <template>
-  <el-empty v-if="!subTasks.length" description="暂无子任务" />
+  <el-empty
+    v-if="!subTasks.length"
+    description="暂无子任务"
+  />
   <!-- 外层横向滚动包裹：批次过多时出现滚动条；表格本体宽度与列数呈正比 -->
-  <div v-else ref="wrapperRef" class="dag-wrapper">
-    <div ref="chartRef" class="dag-chart" :style="{ height: chartHeight + 'px', width: chartWidth + 'px' }" />
+  <div
+    v-else
+    ref="wrapperRef"
+    class="dag-wrapper"
+  >
+    <div
+      ref="chartRef"
+      class="dag-chart"
+      :style="{ height: chartHeight + 'px', width: chartWidth + 'px' }"
+    />
   </div>
 </template>
 

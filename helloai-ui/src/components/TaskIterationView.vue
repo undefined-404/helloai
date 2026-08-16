@@ -1,17 +1,44 @@
 <template>
   <!-- V42 任务执行迭代时间轴 -->
-  <div class="iter-timeline" v-loading="loading || backfilling">
-    <el-empty v-if="!loading && !items.length" description="暂无迭代记录（任务执行后自动回填）">
-      <el-button type="primary" :loading="backfilling" @click="$emit('backfill')">回填历史迭代记录</el-button>
+  <div
+    v-loading="loading || backfilling"
+    class="iter-timeline"
+  >
+    <el-empty
+      v-if="!loading && !items.length"
+      description="暂无迭代记录（任务执行后自动回填）"
+    >
+      <el-button
+        type="primary"
+        :loading="backfilling"
+        @click="$emit('backfill')"
+      >
+        回填历史迭代记录
+      </el-button>
     </el-empty>
     <template v-else>
-      <div v-for="item in items" :key="String(item.id)" class="iter-card">
+      <div
+        v-for="item in items"
+        :key="String(item.id)"
+        class="iter-card"
+      >
         <!-- 头部信息栏 -->
         <div class="iter-head">
           <span class="iter-code">{{ item.taskCode }}</span>
           <span class="iter-name">{{ item.taskName }}</span>
-          <el-tag :type="taskTypeTag(item.taskType)" size="small" class="iter-tag">{{ item.taskType }}</el-tag>
-          <el-tag v-if="item.reviewResult" :type="reviewResultTag(item.reviewResult)" size="small" class="iter-tag">
+          <el-tag
+            :type="taskTypeTag(item.taskType)"
+            size="small"
+            class="iter-tag"
+          >
+            {{ item.taskType }}
+          </el-tag>
+          <el-tag
+            v-if="item.reviewResult"
+            :type="reviewResultTag(item.reviewResult)"
+            size="small"
+            class="iter-tag"
+          >
             {{ item.reviewResult }}
           </el-tag>
           <span class="iter-meta">
@@ -19,41 +46,92 @@
             <template v-if="item.executorAgent"> · {{ item.executorAgent }}</template>
             <template v-if="item.createTime"> · {{ fmtTime(item.createTime) }}</template>
           </span>
-          <el-button link size="small" type="primary" class="iter-toggle" @click="toggleExpand(String(item.id))">
+          <el-button
+            link
+            size="small"
+            type="primary"
+            class="iter-toggle"
+            @click="toggleExpand(String(item.id))"
+          >
             {{ expanded.has(String(item.id)) ? '收起详情' : '查看详情' }}
           </el-button>
         </div>
 
         <!-- V44 执行摘要：始终可见，点击即可 3 秒了解任务结论 -->
-        <div v-if="item.outputSummary" class="iter-summary">
+        <div
+          v-if="item.outputSummary"
+          class="iter-summary"
+        >
           <span class="iter-summary-icon">📝</span>
           <span class="iter-summary-text">{{ item.outputSummary }}</span>
         </div>
 
         <!-- 展开区域：完整产出、需求、驳回 -->
-        <div v-if="expanded.has(String(item.id))" class="iter-body">
+        <div
+          v-if="expanded.has(String(item.id))"
+          class="iter-body"
+        >
           <!-- 当前需求 -->
-          <div v-if="item.currentRequirement" class="iter-section">
-            <div class="iter-section-title">当前需求</div>
-            <div class="iter-text">{{ item.currentRequirement }}</div>
+          <div
+            v-if="item.currentRequirement"
+            class="iter-section"
+          >
+            <div class="iter-section-title">
+              当前需求
+            </div>
+            <div class="iter-text">
+              {{ item.currentRequirement }}
+            </div>
           </div>
 
           <!-- LLM 完整响应 -->
-          <div v-if="item.llmResponse" class="iter-section">
-            <div class="iter-section-title">LLM 完整响应</div>
+          <div
+            v-if="item.llmResponse"
+            class="iter-section"
+          >
+            <div class="iter-section-title">
+              LLM 完整响应
+            </div>
             <div class="iter-markdown-scroll">
               <MarkdownView :content="item.llmResponse" />
             </div>
           </div>
 
           <!-- 驳回历史 -->
-          <div v-if="item.rejectionHistory && item.rejectionHistory.length" class="iter-section">
-            <div class="iter-section-title">驳回记录（{{ item.rejectionHistory.length }} 次）</div>
-            <div v-for="(rj, idx) in item.rejectionHistory" :key="idx" class="iter-rejection">
-              <el-tag size="small" type="danger">驳回 #{{ rj.round || (idx + 1) }}</el-tag>
-              <div v-if="rj.comment" class="iter-text">{{ rj.comment }}</div>
-              <div v-if="rj.issues" class="iter-text iter-issues">{{ rj.issues }}</div>
-              <span v-if="rj.score != null" class="iter-score">评分: {{ rj.score }}</span>
+          <div
+            v-if="item.rejectionHistory && item.rejectionHistory.length"
+            class="iter-section"
+          >
+            <div class="iter-section-title">
+              驳回记录（{{ item.rejectionHistory.length }} 次）
+            </div>
+            <div
+              v-for="(rj, idx) in item.rejectionHistory"
+              :key="idx"
+              class="iter-rejection"
+            >
+              <el-tag
+                size="small"
+                type="danger"
+              >
+                驳回 #{{ rj.round || (idx + 1) }}
+              </el-tag>
+              <div
+                v-if="rj.comment"
+                class="iter-text"
+              >
+                {{ rj.comment }}
+              </div>
+              <div
+                v-if="rj.issues"
+                class="iter-text iter-issues"
+              >
+                {{ rj.issues }}
+              </div>
+              <span
+                v-if="rj.score != null"
+                class="iter-score"
+              >评分: {{ rj.score }}</span>
             </div>
           </div>
         </div>

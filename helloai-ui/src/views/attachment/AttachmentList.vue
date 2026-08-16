@@ -4,36 +4,95 @@
       <template #header>
         <div class="card-header">
           <span>附件管理</span>
-          <el-button size="small" type="primary" @click="load">刷新</el-button>
+          <el-button
+            size="small"
+            type="primary"
+            @click="load"
+          >
+            刷新
+          </el-button>
         </div>
       </template>
-      <div v-loading="loading" class="browser">
-        <el-breadcrumb separator="/" class="crumb">
+      <div
+        v-loading="loading"
+        class="browser"
+      >
+        <el-breadcrumb
+          separator="/"
+          class="crumb"
+        >
           <el-breadcrumb-item>
-            <a class="crumb-link" @click="backTo(0)">全部附件</a>
+            <a
+              class="crumb-link"
+              @click="backTo(0)"
+            >全部附件</a>
           </el-breadcrumb-item>
-          <el-breadcrumb-item v-for="(c, i) in crumbs" :key="i">
-            <a class="crumb-link" @click="backTo(i + 1)">{{ c.name }}</a>
+          <el-breadcrumb-item
+            v-for="(c, i) in crumbs"
+            :key="i"
+          >
+            <a
+              class="crumb-link"
+              @click="backTo(i + 1)"
+            >{{ c.name }}</a>
           </el-breadcrumb-item>
         </el-breadcrumb>
-        <div v-for="(it, i) in view" :key="i" class="row" :class="{ file: it.kind === 'file' }" @click="it.kind === 'dir' ? enter(it) : downloadFile(it.attachment)">
-          <el-icon v-if="it.kind === 'dir'" class="icon dir"><Folder /></el-icon>
-          <el-icon v-else class="icon"><Document /></el-icon>
+        <div
+          v-for="(it, i) in view"
+          :key="i"
+          class="row"
+          :class="{ file: it.kind === 'file' }"
+          @click="it.kind === 'dir' ? enter(it) : downloadFile(it.attachment)"
+        >
+          <el-icon
+            v-if="it.kind === 'dir'"
+            class="icon dir"
+          >
+            <Folder />
+          </el-icon>
+          <el-icon
+            v-else
+            class="icon"
+          >
+            <Document />
+          </el-icon>
           <template v-if="it.kind === 'dir'">
             <span class="name">{{ it.name }}</span>
-            <span v-if="it.idHint" class="hint">{{ it.idHint }}</span>
+            <span
+              v-if="it.idHint"
+              class="hint"
+            >{{ it.idHint }}</span>
             <span class="meta">{{ it.count }} 个附件</span>
           </template>
           <template v-else>
-            <span class="name" :title="it.attachment.storageUrl || it.attachment.fileName">{{ it.attachment.fileName }}</span>
-            <el-tag size="small" :type="it.attachment.status === 'ACTIVE' ? 'success' : 'info'" class="tag">{{ it.attachment.status }}</el-tag>
+            <span
+              class="name"
+              :title="it.attachment.storageUrl || it.attachment.fileName"
+            >{{ it.attachment.fileName }}</span>
+            <el-tag
+              size="small"
+              :type="it.attachment.status === 'ACTIVE' ? 'success' : 'info'"
+              class="tag"
+            >
+              {{ it.attachment.status }}
+            </el-tag>
             <span class="meta">{{ it.attachment.fileType }}</span>
             <span class="meta">{{ formatSize(it.attachment.fileSize) }}</span>
             <span class="meta time">{{ fmtTime(it.attachment.createTime) }}</span>
-            <el-button size="small" type="primary" :loading="downloadingId === it.attachment.id" @click.stop="downloadFile(it.attachment)">下载</el-button>
+            <el-button
+              size="small"
+              type="primary"
+              :loading="downloadingId === it.attachment.id"
+              @click.stop="downloadFile(it.attachment)"
+            >
+              下载
+            </el-button>
           </template>
         </div>
-        <el-empty v-if="!view.length && !loading" description="当前目录无内容" />
+        <el-empty
+          v-if="!view.length && !loading"
+          description="当前目录无内容"
+        />
       </div>
     </el-card>
   </div>

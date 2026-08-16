@@ -1,31 +1,66 @@
 <template>
   <!-- 核验分析：把评审 Agent 返回的 JSON 结构化成非开发者能看懂的卡片 -->
-  <div v-if="verdict" class="verdict">
+  <div
+    v-if="verdict"
+    class="verdict"
+  >
     <div class="verdict-summary">
-      <el-tag :type="verdict.pass ? 'success' : 'danger'" size="small">
+      <el-tag
+        :type="verdict.pass ? 'success' : 'danger'"
+        size="small"
+      >
         {{ verdict.pass ? '核验通过' : '核验未通过' }}
       </el-tag>
-      <el-tag v-if="scoreText" type="warning" size="small" effect="plain">评分 {{ scoreText }}</el-tag>
+      <el-tag
+        v-if="scoreText"
+        type="warning"
+        size="small"
+        effect="plain"
+      >
+        评分 {{ scoreText }}
+      </el-tag>
     </div>
 
-    <div v-if="commentText" class="verdict-field">
-      <div class="verdict-label">总体点评</div>
-      <div class="verdict-value">{{ commentText }}</div>
+    <div
+      v-if="commentText"
+      class="verdict-field"
+    >
+      <div class="verdict-label">
+        总体点评
+      </div>
+      <div class="verdict-value">
+        {{ commentText }}
+      </div>
     </div>
 
-    <div v-if="issuesText" class="verdict-field">
-      <div class="verdict-label">发现的问题</div>
-      <div class="verdict-value verdict-issues">{{ issuesText }}</div>
+    <div
+      v-if="issuesText"
+      class="verdict-field"
+    >
+      <div class="verdict-label">
+        发现的问题
+      </div>
+      <div class="verdict-value verdict-issues">
+        {{ issuesText }}
+      </div>
     </div>
 
-    <div v-if="analysisText" class="verdict-field">
-      <div class="verdict-label">详细分析</div>
+    <div
+      v-if="analysisText"
+      class="verdict-field"
+    >
+      <div class="verdict-label">
+        详细分析
+      </div>
       <MarkdownView :content="analysisText" />
     </div>
   </div>
 
   <!-- 解析失败（非评审 JSON）时降级为普通 Markdown 渲染 -->
-  <MarkdownView v-else :content="content" />
+  <MarkdownView
+    v-else
+    :content="content"
+  />
 </template>
 
 <script setup lang="ts">

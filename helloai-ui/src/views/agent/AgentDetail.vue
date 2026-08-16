@@ -1,8 +1,17 @@
 <template>
-  <div class="page" v-loading="loading">
+  <div
+    v-loading="loading"
+    class="page"
+  >
     <!-- 返回 -->
     <div class="back-bar">
-      <el-button text :icon="ArrowLeft" @click="$router.push('/agents')">返回列表</el-button>
+      <el-button
+        text
+        :icon="ArrowLeft"
+        @click="$router.push('/agents')"
+      >
+        返回列表
+      </el-button>
     </div>
 
     <template v-if="agent">
@@ -10,11 +19,21 @@
       <div class="detail-card header-card">
         <div class="header-top">
           <div class="header-info">
-            <h2 class="detail-name">{{ agent.name }}</h2>
-            <p class="detail-desc">{{ agent.description || agent.remark || '暂无描述' }}</p>
+            <h2 class="detail-name">
+              {{ agent.name }}
+            </h2>
+            <p class="detail-desc">
+              {{ agent.description || agent.remark || '暂无描述' }}
+            </p>
             <div class="detail-tags">
-              <span class="tag-role" :style="roleStyle">{{ roleLabel(agent.role) }}</span>
-              <el-tag :type="agent.status === 'ACTIVE' ? 'success' : 'info'" size="small">
+              <span
+                class="tag-role"
+                :style="roleStyle"
+              >{{ roleLabel(agent.role) }}</span>
+              <el-tag
+                :type="agent.status === 'ACTIVE' ? 'success' : 'info'"
+                size="small"
+              >
                 {{ agent.status === 'ACTIVE' ? '已注册' : '已注销' }}
               </el-tag>
             </div>
@@ -47,118 +66,264 @@
         <div class="detail-card">
           <div class="card-subtitle">
             工作量
-            <el-button size="small" text style="margin-left:auto" @click="$router.push(`/sub-tasks?agent=${agent.id}`)">
+            <el-button
+              size="small"
+              text
+              style="margin-left:auto"
+              @click="$router.push(`/sub-tasks?agent=${agent.id}`)"
+            >
               查看子任务 →
             </el-button>
           </div>
           <div class="workload-grid">
-            <div class="wl-item"><span class="wl-num">{{ agent.assignedCount || 0 }}</span><span class="wl-label">待办</span></div>
-            <div class="wl-item"><span class="wl-num">{{ agent.inProgressCount || 0 }}</span><span class="wl-label">执行中</span></div>
-            <div class="wl-item"><span class="wl-num">{{ agent.doneCount || 0 }}</span><span class="wl-label">已完成</span></div>
-            <div class="wl-item"><span class="wl-num">{{ agent.blockedCount || 0 }}</span><span class="wl-label">阻塞</span></div>
-            <div class="wl-item"><span class="wl-num">{{ agent.reviewCount || 0 }}</span><span class="wl-label">待审查</span></div>
+            <div class="wl-item">
+              <span class="wl-num">{{ agent.assignedCount || 0 }}</span><span class="wl-label">待办</span>
+            </div>
+            <div class="wl-item">
+              <span class="wl-num">{{ agent.inProgressCount || 0 }}</span><span class="wl-label">执行中</span>
+            </div>
+            <div class="wl-item">
+              <span class="wl-num">{{ agent.doneCount || 0 }}</span><span class="wl-label">已完成</span>
+            </div>
+            <div class="wl-item">
+              <span class="wl-num">{{ agent.blockedCount || 0 }}</span><span class="wl-label">阻塞</span>
+            </div>
+            <div class="wl-item">
+              <span class="wl-num">{{ agent.reviewCount || 0 }}</span><span class="wl-label">待审查</span>
+            </div>
           </div>
         </div>
 
         <div class="detail-card">
-          <div class="card-subtitle">时间线</div>
+          <div class="card-subtitle">
+            时间线
+          </div>
           <div class="timeline-list">
-            <div class="tl-row"><span class="tl-label">注册时间</span><span>{{ agent.createdAt || '-' }}</span></div>
-            <div class="tl-row"><span class="tl-label">最后活动</span><span>{{ agent.lastActivityAt || '-' }}</span></div>
-            <div class="tl-row"><span class="tl-label">Agent ID</span><code style="font-size:11px">{{ agent.id }}</code></div>
-            <div class="tl-row"><span class="tl-label">API Key</span><code style="font-size:11px">{{ agent.apiKey ? agent.apiKey.substring(0, 12) + '...' : '-' }}</code></div>
+            <div class="tl-row">
+              <span class="tl-label">注册时间</span><span>{{ agent.createdAt || '-' }}</span>
+            </div>
+            <div class="tl-row">
+              <span class="tl-label">最后活动</span><span>{{ agent.lastActivityAt || '-' }}</span>
+            </div>
+            <div class="tl-row">
+              <span class="tl-label">Agent ID</span><code style="font-size:11px">{{ agent.id }}</code>
+            </div>
+            <div class="tl-row">
+              <span class="tl-label">API Key</span><code style="font-size:11px">{{ agent.apiKey ? agent.apiKey.substring(0, 12) + '...' : '-' }}</code>
+            </div>
           </div>
         </div>
       </div>
 
       <!-- 操作 -->
       <div class="detail-card">
-        <div class="card-subtitle">操作</div>
+        <div class="card-subtitle">
+          操作
+        </div>
         <div class="ops-row">
-          <el-button @click="openEdit">编辑信息</el-button>
-          <el-button :type="agent.status === 'ACTIVE' ? 'warning' : 'success'" @click="openToggleStatus">
+          <el-button @click="openEdit">
+            编辑信息
+          </el-button>
+          <el-button
+            :type="agent.status === 'ACTIVE' ? 'warning' : 'success'"
+            @click="openToggleStatus"
+          >
             {{ agent.status === 'ACTIVE' ? '注销' : '恢复注册' }}
           </el-button>
           <!-- 内部 LLM Agent 无 CLI 接入流程，不展示接入内容入口 -->
-          <el-button v-if="agent.accessType !== 'API_KEY_LLM'" type="primary" plain @click="openOnboarding">生成接入内容</el-button>
-          <el-button type="primary" @click="handleResetKey">重置 API Key</el-button>
-          <el-button type="danger" @click="openDelete">删除 Agent</el-button>
+          <el-button
+            v-if="agent.accessType !== 'API_KEY_LLM'"
+            type="primary"
+            plain
+            @click="openOnboarding"
+          >
+            生成接入内容
+          </el-button>
+          <el-button
+            type="primary"
+            @click="handleResetKey"
+          >
+            重置 API Key
+          </el-button>
+          <el-button
+            type="danger"
+            @click="openDelete"
+          >
+            删除 Agent
+          </el-button>
         </div>
       </div>
 
       <!-- 积分明细 -->
       <div class="detail-card">
-        <div class="card-subtitle">积分明细</div>
-        <el-table :data="scoreList" border stripe style="width:100%" v-loading="scoreLoading">
-          <el-table-column prop="reason" label="原因" min-width="200" show-overflow-tooltip />
-          <el-table-column label="变动" width="100">
+        <div class="card-subtitle">
+          积分明细
+        </div>
+        <el-table
+          v-loading="scoreLoading"
+          :data="scoreList"
+          border
+          stripe
+          style="width:100%"
+        >
+          <el-table-column
+            prop="reason"
+            label="原因"
+            min-width="200"
+            show-overflow-tooltip
+          />
+          <el-table-column
+            label="变动"
+            width="100"
+          >
             <template #default="{ row }">
               <span :style="{ color: row.delta > 0 ? 'var(--ha-success)' : 'var(--ha-danger)', fontWeight:'600' }">
                 {{ row.delta > 0 ? '+' : '' }}{{ row.delta }}
               </span>
             </template>
           </el-table-column>
-          <el-table-column prop="balance" label="余额" width="80" />
-          <el-table-column prop="createTime" label="时间" width="170" />
+          <el-table-column
+            prop="balance"
+            label="余额"
+            width="80"
+          />
+          <el-table-column
+            prop="createTime"
+            label="时间"
+            width="170"
+          />
         </el-table>
         <el-pagination
           v-if="scoreTotal > scorePageSize"
-          layout="prev, pager, next" background size="small"
-          :total="scoreTotal" :page-size="scorePageSize"
-          @current-change="loadScoreLogs"
+          layout="prev, pager, next"
+          background
+          size="small"
+          :total="scoreTotal"
+          :page-size="scorePageSize"
           style="margin-top:12px;justify-content:center"
+          @current-change="loadScoreLogs"
         />
-        <el-empty v-if="!scoreLoading && scoreList.length === 0" description="暂无积分记录" :image-size="60" />
+        <el-empty
+          v-if="!scoreLoading && scoreList.length === 0"
+          description="暂无积分记录"
+          :image-size="60"
+        />
       </div>
 
       <!-- 活动日志 -->
       <div class="detail-card">
-        <div class="card-subtitle">活动日志</div>
-        <el-table :data="activityList" border stripe style="width:100%" v-loading="activityLoading">
-          <el-table-column prop="action" label="动作" min-width="160" show-overflow-tooltip />
-          <el-table-column prop="level" label="级别" width="80">
+        <div class="card-subtitle">
+          活动日志
+        </div>
+        <el-table
+          v-loading="activityLoading"
+          :data="activityList"
+          border
+          stripe
+          style="width:100%"
+        >
+          <el-table-column
+            prop="action"
+            label="动作"
+            min-width="160"
+            show-overflow-tooltip
+          />
+          <el-table-column
+            prop="level"
+            label="级别"
+            width="80"
+          >
             <template #default="{ row }">
-              <el-tag v-if="row.level === 'ERROR'" size="small" type="danger">ERROR</el-tag>
-              <el-tag v-else-if="row.level === 'WARN'" size="small" type="warning">WARN</el-tag>
+              <el-tag
+                v-if="row.level === 'ERROR'"
+                size="small"
+                type="danger"
+              >
+                ERROR
+              </el-tag>
+              <el-tag
+                v-else-if="row.level === 'WARN'"
+                size="small"
+                type="warning"
+              >
+                WARN
+              </el-tag>
               <span v-else>-</span>
             </template>
           </el-table-column>
-          <el-table-column prop="createTime" label="时间" width="170" />
+          <el-table-column
+            prop="createTime"
+            label="时间"
+            width="170"
+          />
         </el-table>
         <el-pagination
           v-if="activityTotal > activityPageSize"
-          layout="prev, pager, next" background size="small"
-          :total="activityTotal" :page-size="activityPageSize"
-          @current-change="loadActivityLogs"
+          layout="prev, pager, next"
+          background
+          size="small"
+          :total="activityTotal"
+          :page-size="activityPageSize"
           style="margin-top:12px;justify-content:center"
+          @current-change="loadActivityLogs"
         />
-        <el-empty v-if="!activityLoading && activityList.length === 0" description="暂无活动记录" :image-size="60" />
+        <el-empty
+          v-if="!activityLoading && activityList.length === 0"
+          description="暂无活动记录"
+          :image-size="60"
+        />
       </div>
     </template>
 
     <!-- 编辑弹窗 -->
-    <AgentEditDialog v-model="editDialog" :agent="editAgentData" @saved="loadDetail" />
+    <AgentEditDialog
+      v-model="editDialog"
+      :agent="editAgentData"
+      @saved="loadDetail"
+    />
 
     <!-- 状态切换 -->
-    <AgentStatusDialog v-model="statusDialog" :agent="statusAgentData" @done="loadDetail" />
+    <AgentStatusDialog
+      v-model="statusDialog"
+      :agent="statusAgentData"
+      @done="loadDetail"
+    />
 
     <!-- 删除确认 -->
-    <AgentDeleteDialog v-model="deleteDialog" :agent="deleteAgentData" @done="handleDeleted" />
+    <AgentDeleteDialog
+      v-model="deleteDialog"
+      :agent="deleteAgentData"
+      @done="handleDeleted"
+    />
 
     <!-- 重置 Key 结果 -->
-    <el-dialog v-model="keyDialog" title="新 API Key" width="480px" top="10vh" append-to-body>
+    <el-dialog
+      v-model="keyDialog"
+      title="新 API Key"
+      width="480px"
+      top="10vh"
+      append-to-body
+    >
       <p style="font-size:13px;color:var(--ha-warning);margin:0 0 8px">
         此 Key 仅显示一次，请立即复制保存。
       </p>
-      <el-input v-model="newApiKey" readonly>
+      <el-input
+        v-model="newApiKey"
+        readonly
+      >
         <template #append>
-          <el-button @click="copyKey">复制</el-button>
+          <el-button @click="copyKey">
+            复制
+          </el-button>
         </template>
       </el-input>
     </el-dialog>
 
     <!-- 接入内容生成弹窗 -->
-    <AgentOnboardingDialog v-model="onboardingDialog" :agent-id="agent?.id || null" />
+    <AgentOnboardingDialog
+      v-model="onboardingDialog"
+      :agent-id="agent?.id || null"
+    />
   </div>
 </template>
 

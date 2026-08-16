@@ -7,27 +7,58 @@
     append-to-body
     @close="$emit('close')"
   >
-    <el-form ref="formRef" :model="form" :rules="rules" label-width="80px">
-      <el-form-item label="名称" prop="name">
+    <el-form
+      ref="formRef"
+      :model="form"
+      :rules="rules"
+      label-width="80px"
+    >
+      <el-form-item
+        label="名称"
+        prop="name"
+      >
         <el-input v-model="form.name" />
       </el-form-item>
-      <el-form-item label="角色" prop="role">
-        <el-select v-model="form.role" style="width:100%">
-          <el-option label="规划者 PLANNER" value="PLANNER" />
-          <el-option label="执行者 EXECUTOR" value="EXECUTOR" />
-          <el-option label="审查者 REVIEWER" value="REVIEWER" />
+      <el-form-item
+        label="角色"
+        prop="role"
+      >
+        <el-select
+          v-model="form.role"
+          style="width:100%"
+        >
+          <el-option
+            label="规划者 PLANNER"
+            value="PLANNER"
+          />
+          <el-option
+            label="执行者 EXECUTOR"
+            value="EXECUTOR"
+          />
+          <el-option
+            label="审查者 REVIEWER"
+            value="REVIEWER"
+          />
         </el-select>
       </el-form-item>
       <el-form-item label="API Key">
-        <el-input :model-value="form.apiKey" readonly>
+        <el-input
+          :model-value="form.apiKey"
+          readonly
+        >
           <template #append>
-            <el-button @click="copyApiKey">复制</el-button>
+            <el-button @click="copyApiKey">
+              复制
+            </el-button>
           </template>
         </el-input>
       </el-form-item>
       <el-form-item label="技能">
         <!-- V52 三段式：模型能力锁定 tag（不可取消，自动并入） -->
-        <div v-if="form.modelType && !skillDegraded" class="skill-cap-row">
+        <div
+          v-if="form.modelType && !skillDegraded"
+          class="skill-cap-row"
+        >
           <el-tag
             v-for="s in skillCap"
             :key="s"
@@ -35,7 +66,9 @@
             type="primary"
             effect="plain"
             disable-transitions
-          >{{ skillLabel(s) }}（模型能力）</el-tag>
+          >
+            {{ skillLabel(s) }}（模型能力）
+          </el-tag>
         </div>
         <el-alert
           v-if="form.modelType && skillDegraded"
@@ -64,15 +97,30 @@
             :title="opt.disabled ? '该模型不支持此技能' : ''"
           />
         </el-select>
-        <div class="field-hint">能力声明，任务「要求技能」按 AND 语义匹配；保存即整体替换</div>
+        <div class="field-hint">
+          能力声明，任务「要求技能」按 AND 语义匹配；保存即整体替换
+        </div>
       </el-form-item>
       <el-form-item label="描述">
-        <el-input v-model="form.remark" type="textarea" :rows="2" placeholder="职责简要" />
+        <el-input
+          v-model="form.remark"
+          type="textarea"
+          :rows="2"
+          placeholder="职责简要"
+        />
       </el-form-item>
     </el-form>
     <template #footer>
-      <el-button @click="visible = false">取消</el-button>
-      <el-button type="primary" :loading="saving" @click="handleSave">保存</el-button>
+      <el-button @click="visible = false">
+        取消
+      </el-button>
+      <el-button
+        type="primary"
+        :loading="saving"
+        @click="handleSave"
+      >
+        保存
+      </el-button>
     </template>
   </el-dialog>
 </template>

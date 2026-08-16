@@ -4,55 +4,114 @@
       <template #header>
         <div class="card-header">
           <span>Agent 打卡上班</span>
-          <el-button size="small" @click="load(currentPage)">刷新</el-button>
+          <el-button
+            size="small"
+            @click="load(currentPage)"
+          >
+            刷新
+          </el-button>
         </div>
       </template>
 
       <!-- Agent 维度表格：每个 Agent 一行，展示最新一条打卡记录 -->
       <el-table
+        v-loading="loading"
         :data="list"
         border
         stripe
-        v-loading="loading"
         style="width: 100%"
         empty-text="暂无打卡记录"
       >
-        <el-table-column label="Agent" min-width="180">
+        <el-table-column
+          label="Agent"
+          min-width="180"
+        >
           <template #default="{ row }">
             <span class="agent-name">{{ row.agentName || '—' }}</span>
             <span class="agent-id">#{{ row.agentId }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="最新状态" width="110">
+        <el-table-column
+          label="最新状态"
+          width="110"
+        >
           <template #default="{ row }: { row: DutyAgentLatestResponse }">
-            <el-tag :type="DUTY_LEASE_STATUS_MAP[row.status]?.type || 'info'" size="small">
+            <el-tag
+              :type="DUTY_LEASE_STATUS_MAP[row.status]?.type || 'info'"
+              size="small"
+            >
               {{ DUTY_LEASE_STATUS_MAP[row.status]?.label || row.status }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="sessionId" label="最新会话" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="workMode" label="模式" width="90" />
-        <el-table-column label="并发上限" width="90" align="center">
+        <el-table-column
+          prop="sessionId"
+          label="最新会话"
+          min-width="180"
+          show-overflow-tooltip
+        />
+        <el-table-column
+          prop="workMode"
+          label="模式"
+          width="90"
+        />
+        <el-table-column
+          label="并发上限"
+          width="90"
+          align="center"
+        >
           <template #default="{ row }">
             <span v-if="row.maxConcurrent == null">—</span>
             <span v-else>{{ row.maxConcurrent }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="上班时间" width="160">
-          <template #default="{ row }">{{ fmtTime(row.startedAt) }}</template>
-        </el-table-column>
-        <el-table-column label="续约时间" width="160">
-          <template #default="{ row }">{{ fmtTime(row.lastRenewedAt) }}</template>
-        </el-table-column>
-        <el-table-column label="超时时间" width="160">
-          <template #default="{ row }">{{ fmtTime(row.expiresAt) }}</template>
-        </el-table-column>
-        <el-table-column label="打卡总数" width="90" align="center">
-          <template #default="{ row }">{{ row.leaseCount }}</template>
-        </el-table-column>
-        <el-table-column label="操作" width="90" fixed="right">
+        <el-table-column
+          label="上班时间"
+          width="160"
+        >
           <template #default="{ row }">
-            <el-button size="small" link type="primary" @click="openHistory(row)">更多</el-button>
+            {{ fmtTime(row.startedAt) }}
+          </template>
+        </el-table-column>
+        <el-table-column
+          label="续约时间"
+          width="160"
+        >
+          <template #default="{ row }">
+            {{ fmtTime(row.lastRenewedAt) }}
+          </template>
+        </el-table-column>
+        <el-table-column
+          label="超时时间"
+          width="160"
+        >
+          <template #default="{ row }">
+            {{ fmtTime(row.expiresAt) }}
+          </template>
+        </el-table-column>
+        <el-table-column
+          label="打卡总数"
+          width="90"
+          align="center"
+        >
+          <template #default="{ row }">
+            {{ row.leaseCount }}
+          </template>
+        </el-table-column>
+        <el-table-column
+          label="操作"
+          width="90"
+          fixed="right"
+        >
+          <template #default="{ row }">
+            <el-button
+              size="small"
+              link
+              type="primary"
+              @click="openHistory(row)"
+            >
+              更多
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -64,8 +123,8 @@
         :total="total"
         :page-size="pageSize"
         :current-page="currentPage"
-        @current-change="load"
         style="margin-top: 16px; text-align: center"
+        @current-change="load"
       />
     </el-card>
 

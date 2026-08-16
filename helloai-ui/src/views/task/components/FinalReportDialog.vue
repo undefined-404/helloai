@@ -27,20 +27,34 @@
     </div>
     <!-- footer 不设关闭按钮（右上角 X 已承担关闭），保持四个动作按钮 -->
     <template #footer>
-      <el-button v-if="report?.content" @click="handleCopy">复制</el-button>
-      <el-button v-if="report?.content" @click="handleExport">导出 .md</el-button>
+      <el-button
+        v-if="report?.content"
+        @click="handleCopy"
+      >
+        复制
+      </el-button>
+      <el-button
+        v-if="report?.content"
+        @click="handleExport"
+      >
+        导出 .md
+      </el-button>
       <el-button
         type="success"
         plain
         :loading="downloading"
         @click="handleDownload"
-      >交付物</el-button>
+      >
+        交付物
+      </el-button>
       <el-button
         type="primary"
         :loading="generating"
         :disabled="task?.status !== 'DONE' || reportGenerating"
         @click="handleGenerate"
-      >{{ reportGenerating ? '生成中…' : (report?.content ? '重新生成' : '生成报告') }}</el-button>
+      >
+        {{ reportGenerating ? '生成中…' : (report?.content ? '重新生成' : '生成报告') }}
+      </el-button>
     </template>
   </el-dialog>
 </template>
@@ -55,7 +69,13 @@ import MarkdownView from '@/components/MarkdownView.vue'
 import type { Task, TaskFinalReport } from '@/types'
 
 const props = defineProps<{ modelValue: boolean; task: Task | null }>()
-const emit = defineEmits<{ 'update:modelValue': [v: boolean] }>()
+// status-change: 把报告生成状态回传父组件，避免直接修改 prop 对象；
+// 父组件 patch 自己 list 里对应行的 finalReportStatus，关闭弹窗后仍能看到。
+type FinalReportStatus = 'NONE' | 'GENERATING' | 'DONE' | 'FAILED'
+const emit = defineEmits<{
+  'update:modelValue': [v: boolean]
+  'status-change': [status: FinalReportStatus]
+}>()
 
 const visible = ref(props.modelValue)
 watch(() => props.modelValue, v => { visible.value = v })
@@ -123,10 +143,10 @@ async function handleGenerate() {
   }
   generating.value = true
   // 同步列表行状态：按钮转"生成中"禁用态（即使关闭弹窗重开也能看到）
-  if (props.task) props.task.finalReportStatus = 'GENERATING'
+  emit('status-change', 'GENERATING')
   try {
     report.value = await taskApi.generateFinalReport(String(props.task.id))
-    if (props.task) props.task.finalReportStatus = 'DONE'
+    emit('status-change', 'DONE')
     ElMessage.success('整合报告生成完成')
   } catch {
     // 拦截器已弹错（非 DONE / 无产出 / LLM 失败由后端 BizException 统一提示）；
