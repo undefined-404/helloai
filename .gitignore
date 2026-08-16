@@ -67,6 +67,8 @@ m5-e2e-psql.log.sql
 tmp/
 .tmp/
 .dbg/
+# --- Qoder IDE 缓存（plans / skills 缓存目录，不入仓） ---
+.qoder/
 # --- Runtime data (ArtifactStorage 本地落盘产出物) ---
 data/
 
