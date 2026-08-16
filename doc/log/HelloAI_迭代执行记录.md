@@ -5383,3 +5383,32 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - 影响：① 方案3 F2 + A0-5 在真实外部 AI 任务上完成实战闭环验证（§6.93 e2e 之外的活体案例，且首次实测 inner-deepseek-pro-reviewer 真实审查）；② uploadArtifact「纯登记、不校验 MinIO 对象存在」语义被内容级核验正确兜住（fail-close 实战价值）；③ 观察项（非 bug）：附件清单「平台可直读」（isContentLoadable 仅查 storageUrl scheme）与正文「内容不可读/为空」并存，对执行者略有误导——Reviewer 判定正确，可选优化为清单标注区分「可直读-已验证」。
 - 遗留：① M5 场景 2 blocked / 3 超时替补 / 4 附件 path / 5 双值班未测；② 本轮无代码改动，文档回填（本条目 + 差距表 N14 + 项目进度 M5）随 F 批次（§6.93 代码）一并 git 提交（含上轮 §6.94 未提交的文档改动）；③ 场景 2 预置脚本 tmp/prepare-scene2.ps1 为临时资产（已登记 agent 凭证，未提交）。
+
+### 6.96 executor SKILL.md 补「值班闭环最小示例（§1.5.7）」（2026-08-16）
+
+#### 1. 范围
+
+- **背景**：Trae 用后体验反馈——文档 §1.3/§1.5 已把「轮询值守协议」讲全（时间轴、两件套、反模式、正模式骨架），但缺一个把「上班 → 轮询 → 收件箱有任务 → 执行 → 提交 → 继续轮询 → 下班」串起来的**完整可照抄示例**；外部 AI 从完整示例学习远比从协议文字快。用户确认有必要加强。
+- **本次落地**：executor SKILL.md 新增 §1.5.7「值班闭环最小示例（可照抄）」（REST 别名通道 PowerShell 一段式脚本 + 照抄要点 5 条）；§1.3 工作循环末尾加指针；§0.1 表注修正（别名通道响应格式失真）。
+- **明确不做**：不改任何 Java 代码；planner SKILL.md 不同步（见遗留①）。
+
+#### 2. 实际落地（契约核对 + 示例修正）
+
+- **示例以服务端真实契约为准**（本机无 Trae 侧 `helloai-register/excutor-poll.ps1`，该目录不在工作区）：核对 `McpController.jsonrpc`（`jsonrpcOk`/`jsonrpcError` 返回 JSON-RPC 原生 `{jsonrpc, result/error, id}`，HTTP 恒 200）与 `tools/list` 11 工具 inputSchema，工具名/参数与 Trae 草稿全部一致。
+- **对 Trae 草稿示例的 5 处契约修正**：
+  1. **ack 顺序**：草稿「先 ack 再 claim」改为 `claimSubTask → 执行 → submitResult → ack`——先 ack 后 claim 时，claim 失败（任务已被抢）或执行中崩溃会让消息提前翻已读、任务丢失；与 §1.3 工作循环顺序一致；
+  2. **error 字段检查**：`Invoke-Tool` 内显式 `if ($r.error) throw`——别名通道失败时 HTTP 仍 200（error 在 body 里），不检查会被当成功吞掉；
+  3. **API Key 占位符**：草稿里的真实 key（`ak_121e...`）不写进仓库文档，改用 `<你的API_KEY>`（与 §认证信息/§三风格一致）；
+  4. **heartbeat onDuty 自检**：每轮心跳后查 `onDuty`，false 即重做 checkIn（A0-8 工具调用自动续约，长任务期间无需手动重签）；
+  5. **reassigned/unassigned 分支**：按 §1.5.1.bis 补「立即停止执行、只 ack」分支，其余类型注释指向 §1.5.1.bis。
+- **§0.1 表注失真修正**：原「REST 直通/别名的响应是 R 包装 {code, msg, data}」与实测矛盾——REST 直通（`/api/mcp/tools/*`）才是 R 包装，REST 别名（`/api/mcp/jsonrpc`）返回 JSON-RPC 原生格式。已按通道区分表述（与 §1.5.7 照抄要点第 1 条互相印证）。
+
+#### 3. 验证结果
+
+- 契约核对：11 工具名/参数与 `McpController.dispatch` + `tools/list` 逐一对上（checkIn/checkOut/heartbeat/pullTasks/ack/claimSubTask/submitResult 等）；响应格式以 `jsonrpcOk`/`jsonrpcError` 实现为准。
+- 文档改动仅 executor SKILL.md（+83 行）与迭代记录本条目；无代码改动，无需编译/测试。
+
+#### 4. 影响与遗留
+
+- 影响：① executor SKILL.md 由「协议完备」升级为「协议 + 可运行示例」双轨，外部 AI（Trae/Qoder）拿到 SKILL 即可照抄值班闭环；② §0.1 三通道响应格式表述与真实实现对齐。
+- 遗留：① planner SKILL.md §1.4(3) 仍保留过时描述「不要走 /api/mcp/jsonrpc 旧 REST 通道，dispatch 不含 checkIn/checkOut」（A0-3 §6.61 后已补齐，与 executor 表述不一致），建议下轮同步修正；② 示例未做真机运行验证（M5 场景 2 起可与 Trae 实测交叉验证）。

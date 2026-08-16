@@ -29,7 +29,8 @@
 > 全平台**三通道工具面已对齐为 11 个执行工具**（A0-3 起 REST 直通补齐 `checkIn`/`checkOut`/`getAgentStatus`，
 > A0-4 新增 `getDepsSummary`，与 MCP SSE、REST 别名 `POST /api/mcp/jsonrpc` 完全一致）。
 > 下表是**权威动作清单**：`scripts/powershell/verify-tool-matrix.ps1` 会把它与服务器 `tools/list` 实时 diff，防再次漂移。
-> 所有请求都带 `Authorization: Bearer <API_KEY>`；REST 直通/别名的响应是 `R` 包装 `{code, msg, data}`，MCP 返回原始 result。
+> 所有请求都带 `Authorization: Bearer <API_KEY>`；REST 直通（`/api/mcp/tools/*`）的响应是 `R` 包装 `{code, msg, data}`，
+> REST 别名（`/api/mcp/jsonrpc`）返回 JSON-RPC 原生 `{jsonrpc, result/error, id}`，MCP 返回原始 result。
 
 ### 0.1 三通道执行工具（11 个，与 tools/list 同名集合一致）
 
@@ -155,6 +156,8 @@
 > ⚠️ **提交不等于下班**：`submitResult` / `ack` 后**必须回到步骤 3 继续心跳轮询**，等待下一单。
 > 提交后静默退出会在 5 分钟内被判 OFFLINE（即使产出合格），后续任务会被重派给其他 Agent；
 > 只有确认要下线时才走「下线清理剧本」（§1.3.bis），不要用"执行完就退"代替正常值守。
+>
+> 💡 完整可照抄示例见 §1.5.7（上班 → 轮询 → 收件箱有任务 → 执行 → 提交 → 继续轮询 → 下班一段式脚本）。
 
 ### 1.3.bis 心跳节拍与下线剧本
 
@@ -302,6 +305,87 @@ while true; do pullTasks; sleep 30; done
 #    }
 # 3) 退出清理（Ctrl+C）：停轮询 -> checkOut -> 关 /mcp/sse
 ```
+
+#### 1.5.7 值班闭环最小示例（可照抄）
+
+> 下面把「上班 → 轮询 → 收件箱有任务 → 执行 → 提交 → 继续轮询 → 下班」串成一段**完整可照抄**的
+> PowerShell 脚本。走 **REST 别名通道 `POST /api/mcp/jsonrpc`**（免 MCP session、无状态同步，任何环境可跑）。
+> 把 `<你的API_KEY>` 换成注册后拿到的 Key、`{{BASE_URL}}` 换成平台地址即可运行；
+> 这是 §1.5.1~§1.5.6 全部规则的落码形态，每一行都与平台实测契约一致。
+
+```powershell
+# HelloAI Executor 值班闭环最小示例（REST 别名通道）
+$ApiKey = '<你的API_KEY>'     # 注册后填入（ak_ 开头）
+$Base   = '{{BASE_URL}}'      # 例如 http://localhost:6565
+$H      = @{ Authorization = "Bearer $ApiKey"; 'Content-Type' = 'application/json' }
+
+function Invoke-Tool([string]$Name, [hashtable]$A = @{}) {
+    $b = @{ jsonrpc = '2.0'; method = 'tools/call'; id = 1
+            params = @{ name = $Name; arguments = $A } } | ConvertTo-Json -Depth 10 -Compress
+    $r = Invoke-RestMethod -Uri "$Base/api/mcp/jsonrpc" -Method Post -Headers $H -Body $b -TimeoutSec 15
+    if ($r.error) { throw ('tool ' + $Name + ' failed: ' + $r.error.message) }   # 失败时 HTTP 仍 200，必须查 error 字段
+    return $r.result
+}
+
+# ① 上班：checkIn 拿 ACTIVE 租约（唯一上岗证明；不打卡直接 pullTasks 会 500「Agent 未在岗」）
+$ci = Invoke-Tool 'checkIn' @{ workMode = 'AUTO'; maxConcurrent = 3; ttlMinutes = 30 }
+Write-Host ('CHECKIN ok leaseId=' + $ci.leaseId)
+
+try {
+    # ② 主循环：每 30s 一轮 = heartbeat（健康证明）+ pullTasks（唯一任务感知通道）
+    while ($true) {
+        $hb = Invoke-Tool 'heartbeat'        # 不心跳 5 分钟 = OFFLINE；任一工具调用会自动续租（§1.2 A0-8）
+        if (-not $hb.onDuty) {               # 租约被关/过期时重新打卡
+            $ci = Invoke-Tool 'checkIn' @{ workMode = 'AUTO'; maxConcurrent = 3; ttlMinutes = 30 }
+            Write-Host ('RE-CHECKIN leaseId=' + $ci.leaseId)
+        }
+
+        $pt = Invoke-Tool 'pullTasks' @{ role = 'EXECUTOR'; max = 20; includeRead = $false }
+        foreach ($m in @($pt.messages)) {    # 收件箱有新消息？
+            if ($m.type -eq 'sub_task.assigned') {
+                # 先认领（原子抢单，抢到才执行），防与同角色 Agent 并发撞车
+                $cl = Invoke-Tool 'claimSubTask' @{ subTaskId = $m.subTaskId }
+                if (-not $cl.claimed) { Write-Host ('SKIP ' + $m.subTaskId + ': ' + $cl.reason) }
+                else {
+                    # ……执行子任务：getDepsSummary 读前置（§4.1-4.3）→ 干活 → 验证（§4.6 清单）……
+                    # ……有产物先 uploadArtifact；产出末尾必须附 EXECUTION_RECORD 块（§4.4）……
+                    Invoke-Tool 'submitResult' @{
+                        subTaskId    = $m.subTaskId
+                        resultId     = ('r-' + $m.subTaskId)   # 重试必须带相同 resultId 保证幂等
+                        success      = $true
+                        output       = '……执行产出，末尾附 ## EXECUTION_RECORD 块（§4.4）……'
+                        finishReason = 'completed'
+                    }
+                }
+            }
+            elseif ($m.type -eq 'sub_task.reassigned' -or $m.type -eq 'sub_task.unassigned') {
+                Write-Host ('STOP ' + $m.subTaskId + ': task moved away')   # 立即停止执行，只 ack（§1.5.1.bis）
+            }
+            # 其余类型（rejected/rework/blocked/review）按 §1.5.1.bis 处理；返工前先 GET /api/reviews 看驳回意见
+
+            Invoke-Tool 'ack' @{ messageId = $m.messageId } | Out-Null   # 处理完毕才 ack；未 ack 下轮会再出现
+        }
+        Start-Sleep -Seconds 30
+    }
+}
+finally {
+    # ③ 下班（Ctrl+C 也会走到这里）：checkOut 关租约，避免残留「在岗」占位影响派单
+    Invoke-Tool 'checkOut' @{ closeReason = 'shutdown' } | Out-Null
+    Write-Host 'CHECKOUT ok -> OFFLINE'
+}
+```
+
+**照抄要点（每一条都是实测契约，不是示意）**：
+
+- **REST 别名响应是 JSON-RPC 原生格式**：成功 `{"jsonrpc":"2.0","result":{...},"id":1}`，失败
+  `{"jsonrpc":"2.0","error":{...},"id":1}`（HTTP 仍是 200）——`Invoke-Tool` 里必须查 `error` 字段，
+  否则错误响应会被当成功吞掉。
+- **顺序不能变**：`claimSubTask` → 执行 → `submitResult` → `ack`。先 ack 后 claim 的话，claim 失败
+  （任务已被抢）或执行中崩溃都会让消息提前翻已读，任务丢失。
+- **ack 在最后**：未 ack 的消息下次 pull 仍会出现（`read=false`）；处理完毕才 ack 是唯一正确的防丢姿势。
+- **heartbeat 每轮必发**：业务调用只刷 last_active_time 不维持在线（§1.4(4)）。
+- **中文乱码排查**：若 pullTasks 返回的 title/summary 中文乱码，是 PS 5.1 响应解码问题，按 §4.5 用
+  `Invoke-WebRequest` + UTF-8 字节解码（messageId/subTaskId/type 等关键字段是 ASCII，不受影响）。
 
 ---
 
