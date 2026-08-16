@@ -13,6 +13,7 @@ import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -170,6 +171,136 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
             throw new BizException("附件不支持平台直读: id=" + id);
         }
         return artifactStorage.load(attachment.getStorageUrl());
+    }
+
+    /**
+     * 浏览器内联预览文件大小上限（5 MiB）。
+     * 经验值：5MB 以下浏览器 iframe / pre 渲染尚可，超过会出现明显卡顿，
+     * 应引导走下载。
+     */
+    private static final long PREVIEW_MAX_SIZE_BYTES = 5L * 1024 * 1024;
+
+    /**
+     * 浏览器可内联预览的 MIME 前缀 / 精确值白名单。
+     * 命中其一即可走 inline 渲染；其余类型统一走下载。
+     */
+    private static final Set<String> PREVIEWABLE_MIME_PREFIXES = Set.of(
+            "text/",
+            "image/",
+            "application/json",
+            "application/xml",
+            "application/yaml"
+    );
+    private static final Set<String> PREVIEWABLE_MIME_EXACT = Set.of(
+            "application/pdf"
+    );
+
+    /**
+     * 推断预览所需 MIME（按 fileName 后缀 → attachment.mimeType → octet-stream）。
+     * 文本类追加 charset=UTF-8，避免浏览器按 GBK 误读中文日志。
+     */
+    @Override
+    public String resolveContentType(Attachment attachment) {
+        if (attachment == null) {
+            return MediaType.APPLICATION_OCTET_STREAM_VALUE;
+        }
+        String byName = detectContentTypeByName(attachment.getFileName());
+        if (byName != null) {
+            return byName;
+        }
+        String stored = attachment.getMimeType();
+        if (stored != null && !stored.isBlank()) {
+            return stored;
+        }
+        return MediaType.APPLICATION_OCTET_STREAM_VALUE;
+    }
+
+    /**
+     * 判定附件是否适合浏览器内联预览。
+     * 必经三关：平台可读 + MIME 命中白名单 + 文件大小未超阈值。
+     */
+    @Override
+    public boolean isPreviewable(Attachment attachment) {
+        if (attachment == null) {
+            return false;
+        }
+        if (!isContentLoadable(attachment)) {
+            return false;
+        }
+        Long size = attachment.getFileSize();
+        if (size != null && size > PREVIEW_MAX_SIZE_BYTES) {
+            return false;
+        }
+        String mime = resolveContentType(attachment);
+        if (mime == null) {
+            return false;
+        }
+        for (String prefix : PREVIEWABLE_MIME_PREFIXES) {
+            if (mime.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return PREVIEWABLE_MIME_EXACT.contains(mime);
+    }
+
+    /**
+     * 按 fileName 后缀推断 MIME（与 {@link com.helloai.core.system.storage.MinioArtifactStorage#detectContentType}
+     * 同步演进，但由 Service 私有持有，避免 Storage 接口被 Controller 侧语义污染）。
+     * 文本类统一追加 charset=UTF-8；识别失败返回 null。
+     */
+    private String detectContentTypeByName(String fileName) {
+        if (fileName == null) {
+            return null;
+        }
+        String lower = fileName.toLowerCase();
+        if (lower.endsWith(".md")) {
+            return "text/markdown;charset=UTF-8";
+        }
+        if (lower.endsWith(".json")) {
+            return "application/json;charset=UTF-8";
+        }
+        if (lower.endsWith(".xml")) {
+            return "application/xml;charset=UTF-8";
+        }
+        if (lower.endsWith(".txt") || lower.endsWith(".log")) {
+            return MediaType.TEXT_PLAIN_VALUE + ";charset=UTF-8";
+        }
+        if (lower.endsWith(".yaml") || lower.endsWith(".yml")) {
+            return "application/yaml;charset=UTF-8";
+        }
+        if (lower.endsWith(".csv")) {
+            return "text/csv;charset=UTF-8";
+        }
+        if (lower.endsWith(".html") || lower.endsWith(".htm")) {
+            return "text/html;charset=UTF-8";
+        }
+        if (lower.endsWith(".png")) {
+            return MediaType.IMAGE_PNG_VALUE;
+        }
+        if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
+            return MediaType.IMAGE_JPEG_VALUE;
+        }
+        if (lower.endsWith(".gif")) {
+            return MediaType.IMAGE_GIF_VALUE;
+        }
+        if (lower.endsWith(".svg")) {
+            // Spring 6.x MediaType 没有 IMAGE_SVG_VALUE 常量，这里直接用字面量
+            return "image/svg+xml";
+        }
+        if (lower.endsWith(".pdf")) {
+            return MediaType.APPLICATION_PDF_VALUE;
+        }
+        // JS 家族源码（.js / .mjs / .cjs / .jsx）：
+        // 统一按 text/javascript 返回，命中 PREVIEWABLE_MIME_PREFIXES 中的 text/ 前缀。
+        if (lower.endsWith(".js") || lower.endsWith(".mjs")
+                || lower.endsWith(".cjs") || lower.endsWith(".jsx")) {
+            return "text/javascript;charset=UTF-8";
+        }
+        // TS 家族源码（.ts / .tsx）：text/typescript 是事实标准，浏览器/编辑器通用识别。
+        if (lower.endsWith(".ts") || lower.endsWith(".tsx")) {
+            return "text/typescript;charset=UTF-8";
+        }
+        return null;
     }
 
     private String detectFileType(String fileName) {

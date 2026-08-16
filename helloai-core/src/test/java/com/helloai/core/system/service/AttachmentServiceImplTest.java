@@ -12,12 +12,14 @@ import com.helloai.core.task.service.TaskService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.MediaType;
 
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -113,5 +115,95 @@ class AttachmentServiceImplTest {
         assertThat(result.get(0).getTaskId()).isNull();
         assertThat(result.get(0).getTaskTitle()).isNull();
         assertThat(result.get(0).getSubTaskTitle()).isNull();
+    }
+
+    @Test
+    @DisplayName("resolveContentType: .txt/.log 应返回 text/plain;charset=UTF-8")
+    void resolveContentType_textLog_shouldReturnTextPlain() {
+        Attachment att = attachment(1L, 100L, "error.log");
+
+        assertThat(service.resolveContentType(att))
+                .isEqualTo(MediaType.TEXT_PLAIN_VALUE + ";charset=UTF-8");
+    }
+
+    @Test
+    @DisplayName("resolveContentType: 未知后缀应回退 attachment.mimeType")
+    void resolveContentType_unknownExt_shouldFallbackToMimeType() {
+        Attachment att = attachment(1L, 100L, "blob.unknown");
+        att.setMimeType("application/x-custom");
+
+        assertThat(service.resolveContentType(att)).isEqualTo("application/x-custom");
+    }
+
+    @Test
+    @DisplayName("resolveContentType: 未知后缀且 mimeType 为空应回退 octet-stream")
+    void resolveContentType_extAndMimeBlank_shouldFallbackOctetStream() {
+        Attachment att = attachment(1L, 100L, "blob.unknown");
+        att.setMimeType(null);
+
+        assertThat(service.resolveContentType(att))
+                .isEqualTo(MediaType.APPLICATION_OCTET_STREAM_VALUE);
+    }
+
+    @Test
+    @DisplayName("resolveContentType: JS 家族后缀应返回 text/javascript;charset=UTF-8")
+    void resolveContentType_jsFamily_shouldReturnTextJavascript() {
+        for (String name : List.of("app.js", "module.mjs", "legacy.cjs", "Component.jsx")) {
+            Attachment att = attachment(1L, 100L, name);
+            assertThat(service.resolveContentType(att))
+                    .as("fileName=%s", name)
+                    .isEqualTo("text/javascript;charset=UTF-8");
+        }
+    }
+
+    @Test
+    @DisplayName("resolveContentType: TS 家族后缀应返回 text/typescript;charset=UTF-8")
+    void resolveContentType_tsFamily_shouldReturnTextTypescript() {
+        for (String name : List.of("types.d.ts", "Component.tsx", "service.ts")) {
+            Attachment att = attachment(1L, 100L, name);
+            assertThat(service.resolveContentType(att))
+                    .as("fileName=%s", name)
+                    .isEqualTo("text/typescript;charset=UTF-8");
+        }
+    }
+
+    @Test
+    @DisplayName("isPreviewable: 超过 5MB 阈值的附件应返回 false")
+    void isPreviewable_oversize_shouldReturnFalse() {
+        Attachment att = attachment(1L, 100L, "big.log");
+        att.setFileSize(6L * 1024 * 1024);
+        when(artifactStorage.supports(anyString())).thenReturn(true);
+
+        assertThat(service.isPreviewable(att)).isFalse();
+    }
+
+    @Test
+    @DisplayName("isPreviewable: text/plain 且大小在阈值内应返回 true")
+    void isPreviewable_textWithinSize_shouldReturnTrue() {
+        Attachment att = attachment(1L, 100L, "small.log");
+        att.setFileSize(1024L);
+        when(artifactStorage.supports(anyString())).thenReturn(true);
+
+        assertThat(service.isPreviewable(att)).isTrue();
+    }
+
+    @Test
+    @DisplayName("isPreviewable: 平台不可读的附件应返回 false（与 zip 无关）")
+    void isPreviewable_notContentLoadable_shouldReturnFalse() {
+        Attachment att = attachment(1L, 100L, "small.log");
+        att.setFileSize(1024L);
+        when(artifactStorage.supports(anyString())).thenReturn(false);
+
+        assertThat(service.isPreviewable(att)).isFalse();
+    }
+
+    @Test
+    @DisplayName("isPreviewable: zip 附件应返回 false（非预览白名单）")
+    void isPreviewable_zipNotInWhitelist_shouldReturnFalse() {
+        Attachment att = attachment(1L, 100L, "archive.zip");
+        att.setFileSize(1024L);
+        when(artifactStorage.supports(anyString())).thenReturn(true);
+
+        assertThat(service.isPreviewable(att)).isFalse();
     }
 }

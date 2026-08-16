@@ -65,4 +65,25 @@ public interface AttachmentService extends IService<Attachment> {
      * @throws BizException 附件不存在 / 地址不可读 / 文件缺失
      */
     byte[] loadContent(Long id);
+
+    /**
+     * 推断浏览器预览所需的 MIME 类型（按 fileName 后缀）。
+     * 推断顺序：fileName 后缀 → attachment.mimeType → application/octet-stream。
+     * 用于 {@code /previewById/{id}} 端点构造 {@code Content-Type} 响应头。
+     *
+     * @param attachment 附件实体
+     * @return MIME 字符串（含 charset 时一并返回），永不为 null
+     */
+    String resolveContentType(Attachment attachment);
+
+    /**
+     * 判断附件是否可在浏览器内联预览。
+     * 判定规则：必须能被平台直读（{@link #isContentLoadable}），
+     * 且 MIME 命中预览白名单（text/* / image/* / application/pdf / json / xml），
+     * 且文件大小不超过实现类内部的预览大小阈值（5 MiB）。
+     *
+     * @param attachment 附件实体
+     * @return 是否适合浏览器内联预览
+     */
+    boolean isPreviewable(Attachment attachment);
 }

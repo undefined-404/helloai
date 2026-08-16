@@ -1,5 +1,6 @@
 package com.helloai.api.controller;
 
+import com.helloai.common.base.BizException;
 import com.helloai.common.base.R;
 import com.helloai.core.system.entity.Attachment;
 import com.helloai.core.system.service.AttachmentService;
@@ -72,5 +73,30 @@ public class AttachmentController {
         return ResponseEntity.status(HttpStatus.FOUND)
                 .location(URI.create(downloadUrl))
                 .build();
+    }
+
+    /**
+     * 附件浏览器内联预览：直接渲染 txt / log / md / json / 图片 / pdf 等小文件，
+     * 浏览器不再触发下载。Content-Disposition 用 inline，Content-Type 命中白名单 MIME。
+     * 超出大小阈值 / 非预览类型 / 不可由平台直读时抛 BizException，
+     * 由前端捕获并提示"请使用下载"。
+     */
+    @GetMapping("/previewById/{id}")
+    public ResponseEntity<byte[]> previewById(@PathVariable("id") Long id) {
+        Attachment attachment = attachmentService.getByIdRequired(id);
+        if (!attachmentService.isPreviewable(attachment)) {
+            // 413 与 RFC 7231 一致；前端可统一捕获 413 走下载
+            throw new BizException(413, "附件过大或类型不支持浏览器内联预览，请使用下载");
+        }
+        String contentType = attachmentService.resolveContentType(attachment);
+        byte[] content = attachmentService.loadContent(id);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentDisposition(ContentDisposition.inline()
+                .filename(attachment.getFileName(), StandardCharsets.UTF_8)
+                .build());
+        headers.setContentType(MediaType.parseMediaType(contentType));
+        log.info("附件内联预览: id={}, fileName={}, size={}, mime={}",
+                id, attachment.getFileName(), content.length, contentType);
+        return new ResponseEntity<>(content, headers, HttpStatus.OK);
     }
 }
