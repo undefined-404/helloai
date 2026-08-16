@@ -13,18 +13,22 @@
         <div class="character-area">
           <AnimatedCharacter
             :size="320"
-            :isFocused="isFormFocused"
-            :isTyping="isTyping"
-            :focusTarget="focusTarget"
-            primaryColor="#7C3AED"
+            :is-focused="isFormFocused"
+            :is-typing="isTyping"
+            :focus-target="focusTarget"
+            primary-color="#7C3AED"
           />
         </div>
       </div>
 
       <div class="brand-bottom">
         <div class="brand-quote">
-          <p class="quote-text">编排、监控、优化 AI Agent 工作流</p>
-          <p class="quote-sub">让智能体协作更高效</p>
+          <p class="quote-text">
+            编排、监控、优化 AI Agent 工作流
+          </p>
+          <p class="quote-sub">
+            让智能体协作更高效
+          </p>
         </div>
 
         <div class="panel-footer">
@@ -48,212 +52,79 @@
 
         <div class="login-card">
           <div class="login-card-header">
-            <h2 class="login-heading">{{ pageTitle }}</h2>
-            <p class="login-hint">{{ pageHint }}</p>
-          </div>
-
-          <template v-if="entryMode === null">
-            <div class="entry-tabs" role="tablist" aria-label="访问入口">
-              <button
-                type="button"
-                role="tab"
-                class="entry-tab"
-                @click="setEntryMode('login')"
-              >
-                登录
-              </button>
-              <button
-                type="button"
-                role="tab"
-                class="entry-tab"
-                @click="setEntryMode('register')"
-              >
-                注册
-              </button>
-            </div>
-          </template>
-
-          <template v-else-if="entryMode === 'login'">
-            <div class="subview-actions">
-              <button type="button" class="helper-link helper-link-quiet" @click="resetEntryMode">
-                返回选择
-              </button>
-            </div>
-            <el-form :model="form" label-width="0" size="large" class="login-form" @keyup.enter="handleLogin">
-              <div class="section-stack">
-                <div class="mode-context">
-                  <p class="mode-context-title">账号密码登录</p>
-                  <p class="mode-context-desc">适用于平台管理员处理任务、规则配置、审查与系统设置。</p>
-                </div>
-
-                <el-form-item>
-                  <el-input
-                    v-model="form.username"
-                    placeholder="管理员用户名"
-                    :prefix-icon="User"
-                    clearable
-                    @focus="onFocus('email')"
-                    @blur="onBlur"
-                    @input="onInput"
-                  />
-                </el-form-item>
-
-                <el-form-item>
-                  <div class="password-field">
-                    <el-input
-                      v-model="form.credential"
-                      placeholder="登录密码"
-                      :type="showPassword ? 'text' : 'password'"
-                      :prefix-icon="Lock"
-                      clearable
-                      @focus="onFocus('password')"
-                      @blur="onBlur"
-                      @input="onInput"
-                    />
-                    <button
-                      v-if="form.credential"
-                      type="button"
-                      class="toggle-pwd-btn"
-                      :aria-label="showPassword ? '隐藏密码' : '显示密码'"
-                      @click="showPassword = !showPassword"
-                    >
-                      <el-icon :size="18"><View /></el-icon>
-                    </button>
-                  </div>
-                </el-form-item>
-
-                <div class="helper-links">
-                  <button type="button" class="helper-link" @click="openSupport('password')">
-                    找回密码
-                  </button>
-                  <button type="button" class="helper-link" @click="openSupport('contact')">
-                    联系管理员
-                  </button>
-                </div>
-
-                <el-button type="primary" :loading="loading" class="login-submit" @click="handleLogin">
-                  使用账号密码登录
-                </el-button>
-
-                <transition name="msg-fade">
-                  <p v-if="errorMsg" class="login-error">{{ errorMsg }}</p>
-                </transition>
-              </div>
-            </el-form>
-          </template>
-
-          <div v-else class="register-stack">
-            <div class="subview-actions">
-              <button type="button" class="helper-link helper-link-quiet" @click="resetEntryMode">
-                返回选择
-              </button>
-            </div>
-
-            <div class="register-card">
-              <div class="register-card-header">
-                <div>
-                  <p class="register-card-title">管理员账号</p>
-                  <p class="register-card-desc">
-                    {{
-                      setupStatus.setupFinished && setupStatus.hasUsers
-                        ? '管理员账号由平台管理员统一开通。'
-                        : '当前环境未初始化，可先创建管理员账号。'
-                    }}
-                  </p>
-                </div>
-                <span class="register-badge">
-                  {{ setupStatus.loading ? '检查中' : setupStatus.setupFinished && setupStatus.hasUsers ? '已初始化' : '首次部署' }}
-                </span>
-              </div>
-
-              <div class="register-card-actions">
-                <el-button
-                  v-if="!setupStatus.setupFinished || !setupStatus.hasUsers"
-                  type="primary"
-                  @click="router.push('/setup')"
-                >
-                  前往初始化
-                </el-button>
-                <el-button
-                  v-else
-                  type="primary"
-                  plain
-                  @click="openSupport('contact')"
-                >
-                  联系管理员开通
-                </el-button>
-                <el-button text @click="goToLogin()">已有账号</el-button>
-              </div>
-            </div>
-
-            <p class="register-tip">
-              账号由平台管理员统一开通；首次部署时可通过「前往初始化」创建首个管理员账号。
+            <h2 class="login-heading">
+              {{ pageTitle }}
+            </h2>
+            <p class="login-hint">
+              {{ pageHint }}
             </p>
           </div>
+
+          <EntryTabs
+            v-if="entryMode === null"
+            @select="setEntryMode"
+          />
+
+          <LoginForm
+            v-else-if="entryMode === 'login'"
+            @back="resetEntryMode"
+            @success="handleLoginSuccess"
+            @focus="onFocus"
+            @blur="onBlur"
+            @input="onInput"
+            @password-support="(username) => openSupport('password', username)"
+            @contact-support="openSupport('contact')"
+          />
+
+          <RegisterStack
+            v-else
+            :setup-status="setupStatus"
+            @back="resetEntryMode"
+            @goto-setup="goToSetup"
+            @contact="openSupport('contact')"
+          />
         </div>
 
-        <p class="login-footer">Hello AI - AI Agent Management Platform</p>
+        <p class="login-footer">
+          Hello AI - AI Agent Management Platform
+        </p>
       </div>
     </div>
 
-    <el-dialog
+    <SupportDialog
       v-model="supportDialogVisible"
-      :title="supportContent.title"
-      width="440px"
-      class="support-dialog"
-      append-to-body
-      destroy-on-close
-    >
-      <p class="support-dialog-intro">{{ supportContent.intro }}</p>
-      <ol class="support-dialog-list">
-        <li v-for="item in supportContent.steps" :key="item">{{ item }}</li>
-      </ol>
-
-      <div v-if="supportContent.template" class="support-template">
-        <div class="support-template-header">
-          <span>联系模板</span>
-          <button type="button" class="helper-link" @click="copySupportTemplate">复制模板</button>
-        </div>
-        <pre>{{ supportContent.template }}</pre>
-      </div>
-
-      <template #footer>
-        <div class="support-dialog-footer">
-          <el-button
-            v-if="supportKind === 'password' && (!setupStatus.setupFinished || !setupStatus.hasUsers)"
-            type="primary"
-            plain
-            @click="goToSetup"
-          >
-            前往初始化
-          </el-button>
-          <el-button @click="supportDialogVisible = false">知道了</el-button>
-        </div>
-      </template>
-    </el-dialog>
+      :kind="supportKind"
+      :content="supportContent"
+      :show-goto-setup="supportKind === 'password' && (!setupStatus.setupFinished || !setupStatus.hasUsers)"
+      @copy-template="copySupportTemplate"
+      @goto-setup="goToSetup"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { Lock, User, View } from '@element-plus/icons-vue'
-import { authApi } from '@/api/auth'
 import { settingsApi } from '@/api/settings'
+import { useAuthStore } from '@/stores/auth'
+import { copyTextWithToast } from '@/composables/useClipboardWithFallback'
 import AnimatedCharacter from '@/components/AnimatedCharacter.vue'
 import StarfieldBackground from '@/components/StarfieldBackground.vue'
-
-type EntryMode = 'login' | 'register'
-type SupportKind = 'password' | 'contact'
+import EntryTabs from './login/EntryTabs.vue'
+import type { EntryMode } from './login/EntryTabs.vue'
+import LoginForm from './login/LoginForm.vue'
+import RegisterStack from './login/RegisterStack.vue'
+import type { SetupStatus } from './login/RegisterStack.vue'
+import SupportDialog from './login/SupportDialog.vue'
+import type { SupportKind, SupportContent } from './login/SupportDialog.vue'
 
 const router = useRouter()
-const loading = ref(false)
-const errorMsg = ref('')
-const showPassword = ref(false)
+
 const entryMode = ref<EntryMode | null>(null)
 const supportKind = ref<SupportKind>('password')
 const supportDialogVisible = ref(false)
+// 找回密码模板需要把当前用户名注入占位，登录表单内部持有，emit 时回传
+const passwordSupportUsername = ref('')
 
 const isFormFocused = ref(false)
 const isTyping = ref(false)
@@ -261,16 +132,11 @@ const focusTarget = ref<'none' | 'email' | 'password'>('none')
 
 let typingTimer: ReturnType<typeof setTimeout> | null = null
 
-const setupStatus = reactive({
+const setupStatus = reactive<SetupStatus>({
   loading: true,
   setupFinished: true,
   hasUsers: true,
   userCount: 1
-})
-
-const form = reactive({
-  username: '',
-  credential: ''
 })
 
 const pageTitle = computed(() => {
@@ -278,13 +144,14 @@ const pageTitle = computed(() => {
   if (entryMode.value === 'register') return '注册与开通'
   return '欢迎回来'
 })
+
 const pageHint = computed(() => {
   if (entryMode.value === 'login') return '使用管理员账号与密码登录。'
   if (entryMode.value === 'register') return '账号由平台管理员统一开通，或首次部署时前往初始化。'
   return '先选择访问入口，再进入对应流程。'
 })
 
-const supportContent = computed(() => {
+const supportContent = computed<SupportContent>(() => {
   if (supportKind.value === 'password') {
     if (!setupStatus.setupFinished || !setupStatus.hasUsers) {
       return {
@@ -307,7 +174,7 @@ const supportContent = computed(() => {
         '拿到新密码后，回到“账号密码登录”完成登录。',
         '登录后立即在用户菜单中修改为你的个人密码。'
       ],
-      template: `你好，我需要重置 Hello AI 管理员密码。\n用户名：${form.username || '[请填写用户名]'}\n原因：无法使用当前密码登录\n期望时间：${new Date().toLocaleString()}`
+      template: `你好，我需要重置 Hello AI 管理员密码。\n用户名：${passwordSupportUsername.value || '[请填写用户名]'}\n原因：无法使用当前密码登录\n期望时间：${new Date().toLocaleString()}`
     }
   }
 
@@ -323,30 +190,14 @@ const supportContent = computed(() => {
   }
 })
 
-function clearAuthStorage() {
-  sessionStorage.removeItem('adminToken')
-  sessionStorage.removeItem('adminUser')
-  sessionStorage.removeItem('agentKey')
-  sessionStorage.removeItem('agentName')
-  sessionStorage.removeItem('loginType')
-}
-
 function setEntryMode(mode: EntryMode) {
   entryMode.value = mode
-  errorMsg.value = ''
-  showPassword.value = false
   onBlur()
 }
 
 function resetEntryMode() {
   entryMode.value = null
-  errorMsg.value = ''
-  showPassword.value = false
   onBlur()
-}
-
-function goToLogin() {
-  setEntryMode('login')
 }
 
 function goToSetup() {
@@ -354,8 +205,9 @@ function goToSetup() {
   router.push('/setup')
 }
 
-function openSupport(kind: SupportKind) {
+function openSupport(kind: SupportKind, username = '') {
   supportKind.value = kind
+  if (kind === 'password') passwordSupportUsername.value = username
   supportDialogVisible.value = true
 }
 
@@ -370,7 +222,6 @@ function onBlur() {
 }
 
 function onInput() {
-  errorMsg.value = ''
   isTyping.value = true
   if (typingTimer) clearTimeout(typingTimer)
   typingTimer = setTimeout(() => {
@@ -380,12 +231,8 @@ function onInput() {
 
 async function copySupportTemplate() {
   if (!supportContent.value.template) return
-  try {
-    await navigator.clipboard.writeText(supportContent.value.template)
-    ElMessage.success('联系模板已复制')
-  } catch {
-    ElMessage.error('复制失败，请手动复制')
-  }
+  // 走统一 composable：Clipboard API + execCommand 双路径降级
+  await copyTextWithToast(supportContent.value.template, '联系模板已复制', '复制失败，请手动复制')
 }
 
 async function loadSetupStatus() {
@@ -401,49 +248,18 @@ async function loadSetupStatus() {
   }
 }
 
-async function handleLogin() {
-  const username = form.username.trim()
-  const credential = form.credential.trim()
-
-  if (!username) {
-    errorMsg.value = '请输入管理员用户名'
-    return
-  }
-
-  if (!credential) {
-    errorMsg.value = '请输入登录密码'
-    return
-  }
-
-  loading.value = true
-  errorMsg.value = ''
-
-  try {
-    const res = await authApi.login({
-      type: 'admin',
-      username,
-      credential
-    })
-
-    clearAuthStorage()
-    sessionStorage.setItem('loginType', res.type)
-    sessionStorage.setItem('adminToken', res.token)
-    sessionStorage.setItem('adminUser', res.displayName || username || 'Admin')
-    ElMessage.success('登录成功')
-    router.push('/dashboard')
-  } catch (e: any) {
-    errorMsg.value = e?.message || '登录失败，请检查账号或凭证'
-  } finally {
-    loading.value = false
-  }
+function handleLoginSuccess() {
+  router.push('/dashboard')
 }
 
 onMounted(() => {
-  if (sessionStorage.getItem('adminToken')) {
+  // 单一来源：store 已是 sessionStorage 的镜像，从 store 读取
+  const auth = useAuthStore()
+  if (auth.isAdmin) {
     router.replace('/dashboard')
     return
   }
-  if (sessionStorage.getItem('agentKey')) {
+  if (auth.isAgent) {
     router.replace('/inbox')
     return
   }
@@ -720,397 +536,11 @@ onBeforeUnmount(() => {
   margin: 0;
 }
 
-.entry-tabs,
-.login-tabs {
-  display: flex;
-  gap: 8px;
-  width: 100%;
-}
-
-.entry-tab,
-.login-tab {
-  flex: 1;
-  height: 38px;
-  border: 1px solid var(--login-accent-border);
-  border-radius: var(--ha-radius-md);
-  background: rgba(255, 255, 255, 0.04);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  color: rgba(255, 255, 255, 0.72);
-  font-size: 13px;
-  font-weight: 600;
-  font-family: var(--ha-font-family);
-  cursor: pointer;
-  box-shadow: none;
-  transition: all var(--ha-duration-fast) var(--ha-ease-out);
-}
-
-.entry-tab:hover,
-.login-tab:hover {
-  border-color: var(--login-accent-border-strong);
-  background: rgba(124, 58, 237, 0.14);
-  color: #FFFFFF;
-  transform: translateY(-1px);
-}
-
-.entry-tab.active,
-.login-tab.active {
-  border-color: rgba(196, 181, 253, 0.35);
-  background: rgba(124, 58, 237, 0.78);
-  color: #FFFFFF;
-  box-shadow: 0 6px 18px rgba(124, 58, 237, 0.40);
-}
-
-.section-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.subview-actions {
-  display: flex;
-  justify-content: flex-start;
-}
-
-.login-form :deep(.el-form-item) {
-  margin-bottom: 0;
-}
-
-.login-form :deep(.el-input__wrapper) {
-  padding-left: 12px;
-}
-
-/* Element Plus 输入框暗色适配（仅登录页作用域） */
-.login-panel :deep(.el-input__wrapper) {
-  background-color: rgba(255, 255, 255, 0.04);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
-}
-
-.login-panel :deep(.el-input__wrapper:hover) {
-  box-shadow: inset 0 0 0 1px var(--login-accent-border-strong);
-}
-
-.login-panel :deep(.el-input__wrapper.is-focus) {
-  box-shadow: inset 0 0 0 1px var(--login-accent-solid),
-              0 0 0 3px rgba(124, 58, 237, 0.22);
-}
-
-.login-panel :deep(.el-input__inner) {
-  color: #EEF2F8;
-  -webkit-text-fill-color: #EEF2F8;
-}
-
-.login-panel :deep(.el-input__inner::placeholder) {
-  color: rgba(255, 255, 255, 0.40);
-}
-
-.login-panel :deep(.el-input__prefix),
-.login-panel :deep(.el-input__suffix),
-.login-panel :deep(.el-input__icon),
-.login-panel :deep(.el-input__clear) {
-  color: rgba(255, 255, 255, 0.50);
-}
-
-.login-panel :deep(.el-input__inner:-webkit-autofill) {
-  -webkit-text-fill-color: #EEF2F8;
-  transition: background-color 9999s ease-in-out 0s;
-}
-
-.mode-context {
-  border: 1px solid var(--ha-border-light);
-  background: var(--ha-surface);
-  border-radius: var(--ha-radius-lg);
-  padding: 14px 16px;
-}
-
-.mode-context-title {
-  margin: 0 0 4px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--ha-ink);
-}
-
-.mode-context-desc {
-  margin: 0;
-  font-size: 13px;
-  color: var(--ha-muted);
-  line-height: 1.6;
-}
-
-.password-field {
-  position: relative;
-  width: 100%;
-}
-
-.toggle-pwd-btn {
-  position: absolute;
-  right: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-  background: none;
-  border: none;
-  color: var(--ha-muted);
-  cursor: pointer;
-  padding: 4px;
-  z-index: 10;
-  transition: color var(--ha-duration-fast);
-}
-
-.toggle-pwd-btn:hover {
-  color: var(--ha-ink);
-}
-
-.helper-links {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-.helper-link {
-  border: none;
-  background: none;
-  padding: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--login-accent-ink);
-  cursor: pointer;
-  transition: color var(--ha-duration-fast) var(--ha-ease-out),
-              opacity var(--ha-duration-fast) var(--ha-ease-out);
-}
-
-.helper-link:hover {
-  color: var(--login-accent-start);
-}
-
-.helper-link-quiet {
-  color: var(--ha-muted);
-}
-
-.helper-link-quiet:hover {
-  color: var(--ha-ink);
-}
-
-.login-submit {
-  width: 100%;
-  height: 40px;
-  font-size: 14px;
-  font-weight: 600;
-  --el-button-border-radius: var(--ha-radius-md);
-  --el-button-text-color: #FFFFFF;
-  --el-button-bg-color: transparent;
-  --el-button-border-color: transparent;
-  --el-button-hover-text-color: #FFFFFF;
-  --el-button-hover-bg-color: transparent;
-  --el-button-hover-border-color: transparent;
-  --el-button-active-text-color: #FFFFFF;
-  --el-button-active-bg-color: transparent;
-  --el-button-active-border-color: transparent;
-  /* 微透明玻璃态：半透紫 + blur + 浅紫细边框，保留主 CTA 权重 */
-  background: rgba(124, 58, 237, 0.78);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 1px solid rgba(196, 181, 253, 0.35);
-  box-shadow: var(--login-accent-shadow);
-  transition: all var(--ha-duration-normal) var(--ha-ease-out);
-}
-
-.login-submit:hover {
-  transform: translateY(-1px);
-  background: rgba(109, 40, 217, 0.88);
-  border-color: rgba(196, 181, 253, 0.50);
-  box-shadow: var(--login-accent-shadow-hover);
-  filter: saturate(1.04);
-}
-
-.login-submit:active {
-  transform: translateY(0);
-  background: rgba(91, 33, 182, 0.92);
-  box-shadow: 0 8px 18px rgba(124, 58, 237, 0.18);
-}
-
-.login-error {
-  text-align: center;
-  color: var(--ha-danger);
-  font-size: 13px;
-  margin: 0;
-}
-
-.register-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.register-card {
-  border: 1px solid var(--ha-border);
-  border-radius: var(--ha-radius-lg);
-  background: var(--ha-bg);
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.register-card-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.register-card-title {
-  margin: 0 0 6px;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--ha-ink);
-}
-
-.register-card-desc {
-  margin: 0;
-  font-size: 13px;
-  color: var(--ha-muted);
-  line-height: 1.6;
-}
-
-.register-badge {
-  flex-shrink: 0;
-  border-radius: 999px;
-  background: var(--ha-primary-muted);
-  color: #C4B5FD;
-  padding: 4px 10px;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.register-card-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.register-card-actions :deep(.el-button) {
-  white-space: nowrap;
-}
-
-.register-card-actions :deep(.el-button--primary) {
-  --el-button-text-color: #FFFFFF;
-  --el-button-bg-color: transparent;
-  --el-button-border-color: transparent;
-  --el-button-hover-text-color: #FFFFFF;
-  --el-button-hover-bg-color: transparent;
-  --el-button-hover-border-color: transparent;
-  --el-button-active-text-color: #FFFFFF;
-  --el-button-active-bg-color: transparent;
-  --el-button-active-border-color: transparent;
-  background: var(--login-accent-solid);
-  box-shadow: 0 8px 18px rgba(124, 58, 237, 0.16);
-}
-
-.register-card-actions :deep(.el-button--primary:hover) {
-  background: var(--login-accent-solid-hover);
-  box-shadow: 0 12px 24px rgba(124, 58, 237, 0.20);
-  filter: saturate(1.04);
-}
-
-.register-card-actions :deep(.el-button--primary:active) {
-  background: var(--login-accent-solid-active);
-}
-
-.register-card-actions :deep(.el-button--primary.is-plain) {
-  --el-button-text-color: var(--login-accent-ink);
-  --el-button-hover-text-color: #FFFFFF;
-  --el-button-active-text-color: #FFFFFF;
-  background: rgba(124, 58, 237, 0.10);
-  border: 1px solid var(--login-accent-border) !important;
-  box-shadow: none;
-}
-
-.register-card-actions :deep(.el-button--primary.is-plain:hover) {
-  background: rgba(124, 58, 237, 0.20);
-  border-color: var(--login-accent-border-strong) !important;
-  box-shadow: 0 8px 18px rgba(124, 58, 237, 0.20);
-}
-
-.register-card-actions :deep(.el-button--text) {
-  --el-button-text-color: var(--login-accent-ink);
-  --el-button-hover-text-color: var(--login-accent-start);
-  --el-button-active-text-color: var(--login-accent-start);
-  font-weight: 600;
-}
-
-.register-tip {
-  margin: 4px 0 0;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--ha-muted);
-}
-
-.msg-fade-enter-active {
-  animation: ha-fade-up 250ms var(--ha-ease-out) both;
-}
-
-.msg-fade-leave-active {
-  animation: ha-fade-in 150ms var(--ha-ease-out) reverse both;
-}
-
 .login-footer {
   text-align: center;
   color: var(--ha-muted);
   font-size: 12px;
   margin-top: 24px;
-}
-
-.support-dialog-intro {
-  margin: 0 0 12px;
-  font-size: 13px;
-  line-height: 1.7;
-  color: var(--ha-muted);
-}
-
-.support-dialog-list {
-  margin: 0;
-  padding-left: 18px;
-  color: var(--ha-ink-secondary);
-  font-size: 13px;
-  line-height: 1.7;
-}
-
-.support-template {
-  margin-top: 16px;
-  border: 1px solid var(--ha-border-light);
-  border-radius: var(--ha-radius-lg);
-  background: var(--ha-surface);
-  padding: 14px 16px;
-}
-
-.support-template-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--ha-ink);
-}
-
-.support-template pre {
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: var(--ha-font-family);
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--ha-ink-secondary);
-}
-
-.support-dialog-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
 }
 
 @media (max-width: 1023px) {
