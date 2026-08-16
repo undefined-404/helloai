@@ -1,10 +1,21 @@
 <template>
   <el-container class="app-shell">
-    <el-aside :width="collapsed ? '64px' : '220px'" class="app-sidebar">
+    <el-aside
+      :width="collapsed ? '64px' : '220px'"
+      class="app-sidebar"
+    >
       <div class="sidebar-header">
         <div class="sidebar-logo">
-          <el-icon :size="22" color="#fff"><MagicStick /></el-icon>
-          <span v-show="!collapsed" class="sidebar-title">HelloAI</span>
+          <el-icon
+            :size="22"
+            color="#fff"
+          >
+            <MagicStick />
+          </el-icon>
+          <span
+            v-show="!collapsed"
+            class="sidebar-title"
+          >HelloAI</span>
         </div>
       </div>
 
@@ -54,7 +65,8 @@
           <el-icon><Select /></el-icon>
           <span>审查中心</span>
         </el-menu-item>
-        <el-menu-item index="/rewards">
+        <!-- 2026-08-16: 积分流水 / 活动流 / 规则配置 暂未启用，先隐藏菜单入口（页面文件保留） -->
+        <!-- <el-menu-item index="/rewards">
           <el-icon><Coin /></el-icon>
           <span>积分流水</span>
         </el-menu-item>
@@ -65,7 +77,7 @@
         <el-menu-item index="/rules">
           <el-icon><Setting /></el-icon>
           <span>规则配置</span>
-        </el-menu-item>
+        </el-menu-item> -->
         <el-menu-item index="/duty-leases">
           <el-icon><Clock /></el-icon>
           <span>打卡上班</span>
@@ -76,19 +88,44 @@
         </el-menu-item>
       </el-menu>
 
-      <div class="sidebar-footer" :class="{ collapsed: collapsed }">
-        <el-dropdown trigger="click" placement="top-start">
+      <div
+        class="sidebar-footer"
+        :class="{ collapsed: collapsed }"
+      >
+        <el-dropdown
+          trigger="click"
+          placement="top-start"
+        >
           <div class="sidebar-user">
-            <el-avatar :size="28" icon="UserFilled" class="user-avatar" />
-            <span v-show="!collapsed" class="user-name">{{ userName }}</span>
-            <el-icon v-show="!collapsed" :size="12" class="user-arrow"><ArrowDown /></el-icon>
+            <el-avatar
+              :size="28"
+              icon="UserFilled"
+              class="user-avatar"
+            />
+            <span
+              v-show="!collapsed"
+              class="user-name"
+            >{{ userName }}</span>
+            <el-icon
+              v-show="!collapsed"
+              :size="12"
+              class="user-arrow"
+            >
+              <ArrowDown />
+            </el-icon>
           </div>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item v-if="isAdmin" @click="openPasswordDialog">
+              <el-dropdown-item
+                v-if="isAdmin"
+                @click="openPasswordDialog"
+              >
                 <el-icon><Lock /></el-icon>修改密码
               </el-dropdown-item>
-              <el-dropdown-item v-if="isAdmin" @click="router.push('/settings')">
+              <el-dropdown-item
+                v-if="isAdmin"
+                @click="router.push('/settings')"
+              >
                 <el-icon><Tools /></el-icon>系统设置
               </el-dropdown-item>
               <el-dropdown-item @click="handleLogout">
@@ -106,87 +143,50 @@
           @click="collapsed = !collapsed"
         />
       </div>
-      <el-button v-show="collapsed" :icon="Expand" text class="collapse-btn-mini" @click="collapsed = !collapsed" />
+      <el-button
+        v-show="collapsed"
+        :icon="Expand"
+        text
+        class="collapse-btn-mini"
+        @click="collapsed = !collapsed"
+      />
     </el-aside>
 
     <el-main class="app-content">
       <router-view v-slot="{ Component }">
-        <transition name="page-fade" mode="out-in">
+        <transition
+          name="page-fade"
+          mode="out-in"
+        >
           <component :is="Component" />
         </transition>
       </router-view>
     </el-main>
 
-    <el-dialog
+    <ChangePasswordDialog
       v-model="passwordDialogVisible"
-      title="修改密码"
-      width="420px"
-      append-to-body
-      destroy-on-close
-      @closed="resetPasswordForm"
-    >
-      <el-form label-position="top" class="password-form">
-        <el-form-item label="当前密码">
-          <el-input
-            v-model="passwordForm.currentPassword"
-            type="password"
-            show-password
-            placeholder="请输入当前登录密码"
-          />
-        </el-form-item>
-        <el-form-item label="新密码">
-          <el-input
-            v-model="passwordForm.newPassword"
-            type="password"
-            show-password
-            placeholder="至少 6 位，建议使用高强度密码"
-          />
-        </el-form-item>
-        <el-form-item label="确认新密码">
-          <el-input
-            v-model="passwordForm.confirmPassword"
-            type="password"
-            show-password
-            placeholder="再次输入新密码"
-          />
-        </el-form-item>
-        <p class="password-form-tip">修改成功后会退出当前会话，请使用新密码重新登录。</p>
-      </el-form>
-
-      <template #footer>
-        <div class="dialog-footer">
-          <el-button @click="passwordDialogVisible = false">取消</el-button>
-          <el-button type="primary" :loading="changingPassword" @click="handleChangePassword">
-            保存新密码
-          </el-button>
-        </div>
-      </template>
-    </el-dialog>
+      :on-changed="handlePasswordChanged"
+    />
   </el-container>
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
 import { ArrowDown, Clock, Expand, Fold, Warning } from '@element-plus/icons-vue'
 import { authApi } from '@/api/auth'
+import { useAuthStore } from '@/stores/auth'
+import ChangePasswordDialog from '@/components/ChangePasswordDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
 const collapsed = ref(false)
 const passwordDialogVisible = ref(false)
-const changingPassword = ref(false)
 
-const loginType = sessionStorage.getItem('loginType') || (sessionStorage.getItem('agentKey') ? 'agent' : 'admin')
-const isAdmin = loginType !== 'agent'
-const userName = ref(sessionStorage.getItem(isAdmin ? 'adminUser' : 'agentName') || (isAdmin ? 'Admin' : 'Agent'))
-
-const passwordForm = reactive({
-  currentPassword: '',
-  newPassword: '',
-  confirmPassword: ''
-})
+// 单一来源：store 已是 sessionStorage 的唯一镜像
+const isAdmin = auth.isAdmin
+const userName = computed(() => auth.displayName)
 
 const activeMenu = computed(() => {
   const path = route.path
@@ -197,71 +197,27 @@ const activeMenu = computed(() => {
   return path
 })
 
-function clearAuthStorage() {
-  sessionStorage.removeItem('adminToken')
-  sessionStorage.removeItem('adminUser')
-  sessionStorage.removeItem('agentKey')
-  sessionStorage.removeItem('agentName')
-  sessionStorage.removeItem('loginType')
-}
-
-function resetPasswordForm() {
-  passwordForm.currentPassword = ''
-  passwordForm.newPassword = ''
-  passwordForm.confirmPassword = ''
-}
-
 function openPasswordDialog() {
-  resetPasswordForm()
   passwordDialogVisible.value = true
 }
 
 async function handleLogout() {
   try {
-    if (isAdmin && sessionStorage.getItem('adminToken')) {
+    if (isAdmin && auth.adminToken) {
       await authApi.logout()
     }
   } catch {
     // 会话不存在时忽略服务端登出失败，继续清理前端状态
   } finally {
-    clearAuthStorage()
+    auth.logout()
     router.push('/login')
   }
 }
 
-async function handleChangePassword() {
-  if (!passwordForm.currentPassword) {
-    ElMessage.error('请输入当前密码')
-    return
-  }
-  if (!passwordForm.newPassword) {
-    ElMessage.error('请输入新密码')
-    return
-  }
-  if (passwordForm.newPassword.length < 6) {
-    ElMessage.error('新密码至少 6 位')
-    return
-  }
-  if (passwordForm.newPassword !== passwordForm.confirmPassword) {
-    ElMessage.error('两次输入的新密码不一致')
-    return
-  }
-
-  changingPassword.value = true
-  try {
-    await authApi.changePassword({
-      currentPassword: passwordForm.currentPassword,
-      newPassword: passwordForm.newPassword
-    })
-    ElMessage.success('密码已更新，请重新登录')
-    passwordDialogVisible.value = false
-    clearAuthStorage()
-    router.push('/login')
-  } catch (e: any) {
-    ElMessage.error(e?.message || '修改密码失败')
-  } finally {
-    changingPassword.value = false
-  }
+function handlePasswordChanged() {
+  // 修改密码成功：清空登录态 + 跳 login（组件已经关闭弹窗，这里只负责后续副作用）
+  auth.logout()
+  router.push('/login')
 }
 </script>
 
@@ -463,19 +419,6 @@ async function handleChangePassword() {
   padding: clamp(16px, 2vw, 32px);
   overflow-y: auto;
   height: 100vh;
-}
-
-.password-form-tip {
-  margin: 4px 0 0;
-  font-size: 12px;
-  color: var(--ha-muted);
-  line-height: 1.6;
-}
-
-.dialog-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
 }
 
 .page-fade-enter-active { animation: ha-fade-up 350ms var(--ha-ease-out) both; }

@@ -24,13 +24,28 @@
         </div>
       </div>
       <div class="toolbar-right">
-        <el-button :icon="Refresh" :loading="loading" @click="load()">刷新</el-button>
-        <el-button type="primary" @click="registerDialog = true">注册 Agent</el-button>
+        <el-button
+          :icon="Refresh"
+          :loading="loading"
+          @click="load()"
+        >
+          刷新
+        </el-button>
+        <el-button
+          type="primary"
+          @click="registerDialog = true"
+        >
+          注册 Agent
+        </el-button>
       </div>
     </div>
 
     <!-- 卡片网格 -->
-    <div v-loading="loading" class="card-grid" v-if="!loading || list.length > 0">
+    <div
+      v-if="!loading || list.length > 0"
+      v-loading="loading"
+      class="card-grid"
+    >
       <AgentCard
         v-for="(agent, idx) in list"
         :key="agent.id"
@@ -53,12 +68,23 @@
     </div>
 
     <!-- 骨架加载 -->
-    <div v-if="loading && list.length === 0" class="card-grid">
-      <div v-for="i in 6" :key="i" class="ha-skeleton" style="height:180px;border-radius:var(--ha-radius-lg)" />
+    <div
+      v-if="loading && list.length === 0"
+      class="card-grid"
+    >
+      <div
+        v-for="i in 6"
+        :key="i"
+        class="ha-skeleton"
+        style="height:180px;border-radius:var(--ha-radius-lg)"
+      />
     </div>
 
     <!-- 分页 -->
-    <div v-if="total > 0" class="pagination-bar">
+    <div
+      v-if="total > 0"
+      class="pagination-bar"
+    >
       <span class="page-info">第 {{ current }} / {{ pages }} 页，共 {{ total }} 条</span>
       <el-pagination
         background
@@ -71,24 +97,71 @@
     </div>
 
     <!-- 注册弹窗 -->
-    <el-dialog v-model="registerDialog" title="注册新 Agent" width="480px" top="5vh" append-to-body>
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="80px">
-        <el-form-item label="名称" prop="name">
+    <el-dialog
+      v-model="registerDialog"
+      title="注册新 Agent"
+      width="480px"
+      top="5vh"
+      append-to-body
+    >
+      <el-form
+        ref="formRef"
+        :model="form"
+        :rules="rules"
+        label-width="80px"
+      >
+        <el-form-item
+          label="名称"
+          prop="name"
+        >
           <el-input v-model="form.name" />
         </el-form-item>
-        <el-form-item label="角色" prop="role">
-          <el-select v-model="form.role" style="width:100%" @change="onRoleChange">
-            <el-option label="规划器 PLANNER" value="PLANNER" />
-            <el-option label="执行器 EXECUTOR" value="EXECUTOR" />
-            <el-option label="审查器 REVIEWER" value="REVIEWER" />
+        <el-form-item
+          label="角色"
+          prop="role"
+        >
+          <el-select
+            v-model="form.role"
+            style="width:100%"
+            @change="onRoleChange"
+          >
+            <el-option
+              label="规划器 PLANNER"
+              value="PLANNER"
+            />
+            <el-option
+              label="执行器 EXECUTOR"
+              value="EXECUTOR"
+            />
+            <el-option
+              label="审查器 REVIEWER"
+              value="REVIEWER"
+            />
           </el-select>
         </el-form-item>
-        <el-form-item label="接入类型" prop="accessType">
-          <el-select v-model="form.accessType" style="width:100%" @change="onAccessTypeChange">
-            <el-option label="外部 AI Agent（CLI 接入）" value="CLI_CLIENT" />
-            <el-option label="内部 LLM（API Key）" value="API_KEY_LLM" />
+        <el-form-item
+          label="接入类型"
+          prop="accessType"
+        >
+          <el-select
+            v-model="form.accessType"
+            style="width:100%"
+            @change="onAccessTypeChange"
+          >
+            <el-option
+              label="外部 AI Agent（CLI 接入）"
+              value="CLI_CLIENT"
+            />
+            <el-option
+              label="内部 LLM（API Key）"
+              value="API_KEY_LLM"
+            />
             <!-- 网页端 Planner 仅 PLANNER 角色可选，当前功能未开放 -->
-            <el-option v-if="form.role === 'PLANNER'" label="网页端 Planner" value="WEB_BROWSER" />
+            <el-option
+              v-if="form.role === 'PLANNER'"
+              label="网页端 Planner"
+              value="WEB_BROWSER"
+            />
           </el-select>
         </el-form-item>
         <el-alert
@@ -100,7 +173,10 @@
           style="margin-bottom:16px"
         />
         <!-- 内部 LLM 注册：V49 模型选择（可用 Provider + 启用模型分组下拉）；留空走系统默认 provider+default-model -->
-        <el-form-item v-if="form.accessType === 'API_KEY_LLM'" label="模型">
+        <el-form-item
+          v-if="form.accessType === 'API_KEY_LLM'"
+          label="模型"
+        >
           <el-select
             v-model="form.modelType"
             placeholder="选择模型（留空使用平台默认）"
@@ -109,15 +185,29 @@
             :loading="modelsLoading"
             style="width:100%"
           >
-            <el-option-group v-for="g in availableModels" :key="g.providerCode" :label="g.providerName">
-              <el-option v-for="m in g.models" :key="m" :label="m" :value="g.providerCode + ':' + m" />
+            <el-option-group
+              v-for="g in availableModels"
+              :key="g.providerCode"
+              :label="g.providerName"
+            >
+              <el-option
+                v-for="m in g.models"
+                :key="m"
+                :label="m"
+                :value="g.providerCode + ':' + m"
+              />
             </el-option-group>
           </el-select>
-          <div class="field-hint">内部 LLM 使用平台密钥；留空则按系统默认 provider+default-model 绑定</div>
+          <div class="field-hint">
+            内部 LLM 使用平台密钥；留空则按系统默认 provider+default-model 绑定
+          </div>
         </el-form-item>
         <el-form-item label="技能">
           <!-- V52 三段式：模型能力锁定 tag（不可取消，自动并入） -->
-          <div v-if="form.accessType === 'API_KEY_LLM' && form.modelType && !skillDegraded" class="skill-cap-row">
+          <div
+            v-if="form.accessType === 'API_KEY_LLM' && form.modelType && !skillDegraded"
+            class="skill-cap-row"
+          >
             <el-tag
               v-for="s in skillCap"
               :key="s"
@@ -125,7 +215,9 @@
               type="primary"
               effect="plain"
               disable-transitions
-            >{{ skillLabel(s) }}（模型能力）</el-tag>
+            >
+              {{ skillLabel(s) }}（模型能力）
+            </el-tag>
           </div>
           <el-alert
             v-if="form.accessType === 'API_KEY_LLM' && form.modelType && skillDegraded"
@@ -154,34 +246,59 @@
               :title="opt.disabled ? '该模型不支持此技能' : ''"
             />
           </el-select>
-          <div class="field-hint">能力声明，任务「要求技能」按 AND 语义匹配；不填则按名称/描述自动推导</div>
+          <div class="field-hint">
+            能力声明，任务「要求技能」按 AND 语义匹配；不填则按名称/描述自动推导
+          </div>
         </el-form-item>
         <el-form-item label="描述">
-          <el-input v-model="form.description" type="textarea" :rows="2" />
+          <el-input
+            v-model="form.description"
+            type="textarea"
+            :rows="2"
+          />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="registerDialog = false">取消</el-button>
+        <el-button @click="registerDialog = false">
+          取消
+        </el-button>
         <el-button
           type="primary"
           :loading="registering"
           :disabled="form.accessType === 'WEB_BROWSER'"
           @click="handleRegister"
-        >注册</el-button>
+        >
+          注册
+        </el-button>
       </template>
     </el-dialog>
 
     <!-- 编辑弹窗 -->
-    <AgentEditDialog v-model="editDialog" :agent="editTarget" @saved="load()" />
+    <AgentEditDialog
+      v-model="editDialog"
+      :agent="editTarget"
+      @saved="load()"
+    />
 
     <!-- 状态切换弹窗 -->
-    <AgentStatusDialog v-model="statusDialog" :agent="statusTarget" @done="load()" />
+    <AgentStatusDialog
+      v-model="statusDialog"
+      :agent="statusTarget"
+      @done="load()"
+    />
 
     <!-- 删除确认弹窗 -->
-    <AgentDeleteDialog v-model="deleteDialog" :agent="deleteTarget" @done="load()" />
+    <AgentDeleteDialog
+      v-model="deleteDialog"
+      :agent="deleteTarget"
+      @done="load()"
+    />
 
     <!-- 接入内容生成弹窗 -->
-    <AgentOnboardingDialog v-model="onboardingDialog" :agent-id="onboardingAgentId" />
+    <AgentOnboardingDialog
+      v-model="onboardingDialog"
+      :agent-id="onboardingAgentId"
+    />
   </div>
 </template>
 
@@ -189,11 +306,11 @@
 import { ref, computed, onMounted, reactive, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Search, Refresh } from '@element-plus/icons-vue'
+import { Refresh } from '@element-plus/icons-vue'
 import { agentApi } from '@/api/agent'
 import type { AvailableModelGroup } from '@/api/agent'
 import { AGENT_SKILL_OPTIONS } from '@/constants/agentSkills'
-import type { AgentListItem, AgentRole } from '@/types'
+import type { AgentListItem } from '@/types'
 import AgentCard from './components/AgentCard.vue'
 import AgentEditDialog from './components/AgentEditDialog.vue'
 import AgentStatusDialog from './components/AgentStatusDialog.vue'

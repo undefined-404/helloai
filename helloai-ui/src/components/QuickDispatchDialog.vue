@@ -10,52 +10,148 @@
     @open="onOpen"
     @closed="resetForm"
   >
-    <el-form ref="formRef" :model="form" :rules="rules" label-width="100px" v-loading="loading">
-      <el-form-item label="任务" prop="taskId">
-        <el-select v-model="form.taskId" placeholder="选择任务" filterable style="width:100%" @change="onTaskChange">
-          <el-option v-for="t in tasks" :key="t.id" :label="t.title" :value="t.id" />
+    <el-form
+      ref="formRef"
+      v-loading="loading"
+      :model="form"
+      :rules="rules"
+      label-width="100px"
+    >
+      <el-form-item
+        label="任务"
+        prop="taskId"
+      >
+        <el-select
+          v-model="form.taskId"
+          placeholder="选择任务"
+          filterable
+          style="width:100%"
+          @change="onTaskChange"
+        >
+          <el-option
+            v-for="t in tasks"
+            :key="t.id"
+            :label="t.title"
+            :value="t.id"
+          />
           <template #footer>
             <div style="padding:6px;display:flex;gap:6px">
-              <el-input v-model="newTaskTitle" placeholder="新任务标题" size="small" />
-              <el-button size="small" type="primary" :loading="creatingTask" @click="createTaskInline">新建</el-button>
+              <el-input
+                v-model="newTaskTitle"
+                placeholder="新任务标题"
+                size="small"
+              />
+              <el-button
+                size="small"
+                type="primary"
+                :loading="creatingTask"
+                @click="createTaskInline"
+              >
+                新建
+              </el-button>
             </div>
           </template>
         </el-select>
       </el-form-item>
 
-      <el-form-item label="模块" prop="moduleId">
-        <el-select v-model="form.moduleId" placeholder="选择模块（可空）" filterable clearable style="width:100%" :disabled="!form.taskId" @visible-change="(v: boolean) => v && loadModules()">
-          <el-option v-for="m in modules" :key="m.id" :label="m.name" :value="m.id" />
+      <el-form-item
+        label="模块"
+        prop="moduleId"
+      >
+        <el-select
+          v-model="form.moduleId"
+          placeholder="选择模块（可空）"
+          filterable
+          clearable
+          style="width:100%"
+          :disabled="!form.taskId"
+          @visible-change="(v: boolean) => v && loadModules()"
+        >
+          <el-option
+            v-for="m in modules"
+            :key="m.id"
+            :label="m.name"
+            :value="m.id"
+          />
           <template #footer>
             <div style="padding:6px;display:flex;gap:6px">
-              <el-input v-model="newModuleName" placeholder="新模块名称" size="small" :disabled="!form.taskId" />
-              <el-button size="small" type="primary" :loading="creatingModule" :disabled="!form.taskId || !newModuleName.trim()" @click="createModuleInline">新建</el-button>
+              <el-input
+                v-model="newModuleName"
+                placeholder="新模块名称"
+                size="small"
+                :disabled="!form.taskId"
+              />
+              <el-button
+                size="small"
+                type="primary"
+                :loading="creatingModule"
+                :disabled="!form.taskId || !newModuleName.trim()"
+                @click="createModuleInline"
+              >
+                新建
+              </el-button>
             </div>
           </template>
         </el-select>
       </el-form-item>
 
-      <el-form-item label="标题" prop="title">
-        <el-input v-model="form.title" placeholder="子任务标题" maxlength="120" show-word-limit />
+      <el-form-item
+        label="标题"
+        prop="title"
+      >
+        <el-input
+          v-model="form.title"
+          placeholder="子任务标题"
+          maxlength="120"
+          show-word-limit
+        />
       </el-form-item>
 
-      <el-form-item label="任务内容" prop="description">
-        <el-input v-model="form.description" type="textarea" :rows="3" placeholder="描述要做什么 / 期望产出" />
+      <el-form-item
+        label="任务内容"
+        prop="description"
+      >
+        <el-input
+          v-model="form.description"
+          type="textarea"
+          :rows="3"
+          placeholder="描述要做什么 / 期望产出"
+        />
       </el-form-item>
 
       <el-form-item label="验收标准">
-        <el-input v-model="form.acceptance" type="textarea" :rows="2" placeholder="（可选）明确可验证的通过条件" />
+        <el-input
+          v-model="form.acceptance"
+          type="textarea"
+          :rows="2"
+          placeholder="（可选）明确可验证的通过条件"
+        />
       </el-form-item>
 
       <el-form-item label="优先级">
-        <el-select v-model="form.priority" style="width:140px">
-          <el-option label="HIGH" value="HIGH" />
-          <el-option label="MEDIUM" value="MEDIUM" />
-          <el-option label="LOW" value="LOW" />
+        <el-select
+          v-model="form.priority"
+          style="width:140px"
+        >
+          <el-option
+            label="HIGH"
+            value="HIGH"
+          />
+          <el-option
+            label="MEDIUM"
+            value="MEDIUM"
+          />
+          <el-option
+            label="LOW"
+            value="LOW"
+          />
         </el-select>
       </el-form-item>
 
-      <el-form-item label="执行 Agent" prop="agentIds">
+      <el-form-item
+        label="执行 Agent"
+        prop="agentIds"
+      >
         <el-select
           v-model="form.agentIds"
           multiple
@@ -77,8 +173,16 @@
     </el-form>
 
     <template #footer>
-      <el-button @click="$emit('update:modelValue', false)">取消</el-button>
-      <el-button type="primary" :loading="submitting" @click="onSubmit">派发</el-button>
+      <el-button @click="$emit('update:modelValue', false)">
+        取消
+      </el-button>
+      <el-button
+        type="primary"
+        :loading="submitting"
+        @click="onSubmit"
+      >
+        派发
+      </el-button>
     </template>
   </el-dialog>
 </template>
@@ -92,6 +196,9 @@ import { agentApi } from '@/api/agent'
 import { subTaskApi } from '@/api/subTask'
 import type { Task, ModuleItem, Agent, CreateSubTaskPayload } from '@/types'
 
+// props.modelValue 没有直接访问，但 <el-dialog> 用 :model-value 绑定父组件 v-model；
+// 必须保留 defineProps 才能让 :model-value 解析到 props.modelValue。
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]

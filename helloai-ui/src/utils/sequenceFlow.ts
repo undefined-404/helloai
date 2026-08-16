@@ -158,7 +158,7 @@ function inferNote(prev: TaskTimelineItem | undefined, cur: TaskTimelineItem, at
 // ── 箭头方向推断：相邻事件对 → { from, to, kind, label, note } ──
 //   主动行为（发起）：sync 实线 "->>"
 //   响应行为（返回）：response 虚线 "-->>"
-function inferMessage(prev: TaskTimelineItem | undefined, cur: TaskTimelineItem, attempt: number, agentDisplay: (id: string) => string): SequenceMessage {
+function inferMessage(prev: TaskTimelineItem | undefined, cur: TaskTimelineItem, attempt: number, _agentDisplay: (id: string) => string): SequenceMessage {
   const from = prev ? classifySwimlane(prev) : classifySwimlane(cur)
   const to = classifySwimlane(cur)
   const t = cur.eventType
@@ -247,13 +247,6 @@ function buildBlocks(events: TaskTimelineItem[], attempts: Map<string, number>, 
     i++
   }
   return blocks
-}
-
-// ── Agent ID → 显示名（包装调用方传入的 resolver）──
-function agentLabel(agentId: string | null, agentDisplay: (id: string) => string): string {
-  if (!agentId) return ''
-  const name = agentDisplay(agentId)
-  return name ? ` · ${name}` : ''
 }
 
 // ── 主入口：TaskTimelineItem[] → mermaid syntax 字符串 ──

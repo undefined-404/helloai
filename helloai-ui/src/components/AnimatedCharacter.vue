@@ -20,7 +20,7 @@
       alt=""
       class="avatar-layer avatar-base"
       draggable="false"
-    />
+    >
 
     <!-- 骨架揭示层 - 使用 CSS mask 跟随鼠标 -->
     <img
@@ -29,7 +29,7 @@
       class="avatar-layer avatar-skeleton"
       :style="skeletonMaskStyle"
       draggable="false"
-    />
+    >
   </div>
 </template>
 
@@ -101,7 +101,7 @@ function onHide() {
   }
 }
 
-function onToggle(e: TouchEvent) {
+function onToggle(_e: TouchEvent) {
   touchRevealed.value = !touchRevealed.value
   isRevealed.value = touchRevealed.value
 
