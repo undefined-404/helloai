@@ -81,6 +81,13 @@
             <span class="meta time">{{ fmtTime(it.attachment.createTime) }}</span>
             <el-button
               size="small"
+              :disabled="!isPreviewable(it.attachment)"
+              @click.stop="previewFile(it.attachment)"
+            >
+              预览
+            </el-button>
+            <el-button
+              size="small"
               type="primary"
               :loading="downloadingId === it.attachment.id"
               @click.stop="downloadFile(it.attachment)"
@@ -95,6 +102,10 @@
         />
       </div>
     </el-card>
+    <PreviewDialog
+      v-model="previewVisible"
+      :attachment="previewAttachment"
+    />
   </div>
 </template>
 
@@ -103,7 +114,9 @@ import { ref, computed, onMounted } from 'vue'
 import { Folder, Document } from '@element-plus/icons-vue'
 import { attachmentApi } from '@/api/attachment'
 import { saveBlobResponse } from '@/utils/download'
+import { isPreviewableAttachment } from '@/utils/filePreview'
 import { fmtTime } from '@/utils/tableConfig'
+import PreviewDialog from '@/components/PreviewDialog.vue'
 import type { Attachment } from '@/types'
 
 interface DirItem {
@@ -123,6 +136,18 @@ const rows = ref<Attachment[]>([])
 const crumbs = ref<{ key: string; name: string }[]>([])
 const loading = ref(false)
 const downloadingId = ref<null | string>(null)
+const previewVisible = ref(false)
+const previewAttachment = ref<Attachment | null>(null)
+
+/** 前端估算附件是否能浏览器内联预览；后端 isPreviewable 是权威源。 */
+function isPreviewable(att: Attachment): boolean {
+  return isPreviewableAttachment(att)
+}
+
+function previewFile(att: Attachment) {
+  previewAttachment.value = att
+  previewVisible.value = true
+}
 
 function storageOf(att: Attachment): 'minio' | 'local' {
   return (att.storageUrl || '').startsWith('minio://') ? 'minio' : 'local'
@@ -219,8 +244,26 @@ onMounted(() => load())
 </script>
 
 <style scoped>
-.page { max-width: var(--ha-content-width); }
-.browser { min-height: 200px; }
+.page {
+  max-width: var(--ha-content-width);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+/* 让 el-card 及其 body 在 page 内可拉伸，配合 .browser 撑满剩余高度 */
+.page :deep(.el-card) {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.page :deep(.el-card__body) {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.browser { flex: 1; min-height: 480px; }
 .crumb { margin-bottom: 14px; }
 .crumb-link { color: var(--ha-primary, #409eff); cursor: pointer; }
 .row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 6px; cursor: pointer; }
