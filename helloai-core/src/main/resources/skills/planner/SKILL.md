@@ -29,8 +29,8 @@
 
 > ⚠️ **给 AI 客户端的第一提醒：门铃推送通道已搁置（技术瓶颈，外部 Agent 无法处理平台推送的门铃信号），任务感知一律靠 `pullTasks` 轮询，不要尝试连接任何推送通道。**
 > - 上线后**第一步必须用 MCP 工具 `checkIn` 打卡**（拿到 ACTIVE 打卡租约，在岗状态与租约入口）。
-> - `checkIn` / `checkOut` **只存在于 MCP SSE 通道**（`{{BASE_URL}}/mcp/sse` + `{{BASE_URL}}/mcp/messages`，共 10 个工具）。
-> - REST 端 `GET {{BASE_URL}}/api/mcp/tools` **只有 7 个工具，没有 `checkIn`/`checkOut`**——那是给非 MCP 客户端的降级视图，不要据此判断"没有 checkIn 就没有 MCP 客户端"。
+> - **三通道工具面已对齐（A0-3）**：`checkIn` / `checkOut` / `getAgentStatus` 在 MCP SSE、REST 别名 `POST {{BASE_URL}}/api/mcp/jsonrpc`、REST 直通 `POST {{BASE_URL}}/api/mcp/tools/*` 均可调用。
+> - **REST 别名通道（A0-2 新增）**：`POST {{BASE_URL}}/api/mcp/jsonrpc` 已补齐全部 11 工具，**无状态、同步响应、不依赖 MCP session**——SSE 断开（Session not found）时用它兜底，无需重新 4 步握手。
 > - 若确实没有 MCP 通道，可用 REST 轮询兜底（见第四节），但优先走 MCP。
 
 ### 1.1 连接配置
@@ -40,27 +40,30 @@
 
 在 Trae / Qoder 等 MCP 客户端里把上述 SSE 端点与 Bearer 头配好，即可自动发现下列工具（`tools/list`）。
 
-### 1.2 全套 MCP 工具（10 个）
-你注册后这 10 个工具**默认全部授权**，参数 schema 由 MCP 客户端 `tools/list` 自动获取：
+### 1.2 全套 MCP 工具（11 个）
+你注册后这 11 个工具**默认全部授权**，参数 schema 由 MCP 客户端 `tools/list` 自动获取：
 
 | 工具 | Planner 何时使用 |
 |---|---|
 | `checkIn` | **上线后先打卡上班**，获取一份打卡租约（ACTIVE），维持"在岗"状态参与调度 |
 | `checkOut` | 会话结束 / 主动下线时打卡下班，关闭当前租约 |
 | `getAgentStatus` | 启动后查询自身状态，确认鉴权与在线状态后再开始规划 |
-| `pullTasks` | 查收件箱：`task.created`（新任务待规划）/ `task.republished`（重新发布）/ `sub_task.blocked`（阻塞求助）等（建议每 30 秒轮询一次；唯一的任务感知通道，门铃已搁置） |
-| `ack` | 每条收件箱消息处理完毕后确认 |
+| `pullTasks` | 查收件箱：`task.created`（新任务待规划）/ `task.republished`（重新发布）/ `sub_task.blocked`（阻塞求助）/ `sub_task.review`（待审查）（建议每 30 秒轮询一次；唯一的任务感知通道，门铃已搁置）；`includeRead=true` 可附带最近已读消息 |
+| `ack` | 每条收件箱消息处理完毕后确认（未 ack 的消息下次 pull 仍会出现） |
 | `claimSubTask` | 如有分配给你本人的规划类子任务，可原子认领 |
 | `heartbeat` | 周期上报心跳维持在线（建议 30 秒一次，超过 5 分钟无心跳会被判 OFFLINE） |
 | `uploadArtifact` | 登记规划产物附件元数据（如拆解方案文档；v2.7：平台可直读 `minio://` 附件，`storageUrl` 按 `{注册名}/{yyyy}/{MM}/{taskId}/{subTaskId}/` 组织） |
 | `submitResult` | 完成自己名下子任务后上交结果；重复提交须带相同 `resultId` 保证幂等 |
 | `reportBlocked` | 规划本身遇到外部依赖不可用等无法自行解决的阻塞时上报 |
+| `getDepsSummary` | 开工前主动拉取前置产出摘要（每条前置的标题/状态/执行摘要/内容本体）；无依赖时 `depCount=0` |
 
 > 🧭 **`checkIn` 租约机制（实测必看）**
-> - 租约是**一次性签发**：`expires_at = now + ttlMinutes`，默认 30 分钟；到点直接 EXPIRED，**不会自动续约**。
-> - DB 部分唯一索引 `uk_duty_lease_agent_active` 阻止同一 Agent 多条 ACTIVE 行；如需"续约"必须先 `checkOut` 旧租约，再 `checkIn` 一次。
-> - 租约 EXPIRED 后即视为离岗（不在调度候选），需要重新 `checkIn` 拿新租约。
-> - **建议节奏**：在 ttlMinutes 到期前 1 分钟主动重做一次 checkIn，避免被静默切到 OFFLINE。
+> - 租约签发：`expires_at = now + ttlMinutes`，默认 30 分钟；到期后翻为 EXPIRED，即视为离岗（不在调度候选），需重新 `checkIn` 拿新租约。
+> - **工具调用自动续约（A0-8）**：除 `checkIn`/`checkOut` 外，任一工具调用都会把当前 ACTIVE 租约按**原 TTL 窗口**顺带延长。**长任务执行期间正常调用工具即可保活，无需周期性重做 checkIn**；只有超过 TTL 无任何工具调用才会掉线。
+> - DB 部分唯一索引 `uk_duty_lease_agent_active` 阻止同一 Agent 多条 ACTIVE 行；需要更换 TTL / 工作模式等参数时，仍可 `checkOut` 旧租约后再 `checkIn` 一次。
+> - **建议节奏**：任务执行期间按 30 秒~1 分钟节奏 `pullTasks` 轮询 + 关键节点 `heartbeat` 自检即可持续在岗，TTL 用尽前无需手动重做 checkIn。
+> - **心跳自检**：`heartbeat` 每次返回 `onDuty` + `leaseId` + `leaseExpiresAt` + `remainingTtlSeconds`（剩余秒数），Agent 据此确认租约仍在有效期内，无需依赖任何推送。
+> - **checkOut 幂等**：重复签退 / 对已过期租约签退都返回成功，且带 `currentStatus` 说明当前租约事实（`CLOSED`=刚签退 / `EXPIRED`=已过期无需再签 / `NONE`=从未打卡）。
 
 ### 1.3 推荐工作循环（轮询值守模式）
 
@@ -78,6 +81,8 @@
 6. ack                     # 确认对应收件箱消息已处理
 7. 会话结束 / Ctrl+C        # 触发退出清理（§1.5.4）：checkOut → 关连接
 ```
+
+> 💡 完整可照抄示例见 §1.5.7（上班 → 轮询 → 收件箱有新消息 → 按第二节工作流处理 → ack → 继续轮询 → 下班一段式脚本）。
 
 ### 1.4 MCP SSE 握手与 sessionId 透传（关键·避坑）
 
@@ -97,9 +102,11 @@
 - 漏传会报 **"sessionId 不能为空"**：把第 1 步拿到的 sessionId **既拼在 URL query（`?sessionId=`）也放进 tool 的 arguments**（字段名 `sessionId`；旧客户端兼容 `_sessionId`）。
 - 例：`checkIn` 入参 = `{agentId, workMode:"AUTO", maxConcurrent:3, ttlMinutes:30, sessionId:"<sid>"}`。
 
-**(3) 不要走 `/api/mcp/jsonrpc` 旧 REST 通道**
-- 那是 v2.4 早期实现，**dispatch 不含 `checkIn`/`checkOut`**，调会报 `Unknown tool: checkIn`。
-- 打卡类工具**只能走 spring-ai SSE 通道**（`/mcp/sse` + `/mcp/messages`）。
+**(3) Session 失效（Session not found）与 REST 别名兜底（A0-2）**
+- spring-ai 的 MCP session **严格绑定 SSE 长连接**：连接断开/超时即失效，之后 `POST /mcp/messages?sessionId=<旧sid>` 会报 **404 Session not found**——这是服务端协议行为，旧 sessionId 无法复活。
+- **修复路径 A（推荐）**：重新走四步握手（重新 GET /mcp/sse 拿新 sessionId）。
+- **修复路径 B（免握手）**：改走 **REST 别名通道 `POST {{BASE_URL}}/api/mcp/jsonrpc`**——A0-3 起已补齐全部 11 工具（含 `checkIn`/`checkOut`/`getAgentStatus`/`getDepsSummary`），**无状态、同步响应**，只带 `Authorization: Bearer <API_KEY>` 即可，不依赖任何 session。请求格式：`{"jsonrpc":"2.0","method":"tools/call","params":{"name":"checkIn","arguments":{"workMode":"AUTO"}},"id":1}`；成功响应 `{"jsonrpc":"2.0","result":{...},"id":1}`，失败响应 `{"jsonrpc":"2.0","error":{...},"id":1}`（HTTP 仍 200，需查 `error` 字段）。
+- 推荐节奏：优先 MCP SSE 通道；一旦遇到 `Session not found` / `session 未鉴权或已过期`，切 REST 别名通道继续本轮轮询，不必中断任务。
 
 **(4) 心跳是唯一的在线证明**
 - `pullTasks` / `submitResult` 等业务调用**只刷新 `last_active_time`，不会维持在线**；必须**周期调 `heartbeat`**（建议 30 秒一次）刷新 `last_seen_time`，超 5 分钟无心跳会被判 OFFLINE。
@@ -124,6 +131,20 @@ T+60s    : heartbeat + pullTasks
 - 门铃推送通道已搁置（技术瓶颈，外部 Agent 无法处理平台推送），**任务感知唯一靠 `pullTasks` 周期轮询**；收件箱有新消息时，平台不会主动通知你。
 - **30s heartbeat 不是为了"收事件"**，而是为了**证明你的进程还活着**（服务端 5 分钟无心跳判 OFFLINE）。
 - `pullTasks` 等业务调用**只刷新 `last_active_time`，不维持在线**；每一轮都必须带 `heartbeat`。
+
+#### 1.5.1.bis 收件箱消息类型与处理规则（必读）
+
+`pullTasks` 返回的每条消息 `type` 字段即事件类型，处理规则如下（类型集为服务端投递逻辑实测）：
+
+| type | 含义 | 你的动作 |
+|---|---|---|
+| `task.created` | 新任务待规划 | 走 §2.1 拆解（先查现状防重复拆分）→ 创建子任务 → 指派 |
+| `task.republished` | 任务重新发布 | 先查现状（`GET /api/sub-tasks?taskId=`），按 §2.1 重新拆解/指派 |
+| `sub_task.blocked` | 执行者阻塞求助 | 走 §2.2 六步排障闭环（URGENT，优先处理） |
+| `sub_task.review` | 子任务已提交待审查 | 平台内自动核验（有 REVIEWER 角色 API_KEY_LLM 在岗时）先行；无可用内核验 Agent 时由你兜底审查：先 `GET /api/reviews?subTaskId=` 查是否已有记录，无则按审查要求 `POST /api/reviews` 评分 |
+| `sub_task.assigned` | 有规划类子任务直接派给你本人 | 认领 → 执行 → 提交（同 EXECUTOR 流程） |
+
+> 每条消息处理完毕必须 `ack`（未 ack 的消息下次 pull 仍会出现）；处理规则与平台实现一致，收到未列出的 type 时先 ack 并按消息摘要判断是否需人工关注。
 
 #### 1.5.2 轮询值守两件套（同一主循环）
 
@@ -156,6 +177,112 @@ T+30m       : 旧租约 expires_at 到点即 EXPIRED（离岗）；提前 60s �
 ```
 
 > 漏步骤 2 会导致租约残留在 DB 30 分钟内继续占据"在岗"状态；漏步骤 3 不会立即出错，但会留下幽灵进程。
+
+#### 1.5.5 反模式（不要这么做）
+
+```bash
+# ❌ 反模式 A：checkIn 后只做一次探针就退出
+checkIn ...
+exit 0
+# 结果：onlineStatus=OFFLINE，阻塞求助通知到了没人处理 = 整条任务链卡死
+
+# ❌ 反模式 B：checkIn 后等待用户输入
+checkIn ...
+echo "已打卡，等待任务"
+read -p "按回车继续..."
+# 结果：用户不动 = 进程挂起 = 无心跳 = 5 分钟后 OFFLINE
+
+# ❌ 反模式 C：只 pullTasks 不 heartbeat
+checkIn ...
+while true; do pullTasks; sleep 30; done
+# 结果：pullTasks 只刷 last_active_time 不维持在线；5 分钟无 heartbeat 仍会被判 OFFLINE
+```
+
+#### 1.5.6 正模式骨架
+
+```powershell
+# 1) 一次性：MCP 四步握手 + checkIn
+# 2) while (-not $shouldExit) {
+#      - MCP heartbeat(sid)
+#      - MCP pullTasks(sid) -> 有新消息按 §1.5.1.bis 处理（拆解/排障/审查）
+#      - 检查租约 expires_at -> 若 < now+60s -> checkOut + checkIn
+#      - Start-Sleep 30
+#    }
+# 3) 退出清理（Ctrl+C）：停轮询 -> checkOut -> 关 /mcp/sse
+```
+
+#### 1.5.7 值班闭环最小示例（可照抄）
+
+> 下面把「上班 → 轮询 → 收件箱有新消息 → 按第二节工作流处理 → ack → 继续轮询 → 下班」串成一段**完整可照抄**的
+> PowerShell 脚本。走 **REST 别名通道 `POST /api/mcp/jsonrpc`**（免 MCP session、无状态同步，任何环境可跑）。
+> 把 `<你的API_KEY>` 换成注册后拿到的 Key、`{{BASE_URL}}` 换成平台地址即可运行；
+> 这是 §1.5.1~§1.5.6 全部规则的落码形态，每一行都与平台实测契约一致。
+
+```powershell
+# HelloAI Planner 值班闭环最小示例（REST 别名通道）
+$ApiKey = '<你的API_KEY>'     # 注册后填入（ak_ 开头）
+$Base   = '{{BASE_URL}}'      # 例如 http://localhost:6565
+$H      = @{ Authorization = "Bearer $ApiKey"; 'Content-Type' = 'application/json' }
+
+function Invoke-Tool([string]$Name, [hashtable]$A = @{}) {
+    $b = @{ jsonrpc = '2.0'; method = 'tools/call'; id = 1
+            params = @{ name = $Name; arguments = $A } } | ConvertTo-Json -Depth 10 -Compress
+    $r = Invoke-RestMethod -Uri "$Base/api/mcp/jsonrpc" -Method Post -Headers $H -Body $b -TimeoutSec 15
+    if ($r.error) { throw ('tool ' + $Name + ' failed: ' + $r.error.message) }   # 失败时 HTTP 仍 200，必须查 error 字段
+    return $r.result
+}
+
+# ① 上班：checkIn 拿 ACTIVE 租约（唯一上岗证明；不打卡直接 pullTasks 会 500「Agent 未在岗」）
+$ci = Invoke-Tool 'checkIn' @{ workMode = 'AUTO'; maxConcurrent = 3; ttlMinutes = 30 }
+Write-Host ('CHECKIN ok leaseId=' + $ci.leaseId)
+
+try {
+    # ② 主循环：每 30s 一轮 = heartbeat（健康证明）+ pullTasks（唯一任务感知通道）
+    while ($true) {
+        $hb = Invoke-Tool 'heartbeat'        # 不心跳 5 分钟 = OFFLINE；任一工具调用会自动续租（§1.2 A0-8）
+        if (-not $hb.onDuty) {               # 租约被关/过期时重新打卡
+            $ci = Invoke-Tool 'checkIn' @{ workMode = 'AUTO'; maxConcurrent = 3; ttlMinutes = 30 }
+            Write-Host ('RE-CHECKIN leaseId=' + $ci.leaseId)
+        }
+
+        $pt = Invoke-Tool 'pullTasks' @{ role = 'PLANNER'; max = 20; includeRead = $false }
+        foreach ($m in @($pt.messages)) {    # 收件箱有新消息？按 §1.5.1.bis 分派
+            if ($m.type -eq 'task.created' -or $m.type -eq 'task.republished') {
+                # ……按 §2.1 拆解：先查现状防重复拆分，再创建子任务 + 指派（写操作走 REST，见第四节）……
+            }
+            elseif ($m.type -eq 'sub_task.blocked') {
+                # ……按 §2.2 六步排障闭环（URGENT 优先）：查详情 → 根因 → 处置 → 留痕 → 调优 → 升级……
+            }
+            elseif ($m.type -eq 'sub_task.review') {
+                # ……平台内自动核验先行；无可用内核验 Agent 时兜底审查：先查 /api/reviews 再 POST 评分……
+            }
+            elseif ($m.type -eq 'sub_task.assigned') {
+                # ……有规划类子任务派给你本人：claimSubTask → 执行 → submitResult（同 EXECUTOR 流程）……
+            }
+
+            Invoke-Tool 'ack' @{ messageId = $m.messageId } | Out-Null   # 处理完毕才 ack；未 ack 下轮会再出现
+        }
+        Start-Sleep -Seconds 30
+    }
+}
+finally {
+    # ③ 下班（Ctrl+C 也会走到这里）：checkOut 关租约，避免残留「在岗」占位影响派单
+    Invoke-Tool 'checkOut' @{ closeReason = 'shutdown' } | Out-Null
+    Write-Host 'CHECKOUT ok -> OFFLINE'
+}
+```
+
+**照抄要点（每一条都是实测契约，不是示意）**：
+
+- **REST 别名响应是 JSON-RPC 原生格式**：成功 `{"jsonrpc":"2.0","result":{...},"id":1}`，失败
+  `{"jsonrpc":"2.0","error":{...},"id":1}`（HTTP 仍是 200）——`Invoke-Tool` 里必须查 `error` 字段，
+  否则错误响应会被当成功吞掉。
+- **ack 在最后**：未 ack 的消息下次 pull 仍会出现（`read=false`）；处理完毕才 ack 是唯一正确的防丢姿势。
+- **heartbeat 每轮必发**：业务调用只刷 last_active_time 不维持在线（§1.4(4)）。
+- **写操作走 REST**：任务/模块/子任务的创建与指派（`POST /api/tasks`、`POST /api/sub-tasks`、
+  `POST /api/sub-tasks/reassign/<id>`）不在 11 工具里，走第四节 REST 端点；工具通道只负责"接活-交付"链路。
+- **中文乱码排查**：若 pullTasks 返回的 title/summary 中文乱码，是 PS 5.1 响应解码问题，用
+  `Invoke-WebRequest` + UTF-8 字节解码（messageId/type 等关键字段是 ASCII，不受影响）。
 
 ---
 
@@ -398,9 +525,9 @@ python task-cli.py --key <API_KEY> update        # 更新 CLI + SKILL
 |---|---|---|---|
 | 400 | `Invalid message format` | POST `/mcp/messages` 缺 `charset=utf-8` | 用 `StringContent(..., UTF8, 'application/json')` 让容器自动追加 charset |
 | 401 | `Unauthorized` | Bearer 头错 | 检查 API Key 前缀 `ak_` 与拼写 |
-| 404 | `/api/mcp/tools` 只列 7 个工具 | 这是 v2.4 降级视图，没含 `checkIn`/`checkOut` | 改走 SSE 通道 `/mcp/sse` 调 `tools/list` 拿全 10 个工具 |
-| 500 | `Agent 未在岗（无 ACTIVE 打卡租约）` | 未 checkIn 就调用依赖在岗状态的能力 | 先 MCP `tools/call checkIn` 再调用 |
+| 404 | `Session not found` | SSE 连接断开/超时，session 已被服务端回收 | 重新 GET /mcp/sse 四步握手；或切 REST 别名 `POST /api/mcp/jsonrpc`（免 session，§1.4(3)） |
+| 500 | `Agent 未在岗（无 ACTIVE 打卡租约）` | 未 checkIn 就调用依赖在岗状态的能力 | 先调 `checkIn`（MCP / REST 别名 / REST 直通均可）再调用 |
 | 500 | `sessionId 不能为空` | tool arguments 漏 `sessionId` 字段 | 把 SSE endpoint 帧拿到的 sid **同时**拼进 URL `?sessionId=` 与 arguments `sessionId` |
-| 500 | `Unknown tool: checkIn`（走 REST JSON-RPC） | 走了 `/api/mcp/jsonrpc` 旧通道，dispatch switch 不含 checkIn | 换 `/mcp/sse` + `/mcp/messages` 通道 |
+| 500 | `Unknown tool: xxx` | 工具名拼错 | 先 `tools/list` 拿权威清单（三通道 11 工具） |
 
 > **建议**：优先走 MCP（全套工具 + 统一心跳/租约语义）；写操作与无 MCP 客户端时用 REST curl 轮询兜底；CLI 仅覆盖 poll/submit/status 三个高频操作。

@@ -5412,3 +5412,28 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - 影响：① executor SKILL.md 由「协议完备」升级为「协议 + 可运行示例」双轨，外部 AI（Trae/Qoder）拿到 SKILL 即可照抄值班闭环；② §0.1 三通道响应格式表述与真实实现对齐。
 - 遗留：① planner SKILL.md §1.4(3) 仍保留过时描述「不要走 /api/mcp/jsonrpc 旧 REST 通道，dispatch 不含 checkIn/checkOut」（A0-3 §6.61 后已补齐，与 executor 表述不一致），建议下轮同步修正；② 示例未做真机运行验证（M5 场景 2 起可与 Trae 实测交叉验证）。
+
+### 6.97 三角色 SKILL.md 同步：planner 失真修正 + 值班闭环示例 / reviewer 按代码事实重写（2026-08-16）
+
+#### 1. 范围
+
+- **背景**：§6.96 只更新了 executor SKILL.md，用户确认「3 个角色的 skills 都应更新」。planner 与 executor 同构（有 §1.5 值守协议但缺示例且多处失真）；reviewer 是旧版结构（无 MCP/值守概念）且其「每次唤醒查收件箱」流程与代码现实不符。用户选择 reviewer「按代码事实重写」。
+- **本次落地**：planner SKILL.md 失真修正 5 处 + 补 1.5.1.bis 消息类型表 / 1.5.5 反模式 / 1.5.6 骨架 / 1.5.7 值班闭环示例（PLANNER 版）；reviewer SKILL.md 整份重写（两种工作形态 + REST 审查入口）。
+- **明确不做**：不改任何 Java 代码；不改变平台对 REVIEWER 角色的投递行为（`sub_task.review` 只投 PLANNER 属代码事实，仅如实写入文档）。
+
+#### 2. 实际落地（契约核对 + 文档同步）
+
+- **planner 失真修正（与 A0-2/A0-3/A0-4/A0-8 现实对齐）**：① §0 提醒「checkIn/checkOut 只存在于 MCP SSE（10 工具）/REST 端 7 工具」改为三通道对齐 + REST 别名兜底表述；② §1.2 工具表 10→11（补 `getDepsSummary`）；③ checkIn 租约机制「不会自动续约」改为 A0-8 工具调用自动续约表述；④ §1.4(3)「不要走 /api/mcp/jsonrpc 旧 REST 通道」改为「Session 失效与 REST 别名兜底（A0-2）」，补 JSON-RPC 原生响应格式说明；⑤ 错误码速查表删两行失真行（404 只列 7 工具 / 500 Unknown tool: checkIn），改为 Session not found / Unknown tool: xxx。
+- **planner §1.5 补全**：新增 1.5.1.bis 收件箱消息类型表（PLANNER 视角 4 类，代码实证：`task.created` TaskController L62 / `task.republished` TaskServiceImpl L243 / `sub_task.blocked` SubTaskServiceImpl L453 / `sub_task.review` L472——均只投 PLANNER）；1.5.5 反模式、1.5.6 骨架、1.5.7 值班闭环示例（PLANNER 版，消息分派指向 §2.1 拆解 / §2.2 六步排障 / 审查兜底，写操作走 REST）；§1.3 加指针。
+- **reviewer 整份重写（按代码事实）**：两种工作形态——形态 A 平台内自动核验 agent（API_KEY_LLM：`pickReviewerAgent` 选择链 + 核验 Prompt 直接调用模型 + **不消费收件箱、不需要 checkIn/心跳**——选人过滤对 API_KEY_LLM 豁免在线与心跳新鲜度检查，AgentSelector L90-96 代码实证；入选条件 = REVIEWER/PLANNER 角色 + API_KEY_LLM + Agent 状态 ACTIVE + 托管凭证启用）；形态 B 外部人工审查（**`sub_task.review` 收件箱通知当前只投 PLANNER，外部 REVIEWER 收不到**——SubTaskServiceImpl L470-477 注释与代码不一致，注释写"通知所有 PLANNER/REVIEWER"但代码只 `listByRole(PLANNER)`；人工审查入口为 REST）。保留旧版精华（断言式三段审查法 / 审查原则 / 评分标准），审查操作补 `X-Agent-Id` 头（ReviewController L28-45 代码实证）与 `reworkAgentId` 参数，补「附件不可读不得臆断」原则（§6.95 实战教训）。
+
+#### 3. 验证结果
+
+- 契约核对：planner 收件箱 4 类消息类型逐一与投递代码对上；reviewer 两种形态的每个断言（收件箱跳过 API_KEY_LLM / 选人豁免在线 / POST /api/reviews 参数与 X-Agent-Id）均有代码行号依据。
+- planner SKILL.md 内 2 个 powershell 代码块（1.5.6 骨架 + 1.5.7 示例 60 行）ParseFile 语法自检 PARSE-OK。
+- 无代码改动，无需编译/测试。
+
+#### 4. 影响与遗留
+
+- 影响：① 三角色 SKILL.md 全部与当前平台现实对齐——executor/planner 双轨（协议 + 可照抄示例），reviewer 两种形态如实（不再给外部 REVIEWER 不存在的「收件箱接审查单」流程）；② planner 的 5 处失真修正消除了「外部 Agent 照旧文档走 /api/mcp/jsonrpc 报 Unknown tool」的误导源。
+- 遗留：① `sub_task.review` 投递注释与代码不一致（注释称通知 PLANNER/REVIEWER，代码只发 PLANNER）——是否把外部 REVIEWER 纳入审查通知属产品决策，未改代码仅文档如实；② 三份 SKILL.md 示例均未做真机运行验证（M5 场景 2 起可交叉验证）。
