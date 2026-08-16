@@ -61,9 +61,12 @@ instance.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 
 instance.interceptors.response.use(
   (response: AxiosResponse<R<any>>) => {
-    // blob 下载（交付物 zip / 附件流式）没有 R 包裹体，原样放行完整 response
-    // （调用方需读 headers 的 Content-Disposition 解析文件名）
-    if (response.config.responseType === 'blob') {
+    // 非 JSON 通道（blob / text / arraybuffer / document / stream 等）原样放行，
+    // 不做 R 包裹体解析；调用方直接读 response.data / response.headers。
+    // 覆盖：download（blob）、previewById（blob）、previewTextById（text）。
+    // 默认 responseType 缺失时按 'json' 走常规 R 解析路径。
+    const rt = response.config.responseType
+    if (rt && rt !== 'json') {
       return response as any
     }
     const res = response.data
