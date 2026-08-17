@@ -132,7 +132,10 @@ services:
     container_name: helloai-web
     restart: unless-stopped
     ports:
-      - "5173:80"   # Only public entry (open TCP 5173 in lightweight server firewall)
+      # V52 修正：对外端口固定 80（注释 L14 一致 + 与 trae 客户端默认 BASE_URL 对齐），
+      # 5173 仅作为本地/局域网备胎绑定（避免运营商对 80 端口的劫持/封锁）。
+      - "80:80"        # 公网唯一入口（轻量服务器防火墙必须开 TCP 80）
+      - "5173:80"      # 本地/局域网备胎入口（可选保留便于本机调试；不再作为对外唯一端口）
     volumes:
       - ./dist:/usr/share/nginx/html:ro
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
