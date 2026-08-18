@@ -1,6 +1,7 @@
 package com.helloai.core.agent.service.impl;
 
 import com.helloai.core.agent.chat.AgentProviderResolver;
+import com.helloai.core.agent.chat.LlmCallConcurrencyGuard;
 import com.helloai.core.agent.service.AgentChatClientService;
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentExecutionProperties;
@@ -34,6 +35,7 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
     private final AgentExecutionProperties executionProperties;
     private final ObjectProvider<ChatClient.Builder> chatClientBuilderProvider;
     private final LlmProviderChatClientFactoryRegistry providerRegistry;
+    private final LlmCallConcurrencyGuard llmCallConcurrencyGuard;
 
     /**
      * 使用 Spring AI ChatClient 生成回复。
@@ -47,6 +49,23 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
         if (!executionProperties.isEnabled()) {
             throw new BizException("平台内 Agent 执行链已关闭");
         }
+        // 并发限流（对话并发优化 B 项）：仅真实 Provider 模式占用许可，
+        // mock 模式本地即时返回无上游压力；finally 保证异常路径也释放。
+        boolean throttled = !executionProperties.isMockMode();
+        if (throttled) {
+            llmCallConcurrencyGuard.acquire();
+        }
+        try {
+            return doGenerate(agent, systemPrompt, userPrompt, provider, apiKeyPlaintext);
+        } finally {
+            if (throttled) {
+                llmCallConcurrencyGuard.release();
+            }
+        }
+    }
+
+    private ChatResponse doGenerate(Agent agent, String systemPrompt, String userPrompt,
+                                    String provider, String apiKeyPlaintext) {
         ChatClient chatClient;
         if (executionProperties.isMockMode()) {
             chatClient = ChatClient.create(new MockChatModel(

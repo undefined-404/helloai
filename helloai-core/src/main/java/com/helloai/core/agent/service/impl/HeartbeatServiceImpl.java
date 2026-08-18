@@ -1,5 +1,6 @@
 package com.helloai.core.agent.service.impl;
 
+import com.helloai.common.config.HeartbeatProperties;
 import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentStatus;
@@ -14,6 +15,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -53,6 +56,13 @@ public class HeartbeatServiceImpl implements HeartbeatService {
 
     private final AgentMapper agentMapper;
     private final StringRedisTemplate redis;
+    private final HeartbeatProperties heartbeatProperties;
+
+    /**
+     * active() 节流时间戳（agentId → 最近一次完整双写时刻，尽力而为不追求强一致）：
+     * 并发窗口内可能双写，但比完全不节流降一个量级。
+     */
+    private final ConcurrentMap<Long, Long> lastActiveWriteAt = new ConcurrentHashMap<>();
 
     /**
      * 心跳刷新（v2.4 升级版）。
@@ -126,6 +136,19 @@ public class HeartbeatServiceImpl implements HeartbeatService {
     public void active(Long agentId) {
         if (agentId == null) {
             return;
+        }
+        // 节流（对话并发优化 A 项）：窗口内同一 agent 只执行一次完整双写，
+        // 消除多对话并发钉住同一 Planner 时的 DB 行锁排队与写放大。
+        // last_active_time 仅用于 ONLINE/IDLE 判定（5 分钟窗口），默认 30s 误差无实质影响；
+        // 外部 Agent 的 last_seen_time 由其 2 秒级 heartbeat 工具独立保活，不受本窗口影响。
+        long throttleMs = heartbeatProperties.getActiveThrottleMs();
+        if (throttleMs > 0) {
+            long now = System.currentTimeMillis();
+            Long last = lastActiveWriteAt.get(agentId);
+            if (last != null && now - last < throttleMs) {
+                return;
+            }
+            lastActiveWriteAt.put(agentId, now);
         }
         // 1) 复用 seen() 的完整双写：Redis TTL + DB last_seen_time + 三态重算
         //    seen() 内部已处理 SLEEPING / OFFLINE→ONLINE 恢复 / Agent 不存在 等边界

@@ -78,6 +78,21 @@ public class AgentExecutionProperties {
     /** mock 前缀，便于联调时快速识别结果来源。 */
     private String mockResponsePrefix = "[mock-executor]";
 
+    /**
+     * 平台内 LLM 调用并发上限（对话并发优化 B 项）。
+     *
+     * <p>真实 Provider 模式下所有 LLM 调用（对话澄清/拆解/审查/执行）共用同一批
+     * API Key，上游有 RPS 限流；信号量限流避免并发打爆上游触发 429。
+     * &lt;=0 表示不限流（保持原行为）；mock 模式自动跳过限流。</p>
+     */
+    private int maxConcurrentLlmCalls = 8;
+
+    /**
+     * LLM 并发许可获取超时（秒）：超时抛 BizException 提示稍后重试，
+     * 避免请求无限阻塞在信号量上占满 Tomcat 线程。
+     */
+    private long llmAcquireTimeoutSeconds = 60L;
+
     /** PENDING 执行记录超时分钟数，默认 5。 */
     private int pendingTimeoutMinutes = 5;
 

@@ -33,7 +33,8 @@ class AgentChatClientServiceTest {
 
         ObjectProvider<ChatClient.Builder> builderProvider = mock(ObjectProvider.class);
         LlmProviderChatClientFactoryRegistry registry = mock(LlmProviderChatClientFactoryRegistry.class);
-        AgentChatClientService service = new AgentChatClientServiceImpl(properties, builderProvider, registry);
+        LlmCallConcurrencyGuard guard = new LlmCallConcurrencyGuard(properties);
+        AgentChatClientService service = new AgentChatClientServiceImpl(properties, builderProvider, registry, guard);
 
         Agent agent = new Agent();
         agent.setId(101L);

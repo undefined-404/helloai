@@ -1,5 +1,6 @@
 package com.helloai.core.agent.observability;
 
+import com.helloai.common.config.HeartbeatProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
@@ -70,7 +71,10 @@ class HeartbeatServiceActiveTest {
 
     @BeforeEach
     void setUp() {
-        heartbeatService = new HeartbeatServiceImpl(agentMapper, redis);
+        HeartbeatProperties properties = new HeartbeatProperties();
+        // 测试默认不节流（保持原行为），节流场景在 Throttle 嵌套类内单独构造
+        properties.setActiveThrottleMs(0);
+        heartbeatService = new HeartbeatServiceImpl(agentMapper, redis, properties);
         // LENIENT 模式：部分用例不调 redis，此 stubbing 不是"未使用"而是被跳过
         when(redis.opsForValue()).thenReturn(valueOps);
     }
@@ -212,6 +216,77 @@ class HeartbeatServiceActiveTest {
 
             // DB 侧的 last_active_time 仍被刷新（Redis 失败不影响 DB）
             verify(agentMapper, atLeastOnce()).updateById(any(Agent.class));
+        }
+    }
+
+    @Nested
+    @DisplayName("active() 节流（对话并发优化 A 项）")
+    class Throttle {
+
+        @Test
+        @DisplayName("窗口内同一 agent 第二次调用直接跳过（不写 Redis/DB）")
+        void shouldSkipSecondCallWithinWindow() {
+            HeartbeatProperties properties = new HeartbeatProperties();
+            properties.setActiveThrottleMs(60_000L);
+            HeartbeatService throttled = new HeartbeatServiceImpl(agentMapper, redis, properties);
+
+            Agent agent = newAgent(501L, AgentOnlineStatus.ONLINE);
+            when(agentMapper.selectById(501L)).thenReturn(agent);
+
+            throttled.active(501L);
+            throttled.active(501L);
+
+            // 第一次完整双写（seen 一次 update + active 末尾一次 update），第二次被节流跳过
+            verify(agentMapper, times(2)).updateById(any(Agent.class));
+        }
+
+        @Test
+        @DisplayName("窗口过期后再次调用恢复写入（last_active_time 误差不超过窗口）")
+        void shouldWriteAgainAfterWindowExpires() {
+            HeartbeatProperties properties = new HeartbeatProperties();
+            properties.setActiveThrottleMs(30_000L);
+            HeartbeatService throttled = new HeartbeatServiceImpl(agentMapper, redis, properties);
+
+            Agent agent = newAgent(502L, AgentOnlineStatus.ONLINE);
+            when(agentMapper.selectById(502L)).thenReturn(agent);
+
+            throttled.active(502L);
+            verify(agentMapper, times(2)).updateById(any(Agent.class));
+
+            // 窗口过期后应再次写入：反射改时间戳回退 40s
+            try {
+                java.lang.reflect.Field field = HeartbeatServiceImpl.class
+                        .getDeclaredField("lastActiveWriteAt");
+                field.setAccessible(true);
+                @SuppressWarnings("unchecked")
+                java.util.concurrent.ConcurrentMap<Long, Long> map =
+                        (java.util.concurrent.ConcurrentMap<Long, Long>) field.get(throttled);
+                map.put(502L, System.currentTimeMillis() - 40_000L);
+            } catch (Exception e) {
+                throw new IllegalStateException("测试反射访问 lastActiveWriteAt 失败", e);
+            }
+
+            throttled.active(502L);
+            verify(agentMapper, times(4)).updateById(any(Agent.class));
+        }
+
+        @Test
+        @DisplayName("不同 agent 互不节流（各自独立窗口）")
+        void shouldNotThrottleAcrossAgents() {
+            HeartbeatProperties properties = new HeartbeatProperties();
+            properties.setActiveThrottleMs(60_000L);
+            HeartbeatService throttled = new HeartbeatServiceImpl(agentMapper, redis, properties);
+
+            Agent a = newAgent(511L, AgentOnlineStatus.ONLINE);
+            Agent b = newAgent(512L, AgentOnlineStatus.ONLINE);
+            when(agentMapper.selectById(511L)).thenReturn(a);
+            when(agentMapper.selectById(512L)).thenReturn(b);
+
+            throttled.active(511L);
+            throttled.active(512L);
+
+            // 两个 agent 各写一轮完整双写（各 2 次 updateById）
+            verify(agentMapper, times(4)).updateById(any(Agent.class));
         }
     }
 
