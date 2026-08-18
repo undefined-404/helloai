@@ -47,8 +47,8 @@
    - [3.x 配置属性类规范](#3x-配置属性类规范)
    - [3.x 资源文件存放规范](#3x-资源文件存放规范)
 4. [命名规范](#4-命名规范)
-   - [4.x 接口使用原则](#4x-接口使用原则)
-   - [4.x 常量与枚举命名](#4x-常量与枚举命名)
+   - [4.5 接口使用原则](#45-接口使用原则)
+   - [4.6 常量与枚举命名](#46-常量与枚举命名)
 5. [实体类规范](#5-实体类规范)
    - [5.5 日期时间处理规范](#55-日期时间处理规范)
 6. [Controller 规范](#6-controller-规范)
@@ -279,13 +279,13 @@ core 模块统一采用"业务域分包 + 域内技术分层"，禁止新增顶�
 - com.helloai.core.system  系统支撑域（用户、配置、规则、模块、凭据、附件、存储、 **LLM Provider**）
 - com.helloai.core.shared  跨域基础设施（event、doorbell、handler、util）
 
-每个域内固定子包：entity / mapper / service / service.impl；按域需要可扩展。当前各域完整子包（v2.8 拆分后实际结构）：
+业务域（agent / task / planner / system）固定子包：entity / mapper / service / service.impl；review 域仅 service 族（评审相关实体归 task 域），shared 域为跨域基础设施无实体层；按域需要可扩展。当前各域完整子包（v2.8 拆分后实际结构）：
 
-- **agent**：entity / mapper / service / service.impl / domain / chat / command / dispatcher / execution / executor / mqconsumer / mcp / observability / output
+- **agent**：entity / mapper / service / service.impl / domain / chat / command / dispatcher / executor / mqconsumer / mcp / observability / output
 - **task**：entity / mapper / service / service.impl / policy / spec / statemachine / score / listener
 - **planner**：entity / mapper / service / service.impl / picker / search
 - **review**：service / service.impl / mqconsumer
-- **system**：entity / mapper / service / service.impl / storage
+- **system**：entity / mapper / service / service.impl / storage / crypto
 - **shared**：event / doorbell / handler / util
 
 > **v2.8 起（2026-08 批次 b0-b4）：Service 层统一"接口 + impl"成对拆分**——业务 Service 一律拆为接口 `XxxService`（放 `{domain}.service`，继承 `IService<Entity>`）+ 实现 `XxxServiceImpl`（放 `{domain}.service.impl`，继承 `ServiceImpl<Mapper, Entity>`）；跨域引用、Controller 一律只依赖接口。已拆分域：agent（10 个移入拆）、task（11 + spec 3 拆）、planner（4 拆 + search 迁移）、review（1 拆）、system（13 拆）；策略/选型类归位专用子包（task/policy、planner/picker）。批次详情见迭代记录 §6.84。
@@ -338,7 +338,7 @@ com.helloai.{模块名}.{层}
 | 实体 | `{Name}` | `Task`、`SubTask`、`Agent`、`ReviewRecord` |
 | Mapper | `{Entity}Mapper` | `SubTaskMapper`、`AgentMapper` |
 | Service 接口 | `{Name}Service` | `SubTaskService`、`ReviewService` |
-| Service 实现 | `{Name}ServiceImpl` | `SubTaskServiceImpl`（v2.8 起 Service 层强制接口 + impl 拆分，见 §4.x 接口使用原则） |
+| Service 实现 | `{Name}ServiceImpl` | `SubTaskServiceImpl`（v2.8 起 Service 层强制接口 + impl 拆分，见 §4.5 接口使用原则） |
 | Controller | `{Name}Controller` | `SubTaskController`、`AgentController` |
 | DTO | `{Action}Request` / `{Action}Response` | `CreateTaskRequest`、`TaskResponse` |
 | MQ 消费者 | `{Name}Consumer` | `ExecutorEventConsumer`、`ReviewerEventConsumer` |
@@ -376,7 +376,7 @@ com.helloai.{模块名}.{层}
 
 > 字段命名的强制细则（时间 `xxx_time`、外键 `xxx_id`、计量 `xxx_count`、避开关键字、主键策略）以 **9.5 字段命名强制规则** 为唯一权威。
 
-### 4.x 接口使用原则
+### 4.5 接口使用原则
 
 | 场景 | 是否强制接口 | 说明 |
 |------|:----------:|------|
@@ -387,7 +387,7 @@ com.helloai.{模块名}.{层}
 
 > **原则**: 接口是抽象边界的产物，不是代码模板的填充物。v2.8 拆分后，Service 接口应保持"业务契约视角"——只声明对外提供的能力，不把内部实现细节（Mapper、私有方法、静态工具）泄漏到接口上。
 
-### 4.x 常量与枚举命名
+### 4.6 常量与枚举命名
 
 | 类型 | 命名规则 | 示例 |
 |------|----------|------|
@@ -2054,9 +2054,9 @@ class SubTaskStateMachineTest {
 | 测试类命名 | `被测类名 + Test`（测 impl 时为 `{Name}ServiceImplTest`） |
 | 测试方法命名 | `方法名_场景_预期结果`（英文下划线） |
 | `@DisplayName` | 写中文描述，清晰表达测试意图 |
-| Mock | 使用 `@Mock` + `@InjectMocks`，不手动 new 对象 |
+| Mock | 纯 mock 单测使用 `@Mock` + `@InjectMocks`，不手动 new 对象 |
 | 断言 | 优先使用 `assertThrows` / `assertDoesNotThrow`，再用 `assertEquals` |
-| Service 实现测试 | 依赖注入用 `@Mock` 依赖 + `@InjectMocks`；需 stub `lambdaQuery()` 链时参照先例 `doReturn(chain).when(service).lambdaQuery()`（LambdaQueryChainWrapper 用 `com.baomidou.mybatisplus.extension.conditions.query` 包），`orderByDesc` 等泛型方法用 `ArgumentMatchers.<SFunction<T, ?>>any()` 消歧义 |
+| Service 实现测试 | 测试目标是实现类自身时允许 `spy(new XxxServiceImpl(...))` 包裹真实实现（豁免“不手动 new 对象”规则，适用基类 `ServiceImpl` 的 `lambdaQuery()` 链 stub，见 AgentServiceTest 先例）；stub 链式写法 `doReturn(chain).when(service).lambdaQuery()`（LambdaQueryChainWrapper 在 `com.baomidou.mybatisplus.extension.conditions.query` 包），`orderByDesc` 等泛型方法用 `ArgumentMatchers.<SFunction<T, ?>>any()` 消歧义 |
 
 ### 21.3 集成测试规范
 
@@ -2074,10 +2074,10 @@ class NotificationConsumerIntegrationTest extends BaseIntegrationTest {
 | 模块 | 行覆盖率目标 | 说明 |
 |------|:----------:|------|
 | `helloai-core/statemachine` | **100%** | 状态机所有转换路径必须覆盖 |
-| `helloai-core/service/score` | **100%** | 评分计算器所有档位必须覆盖 |
+| `helloai-core/task/score` | **100%** | 评分计算器所有档位必须覆盖 |
 | `helloai-mq/consumer` | ≥ 70% | MQ 消费逻辑覆盖 ACK/补偿/幂等 |
 | `helloai-job/task` | ≥ 50% | 补偿任务覆盖超时/正常路径 |
-| `helloai-core/service` | ≥ 60% | 业务逻辑覆盖主流程 |
+| `helloai-core/{各域}.service` | ≥ 60% | 业务逻辑覆盖主流程 |
 
 ### 21.5 关键测试场景
 

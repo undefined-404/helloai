@@ -5437,3 +5437,136 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - 影响：① 三角色 SKILL.md 全部与当前平台现实对齐——executor/planner 双轨（协议 + 可照抄示例），reviewer 两种形态如实（不再给外部 REVIEWER 不存在的「收件箱接审查单」流程）；② planner 的 5 处失真修正消除了「外部 Agent 照旧文档走 /api/mcp/jsonrpc 报 Unknown tool」的误导源。
 - 遗留：① `sub_task.review` 投递注释与代码不一致（注释称通知 PLANNER/REVIEWER，代码只发 PLANNER）——是否把外部 REVIEWER 纳入审查通知属产品决策，未改代码仅文档如实；② 三份 SKILL.md 示例均未做真机运行验证（M5 场景 2 起可交叉验证）。
+
+### 6.98 对话新建并发优化止血：心跳 active 节流 + LLM 并发限流（A+B，2026-08-17）
+
+#### 1. 范围
+
+- **背景**：用户提出「平台能否并发进行多个对话新建」的性能问题。诊断结论：后端无全局锁、无串行队列，对话新建本身天然支持并发；真正的瓶颈有三——① 对话新建链路（RequirementClarifyServiceImpl.create → doRound → runLlmRound → PlatformAgentExecutionServiceImpl.executeSync → ApiKeyAgentExecutor.execute → AgentChatClientServiceImpl.generate）同步阻塞等待 LLM 返回，长时间占用 Tomcat 线程；② 每轮 LLM 调用前 `heartbeatService.active()` 对同一 Agent 行做 2 次 selectById + 2 次全字段 updateById，并发对话下 DB 行锁排队与写放大；③ 上游 DeepSeek 对单 Key 有 RPS/并发限流，突发并发直接 429。
+- **方案**：用户确认「先做 A+B 止血（推荐）」——A. 心跳节流（active() 加时间窗口去重，默认 30s 同一 Agent 只做一次完整双写）；B. LLM 并发限流（JVM 内公平信号量，默认 8 并发、超时 60s 友好报错）。
+- **明确不做**：对话轮次异步化（C 项，改造大、需改接口契约与前端轮询语义）；应用层 429 重试（已核实 Spring Boot 自动配置的 RetryTemplate 在框架层覆盖三个协议工厂，避免重复建设）；多 Key/多 Provider 负载均衡；Redis 分布式锁；不改接口契约与前端。
+
+#### 2. 实际落地
+
+- **A. 心跳节流**：新建 `HeartbeatProperties`（helloai-common/config，前缀 `helloai.heartbeat`，`active-throttle-ms` 默认 30000，<=0 不节流）；`HeartbeatServiceImpl.active()` 入口加节流（`ConcurrentHashMap<Long, Long> lastActiveWriteAt` 时间窗口，窗口内直接 return）。语义：心跳节流仅影响写放大，不影响可用性判定——外部 Agent 的心跳续约走独立路径（checkIn/heartbeat 接口），本处 active() 仅用于平台内 Agent 状态新鲜度刷新。
+- **B. LLM 并发限流**：`AgentExecutionProperties` 新增 `max-concurrent-llm-calls`（默认 8，<=0 不限流）与 `llm-acquire-timeout-seconds`（默认 60）；新建 `LlmCallConcurrencyGuard`（agent/chat，公平 Semaphore，构造时按配置创建）；`AgentChatClientServiceImpl.generate()` 收口接入——非 mock 模式 acquire → doGenerate → finally release，超时抛 BizException「LLM 调用并发过高」，中断时恢复中断位并抛 BizException。
+- **配置**：application.yml 新增 `helloai.heartbeat.active-throttle-ms: 30000` 与 `helloai.execution.max-concurrent-llm-calls: 8` / `llm-acquire-timeout-seconds: 60`（含注释）。
+
+#### 3. 验证结果
+
+- `mvn -pl helloai-core -am test -DskipTests=false "-Dtest=AgentChatClientServiceTest,LlmCallConcurrencyGuardTest,PlatformAgentExecutionServiceTest,HeartbeatServiceActiveTest" -Dsurefire.failIfNoSpecifiedTests=false` **4 测试类 16 tests 全绿**：
+  - `HeartbeatServiceActiveTest` 10 例（原 7 例回归 + 新增 Throttle 嵌套类 3 例：窗口内跳过写 times(2) / 窗口过期后恢复写 times(4) / 跨 Agent 独立窗口互不影响）；
+  - `LlmCallConcurrencyGuardTest` 4 例（许可获取/释放、超限超时抛 BizException、配置 <=0 不限流、12 线程 4 许可并发进入数不超上限）；
+  - `AgentChatClientServiceTest` 1 例 + `PlatformAgentExecutionServiceTest` 1 例回归，构造点已适配新依赖。
+- 踩坑：① `BizException` 无 (String, Throwable) 构造器，中断分支改单参数；② 测试构造点补 `LlmCallConcurrencyGuard` import 与参数；③ 多模块测试需 `-am` 保证 helloai-common 新类进 classpath；④ PowerShell 下 `-Dsurefire.failIfNoSpecifiedTests=false` 需引号包裹防止被拆 token。
+
+#### 4. 影响与遗留
+
+- 影响：① 并发对话时心跳 DB 写放大消除（30s 窗口内同一 Agent 只写一次，多轮对话/多会话并发下效果显著）；② LLM 调用被信号量约束在上游 RPS 限流之下，突发并发从「上游 429 无差别失败」变为「排队等待或友好报错」；③ 心跳节流对可用性判定零影响（外部 Agent 走独立续约路径，last_active_time 窗口 5 分钟远大于节流窗口 30s）。
+- 遗留：① 对话轮次异步化（C 项）未做——同步阻塞仍占 Tomcat 线程，Tomcat 200 线程上限仍是天花板，需时按 C 项方案推进（SSE 流式 + 前端轮询，改接口契约，属产品决策）；② 信号量限流为 JVM 级，多实例部署时需分布式限流（Redis 预留接口位未做）；③ 本轮代码与本文档未 git 提交，待用户确认后提交。
+
+### 6.99 服务器版 MinIO 产物上传修复：平台代理上传接口 POST /api/artifacts/upload（2026-08-17）
+
+#### 1. 范围
+
+- **背景**：用户反馈「本机 AI 无法向服务器版平台上传产出，单机版可以」。根因：① `uploadArtifact` 契约要求 AI 先直连 MinIO PUT 文件再注册元数据（McpToolServiceImpl 注释明示「实际文件内容由客户端直接上传到 MinIO，本工具只注册 DB 元数据」）；② 服务器版 `docker-compose.server.yml` 中 MinIO 端口绑定 `127.0.0.1:29000/29001`（公网不可达），而单机版绑定 `0.0.0.0:29000`——「单机版能传、服务器版不能传」的直接原因；③ 公网唯一入口 nginx（80）只反代 /api、/mcp，无 MinIO 路径；④ SKILL.md 未给出 MinIO 端点/凭据，AI 无地址可传。
+- **方案（用户确认「平台代理上传接口」）**：新增 `POST /api/artifacts/upload`（multipart），AI 带 `Authorization: Bearer <API_KEY>` 上传文件内容，平台用服务端凭据转存主存储（MinIO）并注册附件元数据，一步到位返回 `{attachmentId, storageUrl}`；不暴露 MinIO、不开新端口、AI 无需知道 MinIO 地址与凭据。
+- **明确不做**：改 docker-compose.server.yml 开放 MinIO 端口（凭据暴露公网，仅靠安全组 IP 白名单，不选）；nginx 反代 /minio（S3 签名 Host 头兼容成本）；不改变 `uploadArtifact` 工具契约（保留「仅登记已有对象」场景）。
+
+#### 2. 实际落地
+
+- **ArtifactUploadService**（helloai-core/system/service 新接口 + `ArtifactUploadServiceImpl`）：校验 Agent 存在且 ACTIVE（与 `McpToolServiceImpl.assertAgentActive` 同口径）→ 子任务存在且 `assigned_agent_id=agentId`（与 `AttachmentService.register` 内置校验同口径，register 复用防漂移）→ fileName 安全清洗（`sanitizeFileName`）→ `artifactStorage.store(ownerName=Agent 注册名, taskId, subTaskId, fileName, content)` → `attachmentService.register` 一步到位；store 先于 register，register 失败残留孤儿对象（与 `ExecutionArtifactServiceImpl` 物化链路现状一致，注释说明）。
+- **ArtifactUploadController**（helloai-api/controller 新）：`POST /api/artifacts/upload`，multipart/form-data（`file` + `subTaskId` + 可选 `mimeType`），走现有 `AuthInterceptor` Bearer 鉴权（`@RequestAttribute(_authId)` 注入 agentId），免 MCP session，三通道外部 AI 均可调用；file 空 / subTaskId 空 / fileName 空 / 读取失败均有友好 BizException。
+- **配置**：application.yml 新增 `spring.servlet.multipart.max-file-size/max-request-size=8MB`（略高于 `storage.max-file-size` 5MB 留余量，默认 1MB 太小）。
+- **SKILL.md（executor/planner）**：`uploadArtifact` 描述从「文件先 PUT 到 MinIO」改为「文件内容先经 `POST /api/artifacts/upload` 上传，平台转存 MinIO 并注册一步到位」；executor 新增 🧭「产物文件内容上传（服务器版必读）」提示块（端点/参数/示例，含「不要尝试直连 MinIO PUT 文件」警示），§0.1 通道说明、§1.3 工作循环第 7 步、§1.5.7 示例注释同步更新；planner 工具表行同步。
+
+#### 3. 验证结果
+
+- `mvn -pl helloai-api -am compile` 通过（新 Controller/Service 全模块编译）。
+- `mvn -pl helloai-core -am test` 定向：**ArtifactUploadServiceImplTest 8 tests 全绿**（正常上传 store+register 一步到位 / fileName 清洗 `../报告.md` → `_报告.md` / Agent 不存在 / Agent 未激活 / 子任务不存在 / 非本人子任务不写存储 / fileName 空 / 内容空）；回归 **McpToolServiceTest + AttachmentServiceImplTest + CompositeArtifactStorageTest + MinioArtifactStorageTest 45 tests 全绿**。
+- 踩坑：① `sanitizeFileName` 先替换路径分隔符再剥点前缀（`../报告.md` → `.._报告.md` → `_报告.md`），测试断言按实际清洗行为校准；② PowerShell 下 `-Dsurefire.failIfNoSpecifiedTests=false` 需引号包裹（重复踩坑，已记）。
+
+#### 4. 影响与遗留
+
+- 影响：① 外部 AI 上传产出不再依赖 MinIO 直连，服务器版与单机版行为一致（统一走平台接口）；② MinIO 凭据不暴露公网，上传链路纳入平台 Bearer 鉴权与子任务所有权校验；③ `uploadArtifact` 工具契约不变，保留「仅登记已有对象」语义。
+- 遗留：① 服务器 app 容器内 `MINIO_ENDPOINT` 未覆盖（默认 `localhost:29000` 在容器内自指），后端产出物化写 MinIO 在服务器版可能同样失败——需用户确认服务器实际部署时是否 export `MINIO_ENDPOINT`，未配则需在 docker-compose.server.yml 补 `SPRING_*` 覆盖或改用容器网络地址；② 新接口未做真机端到端验证（需服务器重新部署 jar 后由外部 AI 实测）；③ 本轮代码与本文档未 git 提交，待用户确认后提交。
+
+### 6.100 运行时卡死三根因修复：人工驳回补发执行命令 + 拆解前物理清理旧草案 + 幽灵依赖存在性校验（2026-08-17）
+
+#### 1. 范围
+
+- **背景**：任务"Spec-Driven Development 极简方案"运行期暴露三个问题：① 3 次自动返工驳回后人工改派 inner-deepseek-flash-executor，子任务永久卡死 REWORK——根因 `reworkFresh` 只重置状态/换人/发通知，漏发执行命令（执行链完全由 `agent_execution_record` 驱动，无命令即永不执行，与自动驳回 `rejectAndRework` 补发范式不对称）；② 任务两批拆解（6+7 子任务）的 `depends_on` 全部引用**不存在的幽灵 ID**（与真实 ID 同毫秒窗口偏移），`isReady` 对不存在依赖恒判未就绪，6 个 PENDING 子任务永远无法调度；③ 重新拆解时 CANCELLED 旧草案残留（`rejectPlan` 设计保留审计），幽灵依赖持续污染下一批草案。
+- **本轮内容**：① `ReviewServiceImpl.createReview` 人工驳回路径对 API_KEY_LLM 执行者补发执行命令（trigger=manual-review-rework），失败仅 warn 不阻断；② `PlannerAnalysisServiceImpl.decompose` 拆解前若仅存在 CANCELLED 旧草案则物理删除后再拆解；③ `applyDependsOn` 写入前校验依赖 ID 真实存在，缺失整批拒绝回退（去重比对，兼容 LLM 输出 [2,2,3] 重复引用）；④ 顺带修复 §6.93 遗留测试缺口：`ExecutionResultHandlerTest` 未补构造器新增的 2 个 mock（taskRunningSpecService/executionOutputParser）导致 2 个既有测试 NPE。
+- **明确不做**：不恢复 6 个 CANCELLED 子任务（第一版废弃计划，恢复会与第二版重复执行）；不改 `rejectPlan` 的 CANCELLED 审计语义（保留时间线证据）；不动 `isReady` 依赖判定逻辑；不改前端。
+
+#### 2. 实际落地
+
+- **ReviewServiceImpl.createReview（REJECTED 分支）**：`reworkFresh` 之后取 `reworkAgentId ?? subTask.assignedAgentId` 为目标执行者，`agentService.getById` 判定 `accessType == API_KEY_LLM` 才补发 `executionCommandService.createAssignedCommand(subTaskId, targetExecutor, "manual-review-rework")`，异常仅 `log.warn`（子任务停留 REWORK 等兜底扫描），与 `SubTaskReviewServiceImpl.rejectAndRework` 自动驳回范式对齐。
+- **PlannerAnalysisServiceImpl.decompose（L119-129）**：既有"非 CANCELLED 子任务存在即拒绝"校验之后，追加 CANCELLED 残留计数；`cancelled > 0` 时 `log.info` + `subTaskMapper.physicalDeleteByTaskId(taskId)` 物理清理（该场景草案从未执行、无关联执行记录，删除安全），再走 CAS 推进 PLANNING。
+- **PlannerAnalysisServiceImpl.applyDependsOn（L552-567）**：`depIds.stream().distinct()` 去重后 `subTaskService.listByIds` 校验存在性；数量不匹配时计算 missing 列表，`log.error` + 抛 BizException"依赖指向不存在的草案 ID"，由 decompose 外层 catch 回退 PENDING 并记 `task_plan_failed`。防御注释说明幽灵 ID 历史成因与去重原因。
+
+#### 3. 验证结果
+
+- **ReviewServiceTest 8/8 通过**（新增 4）：API_KEY_LLM 改派补发命令 / 不改派对原执行者补发 / CLI_CLIENT 不补发 / 下发失败仅告警不阻断驳回链路（reward 照常落账）。
+- **PlannerAnalysisServiceTest 20/20 通过**（新增 4）：仅残留 CANCELLED 时拆解前物理删除且新草案正常生成 / 无残留不触发删除 / 幽灵依赖（listByIds 查不到）整批拒绝 + 回退 PENDING + `task_plan_failed` + 不执行任何依赖回写 / 依赖全部存在时序号→真实 id 正常回写（updateDependsOn(12, [11])）。
+- **helloai-core 全量 735 tests 全过（BUILD SUCCESS）**；修复前全量存在 2 个 Error，定位为 §6.93 遗留测试缺口（ExecutionResultHandlerTest 缺 mock），补 2 个 `@Mock` + `@BeforeEach` stub `ParsedOutput.empty()` 后恢复绿色。
+- **数据清理（用户执行）**：任务域/需求澄清对话域/MQ 流水全部 DELETE 清空（task/sub_task/task_timeline/execution_record/review_record/attachment/outbox 等 19 张表），基础配置（agent×4/llm_provider×4/sys_user/prompt_template/agent_mcp_server 等）完好；仅 `agent_inbox` 残留 5 条孤儿通知可选清理。
+
+#### 4. 影响与遗留
+
+- 影响：① 人工驳回改派 API_KEY_LLM 执行者不再卡死（执行命令必达，触发链与自动驳回一致）；② 重新拆解前物理删除 CANCELLED 旧草案，幽灵 depends_on 不再跨批污染；③ applyDependsOn 存在性校验成为幽灵 ID 的最后防线（即使服务器旧版代码行为差异再次产生，也会整批拒绝而非静默写库卡死）。
+- 遗留：① **服务器部署包需同步更新**——本机代码修复后须重新打包部署服务器 jar，否则浏览器请求仍走服务器旧实例（旧逻辑）；② `agent_inbox` 5 条孤儿通知可选清理（`DELETE FROM agent_inbox;`）；③ 幽灵 ID 产生机制未在服务器日志直接证实（双实例日志分散，服务器实例日志不可达），本轮以防御性校验 + 物理清理收口；④ 本轮代码与本文档未 git 提交，待用户确认后提交。
+
+### 6.101 人工介入面板改派候选修复：新增「原执行者重做」选项（2026-08-18）
+
+#### 1. 背景与决策
+
+- **真实事故（承 §6.55/6.57 同源）**：子任务「创建 specs 目录并编写 00-prd.md」返工 3 次达上限（`manualIntervention=rework_limit`）后停在 REVIEW，人工介入面板「改派给」下拉**只剩外部 Agent（trae-executor），内部 inner agent 不可选**。数据库实证（dev 库 agent 表）：环境内 EXECUTOR 角色仅 2 个——`inner-deepseek-flash-executor`（API_KEY_LLM 内部，恰为当前负责人 assigned_agent_id）与 `trae-executor`（CLI_CLIENT 外部）；前端 `manualCandidates` 的「排除当前负责人」过滤把唯一内部执行者过滤掉，与 §6.55「外部/内部 Agent 均可选」决策相悖。
+- **决策**（用户拍板）：保留「改派候选排除当前负责人」语义（下拉仍是可选新 Agent），另在面板新增**「原执行者重做」固定选项**（选择器内特殊值 `__KEEP_CURRENT__`，提交时映射 `reworkAgentId=null`，走后端已有「原执行者重做」语义：`reworkFresh` 重置计数 + API_KEY_LLM 原执行者补发执行命令）。后端零改动。
+- **明确不做**：不放开「排除当前负责人」过滤（避免改派列表混入现任执行者与「原执行者重做」语义重叠）；不改后端接口契约（`createReview.reworkAgentId` 可空语义已存在）。
+
+#### 2. 实际落地
+
+- **SubTaskDetail.vue（§6.52 人工介入面板）**：`manualCandidates` 维持「EXECUTOR + ACTIVE + 排除当前负责人」过滤与在线优先排序；el-select 追加「原执行者重做（当前负责人名）」固定 option（`v-if="currentExecutorName"`）；`submitManualRework` 提交时 `manualTargetAgentId === KEEP_CURRENT` 则 `reworkAgentId=null`（issues 文案区分改派/重做，成功提示同步区分），否则原逻辑传目标 Agent id。
+- **后端兼容确认**（无需改动）：`ReviewServiceImpl.createReview` REJECTED 分支 `reworkFresh(subTaskId, null)` 重置计数并清人工介入标记；`targetExecutor = reworkAgentId ?? assignedAgentId` 对 API_KEY_LLM 补发 `manual-review-rework` 执行命令（§6.100），原执行者重做链路完整。
+
+#### 3. 验证结果
+
+- `vue-tsc --noEmit` 类型检查：0 error。
+- `npm run build`（vue-tsc -b && vite build）：BUILD SUCCESS（32s），dist 产物就绪。
+- 闭环推演：面板选「原执行者重做」→ REJECTED + reworkAgentId=null → reworkCount 归零 + 清除 manualIntervention → inner 执行者收到补发命令重新执行 → 重新进入自动核验（计数从 1 起）。
+
+#### 4. 影响与遗留
+
+- 影响：纯前端修复（SubTaskDetail.vue 单文件），无 DB 迁移、无状态机变更、无后端契约变化；后端零改动无需重新打包 jar，前端 dist 需重新构建部署（`dist/` 已生成）。
+- 遗留：① 服务器前端 dist 需更新后人工介入面板才生效（需用户构建/上传 dist 后重启 web 容器或随 compose 挂载刷新）；② 存量卡死任务（本子任务 reworkCount=3 REVIEW）可由面板「原执行者重做」或改派外部 Agent 处置；③ 本轮代码与本文档未 git 提交，待用户确认后提交。
+
+### 6.102 等保加固：agent.api_key AES-GCM 加密落库 + nginx TLS/UTF-8（V53，2026-08-18）
+
+#### 1. 背景与决策
+
+- **问题提出**：用户问“外部 AI 获取任务、读取任务内容乱码，是否用 AES 或 XML-base64 加密统一外部 AI 收发流程，符合等保三级”。
+- **分析结论（三条）**：① 加密不解决乱码（AES 解密后字节原样，base64 只是编码，均不修复 GBK/UTF-8 链路错位）；② 等保三级“通信传输保密性”标准解法是 TLS/HTTPS，应用层自研加密协议是评审大忌；③ 真正缺口是存储层——`agent.api_key`（consumerToken 工牌）与 LLM 凭证此前明文落库，证书验证 `credential_vault` 已有 24 条 AES-GCM 加密数据但 `agent.api_key` 仍是明文。
+- **决策**（AskUserQuestion 选定）：① 传输层走 TLS（nginx 443 模板，证书就绪后启用）；② 存储层 `agent.api_key` 改 AES-GCM 密文落库（复用既有 `CredentialCryptoService`）；③ 同时修复服务器 MinIO endpoint（承 §6.101 子任务事故根因：app 容器未配 MINIO_ENDPOINT，默认 localhost:29000 在容器内不可达，MinIO 数据卷全空、附件元数据全部空壳，核验报“内容不可读”）。
+- **明确不做**：业务内容不包自研密文协议（外部 AI 接入契约不变，仍明文 Bearer 认证）；不做前后端展示改造；不换 AES 密钥（轮换需同步重加密 vault 与 api_key，属独立治理项）。
+
+#### 2. 实际落地
+
+- **V53 Flyway**：`agent` 加 `api_key_hash VARCHAR(64)` 列 + 存量 SHA-256 回填（PG 内置 `sha256(bytea)`，`undefined_function` 异常时跳过）+ 部分唯一索引（`deleted=0 AND api_key_hash IS NOT NULL`）。AES-GCM 密文每次 nonce 随机不可 SQL eq 匹配，hash 列是认证点查主路径。
+- **AgentApiKeyCipher**（`core/system/crypto` 新组件）：存储形态 `enc:v1:{AES-GCM-Base64}`（版本前缀）；`matches` 用 `MessageDigest.isEqual` 恒定时间比对，无前缀视为存量明文直接兼容；`sha256Hex` 供点查；null 全链安全。
+- **AgentServiceImpl**：`register`/`resetApiKey` 生成明文后加密 + hash 双写（明文仅响应返回一次）；`getByApiKey` 改 hash 点查 → 命中后解密比对防碰撞 → hash 为空的老数据逐条明文比对兜底 → 命中且未加密时惰性迁移（加密 + hash 回写，失败仅告警不影响认证）。
+- **AuthServiceImpl.validateAgentKey**：改为复用 `AgentService.getByApiKey`（401/403 语义不变），消除明文 SQL eq 查询。
+- **API 回显解密**：`AdminAgentController`（列表/详情/注册响应/onboarding 渲染）与 `AgentController`（详情/注册响应）统一 `agentApiKeyCipher.decrypt`——存库密文、出参明文，管理端展示与 SKILL 渲染零感知。
+- **nginx.server.conf**：80 块加 `charset utf-8`（外部 AI 乱码防护：响应头统一携带 charset，防 CLI/SDK 按 GBK 误读中文任务内容）；新增 443 TLS1.2/1.3 server 注释模板（证书路径/协议套件/`X-Forwarded-Proto`，启用步骤在注释内）。
+- **docker-compose.server.yml**：app 服务 environment 补 `MINIO_ENDPOINT: http://minio:9000` + `MINIO_ACCESS_KEY/MINIO_SECRET_KEY/MINIO_BUCKET`（compose 内网服务名互访，绕开容器内 localhost 陷阱）。
+
+#### 3. 验证结果
+
+- `mvn -pl helloai-common,helloai-core,helloai-api -am compile -DskipTests`：BUILD SUCCESS；`-am test` 因 pom 默认 `skipTests=true` 需显式 `-DskipTests=false`，跨模块 `-Dtest` 需 `-Dsurefire.failIfNoSpecifiedTests=false`（且 PowerShell 下参数必须加引号，`.failIfNoSpecifiedTests` 曾被拆成 lifecycle phase）。
+- helloai-core 单测 26/26 全绿：`AgentApiKeyCipherTest` 5 例（roundtrip、密文随机但 matches 稳定、存量明文兼容、null 安全、SHA-256 确定性）+ `AuthServiceTest` 9 例（改 mock AgentService）+ `AgentServiceTest` 12 例（构造器补参）。
+
+#### 4. 影响与遗留
+
+- 影响：存量明文 api_key 认证不受影响（明文兼容 + 惰性迁移逐次回写，无停机窗口）；外部 AI 接入契约零变化；管理端/onboarding 展示不变。
+- 部署要求：服务器 jar 升级触发 V53 迁移 + compose 环境变量生效；惰性迁移在首次认证时逐个完成，无需数据批处理。
+- 遗留：① TLS 证书申请与 443 启用（阿里云免费证书/acme.sh，外部 AI 接入地址需同步改 https，sys_config 外网地址）；② 服务器 MinIO 幽灵附件清理 SQL（`UPDATE attachment SET deleted=1 WHERE sub_task_id='2089260943795032065' AND storage_url LIKE 'minio://trae-executor/%'`，写操作用户执行）；③ AES 密钥轮换治理（轮换必须同步重加密 credential_vault 24 条 + 全部 agent.api_key，否则解密失败）；④ 本轮代码与本文档未 git 提交，待用户确认后提交。
