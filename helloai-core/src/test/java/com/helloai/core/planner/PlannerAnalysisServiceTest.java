@@ -19,6 +19,7 @@ import com.helloai.core.planner.service.PlannerAnalysisService;
 import com.helloai.core.planner.service.impl.PlannerAnalysisServiceImpl;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
@@ -70,6 +71,9 @@ class PlannerAnalysisServiceTest {
     private SubTaskService subTaskService;
 
     @Mock
+    private SubTaskMapper subTaskMapper;
+
+    @Mock
     private PlannerAgentPicker plannerAgentPicker;
 
     @Mock
@@ -97,7 +101,7 @@ class PlannerAnalysisServiceTest {
     void setUp() {
         // ObjectMapper 用真实实例（JSON 解析是被测逻辑本身，不 mock）
         plannerAnalysisService = new PlannerAnalysisServiceImpl(
-                taskService, subTaskService, plannerAgentPicker,
+                taskService, subTaskService, subTaskMapper, plannerAgentPicker,
                 platformAgentExecutionService, taskTimelineService,
                 subTaskDispatchService, taskRunningSpecService, new ObjectMapper());
 
@@ -266,6 +270,119 @@ class PlannerAnalysisServiceTest {
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("不允许重复拆解");
         verify(taskService, never()).lambdaUpdate();
+        // §6.100: 有非 CANCELLED 残留时不得触碰物理删除
+        verify(subTaskMapper, never()).physicalDeleteByTaskId(anyLong());
+    }
+
+    @Test
+    @DisplayName("§6.100: 仅残留 CANCELLED 旧草案时，拆解前物理删除再生成新草案")
+    void shouldPhysicallyDeleteCancelledDraftsBeforeRedecompose() {
+        when(taskService.getById(TASK_ID)).thenReturn(pendingTask());
+        // 第一次 count（非 CANCELLED）= 0，第二次 count（CANCELLED）= 2，按调用顺序 stub
+        when(subTaskQueryChain.count()).thenReturn(0L, 2L);
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        ```json
+                        [
+                          {"title":"设计表结构","content":"建表","deliverable":"DDL","acceptance":"评审通过","priority":"high"},
+                          {"title":"实现统计接口","priority":"不合法优先级"}
+                        ]
+                        ```
+                        """, "stop", "llm", 100));
+        SubTask reloaded1 = draft(11L);
+        SubTask reloaded2 = draft(12L);
+        when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(reloaded1, reloaded2));
+
+        List<SubTask> drafts = plannerAnalysisService.decompose(TASK_ID);
+
+        // 物理删除发生在 LLM 调用前，且新草案正常生成
+        verify(subTaskMapper).physicalDeleteByTaskId(TASK_ID);
+        assertThat(drafts).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("§6.100: 无 CANCELLED 残留时不触发物理删除（正常首次拆解不受影响）")
+    void shouldNotDeleteWhenNoCancelledDrafts() {
+        when(taskService.getById(TASK_ID)).thenReturn(pendingTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        ```json
+                        [
+                          {"title":"设计表结构","content":"建表","deliverable":"DDL","acceptance":"评审通过","priority":"high"},
+                          {"title":"实现统计接口","priority":"不合法优先级"}
+                        ]
+                        ```
+                        """, "stop", "llm", 100));
+        SubTask reloaded1 = draft(11L);
+        SubTask reloaded2 = draft(12L);
+        when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(reloaded1, reloaded2));
+
+        List<SubTask> drafts = plannerAnalysisService.decompose(TASK_ID);
+
+        assertThat(drafts).hasSize(2);
+        verify(subTaskMapper, never()).physicalDeleteByTaskId(anyLong());
+    }
+
+    @Test
+    @DisplayName("§6.100: 幽灵依赖防御——依赖回写引用未落库 ID 时整批拒绝并回退")
+    void shouldRejectDecomposeWhenDependsOnPointsToMissingDraft() {
+        when(taskService.getById(TASK_ID)).thenReturn(pendingTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        // 第 2 条依赖第 1 条（序号 1 → 重加载 drafts 的 id=11L）
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        ```json
+                        [
+                          {"title":"第一步","content":"准备","dependsOn":[]},
+                          {"title":"第二步","content":"执行","dependsOn":[1]}
+                        ]
+                        ```
+                        """, "stop", "llm", 100));
+        SubTask reloaded1 = draft(11L);
+        SubTask reloaded2 = draft(12L);
+        when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(reloaded1, reloaded2));
+        // 幽灵场景：依赖 ID 11 在所有草案之外，listByIds 查不到
+        when(subTaskService.listByIds(List.of(11L))).thenReturn(List.of());
+
+        assertThatThrownBy(() -> plannerAnalysisService.decompose(TASK_ID))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("依赖指向不存在的草案");
+
+        // 幽灵依赖不得静默落库：任何依赖回写都不执行
+        verify(subTaskService, never()).updateDependsOn(anyLong(), any());
+        // 拆解失败回退 PENDING + task_plan_failed
+        verify(taskService, times(2)).lambdaUpdate();
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_failed"),
+                eq(AgentRole.PLANNER), isNull(), anyMap());
+    }
+
+    @Test
+    @DisplayName("§6.100: 依赖回写目标全部存在时正常落库（序号→真实 id 映射）")
+    void shouldApplyDependsOnWhenAllTargetsExist() {
+        when(taskService.getById(TASK_ID)).thenReturn(pendingTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        ```json
+                        [
+                          {"title":"第一步","content":"准备","dependsOn":[]},
+                          {"title":"第二步","content":"执行","dependsOn":[1]}
+                        ]
+                        ```
+                        """, "stop", "llm", 100));
+        SubTask reloaded1 = draft(11L);
+        SubTask reloaded2 = draft(12L);
+        when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(reloaded1, reloaded2));
+        when(subTaskService.listByIds(List.of(11L))).thenReturn(List.of(reloaded1));
+
+        List<SubTask> drafts = plannerAnalysisService.decompose(TASK_ID);
+
+        assertThat(drafts).hasSize(2);
+        // 序号 1 → 真实 id 11L，回写第 2 条草案
+        verify(subTaskService).updateDependsOn(eq(12L), eq(List.of(11L)));
     }
 
     @Test

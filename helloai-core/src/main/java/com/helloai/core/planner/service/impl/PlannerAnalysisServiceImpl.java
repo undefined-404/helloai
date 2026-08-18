@@ -16,6 +16,7 @@ import com.helloai.core.planner.service.PlannerAnalysisService;
 import com.helloai.core.shared.util.SubTaskDependencyOrder;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskRunningSpecService;
@@ -37,6 +38,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Planner 平台内自动拆解服务实现。
@@ -74,6 +76,7 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
 
     private final TaskService taskService;
     private final SubTaskService subTaskService;
+    private final SubTaskMapper subTaskMapper;
     private final PlannerAgentPicker plannerAgentPicker;
     private final PlatformAgentExecutionService platformAgentExecutionService;
     private final TaskTimelineService taskTimelineService;
@@ -112,6 +115,17 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
         if (existing > 0) {
             throw new BizException("任务已存在 " + existing + " 个子任务，不允许重复拆解；"
                     + "如需重新规划请先取消既有子任务");
+        }
+        // §6.100 重新拆解前物理清理 CANCELLED 旧草案：拒绝计划后残留行携带幽灵依赖
+        // （回写时引用未落库 ID，导致后续 PENDING 子任务依赖校验永不就绪），
+        // 直接物理删除避免新草案再次被污染（该场景草案从未执行，无关联执行记录）
+        long cancelled = subTaskService.lambdaQuery()
+                .eq(SubTask::getTaskId, taskId)
+                .eq(SubTask::getStatus, SubTaskStatus.CANCELLED)
+                .count();
+        if (cancelled > 0) {
+            log.info("重新拆解前物理清理 CANCELLED 旧草案: taskId={}, count={}", taskId, cancelled);
+            subTaskMapper.physicalDeleteByTaskId(taskId);
         }
 
         // CAS 推进 PENDING → PLANNING，防并发重复拆解
@@ -534,6 +548,22 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
                             + "（序号=" + dep + "）；重加载可能漏取，请重试拆解");
                 }
                 depIds.add(depId);
+            }
+            // §6.100 幽灵依赖防御：写入前校验所有依赖 ID 真实存在于 sub_task 表。
+            // 历史出现过依赖回写引用“未落库 ID”（内存预分配/重加载错位），
+            // 静默写库后 isReady 对不存在依赖恒判未就绪，PENDING 子任务永久卡死。
+            // 注意：depIds 允许重复（LLM 可输出 [2,2,3] 重复引用同一前置），须去重后比对。
+            List<Long> distinctDeps = depIds.stream().distinct().toList();
+            List<SubTask> existingDeps = subTaskService.listByIds(distinctDeps);
+            if (existingDeps.size() != distinctDeps.size()) {
+                Set<Long> found = existingDeps.stream()
+                        .map(SubTask::getId).collect(Collectors.toSet());
+                List<Long> missing = distinctDeps.stream()
+                        .filter(depId -> !found.contains(depId)).toList();
+                log.error("applyDependsOn 依赖存在性校验失败: draftSeq={}, draftId={}, missing={}",
+                        (i + 1), drafts.get(i).getId(), missing);
+                throw new BizException("拆解结果第 " + (i + 1) + " 条依赖指向不存在的草案 ID: "
+                        + missing + "；需取消现有草案后重新拆解");
             }
             SubTask draft = drafts.get(i);
             if (draft.getId() == null) {
