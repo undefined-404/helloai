@@ -3,8 +3,12 @@ package com.helloai.core.task.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.core.task.entity.ReviewRecord;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.ReviewRecordMapper;
@@ -30,6 +34,8 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
 
     private final SubTaskService subTaskService;
     private final RewardService rewardService;
+    private final AgentService agentService;
+    private final ExecutionCommandService executionCommandService;
 
     private static final Map<Integer, Integer> SCORE_RULES = Map.of(
             5, 5,   // 超出预期
@@ -82,6 +88,23 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
             // §6.57 人工驳回 = 用户拍板开启新一轮：reworkFresh 重置返工计数并清除人工介入标记，
             // 避免改派后的新执行者提交时仍命中 skip_max_rework 跳过自动核验、无节点流转
             subTaskService.reworkFresh(subTaskId, reworkAgentId);
+            // §6.100 人工驳回改派内循环闭合：对 API_KEY_LLM 执行者补发执行命令。
+            // 执行链完全由 execution_record 驱动，改派不补命令则子任务永久停留 REWORK 卡死
+            // （与 SubTaskReviewServiceImpl.rejectAndRework 自动驳回补发范式对齐）。
+            Long targetExecutor = reworkAgentId != null ? reworkAgentId : subTask.getAssignedAgentId();
+            if (targetExecutor != null) {
+                Agent executor = agentService.getById(targetExecutor);
+                if (executor != null && executor.getAccessType() == AgentAccessType.API_KEY_LLM) {
+                    try {
+                        executionCommandService.createAssignedCommand(subTaskId, targetExecutor, "manual-review-rework");
+                        log.info("人工驳回返工执行命令已下发: subTaskId={}, executorAgentId={}",
+                                subTaskId, targetExecutor);
+                    } catch (Exception e) {
+                        log.warn("人工驳回返工执行命令下发失败（子任务停留 REWORK 等兜底）: subTaskId={}, err={}",
+                                subTaskId, e.getMessage());
+                    }
+                }
+            }
         }
 
         // 简易奖励（与原 v1.0 行为兼容：按 review.score 直接加减固定分）

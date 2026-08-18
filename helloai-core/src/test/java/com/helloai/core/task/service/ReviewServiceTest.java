@@ -1,8 +1,12 @@
 package com.helloai.core.task.service;
 
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.ReviewRecordMapper;
 import com.helloai.core.task.service.impl.ReviewServiceImpl;
@@ -50,11 +54,17 @@ class ReviewServiceTest {
     @Mock
     private ReviewRecordMapper reviewRecordMapper;
 
+    @Mock
+    private AgentService agentService;
+
+    @Mock
+    private ExecutionCommandService executionCommandService;
+
     private ReviewService reviewService;
 
     @BeforeEach
     void setUp() {
-        reviewService = new ReviewServiceImpl(subTaskService, rewardService);
+        reviewService = new ReviewServiceImpl(subTaskService, rewardService, agentService, executionCommandService);
         // createReview 内部 round 计数与 record 落库依赖父类 baseMapper；
         // lenient：校验失败路径（如 issues 为空）在 count 之前就返回，stub 不必然被消费
         ReflectionTestUtils.setField(reviewService, "baseMapper", reviewRecordMapper);
@@ -118,6 +128,76 @@ class ReviewServiceTest {
 
         verify(subTaskService).complete(SUB_TASK_ID);
         verify(subTaskService, never()).reworkFresh(anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("§6.100: 人工驳回改派 API_KEY_LLM 执行者时补发执行命令（内循环闭合）")
+    void shouldSendExecutionCommandOnManualRejectToApiKeyAgent() {
+        SubTask subTask = reviewSubTask(3, manualInterventionContext());
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
+        Agent reworkAgent = new Agent();
+        reworkAgent.setId(NEW_AGENT_ID);
+        reworkAgent.setAccessType(AgentAccessType.API_KEY_LLM);
+        when(agentService.getById(NEW_AGENT_ID)).thenReturn(reworkAgent);
+
+        reviewService.createReview(SUB_TASK_ID, REVIEWER_ID, ReviewResult.REJECTED,
+                1, "产出质量不达标", "人工驳回并改派", NEW_AGENT_ID);
+
+        verify(subTaskService).reworkFresh(SUB_TASK_ID, NEW_AGENT_ID);
+        verify(executionCommandService).createAssignedCommand(SUB_TASK_ID, NEW_AGENT_ID, "manual-review-rework");
+    }
+
+    @Test
+    @DisplayName("§6.100: 人工驳回不改派时对原执行者（API_KEY_LLM）补发执行命令")
+    void shouldSendExecutionCommandToOriginalExecutorWhenNoReassign() {
+        SubTask subTask = reviewSubTask(3, manualInterventionContext());
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
+        Agent executor = new Agent();
+        executor.setId(EXECUTOR_ID);
+        executor.setAccessType(AgentAccessType.API_KEY_LLM);
+        when(agentService.getById(EXECUTOR_ID)).thenReturn(executor);
+
+        reviewService.createReview(SUB_TASK_ID, REVIEWER_ID, ReviewResult.REJECTED,
+                2, "需补充验收证据", "人工驳回重做", null);
+
+        verify(subTaskService).reworkFresh(SUB_TASK_ID, null);
+        verify(executionCommandService).createAssignedCommand(SUB_TASK_ID, EXECUTOR_ID, "manual-review-rework");
+    }
+
+    @Test
+    @DisplayName("§6.100: 非 API_KEY_LLM 执行者（CLI_CLIENT）不补发执行命令")
+    void shouldNotSendExecutionCommandToCliAgent() {
+        SubTask subTask = reviewSubTask(3, manualInterventionContext());
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
+        Agent reworkAgent = new Agent();
+        reworkAgent.setId(NEW_AGENT_ID);
+        reworkAgent.setAccessType(AgentAccessType.CLI_CLIENT);
+        when(agentService.getById(NEW_AGENT_ID)).thenReturn(reworkAgent);
+
+        reviewService.createReview(SUB_TASK_ID, REVIEWER_ID, ReviewResult.REJECTED,
+                1, "产出质量不达标", "人工驳回并改派", NEW_AGENT_ID);
+
+        verify(subTaskService).reworkFresh(SUB_TASK_ID, NEW_AGENT_ID);
+        verify(executionCommandService, never()).createAssignedCommand(anyLong(), any(), any());
+    }
+
+    @Test
+    @DisplayName("§6.100: 执行命令下发失败仅告警，不阻断人工驳回链路")
+    void shouldNotBreakReviewWhenCommandDispatchFails() {
+        SubTask subTask = reviewSubTask(3, manualInterventionContext());
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
+        Agent reworkAgent = new Agent();
+        reworkAgent.setId(NEW_AGENT_ID);
+        reworkAgent.setAccessType(AgentAccessType.API_KEY_LLM);
+        when(agentService.getById(NEW_AGENT_ID)).thenReturn(reworkAgent);
+        when(executionCommandService.createAssignedCommand(SUB_TASK_ID, NEW_AGENT_ID, "manual-review-rework"))
+                .thenThrow(new RuntimeException("MQ 不可用"));
+
+        reviewService.createReview(SUB_TASK_ID, REVIEWER_ID, ReviewResult.REJECTED,
+                1, "产出质量不达标", "人工驳回并改派", NEW_AGENT_ID);
+
+        verify(subTaskService).reworkFresh(SUB_TASK_ID, NEW_AGENT_ID);
+        verify(rewardService).addReward(eq(EXECUTOR_ID), any(), eq(-5), eq(SUB_TASK_ID));
     }
 
     @Test
