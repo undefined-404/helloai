@@ -6,6 +6,7 @@ import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -17,14 +18,19 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
+import com.helloai.core.agent.output.ExecutionOutputParser;
+import com.helloai.core.agent.output.ParsedOutput;
 import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskRunningSpecService;
 import com.helloai.core.task.service.TaskTimelineService;
 
 @ExtendWith(MockitoExtension.class)
@@ -52,8 +58,21 @@ class ExecutionResultHandlerTest {
     @Mock
     private com.helloai.core.agent.service.ExecutionArtifactService executionArtifactService;
 
+    // §6.93 后 ExecutionResultHandler 构造器新增字段；@InjectMocks 缺 mock 会注入 null 导致 NPE
+    @Mock
+    private TaskRunningSpecService taskRunningSpecService;
+
+    @Mock
+    private ExecutionOutputParser executionOutputParser;
+
     @InjectMocks
     private ExecutionResultHandler executionResultHandler;
+
+    @BeforeEach
+    void setUp() {
+        // 方案3 产出物化解析：默认空输出（走原文分支），避免 mock 返回 null 触发 NPE
+        lenient().when(executionOutputParser.parse(any(), any())).thenReturn(ParsedOutput.empty());
+    }
 
     @Test
     @DisplayName("成功结果回写 context、推进 REVIEW 并记录时间线")

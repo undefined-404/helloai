@@ -13,7 +13,7 @@ spring:
     exclude: org.springframework.ai.model.deepseek.autoconfigure.DeepSeekChatAutoConfiguration
   # === 默认激活 local 环境（本地 Docker），切换到 dev 使用 spring.profiles.active=dev ===
   profiles:
-    active: local
+    active: dev
   # === MCP Server（v2.4 §3.1 / §9 spring-ai 路线 C） ===
   # spring-ai 1.0 GA 默认 sse-endpoint=/sse（短路径），与 v2.4 文档约定的 /mcp/sse 路径不一致
   # 显式覆盖到 v2.4 路径，确保 Qoder/Trae 按文档配置可直连
@@ -61,6 +61,12 @@ spring:
         acknowledge-mode: manual
         concurrency: 5
         max-concurrency: 20
+  # 产物代理上传（POST /api/artifacts/upload）multipart 上限：
+  # 略高于 storage.max-file-size(5MB)，留出 multipart 边界余量
+  servlet:
+    multipart:
+      max-file-size: 8MB
+      max-request-size: 8MB
   flyway:
     enabled: true
     locations: classpath:db/migration
@@ -100,6 +106,10 @@ helloai:
       max-ttl-minutes: 240
       default-ttl-minutes: 30
       full-score: 100
+  # 对话并发优化 A 项：active() 写节流窗口（毫秒，<=0 不节流）。
+  # 每轮对话 LLM 前都会 active()，窗口内同一 Agent 只做一次完整双写，消除 DB 行锁排队与写放大。
+  heartbeat:
+    active-throttle-ms: 30000
   # Phase 2B 调度策略 3：外部优先 / 空闲优先 / 平台内 LLM 保底
   dispatch:
     auto-assign-on-create: false
@@ -135,6 +145,10 @@ helloai:
     model: deepseek-chat
     mock-response-prefix: "[mock-executor]"
     sync-timeout-seconds: 180
+    # 对话并发优化 B 项：平台内 LLM 调用并发上限（信号量，<=0 不限流）。
+    # 真实 Provider 共用同一批 API Key，上游有 RPS 限流，超限排队等待、超时友好报错。
+    max-concurrent-llm-calls: 8
+    llm-acquire-timeout-seconds: 60
     # Phase 2A §5.1/§5.2 + T5 改造：DB Poller 兜底扫描（主消费路径由 consumer-mode 决定）
     poller-enabled: true
     poller-interval-ms: 1000

@@ -50,6 +50,7 @@
 
 > 通道选择：MCP SSE 是标准协议（需 4 步握手，session 绑定长连接）；REST 别名与 REST 直通**免 session、同步返回**，断连后仍可用。
 > MCP 通道的 `arguments` 里需额外带 `agentId` 与 `sessionId`（§1.4(2)）；REST 通道不需要（鉴权取自 Bearer 头）。
+> 产物文件内容上传：一律走 `POST /api/artifacts/upload`（multipart + Bearer，见 §1.2 🧭 提示），**不要直连 MinIO**（服务器版公网不可达）。
 
 ### 0.2 REST 业务端点（查询/兜底，非执行工具）
 
@@ -113,10 +114,15 @@
 | `ack` | 每条收件箱消息处理完毕后确认（把 `read` 置为 true；未 ack 的消息下次 pull 仍会出现） |
 | `claimSubTask` | 主动原子认领一个 PENDING 子任务（同角色竞争，抢到才执行） |
 | `heartbeat` | 周期上报心跳维持在线（建议 30 秒一次，超过 5 分钟无心跳会被判 OFFLINE） |
-| `uploadArtifact` | 执行完子任务后登记产物附件元数据（v2.7：平台可直读 `minio://` 附件，支持证据核验与流式下载；文件先 PUT 到 MinIO，`storageUrl` 按 `{自身注册名}/{yyyy}/{MM}/{taskId}/{subTaskId}/{文件名}` 组织） |
+| `uploadArtifact` | 执行完子任务后登记产物附件元数据（v2.7：平台可直读 `minio://` 附件，支持证据核验与流式下载；**文件内容先经 `POST /api/artifacts/upload` 上传，平台转存 MinIO 并注册一步到位（见下方 🧭 提示）**；若对象已在别处可访问，可直接带 `storageUrl` 仅登记） |
 | `submitResult` | 完成子任务后上交执行结果（成功或失败）；重复提交须带相同 `resultId` 保证幂等 |
 | `reportBlocked` | 遇到外部依赖不可用 / 环境缺失等无法自行解决的阻塞时上报 |
 | `getDepsSummary` | 开工前主动拉取前置产出摘要（每条前置的标题/状态/执行摘要/内容本体），避免重复调研或遗漏上游结论；无依赖时 `depCount=0` |
+
+> 🧭 **产物文件内容上传（服务器版必读，§6.99）**
+> - 服务器版部署中 MinIO 仅绑定服务器 127.0.0.1（公网不可达），**不要尝试直连 MinIO PUT 文件**（单机版 `localhost:29000` 的写法在服务器版必然失败）。
+> - 正确姿势：`POST /api/artifacts/upload`（multipart/form-data，请求头 `Authorization: Bearer <API_KEY>`；参数 `file` 文件内容 + `subTaskId` + 可选 `mimeType`），平台转存 MinIO 并注册附件，返回 `{attachmentId, storageUrl}`；随后正常 `submitResult` 上交结果。
+> - `uploadArtifact` 工具退化为「仅登记已有对象」场景（storageUrl 指向的对象已在别处可访问时使用）；文件内容场景一律走上传接口。
 
 > 🧭 **ack 语义（A0-4 澄清，实测必看）**
 > - `pullTasks` **不会**自动标记已读；客户端 pull 后崩溃不会丢消息，未 ack 的消息下次 pull 仍能看到（`read=false`）。
@@ -147,7 +153,7 @@
 4. pullTasks 发现新任务     # 处理收件箱消息（30s 轮询是唯一感知通道，门铃已搁置）
 5. claimSubTask            # 认领子任务
 6. 执行任务
-7. uploadArtifact          # 登记产物（如有）
+7. 上传产物内容 + 登记   # 有产物：POST /api/artifacts/upload（见 §1.2 🧭 提示）
 8. submitResult            # 上交结果
 9. ack                     # 确认对应收件箱消息已处理
 10. 会话结束 / Ctrl+C       # 触发退出清理（§1.5.4）：checkOut → 关连接
@@ -348,7 +354,7 @@ try {
                 if (-not $cl.claimed) { Write-Host ('SKIP ' + $m.subTaskId + ': ' + $cl.reason) }
                 else {
                     # ……执行子任务：getDepsSummary 读前置（§4.1-4.3）→ 干活 → 验证（§4.6 清单）……
-                    # ……有产物先 uploadArtifact；产出末尾必须附 EXECUTION_RECORD 块（§4.4）……
+                    # ……有产物先 POST /api/artifacts/upload 上传内容（§1.2 🧭 提示）；产出末尾必须附 EXECUTION_RECORD 块（§4.4）……
                     Invoke-Tool 'submitResult' @{
                         subTaskId    = $m.subTaskId
                         resultId     = ('r-' + $m.subTaskId)   # 重试必须带相同 resultId 保证幂等
