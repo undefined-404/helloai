@@ -6,6 +6,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentMapper;
+import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.system.entity.SysUser;
 import com.helloai.core.system.mapper.SysUserMapper;
 import com.helloai.core.system.service.AuthService;
@@ -30,6 +31,7 @@ public class AuthServiceImpl implements AuthService {
 
     private final SysUserMapper sysUserMapper;
     private final AgentMapper agentMapper;
+    private final AgentService agentService;
     private final StringRedisTemplate redis;
 
     private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
@@ -98,14 +100,11 @@ public class AuthServiceImpl implements AuthService {
     }
 
     /**
-     * Agent API Key 验证
+     * Agent API Key 验证（等保存储加密后走 hash 点查 + 解密比对 + 惰性迁移）。
      */
     @Override
     public Agent validateAgentKey(String apiKey) {
-        Agent agent = agentMapper.selectOne(
-                Wrappers.<Agent>lambdaQuery()
-                        .eq(Agent::getApiKey, apiKey)
-        );
+        Agent agent = agentService.getByApiKey(apiKey);
         if (agent == null) {
             throw new BizException(401, "无效的 API Key");
         }

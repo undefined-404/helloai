@@ -10,6 +10,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.LlmProviderCatalogService;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.system.crypto.AgentApiKeyCipher;
 import com.helloai.core.system.entity.LlmProviderModel;
 import com.helloai.core.system.service.LlmProviderModelQueryService;
 import com.helloai.core.system.service.PromptTemplateService;
@@ -38,6 +39,7 @@ public class AgentController {
     private final LlmProviderCatalogService llmProviderCatalogService;
     private final LlmProviderModelQueryService llmProviderModelQueryService;
     private final AgentBaseUrlResolver agentBaseUrlResolver;
+    private final AgentApiKeyCipher agentApiKeyCipher;
 
     @GetMapping("/list")
     public R<List<AgentResponse>> list() {
@@ -276,7 +278,7 @@ public class AgentController {
         response.setId(agent.getId());
         response.setName(agent.getName());
         response.setRole(agent.getRole());
-        response.setApiKey(agent.getApiKey());
+        response.setApiKey(agentApiKeyCipher.decrypt(agent.getApiKey()));
         response.setModelType(agent.getModelType());
         response.setModelConfig(agent.getModelConfig());
         response.setStatus(agent.getStatus());
@@ -302,7 +304,7 @@ public class AgentController {
         response.setId(agent.getId());
         response.setName(agent.getName());
         response.setRole(agent.getRole().name());
-        response.setApiKey(agent.getApiKey());
+        response.setApiKey(agentApiKeyCipher.decrypt(agent.getApiKey()));
         response.setMessage("注册成功，请保存 API Key");
         return response;
     }

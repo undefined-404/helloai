@@ -17,6 +17,7 @@ import com.helloai.core.agent.service.LlmProviderCatalogService;
 import com.helloai.core.task.entity.ActivityLog;
 import com.helloai.core.task.entity.RewardLog;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.system.crypto.AgentApiKeyCipher;
 import com.helloai.core.system.service.PromptTemplateService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
@@ -44,6 +45,7 @@ public class AdminAgentController {
     private final PromptTemplateService promptTemplateService;
     private final LlmProviderCatalogService llmProviderCatalogService;
     private final AgentBaseUrlResolver agentBaseUrlResolver;
+    private final AgentApiKeyCipher agentApiKeyCipher;
 
     // ══════════════════════════════════════════════════════════════
     //  LLM Provider 目录（手动注册平台内 LLM Agent 用）
@@ -88,7 +90,7 @@ public class AdminAgentController {
             vo.setAccessType(a.getAccessType());
             // V52: modelType 供编辑弹窗技能区按模型能力渲染
             vo.setModelType(a.getModelType());
-            vo.setApiKey(a.getApiKey());
+            vo.setApiKey(agentApiKeyCipher.decrypt(a.getApiKey()));
             vo.setDescription(a.getRemark());
             vo.setStatus(a.getStatus());
             vo.setTotalScore(a.getScore());
@@ -129,7 +131,7 @@ public class AdminAgentController {
         vo.setDescription(agent.getRemark());
         vo.setStatus(agent.getStatus());
         vo.setTotalScore(agent.getScore());
-        vo.setApiKey(agent.getApiKey());
+        vo.setApiKey(agentApiKeyCipher.decrypt(agent.getApiKey()));
         vo.setModelType(agent.getModelType());
         // V47: 详情回显能力声明列表（编辑弹窗整体替换用；此前遗漏导致 getById skills 恒为空）
         vo.setSkills(agent.getSkills());
@@ -171,7 +173,7 @@ public class AdminAgentController {
         response.setId(agent.getId());
         response.setName(agent.getName());
         response.setRole(agent.getRole().name());
-        response.setApiKey(agent.getApiKey());
+        response.setApiKey(agentApiKeyCipher.decrypt(agent.getApiKey()));
         return R.ok(response);
     }
 
@@ -334,20 +336,21 @@ public class AdminAgentController {
         // 1. 解析 baseUrl（外网地址统一解析：sys_config > yml > 请求推导 > localhost 兜底）
         String baseUrl = agentBaseUrlResolver.resolve(request);
 
-        // 2. 获取纯 SKILL 内容（变量已替换）
+        // 2. 获取纯 SKILL 内容（变量已替换）；api_key 存库为密文，渲染前解密为明文
+        String plainApiKey = agentApiKeyCipher.decrypt(agent.getApiKey());
         String skillContent = promptTemplateService.getSkillForAgent(
-                agent.getRole().name(), agent.getApiKey(), baseUrl, agent.getName(), agent.getId());
+                agent.getRole().name(), plainApiKey, baseUrl, agent.getName(), agent.getId());
 
         // 3. 拼装完整接入内容
         String content = promptTemplateService.buildOnboardingContent(
-                agent.getRole().name(), agent.getApiKey(), baseUrl, agent.getName(), agent.getId());
+                agent.getRole().name(), plainApiKey, baseUrl, agent.getName(), agent.getId());
 
         // 4. 组装响应
         AgentOnboardingResponse resp = new AgentOnboardingResponse();
         resp.setAgentId(agent.getId());
         resp.setAgentName(agent.getName());
         resp.setRole(agent.getRole().name());
-        resp.setApiKey(agent.getApiKey());
+        resp.setApiKey(plainApiKey);
         resp.setBaseUrl(baseUrl);
         resp.setTitle("复制到 Trae / Qoder 的接入内容");
         resp.setContent(content);

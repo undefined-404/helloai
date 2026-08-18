@@ -17,6 +17,7 @@ import com.helloai.core.agent.mapper.AgentInboxMapper;
 import com.helloai.core.agent.mapper.AgentMapper;
 import com.helloai.core.agent.service.AgentMcpServerService;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.system.crypto.AgentApiKeyCipher;
 import com.helloai.core.system.entity.LlmProviderModel;
 import com.helloai.core.system.service.LlmProviderModelQueryService;
 import com.helloai.core.task.entity.ActivityLog;
@@ -65,6 +66,7 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     private final TaskTimelineService taskTimelineService;
     private final AgentMcpServerService agentMcpServerService;
     private final LlmProviderModelQueryService llmProviderModelQueryService;
+    private final AgentApiKeyCipher agentApiKeyCipher;
 
     // ══════════════════════════════════════════════════════════════
     //  注册 / 基础 CRUD（不变）
@@ -80,7 +82,10 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
         Agent agent = new Agent();
         agent.setName(name);
         agent.setRole(role);
-        agent.setApiKey(issueConsumerToken());
+        // 等保存储加密：apiKey 以 enc:v1:AES-GCM 密文落库，明文仅本次注册响应返回一次
+        String plainKey = issueConsumerToken();
+        agent.setApiKey(agentApiKeyCipher.encrypt(plainKey));
+        agent.setApiKeyHash(agentApiKeyCipher.sha256Hex(plainKey));
         agent.setStatus(AgentStatus.ACTIVE);
         agent.setScore(0);
         agent.setRemark(description);
@@ -135,7 +140,52 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
 
     @Override
     public Agent getByApiKey(String apiKey) {
-        return lambdaQuery().eq(Agent::getApiKey, apiKey).one();
+        // 1) 主路径：hash 点查（等保加密后 AES-GCM 密文不可 SQL eq 匹配）
+        Agent agent = lambdaQuery().eq(Agent::getApiKeyHash, agentApiKeyCipher.sha256Hex(apiKey)).one();
+        if (agent == null) {
+            // 2) 兜底：存量明文行 hash 未回填（Flyway 回填失败场景），逐条明文比对
+            agent = findLegacyPlaintextAgent(apiKey);
+        }
+        if (agent == null) {
+            return null;
+        }
+        if (!agentApiKeyCipher.matches(apiKey, agent.getApiKey())) {
+            // 哈希碰撞防御：定位命中但解密比对不一致，视为未命中
+            return null;
+        }
+        lazyMigrateToEncrypted(agent, apiKey);
+        return agent;
+    }
+
+    /** 存量明文兜底：hash 列为空的行逐条明文比对（Agent 表规模小，可接受）。 */
+    private Agent findLegacyPlaintextAgent(String apiKey) {
+        List<Agent> legacy = lambdaQuery().isNull(Agent::getApiKeyHash).list();
+        for (Agent a : legacy) {
+            if (a.getApiKey() != null && agentApiKeyCipher.matches(apiKey, a.getApiKey())) {
+                return a;
+            }
+        }
+        return null;
+    }
+
+    /** 惰性迁移：认证命中且仍为存量明文时，加密 + hash 双写（失败仅告警，不影响认证）。 */
+    private void lazyMigrateToEncrypted(Agent agent, String plainKey) {
+        if (agentApiKeyCipher.isEncrypted(agent.getApiKey())) {
+            return;
+        }
+        try {
+            String encrypted = agentApiKeyCipher.encrypt(plainKey);
+            lambdaUpdate()
+                    .set(Agent::getApiKey, encrypted)
+                    .set(Agent::getApiKeyHash, agentApiKeyCipher.sha256Hex(plainKey))
+                    .eq(Agent::getId, agent.getId())
+                    .update();
+            agent.setApiKey(encrypted);
+            agent.setApiKeyHash(agentApiKeyCipher.sha256Hex(plainKey));
+            log.info("agent.api_key 惰性加密迁移完成: agentId={}", agent.getId());
+        } catch (Exception e) {
+            log.warn("agent.api_key 惰性加密迁移失败（不影响本次认证，下次重试）: agentId={}", agent.getId(), e);
+        }
     }
 
     @Override
@@ -165,7 +215,8 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
         Agent agent = getById(agentId);
         if (agent == null) throw new BizException("Agent 不存在: " + agentId);
         String newKey = issueConsumerToken();
-        agent.setApiKey(newKey);
+        agent.setApiKey(agentApiKeyCipher.encrypt(newKey));
+        agent.setApiKeyHash(agentApiKeyCipher.sha256Hex(newKey));
         updateById(agent);
         log.info("Agent 工牌 consumerToken 重置: id={}", agentId);
         return newKey;

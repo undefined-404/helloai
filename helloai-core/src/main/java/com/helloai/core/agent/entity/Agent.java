@@ -52,6 +52,14 @@ public class Agent extends BaseEntity {
      */
     private String apiKey;
 
+    /**
+     * consumerToken 的 SHA-256 hex（认证点查列，等保存储加密配套）。
+     *
+     * <p>api_key 以 AES-GCM 密文（{@code enc:v1:} 前缀，见 AgentApiKeyCipher）落库后
+     * 无法用 SQL eq 匹配（每次 nonce 随机），认证先用本列定位，再解密比对防碰撞。</p>
+     */
+    private String apiKeyHash;
+
     private String modelType;
 
     @TableField(typeHandler = JacksonTypeHandler.class)

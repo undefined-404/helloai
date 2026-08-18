@@ -4,6 +4,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentMapper;
+import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.system.entity.SysUser;
 import com.helloai.core.system.mapper.SysUserMapper;
 import com.helloai.core.system.service.impl.AuthServiceImpl;
@@ -56,6 +57,9 @@ class AuthServiceTest {
     private AgentMapper agentMapper;
 
     @Mock
+    private AgentService agentService;
+
+    @Mock
     private StringRedisTemplate redis;
 
     @Mock
@@ -65,7 +69,7 @@ class AuthServiceTest {
 
     @BeforeEach
     void setUp() {
-        authService = new AuthServiceImpl(sysUserMapper, agentMapper, redis);
+        authService = new AuthServiceImpl(sysUserMapper, agentMapper, agentService, redis);
         // LENIENT 模式：部分用例不触 Redis，此 stubbing 不是"未使用"而是被跳过
         when(redis.opsForValue()).thenReturn(valueOps);
     }
@@ -187,13 +191,13 @@ class AuthServiceTest {
     }
 
     @Nested
-    @DisplayName("Agent API Key 校验（行为不变）")
+    @DisplayName("Agent API Key 校验（等保加密后走 AgentService 点查）")
     class ValidateAgentKey {
 
         @Test
         @DisplayName("无效 API Key 应抛 401")
         void validateAgentKey_invalid_shouldThrow401() {
-            when(agentMapper.selectOne(any())).thenReturn(null);
+            when(agentService.getByApiKey(anyString())).thenReturn(null);
 
             BizException ex = assertThrows(BizException.class,
                     () -> authService.validateAgentKey("bad-key"));
@@ -206,7 +210,7 @@ class AuthServiceTest {
             Agent agent = new Agent();
             agent.setId(2001L);
             agent.setStatus(AgentStatus.DISABLED);
-            when(agentMapper.selectOne(any())).thenReturn(agent);
+            when(agentService.getByApiKey(anyString())).thenReturn(agent);
 
             BizException ex = assertThrows(BizException.class,
                     () -> authService.validateAgentKey("disabled-key"));

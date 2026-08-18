@@ -16,6 +16,7 @@ import com.helloai.core.task.mapper.ReviewRecordMapper;
 import com.helloai.core.task.mapper.RewardLogMapper;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.system.crypto.AgentApiKeyCipher;
 import com.helloai.core.system.service.LlmProviderModelQueryService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -63,11 +64,14 @@ class AgentServiceTest {
     private AgentMcpServerService agentMcpServerService;
     @Mock
     private LlmProviderModelQueryService llmProviderModelQueryService;
+    @Mock
+    private AgentApiKeyCipher agentApiKeyCipher;
 
     private AgentService newSpyService() {
         return spy(new AgentServiceImpl(subTaskMapper, rewardLogMapper, activityLogMapper,
                 reviewRecordMapper, agentInboxMapper, agentDutyLeaseMapper,
-                taskTimelineService, agentMcpServerService, llmProviderModelQueryService));
+                taskTimelineService, agentMcpServerService, llmProviderModelQueryService,
+                agentApiKeyCipher));
     }
 
     @Test
