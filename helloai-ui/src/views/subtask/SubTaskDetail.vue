@@ -133,6 +133,13 @@
                 :label="a.name + '（' + accessTypeLabel(a.accessType) + (a.onlineStatus ? ' · ' + a.onlineStatus : '') + '）'"
                 :value="String(a.id)"
               />
+              <!-- §6.57 原执行者重做：人工驳回=开启新一轮（reworkFresh 重置计数），
+                   不换 Agent 亦合法；选择器里用特殊值标记，提交时映射为 reworkAgentId=null -->
+              <el-option
+                v-if="currentExecutorName"
+                :label="'原执行者重做（' + currentExecutorName + '）'"
+                :value="KEEP_CURRENT"
+              />
             </el-select>
             <el-button
               type="warning"
@@ -571,6 +578,14 @@ function goBackToList() {
 const manualTargetAgentId = ref<string>('')
 const manualSubmitting = ref(false)
 
+// 「原执行者重做」特殊值：提交时映射为 reworkAgentId=null（后端 = 原执行者重做）
+const KEEP_CURRENT = '__KEEP_CURRENT__'
+// 当前负责人展示名（Agent 列表缺失时降级为短 ID）
+const currentExecutorName = computed(() => {
+  if (!item.value?.assignedAgent) return ''
+  return resolveAgentName(item.value.assignedAgent)
+})
+
 // REVIEW 卡死判定：context 有人工介入标记，或返工次数已达后端默认上限
 // （autoReviewMaxRework=3，兼容标记落库前的存量卡死任务）
 const needsManualIntervention = computed(() => {
@@ -587,7 +602,10 @@ const manualReasonText = computed(() => {
   return '返工已达上限（' + (item.value?.reworkCount ?? 0) + ' 次），自动核验已停止'
 })
 
-// 改派候选：EXECUTOR 角色 + ACTIVE，排除当前负责人，在线优先（外部/内部 Agent 均可选）
+// 改派候选：EXECUTOR 角色 + ACTIVE，排除当前负责人（原执行者重做走下方独立选项），
+// 在线优先（外部/内部 Agent 均可选）；当前负责人若为唯一内部 Agent 时仍可通过
+// 「原执行者重做」选项（reworkAgentId=null）回到原执行者，避免候选列表出现外部 Agent
+// 一枝独秀、内部 Agent 完全不可选的情况（§6.55/§6.57 决策）
 const manualCandidates = computed(() => {
   if (!item.value) return []
   const current = item.value.assignedAgent != null ? String(item.value.assignedAgent) : ''
@@ -607,19 +625,21 @@ function accessTypeLabel(t: string | undefined): string {
 }
 
 // 驳回并改派：REVIEW → REWORK + 换 assignedAgent（后端 createReview REJECTED + reworkAgentId）
+// 选中「原执行者重做」（KEEP_CURRENT）时 reworkAgentId=null，后端 reworkFresh 重置计数后原执行者重做
 async function submitManualRework() {
   if (!item.value || !manualTargetAgentId.value) return
   manualSubmitting.value = true
   try {
+    const reworkAgentId = manualTargetAgentId.value === KEEP_CURRENT ? null : manualTargetAgentId.value
     await reviewApi.create({
       subTaskId: item.value.id,
       result: 'REJECTED',
       score: 1,
-      issues: '人工介入：自动链路已停止（返工达上限/能力不匹配），改派 Agent ' + manualTargetAgentId.value + ' 重新执行',
+      issues: '人工介入：自动链路已停止（返工达上限/能力不匹配），' + (reworkAgentId ? '改派 Agent ' + reworkAgentId : '原执行者重做') + '，重新执行',
       comment: '人工驳回改派（平台管理员）',
-      reworkAgentId: manualTargetAgentId.value
+      reworkAgentId
     })
-    ElMessage.success('已驳回并改派，等待新 Agent 认领执行')
+    ElMessage.success(reworkAgentId ? '已驳回并改派，等待新 Agent 认领执行' : '已驳回，等待原执行者重做提交')
     manualTargetAgentId.value = ''
     await pollOnce()
   } catch {
