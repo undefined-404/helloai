@@ -3298,7 +3298,7 @@ minimax（MiniMax-M2.5，Anthropic 协议推理模型）担任 REVIEWER 时自�
 
 后端（主任务实时聚合 zip）：
 
-- `core/shared/util/SubTaskDependencyOrder`（新建）：从 PlannerAnalysisService 私有 orderByDependency 提炼的公共稳定 Kahn 拓扑排序（统一走 `dependsOnIdList()` 归一化，成环兕底不丢条目）；PlannerAnalysisService 改为委托
+- `core/shared/util/SubTaskDependencyOrder`（新建）：从 PlannerAnalysisService 私有 orderByDependency 提炼的公共稳定 Kahn 拓扑排序（统一走 `dependsOnIdList()` 归一化，成环兜底不丢条目）；PlannerAnalysisService 改为委托
 - `core/task/service/TaskDeliverableService`（新建）：`buildZip(taskId)` 内存组包（UTF-8 ZipOutputStream）——`00-任务概览.md`（任务信息 + 子任务完成情况表：状态/Agent/完成时间/最新核验结论）+ `NN-xxx` 拓扑序编号的 DONE 子任务产出；**取数规则：优先物化 local:// 附件（同名取最新一轮），无可读附件回退 context.lastExecution.output 单 .md**（兼容物化上线前的历史任务，并避免新任务重复收录）；草案/已取消不入包，非 DONE 仅概览表标注；重名自动 (2)(3) 后缀；单附件读取失败不拖垮整包
 - `TaskController` 新增 `GET /api/tasks/{id}/deliverables/download`（薄入口，任何状态可下，无产出时包内仅概览）
 
@@ -5570,3 +5570,299 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 - 影响：存量明文 api_key 认证不受影响（明文兼容 + 惰性迁移逐次回写，无停机窗口）；外部 AI 接入契约零变化；管理端/onboarding 展示不变。
 - 部署要求：服务器 jar 升级触发 V53 迁移 + compose 环境变量生效；惰性迁移在首次认证时逐个完成，无需数据批处理。
 - 遗留：① TLS 证书申请与 443 启用（阿里云免费证书/acme.sh，外部 AI 接入地址需同步改 https，sys_config 外网地址）；② 服务器 MinIO 幽灵附件清理 SQL（`UPDATE attachment SET deleted=1 WHERE sub_task_id='2089260943795032065' AND storage_url LIKE 'minio://trae-executor/%'`，写操作用户执行）；③ AES 密钥轮换治理（轮换必须同步重加密 credential_vault 24 条 + 全部 agent.api_key，否则解密失败）；④ 本轮代码与本文档未 git 提交，待用户确认后提交。
+
+### 6.103 拆解异步化改造：提交即返回 + 异步执行 + 前端轮询 + PLANNING 超时兜底（2026-08-19）
+
+#### 1. 范围
+
+- **背景**：用户反映「对话生成方案 → 任务拆解」耗时长、常超时报错。根因：`POST /tasks/planById/{id}` 在 HTTP 线程同步等 LLM（最坏约 245s），前端 axios 超时仅 120s，超时倒挂导致「前端先报错、后端还在跑」。用户选定方案 1（异步优化）。
+- **本轮内容**：decompose 三段式异步化——同步守卫（校验 + CAS 置 PLANNING + timeline + 提交异步）→ `@Async` 异步执行 LLM 段 → `PlanningTimeoutTask` 兜底回收卡死任务；前端三文件轮询改造；测试拆分迁移 + 新增两组测试。
+- **明确不做**：API 契约不改（`planById` 保持 `R<List<SubTask>>` 返回空列表，对 CODE_STYLE §6.7 的有意例外，TaskController 零改动）；不做 SSE 推送草案结果（前端轮询够用）；不改拆解业务逻辑本身（LLM 段原样迁移）。
+
+#### 2. 实际落地
+
+- **PlannerAnalysisServiceImpl.decompose 同步守卫化**：保留校验（PENDING / 无存活子任务 / CANCELLED 残留物理清理）+ CAS 推 PLANNING，之后记录 `task_plan_async_submitted` timeline、调 `plannerDecomposeAsyncService.executeDecompose(taskId)` 立即返回空列表；捕获 `TaskRejectedException`（线程池满）→ CAS 回退 PENDING + BizException「拆解排队已满，请稍后重试」。LLM 段整体迁出，构造器从 9 参改为 7 参（去掉 PlannerAgentPicker / PlatformAgentExecutionService / ObjectMapper，注入 PlannerDecomposeAsyncService）。
+- **PlannerDecomposeAsyncService / Impl（core/planner）**：接口 + impl 成对（CODE_STYLE §7）；`@Async("plannerDecomposeExecutor")` 标注 `executeDecompose`（跨类调用避开代理失效）；入口幂等守卫（task 为空或非 PLANNING 直接 return，与 Job 兜底 CAS 天然互斥）；doDecompose 承接迁出的完整 LLM 段（picker → renderPrompt → executeSync → parseDraftItems → validateDependencies → buildDrafts → saveBatch → applyDependsOn → `task_plan_generated`）；新增 `task_plan_llm_call_end` timeline（costMs/finishReason/tokenUsage/success，补齐 LLM 调用观测缺口）；失败 catch 内闭环（log.error + CAS 回退 PENDING + `task_plan_failed`，void 异步方法不重抛）。
+- **线程池**：`PlannerDecomposeExecutorConfig`（helloai-start，Bean `plannerDecomposeExecutor` core 2 / max 4 / queue 20 / AbortPolicy）+ `PlannerDecomposeProperties`（prefix `helloai.planner.decompose`：core-pool-size / max-pool-size / queue-capacity / planning-timeout-minutes）+ application.yml 配置段。
+- **兜底任务**：`TaskMapper.selectTimedOutPlanning`（注解式 SQL，仅选 id/title/status/create_time/update_time，避开 JSONB 大字段 typeHandler 问题）+ `PlanningTimeoutTask`（helloai-job，`fixedRate=30s` + `scheduler:lock:PlanningTimeout` UUID token + Lua 比对解锁，照 AssignedSubTaskTimeoutTask 范式）；超时阈值读 `PlannerDecomposeProperties.planningTimeoutMinutes`（默认 10 分钟，实施偏差：原计划放 AgentDispatchProperties，统一收口到拆解配置段）；recover CAS PLANNING→PENDING 成功才记 `task_plan_timeout_recovered` timeline，BATCH_LIMIT=50。
+- **前端三文件**：`TaskList.vue` handlePlan 提交即返回（「拆解已提交，草案生成中」+ 立即开审阅弹窗，不再 await 草案）；`PlanReviewDialog.vue` 打开即轮询（3s 间隔、5 分钟上限，并行查 planDrafts + getById：草案非空停 / 任务回退 PENDING 提示「拆解失败，请回任务列表重试」/ 非 PLANNING 或超时停；弹窗关闭与组件卸载均停定时器）+ 生成中提示；`RequirementChat.vue` finalize/regenerate 文案改异步语义（「正在后台拆解…」）；`task.ts` plan 注释同步。
+
+#### 3. 验证结果
+
+- **测试拆分迁移**：`PlannerAnalysisServiceTest` 重写为 13 例（新构造器 mock PlannerDecomposeAsyncService，核心新用例：异步提交返回空 / 线程池拒绝回退 PENDING + BizException）；新建 `PlannerDecomposeAsyncServiceImplTest` 12 例（幂等守卫 / 成功落库三 timeline / llm_call_end 观测字段断言 / 失败回退不抛异常 / 幽灵依赖拒绝 / validateDependencies）；新建 `PlanningTimeoutTaskTest` 6 例（@Nested：锁占用 / 无记录 / 单条回收 / CAS 失败跳过 / 单条失败不中断 / Lua 解锁）。
+- **helloai-core 指定测试 25/25 全绿 + helloai-job PlanningTimeoutTaskTest + AssignedSubTaskTimeoutTaskTest 全绿**；`vue-tsc --noEmit` 0 错 + eslint 改动文件 0 error。
+- **环境要点固化**：根 pom `skipTests=true` 默认跳测试，跑测试必须显式 `-DskipTests=false`；多模块跑测试需 `-am`（否则用本地仓库旧 jar 报 IncompatibleClassChangeError）；测试命令模板 `mvn -pl helloai-core test "-Dtest=类名" -DskipTests=false "-Dsurefire.failIfNoSpecifiedTests=false"`。
+
+#### 4. 影响与遗留
+
+- 影响：① 拆解提交从最坏 245s 同步等待变为毫秒级返回，前端不再有超时倒挂；② LLM 耗时不再占用 HTTP 线程与 DB 事务；③ 卡死 PLANNING 任务 10 分钟后自动回收可重试；④ API 契约与既有 confirm/reject/listDrafts 链路零变化。
+- 部署注意：无 Flyway、无 MQ 变更，重启后端生效；`helloai.planner.decompose` 配置段有默认值可不改 yml。
+- 遗留：① 真实环境端到端回归（提交→轮询→草案展示 / 超时兜底路径）待用户重启后端后实测；② 草案结果推送可后续升级 SSE（当前 3s 轮询已满足体验）；③ 本轮代码与本文档未 git 提交，待用户确认后提交。
+
+---
+
+### 6.104 附件同名去活版本化 + 核验死信显式化：Reviewer 版本冲突死循环收口（2026-08-19）
+
+#### 1. 范围
+
+- **背景**：用户实测「关键提醒与风险预案」子任务（《60天每日每周执行表整合.md》附件）同名 3 版本共存且字节数不同，Reviewer LLM 以「交付物版本冲突」反复驳回 6 次——附件无版本语义，同名重复上传全部 ACTIVE，核验侧按全量附件把多版本并列视为冲突；核验达上限后无显式死信事件、无人工介入标记，时序图也不呈现该操作，AI Agent 完成复杂任务会一直死循环。用户方案：① 附件增加有效/无效状态，每次提交同名附件优先把前面版本置无效再提交最新版，历史记录可回查被打回附件（被打回默认无效）；② 3 次错误后「人工介入并改派」按死信队列操作一并写入时序图（显式 `sub_task_review_dead_letter` 死信事件，与调度死信对称）。
+- **本轮内容**：附件版本化（register 同名去活 + 双查询语义拆分）+ 核验侧 4 处消费方切平台可信视角 + 核验达上限显式死信事件与人工介入 timeline + Prompt 模板版本豁免 + 前端时序图 OPS/DLQ 泳道补全与历史回查 + 测试与验证脚本 + CODE_STYLE 两条准则 + **驳回打回附件自动失效（用户后续诉求：SKILL 同步告知 Agent 旧附件被打回会失效，须重新上传）+ 三角色 SKILL.md + uploadArtifact 工具描述补版本语义**。
+- **明确不做**：不改附件存储/物化链路；不改核验计分逻辑本身；不做附件软删除入口（DELETE 状态枚举预留，本轮不落删除接口）；不做「同名去活 + 打回置 INACTIVE」之外的其他状态联动规则（如 DELETED 自动迁移、过期清理等）。
+
+#### 2. 实际落地
+
+- **附件版本化（后端）**：`AttachmentStatus` 枚举（ACTIVE/INACTIVE/DELETED）落 attachment.status 语义；`AttachmentServiceImpl.register` 在 save 前对同 `subTaskId` + 同 `fileName` + ACTIVE 的存量附件批量置 INACTIVE（`lambdaUpdate().eq(...).eq(...).set(INACTIVE).update()` 单链，不误伤不同名附件），最新版自然成为唯一 ACTIVE；`list(subTaskId)` 保持全量（含 INACTIVE，管理页目录归类与历史回查），新增 `listActive(subTaskId)` 平台可信视角（仅 ACTIVE）。
+- **4 处消费方切换 listActive**：`SubTaskReviewServiceImpl.buildAttachmentList/readableAttachments`（核验证据）、`SubTaskExecutionServiceImpl.loadUpstreamContent`（上游装载）、`TaskDeliverableServiceImpl.appendSubTaskDeliverables`（交付物打包）、`McpToolServiceImpl` 附件查询（MCP 通道）——核验/装载/打包只见唯一有效版，同名历史版本只留作审计回查。
+- **Prompt 模板版本豁免**：`prompts/subtask-review.md` 补版本说明——同名多版本存在时按各文件名 ACTIVE 版本核验，不得以「版本冲突」单一理由驳回（配合 register 去活后核验侧本就收口到唯一 ACTIVE）。
+- **核验死信显式化**：`SubTaskReviewServiceImpl` 在 reworkCount 达上限（默认 3）分支记 `sub_task_review_dead_letter` timeline（AgentRole.SYSTEM，payload `reason=rework_limit_exceeded` + `reworkCount` + `maxRework`），与调度死信 `sub_task_dead_letter` 对称；同时调 `SubTaskServiceImpl.markManualIntervention` 写 `sub_task_manual_intervention_required` timeline（payload 带 reason，人工介入原因全集 7 类：rework_limit / review_skip_execution_dense_no_capability / review_skip_no_evidence / fallback_skip_policy / fallback_skip_policy_restricted / fallback_skip_execution_dense / dispatch_skip_execution_dense）；`sub_task_manual_rework_reset`（人工改派重置返工计数）沿用，三事件构成「核验熔断 → 人工打捞 → 改派重做」闭环。
+- **前端**：`sequenceFlow.ts` 时序图补 OPS/DLQ 泳道映射——LABEL 新增 `sub_task_review_dead_letter`（核验熔断入死信，归 DLQ）/ `sub_task_manual_intervention_required`（人工介入待处理，归 OPS）/ `sub_task_manual_rework_reset`（人工驳回改派，归 OPS）+ INTERVENTION_REASON 映射人话化 reason + inferNote 三类注释 + 死信/核验死信事件循环折叠；`SubTaskDetail.vue` EVENT_META 补 3 条 + 产出附件卡片历史回查（`showHistoryAtt` 开关 + 旧版本行灰显/删除线 + 「旧版本」标记）；`AttachmentList.vue` 顶部 `activeOnly` 开关（默认开启）+ INACTIVE 行灰显，目录计数同步按 activeOnly 视角。
+- **CODE_STYLE 两条准则**：§1 代码修改必须符合本规范；测试优先用 ps1 脚本验证（而非仅单测用例）。
+- **驳回打回附件自动失效（用户后续诉求）**：用户实测发现「打回后旧附件仍以 ACTIVE 参与下次核验」是 register 同名去活未覆盖到的另一面——若 Agent 被打回后只修改本地文件 + 改 output + submitResult（不重新 uploadArtifact），或上传不同名新文件，旧 ACTIVE 附件仍被核验侧 listActive 命中，复现死循环。落地：① `AttachmentService` 接口新增 `invalidateBySubTask(Long subTaskId)`，实现用 `lambdaUpdate().eq(subTaskId).eq(ACTIVE).set(INACTIVE).update()` 单链批量去活；② `SubTaskServiceImpl` 通过 `ObjectProvider<AttachmentService>` 懒解析打破与 `AttachmentServiceImpl` 的构造器循环（后者依赖本服务做 register 归属校验，项目惯例见 CompositeArtifactStorage / WebSearchServiceRouter / ExecutionDispatchValidator）；③ rework()（自动核验驳回返工）+ reworkFresh()（人工驳回改派）两个打回入口在状态迁移后统一调私有 `invalidateAttachmentsOnRework(subTaskId)`（best-effort + warn 不阻断返工主链路，与 sendReworkInboxNotification 哲学一致）；④ 三角色 SKILL.md 同步告知外部 Agent——`executor/SKILL.md` §0.1 `uploadArtifact` 工具行补「版本语义（§6.104）」段、「注意事项」加「返工时附件版本语义」一条；`planner/SKILL.md` §0.1 `uploadArtifact` 工具行补版本语义一句；`reviewer/SKILL.md` 审查原则补「按 ACTIVE 版本核验、不得以版本冲突驳回（§6.104）」一条（与 prompt 模板版本豁免对齐）；⑤ `McpMcpServer.uploadArtifact` @Tool description Gotchas 补「版本语义（2026-08-19，§6.104）」段，工具描述直接进 LLM 上下文，是 SKILL 之外最强约束。
+
+#### 3. 验证结果
+
+- **测试 5 类 + 驳回失效 4 类共 99 用例全绿**：`AttachmentServiceImplTest` 17（+3 上一轮：listActive 仅 ACTIVE / register 同名去活 / 不同名不触发去活；本轮 +2：invalidateBySubTask 主路径 + nullId 跳过；Mockito 陷阱——SFunction 方法引用每次编译为新实例，verify 须 `any(SFunction.class)+eq(值)`；spy 的 ServiceImpl.save 触碰 baseMapper，须 `doReturn(true).when(x).save(any())` 拦截）；`SubTaskReviewServiceTest` 28（+1：reworkCount 达上限 ArgumentCaptor 断言 `sub_task_review_dead_letter` 事件 payload 含 reason/reworkCount/maxRework）；`SubTaskExecutionServiceTest` / `McpToolServiceTest` / `TaskDeliverableServiceTest` list→listActive 切换（2/3/3 处）；**本轮 `SubTaskServiceHandoverTest` 11 用例 0 失败，新增 `verify(attachmentService).invalidateBySubTask(SUB_TASK_ID)` 断言 reworkFresh 触发附件去活**；`SubTaskServiceQuotaTest` 4 用例 + `SubTaskServiceIsReadyTest` 8 用例构造参数适配 ObjectProvider<AttachmentService>，无新增用例。
+- **前端**：`vue-tsc --noEmit` 0 错 + eslint 改动文件 0 error（el-tag 多行格式修复 warning）。
+- **验证脚本**：`scripts/powershell/verify-attachment-version.ps1`（规则 6 UTF-8 头 + 单引号拼接；S0 健康 / S1 上传 v1 / S2 同名 v2 / S3 断言同名校两行 INACTIVE+ACTIVE / S4 不同名不触发去活 / S5 ACTIVE 视角恰 2 行且同名取最新）`ParseFile` 静态自检 0 error，待真实环境跑（需 AgentId/SubTaskId/ApiKey）。
+
+#### 4. 影响与遗留
+
+- 影响：① 同名附件重复提交自动版本化，核验/装载/打包只见唯一有效版，「版本冲突」死循环根除；② 核验熔断在时序图 DLQ 泳道显式可见，人工介入/改派（OPS 泳道）可追溯、可恢复（重置返工计数后重新分发）；③ 附件的标题/字节数不再参与「冲突」判定，Reviewer 聚焦 ACTIVE 版内容一致性。
+- 部署注意：无 Flyway、无 MQ 变更，重启后端生效；旧数据中多版本并列 ACTIVE 的历史附件在首次 listActive 视角下会同时可见（不做存量迁移），管理页可手动感知。
+- 用户已手动停止「关键提醒与风险预案」子任务，改动完成后可重新分发验证：同名附件多轮提交应不再触发 Reviewer 反复驳回，核验熔断后应可见「人工介入待处理」→「人工驳回改派」闭环。
+- 遗留：① `verify-attachment-version.ps1` 真实环境实测；② 重新分发后的人工介入 → 改派 → 重做端到端观察；③ DELETED 状态的删除入口（预留未做）；④ 本轮代码与本文档未 git 提交，待用户确认后提交。
+
+---
+
+### 6.105 Planner 对话完善：意图确认弹窗 + 联网搜索可视化/多轮 + 选项单列（V41，2026-08-19）
+
+#### 1. 范围
+
+- **背景**：用户对 planner 对话提出四项完善：① 联网搜索无可查验信息（是否真搜了、搜了什么、来源是否正确均不可见）；② 联网搜索仅首轮触发，希望多轮都能用；③ 转方案意图词过少，二次确认希望改为弹窗（仅确认/取消、无推荐项）；④ 澄清选项挤在一行，希望每选项独占一行。查验形态经调研对齐 DeepSeek「已搜索 xx 个网页」/ Kimi「已联网检索 · N 个信源」折叠条形态（挂在 assistant 回复上，不走独立时间线事件）。
+- **本轮内容**：选项纵向单列 CSS；意图词组合正则扩充（8 组模式）+ 二次确认改 structured 确认卡（selections 快照三通道判定）；新增 `WebSearchOutcome` 归一化记录，搜索结果落 assistant payload `webSearch` 键 + 前端 `WebSearchBar.vue` 折叠查验条；CLARIFY 搜索从仅首轮放宽为每轮。
+- **明确不做**：thinking 内容透传（需推理模型 + executeSync 链路改造，另立项）；正文内联引用角标 `[citation:X]`（二期演进）；DeepSeek 原生 `enable_search`（Spring AI 1.1.8 未暴露该字段，路线 B）；零 Flyway（`requirement_message.payload` 既有列）、零新增 REST 端点。
+
+#### 2. 实际落地
+
+- **选项单列（问题 4）**：`StructuredQuestionCard.vue` `.sq-options` 改 `flex-direction: column` + `.sq-option` `width: 100%`，追问卡/确认卡/历史只读回显三处统一生效。
+- **意图词扩充（问题 3）**：`INTENT_TO_CLARIFY_PATTERN` 保留既有 18 个方案系变体，追加 8 组「动作词 + 可选量词 + 计划/任务/方案」组合正则（新建/创建/建立/建、帮我/给我/给、生成、做、来、出、帮我总结、总结成/为/个/一下），覆盖「新建个计划吧」「给一个方案」「帮我总结一下」「帮我生成计划」等表达；组合匹配避免「任务」「计划」裸词子串误触，误触由确认弹窗兜底。
+- **确认卡化（问题 3）**：新增 `buildConfirmAskPayload()` 构造 1 题 2 选项 structured payload（id `confirm-switch`，仅确认/取消、无 recommended、allowCustom=false，NON_NULL 序列化保证 recommended 字段不出现）；意图命中分支 assistant 消息正文仍落 `CONFIRM_ASK_MESSAGE`（transcript 不变），payload 改为确认卡。**关键实施发现**：卡片提交文本形如「问题：确认」不命中 `CONFIRM_PHRASE_PATTERN` 开头锚定，故新增 selections 快照判定通道（`isConfirmCardAccept` + `confirmCardValueOf`）：点「确认」走切换 CLARIFY 分支、点「取消」清标记继续 CHAT；手写确认词与再次意图词仍兼容，状态机其余零改动；CHAT 50 轮上限放行条件同步纳入卡片确认。
+- **搜索查验条（问题 1）**：新增 `WebSearchOutcome`（`planner/search` 包，`@Data @Builder`：provider/query/costMs/total/results/failed/reason + `toContextText()` 承接原 renderWebSearchContext 注入文本）；`doWebSearch` 返回值 String→WebSearchOutcome，异常降级 failed outcome、查询词空白返回 null（未搜不落键）；`runLlmRound` 签名改收 outcome（retry/switchToClarify 传 null）；assistant payload 合并 `webSearch` 键（structured/freeform 追问分支 + **终稿分支**——终稿时带 payload 重载，未搜索保持原 3 参形态）；前端新增 `WebSearchBar.vue`（scoped 折叠条：「🌐 已联网搜索 N 个来源（供应商 · Xms）」，failed/total=0 态可见，展开显示搜索词 + 来源标题超链接/站点/摘要）+ `types/clarify.ts` 增 `WebSearchTrace`/`WebSearchSource` + `RequirementChat.vue` renderMessages 随行渲染（实时与历史回显统一）。
+- **多轮搜索（问题 2，路线 A）**：doRound 触发条件去掉 `rounds == 0`，CLARIFY 每轮且开关开启即搜索，查询词取当前轮消息前 40 字；不做数据库级去重（成本由 MAX_ROUNDS=20 封顶，每轮折叠条可见搜索词供查验）；switchToClarify 切换轮维持不搜索。
+- **搜索查询词语义守卫（第二轮修复，用户实测发现）**：点确认卡切入澄清首轮时，当前轮消息是卡片提交文本（「检测到你想把讨论整理成落地方案…：确认」），被直接截前 40 字当搜索词发给博查 → 搜不到任何网页，查验条如实显示「未搜到相关网页」暴露缺陷。修复：新增 `resolveSearchSource` + `lacksSearchSemantics`（无检索语义判定：确认词 / 确认卡提交文本（题面前缀或卡选快照）/ 长度 ≤ `INTENT_ONLY_QUERY_LIMIT=20` 的纯意图短句），命中则倒序回退最近一条有实际内容的 user 消息（通常是触发意图前的讨论主题）作查询词来源；全部无意义时返回空白 → `doWebSearch` 视为未搜不落查验条；长句携带主题内容（如「我想 60 天备考架构师考试，帮我整理成方案」）不受守卫影响仍可作查询词。
+
+#### 3. 验证结果
+
+- **后端**：`RequirementClarifyServiceTest` 55/55 全绿（53 例 + 第二轮修复新增 2 例：确认卡切入时搜索词回退历史主题消息断言 / 历史无可回退主题时不发起搜索断言；含新增 8 例：新意图词置位 + 确认卡 payload 结构断言 / 5 个新意图词覆盖 / 裸词防误触 / 卡片点确认经快照切 CLARIFY / 点取消继续 CHAT / CLARIFY 第 2 轮触发搜索 + payload 断言 / 搜索异常 failed=true 不阻断主流程；既有 3 处确认消息断言从 payload=null 改 anyString）。踩坑：`-pl helloai-core` 单跑需 `-am` 否则用本地仓库旧 jar 报「找不到 HeartbeatProperties」（§6.103 已固化的坑再次验证）；Jackson 默认序列化 null 字段导致 `recommended:null` 出现，确认卡改用 `objectMapper.copy().setSerializationInclusion(NON_NULL)`。
+- **前端**：`vue-tsc --noEmit` 0 错。
+
+#### 4. 影响与遗留
+
+- 影响：① 联网搜索全程可查验（是否搜了、搜了什么词、来源内容与耗时，失败/空结果也可见）；② CLARIFY 每轮都能用联网搜索（成本与轮数成正比，已知代价）；③ 转方案确认从手打改为点选弹窗，误触成本更低；④ 选项单列提升可读性；⑤ API 契约不变（仅消息 payload JSON 扩展），老消息无 webSearch 键不受影响。
+- 部署注意：无 Flyway、无 MQ 变更，重启后端生效。
+- 遗留：① 手工回归清单（确认弹窗交互 / 折叠条展开回显 / 多轮搜索）待用户重启后端实测；② thinking 透传与内联引用角标为二期项；③ 本轮代码与本文档未 git 提交，待用户确认后提交。
+
+---
+
+### 6.106 DeepSeek 原生联网搜索 adapter：把 DeepSeek 当"搜索引擎"替换博查（V42，2026-08-19）
+
+#### 1. 范围
+
+- **背景**：用户实测博查搜索效果不理想，调研两类增强方案（API 代理 search2ai / MCP 服务器）后确认：代理方案会切断查验条数据源，项目仅是 MCP Server 无客户端能力；而四家 Provider 原生搜索能力核实结果为——DeepSeek 在 Anthropic 兼容端点提供 `web_search_20250305` 服务端工具（单次调用返回结构化 `web_search_tool_result`），Kimi 需客户端 tool_calls 回显循环，MiniMax 亦支持同构服务端工具。用户选定第一步方案：只接 DeepSeek 原生搜索且当"搜索引擎"用。
+- **本轮内容**：新增 `DeepSeekNativeSearchServiceImpl`（实现既有 `WebSearchService` 接口，provider=`deepseek-native`）+ `WebSearchProperties` 增 5 个 deepseek-* 配置字段 + 接口/路由 Javadoc 同步 + 新增 11 例单测。澄清主 LLM 调用链、prompt 模板、`WebSearchOutcome`、查验条、前端**零改动**（`WebSearchResult` 归一化契约不变）。
+- **明确不做**：Kimi/MiniMax 原生搜索适配（二期）；per-planner 动态路由搜索源（当前按会话级开关 + 全局 provider 配置）；正文内联引用角标（二期）；不新增 Flyway / REST 端点。
+
+#### 2. 实际落地
+
+- **`DeepSeekNativeSearchServiceImpl`**（`planner/service/impl`，照博查/Tavily 同构）：`@ConditionalOnProperty(havingValue="deepseek-native")` 条件装配，Router 的 provider 匹配零改动自动生效。请求：POST `{deepseekBaseUrl}`（默认 `https://api.deepseek.com/anthropic/v1/messages`），头 `x-api-key` + `anthropic-version: 2023-06-01`，体为 Anthropic messages 格式：单条 user 消息「Perform a web search for query: X」+ `tools:[{type:"web_search_20250305", name:"web_search", max_uses:1}]`（限单次检索控成本），`max_tokens` 压低（默认 1024，正文是副产品不消费）。解析：遍历响应 content 块找首个 `web_search_tool_result`，其 content 列表逐条映射 `WebSearchResult`（title/url/content 引用原文，缺则回退 snippet 字段；siteName 由 URL host 推导；snippet 按 maxSnippetChars 截断）。失败语义照契约：Key 未配置 / 空查询 / 非 2xx / 解析异常一律降级空列表不抛异常。
+- **`WebSearchProperties` 增 5 字段**：`deepseekBaseUrl` / `deepseekApiKey`（建议 env DEEPSEEK_API_KEY 注入）/ `deepseekModel`（默认 deepseek-chat）/ `deepseekMaxTokens`（1024）/ `deepseekTimeoutMs`（15s，独立于全局 timeoutMs：该路径是一次完整 LLM 调用，耗时显著高于普通搜索 API）。
+- **切换方式**：`helloai.web-search.provider=deepseek-native` + `deepseek-api-key` 即切搜索源，重启生效；回退博查只需改回 provider 配置。
+
+#### 3. 验证结果
+
+- **新增 `DeepSeekNativeSearchServiceImplTest` 11/11 全绿**：JDK 内置 `HttpServer` 起本地桩端点模拟 Anthropic 兼容端点（不引新依赖），覆盖：结构化结果块解析映射（title/url/host 推导/未超阈不截断）/ 超长 snippet 截断 / 请求报文断言（web_search_20250305 声明 + 查询词 + x-api-key 头）/ limit 截断 / snippet 字段回退 / 非 2xx / 无结果块 / 缺 Key 不发请求 / 空查询不发请求 / 非法 JSON。
+- **回归**：`RequirementClarifyServiceTest` 55/55 全绿（主链路零改动验证）。
+- **踩坑再验证**：`surefire:test` 不带 `-am` 时 `NoSuchMethodError: setDeepseekApiKey`——本地仓库旧 helloai-common jar，加 `-am` 重跑即绿（§6.103/6.105 已固化的坑第三次验证）。
+
+#### 4. 影响与遗留
+
+- 影响：① 搜索源从博查切换为 DeepSeek 原生后，结构化结果（查询词/来源明细）完整落 payload，查验条渲染链路不变；② 省去独立搜索服务订阅，复用 DeepSeek API Key；③ 代价：每次搜索是一次完整 LLM 调用，耗时（超时已独立放宽到 15s）与成本高于普通搜索 API，成本随 CLARIFY 轮数线性。
+- 部署注意：无 Flyway、无 MQ 变更；需配置 `helloai.web-search.provider=deepseek-native` + `helloai.web-search.deepseek-api-key`（或 env）后重启后端生效。
+- 遗留：① 真实 DeepSeek Key 端到端回归（查验条展示 DeepSeek 来源）待用户配置后实测；② Kimi/MiniMax 原生搜索适配与 per-planner 动态路由为二期项；③ 本轮代码与本文档未 git 提交，待用户确认后提交。
+
+---
+
+### 6.107 联网搜索 URL 分离 + 网页直取：用户给出的站点直接访问而非当搜索词（V43，2026-08-19）
+
+#### 1. 范围
+
+- **背景**：用户实测发现新缺陷——消息含 URL 时（「给我一份快速上手 https://open.maic.chat/ 的操作手册」），整段输入含裸 URL 被截前 40 字直接当搜索词发给搜索引擎，查验条显示「未搜到相关网页」：搜索引擎对 URL 文本检索效果极差。用户要求：应自动提取输入中的网址，**分离后直接访问**，而非全部当搜索内容。
+- **本轮内容**：新增 `WebPageFetchService`（直接访问用户给出的网页抓取正文）+ `doWebSearch` URL 分离改造（提取 URL → 直取页面注入上下文；搜索词改用剥离 URL 后的语义文本，纯 URL 消息回退域名）+ `WebSearchOutcome.fetchedPages` + payload 新增 `fetched` 查验键 + `WebSearchProperties` 增 4 个 urlFetch-* 配置。查验条/前端零改动（直取页面映射为来源置顶合并进 results；`fetched` 为未知键前端天然忽略）。
+- **明确不做**：前端 fetched 键专属展示（二期，当前查验条来源列表已含直取页面）；SPA 页面 JS 渲染拓取（正则式抓取对 SPA 空壳页降级 ok=false 可查验）；多页深度爬取（限前 2 个 URL）；不新增 Flyway / REST 端点。
+
+#### 2. 实际落地
+
+- **`WebPageFetchService` 接口 + `WebPageFetchServiceImpl`**（planner/service 与 impl，纯 JDK 无新依赖）：GET 目标 URL（跟随重定向 + 伪浏览器 UA）→ 限流读响应体（1MB 上限防超大页面）→ 仅接受文本类 Content-Type → 轻量 HTML 转纯文本（正则剔除 script/style/noscript/svg/head 块与注释 → 去标签 → 解码高频实体 → 折叠空白）→ 提取 `<title>`（缺失回退 host）→ 正文按 `urlFetchMaxTextChars`（默认 4000）截断。失败语义照搜索契约：非 2xx / 非文本 / 空正文 / 异常一律 ok=false + reason，绝不抛异常。
+- **`doWebSearch` URL 分离改造**（`RequirementClarifyServiceImpl`）：① `URL_IN_TEXT_PATTERN` 提取消息中全部 http(s) 链接（尾随中文标点/括号不计入）；② 搜索词 = `extractQueryKeyword(stripUrls(消息))`（剥离 URL 的语义文本），剥离后空白且含 URL → 回退首个 URL 的域名作搜索词；③ `fetchUserPages` 直取前 N 个去重 URL（N=`urlFetchMaxPages` 默认 2，总开关 `urlFetchEnabled` 默认开）；④ 直取成功页面映射为 `WebSearchResult`（snippet 取正文前 maxSnippetChars）**置顶**合并进 results（总条数 cap 在 maxResults 内，页面优先），搜索结果补后；⑤ 查询词空白且无成功直取时才返回 null（纯 URL 消息域名回退后总会搜索）；搜索异常降级分支也携带 fetchedPages。
+- **`WebSearchOutcome.fetchedPages`** + `toContextText()` 增「直接访问用户提供的网页后抓取的内容」节（仅 ok 页面，第一手资料优先）置于搜索结果节之前；两节均空维持原占位符。
+- **payload `fetched` 键**（buildWebSearchMap）：每条 `{url,title,ok,textChars,reason?}`，含失败记录可查验；无 URL 时不落键。
+- **`WebSearchProperties` 增 4 字段**：`urlFetchEnabled`（true）/ `urlFetchTimeoutMs`（8s）/ `urlFetchMaxPages`（2）/ `urlFetchMaxTextChars`（4000）。
+
+#### 3. 验证结果
+
+- **新增 `WebPageFetchServiceImplTest` 10/10 全绿**：JDK HttpServer 桩站点，覆盖 title 提取/剔噪转纯文本（script/style/注释断言不泄漏）/实体解码/超长截断/无 title 回退 host/非 2xx/非文本类型/SPA 空壳/非法 URL/连接拒绝全部降级不抛。
+- **`RequirementClarifyServiceTest` 59/59 全绿**（55 + 新增 4 例：URL 分离搜索词断言 + 直取置顶来源 + fetched 落键 / 纯 URL 回退域名 / 直取失败不进来源但记录可查验 / 开关关闭不发起抓取）；`DeepSeekNativeSearchServiceImplTest` 11/11 回归全绿。既有 mock 零改动兼容（`isUrlFetchEnabled` mock 默认 false 自然走原路径）。
+- **踩坑再验证**：`surefire:test` 不带 `-am` 再用本地仓库旧 jar 报 NoSuchMethodError（第四次验证，结论：**跑测试永远用 `mvn -pl helloai-core -am test` 完整命令**）；`-Dtest` 多类用逗号分隔（`+` 号会静默不执行）。
+
+#### 4. 影响与遗留
+
+- 影响：① 用户给出的站点被直接访问，正文（≤ 4000 字/页）注入 Prompt，LLM 可基于第一手站点资料作答（如生成 openMaic 操作手册）；② 搜索词不再被裸 URL 污染；③ 查验条来源列表置顶展示直取页面（标题可点击跳转），payload fetched 键可审计抓取成败；④ 前端/API 契约零变化。
+- 部署注意：无 Flyway、无 MQ，重启后端生效；urlFetch-* 均有默认值可不改 yml；若目标站点反爬严格会降级 ok=false（查验条可见原因），不阻断主流程。
+- 遗留：① 真实环境回归（含 URL 的澄清消息：直取来源置顶/正文注入效果/反爬降级路径）待用户重启后端实测；② SPA 站点可二期引入无头浏览器或站点 sitemap 拓取；③ 前端 fetched 专属展示（如「已直接访问 N 个网页」独立状态行）为二期项；④ 本轮代码与本文档未 git 提交，待用户确认后提交。
+
+### 6.108 uploadArtifact 工具口径更新：文件内容先走代理上传、本工具仅登记（2026-08-19）
+
+#### 1. 范围
+
+- **背景（承 §6.99/6.102）**：`McpMcpServer.uploadArtifact` 的 `@Tool description` 仍残留旧契约文案「实际文件请先 PUT 到 MinIO 再把 storageUrl 传进来」，与 SKILL.md §6.99 新指引（文件内容先经 `POST /api/artifacts/upload` 代理上传，平台转存 MinIO 并注册一步到位）矛盾，会误导外部 Agent 直连服务器版不可达的 MinIO（仅绑定内网），是外部 Agent「无法上传附件、只能登记空壳 metadata」的诱因之一。
+- **本轮内容**：纯文档口径修正（工具描述与 Javadoc 文本，零功能/零契约改动）——`McpMcpServer.uploadArtifact` 描述改为「文件内容场景先走 `POST /api/artifacts/upload`（multipart + Bearer，返回 {attachmentId, storageUrl}）；本工具仅适用于『对象已在别处可访问』的登记场景，只注册 DB 元数据不传输文件内容」；`storageUrl` 的 `@ToolParam` 描述同步；`McpToolServiceImpl.uploadArtifact` Javadoc 同步为同口径。
+- **明确不做**：不改工具签名/逻辑/参数约束；不改 REST 路径与 SKILL.md（其口径已是新版）；不动 `ArtifactUploadService` 命名（用户已确认保持现状，§6.108 命名决策：Artifact 为平台领域术语族，AgentUploadService 语义错误）。
+
+#### 2. 实际落地
+
+- **McpMcpServer.java**：`@Tool(name="uploadArtifact")` description 的 Gotchas 首条由「实际文件请先 PUT 到 MinIO 再把 storageUrl 传进来」改为「文件内容场景：先走 POST /api/artifacts/upload（multipart/form-data + Authorization: Bearer <API_KEY>，参数 file + subTaskId + 可选 mimeType）上传文件内容，平台转存 MinIO 并注册附件一步到位，返回 {attachmentId, storageUrl}；服务器版 MinIO 仅绑定内网（公网不可达），不要直连 MinIO PUT 文件」+ 新增「本工具仅适用于『对象已在别处可访问』的登记场景…不传输文件内容」；`storageUrl` @ToolParam 描述改为「已有可访问对象的存储地址（仅登记场景；文件内容场景请走 POST /api/artifacts/upload），必填」。§6.104 版本语义段保留原样。
+- **McpToolServiceImpl.java**：uploadArtifact Javadoc 同步为「文件内容场景请先经 POST /api/artifacts/upload 上传（平台转存 MinIO 并注册一步到位）；本工具仅适用于『对象已在别处可访问』时的登记（只注册 DB 元数据记录，不传输文件内容）」。
+
+#### 3. 验证结果
+
+- IDE 问题面板：两文件无语法错误（仅历史遗留未使用 import 警告，与本轮无关不扩散清理）。
+- 说明：本轮为纯文本描述改动，不涉及逻辑，未跑 mvn 编译（Node 沙箱调 mvn 会触发 JVM 崩溃，编译验证由用户侧执行或随下次打包天然覆盖）。
+
+#### 4. 影响与遗留
+
+- 影响：外部 Agent 经 MCP 工具清单看到的 uploadArtifact 描述与 SKILL.md §6.99 一致，不再被旧文案引导直连 MinIO；文件内容上传路径明确指向 `POST /api/artifacts/upload`。
+- 部署注意：需重新打包后端 jar（helloai-core 变更）并部署服务器后生效。
+- 遗留：① 已登记的空壳附件（§6.102 遗留 SQL）与服务器 MinIO 数据仍待用户清理；② 本轮代码与本文档未 git 提交，待用户确认后提交。
+
+---
+
+### 6.109 联网搜索 V44：SPA 空壳元数据兜底 + 直取失败域名前置（2026-08-19）
+
+#### 1. 范围
+
+- **背景**：用户实测日志暴露 V43 两个叠加缺陷——① `open.maic.chat` 是 JS 渲染的 SPA，直取拿到的 HTML 只有空壳（textChars=0），而空壳页通常携带的 `<title>`/meta 描述被失败路径整体丢弃；原 UA「HelloAI-WebPageFetch」自曝爬虫身份易被反爬拦截；② 直取全部失败时搜索词不含域名（「给我一份如何快速上手 ，使用openMaic的操作手册…」），搜索引擎无从检索该站点公开资料；叠加博查 API Key 未配置（搜索被跳过）→ results=0，LLM 无任何资料可用。
+- **本轮内容**：直取服务 SPA 元数据兜底 + 浏览器风格 UA；搜索链路直取失败域名前置增强搜索词；`WebPageContent` 增 `metaOnly` 字段并落 payload。属真实缺陷修复。
+- **明确不做**：无头浏览器渲染 SPA（引 Playwright 太重，元数据兜底+域名前置已够用）；搜索 Key 配置属环境配置不在代码范围（已给用户两条配置路径）。
+
+#### 2. 实际落地
+
+- **WebPageFetchServiceImpl（V44）**：① UA 换浏览器风格（Chrome/126）+ 补 Accept-Language；② 正文为空时新增 `salvageMetaText` 兜底路径：提取 `<title>` / meta description / og:description / og:site_name（属性序双向兼容 content 在前/在后），拼作「站点名称：X；站点描述：Y」最低限度资料，ok=true + metaOnly=true；全部缺失才按失败（reason 改为「页面正文为空且无元数据」）。
+- **WebPageContent**：新增 `metaOnly` 布尔字段区分元数据兜底与真实正文抓取。
+- **RequirementClarifyServiceImpl.doWebSearch（V44）**：搜索词构建改三分支——纯 URL 消息回退域名（保持 V43）；语义文本存在但直取无一成功 → 搜索词前置首个域名（如「open.maic.chat 介绍下这个平台」）让搜索引擎检索站点公开资料；直取成功（含 metaOnly 兜底）则不加前缀（第一手资料已在手）。payload 的 fetched 记录 metaOnly=true 时落 `"metaOnly":true` 键（前端忽略未知键零兼容成本）。
+- **WebSearchOutcome** Javadoc 补 metaOnly 语义说明（渲染链路无变化：metaOnly 直取按成功页注入 Prompt 直取节）。
+
+#### 3. 验证结果
+
+- `WebPageFetchServiceImplTest` 12/12 全绿（原 SPA 失败用例改造为 V44 三例：title+meta 兜底成功 / og 属性序反转提取 / 无元数据仍失败）。
+- `RequirementClarifyServiceTest` 61/61 全绿（新增 2 例：直取失败域名前置断言搜索词以「open.maic.chat 」开头 / metaOnly 兜底进来源且 payload 落 metaOnly 标记且不加域名前缀）。
+- `DeepSeekNativeSearchServiceImplTest` 11/11 回归全绿。
+- 环境坑再次验证：`surefire:test` 不带 `-am` 用本地仓库旧 helloai-common jar 报 `NoSuchMethodError: isUrlFetchEnabled()`，换完整生命周期 `-am test` 即绿（§6.103 已固化）；surefire 嵌套类报告根 testsuite 属性 tests=0 但 testcase 元素实际存在，统计须数 testcase 元素而非根属性。
+
+#### 4. 影响与遗留
+
+- 影响：① SPA 站点（如 open.maic.chat）不再零资料，至少注入站点名+描述供 LLM 参考；② 直取失败时搜索词带域名，搜索引擎可检索该站点公开介绍/教程；③ 反爬拦截概率降低。
+- 部署注意：无 Flyway 无新配置项，重启后端生效。**环境配置提示（用户侧待办）**：日志中博查跳过搜索是因 `helloai.web-search.bocha-api-key`（env BOCHA_API_KEY）未配置——配置博查 Key 或切 `provider=deepseek-native` + DeepSeek Key（§6.106）二选一，否则搜索段仍无结果。
+- 遗留：① 真实环境带 URL 对话端到端回归待实测；② SPA 深度渲染（无头浏览器）为二期可选项；③ 本轮代码与本文档未 git 提交，待用户确认后提交。
+
+#### 5. 第二轮补充（博查 Key 到位 + 超时上调 + deepseek-native 停用决策）
+
+- **博查 Key 实测通过**：用户将 bochaApiKey 暂时写死在 `WebSearchProperties`；真实调用 `https://api.bochaai.com/v1/web-search` 验证 599ms 返回 code=200，响应结构（data.webPages.value[].name/url/snippet/siteName/summary）与 `BochaWebSearchServiceImpl` 解析完全匹配，重启后端即恢复联网搜索。
+- **超时默认值 3s → 8s**：发现真正影响效果的隐患——博查开启 AI 摘要（summary=true）时耗时波动大，原 3s 超时易静默降级空列表（可能是此前「效果不理想」的原因之一），`timeoutMs` 默认上调至 8s。
+- **deepseek-native 停用决策（用户拍板）**：用户此前用其他工具尝试 DeepSeek 自带联网未实现，决定停用。事实上无需删代码：`DeepSeekNativeSearchServiceImpl` 带 `@ConditionalOnProperty(havingValue="deepseek-native")`，provider=bocha 时该 Bean 不装配、零干扰，处于休眠状态保留可回切；另注意其协议前提（`web_search_20250305` 服务端工具）实为 Anthropic 官方工具类型名，DeepSeek 是否真提供该兼容端点未经真实 Key 验证，启用前须先验证。
+- **安全提示**：bochaApiKey 写死在代码里，git 提交前应改回 env BOCHA_API_KEY 注入或确认仓库私有。
+
+---
+
+### 6.110 高频轮询 Mapper SQL 日志刷屏治理（2026-08-19）
+
+#### 1. 范围
+
+- **背景**：用户反馈日志被 `[job-scheduler-1] DEBUG c.h.c.a.m.A.selectList` 刷屏，查日志困难。根因：`logging.level.com.helloai.core: DEBUG` 把 MyBatis SQL 日志（logger 名为各 Mapper 接口 FQCN，logback `%logger{36}` 缩写为 `c.h.c.a.m.A`）整体打开，而三个高频轮询任务每轮都打 `selectList` DEBUG——ExecutionCommandPoller（1s，`AgentExecutionRecordMapper.listOrphanPending`）、OutboxRelayTask（1s，`AgentCommandOutboxEventMapper`）、AgentEventCompensationTask（15s，`AgentOutboxEventMapper.pollPending`）。
+- **本轮内容**：配置级日志治理——application.yml `logging.level` 下将上述 3 个高频轮询 Mapper 调高至 INFO，业务链路 Mapper SQL 日志保留。用户已确认选择「精准关闭轮询 Mapper」粒度（其余两个粒度：agent 域全关 / 全局所有 mapper 全关，未采用）。
+- **明确不做**：不关 `com.helloai.core` 整体 DEBUG（业务 DEBUG 日志仍要）；不动 logback-spring.xml（Spring Boot `logging.level.*` 优先级高于 XML 内 `<logger>`，只改 yaml 即生效）；不改轮询频率。
+
+#### 2. 实际落地
+
+- **helloai-start/src/main/resources/application.yml**：`logging.level` 追加 3 行 + 2 行注释（§6.110 编号说明）：
+  - `com.helloai.core.agent.mapper.AgentExecutionRecordMapper: INFO`（poller 1s）
+  - `com.helloai.core.agent.mapper.AgentCommandOutboxEventMapper: INFO`（outbox relay 1s）
+  - `com.helloai.core.agent.mapper.AgentOutboxEventMapper: INFO`（outbox 补偿 15s）
+
+#### 3. 验证结果
+
+- 文件保存成功；三个 Mapper 类名与 helloai-core 实际接口一一对应（Glob 确认）。
+- 生效机制：Spring Boot `logging.level.*` 在 logback 初始化后按 logger 名覆盖，比 `com.helloai.core` 包级 DEBUG 更具体，优先级更高。
+- 说明：未跑 mvn 编译（配置变更不涉及编译；Node 沙箱调 mvn 会触发 JVM 崩溃），生效需重新打包部署后端 jar（application.yml 在 jar 内）。
+
+#### 4. 影响与遗留
+
+- 影响：job 轮询线程不再产生 Mapper SQL DEBUG；业务请求链路（如 submitResult/handleReport 涉及的表）SQL 日志保留，问题 A 排查能力不受影响。若后续仍有低频率任务（30s/60s）SQL 刷屏，可沿用同样式追加。
+- 遗留：本轮改动未 git 提交，待用户确认后提交；重新打包部署后生效（含 §6.108 工具描述改动）。
+
+---
+
+### 6.111 CHAT 自由对话模式联网搜索：任意模式每轮 + 开关开启（V45，2026-08-19）
+
+#### 1. 范围
+
+- **背景**：用户实测：新会话默认 CHAT 模式（V39）下开启联网开关提问「给我一份如何快速上手 https://open.maic.chat/ 的操作手册」，Planner 回复「没有联网浏览能力（无可用联网资料）」。根因：V41 放宽为每轮后联网搜索触发条件仍为 `isClarifyMode(conversation) && isWebSearchEnabled(conversation)`，CHAT 分支直接跳过 → `webSearchContext` 为空 → 模板渲染「（无可用联网资料）」占位符 → LLM 据实告知。`requirement-chat.md` 模板注释已标注「阶段 2 计划：CHAT 也消费检索结果」。
+- **本轮内容**：doRound 搜索条件放宽为「任意模式 + 开关开启」；runLlmRound CHAT 分支消费 `WebSearchOutcome`（结构化追问卡 payload 合并 webSearch 键、纯文本回复走 `buildWebSearchOnlyPayload` 携带查验键）；模板与 8 文件注释/文案口径同步；单测用例反转 + 新增。
+- **明确不做**：thinking 透传、正文内联引用角标（二期项维持）；不改搜索供应商与配置项；无 Flyway / 无新 REST 端点。
+
+#### 2. 实际落地
+
+- **RequirementClarifyServiceImpl.doRound（V45）**：搜索触发条件由 `isClarifyMode(conversation) && isWebSearchEnabled(conversation)` 放宽为 `isWebSearchEnabled(conversation)`（NULL/true 视为开启），CHAT/CLARIFY 任意模式每轮都检索；成本由各自轮数上限封顶（CHAT 50 / CLARIFY 20）；查询词来源沿用 `resolveSearchSource`（URL 剥离直取 / 确认词回退历史主题消息 / 空白不搜）。
+- **runLlmRound CHAT 分支**：`webSearchOutcome` 由恒传 null 改为透传——结构化追问卡 `buildQuestionPayload(chatReply, webSearchOutcome)` 合并 webSearch 键；纯文本回复在有 outcome 时走 `buildWebSearchOnlyPayload(webSearchOutcome)`（与终稿轮同形态），无 outcome 保持原 3 参 null 形态，API 契约零破坏。
+- **requirement-chat.md**：注释头更新为「{{WEB_SEARCH_CONTEXT}} 为联网资料节（V45 起：CHAT/CLARIFY 任意模式每轮按需检索后注入；未检索/检索失败时该节渲染『（无可用联网资料）』，保持 Prompt 语义节稳定）」，阶段 2 标注移除。
+- **注释口径同步（8 文件）**：`RequirementClarifyServiceImpl` create/runLlmRound Javadoc（「首轮」→「每轮」）；`RequirementClarifyService` 接口、`RequirementConversation`（「V45 起 CHAT/CLARIFY 任意模式都生效」）、`ClarifyMessageRequest`（「首轮」→「每轮」、「不阻断澄清流程」→「不阻断对话流程」）、`WebSearchProperties` 类注释；前端 `RequirementChat.vue` webSearchTooltip（「每轮对话自动联网检索行业资料 / 竞品 / 技术方案，注入 Prompt 增强回答质量；失败自动降级」）。
+
+#### 3. 验证结果
+
+- `RequirementClarifyServiceTest` **63/63 全绿**：原 `chatRoundDoesNotTriggerWebSearch` 反转 → `chatRoundTriggersWebSearch`（stub 搜索参数，断言 `webSearchService.search(eq("你好"), eq(5))` + prompt 注入检索结果 + payload 含 webSearch/total）；新增 `chatRoundWebSearchDisabled`（开关关闭不搜 + payload null）、`chatRoundWithUrl_fetchesPageAndInjects`（用户原始场景「给我一份快速上手 https://open.maic.chat/ 的操作手册」回归：URL 剥离进直取、`pageFetchService.fetch` 被调、prompt 含直取正文、payload 含 fetched/webSearch）；既有 CHAT 用例零破坏（未 stub queryKeywordLimit 时 mock 默认 0 → 查询词空 → `doWebSearch` 返回 null → 不搜不落键）。
+- 实测日志实证：`澄清联网搜索 URL 直取成功: url=https://open.maic.chat/, textChars=9`、`query=给我一份快速上手 的操作手册`、`自由对话回复落库`。
+- 踩坑（§6.103 延续）：根 pom `<skipTests>true</skipTests>` 需 `-DskipTests=false`；`-Dtest` 需 `-Dsurefire.failIfNoSpecifiedTests=false` 且 PowerShell 下参数必须整体加引号；最终命令 `mvn -pl helloai-core -am test "-Dtest=RequirementClarifyServiceTest" "-DskipTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"`。
+
+#### 4. 影响与遗留
+
+- 影响：① CHAT 自由对话开启联网开关后每轮真实检索并注入 Prompt，回复不再「无可用联网资料」；② 折叠查验条在 CHAT 轮同样可见（搜索词/来源/耗时，失败与空结果也可见）；③ 成本与对话轮数成正比（CHAT 上限 50 轮，已知代价）；④ API 契约不变（payload 扩展，老消息无 webSearch 键不受影响）。
+- 部署注意：无 Flyway、无新配置项，重启后端生效。**提交前安全收口（2026-08-19，git 提交前执行）**：按 §6.109 安全提示，`WebSearchProperties.bochaApiKey` 由写死值改为 `env BOCHA_API_KEY` 注入（`${BOCHA_API_KEY:}`，未配置=供应商未启用），真实 Key 不再进入仓库；部署环境需设置 BOCHA_API_KEY 后重启生效。
+- 遗留：① 真实环境 CHAT 模式带 URL 对话端到端回归待用户重启后端实测；② 本轮代码与本文档未 git 提交，待用户确认后提交。
+
+---
+
+### 6.112 PLANNING 超时回收误伤已产草案任务修复（2026-08-19）
+
+#### 1. 范围
+
+- **背景**：用户反馈任务确认草案报错「只有 PLANNING 状态的任务才能确认草案: taskId=2089994365468286978, status=PENDING」。数据库取证（timeline 全轨迹 + sub_task 残留 + 代码三重交叉验证）：
+  - ① 拆解**成功**：08:34:22 异步提交 → 08:35:39 `task_plan_llm_call_end`（costMs=77038, finishReason=STOP）+ `task_plan_generated`（draftCount=7），7 条 PENDING_PLAN_REVIEW 草案落库且依赖拓扑已回写；
+  - ② 超时**误伤**：08:44:29 `task_plan_timeout_recovered`（planningTimeoutMinutes=10）——`selectTimedOutPlanning` 只按 `status='PLANNING' AND update_time < deadline` 判定卡死，而 `task_plan_generated` 只写 sub_task 不刷新 task.update_time，超时从「进入 PLANNING」起算，把「草案已就绪、等用户人工确认」的任务当成「异步拆解卡死」回收回退 PENDING，confirmDrafts 的 PLANNING 校验随即失败；
+  - ③ 排除用户猜测：非同一事务问题（拆解早已异步化，77s LLM 调用在 plannerDecomposeExecutor 线程，不在 HTTP 事务内）；LLM 实际成功，非「默认任务拆解失败」。
+- **本轮内容**：`selectTimedOutPlanning` SQL 加 `NOT EXISTS` 排除已有 PENDING_PLAN_REVIEW 草案的任务——有草案 = 等人工确认，永不超时回收；无草案的 PLANNING 任务（真卡死）照常回收。用户已确认选择此方案（其余候选：刷新 update_time 治标 / 新增 PLAN_REVIEW 中间态状态机细化，均未采用）。
+- **明确不做**：不引入 outbox 状态机/saga 编排（用户建议评估：本场景无 MQ 可靠性缺口、无跨服务分布式事务，拆解触发已是「DB 状态 CAS + 异步线程 + timeline 收敛 + 超时兜底」最小闭环，outbox/saga 不对症）；不改 confirmDrafts 校验；不加「确认超时自动拒绝」需求。
+
+#### 2. 实际落地
+
+- **helloai-core/src/main/java/com/helloai/core/task/mapper/TaskMapper.java**：`selectTimedOutPlanning` SQL 由单表查询改为带别名 + NOT EXISTS 子查询（sub_task 按 task_id 关联、status='PENDING_PLAN_REVIEW'、deleted=0 软删过滤），Javadoc 补充 §6.112 误伤修复说明。
+
+#### 3. 验证结果
+
+- MCP 只读验证（postgres_helloai）：完整新 SQL（含 `update_time < now() - interval '10 minutes'`）执行无语法错误；语义验证 `EXISTS(...)=true` for taskId=2089994365468286978（has_draft=true），若该任务处 PLANNING 会被新 SQL 正确排除。当前库无 PLANNING 任务（该任务已被回退 PENDING），无法跑真实超时扫描，待部署后观察。
+- 说明：PlanningTimeoutTaskTest 为 mock 层测试（stub mapper 返回值），无法覆盖注解 SQL 逻辑，SQL 正确性以上述 MCP 直验为准；未跑 mvn 编译（Node 沙箱调 mvn 会触发 JVM 崩溃），编译验证由用户侧执行或随下次打包天然覆盖。
+
+#### 4. 影响与遗留
+
+- 影响：有草案的 PLANNING 任务不再被 10 分钟兜底误回收，用户可从容确认草案；真卡死（异步线程丢失）任务仍被 30s 巡检回收，兜底能力不降。
+- 数据修复（当前受影响任务，写操作由用户执行）：`UPDATE task SET status='PLANNING', update_time=now() WHERE id=2089994365468286978 AND status='PENDING';` 执行后即可在前端确认草案（7 条草案原样保留）。
+- 部署注意：TaskMapper 变更需重新打包部署后端 jar 生效；**旧 jar 部署期间**该任务改回 PLANNING 后 10 分钟内不确认仍会被旧逻辑回收，可临时调大 `helloai.planner.decompose.planning-timeout-minutes`（env）或部署后操作。
+- 遗留：本轮代码与本文档未 git 提交，待用户确认后提交。

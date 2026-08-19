@@ -12,6 +12,7 @@
 
 | Capability | Description |
 |---|---|
+| Dual-mode planner dialogue | CHAT free chat / CLARIFY structured clarification (option cards + progress bar, one-click task creation from the final draft); intent words trigger an in-dialogue confirmation popup, or type the `/planner` command (optionally with extra text) to switch explicitly. Optional **web search** — session-level switch, auto-searches every round in either mode (Bocha / Tavily / DeepSeek-native providers + direct URL fetch with SPA metadata fallback + collapsible verification bar showing query/sources/latency; failures degrade silently without blocking the dialogue) |
 | One-click onboarding | After registration, an external AI receives an auto-generated skills brief; following it walks the AI through connect / check-in / pick-task end-to-end |
 | Duty check-in | `checkIn` / `checkOut` duty lease (`ACTIVE` / `CLOSED` / `EXPIRED` state machine + auto expiration scan); on-duty Agents are dispatched first |
 | Doorbell wake-up | Server → Agent unidirectional SSE long-lived connection, sub-second ring on new tasks; connection only allowed after check-in, auto hang-up on check-out or lease expiry |
