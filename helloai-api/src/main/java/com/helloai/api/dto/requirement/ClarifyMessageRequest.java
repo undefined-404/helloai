@@ -20,8 +20,8 @@ public class ClarifyMessageRequest {
     /**
      * 会话级联网搜索开关（V34，仅新建会话生效；append 消息接口忽略）。
      * <p>前端仿腾讯 ima copilot：输入框旁的轻量开关，默认为开启。</p>
-     * <p>后端语义：NULL 或 true 视为开启，首轮 LLM 调用前预检索行业资料注入 Prompt；
-     * false 关闭；失败一律降级跳过，不阻断澄清流程。</p>
+     * <p>后端语义：NULL 或 true 视为开启，每轮 LLM 调用前预检索行业资料注入 Prompt；
+     * false 关闭；失败一律降级跳过，不阻断对话流程。</p>
      */
     private Boolean webSearchEnabled;
 

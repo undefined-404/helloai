@@ -17,7 +17,8 @@ import java.util.List;
  *   <li>业务侧（{@code RequirementClarifyService}）只依赖 {@link WebSearchService} 接口，
  *       真正拿到的是本 Router（{@code @Primary}），不需要知道有几种供应商实现。</li>
  *   <li>Spring 启动期会按 {@code helloai.web-search.provider} 激活一个具体实现
- *       （{@link BochaWebSearchServiceImpl} / {@link TavilyWebSearchServiceImpl}），本 Router
+ *       （{@link BochaWebSearchServiceImpl} / {@link TavilyWebSearchServiceImpl}
+ *       / {@code DeepSeekNativeSearchServiceImpl}），本 Router
  *       通过 {@code ObjectProvider} 拿到当前已激活的候选（可能为 0 / 1 / N）。</li>
  *   <li>总开关 {@code enabled=false} 或当前没有匹配实现 → 所有方法短路返回空列表，
  *       绝不抛异常。需求澄清主流程不依赖搜索可用性。</li>

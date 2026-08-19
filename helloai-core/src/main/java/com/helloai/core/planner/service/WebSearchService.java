@@ -7,7 +7,8 @@ import java.util.List;
 /**
  * 联网搜索服务接口（供应商无关）。
  *
- * <p>实现类：{@link BochaWebSearchServiceImpl} / {@link TavilyWebSearchServiceImpl}，
+ * <p>实现类：{@link BochaWebSearchServiceImpl} / {@link TavilyWebSearchServiceImpl}
+ * / {@link DeepSeekNativeSearchServiceImpl}（DeepSeek 原生 web_search 服务端工具），
  * 由 Spring 条件装配（{@code @ConditionalOnProperty}）按配置项
  * {@code helloai.web-search.provider} 自动激活其中一个。</p>
  *

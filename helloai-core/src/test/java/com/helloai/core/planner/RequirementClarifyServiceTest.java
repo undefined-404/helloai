@@ -15,11 +15,14 @@ import com.helloai.common.config.WebSearchProperties;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
 import com.helloai.core.planner.service.WebSearchService;
+import com.helloai.core.planner.service.WebPageFetchService;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.service.RequirementClarifyService;
 import com.helloai.core.planner.service.impl.RequirementClarifyServiceImpl;
 import com.helloai.core.planner.service.RequirementConversationService;
 import com.helloai.core.planner.service.RequirementMessageService;
+import com.helloai.core.planner.search.WebPageContent;
+import com.helloai.core.planner.search.WebSearchResult;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
@@ -91,6 +94,9 @@ class RequirementClarifyServiceTest {
     @Mock
     private WebSearchProperties webSearchProperties;
 
+    @Mock
+    private WebPageFetchService pageFetchService;
+
     private RequirementClarifyService clarifyService;
 
     @BeforeEach
@@ -100,7 +106,7 @@ class RequirementClarifyServiceTest {
                 conversationService, messageService, taskService, agentService,
                 plannerAgentPicker, agentInboxService, platformAgentExecutionService,
                 taskTimelineService, new ObjectMapper(),
-                webSearchService, webSearchProperties);
+                webSearchService, webSearchProperties, pageFetchService);
     }
 
     private RequirementConversation activeConversation() {
@@ -536,7 +542,7 @@ class RequirementClarifyServiceTest {
         }
 
         @Test
-        @DisplayName("CHAT 轮：LLM 纯文本直接落库，payload 为 NULL，round_count+1")
+        @DisplayName("CHAT 轮未触发搜索：LLM 纯文本直接落库，payload 为 NULL，round_count+1")
         void chatRoundStoresPlainTextWithoutPayload() {
             RequirementConversation conversation = chatConversation();
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
@@ -612,10 +618,10 @@ class RequirementClarifyServiceTest {
             // 确认询问不消耗对话轮数
             assertThat(conversation.getRoundCount()).isEqualTo(3);
             assertThat(detail.getConversation().getMode()).isEqualTo(RequirementClarifyService.MODE_CHAT);
-            // user 消息 + 固定确认询问落库（payload NULL），不调 LLM
+            // user 消息 + 固定确认询问落库（V41 起 payload 为结构化确认卡），不调 LLM
             verify(messageService).addMessage(CONV_ID, "user", "帮我分析一下市场，然后整理成方案", null);
-            verify(messageService).addMessage(CONV_ID, "assistant",
-                    RequirementClarifyService.CONFIRM_ASK_MESSAGE, null);
+            verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
+                    eq(RequirementClarifyService.CONFIRM_ASK_MESSAGE), anyString());
             verify(platformAgentExecutionService, never())
                     .executeSync(any(Agent.class), any(AgentTask.class));
         }
@@ -635,23 +641,99 @@ class RequirementClarifyServiceTest {
             // 确认询问不消耗对话轮数
             assertThat(conversation.getRoundCount()).isEqualTo(3);
             verify(messageService).addMessage(CONV_ID, "user", "帮我整理方案吧", null);
-            verify(messageService).addMessage(CONV_ID, "assistant",
-                    RequirementClarifyService.CONFIRM_ASK_MESSAGE, null);
+            verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
+                    eq(RequirementClarifyService.CONFIRM_ASK_MESSAGE), anyString());
             verify(platformAgentExecutionService, never())
                     .executeSync(any(Agent.class), any(AgentTask.class));
         }
 
         @Test
-        @DisplayName("CHAT 首轮不触发联网搜索（V34 仅 CLARIFY 首轮）")
-        void chatRoundDoesNotTriggerWebSearch() {
+        @DisplayName("V45 CHAT 轮触发联网搜索：结果注入 CHAT 模板，纯文本回复 payload 携带 webSearch 查验键")
+        void chatRoundTriggersWebSearch() {
             RequirementConversation conversation = chatConversation();
             conversation.setRoundCount(0);
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(webSearchProperties.getQueryKeywordLimit()).thenReturn(40);
+            when(webSearchProperties.getMaxResults()).thenReturn(5);
+            when(webSearchProperties.isUrlFetchEnabled()).thenReturn(false);
+            when(webSearchService.provider()).thenReturn("bocha");
+            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of(
+                    WebSearchResult.builder().title("OpenMaic 官网")
+                            .url("https://open.maic.chat/").snippet("OpenMaic 开放平台官网").build()));
+            stubChatLlmRound("你好！");
+
+            clarifyService.sendMessage(CONV_ID, "你好");
+
+            verify(webSearchService).search(eq("你好"), eq(5));
+            // 联网资料注入 CHAT 通用助手模板
+            ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            assertThat(taskCaptor.getValue().getUserPrompt())
+                    .contains("AI 助手")
+                    .contains("OpenMaic 官网");
+            // 纯文本回复也携带 webSearch 查验键（V45，与终稿轮同形态）
+            ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+            verify(messageService).addMessage(eq(CONV_ID), eq("assistant"), eq("你好！"), payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue())
+                    .contains("\"webSearch\"")
+                    .contains("OpenMaic 官网")
+                    .contains("\"total\":1");
+        }
+
+        @Test
+        @DisplayName("V45 CHAT 会话开关关闭：不触发联网搜索，payload 保持 NULL")
+        void chatRoundWebSearchDisabled() {
+            RequirementConversation conversation = chatConversation();
+            conversation.setRoundCount(0);
+            conversation.setWebSearchEnabled(false);
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
             stubChatLlmRound("你好！");
 
             clarifyService.sendMessage(CONV_ID, "你好");
 
             verify(webSearchService, never()).search(anyString(), anyInt());
+            verify(messageService).addMessage(CONV_ID, "assistant", "你好！", null);
+        }
+
+        @Test
+        @DisplayName("V45 CHAT 轮 URL 分离：直取页面正文注入 CHAT 模板，payload 携带 fetched 查验键")
+        void chatRoundWithUrl_fetchesPageAndInjects() {
+            RequirementConversation conversation = chatConversation();
+            conversation.setRoundCount(0);
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(webSearchProperties.getQueryKeywordLimit()).thenReturn(40);
+            when(webSearchProperties.getMaxResults()).thenReturn(5);
+            when(webSearchProperties.getMaxSnippetChars()).thenReturn(200);
+            when(webSearchProperties.isUrlFetchEnabled()).thenReturn(true);
+            when(webSearchProperties.getUrlFetchMaxPages()).thenReturn(2);
+            when(webSearchService.provider()).thenReturn("bocha");
+            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of());
+            when(pageFetchService.fetch("https://open.maic.chat/")).thenReturn(WebPageContent.builder()
+                    .url("https://open.maic.chat/").ok(true)
+                    .title("OpenMaic 官网").text("这里是官网正文内容").build());
+            stubChatLlmRound("好的，这是快速上手手册大纲：");
+
+            clarifyService.sendMessage(CONV_ID, "给我一份快速上手 https://open.maic.chat/ 的操作手册");
+
+            // 搜索词不含裸 URL，只用剥离后的语义文本；直取被提取出的 URL
+            ArgumentCaptor<String> queryCaptor = ArgumentCaptor.forClass(String.class);
+            verify(webSearchService).search(queryCaptor.capture(), eq(5));
+            assertThat(queryCaptor.getValue())
+                    .doesNotContain("https://")
+                    .contains("快速上手");
+            verify(pageFetchService).fetch("https://open.maic.chat/");
+            // 直取正文（第一手资料）注入 CHAT 模板
+            ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            assertThat(taskCaptor.getValue().getUserPrompt()).contains("这里是官网正文内容");
+            // 纯文本回复 payload 携带 webSearch + fetched 查验键
+            ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+            verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
+                    eq("好的，这是快速上手手册大纲："), payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue())
+                    .contains("\"webSearch\"")
+                    .contains("\"fetched\"")
+                    .contains("OpenMaic 官网");
         }
 
         @Test
@@ -799,8 +881,8 @@ class RequirementClarifyServiceTest {
             // 确认询问不消耗对话轮数（0 轮保持）
             assertThat(conversation.getRoundCount()).isEqualTo(0);
             verify(messageService).addMessage(CONV_ID, "user", "帮我整理成方案：做一个周报工具", null);
-            verify(messageService).addMessage(CONV_ID, "assistant",
-                    RequirementClarifyService.CONFIRM_ASK_MESSAGE, null);
+            verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
+                    eq(RequirementClarifyService.CONFIRM_ASK_MESSAGE), anyString());
             verify(platformAgentExecutionService, never())
                     .executeSync(any(Agent.class), any(AgentTask.class));
         }
@@ -923,7 +1005,7 @@ class RequirementClarifyServiceTest {
         }
 
         @Test
-        @DisplayName("CHAT 容错双模（V40.2）：LLM 输出 structured 追问 → payload 落库出推荐卡片，模式仍 CHAT，不触发联网搜索")
+        @DisplayName("CHAT 容错双模（V40.2）：LLM 输出 structured 追问 → payload 落库出推荐卡片，模式仍 CHAT（未配置搜索参数时不触发搜索）")
         void chatRoundStructuredQuestionStoresPayload() {
             RequirementConversation conversation = chatConversation();
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
@@ -947,7 +1029,7 @@ class RequirementClarifyServiceTest {
             assertThat(contentCaptor.getValue()).contains("业务类型？（选项：企业内部工具 / SaaS 产品）");
             assertThat(payloadCaptor.getValue()).contains("\"mode\":\"structured\"")
                     .contains("\"recommended\":true");
-            // CHAT 自由对话不触发联网搜索（V34 仅 CLARIFY 首轮）
+            // 未配置搜索参数（queryKeywordLimit mock 默认 0 → 查询词为空）时不触发联网搜索
             verify(webSearchService, never()).search(anyString(), anyInt());
         }
 
@@ -995,6 +1077,452 @@ class RequirementClarifyServiceTest {
                     .isInstanceOf(BizException.class)
                     .hasMessageContaining("会话已结束");
             verify(conversationService, never()).updateById(any());
+        }
+
+        // ════════════════════════════════════════════════════════
+        //  V41 意图词扩充 + 确认卡结构化
+        // ════════════════════════════════════════════════════════
+
+        @Test
+        @DisplayName("V41 新意图词：「新建个计划吧」进入待确认并发结构化确认卡（仅确认/取消、无推荐、无自定义）")
+        void doRound_newIntentPhrase_setsPendingConfirmAndSendsCard() {
+            RequirementConversation conversation = chatConversation();
+            conversation.setRoundCount(3);
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+
+            clarifyService.sendMessage(CONV_ID, "新建个计划吧");
+
+            assertThat(conversation.getPendingClarifyConfirm()).isTrue();
+            // 确认询问不消耗对话轮数，不调 LLM
+            assertThat(conversation.getRoundCount()).isEqualTo(3);
+            ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+            verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
+                    eq(RequirementClarifyService.CONFIRM_ASK_MESSAGE), payloadCaptor.capture());
+            verify(platformAgentExecutionService, never())
+                    .executeSync(any(Agent.class), any(AgentTask.class));
+            assertThat(payloadCaptor.getValue())
+                    .contains("\"mode\":\"structured\"")
+                    .contains("\"confirm-switch\"")
+                    .contains("确认").contains("取消")
+                    .doesNotContain("recommended");
+        }
+
+        @Test
+        @DisplayName("V41 确认卡 payload：仅 1 题 2 选项，allowCustom=false 且无 recommended 标记")
+        void doRound_intentHit_confirmPayloadHasTwoOptionsWithoutRecommended() throws Exception {
+            RequirementConversation conversation = chatConversation();
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+
+            clarifyService.sendMessage(CONV_ID, "给一个方案");
+
+            ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+            verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
+                    eq(RequirementClarifyService.CONFIRM_ASK_MESSAGE), payloadCaptor.capture());
+            ObjectMapper mapper = new ObjectMapper();
+            com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(payloadCaptor.getValue());
+            assertThat(root.get("mode").asText()).isEqualTo("structured");
+            com.fasterxml.jackson.databind.JsonNode questions = root.get("questions");
+            assertThat(questions).hasSize(1);
+            com.fasterxml.jackson.databind.JsonNode question = questions.get(0);
+            assertThat(question.get("id").asText()).isEqualTo("confirm-switch");
+            assertThat(question.get("multiple").asBoolean()).isFalse();
+            assertThat(question.get("allowCustom").asBoolean()).isFalse();
+            com.fasterxml.jackson.databind.JsonNode options = question.get("options");
+            assertThat(options).hasSize(2);
+            assertThat(options.get(0).get("label").asText()).isEqualTo("确认");
+            assertThat(options.get(1).get("label").asText()).isEqualTo("取消");
+            for (com.fasterxml.jackson.databind.JsonNode option : options) {
+                assertThat(option.has("recommended")).isFalse();
+            }
+        }
+
+        @Test
+        @DisplayName("V41 新意图词覆盖：「给一个方案/帮我总结一下/新建个任务吧/帮我生成计划/来一个计划」均进入待确认")
+        void doRound_newIntentPhrases_allEnterPendingConfirm() {
+            for (String phrase : List.of("给一个方案", "帮我总结一下", "新建个任务吧", "帮我生成计划", "来一个计划")) {
+                RequirementConversation conversation = chatConversation();
+                when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+
+                clarifyService.sendMessage(CONV_ID, phrase);
+
+                assertThat(conversation.getPendingClarifyConfirm()).as(phrase).isTrue();
+            }
+            verify(platformAgentExecutionService, never())
+                    .executeSync(any(Agent.class), any(AgentTask.class));
+        }
+
+        @Test
+        @DisplayName("V41 防误触：含裸词「任务」的普通提问不触发确认，正常走 CHAT 轮")
+        void doRound_bareTaskWord_doesNotTriggerConfirm() {
+            RequirementConversation conversation = chatConversation();
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            stubChatLlmRound("2 号任务正在执行中。");
+
+            clarifyService.sendMessage(CONV_ID, "2 号任务进展如何");
+
+            assertThat(conversation.getPendingClarifyConfirm()).isNotEqualTo(Boolean.TRUE);
+            assertThat(conversation.getRoundCount()).isEqualTo(2);
+            verify(messageService).addMessage(CONV_ID, "assistant", "2 号任务正在执行中。", null);
+        }
+
+        @Test
+        @DisplayName("V41 确认卡点「确认」：经 selections 快照判定转入 CLARIFY（提交文本非确认词开头也能切换）")
+        void doRound_confirmCardAccept_switchesToClarify() {
+            RequirementConversation conversation = chatConversation();
+            conversation.setRoundCount(3);
+            conversation.setPendingClarifyConfirm(true);
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+            when(messageService.listByConversation(CONV_ID))
+                    .thenReturn(List.of(message("user", "新建个计划吧", 1)));
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.success(
+                            "{\"type\":\"question\",\"message\":\"验收标准是什么？\"}", "stop", "llm", 100));
+
+            // 卡片提交文本形如「问题：确认」，不命中 CONFIRM_PHRASE_PATTERN 开头锚定，靠快照判定
+            RequirementClarifyService.ClarifySelection selection =
+                    new RequirementClarifyService.ClarifySelection();
+            selection.setQuestionId("confirm-switch");
+            selection.setQuestionText("检测到你想把讨论整理成落地方案，是否切换到方案澄清模式？");
+            selection.setValues(List.of("确认"));
+            selection.setLabels(List.of("确认"));
+
+            clarifyService.sendMessage(CONV_ID,
+                    "检测到你想把讨论整理成落地方案，是否切换到方案澄清模式？：确认", List.of(selection));
+
+            assertThat(conversation.getMode()).isEqualTo(RequirementClarifyService.MODE_CLARIFY);
+            assertThat(conversation.getPendingClarifyConfirm()).isFalse();
+            assertThat(conversation.getRoundCount()).isEqualTo(4);
+        }
+
+        @Test
+        @DisplayName("V41 确认卡点「取消」：清标记继续 CHAT（不调澄清模板）")
+        void doRound_confirmCardCancel_continuesChat() {
+            RequirementConversation conversation = chatConversation();
+            conversation.setRoundCount(3);
+            conversation.setPendingClarifyConfirm(true);
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            stubChatLlmRound("好的，继续聊。");
+
+            RequirementClarifyService.ClarifySelection selection =
+                    new RequirementClarifyService.ClarifySelection();
+            selection.setQuestionId("confirm-switch");
+            selection.setQuestionText("检测到你想把讨论整理成落地方案，是否切换到方案澄清模式？");
+            selection.setValues(List.of("取消"));
+            selection.setLabels(List.of("取消"));
+
+            clarifyService.sendMessage(CONV_ID,
+                    "检测到你想把讨论整理成落地方案，是否切换到方案澄清模式？：取消", List.of(selection));
+
+            assertThat(conversation.getMode()).isEqualTo(RequirementClarifyService.MODE_CHAT);
+            assertThat(conversation.getPendingClarifyConfirm()).isFalse();
+            assertThat(conversation.getRoundCount()).isEqualTo(4);
+            verify(messageService).addMessage(CONV_ID, "assistant", "好的，继续聊。", null);
+        }
+
+        // ════════════════════════════════════════════════════════
+        //  V41 联网搜索：多轮触发 + payload 查验
+        // ════════════════════════════════════════════════════════
+
+        @Test
+        @DisplayName("V41 多轮搜索：CLARIFY 第 2 轮也触发搜索，assistant payload 含 webSearch 查验键")
+        void doRound_clarifySecondRound_triggersWebSearchAndPayload() {
+            // activeConversation：roundCount=1（第 2 轮），mode NULL 按 CLARIFY，webSearchEnabled NULL 默认开启
+            RequirementConversation conversation = activeConversation();
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(webSearchProperties.getQueryKeywordLimit()).thenReturn(40);
+            when(webSearchProperties.getMaxResults()).thenReturn(5);
+            when(webSearchService.provider()).thenReturn("bocha");
+            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of(
+                    WebSearchResult.builder().title("报表方案参考")
+                            .url("https://a.example/1").snippet("摘要一").siteName("站点A").build(),
+                    WebSearchResult.builder().title("报表工具选型")
+                            .url("https://a.example/2").snippet("摘要二").siteName("站点B").build()));
+            stubLlmRound("{\"type\":\"question\",\"message\":\"验收标准是什么？\"}");
+
+            clarifyService.sendMessage(CONV_ID, "做一个报表");
+
+            // 第 2 轮（roundCount=1）同样触发搜索，查询词取当前轮消息
+            verify(webSearchService).search(eq("做一个报表"), eq(5));
+            ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+            verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
+                    anyString(), payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue())
+                    .contains("\"webSearch\"")
+                    .contains("\"provider\":\"bocha\"")
+                    .contains("\"query\":\"做一个报表\"")
+                    .contains("\"total\":2")
+                    .contains("报表方案参考")
+                    .contains("https://a.example/1");
+        }
+
+        @Test
+        @DisplayName("V41 修复：确认卡切入方案时搜索词不用卡片提交文本，回退历史主题消息")
+        void doRound_confirmCardAccept_searchQueryFallsBackToHistoryTopic() {
+            RequirementConversation conversation = chatConversation();
+            conversation.setRoundCount(3);
+            conversation.setPendingClarifyConfirm(true);
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+            when(webSearchProperties.getQueryKeywordLimit()).thenReturn(40);
+            when(webSearchProperties.getMaxResults()).thenReturn(5);
+            when(webSearchService.provider()).thenReturn("bocha");
+            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of(
+                    WebSearchResult.builder().title("OpenMaaS 介绍")
+                            .url("https://a.example/1").snippet("摘要").build()));
+            // 历史：主题讨论 → 纯意图短句（应被跳过）→ 确认询问（assistant，跳过）
+            when(messageService.listByConversation(CONV_ID)).thenReturn(List.of(
+                    message("user", "你知道openMaic么？你知道这个怎么使用么？", 1),
+                    message("user", "帮我整理成方案", 2),
+                    message("assistant", "检测到你想把讨论整理成落地方案，是否切换到方案澄清模式？", 3)));
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.success(
+                            "{\"type\":\"question\",\"message\":\"验收标准是什么？\"}", "stop", "llm", 100));
+
+            RequirementClarifyService.ClarifySelection selection =
+                    new RequirementClarifyService.ClarifySelection();
+            selection.setQuestionId("confirm-switch");
+            selection.setQuestionText("检测到你想把讨论整理成落地方案，是否切换到方案澄清模式？");
+            selection.setValues(List.of("确认"));
+            selection.setLabels(List.of("确认"));
+
+            clarifyService.sendMessage(CONV_ID,
+                    "检测到你想把讨论整理成落地方案，是否切换到方案澄清模式？：确认", List.of(selection));
+
+            // 搜索词回退为触发意图前的讨论主题，而非卡片提交文本/纯意图短句
+            verify(webSearchService).search(eq("你知道openMaic么？你知道这个怎么使用么？"), eq(5));
+        }
+
+        @Test
+        @DisplayName("V41 修复：确认后历史无可回退主题消息时不发起搜索（不落查验条）")
+        void doRound_confirmCardAccept_noMeaningfulHistory_skipsSearch() {
+            RequirementConversation conversation = chatConversation();
+            conversation.setRoundCount(1);
+            conversation.setPendingClarifyConfirm(true);
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+            when(webSearchProperties.getQueryKeywordLimit()).thenReturn(40);
+            // 历史只有纯意图短句，无可检索主题
+            when(messageService.listByConversation(CONV_ID)).thenReturn(List.of(
+                    message("user", "帮我生成计划", 1)));
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.success(
+                            "{\"type\":\"question\",\"message\":\"验收标准是什么？\"}", "stop", "llm", 100));
+
+            RequirementClarifyService.ClarifySelection selection =
+                    new RequirementClarifyService.ClarifySelection();
+            selection.setQuestionId("confirm-switch");
+            selection.setQuestionText("检测到你想把讨论整理成落地方案，是否切换到方案澄清模式？");
+            selection.setValues(List.of("确认"));
+            selection.setLabels(List.of("确认"));
+
+            clarifyService.sendMessage(CONV_ID,
+                    "检测到你想把讨论整理成落地方案，是否切换到方案澄清模式？：确认", List.of(selection));
+
+            verify(webSearchService, never()).search(anyString(), anyInt());
+        }
+
+        @Test
+        @DisplayName("V41 搜索异常查验：search 抛异常降级 failed=true 落 payload，澄清主流程不阻断")
+        void doRound_webSearchThrows_payloadMarksFailedWithoutBlocking() {
+            RequirementConversation conversation = activeConversation();
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(webSearchProperties.getQueryKeywordLimit()).thenReturn(40);
+            when(webSearchProperties.getMaxResults()).thenReturn(5);
+            when(webSearchService.provider()).thenReturn("bocha");
+            when(webSearchService.search(anyString(), anyInt()))
+                    .thenThrow(new RuntimeException("bocha timeout"));
+            stubLlmRound("{\"type\":\"question\",\"message\":\"验收标准是什么？\"}");
+
+            clarifyService.sendMessage(CONV_ID, "做一个报表");
+
+            // 主流程不阻断：澄清回复正常落库，payload 携带 failed 查验信息
+            ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+            verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
+                    eq("验收标准是什么？"), payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue())
+                    .contains("\"webSearch\"")
+                    .contains("\"failed\":true")
+                    .contains("bocha timeout")
+                    .contains("\"total\":0");
+        }
+
+        @Test
+        @DisplayName("V43 URL 分离：搜索词用剥离 URL 的语义文本，直取页面置顶作来源")
+        void doRound_messageWithUrl_separatesUrlAndFetchesPage() {
+            RequirementConversation conversation = activeConversation();
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(webSearchProperties.getQueryKeywordLimit()).thenReturn(40);
+            when(webSearchProperties.getMaxResults()).thenReturn(5);
+            when(webSearchProperties.getMaxSnippetChars()).thenReturn(200);
+            when(webSearchProperties.isUrlFetchEnabled()).thenReturn(true);
+            when(webSearchProperties.getUrlFetchMaxPages()).thenReturn(2);
+            when(webSearchService.provider()).thenReturn("bocha");
+            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of(
+                    WebSearchResult.builder().title("搜索结果")
+                            .url("https://s.example/1").snippet("搜索摘要").build()));
+            when(pageFetchService.fetch("https://open.maic.chat/")).thenReturn(WebPageContent.builder()
+                    .url("https://open.maic.chat/").ok(true)
+                    .title("OpenMaic 官网").text("这里是官网正文内容").build());
+            stubLlmRound("{\"type\":\"question\",\"message\":\"验收标准是什么？\"}");
+
+            clarifyService.sendMessage(CONV_ID,
+                    "给我一份快速上手 https://open.maic.chat/ 的操作手册");
+
+            // 搜索词不含裸 URL，只用剥离后的语义文本
+            ArgumentCaptor<String> queryCaptor = ArgumentCaptor.forClass(String.class);
+            verify(webSearchService).search(queryCaptor.capture(), eq(5));
+            assertThat(queryCaptor.getValue())
+                    .doesNotContain("https://")
+                    .contains("快速上手");
+            // 直取被提取出的 URL
+            verify(pageFetchService).fetch("https://open.maic.chat/");
+            // payload：直取来源置顶可见 + fetched 直取记录落键
+            ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+            verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
+                    eq("验收标准是什么？"), payloadCaptor.capture());
+            String payload = payloadCaptor.getValue();
+            assertThat(payload)
+                    .contains("\"webSearch\"")
+                    .contains("OpenMaic 官网")
+                    .contains("\"fetched\"")
+                    .contains("\"ok\":true");
+            assertThat(payload.indexOf("OpenMaic 官网"))
+                    .isLessThan(payload.indexOf("搜索结果"));
+        }
+
+        @Test
+        @DisplayName("V43 纯 URL 消息：搜索词回退域名，直取照常发起")
+        void doRound_bareUrlMessage_queryFallsBackToDomain() {
+            RequirementConversation conversation = activeConversation();
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(webSearchProperties.getQueryKeywordLimit()).thenReturn(40);
+            when(webSearchProperties.getMaxResults()).thenReturn(5);
+            when(webSearchProperties.getMaxSnippetChars()).thenReturn(200);
+            when(webSearchProperties.isUrlFetchEnabled()).thenReturn(true);
+            when(webSearchProperties.getUrlFetchMaxPages()).thenReturn(2);
+            when(webSearchService.provider()).thenReturn("bocha");
+            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of());
+            when(pageFetchService.fetch("https://open.maic.chat/")).thenReturn(WebPageContent.builder()
+                    .url("https://open.maic.chat/").ok(true)
+                    .title("OpenMaic").text("正文").build());
+            stubLlmRound("{\"type\":\"question\",\"message\":\"验收标准是什么？\"}");
+
+            clarifyService.sendMessage(CONV_ID, "https://open.maic.chat/");
+
+            // 剥离 URL 后无文本 → 回退域名作搜索词
+            verify(webSearchService).search(eq("open.maic.chat"), eq(5));
+            verify(pageFetchService).fetch("https://open.maic.chat/");
+        }
+
+        @Test
+        @DisplayName("V43 URL 直取失败：不进来源列表，失败记录落 payload 可查验")
+        void doRound_pageFetchFailed_recordedButNotInResults() {
+            RequirementConversation conversation = activeConversation();
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(webSearchProperties.getQueryKeywordLimit()).thenReturn(40);
+            when(webSearchProperties.getMaxResults()).thenReturn(5);
+            when(webSearchProperties.getMaxSnippetChars()).thenReturn(200);
+            when(webSearchProperties.isUrlFetchEnabled()).thenReturn(true);
+            when(webSearchProperties.getUrlFetchMaxPages()).thenReturn(2);
+            when(webSearchService.provider()).thenReturn("bocha");
+            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of(
+                    WebSearchResult.builder().title("搜索结果")
+                            .url("https://s.example/1").snippet("搜索摘要").build()));
+            when(pageFetchService.fetch(anyString())).thenReturn(WebPageContent.builder()
+                    .url("https://open.maic.chat/").ok(false)
+                    .reason("HTTP 403").title("").text("").build());
+            stubLlmRound("{\"type\":\"question\",\"message\":\"验收标准是什么？\"}");
+
+            clarifyService.sendMessage(CONV_ID, "介绍下 https://open.maic.chat/ 这个平台");
+
+            ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+            verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
+                    eq("验收标准是什么？"), payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue())
+                    .contains("\"fetched\"")
+                    .contains("\"ok\":false")
+                    .contains("HTTP 403")
+                    .contains("\"total\":1"); // 仅搜索结果一条，失败直取不进来源
+        }
+
+        @Test
+        @DisplayName("V44 直取全部失败：域名前置增强搜索词（检索站点公开资料）")
+        void doRound_pageFetchFailed_queryGetsDomainPrefix() {
+            RequirementConversation conversation = activeConversation();
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(webSearchProperties.getQueryKeywordLimit()).thenReturn(40);
+            when(webSearchProperties.getMaxResults()).thenReturn(5);
+            when(webSearchProperties.getMaxSnippetChars()).thenReturn(200);
+            when(webSearchProperties.isUrlFetchEnabled()).thenReturn(true);
+            when(webSearchProperties.getUrlFetchMaxPages()).thenReturn(2);
+            when(webSearchService.provider()).thenReturn("bocha");
+            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of());
+            when(pageFetchService.fetch(anyString())).thenReturn(WebPageContent.builder()
+                    .url("https://open.maic.chat/").ok(false)
+                    .reason("页面正文为空且无元数据").title("").text("").build());
+            stubLlmRound("{\"type\":\"question\",\"message\":\"验收标准是什么？\"}");
+
+            clarifyService.sendMessage(CONV_ID, "介绍下 https://open.maic.chat/ 这个平台");
+
+            // 直取失败 → 搜索词前置域名，让搜索引擎检索该站点公开资料
+            ArgumentCaptor<String> queryCaptor = ArgumentCaptor.forClass(String.class);
+            verify(webSearchService).search(queryCaptor.capture(), eq(5));
+            assertThat(queryCaptor.getValue())
+                    .startsWith("open.maic.chat ")
+                    .contains("介绍下");
+        }
+
+        @Test
+        @DisplayName("V44 SPA 空壳元数据兜底：metaOnly 直取进来源且 payload 落标记")
+        void doRound_metaOnlyFetch_mergedAndMarkedInPayload() {
+            RequirementConversation conversation = activeConversation();
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(webSearchProperties.getQueryKeywordLimit()).thenReturn(40);
+            when(webSearchProperties.getMaxResults()).thenReturn(5);
+            when(webSearchProperties.getMaxSnippetChars()).thenReturn(200);
+            when(webSearchProperties.isUrlFetchEnabled()).thenReturn(true);
+            when(webSearchProperties.getUrlFetchMaxPages()).thenReturn(2);
+            when(webSearchService.provider()).thenReturn("bocha");
+            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of());
+            when(pageFetchService.fetch("https://open.maic.chat/")).thenReturn(WebPageContent.builder()
+                    .url("https://open.maic.chat/").ok(true).metaOnly(true)
+                    .title("OpenMaic 开放平台")
+                    .text("站点名称：OpenMaic 开放平台；站点描述：多智能体协作平台").build());
+            stubLlmRound("{\"type\":\"question\",\"message\":\"验收标准是什么？\"}");
+
+            clarifyService.sendMessage(CONV_ID, "介绍下 https://open.maic.chat/ 这个平台");
+
+            // 元数据兜底视为成功直取 → 搜索词不加域名前缀（第一手资料已在手）
+            ArgumentCaptor<String> queryCaptor = ArgumentCaptor.forClass(String.class);
+            verify(webSearchService).search(queryCaptor.capture(), eq(5));
+            assertThat(queryCaptor.getValue()).doesNotContain("open.maic.chat");
+            // payload：metaOnly 直取来源进结果列表 + fetched 记录带 metaOnly 标记
+            ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+            verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
+                    eq("验收标准是什么？"), payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue())
+                    .contains("OpenMaic 开放平台")
+                    .contains("\"metaOnly\":true")
+                    .contains("\"total\":1");
+        }
+
+        @Test
+        @DisplayName("V43 URL 直取开关关闭：不发起抓取，回退纯搜索引擎行为")
+        void doRound_urlFetchDisabled_skipsPageFetch() {
+            RequirementConversation conversation = activeConversation();
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(webSearchProperties.getQueryKeywordLimit()).thenReturn(40);
+            when(webSearchProperties.getMaxResults()).thenReturn(5);
+            when(webSearchProperties.isUrlFetchEnabled()).thenReturn(false);
+            when(webSearchService.provider()).thenReturn("bocha");
+            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of());
+            stubLlmRound("{\"type\":\"question\",\"message\":\"验收标准是什么？\"}");
+
+            clarifyService.sendMessage(CONV_ID, "介绍下 https://open.maic.chat/ 这个平台");
+
+            verify(pageFetchService, never()).fetch(anyString());
+            verify(webSearchService).search(anyString(), eq(5));
         }
     }
 }

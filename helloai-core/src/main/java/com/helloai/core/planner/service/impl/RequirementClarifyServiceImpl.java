@@ -1,5 +1,7 @@
 package com.helloai.core.planner.service.impl;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.WebSearchProperties;
@@ -14,10 +16,13 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
+import com.helloai.core.planner.search.WebPageContent;
+import com.helloai.core.planner.search.WebSearchOutcome;
 import com.helloai.core.planner.search.WebSearchResult;
 import com.helloai.core.planner.service.RequirementClarifyService;
 import com.helloai.core.planner.service.RequirementConversationService;
 import com.helloai.core.planner.service.RequirementMessageService;
+import com.helloai.core.planner.service.WebPageFetchService;
 import com.helloai.core.planner.service.WebSearchService;
 import com.helloai.core.shared.util.LlmJsonSanitizer;
 import com.helloai.core.task.entity.Task;
@@ -29,11 +34,15 @@ import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 
 import java.io.InputStream;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -62,11 +71,21 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     /**
      * CHAT → CLARIFY 意图词：用户表达"把讨论整理成可落地方案"的常见说法，正则命中即进入二次确认。
      * V40.1 追加口语化话术（整理方案/出个方案/写方案/做个方案等），覆盖"帮我整理方案吧"这类表达；
-     * 误触有二次确认把关（回复其他内容即继续自由对话），故放宽匹配不设额外代价。
+     * V41 追加"动作词 + 可选量词 + 计划/任务/方案"组合模式（新建个计划/给一个方案/帮我总结等），
+     * 组合匹配避免"任务""计划"裸词子串误触；误触有二次确认弹窗把关（点取消即继续自由对话），
+     * 故放宽匹配不设额外代价。
      */
     private static final Pattern INTENT_TO_CLARIFY_PATTERN = Pattern.compile(
             "整理成方案|做成方案|生成方案|转为方案|变成方案|整理成任务|做成任务|落地实施|"
-                    + "出一份方案|写个方案|方案化|整理方案|出个方案|出方案|写方案|做个方案|做方案|方案整理");
+                    + "出一份方案|写个方案|方案化|整理方案|出个方案|出方案|写方案|做个方案|做方案|方案整理|"
+                    + "(新建|创建|建立|建)(一?个|一?份)?(计划|任务|方案)|"
+                    + "(帮我|给我|给)(一?个|一?份)?(计划|方案)|"
+                    + "生成(一?个|一?份)?(计划|任务|方案)|"
+                    + "做(一?个|一?份)(计划|任务)|"
+                    + "来(一?个|一?份)(计划|任务|方案)|"
+                    + "出(一?个|一?份)(计划|任务)|"
+                    + "帮我总结|"
+                    + "总结(成|为|个|一下)(方案|计划|任务)");
 
     /**
      * 意图词二次确认的确认词（V40）：仅会话处于待确认状态时生效；
@@ -93,6 +112,24 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     private static final String MODE_STRUCTURED = "structured";
     private static final String MODE_FREEFORM = "freeform";
 
+    /** V41 意图确认卡（structured 形态的二次确认弹窗）：问题 id 与题面文案。 */
+    private static final String CONFIRM_QUESTION_ID = "confirm-switch";
+    private static final String CONFIRM_QUESTION_TEXT = "检测到你想把讨论整理成落地方案，是否切换到方案澄清模式？";
+
+    /** V41 意图确认卡选项：仅确认/取消两项，均不带推荐标记。 */
+    private static final String CONFIRM_OPTION_ACCEPT = "确认";
+    private static final String CONFIRM_OPTION_CANCEL = "取消";
+
+    /**
+     * V41 搜索查询词语义守卫：纯意图话术（不含主题）的长度上限。
+     * 长度 ≤ 该值且命中意图词的消息视为无检索主题（如「帮我生成计划」），
+     * 长句携带主题内容（如「我想 60 天备考架构师考试，帮我整理成方案」）仍可作查询词。
+     */
+    private static final int INTENT_ONLY_QUERY_LIMIT = 20;
+
+    /** V41 assistant 消息 payload 的联网搜索查验键（与 mode/progress/questions 同级）。 */
+    private static final String PAYLOAD_KEY_WEB_SEARCH = "webSearch";
+
     private final RequirementConversationService conversationService;
     private final RequirementMessageService messageService;
     private final TaskService taskService;
@@ -104,6 +141,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     private final ObjectMapper objectMapper;
     private final WebSearchService webSearchService;
     private final WebSearchProperties webSearchProperties;
+    private final WebPageFetchService pageFetchService;
 
     /**
      * 显式全参构造器（绕开 Lombok {@code @RequiredArgsConstructor} 在
@@ -120,7 +158,8 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                                          TaskTimelineService taskTimelineService,
                                          ObjectMapper objectMapper,
                                          WebSearchService webSearchService,
-                                         WebSearchProperties webSearchProperties) {
+                                         WebSearchProperties webSearchProperties,
+                                         WebPageFetchService pageFetchService) {
         this.conversationService = conversationService;
         this.messageService = messageService;
         this.taskService = taskService;
@@ -132,6 +171,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         this.objectMapper = objectMapper;
         this.webSearchService = webSearchService;
         this.webSearchProperties = webSearchProperties;
+        this.pageFetchService = pageFetchService;
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -144,7 +184,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
      * @param plannerAgentId   手动指定的 Planner Agent ID（空=系统自动选择）；
      *                         指定时严格校验可选性，澄清与后续拆解均跟随该 Planner
      * @param webSearchEnabled 会话级联网搜索开关（V34 新增；NULL=默认开启）；
-     *                         首轮 LLM 调用前若 true 服务端会预检索行业资料并注入
+     *                         每轮 LLM 调用前若 true 服务端会预检索行业资料并注入
      *                         {@code {{WEB_SEARCH_CONTEXT}}} 占位符，失败降级跳过
      * @return 会话 + 全部消息
      */
@@ -220,10 +260,11 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         RequirementConversation conversation = requireActive(conversationId);
         int rounds = conversation.getRoundCount() != null ? conversation.getRoundCount() : 0;
         // V39 轮数上限按模式分派：CHAT 用独立上限（意图词「整理成方案」永远放行，保证转方案出口）；
-        // V40 待确认状态的确认词（或再次意图词）同样放行——确认消息会转入 CLARIFY，不算 CHAT 轮；
-        // CLARIFY（含 NULL 老数据）沿用既有 20 轮上限
+        // V40 待确认状态的确认词（或再次意图词）同样放行；V41 确认卡点「确认」（selections 快照）也放行——
+        // 确认消息会转入 CLARIFY，不算 CHAT 轮；CLARIFY（含 NULL 老数据）沿用既有 20 轮上限
         boolean intent = isIntentToClarify(message);
-        boolean confirm = isPendingClarifyConfirm(conversation) && (isConfirmPhrase(message) || intent);
+        boolean confirm = isPendingClarifyConfirm(conversation)
+                && (isConfirmPhrase(message) || intent || isConfirmCardAccept(selections));
         if (isChatMode(conversation) && !intent && !confirm) {
             if (rounds >= MAX_CHAT_ROUNDS) {
                 throw new BizException("自由对话轮数已达上限 " + MAX_CHAT_ROUNDS
@@ -251,8 +292,8 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
             throw new BizException("最后一条消息已有助手回复，无需重试: conversationId=" + conversationId);
         }
         log.info("澄清会话重试一轮 LLM: conversationId={}", conversationId);
-        // 重试场景不复用首轮预检索资料：失败那轮通常与外部 API 副作用相关，重跑前重新准备
-        return runLlmRound(conversation, "");
+        // 重试场景不复用预检索资料：失败那轮通常与外部 API 副作用相关，重跑前重新准备
+        return runLlmRound(conversation, null);
     }
 
     /** Planner 下拉选数据源（平台内 PLANNER 可选 + 在班外部 Agent 置灰）。 */
@@ -384,8 +425,8 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         conversationService.updateById(conversation);
         log.info("澄清会话切换模式: conversationId={}, from={}, to={}",
                 conversationId, from, MODE_CLARIFY);
-        // 切换轮不做首轮联网搜索（阶段 2 再评估）；澄清模板基于全量历史直接产草案/追问
-        return runLlmRound(conversation, "");
+        // 切换轮不做联网搜索（阶段 2 再评估）；澄清模板基于全量历史直接产草案/追问
+        return runLlmRound(conversation, null);
     }
 
     /**
@@ -458,21 +499,31 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                 conversation.setPendingClarifyConfirm(true);
                 conversationService.updateById(conversation);
                 messageService.addMessage(conversationId, ROLE_USER, userMessage, userPayload);
-                messageService.addMessage(conversationId, ROLE_ASSISTANT, CONFIRM_ASK_MESSAGE, null);
+                // V41：确认询问改为结构化选项卡（前端渲染为确认/取消弹窗），
+                // 可读正文仍落 CONFIRM_ASK_MESSAGE 保证 transcript 上下文不变
+                messageService.addMessage(conversationId, ROLE_ASSISTANT, CONFIRM_ASK_MESSAGE,
+                        buildConfirmAskPayload());
                 log.info("澄清会话意图词命中，等待用户确认转方案: conversationId={}", conversationId);
                 return new ClarifyConversationDetail(conversation,
                         messageService.listByConversation(conversationId));
             }
-            if (pendingConfirm && (isConfirmPhrase(userMessage) || intent)) {
-                conversation.setMode(MODE_CLARIFY);
-                conversation.setPendingClarifyConfirm(false);
-                conversationService.updateById(conversation);
-                log.info("澄清会话用户确认转方案: conversationId={}, from={}, to={}",
-                        conversationId, MODE_CHAT, MODE_CLARIFY);
-            } else if (pendingConfirm) {
-                conversation.setPendingClarifyConfirm(false);
-                conversationService.updateById(conversation);
-                log.info("澄清会话确认被取消，继续自由对话: conversationId={}", conversationId);
+            // V41 确认判定三通道：手打确认词 / 再次意图词 / 确认卡点「确认」（selections 快照）；
+            // 卡片提交文本形如「问题：确认」不命中 CONFIRM_PHRASE_PATTERN 开头锚定，须走快照判定
+            if (pendingConfirm) {
+                String cardValue = confirmCardValueOf(userPayload);
+                boolean confirmed = isConfirmPhrase(userMessage) || intent
+                        || CONFIRM_OPTION_ACCEPT.equals(cardValue);
+                if (confirmed) {
+                    conversation.setMode(MODE_CLARIFY);
+                    conversation.setPendingClarifyConfirm(false);
+                    conversationService.updateById(conversation);
+                    log.info("澄清会话用户确认转方案: conversationId={}, from={}, to={}",
+                            conversationId, MODE_CHAT, MODE_CLARIFY);
+                } else {
+                    conversation.setPendingClarifyConfirm(false);
+                    conversationService.updateById(conversation);
+                    log.info("澄清会话确认被取消，继续自由对话: conversationId={}", conversationId);
+                }
             }
         }
         messageService.addMessage(conversationId, ROLE_USER, userMessage, userPayload);
@@ -480,13 +531,63 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         conversation.setRoundCount(rounds + 1);
         conversationService.updateById(conversation);
 
-        // V34 联网搜索：仅 CLARIFY 首轮（rounds == 0）且开关开启（NULL/true 视为开启）时检索；
-        // CHAT 自由对话不触发（V39 阶段 2 再做按需检索）
-        String webSearchContext = "";
-        if (isClarifyMode(conversation) && rounds == 0 && isWebSearchEnabled(conversation)) {
-            webSearchContext = doWebSearch(userMessage);
+        // V41 联网搜索（V34 引入）：V45 起 CHAT/CLARIFY 任意模式每轮且开关开启
+        // （NULL/true 视为开启）都检索；成本由各自轮数上限封顶（CHAT 50 / CLARIFY 20），
+        // 每轮折叠查验条可见搜索词；确认词/确认卡提交文本等无检索语义的消息回退历史主题消息作查询词
+        WebSearchOutcome webSearchOutcome = null;
+        if (isWebSearchEnabled(conversation)) {
+            webSearchOutcome = doWebSearch(resolveSearchSource(conversationId, userMessage, userPayload));
         }
-        return runLlmRound(conversation, webSearchContext);
+        return runLlmRound(conversation, webSearchOutcome);
+    }
+
+    /**
+     * 解析联网搜索查询词来源（V41 修复）：当前轮消息无检索语义时（确认词 / 确认卡提交文本 /
+     * 纯意图话术），倒序回退最近一条有实际内容的 user 消息（通常是触发意图前的讨论主题）；
+     * 全部无意义时返回空白串，doWebSearch 视为未发起搜索（不落查验条）。
+     */
+    private String resolveSearchSource(Long conversationId, String userMessage, String userPayload) {
+        if (!lacksSearchSemantics(userMessage, userPayload)) {
+            return userMessage;
+        }
+        List<RequirementMessage> msgs = messageService.listByConversation(conversationId);
+        if (msgs != null) {
+            for (int i = msgs.size() - 1; i >= 0; i--) {
+                RequirementMessage m = msgs.get(i);
+                String c = m.getContent();
+                if (!ROLE_USER.equals(m.getRole()) || c == null || c.isBlank()) {
+                    continue;
+                }
+                if (Objects.equals(c, userMessage) || lacksSearchSemantics(c, null)) {
+                    continue;
+                }
+                log.info("澄清联网搜索查询词回退历史主题消息: conversationId={}, fallbackLen={}",
+                        conversationId, c.length());
+                return c;
+            }
+        }
+        return "";
+    }
+
+    /**
+     * 无检索语义判定：确认词 / 确认卡提交文本（题面前缀或卡选快照）/ 纯意图短句。
+     * userPayload 仅当前轮可传（历史消息回退扫描传 null）。
+     */
+    private boolean lacksSearchSemantics(String message, String userPayload) {
+        if (message == null || message.isBlank()) {
+            return true;
+        }
+        String trimmed = message.trim();
+        if (isConfirmPhrase(trimmed)) {
+            return true;
+        }
+        if (trimmed.startsWith(CONFIRM_QUESTION_TEXT)) {
+            return true;
+        }
+        if (userPayload != null && CONFIRM_OPTION_ACCEPT.equals(confirmCardValueOf(userPayload))) {
+            return true;
+        }
+        return isIntentToClarify(trimmed) && trimmed.length() <= INTENT_ONLY_QUERY_LIMIT;
     }
 
     /** NULL/true 视为开启；只有严格的 false 走关闭语义。 */
@@ -508,6 +609,54 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         return CONFIRM_PHRASE_PATTERN.matcher(message.trim()).find();
     }
 
+    /**
+     * V41 确认卡点选判定（selections 快照）：包含 confirm-switch 题且选中「确认」视为确认。
+     * 卡片提交文本形如「问题：确认」不命中 {@link #CONFIRM_PHRASE_PATTERN} 开头锚定，
+     * 故点选确认须走快照通道；点「取消」返回 false → 走清标记继续对话分支。
+     */
+    private boolean isConfirmCardAccept(List<ClarifySelection> selections) {
+        if (selections == null || selections.isEmpty()) {
+            return false;
+        }
+        for (ClarifySelection selection : selections) {
+            if (CONFIRM_QUESTION_ID.equals(selection.getQuestionId())
+                    && selection.getValues() != null
+                    && selection.getValues().contains(CONFIRM_OPTION_ACCEPT)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * V41 从 user payload（{@code {"selections":[...]}}）解析确认卡选择：
+     * 返回选中值（确认/取消）；无确认卡选择/解析失败返回 null（回退文本判定）。
+     */
+    private String confirmCardValueOf(String userPayload) {
+        if (userPayload == null || userPayload.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(userPayload);
+            JsonNode selections = root.get("selections");
+            if (selections == null || !selections.isArray()) {
+                return null;
+            }
+            for (JsonNode selection : selections) {
+                if (!CONFIRM_QUESTION_ID.equals(selection.path("questionId").asText(null))) {
+                    continue;
+                }
+                JsonNode values = selection.get("values");
+                if (values != null && values.isArray() && !values.isEmpty()) {
+                    return values.get(0).asText(null);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("确认卡选择解析失败，回退文本判定: {}", e.getMessage());
+        }
+        return null;
+    }
+
     /** 是否方案澄清模式：NULL 老数据按 CLARIFY 兼容（V39）。 */
     private boolean isClarifyMode(RequirementConversation conversation) {
         return conversation.getMode() == null || MODE_CLARIFY.equals(conversation.getMode());
@@ -521,6 +670,46 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     /** 是否命中 CHAT → CLARIFY 意图词（"整理成方案"等常见说法，正则子串命中即切换）。 */
     private boolean isIntentToClarify(String message) {
         return message != null && INTENT_TO_CLARIFY_PATTERN.matcher(message).find();
+    }
+
+    /**
+     * 意图词二次确认的 structured payload（V41）：1 题 2 选项（确认/取消），
+     * 均不带 recommended → 前端不渲染"推荐"按钮；allowCustom=false → 隐藏自定义补充输入框。
+     *
+     * <p>为什么用 structured 卡片替代纯文本确认：用户点选后经 selections 快照通道判定
+     * （点「确认」走切换分支；点「取消」走继续对话分支，见 {@link #isConfirmCardAccept}），
+     * 手写确认词仍兼容 {@link #CONFIRM_PHRASE_PATTERN}，后端状态机零改动，
+     * 交互形态与方案细则确认卡片一致。</p>
+     *
+     * @return payload JSON；序列化失败降级 null（回退纯文本确认，不阻断主流程）
+     */
+    private String buildConfirmAskPayload() {
+        ClarifyOption accept = new ClarifyOption();
+        accept.setLabel(CONFIRM_OPTION_ACCEPT);
+        accept.setValue(CONFIRM_OPTION_ACCEPT);
+        ClarifyOption cancel = new ClarifyOption();
+        cancel.setLabel(CONFIRM_OPTION_CANCEL);
+        cancel.setValue(CONFIRM_OPTION_CANCEL);
+
+        ClarifyQuestion question = new ClarifyQuestion();
+        question.setId(CONFIRM_QUESTION_ID);
+        question.setText(CONFIRM_QUESTION_TEXT);
+        question.setMultiple(false);
+        question.setAllowCustom(false);
+        question.setOptions(List.of(accept, cancel));
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("mode", MODE_STRUCTURED);
+        payload.put("questions", List.of(question));
+        try {
+            // 跳过 null 字段（weight/recommended 不序列化）：保证卡片确实不带推荐标记
+            return objectMapper.copy()
+                    .setSerializationInclusion(JsonInclude.Include.NON_NULL)
+                    .writeValueAsString(payload);
+        } catch (Exception e) {
+            log.warn("意图确认卡 payload 序列化失败，降级纯文本确认", e);
+            return null;
+        }
     }
 
     /**
@@ -538,25 +727,149 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     }
 
     /**
-     * 联网搜索一次：提取关键词 → 调用搜索服务 → 渲染为注入文本。
-     * 任一环节异常/失败降级为空串。
+     * 联网搜索一次：URL 分离 + 关键词提取 → 直取页面 + 调用搜索服务 → 归一化结果记录。
+     *
+     * <p>V43 URL 分离：消息中的 http(s) 链接被提取后直接访问抓取页面正文（用户给出的
+     * 站点是第一手资料），搜索词改用剥离 URL 后的语义文本——裸 URL 文本当搜索词
+     * 检索效果极差（用户实测：「给我一份快速上手 https://open.maic.chat/ …」未搜到相关网页）；
+     * 纯 URL 消息回退域名作搜索词。直取页面映射为来源置顶合并进结果（总条数 maxResults 内）。</p>
+     *
+     * <p>V44 直取失败域名前缀：消息带 URL 但直取无一成功（SPA 空壳无元数据/反爬拦截）时，
+     * 搜索词前置首个域名，让搜索引擎检索该站点的公开资料（介绍/教程/文档），
+     * 避免用户实测的「直取空 + 搜索词不含域名 → results=0」双失败叠加。</p>
+     *
+     * <p>异常降级为 failed outcome（落 payload 可查验，不阻断澄清主流程）；
+     * 查询词空白且无成功直取页面时返回 null（未获得任何资料，不落 webSearch 键）。</p>
      */
-    private String doWebSearch(String firstUserMessage) {
-        String query = extractQueryKeyword(firstUserMessage);
-        if (query.isBlank()) return "";
+    private WebSearchOutcome doWebSearch(String userMessage) {
+        List<String> urls = extractUrls(userMessage);
+        String query = extractQueryKeyword(stripUrls(userMessage));
+        List<WebPageContent> pages = fetchUserPages(urls);
+        boolean hasOkPage = pages.stream().anyMatch(WebPageContent::isOk);
+        if (query.isBlank() && !urls.isEmpty()) {
+            // 纯 URL 消息：回退域名作搜索词（无论直取成败）
+            query = hostOfUrl(urls.get(0));
+            log.info("澄清联网搜索：纯 URL 消息回退域名作搜索词: query={}", query);
+        } else if (!urls.isEmpty() && !hasOkPage) {
+            // V44：语义文本存在但直取全部失败 → 域名前置增强搜索词，
+            // 让搜索引擎检索该站点的公开资料（介绍/教程/文档）
+            String host = hostOfUrl(urls.get(0));
+            if (!host.isBlank()) {
+                query = host + " " + query;
+                log.info("澄清联网搜索：直取失败，域名前置增强搜索词: query={}", query);
+            }
+        }
+        if (query.isBlank() && !hasOkPage) {
+            return null;
+        }
         long t0 = System.currentTimeMillis();
         try {
-            List<WebSearchResult> results = webSearchService.search(query, webSearchProperties.getMaxResults());
-            log.info("澄清联网搜索结束: provider={}, query={}, results={}, costMs={}",
-                    webSearchService.provider(), query, results.size(), System.currentTimeMillis() - t0);
-            return renderWebSearchContext(results);
+            List<WebSearchResult> searched = query.isBlank()
+                    ? Collections.emptyList()
+                    : webSearchService.search(query, webSearchProperties.getMaxResults());
+            long costMs = System.currentTimeMillis() - t0;
+            List<WebSearchResult> merged = mergeFetchedIntoResults(pages, searched);
+            log.info("澄清联网搜索结束: provider={}, query={}, pages={}, results={}, costMs={}",
+                    webSearchService.provider(), query, pages.size(), merged.size(), costMs);
+            return WebSearchOutcome.builder()
+                    .provider(webSearchService.provider())
+                    .query(query)
+                    .costMs(costMs)
+                    .total(merged.size())
+                    .results(merged)
+                    .fetchedPages(pages)
+                    .build();
         } catch (Exception e) {
             log.warn("澄清联网搜索异常降级（不动澄清主流程）: query={}, err={}", query, e.getMessage());
+            return WebSearchOutcome.builder()
+                    .provider(webSearchService.provider())
+                    .query(query)
+                    .costMs(System.currentTimeMillis() - t0)
+                    .fetchedPages(pages)
+                    .failed(true)
+                    .reason(e.getMessage())
+                    .build();
+        }
+    }
+
+    /** 消息中 http(s) 链接提取（尾随中文标点/括号/引号不算 URL 一部分）。 */
+    private static final Pattern URL_IN_TEXT_PATTERN = Pattern.compile(
+            "https?://[^\\s<>\"'，。；、（）()【】\\[\\]{}]+");
+
+    /** 提取消息中全部 URL（出现顺序，供直取）。 */
+    private List<String> extractUrls(String message) {
+        if (message == null || message.isBlank()) return Collections.emptyList();
+        List<String> urls = new ArrayList<>();
+        Matcher m = URL_IN_TEXT_PATTERN.matcher(message);
+        while (m.find()) {
+            urls.add(m.group());
+        }
+        return urls;
+    }
+
+    /** 剥离 URL 后的语义文本（搜索词来源），空白归一。 */
+    private String stripUrls(String message) {
+        if (message == null) return "";
+        return URL_IN_TEXT_PATTERN.matcher(message).replaceAll(" ").replaceAll("\\s+", " ").trim();
+    }
+
+    /** URL 的 host（纯 URL 消息的域名回退搜索词 / 直取来源的 siteName）。 */
+    private static String hostOfUrl(String url) {
+        try {
+            String host = URI.create(url).getHost();
+            return host == null ? "" : host;
+        } catch (Exception e) {
             return "";
         }
     }
 
-    /** 关键词提取：首条用户消息前 queryKeywordLimit 字符（去两端空白）。 */
+    /**
+     * 直取用户给出的页面（前 N 个去重 URL，N=urlFetchMaxPages）；总开关关闭或无 URL 时
+     * 返回空列表；fetcher 异常已内部降级（ok=false 记录也保留，payload 可查验）。
+     */
+    private List<WebPageContent> fetchUserPages(List<String> urls) {
+        if (!webSearchProperties.isUrlFetchEnabled() || urls.isEmpty()) {
+            return Collections.emptyList();
+        }
+        int max = Math.max(1, webSearchProperties.getUrlFetchMaxPages());
+        List<WebPageContent> out = new ArrayList<>();
+        for (String url : urls.stream().distinct().limit(max).toList()) {
+            WebPageContent page = pageFetchService.fetch(url);
+            if (page == null) continue; // 契约保证非 null，防御性兜底
+            out.add(page);
+            log.info("澄清联网搜索 URL 直取{}: url={}, textChars={}",
+                    page.isOk() ? "成功" : "失败(" + page.getReason() + ")",
+                    url, page.getText() == null ? 0 : page.getText().length());
+        }
+        return out;
+    }
+
+    /** 直取页面映射为来源置顶 + 搜索结果补后，总条数 cap 在 maxResults 内。 */
+    private List<WebSearchResult> mergeFetchedIntoResults(List<WebPageContent> pages,
+                                                          List<WebSearchResult> searched) {
+        int cap = webSearchProperties.getMaxResults();
+        int snippetMax = webSearchProperties.getMaxSnippetChars();
+        List<WebSearchResult> merged = new ArrayList<>();
+        for (WebPageContent p : pages) {
+            if (!p.isOk() || merged.size() >= cap) continue;
+            String text = p.getText() == null ? "" : p.getText();
+            merged.add(WebSearchResult.builder()
+                    .title(p.getTitle() == null || p.getTitle().isBlank() ? "(无标题)" : p.getTitle())
+                    .url(p.getUrl())
+                    .snippet(text.length() <= snippetMax ? text : text.substring(0, snippetMax) + "…")
+                    .siteName(hostOfUrl(p.getUrl()))
+                    .build());
+        }
+        if (searched != null) {
+            for (WebSearchResult r : searched) {
+                if (merged.size() >= cap) break;
+                merged.add(r);
+            }
+        }
+        return merged;
+    }
+
+    /** 关键词提取：用户消息前 queryKeywordLimit 字符（去两端空白）。 */
     private String extractQueryKeyword(String s) {
         if (s == null) return "";
         String trimmed = s.trim();
@@ -565,36 +878,21 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         return trimmed.substring(0, limit);
     }
 
-    /** 联网检索结果 → Prompt 文本（≤ 5 条，每条双行）。空列表输出占位符保证 Prompt 语义节稳定。 */
-    private String renderWebSearchContext(List<WebSearchResult> results) {
-        if (results == null || results.isEmpty()) return "（无可用联网资料）";
-        StringBuilder sb = new StringBuilder();
-        sb.append("以下是联网检索到的行业资料（上限 ").append(results.size()).append(" 条，按相关性排序）：\n");
-        for (int i = 0; i < results.size(); i++) {
-            WebSearchResult r = results.get(i);
-            sb.append('[').append(i + 1).append("] ").append(r.getTitle());
-            if (r.getUrl() != null && !r.getUrl().isBlank()) {
-                sb.append("（").append(r.getUrl()).append("）");
-            }
-            sb.append('\n').append(r.getSnippet());
-            if (i < results.size() - 1) sb.append("\n\n");
-        }
-        return sb.toString();
-    }
-
     /**
      * LLM 一轮（不落 user 消息）：选 Planner → 全量历史渲染模板 → LLM →
      * 解析 question/final 分支落库；doRound 与 retryRound 共用。
      *
-     * @param webSearchContext 首轮预检索的联网资料文本（重试场景传空串）；
-     *                         已在 doRound 里根据首轮/开关限定过
+     * @param webSearchOutcome 本轮联网搜索归一化记录（V41；未搜索/重试/切换轮传 null）；
+     *                         已在 doRound 里根据开关限定过；注入 Prompt 与落 payload 两用
      */
-    private ClarifyConversationDetail runLlmRound(RequirementConversation conversation, String webSearchContext) {
+    private ClarifyConversationDetail runLlmRound(RequirementConversation conversation,
+                                                  WebSearchOutcome webSearchOutcome) {
         Long conversationId = conversation.getId();
         // V39 双模式分派：CLARIFY（含 NULL 老数据）走澄清模板 + JSON 协议解析；
         // CHAT 走通用助手模板，纯文本直接落库
         boolean clarifyMode = isClarifyMode(conversation);
 
+        String webSearchContext = webSearchOutcome != null ? webSearchOutcome.toContextText() : "";
         Agent planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
         String prompt = renderPrompt(conversationId, webSearchContext,
                 clarifyMode ? PROMPT_TEMPLATE_PATH : CHAT_PROMPT_TEMPLATE_PATH);
@@ -619,11 +917,18 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
             }
             ClarifyReply chatReply = tryParseChatStructured(output);
             if (chatReply != null) {
+                // V45：CHAT 轮结构化追问卡同样携带本轮联网搜索查验信息
                 messageService.addMessage(conversationId, ROLE_ASSISTANT,
-                        composeAssistantContent(chatReply), buildQuestionPayload(chatReply));
+                        composeAssistantContent(chatReply), buildQuestionPayload(chatReply, webSearchOutcome));
                 log.info("自由对话结构化追问落库: conversationId={}", conversationId);
             } else {
-                messageService.addMessage(conversationId, ROLE_ASSISTANT, output.trim(), null);
+                // V45：CHAT 轮联网搜索后纯文本回复同样携带 webSearch 查验键（与终稿轮同形态）
+                if (webSearchOutcome != null) {
+                    messageService.addMessage(conversationId, ROLE_ASSISTANT, output.trim(),
+                            buildWebSearchOnlyPayload(webSearchOutcome));
+                } else {
+                    messageService.addMessage(conversationId, ROLE_ASSISTANT, output.trim(), null);
+                }
                 log.info("自由对话回复落库: conversationId={}", conversationId);
             }
             return new ClarifyConversationDetail(conversation,
@@ -634,7 +939,13 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         if ("final".equals(reply.getType())) {
             String note = reply.getMessage() != null && !reply.getMessage().isBlank()
                     ? reply.getMessage() : "已生成终稿";
-            messageService.addMessage(conversationId, ROLE_ASSISTANT, note);
+            // V41：终稿轮同样落联网搜索查验信息（未发生搜索时保持原 3 参形态）
+            if (webSearchOutcome != null) {
+                messageService.addMessage(conversationId, ROLE_ASSISTANT, note,
+                        buildWebSearchOnlyPayload(webSearchOutcome));
+            } else {
+                messageService.addMessage(conversationId, ROLE_ASSISTANT, note);
+            }
             conversation.setFinalTitle(reply.getTitle());
             conversation.setFinalDescription(reply.getDescription());
             conversationService.updateById(conversation);
@@ -642,7 +953,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                     conversationId, reply.getTitle());
         } else {
             messageService.addMessage(conversationId, ROLE_ASSISTANT, composeAssistantContent(reply),
-                    buildQuestionPayload(reply));
+                    buildQuestionPayload(reply, webSearchOutcome));
         }
         return new ClarifyConversationDetail(conversation,
                 messageService.listByConversation(conversationId));
@@ -827,13 +1138,16 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     }
 
     /**
-     * assistant 消息 payload：{@code {"mode","progress","questions"}}；
-     * freeform 且无 progress 时返回 null（纯文本消息）；序列化失败降级 null 不阻断。
+     * assistant 消息 payload：{@code {"mode","progress","questions","webSearch"}}；
+     * freeform 且无 progress 且无搜索记录时返回 null（纯文本消息）；序列化失败降级 null 不阻断。
+     *
+     * @param outcome 本轮联网搜索记录（V41，可为 null）；非空时合并 {@code webSearch} 键，
+     *                前端据此渲染折叠查验条
      */
-    private String buildQuestionPayload(ClarifyReply reply) {
+    private String buildQuestionPayload(ClarifyReply reply, WebSearchOutcome outcome) {
         boolean structured = MODE_STRUCTURED.equals(reply.getMode())
                 && reply.getQuestions() != null && !reply.getQuestions().isEmpty();
-        if (!structured && reply.getProgress() == null) {
+        if (!structured && reply.getProgress() == null && outcome == null) {
             return null;
         }
         Map<String, Object> payload = new LinkedHashMap<>();
@@ -844,12 +1158,72 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         if (structured) {
             payload.put("questions", reply.getQuestions());
         }
+        if (outcome != null) {
+            payload.put(PAYLOAD_KEY_WEB_SEARCH, buildWebSearchMap(outcome));
+        }
         try {
             return objectMapper.writeValueAsString(payload);
         } catch (Exception e) {
             log.warn("澄清 assistant payload 序列化失败，降级纯文本消息", e);
             return null;
         }
+    }
+
+    /** 终稿轮的纯搜索查验 payload：{@code {"webSearch":{...}}}；序列化失败降级 null。 */
+    private String buildWebSearchOnlyPayload(WebSearchOutcome outcome) {
+        try {
+            return objectMapper.writeValueAsString(
+                    Map.of(PAYLOAD_KEY_WEB_SEARCH, buildWebSearchMap(outcome)));
+        } catch (Exception e) {
+            log.warn("澄清终稿轮 webSearch payload 序列化失败，降级纯文本消息", e);
+            return null;
+        }
+    }
+
+    /**
+     * 搜索记录 → payload 嵌套 Map：provider/query/costMs/total/results，
+     * 失败时附 failed/reason；results 每条含 title/url/snippet/siteName（前端查验条展开用）。
+     */
+    private Map<String, Object> buildWebSearchMap(WebSearchOutcome outcome) {
+        Map<String, Object> trace = new LinkedHashMap<>();
+        trace.put("provider", outcome.getProvider());
+        trace.put("query", outcome.getQuery());
+        trace.put("costMs", outcome.getCostMs());
+        trace.put("total", outcome.getTotal());
+        if (outcome.isFailed()) {
+            trace.put("failed", true);
+            trace.put("reason", outcome.getReason());
+        }
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (WebSearchResult r : outcome.getResults()) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("title", r.getTitle());
+            item.put("url", r.getUrl());
+            item.put("snippet", r.getSnippet());
+            item.put("siteName", r.getSiteName());
+            items.add(item);
+        }
+        trace.put("results", items);
+        // V43 URL 直取记录（含失败记录可查验）；无 URL 时不落键，前端忽略未知键零兼容成本
+        if (outcome.getFetchedPages() != null && !outcome.getFetchedPages().isEmpty()) {
+            List<Map<String, Object>> fetched = new ArrayList<>();
+            for (WebPageContent p : outcome.getFetchedPages()) {
+                Map<String, Object> f = new LinkedHashMap<>();
+                f.put("url", p.getUrl());
+                f.put("title", p.getTitle());
+                f.put("ok", p.isOk());
+                if (p.isMetaOnly()) {
+                    f.put("metaOnly", true);
+                }
+                f.put("textChars", p.getText() == null ? 0 : p.getText().length());
+                if (!p.isOk()) {
+                    f.put("reason", p.getReason());
+                }
+                fetched.add(f);
+            }
+            trace.put("fetched", fetched);
+        }
+        return trace;
     }
 
     /** user 消息 payload：{@code {"selections":[...]}}；无选择时返回 null；序列化失败降级 null。 */

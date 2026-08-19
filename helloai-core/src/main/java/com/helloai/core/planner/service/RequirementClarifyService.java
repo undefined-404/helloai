@@ -42,7 +42,7 @@ public interface RequirementClarifyService {
      * @param plannerAgentId   手动指定的 Planner Agent ID（空=系统自动选择）；
      *                         指定时严格校验可选性，澄清与后续拆解均跟随该 Planner
      * @param webSearchEnabled 会话级联网搜索开关（V34 新增；NULL=默认开启）；
-     *                         首轮 LLM 调用前若 true 服务端会预检索行业资料并注入
+     *                         每轮 LLM 调用前若 true 服务端会预检索行业资料并注入
      *                         {@code {{WEB_SEARCH_CONTEXT}}} 占位符，失败降级跳过
      * @return 会话 + 全部消息
      */

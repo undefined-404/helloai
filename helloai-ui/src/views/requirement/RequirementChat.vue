@@ -104,6 +104,16 @@
                 v-for="row in renderMessages"
                 :key="String(row.msg.id)"
               >
+                <!-- V41 联网搜索折叠查验条（对齐 DeepSeek/Kimi 形态：挂在 assistant 回复上方） -->
+                <div
+                  v-if="row.webSearch"
+                  class="msg-row from-assistant"
+                >
+                  <WebSearchBar
+                    class="ws-wrap"
+                    :trace="row.webSearch"
+                  />
+                </div>
                 <!-- 结构化追问：引导语气泡（问题正文由卡片呈现，不重复展示） -->
                 <div
                   v-if="row.intro"
@@ -370,7 +380,8 @@ import { clarifyApi } from '@/api/clarify'
 import { taskApi } from '@/api/task'
 import { fmtTime } from '@/utils/tableConfig'
 import StructuredQuestionCard from './StructuredQuestionCard.vue'
-import type { ClarifyAssistantPayload, ClarifyConversationDetail, ClarifySelection, PlannerOption, RequirementConversation, RequirementConversationStatus, RequirementMessage, LongId } from '@/types'
+import WebSearchBar from './WebSearchBar.vue'
+import type { ClarifyAssistantPayload, ClarifyConversationDetail, ClarifySelection, PlannerOption, RequirementConversation, RequirementConversationStatus, RequirementMessage, LongId, WebSearchTrace } from '@/types'
 
 const router = useRouter()
 
@@ -409,7 +420,7 @@ const selectedPlanner = ref<string>('__auto__')
 
 // V34 会话级联网搜索开关：默认开启；新会话提交后跟随会话落库（老会话不能改）
 const webSearchEnabled = ref<boolean>(true)
-const webSearchTooltip = '首轮对话前预检索行业资料 / 竞品 / 技术方案，注入 Prompt 增强拆解质量；失败自动降级'
+const webSearchTooltip = '每轮对话自动联网检索行业资料 / 竞品 / 技术方案，注入 Prompt 增强回答质量；失败自动降级'
 
 // 已存在会话：下拉开关同步为会话原值（不可改）；新会话手动点击
 watch(
@@ -474,6 +485,7 @@ function introOf(content: string) {
 }
 
 // 消息流渲染行：结构化追问→引导语气泡 + 只读卡片（选择快照取下一条 user 消息）；
+// V41 起 assistant 消息 payload 含 webSearch 时随行渲染折叠查验条（实时消息与历史回显统一）；
 // 最后一条 ACTIVE 结构化追问由可交互卡片承接，此处不重复出只读卡；
 // 选择已由上方只读卡高亮回显的 user 消息不再重复出文本气泡
 const renderMessages = computed(() => {
@@ -481,14 +493,16 @@ const renderMessages = computed(() => {
   const rows = msgs.map((msg, i) => {
     const p = assistantPayloadOf(msg)
     const structured = p?.mode === 'structured' && p.questions?.length ? p : null
-    if (!structured) return { msg, structured: null, intro: msg.content, selections: null }
+    const webSearch: WebSearchTrace | null = p?.webSearch ?? null
+    if (!structured) return { msg, structured: null, intro: msg.content, selections: null, webSearch }
     const interactive = i === msgs.length - 1 && activeStructured.value != null
     const next = msgs[i + 1]
     return {
       msg,
       structured: interactive ? null : structured,
       intro: introOf(msg.content),
-      selections: next ? userSelectionsOf(next) : null
+      selections: next ? userSelectionsOf(next) : null,
+      webSearch
     }
   })
   for (let i = 1; i < rows.length; i++) {
@@ -674,7 +688,7 @@ async function handleFinalize() {
   if (!conv) return
   try {
     await ElMessageBox.confirm(
-      `将以终稿「${conv.finalTitle}」创建任务，并自动调用 LLM 做 AI 拆解（约需几十秒）。是否继续？`,
+      `将以终稿「${conv.finalTitle}」创建任务，并提交 AI 拆解（草案在后台生成，通常需要一段时间：几十秒到几分钟不等，视任务复杂程度而定）。是否继续？`,
       '创建任务并自动拆解',
       { type: 'info', confirmButtonText: '创建并拆解', cancelButtonText: '取消' }
     )
@@ -682,7 +696,7 @@ async function handleFinalize() {
   finalizing.value = true
   try {
     const task = await clarifyApi.finalize(conv.id)
-    ElMessage.success('任务已创建，正在自动拆解…')
+    ElMessage.success('任务已创建，正在后台拆解…')
     try {
       await taskApi.plan(String(task.id))
       router.push({ path: '/tasks', query: { review: String(task.id) } })
@@ -699,7 +713,7 @@ async function handleRegenerate() {
   if (!conv) return
   try {
     await ElMessageBox.confirm(
-      `原任务已不存在，将以终稿「${conv.finalTitle}」重新创建任务，并自动调用 LLM 做 AI 拆解（约需几十秒）。是否继续？`,
+      `原任务已不存在，将以终稿「${conv.finalTitle}」重新创建任务，并提交 AI 拆解（草案在后台生成，通常需要一段时间：几十秒到几分钟不等，视任务复杂程度而定）。是否继续？`,
       '重新生成任务和子任务',
       { type: 'info', confirmButtonText: '重新生成', cancelButtonText: '取消' }
     )
@@ -707,7 +721,7 @@ async function handleRegenerate() {
   finalizing.value = true
   try {
     const task = await clarifyApi.regenerate(conv.id)
-    ElMessage.success('任务已重新创建，正在自动拆解…')
+    ElMessage.success('任务已重新创建，正在后台拆解…')
     try {
       await taskApi.plan(String(task.id))
       router.push({ path: '/tasks', query: { review: String(task.id) } })
@@ -801,6 +815,9 @@ onMounted(() => {
 
 /* 结构化问题卡片宽度对齐气泡 */
 .sq-wrap { max-width: 72%; min-width: 320px; }
+
+/* V41 联网搜索查验条宽度对齐气泡 */
+.ws-wrap { max-width: 72%; min-width: 320px; margin-bottom: 4px; }
 
 .msg-stream { flex: 1; overflow-y: auto; padding: 4px 8px; }
 

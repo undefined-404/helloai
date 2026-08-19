@@ -22,12 +22,34 @@ export interface ClarifyQuestion {
   options: ClarifyOption[]
 }
 
-/** assistant 消息 payload：{mode, progress, questions} */
+/** assistant 消息 payload：{mode, progress, questions, webSearch} */
 export interface ClarifyAssistantPayload {
   mode: 'structured' | 'freeform'
   // LLM 对澄清程度的 0~100 自评（仅展示）
   progress?: number | null
   questions?: ClarifyQuestion[]
+  // V41 联网搜索查验轨迹（仅本轮实际发起过搜索时存在）
+  webSearch?: WebSearchTrace
+}
+
+/** V41 联网搜索单条来源（webSearch payload 的 results 元素） */
+export interface WebSearchSource {
+  title: string
+  url?: string | null
+  snippet?: string | null
+  siteName?: string | null
+}
+
+/** V41 联网搜索查验轨迹（assistant 消息 payload.webSearch，对齐 DeepSeek/Kimi 折叠查验条） */
+export interface WebSearchTrace {
+  provider?: string | null
+  query?: string | null
+  costMs?: number
+  total?: number
+  // 搜索异常降级时为 true，reason 附异常摘要（主流程不阻断）
+  failed?: boolean
+  reason?: string | null
+  results?: WebSearchSource[]
 }
 
 /** 用户选项回答快照（user 消息 payload.selections 元素） */

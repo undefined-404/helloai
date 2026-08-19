@@ -6,8 +6,8 @@
   占位符：
     {{CONVERSATION_HISTORY}} 由服务端替换（transcript 文本，
       `用户：…` / `助手：…` 逐行拼接，含本轮最新用户消息）。
-    {{WEB_SEARCH_CONTEXT}} 为联网资料节（阶段 2 计划：CHAT 模式按需检索后注入；
-      当前该节渲染"（无可用联网资料）"，保持 Prompt 语义节稳定）。
+    {{WEB_SEARCH_CONTEXT}} 为联网资料节（V45 起：CHAT/CLARIFY 任意模式每轮按需检索后注入；
+      未检索/检索失败时该节渲染"（无可用联网资料）"，保持 Prompt 语义节稳定）。
   本模板与 requirement-clarify.md 的差异：不锁定"需求分析师"角色、无 JSON 输出协议、
   无澄清轮自检清单段、无 progress 自评——输出为面向用户的自然语言纯文本。
 -->

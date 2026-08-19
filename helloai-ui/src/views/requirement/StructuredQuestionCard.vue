@@ -190,12 +190,14 @@ function submit() {
 .sq-multi-tag { flex-shrink: 0; }
 .sq-rec-btn { flex-shrink: 0; margin-left: 2px; }
 
-.sq-options { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+/* 选项纵向单列：每个选项独占一行（不论文本长短），避免横向挤行影响可读性 */
+.sq-options { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
 
 .sq-option {
   display: flex;
   align-items: center;
   gap: 6px;
+  width: 100%;
   padding: 6px 12px;
   border: 1px solid var(--ha-border);
   border-radius: var(--ha-radius-md);
