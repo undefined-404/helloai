@@ -144,4 +144,4 @@ Also: EXECUTOR onboarding guide [`.executor-onboarding.md`](.executor-onboarding
 
 #### License
 
-[LICENSE](LICENSE)
+Licensed under the [MIT License](https://opensource.org/licenses/MIT). See [LICENSE](LICENSE).

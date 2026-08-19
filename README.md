@@ -300,4 +300,4 @@ npm run dev
 
 ## 📄 许可证
 
-本项目采用 [木兰宽松许可证，第2版](http://license.coscl.org.cn/MulanPSL2) 开源，详见 [LICENSE](LICENSE)。
+本项目采用 [MIT 许可证](https://opensource.org/licenses/MIT) 开源，详见 [LICENSE](LICENSE)。
