@@ -203,6 +203,12 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId,
                     "sub_task_auto_review_skip_max_rework", AgentRole.REVIEWER, null,
                     Map.of("reworkCount", reworkCount, "maxRework", maxRework));
+            // 核验返工熔断显式入死信（2026-08-19）：与调度维度 sub_task_dead_letter 对称，
+            // 时序图 DLQ 泳道可见"熔断 → 人工打捞"，回调链路清晰
+            taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId,
+                    "sub_task_review_dead_letter", AgentRole.SYSTEM, null,
+                    Map.of("reason", "rework_limit_exceeded",
+                            "reworkCount", reworkCount, "maxRework", maxRework));
             // §6.52 人工介入标记：前端据此展示"人工介入"面板（用户选 agent 驳回改派 / 直接通过）
             subTaskService.markManualIntervention(subTaskId, "rework_limit",
                     Map.of("reworkCount", reworkCount, "maxRework", maxRework));
@@ -591,9 +597,11 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         return new EvidenceCheckResult(true, null, readable.size(), hasOutput);
     }
 
-    /** 子任务可读附件列表（local:// 平台直读产物；list 返回 null 防御按空处理）。 */
+    /** 子任务可读附件列表（local:// 平台直读产物；仅 ACTIVE 有效版本——同名多版本在
+     * {@link com.helloai.core.system.service.impl.AttachmentServiceImpl#register} 时
+     * 已自动去活，核验只认当前最新上传，避免旧版本冲突污染判定；list 返回 null 防御按空处理）。 */
     private List<Attachment> readableAttachments(Long subTaskId) {
-        List<Attachment> attachments = attachmentService.list(subTaskId);
+        List<Attachment> attachments = attachmentService.listActive(subTaskId);
         if (attachments == null) {
             return List.of();
         }
@@ -608,7 +616,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
      * 声称"文件 203 行 errors=0"但附件清单无对应文件时判不达标。
      */
     private String buildAttachmentList(SubTask subTask) {
-        List<Attachment> attachments = attachmentService.list(subTask.getId());
+        List<Attachment> attachments = attachmentService.listActive(subTask.getId());
         if (attachments == null || attachments.isEmpty()) {
             return "（无物化附件）";
         }

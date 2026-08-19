@@ -104,15 +104,16 @@ public class TaskDeliverableServiceImpl implements TaskDeliverableService {
 
     /**
      * 收录单个 DONE 子任务的产出，返回是否写入了至少一个文件。
-     * 优先本地物化附件（同名取最新一轮），无可读附件回退 lastExecution.output。
+     * 优先本地物化附件（仅 ACTIVE 有效版本，同名去活由 {@code AttachmentService.register}
+     * 保证、无需自行去重），无可读附件回退 lastExecution.output。
      */
     private boolean appendSubTaskDeliverables(ZipOutputStream zos, Set<String> usedNames,
                                               SubTask subTask, int seq) throws IOException {
         String prefix = String.format("%02d-", seq);
         boolean wrote = false;
-        // attachmentService.list 按创建时间倒序，putIfAbsent 即"同名取最新"
+        // listActive 已按 ACTIVE 过滤 + 创建时间倒序，putIfAbsent 保留为防御（同名理论上至多一条有效版）
         Map<String, Attachment> latestByName = new LinkedHashMap<>();
-        for (Attachment att : attachmentService.list(subTask.getId())) {
+        for (Attachment att : attachmentService.listActive(subTask.getId())) {
             if (attachmentService.isContentLoadable(att)) {
                 latestByName.putIfAbsent(att.getFileName(), att);
             }

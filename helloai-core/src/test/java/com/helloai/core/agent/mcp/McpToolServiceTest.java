@@ -288,7 +288,7 @@ class McpToolServiceTest {
 
         Attachment attachment = new Attachment();
         attachment.setId(21L);
-        when(attachmentService.list(11L)).thenReturn(List.of(attachment));
+        when(attachmentService.listActive(11L)).thenReturn(List.of(attachment));
         when(attachmentService.isContentLoadable(attachment)).thenReturn(true);
         when(attachmentService.loadContent(21L)).thenReturn("物化产出内容".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
@@ -317,7 +317,7 @@ class McpToolServiceTest {
 
         Attachment attachment = new Attachment();
         attachment.setId(22L);
-        when(attachmentService.list(11L)).thenReturn(List.of(attachment));
+        when(attachmentService.listActive(11L)).thenReturn(List.of(attachment));
         when(attachmentService.isContentLoadable(attachment)).thenReturn(true);
         when(attachmentService.loadContent(22L)).thenReturn("x".repeat(5000).getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
@@ -351,7 +351,7 @@ class McpToolServiceTest {
         dep.setTitle("前置任务C");
         dep.setContext(Map.of("lastExecution", Map.of("output", "执行输出摘要")));
         when(subTaskService.listByIds(List.of(11L))).thenReturn(List.of(dep));
-        when(attachmentService.list(11L)).thenReturn(List.of());
+        when(attachmentService.listActive(11L)).thenReturn(List.of());
 
         McpToolService.GetDepsSummaryResult result = mcpToolService.getDepsSummary(AGENT_ID, SUB_TASK_ID);
 

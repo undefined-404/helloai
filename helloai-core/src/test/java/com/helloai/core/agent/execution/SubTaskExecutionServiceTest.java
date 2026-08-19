@@ -334,7 +334,7 @@ class SubTaskExecutionServiceTest {
             Agent agent = agent();
 
             when(subTaskService.listByIds(List.of(11L))).thenReturn(List.of(upstream));
-            when(attachmentService.list(11L)).thenReturn(List.of(attachment));
+            when(attachmentService.listActive(11L)).thenReturn(List.of(attachment));
             when(attachmentService.isContentLoadable(attachment)).thenReturn(true);
             when(attachmentService.loadContent(99L)).thenReturn("物化附件正文：竞品对比表".getBytes(java.nio.charset.StandardCharsets.UTF_8));
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
@@ -367,7 +367,7 @@ class SubTaskExecutionServiceTest {
             Agent agent = agent();
 
             when(subTaskService.listByIds(List.of(11L))).thenReturn(List.of(upstream));
-            when(attachmentService.list(11L)).thenReturn(List.of(attachment));
+            when(attachmentService.listActive(11L)).thenReturn(List.of(attachment));
             when(attachmentService.isContentLoadable(attachment)).thenReturn(true);
             when(attachmentService.loadContent(99L)).thenThrow(new RuntimeException("file missing"));
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))

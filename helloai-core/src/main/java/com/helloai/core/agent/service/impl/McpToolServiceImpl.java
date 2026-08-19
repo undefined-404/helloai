@@ -315,8 +315,9 @@ public class McpToolServiceImpl implements McpToolService {
     // ================================================================
 
     /**
-     * 上传产物附件元数据。实际文件内容由客户端直接上传到 MinIO/对象存储，
-     * 本工具只注册 DB 元数据记录。
+     * 上传产物附件元数据。文件内容场景请先经 POST /api/artifacts/upload 上传
+     * （平台转存 MinIO 并注册一步到位）；本工具仅适用于「对象已在别处可访问」时的
+     * 登记（只注册 DB 元数据记录，不传输文件内容）。
      * v2.7 起平台可直读 minio:// 附件（下载与执行证据核验），
      * storageUrl 建议按 {注册名}/{yyyy}/{MM}/{taskId}/{subTaskId}/ 组织。
      */
@@ -684,13 +685,14 @@ public class McpToolServiceImpl implements McpToolService {
     }
 
     /**
-     * 读取前置子任务的完成内容本体：物化附件（local:// 平台直读）优先，失败/无附件回退
+     * 读取前置子任务的完成内容本体：物化附件（local:// 平台直读，仅 ACTIVE 有效版本——
+     * 同名历史版本已由 {@code AttachmentService.register} 自动去活）优先，失败/无附件回退
      * {@code context.lastExecution.output} 原始产出；两者均无返回 null。
      * 与 SubTaskExecutionService.loadUpstreamContent 同源实现（消费方隔离，避免渲染逻辑耦合）。
      */
     private String loadUpstreamContent(SubTask dep) {
         try {
-            List<Attachment> attachments = attachmentService.list(dep.getId());
+            List<Attachment> attachments = attachmentService.listActive(dep.getId());
             if (attachments != null) {
                 for (Attachment attachment : attachments) {
                     if (attachmentService.isContentLoadable(attachment)) {

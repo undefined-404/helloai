@@ -2,6 +2,8 @@ package com.helloai.core.system.service;
 
 import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
 import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapper;
+import com.baomidou.mybatisplus.extension.conditions.update.LambdaUpdateChainWrapper;
+import com.helloai.common.constant.AttachmentStatus;
 import com.helloai.core.system.entity.Attachment;
 import com.helloai.core.system.service.impl.AttachmentServiceImpl;
 import com.helloai.core.system.storage.ArtifactStorage;
@@ -20,6 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -35,6 +38,7 @@ class AttachmentServiceImplTest {
 
     private AttachmentServiceImpl service;
     private LambdaQueryChainWrapper<Attachment> chain;
+    private LambdaUpdateChainWrapper<Attachment> updateChain;
 
     @SuppressWarnings("unchecked")
     @BeforeEach
@@ -44,9 +48,16 @@ class AttachmentServiceImplTest {
         artifactStorage = mock(ArtifactStorage.class);
         service = spy(new AttachmentServiceImpl(subTaskService, taskService, artifactStorage));
         chain = mock(LambdaQueryChainWrapper.class);
+        updateChain = mock(LambdaUpdateChainWrapper.class);
         doReturn(chain).when(service).lambdaQuery();
+        doReturn(updateChain).when(service).lambdaUpdate();
+        // register 落库走 ServiceImpl.save，spy 无 baseMapper → 直接拦截 save，避免触碰 MyBatis-Plus 内部
+        doReturn(true).when(service).save(any(Attachment.class));
         when(chain.eq(anyBoolean(), any(), any())).thenReturn(chain);
+        when(chain.eq(any(SFunction.class), any())).thenReturn(chain);
         when(chain.orderByDesc(org.mockito.ArgumentMatchers.<SFunction<Attachment, ?>>any())).thenReturn(chain);
+        when(updateChain.eq(any(SFunction.class), any())).thenReturn(updateChain);
+        when(updateChain.set(any(SFunction.class), any())).thenReturn(updateChain);
     }
 
     private Attachment attachment(Long id, Long subTaskId, String fileName) {
@@ -115,6 +126,70 @@ class AttachmentServiceImplTest {
         assertThat(result.get(0).getTaskId()).isNull();
         assertThat(result.get(0).getTaskTitle()).isNull();
         assertThat(result.get(0).getSubTaskTitle()).isNull();
+    }
+
+    @Test
+    @DisplayName("listActive：只追加 status=ACTIVE 过滤条件，并回填标题（平台可信视角）")
+    void listActive_shouldFilterByActiveStatus() {
+        Attachment active = attachment(1L, 100L, "报告1.md");
+        active.setStatus(AttachmentStatus.ACTIVE);
+        when(chain.list()).thenReturn(List.of(active));
+        // fillBrowseTitles 按 Set<subTaskId> 批量回查，用 any() 而非具体 List/Set 容器
+        when(subTaskService.listByIds(any()))
+                .thenReturn(List.of(subTask(100L, 10L, "子任务A")));
+        Task task = new Task();
+        task.setId(10L);
+        task.setTitle("主任务T");
+        when(taskService.listByIds(any())).thenReturn(List.of(task));
+
+        List<Attachment> result = service.listActive(100L);
+        List<Attachment> resultAllStatus = service.list(100L);
+
+        // 有效视角 + 全量视角 共用回填
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getTaskTitle()).isEqualTo("主任务T");
+        assertThat(resultAllStatus).hasSize(1);
+        // 过滤条件来自 status=ACTIVE（SQL 层过滤，mock 链验证追加；SFunction 按值断言）
+        verify(chain).eq(any(SFunction.class), eq(AttachmentStatus.ACTIVE));
+    }
+
+    @Test
+    @DisplayName("register：同名 ACTIVE 旧版被批量去活后再注册新版本（版本化核心语义）")
+    void register_shouldSupersedeSameNameActiveBeforeSave() {
+        SubTask st = subTask(100L, 10L, "子任务A");
+        st.setAssignedAgentId(7L);
+        when(subTaskService.getById(100L)).thenReturn(st);
+        when(updateChain.update()).thenReturn(true);
+
+        Attachment registered = service.register(7L, 100L, "报告.md", "text/markdown", 1024L,
+                "minio://helloai-artifacts/t/100/x-报告.md");
+
+        // 去活条件：同子任务 + 同文件名 + ACTIVE → INACTIVE
+        // 注：SFunction 方法引用每次编译为不同 Lambda 实例，verify 只按值断言参数
+        verify(updateChain).eq(any(SFunction.class), eq(100L));
+        verify(updateChain).eq(any(SFunction.class), eq("报告.md"));
+        verify(updateChain).eq(any(SFunction.class), eq(AttachmentStatus.ACTIVE));
+        verify(updateChain).set(any(SFunction.class), eq(AttachmentStatus.INACTIVE));
+        verify(updateChain).update();
+        // 新版本以 ACTIVE 落库
+        assertThat(registered.getStatus()).isEqualTo(AttachmentStatus.ACTIVE);
+        verify(service).save(registered);
+    }
+
+    @Test
+    @DisplayName("register：无同名旧版时不触发去活，仍正常注册（update() 返回 false 不影响主链路）")
+    void register_withoutSameName_shouldNotSupersede() {
+        SubTask st = subTask(100L, 10L, "子任务A");
+        st.setAssignedAgentId(7L);
+        when(subTaskService.getById(100L)).thenReturn(st);
+        when(updateChain.update()).thenReturn(false);
+
+        Attachment registered = service.register(7L, 100L, "新文件.md", "text/markdown", 2048L,
+                "local://helloai-local/t/100/x-新文件.md");
+
+        verify(updateChain).update();
+        assertThat(registered.getStatus()).isEqualTo(AttachmentStatus.ACTIVE);
+        verify(service).save(registered);
     }
 
     @Test
@@ -205,5 +280,31 @@ class AttachmentServiceImplTest {
         when(artifactStorage.supports(anyString())).thenReturn(true);
 
         assertThat(service.isPreviewable(att)).isFalse();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  invalidateBySubTask（§6.104 打回失效）
+    //  ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("invalidateBySubTask: ACTIVE → INACTIVE，断言 eq subTaskId + eq ACTIVE + set INACTIVE")
+    void invalidateBySubTask_shouldSupersedeActiveToInactive() {
+        when(updateChain.update()).thenReturn(true);
+
+        service.invalidateBySubTask(100L);
+
+        verify(updateChain).eq(any(SFunction.class), eq(100L));
+        // eq(Attachment::getStatus, ACTIVE) 与 set(Attachment::getStatus, INACTIVE) 各一次
+        verify(updateChain, org.mockito.Mockito.atLeastOnce()).eq(any(SFunction.class), any());
+        verify(updateChain).set(any(SFunction.class), any());
+        verify(updateChain).update();
+    }
+
+    @Test
+    @DisplayName("invalidateBySubTask: subTaskId 为空直接 return，不触碰 updateChain")
+    void invalidateBySubTask_nullId_shouldReturnWithoutTouchingChain() {
+        service.invalidateBySubTask(null);
+
+        verify(updateChain, never()).update();
     }
 }

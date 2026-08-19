@@ -28,8 +28,10 @@ import com.helloai.core.task.service.RewardService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import com.helloai.core.task.statemachine.SubTaskStateMachine;
+import com.helloai.core.system.service.AttachmentService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -63,6 +65,8 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     private final AgentMapper agentMapper;
     private final AgentDispatchProperties agentDispatchProperties;
     private final ConcurrencyQuotaService concurrencyQuotaService;
+    // 懒解析打破循环：AttachmentServiceImpl 依赖 SubTaskService（register 归属校验）
+    private final ObjectProvider<AttachmentService> attachmentServiceProvider;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -548,6 +552,9 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         // 摘要携带最近一轮 review 结果（评分/评语/问题），外部 Agent 轮询 pullTasks 即可感知返工原因
         sendReworkInboxNotification(subTask);
         agentOutboxService.createEvent(subTask, SubTaskStatus.REWORK);
+        // §6.104 打回失效：旧提交附件全部置 INACTIVE，返工必须重新上传最新版
+        // （与核验/装载/打包的 listActive 可信视角闭环，旧证据不再进入下次核验）
+        invalidateAttachmentsOnRework(subTaskId);
         log.info("子任务驳回返工: subTaskId={}, reworkCount={}", subTaskId, subTask.getReworkCount());
     }
 
@@ -581,7 +588,32 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         extra.put("reworkAgentId", reworkAgentId);
         taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId,
                 "sub_task_manual_rework_reset", AgentRole.SYSTEM, reworkAgentId, extra);
+        // §6.104 打回失效：人工驳回同步让旧 ACTIVE 附件失效，新执行者重新产出后须 uploadArtifact 重建 ACTIVE
+        invalidateAttachmentsOnRework(subTaskId);
         log.info("人工驳回重置返工计数: subTaskId={}, reworkCount=0, reworkAgentId={}", subTaskId, reworkAgentId);
+    }
+
+    /**
+     * 打回失效（§6.104）：将该子任务全部 ACTIVE 附件批量置 INACTIVE，
+     * 与 {@code AttachmentServiceImpl.register} 的同名去活互补。
+     *
+     * <p>通过 {@code ObjectProvider<AttachmentService>} 懒解析打破与 AttachmentServiceImpl
+     * 的构造器循环（后者依赖本服务的 register 归属校验）；解析失败/异常一律 warn
+     * 不阻断返工主链路（与 sendReworkInboxNotification 的 best-effort 哲学一致），
+     * 旧证据残留可在下次核验或人工打捞时识别（状态为 INACTIVE）。</p>
+     */
+    private void invalidateAttachmentsOnRework(Long subTaskId) {
+        try {
+            AttachmentService attachmentService = attachmentServiceProvider.getIfAvailable();
+            if (attachmentService == null) {
+                log.warn("附件服务不可用，跳过打回失效: subTaskId={}", subTaskId);
+                return;
+            }
+            attachmentService.invalidateBySubTask(subTaskId);
+        } catch (Exception e) {
+            log.warn("附件打回失效失败（不阻断返工主链路）: subTaskId={}, err={}",
+                    subTaskId, e.getMessage());
+        }
     }
 
     @Override
@@ -601,6 +633,11 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
             ctx.put("manualIntervention", mark);
             fresh.setContext(ctx);
             updateById(fresh);
+            // 可观测（2026-08-19）：人工介入标记落 timeline（OPS 泳道），时序图可见"等待人工处置"节点；
+            // 不能复用 Map.of——mark 可能含 null 值（extra 传入时）
+            taskTimelineService.recordEvent(fresh.getTaskId(), subTaskId,
+                    "sub_task_manual_intervention_required", AgentRole.SYSTEM, null,
+                    new HashMap<>(mark));
             log.info("人工介入标记已写入: subTaskId={}, reason={}", subTaskId, reason);
         } catch (Exception e) {
             log.warn("人工介入标记写入失败（不影响主链路）: subTaskId={}, err={}", subTaskId, e.getMessage());

@@ -173,18 +173,36 @@
         <div class="card-header">
           <span>产出附件</span>
           <span style="font-size:12px;color:var(--ha-muted)">共 {{ attachments.length }} 个</span>
+          <el-switch
+            v-if="historyAttachments.length"
+            v-model="showHistoryAtt"
+            size="small"
+            inline-prompt
+            active-text="历史"
+            inactive-text="有效"
+            style="margin-left:12px"
+            @change="() => {}"
+          />
         </div>
       </template>
       <div class="att-list">
         <div
-          v-for="att in attachments"
+          v-for="att in viewAttachments"
           :key="String(att.id)"
           class="att-item"
+          :class="{ inactive: att.status !== 'ACTIVE' }"
         >
           <span
             class="att-name"
             :title="att.fileName"
           >{{ att.fileName }}</span>
+          <el-tag
+            v-if="att.status === 'INACTIVE'"
+            size="small"
+            type="info"
+          >
+            旧版本
+          </el-tag>
           <span class="att-meta">{{ fmtSize(att.fileSize) }} · {{ fmtTime(att.createTime) }}</span>
           <el-button
             link
@@ -508,6 +526,10 @@ const EVENT_META: Record<string, { label: string; desc: string }> = {
   // 死信 / 重派
   sub_task_dead_letter: { label: '进入死信', desc: '多次失败，子任务进入死信池' },
   sub_task_dead_letter_manual_assign: { label: '死信重派', desc: '人工把死信子任务重新指派给 Agent' },
+  // 核验熔断 / 人工介入（2026-08-19：与调度死信对称，OPS/DLQ 泳道可回溯）
+  sub_task_review_dead_letter: { label: '核验熔断', desc: '核验返工超过上限，子任务进入死信池，等待人工决定通过/改派' },
+  sub_task_manual_intervention_required: { label: '人工介入', desc: '系统判定该子任务需要人工处置（改派/人工通过/人工驳回）' },
+  sub_task_manual_rework_reset: { label: '人工改派', desc: '人工驳回并改派执行者，同时重置返工计数' },
   // 任务级
   task_plan_generated: { label: '生成拆解', desc: '已生成任务拆解草案' },
   task_plan_confirmed: { label: '确认拆解', desc: '拆解草案已确认' },
@@ -800,6 +822,10 @@ async function loadConversation(id: string) {
 // ── 方案 2：产出附件列表 + 单附件下载 ──
 const attachments = ref<Attachment[]>([])
 const downloadingAttId = ref<LongId | null>(null)
+// 附件版本化（2026-08-19）：同名重传后旧版 INACTIVE；默认只看有效版，"历史"开关回查旧版
+const showHistoryAtt = ref(false)
+const historyAttachments = computed(() => attachments.value.filter(a => a.status !== 'ACTIVE'))
+const viewAttachments = computed(() => showHistoryAtt.value ? attachments.value : attachments.value.filter(a => a.status === 'ACTIVE'))
 
 async function loadAttachments(id: string) {
   try {
@@ -925,6 +951,9 @@ onBeforeUnmount(() => {
   border: 1px solid var(--ha-border, rgba(255,255,255,0.08));
   border-radius: 6px;
 }
+/* 历史版本（INACTIVE）灰显：仍可下载回查，但视觉上弱化 */
+.att-item.inactive { opacity: 0.55; }
+.att-item.inactive .att-name { text-decoration: line-through; }
 .att-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .att-meta { color: var(--ha-muted); font-size: 12px; white-space: nowrap; }
 

@@ -4,6 +4,14 @@
       <template #header>
         <div class="card-header">
           <span>附件管理</span>
+          <el-switch
+            v-model="activeOnly"
+            size="small"
+            inline-prompt
+            active-text="仅有效"
+            inactive-text="全部"
+            style="margin-right:12px"
+          />
           <el-button
             size="small"
             type="primary"
@@ -41,7 +49,7 @@
           v-for="(it, i) in view"
           :key="i"
           class="row"
-          :class="{ file: it.kind === 'file' }"
+          :class="{ file: it.kind === 'file', inactive: it.kind === 'file' && it.attachment.status !== 'ACTIVE' }"
           @click="it.kind === 'dir' ? enter(it) : downloadFile(it.attachment)"
         >
           <el-icon
@@ -135,6 +143,8 @@ type Item = DirItem | FileItem
 const rows = ref<Attachment[]>([])
 const crumbs = ref<{ key: string; name: string }[]>([])
 const loading = ref(false)
+// 附件版本化（2026-08-19）：默认只看有效版本（同名重传后旧版 INACTIVE），切"全部"可回查历史
+const activeOnly = ref(true)
 const downloadingId = ref<null | string>(null)
 const previewVisible = ref(false)
 const previewAttachment = ref<Attachment | null>(null)
@@ -167,9 +177,11 @@ function segmentName(seg: string, att: Attachment): { name: string; idHint?: str
 }
 
 const view = computed<Item[]>(() => {
+  // 版本化视角：activeOnly 时只统计/展示 ACTIVE（同名重传的旧版 INACTIVE 仅在全量模式下回查）
+  const base = activeOnly.value ? rows.value.filter(a => a.status === 'ACTIVE') : rows.value
   if (!crumbs.value.length) {
     const count = { minio: 0, local: 0 }
-    for (const att of rows.value) count[storageOf(att)]++
+    for (const att of base) count[storageOf(att)]++
     return (['minio', 'local'] as const)
       .filter(k => count[k] > 0)
       .map(k => ({
@@ -184,7 +196,7 @@ const view = computed<Item[]>(() => {
   const path = crumbs.value.slice(1).map(c => c.key)
   const dirs = new Map<string, DirItem>()
   const files: FileItem[] = []
-  for (const att of rows.value) {
+  for (const att of base) {
     if (storageOf(att) !== storage) continue
     const segs = segsOf(att)
     if (segs.length < depth + 1) continue
@@ -269,6 +281,8 @@ onMounted(() => load())
 .row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 6px; cursor: pointer; }
 .row:hover { background: var(--ha-primary-muted, rgba(124, 58, 237, 0.08)); }
 .row.file { cursor: default; }
+/* 历史版本（INACTIVE/DELETED）灰显：仅在全量模式下回查展示 */
+.row.inactive { opacity: 0.55; }
 .icon { color: var(--ha-muted); font-size: 16px; flex-shrink: 0; }
 .icon.dir { color: var(--ha-primary, #409eff); }
 .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }

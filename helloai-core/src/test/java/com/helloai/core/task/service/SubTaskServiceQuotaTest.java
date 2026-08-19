@@ -15,6 +15,7 @@ import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.ReviewRecordMapper;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
 import com.helloai.core.task.service.impl.SubTaskServiceImpl;
+import com.helloai.core.system.service.AttachmentService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -63,6 +64,9 @@ class SubTaskServiceQuotaTest {
     @Mock private TaskTimelineService taskTimelineService;
     @Mock private AgentMapper agentMapper;
     @Mock private ConcurrencyQuotaService concurrencyQuotaService;
+    @Mock private AttachmentService attachmentService;
+    @SuppressWarnings("unchecked")
+    @Mock private org.springframework.beans.factory.ObjectProvider<AttachmentService> attachmentServiceProvider;
 
     private SubTaskService subTaskService;
     private AgentDispatchProperties dispatchProps;
@@ -75,7 +79,7 @@ class SubTaskServiceQuotaTest {
                 agentOutboxService, agentInboxService, agentService,
                 heartbeatService, reviewRecordMapper, implicitScoreCalculator,
                 rewardService, applicationEventPublisher, taskTimelineService,
-                agentMapper, dispatchProps, concurrencyQuotaService));
+                agentMapper, dispatchProps, concurrencyQuotaService, attachmentServiceProvider));
     }
 
     private void stubPendingSubTask() {

@@ -77,7 +77,7 @@ class TaskDeliverableServiceTest {
         when(subTaskService.lambdaQuery()).thenReturn(subTaskChain);
         when(subTaskChain.eq(any(), any())).thenReturn(subTaskChain);
         when(subTaskChain.orderByAsc(org.mockito.ArgumentMatchers.<SFunction<SubTask, ?>>any())).thenReturn(subTaskChain);
-        when(attachmentService.list(anyLong())).thenReturn(List.of());
+        when(attachmentService.listActive(anyLong())).thenReturn(List.of());
         when(reviewRecordMapper.selectList(any())).thenReturn(List.of());
     }
 
@@ -168,8 +168,8 @@ class TaskDeliverableServiceTest {
         older.setId(20L);
         older.setFileName("架构梳理.md");
         older.setStorageUrl("local://b/11/old-架构梳理.md");
-        // attachmentService.list 按创建时间倒序：最新在前
-        when(attachmentService.list(11L)).thenReturn(List.of(newer, older));
+        // attachmentService.listActive 按创建时间倒序：最新在前
+        when(attachmentService.listActive(11L)).thenReturn(List.of(newer, older));
         when(attachmentService.isContentLoadable(any())).thenReturn(true);
         when(artifactStorage.load(newer.getStorageUrl()))
                 .thenReturn("最新一轮附件内容".getBytes(StandardCharsets.UTF_8));
@@ -192,7 +192,7 @@ class TaskDeliverableServiceTest {
         broken.setId(21L);
         broken.setFileName("架构梳理.md");
         broken.setStorageUrl("local://b/11/gone-架构梳理.md");
-        when(attachmentService.list(11L)).thenReturn(List.of(broken));
+        when(attachmentService.listActive(11L)).thenReturn(List.of(broken));
         when(attachmentService.isContentLoadable(any())).thenReturn(true);
         when(artifactStorage.load(any())).thenThrow(new BizException(404, "产物文件不存在"));
 

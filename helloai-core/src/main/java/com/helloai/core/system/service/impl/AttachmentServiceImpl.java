@@ -39,6 +39,11 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
     /**
      * 注册产物附件元数据。
      * 仅允许对归属于 agentId 的 SubTask 上传附件。
+     *
+     * <p>版本语义（2026-08-19）：同子任务同名文件的旧 ACTIVE 版本自动置
+     * INACTIVE，保证任意文件名至多一条有效版本——核验/依赖装载/交付物打包
+     * 只认最新版，杜绝"同名多版本并存导致 Reviewer 反复打回"的死循环；
+     * 历史版本保留（状态回查 + 内容直读不受影响）。</p>
      */
     @Transactional(rollbackFor = Exception.class)
     @Override
@@ -51,6 +56,17 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
         }
         if (!agentId.equals(subTask.getAssignedAgentId())) {
             throw new BizException("无权为该子任务上传附件: subTaskId=" + subTaskId + ", agentId=" + agentId);
+        }
+
+        // 同子任务同名 ACTIVE 旧版批量去活（含历史多版本），新注册版本成为唯一有效版
+        boolean superseded = lambdaUpdate()
+                .eq(Attachment::getSubTaskId, subTaskId)
+                .eq(Attachment::getFileName, fileName)
+                .eq(Attachment::getStatus, AttachmentStatus.ACTIVE)
+                .set(Attachment::getStatus, AttachmentStatus.INACTIVE)
+                .update();
+        if (superseded) {
+            log.info("附件同名去活: subTaskId={}, fileName={}", subTaskId, fileName);
         }
 
         Attachment attachment = new Attachment();
@@ -73,7 +89,8 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
      * 按子任务 ID 查询附件列表（按创建时间倒序）。
      *
      * <p>{@code subTaskId} 为空时返回所有附件；逻辑删除由 {@code @TableLogic}
-     * 自动过滤。</p>
+     * 自动过滤。含全部状态（ACTIVE/INACTIVE/DELETED），供附件管理页
+     * 历史版本回查使用。</p>
      *
      * @param subTaskId 可选子任务 ID 过滤；null 表示不限
      * @return 附件列表（绝不返回 null）
@@ -84,34 +101,83 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
                 .eq(subTaskId != null, Attachment::getSubTaskId, subTaskId)
                 .orderByDesc(Attachment::getCreateTime)
                 .list();
-        if (result == null || result.isEmpty()) {
-            return result != null ? result : Collections.emptyList();
+        fillBrowseTitles(result);
+        return result;
+    }
+
+    /**
+     * 按子任务 ID 查询有效（ACTIVE）附件列表（按创建时间倒序）。
+     *
+     * <p>平台可信视角：{@link #register} 已保证同名文件至多一条 ACTIVE 记录，
+     * 因此核验证据、上游产出装载、交付物打包等处直接使用本方法即可
+     * 拿到"当前有效版本"，无需自行去重。</p>
+     *
+     * @param subTaskId 子任务 ID（null 表示不限）
+     * @return 有效附件列表（绝不返回 null）
+     */
+    @Override
+    public List<Attachment> listActive(Long subTaskId) {
+        List<Attachment> result = lambdaQuery()
+                .eq(subTaskId != null, Attachment::getSubTaskId, subTaskId)
+                .eq(Attachment::getStatus, AttachmentStatus.ACTIVE)
+                .orderByDesc(Attachment::getCreateTime)
+                .list();
+        fillBrowseTitles(result);
+        return result;
+    }
+
+    /**
+     * 驳回打回时将该子任务全部有效（ACTIVE）附件批量置为 INACTIVE。
+     *
+     * <p>与 {@link #register} 同名去活互补：register 解决"再次上传同名时旧版失效"，
+     * 本方法解决"被打回但尚未重新上传时旧证据仍 ACTIVE"——核验证据 /
+     * 上游装载 / 交付物打包统一走 {@link #listActive} 后，打回即失效、
+     * 重新上传最新版才恢复，杜绝旧版反复进入核验造成死循环。</p>
+     */
+    @Override
+    public void invalidateBySubTask(Long subTaskId) {
+        if (subTaskId == null) {
+            return;
         }
-        // 回填主任务/子任务标题（transient 字段，不落库），供附件管理按层级浏览时展示名称
+        boolean updated = lambdaUpdate()
+                .eq(Attachment::getSubTaskId, subTaskId)
+                .eq(Attachment::getStatus, AttachmentStatus.ACTIVE)
+                .set(Attachment::getStatus, AttachmentStatus.INACTIVE)
+                .update();
+        if (updated) {
+            log.info("附件打回失效: subTaskId={}", subTaskId);
+        }
+    }
+
+    /** 回填主任务/子任务标题（transient 字段，不落库），供附件管理按层级浏览时展示名称。 */
+    private void fillBrowseTitles(List<Attachment> result) {
+        if (result == null || result.isEmpty()) {
+            return;
+        }
         Set<Long> subTaskIds = result.stream().map(Attachment::getSubTaskId)
                 .filter(Objects::nonNull).collect(Collectors.toSet());
-        if (!subTaskIds.isEmpty()) {
-            Map<Long, SubTask> subTaskMap = subTaskService.listByIds(subTaskIds).stream()
-                    .collect(Collectors.toMap(SubTask::getId, s -> s, (a, b) -> a));
-            Set<Long> taskIds = subTaskMap.values().stream().map(SubTask::getTaskId)
-                    .filter(Objects::nonNull).collect(Collectors.toSet());
-            Map<Long, Task> taskMap = taskIds.isEmpty() ? Collections.emptyMap()
-                    : taskService.listByIds(taskIds).stream()
-                            .collect(Collectors.toMap(Task::getId, t -> t, (a, b) -> a));
-            for (Attachment att : result) {
-                SubTask subTask = subTaskMap.get(att.getSubTaskId());
-                if (subTask == null) {
-                    continue;
-                }
-                att.setTaskId(subTask.getTaskId());
-                att.setSubTaskTitle(subTask.getTitle());
-                Task task = taskMap.get(subTask.getTaskId());
-                if (task != null) {
-                    att.setTaskTitle(task.getTitle());
-                }
+        if (subTaskIds.isEmpty()) {
+            return;
+        }
+        Map<Long, SubTask> subTaskMap = subTaskService.listByIds(subTaskIds).stream()
+                .collect(Collectors.toMap(SubTask::getId, s -> s, (a, b) -> a));
+        Set<Long> taskIds = subTaskMap.values().stream().map(SubTask::getTaskId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<Long, Task> taskMap = taskIds.isEmpty() ? Collections.emptyMap()
+                : taskService.listByIds(taskIds).stream()
+                        .collect(Collectors.toMap(Task::getId, t -> t, (a, b) -> a));
+        for (Attachment att : result) {
+            SubTask subTask = subTaskMap.get(att.getSubTaskId());
+            if (subTask == null) {
+                continue;
+            }
+            att.setTaskId(subTask.getTaskId());
+            att.setSubTaskTitle(subTask.getTitle());
+            Task task = taskMap.get(subTask.getTaskId());
+            if (task != null) {
+                att.setTaskTitle(task.getTitle());
             }
         }
-        return result;
     }
 
     /**

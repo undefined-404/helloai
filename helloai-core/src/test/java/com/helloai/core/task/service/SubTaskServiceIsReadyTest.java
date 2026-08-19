@@ -13,6 +13,7 @@ import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.ReviewRecordMapper;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
 import com.helloai.core.task.service.impl.SubTaskServiceImpl;
+import com.helloai.core.system.service.AttachmentService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -55,7 +56,9 @@ class SubTaskServiceIsReadyTest {
                 mock(ReviewRecordMapper.class), mock(ImplicitScoreCalculator.class),
                 mock(RewardService.class), mock(ApplicationEventPublisher.class),
                 mock(TaskTimelineService.class), mock(AgentMapper.class),
-                new AgentDispatchProperties(), mock(ConcurrencyQuotaService.class));
+                new AgentDispatchProperties(), mock(ConcurrencyQuotaService.class),
+                // §6.104 打回失效：ObjectProvider mock 不返任何 bean，getIfAvailable 返回 null 内部判空跳过
+                mock(org.springframework.beans.factory.ObjectProvider.class));
         subTaskService = spy(real);
         // lambdaQuery 链式 mock：绕开无 Spring 上下文时的 baseMapper 依赖
         lenient().doReturn(queryChain).when(subTaskService).lambdaQuery();

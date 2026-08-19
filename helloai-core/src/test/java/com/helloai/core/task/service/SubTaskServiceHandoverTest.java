@@ -13,6 +13,7 @@ import com.helloai.core.task.mapper.ReviewRecordMapper;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
 import com.helloai.core.task.service.impl.SubTaskServiceImpl;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.core.system.service.AttachmentService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -20,6 +21,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.List;
@@ -32,6 +36,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
@@ -43,6 +48,7 @@ import static org.mockito.Mockito.when;
  * 换人改派补发 sub_task.reassigned / 回收补发 sub_task.unassigned / 初始分配与原地保留不通知。
  */
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 @DisplayName("SubTaskService 执行者变更撤销通知（A0-1）")
 class SubTaskServiceHandoverTest {
 
@@ -61,6 +67,8 @@ class SubTaskServiceHandoverTest {
     @Mock private TaskTimelineService taskTimelineService;
     @Mock private AgentMapper agentMapper;
     @Mock private ConcurrencyQuotaService concurrencyQuotaService;
+    @Mock private AttachmentService attachmentService;
+    @Mock private ObjectProvider<AttachmentService> attachmentServiceProvider;
 
     private SubTaskService subTaskService;
 
@@ -72,8 +80,11 @@ class SubTaskServiceHandoverTest {
                 agentOutboxService, agentInboxService, agentService,
                 heartbeatService, reviewRecordMapper, implicitScoreCalculator,
                 rewardService, applicationEventPublisher, taskTimelineService,
-                agentMapper, dispatchProps, concurrencyQuotaService));
+                agentMapper, dispatchProps, concurrencyQuotaService, attachmentServiceProvider));
         doReturn(true).when(subTaskService).updateById(any(SubTask.class));
+        // §6.104 打回失效：让 ObjectProvider 返回 mock，便于断言 invalidateBySubTask 被调
+        //（类级 @MockitoSettings(strictness = Strictness.LENIENT) 已开启，无需 Mockito.lenient()）
+        when(attachmentServiceProvider.getIfAvailable()).thenReturn(attachmentService);
     }
 
     private SubTask subTask(SubTaskStatus status, Long assignedAgentId) {
@@ -165,6 +176,8 @@ class SubTaskServiceHandoverTest {
 
         verify(agentInboxService).send(eq(OLD_AGENT), anyString(), eq("sub_task.reassigned"),
                 anyString(), anyString(), eq("sub_task"), eq(SUB_TASK_ID), anyString());
+        // §6.104 打回失效：reworkFresh 触发附件 ACTIVE → INACTIVE
+        verify(attachmentService).invalidateBySubTask(SUB_TASK_ID);
     }
 
     @Test

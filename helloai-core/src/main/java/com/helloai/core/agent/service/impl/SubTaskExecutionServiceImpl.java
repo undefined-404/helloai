@@ -499,12 +499,13 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
     }
 
     /**
-     * 读取前置子任务的完成内容本体：物化附件（local:// 平台直读）优先，失败/无附件回退
+     * 读取前置子任务的完成内容本体：物化附件（local:// 平台直读，仅 ACTIVE 有效版本——
+     * 同名历史版本已由 {@code AttachmentService.register} 自动去活）优先，失败/无附件回退
      * {@code context.lastExecution.output} 原始产出；两者均无返回 null。
      */
     private String loadUpstreamContent(SubTask dep) {
         try {
-            List<Attachment> attachments = attachmentService.list(dep.getId());
+            List<Attachment> attachments = attachmentService.listActive(dep.getId());
             if (attachments != null) {
                 for (Attachment attachment : attachments) {
                     if (attachmentService.isContentLoadable(attachment)) {

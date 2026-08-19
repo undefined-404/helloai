@@ -52,7 +52,7 @@
 | `ack` | 每条收件箱消息处理完毕后确认（未 ack 的消息下次 pull 仍会出现） |
 | `claimSubTask` | 如有分配给你本人的规划类子任务，可原子认领 |
 | `heartbeat` | 周期上报心跳维持在线（建议 30 秒一次，超过 5 分钟无心跳会被判 OFFLINE） |
-| `uploadArtifact` | 登记规划产物附件元数据（如拆解方案文档；v2.7：平台可直读 `minio://` 附件；**文件内容先经 `POST /api/artifacts/upload` 上传（multipart + `Authorization: Bearer <API_KEY>`，平台转存 MinIO 并注册一步到位），不要直连 MinIO（服务器版公网不可达）**；已存在对象可直接带 `storageUrl` 仅登记） |
+| `uploadArtifact` | 登记规划产物附件元数据（如拆解方案文档；v2.7：平台可直读 `minio://` 附件；**文件内容先经 `POST /api/artifacts/upload` 上传（multipart + `Authorization: Bearer <API_KEY>`，平台转存 MinIO 并注册一步到位），不要直连 MinIO（服务器版公网不可达）**；已存在对象可直接带 `storageUrl` 仅登记）；**版本语义（§6.104）**：同名 fileName 自动版本化（最新为 ACTIVE，历史为 INACTIVE），被打回后旧 ACTIVE 自动失效，返工时须重新上传最新版 |
 | `submitResult` | 完成自己名下子任务后上交结果；重复提交须带相同 `resultId` 保证幂等 |
 | `reportBlocked` | 规划本身遇到外部依赖不可用等无法自行解决的阻塞时上报 |
 | `getDepsSummary` | 开工前主动拉取前置产出摘要（每条前置的标题/状态/执行摘要/内容本体）；无依赖时 `depCount=0` |

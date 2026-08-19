@@ -180,14 +180,16 @@ public class McpMcpServer {
     // ================================================================
 
     @Tool(name = "uploadArtifact", description = """
-            【何时使用】EXECUTOR 执行完子任务后，注册产物附件元数据。
+            【何时使用】EXECUTOR 执行完子任务后，登记产物附件元数据。
             【调用频率】每份产物调一次。
             【Gotchas】
-            - 本工具只注册 DB 元数据记录（attachment 表）；实际文件请先 PUT 到 MinIO 再把 storageUrl 传进来
+            - 文件内容场景：先走 POST /api/artifacts/upload（multipart/form-data + Authorization: Bearer <API_KEY>，参数 file + subTaskId + 可选 mimeType）上传文件内容，平台转存 MinIO 并注册附件一步到位，返回 {attachmentId, storageUrl}；服务器版 MinIO 仅绑定内网（公网不可达），不要直连 MinIO PUT 文件
+            - 本工具仅适用于「对象已在别处可访问」的登记场景：把 storageUrl 指向已可访问对象，只注册 DB 元数据记录（attachment 表），不传输文件内容
             - v2.7 起平台可直读 minio:// 附件（下载、执行证据核验均可直读）；storageUrl 建议按 {自身注册名}/{yyyy}/{MM}/{taskId}/{subTaskId}/{文件名} 组织
             - fileName 必填且非空；storageUrl 必填；mimeType / fileSize 选填
             - 只有自身分配的子任务（assigned_agent=agentId）才能成功上传
             - 参数约束（如 fileSize max）由 agent_mcp_server.param_constraints 强制
+            【版本语义（2026-08-19，§6.104）】同名 fileName 重复上传时，平台自动把历史 ACTIVE 版本置为 INACTIVE，最新版成为唯一有效版；被打回（REJECTED，自动核验驳回或人工驳回）后该子任务全部 ACTIVE 附件自动失效，返工时必须重新 uploadArtifact 上传最新版附件（旧版即使再次同名上传也不会复活，须用新版内容）。历史版本平台保留可在附件管理页回查。
             【相关工具】pullTasks、claimSubTask
             """)
     public McpToolService.UploadArtifactResult uploadArtifact(
@@ -196,7 +198,7 @@ public class McpMcpServer {
             @ToolParam(description = "文件名（含扩展名）", required = true) String fileName,
             @ToolParam(description = "MIME 类型（如 application/json、image/png）", required = false) String mimeType,
             @ToolParam(description = "文件大小（字节），选填", required = false) Long fileSize,
-            @ToolParam(description = "MinIO / S3 存储路径（已上传后），必填", required = true) String storageUrl,
+            @ToolParam(description = "已有可访问对象的存储地址（仅登记场景；文件内容场景请走 POST /api/artifacts/upload），必填", required = true) String storageUrl,
             @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
             @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
         // M4 鉴权：强制覆盖

@@ -114,7 +114,7 @@
 | `ack` | 每条收件箱消息处理完毕后确认（把 `read` 置为 true；未 ack 的消息下次 pull 仍会出现） |
 | `claimSubTask` | 主动原子认领一个 PENDING 子任务（同角色竞争，抢到才执行） |
 | `heartbeat` | 周期上报心跳维持在线（建议 30 秒一次，超过 5 分钟无心跳会被判 OFFLINE） |
-| `uploadArtifact` | 执行完子任务后登记产物附件元数据（v2.7：平台可直读 `minio://` 附件，支持证据核验与流式下载；**文件内容先经 `POST /api/artifacts/upload` 上传，平台转存 MinIO 并注册一步到位（见下方 🧭 提示）**；若对象已在别处可访问，可直接带 `storageUrl` 仅登记） |
+| `uploadArtifact` | 执行完子任务后登记产物附件元数据（v2.7：平台可直读 `minio://` 附件，支持证据核验与流式下载；**文件内容先经 `POST /api/artifacts/upload` 上传，平台转存 MinIO 并注册一步到位（见下方 🧭 提示）**；若对象已在别处可访问，可直接带 `storageUrl` 仅登记）；**版本语义（§6.104）**：同名 fileName 重复上传会自动把历史 ACTIVE 置 INACTIVE，最新一份为唯一有效版；被打回（REJECTED）后该子任务全部 ACTIVE 附件自动失效，返工必须重新上传最新版 |
 | `submitResult` | 完成子任务后上交执行结果（成功或失败）；重复提交须带相同 `resultId` 保证幂等 |
 | `reportBlocked` | 遇到外部依赖不可用 / 环境缺失等无法自行解决的阻塞时上报 |
 | `getDepsSummary` | 开工前主动拉取前置产出摘要（每条前置的标题/状态/执行摘要/内容本体），避免重复调研或遗漏上游结论；无依赖时 `depCount=0` |
@@ -666,6 +666,7 @@ if ($errs.Count -eq 0) { 'PARSE-OK' } else { $errs | ForEach-Object { $_.Message
 - 上线先 `checkIn` 拿租约；会话结束 `checkOut` 关租约。
 - 每次执行前**必须先查收件箱和获取规则**（`GET /api/rules/getMergedRules`，见 §0.2/§三）。
 - 收到返工（REWORK）时，先查 `/api/reviews?subTaskId=<id>` 了解具体问题再修复。
+- **返工时附件版本语义（§6.104）**：被打回后该子任务全部历史 ACTIVE 附件自动置 INACTIVE（平台可信视角核验只认最新 ACTIVE，旧版直接失效，不再进入下次核验 / 装载 / 打包）。**修正产出后必须重新 `uploadArtifact` 上传最新版附件**（同名 fileName 会自动覆盖旧 INACTIVE 成为唯一 ACTIVE，新 fileName 也可；旧版本可在附件管理页回查但不再参与判定）。仅修改本地文件后 `submitResult`（不上传新附件）= 旧内容继续被核验 = 打回循环。
 - 所有产出物放在子任务对应的工作目录下；提交前确认符合验收标准。
 - 不要操作不属于自己的子任务。
 - 遇到阻塞用 `reportBlocked`（MCP）或写 blocked 日志（REST），等待 Planner 协助。

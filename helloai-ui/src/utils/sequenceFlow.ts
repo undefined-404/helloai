@@ -13,8 +13,9 @@
 //    - dispatch_* / execution_command_* / poll_*  → SCH
 //    - execute_* / llm_call_* / result_discarded → EXT（按 agentId 解析执行 Agent 实例名）
 //    - review_* / auto_review_*                    → RVW
-//    - dead_letter（无 manual）                   → DLQ
-//    - dead_letter_manual_assign / trigger=manual → OPS
+//    - dead_letter / review_dead_letter（无 manual）→ DLQ
+//    - dead_letter_manual_assign / manual_intervention_required /
+//      manual_rework_reset / trigger=manual          → OPS
 // 3. 箭头方向：相邻事件对 → 一条箭头
 //    - 主动行为（dispatch / execute / submit / assign）→ 实线 "->>"：源 → 目标
 //    - 响应行为（success / failed / returned / end）   → 虚线 "-->>"：响应方 → 发起方
@@ -59,11 +60,13 @@ export function classifySwimlane(ev: TaskTimelineItem): Swimlane {
   const trigger = ev.payload?.trigger
   // 任务级：业务系统视角
   if (t.startsWith('task_plan_') || t === 'task_auto_completed') return 'BIZ'
-  // 人工介入（死信重派 / 手动触发）→ 人工运维台
-  if (t === 'sub_task_dead_letter_manual_assign') return 'OPS'
+  // 人工介入（死信重派 / 手动触发 / 人工介入标记 / 人工驳回改派）→ 人工运维台
+  if (t === 'sub_task_dead_letter_manual_assign'
+      || t === 'sub_task_manual_intervention_required'
+      || t === 'sub_task_manual_rework_reset') return 'OPS'
   if (trigger === 'manual' || trigger === 'dead_letter_redispatch') return 'OPS'
-  // 死信（系统判定）→ 死信队列
-  if (t === 'sub_task_dead_letter') return 'DLQ'
+  // 死信（系统判定：调度重分配熔断 / 核验返工熔断）→ 死信队列
+  if (t === 'sub_task_dead_letter' || t === 'sub_task_review_dead_letter') return 'DLQ'
   // 核验 → 核验 Agent
   if (t.startsWith('subtask_review_') || t.startsWith('sub_task_auto_review_')) return 'RVW'
   // 执行 → 执行 Agent
@@ -118,7 +121,26 @@ const LABEL: Record<string, string> = {
   subtask_review_thinking: '核验思考',
 
   sub_task_dead_letter: '进入死信',
-  sub_task_dead_letter_manual_assign: '人工指派'
+  sub_task_review_dead_letter: '核验熔断入死信',
+  sub_task_dead_letter_manual_assign: '人工指派',
+  sub_task_manual_intervention_required: '人工介入待处理',
+  sub_task_manual_rework_reset: '人工驳回改派'
+}
+
+// ── 人工介入原因映射（markManualIntervention 的 reason 值 → 人话）──
+const INTERVENTION_REASON: Record<string, string> = {
+  rework_limit: '核验返工达上限',
+  review_skip_execution_dense_no_capability: '提交者无本机执行能力',
+  review_skip_no_evidence: '交付物无物化证据',
+  fallback_skip_policy: '任务级策略禁止自动回退',
+  fallback_skip_policy_restricted: '回退目标不在白名单',
+  fallback_skip_execution_dense: '执行密集不可回退无能力Agent',
+  dispatch_skip_execution_dense: '执行密集不可分配无能力Agent'
+}
+
+function interventionReason(reason: unknown): string {
+  const r = String(reason || '')
+  return INTERVENTION_REASON[r] || r || '需人工处置'
 }
 
 function shortLabel(ev: TaskTimelineItem): string {
@@ -139,9 +161,23 @@ function inferNote(prev: TaskTimelineItem | undefined, cur: TaskTimelineItem, at
   if (t === 'sub_task_execution_command_poll_recovery') {
     return '巡检恢复遗漏指令'
   }
-  // 死信
+  // 死信（调度维度）
   if (t === 'sub_task_dead_letter') {
     return `熔断器打开（累计失败 ${p.failureCount || attempt} 次）`
+  }
+  // 死信（核验维度，2026-08-19 新增）：带返工计数，DLQ 泳道可回溯熔断原因
+  if (t === 'sub_task_review_dead_letter') {
+    const rc = p.reworkCount !== undefined ? String(p.reworkCount) : String(attempt)
+    const max = p.maxRework !== undefined ? String(p.maxRework) : '上限'
+    return `核验熔断（返工 ${rc}/${max} 次，等待人工打捞）`
+  }
+  // 人工介入标记（OPS 泳道）：reason 走映射人话化
+  if (t === 'sub_task_manual_intervention_required') {
+    return `人工介入：${interventionReason(p.reason)}`
+  }
+  // 人工驳回改派（OPS 泳道）：提示改派目标与原执行者重做语义
+  if (t === 'sub_task_manual_rework_reset') {
+    return `改派执行者并重置返工计数`
   }
   // 人工介入
   if (t === 'sub_task_dead_letter_manual_assign') {
@@ -222,7 +258,8 @@ function buildBlocks(events: TaskTimelineItem[], attempts: Map<string, number>, 
     const cur = events[i]
     const curLane = classifySwimlane(cur)
     // 检测连续多次「失败/熔断 → 重新生成指令」是否值得折叠为 loop
-    if (cur.eventType === 'sub_task_dead_letter') {
+    // 2026-08-19：核验熔断（sub_task_review_dead_letter）与调度熔断（sub_task_dead_letter）对称折叠
+    if (cur.eventType === 'sub_task_dead_letter' || cur.eventType === 'sub_task_review_dead_letter') {
       // 死信前置：合并自上一次 dead_letter 之后的所有失败/重派事件
       const loopMsgs: SequenceMessage[] = []
       const prev = i > 0 ? events[i - 1] : undefined

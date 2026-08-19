@@ -41,6 +41,7 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -263,6 +264,15 @@ class SubTaskReviewServiceTest {
                 eq(AgentRole.REVIEWER), any(), anyMap());
         // §6.52：返工达上限须写入人工介入标记（前端面板据此展示）
         verify(subTaskService).markManualIntervention(eq(SUB_TASK_ID), eq("rework_limit"), anyMap());
+        // 2026-08-19：核验返工熔断显式入死信（与调度维度 sub_task_dead_letter 对称），DLQ 泳道可回溯
+        ArgumentCaptor<Map> deadLetterPayload = ArgumentCaptor.forClass(Map.class);
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_review_dead_letter"),
+                eq(AgentRole.SYSTEM), isNull(), deadLetterPayload.capture());
+        assertThat(deadLetterPayload.getValue())
+                .containsEntry("reason", "rework_limit_exceeded")
+                .containsEntry("reworkCount", 3)
+                .containsEntry("maxRework", 3);
     }
 
     @Test
@@ -312,7 +322,7 @@ class SubTaskReviewServiceTest {
         attachment.setFileType("other");
         attachment.setFileSize(2048L);
         attachment.setStorageUrl("local://helloai-local/1/verify-order-expire.ps1");
-        when(attachmentService.list(SUB_TASK_ID)).thenReturn(List.of(attachment));
+        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(attachment));
         when(attachmentService.isContentLoadable(attachment)).thenReturn(true);
         when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
@@ -555,7 +565,7 @@ class SubTaskReviewServiceTest {
         external.setSubTaskId(SUB_TASK_ID);
         external.setFileName("verify-order-expire.ps1");
         external.setStorageUrl("minio://bucket/obj");
-        when(attachmentService.list(SUB_TASK_ID)).thenReturn(List.of(external));
+        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(external));
         when(attachmentService.isContentLoadable(external)).thenReturn(false);
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
@@ -582,11 +592,11 @@ class SubTaskReviewServiceTest {
                 Map.of("output", "脚本执行完成: PASS=12 FAIL=0 全绿")));
         when(subTaskService.getById(SUB_TASK_ID)).thenReturn(dense);
         // 无任何附件（物化缺失/失败场景，重查后仍无）
-        when(attachmentService.list(SUB_TASK_ID)).thenReturn(List.of());
+        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of());
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
-        verify(attachmentService, org.mockito.Mockito.times(2)).list(SUB_TASK_ID);
+        verify(attachmentService, org.mockito.Mockito.times(2)).listActive(SUB_TASK_ID);
         verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
         verify(subTaskService).markManualIntervention(
                 eq(SUB_TASK_ID), eq("review_skip_no_evidence"),
@@ -606,7 +616,7 @@ class SubTaskReviewServiceTest {
         attachment.setFileSize(1024L);
         attachment.setStorageUrl("local://helloai-local/1/api-docs.md");
         when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
-        when(attachmentService.list(SUB_TASK_ID)).thenReturn(List.of(attachment));
+        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(attachment));
         when(attachmentService.isContentLoadable(attachment)).thenReturn(true);
         when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
@@ -683,7 +693,7 @@ class SubTaskReviewServiceTest {
         att.setFileName(name);
         att.setFileType(type);
         att.setFileSize(size);
-        when(attachmentService.list(SUB_TASK_ID)).thenReturn(List.of(att));
+        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(att));
         when(attachmentService.isContentLoadable(att)).thenReturn(true);
         when(attachmentService.loadContent(id)).thenReturn(content);
         return att;
@@ -742,7 +752,7 @@ class SubTaskReviewServiceTest {
         Attachment b = attachmentWithId(504L, "b.log");
         Attachment c = attachmentWithId(505L, "c.log");
         Attachment d = attachmentWithId(506L, "d.log");
-        when(attachmentService.list(SUB_TASK_ID)).thenReturn(List.of(a, b, c, d));
+        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(a, b, c, d));
         for (Attachment att : List.of(a, b, c, d)) {
             when(attachmentService.isContentLoadable(att)).thenReturn(true);
         }
@@ -769,7 +779,7 @@ class SubTaskReviewServiceTest {
         external.setId(505L);
         external.setFileName("out.zip");
         external.setFileType("application/zip");
-        when(attachmentService.list(SUB_TASK_ID)).thenReturn(List.of(external));
+        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(external));
         when(attachmentService.isContentLoadable(external)).thenReturn(false);
         stubReviewerPass();
 
@@ -788,7 +798,7 @@ class SubTaskReviewServiceTest {
         att.setId(507L);
         att.setFileName("main.sh");
         att.setFileType("text/x-shellscript");
-        when(attachmentService.list(SUB_TASK_ID)).thenReturn(List.of(att));
+        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(att));
         when(attachmentService.isContentLoadable(att)).thenReturn(true);
         stubReviewerPass();
 
