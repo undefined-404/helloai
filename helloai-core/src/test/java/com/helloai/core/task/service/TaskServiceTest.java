@@ -1,5 +1,7 @@
 package com.helloai.core.task.service;
 
+import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapper;
+import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.agent.mapper.AgentExecutionRecordMapper;
 import com.helloai.core.agent.mapper.AgentInboxMapper;
@@ -9,7 +11,9 @@ import com.helloai.core.agent.mapper.ConversationMessageMapper;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.system.mapper.AttachmentMapper;
 import com.helloai.core.system.mapper.ModuleMapper;
+import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.entity.TaskTimeline;
 import com.helloai.core.task.mapper.ReviewRecordMapper;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.mapper.TaskTimelineMapper;
@@ -29,6 +33,9 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
@@ -68,12 +75,16 @@ class TaskServiceTest {
     private AgentMapper agentMapper;
     @Mock
     private AgentInboxService agentInboxService;
+    @Mock
+    private SubTaskService subTaskService;
+    @Mock
+    private LambdaQueryChainWrapper<SubTask> subTaskChain;
 
     private TaskService newSpyService() {
         return spy(new TaskServiceImpl(subTaskMapper, moduleMapper, reviewRecordMapper,
                 agentExecutionRecordMapper, agentInboxMapper, taskTimelineMapper,
                 attachmentMapper, conversationArchiveMapper, conversationMessageMapper,
-                agentMapper, agentInboxService));
+                agentMapper, agentInboxService, subTaskService));
     }
 
     private static Map<String, Object> policy() {
@@ -181,5 +192,71 @@ class TaskServiceTest {
 
         assertThat(result).isNull();
         verify(service, never()).updateById(any(Task.class));
+    }
+
+    @Test
+    @DisplayName("updateStatus CANCELLED：级联取消全部未终态子任务并记录 timeline")
+    void shouldCancelSubTasksWhenTaskCancelled() {
+        TaskService service = newSpyService();
+        Task existing = new Task();
+        existing.setId(7L);
+        existing.setStatus(TaskStatus.PENDING);
+        doReturn(existing).when(service).getById(7L);
+        doReturn(true).when(service).updateById(any(Task.class));
+
+        SubTask done = new SubTask();
+        done.setId(1L);
+        done.setStatus(SubTaskStatus.DONE);
+        SubTask pending = new SubTask();
+        pending.setId(2L);
+        pending.setStatus(SubTaskStatus.PENDING);
+        SubTask cancelled = new SubTask();
+        cancelled.setId(3L);
+        cancelled.setStatus(SubTaskStatus.CANCELLED);
+        doReturn(subTaskChain).when(subTaskService).lambdaQuery();
+        doReturn(subTaskChain).when(subTaskChain).eq(any(), any());
+        doReturn(List.of(done, pending, cancelled)).when(subTaskChain).list();
+
+        Task result = service.updateStatus(7L, TaskStatus.CANCELLED);
+
+        assertThat(result.getStatus()).isEqualTo(TaskStatus.CANCELLED);
+        // 仅未终态子任务被级联取消（DONE/CANCELLED 跳过）
+        verify(subTaskService).changeStatus(eq(2L), eq(SubTaskStatus.CANCELLED), isNull(), anyMap());
+        verify(subTaskService, never()).changeStatus(eq(1L), any(), any(), any());
+        verify(subTaskService, never()).changeStatus(eq(3L), any(), any(), any());
+        ArgumentCaptor<TaskTimeline> tlCaptor = ArgumentCaptor.forClass(TaskTimeline.class);
+        verify(taskTimelineMapper).insert(tlCaptor.capture());
+        assertThat(tlCaptor.getValue().getEventType()).isEqualTo("task_cancelled");
+        assertThat(tlCaptor.getValue().getPayload()).containsEntry("cancelledSubTaskCount", 1);
+    }
+
+    @Test
+    @DisplayName("updateStatus 非 CANCELLED：仅改状态，不级联子任务、不写 timeline")
+    void shouldNotCancelSubTasksForOtherStatus() {
+        TaskService service = newSpyService();
+        Task existing = new Task();
+        existing.setId(8L);
+        existing.setStatus(TaskStatus.PENDING);
+        doReturn(existing).when(service).getById(8L);
+        doReturn(true).when(service).updateById(any(Task.class));
+
+        Task result = service.updateStatus(8L, TaskStatus.DONE);
+
+        assertThat(result.getStatus()).isEqualTo(TaskStatus.DONE);
+        verify(subTaskService, never()).lambdaQuery();
+        verify(taskTimelineMapper, never()).insert(any(TaskTimeline.class));
+    }
+
+    @Test
+    @DisplayName("updateStatus：任务不存在返回 null，不触发落库与级联")
+    void shouldReturnNullWhenStatusUpdateTaskMissing() {
+        TaskService service = newSpyService();
+        doReturn(null).when(service).getById(999L);
+
+        Task result = service.updateStatus(999L, TaskStatus.CANCELLED);
+
+        assertThat(result).isNull();
+        verify(service, never()).updateById(any(Task.class));
+        verify(subTaskService, never()).lambdaQuery();
     }
 }
