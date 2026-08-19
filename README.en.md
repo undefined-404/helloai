@@ -5,7 +5,7 @@
 #### Introduction
 
 - **HelloAI** is an AI Agent collaboration & scheduling platform built on the Spring AI MCP protocol. Once an external AI (Qoder, Trae, Codex CLI, Claude Code, etc.) is onboarded with one click, the platform dispatches business tasks to them just like scheduling microservices, and reaps the execution results.
-- The platform communicates with Agents via **MCP SSE** (`/mcp/sse`), and achieves sub-second task wake-up through a **doorbell SSE long-lived connection** (`/api/agents/doorbell/sse`) — when an external AI receives the ring signal, it actively calls MCP tools to pick up work, replacing the legacy poll-on-a-timer pattern.
+- The platform communicates with Agents via **MCP SSE** (`/mcp/sse`); external Agents perceive new tasks by polling their inbox with `pullTasks` (recommended every ~30s). A **doorbell SSE push channel** (`/api/agents/doorbell/sse`) was fully built but is **shelved** (2026-08-07) — external AI clients are one-way executors that cannot consume server push; the code stays running for future Agent-side daemon reuse.
 - Runtime red-line: **JDK 17**. No Spring AI 2.0 / Spring Boot 4.0 upgrades unless the project explicitly opens a JDK upgrade window.
 
 **Core capabilities**
@@ -15,7 +15,7 @@
 | Dual-mode planner dialogue | CHAT free chat / CLARIFY structured clarification (option cards + progress bar, one-click task creation from the final draft); intent words trigger an in-dialogue confirmation popup, or type the `/planner` command (optionally with extra text) to switch explicitly. Optional **web search** — session-level switch, auto-searches every round in either mode (Bocha / Tavily / DeepSeek-native providers + direct URL fetch with SPA metadata fallback + collapsible verification bar showing query/sources/latency; failures degrade silently without blocking the dialogue) |
 | One-click onboarding | After registration, an external AI receives an auto-generated skills brief; following it walks the AI through connect / check-in / pick-task end-to-end |
 | Duty check-in | `checkIn` / `checkOut` duty lease (`ACTIVE` / `CLOSED` / `EXPIRED` state machine + auto expiration scan); on-duty Agents are dispatched first |
-| Doorbell wake-up | Server → Agent unidirectional SSE long-lived connection, sub-second ring on new tasks; connection only allowed after check-in, auto hang-up on check-out or lease expiry |
+| Task perception | External Agents poll the inbox via `pullTasks` (recommended every ~30s) as the only perception channel; the doorbell SSE push channel is shelved (2026-08-07) and kept running for future reuse |
 | MCP tool protocol | `pullTasks` / `claimSubTask` / `submitResult` / `reportBlocked` / `heartbeat` / `uploadArtifact` and others — tool count is whatever `tools/list` actually returns |
 | Elastic scheduling | External-first + idle-first + LLM fallback; external Agents that fail consecutively beyond the threshold auto-fall-back to in-platform `API_KEY_LLM`; same-role replacement |
 | Reliable delivery | Transactional Outbox (`PENDING` / `SENT` / `CONFIRMED` / `FAILED` four states) + publisher confirms + timeout-driven retry |
@@ -97,8 +97,8 @@ After backend startup:
 **External AI Agent quick onboarding**
 
 1. In the admin console create an Agent (role `EXECUTOR`, type `CLI_CLIENT`) and copy the auto-generated skills brief.
-2. Paste the skills brief into the external AI (e.g. Qoder / Trae); the AI will automatically complete: register & auth → MCP connect → `checkIn` → establish doorbell long-lived connection.
-3. After the platform dispatches a task, the AI receives a doorbell ring and follows the skills rules: `pullTasks` → `claimSubTask` → execute → `submitResult`.
+2. Paste the skills brief into the external AI (e.g. Qoder / Trae); the AI will automatically complete: register & auth → MCP connect → `checkIn` → poll `pullTasks` for duty.
+3. After the platform dispatches a task, the AI notices a new inbox message via `pullTasks` and follows the skills rules: `claimSubTask` → execute → `submitResult`.
 4. Exception path: if execution is blocked, call `reportBlocked` (with evidence chain); if the platform times out without submission, it auto-compensates and re-dispatches to another on-duty Agent of the same role.
 
 **Verification & regression scripts**
@@ -109,8 +109,8 @@ All verification scripts live in `scripts/powershell/` (Windows) and `scripts/sh
 |---|---|
 | `verify-mcp-auth.*` | MCP auth regression |
 | `verify-mcp-e2e.*` | MCP end-to-end business loop |
-| `verify-onboarding*.ps1` | External Agent five-step onboarding (register / check-in / doorbell / pull / submit) |
-| `verify-doorbell-e2e.ps1` | Doorbell long-lived connection (connect / handshake / expiry hang-up) |
+| `verify-onboarding*.ps1` | External Agent five-step onboarding (register / check-in / pull / submit) |
+| `verify-doorbell-e2e.ps1` | Doorbell long-lived connection (shelved 2026-08-07; code retained) |
 | `verify-agenthub-duty-e2e.ps1` | Duty lease (checkIn / checkOut / expiry scan / STRICT exclusive) |
 | `verify-poller-e2e.ps1` | DB Poller fallback consumption |
 

@@ -35,7 +35,7 @@ HelloAI 基于 **Spring Boot + Spring AI MCP 协议**实现多 AI 厂商（Qoder
 - **外部 CLI Agent**：Qoder / Trae / Codex CLI / Claude Code 等经 MCP 一键接入，实测可用
 - **弹性策略**：外部优先 + 空闲优先 + 值班优先（STRICT 独占）+ LLM 保底，策略可配置（`preferExternal` / `requireIdle` / `forceAccessType` / `autoAssignOnCreate`）
 - **值班打卡**：外部 Agent `checkIn`/`checkOut` 值班租约（ACTIVE/CLOSED/EXPIRED 状态机 + 到期自动扫描），值班 Agent 优先派单
-- **门铃秒级唤醒**：服务端 → Agent 的 SSE 单向长连接（`/api/agents/doorbell/sse`），新任务秒级响铃，替代传统定时轮询；下班/租约到期自动断铃
+- **任务感知轮询**：外部 Agent 靠 `pullTasks` 周期轮询收件箱感知新任务（建议 30s 一次）；服务端门铃 SSE 推送通道已交付但已搁置（外部 Agent 为单向执行器无法消费推送，代码保留运行，待未来 Agent 端常驻 daemon 落地后可复用）
 
 ### 3. 上下文连续性保障
 - **Task Running Spec 结构化运行规范**：每个任务持有 Baseline（目标/约束/DAG 结构）+ 各子任务执行的结构化摘要（EXECUTION_RECORD）+ 系统自动编译的全局上下文，统一注入执行 Prompt
@@ -100,7 +100,7 @@ HelloAI 基于 **Spring Boot + Spring AI MCP 协议**实现多 AI 厂商（Qoder
 │   │ 质量审核    │   │ 多轮循环  │   │ + 交付物 zip 下载      │    │
 │   └────────────┘   └──────────┘   └──────────────────────┘    │
 └──────────────────────────────────────────────────────────────┘
-           │ MCP（/mcp/sse）            │ 门铃 SSE（秒级唤醒）
+           │ MCP（/mcp/sse）            │ pullTasks 轮询（30s）
 ┌───────────────────────────┐   ┌────────────────────────────┐
 │ 平台内 API_KEY_LLM Agent   │   │ 外部 CLI Agent             │
 │ （DeepSeek 等 API-Key）    │   │ Qoder / Trae / Codex / CC   │
@@ -115,7 +115,7 @@ HelloAI 基于 **Spring Boot + Spring AI MCP 协议**实现多 AI 厂商（Qoder
 **关键通道口径**
 
 - MCP SSE（`/mcp/sse` + `/mcp/messages`）是外部 Agent 的唯一主协议通道；REST `tools/list` / `tools/call` 为兼容保留
-- 门铃 SSE（`/api/agents/doorbell/sse`）是服务端 → Agent 的单向唤醒信号，先打卡才允许建连；门铃丢失无损回退轮询
+- 任务感知：外部 Agent 以 `pullTasks` 轮询收件箱为唯一感知通道（建议 30s）；门铃 SSE（`/api/agents/doorbell/sse`）已搁置（2026-08-07，外部 Agent 无法消费平台推送，代码保留运行待复用）
 - MCP 工具集：`pullTasks` / `ack` / `claimSubTask` / `heartbeat` / `uploadArtifact` / `submitResult` / `reportBlocked` / `getAgentStatus` / `checkIn` / `checkOut`，工具数量以 `tools/list` 实际返回为准
 
 ---
@@ -132,7 +132,7 @@ HelloAI 基于 **Spring Boot + Spring AI MCP 协议**实现多 AI 厂商（Qoder
 | 消息队列 | RabbitMQ | 3.12（publisher confirms / DLX / 手动 ACK） |
 | 对象存储 | MinIO + 本地物化存储 | `minio://` 默认 / `local://` 兜底（v2.7 起 minio:// 附件平台可直读） |
 | 弹性 | Resilience4j CircuitBreaker | — |
-| 协议 | MCP（SSE）/ 门铃 SSE 长连接 | Spring AI MCP Server |
+| 协议 | MCP（SSE）主通道 / 门铃 SSE 长连接（已搁置） | Spring AI MCP Server |
 | 前端 | Vue 3 + TypeScript + Vite + Element Plus | + ECharts / Mermaid |
 | 监控 | Spring Boot Actuator | health / metrics / circuitbreakers |
 | 部署 | Docker Compose + Nginx | 见 `docker-compose.yml` / `docker-compose.server.yml` |
@@ -225,8 +225,8 @@ npm run dev
 
 ### 外部 AI Agent 快速接入
 1. 管理端创建 Agent（角色 EXECUTOR，类型 CLI_CLIENT），复制一键生成的 SKILL 说明；
-2. 在外部 AI（如 Qoder / Trae）中粘贴执行该 SKILL，AI 将自动完成：注册鉴权 → MCP 连接 → `checkIn` 打卡 → 建立门铃长连接；
-3. 平台派单后 AI 收到门铃信号，按 SKILL 规则 `pullTasks` → `claimSubTask` → 执行 → `submitResult`；
+2. 在外部 AI（如 Qoder / Trae）中粘贴执行该 SKILL，AI 将自动完成：注册鉴权 → MCP 连接 → `checkIn` 打卡 → 周期 `pullTasks` 轮询值守；
+3. 平台派单后 AI 经 `pullTasks` 轮询感知新消息，按 SKILL 规则 `claimSubTask` → 执行 → `submitResult`；
 4. 异常路径：执行受阻调 `reportBlocked`（带证据链）；超时未提交由平台自动补偿并改派同角色值班 Agent。
 
 ---
@@ -259,7 +259,7 @@ npm run dev
 - [x] 多轮审核-修正机制
 - [x] 可视化依赖图 / 时间线 / 时序图
 - [x] 弹性调度（外部优先 + 空闲优先 + 值班优先 + LLM 保底 + 熔断降级）
-- [x] MCP 外部 Agent 接入 + 值班打卡 + 门铃秒级唤醒
+- [x] MCP 外部 Agent 接入 + 值班打卡 + 任务感知轮询（门铃 SSE 已交付后搁置）
 - [x] 值班租约增强（动态 TTL 自适应 / concurrency 预扣）
 - [x] 可靠投递（Outbox 四态 + publisher confirms + 三层幂等 + 死信人工兜底）
 - [x] 报告生成与交付物（四态防重最终报告 + zip 下载 + 产出物化 + 附件版本管理：同名去活 / 打回失效 / 历史回查）
