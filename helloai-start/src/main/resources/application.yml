@@ -13,7 +13,7 @@ spring:
     exclude: org.springframework.ai.model.deepseek.autoconfigure.DeepSeekChatAutoConfiguration
   # === 默认激活 local 环境（本地 Docker），切换到 dev 使用 spring.profiles.active=dev ===
   profiles:
-    active: dev
+    active: local
   # === MCP Server（v2.4 §3.1 / §9 spring-ai 路线 C） ===
   # spring-ai 1.0 GA 默认 sse-endpoint=/sse（短路径），与 v2.4 文档约定的 /mcp/sse 路径不一致
   # 显式覆盖到 v2.4 路径，确保 Qoder/Trae 按文档配置可直连
@@ -110,6 +110,16 @@ helloai:
   # 每轮对话 LLM 前都会 active()，窗口内同一 Agent 只做一次完整双写，消除 DB 行锁排队与写放大。
   heartbeat:
     active-throttle-ms: 30000
+  # 拆解异步化改造：任务拆解专用线程池（plannerDecomposeExecutor）参数外置。
+  # decompose 提交即返回，LLM 拆解段异步执行；队列满按 AbortPolicy 拒绝并提示稍后重试。
+  planner:
+    decompose:
+      core-pool-size: 2
+      max-pool-size: 4
+      queue-capacity: 20
+      # PLANNING 超时回收阈值（分钟）：PlanningTimeoutTask 按 update_time 扫描卡死任务回退 PENDING。
+      # 最坏拆解耗时约 4 分钟（排队 60s + 连接 5s + 读取 180s），默认 10 分钟余量充足。
+      planning-timeout-minutes: 10
   # Phase 2B 调度策略 3：外部优先 / 空闲优先 / 平台内 LLM 保底
   dispatch:
     auto-assign-on-create: false
@@ -254,6 +264,11 @@ logging:
     com.helloai: INFO
     com.helloai.core: DEBUG
     com.helloai.job: INFO
+    # §6.110 高频轮询 Mapper SQL 日志治理：poller(1s)/outbox relay(1s)/outbox 补偿(15s)
+    # 三个轮询任务每轮都打 selectList DEBUG 刷屏，调高到 INFO；业务链路 Mapper SQL 日志保留
+    com.helloai.core.agent.mapper.AgentExecutionRecordMapper: INFO
+    com.helloai.core.agent.mapper.AgentCommandOutboxEventMapper: INFO
+    com.helloai.core.agent.mapper.AgentOutboxEventMapper: INFO
 
 # === Resilience4j 熔断降级（v2.4 §4.5） ===
 resilience4j:
