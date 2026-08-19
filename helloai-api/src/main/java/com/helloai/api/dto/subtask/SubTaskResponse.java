@@ -7,6 +7,7 @@ import lombok.Data;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 
 @Data
 public class SubTaskResponse {
@@ -29,6 +30,8 @@ public class SubTaskResponse {
     private String assignedAgentName;
     private String content;
     private Integer reworkCount;
+    /** 执行上下文（JSONB）：含人工介入标记 manualIntervention，§6.52 前端人工介入面板判定依赖此字段 */
+    private Map<String, Object> context;
     /** 依赖的子任务 id 列表（V27 新增，同 Task 内；空列表=无依赖） */
     @JsonSerialize(contentUsing = ToStringSerializer.class)
     private List<Long> dependsOn;

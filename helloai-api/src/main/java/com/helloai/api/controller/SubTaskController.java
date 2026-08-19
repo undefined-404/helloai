@@ -388,6 +388,7 @@ public class SubTaskController {
         response.setAssignedAgent(subTask.getAssignedAgentId());
         response.setContent(subTask.getContent());
         response.setReworkCount(subTask.getReworkCount());
+        response.setContext(subTask.getContext());
         response.setDependsOn(subTask.dependsOnIdList());
         response.setDeadline(subTask.getDeadline());
         response.setCompletedAt(subTask.getCompleteTime());
