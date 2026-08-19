@@ -25,6 +25,7 @@ import com.helloai.core.task.mapper.ReviewRecordMapper;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.mapper.TaskMapper;
 import com.helloai.core.task.mapper.TaskTimelineMapper;
+import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -56,6 +57,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     private final ConversationMessageMapper conversationMessageMapper;
     private final AgentMapper agentMapper;
     private final AgentInboxService agentInboxService;
+    private final SubTaskService subTaskService;
 
     // ══════════════════════════════════════════════════════════════
     //  基础 CRUD（§6.3 收口：条件构造与写操作归 Service）
@@ -114,6 +116,28 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         }
         task.setStatus(status);
         updateById(task);
+        // 停止任务（V48）：任务置 CANCELLED 时级联取消全部未终态子任务（含草案），
+        // 防止“任务已取消但子任务仍被自动派单/继续流转”的割裂；DONE/CANCELLED 跳过。
+        if (status == TaskStatus.CANCELLED) {
+            int cancelled = 0;
+            List<SubTask> subs = subTaskService.lambdaQuery()
+                    .eq(SubTask::getTaskId, id)
+                    .list();
+            for (SubTask st : subs) {
+                SubTaskStatus s = st.getStatus();
+                if (s != SubTaskStatus.DONE && s != SubTaskStatus.CANCELLED) {
+                    subTaskService.changeStatus(st.getId(), SubTaskStatus.CANCELLED, null,
+                            Map.of("cancelledByTask", "task_cancelled"));
+                    cancelled++;
+                }
+            }
+            TaskTimeline tl = new TaskTimeline();
+            tl.setTaskId(id);
+            tl.setEventType("task_cancelled");
+            tl.setRole(AgentRole.SYSTEM);
+            tl.setPayload(Map.of("cancelledSubTaskCount", cancelled));
+            taskTimelineMapper.insert(tl);
+        }
         log.info("任务状态变更: id={}, status={}", id, status);
         return task;
     }

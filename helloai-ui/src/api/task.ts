@@ -39,6 +39,10 @@ export const taskApi = {
   deleteTask(id: LongId, confirmTitle: string) {
     return request.delete<any, TaskRelatedCounts>(`/tasks/deleteById/${id}`, { data: { confirmTitle } })
   },
+  // V48 停止任务（软终止）: 任务置 CANCELLED + 级联取消全部未完成子任务，数据保留可回溯
+  stopTask(id: LongId) {
+    return request.post<any, Task>(`/tasks/updateStatusById/${id}`, { status: 'CANCELLED' })
+  },
   // V26 触发 AI 拆解（拆解异步化）: 仅 PENDING 可调，提交即返回（Task 转 PLANNING），
   // LLM 拆解段后台异步执行，草案经 planDrafts 轮询获取；快进快出，保留 llm 档位绰绰有余
   plan(id: LongId) {

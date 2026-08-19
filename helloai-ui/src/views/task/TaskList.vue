@@ -144,6 +144,15 @@
               重新发布
             </el-button>
             <el-button
+              v-if="row.status !== 'DONE' && row.status !== 'CANCELLED'"
+              size="small"
+              type="danger"
+              :loading="stoppingId === row.id"
+              @click="handleStop(row)"
+            >
+              停止
+            </el-button>
+            <el-button
               size="small"
               type="danger"
               plain
@@ -284,6 +293,25 @@ async function handleRepublish(row: Task) {
     ElMessage.success('已重新发布并通知 PLANNER')
     load()
   } catch { /* 拦截器已弹错 */ }
+}
+
+// ── V48 停止任务（软终止）：任务置 CANCELLED + 级联取消全部未完成子任务，数据保留可回溯 ──
+const stoppingId = ref<string | null>(null)
+async function handleStop(row: Task) {
+  try {
+    await ElMessageBox.confirm(
+      `停止后任务「${row.title}」及全部未完成子任务将置为已取消（数据保留，可回溯）。是否继续？`,
+      '停止任务',
+      { type: 'warning', confirmButtonText: '停止', cancelButtonText: '取消' }
+    )
+  } catch { return }
+  stoppingId.value = String(row.id)
+  try {
+    await taskApi.stopTask(String(row.id))
+    ElMessage.success(`已停止任务「${row.title}」`)
+    load()
+  } catch { /* 拦截器已弹错 */ }
+  finally { stoppingId.value = null }
 }
 
 // ── A1 新建/编辑任务（task=null 新建，否则编辑；编辑态回显 SLA/执行策略/技能）──
