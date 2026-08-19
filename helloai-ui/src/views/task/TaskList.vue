@@ -318,19 +318,20 @@ function openPlanReview(row: Task) { reviewingTask.value = row; planReviewVisibl
 async function handlePlan(row: Task) {
   try {
     await ElMessageBox.confirm(
-      `将调用 LLM 对任务「${row.title}」做 AI 拆解，约需几十秒，完成后生成草案供审阅。是否继续？`,
+      `将对任务「${row.title}」发起 AI 拆解，提交后在后台生成草案（通常需要一段时间：几十秒到几分钟不等，由任务复杂程度而定），完成后即可审阅。`,
       'AI 拆解',
       { type: 'info', confirmButtonText: '开始拆解', cancelButtonText: '取消' }
     )
   } catch { return }
   planningId.value = row.id
   try {
+    // 拆解异步化：plan 提交即返回（任务转 PLANNING），草案由后台生成，
+    // 直接进入审阅弹窗轮询等待（不再原地等 LLM 结果，避免前端超时错乱）
     await taskApi.plan(row.id)
-    ElMessage.success('拆解完成，请审阅草案')
-    await load()
-    // 拆解成功后直接进入草案审阅
+    ElMessage.success('拆解已提交，草案生成中')
+    load()
     openPlanReview(row)
-  } catch { /* 拦截器已弹错（已存在子任务/并发拆解中等由后端 BizException 统一提示） */ }
+  } catch { /* 拦截器已弹错（已存在子任务/并发拆解中/排队已满等由后端 BizException 统一提示） */ }
   finally { planningId.value = null }
 }
 </script>

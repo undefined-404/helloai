@@ -39,8 +39,8 @@ export const taskApi = {
   deleteTask(id: LongId, confirmTitle: string) {
     return request.delete<any, TaskRelatedCounts>(`/tasks/deleteById/${id}`, { data: { confirmTitle } })
   },
-  // V26 触发 AI 拆解: 仅 PENDING 可调，成功后 Task 停 PLANNING、草案落库 PENDING_PLAN_REVIEW
-  // LLM 拆解耗时远超全局 30s，单请求覆盖 timeout（参考 request.ts TIMEOUT.llm 档位）
+  // V26 触发 AI 拆解（拆解异步化）: 仅 PENDING 可调，提交即返回（Task 转 PLANNING），
+  // LLM 拆解段后台异步执行，草案经 planDrafts 轮询获取；快进快出，保留 llm 档位绰绰有余
   plan(id: LongId) {
     return request.post<any, SubTask[]>(`/tasks/planById/${id}`, undefined, { timeout: TIMEOUT.llm })
   },

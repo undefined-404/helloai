@@ -3,7 +3,6 @@ package com.helloai.core.planner.service;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.SubTaskDispatchService;
-import com.helloai.core.task.service.SubTaskService;
 import lombok.Data;
 
 import java.util.List;
@@ -13,8 +12,9 @@ import java.util.List;
  *
  * <p>职责边界（对齐 §6.3 分层红线：编排逻辑收口在 core，Controller 只做薄转发）：</p>
  * <ul>
- *     <li>{@link #decompose(Long)}：CAS 推进 Task → PLANNING，选平台内 API_KEY_LLM Planner
- *         调 LLM 结构化输出，批量落库 {@code PENDING_PLAN_REVIEW} 草案；失败回退 PENDING。</li>
+ *     <li>{@link #decompose(Long)}：同步守卫（校验 + CAS 推进 Task → PLANNING）后提交
+ *         {@link PlannerDecomposeAsyncService} 异步执行 LLM 拆解，立即返回空列表；
+ *         草案产出与失败回退均由异步段收敛，卡死任务由 PlanningTimeoutTask 兜底回收。</li>
  *     <li>{@link #listDrafts(Long)}：查看草案列表。</li>
  *     <li>{@link #confirmPlan(Long)}：草案批量转正（→ PENDING），Task → IN_PROGRESS，
  *         按 {@code autoAssignOnCreate} 配置触发既有自动分发链（与手工创建子任务同构）。</li>
@@ -30,13 +30,15 @@ import java.util.List;
 public interface PlannerAnalysisService {
 
     /**
-     * 触发平台内自动拆解。
+     * 触发平台内自动拆解（同步守卫）。
      *
-     * <p>不加事务：LLM 调用耗时较长，不能占用数据库事务；草案批量落库走
-     * {@link SubTaskService#saveBatch(java.util.Collection)}（ServiceImpl 自带事务，原子提交）。
-     * 任何失败路径都会把 Task 从 PLANNING 回退 PENDING 并记录 timeline。</p>
+     * <p>只做校验与状态推进：校验通过后 CAS 推进 PLANNING、记录
+     * {@code task_plan_async_submitted}，随后把 LLM 拆解段提交
+     * {@link PlannerDecomposeAsyncService} 异步执行并立即返回空列表（拆解异步化改造，
+     * HTTP 线程不再等待 LLM）。异步段通过 timeline 收敛结果，前端轮询草案；
+     * 卡死任务由 PlanningTimeoutTask 兜底回收。</p>
      *
-     * @return 落库后的草案列表
+     * @return 恒为空列表（API 契约保持不变，草案经 {@link #listDrafts(Long)} 轮询获取）
      */
     List<SubTask> decompose(Long taskId);
 
@@ -60,14 +62,6 @@ public interface PlannerAnalysisService {
      * @return 被取消的草案数量
      */
     int rejectPlan(Long taskId);
-
-    /**
-     * 依赖校验（V27）：序号越界/自引用即拒，再用 Kahn 拓扑排序做环检测，
-     * 成环整批拒绝（抛 BizException → decompose 失败回退 PENDING 可重拆）。
-     *
-     * <p>序号为 1-based（指向同批草案中的第 N 条）；dependsOn 为 null/空视为无依赖。</p>
-     */
-    void validateDependencies(List<PlanDraftItem> items);
 
     /** LLM 结构化输出条目（未知字段容忍，避免 LLM 多给字段导致整批失败）。 */
     @Data

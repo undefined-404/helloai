@@ -1,0 +1,425 @@
+package com.helloai.core.planner.service.impl;
+
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.helloai.common.base.BizException;
+import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.common.constant.TaskStatus;
+import com.helloai.core.agent.domain.AgentResult;
+import com.helloai.core.agent.domain.AgentTask;
+import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.service.PlatformAgentExecutionService;
+import com.helloai.core.planner.picker.PlannerAgentPicker;
+import com.helloai.core.planner.service.PlannerAnalysisService.PlanDraftItem;
+import com.helloai.core.planner.service.PlannerDecomposeAsyncService;
+import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskService;
+import com.helloai.core.task.service.TaskTimelineService;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Service;
+
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.time.OffsetDateTime;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+/**
+ * Planner 任务拆解异步执行服务实现。
+ *
+ * <p>承接拆解异步化改造前的 LLM 拆解段：选平台内 API_KEY_LLM Planner → 渲染 Prompt →
+ * {@code executeSync} 调 LLM → 解析校验草案 → 批量落库 {@code PENDING_PLAN_REVIEW} →
+ * 依赖序号回写真实 id → 记录 {@code task_plan_generated}。</p>
+ *
+ * <p>运行于专用线程池 {@code plannerDecomposeExecutor}（{@code @Async} 跨类代理生效，
+ * 由 {@code PlannerAnalysisServiceImpl.decompose} 注入本接口提交，禁止同类自调用）。
+ * 失败路径内部闭环：回退 PLANNING → PENDING + 记录 {@code task_plan_failed}，
+ * LLM 调用失败记 ERROR、可恢复降级记 WARN（CODE_STYLE §14.2），日志均带 taskId 业务标识。</p>
+ *
+ * <p>新增 {@code task_plan_llm_call_end} timeline 事件（耗时毫秒、finishReason、tokenUsage），
+ * 补齐原链路"只有 _start 没有 _end"的可观测缺口。</p>
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncService {
+
+    /** 单次拆解允许落库的草案数量上限（与 Prompt 模板的 3~10 约定对齐，服务端只做硬上限）。 */
+    private static final int MAX_DRAFT_COUNT = 10;
+
+    /** timeline detail 中 LLM 原始输出摘要的截断长度。 */
+    private static final int RAW_OUTPUT_SUMMARY_LIMIT = 500;
+
+    private static final String PROMPT_TEMPLATE_PATH = "prompts/planner-decompose.md";
+
+    private static final Set<String> VALID_PRIORITIES = Set.of("HIGH", "MEDIUM", "LOW");
+
+    private final TaskService taskService;
+    private final SubTaskService subTaskService;
+    private final PlannerAgentPicker plannerAgentPicker;
+    private final PlatformAgentExecutionService platformAgentExecutionService;
+    private final TaskTimelineService taskTimelineService;
+    private final ObjectMapper objectMapper;
+
+    /**
+     * 异步执行拆解（运行于 plannerDecomposeExecutor）。
+     *
+     * <p>入口幂等防御：仅当任务仍处 PLANNING 才执行——若已被 PlanningTimeoutTask 超时回收
+     * 或用户已确认/拒绝，慢线程迟到时直接跳过，避免覆盖并发结果。</p>
+     */
+    @Async("plannerDecomposeExecutor")
+    @Override
+    public void executeDecompose(Long taskId) {
+        Task task = taskService.getById(taskId);
+        if (task == null || task.getStatus() != TaskStatus.PLANNING) {
+            log.info("拆解异步执行跳过（任务不存在或已离开 PLANNING）: taskId={}, status={}",
+                    taskId, task != null ? task.getStatus() : null);
+            return;
+        }
+        try {
+            doDecompose(task);
+        } catch (Exception e) {
+            rollbackToPending(taskId);
+            taskTimelineService.recordEvent(taskId, null, "task_plan_failed",
+                    AgentRole.PLANNER, null,
+                    Map.of("error", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
+            log.error("任务拆解失败，已回退 PENDING: taskId={}", taskId, e);
+        }
+    }
+
+    /** LLM 拆解主流程（从同步 decompose 迁出，行为不变）。 */
+    private void doDecompose(Task task) {
+        Long taskId = task.getId();
+        Agent planner = plannerAgentPicker.pickForTask(taskId);
+        String prompt = renderPrompt(task);
+
+        AgentTask agentTask = AgentTask.builder()
+                .systemPrompt("")
+                .userPrompt(prompt)
+                .context(Map.of("taskId", taskId, "scene", "planner_decompose"))
+                .requiredCapabilities(Map.of())
+                .build();
+        taskTimelineService.recordEvent(taskId, null, "task_plan_llm_call_start",
+                AgentRole.PLANNER, planner.getId(),
+                Map.of("agentId", planner.getId(), "agentName", planner.getName()));
+        long startMs = System.currentTimeMillis();
+        AgentResult result = platformAgentExecutionService.executeSync(planner, agentTask);
+        long costMs = System.currentTimeMillis() - startMs;
+        recordLlmCallEnd(taskId, planner, result, costMs);
+        if (!result.isSuccess()) {
+            throw new BizException("Planner LLM 调用失败: " + result.getErrorMessage());
+        }
+
+        List<PlanDraftItem> items = parseDraftItems(result.getOutput());
+        validateDependencies(items);
+        List<SubTask> drafts = buildDrafts(taskId, items, planner);
+        subTaskService.saveBatch(drafts);
+        // 防御：ServiceImpl.saveBatch 的 @Transactional 边界可能导致实体 ID 未回填，
+        // 从 DB 重加载保证 applyDependsOn 拿到的是持久化后的真实 ID（Snowflake 精度）。
+        // 关键：必须按 buildDrafts/add 顺序（即 items 顺序）加载，不能 orderByAsc(SubTask::getId)，
+        // 因为 dependsOn 序号指向“本批草案中的第 N 条”而不是“按 id 排后的第 N 条”。
+        // 采用 getCreateTime asc + 同毫秒按 id asc 的二级序，与 saveBatch 顺序一致。
+        drafts = subTaskService.list(new LambdaQueryWrapper<SubTask>()
+                .eq(SubTask::getTaskId, taskId)
+                .eq(SubTask::getStatus, SubTaskStatus.PENDING_PLAN_REVIEW)
+                .orderByAsc(SubTask::getCreateTime, SubTask::getId));
+        log.info("Planner 重加载草案: taskId={}, expectedCount={}, actualCount={}",
+                taskId, items.size(), drafts.size());
+        applyDependsOn(drafts, items);
+
+        taskTimelineService.recordEvent(taskId, null, "task_plan_generated",
+                AgentRole.PLANNER, planner.getId(),
+                Map.of("agentId", planner.getId(),
+                        "agentName", planner.getName(),
+                        "draftCount", drafts.size(),
+                        "rawOutputSummary", summarize(result.getOutput())));
+        log.info("任务拆解草案生成: taskId={}, plannerAgentId={}, draftCount={}",
+                taskId, planner.getId(), drafts.size());
+    }
+
+    /** 记录 LLM 调用结束事件（耗时毫秒、finishReason、tokenUsage），补齐可观测缺口。 */
+    private void recordLlmCallEnd(Long taskId, Agent planner, AgentResult result, long costMs) {
+        try {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("agentId", planner.getId());
+            payload.put("agentName", planner.getName());
+            payload.put("costMs", costMs);
+            payload.put("success", result.isSuccess());
+            payload.put("finishReason", result.getFinishReason());
+            payload.put("tokenUsage", result.getTokenUsage());
+            taskTimelineService.recordEvent(taskId, null, "task_plan_llm_call_end",
+                    AgentRole.PLANNER, planner.getId(), payload);
+        } catch (Exception e) {
+            // timeline 记录失败不阻断拆解主流程
+            log.warn("记录 task_plan_llm_call_end 失败（不阻断拆解）: taskId={}, err={}",
+                    taskId, e.getMessage());
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  内部实现
+    // ══════════════════════════════════════════════════════════════
+
+    /** 加载 classpath 模板并替换占位符。 */
+    private String renderPrompt(Task task) {
+        ClassPathResource resource = new ClassPathResource(PROMPT_TEMPLATE_PATH);
+        if (!resource.exists()) {
+            throw new BizException("未找到拆解 Prompt 模板: " + PROMPT_TEMPLATE_PATH);
+        }
+        String template;
+        try (InputStream in = resource.getInputStream()) {
+            template = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw new BizException("读取拆解 Prompt 模板失败: " + e.getMessage());
+        }
+        return template
+                .replace("{{TASK_TITLE}}", task.getTitle() != null ? task.getTitle() : "")
+                .replace("{{TASK_DESCRIPTION}}",
+                        task.getDescription() != null && !task.getDescription().isBlank()
+                                ? task.getDescription() : "（无补充描述，请依据标题拆解）");
+    }
+
+    /** 解析 LLM 输出为草案条目：strip markdown fence 容错 + 逐条校验必填字段与数量上限。 */
+    private List<PlanDraftItem> parseDraftItems(String rawOutput) {
+        if (rawOutput == null || rawOutput.isBlank()) {
+            throw new BizException("Planner LLM 返回内容为空");
+        }
+        String cleaned = stripToJsonArray(rawOutput);
+        List<PlanDraftItem> items;
+        try {
+            items = objectMapper.readValue(cleaned, new TypeReference<List<PlanDraftItem>>() {});
+        } catch (Exception e) {
+            throw new BizException("Planner LLM 输出 JSON 解析失败: " + e.getMessage()
+                    + "; 原始输出摘要: " + summarize(rawOutput));
+        }
+        if (items == null || items.isEmpty()) {
+            throw new BizException("Planner LLM 未拆解出任何子任务");
+        }
+        if (items.size() > MAX_DRAFT_COUNT) {
+            throw new BizException("拆解结果超过数量上限 " + MAX_DRAFT_COUNT + ": 实际 " + items.size());
+        }
+        for (int i = 0; i < items.size(); i++) {
+            PlanDraftItem item = items.get(i);
+            if (item.getTitle() == null || item.getTitle().isBlank()) {
+                throw new BizException("拆解结果第 " + (i + 1) + " 条缺少 title");
+            }
+        }
+        return items;
+    }
+
+    /** 剥离 markdown 代码块围栏，并兜底截取首尾方括号之间的 JSON 数组。 */
+    private String stripToJsonArray(String raw) {
+        String cleaned = raw.trim();
+        if (cleaned.startsWith("```")) {
+            int firstNewline = cleaned.indexOf('\n');
+            if (firstNewline > 0) {
+                cleaned = cleaned.substring(firstNewline + 1);
+            }
+            int fenceEnd = cleaned.lastIndexOf("```");
+            if (fenceEnd >= 0) {
+                cleaned = cleaned.substring(0, fenceEnd);
+            }
+            cleaned = cleaned.trim();
+        }
+        if (!cleaned.startsWith("[")) {
+            int start = cleaned.indexOf('[');
+            int end = cleaned.lastIndexOf(']');
+            if (start >= 0 && end > start) {
+                cleaned = cleaned.substring(start, end + 1);
+            }
+        }
+        return cleaned;
+    }
+
+    /** 草案实体装配：status=PENDING_PLAN_REVIEW，context 记录拆解来源审计信息。 */
+    private List<SubTask> buildDrafts(Long taskId, List<PlanDraftItem> items, Agent planner) {
+        List<SubTask> drafts = new ArrayList<>(items.size());
+        String generatedAt = OffsetDateTime.now().toString();
+        for (PlanDraftItem item : items) {
+            SubTask draft = new SubTask();
+            draft.setTaskId(taskId);
+            draft.setTitle(item.getTitle().trim());
+            draft.setContent(item.getContent());
+            draft.setDeliverable(item.getDeliverable());
+            draft.setAcceptance(item.getAcceptance());
+            draft.setPriority(normalizePriority(item.getPriority()));
+            draft.setStatus(SubTaskStatus.PENDING_PLAN_REVIEW);
+            Map<String, Object> context = new HashMap<>();
+            context.put("plannerAgentId", planner.getId());
+            context.put("plannerAgentName", planner.getName());
+            context.put("planGeneratedAt", generatedAt);
+            draft.setContext(context);
+            drafts.add(draft);
+        }
+        return drafts;
+    }
+
+    private String normalizePriority(String priority) {
+        if (priority == null) {
+            return "MEDIUM";
+        }
+        String upper = priority.trim().toUpperCase();
+        return VALID_PRIORITIES.contains(upper) ? upper : "MEDIUM";
+    }
+
+    /**
+     * 依赖校验（V27）：序号越界/自引用即拒，再用 Kahn 拓扑排序做环检测，
+     * 成环整批拒绝（抛 BizException → 拆解失败回退 PENDING 可重拆）。
+     *
+     * <p>序号为 1-based（指向同批草案中的第 N 条）；dependsOn 为 null/空视为无依赖。</p>
+     */
+    @Override
+    public void validateDependencies(List<PlanDraftItem> items) {
+        int n = items.size();
+        // 1) 逐条范围校验
+        for (int i = 0; i < n; i++) {
+            List<Integer> deps = items.get(i).getDependsOn();
+            if (deps == null) {
+                continue;
+            }
+            for (Integer dep : deps) {
+                if (dep == null || dep < 1 || dep > n) {
+                    throw new BizException("拆解结果第 " + (i + 1) + " 条依赖序号非法: " + dep
+                            + "（合法范围 1~" + n + "）");
+                }
+                if (dep == i + 1) {
+                    throw new BizException("拆解结果第 " + (i + 1) + " 条不得依赖自身");
+                }
+            }
+        }
+        // 2) Kahn 拓扑排序环检测（入度法：能全部出队 = 无环）
+        int[] inDegree = new int[n];
+        List<List<Integer>> adjacency = new ArrayList<>(n);
+        for (int i = 0; i < n; i++) {
+            adjacency.add(new ArrayList<>());
+        }
+        for (int i = 0; i < n; i++) {
+            List<Integer> deps = items.get(i).getDependsOn();
+            if (deps == null) {
+                continue;
+            }
+            for (Integer dep : deps) {
+                adjacency.get(dep - 1).add(i); // 前置 → 后继
+                inDegree[i]++;
+            }
+        }
+        Deque<Integer> queue = new ArrayDeque<>();
+        for (int i = 0; i < n; i++) {
+            if (inDegree[i] == 0) {
+                queue.add(i);
+            }
+        }
+        int visited = 0;
+        while (!queue.isEmpty()) {
+            int node = queue.poll();
+            visited++;
+            for (int next : adjacency.get(node)) {
+                if (--inDegree[next] == 0) {
+                    queue.add(next);
+                }
+            }
+        }
+        if (visited < n) {
+            throw new BizException("拆解结果存在循环依赖，整批拒绝；请重新触发拆解");
+        }
+    }
+
+    /**
+     * 序号→真实 id 映射回写（V27）：saveBatch 后草案 id 已由 assign_id 预填，
+     * 把 dependsOn 序号换成同批草案的真实 sub_task id 写入 depends_on 列，
+     * 并同步回填实体字段（返回给调用方的草案列表携带依赖信息）。
+     *
+     * <p>防御门门：drafts.size() 必须与 items.size() 一致，否则可能重加载顺序与
+     * items 顺序错位（依赖序号拿错 id），甚至漏掉某些 draft；该不变量一旦破坏，
+     * 后续 ready 守卫会把有依赖节点误判为就绪，必须报错并清表回退，不能静默写错位依赖。</p>
+     */
+    private void applyDependsOn(List<SubTask> drafts, List<PlanDraftItem> items) {
+        if (drafts.size() != items.size()) {
+            // 详细记下两者映射，避免后续排错看不到现场
+            StringBuilder sb = new StringBuilder();
+            sb.append("applyDependsOn 计数不匹配: drafts=").append(drafts.size())
+              .append(" items=").append(items.size()).append("; draftsIds=");
+            for (int k = 0; k < drafts.size(); k++) {
+                if (k > 0) sb.append(',');
+                sb.append(drafts.get(k).getId());
+            }
+            log.error(sb.toString());
+            throw new BizException("拆解草案重加载数量与 LLM 输出不一致: drafts=" + drafts.size()
+                    + " items=" + items.size() + "；需取消现有草案后重新拆解");
+        }
+        for (int i = 0; i < items.size(); i++) {
+            List<Integer> deps = items.get(i).getDependsOn();
+            if (deps == null || deps.isEmpty()) {
+                continue;
+            }
+            List<Long> depIds = new ArrayList<>(deps.size());
+            for (Integer dep : deps) {
+                Long depId = drafts.get(dep - 1).getId();
+                if (depId == null) {
+                    throw new BizException("拆解结果第 " + (i + 1) + " 条依赖指向的草案 id 为空"
+                            + "（序号=" + dep + "）；重加载可能漏取，请重试拆解");
+                }
+                depIds.add(depId);
+            }
+            // §6.100 幽灵依赖防御：写入前校验所有依赖 ID 真实存在于 sub_task 表。
+            // 历史出现过依赖回写引用“未落库 ID”（内存预分配/重加载错位），
+            // 静默写库后 isReady 对不存在依赖恒判未就绪，PENDING 子任务永久卡死。
+            // 注意：depIds 允许重复（LLM 可输出 [2,2,3] 重复引用同一前置），须去重后比对。
+            List<Long> distinctDeps = depIds.stream().distinct().toList();
+            List<SubTask> existingDeps = subTaskService.listByIds(distinctDeps);
+            if (existingDeps.size() != distinctDeps.size()) {
+                Set<Long> found = existingDeps.stream()
+                        .map(SubTask::getId).collect(Collectors.toSet());
+                List<Long> missing = distinctDeps.stream()
+                        .filter(depId -> !found.contains(depId)).toList();
+                log.error("applyDependsOn 依赖存在性校验失败: draftSeq={}, draftId={}, missing={}",
+                        (i + 1), drafts.get(i).getId(), missing);
+                throw new BizException("拆解结果第 " + (i + 1) + " 条依赖指向不存在的草案 ID: "
+                        + missing + "；需取消现有草案后重新拆解");
+            }
+            SubTask draft = drafts.get(i);
+            if (draft.getId() == null) {
+                throw new BizException("拆解结果第 " + (i + 1) + " 条自身 id 为空；重加载可能漏取，请重试拆解");
+            }
+            log.info("applyDependsOn: taskId={}, draftSeq={}, draftId={}, seqDeps={}, realDeps={}",
+                    draft.getTaskId(), (i + 1), draft.getId(), deps, depIds);
+            subTaskService.updateDependsOn(draft.getId(), depIds);
+            draft.setDependsOn(depIds);
+        }
+    }
+
+    /** 失败回退：仅当 Task 仍处 PLANNING 时回退 PENDING（避免覆盖并发确认结果）。 */
+    private void rollbackToPending(Long taskId) {
+        try {
+            taskService.lambdaUpdate()
+                    .eq(Task::getId, taskId)
+                    .eq(Task::getStatus, TaskStatus.PLANNING)
+                    .set(Task::getStatus, TaskStatus.PENDING)
+                    .update();
+        } catch (Exception e) {
+            log.error("任务拆解失败后回退 PENDING 异常: taskId={}", taskId, e);
+        }
+    }
+
+    private String summarize(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        String trimmed = raw.trim();
+        return trimmed.length() <= RAW_OUTPUT_SUMMARY_LIMIT
+                ? trimmed : trimmed.substring(0, RAW_OUTPUT_SUMMARY_LIMIT) + "...";
+    }
+}
