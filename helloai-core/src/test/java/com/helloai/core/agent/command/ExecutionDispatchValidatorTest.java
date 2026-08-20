@@ -26,7 +26,7 @@ import static org.mockito.Mockito.when;
  *         Publisher Bean 不可用 → fail-fast；</li>
  *     <li><b>②b 闭环</b>：dispatch-mode ∈ {MQ, BOTH} 但 outbox.relay.enabled=false → fail-fast
  *         （否则 outbox 行永远停在 PENDING）；</li>
- *     <li><b>T5 新闭环</b>：consumer-mode ∈ {POLLER, BOTH} 但 consumer-enabled=false → fail-fast
+ *     <li><b>新闭环</b>：consumer-mode ∈ {POLLER, BOTH} 但 consumer-enabled=false → fail-fast
  *         （POLLER/BOTH 模式下 MQ Consumer 必须存在，否则没有主消费路径、Poller 仅兜底，
  *         命令永远停在 PENDING）；</li>
  *     <li><b>WARN 不阻断</b>：dispatch-mode ∈ {MQ, BOTH} 但 consumer-enabled=false → 仅 WARN

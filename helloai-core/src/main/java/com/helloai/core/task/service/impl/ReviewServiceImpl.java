@@ -82,7 +82,7 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
         save(record);
 
         if (result == ReviewResult.APPROVED) {
-            // v1.1 修复: APPROVED 走 complete() 触发 5 因子隐式评分（score_factors/composite_score/score_grade/completed_at + reward_log）
+            // 修复: APPROVED 走 complete() 触发 5 因子隐式评分（score_factors/composite_score/score_grade/completed_at + reward_log）
             subTaskService.complete(subTaskId);
         } else {
             // §6.57 人工驳回 = 用户拍板开启新一轮：reworkFresh 重置返工计数并清除人工介入标记，
@@ -107,7 +107,7 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
             }
         }
 
-        // 简易奖励（与原 v1.0 行为兼容：按 review.score 直接加减固定分）
+        // 简易奖励（与原 行为兼容：按 review.score 直接加减固定分）
         if (executorAgentId != null) {
             Integer delta = SCORE_RULES.get(score);
             if (delta != null && delta != 0) {

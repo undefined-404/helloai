@@ -3,7 +3,7 @@ package com.helloai.core.shared.event;
 import lombok.Getter;
 
 /**
- * 任务自动收口完成事件（V32 最终整合报告触发源）。
+ * 任务自动收口完成事件（最终整合报告触发源）。
  *
  * <p>{@code SubTaskCompletionListener.tryCloseTask} 用 CAS 把 Task 推 DONE
  * 成功（updated &gt; 0，赢家唯一）后发布；此时已在 AFTER_COMMIT 异步线程、

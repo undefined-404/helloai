@@ -22,20 +22,20 @@ public class Task extends BaseEntity {
     private String description;
     private TaskStatus status;
 
-    /** 最终整合报告正文（V32，Markdown；null=尚未生成），由 Planner 收口后整合全部子任务产出。 */
+    /** 最终整合报告正文（Markdown；null=尚未生成），由 Planner 收口后整合全部子任务产出。 */
     private String finalReport;
 
-    /** 生成报告的 Planner Agent ID（V32，软引用无 FK）。 */
+    /** 生成报告的 Planner Agent ID（软引用无 FK）。 */
     private Long finalReportAgentId;
 
-    /** 报告生成时间（V32）。 */
+    /** 报告生成时间。 */
     private OffsetDateTime finalReportTime;
 
-    /** 报告生成状态（V41，NONE/GENERATING/DONE/FAILED，与任务主状态解耦）。 */
+    /** 报告生成状态（NONE/GENERATING/DONE/FAILED，与任务主状态解耦）。 */
     private FinalReportStatus finalReportStatus;
 
     /**
-     * 任务扩展上下文（V35 新增 JSONB）。
+     * 任务扩展上下文（JSONB）。
      *
      * <p>当前用途：Task Running Spec（Phase A JSONB 过渡态）——
      * {@code runningSpec.baseline} / {@code runningSpec.executionRecords} /
@@ -45,7 +45,7 @@ public class Task extends BaseEntity {
     private Map<String, Object> context;
 
     /**
-     * 任务级 Agent 指定策略（V47 新增 JSONB，§6.58 P1）。
+     * 任务级 Agent 指定策略（JSONB，§6.58 P1）。
      *
      * <p>键说明（解析统一走 {@code TaskAgentPolicy} 静态工具类）：
      * <ul>
@@ -61,7 +61,7 @@ public class Task extends BaseEntity {
     private Map<String, Object> agentPolicy;
 
     /**
-     * 任务要求的能力列表（V47 新增 JSONB[]，§6.58 P1）。
+     * 任务要求的能力列表（JSONB[]，§6.58 P1）。
      *
      * <p>非空时执行者必须全部具备（AND 语义）；默认 {@code []} 不限制，
      * 与旧数据行为完全一致。</p>
@@ -70,7 +70,7 @@ public class Task extends BaseEntity {
     private List<String> requiredSkills;
 
     /**
-     * 任务 SLA 分钟数（A0-7 新增，V48；null=无时限）。
+     * 任务 SLA 分钟数（null=无时限）。
      *
      * <p>计划确认（confirmPlan）时按 {@code now + slaMinutes} 下发各子任务
      * {@code deadline}，外部 Agent 经 pullTasks 的 {@code deadline} 字段感知时限；

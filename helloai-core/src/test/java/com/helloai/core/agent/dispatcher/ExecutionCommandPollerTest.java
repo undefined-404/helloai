@@ -41,7 +41,7 @@ import com.helloai.core.task.service.TaskTimelineService;
 /**
  * {@link ExecutionCommandPoller} 单元测试。
  *
- * <p><b>T5 起重塑</b>：本 Poller 从"主消费载体"降级为"孤儿 / 超时 / 补偿兜底"。
+ * <p><b>重塑</b>：本 Poller 从"主消费载体"降级为"孤儿 / 超时 / 补偿兜底"。
  * 所有 {@code consumer-mode}（EVENT / POLLER / BOTH）下本 Poller 行为一致——只扫
  * {@code listOrphanPending(threshold, batchSize)}、不扫 {@code listAllPending}。
  * 主消费路径由 {@code MqExecutionCommandConsumer}（POLLER / BOTH）或
@@ -55,7 +55,7 @@ import com.helloai.core.task.service.TaskTimelineService;
  *     <li>subTask=null → 跳过 timeline 但仍触发 consume；</li>
  *     <li>consume 抛异常 → 不影响后续记录；</li>
  *     <li>pollerEnabled=false → 跳过扫描；</li>
- *     <li>trigger 前缀恒为 poll-recovery:（T5 起取消 poll-main: 分支）；</li>
+ *     <li>trigger 前缀恒为 poll-recovery:（取消 poll-main: 分支）；</li>
  *     <li>timeline 事件恒为 sub_task_execution_command_poll_recovery；</li>
  *     <li><b>三模式一致性</b>：EVENT/POLLER/BOTH 都只调 listOrphanPending，
  *         永不调 listAllPending——把"Poller 降级为兜底"的语义钉死在测试里。</li>
@@ -341,10 +341,10 @@ class ExecutionCommandPollerTest {
 
             ArgumentCaptor<ExecutionCommand> commandCaptor = ArgumentCaptor.forClass(ExecutionCommand.class);
             verify(executionCommandConsumer).consume(commandCaptor.capture());
-            // T5 起：trigger 前缀统一为 poll-recovery:，不再有 poll-main: 分支
+            // trigger 前缀统一为 poll-recovery:，不再有 poll-main: 分支
             assertThat(commandCaptor.getValue().getTrigger()).isEqualTo("poll-recovery:assigned");
 
-            // T5 起：timeline 事件统一为 sub_task_execution_command_poll_recovery，不再有 sub_task_execution_command_polled_main
+            // timeline 事件统一为 sub_task_execution_command_poll_recovery，不再有 sub_task_execution_command_polled_main
             verify(taskTimelineService).recordEvent(
                     eq(33L), eq(22L), eq("sub_task_execution_command_poll_recovery"),
                     any(), eq(11L), any());

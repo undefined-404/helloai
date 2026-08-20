@@ -17,7 +17,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * 熔断报警服务（v2.4 §4.8）。
+ * 熔断报警服务。
  *
  * <p>熔断器打开/关闭时，通过 Webhook 向钉钉/飞书发送报警。
  * 支持按渠道配置独立 URL，未配置的渠道自动跳过。

@@ -124,7 +124,7 @@ public class ExternalAgentFailureTracker {
      *   <li>{@code access_type = CLI_CLIENT}</li>
      *   <li>{@code consecutive_failure_count >= threshold}</li>
      *   <li>cooldown 已过：{@code last_fallback_at IS NULL} 或早于 {@code now - cooldown}</li>
-     *   <li>v2.6 §4.1：心跳新鲜——{@code last_seen_time} 非空且晚于
+     *   <li>§4.1：心跳新鲜——{@code last_seen_time} 非空且晚于
      *       {@code now - healthProperties.offlineMinutes}；与 AgentSelector
      *       和 AgentHealthCheckTask 共用同一阈值，避免 SQL 与 Java 侧规则漂移</li>
      * </ol>
@@ -144,7 +144,7 @@ public class ExternalAgentFailureTracker {
      * 纯函数式判定：当前 Agent 是否构成回退候选（不查 DB）。
      *
      * <p>给上层在已读到 Agent 实体时复用，避免重复 SQL 扫描。
-     * 判定规则与 {@link #findFallbackCandidates()} 完全一致，包括 v2.6 §4.1
+     * 判定规则与 {@link #findFallbackCandidates()} 完全一致，包括 §4.1
      * 心跳新鲜度检查：CLI_CLIENT 必须在 {@code AgentHealthProperties.offlineMinutes}
      * 之内有过心跳（{@code last_seen_time > now - offlineMinutes}）。</p>
      */
@@ -166,7 +166,7 @@ public class ExternalAgentFailureTracker {
         if (lastFallbackAt != null && !lastFallbackAt.isBefore(cooldownCutoff)) {
             return false;
         }
-        // v2.6 §4.1：CLI_CLIENT 必须心跳新鲜，避免把"刚被死但还没标 OFFLINE"
+        // §4.1：CLI_CLIENT 必须心跳新鲜，避免把"刚被死但还没标 OFFLINE"
         // 的 Agent 当作回退候选；与 SQL selectFallbackCandidates 规则一致。
         // 阈值 <= 0 表示关闭过滤（逃生口）：null last_seen_time 也视为可回退。
         int offlineMinutes = healthProperties != null

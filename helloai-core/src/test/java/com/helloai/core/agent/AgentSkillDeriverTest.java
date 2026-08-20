@@ -11,7 +11,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * AgentSkillDeriver 推导规则单测（A2）。
+ * AgentSkillDeriver 推导规则单测。
  *
  * <p>覆盖：显式优先 / accessType 基础技能 / 关键词命中与大小写归一 / 去重保序 /
  * 空显式走推导 / 清洗（trim、空白过滤、去重） / null 防御。</p>

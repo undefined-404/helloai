@@ -3,7 +3,7 @@ package com.helloai.core.shared.event;
 import lombok.Getter;
 
 /**
- * 收件箱消息已创建事件（AgentHub V3 门铃响铃 PR-2）。
+ * 收件箱消息已创建事件（AgentHub 门铃响铃 PR-2）。
  *
  * <p>由 {@code AgentInboxService.send()} 在收件箱记录<b>成功落库后</b>发布
  * （幂等跳过的重复投递不发），用于在事务提交后异步驱动门铃响铃，

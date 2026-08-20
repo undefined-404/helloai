@@ -5,7 +5,7 @@ import lombok.Data;
 import java.util.List;
 
 /**
- * 批量暂停 Agent 请求体（v2.4 §4.3 批次 3）。
+ * 批量暂停 Agent 请求体。
  *
  * <p>允许部分成功/失败：响应中按 succeeded / failed 维度返回明细，
  * 不抛 BizException 整体中断。

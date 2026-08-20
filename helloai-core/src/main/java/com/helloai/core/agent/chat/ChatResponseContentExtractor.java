@@ -10,7 +10,7 @@ import java.util.List;
 /**
  * ChatResponse 内容提取工具：分离正文与思考过程。
  *
- * <p>推理模型（如 Minimax M2.5，Anthropic 协议）的响应含多个 content block：
+ * <p>推理模型（如 Minimax ，Anthropic 协议）的响应含多个 content block：
  * thinking 块在前、text 正文在后。Spring AI AnthropicChatModel 把每个 block
  * 映射为一个 Generation（thinking 块的思考文本作为 AssistantMessage content，
  * properties 带 signature 标记）。若只取 {@code getResult()}（第一个 Generation）

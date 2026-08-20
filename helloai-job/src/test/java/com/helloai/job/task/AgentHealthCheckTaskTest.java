@@ -46,7 +46,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link AgentHealthCheckTask} 单元测试（v2.6 §4.1 二次选人加固）。
+ * {@link AgentHealthCheckTask} 单元测试（§4.1 二次选人加固）。
  *
  * <p>覆盖：</p>
  * <ul>
@@ -101,7 +101,7 @@ class AgentHealthCheckTaskTest {
 
     /**
      * 通过反射调用 private 方法 reassignStaleTasks(Agent)，覆盖二次选人加固逻辑。
-     * v2.6 §4.1：reassignStaleTasks 已重构为按 Agent 维度调用，无需提前查找字段。
+     * §4.1：reassignStaleTasks 已重构为按 Agent 维度调用，无需提前查找字段。
      */
     @SuppressWarnings("unchecked")
     private int invokeReassignStaleTasks(Agent staleAgent) throws Exception {
@@ -294,7 +294,7 @@ class AgentHealthCheckTaskTest {
 
             task.checkHealth();
 
-            // 语义修正（§6.58）：心跳丢失但无在跑任务不视为执行失败，
+            // 语义修正：心跳丢失但无在跑任务不视为执行失败，
             // 避免"提交后停止心跳"的客户端每完成一个任务就被计 1 次失败
             verify(taskTimelineService, times(1)).recordEvent(
                     any(), any(), eq("agent_offline"), eq(AgentRole.EXECUTOR), eq(101L), any());

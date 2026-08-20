@@ -80,7 +80,7 @@ public class TaskDeliverableServiceImpl implements TaskDeliverableService {
             Set<String> usedNames = new HashSet<>();
             putTextEntry(zos, claimName(usedNames, "00-任务概览.md"), buildOverview(task, ordered));
             int seq = 1;
-            // V32：已生成整合报告时置顶收录，子任务产出顺延从 02- 起；无报告时维持旧编号
+            // 已生成整合报告时置顶收录，子任务产出顺延从 02- 起；无报告时维持旧编号
             if (task.getFinalReport() != null && !task.getFinalReport().isBlank()) {
                 putTextEntry(zos, claimName(usedNames, "01-最终整合报告.md"), task.getFinalReport());
                 seq = 2;

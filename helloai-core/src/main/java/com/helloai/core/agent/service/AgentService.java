@@ -30,7 +30,7 @@ public interface AgentService extends IService<Agent> {
     Agent registerOrGet(String name, AgentRole role, String description);
 
     /**
-     * 校验 modelType 格式、可用性及角色唯一性（V49）。
+     * 校验 modelType 格式、可用性及角色唯一性。
      *
      * <p>格式：providerCode:modelName；模型须启用；同模型在同一角色下只能被一个
      * API_KEY_LLM Agent 使用。null/blank 时跳过校验。注册前预校验用，避免校验失败
@@ -44,7 +44,7 @@ public interface AgentService extends IService<Agent> {
     void validateModelType(String modelType, AgentRole role, Long excludeAgentId);
 
     /**
-     * 校验 Agent skills 不超出模型能力（plan 2182376f 完善版 V52 新增）。
+     * 校验 Agent skills 不超出模型能力。
      *
      * <p>规则（D2=A 标准校验 + 自定义豁免）：仅标准技能标签（{@code AgentSkillDeriver.STANDARD_SKILLS}）
      * 查模型白名单（capabilitySkills ∪ availableOptionalSkills）；非标准项视为自定义技能豁免；
@@ -57,11 +57,11 @@ public interface AgentService extends IService<Agent> {
     void validateAgentSkills(String modelType, List<String> skills);
 
     /**
-     * 收口技能落库推导（plan 2182376f 完善版 V52 新增）。
+     * 收口技能落库推导。
      *
      * <p>API_KEY_LLM 且 modelType 已识别 → 能力驱动推导
      * （{@code AgentSkillDeriver.deriveWithCapabilities}，能力锁定 + 白名单过滤 + 自定义豁免）；
-     * 其他接入类型或未识别模型 → 走 A2 原推导（{@code AgentSkillDeriver.derive}）。</p>
+     * 其他接入类型或未识别模型 → 走基础推导（{@code AgentSkillDeriver.derive}）。</p>
      *
      * @param agent          注册/编辑中的 Agent（accessType/name/remark/modelType 参与推导）
      * @param explicitSkills 用户显式传入的技能（可为 null/空）
@@ -104,7 +104,7 @@ public interface AgentService extends IService<Agent> {
      *
      * <p>按 §6.3 分层红线从 AdminAgentController 收口；作为事务代理入口，
      * 内部 {@link #register} 的事务注解在自调用场景不生效，由本方法统一托管。<br>
-     * V52：skills 按能力驱动落库（API_KEY_LLM + 已识别模型时 thinking 锁定、
+     * skills 按能力驱动落库（API_KEY_LLM + 已识别模型时 thinking 锁定、
      * 白名单过滤、自定义豁免），未传显式技能时同样推导（能力锁定不缺席）。</p>
      */
     Agent registerWithExtras(String name, AgentRole role, String description,
@@ -181,12 +181,12 @@ public interface AgentService extends IService<Agent> {
     Page<ActivityLog> getActivityLogs(Long agentId, int pageNum, int pageSize, String action);
 
     /**
-     * 管理员手动暂停 Agent（v2.4 §4.3）：校验非 SLEEPING 后写入 SLEEPING + task_timeline 审计。
+     * 管理员手动暂停 Agent：校验非 SLEEPING 后写入 SLEEPING + task_timeline 审计。
      */
     Agent sleepAgent(Long agentId, String operator, String reason);
 
     /**
-     * 批量暂停 Agent（v2.4 §4.3 批次 3）：部分成功语义，单个失败不影响其他 Agent。
+     * 批量暂停 Agent：部分成功语义，单个失败不影响其他 Agent。
      */
     Map<String, Object> sleepAgentBatch(List<Long> agentIds, String operator, String reason);
 
@@ -196,12 +196,12 @@ public interface AgentService extends IService<Agent> {
     List<Agent> findSleepingByRole(AgentRole role);
 
     /**
-     * 管理员手动恢复 Agent（v2.4 §4.3）：校验 SLEEPING 后置 OFFLINE（不强行 ONLINE）+ task_timeline 审计。
+     * 管理员手动恢复 Agent：校验 SLEEPING 后置 OFFLINE（不强行 ONLINE）+ task_timeline 审计。
      */
     Agent wakeAgent(Long agentId, String operator, String reason);
 
     /**
-     * 校验同一模型在同一角色下唯一（V49 新增）。
+     * 校验同一模型在同一角色下唯一。
      *
      * <p>规则：deepseek-v4-flash 和 kimi-k3 可同时注册为 Planner；
      * 但 deepseek-v4-flash 不能注册两个 Planner。</p>

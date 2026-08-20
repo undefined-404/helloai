@@ -9,7 +9,7 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 /**
- * 值班关闭 → 主动断门铃监听器（AgentHub V3 门铃 PR-3）。
+ * 值班关闭 → 主动断门铃监听器（AgentHub 门铃 PR-3）。
  *
  * <p>监听 {@link DutyLeaseClosedEvent}，在值班租约关闭 / 到期的事务提交后主动断开
  * 对应 Agent 的门铃连接。语义："先打卡再接电话，签退 / 到期即挂电话"。</p>

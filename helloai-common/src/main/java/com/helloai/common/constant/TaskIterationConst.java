@@ -1,7 +1,7 @@
 package com.helloai.common.constant;
 
 /**
- * task_iteration 表字段常量（V42）。
+ * task_iteration 表字段常量。
  *
  * <p>消除 Service 层字符串硬编码，对齐 CODE_STYLE §1 总体原则：
  * "状态常量：禁止硬编码，统一使用枚举类"。</p>

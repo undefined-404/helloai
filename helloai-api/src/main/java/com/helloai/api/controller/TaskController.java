@@ -54,7 +54,7 @@ public class TaskController {
         Task task = taskService.createTask(req.getTitle(), req.getDescription(), req.getSlaMinutes(),
                 req.getAgentPolicy(), req.getRequiredSkills());
 
-        // v1.1 修复: 创建任务后通知所有 PLANNER
+        // 修复: 创建任务后通知所有 PLANNER
         try {
             List<Agent> planners = agentService.listByRole(AgentRole.PLANNER);
             String eventId = "task.create." + task.getId() + "." + System.currentTimeMillis();
@@ -178,7 +178,7 @@ public class TaskController {
     }
 
     // ══════════════════════════════════════════════════════════
-    //  V42：历史任务迭代记录回填（一次性，按需触发）
+    //  历史任务迭代记录回填（一次性，按需触发）
     // ══════════════════════════════════════════════════════════
 
     @PostMapping("/backfillTaskIterations")

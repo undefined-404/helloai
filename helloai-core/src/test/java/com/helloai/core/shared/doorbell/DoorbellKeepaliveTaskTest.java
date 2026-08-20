@@ -14,7 +14,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link DoorbellKeepaliveTask} 单元测试（AgentHub V3 门铃 PR-4）。
+ * {@link DoorbellKeepaliveTask} 单元测试（AgentHub 门铃 PR-4）。
  *
  * <p>覆盖：门铃关闭时跳过、无连接时跳过、有连接时广播一次、广播异常被吞不外抛。
  * 用真实 {@link DoorbellProperties} + mock {@link DoorbellService}，只验证调度触发逻辑，

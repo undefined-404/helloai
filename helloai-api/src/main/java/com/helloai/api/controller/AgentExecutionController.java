@@ -17,7 +17,7 @@ import org.springframework.web.bind.annotation.*;
 /**
  * Agent 执行验证入口。
  *
- * <p>T5 先提供一个最小管理员入口，验证“选择执行器 → 执行 → 返回结果”的平台内闭环。</p>
+ * <p>先提供一个最小管理员入口，验证“选择执行器 → 执行 → 返回结果”的平台内闭环。</p>
  */
 @RestController
 @RequestMapping("/api/agent-executions")

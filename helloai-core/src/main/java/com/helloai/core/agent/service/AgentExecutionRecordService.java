@@ -51,7 +51,7 @@ public interface AgentExecutionRecordService extends IService<AgentExecutionReco
     /**
      * 旧 DB Poller 主消费扫描：查找「所有未被消费的 PENDING」记录。
      *
-     * @deprecated T5 起 Poller 不再调用本方法；保留仅为兼容历史代码与排查工具。
+     * @deprecated  Poller 不再调用本方法；保留仅为兼容历史代码与排查工具。
      *             新代码请使用 {@link #listOrphanPending(int, int)}。
      */
     @Deprecated

@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 任务事件时间线服务（v2.4 阶段 4.2）。
+ * 任务事件时间线服务。
  *
  * <p>提供事件记录的入口：
  * <ul>
@@ -44,7 +44,7 @@ public interface TaskTimelineService extends IService<TaskTimeline> {
                      Map<String, Object> payload);
 
     /**
-     * 查询指定子任务的时间线条目，按 id 升序（v2.5 M4.5 派发控制台联调）。
+     * 查询指定子任务的时间线条目，按 id 升序（ 派发控制台联调）。
      *
      * <p>供 {@code GET /api/sub-tasks/{id}/timeline} 调用。
      * 仅返回该子任务的事件，不含系统级事件（如 agent_offline）。</p>

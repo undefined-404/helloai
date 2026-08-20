@@ -42,10 +42,10 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 
 /**
- * TaskService 创建/更新单测（A1，V47 收尾）。
+ * TaskService 创建/更新单测（收尾）。
  *
- * <p>回归背景：agentPolicy/requiredSkills 此前无法经任务创建/编辑透传落库，
- * A1 补 createTask 五参重载与 updateTask 六参扩展。本测试验证 policy 随创建落库，
+ * <p>回归背景：agentPolicy/requiredSkills 经任务创建/编辑透传落库（createTask 五参重载
+ *  与 updateTask 六参扩展）。本测试验证 policy 随创建落库，
  * 以及更新侧"null=不更新（MP NOT_NULL 策略跳过）、空集合=显式清空"的语义。</p>
  */
 @ExtendWith(MockitoExtension.class)

@@ -27,7 +27,7 @@ public interface SubTaskDispatchService {
      * <p>这里故意把离线 Agent 作为首选目标交给 {@link ResilientDispatcher}，
      * 由其 fast-fail + fallback 选择替代 Agent，保持角色与熔断逻辑一致。</p>
      *
-     * <p>V27.1 依赖守卫：与 {@link #dispatchPendingSubTaskAuto} 对齐——离线重分配
+     * <p>依赖守卫：与 {@link #dispatchPendingSubTaskAuto} 对齐——离线重分配
      * 曾绕过依赖检查，导致"依赖未 DONE 的子任务被直接重派执行"（实测：trae 离线
      * 时依赖 REVIEW 的子任务被直接分给无本机能力的 inner 执行）。未就绪时保持
      * PENDING，等依赖 DONE 后由正常自动分发链接管。</p>
@@ -48,7 +48,7 @@ public interface SubTaskDispatchService {
     Long dispatchPendingSubTaskAuto(Long subTaskId, AgentRole role);
 
     /**
-     * 死信人工兜底：将 DEAD_LETTER 子任务直接指派给指定 Agent（V25）。
+     * 死信人工兜底：将 DEAD_LETTER 子任务直接指派给指定 Agent。
      *
      * <p>重分配熔断触发后子任务进入 DEAD_LETTER 死信池，自动调度链不再接触。
      * 本方法是唯一的死信恢复入口，由人工确认目标 Agent 后调用：

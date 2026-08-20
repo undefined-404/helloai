@@ -30,7 +30,7 @@ import static org.mockito.Mockito.when;
 import org.mockito.ArgumentCaptor;
 
 /**
- * {@link AgentInboxService} 门铃响铃接线单元测试（AgentHub V3 门铃响铃 PR-2）。
+ * {@link AgentInboxService} 门铃响铃接线单元测试（AgentHub 门铃响铃 PR-2）。
  *
  * <p>只聚焦 PR-2 新增行为：收件箱首次落库成功后发布 {@link InboxMessageCreatedEvent}，
  * 幂等重复投递（{@link DuplicateKeyException}）不发事件。用 spy 桩掉
@@ -115,7 +115,7 @@ class AgentInboxServiceTest {
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  A0-4（§6.63）getRecentRead：已读消息按 read_time 倒序拉取
+    //  getRecentRead：已读消息按 read_time 倒序拉取
     //  ══════════════════════════════════════════════════════════════
 
     @SuppressWarnings("unchecked")

@@ -37,7 +37,7 @@ import com.helloai.core.agent.service.ConcurrencyQuotaService;
 import com.helloai.core.system.service.CredentialVaultService;
 
 /**
- * AgentSelector 单元测试（v2.4 §4.10）。
+ * AgentSelector 单元测试。
  *
  * <p>验证 pickAlternative 的过滤逻辑：
  * SLEEPING/OFFLINE/DISABLED/熔断中的 Agent 被正确跳过，
@@ -98,14 +98,14 @@ class AgentSelectorTest {
         a.setScore(score);
         a.setOnlineStatus(onlineStatus);
         a.setStatus(status);
-        // v2.6 §4.1：默认心跳新鲜（now），避免现有 helper 出来的 CLI_CLIENT 因
+        // §4.1：默认心跳新鲜（now），避免现有 helper 出来的 CLI_CLIENT 因
         // last_seen_time=null 被 isHeartbeatFresh 过滤；心跳用例请改用 agentWithHeartbeat(...)
         a.setLastSeenTime(OffsetDateTime.now().minus(2, ChronoUnit.MINUTES));
         return a;
     }
 
     /**
-     * 心跳新鲜度测试专用构造器。明确指定 last_seen_time，方便测试 v2.6 §4.1
+     * 心跳新鲜度测试专用构造器。明确指定 last_seen_time，方便测试 §4.1
      * AgentSelector 的心跳新鲜度过滤逻辑。
      *
      * @param lastSeenMinutesAgo 距今分钟数；null 表示 last_seen_time 为 null
@@ -556,11 +556,11 @@ class AgentSelectorTest {
     }
 
     /**
-     * v2.6 §4.1 心跳语义对齐：AgentSelector 必须按 last_seen_time 新鲜度过滤。
+     * §4.1 心跳语义对齐：AgentSelector 必须按 last_seen_time 新鲜度过滤。
      * 默认阈值 10 分钟，API_KEY_LLM 豁免。
      */
     @Nested
-    @DisplayName("v2.6 心跳新鲜度过滤（last_seen_time）")
+    @DisplayName("心跳新鲜度过滤（last_seen_time）")
     class HeartbeatFreshness {
 
         @Test
@@ -756,7 +756,7 @@ class AgentSelectorTest {
     }
 
     @Nested
-    @DisplayName("任务级约束过滤（V47 §6.58 P1）")
+    @DisplayName("任务级约束过滤（§6.58 P1）")
     class TaskLevelConstraints {
 
         private Agent agentWithSkills(Long id, Integer score, List<String> skills) {

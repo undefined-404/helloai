@@ -3,7 +3,7 @@ package com.helloai.core.shared.event;
 import lombok.Getter;
 
 /**
- * 值班租约关闭事件（AgentHub V3 门铃 PR-3）。
+ * 值班租约关闭事件（AgentHub 门铃 PR-3）。
  *
  * <p>当 Agent 主动 checkOut（{@code closeLease}）或租约到期被巡检翻为 EXPIRED
  * （{@code expireLeases}）时，由 {@code AgentDutyLeaseService} 在事务内发布。

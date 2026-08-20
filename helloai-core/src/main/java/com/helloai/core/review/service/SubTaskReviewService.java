@@ -4,7 +4,7 @@ import com.helloai.core.shared.event.SubTaskSubmittedForReviewEvent;
 import lombok.Data;
 
 /**
- * 子任务 LLM 自动核验服务（V27 内循环核验门控）。
+ * 子任务 LLM 自动核验服务（内循环核验门控）。
  *
  * <p>入口 {@link #reviewSubTask(Long, Long)}：读取子任务 title/content/deliverable/acceptance
  * + 执行产出（context.lastExecution.output），构造核验 Prompt，经

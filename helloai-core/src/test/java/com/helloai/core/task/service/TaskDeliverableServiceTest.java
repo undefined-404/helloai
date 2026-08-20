@@ -218,7 +218,7 @@ class TaskDeliverableServiceTest {
     }
 
     @Test
-    @DisplayName("V32：已生成整合报告时置顶收录 01-最终整合报告.md，子任务产出顺延从 02- 起")
+    @DisplayName("已生成整合报告时置顶收录 01-最终整合报告.md，子任务产出顺延从 02- 起")
     void shouldIncludeFinalReportWhenPresent() throws IOException {
         Task task = task();
         task.setFinalReport("# 整合报告\n\n全局结论");
@@ -234,7 +234,7 @@ class TaskDeliverableServiceTest {
     }
 
     @Test
-    @DisplayName("V32：报告为空白时不收录，维持旧编号从 01- 起")
+    @DisplayName("报告为空白时不收录，维持旧编号从 01- 起")
     void shouldSkipBlankFinalReport() throws IOException {
         Task task = task();
         task.setFinalReport("   ");

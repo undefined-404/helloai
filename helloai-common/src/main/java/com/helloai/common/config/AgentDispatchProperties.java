@@ -58,11 +58,11 @@ public class AgentDispatchProperties {
     private boolean autoAssignOnCreate = false;
 
     /**
-     * V24：子任务重分配最大尝试次数（熔断阈值）。
+     * 子任务重分配最大尝试次数（熔断阈值）。
      *
      * <p>所有类型的重分配（离线重派、超时回收、N11回退、阻塞重试）
      * 每尝试一次累加 sub_task.reassign_attempt_count；达到本阈值后不再
-     * 重新分配，转入 DEAD_LETTER 死信池待人工兜底（V25，原为 CANCELLED），
+     * 重新分配，转入 DEAD_LETTER 死信池待人工兜底（原为 CANCELLED），
      * 打破无限重试死循环。</p>
      *
      * <p>默认 5 次。设为 0 或负数表示禁用熔断（不推荐生产使用）。</p>
@@ -70,7 +70,7 @@ public class AgentDispatchProperties {
     private int maxReassignAttempts = 5;
 
     /**
-     * V25：ASSIGNED 超时未 claim 回收阈值（分钟）。
+     * ASSIGNED 超时未 claim 回收阈值（分钟）。
      *
      * <p>子任务 ASSIGNED 后若 update_time 超过本阈值仍无人 claim，
      * 由 AssignedSubTaskTimeoutTask 回收到 PENDING 并重新进入调度链。
@@ -81,7 +81,7 @@ public class AgentDispatchProperties {
     private int assignedTimeoutMinutes = 10;
 
     /**
-     * V27：是否启用子任务提交后的 LLM 自动核验（REVIEW 门控）。
+     * 是否启用子任务提交后的 LLM 自动核验（REVIEW 门控）。
      *
      * <p>开启后执行成功提交（→REVIEW）会在事务提交后异步触发
      * SubTaskReviewService 按验收标准自动判定；关闭后子任务停留 REVIEW
@@ -90,7 +90,7 @@ public class AgentDispatchProperties {
     private boolean autoReviewEnabled = true;
 
     /**
-     * V27：自动核验驳回次数上限（沿用 sub_task.rework_count 计数）。
+     * 自动核验驳回次数上限（沿用 sub_task.rework_count 计数）。
      *
      * <p>reworkCount 达到本阈值后自动核验不再打回，子任务停留 REVIEW
      * 等人工处理，避免"执行→驳回→重执行"无限循环。默认 3 次。</p>
@@ -107,7 +107,7 @@ public class AgentDispatchProperties {
     private boolean fallbackSkipExecutionDense = true;
 
     /**
-     * V27 兜底：REVIEW 孤儿扫描阈值（秒）。
+     * 兜底：REVIEW 孤儿扫描阈值（秒）。
      *
      * <p>子任务进入 REVIEW 超过此秒数且无 review_record 时，
      * SubTaskReviewService 的 @Scheduled 兜底扫描会触发核验。
@@ -116,12 +116,12 @@ public class AgentDispatchProperties {
     private int reviewOrphanThresholdSeconds = 60;
 
     /**
-     * V27 兜底：REVIEW 孤儿扫描每批上限。默认 10。</p>
+     * 兜底：REVIEW 孤儿扫描每批上限。默认 10。</p>
      */
     private int reviewOrphanBatchSize = 10;
 
     /**
-     * A0-5：自动核验证据硬检查的附件补偿等待（毫秒）。
+     * 自动核验证据硬检查的附件补偿等待（毫秒）。
      *
      * <p>产出物化在结果回报事务 afterCommit 同步执行，自动核验在 AFTER_COMMIT
      * 异步线程启动，两者存在毫秒级竞态；执行密集任务证据检查未发现可读附件时
@@ -139,7 +139,7 @@ public class AgentDispatchProperties {
     private boolean attachmentContentEnabled = true;
 
     /**
-     * V32：任务自动收口（全部子任务 DONE/CANCELLED → Task DONE）后，
+     * 任务自动收口（全部子任务 DONE/CANCELLED → Task DONE）后，
      * 是否异步触发 Planner 生成最终整合报告。
      *
      * <p>关闭后仍可通过 {@code POST /api/tasks/{id}/final-report} 手动生成。
@@ -147,7 +147,7 @@ public class AgentDispatchProperties {
      */
     private boolean autoFinalReportEnabled = true;
 
-    // 注：原 heartbeatFreshMinutes 字段（v2.6 §4.1 2026-07-20）已迁移至
+    // 注：原 heartbeatFreshMinutes 字段已迁移至
     //     AgentHealthProperties.offlineMinutes，作为 Selector / Reconcile / SQL 回退候选
     //     共用的单一心跳阈值来源。详见 com.helloai.common.config.AgentHealthProperties。
 }

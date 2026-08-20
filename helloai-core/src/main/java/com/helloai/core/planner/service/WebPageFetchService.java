@@ -3,7 +3,7 @@ package com.helloai.core.planner.service;
 import com.helloai.core.planner.search.WebPageContent;
 
 /**
- * 网页直取服务接口（V43）：直接访问用户消息中给出的 URL 并抓取页面正文。
+ * 网页直取服务接口：直接访问用户消息中给出的 URL 并抓取页面正文。
  *
  * <p>实现类：{@link WebPageFetchServiceImpl}。与搜索引擎互补——用户明确给出站点时，
  * 第一手页面内容优于搜索引擎的间接结果；抓取正文注入 Prompt，让 LLM 基于真实站点

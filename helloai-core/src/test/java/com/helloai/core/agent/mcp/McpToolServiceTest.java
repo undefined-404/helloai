@@ -43,19 +43,19 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * A0-1（§6.60）pullTasks 撤销标记单元测试：
+ * pullTasks 撤销标记单元测试：
  * 曾分配给我但已转移的子任务打 reassigned=true + currentAgentId，未转移不打标。
- * <p>A0-4（§6.63）：pullTasks includeRead/summary/read 透传 + getDepsSummary 依赖产出摘要。</p>
- * <p>A0-6（§6.65）：checkIn 租约信息透传 / checkOut 幂等三态（CLOSED/EXPIRED/NONE）/ heartbeat 剩余 TTL。</p>
- * <p>A0-7（§6.66）：pullTasks deadline 透传为 ISO8601 带时区偏移（Z 或 ±HH:MM），null=无时限。</p>
- * <p>A0-8（§6.67）+ E1（§6.83）：除 checkIn/checkOut 外任一工具调用自动续租——
+ * <p>pullTasks includeRead/summary/read 透传 + getDepsSummary 依赖产出摘要。</p>
+ * <p>checkIn 租约信息透传 / checkOut 幂等三态（CLOSED/EXPIRED/NONE）/ heartbeat 剩余 TTL。</p>
+ * <p>pullTasks deadline 透传为 ISO8601 带时区偏移（Z 或 ±HH:MM），null=无时限。</p>
+ * <p>除 checkIn/checkOut 外任一工具调用自动续租——
  * 有 ACTIVE 租约时调 adaptiveRenew 按当前状态动态计算续租窗口（在跑任务最大窗口、
  * 空闲按表现分动态窗口），无租约不自动打卡；续租失败不阻断工具调用。</p>
- * <p>P2（§6.115）：checkIn 技能上报——与 agent.skills 取并集（同义词归一 + 去重 +
+ * <p>P2：checkIn 技能上报——与 agent.skills 取并集（同义词归一 + 去重 +
  * 只增不减），未上报/合并失败不阻断打卡。</p>
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("McpToolService 值班租约与收件箱工具（A0-1/A0-4/A0-6）")
+@DisplayName("McpToolService 值班租约与收件箱工具")
 class McpToolServiceTest {
 
     private static final long AGENT_ID = 1L;
@@ -156,11 +156,11 @@ class McpToolServiceTest {
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  A0-2（§6.61）getAgentStatus：REST 别名通道工具对齐
+    //  getAgentStatus：REST 别名通道工具对齐
     //  ══════════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("getAgentStatus：返回管理态/在线态字段（A0-2 REST 别名复用）")
+    @DisplayName("getAgentStatus：返回管理态/在线态字段（REST 别名复用）")
     void shouldReturnAgentStatus() {
         Agent agent = new Agent();
         agent.setId(AGENT_ID);
@@ -180,7 +180,7 @@ class McpToolServiceTest {
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  A0-4（§6.63）pullTasks includeRead/summary/read 透传
+    //  pullTasks includeRead/summary/read 透传
     //  ══════════════════════════════════════════════════════════════
 
     @Test
@@ -240,7 +240,7 @@ class McpToolServiceTest {
 
         McpToolService.PullTasksResult.Message msg = result.getMessages().get(0);
         assertThat(msg.getDeadline()).isNotNull();
-        // A0-7：ISO8601 带时区偏移（Z 或 ±HH:MM 后缀），外部 Agent 按绝对时刻解析不误判
+        // ISO8601 带时区偏移（Z 或 ±HH:MM 后缀），外部 Agent 按绝对时刻解析不误判
         assertThat(msg.getDeadline()).matches("\\d{4}-\\d{2}-\\d{2}T.*(Z|[+-]\\d{2}:\\d{2})$");
 
         // 无 deadline 时透传 null（=无时限）
@@ -250,7 +250,7 @@ class McpToolServiceTest {
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  A0-4（§6.63）getDepsSummary 前置产出摘要
+    //  getDepsSummary 前置产出摘要
     //  ══════════════════════════════════════════════════════════════
 
     private SubTask taskWithDeps(Long id, List<Long> deps) {
@@ -363,7 +363,7 @@ class McpToolServiceTest {
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  A0-6（§6.65）checkIn/checkOut/heartbeat 值班租约语义对称
+    //  checkIn/checkOut/heartbeat 值班租约语义对称
     //  ══════════════════════════════════════════════════════════════
 
     private AgentDutyLease lease(Long id, AgentDutyLeaseStatus status, OffsetDateTime expireTime, String sessionId) {
@@ -379,7 +379,7 @@ class McpToolServiceTest {
     }
 
     @Test
-    @DisplayName("checkIn：leaseId/sessionId/workMode/maxConcurrent/expiresAt 同步返回（A0-6 子任务1）")
+    @DisplayName("checkIn：leaseId/sessionId/workMode/maxConcurrent/expiresAt 同步返回（子任务1）")
     void shouldReturnLeaseInfoOnCheckIn() {
         OffsetDateTime expiresAt = OffsetDateTime.now().plusMinutes(30);
         AgentDutyLease lease = lease(11L, AgentDutyLeaseStatus.ACTIVE, expiresAt, "uuid-abc");
@@ -399,7 +399,7 @@ class McpToolServiceTest {
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  P2（§6.115）checkIn 技能上报：与 agent.skills 取并集（只增不减）
+    //  P2checkIn 技能上报：与 agent.skills 取并集（只增不减）
     //  ══════════════════════════════════════════════════════════════
 
     @Test
@@ -484,7 +484,7 @@ class McpToolServiceTest {
     }
 
     @Test
-    @DisplayName("checkOut：正常签退后 currentStatus=CLOSED 且带租约事实（A0-6 子任务2）")
+    @DisplayName("checkOut：正常签退后 currentStatus=CLOSED 且带租约事实（子任务2）")
     void shouldReturnClosedStatusOnCheckOut() {
         when(agentDutyLeaseService.closeLease(eq(AGENT_ID), eq("shutdown"))).thenReturn(1);
         OffsetDateTime expiresAt = OffsetDateTime.now().plusMinutes(30);
@@ -503,7 +503,7 @@ class McpToolServiceTest {
     }
 
     @Test
-    @DisplayName("checkOut 幂等：租约已过期返回 currentStatus=EXPIRED（A0-6 子任务2）")
+    @DisplayName("checkOut 幂等：租约已过期返回 currentStatus=EXPIRED（子任务2）")
     void shouldReturnExpiredStatusWhenLeaseExpired() {
         when(agentDutyLeaseService.closeLease(eq(AGENT_ID), eq("shutdown"))).thenReturn(0);
         AgentDutyLease latest = lease(22L, AgentDutyLeaseStatus.EXPIRED,
@@ -521,7 +521,7 @@ class McpToolServiceTest {
     }
 
     @Test
-    @DisplayName("checkOut 幂等：从未打卡返回 currentStatus=NONE（A0-6 子任务2）")
+    @DisplayName("checkOut 幂等：从未打卡返回 currentStatus=NONE（子任务2）")
     void shouldReturnNoneWhenNeverCheckedIn() {
         when(agentDutyLeaseService.closeLease(eq(AGENT_ID), eq("manual_close"))).thenReturn(0);
         when(agentDutyLeaseService.getLatestLease(AGENT_ID)).thenReturn(null);
@@ -536,7 +536,7 @@ class McpToolServiceTest {
     }
 
     @Test
-    @DisplayName("heartbeat：持有 ACTIVE 租约时返回 onDuty/leaseId/leaseExpiresAt/remainingTtlSeconds（A0-6 子任务3）")
+    @DisplayName("heartbeat：持有 ACTIVE 租约时返回 onDuty/leaseId/leaseExpiresAt/remainingTtlSeconds（子任务3）")
     void shouldReturnRemainingTtlWhenActiveLease() {
         OffsetDateTime expiresAt = OffsetDateTime.now().plusMinutes(10);
         AgentDutyLease active = lease(33L, AgentDutyLeaseStatus.ACTIVE, expiresAt, "uuid-active");
@@ -553,7 +553,7 @@ class McpToolServiceTest {
     }
 
     @Test
-    @DisplayName("heartbeat：无 ACTIVE 租约时 onDuty=false 且 remainingTtlSeconds=0（A0-6 子任务3）")
+    @DisplayName("heartbeat：无 ACTIVE 租约时 onDuty=false 且 remainingTtlSeconds=0（子任务3）")
     void shouldReturnOffDutyWhenNoActiveLease() {
         when(agentDutyLeaseService.getActiveLease(AGENT_ID)).thenReturn(null);
 
@@ -567,7 +567,7 @@ class McpToolServiceTest {
     }
 
     @Test
-    @DisplayName("A0-8/E1：业务工具调用（pullTasks）触发自适应续约")
+    @DisplayName("业务工具调用（pullTasks）触发自适应续约")
     void shouldAutoRenewLeaseOnBusinessToolCall() {
         when(agentInboxService.getUnread(AGENT_ID, 10)).thenReturn(List.of());
 
@@ -578,7 +578,7 @@ class McpToolServiceTest {
     }
 
     @Test
-    @DisplayName("A0-8/E1：heartbeat 顺带自适应续约，返回续租后剩余 TTL")
+    @DisplayName("heartbeat 顺带自适应续约，返回续租后剩余 TTL")
     void shouldAutoRenewLeaseOnHeartbeatAndReportPostRenewTtl() {
         OffsetDateTime start = OffsetDateTime.now().minusMinutes(30);
         OffsetDateTime expire = OffsetDateTime.now().plusMinutes(30);
@@ -596,7 +596,7 @@ class McpToolServiceTest {
     }
 
     @Test
-    @DisplayName("A0-8/E1：无 ACTIVE 租约时续租路径安全 no-op（adaptiveRenew 返回 null，工具调用不受影响）")
+    @DisplayName("无 ACTIVE 租约时续租路径安全 no-op（adaptiveRenew 返回 null，工具调用不受影响）")
     void shouldNotRenewLeaseWithoutActiveLease() {
         // 无租约不自动打卡的语义由 adaptiveRenew 内部保证（返回 null 不续约），
         // McpToolService 只负责顺带调用，不自行判断租约存在性
@@ -610,7 +610,7 @@ class McpToolServiceTest {
     }
 
     @Test
-    @DisplayName("A0-8/E1：续租异常不阻断工具调用（pullTasks 仍正常返回）")
+    @DisplayName("续租异常不阻断工具调用（pullTasks 仍正常返回）")
     void shouldKeepToolResultWhenRenewFails() {
         when(agentInboxService.getUnread(AGENT_ID, 10)).thenReturn(List.of(subTaskInbox(SUB_TASK_ID)));
         when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask(AGENT_ID));

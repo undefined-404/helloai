@@ -186,7 +186,7 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
         }
 
         for (SubTask draft : drafts) {
-            // A0-7（§6.66）：任务级 SLA 下发 deadline。必须先持久化再 changeStatus——
+            // 任务级 SLA 下发 deadline。必须先持久化再 changeStatus——
             // changeStatus 内部按 id 重查库后全字段 updateById，未落库的 deadline 会被覆盖丢失。
             if (task.getSlaMinutes() != null && task.getSlaMinutes() > 0) {
                 draft.setDeadline(OffsetDateTime.now().plusMinutes(task.getSlaMinutes()));
@@ -229,7 +229,7 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
                 AgentRole.PLANNER, null, Map.of("subTaskCount", confirmed.size()));
 
         // 事务外触发自动分发（分发链内部有独立事务与事件），单条失败不阻断其余。
-        // V27：确认草案是用户显式启动内循环的动作，不受 auto-assign-on-create
+        // 确认草案是用户显式启动内循环的动作，不受 auto-assign-on-create
         // （任务创建即分发）开关控制；否则开关关闭时只能等孤儿扫描兜底，
         // 内循环无法自动运转。ready 守卫会自动拦住依赖未就绪的节点。
         for (SubTask draft : confirmed) {

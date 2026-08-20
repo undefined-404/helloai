@@ -41,7 +41,7 @@ import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 
 /**
- * ResilientDispatcher 单元测试（v2.4 §4.10）。
+ * ResilientDispatcher 单元测试。
  *
  * <p>验证熔断保护 + fast-fail + fallback 降级逻辑。
  * 使用真实 Resilience4j CircuitBreakerRegistry（内存模式）测试行为。</p>
@@ -86,7 +86,7 @@ class ResilientDispatcherTest {
                 agentSelector,
                 agentDispatchProperties,
                 taskTimelineService);
-        // V25：assignNext fast-fail 段新增心跳新鲜度检查，默认桩为“新鲜”，
+        // assignNext fast-fail 段新增心跳新鲜度检查，默认桩为“新鲜”，
         // 心跳陈旧场景在具体用例中单独覆盖
         lenient().when(agentSelector.isHeartbeatFresh(any())).thenReturn(true);
     }
@@ -184,7 +184,7 @@ class ResilientDispatcherTest {
         }
 
         @Test
-        @DisplayName("V25: CLI_CLIENT ONLINE 但心跳陈旧 → 抛 AgentUnavailableException（走 fallback）")
+        @DisplayName("CLI_CLIENT ONLINE 但心跳陈旧 → 抛 AgentUnavailableException（走 fallback）")
         void shouldThrowAgentUnavailableForStaleHeartbeat() {
             Agent stale = onlineAgent(1L);
             when(agentService.getById(1L)).thenReturn(stale);
@@ -283,7 +283,7 @@ class ResilientDispatcherTest {
     }
 
     @Nested
-    @DisplayName("V27.1 执行密集能力预检")
+    @DisplayName("执行密集能力预检")
     class ExecutionDensePrecheck {
 
         @Test

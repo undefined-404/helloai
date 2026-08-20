@@ -7,7 +7,7 @@ import java.time.Duration;
 import java.time.OffsetDateTime;
 
 /**
- * Agent 心跳服务（v2.4+）：Redis TTL + DB last_seen_time 双写，三态在线判定与调度可用性判断。
+ * Agent 心跳服务：Redis TTL + DB last_seen_time 双写，三态在线判定与调度可用性判断。
  */
 public interface HeartbeatService {
 
@@ -17,13 +17,13 @@ public interface HeartbeatService {
     Duration HB_TTL = Duration.ofMinutes(5);
 
     /**
-     * 心跳刷新：写 Redis TTL → 更新 DB last_seen_at → 三态重算
+     * 心跳刷新：写 Redis TTL → 更新 DB last_seen_time → 三态重算
      * （SLEEPING 只刷 seen_at 不覆盖 online_status；OFFLINE 恢复时清 offline 原因）。
      */
     void seen(Long agentId);
 
     /**
-     * 业务活跃心跳：复用 seen() 双写，并单独刷新 last_active_at
+     * 业务活跃心跳：复用 seen() 双写，并单独刷新 last_active_time
      * （"最近一次业务执行时刻"语义，区别于 seen 的"连接存活"语义）。
      */
     void active(Long agentId);

@@ -27,7 +27,7 @@ import com.helloai.core.agent.service.AgentService;
 /**
  * 平台内 Agent 执行入口。
  *
- * <p>T3 先作为统一 service 入口，避免未来把执行编排逻辑散落到 Controller / MQ consumer 中。</p>
+ * <p>先作为统一 service 入口，避免未来把执行编排逻辑散落到 Controller / MQ consumer 中。</p>
  */
 @Service
 @RequiredArgsConstructor

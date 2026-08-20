@@ -26,14 +26,14 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Agent 健康检查任务（v2.4 阶段 4.2 重构）。
+ * Agent 健康检查任务。
  *
- * <p>采用 Reconcile 模式（v2.4 P2）：
+ * <p>采用 Reconcile 模式：
  * <ol>
  *   <li>每 60s 扫描一次 last_seen_time 早于 5 分钟的 Agent</li>
- *   <li>对每个超时 Agent，先尝试主动 ping（v1.1 占位）</li>
+ *   <li>对每个超时 Agent，先尝试主动 ping（占位）</li>
  *   <li>ping 失败 → 用 CAS UPDATE 标 OFFLINE（防止 seen() 刷新覆盖）</li>
- *   <li>CAS 成功 → 触发任务重分配（v1.1 占位） + 写 task_timeline 审计</li>
+ *   <li>CAS 成功 → 触发任务重分配（占位） + 写 task_timeline 审计</li>
  * </ol>
  * </p>
  *
@@ -69,7 +69,7 @@ public class AgentHealthCheckTask {
 
         try {
             OffsetDateTime now = OffsetDateTime.now();
-            // v2.6 §4.1：统一使用 AgentHealthProperties.offlineMinutes 计算 cutoff，
+            // §4.1：统一使用 AgentHealthProperties.offlineMinutes 计算 cutoff，
             // 与 AgentSelector / ExternalAgentFailureTracker 共用同一阈值，避免漂移。
             // 阈值 ≤ 0 时禁用扫描（逃生口，不推荐生产使用）。
             int thresholdMinutes = healthProperties.getOfflineMinutes();
@@ -108,7 +108,7 @@ public class AgentHealthCheckTask {
             return;
         }
 
-        // 1) 主动 ping（v1.1 占位：CLI 客户端通过 heartbeat 自动续约；API_KEY_LLM 暂用 last_active 判断）
+        // 1) 主动 ping（占位：CLI 客户端通过 heartbeat 自动续约；API_KEY_LLM 暂用 last_active 判断）
         //    当前实现：仅靠 Redis TTL 二次验证（如果 Redis TTL 还在 → 说明刚刚见过，放弃标 OFFLINE）
         if (isRedisAlive(agent.getId())) {
             log.debug("Redis TTL 仍在，跳过: agentId={}", agent.getId());
@@ -161,7 +161,7 @@ public class AgentHealthCheckTask {
     }
 
     /**
-     * Redis TTL 二次验证（v1.1 阶段替代 ping）。
+     * Redis TTL 二次验证（替代主动 ping）。
      *
      * <p>HeartbeatService.seen() 会同时写 Redis TTL 和 DB last_seen_time，
      * 但 Redis 写入可能比 DB 慢（罕见），如果 DB 看起来超时但 Redis TTL 还在，
@@ -179,12 +179,12 @@ public class AgentHealthCheckTask {
     }
 
     /**
-     * 将离线 Agent 的未完成任务重分配给同角色替代 Agent（v2.4 §4.6，v2.6 §4.1 二次选人加固）。
+     * 将离线 Agent 的未完成任务重分配给同角色替代 Agent（§4.1 二次选人加固）。
      *
      * <p>重分配范围：status ∈ {ASSIGNED, IN_PROGRESS} 且 assigned_agent = agentId。
      * PENDING 未分配具体 Agent，DONE/CANCELLED 已完成，均不处理。</p>
      *
-     * <p><b>v2.6 §4.1 二次选人加固（2026-07-20）</b>：
+     * <p><b>§4.1 二次选人加固</b>：
      * 首选路径是 {@link SubTaskDispatchService#redispatchOfflineSubTask}，
      * 让原离线 Agent 触发 fast-fail + 熔断 fallback。
      * 当首选路径异常（如原 Agent 不在白名单、Selector 无候选）时，

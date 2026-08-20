@@ -276,7 +276,7 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
     }
 
     /**
-     * 依赖校验（V27）：序号越界/自引用即拒，再用 Kahn 拓扑排序做环检测，
+     * 依赖校验：序号越界/自引用即拒，再用 Kahn 拓扑排序做环检测，
      * 成环整批拒绝（抛 BizException → 拆解失败回退 PENDING 可重拆）。
      *
      * <p>序号为 1-based（指向同批草案中的第 N 条）；dependsOn 为 null/空视为无依赖。</p>
@@ -338,7 +338,7 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
     }
 
     /**
-     * 序号→真实 id 映射回写（V27）：saveBatch 后草案 id 已由 assign_id 预填，
+     * 序号→真实 id 映射回写：saveBatch 后草案 id 已由 assign_id 预填，
      * 把 dependsOn 序号换成同批草案的真实 sub_task id 写入 depends_on 列，
      * 并同步回填实体字段（返回给调用方的草案列表携带依赖信息）。
      *

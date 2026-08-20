@@ -28,7 +28,7 @@ public interface TaskService extends IService<Task> {
     Task createTask(String title, String description);
 
     /**
-     * 创建任务（初始状态 PENDING），可指定任务级 SLA 分钟数（A0-7 新增，V48）。
+     * 创建任务（初始状态 PENDING），可指定任务级 SLA 分钟数。
      *
      * <p>{@code slaMinutes} 可空：null=无时限；非 null 时在计划确认（confirmPlan）
      * 阶段按 {@code 确认时刻 + slaMinutes} 下发各子任务 {@code deadline}，
@@ -43,7 +43,7 @@ public interface TaskService extends IService<Task> {
     Task createTask(String title, String description, Integer slaMinutes);
 
     /**
-     * 创建任务（初始状态 PENDING），可指定任务级 SLA 与执行策略（A1 新增，V47 收尾）。
+     * 创建任务（初始状态 PENDING），可指定任务级 SLA 与执行策略（收尾）。
      *
      * <p>{@code agentPolicy} / {@code requiredSkills} 可空：null=不设置，落库走 DB 默认值
      * {@code {}} / {@code []}，与旧数据行为完全一致。policy 键结构见 {@code TaskAgentPolicy}。</p>
@@ -92,7 +92,7 @@ public interface TaskService extends IService<Task> {
     Task updateTask(Long id, String title, String description);
 
     /**
-     * 更新任务基本信息、SLA 与执行策略（A1 新增，V47 收尾）；任务不存在时返回 null。
+     * 更新任务基本信息、SLA 与执行策略（收尾）；任务不存在时返回 null。
      *
      * <p>更新语义：null 字段不 set（保持现状，不进入 UPDATE 语句）；
      * {@code agentPolicy} 传空 Map / {@code requiredSkills} 传空列表表示显式清空

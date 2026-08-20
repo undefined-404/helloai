@@ -6,7 +6,7 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * {@code task.agent_policy} JSONB 的静态解析工具（V47，§6.58 P1）。
+ * {@code task.agent_policy} JSONB 的静态解析工具（§6.58 P1）。
  *
  * <p>任务级 Agent 指定策略的全部读取/判定统一收口到本类，避免各处散落
  * Map 取值与防御式类型转换。键结构与默认值语义：
@@ -40,7 +40,7 @@ public final class TaskAgentPolicy {
     /** policy 键：任务难度。 */
     public static final String KEY_DIFFICULTY = "difficulty";
 
-    /** N11 外部 Agent 失败后的保底回退策略（V47）。 */
+    /** N11 外部 Agent 失败后的保底回退策略。 */
     public enum FallbackPolicy {
         /** 默认：N11 正常回退 API_KEY_LLM 保底。 */
         AUTO,
@@ -50,7 +50,7 @@ public final class TaskAgentPolicy {
         NONE
     }
 
-    /** 任务难度（V47）。 */
+    /** 任务难度。 */
     public enum Difficulty {
         LOW,
         /** 默认。 */

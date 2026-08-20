@@ -46,7 +46,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * PlannerAnalysisService 单元测试（拆解异步化改造后）：
+ * PlannerAnalysisService 单元测试（拆解异步化）：
  * decompose 同步守卫（校验 / CAS / 异步提交即返回 / 线程池拒绝回退）、
  * confirm / reject 状态流转。
  *
@@ -306,7 +306,7 @@ class PlannerAnalysisServiceTest {
         plannerAnalysisService.confirmPlan(TASK_ID);
         OffsetDateTime after = OffsetDateTime.now();
 
-        // A0-7：deadline 必须在 changeStatus 前落库（changeStatus 内部重查库后全字段更新，
+        // deadline 必须在 changeStatus 前落库（changeStatus 内部重查库后全字段更新，
         // 未落库的 deadline 会被覆盖丢失），取值区间 [now, now+60min]，序列化 ISO8601 带时区偏移
         ArgumentCaptor<SubTask> captor = ArgumentCaptor.forClass(SubTask.class);
         verify(subTaskService, times(2)).updateById(captor.capture());

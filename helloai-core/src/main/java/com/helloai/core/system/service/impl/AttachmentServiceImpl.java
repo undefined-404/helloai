@@ -40,7 +40,7 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
      * 注册产物附件元数据。
      * 仅允许对归属于 agentId 的 SubTask 上传附件。
      *
-     * <p>版本语义（2026-08-19）：同子任务同名文件的旧 ACTIVE 版本自动置
+     * <p>版本语义：同子任务同名文件的旧 ACTIVE 版本自动置
      * INACTIVE，保证任意文件名至多一条有效版本——核验/依赖装载/交付物打包
      * 只认最新版，杜绝"同名多版本并存导致 Reviewer 反复打回"的死循环；
      * 历史版本保留（状态回查 + 内容直读不受影响）。</p>

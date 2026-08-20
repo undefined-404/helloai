@@ -10,7 +10,7 @@ import java.util.Map;
 /**
  * 技能标签归一化工具类（A3）。
  *
- * <p>V47 后任务 {@code required_skills} 对 {@code agent.skills} 做 AND 精确匹配
+ * <p>后任务 {@code required_skills} 对 {@code agent.skills} 做 AND 精确匹配
  * （{@code AgentSelectionConstraints.allows()} 的 {@code containsAll}），"shell 脚本"
  * 与 "powershell" 被视为不同技能导致误过滤。本类在<b>匹配前</b>把双方技能标签
  * 归一到规范标签（trim + 小写 + 同义词归并），同义词技能互相命中。</p>

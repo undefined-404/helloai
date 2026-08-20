@@ -24,7 +24,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 子任务完成闭环监听器（V27 内循环收尾）。
+ * 子任务完成闭环监听器（内循环收尾）。
  *
  * <p>{@link SubTaskCompletedEvent}（complete → REVIEW→DONE）事务提交后异步执行：</p>
  * <ol>
@@ -82,8 +82,8 @@ public class SubTaskCompletionListener {
                 // ready 守卫会自动过滤依赖仍未全部 DONE 的节点，无需在此重复判定
                 subTaskDispatchService.dispatchPendingSubTaskAuto(downstream.getId(), AgentRole.EXECUTOR);
             } catch (Exception e) {
-                // V41：失败原因写 timeline，让"无可用候选/状态冲突"可见（此前仅 warn 日志，
-                // 子任务无声卡在 PENDING，用户只能靠手动排查）；孤儿巡检（5 分钟阈值）负责重试
+                // 失败原因写 timeline，让"无可用候选/状态冲突"可见，避免子任务无声卡在 PENDING；
+                // 孤儿巡检（5 分钟阈值）负责重试
                 log.warn("下游节点分发失败（保持 PENDING 等兜底）: subTaskId={}, err={}",
                         downstream.getId(), e.getMessage());
                 try {
@@ -136,7 +136,7 @@ public class SubTaskCompletionListener {
             taskTimelineService.recordEvent(taskId, null, "task_auto_completed",
                     AgentRole.SYSTEM, null, Map.of("trigger", "all_sub_tasks_done"));
             log.info("Task 自动收尾完成: taskId={}", taskId);
-            // V32：CAS 赢家唯一，恰好保证整合报告只被触发一次。此处已无事务上下文，
+            // CAS 赢家唯一，恰好保证整合报告只被触发一次。此处已无事务上下文，
             // 消费方（TaskFinalReportService）用普通 @EventListener + @Async 承接。
             applicationEventPublisher.publishEvent(new TaskAutoCompletedEvent(taskId));
         }

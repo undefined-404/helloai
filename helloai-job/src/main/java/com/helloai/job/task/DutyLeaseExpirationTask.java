@@ -14,7 +14,7 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 值班租约到期巡检任务（AgentHub V1 P0-C）。
+ * 值班租约到期巡检任务（AgentHub P0-C）。
  *
  * <p>周期扫描 {@code agent_duty_lease} 表中 status=ACTIVE 且 expires_at 已过期的行，
  * 将它们批量翻为 EXPIRED（close_reason=lease_expired）。防止 Agent 崩溃 / 意外掉线时

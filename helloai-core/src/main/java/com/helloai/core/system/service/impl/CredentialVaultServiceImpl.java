@@ -97,7 +97,7 @@ public class CredentialVaultServiceImpl extends ServiceImpl<CredentialVaultMappe
     /**
      * 以最小 upsert 方式保存 Agent 的 API Key 凭证。
      *
-     * <p>T1 先只支持单条启用态记录；后续多 Provider / 多版本轮换再继续扩展。</p>
+     * <p>先只支持单条启用态记录；后续多 Provider / 多版本轮换再继续扩展。</p>
      */
     @Transactional(rollbackFor = Exception.class)
     @Override
@@ -160,7 +160,7 @@ public class CredentialVaultServiceImpl extends ServiceImpl<CredentialVaultMappe
     /**
      * 轮换 Agent 的 API Key 凭证：旧凭证 → EXPIRED，新凭证 → ACTIVE。
      *
-     * <p>AgentHub V1 T4 轮换语义：</p>
+     * <p>AgentHub 轮换语义：</p>
      * <ul>
      *   <li>旧 ACTIVE 凭证标为 {@code EXPIRED}（非 DISABLED），
      *       区分"人为停用"和"自动轮换"</li>

@@ -9,7 +9,7 @@ import java.util.Map;
 /**
  * 平台内 Agent 执行任务封装。
  *
- * <p>T3 先收敛到最小执行输入，避免把 Controller / MQ / Prompt 拼接细节直接暴露给 Executor。</p>
+ * <p>先收敛到最小执行输入，避免把 Controller / MQ / Prompt 拼接细节直接暴露给 Executor。</p>
  */
 @Value
 @Builder

@@ -13,6 +13,6 @@ public class AgentCreateRequest {
     private Map<String, Object> modelConfig;
     private String remark;
 
-    /** 技能标签列表（V52）：按模型能力驱动落库，不传时按 accessType + 模型能力推导。 */
+    /** 技能标签列表：按模型能力驱动落库，不传时按 accessType + 模型能力推导。 */
     private List<String> skills;
 }

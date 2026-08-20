@@ -11,6 +11,6 @@ public enum CredentialOwnerType {
     /** Agent 级凭证，owner_id = agent.id。 */
     AGENT,
 
-    /** 平台级凭证，owner_id 固定占位 0，按 provider 唯一（配合 V45 迁移放开 CHECK 约束）。 */
+    /** 平台级凭证，owner_id 固定占位 0，按 provider 唯一（配合 迁移放开 CHECK 约束）。 */
     PLATFORM
 }

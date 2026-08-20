@@ -6,7 +6,7 @@ import java.util.Map;
 /**
  * Agent 接入类型。
  *
- * <p>对应 v2.4 路线图 N1：CLI_CLIENT / API_KEY_LLM / WEB_BROWSER 三类 Agent。
+ * <p>对应 CLI_CLIENT / API_KEY_LLM / WEB_BROWSER 三类 Agent。
  * 每个 accessType 有默认 capabilities，注册时允许 Agent 实例独立覆盖。</p>
  */
 public enum AgentAccessType {
@@ -32,7 +32,7 @@ public enum AgentAccessType {
     /**
      * 当前 accessType 是否要求平台从 `credential_vault` 读取托管凭证。
      *
-     * <p>T1/T2 约束：只有 API_KEY_LLM 使用托管凭证；
+     * <p>/约束：只有 API_KEY_LLM 使用托管凭证；
      * `agent.api_key` 对它只保留工牌语义，不再承载真实 LLM Secret。</p>
      */
     public boolean usesCredentialVault() {

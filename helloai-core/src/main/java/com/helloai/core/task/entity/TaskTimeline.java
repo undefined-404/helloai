@@ -11,7 +11,7 @@ import lombok.EqualsAndHashCode;
 import java.util.Map;
 
 /**
- * 任务事件时间线（v2.4 阶段 4.2）。
+ * 任务事件时间线。
  *
  * <p>用于记录任务生命周期内的关键事件（agent_offline / task_assigned / task_completed 等），
  * 同时承载 AgentHealthCheckTask 的审计日志。</p>
@@ -20,7 +20,7 @@ import java.util.Map;
  * <ul>
  *   <li>{@code taskId} / {@code subTaskId} 可空（系统级事件如 agent_offline 不属于具体任务）</li>
  *   <li>{@code eventType} + {@code role} 标识事件类型与产生方角色</li>
- *   <li>{@code payload} 用 JSONB 存储结构化负载（reason / offline_at / metadata 等）</li>
+ *   <li>{@code payload} 用 JSONB 存储结构化负载（reason / offline_time / metadata 等）</li>
  * </ul>
  * </p>
  */
@@ -44,7 +44,7 @@ public class TaskTimeline extends BaseEntity {
     /** 关联 Agent ID（agent_offline 等系统级事件时记录被监控的 Agent） */
     private Long agentId;
 
-    /** 事件负载（JSONB，Map 形式）：结构化记录 reason / offline_at / metadata 等 */
+    /** 事件负载（JSONB，Map 形式）：结构化记录 reason / offline_time / metadata 等 */
     @TableField(typeHandler = JacksonTypeHandler.class)
     private Map<String, Object> payload;
 }

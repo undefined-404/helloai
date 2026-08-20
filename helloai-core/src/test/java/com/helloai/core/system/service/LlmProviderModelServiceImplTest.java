@@ -26,7 +26,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * LlmProviderModelServiceImpl 单元测试（V49 新增）。
+ * LlmProviderModelServiceImpl 单元测试。
  *
  * <p>覆盖：批量保存（空列表 / 默认模型不在列表 / 正常替换）、默认模型设置、
  * 添加模型（重复 / 默认互斥）、删除模型（默认模型 / 最后一个拒绝）、

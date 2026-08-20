@@ -35,7 +35,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link AssignedSubTaskTimeoutTask} 单元测试（AgentHub V1 T1）。
+ * {@link AssignedSubTaskTimeoutTask} 单元测试（AgentHub ）。
  *
  * <p>覆盖：</p>
  * <ul>
@@ -70,7 +70,7 @@ class AssignedSubTaskTimeoutTaskTest {
         task = new AssignedSubTaskTimeoutTask(
                 subTaskMapper, subTaskDispatchService, agentService, redis, agentDispatchProperties);
 
-        // V25：超时阈值改读配置，默认桩为原硬编码值 10 分钟
+        // 超时阈值改读配置，默认桩为原硬编码值 10 分钟
         lenient().when(agentDispatchProperties.getAssignedTimeoutMinutes()).thenReturn(10);
         // 默认 tryLock 成功
         lenient().when(redis.opsForValue()).thenReturn(valueOps);

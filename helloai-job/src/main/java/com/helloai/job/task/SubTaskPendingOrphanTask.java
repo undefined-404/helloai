@@ -21,7 +21,7 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
- * PENDING 孤儿子任务巡检任务（v2.6 §4.1 2026-07-20 新增）。
+ * PENDING 孤儿子任务巡检任务。
  *
  * <p>填补可靠性缺口：dispatch-mode=EVENT 主路径上 Spring 事务事件丢失、
  * {@code agent_execution_record} 行未被创建、但 {@code sub_task} 一直停在 PENDING。
@@ -32,12 +32,12 @@ import java.util.concurrent.TimeUnit;
  * <h3>职责</h3>
  * <ul>
  *     <li>每 60s 扫一次：{@code status='PENDING' AND create_time &lt; now - 5min
- *         AND NOT EXISTS agent_execution_record}（V41 阈值 30min → 5min）</li>
+ *         AND NOT EXISTS agent_execution_record}（阈值 30min → 5min）</li>
  *     <li>逐条重新触发 {@link SubTaskDispatchService#dispatchPendingSubTaskAuto}：
  *         PENDING 状态的子任务自动按角色选人并进入弹性调度链</li>
  *     <li>Redis 锁保证多实例串行，单批上限 50 条防阻塞</li>
  *     <li>覆盖两种"无人接管"场景：① 主路径事件丢失（原始设计目标）；
- *         ② 依赖解锁瞬间无空闲候选导致分发失败（V41 收窄阈值后 5 分钟内自动重试）</li>
+ *         ② 依赖解锁瞬间无空闲候选导致分发失败（收窄阈值后 5 分钟内自动重试）</li>
  * </ul>
  *
  * <h3>与现有任务边界</h3>
@@ -61,7 +61,7 @@ import java.util.concurrent.TimeUnit;
  * <ul>
  *     <li>{@code helloai.execution.pending-orphan-enabled}（默认 true）</li>
  *     <li>{@code helloai.execution.pending-orphan-scan-interval-ms}（默认 60000）</li>
- *     <li>{@code helloai.execution.pending-orphan-threshold-minutes}（默认 5，V41 起）</li>
+ *     <li>{@code helloai.execution.pending-orphan-threshold-minutes}（默认 5）</li>
  *     <li>{@code helloai.execution.pending-orphan-batch-size}（默认 50）</li>
  * </ul>
  *
@@ -149,7 +149,7 @@ public class SubTaskPendingOrphanTask {
                                 subTaskId, latest.getStatus());
                         continue;
                     }
-                    // V27: 依赖未就绪的节点不触发分发（保持 PENDING 等上游 DONE 后解锁），
+                    // 依赖未就绪的节点不触发分发（保持 PENDING 等上游 DONE 后解锁），
                     // 避免孤儿扫描误伤依赖编排中的合法阻塞节点
                     if (!subTaskService.isReady(latest)) {
                         skipNotReady++;
@@ -157,7 +157,7 @@ public class SubTaskPendingOrphanTask {
                                 subTaskId, latest.dependsOnIdList());
                         continue;
                     }
-                    // V27.1: 有人工介入标记的 PENDING 不自动重派（等人工处置），
+                    // 有人工介入标记的 PENDING 不自动重派（等人工处置），
                     // 避免兜底巡检把"无能力/返工超限"等人工场景反复打回调度链
                     if (SubTaskDispatchService.isManualInterventionMarked(latest)) {
                         skipManualIntervention++;

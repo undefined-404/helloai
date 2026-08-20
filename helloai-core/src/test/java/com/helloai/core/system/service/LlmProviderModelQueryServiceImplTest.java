@@ -26,7 +26,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * LlmProviderModelQueryServiceImpl 单元测试（V49 新增）。
+ * LlmProviderModelQueryServiceImpl 单元测试。
  *
  * <p>覆盖：按 Provider ID / Code 查询模型列表、默认模型查询、模型可用性校验、
  * 数量统计，以及空值入参防御（返回空集合而非 null）。</p>

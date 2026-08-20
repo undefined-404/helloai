@@ -25,7 +25,7 @@ import java.util.UUID;
  * 便于按归属者/年月/主任务检索。</p>
  *
  * <p>MinIO 客户端懒创建，bucket 首次写入前自动 ensure（makeBucketIfNotExists）。
- * v2.7 起 minio:// 附件由 {@link CompositeArtifactStorage} 路由到本实现直读，
+ *  minio:// 附件由 {@link CompositeArtifactStorage} 路由到本实现直读，
  * 下载与执行证据检查均不再区分本地/外部存储。</p>
  */
 @Slf4j

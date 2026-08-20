@@ -30,7 +30,7 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
      * 使用 HelloAI 调度平台的<b>完整工具集</b>——用哪些、何时用是外部 Agent 的决策，
      * 平台的责任是「给全」。故值班打卡 checkIn/checkOut 亦纳入默认授权，
      * 否则外部 Agent 无法上岗（isOnDuty=false）。
-     * （注：门铃通道已搁置 2026-08-07——外部 Agent 无法处理平台推送的门铃信号，
+     * （注：门铃通道已搁置 ——外部 Agent 无法处理平台推送的门铃信号，
      * 任务感知一律走 pullTasks 轮询，详见 {@code DoorbellService} 状态注记。）
      * </p>
      * <p>
@@ -38,16 +38,16 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
      * 走 spring-ai ToolCallbackProvider 自动注册，不在此列。
      * </p>
      * <ul>
-     *   <li>{@code pullTasks}      —— 拉取 Agent 待处理收件箱（v2.4 §9.1）</li>
-     *   <li>{@code ack}            —— 确认收件箱消息已处理（v2.4 §9.1）</li>
-     *   <li>{@code claimSubTask}   —— 原子认领子任务（v2.4 §9.1）</li>
-     *   <li>{@code heartbeat}      —— 心跳上报（v2.4 §9.1）</li>
-     *   <li>{@code uploadArtifact} —— 上传产物附件元数据（v2.4 §9.1）</li>
-     *   <li>{@code submitResult}   —— 上交子任务执行结果（v2.5 M5）</li>
-     *   <li>{@code reportBlocked}  —— 上报任务阻塞（v2.5 补齐）</li>
-     *   <li>{@code getAgentStatus} —— 查询 Agent 自身状态（v2.4 §9.1 helloai 此前缺失补齐）</li>
-     *   <li>{@code checkIn}        —— 值班打卡上班，建 ACTIVE 租约（AgentHub V1 P0-A；在岗状态与租约入口）</li>
-     *   <li>{@code checkOut}       —— 值班打卡下班，关闭 ACTIVE 租约（AgentHub V1 P0-A）</li>
+     *   <li>{@code pullTasks}      —— 拉取 Agent 待处理收件箱</li>
+     *   <li>{@code ack}            —— 确认收件箱消息已处理</li>
+     *   <li>{@code claimSubTask}   —— 原子认领子任务</li>
+     *   <li>{@code heartbeat}      —— 心跳上报</li>
+     *   <li>{@code uploadArtifact} —— 上传产物附件元数据</li>
+     *   <li>{@code submitResult}   —— 上交子任务执行结果</li>
+     *   <li>{@code reportBlocked}  —— 上报任务阻塞</li>
+     *   <li>{@code getAgentStatus} —— 查询 Agent 自身状态（协议列要求）</li>
+     *   <li>{@code checkIn}        —— 值班打卡上班，建 ACTIVE 租约（AgentHub P0-A；在岗状态与租约入口）</li>
+     *   <li>{@code checkOut}       —— 值班打卡下班，关闭 ACTIVE 租约（AgentHub P0-A）</li>
      * </ul>
      */
     private static final List<String> DEFAULT_EXECUTOR_TOOLS = List.of(

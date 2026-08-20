@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.when;
 
 /**
- * McpAuthFilter 单测（A0-2 §6.61）：
+ * McpAuthFilter 单测：
  *
  * <ul>
  *   <li>SDK 404「Session not found」时 SESSION_AUTH 联动清理（SSE 断开即失效，不应残留 30min）</li>
@@ -35,7 +35,7 @@ import static org.mockito.Mockito.when;
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("McpAuthFilter 404 联动清理与修复提示（A0-2）")
+@DisplayName("McpAuthFilter 404 联动清理与修复提示")
 class McpAuthFilterTest {
 
     private static final String SESSION_ID = "test-session-abc-123";

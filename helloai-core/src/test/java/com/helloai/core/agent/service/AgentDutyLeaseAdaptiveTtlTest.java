@@ -31,7 +31,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link AgentDutyLeaseService} 动态 TTL 自适应单元测试（E1，N12 A2 第 2 段）。
+ * {@link AgentDutyLeaseService} 动态 TTL 自适应单元测试（E1，N12  第 2 段）。
  *
  * <p>覆盖：</p>
  * <ul>

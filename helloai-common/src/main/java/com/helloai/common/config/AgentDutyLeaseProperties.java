@@ -4,7 +4,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 /**
- * Agent 值班租约自适应 TTL 配置（E1 动态 TTL 自适应，N12 A2 第 2 段）。
+ * Agent 值班租约自适应 TTL 配置（E1 动态 TTL 自适应，N12  第 2 段）。
  *
  * <p>租约 TTL 不再静态固定：checkIn 未显式传 TTL 时按 Agent 表现动态推断
  * （低表现 Agent 窗口短、便于快速回收；高表现 Agent 窗口长、减少续约开销）；

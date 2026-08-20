@@ -42,7 +42,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link ResilientDispatcher} Spring AOP 织入集成测试（v2.6 §4.1）。
+ * {@link ResilientDispatcher} Spring AOP 织入集成测试。
  *
  * <p>目的：验证 {@code @CircuitBreaker(name="agentDispatch", fallbackMethod="assignNextFallback")}
  * 在 Spring Boot 上下文中确实经过 Spring AOP 代理织入；fallback 在被保护方法抛异常时真实触发。</p>
@@ -131,7 +131,7 @@ class ResilientDispatcherAopIntegrationTest {
         when(agentService.getById(101L)).thenReturn(offlineAgent);
         when(agentService.getById(202L)).thenReturn(alternativeAgent);
 
-        // 模拟：pickAlternative 排除原 Agent 后选出替代 Agent（V47 起为 3 参：约束贯穿 fallback）
+        // 模拟：pickAlternative 排除原 Agent 后选出替代 Agent（为 3 参：约束贯穿 fallback）
         when(agentSelector.pickAlternative(eq(101L), any(), any())).thenReturn(alternativeAgent);
 
         // 调用受保护的方法：触发 fallback
@@ -159,7 +159,7 @@ class ResilientDispatcherAopIntegrationTest {
      * 最小化 Spring Boot 集成上下文：仅加载 AOP + Resilience4j 必需 Bean，
      * 避免触发数据库 / Redis / MQ 等基础设施。
      *
-     * <p>v2.6 §4.1：使用 {@link SpringBootConfiguration}（非 @TestConfiguration），
+     * <p>§4.1：使用 {@link SpringBootConfiguration}（非 @TestConfiguration），
      * 让 {@code SpringBootTestContextBootstrapper} 能识别入口配置类；通过
      * {@link ImportAutoConfiguration} 精确启用 {@link AopAutoConfiguration}（启用
      * {@link AnnotationAwareAspectJAutoProxyCreator}）与

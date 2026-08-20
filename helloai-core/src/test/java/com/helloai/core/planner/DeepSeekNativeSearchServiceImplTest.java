@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * {@link DeepSeekNativeSearchServiceImpl} 单元测试（V42 DeepSeek 原生搜索 adapter）。
+ * {@link DeepSeekNativeSearchServiceImpl} 单元测试（DeepSeek 原生搜索 adapter）。
  *
  * <p>用 JDK 内置 {@link HttpServer} 起本地桩端点模拟 DeepSeek Anthropic 兼容端点，
  * 验证：请求报文形状（服务端工具声明 / x-api-key 头）、结构化结果块解析映射、

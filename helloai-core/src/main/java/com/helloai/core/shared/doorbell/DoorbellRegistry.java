@@ -9,7 +9,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.function.BiConsumer;
 
 /**
- * 门铃连接注册表（AgentHub V3 门铃内核 PR-1）。
+ * 门铃连接注册表（AgentHub 门铃内核 PR-1）。
  *
  * <p>维护 {@code agentId → SseEmitter} 的进程内映射，是门铃能"定位某个 Agent 的长连接
  * 并主动响铃"的核心——这正是 spring-ai MCP 传输层封装掉、业务侧拿不到的能力

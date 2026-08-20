@@ -4,7 +4,7 @@ import lombok.Builder;
 import lombok.Data;
 
 /**
- * 一次用户消息 URL 直取的归一化记录（V43）：直接访问用户给出的网页后抓取的页面快照。
+ * 一次用户消息 URL 直取的归一化记录：直接访问用户给出的网页后抓取的页面快照。
  *
  * <p>纯内存领域对象（不映射表）：成功时 {@code text} 为剥离标签后的正文（已按
  * {@code WebSearchProperties#urlFetchMaxTextChars} 截断），随 {@link WebSearchOutcome}
@@ -31,7 +31,7 @@ public class WebPageContent {
     private String text;
 
     /**
-     * V44 SPA 空壳元数据兜底标记：正文为空但 &lt;title&gt;/meta 描述存在时，
+     * SPA 空壳元数据兜底标记：正文为空但 &lt;title&gt;/meta 描述存在时，
      * {@code text} 为拼合的元数据文本（站点名+描述），本标记区分于真实正文抓取。
      */
     private boolean metaOnly;

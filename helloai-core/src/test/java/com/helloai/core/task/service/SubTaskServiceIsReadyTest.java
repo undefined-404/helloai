@@ -36,7 +36,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * SubTaskService.isReady 依赖判定单元测试（V27 内循环依赖编排）：
+ * SubTaskService.isReady 依赖判定单元测试（内循环依赖编排）：
  * 空依赖直接就绪 / 全部 DONE 就绪 / 部分未 DONE 阻塞 / null 防御。
  */
 @ExtendWith(MockitoExtension.class)

@@ -11,12 +11,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
- * 门铃服务实现（AgentHub V3 门铃内核 PR-1）。
+ * 门铃服务实现（AgentHub 门铃内核 PR-1）。
  *
  * <p>PR-1 只做连接内核，暂无响铃来源（响铃接线在 PR-2 由 InboxMessageCreatedEvent 驱动）。</p>
  *
  * <p>PR-4 双心跳（可选，默认关）：若 {@code helloai.doorbell.refresh-heartbeat=true}，
- * {@link #connect(Long)} 建连时顺带调一次 {@link HeartbeatService#seen(Long)} 刷 {@code last_seen_at}，
+ * {@link #connect(Long)} 建连时顺带调一次 {@link HeartbeatService#seen(Long)} 刷 {@code last_seen_time}，
  * keepalive 轮不刷（避免僵尸连接掩盖真实离线）。</p>
  */
 @Slf4j
@@ -59,7 +59,7 @@ public class DoorbellServiceImpl implements DoorbellService {
 
         registry.register(agentId, emitter);
         doSend(agentId, emitter, DoorbellSignal.connected());
-        // 双心跳（可选，默认关）：建连是客户端主动、最可信的存活证据，顺带刷一次 last_seen_at。
+        // 双心跳（可选，默认关）：建连是客户端主动、最可信的存活证据，顺带刷一次 last_seen_time。
         if (properties.isRefreshHeartbeat()) {
             refreshSeen(agentId);
         }

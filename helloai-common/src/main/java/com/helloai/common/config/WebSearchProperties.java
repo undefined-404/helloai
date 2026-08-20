@@ -10,7 +10,7 @@ import org.springframework.stereotype.Component;
  * <p>作为 <code>RequirementClarifyService</code> 对话轮次增强的可选外部依赖集中管理，
  * 仿 {@link DoorbellProperties} 风格，避免供应商、API Key、超时等散落在业务代码里。</p>
  *
- * <p>V45 起任意对话模式（CHAT/CLARIFY）每轮 LLM 调用前按会话级开关触发，
+ * <p>任意对话模式（CHAT/CLARIFY）每轮 LLM 调用前按会话级开关触发，
  * 预检索行业资料 / 竞品 / 技术方案后注入 <code>{{WEB_SEARCH_CONTEXT}}</code> 占位符；
  * 失败一律降级跳过，不阻断对话流程。</p>
  */
@@ -31,7 +31,7 @@ public class WebSearchProperties {
 
     /**
      * 单次搜索请求超时（毫秒）。默认 8 秒：博查开启 AI 摘要（summary=true）时耗时波动大，
-     * 原 3 秒易静默超时降级为空列表（V44 从 3s 上调）；搜索是辅助增强，体验优先。
+     * 原 3 秒易静默超时降级为空列表（从 3s 上调）；搜索是辅助增强，体验优先。
      */
     private long timeoutMs = 8_000L;
 
@@ -75,7 +75,7 @@ public class WebSearchProperties {
     private long deepseekTimeoutMs = 15_000L;
 
     /**
-     * 用户消息 URL 直取开关（V43）：消息含 http(s) 链接时直接访问抓取页面正文
+     * 用户消息 URL 直取开关：消息含 http(s) 链接时直接访问抓取页面正文
      * 注入上下文，而非把裸 URL 文本当搜索词。false 时回退纯搜索引擎行为。
      */
     private boolean urlFetchEnabled = true;

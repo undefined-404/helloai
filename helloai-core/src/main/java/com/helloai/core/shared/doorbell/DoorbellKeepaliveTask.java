@@ -7,7 +7,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * 门铃保活帧调度任务（AgentHub V3 门铃 PR-4）。
+ * 门铃保活帧调度任务（AgentHub 门铃 PR-4）。
  *
  * <p>周期性向本进程 {@link DoorbellRegistry} 中所有活跃 {@code SseEmitter} 广播一帧
  * {@code keepalive}，穿透 Nginx / 反代的空闲连接超时（通常 60s 无数据即断），

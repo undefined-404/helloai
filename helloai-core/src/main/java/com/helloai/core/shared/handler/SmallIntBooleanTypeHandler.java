@@ -9,7 +9,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 
 /**
- * SMALLINT(0/1) ↔ Boolean TypeHandler（V40 起用于 pending_clarify_confirm 等
+ * SMALLINT(0/1) ↔ Boolean TypeHandler（用于 pending_clarify_confirm 等
  * 按代码规范 9.3 使用 SMALLINT 而非 BOOLEAN 的布尔列）：
  * write 侧 Boolean → ps.setInt(0/1)，read 侧 smallint → Boolean。
  *

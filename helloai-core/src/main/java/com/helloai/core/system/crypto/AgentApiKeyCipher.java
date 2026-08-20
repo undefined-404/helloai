@@ -12,7 +12,7 @@ import java.security.NoSuchAlgorithmException;
 /**
  * Agent 工牌 consumerToken（agent.api_key）存储加密器（等保三级"数据保密性"）。
  *
- * <p>存储形态：<code>enc:v1:{AES-GCM-Base64}</code>（版本前缀便于未来算法轮换）；
+ * <p>存储形态：<code>enc:{AES-GCM-Base64}</code>（版本前缀便于未来算法轮换）；
  * 存量明文（无前缀）由 {@link #matches} 兼容比对，认证命中后由调用方触发
  * {@link #encrypt} 惰性迁移回写（加密 + hash 双写）。</p>
  *
@@ -27,7 +27,7 @@ public class AgentApiKeyCipher {
 
     private final CredentialCryptoService credentialCryptoService;
 
-    /** 加密存储形态：{@code enc:v1:}{base64(nonce+密文)}；null 原样返回。 */
+    /** 加密存储形态：{@code enc:}{base64(nonce+密文)}；null 原样返回。 */
     public String encrypt(String plainKey) {
         if (plainKey == null) {
             return null;
@@ -56,7 +56,7 @@ public class AgentApiKeyCipher {
         return MessageDigest.isEqual(actual, expected);
     }
 
-    /** 是否已加密存储（带 {@code enc:v1:} 前缀）。 */
+    /** 是否已加密存储（带 {@code enc:} 前缀）。 */
     public boolean isEncrypted(String stored) {
         return stored != null && stored.startsWith(VERSION_PREFIX);
     }

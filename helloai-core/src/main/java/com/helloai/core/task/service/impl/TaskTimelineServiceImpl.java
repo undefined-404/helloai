@@ -15,7 +15,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 任务事件时间线服务实现（v2.4 阶段 4.2）。
+ * 任务事件时间线服务实现。
  */
 @Slf4j
 @Service

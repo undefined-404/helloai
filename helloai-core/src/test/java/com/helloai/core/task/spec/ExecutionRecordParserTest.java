@@ -8,7 +8,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * ExecutionRecordParser 单测——围栏协议 VERIFICATION 段解析 + SKILL.md 官方示例绑定（A0-9）。
+ * ExecutionRecordParser 单测——围栏协议 VERIFICATION 段解析 + SKILL.md 官方示例绑定。
  *
  * <p>覆盖三态：携带 VERIFICATION / 缺失 VERIFICATION（仅检测不拦截）/ 格式畸形（返回 null）；
  * 另将 SKILL.md §4.4 两个官方示例原文作为解析输入（文档-解析器绑定，防示例漂移）。</p>

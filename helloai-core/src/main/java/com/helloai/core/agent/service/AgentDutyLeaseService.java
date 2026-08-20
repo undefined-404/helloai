@@ -12,7 +12,7 @@ import java.util.Map;
 /**
  * Agent 值班租约服务。
  *
- * <p>AgentHub V1 T3 最小骨架，提供值班态事实源的 CRUD。</p>
+ * <p>AgentHub 最小骨架，提供值班态事实源的 CRUD。</p>
  *
  * <p>本轮只做：
  * <ul>
@@ -51,7 +51,7 @@ public interface AgentDutyLeaseService extends IService<AgentDutyLease> {
     /**
      * 查询 Agent 最近一条值班租约（任意状态，按开始时间倒序取第一条）。
      *
-     * <p>A0-6（§6.65）：checkOut 幂等返回当前状态时使用——租约已过期或从未打卡时
+     * <p>：checkOut 幂等返回当前状态时使用——租约已过期或从未打卡时
      * 也能给出可自检的语义（EXPIRED / NONE），而不是只给 closedCount=0。</p>
      *
      * @return null 如果该 Agent 从未有过租约
@@ -94,7 +94,7 @@ public interface AgentDutyLeaseService extends IService<AgentDutyLease> {
     AgentDutyLease renewLease(Long agentId, int ttlMinutes);
 
     /**
-     * 解析租约 TTL 窗口（E1 动态 TTL 自适应，N12 A2 第 2 段）。
+     * 解析租约 TTL 窗口（E1 动态 TTL 自适应，N12  第 2 段）。
      *
      * <p>显式入参（checkIn 传了 ttlMinutes）永远优先；否则按 Agent 表现动态推断：
      * 有 score → 线性映射 [0, fullScore] → [min, max]；无 score →
@@ -121,7 +121,7 @@ public interface AgentDutyLeaseService extends IService<AgentDutyLease> {
     AgentDutyLease adaptiveRenew(Long agentId);
 
     /**
-     * 扫描到期的 ACTIVE 租约并批量翻为 EXPIRED（AgentHub V1 P0-C）。
+     * 扫描到期的 ACTIVE 租约并批量翻为 EXPIRED（AgentHub P0-C）。
      *
      * <p>由 helloai-job 中的 {@code DutyLeaseExpirationTask} 周期性调用。
      * 每个 Agent 的翻转单独一条 UPDATE，沿用 {@link #closeLease} 相同的
@@ -133,7 +133,7 @@ public interface AgentDutyLeaseService extends IService<AgentDutyLease> {
     int expireLeases(int batchLimit);
 
     /**
-     * 分页查询值班租约（AgentHub V1 P1 值班报表数据源，只读）。
+     * 分页查询值班租约（AgentHub P1 值班报表数据源，只读）。
      *
      * <p>为运营看板提供值班租约列表，支持按 Agent、状态过滤，
      * 按值班开始时间倒序（最近上班的在前）。逻辑删除由 {@code @TableLogic} 自动过滤。</p>

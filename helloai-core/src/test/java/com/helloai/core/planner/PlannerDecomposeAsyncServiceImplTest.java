@@ -343,7 +343,7 @@ class PlannerDecomposeAsyncServiceImplTest {
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  validateDependencies：依赖环校验（V27）
+    //  validateDependencies：依赖环校验
     // ══════════════════════════════════════════════════════════════
 
     private PlannerAnalysisService.PlanDraftItem item(List<Integer> dependsOn) {

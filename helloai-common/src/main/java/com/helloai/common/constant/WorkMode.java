@@ -3,7 +3,7 @@ package com.helloai.common.constant;
 /**
  * Agent 值班租约工作模式。
  *
- * <p>N12 P1 STRICT 独占报锁（A2 第 1 段）落地：值班时声明工作模式，
+ * <p>N12 P1 STRICT 独占报锁（ 第 1 段）落地：值班时声明工作模式，
  * STRICT 模式下平台调度器不把该 Agent 列入他人失败/熔断后的替补池抢派。
  *
  * <p>DB 列 {@code agent_duty_lease.work_mode} 仍为 String，本枚举只做

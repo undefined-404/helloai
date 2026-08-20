@@ -55,7 +55,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
- * SubTaskReviewService 单元测试（V27 核验门控）：
+ * SubTaskReviewService 单元测试（核验门控）：
  * 判定解析三分支（通过/不通过/不可解析）+ 返工上限跳过 + 返工重执行命令下发。
  */
 @ExtendWith(MockitoExtension.class)
@@ -134,7 +134,7 @@ class SubTaskReviewServiceTest {
         subTask.setDeliverable("接口文档");
         subTask.setAcceptance("覆盖全部端点");
         subTask.setReworkCount(0);
-        // A0-5 证据检查：默认携带可读产出（非执行密集任务 output 即产出支撑）
+        //  证据检查：默认携带可读产出（非执行密集任务 output 即产出支撑）
         Map<String, Object> ctx = new HashMap<>();
         ctx.put("lastExecution", Map.of("output", "接口清单已整理完毕，覆盖全部端点。"));
         subTask.setContext(ctx);
@@ -264,7 +264,7 @@ class SubTaskReviewServiceTest {
                 eq(AgentRole.REVIEWER), any(), anyMap());
         // §6.52：返工达上限须写入人工介入标记（前端面板据此展示）
         verify(subTaskService).markManualIntervention(eq(SUB_TASK_ID), eq("rework_limit"), anyMap());
-        // 2026-08-19：核验返工熔断显式入死信（与调度维度 sub_task_dead_letter 对称），DLQ 泳道可回溯
+        // 核验返工熔断显式入死信（与调度维度 sub_task_dead_letter 对称），DLQ 泳道可回溯
         ArgumentCaptor<Map> deadLetterPayload = ArgumentCaptor.forClass(Map.class);
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_review_dead_letter"),
@@ -276,7 +276,7 @@ class SubTaskReviewServiceTest {
     }
 
     @Test
-    @DisplayName("V27.1: 执行密集任务 + 提交者无本机能力 → 跳过自动核验 + 标记人工介入")
+    @DisplayName("执行密集任务 + 提交者无本机能力 → 跳过自动核验 + 标记人工介入")
     void shouldSkipReviewWhenExecutionDenseSubmitterLacksCapability() {
         when(dispatchProperties.isFallbackSkipExecutionDense()).thenReturn(true);
         SubTask dense = reviewSubTask();
@@ -299,7 +299,7 @@ class SubTaskReviewServiceTest {
     }
 
     @Test
-    @DisplayName("V27.1: 执行密集任务 + 提交者有本机能力 → 正常自动核验")
+    @DisplayName("执行密集任务 + 提交者有本机能力 → 正常自动核验")
     void shouldReviewWhenExecutionDenseSubmitterHasLocalCapability() {
         when(dispatchProperties.isFallbackSkipExecutionDense()).thenReturn(true);
         SubTask dense = reviewSubTask();
@@ -314,7 +314,7 @@ class SubTaskReviewServiceTest {
         submitter.setRole(AgentRole.EXECUTOR);
         submitter.setAccessType(AgentAccessType.CLI_CLIENT);
         when(agentService.getById(EXECUTOR_ID)).thenReturn(submitter);
-        // A0-5 证据检查：执行密集任务需有可读物化附件支撑
+        //  证据检查：执行密集任务需有可读物化附件支撑
         Attachment attachment = new Attachment();
         attachment.setId(100L);
         attachment.setSubTaskId(SUB_TASK_ID);
@@ -472,11 +472,11 @@ class SubTaskReviewServiceTest {
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  V47 §6.58 P1：任务级 policy 指定 Reviewer
+    //  §6.58 P1：任务级 policy 指定 Reviewer
     //  ══════════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("V47 §6.58: policy 指定 reviewerAgentId 优先于自动选择")
+    @DisplayName("§6.58: policy 指定 reviewerAgentId 优先于自动选择")
     void shouldUsePolicyReviewerWhenSpecified() {
         Task task = new Task();
         task.setId(TASK_ID);
@@ -502,7 +502,7 @@ class SubTaskReviewServiceTest {
     }
 
     @Test
-    @DisplayName("V47 §6.58: 指定 reviewer 不可用（DISABLED）→ 回退自动选择")
+    @DisplayName("§6.58: 指定 reviewer 不可用（DISABLED）→ 回退自动选择")
     void shouldFallbackToAutoWhenPolicyReviewerUnusable() {
         Task task = new Task();
         task.setId(TASK_ID);
@@ -527,11 +527,11 @@ class SubTaskReviewServiceTest {
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  A0-5 证据硬检查：伪造证据不通过 / 有附件通过
+    //   证据硬检查：伪造证据不通过 / 有附件通过
     //  ══════════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("A0-5: 无产出本体（output 与附件皆空）→ 跳过自动核验 + 人工介入标记")
+    @DisplayName("无产出本体（output 与附件皆空）→ 跳过自动核验 + 人工介入标记")
     void shouldSkipReviewWhenNoOutputAndNoAttachment() {
         SubTask fake = reviewSubTask();
         fake.setContext(null); // 编造提交：连产出文本都没有
@@ -551,7 +551,7 @@ class SubTaskReviewServiceTest {
     }
 
     @Test
-    @DisplayName("A0-5: 执行密集任务仅文字描述产出、无可读物化附件 → 跳过自动核验")
+    @DisplayName("执行密集任务仅文字描述产出、无可读物化附件 → 跳过自动核验")
     void shouldSkipReviewWhenExecutionDenseWithoutReadableAttachment() {
         SubTask dense = reviewSubTask();
         dense.setContent("编写 verify-order-expire.ps1 脚本并执行验证");
@@ -581,7 +581,7 @@ class SubTaskReviewServiceTest {
     }
 
     @Test
-    @DisplayName("A0-5: 执行密集任务无可读附件（重查窗口后仍无）→ 跳过自动核验")
+    @DisplayName("执行密集任务无可读附件（重查窗口后仍无）→ 跳过自动核验")
     void shouldSkipReviewWhenExecutionDenseNoAttachmentAfterRetry() {
         // 覆盖 setUp 的 0：给一个真实等待窗口，验证物化竞态补偿路径（等待→重查→仍无→拦截）
         when(dispatchProperties.getReviewEvidenceCheckWaitMs()).thenReturn(5);
@@ -604,7 +604,7 @@ class SubTaskReviewServiceTest {
     }
 
     @Test
-    @DisplayName("A0-5: 核验 Prompt 注入物化附件清单（有附件列文件名 / 无附件占位）")
+    @DisplayName("核验 Prompt 注入物化附件清单（有附件列文件名 / 无附件占位）")
     void shouldInjectAttachmentListIntoReviewPrompt() {
         // 有可读附件：prompt 应含附件清单章节与文件名
         SubTask subTask = reviewSubTask();

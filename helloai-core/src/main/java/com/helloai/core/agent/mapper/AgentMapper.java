@@ -15,8 +15,8 @@ import java.util.List;
  * 自定义方法集中在 {@code AgentMapper.xml}：
  * <ul>
  *   <li>{@link #insert} / {@link #updateById}：覆盖 BaseMapper，处理 PostgreSQL JSONB 字段</li>
- *   <li>{@link #markOfflineIfStale}：阶段 4 Reconcile 的 CAS UPDATE，防止 seen() 刷新覆盖</li>
- *   <li>{@link #selectByLastSeenBefore}：阶段 4 Reconcile 扫描超时未续约 Agent</li>
+ *   <li>{@link #markOfflineIfStale}：Reconcile 的 CAS UPDATE，防止 seen() 刷新覆盖</li>
+ *   <li>{@link #selectByLastSeenBefore}：Reconcile 扫描超时未续约 Agent</li>
  * </ul>
  * </p>
  */
@@ -41,7 +41,7 @@ public interface AgentMapper extends BaseMapper<Agent> {
      * <p>CAS 条件：
      * <ul>
      *   <li>{@code id = #{agentId}}</li>
-     *   <li>{@code last_seen_at < #{cutoff}} — 仍超时（防止 seen() 刚刷新又被标离线）</li>
+     *   <li>{@code last_seen_time < #{cutoff}} — 仍超时（防止 seen() 刚刷新又被标离线）</li>
      *   <li>{@code online_status IS DISTINCT FROM 'SLEEPING'} — SLEEPING 不自动改</li>
      *   <li>{@code deleted = 0}</li>
      * </ul>
@@ -56,11 +56,11 @@ public interface AgentMapper extends BaseMapper<Agent> {
                            @Param("now") OffsetDateTime now);
 
     /**
-     * 查 last_seen_at 早于 cutoff 的 Agent 列表（用于 Reconcile 扫描）。
+     * 查 last_seen_time 早于 cutoff 的 Agent 列表（用于 Reconcile 扫描）。
      *
      * <p>过滤条件：
      * <ul>
-     *   <li>{@code last_seen_at < #{cutoff}} — 超时未续约</li>
+     *   <li>{@code last_seen_time < #{cutoff}} — 超时未续约</li>
      *   <li>{@code online_status IS DISTINCT FROM 'SLEEPING'} — SLEEPING 不参与扫描</li>
      *   <li>{@code deleted = 0}</li>
      * </ul>
@@ -105,8 +105,7 @@ public interface AgentMapper extends BaseMapper<Agent> {
      *
      * <p>条件：CLI_CLIENT + 未删除 + 连续失败次数 &gt;= threshold +
      * 处于 cooldown 之外（last_fallback_at 为空或早于 cooldownCutoff）+
-     * 心跳新鲜（v2.6 §4.1：last_seen_time 非空且晚于 lastSeenCutoff，
-     * 与 AgentSelector / AgentHealthCheckTask 共用 AgentHealthProperties.offlineMinutes）。</p>
+     * 心跳新鲜（last_seen_time 非空且晚于 lastSeenCutoff* 与 AgentSelector / AgentHealthCheckTask 共用 AgentHealthProperties.offlineMinutes）。</p>
      */
     List<Agent> selectFallbackCandidates(@Param("threshold") int threshold,
                                          @Param("cooldownCutoff") OffsetDateTime cooldownCutoff,

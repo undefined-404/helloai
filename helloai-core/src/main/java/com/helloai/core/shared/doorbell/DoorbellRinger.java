@@ -9,9 +9,9 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 /**
- * 门铃响铃器（AgentHub V3 门铃响铃 PR-2）。
+ * 门铃响铃器（AgentHub 门铃响铃 PR-2）。
  *
- * <p><b>状态注记（2026-08-07）</b>：门铃通道已搁置。技术瓶颈——外部 AI Agent
+ * <p><b>状态注记</b>：门铃通道已搁置。技术瓶颈——外部 AI Agent
  * （安装版 / CLI 版）均为单向执行器，无法处理平台推送的门铃信号，且 Agent 端代码
  * 不可修改；任务感知一律由 pullTasks 轮询承担。本代码保留运行，待未来 Agent 端
  * 常驻 daemon（官方插件 / CLI 包装器）落地后可复用本通道。</p>

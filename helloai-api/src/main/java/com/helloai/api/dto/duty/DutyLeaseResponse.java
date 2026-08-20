@@ -6,7 +6,7 @@ import lombok.Data;
 import java.time.OffsetDateTime;
 
 /**
- * 值班租约列表项（AgentHub V1 P1 值班报表数据源）。
+ * 值班租约列表项（AgentHub P1 值班报表数据源）。
  *
  * <p>对应 {@code agent_duty_lease} 一条租约的对外只读视图，
  * 额外冗余 {@code agentName} 便于看板直接展示。</p>

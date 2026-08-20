@@ -26,7 +26,7 @@ public class MyBatisPlusConfig {
     public MybatisPlusInterceptor mybatisPlusInterceptor() {
         MybatisPlusInterceptor interceptor = new MybatisPlusInterceptor();
 
-        // 1. 乐观锁拦截器（修复 v1.1 测试中 updateById 失败的问题）
+        // 1. 乐观锁拦截器（修复 测试中 updateById 失败的问题）
         interceptor.addInnerInterceptor(new OptimisticLockerInnerInterceptor());
 
         return interceptor;
@@ -42,7 +42,7 @@ public class MyBatisPlusConfig {
             TypeHandlerRegistry registry = configuration.getTypeHandlerRegistry();
             registry.register(java.util.Map.class, JacksonTypeHandler.class);
             registry.register(java.util.HashMap.class, JacksonTypeHandler.class);
-            // V27：sub_task.depends_on 是 List<Long> JSONB 列，SELECT 读出同样需要显式注册
+            // sub_task.depends_on 是 List<Long> JSONB 列，SELECT 读出同样需要显式注册
             registry.register(java.util.List.class, JacksonTypeHandler.class);
             registry.register(java.util.ArrayList.class, JacksonTypeHandler.class);
         };

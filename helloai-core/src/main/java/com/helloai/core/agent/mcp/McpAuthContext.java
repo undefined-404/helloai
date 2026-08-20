@@ -9,7 +9,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 /**
- * MCP Server 鉴权上下文工具类（v2.4 §3.1 / §9 路线 C M4 鉴权改造 v2）。
+ * MCP Server 鉴权上下文工具类（§3.1 / §9 鉴权接入）。
  *
  * <p><b>核心机制</b>：用 sessionId 关联 {@link McpAuthFilter} 写入的鉴权信息与
  * spring-ai MCP Server 反射调用 @Tool 方法时的请求上下文。</p>
@@ -29,7 +29,7 @@ import java.util.concurrent.ConcurrentMap;
  * <p><b>存储</b>：static {@code ConcurrentMap<String, AuthContext>}，
  * 进程级缓存。sessionId 几乎不可能碰撞（UUID），依赖 SSE 长连接断开时由
  * spring-ai 内部清理 session。极端情况下可能累积（不会被 GC），
- * helloai 当前阶段可接受（v2.4 §3.1 阶段 3 收官后再优化）。</p>
+ * helloai 当前阶段可接受（§3.1 收官后再优化）。</p>
  *
  * @author helloai
  * @see McpAuthFilter
@@ -133,7 +133,7 @@ public final class McpAuthContext {
     }
 
     /**
-     * ★ 路径 1 新增：直接透传 sessionId（v2.5 M4 收官方案）。
+     * 直接透传 sessionId（鉴权收官方案）。
      *
      * <p>spring-ai 1.1.0 的 {@code SyncMcpToolMethodCallback} 反射器不认识
      * {@code McpSyncServerExchange}，ToolContext.getContext() 实际为空 map，
@@ -163,7 +163,7 @@ public final class McpAuthContext {
         }
         AuthContext auth = SESSION_AUTH.get(sessionId);
         if (auth == null) {
-            // A0-2（§6.61）：错误带修复提示——SSE 断开后 session 即失效，需重新握手或改走 REST 别名通道
+            // 错误带修复提示——SSE 断开后 session 即失效，需重新握手或改走 REST 别名通道
             throw new BizException(401, "MCP 鉴权失败：session 未鉴权或已过期，sessionId=" + sessionId
                     + "。修复：重新 GET /mcp/sse 握手拿新 sessionId；或改用无状态 REST 别名 POST /api/mcp/jsonrpc（无需 session）");
         }
@@ -190,7 +190,7 @@ public final class McpAuthContext {
     }
 
     /**
-     * 清理指定 session（v2.6 Q3 增强：加日志）。
+     * 清理指定 session（Q3 增强：加日志）。
      *
      * <p><b>使用场景</b>：</p>
      * <ul>

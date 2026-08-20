@@ -17,7 +17,7 @@ public interface CredentialVaultBindingService {
     /**
      * 轮换 Agent 的 API Key 凭证。
      *
-     * <p>AgentHub V1 T4：旧凭证 → EXPIRED，新凭证 → ACTIVE。</p>
+     * <p>AgentHub 旧凭证 → EXPIRED，新凭证 → ACTIVE。</p>
      * <p>与 {@link #bindAgentApiKey} 的区别：</p>
      * <ul>
      *   <li>bindAgentApiKey：旧凭证 → DISABLED（人为停用语义）</li>

@@ -7,7 +7,7 @@ import lombok.Data;
 import java.time.OffsetDateTime;
 
 /**
- * SLEEPING Agent 列表 VO（v2.4 §4.3 批次 3）。
+ * SLEEPING Agent 列表 VO。
  *
  * <p>字段精简：只暴露列表视图需要的关键信息（id/name/role/onlineStatus/updateBy/updateTime），
  * 避免把全量 agent 字段（包括 api_key）暴露到管理列表接口。

@@ -159,7 +159,7 @@ public class AdminLlmProviderController {
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  模型管理端点（V49 新增）
+    //  模型管理端点
     // ══════════════════════════════════════════════════════════════
 
     /**
@@ -258,7 +258,7 @@ public class AdminLlmProviderController {
     }
 
     /**
-     * 查询指定 modelType 的技能选项（V52 新增，plan 2182376f 完善版）。
+     * 查询指定 modelType 的技能选项。
      *
      * <p>供 Agent 注册/编辑弹窗技能区三段式渲染：{@code capabilitySkills}（模型能力锁定，
      * 不可取消）+ {@code availableOptionalSkills}（可扩展白名单）。modelType 形如

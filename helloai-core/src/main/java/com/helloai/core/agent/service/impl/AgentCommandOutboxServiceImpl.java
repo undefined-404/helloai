@@ -23,7 +23,7 @@ import java.util.Map;
 /**
  * 执行命令 Outbox（{@code agent_command_outbox}）服务实现。
  *
- * <p>本轮明确不做：Poller 降级为孤儿 / 超时 / 补偿兜底（T5 推进，本轮 Relay 仍是 MQ 主投递载体）；
+ * <p>本轮明确不做：Poller 降级为孤儿 / 超时 / 补偿兜底（推进，本轮 Relay 仍是 MQ 主投递载体）；
  * {@code OutboxCompensationTask} 独立调度（本轮直接复用 {@code OutboxRelayTask}）；
  * DLQ 与 per-eventId 业务级熔断（本轮未引入，FAILED 仅写 {@code error_msg} 等待后续告警通道）；
  * CAS claim（本轮 Relay 单实例 Redis 锁串行执行，状态更新靠 {@code WHERE status=…} 悲观 CAS）。</p>

@@ -1,7 +1,7 @@
 package com.helloai.common.base;
 
 /**
- * Agent 不可用异常（v2.4 §4.5 熔断 fast-fail）。
+ * Agent 不可用异常（§4.5 熔断 fast-fail）。
  *
  * <p>与 {@link BizException} 的区别：
  * <ul>

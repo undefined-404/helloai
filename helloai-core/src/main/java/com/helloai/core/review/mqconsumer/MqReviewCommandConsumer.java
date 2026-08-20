@@ -20,7 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 /**
- * 批次 D（§6.82）：REVIEWER 自动审查 L2 MQ consumer（三级容错 L2 补齐）。
+ * 批次 D：REVIEWER 自动审查 L2 MQ consumer（三级容错 L2 补齐）。
  *
  * <p>审查链三级容错（§6.40 架构）：</p>
  * <ul>
@@ -39,7 +39,7 @@ import java.util.Map;
  *         （eventId / subTaskId / taskId / status / agentId）；解析失败或缺 subTaskId 按 ACK 处理</li>
  *     <li>MANUAL ACK：消费成功 → basicAck；消费失败 → basicNack(requeue=false) 走 DLX</li>
  *     <li>幂等由父类 {@link AbstractIdempotentConsumer#tryConsume} 提供 Redis + DB 双层去重：
- *         幂等键优先取 payload.eventId（§6.82 生产侧补充，同一事件重投不重复消费，
+ *         幂等键优先取 payload.eventId（生产侧补充同一事件重投不重复消费，
  *         同子任务多轮 REVIEW 各自独立）；老消息无 eventId 时回退 {@code sub_task.review:{subTaskId}}</li>
  *     <li>与 L3 冲突防重：核验本身由 {@link SubTaskReviewService#reviewSubTask} 的
  *         Redis 互斥锁 + 状态防重（非 REVIEW 跳过）双保险，本类无需额外防重逻辑</li>

@@ -21,7 +21,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 public class HelloAIApplication {
 
     public static void main(String[] args) {
-        // === v2.4 §3.1 M4 配套：禁用 CGLIB 类缓存 ===
+        // === §3.1 配套：禁用 CGLIB 类缓存 ===
         // 配置中心化在 application.yml 的 `cglib.cache-classes` 段（默认 false）；
         // 通过命令行 -Dcglib.cache.classes=true 可临时切回 true 验证是否还坏。
         // 背景：spring-ai 1.x + spring-boot 3.4 + McpAuthFilterConfig CGLIB 增强

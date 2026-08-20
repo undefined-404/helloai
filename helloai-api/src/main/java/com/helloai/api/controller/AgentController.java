@@ -61,7 +61,7 @@ public class AgentController {
         AgentRole role = AgentRole.valueOf(((String) body.get("role")).toUpperCase());
         String description = (String) body.getOrDefault("description", "");
         boolean idempotent = Boolean.TRUE.equals(body.get("idempotent"));
-        // V49：注册前预校验 modelType（格式/可用性/角色唯一性），失败时不创建 Agent，避免留下无 modelType 的脏 Agent
+        // 注册前预校验 modelType（格式/可用性/角色唯一性），失败时不创建 Agent，避免留下无 modelType 的脏 Agent
         agentService.validateModelType((String) body.get("modelType"), role, null);
         Agent agent = idempotent
                 ? agentService.registerOrGet(name, role, description)
@@ -87,7 +87,7 @@ public class AgentController {
         String description = (String) body.getOrDefault("description", "");
         AgentRole role = AgentRole.valueOf(roleStr.toUpperCase());
         boolean idempotent = Boolean.TRUE.equals(body.get("idempotent"));
-        // V49：注册前预校验 modelType（格式/可用性/角色唯一性），失败时不创建 Agent，避免留下无 modelType 的脏 Agent
+        // 注册前预校验 modelType（格式/可用性/角色唯一性），失败时不创建 Agent，避免留下无 modelType 的脏 Agent
         agentService.validateModelType((String) body.get("modelType"), role, null);
         Agent agent = idempotent
                 ? agentService.registerOrGet(name, role, description)
@@ -104,12 +104,12 @@ public class AgentController {
      *
      * <p>accessType 默认 CLI_CLIENT；capabilities 按 accessType 默认值填充后允许调用方覆盖；
      * labels 直接存储；modelType 供 API_KEY_LLM Agent 指定 provider:model（缺省走平台默认 provider）；
-     * skills（A2）显式传入则使用显式值，否则已有技能为空时按 accessType + 名称/描述关键词 best-effort 推导，
+     * skills显式传入则使用显式值，否则已有技能为空时按 accessType + 名称/描述关键词 best-effort 推导，
      * 幂等复用（已有技能）不被推导覆盖。</p>
      */
     @SuppressWarnings("unchecked")
     private void applyRegistrationExtras(Agent agent, Map<String, Object> body) {
-        // 1) modelType（V49：校验 provider:model 格式及模型可用性）
+        // 1) modelType（校验 provider:model 格式及模型可用性）
         String modelType = (String) body.get("modelType");
         if (modelType != null && !modelType.isBlank()) {
             int colonIdx = modelType.indexOf(':');
@@ -123,7 +123,7 @@ public class AgentController {
                 throw new com.helloai.common.base.BizException(
                         "模型不可用或已禁用: " + modelType);
             }
-            // V49：同一模型在同一角色下全局唯一（与 registerWithExtras 路径的 validateModelType 对齐）
+            // 同一模型在同一角色下全局唯一（与 registerWithExtras 路径的 validateModelType 对齐）
             agentService.validateModelUniqueInRole(providerCode, modelName, agent.getRole(), null);
             agent.setModelType(modelType);
         }
@@ -140,7 +140,7 @@ public class AgentController {
         }
         agent.setAccessType(accessType);
 
-        // 阶段 0 默认值：新注册的 Agent 在线状态为 OFFLINE
+        // 默认值：新注册的 Agent 在线状态为 OFFLINE
         if (agent.getOnlineStatus() == null) {
             agent.setOnlineStatus(com.helloai.common.constant.AgentOnlineStatus.OFFLINE);
         }
@@ -165,7 +165,7 @@ public class AgentController {
         }
         agent.setCapabilities(AgentCapability.mergeDefaults(accessType, override));
 
-        // 5) skills（A2 + V52 能力驱动）：显式传入优先；否则已有技能为空时按 accessType + 模型能力推导
+        // 5) skills（能力驱动）：显式传入优先；否则已有技能为空时按 accessType + 模型能力推导
         List<String> explicitSkills = null;
         Object skillsObj = body.get("skills");
         if (skillsObj instanceof List<?> rawSkills) {
@@ -175,12 +175,12 @@ public class AgentController {
             }
         }
         if (explicitSkills != null) {
-            // V52：先按模型能力校验（标准技能查白名单、自定义豁免、未识别模型放行），
+            // 先按模型能力校验（标准技能查白名单、自定义豁免、未识别模型放行），
             // 再按能力驱动落库（API_KEY_LLM + 已识别模型时 thinking 锁定不回退）
             agentService.validateAgentSkills(agent.getModelType(), explicitSkills);
             agent.setSkills(agentService.deriveSkillsForRegistration(agent, explicitSkills));
         } else if (agent.getSkills() == null || agent.getSkills().isEmpty()) {
-            // 无显式技能：走能力驱动推导（未识别模型降级为 A2 推导）
+            // 无显式技能：走能力驱动推导（未识别模型降级为基础推导）
             agent.setSkills(agentService.deriveSkillsForRegistration(agent, null));
         }
 
@@ -195,7 +195,7 @@ public class AgentController {
     }
 
     /**
-     * 查询所有可用的 Provider 及其启用模型列表（供 Agent 注册时选择模型，V49 新增）。
+     * 查询所有可用的 Provider 及其启用模型列表（供 Agent 注册时选择模型）。
      *
      * <p>供 Agent 注册/编辑弹窗调用，返回结构：[{providerCode, providerName, defaultModel, models: [modelName, ...]}]。
      * 仅返回 available=true 的 Provider，且只列出 enabled=1 的模型。</p>
@@ -286,7 +286,7 @@ public class AgentController {
         response.setRemark(agent.getRemark());
         response.setCreateTime(agent.getCreateTime());
         response.setUpdateTime(agent.getUpdateTime());
-        // 阶段 0 补全 + 阶段 4 三件套
+        // 补全 + 三件套
         response.setAccessType(agent.getAccessType());
         response.setCapabilities(agent.getCapabilities());
         response.setLabels(agent.getLabels());

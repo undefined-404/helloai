@@ -5,9 +5,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 /**
- * 长连接门铃通知通道配置（AgentHub V3 门铃内核 PR-1）。
+ * 长连接门铃通知通道配置（AgentHub 门铃内核 PR-1）。
  *
- * <p><b>状态注记（2026-08-07）</b>：门铃通道已搁置。技术瓶颈——外部 AI Agent
+ * <p><b>状态注记</b>：门铃通道已搁置。技术瓶颈——外部 AI Agent
  * （安装版 / CLI 版）均为单向执行器，无法处理平台推送的门铃信号，且 Agent 端代码
  * 不可修改；任务感知一律由 pullTasks 轮询承担。本配置保留，待未来 Agent 端
  * 常驻 daemon（官方插件 / CLI 包装器）落地后可复用本通道。</p>
@@ -44,7 +44,7 @@ public class DoorbellProperties {
     private long keepaliveIntervalMs = 15_000L;
 
     /**
-     * 建连时是否顺带刷新 Agent 心跳（last_seen_at），即“双心跳”（PR-4，设计 §6.2/§7）。
+     * 建连时是否顺带刷新 Agent 心跳（last_seen_time），即“双心跳”（PR-4，设计 §6.2/§7）。
      *
      * <p><b>默认 false（保守）</b>：门铃连接存活 ≠ Agent 进程健康（SSE 单向，TCP 存活
      * 不代表对端应用消费了），自动刷心跳会让僵尸连接掩盖真实离线，故默认不启用。</p>

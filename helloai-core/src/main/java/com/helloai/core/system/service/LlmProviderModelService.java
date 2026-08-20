@@ -8,7 +8,7 @@ import java.util.List;
 /**
  * LLM Provider 模型业务服务（CRUD + 默认模型管理）。
  *
- * <p>v2.8 起 Service 层强制接口 + impl 拆分，本接口继承 IService 提供基础 CRUD 能力。</p>
+ * <p> Service 层强制接口 + impl 拆分，本接口继承 IService 提供基础 CRUD 能力。</p>
  */
 public interface LlmProviderModelService extends IService<LlmProviderModel> {
 

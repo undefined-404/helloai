@@ -58,7 +58,7 @@ public class ToolsController {
 
             // 替换版本号占位符
             content = content.replace("CLI_VERSION = 1", "CLI_VERSION = " + CLI_VERSION);
-            // v1.1: 运行时替换 BASE_URL
+            // 运行时替换 BASE_URL
             String baseUrl = resolveBaseUrl(request);
             content = content.replaceFirst(
                     "BASE_URL\\s*=\\s*\"[^\"]*\"",

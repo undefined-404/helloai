@@ -129,7 +129,7 @@ class ExternalAgentFallbackTaskTest {
         }
 
         @Test
-        @DisplayName("无候选 Agent → 仍要执行调度链遗留 PENDING 兜底（v2.6 §4.1）")
+        @DisplayName("无候选 Agent → 仍要执行调度链遗留 PENDING 兜底")
         void shouldStillRunPendingRecoveryWhenNoCandidates() {
             when(failureTracker.findFallbackCandidates()).thenReturn(List.of());
             when(subTaskMapper.selectPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
@@ -149,7 +149,7 @@ class ExternalAgentFallbackTaskTest {
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  v2.6 §4.1：调度链遗留 PENDING 未指派兜底
+    //  §4.1：调度链遗留 PENDING 未指派兜底
     // ══════════════════════════════════════════════════════════════
 
     @Nested
@@ -241,7 +241,7 @@ class ExternalAgentFallbackTaskTest {
         }
 
         @Test
-        @DisplayName("V27.1: 已标记人工介入 → 跳过不自动重派")
+        @DisplayName("已标记人工介入 → 跳过不自动重派")
         void shouldSkipWhenManualInterventionMarked() {
             when(failureTracker.findFallbackCandidates()).thenReturn(List.of());
             when(subTaskMapper.selectPendingUnassignedWithoutActiveExecutionRecord(anyInt()))

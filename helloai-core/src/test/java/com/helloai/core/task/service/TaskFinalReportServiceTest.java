@@ -83,7 +83,7 @@ class TaskFinalReportServiceTest {
     private TaskFinalReportService service;
 
     /**
-     * V41 CAS 防重入使用 {@code new LambdaUpdateWrapper<Task>()}，其 lambda 解析依赖
+     * CAS 防重入使用 {@code new LambdaUpdateWrapper<Task>()}，其 lambda 解析依赖
      * MyBatis-Plus TableInfo 缓存；单测无 Spring 上下文，需手动注册 Task 的 TableInfo，
      * 否则构造 wrapper 时抛 "can not find lambda cache for this entity"。
      */
@@ -109,7 +109,7 @@ class TaskFinalReportServiceTest {
         when(taskUpdateChain.eq(any(), any())).thenReturn(taskUpdateChain);
         when(taskUpdateChain.set(any(), any())).thenReturn(taskUpdateChain);
         when(taskUpdateChain.update()).thenReturn(true);
-        // V41 CAS 防重入：置 GENERATING 默认成功（防重入用例内单独覆盖为 false）
+        // CAS 防重入：置 GENERATING 默认成功（防重入用例内单独覆盖为 false）
         when(taskService.update(any())).thenReturn(true);
     }
 

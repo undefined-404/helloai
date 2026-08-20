@@ -8,7 +8,7 @@ import java.util.List;
 
 /**
  * 附件服务 — 管理 SubTask 的产物附件元数据。
- * v2.7 起平台可直读 local:// 与 minio:// 两类产物（附件物化存储与对象存储
+ * 平台可直读 local:// 与 minio:// 两类产物（附件物化存储与对象存储
  * 均经 {@link #loadContent(Long)} 直接读取内容供流式下载与证据核验）。
  */
 public interface AttachmentService extends IService<Attachment> {
@@ -49,7 +49,7 @@ public interface AttachmentService extends IService<Attachment> {
     /**
      * 驳回打回时将该子任务全部有效（ACTIVE）附件批量置为 INACTIVE。
      *
-     * <p>打回失效语义（2026-08-19）：自动核验驳回 / 人工驳回打回子任务后，
+     * <p>打回失效语义：自动核验驳回 / 人工驳回打回子任务后，
      * 旧提交的证据不应再作为有效版本参与下次核验、依赖装载或交付物打包；
      * 外部执行 Agent 必须基于驳回意见重新产出并重新上传最新版附件
      * （同名上传自然成为唯一 ACTIVE，不同名则新文件生效、旧文件保持失效）。

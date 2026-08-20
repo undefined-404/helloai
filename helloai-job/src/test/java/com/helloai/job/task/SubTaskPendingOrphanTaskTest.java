@@ -41,7 +41,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link SubTaskPendingOrphanTask} 单元测试（v2.6 §4.1 2026-07-20 新增）。
+ * {@link SubTaskPendingOrphanTask} 单元测试。
  *
  * <p>覆盖：</p>
  * <ul>
@@ -82,7 +82,7 @@ class SubTaskPendingOrphanTaskTest {
         when(redis.opsForValue()).thenReturn(valueOps);
         // 默认让 tryLock 成功；个别用例按需覆盖
         when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any())).thenReturn(true);
-        // V27 孤儿扫描前置依赖检查：默认无依赖即就绪，避免既有用例被 ready 守卫拦截
+        // 孤儿扫描前置依赖检查：默认无依赖即就绪，避免既有用例被 ready 守卫拦截
         when(subTaskService.isReady(any(SubTask.class))).thenReturn(true);
 
         task = new SubTaskPendingOrphanTask(
@@ -200,7 +200,7 @@ class SubTaskPendingOrphanTaskTest {
         }
 
         @Test
-        @DisplayName("V27.1: 已标记人工介入 → skip 不自动重派")
+        @DisplayName("已标记人工介入 → skip 不自动重派")
         void shouldSkipWhenManualInterventionMarked() {
             when(subTaskMapper.selectStalePendingWithoutExecutionRecord(any(), anyInt()))
                     .thenReturn(List.of(1L));
@@ -217,7 +217,7 @@ class SubTaskPendingOrphanTaskTest {
         }
 
         @Test
-        @DisplayName("V27.1: 未标记人工介入但带其它 context → 仍正常重派")
+        @DisplayName("未标记人工介入但带其它 context → 仍正常重派")
         void shouldRedispatchWhenContextWithoutManualIntervention() {
             when(subTaskMapper.selectStalePendingWithoutExecutionRecord(any(), anyInt()))
                     .thenReturn(List.of(1L));

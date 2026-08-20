@@ -12,10 +12,10 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Agent 技能（skills）best-effort 推导工具类（A2）。
+ * Agent 技能（skills）best-effort 推导工具类。
  *
- * <p>V47 后 {@code agent.skills} 供任务 {@code required_skills} 做 AND 匹配，
- * 但注册链路此前从不填充，技能匹配形同虚设。本类按接入类型与注册名称/描述
+ * <p>{@code agent.skills} 供任务 {@code required_skills} 做 AND 匹配，
+ * 但注册链路未显式填充时技能匹配会落空。本类按接入类型与注册名称/描述
  * 关键词推导基础技能标签，规则：<b>显式传入的技能优先</b>，其次在已有技能
  * 为空时才做推导（不覆盖手工显式值）。</p>
  *
@@ -36,9 +36,9 @@ public final class AgentSkillDeriver {
             AgentAccessType.WEB_BROWSER, "web-search");
 
     /**
-     * 标准技能标签集合（与前端 constants/agentSkills.ts、V47 required_skills 词表对齐）。
+     * 标准技能标签集合（与前端 constants/agentSkills.ts、required_skills 词表对齐）。
      *
-     * <p>能力驱动校验边界（plan 2182376f 完善版 D2=A）：explicitSkills 中属于标准集合的
+     * <p>能力驱动校验边界（D2=A）：explicitSkills 中属于标准集合的
      * 项必须落在模型白名单内；非标准项视为自定义技能豁免校验（平台侧能力声明，
      * 与模型原生能力无关）。</p>
      */
@@ -81,7 +81,7 @@ public final class AgentSkillDeriver {
     }
 
     /**
-     * 按模型能力推导技能（plan 2182376f 完善版，V52 起 API_KEY_LLM 注册/编辑使用）。
+     * 按模型能力推导技能（API_KEY_LLM 注册/编辑使用）。
      *
      * <p>优先级：① 模型能力锁定（capabilitySkills，始终追加不可取消）→
      * ② accessType 兜底基础技能 → ③ explicitSkills：标准技能按白名单过滤、
@@ -114,7 +114,7 @@ public final class AgentSkillDeriver {
             }
         }
 
-        // ② accessType 兜底（保留 A2 行为）
+        // ② accessType 兜底（保留行为）
         if (type != null) {
             String base = BASE_SKILLS.get(type);
             if (base != null) {
@@ -133,7 +133,7 @@ public final class AgentSkillDeriver {
             }
         }
 
-        // ④ 关键词兜底（保留 A2 行为）
+        // ④ 关键词兜底（保留行为）
         String haystack = haystackOf(name, description);
         for (Map.Entry<String, String> entry : KEYWORD_SKILLS.entrySet()) {
             if (haystack.contains(entry.getKey())) {

@@ -223,7 +223,7 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
 
         // Task Running Spec 上下文装配：
         // 1) 全局段 = Baseline（总体目标/平台约束）+ ContextSummary（全局进度），来源 task.context JSONB / 独立表
-        // 2) 插件规范段 = 任务 required_skills 命中 eng-* 规范库标签时注入「执行速览」（§6.114）
+        // 2) 插件规范段 = 任务 required_skills 命中 eng-* 规范库标签时注入「执行速览」
         // 3) 依赖段 = 直接前置（dependsOnIdList）的结构化摘要 + 完成内容本体（物化附件优先、原始产出回退）
         //    综合注入供 LLM 结合"前置做了什么 + 本轮任务要求"分析执行
         String promptSection = taskRunningSpecService.buildExecutorPromptSection(subTask.getTaskId());
@@ -295,7 +295,7 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
     }
 
     /**
-     * 合并 Task Running Spec 全局段与平台技能规范段（§6.114）：
+     * 合并 Task Running Spec 全局段与平台技能规范段：
      * 插件段为空时原样返回全局段；全局段为空时返回插件段；两者皆有按空行拼接。
      */
     private String mergeSpecSections(String specSection, String pluginSection) {
@@ -382,10 +382,10 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
     }
 
     /**
-     * 返工上下文注入（§6.41）：从 {@code sub_task.context.reviewHistory}（List<Map>）按轮次铺开
+     * 返工上下文注入：从 {@code sub_task.context.reviewHistory}（List<Map>）按轮次铺开
      * REVIEWER 历史审核意见，作为修正指引注入 Prompt。
      *
-     * <p>兼容 V36 回填前的过渡期：旧单 Map 形态的 {@code lastAutoReview} 仍可读取，
+     * <p>兼容 回填前的过渡期：旧单 Map 形态的 {@code lastAutoReview} 仍可读取，
      * 保证新老子任务的 prompt 拼接都不中断。{@code executorDoneIssues} 字段预留读取
      * 但本轮不主动写入（执行回填 hook 留待后续轮次）。</p>
      */

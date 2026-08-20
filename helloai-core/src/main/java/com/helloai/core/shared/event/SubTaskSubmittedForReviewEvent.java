@@ -3,7 +3,7 @@ package com.helloai.core.shared.event;
 import lombok.Getter;
 
 /**
- * 子任务已提交核验事件（V27 内循环核验门控）。
+ * 子任务已提交核验事件（内循环核验门控）。
  *
  * <p>执行成功回报 submit（→REVIEW）后由 {@code ExecutionResultHandler} 发布，
  * 事务提交后异步触发 {@code SubTaskReviewService} 的 LLM 自动核验，

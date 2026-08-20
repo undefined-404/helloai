@@ -23,7 +23,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Agent 值班租约只读报表入口（AgentHub V1 P1）。
+ * Agent 值班租约只读报表入口（AgentHub P1）。
  *
  * <p>为运营看板提供值班租约的分页列表与状态概览。纯只读，
  * 写入语义（checkIn/checkOut/续约/过期扫描）仍分别归属

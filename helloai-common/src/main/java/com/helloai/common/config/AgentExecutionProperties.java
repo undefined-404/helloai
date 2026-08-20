@@ -7,7 +7,7 @@ import org.springframework.stereotype.Component;
 /**
  * 平台内 Agent 执行链配置。
  *
- * <p>T4/T5 默认启用 mock 模式，保证本地无需外部 LLM Key 也能稳定验证最小闭环。</p>
+ * <p>/默认启用 mock 模式，保证本地无需外部 LLM Key 也能稳定验证最小闭环。</p>
  */
 @Data
 @Component
@@ -17,7 +17,7 @@ public class AgentExecutionProperties {
     /**
      * 执行命令消费载体模式。
      *
-     * <p><b>T5 起重塑语义（与差距表 N6 + 架构参考 §5.1 阶段一拍板对齐）</b>：
+     * <p><b>重塑语义（与差距表 N6 + 架构参考 §5.1 阶段一拍板对齐）</b>：
      * 三种模式都对应"Poller 仅作孤儿/超时/补偿兜底"，区别在于<b>主消费路径</b>由谁承担。
      * 主消费路径失效时（如 MQ Consumer Bean 未注册、@Async 线程池卡死、JVM 异常退出），
      * Poller 通过 {@code listOrphanPending(threshold)} 兜底扫描重新触发消费。</p>
@@ -112,33 +112,33 @@ public class AgentExecutionProperties {
     private boolean pollerEnabled = true;
 
     /**
-     * v2.6 §4.1 新增（2026-07-20）：PENDING 孤儿阈值（分钟）。
+     * §4.1：PENDING 孤儿阈值（分钟）。
      *
      * <p>子任务 status=PENDING 且 create_time 距今超过本阈值、且尚未创建
      * {@code agent_execution_record} 记录的，视为“dispatch-mode=EVENT 主路径丢失”
      * 的孤儿，由 {@code SubTaskPendingOrphanTask} 周期重派。</p>
      *
-     * <p>V41（2026-08-03）默认 30 → 5：依赖解锁瞬间“无空闲候选”导致自动分发失败
+     * <p>依赖解锁瞬间“无空闲候选”导致自动分发失败
      * （pickPreferred 返回 null）的子任务同样呈现“PENDING 且无 execution_record”，
-     * 此前要等 30 分钟才被巡检重派，形成无人兜底窗口（实测依赖 DONE 后 3 分钟用户
-     * 就手动指派了）。扫描命中后循环内还有 {@code isReady} 依赖守卫——未就绪的合法
-     * PENDING 会跳过不误伤，因此收窄阈值安全，仅缩短“分发失败”的恢复时间。</p>
+     * 需巡检快速兜底，避免形成无人兜底窗口。扫描命中后循环内还有 {@code isReady}
+     * 依赖守卫——未就绪的合法 PENDING 会跳过不误伤，因此收窄阈值安全，
+     * 仅缩短“分发失败”的恢复时间。</p>
      */
     private int pendingOrphanThresholdMinutes = 5;
 
     /**
-     * v2.6 §4.1 新增（2026-07-20）：PENDING 孤儿巡检周期（毫秒）。默认 60000ms=1 分钟。
+     * §4.1：PENDING 孤儿巡检周期（毫秒）。默认 60000ms=1 分钟。
      */
     private long pendingOrphanScanIntervalMs = 60000L;
 
     /**
-     * v2.6 §4.1 新增（2026-07-20）：PENDING 孤儿巡检单批上限。默认 50 条，防止调
+     * §4.1：PENDING 孤儿巡检单批上限。默认 50 条，防止调
      * 度线程被批量重派阻塞。
      */
     private int pendingOrphanBatchSize = 50;
 
     /**
-     * v2.6 §4.1 新增（2026-07-20）：PENDING 孤儿巡检是否启用。默认 true。
+     * §4.1：PENDING 孤儿巡检是否启用。默认 true。
      */
     private boolean pendingOrphanEnabled = true;
 
@@ -190,7 +190,7 @@ public class AgentExecutionProperties {
     /**
      * 是否为 MQ 主消费模式（POLLER 或 BOTH 都算）。
      *
-     * <p>T5 起重塑语义：POLLER/BOTH 模式都对应"MQ Consumer 作为主消费路径"，
+     * <p>重塑语义：POLLER/BOTH 模式都对应"MQ Consumer 作为主消费路径"，
      * Poller 仅扫孤儿作兜底。本方法名保留仅为兼容外部调用方（如
      * {@code ExecutionCommandPoller} 与 {@code ExecutionDispatchValidator}），
      * 实际语义已从"Poller 主消费"更新为"MQ 主消费路径启用"。</p>

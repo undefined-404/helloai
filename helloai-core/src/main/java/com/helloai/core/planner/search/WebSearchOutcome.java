@@ -7,7 +7,7 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * 一次联网搜索的归一化结果记录（V41）：搜索过程与结局的完整快照。
+ * 一次联网搜索的归一化结果记录：搜索过程与结局的完整快照。
  *
  * <p>纯内存领域对象（不映射表、不属 entity 包）：既承担 Prompt 注入文本的渲染
  * （{@link #toContextText()}，沿用原 renderWebSearchContext 格式），又随 assistant
@@ -39,9 +39,9 @@ public class WebSearchOutcome {
     private List<WebSearchResult> results = Collections.emptyList();
 
     /**
-     * 用户消息 URL 直取记录（V43）：消息含 http(s) 链接时直接访问抓取的页面快照
+     * 用户消息 URL 直取记录：消息含 http(s) 链接时直接访问抓取的页面快照
      * （含失败记录，payload 可查验）；无 URL 时为空列表。
-     * V44：SPA 空壳页正文为空时以 title/meta 描述兜底（{@code metaOnly=true}），
+     * SPA 空壳页正文为空时以 title/meta 描述兜底（{@code metaOnly=true}），
      * 仍按成功直取注入 Prompt。
      */
     @Builder.Default
@@ -54,7 +54,7 @@ public class WebSearchOutcome {
     private String reason;
 
     /**
-     * 渲染为注入 Prompt 的资料文本：直取页面节（V43，用户给出的站点第一手资料）+
+     * 渲染为注入 Prompt 的资料文本：直取页面节（用户给出的站点第一手资料）+
      * 搜索引擎结果节（每条双行：标题（链接）+ 摘要）。两节均空时输出占位符
      * 保证 Prompt 该节语义稳定。
      */

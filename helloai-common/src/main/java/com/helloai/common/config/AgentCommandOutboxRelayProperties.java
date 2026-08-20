@@ -25,7 +25,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>历史明确不做：
  * <ul>
- *   <li>Poller 降级为兜底——T5 才推进，本轮 Relay 仍是 MQ 主投递载体；</li>
+ *   <li>Poller 降级为兜底——才推进，本轮 Relay 仍是 MQ 主投递载体；</li>
  *   <li>{@code OutboxCompensationTask} 新增调度——本轮直接复用 {@code OutboxRelayTask}，不引入新的 Scheduled；</li>
  *   <li>DLQ 与 per-eventId 业务级熔断——本轮未引入；</li>
  *   <li>分区/批量并行扫描——本轮单线程顺序执行；最小闭环不需要。</li>

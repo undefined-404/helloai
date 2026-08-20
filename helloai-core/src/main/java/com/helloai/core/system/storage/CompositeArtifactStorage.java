@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 /**
- * 存储路由（v2.7 引入）：聚合所有 {@link ArtifactStorage} 实现，对外提供统一入口。
+ * 存储路由（引入）：聚合所有 {@link ArtifactStorage} 实现，对外提供统一入口。
  *
  * <p>写入路由到 {@code helloai.storage.type} 指定的主存储（local/minio）；
  * 读取与可读性判断按 storageUrl 协议前缀分派到对应实现，

@@ -3,7 +3,7 @@ package com.helloai.common.constant;
 /**
  * Agent 值班租约状态。
  *
- * <p>AgentHub V1 T3 最小骨架：值班态事实源.</p>
+ * <p>AgentHub 最小骨架：值班态事实源.</p>
  */
 public enum AgentDutyLeaseStatus {
 

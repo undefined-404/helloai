@@ -9,7 +9,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * TaskAgentPolicy 静态解析工具单元测试（V47，§6.58 P1）。
+ * TaskAgentPolicy 静态解析工具单元测试（§6.58 P1）。
  *
  * <p>覆盖：默认值回落（null policy / 键缺失 / 非法值）、JSONB 数字类型防御
  * （Integer/Long/字符串）、executorAgentIds 过滤、isFallbackForbidden 判定、

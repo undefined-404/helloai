@@ -44,12 +44,12 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 
 /**
- * A0-1（§6.60）执行者变更撤销通知单元测试：
+ * 执行者变更撤销通知单元测试：
  * 换人改派补发 sub_task.reassigned / 回收补发 sub_task.unassigned / 初始分配与原地保留不通知。
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
-@DisplayName("SubTaskService 执行者变更撤销通知（A0-1）")
+@DisplayName("SubTaskService 执行者变更撤销通知")
 class SubTaskServiceHandoverTest {
 
     private static final long SUB_TASK_ID = 1L;
@@ -181,25 +181,25 @@ class SubTaskServiceHandoverTest {
     }
 
     @Test
-    @DisplayName("人工驳回不换派（reworkFresh 保持原执行者）：仅补发 sub_task.rejected 返工通知（A0-4）")
+    @DisplayName("人工驳回不换派（reworkFresh 保持原执行者）：仅补发 sub_task.rejected 返工通知")
     void shouldNotifyReworkWhenReworkFreshKeepsAgent() {
         doReturn(subTask(SubTaskStatus.REVIEW, OLD_AGENT))
                 .when(subTaskService).getById(SUB_TASK_ID);
 
         subTaskService.reworkFresh(SUB_TASK_ID, null);
 
-        // A0-1 撤销通知：执行者未变不触发
+        //  撤销通知：执行者未变不触发
         verify(agentInboxService, never()).send(
                 any(), any(), eq("sub_task.reassigned"), any(), any(), any(), any(), any());
         verify(agentInboxService, never()).send(
                 any(), any(), eq("sub_task.unassigned"), any(), any(), any(), any(), any());
-        // A0-4 返工通知：保持原执行者时发给原执行者
+        //  返工通知：保持原执行者时发给原执行者
         verify(agentInboxService).send(eq(OLD_AGENT), anyString(), eq("sub_task.rejected"),
                 anyString(), anyString(), eq("sub_task"), eq(SUB_TASK_ID), eq("HIGH"));
     }
 
     @Test
-    @DisplayName("人工驳回不换派：无 review 历史时摘要回退默认文案（A0-4）")
+    @DisplayName("人工驳回不换派：无 review 历史时摘要回退默认文案")
     void shouldFallbackSummaryWhenNoReviewHistory() {
         doReturn(subTask(SubTaskStatus.REVIEW, OLD_AGENT))
                 .when(subTaskService).getById(SUB_TASK_ID);
@@ -213,7 +213,7 @@ class SubTaskServiceHandoverTest {
     }
 
     @Test
-    @DisplayName("驳回补发通知：从 context.reviewHistory 最新一轮提取评分/评语/问题摘要（A0-4）")
+    @DisplayName("驳回补发通知：从 context.reviewHistory 最新一轮提取评分/评语/问题摘要")
     void shouldExtractReworkSummaryFromReviewHistory() {
         SubTask reviewTask = subTask(SubTaskStatus.REVIEW, OLD_AGENT);
         reviewTask.setContext(Map.of("reviewHistory", List.of(
@@ -235,7 +235,7 @@ class SubTaskServiceHandoverTest {
     }
 
     @Test
-    @DisplayName("自动驳回换人（rework 防御性兼容）：旧执行者收到 sub_task.reassigned，新执行者收到 sub_task.rejected（A0-4）")
+    @DisplayName("自动驳回换人（rework 防御性兼容）：旧执行者收到 sub_task.reassigned，新执行者收到 sub_task.rejected")
     void shouldNotifyOldAgentWhenReworkSwitchesAgent() {
         doReturn(subTask(SubTaskStatus.REVIEW, OLD_AGENT))
                 .when(subTaskService).getById(SUB_TASK_ID);
@@ -244,13 +244,13 @@ class SubTaskServiceHandoverTest {
 
         verify(agentInboxService).send(eq(OLD_AGENT), anyString(), eq("sub_task.reassigned"),
                 anyString(), anyString(), eq("sub_task"), eq(SUB_TASK_ID), anyString());
-        // A0-4：返工通知发给改派后的新执行者（reworkAgentId 非空时）
+        // 返工通知发给改派后的新执行者（reworkAgentId 非空时）
         verify(agentInboxService).send(eq(NEW_AGENT), anyString(), eq("sub_task.rejected"),
                 anyString(), anyString(), eq("sub_task"), eq(SUB_TASK_ID), eq("HIGH"));
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  complete（A0-4 §6.63）：审查通过补发 sub_task.approved
+    //  complete：审查通过补发 sub_task.approved
     //  ══════════════════════════════════════════════════════════════
 
     @Test

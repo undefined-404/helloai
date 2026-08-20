@@ -22,16 +22,16 @@ import java.util.List;
  */
 public interface RequirementClarifyService {
 
-    /** 会话状态常量（与 V29 CHECK 约束对齐）。 */
+    /** 会话状态常量（与 CHECK 约束对齐）。 */
     String STATUS_ACTIVE = "ACTIVE";
     String STATUS_FINALIZED = "FINALIZED";
     String STATUS_ABANDONED = "ABANDONED";
 
-    /** 对话模式常量（与 V39 CHECK 约束对齐）：CHAT 自由对话 / CLARIFY 方案澄清。 */
+    /** 对话模式常量（与 CHECK 约束对齐）：CHAT 自由对话 / CLARIFY 方案澄清。 */
     String MODE_CHAT = "CHAT";
     String MODE_CLARIFY = "CLARIFY";
 
-    /** V40 意图词命中后的固定确认询问文案（服务端直发，不调 LLM、不消耗轮数）。 */
+    /** 意图词命中后的固定确认询问文案（服务端直发，不调 LLM、不消耗轮数）。 */
     String CONFIRM_ASK_MESSAGE =
             "我注意到你想把这段对话整理成方案。回复「确认」将进入方案澄清模式，"
                     + "我会基于全部对话内容梳理需求并产出方案草案；回复其他内容则继续自由对话。";
@@ -41,7 +41,7 @@ public interface RequirementClarifyService {
      *
      * @param plannerAgentId   手动指定的 Planner Agent ID（空=系统自动选择）；
      *                         指定时严格校验可选性，澄清与后续拆解均跟随该 Planner
-     * @param webSearchEnabled 会话级联网搜索开关（V34 新增；NULL=默认开启）；
+     * @param webSearchEnabled 会话级联网搜索开关（NULL=默认开启）；
      *                         每轮 LLM 调用前若 true 服务端会预检索行业资料并注入
      *                         {@code {{WEB_SEARCH_CONTEXT}}} 占位符，失败降级跳过
      * @return 会话 + 全部消息
@@ -49,9 +49,9 @@ public interface RequirementClarifyService {
     ClarifyConversationDetail create(String firstMessage, Long plannerAgentId, Boolean webSearchEnabled);
 
     /**
-     * 新建会话（V39 双模式入口）。
+     * 新建会话（双模式入口）。
      *
-     * @param initialMode 初始对话模式（V39）：'CHAT'=自由对话（缺省）/ 'CLARIFY'=方案澄清快捷直达；
+     * @param initialMode 初始对话模式：'CHAT'=自由对话（缺省）/ 'CLARIFY'=方案澄清快捷直达；
      *                    非法值抛 BizException
      * @return 会话 + 全部消息
      */
@@ -71,7 +71,7 @@ public interface RequirementClarifyService {
     /**
      * 向会话追加一条用户消息并走一轮 LLM 澄清。
      *
-     * @param selections 结构化选项回答快照（V33，可为 null/空=纯文本回答）；
+     * @param selections 结构化选项回答快照（可为 null/空=纯文本回答）；
      *                   序列化为 {@code {"selections":[...]}} 存入 user 消息 payload，
      *                   仅作前端回显快照，LLM 上下文仍用 content 可读文本
      * @return 会话 + 全部消息
@@ -113,8 +113,8 @@ public interface RequirementClarifyService {
     void abandon(Long conversationId);
 
     /**
-     * 切换到方案澄清模式（V40.2 斜杠命令路径）：先落库附加文本（用户消息，进 LLM 上下文），
-     * 再切 CLARIFY 并跑一轮澄清（V40.1 首轮强制 structured → 推荐卡片必出）。
+     * 切换到方案澄清模式（斜杠命令路径）：先落库附加文本（用户消息，进 LLM 上下文），
+     * 再切 CLARIFY 并跑一轮澄清（首轮强制 structured → 推荐卡片必出）。
      * 附加文本不走意图词/确认词判定、不设 payload。
      *
      * @param extraMessage 斜杠命令后的附加文本；空/空白则不加消息（与既有 switchToClarify 等价）
@@ -122,14 +122,14 @@ public interface RequirementClarifyService {
     ClarifyConversationDetail switchToClarify(Long conversationId, String extraMessage);
 
     /**
-     * 切换到方案澄清模式（V39）：置位落库 + 一轮 LLM 基于全量历史产终稿草案/结构化追问。
+     * 切换到方案澄清模式：置位落库 + 一轮 LLM 基于全量历史产终稿草案/结构化追问。
      *
      * @return 会话 + 全部消息
      */
     ClarifyConversationDetail switchToClarify(Long conversationId);
 
     /**
-     * 切回自由对话模式（V39）：仅置位，不调用 LLM；
+     * 切回自由对话模式：仅置位，不调用 LLM；
      * 历史消息全部保留，后续切回 CLARIFY 时作为全量澄清上下文。
      *
      * @return 会话 + 全部消息
@@ -167,7 +167,7 @@ public interface RequirementClarifyService {
         private List<ClarifyQuestion> questions;
     }
 
-    /** 结构化追问单题（V33）。 */
+    /** 结构化追问单题。 */
     @Data
     @JsonIgnoreProperties(ignoreUnknown = true)
     class ClarifyQuestion {
@@ -181,7 +181,7 @@ public interface RequirementClarifyService {
         private List<ClarifyOption> options;
     }
 
-    /** 结构化追问选项（V33）。 */
+    /** 结构化追问选项。 */
     @Data
     @JsonIgnoreProperties(ignoreUnknown = true)
     class ClarifyOption {

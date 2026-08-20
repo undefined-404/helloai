@@ -38,7 +38,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * HeartbeatService.active() 单测（v2.6 §4.1 心跳语义对齐，2026-07-20 落地）。
+ * HeartbeatService.active() 单测（心跳语义对齐落地）。
  *
  * <p>覆盖 active() 的契约：
  * <ol>
@@ -55,7 +55,7 @@ import static org.mockito.Mockito.when;
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
-@DisplayName("HeartbeatService.active() v2.6 心跳语义对齐")
+@DisplayName("HeartbeatService.active() 心跳语义对齐")
 class HeartbeatServiceActiveTest {
 
     @Mock

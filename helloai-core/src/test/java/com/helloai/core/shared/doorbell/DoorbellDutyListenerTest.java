@@ -15,7 +15,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 /**
- * {@link DoorbellDutyListener} 单元测试（AgentHub V3 门铃 PR-3）。
+ * {@link DoorbellDutyListener} 单元测试（AgentHub 门铃 PR-3）。
  *
  * <p>覆盖：值班关闭事件触发按 agentId 主动断门铃；空事件 / 空 agentId 短路不断连；
  * 断连抛异常被吞掉不外抛（离岗断门铃无副作用，不拖累巡检 / 签退主链路）。</p>

@@ -23,7 +23,7 @@ import com.helloai.core.task.service.TaskTimelineService;
 /**
  * 执行命令 DB Poller 兜底扫描器。
  *
- * <p><b>T5 起重塑</b>：本类从"主消费载体"降级为"孤儿 / 超时 / 补偿兜底恢复机制"。
+ * <p><b>重塑</b>：本类从"主消费载体"降级为"孤儿 / 超时 / 补偿兜底恢复机制"。
  * 与架构设计参考 §5.1 阶段一拍板、差距表 N6 处理建议对齐：
  * MQ 主链（{@code MqExecutionCommandConsumer}）已成为主消费路径，
  * 本 Poller 保留作为 MQ 主链异常（broker 丢消息、Consumer Bean 未注册、JVM 异常退出、
@@ -71,7 +71,7 @@ import com.helloai.core.task.service.TaskTimelineService;
  *     <li>{@code helloai.execution.poller-interval-ms}（默认 1000）</li>
  *     <li>{@code helloai.execution.poller-orphan-threshold-seconds}（默认 60；任何模式都用）</li>
  *     <li>{@code helloai.execution.poller-batch-size}（默认 20）</li>
- *     <li>{@code helloai.execution.consumer-mode}（T5 起仅描述主消费路径载体，与 Poller 扫描行为无关）</li>
+ *     <li>{@code helloai.execution.consumer-mode}（仅描述主消费路径载体，与 Poller 扫描行为无关）</li>
  * </ul>
  */
 @Slf4j
@@ -107,7 +107,7 @@ public class ExecutionCommandPoller {
      *
      * <p>{@code fixedDelayString} 直接绑定配置项，支持通过 yaml / 环境变量动态调整扫描周期。</p>
      *
-     * <p><b>T5 起行为收口</b>：本 Poller 不再区分 {@code consumer-mode}，统一调用
+     * <p><b>行为收口</b>：本 Poller 不再区分 {@code consumer-mode}，统一调用
      * {@code listOrphanPending(threshold, batchSize)} 扫描孤儿 PENDING。
      * 主消费路径由 {@code MqExecutionCommandConsumer}（POLLER/BOTH）或
      * {@code LocalExecutionCommandConsumer.onCommandCreated}（EVENT）承担。</p>
@@ -121,7 +121,7 @@ public class ExecutionCommandPoller {
         int batchSize = executionProperties.getPollerBatchSize();
         int threshold = executionProperties.getPollerOrphanThresholdSeconds();
 
-        // T5 起：所有 consumer-mode 统一扫孤儿 PENDING，不再调用 listAllPending；
+        // 所有 consumer-mode 统一扫孤儿 PENDING，不再调用 listAllPending；
         // 主消费路径由 MQ Consumer（POLLER/BOTH）或本地事务事件（EVENT）承担。
         List<AgentExecutionRecord> candidates = agentExecutionRecordService.listOrphanPending(threshold, batchSize);
         String scanType = "listOrphanPending";
@@ -159,7 +159,7 @@ public class ExecutionCommandPoller {
         SubTask subTask = subTaskService.getById(record.getSubTaskId());
 
         // 4. 记录 timeline：Poller 处理事件
-        //    T5 起：scanType 恒为 listOrphanPending，timeline 事件统一使用 sub_task_execution_command_poll_recovery
+        // scanType 恒为 listOrphanPending，timeline 事件统一使用 sub_task_execution_command_poll_recovery
         String timelineEvent = "sub_task_execution_command_poll_recovery";
         if (subTask != null) {
             taskTimelineService.recordEvent(

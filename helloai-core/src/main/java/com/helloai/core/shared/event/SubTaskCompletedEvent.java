@@ -3,7 +3,7 @@ package com.helloai.core.shared.event;
 import lombok.Getter;
 
 /**
- * 子任务已完成事件（V27 内循环闭环收尾）。
+ * 子任务已完成事件（内循环闭环收尾）。
  *
  * <p>{@code SubTaskService.complete}（REVIEW→DONE）提交后发布，
  * 事务提交后异步触发 {@code SubTaskCompletionListener}：

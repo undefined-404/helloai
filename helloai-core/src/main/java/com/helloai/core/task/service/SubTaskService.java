@@ -59,7 +59,7 @@ public interface SubTaskService extends IService<SubTask> {
     SubTask getByIdForUpdate(Long subTaskId);
 
     /**
-     * ready 语义判定（V27 内循环依赖编排）：{@code depends_on} 中所有前置子任务
+     * ready 语义判定（内循环依赖编排）：{@code depends_on} 中所有前置子任务
      * 均为 DONE 才允许分发；空依赖直接就绪（旧数据行为与现状完全一致）。
      *
      * <p>分发链两处复用：{@code SubTaskDispatchService.dispatchPendingSubTaskAuto}
@@ -68,7 +68,7 @@ public interface SubTaskService extends IService<SubTask> {
     boolean isReady(SubTask subTask);
 
     /**
-     * 写入依赖 id 数组（V27）：手工拼 JSON 数字数组后走专用 Mapper SQL（::jsonb），
+     * 写入依赖 id 数组：手工拼 JSON 数字数组后走专用 Mapper SQL（jsonb），
      * 不走 updateById 全列覆盖，避免乐观锁 version 参数依赖。
      * 专供 PlannerAnalysisService 拆解落库后的"序号→真实 id"回写。
      *
@@ -103,7 +103,7 @@ public interface SubTaskService extends IService<SubTask> {
     void resume(Long subTaskId);
 
     /**
-     * A0-4（§6.63）：驳回统一补发收件箱通知（自动核验 rejectAndRework 与人工驳回 rework/reworkFresh 共用），
+     * 驳回统一补发收件箱通知（自动核验 rejectAndRework 与人工驳回 rework/reworkFresh 共用），
      * 摘要携带最近一轮 review 结果（评分/评语/问题），外部 Agent 轮询 pullTasks 即可感知返工原因。
      * 发送失败只 warn 不阻断（返工主链路优先）。
      */
@@ -147,7 +147,7 @@ public interface SubTaskService extends IService<SubTask> {
     void cancel(Long subTaskId);
 
     /**
-     * 将 PENDING 子任务分配给指定 Agent（v2.4 §4.5 熔断调度入口）。
+     * 将 PENDING 子任务分配给指定 Agent（§4.5 熔断调度入口）。
      *
      * <p><b>⚠️ 调用约束：本方法只能由 {@link ResilientDispatcher} 调用！</b>
      * 业务方必须走 {@code resilientDispatcher.assignNext(agentId, subTaskId)}，
@@ -172,7 +172,7 @@ public interface SubTaskService extends IService<SubTask> {
     void reassign(Long subTaskId, Long newAgentId);
 
     /**
-     * 批量创建子任务（v2.5 M4.5 派发控制台——同内容 fan-out 派给多个 Agent）。
+     * 批量创建子任务（ 派发控制台——同内容 fan-out 派给多个 Agent）。
      *
      * <p>传入的是已经由 Controller 完成 DTO→Entity 映射的实体集合 + 各自关联的 assignedAgentId。
      * 逐项调用现有 {@link #create(SubTask, Long)} 单建逻辑：</p>
@@ -191,7 +191,7 @@ public interface SubTaskService extends IService<SubTask> {
     List<SubTask> createBatch(List<BatchCreateItem> items);
 
     /**
-     * 批量创建单项参数（v2.5 M4.5）。
+     * 批量创建单项参数。
      *
      * <p>实体已由 Controller 完成 DTO 映射（含 taskId / moduleId / title / content /
      * deliverable / acceptance / priority / status=PENDING）；assignedAgentId 为直派 Agent ID

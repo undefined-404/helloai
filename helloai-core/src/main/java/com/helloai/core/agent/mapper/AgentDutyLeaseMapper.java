@@ -14,7 +14,7 @@ import java.util.List;
 /**
  * Agent 值班租约 Mapper。
  *
- * <p>AgentHub V1 T3 最小骨架。</p>
+ * <p>AgentHub 最小骨架。</p>
  */
 @Mapper
 public interface AgentDutyLeaseMapper extends BaseMapper<AgentDutyLease> {

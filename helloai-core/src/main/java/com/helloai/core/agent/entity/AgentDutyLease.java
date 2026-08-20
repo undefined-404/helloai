@@ -11,7 +11,7 @@ import java.time.OffsetDateTime;
 /**
  * Agent 值班租约实体。
  *
- * <p>AgentHub V1 T3 最小骨架：值班态事实源。</p>
+ * <p>AgentHub 最小骨架：值班态事实源。</p>
  *
  * <p>每条记录代表一次 Agent "打卡上班"的完整生命周期：
  * 从 {@code status=ACTIVE} 开始，到 {@code status=CLOSED/EXPIRED} 结束。
@@ -30,7 +30,7 @@ public class AgentDutyLease extends BaseEntity {
     /** 值班会话标识（同一次 checkIn 的 lease 共享同一个 session_id）。 */
     private String sessionId;
 
-    /** 工作模式：预留字段，AgentHub V1 后续扩展。 */
+    /** 工作模式：预留字段，AgentHub 后续扩展。 */
     private String workMode;
 
     /** 最大并发子任务数。 */

@@ -72,7 +72,7 @@ public class SubTaskController {
     }
 
     /**
-     * 批量创建子任务（v2.5 M4.5 派发控制台）。
+     * 批量创建子任务（ 派发控制台）。
      *
      * <p>同内容 fan-out 派发给多个 Agent；逐项独立创建（每项自身独立事务），
      * 单项失败不影响其余；返回成功创建的列表（不含失败项）。</p>
@@ -96,7 +96,7 @@ public class SubTaskController {
     }
 
     /**
-     * 子任务执行时间线（v2.5 M4.5 派发控制台联调可视化）。
+     * 子任务执行时间线（ 派发控制台联调可视化）。
      *
      * <p>按 id 升序返回该子任务相关的所有 TaskTimeline 事件；不含系统级事件（如 agent_offline）。</p>
      */
@@ -108,7 +108,7 @@ public class SubTaskController {
     }
 
     /**
-     * 子任务执行对话流（V28 对话流可观测）。
+     * 子任务执行对话流（对话流可观测）。
      *
      * <p>按 seq 升序返回执行产出全文与自动核验的 Prompt / 分析原文，
      * 来源由 toolName 区分；只做实体→DTO 映射，不含编排。</p>
@@ -260,7 +260,7 @@ public class SubTaskController {
     }
 
     /**
-     * 死信人工兜底指派（V25）：将 DEAD_LETTER 子任务直接指派给指定 Agent。
+     * 死信人工兜底指派：将 DEAD_LETTER 子任务直接指派给指定 Agent。
      *
      * <p>重分配熔断（reassign_attempt_count 达阈值）后子任务进入 DEAD_LETTER 死信池，
      * 由人工确认目标 Agent 后调用本接口：熔断计数清零 + 直接 ASSIGNED。

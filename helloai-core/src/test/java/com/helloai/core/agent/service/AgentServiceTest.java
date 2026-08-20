@@ -196,7 +196,7 @@ class AgentServiceTest {
     }
 
     // ════════════════════════════════════════════════════════════
-    //  validateAgentSkills / deriveSkillsForRegistration（V52 能力驱动）
+    //  validateAgentSkills / deriveSkillsForRegistration（能力驱动）
     // ════════════════════════════════════════════════════════════
 
     private LlmProviderModel capability(String modelType, List<String> capability, List<String> available) {
@@ -283,7 +283,7 @@ class AgentServiceTest {
 
         List<String> skills = service.deriveSkillsForRegistration(agent, List.of("python"));
 
-        // 显式优先（A2 语义）：非空显式值原样返回
+        // 显式优先（ 语义）：非空显式值原样返回
         assertThat(skills).containsExactly("python");
     }
 

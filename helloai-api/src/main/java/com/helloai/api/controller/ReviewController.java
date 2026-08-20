@@ -30,7 +30,7 @@ public class ReviewController {
                                    HttpServletRequest httpRequest) {
         ReviewResult result = ReviewResult.valueOf(request.getResult().toUpperCase());
 
-        // v1.1 修复：优先从 Header 取 reviewerAgentId；若 Header 缺失，从 AuthInterceptor 上下文取
+        // 修复：优先从 Header 取 reviewerAgentId；若 Header 缺失，从 AuthInterceptor 上下文取
         Long reviewerAgentId = agentId;
         if (reviewerAgentId == null) {
             Object attr = httpRequest.getAttribute(AuthInterceptor.AUTH_ID_KEY);

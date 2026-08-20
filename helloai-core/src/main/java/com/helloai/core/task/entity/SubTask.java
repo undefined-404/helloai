@@ -48,7 +48,7 @@ public class SubTask extends BaseEntity {
     private Integer timeoutCount;
 
     /**
-     * N11 阈值回退（V17 新增）：当前子任务已发生的"外部→LLM"回退次数。
+     * N11 阈值回退：当前子任务已发生的"外部→LLM"回退次数。
      *
      * <p>每次 ExternalAgentFallbackTask 触发对当前子任务的重新分发，
      * 都会把该值 +1；可用于监控 / 限流（如回退 3 次后直接放弃或转人工）。</p>
@@ -56,7 +56,7 @@ public class SubTask extends BaseEntity {
     private Integer externalFallbackCount;
 
     /**
-     * 重分配尝试次数（V24 新增）：所有类型的重分配（离线重派、超时回收、
+     * 重分配尝试次数：所有类型的重分配（离线重派、超时回收、
      * N11回退、阻塞重试）都计数。
      *
      * <p>达到 {@code helloai.dispatch.max-reassign-attempts}（默认 5）后，
@@ -65,7 +65,7 @@ public class SubTask extends BaseEntity {
     private Integer reassignAttemptCount;
 
     /**
-     * 依赖的子任务 id 数组（V27 新增）：同 Task 内的前置子任务，
+     * 依赖的子任务 id 数组：同 Task 内的前置子任务，
      * 全部 DONE 后本任务才可被分发（ready 语义）；空数组=无依赖。
      *
      * <p>注意：JacksonTypeHandler 反序列化 JSON 数组数字默认是 Integer，

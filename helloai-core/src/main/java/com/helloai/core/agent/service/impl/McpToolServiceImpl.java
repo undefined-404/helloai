@@ -87,14 +87,14 @@ public class McpToolServiceImpl implements McpToolService {
      * 拉取 Agent 的收件箱消息。
      * 只读，不标记已读。ack 才标记已读。
      *
-     * @param includeRead A0-4（§6.63）：true 时在未读之外附带最近已读消息（未读优先，已读按 read_time 倒序
+     * @param includeRead ：true 时在未读之外附带最近已读消息（未读优先，已读按 read_time 倒序
      *                    补齐配额），每条消息带 read 状态位，供外部 Agent 轮询时区分新消息与已 ack 历史；
      *                    false（默认）保持原语义仅返回未读。
      */
     public PullTasksResult pullTasks(Long agentId, String role, int max, boolean includeRead) {
         assertAgentActive(agentId);
         assertToolEnabled(agentId, "pullTasks");
-        refreshDutyLease(agentId); // A0-8：轮询工具顺带续租，轮询期即保活期
+        refreshDutyLease(agentId); // 轮询工具顺带续租，轮询期即保活期
 
         // 应用参数约束（agent_mcp_server.param_constraints.max 优先）
         Map<String, Object> constraints = agentMcpServerService.getParamConstraints(agentId, "pullTasks");
@@ -120,9 +120,9 @@ public class McpToolServiceImpl implements McpToolService {
             msg.setSubTaskId(inbox.getRefId());
             msg.setTitle(inbox.getTitle());
             msg.setPriority(inbox.getPriority());
-            // A0-4（§6.63）：透传收件箱摘要（sub_task.rejected/approved 消息携带 review 评分与评语摘要）
+            // 透传收件箱摘要（sub_task.rejected/approved 消息携带 review 评分与评语摘要）
             msg.setSummary(inbox.getSummary());
-            // A0-4（§6.63）：未读/已读状态位（false=未读待 ack，true=已 ack）
+            // 未读/已读状态位（false=未读待 ack，true=已 ack）
             msg.setRead(inbox.getIsRead() != null && inbox.getIsRead() == 1);
 
             // 如果 refType=sub_task，补充 taskId 和 deadline
@@ -131,7 +131,7 @@ public class McpToolServiceImpl implements McpToolService {
                 if (subTask != null) {
                     msg.setTaskId(subTask.getTaskId());
                     msg.setDeadline(subTask.getDeadline() != null ? subTask.getDeadline().toString() : null);
-                    // A0-1（§6.60）：曾分配给我但已转移的子任务打标记（配合 sub_task.reassigned / unassigned
+                    // 曾分配给我但已转移的子任务打标记（配合 sub_task.reassigned / unassigned
                     // 撤销通知），让 Agent 明确知道"这条消息对应的任务已不在我名下"，避免误继续干活；
                     // 执行者已清空（回收）同样打标，currentAgentId 保持 null
                     Long currentAgentId = subTask.getAssignedAgentId();
@@ -166,7 +166,7 @@ public class McpToolServiceImpl implements McpToolService {
     public AckResult ack(Long agentId, String messageId) {
         assertAgentActive(agentId);
         assertToolEnabled(agentId, "ack");
-        refreshDutyLease(agentId); // A0-8：处理收件箱消息顺带续租
+        refreshDutyLease(agentId); // 处理收件箱消息顺带续租
 
         Long inboxId = parseInboxId(messageId);
         try {
@@ -196,7 +196,7 @@ public class McpToolServiceImpl implements McpToolService {
     public ClaimSubTaskResult claimSubTask(Long agentId, Long subTaskId) {
         assertAgentActive(agentId);
         assertToolEnabled(agentId, "claimSubTask");
-        refreshDutyLease(agentId); // A0-8：认领/开工顺带续租，长任务执行期保活
+        refreshDutyLease(agentId); // 认领/开工顺带续租，长任务执行期保活
 
         SubTask subTask = subTaskService.getById(subTaskId);
         if (subTask == null) {
@@ -268,14 +268,14 @@ public class McpToolServiceImpl implements McpToolService {
     // ================================================================
 
     /**
-     * 心跳上报。刷新 Agent 的 last_seen_at，维持在线状态。
+     * 心跳上报。刷新 Agent 的 last_seen_time，维持在线状态。
      * 幂等，频繁调用无副作用。
      *
-     * <p>A0-6（§6.65）：响应附带当前值班租约状态（onDuty / leaseId / leaseExpiresAt /
+     * <p>：响应附带当前值班租约状态（onDuty / leaseId / leaseExpiresAt /
      * remainingTtlSeconds），供 Agent 每次心跳自检续约——租约剩余时间不足时可主动
      * 重新 checkIn，避免被静默切到离岗。</p>
      *
-     * <p>A0-8（§6.67）：心跳顺带自动续租——有 ACTIVE 租约时按原 TTL 窗口延长
+     * <p>：心跳顺带自动续租——有 ACTIVE 租约时按原 TTL 窗口延长
      * expire_time，remainingTtlSeconds 为续租后的剩余 TTL；外部 Agent 只要保持
      * 轮询本工具即可持续在岗，无需手动重做 checkIn。</p>
      */
@@ -284,7 +284,7 @@ public class McpToolServiceImpl implements McpToolService {
         assertToolEnabled(agentId, "heartbeat");
 
         heartbeatService.seen(agentId);
-        // A0-8：心跳顺带续租——返回的 remainingTtlSeconds 为续租后的剩余 TTL，
+        // 心跳顺带续租——返回的 remainingTtlSeconds 为续租后的剩余 TTL，
         // 外部 Agent 只要保持轮询 heartbeat 即可持续在岗，无需手动重做 checkIn。
         refreshDutyLease(agentId);
 
@@ -319,7 +319,7 @@ public class McpToolServiceImpl implements McpToolService {
      * 上传产物附件元数据。文件内容场景请先经 POST /api/artifacts/upload 上传
      * （平台转存 MinIO 并注册一步到位）；本工具仅适用于「对象已在别处可访问」时的
      * 登记（只注册 DB 元数据记录，不传输文件内容）。
-     * v2.7 起平台可直读 minio:// 附件（下载与执行证据核验），
+     * 平台可直读 minio:// 附件（下载与执行证据核验），
      * storageUrl 建议按 {注册名}/{yyyy}/{MM}/{taskId}/{subTaskId}/ 组织。
      */
     @Transactional(rollbackFor = Exception.class)
@@ -328,7 +328,7 @@ public class McpToolServiceImpl implements McpToolService {
                                                 Long fileSize, String storageUrl) {
         assertAgentActive(agentId);
         assertToolEnabled(agentId, "uploadArtifact");
-        refreshDutyLease(agentId); // A0-8：产物登记顺带续租
+        refreshDutyLease(agentId); // 产物登记顺带续租
 
         if (fileName == null || fileName.isBlank()) {
             throw new BizException("fileName 不能为空");
@@ -356,7 +356,7 @@ public class McpToolServiceImpl implements McpToolService {
                                           Boolean success, String output, String error, String finishReason) {
         assertAgentActive(agentId);
         assertToolEnabled(agentId, "submitResult");
-        refreshDutyLease(agentId); // A0-8：结果提交顺带续租
+        refreshDutyLease(agentId); // 结果提交顺带续租
 
         if (subTaskId == null) {
             SubmitResultResult r = new SubmitResultResult();
@@ -439,7 +439,7 @@ public class McpToolServiceImpl implements McpToolService {
     public ReportBlockedResult reportBlocked(Long agentId, Long subTaskId, String reason) {
         assertAgentActive(agentId);
         assertToolEnabled(agentId, "reportBlocked");
-        refreshDutyLease(agentId); // A0-8：阻塞上报顺带续租
+        refreshDutyLease(agentId); // 阻塞上报顺带续租
 
         if (reason == null || reason.isBlank()) {
             throw new BizException("reason 不能为空");
@@ -464,7 +464,7 @@ public class McpToolServiceImpl implements McpToolService {
     }
 
     // ================================================================
-    // checkIn （AgentHub V1 P0-A：值班打卡）
+    // checkIn （AgentHub P0-A：值班打卡）
     // ================================================================
 
     /**
@@ -480,7 +480,7 @@ public class McpToolServiceImpl implements McpToolService {
      * {@link AgentDutyLeaseService#resolveTtlMinutes} 按 Agent 表现动态推断
      * （低分短窗口快速回收、高分长窗口减少续约）。</p>
      *
-     * @param agentId       Agent ID（M4 鉴权后由服务端强制覆盖）
+     * @param agentId       Agent ID（鉴权后由服务端强制覆盖）
      * @param workMode      工作模式（如 AUTO），null 时保持数据库默认
      * @param maxConcurrent 最大并发子任务数，null 默认 1
      * @param ttlMinutes    租约有效期（分钟），null 时按 Agent 表现动态推断
@@ -510,7 +510,7 @@ public class McpToolServiceImpl implements McpToolService {
         // 顺带刷心跳，避免 checkIn 后仍被判定 OFFLINE
         heartbeatService.seen(agentId);
 
-        // P2（§6.115）：上报技能与既有 agent.skills 取并集（只增不减），best-effort 不阻断打卡
+        // P2：上报技能与既有 agent.skills 取并集（只增不减），best-effort 不阻断打卡
         List<String> mergedSkills = mergeReportedSkills(agentId, reportedSkills);
 
         CheckInResult result = new CheckInResult();
@@ -561,7 +561,7 @@ public class McpToolServiceImpl implements McpToolService {
     }
 
     // ================================================================
-    // checkOut （AgentHub V1 P0-A：值班签退）
+    // checkOut （AgentHub P0-A：值班签退）
     // ================================================================
 
     /**
@@ -571,11 +571,11 @@ public class McpToolServiceImpl implements McpToolService {
      * 触发重分配）由既有 {@code SubTaskDispatchService.redispatchAssignedTimeout} 通过
      * 常规超时兜底路径完成，checkOut 工具不直接触发。</p>
      *
-     * <p>幂等（A0-6）：Agent 当前无 ACTIVE 租约时返回 ok=true, closedCount=0，并附带
+     * <p>幂等：Agent 当前无 ACTIVE 租约时返回 ok=true, closedCount=0，并附带
      * 最近一条租约的当前状态（currentStatus=EXPIRED 表示租约已过期无需签退 / NONE 表示
      * 从未打卡），供 Agent 自检。</p>
      *
-     * @param agentId Agent ID（M4 鉴权后由服务端强制覆盖）
+     * @param agentId Agent ID（鉴权后由服务端强制覆盖）
      * @param reason  关闭原因，可为 null（默认 manual_close）
      */
     @Transactional(rollbackFor = Exception.class)
@@ -592,7 +592,7 @@ public class McpToolServiceImpl implements McpToolService {
         result.setClosedCount(closed);
         result.setReason(closeReason);
 
-        // A0-6：幂等返回当前状态——最近一条租约的状态（ACTIVE 已关为 CLOSED / 已过期 EXPIRED / 从未打卡 NONE）
+        // 幂等返回当前状态——最近一条租约的状态（ACTIVE 已关为 CLOSED / 已过期 EXPIRED / 从未打卡 NONE）
         AgentDutyLease latest = agentDutyLeaseService.getLatestLease(agentId);
         if (latest != null) {
             result.setCurrentStatus(latest.getStatus() != null ? latest.getStatus().name() : null);
@@ -606,20 +606,19 @@ public class McpToolServiceImpl implements McpToolService {
     }
 
     // ================================================================
-    // getAgentStatus（A0-2 §6.61：原实现自 McpMcpServer 收口，REST 别名通道可复用）
+    // getAgentStatus（业务下沉至 McpToolService，REST 别名通道可复用）
     // ================================================================
 
     /**
      * 查询 Agent 自身状态（管理态 + DB 持久在线态 + 实时计算态）。
      *
-     * <p>A0-2（§6.61）收口：该工具此前仅存在于 MCP SSE 通道（McpMcpServer @Tool），
-     * REST 别名通道无法调用；现将业务逻辑下沉到 {@link McpToolService}，
-     * 使两条通道工具矩阵完全对齐（10 工具）。</p>
+     * <p>业务逻辑统一下沉到 {@link McpToolService}，MCP SSE 与 REST 别名
+     * 两条通道工具矩阵完全对齐（10 工具），避免实现漂移。</p>
      */
     public GetAgentStatusResult getAgentStatus(Long agentId) {
         assertAgentActive(agentId);
         assertToolEnabled(agentId, "getAgentStatus");
-        refreshDutyLease(agentId); // A0-8：状态自检顺带续租
+        refreshDutyLease(agentId); // 状态自检顺带续租
 
         Agent agent = agentService.getById(agentId);
         if (agent == null) {
@@ -643,14 +642,14 @@ public class McpToolServiceImpl implements McpToolService {
     }
 
     // ================================================================
-    // getDepsSummary（A0-4 §6.63：外部 Agent 主动获取前置产出摘要）
+    // getDepsSummary（外部 Agent 主动获取前置产出摘要）
     // ================================================================
 
     /**
      * 获取指定子任务的直接前置产出摘要（结构化）。
      *
-     * <p>A0-4（§6.63）：执行链在 executeOnce 时已把依赖产出注入 Prompt（V35 buildDependencySection），
-     * 但外部 Agent 开工前无法主动查看——本工具补齐接口层能力，数据口径与执行链同源：
+     * <p>执行链在 executeOnce 时已把依赖产出注入 Prompt（buildDependencySection），
+     * 但外部 Agent 开工前无法主动查看——本工具提供接口层能力，数据口径与执行链同源：
      * 执行记录摘要（TaskRunningSpec）优先 + 内容本体（物化附件 local:// 平台直读，回退
      * {@code context.lastExecution.output}），单条超 {@link #DEP_CONTENT_MAX_CHARS} 字符截断并打标；
      * 任何异常降级为 degraded（deps 为空，不阻断调用），与执行链降级哲学一致。</p>
@@ -658,7 +657,7 @@ public class McpToolServiceImpl implements McpToolService {
     public GetDepsSummaryResult getDepsSummary(Long agentId, Long subTaskId) {
         assertAgentActive(agentId);
         assertToolEnabled(agentId, "getDepsSummary");
-        refreshDutyLease(agentId); // A0-8：前置产出拉取顺带续租
+        refreshDutyLease(agentId); // 前置产出拉取顺带续租
 
         SubTask subTask = subTaskService.getById(subTaskId);
         if (subTask == null) {
@@ -776,7 +775,7 @@ public class McpToolServiceImpl implements McpToolService {
     }
 
     /**
-     * 工具调用自动续租（A0-8 §6.67 + E1 动态 TTL 自适应）：有 ACTIVE 租约时顺带延长
+     * 工具调用自动续租（ §6.67 + E1 动态 TTL 自适应）：有 ACTIVE 租约时顺带延长
      * {@code expire_time}，长任务执行期间任何工具调用即可保活，无需 Agent 主动
      * 重做 checkIn；无 ACTIVE 租约时跳过（不自动打卡，保持 checkIn 的打卡语义）。
      *

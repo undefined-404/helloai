@@ -11,7 +11,7 @@ import org.springframework.core.Ordered;
 import org.springframework.beans.factory.ObjectProvider;
 
 /**
- * MCP Server 鉴权 Filter 注册配置（v2.4 §3.1 / §9 路线 C M4 鉴权改造）。
+ * MCP Server 鉴权 Filter 注册配置（§3.1 / §9 鉴权接入）。
  *
  * <p><b>为什么手写 {@link FilterRegistrationBean}？</b>
  * 如果用 {@code @Component} 让 Spring Boot 自动注册，filter 顺序无法控制。

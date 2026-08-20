@@ -40,7 +40,7 @@ public interface LlmProviderService extends IService<LlmProvider> {
     void deleteById(Long id);
 
     /**
-     * 校验 Provider 是否有至少一个启用模型（V49 新增）。
+     * 校验 Provider 是否有至少一个启用模型。
      *
      * <p>保存 Provider 时调用，确保 Provider 必须配置可用模型。</p>
      *

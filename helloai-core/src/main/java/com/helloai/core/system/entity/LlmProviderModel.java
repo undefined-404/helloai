@@ -10,12 +10,12 @@ import lombok.EqualsAndHashCode;
 import java.util.List;
 
 /**
- * LLM Provider 模型配置（V49 新增）。
+ * LLM Provider 模型配置。
  *
  * <p>每个 Provider 可配置多个可用模型，必须有一个默认模型。
  * 内置 Provider 模型列表固定，只可选不可改；自定义 Provider 支持任意模型名称。</p>
  *
- * <p>字段命名遵循 V23 规范化规则：xxx_time / xxx_id / xxx_count。</p>
+ * <p>字段命名遵循 规范化规则：xxx_time / xxx_id / xxx_count。</p>
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
@@ -41,7 +41,7 @@ public class LlmProviderModel extends BaseEntity {
     private Integer sortOrder;
 
     /**
-     * 模型能力锁定技能（V52 JSONB）：注册/编辑 Agent 时强制追加，不可取消。
+     * 模型能力锁定技能（JSONB）：注册/编辑 Agent 时强制追加，不可取消。
      *
      * <p>内置模型默认 {@code ["thinking"]}；新模型未回填时取列默认值。</p>
      */
@@ -49,7 +49,7 @@ public class LlmProviderModel extends BaseEntity {
     private List<String> capabilitySkills;
 
     /**
-     * 模型可扩展技能白名单（V52 JSONB）：注册时前端仅展示此集合，后端 validateAgentSkills 校验。
+     * 模型可扩展技能白名单（JSONB）：注册时前端仅展示此集合，后端 validateAgentSkills 校验。
      *
      * <p>内置模型默认 {@code ["shell","code-review"]}；联网模型（kimi/qwen/minimax）回填 web-search。</p>
      */

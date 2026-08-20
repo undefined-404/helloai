@@ -25,7 +25,7 @@ import com.helloai.core.task.service.TaskTimelineService;
 import java.util.Map;
 
 /**
- * 弹性调度器（v2.4 §4.5）。
+ * 弹性调度器。
  *
  * <p>为任务分配提供熔断降级保护：
  * <ul>
@@ -34,7 +34,7 @@ import java.util.Map;
  *       以 agentDispatch 实例配置为模板，实现按 Agent 维度熔断</li>
  *   <li>降级：熔断打开或执行失败时，通过 {@link AgentSelector#pickAlternative}
  *       在同角色 Agent 中选择替代者重新分配</li>
- *   <li>V27.1：分配前执行密集能力预检——执行密集任务（需本机 shell/文件/服务操作）
+ *   <li>分配前执行密集能力预检——执行密集任务（需本机 shell/文件/服务操作）
  *       不分配给无本机执行能力的 Agent，避免"无能力执行 → 幻觉交付 → 审核放行"，
  *       覆盖初始分配 / 离线重分配 / ASSIGNED 超时 / 熔断降级等所有入口</li>
  * </ul>
@@ -72,7 +72,7 @@ public class ResilientDispatcher {
      *   <li>外层 @CircuitBreaker 保护整体调度</li>
      *   <li>按 agentId 获取/创建 per-agent 熔断器</li>
      *   <li>校验 Agent 在线状态（SLEEPING/OFFLINE 立即 fast-fail）</li>
-     *   <li>V27.1 执行密集能力预检（不匹配 → 标记人工介入并 fast-fail 走 fallback）</li>
+     *   <li>执行密集能力预检（不匹配 → 标记人工介入并 fast-fail 走 fallback）</li>
      *   <li>调用 {@link SubTaskService#assignNext} 执行分配</li>
      *   <li>失败/熔断打开 → fallback 选取替代 Agent</li>
      * </ol>
@@ -86,7 +86,7 @@ public class ResilientDispatcher {
     }
 
     /**
-     * V47（§6.58 P1）：带任务级约束的弹性分配。
+     * （§6.58 P1）：带任务级约束的弹性分配。
      *
      * <p>在 {@link #assignNext(Long, Long)} 基础上贯穿任务级选人约束
      * （执行者白名单 + 技能 AND 匹配）：首选 fast-fail 后，fallback 替代选人
@@ -114,7 +114,7 @@ public class ResilientDispatcher {
                 throw new BizException("Agent 不存在: " + agentId);
             }
 
-            // V47：首选 Agent 必须满足任务级约束（防御调用方直接指定白名单外/无技能
+            // 首选 Agent 必须满足任务级约束（防御调用方直接指定白名单外/无技能
             // Agent）；不满足时 fast-fail 走 fallback，由受约束的替代选人兜底。
             if (constraints != null && !constraints.allows(agent)) {
                 throw new AgentUnavailableException(
@@ -131,14 +131,14 @@ public class ResilientDispatcher {
                     && (accessType == null || accessType.requiresRuntimeLiveness())) {
                 throw new AgentUnavailableException("Agent 处于 OFFLINE 状态，不可分配: " + agentId, agentId);
             }
-            // V25：心跳新鲜度 fast-fail —— online_status 翻 OFFLINE 依赖 5min 阈值 + 60s 巡检，
+            // 心跳新鲜度 fast-fail —— online_status 翻 OFFLINE 依赖 5min 阈值 + 60s 巡检，
             // 存在"DB 仍 ONLINE 但 Agent 已死"的滞后窗口；对需运行时存活的 Agent（CLI_CLIENT）
             // 复用 AgentSelector 的心跳新鲜度判断，不新鲜直接走 fallback 选替代 Agent。
             // API_KEY_LLM / WEB_BROWSER 在 isHeartbeatFresh 内部已豁免。
             if (!agentSelector.isHeartbeatFresh(agent)) {
                 throw new AgentUnavailableException("Agent 心跳已陈旧（疑似失联），不可分配: " + agentId, agentId);
             }
-            // V27.1：执行密集能力预检（覆盖所有分配入口）——不匹配时标记人工介入，
+            // 执行密集能力预检（覆盖所有分配入口）——不匹配时标记人工介入，
             // 抛 AgentUnavailableException 走 fallback 尝试同角色替代；替代也需通过预检。
             if (isExecutionDenseMismatch(agentId, subTaskId, agent)) {
                 throw new AgentUnavailableException(
@@ -152,7 +152,7 @@ public class ResilientDispatcher {
     }
 
     /**
-     * V27.1 执行密集能力预检：执行密集任务分配给无本机能力 Agent 时，
+     * 执行密集能力预检：执行密集任务分配给无本机能力 Agent 时，
      * 记 timeline + 幂等标记人工介入，返回 true 表示不匹配（应拒绝分配）。
      */
     private boolean isExecutionDenseMismatch(Long agentId, Long subTaskId, Agent agent) {
@@ -207,7 +207,7 @@ public class ResilientDispatcher {
         doAssignNextFallback(agentId, subTaskId, null, t);
     }
 
-    /** V47：带任务级约束的熔断降级（替代选人同样受约束，见 {@link #assignNext(Long, Long, AgentSelectionConstraints)}）。 */
+    /** 带任务级约束的熔断降级（替代选人同样受约束，见 {@link #assignNext(Long, Long, AgentSelectionConstraints)}）。 */
     @SuppressWarnings("unused")
     private void assignNextFallbackWithConstraints(Long agentId, Long subTaskId,
                                                    AgentSelectionConstraints constraints, Throwable t) {
@@ -223,7 +223,7 @@ public class ResilientDispatcher {
         Agent originalAgent = agentService.getById(agentId);
         AgentRole role = originalAgent != null ? originalAgent.getRole() : null;
 
-        // 选取替代 Agent（V47：任务级约束贯穿 fallback，选人不越出白名单/技能范围）
+        // 选取替代 Agent（任务级约束贯穿 fallback，选人不越出白名单/技能范围）
         Agent alternative = agentSelector.pickAlternative(agentId, role, constraints);
 
         if (alternative == null) {
@@ -233,7 +233,7 @@ public class ResilientDispatcher {
             throw new BizException(msg);
         }
 
-        // V27.1：替代 Agent 同样必须通过执行密集能力预检。
+        // 替代 Agent 同样必须通过执行密集能力预检。
         // 不匹配时已标记人工介入，任务保持 PENDING 由人工处置，不再抛异常冒泡。
         if (isExecutionDenseMismatch(alternative.getId(), subTaskId, alternative)) {
             log.warn("熔断降级替代 Agent 也无本机执行能力，放弃分配: subTaskId={}, alternativeAgentId={}",

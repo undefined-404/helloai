@@ -10,7 +10,7 @@ import java.util.Map;
 /**
  * Agent 能力匹配工具类。
  *
- * <p>v2.4 P3 能力画像：Agent 的 capabilities 是可独立覆盖的 Map，
+ * <p>P3 能力画像：Agent 的 capabilities 是可独立覆盖的 Map，
  * 注册时按 accessType 默认值填充，调用方按需匹配。</p>
  */
 public final class AgentCapability {

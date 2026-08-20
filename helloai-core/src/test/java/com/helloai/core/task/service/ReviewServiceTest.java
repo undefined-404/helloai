@@ -31,7 +31,7 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.lenient;
 
 /**
- * ReviewService（人工审查入口）单元测试（§6.57）：
+ * ReviewService（人工审查入口）单元测试：
  * 人工驳回必须走 reworkFresh 重置返工计数并清除人工介入标记，
  * 否则改派后的新执行者提交时仍命中 skip_max_rework 跳过自动核验、无节点流转。
  */
@@ -100,7 +100,7 @@ class ReviewServiceTest {
         // 核心断言：人工驳回必须走重置链路（而非累加或原样流转）
         verify(subTaskService).reworkFresh(SUB_TASK_ID, NEW_AGENT_ID);
         verify(subTaskService, never()).complete(SUB_TASK_ID);
-        // 原执行者按评分扣分（与 v1.0 兼容）
+        // 原执行者按评分扣分（与 兼容）
         verify(rewardService).addReward(eq(EXECUTOR_ID), any(), eq(-5), eq(SUB_TASK_ID));
     }
 

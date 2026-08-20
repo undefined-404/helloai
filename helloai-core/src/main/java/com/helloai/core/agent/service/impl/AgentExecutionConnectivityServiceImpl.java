@@ -96,7 +96,7 @@ public class AgentExecutionConnectivityServiceImpl implements AgentExecutionConn
                     provider,
                     vaultApiKey
             );
-            // 分离正文与思考过程：推理模型（如 Minimax M2.5）的 thinking 块不混入 output
+            // 分离正文与思考过程：推理模型（如 Minimax ）的 thinking 块不混入 output
             ChatResponseContentExtractor.ExtractedContent extracted = ChatResponseContentExtractor.extract(response);
             Usage usage = response.getMetadata() != null ? response.getMetadata().getUsage() : null;
             Integer totalTokens = usage != null ? usage.getTotalTokens() : null;

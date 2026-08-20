@@ -22,11 +22,11 @@ import java.util.Map;
  * <p>字段分组：</p>
  * <ul>
  *   <li>身份/调度：name / role / apiKey(consumerToken 工牌) / modelType / modelConfig / specializationSlug / status / score</li>
- *   <li>阶段 0 补全：accessType / capabilities / labels</li>
- *   <li>阶段 4 三件套：lastSeenTime / lastActiveTime / onlineStatus / offlineReason / offlineTime</li>
+ *   <li>补全：accessType / capabilities / labels</li>
+ *   <li>三件套：lastSeenTime / lastActiveTime / onlineStatus / offlineReason / offlineTime</li>
  * </ul>
  *
- * <p>状态分离原则（v2.4 P1 + v2.2 设计决策）：</p>
+ * <p>状态分离原则（P1 + 设计决策）：</p>
  * <ul>
  *   <li>AgentStatus（管理态：ACTIVE/DISABLED）— 鉴权只看这个</li>
  *   <li>AgentOnlineStatus（计算态：ONLINE/IDLE/OFFLINE/SLEEPING）— 调度过滤看这个</li>
@@ -43,7 +43,7 @@ public class Agent extends BaseEntity {
     /**
      * Agent 工牌 consumerToken。
      *
-     * <p>语义收口（T2）：
+     * <p>语义收口：
      * <ul>
      *   <li>CLI_CLIENT：继续作为 MCP / HTTP 接入鉴权 token</li>
      *   <li>API_KEY_LLM：只保留平台内身份标识，不再存真实 LLM Secret</li>
@@ -55,7 +55,7 @@ public class Agent extends BaseEntity {
     /**
      * consumerToken 的 SHA-256 hex（认证点查列，等保存储加密配套）。
      *
-     * <p>api_key 以 AES-GCM 密文（{@code enc:v1:} 前缀，见 AgentApiKeyCipher）落库后
+     * <p>api_key 以 AES-GCM 密文（{@code enc:} 前缀，见 AgentApiKeyCipher）落库后
      * 无法用 SQL eq 匹配（每次 nonce 随机），认证先用本列定位，再解密比对防碰撞。</p>
      */
     private String apiKeyHash;
@@ -70,10 +70,10 @@ public class Agent extends BaseEntity {
     private Integer score;
 
     // ============================================================
-    // 阶段 0 补全字段
+    // 补全字段
     // ============================================================
 
-    /** 接入类型：CLI_CLIENT / API_KEY_LLM / WEB_BROWSER（v2.4 N1） */
+    /** 接入类型：CLI_CLIENT / API_KEY_LLM / WEB_BROWSER（N1） */
     private AgentAccessType accessType;
 
     /** 能力画像（JSONB，Map 形式）。注册时按 accessType 默认值填充，可独立覆盖。 */
@@ -85,7 +85,7 @@ public class Agent extends BaseEntity {
     private Map<String, Object> labels;
 
     /**
-     * 能力声明列表（V47 新增 JSONB[]，§6.58 P1）。
+     * 能力声明列表（JSONB[]，§6.58 P1）。
      *
      * <p>注册时按接入方式声明（如 shell / docker / code-review / web-search），
      * 供任务 {@code required_skills} 匹配（AND 语义）；默认 {@code []}，
@@ -95,7 +95,7 @@ public class Agent extends BaseEntity {
     private List<String> skills;
 
     // ============================================================
-    // 阶段 4 三件套心跳 + 计算态在线状态
+    // 三件套心跳 + 计算态在线状态
     // ============================================================
 
     /** 最近一次心跳时间（heartbeat/拉取/ack 即刷新）— 在线判定依据 */
@@ -114,7 +114,7 @@ public class Agent extends BaseEntity {
     private OffsetDateTime offlineTime;
 
     // ============================================================
-    // N11 阈值回退字段（V17 新增）
+    // N11 阈值回退字段
     // ============================================================
 
     /**

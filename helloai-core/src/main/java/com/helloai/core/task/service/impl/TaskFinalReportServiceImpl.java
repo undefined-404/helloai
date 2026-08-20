@@ -37,7 +37,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 任务最终整合报告生成实现（V32）。
+ * 任务最终整合报告生成实现。
  *
  * <p>任务收口后由 Planner 把全部 DONE 子任务产出整合为一份连贯的最终报告
  * （执行摘要 + 重组正文 + 结论），写入 {@code task.final_report} 专列。</p>
@@ -109,7 +109,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
             throw new BizException("没有可整合的子任务产出（无 DONE 子任务或产出为空）: taskId=" + taskId);
         }
 
-        // V41 CAS 防重入：仅当当前状态非 GENERATING 时置位成功；失败说明另一条路径正在生成
+        // CAS 防重入：仅当当前状态非 GENERATING 时置位成功；失败说明另一条路径正在生成
         boolean casOk = taskService.update(new LambdaUpdateWrapper<Task>()
                 .eq(Task::getId, taskId)
                 .ne(Task::getFinalReportStatus, FinalReportStatus.GENERATING)
@@ -164,7 +164,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
                                 "reportSummary", summarize(report)));
                 log.info("任务整合报告生成完成: taskId={}, plannerAgentId={}, reportLength={}, sectionOutputLimit={}",
                         taskId, planner.getId(), report.length(), limit);
-                // V42：回填 task_iteration 表（失败不阻断报告生成）
+                // 回填 task_iteration 表（失败不阻断报告生成）
                 backfillIterationsQuietly(taskId, sections, planner);
                 return taskService.getById(taskId);
             } catch (Exception e) {
@@ -178,7 +178,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
                         AgentRole.PLANNER, planner.getId(),
                         Map.of("error", errMsg, "sectionOutputLimit", limit));
                 log.warn("任务整合报告生成失败: taskId={}", taskId, e);
-                // V41：最终失败置 FAILED，允许手动重试（避免 GENERATING 卡死无恢复口）
+                // 最终失败置 FAILED，允许手动重试（避免 GENERATING 卡死无恢复口）
                 markFailed(taskId, errMsg);
                 if (e instanceof BizException be) {
                     throw be;
@@ -304,7 +304,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
     }
 
     /**
-     * V41：标记报告生成最终失败（FAILED）。
+     * 标记报告生成最终失败（FAILED）。
      *
      * <p>只负责状态回写，失败不外抛（避免掩盖原始 LLM 异常）；置 FAILED 后手动端点可重试。</p>
      */
@@ -328,7 +328,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
     }
 
     /**
-     * V42：回填 task_iteration 表（静默失败，不阻断报告生成主流程）。
+     * 回填 task_iteration 表（静默失败，不阻断报告生成主流程）。
      *
      * <p>报告生成成功后调用，把全部 DONE 子任务的执行迭代数据一次性固化到
      * task_iteration 表。回填失败仅记 timeline + 日志，不影响报告生成结果。</p>

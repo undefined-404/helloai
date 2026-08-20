@@ -7,7 +7,7 @@ import org.springframework.stereotype.Component;
 /**
  * Agent 健康与离线判定统一配置。
  *
- * <p>本类是项目中"Agent 是否视为在线/可用"的单一阈值来源（v2.6 §4.1 调度链修复）。
+ * <p>本类是项目中"Agent 是否视为在线/可用"的单一阈值来源（§4.1 调度链修复）。
  * 用于消除以下两套阈值漂移问题：</p>
  * <ul>
  *     <li>{@code AgentHealthCheckTask} 原硬编码 5 分钟 Reconcile 阈值</li>

@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 任务级执行迭代记录（V42）。
+ * 任务级执行迭代记录。
  *
  * <p>每轮执行（含 rework）一条记录，在 Planner 整合报告生成时一次性回填。
  * 通过 parent_task_id 自引用支持"超大任务 → 主任务 → 子任务"层级；

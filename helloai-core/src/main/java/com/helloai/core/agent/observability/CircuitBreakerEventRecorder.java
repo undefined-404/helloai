@@ -16,7 +16,7 @@ import com.helloai.core.agent.service.CircuitBreakerAlertService;
 import com.helloai.core.task.service.TaskTimelineService;
 
 /**
- * 熔断器事件审计记录器（v2.4 §4.7）。
+ * 熔断器事件审计记录器。
  *
  * <p>监听 per-agent 熔断器状态变更，写入 DB task_timeline 表。
  * 通过 {@link #registerListener} 为每个 Agent 的独立熔断器注册回调，

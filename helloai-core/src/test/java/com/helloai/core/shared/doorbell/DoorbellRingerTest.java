@@ -17,7 +17,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link DoorbellRinger} 单元测试（AgentHub V3 门铃响铃 PR-2）。
+ * {@link DoorbellRinger} 单元测试（AgentHub 门铃响铃 PR-2）。
  *
  * <p>覆盖：事件字段正确映射为 inbox 信号并响铃；空事件/空 agentId 短路不响铃；
  * 响铃抛异常被吞掉不外抛（旁路不拖累主链路）。</p>

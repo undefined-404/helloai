@@ -47,7 +47,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
 
     @Override
     public void dispatchBlockedSubTask(Long subTaskId, Long preferredAgentId) {
-        // V24: 重分配熔断检查
+        // 重分配熔断检查
         if (checkReassignCircuitBreaker(subTaskId)) {
             return;
         }
@@ -68,7 +68,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
 
     @Override
     public void redispatchOfflineSubTask(Long subTaskId, Long offlineAgentId) {
-        // V24: 重分配熔断检查
+        // 重分配熔断检查
         if (checkReassignCircuitBreaker(subTaskId)) {
             return;
         }
@@ -77,7 +77,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         if (subTask == null) {
             throw new BizException("子任务不存在: " + subTaskId);
         }
-        // V27.1: 依赖 ready 守卫 —— 未就绪的离线遗留任务不重派，保持 PENDING
+        // 依赖 ready 守卫 —— 未就绪的离线遗留任务不重派，保持 PENDING
         // 等依赖 DONE 后由 SubTaskPendingOrphanTask / 自动分发链再次触发
         if (!subTaskService.isReady(subTask)) {
             taskTimelineService.recordEvent(
@@ -109,7 +109,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
 
     @Override
     public Long dispatchPendingSubTaskAuto(Long subTaskId, AgentRole role) {
-        // V27: 依赖 ready 守卫必须在熔断计数之前 —— 未就绪的 PENDING 子任务
+        // 依赖 ready 守卫必须在熔断计数之前 —— 未就绪的 PENDING 子任务
         // 会被定时兜底任务反复扫描，若先累加 reassign_attempt_count 会被误推入死信
         SubTask readyCheck = subTaskService.getById(subTaskId);
         if (readyCheck != null && readyCheck.getStatus() == SubTaskStatus.PENDING
@@ -118,7 +118,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
                     subTaskId, readyCheck.dependsOnIdList());
             return null;
         }
-        // V25: 重分配熔断检查 —— 封堵定时兜底任务（PendingOrphan / recoverPendingUnassigned /
+        // 重分配熔断检查 —— 封堵定时兜底任务（PendingOrphan / recoverPendingUnassigned /
         // HealthCheck 二次选人）经本入口无限改派的旁路
         if (checkReassignCircuitBreaker(subTaskId)) {
             return null;
@@ -131,7 +131,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
             throw new BizException("只有 PENDING 状态的子任务才能自动分配: subTaskId=" + subTaskId + ", status=" + subTask.getStatus());
         }
 
-        // V47：任务级选人约束（executorAgentIds 白名单 + required_skills 技能 AND 匹配）
+        // 任务级选人约束（executorAgentIds 白名单 + required_skills 技能 AND 匹配）
         AgentSelectionConstraints constraints = resolveConstraints(subTask);
         var preferred = agentSelector.pickPreferred(role, constraints);
         if (preferred == null) {
@@ -194,7 +194,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
 
     @Override
     public Long redispatchForFallback(Long subTaskId, Long failedAgentId, String reason) {
-        // V24: 重分配熔断检查
+        // 重分配熔断检查
         if (checkReassignCircuitBreaker(subTaskId)) {
             return null;
         }
@@ -211,7 +211,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         final AgentRole role = (failedAgent != null && failedAgent.getRole() != null)
                 ? failedAgent.getRole() : AgentRole.EXECUTOR;
 
-        // V47（§6.58 P1）：任务级回退策略约束——fallbackPolicy=NONE 或 difficulty=HIGH
+        // （§6.58 P1）：任务级回退策略约束——fallbackPolicy=NONE 或 difficulty=HIGH
         // 时禁止 N11 自动回退，改打人工介入标记等人工处置，避免高风险任务被静默换人。
         Map<String, Object> agentPolicy = loadAgentPolicy(subTask);
         if (TaskAgentPolicy.isFallbackForbidden(agentPolicy)) {
@@ -244,7 +244,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
             throw new BizException(msg);
         }
 
-        // V47：RESTRICTED 回退——仅允许回退到 executorAgentIds 内的 API_KEY_LLM Agent；
+        // RESTRICTED 回退——仅允许回退到 executorAgentIds 内的 API_KEY_LLM Agent；
         // 集合为空或回退目标不在集合内时等同 NONE，打人工介入标记。
         if (TaskAgentPolicy.fallbackPolicy(agentPolicy) == TaskAgentPolicy.FallbackPolicy.RESTRICTED) {
             List<Long> allowed = TaskAgentPolicy.executorAgentIds(agentPolicy);
@@ -328,7 +328,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
 
     @Override
     public void redispatchAssignedTimeout(Long subTaskId, Long originalAgentId, AgentRole role) {
-        // V24: 重分配熔断检查
+        // 重分配熔断检查
         if (checkReassignCircuitBreaker(subTaskId)) {
             return;
         }
@@ -347,7 +347,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         // 必须排除 originalAgentId：原 Agent 可能仍在线但静默丢弃，
         // 重分回它只是原地打转。使用 pickAlternative(excludeAgentId, role)
         // 走 AgentSelector 已有的"同角色排除指定 Agent"选人逻辑。
-        // V47：任务级约束（executorAgentIds / required_skills）同样作用于重分配。
+        // 任务级约束（executorAgentIds / required_skills）同样作用于重分配。
         AgentSelectionConstraints constraints = resolveConstraints(subTask);
         var preferred = agentSelector.pickAlternative(originalAgentId, role, constraints);
         if (preferred == null) {
@@ -362,7 +362,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  V47（§6.58 P1）：任务级选人约束解析
+    //  （§6.58 P1）：任务级选人约束解析
     // ══════════════════════════════════════════════════════════════
 
     /**
@@ -403,7 +403,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  V24：重分配熔断 —— 防止无限重分配死循环
+    //  重分配熔断 —— 防止无限重分配死循环
     // ══════════════════════════════════════════════════════════════
 
     /**
@@ -424,7 +424,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
      * </ol>
      * </p>
      *
-     * <p>V25：熔断后的状态由 CANCELLED 改为 DEAD_LETTER，区分"人工主动取消"与
+     * <p>熔断后的状态由 CANCELLED 改为 DEAD_LETTER，区分"人工主动取消"与
      * "系统熔断待人工"；死信由 {@link #redispatchDeadLetter} 人工恢复。</p>
      *
      * @param subTaskId 待检查的子任务 ID

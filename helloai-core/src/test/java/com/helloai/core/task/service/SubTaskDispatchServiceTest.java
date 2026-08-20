@@ -74,7 +74,7 @@ class SubTaskDispatchServiceTest {
 
     @BeforeEach
     void setUp() {
-        // V24 熔断默认禁用（现有测试不改动行为）
+        // 熔断默认禁用（现有测试不改动行为）
         lenient().when(agentDispatchProperties.getMaxReassignAttempts()).thenReturn(0);
     }
 
@@ -109,7 +109,7 @@ class SubTaskDispatchServiceTest {
 
         when(subTaskService.resetToPendingForDispatch(22L, Set.of(SubTaskStatus.ASSIGNED, SubTaskStatus.IN_PROGRESS)))
                 .thenReturn(subTask);
-        // V27.1: 依赖 ready 守卫 —— 默认依赖就绪才继续重派
+        // 依赖 ready 守卫 —— 默认依赖就绪才继续重派
         when(subTaskService.isReady(subTask)).thenReturn(true);
 
         subTaskDispatchService.redispatchOfflineSubTask(22L, 12L);
@@ -125,7 +125,7 @@ class SubTaskDispatchServiceTest {
     }
 
     @Test
-    @DisplayName("V27.1: 离线重分配时依赖未就绪 → 不重派保持 PENDING + 记 skip 事件")
+    @DisplayName("离线重分配时依赖未就绪 → 不重派保持 PENDING + 记 skip 事件")
     void shouldSkipOfflineRedispatchWhenDependencyNotReady() {
         SubTask subTask = new SubTask();
         subTask.setId(22L);
@@ -356,7 +356,7 @@ class SubTaskDispatchServiceTest {
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  AgentHub V1 T1: redispatchAssignedTimeout 必须排除原 Agent
+    //  AgentHub redispatchAssignedTimeout 必须排除原 Agent
     //  ══════════════════════════════════════════════════════════════
 
     @Test
@@ -402,11 +402,11 @@ class SubTaskDispatchServiceTest {
     }
 
     // ══════════════════════════════════════════════════════════
-    //  V25 死信：熔断达阈值 → DEAD_LETTER；人工兜底 redispatchDeadLetter
+    //  死信：熔断达阈值 → DEAD_LETTER；人工兜底 redispatchDeadLetter
     // ══════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("V25: dispatchPendingSubTaskAuto 达熔断阈值 → 置 DEAD_LETTER 且不再选人")
+    @DisplayName("dispatchPendingSubTaskAuto 达熔断阈值 → 置 DEAD_LETTER 且不再选人")
     void shouldMoveToDeadLetterWhenReassignAttemptsExceeded() {
         when(agentDispatchProperties.getMaxReassignAttempts()).thenReturn(5);
 
@@ -416,7 +416,7 @@ class SubTaskDispatchServiceTest {
         subTask.setStatus(SubTaskStatus.PENDING);
         subTask.setReassignAttemptCount(5);
         when(subTaskService.getById(81L)).thenReturn(subTask);
-        // V27 ready 守卫在熔断检查前，无依赖子任务视为就绪
+        // ready 守卫在熔断检查前，无依赖子任务视为就绪
         when(subTaskService.isReady(subTask)).thenReturn(true);
 
         Long result = subTaskDispatchService.dispatchPendingSubTaskAuto(81L, AgentRole.EXECUTOR);
@@ -440,7 +440,7 @@ class SubTaskDispatchServiceTest {
     }
 
     @Test
-    @DisplayName("V25: 未达阈值 → 计数累加后正常进入调度链")
+    @DisplayName("未达阈值 → 计数累加后正常进入调度链")
     void shouldIncrementCountAndDispatchWhenBelowThreshold() {
         when(agentDispatchProperties.getMaxReassignAttempts()).thenReturn(5);
 
@@ -450,7 +450,7 @@ class SubTaskDispatchServiceTest {
         subTask.setStatus(SubTaskStatus.PENDING);
         subTask.setReassignAttemptCount(2);
         when(subTaskService.getById(82L)).thenReturn(subTask);
-        // V27 ready 守卫在熔断检查前，无依赖子任务视为就绪
+        // ready 守卫在熔断检查前，无依赖子任务视为就绪
         when(subTaskService.isReady(subTask)).thenReturn(true);
 
         Agent preferred = new Agent();
@@ -466,7 +466,7 @@ class SubTaskDispatchServiceTest {
     }
 
     @Test
-    @DisplayName("V25: redispatchDeadLetter 清零计数并直接指派 ASSIGNED")
+    @DisplayName("redispatchDeadLetter 清零计数并直接指派 ASSIGNED")
     void shouldResetCountAndAssignWhenRedispatchDeadLetter() {
         SubTask subTask = new SubTask();
         subTask.setId(83L);
@@ -495,7 +495,7 @@ class SubTaskDispatchServiceTest {
     }
 
     @Test
-    @DisplayName("V25: 非 DEAD_LETTER 状态调用 redispatchDeadLetter → BizException")
+    @DisplayName("非 DEAD_LETTER 状态调用 redispatchDeadLetter → BizException")
     void shouldThrowWhenRedispatchNonDeadLetter() {
         SubTask subTask = new SubTask();
         subTask.setId(84L);
@@ -512,7 +512,7 @@ class SubTaskDispatchServiceTest {
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  V47 §6.58 P1：任务级回退策略约束（fallbackPolicy / difficulty）
+    //  §6.58 P1：任务级回退策略约束（fallbackPolicy / difficulty）
     //  ══════════════════════════════════════════════════════════════
 
     private SubTask subTaskWithTaskId(long subTaskId, long taskId) {
@@ -541,7 +541,7 @@ class SubTaskDispatchServiceTest {
     }
 
     @Test
-    @DisplayName("V47: fallbackPolicy=NONE → 跳过 N11 回退并标记人工介入，不落 LLM")
+    @DisplayName("fallbackPolicy=NONE → 跳过 N11 回退并标记人工介入，不落 LLM")
     void shouldSkipFallbackWhenPolicyNone() {
         SubTask subTask = subTaskWithTaskId(47L, 57L);
         Task task = new Task();
@@ -568,7 +568,7 @@ class SubTaskDispatchServiceTest {
     }
 
     @Test
-    @DisplayName("V47: difficulty=HIGH → 跳过 N11 回退并标记人工介入，不落 LLM")
+    @DisplayName("difficulty=HIGH → 跳过 N11 回退并标记人工介入，不落 LLM")
     void shouldSkipFallbackWhenDifficultyHigh() {
         SubTask subTask = subTaskWithTaskId(48L, 58L);
         Task task = new Task();
@@ -589,7 +589,7 @@ class SubTaskDispatchServiceTest {
     }
 
     @Test
-    @DisplayName("V47: fallbackPolicy=RESTRICTED 且回退目标不在白名单 → 跳过并标记人工介入")
+    @DisplayName("fallbackPolicy=RESTRICTED 且回退目标不在白名单 → 跳过并标记人工介入")
     void shouldSkipFallbackWhenRestrictedTargetOutsideWhitelist() {
         SubTask subTask = subTaskWithTaskId(49L, 59L);
         Task task = new Task();
@@ -615,7 +615,7 @@ class SubTaskDispatchServiceTest {
     }
 
     @Test
-    @DisplayName("V47: fallbackPolicy=RESTRICTED 且回退目标在白名单 → 正常回退")
+    @DisplayName("fallbackPolicy=RESTRICTED 且回退目标在白名单 → 正常回退")
     void shouldFallbackWhenRestrictedTargetInWhitelist() {
         SubTask subTask = subTaskWithTaskId(50L, 60L);
         Task task = new Task();

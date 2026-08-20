@@ -37,14 +37,14 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * ExecutionResultHandler AOP 自死锁防护验证（v2.6 §4.1 2026-07-20 锁语义重审）。
+ * ExecutionResultHandler AOP 自死锁防护验证（§4.1  锁语义重审）。
  *
  * <p>本测试锁定 afterCommit + 主事务分离的不变量：
  * <ol>
  *   <li>{@code subTaskService.submit()} 触发链路 {@code changeStatus(REVIEW) -> heartbeatService.active()}
  *       时，{@code agent} 行锁被主事务持有</li>
  *   <li>{@code failureTracker.recordSuccess()} 必须在主事务提交后（afterCommit）执行</li>
- *   <li>v2.6 active() 复用 seen() 双写后行锁更频繁，afterCommit 模式不可豁免</li>
+ *   <li>active() 复用 seen() 双写后行锁更频繁，afterCommit 模式不可豁免</li>
  * </ol>
  */
 @ExtendWith(MockitoExtension.class)
@@ -201,7 +201,7 @@ class ExecutionResultHandlerIntegrationTest {
     }
 
     @Test
-    @DisplayName("v2.6 锁顺序断言：主事务内不调 failureTracker（避免自死锁）")
+    @DisplayName("锁顺序断言：主事务内不调 failureTracker（避免自死锁）")
     void shouldNeverCallFailureTrackerInsideMainTransaction() {
         SubTask subTask = new SubTask();
         subTask.setId(22L);

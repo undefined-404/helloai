@@ -27,7 +27,7 @@ public class AgentResponse {
     private OffsetDateTime createTime;
     private OffsetDateTime updateTime;
 
-    // 阶段 0 补全 + 阶段 4 三件套（list/getById 返回）
+    // 补全 + 三件套（list/getById 返回）
     private AgentAccessType accessType;
     private Map<String, Object> capabilities;
     private Map<String, Object> labels;

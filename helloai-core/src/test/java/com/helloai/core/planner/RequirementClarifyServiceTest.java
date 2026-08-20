@@ -171,7 +171,7 @@ class RequirementClarifyServiceTest {
     }
 
     @Test
-    @DisplayName("structured 追问：校验通过后 payload 落库，content 合成可读文本（V33）")
+    @DisplayName("structured 追问：校验通过后 payload 落库，content 合成可读文本")
     void shouldHandleStructuredQuestionReply() {
         when(conversationService.getById(CONV_ID)).thenReturn(activeConversation());
         stubLlmRound("{\"type\":\"question\",\"mode\":\"structured\",\"progress\":40,"
@@ -195,7 +195,7 @@ class RequirementClarifyServiceTest {
     }
 
     @Test
-    @DisplayName("structured 校验失败（选项为空）：降级 freeform，questions 丢弃（V33）")
+    @DisplayName("structured 校验失败（选项为空）：降级 freeform，questions 丢弃")
     void shouldDowngradeInvalidStructuredToFreeform() {
         when(conversationService.getById(CONV_ID)).thenReturn(activeConversation());
         stubLlmRound("{\"type\":\"question\",\"mode\":\"structured\",\"progress\":30,"
@@ -213,7 +213,7 @@ class RequirementClarifyServiceTest {
     }
 
     @Test
-    @DisplayName("sendMessage 附选项快照：user 消息 payload 存 selections（V33）")
+    @DisplayName("sendMessage 附选项快照：user 消息 payload 存 selections")
     void shouldPersistSelectionSnapshotOnUserMessage() {
         when(conversationService.getById(CONV_ID)).thenReturn(activeConversation());
         stubLlmRound("{\"type\":\"question\",\"message\":\"验收标准是什么？\"}");
@@ -268,7 +268,7 @@ class RequirementClarifyServiceTest {
     // ══════════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("非 JSON 且不含 type 字样：降级为 freeform 追问落库，不报错（V33）")
+    @DisplayName("非 JSON 且不含 type 字样：降级为 freeform 追问落库，不报错")
     void shouldDegradeToFreeformWhenOutputIsNotJson() {
         when(conversationService.getById(CONV_ID)).thenReturn(activeConversation());
         stubLlmRound("抱歉，我无法帮你澄清。");
@@ -518,12 +518,12 @@ class RequirementClarifyServiceTest {
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  V39 ChatModeAndSwitch：CHAT 自由对话 / CLARIFY 方案澄清双模式
+    //  ChatModeAndSwitch：CHAT 自由对话 / CLARIFY 方案澄清双模式
     //  （外层 @BeforeEach 先执行，clarifyService 与全部 @Mock 直接复用）
     // ══════════════════════════════════════════════════════════════
 
     @Nested
-    @DisplayName("V39 ChatModeAndSwitch：双模式分派与切换")
+    @DisplayName("ChatModeAndSwitch：双模式分派与切换")
     class ChatModeAndSwitch {
 
         private RequirementConversation chatConversation() {
@@ -572,13 +572,13 @@ class RequirementClarifyServiceTest {
             verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
             assertThat(taskCaptor.getValue().getUserPrompt())
                     .contains("AI 助手")
-                    // V40.2 CHAT 模板新增「输出形态」节（追问时可输出 structured JSON）
+                    // CHAT 模板新增「输出形态」节（追问时可输出 structured JSON）
                     .contains("输出形态")
                     .doesNotContain("五维度自检清单");
         }
 
         @Test
-        @DisplayName("老数据兼容：mode NULL 视为 CLARIFY——澄清模板 + 首轮联网搜索触发（V34 行为回归）")
+        @DisplayName("老数据兼容：mode NULL 视为 CLARIFY——澄清模板 + 首轮联网搜索触发（行为回归）")
         void legacyNullModeTreatedAsClarify() {
             RequirementConversation conversation = activeConversation();
             conversation.setRoundCount(0);
@@ -618,7 +618,7 @@ class RequirementClarifyServiceTest {
             // 确认询问不消耗对话轮数
             assertThat(conversation.getRoundCount()).isEqualTo(3);
             assertThat(detail.getConversation().getMode()).isEqualTo(RequirementClarifyService.MODE_CHAT);
-            // user 消息 + 固定确认询问落库（V41 起 payload 为结构化确认卡），不调 LLM
+            // user 消息 + 固定确认询问落库（payload 为结构化确认卡），不调 LLM
             verify(messageService).addMessage(CONV_ID, "user", "帮我分析一下市场，然后整理成方案", null);
             verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
                     eq(RequirementClarifyService.CONFIRM_ASK_MESSAGE), anyString());
@@ -627,7 +627,7 @@ class RequirementClarifyServiceTest {
         }
 
         @Test
-        @DisplayName("口语化意图词（V40.1 扩展）：「帮我整理方案吧」同样进入待确认（不调 LLM、不加轮数）")
+        @DisplayName("口语化意图词（扩展）：「帮我整理方案吧」同样进入待确认（不调 LLM、不加轮数）")
         void colloquialIntentPhraseEntersPendingConfirm() {
             RequirementConversation conversation = chatConversation();
             conversation.setRoundCount(3);
@@ -648,7 +648,7 @@ class RequirementClarifyServiceTest {
         }
 
         @Test
-        @DisplayName("V45 CHAT 轮触发联网搜索：结果注入 CHAT 模板，纯文本回复 payload 携带 webSearch 查验键")
+        @DisplayName("CHAT 轮触发联网搜索：结果注入 CHAT 模板，纯文本回复 payload 携带 webSearch 查验键")
         void chatRoundTriggersWebSearch() {
             RequirementConversation conversation = chatConversation();
             conversation.setRoundCount(0);
@@ -671,7 +671,7 @@ class RequirementClarifyServiceTest {
             assertThat(taskCaptor.getValue().getUserPrompt())
                     .contains("AI 助手")
                     .contains("OpenMaic 官网");
-            // 纯文本回复也携带 webSearch 查验键（V45，与终稿轮同形态）
+            // 纯文本回复也携带 webSearch 查验键（与终稿轮同形态）
             ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
             verify(messageService).addMessage(eq(CONV_ID), eq("assistant"), eq("你好！"), payloadCaptor.capture());
             assertThat(payloadCaptor.getValue())
@@ -681,7 +681,7 @@ class RequirementClarifyServiceTest {
         }
 
         @Test
-        @DisplayName("V45 CHAT 会话开关关闭：不触发联网搜索，payload 保持 NULL")
+        @DisplayName("CHAT 会话开关关闭：不触发联网搜索，payload 保持 NULL")
         void chatRoundWebSearchDisabled() {
             RequirementConversation conversation = chatConversation();
             conversation.setRoundCount(0);
@@ -696,7 +696,7 @@ class RequirementClarifyServiceTest {
         }
 
         @Test
-        @DisplayName("V45 CHAT 轮 URL 分离：直取页面正文注入 CHAT 模板，payload 携带 fetched 查验键")
+        @DisplayName("CHAT 轮 URL 分离：直取页面正文注入 CHAT 模板，payload 携带 fetched 查验键")
         void chatRoundWithUrl_fetchesPageAndInjects() {
             RequirementConversation conversation = chatConversation();
             conversation.setRoundCount(0);
@@ -888,7 +888,7 @@ class RequirementClarifyServiceTest {
         }
 
         @Test
-        @DisplayName("create 缺省初始模式为 CHAT（V39 产品决策：新会话默认自由对话）")
+        @DisplayName("create 缺省初始模式为 CHAT（产品决策：新会话默认自由对话）")
         void createDefaultsToChatMode() {
             when(conversationService.save(any(RequirementConversation.class))).thenAnswer(inv -> {
                 RequirementConversation c = inv.getArgument(0);
@@ -953,7 +953,7 @@ class RequirementClarifyServiceTest {
         }
 
         @Test
-        @DisplayName("to-clarify 带附加文本（V40.2 /planner 命令路径）：先落库 user 消息进上下文，再切 CLARIFY 跑澄清轮")
+        @DisplayName("to-clarify 带附加文本（/planner 命令路径）：先落库 user 消息进上下文，再切 CLARIFY 跑澄清轮")
         void switchToClarifyWithExtraMessage() {
             RequirementConversation conversation = chatConversation();
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
@@ -1005,7 +1005,7 @@ class RequirementClarifyServiceTest {
         }
 
         @Test
-        @DisplayName("CHAT 容错双模（V40.2）：LLM 输出 structured 追问 → payload 落库出推荐卡片，模式仍 CHAT（未配置搜索参数时不触发搜索）")
+        @DisplayName("CHAT 容错双模：LLM 输出 structured 追问 → payload 落库出推荐卡片，模式仍 CHAT（未配置搜索参数时不触发搜索）")
         void chatRoundStructuredQuestionStoresPayload() {
             RequirementConversation conversation = chatConversation();
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
@@ -1034,7 +1034,7 @@ class RequirementClarifyServiceTest {
         }
 
         @Test
-        @DisplayName("CHAT 容错双模（V40.2）：freeform JSON / 非结构化输出仍按纯文本落库（payload NULL，零破坏）")
+        @DisplayName("CHAT 容错双模：freeform JSON / 非结构化输出仍按纯文本落库（payload NULL，零破坏）")
         void chatRoundFreeformJsonStillPlain() {
             RequirementConversation conversation = chatConversation();
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
@@ -1080,11 +1080,11 @@ class RequirementClarifyServiceTest {
         }
 
         // ════════════════════════════════════════════════════════
-        //  V41 意图词扩充 + 确认卡结构化
+        //  意图词扩充 + 确认卡结构化
         // ════════════════════════════════════════════════════════
 
         @Test
-        @DisplayName("V41 新意图词：「新建个计划吧」进入待确认并发结构化确认卡（仅确认/取消、无推荐、无自定义）")
+        @DisplayName("新意图词：「新建个计划吧」进入待确认并发结构化确认卡（仅确认/取消、无推荐、无自定义）")
         void doRound_newIntentPhrase_setsPendingConfirmAndSendsCard() {
             RequirementConversation conversation = chatConversation();
             conversation.setRoundCount(3);
@@ -1108,7 +1108,7 @@ class RequirementClarifyServiceTest {
         }
 
         @Test
-        @DisplayName("V41 确认卡 payload：仅 1 题 2 选项，allowCustom=false 且无 recommended 标记")
+        @DisplayName("确认卡 payload：仅 1 题 2 选项，allowCustom=false 且无 recommended 标记")
         void doRound_intentHit_confirmPayloadHasTwoOptionsWithoutRecommended() throws Exception {
             RequirementConversation conversation = chatConversation();
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
@@ -1137,7 +1137,7 @@ class RequirementClarifyServiceTest {
         }
 
         @Test
-        @DisplayName("V41 新意图词覆盖：「给一个方案/帮我总结一下/新建个任务吧/帮我生成计划/来一个计划」均进入待确认")
+        @DisplayName("新意图词覆盖：「给一个方案/帮我总结一下/新建个任务吧/帮我生成计划/来一个计划」均进入待确认")
         void doRound_newIntentPhrases_allEnterPendingConfirm() {
             for (String phrase : List.of("给一个方案", "帮我总结一下", "新建个任务吧", "帮我生成计划", "来一个计划")) {
                 RequirementConversation conversation = chatConversation();
@@ -1152,7 +1152,7 @@ class RequirementClarifyServiceTest {
         }
 
         @Test
-        @DisplayName("V41 防误触：含裸词「任务」的普通提问不触发确认，正常走 CHAT 轮")
+        @DisplayName("防误触：含裸词「任务」的普通提问不触发确认，正常走 CHAT 轮")
         void doRound_bareTaskWord_doesNotTriggerConfirm() {
             RequirementConversation conversation = chatConversation();
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
@@ -1166,7 +1166,7 @@ class RequirementClarifyServiceTest {
         }
 
         @Test
-        @DisplayName("V41 确认卡点「确认」：经 selections 快照判定转入 CLARIFY（提交文本非确认词开头也能切换）")
+        @DisplayName("确认卡点「确认」：经 selections 快照判定转入 CLARIFY（提交文本非确认词开头也能切换）")
         void doRound_confirmCardAccept_switchesToClarify() {
             RequirementConversation conversation = chatConversation();
             conversation.setRoundCount(3);
@@ -1196,7 +1196,7 @@ class RequirementClarifyServiceTest {
         }
 
         @Test
-        @DisplayName("V41 确认卡点「取消」：清标记继续 CHAT（不调澄清模板）")
+        @DisplayName("确认卡点「取消」：清标记继续 CHAT（不调澄清模板）")
         void doRound_confirmCardCancel_continuesChat() {
             RequirementConversation conversation = chatConversation();
             conversation.setRoundCount(3);
@@ -1221,11 +1221,11 @@ class RequirementClarifyServiceTest {
         }
 
         // ════════════════════════════════════════════════════════
-        //  V41 联网搜索：多轮触发 + payload 查验
+        //  联网搜索：多轮触发 + payload 查验
         // ════════════════════════════════════════════════════════
 
         @Test
-        @DisplayName("V41 多轮搜索：CLARIFY 第 2 轮也触发搜索，assistant payload 含 webSearch 查验键")
+        @DisplayName("多轮搜索：CLARIFY 第 2 轮也触发搜索，assistant payload 含 webSearch 查验键")
         void doRound_clarifySecondRound_triggersWebSearchAndPayload() {
             // activeConversation：roundCount=1（第 2 轮），mode NULL 按 CLARIFY，webSearchEnabled NULL 默认开启
             RequirementConversation conversation = activeConversation();
@@ -1257,7 +1257,7 @@ class RequirementClarifyServiceTest {
         }
 
         @Test
-        @DisplayName("V41 修复：确认卡切入方案时搜索词不用卡片提交文本，回退历史主题消息")
+        @DisplayName("修复：确认卡切入方案时搜索词不用卡片提交文本，回退历史主题消息")
         void doRound_confirmCardAccept_searchQueryFallsBackToHistoryTopic() {
             RequirementConversation conversation = chatConversation();
             conversation.setRoundCount(3);
@@ -1294,7 +1294,7 @@ class RequirementClarifyServiceTest {
         }
 
         @Test
-        @DisplayName("V41 修复：确认后历史无可回退主题消息时不发起搜索（不落查验条）")
+        @DisplayName("修复：确认后历史无可回退主题消息时不发起搜索（不落查验条）")
         void doRound_confirmCardAccept_noMeaningfulHistory_skipsSearch() {
             RequirementConversation conversation = chatConversation();
             conversation.setRoundCount(1);
@@ -1323,7 +1323,7 @@ class RequirementClarifyServiceTest {
         }
 
         @Test
-        @DisplayName("V41 搜索异常查验：search 抛异常降级 failed=true 落 payload，澄清主流程不阻断")
+        @DisplayName("搜索异常查验：search 抛异常降级 failed=true 落 payload，澄清主流程不阻断")
         void doRound_webSearchThrows_payloadMarksFailedWithoutBlocking() {
             RequirementConversation conversation = activeConversation();
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
@@ -1348,7 +1348,7 @@ class RequirementClarifyServiceTest {
         }
 
         @Test
-        @DisplayName("V43 URL 分离：搜索词用剥离 URL 的语义文本，直取页面置顶作来源")
+        @DisplayName("URL 分离：搜索词用剥离 URL 的语义文本，直取页面置顶作来源")
         void doRound_messageWithUrl_separatesUrlAndFetchesPage() {
             RequirementConversation conversation = activeConversation();
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
@@ -1392,7 +1392,7 @@ class RequirementClarifyServiceTest {
         }
 
         @Test
-        @DisplayName("V43 纯 URL 消息：搜索词回退域名，直取照常发起")
+        @DisplayName("纯 URL 消息：搜索词回退域名，直取照常发起")
         void doRound_bareUrlMessage_queryFallsBackToDomain() {
             RequirementConversation conversation = activeConversation();
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
@@ -1416,7 +1416,7 @@ class RequirementClarifyServiceTest {
         }
 
         @Test
-        @DisplayName("V43 URL 直取失败：不进来源列表，失败记录落 payload 可查验")
+        @DisplayName("URL 直取失败：不进来源列表，失败记录落 payload 可查验")
         void doRound_pageFetchFailed_recordedButNotInResults() {
             RequirementConversation conversation = activeConversation();
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
@@ -1447,7 +1447,7 @@ class RequirementClarifyServiceTest {
         }
 
         @Test
-        @DisplayName("V44 直取全部失败：域名前置增强搜索词（检索站点公开资料）")
+        @DisplayName("直取全部失败：域名前置增强搜索词（检索站点公开资料）")
         void doRound_pageFetchFailed_queryGetsDomainPrefix() {
             RequirementConversation conversation = activeConversation();
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
@@ -1474,7 +1474,7 @@ class RequirementClarifyServiceTest {
         }
 
         @Test
-        @DisplayName("V44 SPA 空壳元数据兜底：metaOnly 直取进来源且 payload 落标记")
+        @DisplayName("SPA 空壳元数据兜底：metaOnly 直取进来源且 payload 落标记")
         void doRound_metaOnlyFetch_mergedAndMarkedInPayload() {
             RequirementConversation conversation = activeConversation();
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
@@ -1508,7 +1508,7 @@ class RequirementClarifyServiceTest {
         }
 
         @Test
-        @DisplayName("V43 URL 直取开关关闭：不发起抓取，回退纯搜索引擎行为")
+        @DisplayName("URL 直取开关关闭：不发起抓取，回退纯搜索引擎行为")
         void doRound_urlFetchDisabled_skipsPageFetch() {
             RequirementConversation conversation = activeConversation();
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);

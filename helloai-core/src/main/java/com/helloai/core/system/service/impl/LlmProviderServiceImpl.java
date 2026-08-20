@@ -18,7 +18,7 @@ import java.util.Objects;
 /**
  * LlmProvider 业务服务实现（CRUD + 启用/禁用）。
  *
- * <p>V49 扩展：保存 Provider 时校验必须配置可用模型（关联 llm_provider_model 表）。</p>
+ * <p>扩展：保存 Provider 时校验必须配置可用模型（关联 llm_provider_model 表）。</p>
  */
 @Slf4j
 @Service
@@ -97,7 +97,7 @@ public class LlmProviderServiceImpl extends ServiceImpl<LlmProviderMapper, LlmPr
      * 删除 Provider。
      *
      * <p>内置 Provider 拒绝删除；删除时级联物理清理该 Provider 的模型配置
-     * （llm_provider_model，V51 起软删 Provider 不触发 FK 级联，需应用层补齐）；
+     * （llm_provider_model，软删 Provider 不触发 FK 级联，需应用层补齐）；
      * 调用方需自行清理由 PlatformProviderConfigService#saveApiKey 写入的 PLATFORM 级
      * credential_vault 凭证（保留 vault 凭证不会自动清理）。</p>
      */
@@ -133,7 +133,7 @@ public class LlmProviderServiceImpl extends ServiceImpl<LlmProviderMapper, LlmPr
     }
 
     /**
-     * 校验 Provider 是否有至少一个启用模型（V49 新增）。
+     * 校验 Provider 是否有至少一个启用模型。
      *
      * <p>委托给 LlmProviderModelService 执行具体校验逻辑。</p>
      */

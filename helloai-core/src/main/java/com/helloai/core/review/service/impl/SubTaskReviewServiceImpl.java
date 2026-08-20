@@ -51,7 +51,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 子任务 LLM 自动核验服务实现（V27 内循环核验门控）。
+ * 子任务 LLM 自动核验服务实现（内循环核验门控）。
  *
  * <p>入口 {@link #reviewSubTask(Long, Long)}：读取子任务 title/content/deliverable/acceptance
  * + 执行产出（context.lastExecution.output），构造核验 Prompt，经
@@ -203,7 +203,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId,
                     "sub_task_auto_review_skip_max_rework", AgentRole.REVIEWER, null,
                     Map.of("reworkCount", reworkCount, "maxRework", maxRework));
-            // 核验返工熔断显式入死信（2026-08-19）：与调度维度 sub_task_dead_letter 对称，
+            // 核验返工熔断显式入死信：与调度维度 sub_task_dead_letter 对称，
             // 时序图 DLQ 泳道可见"熔断 → 人工打捞"，回调链路清晰
             taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId,
                     "sub_task_review_dead_letter", AgentRole.SYSTEM, null,
@@ -215,7 +215,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             return;
         }
 
-        // V27.1 执行密集无能力提交者预检：提交者无本机执行能力时，产出可信度存疑，
+        // 执行密集无能力提交者预检：提交者无本机执行能力时，产出可信度存疑，
         // 跳过自动核验（避免核验 LLM 无法辨别幻觉证据而放行），打人工介入标记等人工处置。
         Long submitterId = executorAgentId != null ? executorAgentId : subTask.getAssignedAgentId();
         if (dispatchProperties.isFallbackSkipExecutionDense()
@@ -235,7 +235,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             }
         }
 
-        // A0-5 证据硬检查（承 V27.1 预检之后）：声称的交付物必须有物化附件/可读产出支撑。
+        //  证据硬检查（承 预检之后）：声称的交付物必须有物化附件/可读产出支撑。
         // 无任何产出本体（output 与附件皆空）或执行密集任务无可读物化附件时，
         // 跳过自动核验并打人工介入标记——杜绝"编造文字证据也能过初筛"（trae 1923）
         EvidenceCheckResult evidence = checkEvidence(subTask);
@@ -434,7 +434,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
     }
 
     /**
-     * 选平台内核验 Agent（V47 §6.58 P1 指定语义）：
+     * 选平台内核验 Agent（§6.58 P1 指定语义）：
      * <ol>
      *   <li>任务级 {@code task.agent_policy.reviewerAgentId} 优先——指定 Agent
      *       可用（存在且 ACTIVE 且 API_KEY_LLM）时直接采用；失效时记录告警并回退；</li>
@@ -443,7 +443,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
      * </ol>
      */
     private Agent pickReviewerAgent(SubTask subTask) {
-        // V47：任务级指定 reviewerAgentId 优先
+        // 任务级指定 reviewerAgentId 优先
         if (subTask != null && subTask.getTaskId() != null) {
             try {
                 Task task = taskService.getById(subTask.getTaskId());
@@ -548,7 +548,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
     }
 
     /**
-     * A0-5 证据硬检查：子任务声称的交付物必须有物化附件/可读产出支撑（fail-close）。
+     *  证据硬检查：子任务声称的交付物必须有物化附件/可读产出支撑（fail-close）。
      *
      * <p>判定规则：</p>
      * <ul>
@@ -611,7 +611,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
     }
 
     /**
-     * A0-5 附件清单：核验 Prompt 注入子任务全部附件（可读 local:// 产物标注平台直读，
+     *  附件清单：核验 Prompt 注入子任务全部附件（可读 local:// 产物标注平台直读，
      * 外部存储标注不可直读），供核验 LLM 核对"声称交付物 ↔ 真实附件"的对应关系——
      * 声称"文件 203 行 errors=0"但附件清单无对应文件时判不达标。
      */
@@ -633,7 +633,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         return sb.toString().trim();
     }
 
-    /** A0-5 证据检查结果。 */
+    /**  证据检查结果。 */
     record EvidenceCheckResult(boolean ok, String reason, int attachmentCount, boolean outputPresent) {
     }
 

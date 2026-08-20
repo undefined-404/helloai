@@ -13,7 +13,7 @@ import java.time.OffsetDateTime;
 /**
  * 凭证保险库。
  *
- * <p>T1 先落最小模型，解决 4 个核心表达能力：
+ * <p>先落最小模型，解决 4 个核心表达能力：
  * <ul>
  *   <li>凭证类型：{@link #credentialType}</li>
  *   <li>密文 / 引用：{@link #encryptedValue} / {@link #secretRef}</li>
@@ -38,7 +38,7 @@ public class CredentialVault extends BaseEntity {
     /** Provider 标识，例如 deepseek / openai / claude。 */
     private String provider;
 
-    /** 凭证类型，T1 固定为 API_KEY。 */
+    /** 凭证类型，固定为 API_KEY。 */
     private CredentialType credentialType;
 
     /** 应用层加密后的凭证值；若使用外部引用，可为空。 */

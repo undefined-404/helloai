@@ -25,7 +25,7 @@ import java.util.List;
 /**
  * Agent ChatClient 服务。
  *
- * <p>T4 先以稳定 mock 模式接入 Spring AI ChatClient，确保平台内执行链路可在本地稳定验证。
+ * <p>先以稳定 mock 模式接入 Spring AI ChatClient，确保平台内执行链路可在本地稳定验证。
  * 后续切真实 Provider 时，复用这里的 ChatClient 组装入口即可。</p>
  */
 @Service
@@ -99,7 +99,7 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
     }
 
     /**
-     * T4 最小 mock ChatModel。
+     * 最小 mock ChatModel。
      */
     private static final class MockChatModel implements ChatModel {
 

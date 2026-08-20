@@ -1,7 +1,7 @@
 package com.helloai.core.agent.service;
 
 /**
- * Agent 并发额度服务（N12 A2 第 3 段 E2：maxConcurrent 派发即占用）。
+ * Agent 并发额度服务（N12  第 3 段 E2：maxConcurrent 派发即占用）。
  *
  * <p>统一"选人前容量预检 + 派发落库前原子校验"的额度判定入口：
  * <ul>

@@ -67,7 +67,7 @@ public class PlannerAgentPicker {
      *
      * <p>优先级：
      * <ol>
-     *   <li>任务级 {@code task.agent_policy.plannerAgentId}（V47）——任务创建时
+     *   <li>任务级 {@code task.agent_policy.plannerAgentId}——任务创建时
      *       显式指定的 Planner，优先于会话记录；失效（删除/禁用）时由
      *       {@link #pick(Long)} 回退自动选择；</li>
      *   <li>澄清会话钉住的 Planner（澄清→拆解同一 Planner 跟随）；</li>
@@ -76,7 +76,7 @@ public class PlannerAgentPicker {
      * </p>
      */
     public Agent pickForTask(Long taskId) {
-        // V47：任务级 agent_policy.plannerAgentId 优先
+        // 任务级 agent_policy.plannerAgentId 优先
         if (taskId != null) {
             Task task = taskService.getById(taskId);
             if (task != null) {

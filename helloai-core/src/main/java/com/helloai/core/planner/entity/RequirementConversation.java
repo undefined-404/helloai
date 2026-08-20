@@ -10,7 +10,7 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 
 /**
- * 需求澄清会话（对话式新建任务入口，V29）。
+ * 需求澄清会话（对话式新建任务入口）。
  *
  * <p>与 conversation_message 体系无关：那套挂在 sub_task 上（NOT NULL 外键），
  * 无法承载"任务创建前"的澄清对话，故独立建表。</p>
@@ -39,20 +39,20 @@ public class RequirementConversation extends BaseEntity {
     /** 用户消息轮数（服务端硬上限防失控） */
     private Integer roundCount;
 
-    /** 手动指定的 Planner Agent ID（软引用无 FK；NULL 表示系统自动选择，V31） */
+    /** 手动指定的 Planner Agent ID（软引用无 FK；NULL 表示系统自动选择） */
     @JsonSerialize(using = ToStringSerializer.class)
     private Long plannerAgentId;
 
     /**
-     * 会话级联网搜索开关（Flyway V34 新增）。
-     * <p>每轮 LLM 调用前若本字段为 NULL/true（V45 起 CHAT/CLARIFY 任意模式都生效），
+     * 会话级联网搜索开关（Flyway 新增）。
+     * <p>每轮 LLM 调用前若本字段为 NULL/true（CHAT/CLARIFY 任意模式都生效），
      * 服务端会预检索行业资料/竞品/技术方案后注入 {@code {{WEB_SEARCH_CONTEXT}}} 占位符。
      * 失败一律降级跳过，不阻断对话流程；老数据 NULL 视为默认开启。</p>
      */
     private Boolean webSearchEnabled;
 
     /**
-     * 对话模式（Flyway V39 新增）：CHAT 自由对话 / CLARIFY 方案澄清。
+     * 对话模式（Flyway 新增）：CHAT 自由对话 / CLARIFY 方案澄清。
      * <p>NULL = 老数据兼容，读取侧按 CLARIFY 语义处理；新会话默认落库 CHAT，
      * 创建接口可传 initialMode=CLARIFY 快捷直达。切换由用户主导
      * （to-clarify/to-chat），CHAT 模式意图词命中时服务端自动切 CLARIFY。</p>
@@ -60,7 +60,7 @@ public class RequirementConversation extends BaseEntity {
     private String mode;
 
     /**
-     * 意图词二次确认标记（Flyway V40 新增，SMALLINT 0/1）。
+     * 意图词二次确认标记（Flyway 新增，SMALLINT 0/1）。
      * <p>true = CHAT 模式命中意图词后等待用户确认；用户回复确认词
      * （或再次表达意图）后转入 CLARIFY 并清零，回复其他内容则清零继续自由对话。
      * 确认询问由服务端固定文案回复，不消耗对话轮数。</p>

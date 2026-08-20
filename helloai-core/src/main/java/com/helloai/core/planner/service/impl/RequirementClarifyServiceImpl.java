@@ -70,8 +70,8 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
 
     /**
      * CHAT → CLARIFY 意图词：用户表达"把讨论整理成可落地方案"的常见说法，正则命中即进入二次确认。
-     * V40.1 追加口语化话术（整理方案/出个方案/写方案/做个方案等），覆盖"帮我整理方案吧"这类表达；
-     * V41 追加"动作词 + 可选量词 + 计划/任务/方案"组合模式（新建个计划/给一个方案/帮我总结等），
+     * 追加口语化话术（整理方案/出个方案/写方案/做个方案等），覆盖"帮我整理方案吧"这类表达；
+     * 追加"动作词 + 可选量词 + 计划/任务/方案"组合模式（新建个计划/给一个方案/帮我总结等），
      * 组合匹配避免"任务""计划"裸词子串误触；误触有二次确认弹窗把关（点取消即继续自由对话），
      * 故放宽匹配不设额外代价。
      */
@@ -88,7 +88,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                     + "总结(成|为|个|一下)(方案|计划|任务)");
 
     /**
-     * 意图词二次确认的确认词（V40）：仅会话处于待确认状态时生效；
+     * 意图词二次确认的确认词：仅会话处于待确认状态时生效；
      * 开头命中且后随标点/空白/结尾，避免"好的，但我还想先聊聊"这类误判。
      */
     private static final Pattern CONFIRM_PHRASE_PATTERN = Pattern.compile(
@@ -108,26 +108,26 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     private static final String ROLE_USER = "user";
     private static final String ROLE_ASSISTANT = "assistant";
 
-    /** 追问形态（V33 双模协议）：structured 结构化选项式 / freeform 自由文本。 */
+    /** 追问形态（双模协议）：structured 结构化选项式 / freeform 自由文本。 */
     private static final String MODE_STRUCTURED = "structured";
     private static final String MODE_FREEFORM = "freeform";
 
-    /** V41 意图确认卡（structured 形态的二次确认弹窗）：问题 id 与题面文案。 */
+    /** 意图确认卡（structured 形态的二次确认弹窗）：问题 id 与题面文案。 */
     private static final String CONFIRM_QUESTION_ID = "confirm-switch";
     private static final String CONFIRM_QUESTION_TEXT = "检测到你想把讨论整理成落地方案，是否切换到方案澄清模式？";
 
-    /** V41 意图确认卡选项：仅确认/取消两项，均不带推荐标记。 */
+    /** 意图确认卡选项：仅确认/取消两项，均不带推荐标记。 */
     private static final String CONFIRM_OPTION_ACCEPT = "确认";
     private static final String CONFIRM_OPTION_CANCEL = "取消";
 
     /**
-     * V41 搜索查询词语义守卫：纯意图话术（不含主题）的长度上限。
+     * 搜索查询词语义守卫：纯意图话术（不含主题）的长度上限。
      * 长度 ≤ 该值且命中意图词的消息视为无检索主题（如「帮我生成计划」），
      * 长句携带主题内容（如「我想 60 天备考架构师考试，帮我整理成方案」）仍可作查询词。
      */
     private static final int INTENT_ONLY_QUERY_LIMIT = 20;
 
-    /** V41 assistant 消息 payload 的联网搜索查验键（与 mode/progress/questions 同级）。 */
+    /** assistant 消息 payload 的联网搜索查验键（与 mode/progress/questions 同级）。 */
     private static final String PAYLOAD_KEY_WEB_SEARCH = "webSearch";
 
     private final RequirementConversationService conversationService;
@@ -183,7 +183,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
      *
      * @param plannerAgentId   手动指定的 Planner Agent ID（空=系统自动选择）；
      *                         指定时严格校验可选性，澄清与后续拆解均跟随该 Planner
-     * @param webSearchEnabled 会话级联网搜索开关（V34 新增；NULL=默认开启）；
+     * @param webSearchEnabled 会话级联网搜索开关（NULL=默认开启）；
      *                         每轮 LLM 调用前若 true 服务端会预检索行业资料并注入
      *                         {@code {{WEB_SEARCH_CONTEXT}}} 占位符，失败降级跳过
      * @return 会话 + 全部消息
@@ -194,9 +194,9 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     }
 
     /**
-     * 新建会话（V39 双模式入口）。
+     * 新建会话（双模式入口）。
      *
-     * @param initialMode 初始对话模式（V39）：'CHAT'=自由对话（缺省）/ 'CLARIFY'=方案澄清快捷直达；
+     * @param initialMode 初始对话模式：'CHAT'=自由对话（缺省）/ 'CLARIFY'=方案澄清快捷直达；
      *                    非法值抛 BizException
      * @return 会话 + 全部消息
      */
@@ -219,7 +219,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         conversation.setPlannerAgentId(plannerAgentId);
         // NULL 落库为 NULL（兼容老数据默认开启语义由读取侧判定），false/true 严格落库
         conversation.setWebSearchEnabled(webSearchEnabled);
-        // V39：新会话默认 CHAT 自由对话；initialMode=CLARIFY 快捷直达澄清链路
+        // 新会话默认 CHAT 自由对话；initialMode=CLARIFY 快捷直达澄清链路
         conversation.setMode(mode);
         conversationService.save(conversation);
         log.info("澄清会话创建: id={}, title={}, plannerAgentId={}, webSearchEnabled={}, mode={}",
@@ -246,7 +246,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     /**
      * 向会话追加一条用户消息并走一轮 LLM 澄清。
      *
-     * @param selections 结构化选项回答快照（V33，可为 null/空=纯文本回答）；
+     * @param selections 结构化选项回答快照（可为 null/空=纯文本回答）；
      *                   序列化为 {@code {"selections":[...]}} 存入 user 消息 payload，
      *                   仅作前端回显快照，LLM 上下文仍用 content 可读文本
      * @return 会话 + 全部消息
@@ -259,8 +259,8 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         }
         RequirementConversation conversation = requireActive(conversationId);
         int rounds = conversation.getRoundCount() != null ? conversation.getRoundCount() : 0;
-        // V39 轮数上限按模式分派：CHAT 用独立上限（意图词「整理成方案」永远放行，保证转方案出口）；
-        // V40 待确认状态的确认词（或再次意图词）同样放行；V41 确认卡点「确认」（selections 快照）也放行——
+        // 轮数上限按模式分派：CHAT 用独立上限（意图词「整理成方案」永远放行，保证转方案出口）；
+        // 待确认状态的确认词（或再次意图词）同样放行；确认卡点「确认」（selections 快照）也放行——
         // 确认消息会转入 CLARIFY，不算 CHAT 轮；CLARIFY（含 NULL 老数据）沿用既有 20 轮上限
         boolean intent = isIntentToClarify(message);
         boolean confirm = isPendingClarifyConfirm(conversation)
@@ -395,8 +395,8 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     }
 
     /**
-     * 切换到方案澄清模式（V40.2 斜杠命令路径）：先落库附加文本（用户消息，进 LLM 上下文），
-     * 再切 CLARIFY 并跑一轮澄清（V40.1 首轮强制 structured → 推荐卡片必出）。
+     * 切换到方案澄清模式（斜杠命令路径）：先落库附加文本（用户消息，进 LLM 上下文），
+     * 再切 CLARIFY 并跑一轮澄清（首轮强制 structured → 推荐卡片必出）。
      * 附加文本不走意图词/确认词判定、不设 payload。
      *
      * @param extraMessage 斜杠命令后的附加文本；空/空白则不加消息（与既有 switchToClarify 等价）
@@ -411,7 +411,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     }
 
     /**
-     * 切换到方案澄清模式（V39）：置位落库 + 一轮 LLM 基于全量历史产终稿草案/结构化追问。
+     * 切换到方案澄清模式：置位落库 + 一轮 LLM 基于全量历史产终稿草案/结构化追问。
      *
      * @return 会话 + 全部消息
      */
@@ -420,17 +420,17 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         RequirementConversation conversation = requireActive(conversationId);
         String from = conversation.getMode();
         conversation.setMode(MODE_CLARIFY);
-        // V40：手动切换时一并清除意图词待确认标记，避免残留状态影响后续轮次
+        // 手动切换时一并清除意图词待确认标记，避免残留状态影响后续轮次
         conversation.setPendingClarifyConfirm(false);
         conversationService.updateById(conversation);
         log.info("澄清会话切换模式: conversationId={}, from={}, to={}",
                 conversationId, from, MODE_CLARIFY);
-        // 切换轮不做联网搜索（阶段 2 再评估）；澄清模板基于全量历史直接产草案/追问
+        // 切换轮不做联网搜索（后续再评估）；澄清模板基于全量历史直接产草案/追问
         return runLlmRound(conversation, null);
     }
 
     /**
-     * 切回自由对话模式（V39）：仅置位，不调用 LLM；
+     * 切回自由对话模式：仅置位，不调用 LLM；
      * 历史消息全部保留，后续切回 CLARIFY 时作为全量澄清上下文。
      *
      * @return 会话 + 全部消息
@@ -440,7 +440,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         RequirementConversation conversation = requireActive(conversationId);
         String from = conversation.getMode();
         conversation.setMode(MODE_CHAT);
-        // V40：切回 CHAT 时防御性清除意图词待确认标记（该状态仅 CHAT 模式语义存在）
+        // 切回 CHAT 时防御性清除意图词待确认标记（该状态仅 CHAT 模式语义存在）
         conversation.setPendingClarifyConfirm(false);
         conversationService.updateById(conversation);
         log.info("澄清会话切换模式: conversationId={}, from={}, to={}",
@@ -488,7 +488,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     private ClarifyConversationDetail doRound(RequirementConversation conversation, String userMessage,
                                               String userPayload) {
         Long conversationId = conversation.getId();
-        // V40 意图词二次确认状态机（仅 CHAT 模式）：
+        // 意图词二次确认状态机（仅 CHAT 模式）：
         //   意图词命中且无待确认 → 置位 + 回复固定确认询问（不调 LLM、不加轮数）
         //   待确认 + 确认词/再次意图词 → 切 CLARIFY 并清标记，该条消息即澄清首轮
         //   待确认 + 其他消息 → 清标记继续自由对话（用户放弃转方案）
@@ -499,7 +499,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                 conversation.setPendingClarifyConfirm(true);
                 conversationService.updateById(conversation);
                 messageService.addMessage(conversationId, ROLE_USER, userMessage, userPayload);
-                // V41：确认询问改为结构化选项卡（前端渲染为确认/取消弹窗），
+                // 确认询问改为结构化选项卡（前端渲染为确认/取消弹窗），
                 // 可读正文仍落 CONFIRM_ASK_MESSAGE 保证 transcript 上下文不变
                 messageService.addMessage(conversationId, ROLE_ASSISTANT, CONFIRM_ASK_MESSAGE,
                         buildConfirmAskPayload());
@@ -507,7 +507,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                 return new ClarifyConversationDetail(conversation,
                         messageService.listByConversation(conversationId));
             }
-            // V41 确认判定三通道：手打确认词 / 再次意图词 / 确认卡点「确认」（selections 快照）；
+            // 确认判定三通道：手打确认词 / 再次意图词 / 确认卡点「确认」（selections 快照）；
             // 卡片提交文本形如「问题：确认」不命中 CONFIRM_PHRASE_PATTERN 开头锚定，须走快照判定
             if (pendingConfirm) {
                 String cardValue = confirmCardValueOf(userPayload);
@@ -531,7 +531,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         conversation.setRoundCount(rounds + 1);
         conversationService.updateById(conversation);
 
-        // V41 联网搜索（V34 引入）：V45 起 CHAT/CLARIFY 任意模式每轮且开关开启
+        // 联网搜索（引入）： CHAT/CLARIFY 任意模式每轮且开关开启
         // （NULL/true 视为开启）都检索；成本由各自轮数上限封顶（CHAT 50 / CLARIFY 20），
         // 每轮折叠查验条可见搜索词；确认词/确认卡提交文本等无检索语义的消息回退历史主题消息作查询词
         WebSearchOutcome webSearchOutcome = null;
@@ -542,7 +542,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     }
 
     /**
-     * 解析联网搜索查询词来源（V41 修复）：当前轮消息无检索语义时（确认词 / 确认卡提交文本 /
+     * 解析联网搜索查询词来源（修复）：当前轮消息无检索语义时（确认词 / 确认卡提交文本 /
      * 纯意图话术），倒序回退最近一条有实际内容的 user 消息（通常是触发意图前的讨论主题）；
      * 全部无意义时返回空白串，doWebSearch 视为未发起搜索（不落查验条）。
      */
@@ -596,12 +596,12 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         return v == null || v;
     }
 
-    /** V40 意图词二次确认标记：仅显式 true 视为待确认（老数据 NULL/0 均为无待确认）。 */
+    /** 意图词二次确认标记：仅显式 true 视为待确认（老数据 NULL/0 均为无待确认）。 */
     private boolean isPendingClarifyConfirm(RequirementConversation conversation) {
         return Boolean.TRUE.equals(conversation.getPendingClarifyConfirm());
     }
 
-    /** V40 确认词判定：开头命中确认词且后随标点/空白/结尾（待确认状态专用，普通对话不受影响）。 */
+    /** 确认词判定：开头命中确认词且后随标点/空白/结尾（待确认状态专用，普通对话不受影响）。 */
     private boolean isConfirmPhrase(String message) {
         if (message == null || message.isBlank()) {
             return false;
@@ -610,7 +610,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     }
 
     /**
-     * V41 确认卡点选判定（selections 快照）：包含 confirm-switch 题且选中「确认」视为确认。
+     * 确认卡点选判定（selections 快照）：包含 confirm-switch 题且选中「确认」视为确认。
      * 卡片提交文本形如「问题：确认」不命中 {@link #CONFIRM_PHRASE_PATTERN} 开头锚定，
      * 故点选确认须走快照通道；点「取消」返回 false → 走清标记继续对话分支。
      */
@@ -629,7 +629,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     }
 
     /**
-     * V41 从 user payload（{@code {"selections":[...]}}）解析确认卡选择：
+     * 从 user payload（{@code {"selections":[...]}}）解析确认卡选择：
      * 返回选中值（确认/取消）；无确认卡选择/解析失败返回 null（回退文本判定）。
      */
     private String confirmCardValueOf(String userPayload) {
@@ -657,7 +657,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         return null;
     }
 
-    /** 是否方案澄清模式：NULL 老数据按 CLARIFY 兼容（V39）。 */
+    /** 是否方案澄清模式：NULL 老数据按 CLARIFY 兼容。 */
     private boolean isClarifyMode(RequirementConversation conversation) {
         return conversation.getMode() == null || MODE_CLARIFY.equals(conversation.getMode());
     }
@@ -673,7 +673,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     }
 
     /**
-     * 意图词二次确认的 structured payload（V41）：1 题 2 选项（确认/取消），
+     * 意图词二次确认的 structured payload：1 题 2 选项（确认/取消），
      * 均不带 recommended → 前端不渲染"推荐"按钮；allowCustom=false → 隐藏自定义补充输入框。
      *
      * <p>为什么用 structured 卡片替代纯文本确认：用户点选后经 selections 快照通道判定
@@ -713,7 +713,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     }
 
     /**
-     * 初始模式归一化（V39）：缺省/显式 CHAT → CHAT（新会话默认自由对话）；
+     * 初始模式归一化：缺省/显式 CHAT → CHAT（新会话默认自由对话）；
      * 显式 CLARIFY → 快捷直达方案澄清；非法值拒绝。
      */
     private String normalizeInitialMode(String initialMode) {
@@ -729,12 +729,12 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     /**
      * 联网搜索一次：URL 分离 + 关键词提取 → 直取页面 + 调用搜索服务 → 归一化结果记录。
      *
-     * <p>V43 URL 分离：消息中的 http(s) 链接被提取后直接访问抓取页面正文（用户给出的
+     * <p>URL 分离：消息中的 http(s) 链接被提取后直接访问抓取页面正文（用户给出的
      * 站点是第一手资料），搜索词改用剥离 URL 后的语义文本——裸 URL 文本当搜索词
      * 检索效果极差（用户实测：「给我一份快速上手 https://open.maic.chat/ …」未搜到相关网页）；
      * 纯 URL 消息回退域名作搜索词。直取页面映射为来源置顶合并进结果（总条数 maxResults 内）。</p>
      *
-     * <p>V44 直取失败域名前缀：消息带 URL 但直取无一成功（SPA 空壳无元数据/反爬拦截）时，
+     * <p>直取失败域名前缀：消息带 URL 但直取无一成功（SPA 空壳无元数据/反爬拦截）时，
      * 搜索词前置首个域名，让搜索引擎检索该站点的公开资料（介绍/教程/文档），
      * 避免用户实测的「直取空 + 搜索词不含域名 → results=0」双失败叠加。</p>
      *
@@ -751,7 +751,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
             query = hostOfUrl(urls.get(0));
             log.info("澄清联网搜索：纯 URL 消息回退域名作搜索词: query={}", query);
         } else if (!urls.isEmpty() && !hasOkPage) {
-            // V44：语义文本存在但直取全部失败 → 域名前置增强搜索词，
+            // 语义文本存在但直取全部失败 → 域名前置增强搜索词，
             // 让搜索引擎检索该站点的公开资料（介绍/教程/文档）
             String host = hostOfUrl(urls.get(0));
             if (!host.isBlank()) {
@@ -882,13 +882,13 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
      * LLM 一轮（不落 user 消息）：选 Planner → 全量历史渲染模板 → LLM →
      * 解析 question/final 分支落库；doRound 与 retryRound 共用。
      *
-     * @param webSearchOutcome 本轮联网搜索归一化记录（V41；未搜索/重试/切换轮传 null）；
+     * @param webSearchOutcome 本轮联网搜索归一化记录（未搜索/重试/切换轮传 null）；
      *                         已在 doRound 里根据开关限定过；注入 Prompt 与落 payload 两用
      */
     private ClarifyConversationDetail runLlmRound(RequirementConversation conversation,
                                                   WebSearchOutcome webSearchOutcome) {
         Long conversationId = conversation.getId();
-        // V39 双模式分派：CLARIFY（含 NULL 老数据）走澄清模板 + JSON 协议解析；
+        // 双模式分派：CLARIFY（含 NULL 老数据）走澄清模板 + JSON 协议解析；
         // CHAT 走通用助手模板，纯文本直接落库
         boolean clarifyMode = isClarifyMode(conversation);
 
@@ -908,7 +908,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
             throw new BizException("需求澄清 LLM 调用失败: " + result.getErrorMessage());
         }
 
-        // CHAT 模式（V40.2 容错双模）：优先尝试宽松解析 structured 追问（LLM 需要用户回答
+        // CHAT 模式（容错双模）：优先尝试宽松解析 structured 追问（LLM 需要用户回答
         // 关键决策问题时输出选项卡片）；解析失败/非追问一律纯文本直落（payload NULL），零行为破坏
         if (!clarifyMode) {
             String output = result.getOutput();
@@ -917,12 +917,12 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
             }
             ClarifyReply chatReply = tryParseChatStructured(output);
             if (chatReply != null) {
-                // V45：CHAT 轮结构化追问卡同样携带本轮联网搜索查验信息
+                // CHAT 轮结构化追问卡同样携带本轮联网搜索查验信息
                 messageService.addMessage(conversationId, ROLE_ASSISTANT,
                         composeAssistantContent(chatReply), buildQuestionPayload(chatReply, webSearchOutcome));
                 log.info("自由对话结构化追问落库: conversationId={}", conversationId);
             } else {
-                // V45：CHAT 轮联网搜索后纯文本回复同样携带 webSearch 查验键（与终稿轮同形态）
+                // CHAT 轮联网搜索后纯文本回复同样携带 webSearch 查验键（与终稿轮同形态）
                 if (webSearchOutcome != null) {
                     messageService.addMessage(conversationId, ROLE_ASSISTANT, output.trim(),
                             buildWebSearchOnlyPayload(webSearchOutcome));
@@ -939,7 +939,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         if ("final".equals(reply.getType())) {
             String note = reply.getMessage() != null && !reply.getMessage().isBlank()
                     ? reply.getMessage() : "已生成终稿";
-            // V41：终稿轮同样落联网搜索查验信息（未发生搜索时保持原 3 参形态）
+            // 终稿轮同样落联网搜索查验信息（未发生搜索时保持原 3 参形态）
             if (webSearchOutcome != null) {
                 messageService.addMessage(conversationId, ROLE_ASSISTANT, note,
                         buildWebSearchOnlyPayload(webSearchOutcome));
@@ -1008,7 +1008,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     /**
      * 解析 LLM 输出：strip fence 容错 + type/message 必填校验。
      *
-     * <p>V33 降级策略（降级是一等公民路径，不是异常）：
+     * <p>降级策略（降级是一等公民路径，不是异常）：
      * <ul>
      *   <li>输出完全不是 JSON 且不含 {@code "type"} 字样 → 原文作 freeform 追问落库；</li>
      *   <li>含 {@code "type"} 但解析失败 → 保持抛 BizException 走现有 retry 链路；</li>
@@ -1141,7 +1141,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
      * assistant 消息 payload：{@code {"mode","progress","questions","webSearch"}}；
      * freeform 且无 progress 且无搜索记录时返回 null（纯文本消息）；序列化失败降级 null 不阻断。
      *
-     * @param outcome 本轮联网搜索记录（V41，可为 null）；非空时合并 {@code webSearch} 键，
+     * @param outcome 本轮联网搜索记录（可为 null）；非空时合并 {@code webSearch} 键，
      *                前端据此渲染折叠查验条
      */
     private String buildQuestionPayload(ClarifyReply reply, WebSearchOutcome outcome) {
@@ -1204,7 +1204,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
             items.add(item);
         }
         trace.put("results", items);
-        // V43 URL 直取记录（含失败记录可查验）；无 URL 时不落键，前端忽略未知键零兼容成本
+        // URL 直取记录（含失败记录可查验）；无 URL 时不落键，前端忽略未知键零兼容成本
         if (outcome.getFetchedPages() != null && !outcome.getFetchedPages().isEmpty()) {
             List<Map<String, Object>> fetched = new ArrayList<>();
             for (WebPageContent p : outcome.getFetchedPages()) {
@@ -1240,7 +1240,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     }
 
     /**
-     * CHAT 轮结构化追问宽松解析（V40.2）：仅认可 type=question 且 mode=structured 且校验合法；
+     * CHAT 轮结构化追问宽松解析：仅认可 type=question 且 mode=structured 且校验合法；
      * 其余（freeform/final/非 JSON/解析失败）一律返回 null → 调用方按纯文本落库。
      * 不抛异常：CHAT 是自由对话，LLM 输出 JSON 仅是引导型增强（需要用户回答时出推荐卡片），
      * 失败降级为普通聊天，与 CLARIFY 的 parseReply 严格路径完全隔离。

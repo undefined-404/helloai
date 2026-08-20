@@ -28,7 +28,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 批次 D（§6.82）：{@link MqReviewCommandConsumer} 单元测试（REVIEWER 审查命令 L2 MQ consumer）。
+ * 批次 D：{@link MqReviewCommandConsumer} 单元测试（REVIEWER 审查命令 L2 MQ consumer）。
  *
  * <p>覆盖 7 类行为：</p>
  * <ol>

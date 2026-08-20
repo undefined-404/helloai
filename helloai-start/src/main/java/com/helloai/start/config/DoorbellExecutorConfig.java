@@ -7,7 +7,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import java.util.concurrent.Executor;
 
 /**
- * 门铃响铃专用线程池（AgentHub V3 门铃响铃 PR-2）。
+ * 门铃响铃专用线程池（AgentHub 门铃响铃 PR-2）。
  *
  * <p>{@code DoorbellRinger} 在 {@code AFTER_COMMIT} 异步响铃时使用。与执行命令池隔离，
  * 避免门铃 SSE 写出（可能因第三方客户端慢消费而阻塞）拖累执行主链路的线程。</p>

@@ -60,7 +60,7 @@ public class ExternalAgentFallbackTask {
     private static final int BATCH_LIMIT = 50;
     /** 单 Agent 最多拉多少在跑子任务 */
     private static final int PER_AGENT_LIMIT = 20;
-    /** v2.6 §4.1：调度链遗留 PENDING 未指派子任务单轮处理上限 */
+    /** §4.1：调度链遗留 PENDING 未指派子任务单轮处理上限 */
     private static final int PENDING_ORPHAN_BATCH_LIMIT = 50;
 
     @Scheduled(fixedDelayString = "${helloai.dispatch.fallback.scan-interval-ms:60000}",
@@ -91,7 +91,7 @@ public class ExternalAgentFallbackTask {
                 log.debug("N11 阈值回退扫描: 本轮无超阈值候选 Agent");
             }
 
-            // 阶段 B：v2.6 §4.1 调度链遗留 PENDING 未指派兜底（全局唯一一次）
+            // 阶段 B：§4.1 调度链遗留 PENDING 未指派兜底（全局唯一一次）
             // 与阶段 A 共享同一 Redis 锁，但作为独立阶段；
             // 即使没有 N11 候选也要执行，避免仅依赖阶段 A。
             recoverPendingUnassigned();
@@ -178,7 +178,7 @@ public class ExternalAgentFallbackTask {
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  v2.6 §4.1：调度链遗留 PENDING 未指派子任务全局兜底
+    //  §4.1：调度链遗留 PENDING 未指派子任务全局兜底
     // ══════════════════════════════════════════════════════════════
 
     /**
@@ -236,7 +236,7 @@ public class ExternalAgentFallbackTask {
                     skipped++;
                     continue;
                 }
-                // V27.1: 有人工介入标记的 PENDING 不自动重派（等人工处置），
+                // 有人工介入标记的 PENDING 不自动重派（等人工处置），
                 // 避免兜底链路把"无能力/返工超限"等人工场景反复打回调度链
                 if (SubTaskDispatchService.isManualInterventionMarked(latest)) {
                     log.debug("调度链遗留任务已标记人工介入，跳过: subTaskId={}", subTaskId);

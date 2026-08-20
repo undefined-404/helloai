@@ -10,7 +10,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * {@link DoorbellRegistry} 单元测试（AgentHub V3 门铃内核 PR-1）。
+ * {@link DoorbellRegistry} 单元测试（AgentHub 门铃内核 PR-1）。
  *
  * <p>覆盖：注册/取用/计数、关旧建新（同 Agent 只保留一条连接）、
  * 值条件注销（旧连接回调不误删新连接）、空参数保护。</p>

@@ -17,8 +17,8 @@ import java.util.Map;
  * REST 通道用于 curl 测试和管理台调用；JSON-RPC 通道用于 MCP 兼容客户端（Qoder/Trae/CLI）。
  * 认证：走现有 AuthInterceptor（Authorization: Bearer &lt;API_KEY&gt;），agentId 从 _authId 注入。
  *
- * <p><b style="color:orange">[M4 起标记为 @Deprecated]</b><br>
- * v2.4 §3.1/§9 路线 C 阶段 3 MCP Server spring-ai 改造后，外部 MCP 客户端应改走
+ * <p><b style="color:orange">[标记为 @Deprecated]</b><br>
+ * MCP Server 基于 spring-ai 实现，外部 MCP 客户端应改走
  * <b>SSE 通道</b>：
  * <ul>
  *   <li>建立连接：{@code GET /mcp/sse} → 拿 sessionId</li>
@@ -42,8 +42,8 @@ public class McpController {
     private final McpToolService mcpToolService;
 
     // ================================================================
-    // REST 通道 — 11 个工具（A0-3：补齐 getAgentStatus/checkIn/checkOut；
-    // A0-4：新增 getDepsSummary，与 MCP SSE / JSON-RPC 三通道工具面完全对齐）
+    // REST 通道 — 11 个工具（getAgentStatus/checkIn/checkOut；
+    // getDepsSummary，与 MCP SSE / JSON-RPC 三通道工具面完全对齐）
     // ================================================================
 
     /** 三通道统一工具清单（MCP SSE / REST 别名 jsonrpc / REST 直通 tools/*），防声明与实现漂移。 */
@@ -65,7 +65,7 @@ public class McpController {
             @RequestBody Map<String, Object> body) {
         String role = (String) body.getOrDefault("role", "EXECUTOR");
         int max = body.get("max") instanceof Number n ? n.intValue() : 20;
-        // A0-4（§6.63）：includeRead=true 时附带最近已读消息（read 状态位区分）
+        // includeRead=true 时附带最近已读消息（read 状态位区分）
         boolean includeRead = Boolean.TRUE.equals(body.get("includeRead"));
         return R.ok(mcpToolService.pullTasks(agentId, role, max, includeRead));
     }
@@ -152,7 +152,7 @@ public class McpController {
         return R.ok(mcpToolService.reportBlocked(agentId, subTaskId, reason));
     }
 
-    /** POST /api/mcp/tools/getAgentStatus（A0-3：补齐直通端点，与 REST 别名 / MCP SSE 通道对齐；无 body 即可） */
+    /** POST /api/mcp/tools/getAgentStatus（直通端点，与 REST 别名 / MCP SSE 通道对齐；无 body 即可） */
     @PostMapping("/tools/getAgentStatus")
     public R<GetAgentStatusResult> getAgentStatus(
             @RequestAttribute("_authId") Long agentId,
@@ -160,7 +160,7 @@ public class McpController {
         return R.ok(mcpToolService.getAgentStatus(agentId));
     }
 
-    /** POST /api/mcp/tools/getDepsSummary（A0-4：补齐直通端点；body 必填 subTaskId） */
+    /** POST /api/mcp/tools/getDepsSummary（直通端点；body 必填 subTaskId） */
     @PostMapping("/tools/getDepsSummary")
     public R<GetDepsSummaryResult> getDepsSummary(
             @RequestAttribute("_authId") Long agentId,
@@ -172,7 +172,7 @@ public class McpController {
         return R.ok(mcpToolService.getDepsSummary(agentId, subTaskId));
     }
 
-    /** POST /api/mcp/tools/checkIn（A0-3：补齐直通端点；body 可选 workMode / maxConcurrent / ttlMinutes） */
+    /** POST /api/mcp/tools/checkIn（直通端点；body 可选 workMode / maxConcurrent / ttlMinutes） */
     @PostMapping("/tools/checkIn")
     public R<CheckInResult> checkIn(
             @RequestAttribute("_authId") Long agentId,
@@ -184,7 +184,7 @@ public class McpController {
         return R.ok(mcpToolService.checkIn(agentId, workMode, maxConcurrent, ttlMinutes));
     }
 
-    /** POST /api/mcp/tools/checkOut（A0-3：补齐直通端点；body 可选 closeReason / reason） */
+    /** POST /api/mcp/tools/checkOut（直通端点；body 可选 closeReason / reason） */
     @PostMapping("/tools/checkOut")
     public R<CheckOutResult> checkOut(
             @RequestAttribute("_authId") Long agentId,
@@ -218,7 +218,7 @@ public class McpController {
         // 支持 tools/list 和 tools/call
         if ("tools/list".equals(method)) {
             return jsonrpcOk(id, Map.of("tools", java.util.List.of(
-                    Map.of("name", "pullTasks", "description", "拉取待处理收件箱消息（A0-4：includeRead=true 可附带最近已读，每条带 summary/read）",
+                    Map.of("name", "pullTasks", "description", "拉取待处理收件箱消息（includeRead=true 可附带最近已读，每条带 summary/read）",
                             "inputSchema", Map.of("type", "object", "properties", Map.of(
                                     "role", Map.of("type", "string"), "max", Map.of("type", "integer"),
                                     "includeRead", Map.of("type", "boolean")))),
@@ -230,7 +230,7 @@ public class McpController {
                                     "subTaskId", Map.of("type", "integer")))),
                     Map.of("name", "heartbeat", "description", "心跳上报",
                             "inputSchema", Map.of("type", "object", "properties", Map.of())),
-                    Map.of("name", "uploadArtifact", "description", "注册产物附件元数据（v2.7：平台可直读 minio:// 附件；storageUrl 按 {注册名}/{yyyy}/{MM}/{taskId}/{subTaskId}/ 组织）",
+                    Map.of("name", "uploadArtifact", "description", "注册产物附件元数据（平台可直读 minio:// 附件；storageUrl 按 {注册名}/{yyyy}/{MM}/{taskId}/{subTaskId}/ 组织）",
                             "inputSchema", Map.of("type", "object", "properties", Map.of(
                                     "subTaskId", Map.of("type", "integer"), "fileName", Map.of("type", "string"),
                                     "mimeType", Map.of("type", "string"), "fileSize", Map.of("type", "integer"),
@@ -245,7 +245,7 @@ public class McpController {
                                     "subTaskId", Map.of("type", "integer"), "reason", Map.of("type", "string")))),
                     Map.of("name", "getAgentStatus", "description", "查询 Agent 自身状态（管理态/在线态/实时计算态）",
                             "inputSchema", Map.of("type", "object", "properties", Map.of())),
-                    Map.of("name", "getDepsSummary", "description", "主动拉取前置产出摘要（标题/状态/执行摘要/内容本体，A0-4）",
+                    Map.of("name", "getDepsSummary", "description", "主动拉取前置产出摘要（标题/状态/执行摘要/内容本体）",
                             "inputSchema", Map.of("type", "object", "properties", Map.of(
                                     "subTaskId", Map.of("type", "integer")))),
                     Map.of("name", "checkIn", "description", "打卡上班，获取 ACTIVE 打卡租约（无状态，无需 MCP session）",
@@ -290,7 +290,7 @@ public class McpController {
             case "pullTasks" -> {
                 String role = (String) args.getOrDefault("role", "EXECUTOR");
                 int max = args.get("max") instanceof Number n ? n.intValue() : 20;
-                // A0-4（§6.63）：includeRead=true 时附带最近已读消息（未读优先，read 状态位区分）
+                // includeRead=true 时附带最近已读消息（未读优先，read 状态位区分）
                 boolean includeRead = Boolean.TRUE.equals(args.get("includeRead"));
                 yield mcpToolService.pullTasks(agentId, role, max, includeRead);
             }
@@ -336,9 +336,9 @@ public class McpController {
                 if (reason == null || reason.isBlank()) throw new BizException("reason is required");
                 yield mcpToolService.reportBlocked(agentId, subTaskId, reason);
             }
-            // A0-2（§6.61）：REST 别名通道补齐打卡/状态工具——无状态同步响应，不依赖 MCP session
+            // REST 别名通道提供打卡/状态工具——无状态同步响应，不依赖 MCP session
             case "getAgentStatus" -> mcpToolService.getAgentStatus(agentId);
-            // A0-4（§6.63）：REST 别名通道补齐前置产出摘要工具
+            // REST 别名通道提供前置产出摘要工具
             case "getDepsSummary" -> {
                 Long subTaskId = toLong(args.get("subTaskId"));
                 if (subTaskId == null) throw new BizException("subTaskId is required");

@@ -116,7 +116,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         }
         task.setStatus(status);
         updateById(task);
-        // 停止任务（V48）：任务置 CANCELLED 时级联取消全部未终态子任务（含草案），
+        // 停止任务：任务置 CANCELLED 时级联取消全部未终态子任务（含草案），
         // 防止“任务已取消但子任务仍被自动派单/继续流转”的割裂；DONE/CANCELLED 跳过。
         if (status == TaskStatus.CANCELLED) {
             int cancelled = 0;

@@ -16,7 +16,7 @@ import java.util.Map;
  * sys_config["llm.provider.&lt;name&gt;.base-url"] 的散落 key。密钥仍走
  * credential_vault（PLATFORM 级），本表只存 Provider 维度的协议与端点配置。</p>
  *
- * <p>字段命名遵循 V23 规范化规则：xxx_time / xxx_id / xxx_count。</p>
+ * <p>字段命名遵循 规范化规则：xxx_time / xxx_id / xxx_count。</p>
  *
  * <p>协议类型约束：本轮只支持 {@code OPENAI_COMPATIBLE} / {@code ANTHROPIC_COMPATIBLE}，
  * 校验在 {@link com.helloai.core.system.service.LlmProviderService} 中执行。</p>

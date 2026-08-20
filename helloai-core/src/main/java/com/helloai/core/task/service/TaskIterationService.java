@@ -8,7 +8,7 @@ import com.helloai.core.task.entity.TaskIteration;
 import java.util.List;
 
 /**
- * 任务迭代记录服务（V42）。
+ * 任务迭代记录服务。
  *
  * <p>在 Planner 整合报告生成成功后一次性回填，不参与运行时执行/审核链路。
  * 回填幂等：先按 task_id 删旧、再批量插新。</p>

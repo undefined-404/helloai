@@ -27,7 +27,7 @@ import java.util.Comparator;
 import java.util.List;
 
 /**
- * Agent 选择器（v2.4 §4.6）。
+ * Agent 选择器。
  *
  * <p>在熔断降级 / 主 Agent 不可用时，从同角色 Agent 中选择替代者。
  * 自动跳过 SLEEPING、OFFLINE、熔断中的 Agent，优先选分数最高的可用 Agent。</p>
@@ -58,7 +58,7 @@ public class AgentSelector {
     }
 
     /**
-     * V47（§6.58 P1）：带任务级约束的首选选人。
+     * （§6.58 P1）：带任务级约束的首选选人。
      *
      * <p>在 {@link #pickPreferred(AgentRole)} 基础上追加
      * {@link AgentSelectionConstraints} 过滤（执行者白名单 + 技能 AND 匹配），
@@ -84,12 +84,11 @@ public class AgentSelector {
      * <p>过滤规则（按优先级）：
      * <ol>
      *   <li>跳过 excludeAgentId（被熔断或不可用的原 Agent）</li>
-     *   <li>V47：跳过不满足任务级约束的 Agent（{@link AgentSelectionConstraints}——
+     *   <li>跳过不满足任务级约束的 Agent（{@link AgentSelectionConstraints}——
      *       执行者白名单外、或未声明 required_skills 全部技能的 Agent）</li>
      *   <li>跳过 SLEEPING 状态</li>
-     *   <li>跳过 OFFLINE 状态（v2.6 §4.1 由 markOfflineIfStale + Reconcile保证唯一性，
-     *       API_KEY_LLM 豁免）</li>
-     *   <li>v2.6 §4.1：心跳新鲜度过滤—— last_seen_time 距今超过
+     *   <li>跳过 OFFLINE 状态（由 markOfflineIfStale + Reconcile保证唯一性*       API_KEY_LLM 豁免）</li>
+     *   <li>§4.1：心跳新鲜度过滤—— last_seen_time 距今超过
      *       {@link AgentHealthProperties#getOfflineMinutes()}（默认 5 分钟，
      *       对齐 Redis 心跳 TTL）的 Agent 被跳过，即使 online_status 仍是 ONLINE；
      *       防止选人拿到“刚被死但还未来得及被 Reconcile 标 OFFLINE”的 Agent。
@@ -113,7 +112,7 @@ public class AgentSelector {
     }
 
     /**
-     * V47（§6.58 P1）：带任务级约束的替代选人。
+     * （§6.58 P1）：带任务级约束的替代选人。
      *
      * <p>在 {@link #pickAlternative(Long, AgentRole)} 基础上追加
      * {@link AgentSelectionConstraints} 过滤（执行者白名单 + 技能 AND 匹配），
@@ -157,7 +156,7 @@ public class AgentSelector {
     }
 
     /**
-     * 心跳新鲜度检查（v2.6 §4.1）。
+     * 心跳新鲜度检查。
      *
      * <p>返回 true 表示 Agent 近期可见、参与选人：</p>
      * <ul>
@@ -172,7 +171,7 @@ public class AgentSelector {
      * <p>防御式：不因本检查本身报错而影响选人（如 last_seen_time 为 null
      * 造成 NPE 会被 try/catch 降级为不新鲜）。</p>
      *
-     * <p>V25：改为 public 供 {@link com.helloai.core.agent.dispatcher.ResilientDispatcher}
+     * <p>改为 public 供 {@link com.helloai.core.agent.dispatcher.ResilientDispatcher}
      * 在 fast-fail 阶段复用，封堵"DB online_status 滞后 ONLINE 但 Agent 已死"的误派窗口。</p>
      */
     public boolean isHeartbeatFresh(Agent agent) {
@@ -207,7 +206,7 @@ public class AgentSelector {
      * 凭证可用性检查：API_KEY_LLM 候选必须在 credential_vault 中有启用态凭证。
      *
      * <p>API_KEY_LLM 享有心跳/OFFLINE 双重豁免，若不校验凭证，历史遗留的无凭证 Agent
-     * 永远是合格候选，选中即执行 500。其它 accessType 不依赖 vault，直接放行。
+     * 永远是合格候选，选中即执。其它 accessType 不依赖 vault，直接放行。
      * 防御式：查询异常降级为排除（选中无凭证 Agent 必败，排除更安全）。</p>
      */
     private boolean hasUsableCredential(Agent agent) {
@@ -228,9 +227,9 @@ public class AgentSelector {
     }
 
     private Comparator<Agent> resolveComparator() {
-        // AgentHub V1 P0-B：“当前是否处于值班”作为软优先级最高一档。
+        // AgentHub P0-B：“当前是否处于值班”作为软优先级最高一档。
         // 无硬拒绝：即使无任何值班 Agent，仍能从非值班候选中选出，
-        // 保证与当前行为向后兼容（V1 未上线时 checkIn 未被调用，选择器表现与以前一致）。
+        // 保证与当前行为向后兼容（未上线时 checkIn 未被调用，选择器表现与以前一致）。
         Comparator<Agent> dutyFirst = Comparator.comparingInt(this::dutyRank);
         if (!agentDispatchProperties.isPreferExternal()) {
             return dutyFirst.thenComparing(Agent::getScore, Comparator.nullsFirst(Comparator.naturalOrder()));
@@ -268,7 +267,7 @@ public class AgentSelector {
     }
 
     /**
-     * N12 P1 STRICT 独占报锁（A2 第 1 段）语义：
+     * N12 P1 STRICT 独占报锁（ 第 1 段）语义：
      * 返回 true 表示该 Agent 当前以 STRICT 模式上岗，
      * 平台不应当把它列入他人失败/熔断后的替补池候选。
      *
@@ -321,7 +320,7 @@ public class AgentSelector {
     }
 
     /**
-     * 任务级选人约束（V47，§6.58 P1）。
+     * 任务级选人约束（§6.58 P1）。
      *
      * <p>由任务 {@code agent_policy.executorAgentIds} 与 {@code required_skills}
      * 构建，注入选人链：白名单限定 + 技能 AND 匹配。约束为 null 或字段为空时

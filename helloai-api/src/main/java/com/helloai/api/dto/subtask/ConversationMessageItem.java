@@ -7,7 +7,7 @@ import lombok.Data;
 import java.time.OffsetDateTime;
 
 /**
- * 子任务执行对话流消息条目（V28 对话流可观测）。
+ * 子任务执行对话流消息条目（对话流可观测）。
  *
  * <p>用于 GET /api/sub-tasks/{id}/conversation 返回结构，按 seq 升序排列。
  * 承载执行产出全文与自动核验的 Prompt / 分析原文，来源由 toolName 区分：

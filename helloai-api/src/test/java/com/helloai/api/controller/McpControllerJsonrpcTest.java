@@ -39,7 +39,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * REST 别名通道 POST /api/mcp/jsonrpc 单测（A0-2 §6.61）：
+ * REST 别名通道 POST /api/mcp/jsonrpc 单测：
  *
  * <ul>
  *   <li>同步响应：tools/call 返回 JSON-RPC result（含 accepted/resultId/status），不再像
@@ -52,7 +52,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p>说明：通道鉴权由 AuthInterceptor（/api/**）负责，此处 standalone 只测 Controller 逻辑。</p>
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("McpController REST 别名通道（A0-2）")
+@DisplayName("McpController REST 别名通道")
 class McpControllerJsonrpcTest {
 
     private static final long AGENT_ID = 9L;
@@ -89,7 +89,7 @@ class McpControllerJsonrpcTest {
 
         JsonNode tools = root.get("result").get("tools");
         assertNotNull(tools, "tools 数组不应为空");
-        assertEquals(11, tools.size(), "应声明 11 个工具（与 MCP SSE 通道对齐，A0-4 新增 getDepsSummary）");
+        assertEquals(11, tools.size(), "应声明 11 个工具（与 MCP SSE 通道对齐，含 getDepsSummary）");
 
         List<String> expectedNames = List.of(
                 "pullTasks", "ack", "claimSubTask", "heartbeat", "uploadArtifact",
@@ -247,7 +247,7 @@ class McpControllerJsonrpcTest {
     }
 
     // ================================================================
-    // REST 直通端点 /api/mcp/tools/*（A0-3：三通道 10 工具对齐；A0-4：11 工具 + getDepsSummary）
+    // REST 直通端点 /api/mcp/tools/*（与 MCP SSE / JSON-RPC 三通道工具面完全对齐，含 getDepsSummary）
     // ================================================================
 
     @Test
@@ -293,7 +293,7 @@ class McpControllerJsonrpcTest {
     }
 
     @Test
-    @DisplayName("POST /api/mcp/tools/pullTasks：includeRead=true 透传 4 参（A0-4）")
+    @DisplayName("POST /api/mcp/tools/pullTasks：includeRead=true 透传 4 参")
     void directPullTasks_passesIncludeRead() throws Exception {
         PullTasksResult pull = new PullTasksResult();
         pull.setMessages(List.of());
@@ -325,7 +325,7 @@ class McpControllerJsonrpcTest {
     }
 
     @Test
-    @DisplayName("POST /api/mcp/tools/getDepsSummary：直通端点委托 McpToolService（A0-4）")
+    @DisplayName("POST /api/mcp/tools/getDepsSummary：直通端点委托 McpToolService")
     void directGetDepsSummary_delegates() throws Exception {
         GetDepsSummaryResult summary = new GetDepsSummaryResult();
         summary.setSubTaskId(123L);

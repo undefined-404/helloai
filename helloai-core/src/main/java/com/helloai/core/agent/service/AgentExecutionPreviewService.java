@@ -7,7 +7,7 @@ import java.util.Map;
 /**
  * Agent 执行预览服务。
  *
- * <p>作为 T5 最小验证入口的编排层，负责参数收口、默认 prompt 处理与统一执行调用。</p>
+ * <p>作为 最小验证入口的编排层，负责参数收口、默认 prompt 处理与统一执行调用。</p>
  */
 public interface AgentExecutionPreviewService {
 

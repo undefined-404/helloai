@@ -20,7 +20,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * DeepSeek 原生联网搜索实现（把 DeepSeek 当"搜索引擎"用，V42）。
+ * DeepSeek 原生联网搜索实现（把 DeepSeek 当"搜索引擎"用）。
  *
  * <p>走 DeepSeek Anthropic 兼容端点（{@code /anthropic/v1/messages}）+
  * {@code web_search_20250305} 服务端工具：单次调用「Perform a web search for query: X」，

@@ -32,7 +32,7 @@ public interface SubTaskMapper extends BaseMapper<SubTask> {
                                        @Param("now") OffsetDateTime now);
 
     /**
-     * V24：原子累加 sub_task.reassign_attempt_count（重分配熔断计数器）。
+     * 原子累加 sub_task.reassign_attempt_count（重分配熔断计数器）。
      *
      * <p>所有类型的重分配入口（离线重派、超时回收、N11回退、阻塞重试）都通过
      * 本方法累加计数。达到 max-reassign-attempts 阈值后由
@@ -44,7 +44,7 @@ public interface SubTaskMapper extends BaseMapper<SubTask> {
                                       @Param("now") OffsetDateTime now);
 
     /**
-     * V25：重置 sub_task.reassign_attempt_count 为 0（死信人工兜底）。
+     * 重置 sub_task.reassign_attempt_count 为 0（死信人工兜底）。
      *
      * <p>仅由 {@link com.helloai.core.task.service.SubTaskDispatchService#redispatchDeadLetter}
      * 在人工指派 DEAD_LETTER 子任务前调用，避免重新投入调度链后立即再次熔断。</p>
@@ -55,7 +55,7 @@ public interface SubTaskMapper extends BaseMapper<SubTask> {
                                   @Param("now") OffsetDateTime now);
 
     /**
-     * V27：写入子任务依赖 id 数组（JSON 字符串，SQL 内显式 ::jsonb 转换）。
+     * 写入子任务依赖 id 数组（JSON 字符串，SQL 内显式 ::jsonb 转换）。
      *
      * <p>专供 PlannerAnalysisService 拆解落库后做"序号→真实 id"回写；
      * 不走 updateById 全列覆盖，避免乐观锁 version 依赖与并发冲突。</p>
@@ -97,7 +97,7 @@ public interface SubTaskMapper extends BaseMapper<SubTask> {
                                          @Param("limit") int limit);
 
     /**
-     * 查询 PENDING 孤儿子任务 ID 列表（v2.6 §4.1 2026-07-20 新增）。
+     * 查询 PENDING 孤儿子任务 ID 列表。
      *
      * <p>场景：dispatch-mode=EVENT 主路径上 Spring 事务事件丢失、
      * {@code agent_execution_record} 行未被创建、但 {@code sub_task} 一直停在 PENDING。
@@ -125,7 +125,7 @@ public interface SubTaskMapper extends BaseMapper<SubTask> {
 
     /**
      * 查询“有历史 execution record、但无活跃 PENDING/RUNNING record”
-     * 的 PENDING 未指派子任务 ID 列表（v2.6 §4.1）。
+     * 的 PENDING 未指派子任务 ID 列表。
      *
      * <p>职责定位：本方法与 {@link #selectStalePendingWithoutExecutionRecord}
      * 互为补充，由 {@code ExternalAgentFallbackTask} 全局兜底使用：</p>

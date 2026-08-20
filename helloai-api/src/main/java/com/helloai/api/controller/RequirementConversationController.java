@@ -25,11 +25,11 @@ public class RequirementConversationController {
 
     private final RequirementClarifyService requirementClarifyService;
 
-    /** 新建澄清会话（首条用户消息触发一轮 LLM；可选手动指定 Planner；V34 起可带联网搜索开关；V39 起可带初始对话模式）。 */
+    /** 新建澄清会话（首条用户消息触发一轮 LLM；可选手动指定 Planner；可带联网搜索开关；可带初始对话模式）。 */
     @PostMapping
     public R<ClarifyConversationDetail> create(@Valid @RequestBody ClarifyMessageRequest req) {
-        // V34 联网搜索开关透传：NULL 走默认开启语义（与老数据兼容）；
-        // V39 initialMode 透传：缺省 CHAT 自由对话，'CLARIFY' 快捷直达方案澄清
+        // 联网搜索开关透传：NULL 走默认开启语义（与老数据兼容）；
+        // initialMode 透传：缺省 CHAT 自由对话，'CLARIFY' 快捷直达方案澄清
         return R.ok(requirementClarifyService.create(
                 req.getMessage(), req.getPlannerAgentId(), req.getWebSearchEnabled(), req.getInitialMode()));
     }
@@ -53,8 +53,8 @@ public class RequirementConversationController {
         return R.ok(requirementClarifyService.retryRound(id));
     }
 
-    /** 切换到方案澄清模式（V39）：置位落库 + 一轮 LLM 基于全量历史产终稿草案/结构化追问；
-     *  V40.2 支持可选 body.message（斜杠命令 /planner 附加文本，先落库进上下文再切）。 */
+    /** 切换到方案澄清模式：置位落库 + 一轮 LLM 基于全量历史产终稿草案/结构化追问；
+     *  支持可选 body.message（斜杠命令 /planner 附加文本，先落库进上下文再切）。 */
     @PostMapping("/toClarifyById/{id}")
     public R<ClarifyConversationDetail> toClarify(@PathVariable("id") Long id,
                                                   @RequestBody(required = false) ClarifyMessageRequest req) {
@@ -62,7 +62,7 @@ public class RequirementConversationController {
         return R.ok(requirementClarifyService.switchToClarify(id, extraMessage));
     }
 
-    /** 切回自由对话模式（V39）：仅置位，不调用 LLM。 */
+    /** 切回自由对话模式：仅置位，不调用 LLM。 */
     @PostMapping("/toChatById/{id}")
     public R<ClarifyConversationDetail> toChat(@PathVariable("id") Long id) {
         return R.ok(requirementClarifyService.switchToChat(id));

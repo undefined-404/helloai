@@ -36,7 +36,7 @@ import com.helloai.core.system.service.CredentialVaultBindingService;
 /**
  * PlatformAgentExecutionService 单元测试。
  *
- * <p>验证 T4/T5 最小链路：选择执行器 → ChatClient(mock) → 返回结果。</p>
+ * <p>验证 /最小链路：选择执行器 → ChatClient(mock) → 返回结果。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("PlatformAgentExecutionService")

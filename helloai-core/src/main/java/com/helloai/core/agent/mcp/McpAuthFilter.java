@@ -28,7 +28,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * MCP Server 鉴权 Filter（v2.4 §3.1 / §9 路线 C M4 鉴权改造）。
+ * MCP Server 鉴权 Filter（§3.1 / §9 鉴权接入）。
  *
  * <p><b>拦截范围</b>：仅 {@code POST /mcp/messages?sessionId=xxx}（spring-ai MCP Server
  * 接收 JSON-RPC 消息的端点）。{@code GET /mcp/sse} 走握手建立 SSE 长连接，<b>不</b>鉴权，
@@ -98,11 +98,11 @@ public class McpAuthFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
-        // A0-2（§6.61）：包装响应缓冲 body，用于 SDK 404「Session not found」时附修复提示
+        // 包装响应缓冲 body，用于 SDK 404「Session not found」时附修复提示
         // 并联动清理 SESSION_AUTH（SDK session 绑定 SSE 连接，断开即回收，此处同步 evict 避免残留）
         BufferedResponseWrapper wrapped = new BufferedResponseWrapper(response);
         try {
-            // 0) 提取 sessionId（用于 v2 鉴权上下文关联）
+            // 0) 提取 sessionId（用于 鉴权上下文关联）
             String sessionId = request.getParameter("sessionId");
             if (sessionId == null) sessionId = "";
 
@@ -113,7 +113,7 @@ public class McpAuthFilter extends OncePerRequestFilter {
                 request.setAttribute(McpAuthContext.AUTH_ID, session.id());
                 request.setAttribute(McpAuthContext.AUTH_NAME, session.displayName());
                 request.setAttribute(McpAuthContext.AUTH_TYPE, "admin");
-                // v2 鉴权：用 sessionId 关联（RequestContextHolder 在 boundedElastic 线程无效）
+                // 鉴权：用 sessionId 关联（RequestContextHolder 在 boundedElastic 线程无效）
                 McpAuthContext.put(sessionId, session.id(), session.displayName(), "admin");
                 adminSuccess.increment();
                 log.debug("MCP admin auth OK: adminId={}, name={}, sessionId={}", session.id(), session.displayName(), sessionId);
@@ -132,7 +132,7 @@ public class McpAuthFilter extends OncePerRequestFilter {
                     request.setAttribute(McpAuthContext.AUTH_ID, agent.getId());
                     request.setAttribute(McpAuthContext.AUTH_NAME, agent.getName());
                     request.setAttribute(McpAuthContext.AUTH_TYPE, "agent");
-                    // v2 鉴权：用 sessionId 关联
+                    // 鉴权：用 sessionId 关联
                     McpAuthContext.put(sessionId, agent.getId(), agent.getName(), "agent");
                     agentSuccess.increment();
                     log.debug("MCP agent auth OK: agentId={}, name={}, sessionId={}", agent.getId(), agent.getName(), sessionId);
@@ -167,7 +167,7 @@ public class McpAuthFilter extends OncePerRequestFilter {
     }
 
     /**
-     * POST /mcp/messages 处理完成后的收尾（A0-2 §6.61）：
+     * POST /mcp/messages 处理完成后的收尾：
      *
      * <ul>
      *   <li>SDK 返回 404（session 已从 SDK sessions map 移除，即 SSE 连接已断开）时，
@@ -225,7 +225,7 @@ public class McpAuthFilter extends OncePerRequestFilter {
     }
 
     /**
-     * 缓冲响应体包装（A0-2 §6.61）。
+     * 缓冲响应体包装。
      *
      * <p>SDK 的 {@code WebMvcSseServerTransportProvider} 用 RouterFunction 直接写
      * {@code HttpServletResponse}，404 body 不经过任何拦截器/Advice；这里把 body 缓冲到
@@ -322,7 +322,7 @@ public class McpAuthFilter extends OncePerRequestFilter {
         }
 
         /**
-         * 把缓冲的 body 写回原始 response（A0-2 §6.61）。
+         * 把缓冲的 body 写回原始 response。
          *
          * <p>filter 链结束后容器不会自动取 wrapper 缓冲的内容，必须显式把最终 body
          * 刷到底层 {@code HttpServletResponse} 输出流（含改写后的 404 body）。</p>

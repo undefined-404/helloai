@@ -61,7 +61,7 @@ class ExternalAgentFailureTrackerTest {
         properties.setCooldownMinutes(10);
         properties.setScanIntervalMs(60_000L);
 
-        // v2.6 §4.1：共享 5 分钟健康阈值；测试用 5 分钟以贴近真实链路
+        // §4.1：共享 5 分钟健康阈值；测试用 5 分钟以贴近真实链路
         healthProperties = new AgentHealthProperties();
         healthProperties.setOfflineMinutes(5);
 
@@ -266,7 +266,7 @@ class ExternalAgentFailureTrackerTest {
             assertThat(tracker.shouldFallback(a)).isFalse();
         }
 
-        // v2.6 §4.1：心跳新鲜度规则（与 SQL selectFallbackCandidates 完全一致）
+        // §4.1：心跳新鲜度规则（与 SQL selectFallbackCandidates 完全一致）
 
         @Test
         @DisplayName("CLI_CLIENT + last_seen_time=null → false（心跳未知视为过期）")
@@ -314,7 +314,7 @@ class ExternalAgentFailureTrackerTest {
     }
 
     /**
-     * 心跳可控构造器（v2.6 §4.1）。
+     * 心跳可控构造器。
      *
      * @param lastSeenTime Agent.last_seen_time；null 表示从未心跳
      */

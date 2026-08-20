@@ -217,7 +217,7 @@ class PlannerAgentPickerTest {
     }
 
     @Test
-    @DisplayName("pickForTask：任务级 agent_policy.plannerAgentId 优先于会话钉住（V47）")
+    @DisplayName("pickForTask：任务级 agent_policy.plannerAgentId 优先于会话钉住")
     void shouldPreferPolicyPlannerOverConversationPinned() {
         Task task = new Task();
         task.setId(TASK_ID);
@@ -232,7 +232,7 @@ class PlannerAgentPickerTest {
     }
 
     @Test
-    @DisplayName("pickForTask：policy 指定 Planner 失效（禁用）时回退自动选择（V47）")
+    @DisplayName("pickForTask：policy 指定 Planner 失效（禁用）时回退自动选择")
     void shouldFallbackToAutoWhenPolicyPlannerDisabled() {
         Task task = new Task();
         task.setId(TASK_ID);

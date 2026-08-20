@@ -16,13 +16,13 @@ import java.nio.charset.StandardCharsets;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * {@link WebPageFetchServiceImpl} 单元测试（V43 用户消息 URL 直取）。
+ * {@link WebPageFetchServiceImpl} 单元测试（用户消息 URL 直取）。
  *
  * <p>JDK 内置 {@link HttpServer} 起本地桩站点：验证 HTML 转纯文本（剔除 script/style、
  * 去标签、实体解码、空白折叠）、title 提取、正文截断、非 2xx / 非文本类型 / 空正文
  * 一律降级 ok=false 不抛异常。</p>
  */
-@DisplayName("网页直取服务（V43）")
+@DisplayName("网页直取服务")
 class WebPageFetchServiceImplTest {
 
     private HttpServer server;
@@ -144,7 +144,7 @@ class WebPageFetchServiceImplTest {
     }
 
     @Test
-    @DisplayName("V44 SPA 空壳页（有 title 无正文）：元数据兜底成功 metaOnly=true")
+    @DisplayName("SPA 空壳页（有 title 无正文）：元数据兜底成功 metaOnly=true")
     void fetch_emptyText_salvagesTitleMeta() {
         responseBody = "<html><head><title>OpenMaic 开放平台</title>"
                 + "<meta name=\"description\" content=\"多智能体协作平台\"/>"
@@ -162,7 +162,7 @@ class WebPageFetchServiceImplTest {
     }
 
     @Test
-    @DisplayName("V44 SPA 空壳页（og 标签属性序反转）：content 在前也能提取")
+    @DisplayName("SPA 空壳页（og 标签属性序反转）：content 在前也能提取")
     void fetch_emptyText_salvagesOgMetaReversedAttrOrder() {
         responseBody = "<html><head>"
                 + "<meta content=\"AI 多智能体平台\" property=\"og:description\">"
@@ -181,7 +181,7 @@ class WebPageFetchServiceImplTest {
     }
 
     @Test
-    @DisplayName("V44 空壳页无任何元数据：仍降级 ok=false 注明原因")
+    @DisplayName("空壳页无任何元数据：仍降级 ok=false 注明原因")
     void fetch_emptyTextNoMeta_returnsFailed() {
         responseBody = "<html><head></head><body><div id=\"app\"></div>"
                 + "<script>console.log('all in js')</script></body></html>";

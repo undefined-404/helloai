@@ -30,7 +30,7 @@ public class RequirementMessageServiceImpl
     }
 
     /**
-     * 追加带结构化附加数据的消息（V33）。
+     * 追加带结构化附加数据的消息。
      *
      * @param payload JSON 文本（assistant=结构化问题，user=选择快照）；纯文本消息传 null
      */

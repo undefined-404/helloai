@@ -14,8 +14,8 @@ import java.util.Map;
  * 前端主页面 Dashboard 统计入口（{@code /api/dashboard/stats}）。
  *
  * <p>Mapper 调用与聚合计算已全部下沉至 {@link DashboardService}，
- * Controller 仅做 Map → R.ok 透传（§6.7 聚合看板允许返回
- * {@code Map<String,Object>}）。</p>
+ * Controller 仅做 Map → R.ok 透传（聚合看板允许返回
+ * {@code Map<StringObject>}）。</p>
  */
 @Slf4j
 @RestController

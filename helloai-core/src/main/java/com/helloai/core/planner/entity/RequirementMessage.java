@@ -8,7 +8,7 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 
 /**
- * 需求澄清会话消息（V29）。
+ * 需求澄清会话消息。
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
@@ -29,7 +29,7 @@ public class RequirementMessage extends BaseEntity {
     private Integer seq;
 
     /**
-     * 结构化附加数据（JSON 文本，V33）。一列两用：
+     * 结构化附加数据（JSON 文本）。一列两用：
      * assistant 行存结构化问题 {@code {"mode","progress","questions":[...]}}，
      * user 行存选择快照 {@code {"selections":[...]}}；纯文本消息为 NULL。
      */

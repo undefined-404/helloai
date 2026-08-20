@@ -11,6 +11,6 @@ public class AgentUpdateRequest {
     private String modelType;
     private Map<String, Object> modelConfig;
     private String remark;
-    /** 能力声明列表（A2）：显式传入整体替换；null 保持现状 */
+    /** 能力声明列表：显式传入整体替换；null 保持现状 */
     private List<String> skills;
 }

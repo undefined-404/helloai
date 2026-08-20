@@ -89,7 +89,7 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
         agent.setStatus(AgentStatus.ACTIVE);
         agent.setScore(0);
         agent.setRemark(description);
-        // 阶段 0 补全默认值
+        // 补全默认值
         agent.setAccessType(AgentAccessType.CLI_CLIENT);
         agent.setCapabilities(new java.util.HashMap<>());
         agent.setLabels(new java.util.HashMap<>());
@@ -245,12 +245,12 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     public Agent registerWithExtras(String name, AgentRole role, String description,
                                     String modelType, Map<String, Object> modelConfig,
                                     List<String> skills) {
-        // V49：创建 Agent 前校验 modelType 格式、模型可用性、角色唯一性
+        // 创建 Agent 前校验 modelType 格式、模型可用性、角色唯一性
         validateModelType(modelType, role, null);
         Agent agent = register(name, role, description);
         agent.setModelType(modelType);
         if (modelConfig != null) agent.setModelConfig(modelConfig);
-        // V52：技能按模型能力校验 + 推导落库（thinking 锁定、白名单过滤、自定义豁免）
+        // 技能按模型能力校验 + 推导落库（thinking 锁定、白名单过滤、自定义豁免）
         validateAgentSkills(agent.getModelType(), skills);
         agent.setSkills(deriveSkillsForRegistration(agent, skills));
         updateById(agent);
@@ -261,7 +261,7 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
      * 更新 Agent 扩展字段；Agent 不存在时返回 false（Controller 保持原有 R.fail 语义）。
      *
      * <p>按 §6.3 分层红线从 AdminAgentController 收口；仅非 null 字段生效。
-     * V49：编辑时校验 modelType（允许保留原有 modelType 不传）。</p>
+     * 编辑时校验 modelType（允许保留原有 modelType 不传）。</p>
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -269,7 +269,7 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
                                      String remark, List<String> skills) {
         Agent agent = getById(agentId);
         if (agent == null) return false;
-        // V49：编辑 modelType 时校验（排除当前 Agent 自身）
+        // 编辑 modelType 时校验（排除当前 Agent 自身）
         if (modelType != null && !modelType.isBlank()) {
             validateModelType(modelType, agent.getRole(), agentId);
             agent.setModelType(modelType);
@@ -278,7 +278,7 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
         if (modelConfig != null) agent.setModelConfig(modelConfig);
         if (remark != null) agent.setRemark(remark);
         if (skills != null) {
-            // V52：技能先按模型能力校验（标准技能查白名单、自定义豁免、未识别模型放行），
+            // 技能先按模型能力校验（标准技能查白名单、自定义豁免、未识别模型放行），
             // 再按能力驱动重写落库（thinking 锁定不回退）
             validateAgentSkills(agent.getModelType(), skills);
             agent.setSkills(deriveSkillsForRegistration(agent, skills));
@@ -289,7 +289,7 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     }
 
     /**
-     * 校验 Agent skills 不超出模型能力（V52 新增，plan 2182376f 完善版）。
+     * 校验 Agent skills 不超出模型能力。
      *
      * <p>规则（D2=A 标准校验 + 自定义豁免）：仅标准技能标签查模型白名单
      * （capabilitySkills ∪ availableOptionalSkills）；非标准项视为自定义技能豁免；
@@ -306,7 +306,7 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
         }
         Optional<LlmProviderModel> capability = llmProviderModelQueryService.findCapabilityByModelType(modelType);
         if (capability.isEmpty()) {
-            // 未识别模型：不校验（降级兼容，与 A2 行为一致）
+            // 未识别模型：不校验（降级兼容）
             return;
         }
         Set<String> whitelist = new HashSet<>();
@@ -326,10 +326,10 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     }
 
     /**
-     * 收口技能落库推导（V52 新增，plan 2182376f 完善版）。
+     * 收口技能落库推导。
      *
      * <p>API_KEY_LLM 且 modelType 已识别 → 能力驱动推导（能力锁定 + 白名单过滤 + 自定义豁免）；
-     * 其他接入类型或未识别模型 → 走 A2 原推导（显式优先）。</p>
+     * 其他接入类型或未识别模型 → 走基础推导（显式优先）。</p>
      */
     @Override
     public List<String> deriveSkillsForRegistration(Agent agent, List<String> explicitSkills) {
@@ -348,12 +348,12 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
                         capability.get().getAvailableOptionalSkills());
             }
         }
-        // 非 API_KEY_LLM / 未识别模型：A2 原推导（显式优先，不合并基础技能）
+        // 非 API_KEY_LLM / 未识别模型：基础推导（显式优先，不合并基础技能）
         return AgentSkillDeriver.derive(accessType, agent.getName(), agent.getRemark(), explicitSkills);
     }
 
     /**
-     * 校验 modelType 格式、可用性及角色唯一性（V49）。
+     * 校验 modelType 格式、可用性及角色唯一性。
      *
      * <p>格式：providerCode:modelName。模型须启用。同模型在同一角色下只能被一个 API_KEY_LLM Agent 使用。</p>
      *
@@ -580,21 +580,21 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  阶段 4.3 SLEEPING 状态管理（v2.4 §4.3）
+    //  SLEEPING 状态管理
     //  - sleep：管理员手动暂停 Agent，系统不自动设 SLEEPING
     //  - wake：恢复后设 OFFLINE（让系统心跳自然计算 IDLE/ONLINE，不强行 ONLINE）
-    //  - SLEEPING 不写 offline_reason/offline_at（v2.4 行 419）
+    //  - SLEEPING 不写 offline_reason/offline_time
     //  - 每次操作都写 task_timeline 审计（event_type=agent_sleep/agent_wake, role=SYSTEM）
     // ══════════════════════════════════════════════════════════════
 
     /**
-     * 管理员手动暂停 Agent（v2.4 §4.3）。
+     * 管理员手动暂停 Agent。
      *
      * <p>行为：
      * <ol>
      *   <li>校验当前状态不能是 SLEEPING（避免重复 sleep）</li>
      *   <li>设 online_status=SLEEPING + update_by=operator</li>
-     *   <li><b>不动</b> offline_reason/offline_at（v2.4 行 419：SLEEPING 不写此字段）</li>
+     *   <li><b>不动</b> offline_reason/offline_time（SLEEPING 不写此字段）</li>
      *   <li>写 task_timeline 审计（event_type=agent_sleep, role=SYSTEM）</li>
      * </ol>
      *
@@ -621,7 +621,7 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     }
 
     /**
-     * 实际写入 SLEEPING 状态 + task_timeline 审计（v2.4 §4.3）。
+     * 实际写入 SLEEPING 状态 + task_timeline 审计。
      *
      * <p>被 {@link #sleepAgent(Long, String, String)} 与 {@link #sleepAgentBatch(List, String, String)}
      * 共用：单 agent 走外层事务，批量时每条 autoCommit 独立生效。</p>
@@ -655,7 +655,7 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     }
 
     /**
-     * 批量暂停 Agent（v2.4 §4.3 批次 3）。
+     * 批量暂停 Agent。
      *
      * <p><b>行为契约：</b>
      * <ul>
@@ -740,7 +740,7 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     }
 
     /**
-     * 查询当前 SLEEPING 状态的 Agent（v2.4 §4.3 批次 3）。
+     * 查询当前 SLEEPING 状态的 Agent。
      *
      * @param role 可选；为 null 时返回所有角色的 SLEEPING Agent
      * @return 按 update_time DESC 排序（最近操作的在前）
@@ -755,17 +755,17 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     }
 
     /**
-     * 管理员手动恢复 Agent（v2.4 §4.3）。
+     * 管理员手动恢复 Agent。
      *
      * <p>行为：
      * <ol>
      *   <li>校验当前状态必须是 SLEEPING（避免错误恢复）</li>
      *   <li>设 online_status=OFFLINE + update_by=operator（不强行 ONLINE，让系统下次心跳计算）</li>
-     *   <li>保持 offline_reason/offline_at 不变（v2.4 行 419）</li>
+     *   <li>保持 offline_reason/offline_time 不变</li>
      *   <li>写 task_timeline 审计（event_type=agent_wake, role=SYSTEM）</li>
      * </ol>
      *
-     * <p>为什么 wake 后设 OFFLINE 而不是 ONLINE：v2.4 §4.1 设计原则，三态由 last_seen_at/last_active_at
+     * <p>为什么 wake 后设 OFFLINE 而不是 ONLINE：§4.1 设计原则，三态由 last_seen_time/last_active_time
      * 计算，避免 Agent 还未发送心跳就误判为 ONLINE。下次 heartbeat 调用时 HeartbeatService
      * 会计算为 IDLE/ONLINE。</p>
      */
@@ -800,11 +800,11 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  V49 模型唯一性校验
+    //  模型唯一性校验
     // ══════════════════════════════════════════════════════════════
 
     /**
-     * 校验同一模型在同一角色下唯一（V49 新增）。
+     * 校验同一模型在同一角色下唯一。
      *
      * <p>规则：deepseek-v4-flash 和 kimi-k3 可同时注册为 Planner；
      * 但 deepseek-v4-flash 不能注册两个 Planner。</p>
@@ -837,7 +837,7 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     /**
      * 下发 Agent 工牌 consumerToken。
      *
-     * <p>T2 语义收口后，`agent.api_key` 保持字段名不变，但含义升级为 consumerToken。
+     * <p>语义收口后，`agent.api_key` 保持字段名不变，但含义升级为 consumerToken。
      * 真实 LLM 凭证不得再落在该字段。</p>
      */
     private String issueConsumerToken() {

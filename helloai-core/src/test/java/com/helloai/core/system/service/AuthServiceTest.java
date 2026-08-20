@@ -34,7 +34,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * AuthService 单测（管理员会话 Redis 化，2026-07-28 落地）。
+ * AuthService 单测（管理员会话 Redis 化， 落地）。
  *
  * <p>覆盖契约：
  * <ol>

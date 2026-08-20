@@ -29,7 +29,7 @@ import java.util.Map;
 /**
  * API_KEY_LLM 执行器占位实现。
  *
- * <p>T3 先把平台内执行抽象和路由入口立住，真实 ChatClient 链路放到 T4/T5 接入。</p>
+ * <p>先把平台内执行抽象和路由入口立住，真实 ChatClient 链路放到 /接入。</p>
  */
 @Slf4j
 @Component
@@ -182,7 +182,7 @@ public class ApiKeyAgentExecutor implements AgentExecutor {
                     provider,
                     vaultApiKey
             );
-            // 分离正文与思考过程：推理模型（如 Minimax M2.5）的 thinking 块不混入 output
+            // 分离正文与思考过程：推理模型（如 Minimax ）的 thinking 块不混入 output
             ChatResponseContentExtractor.ExtractedContent extracted = ChatResponseContentExtractor.extract(response);
             String content = extracted.text();
             String thinking = extracted.thinking().isBlank() ? null : extracted.thinking();

@@ -9,7 +9,7 @@ import java.util.List;
 /**
  * 凭证保险库服务。
  *
- * <p>T1 只提供最小可复用能力，供后续 AgentExecutor / ChatClient 链路继续接入。</p>
+ * <p>只提供最小可复用能力，供后续 AgentExecutor / ChatClient 链路继续接入。</p>
  */
 public interface CredentialVaultService extends IService<CredentialVault> {
 
@@ -51,7 +51,7 @@ public interface CredentialVaultService extends IService<CredentialVault> {
     /**
      * 以最小 upsert 方式保存 Agent 的 API Key 凭证。
      *
-     * <p>T1 先只支持单条启用态记录；后续多 Provider / 多版本轮换再继续扩展。</p>
+     * <p>先只支持单条启用态记录；后续多 Provider / 多版本轮换再继续扩展。</p>
      */
     CredentialVault saveAgentApiKeyCredential(Long agentId, String provider,
                                               String encryptedValue, String secretRef,
@@ -72,7 +72,7 @@ public interface CredentialVaultService extends IService<CredentialVault> {
     /**
      * 轮换 Agent 的 API Key 凭证：旧凭证 → EXPIRED，新凭证 → ACTIVE。
      *
-     * <p>AgentHub V1 T4 轮换语义：</p>
+     * <p>AgentHub 轮换语义：</p>
      * <ul>
      *   <li>旧 ACTIVE 凭证标为 {@code EXPIRED}（非 DISABLED），
      *       区分"人为停用"和"自动轮换"</li>

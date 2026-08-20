@@ -72,7 +72,7 @@ public interface PlannerAnalysisService {
         private String deliverable;
         private String acceptance;
         private String priority;
-        /** 依赖的同批草案序号（1-based，V27）；空/null=无依赖。 */
+        /** 依赖的同批草案序号（1-based）；空/null=无依赖。 */
         private List<Integer> dependsOn;
     }
 }

@@ -75,13 +75,13 @@ public interface McpToolService {
             private String title;
             private String priority;
             private String deadline;
-            /** A0-4（§6.63）：收件箱通知摘要（sub_task.rejected/approved 携带 review 评分与评语摘要）。 */
+            /** 收件箱通知摘要（sub_task.rejected/approved 携带 review 评分与评语摘要）。 */
             private String summary;
-            /** A0-4（§6.63）：未读/已读状态位（false=未读待 ack，true=已 ack；includeRead=true 时才可能为 true）。 */
+            /** 未读/已读状态位（false=未读待 ack，true=已 ack；includeRead=true 时才可能为 true）。 */
             private Boolean read;
-            /** A0-1（§6.60）：消息对应子任务已转移给其他 Agent（当前执行者非本 Agent）。 */
+            /** 消息对应子任务已转移给其他 Agent（当前执行者非本 Agent）。 */
             private Boolean reassigned;
-            /** A0-1（§6.60）：子任务当前实际执行者 Agent ID（配合 reassigned 使用）。 */
+            /** 子任务当前实际执行者 Agent ID（配合 reassigned 使用）。 */
             private Long currentAgentId;
         }
     }
@@ -108,13 +108,13 @@ public interface McpToolService {
         private boolean ok;
         private Long agentId;
         private String serverTime;
-        /** A0-6：当前是否持有 ACTIVE 值班租约（false = 未打卡或租约已过期）。 */
+        /** 当前是否持有 ACTIVE 值班租约（false = 未打卡或租约已过期）。 */
         private Boolean onDuty;
-        /** A0-6：当前 ACTIVE 租约 ID；未在岗时为 null。 */
+        /** 当前 ACTIVE 租约 ID；未在岗时为 null。 */
         private Long leaseId;
-        /** A0-6：当前 ACTIVE 租约过期时间（ISO8601）；未在岗时为 null。 */
+        /** 当前 ACTIVE 租约过期时间（ISO8601）；未在岗时为 null。 */
         private String leaseExpiresAt;
-        /** A0-6：当前 ACTIVE 租约剩余 TTL（秒）；未在岗为 0。 */
+        /** 当前 ACTIVE 租约剩余 TTL（秒）；未在岗为 0。 */
         private Long remainingTtlSeconds;
     }
 
@@ -163,13 +163,13 @@ public interface McpToolService {
         private Long agentId;
         private int closedCount;
         private String reason;
-        /** A0-6：签退后最近一条租约的当前状态（CLOSED=刚签退 / EXPIRED=已过期无需签退 / NONE=从未打卡）。 */
+        /** 签退后最近一条租约的当前状态（CLOSED=刚签退 / EXPIRED=已过期无需签退 / NONE=从未打卡）。 */
         private String currentStatus;
-        /** A0-6：最近一条租约 ID；从未打卡为 null。 */
+        /** 最近一条租约 ID；从未打卡为 null。 */
         private Long latestLeaseId;
-        /** A0-6：最近一条租约过期时间（ISO8601）；从未打卡为 null。 */
+        /** 最近一条租约过期时间（ISO8601）；从未打卡为 null。 */
         private String latestLeaseExpiresAt;
-        /** A0-6：最近一条租约关闭原因（仅 CLOSED/EXPIRED 时填写）。 */
+        /** 最近一条租约关闭原因（仅 CLOSED/EXPIRED 时填写）。 */
         private String latestLeaseClosedReason;
     }
 
@@ -183,7 +183,7 @@ public interface McpToolService {
         private String status;
         /** AgentOnlineStatus（DB 持久值，可能滞后）：ONLINE / IDLE / OFFLINE / SLEEPING */
         private String dbOnlineStatus;
-        /** AgentOnlineStatus（实时按 last_seen_at/last_active_at 推算） */
+        /** AgentOnlineStatus（实时按 last_seen_time/last_active_time 推算） */
         private String computedOnlineStatus;
         private String lastSeenAt;
         private String lastActiveAt;

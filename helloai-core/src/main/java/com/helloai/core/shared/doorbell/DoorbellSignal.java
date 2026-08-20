@@ -6,7 +6,7 @@ import lombok.Getter;
 import java.time.OffsetDateTime;
 
 /**
- * 门铃信号（AgentHub V3 门铃内核 PR-1）。
+ * 门铃信号（AgentHub 门铃内核 PR-1）。
  *
  * <p>门铃只送"有事了"的轻量唤醒信号，<b>不含任务正文</b>：Agent 收到后自行走
  * MCP {@code pullTasks} 获取内容。因此即便门铃信号丢失，也不丢信息——这与

@@ -174,7 +174,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         }
 
         SubTaskStatus oldStatus = subTask.getStatus();
-        // A0-1（§6.60）：变更前执行者快照——换人/回收时需告知旧执行者任务已转移
+        // 变更前执行者快照——换人/回收时需告知旧执行者任务已转移
         Long oldAgentId = subTask.getAssignedAgentId();
         SubTaskStateMachine.validate(oldStatus, newStatus);
 
@@ -198,9 +198,9 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
 
         agentOutboxService.createEvent(subTask, newStatus);
 
-        // v1.1: 投递收件箱通知
+        // 投递收件箱通知
         sendInboxNotification(subTask, newStatus, oldStatus);
-        // A0-1（§6.60）：执行者变更（换人/回收）时告知旧执行者，防止误以为任务仍在名下继续干活
+        // 执行者变更（换人/回收）时告知旧执行者，防止误以为任务仍在名下继续干活
         notifyAgentHandover(subTask, oldAgentId);
         publishAssignmentEvent(subTask, newStatus);
         if (subTask.getAssignedAgentId() != null
@@ -236,7 +236,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         SubTask subTask = getById(subTaskId);
         if (subTask == null) throw new BizException("子任务不存在: " + subTaskId);
 
-        // v1.1 幂等性: 已是 DONE 状态直接返回，避免前端/重试重复调用报 DONE→DONE 错误
+        // 幂等性: 已是 DONE 状态直接返回，避免前端/重试重复调用报 DONE→DONE 错误
         if (subTask.getStatus() == SubTaskStatus.DONE) {
             log.info("complete() 幂等跳过: subTaskId={} 已是 DONE", subTaskId);
             return;
@@ -246,7 +246,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         subTask.setStatus(SubTaskStatus.DONE);
         subTask.setCompleteTime(OffsetDateTime.now());
 
-        // v1.1: 隐式评分集成
+        // 隐式评分集成
         if (subTask.getAssignedAgentId() != null) {
             try {
                 List<ReviewRecord> reviews = reviewRecordMapper.selectList(
@@ -289,11 +289,11 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
 
         updateById(subTask);
         agentOutboxService.createEvent(subTask, SubTaskStatus.DONE);
-        // A0-4（§6.63）：审查通过补发收件箱通知（携带最新一轮 review 评分/评语），
+        // 审查通过补发收件箱通知（携带最新一轮 review 评分/评语），
         // 外部 Agent 轮询 pullTasks 即可感知交付结果反馈
         sendApprovedInboxNotification(subTask);
 
-        // V27 闭环收尾：事务提交后异步解锁下游依赖节点 + 尝试 Task 自动收尾
+        // 闭环收尾：事务提交后异步解锁下游依赖节点 + 尝试 Task 自动收尾
         // （AFTER_COMMIT 监听在 SubTaskCompletionListener，避免与分发服务形成循环依赖）
         applicationEventPublisher.publishEvent(new SubTaskCompletedEvent(subTaskId, subTask.getTaskId()));
         log.info("子任务审查通过: subTaskId={}", subTaskId);
@@ -312,7 +312,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     }
 
     /**
-     * A0-4（§6.63）：驳回统一补发收件箱通知（自动核验 rejectAndRework 与人工驳回 rework/reworkFresh 共用），
+     * 驳回统一补发收件箱通知（自动核验 rejectAndRework 与人工驳回 rework/reworkFresh 共用），
      * 摘要携带最近一轮 review 结果（评分/评语/问题），外部 Agent 轮询 pullTasks 即可感知返工原因。
      * 发送失败只 warn 不阻断（返工主链路优先）。
      */
@@ -333,7 +333,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     }
 
     /**
-     * 从 context.reviewHistory 最新一轮（V38 格式 {round,ts,reviewerAgentId,issues,comment,score,...}）
+     * 从 context.reviewHistory 最新一轮（格式 {round,ts,reviewerAgentId,issues,comment,score,...}）
      * 提取驳回摘要；无历史（如人工直接驳回）时回退默认文案。
      */
     @SuppressWarnings("unchecked")
@@ -365,7 +365,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     }
 
     /**
-     * A0-4（§6.63）：审查通过补发收件箱通知（携带最新一轮 review 评分/评语），
+     * 审查通过补发收件箱通知（携带最新一轮 review 评分/评语），
      * 外部 Agent 轮询 pullTasks 即可感知交付结果反馈。发送失败只 warn 不阻断。
      */
     private void sendApprovedInboxNotification(SubTask subTask) {
@@ -469,7 +469,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
                     }
                 }
                 case REVIEW -> {
-                    // v1.1 修复: EXECUTOR 提交后，通知所有 PLANNER/REVIEWER 来审查
+                    // 修复: EXECUTOR 提交后，通知所有 PLANNER/REVIEWER 来审查
                     try {
                         List<Agent> planners = agentService.listByRole(AgentRole.PLANNER);
                         for (Agent planner : planners) {
@@ -492,7 +492,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     }
 
     /**
-     * A0-1（§6.60）执行者变更撤销通知：旧执行者收不到"任务已转移"事件时，
+     * 执行者变更撤销通知：旧执行者收不到"任务已转移"事件时，
      * 会误以为任务仍在名下继续干活（trae 1925 冷启动白做）。
      *
      * <p>在换人（旧执行者 A → 新执行者 B）或回收（执行者被清空）时，向旧执行者
@@ -538,7 +538,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         SubTask subTask = getById(subTaskId);
         if (subTask == null) throw new BizException("子任务不存在: " + subTaskId);
         SubTaskStateMachine.validate(subTask.getStatus(), SubTaskStatus.REWORK);
-        // A0-1（§6.60）：变更前执行者快照（自动驳回一般保持原执行者，防御性兼容换人）
+        // 变更前执行者快照（自动驳回一般保持原执行者，防御性兼容换人）
         Long oldAgentId = subTask.getAssignedAgentId();
         subTask.setStatus(SubTaskStatus.REWORK);
         subTask.setReworkCount(subTask.getReworkCount() != null ? subTask.getReworkCount() + 1 : 1);
@@ -546,9 +546,9 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
             subTask.setAssignedAgentId(reworkAgentId);
         }
         updateById(subTask);
-        // A0-1（§6.60）：执行者变更（换人/回收）时告知旧执行者
+        // 执行者变更（换人/回收）时告知旧执行者
         notifyAgentHandover(subTask, oldAgentId);
-        // A0-4（§6.63）：驳回统一补发收件箱通知（自动核验 rejectAndRework 与人工 reworkById 共用本入口），
+        // 驳回统一补发收件箱通知（自动核验 rejectAndRework 与人工 reworkById 共用本入口），
         // 摘要携带最近一轮 review 结果（评分/评语/问题），外部 Agent 轮询 pullTasks 即可感知返工原因
         sendReworkInboxNotification(subTask);
         agentOutboxService.createEvent(subTask, SubTaskStatus.REWORK);
@@ -564,7 +564,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         SubTask subTask = getById(subTaskId);
         if (subTask == null) throw new BizException("子任务不存在: " + subTaskId);
         SubTaskStateMachine.validate(subTask.getStatus(), SubTaskStatus.REWORK);
-        // A0-1（§6.60）：变更前执行者快照——人工驳回改派时需告知旧执行者任务已转移
+        // 变更前执行者快照——人工驳回改派时需告知旧执行者任务已转移
         Long oldAgentId = subTask.getAssignedAgentId();
         subTask.setStatus(SubTaskStatus.REWORK);
         subTask.setReworkCount(0);
@@ -577,9 +577,9 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
             subTask.setContext(ctx);
         }
         updateById(subTask);
-        // A0-1（§6.60）：执行者变更（换人/回收）时告知旧执行者
+        // 执行者变更（换人/回收）时告知旧执行者
         notifyAgentHandover(subTask, oldAgentId);
-        // A0-4（§6.63）：人工驳回同样补发收件箱通知（携带 review 摘要，无历史时回退默认文案）
+        // 人工驳回同样补发收件箱通知（携带 review 摘要，无历史时回退默认文案）
         sendReworkInboxNotification(subTask);
         agentOutboxService.createEvent(subTask, SubTaskStatus.REWORK);
         // 注意：Map.of 不接受 null 值，reworkAgentId 可能为 null（不换派原执行者重做），必须用 HashMap
@@ -594,7 +594,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     }
 
     /**
-     * 打回失效（§6.104）：将该子任务全部 ACTIVE 附件批量置 INACTIVE，
+     * 打回失效：将该子任务全部 ACTIVE 附件批量置 INACTIVE，
      * 与 {@code AttachmentServiceImpl.register} 的同名去活互补。
      *
      * <p>通过 {@code ObjectProvider<AttachmentService>} 懒解析打破与 AttachmentServiceImpl
@@ -633,7 +633,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
             ctx.put("manualIntervention", mark);
             fresh.setContext(ctx);
             updateById(fresh);
-            // 可观测（2026-08-19）：人工介入标记落 timeline（OPS 泳道），时序图可见"等待人工处置"节点；
+            // 可观测：人工介入标记落 timeline（OPS 泳道），时序图可见"等待人工处置"节点；
             // 不能复用 Map.of——mark 可能含 null 值（extra 传入时）
             taskTimelineService.recordEvent(fresh.getTaskId(), subTaskId,
                     "sub_task_manual_intervention_required", AgentRole.SYSTEM, null,

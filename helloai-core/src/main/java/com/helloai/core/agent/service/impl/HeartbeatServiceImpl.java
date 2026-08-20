@@ -20,16 +20,16 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Agent 心跳服务（v2.4 阶段 4 升级）。
+ * Agent 心跳服务（升级）。
  *
  * <p>三件套心跳：
  * <ul>
  *   <li>last_seen_time（DB）— heartbeat/拉取/ack 即刷新，2 秒级</li>
  *   <li>last_active_time（DB）— start/submit/claim 即刷新，按需</li>
- *   <li>Redis TTL（缓存）— agent:heartbeat:{id} = last_seen_at，5 分钟过期</li>
+ *   <li>Redis TTL（缓存）— agent:heartbeat:{id} = last_seen_time，5 分钟过期</li>
  * </ul>
  *
- * <p>活跃即在线契约（v2.6 §4.1 心跳语义对齐，2026-07-20 落地）：
+ * <p>活跃即在线契约（心跳语义对齐落地）：
  * <ul>
  *   <li>{@link #seen(Long)}：连接存活证据——刷 Redis TTL + last_seen_time + 重算 online_status</li>
  *   <li>{@link #active(Long)}：业务活跃证据——复用 seen() 完整双写后再附加 last_active_time</li>
@@ -39,15 +39,15 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>三态即时写回（方案 B，避免 Reconcile 滞后）：
  * <ul>
- *   <li>ONLINE — last_seen_at 和 last_active_at 都在 5 分钟内</li>
- *   <li>IDLE — last_seen_at 5 分钟内，last_active_at 超过 5 分钟</li>
- *   <li>OFFLINE — last_seen_at 超过 5 分钟或空</li>
+ *   <li>ONLINE — last_seen_time 和 last_active_time 都在 5 分钟内</li>
+ *   <li>IDLE — last_seen_time 5 分钟内，last_active_time 超过 5 分钟</li>
+ *   <li>OFFLINE — last_seen_time 超过 5 分钟或空</li>
  *   <li>SLEEPING — 管理员手动设置，系统不会自动设</li>
  * </ul>
  * </p>
  *
- * <p>SLEEPING 防护：seen() 不覆盖 SLEEPING 状态，只更新 last_seen_at。
- * OFFLINE 恢复时清 offline_reason/offline_at。</p>
+ * <p>SLEEPING 防护：seen() 不覆盖 SLEEPING 状态，只更新 last_seen_time。
+ * OFFLINE 恢复时清 offline_reason/offline_time。</p>
  */
 @Slf4j
 @Service
@@ -65,13 +65,13 @@ public class HeartbeatServiceImpl implements HeartbeatService {
     private final ConcurrentMap<Long, Long> lastActiveWriteAt = new ConcurrentHashMap<>();
 
     /**
-     * 心跳刷新（v2.4 升级版）。
+     * 心跳刷新（升级版）。
      *
      * <ol>
      *   <li>写 Redis TTL（即使后续 DB 失败，TTL 仍能告诉 Reconcile "刚有人见过"）</li>
-     *   <li>更新 DB last_seen_at</li>
+     *   <li>更新 DB last_seen_time</li>
      *   <li>若是 SLEEPING，只刷 seen_at，不覆盖 online_status</li>
-     *   <li>否则即时写回三态（ONLINE/IDLE/OFFLINE），从 OFFLINE 恢复时清 offline_reason/offline_at</li>
+     *   <li>否则即时写回三态（ONLINE/IDLE/OFFLINE），从 OFFLINE 恢复时清 offline_reason/offline_time</li>
      * </ol>
      */
     @Transactional(rollbackFor = Exception.class)
@@ -105,7 +105,7 @@ public class HeartbeatServiceImpl implements HeartbeatService {
 
         // 4) 三态即时写回（方案 B）
         AgentOnlineStatus computed = checkOnlineStatus(agent);
-        // 从 OFFLINE 恢复时清 offline_reason/offline_at
+        // 从 OFFLINE 恢复时清 offline_reason/offline_time
         if (agent.getOnlineStatus() == AgentOnlineStatus.OFFLINE
                 && computed != AgentOnlineStatus.OFFLINE) {
             agent.setOfflineReason(null);
@@ -120,7 +120,7 @@ public class HeartbeatServiceImpl implements HeartbeatService {
     /**
      * 活跃刷新（任务执行时调用）。
      *
-     * <p><b>v2.6 §4.1 心跳语义对齐（2026-07-20）</b>：本方法复用 {@link #seen(Long)}
+     * <p><b>§4.1 心跳语义对齐</b>：本方法复用 {@link #seen(Long)}
      * 的完整双写逻辑（Redis TTL + DB last_seen_time + 三态重算），随后再单独刷
      * {@code last_active_time}。这样 MCP 工具调用（pullTasks / claim / submit）
      * 期间 Agent 自动保持在线，离线判定（仅看 last_seen_time）不会把干活的 Agent 误判死。</p>
@@ -170,9 +170,9 @@ public class HeartbeatServiceImpl implements HeartbeatService {
      *
      * <p>判定规则：
      * <ul>
-     *   <li>last_seen_at 空 或 超过 5 分钟 → OFFLINE</li>
-     *   <li>last_seen_at 5 分钟内 且 last_active_at 超过 5 分钟 → IDLE</li>
-     *   <li>last_seen_at 5 分钟内 且 last_active_at 5 分钟内 → ONLINE</li>
+     *   <li>last_seen_time 空 或 超过 5 分钟 → OFFLINE</li>
+     *   <li>last_seen_time 5 分钟内 且 last_active_time 超过 5 分钟 → IDLE</li>
+     *   <li>last_seen_time 5 分钟内 且 last_active_time 5 分钟内 → ONLINE</li>
      * </ul>
      * </p>
      */

@@ -10,7 +10,7 @@ import java.util.Objects;
 /**
  * 平台内 Agent 执行接口。
  *
- * <p>T3 先立统一抽象，让调度核心只依赖接口，不感知具体底层是 CLI、LLM 直调还是未来的浏览器桥接。</p>
+ * <p>先立统一抽象，让调度核心只依赖接口，不感知具体底层是 CLI、LLM 直调还是未来的浏览器桥接。</p>
  */
 public interface AgentExecutor {
 

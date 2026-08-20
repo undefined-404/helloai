@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
- * Agent 门铃通道 Controller（AgentHub V3 门铃内核 PR-1）。
+ * Agent 门铃通道 Controller（AgentHub 门铃内核 PR-1）。
  *
  * <p>为外部 Agent 提供一条"服务端 → Agent"的单向 SSE 长连接（门铃）：Agent 建连后，
  * 平台侧一旦有新收件箱消息即可秒级响铃唤醒，Agent 收到信号自行走 MCP {@code pullTasks}

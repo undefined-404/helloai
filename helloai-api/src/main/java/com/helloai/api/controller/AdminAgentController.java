@@ -88,13 +88,13 @@ public class AdminAgentController {
             vo.setName(a.getName());
             vo.setRole(a.getRole());
             vo.setAccessType(a.getAccessType());
-            // V52: modelType 供编辑弹窗技能区按模型能力渲染
+            // modelType 供编辑弹窗技能区按模型能力渲染
             vo.setModelType(a.getModelType());
             vo.setApiKey(agentApiKeyCipher.decrypt(a.getApiKey()));
             vo.setDescription(a.getRemark());
             vo.setStatus(a.getStatus());
             vo.setTotalScore(a.getScore());
-            // V47/A2: 能力声明列表（任务 required_skills 匹配用，前端编辑弹窗回显）
+            // 能力声明列表（任务 required_skills 匹配用，前端编辑弹窗回显）
             vo.setSkills(a.getSkills());
 
             // enrichment
@@ -106,7 +106,7 @@ public class AdminAgentController {
             vo.setReviewCount(wl.getOrDefault("reviewCount", 0));
             vo.setRank(agentService.scoreRank(a.getId()));
             vo.setCreatedAt(a.getCreateTime());
-            // v2.5.x #9 enrichment 字段映射补齐：last_seen_at/last_active_at → lastRequestAt/lastActivityAt
+            // enrichment 字段映射：last_seen_time/last_active_time → lastRequestAt/lastActivityAt
             vo.setLastRequestAt(a.getLastSeenTime());
             vo.setLastActivityAt(a.getLastActiveTime());
 
@@ -133,7 +133,7 @@ public class AdminAgentController {
         vo.setTotalScore(agent.getScore());
         vo.setApiKey(agentApiKeyCipher.decrypt(agent.getApiKey()));
         vo.setModelType(agent.getModelType());
-        // V47: 详情回显能力声明列表（编辑弹窗整体替换用；此前遗漏导致 getById skills 恒为空）
+        // 详情回显能力声明列表（编辑弹窗整体替换用）
         vo.setSkills(agent.getSkills());
 
         Map<String, Integer> wl = agentService.workloadStats(id);
@@ -144,7 +144,7 @@ public class AdminAgentController {
         vo.setReviewCount(wl.getOrDefault("reviewCount", 0));
         vo.setRank(agentService.scoreRank(id));
         vo.setCreatedAt(agent.getCreateTime());
-        // v2.5.x #9 enrichment 字段映射补齐：last_seen_at/last_active_at → lastRequestAt/lastActivityAt
+        // enrichment 字段映射：last_seen_time/last_active_time → lastRequestAt/lastActivityAt
         vo.setLastRequestAt(agent.getLastSeenTime());
         vo.setLastActivityAt(agent.getLastActiveTime());
 
@@ -202,14 +202,14 @@ public class AdminAgentController {
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  阶段 4.3 SLEEPING 状态管理（v2.4 §4.3）
+    //  SLEEPING 状态管理
     //  - sleep/wake 只切 online_status，不动 AgentStatus（管理态/计算态分离）
     //  - 系统不自动 SLEEPING（HeartbeatService + AgentHealthCheckTask + AgentMapper 已防护）
     // ══════════════════════════════════════════════════════════════
 
     /**
-     * 管理员手动暂停 Agent（v2.4 §4.3）。
-     * <p>设 online_status=SLEEPING，不动 AgentStatus/oldline_reason/offline_at。
+     * 管理员手动暂停 Agent。
+     * <p>设 online_status=SLEEPING，不动 AgentStatus/oldline_reason/offline_time。
      * <br>仅 X-Admin-Token 鉴权的管理员可调用（AuthInterceptor 已拦截）。
      */
     @PostMapping("/sleepById/{id}")
@@ -223,7 +223,7 @@ public class AdminAgentController {
     }
 
     /**
-     * 管理员手动恢复 Agent（v2.4 §4.3）。
+     * 管理员手动恢复 Agent。
      * <p>设 online_status=OFFLINE（不强行 ONLINE，让系统心跳自然计算 IDLE/ONLINE）。
      * <br>仅 X-Admin-Token 鉴权的管理员可调用。
      */
@@ -238,7 +238,7 @@ public class AdminAgentController {
     }
 
     /**
-     * 批量暂停 Agent（v2.4 §4.3 批次 3）。
+     * 批量暂停 Agent。
      *
      * <p>支持部分成功/失败：返回结构见 {@code AgentService.sleepAgentBatch}。
      * <br>仅 X-Admin-Token 鉴权的管理员可调用。
@@ -256,7 +256,7 @@ public class AdminAgentController {
     }
 
     /**
-     * 查询 SLEEPING 状态的 Agent 列表（v2.4 §4.3 批次 3）。
+     * 查询 SLEEPING 状态的 Agent 列表。
      *
      * @param role 可选；为空时返回所有角色的 SLEEPING Agent
      * <br>仅 X-Admin-Token 鉴权的管理员可调用。

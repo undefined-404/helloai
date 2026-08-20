@@ -43,7 +43,7 @@ public interface LlmProviderModelQueryService {
     boolean isModelAvailable(String providerCode, String modelName);
 
     /**
-     * 按 modelType（形如 providerCode:modelName）查询模型能力配置（V52 新增）。
+     * 按 modelType（形如 providerCode:modelName）查询模型能力配置。
      *
      * <p>返回实体携带 {@code capabilitySkills} / {@code availableOptionalSkills} 两列，
      * 供 Agent 技能推导与 skill-options 端点使用；模型不存在或已删除时返回 empty。</p>

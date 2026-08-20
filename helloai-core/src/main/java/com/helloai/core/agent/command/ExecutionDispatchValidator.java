@@ -11,7 +11,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
 /**
- * Phase 2E N6 引入 / Phase 2H ②b 扩展 / T5 改造：执行命令派发链路启动期校验器。
+ * Phase 2E N6 引入 / Phase 2H ②b 扩展 / 改造：执行命令派发链路启动期校验器。
  *
  * <p>职责：</p>
  * <ol>
@@ -23,7 +23,7 @@ import org.springframework.stereotype.Component;
  *                 或 Publisher Bean 不可用，则抛 {@link IllegalStateException}；</li>
  *             <li>②b：若 {@code dispatch-mode ∈ {MQ, BOTH}} 但 {@code outbox.relay.enabled=false}，
  *                 同样抛 {@link IllegalStateException}；</li>
- *             <li>T5：若 {@code consumer-mode ∈ {POLLER, BOTH}} 但 {@code mq.execution-command.consumer-enabled=false}，
+ *             <li>若 {@code consumer-mode ∈ {POLLER, BOTH}} 但 {@code mq.execution-command.consumer-enabled=false}，
  *                 直接抛 {@link IllegalStateException}，杜绝"POLLER/BOTH 主消费路径失效但 Poller 仅兜底，
  *                 命令永远停在 PENDING"的部署形态。</li>
  *         </ul>
@@ -104,7 +104,7 @@ public class ExecutionDispatchValidator {
                     dispatchMode, relayEnabled);
         }
 
-        // T5：consumer-mode ∈ {POLLER, BOTH} 时强制要求 consumer-enabled=true。
+        // consumer-mode ∈ {POLLER, BOTH} 时强制要求 consumer-enabled=true。
         // POLLER/BOTH 模式下 MQ Consumer（@RabbitListener）作为主消费路径；
         // 若 consumer-enabled=false 则 MqExecutionCommandConsumer Bean 不存在，
         // 没有主消费路径仅有 Poller 兜底扫描孤儿 PENDING，命令会永远停在 PENDING。

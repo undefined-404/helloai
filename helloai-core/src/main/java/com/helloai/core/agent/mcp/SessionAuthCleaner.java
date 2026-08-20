@@ -7,7 +7,7 @@ import org.springframework.stereotype.Component;
 import java.util.concurrent.TimeUnit;
 
 /**
- * MCP SESSION_AUTH 定时清理器（v2.6 Q3 任务）。
+ * MCP SESSION_AUTH 定时清理器（Q3 任务）。
  *
  * <p><b>触发条件</b>：每 60 秒扫描一次 SESSION_AUTH，
  * 清理 {@code lastAccessAtMs} 早于当前时间 - 30 分钟的过期 entry。</p>
@@ -15,7 +15,7 @@ import java.util.concurrent.TimeUnit;
  * <p><b>为什么不用 SSE 关闭事件？</b>
  * spring-ai 1.1.0 的 SSE 关闭事件无法保证可靠触发（实测某些 servlet 容器下不回调），
  * 因此采用 "TTL + 定期扫描" 主方案，零外部依赖，零行为变更风险。
- * 详细参考项目路线图 v2.6 §F.7.3。</p>
+ * 详细参考项目路线图 §F.7.3。</p>
  *
  * <p><b>线程安全</b>：复用 {@link McpAuthContext#evictExpired(long)} 的乐观删除语义
  * （{@code ConcurrentMap.remove(key, expectedValue)} 防止误删正在被并发刷新的 entry）。</p>

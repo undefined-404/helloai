@@ -12,19 +12,19 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * helloai MCP Server 业务工具集（v2.4 §3.1 / §9 路线 C 标准化）。
+ * helloai MCP Server 业务工具集。
  * <p>
  * 暴露给外部 MCP Client（如 Qoder / Trae / MCP Inspector）的 9 个工具：
  * <ol>
- *   <li>{@code pullTasks} —— 拉取 Agent 待处理收件箱（v2.4 §9.1；A0-4 增加 includeRead/read/summary）</li>
- *   <li>{@code ack} —— 确认收件箱消息已处理（v2.4 §9.1）</li>
- *   <li>{@code claimSubTask} —— 原子认领子任务（v2.4 §9.1，并发互斥）</li>
- *   <li>{@code heartbeat} —— 心跳上报（v2.4 §9.1，refresh last_seen_at）</li>
- *   <li>{@code uploadArtifact} —— 上传产物附件元数据（v2.4 §9.1）</li>
- *   <li>{@code submitResult} —— 上交子任务执行结果（v2.5 补齐，进入统一回写入口）</li>
+ *   <li>{@code pullTasks} —— 拉取 Agent 待处理收件箱（includeRead/read/summary）</li>
+ *   <li>{@code ack} —— 确认收件箱消息已处理</li>
+ *   <li>{@code claimSubTask} —— 原子认领子任务（并发互斥）</li>
+ *   <li>{@code heartbeat} —— 心跳上报（refresh last_seen_time）</li>
+ *   <li>{@code uploadArtifact} —— 上传产物附件元数据</li>
+ *   <li>{@code submitResult} —— 上交子任务执行结果（进入统一回写入口）</li>
  *   <li>{@code reportBlocked} —— 上报任务阻塞（自动通知所有 PLANNER 排障）</li>
- *   <li>{@code getAgentStatus} —— 查询 Agent 自身状态（v2.4 §9.1 协议列，helloai 此前缺失，本类新增）</li>
- *   <li>{@code getDepsSummary} —— 主动拉取前置产出摘要（A0-4 新增，数据口径与执行链 buildDependencySection 同源）</li>
+ *   <li>{@code getAgentStatus} —— 查询 Agent 自身状态（协议列要求）</li>
+ *   <li>{@code getDepsSummary} —— 主动拉取前置产出摘要（数据口径与执行链 buildDependencySection 同源）</li>
  * </ol>
  * <p>
  * 设计原则：业务逻辑 <b>完全委托</b>给现有 {@link McpToolService}，本类只承担
@@ -34,9 +34,9 @@ import java.util.List;
  *   <li>缺失工具（{@code getAgentStatus}）的补齐</li>
  * </ol>
  * <p>
- * 安全说明（待 M4 接入 auth context 后替换）：
+ * 安全说明（待 接入 auth context 后替换）：
  * 当前 {@code agentId} 字段由客户端通过 {@code @ToolParam} 传入。
- * M4 阶段会通过 spring-ai {@code McpSyncServerExchange} 从 Authorization 头提取真实 agentId，
+ * 阶段会通过 spring-ai {@code McpSyncServerExchange} 从 Authorization 头提取真实 agentId，
  * 覆盖客户端传入值，确保不可伪造身份。
  * <p>
  * 兼容说明：spring-ai 1.0 GA 用 {@code @Tool}（{@code org.springframework.ai.tool.annotation.Tool}）。
@@ -53,7 +53,7 @@ public class McpMcpServer {
 
     /**
      * 从 _sessionId 参数直接拿 sessionId → 查 SESSION_AUTH → 返鉴权主体 ID。
-     * v2.5 M4 路径 1：客户端显式透传 sessionId（spring-ai 1.1.0 不支持隐式注入）。
+     * 客户端显式透传 sessionId（spring-ai 1.1.0 不支持隐式注入）。
      */
     private Long requireAuthId(String sessionId, String _sessionId) {
         String sid = (_sessionId != null && !_sessionId.isBlank()) ? _sessionId : sessionId;
@@ -72,19 +72,19 @@ public class McpMcpServer {
             - max 参数上限 200（含 agent_mcp_server.param_constraints.max 二次约束），超出将截断
             - 返回空 messages 数组表示当前无待处理任务，不是错误
             - 不标记消息已读；客户端 pull 后崩溃不会丢失消息，下次 pull 仍能看到
-            - A0-4：每条消息带 read 状态位（false=未读待 ack，true=已 ack）；includeRead=true 时在未读之外
+            - 每条消息带 read 状态位（false=未读待 ack，true=已 ack）；includeRead=true 时在未读之外
               附带最近已读消息（read_time 倒序补齐配额），供轮询时区分新消息与历史，false 保持仅未读
-            - A0-4：sub_task.rejected / sub_task.approved 消息的 summary 字段携带最近 review 评分与评语摘要
+            - sub_task.rejected / sub_task.approved 消息的 summary 字段携带最近 review 评分与评语摘要
             【相关工具】ack、claimSubTask、heartbeat
             """)
     public McpToolService.PullTasksResult pullTasks(
-            @ToolParam(description = "Agent ID（v2.4 §9.1 协议字段；M4 鉴权接入后此值会被服务端覆盖为从 Authorization 解析的真实 agentId）", required = true) Long agentId,
+            @ToolParam(description = "Agent ID（协议字段鉴权接入后此值会被服务端覆盖为从 Authorization 解析的真实 agentId）", required = true) Long agentId,
             @ToolParam(description = "Agent 角色（如 EXECUTOR / PLANNER / REVIEWER）。默认 EXECUTOR", required = false) String role,
             @ToolParam(description = "最多返回消息数。建议 20，最大 200", required = false) Integer max,
-            @ToolParam(description = "A0-4：是否附带最近已读消息（未读优先，默认 false）", required = false) Boolean includeRead,
+            @ToolParam(description = "是否附带最近已读消息（未读优先，默认 false）", required = false) Boolean includeRead,
             @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
             @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
-        // M4 鉴权：强制用 token 解析的 agentId 覆盖客户端传值，防止越权
+        // 鉴权：强制用 token 解析的 agentId 覆盖客户端传值，防止越权
         Long authAgentId = requireAuthId(sessionId, _sessionId);
         if (agentId == null || !authAgentId.equals(agentId)) {
             log.warn("MCP pullTasks: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
@@ -109,11 +109,11 @@ public class McpMcpServer {
             【相关工具】pullTasks
             """)
     public McpToolService.AckResult ack(
-            @ToolParam(description = "Agent ID（v2.4 §9.1 协议字段；M4 鉴权后会被服务端覆盖）", required = true) Long agentId,
+            @ToolParam(description = "Agent ID（协议字段鉴权后会被服务端覆盖）", required = true) Long agentId,
             @ToolParam(description = "消息 ID，格式 'inbox-{id}'，来自 pullTasks 响应", required = true) String messageId,
             @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
             @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
-        // M4 鉴权：强制覆盖
+        // 鉴权：强制覆盖
         Long authAgentId = requireAuthId(sessionId, _sessionId);
         if (agentId == null || !authAgentId.equals(agentId)) {
             log.warn("MCP ack: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
@@ -137,11 +137,11 @@ public class McpMcpServer {
             【相关工具】pullTasks
             """)
     public McpToolService.ClaimSubTaskResult claimSubTask(
-            @ToolParam(description = "Agent ID（v2.4 §9.1 协议字段；M4 鉴权后会被服务端覆盖）", required = true) Long agentId,
+            @ToolParam(description = "Agent ID（协议字段鉴权后会被服务端覆盖）", required = true) Long agentId,
             @ToolParam(description = "SubTask ID（要认领的子任务）", required = true) Long subTaskId,
             @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
             @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
-        // M4 鉴权：强制覆盖
+        // 鉴权：强制覆盖
         Long authAgentId = requireAuthId(sessionId, _sessionId);
         if (agentId == null || !authAgentId.equals(agentId)) {
             log.warn("MCP claimSubTask: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
@@ -157,19 +157,19 @@ public class McpMcpServer {
     @Tool(name = "heartbeat", description = """
             【何时使用】Agent 上报心跳，维持在线状态。
             【调用频率】建议每 30 秒一次，不要超过 60 秒（5 分钟无心跳会被判定 OFFLINE）。
-            【效果】刷新 last_seen_at + Redis TTL（agent:heartbeat:{id} 续约 5 分钟）。
+            【效果】刷新 last_seen_time + Redis TTL（agent:heartbeat:{id} 续约 5 分钟）。
             【Gotchas】
-            - SLEEPING Agent 也会响应心跳（仅刷新 last_seen_at，不覆盖 online_status=SLEEPING）
-            - OFFLINE Agent 心跳后会被即时计算为 IDLE 或 ONLINE（取决于 last_active_at），并清 offline_reason / offline_at
-            - 不影响 last_active_at（执行任务时该字段才更新）
+            - SLEEPING Agent 也会响应心跳（仅刷新 last_seen_time，不覆盖 online_status=SLEEPING）
+            - OFFLINE Agent 心跳后会被即时计算为 IDLE 或 ONLINE（取决于 last_active_time），并清 offline_reason / offline_time
+            - 不影响 last_active_time（执行任务时该字段才更新）
             - 幂等，频繁调用无副作用
             【相关工具】getAgentStatus
             """)
     public McpToolService.HeartbeatResult heartbeat(
-            @ToolParam(description = "Agent ID（v2.4 §9.1 协议字段；M4 鉴权后会被服务端覆盖）", required = true) Long agentId,
+            @ToolParam(description = "Agent ID（协议字段鉴权后会被服务端覆盖）", required = true) Long agentId,
             @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
             @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
-        // M4 鉴权：强制覆盖
+        // 鉴权：强制覆盖
         Long authAgentId = requireAuthId(sessionId, _sessionId);
         if (agentId == null || !authAgentId.equals(agentId)) {
             log.warn("MCP heartbeat: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
@@ -188,15 +188,15 @@ public class McpMcpServer {
             【Gotchas】
             - 文件内容场景：先走 POST /api/artifacts/upload（multipart/form-data + Authorization: Bearer <API_KEY>，参数 file + subTaskId + 可选 mimeType）上传文件内容，平台转存 MinIO 并注册附件一步到位，返回 {attachmentId, storageUrl}；服务器版 MinIO 仅绑定内网（公网不可达），不要直连 MinIO PUT 文件
             - 本工具仅适用于「对象已在别处可访问」的登记场景：把 storageUrl 指向已可访问对象，只注册 DB 元数据记录（attachment 表），不传输文件内容
-            - v2.7 起平台可直读 minio:// 附件（下载、执行证据核验均可直读）；storageUrl 建议按 {自身注册名}/{yyyy}/{MM}/{taskId}/{subTaskId}/{文件名} 组织
+            - 平台可直读 minio:// 附件（下载、执行证据核验均可直读）；storageUrl 建议按 {自身注册名}/{yyyy}/{MM}/{taskId}/{subTaskId}/{文件名} 组织
             - fileName 必填且非空；storageUrl 必填；mimeType / fileSize 选填
             - 只有自身分配的子任务（assigned_agent=agentId）才能成功上传
             - 参数约束（如 fileSize max）由 agent_mcp_server.param_constraints 强制
-            【版本语义（2026-08-19，§6.104）】同名 fileName 重复上传时，平台自动把历史 ACTIVE 版本置为 INACTIVE，最新版成为唯一有效版；被打回（REJECTED，自动核验驳回或人工驳回）后该子任务全部 ACTIVE 附件自动失效，返工时必须重新 uploadArtifact 上传最新版附件（旧版即使再次同名上传也不会复活，须用新版内容）。历史版本平台保留可在附件管理页回查。
+            【版本语义】同名 fileName 重复上传时，平台自动把历史 ACTIVE 版本置为 INACTIVE，最新版成为唯一有效版；被打回（REJECTED，自动核验驳回或人工驳回）后该子任务全部 ACTIVE 附件自动失效，返工时必须重新 uploadArtifact 上传最新版附件（旧版即使再次同名上传也不会复活，须用新版内容）。历史版本平台保留可在附件管理页回查。
             【相关工具】pullTasks、claimSubTask
             """)
     public McpToolService.UploadArtifactResult uploadArtifact(
-            @ToolParam(description = "Agent ID（v2.4 §9.1 协议字段；M4 鉴权后会被服务端覆盖）", required = true) Long agentId,
+            @ToolParam(description = "Agent ID（协议字段鉴权后会被服务端覆盖）", required = true) Long agentId,
             @ToolParam(description = "子任务 ID（必填）", required = true) Long subTaskId,
             @ToolParam(description = "文件名（含扩展名）", required = true) String fileName,
             @ToolParam(description = "MIME 类型（如 application/json、image/png）", required = false) String mimeType,
@@ -204,7 +204,7 @@ public class McpMcpServer {
             @ToolParam(description = "已有可访问对象的存储地址（仅登记场景；文件内容场景请走 POST /api/artifacts/upload），必填", required = true) String storageUrl,
             @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
             @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
-        // M4 鉴权：强制覆盖
+        // 鉴权：强制覆盖
         Long authAgentId = requireAuthId(sessionId, _sessionId);
         if (agentId == null || !authAgentId.equals(agentId)) {
             log.warn("MCP uploadArtifact: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
@@ -227,7 +227,7 @@ public class McpMcpServer {
             【相关工具】claimSubTask、uploadArtifact
             """)
     public McpToolService.SubmitResultResult submitResult(
-            @ToolParam(description = "Agent ID（v2.4 §9.1 协议字段；M4 鉴权后会被服务端覆盖）", required = true) Long agentId,
+            @ToolParam(description = "Agent ID（协议字段鉴权后会被服务端覆盖）", required = true) Long agentId,
             @ToolParam(description = "子任务 ID", required = true) Long subTaskId,
             @ToolParam(description = "结果幂等键（推荐必填，同一子任务重复提交需保持一致）", required = false) String resultId,
             @ToolParam(description = "是否成功（true=成功，false=失败）", required = true) Boolean success,
@@ -258,12 +258,12 @@ public class McpMcpServer {
             【相关工具】claimSubTask
             """)
     public McpToolService.ReportBlockedResult reportBlocked(
-            @ToolParam(description = "Agent ID（v2.4 §9.1 协议字段；M4 鉴权后会被服务端覆盖）", required = true) Long agentId,
+            @ToolParam(description = "Agent ID（协议字段鉴权后会被服务端覆盖）", required = true) Long agentId,
             @ToolParam(description = "子任务 ID", required = true) Long subTaskId,
             @ToolParam(description = "阻塞原因（必填，建议 50 字以内）", required = true) String reason,
             @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
             @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
-        // M4 鉴权：强制覆盖
+        // 鉴权：强制覆盖
         Long authAgentId = requireAuthId(sessionId, _sessionId);
         if (agentId == null || !authAgentId.equals(agentId)) {
             log.warn("MCP reportBlocked: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
@@ -273,7 +273,7 @@ public class McpMcpServer {
     }
 
     // ================================================================
-    // 8. getAgentStatus（v2.4 §9.1 协议列要求，helloai 此前缺失，本类新增）
+    // 8. getAgentStatus（协议列要求）
     // ================================================================
 
     @Tool(name = "getAgentStatus", description = """
@@ -284,26 +284,26 @@ public class McpMcpServer {
             - 返回 3 套字段：
               * 管理态 status（ACTIVE/DISABLED，鉴权只看这个）
               * DB 持久 onlineStatus（ONLINE/IDLE/OFFLINE/SLEEPING，计算态）
-              * computedOnlineStatus（实时按 last_seen_at/last_active_at 推算）
+              * computedOnlineStatus（实时按 last_seen_time/last_active_time 推算）
             - DISABLED Agent 也会返回结果（仅看 status 字段判断可用性）
             - 客户端拿到的字段会反映当前心跳是否在线
             【相关工具】heartbeat
             """)
     public McpToolService.GetAgentStatusResult getAgentStatus(
-            @ToolParam(description = "Agent ID（v2.4 §9.1 协议字段；M4 鉴权后会被服务端覆盖）", required = true) Long agentId,
+            @ToolParam(description = "Agent ID（协议字段鉴权后会被服务端覆盖）", required = true) Long agentId,
             @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
             @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
-        // M4 鉴权：强制覆盖（与客户端传值无关，永远查 token 解析的 agent）
+        // 鉴权：强制覆盖（与客户端传值无关，永远查 token 解析的 agent）
         Long authAgentId = requireAuthId(sessionId, _sessionId);
         if (agentId == null || !authAgentId.equals(agentId)) {
             log.warn("MCP getAgentStatus: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
         }
-        // A0-2（§6.61）：业务逻辑下沉到 McpToolService，REST 别名通道与 MCP 通道共用
+        // 业务逻辑下沉到 McpToolService，REST 别名通道与 MCP 通道共用
         return mcpToolService.getAgentStatus(authAgentId);
     }
 
     // ================================================================
-    // 8bis. getDepsSummary（A0-4 §6.63：外部 Agent 主动获取前置产出摘要）
+    // 8bis. getDepsSummary（外部 Agent 主动获取前置产出摘要）
     // ================================================================
 
     @Tool(name = "getDepsSummary", description = """
@@ -318,11 +318,11 @@ public class McpMcpServer {
             【相关工具】pullTasks、claimSubTask
             """)
     public McpToolService.GetDepsSummaryResult getDepsSummary(
-            @ToolParam(description = "Agent ID（v2.4 §9.1 协议字段；M4 鉴权后会被服务端覆盖）", required = true) Long agentId,
+            @ToolParam(description = "Agent ID（协议字段鉴权后会被服务端覆盖）", required = true) Long agentId,
             @ToolParam(description = "子任务 ID（查询其直接前置产出）", required = true) Long subTaskId,
             @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
             @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
-        // M4 鉴权：强制覆盖（与客户端传值无关，永远查 token 解析的 agent）
+        // 鉴权：强制覆盖（与客户端传值无关，永远查 token 解析的 agent）
         Long authAgentId = requireAuthId(sessionId, _sessionId);
         if (agentId == null || !authAgentId.equals(agentId)) {
             log.warn("MCP getDepsSummary: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
@@ -331,7 +331,7 @@ public class McpMcpServer {
     }
 
     // ================================================================
-    // 9. checkIn（AgentHub V1 P0-A）
+    // 9. checkIn（AgentHub P0-A）
     // ================================================================
 
     @Tool(name = "checkIn", description = """
@@ -343,14 +343,14 @@ public class McpMcpServer {
             - AgentSelector 会将“当前是否在岗（已打卡）”作为软优先级最高一档（平手时已打卡 Agent 优先）。
             - ttlMinutes 建议与 Agent 自身 renew 周期匹配，默认 30 分钟；到期后会被 DutyLeaseExpirationTask
               自动翻为 EXPIRED，不会阀到商业逻辑。
-            - A0-8：除 checkIn/checkOut 外，任一工具调用（含 heartbeat）都会按原 TTL 自动续约——
+            - 除 checkIn/checkOut 外，任一工具调用（含 heartbeat）都会按原 TTL 自动续约——
               长任务执行期间正常调用工具即可保活，无需周期性重做 checkIn。
             - P2 技能上报：可顺带传 skills（逗号分隔的已加载技能标签，如 "shell,eng-code-review"），
               平台与既有 skills 取并集（只增不减），任务 required_skills 匹配立即生效。
             【相关工具】checkOut、heartbeat
             """)
     public McpToolService.CheckInResult checkIn(
-            @ToolParam(description = "Agent ID（v2.4 §9.1 协议字段；M4 鉴权后会被服务端覆盖）", required = true) Long agentId,
+            @ToolParam(description = "Agent ID（协议字段鉴权后会被服务端覆盖）", required = true) Long agentId,
             @ToolParam(description = "工作模式（如 AUTO），可为空", required = false) String workMode,
             @ToolParam(description = "最大并发子任务数，默认 1", required = false) Integer maxConcurrent,
             @ToolParam(description = "租约有效期（分钟），默认 30", required = false) Integer ttlMinutes,
@@ -380,7 +380,7 @@ public class McpMcpServer {
     }
 
     // ================================================================
-    // 10. checkOut（AgentHub V1 P0-A）
+    // 10. checkOut（AgentHub P0-A）
     // ================================================================
 
     @Tool(name = "checkOut", description = """
@@ -394,7 +394,7 @@ public class McpMcpServer {
             【相关工具】checkIn
             """)
     public McpToolService.CheckOutResult checkOut(
-            @ToolParam(description = "Agent ID（v2.4 §9.1 协议字段；M4 鉴权后会被服务端覆盖）", required = true) Long agentId,
+            @ToolParam(description = "Agent ID（协议字段鉴权后会被服务端覆盖）", required = true) Long agentId,
             @ToolParam(description = "关闭原因（推荐字段名 closeReason，如 shutdown / session_end / manual_close），可缺省", required = false) String closeReason,
             @ToolParam(description = "兼容参数：旧字段名 reason，等同 closeReason", required = false) String reason,
             @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,

@@ -19,7 +19,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link DoorbellService} 单元测试（AgentHub V3 门铃内核 PR-1）。
+ * {@link DoorbellService} 单元测试（AgentHub 门铃内核 PR-1）。
  *
  * <p>覆盖：建连登记 + 握手、未启用拒绝、响铃尽力而为（未连返回 false、
  * 已连返回 true）、主动断连清理。使用真实 {@link DoorbellRegistry}
@@ -138,7 +138,7 @@ class DoorbellServiceTest {
     }
 
     @Test
-    @DisplayName("双心跳开启时建连顺带刷一次 last_seen_at")
+    @DisplayName("双心跳开启时建连顺带刷一次 last_seen_time")
     void shouldRefreshHeartbeatOnConnectWhenEnabled() {
         properties.setRefreshHeartbeat(true);
 

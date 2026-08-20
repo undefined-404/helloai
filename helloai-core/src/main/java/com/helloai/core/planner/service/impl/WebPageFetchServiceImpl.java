@@ -18,7 +18,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 网页直取服务实现（V43，纯 JDK 无额外依赖）。
+ * 网页直取服务实现（纯 JDK 无额外依赖）。
  *
  * <p>流程：GET 目标 URL（跟随重定向）→ 限流读取响应体（{@value #MAX_BODY_BYTES} 字节上限，
  * 防超大页面拖垮内存）→ 仅接受文本类 Content-Type → 轻量 HTML 转纯文本
@@ -27,7 +27,7 @@ import java.util.regex.Pattern;
  *
  * <p>局限（已知代价，不引 jsoup）：正则式 HTML 解析对极端嵌套/畸形标签不完备，
  * 但对本场景（抓站点介绍/文档页给 LLM 作资料）足够；SPA 空壳页正文极少，
- * V44 元数据兜底：正文为空时仍提取 &lt;title&gt;/meta 描述/og 标签拼作最低限度资料
+ * 元数据兜底：正文为空时仍提取 &lt;title&gt;/meta 描述/og 标签拼作最低限度资料
  * （{@code metaOnly=true}），而非整体丢弃（用户实测 open.maic.chat 空壳页 textChars=0）。</p>
  *
  * <p>失败语义：捕获所有异常返回 ok=false 记录，不抛出（{@link WebPageFetchService} 契约）。</p>
@@ -56,7 +56,7 @@ public class WebPageFetchServiceImpl implements WebPageFetchService {
     private static final Pattern TITLE = Pattern.compile(
             "<title[^>]*>([\\s\\S]*?)</title>", Pattern.CASE_INSENSITIVE);
 
-    /** meta 描述提取（V44：属性顺序双向兼容 name/property 与 content 先后）。 */
+    /** meta 描述提取（属性顺序双向兼容 name/property 与 content 先后）。 */
     private static final Pattern[] META_DESC = {
             Pattern.compile("<meta[^>]+name=[\"']description[\"'][^>]*content=[\"']([^\"']*)", Pattern.CASE_INSENSITIVE),
             Pattern.compile("<meta[^>]+content=[\"']([^\"']*)[^>]*name=[\"']description[\"']", Pattern.CASE_INSENSITIVE),
@@ -64,7 +64,7 @@ public class WebPageFetchServiceImpl implements WebPageFetchService {
             Pattern.compile("<meta[^>]+content=[\"']([^\"']*)[^>]*property=[\"']og:description[\"']", Pattern.CASE_INSENSITIVE)
     };
 
-    /** og:site_name 提取（V44，属性顺序双向兼容）。 */
+    /** og:site_name 提取（属性顺序双向兼容）。 */
     private static final Pattern[] META_SITE_NAME = {
             Pattern.compile("<meta[^>]+property=[\"']og:site_name[\"'][^>]*content=[\"']([^\"']*)", Pattern.CASE_INSENSITIVE),
             Pattern.compile("<meta[^>]+content=[\"']([^\"']*)[^>]*property=[\"']og:site_name[\"']", Pattern.CASE_INSENSITIVE)
@@ -90,7 +90,7 @@ public class WebPageFetchServiceImpl implements WebPageFetchService {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .timeout(Duration.ofMillis(properties.getUrlFetchTimeoutMs()))
-                    // V44：浏览器风格 UA（原「HelloAI-WebPageFetch」自曝爬虫身份易被反爬拦截）
+                    // 浏览器风格 UA（原「HelloAI-WebPageFetch」自曝爬虫身份易被反爬拦截）
                     .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                             + "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
                     .header("Accept", "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5")
@@ -111,7 +111,7 @@ public class WebPageFetchServiceImpl implements WebPageFetchService {
             String text = htmlToText(body);
             String title = extractTitle(body);
             if (text.isBlank()) {
-                // V44 SPA 空壳兜底：正文为空但 title/meta 描述存在时，拼作最低限度资料
+                // SPA 空壳兜底：正文为空但 title/meta 描述存在时，拼作最低限度资料
                 // （站点名+一句描述对 LLM 仍优于零信息），而非整体丢弃
                 String metaText = salvageMetaText(body, title);
                 if (metaText.isBlank()) {
@@ -189,7 +189,7 @@ public class WebPageFetchServiceImpl implements WebPageFetchService {
     }
 
     /**
-     * V44 SPA 空壳元数据兜底：从原始 HTML 提取 meta 描述 / og:site_name，
+     * SPA 空壳元数据兜底：从原始 HTML 提取 meta 描述 / og:site_name，
      * 与 title 拼为最低限度资料文本；全部缺失时返回空串（仍按失败处理）。
      */
     static String salvageMetaText(String html, String title) {

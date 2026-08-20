@@ -12,7 +12,7 @@ public class SubTaskStateMachine {
     private static final Map<SubTaskStatus, Set<SubTaskStatus>> TRANSITIONS = new EnumMap<>(SubTaskStatus.class);
 
     static {
-        // V26 规划草案态：确认后转正（PENDING，进入既有分发链）或拒绝（CANCELLED，保留审计）；
+        // 规划草案态：确认后转正（PENDING，进入既有分发链）或拒绝（CANCELLED，保留审计）；
         // 草案不可被 claim/assignNext/自动重派触碰（它们只认 PENDING 等状态）。
         TRANSITIONS.put(SubTaskStatus.PENDING_PLAN_REVIEW, Set.of(SubTaskStatus.PENDING, SubTaskStatus.CANCELLED));
         TRANSITIONS.put(SubTaskStatus.PENDING,     Set.of(SubTaskStatus.ASSIGNED, SubTaskStatus.CANCELLED, SubTaskStatus.DEAD_LETTER));
@@ -24,7 +24,7 @@ public class SubTaskStateMachine {
         TRANSITIONS.put(SubTaskStatus.BLOCKED,      Set.of(SubTaskStatus.PENDING, SubTaskStatus.CANCELLED, SubTaskStatus.DEAD_LETTER));
         TRANSITIONS.put(SubTaskStatus.DONE,         Set.of());
         TRANSITIONS.put(SubTaskStatus.CANCELLED,    Set.of());
-        // V25 死信态：仅允许人工指派（ASSIGNED）或人工放弃（CANCELLED），
+        // 死信态：仅允许人工指派（ASSIGNED）或人工放弃（CANCELLED），
         // 自动重派/兜底定时任务只扫 PENDING/ASSIGNED 等状态，不会碰死信。
         TRANSITIONS.put(SubTaskStatus.DEAD_LETTER,  Set.of(SubTaskStatus.ASSIGNED, SubTaskStatus.CANCELLED));
     }
