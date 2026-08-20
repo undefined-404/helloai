@@ -37,7 +37,7 @@ public interface TaskMapper extends BaseMapper<Task> {
      * 兜底回收异步线程丢失（JVM 重启/异常）导致的永久卡 PLANNING 任务；
      * 不选 JSONB 大字段，避免注解式查询绕开 typeHandler 映射。</p>
      *
-     * <p>§6.111 超时误伤修复：排除已产出 {@code PENDING_PLAN_REVIEW} 草案的任务——
+     * <p>§6.112 超时误伤修复：排除已产出 {@code PENDING_PLAN_REVIEW} 草案的任务——
      * 有草案说明异步拆解已成功、正处于「等待用户确认草案」阶段，update_time 不会
      * 随草案产出刷新（task_plan_generated 只写 sub_task），若仍按原条件回收会把
      * 用户正在确认的草案任务回退 PENDING，导致 confirmDrafts 报「只有 PLANNING
