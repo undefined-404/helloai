@@ -38,6 +38,7 @@ import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import com.helloai.core.task.service.TaskRunningSpecService;
+import com.helloai.core.task.service.PluginSkillSpecService;
 
 @Slf4j
 @Service
@@ -70,6 +71,7 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
     private final TaskTimelineService taskTimelineService;
     private final ExecutionResultHandler executionResultHandler;
     private final TaskRunningSpecService taskRunningSpecService;
+    private final PluginSkillSpecService pluginSkillSpecService;
     private final ConversationService conversationService;
     private final AttachmentService attachmentService;
 
@@ -221,9 +223,12 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
 
         // Task Running Spec 上下文装配：
         // 1) 全局段 = Baseline（总体目标/平台约束）+ ContextSummary（全局进度），来源 task.context JSONB / 独立表
-        // 2) 依赖段 = 直接前置（dependsOnIdList）的结构化摘要 + 完成内容本体（物化附件优先、原始产出回退）
+        // 2) 插件规范段 = 任务 required_skills 命中 eng-* 规范库标签时注入「执行速览」（§6.114）
+        // 3) 依赖段 = 直接前置（dependsOnIdList）的结构化摘要 + 完成内容本体（物化附件优先、原始产出回退）
         //    综合注入供 LLM 结合"前置做了什么 + 本轮任务要求"分析执行
         String promptSection = taskRunningSpecService.buildExecutorPromptSection(subTask.getTaskId());
+        String pluginSection = pluginSkillSpecService.renderSection(subTask.getTaskId());
+        promptSection = mergeSpecSections(promptSection, pluginSection);
         DependencySectionResult dependencySection = buildDependencySection(subTask);
         Map<String, Object> context = new HashMap<>();
         context.put("taskId", subTask.getTaskId());
@@ -246,7 +251,8 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
                         "depCount", dependencySection.depCount,
                         "loadedCount", dependencySection.loadedCount,
                         "truncatedCount", dependencySection.truncatedCount,
-                        "degraded", dependencySection.degraded));
+                        "degraded", dependencySection.degraded,
+                        "pluginSpec", pluginSection != null && !pluginSection.isBlank()));
         taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_llm_call_start",
                 AgentRole.EXECUTOR, agent.getId(),
                 Map.of("agentId", agent.getId(), "agentName", agent.getName()));
@@ -286,6 +292,22 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
             return;
         }
         throw new BizException("子任务状态不允许执行: subTaskId=" + subTaskId + ", status=" + status);
+    }
+
+    /**
+     * 合并 Task Running Spec 全局段与平台技能规范段（§6.114）：
+     * 插件段为空时原样返回全局段；全局段为空时返回插件段；两者皆有按空行拼接。
+     */
+    private String mergeSpecSections(String specSection, String pluginSection) {
+        boolean pluginBlank = pluginSection == null || pluginSection.isBlank();
+        boolean specBlank = specSection == null || specSection.isBlank();
+        if (pluginBlank) {
+            return specSection;
+        }
+        if (specBlank) {
+            return pluginSection;
+        }
+        return specSection + "\n\n" + pluginSection;
     }
 
     /**

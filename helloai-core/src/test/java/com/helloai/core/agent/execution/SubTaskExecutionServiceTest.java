@@ -36,6 +36,7 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.agent.service.impl.SubTaskExecutionServiceImpl;
+import com.helloai.core.task.service.PluginSkillSpecService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import com.helloai.core.task.service.TaskRunningSpecService;
@@ -65,6 +66,9 @@ class SubTaskExecutionServiceTest {
 
     @Mock
     private TaskRunningSpecService taskRunningSpecService;
+
+    @Mock
+    private PluginSkillSpecService pluginSkillSpecService;  // §6.114：eng-* 规范库注入（默认 null → 原样拼接）
 
     @Mock
     private ConversationService conversationService;  // §6.41
