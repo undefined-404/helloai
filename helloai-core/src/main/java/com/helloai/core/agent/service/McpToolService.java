@@ -40,6 +40,15 @@ public interface McpToolService {
     /** Agent 签到（签发值班租约）。 */
     CheckInResult checkIn(Long agentId, String workMode, Integer maxConcurrent, Integer ttlMinutes);
 
+    /**
+     * Agent 签到（签发值班租约）+ 上报已加载技能列表（P2 §6.115）。
+     *
+     * <p>{@code reportedSkills} 与既有 {@code agent.skills} 取并集（归一化后只增不减），
+     * 合并结果经 {@link CheckInResult#getMergedSkills()} 回显；合并失败不阻断打卡。</p>
+     */
+    CheckInResult checkIn(Long agentId, String workMode, Integer maxConcurrent, Integer ttlMinutes,
+                          List<String> reportedSkills);
+
     /** Agent 签退（结束值班租约）。 */
     CheckOutResult checkOut(Long agentId, String reason);
 
@@ -144,6 +153,8 @@ public interface McpToolService {
         private String workMode;
         private Integer maxConcurrent;
         private String expiresAt;
+        /** 上报技能合并后的完整列表（null = 本次未上报技能，P2 §6.115） */
+        private List<String> mergedSkills;
     }
 
     @Data

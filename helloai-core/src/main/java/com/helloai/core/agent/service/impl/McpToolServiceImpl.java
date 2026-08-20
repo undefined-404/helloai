@@ -1,6 +1,7 @@
 package com.helloai.core.agent.service.impl;
 
 import com.helloai.core.agent.service.HeartbeatService;
+import com.helloai.core.agent.SkillNormalizer;
 import com.helloai.core.agent.service.McpToolService;
 import com.helloai.core.agent.service.McpToolService.AckResult;
 import com.helloai.core.agent.service.McpToolService.CheckInResult;
@@ -486,6 +487,13 @@ public class McpToolServiceImpl implements McpToolService {
      */
     @Transactional(rollbackFor = Exception.class)
     public CheckInResult checkIn(Long agentId, String workMode, Integer maxConcurrent, Integer ttlMinutes) {
+        return checkIn(agentId, workMode, maxConcurrent, ttlMinutes, null);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public CheckInResult checkIn(Long agentId, String workMode, Integer maxConcurrent, Integer ttlMinutes,
+                                 List<String> reportedSkills) {
         assertAgentActive(agentId);
         assertToolEnabled(agentId, "checkIn");
 
@@ -502,6 +510,9 @@ public class McpToolServiceImpl implements McpToolService {
         // 顺带刷心跳，避免 checkIn 后仍被判定 OFFLINE
         heartbeatService.seen(agentId);
 
+        // P2（§6.115）：上报技能与既有 agent.skills 取并集（只增不减），best-effort 不阻断打卡
+        List<String> mergedSkills = mergeReportedSkills(agentId, reportedSkills);
+
         CheckInResult result = new CheckInResult();
         result.setOk(true);
         result.setAgentId(agentId);
@@ -510,7 +521,43 @@ public class McpToolServiceImpl implements McpToolService {
         result.setWorkMode(lease.getWorkMode());
         result.setMaxConcurrent(lease.getMaxConcurrent());
         result.setExpiresAt(lease.getExpireTime() != null ? lease.getExpireTime().toString() : null);
+        result.setMergedSkills(mergedSkills);
         return result;
+    }
+
+    /**
+     * 把 checkIn 上报的技能并入 {@code agent.skills}（P2 §6.115，值班能力分级）。
+     *
+     * <p>语义：归一化（{@link SkillNormalizer#normalizeAll}）后与既有列表取并集，
+     * 只增不减——某次打卡漏报不会清掉历史已声明技能；无新增时不写库。
+     * 失败仅告警并返回 null（打卡主链不受影响）。</p>
+     *
+     * @return 合并后的完整技能列表；本次未上报或合并失败返回 null
+     */
+    private List<String> mergeReportedSkills(Long agentId, List<String> reportedSkills) {
+        if (reportedSkills == null || reportedSkills.isEmpty()) {
+            return null;
+        }
+        try {
+            Agent agent = agentService.getById(agentId);
+            if (agent == null) {
+                return null;
+            }
+            List<String> existing = SkillNormalizer.normalizeAll(agent.getSkills());
+            LinkedHashSet<String> merged = new LinkedHashSet<>(existing);
+            merged.addAll(SkillNormalizer.normalizeAll(reportedSkills));
+            List<String> result = new ArrayList<>(merged);
+            if (!result.equals(existing)) {
+                agent.setSkills(result);
+                agentService.updateById(agent);
+                log.info("checkIn 技能上报合并: agentId={}, added={}, merged={}",
+                        agentId, result.size() - existing.size(), result);
+            }
+            return result;
+        } catch (Exception e) {
+            log.warn("checkIn 技能上报合并失败（不阻断打卡）: agentId={}, err={}", agentId, e.getMessage());
+            return null;
+        }
     }
 
     // ================================================================

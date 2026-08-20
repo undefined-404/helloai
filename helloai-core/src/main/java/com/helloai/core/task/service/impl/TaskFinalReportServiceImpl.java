@@ -132,7 +132,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
                             "sectionOutputLimit", limit));
             try {
                 AgentTask agentTask = AgentTask.builder()
-                        .systemPrompt("注意：若你生成的报告字数少于子任务总字数的50%，系统将判定为不合格并触发重写。禁止概括，必须逐字迁移每个子任务的全部技术细节。")
+                        .systemPrompt("注意：按信息密度优先原则整合——契约性事实（表格/代码/参数/阈值/路径）必须完整保留，叙事文字压缩至必要最小，禁止用过程叙事或铺垫填充篇幅。")
                         .userPrompt(prompt)
                         .context(Map.of("taskId", taskId, "scene", "task_final_report"))
                         .requiredCapabilities(Map.of())
@@ -264,18 +264,11 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
             throw new BizException("读取整合报告 Prompt 模板失败: " + e.getMessage());
         }
         String sectionsText = buildSections(sections, sectionOutputLimit);
-        long totalOutputLength = sections.stream()
-                .mapToLong(st -> {
-                    String out = extractExecutionOutput(st);
-                    return out != null ? out.length() : 0;
-                })
-                .sum();
         return template
                 .replace("{{TASK_TITLE}}", task.getTitle() != null ? task.getTitle() : "")
                 .replace("{{TASK_DESCRIPTION}}",
                         task.getDescription() != null && !task.getDescription().isBlank()
                                 ? task.getDescription() : "（无补充描述）")
-                .replace("{{TOTAL_OUTPUT_LENGTH}}", String.valueOf(totalOutputLength))
                 .replace("{{SUB_TASK_SECTIONS}}", sectionsText);
     }
 

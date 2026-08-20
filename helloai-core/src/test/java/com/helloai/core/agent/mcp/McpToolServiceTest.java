@@ -33,6 +33,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -50,6 +51,8 @@ import static org.mockito.Mockito.when;
  * <p>A0-8（§6.67）+ E1（§6.83）：除 checkIn/checkOut 外任一工具调用自动续租——
  * 有 ACTIVE 租约时调 adaptiveRenew 按当前状态动态计算续租窗口（在跑任务最大窗口、
  * 空闲按表现分动态窗口），无租约不自动打卡；续租失败不阻断工具调用。</p>
+ * <p>P2（§6.115）：checkIn 技能上报——与 agent.skills 取并集（同义词归一 + 去重 +
+ * 只增不减），未上报/合并失败不阻断打卡。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("McpToolService 值班租约与收件箱工具（A0-1/A0-4/A0-6）")
@@ -391,6 +394,93 @@ class McpToolServiceTest {
         assertThat(result.getWorkMode()).isEqualTo("AUTO");
         assertThat(result.getMaxConcurrent()).isEqualTo(3);
         assertThat(result.getExpiresAt()).isEqualTo(expiresAt.toString());
+        // 4 参（未上报技能）不触发合并
+        assertThat(result.getMergedSkills()).isNull();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  P2（§6.115）checkIn 技能上报：与 agent.skills 取并集（只增不减）
+    //  ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("checkIn 技能上报：同义词归一 + 去重后与既有 skills 取并集（P2 §6.115）")
+    void shouldMergeReportedSkillsIntoAgentSkills() {
+        OffsetDateTime expiresAt = OffsetDateTime.now().plusMinutes(30);
+        AgentDutyLease lease = lease(11L, AgentDutyLeaseStatus.ACTIVE, expiresAt, "uuid-abc");
+        when(agentDutyLeaseService.resolveTtlMinutes(eq(AGENT_ID), eq(30))).thenReturn(30);
+        when(agentDutyLeaseService.startLease(eq(AGENT_ID), eq("AUTO"), eq(3), eq(30))).thenReturn(lease);
+        Agent agent = new Agent();
+        agent.setId(AGENT_ID);
+        agent.setStatus(AgentStatus.ACTIVE);
+        agent.setSkills(List.of("shell"));
+        when(agentService.getById(AGENT_ID)).thenReturn(agent);
+
+        McpToolService.CheckInResult result = mcpToolService.checkIn(
+                AGENT_ID, "AUTO", 3, 30, List.of("bash", "Shell", "eng-code-review", " "));
+
+        // 同义词归一（bash→shell）+ 去重 + 保序，与既有并集只增不减
+        assertThat(result.getMergedSkills()).containsExactly("shell", "eng-code-review");
+        verify(agentService).updateById(agent);
+    }
+
+    @Test
+    @DisplayName("checkIn 技能上报：未上报时 mergedSkills=null 且不写库（P2 §6.115）")
+    void shouldNotMergeWhenNoSkillsReported() {
+        OffsetDateTime expiresAt = OffsetDateTime.now().plusMinutes(30);
+        AgentDutyLease lease = lease(11L, AgentDutyLeaseStatus.ACTIVE, expiresAt, "uuid-abc");
+        when(agentDutyLeaseService.resolveTtlMinutes(eq(AGENT_ID), eq(30))).thenReturn(30);
+        when(agentDutyLeaseService.startLease(eq(AGENT_ID), eq("AUTO"), eq(3), eq(30))).thenReturn(lease);
+
+        McpToolService.CheckInResult result = mcpToolService.checkIn(AGENT_ID, "AUTO", 3, 30, null);
+
+        assertThat(result.isOk()).isTrue();
+        assertThat(result.getMergedSkills()).isNull();
+        verify(agentService, never()).updateById(any());
+    }
+
+    @Test
+    @DisplayName("checkIn 技能上报：上报技能已全部存在时不写库但回显完整列表（P2 §6.115）")
+    void shouldNotWriteWhenNoNewSkills() {
+        OffsetDateTime expiresAt = OffsetDateTime.now().plusMinutes(30);
+        AgentDutyLease lease = lease(11L, AgentDutyLeaseStatus.ACTIVE, expiresAt, "uuid-abc");
+        when(agentDutyLeaseService.resolveTtlMinutes(eq(AGENT_ID), eq(30))).thenReturn(30);
+        when(agentDutyLeaseService.startLease(eq(AGENT_ID), eq("AUTO"), eq(3), eq(30))).thenReturn(lease);
+        Agent agent = new Agent();
+        agent.setId(AGENT_ID);
+        agent.setStatus(AgentStatus.ACTIVE);
+        agent.setSkills(List.of("shell", "eng-code-review"));
+        when(agentService.getById(AGENT_ID)).thenReturn(agent);
+
+        McpToolService.CheckInResult result = mcpToolService.checkIn(
+                AGENT_ID, "AUTO", 3, 30, List.of("powershell"));
+
+        // powershell 归一到 shell（既有），无新增：不写库，但回显合并后的完整列表
+        assertThat(result.getMergedSkills()).containsExactly("shell", "eng-code-review");
+        verify(agentService, never()).updateById(any());
+    }
+
+    @Test
+    @DisplayName("checkIn 技能上报：合并失败（DB 异常）不阻断打卡，mergedSkills=null（P2 §6.115）")
+    void shouldNotBlockCheckInWhenMergeFails() {
+        OffsetDateTime expiresAt = OffsetDateTime.now().plusMinutes(30);
+        AgentDutyLease lease = lease(11L, AgentDutyLeaseStatus.ACTIVE, expiresAt, "uuid-abc");
+        when(agentDutyLeaseService.resolveTtlMinutes(eq(AGENT_ID), eq(30))).thenReturn(30);
+        when(agentDutyLeaseService.startLease(eq(AGENT_ID), eq("AUTO"), eq(3), eq(30))).thenReturn(lease);
+        Agent agent = new Agent();
+        agent.setId(AGENT_ID);
+        agent.setStatus(AgentStatus.ACTIVE);
+        // 第一次 getById 供 assertAgentActive，第二次（合并阶段）抛异常模拟 DB 故障
+        when(agentService.getById(AGENT_ID))
+                .thenReturn(agent)
+                .thenThrow(new RuntimeException("db down"));
+
+        McpToolService.CheckInResult result = mcpToolService.checkIn(
+                AGENT_ID, "AUTO", 3, 30, List.of("eng-code-review"));
+
+        assertThat(result.isOk()).isTrue();
+        assertThat(result.getLeaseId()).isEqualTo(11L);
+        assertThat(result.getMergedSkills()).isNull();
+        verify(agentService, never()).updateById(any());
     }
 
     @Test

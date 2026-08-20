@@ -8,6 +8,9 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * helloai MCP Server 业务工具集（v2.4 §3.1 / §9 路线 C 标准化）。
  * <p>
@@ -342,6 +345,8 @@ public class McpMcpServer {
               自动翻为 EXPIRED，不会阀到商业逻辑。
             - A0-8：除 checkIn/checkOut 外，任一工具调用（含 heartbeat）都会按原 TTL 自动续约——
               长任务执行期间正常调用工具即可保活，无需周期性重做 checkIn。
+            - P2 技能上报：可顺带传 skills（逗号分隔的已加载技能标签，如 "shell,eng-code-review"），
+              平台与既有 skills 取并集（只增不减），任务 required_skills 匹配立即生效。
             【相关工具】checkOut、heartbeat
             """)
     public McpToolService.CheckInResult checkIn(
@@ -349,6 +354,7 @@ public class McpMcpServer {
             @ToolParam(description = "工作模式（如 AUTO），可为空", required = false) String workMode,
             @ToolParam(description = "最大并发子任务数，默认 1", required = false) Integer maxConcurrent,
             @ToolParam(description = "租约有效期（分钟），默认 30", required = false) Integer ttlMinutes,
+            @ToolParam(description = "本次打卡上报的已加载技能标签（逗号分隔，如 eng-code-review,shell；与既有技能取并集，只增不减），可为空", required = false) String skills,
             @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
             @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
         Long authAgentId = requireAuthId(sessionId, _sessionId);
@@ -356,7 +362,21 @@ public class McpMcpServer {
             log.warn("MCP checkIn: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
         }
         agentId = authAgentId;
-        return mcpToolService.checkIn(agentId, workMode, maxConcurrent, ttlMinutes);
+        return mcpToolService.checkIn(agentId, workMode, maxConcurrent, ttlMinutes, parseCsvSkills(skills));
+    }
+
+    /** checkIn 技能标签 CSV → 列表（P2 §6.115）：逗号/顿号/空格分隔，空项忽略；null/空白返回 null。 */
+    private List<String> parseCsvSkills(String skills) {
+        if (skills == null || skills.isBlank()) {
+            return null;
+        }
+        List<String> result = new ArrayList<>();
+        for (String part : skills.split("[,，\\s]+")) {
+            if (!part.isBlank()) {
+                result.add(part);
+            }
+        }
+        return result.isEmpty() ? null : result;
     }
 
     // ================================================================
