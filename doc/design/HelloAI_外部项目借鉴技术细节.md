@@ -9,13 +9,13 @@
 **版本**：2026-07-11
 **适用范围**：HelloAI 多 Agent 协作调度平台
 
-> **状态注记（2026-08-03 文档核查）**：本文档"HelloAI 落点"表是 2026-07-11 时的目标态描述，部分状态列已过时：§1.1 落点表 `ExecutionCommandConsumer`（MQ/DB Poller 已落地）与 `ExecutionResultHandler`（已固化为唯一执行结果入口）、§3.2 "PLANNER 自动拆解尚未完整闭环"（V26 已闭环）、§6 速查表"调度分离-进行中"（已落地）等条目以《实现差距表》为准。本文档正文保留历史原貌，仅作外部项目借鉴思路参考。
+> **状态注记**：本文档"HelloAI 落点"表是 2026-07-11 时的目标态描述，部分状态列已过时：§1.1 落点表 `ExecutionCommandConsumer`（MQ/DB Poller 已落地）与 `ExecutionResultHandler`（已固化为唯一执行结果入口）、§3.2 "PLANNER 自动拆解尚未完整闭环"（V26 已闭环）、§6 速查表"调度分离-进行中"（已落地）等条目以《实现差距表》为准。本文档正文保留历史原貌，仅作外部项目借鉴思路参考。
 
 ---
 
 ## 1. AgentTeams-main
 
-> 本地路径：`E:\workspace\AgentTeams-main`
+> 仓库：https://github.com/agentscope-ai/AgentTeams
 > 吸收定位：**调度内核 + 执行边界 + 状态收敛模型**（详见架构设计参考 §1.2）
 
 ### 1.1 调度分离：Manager 只发命令，Worker 独立消费
@@ -203,7 +203,7 @@ Worker 状态：idle → busy → idle（循环）
 
 ## 2. Vibe-Skills-main
 
-> 本地路径：`E:\workspace\Vibe-Skills-main`
+> 仓库：https://github.com/foryourhealth111-pixel/Vibe-Skills
 > 吸收定位：**工作流运行时设计参考**（详见架构设计参考 §1.3）
 
 ### 2.1 6 阶段状态机（VCO Runtime）
@@ -341,7 +341,7 @@ XL → L（单人串行），L → M（跳过部分验证）
 
 ## 3. OpenMOSS
 
-> 本地路径：`E:\workspace\openMoss\OpenMOSS-main`
+> 仓库：https://github.com/undefined-404/OpenMOSS
 > 吸收定位：**Agent 接入层 + 角色建模层 + Prompt/Skill 资产层**（详见架构设计参考 §1.1）
 
 ### 3.1 Agent 自注册与 Onboarding
@@ -371,15 +371,15 @@ def register_agent(db, name, role, description):
 - OpenMOSS：返回纯文本引导 + API Key
 - HelloAI：`AgentOnboardingDialog` 弹窗 + `GET /api/admin/agents/{id}/onboarding-content`（已实现）
 
-### 3.2 四角色模型
+### 3.2 三角色模型（OpenMOSS 四角色 → HelloAI 收敛为三角色）
 
-**参考文件**：
+**参考文件**（OpenMOSS 原始四角色 → HelloAI 已移除 PATROL）：
 - `prompts/templates/task-planner.md` (140 行)
 - `prompts/templates/executor.md` (107 行)
 - `prompts/templates/task-reviewer.md` (75 行)
-- `prompts/templates/task-patrol.md` (83 行)
+- ~~`prompts/templates/task-patrol.md` (83 行)~~ — PATROL 在 HelloAI 已移除，职能由定时补偿任务吸收
 
-**核心设计**：
+**核心设计**（OpenMOSS 原始四角色）：
 
 ```
 PLANNER：接收顶层任务 → 拆解为子任务 → 分配给 EXECUTOR → 跟踪进度
@@ -388,14 +388,42 @@ REVIEWER：审查结果 → 通过(DONE) / 驳回(REWORK)
 PATROL：定期扫描 → 发现异常 → 上报 BLOCKED → 通知 PLANNER
 ```
 
-**HelloAI 落点**：
-- HelloAI 已收敛为三角色（PLANNER/EXECUTOR/REVIEWER，通过 `AgentRole` 枚举和 SKILL.md 文件建模）；PATROL 已移除，其兜底目标由重分配熔断、死信池与定时补偿任务覆盖
-- EXECUTOR 自动执行链路已成型
-- PLANNER 自动拆解 + REVIEWER 自动审查尚未完整闭环
+**HelloAI 落点**（三角色闭环 + PATROL 职能吸收，2026-08-20 状态校准）：
 
-**Prompt 模板借鉴**：OpenMOSS 的角色 Prompt 模板（上述 4 个 .md 文件）可作为 HelloAI 当前 `resources/skills/{role}/SKILL.md` 的内容参考，尤其是：
-- PLANNER 的拆解策略描述
-- REVIEWER 的审查标准分级
+| 角色 | 当前代码落点 | 闭环状态 |
+|---|---|---|
+| **PLANNER** | `helloai-core/src/main/resources/skills/planner/SKILL.md`（533 行）+ `prompts/planner-decompose.md` + `prompts/requirement-clarify.md` + `prompts/requirement-chat.md` | ✅ 自动拆解闭环（§6.103 异步化 + §6.114 验收可检查 + 六维自检） |
+| **EXECUTOR** | `helloai-core/src/main/resources/skills/executor/SKILL.md`（772 行） | ✅ 自动执行链路成型（含 checkIn skills 上报，§6.115 P2） |
+| **REVIEWER** | `helloai-core/src/main/resources/skills/reviewer/SKILL.md`（145 行）+ `prompts/subtask-review.md`（94 行，双轨纪律制 + 四元组 issues） | ✅ 双轨纪律制落地（§6.113 P0 + §6.115 P2 trim 报告） |
+| ~~PATROL~~ | —— | ❌ 已移除；职能由熔断降级 / 死信池 / 定时补偿任务共同覆盖 |
+
+**PATROL 职能吸收映射**：
+
+| PATROL 原职能 | HelloAI 替代实现 |
+|---|---|
+| 定期扫描全局状态 | `AgentHealthCheckTask`（每 60s）+ `SubTaskTimeoutTask` |
+| 上报 BLOCKED | `sub_task.status = BLOCKED` 自动跃迁 |
+| 通知 PLANNER | `agent_inbox` + 门铃 / 轮询 |
+| 兜底重分配 | `ReassignStaleTasks`（熔断降级） |
+| 异常事件对账 | `AgentEventCompensationTask`（Outbox 补偿） |
+
+**Prompt 模板借鉴**（OpenMOSS → HelloAI 实际路径）：
+
+| OpenMOSS 原文件 | HelloAI 当前对应 |
+|---|---|
+| `prompts/templates/task-planner.md` | `skills/planner/SKILL.md` + 3 个 `prompts/planner-*.md` 与 `prompts/requirement-*.md` |
+| `prompts/templates/executor.md` | `skills/executor/SKILL.md` |
+| `prompts/templates/task-reviewer.md` | `skills/reviewer/SKILL.md` + `prompts/subtask-review.md` |
+| `prompts/templates/task-patrol.md` | （无对应 — 职能被定时补偿任务吸收） |
+
+跨角色共享资产：
+- `prompts/task-final-report.md`（125 行）— §6.115 P2 trim 重写（契约性事实完整保留 + 过程叙事压缩链接）
+- `skills/plugins/eng-{code-review,doc-standard,verification}.md`（3 份共 ~140 行）— §6.114 P1 平台 eng-* 技能规范库（提炼自 DeepSeek Harness dsh-*，任务 `required_skills` 命中自动注入 Spec）
+
+**借鉴要点**（从 OpenMOSS 角色模板保留的具体价值）：
+- PLANNER 拆解策略描述（acceptance criteria 结构、依赖关系识别）— HelloAI 已升级为「**验收标准必须可检查**」（§6.114 P1），与 VERIFICATION 围栏形成拆解侧 / 审查侧闭环
+- REVIEWER 审查标准分级（pass/fail 判定 + issue 描述框架）— HelloAI 已升级为「**双轨纪律制**」（轨道 A 验收 + 轨道 B 工程纪律 C1-C4 / D1-D3，issues 四元组 `[defect][location][impact][evidence]`，§6.113 P0）
+- 各角色 Prompt 的语气与第一人称描述风格（EXECUTOR 以"我"为主语，REVIEWER 以客观审视者视角）— 风格一致保留，未做改动
 
 ### 3.3 CLI 工具模式（task-cli.py）
 
@@ -535,7 +563,7 @@ APPROVE — 审批通过当前阶段
 
 ## 5. trade-cloud
 
-> 本地路径：`E:\yhzx\1027\trade-cloud`
+> 仓库：https://gitee.com/undefined_404/trade-cloud
 > 吸收定位：**可靠性与最终一致性底座**（详见架构设计参考 §1.5）
 
 ### 5.1 Outbox 事务性消息模式
@@ -635,7 +663,7 @@ Cancel：释放资源（如：Agent 超时 → 释放锁定 → 重新分配）
 | Vibe-Skills §2.2 | Late Skill Binding | `agent_execution_record` 记录 Skill 版本 | P2 | 待设计 |
 | Vibe-Skills §2.3 | Task Contract | `sub_task.context` 扩展 scope/effort | P2 | 待设计 |
 | 优先级文档 §4.3 | 打断与恢复 | `sub_task.context` 存 PausedTask | P2 | 待设计 |
-| OpenMOSS §3.2 | 四角色 Prompt 模板 | `resources/skills/{role}/SKILL.md` 内容参考 | P2 | 可增强 |
+| OpenMOSS §3.2 | 三角色 Prompt 模板（PATROL 已移除并吸收） | `skills/{planner,executor,reviewer}/SKILL.md` + `prompts/{planner-*,requirement-*,subtask-review}.md` | 已落地 | ✅ §6.103 / §6.113 / §6.114 / §6.115 |
 | AgentTeams §1.6 | Team 委托模型 | `task` → `sub_task` 层级扩展 | P3 | 远期 |
 | Vibe-Skills §2.4 | Root/Child Authority | Team 权限模型 | P3 | 远期 |
 | Vibe-Skills §2.1 | 6 阶段状态机 | 工作流模板的阶段参考 | P3 | 远期 |
