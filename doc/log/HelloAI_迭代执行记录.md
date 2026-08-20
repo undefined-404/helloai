@@ -5866,3 +5866,158 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 - 数据修复（当前受影响任务，写操作由用户执行）：`UPDATE task SET status='PLANNING', update_time=now() WHERE id=2089994365468286978 AND status='PENDING';` 执行后即可在前端确认草案（7 条草案原样保留）。
 - 部署注意：TaskMapper 变更需重新打包部署后端 jar 生效；**旧 jar 部署期间**该任务改回 PLANNING 后 10 分钟内不确认仍会被旧逻辑回收，可临时调大 `helloai.planner.decompose.planning-timeout-minutes`（env）或部署后操作。
 - 遗留：本轮代码与本文档未 git 提交，待用户确认后提交。
+
+---
+
+### 6.113 DeepSeek Harness Skills 借鉴 P0：Reviewer 双轨纪律制 + prompt 模板 cot-leakage 清洗（2026-08-20）
+
+#### 1. 范围
+
+- **背景**：用户下载 DeepSeek Harness 官方仓库（`E:\workspace\deepseek-harness-master\.agents\skills`，11 个 SKILL.md 逐文件核对），给出三角色借鉴分析——Reviewer 嵌入 dsh-code-review / dsh-prose-standard 工程纪律、Planner 借鉴文档标准与目标拆解、Executor 作为外部 Agent 能力插件（checkIn 上报技能列表 / Task Running Spec 注入 / 值班能力分级），要求输出完整调整方案。方案经 4 项决策拍板后写入 `doc/design/HelloAI_DeepSeek_Harness_Skills借鉴方案.md`：① Reviewer 全面升级为纪律制（纪律清单与验收标准**并列**成为判定依据，改变「验收标准唯一判定依据」旧产品行为）；② 最终报告完全拥抱 trim 哲学（废除 50% 字数红线）；③ 外部技能规范库采用平台自命名 `eng-` 前缀（不保留 dsh- 前缀，摆脱上游命名演进耦合）；④ 方案落盘 + P0 同步实施。
+- **事实校准**：常被引用的 dsh-planning / dsh-goals / dsh-subagent 在当前仓库不存在；「文档规范」职能实际由 dsh-doc-standards 承担，「目标可验证性」分散在 dsh-prose-standard 的 contract 概念与 dsh-code-review 的 evidence 检查中。价值分级：★★★ 直接嵌入 2 个（code-review / prose-standard）、★★ 概念借鉴 2 个（doc-standards / trim-cot-leakage）、★ 单维度 3 个（find-simplifications / pre-push-checks / archive-agent-notes）、✗ 不适用 4 个（merging-stacked-prs / doc-site-sync / translate-docs / record-browser-gif）。层级结论：Harness 是单 Agent 运行时（「给模型一双手」），HelloAI 是多 Agent 调度平台（「AI 项目经理」），skills 作为外部 Agent 能力插件引入，不替代调度、熔断、死信池、上下文注入等核心机制。
+- **本轮内容（P0）**：`subtask-review.md` 重写为双轨纪律制 + blocker/nit 分层驳回 + issues 四元组格式；排查 5 个 prompt 模板 cot-leakage（实际清洗 2 个）；单测回归。
+- **明确不做**：P1（3 份 eng- 规范库 + Spec 注入 + decompose 验收可检查性 + clarify 第六维）与 P2（checkIn 技能上报 + task-final-report trim 重写）本轮不启动；后端 Java 零改动（JSON schema 五字段不变，`ReviewVerdict` Jackson 解析无感知）；Harness 的 GitHub/VitePress 专用 4 个 skill 明确不借鉴。
+
+#### 2. 实际落地
+
+- **方案文档**（`doc/design/HelloAI_DeepSeek_Harness_Skills借鉴方案.md`，109 行）：§2 事实校准与价值分级表、§3 层级差异边界表、§4 已拍板决策 4 项、§5 分角色方案（Reviewer P0 / Planner P1 / Executor P1~P2）、§6 P0-P2 路线图与文档回填约定、§7 明确不借鉴项。
+- **`prompts/subtask-review.md` 重写（双轨纪律制）**：角色定义改为「从两条独立轨道核验子任务执行产出：轨道 A 对照验收标准判定达标情况，轨道 B 按工程纪律清单核验产出自身质量缺陷，任一轨道 blocker 级问题均可驳回（pass=false）」。轨道 B 按交付物类型条件激活——代码类 C1 接口契约（签名/返回值区分/异常约定/边界条件文档化）、C2 生命周期与并发（资源创建/释放成对、竞态、取消与错误上报）、C3 验证强度（断言真会失败于目标回归）、C4 范围与必要性（投机泛化、过度抽象）；文档类 D1 契约与命题完整（必须/不得/失败模式/归属/后果）、D2 无思维链泄漏（8 类 taxonomy 速查）、D3 结构清晰（tutorial/reference 混写、层级混乱）。分层驳回：blocker（验收未满足 / 纪律缺陷实际造成误用、泄漏、竞态、文档代码矛盾）→ pass=false；nit（风格/命名/格式）→ 仅进 comment 不驳回。issues 四元组格式 `[defect] 缺陷 [location] 位置（文件名/行号/字段名/章节） [impact] 影响 [evidence] 依据`，验收类注明标准条目、纪律类注明 C1-C4/D1-D3 编号。JSON schema 五字段（pass/score/issues/comment/analysis）不变。注释头清理死引用（V27/V1.7/A0-5/方案3 F2 迭代日志）改为现状陈述 + 指向方案文档。
+- **cot-leakage 清洗（排查 5 模板，实际改 2 个）**：`requirement-chat.md` 删「（V39）」「V45 起：」「（V40.2，重要）」版本戳改现状陈述；`requirement-clarify.md` 注释与正文「首轮」→「每轮」（对齐 V45 每轮检索语义）。`planner-decompose.md` / `task-final-report.md` 无 cot-leakage 痕迹未动（后者留 P2 trim 重写）。
+
+#### 3. 验证结果
+
+- **单测回归 35/35 全绿**：`SubTaskReviewServiceTest` 28 例 + `MqReviewCommandConsumerTest` 7 例（嵌套类），`mvn -pl helloai-core test -DskipTests=false "-Dtest=SubTaskReviewServiceTest,MqReviewCommandConsumerTest"` BUILD SUCCESS（零后端改动，纯 prompt 模板变更的回归验证）。
+- **踩坑**：PowerShell 5.1 下 `-Dsurefire.failIfNoSpecifiedTests=false` 被拆成独立参数报 `Unknown lifecycle phase ".failIfNoSpecifiedTests=false"`（点号参数须整体引号或移除，本轮直接移除）；pom 默认 `<skipTests>true</skipTests>` 需 `-DskipTests=false` 覆盖，否则「Tests are skipped」假绿（§6.111 已固化坑再次验证）。
+
+#### 4. 影响与遗留
+
+- 影响：① Reviewer 判定依据从「验收标准唯一」升级为「验收 + 工程纪律」双轨，驳回意见可精确到「第 X 行接口缺异常约定（C1）」粒度，从「代码写得不好」升级为规范锚定的可行动意见；② issues 四元组为 P1 规范库与「执行侧产出 / 审查侧解析」闭环打底；③ prompt 模板 cot-leakage 基线化，为 P2 报告 trim 重写铺路。
+- 部署注意：纯 prompt 模板 + 文档变更，零 Flyway、零 Java、零 schema，重新打包部署后端 jar（resources 在 jar 内）生效。
+- 遗留：① P1（`eng-code-review` / `eng-doc-standard` / `eng-verification` 3 份规范库落 `helloai-core/src/main/resources/skills/plugins/` + executor SKILL 注册示例补 skills + `TaskRunningSpecService.buildExecutorPromptSection` Spec 注入 + planner-decompose 验收必须可检查 + clarify 第六维「边界与排除项」）；② P2（值班 checkIn 技能上报合并进 agent.skills 取并集 + task-final-report.md trim 重写）；③ 差距表 N18 条目已回填（P0 段落），P1/P2 收口后增量更新；④ 本轮代码与文档未 git 提交，待用户确认后提交。
+
+---
+
+### 6.114 DeepSeek Harness Skills 借鉴 P1：eng- 规范库 3 份 + Spec 注入 + 模板升级（2026-08-20）
+
+#### 1. 范围
+
+- **背景**：P0（§6.113）收口 Reviewer 双轨纪律制后，按方案 §6 路线图启动 P1。
+- **本轮内容**：① 平台自命名 `eng-` 前缀外部技能规范库 3 份（classpath `skills/plugins/`）；② `task.required_skills` 命中插件标签时向执行 Prompt 注入「平台技能规范」段；③ `planner-decompose.md` 验收标准必须可检查；④ `requirement-clarify.md` 五维自检加第六维「边界与排除项」；⑤ executor SKILL.md 补技能标签与规范语义节；⑥ 单测回归。
+- **实现偏差说明**：方案文档写「`TaskRunningSpecService.buildExecutorPromptSection` 已有注入点」，实际评估后选择在 `SubTaskExecutionServiceImpl` 装配点新增 `PluginSkillSpecService` 拼接——理由：规范库渲染与 Spec 存储职责分离、与 `buildDependencySection`「调用方按需组装」既有模式一致、避免改接口签名 + 两 Impl + 渲染器；`TaskRunningSpecService` 接口与两个 Impl 零改动。
+- **明确不做**：不重建选人链路（V47/A2/A3 已具备：agent.skills + task.required_skills AND 匹配 + `SkillNormalizer` 同义词归一 + `AgentSelectionConstraints` 全链注入）；只注入速览不注入完整规范正文（控 token）；P2 不启动。
+
+#### 2. 实际落地
+
+- **3 份规范库**（`helloai-core/src/main/resources/skills/plugins/`）：`eng-code-review.md`（52 行，来源 dsh-code-review；速览 5 条：C1 接口契约 / C2 生命周期与并发 / C3 验证强度 / C4 范围与必要性 / 四元组产出格式）、`eng-doc-standard.md`（46 行，来源 dsh-prose-standard + dsh-doc-standards；速览 4 条：D1 命题完整保留 / D3 tutorial-reference 分离 / D2 无思维链泄漏 8 类速查 / 信息密度）、`eng-verification.md`（44 行，来源 dsh-pre-push-checks，与 VERIFICATION 围栏对齐；速览 4 条：最小证据集 / 证据真实可复现 / 断言有效性 / 环境可复现）。文件约定「执行速览在前、首个 `---` 分隔详细规范」。
+- **`PluginSkillSpecService` 接口（task/service，26 行）+ `PluginSkillSpecServiceImpl`（task/service/impl，117 行）**：`renderSection(taskId)` = 查 `Task.required_skills` → `SkillNormalizer.normalizeAll` → 与 `KNOWN_SPECS`（LinkedHashMap 保序 eng-code-review / eng-doc-standard / eng-verification）求交 → `ClassPathResource` 读速览（首个 `\n---\n` 截断 + 去 h1 标题行）→ 拼「## 平台技能规范（任务所需技能命中 eng-* 规范）」章节；失败语义 best-effort（taskId null / 任务不存在 / 无 required_skills / 未命中 / 文件缺失均返回空串，log.warn 不抛异常，绝不阻断执行链）。
+- **`SubTaskExecutionServiceImpl`**：新增 `pluginSkillSpecService` 依赖 + `executeOnce` 装配段改为三步组装（1) 全局段 = Baseline + ContextSummary；2) 插件规范段；3) 依赖段）+ `mergeSpecSections` 私有方法（任一为空原样返回另一）+ timeline `sub_task_spec_context_loaded` payload 加 `pluginSpec` 布尔观测字段。
+- **`planner-decompose.md`**：验收标准第 3 条「尽量可量化、可验证」→「**每条必须可检查**——含可观察的验证点（判定动作 + 预期结果），如"运行 X 命令输出含 Y"或"接口 Z 返回 200 且字段 W 存在"；不得写"功能正常""体验良好"这类无法验证的表述。执行侧按此验收、审查侧按此核验（subtask-review.md 轨道 A），写不出验证点的子任务说明边界不清，应重新界定或合并」；拆解原则新增同主题闭环条目。
+- **`requirement-clarify.md`**：「五维度自检清单」→「六维度自检清单」；第 2 条去掉「明确不做什么（边界）」；新增第 6 条「边界与排除项：明确不做什么——不覆盖的场景、不支持的平台/用户、不含的交付物，必须显式写清，杜绝隐含承诺（scope 必须显式）」；progress 说明「五维度」→「六维度」。
+- **executor SKILL.md**：新增「技能标签（skills）与平台技能规范（eng-*）」节——注册时声明 skills（示例 `"skills": ["shell", "eng-code-review"]`）、3 份规范清单、命中即注入语义（产出必须按规范执行，审查侧按同一清单核验，不达标驳回）、四元组格式示例。
+
+#### 3. 验证结果
+
+- **单测 31/31 全绿**：`PluginSkillSpecServiceImplTest` 新建 7 例（taskId null / 任务不存在 / requiredSkills 空 / 未命中 / 命中渲染速览且不含详细规范与 h1 / 多命中按声明序 / 未知技能忽略，走真实 classpath 资源文件非 mock）+ `SubTaskExecutionServiceTest` 24 例回归（新增 `@Mock PluginSkillSpecService` 字段，默认 mock 返回 null 经 `mergeSpecSections` 原样返回，既有断言不受影响）。命令 `mvn -pl helloai-core -am test "-Dtest=PluginSkillSpecServiceImplTest,SubTaskExecutionServiceTest" "-DskipTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"`。
+- **缺陷修复**：首轮回归暴露 CRLF 行尾下 `indexOf("\n---\n")` 分隔符匹配失败 → 详细规范被整体注入（渲染体含「## 详细规范」断言失败）；修复为读取后 `content.replace("\r\n", "\n")` 归一（§6.111 脚本编码坑的 Java 侧同源教训）。
+- **踩坑**：`-pl helloai-core -am` 下 helloai-common 无匹配测试报 surefire 失败，需 `-Dsurefire.failIfNoSpecifiedTests=false` 且整体引号（PowerShell 5.1）；clean 全量编译后首轮组合跑 `SubTaskExecutionServiceTest` 出现「Tests run: 0」一次性怪癖（@Nested 主类无直接 @Test），单独重跑与后续组合跑均 24/24 稳定，未复现。
+- **真实验证缺口**：注入段对 LLM 产出的实际质量提升待真实环境任务运行观察；速览截断语义已被单测锁定。
+
+#### 4. 影响与遗留
+
+- 影响：① 任务声明 required_skills 含 eng-* 标签时，执行 Prompt 自动携带对应规范速览，执行侧/审查侧共用同一清单（subtask-review 轨道 B 同源 C1-C4/D1-D3），形成「注入 → 产出 → 审查 → 驳回」闭环；② timeline `pluginSpec` 观测字段可定位「命中注入但产出不达标」案件；③ decompose 验收可检查性与 subtask-review 轨道 A 形成拆解侧/审查侧闭环；④ clarify 第六维堵「scope 隐含承诺」类误解。未声明标签的任务零成本（renderSection 返回空串）。
+- 部署注意：新增 Java 类 + 资源文件，重新打包部署后端 jar 生效；无 Flyway、无新配置项。
+- 遗留：① P2（值班 checkIn 技能上报合并进 agent.skills 取并集 + task-final-report.md trim 重写，方向已拍板）；② 差距表 N18 已回填 P1 段落；③ 本轮代码与文档未 git 提交，待用户确认后提交。
+
+---
+
+### 6.115 DeepSeek Harness Skills 借鉴 P2：值班 checkIn 技能上报 + task-final-report.md trim 重写（2026-08-20）
+
+#### 1. 范围
+
+- **背景**：P1（§6.114）收口后，按方案 §6 路线图启动 P2（两项：值班 checkIn 技能上报、task-final-report.md trim 重写，方向均已在方案拍板）。
+- **本轮内容**：① checkIn 打卡时顺带上报已加载技能标签，平台与既有 `agent.skills` 取并集（只增不减），任务 `required_skills` AND 匹配立即生效；② `task-final-report.md` 废除 50% 字数红线改信息密度优先（契约性事实 100% 保留、叙事压缩）；③ executor SKILL.md 工具文档同步；④ 单测回归。
+- **设计要点（技能上报）**：不新建表/枚举/选人链路（V47/A2/A3 已有 agent.skills + required_skills AND 匹配 + SkillNormalizer 归一 + AgentSelectionConstraints 全链注入），只补「能力从执行侧反哺平台」的最后一环；MCP 参数用 String CSV（`skills`）而非 List——spring-ai @ToolParam 全库无 List 参数先例，CSV + 服务端解析最稳。
+- **明确不做**：不做技能删除/减员语义（某次漏报不清历史技能）；不做 checkOut 上报；合并失败不阻断打卡（best-effort）。
+
+#### 2. 实际落地
+
+- **`McpToolService` 接口**：`checkIn` 5 参重载 `checkIn(agentId, workMode, maxConcurrent, ttlMinutes, List<String> reportedSkills)`（Javadoc 写明 P2 §6.115 并集语义）；`CheckInResult` 加 `mergedSkills` 字段（合并后的完整技能列表，null = 本次未上报或合并失败）。
+- **`McpToolServiceImpl`**：原 4 参 `checkIn` 改为转调 5 参传 null（保留 @Transactional 入口）；5 参实现 = 原打卡链 + `mergeReportedSkills` + `result.setMergedSkills`；新增私有方法 `mergeReportedSkills`——reportedSkills 空返回 null；`SkillNormalizer.normalizeAll` 归一既有与上报技能 → `LinkedHashSet` 取并集（保序、只增不减）→ 与既有列表比较，无新增不写库，有新增 `agentService.updateById` 回写并 log.info；整体 try-catch，失败 log.warn 返回 null 不阻断打卡。
+- **`McpMcpServer` checkIn 工具**：加 `@ToolParam String skills`（description「本次打卡上报的已加载技能标签（逗号分隔，如 eng-code-review,shell；与既有技能取并集，只增不减），可为空」，required=false）；工具 description Gotchas 补「P2 技能上报」条目；新增私有 `parseCsvSkills`（`split("[,，\\s]+")` 兼容逗号/中文逗号/空白，空项忽略，null/空白/全空返回 null）；`import java.util.ArrayList/List`。
+- **executor SKILL.md 三处同步**：§0.1 三通道工具表 checkIn 行请求体补 `"skills":"shell,eng-code-review"`、返回要点补 `mergedSkills`（含未上报为 null 说明）；§1.2 工具表 checkIn「何时使用」补技能上报语义；🧭 checkIn 租约机制块新增「技能上报（P2 §6.115）」条目（归一/取并集/只增不减/回显/best-effort 五要点）。
+- **`task-final-report.md` trim 重写**：铁律1「字数红线（50% 绝对值强制）」→「信息密度优先（叙事压缩，事实保留）」——契约性事实 100% 保留、叙事文字压缩至必要最小（删铺垫/重复句/过程叙事/轮次痕迹等 8 类思维链泄漏，速查 eng-doc-standard D2）、删除标准「删掉一句话信息不减少则必须删」；铁律3「技术元素全量抄录」→「契约性事实完整保留（一字不改）」（四类元素清单不变，动机从凑字数改为事实保真）；执行摘要 ≤300→≤200 字且「只陈述结果不描述过程」；绝对禁止清单新增「叙事膨胀」行；自检清单删「≥50% 字数」检查项、加「叙事压缩」+「事实保留」两项；删输入数据 `{{TOTAL_OUTPUT_LENGTH}}` 占位符；强制全覆盖指令「章节长度自平衡」→「章节内容自平衡」（压缩叙事而非事实）。
+- **`TaskFinalReportServiceImpl` 同步**：`renderPrompt` 删 `totalOutputLength` 计算与 `.replace("{{TOTAL_OUTPUT_LENGTH}}", ...)`（占位符已删，防死代码）；systemPrompt 由「少于 50% 判定不合格并触发重写」改为「按信息密度优先原则整合——契约性事实必须完整保留，叙事文字压缩至必要最小，禁止用过程叙事或铺垫填充篇幅」。
+
+#### 3. 验证结果
+
+- **单测 46/46 全绿**：`McpToolServiceTest` 26/26（新增 4 例：同义词归一 bash/Shell→shell + 去重保序取并集且 updateById 回写 / 未上报 mergedSkills=null 不写库 / 上报已全部存在（powershell→shell）不写库但回显完整列表 / DB 异常合并失败不阻断打卡 mergedSkills=null；既有 checkIn 用例补 mergedSkills null 断言）+ `TaskFinalReportServiceTest` 13/13 回归（模板占位符与 systemPrompt 改动零影响）+ `PluginSkillSpecServiceImplTest` 7/7 顺带回归。命令 `mvn -pl helloai-core -am test "-Dtest=McpToolServiceTest,TaskFinalReportServiceTest" "-DskipTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"`。
+- **踩坑（测试侧）**：新用例自己 new 的 Agent 需 `setStatus(ACTIVE)`（`assertAgentActive` 校验状态，覆盖 lenient stub 后 status=null 直接抛「Agent 未激活」）；「合并失败不阻断」用例中 `assertAgentActive` 与 `mergeReportedSkills` 都调 `getById`，需 `thenReturn(agent).thenThrow(...)` 链式 stub 区分两次调用（否则打卡前置校验先炸）。
+- **真实验证缺口**：MCP checkIn 带 skills 参数的真实环境打卡 + 合并后派单匹配未实测（待下次值班会话顺带验证）；trim 后报告质量待真实任务生成观察。
+
+#### 4. 影响与遗留
+
+- 影响：① 外部 Agent 值班打卡即可把「本次会话已加载技能」反哺平台，`required_skills` 精确派单从此不依赖注册时声明（注册漏报可由 checkIn 补齐）；② 取并集只增语义下「读-改-写」竞态最多丢失本次并集条目（下次打卡补上），与 startLease 会话级串行一致，可接受；③ 报告模板不再逼迫 LLM 注水凑字数，产出更贴合 eng-doc-standard 信息密度规范。
+- 部署注意：新增 Java 字段/方法 + 2 个资源文件（task-final-report.md、executor SKILL.md），重新打包部署后端 jar 生效；无 Flyway、无新配置项；旧客户端不传 skills 参数完全兼容（required=false）。
+- 遗留：① 差距表 N18 已回填 P2 段落、方案文档 §6 路线图表待更新；② 本轮代码与文档未 git 提交，待用户确认后提交。
+
+---
+
+### 6.116 executor SKILL.md 重复/相悖口径治理：EXECUTION_RECORD 单一权威定义（2026-08-20）
+
+#### 1. 范围
+
+- **背景**：用户复核 executor SKILL.md，指出 §0.3/§4.2~§4.5 区域存在「相似规则多处、多种解读」。核对后确认 4 类问题：SUMMARY 缺失后果两处说法不一（表格「整块解析失败」vs 🔴 块「解析失败（fallback 前 200 字）」）；VERIFICATION 一处写「可选」、围栏处写「必须」；EXECUTION_RECORD 格式在 §4.2/§4.3/§4.4/§4.6 四处重复定义；§1.5.7「按 §4.5 用 Invoke-WebRequest + UTF-8 字节解码」引用断链（§4.5 只讲交付物编码，无响应解码内容）。
+- **事实校准（以代码为准）**：① `ExecutionRecordParser` SUMMARY 缺失/为空 → parse 返回 null → `ExecutionResultHandler` 捕获后以产出前 200 字兜底摘要（「失败」与「兜底」是同一流程两步，文档各写一半）；② `SubTaskReviewServiceImpl.verificationSignal` **仅检测不拦截**——无证据提交不拒收，但向 Reviewer 注入「从严核验、评分保守、不得判 pass=true」指令；③ `PromptTemplateServiceImpl` 从 classpath `skills/{role}/SKILL.md` 读取 + 变量替换，本文件即唯一源头；④ `ExecutionRecordParserTest` 用 §4.4 两个官方示例原文做解析输入（文档-解析器绑定），示例不可随意删。
+- **整改原则**：每个规则只在 §4.4 定义一次，其余处引用；示例保留（单测绑定）；§0.3 时间语义本身自洽，不动。
+- **明确不做**：不改 Java 代码与解析器行为（口径对齐以现状代码为准）；不动 §一/§二/§三；不动 §4.4 两个官方示例内容。
+
+#### 2. 实际落地
+
+- **§4.4 字段表格口径统一**：SUMMARY 解析约束「缺失或为空 → 整块解析失败」→「缺失或为空 → 整块解析失败，平台以产出前 200 字兜底为摘要」；VERIFICATION 说明「（可选但强烈建议）」→「（平台解析不强制，但缺失会触发审查侧从严核验，见下方围栏）」。
+- **§4.4 两个 🔴 块**：强制格式块删「（fallback 用产出前 200 字做摘要）」的歧义表述，统一为「SUMMARY 缺失或为空 → 整块解析失败，平台以产出前 200 字兜底为摘要——下游读到的将不再是你的原话」；VERIFICATION 围栏块第 3 条补「（仅检测不拦截）」与真实后果（无证据不拒收，但注入「从严核验、评分保守」指令，无法确认验收不得判通过）。
+- **§4.2 Step 3 引用化**：三行字段清单（SUMMARY/DOWNSTREAM_NOTES/DELIVERABLES）改为引用「格式见 §4.4」，并注明 SUMMARY 必填、老产出可能没有。
+- **§4.3 截断规则去重**：模板行「超 2000 字截断并标注」删去，尾句保留为唯一截断规则（每件事只说一遍）。
+- **§4.5 编码口径**：尾句「验收标准要求『UTF-8 声明』时……」→「验收标准若显式声明编码要求，以声明为准且文件实际字节必须与声明一致——口头声明 UTF-8、实际按 GBK 保存同样会被驳回」（消除「统一 UTF-8」与「以声明为准」的张力）。
+- **§1.5.7 引用断链修复**：「按 §4.5 用 Invoke-WebRequest + UTF-8 字节解码」→自包含表述「PS 5.1 对 JSON 响应的解码问题——改用 Invoke-WebRequest 取原始字节后按 UTF-8 解码」。
+- **续签窗口口径统一**：§1.3.bis 与 §1.5.3 两处「T+(ttl-1)m」→「租约到期前 60s」，与 §1.5.2 表格「ttlMinutes 到期前 60s」、§1.5.6「now+60s」单一口径（ttlMinutes 可自定义时「ttl-1 分钟」有歧义）。
+
+#### 3. 验证结果
+
+- **单测回归**：`mvn -pl helloai-core -am test "-Dtest=ExecutionRecordParserTest" "-DskipTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"` → 7/7 全绿（含 §4.4 两个官方示例的文档-解析器绑定用例，示例未改动故绑定不漂移）。
+- 纯资源文件变更（SKILL.md + 本文档），零 Java 改动，无编译风险。
+
+#### 4. 影响与遗留
+
+- 影响：外部 Agent 读到的 EXECUTION_RECORD 格式与平台行为口径完全一致（一处定义、多处引用）；VERIFICATION「可选 vs 必填」统一为「平台不拦截但从严核验、执行侧纪律必须附证据」的单一解读；修复 §1.5.7 引用断链（此前 Agent 按指引去 §4.5 找不到响应解码方法）。
+- 部署注意：资源文件在 jar 内，重新打包部署后端 jar 生效（`getSkillForAgent` 运行时读取）；无 Flyway、无配置项。
+- 遗留：① 差距表 N18 已覆盖 P0-P2 与本文档规范互指关系，本轮为文档质量治理，不改 N18 状态；② 本轮代码与文档未 git 提交，待用户确认后提交。
+
+---
+
+### 6.117 executor SKILL.md 反馈驱动修订：逐条事实核查后的 17 项采纳（2026-08-20）
+
+#### 1. 范围
+
+- **背景**：用户提供一份外部审阅意见（24 项：4 严重 / 11 中等 / 9 小问题），要求据此再调整 executor SKILL.md。按守则先逐条对代码事实核查，再采纳成立项——核查结论：4 项基于旧版/渲染后文档不成立（硬编码密钥、localhost 写死、「证据链」描述均不在当前文件；当前已是占位符注入），2 项反馈建议值与代码不符（workMode 无 MANUAL，实为 AUTO/STRICT；finishReason/closeReason 为自由字符串），其余成立或部分成立。
+- **本轮内容**：采纳 17 项修订（详见 §2）；其中最有价值的是核查中证实的两个隐藏坑：返工重提旧 resultId 会被判幂等重复而静默丢弃新产出、REWORK 状态 submitResult 不自动推进会报 invalid_status。
+- **明确不做**：不改任何 Java 代码（全部是文档口径对齐与补全）；不批量移除 A0-x/§6.x 内部追踪编号（保留可追溯锚点，迭代记录多处交叉引用）；不改 `.bis` 章节编号（重排会波及十余处交叉引用，收益仅美观）；planner/reviewer SKILL.md 不同步（本轮反馈仅针对 executor 说明书）。
+
+#### 2. 实际落地
+
+- **事实核查不采纳项（4+2）**：① 密钥泄露：当前文件第 10 行即 `<注册后填入>` 占位符（`PromptTemplateService` 注册时注入），全文无 `ak_` 实值；② localhost 写死：全文均 `{{BASE_URL}}` 占位符；③ reportBlocked「带证据链」：当前文档无此表述，平台确实只收 reason（`McpToolServiceImpl.reportBlocked(agentId, subTaskId, reason)`）；④ workMode 值域反馈称含 MANUAL——代码 `WorkMode.strictParse` 仅 AUTO/STRICT，非法值拒绝；finishReason/closeReason 无枚举校验（默认 manual_close）。
+- **§0 区**：认证信息区补占位符语义注解（ak_ 前缀、注册注入、勿硬编码外传）+「📎 最快上手」导航（直指 §1.5.7 最小闭环，缓解上下文窗口压力）；§0.1 后新增**值域速查块**（workMode AUTO/STRICT、maxConcurrent 在飞口径与 LLM 型建议 1、ttlMinutes、finishReason/closeReason 建议取值）；§0.2 速查表**补 `listConversationBySubTaskId` 对话流端点行**（真实存在于 `SubTaskController` 但此前未入表）、startById 行补「正常流程无需调，仅返工重提必须调」、submitById 行补「只翻状态不带产出」。
+- **续租口径统一（消除 A0-8 自动续约与旧「提前 60s 重签」建议的矛盾）**：§1.3.bis 心跳节拍、§1.5.2 两件套表、§1.5.3 新增 💡 块（仅三种异常场景需手动 checkOut+checkIn：onDuty=false / 换参数 / 断网恢复自检失效）、§1.5.6 骨架注释四处同步改为「正常轮询自动续租，无需手动重签」。
+- **§四 依赖装配重构（消除 getDepsSummary 与手动 fetch 的结构性矛盾）**：§4.2 改「方式 A 首选 getDepsSummary 一键拉取（含 truncated=4000 字截断 / degraded 降级语义与回退指引）+ 方式 B 兜底手动逐条 fetch（原 Step 1-3 保留，兼作截断补拉）」；章节号 4.1~4.6 不动，既有交叉引用零破坏；§四顶部警告同步改「首选方式 A，degraded/截断回退方式 B」。
+- **返工重提四步（本轮最重修订，两个隐藏坑均经代码证实）**：`ExecutionResultHandler` 幂等判定在状态检查之前且 `rework()`/`reworkFresh()` 不清 `context.lastExecution.idempotencyKey` → 返工沿用旧 resultId 返回 `accepted=true, idempotent=true` 但新产出不写入；`McpToolServiceImpl.submitResult` 仅自动推进 ASSIGNED→IN_PROGRESS，REWORK 直提返回 `invalid_status:REWORK`（状态机 REWORK→IN_PROGRESS 合法，需 `startById`）。§注意事项新增四步流程（查意见重传附件 → startById 拉回 IN_PROGRESS → 新 resultId 提交 → 仍附 EXECUTION_RECORD）；§1.2 submitResult 行、§1.5.1.bis rejected/rework 行、§1.5.7 脚本 resultId 注释三处同步指向。
+- **其余采纳项**：§1.2 reportBlocked 行补「证据内嵌进 reason」（平台无附件字段）；🧭 上传提示补标准流程四步编号（①生成 → ②upload → ③DELIVERABLES 列路径 → ④submit）；§1.5.1.bis assigned 行补「assigned 是资格通知，claim 才锁执行权」、reassigned/unassigned 行补「终止进行中调用、不要 submitResult、只 ack」；§1.5.1 补收件箱多消息按 priority 降序 + deadline 临近优先；§1.5.7 补 MCP SSE 通道参数相同说明 + `trap` 兜底 checkOut（注明与 finally 都不 100% 拦截强杀）+ 执行段补 getMergedRules 注释（与§注意事项「必须」口径闭环）；§4.4 补 VERIFICATION 多行输出粘贴规则（续行原样粘贴无需围栏，但证据内不得出现独立 `---` 行——解析器 BLOCK_END）与 DELIVERABLES 相对项目根路径约定。
+
+#### 3. 验证结果
+
+- **代码事实核验（本轮全部修订的依据）**：`SubTaskController.listConversationBySubTaskId` 存在；`McpToolServiceImpl.submitResult` L392-402 ASSIGNED 自动推进 + REWORK 拒绝；`ExecutionResultHandler.handleReport` L109-120 幂等检查先于状态检查、`SubTaskServiceImpl.rework` 不清 context；`WorkMode` 仅 AUTO/STRICT；`ExecutionRecordParser` BLOCK_END=`---`、VERIFICATION 截取至块尾；`getDepsSummary` 4000 字截断与 degraded 降级语义（`McpToolServiceImpl.getDepsSummary` Javadoc + `McpToolService` 返回 DTO 注释）。
+- 纯资源文件变更，零 Java 改动；§4.4 两个官方示例未动，`ExecutionRecordParserTest` 文档-解析器绑定不漂移。
+
+#### 4. 影响与遗留
+
+- 影响：外部 Agent 接入文档消除四类困惑源（依赖读取双路径无主次、续租新旧口径并存、返工重提无指引、值域无定义）；两个会导致产出静默丢失的坑（旧 resultId / REWORK 状态）首次显式写入文档。
+- 部署注意：资源文件在 jar 内，重新打包部署后端 jar 生效；无 Flyway、无配置项、无 API 变更。
+- 遗留：① 反馈中「提供 50 行精简版 Quick Start 独立文档」未做（已用顶部「最快上手」导航 + §1.5.7 最小闭环轻量覆盖，独立简版待真实接入方反馈上下文压力后再评估）；② A0-x/§6.x 编号与 .bis 章节号经权衡保留（可追溯性 > 轻微噪声）。

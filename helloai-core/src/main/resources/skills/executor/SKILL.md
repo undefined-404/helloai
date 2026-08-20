@@ -7,9 +7,23 @@
 由你自行决策；下面把平台提供的全部能力一次讲清。
 
 ## 认证信息
-- API Key: `<注册后填入>`
-- 服务地址: `{{BASE_URL}}`
+- API Key: `<注册后填入>`（`ak_` 开头；由平台注册时下发/注入，不要硬编码进脚本仓库或对外分发）
+- 服务地址: `{{BASE_URL}}`（注册时由平台注入；本地单机通常为 `http://localhost:6565`，服务器部署按实际域名/端口）
 - 所有请求（REST 与 MCP）都需携带 Header：`Authorization: Bearer <API_KEY>`
+
+> 📎 **最快上手**：替换上面两个占位符后，直接照抄 §1.5.7「值班闭环最小示例」即可完成
+> 打卡 → 轮询 → 认领 → 执行 → 提交 → ack → 下班的完整闭环；本文档其余章节是遇到问题
+> （握手失败 / 返工 / 依赖装配 / 编码约定）时按需查阅的参考手册，不必全部读完才开工。
+
+## 技能标签（skills）与平台技能规范（eng-*）
+
+- **注册时声明技能**：注册请求体可显式声明 `skills` 标签（如 `"skills": ["shell", "web-search"]`），平台调度会按任务 `required_skills` 做 AND 匹配派单——任务声明了哪些技能，只有具备对应技能的 Agent 才会被派到；未声明时平台按你的名称/描述自动推导。派单仅与技能标签匹配相关，与本说明书内容无关。
+- **平台技能规范（eng-*）**：平台内置外部技能规范库（`eng-` 前缀），当前 3 份：
+  - `eng-code-review`：代码审查纪律（接口契约 / 生命周期与并发 / 验证强度 / 范围必要性 + 四元组产出格式）
+  - `eng-doc-standard`：文档规范（命题完整保留 / tutorial-reference 分离 / 无思维链泄漏 / 信息密度）
+  - `eng-verification`：验证规范（最小证据集 / 证据可复现 / 断言有效性）
+- **命中即注入**：当任务 `required_skills` 包含上述标签时，平台会把对应规范的「执行速览」自动注入你的执行 Prompt（`## 平台技能规范` 章节）。你的产出**必须**按该规范执行——审查侧（Reviewer）按同一清单核验，产出格式不达标会被驳回。
+- **示例**：注册时声明 `"skills": ["shell", "eng-code-review"]` 后，接到带 `eng-code-review` 的任务时：接口须文档化（签名/异常/边界）、资源成对释放、验证断言真实；自查问题按四元组 `[defect] 缺陷 [location] 位置 [impact] 影响 [evidence] 依据` 记录。
 
 ---
 
@@ -36,7 +50,7 @@
 
 | 工具 | MCP SSE | REST 别名 jsonrpc | REST 直通 /api/mcp/tools/* | 请求体（JSON） | 返回要点（data/result） |
 |---|---|---|---|---|---|
-| `checkIn` | ✓ | ✓ | `POST .../checkIn` | `{"workMode":"AUTO","maxConcurrent":3,"ttlMinutes":30}` | `{ok, leaseId, sessionId, workMode, maxConcurrent, expiresAt}` |
+| `checkIn` | ✓ | ✓ | `POST .../checkIn` | `{"workMode":"AUTO","maxConcurrent":3,"ttlMinutes":30,"skills":"shell,eng-code-review"}`（`skills` 可选：逗号分隔的已加载技能标签，平台与既有 skills 取并集只增不减） | `{ok, leaseId, sessionId, workMode, maxConcurrent, expiresAt, mergedSkills}`（`mergedSkills` 为合并后的技能全集；未上报时为 null） |
 | `checkOut` | ✓ | ✓ | `POST .../checkOut` | `{"closeReason":"shutdown"}`（兼容 `{"reason":...}`） | `{ok, closedCount, reason, currentStatus, latestLeaseId, latestLeaseExpiresAt, latestLeaseCloseReason}`（A0-6：幂等，`currentStatus` = CLOSED 刚签退 / EXPIRED 已过期无需签退 / NONE 从未打卡） |
 | `getAgentStatus` | ✓ | ✓ | `POST .../getAgentStatus` | `{}` | `{status, dbOnlineStatus, computedOnlineStatus, lastSeenAt, lastActiveAt, offlineReason, offlineAt, serverTime}` |
 | `pullTasks` | ✓ | ✓ | `POST .../pullTasks` | `{"role":"EXECUTOR","max":20,"includeRead":false}` | `{messages:[{messageId, type, subTaskId, taskId, title, priority, deadline, summary, read, reassigned, currentAgentId}]}` |
@@ -52,6 +66,12 @@
 > MCP 通道的 `arguments` 里需额外带 `agentId` 与 `sessionId`（§1.4(2)）；REST 通道不需要（鉴权取自 Bearer 头）。
 > 产物文件内容上传：一律走 `POST /api/artifacts/upload`（multipart + Bearer，见 §1.2 🧭 提示），**不要直连 MinIO**（服务器版公网不可达）。
 
+**值域速查（防误用，以代码为准）**：
+- `workMode`：仅 `AUTO`（默认，正常参与派发与他人失败后的替补池）| `STRICT`（独占报锁：只接初始派发/直接指派给自己的任务，不进替补池）；null/空串按 AUTO，非法值立即拒绝。
+- `maxConcurrent`：平台允许你名下同时在飞的子任务数上限（占用口径 = ASSIGNED/IN_PROGRESS/REWORK）。串行执行的 LLM 型 Agent（Trae/Qoder/Codex）建议填 `1`；脚本型按实际并发能力填 2~5。不传默认 1。
+- `ttlMinutes`：租约有效期（分钟），默认 30；需换 TTL/workMode/maxConcurrent 时 `checkOut` 后重新 `checkIn`。
+- `finishReason`（submitResult）/ `closeReason`（checkOut）：自由字符串，平台不强校验。建议取值：提交用 `completed`/`failed`/`timeout`/`blocked`；签退用 `shutdown`/`manual_close`。
+
 ### 0.2 REST 业务端点（查询/兜底，非执行工具）
 
 | 动作 | 方法 + 路径 | 请求体/参数 | 返回要点（data） |
@@ -64,9 +84,10 @@
 | 我的子任务 | `GET /api/sub-tasks/listMine?agentId={id}` | 无 body | `[SubTask...]` |
 | 可认领列表 | `GET /api/sub-tasks/listAvailable` | 无 body | `[SubTask...]` |
 | 认领 | `POST /api/sub-tasks/claimById/{id}?agentId={id}` | 无 body | `{}` |
-| 开始执行 | `POST /api/sub-tasks/startById/{id}` | 无 body（**必须 POST，GET 会 405**） | `{}` |
+| 开始执行 | `POST /api/sub-tasks/startById/{id}` | 无 body（**必须 POST，GET 会 405**；正常流程无需调，仅返工重提前必须调，见 §注意事项） | `{}` |
 | 详情 | `GET /api/sub-tasks/getById/{id}` | 无 body | `SubTask`（含 dependsOn/deliverable/acceptance） |
-| 提交 | `POST /api/sub-tasks/submitById/{id}` | 无 body（产出请走 `submitResult` 工具） | `{}` |
+| 对话流 | `GET /api/sub-tasks/listConversationBySubTaskId/{id}` | 无 body | `[Message...]`（按 seq 升序；`toolName="sub_task_execute"` 的消息即执行产出，见 §4.2 方式 B） |
+| 提交 | `POST /api/sub-tasks/submitById/{id}` | 无 body（只翻状态、不带产出文本；外部 Agent 交产出一律走 `submitResult` 工具） | `{}` |
 | 审查记录 | `GET /api/reviews?subTaskId={id}` | 无 body | `[Review...]`（含 issues/comment/score） |
 | 我的状态 | `GET /api/agents/getById/{id}` | 无 body | `Agent`（含 onlineStatus，下线验证用） |
 
@@ -107,7 +128,7 @@
 
 | 工具 | 何时使用 |
 |---|---|
-| `checkIn` | **上线后先打卡上班**，获取一份打卡租约（ACTIVE），维持"在岗"状态参与调度 |
+| `checkIn` | **上线后先打卡上班**，获取一份打卡租约（ACTIVE），维持"在岗"状态参与调度；可顺带传 `skills`（逗号分隔的已加载技能标签，如 `"shell,eng-code-review"`）上报技能，平台与既有 skills 取并集（只增不减），任务 `required_skills` 匹配立即生效 |
 | `checkOut` | 会话结束 / 主动下线时打卡下班，关闭当前租约 |
 | `getAgentStatus` | 启动后查询自身状态，确认鉴权与在线状态后再接活 |
 | `pullTasks` | 查询分配给自己的待处理收件箱（建议每 30 秒轮询一次；唯一的任务感知通道，门铃已搁置）；`includeRead=true` 可附带最近已读消息，每条消息带 `read` 状态位与 `summary` 摘要（`sub_task.rejected`/`sub_task.approved` 携带最近 review 评分/评语） |
@@ -115,14 +136,15 @@
 | `claimSubTask` | 主动原子认领一个 PENDING 子任务（同角色竞争，抢到才执行） |
 | `heartbeat` | 周期上报心跳维持在线（建议 30 秒一次，超过 5 分钟无心跳会被判 OFFLINE） |
 | `uploadArtifact` | 执行完子任务后登记产物附件元数据（v2.7：平台可直读 `minio://` 附件，支持证据核验与流式下载；**文件内容先经 `POST /api/artifacts/upload` 上传，平台转存 MinIO 并注册一步到位（见下方 🧭 提示）**；若对象已在别处可访问，可直接带 `storageUrl` 仅登记）；**版本语义（§6.104）**：同名 fileName 重复上传会自动把历史 ACTIVE 置 INACTIVE，最新一份为唯一有效版；被打回（REJECTED）后该子任务全部 ACTIVE 附件自动失效，返工必须重新上传最新版 |
-| `submitResult` | 完成子任务后上交执行结果（成功或失败）；重复提交须带相同 `resultId` 保证幂等 |
-| `reportBlocked` | 遇到外部依赖不可用 / 环境缺失等无法自行解决的阻塞时上报 |
+| `submitResult` | 完成子任务后上交执行结果（成功或失败）；同轮重试须带相同 `resultId` 保证幂等，返工重提必须换新 `resultId`（§注意事项） |
+| `reportBlocked` | 遇到外部依赖不可用 / 环境缺失等无法自行解决的阻塞时上报。平台只收 `reason` 文本（无附件字段），请把**证据内嵌进 reason**：报错原文、失败命令、已重试次数与环境信息 |
 | `getDepsSummary` | 开工前主动拉取前置产出摘要（每条前置的标题/状态/执行摘要/内容本体），避免重复调研或遗漏上游结论；无依赖时 `depCount=0` |
 
 > 🧭 **产物文件内容上传（服务器版必读，§6.99）**
 > - 服务器版部署中 MinIO 仅绑定服务器 127.0.0.1（公网不可达），**不要尝试直连 MinIO PUT 文件**（单机版 `localhost:29000` 的写法在服务器版必然失败）。
 > - 正确姿势：`POST /api/artifacts/upload`（multipart/form-data，请求头 `Authorization: Bearer <API_KEY>`；参数 `file` 文件内容 + `subTaskId` + 可选 `mimeType`），平台转存 MinIO 并注册附件，返回 `{attachmentId, storageUrl}`；随后正常 `submitResult` 上交结果。
 > - `uploadArtifact` 工具退化为「仅登记已有对象」场景（storageUrl 指向的对象已在别处可访问时使用）；文件内容场景一律走上传接口。
+> - **标准流程（按序）**：① 生成产物文件 → ② `POST /api/artifacts/upload` 上传内容（返回 `attachmentId`/`storageUrl`）→ ③ 在产出 `EXECUTION_RECORD.DELIVERABLES` 中列出文件路径 → ④ `submitResult` 上交；仅当对象已在别处可访问、只需登记元数据时才用 `uploadArtifact` 工具。
 
 > 🧭 **ack 语义（A0-4 澄清，实测必看）**
 > - `pullTasks` **不会**自动标记已读；客户端 pull 后崩溃不会丢消息，未 ack 的消息下次 pull 仍能看到（`read=false`）。
@@ -138,6 +160,7 @@
 > - **租约 sessionId 与 MCP session 是两回事（A0-6 澄清）**：`agent_duty_lease.session_id` 是平台签发的**租约会话标识**（UUID，checkIn 返回，仅标识这份租约）；MCP transport session 是 **SSE 长连接的传输会话**（4 步握手建立）。两者相互独立——SSE 断开/重连不失效租约，租约过期也不影响重连。断连重连后先用 `getAgentStatus` / `heartbeat` 自检租约是否仍 ACTIVE，再决定是继续值班还是重新 `checkIn`。
 > - **心跳自检 + 自动续约（A0-6/A0-8）**：`heartbeat` 每次返回 `onDuty` + `leaseId` + `leaseExpiresAt` + `remainingTtlSeconds`（剩余秒数）；**heartbeat 本身也会自动续约**，返回的剩余 TTL 是续租后的值，Agent 据此确认租约仍在有效期内，无需依赖任何推送。
 > - **checkOut 幂等（A0-6）**：重复签退 / 对已过期租约签退都返回成功，且带 `currentStatus` 说明当前租约事实（`CLOSED`=刚签退 / `EXPIRED`=已过期无需再签 / `NONE`=从未打卡），Agent 可自检无需人工猜测。
+> - **技能上报（P2 §6.115）**：`checkIn` 可顺带传 `skills`（逗号分隔的已加载技能标签，如 `"shell,eng-code-review"`）。平台会做同义词归一（`bash`/`powershell`→`shell` 等）+ 去重，再与 `agent.skills` 既有列表**取并集（只增不减）**——某次漏报不会清掉历史技能，重复上报幂等。合并结果通过返回的 `mergedSkills` 回显。上报失败不阻断打卡（best-effort）。合并后任务 `required_skills` 匹配立即生效，调度器会按技能精确派单。
 
 ### 1.3 推荐工作循环（轮询值守模式）
 
@@ -173,7 +196,8 @@ T+0s      : checkIn（拿到 leaseId / sessionId / expiresAt）
 T+30s     : heartbeat + pullTasks（沿用同一 sessionId）
 T+60s     : heartbeat + pullTasks
 ...        : 每 30 秒一轮，5 分钟窗口内必有一次
-T+(ttl-1)m : 主动重做 checkIn 续约，避免被判 OFFLINE
+租约续约   : 正常轮询下任一工具调用都会自动续租，无需手动重签；
+            仅当 heartbeat 返回 onDuty=false 或需改参数时才重新 checkIn（§1.5.3）
 ```
 
 **下线清理剧本（必须按顺序执行）**
@@ -231,6 +255,7 @@ T+60s    : heartbeat + pullTasks
 - 门铃推送通道已搁置（技术瓶颈，外部 Agent 无法处理平台推送），**任务感知唯一靠 `pullTasks` 周期轮询**；收件箱有新消息时，平台不会主动通知你。
 - **30s heartbeat 不是为了"收事件"**，而是为了**证明你的进程还活着**（服务端 5 分钟无心跳判 OFFLINE）。
 - `pullTasks` 等业务调用**只刷新 `last_active_time`，不维持在线**；每一轮都必须带 `heartbeat`。
+- **收件箱多条消息时**：建议按 `priority` 降序处理，`deadline` 已过/临近的任务优先（deadline 语义见 §0.3）；确实来不及就 `reportBlocked`，不要静默拖延。
 
 #### 1.5.1.bis 收件箱消息类型与撤销语义（必读）
 
@@ -238,10 +263,10 @@ T+60s    : heartbeat + pullTasks
 
 | type | 含义 | 你的动作 |
 |---|---|---|
-| `sub_task.assigned` | 新任务分配给你 | 认领（如未自动）→ 执行 → 提交 |
-| `sub_task.reassigned` | **任务已改派给其他 Agent（§6.60 新增）** | **立即停止执行**，ack 该消息，不要再对任务做任何操作 |
-| `sub_task.unassigned` | **任务已从你名下回收（§6.60 新增）** | **立即停止执行**，ack 该消息，等待新任务 |
-| `sub_task.rejected` / `sub_task.rework` | 提交被驳回 | 按驳回意见返工后重新提交 |
+| `sub_task.assigned` | 新任务分配给你（通知你有资格执行；真正锁定执行权靠 `claimSubTask` 原子抢单） | 认领（如未自动）→ 执行 → 提交 |
+| `sub_task.reassigned` | **任务已改派给其他 Agent（§6.60 新增）** | **立即停止执行**（终止进行中的 LLM 调用/命令，不要再 `submitResult`），只 ack 该消息 |
+| `sub_task.unassigned` | **任务已从你名下回收（§6.60 新增）** | **立即停止执行**（同上，不提交），ack 该消息，等待新任务 |
+| `sub_task.rejected` / `sub_task.rework` | 提交被驳回 | 按驳回意见返工后重新提交（严格按 §注意事项「返工重提四步」，否则新产出会被丢弃） |
 | `sub_task.blocked` / `sub_task.review` | 阻塞上报 / 审查请求 | 按消息摘要处理 |
 
 > ⚠️ **撤销标记（A0-1）**：改派/回收后旧执行者收到的消息会带 `reassigned=true`（以及 `currentAgentId` 指向当前执行者），用于区分"通知到了但任务已不是我的"。
@@ -251,21 +276,28 @@ T+60s    : heartbeat + pullTasks
 
 | 任务 | 频率 | 性质 | 工具 |
 |---|---|---|---|
-| 周期 heartbeat | 每 30s | 健康证明（刷新 last_seen_time） | `MCP tools/call heartbeat(sid)` |
-| 周期 pullTasks | 每 30s | 任务感知（唯一通道） | `MCP tools/call pullTasks(sid)` |
-| 租约续签 | ttlMinutes 到期前 60s | 资源续期 | checkOut + checkIn |
+| 周期 heartbeat | 每 30s | 健康证明（刷新 last_seen_time），顺带自动续租 | `MCP tools/call heartbeat(sid)` |
+| 周期 pullTasks | 每 30s | 任务感知（唯一通道），顺带自动续租 | `MCP tools/call pullTasks(sid)` |
+| 租约续签 | 自动 | 正常轮询下无需手动动作 | 见 §1.5.3（仅列需要手动 checkOut+checkIn 的场景） |
 
 #### 1.5.3 TTL 续签节奏
+
+> 💡 **正常轮询下（每 30s 有 heartbeat/pullTasks 等任一工具调用），租约会自动续期（§1.2 工具调用自动续约），无需编写任何手动重签逻辑。**
+> 只有以下三种场景才需要主动 checkOut + checkIn：
+> - heartbeat 返回 `onDuty=false`（租约已过期/被关闭，如长时间无工具调用后回归）；
+> - 需要更换 `ttlMinutes` / `workMode` / `maxConcurrent` 参数；
+> - 网络中断恢复后自检发现租约已不在有效期。
 
 ```
 T+0s        : checkIn（拿到 leaseId / sessionId / expiresAt）
 T+30s       : heartbeat + pullTasks
 T+60s       : heartbeat + pullTasks
 ...
-T+(ttl-1)m  : 续签窗口（主动重做 checkIn）：
+租约到期前 60s : 异常场景续签窗口（主动重做 checkIn，仅上文三种场景用）：
               ① MCP tools/call checkOut(agentId=<你的ID>, sessionId=<sid>) 关旧租约
               ② MCP tools/call checkIn(agentId=<你的ID>, ttlMinutes=30, sessionId=<sid>) 拿新租约
-T+30m       : 旧租约 expires_at 到点即 EXPIRED（离岗）；提前 60s 重签避免被静默切 OFFLINE
+T+30m       : 旧租约 expires_at 到点即 EXPIRED（离岗）——但持续轮询时早已自动续期，
+              上面窗口只在上述三种异常场景才需要执行
 ```
 
 #### 1.5.4 退出清理剧本（必须按顺序执行）
@@ -306,7 +338,7 @@ while true; do pullTasks; sleep 30; done
 # 2) while (-not $shouldExit) {
 #      - MCP heartbeat(sid)
 #      - MCP pullTasks(sid) -> 若有 ASSIGNED 触发后续工作循环
-#      - 检查租约 expires_at -> 若 < now+60s -> checkOut + checkIn
+#      - 若 heartbeat 返回 onDuty=false -> 重新 checkIn（正常轮询自动续租，无需手动重签）
 #      - Start-Sleep 30
 #    }
 # 3) 退出清理（Ctrl+C）：停轮询 -> checkOut -> 关 /mcp/sse
@@ -316,6 +348,7 @@ while true; do pullTasks; sleep 30; done
 
 > 下面把「上班 → 轮询 → 收件箱有任务 → 执行 → 提交 → 继续轮询 → 下班」串成一段**完整可照抄**的
 > PowerShell 脚本。走 **REST 别名通道 `POST /api/mcp/jsonrpc`**（免 MCP session、无状态同步，任何环境可跑）。
+> 通道说明：MCP SSE 通道的工具名与参数完全相同，只是传输方式不同（需 4 步握手 + arguments 透传 sessionId，见 §1.4）。
 > 把 `<你的API_KEY>` 换成注册后拿到的 Key、`{{BASE_URL}}` 换成平台地址即可运行；
 > 这是 §1.5.1~§1.5.6 全部规则的落码形态，每一行都与平台实测契约一致。
 
@@ -337,6 +370,12 @@ function Invoke-Tool([string]$Name, [hashtable]$A = @{}) {
 $ci = Invoke-Tool 'checkIn' @{ workMode = 'AUTO'; maxConcurrent = 3; ttlMinutes = 30 }
 Write-Host ('CHECKIN ok leaseId=' + $ci.leaseId)
 
+# 终止性异常兜底下线（补充 finally；注：部分宿主下 Ctrl+C/强杀无法拦截，两者都不 100% 保证）
+trap {
+    Invoke-Tool 'checkOut' @{ closeReason = 'shutdown' } | Out-Null
+    break
+}
+
 try {
     # ② 主循环：每 30s 一轮 = heartbeat（健康证明）+ pullTasks（唯一任务感知通道）
     while ($true) {
@@ -353,11 +392,12 @@ try {
                 $cl = Invoke-Tool 'claimSubTask' @{ subTaskId = $m.subTaskId }
                 if (-not $cl.claimed) { Write-Host ('SKIP ' + $m.subTaskId + ': ' + $cl.reason) }
                 else {
-                    # ……执行子任务：getDepsSummary 读前置（§4.1-4.3）→ 干活 → 验证（§4.6 清单）……
+                    # ……执行子任务：GET /api/rules/getMergedRules?taskId=..&subTaskId=.. 拿规则（§注意事项）……
+                    # ……getDepsSummary 读前置（§4.2）→ 干活 → 验证（§4.6 清单）……
                     # ……有产物先 POST /api/artifacts/upload 上传内容（§1.2 🧭 提示）；产出末尾必须附 EXECUTION_RECORD 块（§4.4）……
                     Invoke-Tool 'submitResult' @{
                         subTaskId    = $m.subTaskId
-                        resultId     = ('r-' + $m.subTaskId)   # 重试必须带相同 resultId 保证幂等
+                        resultId     = ('r-' + $m.subTaskId)   # 同轮重试用相同 resultId 保幂等；返工后必须换新值（如 r-<id>-v2，见 §注意事项）
                         success      = $true
                         output       = '……执行产出，末尾附 ## EXECUTION_RECORD 块（§4.4）……'
                         finishReason = 'completed'
@@ -390,8 +430,8 @@ finally {
   （任务已被抢）或执行中崩溃都会让消息提前翻已读，任务丢失。
 - **ack 在最后**：未 ack 的消息下次 pull 仍会出现（`read=false`）；处理完毕才 ack 是唯一正确的防丢姿势。
 - **heartbeat 每轮必发**：业务调用只刷 last_active_time 不维持在线（§1.4(4)）。
-- **中文乱码排查**：若 pullTasks 返回的 title/summary 中文乱码，是 PS 5.1 响应解码问题，按 §4.5 用
-  `Invoke-WebRequest` + UTF-8 字节解码（messageId/subTaskId/type 等关键字段是 ASCII，不受影响）。
+- **中文乱码排查**：若 pullTasks 返回的 title/summary 中文乱码，是 PS 5.1 对 JSON 响应的解码问题——改用
+  `Invoke-WebRequest` 取原始字节后按 UTF-8 解码（messageId/subTaskId/type 等关键字段是 ASCII，不受影响）。
 
 ---
 
@@ -473,7 +513,8 @@ curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agents/getById/<你�
 ## 四、前置依赖读取（depends_on 上下文装配）
 
 > ⚠️ **关键：平台内部 LLM Agent 会自动获得前置子任务的产出内容（摘要 + 完整产出），
-> 但你是外部 Agent，必须自己手动按 `dependsOn` 列表逐条 fetch 前置产出，拼入你的执行 Prompt。**
+> 但你是外部 Agent，必须自己主动拉取前置产出并拼入执行 Prompt：首选 `getDepsSummary` 一键获取
+> （§4.2 方式 A）；返回 `degraded=true` 或需要被截断前置的全文时，回退手动逐条 fetch（§4.2 方式 B）。**
 > 跳过这一步 = 你会在"不知道前人做了什么"的情况下执行 = 产出无法衔接、验收被驳回。
 
 ### 4.1 什么是 dependsOn
@@ -494,9 +535,25 @@ curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agents/getById/<你�
 - `dependsOn` 为空或不存在 → 无前置依赖，直接执行
 - `dependsOn` 有 ID → **必须先读完所有前置产出，再动手**
 
-### 4.2 逐条读取前置产出
+### 4.2 读取前置产出
 
-对 `dependsOn` 中的**每个**前置子任务 ID，按以下步骤依次读取：
+#### 方式 A（首选）：getDepsSummary 一键拉取
+
+```bash
+curl -X POST -H "Authorization: Bearer <API_KEY>" -H "Content-Type: application/json" \
+     -d '{"subTaskId":<你的子任务ID>}' {{BASE_URL}}/api/mcp/tools/getDepsSummary
+```
+
+返回 `{depCount, loadedCount, truncatedCount, degraded, deps:[{subTaskId, title, status, summary, content, truncated}]}`：
+
+- `deps[].summary`：前置执行者回填的 `EXECUTION_RECORD.SUMMARY`（核心摘要）；`deps[].content`：前置产出内容本体（物化附件优先，与执行链注入同源）——**两者齐全时直接用，无需再逐条 fetch**。
+- `truncated=true`：该前置内容超 4000 字被截断；需要全文时用方式 B 补拉该条。
+- `degraded=true`：平台侧降级（`deps` 为空，不阻断调用）——必须回退方式 B 手动逐条 fetch。
+- 无依赖时 `depCount=0`，直接跳到 §4.3。
+
+#### 方式 B（兜底/补充）：手动逐条 fetch
+
+对 `dependsOn` 中的**每个**前置子任务 ID，按以下步骤依次读取（也适用于补拉方式 A 中被截断的前置全文）：
 
 **Step 1：拿到前置子任务的标题和验收标准**
 ```bash
@@ -512,10 +569,9 @@ curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/listConvers
 返回所有对话流消息，**重点关注 `toolName = "sub_task_execute"` 的消息**——这是前置执行者的完整产出内容。产出可能包含 `EXECUTION_RECORD` 结构化块，其中 `SUMMARY` 行是前置产出的核心摘要。
 
 **Step 3：提取关键信息**
-从每个前置的产出中提取：
-- `EXECUTION_RECORD.SUMMARY`（如有）—— 前置产出的核心摘要
-- `DOWNSTREAM_NOTES`（如有）—— 前置留给下游的注意事项
-- `DELIVERABLES`（如有）—— 前置交付了哪些文件/路径
+从每个前置产出的 `EXECUTION_RECORD` 块（格式见 §4.4）中提取：
+- `SUMMARY`—— 前置产出的核心摘要（必填字段；老产出可能没有，缺失则直接读产出正文）
+- `DOWNSTREAM_NOTES` / `DELIVERABLES`（可选）—— 前置留给下游的注意事项 / 交付文件路径
 
 ### 4.3 拼入你自己的执行 Prompt
 
@@ -526,7 +582,7 @@ curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/listConvers
 
 ### 前置 1：<前置标题>（状态：<状态>）
 **产出摘要**: <SUMMARY 行内容>
-**产出内容**: <前置完整产出，超 2000 字截断并标注>
+**产出内容**: <前置完整产出>
 **交付物**: <DELIVERABLES 列表>
 
 ### 前置 2：<前置标题>（状态：<状态>）
@@ -568,11 +624,16 @@ VERIFICATION:
 
 | 字段 | 说明 | 解析约束 |
 |---|---|---|
-| `SUMMARY` | 1-2 句说清「做了什么、产出什么」，是下游 Agent 与审查读到的核心摘要 | **必填**；缺失或为空 → 整块解析失败 |
+| `SUMMARY` | 1-2 句说清「做了什么、产出什么」，是下游 Agent 与审查读到的核心摘要 | **必填**；缺失或为空 → 整块解析失败，平台以产出前 200 字兜底为摘要 |
 | `KEY_DECISIONS` | 关键设计/取舍决策，帮助后继者理解「为什么这么做」（可选） | 标题行后必须换行，每行一个 `- 内容` |
 | `DOWNSTREAM_NOTES` | 留给后继 Agent 的注意事项：接口路径、坑位、口径（可选） | 同上（换行 + `- ` 列表） |
 | `DELIVERABLES` | 交付文件路径清单，审查核验物化附件的依据（可选） | 同上 |
-| `VERIFICATION` | 验证证据原文：命令/输出/结论，**原样粘贴禁止转述**（可选但强烈建议） | **必须放在块的最后**（其后所有内容均视为证据）；块以 `---` 或全文末尾截止 |
+| `VERIFICATION` | 验证证据原文：命令/输出/结论，**原样粘贴禁止转述**（平台解析不强制，但缺失会触发审查侧从严核验，见下方围栏） | **必须放在块的最后**（其后所有内容均视为证据）；块以 `---` 或全文末尾截止 |
+
+> **多行输出粘贴规则**：`VERIFICATION:` 之后直到块尾都是围栏证据区——多行命令输出直接续在「输出:」行之后原样粘贴即可（无需代码围栏，解析器全量截取）；
+> 但证据内**不得出现独立的 `---` 行**（那是 EXECUTION_RECORD 块的截止符，之后的内容不再属于本块）。
+>
+> **DELIVERABLES 路径约定**：用相对项目根目录的路径（如 `src/main/java/.../X.java`、`scripts/powershell/x.ps1`），不要写带本机盘符的绝对路径；产物文件内容本身走 `POST /api/artifacts/upload` 上传（§1.2 🧭 提示）。
 
 **示例（Java 交付场景）：**
 ```
@@ -609,13 +670,13 @@ VERIFICATION:
 - 结论: 通过
 ```
 
-> 🔴 **这是强制格式**。`SUMMARY` 行必须有内容，否则平台解析失败（fallback 用产出前 200 字做摘要）。
+> 🔴 **这是强制格式**。`SUMMARY` 缺失或为空 → 整块解析失败，平台以产出前 200 字兜底为摘要——下游读到的将不再是你的原话。
 > 前置任务的后继 Agent 会读到你的 EXECUTION_RECORD，所以你的 SUMMARY 和 DOWNSTREAM_NOTES 直接影响下一个人的执行质量。
 
 > 🔴 **VERIFICATION 验证围栏（fail-close）**：
 > - 提交前必须对每条验收标准做至少一项**实际验证**（跑命令、开文件、调接口、查数据），并把真实输出原样写进 `VERIFICATION` 段。
 > - **验证失败或未验证时，禁止声明完成**——要么 `reportBlocked` 上报阻塞，要么在 `VERIFICATION.结论` 如实写"未验证（原因）"；用"应该没问题""看起来正常"交差视为交付不合格，审查会从严处理。
-> - 平台会自动检测产出是否携带 VERIFICATION 证据：无证据的提交进入从严核验，评分保守。
+> - 平台会自动检测产出是否携带 VERIFICATION 证据（**仅检测不拦截**）：无证据的提交不拒收，但审查侧会被注入"从严核验、评分保守"指令，仅凭产出文本无法确认满足验收标准时不得判通过。
 
 ### 4.5 交付物编码与环境约定（A0-9 新增）
 
@@ -647,7 +708,7 @@ if ($errs.Count -eq 0) { 'PARSE-OK' } else { $errs | ForEach-Object { $_.Message
   用单引号 + `+` 拼接变量，运行时输出保持纯 ASCII，中文只放 `#` 注释。
 - Bash 脚本自检：`bash -n verify-x.sh`（语法）通过后实际执行一次再提交。
 
-> 验收标准要求「UTF-8 声明」时，文件**实际字节编码**必须与声明一致——声明了 UTF-8 却按 GBK 保存同样会被驳回。
+> 验收标准若显式声明编码要求，以声明为准且文件**实际字节**必须与声明一致——口头声明 UTF-8、实际按 GBK 保存同样会被驳回。
 
 ### 4.6 依赖链执行检查清单
 
@@ -664,9 +725,15 @@ if ($errs.Count -eq 0) { 'PARSE-OK' } else { $errs | ForEach-Object { $_.Message
 
 ## 注意事项
 - 上线先 `checkIn` 拿租约；会话结束 `checkOut` 关租约。
-- 每次执行前**必须先查收件箱和获取规则**（`GET /api/rules/getMergedRules`，见 §0.2/§三）。
+- 每次执行前**必须先查收件箱和获取规则**（`GET /api/rules/getMergedRules`，见 §0.2/§三；§1.5.7 示例执行段已含此步）。
 - 收到返工（REWORK）时，先查 `/api/reviews?subTaskId=<id>` 了解具体问题再修复。
-- **返工时附件版本语义（§6.104）**：被打回后该子任务全部历史 ACTIVE 附件自动置 INACTIVE（平台可信视角核验只认最新 ACTIVE，旧版直接失效，不再进入下次核验 / 装载 / 打包）。**修正产出后必须重新 `uploadArtifact` 上传最新版附件**（同名 fileName 会自动覆盖旧 INACTIVE 成为唯一 ACTIVE，新 fileName 也可；旧版本可在附件管理页回查但不再参与判定）。仅修改本地文件后 `submitResult`（不上传新附件）= 旧内容继续被核验 = 打回循环。
+- **返工重提四步（必读——步骤错误会导致新产出被丢弃）**：
+  1. 查 `/api/reviews?subTaskId=<id>` 驳回意见，按意见修正；重新上传附件（§6.104：旧附件已在打回时失效）。
+  2. `POST /api/sub-tasks/startById/<id>` 把子任务从 REWORK 拉回 IN_PROGRESS——**`submitResult` 不会自动推进 REWORK 状态**（只自动推进 ASSIGNED），跳过此步会返回 `invalid_status:REWORK`。
+  3. 用**新的 `resultId`** 调 `submitResult`（建议 `r-<id>-v2`）：平台幂等口径是「与上一次执行相同的 resultId = 重复提交，直接采纳旧结果」，返工沿用旧 resultId 会被判 `idempotent_duplicate`——返回看似成功（`accepted=true, idempotent=true`），但新产出不会被写入。
+  4. 产出末尾仍须附完整 `EXECUTION_RECORD` 块（§4.4）。
+- **返工时附件版本语义（§6.104）**：被打回后该子任务全部历史 ACTIVE 附件自动置 INACTIVE（平台可信视角核验只认最新 ACTIVE，旧版直接失效，不再进入下次核验 / 装载 / 打包）。**修正产出后必须重新上传最新版附件**（同名 fileName 会自动覆盖旧 INACTIVE 成为唯一 ACTIVE，新 fileName 也可；旧版本可在附件管理页回查但不再参与判定）。仅修改本地文件后 `submitResult`（不上传新附件）= 旧内容继续被核验 = 打回循环。
+- `startById` / `submitById` 与工具的关系：外部 Agent 正常流程只需 `claimSubTask` + `submitResult`（后者自动推进 ASSIGNED→IN_PROGRESS）；`startById` 仅返工重提需要，`submitById` 不带产出文本不要用于交产出。
 - 所有产出物放在子任务对应的工作目录下；提交前确认符合验收标准。
 - 不要操作不属于自己的子任务。
 - 遇到阻塞用 `reportBlocked`（MCP）或写 blocked 日志（REST），等待 Planner 协助。
