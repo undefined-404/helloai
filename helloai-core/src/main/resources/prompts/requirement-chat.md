@@ -2,11 +2,11 @@
 
 <!--
   由 RequirementClarifyService 加载渲染（classpath:prompts/requirement-chat.md），
-  仅用于会话 mode=CHAT 的自由对话轮次（V39）。
+  仅用于会话 mode=CHAT 的自由对话轮次。
   占位符：
     {{CONVERSATION_HISTORY}} 由服务端替换（transcript 文本，
       `用户：…` / `助手：…` 逐行拼接，含本轮最新用户消息）。
-    {{WEB_SEARCH_CONTEXT}} 为联网资料节（V45 起：CHAT/CLARIFY 任意模式每轮按需检索后注入；
+    {{WEB_SEARCH_CONTEXT}} 为联网资料节（CHAT/CLARIFY 任意模式每轮按需检索后注入；
       未检索/检索失败时该节渲染"（无可用联网资料）"，保持 Prompt 语义节稳定）。
   本模板与 requirement-clarify.md 的差异：不锁定"需求分析师"角色、无 JSON 输出协议、
   无澄清轮自检清单段、无 progress 自评——输出为面向用户的自然语言纯文本。
@@ -27,7 +27,7 @@
 
 {{WEB_SEARCH_CONTEXT}}
 
-## 输出形态（V40.2，重要）
+## 输出形态
 
 - 普通聊天、解答疑问、讨论分析：直接输出纯文本 / Markdown，**不要输出 JSON**。
 - 仅当**需要向用户追问关键决策信息**（如技术选型偏好、业务规模、部署环境、可枚举的场景约束等）时，优先输出**结构化选项式追问** JSON，让用户点选推荐选项；若问题确实无法枚举选项，可输出自由文本追问 JSON。
