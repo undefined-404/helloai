@@ -274,7 +274,7 @@ npm run dev
 - [ ] 浏览器型 Agent（WEB_BROWSER）真实接入链路
 - [ ] 工作流模板与 Team 编排
 - [ ] 多租户与权限隔离
-- [ ] 分布式调度扩展（多实例门铃 fanout 等）
+- [ ] 分布式调度扩展
 - [ ] 结构化多文件产出物化（方案 3：LLM manifest）
 
 ---
@@ -298,6 +298,19 @@ npm run dev
 2. 新建 `feat_xxx` 或 `fix_xxx` 分支
 3. 改代码前必读 `doc/HelloAI_CODE_STYLE.md`；涉及调度/执行链改动需先读 `doc/design/HelloAI_调度解耦重构分析.md`
 4. 提交前跑通与改动面相关的 `scripts/` 验证脚本，PR 附上脚本输出
+
+---
+
+## 🙏 致谢与参考借鉴
+
+本项目在设计与实现过程中参考了以下开源项目（具体吸收定位与落点详见 [`doc/design/HelloAI_外部项目借鉴技术细节.md`](doc/design/HelloAI_外部项目借鉴技术细节.md) 与 [`doc/design/HelloAI_DeepSeek_Harness_Skills借鉴方案.md`](doc/design/HelloAI_DeepSeek_Harness_Skills借鉴方案.md)）：
+
+- **[OpenMOSS](https://github.com/undefined-404/OpenMOSS)** —— Agent 接入层 + 角色建模层 + Prompt/Skill 资产层（HelloAI 三角色模型收敛受其启发；PATROL 已移除，由熔断降级 / 死信池 / 定时补偿覆盖）
+- **[AgentTeams](https://github.com/agentscope-ai/AgentTeams)** —— 调度内核 + 执行边界 + 状态收敛模型（Manager/Worker 职责分离、Heartbeat 7 步主动巡检、`.processing` 工作区协调锁、任务恢复流思路）
+- **[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)** —— `eng-*` 平台技能规范库（`eng-code-review` / `eng-doc-standard` / `eng-verification`）与 Reviewer 双轨纪律制（C1-C4 / D1-D3 + 四元组 issues）的源头（已按 HelloAI 语义适配并自命名 `eng-` 前缀）
+- **[Vibe-Skills](https://github.com/foryourhealth111-pixel/Vibe-Skills)** —— 工作流运行时设计参考（Late Skill Binding、Task Contract、6 阶段状态机思路）
+
+许可兼容性以各上游 LICENSE 为准；详细借鉴条目 / 本地参考路径 / 当前落地状态以上述两份借鉴文档为准。
 
 ---
 
