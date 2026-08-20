@@ -45,10 +45,10 @@ defineEmits<{
   height: 38px;
   border: 1px solid var(--login-accent-border);
   border-radius: var(--ha-radius-md);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--login-input-bg);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
-  color: rgba(255, 255, 255, 0.72);
+  color: var(--ha-ink-secondary);
   font-size: 13px;
   font-weight: 600;
   font-family: var(--ha-font-family);
@@ -60,7 +60,7 @@ defineEmits<{
 .entry-tab:hover {
   border-color: var(--login-accent-border-strong);
   background: rgba(124, 58, 237, 0.14);
-  color: #FFFFFF;
+  color: var(--login-accent-ink);
   transform: translateY(-1px);
 }
 

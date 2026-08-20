@@ -4,51 +4,67 @@
    ======================================== */
 
 :root {
-  /* ---- Colors (purple-primary, deep navy dark theme) ---- */
+  /* ---- Colors (purple-primary, cool-neutral; 亮色基层) ----
+     亮色为主题基层，暗色由 html.dark 覆盖（项目默认暗色，见 index.html） */
   --ha-primary: #7C3AED;
   --ha-primary-hover: #6D28D9;
   --ha-primary-active: #5B21B6;
-  --ha-primary-muted: rgba(124, 58, 237, 0.18);
-  --ha-primary-light: rgba(124, 58, 237, 0.10);
+  --ha-primary-muted: rgba(124, 58, 237, 0.12);
+  --ha-primary-light: rgba(124, 58, 237, 0.08);
 
-  --ha-bg: #0A0E1A;
-  --ha-surface: #0F1524;
-  --ha-surface-hover: #1A2138;
-  --ha-surface-elevated: #121828;
+  --ha-bg: #F6F7FB;
+  --ha-surface: #FFFFFF;
+  --ha-surface-hover: #F1F3F9;
+  --ha-surface-elevated: #FFFFFF;
 
-  --ha-border: #242D47;
-  --ha-border-light: #1C2438;
+  --ha-border: #E2E6F0;
+  --ha-border-light: #EBEEF5;
 
-  --ha-ink: #EEF2F8;
-  --ha-ink-secondary: #A9B4C7;
-  --ha-muted: #7C8AA0;
+  --ha-ink: #1A2233;
+  --ha-ink-secondary: #4A5568;
+  --ha-muted: #8B96AB;
 
+  /* 语义色：主色两主题共用；-text 为 tag 等文字场景的对比度变体 */
   --ha-success: #10B981;
-  --ha-success-bg: rgba(16, 185, 129, 0.12);
+  --ha-success-bg: rgba(16, 185, 129, 0.10);
+  --ha-success-text: #047857;
   --ha-warning: #F59E0B;
-  --ha-warning-bg: rgba(245, 158, 11, 0.12);
+  --ha-warning-bg: rgba(245, 158, 11, 0.10);
+  --ha-warning-text: #B45309;
   --ha-danger: #EF4444;
-  --ha-danger-bg: rgba(239, 68, 68, 0.12);
+  --ha-danger-bg: rgba(239, 68, 68, 0.10);
+  --ha-danger-text: #B91C1C;
   --ha-info: #3B82F6;
-  --ha-info-bg: rgba(59, 130, 246, 0.12);
+  --ha-info-bg: rgba(59, 130, 246, 0.10);
+  --ha-info-text: #1D4ED8;
+
+  /* ---- Links ---- */
+  --ha-link: #6D28D9;
+  --ha-link-hover: #7C3AED;
+
+  /* ---- Secondary Accent (仅装饰用途：侧边栏光斑 / 登录页光晕 / 引导渐变) ---- */
+  --ha-accent-cyan: #06B6D4;
 
   /* ---- Scrollbar ---- */
-  --ha-scrollbar-thumb: #2A3350;
-  --ha-scrollbar-thumb-hover: #3A4568;
+  --ha-scrollbar-thumb: #C9D0DE;
+  --ha-scrollbar-thumb-hover: #B4BCCF;
 
-  /* ---- Sidebar (deep navy gradient) ---- */
-  --ha-sidebar-bg-start: #0D1220;
-  --ha-sidebar-bg-end: #0E2233;
-  --ha-sidebar-text: rgba(255, 255, 255, 0.85);
-  --ha-sidebar-text-muted: rgba(255, 255, 255, 0.55);
-  --ha-sidebar-hover: rgba(255, 255, 255, 0.10);
-  --ha-sidebar-active: rgba(255, 255, 255, 0.20);
+  /* ---- Sidebar (亮色：白底 + 浅紫高亮) ---- */
+  --ha-sidebar-bg-start: #FFFFFF;
+  --ha-sidebar-bg-mid: #FBFAFE;
+  --ha-sidebar-bg-end: #F8F7FD;
+  --ha-sidebar-text: #3C4658;
+  --ha-sidebar-text-muted: #8B96AB;
+  --ha-sidebar-hover: rgba(124, 58, 237, 0.06);
+  --ha-sidebar-active: rgba(124, 58, 237, 0.12);
+  --ha-sidebar-border: rgba(16, 24, 40, 0.06);
+  --ha-sidebar-grid: rgba(26, 34, 51, 0.04);
 
   /* ---- Content Width (fluid) ---- */
   --ha-content-width: 100%;
 
   /* ---- Typography ---- */
-  --ha-font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  --ha-font-family: 'Inter Variable', 'Inter', system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --ha-font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
 
   /* ---- Border Radius ---- */
@@ -57,10 +73,10 @@
   --ha-radius-lg: 12px;
   --ha-radius-xl: 16px;
 
-  /* ---- Shadows (dark + subtle purple glow) ---- */
-  --ha-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
-  --ha-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.40), 0 0 12px rgba(124, 58, 237, 0.06);
-  --ha-shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.50), 0 0 24px rgba(124, 58, 237, 0.08);
+  /* ---- Shadows (亮色：浅灰系 + 微紫晕) ---- */
+  --ha-shadow-sm: 0 1px 3px rgba(16, 24, 40, 0.06), 0 1px 2px rgba(16, 24, 40, 0.04);
+  --ha-shadow-md: 0 4px 16px rgba(16, 24, 40, 0.08), 0 0 12px rgba(124, 58, 237, 0.05);
+  --ha-shadow-lg: 0 8px 32px rgba(16, 24, 40, 0.12), 0 0 24px rgba(124, 58, 237, 0.06);
 
   /* ---- Spacing ---- */
   --ha-space-xs: 4px;
@@ -77,6 +93,55 @@
   --ha-duration-normal: 250ms;
   --ha-duration-slow: 400ms;
   --ha-duration-entrance: 500ms;
+}
+
+/* ---- Dark Theme Tokens ----
+   暗色为项目默认主题（index.html 带 class="dark"），
+   以深海军蓝板覆盖亮色基层；仅列与亮色不同的 token。 */
+html.dark {
+  --ha-primary-muted: rgba(124, 58, 237, 0.18);
+  --ha-primary-light: rgba(124, 58, 237, 0.10);
+
+  --ha-bg: #0A0E1A;
+  --ha-surface: #0F1524;
+  --ha-surface-hover: #1A2138;
+  --ha-surface-elevated: #121828;
+
+  --ha-border: #242D47;
+  --ha-border-light: #1C2438;
+
+  --ha-ink: #EEF2F8;
+  --ha-ink-secondary: #A9B4C7;
+  --ha-muted: #7C8AA0;
+
+  --ha-success-bg: rgba(16, 185, 129, 0.12);
+  --ha-success-text: #34D399;
+  --ha-warning-bg: rgba(245, 158, 11, 0.12);
+  --ha-warning-text: #FBBF24;
+  --ha-danger-bg: rgba(239, 68, 68, 0.12);
+  --ha-danger-text: #F87171;
+  --ha-info-bg: rgba(59, 130, 246, 0.12);
+  --ha-info-text: #60A5FA;
+
+  --ha-link: #A78BFA;
+  --ha-link-hover: #C4B5FD;
+
+  --ha-scrollbar-thumb: #2A3350;
+  --ha-scrollbar-thumb-hover: #3A4568;
+
+  --ha-sidebar-bg-start: #0D1220;
+  --ha-sidebar-bg-mid: #141B33;
+  --ha-sidebar-bg-end: #0E2233;
+  --ha-sidebar-text: rgba(255, 255, 255, 0.85);
+  --ha-sidebar-text-muted: rgba(255, 255, 255, 0.55);
+  --ha-sidebar-hover: rgba(255, 255, 255, 0.10);
+  --ha-sidebar-active: rgba(255, 255, 255, 0.20);
+  --ha-sidebar-border: rgba(255, 255, 255, 0.06);
+  --ha-sidebar-grid: rgba(255, 255, 255, 0.03);
+
+  --ha-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --ha-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.40), 0 0 12px rgba(124, 58, 237, 0.06);
+  --ha-shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.50), 0 0 24px rgba(124, 58, 237, 0.08);
 }
 
 /* ---- Global Base Styles ---- */
@@ -98,6 +163,9 @@ body {
   background: var(--ha-bg);
   font-size: 14px;
   line-height: 1.5;
+  /* 主题切换时底色平滑过渡（仅 shell 级容器，不做全局 * 过渡） */
+  transition: background-color var(--ha-duration-normal) var(--ha-ease-out),
+              color var(--ha-duration-normal) var(--ha-ease-out);
 }
 
 /* ---- Scrollbar (Webkit) ---- */
@@ -122,10 +190,35 @@ body {
   color: var(--ha-primary);
 }
 
+/* ---- Element Plus brand color alignment ----
+   EP 默认主色是蓝 #409EFF，与项目紫色品牌割裂；
+   覆盖主色族使 switch/radio/checkbox/slider 等组件统一到紫。
+   light-N 为 #7C3AED 向白混合 N0% 的坡道值。 */
+:root {
+  --el-color-primary: #7C3AED;
+  --el-color-primary-light-3: #A375F2;
+  --el-color-primary-light-5: #BE9CF6;
+  --el-color-primary-light-7: #D8C4FA;
+  --el-color-primary-light-8: #E5D8FB;
+  --el-color-primary-light-9: #F2EBFD;
+  --el-color-primary-dark-2: #5B21B6;
+}
+
 /* ---- Element Plus dark palette alignment ----
    将 EP 官方 dark 的中性黑色板对齐到项目深蓝色板，
-   覆盖 message/notification/popper 等 append-to-body 弹层 */
+   覆盖 message/notification/popper 等 append-to-body 弹层。
+   注意：dark 下 light-N 必须是「主色与暗底混合」的深色坡道（与 EP 官方 dark 同构），
+   不能用亮色坡道——否则 plain 按钮/tag 等以 light-N 为底的组件在暗页上出现亮块 */
 html.dark {
+  /* html.dark 选择器特异性高于 :root，EP 主色族需在此重申；
+     light-N 为 #7C3AED 与 #141414 按 (100-N)% 混合的暗色坡道 */
+  --el-color-primary: #7C3AED;
+  --el-color-primary-light-3: #5D2FAC;
+  --el-color-primary-light-5: #482781;
+  --el-color-primary-light-7: #331F55;
+  --el-color-primary-light-8: #291C3F;
+  --el-color-primary-light-9: #1E182A;
+  --el-color-primary-dark-2: #5B21B6;
   --el-bg-color: #121828;
   --el-bg-color-page: #0A0E1A;
   --el-bg-color-overlay: #161E33;
@@ -154,7 +247,9 @@ html.dark {
   font-family: var(--ha-font-family);
   transition: all var(--ha-duration-fast) var(--ha-ease-out) !important;
 }
-.el-button--primary {
+/* plain 变体不能命中：否则实心紫底 + 紫字导致文字不可见（hover 才变白字）；
+   plain primary 回退 EP 原生暗色样式（浅紫底 + 紫字 + 紫边框） */
+.el-button--primary:not(.is-plain) {
   --el-button-bg-color: var(--ha-primary) !important;
   --el-button-border-color: var(--ha-primary) !important;
   --el-button-hover-bg-color: var(--ha-primary-hover) !important;
@@ -178,7 +273,7 @@ html.dark {
               transform var(--ha-duration-normal) var(--ha-ease-out);
 }
 .el-card:hover {
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.45), 0 0 12px rgba(124, 58, 237, 0.10) !important;
+  box-shadow: var(--ha-shadow-md) !important;
 }
 .el-card.is-never-shadow {
   box-shadow: none !important;
@@ -201,24 +296,23 @@ html.dark {
   font-size: 14px;
   color: var(--ha-ink);
 }
+/* 网格线弱化：去掉单元格竖线，仅保留行分隔线，暗底下减轻视觉噪声 */
 .el-table th.el-table__cell {
   font-size: 13px;
   font-weight: 500;
   color: var(--ha-ink) !important;
   background: var(--ha-surface) !important;
   padding: 10px 12px !important;
-  border-right: 1px solid var(--ha-border) !important;
-  border-bottom: none !important;
-}
-.el-table th.el-table__cell.el-table__cell:last-child {
   border-right: none !important;
+  border-bottom: 1px solid var(--ha-border) !important;
 }
 .el-table td.el-table__cell {
   padding: 10px 12px !important;
   border-bottom: 1px solid var(--ha-border-light) !important;
-  border-right: 1px solid var(--ha-border) !important;
+  border-right: none !important;
 }
-.el-table td.el-table__cell:last-child {
+/* border 变体（el-table border 属性）自带的竖线同样压掉，外框保留 */
+.el-table--border .el-table__cell {
   border-right: none !important;
 }
 .el-table::before {
@@ -234,19 +328,19 @@ html.dark {
 }
 .el-tag--success {
   --el-tag-bg-color: var(--ha-success-bg);
-  --el-tag-text-color: #34D399;
+  --el-tag-text-color: var(--ha-success-text);
 }
 .el-tag--warning {
   --el-tag-bg-color: var(--ha-warning-bg);
-  --el-tag-text-color: #FBBF24;
+  --el-tag-text-color: var(--ha-warning-text);
 }
 .el-tag--danger {
   --el-tag-bg-color: var(--ha-danger-bg);
-  --el-tag-text-color: #F87171;
+  --el-tag-text-color: var(--ha-danger-text);
 }
 .el-tag--info {
   --el-tag-bg-color: var(--ha-info-bg);
-  --el-tag-text-color: #60A5FA;
+  --el-tag-text-color: var(--ha-info-text);
 }
 
 /* ---- Menu ---- */
@@ -348,7 +442,7 @@ html.dark {
   background: transparent !important;
 }
 .sidebar-menu .el-menu-item {
-  color: rgba(255, 255, 255, 0.65) !important;
+  color: var(--ha-sidebar-text-muted) !important;
   border-radius: var(--ha-radius-sm) !important;
   margin: 2px 10px !important;
   padding: 0 12px !important;
@@ -356,8 +450,8 @@ html.dark {
   line-height: 38px !important;
 }
 .sidebar-menu .el-menu-item:hover {
-  background: rgba(255, 255, 255, 0.08) !important;
-  color: rgba(255, 255, 255, 0.90) !important;
+  background: var(--ha-sidebar-hover) !important;
+  color: var(--ha-sidebar-text) !important;
 }
 .sidebar-menu .el-menu-item.is-active {
   background: var(--ha-primary) !important;
@@ -415,12 +509,12 @@ p, .el-empty__description p {
 
 /* ---- Subtle link underlines ---- */
 a {
-  color: #A78BFA;
+  color: var(--ha-link);
   text-decoration: none;
   transition: color var(--ha-duration-fast);
 }
 a:hover {
-  color: #C4B5FD;
+  color: var(--ha-link-hover);
   text-decoration: underline;
 }
 
@@ -582,9 +676,9 @@ img {
 }
 
 /* ========================================
-   Dark Component Refinements (permanent dark theme)
-   全站永久暗色：基础色板由 :root token 与 html.dark EP 变量提供，
-   此处仅保留需要额外层次对比的组件精修。
+   Component Refinements (theme-aware)
+   基础色板由 :root（亮）与 html.dark（暗）token 提供，
+   此处仅保留需要额外层次对比的组件精修，全部走 token 自动跟随主题。
    不加 !important，避免覆盖登录页等局部作用域样式。
    ======================================== */
 

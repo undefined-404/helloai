@@ -3,12 +3,13 @@
     <el-aside
       :width="collapsed ? '64px' : '220px'"
       class="app-sidebar"
+      :class="{ collapsed }"
     >
       <div class="sidebar-header">
         <div class="sidebar-logo">
           <el-icon
             :size="22"
-            color="#fff"
+            class="sidebar-logo-icon"
           >
             <MagicStick />
           </el-icon>
@@ -17,6 +18,18 @@
             class="sidebar-title"
           >HelloAI</span>
         </div>
+        <button
+          class="theme-toggle"
+          type="button"
+          :title="themeStore.theme === 'dark' ? '切换到亮色主题' : '切换到暗色主题'"
+          :aria-label="themeStore.theme === 'dark' ? '切换到亮色主题' : '切换到暗色主题'"
+          @click="themeStore.toggleTheme()"
+        >
+          <el-icon :size="15">
+            <Moon v-if="themeStore.theme === 'dark'" />
+            <Sunny v-else />
+          </el-icon>
+        </button>
       </div>
 
       <el-menu
@@ -173,14 +186,16 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowDown, Clock, Expand, Fold, Warning } from '@element-plus/icons-vue'
+import { ArrowDown, Clock, Expand, Fold, Moon, Sunny, Warning } from '@element-plus/icons-vue'
 import { authApi } from '@/api/auth'
 import { useAuthStore } from '@/stores/auth'
+import { useThemeStore } from '@/stores/theme'
 import ChangePasswordDialog from '@/components/ChangePasswordDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+const themeStore = useThemeStore()
 const collapsed = ref(false)
 const passwordDialogVisible = ref(false)
 
@@ -225,16 +240,17 @@ function handlePasswordChanged() {
 .app-shell { height: 100vh; overflow: hidden; }
 
 .app-sidebar {
-  background: linear-gradient(160deg, #0D1220 0%, #141B33 55%, #0E2233 100%);
-  background-size: 400% 400%;
-  animation: sidebar-aurora 18s ease infinite;
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  background: linear-gradient(160deg, var(--ha-sidebar-bg-start) 0%, var(--ha-sidebar-bg-mid) 55%, var(--ha-sidebar-bg-end) 100%);
+  border-right: 1px solid var(--ha-sidebar-border);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   contain: layout style;
   position: relative;
   isolation: isolate;
+  /* 主题切换过渡 */
+  transition: background var(--ha-duration-normal) var(--ha-ease-out),
+              border-color var(--ha-duration-normal) var(--ha-ease-out);
 }
 
 .sidebar-title,
@@ -250,8 +266,8 @@ function handlePasswordChanged() {
   position: absolute;
   inset: 0;
   background-image:
-    linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+    linear-gradient(to right, var(--ha-sidebar-grid) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--ha-sidebar-grid) 1px, transparent 1px);
   background-size: 28px 28px;
   pointer-events: none;
   z-index: 0;
@@ -266,38 +282,28 @@ function handlePasswordChanged() {
   height: 200px;
   border-radius: 50%;
   filter: blur(60px);
-  background: rgba(6, 182, 212, 0.15);
+  background: color-mix(in srgb, var(--ha-accent-cyan) 15%, transparent);
   pointer-events: none;
-  animation: sidebar-blur-float 16s ease-in-out infinite;
-  will-change: transform, filter;
   z-index: 0;
-}
-
-@keyframes sidebar-aurora {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
-}
-
-@keyframes sidebar-blur-float {
-  0% { transform: translate3d(0, 0, 0) scale(1); }
-  50% { transform: translate3d(-40px, 30px, 0) scale(1.15); }
-  100% { transform: translate3d(0, 0, 0) scale(1); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .app-sidebar { animation: none; background-size: auto; }
-  .app-sidebar::after { animation: none; }
 }
 
 .sidebar-header {
   height: 56px;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 0 16px;
   flex-shrink: 0;
   position: relative;
   z-index: 1;
+}
+
+/* 收起态：logo 与主题切换钮纵向排列 */
+.app-sidebar.collapsed .sidebar-header {
+  flex-direction: column;
+  height: auto;
+  padding: 12px 0 8px;
 }
 
 .sidebar-logo {
@@ -306,12 +312,38 @@ function handlePasswordChanged() {
   gap: 10px;
 }
 
+.sidebar-logo-icon {
+  color: var(--ha-sidebar-text);
+}
+
 .sidebar-title {
-  color: #fff;
+  color: var(--ha-sidebar-text);
   font-size: 17px;
   font-weight: 700;
   letter-spacing: -0.01em;
   white-space: nowrap;
+}
+
+/* 主题切换钮：圆形图标钮，侧边栏内自绘（不经 EP，避免亮暗底适配负担） */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border: 1px solid var(--ha-sidebar-border);
+  border-radius: 50%;
+  background: var(--ha-sidebar-hover);
+  color: var(--ha-sidebar-text-muted);
+  cursor: pointer;
+  transition: color var(--ha-duration-fast) var(--ha-ease-out),
+              background-color var(--ha-duration-fast) var(--ha-ease-out),
+              border-color var(--ha-duration-fast) var(--ha-ease-out);
+}
+.theme-toggle:hover {
+  color: var(--ha-sidebar-text);
+  background: var(--ha-sidebar-active);
 }
 
 .sidebar-menu {
@@ -337,7 +369,7 @@ function handlePasswordChanged() {
 
 .sidebar-menu .el-menu-item:hover {
   background: var(--ha-sidebar-hover) !important;
-  color: #fff !important;
+  color: var(--ha-sidebar-text) !important;
 }
 
 .sidebar-menu .el-menu-item.is-active {
@@ -353,7 +385,7 @@ function handlePasswordChanged() {
 
 .sidebar-footer {
   padding: 10px 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--ha-sidebar-border);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -401,7 +433,7 @@ function handlePasswordChanged() {
 }
 
 .collapse-btn:hover {
-  color: #fff !important;
+  color: var(--ha-sidebar-text) !important;
 }
 
 .collapse-btn-mini {
@@ -411,7 +443,7 @@ function handlePasswordChanged() {
 }
 
 .collapse-btn-mini:hover {
-  color: #fff !important;
+  color: var(--ha-sidebar-text) !important;
 }
 
 .app-content {
@@ -419,6 +451,7 @@ function handlePasswordChanged() {
   padding: clamp(16px, 2vw, 32px);
   overflow-y: auto;
   height: 100vh;
+  transition: background-color var(--ha-duration-normal) var(--ha-ease-out);
 }
 
 .page-fade-enter-active { animation: ha-fade-up 350ms var(--ha-ease-out) both; }

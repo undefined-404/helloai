@@ -277,14 +277,14 @@ onMounted(() => load())
 }
 .browser { flex: 1; min-height: 480px; }
 .crumb { margin-bottom: 14px; }
-.crumb-link { color: var(--ha-primary, #409eff); cursor: pointer; }
+.crumb-link { color: var(--ha-primary); cursor: pointer; }
 .row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 6px; cursor: pointer; }
 .row:hover { background: var(--ha-primary-muted, rgba(124, 58, 237, 0.08)); }
 .row.file { cursor: default; }
 /* 历史版本（INACTIVE/DELETED）灰显：仅在全量模式下回查展示 */
 .row.inactive { opacity: 0.55; }
 .icon { color: var(--ha-muted); font-size: 16px; flex-shrink: 0; }
-.icon.dir { color: var(--ha-primary, #409eff); }
+.icon.dir { color: var(--ha-primary); }
 .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .hint { font-size: 12px; color: var(--ha-muted); }
 .meta { font-size: 12px; color: var(--ha-muted); min-width: 44px; text-align: right; }

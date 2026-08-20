@@ -9,7 +9,8 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref } from 'vue'
 
-// 深蓝星空背景（Canvas 2D）：圆形轨道运动 + 拖尾 + 闪烁，深蓝基调点缀 HelloAI 紫青
+// 深蓝星空背景（Canvas 2D）：圆形轨道运动 + 拖尾 + 闪烁，深蓝基调点缀 HelloAI 紫青。
+// 约束：仅供登录页左侧品牌区使用，该区域为固定暗色品牌面板（不随亮暗主题切换）。
 const props = withDefaults(defineProps<{
   // 星星密度（每 10000px² 的星星数），按面板尺寸自动换算总量
   density?: number

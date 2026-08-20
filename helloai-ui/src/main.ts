@@ -12,11 +12,8 @@ import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import './styles/design-system.css'
 import './styles/animations.css'
 
-/* ---- Inter Font (Variable) ---- */
-const link = document.createElement('link')
-link.rel = 'stylesheet'
-link.href = 'https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&display=swap'
-document.head.appendChild(link)
+/* ---- Inter Font (自托管可变字体，免 CDN 依赖) ---- */
+import '@fontsource-variable/inter'
 
 /* ---- Dev-only: impeccable live reload bridge ----
  * 仅在 `vite dev` 模式下注入；构建产物（vite build）不会执行 import.meta.env.DEV 为 true 的分支。

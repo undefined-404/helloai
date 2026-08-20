@@ -8,7 +8,7 @@
       <div
         v-for="stat in stats"
         :key="stat.label"
-        class="stat-card"
+        class="stat-card ha-card-lift"
       >
         <div
           class="stat-dot"
@@ -42,11 +42,11 @@
       class="charts-grid"
     >
       <div
-        class="chart-card ha-entrance-up"
+        class="chart-card ha-card-lift ha-entrance-up"
         style="animation-delay: 100ms"
       >
         <div class="chart-header">
-          <el-icon color="#7C3AED">
+          <el-icon style="color: var(--ha-primary)">
             <User />
           </el-icon>
           <span>Agent 积分排行</span>
@@ -63,11 +63,11 @@
         />
       </div>
       <div
-        class="chart-card ha-entrance-up"
+        class="chart-card ha-card-lift ha-entrance-up"
         style="animation-delay: 200ms"
       >
         <div class="chart-header">
-          <el-icon color="#10B981">
+          <el-icon style="color: var(--ha-success)">
             <DataLine />
           </el-icon>
           <span>任务吞吐量</span>
@@ -93,7 +93,7 @@
     >
       <div class="section-header">
         <div class="section-title">
-          <el-icon color="#0EA5E9">
+          <el-icon style="color: var(--ha-info)">
             <Clock />
           </el-icon>
           <span>今日打卡概览</span>
@@ -107,7 +107,7 @@
       </div>
       <div class="stats-grid duty-grid">
         <div
-          class="stat-card"
+          class="stat-card ha-card-lift"
           :class="dutyLoading ? 'is-loading' : ''"
         >
           <div
@@ -157,12 +157,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, nextTick, onUnmounted } from 'vue'
 import * as echarts from 'echarts'
 import type { ECharts } from 'echarts'
 import { dashboardApi } from '@/api/dashboard'
 import { dutyApi } from '@/api/duty'
 import type { DutyOverviewResponse } from '@/types/duty'
+import { useThemeStore } from '@/stores/theme'
 import { Clock, DataLine } from '@element-plus/icons-vue'
 
 const loading = ref(false)
@@ -204,6 +205,18 @@ const throughputChart = ref<HTMLDivElement>()
 // 实例引用：定义明确类型 + null 兜底，避免 unmounted/dispose 时访问空对象
 let rankInstance: ECharts | null = null
 let throughputInstance: ECharts | null = null
+
+const themeStore = useThemeStore()
+// 主题切换联动：图表配色在 init 时经 cssVar 读取 --ha-*，
+// 换主题后用现有数据 dispose 重建即可拿到新主题色（不重拉接口）
+watch(() => themeStore.theme, async () => {
+  await nextTick()
+  const data = rawData.value
+  if (data && Object.keys(data).length > 0) {
+    initRankChart(data)
+    initThroughputChart(data)
+  }
+})
 
 function disposeCharts() {
   if (rankInstance) {
@@ -441,12 +454,6 @@ onUnmounted(disposeCharts)
   display: flex;
   align-items: flex-start;
   gap: 14px;
-  transition: transform var(--ha-duration-normal) var(--ha-ease-out),
-              box-shadow var(--ha-duration-normal) var(--ha-ease-out);
-}
-.stat-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 20px rgba(124, 58, 237, 0.12);
 }
 
 .stat-dot {
@@ -489,12 +496,6 @@ onUnmounted(disposeCharts)
   border-radius: var(--ha-radius-lg);
   box-shadow: var(--ha-shadow-sm);
   padding: 20px;
-  transition: transform var(--ha-duration-normal) var(--ha-ease-out),
-              box-shadow var(--ha-duration-normal) var(--ha-ease-out);
-}
-.chart-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 20px rgba(124, 58, 237, 0.12);
 }
 
 .chart-header {

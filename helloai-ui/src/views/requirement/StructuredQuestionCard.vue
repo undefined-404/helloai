@@ -207,10 +207,10 @@ function submit() {
   transition: border-color 0.15s, background 0.15s;
 }
 
-.sq-option:hover:not(.disabled):not(.readonly) { border-color: var(--ha-primary, #409eff); }
+.sq-option:hover:not(.disabled):not(.readonly) { border-color: var(--ha-primary); }
 .sq-option.selected {
   background: var(--ha-primary-muted);
-  border-color: var(--ha-primary, #409eff);
+  border-color: var(--ha-primary);
 }
 .sq-option.disabled { cursor: not-allowed; opacity: 0.6; }
 .sq-option.readonly { cursor: default; }

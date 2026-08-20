@@ -1,5 +1,17 @@
 <template>
   <div class="login-page">
+    <button
+      class="login-theme-toggle"
+      type="button"
+      :title="themeStore.theme === 'dark' ? '切换到亮色主题' : '切换到暗色主题'"
+      :aria-label="themeStore.theme === 'dark' ? '切换到亮色主题' : '切换到暗色主题'"
+      @click="themeStore.toggleTheme()"
+    >
+      <el-icon :size="15">
+        <Moon v-if="themeStore.theme === 'dark'" />
+        <Sunny v-else />
+      </el-icon>
+    </button>
     <div class="login-brand">
       <StarfieldBackground />
       <div class="brand-hero">
@@ -105,8 +117,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { Moon, Sunny } from '@element-plus/icons-vue'
 import { settingsApi } from '@/api/settings'
 import { useAuthStore } from '@/stores/auth'
+import { useThemeStore } from '@/stores/theme'
 import { copyTextWithToast } from '@/composables/useClipboardWithFallback'
 import AnimatedCharacter from '@/components/AnimatedCharacter.vue'
 import StarfieldBackground from '@/components/StarfieldBackground.vue'
@@ -119,6 +133,7 @@ import SupportDialog from './login/SupportDialog.vue'
 import type { SupportKind, SupportContent } from './login/SupportDialog.vue'
 
 const router = useRouter()
+const themeStore = useThemeStore()
 
 const entryMode = ref<EntryMode | null>(null)
 const supportKind = ref<SupportKind>('password')
@@ -276,6 +291,7 @@ onBeforeUnmount(() => {
   display: flex;
   height: 100vh;
   overflow: hidden;
+  position: relative;
   --login-accent-start: #A78BFA;
   --login-accent-solid: #7C3AED;
   --login-accent-solid-hover: #6D28D9;
@@ -284,11 +300,33 @@ onBeforeUnmount(() => {
   --login-accent-soft-hover: rgba(124, 58, 237, 0.20);
   --login-accent-border: rgba(124, 58, 237, 0.35);
   --login-accent-border-strong: rgba(167, 139, 250, 0.65);
-  --login-accent-ink: #C4B5FD;
   --login-accent-shadow: 0 10px 24px rgba(124, 58, 237, 0.35);
   --login-accent-shadow-hover: 0 14px 30px rgba(124, 58, 237, 0.45);
 
-  /* 登录页专用暗色主题：仅覆盖本页作用域内的 --ha-* token，不影响登录后后台 */
+  /* 登录页表单侧专用 token（亮色基层）：仅覆盖本页作用域内的 --ha-*，不影响登录后后台。
+     左侧品牌区保持固定暗色（星空/角色插画为暗色设计），右侧表单面板随主题。 */
+  --ha-bg: #F6F7FB;
+  --ha-surface: rgba(16, 24, 40, 0.04);
+  --ha-surface-elevated: rgba(255, 255, 255, 0.82);
+  --ha-border: rgba(16, 24, 40, 0.10);
+  --ha-border-light: rgba(16, 24, 40, 0.08);
+  --ha-ink: #1A2233;
+  --ha-ink-secondary: rgba(26, 34, 51, 0.72);
+  --ha-muted: rgba(26, 34, 51, 0.50);
+  --ha-primary-muted: rgba(124, 58, 237, 0.10);
+  --ha-shadow-lg: 0 24px 60px rgba(16, 24, 40, 0.14), 0 0 40px rgba(124, 58, 237, 0.06);
+
+  /* 登录页表单控件专用（亮色） */
+  --login-accent-ink: #6D28D9;
+  --login-input-bg: rgba(16, 24, 40, 0.04);
+  --login-input-border: rgba(16, 24, 40, 0.12);
+  --login-input-text: #1A2233;
+  --login-input-placeholder: rgba(26, 34, 51, 0.40);
+  --login-input-icon: rgba(26, 34, 51, 0.50);
+}
+
+/* 暗色下的登录页表单侧（html.dark 特异性高于 .login-page） */
+html.dark .login-page {
   --ha-bg: #0A0E1A;
   --ha-surface: rgba(255, 255, 255, 0.03);
   --ha-surface-elevated: rgba(18, 24, 40, 0.60);
@@ -298,6 +336,39 @@ onBeforeUnmount(() => {
   --ha-ink-secondary: rgba(255, 255, 255, 0.72);
   --ha-muted: rgba(255, 255, 255, 0.50);
   --ha-primary-muted: rgba(124, 58, 237, 0.18);
+  --ha-shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.45), 0 0 40px rgba(124, 58, 237, 0.08);
+
+  --login-accent-ink: #C4B5FD;
+  --login-input-bg: rgba(255, 255, 255, 0.04);
+  --login-input-border: rgba(255, 255, 255, 0.12);
+  --login-input-text: #EEF2F8;
+  --login-input-placeholder: rgba(255, 255, 255, 0.40);
+  --login-input-icon: rgba(255, 255, 255, 0.50);
+}
+
+/* 主题切换钮：右上角悬浮圆形图标钮 */
+.login-theme-toggle {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--ha-border);
+  border-radius: 50%;
+  background: var(--ha-surface);
+  color: var(--ha-ink-secondary);
+  cursor: pointer;
+  transition: color var(--ha-duration-fast) var(--ha-ease-out),
+              background-color var(--ha-duration-fast) var(--ha-ease-out),
+              border-color var(--ha-duration-fast) var(--ha-ease-out);
+}
+.login-theme-toggle:hover {
+  color: var(--ha-primary);
+  border-color: var(--login-accent-border);
 }
 
 .login-brand {
@@ -341,7 +412,7 @@ onBeforeUnmount(() => {
   line-height: 1;
   /* 轻微发光提升科技感：紫色为主与主色系一致，外圈极淡青色呼应右下光斑 */
   text-shadow: 0 0 20px rgba(167, 139, 250, 0.30),
-               0 0 64px rgba(6, 182, 212, 0.12);
+               0 0 64px color-mix(in srgb, var(--ha-accent-cyan) 12%, transparent);
 }
 
 .brand-header-accent {
@@ -424,7 +495,6 @@ onBeforeUnmount(() => {
   border-radius: 50%;
   filter: blur(80px);
   pointer-events: none;
-  will-change: transform, filter;
 }
 
 .deco-blur-1 {
@@ -435,7 +505,6 @@ onBeforeUnmount(() => {
   margin-top: -210px;
   margin-left: -210px;
   background: rgba(124, 58, 237, 0.18);
-  animation: blur-float-1 14s ease-in-out infinite;
 }
 
 .deco-blur-2 {
@@ -445,27 +514,7 @@ onBeforeUnmount(() => {
   height: 460px;
   margin-top: -230px;
   margin-left: -230px;
-  background: rgba(6, 182, 212, 0.10);
-  animation: blur-float-2 18s ease-in-out infinite;
-}
-
-@keyframes blur-float-1 {
-  0% { transform: translate3d(0, 0, 0) scale(1); }
-  50% { transform: translate3d(-70px, 40px, 0) scale(1.08); }
-  100% { transform: translate3d(0, 0, 0) scale(1); }
-}
-
-@keyframes blur-float-2 {
-  0% { transform: translate3d(0, 0, 0) scale(1); }
-  50% { transform: translate3d(80px, -50px, 0) scale(1.06); }
-  100% { transform: translate3d(0, 0, 0) scale(1); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .deco-blur-1,
-  .deco-blur-2 {
-    animation: none;
-  }
+  background: color-mix(in srgb, var(--ha-accent-cyan) 10%, transparent);
 }
 
 .login-panel {
@@ -507,10 +556,9 @@ onBeforeUnmount(() => {
   background: var(--ha-surface-elevated);
   backdrop-filter: blur(20px) saturate(1.2);
   -webkit-backdrop-filter: blur(20px) saturate(1.2);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--ha-border-light);
   border-radius: var(--ha-radius-xl);
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45),
-              0 0 40px rgba(124, 58, 237, 0.08);
+  box-shadow: var(--ha-shadow-lg);
   padding: 32px;
   display: flex;
   flex-direction: column;

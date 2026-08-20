@@ -122,7 +122,7 @@ async function handleSubmit() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #7C3AED 0%, #A78BFA 50%, #06B6D4 100%);
+  background: linear-gradient(135deg, var(--ha-primary) 0%, #A78BFA 50%, var(--ha-accent-cyan) 100%);
   padding: 16px;
 }
 .setup-card {

@@ -5,6 +5,14 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HelloAI — AI Agent 协作调度平台</title>
+    <script>
+      // 防 FOUC：Vue 挂载前按 localStorage 恢复主题（与 stores/theme.ts 同约定，缺省 dark）
+      try {
+        if (localStorage.getItem('helloai-theme') === 'light') {
+          document.documentElement.classList.remove('dark')
+        }
+      } catch (e) { /* 存储不可用时保持默认 dark */ }
+    </script>
   </head>
   <body>
     <div id="app"></div>

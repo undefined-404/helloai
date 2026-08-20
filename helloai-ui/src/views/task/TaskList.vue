@@ -93,73 +93,82 @@
         </el-table-column>
         <el-table-column
           label="操作"
-          width="300"
+          width="184"
           fixed="right"
         >
           <template #default="{ row }">
-            <el-button
-              size="small"
-              plain
-              :disabled="row.status === 'DONE'"
-              @click="openEdit(row)"
-            >
-              编辑
-            </el-button>
-            <el-button
-              v-if="row.status === 'PENDING'"
-              size="small"
-              type="primary"
-              plain
-              :loading="planningId === row.id"
-              @click="handlePlan(row)"
-            >
-              AI 拆解
-            </el-button>
-            <el-button
-              v-if="row.status === 'PLANNING'"
-              size="small"
-              type="warning"
-              @click="openPlanReview(row)"
-            >
-              审阅草案
-            </el-button>
-            <el-button
-              v-if="row.status === 'DONE'"
-              size="small"
-              type="primary"
-              plain
-              :loading="row.finalReportStatus === 'GENERATING'"
-              :disabled="row.finalReportStatus === 'GENERATING'"
-              @click="openReport(row)"
-            >
-              {{ row.finalReportStatus === 'GENERATING' ? '生成中' : '报告' }}
-            </el-button>
-            <el-button
-              size="small"
-              type="warning"
-              plain
-              :disabled="row.status === 'DONE'"
-              @click="handleRepublish(row)"
-            >
-              重新发布
-            </el-button>
-            <el-button
-              v-if="row.status !== 'DONE' && row.status !== 'CANCELLED'"
-              size="small"
-              type="danger"
-              :loading="stoppingId === row.id"
-              @click="handleStop(row)"
-            >
-              停止
-            </el-button>
-            <el-button
-              size="small"
-              type="danger"
-              plain
-              @click="openDelete(row)"
-            >
-              删除
-            </el-button>
+            <div class="action-cell">
+              <!-- 主操作：按状态驱动，每行至多一个内联主按钮 -->
+              <el-button
+                v-if="row.status === 'PENDING'"
+                size="small"
+                type="primary"
+                plain
+                :loading="planningId === row.id"
+                @click="handlePlan(row)"
+              >
+                AI 拆解
+              </el-button>
+              <el-button
+                v-else-if="row.status === 'PLANNING'"
+                size="small"
+                type="warning"
+                @click="openPlanReview(row)"
+              >
+                审阅草案
+              </el-button>
+              <el-button
+                v-else-if="row.status === 'DONE'"
+                size="small"
+                type="primary"
+                plain
+                :loading="row.finalReportStatus === 'GENERATING'"
+                :disabled="row.finalReportStatus === 'GENERATING'"
+                @click="openReport(row)"
+              >
+                {{ row.finalReportStatus === 'GENERATING' ? '生成中' : '报告' }}
+              </el-button>
+              <!-- 次要操作：统一收进更多下拉 -->
+              <el-dropdown
+                trigger="click"
+                @command="(cmd: string) => handleCommand(cmd, row)"
+              >
+                <el-button
+                  size="small"
+                  :aria-label="`任务「${row.title}」更多操作`"
+                >
+                  更多
+                  <el-icon class="el-icon--right">
+                    <ArrowDown />
+                  </el-icon>
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item
+                      command="edit"
+                      :disabled="row.status === 'DONE'"
+                    >
+                      编辑
+                    </el-dropdown-item>
+                    <el-dropdown-item command="republish">
+                      重新发布
+                    </el-dropdown-item>
+                    <el-dropdown-item
+                      v-if="row.status !== 'DONE' && row.status !== 'CANCELLED'"
+                      command="stop"
+                    >
+                      停止
+                    </el-dropdown-item>
+                    <el-dropdown-item
+                      command="delete"
+                      divided
+                    >
+                      <span class="dropdown-danger">删除</span>
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -213,6 +222,7 @@
 import { ref, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowDown } from '@element-plus/icons-vue'
 import { taskApi } from '@/api/task'
 import { fmtTime } from '@/utils/tableConfig'
 import { stripMarkdown } from '@/utils/markdown'
@@ -320,6 +330,14 @@ const editingTask = ref<Task | null>(null)
 function openCreate() { editingTask.value = null; formVisible.value = true }
 function openEdit(row: Task) { editingTask.value = row; formVisible.value = true }
 
+// ── 更多下拉：次要操作统一分派（编辑/重新发布/停止/删除） ──
+function handleCommand(command: string, row: Task) {
+  if (command === 'edit') openEdit(row)
+  else if (command === 'republish') handleRepublish(row)
+  else if (command === 'stop') handleStop(row)
+  else if (command === 'delete') openDelete(row)
+}
+
 // ── 删除 ──
 const deleteVisible = ref(false)
 const deletingTask = ref<Task | null>(null)
@@ -368,6 +386,11 @@ async function handlePlan(row: Task) {
 .page { max-width: var(--ha-content-width); }
 .header-actions { display: flex; gap: 8px; }
 .link-cell { color: var(--el-color-primary); cursor: pointer; }
+/* 操作列：主按钮 + 更多下拉横排，不换行不压缩（避免单元格裁切「更多」） */
+.action-cell { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
+.action-cell .el-button { flex: none; }
+/* 删除项：危险语义色（dropdown-item 无 danger 变体，用子元素着色） */
+.dropdown-danger { color: var(--ha-danger); }
 /* 描述弹窗：标题仅保上方留白，去掉下方多余空行 */
 .desc-md :deep(h2),
 .desc-md :deep(h3),

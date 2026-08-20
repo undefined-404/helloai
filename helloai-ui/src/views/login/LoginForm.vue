@@ -204,10 +204,10 @@ function emitPasswordSupport() {
   padding-left: 12px;
 }
 
-/* Element Plus 输入框暗色适配（继承父组件 .login-page 上的 token） */
+/* Element Plus 输入框主题适配（继承父组件 .login-page 上的 --login-input-* token） */
 .login-form :deep(.el-input__wrapper) {
-  background-color: rgba(255, 255, 255, 0.04);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  background-color: var(--login-input-bg);
+  box-shadow: inset 0 0 0 1px var(--login-input-border);
 }
 
 .login-form :deep(.el-input__wrapper:hover) {
@@ -220,23 +220,23 @@ function emitPasswordSupport() {
 }
 
 .login-form :deep(.el-input__inner) {
-  color: #EEF2F8;
-  -webkit-text-fill-color: #EEF2F8;
+  color: var(--login-input-text);
+  -webkit-text-fill-color: var(--login-input-text);
 }
 
 .login-form :deep(.el-input__inner::placeholder) {
-  color: rgba(255, 255, 255, 0.40);
+  color: var(--login-input-placeholder);
 }
 
 .login-form :deep(.el-input__prefix),
 .login-form :deep(.el-input__suffix),
 .login-form :deep(.el-input__icon),
 .login-form :deep(.el-input__clear) {
-  color: rgba(255, 255, 255, 0.50);
+  color: var(--login-input-icon);
 }
 
 .login-form :deep(.el-input__inner:-webkit-autofill) {
-  -webkit-text-fill-color: #EEF2F8;
+  -webkit-text-fill-color: var(--login-input-text);
   transition: background-color 9999s ease-in-out 0s;
 }
 

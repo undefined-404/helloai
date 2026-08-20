@@ -131,7 +131,7 @@ defineEmits<{
   flex-shrink: 0;
   border-radius: 999px;
   background: var(--ha-primary-muted);
-  color: #C4B5FD;
+  color: var(--login-accent-ink);
   padding: 4px 10px;
   font-size: 12px;
   font-weight: 600;

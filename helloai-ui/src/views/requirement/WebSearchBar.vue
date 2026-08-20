@@ -132,7 +132,7 @@ const providerLabel = computed(() => props.trace.provider || '联网搜索')
   gap: 6px;
   flex-wrap: wrap;
 }
-.ws-item-title a { color: var(--ha-primary, #409eff); text-decoration: none; }
+.ws-item-title a { color: var(--ha-primary); text-decoration: none; }
 .ws-item-title a:hover { text-decoration: underline; }
 .ws-site {
   font-size: 11px;
