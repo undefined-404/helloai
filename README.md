@@ -34,11 +34,12 @@ HelloAI 基于 **Spring Boot + Spring AI MCP 协议**实现多 AI 厂商（Qoder
 - **平台内 API_KEY_LLM**：平台托管的 API-Key 型 Agent（DeepSeek 等），自动执行链路，保底执行
 - **外部 CLI Agent**：Qoder / Trae / Codex CLI / Claude Code 等经 MCP 一键接入，实测可用
 - **弹性策略**：外部优先 + 空闲优先 + 值班优先（STRICT 独占）+ LLM 保底，策略可配置（`preferExternal` / `requireIdle` / `forceAccessType` / `autoAssignOnCreate`）
-- **值班打卡**：外部 Agent `checkIn`/`checkOut` 值班租约（ACTIVE/CLOSED/EXPIRED 状态机 + 到期自动扫描），值班 Agent 优先派单
+- **值班打卡**：外部 Agent `checkIn`/`checkOut` 值班租约（ACTIVE/CLOSED/EXPIRED 状态机 + 到期自动扫描），值班 Agent 优先派单；`checkIn` 可顺带 `skills` 上报已加载技能标签（与既有技能取并集、只增不减），任务 `required_skills` 匹配立即生效
 - **任务感知轮询**：外部 Agent 靠 `pullTasks` 周期轮询收件箱感知新任务（建议 30s 一次）；服务端门铃 SSE 推送通道已交付但已搁置（外部 Agent 为单向执行器无法消费推送，代码保留运行，待未来 Agent 端常驻 daemon 落地后可复用）
 
 ### 3. 上下文连续性保障
 - **Task Running Spec 结构化运行规范**：每个任务持有 Baseline（目标/约束/DAG 结构）+ 各子任务执行的结构化摘要（EXECUTION_RECORD）+ 系统自动编译的全局上下文，统一注入执行 Prompt
+- **平台技能规范注入**：平台内置 `eng-*` 工程规范库（代码审查 / 文档标准 / 验证强度，借鉴 DeepSeek Harness Skills 并按平台语义适配），任务 `required_skills` 命中对应规范时执行 Prompt 自动注入纪律速览——只增约束，不阻断执行链
 - **双轨依赖注入**：下游子任务按 `depends_on` 声明顺序同时获得直接前置的**结构化摘要**与**完成内容本体**（物化附件优先、`context.lastExecution.output` 回退），渲染于 `## 依赖产出参考（直接前置）` 章节，多前置全量收集不覆盖；JSONB 分段锁保证并发回填互不覆盖
 - 被 Reviewer 驳回后重新生成时携带：
   - 前置任务结果
@@ -54,6 +55,7 @@ HelloAI 基于 **Spring Boot + Spring AI MCP 协议**实现多 AI 厂商（Qoder
 
 ### 5. 质量审核（Reviewer）
 - 独立 Reviewer Agent 对产出进行审核，支持多轮驳回-修正循环
+- **双轨纪律制**：对照**验收标准**（轨道 A）+ **工程纪律清单**（轨道 B：代码 C1-C4 接口契约 / 生命周期并发 / 验证强度 / 范围必要性，文档 D1-D3 契约完整 / 无思维链泄漏 / 结构清晰），任一轨道 blocker 级问题即驳回（pass=false），issues 用四元组格式 `[defect][location][impact][evidence]` 可直接指导返工
 - 审核意见（`subtask_review_result`）与执行对话流一起可视化展示
 - 最终由 Planner 整合所有子任务产出，生成连贯的最终整合报告
 
@@ -257,6 +259,7 @@ npm run dev
 - [x] 任务自动拆解 + 草案确认（依赖 DAG / 拓扑排序 / 双轨依赖注入 / 拆解异步化：提交即返回 + 前端轮询 + 超时兜底回收）
 - [x] 上下文连续性保障（Task Running Spec 双轨注入 + reviewHistory 多轮累积）
 - [x] 多轮审核-修正机制
+- [x] Reviewer 双轨纪律制 + 平台 eng-* 技能规范库（代码审查 / 文档标准 / 验证强度，任务技能标签命中自动注入）
 - [x] 可视化依赖图 / 时间线 / 时序图
 - [x] 弹性调度（外部优先 + 空闲优先 + 值班优先 + LLM 保底 + 熔断降级）
 - [x] MCP 外部 Agent 接入 + 值班打卡 + 任务感知轮询（门铃 SSE 已交付后搁置）
