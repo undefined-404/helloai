@@ -6046,3 +6046,141 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 - 行为变更：图片/音视频附件不再以二进制乱码注入核验 Prompt；含媒体附件的提交核验 LLM 会收到显式「看不到原内容、从严核验」指令（此前只能凭文字声称盲判）。
 - 兼容性：存量 Agent capabilities 无模态键时 `hasCapability` 返回 false，等价于默认值，零迁移；注册时传 `supportsImageUnderstanding=true` 即可声明。
 - 遗留：阶段③（多模态核验调用链：Spring AI Media 注入 + 含图附件优先多模态 reviewer）另立项；当前 reviewer 未声明多模态能力前，行为退化为「文本注入 + 媒体从严标注」。
+
+---
+
+### 6.119 RabbitMQ 监听端 MessageConverter 换 Jackson，毒消息自动进 DLX（2026-08-20）
+
+#### 1. 背景与决策
+
+- **背景**：启动日志反复出现 `ListenerExecutionFailedException: Failed to convert message`（根因 `SecurityException: Attempt to deserialize unauthorized class java.util.LinkedHashMap`）。定位：Phase 2F 修复前旧发布器 `convertAndSend(Map)` 以 Java 序列化（content-type=`application/x-java-serialized-object`）投递的遗留毒消息仍驻留在 durable 队列（executor/reviewer 队列实测确认）；spring-amqp 默认 `SimpleMessageConverter` 对其做 Java 反序列化被安全白名单拦截，且异常抛在 `MessagingMessageListenerAdapter` 转换层（进入 `@RabbitListener` 方法体之前，反编译 spring-amqp 3.2.7 `AbstractAdaptableMessageListener.extractMessage` 确认无条件走 converter），消费端方法内的「坏消息 ACK」防御够不着；MANUAL ACK 模式下消息永久停在 unacked，每次启动重投 2 条 WARN，手动 purge 只能清 ready 消息，治标不治本。
+- **决策**：`RabbitMQConfig` 新增全局 `MessageConverter` Bean（`Jackson2JsonMessageConverter`）。Boot 自动装配的 `rabbitListenerContainerFactory` 经 `ObjectProvider` 消费该 Bean（字节码确认 `AbstractRabbitListenerContainerFactoryConfigurer` 会 `factory.setMessageConverter`），yml 里 `spring.rabbitmq.listener.simple.*`（manual / concurrency=5 / max-concurrency=20）照常生效；项目 `rabbitTemplate` 是自定义 Bean 未设 converter，且全部发布端均为显式 `RabbitTemplate.send(Message)`（grep 确认无 convertAndSend 调用），发布侧行为不变。
+- **明确不做**：不自建 `rabbitListenerContainerFactory` Bean（会丢 yml listener 配置）；不改消费端解析逻辑（仍按 `message.getBody()` 自行 objectMapper 解析）；不开 `SPRING_AMQP_DESERIALIZATION_TRUST_ALL`（安全倒退）。
+
+#### 2. 实际落地
+
+- **helloai-mq/src/main/java/com/helloai/mq/config/RabbitMQConfig.java**：新增 `rabbitMessageConverter()` Bean（`Jackson2JsonMessageConverter`）+ 完整 Javadoc（背景 / 效果 / 为什么定义为全局 Bean）。效果链路：正常 JSON 消息照常转换（提取的 payload 被丢弃，消费端行为不变）；非 JSON 消息抛 `MessageConversionException`，被 `ConditionalRejectingErrorHandler` 默认策略判定 fatal（字节码确认 `DefaultExceptionStrategy` 含该类型）→ 拒投不重投 → 走队列已绑定的 DLX 隔离。
+
+#### 3. 验证结果
+
+- **编译**：`mvn compile`（JDK 17 + IDEA 自带 Maven，离线）全模块通过。
+- **队列实测**：`helloai.executor.queue` 4 条 Java 序列化毒消息已 purge；`helloai.reviewer.queue` 2 条 unacked 毒消息待本次修复生效后的重启自动转 DLX（旧清理循环未赶上时序，毒消息被新消费者再次持有）。
+- **运行时验证待办**：用户重启后端后确认两点——① 启动日志不再出现 `Failed to convert message`；② 管理后台 `helloai.dlx.queue` 收到 2 条毒消息、`reviewer.queue` 归零。
+
+#### 4. 影响与遗留
+
+- 行为变更：监听端对非 JSON content-type 消息从严处理（fatal → DLX），符合项目「MQ 消息契约 = 显式 JSON」现状；未来若出现新的非 JSON 发布端会被 DLX 显式暴露而非静默失败。
+- 部署注意：无 Flyway、无新配置项，重启后端生效。
+- 遗留：本轮改动未 git 提交，待用户确认后提交；运行时验证（①②）依赖用户重启后端。
+
+---
+
+### 6.120 前端 UI 一致性审计与 P0+P1 修复（纯 helloai-ui，2026-08-20）
+
+#### 1. 背景与决策
+
+- **背景**：对 helloai-ui 做全量 UI 审计（design-taste 审计维度：主题锁定 / 色彩一致性 / 字体落地 / 对比度 / token 纪律），发现两类硬伤：① Settings.vue 供应商配置区整块残留 Element Plus 默认亮色（#fafbfc / #ecf5ff / #ebeef5 / #303133 等），在全站暗底中像误入另一个网站；② 字体/品牌色断链——Inter 原本靠运行时注入 Google Fonts CDN link 加载（国内网络不可靠），且 EP 组件主色 `--el-color-primary` 从未覆盖，switch/radio/checkbox 等仍是 EP 蓝 #409EFF 与紫色按钮割裂。
+- **决策**：Redesign-Preserve 模式，保留既有 `--ha-*` token 体系与紫色品牌，仅做 P0+P1 一致性修复；青色 #06B6D4（侧边栏光斑/登录页光晕/初始化渐变三处装饰）收敛为新 token `--ha-accent-cyan`。
+- **明确不做**：P2 控制台体验项（TaskList 操作列 7 按钮分组、侧边栏/登录页无限循环动效削减、表格边框弱化）、122 处 `!important` 结构性还债、`LoginCharacters.vue` SVG 插画重绘、路由/菜单/文案变更、后端改动。
+
+#### 2. 实际落地
+
+- **字体自托管**：新增依赖 `@fontsource-variable/inter`；`main.ts` 移除运行时 Google Fonts CDN link 注入，改为构建期 import（dist 产物含 7 个 unicode-range 分片 woff2，中文自动回退系统字体）；`design-system.css` 字体栈改为 `'Inter Variable', 'Inter', system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif`。
+- **Settings.vue 亮色改暗**：供应商列表/详情/模型分区/表单提示全部替换为 `--ha-*` token（含计划外的 `#67c23a` / `#c0c4cc` / `#606266` / `#e6a23c` / `#fff` 等 8 组色值）。
+- **EP 主色族对齐**：`design-system.css` 在 `:root` 与 `html.dark`（特异性更高需重申）覆盖 `--el-color-primary: #7C3AED` + light-3/5/7/8/9 紫色坡道 + dark-2（对齐 `--ha-primary-active`）。
+- **fallback 修正**：WebSearchBar / StructuredQuestionCard / AttachmentList 共 5 处 `var(--ha-primary, #409eff)` 去掉错误蓝色 fallback。
+- **Dashboard 收敛**：3 处 `el-icon color=` 硬编码改语义 token（#0EA5E9 归入 `var(--ha-info)`）；stat-card/chart-card 重复定义的 hover 提升效果删除，复用 `animations.css` 既有 `.ha-card-lift` 工具类。
+
+#### 3. 验证结果
+
+- `npm run lint:check` → 0 errors（170 条既有 `any` warning，与本轮无关）。
+- `npm run build`（vue-tsc + vite）→ 构建成功；dist 含 Inter woff2 分片；src 全库 grep 无 #409eff/#ecf5ff/#fafbfc/fonts.googleapis 残留（仅 SubTaskDagView IN_PROGRESS 状态蓝为有意语义色，不在本轮范围）。
+- `npm run dev` 启动正常，预览已提供用户目检 Settings / Login / Setup / Dashboard / 附件页。
+
+#### 4. 影响与遗留
+
+- 行为变更：EP 组件主色全站统一为紫；Inter 字体不再依赖外网 CDN。
+- 差距表无对应前端 UI 条目，本轮不改 `doc/HelloAI_实现差距表.md`。
+- 遗留：P2 项与 `!important` 还债留待后续独立轮次；本轮改动未 git 提交，待用户确认后提交。
+
+---
+
+### 6.121 前端 P2 控制台体验项：操作列分组 + 网格线弱化 + 常驻动效削减（纯 helloai-ui，2026-08-20）
+
+#### 1. 背景与决策
+
+- **背景**：§6.120 审计遗留的 P2 项：① TaskList 操作列 300px 宽塞最多 7 个按钮（编辑/AI 拆解/审阅草案/报告/重新发布/停止/删除），密度失控；② 表格全网格线（th/td 均有竖线）在暗底下视觉噪声大；③ 侧边栏 aurora 渐变 18s 无限循环 + 登录页双 blur 光斑 14s/18s 无限循环，常驻 UI 上 GPU 与注意力成本高。
+- **决策**：操作列改「状态驱动主操作 + 更多下拉」；表格去竖线仅留行分隔线（含 border 变体）；无限循环动效改静态（保留渐变/光斑视觉元素）。
+- **明确不做**：「报告生成中」el-tag type="primary" 经核查符合项目约定（TASK_STATUS_MAP 中 IN_PROGRESS 等「进行中」态统一用 primary，且 §6.120 后 EP 主色已变紫），不改；`LoginCharacters.vue` / `AnimatedCharacter.vue` 的交互动效为有动机反馈（跟随聚焦/输入），保留；`StarfieldBackground.vue` canvas 星空循环待单独评估。
+
+#### 2. 实际落地
+
+- **TaskList.vue 操作列重构**：列宽 300 → 150；内联主按钮按状态互斥驱动（PENDING→AI 拆解 / PLANNING→审阅草案 / DONE→报告，其余状态无内联主按钮）；编辑（DONE 置灰）/重新发布/停止（仅非 DONE/CANCELLED）/删除收进 el-dropdown「更多」，删除项 divided 分隔 + `--ha-danger` 危险色，新增 `handleCommand` 统一分派；所有 loading/confirm 逻辑不变，「更多」按钮带 aria-label。
+- **design-system.css 表格弱化**：th/td 的 border-right 全部改 none，th 补回底部分隔线；新增 `.el-table--border .el-table__cell { border-right: none }` 压掉 border 属性自带的竖线，外框保留。
+- **MainLayout.vue**：删除 sidebar-aurora 18s 背景位移动画与 sidebar-blur-float 16s 光斑漂浮动画（及对应 keyframes/reduced-motion 块），渐变与光斑保留为静态。
+- **Login.vue**：删除 deco-blur-1/2 的 14s/18s 漂浮动画（及对应 keyframes/reduced-motion 块）与 will-change，光斑保留为静态。
+
+#### 3. 验证结果
+
+- `npm run lint:check` → 0 errors（TaskList 仅余 5 条既有 `any` warning）。
+- `npm run build`（vue-tsc + vite）→ 构建成功。
+- dev server（:5173）HMR 热更新无报错，待用户目检任务列表操作列/表格线/侧边栏与登录页静态效果。
+
+#### 4. 影响与遗留
+
+- 行为变更：任务列表次要操作（编辑/重新发布/停止/删除）从内联按钮改为「更多」下拉两步操作；全部表格不再显示列竖线。
+- 遗留：`StarfieldBackground.vue` canvas 循环、122 处 `!important` 还债待后续轮次；本轮改动未 git 提交，待用户确认后提交。
+
+---
+
+### 6.122 修复 plain 按钮文字不可见回归 + 操作列「更多」裁切（纯 helloai-ui，2026-08-21）
+
+#### 1. 背景与决策
+
+- **背景**：用户报告任务管理操作列与系统设置页按钮「鼠标移入才显示汉字」，且「更多」按钮被截断。浏览器实测定位两个根因：① design-system 的 `.el-button--primary` 实心紫底覆盖（带 `!important`）同时命中 `is-plain` 变体，紫字叠紫底导致文字不可见，hover 后 EP 切白字才显现——§6.120 主色覆盖（蓝→紫）把原本勉强可见的蓝字变成同色，触发该回归；② §6.121 操作列 150px 放不下主按钮 + 「更多」，被单元格裁切。另发现连带隐患：§6.120 把亮色 light-N 坡道写进了 `html.dark`，plain 按钮/tag 等以 light-N 为底的组件在暗页会出现亮块。
+
+#### 2. 实际落地
+
+- **design-system.css**：`.el-button--primary` 实心覆盖收窄为 `.el-button--primary:not(.is-plain)`，plain primary 回退 EP 原生暗色样式；`html.dark` 的 `--el-color-primary-light-3/5/7/8/9` 从亮色坡道改为「#7C3AED 与 #141414 按 (100-N)% 混合」的暗色坡道（#5D2FAC/#482781/#331F55/#291C3F/#1E182A），`:root` 亮色坡道保留不变。
+- **TaskList.vue**：操作列宽 150 → 184；`.action-cell .el-button { flex: none }` 防 flex 压缩。
+
+#### 3. 验证结果
+
+- `npm run build` 成功。
+- 浏览器实测：is-plain 按钮 color（#7C3AED）与 background（rgb(30,24,42) 深紫调暗底）已分离，默认态文字可见；「更多」按钮完整落在 184px 单元格内无裁切；状态列 tag 底色均为深色（待规划深灰/已完成深绿），无亮块；任务页与设置页截图存 `.dbg/btn-fix-*.png`。
+
+#### 4. 影响与遗留
+
+- 行为变更：dark 下 EP 组件以 light-N 为底的场景（plain 按钮、primary tag 等）统一呈现暗色坡道底，不再出现亮紫底。
+- 本轮改动未 git 提交，待用户确认后提交。
+
+---
+
+### 6.123 亮暗双主题系统 + 主题切换按钮（纯 helloai-ui，2026-08-21）
+
+#### 1. 背景与决策
+
+- **背景**：控制台此前仅有暗色一套。用户要求新增亮色主题并提供切换按钮；经 AskUserQuestion 确认：默认暗色（选择持久化到 localStorage）、登录页一起适配。
+- **决策**：token 架构不动，仅拆分亮/暗两套值——`:root` 为亮色基层，`html.dark` 为暗色挂载点（EP 暗色 css-vars 与 §6.122 暗色坡道均作用域在 html.dark，移除类即自动回退亮色）；新增 Pinia 主题 store + index.html 防 FOUC 内联脚本。亮色板采用冷调白灰（白/冷灰底 + 紫主色），与暗色深海军蓝同属冷调，品牌连续。
+- **固定暗色区决策**：登录页左侧品牌区（星空 canvas + 角色插画）、SubTaskSequenceFlow 时序图保持刻意暗色设计不随主题切换（前者是品牌面板，后者是「监控面板」语义），仅在组件头部注释声明约束；规避 LoginCharacters.vue 151 处 SVG 色值与 Starfield canvas 的亮色重绘。
+- **明确不做**：122 处 `!important` 结构性还债、Starfield canvas 性能评估、全局 `*` 过渡（避免污染动效）、布局结构与新动效、后端改动。
+
+#### 2. 实际落地
+
+- **主题状态**：新增 `src/stores/theme.ts`（Pinia），`theme: 'dark' | 'light'`，初始化读 `localStorage['helloai-theme']` 缺省 dark，`setTheme()/toggleTheme()` 同步写存储并切换 `document.documentElement` 的 dark 类。
+- **防 FOUC**：`index.html` head 内联脚本在 Vue 挂载前按 localStorage 移除 dark 类（仅 light 时动作，暗色靠既有 class 兜底）。
+- **token 拆分（design-system.css）**：原 `:root` 暗色值整体迁入 `html.dark`；`:root` 定义亮色板（bg #F6F7FB / surface 白 / border #E2E6F0 / ink #1A2233 / muted #8B96AB），新增 `--ha-success-text` 等 4 个语义文字变体、`--ha-link/-hover`、`--ha-sidebar-bg-mid/-grid/-border`；侧边栏亮色板为白底 + 紫调 active；阴影改 `rgba(16,24,40,0.06~0.12)`；tag/链接/card hover/sidebar-menu 等规则 token 化。
+- **MainLayout.vue**：侧边栏渐变/网格线/边框/文字全部改走 `--ha-sidebar-*` token（7 处硬编码收敛）；sidebar-header logo 右侧新增圆形切换按钮（Moon/Sunny 图标随主题切换，带 title/aria-label，collapsed 态纵向布局）。
+- **Login.vue**：页内 `--ha-*` 覆盖拆亮/暗两版，新增 `--login-input-*` 表单 token 组（输入框背景/边框/文字/占位/图标）；右上角固定同款切换按钮；左侧品牌区保持固定暗色；LoginForm/EntryTabs/RegisterStack 三个子组件硬编码色改 token。
+- **Dashboard.vue**：`watch` theme store 变化 → nextTick 后用缓存 rawData dispose 重建两张 ECharts（复用既有 `cssVar()` 机制自动读新主题色）。
+- **切换过渡**：仅 shell 级容器（body、.app-sidebar、.app-content）加 background-color/border-color 250ms 过渡。
+
+#### 3. 验证结果
+
+- `npm run lint:check` → 0 errors；`npm run build`（vue-tsc + vite）→ 构建成功。
+- 浏览器实测（vite :5173，经 /api 代理到后端 :6565，admin/admin123 真实登录）9 步全通过：登录页亮/暗、工作台亮/暗、任务列表、系统设置双主题目检；切换按钮双向可用；localStorage 持久化、刷新无闪暗；ECharts 重建正常；无残留暗块/白字白底/不可见文字。截图 6 张存 `.dbg/theme-01-login-dark.png` ~ `theme-06-settings-light.png`。
+
+#### 4. 影响与遗留
+
+- 行为变更：新增 localStorage key `helloai-theme`；缺省仍为暗色，用户选择后持久；登录页左侧品牌区与时序图为固定暗色设计（已注释声明）。
+- 遗留：122 处 `!important` 还债、Starfield canvas 性能评估、LoginCharacters SVG 亮色重绘（如后续需要）留待独立轮次；本轮改动未 git 提交，待用户确认后提交。
