@@ -6021,3 +6021,28 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 - 影响：外部 Agent 接入文档消除四类困惑源（依赖读取双路径无主次、续租新旧口径并存、返工重提无指引、值域无定义）；两个会导致产出静默丢失的坑（旧 resultId / REWORK 状态）首次显式写入文档。
 - 部署注意：资源文件在 jar 内，重新打包部署后端 jar 生效；无 Flyway、无配置项、无 API 变更。
 - 遗留：① 反馈中「提供 50 行精简版 Quick Start 独立文档」未做（已用顶部「最快上手」导航 + §1.5.7 最小闭环轻量覆盖，独立简版待真实接入方反馈上下文压力后再评估）；② A0-x/§6.x 编号与 .bis 章节号经权衡保留（可追溯性 > 轻微噪声）。
+
+---
+
+### 6.118 Agent 模态能力建模与核验附件注入硬化（2026-08-20）
+
+#### 1. 背景与决策
+
+- **背景**：外部 executor 提交截图类证据时，自动核验的 reviewer 完全看不到图片——核验链路纯文本，且 `SubTaskReviewServiceImpl.readAttachmentContent` 用 `new String(bytes, UTF_8)` 读附件正文：若图片附件被上传，二进制乱码会被注入核验 Prompt（吞占 24000 字符限额并污染判定）。同时 `agent.capabilities` 只有接入通道能力键（supportsPull/supportsMCP 等），无模态维度，无法表达「底层模型是否具备图片理解能力」。
+- **决策**：分三阶段推进，本轮落地阶段①+②（用户确认）：① 模态能力建模（capabilities 新增 supportsImageUnderstanding/supportsAudioUnderstanding/supportsVideoUnderstanding，三类 accessType 统一默认 false——模态能力取决于底层模型而非接入通道，注册时可覆盖）；② 核验注入硬化（仅文本类附件注入正文 + 含媒体附件时注入「无法查看原内容、从严核验」显式标注，标注独立于 attachment-content-enabled 开关）；③ 多模态核验调用链（Spring AI Media 注入 + reviewer 挑选偏好）另立项，因涉及 ChatClient 调用链改造与 provider 兼容性（DeepSeek 通道不支持图片，仅 OpenAI 兼容/Anthropic 兼容可用）。
+- **明确不做**：不改 reviewer 挑选逻辑（pickReviewerAgent 仍按角色 + API_KEY_LLM）；不改前端注册表单（能力声明走既有注册 API 的 capabilities 覆盖）；音频/视频仅预留能力键，核验链路本轮不做处理。
+
+#### 2. 实际落地
+
+- **模态能力建模**：`AgentAccessType.defaultCapabilities()` 三类统一新增 3 个模态键（默认 false）并持有 `CAP_SUPPORTS_IMAGE_UNDERSTANDING` 等常量；`AgentCapability` 新增对应常量（指向 common 侧定义避免字符串重复）+ javadoc，读取复用既有 `hasCapability`（未配置视为 false）；注册通道零改动（`AgentController` 已支持 capabilities 覆盖合并）。
+- **核验注入硬化**（`SubTaskReviewServiceImpl`）：新增 `isTextualAttachment`（mimeType 优先：text/* 与文本族 application 类型；缺失或 octet-stream 回退扩展名；无法判定 fail-close 按非文本）、`isMediaAttachment`（image/ audio/ video/ 前缀优先 + 扩展名兜底）、`buildMediaVisibilityNote`（含媒体附件时输出「本提交含 N 个媒体附件（文件名）。当前核验链路无法查看其原始内容；与之相关的文字声称请从严核验、评分保守」）；`buildAttachmentContent` 循环内非文本附件直接 continue（不再调 `readAttachmentContent`，杜绝二进制进 Prompt），返回文本前置 mediaNote（开关关闭/无可读附件两条早退路径同样带标注）。A0-5 证据硬检查的 `readableAttachments` 不变——图片仍是有效物化证据，继续计入 attachmentCount。
+
+#### 3. 验证结果
+
+- **单测**：`mvn -pl helloai-core -am test -DskipTests=false -Dtest=SubTaskReviewServiceTest,AgentModalityCapabilityTest` → 34/34 全绿（SubTaskReviewService 32 例含 4 个新增硬化用例：图片不注入二进制 + 标注点名文件 / mimeType 缺失按扩展名识别 / 开关关闭标注仍注入 / 纯文本组合无标注；AgentModalityCapability 2 例：三类默认值含键且 false、常量一致 + 覆盖可读）。既有 28 例核验用例零回归。
+
+#### 4. 影响与遗留
+
+- 行为变更：图片/音视频附件不再以二进制乱码注入核验 Prompt；含媒体附件的提交核验 LLM 会收到显式「看不到原内容、从严核验」指令（此前只能凭文字声称盲判）。
+- 兼容性：存量 Agent capabilities 无模态键时 `hasCapability` 返回 false，等价于默认值，零迁移；注册时传 `supportsImageUnderstanding=true` 即可声明。
+- 遗留：阶段③（多模态核验调用链：Spring AI Media 注入 + 含图附件优先多模态 reviewer）另立项；当前 reviewer 未声明多模态能力前，行为退化为「文本注入 + 媒体从严标注」。

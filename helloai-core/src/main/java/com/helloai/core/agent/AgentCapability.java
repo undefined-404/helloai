@@ -17,6 +17,16 @@ public final class AgentCapability {
 
     private AgentCapability() {}
 
+    /** 能力键：底层模型具备图片理解（多模态）。默认 false，注册时按模型实际能力覆盖。 */
+    public static final String SUPPORTS_IMAGE_UNDERSTANDING =
+            AgentAccessType.CAP_SUPPORTS_IMAGE_UNDERSTANDING;
+    /** 能力键：底层模型具备音频理解（多模态）。默认 false，注册时按模型实际能力覆盖。 */
+    public static final String SUPPORTS_AUDIO_UNDERSTANDING =
+            AgentAccessType.CAP_SUPPORTS_AUDIO_UNDERSTANDING;
+    /** 能力键：底层模型具备视频理解（多模态）。默认 false，注册时按模型实际能力覆盖。 */
+    public static final String SUPPORTS_VIDEO_UNDERSTANDING =
+            AgentAccessType.CAP_SUPPORTS_VIDEO_UNDERSTANDING;
+
     /**
      * 合并默认值与覆盖值（覆盖优先，缺失则取默认）。
      *
@@ -36,7 +46,7 @@ public final class AgentCapability {
      * 判断 Agent 是否具备指定能力。
      *
      * @param agent   Agent
-     * @param key     能力名（如 supportsPull / supportsMCP / isSlow）
+     * @param key     能力名（如 supportsPull / supportsMCP / isSlow / supportsImageUnderstanding）
      * @return true-具备（值为 true）/ 能力未配置视为 false
      */
     public static boolean hasCapability(Agent agent, String key) {

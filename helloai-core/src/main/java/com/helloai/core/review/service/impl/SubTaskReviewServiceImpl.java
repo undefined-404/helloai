@@ -48,6 +48,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -82,6 +83,20 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
     private static final int ATTACHMENT_CONTENT_PER_FILE_LIMIT = 8000;
     /** 附件内容注入限额（方案3 F2）：总计 24000 字符，超限停止注入后续附件正文。 */
     private static final int ATTACHMENT_CONTENT_TOTAL_LIMIT = 24000;
+    /** 文本族 MIME 精确值集（text/* 前缀另判）：命中才允许注入附件正文。 */
+    private static final Set<String> TEXTUAL_MIME_EXACT = Set.of(
+            "application/json", "application/xml", "application/x-yaml", "application/yaml", "application/sql");
+    /** 文本扩展名兜底集（mimeType 缺失或 octet-stream 时用）：命中才允许注入附件正文。 */
+    private static final Set<String> TEXTUAL_EXTENSIONS = Set.of(
+            "md", "markdown", "txt", "log", "json", "xml", "yaml", "yml", "csv", "tsv", "sql",
+            "java", "py", "js", "ts", "sh", "ps1", "html", "css", "properties", "ini", "toml");
+    /** 媒体类 MIME 前缀：图片/音频/视频。 */
+    private static final List<String> MEDIA_MIME_PREFIXES = List.of("image/", "audio/", "video/");
+    /** 媒体扩展名兜底集（mimeType 缺失或 octet-stream 时用）。 */
+    private static final Set<String> MEDIA_EXTENSIONS = Set.of(
+            "png", "jpg", "jpeg", "gif", "webp", "bmp",
+            "mp3", "wav", "m4a", "ogg", "flac",
+            "mp4", "avi", "mov", "mkv", "webm");
 
     /** §6.82 批次 D：核验互斥锁（防 L1/L2/L3 三路并发双审），key = review:lock:{subTaskId} */
     private static final String REVIEW_LOCK_PREFIX = "review:lock:";
@@ -645,20 +660,29 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
      * <p>限额策略：每附件 8000 字符、总计 24000 字符，超限截断并标注；不可直读/读取失败/
      * 空内容附件不注入正文（清单仍全量展示）；开关 {@code helloai.dispatch.attachment-content-enabled}
      * 关闭时退化为仅清单（与开关引入前行为一致）。</p>
+     *
+     * <p>文本硬化：仅对文本类附件注入正文，图片/音频/视频等二进制附件绝不按文本读取
+     * （避免二进制乱码进 Prompt 并吞占限额）；提交含媒体附件时前置注入媒体可见性标注
+     * （独立于注入开关），告知核验 LLM 原内容不可见、文字声称从严核验。</p>
      */
     private String buildAttachmentContent(SubTask subTask) {
+        String mediaNote = buildMediaVisibilityNote(subTask.getId());
         if (!dispatchProperties.isAttachmentContentEnabled()) {
-            return "（附件内容注入已关闭，仅见清单）";
+            return mediaNote + "（附件内容注入已关闭，仅见清单）";
         }
         List<Attachment> attachments = readableAttachments(subTask.getId());
         if (attachments.isEmpty()) {
-            return "（无平台可直读附件，无法核对文件正文）";
+            return mediaNote + "（无平台可直读附件，无法核对文件正文）";
         }
         StringBuilder sb = new StringBuilder();
         int totalChars = 0;
         boolean truncated = false;
         boolean totalExceeded = false;
         for (Attachment att : attachments) {
+            if (!isTextualAttachment(att)) {
+                // 非文本附件（图片/音频/视频等）不注入正文，避免二进制乱码；媒体可见性标注已覆盖
+                continue;
+            }
             String content = readAttachmentContent(att);
             if (content == null) {
                 sb.append("### ").append(att.getFileName())
@@ -688,7 +712,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         if (totalExceeded) {
             sb.append("（附件内容总计超出限额，后续附件仅见清单）");
         }
-        return sb.toString().trim();
+        return (mediaNote + sb).trim();
     }
 
     /** 单附件内容段：标题行（文件名/类型/大小）+ 正文。 */
@@ -712,6 +736,68 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             log.debug("附件内容读取失败，仅注入清单: attachmentId={}, err={}", att.getId(), e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * 媒体可见性标注：提交含图片/音频/视频附件时，显式告知核验 LLM 当前链路无法查看
+     * 原内容、相关文字声称从严核验评分保守。“看不到媒体”与内容注入开关无关，
+     * 故开关关闭时同样注入；无媒体附件返回空串。
+     */
+    private String buildMediaVisibilityNote(Long subTaskId) {
+        List<Attachment> attachments = attachmentService.listActive(subTaskId);
+        if (attachments == null || attachments.isEmpty()) {
+            return "";
+        }
+        List<String> mediaNames = attachments.stream()
+                .filter(this::isMediaAttachment)
+                .map(Attachment::getFileName)
+                .toList();
+        if (mediaNames.isEmpty()) {
+            return "";
+        }
+        return "本提交含 " + mediaNames.size() + " 个媒体附件（" + String.join("、", mediaNames)
+                + "）。当前核验链路无法查看其原始内容；与之相关的文字声称请从严核验、评分保守。\n";
+    }
+
+    /**
+     * 附件是否文本类（仅文本类注入正文）。优先按 mimeType 判定（text/* 与文本族
+     * application 类型）；mimeType 缺失或 octet-stream 时回退扩展名；仍无法判定则
+     * fail-close 按非文本处理，宁可不注入正文也不把二进制字节当文本读入 Prompt。
+     */
+    private boolean isTextualAttachment(Attachment att) {
+        String mime = att.getMimeType() != null ? att.getMimeType().toLowerCase() : null;
+        if (mime != null && !"application/octet-stream".equals(mime)) {
+            if (mime.startsWith("text/")) {
+                return true;
+            }
+            return TEXTUAL_MIME_EXACT.contains(mime);
+        }
+        return TEXTUAL_EXTENSIONS.contains(extensionOf(att.getFileName()));
+    }
+
+    /** 附件是否媒体类（图片/音频/视频）：mimeType 前缀优先，缺失时回退扩展名。 */
+    private boolean isMediaAttachment(Attachment att) {
+        String mime = att.getMimeType() != null ? att.getMimeType().toLowerCase() : null;
+        if (mime != null) {
+            for (String prefix : MEDIA_MIME_PREFIXES) {
+                if (mime.startsWith(prefix)) {
+                    return true;
+                }
+            }
+        }
+        return MEDIA_EXTENSIONS.contains(extensionOf(att.getFileName()));
+    }
+
+    /** fileName 扩展名小写（不含点）；缺失返回空串。 */
+    private String extensionOf(String fileName) {
+        if (fileName == null) {
+            return "";
+        }
+        int idx = fileName.lastIndexOf('.');
+        if (idx < 0 || idx == fileName.length() - 1) {
+            return "";
+        }
+        return fileName.substring(idx + 1).toLowerCase();
     }
 
     /**

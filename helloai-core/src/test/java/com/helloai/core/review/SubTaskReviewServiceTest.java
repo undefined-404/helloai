@@ -816,4 +816,78 @@ class SubTaskReviewServiceTest {
         att.setFileName(name);
         return att;
     }
+
+    // ════════════════════════════════════════════════════════════
+    //  核验附件注入硬化：媒体附件不注入二进制 + 媒体可见性标注
+    // ════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("硬化: 图片附件不注入二进制正文，媒体可见性标注点名文件")
+    void shouldNotInjectImageBinaryAndAddMediaNote() {
+        Attachment md = attachmentWithId(601L, "walkthrough.md");
+        md.setMimeType("text/markdown");
+        Attachment png = attachmentWithId(602L, "screenshot_01.png");
+        png.setMimeType("image/png");
+        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(md, png));
+        when(attachmentService.isContentLoadable(md)).thenReturn(true);
+        when(attachmentService.isContentLoadable(png)).thenReturn(true);
+        when(attachmentService.loadContent(601L))
+                .thenReturn("走查正文内容".getBytes(StandardCharsets.UTF_8));
+        stubReviewerPass();
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        String prompt = captureReviewPrompt();
+        assertThat(prompt).contains("走查正文内容");
+        assertThat(prompt).contains("本提交含 1 个媒体附件（screenshot_01.png）");
+        assertThat(prompt).contains("当前核验链路无法查看其原始内容");
+        // 二进制字节绝不按文本读取
+        verify(attachmentService, never()).loadContent(602L);
+    }
+
+    @Test
+    @DisplayName("硬化: mimeType 缺失时按扩展名识别媒体附件，同样不注入正文")
+    void shouldDetectMediaByExtensionWhenMimeMissing() {
+        Attachment png = attachmentWithId(603L, "screenshot_02.png"); // mimeType 缺失
+        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(png));
+        when(attachmentService.isContentLoadable(png)).thenReturn(true);
+        stubReviewerPass();
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        String prompt = captureReviewPrompt();
+        assertThat(prompt).contains("本提交含 1 个媒体附件（screenshot_02.png）");
+        verify(attachmentService, never()).loadContent(603L);
+    }
+
+    @Test
+    @DisplayName("硬化: 注入开关关闭时媒体可见性标注仍注入")
+    void shouldKeepMediaNoteWhenSwitchDisabled() {
+        when(dispatchProperties.isAttachmentContentEnabled()).thenReturn(false);
+        Attachment png = attachmentWithId(604L, "shot.jpg");
+        png.setMimeType("image/jpeg");
+        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(png));
+        stubReviewerPass();
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        String prompt = captureReviewPrompt();
+        assertThat(prompt).contains("本提交含 1 个媒体附件（shot.jpg）");
+        assertThat(prompt).contains("附件内容注入已关闭，仅见清单");
+        verify(attachmentService, never()).loadContent(anyLong());
+    }
+
+    @Test
+    @DisplayName("硬化: 纯文本附件组合不产生媒体可见性标注")
+    void shouldNotAddMediaNoteForTextOnlyAttachments() {
+        readableAttachment(605L, "notes.md", "markdown", 10L,
+                "纯文本内容".getBytes(StandardCharsets.UTF_8));
+        stubReviewerPass();
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        String prompt = captureReviewPrompt();
+        assertThat(prompt).contains("纯文本内容");
+        assertThat(prompt).doesNotContain("媒体附件");
+    }
 }

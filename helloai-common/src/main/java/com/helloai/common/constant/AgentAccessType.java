@@ -82,6 +82,17 @@ public enum AgentAccessType {
                 defaults.put("isSlow", true);
             }
         }
+        // 模态理解能力取决于底层模型而非接入通道，三类统一默认 false，注册时可覆盖
+        defaults.put(CAP_SUPPORTS_IMAGE_UNDERSTANDING, false);
+        defaults.put(CAP_SUPPORTS_AUDIO_UNDERSTANDING, false);
+        defaults.put(CAP_SUPPORTS_VIDEO_UNDERSTANDING, false);
         return defaults;
     }
+
+    /** 能力键：底层模型具备图片理解（多模态）。 */
+    public static final String CAP_SUPPORTS_IMAGE_UNDERSTANDING = "supportsImageUnderstanding";
+    /** 能力键：底层模型具备音频理解（多模态）。 */
+    public static final String CAP_SUPPORTS_AUDIO_UNDERSTANDING = "supportsAudioUnderstanding";
+    /** 能力键：底层模型具备视频理解（多模态）。 */
+    public static final String CAP_SUPPORTS_VIDEO_UNDERSTANDING = "supportsVideoUnderstanding";
 }
