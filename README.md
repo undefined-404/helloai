@@ -75,7 +75,7 @@ HelloAI 基于 **Spring Boot + Spring AI MCP 协议**实现多 AI 厂商（Qoder
 | 外部 Agent 离线/超时 | Reconcile 健康检查 + 离线重分配 + 执行超时补偿（TIMEOUT/BLOCKED） |
 | 前置任务未完成 | `depends_on` 拓扑守卫：下游不提前分发，不会无效分配 Agent |
 | 子任务滞留 PENDING（孤儿） | 5 分钟快速巡检兜底（isReady 依赖守卫不误伤未就绪任务），分发异常写 `sub_task_dispatch_deferred` 事件可观测 |
-| 在线状态判定 | 三件套：`last_seen_at` / `last_active_at` / `online_status`，`heartbeat` 工具刷新 |
+| 在线状态判定 | 三件套：`last_seen_time` / `last_active_time` / `online_status`（`heartbeat` 刷新 `last_seen_time`，`claim`/`start`/`submit` 刷新 `last_active_time`） |
 
 ---
 
@@ -118,7 +118,7 @@ HelloAI 基于 **Spring Boot + Spring AI MCP 协议**实现多 AI 厂商（Qoder
 
 - MCP SSE（`/mcp/sse` + `/mcp/messages`）是外部 Agent 的唯一主协议通道；REST `tools/list` / `tools/call` 为兼容保留
 - 任务感知：外部 Agent 以 `pullTasks` 轮询收件箱为唯一感知通道（建议 30s）；门铃 SSE（`/api/agents/doorbell/sse`）已搁置（2026-08-07，外部 Agent 无法消费平台推送，代码保留运行待复用）
-- MCP 工具集：`pullTasks` / `ack` / `claimSubTask` / `heartbeat` / `uploadArtifact` / `submitResult` / `reportBlocked` / `getAgentStatus` / `checkIn` / `checkOut`，工具数量以 `tools/list` 实际返回为准
+- MCP 工具集：`pullTasks` / `ack` / `claimSubTask` / `heartbeat` / `getDepsSummary` / `uploadArtifact` / `submitResult` / `reportBlocked` / `getAgentStatus` / `checkIn` / `checkOut`，工具数量以 `tools/list` 实际返回为准
 
 ---
 
