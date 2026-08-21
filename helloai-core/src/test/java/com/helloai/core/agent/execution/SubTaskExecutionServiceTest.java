@@ -32,6 +32,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import com.helloai.core.agent.command.ExecutionResultHandler;
+import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
@@ -75,6 +76,9 @@ class SubTaskExecutionServiceTest {
 
     @Mock
     private AttachmentService attachmentService;  // 依赖产出双轨：物化附件内容
+
+    @Mock
+    private AgentQualityProfileService agentQualityProfileService;  // 反馈回路第 2 层：历史表现节注入
 
     @InjectMocks
     private SubTaskExecutionServiceImpl subTaskExecutionService;
@@ -636,6 +640,86 @@ class SubTaskExecutionServiceTest {
                     .contains("## 返工修正指引（共 1 轮历史审核）")
                     .contains("### 第 1 轮")
                     .contains("缺端点");
+        }
+    }
+
+    @Nested
+    @DisplayName("executeOnce — 历史表现注入（反馈回路第 2 层）")
+    class ExecuteOnceHistorySection {
+
+        @Test
+        @DisplayName("TC-1 should inject history section into prompt when profile summary non-blank")
+        void shouldInjectHistorySectionWhenProfileExists() {
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            Agent agent = agent();
+
+            when(agentQualityProfileService.renderHistorySection(44L))
+                    .thenReturn("## 你的历史表现\n- 累计评审 5 次，通过率 80%\n"
+                            + "- 最常见驳回原因 TOP1：交付物未物化\n"
+                            + "- 本轮提醒：请对照验收标准逐条自查\n");
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+
+            subTaskExecutionService.executeOnce(subTask, agent);
+
+            ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            assertThat(taskCaptor.getValue().getUserPrompt())
+                    .contains("## 你的历史表现")
+                    .contains("累计评审 5 次")
+                    .contains("最常见驳回原因 TOP1");
+            // 装配观测：historySummary=true
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(taskTimelineService).recordEvent(eq(33L), eq(22L), eq("sub_task_spec_context_loaded"),
+                    eq(AgentRole.EXECUTOR), eq(44L), payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue()).containsEntry("historySummary", true);
+        }
+
+        @Test
+        @DisplayName("TC-2 should omit history section when profile summary blank")
+        void shouldOmitHistorySectionWhenProfileBlank() {
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            Agent agent = agent();
+
+            when(agentQualityProfileService.renderHistorySection(44L)).thenReturn("");
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+
+            subTaskExecutionService.executeOnce(subTask, agent);
+
+            ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            assertThat(taskCaptor.getValue().getUserPrompt()).doesNotContain("你的历史表现");
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(taskTimelineService).recordEvent(eq(33L), eq(22L), eq("sub_task_spec_context_loaded"),
+                    eq(AgentRole.EXECUTOR), eq(44L), payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue()).containsEntry("historySummary", false);
+        }
+
+        @Test
+        @DisplayName("TC-3 should degrade gracefully and keep executing when history render throws")
+        void shouldDegradeWhenHistoryRenderThrows() {
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            Agent agent = agent();
+
+            when(agentQualityProfileService.renderHistorySection(44L))
+                    .thenThrow(new RuntimeException("profile db down"));
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+
+            AgentResult result = subTaskExecutionService.executeOnce(subTask, agent);
+
+            assertThat(result.isSuccess()).isTrue();
+            ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            assertThat(taskCaptor.getValue().getUserPrompt()).doesNotContain("你的历史表现");
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(taskTimelineService).recordEvent(eq(33L), eq(22L), eq("sub_task_spec_context_loaded"),
+                    eq(AgentRole.EXECUTOR), eq(44L), payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue()).containsEntry("historySummary", false);
         }
     }
 

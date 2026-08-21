@@ -35,10 +35,12 @@ import java.util.stream.Collectors;
 import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConversationService;
+import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import com.helloai.core.task.service.TaskRunningSpecService;
 import com.helloai.core.task.service.PluginSkillSpecService;
+import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 
 @Slf4j
 @Service
@@ -74,6 +76,7 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
     private final PluginSkillSpecService pluginSkillSpecService;
     private final ConversationService conversationService;
     private final AttachmentService attachmentService;
+    private final AgentQualityProfileService agentQualityProfileService;
 
     // #region debug-point redispatch-stuck-blocked
     private static final ObjectMapper DBG_MAPPER = new ObjectMapper();
@@ -221,14 +224,17 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
                 "agentOnlineStatus", agent.getOnlineStatus() != null ? agent.getOnlineStatus().name() : null
         ));
 
-        // Task Running Spec 上下文装配：
         // 1) 全局段 = Baseline（总体目标/平台约束）+ ContextSummary（全局进度），来源 task.context JSONB / 独立表
         // 2) 插件规范段 = 任务 required_skills 命中 eng-* 规范库标签时注入「执行速览」
-        // 3) 依赖段 = 直接前置（dependsOnIdList）的结构化摘要 + 完成内容本体（物化附件优先、原始产出回退）
+        // 3) 历史表现段 = 执行者画像摘要（反馈回路第 2 层）：画像缺失/查询失败返回空串，
+        //    零注入零阻断（N18 P1 同款哲学；renderHistorySection 内部已防御，此处再兜底防扩散）
+        // 4) 依赖段 = 直接前置（dependsOnIdList）的结构化摘要 + 完成内容本体（物化附件优先、原始产出回退）
         //    综合注入供 LLM 结合"前置做了什么 + 本轮任务要求"分析执行
         String promptSection = taskRunningSpecService.buildExecutorPromptSection(subTask.getTaskId());
         String pluginSection = pluginSkillSpecService.renderSection(subTask.getTaskId());
         promptSection = mergeSpecSections(promptSection, pluginSection);
+        String historySection = renderHistorySectionSafely(agent);
+        promptSection = mergeSpecSections(promptSection, historySection);
         DependencySectionResult dependencySection = buildDependencySection(subTask);
         Map<String, Object> context = new HashMap<>();
         context.put("taskId", subTask.getTaskId());
@@ -252,7 +258,8 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
                         "loadedCount", dependencySection.loadedCount,
                         "truncatedCount", dependencySection.truncatedCount,
                         "degraded", dependencySection.degraded,
-                        "pluginSpec", pluginSection != null && !pluginSection.isBlank()));
+                        "pluginSpec", pluginSection != null && !pluginSection.isBlank(),
+                        "historySummary", historySection != null && !historySection.isBlank()));
         taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_llm_call_start",
                 AgentRole.EXECUTOR, agent.getId(),
                 Map.of("agentId", agent.getId(), "agentName", agent.getName()));
@@ -308,6 +315,20 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
             return pluginSection;
         }
         return specSection + "\n\n" + pluginSection;
+    }
+
+    /**
+     * 历史表现段安全渲染（反馈回路第 2 层）：画像查询/渲染任何异常都降级为空串，
+     * 绝不让执行主链路被画像副链路拖死（N18 P1 同款哲学 + §6.128 best-effort 教训）。
+     */
+    private String renderHistorySectionSafely(Agent agent) {
+        try {
+            return agentQualityProfileService.renderHistorySection(agent.getId());
+        } catch (Exception e) {
+            log.debug("历史表现段渲染失败（best-effort 降级，零注入）: agentId={}, err={}",
+                    agent.getId(), e.getMessage());
+            return "";
+        }
     }
 
     /**
