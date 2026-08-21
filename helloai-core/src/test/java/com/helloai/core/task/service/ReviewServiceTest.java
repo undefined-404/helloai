@@ -5,6 +5,7 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.quality.QualityProfileUpdater;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.core.task.entity.SubTask;
@@ -60,11 +61,15 @@ class ReviewServiceTest {
     @Mock
     private ExecutionCommandService executionCommandService;
 
+    @Mock
+    private QualityProfileUpdater qualityProfileUpdater;
+
     private ReviewService reviewService;
 
     @BeforeEach
     void setUp() {
-        reviewService = new ReviewServiceImpl(subTaskService, rewardService, agentService, executionCommandService);
+        reviewService = new ReviewServiceImpl(subTaskService, rewardService, agentService,
+                executionCommandService, qualityProfileUpdater);
         // createReview 内部 round 计数与 record 落库依赖父类 baseMapper；
         // lenient：校验失败路径（如 issues 为空）在 count 之前就返回，stub 不必然被消费
         ReflectionTestUtils.setField(reviewService, "baseMapper", reviewRecordMapper);

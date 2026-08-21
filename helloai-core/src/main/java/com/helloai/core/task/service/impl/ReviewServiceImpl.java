@@ -7,6 +7,7 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.quality.QualityProfileUpdater;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.core.task.entity.ReviewRecord;
@@ -36,6 +37,8 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
     private final RewardService rewardService;
     private final AgentService agentService;
     private final ExecutionCommandService executionCommandService;
+    /** 反馈回路第 1 层：review_record 落库后同事务增量维护质量画像（best-effort 不阻断）。 */
+    private final QualityProfileUpdater qualityProfileUpdater;
 
     private static final Map<Integer, Integer> SCORE_RULES = Map.of(
             5, 5,   // 超出预期
@@ -80,6 +83,9 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
         record.setComment(comment);
         record.setRound((int) round);
         save(record);
+
+        // 反馈回路第 1 层：画像增量维护与 review_record 同事务（失败不阻断审查主链路）
+        qualityProfileUpdater.onReviewRecordPersisted(executorAgentId, record);
 
         if (result == ReviewResult.APPROVED) {
             // 修复: APPROVED 走 complete() 触发 5 因子隐式评分（score_factors/composite_score/score_grade/completed_at + reward_log）
@@ -145,6 +151,15 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
         record.setRound((int) round);
         record.setRemark("AUTO_REVIEW");
         save(record);
+
+        // 反馈回路第 1 层：画像增量维护与 review_record 同事务（失败不阻断核验主链路）。
+        // 执行者维度取落库时刻 sub_task.assigned_agent_id 归属
+        Long executorAgentId = null;
+        SubTask subTask = subTaskService.getById(subTaskId);
+        if (subTask != null) {
+            executorAgentId = subTask.getAssignedAgentId();
+        }
+        qualityProfileUpdater.onReviewRecordPersisted(executorAgentId, record);
 
         log.info("自动核验落库: subTaskId={}, result={}, score={}, round={}",
                 subTaskId, result.name(), score, round);
