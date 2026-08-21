@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
+import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.config.AgentDutyLeaseProperties;
 import com.helloai.common.constant.AgentDutyLeaseStatus;
 import com.helloai.core.agent.entity.Agent;
@@ -12,6 +13,7 @@ import com.helloai.core.agent.entity.AgentDutyLease;
 import com.helloai.core.agent.entity.AgentDutyLeaseLatestRow;
 import com.helloai.core.agent.mapper.AgentDutyLeaseMapper;
 import com.helloai.core.agent.mapper.AgentMapper;
+import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.shared.event.DutyLeaseClosedEvent;
 import com.helloai.core.task.entity.SubTask;
@@ -46,6 +48,8 @@ public class AgentDutyLeaseServiceImpl extends ServiceImpl<AgentDutyLeaseMapper,
     private final AgentMapper agentMapper;
     private final SubTaskMapper subTaskMapper;
     private final AgentDutyLeaseProperties dutyLeaseProperties;
+    private final AgentDispatchProperties agentDispatchProperties;
+    private final AgentQualityProfileService agentQualityProfileService;
 
     /**
      * 按 ID 批量查询 Agent 名称（用于值班租约报表面板填充 agentName）。
@@ -227,6 +231,9 @@ public class AgentDutyLeaseServiceImpl extends ServiceImpl<AgentDutyLeaseMapper,
      *       低分 Agent 窗口短（快速回收），高分 Agent 窗口长（减少续约开销）</li>
      *   <li>无 score → 用 {@code consecutive_failure_count} 折算表现分（每次失败 -20，下限 0），
      *       连续失败越多窗口越短</li>
+     *   <li>反馈回路第 1 层：performanceScore 升级为复合分 =
+     *       失败折算分 + 质量分(0~100) × {@code helloai.dispatch.quality-weight}；
+     *       质量画像缺失或权重为 0 时回退原逻辑（开关可回退）</li>
      *   <li>自适应开关关闭 / agentId 为空 / Agent 记录不存在 → defaultTtlMinutes 兜底</li>
      * </ul></p>
      *
@@ -255,6 +262,21 @@ public class AgentDutyLeaseServiceImpl extends ServiceImpl<AgentDutyLeaseMapper,
             performanceScore = fullScore - failures * 20;
         }
         performanceScore = Math.max(0, Math.min(fullScore, performanceScore));
+        // 反馈回路第 1 层：失败折算分 + 质量分加权 → 复合分（同源 quality-weight 配置；
+        // 权重 0 或质量分缺失时保持原逻辑，开关可回退）
+        double qualityWeight = agentDispatchProperties.getQualityWeight();
+        if (qualityWeight > 0) {
+            try {
+                Integer qualityScore = agentQualityProfileService.computeQualityScore(agentId);
+                if (qualityScore != null) {
+                    double composite = performanceScore + qualityScore * qualityWeight;
+                    performanceScore = (int) Math.round(Math.max(0, Math.min(fullScore, composite)));
+                }
+            } catch (Exception e) {
+                // 防御式：画像查询异常回退失败折算分，不阻断 checkIn 链路
+                log.debug("复合分画像查询异常（回退原逻辑）: agentId={}, err={}", agentId, e.getMessage());
+            }
+        }
         int min = Math.max(dutyLeaseProperties.getMinTtlMinutes(), 1);
         int max = Math.max(dutyLeaseProperties.getMaxTtlMinutes(), min);
         return min + (max - min) * performanceScore / fullScore;

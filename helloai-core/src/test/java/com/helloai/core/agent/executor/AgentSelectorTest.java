@@ -8,6 +8,7 @@ import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.config.AgentHealthProperties;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
+import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.common.constant.AgentDutyLeaseStatus;
 import com.helloai.common.constant.WorkMode;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
@@ -62,6 +63,9 @@ class AgentSelectorTest {
     @Mock
     private ConcurrencyQuotaService concurrencyQuotaService;
 
+    @Mock
+    private AgentQualityProfileService agentQualityProfileService;
+
     private AgentSelector agentSelector;
 
     @BeforeEach
@@ -80,9 +84,12 @@ class AgentSelectorTest {
         lenient().when(credentialVaultService.hasActiveAgentCredential(anyLong())).thenReturn(true);
         // E2 默认所有候选额度未满；满额用例请单独 stub 返回 false
         lenient().when(concurrencyQuotaService.canAccept(anyLong())).thenReturn(true);
+        // 质量画像默认缺失（computeQualityScore=null → qualityRank 记 0 档不参与排序）；
+        // qualityRank 相关用例请单独 stub 返回具体分数
+        lenient().when(agentQualityProfileService.computeQualityScore(anyLong())).thenReturn(null);
         agentSelector = new AgentSelector(
                 agentService, circuitBreakerRegistry, props, health, agentDutyLeaseService,
-                credentialVaultService, concurrencyQuotaService);
+                credentialVaultService, concurrencyQuotaService, agentQualityProfileService);
     }
 
     // ════════════════════════════════════════════════════════════
@@ -446,7 +453,7 @@ class AgentSelectorTest {
             policyHealth.setOfflineMinutes(5);
             policySelector = new AgentSelector(
                     agentService, circuitBreakerRegistry, policyProps, policyHealth, agentDutyLeaseService,
-                    credentialVaultService, concurrencyQuotaService);
+                    credentialVaultService, concurrencyQuotaService, agentQualityProfileService);
         }
 
         private Agent agentWith(Long id, Integer score,
@@ -499,7 +506,7 @@ class AgentSelectorTest {
             AgentSelector forceSelector =
                     new AgentSelector(
                             agentService, circuitBreakerRegistry, forceProps, forceHealth, agentDutyLeaseService,
-                            credentialVaultService, concurrencyQuotaService);
+                            credentialVaultService, concurrencyQuotaService, agentQualityProfileService);
 
             when(agentService.listByRole(AgentRole.EXECUTOR))
                     .thenReturn(List.of(cli, api));
@@ -654,7 +661,7 @@ class AgentSelectorTest {
             zeroHealth.setOfflineMinutes(0);
             AgentSelector zeroSelector = new AgentSelector(
                     agentService, circuitBreakerRegistry, zeroProps, zeroHealth, agentDutyLeaseService,
-                    credentialVaultService, concurrencyQuotaService);
+                    credentialVaultService, concurrencyQuotaService, agentQualityProfileService);
 
             Agent stale = agentWithHeartbeat(2L, 90, AgentOnlineStatus.ONLINE,
                     AgentStatus.ACTIVE, 120L);  // 2 小时前
@@ -678,7 +685,7 @@ class AgentSelectorTest {
             customHealth.setOfflineMinutes(3);
             AgentSelector customSelector = new AgentSelector(
                     agentService, circuitBreakerRegistry, customProps, customHealth, agentDutyLeaseService,
-                    credentialVaultService, concurrencyQuotaService);
+                    credentialVaultService, concurrencyQuotaService, agentQualityProfileService);
 
             Agent stale = agentWithHeartbeat(2L, 90, AgentOnlineStatus.ONLINE,
                     AgentStatus.ACTIVE, 9L);  // 9 分钟前 > 3 分钟阈值
@@ -961,13 +968,123 @@ class AgentSelectorTest {
             health.setOfflineMinutes(5);
             AgentSelector disabledSelector = new AgentSelector(
                     agentService, circuitBreakerRegistry, disabledProps, health,
-                    agentDutyLeaseService, credentialVaultService, concurrencyQuotaService);
+                    agentDutyLeaseService, credentialVaultService, concurrencyQuotaService,
+                    agentQualityProfileService);
 
             Agent result = disabledSelector.pickAlternative(1L, AgentRole.EXECUTOR);
 
             assertThat(result).isNotNull();
             assertThat(result.getId()).isEqualTo(2L);
             verify(concurrencyQuotaService, never()).canAccept(anyLong());
+        }
+    }
+
+    @Nested
+    @DisplayName("反馈回路第 1 层：qualityRank 调度回灌")
+    class QualityRank {
+
+        private AgentSelector qualitySelector;
+
+        @BeforeEach
+        void initQualitySelector() {
+            // 默认 quality-weight=0.1 > 0，qualityRank 参与排序（dutyRank 之后、score 之前）
+            AgentDispatchProperties props = new AgentDispatchProperties();
+            props.setPreferExternal(false);
+            props.setRequireIdle(false);
+            props.setQualityWeight(0.1);
+            AgentHealthProperties health = new AgentHealthProperties();
+            health.setOfflineMinutes(5);
+            qualitySelector = new AgentSelector(
+                    agentService, circuitBreakerRegistry, props, health, agentDutyLeaseService,
+                    credentialVaultService, concurrencyQuotaService, agentQualityProfileService);
+        }
+
+        @Test
+        @DisplayName("质量分档位不同 → 高质量分 Agent 优先于低质量分但 score 更高的 Agent")
+        void shouldPreferHigherQualityRankOverHigherScore() {
+            // A: 质量分 80 → rank 4（×0.1=0.4）；B: 质量分 20 → rank 1（×0.1=0.1）
+            // A 即使 score 更低也应胜出（qualityRank 在 score 之前）
+            Agent lowQualityHighScore = agent(2L, 95, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            Agent highQualityLowScore = agent(3L, 30, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(lowQualityHighScore, highQualityLowScore));
+            when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
+            when(circuitBreakerRegistry.find("agentDispatch-3")).thenReturn(Optional.empty());
+            when(agentQualityProfileService.computeQualityScore(2L)).thenReturn(20);
+            when(agentQualityProfileService.computeQualityScore(3L)).thenReturn(80);
+
+            Agent result = qualitySelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(3L);
+        }
+
+        @Test
+        @DisplayName("质量分缺失（null）降级 0 档 → 不影响有画像 Agent 的胜出")
+        void shouldDegradeNullQualityScoreToZeroRank() {
+            Agent noProfile = agent(2L, 95, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            Agent withProfile = agent(3L, 30, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(noProfile, withProfile));
+            when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
+            when(circuitBreakerRegistry.find("agentDispatch-3")).thenReturn(Optional.empty());
+            when(agentQualityProfileService.computeQualityScore(2L)).thenReturn(null);
+            when(agentQualityProfileService.computeQualityScore(3L)).thenReturn(80);
+
+            Agent result = qualitySelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(3L);
+        }
+
+        @Test
+        @DisplayName("质量分档位相同 → 回退 score 排序（质量维度不主导同档比较）")
+        void shouldFallbackToScoreWhenQualityRankEqual() {
+            Agent lowerScore = agent(2L, 40, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            Agent higherScore = agent(3L, 90, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(lowerScore, higherScore));
+            when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
+            when(circuitBreakerRegistry.find("agentDispatch-3")).thenReturn(Optional.empty());
+            when(agentQualityProfileService.computeQualityScore(2L)).thenReturn(85);
+            when(agentQualityProfileService.computeQualityScore(3L)).thenReturn(90);
+
+            Agent result = qualitySelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(3L);
+        }
+
+        @Test
+        @DisplayName("quality-weight=0 关闭 → 不查画像，仅按 score 排序")
+        void shouldDisableQualityRankWhenWeightZero() {
+            AgentDispatchProperties zeroWeightProps = new AgentDispatchProperties();
+            zeroWeightProps.setPreferExternal(false);
+            zeroWeightProps.setRequireIdle(false);
+            zeroWeightProps.setQualityWeight(0);
+            AgentHealthProperties health = new AgentHealthProperties();
+            health.setOfflineMinutes(5);
+            AgentSelector zeroWeightSelector = new AgentSelector(
+                    agentService, circuitBreakerRegistry, zeroWeightProps, health, agentDutyLeaseService,
+                    credentialVaultService, concurrencyQuotaService, agentQualityProfileService);
+
+            Agent lowQualityHighScore = agent(2L, 95, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            Agent highQualityLowScore = agent(3L, 30, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(lowQualityHighScore, highQualityLowScore));
+            when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
+            when(circuitBreakerRegistry.find("agentDispatch-3")).thenReturn(Optional.empty());
+
+            Agent result = zeroWeightSelector.pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(2L);
+            // 权重关闭：画像查询完全不被调用
+            verify(agentQualityProfileService, never()).computeQualityScore(anyLong());
         }
     }
 }

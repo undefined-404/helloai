@@ -121,6 +121,21 @@ public class AgentDispatchProperties {
     private int reviewOrphanBatchSize = 10;
 
     /**
+     * 质量画像回灌权重（反馈回路第 1 层）。
+     *
+     * <p>用于两处调度回灌（同源配置，均可通过置 0 关闭回退）：
+     * <ul>
+     *   <li>{@code AgentSelector} 选人排序：qualityRank（画像质量分归一化档位）
+     *       乘以本权重后插入 dutyRank 之后参与比较，低权重起步防抖动</li>
+     *   <li>{@code AgentDutyLeaseServiceImpl.resolveTtlMinutes} 动态 TTL 复合分：
+     *       performanceScore = 失败折算分 + 质量分(0~100) × qualityWeight</li>
+     * </ul>
+     * 质量画像缺失时两处均回退原逻辑（best-effort，不阻断调度主链路）。
+     * 默认 0.1；0 表示完全关闭质量分参与（与画像回灌前行为一致）。</p>
+     */
+    private double qualityWeight = 0.1;
+
+    /**
      * 自动核验证据硬检查的附件补偿等待（毫秒）。
      *
      * <p>产出物化在结果回报事务 afterCommit 同步执行，自动核验在 AFTER_COMMIT

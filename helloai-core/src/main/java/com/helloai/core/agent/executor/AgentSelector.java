@@ -10,6 +10,7 @@ import com.helloai.common.constant.WorkMode;
 import com.helloai.core.agent.SkillNormalizer;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
+import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.ConcurrencyQuotaService;
@@ -23,8 +24,11 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Agent 选择器。
@@ -46,6 +50,7 @@ public class AgentSelector {
     private final AgentDutyLeaseService agentDutyLeaseService;
     private final CredentialVaultService credentialVaultService;
     private final ConcurrencyQuotaService concurrencyQuotaService;
+    private final AgentQualityProfileService agentQualityProfileService;
 
     /**
      * 从指定角色的 Agent 中选取首选执行器（用于初始分配）。
@@ -135,6 +140,7 @@ public class AgentSelector {
 
     private Agent pickFromCandidates(List<Agent> candidates, Long excludeAgentId,
                                      AgentSelectionConstraints constraints) {
+        Map<Long, Integer> qualityRanks = resolveQualityRanks(candidates);
         return candidates.stream()
                 .filter(a -> excludeAgentId == null || !a.getId().equals(excludeAgentId))
                 .filter(a -> constraints == null || constraints.allows(a))
@@ -151,7 +157,7 @@ public class AgentSelector {
                 .filter(this::hasUsableCredential)
                 .filter(a -> !isOnStrictDuty(a.getId()))
                 .filter(this::isCircuitClosed)
-                .max(resolveComparator())
+                .max(resolveComparator(qualityRanks))
                 .orElse(null);
     }
 
@@ -226,17 +232,52 @@ public class AgentSelector {
         }
     }
 
-    private Comparator<Agent> resolveComparator() {
+    private Comparator<Agent> resolveComparator(Map<Long, Integer> qualityRanks) {
         // AgentHub P0-B：“当前是否处于值班”作为软优先级最高一档。
         // 无硬拒绝：即使无任何值班 Agent，仍能从非值班候选中选出，
         // 保证与当前行为向后兼容（未上线时 checkIn 未被调用，选择器表现与以前一致）。
         Comparator<Agent> dutyFirst = Comparator.comparingInt(this::dutyRank);
-        if (!agentDispatchProperties.isPreferExternal()) {
-            return dutyFirst.thenComparing(Agent::getScore, Comparator.nullsFirst(Comparator.naturalOrder()));
+        if (agentDispatchProperties.isPreferExternal()) {
+            dutyFirst = dutyFirst.thenComparingInt(this::accessTypeRank);
         }
-        return dutyFirst
-                .thenComparingInt(this::accessTypeRank)
-                .thenComparing(Agent::getScore, Comparator.nullsFirst(Comparator.naturalOrder()));
+        // 反馈回路第 1 层调度回灌：dutyRank 之后插入 qualityRank（质量分档位 ×
+        // quality-weight，默认 0.1 低权重防抖动；0 关闭）。质量分缺失/查询异常
+        // 档位记 0（不参与质量维度比较，不影响有画像 Agent 之间的相对顺序）。
+        double qualityWeight = agentDispatchProperties.getQualityWeight();
+        if (qualityWeight > 0) {
+            dutyFirst = dutyFirst.thenComparingDouble(
+                    a -> qualityRanks.getOrDefault(a.getId(), 0) * qualityWeight);
+        }
+        return dutyFirst.thenComparing(Agent::getScore,
+                Comparator.nullsFirst(Comparator.naturalOrder()));
+    }
+
+    /**
+     * 预计算候选 Agent 的质量分档位（0~5 档：qualityScore/20），供比较器复用。
+     *
+     * <p>一次选人只查询一轮画像（避免 Comparator 两两比较时重复查库）；
+     * weight ≤ 0 或查询异常一律记 0 档（best-effort，不阻断选人）。</p>
+     */
+    private Map<Long, Integer> resolveQualityRanks(List<Agent> candidates) {
+        if (agentDispatchProperties.getQualityWeight() <= 0
+                || candidates == null || candidates.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<Long, Integer> ranks = new HashMap<>();
+        for (Agent agent : candidates) {
+            if (agent == null || agent.getId() == null) {
+                continue;
+            }
+            try {
+                Integer qualityScore = agentQualityProfileService.computeQualityScore(agent.getId());
+                ranks.put(agent.getId(), qualityScore != null ? qualityScore / 20 : 0);
+            } catch (Exception e) {
+                // 防御式：画像查询异常降级为 0 档，不参与质量维度排序
+                log.debug("qualityRank fallback to 0 for agent {}: {}", agent.getId(), e.getMessage());
+                ranks.put(agent.getId(), 0);
+            }
+        }
+        return ranks;
     }
 
     /**
