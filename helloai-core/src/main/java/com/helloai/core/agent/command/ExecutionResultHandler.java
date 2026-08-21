@@ -7,6 +7,7 @@ import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.output.ExecutionOutputParser;
 import com.helloai.core.agent.output.ParsedOutput;
+import com.helloai.core.agent.quality.ExecutorDoneIssuesBackfiller;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.shared.event.SubTaskSubmittedForReviewEvent;
 import com.helloai.core.agent.service.ExecutionArtifactService;
@@ -24,6 +25,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.time.OffsetDateTime;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import com.helloai.core.agent.service.SubTaskExecutionService;
 import com.helloai.core.task.service.SubTaskService;
@@ -53,6 +55,7 @@ public class ExecutionResultHandler {
     private final ExecutionArtifactService executionArtifactService;
     private final TaskRunningSpecService taskRunningSpecService;
     private final ExecutionOutputParser executionOutputParser;
+    private final ExecutorDoneIssuesBackfiller executorDoneIssuesBackfiller;
 
     @Transactional(rollbackFor = Exception.class)
     public void handleSuccess(Long subTaskId, Long agentId, AgentResult result) {
@@ -249,6 +252,25 @@ public class ExecutionResultHandler {
             } else {
                 executionArtifactService.materialize(materializeTarget, materializeAgentId, materializeParsed);
             }
+
+            // 反馈回路第 1 层：executorDoneIssues LLM 语义对比回填（异步 best-effort）。
+            // 轻量预检（reviewHistory 最后一轮有空 executorDoneIssues 且有 issues）通过才
+            // 注册 afterCommit 触发；完整校验与防覆盖在 ExecutorDoneIssuesBackfiller 内完成。
+            if (report.getOutput() != null && !report.getOutput().isBlank()
+                    && hasUnresolvedLastRound(ctx)) {
+                final Long backfillSubTaskId = report.getSubTaskId();
+                final String backfillOutput = report.getOutput();
+                if (TransactionSynchronizationManager.isSynchronizationActive()) {
+                    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            executorDoneIssuesBackfiller.backfill(backfillSubTaskId, backfillOutput);
+                        }
+                    });
+                } else {
+                    executorDoneIssuesBackfiller.backfill(backfillSubTaskId, backfillOutput);
+                }
+            }
         } else {
             subTaskService.block(report.getSubTaskId());
             taskTimelineService.recordEvent(
@@ -308,6 +330,32 @@ public class ExecutionResultHandler {
         private boolean applied;
         private boolean idempotent;
         private String status;
+    }
+
+    /**
+     * executorDoneIssues 回填预检（轻量，仅看结构不落库）：
+     * reviewHistory 最后一轮 executorDoneIssues 为空且 issues 非空 → 需要语义对比。
+     * 完整校验（round 比对 / 防覆盖）由 {@link ExecutorDoneIssuesBackfiller} 在异步链路完成。
+     */
+    private boolean hasUnresolvedLastRound(Map<String, Object> ctx) {
+        if (ctx == null) {
+            return false;
+        }
+        Object historyObj = ctx.get("reviewHistory");
+        if (!(historyObj instanceof List<?> history) || history.isEmpty()) {
+            return false;
+        }
+        Object last = history.get(history.size() - 1);
+        if (!(last instanceof Map<?, ?> m)) {
+            return false;
+        }
+        Object done = m.get("executorDoneIssues");
+        if (done instanceof List<?> doneList && !doneList.isEmpty()) {
+            return false;
+        }
+        Object issues = m.get("issues");
+        return (issues instanceof List<?> issueList && !issueList.isEmpty())
+                || (issues instanceof String issueStr && !issueStr.isBlank());
     }
 
     /**
