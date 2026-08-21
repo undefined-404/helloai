@@ -12,7 +12,8 @@ import java.util.Map;
  *
  * <p>封装了 Task 执行过程中累积的结构化知识，替代当前原始产出注入。
  * 包含：Planner 写入的 Baseline、各 executor 回填的 ExecutionRecord、
- * 系统自动编译的 ContextSummary。</p>
+ * 系统自动编译的 ContextSummary，以及契约先行拆解模式下由契约定义子任务
+ * 回流的 Contract。</p>
  *
  * <p>通过 {@link #toMap()} / {@link #fromMap(Map)} 实现 JSONB 序列化边界。
  * 无状态——每次更新都产生新的不可变实例，由 Service 层负责回写 DB。</p>
@@ -26,6 +27,7 @@ public final class TaskRunningSpec {
     private final List<ExecutionRecord> executionRecords;
     private final String contextSummary;
     private final String lastUpdatedAt;
+    private final Map<String, Object> contract;
 
     private TaskRunningSpec(Builder builder) {
         this.version = builder.version > 0 ? builder.version : CURRENT_VERSION;
@@ -34,6 +36,9 @@ public final class TaskRunningSpec {
                 new ArrayList<>(builder.executionRecords != null ? builder.executionRecords : List.of()));
         this.contextSummary = builder.contextSummary;
         this.lastUpdatedAt = builder.lastUpdatedAt;
+        this.contract = builder.contract != null && !builder.contract.isEmpty()
+                ? Collections.unmodifiableMap(new LinkedHashMap<>(builder.contract))
+                : null;
     }
 
     /** 空实例——新任务尚未初始化时的默认状态。 */
@@ -47,10 +52,14 @@ public final class TaskRunningSpec {
     public String contextSummary() { return contextSummary; }
     public String lastUpdatedAt() { return lastUpdatedAt; }
 
+    /** 任务契约（契约先行拆解）：契约定义子任务产出回流；无契约返回 null。 */
+    public Map<String, Object> contract() { return contract; }
+
     /** 是否有任何内容（用于判断是否需要注入上下文段）。 */
     public boolean isEmpty() {
         return baseline == null && executionRecords.isEmpty()
-                && (contextSummary == null || contextSummary.isBlank());
+                && (contextSummary == null || contextSummary.isBlank())
+                && (contract == null || contract.isEmpty());
     }
 
     // ──────────────── JSONB 序列化边界 ────────────────
@@ -70,6 +79,9 @@ public final class TaskRunningSpec {
         }
         if (contextSummary != null && !contextSummary.isBlank()) {
             m.put("contextSummary", contextSummary);
+        }
+        if (contract != null && !contract.isEmpty()) {
+            m.put("contract", contract);
         }
         if (lastUpdatedAt != null) {
             m.put("lastUpdatedAt", lastUpdatedAt);
@@ -102,6 +114,10 @@ public final class TaskRunningSpec {
         }
         Object cs = map.get("contextSummary");
         if (cs instanceof String s) b.contextSummary(s);
+        Object ct = map.get("contract");
+        if (ct instanceof Map<?, ?> contractMap) {
+            b.contract((Map<String, Object>) contractMap);
+        }
         Object lua = map.get("lastUpdatedAt");
         if (lua instanceof String s) b.lastUpdatedAt(s);
         return b.build();
@@ -119,6 +135,7 @@ public final class TaskRunningSpec {
                 .version(this.version)
                 .baseline(this.baseline)
                 .contextSummary(this.contextSummary)
+                .contract(this.contract)
                 .lastUpdatedAt(OffsetDateTime.now().toString());
         for (ExecutionRecord rec : this.executionRecords) {
             b.addExecutionRecord(rec);
@@ -132,12 +149,14 @@ public final class TaskRunningSpec {
         private List<ExecutionRecord> executionRecords = new ArrayList<>();
         private String contextSummary;
         private String lastUpdatedAt;
+        private Map<String, Object> contract;
 
         public Builder version(int v) { this.version = v; return this; }
         public Builder baseline(TaskBaseline v) { this.baseline = v; return this; }
         public Builder addExecutionRecord(ExecutionRecord v) { this.executionRecords.add(v); return this; }
         public Builder contextSummary(String v) { this.contextSummary = v; return this; }
         public Builder lastUpdatedAt(String v) { this.lastUpdatedAt = v; return this; }
+        public Builder contract(Map<String, Object> v) { this.contract = v; return this; }
 
         public TaskRunningSpec build() {
             if (lastUpdatedAt == null || lastUpdatedAt.isBlank()) {

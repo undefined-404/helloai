@@ -42,4 +42,11 @@ public class TaskRunningSpecEntity extends BaseEntity {
      * 注入到下游 Executor Prompt 头部。
      */
     private String contextSummary;
+
+    /**
+     * 任务契约（JSONB，V55，契约先行拆解模式）：契约定义子任务产出回流，
+     * 渲染为「## 任务契约」节全局注入下游执行 Prompt。
+     */
+    @TableField(typeHandler = PgJsonbTypeHandler.class)
+    private Map<String, Object> contract;
 }

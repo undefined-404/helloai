@@ -104,7 +104,8 @@ public class TaskRunningSpecJsonbServiceImpl implements TaskRunningSpecService {
 
             TaskRunningSpec.Builder builder = TaskRunningSpec.builder()
                     .version(current.version())
-                    .baseline(current.baseline());
+                    .baseline(current.baseline())
+                    .contract(current.contract());
             for (ExecutionRecord rec : deduped) {
                 builder.addExecutionRecord(rec);
             }
@@ -157,6 +158,22 @@ public class TaskRunningSpecJsonbServiceImpl implements TaskRunningSpecService {
             sb.append("\n### 全局进度与关键事实\n");
             sb.append(cs).append('\n');
         }
+
+        // 任务契约（契约先行拆解）：契约定义子任务产出回流后，
+        // 作为独立二级节全局注入所有下游执行 Prompt（与 Table 侧
+        // JsonbPromptRenderer 渲染逻辑保持一致）
+        Map<String, Object> contract = spec.contract();
+        if (contract != null && !contract.isEmpty()) {
+            sb.append("\n## 任务契约\n\n");
+            Object title = contract.get("title");
+            if (title != null && !String.valueOf(title).isBlank()) {
+                sb.append("契约来源：").append(title).append("\n\n");
+            }
+            Object content = contract.get("content");
+            if (content != null && !String.valueOf(content).isBlank()) {
+                sb.append(content).append('\n');
+            }
+        }
         return sb.toString();
     }
 
@@ -175,6 +192,22 @@ public class TaskRunningSpecJsonbServiceImpl implements TaskRunningSpecService {
         writeToTask(task, updated);
         taskService.updateById(task);
         log.debug("ContextSummary 已重新编译: taskId={}", taskId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void updateContract(Long taskId, Map<String, Object> contract) {
+        synchronized (lockFor(taskId)) {
+            Task task = requireTask(taskId);
+            TaskRunningSpec current = readFromTask(task);
+            TaskRunningSpec updated = current.toBuilder()
+                    .contract(contract)
+                    .build();
+            writeToTask(task, updated);
+            taskService.updateById(task);
+            log.info("TaskRunningSpec 契约已写入: taskId={}, contractKeys={}",
+                    taskId, contract != null ? contract.keySet() : null);
+        }
     }
 
     // ──────────────── 内部 ────────────────

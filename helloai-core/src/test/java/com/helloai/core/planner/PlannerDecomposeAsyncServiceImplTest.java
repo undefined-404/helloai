@@ -224,6 +224,62 @@ class PlannerDecomposeAsyncServiceImplTest {
     }
 
     // ══════════════════════════════════════════════════════════════
+    //  契约先行拆解（Phase 2）：contract 字段解析与落库
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("contract=true 落库 isContract=1；false/缺省/字符串布尔宽容解析降级为 0")
+    void shouldParseContractFlagToIsContract() {
+        when(taskService.getById(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [
+                          {"title":"契约定义","content":"接口签名","contract":true,"dependsOn":[]},
+                          {"title":"下游实现","content":"照契约实现","contract":false,"dependsOn":[1]},
+                          {"title":"普通子任务","content":"缺省 contract","dependsOn":[1]},
+                          {"title":"字符串布尔","content":"contract 给字符串","contract":"true","dependsOn":[1]}
+                        ]
+                        """, "stop", "llm", 100));
+        when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(
+                draft(11L), draft(12L), draft(13L), draft(14L)));
+        when(subTaskService.listByIds(List.of(11L))).thenReturn(List.of(draft(11L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<SubTask>> captor = ArgumentCaptor.forClass(List.class);
+        verify(subTaskService).saveBatch(captor.capture());
+        List<SubTask> drafts = captor.getValue();
+        assertThat(drafts).hasSize(4);
+        // 布尔 true / 字符串 "true" → 1；false/缺省 → 0（Boolean.TRUE.equals 语义降级）
+        assertThat(drafts).extracting(SubTask::getIsContract)
+                .containsExactly(1, 0, 0, 1);
+    }
+
+    @Test
+    @DisplayName("contract 完全非法值（非布尔）：整批解析失败回退 PENDING，不落库（可重拆恢复）")
+    void shouldRollbackWhenContractFlagIsInvalid() {
+        when(taskService.getById(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [
+                          {"title":"契约定义","content":"接口签名","contract":"yes","dependsOn":[]},
+                          {"title":"下游实现","dependsOn":[1]}
+                        ]
+                        """, "stop", "llm", 100));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        verify(subTaskService, never()).saveBatch(any());
+        verify(taskService).lambdaUpdate();
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_failed"),
+                eq(AgentRole.PLANNER), isNull(), anyMap());
+    }
+
+    // ══════════════════════════════════════════════════════════════
     //  失败路径：内部闭环回退 PENDING（不再抛出）
     // ══════════════════════════════════════════════════════════════
 

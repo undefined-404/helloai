@@ -100,6 +100,81 @@ class TaskRunningSpecJsonbServiceTest {
         assertThat(spec.baseline().goal()).isEqualTo("做一个教程");
     }
 
+    // ──────────────── 契约先行拆解（Phase 2）：contract 往返 / 渲染 / 保留 ────────────────
+
+    @Test
+    @DisplayName("should write contract and keep it in toMap/fromMap round trip")
+    void shouldUpdateContractAndRoundTrip() {
+        Task task = taskWithContext(new HashMap<>());
+        when(taskService.getById(100L)).thenReturn(task);
+
+        Map<String, Object> contract = Map.of(
+                "subTaskId", 11L, "title", "契约定义",
+                "content", "接口签名：POST /api/orders", "backfilledAt", "2026-08-21T10:00:00+08:00");
+        jsonbService.updateContract(100L, contract);
+
+        TaskRunningSpec spec = jsonbService.getOrCreate(100L);
+        assertThat(spec.contract()).isNotNull()
+                .containsEntry("title", "契约定义")
+                .containsEntry("content", "接口签名：POST /api/orders");
+
+        // JSONB 边界往返：toMap → fromMap 契约不丢
+        TaskRunningSpec roundTripped = TaskRunningSpec.fromMap(spec.toMap());
+        assertThat(roundTripped.contract()).containsEntry("subTaskId", 11L)
+                .containsEntry("backfilledAt", "2026-08-21T10:00:00+08:00");
+    }
+
+    @Test
+    @DisplayName("should render contract section when present and omit it when absent")
+    void shouldRenderContractSectionOnlyWhenPresent() {
+        Task task = taskWithContext(new HashMap<>());
+        when(taskService.getById(100L)).thenReturn(task);
+
+        // 无契约：Prompt 段不含任务契约节
+        assertThat(jsonbService.buildExecutorPromptSection(100L))
+                .doesNotContain("## 任务契约");
+
+        jsonbService.updateContract(100L, Map.of(
+                "title", "接口契约 v1", "content", "GET /api/users → 200"));
+
+        String section = jsonbService.buildExecutorPromptSection(100L);
+        assertThat(section)
+                .contains("## 任务契约")
+                .contains("契约来源：接口契约 v1")
+                .contains("GET /api/users → 200");
+    }
+
+    @Test
+    @DisplayName("should keep contract when appending execution records (no loss on rebuild)")
+    void shouldKeepContractOnAppendExecutionRecord() {
+        Task task = taskWithContext(new HashMap<>());
+        when(taskService.getById(100L)).thenReturn(task);
+
+        jsonbService.updateContract(100L, Map.of(
+                "title", "契约定义", "content", "错误码表：400/401/500"));
+        jsonbService.appendExecutionRecord(100L, ExecutionRecord.builder()
+                .subTaskId(11L).title("契约定义").summary("契约已产出").build());
+
+        TaskRunningSpec spec = jsonbService.getOrCreate(100L);
+        assertThat(spec.executionRecords()).hasSize(1);
+        // appendExecutionRecord 重建 spec 时不得丢契约（回归防御）
+        assertThat(spec.contract()).isNotNull()
+                .containsEntry("content", "错误码表：400/401/500");
+    }
+
+    @Test
+    @DisplayName("should overwrite contract on repeated update (latest wins)")
+    void shouldOverwriteContractOnRepeatedUpdate() {
+        Task task = taskWithContext(new HashMap<>());
+        when(taskService.getById(100L)).thenReturn(task);
+
+        jsonbService.updateContract(100L, Map.of("title", "v1", "content", "旧契约"));
+        jsonbService.updateContract(100L, Map.of("title", "v2", "content", "新契约"));
+
+        TaskRunningSpec spec = jsonbService.getOrCreate(100L);
+        assertThat(spec.contract()).containsEntry("content", "新契约");
+    }
+
     private static Task taskWithContext(Map<String, Object> context) {
         Task task = new Task();
         task.setId(100L);

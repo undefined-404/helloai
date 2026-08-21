@@ -8,6 +8,8 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
+import java.util.Map;
+
 /**
  * TaskRunningSpec Mapper（Phase B）。
  */
@@ -21,6 +23,10 @@ public interface TaskRunningSpecMapper extends BaseMapper<TaskRunningSpecEntity>
     /** 重写 ContextSummary（不改变 baseline / version）。 */
     @Update("UPDATE task_running_spec SET context_summary = #{contextSummary}, update_time = CURRENT_TIMESTAMP WHERE task_id = #{taskId} AND deleted = 0")
     int updateContextSummary(@Param("taskId") Long taskId, @Param("contextSummary") String contextSummary);
+
+    /** 重写任务契约（JSONB，契约先行拆解模式；不改变 baseline / version）。 */
+    @Update("UPDATE task_running_spec SET contract = #{contract,typeHandler=com.helloai.core.shared.handler.PgJsonbTypeHandler}, update_time = CURRENT_TIMESTAMP WHERE task_id = #{taskId} AND deleted = 0")
+    int updateContract(@Param("taskId") Long taskId, @Param("contract") Map<String, Object> contract);
 
     /** 物理删除某任务的 Spec（任务级联删除时使用）。 */
     @Delete("DELETE FROM task_running_spec WHERE task_id = #{taskId}")

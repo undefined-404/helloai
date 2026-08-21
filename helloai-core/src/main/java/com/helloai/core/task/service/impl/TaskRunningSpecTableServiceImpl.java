@@ -17,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Phase B 实现：TaskRunningSpecService 接口的独立表实现。
@@ -120,6 +121,16 @@ public class TaskRunningSpecTableServiceImpl implements TaskRunningSpecService {
         log.debug("ContextSummary 已重新编译: taskId={}", taskId);
     }
 
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void updateContract(Long taskId, Map<String, Object> contract) {
+        // DB 层 UPDATE：契约写入独立列（JSONB），行级更新天然并发安全
+        // （Phase A JSONB 实现按 taskId 分段锁串行，两实现语义一致）
+        specMapper.updateContract(taskId, contract);
+        log.info("TaskRunningSpec 契约已写入: taskId={}, contractKeys={}",
+                taskId, contract != null ? contract.keySet() : null);
+    }
+
     // ──────────────── 内部 ────────────────
 
     private List<ExecutionRecord> loadExecutionRecords(Long taskId) {
@@ -139,6 +150,7 @@ public class TaskRunningSpecTableServiceImpl implements TaskRunningSpecService {
                 .version(entity.getVersion() != null ? entity.getVersion() : 1)
                 .baseline(baseline)
                 .contextSummary(entity.getContextSummary())
+                .contract(entity.getContract())
                 .lastUpdatedAt(entity.getUpdateTime() != null
                         ? entity.getUpdateTime().toString()
                         : OffsetDateTime.now().toString());
@@ -220,6 +232,20 @@ public class TaskRunningSpecTableServiceImpl implements TaskRunningSpecService {
             if (cs != null && !cs.isBlank()) {
                 sb.append("\n### 全局进度与关键事实\n");
                 sb.append(cs).append('\n');
+            }
+            // 任务契约（契约先行拆解）：与 Jsonb 侧 buildExecutorPromptSection
+            // 渲染逻辑保持一致，作为独立二级节全局注入所有下游执行 Prompt
+            Map<String, Object> contract = spec.contract();
+            if (contract != null && !contract.isEmpty()) {
+                sb.append("\n## 任务契约\n\n");
+                Object title = contract.get("title");
+                if (title != null && !String.valueOf(title).isBlank()) {
+                    sb.append("契约来源：").append(title).append("\n\n");
+                }
+                Object content = contract.get("content");
+                if (content != null && !String.valueOf(content).isBlank()) {
+                    sb.append(content).append('\n');
+                }
             }
             // 子任务执行记录明细不在此全量铺开：依赖上下文由调用方按 dependsOnIdList
             // 经 findRecord 逐条收集渲染（见 SubTaskExecutionService.buildDependencySection）

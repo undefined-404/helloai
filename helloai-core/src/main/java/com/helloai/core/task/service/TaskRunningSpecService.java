@@ -4,6 +4,8 @@ import com.helloai.core.task.spec.ExecutionRecord;
 import com.helloai.core.task.spec.TaskBaseline;
 import com.helloai.core.task.spec.TaskRunningSpec;
 
+import java.util.Map;
+
 /**
  * Task Running Spec 服务接口——隔离存储细节，Phase A JSONB / Phase B 独立表共享同一接口。
  *
@@ -73,4 +75,17 @@ public interface TaskRunningSpecService {
      * @param taskId 主任务 ID
      */
     void compileContextSummary(Long taskId);
+
+    /**
+     * 写入任务契约（契约先行拆解模式，Phase 2）。
+     *
+     * <p>契约定义子任务（{@code sub_task.is_contract=1}）完成（DONE）后，
+     * 由其产出回流调用本方法；契约会经 {@link #buildExecutorPromptSection}
+     * 渲染为「## 任务契约」节，全局注入所有下游子任务执行 Prompt。
+     * 重复回流时覆盖旧契约（契约子任务每任务至多 1 个，覆盖即最新产出）。</p>
+     *
+     * @param taskId   主任务 ID
+     * @param contract 契约 Map（内容结构由回流方约定：subTaskId/title/content/backfilledAt）
+     */
+    void updateContract(Long taskId, Map<String, Object> contract);
 }

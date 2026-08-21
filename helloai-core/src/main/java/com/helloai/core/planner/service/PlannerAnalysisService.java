@@ -74,5 +74,11 @@ public interface PlannerAnalysisService {
         private String priority;
         /** 依赖的同批草案序号（1-based）；空/null=无依赖。 */
         private List<Integer> dependsOn;
+        /**
+         * 契约定义子任务标记（契约先行拆解模式）：true=契约定义子任务
+         * （产出接口签名/数据模型/错误码表，全局注入下游），落库
+         * {@code SubTask.isContract}；null/缺省=false 按普通子任务处理。
+         */
+        private Boolean contract;
     }
 }

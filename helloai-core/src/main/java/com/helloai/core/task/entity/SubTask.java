@@ -48,6 +48,16 @@ public class SubTask extends BaseEntity {
     private Integer timeoutCount;
 
     /**
+     * 契约定义子任务标记（契约先行拆解模式，V56）：1=契约定义子任务，
+     * 完成（DONE）后其产出回流 {@code task_running_spec.contract}，
+     * 全局注入所有下游子任务执行 Prompt；0=普通子任务。
+     *
+     * <p>SMALLINT 列按规范 §9.3 用 Integer 映射（与 deleted 同款），
+     * 由 PlannerDecomposeAsyncServiceImpl 解析 {@code "contract": true} 落库。</p>
+     */
+    private Integer isContract;
+
+    /**
      * N11 阈值回退：当前子任务已发生的"外部→LLM"回退次数。
      *
      * <p>每次 ExternalAgentFallbackTask 触发对当前子任务的重新分发，

@@ -256,6 +256,9 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
             draft.setDeliverable(item.getDeliverable());
             draft.setAcceptance(item.getAcceptance());
             draft.setPriority(normalizePriority(item.getPriority()));
+            // 契约先行拆解（Phase 2）：contract=true → is_contract=1；
+            // null/缺省/非法值一律按普通子任务（0）降级，不阻断拆解
+            draft.setIsContract(Boolean.TRUE.equals(item.getContract()) ? 1 : 0);
             draft.setStatus(SubTaskStatus.PENDING_PLAN_REVIEW);
             Map<String, Object> context = new HashMap<>();
             context.put("plannerAgentId", planner.getId());

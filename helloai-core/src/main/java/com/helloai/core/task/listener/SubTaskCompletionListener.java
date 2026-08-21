@@ -6,11 +6,15 @@ import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.shared.event.SubTaskCompletedEvent;
 import com.helloai.core.shared.event.TaskAutoCompletedEvent;
+import com.helloai.core.shared.util.SubTaskOutputExtractor;
+import com.helloai.core.system.entity.Attachment;
+import com.helloai.core.system.service.AttachmentService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.mapper.TaskMapper;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskRunningSpecService;
 import com.helloai.core.task.service.TaskTimelineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -20,6 +24,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
+import java.nio.charset.StandardCharsets;
+import java.time.OffsetDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -28,6 +35,9 @@ import java.util.Map;
  *
  * <p>{@link SubTaskCompletedEvent}（complete → REVIEW→DONE）事务提交后异步执行：</p>
  * <ol>
+ *     <li><b>契约产出回流</b>：本子任务为契约定义子任务（{@code is_contract=1}）时，
+ *         提取产出（物化附件优先、{@code context.lastExecution.output} 回退）写入
+ *         {@code task_running_spec.contract}，全局注入所有下游执行 Prompt（Phase 2）</li>
  *     <li><b>解锁下游</b>：查同 Task 下 PENDING 且 {@code depends_on} 包含本子任务的节点，
  *         逐个尝试 {@code dispatchPendingSubTaskAuto}（其内部 ready 守卫会自动过滤仍未就绪的）</li>
  *     <li><b>Task 自动收尾</b>：同 Task 全部有效子任务均为 DONE/CANCELLED 时，
@@ -47,10 +57,17 @@ public class SubTaskCompletionListener {
     private final TaskMapper taskMapper;
     private final TaskTimelineService taskTimelineService;
     private final ApplicationEventPublisher applicationEventPublisher;
+    private final TaskRunningSpecService taskRunningSpecService;
+    private final AttachmentService attachmentService;
 
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onSubTaskCompleted(SubTaskCompletedEvent event) {
+        try {
+            backfillContract(event.getSubTaskId(), event.getTaskId());
+        } catch (Exception e) {
+            log.warn("契约产出回流异常: subTaskId={}, err={}", event.getSubTaskId(), e.getMessage());
+        }
         try {
             unlockDownstream(event.getSubTaskId(), event.getTaskId());
         } catch (Exception e) {
@@ -61,6 +78,80 @@ public class SubTaskCompletionListener {
         } catch (Exception e) {
             log.warn("Task 自动收尾异常: taskId={}, err={}", event.getTaskId(), e.getMessage());
         }
+    }
+
+    /**
+     * 契约产出回流（契约先行拆解模式，Phase 2）：
+     * 仅当完成子任务为契约定义子任务（isContract=1）时执行。
+     *
+     * <p>产出提取口径与执行链依赖装载同源：物化附件（local:// 平台直读，仅 ACTIVE
+     * 有效版本）优先，回退 {@code context.lastExecution.output} 原始产出；两者均无时
+     * 记录 skipped 不写契约。失败 best-effort 绝不阻断解锁下游 / Task 收尾主链路，
+     * 成功 / 跳过 / 失败三态均写 {@code sub_task_contract_backfilled} timeline。</p>
+     */
+    private void backfillContract(Long subTaskId, Long taskId) {
+        if (taskId == null) {
+            return;
+        }
+        SubTask subTask = subTaskService.getById(subTaskId);
+        if (subTask == null || !Integer.valueOf(1).equals(subTask.getIsContract())) {
+            return;
+        }
+        String content = extractContractContent(subTask);
+        if (content == null || content.isBlank()) {
+            taskTimelineService.recordEvent(taskId, subTaskId, "sub_task_contract_backfilled",
+                    AgentRole.SYSTEM, null, Map.of("status", "skipped", "reason", "no_output"));
+            log.info("契约子任务无产出，跳过回流: subTaskId={}", subTaskId);
+            return;
+        }
+        try {
+            Map<String, Object> contract = new LinkedHashMap<>();
+            contract.put("subTaskId", subTaskId);
+            contract.put("title", subTask.getTitle());
+            contract.put("content", content);
+            contract.put("backfilledAt", OffsetDateTime.now().toString());
+            taskRunningSpecService.updateContract(taskId, contract);
+            taskTimelineService.recordEvent(taskId, subTaskId, "sub_task_contract_backfilled",
+                    AgentRole.SYSTEM, null, Map.of("status", "success", "chars", content.length()));
+            log.info("契约产出已回流: taskId={}, subTaskId={}, chars={}", taskId, subTaskId, content.length());
+        } catch (Exception e) {
+            log.warn("契约产出回流失败（不阻断收尾链）: taskId={}, subTaskId={}, err={}",
+                    taskId, subTaskId, e.getMessage());
+            try {
+                taskTimelineService.recordEvent(taskId, subTaskId, "sub_task_contract_backfilled",
+                        AgentRole.SYSTEM, null,
+                        Map.of("status", "failed",
+                                "error", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
+            } catch (Exception timelineEx) {
+                log.debug("记录 sub_task_contract_backfilled 失败事件异常: subTaskId={}, err={}",
+                        subTaskId, timelineEx.getMessage());
+            }
+        }
+    }
+
+    /**
+     * 提取契约子任务产出正文：物化附件（仅 ACTIVE 有效版本）优先，
+     * 失败/无附件回退 {@link SubTaskOutputExtractor#extractExecutionOutput}；
+     * 两者均无返回 null。与 SubTaskExecutionService.loadUpstreamContent 同源口径。
+     */
+    private String extractContractContent(SubTask subTask) {
+        try {
+            List<Attachment> attachments = attachmentService.listActive(subTask.getId());
+            if (attachments != null) {
+                for (Attachment attachment : attachments) {
+                    if (attachmentService.isContentLoadable(attachment)) {
+                        byte[] bytes = attachmentService.loadContent(attachment.getId());
+                        if (bytes != null && bytes.length > 0) {
+                            return new String(bytes, StandardCharsets.UTF_8);
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("读取契约子任务物化附件失败，回退原始产出: subTaskId={}, err={}",
+                    subTask.getId(), e.getMessage());
+        }
+        return SubTaskOutputExtractor.extractExecutionOutput(subTask);
     }
 
     /** 解锁下游：查同 Task PENDING 且依赖包含本子任务的节点，逐个尝试自动分发。 */
