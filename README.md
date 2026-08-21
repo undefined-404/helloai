@@ -1,29 +1,59 @@
-# HelloAI — AI Agent 协作调度平台
+# HelloAI —— 你说人话，它带一支 AI 团队把活干完
 
-> 让多个 AI Agent 像团队一样协作，可靠、透明、可追踪
+<p align="center">
+  <img src="https://img.shields.io/badge/License-MIT-7C3AED" alt="License MIT">
+  <img src="https://img.shields.io/badge/Spring%20Boot-3.4.10-6DB33F?logo=springboot&logoColor=white" alt="Spring Boot 3.4.10">
+  <img src="https://img.shields.io/badge/Vue-3.x-4FC08D?logo=vuedotjs&logoColor=white" alt="Vue 3">
+  <img src="https://img.shields.io/badge/JDK-17-orange?logo=openjdk&logoColor=white" alt="JDK 17">
+  <img src="https://img.shields.io/badge/协议-MCP-blue" alt="MCP">
+</p>
+
+**HelloAI 是一个"AI 项目经理"**：你用日常语言说一个需求（比如"帮我对比三家竞品的定价策略"），它会先追问澄清你的真实意图，把任务拆成几件小任务，派给不同的 AI（Qoder / Trae / Codex / Claude Code……）并行干活，再由 AI 质检员逐个验收——不合格的自动打回重做，最后把所有成果整合成一份完整报告交给你。
+
+全程你只需说一次需求、点一次确认。卡在哪个环节、谁在执行、被驳回了几次，全部可视化、可回看。
+
+![一句话看懂 HelloAI](doc/images/helloai一句话看懂.png)
 
 <p align="center">
   <a href="http://39.106.204.43:5173/#/login">🌐 在线体验</a> •
-  <a href="#快速开始">🚀 快速开始</a> •
-  <a href="#核心概念">📖 文档</a> •
-  <a href="#架构设计">🏗️ 架构</a>
+  <a href="#快速开始">🚀 5 分钟跑起来</a> •
+  <a href="doc/README.md">📖 文档地图</a> •
+  <a href="#核心功能开发者详解">🔍 开发者详解</a>
 </p>
 
 ---
 
-## 📌 项目介绍
+## 🗺️ 一个任务的真实旅程
 
-HelloAI 是一个面向复杂任务拆解的 **AI Agent 协作调度平台**。它不只是一个对话工具，而是一个生产级的"AI 项目经理"——能够自动理解需求、多轮澄清、拆解任务、调度多个 Agent 并行/串行执行、审核质量、最终合并输出完整报告。
+![任务旅程](doc/images/helloai任务旅程.png)
 
-核心定位：**解决多 Agent 协作中的调度混乱、上下文断裂、执行不可追踪问题。**
+<!-- TODO(发布前)：下文"5 个子任务"与两幅配图中的"拆成 5 个子任务 / 打回重做 2 轮"均为占位数字，发布前请替换为一次真实案例的真实数字（旅程图需按新数字重绘） -->
 
-> 当前业界框架（如 CrewAI、LangGraph）侧重"如何写 Agent"，HelloAI 侧重"如何管 Agent"——调度、容错、可视化、审计。
+1. **你说需求**：「帮我写一份竞品分析报告」
+2. **它先问清楚**：报告给谁看？要多详细？什么时候要？（像真人 PM 一样追问，还能联网查资料）
+3. **它拆任务**：拆成 5 个互相衔接的子任务（占位数字），**你确认后才开工**
+4. **它派活**：分给最合适的 AI 员工并行执行——卡住了自动换人，出错多了自动熔断兜底
+5. **它验收**：AI 质检员逐条对照验收标准审核，不合格打回重做（附具体修改意见）
+6. **它交付**：全部成果整合成一份连贯报告 + 产出打包 zip，一键下载
 
-HelloAI 基于 **Spring Boot + Spring AI MCP 协议**实现多 AI 厂商（Qoder / Trae / Codex CLI / Claude Code 等）的跨平台任务协作：外部 AI 一键接入后，平台像调度微服务一样向它们派发子任务，并回收执行结果。
+## ⚖️ 它擅长什么 / 不擅长什么
+
+✅ **擅长**：调研分析、文档生成、代码审查、独立工具开发——凡是"每个部分能独立验证对错"的任务
+
+⚠️ **不擅长**：需要全局强一致性的任务（完整项目架构设计、大规模重构、统一风格的整套 UI）——拆开会放大不一致，这类任务建议人工把关后小粒度拆解
+
+> 诚实的能力边界比夸大的宣传更省你的时间。详细判断依据见 [适用场景与能力边界](#适用场景与能力边界)。
+
+## 🔍 它是怎么做到的（开发者看这里）
+
+- 与 CrewAI / LangGraph 侧重"如何写 Agent"不同，HelloAI 侧重"**如何管 Agent**"：调度、容错、可视化、审计
+- 基于 Spring Boot + Spring AI MCP 协议，外部 AI 一键接入后像调度微服务一样派发子任务，并回收执行结果
+- 生产级可靠性：事务性 Outbox、三层幂等、熔断降级、死信人工兜底（详见下文「7. 生产级可靠性」表）
+- 核心定位：**解决多 Agent 协作中的调度混乱、上下文断裂、执行不可追踪问题**
 
 ---
 
-## ✨ 核心功能
+## ✨ 核心功能（开发者详解）
 
 ### 1. 智能任务规划（Planner）
 - **双模对话式需求澄清**：同一会话内自由切换——**CHAT 自由对话**（通用 AI 助手，闲聊/咨询不被打断）+ **CLARIFY 方案澄清**（结构化选项点选 + 完成度进度条，产出终稿一键立项）；两种模式均可开启**联网搜索**（会话级开关，任意模式每轮自动检索——博查 / Tavily / DeepSeek 原生多供应商，用户消息中的 URL 自动提取直取，折叠查验条展示搜索词/来源/耗时，失败自动降级不阻断对话）；CHAT 中表达「整理成方案」等意图词经**对话内二次确认**（弹窗选项卡）后转入方案模式，或直接输入 **`/planner` 斜杠命令**（可带附加文本）显式直达
@@ -315,6 +345,30 @@ npm run dev
 - 当前进度：[`doc/项目进度.md`](doc/项目进度.md)
 
 其他：EXECUTOR 接入指南 [`.executor-onboarding.md`](.executor-onboarding.md) / 设计系统 [`DESIGN.md`](DESIGN.md) / 产品定义 [`PRODUCT.md`](PRODUCT.md) / English [`README.en.md`](README.en.md)
+
+---
+
+## ❓ FAQ
+
+**Q：与 CrewAI / LangGraph / Dify 这类框架有什么区别？**
+
+A：CrewAI / LangGraph 侧重"如何写 Agent"（Python 生态），Dify 更接近 LLM 应用工作流编排；HelloAI 侧重"**如何管 Agent**"——任务拆解、弹性调度、验收审计、全链路可视化，且基于 Java 企业级技术栈。
+
+**Q：必须部署 Java 环境吗？**
+
+A：是。JDK 17 是项目红线，另需 Docker Compose 拉起 PostgreSQL / Redis / RabbitMQ / MinIO 基础设施，步骤见[快速开始](#快速开始)。
+
+**Q：支持哪些大模型？**
+
+A：DeepSeek 实测可用，Moonshot / MiniMax / DashScope 预置。后端启动后在管理端「系统设置 → 模型配置（LLM Provider）」填写 API Key 即可，加密存储、实时生效、无需重启。
+
+**Q：接入外部 AI（Qoder / Trae / Codex CLI / Claude Code）要改它的代码吗？**
+
+A：不用——这正是 HelloAI 的卖点。管理端创建 Agent 后一键生成 SKILL 说明，粘贴给外部 AI 执行，即可自动完成注册鉴权 → MCP 连接 → 值班打卡 → 轮询值守，详见[外部 AI Agent 快速接入](#外部-ai-agent-快速接入)。
+
+**Q：数据会离开我的服务器吗？**
+
+A：支持完全私有化部署（Docker Compose 一键拉起），任务、产出物、审计记录全部落在你自己的数据库；LLM API Key 经 AES-GCM 加密存入凭证库。任务内容仅会发送给你自行配置 API Key 的大模型服务，无其他第三方数据通道。
 
 ---
 
