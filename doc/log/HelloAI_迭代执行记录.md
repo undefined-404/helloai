@@ -6184,3 +6184,167 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - 行为变更：新增 localStorage key `helloai-theme`；缺省仍为暗色，用户选择后持久；登录页左侧品牌区与时序图为固定暗色设计（已注释声明）。
 - 遗留：122 处 `!important` 还债、Starfield canvas 性能评估、LoginCharacters SVG 亮色重绘（如后续需要）留待独立轮次；本轮改动未 git 提交，待用户确认后提交。
+---
+
+### 6.124 反馈回路第 1 层落地：质量画像 + 调度回灌 + 动态 TTL 复合分 + executorDoneIssues LLM 回填（2026-08-21）
+
+#### 1. 背景与决策
+
+- **背景**：《HelloAI设计评审与改进建议》交叉验证报告指出两条反馈回路缺口：① 质量画像未回灌调度选人（executor 历史一次通过率/驳回原因不参与选人与租约 TTL）；② 上一轮 review 驳回的问题（executorDoneIssues）从未回流给 executor 作为"已修复清单"。按《反馈回路与契约先行落地计划》Phase 1 落地（用户拍板：画像=新表增量维护、executorDoneIssues=LLM 语义相似度对比、契约回流=TaskRunningSpec 新增 contract 字段——契约先行拆解为 Phase 2）。
+- **决策**：画像随 review_record 落库同事务增量维护（QualityProfileUpdater 收口在 ReviewServiceImpl.recordAutoReview/createReview 两处）；qualityRank 插在 dutyRank 之后、score 之前，低权重（0.1）起步可配置关闭；动态 TTL 复合分 = 失败折算分 + 质量分加权（同源 quality-weight 配置，开关可回退）；executorDoneIssues 回填走平台级凭证 LLM 语义对比，无凭证静默跳过（best-effort 不阻断回写主链路）。
+
+#### 2. 实际落地
+
+- **V54 `agent_quality_profile` 画像表**：agent_id 部分唯一索引 WHERE deleted=0 + 审计列全套；reviewed_count/approved_count/first_reviewed_count/first_pass_count/total_score/rework_round_sum/issue_defect_stats JSONB（[defect] 标签计数）+ reviewer_reviewed_count/reviewer_disagreement_count（Phase 4 预留）+ last_review_record_id（增量幂等判定 + 对账起点）；DO 验证块。
+- **V55/V56**：`task_running_spec.contract JSONB`、`sub_task.is_contract SMALLINT NOT NULL DEFAULT 0`（契约先行 Phase 2 预留）。
+- **agent/quality 包**：`AgentQualityProfile` 实体 + `AgentQualityProfileMapper`（incrementCore 单条 UPDATE 原子增量 + mergeDefectStats JSONB LATERAL 原子合并，规避并发读改写竞态）；`AgentQualityProfileService/Impl`（getProfile / computeQualityScore（首轮通过率 0.5 + 平均分归一 0.5，无数据返 null）/ renderHistorySection（Phase 3 预留）/ rebuild 全量重算兜底）；`QualityProfileUpdater`（执行者维度取 sub_task.assigned_agent_id 落库时刻归属；防重 last_review_record_id 递增判定；失败 best-effort 不阻断 review 主链路）；`DefectLabelParser`（纯函数，[defect] 标签提取 + 空白折叠 + 30 字符截断，增量/重算同口径）。
+- **调度回灌**：`AgentSelector.resolveComparator` dutyRank 之后插入 qualityRank（qualityScore/20 档位 × quality-weight，默认 0.1，0=关闭；null 安全降级不参与排序）；`AgentDutyLeaseServiceImpl.resolveTtlMinutes` performanceScore 升级为复合分（clamp [0,100]，质量分缺失回退原逻辑）。
+- **executorDoneIssues 回填**：`ExecutorIssueResolutionAssessor`（严格 JSON 协议 + strip fence 容错，失败降级跳过）+ classpath 模板 `prompts/executor-done-issues.md`；LLM 通道平台级凭证 > 无凭证跳过，超时独立配置默认 30s；挂接 `ExecutionResultHandler` 成功回写路径（异步执行，写入前重读 context 防覆盖）+ timeline `sub_task_executor_done_issues` 三态 payload。
+- **验证基建**：`AdminQualityController`（POST /api/admin/quality/rebuild/{agentId} + /dispatch/{subTaskId}，薄透传零编排，供 ps1 实测）；`scripts/powershell/verify-quality-profile.ps1` S1~S5（画像增量初始行 / 首轮通过率+返工轮数+缺陷标签口径 / qualityRank 回灌选人 / 动态 TTL 复合分 / rebuild 对账），UTF-8 with BOM + Parser.ParseFile 0 error。
+
+#### 3. 验证结果
+
+- 单测 helloai-core 868/868 全绿（AgentQualityProfileServiceTest 14 / QualityProfileUpdaterTest 13 / ExecutorIssueResolutionAssessorTest 21 新增 + AgentSelectorTest / AgentDutyLeaseAdaptiveTtlTest 增补）；helloai-job 66/66 无回归。
+- `mvn -pl helloai-api -am compile` BUILD SUCCESS（AdminQualityController）。
+- verify-quality-profile.ps1 静态自检通过（BOM EF BB BF + Parse 0 error）；真实环境实测待用户执行（docker compose up + helloai-start :6565 运行后跑脚本）。
+
+#### 4. 影响与遗留
+
+- 行为变更：调度选人新增质量维度（qualityRank）、动态 TTL 变为复合分——quality-weight 默认 0.1 低权重起步防抖动，可配置 0 完全关闭回退原行为。
+- 遗留：Phase 3 历史表现摘要注入 Prompt（renderHistorySection 已预置）/ Phase 4 Reviewer 双审 + 抽检（reviewer_* 计数列已预置）按计划依次推进；本轮改动未 git 提交，待用户确认后提交。
+
+---
+
+### 6.125 契约先行拆解：spec contract 双实现 + 完成回流 + 全局渲染（2026-08-22）
+
+#### 1. 背景与决策
+
+- **背景**：《反馈回路与契约先行落地计划》Phase 2：多模块接口/多组件协作任务在拆解阶段先生成「契约定义」子任务（接口签名/数据模型/错误码表），排 DAG 最上游；契约子任务完成后产出回流 `task_running_spec.contract`（V55 已预置），全局注入所有下游执行 Prompt，下游按契约实现、Reviewer 按契约验收，从源头减少模块间口径漂移与返工。
+- **决策**：拆解侧由 LLM 协议驱动（planner-decompose.md 加 `"contract": true` 可选字段，解析落 `sub_task.is_contract` V56 SMALLINT）；契约存储双实现齐动（Jsonb 分段锁 + Table 行级天然无竞态）；回流挂接 `SubTaskCompletionListener`（REVIEW→DONE 事务提交后异步，best-effort 不阻断解锁下游/Task 收尾主链路）；渲染节「## 任务契约」在 Baseline 之后、contract 非空时渲染（零噪音原则：非契约任务不加节）。
+
+#### 2. 实际落地
+
+- **拆解协议与落库**：`prompts/planner-decompose.md` 拆解要求加第 6 点（多模块接口/多组件协作任务强制生成 1 个契约定义子任务，deliverable=接口签名/数据模型/错误码表，验收标准可检查）+ 拆解原则「契约先行」规则 + 输出 JSON 加 `"contract": false` 字段；`PlanDraftItem` 加 `Boolean contract`；`PlannerDecomposeAsyncServiceImpl.buildDrafts` 解析落库 `SubTask.isContract`（`Boolean.TRUE.equals` 归一 1/0；非法值整批解析失败走既有回退 PENDING 闭环，可重拆恢复）。
+- **spec contract 字段双实现**：`TaskRunningSpec` 不可变领域模型加 `contract`（Map）——builder/toMap/fromMap/toBuilder 完整往返，isEmpty() 计入 contract（修复：契约写入后 spec 判空返回空串导致渲染节丢失）；`TaskRunningSpecService` 接口加 `updateContract(Long taskId, Map<String,Object> contract)`；Jsonb 实现（taskId 粒度分段锁 synchronized + toBuilder().contract() 重建 + writeToTask 落 task.context.runningSpec，appendExecutionRecord 同步改为重建 builder 保留 contract）与 Table 实现（`TaskRunningSpecEntity.contract` PgJsonbTypeHandler + `specMapper.updateContract` @Update + assembleDomain 组装）双实现同步；渲染节「## 任务契约」（契约来源 title + content 正文，Jsonb buildExecutorPromptSection 与 Table JsonbPromptRenderer 双处一致）。
+- **契约产出回流**：`SubTaskCompletionListener.onSubTaskCompleted` 首步 `backfillContract`——isContract=1 检测（非契约零动作）→ 产出提取（物化附件 ACTIVE 版本优先、`SubTaskOutputExtractor` 读 `context.lastExecution.output` 回退，与执行链依赖装载同源口径）→ `updateContract` 写 `{subTaskId, title, content, backfilledAt}` → timeline `sub_task_contract_backfilled` success/skipped/failed 三态 payload；失败 best-effort 绝不阻断解锁下游 / Task 收尾主链路。
+- **验证基建**：`AdminQualityController` 加 GET /api/admin/quality/spec-section/{taskId}（薄透传 `buildExecutorPromptSection`，供 ps1 S3/S4 断言契约节渲染）；`scripts/powershell/verify-contract-first.ps1` S1~S4（S1 planById 真实 LLM 拆解轮询草案断言契约子任务 is_contract=1 + confirmPlan / S2 SQL 预置契约子任务 REVIEW→APPROVED 触发回流，断言 contract 非空 + 内容保真 + timeline success / S3 spec-section 含「## 任务契约」节与契约正文 / S4 非契约任务 contract 保持 NULL 且无契约节零噪音；双存储模式兼容断言 context.runningSpec.contract 与 task_running_spec.contract 任一非空；UTF-8 with BOM + Parser.ParseFile 0 error）。
+
+#### 3. 验证结果
+
+- 单测 helloai-core 883/883 全绿（PlannerDecomposeAsyncServiceImplTest 14 / TaskRunningSpecJsonbServiceTest 8 / TaskRunningSpecTableServiceTest 4 / SubTaskCompletionListenerContractTest 5 新增，含 contract 往返/渲染节/append 保留/重复覆盖/附件回流/output 回退/skipped/非契约零动作/失败三态）；helloai-job 66/66 无回归。
+- `mvn -pl helloai-api -am compile` BUILD SUCCESS（AdminQualityController spec-section 端点）。
+- verify-contract-first.ps1 静态自检通过（BOM EF BB BF + Parse 0 error）；真实环境实测待用户执行（docker compose up + helloai-start :6565 运行后跑脚本，S1 依赖平台级 LLM 凭证）。
+
+#### 4. 影响与遗留
+
+- 行为变更：多模块协作任务的拆解草案可能包含契约子任务（DAG 最上游）；契约子任务 DONE 后所有下游执行 Prompt 自动附加「## 任务契约」节；非契约任务与契约缺失场景零噪音。
+- 遗留：Phase 3 历史表现摘要注入 Prompt / Phase 4 Reviewer 双审 + 抽检 / Phase 5 质量度量看板按计划依次推进；本轮改动未 git 提交，待用户确认后提交。
+
+### 6.126 启动失败修复：@MapperScan 登记 agent.quality.mapper 包（2026-08-21）
+
+#### 1. 背景与根因
+
+- **现象**：真实环境启动失败，链路为 adminAgentController → … → mcpToolServiceImpl(param 3=subTaskService) → subTaskServiceImpl(param 11=concurrencyQuotaService) → agentDutyLeaseServiceImpl(param 5) → agentQualityProfileServiceImpl baseMapper 注入失败：`No qualifying bean of type 'com.helloai.core.agent.quality.mapper.AgentQualityProfileMapper' available`。
+- **根因**：Phase 1.4/1.5 新增的 `AgentQualityProfileMapper` 位于 `agent.quality.mapper` 包（与 `agent.mapper` 平级），但 `HelloAIApplication` 的 `@MapperScan` 是显式包清单（agent/task/system/planner 四个 mapper 包），MyBatis `@MapperScan` 不递归子包；且显式 `@MapperScan` 存在时 `@Mapper` 注解的 starter 自动扫描不再生效，新包完全无 bean。单测未暴露：core 单测不加载 helloai-start 启动类上下文。
+
+#### 2. 修复与验证
+
+- `HelloAIApplication` `@MapperScan` 清单加 `com.helloai.core.agent.quality.mapper`（全仓库 mapper 共 5 个包，逐一核对后仅此遗漏）。
+- `mvn -pl helloai-start -am compile -DskipTests` BUILD SUCCESS；真实启动验证待用户重启应用确认。
+
+### 6.127 循环依赖修复：ExecutorIssueResolutionAssessor 懒解析断环 + CODE_STYLE §7.7（2026-08-21）
+
+#### 1. 背景与根因
+
+- **现象**：修复 §6.126 mapper 遗漏后真实启动暴露第二层问题——`The dependencies of some of the beans in the application context form a cycle`，环为 `LlmProviderChatClientFactoryRegistry → deepSeekProviderChatClientFactory → toolCallingManager → toolCallbackResolver → mcpToolConfig → mcpMcpServer → mcpToolServiceImpl → executionResultHandler → executorDoneIssuesBackfiller → executorIssueResolutionAssessor → 回到 Registry`。
+- **根因**：Phase 1.3 executorDoneIssues 回填链路引入三条新依赖边闭合构造器环——`ExecutionResultHandler → ExecutorDoneIssuesBackfiller → ExecutorIssueResolutionAssessor → LlmProviderChatClientFactoryRegistry`，而 Registry 依赖链经 MCP tool 链反向回到 `mcpToolServiceImpl → executionResultHandler`。Spring Boot 3.4 默认禁循环（allow-circular-references=false），启动直接失败。单测未暴露：单测不加载完整容器上下文，构造器环只在真实装配时显形。项目已有先例（SubTaskServiceImpl.attachmentServiceProvider 懒解析打破 AttachmentService 反向环）未沿用。
+
+#### 2. 修复与验证
+
+- **断环**：`ExecutorIssueResolutionAssessor` 注入 `LlmProviderChatClientFactoryRegistry` 改为 `ObjectProvider` 懒解析——构造不解析、运行时 `getIfAvailable()` 取容器已完成单例，取不到按 best-effort 降级跳过回填（与既有降级哲学一致）；字段注释标明循环链路（CODE_STYLE §7.7 要求）。
+- **测试适配**：`ExecutorIssueResolutionAssessorTest` 构造器入参改 ObjectProvider mock，`setUp` 用 `lenient()` 包装 provider stub（stripFence 纯函数用例不触碰 provider，避免 UnnecessaryStubbing）。
+- **规范沉淀**：CODE_STYLE 新增 §7.7 循环依赖处理规范（禁构造器环、禁 allow-circular-references 放开、ObjectProvider 断点选择、注释要求、两处先例）；§3.2 启动类示例 @MapperScan 补 planner/quality 两包消除文档失真。
+- **验证**：ExecutorIssueResolutionAssessorTest 21/21 全绿；helloai-core 883/883 全量无回归；`mvn -pl helloai-start -am compile` BUILD SUCCESS。真实启动验证待用户重启应用确认。
+
+### 6.128 真实环境修复：画像 jsonb 类型映射 + NESTED savepoint 事务隔离（2026-08-21）
+
+#### 1. 背景与根因
+
+- **现象**（用户真实环境实测）：POST /api/reviews 请求 500。画像 INSERT 报 `column "issue_defect_stats" is of type jsonb but expression is of type character varying`；随后同事务内后续语句报 `current transaction is aborted`（25P02），review 主链路（reworkFresh）被拖死。
+- **根因 1（类型映射）**：`AgentQualityProfile.issueDefectStats` 误用 MyBatis-Plus 内置 `JacksonTypeHandler`（write 侧 setString，PG 拒绝 varchar 隐式转 jsonb）；项目 jsonb 列先例是 `PgJsonbTypeHandler`（PGobject type=jsonb，TaskRunningSpecEntity.baseline/contract 同款）未沿用。
+- **根因 2（事务隔离缺陷）**：`QualityProfileUpdater.onReviewRecordPersisted` 与 review 落库同事务，best-effort 的 catch 在同事务内无效——PG 事务内任一语句失败即整体 aborted，catch 后主事务后续 SQL 必炸。并发首次建画像的 DuplicateKeyException 退化路径同样潜伏此问题。
+
+#### 2. 修复与验证
+
+- `AgentQualityProfile.issueDefectStats` typeHandler 换 `PgJsonbTypeHandler`。
+- `onReviewRecordPersisted` 加 `@Transactional(propagation = Propagation.NESTED, rollbackFor = Exception.class)`：savepoint 隔离——与 review 同提交（主事务回滚画像一并回滚，保持同事务口径），画像 SQL 失败仅回滚 savepoint，主事务不 aborted；无事务上下文等价 REQUIRED。
+- CODE_STYLE §7.5 补「best-effort 副链路隔离例外」：同事务降级类副链路必须 NESTED 而非 REQUIRES_NEW（先例 QualityProfileUpdater）。
+- 验证：QualityProfileUpdaterTest/AgentQualityProfileServiceTest/ExecutorIssueResolutionAssessorTest/ReviewServiceTest 56/56 全绿；helloai-core 883/883 无回归；helloai-start compile 成功。真实环境复测待用户重启后重放 review 请求。
+
+### 6.129 真实环境修复：mergeDefectStats JSONB 合并覆盖语义（2026-08-21）
+
+#### 1. 背景与根因
+
+- **现象**（数据库对账发现）：任务「Python学习+项目搭建双线并行4周方案生成」跑完后，`agent_quality_profile.issue_defect_stats`（agent 2090277886093889538）只剩 1 个标签 `{"无法确认验收标准第2/6条在 plan.md 中真实存在：附": 1}`；但该 agent 名下 6 条 REJECTED 评审共含 15+ 个不同 [defect] 标签，理应是多键累积 map。
+- **根因**：`AgentQualityProfileMapper.mergeDefectStats` 的 SQL 以 `jsonb_each_text(入参)` 为遍历域聚合写回——只遍历本次入参 key，旧 map 中本次未出现的 key 被整体丢弃，实际语义是「新标签集合覆盖」而非注释声称的「逐 key 累加」。最后一次 REJECTED（子任务6 round1，仅 1 个 defect）合并后把此前所有标签冲掉，与数据吻合。重算路径（rebuild）不受影响（Java 侧 stats.merge 累积正确）。
+
+#### 2. 修复与验证
+
+- SQL 改为旧 key ∪ 新 key 并集遍历域逐 key 相加：`FROM (SELECT CAST(#{statsJson} AS jsonb)) incoming CROSS JOIN LATERAL (SELECT jsonb_object_keys(p.issue_defect_stats) UNION SELECT jsonb_object_keys(incoming.json)) all_keys`，同 key 相加、旧独有 key 保留、新 key 追加；仍为单条 UPDATE 原子合并。
+- 修复前用 MCP 只读 SQL 在真实 PG 验证新表达式语义（并集合并输出 `{"A":1,"B":7,"C":3}`；LATERAL + 外层行旧值引用在标量子查询上下文可用）。
+- 验证：QualityProfileUpdaterTest/AgentQualityProfileServiceTest/ExecutorIssueResolutionAssessorTest 48/48 全绿；helloai-start compile 成功。
+- **历史数据自愈**：存量画像的 issue_defect_stats 已被覆盖语义污染，可调用 `POST /api/admin/quality/rebuild/{agentId}`（agentId=2090277886093889538）重算修正——rebuild 路径口径正确。
+
+### 6.130 Phase 3：历史表现摘要注入执行 Prompt（反馈回路第 2 层）（2026-08-21）
+
+#### 1. 背景与方案
+
+- **目标**：反馈回路第 2 层——把执行者质量画像（Phase 1 产物）渲染成「你的历史表现」摘要段注入每次执行 Prompt，让 LLM 执行前感知自身历史通过率与常见驳回原因，形成「评审 → 画像 → 下次执行改进」的闭环。
+- **渲染器**（Phase 1 已预留 `renderHistorySection`，本轮接通执行装配点）：画像缺失或 reviewed=0 返回空串；有数据输出「## 你的历史表现」+ 累计评审/通过率/一次通过率 + 最常见驳回原因 TOP N（含计数）+ 本轮自查提醒。
+- **装配点**：`SubTaskExecutionServiceImpl.executeOnce` 在 pluginSpec 段拼接后追加 historySection（`mergeSpecSections` 同款空值语义）；新增私有方法 `renderHistorySectionSafely` try-catch 包一层——画像查询/渲染任何异常降级空串，绝不让副链路拖死执行主链路（N18 P1 + §6.128 best-effort 哲学，§6.128 教训再落地）。
+- **可观测**：timeline `sub_task_spec_context_loaded` payload 新增 `historySummary` 布尔（画像段是否注入），与既有 pluginSpec / depCount 等装配事实并列。
+
+#### 2. 实现与测试
+
+- 主代码：`SubTaskExecutionServiceImpl`（装配点 2 行 + 私有降级方法 + 注入 `AgentQualityProfileService`）；零 Controller 改动；无 Flyway。
+- 单测：`SubTaskExecutionServiceTest` 新增 @Nested ExecuteOnceHistorySection 3 用例（TC-1 画像注入 → prompt 含历史表现段 + payload historySummary=true；TC-2 空串 → prompt 零噪音 + historySummary=false；TC-3 渲染异常 → 降级空串执行不失败）。首次运行踩 IDE 增量编译残留坑（`renderHistorySectionSafely undefined` 而 test-compile SUCCESS）→ `mvn clean test` 解决；helloai-core 886/886（883+3）全绿 + helloai-job 66/66 无回归 + helloai-start compile BUILD SUCCESS。
+- S6 场景脚本：`verify-quality-profile.ps1` 新增 `Run-Scenario6`——预设 REWORK 子任务（幂等建任务 + SQL 置 REWORK）→ `POST /api/sub-tasks/executeById/{id}`（admin 触发异步执行）→ Wait-Until 轮询 `conversation_message` 的 `sub_task_execute_user_prompt`（addMessage 在 executeSync 之前落库——LLM 调用失败 prompt 也在，断言链条稳定）断言「你的历史表现」「累计评审 N 次」「本轮提醒」三段标记 + `task_timeline` `historySummary=true`；超时二态区分：无执行记录 → SKIP（本地消费链未启动，环境依赖），有执行记录但无 prompt → FAIL（真实缺陷）。`-Scene` ValidateSet 加 S6、场景调度区与 teardown（含 conversation_message 清理）同步接线；UTF-8 with BOM + Parser.ParseFile 0 error。
+- 真实环境装配自检待用户重启应用后执行 `verify-quality-profile.ps1`（S1~S6）。
+
+### 6.131 联网搜索 V45：搜索查询规划器——规则清洗 + 条件 LLM 改写 + 多候选词顺序降级（2026-08-21）
+
+#### 1. 背景与根因
+
+- **现象**：用户提问「能否给我提供一份快速学习Python + 快速搭建项目的完整方案，按"学"和"做？」，博查返回零结果（「未查询到相关网页」），联网搜索形同虚设。
+- **根因**：`doWebSearch` 用 `extractQueryKeyword` 把用户原消息截前 40 字直接当搜索词——敬语（能否给我提供一份）、疑问前缀、标点、连接符（+ / 以及）全是检索噪音；且单查询零结果即放弃，无第二候选词补救。
+- **方案**（用户确认两个取舍）：① 规则清洗总是执行（零成本）+ LLM 改写条件触发；② LLM 改写走轻量直连快模型（JDK HttpClient 直连 DeepSeek chat/completions，独立 5s 超时，不走 executeSync + Planner 重链路）；③ 多候选词顺序降级搜索（首个命中即停），不做无条件并行。
+
+#### 2. 实现
+
+- **`WebSearchProperties` 新增 5 配置**（helloai-common）：`queryRewriteEnabled`（默认 true）/ `queryRewriteBaseUrl`（默认 DeepSeek 官方 chat/completions）/ `queryRewriteModel`（deepseek-chat）/ `queryRewriteTimeoutMs`（5000）/ `maxQueries`（3）；复用既有 `deepseekApiKey` 作改写 Key，空 Key 自动禁用改写（零配置降级）。
+- **新增 `SearchQueryPlannerService` / `SearchQueryPlannerServiceImpl`**（按 CODE_STYLE §4.2 接口+impl 成对拆分；原计划命名 SearchQueryPlanner/DefaultSearchQueryPlannerImpl 按用户「修改要符合代码规范」要求整改为规范命名）：三层结构——规则清洗（去敬语/疑问前缀 → 按连接符拆分多主题 → 去标点语气词 → 20 字截断去重）→ 条件触发判定（仅当规则产出单候选词且原文 >30 字或含疑问句式才进 LLM）→ LLM 改写（`prompts/websearch-query-rewrite.md` 模板，temperature=0 / max_tokens=256，宽松 JSON 解析，失败降级规则结果）；契约 `planQueries` 绝不抛异常（搜索是增强不是门槛，V34 降级哲学延续）。
+- **`WebSearchOutcome` 新增 `queries` 字段**（@Builder.Default 空列表）：记录实际尝试的全部候选词。
+- **`RequirementClarifyServiceImpl.doWebSearch` 改造**：构造器注入 `SearchQueryPlannerService`（显式全参构造器）；先由规划器产出多候选词（规划器返回空 → 回退 `extractQueryKeyword` 截断旧逻辑），候选词逐个 `webSearchService.search` 首个非空即停；纯 URL 域名回退 / 直取失败域名前置（V43/V44 逻辑）继续作用于首个候选词；`buildWebSearchMap` 落 `queries` 键进 payload。
+- **前端查验条**：`WebSearchTrace` 加 `queries?: string[]`；`WebSearchBar.vue` 新增 `queryLine` computed——多搜索词显示「已依次搜索 N 个关键词：A、B」，旧消息无 queries 键回退单词 query（向前兼容）。
+
+#### 3. 测试与验证
+
+- 新增 `SearchQueryPlannerServiceImplTest` 7 例（原句拆多候选词 / 短消息 / 空白输入 / 敬语剥离 / maxQueries 封顶 / LLM 端点不可达降级 / 开关关闭纯规则）；`RequirementClarifyServiceTest` +3 例（顺序降级首命中即停 / 全零结果 queries 落 payload / 规划器空回退截断词），存量用例借 Mockito 默认空 List 自动走兜底路径行为不变。
+- `mvn test -pl helloai-core -am "-DskipTests=false" "-Dsurefire.failIfNoSpecifiedTests=false"` 全量 **896/896 全绿 BUILD SUCCESS**；前端 `npm run type-check`（vue-tsc）0 错。
+- 无 Flyway，重启后端生效；真实环境用户原问端到端回归待实测（需博查 Key 有效或切 provider）。
+
+### 6.132 真实环境修复：MyBatisPlusConfig 全局 Map→JacksonTypeHandler 劫持 rebuild 数据源查询导致 500（2026-08-21）
+
+#### 1. 现象与根因
+
+- **现象**：Phase 3 装配自检时 `POST /api/admin/quality/rebuild/2090277886093889538` 报 500（traceId 284a77d640de4edc），异常栈为 `JacksonTypeHandler → MismatchedInputException: Cannot deserialize LinkedHashMap from Integer value`，`Error attempting to get column 'record_id'`。
+- **排查链**：MCP 只读确认 `review_record` 表结构与数据全正常（复现 SQL 返回 3 行）→ javap 反编译 MybatisConfiguration/TypeHandlerRegistry 证实构造器无 Map 注册 → 定位 `helloai-start` `MyBatisPlusConfig.mybatisPlusConfigurationCustomizer` 历史遗留全局注册 `Map.class/HashMap.class/List.class/ArrayList.class → JacksonTypeHandler`（为 JSONB 列 SELECT 非 null 而加）。
+- **根因**：`AgentQualityProfileMapper.selectRebuildSource` 返回 `List<Map<String, Object>>`，MyBatis 注解查询推断 resultType=Map.class，`hasTypeHandlerForResultObject` 因全局注册命中（jdbcType=null 通配）为 true → `createPrimitiveResultObject` 把**第一列** record_id 裸数字当作 JSON 反序列化为 Map → MismatchedInputException → 500。全项目仅此一处 Map 返回自定义查询，此前从未被真实调用故未暴露。
+
+#### 2. 修复与验证
+
+- 新建 `RebuildSourceRow` DTO（`com.helloai.core.agent.quality.dto`，字段 recordId/result/score/round/issues），Mapper 返回类型改为 `List<RebuildSourceRow>`，ServiceImpl 循环体改 getter 访问并删除 str/intVal/longVal 三个 Map helper；类 Javadoc 记录根因防复发。
+- `MyBatisPlusConfig` 注册块补副作用警告注释：返回值被推断为 Map.class 的查询会被整行按 JSON 解析，**Mapper 自定义查询禁止返回 List&lt;Map&gt;，必须用具体 DTO**。
+- 单测同步：`AgentQualityProfileServiceTest` row() helper 从 `Map.of(...)` 改为构造 `RebuildSourceRow`；`mvn test -pl helloai-core -am "-DskipTests=false" -Dtest=AgentQualityProfileServiceTest` 14/14 全绿（含 rebuildAggregatesConsistently 口径一致性）。
+- 至今全项目仅 `selectRebuildSource` 一处踩中，Grep 确认无其他 `List<Map<String, Object>>` Mapper 返回。
+- 生效方式：重启应用后重试 rebuild 即可（无 Flyway 变更）。

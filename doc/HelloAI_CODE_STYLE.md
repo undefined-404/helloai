@@ -190,8 +190,10 @@ package com.helloai;
 @EnableConfigurationProperties(AgentProviderProperties.class)
 @MapperScan({
         "com.helloai.core.agent.mapper",
+        "com.helloai.core.agent.quality.mapper",
         "com.helloai.core.task.mapper",
-        "com.helloai.core.system.mapper"
+        "com.helloai.core.system.mapper",
+        "com.helloai.core.planner.mapper"
 })
 @EnableScheduling
 @EnableAsync(proxyTargetClass = true)
@@ -941,6 +943,7 @@ public class ReviewService {
 ```
 
 > ⚠️ **禁止**在跨 Service 调用中使用 `@Transactional(propagation = Propagation.REQUIRES_NEW)`，除非有明确的异步隔离需求。默认使用 `REQUIRED`（同一事务）。
+> ✅ **best-effort 副链路隔离例外（2026-08-21 起）**：同事务内的降级类副链路（如 `QualityProfileUpdater` 画像增量）必须用 `Propagation.NESTED`（savepoint）而非 `REQUIRES_NEW`——与主事务同提交（主事务回滚则副链路一并回滚，保持同事务口径），但副链路 SQL 失败只回滚 savepoint，主事务不进入 PG aborted 状态（否则 catch 后后续语句报 25P02，主链路被拖死）。无事务上下文时 NESTED 等价 REQUIRED。先例：`QualityProfileUpdater.onReviewRecordPersisted`。
 
 ### 7.6 空值与 Optional 处理规范
 
@@ -965,6 +968,28 @@ public List<SubTask> listByStatus(SubTaskStatus status) {
 ```
 
 > **原则**: 方法返回集合类型时，"没有数据"和"出错"是两个概念。前者返回空集合，后者抛异常。
+
+### 7.7 循环依赖处理规范（2026-08-21 起强制）
+
+Spring Boot 3.x 默认 `spring.main.allow-circular-references=false`，**构造器循环依赖会导致启动直接失败**，必须主动规避。
+
+| 条目 | 规范 |
+|------|------|
+| 硬性禁止 | 禁止构造器注入形成循环依赖（A → B → A）；**禁止**通过 `spring.main.allow-circular-references=true` 全局放开 |
+| 检测时机 | 新增跨域 Service/Component 依赖时，先用 `mvn -pl helloai-start -am compile` + 启动自检；启动失败提示 `The dependencies of some of the beans in the application context form a cycle` 即为本规范违规 |
+| 打破方式 | 循环边上的**重量级基础设施依赖侧**改用 `ObjectProvider<T>` 懒解析：构造时不解析，运行时 `getIfAvailable()` 取容器已完成单例（无性能损失）；取不到时按 best-effort 降级，不抛异常 |
+| 断开点选择 | 优先断开"依赖方向反向"的一侧：即被依赖方（如 LLM 工厂 Registry、附件服务）的依赖链反向引用本组件时，在本组件侧懒解析被依赖方 |
+| 注释要求 | 懒解析字段必须注释说明循环链路（谁 → 谁 → 回到本组件）与为何运行时解析安全 |
+
+```java
+// 懒解析打破循环：AttachmentServiceImpl 依赖 SubTaskService（register 归属校验），
+// 构造注入会形成 SubTaskServiceImpl → AttachmentServiceImpl → SubTaskServiceImpl 环
+private final ObjectProvider<AttachmentService> attachmentServiceProvider;
+```
+
+仓库内已有先例：`SubTaskServiceImpl.attachmentServiceProvider`（AttachmentServiceImpl 反向依赖 SubTaskService）、`ExecutorIssueResolutionAssessor.chatClientFactoryRegistryProvider`（Registry 依赖链经 MCP tool 链 → mcpToolServiceImpl → executionResultHandler → executorDoneIssuesBackfiller 反向回到本组件）。新增同类懒解析时沿用此模式。
+
+> **原则**: 循环依赖不是靠"放开开关"解决的配置问题，而是依赖方向设计缺陷；构造注入阶段就必须单向化。
 
 
 ## 8. 接口路径规范（内外双轨制）
