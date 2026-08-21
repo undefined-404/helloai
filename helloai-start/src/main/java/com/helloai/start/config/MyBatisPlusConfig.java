@@ -35,6 +35,12 @@ public class MyBatisPlusConfig {
     /**
      * 显式注册 JacksonTypeHandler 到 MyBatis TypeHandlerRegistry，
      * 确保 @TableField(typeHandler=JacksonTypeHandler.class) 在 BaseMapper.selectList 中生效。
+     *
+     * <p>⚠ 副作用（真实环境已踩坑，迭代记录 §6.132）：Map 与 List 是按类型全局注册，
+     * 任何返回值被推断为 Map.class 的自定义查询（如 {@code List<Map<String, Object>>}），
+     * MyBatis 会把整行（首列）当作 JSON 交给 JacksonTypeHandler 反序列化，
+     * 裸数字/字符串列会抛 MismatchedInputException 导致 500。
+     * 因此 Mapper 自定义查询一律禁止返回 List&lt;Map&gt;，必须使用具体 DTO。</p>
      */
     @Bean
     public com.baomidou.mybatisplus.autoconfigure.ConfigurationCustomizer mybatisPlusConfigurationCustomizer() {
