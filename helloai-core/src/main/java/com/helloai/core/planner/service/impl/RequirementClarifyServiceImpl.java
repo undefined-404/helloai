@@ -22,6 +22,7 @@ import com.helloai.core.planner.search.WebSearchResult;
 import com.helloai.core.planner.service.RequirementClarifyService;
 import com.helloai.core.planner.service.RequirementConversationService;
 import com.helloai.core.planner.service.RequirementMessageService;
+import com.helloai.core.planner.service.SearchQueryPlannerService;
 import com.helloai.core.planner.service.WebPageFetchService;
 import com.helloai.core.planner.service.WebSearchService;
 import com.helloai.core.shared.util.LlmJsonSanitizer;
@@ -142,6 +143,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     private final WebSearchService webSearchService;
     private final WebSearchProperties webSearchProperties;
     private final WebPageFetchService pageFetchService;
+    private final SearchQueryPlannerService searchQueryPlannerService;
 
     /**
      * 显式全参构造器（绕开 Lombok {@code @RequiredArgsConstructor} 在
@@ -159,7 +161,8 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                                          ObjectMapper objectMapper,
                                          WebSearchService webSearchService,
                                          WebSearchProperties webSearchProperties,
-                                         WebPageFetchService pageFetchService) {
+                                         WebPageFetchService pageFetchService,
+                                         SearchQueryPlannerService searchQueryPlannerService) {
         this.conversationService = conversationService;
         this.messageService = messageService;
         this.taskService = taskService;
@@ -172,6 +175,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         this.webSearchService = webSearchService;
         this.webSearchProperties = webSearchProperties;
         this.pageFetchService = pageFetchService;
+        this.searchQueryPlannerService = searchQueryPlannerService;
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -727,63 +731,96 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     }
 
     /**
-     * 联网搜索一次：URL 分离 + 关键词提取 → 直取页面 + 调用搜索服务 → 归一化结果记录。
+     * 联网搜索一次：URL 分离 + 查询规划 → 直取页面 + 顺序降级搜索 → 归一化结果记录。
+     *
+     * <p>查询规划（引入）：剥离 URL 后的语义文本不再原样截前 40 字当搜索词
+     * （疑问句式/敬语/标点/多主题长句对关键词检索命中率极低），改由
+     * {@link SearchQueryPlannerService} 产出 1~N 个候选词（规则清洗总是执行，
+     * LLM 改写条件触发，失败降级规则结果）；规划器无产出时兜底规则截断。</p>
+     *
+     * <p>顺序降级（引入）：候选词逐个尝试，首个非空结果即停（命中场景成本不变）；
+     * 全零结果时 outcome.total=0 且已尝试词全量落 payload，不再静默放弃。</p>
      *
      * <p>URL 分离：消息中的 http(s) 链接被提取后直接访问抓取页面正文（用户给出的
-     * 站点是第一手资料），搜索词改用剥离 URL 后的语义文本——裸 URL 文本当搜索词
-     * 检索效果极差（用户实测：「给我一份快速上手 https://open.maic.chat/ …」未搜到相关网页）；
-     * 纯 URL 消息回退域名作搜索词。直取页面映射为来源置顶合并进结果（总条数 maxResults 内）。</p>
+     * 站点是第一手资料），候选词改用剥离 URL 后的语义文本——裸 URL 文本当搜索词
+     * 检索效果极差；纯 URL 消息回退域名作搜索词。直取页面映射为来源置顶合并进结果
+     * （总条数 maxResults 内）。</p>
      *
      * <p>直取失败域名前缀：消息带 URL 但直取无一成功（SPA 空壳无元数据/反爬拦截）时，
-     * 搜索词前置首个域名，让搜索引擎检索该站点的公开资料（介绍/教程/文档），
-     * 避免用户实测的「直取空 + 搜索词不含域名 → results=0」双失败叠加。</p>
+     * 首个候选词前置首个域名，让搜索引擎检索该站点的公开资料（介绍/教程/文档），
+     * 避免「直取空 + 搜索词不含域名 → results=0」双失败叠加。</p>
      *
      * <p>异常降级为 failed outcome（落 payload 可查验，不阻断澄清主流程）；
-     * 查询词空白且无成功直取页面时返回 null（未获得任何资料，不落 webSearch 键）。</p>
+     * 候选词全部空白且无成功直取页面时返回 null（未获得任何资料，不落 webSearch 键）。</p>
      */
     private WebSearchOutcome doWebSearch(String userMessage) {
         List<String> urls = extractUrls(userMessage);
-        String query = extractQueryKeyword(stripUrls(userMessage));
+        List<String> candidates = searchQueryPlannerService.planQueries(stripUrls(userMessage));
+        if (candidates.isEmpty()) {
+            // 规划器无产出（极端消息清洗后为空）时兜底规则截断，不丢搜索机会
+            String fallback = extractQueryKeyword(stripUrls(userMessage));
+            if (!fallback.isBlank()) {
+                candidates = List.of(fallback);
+            }
+        }
         List<WebPageContent> pages = fetchUserPages(urls);
         boolean hasOkPage = pages.stream().anyMatch(WebPageContent::isOk);
-        if (query.isBlank() && !urls.isEmpty()) {
+        if (candidates.isEmpty() && !urls.isEmpty()) {
             // 纯 URL 消息：回退域名作搜索词（无论直取成败）
-            query = hostOfUrl(urls.get(0));
-            log.info("澄清联网搜索：纯 URL 消息回退域名作搜索词: query={}", query);
-        } else if (!urls.isEmpty() && !hasOkPage) {
-            // 语义文本存在但直取全部失败 → 域名前置增强搜索词，
+            String host = hostOfUrl(urls.get(0));
+            if (!host.isBlank()) {
+                candidates = List.of(host);
+                log.info("澄清联网搜索：纯 URL 消息回退域名作搜索词: query={}", host);
+            }
+        } else if (!urls.isEmpty() && !hasOkPage && !candidates.isEmpty()) {
+            // 语义文本存在但直取全部失败 → 首个候选词前置域名，
             // 让搜索引擎检索该站点的公开资料（介绍/教程/文档）
             String host = hostOfUrl(urls.get(0));
             if (!host.isBlank()) {
-                query = host + " " + query;
-                log.info("澄清联网搜索：直取失败，域名前置增强搜索词: query={}", query);
+                List<String> prefixed = new ArrayList<>(candidates);
+                prefixed.set(0, host + " " + prefixed.get(0));
+                candidates = prefixed;
+                log.info("澄清联网搜索：直取失败，域名前置增强搜索词: query={}", prefixed.get(0));
             }
         }
-        if (query.isBlank() && !hasOkPage) {
+        if (candidates.isEmpty() && !hasOkPage) {
             return null;
         }
         long t0 = System.currentTimeMillis();
+        List<String> attempted = new ArrayList<>();
         try {
-            List<WebSearchResult> searched = query.isBlank()
-                    ? Collections.emptyList()
-                    : webSearchService.search(query, webSearchProperties.getMaxResults());
+            // 顺序降级：候选词逐个尝试，首个非空结果即停；全零结果时 attempted 完整记录已尝试词
+            List<WebSearchResult> searched = Collections.emptyList();
+            for (String q : candidates) {
+                if (q == null || q.isBlank()) {
+                    continue;
+                }
+                attempted.add(q);
+                searched = webSearchService.search(q, webSearchProperties.getMaxResults());
+                if (!searched.isEmpty()) {
+                    break;
+                }
+                log.info("澄清联网搜索：零结果，顺序降级尝试下一候选词: tried={}", q);
+            }
             long costMs = System.currentTimeMillis() - t0;
             List<WebSearchResult> merged = mergeFetchedIntoResults(pages, searched);
-            log.info("澄清联网搜索结束: provider={}, query={}, pages={}, results={}, costMs={}",
-                    webSearchService.provider(), query, pages.size(), merged.size(), costMs);
+            log.info("澄清联网搜索结束: provider={}, queries={}, pages={}, results={}, costMs={}",
+                    webSearchService.provider(), attempted, pages.size(), merged.size(), costMs);
             return WebSearchOutcome.builder()
                     .provider(webSearchService.provider())
-                    .query(query)
+                    .query(attempted.isEmpty() ? "" : attempted.get(0))
+                    .queries(attempted)
                     .costMs(costMs)
                     .total(merged.size())
                     .results(merged)
                     .fetchedPages(pages)
                     .build();
         } catch (Exception e) {
-            log.warn("澄清联网搜索异常降级（不动澄清主流程）: query={}, err={}", query, e.getMessage());
+            log.warn("澄清联网搜索异常降级（不动澄清主流程）: queries={}, err={}", attempted, e.getMessage());
             return WebSearchOutcome.builder()
                     .provider(webSearchService.provider())
-                    .query(query)
+                    .query(attempted.isEmpty() ? "" : attempted.get(0))
+                    .queries(attempted)
                     .costMs(System.currentTimeMillis() - t0)
                     .fetchedPages(pages)
                     .failed(true)
@@ -869,7 +906,8 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         return merged;
     }
 
-    /** 关键词提取：用户消息前 queryKeywordLimit 字符（去两端空白）。 */
+    /** 关键词提取（兜底）：用户消息前 queryKeywordLimit 字符（去两端空白）；
+     * 查询规划器候选词为空时启用，保留旧行为不丢搜索机会。 */
     private String extractQueryKeyword(String s) {
         if (s == null) return "";
         String trimmed = s.trim();
@@ -1181,13 +1219,17 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     }
 
     /**
-     * 搜索记录 → payload 嵌套 Map：provider/query/costMs/total/results，
-     * 失败时附 failed/reason；results 每条含 title/url/snippet/siteName（前端查验条展开用）。
+     * 搜索记录 → payload 嵌套 Map：provider/query/queries/costMs/total/results，
+     * 失败时附 failed/reason；queries 为本轮实际尝试过的搜索词（多候选词顺序降级时多条），
+     * results 每条含 title/url/snippet/siteName（前端查验条展开用）。
      */
     private Map<String, Object> buildWebSearchMap(WebSearchOutcome outcome) {
         Map<String, Object> trace = new LinkedHashMap<>();
         trace.put("provider", outcome.getProvider());
         trace.put("query", outcome.getQuery());
+        if (outcome.getQueries() != null && !outcome.getQueries().isEmpty()) {
+            trace.put("queries", outcome.getQueries());
+        }
         trace.put("costMs", outcome.getCostMs());
         trace.put("total", outcome.getTotal());
         if (outcome.isFailed()) {

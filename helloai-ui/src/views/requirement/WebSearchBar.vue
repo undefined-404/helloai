@@ -36,10 +36,10 @@
         原因：{{ trace.reason || '未知错误' }}
       </div>
       <div
-        v-if="trace.query"
+        v-if="queryLine"
         class="ws-query"
       >
-        搜索词：{{ trace.query }}
+        {{ queryLine }}
       </div>
       <div
         v-for="(r, i) in trace.results ?? []"
@@ -85,6 +85,17 @@ const props = defineProps<{
 const expanded = ref(false)
 
 const providerLabel = computed(() => props.trace.provider || '联网搜索')
+
+// 搜索词展示：多候选词顺序降级时全量展示（"实际搜了哪几个词"）；
+// 旧消息无 queries 键时回退单词 query，保持向前兼容
+const queryLine = computed(() => {
+  const qs = (props.trace.queries ?? []).filter(q => !!q)
+  if (qs.length > 1) {
+    return `已依次搜索 ${qs.length} 个关键词：${qs.join('、')}`
+  }
+  const single = qs[0] || props.trace.query
+  return single ? `搜索词：${single}` : ''
+})
 </script>
 
 <style scoped>

@@ -16,6 +16,7 @@ import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
 import com.helloai.core.planner.service.WebSearchService;
 import com.helloai.core.planner.service.WebPageFetchService;
+import com.helloai.core.planner.service.SearchQueryPlannerService;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.service.RequirementClarifyService;
 import com.helloai.core.planner.service.impl.RequirementClarifyServiceImpl;
@@ -97,16 +98,21 @@ class RequirementClarifyServiceTest {
     @Mock
     private WebPageFetchService pageFetchService;
 
+    @Mock
+    private SearchQueryPlannerService searchQueryPlannerService;
+
     private RequirementClarifyService clarifyService;
 
     @BeforeEach
     void setUp() {
-        // ObjectMapper 用真实实例（JSON 解析是被测逻辑本身，不 mock）
+        // ObjectMapper 用真实实例（JSON 解析是被测逻辑本身，不 mock）；
+        // searchQueryPlannerService 默认 mock 返回空列表 → 走规则截断兜底路径（存量用例行为不变）
         clarifyService = new RequirementClarifyServiceImpl(
                 conversationService, messageService, taskService, agentService,
                 plannerAgentPicker, agentInboxService, platformAgentExecutionService,
                 taskTimelineService, new ObjectMapper(),
-                webSearchService, webSearchProperties, pageFetchService);
+                webSearchService, webSearchProperties, pageFetchService,
+                searchQueryPlannerService);
     }
 
     private RequirementConversation activeConversation() {
@@ -1523,6 +1529,87 @@ class RequirementClarifyServiceTest {
 
             verify(pageFetchService, never()).fetch(anyString());
             verify(webSearchService).search(anyString(), eq(5));
+        }
+
+        // ════════════════════════════════════════════════════════
+        //  联网搜索：查询规划 + 顺序降级
+        // ════════════════════════════════════════════════════════
+
+        @Test
+        @DisplayName("规划器多候选词：顺序降级首命中即停，payload 落全部已尝试词")
+        void doRound_multipleCandidates_sequentialFallbackStopsOnHit() {
+            RequirementConversation conversation = activeConversation();
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(webSearchProperties.getMaxResults()).thenReturn(5);
+            when(webSearchService.provider()).thenReturn("bocha");
+            when(searchQueryPlannerService.planQueries(anyString()))
+                    .thenReturn(List.of("快速学习Python", "Python 项目搭建教程"));
+            // 首候选词零结果 → 降级次词命中
+            when(webSearchService.search(eq("快速学习Python"), eq(5))).thenReturn(List.of());
+            when(webSearchService.search(eq("Python 项目搭建教程"), eq(5))).thenReturn(List.of(
+                    WebSearchResult.builder().title("Python 实战教程")
+                            .url("https://p.example/1").snippet("摘要").build()));
+            stubLlmRound("{\"type\":\"question\",\"message\":\"验收标准是什么？\"}");
+
+            clarifyService.sendMessage(CONV_ID,
+                    "能否给我提供一份快速学习Python + 快速搭建项目的完整方案");
+
+            // 顺序降级：两词各试一次，命中即停（共 2 次调用）
+            verify(webSearchService, times(2)).search(anyString(), anyInt());
+            ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+            verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
+                    anyString(), payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue())
+                    .contains("\"webSearch\"")
+                    .contains("\"queries\":[\"快速学习Python\",\"Python 项目搭建教程\"]")
+                    .contains("\"total\":1")
+                    .contains("Python 实战教程");
+        }
+
+        @Test
+        @DisplayName("候选词全零结果：total=0 不静默放弃，queries 完整落 payload 可查验")
+        void doRound_allCandidatesEmpty_totalZeroWithQueriesInPayload() {
+            RequirementConversation conversation = activeConversation();
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(webSearchProperties.getMaxResults()).thenReturn(5);
+            when(webSearchService.provider()).thenReturn("bocha");
+            when(searchQueryPlannerService.planQueries(anyString()))
+                    .thenReturn(List.of("快速学习Python", "Python 项目搭建"));
+            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of());
+            stubLlmRound("{\"type\":\"question\",\"message\":\"验收标准是什么？\"}");
+
+            clarifyService.sendMessage(CONV_ID,
+                    "能否给我提供一份快速学习Python + 快速搭建项目的完整方案");
+
+            // 两个候选词都尝试过（零结果不放弃），结局可查验
+            verify(webSearchService, times(2)).search(anyString(), anyInt());
+            ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+            verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
+                    anyString(), payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue())
+                    .contains("\"webSearch\"")
+                    .contains("\"queries\":[\"快速学习Python\",\"Python 项目搭建\"]")
+                    .contains("\"total\":0");
+        }
+
+        @Test
+        @DisplayName("规划器无产出：兜底规则截断提取搜索词（旧行为不丢）")
+        void doRound_plannerEmpty_fallsBackToTruncatedKeyword() {
+            RequirementConversation conversation = activeConversation();
+            when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+            when(webSearchProperties.getQueryKeywordLimit()).thenReturn(40);
+            when(webSearchProperties.getMaxResults()).thenReturn(5);
+            when(webSearchService.provider()).thenReturn("bocha");
+            when(searchQueryPlannerService.planQueries(anyString())).thenReturn(List.of());
+            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of(
+                    WebSearchResult.builder().title("报表方案参考")
+                            .url("https://a.example/1").snippet("摘要").build()));
+            stubLlmRound("{\"type\":\"question\",\"message\":\"验收标准是什么？\"}");
+
+            clarifyService.sendMessage(CONV_ID, "做一个报表");
+
+            // 规划器空产出 → 兜底前 40 字截断（与改造前行为一致）
+            verify(webSearchService).search(eq("做一个报表"), eq(5));
         }
     }
 }

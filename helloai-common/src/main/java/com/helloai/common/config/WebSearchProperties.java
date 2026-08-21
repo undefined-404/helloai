@@ -41,8 +41,27 @@ public class WebSearchProperties {
     /** 单条 snippet 最大字符数。超出截断，防止注入占位符后总长爆 token。 */
     private int maxSnippetChars = 200;
 
-    /** 关键词提取长度上限：首条用户消息前 N 字作为查询。规则提取，不额外调 LLM。 */
+    /** 关键词提取长度上限：规则兜底截断的首条用户消息前 N 字（查询规划器候选词为空时启用）。 */
     private int queryKeywordLimit = 40;
+
+    /**
+     * 搜索词 LLM 改写开关：规则清洗后仍只有单候选词且消息长/含疑问句式时，
+     * 用快模型改写出 1~3 个关键词。false=纯规则运行；
+     * {@link #deepseekApiKey} 未配置时也自动禁用（空 Key=未启用语义）。
+     */
+    private boolean queryRewriteEnabled = true;
+
+    /** 查询改写 LLM 端点（OpenAI 兼容 chat/completions，区别于 native 搜索的 Anthropic 端点）。 */
+    private String queryRewriteBaseUrl = "https://api.deepseek.com/chat/completions";
+
+    /** 查询改写使用的模型（轻任务，快模型即可，单次几百 token）。 */
+    private String queryRewriteModel = "deepseek-chat";
+
+    /** 查询改写 LLM 请求超时（毫秒）：独立于主链路，宁降级不拖慢对话。 */
+    private long queryRewriteTimeoutMs = 5_000L;
+
+    /** 单轮最多候选搜索词条数（规则拆分 / LLM 改写共同上限，顺序降级逐个尝试）。 */
+    private int maxQueries = 3;
 
     /** 博查 Web Search API 端点。 */
     private String bochaBaseUrl = "https://api.bochaai.com/v1/web-search";

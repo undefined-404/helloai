@@ -25,8 +25,16 @@ public class WebSearchOutcome {
     /** 搜索供应商标识（如 bocha / tavily，取 {@code WebSearchService.provider()}）。 */
     private String provider;
 
-    /** 实际发起搜索的查询词（用户消息截断后的关键词）。 */
+    /** 实际发起搜索的首个查询词（老数据兼容；多候选词全量见 {@link #queries}）。 */
     private String query;
+
+    /**
+     * 本轮实际尝试过的搜索词（按顺序，含顺序降级重试的词）：
+     * 查询规划器产出多候选词时逐个尝试，首个命中即停；
+     * 落 payload 的 {@code queries} 键供查验条展示"实际搜了哪几个词"。
+     */
+    @Builder.Default
+    private List<String> queries = Collections.emptyList();
 
     /** 搜索耗时（毫秒）。 */
     private long costMs;

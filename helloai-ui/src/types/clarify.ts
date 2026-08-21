@@ -44,6 +44,8 @@ export interface WebSearchSource {
 export interface WebSearchTrace {
   provider?: string | null
   query?: string | null
+  // 本轮实际尝试过的搜索词（多候选词顺序降级时多条；旧消息无此键时回退 query）
+  queries?: string[]
   costMs?: number
   total?: number
   // 搜索异常降级时为 true，reason 附异常摘要（主流程不阻断）
