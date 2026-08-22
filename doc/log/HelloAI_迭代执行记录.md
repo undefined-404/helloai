@@ -6529,3 +6529,27 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - 影响：Agent 修改 model_type 后即时生效（新 key 自动建桶重建实例），无需重启后端；缓存日志可见 `key=...::model` 尾部 model 段；旧模型实例滞留内存直至无引用 GC，可接受。
 - 遗留：真实环境需重启 6565 实例后验证模型切换即时生效（此前 qwen3.7-plus 场景可作回归素材）；verify-reviewer-dual.ps1 无需变更；本轮改动未 git 提交，待用户确认后提交。
+
+### 6.144 verify-quality-profile.ps1 真实环境全绿：反馈回路 Phase 1/3 验收通过（2026-08-22）
+
+#### 1. 背景与结论
+
+- **背景**：verify-quality-profile.ps1（S1~S6 反馈回路 Phase 1 质量画像 + Phase 3 历史表现注入验收脚本）在 6565 实例上首轮真实环境运行连续暴露 4 类脚本侧问题——preset agent 注册失败连锁 SQL 报错、Invoke-Tool 参数绑定崩溃、lease 查询列名不存在、S6 prompt 多行断言错位；S3/S4/S6 三个场景先后 FAIL，无一场景一次通过。
+- **结论**：全部修复后 **S1~S6 = PASS 42 / FAIL 0 / SKIP 0 ALL PASSED**；产品代码零改动，服务端功能（画像增量、指标语义、qualityRank 回灌、动态 TTL 复合分、rebuild 对账、历史表现摘要注入）经真实环境验收通过，反馈回路 Phase 1/3 实测闭环。
+
+#### 2. 实现要点
+
+- **前置修复（agent 注册失败连锁）**：脚本原写死 `modelType='gpt-4o'`（无冒号格式）注册三个 preset agent，服务端 `AgentSkillPolicyService.validateModelType` 要求 `providerCode:modelName` 冒号格式 → 注册全部失败（日志三次「modelType 格式错误」实锤）→ Ensure-TestAgent 返回空 → cleanSql 拼出 `agent_id IN (, )` psql 语法错误。修复：新增三个参数 `-ExecutorModelA/-ExecutorModelB/-ReviewerModel`（从 llm_provider_model enabled 目录选出 dashscope:qwen3.6-Flash / qwen3.7-plus、moonshot:kimi-k3，避开同角色同模型唯一冲突）+ Ensure-TestAgent 补 SQL fallback（强制 ACTIVE + model_type，对齐 verify-reviewer-dual.ps1）。
+- **① Invoke-Tool 参数名 `$Args` → `$ToolArgs`**：`param([hashtable]$Args = @{})` 的参数名与 PS 自动变量 `$args`（未绑定参数数组）同名冲突——PS 5.1 参数绑定器把默认值覆盖为 Object[]，任何调用（含无参）都抛 `ConvertToFinalInvalidCastException`（Object[] → Hashtable）。先用独立 ps1 最小复现（错误 ID 与线上完全一致：F-Args 全部报错、F-ToolArgs 全部正常）再改 5 处调用点；顺带函数内 12 处 Write-Output 改 Write-Host 防返回流污染（同类隐患，对齐 verify-reviewer-dual.ps1 先例）。
+- **② S4 lease 查询列名 `started_at/expires_at` → `start_time/expire_time`**：agent_duty_lease 实际列名是 `_time` 后缀（项目惯例），`column does not exist` 实锤；用 MCP information_schema 核对 review_record / conversation_message / agent_execution_record / task_timeline 全部列名，其余 SQL 无同类问题。
+- **③ S6 prompt 多行截断 → SQL regexp_replace 单行化**：`Get-PsqlFields` 只取输出文件首行（Select-Object -First 1），psql -A 模式保留 text 字段内换行 → 只拿到「## 你的历史表现」首行，heading PASS / stats+remind FAIL 的错位特征实锤截断；查询 SQL 加 `regexp_replace(content, '[[:space:]]+', ' ', 'g')` 把整段 prompt 单行化（MCP 实测输出正确）。
+
+#### 3. 验证结果
+
+- **最终全绿：PASS=42 FAIL=0 SKIP=0 ALL PASSED**——S1 画像增量 7（reviewed/approved/first_reviewed/first_pass/total_score/rework/last_id 全对，row=1|1|1|1|5|0）；S2 指标语义 6（rework_round_sum=1、missing-unit-test=2 等）；S3 qualityRank 回灌 4（winner=exec-a，profile-rich 胜出）；S4 动态 TTL 4（exec-a=134min vs exec-b=122min，差 12≥8 期望）；S5 rebuild 对账 8（4|1|2|1|11|3 全对，total_score=11=5+3+2+1、rework=3=1+2）；S6 历史注入 4（prompt 含「你的历史表现」+ 统计行 + 提醒行 + historySummary=true）。
+- **每轮修复均先复现/验证再改**：① $Args 冲突用独立 ps1 最小复现（错误 ID 与线上完全一致）→ 改名后同脚本 0 错误；② 列名用 MCP information_schema 实锤 + 真实 lease 数据模拟查询（134/122 与断言期望一致）；③ 单行化 SQL 用真实 PG 验证输出。每次修改后 Parser::ParseFile 语法自检 SYNTAX OK。
+
+#### 4. 影响与遗留
+
+- 影响：反馈回路 Phase 1（质量画像 + 调度回灌 + 动态 TTL 复合分 + rebuild 对账）与 Phase 3（历史表现摘要注入 executor prompt）真实环境验收通过；脚本侧沉淀 3 条 PS 5.1 陷阱教训（参数名不得与自动变量同名、`_time` 列名惯例、psql 多行字段截断需单行化）。
+- 遗留：本轮改动（verify-quality-profile.ps1 + 差距表 N20 §6.144 增量）未 git 提交，待用户确认后提交；Phase 5 质量度量看板按《反馈回路与契约先行落地计划》推进。
