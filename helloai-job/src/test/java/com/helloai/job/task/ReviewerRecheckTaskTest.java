@@ -1,7 +1,7 @@
 package com.helloai.job.task;
 
 import com.helloai.common.config.ReviewProperties;
-import com.helloai.core.review.service.SubTaskReviewService;
+import com.helloai.core.review.support.ReviewRecheckExecutor;
 import com.helloai.core.task.service.ReviewService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -41,7 +41,7 @@ class ReviewerRecheckTaskTest {
     @Mock
     private ReviewService reviewService;
     @Mock
-    private SubTaskReviewService subTaskReviewService;
+    private ReviewRecheckExecutor reviewRecheckExecutor;
     @Mock
     private StringRedisTemplate redis;
     @Mock
@@ -51,7 +51,7 @@ class ReviewerRecheckTaskTest {
 
     @BeforeEach
     void setUp() {
-        task = new ReviewerRecheckTask(reviewService, subTaskReviewService, props(), redis);
+        task = new ReviewerRecheckTask(reviewService, reviewRecheckExecutor, props(), redis);
         // 默认 tryLock 成功（锁用例单独 stub 为 false）
         lenient().when(redis.opsForValue()).thenReturn(valueOps);
         lenient().when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any()))
@@ -76,7 +76,7 @@ class ReviewerRecheckTaskTest {
         void shouldSkipWhenDisabled() {
             ReviewProperties disabled = props();
             disabled.setRecheckEnabled(false);
-            task = new ReviewerRecheckTask(reviewService, subTaskReviewService, disabled, redis);
+            task = new ReviewerRecheckTask(reviewService, reviewRecheckExecutor, disabled, redis);
 
             task.recheck();
 
@@ -119,7 +119,7 @@ class ReviewerRecheckTaskTest {
             task.recheck();
 
             verify(reviewService).listRecheckCandidateIds(any(), eq(5));
-            verify(subTaskReviewService, times(5)).recheckReviewRecord(anyLong());
+            verify(reviewRecheckExecutor, times(5)).recheckReviewRecord(anyLong());
         }
 
         @Test
@@ -127,7 +127,7 @@ class ReviewerRecheckTaskTest {
         void shouldCapBatchAtMax() {
             ReviewProperties p = props();
             p.setRecheckSampleRatio(0.5);
-            task = new ReviewerRecheckTask(reviewService, subTaskReviewService, p, redis);
+            task = new ReviewerRecheckTask(reviewService, reviewRecheckExecutor, p, redis);
             when(reviewService.countRecheckCandidates(any())).thenReturn(1000L);
             when(reviewService.listRecheckCandidateIds(any(), anyInt()))
                     .thenReturn(List.of(1L, 2L));
@@ -144,11 +144,11 @@ class ReviewerRecheckTaskTest {
             when(reviewService.listRecheckCandidateIds(any(), anyInt()))
                     .thenReturn(List.of(1L, 2L));
             doThrow(new RuntimeException("synthetic failure"))
-                    .when(subTaskReviewService).recheckReviewRecord(1L);
+                    .when(reviewRecheckExecutor).recheckReviewRecord(1L);
 
             task.recheck();
 
-            verify(subTaskReviewService).recheckReviewRecord(2L);
+            verify(reviewRecheckExecutor).recheckReviewRecord(2L);
         }
 
         @Test

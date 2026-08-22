@@ -8,18 +8,15 @@ import com.helloai.common.constant.ReviewResult;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.service.ExecutionCommandService;
-import com.helloai.core.agent.domain.AgentResult;
-import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.review.picker.ReviewerPicker;
 import com.helloai.core.review.service.SubTaskReviewService;
 import com.helloai.core.review.support.ReviewEvidenceAssembler;
+import com.helloai.core.review.support.ReviewExecutionEngine;
 import com.helloai.core.review.support.VerdictParser;
 import com.helloai.core.shared.event.SubTaskSubmittedForReviewEvent;
-import com.helloai.core.task.entity.ReviewRecord;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.policy.TaskAgentPolicy;
@@ -29,7 +26,6 @@ import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -37,8 +33,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -51,8 +45,8 @@ import java.util.concurrent.TimeUnit;
  * 子任务 LLM 自动核验服务实现（内循环核验门控）。
  *
  * <p>入口 {@link #reviewSubTask(Long, Long)}：读取子任务 title/content/deliverable/acceptance
- * + 执行产出（context.lastExecution.output），构造核验 Prompt，经
- * {@link PlatformAgentExecutionService#executeSync} 调平台内 LLM 判定：</p>
+ * + 执行产出（context.lastExecution.output），由 {@link ReviewExecutionEngine}
+ * 渲染核验 Prompt 并经平台内 LLM 判定：</p>
  * <ul>
  *     <li>通过 → {@link SubTaskService#complete}（REVIEW→DONE，触发隐式评分与下游解锁）</li>
  *     <li>不通过 → {@link SubTaskService#rework}（REVIEW→REWORK，核验意见写入 context），
@@ -67,12 +61,22 @@ import java.util.concurrent.TimeUnit;
  * <p>防重：核验前检查当前状态仍为 REVIEW；reworkCount 达
  * {@code helloai.dispatch.auto-review-max-rework}（默认 3）后停留 REVIEW 等人工，
  * 不再自动打回，避免"执行→驳回→重执行"无限循环。</p>
+ *
+ * <p><b>§7.8 类规模拆分评审结论（2026-08-23）</b>：本类经四轮剥离后仍为
+ * 核验编排强内聚汇聚点，按 §7.8 选项二书面声明不继续拆分：</p>
+ * <ul>
+ *     <li>已剥离：§6.136 解析器/证据装配（VerdictParser / ReviewEvidenceAssembler）、
+ *         §6.142 选取职责（ReviewerPicker）、本轮执行与抽检
+ *         （ReviewExecutionEngine / ReviewRecheckExecutor）；</li>
+ *     <li>剩余职责：L1/L2/L3 三入口 + 防双审互斥锁 + 状态机编排（返工上限/能力与
+ *         证据预检/双审共识）+ 判定落地（complete/rework/落库/timeline/返工命令）；</li>
+ *     <li>不拆理由：三入口共享同一把锁与状态机决策，判定落地与编排共享 verdict 流转；
+ *         继续拆分将导致依赖搬家与跨类内部状态共享，行为验证面扩大且无独立可测职责可剥。</li>
+ * </ul>
  */
 @Slf4j
 @Service
 public class SubTaskReviewServiceImpl implements SubTaskReviewService {
-
-    private static final String PROMPT_TEMPLATE_PATH = "prompts/subtask-review.md";
 
     /** §6.82 批次 D：核验互斥锁（防 L1/L2/L3 三路并发双审），key = review:lock:{subTaskId} */
     private static final String REVIEW_LOCK_PREFIX = "review:lock:";
@@ -81,7 +85,8 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
 
     private final SubTaskService subTaskService;
     private final AgentService agentService;
-    private final PlatformAgentExecutionService platformAgentExecutionService;
+    /** §7.8 拆分：单次核验执行（渲染 Prompt/LLM 调用/对话流双写/判定解析）迁出为独立引擎。 */
+    private final ReviewExecutionEngine reviewExecutionEngine;
     private final TaskTimelineService taskTimelineService;
     private final ExecutionCommandService executionCommandService;
     private final AgentDispatchProperties dispatchProperties;
@@ -104,7 +109,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
     @Autowired
     public SubTaskReviewServiceImpl(SubTaskService subTaskService,
                                     AgentService agentService,
-                                    PlatformAgentExecutionService platformAgentExecutionService,
+                                    ReviewExecutionEngine reviewExecutionEngine,
                                     TaskTimelineService taskTimelineService,
                                     ExecutionCommandService executionCommandService,
                                     AgentDispatchProperties dispatchProperties,
@@ -118,7 +123,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                                     AgentQualityProfileService agentQualityProfileService) {
         this.subTaskService = subTaskService;
         this.agentService = agentService;
-        this.platformAgentExecutionService = platformAgentExecutionService;
+        this.reviewExecutionEngine = reviewExecutionEngine;
         this.taskTimelineService = taskTimelineService;
         this.executionCommandService = executionCommandService;
         this.dispatchProperties = dispatchProperties;
@@ -305,69 +310,10 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             return;
         }
 
-        ReviewVerdict verdict = doReviewWith(subTask, executorAgentId, reviewer);
+        ReviewVerdict verdict = reviewExecutionEngine.execute(subTask, reviewer);
         if (verdict != null) {
             applyVerdict(subTask, executorAgentId, reviewer, verdict);
         }
-    }
-
-    /**
-     * 单次核验（不改状态不落库）：渲染 Prompt → LLM 调用 → 对话流双写 → 解析判定；
-     * 失败/不可解析返回 null（内部已记日志/timeline，调用方据此停留 REVIEW 等人工）。
-     */
-    private ReviewVerdict doReviewWith(SubTask subTask, Long executorAgentId, Agent reviewer) {
-        Long subTaskId = subTask.getId();
-        String prompt = renderPrompt(subTask);
-        AgentResult result;
-        try {
-            AgentTask agentTask = AgentTask.builder()
-                    .subTaskId(subTaskId)
-                    .systemPrompt("")
-                    .userPrompt(prompt)
-                    .context(Map.of("subTaskId", subTaskId, "scene", "subtask_review"))
-                    .requiredCapabilities(Map.of())
-                    .build();
-            result = platformAgentExecutionService.executeSync(reviewer, agentTask);
-        } catch (Exception e) {
-            log.warn("自动核验 LLM 调用异常，子任务停留 REVIEW: subTaskId={}, err={}", subTaskId, e.getMessage());
-            return null;
-        }
-        if (result == null || !result.isSuccess()) {
-            log.warn("自动核验 LLM 调用失败，子任务停留 REVIEW: subTaskId={}, err={}",
-                    subTaskId, result != null ? result.getErrorMessage() : "null_result");
-            return null;
-        }
-
-        // 对话流双写：核验 Prompt + REVIEWER 分析原文全量落 conversation_message，
-        // 不可解析时同样保留原始输出（正是人工兜底最需要看的内容）；失败不阻断核验主链路
-        try {
-            conversationService.addMessage(subTaskId, null,
-                    "user", "platform", prompt, "subtask_review_prompt");
-            // 推理模型的思考过程单独落一条消息（保留 thinking，供前端动态展示）
-            if (result.getThinking() != null && !result.getThinking().isBlank()) {
-                conversationService.addMessage(subTaskId, reviewer.getId(),
-                        "assistant", "agent",
-                        result.getThinking(),
-                        "subtask_review_thinking");
-            }
-            conversationService.addMessage(subTaskId, reviewer.getId(),
-                    "assistant", "agent",
-                    result.getOutput() != null ? result.getOutput() : "",
-                    "subtask_review_verdict");
-        } catch (Exception e) {
-            log.warn("核验对话流写入失败（不阻断核验）: subTaskId={}, err={}", subTaskId, e.getMessage());
-        }
-
-        ReviewVerdict verdict = verdictParser.parseVerdict(result.getOutput());
-        if (verdict == null) {
-            log.warn("自动核验输出不可解析，子任务停留 REVIEW 等人工: subTaskId={}, rawOutput={}",
-                    subTaskId, VerdictParser.summarize(result.getOutput(), 300));
-            taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId,
-                    "sub_task_auto_review_unparseable", AgentRole.REVIEWER, reviewer.getId(),
-                    Map.of("rawOutput", VerdictParser.summarize(result.getOutput(), 300)));
-            return null;
-        }
-        return verdict;
     }
 
     /** 判定落地：对话流结果文本 + 按判定走既有通过/驳回链（单审/双审共识共用）。 */
@@ -409,8 +355,8 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
      */
     private void doDualReview(SubTask subTask, Long executorAgentId, Agent reviewer1, Agent reviewer2) {
         Long subTaskId = subTask.getId();
-        ReviewVerdict v1 = doReviewWith(subTask, executorAgentId, reviewer1);
-        ReviewVerdict v2 = doReviewWith(subTask, executorAgentId, reviewer2);
+        ReviewVerdict v1 = reviewExecutionEngine.execute(subTask, reviewer1);
+        ReviewVerdict v2 = reviewExecutionEngine.execute(subTask, reviewer2);
         if (v1 == null || v2 == null) {
             log.warn("双审核验不完整，停留 REVIEW 等人工: subTaskId={}, verdict1Ready={}, verdict2Ready={}",
                     subTaskId, v1 != null, v2 != null);
@@ -570,97 +516,6 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             log.warn("自动核验落 review_record 失败（不阻断主链路）: subTaskId={}, err={}",
                     subTaskId, e.getMessage());
         }
-    }
-
-    /**
-     * 抽检复审（反馈回路 Phase 4）：对已 APPROVED 的审查记录换 Reviewer 复判一次。
-     *
-     * <p>只度量不改状态：复用 doReviewWith 单次核验（不改状态不落库），复审结果仅写
-     * review_recheck_log（discrepancy=原 APPROVED 复审 REJECTED）+ timeline 观测，
-     * 不落 review_record、不改子任务状态；Reviewer 维度 reviewed 计数单独走
-     * incrementReviewerStats（best-effort），执行者画像不受抽检影响。</p>
-     */
-    @Override
-    public void recheckReviewRecord(Long reviewRecordId) {
-        if (reviewRecordId == null) {
-            return;
-        }
-        ReviewRecord record = reviewService.getById(reviewRecordId);
-        if (record == null) {
-            log.warn("抽检复审跳过：审查记录不存在, reviewRecordId={}", reviewRecordId);
-            return;
-        }
-        if (record.getResult() != ReviewResult.APPROVED) {
-            log.debug("抽检复审跳过：仅抽检 APPROVED 记录, reviewRecordId={}, result={}",
-                    reviewRecordId, record.getResult());
-            return;
-        }
-        SubTask subTask = subTaskService.getById(record.getSubTaskId());
-        if (subTask == null) {
-            log.warn("抽检复审跳过：子任务不存在, reviewRecordId={}, subTaskId={}",
-                    reviewRecordId, record.getSubTaskId());
-            return;
-        }
-        Agent reviewer = reviewerPicker.pickSingle(subTask);
-        if (reviewer == null) {
-            log.warn("抽检复审跳过：无可用平台内核验 Agent, reviewRecordId={}", reviewRecordId);
-            return;
-        }
-        ReviewVerdict verdict = doReviewWith(subTask, null, reviewer);
-        if (verdict == null) {
-            log.warn("抽检复审不可判定，跳过等下一轮: reviewRecordId={}", reviewRecordId);
-            return;
-        }
-        boolean pass = Boolean.TRUE.equals(verdict.getPass());
-        ReviewResult recheckResult = pass ? ReviewResult.APPROVED : ReviewResult.REJECTED;
-        int fallback = pass ? 3 : 1;
-        int score = verdict.getScore() != null ? verdict.getScore() : fallback;
-        score = Math.max(1, Math.min(5, score));
-        // 抽检日志落库（best-effort）：放水率度量与人工复核追溯的唯一事实源
-        try {
-            reviewService.recordRecheck(reviewRecordId, subTask.getId(), ReviewResult.APPROVED,
-                    recheckResult, !pass, reviewer.getId(), score,
-                    verdict.getIssues(), verdict.getComment());
-        } catch (Exception e) {
-            log.warn("抽检复审落 review_recheck_log 失败: reviewRecordId={}, err={}",
-                    reviewRecordId, e.getMessage());
-        }
-        // Reviewer 维度画像计数（best-effort）：复审完成 +1 reviewed；分歧信号留在 log.discrepancy
-        try {
-            agentQualityProfileService.incrementReviewerStats(reviewer.getId(), 1, 0);
-        } catch (Exception e) {
-            log.warn("抽检 Reviewer 画像计数增量失败: reviewRecordId={}, err={}",
-                    reviewRecordId, e.getMessage());
-        }
-        taskTimelineService.recordEvent(subTask.getTaskId(), subTask.getId(),
-                pass ? "sub_task_recheck_consistent" : "sub_task_recheck_discrepancy",
-                AgentRole.REVIEWER, reviewer.getId(),
-                Map.of("reviewRecordId", reviewRecordId, "originalResult", "APPROVED",
-                        "recheckResult", recheckResult.name(), "discrepancy", !pass,
-                        "score", score));
-        log.info("抽检复审完成: reviewRecordId={}, subTaskId={}, recheckResult={}, reviewerAgentId={}",
-                reviewRecordId, subTask.getId(), recheckResult, reviewer.getId());
-    }
-
-    /** 加载核验 Prompt 模板并替换占位符（证据/附件占位由装配器产出）。 */
-    private String renderPrompt(SubTask subTask) {
-        ClassPathResource resource = new ClassPathResource(PROMPT_TEMPLATE_PATH);
-        String template;
-        try (InputStream in = resource.getInputStream()) {
-            template = new String(in.readAllBytes(), StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            throw new IllegalStateException("读取核验 Prompt 模板失败: " + e.getMessage(), e);
-        }
-        return template
-                .replace("{{SUB_TASK_TITLE}}", VerdictParser.nullToEmpty(subTask.getTitle()))
-                .replace("{{SUB_TASK_CONTENT}}", VerdictParser.nullToEmpty(subTask.getContent()))
-                .replace("{{DELIVERABLE}}", VerdictParser.nullToEmpty(subTask.getDeliverable()))
-                .replace("{{ACCEPTANCE}}", VerdictParser.nullToEmpty(subTask.getAcceptance()))
-                .replace("{{EXECUTION_OUTPUT}}", reviewEvidenceAssembler.extractExecutionOutput(subTask))
-                .replace("{{ATTACHMENT_LIST}}", reviewEvidenceAssembler.buildAttachmentList(subTask))
-                .replace("{{ATTACHMENT_CONTENT}}", reviewEvidenceAssembler.buildAttachmentContent(subTask))
-                .replace("{{VERIFICATION_SIGNAL}}",
-                        reviewEvidenceAssembler.verificationSignal(reviewEvidenceAssembler.extractRawOutput(subTask)));
     }
 
     /**

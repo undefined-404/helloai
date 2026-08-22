@@ -55,20 +55,6 @@ public interface SubTaskReviewService {
     void reviewSubTask(Long subTaskId, Long executorAgentId);
 
     /**
-     * 抽检复审（反馈回路 Phase 4）：对已 APPROVED 的审查记录换 Reviewer 复判一次。
-     *
-     * <p>只度量不改状态：子任务已按原判推进，复审结果仅写 review_recheck_log 供
-     * 放水率统计与人工复核追溯（discrepancy=1 表示原 APPROVED 复审 REJECTED），
-     * 不落 review_record、不改子任务状态、不触发执行者画像 reviewed_count 重复计数；
-     * Reviewer 维度计数由 {@code AgentQualityProfileService.incrementReviewerStats}
-     * 单独维护（best-effort）。复审不可判定（LLM 失败/无可用 Reviewer）直接跳过，
-     * 等待下一轮抽检。</p>
-     *
-     * @param reviewRecordId 被抽检的审查记录 ID
-     */
-    void recheckReviewRecord(Long reviewRecordId);
-
-    /**
      * 解析核验判定 JSON；不可解析返回 null（调用方据此停留 REVIEW）。
      */
     ReviewVerdict parseVerdict(String rawOutput);

@@ -1,7 +1,7 @@
 package com.helloai.job.task;
 
 import com.helloai.common.config.ReviewProperties;
-import com.helloai.core.review.service.SubTaskReviewService;
+import com.helloai.core.review.support.ReviewRecheckExecutor;
 import com.helloai.core.task.service.ReviewService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -21,7 +21,7 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>只度量不改状态：复审结果写 review_recheck_log（discrepancy=原 APPROVED 复审
  * REJECTED 的放水标记）+ timeline 观测，子任务状态与 review_record 均不动；
- * Reviewer 维度画像计数由 {@link SubTaskReviewService#recheckReviewRecord} 内部
+ * Reviewer 维度画像计数由 {@link ReviewRecheckExecutor#recheckReviewRecord} 内部
  * best-effort 增量。窗口/抽样比例/批量上限走 {@code helloai.review.*} 配置。</p>
  *
  * <p>保护机制（与 {@link PlanningTimeoutTask} 同构）：
@@ -38,7 +38,7 @@ import java.util.concurrent.TimeUnit;
 public class ReviewerRecheckTask {
 
     private final ReviewService reviewService;
-    private final SubTaskReviewService subTaskReviewService;
+    private final ReviewRecheckExecutor reviewRecheckExecutor;
     private final ReviewProperties reviewProperties;
     private final StringRedisTemplate redis;
 
@@ -85,7 +85,7 @@ public class ReviewerRecheckTask {
             int failed = 0;
             for (Long reviewRecordId : ids) {
                 try {
-                    subTaskReviewService.recheckReviewRecord(reviewRecordId);
+                    reviewRecheckExecutor.recheckReviewRecord(reviewRecordId);
                     done++;
                 } catch (Exception e) {
                     failed++;

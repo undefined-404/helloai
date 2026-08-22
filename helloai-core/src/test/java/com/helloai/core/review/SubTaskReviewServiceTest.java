@@ -12,6 +12,7 @@ import com.helloai.core.review.picker.ReviewerPicker;
 import com.helloai.core.review.service.SubTaskReviewService;
 import com.helloai.core.review.service.impl.SubTaskReviewServiceImpl;
 import com.helloai.core.review.support.ReviewEvidenceAssembler;
+import com.helloai.core.review.support.ReviewExecutionEngine;
 import com.helloai.core.review.support.VerdictParser;
 import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.core.agent.domain.AgentResult;
@@ -23,7 +24,6 @@ import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.service.AttachmentService;
-import com.helloai.core.task.entity.ReviewRecord;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.ReviewService;
 import com.helloai.core.task.service.SubTaskService;
@@ -69,7 +69,6 @@ class SubTaskReviewServiceTest {
     private static final Long SUB_TASK_ID = 22L;
     private static final Long TASK_ID = 10L;
     private static final Long EXECUTOR_ID = 5L;
-    private static final Long RECORD_ID = 999L;
 
     @Mock
     private SubTaskService subTaskService;
@@ -118,9 +117,12 @@ class SubTaskReviewServiceTest {
     @BeforeEach
     void setUp() {
         // ObjectMapper 用真实实例（JSON 解析是被测逻辑本身，不 mock）；
-        // 证据装配/判定解析为真实组件实例（拆分后主类仅编排，不直接持有 mock 目标）
+        // 执行引擎/证据装配/判定解析为真实组件实例（拆分后主类仅编排，不直接持有 mock 目标）
         reviewService = new SubTaskReviewServiceImpl(
-                subTaskService, agentService, platformAgentExecutionService,
+                subTaskService, agentService,
+                new ReviewExecutionEngine(platformAgentExecutionService, conversationService,
+                        taskTimelineService, new VerdictParser(new ObjectMapper()),
+                        new ReviewEvidenceAssembler(attachmentService, dispatchProperties)),
                 taskTimelineService, executionCommandService, dispatchProperties,
                 conversationService, recordReviewService, redisTemplate,
                 new ReviewEvidenceAssembler(attachmentService, dispatchProperties),
@@ -1021,85 +1023,4 @@ class SubTaskReviewServiceTest {
                 eq(AgentRole.REVIEWER), eq(9L), anyMap());
     }
 
-    // ══════════════════════════════════════════════════════════════
-    //  §6.142 抽检复审（recheckReviewRecord）：一致/放水/跳过
-    //  ══════════════════════════════════════════════════════════════
-
-    private ReviewRecord approvedRecord(Long id) {
-        ReviewRecord record = new ReviewRecord();
-        record.setId(id);
-        record.setSubTaskId(SUB_TASK_ID);
-        record.setReviewerAgentId(EXECUTOR_ID);
-        record.setResult(ReviewResult.APPROVED);
-        record.setScore(5);
-        return record;
-    }
-
-    @Test
-    @DisplayName("§6.142 抽检复审一致 → 落 recheck log（discrepancy=false）+ reviewer 画像 +1")
-    void shouldRecheckRecordWhenConsistent() {
-        when(recordReviewService.getById(RECORD_ID)).thenReturn(approvedRecord(RECORD_ID));
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
-                .thenReturn(AgentResult.success(
-                        "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
-
-        reviewService.recheckReviewRecord(RECORD_ID);
-
-        verify(recordReviewService).recordRecheck(
-                eq(RECORD_ID), eq(SUB_TASK_ID), eq(ReviewResult.APPROVED), eq(ReviewResult.APPROVED),
-                eq(false), eq(9L), any(), any(), any());
-        verify(agentQualityProfileService).incrementReviewerStats(9L, 1, 0);
-        verify(taskTimelineService).recordEvent(
-                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_recheck_consistent"),
-                eq(AgentRole.REVIEWER), eq(9L), anyMap());
-        // 抽检不改状态、不落 review_record
-        verify(subTaskService, never()).complete(anyLong());
-        verify(subTaskService, never()).rework(anyLong(), any());
-        verify(recordReviewService, never()).recordAutoReview(anyLong(), any(), any(), anyInt(), any(), any());
-    }
-
-    @Test
-    @DisplayName("§6.142 抽检发现放水（原 APPROVED 复审 REJECTED）→ discrepancy=true + timeline 观测")
-    void shouldRecheckRecordWhenDiscrepancy() {
-        when(recordReviewService.getById(RECORD_ID)).thenReturn(approvedRecord(RECORD_ID));
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
-                .thenReturn(AgentResult.success(
-                        "{\"pass\": false, \"score\": 1, \"issues\": \"产出为编造\", \"comment\": \"\"}", "stop", "llm", 100));
-
-        reviewService.recheckReviewRecord(RECORD_ID);
-
-        verify(recordReviewService).recordRecheck(
-                eq(RECORD_ID), eq(SUB_TASK_ID), eq(ReviewResult.APPROVED), eq(ReviewResult.REJECTED),
-                eq(true), eq(9L), any(), any(), any());
-        verify(taskTimelineService).recordEvent(
-                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_recheck_discrepancy"),
-                eq(AgentRole.REVIEWER), eq(9L), anyMap());
-        verify(subTaskService, never()).complete(anyLong());
-        verify(subTaskService, never()).rework(anyLong(), any());
-    }
-
-    @Test
-    @DisplayName("§6.142 抽检跳过：记录不存在 / 非 APPROVED / 无可用 reviewer 均不调 LLM")
-    void shouldSkipRecheckWhenNotEligible() {
-        // 记录不存在
-        when(recordReviewService.getById(RECORD_ID)).thenReturn(null);
-        reviewService.recheckReviewRecord(RECORD_ID);
-        verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
-
-        // 非 APPROVED（人工驳回记录不属于抽检目标）
-        ReviewRecord rejected = approvedRecord(RECORD_ID);
-        rejected.setResult(ReviewResult.REJECTED);
-        when(recordReviewService.getById(RECORD_ID)).thenReturn(rejected);
-        reviewService.recheckReviewRecord(RECORD_ID);
-        verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
-
-        // 无可用 reviewer → 跳过
-        when(recordReviewService.getById(RECORD_ID)).thenReturn(approvedRecord(RECORD_ID));
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(reviewerPicker.pickSingle(any())).thenReturn(null);
-        reviewService.recheckReviewRecord(RECORD_ID);
-        verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
-    }
 }
