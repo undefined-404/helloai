@@ -6553,3 +6553,30 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - 影响：反馈回路 Phase 1（质量画像 + 调度回灌 + 动态 TTL 复合分 + rebuild 对账）与 Phase 3（历史表现摘要注入 executor prompt）真实环境验收通过；脚本侧沉淀 3 条 PS 5.1 陷阱教训（参数名不得与自动变量同名、`_time` 列名惯例、psql 多行字段截断需单行化）。
 - 遗留：本轮改动（verify-quality-profile.ps1 + 差距表 N20 §6.144 增量）未 git 提交，待用户确认后提交；Phase 5 质量度量看板按《反馈回路与契约先行落地计划》推进。
+
+### 6.145 Phase 5 前置合规：SubTaskReviewServiceImpl 组合拆分 + AdminQualityController 路径 ById 化（2026-08-23）
+
+#### 1. 背景与结论
+
+- **背景**：Phase 5 质量度量看板推进前的 CODE_STYLE 合规检查发现两个观察点：① `SubTaskReviewServiceImpl` 674 行 / 14 个构造器依赖，超出 §7.8 类规模红线（500 行 / 8 依赖）；② `AdminQualityController` 三个端点路径（`/rebuild/{agentId}`、`/dispatch/{subTaskId}`、`/spec-section/{taskId}`）不遵循 §8.2 接口路径命名（状态操作应 `POST /xxxById/{id}`、查询子资源应 `GET /findXxxByYyyId/{id}`）。
+- **结论**：用户确认"组合拆分"方案——剥离核验执行（`ReviewExecutionEngine`，5 依赖）与抽检复审（`ReviewRecheckExecutor`，6 依赖）为两个独立组件，新组件均达标（≤8 依赖）；剩余编排（三入口 + 互斥锁 + 状态机 + 判定落地）在类 Javadoc 按 §7.8 选项二书面声明不继续拆分；路径全部改 ById 风格并与 3 个 verify 脚本同步。
+
+#### 2. 实现要点
+
+- **ReviewExecutionEngine（`review/support/`，新建）**：从 SubTaskReviewServiceImpl 迁出 `doReviewWith` + `renderPrompt`（渲染 Prompt → `executeSync` → 对话流双写 subtask_review_prompt/thinking/verdict → `verdictParser.parseVerdict`），5 依赖（PlatformAgentExecutionService / ConversationService / TaskTimelineService / VerdictParser / ReviewEvidenceAssembler）；`execute(subTask, reviewer)` 返回 `ReviewVerdict`，失败/不可解析返回 null 不改状态；单审/双审/抽检三方共用同一执行口径。
+- **ReviewRecheckExecutor（`review/support/`，新建）**：迁出 `recheckReviewRecord`（一致性/放水/跳过三分支 + recordRecheck + incrementReviewerStats + timeline），6 依赖；入口 `ReviewerRecheckTask` 由注入 `SubTaskReviewService` 改为注入本类。
+- **SubTaskReviewServiceImpl 收编**：删除 3 个方法（doReviewWith/renderPrompt/recheckReviewRecord）后由 674 行降至约 524 行；字段/构造器 `PlatformAgentExecutionService` → `ReviewExecutionEngine`；类 Javadoc 补 §7.8 拆分评审结论（已剥离清单 + 剩余职责 + 不拆理由：三入口共享同一把锁与状态机决策、判定落地与编排共享 verdict 流转）。
+- **SubTaskReviewService 接口**：移除 `recheckReviewRecord` 抽象方法（抽检职责迁出），保留 L1/L2/L3 三入口 + parseVerdict + ReviewVerdict。
+- **AdminQualityController 路径 ById 化（§8.2）**：`POST /rebuild/{agentId}` → `/rebuildById/{agentId}`；`POST /dispatch/{subTaskId}` → `/dispatchById/{subTaskId}`；`GET /spec-section/{taskId}` → `/findSpecSectionByTaskId/{taskId}`；类 Javadoc 同步。前端零引用（helloai-ui 已确认），仅 3 个 verify 脚本 11 处引用同步（verify-quality-profile.ps1 ×6、verify-contract-first.ps1 ×4、verify-admin-authz.ps1 ×1，含头部注释与断言字符串）。
+- **测试迁移**：SubTaskReviewServiceTest 构造器改真实引擎注入（底层 mock 不变，37 例语义零改动）；recheck 3 例迁移至新建 ReviewRecheckExecutorTest（引擎真实组件 + 底层 mock）；ReviewerRecheckTaskTest mock 换 ReviewRecheckExecutor（7 例）。
+
+#### 3. 验证结果
+
+- 编译：`mvn -pl helloai-core,helloai-job,helloai-api -am test-compile` 通过（`-q` 无错误）。
+- 单测：`-Dtest=SubTaskReviewServiceTest,ReviewRecheckExecutorTest,ReviewerRecheckTaskTest` 47/47 全绿（37/3/7，注意项目默认 skipTests=true 需 `-DskipTests=false`）。
+- 真实环境回归（6565 实例 + docker 四件套）：verify-reviewer-dual.ps1 **PASS=12 FAIL=0 SKIP=2**（S1 双审触发/降级守卫 PASS，S2 分歧未复现 SKIP 属 LLM 环境相关，S3 抽检候选链路 7 项 PASS）；verify-quality-profile.ps1 **PASS=42 FAIL=0 SKIP=0**（S3-dispatch-http 与 S5-rebuild-http 均走改名路径 HTTP 200，质量画像/调度回灌/动态 TTL/rebuild 对账/历史注入全量通过）。
+
+#### 4. 影响与遗留
+
+- 影响：核验执行与抽检复审职责独立可测（引擎 5 依赖 / 抽检 6 依赖均达标）；编排类约 524 行仍略超 500 行红线，但已有 §7.8 书面声明覆盖（与 AgentServiceImpl 583 行 / 14 依赖先例同口径）；管理侧实测端点路径风格与 §8.2 对齐，前端与既有脚本无破坏（脚本已同步）。
+- 遗留：本轮改动未 git 提交，待用户确认后提交；Phase 5 质量度量看板按《反馈回路与契约先行落地计划》推进。
