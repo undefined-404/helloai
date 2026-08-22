@@ -2,8 +2,9 @@
 
 > 适用项目：HelloAI（AI Agent 协作调度平台）  
 > 生效范围：后端单体服务 + 前端管理后台（Vue 3 / Element Plus）  
-> 版本：V1.12  
+> 版本：V1.13  
 > 最后更新：2026-08-22  
+> 本版重点 V1.13：§7.1 事务口径修正——"单语句原子写不豁免"改为"**单语句原子写可豁免**"（单实体单条 UPDATE/DELETE 且无跨实体一致性诉求，豁免时须在 Javadoc 注明；追加第二条写操作必须补注解；best-effort 降级写豁免但须声明降级语义，参考 `SubTaskServiceImpl.markManualIntervention`）；`SubTaskServiceImpl.getByIdForUpdate` 实现类补 Javadoc 强制注明"必须在调用方事务内调用"（行锁随调用方事务存续，接口注释原已有同款语义，迭代记录 §6.141）
 > 本版重点 V1.12：§3.x 依赖方向红线双向化——"禁止跨域直捅 Mapper"对所有方向生效（含合法向下依赖），task 域对 `agent.mapper` import 清零（TaskServiceImpl 5 个 / FeedServiceImpl / SubTaskServiceImpl 共 7 处直调收口为 AgentService 接口方法，迭代记录 §6.140）；规则 5 配套脚本新增 @MapperScan 登记断言（所有 `*Mapper.java` 包路径必须登记，防启动期炸）；§7.1 事务注解明确"单语句原子写不豁免 @Transactional"（SubTaskServiceImpl.updateDependsOn 已补注解）
 > 本版重点 V1.11：§3.x 依赖方向红线配套落地（评审报告 P1 阶段五）——agent 域对 `task.mapper` import 清零（6 处直捅收口为 `SubTaskService` 接口），task↔agent 调度分发改 `TaskDispatchPort` 端口反转（task 域定义、agent 域实现）；ObjectProvider 登记制执行：主代码 8 处减半——4 处 Optional 化（存在性探测场景：AgentChatClientServiceImpl / McpAuthFilterConfig / ExecutionDispatchValidator / OutboxRelayTask），4 处保留理由登记（多候选 orderedStream 路由：CompositeArtifactStorage / WebSearchServiceRouter；懒解析打破循环：SubTaskServiceImpl / ExecutorIssueResolutionAssessor）；配套 `verify-dependency-direction.ps1` 9 项全 PASS
 > 本版重点 V1.10：§7.8 类规模红线存量清单三巨头全数拆分完成（RequirementClarify 1342→675 四拆 / SubTaskReview 888→546 两拆 / AgentServiceImpl 856→553 四组件，迭代记录 §6.136）；§8.2 删除端点特例——DELETE 带 body 不符合 HTTP 语义，改 `POST /deleteById/{id}`（TaskController.deleteById 已落地）；§19 新增 19.0「前端 API 路径常量准则」（src/api/paths.ts 单一事实源，16 个 api 文件全量收口，来源：后端代码评审报告 P2）
@@ -293,7 +294,7 @@ core 模块统一采用"业务域分包 + 域内技术分层"，禁止新增顶�
 - **agent**：entity / mapper / service / service.impl / domain / chat / command / dispatcher / executor / mqconsumer / mcp / observability / output
 - **task**：entity / mapper / service / service.impl / policy / spec / statemachine / score / listener
 - **planner**：entity / mapper / service / service.impl / picker / search
-- **review**：service / service.impl / mqconsumer
+- **review**：service / service.impl / mqconsumer / picker
 - **system**：entity / mapper / service / service.impl / storage / crypto
 - **shared**：event / doorbell / handler / util
 
@@ -834,7 +835,7 @@ public class PageResult<T> {
 
 - **接口 + impl 成对拆分（v2.8 起强制）**：接口 `XxxService` 放 `{domain}.service`（继承 `IService<Entity>`），实现 `XxxServiceImpl` 放 `{domain}.service.impl`（继承 `ServiceImpl<Mapper, Entity>`）；Controller 与跨域引用一律只依赖接口
 - 实现类 `@Service` + `@RequiredArgsConstructor`，构造器注入所有依赖
-- 方法级 `@Transactional(rollbackFor = Exception.class)`（写方法一律带注解，**单语句原子写不豁免**——即使当前实现只有一条 baseMapper 自定义 UPDATE/DELETE，也必须补注解，防止后续追加第二处写操作时悄悄破窗）
+- 方法级 `@Transactional(rollbackFor = Exception.class)`：写方法一律带注解；**单语句原子写可豁免**——方法内仅对单个实体执行单条 UPDATE/DELETE（含 getById + updateById 组合）且无跨实体一致性诉求时，可暂不加注解，但必须在方法 Javadoc 注明"单语句原子写，无事务"；一旦追加第二条写操作（第二张表 / 跨 Service 写），必须补注解，防止悄悄破窗。best-effort 降级写（try-catch 包裹、失败仅告警不影响主链路）同样豁免，但须在 Javadoc 声明降级语义（参考 `SubTaskServiceImpl.markManualIntervention`）；已有注解的写方法（如 `updateDependsOn`）保持注解，不因豁免条款倒退
 - 使用 LambdaQueryWrapper / LambdaUpdateWrapper
 - `ServiceImpl` 可以注入多个 Mapper，但仅限当前模块所属 Mapper
 - 若一个 `ServiceImpl` 同时承担"本地领域逻辑 + 多流程聚合"，应考虑拆分为领域 Service 与编排型 Service

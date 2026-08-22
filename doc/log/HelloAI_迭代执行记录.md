@@ -6445,3 +6445,61 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - 影响：task→agent.mapper 双向清零，跨域数据访问全部收敛到 service 接口；@MapperScan 漏登记风险脚本化防回归；规范与代码事实对齐（CODE_STYLE V1.12）。
 - 遗留：本轮改动未 git 提交，待用户确认后提交。
+
+### 6.141 评审确认点：FOR UPDATE 锁语义 Javadoc 强制注明 + 事务豁免口径修正（2026-08-22）
+
+#### 1. 背景与结论
+
+- **背景**：§6.140 整改后评审顺带确认两点——① `SubTaskServiceImpl.getByIdForUpdate` 无事务但用 `.last("FOR UPDATE")`，行锁依赖调用方事务存续，接口注释已有"必须在事务内调用"语义但**实现类无 Javadoc**，直接看实现容易误以为方法自带锁；② `markManualIntervention` 无事务（getById + updateById 单次写 + try-catch 降级）评审判定可接受，但 §6.140 刚写进 CODE_STYLE §7.1 的口径是"单语句原子写**不**豁免"，与豁免诉求直接冲突。
+- **结论**：getByIdForUpdate 保持无事务，实现类补 Javadoc 强制注明调用方事务前提；markManualIntervention 保持无事务（best-effort 降级写），CODE_STYLE §7.1 口径从"不豁免"修正为"单语句原子写可豁免 + 触发条件"，版本升 V1.13。
+
+#### 2. 实现要点
+
+- **SubTaskServiceImpl.getByIdForUpdate 补 Javadoc**：明确"只发行锁 SQL 不自行开启事务，行锁随调用方事务存续而释放（方法返回即释放），自开事务会立刻释放锁失去互斥意义，唯一主代码调用方 ExecutionCommandServiceImpl.createAssignedCommand 已满足前提"——与接口注释同款语义，实现类补齐防误读。
+- **CODE_STYLE V1.13 §7.1 口径修正**：写方法一律带注解为总则；豁免条件为"仅对单个实体执行单条 UPDATE/DELETE（含 getById + updateById 组合）且无跨实体一致性诉求"，豁免时须在方法 Javadoc 注明"单语句原子写，无事务"；一旦追加第二条写操作（第二张表 / 跨 Service 写）必须补注解；best-effort 降级写（try-catch 包裹、失败仅告警）同样豁免但须声明降级语义（参考 markManualIntervention）；已有注解的写方法（updateDependsOn）保持注解不倒退。
+- **markManualIntervention 补 Javadoc（自洽）**：作为 §7.1 豁免参考案例，按新口径声明"best-effort 降级写（getById + updateById 单次原子更新，无跨实体一致性诉求，不加 @Transactional；try-catch 降级失败仅告警；追加第二条写必须补注解）"——规范立的规矩自身先遵守，避免重蹈"说一套做一套"。
+
+#### 3. 验证结果
+
+- 纯注释 + 文档改动，不影响编译逻辑与运行时行为（getByIdForUpdate / markManualIntervention 方法体零改动）；改动前 §6.140 已验证 896/896 全绿 + 启动验证通过，本轮无新增行为变更。
+
+#### 4. 影响与遗留
+
+- 影响：行锁方法实现类具备强制语义提示，误用风险下降；规范口径与评审确认结论一致（豁免条款有明确触发条件，防破窗初衷保留）。
+- 遗留：本轮改动未 git 提交，待用户确认后提交。
+
+### 6.142 反馈回路 Phase 4：Reviewer 双审共识 + 抽检复审机制（2026-08-22）
+
+#### 1. 背景与结论
+
+- **背景**：反馈回路第 1 层（质量画像 + 调度回灌）已交付，但评审环节仍是单一 Reviewer 判定，无双审共识、无事后抽检、reviewer 维度画像无计数——评审质量本身缺闭环（§6.124/§6.125/§6.130 已覆盖执行者画像，评审者画像与抽检留白）。
+- **结论**：Phase 4 落地双审共识 + 抽检复审：双审只落一条 review_record（reviewer1 为记录归属，reviewer2 判定保留在对话流与 timeline payload），防 QualityProfileUpdater 按 record 逐条增量导致执行者画像重复计数；抽检由 helloai-job 定时任务按比例抽样复审已 APPROVED 记录，分歧回写 timeline 并计数画像。
+
+#### 2. 实现要点
+
+- **V57 迁移 + 实体/Mapper**：新增 `review_recheck_log` 表（抽检日志），`ReviewRecheckLog` 实体/Mapper 归 task 域，Flyway 只增不改。
+- **ReviewProperties（helloai-common，`helloai.review.*`）**：dual-review-enabled / dual-review-consensus-policy（REQUIRE_BOTH｜ANY）/ recheck-enabled / recheck-interval-ms / recheck-sample-ratio / recheck-max-batch / recheck-window-days；application.yml 未显式声明，走默认值（双审开、REQUIRE_BOTH、抽检开、1h、5%、20、7d）。
+- **ReviewerPicker 接口 + Impl（`review/picker/`）**：pickSingle / pickDual / isDualReviewRequired，候选选取三段逻辑从 SubTaskReviewServiceImpl 搬入，对齐 planner/picker/PlannerAgentPicker 先例；CODE_STYLE §3.x review 域清单补 `picker` 子包。
+- **SubTaskReviewServiceImpl 改造**：抽取 `doReviewWith`（渲染 Prompt → executeSync → 对话流双写 subtask_review_prompt/thinking/verdict → verdictParser.parseVerdict）；新增 `doDualReview`——v1/v2 任一 null 落 `sub_task_dual_review_incomplete` 停留 REVIEW；REQUIRE_BOTH 分歧 → `markManualIntervention("reviewer_disagreement")` + `sub_task_reviewer_disagreement` timeline + `recordReviewerStats(1,1)`；共识 → `applyVerdict(reviewer1, chosen)` + `recordReviewerStats(1,0)` + `sub_task_dual_review_consented`（payload 含 consensus/policy/pass1/pass2/score1/score2）；ANY 任一通过即过；新增 `recheckReviewRecord`（前置校验：record 存在/APPROVED/subTask 存在/pickSingle 有值/verdict 可判定 → `reviewService.recordRecheck` 落库 best-effort → 画像计数 → `sub_task_recheck_consistent` / `sub_task_recheck_discrepancy` timeline）。
+- **AgentQualityProfileService.incrementReviewerStats + Mapper 增量 SQL**：UPDATE 无行 → INSERT 仅 reviewer 维度画像兜底（唯一索引冲突 catch 回退 UPDATE），外层 catch best-effort 记 warn。
+- **ReviewService 抽检候选**：countRecheckCandidates / listRecheckCandidateIds（APPROVED + create_time>=since + NOT EXISTS 排除已抽检）/ recordRecheck（@Transactional 直插 review_recheck_log）。
+- **ReviewerRecheckTask（helloai-job）**：`@Scheduled(fixedDelayString="${helloai.review.recheck-interval-ms:3600000}")` + Redis 锁（LOCK_KEY="scheduler:lock:ReviewerRecheck"，token + Lua 安全解锁，与 PlanningTimeoutTask 同构）；抽样批量 = ceil(候选×比例)，下限 1 上限 maxBatch；单条失败只记日志不中断。
+- **单测**：SubTaskReviewServiceTest 增补双审 5 例（一致通过 / 分歧转人工 / 候选不足降级单审 / 未开启跳过 / ANY 任一通过）+ 抽检 3 例（一致 / 分歧 / 不可复审跳过）；AgentQualityProfileServiceTest 增补；ReviewerRecheckTaskTest 7 例（前置 3 + 抽样 4）。
+- **验收脚本**：`scripts/powershell/verify-reviewer-dual.ps1`（S1 双审一致 / S2 分歧转人工 / S3 抽检计数）。
+
+#### 3. 验证结果
+
+- `mvn -pl helloai-job -am test -DskipTests=false`：helloai-job 模块 73/73 全绿（ReviewerRecheckTask 抽样执行 4 + 前置条件短路 3 在内）。
+- core 聚焦测试（`-Dtest=SubTaskReviewServiceTest,AgentQualityProfileServiceTest,ReviewServiceTest`）：40/19/8 全绿。
+- 排查并修复历史问题：job 模块部分 @Nested 测试类 0 run（AgentHealthCheckTaskTest 等，含本轮 ReviewerRecheckTaskTest）——根因是 target/test-classes 过期编译产物导致 JUnit Platform 发现 0 测试且不报错；触发 testCompile 全量重编译后全部恢复，与 Phase 4 代码本身无关。
+- verify-reviewer-dual.ps1 真实环境实测（2026-08-22 晚，6565 实例 + deepseek 双模型 v4-flash/v4-pro）：
+  - **S1 双审一致路径全绿（最终轮 PASS=8 FAIL=0 SKIP=0）**：sub_task_dual_review_consented consensus=APPROVED → 子任务 DONE → 恰好 1 条 review_record（reviewer1 归属）→ verdict senders=rd-reviewer-b + rd-reviewer-a → 两审 reviewer_reviewed_count 均 >=+1（动态断言，实测 11→12、1→2）。
+  - **S3 抽检链路全绿（PASS=7 FAIL=0 SKIP=0）**：APPROVED 记录在候选中可见（count=22）→ 模拟一轮抽检落 review_recheck_log 后从候选窗口排除（NOT EXISTS 语义）→ log 行 shape=APPROVED|APPROVED|0|reviewer → review_recheck_log 6 核心列 + agent_quality_profile reviewer 维度 2 列就绪（V57/V54）。
+  - **其余路径均有真实证据（多轮运行，修复后脚本 0 FAIL）**：分歧路径（manual_intervention reason=reviewer_disagreement + 双方 reviewed/disagreement 计数 +1，sub_task_reviewer_disagreement timeline）；REJECTED 共识路径（单 record 纪律断言 PASS）；incomplete 降级路径（LLM 失败停留 REVIEW，编排触发与 timeline 断言 PASS）。
+- 实测暴露并修复脚本 3 处问题：① 画像断言原硬编码 rd-reviewer-a/b，但 pickDual 首位=AgentSelector.pickPreferred（质量分最高）人选不定，改为按 verdict senders 动态断言；② Get-DualReviewEvent 事件匹配原只覆盖 sub_task_dual_review_% 前缀，分歧事件 sub_task_reviewer_disagreement 匹配不到导致等待超时，已补入；③ 画像断言原为"恰好 +1"，实测发现自动抽检（ReviewerRecheckTask）可能在快照间隙给参与者额外 +1（实证 rd-reviewer-b 4→6=抽检+1+双审+1），放宽为">=+1"（双审 0 计数仍 FAIL）。
+- 实测暴露环境/产品问题（未改产品代码）：rd-reviewer-a 原配 dashscope:qwen3.8-Max 调用恒 404 model_not_found（目录数据与 dashscope API 不一致）；改 qwen3.7-plus 后仍 404——ProviderChatModelCache.buildKey 不含 model 维度，ChatModel 按 (protocolType,provider,baseUrl,apiKey) 永久缓存，改 model_type 不生效直到重启（产品级缺陷，建议后续修复：buildKey 增加 model 维度 5 参重载 + 3 个 factory 传 model + 测试同步）；实测改用 deepseek 双模型（deepseek-v4-flash/pro）+ 为 rd-reviewer-a 复制 deepseek 托管凭据（同 provider 加密值可复用）后全链路跑通。
+
+#### 4. 影响与遗留
+
+- 影响：评审环节从单一判定升级为双审共识 + 定时抽检，reviewer 维度画像计数闭环（incrementReviewerStats），分歧/不一致可见于 timeline 与人工干预记录；抽检配置全部走 helloai.review.* 默认值，未显式声明。
+- 遗留：本轮改动未 git 提交，待用户确认后提交；verify-reviewer-dual.ps1 实测已全绿（S1 PASS=8/S3 PASS=7，S2 分歧未复现轮按 SKIP 设计）；ProviderChatModelCache 缓存 key 不含 model 的产品缺陷待用户决策是否修复（涉及 core 代码 + 测试同步 + 重启 6565 验证）。
