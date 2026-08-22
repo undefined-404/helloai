@@ -20,13 +20,13 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>Controller 零编排：薄透传端点均直接转发 service 方法，不承载任何
  * 条件/循环/聚合逻辑。用途：
  * <ul>
- *   <li>{@code POST /rebuild/{agentId}}：从 review_record 全量重算指定 Agent
+ *   <li>{@code POST /rebuildById/{agentId}}：从 review_record 全量重算指定 Agent
  *       画像并覆盖落库，供 verify-quality-profile.ps1 S5 对账
  *       （验证 rebuild 与增量维护口径一致）；</li>
- *   <li>{@code POST /dispatch/{subTaskId}}：对 PENDING 子任务触发自动选人分发，
+ *   <li>{@code POST /dispatchById/{subTaskId}}：对 PENDING 子任务触发自动选人分发，
  *       供 verify-quality-profile.ps1 S3 断言 qualityRank 回灌调度选人
  *       （auto-assign-on-create 默认关闭，实测需显式触发入口）；</li>
- *   <li>{@code GET /spec-section/{taskId}}：返回 TaskRunningSpec 执行上下文
+ *   <li>{@code GET /findSpecSectionByTaskId/{taskId}}：返回 TaskRunningSpec 执行上下文
  *       Prompt 段（含契约先行拆解「## 任务契约」节），供
  *       verify-contract-first.ps1 S3/S4 断言契约节渲染（Phase 2）。</li>
  * </ul>
@@ -58,7 +58,7 @@ public class AdminQualityController {
      *
      * @param agentId Agent ID
      */
-    @PostMapping("/rebuild/{agentId}")
+    @PostMapping("/rebuildById/{agentId}")
     public R<Void> rebuild(@PathVariable("agentId") Long agentId) {
         if (!isEnabled()) {
             return gateDenied();
@@ -73,7 +73,7 @@ public class AdminQualityController {
      *
      * @param subTaskId 子任务 ID
      */
-    @PostMapping("/dispatch/{subTaskId}")
+    @PostMapping("/dispatchById/{subTaskId}")
     public R<Long> dispatch(@PathVariable("subTaskId") Long subTaskId) {
         if (!isEnabled()) {
             return gateDenied();
@@ -88,7 +88,7 @@ public class AdminQualityController {
      *
      * @param taskId 主任务 ID
      */
-    @GetMapping("/spec-section/{taskId}")
+    @GetMapping("/findSpecSectionByTaskId/{taskId}")
     public R<String> specSection(@PathVariable("taskId") Long taskId) {
         if (!isEnabled()) {
             return gateDenied();

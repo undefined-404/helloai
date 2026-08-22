@@ -135,7 +135,7 @@ $probePaths = @(
     '/api/admin/config',
     '/api/admin/prompts',
     '/api/admin/dashboard/getOverview',
-    '/api/admin/quality/spec-section/999999',
+    '/api/admin/quality/findSpecSectionByTaskId/999999',
     '/api/admin/duty-leases'
 )
 # admin 侧 sanity 端点（剔除 quality：假 taskId 会让业务层报错而非 200）

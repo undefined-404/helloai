@@ -9,11 +9,11 @@
 #                          aggregation asserted
 #   S3 scheduling feedback: qualityRank selects the agent with better
 #                          profile (exec-a) over profile-less exec-b
-#                          via POST /api/admin/quality/dispatch/{id}
+#                          via POST /api/admin/quality/dispatchById/{id}
 #   S4 dynamic TTL       : composite score -> exec-a lease TTL longer
 #                          than exec-b (approx 134 vs 122 minutes)
 #   S5 rebuild reconcile : SQL-insert 4th review bypassing increment
-#                          -> POST /api/admin/quality/rebuild/{id}
+#                          -> POST /api/admin/quality/rebuildById/{id}
 #                          -> full recompute equals expected totals
 #   S6 history inject    : REWORK sub-task executed via admin executeById
 #                          -> full prompt in conversation_message contains
@@ -588,8 +588,8 @@ function Run-Scenario3 {
     Assert-Pass ($state3 -and $state3.StartsWith('PENDING')) 'S3-preset' ('sub-task PENDING, actual=' + $state3)
 
     # 4) dispatch via admin endpoint -> qualityRank feedback visible in assignment
-    $dispResp = Invoke-Json -Method POST -Uri ($BaseUrl + '/api/admin/quality/dispatch/' + $sub3Id) -Headers @{ 'X-Admin-Token' = $adminToken }
-    Assert-Pass ($dispResp.Code -eq 200) 'S3-dispatch-http' ('POST /api/admin/quality/dispatch HTTP=' + $dispResp.Code + ' body=' + $dispResp.Body)
+    $dispResp = Invoke-Json -Method POST -Uri ($BaseUrl + '/api/admin/quality/dispatchById/' + $sub3Id) -Headers @{ 'X-Admin-Token' = $adminToken }
+    Assert-Pass ($dispResp.Code -eq 200) 'S3-dispatch-http' ('POST /api/admin/quality/dispatchById HTTP=' + $dispResp.Code + ' body=' + $dispResp.Body)
 
     $finalState = Wait-Until -Condition {
         param($id, $want)
@@ -673,8 +673,8 @@ function Run-Scenario5 {
     Assert-Pass ($insRc -eq 0) 'S5-direct-insert' ('direct review_record insert id=' + $newRid + ' rc=' + $insRc)
 
     # rebuild via admin endpoint
-    $rebResp = Invoke-Json -Method POST -Uri ($BaseUrl + '/api/admin/quality/rebuild/' + $execAId) -Headers @{ 'X-Admin-Token' = $adminToken }
-    Assert-Pass ($rebResp.Code -eq 200) 'S5-rebuild-http' ('POST /api/admin/quality/rebuild HTTP=' + $rebResp.Code)
+    $rebResp = Invoke-Json -Method POST -Uri ($BaseUrl + '/api/admin/quality/rebuildById/' + $execAId) -Headers @{ 'X-Admin-Token' = $adminToken }
+    Assert-Pass ($rebResp.Code -eq 200) 'S5-rebuild-http' ('POST /api/admin/quality/rebuildById HTTP=' + $rebResp.Code)
 
     $prof = Get-ProfileRow -AgentId $execAId
     Write-Output ('[S5] profile row after rebuild=' + $prof)

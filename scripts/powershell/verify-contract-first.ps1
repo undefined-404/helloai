@@ -5,7 +5,7 @@
 #   S2 contract backfill        : contract sub-task DONE (APPROVED) ->
 #                                task running spec contract non-empty +
 #                                content preserved + timeline success
-#   S3 prompt section render    : GET /api/admin/quality/spec-section/{taskId}
+#   S3 prompt section render    : GET /api/admin/quality/findSpecSectionByTaskId/{taskId}
 #                                contains '## task contract' header + body
 #   S4 zero-noise               : non-contract sub-task DONE ->
 #                                no contract written, no contract section
@@ -488,8 +488,8 @@ function Run-Scenario3 {
     Write-Output ''
     Write-Output '=== [S3] executor prompt section renders contract header ==='
     if (-not $script:TaskIdS2) { Assert-Skip 'S3' 'run S2 first'; return }
-    $resp = Invoke-Json -Method GET -Uri ($BaseUrl + '/api/admin/quality/spec-section/' + $script:TaskIdS2) -Headers @{ 'X-Admin-Token' = $adminToken }
-    Assert-Pass ($resp.Code -eq 200) 'S3-spec-http' ('GET /api/admin/quality/spec-section HTTP=' + $resp.Code)
+    $resp = Invoke-Json -Method GET -Uri ($BaseUrl + '/api/admin/quality/findSpecSectionByTaskId/' + $script:TaskIdS2) -Headers @{ 'X-Admin-Token' = $adminToken }
+    Assert-Pass ($resp.Code -eq 200) 'S3-spec-http' ('GET /api/admin/quality/findSpecSectionByTaskId HTTP=' + $resp.Code)
     $json = $null
     try { $json = $resp.Body | ConvertFrom-Json } catch { }
     $data = if ($json -and $json.data) { [string]$json.data } else { '' }
@@ -524,7 +524,7 @@ function Run-Scenario4 {
     $tl4 = Get-ContractTimeline -TaskId $taskId
     Assert-Pass ([string]::IsNullOrEmpty($tl4)) 'S4-no-timeline' ('no sub_task_contract_backfilled timeline, actual=' + $tl4)
 
-    $resp4 = Invoke-Json -Method GET -Uri ($BaseUrl + '/api/admin/quality/spec-section/' + $taskId) -Headers @{ 'X-Admin-Token' = $adminToken }
+    $resp4 = Invoke-Json -Method GET -Uri ($BaseUrl + '/api/admin/quality/findSpecSectionByTaskId/' + $taskId) -Headers @{ 'X-Admin-Token' = $adminToken }
     $json4 = $null
     try { $json4 = $resp4.Body | ConvertFrom-Json } catch { }
     $data4 = if ($json4 -and $json4.data) { [string]$json4.data } else { '' }
