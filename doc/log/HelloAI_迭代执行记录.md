@@ -6371,9 +6371,9 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - `mvn -pl helloai-api -am compile`：BUILD SUCCESS。
 - `AdminOnlyInterceptorTest`：3/3 全绿（根 pom 默认 skipTests=true，需显式 `-DskipTests=false`）。
-- `verify-admin-authz.ps1` 实跑：本轮执行环境（IDE 命令沙箱）的 loopback 探测对宿主服务不可达，多次启动实例后健康检查始终不通，行为级验收未完成——脚本已就绪，待用户在本地终端重启服务后执行 `scripts/powershell/verify-admin-authz.ps1` 完成闭环（脚本即验收手段，符合「脚本输出即事实源」惯例）。
+- `verify-admin-authz.ps1` 实跑（用户本地终端，2026-08-22）：**17/17 全绿**——agent Bearer 探 8 个 GET + 1 个 PUT 写端点全部 403；admin token 同批 7 端点全部 200（不误伤管理员）；无凭证 401。行为级验收闭环（脚本输出即事实源）。注：AI 执行环境（IDE 命令沙箱）的 loopback 探测对宿主服务不可达，实跑只能在用户本地终端完成，后续同类行为级验收同理。
 
 #### 4. 影响与遗留
 
 - 影响：① 评审报告 P0「admin 授权缺口」关闭——`/api/admin/**` 全量端点强制 admin 身份，agent 越权通道堵死，MCP 通道（`/mcp/**`）不在该前缀下不受影响；② 授权防线有单测 + e2e 脚本双层回归护栏，后续新增 admin 端点自动被覆盖；③ 报告发现但遗漏的 `AgentDutyLeaseController` 一并纳入。
-- 遗留：① `verify-admin-authz.ps1` 行为级实跑验收待用户在本地终端重启服务后执行；② 报告其余条目（依赖方向、巨型类拆分、事务缺失、状态枚举收口、DELETE body、5.4 测试端点门控）不在本轮范围；③ 已有 3 处手动 requireAdmin() 保留不动（路径不在 `/api/admin/**`，作纵深防御）；④ 本轮改动本地 git commit，不 push。
+- 遗留：① 无（`verify-admin-authz.ps1` 已于 2026-08-22 用户本地终端实跑 17/17 全绿）；② 报告其余条目（依赖方向、巨型类拆分、事务缺失、状态枚举收口、DELETE body、5.4 测试端点门控）不在本轮范围；③ 已有 3 处手动 requireAdmin() 保留不动（路径不在 `/api/admin/**`，作纵深防御）；④ 本轮改动本地 git commit，不 push。
