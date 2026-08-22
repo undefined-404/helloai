@@ -28,7 +28,7 @@ import com.helloai.core.task.service.RewardService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import com.helloai.core.task.statemachine.SubTaskStateMachine;
-import com.helloai.core.system.service.AttachmentService;
+import com.helloai.core.task.service.AttachmentService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -39,6 +39,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.OffsetDateTime;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -55,7 +56,9 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
 
     private final AgentOutboxService agentOutboxService;
     private final AgentInboxService agentInboxService;
-    private final AgentService agentService;
+    // 懒解析打破循环：AgentServiceImpl 依赖 SubTaskService（阶段五级联清理收口），
+    // 直接注入 AgentService 会形成 agentServiceImpl ↔ subTaskServiceImpl 构造器环
+    private final ObjectProvider<AgentService> agentServiceProvider;
     private final HeartbeatService heartbeatService;
     private final ReviewRecordMapper reviewRecordMapper;
     private final ImplicitScoreCalculator implicitScoreCalculator;
@@ -452,7 +455,9 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
                     String summary = reason != null && !reason.isBlank()
                             ? ("阻塞原因: " + reason)
                             : "需要 Planner 排障处理";
-                    List<Agent> planners = agentService.listByRole(AgentRole.PLANNER);
+                    AgentService agentService = agentServiceProvider.getIfAvailable();
+                    List<Agent> planners = agentService == null
+                            ? List.of() : agentService.listByRole(AgentRole.PLANNER);
                     for (Agent planner : planners) {
                         agentInboxService.send(planner.getId(), eventId, "sub_task.blocked",
                                 "任务阻塞: " + title,
@@ -471,7 +476,9 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
                 case REVIEW -> {
                     // 修复: EXECUTOR 提交后，通知所有 PLANNER/REVIEWER 来审查
                     try {
-                        List<Agent> planners = agentService.listByRole(AgentRole.PLANNER);
+                        AgentService agentService = agentServiceProvider.getIfAvailable();
+                        List<Agent> planners = agentService == null
+                                ? List.of() : agentService.listByRole(AgentRole.PLANNER);
                         for (Agent planner : planners) {
                             agentInboxService.send(planner.getId(), eventId, "sub_task.review",
                                     "任务已提交审查: " + title,
@@ -786,5 +793,72 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
             return ctx != null && ctx.get("manualIntervention") != null;
         });
         return candidates;
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  阶段五 agent→task.mapper 清零承接（统计 / 解绑 / 原子认领）
+    // ══════════════════════════════════════════════════════════════
+
+    @Override
+    public Map<String, Integer> countByStatusForAgent(Long agentId) {
+        Map<String, Integer> m = new LinkedHashMap<>();
+        m.put("assignedCount", 0);
+        m.put("inProgressCount", 0);
+        m.put("doneCount", 0);
+        m.put("blockedCount", 0);
+        m.put("reviewCount", 0);
+        if (agentId == null) return m;
+
+        List<SubTask> subs = lambdaQuery()
+                .select(SubTask::getStatus)
+                .eq(SubTask::getAssignedAgentId, agentId)
+                .list();
+        for (SubTask s : subs) {
+            if (s.getStatus() == SubTaskStatus.DONE) m.merge("doneCount", 1, Integer::sum);
+            else if (s.getStatus() == SubTaskStatus.IN_PROGRESS) m.merge("inProgressCount", 1, Integer::sum);
+            else if (s.getStatus() == SubTaskStatus.BLOCKED) m.merge("blockedCount", 1, Integer::sum);
+            else if (s.getStatus() == SubTaskStatus.REVIEW) m.merge("reviewCount", 1, Integer::sum);
+            else m.merge("assignedCount", 1, Integer::sum);
+        }
+        return m;
+    }
+
+    @Override
+    public long countByAssignedAgent(Long agentId) {
+        if (agentId == null) return 0;
+        return lambdaQuery().eq(SubTask::getAssignedAgentId, agentId).count();
+    }
+
+    @Override
+    public long countReviewByReviewerAgent(Long agentId) {
+        if (agentId == null) return 0;
+        return reviewRecordMapper.selectCount(
+                new LambdaQueryWrapper<ReviewRecord>().eq(ReviewRecord::getReviewerAgentId, agentId));
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void unlinkByAssignedAgent(Long agentId) {
+        lambdaUpdate()
+                .eq(SubTask::getAssignedAgentId, agentId)
+                .set(SubTask::getAssignedAgentId, null)
+                .update();
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean claimAtomic(Long subTaskId, Long agentId) {
+        // ServiceImpl<SubTaskMapper, SubTask>：baseMapper 即 SubTaskMapper
+        return baseMapper.claimAtomic(subTaskId, agentId) > 0;
+    }
+
+    @Override
+    public List<SubTask> selectInFlightByAgent(Long agentId, int limit) {
+        return baseMapper.selectInFlightByAgent(agentId, limit);
+    }
+
+    @Override
+    public int countInFlightByAgent(Long agentId) {
+        return baseMapper.countInFlightByAgent(agentId);
     }
 }

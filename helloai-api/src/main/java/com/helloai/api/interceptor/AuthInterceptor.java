@@ -2,6 +2,7 @@ package com.helloai.api.interceptor;
 
 import com.helloai.common.base.BizException;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentAuthPort;
 import com.helloai.core.system.service.AuthService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -16,6 +17,7 @@ public class AuthInterceptor implements HandlerInterceptor {
     public static final String AUTH_NAME_KEY = "_authName";
 
     private final AuthService authService;
+    private final AgentAuthPort agentAuthPort;
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
@@ -34,7 +36,7 @@ public class AuthInterceptor implements HandlerInterceptor {
         if (authorization != null && authorization.startsWith("Bearer ")) {
             String apiKey = authorization.substring(7);
             if (!apiKey.isBlank()) {
-                Agent agent = authService.validateAgentKey(apiKey);
+                Agent agent = agentAuthPort.validateApiKey(apiKey);
                 request.setAttribute(AUTH_TYPE_KEY, "agent");
                 request.setAttribute(AUTH_ID_KEY, agent.getId());
                 request.setAttribute(AUTH_NAME_KEY, agent.getName());

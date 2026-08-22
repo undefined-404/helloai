@@ -12,6 +12,10 @@ import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.common.config.WebSearchProperties;
+import com.helloai.core.planner.clarify.ClarifyReplyParser;
+import com.helloai.core.planner.clarify.ClarifyWebSearchOrchestrator;
+import com.helloai.core.planner.clarify.ConfirmCardProtocol;
+import com.helloai.core.planner.clarify.IntentDetectionService;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
 import com.helloai.core.planner.service.WebSearchService;
@@ -106,13 +110,17 @@ class RequirementClarifyServiceTest {
     @BeforeEach
     void setUp() {
         // ObjectMapper 用真实实例（JSON 解析是被测逻辑本身，不 mock）；
-        // searchQueryPlannerService 默认 mock 返回空列表 → 走规则截断兜底路径（存量用例行为不变）
+        // searchQueryPlannerService 默认 mock 返回空列表 → 走规则截断兜底路径（存量用例行为不变）；
+        // 拆分组件 ClarifyReplyParser/ConfirmCardProtocol/IntentDetectionService/ClarifyWebSearchOrchestrator
+        // 用真实实例直连（纯函数/编排可测，无需 mock）；搜索服务 mock 不变
         clarifyService = new RequirementClarifyServiceImpl(
                 conversationService, messageService, taskService, agentService,
                 plannerAgentPicker, agentInboxService, platformAgentExecutionService,
-                taskTimelineService, new ObjectMapper(),
-                webSearchService, webSearchProperties, pageFetchService,
-                searchQueryPlannerService);
+                taskTimelineService, new ClarifyReplyParser(new ObjectMapper()),
+                new ConfirmCardProtocol(new ObjectMapper()),
+                new IntentDetectionService(new ConfirmCardProtocol(new ObjectMapper())),
+                new ClarifyWebSearchOrchestrator(webSearchService, webSearchProperties,
+                        pageFetchService, searchQueryPlannerService));
     }
 
     private RequirementConversation activeConversation() {

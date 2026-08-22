@@ -91,7 +91,9 @@ public final class AgentCapability {
         Object v = caps.get(key);
         if (v instanceof Number n) return n.intValue();
         if (v instanceof String s) {
-            try { return Integer.parseInt(s); } catch (NumberFormatException ignored) {}
+            try { return Integer.parseInt(s); } catch (NumberFormatException ignored) {
+                // 解析失败按缺省处理（返回 null），调用方回退默认值
+            }
         }
         return defaultValue;
     }

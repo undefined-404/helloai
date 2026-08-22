@@ -217,9 +217,10 @@ public class TaskController {
 
     // ══════════════════════════════════════════════════════════
     //  级联删除（子任务/死信/收件箱未读消息一并物理清理）
+    //  注：DELETE 带 body 不符合语义，按 §10.2 路由风格改为 POST
     // ══════════════════════════════════════════════════════════
 
-    @DeleteMapping("/deleteById/{id}")
+    @PostMapping("/deleteById/{id}")
     public R<TaskRelatedCounts> delete(@PathVariable("id") Long id,
                                        @RequestBody Map<String, String> body) {
         String confirmTitle = body.get("confirmTitle");

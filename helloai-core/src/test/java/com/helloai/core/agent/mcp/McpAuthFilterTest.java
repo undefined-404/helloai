@@ -1,6 +1,7 @@
 package com.helloai.core.agent.mcp;
 
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentAuthPort;
 import com.helloai.core.system.service.AuthService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.servlet.FilterChain;
@@ -44,13 +45,16 @@ class McpAuthFilterTest {
     @Mock
     private AuthService authService;
 
+    @Mock
+    private AgentAuthPort agentAuthPort;
+
     private McpAuthFilter filter;
     private MockHttpServletRequest request;
     private MockHttpServletResponse response;
 
     @BeforeEach
     void setUp() {
-        filter = new McpAuthFilter(authService, new SimpleMeterRegistry());
+        filter = new McpAuthFilter(authService, agentAuthPort, new SimpleMeterRegistry());
         request = new MockHttpServletRequest("POST", "/mcp/messages");
         request.setParameter("sessionId", SESSION_ID);
         request.addHeader("Authorization", "Bearer fake-api-key");
@@ -84,7 +88,7 @@ class McpAuthFilterTest {
     @Test
     @DisplayName("SDK 404 Session not found：SESSION_AUTH 联动清理 + body 附修复提示")
     void sdk404_evictsAuthAndAppendsFixHint() throws Exception {
-        when(authService.validateAgentKey("fake-api-key")).thenReturn(mockAgent());
+        when(agentAuthPort.validateApiKey("fake-api-key")).thenReturn(mockAgent());
         // 模拟该 session 之前已鉴权通过
         McpAuthContext.put(SESSION_ID, AGENT_ID, "test-executor", "agent");
         assertNotNull(McpAuthContext.nameBySessionId(SESSION_ID), "前置：SESSION_AUTH 应有该 session");
@@ -105,7 +109,7 @@ class McpAuthFilterTest {
     @Test
     @DisplayName("正常 200 响应：SESSION_AUTH 保留、body 不改写")
     void normalResponse_keepsAuthAndBody() throws Exception {
-        when(authService.validateAgentKey("fake-api-key")).thenReturn(mockAgent());
+        when(agentAuthPort.validateApiKey("fake-api-key")).thenReturn(mockAgent());
         McpAuthContext.put(SESSION_ID, AGENT_ID, "test-executor", "agent");
 
         FilterChain okChain = (req, resp) -> {
@@ -123,7 +127,7 @@ class McpAuthFilterTest {
     @Test
     @DisplayName("非 Session not found 的 404（如路径 404）：不附修复提示")
     void sdk404_otherMessage_noFixHint() throws Exception {
-        when(authService.validateAgentKey("fake-api-key")).thenReturn(mockAgent());
+        when(agentAuthPort.validateApiKey("fake-api-key")).thenReturn(mockAgent());
         McpAuthContext.put(SESSION_ID, AGENT_ID, "test-executor", "agent");
 
         FilterChain other404 = (req, resp) -> {
@@ -157,7 +161,7 @@ class McpAuthFilterTest {
     @Test
     @DisplayName("鉴权失败（非法 apiKey）：401 且不执行 chain")
     void badApiKey_401WithoutChain() throws Exception {
-        when(authService.validateAgentKey("bad-key")).thenThrow(
+        when(agentAuthPort.validateApiKey("bad-key")).thenThrow(
                 new com.helloai.common.base.BizException(401, "无效的 API Key"));
         request = new MockHttpServletRequest("POST", "/mcp/messages");
         request.setParameter("sessionId", SESSION_ID);
@@ -173,7 +177,7 @@ class McpAuthFilterTest {
     @Test
     @DisplayName("sessionId 缺失时 404：evict 幂等不抛异常")
     void sdk404_withoutSessionId_noException() throws Exception {
-        when(authService.validateAgentKey("fake-api-key")).thenReturn(mockAgent());
+        when(agentAuthPort.validateApiKey("fake-api-key")).thenReturn(mockAgent());
         request = new MockHttpServletRequest("POST", "/mcp/messages");
         request.addHeader("Authorization", "Bearer fake-api-key");
 

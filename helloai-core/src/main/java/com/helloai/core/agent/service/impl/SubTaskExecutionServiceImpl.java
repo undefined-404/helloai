@@ -10,8 +10,8 @@ import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
-import com.helloai.core.system.entity.Attachment;
-import com.helloai.core.system.service.AttachmentService;
+import com.helloai.core.task.entity.Attachment;
+import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.spec.ExecutionRecord;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -110,6 +110,7 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
                     }
                 }
             } catch (Exception ignore) {
+                // best-effort：调试配置读取失败即放弃，不影响主链路
             }
             return null;
         }
@@ -133,6 +134,7 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
                     .build();
             DBG_HTTP.sendAsync(req, HttpResponse.BodyHandlers.discarding());
         } catch (Exception ignore) {
+            // best-effort：调试上报失败忽略，不影响执行链路
         }
     }
 

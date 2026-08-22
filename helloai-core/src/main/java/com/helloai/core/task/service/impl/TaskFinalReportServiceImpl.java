@@ -11,7 +11,7 @@ import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
-import com.helloai.core.planner.picker.PlannerAgentPicker;
+import com.helloai.core.task.port.TaskPlannerPickerPort;
 import com.helloai.core.shared.event.TaskAutoCompletedEvent;
 import com.helloai.core.shared.util.SubTaskDependencyOrder;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
@@ -58,7 +58,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
 
     private final TaskService taskService;
     private final SubTaskService subTaskService;
-    private final PlannerAgentPicker plannerAgentPicker;
+    private final TaskPlannerPickerPort plannerPickerPort;
     private final PlatformAgentExecutionService platformAgentExecutionService;
     private final TaskTimelineService taskTimelineService;
     private final AgentDispatchProperties dispatchProperties;
@@ -118,7 +118,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
             throw new BizException("任务整合报告正在生成中，请稍候后再试: taskId=" + taskId);
         }
 
-        Agent planner = plannerAgentPicker.pickForTask(taskId);
+        Agent planner = plannerPickerPort.pickForTask(taskId);
         // 截断阶梯降档重试：命中模型 token 上限错误且还有更紧档位时收紧重试，其余错误直接失败
         for (int i = 0; i < SECTION_OUTPUT_LIMITS.length; i++) {
             int limit = SECTION_OUTPUT_LIMITS[i];

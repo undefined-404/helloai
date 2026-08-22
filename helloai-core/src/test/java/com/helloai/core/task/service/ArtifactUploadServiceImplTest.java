@@ -1,15 +1,14 @@
-package com.helloai.core.system.service;
+package com.helloai.core.task.service;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.AgentService;
-import com.helloai.core.system.entity.Attachment;
-import com.helloai.core.system.service.impl.ArtifactUploadServiceImpl;
 import com.helloai.core.system.storage.ArtifactStorage;
 import com.helloai.core.system.storage.StoredArtifact;
+import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.impl.ArtifactUploadServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

@@ -1,14 +1,14 @@
-package com.helloai.core.system.service.impl;
+package com.helloai.core.task.service.impl;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AttachmentStatus;
-import com.helloai.core.system.entity.Attachment;
-import com.helloai.core.system.mapper.AttachmentMapper;
-import com.helloai.core.system.service.AttachmentService;
 import com.helloai.core.system.storage.ArtifactStorage;
+import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.mapper.AttachmentMapper;
+import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
 import lombok.RequiredArgsConstructor;

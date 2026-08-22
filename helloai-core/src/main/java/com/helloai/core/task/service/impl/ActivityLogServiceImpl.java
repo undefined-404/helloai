@@ -67,4 +67,29 @@ public class ActivityLogServiceImpl extends ServiceImpl<ActivityLogMapper, Activ
         log.info("活动日志写入: agentId={}, action={}, subTaskId={}", agentId, action, subTaskId);
         return entity;
     }
+
+    // ══════════════════════════════════════════════════════════════
+    //  阶段五 agent→task.mapper 清零承接（统计 / 物理删除）
+    // ══════════════════════════════════════════════════════════════
+
+    @Override
+    public IPage<ActivityLog> listByAgent(Long agentId, String action, int page, int pageSize) {
+        return page(new Page<>(page, pageSize),
+                new LambdaQueryWrapper<ActivityLog>()
+                        .eq(ActivityLog::getAgentId, agentId)
+                        .eq(action != null && !action.isBlank(), ActivityLog::getAction, action)
+                        .orderByDesc(ActivityLog::getCreateTime));
+    }
+
+    @Override
+    public long countByAgent(Long agentId) {
+        if (agentId == null) return 0;
+        return lambdaQuery().eq(ActivityLog::getAgentId, agentId).count();
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public int physicalDeleteByAgent(Long agentId) {
+        return baseMapper.physicalDeleteByAgentId(agentId);
+    }
 }

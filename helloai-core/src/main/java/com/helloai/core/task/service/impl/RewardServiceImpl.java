@@ -11,6 +11,7 @@ import com.helloai.core.task.mapper.RewardLogMapper;
 import com.helloai.core.task.service.RewardService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,11 +28,17 @@ import java.util.Map;
 public class RewardServiceImpl extends ServiceImpl<RewardLogMapper, RewardLog>
         implements RewardService {
 
-    private final AgentService agentService;
+    // 懒解析打破循环：AgentServiceImpl 依赖 RewardService（阶段五级联统计/清理收口），
+    // 直接注入 AgentService 会形成 agentServiceImpl ↔ rewardServiceImpl 构造器环
+    private final ObjectProvider<AgentService> agentServiceProvider;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void addReward(Long agentId, String reason, int delta, Long subTaskId) {
+        AgentService agentService = agentServiceProvider.getIfAvailable();
+        if (agentService == null) {
+            throw new BizException("Agent 服务不可用");
+        }
         Agent agent = agentService.getById(agentId);
         if (agent == null) {
             throw new BizException("Agent 不存在: " + agentId);
@@ -63,6 +70,10 @@ public class RewardServiceImpl extends ServiceImpl<RewardLogMapper, RewardLog>
 
     @Override
     public Map<String, Object> getAgentScoreSummary(Long agentId) {
+        AgentService agentService = agentServiceProvider.getIfAvailable();
+        if (agentService == null) {
+            throw new BizException("Agent 服务不可用");
+        }
         Agent agent = agentService.getById(agentId);
         if (agent == null) {
             throw new BizException("Agent 不存在: " + agentId);
@@ -83,5 +94,29 @@ public class RewardServiceImpl extends ServiceImpl<RewardLogMapper, RewardLog>
         result.put("penaltyCount", penaltyCount);
         result.put("totalRecords", logs.size());
         return result;
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  阶段五 agent→task.mapper 清零承接（统计 / 物理删除）
+    // ══════════════════════════════════════════════════════════════
+
+    @Override
+    public IPage<RewardLog> listLogsByAgent(Long agentId, int page, int pageSize) {
+        return lambdaQuery()
+                .eq(RewardLog::getAgentId, agentId)
+                .orderByDesc(RewardLog::getCreateTime)
+                .page(new Page<>(page, pageSize));
+    }
+
+    @Override
+    public long countByAgent(Long agentId) {
+        if (agentId == null) return 0;
+        return lambdaQuery().eq(RewardLog::getAgentId, agentId).count();
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public int physicalDeleteByAgent(Long agentId) {
+        return baseMapper.physicalDeleteByAgentId(agentId);
     }
 }

@@ -6,7 +6,6 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.SubTaskStatus;
-import com.helloai.core.agent.dispatcher.ResilientDispatcher;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.executor.AgentSelector.AgentSelectionConstraints;
@@ -15,6 +14,8 @@ import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.policy.TaskAgentPolicy;
+import com.helloai.core.task.port.TaskDispatchPort;
+import com.helloai.core.task.port.TaskDispatchPort.DispatchConstraints;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
@@ -37,7 +38,7 @@ import java.util.Set;
 public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
 
     private final SubTaskService subTaskService;
-    private final ResilientDispatcher resilientDispatcher;
+    private final TaskDispatchPort taskDispatchPort;
     private final TaskTimelineService taskTimelineService;
     private final AgentSelector agentSelector;
     private final AgentService agentService;
@@ -62,7 +63,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
                 Map.of(
                         "trigger", "blocked_reassign",
                         "preferredAgentId", preferredAgentId));
-        resilientDispatcher.assignNext(preferredAgentId, subTaskId, resolveConstraints(subTask));
+        taskDispatchPort.assignNext(preferredAgentId, subTaskId, resolveConstraints(subTask));
         log.info("阻塞子任务重新进入调度: subTaskId={}, preferredAgentId={}", subTaskId, preferredAgentId);
     }
 
@@ -103,7 +104,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
                         "trigger", "agent_offline",
                         "preferredAgentId", offlineAgentId,
                         "previousAgentId", offlineAgentId));
-        resilientDispatcher.assignNext(offlineAgentId, subTaskId, resolveConstraints(subTask));
+        taskDispatchPort.assignNext(offlineAgentId, subTaskId, resolveConstraints(subTask));
         log.info("离线子任务重新进入调度: subTaskId={}, offlineAgentId={}", subTaskId, offlineAgentId);
     }
 
@@ -132,8 +133,8 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         }
 
         // 任务级选人约束（executorAgentIds 白名单 + required_skills 技能 AND 匹配）
-        AgentSelectionConstraints constraints = resolveConstraints(subTask);
-        var preferred = agentSelector.pickPreferred(role, constraints);
+        DispatchConstraints constraints = resolveConstraints(subTask);
+        var preferred = agentSelector.pickPreferred(role, toSelectorConstraints(constraints));
         if (preferred == null) {
             throw new BizException("无可用候选 Agent: role=" + role);
         }
@@ -149,7 +150,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
                         "preferredAgentId", preferred.getId(),
                         "role", role != null ? role.name() : "null"));
 
-        resilientDispatcher.assignNext(preferred.getId(), subTaskId, constraints);
+        taskDispatchPort.assignNext(preferred.getId(), subTaskId, constraints);
         log.info("子任务自动分配进入调度链: subTaskId={}, preferredAgentId={}, role={}",
                 subTaskId, preferred.getId(), role);
         return preferred.getId();
@@ -298,7 +299,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
                         "previousAgentId", failedAgentId,
                         "reason", reason != null ? reason : ""));
 
-        resilientDispatcher.assignNext(fallbackAgent.getId(), subTaskId);
+        taskDispatchPort.assignNext(fallbackAgent.getId(), subTaskId);
         log.info("N11 阈值回退已重新进入调度链: subTaskId={}, failedAgentId={}, fallbackAgentId={}",
                 subTaskId, failedAgentId, fallbackAgent.getId());
         return fallbackAgent.getId();
@@ -348,15 +349,15 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         // 重分回它只是原地打转。使用 pickAlternative(excludeAgentId, role)
         // 走 AgentSelector 已有的"同角色排除指定 Agent"选人逻辑。
         // 任务级约束（executorAgentIds / required_skills）同样作用于重分配。
-        AgentSelectionConstraints constraints = resolveConstraints(subTask);
-        var preferred = agentSelector.pickAlternative(originalAgentId, role, constraints);
+        DispatchConstraints constraints = resolveConstraints(subTask);
+        var preferred = agentSelector.pickAlternative(originalAgentId, role, toSelectorConstraints(constraints));
         if (preferred == null) {
             log.warn("ASSIGNED超时回收：无可用候选 Agent: subTaskId={}, role={}, excludeAgentId={}",
                     subTaskId, role != null ? role : "null", originalAgentId);
             return;
         }
 
-        resilientDispatcher.assignNext(preferred.getId(), subTaskId, constraints);
+        taskDispatchPort.assignNext(preferred.getId(), subTaskId, constraints);
         log.info("ASSIGNED超时已回收: subTaskId={}, originalAgentId={}, newPreferredAgentId={}",
                 subTaskId, originalAgentId, preferred.getId());
     }
@@ -370,18 +371,27 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
      *
      * <p>两者均未声明时返回 null（与旧行为一致，不约束选人）。</p>
      */
-    private AgentSelectionConstraints resolveConstraints(SubTask subTask) {
+    private DispatchConstraints resolveConstraints(SubTask subTask) {
         Task task = loadTask(subTask);
         if (task == null) {
             return null;
         }
         List<Long> executorAgentIds = TaskAgentPolicy.executorAgentIds(task.getAgentPolicy());
         List<String> requiredSkills = task.getRequiredSkills();
-        if ((executorAgentIds == null || executorAgentIds.isEmpty())
-                && (requiredSkills == null || requiredSkills.isEmpty())) {
-            return null;
-        }
-        return AgentSelectionConstraints.of(executorAgentIds, requiredSkills);
+        return DispatchConstraints.of(executorAgentIds, requiredSkills);
+    }
+
+    /**
+     * 端口约束（纯数据）→ AgentSelector 内部约束（含 Agent 实体判定能力）。
+     *
+     * <p>端口契约 {@link TaskDispatchPort.DispatchConstraints} 不引用 agent 域类型，
+     * 而 {@code AgentSelector.pickPreferred/pickAlternative} 需要
+     * {@link AgentSelectionConstraints}（allows(Agent) 判定），本方法在 task 域
+     * 做一次性适配转换，转换语义与阶段五改造前的构造完全一致。</p>
+     */
+    private AgentSelectionConstraints toSelectorConstraints(DispatchConstraints constraints) {
+        return constraints == null ? null
+                : AgentSelectionConstraints.of(constraints.allowedAgentIds(), constraints.requiredSkills());
     }
 
     /** 加载子任务所属 Task 的 agent_policy；Task 不存在返回 null（防御式，与旧行为一致）。 */

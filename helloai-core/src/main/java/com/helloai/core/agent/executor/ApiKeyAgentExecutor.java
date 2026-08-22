@@ -80,6 +80,7 @@ public class ApiKeyAgentExecutor implements AgentExecutor {
                     }
                 }
             } catch (Exception ignore) {
+                // best-effort：调试配置读取失败即放弃，不影响主链路
             }
             return null;
         }
@@ -103,6 +104,7 @@ public class ApiKeyAgentExecutor implements AgentExecutor {
                     .build();
             DBG_HTTP.sendAsync(req, HttpResponse.BodyHandlers.discarding());
         } catch (Exception ignore) {
+            // best-effort：调试上报失败忽略，不影响执行链路
         }
     }
 

@@ -7,8 +7,9 @@ import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.mq.config.RabbitMQConfig;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
+
+import java.util.Optional;
 
 /**
  * Phase 2E N6 引入 / Phase 2H ②b 扩展 / 改造：执行命令派发链路启动期校验器。
@@ -43,12 +44,13 @@ public class ExecutionDispatchValidator {
     private final AgentExecutionProperties executionProperties;
     private final MqExecutionCommandProperties mqProperties;
     private final AgentCommandOutboxRelayProperties outboxRelayProperties;
-    private final ObjectProvider<ExecutionCommandMqPublisher> mqPublisherProvider;
+    // 阶段五：存在性探测改 Optional 注入（无 Bean 时 empty，语义与 getIfAvailable 等价）
+    private final Optional<ExecutionCommandMqPublisher> mqPublisherProvider;
 
     public ExecutionDispatchValidator(AgentExecutionProperties executionProperties,
                                       MqExecutionCommandProperties mqProperties,
                                       AgentCommandOutboxRelayProperties outboxRelayProperties,
-                                      ObjectProvider<ExecutionCommandMqPublisher> mqPublisherProvider) {
+                                      Optional<ExecutionCommandMqPublisher> mqPublisherProvider) {
         this.executionProperties = executionProperties;
         this.mqProperties = mqProperties;
         this.outboxRelayProperties = outboxRelayProperties;
@@ -82,7 +84,7 @@ public class ExecutionDispatchValidator {
                                 + " 要求同时开启 helloai.mq.execution-command.producer-enabled=true，"
                                 + "当前 producer-enabled=false，拒绝以隐式跳过 MQ 的方式启动");
             }
-            if (mqPublisherProvider.getIfAvailable() == null) {
+            if (mqPublisherProvider.isEmpty()) {
                 throw new IllegalStateException(
                         "helloai.execution.dispatch-mode=" + dispatchMode
                                 + " 但 ExecutionCommandMqPublisher Bean 不可用（可能因 RabbitMQ 依赖缺失或条件装配失败），"

@@ -3,6 +3,7 @@ package com.helloai.core.system.service.impl;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.SysUserStatus;
 import com.helloai.core.system.entity.SysUser;
 import com.helloai.core.system.mapper.SysUserMapper;
 import com.helloai.core.system.service.AuthService;
@@ -37,7 +38,7 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
         user.setPassword(authService.encodePassword(password));
         user.setNickname(nickname);
         user.setRole(role != null ? role : "ADMIN");
-        user.setStatus("ACTIVE");
+        user.setStatus(SysUserStatus.ACTIVE.name());
         save(user);
 
         log.info("管理员用户创建: username={}, role={}", username, user.getRole());

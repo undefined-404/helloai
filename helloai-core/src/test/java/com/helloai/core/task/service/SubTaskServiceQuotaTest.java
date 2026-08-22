@@ -15,7 +15,7 @@ import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.ReviewRecordMapper;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
 import com.helloai.core.task.service.impl.SubTaskServiceImpl;
-import com.helloai.core.system.service.AttachmentService;
+import com.helloai.core.task.service.AttachmentService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -55,7 +55,7 @@ class SubTaskServiceQuotaTest {
 
     @Mock private AgentOutboxService agentOutboxService;
     @Mock private AgentInboxService agentInboxService;
-    @Mock private AgentService agentService;
+    @Mock private org.springframework.beans.factory.ObjectProvider<AgentService> agentServiceProvider;
     @Mock private HeartbeatService heartbeatService;
     @Mock private ReviewRecordMapper reviewRecordMapper;
     @Mock private ImplicitScoreCalculator implicitScoreCalculator;
@@ -76,7 +76,7 @@ class SubTaskServiceQuotaTest {
         dispatchProps = new AgentDispatchProperties();
         dispatchProps.setEnforceMaxConcurrent(true);
         subTaskService = spy(new SubTaskServiceImpl(
-                agentOutboxService, agentInboxService, agentService,
+                agentOutboxService, agentInboxService, agentServiceProvider,
                 heartbeatService, reviewRecordMapper, implicitScoreCalculator,
                 rewardService, applicationEventPublisher, taskTimelineService,
                 agentMapper, dispatchProps, concurrencyQuotaService, attachmentServiceProvider));

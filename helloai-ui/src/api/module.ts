@@ -1,4 +1,5 @@
 import request from './request'
+import { paths } from './paths'
 import type { ModuleItem, LongId } from '@/types'
 
 /**
@@ -12,10 +13,10 @@ import type { ModuleItem, LongId } from '@/types'
 export const moduleApi = {
   /** 列出指定任务下的模块（按 sortOrder 升序） */
   list(taskId: LongId) {
-    return request.get<any, ModuleItem[]>(`/modules/findModulesByTaskId/${taskId}`)
+    return request.get<any, ModuleItem[]>(paths.modules.list(taskId))
   },
   /** 行内新建模块（QuickDispatchDialog "+ 新建模块" 使用） */
   create(taskId: LongId, data: { name: string }) {
-    return request.post<any, ModuleItem>(`/modules/setModulesByTaskId/${taskId}`, data)
+    return request.post<any, ModuleItem>(paths.modules.set(taskId), data)
   }
 }

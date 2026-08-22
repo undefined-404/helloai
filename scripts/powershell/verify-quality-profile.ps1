@@ -262,7 +262,7 @@ function New-TaskWithWhitelist {
         $residualId = $findLine.Split('|')[0]
         Write-Output ('[preset] cleanup residual task id=' + $residualId)
         $delBody = '{"confirmTitle":"' + $Title + '"}'
-        $null = Invoke-Json -Method DELETE -Uri ($BaseUrl + '/api/tasks/deleteById/' + $residualId) -Body $delBody -Headers @{ 'X-Admin-Token' = $AdminToken }
+        $null = Invoke-Json -Method POST -Uri ($BaseUrl + '/api/tasks/deleteById/' + $residualId) -Body $delBody -Headers @{ 'X-Admin-Token' = $AdminToken }
     }
     $policy = ''
     if ($ExecutorIds -and $ExecutorIds.Count -gt 0) {
@@ -359,7 +359,7 @@ function Get-DefectCount {
 function Remove-Task {
     param([string]$TaskId, [string]$Title, [string]$AdminToken)
     $delBody = '{"confirmTitle":"' + $Title + '"}'
-    $null = Invoke-Json -Method DELETE -Uri ($BaseUrl + '/api/tasks/deleteById/' + $TaskId) -Body $delBody -Headers @{ 'X-Admin-Token' = $AdminToken }
+    $null = Invoke-Json -Method POST -Uri ($BaseUrl + '/api/tasks/deleteById/' + $TaskId) -Body $delBody -Headers @{ 'X-Admin-Token' = $AdminToken }
 }
 
 function Wait-Until {
@@ -411,6 +411,19 @@ if ([string]::IsNullOrEmpty($adminToken)) {
     exit 1
 }
 Write-Output '[A1] admin token acquired'
+
+# ============================================================
+# STEP A1.5: enable admin quality endpoints gate
+#   AdminQualityController 配置门控（生产默认关闭）：sys config
+#   admin.quality.enabled=true 才开放 rebuild/dispatch/spec-section。
+#   详见评审整改计划阶段四-4 与 AdminQualityController Javadoc。
+# ============================================================
+Write-Output ''
+Write-Output '=== [A1.5] enable admin quality gate ==='
+$gateBody = '{"value":"true"}'
+$gateResp = Invoke-Json -Method PUT -Uri ($BaseUrl + '/api/admin/config/updateByKey/admin.quality.enabled') -Body $gateBody -Headers @{ 'X-Admin-Token' = $adminToken }
+Assert-Pass ($gateResp.Code -eq 200) 'A1.5-quality-gate' ('PUT /api/admin/config/updateByKey/admin.quality.enabled HTTP=' + $gateResp.Code + ' body=' + $gateResp.Body)
+
 
 # ============================================================
 # ensure preset agents (idempotent, fixed names)

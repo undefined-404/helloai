@@ -253,7 +253,7 @@ if ($findLine -and $findLine.Split('|')[0]) {
     $residualTaskId = $findLine.Split('|')[0]
     Write-Output ('[S3.0] cleanup residual task id=' + $residualTaskId)
     $delBody = '{"confirmTitle":"' + $taskTitle + '"}'
-    $null = Invoke-Json -Method DELETE -Uri ($BaseUrl + '/api/tasks/deleteById/' + $residualTaskId) -Body $delBody -Headers @{ 'X-Admin-Token' = $adminToken }
+    $null = Invoke-Json -Method POST -Uri ($BaseUrl + '/api/tasks/deleteById/' + $residualTaskId) -Body $delBody -Headers @{ 'X-Admin-Token' = $adminToken }
 }
 
 $taskBody = '{"title":"' + $taskTitle + '","description":"e2e artifact content review task","agentPolicy":{"executorAgentIds":[' + $agentId + ']}}'
@@ -594,7 +594,7 @@ if (-not $conv2Line) {
 # ============================================================
 Write-Output ''
 Write-Output '=== [S9] teardown ==='
-$delResp = Invoke-Json -Method DELETE -Uri ($BaseUrl + '/api/tasks/deleteById/' + $taskId) -Body ('{"confirmTitle":"' + $taskTitle + '"}') -Headers @{ 'X-Admin-Token' = $adminToken }
+$delResp = Invoke-Json -Method POST -Uri ($BaseUrl + '/api/tasks/deleteById/' + $taskId) -Body ('{"confirmTitle":"' + $taskTitle + '"}') -Headers @{ 'X-Admin-Token' = $adminToken }
 Write-Output ('[S9] delete task HTTP=' + $delResp.Code + ' body=' + $delResp.Body)
 $verifySql = "SELECT COUNT(*) FROM sub_task WHERE task_id = $taskId AND deleted = 0;"
 $verifyFile = Join-Path $scriptDir 'verify-artifact-content-review-s9-verify.out'

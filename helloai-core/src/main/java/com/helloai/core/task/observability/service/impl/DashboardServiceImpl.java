@@ -1,14 +1,14 @@
-package com.helloai.core.system.service.impl;
+package com.helloai.core.task.observability.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.agent.mapper.AgentMapper;
-import com.helloai.core.system.service.DashboardService;
+import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.mapper.TaskMapper;
+import com.helloai.core.task.observability.service.DashboardService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -32,7 +32,7 @@ public class DashboardServiceImpl implements DashboardService {
 
     private final TaskMapper taskMapper;
     private final SubTaskMapper subTaskMapper;
-    private final AgentMapper agentMapper;
+    private final AgentService agentService;
 
     /**
      * Dashboard 主统计。
@@ -55,12 +55,10 @@ public class DashboardServiceImpl implements DashboardService {
         long blockedTasks = subTaskMapper.selectCount(
                 new LambdaQueryWrapper<SubTask>().eq(SubTask::getStatus, SubTaskStatus.BLOCKED).eq(SubTask::getDeleted, 0));
 
-        // Agent 积分排行（按 score 倒序取前 10）
-        List<Agent> topAgents = agentMapper.selectList(
-                new LambdaQueryWrapper<Agent>()
-                        .eq(Agent::getDeleted, 0)
-                        .orderByDesc(Agent::getScore)
-                        .last("LIMIT " + AGENT_RANKING_LIMIT));
+        // Agent 积分排行（按 score 倒序取前 10，跨域走 AgentService 接口，不直捅 agent.mapper）
+        List<Agent> topAgents = agentService.listAllOrderByScoreDesc().stream()
+                .limit(AGENT_RANKING_LIMIT)
+                .collect(Collectors.toList());
         List<Map<String, Object>> agentRanking = topAgents == null ? new ArrayList<>()
                 : topAgents.stream().map(a -> {
             Map<String, Object> m = new LinkedHashMap<>();

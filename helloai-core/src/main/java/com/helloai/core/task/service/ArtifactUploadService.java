@@ -1,4 +1,4 @@
-package com.helloai.core.system.service;
+package com.helloai.core.task.service;
 
 import lombok.Data;
 

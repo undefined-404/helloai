@@ -3,6 +3,7 @@ package com.helloai.api.config;
 import com.helloai.api.interceptor.AdminOnlyInterceptor;
 import com.helloai.api.interceptor.AuthInterceptor;
 import com.helloai.api.interceptor.RequestLogInterceptor;
+import com.helloai.core.agent.port.AgentAuthPort;
 import com.helloai.core.system.mapper.RequestLogMapper;
 import com.helloai.core.system.service.AuthService;
 import lombok.RequiredArgsConstructor;
@@ -15,6 +16,7 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 public class WebMvcConfig implements WebMvcConfigurer {
 
     private final AuthService authService;
+    private final AgentAuthPort agentAuthPort;
     private final RequestLogMapper requestLogMapper;
 
     @Override
@@ -24,7 +26,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 .addPathPatterns("/api/**");
 
         // 认证拦截器
-        registry.addInterceptor(new AuthInterceptor(authService))
+        registry.addInterceptor(new AuthInterceptor(authService, agentAuthPort))
                 .addPathPatterns("/api/**")
                 // 登录/登出不需要认证
                 .excludePathPatterns("/api/auth/login")

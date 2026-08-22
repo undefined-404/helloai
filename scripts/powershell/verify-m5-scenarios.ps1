@@ -260,7 +260,7 @@ function New-TaskWithWhitelist {
         $residualId = $findLine.Split('|')[0]
         Write-Output ('[preset] cleanup residual task id=' + $residualId)
         $delBody = '{"confirmTitle":"' + $Title + '"}'
-        $null = Invoke-Json -Method DELETE -Uri ($BaseUrl + '/api/tasks/deleteById/' + $residualId) -Body $delBody -Headers @{ 'X-Admin-Token' = $AdminToken }
+        $null = Invoke-Json -Method POST -Uri ($BaseUrl + '/api/tasks/deleteById/' + $residualId) -Body $delBody -Headers @{ 'X-Admin-Token' = $AdminToken }
     }
     $policy = ''
     if ($ExecutorIds -and $ExecutorIds.Count -gt 0) {
@@ -366,7 +366,7 @@ function Wait-Until {
 function Remove-Task {
     param([string]$TaskId, [string]$Title, [string]$AdminToken)
     $delBody = '{"confirmTitle":"' + $Title + '"}'
-    $null = Invoke-Json -Method DELETE -Uri ($BaseUrl + '/api/tasks/deleteById/' + $TaskId) -Body $delBody -Headers @{ 'X-Admin-Token' = $AdminToken }
+    $null = Invoke-Json -Method POST -Uri ($BaseUrl + '/api/tasks/deleteById/' + $TaskId) -Body $delBody -Headers @{ 'X-Admin-Token' = $AdminToken }
 }
 
 # ============================================================

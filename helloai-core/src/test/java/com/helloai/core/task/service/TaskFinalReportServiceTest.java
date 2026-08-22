@@ -16,10 +16,10 @@ import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
-import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.shared.event.TaskAutoCompletedEvent;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.port.TaskPlannerPickerPort;
 import com.helloai.core.task.service.TaskIterationService;
 import com.helloai.core.task.service.impl.TaskFinalReportServiceImpl;
 import org.junit.jupiter.api.BeforeAll;
@@ -64,7 +64,7 @@ class TaskFinalReportServiceTest {
     @Mock
     private SubTaskService subTaskService;
     @Mock
-    private PlannerAgentPicker plannerAgentPicker;
+    private TaskPlannerPickerPort plannerPickerPort;
     @Mock
     private PlatformAgentExecutionService platformAgentExecutionService;
     @Mock
@@ -95,7 +95,7 @@ class TaskFinalReportServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new TaskFinalReportServiceImpl(taskService, subTaskService, plannerAgentPicker,
+        service = new TaskFinalReportServiceImpl(taskService, subTaskService, plannerPickerPort,
                 platformAgentExecutionService, taskTimelineService, dispatchProperties,
                 taskIterationService);
 
@@ -149,7 +149,7 @@ class TaskFinalReportServiceTest {
     @DisplayName("生成成功：prompt 含任务与子任务产出，报告写回三列并记录 generated 事件")
     void shouldGenerateAndPersistReport() {
         when(taskService.getById(TASK_ID)).thenReturn(doneTask());
-        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(planner());
+        when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
         when(subTaskQueryChain.list()).thenReturn(List.of(
                 doneSubTask(11L, "架构梳理", "# 架构梳理产出")));
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
@@ -190,7 +190,7 @@ class TaskFinalReportServiceTest {
         assertThatThrownBy(() -> service.generate(TASK_ID))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("DONE");
-        verify(plannerAgentPicker, never()).pickForTask(any());
+        verify(plannerPickerPort, never()).pickForTask(any());
     }
 
     @Test
@@ -203,14 +203,14 @@ class TaskFinalReportServiceTest {
         assertThatThrownBy(() -> service.generate(TASK_ID))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("没有可整合的子任务产出");
-        verify(plannerAgentPicker, never()).pickForTask(any());
+        verify(plannerPickerPort, never()).pickForTask(any());
     }
 
     @Test
     @DisplayName("LLM 调用失败：记录 failed 事件并抛 BizException，不写回")
     void shouldRecordFailedEventWhenLlmFails() {
         when(taskService.getById(TASK_ID)).thenReturn(doneTask());
-        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(planner());
+        when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
         when(subTaskQueryChain.list()).thenReturn(List.of(
                 doneSubTask(11L, "架构梳理", "# 架构梳理产出")));
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
@@ -229,7 +229,7 @@ class TaskFinalReportServiceTest {
     @DisplayName("token 超限降档重试：首档命中上下文上限后收紧截断重试并成功写回")
     void shouldDowngradeAndRetryOnTokenLimitError() {
         when(taskService.getById(TASK_ID)).thenReturn(doneTask());
-        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(planner());
+        when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
         // 产出超过第二档 2000 字符，确保重试 prompt 确实被收紧
         when(subTaskQueryChain.list()).thenReturn(List.of(
                 doneSubTask(11L, "架构梳理", "X".repeat(9000))));
@@ -260,7 +260,7 @@ class TaskFinalReportServiceTest {
     @DisplayName("token 超限降到最后一档仍失败：尝试全部阶梯后记 failed 事件并抛出")
     void shouldFailAfterAllTiersOnPersistentTokenLimitError() {
         when(taskService.getById(TASK_ID)).thenReturn(doneTask());
-        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(planner());
+        when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
         when(subTaskQueryChain.list()).thenReturn(List.of(
                 doneSubTask(11L, "架构梳理", "# 架构梳理产出")));
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
@@ -287,7 +287,7 @@ class TaskFinalReportServiceTest {
         service.onTaskAutoCompleted(new TaskAutoCompletedEvent(TASK_ID));
 
         verify(taskService, never()).getById(any());
-        verify(plannerAgentPicker, never()).pickForTask(any());
+        verify(plannerPickerPort, never()).pickForTask(any());
     }
 
     @Test
@@ -299,7 +299,7 @@ class TaskFinalReportServiceTest {
 
         service.onTaskAutoCompleted(new TaskAutoCompletedEvent(TASK_ID));
 
-        verify(plannerAgentPicker, never()).pickForTask(any());
+        verify(plannerPickerPort, never()).pickForTask(any());
     }
 
     @Test
@@ -310,7 +310,7 @@ class TaskFinalReportServiceTest {
 
         service.onTaskAutoCompleted(new TaskAutoCompletedEvent(TASK_ID));
 
-        verify(plannerAgentPicker, never()).pickForTask(any());
+        verify(plannerPickerPort, never()).pickForTask(any());
     }
 
     @Test
@@ -324,7 +324,7 @@ class TaskFinalReportServiceTest {
         assertThatThrownBy(() -> service.generate(TASK_ID))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("正在生成中");
-        verify(plannerAgentPicker, never()).pickForTask(any());
+        verify(plannerPickerPort, never()).pickForTask(any());
         verify(platformAgentExecutionService, never())
                 .executeSync(any(Agent.class), any(AgentTask.class));
     }
@@ -333,7 +333,7 @@ class TaskFinalReportServiceTest {
     @DisplayName("LLM 最终失败：状态置 FAILED（CAS 置 GENERATING + 失败置 FAILED 共两次 update）")
     void shouldMarkFailedStatusWhenLlmFails() {
         when(taskService.getById(TASK_ID)).thenReturn(doneTask());
-        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(planner());
+        when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
         when(subTaskQueryChain.list()).thenReturn(List.of(
                 doneSubTask(11L, "架构梳理", "# 架构梳理产出")));
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
@@ -358,7 +358,7 @@ class TaskFinalReportServiceTest {
 
         service.onTaskAutoCompleted(new TaskAutoCompletedEvent(TASK_ID));
 
-        verify(plannerAgentPicker, never()).pickForTask(any());
+        verify(plannerPickerPort, never()).pickForTask(any());
         verify(taskService, never()).update(any());
     }
 }

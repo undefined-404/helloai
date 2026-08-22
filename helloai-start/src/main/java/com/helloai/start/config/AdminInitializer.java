@@ -1,6 +1,7 @@
 package com.helloai.start.config;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.helloai.common.constant.SysUserStatus;
 import com.helloai.core.system.entity.SysUser;
 import com.helloai.core.system.mapper.SysUserMapper;
 import com.helloai.core.system.service.AuthService;
@@ -30,7 +31,7 @@ public class AdminInitializer implements CommandLineRunner {
         admin.setPassword(authService.encodePassword("helloai123"));
         admin.setNickname("系统管理员");
         admin.setRole("SUPER_ADMIN");
-        admin.setStatus("ACTIVE");
+        admin.setStatus(SysUserStatus.ACTIVE.name());
         admin.setRemark("默认超级管理员，首次启动自动创建");
         sysUserMapper.insert(admin);
 

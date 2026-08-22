@@ -1,18 +1,16 @@
-package com.helloai.core.system.service.impl;
+package com.helloai.core.task.observability.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.agent.mapper.AgentMapper;
 import com.helloai.core.agent.service.AgentService;
-import com.helloai.core.system.service.AdminDashboardService;
 import com.helloai.core.system.service.SysUserService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.mapper.TaskMapper;
+import com.helloai.core.task.observability.service.AdminDashboardService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -36,7 +34,6 @@ public class AdminDashboardServiceImpl implements AdminDashboardService {
 
     private final TaskMapper taskMapper;
     private final SubTaskMapper subTaskMapper;
-    private final AgentMapper agentMapper;
     private final AgentService agentService;
     private final SysUserService sysUserService;
 
@@ -58,10 +55,9 @@ public class AdminDashboardServiceImpl implements AdminDashboardService {
                 new LambdaQueryWrapper<Task>().eq(Task::getStatus, TaskStatus.DONE).eq(Task::getDeleted, 0)));
         result.put("blockedTasks", subTaskMapper.selectCount(
                 new LambdaQueryWrapper<SubTask>().eq(SubTask::getStatus, SubTaskStatus.BLOCKED).eq(SubTask::getDeleted, 0)));
-        result.put("totalAgents", agentMapper.selectCount(
-                new LambdaQueryWrapper<Agent>().eq(Agent::getDeleted, 0)));
-        result.put("activeAgents", agentMapper.selectCount(
-                new LambdaQueryWrapper<Agent>().eq(Agent::getStatus, AgentStatus.ACTIVE).eq(Agent::getDeleted, 0)));
+        // 跨域 Agent 计数走 AgentService 接口，不直捅 agent.mapper
+        result.put("totalAgents", agentService.countAll());
+        result.put("activeAgents", (long) agentService.listActive().size());
         result.put("pendingReviews", subTaskMapper.selectCount(
                 new LambdaQueryWrapper<SubTask>().eq(SubTask::getStatus, SubTaskStatus.REVIEW).eq(SubTask::getDeleted, 0)));
         result.put("todayCompleted", subTaskMapper.selectCount(
@@ -125,7 +121,7 @@ public class AdminDashboardServiceImpl implements AdminDashboardService {
             item.put("subTaskTitle", st.getTitle());
             item.put("priority", st.getPriority());
             if (st.getAssignedAgentId() != null) {
-                Agent agent = agentMapper.selectById(st.getAssignedAgentId());
+                Agent agent = agentService.getById(st.getAssignedAgentId());
                 if (agent != null) {
                     item.put("assignedAgent", agent.getName());
                 }

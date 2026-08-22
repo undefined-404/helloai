@@ -14,10 +14,9 @@ import com.helloai.core.agent.service.impl.McpToolServiceImpl;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentMcpServerService;
 import com.helloai.core.agent.service.AgentService;
-import com.helloai.core.system.entity.Attachment;
-import com.helloai.core.system.service.AttachmentService;
+import com.helloai.core.task.entity.Attachment;
+import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.spec.ExecutionRecord;
 import com.helloai.core.task.service.TaskRunningSpecService;
@@ -66,7 +65,6 @@ class McpToolServiceTest {
     @Mock private AgentInboxService agentInboxService;
     @Mock private AgentMcpServerService agentMcpServerService;
     @Mock private SubTaskService subTaskService;
-    @Mock private SubTaskMapper subTaskMapper;
     @Mock private HeartbeatService heartbeatService;
     @Mock private AttachmentService attachmentService;
     @Mock private ExecutionResultHandler executionResultHandler;
@@ -79,7 +77,7 @@ class McpToolServiceTest {
     void setUp() {
         mcpToolService = new McpToolServiceImpl(
                 agentService, agentInboxService, agentMcpServerService,
-                subTaskService, subTaskMapper, heartbeatService,
+                subTaskService, heartbeatService,
                 attachmentService, executionResultHandler, agentDutyLeaseService,
                 taskRunningSpecService);
 

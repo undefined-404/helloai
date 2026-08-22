@@ -3,8 +3,8 @@ package com.helloai.core.task.service;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.helloai.common.constant.SubTaskStatus;
-import com.helloai.core.agent.dispatcher.ResilientDispatcher;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.port.TaskDispatchPort;
 import lombok.Data;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -55,6 +55,11 @@ public interface SubTaskService extends IService<SubTask> {
      *
      * <p>用于命令创建等需要"读现状 + 紧接写入"原子化的路径，
      * 避免在同一子任务上出现并发重复发命令。</p>
+     *
+     * <p><b>必须在事务内调用</b>：本方法只发 {@code SELECT ... FOR UPDATE}，
+     * 不自行开启事务；行锁随调用方事务存续而释放（方法返回即释放）。
+     * 自开事务会立刻释放锁，失去互斥意义。当前唯一主代码调用方
+     * {@code ExecutionCommandServiceImpl.createAssignedCommand} 已满足该前提。</p>
      */
     SubTask getByIdForUpdate(Long subTaskId);
 
@@ -76,6 +81,7 @@ public interface SubTaskService extends IService<SubTask> {
      * 防前端精度丢失），会把依赖 id 写成字符串数组，导致 ready 守卫读取时
      * 归一化失败、有依赖节点被误判为就绪。</p>
      */
+    @Transactional(rollbackFor = Exception.class)
     void updateDependsOn(Long subTaskId, List<Long> dependsOnIds);
 
     @Transactional(rollbackFor = Exception.class)
@@ -135,6 +141,7 @@ public interface SubTaskService extends IService<SubTask> {
      * @param reason    触发原因（rework_limit / fallback_skip_execution_dense 等）
      * @param extra     附加信息（reworkCount / maxRework / failedAgentId 等，可空）
      */
+    @Transactional(rollbackFor = Exception.class)
     void markManualIntervention(Long subTaskId, String reason, Map<String, Object> extra);
 
     @Transactional(rollbackFor = Exception.class)
@@ -149,8 +156,8 @@ public interface SubTaskService extends IService<SubTask> {
     /**
      * 将 PENDING 子任务分配给指定 Agent（§4.5 熔断调度入口）。
      *
-     * <p><b>⚠️ 调用约束：本方法只能由 {@link ResilientDispatcher} 调用！</b>
-     * 业务方必须走 {@code resilientDispatcher.assignNext(agentId, subTaskId)}，
+     * <p><b>⚠️ 调用约束：本方法只能由 {@link TaskDispatchPort} 实现方（ResilientDispatcher）调用！</b>
+     * 业务方必须走 {@code taskDispatchPort.assignNext(agentId, subTaskId)}，
      * 直接调用本方法将<b>绕过熔断保护</b>，导致不可用 Agent 仍被分配任务。</p>
      *
      * <p>只允许 PENDING 状态，避免抢任务冲突。</p>
@@ -162,7 +169,7 @@ public interface SubTaskService extends IService<SubTask> {
      * 将子任务重置为待重新调度的 PENDING 状态。
      *
      * <p>该方法用于离线补偿、阻塞重分配等"需要重新走弹性调度器"的系统路径。
-     * 会清空当前 assignedAgent，让后续 {@link ResilientDispatcher#assignNext(Long, Long)}
+     * 会清空当前 assignedAgent，让后续 {@link TaskDispatchPort#assignNext(Long, Long)}
      * 重新发布标准 ASSIGNED 事件与自动执行链。</p>
      */
     @Transactional(rollbackFor = Exception.class)
@@ -220,4 +227,81 @@ public interface SubTaskService extends IService<SubTask> {
      * @return REVIEW 孤儿子任务列表
      */
     List<SubTask> listReviewOrphans(int thresholdSeconds, int limit);
+
+    // ══════════════════════════════════════════════════════════════
+    //  阶段五 agent→task.mapper 清零承接（agent 域只依赖本服务接口）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 指定 Agent 名下子任务状态分布统计（assigned/inProgress/done/blocked/review 计数）。
+     *
+     * <p>原实现位于 agent 域 AgentStatsService（直捅 SubTaskMapper），阶段五收口到
+     * task 域：状态枚举归本域解释，agent 域不再感知 sub_task 表结构。</p>
+     *
+     * @param agentId Agent ID；null 返回全零分布（与旧行为一致）
+     * @return 五类计数 Map（键固定，绝不返回 null）
+     */
+    Map<String, Integer> countByStatusForAgent(Long agentId);
+
+    /**
+     * 指定 Agent 名下的子任务总数（级联删除前统计、详情页关联计数）。
+     *
+     * @param agentId Agent ID
+     * @return 子任务数
+     */
+    long countByAssignedAgent(Long agentId);
+
+    /**
+     * 指定 Agent 作为审查者产生的审查记录数（级联删除前统计、详情页关联计数）。
+     *
+     * @param agentId Agent ID
+     * @return 审查记录数
+     */
+    long countReviewByReviewerAgent(Long agentId);
+
+    /**
+     * 级联删除前解绑：将指定 Agent 名下的子任务 assigned_agent_id 置空。
+     *
+     * <p>调用方（agent 域级联删除）保持自身事务，本方法以 REQUIRED 传播加入。</p>
+     *
+     * @param agentId Agent ID
+     */
+    @Transactional(rollbackFor = Exception.class)
+    void unlinkByAssignedAgent(Long agentId);
+
+    /**
+     * 查询指定 Agent 在跑子任务列表（ASSIGNED / IN_PROGRESS / REWORK 语义）。
+     *
+     * <p>原实现位于 agent 域 AgentDutyLeaseServiceImpl（直捅 SubTaskMapper.selectInFlightByAgent），
+     * 阶段五收口到 task 域：在跑状态语义归本域解释。</p>
+     *
+     * @param agentId Agent ID
+     * @param limit   最大返回条数（调用方仅做空判断时传 1）
+     * @return 在跑子任务列表（可能为空，绝不返回 null）
+     */
+    List<SubTask> selectInFlightByAgent(Long agentId, int limit);
+
+    /**
+     * 指定 Agent 在跑子任务计数（并发额度占用统计）。
+     *
+     * <p>原实现位于 agent 域 InFlightDbQuotaService（直捅 SubTaskMapper.countInFlightByAgent），
+     * 阶段五收口到 task 域。</p>
+     *
+     * @param agentId Agent ID
+     * @return 在跑子任务数
+     */
+    int countInFlightByAgent(Long agentId);
+
+    /**
+     * 原子认领子任务（并发安全：DB 条件更新 WHERE status='PENDING' 且 assigned 为空或本人）。
+     *
+     * <p>原实现位于 agent 域 McpToolServiceImpl（直捅 SubTaskMapper.claimAtomic），
+     * 阶段五收口到 task 域，agent 域只依赖本方法契约。</p>
+     *
+     * @param subTaskId 子任务 ID
+     * @param agentId   认领 Agent ID
+     * @return true=认领成功；false=已被他人抢走或状态已变
+     */
+    @Transactional(rollbackFor = Exception.class)
+    boolean claimAtomic(Long subTaskId, Long agentId);
 }

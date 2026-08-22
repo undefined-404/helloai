@@ -7,14 +7,14 @@ import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.SubTaskStatus;
-import com.helloai.core.agent.dispatcher.ResilientDispatcher;
+import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.service.AgentService;
-import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.policy.TaskAgentPolicy;
+import com.helloai.core.task.port.TaskDispatchPort;
 import com.helloai.core.task.service.impl.SubTaskDispatchServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -49,7 +49,7 @@ class SubTaskDispatchServiceTest {
     private SubTaskService subTaskService;
 
     @Mock
-    private ResilientDispatcher resilientDispatcher;
+    private TaskDispatchPort taskDispatchPort;
 
     @Mock
     private TaskTimelineService taskTimelineService;
@@ -97,7 +97,7 @@ class SubTaskDispatchServiceTest {
                 AgentRole.PLANNER,
                 11L,
                 Map.of("trigger", "blocked_reassign", "preferredAgentId", 11L));
-        verify(resilientDispatcher).assignNext(11L, 21L, null);
+        verify(taskDispatchPort).assignNext(11L, 21L, null);
     }
 
     @Test
@@ -121,7 +121,7 @@ class SubTaskDispatchServiceTest {
                 AgentRole.SYSTEM,
                 12L,
                 Map.of("trigger", "agent_offline", "preferredAgentId", 12L, "previousAgentId", 12L));
-        verify(resilientDispatcher).assignNext(12L, 22L, null);
+        verify(taskDispatchPort).assignNext(12L, 22L, null);
     }
 
     @Test
@@ -145,7 +145,7 @@ class SubTaskDispatchServiceTest {
                 12L,
                 Map.of("trigger", "agent_offline", "reason", "dependency_not_ready",
                         "dependsOn", subTask.dependsOnIdList()));
-        verify(resilientDispatcher, never()).assignNext(anyLong(), anyLong(), any());
+        verify(taskDispatchPort, never()).assignNext(anyLong(), anyLong(), any());
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -193,7 +193,7 @@ class SubTaskDispatchServiceTest {
                         "preferredAgentId", 99L,
                         "previousAgentId", 11L,
                         "reason", "consecutive_failure=5"));
-        verify(resilientDispatcher).assignNext(99L, 41L);
+        verify(taskDispatchPort).assignNext(99L, 41L);
     }
 
     @Test
@@ -222,7 +222,7 @@ class SubTaskDispatchServiceTest {
         Long newAgentId = subTaskDispatchService.redispatchForFallback(42L, 11L, "reason");
 
         assertThat(newAgentId).isEqualTo(99L);
-        verify(resilientDispatcher).assignNext(99L, 42L);
+        verify(taskDispatchPort).assignNext(99L, 42L);
     }
 
     @Test
@@ -244,7 +244,7 @@ class SubTaskDispatchServiceTest {
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("API_KEY_LLM");
 
-        verify(resilientDispatcher, never())
+        verify(taskDispatchPort, never())
                 .assignNext(any(), any());
     }
 
@@ -287,7 +287,7 @@ class SubTaskDispatchServiceTest {
                         "fallbackAgentId", 99L, "previousAgentId", 11L));
         verify(subTaskService).markManualIntervention(
                 eq(44L), eq("fallback_skip_execution_dense"), anyMap());
-        verify(resilientDispatcher, never()).assignNext(any(), any(), any());
+        verify(taskDispatchPort, never()).assignNext(any(), any(), any());
     }
 
     @Test
@@ -320,7 +320,7 @@ class SubTaskDispatchServiceTest {
 
         assertThat(newAgentId).isEqualTo(99L);
         verify(subTaskService, never()).markManualIntervention(any(), any(), any());
-        verify(resilientDispatcher).assignNext(99L, 45L);
+        verify(taskDispatchPort).assignNext(99L, 45L);
     }
 
     @Test
@@ -352,7 +352,7 @@ class SubTaskDispatchServiceTest {
 
         assertThat(newAgentId).isEqualTo(99L);
         verify(subTaskService, never()).markManualIntervention(any(), any(), any());
-        verify(resilientDispatcher).assignNext(99L, 46L);
+        verify(taskDispatchPort).assignNext(99L, 46L);
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -380,7 +380,7 @@ class SubTaskDispatchServiceTest {
         // 必须用 pickAlternative(originalAgentId, role)，而不是 pickPreferred(role)
         verify(agentSelector).pickAlternative(11L, AgentRole.EXECUTOR, null);
         verify(agentSelector, never()).pickPreferred(any(), any());
-        verify(resilientDispatcher).assignNext(99L, 61L, null);
+        verify(taskDispatchPort).assignNext(99L, 61L, null);
     }
 
     @Test
@@ -398,7 +398,7 @@ class SubTaskDispatchServiceTest {
         subTaskDispatchService.redispatchAssignedTimeout(62L, 11L, AgentRole.EXECUTOR);
 
         verify(agentSelector).pickAlternative(11L, AgentRole.EXECUTOR, null);
-        verify(resilientDispatcher, never()).assignNext(any(), any(), any());
+        verify(taskDispatchPort, never()).assignNext(any(), any(), any());
     }
 
     // ══════════════════════════════════════════════════════════
@@ -436,7 +436,7 @@ class SubTaskDispatchServiceTest {
                         "reassign_attempt_count", 5,
                         "max_reassign_attempts", 5));
         verify(agentSelector, never()).pickPreferred(any(), any());
-        verify(resilientDispatcher, never()).assignNext(any(), any(), any());
+        verify(taskDispatchPort, never()).assignNext(any(), any(), any());
     }
 
     @Test
@@ -462,7 +462,7 @@ class SubTaskDispatchServiceTest {
         assertThat(result).isEqualTo(99L);
         verify(subTaskMapper).incrementReassignAttemptCount(eq(82L), any(OffsetDateTime.class));
         verify(subTaskService, never()).changeStatus(anyLong(), any(), any(), any());
-        verify(resilientDispatcher).assignNext(99L, 82L, null);
+        verify(taskDispatchPort).assignNext(99L, 82L, null);
     }
 
     @Test
@@ -564,7 +564,7 @@ class SubTaskDispatchServiceTest {
         verify(subTaskService).markManualIntervention(
                 eq(47L), eq("fallback_skip_policy"), anyMap());
         verify(agentService, never()).listActive();
-        verify(resilientDispatcher, never()).assignNext(any(), any(), any());
+        verify(taskDispatchPort, never()).assignNext(any(), any(), any());
     }
 
     @Test
@@ -585,7 +585,7 @@ class SubTaskDispatchServiceTest {
         verify(subTaskService).markManualIntervention(
                 eq(48L), eq("fallback_skip_policy"), anyMap());
         verify(agentService, never()).listActive();
-        verify(resilientDispatcher, never()).assignNext(any(), any(), any());
+        verify(taskDispatchPort, never()).assignNext(any(), any(), any());
     }
 
     @Test
@@ -611,7 +611,7 @@ class SubTaskDispatchServiceTest {
                         "fallbackAgentId", 99L, "previousAgentId", 11L));
         verify(subTaskService).markManualIntervention(
                 eq(49L), eq("fallback_skip_policy_restricted"), anyMap());
-        verify(resilientDispatcher, never()).assignNext(any(), any(), any());
+        verify(taskDispatchPort, never()).assignNext(any(), any(), any());
     }
 
     @Test
@@ -631,6 +631,6 @@ class SubTaskDispatchServiceTest {
 
         assertThat(newAgentId).isEqualTo(99L);
         verify(subTaskService, never()).markManualIntervention(any(), any(), any());
-        verify(resilientDispatcher).assignNext(99L, 50L);
+        verify(taskDispatchPort).assignNext(99L, 50L);
     }
 }

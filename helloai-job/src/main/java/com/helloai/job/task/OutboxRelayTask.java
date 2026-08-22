@@ -12,7 +12,6 @@ import com.helloai.core.agent.service.AgentCommandOutboxService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -20,6 +19,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -80,7 +80,8 @@ import java.util.concurrent.TimeUnit;
 public class OutboxRelayTask {
 
     private final AgentCommandOutboxService outboxService;
-    private final ObjectProvider<ExecutionCommandMqPublisher> mqPublisherProvider;
+    // 阶段五：存在性探测改 Optional 注入（无 Bean 时 empty，orElse(null) 保持原判空语义）
+    private final Optional<ExecutionCommandMqPublisher> mqPublisherProvider;
     private final AgentCommandOutboxRelayProperties properties;
     private final AgentExecutionProperties executionProperties;
     private final StringRedisTemplate redis;
@@ -94,7 +95,7 @@ public class OutboxRelayTask {
             return;
         }
         try {
-            ExecutionCommandMqPublisher publisher = mqPublisherProvider.getIfAvailable();
+            ExecutionCommandMqPublisher publisher = mqPublisherProvider.orElse(null);
             if (publisher == null) {
                 // 启动期 ExecutionDispatchValidator 在 dispatch-mode ∈ {MQ,BOTH} 时已 fail-fast，
                 // 这里仅是双保险：若运行时 Publisher 不可用（如 producer-enabled 被运行时切换），
@@ -247,6 +248,7 @@ public class OutboxRelayTask {
                 retryCount = current.getRetryCount() + 1;
             }
         } catch (Exception ignored) {
+            // 读取当前重试计数失败：保守按 retryCount=1 继续退避重试，不因读取异常误判 FINAL_FAILED
         }
 
         int maxRetry = properties.getMaxRetry();

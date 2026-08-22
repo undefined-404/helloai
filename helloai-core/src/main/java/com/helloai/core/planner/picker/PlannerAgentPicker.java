@@ -13,6 +13,7 @@ import com.helloai.core.planner.service.RequirementConversationService;
 import com.helloai.core.system.service.CredentialVaultService;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.policy.TaskAgentPolicy;
+import com.helloai.core.task.port.TaskPlannerPickerPort;
 import com.helloai.core.task.service.TaskService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
@@ -26,7 +27,8 @@ import java.util.List;
 /**
  * Planner Agent 选型器（澄清链 / 拆解链共用，收编两处原本刻意复制的 pickPlannerAgent）。
  *
- * <p>选型语义：</p>
+ * <p>实现 task 域 {@link TaskPlannerPickerPort}（依赖倒置：task 域只依赖端口，
+ * 由本类提供按任务选 Planner 的能力）；选型语义：</p>
  * <ul>
  *   <li>手动指定（pinned）：会话上记录的 planner_agent_id 优先；指定 Agent 失效
  *       （删除/禁用/非平台内）时回退自动选择，不阻断对话。</li>
@@ -40,7 +42,7 @@ import java.util.List;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class PlannerAgentPicker {
+public class PlannerAgentPicker implements TaskPlannerPickerPort {
 
     private final AgentService agentService;
     private final RequirementConversationService conversationService;
@@ -75,6 +77,7 @@ public class PlannerAgentPicker {
      * </ol>
      * </p>
      */
+    @Override
     public Agent pickForTask(Long taskId) {
         // 任务级 agent_policy.plannerAgentId 优先
         if (taskId != null) {

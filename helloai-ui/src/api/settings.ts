@@ -1,4 +1,5 @@
 import request from './request'
+import { paths } from './paths'
 
 /** 平台级 LLM Provider 配置项（旧 /api/admin/platform/providers/list 响应，向后兼容）。 */
 export interface ProviderConfigItem {
@@ -77,19 +78,19 @@ export const PROTOCOL_OPTIONS: { label: string; value: ProtocolType }[] = [
 
 export const settingsApi = {
   getStatus() {
-    return request.get<any, { setupFinished: boolean; hasUsers: boolean; userCount: number }>('/setup/getStatus')
+    return request.get<any, { setupFinished: boolean; hasUsers: boolean; userCount: number }>(paths.setup.getStatus)
   },
   initialize(data: { adminPassword: string; systemName: string; systemDescription?: string; adminUsername?: string }) {
-    return request.post('/setup/initialize', data)
+    return request.post(paths.setup.initialize, data)
   },
   getConfig() {
-    return request.get<any, Record<string, string>>('/admin/config')
+    return request.get<any, Record<string, string>>(paths.admin.config)
   },
   getConfigValue(key: string) {
-    return request.get<any, string>(`/admin/config/getByKey/${key}`)
+    return request.get<any, string>(paths.admin.configByKey(key))
   },
   updateConfig(key: string, value: string) {
-    return request.put(`/admin/config/updateByKey/${key}`, { value })
+    return request.put(paths.admin.configUpdateByKey(key), { value })
   },
   /**
    * 批量更新配置（保存"基础配置"区域：平台名 + 外部访问地址）。
@@ -97,65 +98,65 @@ export const settingsApi = {
    * 否则 SysConfigService.batchUpdate 拿到 null 会 NPE（2026-08-08 实测 500 复现）。
    */
   batchUpdateConfig(map: Record<string, string>) {
-    return request.put('/admin/config/batch', { config: map })
+    return request.put(paths.admin.configBatch, { config: map })
   },
   // ---- 旧端点（保留兼容）----
   listProviders() {
-    return request.get<any, ProviderConfigItem[]>('/admin/platform/providers/list')
+    return request.get<any, ProviderConfigItem[]>(paths.admin.platformProviders)
   },
   saveProviderApiKey(provider: string, apiKey: string) {
-    return request.put(`/admin/platform/providers/${provider}/api-key`, { apiKey })
+    return request.put(paths.admin.platformProviderApiKey(provider), { apiKey })
   },
   saveProviderSettings(provider: string, settings: { baseUrl?: string; defaultModel?: string }) {
-    return request.put(`/admin/platform/providers/${provider}/settings`, settings)
+    return request.put(paths.admin.platformProviderSettings(provider), settings)
   },
   // ---- 新端点（方案B 动态化 LLM Provider）----
   listLlmProviders() {
-    return request.get<any, LlmProviderResponse[]>('/admin/llm-providers/list')
+    return request.get<any, LlmProviderResponse[]>(paths.admin.llmProviders)
   },
   getLlmProvider(id: number) {
-    return request.get<any, LlmProviderResponse>(`/admin/llm-providers/getById/${id}`)
+    return request.get<any, LlmProviderResponse>(paths.admin.llmProviderById(id))
   },
   createLlmProvider(data: CreateLlmProviderRequest) {
-    return request.post<any, LlmProviderResponse>('/admin/llm-providers', data)
+    return request.post<any, LlmProviderResponse>(paths.admin.llmProviderCreate, data)
   },
   updateLlmProvider(id: number, data: UpdateLlmProviderRequest) {
-    return request.put(`/admin/llm-providers/updateById/${id}`, data)
+    return request.put(paths.admin.llmProviderUpdate(id), data)
   },
   deleteLlmProvider(id: number) {
-    return request.delete(`/admin/llm-providers/deleteById/${id}`)
+    return request.delete(paths.admin.llmProviderDelete(id))
   },
   toggleLlmProvider(id: number) {
-    return request.put(`/admin/llm-providers/toggleById/${id}`, {})
+    return request.put(paths.admin.llmProviderToggle(id), {})
   },
   /** 写入 API Key（请求体为纯字符串的 apiKey 明文）。 */
   saveLlmProviderApiKey(id: number, apiKey: string) {
-    return request.put(`/admin/llm-providers/${id}/api-key`, apiKey, {
+    return request.put(paths.admin.llmProviderApiKey(id), apiKey, {
       headers: { 'Content-Type': 'text/plain' }
     })
   },
   // ---- 模型管理（V49，模型多选配置）----
   listProviderModels(id: number) {
-    return request.get<any, LlmProviderModelResponse[]>(`/admin/llm-providers/${id}/models/list`)
+    return request.get<any, LlmProviderModelResponse[]>(paths.admin.llmProviderModels(id))
   },
   addProviderModel(id: number, modelName: string, isDefault: boolean) {
-    return request.post<any, LlmProviderModelResponse>(`/admin/llm-providers/${id}/models`, {
+    return request.post<any, LlmProviderModelResponse>(paths.admin.llmProviderModelCreate(id), {
       modelName,
       isDefault
     })
   },
   saveAllProviderModels(id: number, data: SaveProviderModelsRequest) {
-    return request.put(`/admin/llm-providers/${id}/models/saveAll`, data)
+    return request.put(paths.admin.llmProviderModelsSaveAll(id), data)
   },
   deleteProviderModel(id: number, modelName: string) {
-    return request.delete(`/admin/llm-providers/${id}/models/deleteByName/${encodeURIComponent(modelName)}`)
+    return request.delete(paths.admin.llmProviderModelDelete(id, modelName))
   },
   toggleProviderModel(id: number, modelName: string, enabled: boolean) {
-    return request.put(`/admin/llm-providers/${id}/models/toggleByName/${encodeURIComponent(modelName)}`, {
+    return request.put(paths.admin.llmProviderModelToggle(id, modelName), {
       enabled
     })
   },
   setDefaultProviderModel(id: number, modelName: string) {
-    return request.put(`/admin/llm-providers/${id}/models/setDefaultByName/${encodeURIComponent(modelName)}`, {})
+    return request.put(paths.admin.llmProviderModelSetDefault(id, modelName), {})
   }
 }

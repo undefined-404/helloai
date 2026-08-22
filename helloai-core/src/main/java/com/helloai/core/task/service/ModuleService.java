@@ -1,7 +1,7 @@
-package com.helloai.core.system.service;
+package com.helloai.core.task.service;
 
 import com.baomidou.mybatisplus.extension.service.IService;
-import com.helloai.core.system.entity.Module;
+import com.helloai.core.task.entity.Module;
 import com.helloai.core.task.entity.Task;
 
 import java.util.List;

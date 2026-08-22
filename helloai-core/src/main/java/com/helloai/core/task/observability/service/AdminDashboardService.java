@@ -1,4 +1,4 @@
-package com.helloai.core.system.service;
+package com.helloai.core.task.observability.service;
 
 import java.util.List;
 import java.util.Map;
@@ -7,12 +7,12 @@ import java.util.Map;
  * 管理后台 Dashboard 聚合统计服务。
  *
  * <p>为 {@code /api/admin/dashboard} 提供概览、高亮与趋势三类聚合查询；
- * 涉及 Task、SubTask、Agent、SubTask、AgentService、SysUserService 多个数据源，
+ * 涉及 Task、SubTask、Agent、AgentService、SysUserService 多个数据源，
  * 不绑定单一 Mapper，故不继承 {@code ServiceImpl}。</p>
  *
  * <p>由于 {@code helloai-core} 不依赖 {@code helloai-api}，本服务仅返回
  * Map/Entity 等基础结构，DTO 装配由 Controller 完成（符合 §6.7 “聚合看板可
- * 返回专用聚合 DTO 或 Map<String,Object>，但不直接暴露实体”）。</p>
+ * 返回专用聚合 DTO 或 Map&lt;String,Object&gt;，但不直接暴露实体”）。</p>
  */
 public interface AdminDashboardService {
 

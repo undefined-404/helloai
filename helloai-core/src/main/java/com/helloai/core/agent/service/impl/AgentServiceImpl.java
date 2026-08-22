@@ -1,7 +1,6 @@
 package com.helloai.core.agent.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
@@ -9,40 +8,31 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
-import com.helloai.common.constant.SubTaskStatus;
-import com.helloai.core.agent.AgentSkillDeriver;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentDutyLeaseMapper;
 import com.helloai.core.agent.mapper.AgentInboxMapper;
 import com.helloai.core.agent.mapper.AgentMapper;
+import com.helloai.core.agent.port.AgentAuthPort;
+import com.helloai.core.agent.service.AgentCredentialService;
+import com.helloai.core.agent.service.AgentLifecycleService;
 import com.helloai.core.agent.service.AgentMcpServerService;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.agent.service.AgentSkillPolicyService;
+import com.helloai.core.agent.service.AgentStatsService;
 import com.helloai.core.system.crypto.AgentApiKeyCipher;
-import com.helloai.core.system.entity.LlmProviderModel;
-import com.helloai.core.system.service.LlmProviderModelQueryService;
 import com.helloai.core.task.entity.ActivityLog;
-import com.helloai.core.task.entity.ReviewRecord;
 import com.helloai.core.task.entity.RewardLog;
-import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.mapper.ActivityLogMapper;
-import com.helloai.core.task.mapper.ReviewRecordMapper;
-import com.helloai.core.task.mapper.RewardLogMapper;
-import com.helloai.core.task.mapper.SubTaskMapper;
-import com.helloai.core.task.service.TaskTimelineService;
-import lombok.RequiredArgsConstructor;
+import com.helloai.core.task.service.ActivityLogService;
+import com.helloai.core.task.service.RewardService;
+import com.helloai.core.task.service.SubTaskService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.security.SecureRandom;
-import java.time.OffsetDateTime;
-import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
 
 /**
  * Agent 核心服务实现。负责 Agent 注册、CRUD、enrichment 查询、级联删除。
@@ -52,21 +42,46 @@ import java.util.Set;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
-public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements AgentService {
+public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements AgentService, AgentAuthPort {
 
-    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
-
-    private final SubTaskMapper subTaskMapper;
-    private final RewardLogMapper rewardLogMapper;
-    private final ActivityLogMapper activityLogMapper;
-    private final ReviewRecordMapper reviewRecordMapper;
+    // 阶段五 task↔agent 事件解耦：task 域数据一律经 task 域服务接口，
+    // 不再直捅 task.mapper（关联统计 / 级联删除 / 原子认领见 SubTaskService 等）
+    private final SubTaskService subTaskService;
+    private final RewardService rewardService;
+    private final ActivityLogService activityLogService;
     private final AgentInboxMapper agentInboxMapper;
     private final AgentDutyLeaseMapper agentDutyLeaseMapper;
-    private final TaskTimelineService taskTimelineService;
     private final AgentMcpServerService agentMcpServerService;
-    private final LlmProviderModelQueryService llmProviderModelQueryService;
     private final AgentApiKeyCipher agentApiKeyCipher;
+    private final AgentCredentialService credentialService;
+    private final AgentSkillPolicyService skillPolicyService;
+    private final AgentLifecycleService lifecycleService;
+    private final AgentStatsService statsService;
+
+    @Autowired
+    public AgentServiceImpl(SubTaskService subTaskService,
+                            RewardService rewardService,
+                            ActivityLogService activityLogService,
+                            AgentInboxMapper agentInboxMapper,
+                            AgentDutyLeaseMapper agentDutyLeaseMapper,
+                            AgentMcpServerService agentMcpServerService,
+                            AgentApiKeyCipher agentApiKeyCipher,
+                            AgentCredentialService credentialService,
+                            AgentSkillPolicyService skillPolicyService,
+                            AgentLifecycleService lifecycleService,
+                            AgentStatsService statsService) {
+        this.subTaskService = subTaskService;
+        this.rewardService = rewardService;
+        this.activityLogService = activityLogService;
+        this.agentInboxMapper = agentInboxMapper;
+        this.agentDutyLeaseMapper = agentDutyLeaseMapper;
+        this.agentMcpServerService = agentMcpServerService;
+        this.agentApiKeyCipher = agentApiKeyCipher;
+        this.credentialService = credentialService;
+        this.skillPolicyService = skillPolicyService;
+        this.lifecycleService = lifecycleService;
+        this.statsService = statsService;
+    }
 
     // ══════════════════════════════════════════════════════════════
     //  注册 / 基础 CRUD（不变）
@@ -83,7 +98,7 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
         agent.setName(name);
         agent.setRole(role);
         // 等保存储加密：apiKey 以 enc:v1:AES-GCM 密文落库，明文仅本次注册响应返回一次
-        String plainKey = issueConsumerToken();
+        String plainKey = credentialService.issueConsumerToken();
         agent.setApiKey(agentApiKeyCipher.encrypt(plainKey));
         agent.setApiKeyHash(agentApiKeyCipher.sha256Hex(plainKey));
         agent.setStatus(AgentStatus.ACTIVE);
@@ -157,6 +172,23 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
         return agent;
     }
 
+    /**
+     * 认证内核专用：按 API Key 校验并取回 Agent（无效 401 / 已禁用 403）。
+     * 由 system 域 AuthService 原逻辑下沉而来（§3.x 依赖方向红线），
+     * 业务语义与 {@link #getByApiKey} 完全一致，仅追加状态校验。
+     */
+    @Override
+    public Agent validateApiKey(String apiKey) {
+        Agent agent = getByApiKey(apiKey);
+        if (agent == null) {
+            throw new BizException(401, "无效的 API Key");
+        }
+        if (agent.getStatus() == AgentStatus.DISABLED) {
+            throw new BizException(403, "Agent 已禁用");
+        }
+        return agent;
+    }
+
     /** 存量明文兜底：hash 列为空的行逐条明文比对（Agent 表规模小，可接受）。 */
     private Agent findLegacyPlaintextAgent(String apiKey) {
         List<Agent> legacy = lambdaQuery().isNull(Agent::getApiKeyHash).list();
@@ -210,16 +242,8 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public String resetApiKey(Long agentId) {
-        Agent agent = getById(agentId);
-        if (agent == null) throw new BizException("Agent 不存在: " + agentId);
-        String newKey = issueConsumerToken();
-        agent.setApiKey(agentApiKeyCipher.encrypt(newKey));
-        agent.setApiKeyHash(agentApiKeyCipher.sha256Hex(newKey));
-        updateById(agent);
-        log.info("Agent 工牌 consumerToken 重置: id={}", agentId);
-        return newKey;
+        return credentialService.resetApiKey(agentId);
     }
 
     @Override
@@ -246,13 +270,13 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
                                     String modelType, Map<String, Object> modelConfig,
                                     List<String> skills) {
         // 创建 Agent 前校验 modelType 格式、模型可用性、角色唯一性
-        validateModelType(modelType, role, null);
+        skillPolicyService.validateModelType(modelType, role, null);
         Agent agent = register(name, role, description);
         agent.setModelType(modelType);
         if (modelConfig != null) agent.setModelConfig(modelConfig);
         // 技能按模型能力校验 + 推导落库（thinking 锁定、白名单过滤、自定义豁免）
-        validateAgentSkills(agent.getModelType(), skills);
-        agent.setSkills(deriveSkillsForRegistration(agent, skills));
+        skillPolicyService.validateAgentSkills(agent.getModelType(), skills);
+        agent.setSkills(skillPolicyService.deriveSkillsForRegistration(agent, skills));
         updateById(agent);
         return agent;
     }
@@ -271,7 +295,7 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
         if (agent == null) return false;
         // 编辑 modelType 时校验（排除当前 Agent 自身）
         if (modelType != null && !modelType.isBlank()) {
-            validateModelType(modelType, agent.getRole(), agentId);
+            skillPolicyService.validateModelType(modelType, agent.getRole(), agentId);
             agent.setModelType(modelType);
         }
         if (name != null) agent.setName(name);
@@ -280,8 +304,8 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
         if (skills != null) {
             // 技能先按模型能力校验（标准技能查白名单、自定义豁免、未识别模型放行），
             // 再按能力驱动重写落库（thinking 锁定不回退）
-            validateAgentSkills(agent.getModelType(), skills);
-            agent.setSkills(deriveSkillsForRegistration(agent, skills));
+            skillPolicyService.validateAgentSkills(agent.getModelType(), skills);
+            agent.setSkills(skillPolicyService.deriveSkillsForRegistration(agent, skills));
         }
         updateById(agent);
         log.info("Agent 信息更新: id={}", agentId);
@@ -297,32 +321,7 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
      */
     @Override
     public void validateAgentSkills(String modelType, List<String> skills) {
-        if (modelType == null || modelType.isBlank()) {
-            return;
-        }
-        List<String> cleaned = AgentSkillDeriver.clean(skills);
-        if (cleaned.isEmpty()) {
-            return;
-        }
-        Optional<LlmProviderModel> capability = llmProviderModelQueryService.findCapabilityByModelType(modelType);
-        if (capability.isEmpty()) {
-            // 未识别模型：不校验（降级兼容）
-            return;
-        }
-        Set<String> whitelist = new HashSet<>();
-        if (capability.get().getCapabilitySkills() != null) {
-            whitelist.addAll(capability.get().getCapabilitySkills());
-        }
-        if (capability.get().getAvailableOptionalSkills() != null) {
-            whitelist.addAll(capability.get().getAvailableOptionalSkills());
-        }
-        List<String> invalid = cleaned.stream()
-                .filter(AgentSkillDeriver.STANDARD_SKILLS::contains)
-                .filter(s -> !whitelist.contains(s))
-                .toList();
-        if (!invalid.isEmpty()) {
-            throw new BizException("模型 " + modelType + " 不支持技能: " + String.join(", ", invalid));
-        }
+        skillPolicyService.validateAgentSkills(modelType, skills);
     }
 
     /**
@@ -333,23 +332,7 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
      */
     @Override
     public List<String> deriveSkillsForRegistration(Agent agent, List<String> explicitSkills) {
-        if (agent == null) {
-            return new ArrayList<>();
-        }
-        AgentAccessType accessType = agent.getAccessType();
-        String modelType = agent.getModelType();
-        if (accessType == AgentAccessType.API_KEY_LLM && modelType != null && !modelType.isBlank()) {
-            Optional<LlmProviderModel> capability = llmProviderModelQueryService.findCapabilityByModelType(modelType);
-            if (capability.isPresent()) {
-                return AgentSkillDeriver.deriveWithCapabilities(
-                        accessType, agent.getName(), agent.getRemark(),
-                        explicitSkills,
-                        capability.get().getCapabilitySkills(),
-                        capability.get().getAvailableOptionalSkills());
-            }
-        }
-        // 非 API_KEY_LLM / 未识别模型：基础推导（显式优先，不合并基础技能）
-        return AgentSkillDeriver.derive(accessType, agent.getName(), agent.getRemark(), explicitSkills);
+        return skillPolicyService.deriveSkillsForRegistration(agent, explicitSkills);
     }
 
     /**
@@ -363,19 +346,7 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
      */
     @Override
     public void validateModelType(String modelType, AgentRole role, Long excludeAgentId) {
-        if (modelType == null || modelType.isBlank()) {
-            return;
-        }
-        int colonIdx = modelType.indexOf(':');
-        if (colonIdx <= 0 || colonIdx == modelType.length() - 1) {
-            throw new BizException("modelType 格式错误，应为 providerCode:modelName");
-        }
-        String providerCode = modelType.substring(0, colonIdx);
-        String modelName = modelType.substring(colonIdx + 1);
-        if (!llmProviderModelQueryService.isModelAvailable(providerCode, modelName)) {
-            throw new BizException("模型不可用或已禁用: " + modelType);
-        }
-        validateModelUniqueInRole(providerCode, modelName, role, excludeAgentId);
+        skillPolicyService.validateModelType(modelType, role, excludeAgentId);
     }
 
     /**
@@ -429,45 +400,17 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
 
     @Override
     public Map<String, Integer> workloadStats(Long agentId) {
-        Map<String, Integer> m = new LinkedHashMap<>();
-        m.put("assignedCount", 0);
-        m.put("inProgressCount", 0);
-        m.put("doneCount", 0);
-        m.put("blockedCount", 0);
-        m.put("reviewCount", 0);
-        if (agentId == null) return m;
-
-        List<SubTask> subs = subTaskMapper.selectList(
-                new LambdaQueryWrapper<SubTask>()
-                        .eq(SubTask::getAssignedAgentId, agentId)
-                        .select(SubTask::getStatus));
-
-        for (SubTask s : subs) {
-            if (s.getStatus() == SubTaskStatus.DONE) m.merge("doneCount", 1, Integer::sum);
-            else if (s.getStatus() == SubTaskStatus.IN_PROGRESS) m.merge("inProgressCount", 1, Integer::sum);
-            else if (s.getStatus() == SubTaskStatus.BLOCKED) m.merge("blockedCount", 1, Integer::sum);
-            else if (s.getStatus() == SubTaskStatus.REVIEW) m.merge("reviewCount", 1, Integer::sum);
-            else m.merge("assignedCount", 1, Integer::sum);
-        }
-        return m;
+        return statsService.workloadStats(agentId);
     }
 
     @Override
     public int inProgressCount(Long agentId) {
-        if (agentId == null) return 0;
-        return Integer.parseInt(subTaskMapper.selectCount(
-                new LambdaQueryWrapper<SubTask>()
-                        .eq(SubTask::getAssignedAgentId, agentId)
-                        .eq(SubTask::getStatus, SubTaskStatus.IN_PROGRESS)
-                        .eq(SubTask::getDeleted, 0)).toString());
+        return statsService.inProgressCount(agentId);
     }
 
     @Override
     public int scoreRank(Long agentId) {
-        Agent self = getById(agentId);
-        if (self == null || self.getScore() == null) return 0;
-        long higher = lambdaQuery().gt(Agent::getScore, self.getScore()).count();
-        return (int) (higher + 1);
+        return statsService.scoreRank(agentId);
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -487,21 +430,8 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
 
     @Override
     public Map<String, Object> getRelatedCounts(Long agentId) {
-        Agent agent = getById(agentId);
-        if (agent == null) throw new BizException("Agent 不存在: " + agentId);
-
-        Map<String, Object> counts = new LinkedHashMap<>();
-        counts.put("agentId", agentId);
-        counts.put("agentName", agent.getName());
-        counts.put("subTaskCount", subTaskMapper.selectCount(
-                new LambdaQueryWrapper<SubTask>().eq(SubTask::getAssignedAgentId, agentId)).intValue());
-        counts.put("reviewCount", reviewRecordMapper.selectCount(
-                new LambdaQueryWrapper<ReviewRecord>().eq(ReviewRecord::getReviewerAgentId, agentId)).intValue());
-        counts.put("rewardCount", rewardLogMapper.selectCount(
-                new LambdaQueryWrapper<RewardLog>().eq(RewardLog::getAgentId, agentId)).intValue());
-        counts.put("activityCount", activityLogMapper.selectCount(
-                new LambdaQueryWrapper<ActivityLog>().eq(ActivityLog::getAgentId, agentId)).intValue());
-        return counts;
+        // 阶段五：关联统计收口到 AgentStatsService（经 task 域服务接口取数）
+        return statsService.getRelatedCounts(agentId);
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -517,26 +447,19 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
             throw new BizException("名称不匹配，请确认后重试");
         }
 
-        // 先统计
-        int subTaskCount = Integer.parseInt(subTaskMapper.selectCount(
-                new LambdaQueryWrapper<SubTask>().eq(SubTask::getAssignedAgentId, agentId)).toString());
-        int reviewCount = Integer.parseInt(reviewRecordMapper.selectCount(
-                new LambdaQueryWrapper<ReviewRecord>().eq(ReviewRecord::getReviewerAgentId, agentId)).toString());
-        int rewardCount = Integer.parseInt(rewardLogMapper.selectCount(
-                new LambdaQueryWrapper<RewardLog>().eq(RewardLog::getAgentId, agentId)).toString());
-        int activityCount = Integer.parseInt(activityLogMapper.selectCount(
-                new LambdaQueryWrapper<ActivityLog>().eq(ActivityLog::getAgentId, agentId)).toString());
+        // 先统计（阶段五：经 task 域服务接口，不再直捅 task.mapper）
+        int subTaskCount = (int) subTaskService.countByAssignedAgent(agentId);
+        int reviewCount = (int) subTaskService.countReviewByReviewerAgent(agentId);
+        int rewardCount = (int) rewardService.countByAgent(agentId);
+        int activityCount = (int) activityLogService.countByAgent(agentId);
 
-        // unlink 子任务
-        subTaskMapper.update(null,
-                new LambdaUpdateWrapper<SubTask>()
-                        .eq(SubTask::getAssignedAgentId, agentId)
-                        .set(SubTask::getAssignedAgentId, null));
+        // unlink 子任务（assigned_agent_id 置空，保留任务与审查记录）
+        subTaskService.unlinkByAssignedAgent(agentId);
 
         // 清理级联数据（物理删除：@TableLogic 会把普通 delete 改写为 UPDATE deleted=1，
-        // 这里走 Mapper 自定义 DELETE SQL 真删，不留残留行）
-        rewardLogMapper.physicalDeleteByAgentId(agentId);
-        activityLogMapper.physicalDeleteByAgentId(agentId);
+        // 这里走 task 域服务的自定义 DELETE SQL 真删，不留残留行）
+        rewardService.physicalDeleteByAgent(agentId);
+        activityLogService.physicalDeleteByAgent(agentId);
         agentMcpServerService.physicalDeleteByAgentId(agentId);
         // agent_inbox / agent_duty_lease 对 agent.id 有外键约束，必须先于 agent 行删除
         agentInboxMapper.physicalDeleteByAgentId(agentId);
@@ -562,295 +485,44 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
 
     @Override
     public Page<RewardLog> getScoreLogs(Long agentId, int pageNum, int pageSize) {
-        return rewardLogMapper.selectPage(
-                new Page<>(pageNum, pageSize),
-                new LambdaQueryWrapper<RewardLog>()
-                        .eq(RewardLog::getAgentId, agentId)
-                        .orderByDesc(RewardLog::getCreateTime));
+        return statsService.getScoreLogs(agentId, pageNum, pageSize);
     }
 
     @Override
     public Page<ActivityLog> getActivityLogs(Long agentId, int pageNum, int pageSize, String action) {
-        return activityLogMapper.selectPage(
-                new Page<>(pageNum, pageSize),
-                new LambdaQueryWrapper<ActivityLog>()
-                        .eq(ActivityLog::getAgentId, agentId)
-                        .eq(action != null && !action.isBlank(), ActivityLog::getAction, action)
-                        .orderByDesc(ActivityLog::getCreateTime));
+        return statsService.getActivityLogs(agentId, pageNum, pageSize, action);
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  SLEEPING 状态管理
+    //  SLEEPING 状态管理（实现下沉 AgentLifecycleService）
     //  - sleep：管理员手动暂停 Agent，系统不自动设 SLEEPING
     //  - wake：恢复后设 OFFLINE（让系统心跳自然计算 IDLE/ONLINE，不强行 ONLINE）
     //  - SLEEPING 不写 offline_reason/offline_time
     //  - 每次操作都写 task_timeline 审计（event_type=agent_sleep/agent_wake, role=SYSTEM）
     // ══════════════════════════════════════════════════════════════
 
-    /**
-     * 管理员手动暂停 Agent。
-     *
-     * <p>行为：
-     * <ol>
-     *   <li>校验当前状态不能是 SLEEPING（避免重复 sleep）</li>
-     *   <li>设 online_status=SLEEPING + update_by=operator</li>
-     *   <li><b>不动</b> offline_reason/offline_time（SLEEPING 不写此字段）</li>
-     *   <li>写 task_timeline 审计（event_type=agent_sleep, role=SYSTEM）</li>
-     * </ol>
-     *
-     * <p>SLEEPING 防护（已实现，本方法不重复校验）：
-     * <ul>
-     *   <li>HeartbeatService.seen/active 检测到 SLEEPING 不会覆盖 online_status</li>
-     *   <li>AgentHealthCheckTask 扫描时跳过 SLEEPING（IS DISTINCT FROM 'SLEEPING'）</li>
-     *   <li>AgentMapper.markOfflineIfStale CAS 条件中也防护 SLEEPING</li>
-     * </ul>
-     */
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public Agent sleepAgent(Long agentId, String operator, String reason) {
-        Agent agent = getById(agentId);
-        if (agent == null) throw new BizException("Agent 不存在: " + agentId);
-
-        AgentOnlineStatus prev = agent.getOnlineStatus();
-        if (prev == AgentOnlineStatus.SLEEPING) {
-            throw new BizException("Agent 已经是 SLEEPING 状态，无需重复暂停: id=" + agentId);
-        }
-
-        applySleepToAgent(agent, prev, operator, reason);
-        return agent;
+        return lifecycleService.sleepAgent(agentId, operator, reason);
     }
 
-    /**
-     * 实际写入 SLEEPING 状态 + task_timeline 审计。
-     *
-     * <p>被 {@link #sleepAgent(Long, String, String)} 与 {@link #sleepAgentBatch(List, String, String)}
-     * 共用：单 agent 走外层事务，批量时每条 autoCommit 独立生效。</p>
-     *
-     * @param agent    已读取的 Agent 实体（避免再次 getById）
-     * @param prev     调用方读取时的 online_status（用于审计 payload.prev_status）
-     * @param operator 操作人；空时回退 "admin"
-     * @param reason   可选原因，写入 task_timeline.payload
-     */
-    private void applySleepToAgent(Agent agent, AgentOnlineStatus prev,
-                                   String operator, String reason) {
-        // 业务操作人：空值回退 "admin"；用于审计 payload.operator
-        String effectiveOperator = operator != null && !operator.isBlank() ? operator : "admin";
-
-        agent.setOnlineStatus(AgentOnlineStatus.SLEEPING);
-        agent.setUpdateBy(effectiveOperator); // MetaObjectHandler.updateFill 仍会覆盖为 "system"，无影响
-        updateById(agent);
-
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("operator", effectiveOperator); // 用业务操作人，不用 agent.getUpdateBy()
-        if (reason != null && !reason.isBlank()) payload.put("reason", reason);
-        payload.put("prev_status", prev != null ? prev.name() : "UNKNOWN");
-        payload.put("new_status", AgentOnlineStatus.SLEEPING.name());
-        payload.put("at", OffsetDateTime.now().toString());
-
-        taskTimelineService.recordEvent(
-                null, null, "agent_sleep", AgentRole.SYSTEM, agent.getId(), payload);
-
-        log.info("Agent 手动暂停: id={}, prev={}, operator={}, reason={}",
-                agent.getId(), prev, effectiveOperator, reason);
-    }
-
-    /**
-     * 批量暂停 Agent。
-     *
-     * <p><b>行为契约：</b>
-     * <ul>
-     *   <li><b>部分成功</b>：逐个处理，单个失败不影响其他 Agent</li>
-     *   <li><b>不抛 BizException</b>：所有失败收集到 failed 列表，整体返回 200</li>
-     *   <li><b>无外层事务</b>：每条 agent 的 sleep SQL autoCommit 独立生效（自调用不触发代理，
-     *       且批量场景不应让一条失败回滚整批）</li>
-     * </ul>
-     *
-     * <p><b>响应结构：</b>
-     * <pre>
-     * {
-     *   "total": 3,
-     *   "successCount": 2,
-     *   "failedCount": 1,
-     *   "succeeded": [{"agentId":1,"agentName":"alice","onlineStatus":"SLEEPING"},
-     *                 {"agentId":2,"agentName":"bob","onlineStatus":"SLEEPING"}],
-     *   "failed":    [{"agentId":3,"agentName":"carol","reason":"Agent 已是 SLEEPING 状态"}]
-     * }
-     * </pre>
-     *
-     * @return 永远非 null；total = agentIds.size()（输入维度，便于 UI 直接展示进度）
-     */
     @Override
     public Map<String, Object> sleepAgentBatch(List<Long> agentIds, String operator, String reason) {
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("total", agentIds == null ? 0 : agentIds.size());
-
-        List<Map<String, Object>> succeeded = new ArrayList<>();
-        List<Map<String, Object>> failed = new ArrayList<>();
-
-        if (agentIds == null || agentIds.isEmpty()) {
-            result.put("successCount", 0);
-            result.put("failedCount", 0);
-            result.put("succeeded", succeeded);
-            result.put("failed", failed);
-            return result;
-        }
-
-        for (Long agentId : agentIds) {
-            Map<String, Object> item = new LinkedHashMap<>();
-            item.put("agentId", agentId);
-
-            try {
-                Agent agent = getById(agentId);
-                if (agent == null) {
-                    item.put("reason", "Agent 不存在");
-                    failed.add(item);
-                    continue;
-                }
-
-                AgentOnlineStatus prev = agent.getOnlineStatus();
-                if (prev == AgentOnlineStatus.SLEEPING) {
-                    item.put("agentName", agent.getName());
-                    item.put("currentStatus", prev.name());
-                    item.put("reason", "Agent 已是 SLEEPING 状态");
-                    failed.add(item);
-                    continue;
-                }
-
-                applySleepToAgent(agent, prev, operator, reason);
-
-                item.put("agentName", agent.getName());
-                item.put("onlineStatus", agent.getOnlineStatus().name());
-                succeeded.add(item);
-
-            } catch (Exception e) {
-                log.error("Agent 批量暂停失败: agentId={}", agentId, e);
-                item.put("reason", "处理异常: " + e.getMessage());
-                failed.add(item);
-            }
-        }
-
-        result.put("successCount", succeeded.size());
-        result.put("failedCount", failed.size());
-        result.put("succeeded", succeeded);
-        result.put("failed", failed);
-
-        log.info("Agent 批量暂停汇总: total={}, success={}, failed={}, operator={}, reason={}",
-                result.get("total"), succeeded.size(), failed.size(), operator, reason);
-        return result;
+        return lifecycleService.sleepAgentBatch(agentIds, operator, reason);
     }
 
-    /**
-     * 查询当前 SLEEPING 状态的 Agent。
-     *
-     * @param role 可选；为 null 时返回所有角色的 SLEEPING Agent
-     * @return 按 update_time DESC 排序（最近操作的在前）
-     */
     @Override
     public List<Agent> findSleepingByRole(AgentRole role) {
-        return lambdaQuery()
-                .eq(Agent::getOnlineStatus, AgentOnlineStatus.SLEEPING)
-                .eq(role != null, Agent::getRole, role)
-                .orderByDesc(Agent::getUpdateTime)
-                .list();
+        return lifecycleService.findSleepingByRole(role);
     }
 
-    /**
-     * 管理员手动恢复 Agent。
-     *
-     * <p>行为：
-     * <ol>
-     *   <li>校验当前状态必须是 SLEEPING（避免错误恢复）</li>
-     *   <li>设 online_status=OFFLINE + update_by=operator（不强行 ONLINE，让系统下次心跳计算）</li>
-     *   <li>保持 offline_reason/offline_time 不变</li>
-     *   <li>写 task_timeline 审计（event_type=agent_wake, role=SYSTEM）</li>
-     * </ol>
-     *
-     * <p>为什么 wake 后设 OFFLINE 而不是 ONLINE：§4.1 设计原则，三态由 last_seen_time/last_active_time
-     * 计算，避免 Agent 还未发送心跳就误判为 ONLINE。下次 heartbeat 调用时 HeartbeatService
-     * 会计算为 IDLE/ONLINE。</p>
-     */
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public Agent wakeAgent(Long agentId, String operator, String reason) {
-        Agent agent = getById(agentId);
-        if (agent == null) throw new BizException("Agent 不存在: " + agentId);
-
-        AgentOnlineStatus prev = agent.getOnlineStatus();
-        if (prev != AgentOnlineStatus.SLEEPING) {
-            throw new BizException("Agent 不是 SLEEPING 状态，无法唤醒: id=" + agentId + ", current=" + prev);
-        }
-
-        agent.setOnlineStatus(AgentOnlineStatus.OFFLINE);
-        String effectiveOperator = operator != null && !operator.isBlank() ? operator : "admin";
-        agent.setUpdateBy(effectiveOperator);
-        updateById(agent);
-
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("operator", effectiveOperator);
-        if (reason != null && !reason.isBlank()) payload.put("reason", reason);
-        payload.put("prev_status", prev.name());
-        payload.put("new_status", AgentOnlineStatus.OFFLINE.name());
-        payload.put("at", OffsetDateTime.now().toString());
-
-        taskTimelineService.recordEvent(
-                null, null, "agent_wake", AgentRole.SYSTEM, agentId, payload);
-
-        log.info("Agent 手动唤醒: id={}, operator={}, reason={}", agentId, effectiveOperator, reason);
-        return agent;
+        return lifecycleService.wakeAgent(agentId, operator, reason);
     }
 
-    // ══════════════════════════════════════════════════════════════
-    //  模型唯一性校验
-    // ══════════════════════════════════════════════════════════════
-
-    /**
-     * 校验同一模型在同一角色下唯一。
-     *
-     * <p>规则：deepseek-v4-flash 和 kimi-k3 可同时注册为 Planner；
-     * 但 deepseek-v4-flash 不能注册两个 Planner。</p>
-     *
-     * @param providerCode   供应商编码（如 deepseek）
-     * @param modelName      模型名称（如 deepseek-v4-flash）
-     * @param role           Agent 角色（PLANNER/EXECUTOR/REVIEWER）
-     * @param excludeAgentId 排除的 Agent ID（编辑场景下排除自身）
-     * @throws BizException 当同一模型在同一角色下已存在时抛出
-     */
     @Override
     public void validateModelUniqueInRole(String providerCode, String modelName, AgentRole role, Long excludeAgentId) {
-        String modelType = providerCode + ":" + modelName;
-        boolean exists = lambdaQuery()
-                .eq(Agent::getRole, role)
-                .eq(Agent::getAccessType, AgentAccessType.API_KEY_LLM)
-                .eq(Agent::getModelType, modelType)
-                .eq(Agent::getDeleted, 0)
-                .ne(excludeAgentId != null, Agent::getId, excludeAgentId)
-                .exists();
-        if (exists) {
-            throw new BizException("角色 " + role + " 已存在使用模型 " + modelName + " 的Agent，同一模型在同一角色下只能注册一个");
-        }
-    }
-
-    // ══════════════════════════════════════════════════════════════
-    //  Util
-    // ══════════════════════════════════════════════════════════════
-
-    /**
-     * 下发 Agent 工牌 consumerToken。
-     *
-     * <p>语义收口后，`agent.api_key` 保持字段名不变，但含义升级为 consumerToken。
-     * 真实 LLM 凭证不得再落在该字段。</p>
-     */
-    private String issueConsumerToken() {
-        return "ak_" + generateRandomHex(32);
-    }
-
-    private String generateRandomHex(int length) {
-        byte[] bytes = new byte[length / 2];
-        SECURE_RANDOM.nextBytes(bytes);
-        StringBuilder sb = new StringBuilder();
-        for (byte b : bytes) {
-            sb.append(String.format("%02x", b));
-        }
-        return sb.toString();
+        skillPolicyService.validateModelUniqueInRole(providerCode, modelName, role, excludeAgentId);
     }
 }

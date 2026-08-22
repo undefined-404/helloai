@@ -1,8 +1,8 @@
-package com.helloai.core.system.service;
+package com.helloai.core.task.service;
 
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.helloai.common.base.BizException;
-import com.helloai.core.system.entity.Attachment;
+import com.helloai.core.task.entity.Attachment;
 
 import java.util.List;
 

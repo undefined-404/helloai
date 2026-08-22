@@ -3,10 +3,7 @@ package com.helloai.core.system.service.impl;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
-import com.helloai.common.constant.AgentStatus;
-import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.agent.mapper.AgentMapper;
-import com.helloai.core.agent.service.AgentService;
+import com.helloai.common.constant.SysUserStatus;
 import com.helloai.core.system.entity.SysUser;
 import com.helloai.core.system.mapper.SysUserMapper;
 import com.helloai.core.system.service.AuthService;
@@ -23,6 +20,9 @@ import java.util.HexFormat;
 
 /**
  * 统一鉴权服务实现。
+ *
+ * <p>Agent API Key 验证已按 §3.x 依赖方向红线下沉至 agent 域
+ * {@code AgentAuthPort}（由 AgentServiceImpl 实现），本实现只保留管理员认证。</p>
  */
 @Slf4j
 @Service
@@ -30,8 +30,6 @@ import java.util.HexFormat;
 public class AuthServiceImpl implements AuthService {
 
     private final SysUserMapper sysUserMapper;
-    private final AgentMapper agentMapper;
-    private final AgentService agentService;
     private final StringRedisTemplate redis;
 
     private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
@@ -47,7 +45,7 @@ public class AuthServiceImpl implements AuthService {
         SysUser user = sysUserMapper.selectOne(
                 Wrappers.<SysUser>lambdaQuery()
                         .eq(SysUser::getUsername, username)
-                        .eq(SysUser::getStatus, "ACTIVE")
+                        .eq(SysUser::getStatus, SysUserStatus.ACTIVE.name())
         );
         if (user == null) {
             throw new BizException("用户不存在或已禁用");
@@ -97,21 +95,6 @@ public class AuthServiceImpl implements AuthService {
     public void adminLogout(String token) {
         redis.delete(ADMIN_TOKEN_KEY_PREFIX + token);
         log.info("管理员登出");
-    }
-
-    /**
-     * Agent API Key 验证（等保存储加密后走 hash 点查 + 解密比对 + 惰性迁移）。
-     */
-    @Override
-    public Agent validateAgentKey(String apiKey) {
-        Agent agent = agentService.getByApiKey(apiKey);
-        if (agent == null) {
-            throw new BizException(401, "无效的 API Key");
-        }
-        if (agent.getStatus() == AgentStatus.DISABLED) {
-            throw new BizException(403, "Agent 已禁用");
-        }
-        return agent;
     }
 
     /**

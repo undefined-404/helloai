@@ -150,6 +150,7 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
             try {
                 save(row);
             } catch (DuplicateKeyException e) {
+                // 并发首查同工具行时唯一键冲突：幂等忽略，下方统一走重查
             }
             config = lambdaQuery()
                     .eq(AgentMcpServer::getAgentId, agentId)

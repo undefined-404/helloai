@@ -6,6 +6,7 @@ import com.helloai.api.dto.auth.LoginResponse;
 import com.helloai.api.interceptor.AuthInterceptor;
 import com.helloai.common.base.R;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentAuthPort;
 import com.helloai.core.system.service.AuthService;
 import com.helloai.core.system.service.SysUserService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -21,6 +22,7 @@ import org.springframework.web.bind.annotation.*;
 public class AuthController {
 
     private final AuthService authService;
+    private final AgentAuthPort agentAuthPort;
     private final SysUserService sysUserService;
 
     @PostMapping("/login")
@@ -34,7 +36,7 @@ public class AuthController {
                 yield R.ok(new LoginResponse(session.token(), "admin", session.displayName(), session.role()));
             }
             case "agent" -> {
-                Agent agent = authService.validateAgentKey(req.getCredential());
+                Agent agent = agentAuthPort.validateApiKey(req.getCredential());
                 yield R.ok(new LoginResponse(agent.getApiKey(), "agent", agent.getName(), agent.getRole().name()));
             }
             default -> R.fail("登录类型无效，仅支持 admin/agent");
@@ -74,7 +76,7 @@ public class AuthController {
         }
         if (authorization != null && authorization.startsWith("Bearer ")) {
             String apiKey = authorization.substring(7);
-            Agent agent = authService.validateAgentKey(apiKey);
+            Agent agent = agentAuthPort.validateApiKey(apiKey);
             return R.ok(new LoginResponse(agent.getApiKey(), "agent", agent.getName(), agent.getRole().name()));
         }
         return R.fail(401, "未登录");

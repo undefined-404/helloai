@@ -25,13 +25,12 @@ import com.helloai.core.agent.command.ExecutionResultReport;
 import com.helloai.core.agent.entity.*;
 import com.helloai.core.task.entity.*;
 import com.helloai.core.system.entity.*;
-import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentMcpServerService;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.system.service.AttachmentService;
+import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.service.TaskRunningSpecService;
 import com.helloai.core.task.spec.ExecutionRecord;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
@@ -58,7 +57,6 @@ public class McpToolServiceImpl implements McpToolService {
     private final AgentInboxService agentInboxService;
     private final AgentMcpServerService agentMcpServerService;
     private final SubTaskService subTaskService;
-    private final SubTaskMapper subTaskMapper;
     private final HeartbeatService heartbeatService;
     private final AttachmentService attachmentService;
     private final ExecutionResultHandler executionResultHandler;
@@ -188,7 +186,7 @@ public class McpToolServiceImpl implements McpToolService {
     // ================================================================
 
     /**
-     * 原子认领子任务。并发安全：使用 SubTaskMapper.claimAtomic（DB 条件更新）。
+     * 原子认领子任务。并发安全：使用 SubTaskService.claimAtomic（DB 条件更新）。
      *
      * @return claimed=true 表示认领成功，claimed=false 表示已被他人抢走或状态已变
      */
@@ -240,8 +238,7 @@ public class McpToolServiceImpl implements McpToolService {
         }
 
         // 原子条件更新: WHERE status='PENDING' AND (assigned_agent IS NULL OR = agentId)
-        int affected = subTaskMapper.claimAtomic(subTaskId, agentId);
-        if (affected == 0) {
+        if (!subTaskService.claimAtomic(subTaskId, agentId)) {
             ClaimSubTaskResult result = new ClaimSubTaskResult();
             result.setOk(true);
             result.setClaimed(false);

@@ -10,7 +10,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.beans.factory.ObjectProvider;
+
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -37,8 +38,9 @@ import static org.mockito.Mockito.when;
  * </ul>
  *
  * <p>验证策略：mock {@link AgentExecutionProperties}、{@link MqExecutionCommandProperties}、
- * {@link AgentCommandOutboxRelayProperties} 与 {@link ObjectProvider}，
- * 让 {@link ExecutionDispatchValidator} 跑纯逻辑分支；不引入 Spring 上下文。</p>
+ * {@link AgentCommandOutboxRelayProperties}，Publisher 经 {@link Optional} 注入（阶段五：
+ * ObjectProvider → Optional），让 {@link ExecutionDispatchValidator} 跑纯逻辑分支；
+ * 不引入 Spring 上下文。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("ExecutionDispatchValidator (Phase 2H ②b + T5)")
@@ -50,8 +52,8 @@ class ExecutionDispatchValidatorTest {
     private MqExecutionCommandProperties mqProperties;
     @Mock
     private AgentCommandOutboxRelayProperties outboxRelayProperties;
-    @Mock
-    private ObjectProvider<ExecutionCommandMqPublisher> mqPublisherProvider;
+    // 阶段五：ObjectProvider → Optional 注入；默认 empty（Publisher 缺失），可用用例重建 validator
+    private Optional<ExecutionCommandMqPublisher> mqPublisherProvider = Optional.empty();
     @Mock
     private ExecutionCommandMqPublisher mqPublisher;
 
@@ -110,7 +112,7 @@ class ExecutionDispatchValidatorTest {
             when(executionProperties.getDispatchMode())
                     .thenReturn(AgentExecutionProperties.DispatchMode.MQ);
             when(mqProperties.isProducerEnabled()).thenReturn(true);
-            // ObjectProvider.getIfAvailable() 默认返回 null（mock 缺省行为）
+            // 阶段五：mqPublisherProvider 默认 Optional.empty()（Publisher 缺失场景）
 
             assertThatThrownBy(() -> validator.validateAndReport())
                     .isInstanceOf(IllegalStateException.class)
@@ -128,7 +130,8 @@ class ExecutionDispatchValidatorTest {
             when(executionProperties.getDispatchMode())
                     .thenReturn(AgentExecutionProperties.DispatchMode.MQ);
             when(mqProperties.isProducerEnabled()).thenReturn(true);
-            when(mqPublisherProvider.getIfAvailable()).thenReturn(mqPublisher);
+            mqPublisherProvider = Optional.of(mqPublisher);
+            validator = new ExecutionDispatchValidator(executionProperties, mqProperties, outboxRelayProperties, mqPublisherProvider);
             when(outboxRelayProperties.isEnabled()).thenReturn(false);
 
             assertThatThrownBy(() -> validator.validateAndReport())
@@ -144,7 +147,8 @@ class ExecutionDispatchValidatorTest {
             when(executionProperties.getDispatchMode())
                     .thenReturn(AgentExecutionProperties.DispatchMode.BOTH);
             when(mqProperties.isProducerEnabled()).thenReturn(true);
-            when(mqPublisherProvider.getIfAvailable()).thenReturn(mqPublisher);
+            mqPublisherProvider = Optional.of(mqPublisher);
+            validator = new ExecutionDispatchValidator(executionProperties, mqProperties, outboxRelayProperties, mqPublisherProvider);
             when(outboxRelayProperties.isEnabled()).thenReturn(false);
 
             assertThatThrownBy(() -> validator.validateAndReport())
@@ -158,7 +162,8 @@ class ExecutionDispatchValidatorTest {
             when(executionProperties.getDispatchMode())
                     .thenReturn(AgentExecutionProperties.DispatchMode.MQ);
             when(mqProperties.isProducerEnabled()).thenReturn(true);
-            when(mqPublisherProvider.getIfAvailable()).thenReturn(mqPublisher);
+            mqPublisherProvider = Optional.of(mqPublisher);
+            validator = new ExecutionDispatchValidator(executionProperties, mqProperties, outboxRelayProperties, mqPublisherProvider);
             when(outboxRelayProperties.isEnabled()).thenReturn(true);
             when(mqProperties.isConsumerEnabled()).thenReturn(true);
 
@@ -237,7 +242,8 @@ class ExecutionDispatchValidatorTest {
             when(executionProperties.getDispatchMode())
                     .thenReturn(AgentExecutionProperties.DispatchMode.MQ);
             when(mqProperties.isProducerEnabled()).thenReturn(true);
-            when(mqPublisherProvider.getIfAvailable()).thenReturn(mqPublisher);
+            mqPublisherProvider = Optional.of(mqPublisher);
+            validator = new ExecutionDispatchValidator(executionProperties, mqProperties, outboxRelayProperties, mqPublisherProvider);
             when(mqProperties.isConsumerEnabled()).thenReturn(false);
 
             // 不抛即为通过——生产端投到 MQ 但本进程不消费，跨实例/shadow 场景允许
@@ -250,7 +256,8 @@ class ExecutionDispatchValidatorTest {
             when(executionProperties.getDispatchMode())
                     .thenReturn(AgentExecutionProperties.DispatchMode.BOTH);
             when(mqProperties.isProducerEnabled()).thenReturn(true);
-            when(mqPublisherProvider.getIfAvailable()).thenReturn(mqPublisher);
+            mqPublisherProvider = Optional.of(mqPublisher);
+            validator = new ExecutionDispatchValidator(executionProperties, mqProperties, outboxRelayProperties, mqPublisherProvider);
             when(mqProperties.isConsumerEnabled()).thenReturn(false);
 
             validator.validateAndReport();
@@ -302,7 +309,8 @@ class ExecutionDispatchValidatorTest {
             when(executionProperties.getDispatchMode())
                     .thenReturn(AgentExecutionProperties.DispatchMode.MQ);
             when(mqProperties.isProducerEnabled()).thenReturn(true);
-            when(mqPublisherProvider.getIfAvailable()).thenReturn(mqPublisher);
+            mqPublisherProvider = Optional.of(mqPublisher);
+            validator = new ExecutionDispatchValidator(executionProperties, mqProperties, outboxRelayProperties, mqPublisherProvider);
             when(outboxRelayProperties.isEnabled()).thenReturn(false);
             when(executionProperties.getConsumerMode())
                     .thenReturn(AgentExecutionProperties.ConsumerMode.POLLER);

@@ -25,6 +25,8 @@ import java.util.List;
 public class CompositeArtifactStorage implements ArtifactStorage {
 
     private final ArtifactStorageProperties properties;
+    // 阶段五保留：多实现路由需 orderedStream 按 @Order 探测全部候选并按 URL 前缀匹配，
+    // Optional 只能取单值，无法表达"候选集合"，故保留 ObjectProvider
     private final ObjectProvider<ArtifactStorage> storageProvider;
 
     @Override

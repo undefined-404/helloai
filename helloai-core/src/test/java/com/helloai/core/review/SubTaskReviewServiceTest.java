@@ -8,6 +8,8 @@ import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.review.service.SubTaskReviewService;
 import com.helloai.core.review.service.impl.SubTaskReviewServiceImpl;
+import com.helloai.core.review.support.ReviewEvidenceAssembler;
+import com.helloai.core.review.support.VerdictParser;
 import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
@@ -16,8 +18,8 @@ import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConversationService;
-import com.helloai.core.system.entity.Attachment;
-import com.helloai.core.system.service.AttachmentService;
+import com.helloai.core.task.entity.Attachment;
+import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.service.ReviewService;
@@ -109,11 +111,14 @@ class SubTaskReviewServiceTest {
 
     @BeforeEach
     void setUp() {
-        // ObjectMapper 用真实实例（JSON 解析是被测逻辑本身，不 mock）
+        // ObjectMapper 用真实实例（JSON 解析是被测逻辑本身，不 mock）；
+        // 证据装配/判定解析为真实组件实例（拆分后主类仅编排，不直接持有 mock 目标）
         reviewService = new SubTaskReviewServiceImpl(
                 subTaskService, agentSelector, agentService, platformAgentExecutionService,
-                taskTimelineService, executionCommandService, dispatchProperties, new ObjectMapper(),
-                conversationService, recordReviewService, taskService, attachmentService, redisTemplate);
+                taskTimelineService, executionCommandService, dispatchProperties,
+                conversationService, recordReviewService, taskService, redisTemplate,
+                new ReviewEvidenceAssembler(attachmentService, dispatchProperties),
+                new VerdictParser(new ObjectMapper()));
         lenient().when(dispatchProperties.getAutoReviewMaxRework()).thenReturn(3);
         lenient().when(dispatchProperties.getReviewEvidenceCheckWaitMs()).thenReturn(0);
         // 方案3 F2 附件内容注入：默认开启（开关用例单独 stub 为 false）

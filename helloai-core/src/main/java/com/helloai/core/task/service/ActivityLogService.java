@@ -52,4 +52,38 @@ public interface ActivityLogService extends IService<ActivityLog> {
      */
     ActivityLog record(Long agentId, String action, String level, String source,
                        Long subTaskId, Map<String, Object> detail);
+
+    // ══════════════════════════════════════════════════════════════
+    //  阶段五 agent→task.mapper 清零承接（agent 域只依赖本服务接口）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 分页查询指定 Agent 的活动日志（可按 action 过滤），按创建时间倒序。
+     *
+     * <p>原实现位于 agent 域 AgentStatsService（直捅 ActivityLogMapper），阶段五收口。</p>
+     *
+     * @param agentId  Agent ID
+     * @param action   动作标识过滤；null/空表示不限
+     * @param page     页码（从 1 开始）
+     * @param pageSize 每页条数
+     * @return 分页结果
+     */
+    IPage<ActivityLog> listByAgent(Long agentId, String action, int page, int pageSize);
+
+    /**
+     * 指定 Agent 的活动日志总数（级联删除前统计、详情页关联计数）。
+     *
+     * @param agentId Agent ID
+     * @return 日志数
+     */
+    long countByAgent(Long agentId);
+
+    /**
+     * 级联删除前物理删除指定 Agent 的活动日志（@TableLogic 普通 delete 会改写为
+     * UPDATE deleted=1，本方法走 Mapper 自定义 DELETE SQL 真删，不留残留行）。
+     *
+     * @param agentId Agent ID
+     * @return 删除行数
+     */
+    int physicalDeleteByAgent(Long agentId);
 }

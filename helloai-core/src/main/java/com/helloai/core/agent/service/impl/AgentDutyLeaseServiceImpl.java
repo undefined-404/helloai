@@ -17,7 +17,7 @@ import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.shared.event.DutyLeaseClosedEvent;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.mapper.SubTaskMapper;
+import com.helloai.core.task.service.SubTaskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -46,7 +46,7 @@ public class AgentDutyLeaseServiceImpl extends ServiceImpl<AgentDutyLeaseMapper,
 
     private final ApplicationEventPublisher eventPublisher;
     private final AgentMapper agentMapper;
-    private final SubTaskMapper subTaskMapper;
+    private final SubTaskService subTaskService;
     private final AgentDutyLeaseProperties dutyLeaseProperties;
     private final AgentDispatchProperties agentDispatchProperties;
     private final AgentQualityProfileService agentQualityProfileService;
@@ -308,14 +308,14 @@ public class AgentDutyLeaseServiceImpl extends ServiceImpl<AgentDutyLeaseMapper,
     /**
      * 判断 Agent 是否存在在跑子任务（ASSIGNED / IN_PROGRESS / REWORK）。
      *
-     * <p>复用 {@code SubTaskMapper.selectInFlightByAgent} 的在跑语义；
+     * <p>复用 {@code SubTaskService.selectInFlightByAgent} 的在跑语义；
      * REVIEW（审核中）与 DONE 等状态视为已交付，不再计入执行期保活。</p>
      */
     private boolean hasInFlightSubTask(Long agentId) {
         if (agentId == null) {
             return false;
         }
-        List<SubTask> inFlight = subTaskMapper.selectInFlightByAgent(agentId, 1);
+        List<SubTask> inFlight = subTaskService.selectInFlightByAgent(agentId, 1);
         return inFlight != null && !inFlight.isEmpty();
     }
 

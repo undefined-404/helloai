@@ -4,7 +4,7 @@ import com.helloai.api.dto.admin.DashboardHighlights;
 import com.helloai.api.dto.admin.DashboardOverview;
 import com.helloai.api.dto.admin.DashboardTrend;
 import com.helloai.common.base.R;
-import com.helloai.core.system.service.AdminDashboardService;
+import com.helloai.core.task.observability.service.AdminDashboardService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.GetMapping;

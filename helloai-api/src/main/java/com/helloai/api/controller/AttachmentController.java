@@ -2,8 +2,8 @@ package com.helloai.api.controller;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.base.R;
-import com.helloai.core.system.entity.Attachment;
-import com.helloai.core.system.service.AttachmentService;
+import com.helloai.core.task.entity.Attachment;
+import com.helloai.core.task.service.AttachmentService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ContentDisposition;

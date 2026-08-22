@@ -9,7 +9,7 @@ import com.helloai.core.agent.mapper.AgentMapper;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.service.impl.AgentDutyLeaseServiceImpl;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.mapper.SubTaskMapper;
+import com.helloai.core.task.service.SubTaskService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -53,7 +53,7 @@ class AgentDutyLeaseAdaptiveTtlTest {
     private static final long AGENT_ID = 1L;
 
     @Mock private AgentMapper agentMapper;
-    @Mock private SubTaskMapper subTaskMapper;
+    @Mock private SubTaskService subTaskService;
     @Mock private AgentQualityProfileService agentQualityProfileService;
 
     private AgentDutyLeaseProperties props;
@@ -71,7 +71,7 @@ class AgentDutyLeaseAdaptiveTtlTest {
         // 默认权重 0.1 开启复合分；质量分缺失 stub 返回 null → 回退原逻辑
         lenient().when(agentQualityProfileService.computeQualityScore(anyLong())).thenReturn(null);
         service = spy(new AgentDutyLeaseServiceImpl(
-                mock(ApplicationEventPublisher.class), agentMapper, subTaskMapper, props,
+                mock(ApplicationEventPublisher.class), agentMapper, subTaskService, props,
                 dispatchProps, agentQualityProfileService));
     }
 
@@ -197,7 +197,7 @@ class AgentDutyLeaseAdaptiveTtlTest {
         AgentDispatchProperties zeroWeightProps = new AgentDispatchProperties();
         zeroWeightProps.setQualityWeight(0);
         AgentDutyLeaseService zeroWeightService = spy(new AgentDutyLeaseServiceImpl(
-                mock(ApplicationEventPublisher.class), agentMapper, subTaskMapper, props,
+                mock(ApplicationEventPublisher.class), agentMapper, subTaskService, props,
                 zeroWeightProps, agentQualityProfileService));
         stubAgent(50, 0);
 
@@ -219,7 +219,7 @@ class AgentDutyLeaseAdaptiveTtlTest {
         stubActiveLease();
         SubTask inFlight = new SubTask();
         inFlight.setId(99L);
-        when(subTaskMapper.selectInFlightByAgent(AGENT_ID, 1)).thenReturn(List.of(inFlight));
+        when(subTaskService.selectInFlightByAgent(AGENT_ID, 1)).thenReturn(List.of(inFlight));
 
         service.adaptiveRenew(AGENT_ID);
 
@@ -231,7 +231,7 @@ class AgentDutyLeaseAdaptiveTtlTest {
     void adaptiveRenewIdleUsesDynamicWindow() {
         stubActiveLease();
         stubAgent(100, 0);
-        when(subTaskMapper.selectInFlightByAgent(AGENT_ID, 1)).thenReturn(Collections.emptyList());
+        when(subTaskService.selectInFlightByAgent(AGENT_ID, 1)).thenReturn(Collections.emptyList());
 
         service.adaptiveRenew(AGENT_ID);
 
@@ -243,7 +243,7 @@ class AgentDutyLeaseAdaptiveTtlTest {
     void adaptiveRenewIdleLowScoreUsesShortWindow() {
         stubActiveLease();
         stubAgent(0, 0);
-        when(subTaskMapper.selectInFlightByAgent(AGENT_ID, 1)).thenReturn(Collections.emptyList());
+        when(subTaskService.selectInFlightByAgent(AGENT_ID, 1)).thenReturn(Collections.emptyList());
 
         service.adaptiveRenew(AGENT_ID);
 

@@ -1,4 +1,5 @@
 import request, { TIMEOUT } from './request'
+import { paths } from './paths'
 import type { AxiosResponse } from 'axios'
 import type { Task, TaskAgentPolicy, TaskRelatedCounts, TaskFinalReport, TaskIteration, SubTask, LongId } from '@/types'
 
@@ -13,76 +14,76 @@ export interface TaskFormPayload {
 
 export const taskApi = {
   list(params?: { status?: string }) {
-    return request.get<any, Task[]>('/tasks/list', { params })
+    return request.get<any, Task[]>(paths.tasks.list, { params })
   },
   // v1.1 修复: LongID 后端已全局序列化为 string，传 string 避免任何 Number() 精度丢
   getById(id: LongId) {
-    return request.get<any, Task>(`/tasks/getById/${id}`)
+    return request.get<any, Task>(paths.tasks.getById(id))
   },
   // M4.5: 派发控制台新建任务入口（A1: 支持 SLA/执行策略/技能透传）
   create(data: TaskFormPayload) {
-    return request.post<any, Task>('/tasks', data)
+    return request.post<any, Task>(paths.tasks.create, data)
   },
   // 任务管理 CRUD: 编辑基本信息（A1: 扩展 SLA/执行策略/技能）
   update(id: LongId, data: TaskFormPayload) {
-    return request.put<any, Task>(`/tasks/updateById/${id}`, data)
+    return request.put<any, Task>(paths.tasks.update(id), data)
   },
   // 重新发布: 重置 PENDING + 重新通知全部 PLANNER（DONE 不允许）
   republish(id: LongId) {
-    return request.post<any, Task>(`/tasks/republishById/${id}`)
+    return request.post<any, Task>(paths.tasks.republish(id))
   },
   // 删除前关联数据统计（风险提示）
   relatedCounts(id: LongId) {
-    return request.get<any, TaskRelatedCounts>(`/tasks/listRelatedCountsByTaskId/${id}`)
+    return request.get<any, TaskRelatedCounts>(paths.tasks.relatedCounts(id))
   },
-  // 级联删除: 需输入任务标题确认
+  // 级联删除: 需输入任务标题确认（POST 携带 body，DELETE 带 body 不符合语义）
   deleteTask(id: LongId, confirmTitle: string) {
-    return request.delete<any, TaskRelatedCounts>(`/tasks/deleteById/${id}`, { data: { confirmTitle } })
+    return request.post<any, TaskRelatedCounts>(paths.tasks.deleteById(id), { confirmTitle })
   },
   // V48 停止任务（软终止）: 任务置 CANCELLED + 级联取消全部未完成子任务，数据保留可回溯
   stopTask(id: LongId) {
-    return request.post<any, Task>(`/tasks/updateStatusById/${id}`, { status: 'CANCELLED' })
+    return request.post<any, Task>(paths.tasks.updateStatusById(id), { status: 'CANCELLED' })
   },
   // V26 触发 AI 拆解（拆解异步化）: 仅 PENDING 可调，提交即返回（Task 转 PLANNING），
   // LLM 拆解段后台异步执行，草案经 planDrafts 轮询获取；快进快出，保留 llm 档位绰绰有余
   plan(id: LongId) {
-    return request.post<any, SubTask[]>(`/tasks/planById/${id}`, undefined, { timeout: TIMEOUT.llm })
+    return request.post<any, SubTask[]>(paths.tasks.plan(id), undefined, { timeout: TIMEOUT.llm })
   },
   // 查看待审阅草案列表
   planDrafts(id: LongId) {
-    return request.get<any, SubTask[]>(`/tasks/findPlanByTaskId/${id}`)
+    return request.get<any, SubTask[]>(paths.tasks.planDrafts(id))
   },
   // 确认草案: 草案转 PENDING + Task→IN_PROGRESS，按配置自动分发
   confirmPlan(id: LongId) {
-    return request.post<any, SubTask[]>(`/tasks/confirmPlanByTaskId/${id}`)
+    return request.post<any, SubTask[]>(paths.tasks.confirmPlan(id))
   },
   // 拒绝草案: 草案翻 CANCELLED，Task 回 PENDING 可重拆
   rejectPlan(id: LongId) {
-    return request.post<any, { taskId: string; cancelledCount: number }>(`/tasks/rejectPlanByTaskId/${id}`)
+    return request.post<any, { taskId: string; cancelledCount: number }>(paths.tasks.rejectPlan(id))
   },
   // 交付物 zip 下载: 实时聚合子任务产出（概览 + 拓扑序产出文件），
   // blob 响应由拦截器放行返回完整 response 供解析文件名
   downloadDeliverables(id: LongId) {
-    return request.get<any, AxiosResponse<Blob>>(`/tasks/downloadDeliverablesByTaskId/${id}`, {
+    return request.get<any, AxiosResponse<Blob>>(paths.tasks.downloadDeliverables(id), {
       responseType: 'blob',
       timeout: TIMEOUT.llm
     })
   },
   // V32 最终整合报告: 读取 task.final_report 专列（content=null 表示尚未生成）
   getFinalReport(id: LongId) {
-    return request.get<any, TaskFinalReport>(`/tasks/findFinalReportByTaskId/${id}`)
+    return request.get<any, TaskFinalReport>(paths.tasks.finalReport(id))
   },
   // 生成/重新生成整合报告: Planner 整合全部 DONE 子任务产出，仅 DONE 任务可调；
   // 后端 LLM 读超时 180s（provider read-timeout-ms），前端用 longReport 档位留出降档重试与传输余量
   generateFinalReport(id: LongId) {
-    return request.post<any, TaskFinalReport>(`/tasks/generateFinalReportByTaskId/${id}`, undefined, { timeout: TIMEOUT.longReport })
+    return request.post<any, TaskFinalReport>(paths.tasks.generateFinalReport(id), undefined, { timeout: TIMEOUT.longReport })
   },
   // V42 任务执行迭代记录
   findTaskIterationsByTaskId(id: LongId) {
-    return request.get<any, TaskIteration[]>(`/tasks/findTaskIterationsByTaskId/${id}`)
+    return request.get<any, TaskIteration[]>(paths.tasks.iterations(id))
   },
   // V42 触发历史迭代记录回填（一次性，幂等）
   backfillTaskIterations() {
-    return request.post<any, { backfilledCount: number }>('/tasks/backfillTaskIterations')
+    return request.post<any, { backfilledCount: number }>(paths.tasks.backfillIterations)
   }
 }

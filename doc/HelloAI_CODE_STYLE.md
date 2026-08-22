@@ -2,8 +2,11 @@
 
 > 适用项目：HelloAI（AI Agent 协作调度平台）  
 > 生效范围：后端单体服务 + 前端管理后台（Vue 3 / Element Plus）  
-> 版本：V1.8  
-> 最后更新：2026-08-21  
+> 版本：V1.11  
+> 最后更新：2026-08-22  
+> 本版重点 V1.11：§3.x 依赖方向红线配套落地（评审报告 P1 阶段五）——agent 域对 `task.mapper` import 清零（6 处直捅收口为 `SubTaskService` 接口），task↔agent 调度分发改 `TaskDispatchPort` 端口反转（task 域定义、agent 域实现）；ObjectProvider 登记制执行：主代码 8 处减半——4 处 Optional 化（存在性探测场景：AgentChatClientServiceImpl / McpAuthFilterConfig / ExecutionDispatchValidator / OutboxRelayTask），4 处保留理由登记（多候选 orderedStream 路由：CompositeArtifactStorage / WebSearchServiceRouter；懒解析打破循环：SubTaskServiceImpl / ExecutorIssueResolutionAssessor）；配套 `verify-dependency-direction.ps1` 9 项全 PASS
+> 本版重点 V1.10：§7.8 类规模红线存量清单三巨头全数拆分完成（RequirementClarify 1342→675 四拆 / SubTaskReview 888→546 两拆 / AgentServiceImpl 856→553 四组件，迭代记录 §6.136）；§8.2 删除端点特例——DELETE 带 body 不符合 HTTP 语义，改 `POST /deleteById/{id}`（TaskController.deleteById 已落地）；§19 新增 19.0「前端 API 路径常量准则」（src/api/paths.ts 单一事实源，16 个 api 文件全量收口，来源：后端代码评审报告 P2）
+> 本版重点 V1.9：新增 §3.x「依赖方向红线」——core 六业务域单向依赖（planner/review → task → agent → system → shared），system 不得 import task/agent，task 不得 import planner/review，跨域禁止直捅对方 Mapper；配套防回归脚本 `scripts/powershell/verify-dependency-direction.ps1`（来源：后端代码评审报告 P0 领域依赖方向失控）。system 域附件/模块/看板/上传类迁出（Attachment/Module/Dashboard/ArtifactUpload → task 域），AuthServiceImpl 抽 `AgentAuthPort` 下沉 agent 域；反向能力诉求走端口反转（task 域 `TaskPlannerPickerPort` 由 planner 域 `PlannerAgentPicker` 实现，消除 task→planner 孤点）
 > 本版重点 V1.8：新增 §6.8「授权拦截红线」——认证（AuthInterceptor）与授权（AdminOnlyInterceptor）分离，`/api/admin/**` 强制 admin 身份，agent 身份一律 403；配套防回归脚本 `scripts/powershell/verify-admin-authz.ps1`（来源：后端代码评审报告 P0 admin 授权缺口）
 > 本版重点 V1.7：第 8 章「接口路径规范」重写为**内外双轨制**——对内平台轨 `/api/**` 维持描述性驼峰（原 8.1/8.2 规则原样保留），新增开放轨 `/open/**` 强制 kebab-case（服务手机端与第三方集成）；Agent 接入面路径契约冻结不迁；新增 8.4 审查红线与 AI 判定流程；20 章校验清单同步双轨条目
 > 本版重点：对齐 core 业务域分包重构后的代码事实——修正 3.2 启动类 @MapperScan 示例、3.x 资源文件位置、4.1 包命名示例、9.4 Flyway 规范与多版本迁移现实的冲突；补写 6.3 Controller 职责边界（含分层红线与待收口清单）；3.x 业务域分包规则补全子包清单与 outbox 归属决策；9.5 实施要点追加"变更残留检查范围"
@@ -309,6 +312,23 @@ core 模块统一采用"业务域分包 + 域内技术分层"，禁止新增顶�
 **outbox 归属决策**：事务性 outbox 的两张表（agent_outbox_event、agent_command_outbox）及其 entity / mapper / service 归属 agent 域（它们服务的就是 agent 命令与事件分发）；中继调度 OutboxRelayTask 属 helloai-job，MQ 收发侧属 helloai-mq。当第二个业务域引入 outbox 时，再评估将 entity/mapper/service 下沉至 shared/outbox；不要提前建空包占位。
 
 **start 模块配置类归属**：启动模块配置类统一放在 `com.helloai.start.config`；`MyBatisPlusMetaObjectHandler`、`AdminInitializer` 已并入该包，`DeepSeekProviderChatClientFactory` 已迁至 `core.agent.chat.provider`（与 ChatClient 工厂族同源）。新配置类一律放 `start.config`，不允许再出现分裂包。
+
+### 3.x 依赖方向红线（V1.9 新增）
+
+【必须】core 六个业务域实行单向依赖，方向固定：
+
+    planner ─┐
+             ├─→ task ─→ agent ─→ system ─→ shared
+    review ──┘
+
+规则：
+1. 只允许向下依赖，禁止反向依赖与横向回指（如 system 不得 import task/agent/planner/review，task 不得 import planner/review，agent 不得 import planner/review）。
+2. 跨域只允许依赖对方的 service 接口与 entity；**禁止跨域直捅对方 Mapper**（Mapper 是持久层实现细节，跨域直捅是最深耦合）。验收标准：agent 域对 `task.mapper` 包的 import 必须为零。
+3. 反向能力诉求走**端口反转（依赖倒置）**：接口定义在"消费方域"（如 `task.port.TaskPlannerPickerPort`、`agent.port.AgentAuthPort`），由"实现方域"（planner 的 `PlannerAgentPicker`、agent 的 `AgentServiceImpl`）落实 `implements`——消费方域不 import 实现方域，实现方域下依赖消费方域属于合法向下依赖。
+4. 禁止用 ObjectProvider / @Lazy 掩盖设计性循环依赖。确需使用时，必须在类 Javadoc 注明"为解 X↔Y 循环而引入，目标解耦方案为 Z"，并在实现差距表登记为待办。存量 ObjectProvider 逐步通过事件解耦或接口下沉消除。
+5. 验证：`scripts/powershell/verify-dependency-direction.ps1`，任何涉及跨域 import 的改动后必跑，红色命中即阻断合入。
+
+> **归属判断**：新增/搬迁类先问"它服务哪个业务域"——附件（Attachment）与产出物上传（ArtifactUpload）归 task 域（owner 是 sub_task）；模块（Module）是任务的子结构归 task 域；看板聚合（Dashboard / AdminDashboard）归 task 域 observability 子包。system 域只保留用户、凭据、配置、存储抽象、LLM Provider 目录类设施。
 
 ---
 
@@ -1003,6 +1023,18 @@ private final ObjectProvider<AttachmentService> attachmentServiceProvider;
 
 > **原则**: 循环依赖不是靠"放开开关"解决的配置问题，而是依赖方向设计缺陷；构造注入阶段就必须单向化。
 
+### 7.8 类规模红线（V1.9 新增）
+
+【必须】ServiceImpl 满足任一条件即触发拆分评审：
+- 代码超过 500 行；或
+- 构造器注入依赖超过 8 个。
+
+触发后二选一：拆分，或在类 Javadoc 书面说明"不拆"的理由（如强内聚的状态机）。拆分方向优先按"单一职责聚类"：解析器、外部服务编排、协议构造等可独立测试的职责优先剥离为独立类。
+
+理由：AI 协作开发时，超大类的完整上下文无法装入模型窗口，是改错率的主要来源；类规模红线本质上是 AI 协作的生产率红线。
+
+> **存量清单**（评审报告 P1，2026-08-22 起逐批拆分，**当日全部完成**）：`RequirementClarifyServiceImpl`（1342→675 行，四拆：IntentDetectionService / ClarifyWebSearchOrchestrator / ClarifyReplyParser / ConfirmCardProtocol）、`SubTaskReviewServiceImpl`（888→546 行，两拆：ReviewEvidenceAssembler / VerdictParser）、`AgentServiceImpl`（856→553 行，四组件：AgentCredentialService / AgentSkillPolicyService / AgentLifecycleService / AgentStatsService）；每一拆独立小闭环（编译 + 相关单测 + 依赖方向脚本），拆分未改变业务行为。详见迭代记录 §6.136。
+
 
 ## 8. 接口路径规范（内外双轨制）
 
@@ -1052,6 +1084,9 @@ private final ObjectProvider<AttachmentService> attachmentServiceProvider;
 | 新增 | POST | `/` | `POST /api/tasks` |
 | 修改 | PUT | `/` | `PUT /api/tasks` |
 | 删除 | DELETE | `/deleteById/{id}` | `DELETE /api/tasks/deleteById/1001` |
+
+> **特例**：删除需携带确认信息的 body 时（如 `TaskController.deleteById` 的 `confirmTitle` 级联删除确认），
+> DELETE 带 body 不符合 HTTP 语义，改用 `POST /deleteById/{id}`（前端 `request.post` 同步）。
 
 ### 8.3 开放轨 `/open/**`
 
@@ -1908,6 +1943,17 @@ public class {Name}CompensationTask {
 ---
 
 ## 19. Vue 页面规范
+
+### 19.0 前端 API 路径常量准则（V1.10 新增）
+
+【必须】前端请求路径统一引用 `src/api/paths.ts` 导出的 `paths` 常量字典，禁止在 api 模块或页面内联路径字符串：
+
+- 路径按资源分组（tasks / subTasks / agents / setup / admin / attachments / clarifications 等），静态路径直接字符串，带参路径用箭头函数 `(id) => \`/xxx/${enc(id)}\``
+- `enc()` 统一 `encodeURIComponent(String(s))`，调用方禁止重复 `encodeURIComponent`
+- 新增接口路径只改 paths.ts 一处，api 模块与页面全部引用常量
+- 存量 16 个 api 文件已于 2026-08-22 全量收口（评审整改阶段四-3）；防回归：grep 内联 `/api/` 路径字符串应零命中
+
+理由：路径单一事实源，前后端契约变更只改一处；AI 协作下避免散落字符串漂移。
 
 ### 19.1 列表页标准结构
 

@@ -657,7 +657,7 @@ if ($s80Line -and $s80Line.Split('|')[0]) {
     $residualTaskId = $s80Line.Split('|')[0]
     Write-Output "S8.0 cleanup residual task id=$residualTaskId"
     $s80DelBody = "{`"confirmTitle`":`"$quotaTaskTitle`"}"
-    $null = Invoke-Json -Method DELETE -Uri "$base/api/tasks/deleteById/$residualTaskId" -Body $s80DelBody -Headers @{ "X-Admin-Token" = $adminToken }
+    $null = Invoke-Json -Method POST -Uri "$base/api/tasks/deleteById/$residualTaskId" -Body $s80DelBody -Headers @{ "X-Admin-Token" = $adminToken }
 }
 
 # ---------- S8.1 checkIn(maxConcurrent=1) ----------
@@ -809,7 +809,7 @@ Write-Output ('S8.5 OK: concurrent dispatch kept in-flight count at ' + $s85InFl
 $s86OutBody = '{"jsonrpc":"2.0","id":86,"method":"tools/call","params":{"name":"checkOut","arguments":{"agentId":' + $agentId + ',"closeReason":"s8_final_cleanup","sessionId":"' + $sid + '"}}}'
 $null = Send-Mcp -Sid $sid -Body $s86OutBody -Label 'S8.6 final checkOut' -Headers @{ 'Authorization' = 'Bearer ' + $agentApiKey }
 $s86DelBody = "{`"confirmTitle`":`"$quotaTaskTitle`"}"
-$s86DelResp = Invoke-Json -Method DELETE -Uri "$base/api/tasks/deleteById/$s82TaskId" -Body $s86DelBody -Headers @{ "X-Admin-Token" = $adminToken }
+$s86DelResp = Invoke-Json -Method POST -Uri "$base/api/tasks/deleteById/$s82TaskId" -Body $s86DelBody -Headers @{ "X-Admin-Token" = $adminToken }
 Write-Output ('S8.6 delete task HTTP=' + $s86DelResp.Code + ' body=' + $s86DelResp.Body)
 $s86VerifySql = "SELECT COUNT(*) FROM sub_task WHERE task_id = $s82TaskId AND deleted = 0;"
 $s86VerifyFile = Join-Path $scriptDir 'verify-agenthub-duty-e2e-s8-6.out'

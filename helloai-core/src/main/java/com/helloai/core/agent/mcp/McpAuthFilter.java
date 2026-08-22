@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentAuthPort;
 import com.helloai.core.system.service.AuthService;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -37,7 +38,7 @@ import java.util.Map;
  * <p><b>鉴权来源</b>（与现有 {@code AuthInterceptor} 一致）：
  * <ol>
  *   <li>{@code X-Admin-Token} 头 → {@link AuthService#validateAdminToken} → 管理员会话</li>
- *   <li>{@code Authorization: Bearer <apiKey>} 头 → {@link AuthService#validateAgentKey} → Agent 实体</li>
+ *   <li>{@code Authorization: Bearer <apiKey>} 头 → {@link AgentAuthPort#validateApiKey} → Agent 实体</li>
  *   <li>两者都缺 → 401 + JSON-RPC error 风格 body</li>
  * </ol>
  * </p>
@@ -60,6 +61,7 @@ import java.util.Map;
 public class McpAuthFilter extends OncePerRequestFilter {
 
     private final AuthService authService;
+    private final AgentAuthPort agentAuthPort;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Counter adminSuccess;
     private final Counter agentSuccess;
@@ -68,8 +70,9 @@ public class McpAuthFilter extends OncePerRequestFilter {
     private final Counter agentFailure;
     private final Counter exceptionFailure;
 
-    public McpAuthFilter(AuthService authService, MeterRegistry meterRegistry) {
+    public McpAuthFilter(AuthService authService, AgentAuthPort agentAuthPort, MeterRegistry meterRegistry) {
         this.authService = authService;
+        this.agentAuthPort = agentAuthPort;
         this.adminSuccess = meterRegistry.counter("helloai.mcp.auth", "result", "success", "type", "admin");
         this.agentSuccess = meterRegistry.counter("helloai.mcp.auth", "result", "success", "type", "agent");
         this.missingCredentialFailure = meterRegistry.counter("helloai.mcp.auth", "result", "fail", "type", "none", "reason", "missing_credential");
@@ -128,7 +131,7 @@ public class McpAuthFilter extends OncePerRequestFilter {
             if (authorization != null && authorization.startsWith("Bearer ")) {
                 String apiKey = authorization.substring(7);
                 if (!apiKey.isBlank()) {
-                    Agent agent = authService.validateAgentKey(apiKey);
+                    Agent agent = agentAuthPort.validateApiKey(apiKey);
                     request.setAttribute(McpAuthContext.AUTH_ID, agent.getId());
                     request.setAttribute(McpAuthContext.AUTH_NAME, agent.getName());
                     request.setAttribute(McpAuthContext.AUTH_TYPE, "agent");

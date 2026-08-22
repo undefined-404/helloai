@@ -1,7 +1,5 @@
 package com.helloai.core.system.service;
 
-import com.helloai.core.agent.entity.Agent;
-
 import java.time.Duration;
 
 /**
@@ -11,6 +9,9 @@ import java.time.Duration;
  * <p><b>会话存储</b>：管理员会话存 Redis（key 前缀 {@link #ADMIN_TOKEN_KEY_PREFIX}，
  * TTL {@link #ADMIN_TOKEN_TTL}，每次校验命中后滑动续期），后端重启不再导致会话丢失。
  * Redis 为鉴权强依赖（与心跳/MQ 幂等一致），不做内存降级。</p>
+ *
+ * <p><b>Agent API Key 验证</b>：按 §3.x 依赖方向红线下沉至 agent 域
+ * {@code AgentAuthPort}（由 AgentServiceImpl 实现），本服务不再依赖 agent 域。</p>
  */
 public interface AuthService {
 
@@ -35,11 +36,6 @@ public interface AuthService {
      * 管理员登出
      */
     void adminLogout(String token);
-
-    /**
-     * Agent API Key 验证
-     */
-    Agent validateAgentKey(String apiKey);
 
     /**
      * 加密明文密码

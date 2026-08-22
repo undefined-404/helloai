@@ -48,6 +48,8 @@ public class ExecutorIssueResolutionAssessor {
     private static final Pattern JSON_FENCE =
             Pattern.compile("```(?:json)?\\s*([\\s\\S]*?)\\s*```", Pattern.CASE_INSENSITIVE);
 
+    // 阶段五保留：懒解析打破循环（LlmProviderChatClientFactoryRegistry 依赖 agent 域服务，
+    // 直接注入会成环），仅在使用时 getIfAvailable 探测可用性，故保留 ObjectProvider
     private final ObjectProvider<LlmProviderChatClientFactoryRegistry> chatClientFactoryRegistryProvider;
     private final PlatformProviderConfigService platformProviderConfigService;
     private final LlmProviderQueryService llmProviderQueryService;

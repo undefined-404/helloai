@@ -1,5 +1,6 @@
 package com.helloai.core.agent.mcp;
 
+import com.helloai.core.agent.port.AgentAuthPort;
 import com.helloai.core.system.service.AuthService;
 import lombok.RequiredArgsConstructor;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -8,7 +9,8 @@ import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.Ordered;
-import org.springframework.beans.factory.ObjectProvider;
+
+import java.util.Optional;
 
 /**
  * MCP Server 鉴权 Filter 注册配置（§3.1 / §9 鉴权接入）。
@@ -29,12 +31,14 @@ import org.springframework.beans.factory.ObjectProvider;
 public class McpAuthFilterConfig {
 
     private final AuthService authService;
-    private final ObjectProvider<MeterRegistry> meterRegistryProvider;
+    private final AgentAuthPort agentAuthPort;
+    // 阶段五：存在性探测改 Optional 注入（无 Bean 时 empty，orElseGet 兜底 SimpleMeterRegistry）
+    private final Optional<MeterRegistry> meterRegistryProvider;
 
     @Bean
     public FilterRegistrationBean<McpAuthFilter> mcpAuthFilterRegistration() {
-        MeterRegistry meterRegistry = meterRegistryProvider.getIfAvailable(SimpleMeterRegistry::new);
-        McpAuthFilter filter = new McpAuthFilter(authService, meterRegistry);
+        MeterRegistry meterRegistry = meterRegistryProvider.orElseGet(SimpleMeterRegistry::new);
+        McpAuthFilter filter = new McpAuthFilter(authService, agentAuthPort, meterRegistry);
         FilterRegistrationBean<McpAuthFilter> registration = new FilterRegistrationBean<>(filter);
         registration.addUrlPatterns("/mcp/*");
         registration.setName("mcpAuthFilter");

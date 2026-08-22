@@ -18,6 +18,7 @@ import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.observability.CircuitBreakerEventRecorder;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.port.TaskDispatchPort;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
@@ -26,6 +27,9 @@ import java.util.Map;
 
 /**
  * 弹性调度器。
+ *
+ * <p>实现 {@link TaskDispatchPort}（task 域定义的子任务分发端口，阶段五
+ * task↔agent 事件解耦）：task 域只依赖端口，本类按依赖倒置提供实现。</p>
  *
  * <p>为任务分配提供熔断降级保护：
  * <ul>
@@ -52,7 +56,7 @@ import java.util.Map;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class ResilientDispatcher {
+public class ResilientDispatcher implements TaskDispatchPort {
 
     private final CircuitBreakerRegistry circuitBreakerRegistry;
     private final CircuitBreakerEventRecorder circuitBreakerEventRecorder;
@@ -80,6 +84,7 @@ public class ResilientDispatcher {
      * @param agentId   目标 Agent ID
      * @param subTaskId 待分配的子任务 ID
      */
+    @Override
     @CircuitBreaker(name = "agentDispatch", fallbackMethod = "assignNextFallback")
     public void assignNext(Long agentId, Long subTaskId) {
         doAssignNext(agentId, subTaskId, null);
@@ -92,13 +97,19 @@ public class ResilientDispatcher {
      * （执行者白名单 + 技能 AND 匹配）：首选 fast-fail 后，fallback 替代选人
      * 同样受约束，保证整条分配链不选到任务指定范围外的 Agent。</p>
      *
+     * <p>端口契约约束 {@link TaskDispatchPort.DispatchConstraints} 为纯数据，
+     * 本方法在此转换为内部 {@link AgentSelectionConstraints}（含 Agent 实体
+     * 判定能力），转换语义与旧调用方构造完全一致。</p>
+     *
      * @param agentId     目标 Agent ID
      * @param subTaskId   待分配的子任务 ID
      * @param constraints 任务级选人约束；null 表示不约束（与旧行为一致）
      */
+    @Override
     @CircuitBreaker(name = "agentDispatch", fallbackMethod = "assignNextFallbackWithConstraints")
-    public void assignNext(Long agentId, Long subTaskId, AgentSelectionConstraints constraints) {
-        doAssignNext(agentId, subTaskId, constraints);
+    public void assignNext(Long agentId, Long subTaskId, TaskDispatchPort.DispatchConstraints constraints) {
+        doAssignNext(agentId, subTaskId, constraints == null ? null
+                : AgentSelectionConstraints.of(constraints.allowedAgentIds(), constraints.requiredSkills()));
     }
 
     private void doAssignNext(Long agentId, Long subTaskId, AgentSelectionConstraints constraints) {
@@ -207,7 +218,7 @@ public class ResilientDispatcher {
         doAssignNextFallback(agentId, subTaskId, null, t);
     }
 
-    /** 带任务级约束的熔断降级（替代选人同样受约束，见 {@link #assignNext(Long, Long, AgentSelectionConstraints)}）。 */
+    /** 带任务级约束的熔断降级（替代选人同样受约束，见 {@link #assignNext(Long, Long, TaskDispatchPort.DispatchConstraints)}）。 */
     @SuppressWarnings("unused")
     private void assignNextFallbackWithConstraints(Long agentId, Long subTaskId,
                                                    AgentSelectionConstraints constraints, Throwable t) {

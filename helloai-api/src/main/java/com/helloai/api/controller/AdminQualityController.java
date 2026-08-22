@@ -3,6 +3,7 @@ package com.helloai.api.controller;
 import com.helloai.common.base.R;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
+import com.helloai.core.system.service.SysConfigService;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.TaskRunningSpecService;
 import lombok.RequiredArgsConstructor;
@@ -31,6 +32,12 @@ import org.springframework.web.bind.annotation.RestController;
  * </ul>
  *
  * <p>本端点仅面向管理侧实测验证；Phase 5 看板查询端点落地时再行扩展。</p>
+ *
+ * <p>配置门控：全部端点受 sys_config 键 {@code admin.quality.enabled}
+ * （值 "true" 开放）控制，生产默认关闭；实测脚本
+ * （verify-quality-profile.ps1 / verify-contract-first.ps1）登录后会先
+ * {@code PUT /api/admin/config/updateByKey/admin.quality.enabled} 开启。
+ * 关闭时返回业务码 403，避免内部 Prompt 段/重算/派发入口在生产无门槛暴露。</p>
  */
 @Slf4j
 @RestController
@@ -38,9 +45,13 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 public class AdminQualityController {
 
+    /** 门控配置键：sys_config 中置 "true" 才开放本控制器全部端点。 */
+    private static final String ENABLED_CONFIG_KEY = "admin.quality.enabled";
+
     private final AgentQualityProfileService agentQualityProfileService;
     private final SubTaskDispatchService subTaskDispatchService;
     private final TaskRunningSpecService taskRunningSpecService;
+    private final SysConfigService sysConfigService;
 
     /**
      * 重算指定 Agent 的质量画像（rebuild 兜底）。
@@ -49,6 +60,9 @@ public class AdminQualityController {
      */
     @PostMapping("/rebuild/{agentId}")
     public R<Void> rebuild(@PathVariable("agentId") Long agentId) {
+        if (!isEnabled()) {
+            return gateDenied();
+        }
         agentQualityProfileService.rebuild(agentId);
         log.info("管理员触发画像重算: agentId={}", agentId);
         return R.ok();
@@ -61,6 +75,9 @@ public class AdminQualityController {
      */
     @PostMapping("/dispatch/{subTaskId}")
     public R<Long> dispatch(@PathVariable("subTaskId") Long subTaskId) {
+        if (!isEnabled()) {
+            return gateDenied();
+        }
         Long preferredAgentId = subTaskDispatchService.dispatchPendingSubTaskAuto(subTaskId, AgentRole.EXECUTOR);
         log.info("管理员触发子任务自动分发: subTaskId={}, preferredAgentId={}", subTaskId, preferredAgentId);
         return R.ok(preferredAgentId);
@@ -73,6 +90,17 @@ public class AdminQualityController {
      */
     @GetMapping("/spec-section/{taskId}")
     public R<String> specSection(@PathVariable("taskId") Long taskId) {
+        if (!isEnabled()) {
+            return gateDenied();
+        }
         return R.ok(taskRunningSpecService.buildExecutorPromptSection(taskId));
+    }
+
+    private boolean isEnabled() {
+        return "true".equalsIgnoreCase(sysConfigService.getValue(ENABLED_CONFIG_KEY));
+    }
+
+    private <T> R<T> gateDenied() {
+        return R.fail(403, "管理侧质量实测端点未开启（sys config " + ENABLED_CONFIG_KEY + "=true）");
     }
 }

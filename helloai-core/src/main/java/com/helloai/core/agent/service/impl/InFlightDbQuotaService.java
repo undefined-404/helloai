@@ -5,9 +5,10 @@ import com.helloai.core.agent.entity.AgentDutyLease;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConcurrencyQuotaService;
-import com.helloai.core.task.mapper.SubTaskMapper;
+import com.helloai.core.task.service.SubTaskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 /**
@@ -31,24 +32,37 @@ public class InFlightDbQuotaService implements ConcurrencyQuotaService {
     /** capabilities 中的并发额度键（能力声明，无租约时生效）。 */
     public static final String MAX_CONCURRENT_CAPABILITY_KEY = "maxConcurrentTasks";
 
-    private final SubTaskMapper subTaskMapper;
-    private final AgentDutyLeaseService agentDutyLeaseService;
-    private final AgentService agentService;
+    // 懒解析打破循环：SubTaskServiceImpl 构造注入 ConcurrencyQuotaService（本类），
+    // 本类再直接注入 SubTaskService/AgentService/AgentDutyLeaseService 会形成多条构造器环
+    // （subTaskServiceImpl ↔ inFlightDbQuotaService、inFlightDbQuotaService → agentDutyLeaseServiceImpl
+    // → subTaskServiceImpl、inFlightDbQuotaService → agentServiceImpl，§6.86 引入，重启暴露）
+    private final ObjectProvider<SubTaskService> subTaskServiceProvider;
+    private final ObjectProvider<AgentDutyLeaseService> agentDutyLeaseServiceProvider;
+    private final ObjectProvider<AgentService> agentServiceProvider;
 
     @Override
     public int inFlightCount(Long agentId) {
-        return subTaskMapper.countInFlightByAgent(agentId);
+        SubTaskService subTaskService = subTaskServiceProvider.getIfAvailable();
+        if (subTaskService == null) {
+            return 0;
+        }
+        return subTaskService.countInFlightByAgent(agentId);
     }
 
     @Override
     public Integer resolveQuota(Long agentId) {
         // 1. 值班租约声明优先：checkIn 显式承诺的容量
-        AgentDutyLease lease = agentDutyLeaseService.getActiveLease(agentId);
+        AgentDutyLeaseService agentDutyLeaseService = agentDutyLeaseServiceProvider.getIfAvailable();
+        AgentDutyLease lease = agentDutyLeaseService == null ? null : agentDutyLeaseService.getActiveLease(agentId);
         if (lease != null && lease.getMaxConcurrent() != null) {
             return lease.getMaxConcurrent();
         }
         // 2. 无租约：仅当 capabilities 显式声明 maxConcurrentTasks 才约束；
         //    未声明返回 null（不限制），保证与 E2 前行为完全兼容。
+        AgentService agentService = agentServiceProvider.getIfAvailable();
+        if (agentService == null) {
+            return null;
+        }
         try {
             Agent agent = agentService.getById(agentId);
             if (agent == null || agent.getCapabilities() == null) {

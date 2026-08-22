@@ -513,7 +513,7 @@ s80_find="$(psql_field 1 "SELECT COALESCE((SELECT id::text FROM task WHERE title
 if [[ "$s80_find" != "NONE" ]]; then
   log "S8.0 cleanup residual task id=$s80_find"
   s80_del_body="$(jq -cn --arg t "$QUOTA_TASK_TITLE" '{confirmTitle:$t}')"
-  http_request DELETE "$BASE_URL/api/tasks/deleteById/$s80_find" "$s80_del_body" "X-Admin-Token: $ADMIN_TOKEN"
+  http_request POST "$BASE_URL/api/tasks/deleteById/$s80_find" "$s80_del_body" "X-Admin-Token: $ADMIN_TOKEN"
   log "S8.0 delete residual HTTP $HTTP_CODE"
 fi
 
@@ -617,7 +617,7 @@ log "S8.5 OK: concurrent dispatch kept in-flight count at $s85_inflight (<= quot
 s86_out_body='{"jsonrpc":"2.0","id":86,"method":"tools/call","params":{"name":"checkOut","arguments":{"agentId":'"$AGENT_ID"',"closeReason":"s8_final_cleanup","sessionId":"'"$SID"'"}}}'
 send_mcp "$s86_out_body" "S8.6 final checkOut" "Authorization: Bearer $AGENT_API_KEY"
 s86_del_body="$(jq -cn --arg t "$QUOTA_TASK_TITLE" '{confirmTitle:$t}')"
-http_request DELETE "$BASE_URL/api/tasks/deleteById/$S82_TASK_ID" "$s86_del_body" "X-Admin-Token: $ADMIN_TOKEN"
+http_request POST "$BASE_URL/api/tasks/deleteById/$S82_TASK_ID" "$s86_del_body" "X-Admin-Token: $ADMIN_TOKEN"
 log "S8.6 delete task HTTP $HTTP_CODE body: $HTTP_BODY"
 s86_left="$(psql_field 1 "SELECT COUNT(*) FROM sub_task WHERE task_id = $S82_TASK_ID AND deleted = 0;")"
 [[ "$s86_left" == "0" ]] || fail "S8.6 FAIL: residual sub_tasks $s86_left after cascade delete"

@@ -9,12 +9,13 @@ import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentDutyLeaseMapper;
 import com.helloai.core.agent.mapper.AgentInboxMapper;
+import com.helloai.core.agent.mapper.AgentMapper;
+import com.helloai.core.agent.port.AgentAuthPort;
 import com.helloai.core.agent.service.impl.AgentServiceImpl;
 import com.helloai.core.system.entity.LlmProviderModel;
-import com.helloai.core.task.mapper.ActivityLogMapper;
-import com.helloai.core.task.mapper.ReviewRecordMapper;
-import com.helloai.core.task.mapper.RewardLogMapper;
-import com.helloai.core.task.mapper.SubTaskMapper;
+import com.helloai.core.task.service.ActivityLogService;
+import com.helloai.core.task.service.RewardService;
+import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import com.helloai.core.system.crypto.AgentApiKeyCipher;
 import com.helloai.core.system.service.LlmProviderModelQueryService;
@@ -30,6 +31,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
@@ -47,17 +49,17 @@ import static org.mockito.Mockito.when;
 class AgentServiceTest {
 
     @Mock
-    private SubTaskMapper subTaskMapper;
+    private SubTaskService subTaskService;
     @Mock
-    private RewardLogMapper rewardLogMapper;
+    private RewardService rewardService;
     @Mock
-    private ActivityLogMapper activityLogMapper;
-    @Mock
-    private ReviewRecordMapper reviewRecordMapper;
+    private ActivityLogService activityLogService;
     @Mock
     private AgentInboxMapper agentInboxMapper;
     @Mock
     private AgentDutyLeaseMapper agentDutyLeaseMapper;
+    @Mock
+    private AgentMapper agentMapper;
     @Mock
     private TaskTimelineService taskTimelineService;
     @Mock
@@ -68,10 +70,13 @@ class AgentServiceTest {
     private AgentApiKeyCipher agentApiKeyCipher;
 
     private AgentService newSpyService() {
-        return spy(new AgentServiceImpl(subTaskMapper, rewardLogMapper, activityLogMapper,
-                reviewRecordMapper, agentInboxMapper, agentDutyLeaseMapper,
-                taskTimelineService, agentMcpServerService, llmProviderModelQueryService,
-                agentApiKeyCipher));
+        return spy(new AgentServiceImpl(subTaskService, rewardService, activityLogService,
+                agentInboxMapper, agentDutyLeaseMapper,
+                agentMcpServerService, agentApiKeyCipher,
+                new AgentCredentialService(agentMapper, agentApiKeyCipher),
+                new AgentSkillPolicyService(agentMapper, llmProviderModelQueryService),
+                new AgentLifecycleService(agentMapper, taskTimelineService),
+                new AgentStatsService(agentMapper, subTaskService, rewardService, activityLogService)));
     }
 
     @Test
@@ -81,12 +86,13 @@ class AgentServiceTest {
         Agent agent = new Agent();
         agent.setId(1L);
         agent.setName("agent-a");
-        doReturn(agent).when(service).getById(1L);
+        // 阶段五：getRelatedCounts 收口到 AgentStatsService，经 AgentMapper 取 Agent
+        when(agentMapper.selectById(1L)).thenReturn(agent);
 
-        when(subTaskMapper.selectCount(any())).thenReturn(3L);
-        when(reviewRecordMapper.selectCount(any())).thenReturn(2L);
-        when(rewardLogMapper.selectCount(any())).thenReturn(5L);
-        when(activityLogMapper.selectCount(any())).thenReturn(7L);
+        when(subTaskService.countByAssignedAgent(1L)).thenReturn(3L);
+        when(subTaskService.countReviewByReviewerAgent(1L)).thenReturn(2L);
+        when(rewardService.countByAgent(1L)).thenReturn(5L);
+        when(activityLogService.countByAgent(1L)).thenReturn(7L);
 
         Map<String, Object> counts = service.getRelatedCounts(1L);
 
@@ -103,11 +109,41 @@ class AgentServiceTest {
     @DisplayName("getRelatedCounts：Agent 不存在抛 BizException")
     void shouldThrowWhenAgentNotFound() {
         AgentService service = newSpyService();
-        doReturn(null).when(service).getById(999L);
+        // statsService 经 AgentMapper 取 Agent，@Mock 默认返回 null 即触发不存在分支
+        when(agentMapper.selectById(999L)).thenReturn(null);
 
         assertThatThrownBy(() -> service.getRelatedCounts(999L))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("Agent 不存在");
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  AgentAuthPort.validateApiKey（认证内核；由 system 域 AuthService 下沉）
+    // ════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("validateApiKey：无效 Key 抛 401")
+    void validateApiKey_invalid_shouldThrow401() {
+        AgentService service = newSpyService();
+        doReturn(null).when(service).getByApiKey("bad-key");
+
+        BizException ex = assertThrows(BizException.class,
+                () -> ((AgentAuthPort) service).validateApiKey("bad-key"));
+        assertThat(ex.getCode()).isEqualTo(401);
+    }
+
+    @Test
+    @DisplayName("validateApiKey：已禁用 Agent 抛 403")
+    void validateApiKey_disabled_shouldThrow403() {
+        AgentService service = newSpyService();
+        Agent agent = new Agent();
+        agent.setId(2001L);
+        agent.setStatus(AgentStatus.DISABLED);
+        doReturn(agent).when(service).getByApiKey("disabled-key");
+
+        BizException ex = assertThrows(BizException.class,
+                () -> ((AgentAuthPort) service).validateApiKey("disabled-key"));
+        assertThat(ex.getCode()).isEqualTo(403);
     }
 
     // ════════════════════════════════════════════════════════════

@@ -5,7 +5,6 @@ import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapp
 import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentOutboxService;
-import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConcurrencyQuotaService;
 import com.helloai.core.agent.mapper.AgentMapper;
 import com.helloai.common.config.AgentDispatchProperties;
@@ -13,7 +12,7 @@ import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.ReviewRecordMapper;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
 import com.helloai.core.task.service.impl.SubTaskServiceImpl;
-import com.helloai.core.system.service.AttachmentService;
+import com.helloai.core.task.service.AttachmentService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -52,7 +51,7 @@ class SubTaskServiceIsReadyTest {
     void setUp() {
         SubTaskService real = new SubTaskServiceImpl(
                 mock(AgentOutboxService.class), mock(AgentInboxService.class),
-                mock(AgentService.class), mock(HeartbeatService.class),
+                mock(org.springframework.beans.factory.ObjectProvider.class), mock(HeartbeatService.class),
                 mock(ReviewRecordMapper.class), mock(ImplicitScoreCalculator.class),
                 mock(RewardService.class), mock(ApplicationEventPublisher.class),
                 mock(TaskTimelineService.class), mock(AgentMapper.class),

@@ -1,7 +1,7 @@
 package com.helloai.api.controller;
 
 import com.helloai.common.base.R;
-import com.helloai.core.system.service.DashboardService;
+import com.helloai.core.task.observability.service.DashboardService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.GetMapping;

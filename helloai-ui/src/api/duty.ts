@@ -1,4 +1,5 @@
 import request from './request'
+import { paths } from './paths'
 import type { DutyLeaseResponse, DutyAgentLatestResponse, DutyOverviewResponse } from '@/types/duty'
 import type { PageResult, LongId } from '@/types'
 
@@ -16,16 +17,16 @@ export const dutyApi = {
     page?: number
     size?: number
   }) {
-    return request.get<any, PageResult<DutyLeaseResponse>>('/admin/duty-leases', { params })
+    return request.get<any, PageResult<DutyLeaseResponse>>(paths.admin.dutyLeases, { params })
   },
 
   /** Agent 维度分页：每个 Agent 只返回最新一条打卡记录 + 记录总数。 */
   listByAgent(params?: { page?: number; size?: number }) {
-    return request.get<any, PageResult<DutyAgentLatestResponse>>('/admin/duty-leases/listByAgent', { params })
+    return request.get<any, PageResult<DutyAgentLatestResponse>>(paths.admin.dutyLeasesByAgent, { params })
   },
 
   /** 今日打卡概览（Dashboard 顶部卡片数据源，Agent 维度去重）。 */
   overview() {
-    return request.get<any, DutyOverviewResponse>('/admin/duty-leases/getOverview')
+    return request.get<any, DutyOverviewResponse>(paths.admin.dutyLeasesOverview)
   }
 }

@@ -18,7 +18,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
@@ -26,6 +25,7 @@ import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -63,10 +63,10 @@ class OutboxRelayTaskTest {
     private AgentCommandOutboxService outboxService;
 
     @Mock
-    private ObjectProvider<ExecutionCommandMqPublisher> mqPublisherProvider;
-
-    @Mock
     private ExecutionCommandMqPublisher mqPublisher;
+
+    // 阶段五：ObjectProvider → Optional 注入；默认有 Publisher，测试内可整体替换为 empty
+    private Optional<ExecutionCommandMqPublisher> mqPublisherProvider;
 
     @Mock
     private AgentCommandOutboxRelayProperties properties;
@@ -92,6 +92,7 @@ class OutboxRelayTaskTest {
     @BeforeEach
     void setUp() {
         // 通过 new + 反射设置 final 字段，避免被 @InjectMocks 反射检查阻断
+        mqPublisherProvider = Optional.of(mqPublisher);
         task = new OutboxRelayTask(outboxService, mqPublisherProvider, properties,
                 executionProperties, redis, objectMapper);
         // Redis 锁默认能拿到
@@ -102,8 +103,7 @@ class OutboxRelayTaskTest {
         lenient().when(properties.getBaseBackoffSeconds()).thenReturn(2);
         lenient().when(properties.getBatchLimit()).thenReturn(50);
         lenient().when(properties.getConfirmTimeoutSeconds()).thenReturn(30);
-        // Publisher 默认能拿到（个别用例单独 override）
-        lenient().when(mqPublisherProvider.getIfAvailable()).thenReturn(mqPublisher);
+        // Publisher 默认可拿（Optional.of(mqPublisher)）；需要"不可用"路径时整体替换为 Optional.empty()
         lenient().when(outboxService.listExpiredSentForRetry(anyInt())).thenReturn(List.of());
     }
 

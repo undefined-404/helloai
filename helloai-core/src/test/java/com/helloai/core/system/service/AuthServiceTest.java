@@ -1,10 +1,6 @@
 package com.helloai.core.system.service;
 
 import com.helloai.common.base.BizException;
-import com.helloai.common.constant.AgentStatus;
-import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.agent.mapper.AgentMapper;
-import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.system.entity.SysUser;
 import com.helloai.core.system.mapper.SysUserMapper;
 import com.helloai.core.system.service.impl.AuthServiceImpl;
@@ -42,7 +38,7 @@ import static org.mockito.Mockito.when;
  *   <li>校验命中后滑动续期（expire 重置 TTL）</li>
  *   <li>token 未命中 / 缓存值损坏 → 401，损坏 key 被清理</li>
  *   <li>登出删除 Redis key</li>
- *   <li>Agent API Key 校验行为不变（直查 DB，无效 401 / 禁用 403）</li>
+ *   <li>Agent API Key 校验已下沉至 agent 域 AgentAuthPort（见 AgentServiceTest），本测试不再覆盖</li>
  * </ol>
  */
 @ExtendWith(MockitoExtension.class)
@@ -54,12 +50,6 @@ class AuthServiceTest {
     private SysUserMapper sysUserMapper;
 
     @Mock
-    private AgentMapper agentMapper;
-
-    @Mock
-    private AgentService agentService;
-
-    @Mock
     private StringRedisTemplate redis;
 
     @Mock
@@ -69,7 +59,7 @@ class AuthServiceTest {
 
     @BeforeEach
     void setUp() {
-        authService = new AuthServiceImpl(sysUserMapper, agentMapper, agentService, redis);
+        authService = new AuthServiceImpl(sysUserMapper, redis);
         // LENIENT 模式：部分用例不触 Redis，此 stubbing 不是"未使用"而是被跳过
         when(redis.opsForValue()).thenReturn(valueOps);
     }
@@ -187,34 +177,6 @@ class AuthServiceTest {
             authService.adminLogout("tok-1");
 
             verify(redis).delete(AuthService.ADMIN_TOKEN_KEY_PREFIX + "tok-1");
-        }
-    }
-
-    @Nested
-    @DisplayName("Agent API Key 校验（等保加密后走 AgentService 点查）")
-    class ValidateAgentKey {
-
-        @Test
-        @DisplayName("无效 API Key 应抛 401")
-        void validateAgentKey_invalid_shouldThrow401() {
-            when(agentService.getByApiKey(anyString())).thenReturn(null);
-
-            BizException ex = assertThrows(BizException.class,
-                    () -> authService.validateAgentKey("bad-key"));
-            assertEquals(401, ex.getCode());
-        }
-
-        @Test
-        @DisplayName("已禁用 Agent 应抛 403")
-        void validateAgentKey_disabled_shouldThrow403() {
-            Agent agent = new Agent();
-            agent.setId(2001L);
-            agent.setStatus(AgentStatus.DISABLED);
-            when(agentService.getByApiKey(anyString())).thenReturn(agent);
-
-            BizException ex = assertThrows(BizException.class,
-                    () -> authService.validateAgentKey("disabled-key"));
-            assertEquals(403, ex.getCode());
         }
     }
 }

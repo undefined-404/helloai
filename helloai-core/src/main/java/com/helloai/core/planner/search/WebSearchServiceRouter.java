@@ -32,6 +32,8 @@ import java.util.List;
 public class WebSearchServiceRouter implements WebSearchService {
 
     private final WebSearchProperties properties;
+    // 阶段五保留：多候选探测需 orderedStream 取全部已激活实现（0/1/N）再按 provider 配置
+    // 选定一个，Optional 只能取单值，故保留 ObjectProvider
     private final ObjectProvider<WebSearchService> candidates;
 
     public WebSearchServiceRouter(WebSearchProperties properties,

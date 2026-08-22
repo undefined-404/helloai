@@ -1,9 +1,9 @@
 package com.helloai.core.task.service;
 
 import com.helloai.common.constant.AgentRole;
-import com.helloai.core.agent.dispatcher.ResilientDispatcher;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.port.TaskDispatchPort;
 
 import java.util.regex.Pattern;
 
@@ -11,7 +11,7 @@ import java.util.regex.Pattern;
  * 子任务调度分配服务。
  *
  * <p>负责把"需要重新进入分配链"的场景统一收口到
- * {@link ResilientDispatcher}，避免 Controller、补偿任务直接改库后绕开
+ * {@link TaskDispatchPort}，避免 Controller、补偿任务直接改库后绕开
  * ASSIGNED 事件、收件箱通知与自动执行链。</p>
  */
 public interface SubTaskDispatchService {
@@ -24,7 +24,7 @@ public interface SubTaskDispatchService {
     /**
      * 对离线 Agent 遗留子任务执行重新调度。
      *
-     * <p>这里故意把离线 Agent 作为首选目标交给 {@link ResilientDispatcher}，
+     * <p>这里故意把离线 Agent 作为首选目标交给 {@link TaskDispatchPort}，
      * 由其 fast-fail + fallback 选择替代 Agent，保持角色与熔断逻辑一致。</p>
      *
      * <p>依赖守卫：与 {@link #dispatchPendingSubTaskAuto} 对齐——离线重分配
@@ -38,7 +38,7 @@ public interface SubTaskDispatchService {
      * 初始分配：对 PENDING 子任务执行自动选人并进入弹性调度链。
      *
      * <p>该入口用于"初始分配也按外部优先选人"的目标态演进：
-     * 先按角色/策略挑选首选 Agent，再交给 {@link ResilientDispatcher#assignNext(Long, Long)}
+     * 先按角色/策略挑选首选 Agent，再交给 {@link TaskDispatchPort#assignNext(Long, Long)}
      * 执行 fast-fail + 熔断 + fallback 的最终分配。</p>
      *
      * @param subTaskId 子任务 ID
@@ -79,7 +79,7 @@ public interface SubTaskDispatchService {
      *   <li>把子任务重置为 PENDING（清空原 assignedAgent）</li>
      *   <li>在同角色 EXECUTOR 中按 score 降序选一个 API_KEY_LLM 类型的活跃 Agent；</li>
      *   <li>把"原失败 Agent"和"新选中的 LLM Agent"都写入 task_timeline 审计；</li>
-     *   <li>交给 {@link ResilientDispatcher#assignNext} 做 fast-fail + 熔断 + fallback
+     *   <li>交给 {@link TaskDispatchPort#assignNext} 做 fast-fail + 熔断 + fallback
      *       收口，避免 Controller / 补偿任务绕开主调度链。</li>
      * </ol>
      * </p>
