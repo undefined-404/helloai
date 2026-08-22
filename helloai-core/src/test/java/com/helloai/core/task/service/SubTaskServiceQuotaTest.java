@@ -4,7 +4,6 @@ import com.helloai.common.base.AgentUnavailableException;
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.SubTaskStatus;
-import com.helloai.core.agent.mapper.AgentMapper;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.agent.service.AgentService;
@@ -30,6 +29,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
@@ -62,7 +62,7 @@ class SubTaskServiceQuotaTest {
     @Mock private RewardService rewardService;
     @Mock private ApplicationEventPublisher applicationEventPublisher;
     @Mock private TaskTimelineService taskTimelineService;
-    @Mock private AgentMapper agentMapper;
+    @Mock private AgentService agentService;
     @Mock private ConcurrencyQuotaService concurrencyQuotaService;
     @Mock private AttachmentService attachmentService;
     @SuppressWarnings("unchecked")
@@ -79,7 +79,10 @@ class SubTaskServiceQuotaTest {
                 agentOutboxService, agentInboxService, agentServiceProvider,
                 heartbeatService, reviewRecordMapper, implicitScoreCalculator,
                 rewardService, applicationEventPublisher, taskTimelineService,
-                agentMapper, dispatchProps, concurrencyQuotaService, attachmentServiceProvider));
+                dispatchProps, concurrencyQuotaService, attachmentServiceProvider));
+        // §6.140 收口：行锁改走 AgentService.lockByIdForUpdate（ObjectProvider 懒解析）；
+        // lenient：状态校验失败路径不触发行锁，避免 UnnecessaryStubbing
+        lenient().when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
     }
 
     private void stubPendingSubTask() {
@@ -98,7 +101,7 @@ class SubTaskServiceQuotaTest {
         assertThatThrownBy(() -> subTaskService.assignNext(AGENT_ID, SUB_TASK_ID))
                 .isInstanceOf(AgentUnavailableException.class);
 
-        verify(agentMapper).selectByIdForUpdate(AGENT_ID);
+        verify(agentService).lockByIdForUpdate(AGENT_ID);
         verify(concurrencyQuotaService).canAccept(AGENT_ID);
         verify(subTaskService, never()).changeStatus(anyLong(), any(SubTaskStatus.class), anyLong());
     }
@@ -112,7 +115,7 @@ class SubTaskServiceQuotaTest {
 
         subTaskService.assignNext(AGENT_ID, SUB_TASK_ID);
 
-        verify(agentMapper).selectByIdForUpdate(AGENT_ID);
+        verify(agentService).lockByIdForUpdate(AGENT_ID);
         ArgumentCaptor<SubTask> captor = ArgumentCaptor.forClass(SubTask.class);
         verify(subTaskService).updateById(captor.capture());
         assertThat(captor.getValue().getStatus()).isEqualTo(SubTaskStatus.ASSIGNED);
@@ -128,7 +131,7 @@ class SubTaskServiceQuotaTest {
         // canAccept 默认 false（Mockito boolean 默认值），关闭开关后不应被调用
         subTaskService.assignNext(AGENT_ID, SUB_TASK_ID);
 
-        verify(agentMapper).selectByIdForUpdate(AGENT_ID);
+        verify(agentService).lockByIdForUpdate(AGENT_ID);
         verify(concurrencyQuotaService, never()).canAccept(anyLong());
         verify(subTaskService).updateById(any(SubTask.class));
     }
@@ -144,6 +147,6 @@ class SubTaskServiceQuotaTest {
         assertThatThrownBy(() -> subTaskService.assignNext(AGENT_ID, SUB_TASK_ID))
                 .isInstanceOf(BizException.class);
 
-        verify(agentMapper, never()).selectByIdForUpdate(anyLong());
+        verify(agentService, never()).lockByIdForUpdate(anyLong());
     }
 }

@@ -5,7 +5,6 @@ import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConcurrencyQuotaService;
-import com.helloai.core.agent.mapper.AgentMapper;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.core.task.entity.ReviewRecord;
 import com.helloai.core.task.entity.SubTask;
@@ -65,7 +64,6 @@ class SubTaskServiceHandoverTest {
     @Mock private RewardService rewardService;
     @Mock private ApplicationEventPublisher applicationEventPublisher;
     @Mock private TaskTimelineService taskTimelineService;
-    @Mock private AgentMapper agentMapper;
     @Mock private ConcurrencyQuotaService concurrencyQuotaService;
     @Mock private AttachmentService attachmentService;
     @Mock private ObjectProvider<AttachmentService> attachmentServiceProvider;
@@ -80,7 +78,7 @@ class SubTaskServiceHandoverTest {
                 agentOutboxService, agentInboxService, agentServiceProvider,
                 heartbeatService, reviewRecordMapper, implicitScoreCalculator,
                 rewardService, applicationEventPublisher, taskTimelineService,
-                agentMapper, dispatchProps, concurrencyQuotaService, attachmentServiceProvider));
+                dispatchProps, concurrencyQuotaService, attachmentServiceProvider));
         doReturn(true).when(subTaskService).updateById(any(SubTask.class));
         // §6.104 打回失效：让 ObjectProvider 返回 mock，便于断言 invalidateBySubTask 被调
         //（类级 @MockitoSettings(strictness = Strictness.LENIENT) 已开启，无需 Mockito.lenient()）

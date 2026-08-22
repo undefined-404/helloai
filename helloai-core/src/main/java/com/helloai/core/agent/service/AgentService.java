@@ -213,4 +213,47 @@ public interface AgentService extends IService<Agent> {
      * @throws com.helloai.common.base.BizException 当同一角色已存在使用该模型的 Agent 时
      */
     void validateModelUniqueInRole(String providerCode, String modelName, AgentRole role, Long excludeAgentId);
+
+    // ══════════════════════════════════════════════════════════════
+    //  §6.140 task→agent.mapper 双向红线收口（跨域直捅清零）
+    //  承接 SubTaskServiceImpl / TaskServiceImpl / FeedServiceImpl 的 Mapper 直调
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 行锁读取 Agent（E2 并发额度原子防线，原 SubTaskServiceImpl 直调 AgentMapper）。
+     *
+     * <p>{@code SELECT ... FOR UPDATE} 锁定 agent 行，串行化同一 Agent 的并发派发。
+     * <b>必须在调用方事务内使用</b>：本方法只发锁语句、不自行开启事务，
+     * 行锁随调用方事务存续而释放（与 {@code SubTaskService.getByIdForUpdate} 同规则）。</p>
+     *
+     * @return Agent；不存在或已删除时返回 null
+     */
+    Agent lockByIdForUpdate(Long agentId);
+
+    /**
+     * 全量 Agent 摘要列表（id/name/role/status/score，未删除；前端活动流列表数据源）。
+     */
+    List<Agent> listSummaries();
+
+    /**
+     * 统计某任务的执行记录数（删除前风险提示，原 TaskServiceImpl 直调 AgentExecutionRecordMapper）。
+     */
+    int countExecutionByTaskId(Long taskId);
+
+    /**
+     * 统计引用某任务及其子任务/审查记录的未读收件箱消息数（删除前风险提示）。
+     */
+    int countUnreadInboxByTaskRef(Long taskId);
+
+    /**
+     * 任务级联删除的 agent 域痕迹清理：按 taskId 物理删除 inbox / execution_record /
+     * archive / message 关联行（原 TaskServiceImpl 直调 4 个 agent Mapper）。
+     *
+     * <p>inbox 的 DELETE 子查询依赖 sub_task/review_record 行仍存在，
+     * 调用方必须在同一事务内先于子任务/审查记录执行（与 deleteTaskCascade 的
+     * 既有删除顺序约定一致）。</p>
+     *
+     * @return 清理的总行数
+     */
+    int physicalDeleteTaskTrace(Long taskId);
 }

@@ -10,7 +10,6 @@ import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.agent.mapper.AgentMapper;
 import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentOutboxService;
@@ -65,7 +64,6 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     private final RewardService rewardService;
     private final ApplicationEventPublisher applicationEventPublisher;
     private final TaskTimelineService taskTimelineService;
-    private final AgentMapper agentMapper;
     private final AgentDispatchProperties agentDispatchProperties;
     private final ConcurrencyQuotaService concurrencyQuotaService;
     // 懒解析打破循环：AttachmentServiceImpl 依赖 SubTaskService（register 归属校验）
@@ -146,6 +144,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void updateDependsOn(Long subTaskId, List<Long> dependsOnIds) {
         List<Long> ids = dependsOnIds != null ? dependsOnIds : Collections.emptyList();
         StringBuilder json = new StringBuilder("[");
@@ -716,7 +715,11 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         // 锁内重新统计在飞数判定额度（选人通过 ≠ 落库安全，杜绝并发超发窗口）。
         // 满额抛 AgentUnavailableException：不计入熔断统计，由 ResilientDispatcher
         // 走 fallback 换人；并发窗口下 fallback 内仍满额则异常冒泡，任务保持 PENDING 由定时兜底重试。
-        agentMapper.selectByIdForUpdate(agentId);
+        AgentService agentService = agentServiceProvider.getIfAvailable();
+        if (agentService == null) {
+            throw new BizException("Agent 服务不可用");
+        }
+        agentService.lockByIdForUpdate(agentId);
         if (agentDispatchProperties.isEnforceMaxConcurrent()
                 && !concurrencyQuotaService.canAccept(agentId)) {
             throw new AgentUnavailableException(

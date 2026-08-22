@@ -6,7 +6,6 @@ import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.agent.service.ConcurrencyQuotaService;
-import com.helloai.core.agent.mapper.AgentMapper;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.ReviewRecordMapper;
@@ -54,7 +53,7 @@ class SubTaskServiceIsReadyTest {
                 mock(org.springframework.beans.factory.ObjectProvider.class), mock(HeartbeatService.class),
                 mock(ReviewRecordMapper.class), mock(ImplicitScoreCalculator.class),
                 mock(RewardService.class), mock(ApplicationEventPublisher.class),
-                mock(TaskTimelineService.class), mock(AgentMapper.class),
+                mock(TaskTimelineService.class),
                 new AgentDispatchProperties(), mock(ConcurrencyQuotaService.class),
                 // §6.104 打回失效：ObjectProvider mock 不返任何 bean，getIfAvailable 返回 null 内部判空跳过
                 mock(org.springframework.beans.factory.ObjectProvider.class));

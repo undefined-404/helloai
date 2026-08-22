@@ -10,8 +10,11 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentDutyLeaseMapper;
+import com.helloai.core.agent.mapper.AgentExecutionRecordMapper;
 import com.helloai.core.agent.mapper.AgentInboxMapper;
 import com.helloai.core.agent.mapper.AgentMapper;
+import com.helloai.core.agent.mapper.ConversationArchiveMapper;
+import com.helloai.core.agent.mapper.ConversationMessageMapper;
 import com.helloai.core.agent.port.AgentAuthPort;
 import com.helloai.core.agent.service.AgentCredentialService;
 import com.helloai.core.agent.service.AgentLifecycleService;
@@ -36,7 +39,9 @@ import java.util.Map;
 
 /**
  * Agent 核心服务实现。负责 Agent 注册、CRUD、enrichment 查询、级联删除。
- * 为避免循环依赖，本 Service 直接注入 Mapper 而非依赖其他 Service。
+ * 阶段五起：task 域数据一律经 task 域服务接口（SubTaskService/RewardService/
+ * ActivityLogService），自身直捅 Mapper 仅限于 agent 域内部（含 §6.140 承接的
+ * task 域跨域收口方法）。
  *
  * @see Agent
  */
@@ -51,6 +56,10 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     private final ActivityLogService activityLogService;
     private final AgentInboxMapper agentInboxMapper;
     private final AgentDutyLeaseMapper agentDutyLeaseMapper;
+    // §6.140：承接 TaskServiceImpl 跨域收口（任务级联删除/关联统计的 agent 域执行）
+    private final AgentExecutionRecordMapper agentExecutionRecordMapper;
+    private final ConversationArchiveMapper conversationArchiveMapper;
+    private final ConversationMessageMapper conversationMessageMapper;
     private final AgentMcpServerService agentMcpServerService;
     private final AgentApiKeyCipher agentApiKeyCipher;
     private final AgentCredentialService credentialService;
@@ -64,6 +73,9 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
                             ActivityLogService activityLogService,
                             AgentInboxMapper agentInboxMapper,
                             AgentDutyLeaseMapper agentDutyLeaseMapper,
+                            AgentExecutionRecordMapper agentExecutionRecordMapper,
+                            ConversationArchiveMapper conversationArchiveMapper,
+                            ConversationMessageMapper conversationMessageMapper,
                             AgentMcpServerService agentMcpServerService,
                             AgentApiKeyCipher agentApiKeyCipher,
                             AgentCredentialService credentialService,
@@ -75,6 +87,9 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
         this.activityLogService = activityLogService;
         this.agentInboxMapper = agentInboxMapper;
         this.agentDutyLeaseMapper = agentDutyLeaseMapper;
+        this.agentExecutionRecordMapper = agentExecutionRecordMapper;
+        this.conversationArchiveMapper = conversationArchiveMapper;
+        this.conversationMessageMapper = conversationMessageMapper;
         this.agentMcpServerService = agentMcpServerService;
         this.agentApiKeyCipher = agentApiKeyCipher;
         this.credentialService = credentialService;
@@ -524,5 +539,45 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     @Override
     public void validateModelUniqueInRole(String providerCode, String modelName, AgentRole role, Long excludeAgentId) {
         skillPolicyService.validateModelUniqueInRole(providerCode, modelName, role, excludeAgentId);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  §6.140 task→agent.mapper 双向红线收口实现
+    //  承接 SubTaskServiceImpl / TaskServiceImpl / FeedServiceImpl 的 Mapper 直调
+    // ══════════════════════════════════════════════════════════════
+
+    @Override
+    public Agent lockByIdForUpdate(Long agentId) {
+        return baseMapper.selectByIdForUpdate(agentId);
+    }
+
+    @Override
+    public List<Agent> listSummaries() {
+        return lambdaQuery()
+                .select(Agent::getId, Agent::getName, Agent::getRole, Agent::getStatus, Agent::getScore)
+                .eq(Agent::getDeleted, 0)
+                .list();
+    }
+
+    @Override
+    public int countExecutionByTaskId(Long taskId) {
+        return agentExecutionRecordMapper.countByTaskId(taskId);
+    }
+
+    @Override
+    public int countUnreadInboxByTaskRef(Long taskId) {
+        return agentInboxMapper.countUnreadByTaskRef(taskId);
+    }
+
+    @Override
+    public int physicalDeleteTaskTrace(Long taskId) {
+        // 顺序与 deleteTaskCascade 既有约定一致：inbox 依赖 sub_task/review_record 子查询，
+        // 调用方必须同一事务内先于子任务/审查记录执行本方法
+        int total = 0;
+        total += agentInboxMapper.physicalDeleteByTaskRef(taskId);
+        total += agentExecutionRecordMapper.physicalDeleteByTaskId(taskId);
+        total += conversationArchiveMapper.physicalDeleteByTaskId(taskId);
+        total += conversationMessageMapper.physicalDeleteByTaskId(taskId);
+        return total;
     }
 }

@@ -3,12 +3,8 @@ package com.helloai.core.task.service;
 import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapper;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskStatus;
-import com.helloai.core.agent.mapper.AgentExecutionRecordMapper;
-import com.helloai.core.agent.mapper.AgentInboxMapper;
-import com.helloai.core.agent.mapper.AgentMapper;
-import com.helloai.core.agent.mapper.ConversationArchiveMapper;
-import com.helloai.core.agent.mapper.ConversationMessageMapper;
 import com.helloai.core.agent.service.AgentInboxService;
+import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.mapper.AttachmentMapper;
 import com.helloai.core.task.mapper.ModuleMapper;
 import com.helloai.core.task.entity.SubTask;
@@ -60,21 +56,13 @@ class TaskServiceTest {
     @Mock
     private ReviewRecordMapper reviewRecordMapper;
     @Mock
-    private AgentExecutionRecordMapper agentExecutionRecordMapper;
-    @Mock
-    private AgentInboxMapper agentInboxMapper;
-    @Mock
     private TaskTimelineMapper taskTimelineMapper;
     @Mock
     private AttachmentMapper attachmentMapper;
     @Mock
-    private ConversationArchiveMapper conversationArchiveMapper;
-    @Mock
-    private ConversationMessageMapper conversationMessageMapper;
-    @Mock
-    private AgentMapper agentMapper;
-    @Mock
     private AgentInboxService agentInboxService;
+    @Mock
+    private AgentService agentService;
     @Mock
     private SubTaskService subTaskService;
     @Mock
@@ -82,9 +70,8 @@ class TaskServiceTest {
 
     private TaskService newSpyService() {
         return spy(new TaskServiceImpl(subTaskMapper, moduleMapper, reviewRecordMapper,
-                agentExecutionRecordMapper, agentInboxMapper, taskTimelineMapper,
-                attachmentMapper, conversationArchiveMapper, conversationMessageMapper,
-                agentMapper, agentInboxService, subTaskService));
+                taskTimelineMapper, attachmentMapper, agentInboxService,
+                agentService, subTaskService));
     }
 
     private static Map<String, Object> policy() {

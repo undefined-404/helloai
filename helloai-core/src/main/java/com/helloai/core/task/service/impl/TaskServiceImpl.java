@@ -9,12 +9,8 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.agent.mapper.AgentExecutionRecordMapper;
-import com.helloai.core.agent.mapper.AgentInboxMapper;
-import com.helloai.core.agent.mapper.AgentMapper;
-import com.helloai.core.agent.mapper.ConversationArchiveMapper;
-import com.helloai.core.agent.mapper.ConversationMessageMapper;
 import com.helloai.core.agent.service.AgentInboxService;
+import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.entity.Module;
 import com.helloai.core.task.mapper.AttachmentMapper;
 import com.helloai.core.task.mapper.ModuleMapper;
@@ -39,7 +35,8 @@ import java.util.Map;
 /**
  * 任务核心服务实现。负责任务级联删除、关联统计、重新发布。
  * 为避免循环依赖，本 Service 直接注入 Mapper 而非依赖其他 Service
- * （AgentInboxService 为无回向依赖的叶子服务，注入以复用门铃链路）。
+ * （AgentInboxService 为无回向依赖的叶子服务，注入以复用门铃链路；
+ * AgentService 经 §6.140 收口承接 agent 域数据访问，不再直捅 agent.mapper）。
  */
 @Slf4j
 @Service
@@ -49,14 +46,10 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     private final SubTaskMapper subTaskMapper;
     private final ModuleMapper moduleMapper;
     private final ReviewRecordMapper reviewRecordMapper;
-    private final AgentExecutionRecordMapper agentExecutionRecordMapper;
-    private final AgentInboxMapper agentInboxMapper;
     private final TaskTimelineMapper taskTimelineMapper;
     private final AttachmentMapper attachmentMapper;
-    private final ConversationArchiveMapper conversationArchiveMapper;
-    private final ConversationMessageMapper conversationMessageMapper;
-    private final AgentMapper agentMapper;
     private final AgentInboxService agentInboxService;
+    private final AgentService agentService;
     private final SubTaskService subTaskService;
 
     // ══════════════════════════════════════════════════════════════
@@ -201,8 +194,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         counts.put("moduleCount", moduleMapper.selectCount(
                 new LambdaQueryWrapper<Module>().eq(Module::getTaskId, taskId)).intValue());
         counts.put("reviewCount", reviewRecordMapper.countByTaskId(taskId));
-        counts.put("executionCount", agentExecutionRecordMapper.countByTaskId(taskId));
-        counts.put("unreadInboxCount", agentInboxMapper.countUnreadByTaskRef(taskId));
+        counts.put("executionCount", agentService.countExecutionByTaskId(taskId));
+        counts.put("unreadInboxCount", agentService.countUnreadInboxByTaskRef(taskId));
         counts.put("timelineCount", taskTimelineMapper.selectCount(
                 new LambdaQueryWrapper<TaskTimeline>().eq(TaskTimeline::getTaskId, taskId)).intValue());
         return counts;
@@ -227,20 +220,19 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         // 清理级联数据（物理删除：@TableLogic 会把普通 delete 改写为软删，
         // 这里走 Mapper 自定义 DELETE SQL 真删，不留残留行）。
         // 外键引用 sub_task.id 的 5 张表与 inbox 的 SQL 均依赖 sub_task 子查询，必须先于 sub_task 删除。
-        int inboxDeleted = agentInboxMapper.physicalDeleteByTaskRef(taskId);
-        agentExecutionRecordMapper.physicalDeleteByTaskId(taskId);
+        // agent 域痕迹（inbox/execution_record/archive/message）经 AgentService 收口执行，
+        // 与任务域删除同一事务，顺序语义保持（inbox 依赖 sub_task/review_record 子查询）。
+        int traceCleaned = agentService.physicalDeleteTaskTrace(taskId);
         reviewRecordMapper.physicalDeleteByTaskId(taskId);
         attachmentMapper.physicalDeleteByTaskId(taskId);
-        conversationArchiveMapper.physicalDeleteByTaskId(taskId);
-        conversationMessageMapper.physicalDeleteByTaskId(taskId);
         taskTimelineMapper.physicalDeleteByTaskId(taskId);
         subTaskMapper.physicalDeleteByTaskId(taskId);
         moduleMapper.physicalDeleteByTaskId(taskId);
         baseMapper.physicalDeleteById(taskId);
 
-        log.info("任务级联删除完成: id={}, title={}, subTask={}, deadLetter={}, inboxCleaned={}",
+        log.info("任务级联删除完成: id={}, title={}, subTask={}, deadLetter={}, traceCleaned={}",
                 taskId, task.getTitle(), counts.get("subTaskCount"),
-                counts.get("deadLetterCount"), inboxDeleted);
+                counts.get("deadLetterCount"), traceCleaned);
         return counts;
     }
 
@@ -260,8 +252,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         task.setStatus(TaskStatus.PENDING);
         updateById(task);
 
-        List<Agent> planners = agentMapper.selectList(
-                new LambdaQueryWrapper<Agent>().eq(Agent::getRole, AgentRole.PLANNER));
+        List<Agent> planners = agentService.listByRole(AgentRole.PLANNER);
         String eventId = "task.republish." + taskId + "." + System.currentTimeMillis();
         for (Agent planner : planners) {
             agentInboxService.send(planner.getId(), eventId, "task.republished",

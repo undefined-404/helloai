@@ -3,7 +3,7 @@ package com.helloai.core.task.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.agent.mapper.AgentMapper;
+import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.entity.ActivityLog;
 import com.helloai.core.task.service.ActivityLogService;
 import com.helloai.core.task.service.FeedService;
@@ -22,14 +22,15 @@ import java.util.stream.Collectors;
  * Feed 聚合服务实现（前端活动流 {@code /api/feed} 数据源）。
  *
  * <p>聚合 ActivityLog 与 Agent 两张表的活动日志分页列表与 Agent 摘要列表，
- * 为避免在 Controller 直接注入 Mapper，将查询与名称解析下移至本服务。</p>
+ * 为避免在 Controller 直接注入 Mapper，将查询与名称解析下移至本服务；
+ * agent 域数据经 AgentService 收口（§6.140），不再直捅 agent.mapper。</p>
  */
 @Service
 @RequiredArgsConstructor
 public class FeedServiceImpl implements FeedService {
 
     private final ActivityLogService activityLogService;
-    private final AgentMapper agentMapper;
+    private final AgentService agentService;
 
     @Override
     public Page<ActivityLog> listActivityLogs(int page, int pageSize, String level, String source) {
@@ -52,7 +53,7 @@ public class FeedServiceImpl implements FeedService {
         if (ids.isEmpty()) {
             return Collections.emptyMap();
         }
-        List<Agent> agents = agentMapper.selectBatchIds(ids);
+        List<Agent> agents = agentService.listByIds(ids);
         if (agents == null || agents.isEmpty()) {
             return Collections.emptyMap();
         }
@@ -67,10 +68,7 @@ public class FeedServiceImpl implements FeedService {
 
     @Override
     public List<Agent> listAgentSummaries() {
-        List<Agent> list = agentMapper.selectList(
-                new LambdaQueryWrapper<Agent>()
-                        .select(Agent::getId, Agent::getName, Agent::getRole, Agent::getStatus, Agent::getScore)
-                        .eq(Agent::getDeleted, 0));
+        List<Agent> list = agentService.listSummaries();
         return list != null ? list : Collections.emptyList();
     }
 }

@@ -8,8 +8,11 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentDutyLeaseMapper;
+import com.helloai.core.agent.mapper.AgentExecutionRecordMapper;
 import com.helloai.core.agent.mapper.AgentInboxMapper;
 import com.helloai.core.agent.mapper.AgentMapper;
+import com.helloai.core.agent.mapper.ConversationArchiveMapper;
+import com.helloai.core.agent.mapper.ConversationMessageMapper;
 import com.helloai.core.agent.port.AgentAuthPort;
 import com.helloai.core.agent.service.impl.AgentServiceImpl;
 import com.helloai.core.system.entity.LlmProviderModel;
@@ -59,6 +62,12 @@ class AgentServiceTest {
     @Mock
     private AgentDutyLeaseMapper agentDutyLeaseMapper;
     @Mock
+    private AgentExecutionRecordMapper agentExecutionRecordMapper;
+    @Mock
+    private ConversationArchiveMapper conversationArchiveMapper;
+    @Mock
+    private ConversationMessageMapper conversationMessageMapper;
+    @Mock
     private AgentMapper agentMapper;
     @Mock
     private TaskTimelineService taskTimelineService;
@@ -72,6 +81,7 @@ class AgentServiceTest {
     private AgentService newSpyService() {
         return spy(new AgentServiceImpl(subTaskService, rewardService, activityLogService,
                 agentInboxMapper, agentDutyLeaseMapper,
+                agentExecutionRecordMapper, conversationArchiveMapper, conversationMessageMapper,
                 agentMcpServerService, agentApiKeyCipher,
                 new AgentCredentialService(agentMapper, agentApiKeyCipher),
                 new AgentSkillPolicyService(agentMapper, llmProviderModelQueryService),
