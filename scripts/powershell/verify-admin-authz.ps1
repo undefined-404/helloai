@@ -96,7 +96,7 @@ Write-Output ''
 Write-Output '=== [B] create or reuse test agent (admin token) ==='
 $agentName = 'authz-probe-executor'
 $agentApiKey = $null
-$lookupResp = Invoke-Http -Method 'GET' -Uri ($base + '/api/admin/agents?pageSize=50') -Headers @{ 'X-Admin-Token' = $adminToken }
+$lookupResp = Invoke-Http -Method 'GET' -Uri ($base + '/api/admin/agents/list?pageSize=50') -Headers @{ 'X-Admin-Token' = $adminToken }
 if ($lookupResp.Code -ne 200) {
     Write-Output ('agent lookup failed: ' + $lookupResp.Body)
     exit 1

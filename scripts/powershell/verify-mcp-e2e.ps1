@@ -214,7 +214,7 @@ $agentId    = $null
 $agentApiKey = $null
 
 # B-1 idempotent lookup
-$lookupResp = Invoke-Json -Method GET -Uri "$base/api/admin/agents?pageSize=50" -Headers @{ "X-Admin-Token" = $adminToken }
+$lookupResp = Invoke-Json -Method GET -Uri "$base/api/admin/agents/list?pageSize=50" -Headers @{ "X-Admin-Token" = $adminToken }
 $parsedJson = $lookupResp.Body | ConvertFrom-Json
 $lookupData = $parsedJson.data
 if ($lookupData -eq $null -or $lookupData.list -eq $null) {

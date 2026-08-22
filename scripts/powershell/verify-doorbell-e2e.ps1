@@ -187,7 +187,7 @@ Write-Output ''
 # STEP B: create or reuse test agent
 # ============================================================
 Write-Output ('=== [B] create or reuse ' + $agentName + ' ===')
-$lookupResp = Invoke-Json -Method GET -Uri ($base + '/api/admin/agents?pageSize=50') -Headers @{ 'X-Admin-Token' = $adminToken }
+$lookupResp = Invoke-Json -Method GET -Uri ($base + '/api/admin/agents/list?pageSize=50') -Headers @{ 'X-Admin-Token' = $adminToken }
 if ($lookupResp.Code -ne 200) {
     Write-Output ('lookup HTTP=' + $lookupResp.Code + ' body: ' + $lookupResp.Body)
     Write-Error 'admin agents list failed'

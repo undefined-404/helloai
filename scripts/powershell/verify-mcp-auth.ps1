@@ -114,7 +114,7 @@ $agentApiKey = $null
 # B-1: 先查已存在（M4 重复跑 / 多分支测试必备的幂等性）
 # 直接拉所有 agent（不传 role / page，默认 pageSize=20），客户端按 name 精确过滤
 # 绕开 pageSize+role 组合某些情况下 server 返 data=null 的坑
-$lookupUrl = "$base/api/admin/agents?pageSize=50"
+$lookupUrl = "$base/api/admin/agents/list?pageSize=50"
 $lookupResp = Invoke-GetJson -Uri $lookupUrl -Headers @{ "X-Admin-Token" = $adminToken }
 Write-Output "lookup HTTP $($lookupResp.Code)"
 Write-Output "lookup Body (前 800 字符): $($lookupResp.Body.Substring(0, [Math]::Min(800, $lookupResp.Body.Length)))"
