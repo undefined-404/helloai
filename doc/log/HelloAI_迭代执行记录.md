@@ -6415,3 +6415,33 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - 影响：启动链路恢复；§6.138 的"Optional 化 4 处"修正为 3 处（AgentChatClientServiceImpl 保持 ObjectProvider 并登记理由）；应用内无全局 ChatModel bean 是设计预期，Agent 执行 100% 走 ProviderChatClientFactory 程序化构建。
 - 遗留：本轮改动未 git 提交，待用户确认后提交。
+
+### 6.140 评审整改：task→agent.mapper 双向红线清零 + updateDependsOn 事务注解 + @MapperScan 登记断言（评审报告 P1/P2）（2026-08-22）
+
+#### 1. 背景与结论
+
+- **背景**：评审发现红线只执行了一个方向——§6.138 清零了 agent→task.mapper，但反方向 task→agent.mapper 仍在直捅（SubTaskServiceImpl / TaskServiceImpl / FeedServiceImpl 共 7 处 import），规范说一套代码做另一套；updateDependsOn 无 `@Transactional`（事务整改只做了一半）；@MapperScan 登记完整性无脚本断言（agent.quality.mapper 漏登记曾炸启动）。
+- **结论**：按评审建议走①——禁直捅 Mapper 对所有方向生效（合法向下依赖不豁免），7 处直调全部收口为 AgentService 接口方法；updateDependsOn 补事务注解（单语句原子写不豁免口径同步进规范）；verify-dependency-direction.ps1 升级 v2 新增 task→agent.mapper 双向断言与 @MapperScan 登记断言，11 项全 PASS。
+
+#### 2. 实现要点
+
+- **AgentService 接口 +5 方法承接**：`lockByIdForUpdate`（行锁读 agent，必须在调用方事务内使用，与 SubTaskService.getByIdForUpdate 同规则）/ `listSummaries`（id/name/role/status/score 摘要，前端活动流数据源）/ `countExecutionByTaskId` / `countUnreadInboxByTaskRef`（删除前风险提示）/ `physicalDeleteTaskTrace`（inbox/execution_record/archive/message 四表物理删除，inbox DELETE 依赖 sub_task/review_record 子查询，调用方必须同一事务内先于子任务/审查记录执行）。AgentServiceImpl 构造器 11→14 参（+3 Mapper 注入），类注释同步说明 §6.140 承接。
+- **TaskServiceImpl 去 5 个 agent Mapper**：getRelatedCounts 2 处（executionCount/unreadInboxCount → countExecutionByTaskId/countUnreadInboxByTaskRef）；deleteTaskCascade 4 表清理（inbox/execution_record/archive/message）收口为 `physicalDeleteTaskTrace` 单调用（日志 inboxCleaned → traceCleaned），删除顺序语义保持（先 agent 域痕迹、再 review/attachment/timeline、后 sub_task/module/task）；republish 的 PLANNER 列表改 `listByRole(AgentRole.PLANNER)`（@TableLogic 自动过滤 deleted=0，与原 selectList 语义一致）。类注释更新（AgentService 经 §6.140 收口承接 agent 域数据访问）。
+- **FeedServiceImpl 去 AgentMapper**：resolveAgentNames 改 `agentService.listByIds(ids)`（IService 既有）；listAgentSummaries 改 `agentService.listSummaries()`。
+- **SubTaskServiceImpl 去 AgentMapper**：assignNext 行锁改经既有 `ObjectProvider<AgentService>` 懒解析（遵循 RewardServiceImpl 判空惯例：getIfAvailable()==null 抛 BizException），不新增构造器依赖、不断环。
+- **updateDependsOn 补 `@Transactional(rollbackFor = Exception.class)`**：当前实现是单条 baseMapper 原子 UPDATE 正确性无碍，但写方法一律带注解是规范总则；CODE_STYLE §7.1 明确"单语句原子写不豁免 @Transactional，防止后续追加第二处写操作时悄悄破窗"。
+- **verify-dependency-direction.ps1 v2**：新增 `task 不得 import agent.mapper` 双向断言；新增 @MapperScan 登记断言（扫描 helloai-core 下全部 *Mapper.java 的 package 声明 vs HelloAIApplication @MapperScan 显式清单，当前 5 个 mapper 包全覆盖）；头注释版本 v1→v2。
+- **CODE_STYLE V1.12**：§3.x 规则 2 双向化（禁令对所有方向生效，含合法向下依赖，附 §6.140 收口清单）；规则 5 补 @MapperScan 登记断言说明；§7.1 事务注解补单语句原子写不豁免口径。
+- **测试同步**：TaskServiceTest（12→8 参构造器，删 5 个 agent Mapper mock）；AgentServiceTest（11→14 参构造器 +3 Mapper mock）；SubTaskServiceHandoverTest / IsReadyTest（去 AgentMapper）；SubTaskServiceQuotaTest（行锁断言 `agentMapper.selectByIdForUpdate` → `agentService.lockByIdForUpdate`，setUp 加 ObjectProvider stub 且 lenient——状态校验失败路径不触发行锁）。
+
+#### 3. 验证结果
+
+- `mvn -pl helloai-core -am test -DskipTests=false`：896/896 全绿（含 AgentServiceTest / TaskServiceTest / SubTaskService 三测 / AgentInboxServiceTest）。
+- `verify-dependency-direction.ps1`：11 项全 PASS（10 条 import 方向断言含双向 agent.mapper 红线 + @MapperScan 登记断言）。
+- 启动验证：`mvn -pl helloai-start -am install -DskipTests` + `mvn -pl helloai-start spring-boot:run`：`Started HelloAIApplication in 13.492 seconds`，端口 6565 监听，`GET /api/feed` 200（FeedServiceImpl→AgentService 链路实测），无 BeanCreationException。
+- 循环依赖确认：TaskServiceImpl / FeedServiceImpl 直接注入 AgentService 无环（agentServiceImpl 依赖 subTaskServiceImpl / rewardServiceImpl / activityLogServiceImpl，不依赖 Task / FeedService；SubTaskServiceImpl 侧 ObjectProvider 懒解析保持断环）。
+
+#### 4. 影响与遗留
+
+- 影响：task→agent.mapper 双向清零，跨域数据访问全部收敛到 service 接口；@MapperScan 漏登记风险脚本化防回归；规范与代码事实对齐（CODE_STYLE V1.12）。
+- 遗留：本轮改动未 git 提交，待用户确认后提交。
