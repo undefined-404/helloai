@@ -33,6 +33,11 @@ import java.util.List;
 public class AgentChatClientServiceImpl implements AgentChatClientService {
 
     private final AgentExecutionProperties executionProperties;
+    // 存在性探测必须保持 ObjectProvider（完全惰性）：ChatClientAutoConfiguration 的
+    // chatClientBuilder 候选始终存在，但其依赖的 ChatModel 由 DeepSeekChatAutoConfiguration
+    // 提供、已被 application.yml 排除（api-key 置空 fail-fast 防护）——若改 Optional 注入，
+    // Spring 会立即解析候选并创建 chatClientBuilder → 启动期直接炸（§6.138 回归暴露）；
+    // ObjectProvider 运行期 getIfAvailable 返回 null 由下方 BizException 兜底。
     private final ObjectProvider<ChatClient.Builder> chatClientBuilderProvider;
     private final LlmProviderChatClientFactoryRegistry providerRegistry;
     private final LlmCallConcurrencyGuard llmCallConcurrencyGuard;

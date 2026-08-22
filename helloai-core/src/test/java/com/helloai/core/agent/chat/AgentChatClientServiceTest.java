@@ -31,6 +31,8 @@ class AgentChatClientServiceTest {
         properties.setModel("helloai-mock-executor");
         properties.setMockResponsePrefix("[mock-executor]");
 
+        // 主类保持 ObjectProvider 惰性（§6.139：Optional 注入会立即解析 chatClientBuilder
+        // 候选并触发 ChatModel 依赖解析导致启动炸）；mock 模式不触达 Builder，空 provider 即可
         ObjectProvider<ChatClient.Builder> builderProvider = mock(ObjectProvider.class);
         LlmProviderChatClientFactoryRegistry registry = mock(LlmProviderChatClientFactoryRegistry.class);
         LlmCallConcurrencyGuard guard = new LlmCallConcurrencyGuard(properties);
