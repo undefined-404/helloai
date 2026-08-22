@@ -37,7 +37,13 @@ param(
     [string]$AdminUsername = 'admin',
     [string]$AdminPassword = 'admin123',
     [int]$PollIntervalSec = 3,
-    [int]$DispatchWaitSec = 60
+    [int]$DispatchWaitSec = 60,
+    # provider:model pairs for preset agents; must exist in llm_provider_model
+    # and be role-free within the role (same role + same model is unique),
+    # otherwise register pre-validation fails and the script aborts.
+    [string]$ExecutorModelA = 'dashscope:qwen3.6-Flash',
+    [string]$ExecutorModelB = 'dashscope:qwen3.7-plus',
+    [string]$ReviewerModel  = 'moonshot:kimi-k3'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -183,7 +189,7 @@ function Ensure-TestAgent {
             if ($existing.Count -gt 0) {
                 $agentId = $existing[0].id
                 $agentApiKey = $existing[0].apiKey
-                Write-Output ('[agent] reuse ' + $Name + ' id=' + $agentId)
+                Write-Host ('[agent] reuse ' + $Name + ' id=' + $agentId)
             }
         }
     }
@@ -191,7 +197,7 @@ function Ensure-TestAgent {
         $regBody = @{ name = $Name; role = $RoleValue; description = 'verify-quality-profile preset agent'; accessType = $AccessType; modelType = $ModelType; idempotent = $true } | ConvertTo-Json -Depth 6
         $regResp = Invoke-Json -Method POST -Uri ($BaseUrl + '/api/agents/register') -Body $regBody -Headers @{}
         if ($regResp.Code -ne 200) {
-            Write-Output ('[agent] FAIL register ' + $Name + ' HTTP=' + $regResp.Code + ' body=' + $regResp.Body)
+            Write-Host ('[agent] FAIL register ' + $Name + ' HTTP=' + $regResp.Code + ' body=' + $regResp.Body)
             return $null
         }
         $regJson = $null
@@ -199,7 +205,7 @@ function Ensure-TestAgent {
         if ($regJson -and $regJson.data -and $regJson.data.id) {
             $agentId = $regJson.data.id
             $agentApiKey = $regJson.data.apiKey
-            Write-Output ('[agent] registered ' + $Name + ' id=' + $agentId)
+            Write-Host ('[agent] registered ' + $Name + ' id=' + $agentId)
         }
     }
     if (-not $agentId) { return $null }
@@ -215,9 +221,15 @@ function Ensure-TestAgent {
         }
     }
     if ([string]::IsNullOrEmpty($agentApiKey)) {
-        Write-Output ('[agent] FAIL ' + $Name + ' apiKey empty (re-register manually or clean the agent)')
+        Write-Host ('[agent] FAIL ' + $Name + ' apiKey empty (re-register manually or clean the agent)')
         return $null
     }
+    # SQL fallback: force ACTIVE + correct model_type so reuse is idempotent
+    # (same precedent as verify-reviewer-dual.ps1; register pre-validation
+    # rejects legacy/gpt-4o model_type on the next run otherwise).
+    $fixSql = "UPDATE agent SET status = 'ACTIVE', model_type = '" + $ModelType + "' WHERE id = " + $agentId + " AND deleted = 0;"
+    $fixOut = Join-Path $scriptDir 'verify-quality-profile-agentfix.out'
+    $null = Run-Psql -Sql $fixSql -OutFile $fixOut
     return @{ Id = $agentId; ApiKey = [string]$agentApiKey }
 }
 
@@ -225,25 +237,28 @@ function Ensure-TestAgent {
 # helper: MCP REST 直通工具调用（R 包装 {code,msg,data}）
 # ============================================================
 function Invoke-Tool {
-    param([string]$ApiKey, [string]$ToolName, [hashtable]$Args = @{})
-    $body = @{ jsonrpc = '2.0'; id = 1; method = 'tools/call'; params = @{ name = $ToolName; arguments = $Args } } | ConvertTo-Json -Depth 8
+    param([string]$ApiKey, [string]$ToolName, [hashtable]$ToolArgs = @{})
+    # NOTE: parameter must NOT be named $Args -- $args is a PS automatic
+    # variable (unbound-argument array); PS 5.1 then fails to bind the
+    # hashtable default and throws ConvertToFinalInvalidCastException.
+    $body = @{ jsonrpc = '2.0'; id = 1; method = 'tools/call'; params = @{ name = $ToolName; arguments = $ToolArgs } } | ConvertTo-Json -Depth 8
     return Invoke-Json -Method POST -Uri ($BaseUrl + '/api/mcp/jsonrpc') -Body $body -Headers @{ 'Authorization' = ('Bearer ' + $ApiKey) }
 }
 
 function Get-ToolResult {
     param([object]$Resp, [string]$Scenario)
     if ($Resp.Code -ne 200) {
-        Write-Output ('[' + $Scenario + '] FAIL : HTTP=' + $Resp.Code + ' body=' + $Resp.Body)
+        Write-Host ('[' + $Scenario + '] FAIL : HTTP=' + $Resp.Code + ' body=' + $Resp.Body)
         return $null
     }
     $json = $null
     try { $json = $Resp.Body | ConvertFrom-Json } catch { }
     if (-not $json) {
-        Write-Output ('[' + $Scenario + '] FAIL : invalid json body=' + $Resp.Body)
+        Write-Host ('[' + $Scenario + '] FAIL : invalid json body=' + $Resp.Body)
         return $null
     }
     if ($json.error) {
-        Write-Output ('[' + $Scenario + '] FAIL : jsonrpc error=' + ($json.error | ConvertTo-Json -Compress -Depth 6))
+        Write-Host ('[' + $Scenario + '] FAIL : jsonrpc error=' + ($json.error | ConvertTo-Json -Compress -Depth 6))
         return $null
     }
     return $json.result
@@ -260,7 +275,7 @@ function New-TaskWithWhitelist {
     $findLine = Get-PsqlFields -Path $findFile
     if ($findLine -and $findLine.Split('|')[0]) {
         $residualId = $findLine.Split('|')[0]
-        Write-Output ('[preset] cleanup residual task id=' + $residualId)
+        Write-Host ('[preset] cleanup residual task id=' + $residualId)
         $delBody = '{"confirmTitle":"' + $Title + '"}'
         $null = Invoke-Json -Method POST -Uri ($BaseUrl + '/api/tasks/deleteById/' + $residualId) -Body $delBody -Headers @{ 'X-Admin-Token' = $AdminToken }
     }
@@ -272,13 +287,13 @@ function New-TaskWithWhitelist {
     $taskBody = '{"title":"' + $Title + '","description":"verify-quality-profile preset task"' + $policy + '}'
     $taskResp = Invoke-Json -Method POST -Uri ($BaseUrl + '/api/tasks') -Body $taskBody -Headers @{ 'X-Admin-Token' = $AdminToken }
     if ($taskResp.Code -ne 200) {
-        Write-Output ('[preset] FAIL create task HTTP=' + $taskResp.Code + ' body=' + $taskResp.Body)
+        Write-Host ('[preset] FAIL create task HTTP=' + $taskResp.Code + ' body=' + $taskResp.Body)
         return $null
     }
     $taskJson = $null
     try { $taskJson = $taskResp.Body | ConvertFrom-Json } catch { }
     if (-not $taskJson -or $taskJson.code -ne 200 -or -not $taskJson.data.id) {
-        Write-Output ('[preset] FAIL create task biz: ' + $taskResp.Body)
+        Write-Host ('[preset] FAIL create task biz: ' + $taskResp.Body)
         return $null
     }
     return [string]$taskJson.data.id
@@ -291,13 +306,13 @@ function New-SubTask {
     $body = '{"taskId":' + $TaskId + ',"title":"' + $Title + '","description":"preset sub-task","deliverable":"verification evidence note","acceptance":"evidence present"' + $assignField + '}'
     $resp = Invoke-Json -Method POST -Uri ($BaseUrl + '/api/sub-tasks') -Body $body -Headers @{ 'X-Admin-Token' = $AdminToken }
     if ($resp.Code -ne 200) {
-        Write-Output ('[preset] FAIL create sub-task HTTP=' + $resp.Code + ' body=' + $resp.Body)
+        Write-Host ('[preset] FAIL create sub-task HTTP=' + $resp.Code + ' body=' + $resp.Body)
         return $null
     }
     $json = $null
     try { $json = $resp.Body | ConvertFrom-Json } catch { }
     if (-not $json -or $json.code -ne 200 -or -not $json.data.id) {
-        Write-Output ('[preset] FAIL create sub-task biz: ' + $resp.Body)
+        Write-Host ('[preset] FAIL create sub-task biz: ' + $resp.Body)
         return $null
     }
     return [string]$json.data.id
@@ -309,7 +324,7 @@ function Reset-Pending {
     $out = Join-Path $scriptDir 'verify-quality-profile-reset.out'
     $rc = Run-Psql -Sql $sql -OutFile $out
     if ($rc -ne 0) {
-        Write-Output ('[preset] FAIL reset pending rc=' + $rc)
+        Write-Host ('[preset] FAIL reset pending rc=' + $rc)
     }
 }
 
@@ -430,9 +445,9 @@ Assert-Pass ($gateResp.Code -eq 200) 'A1.5-quality-gate' ('PUT /api/admin/config
 # ============================================================
 Write-Output ''
 Write-Output '=== [agents] ensure preset test agents ==='
-$execA = Ensure-TestAgent -Name $execAName -RoleValue 'EXECUTOR' -AccessType 'CLI_CLIENT' -ModelType 'gpt-4o' -AdminToken $adminToken
-$execB = Ensure-TestAgent -Name $execBName -RoleValue 'EXECUTOR' -AccessType 'CLI_CLIENT' -ModelType 'gpt-4o' -AdminToken $adminToken
-$reviewer = Ensure-TestAgent -Name $reviewerName -RoleValue 'REVIEWER' -AccessType 'CLI_CLIENT' -ModelType 'gpt-4o' -AdminToken $adminToken
+$execA = Ensure-TestAgent -Name $execAName -RoleValue 'EXECUTOR' -AccessType 'CLI_CLIENT' -ModelType $ExecutorModelA -AdminToken $adminToken
+$execB = Ensure-TestAgent -Name $execBName -RoleValue 'EXECUTOR' -AccessType 'CLI_CLIENT' -ModelType $ExecutorModelB -AdminToken $adminToken
+$reviewer = Ensure-TestAgent -Name $reviewerName -RoleValue 'REVIEWER' -AccessType 'CLI_CLIENT' -ModelType $ReviewerModel -AdminToken $adminToken
 if (-not $execA -or -not $execB -or -not $reviewer) {
     Write-Output 'FAIL : preset agents unavailable'
     exit 1
@@ -551,8 +566,8 @@ function Run-Scenario3 {
     Assert-Pass ($scoreRc -eq 0) 'S3-score-preset' ('both agents score=50, rc=' + $scoreRc)
 
     # 2) dual checkIn WITHOUT ttlMinutes (dynamic TTL path also feeds S4)
-    $ciA = Get-ToolResult -Resp (Invoke-Tool -ApiKey $execA.ApiKey -ToolName 'checkIn' -Args @{ workMode = 'AUTO'; maxConcurrent = 3 }) -Scenario 'S3-checkIn-a'
-    $ciB = Get-ToolResult -Resp (Invoke-Tool -ApiKey $execB.ApiKey -ToolName 'checkIn' -Args @{ workMode = 'AUTO'; maxConcurrent = 3 }) -Scenario 'S3-checkIn-b'
+    $ciA = Get-ToolResult -Resp (Invoke-Tool -ApiKey $execA.ApiKey -ToolName 'checkIn' -ToolArgs @{ workMode = 'AUTO'; maxConcurrent = 3 }) -Scenario 'S3-checkIn-a'
+    $ciB = Get-ToolResult -Resp (Invoke-Tool -ApiKey $execB.ApiKey -ToolName 'checkIn' -ToolArgs @{ workMode = 'AUTO'; maxConcurrent = 3 }) -Scenario 'S3-checkIn-b'
     if (-not $ciA -or -not $ciB) {
         Assert-Pass $false 'S3-lease' 'dual checkIn failed'
         return
@@ -601,7 +616,7 @@ function Run-Scenario3 {
 function Run-Scenario4 {
     Write-Output ''
     Write-Output '=== [S4] dynamic TTL composite score ==='
-    $leaseSql = "SELECT agent_id || '|' || ROUND(EXTRACT(EPOCH FROM (expires_at - started_at)) / 60)::int FROM (SELECT DISTINCT ON (agent_id) agent_id, started_at, expires_at FROM agent_duty_lease WHERE agent_id IN (" + $execAId + ',' + $execBId + ") AND status = 'ACTIVE' AND deleted = 0 ORDER BY agent_id, id DESC) t ORDER BY agent_id;"
+    $leaseSql = "SELECT agent_id || '|' || ROUND(EXTRACT(EPOCH FROM (expire_time - start_time)) / 60)::int FROM (SELECT DISTINCT ON (agent_id) agent_id, start_time, expire_time FROM agent_duty_lease WHERE agent_id IN (" + $execAId + ',' + $execBId + ") AND status = 'ACTIVE' AND deleted = 0 ORDER BY agent_id, id DESC) t ORDER BY agent_id;"
     $leaseOut = Join-Path $scriptDir 'verify-quality-profile-lease.out'
     $leaseRc = Run-Psql -Sql $leaseSql -OutFile $leaseOut
     Assert-Pass ($leaseRc -eq 0) 'S4-lease-query' ('lease query rc=' + $leaseRc)
@@ -726,7 +741,10 @@ function Run-Scenario6 {
     #    LLM call itself fails, making the assertion chain-stable)
     $promptContent = Wait-Until -Condition {
         param($id)
-        $sqlP = "SELECT content FROM conversation_message WHERE sub_task_id = " + $id + " AND tool_name = 'sub_task_execute_user_prompt' ORDER BY seq DESC LIMIT 1;"
+        # NOTE: prompt is multi-line; Get-PsqlFields only keeps the first
+        # line, so collapse whitespace in SQL (POSIX [[:space:]] class) to
+        # make the whole prompt a single row before reading it back.
+        $sqlP = "SELECT regexp_replace(content, '[[:space:]]+', ' ', 'g') FROM conversation_message WHERE sub_task_id = " + $id + " AND tool_name = 'sub_task_execute_user_prompt' ORDER BY seq DESC LIMIT 1;"
         $outP = Join-Path $scriptDir 'verify-quality-profile-s6-prompt.out'
         $rcP = Run-Psql -Sql $sqlP -OutFile $outP
         if ($rcP -ne 0) { return $null }
@@ -800,8 +818,8 @@ if ($script:TaskIdS6) {
     Remove-Task -TaskId $script:TaskIdS6 -Title 'qp-s6-history-task' -AdminToken $adminToken
     Write-Output ('[teardown] task S6 removed id=' + $script:TaskIdS6)
 }
-$null = Get-ToolResult -Resp (Invoke-Tool -ApiKey $execA.ApiKey -ToolName 'checkOut' -Args @{ closeReason = 'qp-verify-done' }) -Scenario 'teardown-checkOut-a'
-$null = Get-ToolResult -Resp (Invoke-Tool -ApiKey $execB.ApiKey -ToolName 'checkOut' -Args @{ closeReason = 'qp-verify-done' }) -Scenario 'teardown-checkOut-b'
+$null = Get-ToolResult -Resp (Invoke-Tool -ApiKey $execA.ApiKey -ToolName 'checkOut' -ToolArgs @{ closeReason = 'qp-verify-done' }) -Scenario 'teardown-checkOut-a'
+$null = Get-ToolResult -Resp (Invoke-Tool -ApiKey $execB.ApiKey -ToolName 'checkOut' -ToolArgs @{ closeReason = 'qp-verify-done' }) -Scenario 'teardown-checkOut-b'
 Write-Output '[teardown] both agents checked out'
 
 # ============================================================
