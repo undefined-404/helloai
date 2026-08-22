@@ -6349,3 +6349,31 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 - 单测同步：`AgentQualityProfileServiceTest` row() helper 从 `Map.of(...)` 改为构造 `RebuildSourceRow`；`mvn test -pl helloai-core -am "-DskipTests=false" -Dtest=AgentQualityProfileServiceTest` 14/14 全绿（含 rebuildAggregatesConsistently 口径一致性）。
 - 至今全项目仅 `selectRebuildSource` 一处踩中，Grep 确认无其他 `List<Map<String, Object>>` Mapper 返回。
 - 生效方式：重启应用后重试 rebuild 即可（无 Flyway 变更）。
+
+### 6.133 admin 授权拦截收口：AdminOnlyInterceptor + /api/admin/** 授权防线（评审报告 P0）（2026-08-21）
+
+#### 1. 背景与结论
+
+- **背景**：《HelloAI 后端代码评审报告》（@9442102）P0 安全问题——`AuthInterceptor` 只做认证（X-Admin-Token → admin，Bearer → agent），`WebMvcConfig` 无任何授权拦截，`/api/admin/**` 全部端点仅凭认证即可访问，agent 身份（外部 AI 的 API Key）可越权调用所有管理端点。本轮按批准计划落地，仅修该 P0，报告其余条目不做。
+- **事实核对（计划阶段逐项验证）**：① `/api/admin/**` 实际有 **8 个** Controller（报告列 7 个，漏了 `AgentDutyLeaseController` `/api/admin/duty-leases`）：AdminAgent / AdminLlmProvider / AdminProviderConfig / AdminConfig / AdminPrompt / AdminDashboard / AdminQuality / AgentDutyLease；② 全仓库 `_authType == "admin"` 检查仅 3 处（AuthController 改密码 / CredentialController / SubTaskController），路径均不在 `/api/admin/**` 下，拦截器覆盖不到，作纵深防御保留；③ `sys_user.role` 仅 ADMIN/SUPER_ADMIN（Flyway 默认 'ADMIN'），单角色现状下校验 `_authType == "admin"` 即足够，role 字段按报告选项 B 处理——文档标注「单角色，role 预留」，不写 role 校验逻辑。
+- **历史陈述纠偏**：§6.81「权限颗粒度审计收口」中「平台级凭证管理（AdminLlmProviderController / AdminProviderConfigController）走 admin 拦截器」的表述在 2026-08-21 之前**不属实**（当时不存在任何 admin 拦截器，admin 端点只过认证不过授权）。差距表 N10 同步存在该引用。历史行不改写，以本条目与差距表 §6 治理结论 2026-08-21 条澄清为准；本轮落地后该表述才真正成立。
+
+#### 2. 实现要点
+
+- **新增 `AdminOnlyInterceptor`**（`helloai-api/.../interceptor/`）：`preHandle` 校验 `_authType == "admin"`（复用 `AuthInterceptor.AUTH_TYPE_KEY` 常量），非 admin 抛 `BizException(403, "需要管理员权限")`，由 `GlobalExceptionHandler` 统一转 HTTP 403 + `R.fail`，与 AuthInterceptor 抛 401 同构，全局处理器零改动。
+- **`WebMvcConfig.addInterceptors`**：AuthInterceptor 之后追加注册 `AdminOnlyInterceptor`，`addPathPatterns("/api/admin/**")`。注册顺序保证执行时 `_authType` 已由认证阶段写入；语义分层：无凭证先在 Auth 处 401，agent 身份在 AdminOnly 处 403。8 个 admin Controller 一次性全覆盖，后续新增 `/api/admin/**` 端点自动纳入。
+- **`AgentController.register` 门控**：复用 `agentConfig.isAllowRegistration()` 开关（与 `registerWithToken` 同口径、同 403 文案「Agent 自注册已关闭，请联系管理员创建」），关闭后公开注册通道同样不可用。
+- **单测** `AdminOnlyInterceptorTest` 3 例（Mockito 纯 Mock HttpServletRequest）：admin 放行 / agent 403 / `_authType` 缺失 403。
+- **防回归脚本** `scripts/powershell/verify-admin-authz.ps1`：admin 登录 → 创建/复用测试 Agent → agent Bearer 探 8 个 `/api/admin/**` GET 端点（各前缀一个，零副作用）+ 假 providerCode 的 PUT 写端点断言 403 → admin token 同批端点断言 200（确认不误伤管理员）→ 无凭证断言 401 → 汇总 PASS/FAIL，FAIL>0 退出码 1。遵守 AGENTS.md 脚本规范（UTF-8 编码头、单引号拼接、CJK 只进注释）。
+- **文档回填**：CODE_STYLE V1.8 新增 §6.8「授权拦截红线」（认证/授权分离、`/api/admin/**` 强制过 AdminOnlyInterceptor、agent 禁访 admin 端点、非该前缀的 admin 端点用 requireAdmin() 纵深防御、单角色 role 预留说明、verify-admin-authz.ps1 为验证手段）；差距表新增 N21「admin 授权拦截」→ 已交付 + §6 治理结论含上述纠偏声明。
+
+#### 3. 验证结果
+
+- `mvn -pl helloai-api -am compile`：BUILD SUCCESS。
+- `AdminOnlyInterceptorTest`：3/3 全绿（根 pom 默认 skipTests=true，需显式 `-DskipTests=false`）。
+- `verify-admin-authz.ps1` 实跑：本轮执行环境（IDE 命令沙箱）的 loopback 探测对宿主服务不可达，多次启动实例后健康检查始终不通，行为级验收未完成——脚本已就绪，待用户在本地终端重启服务后执行 `scripts/powershell/verify-admin-authz.ps1` 完成闭环（脚本即验收手段，符合「脚本输出即事实源」惯例）。
+
+#### 4. 影响与遗留
+
+- 影响：① 评审报告 P0「admin 授权缺口」关闭——`/api/admin/**` 全量端点强制 admin 身份，agent 越权通道堵死，MCP 通道（`/mcp/**`）不在该前缀下不受影响；② 授权防线有单测 + e2e 脚本双层回归护栏，后续新增 admin 端点自动被覆盖；③ 报告发现但遗漏的 `AgentDutyLeaseController` 一并纳入。
+- 遗留：① `verify-admin-authz.ps1` 行为级实跑验收待用户在本地终端重启服务后执行；② 报告其余条目（依赖方向、巨型类拆分、事务缺失、状态枚举收口、DELETE body、5.4 测试端点门控）不在本轮范围；③ 已有 3 处手动 requireAdmin() 保留不动（路径不在 `/api/admin/**`，作纵深防御）；④ 本轮改动本地 git commit，不 push。

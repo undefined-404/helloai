@@ -1,5 +1,6 @@
 package com.helloai.api.config;
 
+import com.helloai.api.interceptor.AdminOnlyInterceptor;
 import com.helloai.api.interceptor.AuthInterceptor;
 import com.helloai.api.interceptor.RequestLogInterceptor;
 import com.helloai.core.system.mapper.RequestLogMapper;
@@ -40,5 +41,10 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 .excludePathPatterns("/api/setup/**")
                 // 活动流公开接口
                 .excludePathPatterns("/api/feed/**");
+
+        // 授权拦截器：/api/admin/** 强制 admin 身份（认证与授权分离，见 CODE_STYLE §6.8）
+        // 注册顺序在 AuthInterceptor 之后，执行时 _authType 已由认证阶段写入
+        registry.addInterceptor(new AdminOnlyInterceptor())
+                .addPathPatterns("/api/admin/**");
     }
 }

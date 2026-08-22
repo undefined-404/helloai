@@ -57,6 +57,10 @@ public class AgentController {
 
     @PostMapping("/register")
     public R<AgentRegistrationResponse> register(@RequestBody Map<String, Object> body) {
+        // 与 registerWithToken 共用自注册开关：关闭后公开注册通道同样不可用
+        if (!agentConfig.isAllowRegistration()) {
+            return R.fail(403, "Agent 自注册已关闭，请联系管理员创建");
+        }
         String name = (String) body.get("name");
         AgentRole role = AgentRole.valueOf(((String) body.get("role")).toUpperCase());
         String description = (String) body.getOrDefault("description", "");

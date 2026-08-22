@@ -2,8 +2,9 @@
 
 > 适用项目：HelloAI（AI Agent 协作调度平台）  
 > 生效范围：后端单体服务 + 前端管理后台（Vue 3 / Element Plus）  
-> 版本：V1.7  
-> 最后更新：2026-08-10  
+> 版本：V1.8  
+> 最后更新：2026-08-21  
+> 本版重点 V1.8：新增 §6.8「授权拦截红线」——认证（AuthInterceptor）与授权（AdminOnlyInterceptor）分离，`/api/admin/**` 强制 admin 身份，agent 身份一律 403；配套防回归脚本 `scripts/powershell/verify-admin-authz.ps1`（来源：后端代码评审报告 P0 admin 授权缺口）
 > 本版重点 V1.7：第 8 章「接口路径规范」重写为**内外双轨制**——对内平台轨 `/api/**` 维持描述性驼峰（原 8.1/8.2 规则原样保留），新增开放轨 `/open/**` 强制 kebab-case（服务手机端与第三方集成）；Agent 接入面路径契约冻结不迁；新增 8.4 审查红线与 AI 判定流程；20 章校验清单同步双轨条目
 > 本版重点：对齐 core 业务域分包重构后的代码事实——修正 3.2 启动类 @MapperScan 示例、3.x 资源文件位置、4.1 包命名示例、9.4 Flyway 规范与多版本迁移现实的冲突；补写 6.3 Controller 职责边界（含分层红线与待收口清单）；3.x 业务域分包规则补全子包清单与 outbox 归属决策；9.5 实施要点追加"变更残留检查范围"
 > 本版重点 V1.5：新增第 8 章「接口路径规范」（8.1 描述性风格 / 8.2 路径命名规则表 / 8.3 全局 URI 清理），废弃 6.4 嵌套资源路径规范，改写 6.5 状态操作端点为 `POST /xxxById/{id}`，6.6 分页端点改为 `POST /page`；原第 8～20 章顺延为第 9～21 章；20 章（原 19 章）校验清单路径条目同步新规范
@@ -792,6 +793,17 @@ public class PageResult<T> {
 | 调用 Service | 在普通业务接口中直接操作 Mapper/DB |
 | DTO 转换 | 事务管理 |
 | 返回 R | 跨服务调用逻辑（当前单体，未来微服务化后走 Feign） |
+
+### 6.8 授权拦截红线（V1.8 新增）
+
+【必须】认证（你是谁）与授权（你能干什么）分离：
+
+1. `AuthInterceptor` 只负责认证（校验 `X-Admin-Token` / `Bearer` API Key 有效、写入 `_authType`/`_authId`/`_authName`），不做角色判断。
+2. 凡 `/api/admin/**` 路径，必须经过 `AdminOnlyInterceptor` 校验 `_authType == "admin"`，否则抛 `BizException(403, ...)`。新增任何 admin 端点只要落在该路径前缀下即自动被拦截器覆盖，无需逐端点注解；因此**管理端点一律使用 `/api/admin/**` 前缀**，不得散落在其他前缀下绕过授权。
+3. 外部 Agent（`_authType == "agent"`）只允许访问 MCP 工具面、Agent 接入面（`/api/agents/**` 中面向 Agent 的端点）与其自身收件箱，禁止访问任何 admin 端点。
+4. 不在 `/api/admin/**` 前缀下但需要管理员权限的端点（如 `SubTaskController.executeById`、`CredentialController` 凭证读写），在 Controller 内用 `requireAdmin()` 显式检查 `_authType`，作为纵深防御保留。
+5. 单角色现状说明：`sys_user.role` 字段目前仅展示不生效（存量均为 ADMIN），授权边界即 `_authType == "admin"`；多角色演进时再在拦截器内引入 role 校验。
+6. 验证：`scripts/powershell/verify-admin-authz.ps1` —— 用 agent token 探全部 `/api/admin/**` 前缀端点必须全部 403，admin token 同一批端点必须 200，无凭证必须 401。涉及授权面的改动后必跑。
 
 ---
 
