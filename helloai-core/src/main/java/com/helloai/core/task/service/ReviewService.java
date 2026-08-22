@@ -2,8 +2,10 @@ package com.helloai.core.task.service;
 
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.helloai.common.constant.ReviewResult;
+import com.helloai.core.task.entity.ReviewRecheckLog;
 import com.helloai.core.task.entity.ReviewRecord;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 
 /**
@@ -53,4 +55,42 @@ public interface ReviewService extends IService<ReviewRecord> {
     ReviewRecord recordAutoReview(Long subTaskId, Long reviewerAgentId,
                                   ReviewResult result, int score,
                                   String issues, String comment);
+
+    /**
+     * 抽检候选计数：窗口内 APPROVED 且未被抽检覆盖的 review_record 数
+     * （反馈回路 Phase 4，供 ReviewerRecheckTask 按抽样比例折算批量）。
+     *
+     * @param since 窗口起点（含）；null 时按全量统计
+     */
+    long countRecheckCandidates(OffsetDateTime since);
+
+    /**
+     * 抽检候选 ID 列表：按落库时间升序（先审先抽）。
+     *
+     * @param since 窗口起点（含）；null 时按全量统计
+     * @param limit 批量上限
+     */
+    List<Long> listRecheckCandidateIds(OffsetDateTime since, int limit);
+
+    /**
+     * 抽检复审落库（反馈回路 Phase 4）：一条抽检日志 = 一次复审判定。
+     *
+     * <p>抽检只度量不改状态：子任务已按原判推进，本记录仅供放水率统计
+     * 与人工复核追溯（discrepancy=1 表示原 APPROVED 复审 REJECTED）。</p>
+     *
+     * @param reviewRecordId  被抽检的审查记录 ID
+     * @param subTaskId       被抽检子任务 ID
+     * @param originalResult  原判结果
+     * @param recheckResult   复审判定
+     * @param discrepancy     放水标记（true=原 APPROVED 复审 REJECTED）
+     * @param reviewerAgentId 执行复审的 Reviewer Agent ID
+     * @param score           复审评分（1-5）
+     * @param issues          复审驳回时的问题描述，可空
+     * @param comment         复审意见，可空
+     * @return 已持久化的 ReviewRecheckLog
+     */
+    ReviewRecheckLog recordRecheck(Long reviewRecordId, Long subTaskId,
+                                   ReviewResult originalResult, ReviewResult recheckResult,
+                                   boolean discrepancy, Long reviewerAgentId,
+                                   Integer score, String issues, String comment);
 }

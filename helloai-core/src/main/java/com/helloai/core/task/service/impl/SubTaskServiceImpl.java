@@ -119,6 +119,15 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
                 .list();
     }
 
+    /**
+     * 行锁读取：{@code SELECT ... FOR UPDATE} 锁定子任务行，用于"读现状 + 紧接写入"
+     * 原子化路径，避免同一子任务并发重复发命令。
+     *
+     * <p><b>必须在调用方事务内调用</b>：本方法只发行锁 SQL，不自行开启事务；
+     * 行锁随调用方事务存续而释放（方法返回即释放），自开事务会立刻释放锁，
+     * 失去互斥意义。唯一主代码调用方
+     * {@code ExecutionCommandServiceImpl.createAssignedCommand} 已满足该前提。</p>
+     */
     @Override
     public SubTask getByIdForUpdate(Long subTaskId) {
         return lambdaQuery()
@@ -622,6 +631,14 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         }
     }
 
+    /**
+     * 人工介入标记：在子任务 context 写入 manualIntervention 标记并落 timeline。
+     *
+     * <p>best-effort 降级写（CODE_STYLE §7.1 单语句原子写豁免口径）：getById + updateById
+     * 对单实体的单次原子更新，无跨实体一致性诉求，故不加 {@code @Transactional}；
+     * 整段 try-catch 降级——失败仅告警、不影响主链路。若后续追加第二条写操作，
+     * 必须补事务注解。</p>
+     */
     @Override
     public void markManualIntervention(Long subTaskId, String reason, Map<String, Object> extra) {
         try {

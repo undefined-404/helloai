@@ -10,8 +10,10 @@ import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.quality.QualityProfileUpdater;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ExecutionCommandService;
+import com.helloai.core.task.entity.ReviewRecheckLog;
 import com.helloai.core.task.entity.ReviewRecord;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.mapper.ReviewRecheckLogMapper;
 import com.helloai.core.task.mapper.ReviewRecordMapper;
 import com.helloai.core.task.service.ReviewService;
 import com.helloai.core.task.service.RewardService;
@@ -21,6 +23,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -39,6 +42,8 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
     private final ExecutionCommandService executionCommandService;
     /** 反馈回路第 1 层：review_record 落库后同事务增量维护质量画像（best-effort 不阻断）。 */
     private final QualityProfileUpdater qualityProfileUpdater;
+    /** 反馈回路 Phase 4：抽检候选查询与抽检日志落库（review_recheck_log，同域 Mapper）。 */
+    private final ReviewRecheckLogMapper reviewRecheckLogMapper;
 
     private static final Map<Integer, Integer> SCORE_RULES = Map.of(
             5, 5,   // 超出预期
@@ -164,5 +169,45 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
         log.info("自动核验落库: subTaskId={}, result={}, score={}, round={}",
                 subTaskId, result.name(), score, round);
         return record;
+    }
+
+    @Override
+    public long countRecheckCandidates(OffsetDateTime since) {
+        if (since == null) {
+            since = OffsetDateTime.now().minusYears(100);
+        }
+        return reviewRecheckLogMapper.countRecheckCandidates(since);
+    }
+
+    @Override
+    public List<Long> listRecheckCandidateIds(OffsetDateTime since, int limit) {
+        if (since == null) {
+            since = OffsetDateTime.now().minusYears(100);
+        }
+        List<Long> ids = reviewRecheckLogMapper.selectRecheckCandidateIds(since, limit);
+        return ids != null ? ids : List.of();
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ReviewRecheckLog recordRecheck(Long reviewRecordId, Long subTaskId,
+                                          ReviewResult originalResult, ReviewResult recheckResult,
+                                          boolean discrepancy, Long reviewerAgentId,
+                                          Integer score, String issues, String comment) {
+        ReviewRecheckLog recheckLog = new ReviewRecheckLog();
+        recheckLog.setReviewRecordId(reviewRecordId);
+        recheckLog.setSubTaskId(subTaskId);
+        recheckLog.setOriginalResult(originalResult);
+        recheckLog.setRecheckResult(recheckResult);
+        recheckLog.setDiscrepancy(discrepancy ? 1 : 0);
+        recheckLog.setReviewerAgent(reviewerAgentId);
+        recheckLog.setScore(score != null ? score : 0);
+        recheckLog.setIssues(issues);
+        recheckLog.setComment(comment);
+        // 本 ServiceImpl 泛型为 ReviewRecord，抽检日志经同域 Mapper 直插（同事务）
+        reviewRecheckLogMapper.insert(recheckLog);
+        log.info("抽检复审落库: reviewRecordId={}, subTaskId={}, original={}, recheck={}, discrepancy={}",
+                reviewRecordId, subTaskId, originalResult, recheckResult, discrepancy);
+        return recheckLog;
     }
 }

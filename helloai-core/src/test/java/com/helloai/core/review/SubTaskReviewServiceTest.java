@@ -2,10 +2,13 @@ package com.helloai.core.review;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.config.AgentDispatchProperties;
+import com.helloai.common.config.ReviewProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
+import com.helloai.common.constant.ReviewResult;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.core.review.picker.ReviewerPicker;
 import com.helloai.core.review.service.SubTaskReviewService;
 import com.helloai.core.review.service.impl.SubTaskReviewServiceImpl;
 import com.helloai.core.review.support.ReviewEvidenceAssembler;
@@ -15,17 +18,15 @@ import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
-import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.service.AttachmentService;
+import com.helloai.core.task.entity.ReviewRecord;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.service.ReviewService;
 import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.policy.TaskAgentPolicy;
-import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -38,6 +39,7 @@ import org.springframework.data.redis.core.ValueOperations;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -67,12 +69,10 @@ class SubTaskReviewServiceTest {
     private static final Long SUB_TASK_ID = 22L;
     private static final Long TASK_ID = 10L;
     private static final Long EXECUTOR_ID = 5L;
+    private static final Long RECORD_ID = 999L;
 
     @Mock
     private SubTaskService subTaskService;
-
-    @Mock
-    private AgentSelector agentSelector;
 
     @Mock
     private AgentService agentService;
@@ -96,9 +96,6 @@ class SubTaskReviewServiceTest {
     private ReviewService recordReviewService;
 
     @Mock
-    private TaskService taskService;
-
-    @Mock
     private AttachmentService attachmentService;
 
     @Mock
@@ -107,6 +104,15 @@ class SubTaskReviewServiceTest {
     @Mock
     private ValueOperations<String, String> valueOperations;
 
+    @Mock
+    private ReviewerPicker reviewerPicker;
+
+    @Mock
+    private ReviewProperties reviewProperties;
+
+    @Mock
+    private AgentQualityProfileService agentQualityProfileService;
+
     private SubTaskReviewService reviewService;
 
     @BeforeEach
@@ -114,11 +120,16 @@ class SubTaskReviewServiceTest {
         // ObjectMapper 用真实实例（JSON 解析是被测逻辑本身，不 mock）；
         // 证据装配/判定解析为真实组件实例（拆分后主类仅编排，不直接持有 mock 目标）
         reviewService = new SubTaskReviewServiceImpl(
-                subTaskService, agentSelector, agentService, platformAgentExecutionService,
+                subTaskService, agentService, platformAgentExecutionService,
                 taskTimelineService, executionCommandService, dispatchProperties,
-                conversationService, recordReviewService, taskService, redisTemplate,
+                conversationService, recordReviewService, redisTemplate,
                 new ReviewEvidenceAssembler(attachmentService, dispatchProperties),
-                new VerdictParser(new ObjectMapper()));
+                new VerdictParser(new ObjectMapper()),
+                reviewerPicker, reviewProperties, agentQualityProfileService);
+        // §6.142 选取职责迁入 Picker：单审默认返回 9L REVIEWER（双审/指定用例单独 stub）
+        lenient().when(reviewerPicker.pickSingle(any())).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
+        // §6.142 双审默认关闭：既有用例保持单审语义（双审用例单独 stub true）
+        lenient().when(reviewProperties.isDualReviewEnabled()).thenReturn(false);
         lenient().when(dispatchProperties.getAutoReviewMaxRework()).thenReturn(3);
         lenient().when(dispatchProperties.getReviewEvidenceCheckWaitMs()).thenReturn(0);
         // 方案3 F2 附件内容注入：默认开启（开关用例单独 stub 为 false）
@@ -201,7 +212,6 @@ class SubTaskReviewServiceTest {
     @DisplayName("核验通过 → complete（REVIEW→DONE）并记 timeline")
     void shouldCompleteWhenVerdictPass() {
         when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
 
@@ -218,7 +228,6 @@ class SubTaskReviewServiceTest {
     @DisplayName("核验不通过 → rework 并对 API_KEY_LLM 执行者重发执行命令")
     void shouldReworkAndRedispatchWhenVerdictFail() {
         when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 2, \"issues\": \"缺 3 个端点\", \"comment\": \"\"}", "stop", "llm", 100));
         when(agentService.getById(EXECUTOR_ID)).thenReturn(llmAgent(EXECUTOR_ID, AgentRole.EXECUTOR));
@@ -237,7 +246,6 @@ class SubTaskReviewServiceTest {
     @DisplayName("输出不可解析 → 不改状态（停留 REVIEW），记 unparseable timeline")
     void shouldStayInReviewWhenUnparseable() {
         when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("这个任务完成得还行吧", "stop", "llm", 100));
 
@@ -329,7 +337,6 @@ class SubTaskReviewServiceTest {
         attachment.setStorageUrl("local://helloai-local/1/verify-order-expire.ps1");
         when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(attachment));
         when(attachmentService.isContentLoadable(attachment)).thenReturn(true);
-        when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
                         "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
@@ -344,7 +351,6 @@ class SubTaskReviewServiceTest {
     @DisplayName("LLM 调用失败 → 不改状态（停留 REVIEW 等人工兜底）")
     void shouldStayInReviewWhenLlmFails() {
         when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                 .thenThrow(new RuntimeException("llm timeout"));
 
@@ -364,7 +370,6 @@ class SubTaskReviewServiceTest {
     @DisplayName("§6.41 TC-1 首次驳回 → context.reviewHistory.length == 1，round=1")
     void shouldAppendFirstRoundToReviewHistory() {
         when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 2, \"issues\": \"缺端点\", \"comment\": \"请补\"}", "stop", "llm", 100));
 
@@ -402,7 +407,6 @@ class SubTaskReviewServiceTest {
                 "executorDoneIssues", List.of())));
         subTask.setContext(ctx);
         when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
-        when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 3, \"issues\": \"格式不对\", \"comment\": \"再改\"}", "stop", "llm", 100));
 
@@ -433,7 +437,6 @@ class SubTaskReviewServiceTest {
                 "issues", "缺端点", "comment", "请补", "score", 2));
         subTask.setContext(ctx);
         when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
-        when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 2, \"issues\": \"仍未达标\", \"comment\": \"\"}", "stop", "llm", 100));
 
@@ -461,7 +464,6 @@ class SubTaskReviewServiceTest {
     @DisplayName("§6.41 TC-4 executorDoneIssues 初始为空列表（留待后续执行回填 hook）")
     void shouldInitializeExecutorDoneIssuesAsEmptyList() {
         when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 2, \"issues\": \"缺端点\", \"comment\": \"\"}", "stop", "llm", 100));
 
@@ -481,25 +483,19 @@ class SubTaskReviewServiceTest {
     //  ══════════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("§6.58: policy 指定 reviewerAgentId 优先于自动选择")
+    @DisplayName("§6.58: policy 指定 reviewerAgentId 生效（Picker 返回指定 reviewer）")
     void shouldUsePolicyReviewerWhenSpecified() {
-        Task task = new Task();
-        task.setId(TASK_ID);
-        task.setAgentPolicy(TaskAgentPolicy.build(null, null, 99L, null, null));
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(taskService.getById(TASK_ID)).thenReturn(task);
         Agent pinned = llmAgent(99L, AgentRole.REVIEWER);
         pinned.setStatus(AgentStatus.ACTIVE);
-        when(agentService.getById(99L)).thenReturn(pinned);
+        when(reviewerPicker.pickSingle(any())).thenReturn(pinned);
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
                         "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
-        // 指定可用 → 不再走自动选择链
-        verify(agentSelector, never()).pickPreferred(any());
-        verify(agentSelector, never()).pickPreferred(any(), any());
+        // 选取职责已迁入 Picker：指定可用时返回指定 reviewer，核验记录归属该 reviewer
         verify(subTaskService).complete(SUB_TASK_ID);
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_auto_review_passed"),
@@ -507,24 +503,17 @@ class SubTaskReviewServiceTest {
     }
 
     @Test
-    @DisplayName("§6.58: 指定 reviewer 不可用（DISABLED）→ 回退自动选择")
+    @DisplayName("§6.58: 指定 reviewer 不可用（DISABLED）→ Picker 回退自动选择（9L）")
     void shouldFallbackToAutoWhenPolicyReviewerUnusable() {
-        Task task = new Task();
-        task.setId(TASK_ID);
-        task.setAgentPolicy(TaskAgentPolicy.build(null, null, 99L, null, null));
         when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(taskService.getById(TASK_ID)).thenReturn(task);
-        Agent disabled = llmAgent(99L, AgentRole.REVIEWER);
-        disabled.setStatus(AgentStatus.DISABLED);
-        when(agentService.getById(99L)).thenReturn(disabled);
-        when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
+        when(reviewerPicker.pickSingle(any())).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
                         "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
-        // 指定失效 → 走自动选择链的 REVIEWER
+        // 指定失效 → Picker 内部回退自动选择链，返回可用 REVIEWER
         verify(subTaskService).complete(SUB_TASK_ID);
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_auto_review_passed"),
@@ -623,7 +612,6 @@ class SubTaskReviewServiceTest {
         when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
         when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(attachment));
         when(attachmentService.isContentLoadable(attachment)).thenReturn(true);
-        when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
                         "{\"pass\": true, \"score\": 4, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
@@ -663,7 +651,6 @@ class SubTaskReviewServiceTest {
     @DisplayName("§6.82: 核验正常完成 → finally 释放互斥锁")
     void shouldReleaseLockAfterReview() {
         when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
 
@@ -677,7 +664,6 @@ class SubTaskReviewServiceTest {
     @DisplayName("§6.82: LLM 调用异常 → 锁仍释放（finally 兜底）")
     void shouldReleaseLockEvenOnException() {
         when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                 .thenThrow(new RuntimeException("llm down"));
 
@@ -712,7 +698,6 @@ class SubTaskReviewServiceTest {
 
     private void stubReviewerPass() {
         when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(agentSelector.pickPreferred(AgentRole.REVIEWER)).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
     }
@@ -894,5 +879,227 @@ class SubTaskReviewServiceTest {
         String prompt = captureReviewPrompt();
         assertThat(prompt).contains("纯文本内容");
         assertThat(prompt).doesNotContain("媒体附件");
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  §6.142 双审（difficulty=HIGH）：一致/分歧/降级/指定跳过/ANY
+    //  ══════════════════════════════════════════════════════════════
+
+    private void stubDualReviewEnabled() {
+        when(reviewProperties.isDualReviewEnabled()).thenReturn(true);
+        when(reviewerPicker.isDualReviewRequired(TASK_ID)).thenReturn(true);
+        // 默认从严：REQUIRE_BOTH（分歧转人工）；ANY 用例单独覆盖
+        when(reviewProperties.getDualReviewConsensusPolicy())
+                .thenReturn(ReviewProperties.DualReviewConsensusPolicy.REQUIRE_BOTH);
+    }
+
+    @Test
+    @DisplayName("§6.142 双审一致通过 → 走既有通过链，仅落一条 review_record，双 reviewer 画像各 +1")
+    void shouldDualReviewConsistentPass() {
+        stubDualReviewEnabled();
+        when(reviewerPicker.pickDual(any())).thenReturn(List.of(
+                llmAgent(9L, AgentRole.REVIEWER), llmAgent(10L, AgentRole.REVIEWER)));
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100),
+                        AgentResult.success(
+                        "{\"pass\": true, \"score\": 4, \"issues\": \"\", \"comment\": \"同意\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        verify(subTaskService).complete(SUB_TASK_ID);
+        verify(subTaskService, never()).rework(anyLong(), any());
+        verify(subTaskService, never()).markManualIntervention(anyLong(), anyString(), anyMap());
+        // 双审只落一条共识 record（reviewer1 归属，防执行者画像重复计数）
+        verify(recordReviewService).recordAutoReview(
+                eq(SUB_TASK_ID), eq(9L), eq(ReviewResult.APPROVED), anyInt(), any(), any());
+        // Reviewer 维度画像：两个 reviewer 各 +1 reviewed、0 disagreement
+        verify(agentQualityProfileService).incrementReviewerStats(9L, 1, 0);
+        verify(agentQualityProfileService).incrementReviewerStats(10L, 1, 0);
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_dual_review_consented"),
+                eq(AgentRole.REVIEWER), eq(9L), anyMap());
+    }
+
+    @Test
+    @DisplayName("§6.142 双审分歧（一过一拒）→ 停 REVIEW 转人工介入 + 双 reviewer disagreement +1")
+    void shouldManualInterventionWhenDualReviewDisagreement() {
+        stubDualReviewEnabled();
+        when(reviewerPicker.pickDual(any())).thenReturn(List.of(
+                llmAgent(9L, AgentRole.REVIEWER), llmAgent(10L, AgentRole.REVIEWER)));
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100),
+                        AgentResult.success(
+                        "{\"pass\": false, \"score\": 2, \"issues\": \"缺端点\", \"comment\": \"\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        verify(subTaskService, never()).complete(anyLong());
+        verify(subTaskService, never()).rework(anyLong(), any());
+        // 分歧复用前端人工介入面板（零新增通道），payload 含两审判定明细
+        ArgumentCaptor<Map> payload = ArgumentCaptor.forClass(Map.class);
+        verify(subTaskService).markManualIntervention(
+                eq(SUB_TASK_ID), eq("reviewer_disagreement"), payload.capture());
+        assertThat(payload.getValue())
+                .containsEntry("reviewer1AgentId", 9L)
+                .containsEntry("pass1", true)
+                .containsEntry("pass2", false);
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_reviewer_disagreement"),
+                eq(AgentRole.REVIEWER), any(), anyMap());
+        verify(agentQualityProfileService).incrementReviewerStats(9L, 1, 1);
+        verify(agentQualityProfileService).incrementReviewerStats(10L, 1, 1);
+        // 分歧不落 review_record（未产生共识判定，防画像重复计数）
+        verify(recordReviewService, never()).recordAutoReview(anyLong(), any(), any(), anyInt(), any(), any());
+    }
+
+    @Test
+    @DisplayName("§6.142 双审候选不足（1 个）→ 降级单审 + 记 degraded timeline")
+    void shouldDegradeToSingleReviewWhenCandidatesInsufficient() {
+        // 候选不足直接降级，不会走到共识策略判断，故不 stub 策略
+        when(reviewProperties.isDualReviewEnabled()).thenReturn(true);
+        when(reviewerPicker.isDualReviewRequired(TASK_ID)).thenReturn(true);
+        when(reviewerPicker.pickDual(any())).thenReturn(List.of(llmAgent(9L, AgentRole.REVIEWER)));
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        verify(subTaskService).complete(SUB_TASK_ID);
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_dual_review_degraded"),
+                eq(AgentRole.REVIEWER), isNull(), anyMap());
+        // 降级走单审：仅一个 reviewer 参与，不触发双审画像计数
+        verify(agentQualityProfileService, never()).incrementReviewerStats(anyLong(), anyInt(), anyInt());
+    }
+
+    @Test
+    @DisplayName("§6.142 指定 reviewer 或非 HIGH → 跳过双审，走单审")
+    void shouldSkipDualWhenNotRequired() {
+        when(reviewProperties.isDualReviewEnabled()).thenReturn(true);
+        when(reviewerPicker.isDualReviewRequired(TASK_ID)).thenReturn(false);
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        verify(reviewerPicker, never()).pickDual(any());
+        verify(subTaskService).complete(SUB_TASK_ID);
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_auto_review_passed"),
+                eq(AgentRole.REVIEWER), eq(9L), anyMap());
+    }
+
+    @Test
+    @DisplayName("§6.142 ANY 策略：任一通过即按通过落地（reviewer2 通过）")
+    void shouldApplyAnyPolicyWhenEitherPasses() {
+        stubDualReviewEnabled();
+        when(reviewProperties.getDualReviewConsensusPolicy())
+                .thenReturn(ReviewProperties.DualReviewConsensusPolicy.ANY);
+        when(reviewerPicker.pickDual(any())).thenReturn(List.of(
+                llmAgent(9L, AgentRole.REVIEWER), llmAgent(10L, AgentRole.REVIEWER)));
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": false, \"score\": 2, \"issues\": \"缺端点\", \"comment\": \"\"}", "stop", "llm", 100),
+                        AgentResult.success(
+                        "{\"pass\": true, \"score\": 4, \"issues\": \"\", \"comment\": \"可过\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        verify(subTaskService).complete(SUB_TASK_ID);
+        verify(subTaskService, never()).markManualIntervention(anyLong(), anyString(), anyMap());
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_dual_review_consented"),
+                eq(AgentRole.REVIEWER), eq(9L), anyMap());
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  §6.142 抽检复审（recheckReviewRecord）：一致/放水/跳过
+    //  ══════════════════════════════════════════════════════════════
+
+    private ReviewRecord approvedRecord(Long id) {
+        ReviewRecord record = new ReviewRecord();
+        record.setId(id);
+        record.setSubTaskId(SUB_TASK_ID);
+        record.setReviewerAgentId(EXECUTOR_ID);
+        record.setResult(ReviewResult.APPROVED);
+        record.setScore(5);
+        return record;
+    }
+
+    @Test
+    @DisplayName("§6.142 抽检复审一致 → 落 recheck log（discrepancy=false）+ reviewer 画像 +1")
+    void shouldRecheckRecordWhenConsistent() {
+        when(recordReviewService.getById(RECORD_ID)).thenReturn(approvedRecord(RECORD_ID));
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
+
+        reviewService.recheckReviewRecord(RECORD_ID);
+
+        verify(recordReviewService).recordRecheck(
+                eq(RECORD_ID), eq(SUB_TASK_ID), eq(ReviewResult.APPROVED), eq(ReviewResult.APPROVED),
+                eq(false), eq(9L), any(), any(), any());
+        verify(agentQualityProfileService).incrementReviewerStats(9L, 1, 0);
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_recheck_consistent"),
+                eq(AgentRole.REVIEWER), eq(9L), anyMap());
+        // 抽检不改状态、不落 review_record
+        verify(subTaskService, never()).complete(anyLong());
+        verify(subTaskService, never()).rework(anyLong(), any());
+        verify(recordReviewService, never()).recordAutoReview(anyLong(), any(), any(), anyInt(), any(), any());
+    }
+
+    @Test
+    @DisplayName("§6.142 抽检发现放水（原 APPROVED 复审 REJECTED）→ discrepancy=true + timeline 观测")
+    void shouldRecheckRecordWhenDiscrepancy() {
+        when(recordReviewService.getById(RECORD_ID)).thenReturn(approvedRecord(RECORD_ID));
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": false, \"score\": 1, \"issues\": \"产出为编造\", \"comment\": \"\"}", "stop", "llm", 100));
+
+        reviewService.recheckReviewRecord(RECORD_ID);
+
+        verify(recordReviewService).recordRecheck(
+                eq(RECORD_ID), eq(SUB_TASK_ID), eq(ReviewResult.APPROVED), eq(ReviewResult.REJECTED),
+                eq(true), eq(9L), any(), any(), any());
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_recheck_discrepancy"),
+                eq(AgentRole.REVIEWER), eq(9L), anyMap());
+        verify(subTaskService, never()).complete(anyLong());
+        verify(subTaskService, never()).rework(anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("§6.142 抽检跳过：记录不存在 / 非 APPROVED / 无可用 reviewer 均不调 LLM")
+    void shouldSkipRecheckWhenNotEligible() {
+        // 记录不存在
+        when(recordReviewService.getById(RECORD_ID)).thenReturn(null);
+        reviewService.recheckReviewRecord(RECORD_ID);
+        verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
+
+        // 非 APPROVED（人工驳回记录不属于抽检目标）
+        ReviewRecord rejected = approvedRecord(RECORD_ID);
+        rejected.setResult(ReviewResult.REJECTED);
+        when(recordReviewService.getById(RECORD_ID)).thenReturn(rejected);
+        reviewService.recheckReviewRecord(RECORD_ID);
+        verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
+
+        // 无可用 reviewer → 跳过
+        when(recordReviewService.getById(RECORD_ID)).thenReturn(approvedRecord(RECORD_ID));
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(reviewerPicker.pickSingle(any())).thenReturn(null);
+        reviewService.recheckReviewRecord(RECORD_ID);
+        verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
     }
 }

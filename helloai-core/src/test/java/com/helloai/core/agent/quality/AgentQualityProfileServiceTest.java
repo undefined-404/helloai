@@ -18,11 +18,16 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * Agent 质量画像服务单元测试（反馈回路第 1 层，Phase 1.5）。
@@ -222,5 +227,73 @@ class AgentQualityProfileServiceTest {
         assertThat(saved.getIssueDefectStats())
                 .containsEntry("缺单测", 2)
                 .containsEntry("文档不全", 1);
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  incrementReviewerStats（反馈回路 Phase 4：双审/抽检 reviewer 维度计数）
+    //  ════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("reviewerAgentId 为 null 或 delta 全非正 → 早退不触碰数据源")
+    void reviewerStatsEarlyReturn() {
+        service.incrementReviewerStats(null, 1, 0);
+        service.incrementReviewerStats(AGENT_ID, 0, 0);
+        service.incrementReviewerStats(AGENT_ID, -1, 0);
+        verify(profileMapper, never()).incrementReviewerStats(anyLong(), anyInt(), anyInt(), anyString());
+    }
+
+    @Test
+    @DisplayName("画像行存在 → UPDATE 命中（返回 1），不 INSERT")
+    void reviewerStatsUpdateHit() {
+        when(profileMapper.incrementReviewerStats(AGENT_ID, 1, 1, "review")).thenReturn(1);
+
+        service.incrementReviewerStats(AGENT_ID, 1, 1);
+
+        verify(profileMapper).incrementReviewerStats(AGENT_ID, 1, 1, "review");
+        verify(service, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("画像行不存在 → UPDATE 未命中（返回 0）→ INSERT 仅 reviewer 维度画像")
+    void reviewerStatsInsertWhenNoRow() {
+        when(profileMapper.incrementReviewerStats(AGENT_ID, 2, 1, "review")).thenReturn(0);
+        doReturn(true).when(service).save(any());
+
+        service.incrementReviewerStats(AGENT_ID, 2, 1);
+
+        ArgumentCaptor<AgentQualityProfile> captor = ArgumentCaptor.forClass(AgentQualityProfile.class);
+        verify(service).save(captor.capture());
+        AgentQualityProfile saved = captor.getValue();
+        assertThat(saved.getAgentId()).isEqualTo(AGENT_ID);
+        // 执行者维度保持 0（reviewer 维度计数独立，rebuild 可覆盖）
+        assertThat(saved.getReviewedCount()).isZero();
+        assertThat(saved.getApprovedCount()).isZero();
+        assertThat(saved.getTotalScore()).isZero();
+        assertThat(saved.getReviewerReviewedCount()).isEqualTo(2);
+        assertThat(saved.getReviewerDisagreementCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("INSERT 并发唯一索引冲突 → 回退 UPDATE（另一路已建行）")
+    void reviewerStatsConflictFallbackToUpdate() {
+        when(profileMapper.incrementReviewerStats(AGENT_ID, 1, 0, "review")).thenReturn(0);
+        doThrow(new RuntimeException("duplicate key")).when(service).save(any());
+
+        service.incrementReviewerStats(AGENT_ID, 1, 0);
+
+        // save 冲突后回退 UPDATE：incrementReviewerStats 总调用 2 次
+        verify(profileMapper, times(2)).incrementReviewerStats(AGENT_ID, 1, 0, "review");
+    }
+
+    @Test
+    @DisplayName("UPDATE 抛异常 → 静默吞掉（best-effort 不阻断双审/抽检主链路）")
+    void reviewerStatsSwallowError() {
+        when(profileMapper.incrementReviewerStats(AGENT_ID, 1, 0, "review"))
+                .thenThrow(new RuntimeException("db down"));
+
+        service.incrementReviewerStats(AGENT_ID, 1, 0);
+
+        // 不抛异常即通过；不得触发 INSERT 兜底
+        verify(service, never()).save(any());
     }
 }

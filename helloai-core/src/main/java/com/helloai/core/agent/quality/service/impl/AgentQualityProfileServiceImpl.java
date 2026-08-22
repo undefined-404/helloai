@@ -119,6 +119,41 @@ public class AgentQualityProfileServiceImpl
     }
 
     @Override
+    public void incrementReviewerStats(Long reviewerAgentId, int reviewedDelta, int disagreementDelta) {
+        if (reviewerAgentId == null || (reviewedDelta <= 0 && disagreementDelta <= 0)) {
+            return;
+        }
+        try {
+            int updated = baseMapper.incrementReviewerStats(reviewerAgentId,
+                    reviewedDelta, disagreementDelta, "review");
+            if (updated <= 0) {
+                // 画像行不存在：创建仅 reviewer 维度的画像（执行者维度保持 0，rebuild 可覆盖）
+                AgentQualityProfile profile = new AgentQualityProfile();
+                profile.setAgentId(reviewerAgentId);
+                profile.setReviewedCount(0);
+                profile.setApprovedCount(0);
+                profile.setFirstReviewedCount(0);
+                profile.setFirstPassCount(0);
+                profile.setTotalScore(0);
+                profile.setReworkRoundSum(0);
+                profile.setReviewerReviewedCount(Math.max(reviewedDelta, 0));
+                profile.setReviewerDisagreementCount(Math.max(disagreementDelta, 0));
+                try {
+                    save(profile);
+                } catch (Exception conflict) {
+                    // 并发双写唯一索引冲突：回退 UPDATE（另一路已建行）
+                    baseMapper.incrementReviewerStats(reviewerAgentId,
+                            reviewedDelta, disagreementDelta, "review");
+                }
+            }
+        } catch (Exception e) {
+            // best-effort：计数失败不阻断双审/抽检主链路
+            log.warn("Reviewer 画像计数增量失败（忽略）: reviewerAgentId={}, err={}",
+                    reviewerAgentId, e.getMessage());
+        }
+    }
+
+    @Override
     @Transactional(rollbackFor = Exception.class)
     public void rebuild(Long agentId) {
         if (agentId == null) {

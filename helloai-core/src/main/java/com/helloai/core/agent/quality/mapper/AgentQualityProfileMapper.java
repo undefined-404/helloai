@@ -79,6 +79,25 @@ public interface AgentQualityProfileMapper extends BaseMapper<AgentQualityProfil
                          @Param("updateBy") String updateBy);
 
     /**
+     * Reviewer 维度计数原子增量（反馈回路 Phase 4 双审/抽检）：
+     * reviewer_reviewed_count / reviewer_disagreement_count 单条 UPDATE 累加，
+     * 并发由 PG 行锁串行化；调用方（review 域经 Service 接口）best-effort 包裹。
+     *
+     * <p>画像行不存在时返回 0（调用方决定是否 INSERT 兜底）。</p>
+     */
+    @Update("""
+            UPDATE agent_quality_profile SET
+                reviewer_reviewed_count = reviewer_reviewed_count + #{reviewedDelta},
+                reviewer_disagreement_count = reviewer_disagreement_count + #{disagreementDelta},
+                update_by = #{updateBy}
+            WHERE agent_id = #{agentId} AND deleted = 0
+            """)
+    int incrementReviewerStats(@Param("agentId") Long agentId,
+                               @Param("reviewedDelta") int reviewedDelta,
+                               @Param("disagreementDelta") int disagreementDelta,
+                               @Param("updateBy") String updateBy);
+
+    /**
      * 重算数据源：该执行者（sub_task.assigned_agent_id 当前归属）名下全部
      * review_record，按记录 id 升序（保证重算顺序与历史落库顺序一致）。
      *

@@ -43,6 +43,19 @@ public interface AgentQualityProfileService extends IService<AgentQualityProfile
     String renderHistorySection(Long agentId);
 
     /**
+     * Reviewer 维度计数增量（反馈回路 Phase 4 双审/抽检）。
+     *
+     * <p>reviewer_reviewed_count / reviewer_disagreement_count 原子累加；
+     * 画像行不存在时创建（仅 reviewer 维度字段非零），并发冲突时回退 UPDATE。
+     * best-effort：内部异常不向调用方抛出（双审/抽检主链路绝不因计数失败阻断）。</p>
+     *
+     * @param reviewerAgentId   Reviewer Agent ID；null 直接忽略
+     * @param reviewedDelta     核验次数增量（≥0）
+     * @param disagreementDelta 分歧次数增量（≥0）
+     */
+    void incrementReviewerStats(Long reviewerAgentId, int reviewedDelta, int disagreementDelta);
+
+    /**
      * 重算兜底：从 review_record 全量重算指定 Agent 的画像并覆盖落库。
      *
      * <p>口径与增量维护一致（首轮通过/评分累加/返工轮次/缺陷标签），
