@@ -52,7 +52,7 @@ public class OpenAiCompatibleProtocolFactory implements LlmProviderChatClientFac
         }
         String baseUrl = platformProviderConfigService.getBaseUrl(provider.getProviderCode());
         String cacheKey = ProviderChatModelCache.buildKey(
-                provider.getProviderCode(), apiKeyPlaintext, baseUrl, PROTOCOL_TYPE);
+                provider.getProviderCode(), apiKeyPlaintext, baseUrl, PROTOCOL_TYPE, model);
 
         ChatModel chatModel = cache.getOrCompute(cacheKey,
                 () -> buildChatModel(provider, apiKeyPlaintext, baseUrl, model));

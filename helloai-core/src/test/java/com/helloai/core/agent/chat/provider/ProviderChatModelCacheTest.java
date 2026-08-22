@@ -20,7 +20,7 @@ import static org.mockito.Mockito.mock;
  *     <li>不同 key 完全隔离；</li>
  *     <li>loader 抛异常时不会写入缓存；</li>
  *     <li>{@code evict} / {@code clear} 操作正确性；</li>
- *     <li>{@link ProviderChatModelCache#buildKey} provider 大小写归一，apiKey 不同 → key 不同。</li>
+ *     <li>{@link ProviderChatModelCache#buildKey} provider 大小写归一，apiKey 不同 → key 不同，model 不同 → key 不同。</li>
  * </ul>
  */
 @DisplayName("ProviderChatModelCache")
@@ -173,6 +173,32 @@ class ProviderChatModelCacheTest {
             // null 和 blank 同 hash；同值非空时 hash 与 "no-key" 字面量不同
             assertThat(nullKey).isEqualTo(blankKey);
             assertThat(nullKey).isNotEqualTo(noKey);
+        }
+
+        @Test
+        @DisplayName("不同 model 产生不同 key（Agent 改模型后自动分桶）")
+        void shouldDistinguishModel() {
+            String a = ProviderChatModelCache.buildKey("deepseek", "k", "https://api.deepseek.com", "deepseek", "deepseek-chat");
+            String b = ProviderChatModelCache.buildKey("deepseek", "k", "https://api.deepseek.com", "deepseek", "deepseek-reasoner");
+            assertThat(a).isNotEqualTo(b);
+        }
+
+        @Test
+        @DisplayName("model null/blank 与显式 default 同桶（默认模型桶）")
+        void shouldGroupNullOrBlankModel() {
+            String nullModel = ProviderChatModelCache.buildKey("deepseek", "k", "x", "deepseek", null);
+            String blankModel = ProviderChatModelCache.buildKey("deepseek", "k", "x", "deepseek", "  ");
+            String explicitDefault = ProviderChatModelCache.buildKey("deepseek", "k", "x", "deepseek", "default");
+            // model 段直接拼接：null/blank 归 "default" 字面量，与显式 default 同桶（默认模型桶）
+            assertThat(nullModel).isEqualTo(blankModel).isEqualTo(explicitDefault);
+        }
+
+        @Test
+        @DisplayName("model 大小写敏感（不归一化，避免大小写不同配置误共享）")
+        void shouldKeepModelCase() {
+            String lower = ProviderChatModelCache.buildKey("moonshot", "k", "x", "OPENAI_COMPATIBLE", "moonshot-v1-8k");
+            String upper = ProviderChatModelCache.buildKey("moonshot", "k", "x", "OPENAI_COMPATIBLE", "Moonshot-V1-8K");
+            assertThat(lower).isNotEqualTo(upper);
         }
     }
 

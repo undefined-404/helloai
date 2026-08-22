@@ -30,7 +30,7 @@ import static org.mockito.Mockito.when;
  * <ul>
  *     <li>apiKey 空白拒绝（BizException）；</li>
  *     <li>Anthropic 兼容 ChatClient 创建成功、ChatModel 类型与 defaultModel 解析；</li>
- *     <li>同 (provider, apiKey, baseUrl) 四元组缓存复用（同实例）；</li>
+ *     <li>同 (provider, apiKey, baseUrl, protocolType, model) 五元组缓存复用（同实例），不同 model 各自建桶；</li>
  *     <li>defaultModel 三级兜底：调用方传入 > llm_provider.defaultModel > sys_config；</li>
  *     <li>baseUrl 兜底：平台配置缺失时回退 llm_provider.baseUrl。</li>
  * </ul>
@@ -117,7 +117,7 @@ class AnthropicCompatibleProtocolFactoryTest {
 
             assertThat(client).isNotNull();
             ChatModel model = cache.get(ProviderChatModelCache.buildKey(
-                    PROVIDER_CODE, "sk-test", "https://api.minimaxi.com/anthropic", "ANTHROPIC_COMPATIBLE"));
+                    PROVIDER_CODE, "sk-test", "https://api.minimaxi.com/anthropic", "ANTHROPIC_COMPATIBLE", "MiniMax-Text-01"));
             assertThat(model).isInstanceOf(AnthropicChatModel.class);
             assertThat(((AnthropicChatModel) model).getDefaultOptions().getModel())
                     .isEqualTo("MiniMax-Text-01");
@@ -132,7 +132,7 @@ class AnthropicCompatibleProtocolFactoryTest {
             factory.createChatClient(provider, "sk-test", agent(), null);
 
             ChatModel model = cache.get(ProviderChatModelCache.buildKey(
-                    PROVIDER_CODE, "sk-test", "https://api.minimaxi.com/anthropic", "ANTHROPIC_COMPATIBLE"));
+                    PROVIDER_CODE, "sk-test", "https://api.minimaxi.com/anthropic", "ANTHROPIC_COMPATIBLE", null));
             assertThat(((AnthropicChatModel) model).getDefaultOptions().getModel())
                     .isEqualTo("MiniMax-M2.5");
             verify(platformProviderConfigService, never()).getDefaultModel(PROVIDER_CODE);
@@ -148,7 +148,7 @@ class AnthropicCompatibleProtocolFactoryTest {
             factory.createChatClient(provider, "sk-test", agent(), null);
 
             ChatModel model = cache.get(ProviderChatModelCache.buildKey(
-                    PROVIDER_CODE, "sk-test", "https://api.minimaxi.com/anthropic", "ANTHROPIC_COMPATIBLE"));
+                    PROVIDER_CODE, "sk-test", "https://api.minimaxi.com/anthropic", "ANTHROPIC_COMPATIBLE", null));
             assertThat(((AnthropicChatModel) model).getDefaultOptions().getModel())
                     .isEqualTo("MiniMax-M2.5");
             verify(platformProviderConfigService).getDefaultModel(PROVIDER_CODE);
@@ -195,11 +195,30 @@ class AnthropicCompatibleProtocolFactoryTest {
 
             assertThat(cache.size()).isEqualTo(1);
             ChatModel firstModel = cache.get(ProviderChatModelCache.buildKey(
-                    PROVIDER_CODE, "sk-test", "https://api.minimaxi.com/anthropic", "ANTHROPIC_COMPATIBLE"));
+                    PROVIDER_CODE, "sk-test", "https://api.minimaxi.com/anthropic", "ANTHROPIC_COMPATIBLE", "MiniMax-M2.5"));
             ChatModel secondModel = cache.get(ProviderChatModelCache.buildKey(
-                    PROVIDER_CODE, "sk-test", "https://api.minimaxi.com/anthropic", "ANTHROPIC_COMPATIBLE"));
+                    PROVIDER_CODE, "sk-test", "https://api.minimaxi.com/anthropic", "ANTHROPIC_COMPATIBLE", "MiniMax-M2.5"));
             assertThat(secondModel).isSameAs(firstModel);
             assertThat(second).isNotSameAs(first);
+        }
+
+        @Test
+        @DisplayName("同四元组不同 model 各自建桶，不共享实例（改模型即时生效的缓存基础）")
+        void shouldIsolateByModel() {
+            LlmProvider provider = llmProvider("ANTHROPIC_COMPATIBLE", "https://api.minimaxi.com/anthropic", "MiniMax-M2.5");
+            when(platformProviderConfigService.getBaseUrl(PROVIDER_CODE)).thenReturn("https://api.minimaxi.com/anthropic");
+
+            factory.createChatClient(provider, "sk-test", agent(), "MiniMax-Text-01");
+            factory.createChatClient(provider, "sk-test", agent(), "MiniMax-M2.5");
+
+            assertThat(cache.size()).isEqualTo(2);
+            ChatModel modelText = cache.get(ProviderChatModelCache.buildKey(
+                    PROVIDER_CODE, "sk-test", "https://api.minimaxi.com/anthropic", "ANTHROPIC_COMPATIBLE", "MiniMax-Text-01"));
+            ChatModel modelM25 = cache.get(ProviderChatModelCache.buildKey(
+                    PROVIDER_CODE, "sk-test", "https://api.minimaxi.com/anthropic", "ANTHROPIC_COMPATIBLE", "MiniMax-M2.5"));
+            assertThat(modelText).isNotSameAs(modelM25);
+            assertThat(((AnthropicChatModel) modelText).getDefaultOptions().getModel()).isEqualTo("MiniMax-Text-01");
+            assertThat(((AnthropicChatModel) modelM25).getDefaultOptions().getModel()).isEqualTo("MiniMax-M2.5");
         }
 
         @Test

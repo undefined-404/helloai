@@ -30,7 +30,7 @@ import static org.mockito.Mockito.when;
  * <ul>
  *     <li>apiKey 空白拒绝（BizException）；</li>
  *     <li>OpenAI 兼容 ChatClient 创建成功、ChatModel 类型与 defaultModel 解析；</li>
- *     <li>同 (provider, apiKey, baseUrl) 四元组缓存复用（同实例）；</li>
+ *     <li>同 (provider, apiKey, baseUrl, protocolType, model) 五元组缓存复用（同实例），不同 model 各自建桶；</li>
  *     <li>defaultModel 三级兜底：调用方传入 > llm_provider.defaultModel > sys_config；</li>
  *     <li>baseUrl 兜底：平台配置缺失时回退 llm_provider.baseUrl。</li>
  * </ul>
@@ -117,7 +117,7 @@ class OpenAiCompatibleProtocolFactoryTest {
 
             assertThat(client).isNotNull();
             ChatModel model = cache.get(ProviderChatModelCache.buildKey(
-                    PROVIDER_CODE, "sk-test", "https://api.moonshot.cn", "OPENAI_COMPATIBLE"));
+                    PROVIDER_CODE, "sk-test", "https://api.moonshot.cn", "OPENAI_COMPATIBLE", "moonshot-v1-32k"));
             assertThat(model).isInstanceOf(OpenAiChatModel.class);
             assertThat(((OpenAiChatModel) model).getDefaultOptions().getModel())
                     .isEqualTo("moonshot-v1-32k");
@@ -132,7 +132,7 @@ class OpenAiCompatibleProtocolFactoryTest {
             factory.createChatClient(provider, "sk-test", agent(), null);
 
             ChatModel model = cache.get(ProviderChatModelCache.buildKey(
-                    PROVIDER_CODE, "sk-test", "https://api.moonshot.cn", "OPENAI_COMPATIBLE"));
+                    PROVIDER_CODE, "sk-test", "https://api.moonshot.cn", "OPENAI_COMPATIBLE", null));
             assertThat(((OpenAiChatModel) model).getDefaultOptions().getModel())
                     .isEqualTo("moonshot-v1-8k");
             verify(platformProviderConfigService, never()).getDefaultModel(PROVIDER_CODE);
@@ -148,7 +148,7 @@ class OpenAiCompatibleProtocolFactoryTest {
             factory.createChatClient(provider, "sk-test", agent(), null);
 
             ChatModel model = cache.get(ProviderChatModelCache.buildKey(
-                    PROVIDER_CODE, "sk-test", "https://api.moonshot.cn", "OPENAI_COMPATIBLE"));
+                    PROVIDER_CODE, "sk-test", "https://api.moonshot.cn", "OPENAI_COMPATIBLE", null));
             assertThat(((OpenAiChatModel) model).getDefaultOptions().getModel())
                     .isEqualTo("moonshot-v1-8k");
             verify(platformProviderConfigService).getDefaultModel(PROVIDER_CODE);
@@ -195,11 +195,30 @@ class OpenAiCompatibleProtocolFactoryTest {
 
             assertThat(cache.size()).isEqualTo(1);
             ChatModel firstModel = cache.get(ProviderChatModelCache.buildKey(
-                    PROVIDER_CODE, "sk-test", "https://api.moonshot.cn", "OPENAI_COMPATIBLE"));
+                    PROVIDER_CODE, "sk-test", "https://api.moonshot.cn", "OPENAI_COMPATIBLE", "moonshot-v1-8k"));
             ChatModel secondModel = cache.get(ProviderChatModelCache.buildKey(
-                    PROVIDER_CODE, "sk-test", "https://api.moonshot.cn", "OPENAI_COMPATIBLE"));
+                    PROVIDER_CODE, "sk-test", "https://api.moonshot.cn", "OPENAI_COMPATIBLE", "moonshot-v1-8k"));
             assertThat(secondModel).isSameAs(firstModel);
             assertThat(second).isNotSameAs(first);
+        }
+
+        @Test
+        @DisplayName("同四元组不同 model 各自建桶，不共享实例（改模型即时生效的缓存基础）")
+        void shouldIsolateByModel() {
+            LlmProvider provider = llmProvider("OPENAI_COMPATIBLE", "https://api.moonshot.cn", "moonshot-v1-8k");
+            when(platformProviderConfigService.getBaseUrl(PROVIDER_CODE)).thenReturn("https://api.moonshot.cn");
+
+            factory.createChatClient(provider, "sk-test", agent(), "moonshot-v1-32k");
+            factory.createChatClient(provider, "sk-test", agent(), "moonshot-v1-8k");
+
+            assertThat(cache.size()).isEqualTo(2);
+            ChatModel model32k = cache.get(ProviderChatModelCache.buildKey(
+                    PROVIDER_CODE, "sk-test", "https://api.moonshot.cn", "OPENAI_COMPATIBLE", "moonshot-v1-32k"));
+            ChatModel model8k = cache.get(ProviderChatModelCache.buildKey(
+                    PROVIDER_CODE, "sk-test", "https://api.moonshot.cn", "OPENAI_COMPATIBLE", "moonshot-v1-8k"));
+            assertThat(model32k).isNotSameAs(model8k);
+            assertThat(((OpenAiChatModel) model32k).getDefaultOptions().getModel()).isEqualTo("moonshot-v1-32k");
+            assertThat(((OpenAiChatModel) model8k).getDefaultOptions().getModel()).isEqualTo("moonshot-v1-8k");
         }
 
         @Test

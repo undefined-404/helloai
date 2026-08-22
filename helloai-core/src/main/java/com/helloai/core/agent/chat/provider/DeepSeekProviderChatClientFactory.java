@@ -46,11 +46,12 @@ public class DeepSeekProviderChatClientFactory implements ProviderChatClientFact
         // baseUrl 动态化：sys_config > yml > null（null 时 DeepSeekApi 走官方默认）
         String baseUrl = platformProviderConfigService.getBaseUrl(PROVIDER);
 
-        // N9: 按 (provider, baseUrl, apiKey, protocolType) 四元组复用 ChatModel 实例，避免每次请求重
+        // N9: 按 (provider, baseUrl, apiKey, protocolType, model) 五元组复用 ChatModel 实例，避免每次请求重
         // 建 RestClient/连接池。idempotencyKey / 上下文 model 切换由 ChatClient 层的
         // options/advisor 覆盖，不影响本缓存 key。protocolType=deepseek 是一个独立桶，与
-        // OpenAI 兼容 / Anthropic 兼容 ChatModel 隔离。
-        String cacheKey = ProviderChatModelCache.buildKey(PROVIDER, apiKeyPlaintext, baseUrl, PROVIDER);
+        // OpenAI 兼容 / Anthropic 兼容 ChatModel 隔离。model 维度保证 Agent 改 model_type
+        // 后自动重建实例（2026-08-22 修复，此前缺 model 需重启才生效）。
+        String cacheKey = ProviderChatModelCache.buildKey(PROVIDER, apiKeyPlaintext, baseUrl, PROVIDER, model);
 
         ChatModel chatModel = cache.getOrCompute(cacheKey, () -> buildChatModel(apiKeyPlaintext, config, baseUrl, model));
         return ChatClient.create(chatModel);
