@@ -6503,3 +6503,29 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - 影响：评审环节从单一判定升级为双审共识 + 定时抽检，reviewer 维度画像计数闭环（incrementReviewerStats），分歧/不一致可见于 timeline 与人工干预记录；抽检配置全部走 helloai.review.* 默认值，未显式声明。
 - 遗留：本轮改动未 git 提交，待用户确认后提交；verify-reviewer-dual.ps1 实测已全绿（S1 PASS=8/S3 PASS=7，S2 分歧未复现轮按 SKIP 设计）；ProviderChatModelCache 缓存 key 不含 model 的产品缺陷待用户决策是否修复（涉及 core 代码 + 测试同步 + 重启 6565 验证）。
+
+### 6.143 ProviderChatModelCache 缓存 key 补 model 维度（产品缺陷修复）（2026-08-22）
+
+#### 1. 背景与结论
+
+- **背景**：§6.142 实测暴露的产品级缺陷——`ProviderChatModelCache.buildKey` 仅含 (provider, baseUrl, apiKey, protocolType) 四元组，不含 model 维度；Agent 修改 model_type 后命中同一 key 复用旧 ChatModel 实例，新模型配置不生效直到重启（实测 rd-reviewer-a 由 qwen3.8-Max 改 qwen3.7-plus 后请求仍 404 qwen3.8-Max）。
+- **结论**：用户确认修复。buildKey 升级五元组主签名（含 model），3 个 factory 调用点同步补 model 参数；model 变更自动落入新桶重建 ChatModel，无需重启。
+
+#### 2. 实现要点
+
+- **buildKey 5 参主签名**（`provider, apiKey, baseUrl, protocolType, model`）：model 段追加到 key 尾部，**按原样参与 key（不归一化大小写）**——模型名可能大小写敏感（如 MiniMax-Text-01），归一化会导致大小写不同的配置误共享同一实例；null/blank 归 `default` 桶（与显式字面量 `default` 同桶，model 段直接拼接非 hash）。
+- **3 参 / 4 参旧签名保留为兼容委托**（model 归 default 桶），既有测试与潜在调用方不受破坏。
+- **3 个 factory 调用点补 model**：`OpenAiCompatibleProtocolFactory` / `AnthropicCompatibleProtocolFactory`（buildKey 传调用方 model）/ `DeepSeekProviderChatClientFactory`（注释同步更新为五元组口径，注明 2026-08-22 修复）。
+- **类注释更新**：缓存粒度改为五元组；失效策略注明「key 含 model 维度，Agent 修改 model_type 后自动落入新桶重建实例，无需重启」。
+- **明确不做**：不做 LRU 容量上限、不做 model 变更主动驱逐旧实例（旧 key 无引用即 GC，与 clear() 语义一致）。
+
+#### 3. 验证结果
+
+- `mvn -pl helloai-core -am clean test -Dtest=ProviderChatModelCacheTest,OpenAiCompatibleProtocolFactoryTest,AnthropicCompatibleProtocolFactoryTest,LlmProviderChatClientFactoryRegistryTest`：**42/42 全绿**（ProviderChatModelCacheTest 15 含 3 个新增 model 用例：不同 model 不同 key / null-blank 与显式 default 同桶 / 大小写敏感；两个 factory 测试各含 `shouldIsolateByModel`：同四元组不同 model 各自建桶不共享实例，cache.size()=2 且各自 defaultOptions.model 正确）。
+- 期间再次踩到 §6.142 记载的 target/test-classes 过期编译产物导致 @Nested 测试类 0 run 问题，`clean` 全量重编译后恢复（与本次代码无关，属已知环境坑）。
+- 测试断言修正记录：首版断言「null model 与显式 default 字面量不同」与实际语义冲突（model 段直接拼接，null/blank 与字面量 default 同桶），已修正为同桶断言。
+
+#### 4. 影响与遗留
+
+- 影响：Agent 修改 model_type 后即时生效（新 key 自动建桶重建实例），无需重启后端；缓存日志可见 `key=...::model` 尾部 model 段；旧模型实例滞留内存直至无引用 GC，可接受。
+- 遗留：真实环境需重启 6565 实例后验证模型切换即时生效（此前 qwen3.7-plus 场景可作回归素材）；verify-reviewer-dual.ps1 无需变更；本轮改动未 git 提交，待用户确认后提交。
