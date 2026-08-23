@@ -1956,7 +1956,7 @@ public class {Name}CompensationTask {
 - 路径按资源分组（tasks / subTasks / agents / setup / admin / attachments / clarifications 等），静态路径直接字符串，带参路径用箭头函数 `(id) => \`/xxx/${enc(id)}\``
 - `enc()` 统一 `encodeURIComponent(String(s))`，调用方禁止重复 `encodeURIComponent`
 - 新增接口路径只改 paths.ts 一处，api 模块与页面全部引用常量
-- 存量 16 个 api 文件已于 2026-08-22 全量收口（评审整改阶段四-3）；防回归：grep 内联 `/api/` 路径字符串应零命中
+- 存量 16 个 api 文件已于 2026-08-22 全量收口（评审整改阶段四-3）；防回归：grep 内联 `/api/` 路径字符串应零命中；**2026-08-23 升级为脚本双通道校验 `scripts/powershell/verify-code-style-p1-ui-sync.ps1`**——通道 A：paths.ts 全部路径字面量（含 `${...}` 模板归一）须存在对应后端端点（方法无关）；通道 B：api 文件 request 调用必须引用 `paths.<block>.<key>`，内联路径/未知键/方法不匹配均报违规
 
 理由：路径单一事实源，前后端契约变更只改一处；AI 协作下避免散落字符串漂移。
 

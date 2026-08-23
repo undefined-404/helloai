@@ -6664,3 +6664,28 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 - 影响：质量看板三端点可观测（overview / 排行 / 30 天窗口聚合），缺陷标签与画像表同口径；P2 竞态窗口关闭（双审窗口 90s < 锁 TTL 120s）。
 - 遗留：CODE_STYLE V1.15 已回填（§3.x review 域 dto 子包 + 看板聚合归属 + P3 修正）；差距表 N20 状态补 08-23；verify-quality-dashboard.ps1 依赖 docker 容器 + 6565 运行实例。
 - **实测修复（浏览器复验，2026-08-23）**：前端看板首载报「加载质量看板失败」——design-system.css 未定义 `--ha-success-light`（仅 primary 系有 -light 令牌），`initReworkChart` 渐变第二个 stop 取到空串，ECharts CanvasGradient.addColorStop('') 抛 SyntaxError，被 loadDashboard catch 后整页错误态；修复：亮色 `rgba(16,185,129,0.10)` / 暗色 `rgba(16,185,129,0.14)` 补令牌；浏览器复验：5 图全部渲染 + 统计卡片 + 7/30/90 窗口切换 + 明暗主题切换均正常，Console 0 报错。
+
+### 6.148 CODE_STYLE 合规审计修复（2026-08-23）
+
+#### 1. 背景与结论
+
+- **背景**：对照 CODE_STYLE V1.15 全量合规审计发现 4 类违规：① §8.2 描述性驼峰路径违规 11 处（AdminLlmProviderController 8 + AdminProviderConfigController 2 + AdminQualityController 1）；② §7.8 类规模红线超线 5 个 ServiceImpl（SubTaskServiceImpl 879 行 / McpToolServiceImpl 807 / SubTaskExecutionServiceImpl 597 / RequirementClarifyServiceImpl 675 / AgentServiceImpl 583）；③ `ImplicitScoreCalculator` 缺类 Javadoc（§1.x）+ `LlmProviderModelQueryService` 3 个方法 Optional 作返回值（§7.6 禁止）；④ `verify-code-style-p1-ui-sync.ps1` 字面量匹配在 paths.ts 单一事实源收口后 100% 失效（提取器还把 `'ACTIVE'`、`responseType: 'blob'` 等当路径误报）。
+- **结论**：按用户「1-4 依次修复」全部落地：路径全部 ById/ByProvider 化并同步调用方；5 个超线类按 §7.8 选项二书面声明不拆分（对齐 SubTaskReviewServiceImpl 先例）；Optional 全部收口 + Javadoc 补齐；ui-sync 脚本升级为 paths.ts 常量双通道匹配。
+
+#### 2. 实现要点
+
+- **① §8.2 路径整改（11 处 + 调用方同步）**：`AdminLlmProviderController` 8 处（saveApiKeyById/{id} / listModelsByProviderId/{id} / addModelByProviderId/{id} / saveAllModelsByProviderId/{id} / deleteModelByProviderIdAndName/{providerId}/{modelName} / toggleModelByProviderIdAndName/... / setDefaultModelByProviderIdAndName/... / getSkillOptionsByModelType/{modelType}）；`AdminProviderConfigController` 2 处（saveApiKeyByProvider/{provider} / saveSettingsByProvider/{provider}）；`AdminQualityController` 1 处（findSpecSectionByTaskId/{taskId}）。调用方同步：paths.ts 11 行 + verify-llm-provider-models.ps1 20 处 + verify-admin-authz.ps1 2 处 + verify-platform-config.ps1 2 处；全仓库旧路径 grep 0 残留。
+- **② §7.8 书面声明（5 个超线类）**：每个类 Javadoc 补「§7.8 类规模拆分评审结论（2026-08-23）」三节（已剥离清单 + 剩余职责 + 不拆理由），格式对齐 SubTaskReviewServiceImpl 先例（如 SubTaskServiceImpl 已剥离状态机/审查/执行/评分/结果处理器 5 组件，剩余状态流转 + 事件发布 + 评分联动，不拆理由=状态机与事件序共享）；`SubTaskExecutionServiceImpl` 顺带修正类 Javadoc 错位（原挂在字段区）。
+- **③ §7.6 Optional 收口 + Javadoc**：`LlmProviderModelQueryService` 3 方法（findDefaultByProviderId / findDefaultModelNameByProviderCode / findCapabilityByModelType，审计点名 1 处 + 同接口同类 2 处一并收口）Optional→null 语义，同步 Impl / AgentSkillPolicyService / AdminLlmProviderController 及 2 个测试（AgentServiceTest 5 处 mock、LlmProviderModelQueryServiceImplTest 7 处断言与 DisplayName）；`ImplicitScoreCalculator` 补类 Javadoc（五维因子 + 调用链 + 评分失败不阻断 DONE 语义）。
+- **④ ui-sync 脚本双通道升级**：通道 A = paths.ts 119 个路径字面量 ↔ 后端 163 个路径（方法无关匹配，`${...}` 模板统一归一 {id}，豁免后端未实现的 /rules/updateById/{id}、/rules/deleteById/{id}）；通道 B = api 文件 125 个 request 调用必须引用 paths.&lt;block&gt;.&lt;key&gt;（§19.0 防内联路径回归，支持泛型跨行 `request.post&lt;T,R&gt;(\n` 形式）；规则 6 合规（UTF-8 头 + 单引号拼接 + 全 ASCII 运行时字面量）。
+
+#### 3. 验证结果
+
+- P1 paths 脚本：146 端点 0 违规 ALL PASSED。
+- 新 ui-sync：双通道 ALL SYNCED（通道 A 119 字面量 0 未匹配、通道 B 125 调用 0 违规）。
+- 编译：`mvn -pl helloai-core,helloai-api -am test-compile` BUILD SUCCESS（覆盖 ②③ 全部改动文件）。
+
+#### 4. 影响与遗留
+
+- 影响：§8.2 路径全量对齐；5 个超线类具备 §7.8 书面声明；§7.6 Optional 返回值清零；ui-sync 防回归能力恢复（可捕获内联路径 / 死键 / 方法不匹配）。
+- 遗留：审计观察项（非违规项）按用户确认不处理；本轮未 git 提交。
