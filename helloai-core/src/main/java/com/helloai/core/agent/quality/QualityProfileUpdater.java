@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.core.agent.quality.entity.AgentQualityProfile;
 import com.helloai.core.agent.quality.mapper.AgentQualityProfileMapper;
-import com.helloai.core.task.entity.ReviewRecord;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
@@ -51,29 +50,37 @@ public class QualityProfileUpdater {
      *
      * @param executorAgentId 执行者维度归属（sub_task.assigned_agent_id 落库时刻值）；
      *                        null 时跳过（未指派执行者的评审不产生画像数据）
-     * @param record          刚持久化的 ReviewRecord（round/result/score/issues 已就绪）
+     * @param reviewRecordId  刚持久化的 review_record 主键（防重计数依据）
+     * @param round           审查轮次（null 按 1 处理）
+     * @param result          审查结论（APPROVED 计入通过/首轮通过计数）
+     * @param score           审查评分（1-5，null 按 0 处理）
+     * @param issues          审查问题描述（解析 [defect] 标签统计）
      */
     @Transactional(propagation = Propagation.NESTED, rollbackFor = Exception.class)
-    public void onReviewRecordPersisted(Long executorAgentId, ReviewRecord record) {
-        if (executorAgentId == null || record == null || record.getId() == null) {
-            log.debug("画像增量跳过：executorAgentId 或 record 缺失, executorAgentId={}", executorAgentId);
+    public void onReviewRecordPersisted(Long executorAgentId, Long reviewRecordId,
+                                        Integer round, ReviewResult result,
+                                        Integer score, String issues) {
+        if (executorAgentId == null || reviewRecordId == null) {
+            log.debug("画像增量跳过：executorAgentId 或 reviewRecordId 缺失, executorAgentId={}", executorAgentId);
             return;
         }
         try {
-            applyIncrement(executorAgentId, record);
+            applyIncrement(executorAgentId, reviewRecordId, round, result, score, issues);
         } catch (Exception e) {
             // best-effort：画像更新失败绝不阻断 review 主链路
             log.warn("质量画像增量更新失败（已降级跳过）: agentId={}, reviewRecordId={}, err={}",
-                    executorAgentId, record.getId(), e.getMessage());
+                    executorAgentId, reviewRecordId, e.getMessage());
         }
     }
 
     /** 增量主体：画像行存在则原子增量，不存在则插入初始行（并发冲突时退化为增量）。 */
-    private void applyIncrement(Long agentId, ReviewRecord record) {
+    private void applyIncrement(Long agentId, Long reviewRecordId,
+                                Integer round, ReviewResult result,
+                                Integer score, String issues) {
         AgentQualityProfile existing = findProfile(agentId);
         if (existing == null) {
             try {
-                insertInitial(agentId, record);
+                insertInitial(agentId, reviewRecordId, round, result, score, issues);
                 return;
             } catch (DuplicateKeyException e) {
                 // 并发首次建画像：另一事务已插入，退化为增量路径
@@ -86,46 +93,48 @@ public class QualityProfileUpdater {
         }
         // 防重：同一 review_record 重复回调不重复计数
         if (existing.getLastReviewRecordId() != null
-                && existing.getLastReviewRecordId() >= record.getId()) {
+                && existing.getLastReviewRecordId() >= reviewRecordId) {
             log.debug("画像增量跳过：review_record 重复回调, agentId={}, recordId={}, lastId={}",
-                    agentId, record.getId(), existing.getLastReviewRecordId());
+                    agentId, reviewRecordId, existing.getLastReviewRecordId());
             return;
         }
 
-        int round = record.getRound() != null ? record.getRound() : 1;
-        boolean approved = record.getResult() == ReviewResult.APPROVED;
+        int roundValue = round != null ? round : 1;
+        boolean approved = result == ReviewResult.APPROVED;
         int approvedDelta = approved ? 1 : 0;
-        int firstReviewedDelta = round == 1 ? 1 : 0;
-        int firstPassDelta = (round == 1 && approved) ? 1 : 0;
-        int reworkDelta = Math.max(round - 1, 0);
-        int scoreDelta = record.getScore() != null ? record.getScore() : 0;
+        int firstReviewedDelta = roundValue == 1 ? 1 : 0;
+        int firstPassDelta = (roundValue == 1 && approved) ? 1 : 0;
+        int reworkDelta = Math.max(roundValue - 1, 0);
+        int scoreDelta = score != null ? score : 0;
 
         int rows = profileMapper.incrementCore(agentId, 1, approvedDelta,
                 firstReviewedDelta, firstPassDelta, scoreDelta, reworkDelta,
-                record.getId(), UPDATE_BY);
+                reviewRecordId, UPDATE_BY);
         if (rows == 0) {
             log.debug("画像增量更新 0 行（防重或画像缺失）: agentId={}", agentId);
             return;
         }
-        mergeDefectStats(agentId, record.getIssues());
+        mergeDefectStats(agentId, issues);
     }
 
     /** 插入初始画像行（首条 review 的贡献直接作为初始值写入）。 */
-    private void insertInitial(Long agentId, ReviewRecord record) {
-        int round = record.getRound() != null ? record.getRound() : 1;
-        boolean approved = record.getResult() == ReviewResult.APPROVED;
+    private void insertInitial(Long agentId, Long reviewRecordId,
+                               Integer round, ReviewResult result,
+                               Integer score, String issues) {
+        int roundValue = round != null ? round : 1;
+        boolean approved = result == ReviewResult.APPROVED;
         AgentQualityProfile profile = new AgentQualityProfile();
         profile.setAgentId(agentId);
         profile.setReviewedCount(1);
         profile.setApprovedCount(approved ? 1 : 0);
-        profile.setFirstReviewedCount(round == 1 ? 1 : 0);
-        profile.setFirstPassCount((round == 1 && approved) ? 1 : 0);
-        profile.setTotalScore(record.getScore() != null ? record.getScore() : 0);
-        profile.setReworkRoundSum(Math.max(round - 1, 0));
-        profile.setIssueDefectStats(DefectLabelParser.parse(record.getIssues()));
+        profile.setFirstReviewedCount(roundValue == 1 ? 1 : 0);
+        profile.setFirstPassCount((roundValue == 1 && approved) ? 1 : 0);
+        profile.setTotalScore(score != null ? score : 0);
+        profile.setReworkRoundSum(Math.max(roundValue - 1, 0));
+        profile.setIssueDefectStats(DefectLabelParser.parse(issues));
         profile.setReviewerReviewedCount(0);
         profile.setReviewerDisagreementCount(0);
-        profile.setLastReviewRecordId(record.getId());
+        profile.setLastReviewRecordId(reviewRecordId);
         profileMapper.insert(profile);
     }
 

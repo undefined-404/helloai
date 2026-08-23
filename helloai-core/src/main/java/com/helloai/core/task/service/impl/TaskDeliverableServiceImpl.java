@@ -1,6 +1,5 @@
 package com.helloai.core.task.service.impl;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.Agent;
@@ -8,12 +7,12 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.shared.util.SubTaskDependencyOrder;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.task.entity.Attachment;
-import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.system.storage.ArtifactStorage;
-import com.helloai.core.task.entity.ReviewRecord;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
-import com.helloai.core.task.mapper.ReviewRecordMapper;
+import com.helloai.core.task.port.ReviewPort;
+import com.helloai.core.task.port.ReviewSummary;
+import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskDeliverableService;
 import com.helloai.core.task.service.TaskService;
@@ -53,7 +52,7 @@ public class TaskDeliverableServiceImpl implements TaskDeliverableService {
     private final AgentService agentService;
     private final AttachmentService attachmentService;
     private final ArtifactStorage artifactStorage;
-    private final ReviewRecordMapper reviewRecordMapper;
+    private final ReviewPort reviewPort;
 
     @Override
     public DeliverablePackage buildZip(Long taskId) {
@@ -175,20 +174,16 @@ public class TaskDeliverableServiceImpl implements TaskDeliverableService {
         return sb.toString();
     }
 
-    /** 最新一轮核验结论（round 倒序取第一条）；无记录返回 "-"。 */
+    /** 最新一轮核验结论（§6.146 经 ReviewPort 取摘要）；无记录返回 "-"。 */
     private String latestReviewConclusion(Long subTaskId) {
-        List<ReviewRecord> reviews = reviewRecordMapper.selectList(
-                new LambdaQueryWrapper<ReviewRecord>()
-                        .eq(ReviewRecord::getSubTaskId, subTaskId)
-                        .orderByDesc(ReviewRecord::getRound));
-        if (reviews == null || reviews.isEmpty()) {
+        ReviewSummary latest = reviewPort.latestReviewSummary(subTaskId);
+        if (latest == null) {
             return "-";
         }
-        ReviewRecord latest = reviews.get(0);
         StringBuilder sb = new StringBuilder();
-        sb.append(latest.getResult() != null ? latest.getResult() : "-");
-        if (latest.getScore() != null) {
-            sb.append("（").append(latest.getScore()).append("分）");
+        sb.append(latest.result() != null ? latest.result() : "-");
+        if (latest.score() != null) {
+            sb.append("（").append(latest.score()).append("分）");
         }
         return sb.toString();
     }

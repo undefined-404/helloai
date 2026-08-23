@@ -1,4 +1,4 @@
-package com.helloai.core.task.service.impl;
+package com.helloai.core.review.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
@@ -10,12 +10,12 @@ import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.quality.QualityProfileUpdater;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ExecutionCommandService;
-import com.helloai.core.task.entity.ReviewRecheckLog;
-import com.helloai.core.task.entity.ReviewRecord;
+import com.helloai.core.review.entity.ReviewRecheckLog;
+import com.helloai.core.review.entity.ReviewRecord;
+import com.helloai.core.review.mapper.ReviewRecheckLogMapper;
+import com.helloai.core.review.mapper.ReviewRecordMapper;
+import com.helloai.core.review.service.ReviewService;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.mapper.ReviewRecheckLogMapper;
-import com.helloai.core.task.mapper.ReviewRecordMapper;
-import com.helloai.core.task.service.ReviewService;
 import com.helloai.core.task.service.RewardService;
 import com.helloai.core.task.service.SubTaskService;
 import lombok.RequiredArgsConstructor;
@@ -90,7 +90,9 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
         save(record);
 
         // 反馈回路第 1 层：画像增量维护与 review_record 同事务（失败不阻断审查主链路）
-        qualityProfileUpdater.onReviewRecordPersisted(executorAgentId, record);
+        qualityProfileUpdater.onReviewRecordPersisted(executorAgentId,
+                record.getId(), record.getRound(), record.getResult(),
+                record.getScore(), record.getIssues());
 
         if (result == ReviewResult.APPROVED) {
             // 修复: APPROVED 走 complete() 触发 5 因子隐式评分（score_factors/composite_score/score_grade/completed_at + reward_log）
@@ -164,7 +166,9 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
         if (subTask != null) {
             executorAgentId = subTask.getAssignedAgentId();
         }
-        qualityProfileUpdater.onReviewRecordPersisted(executorAgentId, record);
+        qualityProfileUpdater.onReviewRecordPersisted(executorAgentId,
+                record.getId(), record.getRound(), record.getResult(),
+                record.getScore(), record.getIssues());
 
         log.info("自动核验落库: subTaskId={}, result={}, score={}, round={}",
                 subTaskId, result.name(), score, round);

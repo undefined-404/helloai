@@ -1,18 +1,16 @@
 package com.helloai.core.task.service.impl;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.helloai.common.constant.ReviewResult;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskIterationConst;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.shared.util.SubTaskDependencyOrder;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
-import com.helloai.core.task.entity.ReviewRecord;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.TaskIteration;
 import com.helloai.core.task.mapper.TaskIterationMapper;
-import com.helloai.core.task.service.ReviewService;
+import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskIterationService;
 import lombok.RequiredArgsConstructor;
@@ -38,7 +36,7 @@ import java.util.Map;
 public class TaskIterationServiceImpl extends ServiceImpl<TaskIterationMapper, TaskIteration>
         implements TaskIterationService {
 
-    private final ReviewService reviewService;
+    private final ReviewPort reviewPort;
     private final AgentService agentService;
     private final SubTaskService subTaskService;
 
@@ -78,11 +76,10 @@ public class TaskIterationServiceImpl extends ServiceImpl<TaskIterationMapper, T
             List<Long> deps = st.dependsOnIdList();
             iter.setDependsOn(deps.isEmpty() ? Collections.emptyList() : new ArrayList<>(deps));
 
-            // 审核结果：取最新一条 review_record
-            List<ReviewRecord> reviews = reviewService.getBySubTaskId(st.getId());
-            if (reviews != null && !reviews.isEmpty()) {
-                ReviewRecord latest = reviews.get(reviews.size() - 1);
-                iter.setReviewResult(latest.getResult() == ReviewResult.APPROVED
+            // 审核结果：经 ReviewPort 只消费「最新一条是否 APPROVED」判定（§6.146 端口反转）
+            Boolean approved = reviewPort.isLatestReviewApproved(st.getId());
+            if (approved != null) {
+                iter.setReviewResult(approved
                         ? TaskIterationConst.REVIEW_PASSED : TaskIterationConst.REVIEW_REJECTED);
             }
 

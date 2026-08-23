@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.core.agent.quality.entity.AgentQualityProfile;
 import com.helloai.core.agent.quality.mapper.AgentQualityProfileMapper;
-import com.helloai.core.task.entity.ReviewRecord;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -50,16 +49,6 @@ class QualityProfileUpdaterTest {
         updater = new QualityProfileUpdater(profileMapper, new ObjectMapper());
     }
 
-    private ReviewRecord record(long id, ReviewResult result, Integer score, int round, String issues) {
-        ReviewRecord r = new ReviewRecord();
-        r.setId(id);
-        r.setResult(result);
-        r.setScore(score);
-        r.setRound(round);
-        r.setIssues(issues);
-        return r;
-    }
-
     private AgentQualityProfile existing(long lastReviewRecordId) {
         AgentQualityProfile p = new AgentQualityProfile();
         p.setId(99L);
@@ -75,18 +64,17 @@ class QualityProfileUpdaterTest {
     @Test
     @DisplayName("executorAgentId 为 null → 跳过且不触碰 mapper")
     void skipWhenAgentIdNull() {
-        updater.onReviewRecordPersisted(null, record(1L, ReviewResult.APPROVED, 5, 1, null));
+        updater.onReviewRecordPersisted(null, 1L, 1, ReviewResult.APPROVED, 5, null);
         verify(profileMapper, never()).selectOne(any());
         verify(profileMapper, never()).incrementCore(anyLong(), anyInt(), anyInt(), anyInt(),
                 anyInt(), anyInt(), anyInt(), anyLong(), anyString());
     }
 
     @Test
-    @DisplayName("record 为 null 或 record.id 为 null → 跳过")
+    @DisplayName("reviewRecordId 为 null → 跳过")
     void skipWhenRecordInvalid() {
-        updater.onReviewRecordPersisted(AGENT_ID, null);
-        ReviewRecord noId = new ReviewRecord();
-        updater.onReviewRecordPersisted(AGENT_ID, noId);
+        updater.onReviewRecordPersisted(AGENT_ID, null, 1, ReviewResult.APPROVED, 5, null);
+        updater.onReviewRecordPersisted(AGENT_ID, null, 2, ReviewResult.REJECTED, 2, null);
         verify(profileMapper, never()).selectOne(any());
     }
 
@@ -98,10 +86,8 @@ class QualityProfileUpdaterTest {
     @DisplayName("画像不存在 → 插入初始行（首条 review 贡献作为初始值）")
     void insertInitialProfileOnFirstReview() {
         when(profileMapper.selectOne(any())).thenReturn(null);
-        ReviewRecord rec = record(10L, ReviewResult.APPROVED, 5, 1,
+        updater.onReviewRecordPersisted(AGENT_ID, 10L, 1, ReviewResult.APPROVED, 5,
                 "[defect] 缺单测 [location] x [impact] y [evidence] z");
-
-        updater.onReviewRecordPersisted(AGENT_ID, rec);
 
         ArgumentCaptor<AgentQualityProfile> captor = ArgumentCaptor.forClass(AgentQualityProfile.class);
         verify(profileMapper).insert(captor.capture());
@@ -122,9 +108,7 @@ class QualityProfileUpdaterTest {
     @DisplayName("首条即 round=2 REJECTED → 首轮通过计数为 0、返工轮次 1")
     void insertInitialProfileRoundTwoRejected() {
         when(profileMapper.selectOne(any())).thenReturn(null);
-        ReviewRecord rec = record(10L, ReviewResult.REJECTED, 2, 2, null);
-
-        updater.onReviewRecordPersisted(AGENT_ID, rec);
+        updater.onReviewRecordPersisted(AGENT_ID, 10L, 2, ReviewResult.REJECTED, 2, null);
 
         ArgumentCaptor<AgentQualityProfile> captor = ArgumentCaptor.forClass(AgentQualityProfile.class);
         verify(profileMapper).insert(captor.capture());
@@ -144,9 +128,7 @@ class QualityProfileUpdaterTest {
     @DisplayName("防重：last_review_record_id >= 本次 record.id → 不重复计数")
     void skipDuplicateReviewRecord() {
         when(profileMapper.selectOne(any())).thenReturn(existing(10L));
-        ReviewRecord rec = record(10L, ReviewResult.APPROVED, 5, 1, null);
-
-        updater.onReviewRecordPersisted(AGENT_ID, rec);
+        updater.onReviewRecordPersisted(AGENT_ID, 10L, 1, ReviewResult.APPROVED, 5, null);
 
         verify(profileMapper, never()).incrementCore(anyLong(), anyInt(), anyInt(), anyInt(),
                 anyInt(), anyInt(), anyInt(), anyLong(), anyString());
@@ -158,9 +140,7 @@ class QualityProfileUpdaterTest {
         when(profileMapper.selectOne(any())).thenReturn(existing(9L));
         when(profileMapper.incrementCore(eq(AGENT_ID), eq(1), eq(0), eq(0), eq(0), eq(2), eq(1),
                 eq(10L), anyString())).thenReturn(1);
-        ReviewRecord rec = record(10L, ReviewResult.REJECTED, 2, 2, null);
-
-        updater.onReviewRecordPersisted(AGENT_ID, rec);
+        updater.onReviewRecordPersisted(AGENT_ID, 10L, 2, ReviewResult.REJECTED, 2, null);
 
         verify(profileMapper).incrementCore(AGENT_ID, 1, 0, 0, 0, 2, 1, 10L, "quality-profile");
     }
@@ -171,9 +151,7 @@ class QualityProfileUpdaterTest {
         when(profileMapper.selectOne(any())).thenReturn(existing(9L));
         when(profileMapper.incrementCore(eq(AGENT_ID), eq(1), eq(1), eq(1), eq(1), eq(5), eq(0),
                 eq(10L), anyString())).thenReturn(1);
-        ReviewRecord rec = record(10L, ReviewResult.APPROVED, 5, 1, null);
-
-        updater.onReviewRecordPersisted(AGENT_ID, rec);
+        updater.onReviewRecordPersisted(AGENT_ID, 10L, 1, ReviewResult.APPROVED, 5, null);
 
         verify(profileMapper).incrementCore(AGENT_ID, 1, 1, 1, 1, 5, 0, 10L, "quality-profile");
     }
@@ -184,10 +162,8 @@ class QualityProfileUpdaterTest {
         when(profileMapper.selectOne(any())).thenReturn(existing(9L));
         when(profileMapper.incrementCore(anyLong(), anyInt(), anyInt(), anyInt(), anyInt(),
                 anyInt(), anyInt(), anyLong(), anyString())).thenReturn(0);
-        ReviewRecord rec = record(10L, ReviewResult.REJECTED, 2, 2,
+        updater.onReviewRecordPersisted(AGENT_ID, 10L, 2, ReviewResult.REJECTED, 2,
                 "[defect] 缺单测 [location] x [impact] y [evidence] z");
-
-        updater.onReviewRecordPersisted(AGENT_ID, rec);
 
         verify(profileMapper, never()).mergeDefectStats(anyLong(), anyString(), anyString());
     }
@@ -198,10 +174,8 @@ class QualityProfileUpdaterTest {
         when(profileMapper.selectOne(any())).thenReturn(existing(9L));
         when(profileMapper.incrementCore(anyLong(), anyInt(), anyInt(), anyInt(), anyInt(),
                 anyInt(), anyInt(), anyLong(), anyString())).thenReturn(1);
-        ReviewRecord rec = record(10L, ReviewResult.REJECTED, 2, 2,
+        updater.onReviewRecordPersisted(AGENT_ID, 10L, 2, ReviewResult.REJECTED, 2,
                 "[defect] 缺单测 [location] x [impact] y [evidence] z");
-
-        updater.onReviewRecordPersisted(AGENT_ID, rec);
 
         ArgumentCaptor<String> jsonCaptor = ArgumentCaptor.forClass(String.class);
         verify(profileMapper).mergeDefectStats(eq(AGENT_ID), jsonCaptor.capture(), eq("quality-profile"));
@@ -221,9 +195,7 @@ class QualityProfileUpdaterTest {
         when(profileMapper.insert(any(AgentQualityProfile.class))).thenThrow(new DuplicateKeyException("duplicate"));
         when(profileMapper.incrementCore(eq(AGENT_ID), eq(1), eq(0), eq(0), eq(0), eq(2), eq(1),
                 eq(10L), anyString())).thenReturn(1);
-        ReviewRecord rec = record(10L, ReviewResult.REJECTED, 2, 2, null);
-
-        updater.onReviewRecordPersisted(AGENT_ID, rec);
+        updater.onReviewRecordPersisted(AGENT_ID, 10L, 2, ReviewResult.REJECTED, 2, null);
 
         verify(profileMapper).incrementCore(AGENT_ID, 1, 0, 0, 0, 2, 1, 10L, "quality-profile");
     }
@@ -234,7 +206,7 @@ class QualityProfileUpdaterTest {
         when(profileMapper.selectOne(any())).thenThrow(new RuntimeException("db down"));
 
         // 不应抛出异常
-        updater.onReviewRecordPersisted(AGENT_ID, record(10L, ReviewResult.REJECTED, 2, 2, null));
+        updater.onReviewRecordPersisted(AGENT_ID, 10L, 2, ReviewResult.REJECTED, 2, null);
     }
 
     // ════════════════════════════════════════════════════════════

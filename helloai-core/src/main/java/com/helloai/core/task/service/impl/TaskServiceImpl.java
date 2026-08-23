@@ -17,10 +17,10 @@ import com.helloai.core.task.mapper.ModuleMapper;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.entity.TaskTimeline;
-import com.helloai.core.task.mapper.ReviewRecordMapper;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.mapper.TaskMapper;
 import com.helloai.core.task.mapper.TaskTimelineMapper;
+import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
 import lombok.RequiredArgsConstructor;
@@ -45,7 +45,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
 
     private final SubTaskMapper subTaskMapper;
     private final ModuleMapper moduleMapper;
-    private final ReviewRecordMapper reviewRecordMapper;
+    private final ReviewPort reviewPort;
     private final TaskTimelineMapper taskTimelineMapper;
     private final AttachmentMapper attachmentMapper;
     private final AgentInboxService agentInboxService;
@@ -193,7 +193,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
                         .eq(SubTask::getStatus, SubTaskStatus.DEAD_LETTER)).intValue());
         counts.put("moduleCount", moduleMapper.selectCount(
                 new LambdaQueryWrapper<Module>().eq(Module::getTaskId, taskId)).intValue());
-        counts.put("reviewCount", reviewRecordMapper.countByTaskId(taskId));
+        counts.put("reviewCount", reviewPort.countByTaskId(taskId));
         counts.put("executionCount", agentService.countExecutionByTaskId(taskId));
         counts.put("unreadInboxCount", agentService.countUnreadInboxByTaskRef(taskId));
         counts.put("timelineCount", taskTimelineMapper.selectCount(
@@ -223,7 +223,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         // agent 域痕迹（inbox/execution_record/archive/message）经 AgentService 收口执行，
         // 与任务域删除同一事务，顺序语义保持（inbox 依赖 sub_task/review_record 子查询）。
         int traceCleaned = agentService.physicalDeleteTaskTrace(taskId);
-        reviewRecordMapper.physicalDeleteByTaskId(taskId);
+        // §6.146 域迁移：review_record 级联删除经 ReviewPort 收口（review 域同事务执行）
+        reviewPort.physicalDeleteByTaskId(taskId);
         attachmentMapper.physicalDeleteByTaskId(taskId);
         taskTimelineMapper.physicalDeleteByTaskId(taskId);
         subTaskMapper.physicalDeleteByTaskId(taskId);

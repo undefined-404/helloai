@@ -17,10 +17,11 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConcurrencyQuotaService;
 import com.helloai.core.shared.event.SubTaskAssignedEvent;
 import com.helloai.core.shared.event.SubTaskCompletedEvent;
-import com.helloai.core.task.entity.ReviewRecord;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.mapper.ReviewRecordMapper;
 import com.helloai.core.task.mapper.SubTaskMapper;
+import com.helloai.core.task.port.ReviewFact;
+import com.helloai.core.task.port.ReviewPort;
+import com.helloai.core.task.port.ReviewSummary;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
 import com.helloai.core.task.score.ImplicitScoreCalculator.ScoreResult;
 import com.helloai.core.task.service.RewardService;
@@ -59,7 +60,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     // 直接注入 AgentService 会形成 agentServiceImpl ↔ subTaskServiceImpl 构造器环
     private final ObjectProvider<AgentService> agentServiceProvider;
     private final HeartbeatService heartbeatService;
-    private final ReviewRecordMapper reviewRecordMapper;
+    private final ReviewPort reviewPort;
     private final ImplicitScoreCalculator implicitScoreCalculator;
     private final RewardService rewardService;
     private final ApplicationEventPublisher applicationEventPublisher;
@@ -260,10 +261,8 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         // 隐式评分集成
         if (subTask.getAssignedAgentId() != null) {
             try {
-                List<ReviewRecord> reviews = reviewRecordMapper.selectList(
-                        new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ReviewRecord>()
-                                .eq(ReviewRecord::getSubTaskId, subTaskId)
-                                .orderByAsc(ReviewRecord::getRound));
+                // §6.146：审查评分事实经 ReviewPort 收口，不直捅 review 域
+                List<ReviewFact> reviews = reviewPort.listReviewFactsBySubTaskId(subTaskId);
                 int blockCount = 0; // 可扩展: 从 activity_log 统计
                 int timeoutCount = subTask.getTimeoutCount() != null ? subTask.getTimeoutCount() : 0;
 
@@ -400,19 +399,15 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
      */
     private String buildApprovedSummary(SubTask subTask) {
         try {
-            List<ReviewRecord> reviews = reviewRecordMapper.selectList(
-                    new LambdaQueryWrapper<ReviewRecord>()
-                            .eq(ReviewRecord::getSubTaskId, subTask.getId())
-                            .orderByDesc(ReviewRecord::getRound)
-                            .last("LIMIT 1"));
-            if (reviews != null && !reviews.isEmpty()) {
-                ReviewRecord latest = reviews.get(0);
+            // §6.146：最新一轮评分/评语经 ReviewPort 摘要收口，不直捅 review 域
+            ReviewSummary latest = reviewPort.latestReviewSummary(subTask.getId());
+            if (latest != null) {
                 StringBuilder sb = new StringBuilder("审查通过");
-                if (latest.getScore() != null) {
-                    sb.append("，评分 ").append(latest.getScore()).append("/5");
+                if (latest.score() != null) {
+                    sb.append("，评分 ").append(latest.score()).append("/5");
                 }
-                if (latest.getComment() != null && !latest.getComment().isBlank()) {
-                    sb.append("；评语: ").append(clip(latest.getComment(), 150));
+                if (latest.comment() != null && !latest.comment().isBlank()) {
+                    sb.append("；评语: ").append(clip(latest.comment(), 150));
                 }
                 return sb.toString();
             }
@@ -852,8 +847,8 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     @Override
     public long countReviewByReviewerAgent(Long agentId) {
         if (agentId == null) return 0;
-        return reviewRecordMapper.selectCount(
-                new LambdaQueryWrapper<ReviewRecord>().eq(ReviewRecord::getReviewerAgentId, agentId));
+        // §6.146：审查计数经 ReviewPort 收口，不直捅 review 域
+        return reviewPort.countByReviewerAgentId(agentId);
     }
 
     @Override

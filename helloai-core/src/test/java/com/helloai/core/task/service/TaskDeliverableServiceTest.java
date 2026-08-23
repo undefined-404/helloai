@@ -11,10 +11,10 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.system.storage.ArtifactStorage;
-import com.helloai.core.task.entity.ReviewRecord;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
-import com.helloai.core.task.mapper.ReviewRecordMapper;
+import com.helloai.core.task.port.ReviewPort;
+import com.helloai.core.task.port.ReviewSummary;
 import com.helloai.core.task.service.impl.TaskDeliverableServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -62,7 +62,7 @@ class TaskDeliverableServiceTest {
     @Mock
     private ArtifactStorage artifactStorage;
     @Mock
-    private ReviewRecordMapper reviewRecordMapper;
+    private ReviewPort reviewPort;
 
     @SuppressWarnings("unchecked")
     private final LambdaQueryChainWrapper<SubTask> subTaskChain = mock(LambdaQueryChainWrapper.class);
@@ -72,13 +72,13 @@ class TaskDeliverableServiceTest {
     @BeforeEach
     void setUp() {
         service = new TaskDeliverableServiceImpl(taskService, subTaskService, agentService,
-                attachmentService, artifactStorage, reviewRecordMapper);
+                attachmentService, artifactStorage, reviewPort);
         // lambdaQuery 链式 mock（项目内先例：PlannerAnalysisServiceTest）
         when(subTaskService.lambdaQuery()).thenReturn(subTaskChain);
         when(subTaskChain.eq(any(), any())).thenReturn(subTaskChain);
         when(subTaskChain.orderByAsc(org.mockito.ArgumentMatchers.<SFunction<SubTask, ?>>any())).thenReturn(subTaskChain);
         when(attachmentService.listActive(anyLong())).thenReturn(List.of());
-        when(reviewRecordMapper.selectList(any())).thenReturn(List.of());
+        when(reviewPort.latestReviewSummary(anyLong())).thenReturn(null);
     }
 
     private SubTask subTask(long id, String title, SubTaskStatus status, String output) {
@@ -133,11 +133,9 @@ class TaskDeliverableServiceTest {
         SubTask blocked = subTask(12L, "受阻项", SubTaskStatus.BLOCKED, "不应收录");
         SubTask draft = subTask(13L, "草案项", SubTaskStatus.PENDING_PLAN_REVIEW, null);
         when(subTaskChain.list()).thenReturn(List.of(done, blocked, draft));
-        ReviewRecord review = new ReviewRecord();
-        review.setResult(ReviewResult.APPROVED);
-        review.setScore(92);
-        review.setRound(2);
-        when(reviewRecordMapper.selectList(any())).thenReturn(List.of(review));
+        // §6.146：审查结论/评分经 ReviewPort 摘要收口（概览表展示口径）
+        when(reviewPort.latestReviewSummary(anyLong())).thenReturn(
+                new ReviewSummary(ReviewResult.APPROVED, 92, null));
 
         TaskDeliverableService.DeliverablePackage pkg = service.buildZip(1L);
 

@@ -2,7 +2,7 @@ package com.helloai.job.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.core.agent.service.AgentInboxService;
-import com.helloai.core.task.service.ReviewService;
+import com.helloai.core.review.service.ReviewService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.mq.config.RabbitMQConfig;

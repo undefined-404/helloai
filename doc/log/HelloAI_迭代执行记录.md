@@ -6580,3 +6580,32 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - 影响：核验执行与抽检复审职责独立可测（引擎 5 依赖 / 抽检 6 依赖均达标）；编排类约 524 行仍略超 500 行红线，但已有 §7.8 书面声明覆盖（与 AgentServiceImpl 583 行 / 14 依赖先例同口径）；管理侧实测端点路径风格与 §8.2 对齐，前端与既有脚本无破坏（脚本已同步）。
 - 遗留：本轮改动未 git 提交，待用户确认后提交；Phase 5 质量度量看板按《反馈回路与契约先行落地计划》推进。
+
+### 6.146 Review 域迁移：审核产物归 review 域（2026-08-23）
+
+#### 1. 背景与结论
+
+- **背景**：§3.x 依赖方向红线（planner/review → task → agent → system → shared）下，review 域仅有 service 族，评审相关实体（ReviewRecord/ReviewRecheckLog）与审核服务（ReviewService）滞留 task 域，形成历史归属错位；task 域 5 处（SubTaskServiceImpl / TaskDeliverableServiceImpl / TaskServiceImpl / TaskIterationServiceImpl / ImplicitScoreCalculator）直接持有 ReviewRecord 实体，是本次迁移最大的隐藏面（不只 TaskIterationServiceImpl 一处）。
+- **结论**：按 CODE_STYLE §3.x 修订（V1.14，"审核产物归审核域"）将 6 个文件同批迁入 review 域（ReviewService 与实体/Mapper 强绑定必须随迁）；task 域消费侧全部收口到 	ask.port.ReviewPort 端口（值对象 ReviewFact/ReviewSummary 防实体泄漏）；QualityProfileUpdater（agent 域）签名改原子参数去 ReviewRecord 依赖；ReviewResult 枚举实测在 common 域（所有域合法引用，无需迁移）。
+
+#### 2. 实现要点
+
+- **规范先行**：CODE_STYLE §3.x L292 修订为"review 域完整子包（entity/mapper/service/service.impl/mqconsumer/picker/support），评审相关实体与审核服务归 review 域"，同步更新"当前各域完整子包"清单与 @MapperScan 示例。
+- **6 文件同批迁移（git mv）**：	ask.entity.ReviewRecord/ReviewRecheckLog → eview.entity；	ask.mapper.ReviewRecordMapper/ReviewRecheckLogMapper → eview.mapper；	ask.service.ReviewService → eview.service；	ask.service.impl.ReviewServiceImpl → eview.service.impl；package/import 全量适配（两 Mapper 为注解 SQL，无 XML namespace 同步项）。
+- **端口三件套（task 域定义、review 域实现）**：	ask.port.ReviewPort（6 方法：isLatestReviewApproved / listReviewFactsBySubTaskId / latestReviewSummary / countByReviewerAgentId / countByTaskId / physicalDeleteByTaskId）+ 	ask.port.ReviewFact(score, approved) + 	ask.port.ReviewSummary(result, score, comment)；端口实现独立为 ReviewPortAdapter（review.service.impl，仅依赖同域 ReviewRecordMapper）——若挂在 ReviewServiceImpl 上会构成 SubTaskServiceImpl → ReviewPort 实现 → SubTaskService 构造器环（启动装配自检实测暴露）。
+- **task 域 5 处实体依赖收口**：SubTaskServiceImpl（complete 迭代历史组装 / buildApprovedSummary 摘要）、TaskDeliverableServiceImpl（latestReviewSummary）、TaskServiceImpl（isLatestReviewApproved 等）、TaskIterationServiceImpl（ReviewRecord 引用改 ReviewPort）、ImplicitScoreCalculator（listReviewFactsBySubTaskId）全部改走 ReviewPort，零实体泄漏。
+- **QualityProfileUpdater 签名**：onReviewRecordPersisted(Long executorAgentId, Long reviewRecordId, Integer round, ReviewResult result, Integer score, String issues) 原子参数化，两处调用方（ReviewServiceImpl.createReview / recordAutoReview）同步。
+- **@MapperScan 登记** com.helloai.core.review.mapper（@MapperScan 不递归子包，漏登记启动才炸）。
+- **测试适配 7 文件**：ReviewServiceTest 迁 review.service 包（补 SubTaskService/RewardService import）；QualityProfileUpdaterTest 14 处原子参数化；SubTaskServiceHandoverTest / IsReadyTest / QuotaTest / TaskDeliverableServiceTest / TaskServiceTest 的 ReviewRecordMapper mock 全部换 ReviewPort；ReviewRecheckExecutorTest import 路径。
+
+#### 3. 验证结果
+
+- 编译：mvn -pl helloai-core,helloai-job,helloai-api -am test-compile 通过。
+- 单测：core 916/916 全绿 + job 7/7 全绿。
+- 依赖方向：verify-dependency-direction.ps1 11 项全 PASS（含 @MapperScan 6 包断言）；review 相关 import 23 处全部指向 com.helloai.core.review.*，task/agent 旧路径零残留。
+- 启动装配自检（硬性约束第 4 条）：helloai-start 实际启动成功；首次启动暴露 subTaskServiceImpl → reviewServiceImpl → subTaskServiceImpl 构造器环，由 ReviewPortAdapter 独立实现断环。
+
+#### 4. 影响与遗留
+
+- 影响：审核产物归 review 域，task 域不再持有审核持久层；task 消费侧全部经 ReviewPort 值对象，实体零泄漏；agent 域 QualityProfileUpdater 不再 import review 实体。
+- 遗留：双审并行化（§6.146 续）已完成待提交，与迁移分两个 commit 提交。

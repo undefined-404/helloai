@@ -10,7 +10,7 @@ import com.helloai.core.task.mapper.ModuleMapper;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.entity.TaskTimeline;
-import com.helloai.core.task.mapper.ReviewRecordMapper;
+import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.mapper.TaskTimelineMapper;
 import com.helloai.core.task.service.impl.TaskServiceImpl;
@@ -54,7 +54,7 @@ class TaskServiceTest {
     @Mock
     private ModuleMapper moduleMapper;
     @Mock
-    private ReviewRecordMapper reviewRecordMapper;
+    private ReviewPort reviewPort;
     @Mock
     private TaskTimelineMapper taskTimelineMapper;
     @Mock
@@ -69,7 +69,7 @@ class TaskServiceTest {
     private LambdaQueryChainWrapper<SubTask> subTaskChain;
 
     private TaskService newSpyService() {
-        return spy(new TaskServiceImpl(subTaskMapper, moduleMapper, reviewRecordMapper,
+        return spy(new TaskServiceImpl(subTaskMapper, moduleMapper, reviewPort,
                 taskTimelineMapper, attachmentMapper, agentInboxService,
                 agentService, subTaskService));
     }

@@ -2,7 +2,7 @@ package com.helloai.job.task;
 
 import com.helloai.common.config.ReviewProperties;
 import com.helloai.core.review.support.ReviewRecheckExecutor;
-import com.helloai.core.task.service.ReviewService;
+import com.helloai.core.review.service.ReviewService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;

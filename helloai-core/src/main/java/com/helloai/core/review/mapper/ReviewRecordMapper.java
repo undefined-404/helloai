@@ -1,7 +1,7 @@
-package com.helloai.core.task.mapper;
+package com.helloai.core.review.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
-import com.helloai.core.task.entity.ReviewRecord;
+import com.helloai.core.review.entity.ReviewRecord;
 import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;

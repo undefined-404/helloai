@@ -1,4 +1,4 @@
-package com.helloai.core.task.entity;
+package com.helloai.core.review.entity;
 
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.helloai.common.base.BaseEntity;
@@ -11,8 +11,8 @@ import lombok.EqualsAndHashCode;
  *
  * <p>一行 = 一次抽检复审：记录被抽检 review_record 的原判、复审判定与
  * 放水标记（原 APPROVED 复审 REJECTED），度量 Reviewer 放水率并驱动
- * 画像表 reviewer 维度计数增量。归属 task 域（与 {@link ReviewRecord}
- * 同域先例，V54 注释明确「评审相关实体归 task 域」）。</p>
+ * 画像表 reviewer 维度计数增量。归属 review 域（§6.146 域迁移：
+ * 评审相关实体/服务/映射器归位 review 域，与 {@link ReviewRecord} 同域）。</p>
  */
 @Data
 @EqualsAndHashCode(callSuper = true)

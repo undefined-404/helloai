@@ -1,7 +1,7 @@
-package com.helloai.core.task.mapper;
+package com.helloai.core.review.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
-import com.helloai.core.task.entity.ReviewRecheckLog;
+import com.helloai.core.review.entity.ReviewRecheckLog;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
@@ -12,8 +12,9 @@ import java.util.List;
 /**
  * Reviewer 抽检日志 Mapper（反馈回路 Phase 4，V57）。
  *
- * <p>抽检候选查询收口在本域：review_record 是 task 域实体，跨域（review/job）
- * 一律走 {@code ReviewService} 接口方法，禁止直捅本 Mapper（§3.x 跨域红线）。</p>
+ * <p>抽检候选查询收口在本域：review_record / review_recheck_log 同属 review 域
+ * （§6.146 域迁移），本 Mapper 仅供 review 域自查自表；跨域（job）一律走
+ * {@code ReviewService} 接口方法，禁止直捅本 Mapper（§3.x 跨域红线）。</p>
  */
 @Mapper
 public interface ReviewRecheckLogMapper extends BaseMapper<ReviewRecheckLog> {

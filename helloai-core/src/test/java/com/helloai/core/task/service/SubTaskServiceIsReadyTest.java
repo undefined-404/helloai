@@ -8,7 +8,7 @@ import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.agent.service.ConcurrencyQuotaService;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.mapper.ReviewRecordMapper;
+import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
 import com.helloai.core.task.service.impl.SubTaskServiceImpl;
 import com.helloai.core.task.service.AttachmentService;
@@ -51,7 +51,7 @@ class SubTaskServiceIsReadyTest {
         SubTaskService real = new SubTaskServiceImpl(
                 mock(AgentOutboxService.class), mock(AgentInboxService.class),
                 mock(org.springframework.beans.factory.ObjectProvider.class), mock(HeartbeatService.class),
-                mock(ReviewRecordMapper.class), mock(ImplicitScoreCalculator.class),
+                mock(ReviewPort.class), mock(ImplicitScoreCalculator.class),
                 mock(RewardService.class), mock(ApplicationEventPublisher.class),
                 mock(TaskTimelineService.class),
                 new AgentDispatchProperties(), mock(ConcurrencyQuotaService.class),

@@ -6,9 +6,10 @@ import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConcurrencyQuotaService;
 import com.helloai.common.config.AgentDispatchProperties;
-import com.helloai.core.task.entity.ReviewRecord;
+import com.helloai.common.constant.ReviewResult;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.mapper.ReviewRecordMapper;
+import com.helloai.core.task.port.ReviewPort;
+import com.helloai.core.task.port.ReviewSummary;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
 import com.helloai.core.task.service.impl.SubTaskServiceImpl;
 import com.helloai.common.constant.SubTaskStatus;
@@ -59,7 +60,7 @@ class SubTaskServiceHandoverTest {
     @Mock private AgentOutboxService agentOutboxService;
     @Mock private ObjectProvider<AgentService> agentServiceProvider;
     @Mock private HeartbeatService heartbeatService;
-    @Mock private ReviewRecordMapper reviewRecordMapper;
+    @Mock private ReviewPort reviewPort;
     @Mock private ImplicitScoreCalculator implicitScoreCalculator;
     @Mock private RewardService rewardService;
     @Mock private ApplicationEventPublisher applicationEventPublisher;
@@ -76,7 +77,7 @@ class SubTaskServiceHandoverTest {
         dispatchProps.setEnforceMaxConcurrent(true);
         subTaskService = spy(new SubTaskServiceImpl(
                 agentOutboxService, agentInboxService, agentServiceProvider,
-                heartbeatService, reviewRecordMapper, implicitScoreCalculator,
+                heartbeatService, reviewPort, implicitScoreCalculator,
                 rewardService, applicationEventPublisher, taskTimelineService,
                 dispatchProps, concurrencyQuotaService, attachmentServiceProvider));
         doReturn(true).when(subTaskService).updateById(any(SubTask.class));
@@ -257,12 +258,9 @@ class SubTaskServiceHandoverTest {
         SubTask done = subTask(SubTaskStatus.REVIEW, OLD_AGENT);
         doReturn(done).when(subTaskService).getById(SUB_TASK_ID);
         stubImplicitScore();
-        ReviewRecord latest = new ReviewRecord();
-        latest.setSubTaskId(SUB_TASK_ID);
-        latest.setRound(2);
-        latest.setScore(5);
-        latest.setComment("质量优秀");
-        when(reviewRecordMapper.selectList(any())).thenReturn(List.of(latest));
+        // §6.146：最新一轮摘要经 ReviewPort 收口（review 域组装，task 域不依赖实体）
+        when(reviewPort.latestReviewSummary(anyLong())).thenReturn(
+                new ReviewSummary(ReviewResult.APPROVED, 5, "质量优秀"));
 
         subTaskService.complete(SUB_TASK_ID);
 
@@ -280,7 +278,7 @@ class SubTaskServiceHandoverTest {
         doReturn(subTask(SubTaskStatus.REVIEW, OLD_AGENT))
                 .when(subTaskService).getById(SUB_TASK_ID);
         stubImplicitScore();
-        when(reviewRecordMapper.selectList(any())).thenReturn(List.of());
+        when(reviewPort.latestReviewSummary(anyLong())).thenReturn(null);
 
         subTaskService.complete(SUB_TASK_ID);
 

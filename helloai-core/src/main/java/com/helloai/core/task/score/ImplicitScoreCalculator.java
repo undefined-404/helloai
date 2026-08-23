@@ -1,7 +1,7 @@
 package com.helloai.core.task.score;
 
-import com.helloai.core.task.entity.ReviewRecord;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.port.ReviewFact;
 import lombok.Builder;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
@@ -37,7 +37,7 @@ public class ImplicitScoreCalculator {
         private Long deadlineMs;
     }
 
-    public ScoreResult calculate(SubTask subTask, List<ReviewRecord> reviews, int blockCount, int timeoutCount) {
+    public ScoreResult calculate(SubTask subTask, List<ReviewFact> reviews, int blockCount, int timeoutCount) {
         ScoreFactors factors = new ScoreFactors();
 
         long actualMs = Duration.between(subTask.getCreateTime(), subTask.getUpdateTime()).toMillis();
@@ -50,7 +50,7 @@ public class ImplicitScoreCalculator {
         factors.setTimeScore(calculateTimeScore(actualMs, deadlineMs));
         factors.setQualityScore(calculateQualityScore(reviews));
 
-        long reworkCount = reviews.stream().filter(r -> "REJECTED".equals(r.getResult().name())).count();
+        long reworkCount = reviews.stream().filter(r -> !r.approved()).count();
         factors.setReworkCount((int) reworkCount);
         factors.setCoopScore(Math.max(0, 100 - (int) reworkCount * 20));
 
@@ -88,9 +88,9 @@ public class ImplicitScoreCalculator {
         }
     }
 
-    private int calculateQualityScore(List<ReviewRecord> reviews) {
+    private int calculateQualityScore(List<ReviewFact> reviews) {
         if (reviews == null || reviews.isEmpty()) return 75;
-        double avg = reviews.stream().mapToInt(ReviewRecord::getScore).average().orElse(3);
+        double avg = reviews.stream().mapToInt(ReviewFact::score).average().orElse(3);
         return (int) Math.round((avg - 1) / 4.0 * 100);
     }
 

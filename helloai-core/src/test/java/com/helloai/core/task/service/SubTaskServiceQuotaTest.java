@@ -9,9 +9,8 @@ import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConcurrencyQuotaService;
 import com.helloai.core.agent.service.HeartbeatService;
-import com.helloai.core.task.entity.ReviewRecord;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.mapper.ReviewRecordMapper;
+import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
 import com.helloai.core.task.service.impl.SubTaskServiceImpl;
 import com.helloai.core.task.service.AttachmentService;
@@ -57,7 +56,7 @@ class SubTaskServiceQuotaTest {
     @Mock private AgentInboxService agentInboxService;
     @Mock private org.springframework.beans.factory.ObjectProvider<AgentService> agentServiceProvider;
     @Mock private HeartbeatService heartbeatService;
-    @Mock private ReviewRecordMapper reviewRecordMapper;
+    @Mock private ReviewPort reviewPort;
     @Mock private ImplicitScoreCalculator implicitScoreCalculator;
     @Mock private RewardService rewardService;
     @Mock private ApplicationEventPublisher applicationEventPublisher;
@@ -77,7 +76,7 @@ class SubTaskServiceQuotaTest {
         dispatchProps.setEnforceMaxConcurrent(true);
         subTaskService = spy(new SubTaskServiceImpl(
                 agentOutboxService, agentInboxService, agentServiceProvider,
-                heartbeatService, reviewRecordMapper, implicitScoreCalculator,
+                heartbeatService, reviewPort, implicitScoreCalculator,
                 rewardService, applicationEventPublisher, taskTimelineService,
                 dispatchProps, concurrencyQuotaService, attachmentServiceProvider));
         // §6.140 收口：行锁改走 AgentService.lockByIdForUpdate（ObjectProvider 懒解析）；

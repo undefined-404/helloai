@@ -1,9 +1,9 @@
-package com.helloai.core.task.service;
+package com.helloai.core.review.service;
 
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.helloai.common.constant.ReviewResult;
-import com.helloai.core.task.entity.ReviewRecheckLog;
-import com.helloai.core.task.entity.ReviewRecord;
+import com.helloai.core.review.entity.ReviewRecheckLog;
+import com.helloai.core.review.entity.ReviewRecord;
 
 import java.time.OffsetDateTime;
 import java.util.List;
