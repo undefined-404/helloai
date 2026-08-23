@@ -47,6 +47,19 @@ import java.util.stream.Collectors;
 
 /**
  * 子任务领域服务实现。
+ *
+ * <p><b>§7.8 类规模拆分评审结论（2026-08-23）</b>：本类为子任务状态机与领域聚合的
+ * 汇聚点，经多轮职责外置后仍超 500 行 / 8 依赖红线，按 §7.8 选项二书面声明不继续拆分：</p>
+ * <ul>
+ *     <li>已剥离：状态机校验（SubTaskStateMachine）、核验编排（SubTaskReviewServiceImpl）、
+ *         执行编排（SubTaskExecutionServiceImpl）、评分计算（ImplicitScoreCalculator）、
+ *         结果回写（ExecutionResultHandler）；</li>
+ *     <li>剩余职责：子任务 CRUD / 依赖 / 状态流转（changeStatus 及 claim/start/submit/
+ *         complete/pause/resume/block/rework 收敛入口）+ 事件发布（outbox / 收件箱 / 交接）+
+ *         评分联动 + 心跳 / 并发配额 + 跨域统计与级联删除收口；</li>
+ *     <li>不拆理由：状态流转各入口共享同一状态机与事件发布链，拆分会造成事件序与事务边界
+ *         在类间漂移；已外置的均为无状态工具或独立引擎，剩余部分无独立可测职责可继续剥离。</li>
+ * </ul>
  */
 @Slf4j
 @Service

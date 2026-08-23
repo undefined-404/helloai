@@ -43,6 +43,19 @@ import java.util.Map;
  * ActivityLogService），自身直捅 Mapper 仅限于 agent 域内部（含 §6.140 承接的
  * task 域跨域收口方法）。
  *
+ * <p><b>§7.8 类规模拆分评审结论（2026-08-23）</b>：本类为 agent 域聚合汇聚点，
+ * 超 500 行 / 8 依赖红线，按 §7.8 选项二书面声明不继续拆分：</p>
+ * <ul>
+ *     <li>已剥离：技能策略（AgentSkillPolicyService）、生命周期（AgentLifecycleService）、
+ *         统计与积分明细（AgentStatsService）、凭据与密钥（AgentCredentialService /
+ *         AgentApiKeyCipher）、MCP 服务器（AgentMcpServerService）；</li>
+ *     <li>剩余职责：注册 / 幂等注册 / 认证（含惰性加密迁移）、CRUD 与分页、级联删除、
+ *         §6.140 跨域收口薄转发；</li>
+ *     <li>不拆理由：注册与认证共享密钥 / 凭据链路（issueConsumerToken → 加密 → hash），
+ *         级联删除必须单事务编排多域清理顺序；已外置部分均为独立子域服务，剩余聚合逻辑
+ *         互相引用紧密，无独立可测职责可继续剥离。</li>
+ * </ul>
+ *
  * @see Agent
  */
 @Slf4j

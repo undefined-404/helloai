@@ -42,6 +42,33 @@ import com.helloai.core.task.service.TaskRunningSpecService;
 import com.helloai.core.task.service.PluginSkillSpecService;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 
+/**
+ * 子任务执行服务。
+ *
+ * <p>职责划分（对齐架构设计参考 §3.1 调度分离）：</p>
+ * <ul>
+ *     <li>{@link #executeCommand(ExecutionCommand)}：完整编排入口，含参数校验、加载、状态推进、执行、回写。</li>
+ *     <li>{@link #executeOnce(SubTask, Agent)}：纯执行入口，只负责组装 AgentTask + 调平台执行器 + 观测 timeline。</li>
+ *     <li>{@link #startIfNeeded(Long, SubTaskStatus)}：状态推进前置，允许消费者在调 {@link #executeOnce} 之前调用。</li>
+ * </ul>
+ *
+ * <p>消费者（LocalExecutionCommandConsumer 或未来 MQ/DB poller）可以组合调用
+ * {@code startIfNeeded + executeOnce + ExecutionResultHandler.handleSuccess/Failure} 实现分层，
+ * 也可以直接调用 {@link #executeCommand(ExecutionCommand)} 拿完整链路（向后兼容入口）。</p>
+ *
+ * <p><b>§7.8 类规模拆分评审结论（2026-08-23）</b>：本类为执行编排汇聚点，超 500 行 /
+ * 8 依赖红线，按 §7.8 选项二书面声明不继续拆分：</p>
+ * <ul>
+ *     <li>已剥离：任务运行规范装配（TaskRunningSpecService）、平台技能规范渲染
+ *         （PluginSkillSpecService）、执行者画像（AgentQualityProfileService）、
+ *         依赖产出物化读取（AttachmentService / SubTaskOutputExtractor）、对话流落库
+ *         （ConversationService）、结果回写（ExecutionResultHandler）；</li>
+ *     <li>剩余职责：执行编排三入口（executeCommand / executeOnce / startIfNeeded）+
+ *         Prompt 组装（四要素 / 依赖段 / 历史段 / 返工上下文）+ 可观测 timeline 记录；</li>
+ *     <li>不拆理由：三入口共享 Prompt 装配与执行前校验链路，拆分会把编排上下文拆成参数传递链；
+ *         已外置部分均为无状态渲染 / 落库工具，剩余编排逻辑互相引用紧密，无独立可测职责可继续剥离。</li>
+ * </ul>
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -52,20 +79,6 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
      */
     private static final int DEP_CONTENT_MAX_CHARS = 4000;
 
-    /**
-     * 子任务执行服务。
-     *
-     * <p>职责划分（对齐架构设计参考 §3.1 调度分离）：</p>
-     * <ul>
-     *     <li>{@link #executeCommand(ExecutionCommand)}：完整编排入口，含参数校验、加载、状态推进、执行、回写。</li>
-     *     <li>{@link #executeOnce(SubTask, Agent)}：纯执行入口，只负责组装 AgentTask + 调平台执行器 + 观测 timeline。</li>
-     *     <li>{@link #startIfNeeded(Long, SubTaskStatus)}：状态推进前置，允许消费者在调 {@link #executeOnce} 之前调用。</li>
-     * </ul>
-     *
-     * <p>消费者（LocalExecutionCommandConsumer 或未来 MQ/DB poller）可以组合调用
-     * {@code startIfNeeded + executeOnce + ExecutionResultHandler.handleSuccess/Failure} 实现分层，
-     * 也可以直接调用 {@link #executeCommand(ExecutionCommand)} 拿完整链路（向后兼容入口）。</p>
-     */
 
     private final SubTaskService subTaskService;
     private final AgentService agentService;

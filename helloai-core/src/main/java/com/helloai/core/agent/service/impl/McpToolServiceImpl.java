@@ -47,6 +47,20 @@ import java.util.*;
 /**
  * MCP 工具核心逻辑。
  * 每个方法对应一个 MCP 工具，供 Controller（REST + JSON-RPC）统一调用。
+ *
+ * <p><b>§7.8 类规模拆分评审结论（2026-08-23）</b>：本类为 MCP 工具协议层汇聚点，
+ * 超 500 行 / 8 依赖红线，按 §7.8 选项二书面声明不继续拆分：</p>
+ * <ul>
+ *     <li>已剥离：领域状态机与任务流转（SubTaskService）、执行编排与结果回写
+ *         （SubTaskExecutionServiceImpl / ExecutionResultHandler）、MCP 服务器管理
+ *         （AgentMcpServerService）、值守租约（AgentDutyLeaseService）、
+ *         附件登记（AttachmentService）；</li>
+ *     <li>剩余职责：工具协议适配（入参校验 / 鉴权守卫 / 幂等 / 结果组装），方法体为
+ *         薄转发，业务逻辑已全部下沉领域服务；</li>
+ *     <li>不拆理由：所有工具共享同一套 agent 活跃度守卫、工具开关与租约续期前置
+ *         （assertAgentActive / assertToolEnabled / refreshDutyLease），拆分后守卫逻辑
+ *         被迫复制或跨类回调；按工具分组拆分只会平移行数。</li>
+ * </ul>
  */
 @Slf4j
 @Service

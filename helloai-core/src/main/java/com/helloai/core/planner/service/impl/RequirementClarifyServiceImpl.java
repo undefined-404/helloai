@@ -44,6 +44,20 @@ import java.util.Objects;
  *
  * <p>LLM/解析失败时：user 消息保留（round_count 已加），抛 BizException，
  * 前端弹错后可重发一条消息重试；会话本身无状态回退需求（始终 ACTIVE）。</p>
+ *
+ * <p><b>§7.8 类规模拆分评审结论（2026-08-23）</b>：本类为澄清编排汇聚点，超 500 行 /
+ * 8 依赖红线，按 §7.8 选项二书面声明不继续拆分：</p>
+ * <ul>
+ *     <li>已剥离：PlannerAgentPicker（选 Agent）、ClarifyReplyParser（回复解析）、
+ *         ConfirmCardProtocol（确认卡协议）、IntentDetectionService（意图识别）、
+ *         ClarifyWebSearchOrchestrator（联网检索）；</li>
+ *     <li>剩余职责：会话生命周期（create / sendMessage / retryRound / finalize / regenerate /
+ *         abandon / switchToClarify / switchToChat）+ 轮次编排（doRound / runLlmRound）+
+ *         终稿转任务（buildTaskFromDraft）；</li>
+ *     <li>不拆理由：轮次编排与消息持久化 / 终稿转任务共享会话状态与轮数上限决策，拆分将导致
+ *         会话状态在类间传递；已外置部分均为可独立测试的无状态组件，剩余编排逻辑为
+ *         单会话状态机的自然整体。</li>
+ * </ul>
  */
 @Slf4j
 @Service
