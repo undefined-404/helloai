@@ -53,7 +53,7 @@
 
 ### 2.2 执行 Prompt 构造点
 
-关键类：`helloai-core/.../agent/execution/SubTaskExecutionService.java`，方法 `buildUserPrompt(SubTask)`：
+关键类：`helloai-core/.../agent/service/SubTaskExecutionService.java`（接口，实现 `agent/service/impl/SubTaskExecutionServiceImpl.java`），方法 `buildUserPrompt(SubTask)`：
 
 - 代码内拼 user prompt（任务标题/描述/交付物/验收标准），末尾追加"请输出交付结果，尽量结构化。"
 - `systemPrompt` 当前固定空串。
@@ -62,7 +62,7 @@
 ### 2.3 附件体系
 
 - 表 `attachment`（`V1__init_all.sql`）：`sub_task_id`(FK) / `file_name` / `file_type` / `mime_type` / `file_size` / `bucket_name`(默认 `helloai`) / `object_key` / `storage_url` / `preview_url` / `status`(ACTIVE/INACTIVE/DELETED)。
-- `helloai-core/.../system/service/AttachmentService.java`：
+- `helloai-core/.../task/service/AttachmentService.java`（接口，实现 `task/service/impl/AttachmentServiceImpl.java`）：
   - `register(agentId, subTaskId, fileName, mimeType, fileSize, storageUrl)`：强校验 `agentId.equals(subTask.getAssignedAgentId())`。内置链路可传 `assignedAgentId` 满足校验，或新增旁路方法。
   - `detectFileType`（按后缀）/ `detectBucketName` / `detectObjectKey`（解析 `minio://` `s3://` `oss://` 前缀；未知前缀落默认 bucket `helloai`）。
   - `getStorageUrlRequired(id)` 供下载用。
@@ -197,7 +197,7 @@ ParsedOutput parse(String raw);
 
 ### 4.4 新增：物化编排服务
 
-`helloai-core/.../agent/output/ExecutionArtifactService.java`（`@Service`）：
+`helloai-core/.../agent/service/ExecutionArtifactService.java`（接口，实现 `agent/service/impl/ExecutionArtifactServiceImpl.java`）：
 
 ```java
 /** best-effort：物化 files 为 attachment 记录，返回登记成功的附件数；任何异常内部吞掉并记录 warn */
@@ -291,15 +291,15 @@ int materialize(SubTask subTask, List<ArtifactFile> files);
 | `system/storage/StoredArtifact.java` | helloai-core | 存储坐标 DTO |
 | `agent/output/ExecutionOutputParser.java` | helloai-core | 产出解析（纯文本/结构化） |
 | `agent/output/ParsedOutput.java` `ArtifactFile.java` | helloai-core | 解析结果 DTO |
-| `agent/output/ExecutionArtifactService.java` | helloai-core | 物化编排 |
+| `agent/service/ExecutionArtifactService.java`（接口）+ `agent/service/impl/ExecutionArtifactServiceImpl.java`（实现） | helloai-core | 物化编排 |
 
 ### 6.2 修改文件
 
 | 文件 | 改动 |
 | --- | --- |
 | `agent/command/ExecutionResultHandler.java` | 注入 parser+artifactService；用 displayText 写 output/对话流；afterCommit 物化 |
-| `agent/execution/SubTaskExecutionService.java` | `buildUserPrompt` 追加可选 manifest 协议 |
-| `system/service/AttachmentService.java` | 新增 `loadContent` |
+| `agent/service/SubTaskExecutionService.java` | `buildUserPrompt` 追加可选 manifest 协议 |
+| `task/service/AttachmentService.java` | 新增 `loadContent` |
 | `controller/AttachmentController.java` | `download` 支持 local:// 流式 |
 | `helloai-start/.../application.yml` | 新增 `helloai.storage` 段 |
 | `helloai-ui/src/api/attachment.ts` | 新增 `download` |

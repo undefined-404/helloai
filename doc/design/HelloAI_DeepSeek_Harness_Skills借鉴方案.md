@@ -1,7 +1,7 @@
 # HelloAI × DeepSeek Harness Skills 借鉴调整方案
 
 > 状态：已拍板（2026-08-20），P0 已实施。P1/P2 按路线图推进。
-> 事实源：`E:\workspace\deepseek-harness-master\.agents\skills`（11 个 SKILL.md，逐文件核对）。
+> 事实源：`E:\workspace\deepseek-harness-master\.agents\skills`（11 个 SKILL.md，逐文件核对；2026-08-23 复核，§2 清单与本地源码完全一致）。
 
 ## 1. 文档定位
 

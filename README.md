@@ -201,7 +201,7 @@
 helloai/
 ├── helloai-common/   # 公共基础（常量、枚举、异常、配置属性）
 ├── helloai-mq/       # 消息队列（RabbitMQ 配置 + 幂等消费基类）
-├── helloai-core/     # 核心业务（业务域分包：agent/task/system/shared/planner）
+├── helloai-core/     # 核心业务（业务域分包：agent/planner/review/shared/system/task）
 ├── helloai-api/      # REST 接口层（Controller + DTO，禁连 Mapper）
 ├── helloai-job/      # 定时任务（Outbox 中继/超时补偿/健康检查/租约过期）
 ├── helloai-start/    # 启动模块（Application + application.yml + Flyway 迁移）
@@ -301,6 +301,7 @@ npm run dev
 | 依赖图 | 拓扑分层流水线，展示子任务依赖关系 |
 | 时间线 / 时序图 | 记录每一步操作详情，泳道式展示单任务执行周期 |
 | 值班看板 | 外部 Agent 值班租约列表与状态概览 |
+| 质量度量看板 | review/agent 双域执行质量统计（通过率/返工率/驳回 TOP/时长分布），7/30/90 天窗口切换 + 明暗主题 |
 | 报告下载 | 最终整合报告 + 全子任务产出 zip 一键下载 |
 
 ---
@@ -322,6 +323,9 @@ npm run dev
 - [x] 值班租约增强（动态 TTL 自适应 / concurrency 预扣）
 - [x] 可靠投递（Outbox 四态 + publisher confirms + 三层幂等 + 死信人工兜底）
 - [x] 报告生成与交付物（四态防重最终报告 + zip 下载 + 产出物化 + 附件版本管理：同名去活 / 打回失效 / 历史回查）
+- [x] 结构化多文件产出物化（方案 3：LLM manifest 协议 + 多文件附件 + Reviewer 内容级核验，迭代记录 §6.93）
+- [x] LLM Provider 动态化与模型多选配置（模型能力驱动默认配置 + 多选校验，迭代记录 §6.89）
+- [x] 反馈回路体系（历史表现摘要注入 §6.130 + Reviewer 双审共识与抽检复审 §6.142 + 质量度量看板 §6.147）
 
 **待办 🔜**
 
@@ -331,7 +335,6 @@ npm run dev
 - [ ] 工作流模板与 Team 编排
 - [ ] 多租户与权限隔离
 - [ ] 分布式调度扩展
-- [ ] 结构化多文件产出物化（方案 3：LLM manifest）
 
 ---
 

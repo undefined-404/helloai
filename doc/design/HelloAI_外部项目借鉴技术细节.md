@@ -9,7 +9,7 @@
 **版本**：2026-07-11
 **适用范围**：HelloAI 多 Agent 协作调度平台
 
-> **状态注记**：本文档"HelloAI 落点"表是 2026-07-11 时的目标态描述，部分状态列已过时：§1.1 落点表 `ExecutionCommandConsumer`（MQ/DB Poller 已落地）与 `ExecutionResultHandler`（已固化为唯一执行结果入口）、§3.2 "PLANNER 自动拆解尚未完整闭环"（V26 已闭环）、§6 速查表"调度分离-进行中"（已落地）等条目以《实现差距表》为准。本文档正文保留历史原貌，仅作外部项目借鉴思路参考。
+> **状态注记（2026-08-23 文档核查）**：本文档"HelloAI 落点"表是 2026-07-11 时的目标态描述，部分状态列已过时：§1.1 落点表 `ExecutionCommandConsumer`（MQ/DB Poller 已落地）与 `ExecutionResultHandler`（已固化为唯一执行结果入口）、§3.2 "PLANNER 自动拆解尚未完整闭环"（V26 已闭环）、§6 速查表"调度分离-进行中"（已落地）与"防晚到结果覆盖-待补"（`ExecutionResultHandler` 状态前置校验已固化）等条目以《实现差距表》为准。2026-08-23 另按本地源码校准了 OpenMOSS 精确文件路径（§3.1/§3.4，本地参考目录 `E:\workspace\openMoss\OpenMOSS-main`）与 HelloAI onboarding 接口路径（§3.1）。本文档正文保留历史原貌，仅作外部项目借鉴思路参考。
 
 ---
 
@@ -346,11 +346,11 @@ XL → L（单人串行），L → M（跳过部分验证）
 
 ### 3.1 Agent 自注册与 Onboarding
 
-**参考模块**（OpenMOSS 源码目录结构可能已变化，以下为职责级描述）：
+**参考文件**（已按 2026-08-23 本地源码 `E:\workspace\openMoss\OpenMOSS-main` 校准，仓库根下存在嵌套副本 `OpenMOSS-main\OpenMOSS-main\`）：
 
-- Agent 注册端点（`routers/agents` 模块）：处理 Agent 注册的 HTTP 端点，含角色白名单校验
-- Agent 注册服务（`services/agent_service` 模块）：注册核心逻辑——名称去重、UUID 生成、API Key（`"ak_" + secrets.token_hex(16)`）生成、DB 写入
-- Onboarding 指引：`prompts/tool/` 目录下的 agent-onboarding 类文件，定义首次注册时的引导内容
+- `app/routers/agents.py` — Agent 注册端点（处理注册的 HTTP 端点，含角色白名单校验）
+- `app/services/agent_service.py` — 注册核心逻辑——名称去重、UUID 生成、API Key（`"ak_" + secrets.token_hex(16)`）生成、DB 写入
+- `prompts/tool/agent-onboarding.md` — onboarding 引导内容（首次注册时的引导定义）
 
 **核心模式**（Python → Java 映射）：
 
@@ -369,7 +369,7 @@ def register_agent(db, name, role, description):
 
 **Onboarding 差异**：
 - OpenMOSS：返回纯文本引导 + API Key
-- HelloAI：`AgentOnboardingDialog` 弹窗 + `GET /api/admin/agents/{id}/onboarding-content`（已实现）
+- HelloAI：`AgentOnboardingDialog` 弹窗 + `GET /api/admin/agents/{id}/getOnboardingContentByAgentId`（已实现，`AdminAgentController.getOnboardingContent`）
 
 ### 3.2 三角色模型（OpenMOSS 四角色 → HelloAI 收敛为三角色）
 
@@ -449,10 +449,10 @@ update
 
 ### 3.4 规则合并（Rules Merging）
 
-**参考模块**（OpenMOSS 源码目录结构可能已变化，以下为职责级描述）：
+**参考文件**（已按 2026-08-23 本地源码 `E:\workspace\openMoss\OpenMOSS-main` 校准）：
 
-- 规则合并端点（`routers/rules` 模块）：对外暴露规则合并 API，含 CLI 版本检查（`cli_version < latest → update_available=true`）
-- 规则合并服务（`services/rule_service` 模块）：实现全局规则 + 任务规则 + 子任务规则 + 模块规则的合并优先级逻辑
+- `app/routers/rules.py` — 规则合并端点（对外暴露规则合并 API，含 CLI 版本检查 `cli_version < latest → update_available=true`）
+- `app/services/rule_service.py` — 规则合并服务（实现全局规则 + 任务规则 + 子任务规则 + 模块规则的合并优先级逻辑）
 
 **核心模式**：
 
@@ -653,10 +653,10 @@ Cancel：释放资源（如：Agent 超时 → 释放锁定 → 重新分配）
 
 | 借鉴来源 | 借鉴项 | HelloAI 落点 | 优先级 | 状态 |
 |---|---|---|---|---|
-| AgentTeams §1.1 | 调度分离（命令边界） | `ExecutionCommand` + `ExecutionCommandConsumer` | P0 | 进行中 |
+| AgentTeams §1.1 | 调度分离（命令边界） | `ExecutionCommand` + `ExecutionCommandConsumer` | P0 | 已落地（N1/N6，Local/Mq 双实现） |
 | AgentTeams §1.3 | Heartbeat 主动巡检 | `AgentHealthCheckTask` 增强 | P0 | 待补 |
 | trade-cloud §5.1 | Outbox 事务性消息 | `AgentOutboxService` | P0 | 已落地 |
-| trade-cloud §5.4 | 防晚到结果覆盖 | `ExecutionResultHandler` 增强 | P0 | 待补 |
+| trade-cloud §5.4 | 防晚到结果覆盖 | `ExecutionResultHandler` 增强 | P0 | 已落地（N1/N6，状态前置校验已固化） |
 | AgentTeams §1.4 | .processing 工作区锁 | `agent_execution_record` + Redis 锁 | P1 | 待补 |
 | AgentTeams §1.5 | 任务恢复流 | `sub_task.context` + progress 快照 | P1 | 待补 |
 | 优先级文档 §4.2 | Agent 执行状态 | 查询推导（不新增 DB 枚举） | P1 | 待设计 |
