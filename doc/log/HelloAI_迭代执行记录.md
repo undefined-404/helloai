@@ -6662,4 +6662,5 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 #### 4. 影响与遗留
 
 - 影响：质量看板三端点可观测（overview / 排行 / 30 天窗口聚合），缺陷标签与画像表同口径；P2 竞态窗口关闭（双审窗口 90s < 锁 TTL 120s）。
-- 遗留：CODE_STYLE V1.15 已回填（§3.x review 域 dto 子包 + 看板聚合归属 + P3 修正）；差距表 N20 状态补 08-23；看板页面视觉细节待用户浏览器实测反馈；verify-quality-dashboard.ps1 依赖 docker 容器 + 6565 运行实例。
+- 遗留：CODE_STYLE V1.15 已回填（§3.x review 域 dto 子包 + 看板聚合归属 + P3 修正）；差距表 N20 状态补 08-23；verify-quality-dashboard.ps1 依赖 docker 容器 + 6565 运行实例。
+- **实测修复（浏览器复验，2026-08-23）**：前端看板首载报「加载质量看板失败」——design-system.css 未定义 `--ha-success-light`（仅 primary 系有 -light 令牌），`initReworkChart` 渐变第二个 stop 取到空串，ECharts CanvasGradient.addColorStop('') 抛 SyntaxError，被 loadDashboard catch 后整页错误态；修复：亮色 `rgba(16,185,129,0.10)` / 暗色 `rgba(16,185,129,0.14)` 补令牌；浏览器复验：5 图全部渲染 + 统计卡片 + 7/30/90 窗口切换 + 明暗主题切换均正常，Console 0 报错。

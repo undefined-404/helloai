@@ -26,6 +26,7 @@
 
   /* 语义色：主色两主题共用；-text 为 tag 等文字场景的对比度变体 */
   --ha-success: #10B981;
+  --ha-success-light: rgba(16, 185, 129, 0.10);
   --ha-success-bg: rgba(16, 185, 129, 0.10);
   --ha-success-text: #047857;
   --ha-warning: #F59E0B;
@@ -114,6 +115,7 @@ html.dark {
   --ha-ink-secondary: #A9B4C7;
   --ha-muted: #7C8AA0;
 
+  --ha-success-light: rgba(16, 185, 129, 0.14);
   --ha-success-bg: rgba(16, 185, 129, 0.12);
   --ha-success-text: #34D399;
   --ha-warning-bg: rgba(245, 158, 11, 0.12);
