@@ -5,8 +5,9 @@ import java.util.List;
 /**
  * 审查数据访问端口（§6.146 端口反转）：task 域消费方不依赖 review 域
  * service/entity，一切审查数据诉求经本端口收口（布尔判定/评分事实/摘要/
- * 统计/级联删除），由 review 域 {@code ReviewServiceImpl} 落实 implements
- * （review → task 属于合法向下依赖）。
+ * 统计/级联删除），由 review 域 {@code ReviewPortAdapter} 独立实现
+ * （review → task 属于合法向下依赖；独立实现而非挂在业务服务上，
+ * 避免与 task 域构成构造器依赖环）。
  *
  * <p>返回值只暴露基本类型与 task 域值对象（{@link ReviewFact} /
  * {@link ReviewSummary}），不泄漏 review 域实体，保证 task → review
