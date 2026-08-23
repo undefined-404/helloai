@@ -13,9 +13,6 @@
         <el-divider content-position="left">
           基础配置
         </el-divider>
-        <el-form-item label="平台名称">
-          <el-input v-model="form.platformName" />
-        </el-form-item>
         <el-form-item label="外部访问地址">
           <el-input
             v-model="form.externalUrl"
@@ -25,6 +22,13 @@
             用于生成 SKILL 接入内容（Agent 凭此地址回连本平台）。
             本机可直接用 <code>http://localhost:6565</code>，其他设备用
             <code>http://&lt;本机IP&gt;:6565</code>，公网部署用域名或公网 IP。
+          </div>
+        </el-form-item>
+        <el-form-item label="质量实测端点">
+          <el-switch v-model="form.qualityGateEnabled" />
+          <div class="form-hint">
+            对应配置键 <code>admin.quality.enabled</code>，默认关闭。开启后开放管理侧质量实测端点，
+            质量看板（/quality-dashboard）及画像重算、自动派发等入口才可用；生产环境建议保持关闭。
           </div>
         </el-form-item>
 
@@ -472,8 +476,8 @@ import {
 
 const formRef = ref()
 const form = reactive({
-  platformName: 'HelloAI',
   externalUrl: '',
+  qualityGateEnabled: false,
   notifyChannels: ['web']
 })
 
@@ -537,8 +541,8 @@ async function load() {
   try {
     const config = await settingsApi.getConfig()
     if (config) {
-      form.platformName = config['system.name'] || 'HelloAI'
       form.externalUrl = config['helloai.base-url'] || ''
+      form.qualityGateEnabled = config['admin.quality.enabled'] === 'true'
     }
   } catch (e: any) {
     ElMessage.error('加载配置失败')
@@ -638,8 +642,8 @@ async function handleSaveModels() {
 async function handleSave() {
   try {
     await settingsApi.batchUpdateConfig({
-      'system.name': form.platformName,
-      'helloai.base-url': form.externalUrl
+      'helloai.base-url': form.externalUrl,
+      'admin.quality.enabled': form.qualityGateEnabled ? 'true' : 'false'
     })
     ElMessage.success('保存成功')
   } catch (e: any) {

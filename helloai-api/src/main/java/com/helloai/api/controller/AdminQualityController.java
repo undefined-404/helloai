@@ -44,9 +44,9 @@ import java.util.List;
  * <p>本端点仅面向管理侧实测验证。</p>
  *
  * <p>配置门控：全部端点受 sys_config 键 {@code admin.quality.enabled}
- * （值 "true" 开放）控制，生产默认关闭；实测脚本
- * （verify-quality-profile.ps1 / verify-contract-first.ps1）登录后会先
- * {@code PUT /api/admin/config/updateByKey/admin.quality.enabled} 开启。
+ * （值 "true" 开放）控制，生产默认关闭；可在系统设置页「基础配置 - 质量实测端点」
+ * 开关切换，实测脚本（verify-quality-profile.ps1 / verify-contract-first.ps1）
+ * 登录后会先 {@code PUT /api/admin/config/updateByKey/admin.quality.enabled} 开启。
  * 关闭时返回业务码 403，避免内部 Prompt 段/重算/派发入口在生产无门槛暴露。</p>
  */
 @Slf4j
