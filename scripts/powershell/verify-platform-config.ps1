@@ -235,7 +235,7 @@ if ($ReadOnly) {
     Write-Output '[S5] READONLY : current catalog state (show only)'
     $catRespRo.data | ConvertTo-Json -Depth 10
     Write-Output '==== READONLY: write steps skipped ===='
-    Write-Output ('READONLY_MODE: next write step would be PUT /api/admin/platform/providers/' + $Provider + '/api-key (writes PLATFORM-level credential to vault). Re-run without -ReadOnly after user confirmation.')
+    Write-Output ('READONLY_MODE: next write step would be PUT /api/admin/platform/providers/saveApiKeyByProvider/' + $Provider + ' (writes PLATFORM-level credential to vault). Re-run without -ReadOnly after user confirmation.')
     Write-Output ('RESULT: PASS=' + $global:PassCount + ' FAIL=' + $global:FailCount)
     Stop-BackendIfStarted
     if ($global:FailCount -gt 0) {
@@ -250,7 +250,7 @@ if ($ReadOnly) {
 }
 
 Write-Output '==== S3: PUT platform api-key ===='
-$keyResp = Invoke-Json 'Put' ($BaseUrl + '/api/admin/platform/providers/' + $Provider + '/api-key') @{
+$keyResp = Invoke-Json 'Put' ($BaseUrl + '/api/admin/platform/providers/saveApiKeyByProvider/' + $Provider) @{
     apiKey = $TestApiKey
 } $adminHeaders
 Assert-Pass ($keyResp -ne $null -and $keyResp.code -eq 200) 'S3' ('save api-key code=' + $keyResp.code + ' msg=' + $keyResp.msg)

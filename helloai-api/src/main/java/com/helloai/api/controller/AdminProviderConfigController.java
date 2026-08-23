@@ -52,7 +52,7 @@ public class AdminProviderConfigController {
     /**
      * 写入（轮换）平台级 API Key，实时生效无需重启。
      */
-    @PutMapping("/{provider}/api-key")
+    @PutMapping("/saveApiKeyByProvider/{provider}")
     public R<Void> saveApiKey(@PathVariable("provider") String provider,
                               @RequestBody ProviderApiKeyRequest req) {
         if (req == null || req.getApiKey() == null || req.getApiKey().isBlank()) {
@@ -66,7 +66,7 @@ public class AdminProviderConfigController {
     /**
      * 更新 provider 的 Base URL / 默认模型（均可选；传空表示清除覆盖，回到 yml 默认）。
      */
-    @PutMapping("/{provider}/settings")
+    @PutMapping("/saveSettingsByProvider/{provider}")
     public R<Void> saveSettings(@PathVariable("provider") String provider,
                                 @RequestBody ProviderSettingsRequest req) {
         if (req == null || (req.getBaseUrl() == null && req.getDefaultModel() == null)) {

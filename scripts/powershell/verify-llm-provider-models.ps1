@@ -211,7 +211,7 @@ if ($deepseekId -eq $null) {
     Stop-BackendIfStarted
     exit 1
 }
-$dsModelsResp = Invoke-Json 'Get' ($BaseUrl + '/api/admin/llm-providers/' + $deepseekId + '/models/list') $null $adminHeaders
+$dsModelsResp = Invoke-Json 'Get' ($BaseUrl + '/api/admin/llm-providers/listModelsByProviderId/' + $deepseekId) $null $adminHeaders
 Assert-Pass ($dsModelsResp -ne $null -and $dsModelsResp.code -eq 200) 'S2' ('deepseek models code=' + $dsModelsResp.code)
 $dsModels = @($dsModelsResp.data)
 Assert-Pass ($dsModels.Count -eq 2) 'S2' ('deepseek has 2 seed models, got ' + $dsModels.Count)
@@ -219,7 +219,7 @@ $dsDefault = $dsModels | Where-Object { $_.isDefault -eq 1 } | Select-Object -Fi
 Assert-Pass ($dsDefault -ne $null -and $dsDefault.modelName -eq 'deepseek-v4-flash') 'S2' ('deepseek default model is deepseek-v4-flash, got ' + $dsDefault.modelName)
 $moonshot = @($provList.data) | Where-Object { $_.providerCode -eq 'moonshot' } | Select-Object -First 1
 if ($moonshot -ne $null) {
-    $msModelsResp = Invoke-Json 'Get' ($BaseUrl + '/api/admin/llm-providers/' + $moonshot.id + '/models/list') $null $adminHeaders
+    $msModelsResp = Invoke-Json 'Get' ($BaseUrl + '/api/admin/llm-providers/listModelsByProviderId/' + $moonshot.id) $null $adminHeaders
     $msModels = @($msModelsResp.data)
     Assert-Pass ($msModels.Count -eq 5) 'S2' ('moonshot has 5 seed models, got ' + $msModels.Count)
     $msDefault = $msModels | Where-Object { $_.isDefault -eq 1 } | Select-Object -First 1
@@ -265,14 +265,14 @@ $probeId = [long]$createResp.data.id
 Assert-Pass ($probeId -gt 0) 'S3' ('probe provider id=' + $probeId)
 
 Write-Output '==== S4: saveAllModels (multi-select bulk save) ===='
-$saveResp = Invoke-Json 'Put' ($BaseUrl + '/api/admin/llm-providers/' + $probeId + '/models/saveAll') @{
+$saveResp = Invoke-Json 'Put' ($BaseUrl + '/api/admin/llm-providers/saveAllModelsByProviderId/' + $probeId) @{
     modelNames   = @('m1', 'm2', 'm3')
     defaultModel = 'm1'
 } $adminHeaders
 Assert-Pass ($saveResp -ne $null -and $saveResp.code -eq 200) 'S4' ('saveAll code=' + $saveResp.code + ' msg=' + $saveResp.msg)
 
 Write-Output '==== S5: model list after saveAll ===='
-$modelsResp = Invoke-Json 'Get' ($BaseUrl + '/api/admin/llm-providers/' + $probeId + '/models/list') $null $adminHeaders
+$modelsResp = Invoke-Json 'Get' ($BaseUrl + '/api/admin/llm-providers/listModelsByProviderId/' + $probeId) $null $adminHeaders
 Assert-Pass ($modelsResp -ne $null -and $modelsResp.code -eq 200) 'S5' ('models list code=' + $modelsResp.code)
 $models = @($modelsResp.data)
 Assert-Pass ($models.Count -eq 3) 'S5' ('probe provider has 3 models, got ' + $models.Count)
@@ -282,62 +282,62 @@ $m2 = $models | Where-Object { $_.modelName -eq 'm2' } | Select-Object -First 1
 Assert-Pass ($m2 -ne $null -and $m2.isDefault -eq 0 -and $m2.enabled -eq 1) 'S5' 'm2 present, non-default, enabled'
 
 Write-Output '==== S6: error paths ===='
-$errEmpty = Invoke-Json 'Put' ($BaseUrl + '/api/admin/llm-providers/' + $probeId + '/models/saveAll') @{
+$errEmpty = Invoke-Json 'Put' ($BaseUrl + '/api/admin/llm-providers/saveAllModelsByProviderId/' + $probeId) @{
     modelNames   = @()
     defaultModel = 'm1'
 } $adminHeaders
 Assert-Pass ($errEmpty -eq $null -or $errEmpty.code -ne 200) 'S6' ('empty modelNames rejected, code=' + $(if ($errEmpty -eq $null) { 'HTTP_FAIL' } else { [string]$errEmpty.code }))
-$errDefault = Invoke-Json 'Put' ($BaseUrl + '/api/admin/llm-providers/' + $probeId + '/models/saveAll') @{
+$errDefault = Invoke-Json 'Put' ($BaseUrl + '/api/admin/llm-providers/saveAllModelsByProviderId/' + $probeId) @{
     modelNames   = @('m1', 'm2')
     defaultModel = 'm9'
 } $adminHeaders
 Assert-Pass ($errDefault -eq $null -or $errDefault.code -ne 200) 'S6' ('default not in list rejected, code=' + $(if ($errDefault -eq $null) { 'HTTP_FAIL' } else { [string]$errDefault.code }))
-$errDup = Invoke-Json 'Post' ($BaseUrl + '/api/admin/llm-providers/' + $probeId + '/models') @{
+$errDup = Invoke-Json 'Post' ($BaseUrl + '/api/admin/llm-providers/addModelByProviderId/' + $probeId) @{
     modelName = 'm1'
     isDefault = $false
 } $adminHeaders
 Assert-Pass ($errDup -eq $null -or $errDup.code -ne 200) 'S6' ('duplicate addModel rejected, code=' + $(if ($errDup -eq $null) { 'HTTP_FAIL' } else { [string]$errDup.code }))
-$errSetDefault = Invoke-Json 'Put' ($BaseUrl + '/api/admin/llm-providers/' + $probeId + '/models/setDefaultByName/m9') @{} $adminHeaders
+$errSetDefault = Invoke-Json 'Put' ($BaseUrl + '/api/admin/llm-providers/setDefaultModelByProviderIdAndName/' + $probeId + '/m9') @{} $adminHeaders
 Assert-Pass ($errSetDefault -eq $null -or $errSetDefault.code -ne 200) 'S6' ('setDefault on missing model rejected, code=' + $(if ($errSetDefault -eq $null) { 'HTTP_FAIL' } else { [string]$errSetDefault.code }))
 # 异常路径不改动数据：仍为 3 个模型
-$modelsAfterErr = Invoke-Json 'Get' ($BaseUrl + '/api/admin/llm-providers/' + $probeId + '/models/list') $null $adminHeaders
+$modelsAfterErr = Invoke-Json 'Get' ($BaseUrl + '/api/admin/llm-providers/listModelsByProviderId/' + $probeId) $null $adminHeaders
 Assert-Pass (@($modelsAfterErr.data).Count -eq 3) 'S6' ('error paths left data untouched, still 3 models')
 
 Write-Output '==== S7: setDefaultModel switch ===='
-$setDefResp = Invoke-Json 'Put' ($BaseUrl + '/api/admin/llm-providers/' + $probeId + '/models/setDefaultByName/m2') @{} $adminHeaders
+$setDefResp = Invoke-Json 'Put' ($BaseUrl + '/api/admin/llm-providers/setDefaultModelByProviderIdAndName/' + $probeId + '/m2') @{} $adminHeaders
 Assert-Pass ($setDefResp -ne $null -and $setDefResp.code -eq 200) 'S7' ('setDefault m2 code=' + $setDefResp.code)
-$modelsAfterDef = Invoke-Json 'Get' ($BaseUrl + '/api/admin/llm-providers/' + $probeId + '/models/list') $null $adminHeaders
+$modelsAfterDef = Invoke-Json 'Get' ($BaseUrl + '/api/admin/llm-providers/listModelsByProviderId/' + $probeId) $null $adminHeaders
 $defAfter = @($modelsAfterDef.data) | Where-Object { $_.isDefault -eq 1 } | Select-Object -First 1
 Assert-Pass ($defAfter -ne $null -and $defAfter.modelName -eq 'm2') 'S7' ('default model switched to m2, got ' + $defAfter.modelName)
 
 Write-Output '==== S8: deleteModel protection ===='
-$delDefaultResp = Invoke-Json 'Delete' ($BaseUrl + '/api/admin/llm-providers/' + $probeId + '/models/deleteByName/m2') $null $adminHeaders
+$delDefaultResp = Invoke-Json 'Delete' ($BaseUrl + '/api/admin/llm-providers/deleteModelByProviderIdAndName/' + $probeId + '/m2') $null $adminHeaders
 Assert-Pass ($delDefaultResp -eq $null -or $delDefaultResp.code -ne 200) 'S8' ('delete default m2 rejected, code=' + $(if ($delDefaultResp -eq $null) { 'HTTP_FAIL' } else { [string]$delDefaultResp.code }))
-$delLastGuard = Invoke-Json 'Delete' ($BaseUrl + '/api/admin/llm-providers/' + $probeId + '/models/deleteByName/m1') $null $adminHeaders
+$delLastGuard = Invoke-Json 'Delete' ($BaseUrl + '/api/admin/llm-providers/deleteModelByProviderIdAndName/' + $probeId + '/m1') $null $adminHeaders
 Assert-Pass ($delLastGuard -ne $null -and $delLastGuard.code -eq 200) 'S8' ('delete non-default m1 allowed, code=' + $delLastGuard.code)
-$modelsAfterDel = Invoke-Json 'Get' ($BaseUrl + '/api/admin/llm-providers/' + $probeId + '/models/list') $null $adminHeaders
+$modelsAfterDel = Invoke-Json 'Get' ($BaseUrl + '/api/admin/llm-providers/listModelsByProviderId/' + $probeId) $null $adminHeaders
 Assert-Pass (@($modelsAfterDel.data).Count -eq 2) 'S8' ('after delete m1, still 2 models')
 # 删除最后一个模型被拒（当前默认 m2 + 仅剩 m3，删 m3 后剩 1 个 -> 允许；再删 m2 拒绝）
-$delM3 = Invoke-Json 'Delete' ($BaseUrl + '/api/admin/llm-providers/' + $probeId + '/models/deleteByName/m3') $null $adminHeaders
+$delM3 = Invoke-Json 'Delete' ($BaseUrl + '/api/admin/llm-providers/deleteModelByProviderIdAndName/' + $probeId + '/m3') $null $adminHeaders
 Assert-Pass ($delM3 -ne $null -and $delM3.code -eq 200) 'S8' ('delete m3 allowed, code=' + $delM3.code)
-$delLast = Invoke-Json 'Delete' ($BaseUrl + '/api/admin/llm-providers/' + $probeId + '/models/deleteByName/m2') $null $adminHeaders
+$delLast = Invoke-Json 'Delete' ($BaseUrl + '/api/admin/llm-providers/deleteModelByProviderIdAndName/' + $probeId + '/m2') $null $adminHeaders
 Assert-Pass ($delLast -eq $null -or $delLast.code -ne 200) 'S8' ('delete last model m2 rejected, code=' + $(if ($delLast -eq $null) { 'HTTP_FAIL' } else { [string]$delLast.code }))
 
 Write-Output '==== S9: toggleModel protection ===='
 # 恢复现场：当前仅剩 m2（默认启用）。新增 m1 再测禁用保护
-$addResp = Invoke-Json 'Post' ($BaseUrl + '/api/admin/llm-providers/' + $probeId + '/models') @{
+$addResp = Invoke-Json 'Post' ($BaseUrl + '/api/admin/llm-providers/addModelByProviderId/' + $probeId) @{
     modelName = 'm1'
     isDefault = $false
 } $adminHeaders
 Assert-Pass ($addResp -ne $null -and $addResp.code -eq 200) 'S9' ('re-add m1 code=' + $addResp.code)
 # 禁用默认 m2 但 m1 仍启用 -> 允许
-$t1 = Invoke-Json 'Put' ($BaseUrl + '/api/admin/llm-providers/' + $probeId + '/models/toggleByName/m2') @{ enabled = $false } $adminHeaders
+$t1 = Invoke-Json 'Put' ($BaseUrl + '/api/admin/llm-providers/toggleModelByProviderIdAndName/' + $probeId + '/m2') @{ enabled = $false } $adminHeaders
 Assert-Pass ($t1 -ne $null -and $t1.code -eq 200) 'S9' ('disable default m2 with m1 enabled allowed, code=' + $t1.code)
 # 再禁用 m1 -> 无其他启用 -> 拒绝
-$t2 = Invoke-Json 'Put' ($BaseUrl + '/api/admin/llm-providers/' + $probeId + '/models/toggleByName/m1') @{ enabled = $false } $adminHeaders
+$t2 = Invoke-Json 'Put' ($BaseUrl + '/api/admin/llm-providers/toggleModelByProviderIdAndName/' + $probeId + '/m1') @{ enabled = $false } $adminHeaders
 Assert-Pass ($t2 -eq $null -or $t2.code -ne 200) 'S9' ('disable last enabled m1 rejected, code=' + $(if ($t2 -eq $null) { 'HTTP_FAIL' } else { [string]$t2.code }))
 # 恢复：启用 m2（默认）、m1 保持启用
-$t3 = Invoke-Json 'Put' ($BaseUrl + '/api/admin/llm-providers/' + $probeId + '/models/toggleByName/m2') @{ enabled = $true } $adminHeaders
+$t3 = Invoke-Json 'Put' ($BaseUrl + '/api/admin/llm-providers/toggleModelByProviderIdAndName/' + $probeId + '/m2') @{ enabled = $true } $adminHeaders
 Assert-Pass ($t3 -ne $null -and $t3.code -eq 200) 'S9' ('re-enable m2 code=' + $t3.code)
 
 Write-Output '==== S10: agent role model uniqueness ===='

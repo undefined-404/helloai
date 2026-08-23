@@ -156,8 +156,8 @@ foreach ($p in $probePaths) {
     Assert-Status -Label ('GET ' + $p) -Expected 403 -Resp $resp
 }
 # 写端点探测：假 provider，拦截器在业务逻辑前拦截，无副作用
-$putResp = Invoke-Http -Method 'PUT' -Uri ($base + '/api/admin/platform/providers/FAKE-PROVIDER/api-key') -Body '{"apiKey":"probe"}' -Headers @{ 'Authorization' = 'Bearer ' + $agentApiKey }
-Assert-Status -Label 'PUT /api/admin/platform/providers/{provider}/api-key' -Expected 403 -Resp $putResp
+$putResp = Invoke-Http -Method 'PUT' -Uri ($base + '/api/admin/platform/providers/saveApiKeyByProvider/FAKE-PROVIDER') -Body '{"apiKey":"probe"}' -Headers @{ 'Authorization' = 'Bearer ' + $agentApiKey }
+Assert-Status -Label 'PUT /api/admin/platform/providers/saveApiKeyByProvider/{provider}' -Expected 403 -Resp $putResp
 Write-Output ''
 
 # ==================== [D] admin identity unaffected (200) ====================

@@ -28,7 +28,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
@@ -42,17 +41,17 @@ import java.util.stream.Collectors;
  *   <li>PUT    /api/admin/llm-providers/updateById/{id} 修改（局部更新）</li>
  *   <li>DELETE /api/admin/llm-providers/deleteById/{id} 删除（内置不可）</li>
  *   <li>PUT    /api/admin/llm-providers/toggleById/{id} 启用 / 禁用</li>
- *   <li>PUT    /api/admin/llm-providers/{id}/api-key  写入 API Key（走 credential_vault）</li>
- *   <li>GET    /api/admin/llm-providers/{id}/models/list           模型列表（含禁用）</li>
- *   <li>POST   /api/admin/llm-providers/{id}/models               添加模型</li>
- *   <li>PUT    /api/admin/llm-providers/{id}/models/saveAll       批量保存模型配置</li>
- *   <li>DELETE /api/admin/llm-providers/{id}/models/deleteByName/{modelName} 删除模型</li>
- *   <li>PUT    /api/admin/llm-providers/{id}/models/toggleByName/{modelName} 启用/禁用模型</li>
- *   <li>PUT    /api/admin/llm-providers/{id}/models/setDefaultByName/{modelName} 设为默认模型</li>
+ *   <li>PUT    /api/admin/llm-providers/saveApiKeyById/{id}  写入 API Key（走 credential_vault）</li>
+ *   <li>GET    /api/admin/llm-providers/listModelsByProviderId/{id}           模型列表（含禁用）</li>
+ *   <li>POST   /api/admin/llm-providers/addModelByProviderId/{id}               添加模型</li>
+ *   <li>PUT    /api/admin/llm-providers/saveAllModelsByProviderId/{id}       批量保存模型配置</li>
+ *   <li>DELETE /api/admin/llm-providers/deleteModelByProviderIdAndName/{providerId}/{modelName} 删除模型</li>
+ *   <li>PUT    /api/admin/llm-providers/toggleModelByProviderIdAndName/{providerId}/{modelName} 启用/禁用模型</li>
+ *   <li>PUT    /api/admin/llm-providers/setDefaultModelByProviderIdAndName/{providerId}/{modelName} 设为默认模型</li>
  * </ul>
  *
  * <p>与 {@link AdminProviderConfigController}（旧 /api/admin/platform/providers）共存，
- * 前端 Settings.vue 优先使用本套端点；旧端点保留用于兼容既有脚本与老页面。</p>
+ * 前端 Settings.vue 优先使用本套端点；旧端点保留用于兼容既有脚本。</p>
  */
 @Slf4j
 @RestController
@@ -143,7 +142,7 @@ public class AdminLlmProviderController {
      * <p>请求体为纯字符串（apiKey 明文），使用 {@link String} 直接接收避免 Jackson 把数字等
      * 误识别为 JSON 节点。空值返回 400。</p>
      */
-    @PutMapping("/{id}/api-key")
+    @PutMapping("/saveApiKeyById/{id}")
     public R<Void> saveApiKey(@PathVariable("id") Long id, @RequestBody String apiKey) {
         if (apiKey == null || apiKey.isBlank()) {
             return R.fail("apiKey 不能为空");
@@ -165,7 +164,7 @@ public class AdminLlmProviderController {
     /**
      * 查询 Provider 的模型列表（含禁用）。
      */
-    @GetMapping("/{id}/models/list")
+    @GetMapping("/listModelsByProviderId/{id}")
     public R<List<LlmProviderModelResponse>> listModels(@PathVariable("id") Long id) {
         LlmProvider p = providerService.getById(id);
         if (p == null) {
@@ -180,7 +179,7 @@ public class AdminLlmProviderController {
     /**
      * 添加单个模型到 Provider。
      */
-    @PostMapping("/{id}/models")
+    @PostMapping("/addModelByProviderId/{id}")
     public R<LlmProviderModelResponse> addModel(@PathVariable("id") Long id,
                                                  @RequestBody Map<String, Object> body) {
         LlmProvider p = providerService.getById(id);
@@ -196,7 +195,7 @@ public class AdminLlmProviderController {
     /**
      * 批量保存 Provider 的模型配置（多选）。
      */
-    @PutMapping("/{id}/models/saveAll")
+    @PutMapping("/saveAllModelsByProviderId/{id}")
     public R<Void> saveAllModels(@PathVariable("id") Long id,
                                   @RequestBody Map<String, Object> body) {
         LlmProvider p = providerService.getById(id);
@@ -213,8 +212,8 @@ public class AdminLlmProviderController {
     /**
      * 删除模型。
      */
-    @DeleteMapping("/{id}/models/deleteByName/{modelName}")
-    public R<Void> deleteModel(@PathVariable("id") Long id,
+    @DeleteMapping("/deleteModelByProviderIdAndName/{providerId}/{modelName}")
+    public R<Void> deleteModel(@PathVariable("providerId") Long id,
                                 @PathVariable("modelName") String modelName) {
         LlmProvider p = providerService.getById(id);
         if (p == null) {
@@ -227,8 +226,8 @@ public class AdminLlmProviderController {
     /**
      * 启用/禁用模型。
      */
-    @PutMapping("/{id}/models/toggleByName/{modelName}")
-    public R<Void> toggleModel(@PathVariable("id") Long id,
+    @PutMapping("/toggleModelByProviderIdAndName/{providerId}/{modelName}")
+    public R<Void> toggleModel(@PathVariable("providerId") Long id,
                                 @PathVariable("modelName") String modelName,
                                 @RequestBody Map<String, Boolean> body) {
         LlmProvider p = providerService.getById(id);
@@ -246,8 +245,8 @@ public class AdminLlmProviderController {
     /**
      * 设置默认模型。
      */
-    @PutMapping("/{id}/models/setDefaultByName/{modelName}")
-    public R<Void> setDefaultModel(@PathVariable("id") Long id,
+    @PutMapping("/setDefaultModelByProviderIdAndName/{providerId}/{modelName}")
+    public R<Void> setDefaultModel(@PathVariable("providerId") Long id,
                                     @PathVariable("modelName") String modelName) {
         LlmProvider p = providerService.getById(id);
         if (p == null) {
@@ -266,22 +265,22 @@ public class AdminLlmProviderController {
      * 模型未识别（表中不存在/已删除）时返回降级默认值并标注 {@code degraded=true}，
      * 前端提示「模型未上架，建议使用已上架模型」。</p>
      */
-    @GetMapping("/{modelType}/skill-options")
-    public R<Map<String, Object>> skillOptions(@PathVariable("modelType") String modelType) {
+    @GetMapping("/getSkillOptionsByModelType/{modelType}")
+    public R<Map<String, Object>> getSkillOptions(@PathVariable("modelType") String modelType) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("modelType", modelType);
-        Optional<LlmProviderModel> capability = llmProviderModelQueryService.findCapabilityByModelType(modelType);
-        if (capability.isEmpty()) {
+        LlmProviderModel capability = llmProviderModelQueryService.findCapabilityByModelType(modelType);
+        if (capability == null) {
             // 降级：返回 Phase 2 默认可选项，前端提示使用已上架模型
             body.put("capabilitySkills", List.of());
             body.put("availableOptionalSkills", List.of("shell", "code-review"));
             body.put("degraded", true);
             return R.ok(body);
         }
-        body.put("capabilitySkills", capability.get().getCapabilitySkills() != null
-                ? capability.get().getCapabilitySkills() : List.of());
-        body.put("availableOptionalSkills", capability.get().getAvailableOptionalSkills() != null
-                ? capability.get().getAvailableOptionalSkills() : List.of());
+        body.put("capabilitySkills", capability.getCapabilitySkills() != null
+                ? capability.getCapabilitySkills() : List.of());
+        body.put("availableOptionalSkills", capability.getAvailableOptionalSkills() != null
+                ? capability.getAvailableOptionalSkills() : List.of());
         body.put("degraded", false);
         return R.ok(body);
     }

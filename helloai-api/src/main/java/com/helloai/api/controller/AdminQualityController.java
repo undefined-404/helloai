@@ -114,7 +114,7 @@ public class AdminQualityController {
      * @return 画像表存量聚合；空表返回全 0 概览
      */
     @GetMapping("/overview")
-    public R<QualityOverview> overview() {
+    public R<QualityOverview> getOverview() {
         if (!isEnabled()) {
             return gateDenied();
         }
