@@ -100,7 +100,7 @@ state.json 是每个 task 目录下的权威状态文件，包含：
 | 步骤 6：escalation | `SubTaskTimeoutTask` | 已有（2小时阈值，偏长） |
 | 步骤 7：audit trail | `task_timeline` | 已有 |
 
-**关键借鉴**：AgentTeams 的心跳是**主动逐个询问 Worker 状态**，而非被动等待超时。HelloAI 当前只检查 Agent 是否在线（last_seen_at），不主动询问"你手上的 IN_PROGRESS 任务还在跑吗"。这是后续需要增强的点。
+**关键借鉴**：AgentTeams 的心跳是**主动逐个询问 Worker 状态**，而非被动等待超时。HelloAI 当前只检查 Agent 是否在线（`last_seen_time`），不主动询问"你手上的 IN_PROGRESS 任务还在跑吗"。这是后续需要增强的点。
 
 ### 1.4 .processing 工作区协调锁
 

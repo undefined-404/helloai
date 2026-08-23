@@ -201,12 +201,19 @@ trade-cloud 是 HelloAI **可靠性与最终一致性底座** 的主要参考来
 
 ### 3.2 双心跳
 
-双心跳指：
+双心跳指 `agent` 表上的两个时间字段（V1 建表原名为 `last_seen_at` / `last_active_at`，V23 字段命名规范化后更名为 `last_seen_time` / `last_active_time`，代码与文档一律使用新名）：
 
-- `last_seen_at`：判断 Agent 是否在线
-- `last_active_at`：判断 Agent 是否处于活跃工作状态
+- `last_seen_time`：**最近一次心跳时间（连接存活依据）**。由 `HeartbeatService.seen()` 刷新（MCP `heartbeat` 工具调用、`pullTasks` / `ack` 等协议活动都会触发），写 Redis TTL（`agent:heartbeat:{agentId}`，5 分钟）+ DB `last_seen_time` 双写，随后重算在线态。
+- `last_active_time`：**最近一次任务活跃时间（活跃度依据）**。由 `HeartbeatService.active()` 在 `claim` / `start` / `submit` 时单独刷新，语义区别于 seen 的"连接存活"（"最近一次业务执行时刻"）。
 
-它们的计算与收敛策略由在线状态模型和巡检任务共同完成。
+配套字段与状态（同表，V23 后均为 `_time` 后缀命名）：
+
+- `online_status`：系统**计算态**（`ONLINE` / `IDLE` / `OFFLINE` / `SLEEPING`），由 `HeartbeatService.checkOnlineStatus()` 基于两个时间字段推导，不手工赋值；SLEEPING 只刷 `last_seen_time` 不覆盖在线态，OFFLINE 恢复时清除 `offline_reason`。
+- `offline_time` / `offline_reason`：被判定离线的时间与原因（`heartbeat_lost` / `ping_failed`），由 `AgentHealthCheckTask` 每 60s 巡检写入（扫描 `last_seen_time` 早于 5 分钟、对齐 Redis TTL 的 Agent，ping 失败后 CAS 标记 OFFLINE）。
+
+调度侧用法：`AgentSelector` 心跳新鲜度过滤——`CLI_CLIENT` 的 `last_seen_time` 距今超过 `offline-minutes`（默认 5 分钟）即视为不新鲜、跳过选人（`last_seen_time=null` 也视为陈旧）；`API_KEY_LLM` 豁免（无需运行时心跳）。
+
+它们的计算与收敛策略由在线状态模型（`HeartbeatService` 三态判定 + `AgentHealthCheckTask` / `Reconcile` 巡检）共同完成。
 
 ### 3.3 熔断
 
@@ -249,7 +256,7 @@ TCC 在本项目中更多作为最终一致与兜底思路参考，而不是逐�
 
 - **上班打卡（duty lease）— 业务准入**：决定 Agent 是否进入调度候选池，是"愿不愿意接单"的显式表达。未打卡不参与分配。这是外部 Agent 可被调度的第一步。
 - **长连接（TCP / WebSocket / SSE 门铃）— 通信通道**：让平台能在任务发布时**实时唤醒** Agent，而非依赖 Agent 端定时轮询。
-- **双心跳（`last_seen_at` / `last_active_at`）— 运行时健康监控**：验证 Agent 是否在正常干活、能否及时完成任务；异常时触发熔断与重分配。它是"确保任务及时完成"的监控工具，不是准入条件。
+- **双心跳（`last_seen_time` / `last_active_time`）— 运行时健康监控**：验证 Agent 是否在正常干活、能否及时完成任务；异常时触发熔断与重分配。它是"确保任务及时完成"的监控工具，不是准入条件。
 
 `API_KEY_LLM` **不适用**上述三层：
 
@@ -323,7 +330,7 @@ TCC 在本项目中更多作为最终一致与兜底思路参考，而不是逐�
 
 - `MCP-over-SSE` 在 HelloAI 中首先是**协议传输层**，用于建立会话、完成鉴权并承载 `tools/call`；它本身不应被等同为“平台已经具备服务端主动任务推送语义”
 - 当前外部 Agent 最小闭环仍以 `pull -> ack -> claim -> result/blocked` 为核心；这条链路能保证消息不易因客户端崩溃而丢失，但不能单独保证“任务一到达，第三方 Agent 就一定能第一时间响应”
-- 双心跳（`last_seen_at` / `last_active_at`）与在线态收敛，只能证明外部 Agent 处于在线或活跃窗口，不能证明它当前正处于“可被平台立即唤醒并立刻接活”的状态
+- 双心跳（`last_seen_time` / `last_active_time`）与在线态收敛，只能证明外部 Agent 处于在线或活跃窗口，不能证明它当前正处于"可被平台立即唤醒并立刻接活"的状态
 - 因此，外部 Agent 接入层需要显式承认一个事实：**在线 ≠ 可及时响应 ≠ 可被即时唤醒**
 - 对支持长期保持 `MCP-over-SSE` 连接、并能在收到平台事件后自主进入工具调用的客户端，额外通知通道可以不必引入
 - 对仅支持 stdio、依赖用户交互触发、或缺乏后台常驻形态的第三方 Agent，后续大概率仍需要补一层“本地 Bridge / Daemon + 通知通道”能力；其职责是接收平台通知，再在本机触发 MCP Client / CLI / 脚本入口，而不是让第三方 Agent 直接接入 RabbitMQ 或直接写平台 DB

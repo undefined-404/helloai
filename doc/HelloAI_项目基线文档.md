@@ -27,7 +27,7 @@
 - 管理员 Token / Agent API Key 双通道鉴权
 - MCP 工具注册与业务工具调用
 - 外部 Agent 执行闭环最小集：`submitResult` 上交结果进入统一回写入口；`reportBlocked` 上报阻塞原因进入证据链
-- Agent 在线状态三件套：`last_seen_at` / `last_active_at` / `online_status`
+- Agent 在线状态三件套：`last_seen_time` / `last_active_time` / `online_status`
 - `ASSIGNED` 超时未 `claim` 的巡检回收与重新分配
 - 熔断降级与同角色替补
 - Reconcile 健康检查与离线重分配
@@ -80,7 +80,7 @@
 - 不把外部项目的基础设施形态（K8s / Matrix / MinIO / 大量治理壳）原样搬进当前主线
 - 引入 Agent 执行状态（IDLE / WORKING / INTERRUPTED）优先通过查询推导而非新增 DB 枚举，
   避免与 `online_status`（ONLINE / OFFLINE / SLEEPING）形成双套状态体系
-- 双心跳（`last_seen_at` / `last_active_at`）与上班打卡（`agent_duty_lease`）仅用于外部 Agent
+- 双心跳（`last_seen_time` / `last_active_time`）与上班打卡（`agent_duty_lease`）仅用于外部 Agent
   （`CLI_CLIENT` / `WEB_BROWSER`）的可用性判定：打卡是被调度选中的准入第一步，双心跳是验证其是否在
   正常干活的运行时监控；`API_KEY_LLM` 豁免这两类判定，其可用性以"任务是否按时完成 + 定期 API Key
   可用性探测"衡量（三层可用性模型详见 `doc/design/HelloAI_架构设计参考.md` §3.8）
