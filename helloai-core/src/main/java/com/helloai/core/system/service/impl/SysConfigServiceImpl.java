@@ -16,22 +16,36 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class SysConfigServiceImpl extends ServiceImpl<SysConfigMapper, SysConfig> implements SysConfigService {
 
+    /** 凭证类配置键后缀：读取端点对外返回时脱敏，防明文/密文经管理接口泄露。 */
+    private static final String SENSITIVE_KEY_SUFFIX = ".api-key";
+
+    /** 脱敏占位值：仅表达"已配置"，不回显任何凭证内容。 */
+    private static final String SENSITIVE_MASKED = "********";
+
     /**
      * 获取所有配置为 Map
      */
     @Override
     public Map<String, String> getAllAsMap() {
         return list().stream()
-                .collect(Collectors.toMap(SysConfig::getConfigKey, SysConfig::getConfigValue));
+                .collect(Collectors.toMap(SysConfig::getConfigKey, c -> maskIfSensitive(c.getConfigKey(), c.getConfigValue())));
     }
 
     /**
-     * 获取单个配置值
+     * 获取单个配置值（内部业务消费入口，不脱敏；凭证读取自行走 KeyStore 解密）
      */
     @Override
     public String getValue(String key) {
         SysConfig config = lambdaQuery().eq(SysConfig::getConfigKey, key).one();
         return config != null ? config.getConfigValue() : null;
+    }
+
+    /** 凭证类键对外脱敏；其余键原样返回。 */
+    private static String maskIfSensitive(String key, String value) {
+        if (key != null && key.endsWith(SENSITIVE_KEY_SUFFIX) && value != null && !value.isBlank()) {
+            return SENSITIVE_MASKED;
+        }
+        return value;
     }
 
     /**
@@ -49,7 +63,12 @@ public class SysConfigServiceImpl extends ServiceImpl<SysConfigMapper, SysConfig
             config.setConfigValue(value);
             save(config);
         }
-        log.info("系统配置更新: key={}, value={}", key, value);
+        // 凭证类键不落日志明文/密文，避免敏感信息扩散到日志采集链路
+        if (key != null && key.endsWith(SENSITIVE_KEY_SUFFIX)) {
+            log.info("系统配置更新: key={}, value=<masked>", key);
+        } else {
+            log.info("系统配置更新: key={}, value={}", key, value);
+        }
     }
 
     /**

@@ -76,6 +76,7 @@ export const paths = {
     configByKey: (key: string) => `/admin/config/getByKey/${enc(key)}`,
     configUpdateByKey: (key: string) => `/admin/config/updateByKey/${enc(key)}`,
     configBatch: '/admin/config/batch',
+    webSearchApiKey: '/admin/config/webSearchApiKey',
     // 旧平台 Provider 端点（保留兼容 verify 脚本）
     platformProviders: '/admin/platform/providers/list',
     platformProviderApiKey: (provider: string) => `/admin/platform/providers/saveApiKeyByProvider/${enc(provider)}`,

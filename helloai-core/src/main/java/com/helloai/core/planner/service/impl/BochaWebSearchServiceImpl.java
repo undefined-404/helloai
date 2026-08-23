@@ -3,6 +3,7 @@ package com.helloai.core.planner.service.impl;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.config.WebSearchProperties;
+import com.helloai.core.planner.search.WebSearchCredentialKeyStore;
 import com.helloai.core.planner.search.WebSearchResult;
 import com.helloai.core.planner.service.WebSearchService;
 import lombok.extern.slf4j.Slf4j;
@@ -27,6 +28,9 @@ import java.util.Map;
  * <code>summary=true</code> 让博查返回 AI 摘要，省去自解析网页的负担。</p>
  *
  * <p>失败语义：捕获所有异常返回空列表，不抛出（{@link WebSearchService} 契约）。</p>
+ *
+ * <p>API Key 解析统一走 {@link WebSearchCredentialKeyStore}（sys_config 加密值 >
+ * yml/env 兜底，系统设置页可写），不再直读 properties 避免占位符字面量误用。</p>
  */
 @Slf4j
 @Service
@@ -34,11 +38,15 @@ import java.util.Map;
 public class BochaWebSearchServiceImpl implements WebSearchService {
 
     private final WebSearchProperties properties;
+    private final WebSearchCredentialKeyStore credentialKeyStore;
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
 
-    public BochaWebSearchServiceImpl(WebSearchProperties properties, ObjectMapper objectMapper) {
+    public BochaWebSearchServiceImpl(WebSearchProperties properties,
+                                     WebSearchCredentialKeyStore credentialKeyStore,
+                                     ObjectMapper objectMapper) {
         this.properties = properties;
+        this.credentialKeyStore = credentialKeyStore;
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(properties.getTimeoutMs()))
@@ -50,8 +58,9 @@ public class BochaWebSearchServiceImpl implements WebSearchService {
 
     @Override
     public List<WebSearchResult> search(String query, int maxResults) {
-        if (properties.getBochaApiKey() == null || properties.getBochaApiKey().isBlank()) {
-            log.warn("博查 API Key 未配置（helloai.web-search.bocha-api-key），跳过本次搜索");
+        String apiKey = credentialKeyStore.resolveBochaApiKey();
+        if (apiKey == null || apiKey.isBlank()) {
+            log.warn("博查 API Key 未配置（系统设置页「联网搜索」或 env BOCHA_API_KEY），跳过本次搜索");
             return List.of();
         }
         if (query == null || query.isBlank()) return List.of();
@@ -68,7 +77,7 @@ public class BochaWebSearchServiceImpl implements WebSearchService {
                     .uri(URI.create(properties.getBochaBaseUrl()))
                     .timeout(Duration.ofMillis(properties.getTimeoutMs()))
                     .header("Content-Type", "application/json")
-                    .header("Authorization", "Bearer " + properties.getBochaApiKey())
+                    .header("Authorization", "Bearer " + apiKey)
                     .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
                     .build();
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));

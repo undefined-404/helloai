@@ -100,6 +100,10 @@ export const settingsApi = {
   batchUpdateConfig(map: Record<string, string>) {
     return request.put(paths.admin.configBatch, { config: map })
   },
+  /** 保存博查联网搜索 API Key（后端加密落库，实时生效）。 */
+  saveWebSearchApiKey(value: string) {
+    return request.put(paths.admin.webSearchApiKey, { value })
+  },
   // ---- 旧端点（保留兼容）----
   listProviders() {
     return request.get<any, ProviderConfigItem[]>(paths.admin.platformProviders)
