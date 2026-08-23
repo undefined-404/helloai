@@ -2,6 +2,10 @@ package com.helloai.core.review.service;
 
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.helloai.common.constant.ReviewResult;
+import com.helloai.core.review.dto.DefectDistribution;
+import com.helloai.core.review.dto.QualityTrendPoint;
+import com.helloai.core.review.dto.ReviewerLeniency;
+import com.helloai.core.review.dto.ReworkRoundPoint;
 import com.helloai.core.review.entity.ReviewRecheckLog;
 import com.helloai.core.review.entity.ReviewRecord;
 
@@ -93,4 +97,38 @@ public interface ReviewService extends IService<ReviewRecord> {
                                    ReviewResult originalResult, ReviewResult recheckResult,
                                    boolean discrepancy, Long reviewerAgentId,
                                    Integer score, String issues, String comment);
+
+    /**
+     * 质量趋势源（Phase 5 看板）：窗口内按天分组的审查统计。
+     *
+     * @param days 统计窗口（天）；&lt;=0 按 30 兜底
+     * @return 按日期升序的趋势点；窗口内无数据返回空列表
+     */
+    List<QualityTrendPoint> statsTrendSource(int days);
+
+    /**
+     * 驳回原因分布（Phase 5 看板）：窗口内 issues 的 {@code [defect]} 标签计数。
+     *
+     * <p>解析口径与质量画像增量/rebuild 一致（复用 agent 域 DefectLabelParser）。</p>
+     *
+     * @param days 统计窗口（天）；&lt;=0 按 30 兜底
+     * @return 按计数降序（同计数按标签字典序）；无标签返回空列表
+     */
+    List<DefectDistribution> statsDefectDistribution(int days);
+
+    /**
+     * 返工轮次分布（Phase 5 看板）：窗口内按审查轮次分组计数。
+     *
+     * @param days 统计窗口（天）；&lt;=0 按 30 兜底
+     * @return 按 round 升序；窗口内无数据返回空列表
+     */
+    List<ReworkRoundPoint> statsReworkDistribution(int days);
+
+    /**
+     * Reviewer 放水率（Phase 5 看板）：窗口内审查者维度通过率统计。
+     *
+     * @param days 统计窗口（天）；&lt;=0 按 30 兜底
+     * @return 按审查记录数降序；reviewerName 经 agent 域服务补名（缺失显示 ID 字符串）
+     */
+    List<ReviewerLeniency> statsReviewerLeniency(int days);
 }

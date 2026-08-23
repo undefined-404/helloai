@@ -2,11 +2,15 @@ package com.helloai.core.agent.quality.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.quality.DefectLabelParser;
+import com.helloai.core.agent.quality.dto.AgentQualityRank;
+import com.helloai.core.agent.quality.dto.QualityOverview;
 import com.helloai.core.agent.quality.dto.RebuildSourceRow;
 import com.helloai.core.agent.quality.entity.AgentQualityProfile;
 import com.helloai.core.agent.quality.mapper.AgentQualityProfileMapper;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
+import com.helloai.core.agent.service.AgentService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -16,6 +20,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Agent 质量画像服务实现（反馈回路第 1 层）。
@@ -32,6 +37,9 @@ public class AgentQualityProfileServiceImpl
 
     /** 历史表现节 TOP3 驳回原因条数。 */
     private static final int HISTORY_TOP_N = 3;
+
+    /** Phase 5 看板排行补名用：agent 表只读查询，与画像域无环（已核验依赖清单）。 */
+    private final AgentService agentService;
 
     @Override
     public AgentQualityProfile getProfile(Long agentId) {
@@ -218,6 +226,31 @@ public class AgentQualityProfileServiceImpl
         saveOrUpdate(profile);
         log.info("画像重算完成: agentId={}, reviewed={}, approved={}, lastReviewRecordId={}",
                 agentId, reviewed, approved, lastId);
+    }
+
+    @Override
+    public QualityOverview statsOverview() {
+        QualityOverview row = baseMapper.selectOverviewRow();
+        // SQL COALESCE 兜底单行必返回；防御性再兜底
+        return row != null ? row : new QualityOverview(0, 0, 0, 0, 0);
+    }
+
+    @Override
+    public List<AgentQualityRank> statsAgentRankings(Integer limit) {
+        List<AgentQualityRank> rows = baseMapper.selectRankingRows(limit);
+        if (rows == null || rows.isEmpty()) {
+            return List.of();
+        }
+        // 补名 + 质量分逐行重算：qualityScore 复用 computeQualityScore 口径（SQL 只排序不重复实现）
+        List<Long> ids = rows.stream().map(AgentQualityRank::agentId).toList();
+        Map<Long, String> names = agentService.listByIds(ids).stream()
+                .collect(Collectors.toMap(Agent::getId, Agent::getName, (a, b) -> a));
+        return rows.stream().map(r -> {
+            Long id = r.agentId();
+            String name = names.get(id);
+            return new AgentQualityRank(id, name != null ? name : String.valueOf(id),
+                    r.reviewedCount(), r.firstPassRate(), computeQualityScore(id));
+        }).toList();
     }
 
     /** Integer null 安全取 0。 */

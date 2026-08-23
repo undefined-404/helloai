@@ -905,7 +905,7 @@ class SubTaskReviewServiceTest {
         // 默认从严：REQUIRE_BOTH（分歧转人工）；ANY 用例单独覆盖
         when(reviewProperties.getDualReviewConsensusPolicy())
                 .thenReturn(ReviewProperties.DualReviewConsensusPolicy.REQUIRE_BOTH);
-        // 单侧核验超时（秒）：默认 120，防 deadline 立即过期（mock 默认 0）
+        // 单侧核验超时（秒）：默认 90，防 deadline 立即过期（mock 默认 0）
         when(reviewProperties.getDualReviewTimeoutSeconds()).thenReturn(120L);
     }
 

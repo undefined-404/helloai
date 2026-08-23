@@ -1,6 +1,8 @@
 package com.helloai.core.agent.quality.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.helloai.core.agent.quality.dto.AgentQualityRank;
+import com.helloai.core.agent.quality.dto.QualityOverview;
 import com.helloai.core.agent.quality.dto.RebuildSourceRow;
 import com.helloai.core.agent.quality.entity.AgentQualityProfile;
 import org.apache.ibatis.annotations.Mapper;
@@ -114,4 +116,43 @@ public interface AgentQualityProfileMapper extends BaseMapper<AgentQualityProfil
             ORDER BY r.id ASC
             """)
     List<RebuildSourceRow> selectRebuildSource(@Param("agentId") Long agentId);
+
+    /**
+     * 全局质量概览（Phase 5 看板 overview）：画像表存量聚合，单行必返回。
+     *
+     * <p>COALESCE 兜底保证空表也返回一行 0 值；投影 record（非 Map），
+     * 防 Map→JacksonTypeHandler 劫持（§6.132）。</p>
+     */
+    @Select("""
+            SELECT COALESCE(SUM(reviewed_count), 0) AS totalReviewed,
+                   COALESCE(SUM(approved_count), 0) AS totalApproved,
+                   COALESCE(SUM(first_pass_count) * 100 / NULLIF(SUM(first_reviewed_count), 0), 0) AS firstPassRate,
+                   COALESCE(SUM(rework_round_sum) * 1.0 / NULLIF(SUM(reviewed_count), 0), 0) AS avgReworkRounds,
+                   COUNT(*) AS activeExecutors
+            FROM agent_quality_profile
+            WHERE deleted = 0
+            """)
+    QualityOverview selectOverviewRow();
+
+    /**
+     * Agent 质量排行（Phase 5 看板 agents）：一次通过率降序 → 审查数降序 → agentId 升序。
+     *
+     * <p>agentName/qualityScore 为占位：前者由 Service 层经 AgentService 批量补名，
+     * 后者由 Service 层逐行调 {@code computeQualityScore} 重算（口径唯一，防 SQL 漂移）。
+     * limit &lt;= 0 返回全部（LIMIT 子句动态拼接）。</p>
+     */
+    @Select("""
+            <script>
+            SELECT p.agent_id AS agentId,
+                   CAST('' AS VARCHAR) AS agentName,
+                   p.reviewed_count AS reviewedCount,
+                   COALESCE(p.first_pass_count * 100 / NULLIF(p.first_reviewed_count, 0), 0) AS firstPassRate,
+                   0 AS qualityScore
+            FROM agent_quality_profile p
+            WHERE p.deleted = 0 AND p.reviewed_count > 0
+            ORDER BY firstPassRate DESC, p.reviewed_count DESC, p.agent_id ASC
+            <if test="limit != null and limit > 0">LIMIT #{limit}</if>
+            </script>
+            """)
+    List<AgentQualityRank> selectRankingRows(@Param("limit") Integer limit);
 }

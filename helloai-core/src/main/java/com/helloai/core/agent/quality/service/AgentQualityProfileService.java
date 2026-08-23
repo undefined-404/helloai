@@ -1,7 +1,11 @@
 package com.helloai.core.agent.quality.service;
 
 import com.baomidou.mybatisplus.extension.service.IService;
+import com.helloai.core.agent.quality.dto.AgentQualityRank;
+import com.helloai.core.agent.quality.dto.QualityOverview;
 import com.helloai.core.agent.quality.entity.AgentQualityProfile;
+
+import java.util.List;
 
 /**
  * Agent 质量画像服务（反馈回路第 1 层）。
@@ -65,4 +69,26 @@ public interface AgentQualityProfileService extends IService<AgentQualityProfile
      * @param agentId Agent ID；null 或名下无任何评审记录时删除画像行
      */
     void rebuild(Long agentId);
+
+    /**
+     * 全局质量概览（Phase 5 质量度量看板 overview 卡片）。
+     *
+     * <p>数据源为画像表存量（执行者维度累计值，非时间窗口）；空表返回
+     * 全 0 概览（Mapper COALESCE 兜底单行必返回）。</p>
+     *
+     * @return 全局概览
+     */
+    QualityOverview statsOverview();
+
+    /**
+     * Agent 质量排行（Phase 5 质量度量看板 agents 排行）。
+     *
+     * <p>排序：一次通过率降序 → 审查数降序 → agentId 升序；qualityScore
+     * 复用 {@link #computeQualityScore} 逐行计算（口径唯一）；agentName 经
+     * AgentService 批量补名（缺失显示 ID 字符串）。</p>
+     *
+     * @param limit 返回条数上限；null 或 &lt;=0 返回全部
+     * @return 排行列表；无数据返回空列表
+     */
+    List<AgentQualityRank> statsAgentRankings(Integer limit);
 }

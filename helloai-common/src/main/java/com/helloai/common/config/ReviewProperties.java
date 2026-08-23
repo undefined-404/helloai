@@ -34,10 +34,12 @@ public class ReviewProperties {
     private DualReviewConsensusPolicy dualReviewConsensusPolicy = DualReviewConsensusPolicy.REQUIRE_BOTH;
 
     /**
-     * 双审单侧核验超时（秒）。默认 120，与核验互斥锁 TTL 对齐
-     * （超时边界 ≤ 锁 TTL，防锁释放后核验线程仍在跑）。
+     * 双审单侧核验超时（秒）。默认 90，严格收进核验互斥锁 TTL（120s）内：
+     * deadline 在加锁之后才起算，若超时 ≥ 锁 TTL，双审窗口必然超出锁有效期，
+     * 锁释放后 L1/L2/L3 触发源可抢到已过期锁重复双审（重复 review_record →
+     * 画像重复计数）。90s 保证整个双审窗口（等待 + 落库 + 时间线）落在锁内。
      */
-    private long dualReviewTimeoutSeconds = 120;
+    private long dualReviewTimeoutSeconds = 90;
 
     /** 是否启用 Reviewer 抽检任务。默认 true。 */
     private boolean recheckEnabled = true;

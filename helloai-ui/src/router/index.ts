@@ -26,6 +26,7 @@ const routes = [
       { path: 'agents',     component: () => import('@/views/agent/AgentList.vue'), meta: { title: 'Agent管理' } },
       { path: 'agents/:id', component: () => import('@/views/agent/AgentDetail.vue'), meta: { title: 'Agent详情' } },
       { path: 'reviews',    component: () => import('@/views/review/ReviewList.vue'), meta: { title: '审查中心' } },
+      { path: 'quality-dashboard', component: () => import('@/views/quality/QualityDashboard.vue'), meta: { title: '质量看板' } },
       { path: 'rewards',    component: () => import('@/views/reward/RewardList.vue'), meta: { title: '积分流水' } },
       { path: 'activity',   component: () => import('@/views/activity/ActivityList.vue'), meta: { title: '活动流' } },
       { path: 'rules',      component: () => import('@/views/rule/RuleList.vue'), meta: { title: '规则配置' } },

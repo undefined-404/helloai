@@ -1,9 +1,13 @@
 package com.helloai.core.agent.quality;
 
+import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.quality.dto.AgentQualityRank;
+import com.helloai.core.agent.quality.dto.QualityOverview;
 import com.helloai.core.agent.quality.dto.RebuildSourceRow;
 import com.helloai.core.agent.quality.entity.AgentQualityProfile;
 import com.helloai.core.agent.quality.mapper.AgentQualityProfileMapper;
 import com.helloai.core.agent.quality.service.impl.AgentQualityProfileServiceImpl;
+import com.helloai.core.agent.service.AgentService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -44,11 +48,14 @@ class AgentQualityProfileServiceTest {
     @Mock
     private AgentQualityProfileMapper profileMapper;
 
+    @Mock
+    private AgentService agentService;
+
     private AgentQualityProfileServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        service = spy(new AgentQualityProfileServiceImpl());
+        service = spy(new AgentQualityProfileServiceImpl(agentService));
         // ServiceImpl 的 baseMapper 为父类 protected 字段，单测环境通过反射注入 mock
         ReflectionTestUtils.setField(service, "baseMapper", profileMapper);
     }
@@ -295,5 +302,48 @@ class AgentQualityProfileServiceTest {
 
         // 不抛异常即通过；不得触发 INSERT 兜底
         verify(service, never()).save(any());
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  statsOverview / statsAgentRankings（Phase 5 质量度量看板）
+    //  ════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("§6.147: statsOverview 透传 Mapper 聚合，null 兜底全 0")
+    void statsOverviewPassthrough() {
+        QualityOverview row = new QualityOverview(25, 18, 72, 0.6, 4);
+        when(profileMapper.selectOverviewRow()).thenReturn(row);
+        assertThat(service.statsOverview()).isEqualTo(row);
+
+        // SQL COALESCE 理论上单行必返回，防御性 null 兜底也要成立
+        when(profileMapper.selectOverviewRow()).thenReturn(null);
+        assertThat(service.statsOverview()).isEqualTo(new QualityOverview(0, 0, 0, 0.0, 0));
+    }
+
+    @Test
+    @DisplayName("§6.147: statsAgentRankings 补名 + qualityScore 复用 computeQualityScore 口径")
+    void statsAgentRankingsAssemble() {
+        List<AgentQualityRank> rows = List.of(
+                new AgentQualityRank(1L, "", 10, 60, 0),
+                new AgentQualityRank(7L, "", 5, 100, 0));
+        when(profileMapper.selectRankingRows(10)).thenReturn(rows);
+        Agent a1 = new Agent();
+        a1.setId(1L);
+        a1.setName("执行者甲");
+        when(agentService.listByIds(List.of(1L, 7L))).thenReturn(List.of(a1));
+        // qualityScore 由 computeQualityScore 逐行重算（SQL 只排序，占位 0 会被覆盖）
+        doReturn(profile(10, 8, 10, 6, 40)).when(service).getProfile(1L);
+        doReturn(profile(5, 5, 5, 5, 25)).when(service).getProfile(7L);
+
+        List<AgentQualityRank> result = service.statsAgentRankings(10);
+
+        assertThat(result).hasSize(2);
+        assertThat(result.get(0).agentName()).isEqualTo("执行者甲");
+        // 首轮通过率 60%×0.5 + 平均分 4 分归一 75×0.5 = 68
+        assertThat(result.get(0).qualityScore()).isEqualTo(68);
+        assertThat(result.get(1).agentName()).isEqualTo("7");
+        // 100% 通过 + 满分 → 100
+        assertThat(result.get(1).qualityScore()).isEqualTo(100);
+        verify(profileMapper).selectRankingRows(10);
     }
 }

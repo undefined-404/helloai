@@ -12,7 +12,8 @@ import java.util.concurrent.ThreadPoolExecutor;
  *
  * <p>双审的两个不同模型 Reviewer 核验运行在 {@code reviewDualExecutor} 上并行执行，
  * 与执行命令池、拆解池、门铃池相互隔离：单侧核验最坏耗时可达 LLM 调用超时窗口
- * （由 {@code helloai.review.dual-review-timeout-seconds} 控制，默认 120s），
+ * （由 {@code helloai.review.dual-review-timeout-seconds} 控制，默认 90s，
+ * 严格收进核验互斥锁 TTL 120s 内——deadline 加锁后才起算，须留余量），
  * 独立小池防止慢核验占满公共线程资源。</p>
  *
  * <p>拒绝策略选 CallerRunsPolicy（而非 Abort/Discard）：双审核验是编排内联调用，

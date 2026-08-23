@@ -357,7 +357,8 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
      * 任一侧核验不可判定（LLM 失败/不可解析/超时）不冒然改状态，停留 REVIEW 等人工。</p>
      *
      * <p>超时口径：两侧共用同一 deadline（{@code helloai.review.dual-review-timeout-seconds}，
-     * 默认 120s），各以剩余时间等待；超时侧判定为不可判定走 incomplete 路径，
+     * 默认 90s，严格收进核验互斥锁 TTL 120s 内），各以剩余时间等待；超时侧判定为不可判定走
+     * incomplete 路径，
      * future 不取消（LLM 调用已在途，取消无收益），残留线程自然跑完由线程池回收。</p>
      *
      * <p>落库口径：共识后仅落一条 review_record（reviewer1 为记录归属），避免

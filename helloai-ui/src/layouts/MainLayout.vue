@@ -78,6 +78,11 @@
           <el-icon><Select /></el-icon>
           <span>审查中心</span>
         </el-menu-item>
+        <!-- Phase 5 质量度量看板 -->
+        <el-menu-item index="/quality-dashboard">
+          <el-icon><DataAnalysis /></el-icon>
+          <span>质量看板</span>
+        </el-menu-item>
         <!-- 2026-08-16: 积分流水 / 活动流 / 规则配置 暂未启用，先隐藏菜单入口（页面文件保留） -->
         <!-- <el-menu-item index="/rewards">
           <el-icon><Coin /></el-icon>
@@ -186,7 +191,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowDown, Clock, Expand, Fold, Moon, Sunny, Warning } from '@element-plus/icons-vue'
+import { ArrowDown, Clock, DataAnalysis, Expand, Fold, Moon, Sunny, Warning } from '@element-plus/icons-vue'
 import { authApi } from '@/api/auth'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'

@@ -2,7 +2,11 @@ package com.helloai.api.controller;
 
 import com.helloai.common.base.R;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.core.agent.quality.dto.AgentQualityRank;
+import com.helloai.core.agent.quality.dto.QualityOverview;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
+import com.helloai.core.review.dto.QualityDashboardResponse;
+import com.helloai.core.review.service.QualityDashboardService;
 import com.helloai.core.system.service.SysConfigService;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.TaskRunningSpecService;
@@ -12,7 +16,10 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 /**
  * 管理端质量画像端点（反馈回路第 1 层，Phase 1 交付）。
@@ -28,10 +35,13 @@ import org.springframework.web.bind.annotation.RestController;
  *       （auto-assign-on-create 默认关闭，实测需显式触发入口）；</li>
  *   <li>{@code GET /findSpecSectionByTaskId/{taskId}}：返回 TaskRunningSpec 执行上下文
  *       Prompt 段（含契约先行拆解「## 任务契约」节），供
- *       verify-contract-first.ps1 S3/S4 断言契约节渲染（Phase 2）。</li>
+ *       verify-contract-first.ps1 S3/S4 断言契约节渲染（Phase 2）；</li>
+ *   <li>{@code GET /overview}、{@code GET /agents?limit=}、{@code GET /dashboard?days=}：
+ *       质量度量看板三查询端点（Phase 5），薄透传两域统计 Service，供
+ *       verify-quality-dashboard.ps1 字段断言（聚合在 review 域 QualityDashboardService）。</li>
  * </ul>
  *
- * <p>本端点仅面向管理侧实测验证；Phase 5 看板查询端点落地时再行扩展。</p>
+ * <p>本端点仅面向管理侧实测验证。</p>
  *
  * <p>配置门控：全部端点受 sys_config 键 {@code admin.quality.enabled}
  * （值 "true" 开放）控制，生产默认关闭；实测脚本
@@ -52,6 +62,8 @@ public class AdminQualityController {
     private final SubTaskDispatchService subTaskDispatchService;
     private final TaskRunningSpecService taskRunningSpecService;
     private final SysConfigService sysConfigService;
+    /** Phase 5：看板聚合（review 域，Controller 零编排只透传）。 */
+    private final QualityDashboardService qualityDashboardService;
 
     /**
      * 重算指定 Agent 的质量画像（rebuild 兜底）。
@@ -94,6 +106,47 @@ public class AdminQualityController {
             return gateDenied();
         }
         return R.ok(taskRunningSpecService.buildExecutorPromptSection(taskId));
+    }
+
+    /**
+     * 全局质量概览（Phase 5 看板 overview 卡片）。
+     *
+     * @return 画像表存量聚合；空表返回全 0 概览
+     */
+    @GetMapping("/overview")
+    public R<QualityOverview> overview() {
+        if (!isEnabled()) {
+            return gateDenied();
+        }
+        return R.ok(agentQualityProfileService.statsOverview());
+    }
+
+    /**
+     * Agent 质量排行（Phase 5 看板 agents 排行）。
+     *
+     * @param limit 返回条数上限；缺省/&lt;=0 返回全部
+     * @return 一次通过率降序排行（含质量分与补名）
+     */
+    @GetMapping("/agents")
+    public R<List<AgentQualityRank>> agentRankings(@RequestParam(value = "limit", required = false) Integer limit) {
+        if (!isEnabled()) {
+            return gateDenied();
+        }
+        return R.ok(agentQualityProfileService.statsAgentRankings(limit));
+    }
+
+    /**
+     * 质量看板全量数据（Phase 5：趋势/驳回原因/返工轮次/放水率 + 概览）。
+     *
+     * @param days 统计窗口（天）；缺省/&lt;=0 按 30 兜底
+     * @return 聚合响应；排行单独走 {@code /agents} 端点
+     */
+    @GetMapping("/dashboard")
+    public R<QualityDashboardResponse> dashboard(@RequestParam(value = "days", required = false) Integer days) {
+        if (!isEnabled()) {
+            return gateDenied();
+        }
+        return R.ok(qualityDashboardService.assemble(days != null ? days : 0));
     }
 
     private boolean isEnabled() {

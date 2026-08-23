@@ -11,6 +11,10 @@ import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.RewardService;
+import com.helloai.core.review.dto.DefectDistribution;
+import com.helloai.core.review.dto.QualityTrendPoint;
+import com.helloai.core.review.dto.ReviewerLeniency;
+import com.helloai.core.review.dto.ReworkRoundPoint;
 import com.helloai.core.review.mapper.ReviewRecordMapper;
 import com.helloai.core.review.mapper.ReviewRecheckLogMapper;
 import com.helloai.core.review.service.impl.ReviewServiceImpl;
@@ -22,9 +26,12 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -218,5 +225,75 @@ class ReviewServiceTest {
         assertThatThrownBy(() -> reviewService.createReview(SUB_TASK_ID, REVIEWER_ID,
                 ReviewResult.REJECTED, 1, "  ", null, NEW_AGENT_ID))
                 .isInstanceOf(BizException.class);
+    }
+
+    @Test
+    @DisplayName("§6.147: 质量趋势源透传 Mapper，days<=0 归一 30 天")
+    void shouldPassthroughTrendSourceWithNormalizedDays() {
+        List<QualityTrendPoint> points = List.of(
+                new QualityTrendPoint("2026-08-20", 3, 2, 3.7),
+                new QualityTrendPoint("2026-08-21", 5, 4, 4.0));
+        when(reviewRecordMapper.selectTrendSource(30)).thenReturn(points);
+
+        assertThat(reviewService.statsTrendSource(0)).isEqualTo(points);
+        verify(reviewRecordMapper).selectTrendSource(30);
+
+        // 窗口正常传参直接透传
+        List<QualityTrendPoint> empty = new ArrayList<>();
+        when(reviewRecordMapper.selectTrendSource(7)).thenReturn(empty);
+        assertThat(reviewService.statsTrendSource(7)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("§6.147: 驳回原因分布复用 DefectLabelParser 聚合，按计数降序")
+    void shouldAggregateDefectDistribution() {
+        // issues 四元组真实格式：[defect] 描述 [location] 位置 [impact] 影响 [evidence] 依据
+        when(reviewRecordMapper.selectIssuesForStats(30)).thenReturn(List.of(
+                "产出有误 [defect] 规格缺失 [location] 模块A [impact] 高 [evidence] 复现步骤",
+                "[defect] 规格缺失 [location] 模块A [impact] 高 [evidence] 复现步骤" +
+                        " [defect] 实现偏差 [location] 模块B [impact] 中 [evidence] 日志",
+                "无可复现证据"));
+
+        List<DefectDistribution> result = reviewService.statsDefectDistribution(0);
+
+        assertThat(result).hasSize(2);
+        // 降序：规格缺失 2 次 > 实现偏差 1 次
+        assertThat(result.get(0).defectTag()).isEqualTo("规格缺失");
+        assertThat(result.get(0).count()).isEqualTo(2);
+        assertThat(result.get(1).defectTag()).isEqualTo("实现偏差");
+        assertThat(result.get(1).count()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("§6.147: 返工轮次分布透传 Mapper（round 升序由 SQL 保证）")
+    void shouldPassthroughReworkDistribution() {
+        List<ReworkRoundPoint> points = List.of(
+                new ReworkRoundPoint(1, 12),
+                new ReworkRoundPoint(2, 5));
+        when(reviewRecordMapper.selectReworkDistribution(30)).thenReturn(points);
+
+        assertThat(reviewService.statsReworkDistribution(-1)).isEqualTo(points);
+        verify(reviewRecordMapper).selectReworkDistribution(30);
+    }
+
+    @Test
+    @DisplayName("§6.147: Reviewer 放水率经 AgentService 批量补名，缺失显示 ID 字符串")
+    void shouldFillReviewerNameViaAgentService() {
+        List<ReviewerLeniency> rows = List.of(
+                new ReviewerLeniency(2L, "", 5, 80, 4.2),
+                new ReviewerLeniency(9L, "", 3, 33, 3.0));
+        when(reviewRecordMapper.selectReviewerLeniency(30)).thenReturn(rows);
+        Agent reviewer = new Agent();
+        reviewer.setId(2L);
+        reviewer.setName("审查者A");
+        when(agentService.listByIds(List.of(2L, 9L))).thenReturn(List.of(reviewer));
+
+        List<ReviewerLeniency> result = reviewService.statsReviewerLeniency(30);
+
+        assertThat(result).hasSize(2);
+        assertThat(result.get(0).reviewerName()).isEqualTo("审查者A");
+        // 缺失（9L 不在 agent 表）回退 ID 字符串，其余字段保持 SQL 投影值
+        assertThat(result.get(1).reviewerName()).isEqualTo("9");
+        assertThat(result.get(1).approveRate()).isEqualTo(33);
     }
 }

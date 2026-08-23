@@ -7,9 +7,14 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.quality.DefectLabelParser;
 import com.helloai.core.agent.quality.QualityProfileUpdater;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ExecutionCommandService;
+import com.helloai.core.review.dto.DefectDistribution;
+import com.helloai.core.review.dto.QualityTrendPoint;
+import com.helloai.core.review.dto.ReviewerLeniency;
+import com.helloai.core.review.dto.ReworkRoundPoint;
 import com.helloai.core.review.entity.ReviewRecheckLog;
 import com.helloai.core.review.entity.ReviewRecord;
 import com.helloai.core.review.mapper.ReviewRecheckLogMapper;
@@ -24,8 +29,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * 审查服务实现：人工审查、自动核验落库与审查记录查询。
@@ -213,5 +220,59 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
         log.info("抽检复审落库: reviewRecordId={}, subTaskId={}, original={}, recheck={}, discrepancy={}",
                 reviewRecordId, subTaskId, originalResult, recheckResult, discrepancy);
         return recheckLog;
+    }
+
+    @Override
+    public List<QualityTrendPoint> statsTrendSource(int days) {
+        List<QualityTrendPoint> points = baseMapper.selectTrendSource(normalizeDays(days));
+        return points != null ? points : List.of();
+    }
+
+    @Override
+    public List<DefectDistribution> statsDefectDistribution(int days) {
+        List<String> issuesList = baseMapper.selectIssuesForStats(normalizeDays(days));
+        if (issuesList == null || issuesList.isEmpty()) {
+            return List.of();
+        }
+        // 解析口径与画像增量/rebuild 完全一致（DefectLabelParser），保证看板对账一致
+        Map<String, Long> merged = new LinkedHashMap<>();
+        for (String issues : issuesList) {
+            DefectLabelParser.parse(issues).forEach((label, count) ->
+                    merged.merge(label, count.longValue(), Long::sum));
+        }
+        return merged.entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed()
+                        .thenComparing(Map.Entry.comparingByKey()))
+                .map(e -> new DefectDistribution(e.getKey(), e.getValue()))
+                .toList();
+    }
+
+    @Override
+    public List<ReworkRoundPoint> statsReworkDistribution(int days) {
+        List<ReworkRoundPoint> points = baseMapper.selectReworkDistribution(normalizeDays(days));
+        return points != null ? points : List.of();
+    }
+
+    @Override
+    public List<ReviewerLeniency> statsReviewerLeniency(int days) {
+        List<ReviewerLeniency> rows = baseMapper.selectReviewerLeniency(normalizeDays(days));
+        if (rows == null || rows.isEmpty()) {
+            return List.of();
+        }
+        // 审查者补名：批量查 agent 表，缺失（如已删除）显示 ID 字符串
+        List<Long> ids = rows.stream().map(ReviewerLeniency::reviewerAgentId).toList();
+        Map<Long, String> names = agentService.listByIds(ids).stream()
+                .collect(Collectors.toMap(Agent::getId, Agent::getName, (a, b) -> a));
+        return rows.stream().map(r -> {
+            Long id = r.reviewerAgentId();
+            String name = names.get(id);
+            return new ReviewerLeniency(id, name != null ? name : String.valueOf(id),
+                    r.reviewedCount(), r.approveRate(), r.avgScore());
+        }).toList();
+    }
+
+    /** 看板统计窗口归一：&lt;=0 按 30 天兜底。 */
+    private int normalizeDays(int days) {
+        return days > 0 ? days : 30;
     }
 }
