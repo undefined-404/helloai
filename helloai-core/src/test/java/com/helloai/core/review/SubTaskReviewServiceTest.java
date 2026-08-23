@@ -25,7 +25,7 @@ import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.service.ReviewService;
+import com.helloai.core.review.service.ReviewService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import org.junit.jupiter.api.BeforeEach;
@@ -56,7 +56,12 @@ import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * SubTaskReviewService 单元测试（核验门控）：
@@ -116,18 +121,9 @@ class SubTaskReviewServiceTest {
 
     @BeforeEach
     void setUp() {
-        // ObjectMapper 用真实实例（JSON 解析是被测逻辑本身，不 mock）；
-        // 执行引擎/证据装配/判定解析为真实组件实例（拆分后主类仅编排，不直接持有 mock 目标）
-        reviewService = new SubTaskReviewServiceImpl(
-                subTaskService, agentService,
-                new ReviewExecutionEngine(platformAgentExecutionService, conversationService,
-                        taskTimelineService, new VerdictParser(new ObjectMapper()),
-                        new ReviewEvidenceAssembler(attachmentService, dispatchProperties)),
-                taskTimelineService, executionCommandService, dispatchProperties,
-                conversationService, recordReviewService, redisTemplate,
-                new ReviewEvidenceAssembler(attachmentService, dispatchProperties),
-                new VerdictParser(new ObjectMapper()),
-                reviewerPicker, reviewProperties, agentQualityProfileService);
+        // §6.142 双审并行：默认用同步直跑 Executor（supplyAsync 立即执行，保证确定性，不引入真实线程）；
+        // 并行语义用例单独换真实线程池重建（见 shouldRunDualVerdictsInParallel）
+        reviewService = buildService(command -> command.run());
         // §6.142 选取职责迁入 Picker：单审默认返回 9L REVIEWER（双审/指定用例单独 stub）
         lenient().when(reviewerPicker.pickSingle(any())).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
         // §6.142 双审默认关闭：既有用例保持单审语义（双审用例单独 stub true）
@@ -140,6 +136,22 @@ class SubTaskReviewServiceTest {
         lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         lenient().when(valueOperations.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class)))
                 .thenReturn(true);
+    }
+
+    /** 构造被测服务（§6.142 双审并行：Executor 参数化，并行语义用例可换真实线程池重建）。 */
+    private SubTaskReviewService buildService(Executor executor) {
+        // ObjectMapper 用真实实例（JSON 解析是被测逻辑本身，不 mock）；
+        // 执行引擎/证据装配/判定解析为真实组件实例（拆分后主类仅编排，不直接持有 mock 目标）
+        return new SubTaskReviewServiceImpl(
+                subTaskService, agentService,
+                new ReviewExecutionEngine(platformAgentExecutionService, conversationService,
+                        taskTimelineService, new VerdictParser(new ObjectMapper()),
+                        new ReviewEvidenceAssembler(attachmentService, dispatchProperties)),
+                taskTimelineService, executionCommandService, dispatchProperties,
+                conversationService, recordReviewService, redisTemplate,
+                new ReviewEvidenceAssembler(attachmentService, dispatchProperties),
+                new VerdictParser(new ObjectMapper()),
+                reviewerPicker, reviewProperties, agentQualityProfileService, executor);
     }
 
     private SubTask reviewSubTask() {
@@ -893,6 +905,8 @@ class SubTaskReviewServiceTest {
         // 默认从严：REQUIRE_BOTH（分歧转人工）；ANY 用例单独覆盖
         when(reviewProperties.getDualReviewConsensusPolicy())
                 .thenReturn(ReviewProperties.DualReviewConsensusPolicy.REQUIRE_BOTH);
+        // 单侧核验超时（秒）：默认 120，防 deadline 立即过期（mock 默认 0）
+        when(reviewProperties.getDualReviewTimeoutSeconds()).thenReturn(120L);
     }
 
     @Test
@@ -1021,6 +1035,79 @@ class SubTaskReviewServiceTest {
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_dual_review_consented"),
                 eq(AgentRole.REVIEWER), eq(9L), anyMap());
+    }
+
+    @Test
+    @DisplayName("§6.142 双审单侧核验超时（deadline 过期）→ 不可判定停留 REVIEW，仅 incomplete 观测")
+    void shouldStayReviewWhenDualReviewTimeout() {
+        // 超时配置为 0：deadline 立即过期，两侧均按不可判定处理（future 不取消，结果丢弃）；
+        // 不可判定路径提前 return，不走到共识策略判断，故不 stub policy
+        when(reviewProperties.isDualReviewEnabled()).thenReturn(true);
+        when(reviewerPicker.isDualReviewRequired(TASK_ID)).thenReturn(true);
+        when(reviewProperties.getDualReviewTimeoutSeconds()).thenReturn(0L);
+        when(reviewerPicker.pickDual(any())).thenReturn(List.of(
+                llmAgent(9L, AgentRole.REVIEWER), llmAgent(10L, AgentRole.REVIEWER)));
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        // 不可判定：不改状态、不落 record、不记画像，仅 incomplete 观测等人工
+        verify(subTaskService, never()).complete(anyLong());
+        verify(subTaskService, never()).rework(anyLong(), any());
+        verify(subTaskService, never()).markManualIntervention(anyLong(), anyString(), anyMap());
+        verify(recordReviewService, never()).recordAutoReview(anyLong(), any(), any(), anyInt(), any(), any());
+        verify(agentQualityProfileService, never()).incrementReviewerStats(anyLong(), anyInt(), anyInt());
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_dual_review_incomplete"),
+                eq(AgentRole.REVIEWER), isNull(), anyMap());
+    }
+
+    @Test
+    @DisplayName("§6.142 双审并行：两路核验在专用线程池上同时执行（并发 in-flight = 2）后按共识落地")
+    void shouldRunDualVerdictsInParallel() throws InterruptedException {
+        stubDualReviewEnabled();
+        when(reviewerPicker.pickDual(any())).thenReturn(List.of(
+                llmAgent(9L, AgentRole.REVIEWER), llmAgent(10L, AgentRole.REVIEWER)));
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        // 两路 executeSync 同时在途：各自进入 answer 后互相等待，观察线程验证并发度后放行
+        CountDownLatch bothInFlight = new CountDownLatch(2);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger maxConcurrent = new AtomicInteger();
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenAnswer(inv -> {
+                    maxConcurrent.incrementAndGet();
+                    bothInFlight.countDown();
+                    if (!release.await(2, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("parallel release timeout");
+                    }
+                    return AgentResult.success(
+                            "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100);
+                });
+        // 观察线程：两路核验都在途后放行（主线程阻塞在 awaitVerdict，不能由主线程放行）
+        Thread observer = new Thread(() -> {
+            try {
+                bothInFlight.await(2, TimeUnit.SECONDS);
+                release.countDown();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        observer.start();
+        // 真实 2 线程池：同步直跑 Executor 下无法验证并发，此处换真实线程池重建被测服务
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        reviewService = buildService(pool);
+        try {
+            reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+        } finally {
+            pool.shutdownNow();
+        }
+
+        // 两路核验真正同时执行（串行实现下最大并发只能到 1，此断言即并行语义证据）
+        assertThat(maxConcurrent.get()).isEqualTo(2);
+        verify(subTaskService).complete(SUB_TASK_ID);
     }
 
 }

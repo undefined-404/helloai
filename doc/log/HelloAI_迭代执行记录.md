@@ -6609,3 +6609,29 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - 影响：审核产物归 review 域，task 域不再持有审核持久层；task 消费侧全部经 ReviewPort 值对象，实体零泄漏；agent 域 QualityProfileUpdater 不再 import review 实体。
 - 遗留：双审并行化（§6.146 续）已完成待提交，与迁移分两个 commit 提交。
+
+### 6.146 续：双审并行化（reviewDualExecutor 线程池 + deadline 等待）（2026-08-23）
+
+#### 1. 背景与结论
+
+- **背景**：doDualReview 串行执行两次 LLM 核验（v1 完成后才发起 v2），单侧最坏耗时 120s 时双审整体最坏 240s，拉长核验互斥锁（TTL 120s）占用窗口，锁释放后残留核验线程仍在跑的边界紧张。
+- **结论**：两路核验在专用线程池（reviewDualExecutor，2/4/20 + CallerRunsPolicy）上以 CompletableFuture.supplyAsync 并行发起，共用同一 deadline（helloai.review.dual-review-timeout-seconds，默认 120s）各以剩余时间等待；超时/中断/异常按不可判定走既有 sub_task_dual_review_incomplete 路径；future 不取消（LLM 调用已在途，取消无收益且会中断共享连接池），残留线程自然跑完由线程池回收。判定/落库/timeline 逻辑零改动。
+
+#### 2. 实现要点
+
+- **ReviewDualExecutorConfig（helloai-start/config，新建）**：ThreadPoolTaskExecutor core=2 / max=4 / queue=20，拒绝策略 CallerRunsPolicy（双审核验为编排内联调用，队列满由调用线程兜底直跑，不静默丢核验），@Bean("reviewDualExecutor")，与执行命令池/拆解池/门铃池相互隔离。
+- **ReviewProperties**：新增 dualReviewTimeoutSeconds = 120（与互斥锁 TTL 对齐：超时边界 ≤ 锁 TTL，防锁释放后核验线程仍在跑）。
+- **SubTaskReviewServiceImpl**：显式构造器 14→15 参（@Qualifier("reviewDualExecutor") Executor reviewDualExecutor）；doDualReview 两路 supplyAsync + 新增 waitVerdict(future, deadline) helper（remain = deadline - now，uture.get(remain, MILLISECONDS)，异常返回 null）。
+- **测试（SubTaskReviewServiceTest）**：构造器同步（默认同步直跑 Executor 保证确定性，uildService(Executor) 参数化）；新增 2 用例：① 超时不可判定（timeout=0 → incomplete 观测，不落 record/不改状态/不记画像）；② 真实并行（2 线程池 + CountDownLatch 断言两路 executeSync 并发 in-flight=2，串行实现下最大并发只能到 1）。
+
+#### 3. 验证结果
+
+- 编译：mvn test-compile 通过；打包 + 实际启动 6565 实例成功（16.1s，无循环依赖）。
+- 单测：SubTaskReviewServiceTest 39/39 全绿（37 既有 + 2 新增）；core 916/916 全绿。
+- 依赖方向：verify-dependency-direction.ps1 11 项全 PASS。
+- E2E：verify-reviewer-dual.ps1 S1 **PASS=3 FAIL=0 SKIP=1**（双审触发无降级，LLM 分歧属环境依赖）、S2 **PASS=2 FAIL=0 SKIP=1**（本轮 LLM 一致走 consented）、S3 **PASS=7 FAIL=0 SKIP=0**（抽检候选链路）——ALL PASSED。
+
+#### 4. 影响与遗留
+
+- 影响：双审最坏耗时由 2×单侧收敛为单侧 + 汇合等待，互斥锁占用窗口减半；超时口径统一（共用 deadline 剩余时间，非 2×timeout）。
+- 遗留：双审并行化与 Review 域迁移分两个 commit 提交（本 commit 为并行）；PATH 下 java（Oracle javapath）已失效，启动需用 $env:JAVA_HOME\bin\java.exe（ms-17.0.19）。

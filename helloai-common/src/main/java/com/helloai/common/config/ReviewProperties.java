@@ -33,6 +33,12 @@ public class ReviewProperties {
     /** 双审共识策略。默认 REQUIRE_BOTH。 */
     private DualReviewConsensusPolicy dualReviewConsensusPolicy = DualReviewConsensusPolicy.REQUIRE_BOTH;
 
+    /**
+     * 双审单侧核验超时（秒）。默认 120，与核验互斥锁 TTL 对齐
+     * （超时边界 ≤ 锁 TTL，防锁释放后核验线程仍在跑）。
+     */
+    private long dualReviewTimeoutSeconds = 120;
+
     /** 是否启用 Reviewer 抽检任务。默认 true。 */
     private boolean recheckEnabled = true;
 

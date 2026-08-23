@@ -20,12 +20,13 @@ import com.helloai.core.shared.event.SubTaskSubmittedForReviewEvent;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.policy.TaskAgentPolicy;
-import com.helloai.core.task.service.ReviewService;
+import com.helloai.core.review.service.ReviewService;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -39,6 +40,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -101,6 +104,8 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
     private final ReviewProperties reviewProperties;
     /** §6.142 双审 Reviewer 维度画像计数增量（best-effort 不阻断主链路）。 */
     private final AgentQualityProfileService agentQualityProfileService;
+    /** §6.142 双审并行化：两路核验共享的专用线程池（helloai-start ReviewDualExecutorConfig）。 */
+    private final Executor reviewDualExecutor;
 
     /**
      * 显式全参构造器（绕开 Lombok {@code @RequiredArgsConstructor} 在
@@ -120,7 +125,8 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                                     VerdictParser verdictParser,
                                     ReviewerPicker reviewerPicker,
                                     ReviewProperties reviewProperties,
-                                    AgentQualityProfileService agentQualityProfileService) {
+                                    AgentQualityProfileService agentQualityProfileService,
+                                    @Qualifier("reviewDualExecutor") Executor reviewDualExecutor) {
         this.subTaskService = subTaskService;
         this.agentService = agentService;
         this.reviewExecutionEngine = reviewExecutionEngine;
@@ -135,6 +141,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         this.reviewerPicker = reviewerPicker;
         this.reviewProperties = reviewProperties;
         this.agentQualityProfileService = agentQualityProfileService;
+        this.reviewDualExecutor = reviewDualExecutor;
     }
 
     /** AFTER_COMMIT 异步监听：结果回报事务提交后触发自动核验。 */
@@ -343,11 +350,15 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
     }
 
     /**
-     * 双审编排：两个不同模型 Reviewer 独立核验，按共识策略落地。
+     * 双审编排：两个不同模型 Reviewer 在专用线程池上<b>并行</b>独立核验，按共识策略落地。
      *
      * <p>REQUIRE_BOTH（默认）：两审一致按共识走既有通过/驳回链；分歧停 REVIEW
      * 转人工介入（复用前端人工介入面板，零新增通道）。ANY：任一通过即按通过落地。
-     * 任一侧核验不可判定（LLM 失败/不可解析）不冒然改状态，停留 REVIEW 等人工。</p>
+     * 任一侧核验不可判定（LLM 失败/不可解析/超时）不冒然改状态，停留 REVIEW 等人工。</p>
+     *
+     * <p>超时口径：两侧共用同一 deadline（{@code helloai.review.dual-review-timeout-seconds}，
+     * 默认 120s），各以剩余时间等待；超时侧判定为不可判定走 incomplete 路径，
+     * future 不取消（LLM 调用已在途，取消无收益），残留线程自然跑完由线程池回收。</p>
      *
      * <p>落库口径：共识后仅落一条 review_record（reviewer1 为记录归属），避免
      * 双审两条 record 使执行者画像 reviewed_count 重复计数（QualityProfileUpdater
@@ -355,8 +366,14 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
      */
     private void doDualReview(SubTask subTask, Long executorAgentId, Agent reviewer1, Agent reviewer2) {
         Long subTaskId = subTask.getId();
-        ReviewVerdict v1 = reviewExecutionEngine.execute(subTask, reviewer1);
-        ReviewVerdict v2 = reviewExecutionEngine.execute(subTask, reviewer2);
+        long timeoutMs = reviewProperties.getDualReviewTimeoutSeconds() * 1000L;
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        CompletableFuture<ReviewVerdict> future1 = CompletableFuture.supplyAsync(
+                () -> reviewExecutionEngine.execute(subTask, reviewer1), reviewDualExecutor);
+        CompletableFuture<ReviewVerdict> future2 = CompletableFuture.supplyAsync(
+                () -> reviewExecutionEngine.execute(subTask, reviewer2), reviewDualExecutor);
+        ReviewVerdict v1 = awaitVerdict(future1, deadline);
+        ReviewVerdict v2 = awaitVerdict(future2, deadline);
         if (v1 == null || v2 == null) {
             log.warn("双审核验不完整，停留 REVIEW 等人工: subTaskId={}, verdict1Ready={}, verdict2Ready={}",
                     subTaskId, v1 != null, v2 != null);
@@ -406,6 +423,26 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         log.info("双审{}: subTaskId={}, consensus={}, reviewer1={}, reviewer2={}",
                 requireBoth ? "一致" : "落地", subTaskId,
                 consensusPass ? "APPROVED" : "REJECTED", reviewer1.getId(), reviewer2.getId());
+    }
+
+    /**
+     * 等待单侧核验结果（双审并行：以共同 deadline 的剩余时间等待）。
+     *
+     * <p>超时/中断/异常均返回 null（不可判定），由调用方走既有
+     * {@code sub_task_dual_review_incomplete} 路径；future 不取消：核验 LLM 调用
+     * 已在途，取消无收益且会中断共享连接池，残留线程自然跑完由线程池回收。</p>
+     */
+    private ReviewVerdict awaitVerdict(CompletableFuture<ReviewVerdict> future, long deadline) {
+        long remain = deadline - System.currentTimeMillis();
+        if (remain <= 0) {
+            return null;
+        }
+        try {
+            return future.get(remain, TimeUnit.MILLISECONDS);
+        } catch (Exception e) {
+            log.warn("双审单侧核验等待异常（按不可判定处理）: err={}", e.getMessage());
+            return null;
+        }
     }
 
     /** Reviewer 维度画像计数增量（best-effort，失败不阻断双审主链路）。 */
