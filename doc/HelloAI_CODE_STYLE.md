@@ -2,8 +2,9 @@
 
 > 适用项目：HelloAI（AI Agent 协作调度平台）  
 > 生效范围：后端单体服务 + 前端管理后台（Vue 3 / Element Plus）  
-> 版本：V1.14  
+> 版本：V1.15  
 > 最后更新：2026-08-23  
+> 本版重点 V1.15：§3.x 质量看板聚合归属与 P2/P3 修正——Phase 5 质量度量看板落地（§6.147）：review 域统计挂 ReviewRecordMapper 4 投影 SQL + ReviewService 4 方法（趋势/驳回原因/返工轮次/放水率），review 域新增 dto 子包（QualityTrendPoint / DefectDistribution / ReworkRoundPoint / ReviewerLeniency / QualityDashboardResponse）；agent 域 AgentQualityProfileMapper 2 投影 SQL（overview/rankings，qualityScore 口径唯一收口 Java `computeQualityScore` 防 SQL 漂移，排行补名走 AgentService.listByIds）；看板聚合归 review 域 `QualityDashboardService`（Controller 零编排只透传）；P2 修正——`ReviewProperties.dualReviewTimeoutSeconds` 默认 120→90s（deadline 加锁后才起算，90s 保证双审窗口收进核验锁 TTL 120s 内，防锁过期竞态重复双审）；P3 修正——规则 3 端口反转示例 ReviewServiceImpl 改 `ReviewPortAdapter`（独立适配器断环，消费方 task.port.ReviewPort 由 review 域 ReviewPortAdapter 实现）
 > 本版重点 V1.14：§3.x 业务域分包修订——review 域由「仅 service 族」扩为完整子包（entity / mapper / service / service.impl / mqconsumer / picker / support），评审相关实体（ReviewRecord / ReviewRecheckLog）与审核服务（ReviewService）自 task 域归位 review 域（§6.146 域迁移；task 域消费方改经 task.port.ReviewPort 端口反转，agent 域 QualityProfileUpdater 改原子参数签名）；「审核产物归审核域」消除历史归属错位
 > 本版重点 V1.13：§7.1 事务口径修正——"单语句原子写不豁免"改为"**单语句原子写可豁免**"（单实体单条 UPDATE/DELETE 且无跨实体一致性诉求，豁免时须在 Javadoc 注明；追加第二条写操作必须补注解；best-effort 降级写豁免但须声明降级语义，参考 `SubTaskServiceImpl.markManualIntervention`）；`SubTaskServiceImpl.getByIdForUpdate` 实现类补 Javadoc 强制注明"必须在调用方事务内调用"（行锁随调用方事务存续，接口注释原已有同款语义，迭代记录 §6.141）
 > 本版重点 V1.12：§3.x 依赖方向红线双向化——"禁止跨域直捅 Mapper"对所有方向生效（含合法向下依赖），task 域对 `agent.mapper` import 清零（TaskServiceImpl 5 个 / FeedServiceImpl / SubTaskServiceImpl 共 7 处直调收口为 AgentService 接口方法，迭代记录 §6.140）；规则 5 配套脚本新增 @MapperScan 登记断言（所有 `*Mapper.java` 包路径必须登记，防启动期炸）；§7.1 事务注解明确"单语句原子写不豁免 @Transactional"（SubTaskServiceImpl.updateDependsOn 已补注解）
@@ -291,7 +292,7 @@ core 模块统一采用"业务域分包 + 域内技术分层"，禁止新增顶�
 - com.helloai.core.system  系统支撑域（用户、配置、规则、模块、凭据、附件、存储、 **LLM Provider**）
 - com.helloai.core.shared  跨域基础设施（event、doorbell、handler、util）
 
-业务域（agent / task / planner / review / system）固定子包：entity / mapper / service / service.impl；review 域完整子包：entity / mapper / service / service.impl / mqconsumer / picker / support；评审相关实体（ReviewRecord / ReviewRecheckLog）与审核服务（ReviewService）归 review 域——审核产物归审核域，消除历史归属错位（§6.146 域迁移）；shared 域为跨域基础设施无实体层；按域需要可扩展。当前各域完整子包（v2.8 拆分后实际结构）：
+业务域（agent / task / planner / review / system）固定子包：entity / mapper / service / service.impl；review 域完整子包：entity / mapper / service / service.impl / dto / mqconsumer / picker / support；评审相关实体（ReviewRecord / ReviewRecheckLog）与审核服务（ReviewService）归 review 域——审核产物归审核域，消除历史归属错位（§6.146 域迁移）；shared 域为跨域基础设施无实体层；按域需要可扩展。当前各域完整子包（v2.8 拆分后实际结构）：
 
 - **agent**：entity / mapper / service / service.impl / domain / chat / command / dispatcher / executor / mqconsumer / mcp / observability / output
 - **task**：entity / mapper / service / service.impl / policy / spec / statemachine / score / listener
@@ -328,7 +329,7 @@ core 模块统一采用"业务域分包 + 域内技术分层"，禁止新增顶�
 规则：
 1. 只允许向下依赖，禁止反向依赖与横向回指（如 system 不得 import task/agent/planner/review，task 不得 import planner/review，agent 不得 import planner/review）。
 2. 跨域只允许依赖对方的 service 接口与 entity；**禁止跨域直捅对方 Mapper**（Mapper 是持久层实现细节，跨域直捅是最深耦合；禁令对所有方向生效，合法向下依赖同样不豁免，一律收口为对方域 service 接口方法）。验收标准：agent 域对 `task.mapper` 包的 import 必须为零，task 域对 `agent.mapper` 包的 import 必须为零（§6.140 已双向清零：TaskServiceImpl / FeedServiceImpl / SubTaskServiceImpl 的 agent Mapper 直调全部收口为 AgentService 接口方法——`lockByIdForUpdate` / `listSummaries` / `countExecutionByTaskId` / `countUnreadInboxByTaskRef` / `physicalDeleteTaskTrace`，task 域复用 `listByIds` / `listByRole` 等既有接口）。
-3. 反向能力诉求走**端口反转（依赖倒置）**：接口定义在"消费方域"（如 `task.port.TaskPlannerPickerPort`、`agent.port.AgentAuthPort`、`task.port.ReviewPort`），由"实现方域"（planner 的 `PlannerAgentPicker`、agent 的 `AgentServiceImpl`、review 的 `ReviewServiceImpl`）落实 `implements`——消费方域不 import 实现方域，实现方域下依赖消费方域属于合法向下依赖。
+3. 反向能力诉求走**端口反转（依赖倒置）**：接口定义在"消费方域"（如 `task.port.TaskPlannerPickerPort`、`agent.port.AgentAuthPort`、`task.port.ReviewPort`），由"实现方域"（planner 的 `PlannerAgentPicker`、agent 的 `AgentServiceImpl`、review 的 `ReviewPortAdapter`）落实 `implements`——消费方域不 import 实现方域，实现方域下依赖消费方域属于合法向下依赖。端口实现独立于业务服务（如 ReviewPort 由 review/service/impl 的 ReviewPortAdapter 实现而非 ReviewService，避免业务服务同时背端口职责，断环理由见类 Javadoc）。
 4. 禁止用 ObjectProvider / @Lazy 掩盖设计性循环依赖。确需使用时，必须在类 Javadoc 注明"为解 X↔Y 循环而引入，目标解耦方案为 Z"，并在实现差距表登记为待办。存量 ObjectProvider 逐步通过事件解耦或接口下沉消除。
 5. 验证：`scripts/powershell/verify-dependency-direction.ps1`，任何涉及跨域 import 的改动后必跑，红色命中即阻断合入。脚本同时断言：所有 `*Mapper.java` 的包路径必须登记在 `HelloAIApplication` 的 `@MapperScan` 显式清单中（漏登记会在启动期炸），新增/搬迁 mapper 包后必须同步登记并过脚本。
 
@@ -351,7 +352,7 @@ com.helloai.{模块名}.{层}
 - `com.helloai.core.agent.executor` / `com.helloai.core.agent.mqconsumer` / `com.helloai.core.agent.mcp`
 - `com.helloai.core.task.entity` / `com.helloai.core.task.statemachine` / `com.helloai.core.task.score` / `com.helloai.core.task.policy`
 - `com.helloai.core.planner.entity` / `com.helloai.core.planner.service` / `com.helloai.core.planner.service.impl` / `com.helloai.core.planner.picker`
-- `com.helloai.core.review.entity` / `com.helloai.core.review.mapper` / `com.helloai.core.review.service` / `com.helloai.core.review.service.impl`
+- `com.helloai.core.review.entity` / `com.helloai.core.review.mapper` / `com.helloai.core.review.service` / `com.helloai.core.review.service.impl` / `com.helloai.core.review.dto`
 - `com.helloai.core.system.entity` / `com.helloai.core.system.service` / `com.helloai.core.system.service.impl` / `com.helloai.core.system.storage`
 - `com.helloai.core.shared.event` / `com.helloai.core.shared.doorbell`
 - `com.helloai.api.controller` / `com.helloai.api.dto` / `com.helloai.api.config`

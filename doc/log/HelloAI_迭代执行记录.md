@@ -6635,3 +6635,31 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - 影响：双审最坏耗时由 2×单侧收敛为单侧 + 汇合等待，互斥锁占用窗口减半；超时口径统一（共用 deadline 剩余时间，非 2×timeout）。
 - 遗留：双审并行化与 Review 域迁移分两个 commit 提交（本 commit 为并行）；PATH 下 java（Oracle javapath）已失效，启动需用 $env:JAVA_HOME\bin\java.exe（ms-17.0.19）。
+
+### 6.147 Phase 5 质量度量看板 + P2 双审超时修正 / P3 规范修正（2026-08-23）
+
+#### 1. 背景与结论
+
+- **背景**：Phase 5 计划（.qoder/plans/HelloAI反馈回路落地计划.md Phase 5 + 5.1 设计稿 L163-198）要求交付质量度量看板：AdminQualityController 三端点（/overview、/agents?limit=、/dashboard?days=），聚合放 Service（§6.7 语义），Controller 零编排；用户核对计划后确认事实全部属实放行，并提出 2 个不阻塞问题：P2（dualReviewTimeoutSeconds=120 与核验锁 TTL 120 相等，deadline 加锁后才起算，双审窗口必然超出锁有效期，L1/L2/L3 触发源可抢到已过期锁重复双审→重复 review_record→画像重复计数+可能重复返工）与 P3（CODE_STYLE L331 端口反转示例把 ReviewPort 实现方写成 ReviewServiceImpl，实际是独立 ReviewPortAdapter）。
+- **结论**：Phase 5 全链路交付（review/agent 两域统计 + 聚合服务 + 3 端点 + 前端 5 图看板 + 单测增补 + ps1 真实环境 6/6 全绿）；P2 一行修复默认 120→90s + 3 处注释同步；P3 在 CODE_STYLE V1.15 顺手修正。
+
+#### 2. 实现要点
+
+- **review 域统计**：ReviewRecordMapper 4 投影 SQL（selectTrendSource / selectIssuesForStats / selectReworkDistribution / selectReviewerLeniency），窗口 `create_time >= now() - #{days} * interval '1 day'` + deleted=0；投影返回具体 DTO record（防 §6.132 Map→JacksonTypeHandler 劫持复发）；review/dto 新增 4 record（QualityTrendPoint / DefectDistribution / ReworkRoundPoint / ReviewerLeniency，SQL 侧 reviewerName 空串占位 + Java 补名重建）；ReviewService 4 方法（statsTrendSource / statsDefectDistribution / statsReworkDistribution / statsReviewerLeniency），缺陷标签聚合复用 DefectLabelParser 同口径（与画像表对账一致），补名走 AgentService.listByIds 缺失回退 ID 字符串，days<=0 归一 30。
+- **agent 域统计**：AgentQualityProfileMapper 2 投影 SQL（selectOverviewRow COALESCE 兜底单行必返 / selectRankingRows 动态 LIMIT，agentName 空串占位 + qualityScore=0 占位）；agent/quality/dto 新增 2 record（QualityOverview / AgentQualityRank）；AgentQualityProfileService 2 方法（statsOverview / statsAgentRankings），qualityScore 逐行调 computeQualityScore（口径唯一防 SQL 漂移）；新增 AgentService 注入（reviewer 补名无环——注入点交叉核验无交集 + SubTaskServiceImpl 对 AgentService 走 ObjectProvider 双保险）。
+- **聚合与端点**：QualityDashboardService（review 域新建接口 + Impl，依赖 AgentQualityProfileService + ReviewService 无环）+ QualityDashboardResponse（review/dto，overview + trends/defectDistributions/reworkRounds/reviewers 四数组，rankings 单独 /agents 端点）；AdminQualityController 3 薄透传端点（admin.quality.enabled 门控复用，关闭返回业务码 403）。
+- **前端**：paths.ts admin 段 + 3 路径；api/quality.ts + types/quality.ts（6 接口）；QualityDashboard.vue（543 行，5 图：趋势双线 / 排行横向 bar / 驳回原因 / 返工轮次 / 放水率，windowDays 7/30/90，echarts init 模式对齐 Dashboard.vue：cssVar 取色 + dispose 重建 + theme watch + el-empty 空态；initChart option 参数用 any——echarts 类型声明对 bar.borderRadius 校验过严，vue-tsc 0 错为硬门槛）；MainLayout 菜单 + router 路由。
+- **P2 修复（4 文件）**：ReviewProperties.dualReviewTimeoutSeconds 默认 120→90 + 注释重写（deadline 加锁后才起算，90s 保证双审窗口（等待 + 落库 + 时间线）收进锁 TTL 120s 内）；ReviewDualExecutorConfig / SubTaskReviewServiceImpl / SubTaskReviewServiceTest 注释同步（测试 mock 120L 保留）；yml 无显式覆盖（grep 零匹配，纯默认值生效）。
+- **ps1（verify-quality-dashboard.ps1，262 行）**：S1 门控关闭断言业务码 403 / S2 开闸 / S3 overview 字段（firstPassRate 0-100 边界）/ S4 /agents?limit=5 数组 ≤5 + 字段 / S5 dashboard 四数组 + overview 嵌套 / S6 days=0/-7 仍 200（服务端默认 30）；规则 6 合规（UTF-8 头 + 单引号拼接 + 全 ASCII 运行时字面量 + ParseFile 0 错）；真实环境修复：getByKey 返回 data 为 Map{key:value} 而非 {value:...}，S1 解析改取首个属性值。
+
+#### 3. 验证结果
+
+- 单测：helloai-core 922/922 全绿（ReviewServiceTest +4、AgentQualityProfileServiceTest +2，构造器参数化 @Mock AgentService）+ helloai-job 66/66 无回归；期间修复 shouldAggregateDefectDistribution 测试数据格式——DefectLabelParser 正则 `\[defect]\s*([^\[]+)` 要求 defect 后直接 `]`，真实格式为 `[defect] 描述 [location] ...` 四元组。
+- 依赖方向：verify-dependency-direction.ps1 全 PASS（含 @MapperScan 6 包登记断言）。
+- 前端：vue-tsc --noEmit 0 错（修复 4 个 TS2322：initChart option 改 any 对齐 Dashboard.vue 先例）。
+- 装配自检：mvn -pl helloai-start -am -DskipTests package BUILD SUCCESS → java -jar（$env:JAVA_HOME\bin\java.exe，javapath stub 已失效）启动 6565 成功，Started 无异常；verify-quality-dashboard.ps1 真实环境 S1~S6 = PASS 6 / FAIL 0 / SKIP 0（S4 排行 3 条补名正常：qp-exec-a / TeleAgent-executor / rd-exec；S5 reviewers 含已删 agent 回退 ID 字符串符合预期）。
+
+#### 4. 影响与遗留
+
+- 影响：质量看板三端点可观测（overview / 排行 / 30 天窗口聚合），缺陷标签与画像表同口径；P2 竞态窗口关闭（双审窗口 90s < 锁 TTL 120s）。
+- 遗留：CODE_STYLE V1.15 已回填（§3.x review 域 dto 子包 + 看板聚合归属 + P3 修正）；差距表 N20 状态补 08-23；看板页面视觉细节待用户浏览器实测反馈；verify-quality-dashboard.ps1 依赖 docker 容器 + 6565 运行实例。
