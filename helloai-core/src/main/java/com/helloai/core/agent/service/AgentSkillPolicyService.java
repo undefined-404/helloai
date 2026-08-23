@@ -14,7 +14,6 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -51,17 +50,17 @@ public class AgentSkillPolicyService {
         if (cleaned.isEmpty()) {
             return;
         }
-        Optional<LlmProviderModel> capability = llmProviderModelQueryService.findCapabilityByModelType(modelType);
-        if (capability.isEmpty()) {
+        LlmProviderModel capability = llmProviderModelQueryService.findCapabilityByModelType(modelType);
+        if (capability == null) {
             // 未识别模型：不校验（降级兼容）
             return;
         }
         Set<String> whitelist = new HashSet<>();
-        if (capability.get().getCapabilitySkills() != null) {
-            whitelist.addAll(capability.get().getCapabilitySkills());
+        if (capability.getCapabilitySkills() != null) {
+            whitelist.addAll(capability.getCapabilitySkills());
         }
-        if (capability.get().getAvailableOptionalSkills() != null) {
-            whitelist.addAll(capability.get().getAvailableOptionalSkills());
+        if (capability.getAvailableOptionalSkills() != null) {
+            whitelist.addAll(capability.getAvailableOptionalSkills());
         }
         List<String> invalid = cleaned.stream()
                 .filter(AgentSkillDeriver.STANDARD_SKILLS::contains)
@@ -85,13 +84,13 @@ public class AgentSkillPolicyService {
         AgentAccessType accessType = agent.getAccessType();
         String modelType = agent.getModelType();
         if (accessType == AgentAccessType.API_KEY_LLM && modelType != null && !modelType.isBlank()) {
-            Optional<LlmProviderModel> capability = llmProviderModelQueryService.findCapabilityByModelType(modelType);
-            if (capability.isPresent()) {
+            LlmProviderModel capability = llmProviderModelQueryService.findCapabilityByModelType(modelType);
+            if (capability != null) {
                 return AgentSkillDeriver.deriveWithCapabilities(
                         accessType, agent.getName(), agent.getRemark(),
                         explicitSkills,
-                        capability.get().getCapabilitySkills(),
-                        capability.get().getAvailableOptionalSkills());
+                        capability.getCapabilitySkills(),
+                        capability.getAvailableOptionalSkills());
             }
         }
         // 非 API_KEY_LLM / 未识别模型：基础推导（显式优先，不合并基础技能）

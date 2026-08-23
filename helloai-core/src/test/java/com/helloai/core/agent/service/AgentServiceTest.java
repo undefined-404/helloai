@@ -30,7 +30,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -260,8 +259,8 @@ class AgentServiceTest {
     void validateSkills_standardSkillOutOfWhitelist_throws() {
         AgentService service = newSpyService();
         when(llmProviderModelQueryService.findCapabilityByModelType("deepseek:deepseek-v4-flash"))
-                .thenReturn(Optional.of(capability("deepseek:deepseek-v4-flash",
-                        List.of("thinking"), List.of("shell", "code-review"))));
+                .thenReturn(capability("deepseek:deepseek-v4-flash",
+                        List.of("thinking"), List.of("shell", "code-review")));
 
         assertThatThrownBy(() -> service.validateAgentSkills(
                 "deepseek:deepseek-v4-flash", List.of("python", "shell")))
@@ -275,8 +274,8 @@ class AgentServiceTest {
     void validateSkills_whitelistAndCustom_pass() {
         AgentService service = newSpyService();
         when(llmProviderModelQueryService.findCapabilityByModelType("deepseek:deepseek-v4-flash"))
-                .thenReturn(Optional.of(capability("deepseek:deepseek-v4-flash",
-                        List.of("thinking"), List.of("shell", "code-review"))));
+                .thenReturn(capability("deepseek:deepseek-v4-flash",
+                        List.of("thinking"), List.of("shell", "code-review")));
 
         service.validateAgentSkills("deepseek:deepseek-v4-flash",
                 List.of("thinking", "shell", "kubernetes"));
@@ -287,7 +286,7 @@ class AgentServiceTest {
     void validateSkills_unknownOrEmpty_pass() {
         AgentService service = newSpyService();
         when(llmProviderModelQueryService.findCapabilityByModelType("legacy:old-model"))
-                .thenReturn(Optional.empty());
+                .thenReturn(null);
 
         service.validateAgentSkills("legacy:old-model", List.of("python"));   // 未识别模型放行
         service.validateAgentSkills(null, List.of("python"));                 // modelType 空放行
@@ -301,8 +300,8 @@ class AgentServiceTest {
     void deriveSkills_capabilityDriven() {
         AgentService service = newSpyService();
         when(llmProviderModelQueryService.findCapabilityByModelType("deepseek:deepseek-v4-flash"))
-                .thenReturn(Optional.of(capability("deepseek:deepseek-v4-flash",
-                        List.of("thinking"), List.of("shell", "code-review"))));
+                .thenReturn(capability("deepseek:deepseek-v4-flash",
+                        List.of("thinking"), List.of("shell", "code-review")));
 
         Agent agent = new Agent();
         agent.setAccessType(AgentAccessType.API_KEY_LLM);
@@ -320,7 +319,7 @@ class AgentServiceTest {
     void deriveSkills_unknownModel_fallsBackToDerive() {
         AgentService service = newSpyService();
         when(llmProviderModelQueryService.findCapabilityByModelType("legacy:old-model"))
-                .thenReturn(Optional.empty());
+                .thenReturn(null);
 
         Agent agent = new Agent();
         agent.setAccessType(AgentAccessType.API_KEY_LLM);

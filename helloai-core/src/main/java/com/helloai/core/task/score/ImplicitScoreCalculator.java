@@ -10,6 +10,14 @@ import org.springframework.stereotype.Component;
 import java.time.Duration;
 import java.util.List;
 
+/**
+ * 隐式评分计算器：子任务完成后按时间/质量/协作/稳定性/效率五维因子计算复合评分。
+ *
+ * <p>由 {@link com.helloai.core.task.service.impl.SubTaskServiceImpl#complete} 在 DONE
+ * 状态转换时调用：读取审查事实（{@link ReviewFact}）与执行统计（block/timeout），
+ * 输出 {@link ScoreResult}（五维因子 + 复合分 + 等级 + 奖惩增量）；评分失败不阻断
+ * DONE 状态转换（调用方 try-catch 兜底）。</p>
+ */
 @Slf4j
 @Component
 public class ImplicitScoreCalculator {

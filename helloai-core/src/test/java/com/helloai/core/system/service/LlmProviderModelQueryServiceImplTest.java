@@ -18,7 +18,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.Collections;
 import java.util.List;
-import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -110,24 +109,24 @@ class LlmProviderModelQueryServiceImplTest {
     }
 
     @Test
-    @DisplayName("findDefaultByProviderId：存在默认模型时返回 Optional 值")
-    void findDefaultByProviderId_found_returnsOptional() {
+    @DisplayName("findDefaultByProviderId：存在默认模型时返回实体")
+    void findDefaultByProviderId_found_returnsModel() {
         LlmProviderModel m = model("deepseek-v4-flash", 1, 1);
         when(mapper.selectOne(any())).thenReturn(m);
 
-        Optional<LlmProviderModel> result = service.findDefaultByProviderId(1L);
+        LlmProviderModel result = service.findDefaultByProviderId(1L);
 
-        assertThat(result).isPresent();
-        assertThat(result.get().getModelName()).isEqualTo("deepseek-v4-flash");
+        assertThat(result).isNotNull();
+        assertThat(result.getModelName()).isEqualTo("deepseek-v4-flash");
     }
 
     @Test
-    @DisplayName("findDefaultByProviderId：无默认模型时返回 Optional.empty")
-    void findDefaultByProviderId_notFound_returnsEmpty() {
+    @DisplayName("findDefaultByProviderId：无默认模型时返回 null")
+    void findDefaultByProviderId_notFound_returnsNull() {
         when(mapper.selectOne(any())).thenReturn(null);
 
-        assertThat(service.findDefaultByProviderId(1L)).isEmpty();
-        assertThat(service.findDefaultByProviderId(null)).isEmpty();
+        assertThat(service.findDefaultByProviderId(1L)).isNull();
+        assertThat(service.findDefaultByProviderId(null)).isNull();
     }
 
     @Test
@@ -136,18 +135,17 @@ class LlmProviderModelQueryServiceImplTest {
         LlmProviderModel m = model("kimi-k2.5", 1, 1);
         when(mapper.selectOne(any())).thenReturn(m);
 
-        Optional<String> result = service.findDefaultModelNameByProviderCode("moonshot");
+        String result = service.findDefaultModelNameByProviderCode("moonshot");
 
-        assertThat(result).isPresent();
-        assertThat(result.get()).isEqualTo("kimi-k2.5");
+        assertThat(result).isEqualTo("kimi-k2.5");
     }
 
     @Test
-    @DisplayName("findDefaultModelNameByProviderCode：未命中返回 Optional.empty")
-    void findDefaultModelNameByProviderCode_notFound_returnsEmpty() {
+    @DisplayName("findDefaultModelNameByProviderCode：未命中返回 null")
+    void findDefaultModelNameByProviderCode_notFound_returnsNull() {
         when(mapper.selectOne(any())).thenReturn(null);
 
-        assertThat(service.findDefaultModelNameByProviderCode("unknown")).isEmpty();
+        assertThat(service.findDefaultModelNameByProviderCode("unknown")).isNull();
     }
 
     @Test
@@ -174,18 +172,18 @@ class LlmProviderModelQueryServiceImplTest {
     }
 
     @Test
-    @DisplayName("findCapabilityByModelType：命中模型返回携带能力列的 Optional 值")
-    void findCapabilityByModelType_found_returnsOptional() {
+    @DisplayName("findCapabilityByModelType：命中模型返回携带能力列的实体")
+    void findCapabilityByModelType_found_returnsModel() {
         LlmProviderModel m = model("deepseek-v4-flash", 1, 1);
         m.setCapabilitySkills(List.of("thinking"));
         m.setAvailableOptionalSkills(List.of("shell", "code-review"));
         when(mapper.selectOne(any())).thenReturn(m);
 
-        Optional<LlmProviderModel> result = service.findCapabilityByModelType("deepseek:deepseek-v4-flash");
+        LlmProviderModel result = service.findCapabilityByModelType("deepseek:deepseek-v4-flash");
 
-        assertThat(result).isPresent();
-        assertThat(result.get().getCapabilitySkills()).containsExactly("thinking");
-        assertThat(result.get().getAvailableOptionalSkills()).containsExactly("shell", "code-review");
+        assertThat(result).isNotNull();
+        assertThat(result.getCapabilitySkills()).containsExactly("thinking");
+        assertThat(result.getAvailableOptionalSkills()).containsExactly("shell", "code-review");
     }
 
     @Test
@@ -205,15 +203,15 @@ class LlmProviderModelQueryServiceImplTest {
     }
 
     @Test
-    @DisplayName("findCapabilityByModelType：未命中或入参非法返回 Optional.empty")
-    void findCapabilityByModelType_notFound_returnsEmpty() {
+    @DisplayName("findCapabilityByModelType：未命中或入参非法返回 null")
+    void findCapabilityByModelType_notFound_returnsNull() {
         when(mapper.selectOne(any())).thenReturn(null);
-        assertThat(service.findCapabilityByModelType("deepseek:deepseek-v5")).isEmpty();
+        assertThat(service.findCapabilityByModelType("deepseek:deepseek-v5")).isNull();
         // 非法格式：无冒号 / 空段 / blank 整体
-        assertThat(service.findCapabilityByModelType("deepseek-v4-flash")).isEmpty();
-        assertThat(service.findCapabilityByModelType("deepseek:")).isEmpty();
-        assertThat(service.findCapabilityByModelType("  ")).isEmpty();
-        assertThat(service.findCapabilityByModelType(null)).isEmpty();
+        assertThat(service.findCapabilityByModelType("deepseek-v4-flash")).isNull();
+        assertThat(service.findCapabilityByModelType("deepseek:")).isNull();
+        assertThat(service.findCapabilityByModelType("  ")).isNull();
+        assertThat(service.findCapabilityByModelType(null)).isNull();
     }
 
     @Test

@@ -9,7 +9,6 @@ import org.springframework.stereotype.Service;
 
 import java.util.Collections;
 import java.util.List;
-import java.util.Optional;
 
 /**
  * LLM Provider 模型查询服务实现。
@@ -70,9 +69,9 @@ public class LlmProviderModelQueryServiceImpl implements LlmProviderModelQuerySe
     }
 
     @Override
-    public Optional<LlmProviderModel> findDefaultByProviderId(Long providerId) {
+    public LlmProviderModel findDefaultByProviderId(Long providerId) {
         if (providerId == null) {
-            return Optional.empty();
+            return null;
         }
         LlmProviderModel model = llmProviderModelMapper.selectOne(
                 new LambdaQueryWrapper<LlmProviderModel>()
@@ -82,13 +81,13 @@ public class LlmProviderModelQueryServiceImpl implements LlmProviderModelQuerySe
                         .eq(LlmProviderModel::getDeleted, 0)
                         .last("LIMIT 1")
         );
-        return Optional.ofNullable(model);
+        return model;
     }
 
     @Override
-    public Optional<String> findDefaultModelNameByProviderCode(String providerCode) {
+    public String findDefaultModelNameByProviderCode(String providerCode) {
         if (providerCode == null || providerCode.isBlank()) {
-            return Optional.empty();
+            return null;
         }
         LlmProviderModel model = llmProviderModelMapper.selectOne(
                 new LambdaQueryWrapper<LlmProviderModel>()
@@ -98,17 +97,17 @@ public class LlmProviderModelQueryServiceImpl implements LlmProviderModelQuerySe
                         .eq(LlmProviderModel::getDeleted, 0)
                         .last("LIMIT 1")
         );
-        return Optional.ofNullable(model != null ? model.getModelName() : null);
+        return model != null ? model.getModelName() : null;
     }
 
     @Override
-    public Optional<LlmProviderModel> findCapabilityByModelType(String modelType) {
+    public LlmProviderModel findCapabilityByModelType(String modelType) {
         if (modelType == null || modelType.isBlank()) {
-            return Optional.empty();
+            return null;
         }
         String[] parts = modelType.split(":", 2);
         if (parts.length != 2 || parts[0].isBlank() || parts[1].isBlank()) {
-            return Optional.empty();
+            return null;
         }
         LlmProviderModel model = llmProviderModelMapper.selectOne(
                 new LambdaQueryWrapper<LlmProviderModel>()
@@ -117,7 +116,7 @@ public class LlmProviderModelQueryServiceImpl implements LlmProviderModelQuerySe
                         .eq(LlmProviderModel::getDeleted, 0)
                         .last("LIMIT 1")
         );
-        return Optional.ofNullable(model);
+        return model;
     }
 
     @Override
