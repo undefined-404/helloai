@@ -14,6 +14,29 @@
 
 ## 2. 近期关键轮次
 
+### 2026-08 博查联网搜索 API Key 接入系统设置页（含占位符字面量修复）
+
+#### 1. 范围
+
+- 博查（bocha）联网搜索 API Key 从 yml/env 迁移到系统设置页配置，修 bug + 补功能。
+- 发现并修复隐患：`WebSearchProperties.bochaApiKey` 默认值为字符串字面量 `${BOCHA_API_KEY:}`，无 yml 条目时占位符不解析，运行时把字面量当 Bearer token 发出，博查搜索实际一直失效。
+- 不做：不动 `@ConditionalOnProperty` 的 provider 启动期选择（bocha 默认）；tavily/deepseek-native 不上设置页；不引入 vault 重设施。
+
+#### 2. 实际落地
+
+- 新增 `WebSearchCredentialKeyStore`（core/planner/search）：解析优先级 sys_config 加密值 > yml/env 兜底（仿 `AgentBaseUrlResolver` 模式），`enc:` 前缀 AES-GCM 加密存储，并剔除占位符字面量残留；键名 `web-search.bocha.api-key`，blank=清除。
+- `BochaWebSearchServiceImpl` 改走 KeyStore 取 Key，不再直读 properties。
+- `SysConfigServiceImpl.getAllAsMap` 对 `.api-key` 后缀键对外脱敏（`********`）；`setValue` 凭证键不落日志明文。`AdminConfigController.getByKey` 同步脱敏。
+- 新增 `PUT /api/admin/config/webSearchApiKey`（加密落库，实时生效）；前端 `Settings.vue` 新增「联网搜索」区（博查 API Key 密码输入 + 已配置/未配置状态标签），未改动时不提交、防把掩码当 Key 写入。
+- 验证：IntelliJ 内置 Maven + JDK 17 下 core/api 主代码与测试编译通过；`vue-tsc --noEmit` 通过。
+
+#### 3. 遗留
+
+- 需重启后端（新 Bean 装配）后新链路才生效；设置页保存 Key 后无需再重启。
+- tavily / deepseek-native 的 Key 仍为 yml/env 配置，后续如有需要可按同一模式扩展。
+- `BOCHA_API_KEY` 环境变量仅作为部署级兜底保留，建议文档口径以设置页为主。
+
+
 ### 2026-08 质量实测门控接入系统设置页
 
 #### 1. 范围
@@ -6709,3 +6732,56 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - 影响：§8.2 路径全量对齐；5 个超线类具备 §7.8 书面声明；§7.6 Optional 返回值清零；ui-sync 防回归能力恢复（可捕获内联路径 / 死键 / 方法不匹配）。
 - 遗留：审计观察项（非违规项）按用户确认不处理；本轮未 git 提交。
+
+### 6.149 设置页 UX 收口：polish / layout / typeset 三连（2026-08-23）
+
+#### 1. 背景与结论
+
+- **背景**：`$impeccable critique` 对设置页（Settings.vue）评分 20/40，快照（.impeccable/critique/2026-08-23T12-55-42Z__helloai-ui-src-views-settings-vue.md）列 2 项 P1 + 3 项 P2。本轮按快照收口三组：P1 对比度与语义统一（polish）、sticky 保存条 + 侧边栏入口（layout）、字号收敛与分区标题层级（typeset）。
+- **结论**：三组全部落地并浏览器实测通过（含交互脏状态往返与现场恢复）；过程中额外发现并修复 1 个设计系统级既有债务（EP 双类选择器压掉 --ha-* tag 语义色）与 1 个 sticky 滚动上下文陷阱。
+
+#### 2. 实现要点
+
+- **polish**：`.form-hint` 与 `.provider-item-code` 由 `--ha-muted`（3.0:1 不达标）改 `--ha-ink-secondary`（亮 #4A5568 / 暗 #A9B4C7，均 ≥4.5:1），hint 字号 12→13px；博查 Key 未配置 tag 由灰色 info 改橙色 warning「未配置 · 联网搜索不可用」，与 Provider Key 未配置语义统一（缺凭证=功能不可用=需要行动）。
+- **layout**：保存条移出表单为 `.page` 直接子级（EP 卡片 `overflow:hidden` + body `overflow:auto` 会截断卡片内 sticky 的滚动上下文，首轮放卡片内实测不吸附），`position: sticky; bottom: 0` 全程吸底；左侧新增「有未保存更改 / 全部已保存」状态（加载快照 vs 表单值 computed，保存成功后同步快照，博查掩码防呆逻辑不变），保存按钮补 `:loading` 态；MainLayout 侧边栏底部新增「系统设置」一级菜单项（`v-if="isAdmin"`，Tools 图标，激活态走既有 `.is-active`），头像下拉保留作冗余入口。
+- **typeset**：四处分区标题由裸 `el-divider` 嵌文字改 `.section-heading`（16px/600 标题 + 底部细线 + 28px 上间距，消除文字紧贴分隔线），「添加供应商」按钮随标题右对齐；设置页自定义字号收敛至 12/13/14/16（18px detail-title 降为 16）；4 处 3px/6px 圆角归一到 `--ha-radius-sm/md` 刻度（检测器 advisory 清零）。
+- **设计系统债务修复（detect.js 实测暴露）**：EP 自身用 `.el-tag.el-tag--X` 双类选择器（特异性 0-2-0）设类型色，design-system.css 原单类覆盖被压掉——「已启用」success tag 实际一直是 EP 默认绿 #67C23A/#F0F9EB（2.1:1）。修复：tag 四型覆盖全部升双类选择器（补 `--error` 别名），新增 `el-message--success/warning/error` 三型 toast 语义色覆盖（同一低对比根因）。
+
+#### 3. 验证结果
+
+- 类型检查：`vue-tsc --noEmit` 0 错；检测器 `detect.mjs` Settings.vue 0 命中（改前 4 条 advisory）。
+- 浏览器实测（5173 + 6565 真实环境）：侧边栏入口激活态正常；保存条顶部/中部/底部三次读数均吸底可视（top 恒 < 视口高）；切开关→橙色「有未保存更改」→保存→「全部已保存」往返正常；「已启用」tag computed color = rgb(4,120,87)、博查标签 = rgb(180,83,9)，均为 --ha-* 语义色；「保存成功」toast 文字同语义色；亮暗双主题样式均正常；测试开关现场已恢复（admin.quality.enabled=true 前后一致）。
+- 遗留读数说明：页内检测仍有 4 条来自 app shell / EP 默认动效的发现（网格背景、紫色光晕为登录页/侧边栏刻意为之；11 档字号主因 EP 组件内置尺寸），非设置页本身债务。
+
+#### 4. 影响与遗留
+
+- 影响：设置页从「能用的表单」向「可信的控制台」收口——对比度达标、状态语义统一、保存操作常驻可视、管理员一级入口可达。
+- 遗留：快照中未认领项——键盘快捷键 / 分区就近保存、通知区单一禁用复选框噪声、内置 Provider 禁用复选框改只读标签、详情表 7px 内边距、保存失败透传后端 msg、质量看板门控关闭时的页内引导；本轮未 git 提交。
+
+---
+
+### 6.150 设置页 critique 复评（22/40）与 harden/clarify Top 3 收口（2026-08-23）
+
+#### 1. 背景与结论
+
+- 三连收口后复评（dual-agent + 父级裁决轮）：总分 20 → 22/40。上轮成果全部经受住实测（吸底保存条、语义色、侧边栏入口）；裁决修正两条误报（暗色画布错位系过渡中途读数、亮色琥珀标签实测 #B45309 达标）。
+- 复评 P0「el-switch 视觉与逻辑背离」经专项诊断**裁定为测量假象**：Qoder 内置浏览器 visibilityState 恒为 hidden，document.timeline 冻结在 0，开关翻转时 300ms CSS transition 被创建但永不推进、停在第 0 帧（OFF 外观），且 CSS transition origin 优先级凌驾作者规则（含 !important）——这同时解释了此前截图超时与焦点环"读灰"伪影。项目 CSS 级联本身正确，真实浏览器可见紫色 ON 态。
+- 按用户选择执行 Top 3：P0 兜底（开关文字态 + 开启确认）、键盘可达性、文案泄露。
+
+#### 2. 实现要点
+
+- Settings.vue：质量分区标签「质量实测端点」→「质量门控」，提示去掉配置键 `admin.quality.enabled` 与裸路径，改为「质量看板」router-link 跳转；开关加 `:before-change` 二次确认（仅开启方向，before-change 返回 false 不污染脏状态）；开关旁新增「已开启/已关闭」文字态（第二状态通道，不依赖动画/颜色）。
+- Settings.vue：供应商列表改 `role="listbox"` + option（tabindex=0 / aria-selected），Enter/空格选中、↑↓ 焦点漫游；`.provider-item:focus-visible` 2px 主色 outline。
+- design-system.css：`.el-input__wrapper` 焦点环补 `:focus-within` 选择器，键盘聚焦路径不再依赖 EP is-focus 时机。
+
+#### 3. 验证结果
+
+- `vue-tsc --noEmit` 0 错。
+- 浏览器回归全部通过：确认对话框开启/取消/往返行为正确且取消不产生脏状态；键盘漫游后详情区随 Enter 切换；焦点环禁过渡实测 2px 紫；亮暗双主题文字态可读性正常。
+- 脏检测语义确认：往返复归后端值即判「全部已保存」，为取值比对的正确行为（非粘滞脏）。
+- 现场红线保持：全程未点保存，后端 `admin.quality.enabled` 实测仍为 "true"。
+
+#### 4. 影响与遗留
+
+- 影响：设置页状态展示从"仅动画视觉"升级为"动画 + 文字态"双通道；核心交互（供应商切换）对键盘用户可达；文案不再泄露实现细节。
+- 遗留：快照 P2 项（分区就近保存、信息层级平塌、装饰性禁用复选框、默认模型三重冗余）；ElMessageBox 离场过渡在 hidden 标签页环境卡住（环境特性，真实浏览器无影响）；本轮未 git 提交。
