@@ -10,9 +10,9 @@
         label-width="140px"
         class="settings-form"
       >
-        <el-divider content-position="left">
-          基础配置
-        </el-divider>
+        <div class="section-heading">
+          <h3 class="section-title">基础配置</h3>
+        </div>
         <el-form-item label="外部访问地址">
           <el-input
             v-model="form.externalUrl"
@@ -24,36 +24,82 @@
             <code>http://&lt;本机IP&gt;:6565</code>，公网部署用域名或公网 IP。
           </div>
         </el-form-item>
-        <el-form-item label="质量实测端点">
-          <el-switch v-model="form.qualityGateEnabled" />
+        <el-form-item label="质量门控">
+          <div class="switch-field">
+            <el-switch
+              v-model="form.qualityGateEnabled"
+              :before-change="beforeQualityGateChange"
+            />
+            <!-- 文字态双保险：开关动画视觉之外提供不依赖颜色的状态通道 -->
+            <span
+              class="switch-state"
+              :class="form.qualityGateEnabled ? 'on' : 'off'"
+            >{{ form.qualityGateEnabled ? '已开启' : '已关闭' }}</span>
+          </div>
           <div class="form-hint">
-            对应配置键 <code>admin.quality.enabled</code>，默认关闭。开启后开放管理侧质量实测端点，
-            质量看板（/quality-dashboard）及画像重算、自动派发等入口才可用；生产环境建议保持关闭。
+            开启后
+            <router-link
+              class="hint-link"
+              to="/quality-dashboard"
+            >质量看板</router-link>
+            及画像重算、自动派发等管理侧入口才可用；默认关闭，生产环境建议保持关闭。
           </div>
         </el-form-item>
 
-        <el-divider content-position="left">
-          LLM 供应商
+        <div class="section-heading">
+          <h3 class="section-title">联网搜索</h3>
+        </div>
+        <el-form-item label="博查 API Key">
+          <el-input
+            v-model="form.webSearchApiKey"
+            type="password"
+            show-password
+            placeholder="输入新 Key 并保存；清空并保存则移除 Key"
+          />
+          <div class="form-hint">
+            需求对话每轮联网检索（默认供应商博查）使用，加密存储，保存后立即生效无需重启。
+            <el-tag
+              v-if="webSearchKeyConfigured"
+              type="success"
+              size="small"
+            >已配置</el-tag>
+            <el-tag
+              v-else
+              type="warning"
+              size="small"
+            >未配置 · 联网搜索不可用</el-tag>
+          </div>
+        </el-form-item>
+
+        <div class="section-heading">
+          <h3 class="section-title">LLM 供应商</h3>
           <el-button
             type="primary"
             size="small"
             :icon="Plus"
-            class="header-action"
             @click="openCreateDialog"
           >
             添加供应商
           </el-button>
-        </el-divider>
+        </div>
 
         <div class="provider-layout">
-          <!-- 左侧列表 -->
-          <div class="provider-list">
+          <!-- 左侧列表：role="listbox" + option 支持键盘漫游（Tab 进入，↑↓ 移动，Enter/空格 选中） -->
+          <div
+            class="provider-list"
+            role="listbox"
+            aria-label="LLM 供应商列表"
+          >
             <div
-              v-for="p in providers"
+              v-for="(p, idx) in providers"
               :key="p.id"
               class="provider-item"
               :class="{ active: selectedId === p.id }"
+              role="option"
+              :aria-selected="selectedId === p.id"
+              tabindex="0"
               @click="selectedId = p.id"
+              @keydown="onProviderKeydown($event, idx)"
             >
               <div class="provider-item-name">
                 <el-icon
@@ -326,9 +372,9 @@
           </div>
         </div>
 
-        <el-divider content-position="left">
-          通知配置
-        </el-divider>
+        <div class="section-heading">
+          <h3 class="section-title">通知配置</h3>
+        </div>
         <el-form-item label="通知方式">
           <el-checkbox-group v-model="form.notifyChannels">
             <el-checkbox
@@ -339,16 +385,29 @@
             </el-checkbox>
           </el-checkbox-group>
         </el-form-item>
-        <el-form-item>
-          <el-button
-            type="primary"
-            @click="handleSave"
-          >
-            保存设置
-          </el-button>
-        </el-form-item>
       </el-form>
     </el-card>
+
+    <!-- 保存条：卡片外直接子级才能对 .app-content 滚动容器生效（EP 卡片自带 overflow，会吃掉内部 sticky） -->
+    <div class="save-bar">
+      <span
+        class="save-bar-status"
+        :class="isDirty ? 'dirty' : 'clean'"
+      >
+        <el-icon
+          v-if="isDirty"
+          class="save-bar-icon"
+        ><WarningFilled /></el-icon>
+        {{ isDirty ? '有未保存更改' : '全部已保存' }}
+      </span>
+      <el-button
+        type="primary"
+        :loading="saving"
+        @click="handleSave"
+      >
+        保存设置
+      </el-button>
+    </div>
 
     <!-- 配置 API Key 对话框 -->
     <el-dialog
@@ -464,7 +523,7 @@
 <script setup lang="ts">
 import { reactive, ref, onMounted, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox, FormInstance, FormRules } from 'element-plus'
-import { Plus, CircleCheckFilled, CircleCloseFilled } from '@element-plus/icons-vue'
+import { Plus, CircleCheckFilled, CircleCloseFilled, WarningFilled } from '@element-plus/icons-vue'
 import {
   settingsApi,
   LlmProviderResponse,
@@ -478,8 +537,24 @@ const formRef = ref()
 const form = reactive({
   externalUrl: '',
   qualityGateEnabled: false,
+  webSearchApiKey: '',
   notifyChannels: ['web']
 })
+
+// 博查 Key 加载时的脱敏回显值（'********'）；未改动则保存时跳过提交，避免把掩码当 Key 写入。
+const webSearchKeyLoaded = ref('')
+const webSearchKeyConfigured = ref(false)
+
+// 未保存变更指示：加载快照与当前表单值比对（保存成功后同步快照）。
+const loadedExternalUrl = ref('')
+const loadedQualityGate = ref(false)
+const saving = ref(false)
+
+const isDirty = computed(() =>
+  form.externalUrl !== loadedExternalUrl.value
+  || form.qualityGateEnabled !== loadedQualityGate.value
+  || form.webSearchApiKey !== webSearchKeyLoaded.value
+)
 
 const providers = ref<LlmProviderResponse[]>([])
 const providersLoading = ref(false)
@@ -537,12 +612,46 @@ function protocolLabel(type: ProtocolType): string {
   return PROTOCOL_OPTIONS.find(o => o.value === type)?.label || type
 }
 
+// 质量门控安全确认：开启会开放管理侧入口，需二次确认；关闭为收敛动作直接放行。
+// before-change 返回 false 时开关保持原值，不会污染表单脏状态。
+function beforeQualityGateChange(): Promise<boolean> {
+  if (!form.qualityGateEnabled) {
+    return ElMessageBox.confirm(
+      '开启后将开放质量看板及自动派发等管理侧入口；生产环境建议保持关闭。确认开启？',
+      '开启质量门控',
+      { confirmButtonText: '开启', cancelButtonText: '取消', type: 'warning' }
+    ).then(() => true).catch(() => false)
+  }
+  return Promise.resolve(true)
+}
+
+// 供应商列表键盘漫游：Enter/空格选中，↑↓ 在同级 option 间移动焦点。
+function onProviderKeydown(e: KeyboardEvent, idx: number) {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault()
+    selectedId.value = providers.value[idx].id
+    return
+  }
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+  e.preventDefault()
+  const next = e.key === 'ArrowDown'
+    ? Math.min(idx + 1, providers.value.length - 1)
+    : Math.max(idx - 1, 0)
+  const list = (e.currentTarget as HTMLElement).parentElement
+  list?.querySelectorAll<HTMLElement>('.provider-item')[next]?.focus()
+}
+
 async function load() {
   try {
     const config = await settingsApi.getConfig()
     if (config) {
       form.externalUrl = config['helloai.base-url'] || ''
       form.qualityGateEnabled = config['admin.quality.enabled'] === 'true'
+      form.webSearchApiKey = config['web-search.bocha.api-key'] || ''
+      loadedExternalUrl.value = form.externalUrl
+      loadedQualityGate.value = form.qualityGateEnabled
+      webSearchKeyLoaded.value = form.webSearchApiKey
+      webSearchKeyConfigured.value = !!form.webSearchApiKey
     }
   } catch (e: any) {
     ElMessage.error('加载配置失败')
@@ -640,14 +749,26 @@ async function handleSaveModels() {
 }
 
 async function handleSave() {
+  saving.value = true
   try {
     await settingsApi.batchUpdateConfig({
       'helloai.base-url': form.externalUrl,
       'admin.quality.enabled': form.qualityGateEnabled ? 'true' : 'false'
     })
+    // 博查 Key 走专用加密端点；未改动（仍是脱敏回显值）时跳过，清空则视为移除。
+    if (form.webSearchApiKey !== webSearchKeyLoaded.value) {
+      await settingsApi.saveWebSearchApiKey(form.webSearchApiKey.trim())
+      webSearchKeyConfigured.value = !!form.webSearchApiKey.trim()
+      webSearchKeyLoaded.value = ''
+      form.webSearchApiKey = ''
+    }
+    loadedExternalUrl.value = form.externalUrl
+    loadedQualityGate.value = form.qualityGateEnabled
     ElMessage.success('保存成功')
   } catch (e: any) {
     ElMessage.error('保存失败')
+  } finally {
+    saving.value = false
   }
 }
 
@@ -779,9 +900,62 @@ onMounted(() => {
 .settings-form {
   max-width: 920px;
 }
+
+/* 分区标题：小号加粗 + 底线，替代裸 el-divider（文字不再紧贴分隔线） */
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 28px 0 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--ha-border-light);
+}
+.settings-form > .section-heading:first-child {
+  margin-top: 4px;
+}
+.section-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ha-ink);
+}
+
+/* 底部保存条：置于卡片外、.page 直接子级，才能对 .app-content 滚动容器 sticky 生效
+   （EP 卡片自带 overflow，会截断卡片内部的 sticky 滚动上下文） */
+.save-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  max-width: 920px;
+  margin-top: 12px;
+  padding: 12px 20px;
+  background: var(--ha-surface-elevated);
+  border: 1px solid var(--ha-border-light);
+  border-radius: var(--ha-radius-lg);
+  box-shadow: var(--ha-shadow-sm);
+}
+.save-bar-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ha-ink-secondary);
+}
+.save-bar-status.dirty {
+  color: var(--ha-warning-text);
+}
+.save-bar-icon {
+  font-size: 14px;
+}
+
 .form-hint {
-  font-size: 12px;
-  color: var(--ha-muted);
+  font-size: 13px;
+  color: var(--ha-ink-secondary);
   line-height: 1.5;
   margin-top: 4px;
 }
@@ -789,7 +963,29 @@ onMounted(() => {
   background: var(--ha-surface-hover);
   color: var(--ha-ink-secondary);
   padding: 1px 4px;
-  border-radius: 3px;
+  border-radius: var(--ha-radius-sm);
+}
+.form-hint .hint-link {
+  color: var(--ha-primary);
+  text-decoration: none;
+}
+.form-hint .hint-link:hover {
+  text-decoration: underline;
+}
+
+/* 开关文字态：不依赖动画/颜色的第二状态通道（亮暗双主题均用 --ha-* 语义色） */
+.switch-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.switch-state {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ha-ink-secondary);
+}
+.switch-state.on {
+  color: var(--ha-success-text);
 }
 
 .provider-layout {
@@ -801,7 +997,7 @@ onMounted(() => {
 }
 .provider-list {
   border: 1px solid var(--ha-border-light);
-  border-radius: 6px;
+  border-radius: var(--ha-radius-md);
   padding: 8px;
   background: var(--ha-surface);
   max-height: 420px;
@@ -809,7 +1005,7 @@ onMounted(() => {
 }
 .provider-item {
   padding: 8px 10px;
-  border-radius: 4px;
+  border-radius: var(--ha-radius-sm);
   cursor: pointer;
   margin-bottom: 4px;
   transition: background 0.15s;
@@ -817,6 +1013,11 @@ onMounted(() => {
 }
 .provider-item:hover {
   background: var(--ha-primary-light);
+}
+/* 键盘漫游焦点环：与按钮 :focus-visible 先例对齐，低视力用户可定位当前项 */
+.provider-item:focus-visible {
+  outline: 2px solid var(--ha-primary);
+  outline-offset: 2px;
 }
 .provider-item.active {
   background: var(--ha-primary-light);
@@ -831,7 +1032,7 @@ onMounted(() => {
 }
 .provider-item-code {
   font-size: 12px;
-  color: var(--ha-muted);
+  color: var(--ha-ink-secondary);
   margin-top: 2px;
   padding-left: 18px;
 }
@@ -846,7 +1047,7 @@ onMounted(() => {
 
 .provider-detail {
   border: 1px solid var(--ha-border-light);
-  border-radius: 6px;
+  border-radius: var(--ha-radius-md);
   padding: 16px;
   background: var(--ha-surface-elevated);
 }
@@ -866,7 +1067,7 @@ onMounted(() => {
 }
 .detail-title {
   margin: 0;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
   display: flex;
   align-items: center;
@@ -883,7 +1084,7 @@ onMounted(() => {
 .model-section {
   margin-top: 16px;
   border: 1px solid var(--ha-border-light);
-  border-radius: 6px;
+  border-radius: var(--ha-radius-md);
   padding: 12px 16px;
   background: var(--ha-surface);
 }
@@ -934,10 +1135,6 @@ onMounted(() => {
 }
 .key-source {
   margin-left: 6px;
-}
-
-.header-action {
-  margin-left: 12px;
 }
 
 @media (max-width: 768px) {

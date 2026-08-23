@@ -104,6 +104,14 @@
           <el-icon><Folder /></el-icon>
           <span>附件管理</span>
         </el-menu-item>
+        <!-- 系统设置：管理员一级入口（头像下拉保留作为冗余入口） -->
+        <el-menu-item
+          v-if="isAdmin"
+          index="/settings"
+        >
+          <el-icon><Tools /></el-icon>
+          <span>系统设置</span>
+        </el-menu-item>
       </el-menu>
 
       <div

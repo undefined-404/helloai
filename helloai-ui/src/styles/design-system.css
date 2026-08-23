@@ -324,25 +324,47 @@ html.dark {
   background: var(--ha-surface) !important;
 }
 
-/* ---- Tag ---- */
+/* ---- Tag ----
+   注意：EP 自身用 `.el-tag.el-tag--X` 双类选择器设类型色（特异性 0-2-0），
+   单类覆盖会被压掉导致 tag 回退 EP 默认色（如 success 默认绿 #67C23A 对比度仅 2.1:1）；
+   此处同样用双类选择器保证 --ha-* 语义色生效。 */
 .el-tag {
   border: none;
 }
-.el-tag--success {
+.el-tag.el-tag--success {
   --el-tag-bg-color: var(--ha-success-bg);
   --el-tag-text-color: var(--ha-success-text);
 }
-.el-tag--warning {
+.el-tag.el-tag--warning {
   --el-tag-bg-color: var(--ha-warning-bg);
   --el-tag-text-color: var(--ha-warning-text);
 }
-.el-tag--danger {
+.el-tag.el-tag--danger,
+.el-tag.el-tag--error {
   --el-tag-bg-color: var(--ha-danger-bg);
   --el-tag-text-color: var(--ha-danger-text);
 }
-.el-tag--info {
+.el-tag.el-tag--info {
   --el-tag-bg-color: var(--ha-info-bg);
   --el-tag-text-color: var(--ha-info-text);
+}
+
+/* ---- Message ----
+   toast 同样走 --ha-* 语义色，避免 EP 默认绿/橙文字在浅底上对比度不达标 */
+.el-message--success {
+  --el-message-bg-color: var(--ha-success-bg);
+  --el-message-border-color: var(--ha-success-bg);
+  --el-message-text-color: var(--ha-success-text);
+}
+.el-message--warning {
+  --el-message-bg-color: var(--ha-warning-bg);
+  --el-message-border-color: var(--ha-warning-bg);
+  --el-message-text-color: var(--ha-warning-text);
+}
+.el-message--error {
+  --el-message-bg-color: var(--ha-danger-bg);
+  --el-message-border-color: var(--ha-danger-bg);
+  --el-message-text-color: var(--ha-danger-text);
 }
 
 /* ---- Menu ---- */
@@ -482,7 +504,9 @@ html.dark {
 .el-input__wrapper {
   box-shadow: 0 0 0 1px var(--ha-border) inset !important;
 }
-.el-input__wrapper.is-focus {
+.el-input__wrapper.is-focus,
+.el-input__wrapper:focus-within {
+  /* focus-within 兜底键盘聚焦路径：不依赖 EP 的 is-focus 时机，任何聚焦方式都能看到焦点环 */
   box-shadow: 0 0 0 2px var(--ha-primary) inset !important;
 }
 
