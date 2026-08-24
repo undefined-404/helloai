@@ -5,8 +5,9 @@ import type { AgentQualityRank, QualityDashboardResponse, QualityOverview } from
 /**
  * Phase 5 质量度量看板 API（对齐后端 AdminQualityController）。
  *
- * <p>全部端点受 sys_config 键 admin.quality.enabled 门控（生产默认关闭），
- * 前端拿到 403 时由 request 拦截器统一提示并登出。</p>
+ * <p>全部端点受 sys_config 键 admin.quality.enabled 门控（§6.151 起默认开放，
+ * 仅显式 false 关闭）；关闭时后端返回业务码 403，前端由 request 拦截器统一
+ * 提示但不登出（403 不再触发 logout）。</p>
  */
 export const qualityApi = {
   /** 全局质量概览（画像表存量聚合）。 */

@@ -77,11 +77,17 @@ instance.interceptors.response.use(
     if (shouldLetCallerHandleError(response.config.url)) {
       return Promise.reject(new Error(res.msg))
     }
-    if (res.code === 401 || res.code === 403) {
+    // 401 未认证/会话失效 → 清空登录态登出（§6.151 起 403 不再登出：
+    // 403 是"已认证但无权限/功能未开启"，应只提示，避免质量看板门控等业务 403 误登出）
+    if (res.code === 401) {
       ElMessage.error(res.msg || '认证失败')
       // 走 store 清空，避免业务代码再散落 sessionStorage.removeItem
       const auth = useAuthStore()
       auth.logout()
+      return Promise.reject(new Error(res.msg))
+    }
+    if (res.code === 403) {
+      ElMessage.error(res.msg || '无权限或功能未开启')
       return Promise.reject(new Error(res.msg))
     }
     ElMessage.error(res.msg || '请求失败')

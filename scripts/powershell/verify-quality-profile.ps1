@@ -429,9 +429,9 @@ Write-Output '[A1] admin token acquired'
 
 # ============================================================
 # STEP A1.5: enable admin quality endpoints gate
-#   AdminQualityController 配置门控（生产默认关闭）：sys config
-#   admin.quality.enabled=true 才开放 rebuild/dispatch/spec-section。
-#   详见评审整改计划阶段四-4 与 AdminQualityController Javadoc。
+#   AdminQualityController 配置门控（§6.151 起默认开放，仅显式 false 关闭）：
+#   sys config admin.quality.enabled=false 才关闭 rebuild/dispatch/spec-section。
+#   显式置 true 保证脚本环境确定。详见 AdminQualityController Javadoc。
 # ============================================================
 Write-Output ''
 Write-Output '=== [A1.5] enable admin quality gate ==='

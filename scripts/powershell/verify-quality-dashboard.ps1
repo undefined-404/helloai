@@ -2,7 +2,8 @@
 # helloai verify-quality-dashboard.ps1
 # Purpose: assert Phase 5 quality metrics dashboard endpoints:
 #   S1 gate closed : GET /api/admin/quality/overview returns business
-#                    code 403 when sys config admin.quality.enabled != true
+#                    code 403 when sys config admin.quality.enabled == false
+#                    (since 6.151 gate is open by default, S1 auto-skips when true)
 #   S2 gate open   : PUT /api/admin/config/updateByKey/admin.quality.enabled=true
 #   S3 overview    : GET /overview -> data.totalReviewed/totalApproved/
 #                    firstPassRate(0-100)/avgReworkRounds/activeExecutors
@@ -124,8 +125,8 @@ $authHeaders = @{ 'X-Admin-Token' = $adminToken }
 
 # ============================================================
 # STEP S1: gate closed -> business code 403
-#   AdminQualityController 配置门控（生产默认关闭）：sys config
-#   admin.quality.enabled != true 时全部端点返回 R{code:403}。
+#   AdminQualityController 配置门控（§6.151 起默认开放，仅显式 false 关闭）：
+#   sys config admin.quality.enabled == false 时全部端点返回 R{code:403}。
 #   注意：gateDenied 返回 HTTP 200 + R{code:403}，断言 body.code。
 # ============================================================
 Write-Output ''

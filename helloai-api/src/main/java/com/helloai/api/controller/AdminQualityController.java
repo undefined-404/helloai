@@ -43,11 +43,13 @@ import java.util.List;
  *
  * <p>本端点仅面向管理侧实测验证。</p>
  *
- * <p>配置门控：全部端点受 sys_config 键 {@code admin.quality.enabled}
- * （值 "true" 开放）控制，生产默认关闭；可在系统设置页「基础配置 - 质量实测端点」
+ * <p>配置门控：全部端点受 sys_config 键 {@code admin.quality.enabled} 控制
+ * （§6.151 起默认开放——缺省/空值视为开放，仅显式置 "false" 关闭），Flyway V58
+ * 已初始化默认值 "true"，新老部署开箱即用；可在系统设置页「基础配置 - 质量门控」
  * 开关切换，实测脚本（verify-quality-profile.ps1 / verify-contract-first.ps1）
  * 登录后会先 {@code PUT /api/admin/config/updateByKey/admin.quality.enabled} 开启。
- * 关闭时返回业务码 403，避免内部 Prompt 段/重算/派发入口在生产无门槛暴露。</p>
+ * 关闭时返回业务码 403（前端只提示不登出，见 §6.151），避免内部 Prompt 段/重算/派发
+ * 入口被显式收敛。</p>
  */
 @Slf4j
 @RestController
@@ -55,7 +57,9 @@ import java.util.List;
 @RequiredArgsConstructor
 public class AdminQualityController {
 
-    /** 门控配置键：sys_config 中置 "true" 才开放本控制器全部端点。 */
+    /**
+     * 门控配置键：sys_config 中显式置 "false" 才关闭本控制器全部端点（默认开放）。
+     */
     private static final String ENABLED_CONFIG_KEY = "admin.quality.enabled";
 
     private final AgentQualityProfileService agentQualityProfileService;
@@ -149,8 +153,12 @@ public class AdminQualityController {
         return R.ok(qualityDashboardService.assemble(days != null ? days : 0));
     }
 
+    /**
+     * §6.151 默认开放：缺省/空值/任意非 "false" 值均视为开放，
+     * 仅显式 "false" 关闭——保证未配置或配置丢失时看板可用，开关能力保留。
+     */
     private boolean isEnabled() {
-        return "true".equalsIgnoreCase(sysConfigService.getValue(ENABLED_CONFIG_KEY));
+        return !"false".equalsIgnoreCase(sysConfigService.getValue(ENABLED_CONFIG_KEY));
     }
 
     private <T> R<T> gateDenied() {
