@@ -37,12 +37,12 @@
             >{{ form.qualityGateEnabled ? '已开启' : '已关闭' }}</span>
           </div>
           <div class="form-hint">
-            开启后
+            默认开启；关闭后
             <router-link
               class="hint-link"
               to="/quality-dashboard"
             >质量看板</router-link>
-            及画像重算、自动派发等管理侧入口才可用；默认关闭，生产环境建议保持关闭。
+            及画像重算、自动派发等管理侧入口不可用（§6.151 起默认开放）。
           </div>
         </el-form-item>
 
@@ -385,29 +385,26 @@
             </el-checkbox>
           </el-checkbox-group>
         </el-form-item>
+      <!-- 保存区：融入表单内部（§6.152），作为表单收尾行；"全部已保存"不常驻——
+           保存成功由 ElMessage toast 提示并自动消失（handleSave 已有），仅未保存时显示防遗漏提醒 -->
+      <div class="save-bar">
+        <span
+          v-if="isDirty"
+          class="save-bar-status dirty"
+        >
+          <el-icon class="save-bar-icon"><WarningFilled /></el-icon>
+          有未保存更改
+        </span>
+        <el-button
+          type="primary"
+          :loading="saving"
+          @click="handleSave"
+        >
+          保存设置
+        </el-button>
+      </div>
       </el-form>
     </el-card>
-
-    <!-- 保存条：卡片外直接子级才能对 .app-content 滚动容器生效（EP 卡片自带 overflow，会吃掉内部 sticky） -->
-    <div class="save-bar">
-      <span
-        class="save-bar-status"
-        :class="isDirty ? 'dirty' : 'clean'"
-      >
-        <el-icon
-          v-if="isDirty"
-          class="save-bar-icon"
-        ><WarningFilled /></el-icon>
-        {{ isDirty ? '有未保存更改' : '全部已保存' }}
-      </span>
-      <el-button
-        type="primary"
-        :loading="saving"
-        @click="handleSave"
-      >
-        保存设置
-      </el-button>
-    </div>
 
     <!-- 配置 API Key 对话框 -->
     <el-dialog
@@ -612,12 +609,12 @@ function protocolLabel(type: ProtocolType): string {
   return PROTOCOL_OPTIONS.find(o => o.value === type)?.label || type
 }
 
-// 质量门控安全确认：开启会开放管理侧入口，需二次确认；关闭为收敛动作直接放行。
-// before-change 返回 false 时开关保持原值，不会污染表单脏状态。
+// 质量门控开关确认：§6.151 起默认开启，开启方向是恢复默认（仍二次确认防误点）；
+// 关闭为收敛动作直接放行。before-change 返回 false 时开关保持原值，不污染表单脏状态。
 function beforeQualityGateChange(): Promise<boolean> {
   if (!form.qualityGateEnabled) {
     return ElMessageBox.confirm(
-      '开启后将开放质量看板及自动派发等管理侧入口；生产环境建议保持关闭。确认开启？',
+      '开启后将开放质量看板及画像重算、自动派发等管理侧入口（默认开启状态）。确认开启？',
       '开启质量门控',
       { confirmButtonText: '开启', cancelButtonText: '取消', type: 'warning' }
     ).then(() => true).catch(() => false)
@@ -921,28 +918,23 @@ onMounted(() => {
   color: var(--ha-ink);
 }
 
-/* 底部保存条：置于卡片外、.page 直接子级，才能对 .app-content 滚动容器 sticky 生效
-   （EP 卡片自带 overflow，会截断卡片内部的 sticky 滚动上下文） */
+/* 保存区：融入表单内部（§6.152）——表单收尾行，去独立卡片外观，仅用细分隔线与表单内容区分；
+   按钮恒右对齐（与其他按钮一致）：clean 态无状态文字时 flex-end 生效，
+   dirty 态状态文字靠 margin-right: auto 撑到左侧、按钮仍贴右 */
 .save-bar {
-  position: sticky;
-  bottom: 0;
-  z-index: 1;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
-  max-width: 920px;
-  margin-top: 12px;
-  padding: 12px 20px;
-  background: var(--ha-surface-elevated);
-  border: 1px solid var(--ha-border-light);
-  border-radius: var(--ha-radius-lg);
-  box-shadow: var(--ha-shadow-sm);
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--ha-border-light);
 }
 .save-bar-status {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  margin-right: auto;
   font-size: 13px;
   color: var(--ha-ink-secondary);
 }
