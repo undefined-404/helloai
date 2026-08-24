@@ -48,6 +48,14 @@
 
         <div class="section-heading">
           <h3 class="section-title">联网搜索</h3>
+          <el-button
+            size="small"
+            plain
+            :loading="verifyingWebSearchKey"
+            @click="verifyWebSearchKey(true)"
+          >
+            验证 Key
+          </el-button>
         </div>
         <el-form-item label="博查 API Key">
           <el-input
@@ -69,6 +77,10 @@
               size="small"
             >未配置 · 联网搜索不可用</el-tag>
           </div>
+          <div
+            v-if="webSearchDirty"
+            class="verify-key-tip"
+          >验证的是已保存的 Key；输入框改动请先保存</div>
         </el-form-item>
 
         <div class="section-heading">
@@ -569,7 +581,10 @@ const form = reactive({
 const webSearchKeyLoaded = ref('')
 const webSearchKeyConfigured = ref(false)
 
-// 未保存变更指示：加载快照与当前表单值比对（保存成功后同步快照）。
+/** 博查 Key 未保存变更指示：保存的是已落库的 Key，验证前提示先保存。 */
+const webSearchDirty = computed(() => form.webSearchApiKey !== webSearchKeyLoaded.value)
+
+/** 未保存变更指示：加载快照与当前表单值比对（保存成功后同步快照）。 */
 const loadedExternalUrl = ref('')
 const loadedQualityGate = ref(false)
 const saving = ref(false)
@@ -647,6 +662,8 @@ const pickerVisible = ref(false)
 const addModelVisible = ref(false)
 const addModelInitial = ref<CatalogProvider | null>(null)
 const verifyingKeyId = ref<number | null>(null)
+// 博查 Key 手动验证 loading（与供应商验证同源：按钮转圈 + 过程消息提示）
+const verifyingWebSearchKey = ref(false)
 
 function openPickerDialog() {
   pickerVisible.value = true
@@ -683,8 +700,12 @@ async function verifyProviderKey(providerId: number) {
   }
 }
 
-/** 博查 Key 验证（保存设置后自动调用；供应商不支持时降级为提示）。 */
-async function verifyWebSearchKey() {
+/** 博查 Key 验证（保存设置后自动调用 / 详情页「验证 Key」按钮手动触发；供应商不支持时降级为提示）。 */
+async function verifyWebSearchKey(manual = false) {
+  verifyingWebSearchKey.value = manual
+  const loading = manual
+    ? ElMessage({ message: '正在验证博查 API Key（最小搜索请求探测）…', type: 'info', duration: 0 })
+    : null
   try {
     const res = await settingsApi.verifyWebSearchApiKey()
     if (res.supported === false) {
@@ -696,6 +717,9 @@ async function verifyWebSearchKey() {
     }
   } catch (e: any) {
     ElMessage.error('博查 Key 验证请求失败')
+  } finally {
+    loading?.close()
+    verifyingWebSearchKey.value = false
   }
 }
 
@@ -1061,6 +1085,15 @@ onMounted(() => {
 }
 .form-hint .hint-link:hover {
   text-decoration: underline;
+}
+
+/* 博查 Key 未保存提示（仅输入框有未保存改动时显示，提醒验证对象是已落库的 Key）。
+   「验证 Key」按钮已上提至「联网搜索」分区标题右侧，与 LLM 供应商验证按钮布局一致。 */
+.verify-key-tip {
+  font-size: 12px;
+  color: var(--ha-ink-secondary);
+  opacity: 0.75;
+  margin-top: 6px;
 }
 
 /* 开关文字态：不依赖动画/颜色的第二状态通道（亮暗双主题均用 --ha-* 语义色） */
