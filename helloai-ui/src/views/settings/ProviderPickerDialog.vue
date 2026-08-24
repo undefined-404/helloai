@@ -64,7 +64,9 @@ function pick(entry: CatalogProvider) {
 /* 供应商双列网格：卡片式按钮，monogram 徽标 + 名称 + 右箭头 */
 .picker-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* minmax(0, 1fr)：轨道下限取 0 而非内容自动最小值，
+     否则卡片内 nowrap 文案会把列撑宽超出弹窗（列内容已由 ellipsis 截断兼容） */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 12px;
 }
 .picker-card {
