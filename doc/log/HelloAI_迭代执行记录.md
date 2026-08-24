@@ -6785,3 +6785,56 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - 影响：设置页状态展示从"仅动画视觉"升级为"动画 + 文字态"双通道；核心交互（供应商切换）对键盘用户可达；文案不再泄露实现细节。
 - 遗留：快照 P2 项（分区就近保存、信息层级平塌、装饰性禁用复选框、默认模型三重冗余）；ElMessageBox 离场过渡在 hidden 标签页环境卡住（环境特性，真实浏览器无影响）；本轮未 git 提交。
+
+### 6.151 质量看板默认开放 + 前端 403 不再误登出（2026-08-24）
+
+#### 1. 背景与结论
+
+- **背景**：质量看板（AdminQualityController）默认关闭（`admin.quality.enabled` 无任何初始化，V1 种子仅 3 个键），但前端菜单无条件可见；用户首次点击 → 后端返回 HTTP 200 + 业务码 403 → 前端 request.ts 把 `res.code === 403` 与 401 同等对待触发 `auth.logout()` → 直接退出登录，误判为系统 Bug。
+- **根因**：三层叠加——① 配置键缺省即关（`getValue` 返回 null → `isEnabled()` = false）；② 前端 403 语义误用（403 是"已认证但无权限/功能未开启"，401 才是未认证应登出）；③ 菜单未按开关状态隐藏（隐藏方案改动面大，默认开放后无需隐藏）。
+- **结论**：按评审建议走"默认开放 + 初始化"路线——门控语义反转为"缺省/空值视为开放，仅显式 false 关闭"，Flyway V58 落库默认值 true；前端 403 只提示不登出。安全面无损：全部端点已在 `/api/admin/**` 下受 AdminOnlyInterceptor 强制 admin 鉴权，门控仅是可关闭功能开关而非安全边界。
+
+#### 2. 实现要点
+
+- **AdminQualityController.isEnabled 语义反转**：`"true".equalsIgnoreCase(value)` → `!"false".equalsIgnoreCase(value)`（缺省/空/任意非 false → 开放，仅显式 "false" → 关闭），gateDenied 保留；类注释/常量注释同步（§6.151 引用）。
+- **Flyway V58__seed_admin_quality_enabled.sql**：`INSERT sys_config (id=1000000000000000004, 'admin.quality.enabled', 'true') ON CONFLICT (config_key) WHERE deleted = 0 DO NOTHING`——幂等（partial unique index idx_sys_config_key 为冲突目标，**必须带 WHERE 谓词**，裸列名推断会报 42P10），不覆盖用户手动创建/历史遗留值；新老部署开箱即用。
+- **V58 首版启动失败修正**：首版 `ON CONFLICT (config_key) DO NOTHING` 在 PostgreSQL 16 报 `42P10 no unique or exclusion constraint matching the ON CONFLICT specification`——partial unique index 无法通过裸列名推断为冲突目标；已修正为 `ON CONFLICT (config_key) WHERE deleted = 0 DO NOTHING`（与 V2/V13/V21 既有 partial index 写法一致），失败迁移已回滚、schema 版本停在 57，修复后重启自动重试。
+- **前端 request.ts**：403 从登出分支拆出——401 仍 `auth.logout()`，403 改为 `ElMessage.error` 只提示（"无权限或功能未开启"）；修复面覆盖质量门控 / AuthController 改密非 admin / AgentController 自注册关闭等全部业务码 403 场景（HTTP 403 走 error 分支本就不登出，不受影响）。
+- **前端文案同步**：Settings.vue 门控 hint「默认开启；关闭后…不可用（§6.151 起默认开放）」+ 开启确认弹窗文案（开启=恢复默认）；quality.ts 头注释更新（403 提示不登出）。
+- **验证脚本注释同步**：verify-quality-dashboard.ps1 S1 与 verify-quality-profile.ps1 / verify-contract-first.ps1 A1.5 的"生产默认关闭"口径更新为"默认开放，仅显式 false 关闭"；脚本逻辑兼容（S1 读 gateValue=true 时自动 skip，显式关闭时仍断言 403）。
+
+#### 3. 验证结果
+
+- `vue-tsc --noEmit` 0 错（request.ts 逻辑拆分 + Settings.vue 文案）。
+- 3 个改动脚本 `[Parser]::ParseFile` 静态自检 0 错误（规则 6）。
+- 后端仅一行语义反转 + 注释 + 新增 SQL，无行为面扩大；Node fallback 下不跑 mvn（已知 JVM 崩溃陷阱），编译验证待用户环境确认。
+- 兼容性：设置页开关加载（`config['admin.quality.enabled'] === 'true'`）与保存（true/false 双向）不受影响；Flyway 幂等不覆盖既有值。
+
+#### 4. 影响与遗留
+
+- 影响：质量看板开箱即用，首次点击不再登出；业务码 403 全局不再误登出（语义对齐 401/403 边界）；显式关闭能力保留（设置页开关 + 脚本 S1 断言仍有效）。
+- 遗留：本轮改动未 git 提交，待用户确认后提交。
+
+### 6.152 设置页保存区形态调整：吸底悬浮条融入表单内部 + 保存成功 toast 化（2026-08-24）
+
+#### 1. 背景与结论
+
+- **背景**：设置页保存条为 §6.149/6.150 critique 收口引入的 sticky 吸底悬浮条（卡片外、跟随 .app-content 滚动吸底），用户反馈"单独悬浮"视觉干扰；经用户澄清，目标形态不是"独立条块"，而是**融入表单内部**——保存按钮作为表单的收尾行存在，而非独立在外的区域。同时用户要求"全部已保存"不再常驻文字提示，改为**保存成功后的自动消失 toast**。
+- **结论**：保存区移入 `el-form` 内部（表单最后一个元素），去掉独立卡片外观（背景/边框/圆角/阴影），仅保留细分隔线与表单内容区分；"全部已保存"常驻文字移除——保存成功反馈复用 `handleSave` 已有的 `ElMessage.success('保存成功')`（toast 自动消失），仅保留"有未保存更改"防遗漏提醒（dirty 态才显示）。
+
+#### 2. 实现要点
+
+- **HTML**：`.save-bar` div 从卡片外移入 `</el-form>` 之前，作为表单收尾行；状态 span 改为 `v-if="isDirty"` 单态（class 固定 `save-bar-status dirty`，去三元 `dirty/clean` 双态绑定），clean 态不再渲染任何文字。
+- **CSS .save-bar**：删除 `position: sticky / bottom / z-index`、`background / border / border-radius / box-shadow / max-width` 等独立块外观；`justify-content` 由 `space-between` 改为 `flex-end`（clean 态无状态文字时 space-between 失效导致按钮落左，与页内其他右对齐按钮不一致），`.save-bar-status` 补 `margin-right: auto`（dirty 态状态文字撑左侧、按钮仍贴右）；新增 `margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--ha-border-light)`——宽度继承 `.settings-form`（920px），与表单内容自然对齐；`.save-bar-status` 基础样式保留（dirty 态仍使用）。
+- 保存成功 toast（`ElMessage.success('保存成功')`）为既有逻辑，未改动；isDirty 脏检测、保存流程、`saving` loading 均不变。
+- 不做的项：分区就近保存（此前 P2 快照项）改动面大，本次仅形态调整，保持全局保存语义。
+
+#### 3. 验证结果
+
+- `vue-tsc --noEmit` 0 错（纯 HTML/CSS 改动，无 JS 逻辑变化）。
+- 行为不变：isDirty 脏检测、保存流程、状态文字逻辑均未触碰；保存成功 toast 自动消失为 Element Plus 默认行为。
+
+#### 4. 影响与遗留
+
+- 影响：保存区不再是独立悬浮/独立条块，视觉上成为表单的一部分（分隔线收尾行）；保存成功反馈为瞬时 toast，无常驻"全部已保存"文字；与 §6.149/6.150 的"吸底"验收结论相悖系用户主动偏好变更，记录在案。
+- 遗留：本轮改动未 git 提交，待用户确认后提交。
