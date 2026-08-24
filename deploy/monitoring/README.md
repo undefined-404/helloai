@@ -52,12 +52,19 @@ Local (app runs in IDEA, scrapes `host.docker.internal:6565` by default):
 docker compose -f deploy/monitoring/docker-compose.monitoring.yml up -d
 ```
 
-Server (app is a compose container, scrapes internal `app:6565`):
+Server (app is a compose container, scrapes internal `app:6565`; expose Grafana on the public NIC and set a strong admin password):
 
 ```bash
 export PROMETHEUS_CONFIG=./prometheus/prometheus.yml
+export GRAFANA_BIND=0.0.0.0        # expose Grafana on the public NIC
+export GRAFANA_ADMIN_PASSWORD=<strong-password>  # required once Grafana is public
+# Optional: export PROMETHEUS_BIND=0.0.0.0 to expose Prometheus too
+cd /home/admin/helloai/deploy/monitoring
+# run the compose file from this directory (internal mounts are relative paths)
 docker compose -f docker-compose.monitoring.yml up -d
 ```
+
+Access: `http://<server-ip>:3000` (admin / the password set above).
 
 ### 3. Verification
 
@@ -68,7 +75,7 @@ docker compose -f docker-compose.monitoring.yml up -d
 
 ## Operations Notes
 
-- Port binding: prometheus/grafana bind to `127.0.0.1` only, not exposed publicly; no extra Aliyun security group rule needed.
+- Port binding: prometheus/grafana bind to `127.0.0.1` by default, not exposed publicly. To access Grafana from the internet, set `GRAFANA_BIND=0.0.0.0` (and set `GRAFANA_ADMIN_PASSWORD` to a strong password first); optionally `PROMETHEUS_BIND=0.0.0.0` for Prometheus. Restrict the Aliyun security group source IP if possible instead of `0.0.0.0/0`.
 - Data retention: Prometheus `--storage.tsdb.retention.time=30d` (a few tens of MB/day, negligible).
 - Stopping the monitoring stack does not affect the main stack: `docker compose -f deploy/monitoring/docker-compose.monitoring.yml down`
 - After editing dashboards/datasources: `docker compose -f deploy/monitoring/docker-compose.monitoring.yml restart grafana` (provisioning re-applies within 30s).

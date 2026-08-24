@@ -15,9 +15,10 @@
 #
 # Stop: docker compose -f deploy/monitoring/docker-compose.monitoring.yml down
 #
-# Ports are bound to 127.0.0.1 only (no public exposure):
+# Ports bind to 127.0.0.1 by default (no public exposure). Override on the
+# server with GRAFANA_BIND / PROMETHEUS_BIND (see note near 'services'):
 #   Prometheus -> http://localhost:9090
-#   Grafana    -> http://localhost:3000 (admin/admin)
+#   Grafana    -> http://localhost:3000 (admin / $GRAFANA_ADMIN_PASSWORD)
 #
 # PostgreSQL monitoring account (run manually once, see README.md):
 #   CREATE ROLE helloai_monitor LOGIN PASSWORD 'HelloAI_monitor_2026';
@@ -33,6 +34,11 @@
 # down/up commands affect each other's containers and volumes.
 name: helloai-monitoring
 
+# Bind address override (server public access):
+#   export GRAFANA_BIND=0.0.0.0    # expose Grafana on public NIC (change admin password first!)
+#   export PROMETHEUS_BIND=0.0.0.0 # expose Prometheus on public NIC (optional)
+# Default keeps both bound to 127.0.0.1 only.
+
 services:
 
   # --- Prometheus (scrapes app / rabbitmq / redis / postgres) ---
@@ -41,7 +47,7 @@ services:
     container_name: helloai-prometheus
     restart: unless-stopped
     ports:
-      - "127.0.0.1:9090:9090"
+      - "${PROMETHEUS_BIND:-127.0.0.1}:9090:9090"
     volumes:
       - ${PROMETHEUS_CONFIG:-./prometheus/prometheus-local.yml}:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
@@ -59,10 +65,10 @@ services:
     container_name: helloai-grafana
     restart: unless-stopped
     ports:
-      - "127.0.0.1:3000:3000"
+      - "${GRAFANA_BIND:-127.0.0.1}:3000:3000"
     environment:
       - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
       - GF_INSTALL_PLUGINS=grafana-piechart-panel
     volumes:
       - grafana_data:/var/lib/grafana
