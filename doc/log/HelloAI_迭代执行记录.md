@@ -14,6 +14,29 @@
 
 ## 2. 近期关键轮次
 
+### 2026-08 监控体系阶段1：Prometheus + Grafana 指标监控（借鉴 maticube）
+
+#### 1. 范围
+
+- 新增监控体系阶段1（指标监控）：应用 Actuator Prometheus 端点 + Prometheus + Grafana 监控栈 + Redis/PG exporter；RabbitMQ 复用 management 镜像自带 rabbitmq_prometheus 插件（15692），无需额外 exporter。
+- 参考 `E:\yhzx\1027\maticube\deploy\monitoring`（已在 maticube 验证可用的全套监控实现）落地最小集，镜像版本与其保持一致（prometheus v2.51.0 / grafana 10.4.0 / postgres-exporter v0.15.0 / redis_exporter v1.61.0）。
+- 不做：ELK/Loki 日志聚合（阶段2 预留）、Grafana 告警通知、看板美化。
+
+#### 2. 实际落地
+
+- `helloai-start/pom.xml` 新增 `micrometer-registry-prometheus` 依赖（actuator 依赖此前已有）；`application.yml` management 段 exposure 增加 `prometheus`，新增 `http.server.requests` 直方图（percentiles-histogram + SLO 桶 100ms~5s）与 `application=helloai` 公共标签。
+- 新增 `deploy/monitoring/`：`docker-compose.monitoring.yml`（prometheus + grafana + redis-exporter + postgres-exporter，端口均绑 127.0.0.1 不暴露公网；显式 `name: helloai-monitoring` 避免与 maticube 监控 compose 同目录默认 project 名冲突导致 down/up 互伤）+ `prometheus/prometheus.yml`（服务器版抓 compose 内网 `app:6565`）/ `prometheus-local.yml`（本地版抓 `host.docker.internal:6565`，默认挂载）+ grafana provisioning（Prometheus 数据源 + 「HelloAI 监控总览」看板自动加载）+ README（含 PG 监控账号 SQL）。
+- 看板覆盖：JVM 堆/非堆、系统 CPU、活跃线程、接口 RT P50/P95/P99、QPS、GC 暂停、Top5 慢接口、RabbitMQ 队列就绪/未确认消息、PG 连接数/事务速率、Redis 内存/连接数、抓取目标健康。
+- 验证：`mvn compile -pl helloai-start -am` 通过；本地监控栈启动后 Prometheus targets 中 rabbitmq/redis/postgres/prometheus 全部 UP（rabbitmq 15692 插件实测可抓），`redis_memory_used_bytes`、`rabbitmq_queue_messages_ready` 指标实测采集成功；Grafana basic auth 确认「HelloAI 监控总览」看板 provisioning 加载成功。
+
+#### 3. 遗留
+
+- app 的 `/actuator/prometheus` 需重启后端（新依赖装配）后生效，重启后 `helloai-app` target 恢复 UP。
+- PostgreSQL 监控账号 `helloai_monitor` 未创建（写操作由人工执行，SQL 见 `deploy/monitoring/README.md`），建号后 postgres-exporter 自动恢复指标采集。
+- 服务器部署：将 `deploy/monitoring/` 拷至服务器后设 `PROMETHEUS_CONFIG=./prometheus/prometheus.yml` 再启动；端口绑 127.0.0.1，公网不可达（SSH 隧道访问）。
+- 阶段2 预留：Loki 日志聚合、告警通知（Grafana Alerting + 钉钉/企业微信 webhook）。
+
+
 ### 2026-08 博查联网搜索 API Key 接入系统设置页（含占位符字面量修复）
 
 #### 1. 范围

@@ -45,6 +45,7 @@
 - 子任务分发失败快速兜底（V41，2026-08-04）：孤儿 PENDING 巡检阈值收窄至 5 分钟（isReady 依赖守卫保证不误伤未就绪子任务）+ 依赖解锁失败写 `sub_task_dispatch_deferred` timeline 事件（分发异常不再静默，见迭代记录 §6.47）
 - 执行链依赖上下文注入（V35 原始产出 + 2026-08-03 双轨升级）：执行 Agent 按 `depends_on` 声明顺序参考直接前置产出——先经 V35 `## 上游产出参考` 注入原始产出，2026-08-03 升级为 Task Running Spec 双轨：直接前置的**结构化摘要**（`findRecord` 精确取单条 EXECUTION_RECORD）+ **完成内容本体**（物化附件优先、`context.lastExecution.output` 回退）同现于 `## 依赖产出参考（直接前置）` 章节（多前置按声明顺序全量收集防覆盖）；Phase A JSONB 回填加 taskId 粒度分段锁防并发互覆（Phase B 独立表行级天然安全）；`sub_task_spec_context_loaded` 可观测（depCount/loadedCount/truncatedCount/degraded）。E2E 双前置场景 PASS（§6.43）
 - 执行对话流可观测（V38 + 2026-08-02）：user prompt 落库 `conversation_message`（`sub_task_execute_user_prompt`）、reviewHistory 多轮累积、审核结论消息 `subtask_review_result`、Snowflake 长 ID 全链路字符串化（`BaseEntity.id` + DTO 注解 + 前端 `String()` 防御）
+- 监控体系阶段1（2026-08-24）：Prometheus + Grafana 指标监控——app 暴露 `/actuator/prometheus`（接口 RT 直方图 SLO 100ms~5s），RabbitMQ 复用 management 镜像自带 prometheus 插件（15692），Redis/PG 走 exporter；看板「HelloAI 监控总览」provisioning 自动加载，详见 `deploy/monitoring/` 与迭代执行记录
 
 ---
 
