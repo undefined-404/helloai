@@ -1,0 +1,67 @@
+# ============================================================
+# Prometheus 配置 — HelloAI 服务器环境（docker-compose.server.yml）
+# ------------------------------------------------------------
+# 服务器部署时使用（PROMETHEUS_CONFIG=./prometheus/prometheus.yml）。
+# 所有 target 通过 compose 内部网络服务名访问：
+#   app        → app:6565   (/actuator/prometheus)
+#   RabbitMQ   → rabbitmq:15692（management 镜像自带 prometheus 插件）
+#   Redis      → redis-exporter:9121
+#   PostgreSQL → postgres-exporter:9187
+# ============================================================
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    application: helloai
+    environment: server
+
+scrape_configs:
+  # ========== HelloAI 应用（Actuator Prometheus 端点） ==========
+  - job_name: "helloai-app"
+    metrics_path: "/actuator/prometheus"
+    scrape_interval: 10s
+    static_configs:
+      - targets:
+          - "app:6565"
+        labels:
+          app: helloai
+          env: server
+
+  # ========== RabbitMQ（内置 prometheus 插件，15692） ==========
+  - job_name: "rabbitmq"
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - "rabbitmq:15692"
+        labels:
+          app: rabbitmq
+          env: server
+
+  # ========== Redis ==========
+  - job_name: "redis"
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - "redis-exporter:9121"
+        labels:
+          app: redis
+          env: server
+
+  # ========== PostgreSQL ==========
+  - job_name: "postgres"
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - "postgres-exporter:9187"
+        labels:
+          app: postgresql
+          env: server
+
+  # ========== Prometheus 自身监控 ==========
+  - job_name: "prometheus"
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+          - "localhost:9090"

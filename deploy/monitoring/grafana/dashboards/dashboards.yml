@@ -1,0 +1,13 @@
+# Grafana Dashboard 自动加载配置（provisioning 自动加载）
+apiVersion: 1
+providers:
+  - name: "helloai"
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: true

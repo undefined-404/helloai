@@ -1,0 +1,102 @@
+# ============================================================
+# HelloAI - Prometheus + Grafana 监控栈（阶段1：指标监控）
+# 参考：maticube deploy/monitoring 同名实现（已验证可用）
+# ------------------------------------------------------------
+# 前置条件：主栈已启动（本地 docker-compose.yml 或服务器 docker-compose.server.yml），
+#           共享外部网络 helloai_default 已存在。
+#
+# 启动（本地默认，抓 host.docker.internal:6565 的 app）:
+#   docker compose -f deploy/monitoring/docker-compose.monitoring.yml up -d
+#
+# 启动（服务器版，抓 compose 内网 app:6565）:
+#   $env:PROMETHEUS_CONFIG = "./prometheus/prometheus.yml"
+#   docker compose -f docker-compose.monitoring.yml up -d
+#
+# 停止: docker compose -f deploy/monitoring/docker-compose.monitoring.yml down
+#
+# 端口映射（均绑定 127.0.0.1，不暴露公网）:
+#   Prometheus -> http://localhost:9090
+#   Grafana    -> http://localhost:3000 (admin/admin)
+#
+# PostgreSQL 监控账号（首次需手动执行，见 README.md）:
+#   CREATE ROLE helloai_monitor LOGIN PASSWORD 'HelloAI_monitor_2026';
+#   GRANT CONNECT ON DATABASE helloai TO helloai_monitor;
+#   GRANT pg_monitor TO helloai_monitor;
+#
+# RabbitMQ 无需额外 exporter：management 镜像默认启用 rabbitmq_prometheus 插件（15692）
+# ============================================================
+
+version: '3.8'
+
+# 显式项目名：避免与 maticube 的 monitoring compose（同目录名默认 project=monitoring）共享项目名，
+# 防止 down/up 互相误伤（容器 label 与 volume 均按本项目名隔离）
+name: helloai-monitoring
+
+services:
+
+  # --- Prometheus（抓取 app / rabbitmq / redis / postgres） ---
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: helloai-prometheus
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ${PROMETHEUS_CONFIG:-./prometheus/prometheus-local.yml}:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.enable-lifecycle"
+    networks:
+      - helloai-net
+
+  # --- Grafana（provisioning 自动加载数据源与看板） ---
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: helloai-grafana
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      - prometheus
+    networks:
+      - helloai-net
+
+  # --- Redis Exporter ---
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.61.0
+    container_name: helloai-redis-exporter
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: "redis://redis:6379"
+    networks:
+      - helloai-net
+
+  # --- PostgreSQL Exporter ---
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: helloai-postgres-exporter
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: "postgresql://helloai_monitor:HelloAI_monitor_2026@postgres:5432/helloai?sslmode=disable"
+    networks:
+      - helloai-net
+
+volumes:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  helloai-net:
+    external: true
+    name: helloai_default
