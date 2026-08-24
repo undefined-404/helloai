@@ -32,6 +32,10 @@ public class UpdateLlmProviderRequest {
     /** 排序（可选）。 */
     private Integer sortOrder;
 
+    /** 计费类型（可选；当前仅支持 API_KEY=按量付费，TOKEN_PLAN / CODING_PLAN 暂不支持）。 */
+    @Pattern(regexp = "API_KEY", message = "计费类型暂仅支持按量付费（API_KEY），Token Plan / Coding Plan 敬请期待")
+    private String billingType;
+
     /** 扩展配置 JSONB（可选）。 */
     private Map<String, Object> extraConfig;
 }

@@ -50,6 +50,12 @@ public class LlmProvider extends BaseEntity {
     /** 列表排序（数值越小越靠前）。 */
     private Integer sortOrder;
 
+    /**
+     * 计费类型：API_KEY=按量付费（默认）；TOKEN_PLAN / CODING_PLAN 预留，
+     * 当前应用层仅放行 API_KEY（见 {@code LlmProviderServiceImpl.validateBillingType}）。
+     */
+    private String billingType;
+
     /** 扩展配置（如 openai 的 completionsPath、anthropic 的 messagesPath）。 */
     @TableField(typeHandler = JacksonTypeHandler.class)
     private Map<String, Object> extraConfig;

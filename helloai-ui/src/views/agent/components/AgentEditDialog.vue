@@ -41,6 +41,19 @@
           />
         </el-select>
       </el-form-item>
+      <el-form-item
+        v-if="isInternalLlm"
+        label="模型"
+      >
+        <!-- V59：编辑信息展示当前 Agent 选中的模型（只读；外部 Agent 无模型概念不展示） -->
+        <el-input
+          :model-value="form.modelType || '（系统默认模型）'"
+          readonly
+        />
+        <div class="field-hint">
+          模型在 Agent 注册时选定；内部 LLM Agent 统一走平台供应商配置。
+        </div>
+      </el-form-item>
       <el-form-item label="API Key">
         <el-input
           :model-value="form.apiKey"
@@ -146,6 +159,9 @@ const formRef = ref()
 // V52: 内部 LLM Agent 编辑时可切换模型（modelType 回显），技能区按模型能力三段式渲染
 const form = reactive({ name: '', role: 'EXECUTOR', remark: '', apiKey: '', modelType: '', skills: [] as string[] })
 const rules = { name: [{ required: true, message: '请输入名称', trigger: 'blur' }] }
+
+/** 内部 LLM Agent 才展示模型字段（外部 CLI / 浏览器 Agent 无法管理，不展示）。 */
+const isInternalLlm = computed(() => props.agent?.accessType === 'API_KEY_LLM' || !!form.modelType)
 
 watch(() => props.agent, (a) => {
   if (a) {

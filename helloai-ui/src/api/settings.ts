@@ -26,6 +26,8 @@ export interface LlmProviderResponse {
   enabled: number
   builtin: number
   sortOrder: number
+  /** 计费类型：API_KEY=按量付费（默认）；TOKEN_PLAN / CODING_PLAN 预留暂不可用。 */
+  billingType?: string
   extraConfig?: Record<string, any>
   apiKeyConfigured: boolean
   apiKeyMasked?: string
@@ -41,6 +43,8 @@ export interface CreateLlmProviderRequest {
   defaultModel?: string
   enabled?: number
   sortOrder?: number
+  /** 计费类型（不传后端兜底 API_KEY）。 */
+  billingType?: string
   extraConfig?: Record<string, any>
 }
 
@@ -52,6 +56,7 @@ export interface UpdateLlmProviderRequest {
   defaultModel?: string
   enabled?: number
   sortOrder?: number
+  billingType?: string
   extraConfig?: Record<string, any>
 }
 
@@ -75,6 +80,22 @@ export const PROTOCOL_OPTIONS: { label: string; value: ProtocolType }[] = [
   { label: 'OpenAI 兼容', value: 'OPENAI_COMPATIBLE' },
   { label: 'Anthropic 兼容', value: 'ANTHROPIC_COMPATIBLE' }
 ]
+
+/** 计费类型选项（前端下拉）：当前仅按量付费可用，其余预留置灰。 */
+export const BILLING_TYPE_OPTIONS: { label: string; value: string; disabled: boolean }[] = [
+  { label: '按量付费（API Key）', value: 'API_KEY', disabled: false },
+  { label: 'Token Plan（敬请期待）', value: 'TOKEN_PLAN', disabled: true },
+  { label: 'Coding Plan（敬请期待）', value: 'CODING_PLAN', disabled: true }
+]
+
+/** API Key 验证结果（后端 verifyApiKeyById / verifyWebSearchApiKey 响应）。 */
+export interface ApiKeyVerifyResult {
+  success: boolean
+  message: string
+  model?: string
+  supported?: boolean
+  elapsedMs?: number
+}
 
 export const settingsApi = {
   getStatus() {
@@ -103,6 +124,10 @@ export const settingsApi = {
   /** 保存博查联网搜索 API Key（后端加密落库，实时生效）。 */
   saveWebSearchApiKey(value: string) {
     return request.put(paths.admin.webSearchApiKey, { value })
+  },
+  /** 验证博查联网搜索 API Key（最小搜索请求探测）。 */
+  verifyWebSearchApiKey() {
+    return request.post<any, ApiKeyVerifyResult>(paths.admin.verifyWebSearchApiKey)
   },
   // ---- 旧端点（保留兼容）----
   listProviders() {
@@ -137,6 +162,12 @@ export const settingsApi = {
   saveLlmProviderApiKey(id: number, apiKey: string) {
     return request.put(paths.admin.llmProviderApiKey(id), apiKey, {
       headers: { 'Content-Type': 'text/plain' }
+    })
+  },
+  /** 验证 Provider API Key（最小请求直探端点，耗时最长约 20s）。 */
+  verifyLlmProviderApiKey(id: number) {
+    return request.post<any, ApiKeyVerifyResult>(paths.admin.llmProviderVerifyApiKey(id), null, {
+      timeout: 30000
     })
   },
   // ---- 模型管理（V49，模型多选配置）----

@@ -255,4 +255,61 @@ class LlmProviderServiceTest {
 
         verify(mapper).deleteById(10L);
     }
+
+    // ---- V59：计费类型 billingType 校验 ----
+
+    @Test
+    @DisplayName("create：billingType 缺省时兜底 API_KEY")
+    void create_billingTypeMissing_defaultsToApiKey() {
+        when(queryService.findByCode("billing-probe")).thenReturn(Optional.empty());
+
+        LlmProvider entity = new LlmProvider();
+        entity.setProviderCode("billing-probe");
+        entity.setProviderName("t");
+        entity.setProtocolType("OPENAI_COMPATIBLE");
+        entity.setBaseUrl("https://x.com");
+
+        LlmProvider saved = service.create(entity);
+
+        assertThat(saved.getBillingType()).isEqualTo("API_KEY");
+    }
+
+    @Test
+    @DisplayName("create：billingType=TOKEN_PLAN 拒绝（当前仅放行按量付费）")
+    void create_billingTypeTokenPlan_rejected() {
+        LlmProvider entity = new LlmProvider();
+        entity.setProviderCode("billing-probe");
+        entity.setProviderName("t");
+        entity.setProtocolType("OPENAI_COMPATIBLE");
+        entity.setBaseUrl("https://x.com");
+        entity.setBillingType("TOKEN_PLAN");
+
+        assertThatThrownBy(() -> service.create(entity))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("计费类型暂仅支持按量付费");
+    }
+
+    @Test
+    @DisplayName("update：billingType 非法值拒绝，合法值局部更新生效")
+    void update_billingType_invalidRejectedValidApplied() {
+        LlmProvider existing = new LlmProvider();
+        existing.setId(20L);
+        existing.setProviderCode("billing-probe");
+        existing.setBillingType("API_KEY");
+        existing.setBuiltin(0);
+        when(mapper.selectById(20L)).thenReturn(existing);
+
+        LlmProvider badPatch = new LlmProvider();
+        badPatch.setBillingType("CODING_PLAN");
+        assertThatThrownBy(() -> service.update(20L, badPatch))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("计费类型暂仅支持按量付费");
+
+        LlmProvider goodPatch = new LlmProvider();
+        goodPatch.setBillingType("API_KEY");
+        service.update(20L, goodPatch);
+        ArgumentCaptor<LlmProvider> captor = ArgumentCaptor.forClass(LlmProvider.class);
+        verify(mapper).updateById(captor.capture());
+        assertThat(captor.getValue().getBillingType()).isEqualTo("API_KEY");
+    }
 }

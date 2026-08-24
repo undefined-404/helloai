@@ -77,6 +77,7 @@ export const paths = {
     configUpdateByKey: (key: string) => `/admin/config/updateByKey/${enc(key)}`,
     configBatch: '/admin/config/batch',
     webSearchApiKey: '/admin/config/webSearchApiKey',
+    verifyWebSearchApiKey: '/admin/config/verifyWebSearchApiKey',
     // 旧平台 Provider 端点（保留兼容 verify 脚本）
     platformProviders: '/admin/platform/providers/list',
     platformProviderApiKey: (provider: string) => `/admin/platform/providers/saveApiKeyByProvider/${enc(provider)}`,
@@ -89,6 +90,7 @@ export const paths = {
     llmProviderDelete: (id: string | number) => `/admin/llm-providers/deleteById/${enc(id)}`,
     llmProviderToggle: (id: string | number) => `/admin/llm-providers/toggleById/${enc(id)}`,
     llmProviderApiKey: (id: string | number) => `/admin/llm-providers/saveApiKeyById/${enc(id)}`,
+    llmProviderVerifyApiKey: (id: string | number) => `/admin/llm-providers/verifyApiKeyById/${enc(id)}`,
     llmProviderModels: (id: string | number) => `/admin/llm-providers/listModelsByProviderId/${enc(id)}`,
     llmProviderModelCreate: (id: string | number) => `/admin/llm-providers/addModelByProviderId/${enc(id)}`,
     llmProviderModelsSaveAll: (id: string | number) => `/admin/llm-providers/saveAllModelsByProviderId/${enc(id)}`,

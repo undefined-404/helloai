@@ -6838,3 +6838,30 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - 影响：保存区不再是独立悬浮/独立条块，视觉上成为表单的一部分（分隔线收尾行）；保存成功反馈为瞬时 toast，无常驻"全部已保存"文字；与 §6.149/6.150 的"吸底"验收结论相悖系用户主动偏好变更，记录在案。
 - 遗留：本轮改动未 git 提交，待用户确认后提交。
+
+### 6.153 添加模型两步式弹窗 + 计费类型字段 + API Key 连通性验证（2026-08-24）
+
+#### 1. 背景与结论
+
+- **背景**：系统设置页“添加供应商”为单表单直填（code/名称/协议/Base URL/Key），与产品期望的两步式“添加模型”体验不符（第一步供应商双列网格选择、第二步表单填类型与密钥）；且缺少“类型”字段（按量付费 / Token Plan / Coding Plan）与 API Key 有效性验证（保存后无从得知 Key 是否可用，博查 Key 同样缺验证）。
+- **结论**：① Flyway V59 为 llm_provider 增加 billing_type 列（默认 API_KEY，TOKEN_PLAN / CODING_PLAN 预留，应用层仅放行 API_KEY）；② 前端新增两步式弹窗（ProviderPickerDialog 双列网格 monogram 徽标卡片 + AddModelFormDialog 供应商下拉/类型下拉带置灰预留项/密钥输入与“获取 API 密钥”绿链），预置供应商“添加”语义 = 覆盖写既有内置行 Key，目录外选“自定义供应商”才新建；③ 新增 API Key 连通性验证：`POST /api/admin/llm-providers/verifyApiKeyById/{id}`（raw HTTP 最小请求 max_tokens=1 直探 Provider 端点，不走 ChatClient 工厂）与 `POST /api/admin/config/verifyWebSearchApiKey`（博查最小搜索 query=ping/count=1），保存 Key 后自动验证；④ Agent 编辑弹窗为内部 LLM Agent 只读展示所选模型。
+- 全部改动遵循 CODE_STYLE：验证服务落 agent 域（依赖方向红线，需 PlatformProviderConfigService）、Service 接口+impl 拆分、描述性驼峰路径（§8.2）、V59 幂等迁移 + RAISE NOTICE 验证块（§9.4）、paths.ts 单一事实源（§19.0）、测试命名方法名_场景_预期（§21）、脚本 UTF-8 头 + 单引号拼接（规则 6）。
+
+#### 2. 实现要点
+
+- **后端 billingType 全链路**：V59 迁移（ADD COLUMN IF NOT EXISTS billing_type VARCHAR(32) NOT NULL DEFAULT 'API_KEY'）；LlmProvider 实体 + Create/Update DTO（@Pattern 仅放行 API_KEY）+ LlmProviderResponse；LlmProviderServiceImpl 增 validateBillingType + create 空值兜底 API_KEY；AdminLlmProviderController create/update/toResponse 映射（历史无值兜底 API_KEY，与 V59 DEFAULT 口径一致）。
+- **后端 Key 验证**：新服务 `LlmProviderKeyVerifyService`（agent 域，接口+impl 拆分）——OPENAI_COMPATIBLE 拼 {baseUrl}/v1/chat/completions（已含 /v1 不重拼）、ANTHROPIC_COMPATIBLE 拼 /v1/messages + x-api-key + anthropic-version；连接 5s / 请求 20s；模型取 default_model > 内置供应商兜底表；失败收敛为 success/message/model/elapsedMs，绝不抛异常。博查侧：WebSearchService 新增 default `verifyApiKey()`（默认不支持），BochaWebSearchServiceImpl 覆写（校验 HTTP 2xx + body code=200），WebSearchServiceRouter 委托转发且不受总开关短路；AdminConfigController 新增验证端点。
+- **前端两步式弹窗**：`src/views/settings/providerCatalog.ts`（deepseek/moonshot/minimax/dashscope 品牌目录：monogram 徽标色 + 缺省端点 + 官方 Key 获取页）；ProviderPickerDialog（双列网格卡片按钮，role=listbox 可键盘操作）；AddModelFormDialog（供应商下拉带“已添加”标记、类型下拉置灰预留项、密钥框 + 绿色获取链接、已配置覆盖告警、保存后自动验证并内嵌结果面板与“重新验证”）。
+- **前端接线**：Settings.vue “添加供应商”按钮改“添加模型”接入两步弹窗；详情区增“验证 Key”按钮与“计费类型”描述项；配置 Key 弹窗保存后自动验证；博查 Key 非空保存后自动验证；AgentEditDialog 对 accessType=API_KEY_LLM 只读展示 modelType（外部 Agent 不展示）。paths.ts 新增 llmProviderVerifyApiKey / verifyWebSearchApiKey 两键（无内联路径）。
+- **测试与脚本**：新增 LlmProviderKeyVerifyServiceTest（4 个前置守卫用例）+ LlmProviderServiceTest 补 3 个 billingType 用例（兜底/拒绝/局部更新）；新增冒烟脚本 `scripts/powershell/verify-api-key-verify.ps1`（S0-S7：billingType 回显/假 Key 验证返回结构良好/TOKEN_PLAN 400/博查验证/清理，幂等可重跑）。
+
+#### 3. 验证结果
+
+- 后端：`mvn -DskipTests compile` 全模块通过；`mvn -pl helloai-core -am test -Dtest=LlmProviderServiceTest,LlmProviderKeyVerifyServiceTest` BUILD SUCCESS。
+- 前端：`npm run lint:check` 仅剩 1 个存量 error（QualityDashboard.vue 151:3 no-extra-semi，`;[...]` ASI 守卫，非本轮引入）；`npm run build`（含 vue-tsc）通过。
+- 冒烟脚本需后端运行态执行（`verify-api-key-verify.ps1`），本轮未启动后端未实跑。
+
+#### 4. 影响与遗留
+
+- 影响：“添加模型”交互对齐参考截图（两步式 + 类型字段默认按量付费）；Key 保存即验证（LLM 与博查），无效密钥即时暴露；Agent 编辑信息可见所选模型。
+- 遗留：TOKEN_PLAN / CODING_PLAN 仅预留置灰；外部 AI Agent 模型不在管理范围（用户明确不管）；冒烟脚本未实跑；本轮改动未 git 提交，待用户确认后提交。

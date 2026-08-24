@@ -8,6 +8,7 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 联网搜索服务路由（业务层唯一注入入口）。
@@ -56,6 +57,19 @@ public class WebSearchServiceRouter implements WebSearchService {
         WebSearchService delegate = resolve();
         if (delegate == null) return List.of();
         return delegate.search(query, maxResults);
+    }
+
+    /**
+     * 委托当前激活的供应商实现验证 API Key。
+     *
+     * <p>不受总开关 {@code enabled} 短路：验证是管理员显式操作，即使搜索开关关闭
+     * 也应能验证密钥。无候选实现时返回默认“不支持”结果。</p>
+     */
+    @Override
+    public Map<String, Object> verifyApiKey() {
+        WebSearchService delegate = resolve();
+        if (delegate == null) return WebSearchService.super.verifyApiKey();
+        return delegate.verifyApiKey();
     }
 
     /** 解析当前应使用的供应商实现，候选为 0 或与 provider 配置不匹配时返回 null。 */

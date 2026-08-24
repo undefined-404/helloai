@@ -77,9 +77,9 @@
             type="primary"
             size="small"
             :icon="Plus"
-            @click="openCreateDialog"
+            @click="openPickerDialog"
           >
-            添加供应商
+            添加模型
           </el-button>
         </div>
 
@@ -170,6 +170,14 @@
                   配置 Key
                 </el-button>
                 <el-button
+                  size="small"
+                  plain
+                  :loading="verifyingKeyId === selectedProvider.id"
+                  @click="verifyProviderKey(selectedProvider.id)"
+                >
+                  验证 Key
+                </el-button>
+                <el-button
                   v-if="selectedProvider.builtin !== 1"
                   size="small"
                   plain
@@ -195,6 +203,9 @@
             >
               <el-descriptions-item label="协议">
                 {{ protocolLabel(selectedProvider.protocolType) }}
+              </el-descriptions-item>
+              <el-descriptions-item label="计费类型">
+                {{ billingLabel(selectedProvider.billingType) }}
               </el-descriptions-item>
               <el-descriptions-item label="Provider Code">
                 <code>{{ selectedProvider.providerCode }}</code>
@@ -514,6 +525,18 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 添加模型两步式弹窗（V59）：第一步选供应商，第二步填类型 + API 密钥并自动验证 -->
+    <ProviderPickerDialog
+      v-model="pickerVisible"
+      @pick="handlePickProvider"
+    />
+    <AddModelFormDialog
+      v-model="addModelVisible"
+      :providers="providers"
+      :initial="addModelInitial"
+      @added="handleModelAdded"
+    />
   </div>
 </template>
 
@@ -527,8 +550,12 @@ import {
   LlmProviderModelResponse,
   CreateLlmProviderRequest,
   ProtocolType,
-  PROTOCOL_OPTIONS
+  PROTOCOL_OPTIONS,
+  BILLING_TYPE_OPTIONS
 } from '@/api/settings'
+import ProviderPickerDialog from './settings/ProviderPickerDialog.vue'
+import AddModelFormDialog from './settings/AddModelFormDialog.vue'
+import type { CatalogProvider } from './settings/providerCatalog'
 
 const formRef = ref()
 const form = reactive({
@@ -607,6 +634,69 @@ const formRules: FormRules = {
 
 function protocolLabel(type: ProtocolType): string {
   return PROTOCOL_OPTIONS.find(o => o.value === type)?.label || type
+}
+
+/** 计费类型展示标签：无值兜底按量付费（与后端 toResponse 口径一致）。 */
+function billingLabel(type?: string): string {
+  const value = type && !/^\s*$/.test(type) ? type : 'API_KEY'
+  return BILLING_TYPE_OPTIONS.find(o => o.value === value)?.label?.replace(/（敬请期待）$/, '') || value
+}
+
+// ---- 添加模型两步式弹窗（V59）----
+const pickerVisible = ref(false)
+const addModelVisible = ref(false)
+const addModelInitial = ref<CatalogProvider | null>(null)
+const verifyingKeyId = ref<number | null>(null)
+
+function openPickerDialog() {
+  pickerVisible.value = true
+}
+
+/** 第一步选中供应商 → 进入第二步表单。 */
+function handlePickProvider(entry: CatalogProvider) {
+  addModelInitial.value = entry
+  addModelVisible.value = true
+}
+
+/** 第二步保存完成：刷新列表并定位到新/更新的 Provider。 */
+async function handleModelAdded(providerId: number) {
+  await loadProviders()
+  selectedId.value = providerId
+}
+
+/** Provider Key 连通性验证（详情页「验证 Key」与保存后自动验证共用）。 */
+async function verifyProviderKey(providerId: number) {
+  verifyingKeyId.value = providerId
+  const loading = ElMessage({ message: '正在验证 API Key（最小请求探测）…', type: 'info', duration: 0 })
+  try {
+    const res = await settingsApi.verifyLlmProviderApiKey(providerId)
+    if (res.success) {
+      ElMessage.success(res.message)
+    } else {
+      ElMessage({ message: res.message, type: 'error', duration: 8000 })
+    }
+  } catch (e: any) {
+    ElMessage.error('验证请求失败')
+  } finally {
+    loading.close()
+    verifyingKeyId.value = null
+  }
+}
+
+/** 博查 Key 验证（保存设置后自动调用；供应商不支持时降级为提示）。 */
+async function verifyWebSearchKey() {
+  try {
+    const res = await settingsApi.verifyWebSearchApiKey()
+    if (res.supported === false) {
+      ElMessage.info(res.message)
+    } else if (res.success) {
+      ElMessage.success(res.message)
+    } else {
+      ElMessage({ message: res.message, type: 'error', duration: 8000 })
+    }
+  } catch (e: any) {
+    ElMessage.error('博查 Key 验证请求失败')
+  }
 }
 
 // 质量门控开关确认：§6.151 起默认开启，开启方向是恢复默认（仍二次确认防误点）；
@@ -754,10 +844,15 @@ async function handleSave() {
     })
     // 博查 Key 走专用加密端点；未改动（仍是脱敏回显值）时跳过，清空则视为移除。
     if (form.webSearchApiKey !== webSearchKeyLoaded.value) {
-      await settingsApi.saveWebSearchApiKey(form.webSearchApiKey.trim())
-      webSearchKeyConfigured.value = !!form.webSearchApiKey.trim()
+      const newKey = form.webSearchApiKey.trim()
+      await settingsApi.saveWebSearchApiKey(newKey)
+      webSearchKeyConfigured.value = !!newKey
       webSearchKeyLoaded.value = ''
       form.webSearchApiKey = ''
+      // 非空保存后自动验证（最小搜索请求探测）
+      if (newKey) {
+        await verifyWebSearchKey()
+      }
     }
     loadedExternalUrl.value = form.externalUrl
     loadedQualityGate.value = form.qualityGateEnabled
@@ -781,13 +876,16 @@ async function handleSaveKey() {
     return
   }
   if (!keyDialogProvider.value) return
+  const providerId = keyDialogProvider.value.id
   try {
     // 后端 /api/admin/llm-providers/{id}/api-key 接收纯字符串，request.ts 默认按 JSON 提交会多包一层引号；
     // 这里用 settingsApi 中显式声明 Content-Type: text/plain 的版本。
-    await settingsApi.saveLlmProviderApiKey(keyDialogProvider.value.id, newApiKey.value.trim())
+    await settingsApi.saveLlmProviderApiKey(providerId, newApiKey.value.trim())
     ElMessage.success('API Key 已生效，无需重启')
     keyDialogVisible.value = false
     await loadProviders()
+    // 保存后自动验证连通性（最小请求探测）
+    await verifyProviderKey(providerId)
   } catch (e: any) {
     ElMessage.error('保存失败')
   }

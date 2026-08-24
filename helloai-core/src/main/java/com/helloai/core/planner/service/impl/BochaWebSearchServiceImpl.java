@@ -17,6 +17,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -55,6 +56,64 @@ public class BochaWebSearchServiceImpl implements WebSearchService {
 
     @Override
     public String provider() { return "bocha"; }
+
+    /**
+     * 验证博查 API Key：发送最小搜索请求（query=ping、summary=false、count=1），
+     * 校验 HTTP 2xx 且响应 {@code code=200}。Key 未配置时直接返回失败，不发起请求。
+     */
+    @Override
+    public Map<String, Object> verifyApiKey() {
+        long start = System.currentTimeMillis();
+        String apiKey = credentialKeyStore.resolveBochaApiKey();
+        if (apiKey == null || apiKey.isBlank()) {
+            return verifyResult(false, "尚未配置博查 API Key，请先保存密钥再验证", start);
+        }
+        try {
+            String body = objectMapper.writeValueAsString(Map.of(
+                    "query", "ping",
+                    "summary", false,
+                    "count", 1,
+                    "freshness", "noLimit"
+            ));
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(properties.getBochaBaseUrl()))
+                    .timeout(Duration.ofMillis(properties.getTimeoutMs()))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + apiKey)
+                    .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (response.statusCode() / 100 != 2) {
+                boolean authFail = response.statusCode() == 401 || response.statusCode() == 403;
+                log.warn("博查 Key 验证返回非 2xx: status={}, body={}", response.statusCode(),
+                        truncate(response.body(), 200));
+                return verifyResult(false,
+                        (authFail ? "API Key 无效或无权限" : "验证失败（HTTP " + response.statusCode() + "）")
+                                + "：" + truncate(response.body(), 120), start);
+            }
+            JsonNode root = objectMapper.readTree(response.body());
+            int code = root.path("code").asInt(-1);
+            if (code != 200) {
+                String msg = textOrNull(root.path("msg"));
+                return verifyResult(false, "验证失败（博查 code=" + code + "）"
+                        + (msg != null ? "：" + truncate(msg, 120) : ""), start);
+            }
+            long elapsed = System.currentTimeMillis() - start;
+            return verifyResult(true, "验证通过，博查 API Key 有效（" + elapsed + "ms）", start);
+        } catch (Exception e) {
+            log.warn("博查 Key 验证异常（已降级为失败结果）: err={}", e.getMessage());
+            return verifyResult(false, "验证请求失败：" + e.getMessage(), start);
+        }
+    }
+
+    private static Map<String, Object> verifyResult(boolean success, String message, long start) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("success", success);
+        out.put("supported", true);
+        out.put("message", message);
+        out.put("elapsedMs", System.currentTimeMillis() - start);
+        return out;
+    }
 
     @Override
     public List<WebSearchResult> search(String query, int maxResults) {

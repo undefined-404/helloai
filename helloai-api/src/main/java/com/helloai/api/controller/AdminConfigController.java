@@ -3,6 +3,7 @@ package com.helloai.api.controller;
 import com.helloai.api.dto.admin.ConfigBatchRequest;
 import com.helloai.common.base.R;
 import com.helloai.core.planner.search.WebSearchCredentialKeyStore;
+import com.helloai.core.planner.service.WebSearchService;
 import com.helloai.core.system.entity.SysConfig;
 import com.helloai.core.system.service.SysConfigService;
 import lombok.RequiredArgsConstructor;
@@ -25,6 +26,7 @@ public class AdminConfigController {
 
     private final SysConfigService sysConfigService;
     private final WebSearchCredentialKeyStore webSearchCredentialKeyStore;
+    private final WebSearchService webSearchService;
 
     /**
      * 获取所有配置
@@ -55,6 +57,17 @@ public class AdminConfigController {
     public R<Void> saveWebSearchApiKey(@RequestBody Map<String, String> body) {
         webSearchCredentialKeyStore.saveBochaApiKey(body.get("value"));
         return R.ok();
+    }
+
+    /**
+     * 验证联网搜索（博查）API Key：发送最小搜索请求（query=ping、count=1）探测。
+     *
+     * <p>返回 {@code success / message / supported / elapsedMs}；验证失败不抛异常，
+     * success=false + 可读 message，前端直接展示。</p>
+     */
+    @PostMapping("/verifyWebSearchApiKey")
+    public R<Map<String, Object>> verifyWebSearchApiKey() {
+        return R.ok(webSearchService.verifyApiKey());
     }
 
     /**

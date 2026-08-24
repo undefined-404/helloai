@@ -5,6 +5,7 @@ import com.helloai.api.dto.admin.LlmProviderModelResponse;
 import com.helloai.api.dto.admin.LlmProviderResponse;
 import com.helloai.api.dto.admin.UpdateLlmProviderRequest;
 import com.helloai.common.base.R;
+import com.helloai.core.agent.service.LlmProviderKeyVerifyService;
 import com.helloai.core.agent.service.PlatformProviderConfigService;
 import com.helloai.core.system.entity.LlmProvider;
 import com.helloai.core.system.entity.LlmProviderModel;
@@ -42,6 +43,7 @@ import java.util.stream.Collectors;
  *   <li>DELETE /api/admin/llm-providers/deleteById/{id} 删除（内置不可）</li>
  *   <li>PUT    /api/admin/llm-providers/toggleById/{id} 启用 / 禁用</li>
  *   <li>PUT    /api/admin/llm-providers/saveApiKeyById/{id}  写入 API Key（走 credential_vault）</li>
+ *   <li>POST   /api/admin/llm-providers/verifyApiKeyById/{id} 验证 API Key（最小请求探测）</li>
  *   <li>GET    /api/admin/llm-providers/listModelsByProviderId/{id}           模型列表（含禁用）</li>
  *   <li>POST   /api/admin/llm-providers/addModelByProviderId/{id}               添加模型</li>
  *   <li>PUT    /api/admin/llm-providers/saveAllModelsByProviderId/{id}       批量保存模型配置</li>
@@ -62,6 +64,7 @@ public class AdminLlmProviderController {
     private final LlmProviderService providerService;
     private final LlmProviderQueryService queryService;
     private final PlatformProviderConfigService platformProviderConfigService;
+    private final LlmProviderKeyVerifyService llmProviderKeyVerifyService;
     private final LlmProviderModelService llmProviderModelService;
     private final LlmProviderModelQueryService llmProviderModelQueryService;
 
@@ -93,6 +96,8 @@ public class AdminLlmProviderController {
         entity.setEnabled(req.getEnabled() != null ? req.getEnabled() : 1);
         entity.setBuiltin(0);
         entity.setSortOrder(req.getSortOrder() != null ? req.getSortOrder() : 100);
+        // 计费类型：前端"添加模型"弹窗类型字段；不传由 Service 兜底 API_KEY
+        entity.setBillingType(req.getBillingType());
         entity.setExtraConfig(req.getExtraConfig());
         LlmProvider saved = providerService.create(entity);
         log.info("管理员创建 LLM Provider: code={}, name={}",
@@ -113,6 +118,7 @@ public class AdminLlmProviderController {
         if (req.getEnabled() != null) patch.setEnabled(req.getEnabled());
         if (req.getSortOrder() != null) patch.setSortOrder(req.getSortOrder());
         if (req.getExtraConfig() != null) patch.setExtraConfig(req.getExtraConfig());
+        if (req.getBillingType() != null) patch.setBillingType(req.getBillingType());
         providerService.update(id, patch);
         return R.ok();
     }
@@ -155,6 +161,17 @@ public class AdminLlmProviderController {
         log.info("管理员配置平台级 API Key 已生效: id={}, provider={}",
                 id, p.getProviderCode());
         return R.ok();
+    }
+
+    /**
+     * 验证 Provider 平台级 API Key：以最小请求（max_tokens=1）直探 Provider 端点。
+     *
+     * <p>返回 {@code success / message / model / elapsedMs}；验证失败不抛异常，
+     * success=false + 可读 message，前端直接展示。</p>
+     */
+    @PostMapping("/verifyApiKeyById/{id}")
+    public R<Map<String, Object>> verifyApiKey(@PathVariable("id") Long id) {
+        return R.ok(llmProviderKeyVerifyService.verifyById(id));
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -307,6 +324,9 @@ public class AdminLlmProviderController {
         r.setEnabled(p.getEnabled());
         r.setBuiltin(p.getBuiltin());
         r.setSortOrder(p.getSortOrder());
+        // 计费类型：历史数据无此列值时兜底按量付费，与 V59 迁移 DEFAULT 语义一致
+        r.setBillingType(p.getBillingType() != null && !p.getBillingType().isBlank()
+                ? p.getBillingType() : "API_KEY");
         r.setExtraConfig(p.getExtraConfig());
         r.setApiKeyConfigured(platformProviderConfigService.isApiKeyConfigured(p.getProviderCode()));
         r.setApiKeyMasked(platformProviderConfigService.maskApiKey(p.getProviderCode()));

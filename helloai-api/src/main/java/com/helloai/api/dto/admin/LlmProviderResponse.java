@@ -40,6 +40,9 @@ public class LlmProviderResponse {
     /** 列表排序。 */
     private Integer sortOrder;
 
+    /** 计费类型：API_KEY=按量付费（默认）；TOKEN_PLAN / CODING_PLAN 预留。 */
+    private String billingType;
+
     /** 扩展配置 JSONB。 */
     private Map<String, Object> extraConfig;
 

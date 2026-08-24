@@ -25,6 +25,9 @@ import java.util.Objects;
 @RequiredArgsConstructor
 public class LlmProviderServiceImpl extends ServiceImpl<LlmProviderMapper, LlmProvider> implements LlmProviderService {
 
+    /** 计费类型：按量付费（API Key），当前唯一放行值。 */
+    public static final String BILLING_TYPE_API_KEY = "API_KEY";
+
     private final LlmProviderQueryService llmProviderQueryService;
     private final LlmProviderModelService llmProviderModelService;
 
@@ -45,6 +48,7 @@ public class LlmProviderServiceImpl extends ServiceImpl<LlmProviderMapper, LlmPr
         }
         validateCode(provider.getProviderCode());
         validateProtocol(provider.getProtocolType());
+        validateBillingType(provider.getBillingType());
         if (llmProviderQueryService.findByCode(provider.getProviderCode()).isPresent()) {
             throw new BizException("Provider 已存在: " + provider.getProviderCode());
         }
@@ -56,6 +60,10 @@ public class LlmProviderServiceImpl extends ServiceImpl<LlmProviderMapper, LlmPr
         }
         if (provider.getSortOrder() == null) {
             provider.setSortOrder(100);
+        }
+        // 计费类型兼容：旧客户端不传时兜底按量付费（DB 列也有 DEFAULT 'API_KEY' 双保险）
+        if (provider.getBillingType() == null || provider.getBillingType().isBlank()) {
+            provider.setBillingType(BILLING_TYPE_API_KEY);
         }
         save(provider);
         log.info("LLM Provider 已创建: code={}, name={}, protocol={}",
@@ -83,6 +91,9 @@ public class LlmProviderServiceImpl extends ServiceImpl<LlmProviderMapper, LlmPr
         if (patch.getProtocolType() != null) {
             validateProtocol(patch.getProtocolType());
         }
+        if (patch.getBillingType() != null) {
+            validateBillingType(patch.getBillingType());
+        }
         if (patch.getProviderName() != null) existing.setProviderName(patch.getProviderName());
         if (patch.getProtocolType() != null) existing.setProtocolType(patch.getProtocolType());
         if (patch.getBaseUrl() != null) existing.setBaseUrl(patch.getBaseUrl());
@@ -90,6 +101,9 @@ public class LlmProviderServiceImpl extends ServiceImpl<LlmProviderMapper, LlmPr
         if (patch.getEnabled() != null) existing.setEnabled(patch.getEnabled());
         if (patch.getSortOrder() != null) existing.setSortOrder(patch.getSortOrder());
         if (patch.getExtraConfig() != null) existing.setExtraConfig(patch.getExtraConfig());
+        if (patch.getBillingType() != null && !patch.getBillingType().isBlank()) {
+            existing.setBillingType(patch.getBillingType());
+        }
         updateById(existing);
     }
 
@@ -129,6 +143,19 @@ public class LlmProviderServiceImpl extends ServiceImpl<LlmProviderMapper, LlmPr
     private void validateProtocol(String protocol) {
         if (!"OPENAI_COMPATIBLE".equals(protocol) && !"ANTHROPIC_COMPATIBLE".equals(protocol)) {
             throw new BizException("protocol_type 仅支持 OPENAI_COMPATIBLE / ANTHROPIC_COMPATIBLE");
+        }
+    }
+
+    /**
+     * 校验计费类型：当前仅放行 API_KEY（按量付费）；TOKEN_PLAN / CODING_PLAN
+     * 为预留枚举值，未接入前拒绝写入（blank/null 由 create 兜底默认值，此处放行）。
+     */
+    private void validateBillingType(String billingType) {
+        if (billingType == null || billingType.isBlank()) {
+            return;
+        }
+        if (!BILLING_TYPE_API_KEY.equals(billingType)) {
+            throw new BizException("计费类型暂仅支持按量付费（API_KEY），Token Plan / Coding Plan 敬请期待");
         }
     }
 
