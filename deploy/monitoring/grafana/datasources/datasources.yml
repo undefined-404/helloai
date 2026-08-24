@@ -1,4 +1,4 @@
-# Grafana 数据源配置（provisioning 自动加载）
+# Grafana datasource provisioning (auto-loaded at startup)
 apiVersion: 1
 datasources:
   - name: Prometheus

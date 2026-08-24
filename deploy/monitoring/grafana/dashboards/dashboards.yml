@@ -1,4 +1,4 @@
-# Grafana Dashboard 自动加载配置（provisioning 自动加载）
+# Grafana dashboard provisioning (auto-loaded at startup)
 apiVersion: 1
 providers:
   - name: "helloai"

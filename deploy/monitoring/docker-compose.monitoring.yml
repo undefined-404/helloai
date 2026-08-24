@@ -1,40 +1,41 @@
 # ============================================================
-# HelloAI - Prometheus + Grafana 监控栈（阶段1：指标监控）
-# 参考：maticube deploy/monitoring 同名实现（已验证可用）
+# HelloAI - Prometheus + Grafana monitoring stack (phase 1: metrics)
+# Reference: maticube deploy/monitoring (verified implementation)
 # ------------------------------------------------------------
-# 前置条件：主栈已启动（本地 docker-compose.yml 或服务器 docker-compose.server.yml），
-#           共享外部网络 helloai_default 已存在。
+# Prerequisite: main stack is up (docker-compose.yml locally or
+#               docker-compose.server.yml on server), external
+#               network helloai_default already exists.
 #
-# 启动（本地默认，抓 host.docker.internal:6565 的 app）:
+# Start (local default, scrapes host.docker.internal:6565):
 #   docker compose -f deploy/monitoring/docker-compose.monitoring.yml up -d
 #
-# 启动（服务器版，抓 compose 内网 app:6565）:
-#   $env:PROMETHEUS_CONFIG = "./prometheus/prometheus.yml"
+# Start (server, scrapes compose-internal app:6565):
+#   export PROMETHEUS_CONFIG=./prometheus/prometheus.yml
 #   docker compose -f docker-compose.monitoring.yml up -d
 #
-# 停止: docker compose -f deploy/monitoring/docker-compose.monitoring.yml down
+# Stop: docker compose -f deploy/monitoring/docker-compose.monitoring.yml down
 #
-# 端口映射（均绑定 127.0.0.1，不暴露公网）:
+# Ports are bound to 127.0.0.1 only (no public exposure):
 #   Prometheus -> http://localhost:9090
 #   Grafana    -> http://localhost:3000 (admin/admin)
 #
-# PostgreSQL 监控账号（首次需手动执行，见 README.md）:
+# PostgreSQL monitoring account (run manually once, see README.md):
 #   CREATE ROLE helloai_monitor LOGIN PASSWORD 'HelloAI_monitor_2026';
 #   GRANT CONNECT ON DATABASE helloai TO helloai_monitor;
 #   GRANT pg_monitor TO helloai_monitor;
 #
-# RabbitMQ 无需额外 exporter：management 镜像默认启用 rabbitmq_prometheus 插件（15692）
+# RabbitMQ needs no extra exporter: the management image enables the
+# rabbitmq_prometheus plugin by default (port 15692)
 # ============================================================
 
-version: '3.8'
-
-# 显式项目名：避免与 maticube 的 monitoring compose（同目录名默认 project=monitoring）共享项目名，
-# 防止 down/up 互相误伤（容器 label 与 volume 均按本项目名隔离）
+# Explicit project name: avoids sharing the default project name "monitoring"
+# with the maticube monitoring compose (same directory name), which would let
+# down/up commands affect each other's containers and volumes.
 name: helloai-monitoring
 
 services:
 
-  # --- Prometheus（抓取 app / rabbitmq / redis / postgres） ---
+  # --- Prometheus (scrapes app / rabbitmq / redis / postgres) ---
   prometheus:
     image: prom/prometheus:v2.51.0
     container_name: helloai-prometheus
@@ -52,7 +53,7 @@ services:
     networks:
       - helloai-net
 
-  # --- Grafana（provisioning 自动加载数据源与看板） ---
+  # --- Grafana (provisioning auto-loads datasource and dashboard) ---
   grafana:
     image: grafana/grafana:10.4.0
     container_name: helloai-grafana

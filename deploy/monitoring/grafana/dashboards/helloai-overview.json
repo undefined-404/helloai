@@ -31,9 +31,9 @@
         "wideLayout": true
       },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(jvm_memory_used_bytes{area=\"heap\"})", "legendFormat": "堆使用", "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(jvm_memory_used_bytes{area=\"heap\"})", "legendFormat": "Heap Used", "refId": "A" }
       ],
-      "title": "JVM 堆内存",
+      "title": "JVM Heap Memory",
       "type": "stat"
     },
     {
@@ -59,9 +59,9 @@
         "wideLayout": true
       },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(jvm_memory_used_bytes{area=\"nonheap\"})", "legendFormat": "非堆使用", "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(jvm_memory_used_bytes{area=\"nonheap\"})", "legendFormat": "Non-Heap Used", "refId": "A" }
       ],
-      "title": "JVM 非堆内存",
+      "title": "JVM Non-Heap Memory",
       "type": "stat"
     },
     {
@@ -87,9 +87,9 @@
         "wideLayout": true
       },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "system_cpu_usage", "legendFormat": "系统 CPU", "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "system_cpu_usage", "legendFormat": "System CPU", "refId": "A" }
       ],
-      "title": "系统 CPU",
+      "title": "System CPU",
       "type": "stat"
     },
     {
@@ -115,9 +115,9 @@
         "wideLayout": true
       },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "jvm_threads_live_threads", "legendFormat": "活跃线程", "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "jvm_threads_live_threads", "legendFormat": "Live Threads", "refId": "A" }
       ],
-      "title": "活跃线程",
+      "title": "Live Threads",
       "type": "stat"
     },
     {
@@ -162,7 +162,7 @@
         { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket[5m])) by (le))", "legendFormat": "P95", "refId": "B" },
         { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket[5m])) by (le))", "legendFormat": "P99", "refId": "C" }
       ],
-      "title": "HTTP 接口 RT（P50/P95/P99）",
+      "title": "HTTP RT (P50/P95/P99)",
       "type": "timeseries"
     },
     {
@@ -194,7 +194,7 @@
       "targets": [
         { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "topk(5, histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket[5m])) by (le, uri)))", "format": "table", "instant": true, "legendFormat": "{{uri}}", "refId": "A" }
       ],
-      "title": "Top 5 接口 P95 耗时",
+      "title": "Top 5 URIs by P95 Latency",
       "type": "table"
     },
     {
@@ -237,7 +237,7 @@
       "targets": [
         { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(rate(http_server_requests_seconds_count[5m]))", "legendFormat": "QPS", "refId": "A" }
       ],
-      "title": "HTTP 请求 QPS",
+      "title": "HTTP Requests QPS",
       "type": "timeseries"
     },
     {
@@ -278,9 +278,9 @@
         "maxDataPoints": 500
       },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(rate(jvm_gc_pause_seconds_sum[5m]))", "legendFormat": "GC 暂停", "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(rate(jvm_gc_pause_seconds_sum[5m]))", "legendFormat": "GC Pause", "refId": "A" }
       ],
-      "title": "GC 暂停时间（每秒）",
+      "title": "GC Pause Time (per second)",
       "type": "timeseries"
     },
     {
@@ -321,10 +321,10 @@
         "maxDataPoints": 500
       },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(rabbitmq_queue_messages_ready)", "legendFormat": "就绪消息", "refId": "A" },
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(rabbitmq_queue_messages_unacked)", "legendFormat": "未确认消息", "refId": "B" }
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(rabbitmq_queue_messages_ready)", "legendFormat": "Ready Messages", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(rabbitmq_queue_messages_unacked)", "legendFormat": "Unacked Messages", "refId": "B" }
       ],
-      "title": "RabbitMQ 队列消息积压",
+      "title": "RabbitMQ Queue Backlog",
       "type": "timeseries"
     },
     {
@@ -367,7 +367,7 @@
       "targets": [
         { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "pg_stat_database_numbackends", "legendFormat": "{{datname}}", "refId": "A" }
       ],
-      "title": "PostgreSQL 连接数",
+      "title": "PostgreSQL Connections",
       "type": "timeseries"
     },
     {
@@ -408,9 +408,9 @@
         "maxDataPoints": 500
       },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(rate(pg_stat_database_xact_commit[5m]))", "legendFormat": "事务提交/秒", "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(rate(pg_stat_database_xact_commit[5m]))", "legendFormat": "Commits/sec", "refId": "A" }
       ],
-      "title": "PostgreSQL 事务速率",
+      "title": "PostgreSQL Transaction Rate",
       "type": "timeseries"
     },
     {
@@ -451,9 +451,9 @@
         "maxDataPoints": 500
       },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "redis_memory_used_bytes", "legendFormat": "内存使用", "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "redis_memory_used_bytes", "legendFormat": "Memory Used", "refId": "A" }
       ],
-      "title": "Redis 内存使用",
+      "title": "Redis Memory Used",
       "type": "timeseries"
     },
     {
@@ -494,9 +494,9 @@
         "maxDataPoints": 500
       },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "redis_connected_clients", "legendFormat": "连接数", "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "redis_connected_clients", "legendFormat": "Connections", "refId": "A" }
       ],
-      "title": "Redis 连接数",
+      "title": "Redis Connections",
       "type": "timeseries"
     },
     {
@@ -522,9 +522,9 @@
         "wideLayout": true
       },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "count(up == 1)", "legendFormat": "正常", "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "count(up == 1)", "legendFormat": "Up", "refId": "A" }
       ],
-      "title": "抓取正常 Target 数",
+      "title": "Healthy Targets",
       "type": "stat"
     },
     {
@@ -550,9 +550,9 @@
         "wideLayout": true
       },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "count(up == 0)", "legendFormat": "异常", "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "count(up == 0)", "legendFormat": "Down", "refId": "A" }
       ],
-      "title": "抓取异常 Target 数",
+      "title": "Unhealthy Targets",
       "type": "stat"
     },
     {
@@ -584,7 +584,7 @@
       "targets": [
         { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "up", "format": "table", "instant": true, "legendFormat": "{{job}}/{{instance}}", "refId": "A" }
       ],
-      "title": "抓取目标状态",
+      "title": "Scrape Target Status",
       "type": "table"
     }
   ],
@@ -595,7 +595,7 @@
   "time": { "from": "now-1h", "to": "now" },
   "timepicker": {},
   "timezone": "browser",
-  "title": "HelloAI 监控总览",
+  "title": "HelloAI Overview",
   "uid": "helloai-overview",
   "version": 1,
   "weekStart": ""

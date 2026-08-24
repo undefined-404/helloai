@@ -1,9 +1,10 @@
 # ============================================================
-# Prometheus 配置 — HelloAI 本地开发环境（IDEA 启动 app）
+# Prometheus config - HelloAI local dev environment (app runs in IDEA)
 # ------------------------------------------------------------
-# 本地默认使用（docker-compose.monitoring.yml 默认挂载本文件）。
-# app 在宿主机 IDEA 运行，通过 host.docker.internal:6565 抓取；
-# 中间件为 compose 容器，通过服务名访问。
+# Local default (docker-compose.monitoring.yml mounts this file).
+# The app runs on the host via IDEA and is scraped through
+# host.docker.internal:6565; middleware containers are reached
+# by service names.
 # ============================================================
 
 global:
@@ -15,7 +16,7 @@ global:
     environment: local
 
 scrape_configs:
-  # ========== HelloAI 应用（宿主机 IDEA 运行，Actuator Prometheus 端点） ==========
+  # ========== HelloAI application (host IDEA, Actuator Prometheus endpoint) ==========
   - job_name: "helloai-app"
     metrics_path: "/actuator/prometheus"
     scrape_interval: 10s
@@ -26,7 +27,7 @@ scrape_configs:
           app: helloai
           env: local
 
-  # ========== RabbitMQ（内置 prometheus 插件，15692） ==========
+  # ========== RabbitMQ (built-in prometheus plugin, port 15692) ==========
   - job_name: "rabbitmq"
     scrape_interval: 15s
     static_configs:
@@ -56,7 +57,7 @@ scrape_configs:
           app: postgresql
           env: local
 
-  # ========== Prometheus 自身监控 ==========
+  # ========== Prometheus self-monitoring ==========
   - job_name: "prometheus"
     scrape_interval: 30s
     static_configs:
