@@ -1510,7 +1510,7 @@ onBeforeUnmount(() => {
   line-height: 1.55;
   color: var(--ha-ink-secondary);
   background: transparent;
-  border: 1px dashed var(--ha-border);
+  border: 0px dashed var(--ha-border);
   border-radius: var(--ha-radius-sm);
   white-space: nowrap;
   overflow: hidden;
