@@ -736,6 +736,142 @@ img {
   color: var(--ha-ink);
 }
 
+/* ---- Stat tile (顶都会计卡) ----
+   为审查中心、Agent 打卡上班 等页面提供“右上图标方块 + 主标签 + 大数字 + 副信息/进度条”布局。
+   Dashboard 的老 .stat-card 保留独立 DOM，避免回归；
+   新页面用本套样式以设计图为准统一视觉。
+   所有色值走 --ha-* token，亮暗主题自动跟随。 */
+.stat-tile {
+  position: relative;
+  background: var(--ha-surface-elevated);
+  border-radius: var(--ha-radius-lg);
+  box-shadow: var(--ha-shadow-sm);
+  padding: 20px;
+  transition: box-shadow var(--ha-duration-normal) var(--ha-ease-out),
+              transform var(--ha-duration-normal) var(--ha-ease-out);
+}
+.stat-tile:hover {
+  box-shadow: var(--ha-shadow-md);
+  transform: translateY(-1px);
+}
+.stat-tile-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.stat-tile-label {
+  font-size: 13px;
+  color: var(--ha-muted);
+  line-height: 1.4;
+}
+.stat-tile-label .accent { color: var(--ha-ink-secondary); margin-left: 4px; }
+.stat-tile-icon {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--ha-radius-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+}
+.stat-tile-icon.primary {
+  background: color-mix(in srgb, var(--ha-primary) 14%, transparent);
+  color: var(--ha-primary);
+}
+.stat-tile-icon.success {
+  background: var(--ha-success-bg);
+  color: var(--ha-success);
+}
+.stat-tile-icon.warning {
+  background: var(--ha-warning-bg);
+  color: var(--ha-warning);
+}
+.stat-tile-icon.danger {
+  background: var(--ha-danger-bg);
+  color: var(--ha-danger);
+}
+.stat-tile-value {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--ha-ink);
+  font-variant-numeric: tabular-nums;
+}
+.stat-tile-value .unit {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ha-muted);
+  margin-left: 4px;
+}
+.stat-tile-value .delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 12px;
+  font-weight: 500;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+.stat-tile-value .delta.up { color: var(--ha-success); }
+.stat-tile-value .delta.down { color: var(--ha-danger); }
+.stat-tile-extra {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ha-muted);
+}
+.stat-tile-bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--ha-surface-hover);
+  overflow: hidden;
+}
+.stat-tile-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  transition: width var(--ha-duration-slow) var(--ha-ease-out);
+}
+.stat-tile-bar-fill.success { background: var(--ha-success); }
+.stat-tile-bar-fill.danger { background: var(--ha-danger); }
+.stat-tile-bar-fill.primary { background: var(--ha-primary); }
+.stat-tile-bar-fill.warning { background: var(--ha-warning); }
+.stat-tile-bar-pct {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--ha-ink-secondary);
+}
+.stat-tile-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ha-muted);
+}
+.stat-tile-meta .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.stat-tile-meta .dot.success { background: var(--ha-success); }
+.stat-tile-meta .dot.warning { background: var(--ha-warning); }
+.stat-tile-meta .dot.primary { background: var(--ha-primary); }
+.stat-tile-stars {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 14px;
+  color: var(--ha-warning);
+}
+.stat-tile-stars .el-icon--empty { color: var(--ha-border); }
+
 /* ---- Reduced motion: global safety ---- */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

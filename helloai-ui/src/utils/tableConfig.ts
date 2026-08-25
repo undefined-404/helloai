@@ -27,6 +27,17 @@ export function fmtTime(t: string | null | undefined): string {
   return t.replace('T', ' ').substring(0, 19)
 }
 
+// ---- 时间拆为日期/时分秒两部分 ----
+// 窄列场景下上下两行展示，节省横向空间；返回结构含 null 让模板走占位分支
+export function splitDateTime(t: string | null | undefined): { date: string; time: string } | null {
+  if (!t) return null
+  const normalized = t.replace('T', ' ')
+  const s = normalized.substring(0, 19)
+  const sp = s.indexOf(' ')
+  if (sp < 0) return { date: s, time: '' }
+  return { date: s.substring(0, sp), time: s.substring(sp + 1) }
+}
+
 // ---- 文件大小格式化 ----
 export function fmtSize(bytes: number): string {
   if (!bytes) return '-'

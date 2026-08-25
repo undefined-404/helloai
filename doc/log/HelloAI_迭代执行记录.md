@@ -7018,3 +7018,199 @@ _时间：2026-08-25（用户提供设计图，要求保留布局只润色元素
 - 遗留：设计图中「执行者：xxx」行与「技术详情（开发者）」入口本轮按边界未纳入，如后续需要再单独提；本轮改动未 git 提交，待用户确认后提交。
 - **复验修正（用户反馈，2026-08-25）**：移除「一眼概览」四张统计卡（对话轮次/核验轮次/产出附件/时间线事件）——数字与各卡头「共 N 条 · M 轮」计数完全重复，用户判定冗余；同步下线 `statCards` computed 与 `scrollToSection` 锚点滚动函数、`.stat-grid/.stat-card/.stat-num/.stat-label/.tone-*` 样式与 768px 媒体查询规则；点击锚点定位能力随卡片一并移除（页面不长，直接滚动即可）；`.full-row` 保留（头部卡/摘要卡/人工介入卡仍在用）。修正后验证：vue-tsc 0 错、eslint 0 error（1 存量 warning）。
 - **复验修正（续，2026-08-25）**：任务摘要并入头部卡（用户要求「任务摘要和子任务详情放在一个框中」）——独立 `summary-card` 移除，摘要块作为头部卡底部区块（`.head-summary`，虚线分隔 + 小标签），`v-if="item.content"` 条件渲染不变；`.summary-text` 样式复用，新增 `.head-summary/.head-summary-label`。修正后验证：vue-tsc 0 错、eslint 0 error（1 存量 warning，4 个 singleline-content 告警经 --fix 自动修复）。
+
+---
+
+### 6.159 子任务列表页表格润色：负责人单行截断 + 创建时间上下两行（2026-08-25）
+
+#### 1. 背景与结论
+
+用户提供子任务列表页亮暗双主题设计图，要求按设计图调整表格排版。实测发现设计图本身有一个不可对齐的缺陷：负责人 Agent 名（如 `inner-deepseek-flash-executor`）在窄列下被换行成 2 行、创建时间是单行 1 行，导致两列 baseline 错位。用户明确「这一点不必参考设计图」，并指定时间格式改成「日期在上 / 时间在下」的上下两行结构以节省横向列宽。本轮定性为**纯表现层调整**：不动后端、不动业务逻辑、不动状态过滤/认领/暂停/重新指派/重新调度等动作。
+
+#### 2. 实现要点
+
+- **工具函数扩展**（`helloai-ui/src/utils/tableConfig.ts`）：新增 `splitDateTime(t)` 返回 `{ date, time } | null`，拆出 `YYYY-MM-DD` 与 `HH:mm:ss`；原有 `fmtTime(t)` 保留单行格式供其他 12 个页面继续使用（TaskList / RuleList / RewardList / AgentInbox / SubTaskDetail / AttachmentList / FinalReportDialog / ReviewList / RequirementChat / PromptList 等），避免大范围回归。
+- **负责人列单行截断**（SubTaskList.vue）：`<span class="agent-cell" :title="row.assignedAgentName">` 替换裸插值，CSS `display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap`；min-width 由 100 → 160 给长 Agent 名预留可见宽度（`inner-deepsee…` 级别），浏览器原生 `title` 触发悬停 tooltip 补全名。
+- **创建时间上下两行**（SubTaskList.vue）：`<div class="time-cell"><div class="time-date">2026-08-24</div><div class="time-hh">16:06:47</div></div>`，width 由 170 → 104，date 用 `--ha-ink-secondary` 13px（主信息）、hh 用 `--ha-muted` 12px（次信息降级），`tabular-nums` 保证等宽对齐。
+- **关键修复（浏览器实测发现）**：首版 `.time-cell` 用 `display: inline-flex` 在 104px 列宽下被 `.cell` flex 上下文压垮，`.time-date` 被拆成 `2026-` / `08-24` / `16:06:47` 三行。修正三处：① `.time-cell` 改为 `display: flex`（不再是 inline-flex）+ `min-width: 90px` 锁住子项自然宽度；② `.time-date` / `.time-hh` 显式 `white-space: nowrap` 防御内层压缩；③ `:deep(.el-table td.el-table__cell > .cell) { display: flex; align-items: center }` 显式兜底（EP 默认就是 flex+center，显式写出避免依赖升级回归）。
+- **token 合规**：所有颜色走 `--ha-ink-secondary` / `--ha-muted`，亮暗主题自动跟随；新增样式无任何硬编码色值。
+
+#### 3. 验证结果
+
+- `npx vue-tsc --noEmit -p tsconfig.json` 0 错。
+- `npx eslint src/views/subtask/SubTaskList.vue src/utils/tableConfig.ts` 0 错。
+- `npx vite build` 6.07s 通过。
+- 浏览器实测（dev server :5174，admin/admin123，子任务页 25 条数据）：
+  - 抽样 5 行几何对齐：负责人列中线 y=199/254/308/363/418，创建时间列中线 y=199/254/308/363/418，diff = 0px（像素级对齐）。
+  - DOM 验证：`<div class="time-cell"><div class="time-date">2026-08-24</div><div class="time-hh">16:06:47</div></div>`，renderedText = `"2026-08-24\n16:06:47"`，TD 高度 55px 统一。
+  - DOM 验证：`<span class="agent-cell" title="inner-deepseek-flash-executor">` scrollWidth=215px / clientWidth=112px，横向截断生效，原生 title tooltip 提示完整名。
+  - 暗色主题：表格、行内文字、分隔线、状态 tag 均已正确切换，无亮色残留。
+
+#### 4. 影响与遗留
+
+- 影响：子任务列表页负责人与创建时间两列不再错位，长 Agent 名在窄列下稳定单行截断，时间列从 170px 收缩到 104px，腾出 66px 给标题列缓解窄屏折行；亮暗双主题无回归。
+- 遗留：本轮改动未 git 提交；其他列表页（TaskList / RuleList / RewardList 等）仍用单行 `fmtTime`，如后续需要全局改造可独立提一轮。
+- **复验回退（用户反馈，2026-08-25）**：创建时间格式从上下两行回退为单行 `2026-08-24 16:06:47`——用户在实际页面发现列宽有足够空间，时间上下两行结构反而需要二次浏览；恢复 `{{ fmtTime(row.createTime) }}` 单行渲染，列宽 104 → 170px；import 从 `splitDateTime` 改回 `fmtTime`；移除 `.time-cell` / `.time-date` / `.time-hh` 三组样式，保留 `.agent-cell` 单行截断 与 `:deep(.el-table td.el-table__cell > .cell)` 居中兜底；`splitDateTime` 工具函数在 tableConfig.ts 中保留（未使用，不影响其他页面）。DOM 实测：创建时间 innerText = `"2026-08-24 16:06:47"`，TD 高度回落单行水平。
+
+---
+
+### 6.160 审查中心 + Agent 打卡上班两页面 UI 重构：design-system.css 全局 .stat-tile 系统 + 顶部统计卡 + 刷新按钮跨页一致（2026-08-25）
+
+#### 1. 背景与结论
+
+用户提供审查中心（亮暗双主题）和 Agent 打卡上班（亮暗双主题）两组设计图，要求参照前几轮 SubTaskList / SubTaskDetail 等列表页的形态做整体重构，并明确强调**「不同菜单相同的按钮（比如刷新），按钮颜色大小样式尽量保持一致」**——这是对设计系统一致性的硬约束。本轮定性为**纯表现层重构**：不动后端 API、不动业务规则、不动权限/状态机；只在两个视图页 + 一个全局样式文件中落实设计系统。
+
+#### 2. 全局设计系统：`.stat-tile` 统计卡
+
+为避免每个页面重复发明「右上图标方块 + 主标签 + 大数字 + 副信息/进度条」的 DOM 和样式，在 `helloai-ui/src/styles/design-system.css` 顶部新增 `.stat-tile` 系列全局类（共 18 条规则）。Dashboard 的旧 `.stat-card` 独立 DOM 保留（避免回归）；新页面一律使用本套样式以设计图为准统一视觉。
+
+- **基础结构**：`.stat-tile` 容器（`--ha-surface-elevated` 背景 / `--ha-radius-lg` 圆角 / `--ha-shadow-sm` 阴影 / 20px padding / hover 提升至 `--ha-shadow-md` 并 `translateY(-1px)`）。
+- **头部布局**：`.stat-tile-head` flex space-between + `align-items: flex-start`，容纳 `.stat-tile-label`（13px `--ha-muted`，含 `.accent` 二级英文标签变体）与 `.stat-tile-icon`（32×32 圆角方块，flex 居中图标）。
+- **图标语义色**：`.stat-tile-icon` 4 个变体 `primary`（`color-mix` 主色 14%）/ `success` / `warning` / `danger`（全部走 `--ha-*-bg` 浅底 + `--ha-*` 深字），缺省为中性 `--ha-surface-hover` + `--ha-muted`。
+- **主数值**：`.stat-tile-value` 28px / 700 / `letter-spacing: -0.02em` / `tabular-nums`；含 `.unit` 13px 灰色单位后缀、`.delta.up` / `.delta.down` 12px 增量徽标（success / danger 着色）。
+- **副信息区**：`.stat-tile-extra` flex 容器，三种典型内容：
+  - 进度条 `.stat-tile-bar` + `.stat-tile-bar-fill`（success / danger / primary / warning 四种语义色）+ `.stat-tile-bar-pct` 百分比文本；
+  - 文本元信息 `.stat-tile-meta` + `.dot.success` / `.dot.warning` / `.dot.primary` 小圆点；
+  - 星级 `.stat-tile-stars`（EP StarFilled 5 颗，> 当前评分用 `.el-icon--empty` 置灰）。
+- **token 合规**：所有色值走 `--ha-*` token，亮暗主题自动跟随，零硬编码色值。
+
+#### 3. ReviewList.vue（审查中心）完整重写
+
+- **页面头部**：`.page-head` 外置标题（`审查中心`，紫色 `--ha-primary`）+ `.page-actions` 右侧水平排列三件套：结果筛选（全部 / 通过 / 驳回，clearable，140px）+ 关键词搜索（子任务ID / 问题 / 评价，260px，带 Search 前缀图标）+ **紫色刷新按钮** `<el-button size="small" type="primary">刷新</el-button>`（与 DutyLeaseList / SubTaskList 完全一致）。
+- **顶部 4 张统计卡**（全部走全局 `.stat-tile`）：
+  - 总审查数（primary 紫，Document 图标，含 `+N 本周` 增量徽标，最近 7 天 count）；
+  - 通过 APPROVED（success 绿，CircleCheck 图标，progress bar + `approvedPct.toFixed(1)%`）；
+  - 驳回 REJECTED（danger 红，CircleClose 图标，progress bar + `rejectedPct.toFixed(1)%`）；
+  - 平均评分（warning 橙，Star 图标，`avgScore.toFixed(1) / 5.0` + 5 颗 StarFilled 星标，`Math.round` 整数位亮起其余置灰）。
+- **统计聚合**：`stats` computed 从 `list.value` 实时计算（与表格数据同源，避免脱节）；通过率/驳回率分母为 `approved + rejected`（不含其他结果，避免稀释比例）。
+- **表格 8 列**：子任务 #id（link 按钮跳转详情）/ 结果（APPROVE / REJECTED tag，success / danger）/ 评分（`score-num.good` / `.bad` 数字强调）/ 问题（multi-line 2 行截断）/ 评价（multi-line 2 行截断）/ 轮次（数字）/ 时间（`fmtTime`）/ 操作（查看详情 link 按钮）。
+- **响应式**：`.stats-grid` 默认 `repeat(4, 1fr)`；1200px 降为 2 列；640px 降为 1 列，筛选控件宽度 100%。
+
+#### 4. DutyLeaseList.vue（Agent 打卡上班）完整重写
+
+- **页面头部**：与 ReviewList 同构——标题外置「Agent 打卡上班」+ 状态筛选（在线 ACTIVE / 下班 CLOSED / 超时 EXPIRED，clearable）+ 关键词搜索（Agent 名 / 会话ID，260px）+ 紫色刷新按钮 `<el-button size="small" type="primary">刷新</el-button>`。
+- **顶部 4 张统计卡**：
+  - 在岗 Agent（success 绿，CircleCheck 图标，「实时在线」dot 副信息）；
+  - 超时 Agent（warning 橙，Clock 图标，Warning 子图标「需关注处理」副信息）；
+  - 已下班 Agent（中性灰，User 图标，Moon 子图标「今日已下班」副信息——避免 success/warning/danger 都抢注意力）；
+  - **并发配置上限**（primary 紫，Files 图标，单数字 `stats.totalCap` + 「覆盖 N 个 Agent」副信息）。
+- **表格 9 列**：Agent（方形头像 + 名称 + `#agentId` + `sessionId.slice(0,12)` 摘要，状态着色头像底色）/ 最新状态（`DUTY_LEASE_STATUS_MAP[row.status]` 在线 success / 下班 info / 超时 warning tag）/ 最新会话（sessionId `show-overflow-tooltip`）/ 模式（AUTO info tag / MANUAL primary tag plain）/ 并发上限（`modeClass` MANUAL 主色 / AUTO success 绿，weight 600 tabular-nums）/ 上班时间 / 续约时间（24h 内 warning 橙）/ 超时时间（未来 24h 内 danger 红）/ 操作（更多 link 按钮触发 `DutyLeaseHistoryDialog`）。
+- **时间热度着色**：`recentClass(t)` 函数——未来 24h 内 `soon`（danger 红）、过去 24h 内 `recent`（warning 橙）、其余默认 `--ha-ink-secondary`。
+- **头像底色**：`avatarBg(row)` 按 `DutyLeaseStatus` 取 `color-mix(--ha-* 14%, transparent)`。
+- **响应式**：与 ReviewList 完全相同的 `.stats-grid` 4→2→1 降级规则。
+
+#### 5. 关键 Bug 发现与修复（浏览器实测）
+
+第一轮上线后浏览器实测发现「并发配置上限」卡片拼接异常：渲染出 `0714 / 6`、`11900%` 这类无意义字符串。根因排查：
+
+- 后端 `DutyAgentLatestResponse` 未提供 `currentLoad`（当前并发占用）字段；
+- 前端误把 `leaseCount`（该 Agent 历史租约总条数）当作「当前占用」用于计算进度条，导致：① 数字含义混淆（历史租约总数 ≠ 当前并发占用）；② 拼接逻辑错位产生 `0714 / 6` 这类伪拼接。
+
+修复方案（语义重定义，不依赖后端字段补齐）：
+
+1. 卡片标题：「并发总数」→「**并发配置上限**」（语义清晰，不暗示实时占用）。
+2. 卡片主数字：移除进度条，仅显示 `stats.totalCap`（所有 Agent `maxConcurrent` 之和），单数字单语义。
+3. 卡片副信息：「覆盖 `{{ stats.configuredAgents }}` 个 Agent」（说明聚合基数，避免歧义）。
+4. 表格「并发上限」列：简化为只显示 `row.maxConcurrent` 数字着色（MANUAL 主色 / AUTO success 绿），移除一切拼接逻辑。
+5. 移除 `currentLoad` 计算函数，stats computed 加注释：「后端未提供 currentLoad，本卡只统计 maxConcurrent 配置上限与配置 Agent 数，避免用 leaseCount 冒充『当前占用』造成拼接错位」。
+6. 类型守卫替代 `(row as any)`：`modeClass(row: DutyAgentLatestResponse)` 显式参数类型，vue-tsc 0 错、eslint 0 错。
+
+修复后实测：`.stat-tile-value` innerText = `"6"`，副文字 innerText = `"覆盖 2 个 Agent"`，无进度条 DOM，与设计图一致。
+
+#### 6. 跨页按钮一致性落地
+
+用户硬约束「不同菜单相同的按钮（比如刷新）颜色大小样式尽量保持一致」实施要点：
+
+- **刷新按钮**：审查中心 / Agent 打卡上班 / 子任务列表 三个页面统一 `<el-button size="small" type="primary">刷新</el-button>`，紫色实底 + 同尺寸 + 同 loading 行为。
+- **筛选控件宽度**：`.filter-select` 140px + `.filter-search` 260px 跨页统一。
+- **操作区布局**：`.page-actions` flex + `gap: 8px` 跨页统一，水平排列 + 右侧对齐。
+- **页面标题**：`.page-heading` 20px / 600 / `--ha-primary` / `letter-spacing: -0.02em` 跨页统一。
+- **统计卡网格**：`.stats-grid` 默认 `repeat(4, 1fr)` + 1200px → 2 列 + 640px → 1 列 跨页统一。
+- **stat-tile 系统**：`.stat-tile` / `.stat-tile-icon` / `.stat-tile-value` / `.stat-tile-extra` / `.stat-tile-bar` 全部走全局类，不再每个页面私有复制——这是按钮/卡片一致性的根本保障。
+
+#### 7. 验证结果
+
+- `npx vue-tsc --noEmit -p tsconfig.json` 0 错。
+- `npx eslint src/views/review/ReviewList.vue src/views/duty/DutyLeaseList.vue src/styles/design-system.css` 0 error（CSS 文件跳过 lint，EP `<template>` 类型注解 `DutyAgentLatestResponse` 显式收口）。
+- `npx vite build` 6.16s 通过。
+- 浏览器实测（dev server :5174，admin/admin123）：
+  - **审查中心**：4 张统计卡渲染正常，紫色刷新按钮与设计图一致；APPROVED tag 绿、REJECTED tag 红、平均评分 4.X/5.0 + 4-5 颗星；筛选/搜索/翻页交互无异常；亮暗主题无残留。
+  - **Agent 打卡上班**：4 张统计卡渲染正常，「并发配置上限 = 6 / 覆盖 2 个 Agent」无拼接异常；状态 tag 在线 success / 下班 info / 超时 warning；MANUAL 主色 + AUTO 绿着色正确；亮暗主题无残留。
+  - **Dashboard**：旧 `.stat-card` 独立 DOM 未动，无回归。
+- 类型守卫替换 `(row as any)` 后 ESLint 全绿，TypeScript 模板插槽 `<template #default="{ row }: { row: DutyAgentLatestResponse }">` 显式注解消除 TS7053。
+
+#### 8. 影响与遗留
+
+- 影响：审查中心 + Agent 打卡上班 两页面完成设计图落地，与 SubTaskList 形成「列表页三件套」视觉同构；`.stat-tile` 全局统计卡系统沉淀到 design-system.css，后续 Settings / Rule / Reward 等列表页改造可直接复用；刷新按钮 / 筛选区 / 标题样式跨页统一。
+- 遗留：① 后端 `DutyAgentLatestResponse` 未提供 `currentLoad` 字段，「并发配置上限」卡当前只能展示配置总和与配置 Agent 数，无法展示「当前实时占用 vs 配置上限」的进度对比。如后续需要，建议在 `DutyAgentLatestResponse` 增加 `currentLoad: number | null` 字段后回归此卡进度条。② 本轮改动未 git 提交。
+
+---
+
+### 6.161 审查中心页面收口：客户端分页 + 详情按钮文案一致性（2026-08-25）
+
+#### 1. 背景与结论
+
+§6.160 上线后用户实测反馈两点遗漏：① 审查中心 `load()` 一次性拉取所有 review 数据，无分页控件，后端 `GET /api/reviews` 当前只返 `List<ReviewResponse>` 不返 `PageResult`；② 操作列「查看详情」按钮在 `ACTION.ONE = 80px` 列宽下被截断，与 SubTaskList 等其他列表页「详情」按钮文案不一致。本轮定性为**纯前端补漏**：不动后端 Controller / Service / 类型契约，避免引入跨端回归。
+
+#### 2. 实现要点
+
+- **客户端分页**（不后后端加分页接口）：保留 `reviewApi.list()` 全量拉取不变，在前端用 `paginatedList` computed 对 `filteredList` 切片：`slice((currentPage - 1) * pageSize, currentPage * pageSize)`，`pageSize = 20` 与其他列表页默认一致。
+- **currentPage 重置点**（三个）：① `load()` 全量重新拉取时重置为 1；② `onKeywordInput()` 防抖后重置为 1；③ 结果筛选 `reload()` → `load()` 重走路径一。三个路径都是为了避免「过滤后总页数缩小但页码停留在旧页」的越界问题。
+- **雨衣虫越界保护**（watch）：防御性 `watch(filteredList)`，计算 `totalPages = Math.max(1, Math.ceil(list.length / pageSize))`，如 `currentPage > totalPages` 则回退到末页。这一道保护是给 “快速点击筛选」后“过滤事件与手动页码变化“中间状态不一致”而准备的后续追加错误。比如用户手动跳到第 3 页后立刻输入关键词过滤，结果剩 5 条 → 第 3 页越界，雨衣虫会立即回退到第 1 页，绘制不会出现 “分页器亮黄色但表格为空”。
+- **分页器控件**：在 el-table 后插入 `<el-pagination v-if="filteredList.length > 0" background layout="prev, pager, next, total" :total="filteredList.length" :page-size="pageSize" :current-page="currentPage" @current-change="onPageChange" />`，与 DutyLeaseList 同构（同样的 `margin-top: 16px; text-align: center`）。`v-if="filteredList.length > 0"` 是为了在过滤后空集时不出现「1 Total 0」这种虚假控件。
+- **顶部统计语义保留**：`stats` computed 仍然从 `list.value` 全量计算（与 §6.160 语义一致，反映总数据，不随分页变化而变），分页只作用于表格 `paginatedList`。
+- **按钮文案「查看详情」→「详情」**：从 4 个汉字变为 2 个汉字，列宽 `ACTION.ONE = 80px` 在 2 汉字 + el-button small 默认 padding（8×15）下完全够用。按钮保留 `<el-button size="small">` 默认样式（与 SubTaskList :223 「详情」按钮同构），列宽不变。
+
+#### 3. 验证结果
+
+- `npx vue-tsc --noEmit -p tsconfig.json` 0 错。
+- `npx eslint src/views/review/ReviewList.vue` 0 错。
+- `npx vite build` 6.02s 通过。
+- 浏览器实测（dev server :5174，admin/admin123）：
+  - **按钮检查**：操作列按钮 innerText = `"详情"`（不是「查看详情」），clientWidth = 48px，scrollWidth = 48px，TD clientWidth = 80px，按钮宽度 ≤ TD 可用宽度，不溢出、不截断；表格 40 个 el-button（20 个子任务 ID 紫色 link + 20 个详情 default）全部文案正确。
+  - **分页器渲染**：当前数据库有 25 条 review 记录（APPROVED 19、REJECTED 6、平均评分 3.4/5.0），`pageSize = 20` → 分页器 `innerText = "1\n2\nTotal 25"`，prev 禁用 / 紫色高亮 1 / next 可点。
+  - **翻页交互**：点 next 跳到第二页，显示剩余 5 条；末页 next 禁用 / prev 可点；点 prev 回第一页交互正常。
+  - **搜索过滤**：输入 "VERIFICATION" 关键词后 `total = 25 → 10`，表格立即缩为 10 行，分页器 `innerText = "1\nTotal 10"` 且 currentPage 自动重置为 1；清空搜索后 `total` 恢复到 25，重新出现「1 2 Total 25」双页。
+  - **结果筛选**：选「通过」后 `total = 25 → 19`（仅 APPROVE），表格内容、currentPage 同步重置；切回「全部」恢复 25 条。
+  - **亮暗主题**：亮 / 暗双主题下分页器、表格行、「详情」按钮、统计卡全部正常切换，无亮色残留。
+  - **8 项检查脚本全过**（登录 + 进入 / 按钮文案 / 分页器存在 / 翻页交互 / 搜索重置 / 筛选重置 / 暗色主题 / 数据条数）：按钮 innerText = `"详情"` ✓、按钮宽度 48px ≤ TD 80px ✓、分页器 `Total 25` ✓、第二页 5 行 ✓、prev/next 禁用态正确 ✓、筛选/搜索后 total 实时变 ✓。
+
+#### 4. 影响与遗留
+
+- 影响：审查中心页面「详情」按钮与其他列表页文案 / 宽度一致；增 25 条记录分两页、首屏 20 行渲染，首屏加载压力降低 ~20%；后端零改动，不破坏 SKILL.md 中外部 Agent 全量契约。
+- 遗留：① 客户端分页为最小闭环临时方案，当 review 记录超过数百条时仍会触发「一次拉全量 + 首屏渲染压力」问题，后续如需长期优化建议后端 `ReviewController.list` 返 `R<PageResult<ReviewResponse>>` + 参数 `page`/`size`，前端 `reviewApi.list` 加分页参数，迁移后移除 `paginatedList` computed 与 `currentPage` ref 并改为 server-side 分页。② 本轮改动未 git 提交。
+
+---
+
+### 6.162 Agent 打卡上班表格列收口：隐藏「模式」「并发上限」两列 + 清理死代码（2026-08-25）
+
+#### 1. 背景与结论
+
+§6.160 上线后用户反馈 Agent 打卡上班 页面 「模式」「并发上限」两列多余，去除可让主表信息更聚焦（Agent / 状态 / 会话 / 三个时间 / 操作）。同时该两列中的 `modeClass(row)` 函数 与 `.concurrent` 样式也随之变为死代码，一并清理避免遗留。本轮定性为**纯表现层收口**：不动后端 / 不动顶部统计卡 / 不动类型契约，仅删两列 + 清理两个孤儿符号。
+
+#### 2. 实现要点
+
+- **删除两列**（DutyLeaseList.vue template）：移除「模式」el-table-column（AUTO/MANUAL tag，width=90 align=center）与「并发上限」el-table-column（maxConcurrent 数字着色，width=100 align=center）。表头从 9 列减为 7 列。
+- **清理死代码**（script）：删除 `modeClass(row: DutyAgentLatestResponse)` 函数（原为并发列 MANUAL 主色 / AUTO success 绿返回 class 名），调用点已不存在，TypeScript 中已是 unreachable 函数。
+- **清理死样式**（style scoped）：删除 `.concurrent` / `.concurrent.good` / `.concurrent.manual` 三条 CSS（font-weight 600 + tabular-nums + MANUAL 主色 / AUTO success 绿），与表格中 `.concurrent` 节点一起清除。
+- **顶部统计卡保持不变**：「并发配置上限」卡仍以 `stats.totalCap` + 「覆盖 N 个 Agent」展示（§6.160 已闭合），不被本轮表格列隐藏影响；`maxConcurrent` 字段仍被 stats computed 使用，类型不变。
+- **不修改范围**：① 不删 `maxConcurrent` / `workMode` 字段（顶部「并发配置上限」卡仍需 maxConcurrent）；② 不改状态 tag / 时间热度着色 / 头像底色；③ 不动分页器与筛选交互。
+
+#### 3. 验证结果
+
+- `npx vue-tsc --noEmit -p tsconfig.json` 0 错。
+- `npx eslint src/views/duty/DutyLeaseList.vue` 0 错。
+- `npx vite build` 6.26s 通过。
+- 浏览器实测（dev server :5174，admin/admin123）：
+  - **列头验证**：亮色主题下 `.el-table__header th` 文本为 `['Agent', '最新状态', '最新会话', '上班时间', '续约时间', '超时时间', '操作']`，7 列，不含「模式」「并发上限」。
+  - **顶部统计卡保持**：在岗 Agent=0 / 超时 Agent=1 / 已下班 Agent=1 / 并发配置上限=6 覆盖 2 个 Agent，4 张卡完整渲染。
+  - **筛选交互**：状态筛选选「下班」后表格只剩 trae-executor 一行（status=CLOSED info tag），筛选项生效、currentPage 自动重置。
+  - **亮色主题**：表格行 / 操作列「更多」按钮 / 状态 tag / 时间热度着色 / Agent 头像底色全部正常。
+  - **暗色主题**：html.className = `"dark"`，localStorage.helloai-theme = `"dark"`，body 背景 `rgb(10,14,26)`，表格列头背景 `rgb(15,21,36)`，文字 `rgb(238,242,248)`，「更多」按钮紫色 `rgb(124,58,237)` 可读，4 张统计卡背景 `rgb(18,24,40)` / 文字 `rgb(238,242,248)`。
+  - **双向切换无残留**：切回亮色后 html.className = `""`，body 背景 `rgb(246,247,251)` 浅色，文字 `rgb(26,34,51)` 深色，无遗留暗块。
+
+#### 4. 影响与遗留
+
+- 影响：Agent 打卡上班 表格列从 9 列减为 7 列，横向占用收窄，可读性与信息密度提升；移除 modeClass 函数 + .concurrent 样式 后文件减小 ~13 行；后端类型契约不动，顶部「并发配置上限」卡依然能展示总 maxConcurrent 与覆盖 Agent 数。
+- 遗留：① 「模式」「并发上限」信息从表格中隐藏后，仅能从顶部「并发配置上限」卡获取汇总值，如后续需要查看某个 Agent 的具体并发上限值，需另外设计查看入口（如点击 Agent 行打开详情抽屉或在「更多」弹出的历史对话框中展示）；② 本轮改动未 git 提交。
+

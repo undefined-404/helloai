@@ -192,10 +192,13 @@
           </el-table-column>
           <el-table-column
             label="负责人"
-            min-width="100"
+            min-width="160"
           >
             <template #default="{ row }">
-              {{ row.assignedAgentName || '-' }}
+              <span
+                class="agent-cell"
+                :title="row.assignedAgentName || ''"
+              >{{ row.assignedAgentName || '-' }}</span>
             </template>
           </el-table-column>
           <el-table-column
@@ -403,8 +406,7 @@ import QuickDispatchDialog from '@/components/QuickDispatchDialog.vue'
 import SubTaskDagView from '@/components/SubTaskDagView.vue'
 import TaskIterationView from '@/components/TaskIterationView.vue'
 import { SUB_TASK_STATUS_MAP, SCORE_GRADE_MAP } from '@/types'
-import { ACTION } from '@/utils/tableConfig'
-import { fmtTime } from '@/utils/tableConfig'
+import { ACTION, fmtTime } from '@/utils/tableConfig'
 import { orderByDependency } from '@/utils/subTaskDag'
 import { queryString } from '@/utils/queryParam'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
@@ -684,5 +686,20 @@ onMounted(() => {
   background: var(--el-color-primary);
   border-radius: 8px;
   vertical-align: 1px;
+}
+/* 负责人 Agent 名：长名在窄列下不能换行，单行截断 + 原生 title tooltip 提示全名 */
+.agent-cell {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ha-ink);
+}
+/* 表格 cell 默认 vertical-align: middle，显式居中作为升级防御，
+   保证单行 Agent 名与单行时间戳视觉中线对齐 */
+:deep(.el-table td.el-table__cell > .cell) {
+  display: flex;
+  align-items: center;
 }
 </style>
