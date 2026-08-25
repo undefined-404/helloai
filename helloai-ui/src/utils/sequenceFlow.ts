@@ -120,6 +120,22 @@ const LABEL: Record<string, string> = {
   subtask_review_verdict: '核验结论',
   subtask_review_thinking: '核验思考',
 
+  // V58: 双审 / 抽检链路节点（与单审核验泳道区分）
+  sub_task_dual_review_consented: '双审共识落地',
+  sub_task_dual_review_incomplete: '双审缺失等人工',
+  sub_task_dual_review_degraded: '双审降级单审',
+  sub_task_reviewer_disagreement: '双审分歧转人工',
+  sub_task_recheck_consistent: '抽检一致',
+  sub_task_recheck_discrepancy: '抽检分歧',
+  subtask_dual_review_prompt: '发起双审核验',
+  subtask_dual_review_verdict: '双审结论',
+  subtask_dual_review_thinking: '双审思考',
+  subtask_dual_review_result: '双审共识落定',
+  subtask_recheck_prompt: '发起抽检复审',
+  subtask_recheck_verdict: '抽检审查',
+  subtask_recheck_thinking: '抽检思考',
+  subtask_recheck_result: '抽检结论落定',
+
   sub_task_dead_letter: '进入死信',
   sub_task_review_dead_letter: '核验熔断入死信',
   sub_task_dead_letter_manual_assign: '人工指派',

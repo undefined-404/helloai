@@ -13,6 +13,7 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.review.picker.ReviewerPicker;
 import com.helloai.core.review.service.SubTaskReviewService;
+import com.helloai.core.review.support.ReviewChannel;
 import com.helloai.core.review.support.ReviewEvidenceAssembler;
 import com.helloai.core.review.support.ReviewExecutionEngine;
 import com.helloai.core.review.support.VerdictParser;
@@ -323,15 +324,29 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         }
     }
 
-    /** 判定落地：对话流结果文本 + 按判定走既有通过/驳回链（单审/双审共识共用）。 */
+    /** 判定落地：对话流结果文本 + 按判定走既有通过/驳回链（单审默认链路）。 */
     private void applyVerdict(SubTask subTask, Long executorAgentId, Agent reviewer, ReviewVerdict verdict) {
+        applyVerdict(subTask, executorAgentId, reviewer, verdict, ReviewChannel.SINGLE, null);
+    }
+
+    /**
+     * 判定落地：对话流结果文本 + 按判定走既有通过/驳回链（单审/双审共识共用）。
+     *
+     * @param channel          链路来源（SINGLE/DUAL），决定结果消息类型
+     * @param consensusSummary 双审共识摘要（首部附加行，双审才有；单审传 null）
+     */
+    private void applyVerdict(SubTask subTask, Long executorAgentId, Agent reviewer, ReviewVerdict verdict,
+                              ReviewChannel channel, String consensusSummary) {
         Long subTaskId = subTask.getId();
         // 对话流：审核结果（通过/驳回 + 评分 + 问题）以可读文本单独落库，
-        // 与 verdict JSON 原文互补，方便前端直接展示结论
+        // 与 verdict JSON 原文互补，方便前端直接展示结论；双审附加共识摘要行
         try {
             String resultText = VerdictParser.formatReviewResult(verdict);
+            if (consensusSummary != null && !consensusSummary.isBlank()) {
+                resultText = consensusSummary + "\n\n" + resultText;
+            }
             conversationService.addMessage(subTaskId, reviewer.getId(),
-                    "assistant", "agent", resultText, "subtask_review_result");
+                    "assistant", "agent", resultText, channel.toolName("result"));
         } catch (Exception e) {
             log.warn("核验结果对话流写入失败（不阻断核验）: subTaskId={}, err={}", subTaskId, e.getMessage());
         }
@@ -370,9 +385,9 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         long timeoutMs = reviewProperties.getDualReviewTimeoutSeconds() * 1000L;
         long deadline = System.currentTimeMillis() + timeoutMs;
         CompletableFuture<ReviewVerdict> future1 = CompletableFuture.supplyAsync(
-                () -> reviewExecutionEngine.execute(subTask, reviewer1), reviewDualExecutor);
+                () -> reviewExecutionEngine.execute(subTask, reviewer1, ReviewChannel.DUAL), reviewDualExecutor);
         CompletableFuture<ReviewVerdict> future2 = CompletableFuture.supplyAsync(
-                () -> reviewExecutionEngine.execute(subTask, reviewer2), reviewDualExecutor);
+                () -> reviewExecutionEngine.execute(subTask, reviewer2, ReviewChannel.DUAL), reviewDualExecutor);
         ReviewVerdict v1 = awaitVerdict(future1, deadline);
         ReviewVerdict v2 = awaitVerdict(future2, deadline);
         if (v1 == null || v2 == null) {
@@ -411,7 +426,13 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         // （ANY 仅 reviewer2 通过时取 v2），reviewer2 判定完整保留在对话流与 timeline payload
         ReviewVerdict chosen = pass1 ? v1 : v2;
         boolean consensusPass = requireBoth ? pass1 : (pass1 || pass2);
-        applyVerdict(subTask, executorAgentId, reviewer1, chosen);
+        // 双审共识摘要：两位评审观点 + 共识策略落成可读文本，附在结果消息首部
+        String consensusSummary = "## 双审共识\n\n"
+                + "- 策略: " + (requireBoth ? "REQUIRE_BOTH（两审一致才落地）" : "ANY（任一通过即落地）") + "\n"
+                + "- 评审1: " + verdictSummary(v1, pass1) + "\n"
+                + "- 评审2: " + verdictSummary(v2, pass2) + "\n"
+                + "- 共识: " + (consensusPass ? "通过" : "驳回");
+        applyVerdict(subTask, executorAgentId, reviewer1, chosen, ReviewChannel.DUAL, consensusSummary);
         recordReviewerStats(reviewer1.getId(), reviewer2.getId(), 1, 0);
         taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId,
                 "sub_task_dual_review_consented", AgentRole.REVIEWER, reviewer1.getId(),
@@ -424,6 +445,14 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         log.info("双审{}: subTaskId={}, consensus={}, reviewer1={}, reviewer2={}",
                 requireBoth ? "一致" : "落地", subTaskId,
                 consensusPass ? "APPROVED" : "REJECTED", reviewer1.getId(), reviewer2.getId());
+    }
+
+    /**
+     * 双审共识摘要用：单侧评审观点行（通过/驳回 + 评分，评分缺失显示 -）。
+     */
+    private String verdictSummary(ReviewVerdict verdict, boolean pass) {
+        String score = verdict.getScore() != null ? verdict.getScore() + " / 5" : "-";
+        return (pass ? "通过" : "驳回") + "（评分 " + score + "）";
     }
 
     /**

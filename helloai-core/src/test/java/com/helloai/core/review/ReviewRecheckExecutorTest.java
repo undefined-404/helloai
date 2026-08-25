@@ -37,6 +37,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -86,7 +87,8 @@ class ReviewRecheckExecutorTest {
                 new VerdictParser(new ObjectMapper()),
                 new ReviewEvidenceAssembler(attachmentService, dispatchProperties));
         executor = new ReviewRecheckExecutor(recordReviewService, subTaskService,
-                reviewerPicker, taskTimelineService, agentQualityProfileService, engine);
+                reviewerPicker, taskTimelineService, agentQualityProfileService, engine,
+                conversationService);
         lenient().when(reviewerPicker.pickSingle(any())).thenReturn(reviewer(9L));
     }
 
@@ -139,6 +141,9 @@ class ReviewRecheckExecutorTest {
                 eq(RECORD_ID), eq(SUB_TASK_ID), eq(ReviewResult.APPROVED), eq(ReviewResult.APPROVED),
                 eq(false), eq(9L), any(), any(), any());
         verify(agentQualityProfileService).incrementReviewerStats(9L, 1, 0);
+        verify(conversationService).addMessage(
+                eq(SUB_TASK_ID), eq(9L), eq("assistant"), eq("agent"),
+                anyString(), eq("subtask_recheck_result"));
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_recheck_consistent"),
                 eq(AgentRole.REVIEWER), eq(9L), anyMap());
@@ -162,6 +167,9 @@ class ReviewRecheckExecutorTest {
         verify(recordReviewService).recordRecheck(
                 eq(RECORD_ID), eq(SUB_TASK_ID), eq(ReviewResult.APPROVED), eq(ReviewResult.REJECTED),
                 eq(true), eq(9L), any(), any(), any());
+        verify(conversationService).addMessage(
+                eq(SUB_TASK_ID), eq(9L), eq("assistant"), eq("agent"),
+                anyString(), eq("subtask_recheck_result"));
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_recheck_discrepancy"),
                 eq(AgentRole.REVIEWER), eq(9L), anyMap());

@@ -45,11 +45,28 @@ public class ReviewExecutionEngine {
      * 单次核验（不改状态不落库）：渲染 Prompt → LLM 调用 → 对话流双写 → 解析判定；
      * 失败/不可解析返回 null（内部已记日志/timeline，调用方据此停留 REVIEW 等人工）。
      *
+     * <p>默认走单审链路（{@link ReviewChannel#SINGLE}），双审/抽检显式传链路来源，
+     * 对话流消息类型随链路切换（subtask_review_* / subtask_dual_review_* /
+     * subtask_recheck_*），保证执行对话流可分辨三种链路。</p>
+     *
      * @param subTask  待核验子任务
      * @param reviewer 核验 Reviewer Agent
      * @return 结构化判定；LLM 调用失败/超时/输出不可解析时返回 null
      */
     public SubTaskReviewService.ReviewVerdict execute(SubTask subTask, Agent reviewer) {
+        return execute(subTask, reviewer, ReviewChannel.SINGLE);
+    }
+
+    /**
+     * 单次核验（不改状态不落库）：同 {@link #execute(SubTask, Agent)}，按链路来源
+     * 切换对话流消息类型前缀（单审/双审/抽检三态可分辨）。
+     *
+     * @param subTask  待核验子任务
+     * @param reviewer 核验 Reviewer Agent
+     * @param channel  链路来源（SINGLE / DUAL / RECHECK），决定消息类型前缀
+     * @return 结构化判定；LLM 调用失败/超时/输出不可解析时返回 null
+     */
+    public SubTaskReviewService.ReviewVerdict execute(SubTask subTask, Agent reviewer, ReviewChannel channel) {
         Long subTaskId = subTask.getId();
         String prompt = renderPrompt(subTask);
         AgentResult result;
@@ -72,22 +89,23 @@ public class ReviewExecutionEngine {
             return null;
         }
 
-        // 对话流双写：核验 Prompt + REVIEWER 分析原文全量落 conversation_message，
+        // 对话流双写：核验 Prompt + REVIEWER 分析原文全量落 conversation_message
+        // （消息类型随链路来源切换：subtask_review_* / subtask_dual_review_* / subtask_recheck_*），
         // 不可解析时同样保留原始输出（正是人工兜底最需要看的内容）；失败不阻断核验主链路
         try {
             conversationService.addMessage(subTaskId, null,
-                    "user", "platform", prompt, "subtask_review_prompt");
+                    "user", "platform", prompt, channel.toolName("prompt"));
             // 推理模型的思考过程单独落一条消息（保留 thinking，供前端动态展示）
             if (result.getThinking() != null && !result.getThinking().isBlank()) {
                 conversationService.addMessage(subTaskId, reviewer.getId(),
                         "assistant", "agent",
                         result.getThinking(),
-                        "subtask_review_thinking");
+                        channel.toolName("thinking"));
             }
             conversationService.addMessage(subTaskId, reviewer.getId(),
                     "assistant", "agent",
                     result.getOutput() != null ? result.getOutput() : "",
-                    "subtask_review_verdict");
+                    channel.toolName("verdict"));
         } catch (Exception e) {
             log.warn("核验对话流写入失败（不阻断核验）: subTaskId={}, err={}", subTaskId, e.getMessage());
         }

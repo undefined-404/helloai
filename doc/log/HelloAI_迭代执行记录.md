@@ -6888,3 +6888,133 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 
 - 影响：“添加模型”交互对齐参考截图（两步式 + 类型字段默认按量付费）；Key 保存即验证（LLM 与博查），无效密钥即时暴露；Agent 编辑信息可见所选模型。
 - 遗留：TOKEN_PLAN / CODING_PLAN 仅预留置灰；外部 AI Agent 模型不在管理范围（用户明确不管）；冒烟脚本未实跑；本轮改动未 git 提交，待用户确认后提交。
+
+### 6.154 执行对话流链路来源区分：单审/双审/抽检消息类型三分 + 双审共识摘要 + 抽检结论消息（2026-08-25）
+
+#### 1. 背景与结论
+
+- **背景**：§6.142 Phase 4 落地双审共识 + 抽检复审后，单审/双审/抽检三方复用同一 ReviewExecutionEngine 执行口径，对话流消息统一落 `subtask_review_prompt/thinking/verdict`，执行对话流无法分辨三条链路；且抽检结论只落 review_recheck_log + timeline，对话流完全不可见。Dev 库实证（任务「AI 核心概念内部培训方案文档」子任务）：抽检 discrepancy 后用户只能从 timeline 事件间接判断，误读为「双审一过一不过最终通过」，引发对综合评判机制的疑问。
+- **结论**：新增 ReviewChannel 链路枚举（SINGLE/DUAL/RECHECK），核验对话流消息类型随链路三分（`subtask_review_*` / `subtask_dual_review_*` / `subtask_recheck_*`）；双审共识落定消息附加「双审共识」摘要（两位评审观点 + 共识策略）；抽检补一条 `subtask_recheck_result` 结论消息（显式声明只度量不改状态）；前端标签/时序图/timeline 字典同步，核验轮次分组识别前缀扩展。
+
+#### 2. 实现要点
+
+- **ReviewChannel 枚举（review/support 包新增）**：SINGLE/DUAL/RECHECK 三值，`toolName(kind)` 按链路返回 `subtask_review_{kind}` / `subtask_dual_review_{kind}` / `subtask_recheck_{kind}`，作为对话流消息类型与前端标签的单一事实源。
+- **ReviewExecutionEngine**：新增 3 参 `execute(subTask, reviewer, channel)`（2 参默认委托 SINGLE 保留），prompt/thinking/verdict 双写消息类型改 `channel.toolName(...)`；单审/双审/抽检共用执行口径不变（§7.8/§6.142 语义保持）。
+- **SubTaskReviewServiceImpl**：doDualReview 两侧 execute 传 DUAL；applyVerdict 增加 channel + consensusSummary 参数（原签名委托 SINGLE），结果消息类型随链路切换；双审共识落地时构造「## 双审共识」摘要行（策略 REQUIRE_BOTH/ANY + 评审1/评审2 通过/驳回与评分 + 共识结论），附在结果消息首部；评审1/2 各自 verdict 原文与 sender_id 仍完整保留在对话流（§6.142 口径不破）。
+- **ReviewRecheckExecutor**：execute 传 RECHECK；判定后可读结论以 `subtask_recheck_result` 落对话流（best-effort，含结果/评分/原判定 reviewRecordId/问题/评语，标题显式标注「只度量，不改变子任务状态」）；新增 ConversationService 构造器注入。
+- **前端**：SubTaskDetail.vue CONV_TAG_MAP 与 timeline 共用字典、sequenceFlow.ts 节点名各补三链路 14+ 项（双审请求/分析/结论、抽检请求/分析/结论，及双审共识/缺失/降级/分歧、抽检一致/分歧等 timeline 事件文案）；核验轮次分组 isReview 前缀扩展（`subtask_review | subtask_dual_review | subtask_recheck`）；ReviewVerdictView 结构化视图兼容三种 verdict 类型（原单审标签与历史消息不变）。
+
+#### 3. 验证结果
+
+- 后端：`mvn -pl helloai-core -am test -DskipTests=false -Dtest=SubTaskReviewServiceTest,ReviewRecheckExecutorTest -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false` BUILD SUCCESS，**42/42 全绿**（SubTaskReviewServiceTest 39 + ReviewRecheckExecutorTest 3，覆盖双审一致/分歧转人工/候选不足降级/ANY 与抽检一致/分歧/跳过全链路；ReviewRecheckExecutorTest 新增 2 处对话流结论消息断言）。
+- 前端：`npm run type-check` EXIT=0（vue-tsc --noEmit 0 错）；顺序 Flow 节点映射与轮次分组前缀变更无类型错误。
+- 历史兼容：存量 `subtask_review_*` 消息标签与渲染路径不变，仅新产生消息按新链路类型生效。
+
+#### 4. 影响与遗留
+
+- 影响：执行对话流可一眼分辨单审/双审/抽检；双审共识摘要让「一过一不过最终通过」类疑问在对话流内自解释（评审1/评审2 观点 + 共识策略）；抽检结论（含分歧缺陷）直接在对话流可见，不再依赖 timeline 间接推断；双审/抽检相关 timeline 事件获得前端文案。
+- 遗留：双审两条 verdict 消息头未展示 Reviewer 名称（sender_id 可查证，如需展示可后续加 agent 名解析）；真实环境效果待后端重启后实测；本轮改动未 git 提交，待用户确认后提交。
+
+### 6.155 子任务详情页改版（版本三精简版）：概览统计卡 + 双栏布局 + 时间线里程碑收纳（2026-08-25）
+
+#### 1. 背景与结论
+
+- **背景**：子任务详情页（SubTaskDetail.vue）为单列堆叠的日志式布局：el-descriptions 元信息表 + 对话流 + 13 条全量时间线顺序铺陈，关键结论（核验通过/产出附件）淹没在长页中；时间线里分发/指令流转/上下文装配等例行内部事件与关键里程碑享受同等视觉权重，每条还挂「技术详情（开发者）」折叠。用户提供三版设计稿对比后选定版本三（精简版）：概览统计卡 + 头部信息带 + 双栏（左对话流 / 右附件 + 时间线）。
+- **结论**：纯前端改版（无后端 / Flyway / 配置变更），页面结构改为「状态徽标 + 标题 + 依赖标签头部卡 → 4 张可点击概览统计卡 → 任务摘要 → （人工介入卡）→ 左主栏对话流 / 右栏附件 + 时间线」；时间线默认只呈现关键里程碑，例行事件收纳进「展开全部」，技术详情仅在全量视图露出；数据源与轮询/人工介入/导出等既有能力零改动。
+
+#### 2. 实现要点（仅 `helloai-ui/src/views/subtask/SubTaskDetail.vue`）
+
+- **布局**：`.page` 改 CSS Grid（`minmax(0,1fr) 360px` 双栏 + 16px gap），头部/统计/摘要/人工介入用 `.full-row` 通栏，对话流 `.main-col`（grid-row: span 2）占左主栏，附件 + 时间线 `.side-card` 自然堆叠右栏——DOM 顺序不变、卡片内容零重排，靠网格定位完成双栏，规避 vue/html-indent 大面积重缩进。≤1024px 收单列（对齐项目 1024/768 断点口径），≤768px 统计卡变 2 列。
+- **头部卡**：替代 el-descriptions——「子任务详情」小标 + 状态 tag + 评分 tag + 返回列表；h1 标题；负责人/创建时间元信息行；前置依赖/被依赖标签行（V27 能力保留，点击跳兄弟子任务）。原「内容」行独立为任务摘要卡。
+- **概览统计卡**：对话轮次 / 核验轮次 / 产出附件 / 时间线事件 4 张（数字与下方区块同源：convRounds 按 execute/review 分计、viewAttachments、timeline.length），左边框色走 `--ha-*` 语义令牌（primary/warning/success/info），点击 scrollIntoView 定位对应卡片（`sec-conv/sec-att/sec-tl` 锚点 + scroll-margin-top）。
+- **时间线精简**：新增 `COMPACT_HIDDEN_EVENTS`（20 个例行事件：分发准备/派单流转/指令生成领取/上下文装配/思考过程/核验请求与思考等）+ `timelineFull` 开关；`viewTimeline` 默认过滤例行事件（典型 13 条 → 约 5-6 条关键节点），卡头「展开全部 N 条 / 只看关键节点」切换；「技术详情（开发者）」折叠仅在全量视图露出（默认面向非开发者，开发者一键展开回查）。「时间线列表 / 执行时序图」V35 双视图保留。
+- **样式纪律**：全部色值走 `--ha-*` 令牌（未硬编码十六进制）；统计卡悬停/按压动效走 `--ha-duration-fast`/`--ha-ease-out`；入场沿用 `ha-stagger-entrance`；`margin-top:16px` 内联样式全部移除改由 grid gap 接管。
+- **不做项**：后端 / API / Flyway 零改动；时间线事件字典（EVENT_META）、对话流轮次分组、人工介入面板、附件下载、轮询逻辑均不变。
+
+#### 3. 验证结果
+
+- `npm run type-check`（vue-tsc --noEmit）0 错。
+- `npx eslint src/views/subtask/SubTaskDetail.vue`：0 error，1 warning 为存量 `@typescript-eslint/no-explicit-any`（manualReasonText 既有代码，非本轮引入）。
+
+#### 4. 影响与遗留
+
+- 影响：子任务详情页从「日志视角」转为「用户视角」——首屏即状态 + 评分 + 概览数字，核验结论与产出附件同屏可达；例行事件不再噪声化，开发者可一键回查全量 + 技术详情；窄屏自动退化为原单列形态。
+- 遗留：真实环境视觉效果待用户浏览器复验；若后续右栏新增第三张卡，`.main-col` 的 `grid-row: span 2` 需同步调整（样式注释已标注）；本轮改动未 git 提交，待用户确认后提交。
+
+### 6.156 子任务详情页版本三第二轮：对话流卡片化 + 核验分析折叠 + 时间线去技术详情 + 时序图迁对话流页签（2026-08-25）
+
+#### 1. 背景与结论
+
+- **背景**：§6.155 版本三改版后用户对照新设计稿提出四点迭代：① 执行对话流按设计图卡片化（轮次头 = #N · type 徽标 + Agent 标签 + 状态标签 + 时间右对齐）；② 「核验分析 #N · assistant/agent · …」类长文消息要可展开/收缩（默认收起）；③ 时间线列表隐藏「技术详情（开发者）」，只展示标题 + 一句话描述 + 时间；④ 执行时序图从右栏时间线卡迁到执行对话流卡的页签（右栏 360px 太窄，mermaid 图显示太小看不全）。
+- **结论**：纯前端迭代（仅 SubTaskDetail.vue），四点全部落地：对话流卡内页签「执行对话流 / 执行时序图」（时序图获得左主栏宽画布）；消息块统一折叠交互（分析/思考类默认收起 + 单行摘要预览，长文 >300 字按需展开）；时间线右栏纯列表化；数据源/轮询/人工介入/导出能力零改动。
+
+#### 2. 实现要点（仅 `helloai-ui/src/views/subtask/SubTaskDetail.vue`）
+
+- **对话流页签化**：对话流卡头改为 `el-tabs`（convView: 'conv' | 'seq'），执行时序图（SubTaskSequenceFlow，mermaid 自适应宽度）从时间线卡迁入；时间线卡移除双视图与「展开全部」按钮，退化为纯里程碑列表。
+- **轮次头卡片化（对齐设计图）**：`#{{roundNo}} · {{type}}` 徽标（execute 紫 / review 橙）+ Agent 名标签（首条带 senderId 的消息解析，回退当前负责人）+ 状态标签（已完成/失败，按是否含 sub_task_execute_failed）+ 末条消息时间右对齐（tabular-nums）。
+- **消息块折叠**：`ANALYSIS_TOOLS`（单审/双审/抽检 verdict + thinking + 执行思考 7 类）默认收起，`msgToggleOverride` 记录逐条用户开关（轮询刷新不重置已打开块）；收起态渲染单行摘要预览（首个非空行去 Markdown 符号截断 120 字），头部 ArrowRight caret 旋转 90° 指示状态；分析类块底色走 `--ha-warning-bg` 语义令牌（亮/暗自适应）；长文 >300 字非分析类沿用展开逻辑；复制/导出按钮 `@click.stop` 防冒泡误触折叠。
+- **时间线纯列表化**：移除「技术详情（开发者）」collapse 与 payload 展示（`.tl-collapse/.tl-payload` 样式一并删除），每条 = 事件标题（14px/600）+ 右侧时间 + 一句话人话描述；移除 el-timeline-item 自带 `:timestamp`（与右侧时间重复）；例行事件仍按 `COMPACT_HIDDEN_EVENTS` 静默过滤（`timelineFull` 保留作回查开关，当前无模板入口）；清理不再使用的 `ROLE_LABEL/roleLabel/hiddenEventCount`。
+- **样式纪律**：新增样式全部走 `--ha-*` 令牌（warning-bg 底色、muted 预览文字、duration-fast caret 动效）；缩进由 `eslint --fix` 对齐 vue/html-indent（块嵌入 tab-pane 深一层）。
+- **不做项**：后端 / API / Flyway 零改动；EVENT_META 事件字典、轮次分组逻辑、统计卡、双栏布局均不变。
+
+#### 3. 验证结果
+
+- `npm run type-check`（vue-tsc --noEmit）0 错。
+- `npx eslint src/views/subtask/SubTaskDetail.vue`：0 error，1 warning 为存量 `@typescript-eslint/no-explicit-any`（manualReasonText 既有代码，非本轮引入）。
+
+#### 4. 影响与遗留
+
+- 影响：对话流从「平铺长文」转为「卡片 + 按需下钻」，核验分析黄块默认收起一行摘要，页面显著变短；时序图获得左主栏全宽画布，不再被右栏压小；时间线对非开发者完全去噪。
+- 遗留：`timelineFull` 开关当前无模板入口（保留代码作未来回查出口）；真实环境视觉效果待用户浏览器复验；本轮改动未 git 提交，待用户确认后提交。
+
+### 6.157 子任务详情页版本三第三轮：时间线截断防溢出 + 附件行式缩略图布局 + 右栏卡顶对齐（2026-08-25）
+
+#### 1. 背景与结论
+
+- **背景**：§6.156 后用户浏览器复验提出三点：① 无字典事件名（如 `sub_task_artifact_materialized`）在 360px 右栏换行撑宽，产生横向滚动条，期望 `sub_task…` 式单行截断；② 产出附件平铺式（名称+大小时间+按钮）与卡片语言不协调，按参考图改为「左侧类型缩略块 + 右侧文件名/类型·大小双行」；③ 附件卡夹在中间导致执行时间线下沉，与执行对话流卡顶错位，期望两卡对齐。
+- **结论**：纯前端收口（仅 SubTaskDetail.vue）：事件名单行省略截断（悬停 title 回查原名）+ 补 `sub_task_artifact_materialized` 字典（产出物化）；附件卡改行式缩略图布局（扩展名大写缩略块）；右栏 DOM 顺序调整为「时间线先、附件后」+ 自动堆叠，时间线恒与对话流卡顶对齐且附件条件渲染不产生空行间隙。
+
+#### 2. 实现要点（仅 `helloai-ui/src/views/subtask/SubTaskDetail.vue`）
+
+- **时间线截断**：`.tl-title` 加 `flex:1; min-width:0` + `overflow:hidden; text-overflow:ellipsis; white-space:nowrap`（flex 子项不设 min-width:0 时省略号不生效），`.tl-row` 同步 `min-width:0`，`:title` 悬停回查完整事件名；`.tl-desc` 补 `word-break:break-word` 防长描述横向溢出；EVENT_META 补 `sub_task_artifact_materialized`（产出物化）使标题与描述均人话化。
+- **附件行式布局（对齐参考图）**：新增 `attExt()` 取扩展名大写（>5 字符/无扩展名降级 FILE）；每行 = 44px 类型缩略块（`--ha-surface-elevated` 底 + 边框 + 大写扩展名）+ 文件名（单行截断）/「类型 · 大小」双行 + 旧版本标 + 下载按钮；原元信息行中的创建时间移除（信息密度让位给类型层级）。
+- **右栏卡顶对齐**：曾尝试显式行定位（附件 row 1 / 时间线 row 2）——但附件条件渲染缺失时空行仍产生 16px gap 导致错位，已回退；最终方案 = DOM 顺序重排（时间线卡移到附件卡前）+ `.side-card` 自动堆叠，时间线恒在右栏首位与对话流卡顶对齐，无附件时零间隙；≤1024px 单列回退不变。
+- **样式纪律**：新增样式全部走 `--ha-*` 令牌；未引入图标库（扩展名文字缩略块即可表达文件类型，避免新增依赖）。
+- **不做项**：后端 / API / Flyway 零改动；折叠交互、页签结构、统计卡均不变。
+
+#### 3. 验证结果
+
+- `npm run type-check`（vue-tsc --noEmit）0 错。
+- `npx eslint src/views/subtask/SubTaskDetail.vue`：0 error，1 warning 为存量 `@typescript-eslint/no-explicit-any`（manualReasonText 既有代码）。
+- 用户已手动微调对话流卡头（移除「执行对话流」标题 span，仅留条数/轮数计数），本轮改动保留该调整。
+
+#### 4. 影响与遗留
+
+- 影响：右栏彻底消除横向滚动条；时间线与对话流两卡顶对齐，附件沉底不再突兀；附件展示与参考图形态一致。
+- 遗留：右栏顺序变为「时间线在上、附件在下」，与版本三初版（附件在上）相反，属用户本轮明确要求的对齐优先级取舍；真实环境待用户浏览器复验；本轮改动未 git 提交，待用户确认后提交。
+- **复验修正（用户反馈，2026-08-25）**：① 时间线卡头恢复「展开全部 N 条 / 只看关键节点」切换按钮（§6.156 精简时误删，`timelineFull`/`COMPACT_HIDDEN_EVENTS` 逻辑一直在，仅模板入口丢失；同步恢复 `hiddenEventCount` computed 与 `.tl-head-right` 样式，后者在 §6.156 清理时被一并删除）；② 对话流消息默认态由「分析/思考类收起」改为**全部展开**（`isMsgExpanded` 默认返 true，覆盖 §6.156 的 `!isAnalysisMsg` 默认口径），折叠能力保留（点头部可收起为单行摘要预览）。修正后验证：vue-tsc 0 错、eslint 0 error（1 存量 warning）。
+- **复验修正第二轮（用户确认，2026-08-25）**：① 时间线「收起」按钮消失是 `hiddenEventCount` 口径 bug——原实现用「总数 − 当前显示数」，展开后差值为 0 导致 `v-if` 不成立按钮消失；已改为基于 `COMPACT_HIDDEN_EVENTS` 的全量稳定计数，展开/收起两态按钮恒在；② 对话流默认态修正为**全部收起**（用户确认「默认收起没问题」，上轮将「默认都收起」误读为「应全部展开」并已反向回改；`isMsgExpanded` 默认返 false，点击头部展开），折叠交互与轮询不重置特性不变。二次修正后验证：vue-tsc 0 错、eslint 0 error（1 存量 warning）。
+
+---
+
+### 6.158 子任务详情页版本三第四轮：时间线设计图润色（事件卡片化 + 语义着色）
+_时间：2026-08-25（用户提供设计图，要求保留布局只润色元素样式）_
+
+#### 1. 背景与结论
+用户提供执行时间线设计图（彩色圆点轴 + 类型标签徽标 + 语义淡底事件卡），要求执行时间线与执行时序图保持现有布局不变，仅对按钮与元素样式按设计图润色。定性为**纯视觉层精修**：不动布局、不动数据结构、不动事件过滤逻辑。实施后时间线每个事件呈现为「语义色淡底卡片 + 顶部分类徽标/时间 + 标题 + 人话描述」，与右栏窄宽适配（截断/换行防护保留）。
+明确不做：不恢复「技术详情（开发者）」链接（设计图含此项，但前轮用户已明确要求隐藏，用户当前指令优先）；不新增「执行者」行（设计图含，但属新增数据展示，超出「只润色样式」边界）；时序图 mermaid 画布与主题变量不动。
+#### 2. 实现要点
+- **事件卡片化**：`el-timeline-item` 内容包入 `.tl-item`（`--ha-radius-md` 圆角 + 细边框 + 10px/12px 内边距 + hover 边框提亮），结构改为三行：顶行分类徽标 + 右对齐时间 → 标题（单行截断保留）→ 人话描述。
+- **语义色淡底**：新增 `tone-primary/success/warning/danger` 四组类，全部用 `color-mix(in srgb, var(--ha-*) 7~30%, transparent)` 基于设计令牌混透明，零硬编码色值，暗/亮主题自动跟随；`info` 态走默认 surface 不上色。
+- **分类徽标**：新增 `eventCategory()`（分发/执行/核验/人工介入/任务/流程 六类，关键词正则判定），`el-tag size=small effect=light` 跟随 `eventTypeColor` 语义色。
+- **`eventTypeColor` 修正**：异常分支前置（修复存量误判：`sub_task_auto_review_rejected` 含 review 关键字被误归 success）；warning 扩充 unparseable/degraded/disagreement/discrepancy/incomplete；success 改按 passed/ok/materialized/consistent/consented 等正向词；primary 扩充 dispatch/command（分发类着主色，对齐设计图）。
+- **按钮润色**：卡头「展开全部 / 只看关键节点」由 link 按钮改为胶囊形 `round plain` 小按钮（展开态 info、收起态 primary），对齐设计图圆角矩形按钮风格。
+- **时序图配套**：`SubTaskSequenceFlow` 摘要条五个 `el-tag` 统一加 `round` 胶囊化，与时间线徽标形态呼应；mermaid 画布/主题变量/语法折叠均不动。
+#### 3. 验证结果
+- `npm run type-check`（vue-tsc --noEmit）0 错。
+- `npx eslint`（SubTaskDetail.vue + SubTaskSequenceFlow.vue）：0 error，2 warning 均为存量 `no-explicit-any`。
+#### 4. 影响与遗留
+- 影响：时间线节点语义一目了然（紫=分发、绿=成功、红=异常、黄=降级/分歧），事件卡与轴点颜色同调；交互与信息结构零变化。
+- 遗留：设计图中「执行者：xxx」行与「技术详情（开发者）」入口本轮按边界未纳入，如后续需要再单独提；本轮改动未 git 提交，待用户确认后提交。
+- **复验修正（用户反馈，2026-08-25）**：移除「一眼概览」四张统计卡（对话轮次/核验轮次/产出附件/时间线事件）——数字与各卡头「共 N 条 · M 轮」计数完全重复，用户判定冗余；同步下线 `statCards` computed 与 `scrollToSection` 锚点滚动函数、`.stat-grid/.stat-card/.stat-num/.stat-label/.tone-*` 样式与 768px 媒体查询规则；点击锚点定位能力随卡片一并移除（页面不长，直接滚动即可）；`.full-row` 保留（头部卡/摘要卡/人工介入卡仍在用）。修正后验证：vue-tsc 0 错、eslint 0 error（1 存量 warning）。
+- **复验修正（续，2026-08-25）**：任务摘要并入头部卡（用户要求「任务摘要和子任务详情放在一个框中」）——独立 `summary-card` 移除，摘要块作为头部卡底部区块（`.head-summary`，虚线分隔 + 小标签），`v-if="item.content"` 条件渲染不变；`.summary-text` 样式复用，新增 `.head-summary/.head-summary-label`。修正后验证：vue-tsc 0 错、eslint 0 error（1 存量 warning，4 个 singleline-content 告警经 --fix 自动修复）。

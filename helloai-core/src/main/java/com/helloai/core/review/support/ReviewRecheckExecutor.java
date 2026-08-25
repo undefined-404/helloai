@@ -4,6 +4,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
+import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.review.picker.ReviewerPicker;
 import com.helloai.core.review.service.SubTaskReviewService;
 import com.helloai.core.review.entity.ReviewRecord;
@@ -27,8 +28,10 @@ import java.util.Map;
  * {@link AgentQualityProfileService#incrementReviewerStats}（best-effort），
  * 执行者画像不受抽检影响。</p>
  *
- * <p>判定复用 {@link ReviewExecutionEngine}（与单审/双审同一执行口径）；
- * 复审不可判定（LLM 失败/无可用 Reviewer）直接跳过，等待下一轮抽检。</p>
+ * <p>判定复用 {@link ReviewExecutionEngine}（与单审/双审同一执行口径，链路来源传
+ * {@link ReviewChannel#RECHECK}，对话流消息走 subtask_recheck_* 前缀与正常核验区分，
+ * 且补一条抽检结论消息供执行对话流直接查看）；复审不可判定（LLM 失败/无可用
+ * Reviewer）直接跳过，等待下一轮抽检。</p>
  */
 @Slf4j
 @Component
@@ -41,6 +44,7 @@ public class ReviewRecheckExecutor {
     private final TaskTimelineService taskTimelineService;
     private final AgentQualityProfileService agentQualityProfileService;
     private final ReviewExecutionEngine reviewExecutionEngine;
+    private final ConversationService conversationService;
 
     /**
      * 对已 APPROVED 的审查记录换 Reviewer 复判一次（入口：ReviewerRecheckTask 抽样调度）。
@@ -73,7 +77,7 @@ public class ReviewRecheckExecutor {
             log.warn("抽检复审跳过：无可用平台内核验 Agent, reviewRecordId={}", reviewRecordId);
             return;
         }
-        SubTaskReviewService.ReviewVerdict verdict = reviewExecutionEngine.execute(subTask, reviewer);
+        SubTaskReviewService.ReviewVerdict verdict = reviewExecutionEngine.execute(subTask, reviewer, ReviewChannel.RECHECK);
         if (verdict == null) {
             log.warn("抽检复审不可判定，跳过等下一轮: reviewRecordId={}", reviewRecordId);
             return;
@@ -83,6 +87,25 @@ public class ReviewRecheckExecutor {
         int fallback = pass ? 3 : 1;
         int score = verdict.getScore() != null ? verdict.getScore() : fallback;
         score = Math.max(1, Math.min(5, score));
+        // 对话流：补一条抽检结论消息（与正常核验的类型前缀区分开），
+        // 声明"只度量不改状态"，避免执行对话流误读为新一轮正式核验
+        try {
+            String resultText = "## 抽检复审结论（只度量，不改变子任务状态）\n\n"
+                    + "- 结果: " + (pass ? "通过（与原判一致）" : "不通过（与原判分歧）") + "\n"
+                    + "- 评分: " + score + " / 5\n"
+                    + "- 原判定: APPROVED（reviewRecordId=" + reviewRecordId + "）";
+            if (verdict.getIssues() != null && !verdict.getIssues().isBlank()) {
+                resultText += "\n- 问题: " + verdict.getIssues();
+            }
+            if (verdict.getComment() != null && !verdict.getComment().isBlank()) {
+                resultText += "\n- 评语: " + verdict.getComment();
+            }
+            conversationService.addMessage(subTask.getId(), reviewer.getId(),
+                    "assistant", "agent", resultText, "subtask_recheck_result");
+        } catch (Exception e) {
+            log.warn("抽检结论对话流写入失败（不阻断抽检）: reviewRecordId={}, err={}",
+                    reviewRecordId, e.getMessage());
+        }
         // 抽检日志落库（best-effort）：放水率度量与人工复核追溯的唯一事实源
         try {
             reviewService.recordRecheck(reviewRecordId, subTask.getId(), ReviewResult.APPROVED,
