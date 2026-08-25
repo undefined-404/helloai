@@ -12,16 +12,21 @@
       <el-tag
         size="small"
         type="info"
+        round
       >
         共 {{ events.length }} 条事件
       </el-tag>
-      <el-tag size="small">
+      <el-tag
+        size="small"
+        round
+      >
         跨度 {{ summarySpan }}
       </el-tag>
       <el-tag
         v-if="failureCount > 0"
         size="small"
         type="danger"
+        round
       >
         {{ failureCount }} 次失败
       </el-tag>
@@ -29,6 +34,7 @@
         v-if="retryCount > 0"
         size="small"
         type="warning"
+        round
       >
         重派 {{ retryCount }} 次
       </el-tag>
@@ -36,6 +42,7 @@
         v-if="hasManual"
         size="small"
         type="primary"
+        round
       >
         有人工介入
       </el-tag>
