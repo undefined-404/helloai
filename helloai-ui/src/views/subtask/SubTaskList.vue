@@ -211,59 +211,77 @@
           </el-table-column>
           <el-table-column
             label="操作"
-            :width="ACTION.THREE"
+            width="184"
             fixed="right"
           >
             <template #default="{ row }">
               <div class="action-cell">
+                <!-- 主操作：详情保持外置（参考任务管理主按钮模式） -->
                 <el-button
                   size="small"
                   @click="router.push('/sub-tasks/' + row.id)"
                 >
                   详情
                 </el-button>
-                <el-button
-                  v-if="row.status==='PENDING'"
-                  size="small"
-                  type="primary"
-                  @click="handleClaim(row)"
+                <!-- 次要操作：统一收进更多下拉（参考任务管理；无操作的状态只展示详情） -->
+                <el-dropdown
+                  v-if="hasMoreActions(row)"
+                  trigger="click"
+                  @command="(cmd: string) => handleCommand(cmd, row)"
                 >
-                  认领
-                </el-button>
-                <el-button
-                  v-if="row.status==='IN_PROGRESS'"
-                  size="small"
-                  type="warning"
-                  @click="handlePause(row)"
-                >
-                  暂停
-                </el-button>
-                <el-button
-                  v-if="row.status==='PAUSED'"
-                  size="small"
-                  type="success"
-                  @click="handleResume(row)"
-                >
-                  恢复
-                </el-button>
-                <!-- V25 死信人工兜底：重新指派给指定 Agent（DEAD_LETTER → ASSIGNED） -->
-                <el-button
-                  v-if="row.status==='DEAD_LETTER'"
-                  size="small"
-                  type="danger"
-                  @click="handleRedispatch(row)"
-                >
-                  重新指派
-                </el-button>
-                <!-- BLOCKED 阻塞子任务：重新调度（reset → PENDING 后交调度链） -->
-                <el-button
-                  v-if="row.status==='BLOCKED'"
-                  size="small"
-                  type="warning"
-                  @click="handleReassign(row)"
-                >
-                  重新调度
-                </el-button>
+                  <el-button
+                    size="small"
+                    :aria-label="`子任务「${row.title}」更多操作`"
+                  >
+                    更多
+                    <el-icon class="el-icon--right">
+                      <ArrowDown />
+                    </el-icon>
+                  </el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item
+                        v-if="row.status==='PENDING'"
+                        command="claim"
+                      >
+                        认领
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="row.status==='IN_PROGRESS'"
+                        command="pause"
+                      >
+                        暂停
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="row.status==='PAUSED'"
+                        command="resume"
+                      >
+                        恢复
+                      </el-dropdown-item>
+                      <!-- 暂停后换人：PAUSED 是人工处置窗口（恢复/换人二选一），后端先自动恢复再标 BLOCKED 进重调度链 -->
+                      <el-dropdown-item
+                        v-if="row.status==='PAUSED'"
+                        command="reassign"
+                      >
+                        <span class="dropdown-danger">换人</span>
+                      </el-dropdown-item>
+                      <!-- V25 死信人工兜底：重新指派给指定 Agent（DEAD_LETTER → ASSIGNED） -->
+                      <el-dropdown-item
+                        v-if="row.status==='DEAD_LETTER'"
+                        command="redispatch"
+                      >
+                        <span class="dropdown-danger">重新指派</span>
+                      </el-dropdown-item>
+                      <!-- BLOCKED 阻塞子任务：重新调度（reset → PENDING 后交调度链） -->
+                      <el-dropdown-item
+                        v-if="row.status==='BLOCKED'"
+                        command="reassign"
+                      >
+                        重新调度
+                      </el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
               </div>
             </template>
           </el-table-column>
@@ -352,15 +370,24 @@
         </template>
       </el-dialog>
 
-      <!-- BLOCKED 重新调度弹窗：选目标 Agent，后端 reset→PENDING 后重新进入调度链 -->
+      <!-- BLOCKED 重新调度 / PAUSED 换人 共用弹窗：选目标 Agent，后端先标 BLOCKED 再重新进入调度链 -->
       <el-dialog
         v-model="reassignDialog.visible"
-        title="重新调度阻塞子任务"
+        :title="reassignDialog.row?.status === 'PAUSED' ? '改派暂停任务' : '重新调度阻塞子任务'"
         width="420px"
         top="5vh"
         append-to-body
       >
         <el-form label-width="100px">
+          <el-alert
+            v-if="reassignDialog.row?.status === 'PAUSED'"
+            type="warning"
+            :closable="false"
+            show-icon
+            title="将为该暂停任务改派新执行者"
+            description="系统会将任务标记为阻塞后重新分配给新 Agent；原执行者将收到任务已转移通知。"
+            style="margin-bottom:12px"
+          />
           <el-form-item label="子任务">
             <span>{{ reassignDialog.row?.title || '-' }}</span>
           </el-form-item>
@@ -381,7 +408,7 @@
             :disabled="!reassignDialog.agentId"
             @click="doReassign"
           >
-            确认重新调度
+            {{ reassignDialog.row?.status === 'PAUSED' ? '确认改派' : '确认重新调度' }}
           </el-button>
         </template>
       </el-dialog>
@@ -399,6 +426,7 @@
 import { ref, onMounted, reactive, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowDown } from '@element-plus/icons-vue'
 import { subTaskApi } from '@/api/subTask'
 import { taskApi } from '@/api/task'
 import AgentSelect from '@/components/AgentSelect.vue'
@@ -406,7 +434,7 @@ import QuickDispatchDialog from '@/components/QuickDispatchDialog.vue'
 import SubTaskDagView from '@/components/SubTaskDagView.vue'
 import TaskIterationView from '@/components/TaskIterationView.vue'
 import { SUB_TASK_STATUS_MAP, SCORE_GRADE_MAP } from '@/types'
-import { ACTION, fmtTime } from '@/utils/tableConfig'
+import { fmtTime } from '@/utils/tableConfig'
 import { orderByDependency } from '@/utils/subTaskDag'
 import { queryString } from '@/utils/queryParam'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
@@ -615,7 +643,7 @@ async function doRedispatch() {
   } finally { redispatchDialog.loading = false }
 }
 
-// BLOCKED 阻塞子任务重新调度（后端 reset→PENDING 后交弹性调度链，受熔断计数管控）
+// BLOCKED 重新调度 / PAUSED 换人 共用弹窗状态（后端先标 BLOCKED 再交弹性调度链，受熔断计数管控）
 const reassignDialog = reactive<{ visible: boolean; loading: boolean; agentId: string | number | null; row: SubTask | null }>({
   visible: false, loading: false, agentId: null, row: null,
 })
@@ -630,11 +658,32 @@ async function doReassign() {
   if (!reassignDialog.row || !reassignDialog.agentId) return
   reassignDialog.loading = true
   try {
-    await subTaskApi.reassign(reassignDialog.row.id, reassignDialog.agentId)
-    ElMessage.success('已重新调度，子任务重新进入分发链')
+    if (reassignDialog.row.status === 'PAUSED') {
+      // 暂停后换人：后端先自动恢复（PAUSED 到 IN_PROGRESS）再标 BLOCKED 进入重调度链
+      await subTaskApi.redispatchInProgress(reassignDialog.row.id, reassignDialog.agentId)
+      ElMessage.success('已改派，子任务重新进入分发链')
+    } else {
+      await subTaskApi.reassign(reassignDialog.row.id, reassignDialog.agentId)
+      ElMessage.success('已重新调度，子任务重新进入分发链')
+    }
     reassignDialog.visible = false
     load()
   } finally { reassignDialog.loading = false }
+}
+
+// ── 更多下拉：状态操作统一分派（认领/暂停/恢复/换人/重新指派/重新调度） ──
+// 仅当当前状态存在可执行操作时展示「更多」（无操作状态只留「详情」）
+const MORE_ACTION_STATUSES: readonly SubTask['status'][] = ['PENDING', 'IN_PROGRESS', 'PAUSED', 'BLOCKED', 'DEAD_LETTER']
+function hasMoreActions(row: SubTask) {
+  return MORE_ACTION_STATUSES.includes(row.status)
+}
+
+function handleCommand(command: string, row: SubTask) {
+  if (command === 'claim') handleClaim(row)
+  else if (command === 'pause') handlePause(row)
+  else if (command === 'resume') handleResume(row)
+  else if (command === 'reassign') handleReassign(row)
+  else if (command === 'redispatch') handleRedispatch(row)
 }
 
 function getSubTaskStatusMeta(status: SubTask['status']) { return SUB_TASK_STATUS_MAP[status] }
@@ -673,6 +722,10 @@ onMounted(() => {
 .parent-task-bar :deep(.el-alert__title) { display: flex; align-items: center; justify-content: space-between; width: 100%; }
 .parent-task-title { display: flex; align-items: center; }
 .link-cell { color: var(--el-color-primary); cursor: pointer; }
+.dropdown-danger { color: var(--ha-danger); }
+/* 操作列：详情 + 更多下拉横排，不换行不压缩（参考任务管理，避免单元格折行） */
+.action-cell { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
+.action-cell .el-button { flex: none; }
 .dep-tag { cursor: pointer; margin-right: 4px; }
 /* 标题前拓扑序号小徽标：参考电商 new 角标样式（小号胶囊、实底白字） */
 .seq-badge {

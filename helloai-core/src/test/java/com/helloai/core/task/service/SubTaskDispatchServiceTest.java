@@ -20,6 +20,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
@@ -38,6 +39,7 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -632,5 +634,58 @@ class SubTaskDispatchServiceTest {
         assertThat(newAgentId).isEqualTo(99L);
         verify(subTaskService, never()).markManualIntervention(any(), any(), any());
         verify(taskDispatchPort).assignNext(99L, 50L);
+    }
+
+    @Test
+    @DisplayName("执行中卡死改派：先 block 标阻塞再走既有重调度链")
+    void shouldRedispatchInProgressBlockThenReschedule() {
+        SubTask subTask = subTaskWithTaskId(51L, 61L);
+        subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+        when(subTaskService.getById(51L)).thenReturn(subTask);
+        when(subTaskService.resetToPendingForDispatch(51L, Set.of(SubTaskStatus.BLOCKED)))
+                .thenReturn(subTask);
+
+        subTaskDispatchService.redispatchInProgress(51L, 11L);
+
+        // 第一步：人工阻塞（带原因，走 BLOCKED 收件箱通知 + timeline 审计）
+        verify(subTaskService).block(51L, "人工判定执行停滞，改派新执行者", null);
+        // 第二步：复用 dispatchBlockedSubTask 的既有调度链（timeline + assignNext）
+        verify(taskTimelineService).recordEvent(
+                61L, 51L, "sub_task_dispatch_prepare", AgentRole.PLANNER, 11L,
+                Map.of("trigger", "blocked_reassign", "preferredAgentId", 11L));
+        verify(taskDispatchPort).assignNext(11L, 51L, null);
+    }
+
+    @Test
+    @DisplayName("人工换人：非 IN_PROGRESS/PAUSED 状态拒绝且不触发调度")
+    void shouldRejectRedispatchInProgressWhenNotInProgressOrPaused() {
+        SubTask subTask = subTaskWithTaskId(52L, 62L);
+        subTask.setStatus(SubTaskStatus.PENDING);
+        when(subTaskService.getById(52L)).thenReturn(subTask);
+
+        assertThatThrownBy(() -> subTaskDispatchService.redispatchInProgress(52L, 11L))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("只有 IN_PROGRESS 或 PAUSED 状态的子任务才能改派");
+        verify(subTaskService, never()).resume(anyLong());
+        verify(subTaskService, never()).block(anyLong(), any(), any());
+        verify(taskDispatchPort, never()).assignNext(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("暂停后换人：先恢复 IN_PROGRESS 再 block 标阻塞再走既有重调度链")
+    void shouldRedispatchPausedResumeThenBlockAndReschedule() {
+        SubTask subTask = subTaskWithTaskId(53L, 63L);
+        subTask.setStatus(SubTaskStatus.PAUSED);
+        when(subTaskService.getById(53L)).thenReturn(subTask);
+        when(subTaskService.resetToPendingForDispatch(53L, Set.of(SubTaskStatus.BLOCKED)))
+                .thenReturn(subTask);
+
+        subTaskDispatchService.redispatchInProgress(53L, 11L);
+
+        // 顺序：先恢复执行权（PAUSED 到 IN_PROGRESS），再人工阻塞，最后走重调度链
+        InOrder inOrder = inOrder(subTaskService);
+        inOrder.verify(subTaskService).resume(53L);
+        inOrder.verify(subTaskService).block(53L, "人工判定执行停滞，改派新执行者", null);
+        verify(taskDispatchPort).assignNext(11L, 53L, null);
     }
 }

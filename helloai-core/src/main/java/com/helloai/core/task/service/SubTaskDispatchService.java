@@ -118,6 +118,37 @@ public interface SubTaskDispatchService {
      */
     void redispatchAssignedTimeout(Long subTaskId, Long originalAgentId, AgentRole role);
 
+    /**
+     * 人工换人：执行中卡死（IN_PROGRESS）或暂停后（PAUSED）将子任务改派给新 Agent。
+     *
+     * <p>背景：外部 Agent 心跳正常但任务停滞（磨洋工/静默卡住）时，IN_PROGRESS 任务
+     * 只能等 {@code SubTaskTimeoutTask} 2 小时超时自动 BLOCKED，前端无人工换人入口。
+     * 本方法提供人工一键改派，两个入口共用同一条改派链：
+     * <ol>
+     *   <li>IN_PROGRESS —— 执行中卡死直接换人；</li>
+     *   <li>PAUSED —— 暂停后处置窗口换人：先自动恢复（PAUSED 到 IN_PROGRESS），
+     *       再走同一改派链。</li>
+     * </ol>
+     * 改派链：
+     * <ol>
+     *   <li>校验子任务状态必须为 IN_PROGRESS 或 PAUSED（防御误用）；</li>
+     *   <li>调用 {@code SubTaskService.block} 报告人工阻塞（带原因，走既有
+     *       BLOCKED 收件箱通知 + timeline 审计），事务独立先行落库；</li>
+     *   <li>复用 {@link #dispatchBlockedSubTask} 走既有重调度链
+     *       （熔断计数 + 选人 + fallback + timeline），语义与 BLOCKED 重派一致。</li>
+     * </ol>
+     * </p>
+     *
+     * <p>与其它入口的区别：本方法专用于“执行停滞但人工判定需要换人”的场景，
+     * 不依赖离线判定（{@link #redispatchOfflineSubTask}）、不依赖失败计数
+     * （{@link #redispatchForFallback}）、不依赖超时巡检（{@link #redispatchAssignedTimeout}）。</p>
+     *
+     * @param subTaskId         待改派的 IN_PROGRESS 或 PAUSED 子任务 ID
+     * @param preferredAgentId  首选目标 Agent ID（不满足时由调度链 fallback）
+     * @throws BizException 子任务不存在或状态不是 IN_PROGRESS/PAUSED 时抛出
+     */
+    void redispatchInProgress(Long subTaskId, Long preferredAgentId);
+
     // ══════════════════════════════════════════════════════════════
     //  §6.52 执行能力判定（public static：供 ResilientDispatcher 与
     //  SubTaskReviewService 复用，避免各入口各自实现导致判定不一致）

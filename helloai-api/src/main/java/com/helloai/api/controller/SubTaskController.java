@@ -260,6 +260,21 @@ public class SubTaskController {
     }
 
     /**
+     * 执行中卡死改派：将 IN_PROGRESS 子任务先标记 BLOCKED，再重新进入调度链改派给指定 Agent。
+     *
+     * <p>外部 Agent 长时间未完成任务（心跳正常但停滞）时的人工换人入口：
+     * 后端先 {@code SubTaskService.block} 报告人工阻塞，再复用
+     * {@code dispatchBlockedSubTask} 走既有熔断 + 选人 + fallback 重调度链。
+     * 重派失败时任务停留在 BLOCKED，可再次调用重新调度接口。</p>
+     */
+    @PostMapping("/redispatchInProgressById/{id}")
+    public R<Void> redispatchInProgress(@PathVariable("id") Long id,
+                                        @Valid @RequestBody ReassignRequest req) {
+        subTaskDispatchService.redispatchInProgress(id, req.getAgentId());
+        return R.ok();
+    }
+
+    /**
      * 死信人工兜底指派：将 DEAD_LETTER 子任务直接指派给指定 Agent。
      *
      * <p>重分配熔断（reassign_attempt_count 达阈值）后子任务进入 DEAD_LETTER 死信池，

@@ -362,6 +362,27 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
                 subTaskId, originalAgentId, preferred.getId());
     }
 
+    @Override
+    public void redispatchInProgress(Long subTaskId, Long preferredAgentId) {
+        SubTask subTask = subTaskService.getById(subTaskId);
+        if (subTask == null) {
+            throw new BizException("子任务不存在: " + subTaskId);
+        }
+        if (subTask.getStatus() == SubTaskStatus.PAUSED) {
+            // 暂停后换人：先恢复执行权（PAUSED 到 IN_PROGRESS 是状态机允许的转移），
+            // 再统一走下方 block + 重调度链。
+            subTaskService.resume(subTaskId);
+        } else if (subTask.getStatus() != SubTaskStatus.IN_PROGRESS) {
+            throw new BizException("只有 IN_PROGRESS 或 PAUSED 状态的子任务才能改派，当前状态: " + subTask.getStatus());
+        }
+        // 人工判定执行停滞：先报告阻塞（带原因落 timeline + BLOCKED 收件箱通知），
+        // 再走既有 BLOCKED 重调度链（熔断计数/选人/fallback 全部复用，语义一致）。
+        // 两步各自事务：block 先落库，重派失败时任务停在 BLOCKED 可再人工重试。
+        subTaskService.block(subTaskId, "人工判定执行停滞，改派新执行者", null);
+        dispatchBlockedSubTask(subTaskId, preferredAgentId);
+        log.info("执行停滞改派: subTaskId={}, preferredAgentId={}", subTaskId, preferredAgentId);
+    }
+
     // ══════════════════════════════════════════════════════════════
     //  （§6.58 P1）：任务级选人约束解析
     // ══════════════════════════════════════════════════════════════

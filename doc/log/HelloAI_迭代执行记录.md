@@ -14,6 +14,45 @@
 
 ## 2. 近期关键轮次
 
+### 2026-08-26 子任务「执行中卡死改派」：前端换人按钮 + 后端收口接口
+
+#### 1. 背景
+
+- 用户反馈：任务分发后外部 AI agent 长时间未完成任务（IN_PROGRESS 一直挂着、心跳正常但停滞）时，前端只有「暂停」，PAUSED 又不能直接重新分配，只能等 SubTaskTimeoutTask 2 小时超时自动 BLOCKED 或重启外部 agent。
+
+#### 2. 实际落地
+
+- 后端 `SubTaskDispatchService` 新增 `redispatchInProgress`：校验状态必须为 IN_PROGRESS → `SubTaskService.block`（原因「人工判定执行停滞，改派新执行者」落 timeline + BLOCKED 收件箱通知）→ 复用 `dispatchBlockedSubTask` 既有重调度链（熔断计数/选人/fallback/timeline 全部一致）；两步各自事务，重派失败时任务停在 BLOCKED 可再人工重试。
+- 新增端点 `POST /sub-tasks/redispatchInProgressById/{id}`（复用 ReassignRequest，Controller 仅透传）。
+- 前端 `SubTaskList.vue`：IN_PROGRESS 行新增「换人」按钮（与「暂停」并列，danger 色）；复用重新调度弹窗并动态化——标题「改派执行中任务」/「重新调度阻塞子任务」、确认按钮文案、IN_PROGRESS 时追加 el-alert 警示「将中断当前执行者并改派」；`doReassign` 按状态分流调用 `redispatchInProgress` / `reassign`。
+- 前端 `paths.ts` / `api/subTask.ts` 新增 `redispatchInProgress` 路径与方法。
+- 测试：`SubTaskDispatchServiceTest` 新增 2 用例（先 block 再走重调度链 / 非 IN_PROGRESS 拒绝且不触发调度），21 用例全绿。
+- 验证：`mvn compile`（core/api，JDK 17）通过；`vue-tsc --noEmit` ExitCode 0。
+- 脚本验证：`scripts/shell/verify-redispatch-in-progress.sh` e2e 全链路通过（2026-08-26）——注册 2 个 CLI_CLIENT EXECUTOR agent（幂等固定名 redispatch-e2e-a/b），目标 agent checkIn + heartbeat 后走 `ASSIGNED(A) → start → IN_PROGRESS(A) → redispatchInProgress → ASSIGNED(B)`；断言换人后 assignedAgent 切换 + timeline 含 `sub_task_report_blocked`（原因「人工判定执行停滞，改派新执行者」已落库）；负面用例 PAUSED 调用被拒绝（code=500）。
+
+#### 3. 遗留 / 不做的事
+
+- 不动状态机：IN_PROGRESS → PENDING 仍不允许，保持「先 BLOCKED 再重派」的既有语义（block 自带审计/通知，直接回 PENDING 会丢证据）。
+- 自动兜底任务全部保持原样：2h 超时自动 BLOCKED（SubTaskTimeoutTask）/ 5min 心跳离线重派（AgentHealthCheckTask）/ N11 连续失败阈值回退（ExternalAgentFallbackTask）/ 10min ASSIGNED 回收（AssignedSubTaskTimeoutTask）。
+- ASSIGNED / REWORK 状态未加按钮：ASSIGNED 有 10 分钟自动回收兜底，REWORK 场景不在本次用户反馈范围。
+
+#### 4. 业务收口（同日追加）
+
+- 业务梳理：PAUSED 是人工介入决策窗口（恢复/换人二选一），换人按钮应放在 PAUSED 而非 IN_PROGRESS（先叫停、再决策）。用户确认按「移到 PAUSED」落地。
+- 后端 `redispatchInProgress` 扩展兼容 PAUSED：先 `SubTaskService.resume`（PAUSED 到 IN_PROGRESS，状态机允许）再走既有 block + 重调度链；非 IN_PROGRESS/PAUSED 状态拒绝（错误信息同步）；接口 Javadoc 同步更新（双入口 + 改派链说明）。
+- 前端 `SubTaskList.vue`：IN_PROGRESS 移除「换人」（只留「暂停」）；PAUSED 新增「换人」（danger 色，与「恢复」并列）；弹窗收口为 PAUSED / BLOCKED 两态——标题「改派暂停任务」/「重新调度阻塞子任务」、alert「将为该暂停任务改派新执行者」、确认按钮「确认改派」/「确认重新调度」；`doReassign` 分流条件由 IN_PROGRESS 改为 PAUSED。
+- 测试：`SubTaskDispatchServiceTest` 负面用例由 PAUSED 改为 PENDING（消息断言同步）；新增 PAUSED 换人正向用例（InOrder 断言 resume → block → assignNext 顺序），21 用例全绿。
+- 脚本：`verify-redispatch-in-progress.sh` 负面用例改 PENDING；新增 STEP9b PAUSED 换人正向链路（start → pause → redispatch → ASSIGNED(B)）。
+- 验证：`mvn test`（SubTaskDispatchServiceTest，JDK 17）21 用例全绿；`vue-tsc --noEmit` ExitCode 0；`zsh -n` 脚本语法通过。
+
+#### 5. 按钮布局收口（同日追加）
+
+- 参考任务管理操作列模式：主操作外置、次要操作统一收进「更多」下拉。
+- 前端 `SubTaskList.vue`：操作列收口为「详情」（外置，所有状态可见）+「更多」下拉——认领（PENDING）/ 暂停（IN_PROGRESS）/ 恢复（PAUSED）/ 换人（PAUSED）/ 重新指派（DEAD_LETTER）/ 重新调度（BLOCKED），按状态 v-if 显示；新增 `handleCommand` 统一分派；「换人」「重新指派」沿用 danger 语义（dropdown-danger 红字）。
+- 列宽与防折行：操作列 width="184"（与任务管理一致）；scoped style 加 `.action-cell { flex-wrap: nowrap }` + `.action-cell .el-button { flex: none }`，覆盖全局 `design-system.css` 默认的 `flex-wrap: wrap` 避免在窄列下折行；同时清理无用的 `ACTION` import。
+- 「更多」按需展示：仅当当前状态有可执行操作（`MORE_ACTION_STATUSES = PENDING/IN_PROGRESS/PAUSED/BLOCKED/DEAD_LETTER`）才渲染 `el-dropdown`；无操作状态（ASSIGNED/REVIEW/REWORK/DONE/CANCELLED/DRAFT_PENDING_REVIEW 等）只保留「详情」，避免空下拉。
+- 验证：`vue-tsc --noEmit` ExitCode 0；浏览器实测 PAUSED 行两按钮 top=158.77 同基线、间隔 6px 无折行；32 行中 31 行无操作状态只显示「详情」、1 行（PAUSED）显示「详情」+「更多」。
+
 ### 2026-08-26 注册接入类型 UX 收口：CLI 置灰，GUI 接入作为主推选项
 
 #### 1. 背景

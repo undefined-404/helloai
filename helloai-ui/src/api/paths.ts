@@ -39,6 +39,7 @@ export const paths = {
     timeline: (id: string | number) => `/sub-tasks/listTimelineBySubTaskId/${enc(id)}`,
     conversation: (id: string | number) => `/sub-tasks/listConversationBySubTaskId/${enc(id)}`,
     redispatchDeadLetter: (id: string | number) => `/sub-tasks/redispatchDeadLetterById/${enc(id)}`,
+    redispatchInProgress: (id: string | number) => `/sub-tasks/redispatchInProgressById/${enc(id)}`,
     reassign: (id: string | number) => `/sub-tasks/reassignById/${enc(id)}`,
     changeStatus: '/sub-tasks/changeStatus',
     claim: (id: string | number) => `/sub-tasks/claimById/${enc(id)}`,

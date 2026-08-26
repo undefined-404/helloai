@@ -40,6 +40,10 @@ export const subTaskApi = {
   reassign(id: LongId, agentId: LongId) {
     return request.post(paths.subTasks.reassign(id), { agentId })
   },
+  // IN_PROGRESS 执行中卡死改派（先标 BLOCKED 再重新调度，redispatchInProgress）
+  redispatchInProgress(id: LongId, agentId: LongId) {
+    return request.post(paths.subTasks.redispatchInProgress(id), { agentId })
+  },
   changeStatus(data: ChangeStatusRequest) {
     return request.post(paths.subTasks.changeStatus, data)
   },
