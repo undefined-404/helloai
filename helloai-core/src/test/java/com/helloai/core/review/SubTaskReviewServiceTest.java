@@ -34,8 +34,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.ValueOperations;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -103,10 +103,10 @@ class SubTaskReviewServiceTest {
     private AttachmentService attachmentService;
 
     @Mock
-    private StringRedisTemplate redisTemplate;
+    private RedissonClient redissonClient;
 
     @Mock
-    private ValueOperations<String, String> valueOperations;
+    private RLock reviewLock;
 
     @Mock
     private ReviewerPicker reviewerPicker;
@@ -120,7 +120,7 @@ class SubTaskReviewServiceTest {
     private SubTaskReviewService reviewService;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws InterruptedException {
         // §6.142 双审并行：默认用同步直跑 Executor（supplyAsync 立即执行，保证确定性，不引入真实线程）；
         // 并行语义用例单独换真实线程池重建（见 shouldRunDualVerdictsInParallel）
         reviewService = buildService(command -> command.run());
@@ -133,9 +133,11 @@ class SubTaskReviewServiceTest {
         // 方案3 F2 附件内容注入：默认开启（开关用例单独 stub 为 false）
         lenient().when(dispatchProperties.isAttachmentContentEnabled()).thenReturn(true);
         // §6.82 核验互斥锁：默认可获取（所有既有用例走完整核验链路）；锁用例单独 stub 为 false
-        lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        lenient().when(valueOperations.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class)))
-                .thenReturn(true);
+        // v1.2 §阶段1：setIfAbsent 迁 Redisson RLock，mock 锁对象/获取/持有断言
+        lenient().when(redissonClient.getLock(anyString())).thenReturn(reviewLock);
+        lenient().when(reviewLock.tryLock(anyLong(), anyLong(), any(TimeUnit.class))).thenReturn(true);
+        // isHeldByCurrentThread 默认 false，正常路径须显式放行为持有锁（finally 防御分支依赖）
+        lenient().when(reviewLock.isHeldByCurrentThread()).thenReturn(true);
     }
 
     /** 构造被测服务（§6.142 双审并行：Executor 参数化，并行语义用例可换真实线程池重建）。 */
@@ -148,7 +150,7 @@ class SubTaskReviewServiceTest {
                         taskTimelineService, new VerdictParser(new ObjectMapper()),
                         new ReviewEvidenceAssembler(attachmentService, dispatchProperties)),
                 taskTimelineService, executionCommandService, dispatchProperties,
-                conversationService, recordReviewService, redisTemplate,
+                conversationService, recordReviewService, redissonClient,
                 new ReviewEvidenceAssembler(attachmentService, dispatchProperties),
                 new VerdictParser(new ObjectMapper()),
                 reviewerPicker, reviewProperties, agentQualityProfileService, executor);
@@ -647,9 +649,8 @@ class SubTaskReviewServiceTest {
 
     @Test
     @DisplayName("§6.82: 已有核验进行中（锁被占用）→ 跳过，不调 LLM、不改状态、不释放他人锁")
-    void shouldSkipWhenReviewLockHeld() {
-        when(valueOperations.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class)))
-                .thenReturn(false);
+    void shouldSkipWhenReviewLockHeld() throws InterruptedException {
+        when(reviewLock.tryLock(anyLong(), anyLong(), any(TimeUnit.class))).thenReturn(false);
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
@@ -657,8 +658,8 @@ class SubTaskReviewServiceTest {
         verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
         verify(subTaskService, never()).complete(anyLong());
         verify(subTaskService, never()).rework(anyLong(), any());
-        // 锁未持有成功，不得删除他人持有的锁
-        verify(redisTemplate, never()).delete(anyString());
+        // 锁获取失败（未持有），不得释放他人持有的锁
+        verify(reviewLock, never()).unlock();
     }
 
     @Test
@@ -671,7 +672,8 @@ class SubTaskReviewServiceTest {
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
         verify(subTaskService).complete(SUB_TASK_ID);
-        verify(redisTemplate).delete("review:lock:" + SUB_TASK_ID);
+        verify(redissonClient).getLock("review:lock:" + SUB_TASK_ID);
+        verify(reviewLock).unlock();
     }
 
     @Test
@@ -683,7 +685,7 @@ class SubTaskReviewServiceTest {
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
-        verify(redisTemplate).delete("review:lock:" + SUB_TASK_ID);
+        verify(reviewLock).unlock();
         verify(subTaskService, never()).complete(anyLong());
         verify(subTaskService, never()).rework(anyLong(), any());
     }

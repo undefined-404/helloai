@@ -45,6 +45,10 @@ public class RabbitMQConfig {
         return QueueBuilder.durable(EXECUTOR_QUEUE)
                 .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
                 .withArgument("x-dead-letter-routing-key", DLX_QUEUE)
+                // v1.2 §阶段3（MQ 容量治理）：x-max-length 容量阈值（起步值，按实测深度校准）
+                .withArgument("x-max-length", 50000)
+                // x-overflow=reject-publish（需 RabbitMQ ≥ 3.10）：队列满 broker 拒绝发布 → 快速失败
+                .withArgument("x-overflow", "reject-publish")
                 .build();
     }
 
@@ -53,6 +57,8 @@ public class RabbitMQConfig {
         return QueueBuilder.durable(REVIEWER_QUEUE)
                 .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
                 .withArgument("x-dead-letter-routing-key", DLX_QUEUE)
+                .withArgument("x-max-length", 50000)
+                .withArgument("x-overflow", "reject-publish")
                 .build();
     }
 
@@ -61,6 +67,8 @@ public class RabbitMQConfig {
         return QueueBuilder.durable(PLANNER_QUEUE)
                 .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
                 .withArgument("x-dead-letter-routing-key", DLX_QUEUE)
+                .withArgument("x-max-length", 50000)
+                .withArgument("x-overflow", "reject-publish")
                 .build();
     }
 
@@ -74,14 +82,20 @@ public class RabbitMQConfig {
         return QueueBuilder.durable(EXECUTION_COMMAND_QUEUE)
                 .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
                 .withArgument("x-dead-letter-routing-key", DLX_QUEUE)
+                .withArgument("x-max-length", 50000)
+                .withArgument("x-overflow", "reject-publish")
                 .build();
     }
 
     @Bean
     public Queue notificationQueue() {
+        // 通知队列（非核心，可降级）：收紧阈值防无效堆积；当前无消费者时消息停留队列，
+        // 容量上限防拖垮节点（v1.2 门禁：上线前核查 ready 数，如需重建先删旧队列）
         return QueueBuilder.durable(NOTIFICATION_QUEUE)
                 .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
                 .withArgument("x-dead-letter-routing-key", DLX_QUEUE)
+                .withArgument("x-max-length", 1000)
+                .withArgument("x-overflow", "reject-publish")
                 .build();
     }
 
@@ -120,7 +134,8 @@ public class RabbitMQConfig {
         RabbitTemplate template = new RabbitTemplate(connectionFactory);
         template.setConfirmCallback((correlationData, ack, cause) -> {
             if (!ack) {
-                log.error("RabbitMQ publish NACK: correlationData={}, cause={}", correlationData, cause);
+                log.error("RabbitMQ publish NACK（可能队列已满触发 reject-publish 快速失败）: correlationData={}, cause={}",
+                        correlationData, cause);
             }
         });
         template.setReturnsCallback(returned -> {

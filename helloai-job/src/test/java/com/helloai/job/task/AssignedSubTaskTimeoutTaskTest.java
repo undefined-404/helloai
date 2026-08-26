@@ -15,9 +15,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.ValueOperations;
-import org.springframework.data.redis.core.script.RedisScript;
 
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -25,7 +22,6 @@ import java.util.List;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
@@ -39,7 +35,6 @@ import static org.mockito.Mockito.when;
  *
  * <p>覆盖：</p>
  * <ul>
- *   <li>锁被占用 → 跳过</li>
  *   <li>无超时记录 → 跳过（不调用 dispatch）</li>
  *   <li>单条超时 → 推导 role → redispatchAssignedTimeout</li>
  *   <li>多条超时 → 逐条回收，单条失败不中断</li>
@@ -57,10 +52,6 @@ class AssignedSubTaskTimeoutTaskTest {
     @Mock
     private AgentService agentService;
     @Mock
-    private StringRedisTemplate redis;
-    @Mock
-    private ValueOperations<String, String> valueOps;
-    @Mock
     private AgentDispatchProperties agentDispatchProperties;
 
     private AssignedSubTaskTimeoutTask task;
@@ -68,32 +59,15 @@ class AssignedSubTaskTimeoutTaskTest {
     @BeforeEach
     void setUp() {
         task = new AssignedSubTaskTimeoutTask(
-                subTaskMapper, subTaskDispatchService, agentService, redis, agentDispatchProperties);
+                subTaskMapper, subTaskDispatchService, agentService, agentDispatchProperties);
 
         // 超时阈值改读配置，默认桩为原硬编码值 10 分钟
         lenient().when(agentDispatchProperties.getAssignedTimeoutMinutes()).thenReturn(10);
-        // 默认 tryLock 成功
-        lenient().when(redis.opsForValue()).thenReturn(valueOps);
-        lenient().when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any()))
-                .thenReturn(true);
     }
 
     @Nested
     @DisplayName("前置条件短路")
     class Precondition {
-
-        @Test
-        @DisplayName("锁被占用 → 跳过")
-        void shouldSkipWhenLocked() {
-            when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any()))
-                    .thenReturn(false);
-
-            task.scan();
-
-            verify(subTaskMapper, never()).selectTimedOutAssigned(any(), anyInt());
-            verify(subTaskDispatchService, never())
-                    .redispatchAssignedTimeout(anyLong(), anyLong(), any());
-        }
 
         @Test
         @DisplayName("无超时记录 → 跳过")
@@ -202,21 +176,6 @@ class AssignedSubTaskTimeoutTaskTest {
 
             verify(subTaskDispatchService, times(1))
                     .redispatchAssignedTimeout(eq(1L), eq(101L), eq(AgentRole.EXECUTOR));
-        }
-
-        @Test
-        @DisplayName("安全释放锁：仅当 token 一致时才删（防止误删他人锁）")
-        void shouldUseLuaUnlockScriptWithMatchingToken() {
-            SubTask st = subTask(1L, 101L);
-            when(subTaskMapper.selectTimedOutAssigned(any(), anyInt()))
-                    .thenReturn(List.of(st));
-            when(agentService.getById(101L)).thenReturn(agent(101L, AgentRole.EXECUTOR));
-
-            task.scan();
-
-            // finally 必须调用 redis.execute(Lua, ...) 而不是 redis.delete
-            verify(redis).execute(any(RedisScript.class), any(List.class), any());
-            verify(redis, never()).delete((String) any());
         }
     }
 

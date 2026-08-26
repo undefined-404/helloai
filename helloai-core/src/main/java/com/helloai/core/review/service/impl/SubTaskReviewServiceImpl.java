@@ -26,9 +26,10 @@ import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -82,9 +83,10 @@ import java.util.concurrent.TimeUnit;
 @Service
 public class SubTaskReviewServiceImpl implements SubTaskReviewService {
 
-    /** §6.82 批次 D：核验互斥锁（防 L1/L2/L3 三路并发双审），key = review:lock:{subTaskId} */
+    /** §6.82 批次 D：核验互斥锁（防 L1/L2/L3 三路并发双审），key = review:lock:{subTaskId}
+     *  （v1.2 §阶段1：setIfAbsent 自旋锁迁 Redisson RLock，key 不变兼容存量） */
     private static final String REVIEW_LOCK_PREFIX = "review:lock:";
-    /** 锁 TTL 兜底：覆盖 LLM 调用超时窗口，崩溃残留自动过期 */
+    /** 锁 leaseTime 兜底：覆盖 LLM 调用超时窗口，显式 leaseTime 禁看门狗，崩溃残留自动过期 */
     private static final long REVIEW_LOCK_TTL_SECONDS = 120;
 
     private final SubTaskService subTaskService;
@@ -96,7 +98,8 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
     private final AgentDispatchProperties dispatchProperties;
     private final ConversationService conversationService;
     private final ReviewService reviewService;
-    private final StringRedisTemplate redis;
+    /** §6.82 核验互斥锁客户端（v1.2 §阶段1：Redis setIfAbsent 迁 Redisson RLock）。 */
+    private final RedissonClient redissonClient;
     private final ReviewEvidenceAssembler reviewEvidenceAssembler;
     private final VerdictParser verdictParser;
     /** §6.142 双审/抽检：选取职责收口（原 pickReviewerAgent 三段私有方法迁出）。 */
@@ -121,7 +124,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                                     AgentDispatchProperties dispatchProperties,
                                     ConversationService conversationService,
                                     ReviewService reviewService,
-                                    StringRedisTemplate redis,
+                                    RedissonClient redissonClient,
                                     ReviewEvidenceAssembler reviewEvidenceAssembler,
                                     VerdictParser verdictParser,
                                     ReviewerPicker reviewerPicker,
@@ -136,7 +139,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         this.dispatchProperties = dispatchProperties;
         this.conversationService = conversationService;
         this.reviewService = reviewService;
-        this.redis = redis;
+        this.redissonClient = redissonClient;
         this.reviewEvidenceAssembler = reviewEvidenceAssembler;
         this.verdictParser = verdictParser;
         this.reviewerPicker = reviewerPicker;
@@ -203,8 +206,10 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
      * 判定失败/不可解析时不改状态（子任务停留 REVIEW）。</p>
      *
      * <p>§6.82 批次 D 防双审互斥锁：L1 AFTER_COMMIT 事件 / L2 MQ consumer / L3 孤儿扫描
-     * 三路可能并发触发同一子任务核验，Redis setIfAbsent 保证 LLM 调用窗口内仅一路进入
-     * （其他路直接跳过），TTL 兜底崩溃残留，finally 释放。</p>
+     * 三路可能并发触发同一子任务核验，Redisson RLock 保证 LLM 调用窗口内仅一路进入
+     * （其他路直接跳过），显式 leaseTime 兜底崩溃残留，finally isHeldByCurrentThread
+     * 防御释放（v1.2 §阶段1：setIfAbsent + 无条件 delete 迁 RLock，修掉锁过期被接管后
+     * 误删他人锁的窗口）。</p>
      */
     @Override
     public void reviewSubTask(Long subTaskId, Long executorAgentId) {
@@ -212,16 +217,25 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             log.debug("自动核验跳过：subTaskId 为空");
             return;
         }
-        Boolean locked = redis.opsForValue().setIfAbsent(
-                REVIEW_LOCK_PREFIX + subTaskId, "1", REVIEW_LOCK_TTL_SECONDS, TimeUnit.SECONDS);
-        if (!Boolean.TRUE.equals(locked)) {
-            log.debug("自动核验跳过：已有核验进行中（防双审）, subTaskId={}", subTaskId);
-            return;
-        }
+        RLock lock = redissonClient.getLock(REVIEW_LOCK_PREFIX + subTaskId);
         try {
-            doReview(subTaskId, executorAgentId);
-        } finally {
-            redis.delete(REVIEW_LOCK_PREFIX + subTaskId);
+            // waitTime=0 保持"抢占失败即跳过"语义；显式 leaseTime 禁看门狗，TTL 兜底口径与旧 setIfAbsent 一致
+            boolean locked = lock.tryLock(0, REVIEW_LOCK_TTL_SECONDS, TimeUnit.SECONDS);
+            if (!locked) {
+                log.debug("自动核验跳过：已有核验进行中（防双审）, subTaskId={}", subTaskId);
+                return;
+            }
+            try {
+                doReview(subTaskId, executorAgentId);
+            } finally {
+                // isHeldByCurrentThread 防御：锁已过期被他人接管时，本线程不得释放他人持有的锁
+                if (lock.isHeldByCurrentThread()) {
+                    lock.unlock();
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("自动核验锁获取中断，子任务停留 REVIEW 等兜底: subTaskId={}", subTaskId);
         }
     }
 

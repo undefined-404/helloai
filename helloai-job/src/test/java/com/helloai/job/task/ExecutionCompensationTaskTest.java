@@ -16,8 +16,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -57,19 +55,11 @@ class ExecutionCompensationTaskTest {
     @Mock
     private TransactionTemplate transactionTemplate;
 
-    @Mock
-    private StringRedisTemplate redis;
-
-    @Mock
-    private ValueOperations<String, String> valueOperations;
-
     @InjectMocks
     private ExecutionCompensationTask executionCompensationTask;
 
     @BeforeEach
     void setUp() {
-        when(redis.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.setIfAbsent(any(), any(), anyLong(), any())).thenReturn(true);
         when(executionProperties.getPendingTimeoutMinutes()).thenReturn(5);
         when(executionProperties.getRunningTimeoutMinutes()).thenReturn(10);
         lenient().doAnswer(invocation -> {

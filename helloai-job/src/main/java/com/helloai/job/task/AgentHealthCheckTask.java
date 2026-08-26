@@ -16,6 +16,7 @@ import com.helloai.core.task.service.TaskTimelineService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -23,7 +24,6 @@ import org.springframework.stereotype.Component;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Agent 健康检查任务。
@@ -53,20 +53,14 @@ public class AgentHealthCheckTask {
     private final ExternalAgentFailureTracker failureTracker;
     private final AgentHealthProperties healthProperties;
 
-    private static final String LOCK_KEY = "scheduler:lock:AgentHealth";
-
     /** OFFLINE 时 CAS 写入的 online_status 值（字符串，与 DB CHECK 约束对齐） */
     private static final String OFFLINE_STATUS = "OFFLINE";
     /** 离线原因标记（payload 中记录） */
     private static final String REASON_HEARTBEAT_LOST = "heartbeat_lost";
 
     @Scheduled(fixedRate = 60000)
+    @SchedulerLock(name = "agentHealthCheck", lockAtMostFor = "PT55S")
     public void checkHealth() {
-        if (!tryLock()) {
-            log.debug("AgentHealthCheckTask 跳过（其他实例正在执行）");
-            return;
-        }
-
         try {
             OffsetDateTime now = OffsetDateTime.now();
             // §4.1：统一使用 AgentHealthProperties.offlineMinutes 计算 cutoff，
@@ -93,8 +87,6 @@ public class AgentHealthCheckTask {
 
         } catch (Exception e) {
             log.error("AgentHealthCheckTask 执行异常", e);
-        } finally {
-            unlock();
         }
     }
 
@@ -256,15 +248,6 @@ public class AgentHealthCheckTask {
         log.info("Agent {} 离线任务重分配完成: total={}, fallback={}, autoReselect={}, failed={}",
                 agentId, staleTasks.size(), reassignedByFallback, reassignedByAuto, failed);
         return staleTasks.size();
-    }
-
-    private boolean tryLock() {
-        Boolean acquired = redis.opsForValue().setIfAbsent(LOCK_KEY, "1", 55, TimeUnit.SECONDS);
-        return Boolean.TRUE.equals(acquired);
-    }
-
-    private void unlock() {
-        redis.delete(LOCK_KEY);
     }
 
     /**

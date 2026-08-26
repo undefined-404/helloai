@@ -2,8 +2,9 @@
 
 > 适用项目：HelloAI（AI Agent 协作调度平台）  
 > 生效范围：后端单体服务 + 前端管理后台（Vue 3 / Element Plus）  
-> 版本：V1.15  
-> 最后更新：2026-08-23  
+> 版本：V1.16  
+> 最后更新：2026-08-26  
+> 本版重点 V1.16：分布式健壮性改造收口（§6.163）——新增 §3.y 分布式锁选型铁律（ShedLock 定时任务单例锁 + Redisson 业务互斥锁双选型，禁止新增手写 setIfAbsent 锁；含 5 个无锁 @Scheduled 豁免清单）与 §3.z MQ 容量治理（x-max-length + x-overflow=reject-publish（需 RabbitMQ ≥ 3.10）+ prefetch ≤ 10 + 死信台账 mq_dead_letter_archive + DlxAlertConsumer 先台账后 ACK + 载荷 ≤ 10KB）；§12 分布式锁章节按新口径整体重写（旧 RedisLockUtil 封装与 scheduler:lock: 手写锁口径为文档失真，作废改写）；§2 版本表新增 Redisson 4.0.0 / ShedLock 6.6.0 两行
 > 本版重点 V1.15：§3.x 质量看板聚合归属与 P2/P3 修正——Phase 5 质量度量看板落地（§6.147）：review 域统计挂 ReviewRecordMapper 4 投影 SQL + ReviewService 4 方法（趋势/驳回原因/返工轮次/放水率），review 域新增 dto 子包（QualityTrendPoint / DefectDistribution / ReworkRoundPoint / ReviewerLeniency / QualityDashboardResponse）；agent 域 AgentQualityProfileMapper 2 投影 SQL（overview/rankings，qualityScore 口径唯一收口 Java `computeQualityScore` 防 SQL 漂移，排行补名走 AgentService.listByIds）；看板聚合归 review 域 `QualityDashboardService`（Controller 零编排只透传）；P2 修正——`ReviewProperties.dualReviewTimeoutSeconds` 默认 120→90s（deadline 加锁后才起算，90s 保证双审窗口收进核验锁 TTL 120s 内，防锁过期竞态重复双审）；P3 修正——规则 3 端口反转示例 ReviewServiceImpl 改 `ReviewPortAdapter`（独立适配器断环，消费方 task.port.ReviewPort 由 review 域 ReviewPortAdapter 实现）
 > 本版重点 V1.14：§3.x 业务域分包修订——review 域由「仅 service 族」扩为完整子包（entity / mapper / service / service.impl / mqconsumer / picker / support），评审相关实体（ReviewRecord / ReviewRecheckLog）与审核服务（ReviewService）自 task 域归位 review 域（§6.146 域迁移；task 域消费方改经 task.port.ReviewPort 端口反转，agent 域 QualityProfileUpdater 改原子参数签名）；「审核产物归审核域」消除历史归属错位
 > 本版重点 V1.13：§7.1 事务口径修正——"单语句原子写不豁免"改为"**单语句原子写可豁免**"（单实体单条 UPDATE/DELETE 且无跨实体一致性诉求，豁免时须在 Javadoc 注明；追加第二条写操作必须补注解；best-effort 降级写豁免但须声明降级语义，参考 `SubTaskServiceImpl.markManualIntervention`）；`SubTaskServiceImpl.getByIdForUpdate` 实现类补 Javadoc 强制注明"必须在调用方事务内调用"（行锁随调用方事务存续，接口注释原已有同款语义，迭代记录 §6.141）
@@ -152,7 +153,9 @@ public class AgentInboxService {
 | MyBatis-Spring | 3.0.4 | Spring Boot 3.x 配套版本 |
 | PostgreSQL | 16 | 主数据库，支持 JSONB、pgvector 扩展 |
 | PostgreSQL Driver | 42.7.3 | JDBC 驱动 |
-| Redis | 7.x | 缓存 + 分布式锁 + 去重 + 上下文存储 |
+| Redis | 7.x | 缓存 + 去重 + 上下文存储（锁底层载体：ShedLock 锁记录 / Redisson RLock 复用同一 Redis） |
+| Redisson | 4.0.0 | 业务级分布式锁（redisson-spring-boot-starter + redisson-spring-data-34 适配 Boot 3.4） |
+| ShedLock | 6.6.0 | 定时任务实例级互斥（@SchedulerLock；shedlock-provider-redis-spring 复用 Lettuce） |
 | RabbitMQ | 3.12+ | 消息中间件，Topic Exchange + DLX |
 | MinIO | Docker Compose 当前为 `latest` | 开发环境以仓库当前配置为准 |
 | SpringDoc | 2.8.0 | OpenAPI 3 文档 |
@@ -334,6 +337,38 @@ core 模块统一采用"业务域分包 + 域内技术分层"，禁止新增顶�
 5. 验证：`scripts/powershell/verify-dependency-direction.ps1`，任何涉及跨域 import 的改动后必跑，红色命中即阻断合入。脚本同时断言：所有 `*Mapper.java` 的包路径必须登记在 `HelloAIApplication` 的 `@MapperScan` 显式清单中（漏登记会在启动期炸），新增/搬迁 mapper 包后必须同步登记并过脚本。
 
 > **归属判断**：新增/搬迁类先问"它服务哪个业务域"——附件（Attachment）与产出物上传（ArtifactUpload）归 task 域（owner 是 sub_task）；模块（Module）是任务的子结构归 task 域；看板聚合（Dashboard / AdminDashboard）归 task 域 observability 子包。system 域只保留用户、凭据、配置、存储抽象、LLM Provider 目录类设施。
+
+### 3.y 分布式锁选型（V1.16 新增）
+
+【必须】分布式锁只允许两种实现，**禁止新增手写 setIfAbsent 锁**：
+
+1. **定时任务单例锁**（@Scheduled 防多实例并发）→ ShedLock `@SchedulerLock`：name 用任务名，lockAtMostFor = 原 TTL 口径，lockAtLeastFor 不设；
+2. **业务互斥锁**（动态 key / 请求级并发互斥）→ Redisson `RLock`：
+   - 一律 `tryLock(0, leaseTime, unit)`，显式传 leaseTime；
+   - 【禁止】裸 `lock()` / `tryLock()` 不带 leaseTime——看门狗自动续期会改变"崩溃残留自动过期"的既有语义（review 锁 TTL=120s 与双审 deadline 90s 的配合依赖该语义，§6.142）；
+   - 释放仅 `unlock()`，持锁校验由 RLock 保证（结构上不可能误删他人锁）；
+3. `RedisTemplate` 仅保留缓存/会话/队列用途，不再承担锁职责；
+4. **豁免清单**（多实例并行无害，无需 ShedLock；**新增任何 @Scheduled 必须先对照本表决定归口**，§6.163 已穷尽核对全工程 16 处 @Scheduled）：
+
+| 位置 | 任务 | 豁免理由 |
+|---|---|---|
+| core | `SubTaskReviewServiceImpl.scanReviewOrphans` | 孤儿核验逐条走 `review:lock:{subTaskId}` 业务锁兜底，DB 扫描幂等 |
+| core | `ExecutionCommandPoller` | DB 悲观条件更新（WHERE status=PENDING）幂等 |
+| core | `DoorbellKeepaliveTask` | 本地 SseEmitter 集合，每实例只推自己的连接 |
+| core | `SessionAuthCleaner` | JVM 本地内存缓存，实例私有 |
+| job | `McpSessionAuthCleanupTask` | JVM 本地内存缓存，实例私有 |
+
+> §12 分布式锁章节（旧 RedisLockUtil 封装与 `scheduler:lock:` 手写锁口径，文档失真）已并入本节口径，见 §12.1。
+
+### 3.z MQ 容量治理（V1.16 新增）
+
+【必须】消息队列实行容量治理，防止"消息不丢但系统被压垮"：
+
+1. 每个业务队列声明必须带容量阈值与溢出策略：`x-max-length`（核心队列 50000 / 非核心 1000~10000 起步，按实测深度校准）、`x-overflow=reject-publish`（队列满时 broker 拒绝发布，显式失败而非静默堆积；**前置：RabbitMQ ≥ 3.10**，低于该版本只声明 x-max-length 并记录例外）；
+2. 监听端必须配 prefetch，**禁止默认值 250**（慢消费者囤积、快消费者饿死）；LLM 等秒级消费 prefetch ≤ 10（当前全局 `listener.simple.prefetch=10`，生效于全部 3 个手动 ACK 消费者：MqReviewCommandConsumer / MqExecutionCommandConsumer / NotificationConsumer）；
+3. 死信队列必须有告警出口（`DlxAlertConsumer`），死信消息必须落台账（`mq_dead_letter_archive`）**后再 ACK**，禁止死信静默堆积或无法追溯；dlxQueue 未挂 DLX，消费异常 `basicNack(requeue=false)` 任何情况下不得 requeue；
+4. 消息体必须瘦身（**载荷 ≤ 10KB**），超阈值先落 MinIO/DB 再传引用；
+5. 生产端 ConfirmCallback 的 NACK 日志必须带"可能是队列满"提示，便于快速分辨 reject-publish 触发的快速失败。
 
 ---
 
@@ -1371,49 +1406,65 @@ public class ExecutorEventConsumer extends AbstractIdempotentConsumer {
 
 ## 12. 分布式锁编码规范
 
-### 12.1 统一使用 Redis 分布式锁
+### 12.1 锁选型铁律（V1.16 重写）
 
-**禁止直接操作 Redis 客户端**，必须通过封装工具统一加锁。
+【必须】分布式锁只允许两种实现，**禁止新增手写 setIfAbsent 锁**：
 
-### 12.2 锁键命名规范
+1. 定时任务单例锁（@Scheduled 防多实例并发）→ ShedLock `@SchedulerLock`；
+2. 业务互斥锁（动态 key / 请求级并发互斥）→ Redisson `RLock`。
 
-| 业务场景 | 锁键格式 |
-|----------|----------|
-| 定时任务 | `scheduler:lock:{任务名}` |
-| 子任务状态变更 | `subtask:lock:{subTaskId}` |
-| Outbox 补偿 | `scheduler:lock:AgentOutbox` |
-| 执行记录补偿 | `scheduler:lock:ExecutionComp` |
-| 通知重试 | `scheduler:lock:AgentNotify` |
-| 超时巡检 | `scheduler:lock:SubTaskTimeout` |
-| 健康检查 | `scheduler:lock:AgentHealth` |
+> V1.16 前本节为 `RedisLockUtil` 封装 + `scheduler:lock:` 手写 setIfAbsent 口径（代码中不存在该工具类，属文档失真）；V1.16 起按 §3.y 选型铁律并入口径：两类锁各用各的库，由库本身保证持锁校验，结构上消除"无条件 delete 误删他人锁"隐患。依赖与版本见 §2 版本表。
 
-### 12.3 使用方式
+### 12.2 ShedLock 定时任务锁（§3.y 细则）
+
+模板：
 
 ```java
-// 函数式（推荐）— 无返回值
-redisLockUtil.executeWithLock(
-    "scheduler:lock:AgentOutbox",
-    () -> {
-        // 业务逻辑
-    }
-);
-
-// 手动管理（不推荐，仅特殊场景）
-Boolean locked = redisTemplate.opsForValue().setIfAbsent(lockKey, "1", 30, TimeUnit.SECONDS);
-if (!locked) throw new BizException("获取锁失败");
-try {
-    // ...
-} finally {
-    redisTemplate.delete(lockKey);
+@Scheduled(fixedRate = 30_000)
+@SchedulerLock(name = "subTaskTimeout", lockAtMostFor = "PT60S")
+public void scan() {
+    // 业务逻辑（不再有 tryLock / unlock / token / Lua 仪式）
 }
 ```
 
-### 11.4 默认参数
+规则：
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| waitTime | 5 秒 | 等待获取锁的超时时间 |
-| leaseTime | 30 秒 | 锁持有时间（定时任务场景） |
+- `name` 用任务名（与任务类名驼峰对应），`lockAtMostFor` = 原 TTL 口径，`lockAtLeastFor` **不设**；
+- 锁存储 Redis，key 前缀 `helloai:schedlock:`（helloai-start `ShedLockConfig` 统一装配，`RedisLockProvider` 复用 Lettuce 连接，不新增客户端；自动包装既有 taskScheduler Bean，无需改调度配置）；
+- 已迁移 11 任务对照表（§6.163）：assignedSubTaskTimeout/PT60S、agentEventCompensation/PT30S、agentHealthCheck/PT55S、dutyLeaseExpiration/PT60S、executionCompensation/PT60S、externalAgentFallback/PT60S、outboxRelay/PT30S、planningTimeout/PT60S、reviewerRecheck/PT300S、subTaskPendingOrphan/PT60S、subTaskTimeout/PT60S；
+- **豁免清单见 §3.y 第 4 条**（5 个多实例并行无害的任务；新增 @Scheduled 先对照归口表）。
+
+### 12.3 Redisson 业务互斥锁（§3.y 细则）
+
+模板（review 锁，SubTaskReviewServiceImpl）：
+
+```java
+RLock lock = redissonClient.getLock("review:lock:" + subTaskId);
+if (!lock.tryLock(0, 120, TimeUnit.SECONDS)) {
+    return; // 抢不到立即跳过，保持既有语义，不引入等待
+}
+try {
+    // 核验逻辑（LLM 双审窗口）
+} finally {
+    // 防御持锁期间超时丢锁：unlock 前先校验持有，finally 不炸
+    if (lock.isHeldByCurrentThread()) {
+        lock.unlock();
+    }
+}
+```
+
+规则：
+
+- **一律 `tryLock(0, leaseTime, unit)` 并显式传 leaseTime**；【禁止】裸 `lock()` / `tryLock()` 不带 leaseTime——看门狗自动续期会改变"崩溃残留自动过期"的既有语义（review 锁 TTL=120s 与双审 deadline 90s 的配合依赖该语义，§6.142）；
+- 释放仅 `unlock()`，持锁校验由 RLock 保证（结构上不可能误删他人锁）；
+- `RedisTemplate` 仅保留缓存/会话/队列用途，不承担锁职责。
+
+### 12.4 锁键命名
+
+| 类型 | key 格式 |
+|------|----------|
+| ShedLock 定时任务锁 | `helloai:schedlock:{name}`（Redis，LockProvider 自动管理，勿手动操作） |
+| Redisson 业务锁 | `{业务}:lock:{动态Id}`（如 `review:lock:{subTaskId}`，前缀常量类、全小写 + 冒号） |
 
 ---
 

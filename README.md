@@ -187,7 +187,8 @@
 | AI 框架 | Spring AI | **1.1.8**（MCP Server / 多 LLM 统一接入） |
 | 持久化 | PostgreSQL + MyBatis-Plus + Flyway | 16.4 / 3.5.9 / 自动迁移 |
 | 缓存 | Redis（Lettuce） | 7.2 |
-| 消息队列 | RabbitMQ | 3.12（publisher confirms / DLX / 手动 ACK） |
+| 分布式锁 | Redisson + ShedLock | 4.0.0 / 6.6.0（业务互斥锁 RLock + 定时任务单例锁 @SchedulerLock，禁止手写 setIfAbsent） |
+| 消息队列 | RabbitMQ | 3.12（publisher confirms / DLX / 手动 ACK / 容量治理：x-max-length + reject-publish + prefetch / 死信台账 mq_dead_letter_archive） |
 | 对象存储 | MinIO + 本地物化存储 | `minio://` 默认 / `local://` 兜底（v2.7 起 minio:// 附件平台可直读） |
 | 弹性 | Resilience4j CircuitBreaker | — |
 | 协议 | MCP（SSE）主通道 / 门铃 SSE 长连接（已搁置） | Spring AI MCP Server |

@@ -18,8 +18,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.ValueOperations;
 
 import java.time.OffsetDateTime;
 import java.util.HashMap;
@@ -53,7 +51,8 @@ import static org.mockito.Mockito.when;
  *   <li>payload 反序列化失败 → markFinalFailed（终态）。</li>
  * </ol>
  *
- * <p>Redis 锁相关通过 {@code redis.opsForValue().setIfAbsent} 模拟获取成功。</p>
+ * <p>实例级互斥由 ShedLock 代理在容器装配期完成（@SchedulerLock），
+ * 单测直建对象不涉及锁分支（v1.2 §阶段2：SETNX 手写锁迁 ShedLock）。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("OutboxRelayTask (Phase 2H ②a)")
@@ -75,12 +74,6 @@ class OutboxRelayTaskTest {
     private AgentExecutionProperties executionProperties;
 
     @Mock
-    private StringRedisTemplate redis;
-
-    @Mock
-    private ValueOperations<String, String> valueOperations;
-
-    @Mock
     private ObjectMapper objectMapper;
 
     private OutboxRelayTask task;
@@ -94,10 +87,7 @@ class OutboxRelayTaskTest {
         // 通过 new + 反射设置 final 字段，避免被 @InjectMocks 反射检查阻断
         mqPublisherProvider = Optional.of(mqPublisher);
         task = new OutboxRelayTask(outboxService, mqPublisherProvider, properties,
-                executionProperties, redis, objectMapper);
-        // Redis 锁默认能拿到
-        when(redis.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.setIfAbsent(anyString(), any(), anyLong(), any())).thenReturn(true);
+                executionProperties, objectMapper);
         // properties 默认值（部分路径不会触发 maxRetry/baseBackoff 查询，转 lenient）
         lenient().when(properties.getMaxRetry()).thenReturn(5);
         lenient().when(properties.getBaseBackoffSeconds()).thenReturn(2);

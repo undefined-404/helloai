@@ -10,9 +10,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.ValueOperations;
-import org.springframework.data.redis.core.script.RedisScript;
 
 import java.util.List;
 
@@ -31,8 +28,8 @@ import static org.mockito.Mockito.when;
 /**
  * {@link ReviewerRecheckTask} 单元测试（反馈回路 Phase 4 抽检）。
  *
- * <p>覆盖：开关关闭跳过 / 锁占用跳过 / 无候选跳过 / 抽样批量折算（候选 × 比例，
- * 上限 maxBatch）/ 单条失败不中断 / Lua 安全解锁。</p>
+ * <p>覆盖：开关关闭跳过 / 无候选跳过 / 抽样批量折算（候选 × 比例，
+ * 上限 maxBatch）/ 单条失败不中断。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("ReviewerRecheckTask")
@@ -42,20 +39,12 @@ class ReviewerRecheckTaskTest {
     private ReviewService reviewService;
     @Mock
     private ReviewRecheckExecutor reviewRecheckExecutor;
-    @Mock
-    private StringRedisTemplate redis;
-    @Mock
-    private ValueOperations<String, String> valueOps;
 
     private ReviewerRecheckTask task;
 
     @BeforeEach
     void setUp() {
-        task = new ReviewerRecheckTask(reviewService, reviewRecheckExecutor, props(), redis);
-        // 默认 tryLock 成功（锁用例单独 stub 为 false）
-        lenient().when(redis.opsForValue()).thenReturn(valueOps);
-        lenient().when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any()))
-                .thenReturn(true);
+        task = new ReviewerRecheckTask(reviewService, reviewRecheckExecutor, props());
     }
 
     private static ReviewProperties props() {
@@ -76,18 +65,7 @@ class ReviewerRecheckTaskTest {
         void shouldSkipWhenDisabled() {
             ReviewProperties disabled = props();
             disabled.setRecheckEnabled(false);
-            task = new ReviewerRecheckTask(reviewService, reviewRecheckExecutor, disabled, redis);
-
-            task.recheck();
-
-            verify(reviewService, never()).countRecheckCandidates(any());
-        }
-
-        @Test
-        @DisplayName("锁被占用 → 跳过（不查候选）")
-        void shouldSkipWhenLocked() {
-            when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any()))
-                    .thenReturn(false);
+            task = new ReviewerRecheckTask(reviewService, reviewRecheckExecutor, disabled);
 
             task.recheck();
 
@@ -127,7 +105,7 @@ class ReviewerRecheckTaskTest {
         void shouldCapBatchAtMax() {
             ReviewProperties p = props();
             p.setRecheckSampleRatio(0.5);
-            task = new ReviewerRecheckTask(reviewService, reviewRecheckExecutor, p, redis);
+            task = new ReviewerRecheckTask(reviewService, reviewRecheckExecutor, p);
             when(reviewService.countRecheckCandidates(any())).thenReturn(1000L);
             when(reviewService.listRecheckCandidateIds(any(), anyInt()))
                     .thenReturn(List.of(1L, 2L));
@@ -149,18 +127,6 @@ class ReviewerRecheckTaskTest {
             task.recheck();
 
             verify(reviewRecheckExecutor).recheckReviewRecord(2L);
-        }
-
-        @Test
-        @DisplayName("安全释放锁：Lua 脚本比对 token（防误删他人锁）")
-        void shouldUseLuaUnlockScriptWithMatchingToken() {
-            when(reviewService.countRecheckCandidates(any())).thenReturn(0L);
-
-            task.recheck();
-
-            // finally 必须调用 redis.execute(Lua, ...) 而不是 redis.delete
-            verify(redis).execute(any(RedisScript.class), any(List.class), any());
-            verify(redis, never()).delete((String) any());
         }
     }
 }

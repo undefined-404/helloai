@@ -17,10 +17,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.ValueOperations;
-import org.springframework.data.redis.core.script.RedisScript;
-
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -30,7 +26,6 @@ import java.util.Map;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
@@ -45,13 +40,12 @@ import static org.mockito.Mockito.when;
  *
  * <p>覆盖：</p>
  * <ul>
- *   <li>enabled=false / 锁被占用 / 无孤儿 → noop</li>
+ *   <li>enabled=false / 无孤儿 → noop</li>
  *   <li>单条孤儿 → dispatchPendingSubTaskAuto</li>
  *   <li>多条孤儿 → 逐条重派，单条失败不中断</li>
  *   <li>子任务不存在 / 状态已变更 → skip</li>
  *   <li>BizException（并发状态冲突）→ skip 不计入失败</li>
  *   <li>RuntimeException → 计入失败但不影响其它</li>
- *   <li>Redis 锁通过 Lua 脚本安全释放（仅当 token 匹配才删）</li>
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
@@ -67,10 +61,6 @@ class SubTaskPendingOrphanTaskTest {
     private SubTaskDispatchService subTaskDispatchService;
     @Mock
     private AgentExecutionProperties executionProperties;
-    @Mock
-    private StringRedisTemplate redis;
-    @Mock
-    private ValueOperations<String, String> valueOps;
 
     private SubTaskPendingOrphanTask task;
 
@@ -79,15 +69,12 @@ class SubTaskPendingOrphanTaskTest {
         when(executionProperties.isPendingOrphanEnabled()).thenReturn(true);
         when(executionProperties.getPendingOrphanThresholdMinutes()).thenReturn(30);
         when(executionProperties.getPendingOrphanBatchSize()).thenReturn(50);
-        when(redis.opsForValue()).thenReturn(valueOps);
-        // 默认让 tryLock 成功；个别用例按需覆盖
-        when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any())).thenReturn(true);
         // 孤儿扫描前置依赖检查：默认无依赖即就绪，避免既有用例被 ready 守卫拦截
         when(subTaskService.isReady(any(SubTask.class))).thenReturn(true);
 
         task = new SubTaskPendingOrphanTask(
                 subTaskMapper, subTaskService, subTaskDispatchService,
-                executionProperties, redis);
+                executionProperties);
     }
 
     @Nested
@@ -104,19 +91,6 @@ class SubTaskPendingOrphanTaskTest {
             verifyNoInteractions(subTaskMapper);
             verifyNoInteractions(subTaskService);
             verifyNoInteractions(subTaskDispatchService);
-        }
-
-        @Test
-        @DisplayName("锁被占用 → 跳过（不查 DB）")
-        void shouldSkipWhenLocked() {
-            when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any()))
-                    .thenReturn(false);
-
-            task.scan();
-
-            verify(subTaskMapper, never()).selectStalePendingWithoutExecutionRecord(any(), anyInt());
-            verify(subTaskDispatchService, never())
-                    .dispatchPendingSubTaskAuto(anyLong(), any());
         }
 
         @Test
@@ -319,42 +293,6 @@ class SubTaskPendingOrphanTaskTest {
             // offsetDate 参数无法直接 eq —— 改为用 any() 单独验证 limit=17
             verify(subTaskMapper, times(1))
                     .selectStalePendingWithoutExecutionRecord(any(OffsetDateTime.class), eq(17));
-        }
-    }
-
-    @Nested
-    @DisplayName("Redis 锁释放")
-    class UnlockSafety {
-
-        @Test
-        @DisplayName("正常流程：finally 释放锁时使用 Lua 脚本，不用 redis.delete")
-        void shouldUseLuaUnlockScript() {
-            // 让 mapper 返回一条孤儿，避免提前 short-circuit return 而跳过 finally
-            when(subTaskMapper.selectStalePendingWithoutExecutionRecord(any(), anyInt()))
-                    .thenReturn(List.of());
-            // 空列表 → 仍然走 finally → unlock
-
-            task.scan();
-
-            // 必须通过 Lua 脚本释放锁（含 token 校验），不能裸 delete
-            verify(redis, times(1)).execute(any(RedisScript.class), any(List.class), any());
-            verify(redis, never()).delete((String) any());
-        }
-
-        @Test
-        @DisplayName("dispatch 抛异常时仍走 finally → Lua unlock")
-        void shouldStillUnlockOnDispatchFailure() {
-            when(subTaskMapper.selectStalePendingWithoutExecutionRecord(any(), anyInt()))
-                    .thenReturn(List.of(1L));
-            when(subTaskService.getById(1L)).thenReturn(pendingSubTask(1L));
-            doThrow(new RuntimeException("boom"))
-                    .when(subTaskDispatchService)
-                    .dispatchPendingSubTaskAuto(anyLong(), any());
-
-            task.scan();
-
-            // 即使业务抛异常，finally 仍要释放
-            verify(redis, times(1)).execute(any(RedisScript.class), any(List.class), any());
         }
     }
 

@@ -15,9 +15,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.ValueOperations;
-import org.springframework.data.redis.core.script.RedisScript;
 
 import java.util.List;
 
@@ -39,12 +36,10 @@ import static org.mockito.Mockito.when;
  *
  * <p>覆盖：</p>
  * <ul>
- *   <li>锁被占用 → 跳过</li>
  *   <li>无超时记录 → 跳过（不做 CAS 回退）</li>
  *   <li>单条超时 → CAS 回退 PENDING + 记录 task_plan_timeout_recovered</li>
  *   <li>CAS 失败（状态已变化）→ 不记录 timeline（与异步成功路径互斥）</li>
  *   <li>多条超时 → 逐条回收，单条失败不中断</li>
- *   <li>安全释放锁：Lua 脚本比对 token（防误删他人锁）</li>
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
@@ -58,10 +53,6 @@ class PlanningTimeoutTaskTest {
     @Mock
     private TaskTimelineService taskTimelineService;
     @Mock
-    private StringRedisTemplate redis;
-    @Mock
-    private ValueOperations<String, String> valueOps;
-    @Mock
     private PlannerDecomposeProperties plannerDecomposeProperties;
 
     private PlanningTimeoutTask task;
@@ -72,14 +63,10 @@ class PlanningTimeoutTaskTest {
     @BeforeEach
     void setUp() {
         task = new PlanningTimeoutTask(
-                taskMapper, taskService, taskTimelineService, redis, plannerDecomposeProperties);
+                taskMapper, taskService, taskTimelineService, plannerDecomposeProperties);
 
         // 超时阈值读配置，默认桩为 10 分钟
         lenient().when(plannerDecomposeProperties.getPlanningTimeoutMinutes()).thenReturn(10);
-        // 默认 tryLock 成功
-        lenient().when(redis.opsForValue()).thenReturn(valueOps);
-        lenient().when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any()))
-                .thenReturn(true);
         // CAS 回退链：默认成功
         lenient().when(taskService.lambdaUpdate()).thenReturn(taskUpdateChain);
         lenient().when(taskUpdateChain.eq(any(), any())).thenReturn(taskUpdateChain);
@@ -90,18 +77,6 @@ class PlanningTimeoutTaskTest {
     @Nested
     @DisplayName("前置条件短路")
     class Precondition {
-
-        @Test
-        @DisplayName("锁被占用 → 跳过")
-        void shouldSkipWhenLocked() {
-            when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any()))
-                    .thenReturn(false);
-
-            task.scan();
-
-            verify(taskMapper, never()).selectTimedOutPlanning(any(), anyInt());
-            verify(taskService, never()).lambdaUpdate();
-        }
 
         @Test
         @DisplayName("无超时记录 → 跳过")
@@ -163,19 +138,6 @@ class PlanningTimeoutTaskTest {
             verify(taskTimelineService).recordEvent(
                     eq(2L), isNull(), eq("task_plan_timeout_recovered"),
                     eq(AgentRole.PLANNER), isNull(), anyMap());
-        }
-
-        @Test
-        @DisplayName("安全释放锁：仅当 token 一致时才删（防止误删他人锁）")
-        void shouldUseLuaUnlockScriptWithMatchingToken() {
-            when(taskMapper.selectTimedOutPlanning(any(), anyInt()))
-                    .thenReturn(List.of(planningTask(1L)));
-
-            task.scan();
-
-            // finally 必须调用 redis.execute(Lua, ...) 而不是 redis.delete
-            verify(redis).execute(any(RedisScript.class), any(List.class), any());
-            verify(redis, never()).delete((String) any());
         }
     }
 

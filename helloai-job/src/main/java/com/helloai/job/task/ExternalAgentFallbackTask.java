@@ -12,14 +12,13 @@ import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.redis.core.StringRedisTemplate;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 
 /**
  * N11 外部 Agent 阈值回退 — 周期补偿任务。
@@ -52,10 +51,8 @@ public class ExternalAgentFallbackTask {
     private final SubTaskMapper subTaskMapper;
     private final TaskTimelineService taskTimelineService;
     private final AgentFallbackProperties properties;
-    private final StringRedisTemplate redis;
     private final SubTaskService subTaskService;
 
-    private static final String LOCK_KEY = "scheduler:lock:ExternalAgentFallback";
     /** 单次扫描最多处理的子任务数（防止某轮候选 Agent 持有大量在跑任务时阻塞调度） */
     private static final int BATCH_LIMIT = 50;
     /** 单 Agent 最多拉多少在跑子任务 */
@@ -65,13 +62,10 @@ public class ExternalAgentFallbackTask {
 
     @Scheduled(fixedDelayString = "${helloai.dispatch.fallback.scan-interval-ms:60000}",
                initialDelay = 30_000L)
+    @SchedulerLock(name = "externalAgentFallback", lockAtMostFor = "PT60S")
     public void scan() {
         if (!properties.isEnabled()) {
             log.debug("ExternalAgentFallbackTask 跳过 (helloai.dispatch.fallback.enabled=false)");
-            return;
-        }
-        if (!tryLock()) {
-            log.debug("ExternalAgentFallbackTask 跳过（其他实例正在执行）");
             return;
         }
 
@@ -98,8 +92,6 @@ public class ExternalAgentFallbackTask {
 
         } catch (Exception e) {
             log.error("ExternalAgentFallbackTask 执行异常", e);
-        } finally {
-            unlock();
         }
     }
 
@@ -166,15 +158,6 @@ public class ExternalAgentFallbackTask {
         log.info("N11 阈值回退 agentId={} 汇总: inFlight={}, success={}, failed={}, processed={}",
                 agent.getId(), inFlight.size(), success, failed, processed);
         return success;
-    }
-
-    private boolean tryLock() {
-        Boolean acquired = redis.opsForValue().setIfAbsent(LOCK_KEY, "1", 60, TimeUnit.SECONDS);
-        return Boolean.TRUE.equals(acquired);
-    }
-
-    private void unlock() {
-        redis.delete(LOCK_KEY);
     }
 
     // ══════════════════════════════════════════════════════════════

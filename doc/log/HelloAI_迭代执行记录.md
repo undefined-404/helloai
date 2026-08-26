@@ -7241,3 +7241,32 @@ _时间：2026-08-25（用户提供设计图，要求保留布局只润色元素
 - 影响：Agent 打卡上班 表格列从 9 列减为 7 列，横向占用收窄，可读性与信息密度提升；移除 modeClass 函数 + .concurrent 样式 后文件减小 ~13 行；后端类型契约不动，顶部「并发配置上限」卡依然能展示总 maxConcurrent 与覆盖 Agent 数。
 - 遗留：① 「模式」「并发上限」信息从表格中隐藏后，仅能从顶部「并发配置上限」卡获取汇总值，如后续需要查看某个 Agent 的具体并发上限值，需另外设计查看入口（如点击 Agent 行打开详情抽屉或在「更多」弹出的历史对话框中展示）；② 本轮改动未 git 提交。
 
+---
+
+### 6.163 分布式健壮性改造（v1.2 清单阶段 0-5）：Redisson/ShedLock 双锁选型 + MQ 容量治理 + 死信台账（2026-08-26）
+
+#### 1. 背景与结论
+
+《分布式健壮性改造实施清单》v1.2（doc/design/，对照基线 1cf48eb 核对后用户放行）落地：12 处手写 setIfAbsent 锁（11 处 job 定时任务 + 1 处 review 业务锁）全部迁移，MQ 补容量治理四件套（阈值 / 快速失败 / 削峰阀门 / 死信台账），规范收口为——**定时任务单例锁用 ShedLock，业务互斥锁用 Redisson，MQ 实行容量治理，禁止第三种新写法**，为 k3s 水平扩容打底。明确不做：死信重放工具、MQ 分级 prefetch、生产实机队列重建（列入部署门禁）。
+
+#### 2. 实际落地
+
+- **阶段 0 依赖收口（修正 v1.1 方向错误）**：父 pom `<properties>` 集中版本——`redisson.version=4.0.0`（+ `redisson-spring-data-34` 适配 Boot 3.4.10）、`shedlock.version=6.6.0`；依赖按编译期可见性落在 **core/job 各自 pom 直接声明**（start 传递方向反，收口在 start 会导致 core/job 编译不可见）；helloai-start 新建 `ShedLockConfig`（`@EnableSchedulerLock(defaultLockAtMostFor="PT60S")` + `RedisLockProvider`，key 前缀 `helloai:schedlock:`，复用 Lettuce 不新增客户端，自动包装既有 taskScheduler Bean）；`mvn dependency:tree` / 编译验证通过。
+- **阶段 1 review 锁迁 Redisson**：`SubTaskReviewServiceImpl` 的 `setIfAbsent("review:lock:{id}", 120s)` + 无条件 delete 迁 `RLock.tryLock(0, 120, SECONDS)` + `isHeldByCurrentThread()` 防御 finally——消除"持锁超时后误删他人锁 → 重复双审 → 画像重复计数"；`SubTaskReviewServiceTest` 同步改造（删 setIfAbsent stub，mock RedissonClient/rLock 覆盖"抢不到跳过 / 正常完成释放 / 持锁期间丢锁不炸"三场景）。
+- **阶段 2 11 个 job 任务迁 ShedLock**：批次 A 简单式 6 个（AgentEventCompensation / AgentHealthCheck / ExecutionCompensation / ExternalAgentFallback / OutboxRelay / SubTaskTimeout）+ 批次 B token 式 5 个（AssignedSubTaskTimeout / DutyLeaseExpiration / PlanningTimeout / ReviewerRecheck / SubTaskPendingOrphan）；删除全部 tryLock / unlock / token / Lua 模板与锁专用 Redis 构造依赖（AgentHealthCheckTask 保留 redis 用于 isRedisAlive 探活）；name = 任务名驼峰、lockAtMostFor = 原 TTL 口径（30s~300s）；测试改造 8 个文件（含删除"锁被占用跳过" / "Lua 安全解锁"用例）；全工程 16 处 @Scheduled 穷尽核对 = 11 迁移 + 5 豁免（scanReviewOrphans / ExecutionCommandPoller / DoorbellKeepaliveTask / SessionAuthCleaner / McpSessionAuthCleanupTask），豁免口径写入 CODE_STYLE §3.y。
+- **阶段 3 MQ 容量治理**：application.yml `listener.simple.prefetch=10`（全局配置，生效于全部 3 个手动 ACK 消费者：MqReviewCommandConsumer / MqExecutionCommandConsumer / NotificationConsumer，防默认 250 慢消费者囤积）；RabbitMQConfig 5 个业务队列加 `x-max-length`（executor / reviewer / planner / execution-command = 50000，notification = 1000 收紧防堆积）+ `x-overflow=reject-publish`（**前置 RabbitMQ ≥ 3.10**：compose 双文件 3.12.14 ✓，dev/prod 实机探测入门禁；低于 3.10 仅保留 x-max-length 降级）；dlxQueue 裸声明不设容量；NACK 回调日志补"可能队列已满触发 reject-publish 快速失败"提示文案。
+- **阶段 4 死信台账 + 告警出口**：Flyway **V60** `mq_dead_letter_archive`（id / original_exchange / original_routing_key / first_death_exchange / first_death_queue / first_death_reason / headers JSONB / body TEXT / created_at / replayed_at 预留重放位，对齐 V18/V59 风格含 DO 自检块）；新建 `DlxAlertConsumer`（com.helloai.core.dlx，`@RabbitListener(DLX_QUEUE, MANUAL)`）消费顺序固定**台账 → 告警日志 → ACK**（对齐 §11.4 禁止先 ACK 再持久化），台账失败记 error 不阻断告警（差值极小窗口 + 告警日志落盘可捞）；body 截断 64KB、日志预览 500 字符；dlxQueue 未挂 DLX，消费异常 `basicNack(requeue=false)` 任何情况不得 requeue（消息留队列不丢、不循环）；选型对齐 event_consumption_log 的 JdbcTemplate 模式；`DlxAlertConsumerTest` 3 用例全过。
+- **文档收尾**：CODE_STYLE **V1.16**（新增 §3.y 锁选型铁律 + §3.z MQ 容量治理，§12 旧 RedisLockUtil/scheduler:lock: 失真口径整体重写并入口径，§2 版本表新增 Redisson 4.0.0 / ShedLock 6.6.0）；README 技术栈表同步；实现差距表新增 N27（编号勘误：N22~N26 已被 §6 记录区占用，实际追加 N27）；本记录 §6.163。
+
+#### 3. 验证结果
+
+- helloai-job 全量测试 BUILD SUCCESS **63/63**（批次 A 后 72 → 删锁用例后 63，数量合理）；helloai-core **932/932**；SubTaskReviewServiceTest（Redisson 三场景）+ DlxAlertConsumerTest 3/3 全过；
+- **收尾修正（同日全量回归）**：`mvn -DskipTests=false install` 首轮暴露阶段 2-b 迁移遗留死代码——AssignedSubTaskTimeoutTask / SubTaskPendingOrphanTask 尾部私有 tryLock / unlock 方法未删干净（方法体引用已移除的 redis / LOCK_KEY / LOCK_TTL_SECONDS / UNLOCK_SCRIPT / TimeUnit，scan() 调用点已删、字段与 import 已清，仅方法残留），helloai-job 编译失败 16 错；已删除两个死方法（各 -15 行，List import 仍被业务使用保留），修复后 7 模块全量 install BUILD SUCCESS（core 932/932 + job 63/63 + api 19/19 + start 可执行 jar 出包）；
+- `mvn -pl helloai-start -am compile -q` 零错误（Redisson 自动装配 / ShedLock 注入链路通过）；
+- MQ 容量参数实机生效验证（Management UI prefetch/unacked 深度观察、队列删旧重建、notification 队列 ready 积压核查）与 dev/prod broker `rabbitmq-diagnostics status` ≥ 3.10 探测为**部署侧门禁**（需 RabbitMQ 环境，见清单门禁 3）；启动自检（`helloai:schedlock:` key 观察一轮全部任务执行/锁跳过痕迹）随后执行（2026-08-26 全量回归日 Docker Desktop 未运行，本机未执行，保留为部署门禁）。
+
+#### 4. 影响与遗留
+
+- 影响：12 处手写锁清零，误删他人锁在结构上不可能；新增 @Scheduled 必须先对照 CODE_STYLE §3.y 豁免归口表；MQ 队列参数 immutable——已有队列须先在 Management UI 删旧重建（生产评估存量消息）新参数才生效；死信从此可见、可追溯、可重放（台账为唯一数据源）。
+- 遗留：① 死信重放工具（按 original_routing_key 读台账重发）列入观察项，replayed_at 列已预留；② dev/prod 实机 broker ≥ 3.10 探测、notification 队列积压核查、队列重建、prefetch 生效观察需上线环境执行；③ 本轮改动未 git 提交。
+

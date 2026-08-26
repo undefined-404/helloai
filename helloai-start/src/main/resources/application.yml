@@ -61,6 +61,10 @@ spring:
         acknowledge-mode: manual
         concurrency: 5
         max-concurrency: 20
+        # v1.2 §阶段3（MQ 容量治理）：prefetch 全局生效于 3 个 MANUAL ACK 消费者
+        # （MqReviewCommandConsumer / MqExecutionCommandConsumer / NotificationConsumer），
+        # 收紧后消息按各副本实际消费速率被拉走，避免 250 默认值导致的慢消费者囤积、快消费者饿死
+        prefetch: 10
   # 产物代理上传（POST /api/artifacts/upload）multipart 上限：
   # 略高于 storage.max-file-size(5MB)，留出 multipart 边界余量
   servlet:

@@ -11,9 +11,9 @@ import com.helloai.core.agent.entity.AgentCommandOutboxEvent;
 import com.helloai.core.agent.service.AgentCommandOutboxService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -35,8 +35,9 @@ import java.util.concurrent.TimeUnit;
  * {@link AgentCommandOutboxRelayProperties#getIntervalMs()}），单批上限
  * {@link AgentCommandOutboxRelayProperties#getBatchLimit()} 条。</p>
  *
- * <p><b>并发控制</b>：通过 Redis {@code SETNX 30s} 实现实例级互斥锁，
- * 避免多副本同时扫描同一批 outbox 行；本轮未引入乐观锁 CAS，
+ * <p><b>并发控制</b>：通过 ShedLock（{@code @SchedulerLock}，Redis 存储锁记录）
+ * 实现实例级互斥（v1.2 §阶段2：SETNX 手写锁迁 ShedLock），避免多副本同时扫描
+ * 同一批 outbox 行；本轮未引入乐观锁 CAS，
  * 因为 Relay 任务在写状态时使用 {@code WHERE status=PENDING / SENT} 的悲观条件更新
  * （{@link AgentCommandOutboxService#markSent} / {@link AgentCommandOutboxService#markConfirmed} /
  * {@link AgentCommandOutboxService#markFailed} / {@link AgentCommandOutboxService#markFailedFromSent} 等）
@@ -84,60 +85,51 @@ public class OutboxRelayTask {
     private final Optional<ExecutionCommandMqPublisher> mqPublisherProvider;
     private final AgentCommandOutboxRelayProperties properties;
     private final AgentExecutionProperties executionProperties;
-    private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
 
-    private static final String LOCK_KEY = "scheduler:lock:AgentCommandOutbox";
-
     @Scheduled(fixedRateString = "${helloai.outbox.relay.interval-ms:1000}")
+    @SchedulerLock(name = "outboxRelay", lockAtMostFor = "PT30S")
     public void relay() {
-        if (!tryLock()) {
+        ExecutionCommandMqPublisher publisher = mqPublisherProvider.orElse(null);
+        if (publisher == null) {
+            // 启动期 ExecutionDispatchValidator 在 dispatch-mode ∈ {MQ,BOTH} 时已 fail-fast，
+            // 这里仅是双保险：若运行时 Publisher 不可用（如 producer-enabled 被运行时切换），
+            // 不要静默吞 outbox，至少要让日志可见。
+            if (executionProperties.isDispatchMq()) {
+                log.error("OutboxRelay skipped: ExecutionCommandMqPublisher Bean unavailable "
+                        + "while dispatch-mode requires MQ delivery. "
+                        + "Check helloai.mq.execution-command.producer-enabled.");
+            } else {
+                log.debug("OutboxRelay skipped: Publisher Bean not registered (dispatch-mode ≠ MQ/BOTH)");
+            }
             return;
         }
-        try {
-            ExecutionCommandMqPublisher publisher = mqPublisherProvider.orElse(null);
-            if (publisher == null) {
-                // 启动期 ExecutionDispatchValidator 在 dispatch-mode ∈ {MQ,BOTH} 时已 fail-fast，
-                // 这里仅是双保险：若运行时 Publisher 不可用（如 producer-enabled 被运行时切换），
-                // 不要静默吞 outbox，至少要让日志可见。
-                if (executionProperties.isDispatchMq()) {
-                    log.error("OutboxRelay skipped: ExecutionCommandMqPublisher Bean unavailable "
-                            + "while dispatch-mode requires MQ delivery. "
-                            + "Check helloai.mq.execution-command.producer-enabled.");
-                } else {
-                    log.debug("OutboxRelay skipped: Publisher Bean not registered (dispatch-mode ≠ MQ/BOTH)");
-                }
-                return;
-            }
 
-            int batchLimit = properties.getBatchLimit();
-            revertExpiredSent(batchLimit);
-            List<AgentCommandOutboxEvent> ready = outboxService.listReadyForRelay(batchLimit);
-            if (ready.isEmpty()) {
-                return;
-            }
+        int batchLimit = properties.getBatchLimit();
+        revertExpiredSent(batchLimit);
+        List<AgentCommandOutboxEvent> ready = outboxService.listReadyForRelay(batchLimit);
+        if (ready.isEmpty()) {
+            return;
+        }
 
-            int sent = 0;
-            int failed = 0;
-            int finalFailed = 0;
-            for (AgentCommandOutboxEvent row : ready) {
-                RelayOutcome outcome = processOne(row, publisher);
-                switch (outcome) {
-                    case SENT -> sent++;
-                    case FAILED -> failed++;
-                    case FINAL_FAILED -> finalFailed++;
-                    default -> {
-                        // SKIPPED 不计入指标
-                    }
+        int sent = 0;
+        int failed = 0;
+        int finalFailed = 0;
+        for (AgentCommandOutboxEvent row : ready) {
+            RelayOutcome outcome = processOne(row, publisher);
+            switch (outcome) {
+                case SENT -> sent++;
+                case FAILED -> failed++;
+                case FINAL_FAILED -> finalFailed++;
+                default -> {
+                    // SKIPPED 不计入指标
                 }
             }
+        }
 
-            if (sent + failed + finalFailed > 0) {
-                log.info("OutboxRelay batch done: scanned={}, sent={}, retry={}, final-failed={}",
-                        ready.size(), sent, failed, finalFailed);
-            }
-        } finally {
-            unlock();
+        if (sent + failed + finalFailed > 0) {
+            log.info("OutboxRelay batch done: scanned={}, sent={}, retry={}, final-failed={}",
+                    ready.size(), sent, failed, finalFailed);
         }
     }
 
@@ -290,15 +282,6 @@ public class OutboxRelayTask {
             }
         }
         return command;
-    }
-
-    private boolean tryLock() {
-        Boolean acquired = redis.opsForValue().setIfAbsent(LOCK_KEY, "1", 30, TimeUnit.SECONDS);
-        return Boolean.TRUE.equals(acquired);
-    }
-
-    private void unlock() {
-        redis.delete(LOCK_KEY);
     }
 
     private int safeRetryCount(AgentCommandOutboxEvent row) {

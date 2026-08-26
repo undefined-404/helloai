@@ -25,7 +25,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.ValueOperations;
 
 import java.lang.reflect.Field;
 import java.time.OffsetDateTime;
@@ -75,8 +74,6 @@ class AgentHealthCheckTaskTest {
     @Mock
     private StringRedisTemplate redis;
     @Mock
-    private ValueOperations<String, String> valueOps;
-    @Mock
     private ExternalAgentFailureTracker failureTracker;
 
     private AgentHealthProperties healthProperties;
@@ -92,10 +89,8 @@ class AgentHealthCheckTaskTest {
                 agentService, subTaskDispatchService, redis,
                 failureTracker, healthProperties);
 
-        // 默认让 tryLock 成功
-        lenient().when(redis.opsForValue()).thenReturn(valueOps);
-        lenient().when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any())).thenReturn(true);
-        // 默认 Redis TTL 不存在（离线状态）
+        // v1.2 §阶段2：SETNX 手写锁迁 ShedLock（代理拦截，单测直建对象无锁分支）；
+        // StringRedisTemplate 保留用于 isRedisAlive 心跳 TTL 二次验证
         lenient().when(redis.hasKey(anyString())).thenReturn(false);
     }
 

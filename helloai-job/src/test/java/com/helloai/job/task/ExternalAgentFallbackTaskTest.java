@@ -20,8 +20,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.ValueOperations;
 
 import java.time.OffsetDateTime;
 import java.util.HashMap;
@@ -45,7 +43,7 @@ import static org.mockito.Mockito.lenient;
  *
  * <p>覆盖：</p>
  * <ul>
- *   <li>enabled=false / 锁占用 / 无候选 → noop</li>
+ *   <li>enabled=false / 无候选 → noop（实例级互斥由 ShedLock 代理拦截，单测直建对象无锁分支）</li>
  *   <li>扫描到候选 → 写 audit + markFallbackTriggered + redispatchForFallback</li>
  *   <li>单 Agent 多个在跑子任务 → 逐个 redispatchForFallback，partial 失败不中断</li>
  *   <li>无在跑子任务 → 仍 markFallbackTriggered 写冷却</li>
@@ -64,10 +62,6 @@ class ExternalAgentFallbackTaskTest {
     @Mock
     private TaskTimelineService taskTimelineService;
     @Mock
-    private StringRedisTemplate redis;
-    @Mock
-    private ValueOperations<String, String> valueOps;
-    @Mock
     private SubTaskService subTaskService;
 
     private AgentFallbackProperties properties;
@@ -83,11 +77,7 @@ class ExternalAgentFallbackTaskTest {
 
         task = new ExternalAgentFallbackTask(
                 failureTracker, subTaskDispatchService, subTaskMapper,
-                taskTimelineService, properties, redis, subTaskService);
-
-        // 默认让 tryLock 成功（用 lenient 避免 shouldSkipWhenDisabled 这种短路测试报 UnnecessaryStubbings）
-        lenient().when(redis.opsForValue()).thenReturn(valueOps);
-        lenient().when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any())).thenReturn(true);
+                taskTimelineService, properties, subTaskService);
     }
 
     @Nested
@@ -105,16 +95,6 @@ class ExternalAgentFallbackTaskTest {
             verifyNoInteractions(subTaskDispatchService);
             verifyNoInteractions(subTaskMapper);
             verifyNoInteractions(taskTimelineService);
-        }
-
-        @Test
-        @DisplayName("锁被占用 → 跳过")
-        void shouldSkipWhenLocked() {
-            when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any())).thenReturn(false);
-
-            task.scan();
-
-            verify(failureTracker, never()).findFallbackCandidates();
         }
 
         @Test

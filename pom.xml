@@ -30,6 +30,10 @@
         <lombok.version>1.18.32</lombok.version>
         <resilience4j.version>2.2.0</resilience4j.version>
         <minio.version>8.5.12</minio.version>
+        <!-- Redisson 分布式锁（子任务审核并发锁迁移，v1.2 §阶段1） -->
+        <redisson.version>4.0.0</redisson.version>
+        <!-- ShedLock 定时任务分布式锁（11 个 job 任务迁移，v1.2 §阶段2） -->
+        <shedlock.version>6.6.0</shedlock.version>
 
         <!-- 打包时默认跳过测试执行，需要跑测试时加 -DskipTests=false -->
         <skipTests>true</skipTests>
@@ -141,6 +145,30 @@
                 <groupId>io.minio</groupId>
                 <artifactId>minio</artifactId>
                 <version>${minio.version}</version>
+            </dependency>
+            <!-- Redisson 分布式锁（v1.2 §阶段1：SubTaskReview 锁迁 RLock；4.0.0 starter 默认带 spring-data-40 适配器，
+                 Boot 3.4 需显式用 redisson-spring-data-34 并排除 40） -->
+            <dependency>
+                <groupId>org.redisson</groupId>
+                <artifactId>redisson-spring-boot-starter</artifactId>
+                <version>${redisson.version}</version>
+            </dependency>
+            <!-- Redisson × Spring Data Redis 3.4 适配（Boot 3.4.10 → spring-data-redis 3.4.x） -->
+            <dependency>
+                <groupId>org.redisson</groupId>
+                <artifactId>redisson-spring-data-34</artifactId>
+                <version>${redisson.version}</version>
+            </dependency>
+            <!-- ShedLock 定时任务锁（v1.2 §阶段2：11 个 @Scheduled 任务迁 @SchedulerLock） -->
+            <dependency>
+                <groupId>net.javacrumbs.shedlock</groupId>
+                <artifactId>shedlock-spring</artifactId>
+                <version>${shedlock.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>net.javacrumbs.shedlock</groupId>
+                <artifactId>shedlock-provider-redis-spring</artifactId>
+                <version>${shedlock.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

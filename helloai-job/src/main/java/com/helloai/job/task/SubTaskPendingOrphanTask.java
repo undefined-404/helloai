@@ -9,16 +9,12 @@ import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.script.DefaultRedisScript;
-import org.springframework.data.redis.core.script.RedisScript;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.OffsetDateTime;
 import java.util.List;
-import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 
 /**
  * PENDING 孤儿子任务巡检任务。
@@ -35,7 +31,7 @@ import java.util.concurrent.TimeUnit;
  *         AND NOT EXISTS agent_execution_record}（阈值 30min → 5min）</li>
  *     <li>逐条重新触发 {@link SubTaskDispatchService#dispatchPendingSubTaskAuto}：
  *         PENDING 状态的子任务自动按角色选人并进入弹性调度链</li>
- *     <li>Redis 锁保证多实例串行，单批上限 50 条防阻塞</li>
+ *     <li>ShedLock 实例级互斥（@SchedulerLock，Redis 存储锁记录）保证多实例串行，单批上限 50 条防阻塞</li>
  *     <li>覆盖两种"无人接管"场景：① 主路径事件丢失（原始设计目标）；
  *         ② 依赖解锁瞬间无空闲候选导致分发失败（收窄阈值后 5 分钟内自动重试）</li>
  * </ul>
@@ -79,21 +75,6 @@ public class SubTaskPendingOrphanTask {
     private final SubTaskService subTaskService;
     private final SubTaskDispatchService subTaskDispatchService;
     private final AgentExecutionProperties executionProperties;
-    private final StringRedisTemplate redis;
-
-    private static final String LOCK_KEY = "scheduler:lock:SubTaskPendingOrphan";
-
-    /**
-     * 安全释放脚本：仅当 Redis 中锁的 value 仍等于本实例的 token 时才删除，
-     * 避免本实例因 scan 超时而被锁过期 → 被其他实例拿到锁 → 本实例 finally
-     * 中误删新持有者锁的并发窗口。
-     */
-    private static final RedisScript<Long> UNLOCK_SCRIPT = new DefaultRedisScript<>(
-            "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
-            Long.class);
-
-    /** Redis 锁 TTL（秒）：大于单轮最坏处理时间 */
-    private static final long LOCK_TTL_SECONDS = 60;
 
     /**
      * 周期扫描入口。
@@ -103,14 +84,9 @@ public class SubTaskPendingOrphanTask {
      * 统一进入选人 → ASSIGNED 链。</p>
      */
     @Scheduled(fixedDelayString = "${helloai.execution.pending-orphan-scan-interval-ms:60000}")
+    @SchedulerLock(name = "subTaskPendingOrphan", lockAtMostFor = "PT60S")
     public void scan() {
         if (!executionProperties.isPendingOrphanEnabled()) {
-            return;
-        }
-        // tryLock 时生成唯一 token；unlock 必须用同一 token，避免误删他人锁
-        String token = UUID.randomUUID().toString();
-        if (!tryLock(token)) {
-            log.debug("SubTaskPendingOrphanTask 跳过（其他实例正在执行）");
             return;
         }
 
@@ -190,24 +166,7 @@ public class SubTaskPendingOrphanTask {
 
         } catch (Exception e) {
             log.error("SubTaskPendingOrphanTask 执行异常", e);
-        } finally {
-            unlock(token);
         }
     }
 
-    private boolean tryLock(String token) {
-        Boolean acquired = redis.opsForValue().setIfAbsent(LOCK_KEY, token, LOCK_TTL_SECONDS, TimeUnit.SECONDS);
-        return Boolean.TRUE.equals(acquired);
-    }
-
-    private void unlock(String token) {
-        // Lua 脚本：仅当 Redis 中的 value 等于本实例的 token 时才删除，
-        // 避免本实例因超时丢锁后误删新持有者的锁。
-        try {
-            redis.execute(UNLOCK_SCRIPT, List.of(LOCK_KEY), token);
-        } catch (Exception e) {
-            // 释放失败不阻断业务，下次定时任务会重新竞争锁；仅记录
-            log.warn("释放 Redis 锁失败: lockKey={}, token={}", LOCK_KEY, token, e);
-        }
-    }
 }
