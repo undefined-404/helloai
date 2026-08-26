@@ -90,6 +90,7 @@
 import { ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { agentApi } from '@/api/agent'
+import { copyTextWithToast } from '@/composables/useClipboardWithFallback'
 import type { AgentOnboardingResponse } from '@/types'
 
 const props = defineProps<{
@@ -130,11 +131,10 @@ watch(() => props.agentId, (newVal) => {
   }
 })
 
-function copyContent() {
-  if (data.value) {
-    navigator.clipboard.writeText(data.value.content)
-    ElMessage.success('已复制全部接入内容到剪贴板')
-  }
+async function copyContent() {
+  if (!data.value) return
+  // 使用带降级的剪贴板写入，兼容 HTTP 公网部署下 navigator.clipboard 不可用的情况
+  await copyTextWithToast(data.value.content, '已复制全部接入内容到剪贴板')
 }
 
 // 文件名净化：仅保留 ASCII 字母/数字/短横线/下划线，中文名降级为 _
@@ -160,11 +160,11 @@ function downloadSkill() {
 }
 
 // 复制一键上班口令：粘到 IDE 对话框第一句话即可触发 AI Agent 自检接入
-function copyActivation() {
+async function copyActivation() {
   if (!data.value) return
   const cmd = `你是 HelloAI 平台的 ${data.value.agentName}（ID=${data.value.agentId}），请按平台 SKILL 接入并开始工作。`
-  navigator.clipboard.writeText(cmd)
-  ElMessage.success('已复制激活口令，粘到 IDE 对话框即可触发接入')
+  // 使用带降级的剪贴板写入，兼容 HTTP 公网部署下 navigator.clipboard 不可用的情况
+  await copyTextWithToast(cmd, '已复制激活口令，粘到 IDE 对话框即可触发接入')
 }
 
 // 下载 daemon 脚本（B 类）：从 public 静态资源拉取参考实现，浏览器触发下载

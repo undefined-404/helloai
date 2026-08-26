@@ -231,7 +231,7 @@
                     >
                       <el-tag
                         size="small"
-                        :type="convTagType(msg.toolName)"
+                        :type="convTagType(msg.toolName, msg.content)"
                       >
                         {{ convTagLabel(msg.toolName) }}
                       </el-tag>
@@ -872,26 +872,58 @@ function convTagLabel(toolName: string | null) {
   return (toolName && CONV_TAG_MAP[toolName]?.label) || toolName || '消息'
 }
 
-function convTagType(toolName: string | null) {
-  return (toolName && CONV_TAG_MAP[toolName]?.type) || 'info'
+function convTagType(toolName: string | null, content: string | null | undefined = null) {
+  const base = (toolName && CONV_TAG_MAP[toolName]?.type) || 'info'
+  // 核验结论类（_result）跟随 verdict.pass 切色：默认绿（success），驳回走红（danger）。
+  // 说明：仅 _result 动态切；_verdict（核验分析）保持原 warning 黄色作类别标识，
+  // 因为其内容已走 ReviewVerdictView 单独展示 通过/未通过 tag，避免重复表达。
+  if (toolName && /subtask_(review|dual_review|recheck)_result$/.test(toolName)) {
+    return parseVerdictPass(content) ? 'success' : 'danger'
+  }
+  return base
 }
 
 // 设计图润色：消息块语义分类 → is-user / is-execute / is-analysis / is-result
 // 互不冲突的修饰类，驱动头像、背景、边框的颜色分支
+// 说明：is-result 现在包含 _verdict 与 _result 两类（核验分析与核验结论），
+// 外层框体都需要按 pass/fail 切色；_verdict 内容走 JSON 解析，_result 多为遗留 Markdown 走关键字兜底
 function convItemClass(msg: ConversationMessageItem): Record<string, boolean> {
   const tool = msg.toolName || ''
   const isUser = tool === 'sub_task_execute_user_prompt'
   const isExecute = tool === 'sub_task_execute' || tool === 'sub_task_execute_failed'
   const isAnalysis = isAnalysisMsg(msg)
-  // 核验结论类（subtask_review_result / dual_review_result / recheck_result）
-  // 与 thinking/verdict 区分：结论是成功落定的结果，背景走 success 语义
-  const isResult = /subtask_(review|dual_review|recheck)_result$/.test(tool)
+  // 核验类（subtask_(review|dual_review|recheck)_(verdict|result)）
+  const isResult = /subtask_(review|dual_review|recheck)_(verdict|result)$/.test(tool)
+  const verdictFail = isResult && !isUser && !isExecute && !parseVerdictPass(msg.content)
   return {
     'is-user': isUser,
     'is-execute': isExecute && !isUser,
     'is-analysis': isAnalysis && !isUser && !isExecute,
-    'is-result': isResult && !isUser && !isExecute
+    'is-result': isResult && !isUser && !isExecute,
+    'is-result-fail': verdictFail
   }
+}
+
+// 从核验结论内容中判断通过/驳回：先尝试解析 JSON verdict.pass，
+// 失败则按文案关键字兑底（兼容 `- 结果: 驳回` 这类遗留 Markdown 结论）。
+// 解析不出时默认 true（走原绿色），避免误将未知内容刷红。
+// 冒号同时匹配 ASCII 半角与中文全角（\uFF1A），避免遗漏 `结果：驳回` 这类中文写法。
+// 说明：is-result 现在包含 _verdict 与 _result 两类（核验分析与核验结论），
+// 外层框体都需要按 pass/fail 切色；_verdict 内容走 JSON 解析，_result 多为遗留 Markdown 走关键字兜底
+function parseVerdictPass(content: string | null | undefined): boolean {
+  const raw = (content || '').trim()
+  if (!raw) return true
+  try {
+    const t = raw.replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/, '$1').trim()
+    if (t.startsWith('{')) {
+      const obj = JSON.parse(t)
+      if (obj && typeof obj === 'object' && 'pass' in obj) {
+        return !!obj.pass
+      }
+    }
+  } catch { /* 不是 JSON，回退关键字判定 */ }
+  if (/结果\s*[:：]\s*(驳回|未通过|拒绝|失败|不达标)|核验未通过|核验驳回|未达标|\b驳回\b|\b未通过\b/.test(raw)) return false
+  return true
 }
 
 // 设计图润色：头像缩写（USER/AI/审核）三角色
@@ -1436,10 +1468,15 @@ onBeforeUnmount(() => {
   background: color-mix(in srgb, var(--ha-warning) 7%, var(--ha-surface));
   border-color: color-mix(in srgb, var(--ha-warning) 28%, var(--ha-border-light));
 }
-/* 核验结论：成功落定结果，走 success 绿色语义（与核验分析黄块区分） */
-.conv-item.is-result {
+/* 核验结论：默认 success 绿色语义（与核验分析黄块区分） */
+.conv-item.is-result:not(.is-result-fail) {
   background: color-mix(in srgb, var(--ha-success) 7%, var(--ha-surface));
   border-color: color-mix(in srgb, var(--ha-success) 28%, var(--ha-border-light));
+}
+/* 核验结论：驳回则走 danger 红色语义（绿色代表通过，红色代表驳回） */
+.conv-item.is-result.is-result-fail {
+  background: color-mix(in srgb, var(--ha-danger) 7%, var(--ha-surface));
+  border-color: color-mix(in srgb, var(--ha-danger) 30%, var(--ha-border-light));
 }
 
 /* 设计图：左侧角色小图标（圆形背景） */
@@ -1465,9 +1502,13 @@ onBeforeUnmount(() => {
   background: color-mix(in srgb, var(--ha-warning) 22%, transparent);
   color: var(--ha-warning-text);
 }
-.conv-item.is-result .conv-avatar {
+.conv-item.is-result:not(.is-result-fail) .conv-avatar {
   background: color-mix(in srgb, var(--ha-success) 22%, transparent);
   color: var(--ha-success-text);
+}
+.conv-item.is-result.is-result-fail .conv-avatar {
+  background: color-mix(in srgb, var(--ha-danger) 22%, transparent);
+  color: var(--ha-danger-text);
 }
 /* 用户消息头像走主色 */
 .conv-item.is-user .conv-avatar {
