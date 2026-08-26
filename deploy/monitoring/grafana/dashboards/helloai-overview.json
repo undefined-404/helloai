@@ -321,10 +321,10 @@
         "maxDataPoints": 500
       },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(rabbitmq_queue_messages_ready)", "legendFormat": "Ready Messages", "refId": "A" },
-        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(rabbitmq_queue_messages_unacked)", "legendFormat": "Unacked Messages", "refId": "B" }
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (queue) (rabbitmq_queue_messages_ready{queue=~\"helloai.*\"})", "legendFormat": "{{queue}} Ready", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (queue) (rabbitmq_queue_messages_unacked{queue=~\"helloai.*\"})", "legendFormat": "{{queue}} Unacked", "refId": "B" }
       ],
-      "title": "RabbitMQ Queue Backlog",
+      "title": "MQ Ready/Unacked by Queue",
       "type": "timeseries"
     },
     {
@@ -586,6 +586,173 @@
       ],
       "title": "Scrape Target Status",
       "type": "table"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Queue ready depth divided by x-max-length (v1.2 MQ capacity limits: core queues 50000, notification 1000). Above 0.5 means watch out; above 0.9 approaches reject-publish fast-fail.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "line" }
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 0.5 }, { "color": "red", "value": 0.9 } ] },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 48 },
+      "id": 101,
+      "options": {
+        "legend": { "calcs": [ "mean", "max" ], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "maxDataPoints": 500
+      },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rabbitmq_queue_messages_ready{queue=\"helloai.execution-command.queue\"} / 50000", "legendFormat": "execution-command", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rabbitmq_queue_messages_ready{queue=\"helloai.executor.queue\"} / 50000", "legendFormat": "executor", "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rabbitmq_queue_messages_ready{queue=\"helloai.reviewer.queue\"} / 50000", "legendFormat": "reviewer", "refId": "C" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rabbitmq_queue_messages_ready{queue=\"helloai.planner.queue\"} / 50000", "legendFormat": "planner", "refId": "D" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rabbitmq_queue_messages_ready{queue=\"helloai.notification.queue\"} / 1000", "legendFormat": "notification (cap 1000)", "refId": "E" }
+      ],
+      "title": "MQ Fill Ratio vs x-max-length",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Dead-letter queue depth (helloai.dlx.queue) consumed by DlxAlertConsumer. Sustained ready growth means config errors or poison messages accumulating.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 48 },
+      "id": 102,
+      "options": {
+        "legend": { "calcs": [ "mean", "max" ], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "maxDataPoints": 500
+      },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rabbitmq_queue_messages_ready{queue=\"helloai.dlx.queue\"}", "legendFormat": "DLX Ready", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rabbitmq_queue_messages_unacked{queue=\"helloai.dlx.queue\"}", "legendFormat": "DLX Unacked", "refId": "B" }
+      ],
+      "title": "MQ DLX / Dead Letter Inflow",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Row count of mq_dead_letter_archive (Flyway V60 dead-letter ledger), read from pg_stat_user_tables.n_live_tup. Growth trend mirrors dead-letter inflow; flat means DlxAlertConsumer keeps up.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 56 },
+      "id": 103,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false },
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(pg_stat_user_tables_n_live_tup{relname=\"mq_dead_letter_archive\"})", "legendFormat": "Rows", "refId": "A" }
+      ],
+      "title": "Dead Letter Archive Rows",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null } ] },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 56 },
+      "id": 104,
+      "options": {
+        "legend": { "calcs": [ "mean", "max" ], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "maxDataPoints": 500
+      },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(redis_commands_processed_total[$__rate_interval])", "legendFormat": "Commands/s", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(redis_keyspace_hits_total[$__rate_interval])", "legendFormat": "Key Hits/s", "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(redis_keyspace_misses_total[$__rate_interval])", "legendFormat": "Key Misses/s", "refId": "C" }
+      ],
+      "title": "Redis Throughput & Keyspace Hits",
+      "type": "timeseries"
     }
   ],
   "refresh": "10s",

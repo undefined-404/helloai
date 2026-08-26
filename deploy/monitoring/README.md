@@ -7,9 +7,9 @@ Port of the verified monitoring implementation from `E:\yhzx\1027\maticube\deplo
 | Target | Collection | Dashboard panels |
 | --- | --- | --- |
 | HelloAI app | Actuator `/actuator/prometheus` (micrometer-registry-prometheus) | JVM heap/non-heap, system CPU, live threads, HTTP RT P50/P95/P99, QPS, GC pause, Top 5 slow URIs |
-| RabbitMQ | Built-in rabbitmq_prometheus plugin in the management image (15692, no extra exporter) | Queue ready/unacked messages (backlog) |
-| PostgreSQL | postgres-exporter (read-only monitoring account `helloai_monitor`) | Connections, transaction rate |
-| Redis | redis-exporter | Memory used, connected clients |
+| RabbitMQ | Built-in rabbitmq_prometheus plugin in the management image (15692, no extra exporter) | Ready/unacked by queue, fill ratio vs x-max-length (v1.2 capacity limits), DLX dead-letter depth |
+| PostgreSQL | postgres-exporter (read-only monitoring account `helloai_monitor`) | Connections, transaction rate, mq_dead_letter_archive row count (V60 dead-letter ledger) |
+| Redis | redis-exporter | Memory used, connected clients, commands/s, keyspace hits/misses |
 | Scrape health | Prometheus `up` metric | Healthy/unhealthy target counts, target status table |
 
 ## Directory Layout
