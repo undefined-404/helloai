@@ -1,423 +1,541 @@
 <template>
-  <div class="page ha-entrance-up">
-    <el-card>
-      <template #header>
-        <span>系统设置</span>
-      </template>
+  <div class="page settings-page ha-entrance-up">
+    <!-- ============================================================
+         顶部 Hero 区：品牌锚点 + 标题/副标题
+         ============================================================ -->
+    <header class="page-hero">
+      <div class="page-hero-icon" aria-hidden="true">
+        <el-icon :size="20">
+          <Setting />
+        </el-icon>
+      </div>
+      <p class="page-hero-subtitle">
+        配置系统基础参数、模型供应商与通知方式
+      </p>
+    </header>
+
+    <!-- ============================================================
+         主包裹卡 sheet：所有设置内容收纳在一张大卡内，铺满页面宽度
+         ============================================================ -->
+    <el-card class="settings-sheet" shadow="never">
+      <header class="sheet-header">
+        <div class="sheet-header-text">
+          <h1 class="sheet-title">系统设置</h1>
+          <p class="sheet-subtitle">以下配置修改后点击底部「保存设置」按钮生效</p>
+        </div>
+        <el-button
+          size="small"
+          plain
+          :disabled="!isDirty"
+          @click="handleReset"
+        >
+          <el-icon><RefreshLeft /></el-icon>
+          <span>重置</span>
+        </el-button>
+      </header>
+
       <el-form
         ref="formRef"
         :model="form"
-        label-width="140px"
+        label-width="120px"
         class="settings-form"
       >
-        <div class="section-heading">
-          <h3 class="section-title">基础配置</h3>
-        </div>
-        <el-form-item label="外部访问地址">
-          <el-input
-            v-model="form.externalUrl"
-            placeholder="http://192.168.1.100:6565"
-          />
-          <div class="form-hint">
-            用于生成 SKILL 接入内容（Agent 凭此地址回连本平台）。
-            本机可直接用 <code>http://localhost:6565</code>，其他设备用
-            <code>http://&lt;本机IP&gt;:6565</code>，公网部署用域名或公网 IP。
+        <div class="settings-stack">
+        <!-- 1 基础配置 -->
+        <div
+          class="section-block"
+        >
+          <div class="section-header">
+            <div class="section-mark">
+              <span class="section-mark-num">1</span>
+              <h2 class="section-mark-title">
+                基础配置
+              </h2>
+            </div>
+            <el-button
+              size="small"
+              plain
+              :disabled="!isDirty"
+              @click="handleReset"
+            >
+              <el-icon><RefreshLeft /></el-icon>
+              <span>重置</span>
+            </el-button>
           </div>
-        </el-form-item>
-        <el-form-item label="质量门控">
-          <div class="switch-field">
-            <el-switch
-              v-model="form.qualityGateEnabled"
-              :before-change="beforeQualityGateChange"
+          <el-form-item label="外部访问地址">
+            <el-input
+              v-model="form.externalUrl"
+              placeholder="http://192.168.1.100:6565"
             />
-            <!-- 文字态双保险：开关动画视觉之外提供不依赖颜色的状态通道 -->
-            <span
-              class="switch-state"
-              :class="form.qualityGateEnabled ? 'on' : 'off'"
-            >{{ form.qualityGateEnabled ? '已开启' : '已关闭' }}</span>
-          </div>
-          <div class="form-hint">
-            默认开启；关闭后
-            <router-link
-              class="hint-link"
-              to="/quality-dashboard"
-            >质量看板</router-link>
-            及画像重算、自动派发等管理侧入口不可用（§6.151 起默认开放）。
-          </div>
-        </el-form-item>
-
-        <div class="section-heading">
-          <h3 class="section-title">联网搜索</h3>
-          <el-button
-            size="small"
-            plain
-            :loading="verifyingWebSearchKey"
-            @click="verifyWebSearchKey(true)"
-          >
-            验证 Key
-          </el-button>
-        </div>
-        <el-form-item label="博查 API Key">
-          <el-input
-            v-model="form.webSearchApiKey"
-            type="password"
-            show-password
-            placeholder="输入新 Key 并保存；清空并保存则移除 Key"
-          />
-          <div class="form-hint">
-            需求对话每轮联网检索（默认供应商博查）使用，加密存储，保存后立即生效无需重启。
-            <el-tag
-              v-if="webSearchKeyConfigured"
-              type="success"
-              size="small"
-            >已配置</el-tag>
-            <el-tag
-              v-else
-              type="warning"
-              size="small"
-            >未配置 · 联网搜索不可用</el-tag>
-          </div>
-          <div
-            v-if="webSearchDirty"
-            class="verify-key-tip"
-          >验证的是已保存的 Key；输入框改动请先保存</div>
-        </el-form-item>
-
-        <div class="section-heading">
-          <h3 class="section-title">LLM 供应商</h3>
-          <el-button
-            type="primary"
-            size="small"
-            :icon="Plus"
-            @click="openPickerDialog"
-          >
-            添加模型
-          </el-button>
+            <div class="form-hint">
+              用于生成 SKILL 接入内容（Agent 凭此地址回连本平台）。
+              本机可直接用 <code>http://localhost:6565</code>，其他设备用
+              <code>http://&lt;本机IP&gt;:6565</code>，公网部署用域名或公网 IP。
+            </div>
+          </el-form-item>
+          <el-form-item label="质量门控">
+            <div class="switch-field">
+              <el-switch
+                v-model="form.qualityGateEnabled"
+                :before-change="beforeQualityGateChange"
+              />
+              <!-- 文字态双保险：开关动画视觉之外提供不依赖颜色的状态通道 -->
+              <span
+                class="switch-state"
+                :class="form.qualityGateEnabled ? 'on' : 'off'"
+              >{{ form.qualityGateEnabled ? '已开启' : '已关闭' }}</span>
+            </div>
+            <div class="form-hint">
+              默认开启；关闭后
+              <router-link
+                class="hint-link"
+                to="/quality-dashboard"
+              >质量看板</router-link>
+              及画像重算、自动派发等管理侧入口不可用（§6.151 起默认开放）。
+            </div>
+          </el-form-item>
         </div>
 
-        <div class="provider-layout">
-          <!-- 左侧列表：role="listbox" + option 支持键盘漫游（Tab 进入，↑↓ 移动，Enter/空格 选中） -->
-          <div
-            class="provider-list"
-            role="listbox"
-            aria-label="LLM 供应商列表"
-          >
+        <!-- 2 联网搜索 -->
+        <div
+          class="section-block"
+        >
+          <div class="section-header">
+            <div class="section-mark">
+              <span class="section-mark-num">2</span>
+              <h2 class="section-mark-title">
+                联网搜索
+              </h2>
+            </div>
+            <el-button
+              size="small"
+              plain
+              :loading="verifyingWebSearchKey"
+              @click="verifyWebSearchKey(true)"
+            >
+              <el-icon><CircleCheck /></el-icon>
+              <span>验证 Key</span>
+            </el-button>
+          </div>
+          <el-form-item label="博查 API Key">
+            <el-input
+              v-model="form.webSearchApiKey"
+              type="password"
+              show-password
+              placeholder="输入新 Key 并保存；清空并保存则移除 Key"
+            />
+            <div class="form-hint">
+              需求对话每轮联网检索（默认供应商博查）使用，加密存储，保存后立即生效无需重启。
+              <el-tag
+                v-if="webSearchKeyConfigured"
+                type="success"
+                size="small"
+                class="hint-tag"
+              >已配置</el-tag>
+              <el-tag
+                v-else
+                type="warning"
+                size="small"
+                class="hint-tag"
+              >未配置 · 联网搜索不可用</el-tag>
+            </div>
             <div
-              v-for="(p, idx) in providers"
-              :key="p.id"
-              class="provider-item"
-              :class="{ active: selectedId === p.id }"
-              role="option"
-              :aria-selected="selectedId === p.id"
-              tabindex="0"
-              @click="selectedId = p.id"
-              @keydown="onProviderKeydown($event, idx)"
-            >
-              <div class="provider-item-name">
-                <el-icon
-                  v-if="p.enabled === 1"
-                  class="status-dot on"
-                >
-                  <CircleCheckFilled />
-                </el-icon>
-                <el-icon
-                  v-else
-                  class="status-dot off"
-                >
-                  <CircleCloseFilled />
-                </el-icon>
-                <span>{{ p.providerName }}</span>
-                <el-tag
-                  v-if="p.builtin === 1"
-                  type="info"
-                  size="small"
-                  class="tag-builtin"
-                >
-                  内置
-                </el-tag>
-              </div>
-              <div class="provider-item-code">
-                {{ p.providerCode }}
-              </div>
+              v-if="webSearchDirty"
+              class="verify-key-tip"
+            >验证的是已保存的 Key；输入框改动请先保存</div>
+          </el-form-item>
+        </div>
+
+        <!-- 3 LLM 供应商 -->
+        <div
+          class="section-block"
+        >
+          <div class="section-header">
+            <div class="section-mark">
+              <span class="section-mark-num">3</span>
+              <h2 class="section-mark-title">
+                LLM 供应商
+              </h2>
             </div>
-            <el-empty
-              v-if="!providersLoading && providers.length === 0"
-              description="还没有配置任何 LLM Provider"
-              :image-size="64"
-            />
+            <el-button
+              type="primary"
+              size="small"
+              :icon="Plus"
+              @click="openPickerDialog"
+            >
+              添加模型
+            </el-button>
           </div>
 
-          <!-- 右侧详情 -->
-          <div
-            v-if="selectedProvider"
-            class="provider-detail"
-          >
-            <div class="detail-header">
-              <h3 class="detail-title">
-                {{ selectedProvider.providerName }}
-                <el-tag
-                  v-if="selectedProvider.builtin === 1"
-                  type="info"
-                  size="small"
-                >
-                  内置
-                </el-tag>
-              </h3>
-              <div class="detail-actions">
-                <el-button
-                  v-if="selectedProvider.builtin !== 1"
-                  size="small"
-                  type="primary"
-                  plain
-                  @click="openEditDialog(selectedProvider)"
-                >
-                  编辑
-                </el-button>
-                <el-button
-                  size="small"
-                  type="primary"
-                  plain
-                  @click="openKeyDialog(selectedProvider)"
-                >
-                  配置 Key
-                </el-button>
-                <el-button
-                  size="small"
-                  plain
-                  :loading="verifyingKeyId === selectedProvider.id"
-                  @click="verifyProviderKey(selectedProvider.id)"
-                >
-                  验证 Key
-                </el-button>
-                <el-button
-                  v-if="selectedProvider.builtin !== 1"
-                  size="small"
-                  plain
-                  @click="handleToggle(selectedProvider)"
-                >
-                  {{ selectedProvider.enabled === 1 ? '禁用' : '启用' }}
-                </el-button>
-                <el-button
-                  v-if="selectedProvider.builtin !== 1"
-                  size="small"
-                  type="danger"
-                  plain
-                  @click="handleDelete(selectedProvider)"
-                >
-                  删除
-                </el-button>
-              </div>
-            </div>
-            <el-descriptions
-              :column="1"
-              border
-              size="small"
+          <div class="provider-layout">
+            <!-- 左侧列表：role="listbox" + option 支持键盘漫游（Tab 进入，↑↓ 移动，Enter/空格 选中） -->
+            <div
+              class="provider-list"
+              role="listbox"
+              aria-label="LLM 供应商列表"
             >
-              <el-descriptions-item label="协议">
-                {{ protocolLabel(selectedProvider.protocolType) }}
-              </el-descriptions-item>
-              <el-descriptions-item label="计费类型">
-                {{ billingLabel(selectedProvider.billingType) }}
-              </el-descriptions-item>
-              <el-descriptions-item label="Provider Code">
-                <code>{{ selectedProvider.providerCode }}</code>
-              </el-descriptions-item>
-              <el-descriptions-item label="Base URL">
-                {{ selectedProvider.baseUrl || '-' }}
-              </el-descriptions-item>
-              <el-descriptions-item label="默认模型">
-                {{ selectedProviderDefaultModel || selectedProvider.defaultModel || '-' }}
-              </el-descriptions-item>
-              <el-descriptions-item label="API Key">
-                <span v-if="selectedProvider.apiKeyConfigured">{{ selectedProvider.apiKeyMasked }}</span>
-                <span
-                  v-else
-                  class="key-missing"
-                >未配置</span>
-                <el-tag
-                  v-if="selectedProvider.apiKeyFromVault"
-                  type="success"
-                  size="small"
-                  class="key-source"
-                >
-                  vault
-                </el-tag>
-              </el-descriptions-item>
-              <el-descriptions-item label="状态">
-                <el-tag
-                  v-if="selectedProvider.enabled === 1"
-                  type="success"
-                  size="small"
-                >
-                  已启用
-                </el-tag>
-                <el-tag
-                  v-else
-                  type="info"
-                  size="small"
-                >
-                  已禁用
-                </el-tag>
-              </el-descriptions-item>
-            </el-descriptions>
-            <div class="model-section">
-              <div class="model-section-header">
-                <span class="model-section-title">模型配置</span>
-                <div class="model-section-actions">
-                  <template v-if="!isBuiltinSelected">
-                    <el-button
-                      size="small"
-                      :disabled="!providerModels.length"
-                      @click="selectAllModels"
-                    >
-                      全选
-                    </el-button>
-                    <el-button
-                      size="small"
-                      :disabled="!providerModels.length"
-                      @click="checkedModels = []"
-                    >
-                      清空
-                    </el-button>
-                  </template>
-                  <el-button
-                    v-if="!isBuiltinSelected"
-                    size="small"
-                    type="primary"
-                    :loading="modelSaving"
-                    @click="handleSaveModels"
+              <div
+                v-for="(p, idx) in providers"
+                :key="p.id"
+                class="provider-item"
+                :class="{ active: selectedId === p.id }"
+                role="option"
+                :aria-selected="selectedId === p.id"
+                tabindex="0"
+                @click="selectedId = p.id"
+                @keydown="onProviderKeydown($event, idx)"
+              >
+                <div class="provider-item-name">
+                  <el-icon
+                    v-if="p.enabled === 1"
+                    class="status-dot on"
                   >
-                    保存模型配置
+                    <CircleCheckFilled />
+                  </el-icon>
+                  <el-icon
+                    v-else
+                    class="status-dot off"
+                  >
+                    <CircleCloseFilled />
+                  </el-icon>
+                  <span>{{ p.providerName }}</span>
+                  <el-tag
+                    v-if="p.builtin === 1"
+                    type="info"
+                    size="small"
+                    class="tag-builtin"
+                  >
+                    内置
+                  </el-tag>
+                </div>
+                <div class="provider-item-code">
+                  {{ p.providerCode }}
+                </div>
+              </div>
+              <el-empty
+                v-if="!providersLoading && providers.length === 0"
+                description="还没有配置任何 LLM Provider"
+                :image-size="64"
+              />
+            </div>
+
+            <!-- 右侧详情 -->
+            <div
+              v-if="selectedProvider"
+              class="provider-detail"
+            >
+              <div class="detail-header">
+                <h3 class="detail-title">
+                  <span class="detail-logo">
+                    <el-icon :size="16"><MagicStick /></el-icon>
+                  </span>
+                  {{ selectedProvider.providerName }}
+                  <el-tag
+                    v-if="selectedProvider.builtin === 1"
+                    type="info"
+                    size="small"
+                  >
+                    内置
+                  </el-tag>
+                </h3>
+                <div class="detail-actions">
+                  <el-button
+                    v-if="selectedProvider.builtin !== 1"
+                    size="small"
+                    plain
+                    @click="openEditDialog(selectedProvider)"
+                  >
+                    编辑
+                  </el-button>
+                  <el-button
+                    size="small"
+                    plain
+                    @click="openKeyDialog(selectedProvider)"
+                  >
+                    配置 Key
+                  </el-button>
+                  <el-button
+                    size="small"
+                    plain
+                    :loading="verifyingKeyId === selectedProvider.id"
+                    @click="verifyProviderKey(selectedProvider.id)"
+                  >
+                    验证 Key
+                  </el-button>
+                  <el-button
+                    v-if="selectedProvider.builtin !== 1"
+                    size="small"
+                    plain
+                    @click="handleToggle(selectedProvider)"
+                  >
+                    {{ selectedProvider.enabled === 1 ? '禁用' : '启用' }}
+                  </el-button>
+                  <el-button
+                    v-if="selectedProvider.builtin !== 1"
+                    size="small"
+                    type="danger"
+                    plain
+                    @click="handleDelete(selectedProvider)"
+                  >
+                    删除
                   </el-button>
                 </div>
               </div>
 
-              <el-checkbox-group
-                v-model="checkedModels"
-                class="model-checkbox-group"
+              <el-descriptions
+                :column="1"
+                border
+                size="small"
+                class="detail-desc"
               >
-                <el-checkbox
-                  v-for="m in providerModels"
-                  :key="m.modelName"
-                  :label="m.modelName"
-                  :disabled="isBuiltinSelected"
-                >
-                  {{ m.modelName }}
+                <el-descriptions-item label="协议">
+                  {{ protocolLabel(selectedProvider.protocolType) }}
+                </el-descriptions-item>
+                <el-descriptions-item label="计费类型">
+                  {{ billingLabel(selectedProvider.billingType) }}
+                </el-descriptions-item>
+                <el-descriptions-item label="Provider Code">
+                  <code>{{ selectedProvider.providerCode }}</code>
+                </el-descriptions-item>
+                <el-descriptions-item label="Base URL">
+                  <span class="base-url-cell">
+                    <span class="base-url-text">{{ selectedProvider.baseUrl || '-' }}</span>
+                    <el-button
+                      v-if="selectedProvider.baseUrl"
+                      size="small"
+                      plain
+                      class="base-url-copy"
+                      @click="copyText(selectedProvider.baseUrl)"
+                    >
+                      复制
+                    </el-button>
+                  </span>
+                </el-descriptions-item>
+                <el-descriptions-item label="默认模型">
+                  {{ selectedProviderDefaultModel || selectedProvider.defaultModel || '-' }}
+                </el-descriptions-item>
+                <el-descriptions-item label="API Key">
+                  <span v-if="selectedProvider.apiKeyConfigured">{{ selectedProvider.apiKeyMasked }}</span>
+                  <span
+                    v-else
+                    class="key-missing"
+                  >未配置</span>
                   <el-tag
-                    v-if="m.isDefault === 1"
-                    type="warning"
+                    v-if="selectedProvider.apiKeyFromVault"
+                    type="success"
                     size="small"
-                    class="model-tag"
+                    class="key-source"
                   >
-                    默认
+                    vault
+                  </el-tag>
+                </el-descriptions-item>
+                <el-descriptions-item label="状态">
+                  <el-tag
+                    v-if="selectedProvider.enabled === 1"
+                    type="success"
+                    size="small"
+                    effect="light"
+                  >
+                    已启用
                   </el-tag>
                   <el-tag
-                    v-if="m.enabled !== 1"
+                    v-else
                     type="info"
                     size="small"
-                    class="model-tag"
+                    effect="light"
                   >
                     已禁用
                   </el-tag>
-                </el-checkbox>
-              </el-checkbox-group>
-              <el-empty
-                v-if="!providerModels.length"
-                description="该 Provider 还没有配置模型"
-                :image-size="48"
-              />
+                </el-descriptions-item>
+              </el-descriptions>
 
-              <div
-                v-if="!isBuiltinSelected"
-                class="custom-model-row"
-              >
-                <el-input
-                  v-model="customModelInput"
-                  placeholder="输入自定义模型名称，回车添加"
-                  class="custom-model-input"
-                  @keyup.enter="addCustomModel"
+              <div class="model-section">
+                <div class="model-section-header">
+                  <span class="model-section-title">
+                    <el-icon class="model-section-icon"><Cpu /></el-icon>
+                    模型配置
+                  </span>
+                  <div class="model-section-actions">
+                    <template v-if="!isBuiltinSelected">
+                      <el-button
+                        size="small"
+                        :disabled="!providerModels.length"
+                        @click="selectAllModels"
+                      >
+                        全选
+                      </el-button>
+                      <el-button
+                        size="small"
+                        :disabled="!providerModels.length"
+                        @click="checkedModels = []"
+                      >
+                        清空
+                      </el-button>
+                    </template>
+                    <el-button
+                      v-if="!isBuiltinSelected"
+                      size="small"
+                      type="primary"
+                      :loading="modelSaving"
+                      @click="handleSaveModels"
+                    >
+                      保存模型配置
+                    </el-button>
+                  </div>
+                </div>
+
+                <el-checkbox-group
+                  v-model="checkedModels"
+                  class="model-checkbox-group"
+                >
+                  <el-checkbox
+                    v-for="m in providerModels"
+                    :key="m.modelName"
+                    :label="m.modelName"
+                    :disabled="isBuiltinSelected"
+                    class="model-checkbox"
+                  >
+                    <span class="model-row">
+                      <span class="model-row-name">{{ m.modelName }}</span>
+                      <el-tag
+                        v-if="m.isDefault === 1"
+                        type="warning"
+                        size="small"
+                        class="model-row-tag"
+                      >
+                        默认
+                      </el-tag>
+                      <el-tag
+                        v-if="m.enabled !== 1"
+                        type="info"
+                        size="small"
+                        class="model-row-tag"
+                      >
+                        已禁用
+                      </el-tag>
+                    </span>
+                  </el-checkbox>
+                </el-checkbox-group>
+                <el-empty
+                  v-if="!providerModels.length"
+                  description="该 Provider 还没有配置模型"
+                  :image-size="48"
                 />
-                <el-button
-                  size="small"
-                  @click="addCustomModel"
-                >
-                  添加
-                </el-button>
-              </div>
 
-              <div class="default-model-row">
-                <span class="default-model-label">默认模型</span>
-                <el-select
+                <div
                   v-if="!isBuiltinSelected"
-                  v-model="selectedDefaultModel"
-                  placeholder="从已选模型中选择"
-                  style="width: 240px"
+                  class="custom-model-row"
                 >
-                  <el-option
-                    v-for="m in checkedModels"
-                    :key="m"
-                    :label="m"
-                    :value="m"
+                  <el-input
+                    v-model="customModelInput"
+                    placeholder="输入自定义模型名称，回车添加"
+                    class="custom-model-input"
+                    @keyup.enter="addCustomModel"
                   />
-                </el-select>
-                <el-tag
-                  v-else
+                  <el-button
+                    size="small"
+                    @click="addCustomModel"
+                  >
+                    添加
+                  </el-button>
+                </div>
+
+                <div class="default-model-row">
+                  <span class="default-model-label">默认模型</span>
+                  <el-select
+                    v-if="!isBuiltinSelected"
+                    v-model="selectedDefaultModel"
+                    placeholder="从已选模型中选择"
+                    style="width: 240px"
+                  >
+                    <el-option
+                      v-for="m in checkedModels"
+                      :key="m"
+                      :label="m"
+                      :value="m"
+                    />
+                  </el-select>
+                  <el-tag
+                    v-else
+                    type="warning"
+                    effect="light"
+                  >
+                    {{ selectedProviderDefaultModel || '-' }}
+                  </el-tag>
+                </div>
+
+                <div class="form-hint">
+                  每个 Provider 必须至少配置一个启用模型并指定默认模型；内置供应商的预设模型固定不可修改。
+                </div>
+              </div>
+
+              <div class="detail-hint">
+                <el-alert
                   type="warning"
+                  :closable="false"
+                  show-icon
                 >
-                  {{ selectedProviderDefaultModel || '-' }}
-                </el-tag>
-              </div>
-
-              <div class="form-hint">
-                每个 Provider 必须至少配置一个启用模型并指定默认模型；内置供应商的预设模型固定不可修改。
+                  <template #title>
+                    启用后才能在 Agent 注册时被选为默认 provider；禁用仅是管理侧的"软隐藏"，不会删除任何 Agent。
+                  </template>
+                </el-alert>
               </div>
             </div>
-            <div class="detail-hint">
-              <el-alert
-                type="info"
-                :closable="false"
-                show-icon
-              >
-                <template #title>
-                  启用后才能在 Agent 注册时被选为默认 provider；禁用仅是管理侧的"软隐藏"，不会删除任何 Agent。
-                </template>
-              </el-alert>
-            </div>
-          </div>
-          <div
-            v-else
-            class="provider-detail placeholder"
-          >
-            <el-empty
-              description="左侧选择一个 Provider 查看详情"
-              :image-size="64"
-            />
-          </div>
-        </div>
-
-        <div class="section-heading">
-          <h3 class="section-title">通知配置</h3>
-        </div>
-        <el-form-item label="通知方式">
-          <el-checkbox-group v-model="form.notifyChannels">
-            <el-checkbox
-              label="web"
-              disabled
+            <div
+              v-else
+              class="provider-detail placeholder"
             >
-              站内通知
-            </el-checkbox>
-          </el-checkbox-group>
-        </el-form-item>
-      <!-- 保存区：融入表单内部（§6.152），作为表单收尾行；"全部已保存"不常驻——
-           保存成功由 ElMessage toast 提示并自动消失（handleSave 已有），仅未保存时显示防遗漏提醒 -->
-      <div class="save-bar">
-        <span
-          v-if="isDirty"
-          class="save-bar-status dirty"
+              <el-empty
+                description="左侧选择一个 Provider 查看详情"
+                :image-size="64"
+              />
+            </div>
+          </div>
+        </div>
+
+        <!-- 4 通知配置 -->
+        <div
+          class="section-block"
         >
-          <el-icon class="save-bar-icon"><WarningFilled /></el-icon>
-          有未保存更改
-        </span>
+          <div class="section-header">
+            <div class="section-mark">
+              <span class="section-mark-num">4</span>
+              <h2 class="section-mark-title">
+                通知配置
+              </h2>
+            </div>
+          </div>
+          <el-form-item label="通知方式">
+            <div class="switch-field">
+              <el-checkbox
+                v-model="form.notifyChannels"
+                label="web"
+                disabled
+                class="notify-checkbox"
+              >
+                <span class="notify-label">
+                  <el-icon><BellFilled /></el-icon>
+                  站内通知
+                </span>
+              </el-checkbox>
+            </div>
+            <div class="form-hint">
+              系统消息推送。当前仅支持站内通知，其他通道（邮件、IM）后续接入。
+            </div>
+          </el-form-item>
+        </div>
+      </div>
+    </el-form>
+
+    <!-- 主卡底部保存区：嵌入 settings-sheet，不悬浮 -->
+    <footer class="sheet-footer">
+      <div class="sheet-footer-actions">
+        <el-button
+          :disabled="!isDirty"
+          @click="handleReset"
+        >
+          取消
+        </el-button>
         <el-button
           type="primary"
           :loading="saving"
@@ -426,8 +544,8 @@
           保存设置
         </el-button>
       </div>
-      </el-form>
-    </el-card>
+    </footer>
+  </el-card>
 
     <!-- 配置 API Key 对话框 -->
     <el-dialog
@@ -555,7 +673,18 @@
 <script setup lang="ts">
 import { reactive, ref, onMounted, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox, FormInstance, FormRules } from 'element-plus'
-import { Plus, CircleCheckFilled, CircleCloseFilled, WarningFilled } from '@element-plus/icons-vue'
+import {
+  Plus,
+  CircleCheckFilled,
+  CircleCloseFilled,
+  WarningFilled,
+  Setting,
+  RefreshLeft,
+  CircleCheck,
+  MagicStick,
+  Cpu,
+  BellFilled
+} from '@element-plus/icons-vue'
 import {
   settingsApi,
   LlmProviderResponse,
@@ -574,7 +703,7 @@ const form = reactive({
   externalUrl: '',
   qualityGateEnabled: false,
   webSearchApiKey: '',
-  notifyChannels: ['web']
+  notifyChannels: ['web'] as string[]
 })
 
 // 博查 Key 加载时的脱敏回显值（'********'）；未改动则保存时跳过提交，避免把掩码当 Key 写入。
@@ -723,8 +852,10 @@ async function verifyWebSearchKey(manual = false) {
   }
 }
 
-// 质量门控开关确认：§6.151 起默认开启，开启方向是恢复默认（仍二次确认防误点）；
-// 关闭为收敛动作直接放行。before-change 返回 false 时开关保持原值，不污染表单脏状态。
+/**
+ * 质量门控开关确认：§6.151 起默认开启，开启方向是恢复默认（仍二次确认防误点）；
+ * 关闭为收敛动作直接放行。before-change 返回 false 时开关保持原值，不污染表单脏状态。
+ */
 function beforeQualityGateChange(): Promise<boolean> {
   if (!form.qualityGateEnabled) {
     return ElMessageBox.confirm(
@@ -736,7 +867,19 @@ function beforeQualityGateChange(): Promise<boolean> {
   return Promise.resolve(true)
 }
 
-// 供应商列表键盘漫游：Enter/空格选中，↑↓ 在同级 option 间移动焦点。
+/**
+ * 卸载未保存改动：把基础配置/博查 Key 三个字段恢复到加载快照，
+ * LLM Provider / 模型变更属独立保存路径，不参与此处的"未保存"语义。
+ */
+function handleReset() {
+  if (!isDirty.value) return
+  form.externalUrl = loadedExternalUrl.value
+  form.qualityGateEnabled = loadedQualityGate.value
+  form.webSearchApiKey = webSearchKeyLoaded.value
+  ElMessage.success('已重置为上次保存的版本')
+}
+
+/** 供应商列表键盘漫游：Enter/空格选中，↑↓ 在同级 option 间移动焦点。 */
 function onProviderKeydown(e: KeyboardEvent, idx: number) {
   if (e.key === 'Enter' || e.key === ' ') {
     e.preventDefault()
@@ -750,6 +893,27 @@ function onProviderKeydown(e: KeyboardEvent, idx: number) {
     : Math.max(idx - 1, 0)
   const list = (e.currentTarget as HTMLElement).parentElement
   list?.querySelectorAll<HTMLElement>('.provider-item')[next]?.focus()
+}
+
+/** 通用复制到剪贴板，回退到旧 execCommand 兼容 HTTPS 外的环境。 */
+async function copyText(text: string) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+    } else {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    }
+    ElMessage.success('已复制到剪贴板')
+  } catch {
+    ElMessage.error('复制失败，请手动复制')
+  }
 }
 
 async function load() {
@@ -1015,69 +1179,157 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.page { max-width: 1200px; }
-.settings-form {
-  max-width: 920px;
+/* ============================================================
+   页面外壳：Hero + Stack + Save Footer
+   ============================================================ */
+.settings-page {
+  max-width: 1200px;
+  margin: 0 auto;
 }
 
-/* 分区标题：小号加粗 + 底线，替代裸 el-divider（文字不再紧贴分隔线） */
-.section-heading {
+/* 顶部 Hero ===================================================== */
+.page-hero {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 0 20px;
+}
+.page-hero-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--ha-radius-md);
+  background: var(--ha-primary-muted);
+  color: var(--ha-primary);
+  flex-shrink: 0;
+}
+.page-hero-subtitle {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ha-ink-secondary);
+  line-height: 1.5;
+}
+
+/* 主包裹卡 settings-sheet ============================================= */
+.settings-sheet {
+  border: 1px solid var(--ha-border-light);
+  border-radius: var(--ha-radius-lg);
+  background: var(--ha-surface);
+  box-shadow: var(--ha-shadow-sm);
+  overflow: hidden;
+}
+.settings-sheet :deep(.el-card__body) {
+  padding: 0;
+}
+/* 主卡标题区 */
+.sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 24px 18px;
+  border-bottom: 1px solid var(--ha-border-light);
+}
+.sheet-header-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.sheet-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--ha-ink);
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+.sheet-subtitle {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ha-ink-secondary);
+  line-height: 1.5;
+}
+
+/* 表单容器：去掉 960px 限制，跟随主卡宽度 */
+.settings-form {
+  width: 100%;
+}
+.settings-form :deep(.el-form-item) {
+  margin-bottom: 18px;
+}
+.settings-form :deep(.el-form-item:last-child) {
+  margin-bottom: 0;
+}
+.settings-stack {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 章节区块：主卡内的分隔区块，仅用编号 chip + 细底边区分，不做紫线悬停提示 */
+.section-block {
+  padding: 22px 24px;
+  border-bottom: 1px solid var(--ha-border-light);
+}
+.section-block:last-child {
+  border-bottom: none;
+}
+
+/* 章节标题行：编号 + 标题 + 右侧操作区 */
+.section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin: 28px 0 16px;
-  padding-bottom: 8px;
+  padding-bottom: 14px;
+  margin-bottom: 18px;
   border-bottom: 1px solid var(--ha-border-light);
 }
-.settings-form > .section-heading:first-child {
-  margin-top: 4px;
-}
-.section-title {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--ha-ink);
-}
-
-/* 保存区：融入表单内部（§6.152）——表单收尾行，去独立卡片外观，仅用细分隔线与表单内容区分；
-   按钮恒右对齐（与其他按钮一致）：clean 态无状态文字时 flex-end 生效，
-   dirty 态状态文字靠 margin-right: auto 撑到左侧、按钮仍贴右 */
-.save-bar {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 12px;
-  margin-top: 20px;
-  padding-top: 16px;
-  border-top: 1px solid var(--ha-border-light);
-}
-.save-bar-status {
+.section-mark {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  margin-right: auto;
-  font-size: 13px;
-  color: var(--ha-ink-secondary);
+  gap: 10px;
+  min-width: 0;
 }
-.save-bar-status.dirty {
-  color: var(--ha-warning-text);
+.section-mark-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--ha-radius-sm);
+  background: var(--ha-primary-muted);
+  color: var(--ha-primary);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
 }
-.save-bar-icon {
-  font-size: 14px;
+.section-mark-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ha-ink);
+  letter-spacing: -0.01em;
+  text-wrap: balance;
 }
 
+/* 表单提示文案 ==================================================== */
 .form-hint {
   font-size: 13px;
   color: var(--ha-ink-secondary);
-  line-height: 1.5;
-  margin-top: 4px;
+  line-height: 1.55;
+  margin-top: 6px;
 }
 .form-hint code {
+  font-family: var(--ha-font-mono);
   background: var(--ha-surface-hover);
   color: var(--ha-ink-secondary);
-  padding: 1px 4px;
+  padding: 1px 6px;
   border-radius: var(--ha-radius-sm);
+  font-size: 12px;
 }
 .form-hint .hint-link {
   color: var(--ha-primary);
@@ -1086,21 +1338,17 @@ onMounted(() => {
 .form-hint .hint-link:hover {
   text-decoration: underline;
 }
-
-/* 博查 Key 未保存提示（仅输入框有未保存改动时显示，提醒验证对象是已落库的 Key）。
-   「验证 Key」按钮已上提至「联网搜索」分区标题右侧，与 LLM 供应商验证按钮布局一致。 */
-.verify-key-tip {
-  font-size: 12px;
-  color: var(--ha-ink-secondary);
-  opacity: 0.75;
-  margin-top: 6px;
+.form-hint .hint-tag {
+  margin-left: 6px;
+  vertical-align: middle;
 }
 
-/* 开关文字态：不依赖动画/颜色的第二状态通道（亮暗双主题均用 --ha-* 语义色） */
+/* 开关文字态（亮/暗双主题同色板） ================================ */
 .switch-field {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 .switch-state {
   font-size: 13px;
@@ -1111,40 +1359,63 @@ onMounted(() => {
   color: var(--ha-success-text);
 }
 
+/* 通知复选框 ===================================================== */
+.notify-checkbox {
+  pointer-events: none;
+}
+.notify-checkbox :deep(.el-checkbox__label) {
+  color: var(--ha-ink);
+}
+.notify-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 博查 Key 未保存提示 ============================================= */
+.verify-key-tip {
+  font-size: 12px;
+  color: var(--ha-ink-secondary);
+  opacity: 0.75;
+  margin-top: 6px;
+}
+
+/* LLM 供应商：左列表 + 右详情 ==================================== */
 .provider-layout {
   display: grid;
   grid-template-columns: 280px 1fr;
   gap: 16px;
-  margin-bottom: 16px;
   min-height: 280px;
 }
 .provider-list {
   border: 1px solid var(--ha-border-light);
   border-radius: var(--ha-radius-md);
   padding: 8px;
-  background: var(--ha-surface);
+  background: var(--ha-surface-hover);
   max-height: 420px;
   overflow-y: auto;
 }
 .provider-item {
-  padding: 8px 10px;
-  border-radius: var(--ha-radius-sm);
+  padding: 10px 12px;
+  border-radius: var(--ha-radius-md);
   cursor: pointer;
   margin-bottom: 4px;
-  transition: background 0.15s;
+  transition: background var(--ha-duration-fast) var(--ha-ease-out),
+              border-color var(--ha-duration-fast) var(--ha-ease-out);
   border: 1px solid transparent;
 }
 .provider-item:hover {
-  background: var(--ha-primary-light);
+  background: var(--ha-surface);
+  border-color: var(--ha-border-light);
 }
-/* 键盘漫游焦点环：与按钮 :focus-visible 先例对齐，低视力用户可定位当前项 */
+/* 键盘漫游焦点环：与按钮 :focus-visible 先例对齐 */
 .provider-item:focus-visible {
   outline: 2px solid var(--ha-primary);
   outline-offset: 2px;
 }
 .provider-item.active {
   background: var(--ha-primary-light);
-  border-color: var(--ha-primary);
+  border-color: var(--ha-primary-muted);
 }
 .provider-item-name {
   display: flex;
@@ -1157,7 +1428,8 @@ onMounted(() => {
   font-size: 12px;
   color: var(--ha-ink-secondary);
   margin-top: 2px;
-  padding-left: 18px;
+  padding-left: 22px;
+  font-family: var(--ha-font-mono);
 }
 .status-dot {
   font-size: 14px;
@@ -1171,21 +1443,27 @@ onMounted(() => {
 .provider-detail {
   border: 1px solid var(--ha-border-light);
   border-radius: var(--ha-radius-md);
-  padding: 16px;
+  padding: 18px 20px;
   background: var(--ha-surface-elevated);
+  box-shadow: var(--ha-shadow-sm);
 }
 .provider-detail.placeholder {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--ha-surface);
+  background: var(--ha-surface-hover);
+  box-shadow: none;
 }
+
+/* 详情头部：Provider logo + 标题 + 操作区 ========================= */
 .detail-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
-  padding-bottom: 12px;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding-bottom: 14px;
   border-bottom: 1px solid var(--ha-border-light);
 }
 .detail-title {
@@ -1195,58 +1473,136 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+  color: var(--ha-ink);
+  text-wrap: balance;
+}
+.detail-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--ha-radius-sm);
+  background: var(--ha-primary-muted);
+  color: var(--ha-primary);
+  flex-shrink: 0;
 }
 .detail-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
+
+.detail-desc :deep(.el-descriptions__label) {
+  width: 100px;
+  color: var(--ha-ink-secondary);
+  font-weight: 500;
+}
+.detail-desc :deep(.el-descriptions__content) {
+  color: var(--ha-ink);
+}
+.detail-desc :deep(code) {
+  font-family: var(--ha-font-mono);
+  font-size: 12px;
+  background: var(--ha-surface-hover);
+  padding: 1px 6px;
+  border-radius: var(--ha-radius-sm);
+  color: var(--ha-ink-secondary);
+}
+
+.base-url-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+.base-url-text {
+  font-family: var(--ha-font-mono);
+  font-size: 12px;
+  word-break: break-all;
+  color: var(--ha-ink);
+}
+.base-url-copy {
+  flex-shrink: 0;
+}
+
 .detail-hint {
   margin-top: 12px;
 }
 
+/* 模型配置区 ====================================================== */
 .model-section {
-  margin-top: 16px;
+  margin-top: 18px;
   border: 1px solid var(--ha-border-light);
   border-radius: var(--ha-radius-md);
-  padding: 12px 16px;
-  background: var(--ha-surface);
+  padding: 14px 16px;
+  background: var(--ha-surface-hover);
 }
 .model-section-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 .model-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-weight: 600;
   color: var(--ha-ink);
+}
+.model-section-icon {
+  color: var(--ha-primary);
 }
 .model-section-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 .model-checkbox-group {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 6px;
+  gap: 8px;
 }
-.model-tag {
-  margin-left: 6px;
+.model-checkbox {
+  width: 100%;
+  margin-right: 0 !important;
+}
+.model-checkbox :deep(.el-checkbox__label) {
+  width: 100%;
+}
+.model-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.model-row-name {
+  font-family: var(--ha-font-mono);
+  font-size: 13px;
+}
+.model-row-tag {
+  flex-shrink: 0;
 }
 .custom-model-row {
   display: flex;
   gap: 8px;
   margin-top: 12px;
+  flex-wrap: wrap;
 }
 .custom-model-input {
-  width: 320px;
+  flex: 1;
+  min-width: 200px;
 }
 .default-model-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 12px;
+  gap: 10px;
+  margin-top: 14px;
+  flex-wrap: wrap;
 }
 .default-model-label {
   color: var(--ha-ink-secondary);
@@ -1254,22 +1610,53 @@ onMounted(() => {
   white-space: nowrap;
 }
 .key-missing {
-  color: var(--ha-warning);
+  color: var(--ha-warning-text);
 }
 .key-source {
   margin-left: 6px;
 }
 
+/* 主卡底部保存区 sheet-footer ========================================== */
+.sheet-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 24px;
+  border-top: 1px solid var(--ha-border-light);
+  background: var(--ha-surface-hover);
+}
+.sheet-footer-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* 响应式 =========================================================== */
 @media (max-width: 768px) {
+  .settings-form :deep(.el-form-item__label) {
+    width: auto !important;
+    padding-bottom: 4px;
+  }
   .provider-layout {
     grid-template-columns: 1fr;
   }
-  .settings-form {
-    max-width: 100%;
+  .detail-actions {
+    width: 100%;
   }
-  .settings-form :deep(.el-form-item__label) {
-    width: auto !important;
-    padding-bottom: 0;
+  .sheet-header {
+    flex-wrap: wrap;
+  }
+  .section-block {
+    padding: 18px 16px;
+  }
+  .sheet-footer {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .sheet-footer-actions {
+    width: 100%;
+    justify-content: flex-end;
   }
 }
 </style>

@@ -16,6 +16,8 @@
   --ha-surface: #FFFFFF;
   --ha-surface-hover: #F1F3F9;
   --ha-surface-elevated: #FFFFFF;
+  /* 主内容区底色：浅色主题用雾灰白，衬托白色卡片层次 */
+  --ha-content-bg: #EAE7E7;
 
   --ha-border: #E2E6F0;
   --ha-border-light: #EBEEF5;
@@ -107,6 +109,7 @@ html.dark {
   --ha-surface: #0F1524;
   --ha-surface-hover: #1A2138;
   --ha-surface-elevated: #121828;
+  --ha-content-bg: #0F1524;
 
   --ha-border: #242D47;
   --ha-border-light: #1C2438;

@@ -460,7 +460,7 @@ function handlePasswordChanged() {
 }
 
 .app-content {
-  background: var(--ha-surface);
+  background: var(--ha-content-bg);
   padding: clamp(16px, 2vw, 32px);
   overflow-y: auto;
   height: 100vh;

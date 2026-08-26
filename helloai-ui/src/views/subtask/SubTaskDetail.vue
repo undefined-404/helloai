@@ -747,8 +747,8 @@ const manualCandidates = computed(() => {
 })
 
 function accessTypeLabel(t: string | undefined): string {
-  if (t === 'CLI_CLIENT') return '外部 CLI'
-  if (t === 'WEB_BROWSER') return '浏览器'
+  if (t === 'CLI_CLIENT') return '外部 CLI（暂未上线）'
+  if (t === 'WEB_BROWSER') return '外部 GUI'
   if (t === 'API_KEY_LLM') return '内部 LLM'
   return t || '未知'
 }

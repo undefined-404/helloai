@@ -149,29 +149,21 @@
             @change="onAccessTypeChange"
           >
             <el-option
-              label="外部 AI Agent（CLI 接入）"
-              value="CLI_CLIENT"
+              label="外部 AI Agent（GUI 接入）"
+              value="WEB_BROWSER"
             />
             <el-option
               label="内部 LLM（API Key）"
               value="API_KEY_LLM"
             />
-            <!-- 网页端 Planner 仅 PLANNER 角色可选，当前功能未开放 -->
+            <!-- CLI 接入暂未上线：未做过端到端联调，仅保留枚举通道，不开放新注册入口 -->
             <el-option
-              v-if="form.role === 'PLANNER'"
-              label="网页端 Planner"
-              value="WEB_BROWSER"
+              label="外部 AI Agent"
+              value="CLI_CLIENT"
+              disabled
             />
           </el-select>
         </el-form-item>
-        <el-alert
-          v-if="form.accessType === 'WEB_BROWSER'"
-          title="网页端 Planner 功能暂不可用，敬请期待"
-          type="warning"
-          :closable="false"
-          show-icon
-          style="margin-bottom:16px"
-        />
         <!-- 内部 LLM 注册：V49 模型选择（可用 Provider + 启用模型分组下拉）；留空走系统默认 provider+default-model -->
         <el-form-item
           v-if="form.accessType === 'API_KEY_LLM'"
@@ -265,7 +257,6 @@
         <el-button
           type="primary"
           :loading="registering"
-          :disabled="form.accessType === 'WEB_BROWSER'"
           @click="handleRegister"
         >
           注册
@@ -378,7 +369,8 @@ const form = reactive({
   description: '',
   // §6.74: 专业化已移除；skills 注册即填写（A2 显式技能优先）
   // V49: 内部 LLM（API_KEY_LLM）注册可显式选择模型，留空走系统默认 provider+default-model
-  accessType: 'CLI_CLIENT',
+  // 2026-08-26: 默认改为 WEB_BROWSER（GUI 接入）——CLI 接入暂未上线且 UI 已置灰
+  accessType: 'WEB_BROWSER',
   modelType: '',
   skills: [] as string[]
 })
@@ -410,15 +402,12 @@ watch(registerDialog, (open) => {
 })
 
 function onRoleChange() {
-  // 网页端 Planner 仅 PLANNER 角色可选，切走角色后回退默认接入类型
-  if (form.role !== 'PLANNER' && form.accessType === 'WEB_BROWSER') {
-    form.accessType = 'CLI_CLIENT'
-  }
+  // 接入类型选项已对全角色开放，无需在切角色时强制回退默认项（CLI 仅置灰，不再回退）
 }
 
 function onAccessTypeChange(v: string) {
-  if (v === 'WEB_BROWSER') {
-    ElMessage.warning('网页端 Planner 功能暂不可用')
+  if (v === 'CLI_CLIENT') {
+    ElMessage.warning('外部 AI Agent（CLI 接入）暂未上线，请选择 GUI 接入或内部 LLM')
   }
 }
 
@@ -477,8 +466,8 @@ const skillSelectOptions = computed(() => {
 })
 
 async function handleRegister() {
-  if (form.accessType === 'WEB_BROWSER') {
-    ElMessage.warning('网页端 Planner 功能暂不可用')
+  if (form.accessType === 'CLI_CLIENT') {
+    ElMessage.warning('外部 AI Agent（CLI 接入）暂未上线，请选择 GUI 接入或内部 LLM')
     return
   }
   const valid = await formRef.value?.validate().catch(() => false)
@@ -501,14 +490,14 @@ async function handleRegister() {
       // 内部 LLM Agent 无需 CLI 接入内容，注册即完成（平台密钥已自动绑定）
       ElMessage.success('内部 LLM Agent 注册成功，平台密钥已自动绑定')
     } else {
-      // 外部 Agent：注册成功后直接打开 onboarding 弹窗
+      // 外部 Agent（GUI 接入）：注册成功后直接打开 onboarding 弹窗
       onboardingAgentId.value = res.id
       onboardingDialog.value = true
     }
     // 重置表单
     form.name = ''
     form.description = ''
-    form.accessType = 'CLI_CLIENT'
+    form.accessType = 'WEB_BROWSER'
     form.modelType = ''
     form.skills = []
     load()

@@ -14,6 +14,33 @@
 
 ## 2. 近期关键轮次
 
+### 2026-08-26 注册接入类型 UX 收口：CLI 置灰，GUI 接入作为主推选项
+
+#### 1. 背景
+
+- 用户反馈：团队目前实际跑通的外部 Agent 实测走 GUI 接入（WEB_BROWSER 后端通道），CLI 接入（CLI_CLIENT）未做过端到端联调。
+- 现状：注册弹窗「接入类型」默认 CLI_CLIENT，「网页端 Planner」仅 PLANNER 可见且选中即提示「暂不可用」+ 注册按钮 disabled——CLI 通道未联调却被作为主入口、GUI 通道被错锁为「不可用」，与实际使用相反。
+
+#### 2. 实际落地
+
+- `helloai-ui/src/views/agent/AgentList.vue`
+  - 「接入类型」下拉重构：WEB_BROWSER 置于首位并改 label 为「外部 AI Agent（GUI 接入）」，CLI_CLIENT 加 `disabled` 置灰（label 保留「外部 AI Agent（CLI 接入）」），并取消 WEB_BROWSER 的 `v-if="form.role === 'PLANNER'"` 限定（对全角色开放）。
+  - 删除 WEB_BROWSER 选中后的 `el-alert` 警告「网页端 Planner 功能暂不可用，敬请期待」。
+  - 注册按钮移除 `:disabled="form.accessType === 'WEB_BROWSER'"`。
+  - 默认 `form.accessType` 由 `'CLI_CLIENT'` 改为 `'WEB_BROWSER'`（CLI 已置灰，默认不可用不合理）。
+  - `onRoleChange` 清空原「切走 PLANNER 自动回退 CLI_CLIENT」逻辑（接入类型对全角色开放）。
+  - `onAccessTypeChange` 与 `handleRegister` 拦截改为 `CLI_CLIENT` 暂未上线提示（`ElMessage.warning` + 阻断提交），作为 UI 置灰之外的防御性兜底，防止绕过 UI 直接调用 `agentApi.register`。
+  - 注册成功 `else` 分支注释由「外部 Agent」改为「外部 Agent（GUI 接入）」；表单重置同步把 accessType 回写为 `WEB_BROWSER`。
+- `helloai-ui/src/views/subtask/SubTaskDetail.vue`：`accessTypeLabel` 文案同步——`CLI_CLIENT` → 「外部 CLI（暂未上线）」、`WEB_BROWSER` → 「外部 GUI」，与注册弹窗/产品口径统一。
+- 验证：`helloai-ui` `npm run type-check`（vue-tsc --noEmit）ExitCode 0。
+
+#### 3. 遗留 / 不做的事
+
+- 不改后端：`AgentAccessType` 枚举仍为 CLI_CLIENT / API_KEY_LLM / WEB_BROWSER 三值，CLI 通道仅 UI 屏蔽，DB 中已注册 CLI Agent 保留。
+- 不动后端调度/CLI 执行链路，N8「WEB_BROWSER 执行链」差距状态不变。
+- 不清理 `AgentCard.vue` / `AgentDetail.vue` / `AgentEditDialog.vue` 中「内部 LLM Agent 无 CLI 接入流程」注释——该判断逻辑仍准确（内部 LLM 确实无接入内容）。
+- `settings.ts` 中 `TOKEN_PLAN / CODING_PLAN 预留暂不可用` 与本次 Agent 接入类型无关，未动。
+
 ### 2026-08 监控体系阶段1：Prometheus + Grafana 指标监控（借鉴 maticube）
 
 #### 1. 范围
