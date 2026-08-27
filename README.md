@@ -350,6 +350,141 @@ npm run dev
 
 ---
 
+## 🐳 Docker 部署
+
+如果你不想配置开发环境，只想在服务器上跑起来，`docker-compose.server.yml` 会拉起 PostgreSQL / Redis / RabbitMQ / MinIO + 后端 jar + Nginx 一整套，对外只暴露 80 端口。
+
+### 前置条件
+- 服务器安装 [Docker](https://docs.docker.com/engine/install/) + Docker Compose
+- 构建好的后端 jar（`helloai-start-1.0.0-SNAPSHOT.jar`）与前端 `dist/`（从源码构建，或从 Release 拉取预构建产物）
+- 一个 AES 加密密钥（生产环境必须替换默认占位符，见步骤 3 写入 .env）
+
+### 部署步骤
+
+**1. 构建产物（源码路径）**
+
+```bash
+mvn clean package -DskipTests          # 后端：产出 helloai-start/target/helloai-start-1.0.0-SNAPSHOT.jar
+cd helloai-ui && npm install && npm run build && cd ..   # 前端：产出 helloai-ui/dist/
+```
+
+**2. 准备部署目录**
+
+将以下文件放在同一目录（按 `docker-compose.server.yml` 中的 volume 挂载约定）：
+
+| 文件 / 目录 | 来源 |
+|---|---|
+| `docker-compose.yml` | 将仓库的 `docker-compose.server.yml` 重命名（或 `cp docker-compose.server.yml docker-compose.yml`） |
+| `helloai-start-1.0.0-SNAPSHOT.jar` | 步骤 1 构建产物 |
+| `dist/` | 步骤 1 构建产物（含 `index.html` 与资源） |
+| `nginx.conf` | 将仓库的 `nginx.server.conf` 复制并改名为 `nginx.conf`（如需 HTTPS 参考文件中的 443 server 块模板） |
+| `.env` | 部署密钥文件（步骤 3 会生成） |
+
+**3. 写入 .env（必做）**
+
+```bash
+# 生成一个 32 字节的 Base64 AES-256 密钥
+openssl rand -base64 32
+```
+
+将输出写入 `.env`：
+
+```env
+HELLOAI_CREDENTIAL_AES_KEY_BASE64=你的密钥
+```
+
+> **务必妥善保管这个密钥**：`credential_vault` 表里所有 API Key 都用这个 AES-GCM 密钥加密，**密钥一旦变更，所有已配置的 Provider API Key 全部解密失败、需要重配**。升级部署时必须沿用同一份密钥。
+
+`application.yml` 中默认值是开源仓库占位符（`MEsmol1MWDTT69/...`），生产必须用环境变量覆盖。
+
+**4. 启动**
+
+```bash
+docker compose up -d
+```
+
+启动顺序由 healthcheck 保证：PostgreSQL → Redis → RabbitMQ → app → web。Flyway 会自动执行数据库迁移建表。
+
+查看日志：
+```bash
+docker compose logs -f app
+```
+
+**5. 访问**
+
+| 入口 | 地址 | 说明 |
+|---|---|---|
+| Web SPA | `http://<服务器IP>/` | 唯一对外入口，Nginx 反向代理 `/api`、`/mcp` 到 app |
+| 后端 API | `http://127.0.0.1:6565` | 仅本机可访问，用于远程调试 |
+| Swagger UI | `http://127.0.0.1:6565/swagger-ui.html` | |
+| RabbitMQ 控制台 | `http://<服务器IP>:25673` | guest / guest |
+| MinIO 控制台 | `http://127.0.0.1:29001` | minioadmin / minioadmin123，仅本机 |
+
+### 升级
+
+替换 `helloai-start-1.0.0-SNAPSHOT.jar` 与 `dist/` 后：
+
+```bash
+docker compose restart app web
+```
+
+`.env`（含 AES 密钥）保持不变，系统设置页配置过的 API Key 不会丢失。
+
+---
+
+## 🗝️ 配置 API Key
+
+LLM API Key 支持两种配置方式，**推荐方式一**（系统设置页，运行时生效无需重启）。
+
+### 方式一：系统设置页（推荐）
+
+应用启动完成后，浏览器打开 Web 入口，用管理员账号登录（默认 `admin / admin123`，首次登录后请修改密码），进入顶部菜单 **系统设置** → **模型配置（LLM Provider）** 页面。
+
+<!-- TODO(系统设置页截图)：待网络/浏览器代理可用后补一张「系统设置 → 模型配置」页面截图（占位文件 doc/images/settings-providers.png 暂未生成） -->
+
+支持动态配置 / 轮换以下四家 Provider 的 API Key：
+
+| Provider | 协议 | 默认 Base URL | 默认模型 | 获取地址 |
+|---|---|---|---|---|
+| **DeepSeek** | 官方 SDK（OpenAI 兼容） | `https://api.deepseek.com` | `deepseek-chat` | [platform.deepseek.com](https://platform.deepseek.com/) |
+| **Moonshot (Kimi)** | OpenAI 兼容 | `https://api.moonshot.cn` | `moonshot-v1-8k` | [platform.moonshot.cn](https://platform.moonshot.cn/) |
+| **MiniMax** | Anthropic 兼容 | `https://api.minimaxi.com/anthropic` | `MiniMax-M2.5` | [MiniMax 开放平台](https://api.minimaxi.com/) |
+| **DashScope (通义千问)** | OpenAI 兼容 | `https://dashscope.aliyuncs.com/compatible-mode` | `qwen-plus` | [dashscope.console.aliyun.com](https://dashscope.console.aliyun.com/) |
+
+<!-- TODO(添加模型弹窗截图)：待浏览器代理可用后补一张「添加模型」两步式弹窗截图（占位文件 doc/images/settings-model-add.png 暂未生成） -->
+
+「添加模型」使用两步式弹窗：① 选 Provider → ② 填**模型 ID**、**计费类型**、**API Key** 并触发**连通性验证**（未通过不允许保存，确保配置即时可用）。
+
+特性：
+- **加密落库**：API Key 写入 `credential_vault` 表，**AES-GCM 加密**（密钥来自 `HELLOAI_CREDENTIAL_AES_KEY_BASE64`）
+- **实时生效**：保存即生效，**无需重启**应用
+- **支持轮换**：在线更新 Key，下一次 LLM 调用立即使用新 Key
+- **模型能力锁定**：每个模型自带 `capability_skills`（锁定技能）与 `available_optional_skills`（可选技能白名单），按模型是否支持 web-search 等能力自动限定可选范围
+
+未配置 Key 的 Provider 显示「未生效」状态：在模型配置下拉框中不可选、注册平台内 LLM Agent 会被拒绝。
+
+### 方式二：环境变量（仅启动期生效）
+
+适合自动化部署 / CI 场景。值在容器启动时通过环境变量注入 yml 占位符 `${XXX_API_KEY:}`：
+
+| 环境变量 | 对应 Provider |
+|---|---|
+| `DEEPSEEK_API_KEY` | DeepSeek |
+| `MOONSHOT_API_KEY` | Moonshot |
+| `MINIMAX_API_KEY` | MiniMax |
+| `DASHSCOPE_API_KEY` | DashScope |
+
+`docker-compose.server.yml` 默认**未**预填这些变量。你可以在 compose 文件里追加（例）：
+
+```yaml
+environment:
+  DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+```
+
+并把真值写入 `.env`。**注意**：环境变量写入的 Key 也可被系统设置页读取 / 覆盖**——推荐两个通道都用系统设置页统一管理，避免配置分散。
+
+---
+
 ## 📖 核心概念
 
 | 角色 | 职责 | 类比 |
