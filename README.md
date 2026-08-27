@@ -57,7 +57,7 @@
 - 生产级可靠性：事务性 Outbox、三层幂等、熔断降级、死信人工兜底（详见下文「7. 生产级可靠性」表）
 - 诚实的边界：✅ **擅长**调研分析、文档生成、代码审查、独立工具开发——凡是"每个部分能独立验证对错"的任务；⚠️ **不擅长**需要全局强一致性的任务（完整项目架构设计、大规模重构、统一风格的整套 UI）——拆开会放大不一致，这类任务建议人工把关后小粒度拆解
 
-> 诚实的能力边界比夸大的宣传更省你的时间。详细判断依据见 [适用场景与能力边界](#适用场景与能力边界)。
+> 诚实的能力边界比夸大的宣传更省你的时间。详细判断依据见 [适用场景与能力边界](#scenarios)。
 
 ---
 
@@ -117,6 +117,8 @@ Reviewer：核验通过（4/5）——交付物满足全部验收标准，未发
 卡在哪个环节、谁在执行、被驳回了几次、驳回意见是什么——依赖 DAG、时间线、时序图、质量看板全部可视化、可回看。质量看板汇总一次通过率、返工轮次、驳回原因分布、Reviewer 放水率：
 
 ![质量度量看板](doc/images/quality-dashboard.png)
+
+<a id="comparison"></a>
 
 ## ⚖️ HelloAI vs 其他方案
 
@@ -188,6 +190,8 @@ Reviewer：核验通过（4/5）——交付物满足全部验收标准，未发
 | 在线状态判定 | 三件套：`last_seen_time` / `last_active_time` / `online_status`（`heartbeat` 刷新 `last_seen_time`，`claim`/`start`/`submit` 刷新 `last_active_time`） |
 
 ---
+
+<a id="scenarios"></a>
 
 ## 🎯 适用场景与能力边界
 
@@ -314,7 +318,7 @@ helloai/
 | 方式 | 适用场景 | 入口 |
 |---|---|---|
 | **A · 源码开发** | 改代码 / 调试 / 贡献，后端与前端跑在宿主机 | 本页下方 5 步 |
-| **B · Docker 一键部署** | 服务器直接跑起来，不搭建开发环境 | 直接跳到 [Docker 部署](#docker-部署) |
+| **B · Docker 一键部署** | 服务器直接跑起来，不搭建开发环境 | 直接跳到 [Docker 部署](#docker-deploy) |
 
 ### 环境要求
 - 硬件：建议 4C8GB（同时运行 PostgreSQL / Redis / RabbitMQ / MinIO + 后端应用 + 前端 Dev Server；最低 2C4GB 可运行但构建较慢）
@@ -330,7 +334,7 @@ cd helloai
 ```
 
 ### 2. 启动基础设施
-> 仅启动中间件；需要服务器一键部署请直接走 [Docker 部署](#docker-部署)。
+> 仅启动中间件；需要服务器一键部署请直接走 [Docker 部署](#docker-deploy)。
 ```bash
 docker compose up -d
 # PostgreSQL(15432) / Redis(26379) / RabbitMQ(25672) / MinIO(29000)
@@ -339,8 +343,8 @@ docker compose up -d
 ### 3. 配置后端
 本地开发**无需编辑任何 yml**，默认配置即可直接启动：
 - 数据库 / Redis / RabbitMQ 连接（本地 Docker 默认值）
-- **凭证加密密钥**：`HELLOAI_CREDENTIAL_AES_KEY_BASE64`（AES-GCM，yml 内为开发占位符）——本地开发可不配，生产部署必配（见 [Docker 部署](#docker-部署)步骤 3）
-- **API Key 无需在启动前配置**：先启动，后登录管理端「系统设置 → 模型配置（LLM Provider）」页填写 / 轮换，加密落库、实时生效，详见 [配置 API Key](#配置-api-key) 章节
+- **凭证加密密钥**：`HELLOAI_CREDENTIAL_AES_KEY_BASE64`（AES-GCM，yml 内为开发占位符）——本地开发可不配，生产部署必配（见 [Docker 部署](#docker-deploy)步骤 3）
+- **API Key 无需在启动前配置**：先启动，后登录管理端「系统设置 → 模型配置（LLM Provider）」页填写 / 轮换，加密落库、实时生效，详见 [配置 API Key](#api-key-config) 章节
 
 ### 4. 启动后端（Flyway 自动执行数据库迁移）
 ```bash
@@ -361,6 +365,8 @@ npm run dev
 ```
 
 ---
+
+<a id="docker-deploy"></a>
 
 ## 🐳 Docker 部署
 
@@ -446,6 +452,8 @@ docker compose restart app web
 
 ---
 
+<a id="api-key-config"></a>
+
 ## 🗝️ 配置 API Key
 
 LLM API Key 支持两种配置方式，**推荐方式一**（系统设置页，运行时生效无需重启）。
@@ -519,6 +527,8 @@ environment:
                     → [驳回] → 携带历史驳回意见重新执行 → 再次审核
 异常路径：外部 Agent 超时/失败 → 熔断回退 API_KEY_LLM → 重分配达阈值 → DEAD_LETTER 人工兜底
 ```
+
+<a id="agent-quick-connect"></a>
 
 ### 外部 AI Agent 快速接入
 1. 管理端创建 Agent（角色 EXECUTOR，类型 CLI_CLIENT），复制一键生成的 SKILL 说明；
@@ -595,11 +605,11 @@ environment:
 
 **Q：与 CrewAI / LangGraph / Dify 这类框架有什么区别？**
 
-A：一句话：它们解决"如何写 Agent / 编排应用"，HelloAI 解决"**如何管 Agent**"——任务拆解、弹性调度、验收审计、全链路可视化，且基于 Java 企业级技术栈。逐项对比见 [HelloAI vs 其他方案](#helloai-vs-其他方案)。
+A：一句话：它们解决"如何写 Agent / 编排应用"，HelloAI 解决"**如何管 Agent**"——任务拆解、弹性调度、验收审计、全链路可视化，且基于 Java 企业级技术栈。逐项对比见 [HelloAI vs 其他方案](#comparison)。
 
 **Q：必须部署 Java 环境吗？**
 
-A：是。JDK 17 是项目红线，另需 Docker Compose 拉起 PostgreSQL / Redis / RabbitMQ / MinIO 基础设施，步骤见[快速开始](#快速开始)。
+A：是。JDK 17 是项目红线，另需 Docker Compose 拉起 PostgreSQL / Redis / RabbitMQ / MinIO 基础设施，步骤见[快速开始](#quick-start)。
 
 **Q：支持哪些大模型？**
 
@@ -607,7 +617,7 @@ A：DeepSeek 实测可用，Moonshot / MiniMax / DashScope 预置。后端启动
 
 **Q：接入外部 AI（Qoder / Trae / Codex CLI / Claude Code）要改它的代码吗？**
 
-A：不用——这正是 HelloAI 的卖点。管理端创建 Agent 后一键生成 SKILL 说明，粘贴给外部 AI 执行，即可自动完成注册鉴权 → MCP 连接 → 值班打卡 → 轮询值守，详见[外部 AI Agent 快速接入](#外部-ai-agent-快速接入)。
+A：不用——这正是 HelloAI 的卖点。管理端创建 Agent 后一键生成 SKILL 说明，粘贴给外部 AI 执行，即可自动完成注册鉴权 → MCP 连接 → 值班打卡 → 轮询值守，详见[外部 AI Agent 快速接入](#agent-quick-connect)。
 
 **Q：数据会离开我的服务器吗？**
 
