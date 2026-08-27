@@ -14,6 +14,26 @@
 
 ## 2. 近期关键轮次
 
+### 2026-08-27 dev 配置参数化：application-dev.yml 连接地址支持环境变量覆盖
+
+#### 1. 背景
+
+- 用户要求把 `application-dev.yml` 中写死的阿里云公网地址（数据库 / Redis / RabbitMQ）改为 `${环境变量:默认值}` 占位符模式，换环境时直接设环境变量、不设则用默认公网地址；与 `application.yml` 既有 `${DEEPSEEK_*}` / `${MINIO_*}` 惯例一致。
+
+#### 2. 实际落地
+
+- `application-dev.yml`：datasource `url/username/password` 与 hikari `maximum-pool-size` 参数化为 `${DATASOURCE_URL/USERNAME/PASSWORD/POOL_SIZE:默认}`；redis / rabbitmq `host/port` 参数化为 `${REDIS_HOST/PORT}`、`${RABBITMQ_HOST/PORT}`；默认值统一为 localhost（本地 docker compose 中间件），开源仓库不保留服务器地址；需连服务器时通过环境变量 / IDEA Run Configuration 注入。
+- 顺带修复：redis `port` 原缩进错误（挂在 `spring.data` 下不生效，实际连默认 6379），修正到 `spring.data.redis` 层级（默认 26379）；rabbitmq 尾随空格清理。
+- 兼容性：docker-compose.server.yml 用 `SPRING_*` 环境变量直接覆盖属性（优先级高于 yml），两套链路互不影响，服务器部署零变更。
+- 验证：YAML 解析通过（`spring.data.redis` 正确含 host/port 两键）。
+- 开源脱敏（同日追加）：README 在线演示地址换通用占位符 `http://your-server:5173`；`application.yml` 的 `HELLOAI_CREDENTIAL_AES_KEY_BASE64` 默认值随机化（原密钥仅生产注入，docker-compose.server.yml 新增 `${HELLOAI_CREDENTIAL_AES_KEY_BASE64:-}` .env 入口）；本记录历史事实条目中的服务器 IP 同步脱敏。
+
+#### 3. 遗留 / 不做的事
+
+- 未改：`application-local.yml` / docker-compose.yml（本地版）保持原样。
+- 未重写 git 历史：旧提交中的 IP / 旧 AES 密钥仍可从历史可见，如需彻底清除需用户自行执行 git filter-repo / BFG 重写历史（破坏性操作，自行决策）。
+- 按既有教训：改 resources 配置后如要部署 jar，需重新 `mvn package`（IDEA 自动构建只同步 target/classes，不重建 jar）。
+
 ### 2026-08-26 子任务「执行中卡死改派」：前端换人按钮 + 后端收口接口
 
 #### 1. 背景
@@ -4277,7 +4297,7 @@ V39 的意图词命中即自动切 CLARIFY，前端另有「转为方案」按�
 - **local profile 启动冒烟**（`--spring.profiles.active=local`，连本机 docker 中间件）：后端启动成�?`/api/health` 200，Flyway 自动应用 V45 成功（日�?"Successfully applied 7 migrations to schema public, now at version v45"）�?
 - `scripts/powershell/verify-platform-config.ps1 -ReadOnly`（复用运行中后端）PASS 4 / FAIL 0：admin 登录 OK�? �?provider 列表全部 `apiKeyConfigured=false / apiKeyMasked=null / available=false`（yml 置空生效）；`listLlmProviders` 目录同步正常（factorySupported=true、available=false）；脚本遵循规则 6（UTF-8 with BOM + 编码强制�?+ 单引号拼接），`Parser.ParseFile` 静态自检 0 error�?ReadOnly 模式不写库（S3 �?Key 前退出）�?
 - **e2e 完整写库链路实测（local profile，用户将 `spring.profiles.active` 切为 local 后执行）**：`scripts/powershell/verify-platform-config.ps1` 由脚本自拉起 jar（不重启进程�?*PASS 22 / FAIL 0，ALL PASSED**：S2 初始 4 provider 全部未配置（yml 置空生效）→ S3 PUT api-key 写入测试 key �?S4 实时生效（available=true / apiKeyFromVault=true / 脱敏 `****0001`）→ S5 目录同步（listLlmProviders available=true）→ S6 注册 API_KEY_LLM Agent �?S7 AGENT �?ACTIVE 凭证自动补绑（hasEncryptedValue=true）→ S8 sys_config �?`helloai.base-url` �?getMySkill SKILL 内容立即包含该地址（不重启）并写回空串还原。全程单进程实时生效，无重启�?
-  - **�?首轮运行环境纠偏（重要事实链�?*：首次手动执行（15:12）与第二轮复跑（15:16）时，jar 内打包的 `application.yml` 仍为 `active: dev`（src 已改 local，但改后未重�?`mvn package`；IDEA 自动构建只同步了 `target/classes` 不重�?jar），后端实际连服务器�?`39.106.204.43:15432`，两�?S3-S8 均写入服务器共享库（PLATFORM/AGENT 级测试凭�?+ `platform-config-e2e` agent，sys_config 已还原）。第三轮�?5:25）重�?`mvn package`（jar �?`active: local`）后连本�?docker local 库（localhost:15432，干净库）实现**真正�?local 全链�?22 PASS / 0 FAIL**（agentId=2085628380873048065，与服务器库残留 2085625109789908994 区分）。服务器库残留清�?SQL 已提供给用户执行（UPDATE 软删 credential_vault PLATFORM×2 / AGENT×1 + agent×1）�?
+  - **�?首轮运行环境纠偏（重要事实链�?*：首次手动执行（15:12）与第二轮复跑（15:16）时，jar 内打包的 `application.yml` 仍为 `active: dev`（src 已改 local，但改后未重�?`mvn package`；IDEA 自动构建只同步了 `target/classes` 不重�?jar），后端实际连服务器�?`地址已脱敏`，两�?S3-S8 均写入服务器共享库（PLATFORM/AGENT 级测试凭�?+ `platform-config-e2e` agent，sys_config 已还原）。第三轮�?5:25）重�?`mvn package`（jar �?`active: local`）后连本�?docker local 库（localhost:15432，干净库）实现**真正�?local 全链�?22 PASS / 0 FAIL**（agentId=2085628380873048065，与服务器库残留 2085625109789908994 区分）。服务器库残留清�?SQL 已提供给用户执行（UPDATE 软删 credential_vault PLATFORM×2 / AGENT×1 + agent×1）�?
   - **教训**：修�?resources 下配置（�?`application.yml` �?profile/key）后必须重新 `mvn package` 再验证，IDE 自动构建�?`target/classes` 同步不能代表 jar 产物；e2e 脚本启动 jar 前可加一�?jar 内配置校验（如对�?jar �?application.yml �?src �?`profiles.active`）�?
 - **待实测项已清�?*：唯一未在真实环境回归的是"写库后真�?LLM 调用"（Factory 用测�?key 无法真连 DeepSeek），属既�?verify-agent-llm-connectivity 范畴，不阻塞本轮�?
 

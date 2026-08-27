@@ -15,7 +15,7 @@
 ![一句话看懂 HelloAI](doc/images/helloai一句话看懂.png)
 
 <p align="center">
-  <a href="http://39.106.204.43:5173/#/login">🌐 在线体验</a> •
+  <a href="http://your-server:5173/#/login">🌐 在线体验</a> •
   <a href="#快速开始">🚀 5 分钟跑起来</a> •
   <a href="doc/README.md">📖 文档地图</a> •
   <a href="#核心功能开发者详解">🔍 开发者详解</a>
@@ -292,7 +292,7 @@ npm run dev
 
 ## 🖼️ 功能预览
 
-> 在线演示：http://39.106.204.43:5173/#/login
+> 在线演示：http://your-server:5173/#/login
 
 | 功能 | 说明 |
 |------|------|
