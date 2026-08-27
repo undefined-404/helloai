@@ -16,10 +16,10 @@
 ![一句话看懂 HelloAI](doc/images/helloai一句话看懂.png)
 
 <p align="center">
-  <a href="#工作方式">🎬 工作方式</a> •
-  <a href="#快速开始">🚀 5 分钟跑起来</a> •
+  <a href="#how-it-works">🎬 工作方式</a> •
+  <a href="#quick-start">🚀 5 分钟跑起来</a> •
   <a href="doc/README.md">📖 文档地图</a> •
-  <a href="#核心功能开发者详解">🔍 开发者详解</a>
+  <a href="#for-developers">🔍 开发者详解</a>
 </p>
 
 ---
@@ -60,6 +60,8 @@
 > 诚实的能力边界比夸大的宣传更省你的时间。详细判断依据见 [适用场景与能力边界](#适用场景与能力边界)。
 
 ---
+
+<a id="how-it-works"></a>
 
 ## 🎬 工作方式
 
@@ -128,6 +130,8 @@ Reviewer：核验通过（4/5）——交付物满足全部验收标准，未发
 | 部署形态 | 库 / 服务 | SaaS / 私有部署 | Docker Compose 完全私有化 |
 
 ---
+
+<a id="for-developers"></a>
 
 ## ✨ 核心功能（开发者详解）
 
@@ -300,6 +304,8 @@ helloai/
 ```
 
 ---
+
+<a id="quick-start"></a>
 
 ## 🚀 快速开始
 
