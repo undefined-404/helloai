@@ -346,8 +346,6 @@ npm install
 npm run dev
 ```
 
-访问 <http://localhost:5173> 即可体验。
-
 ---
 
 ## 🐳 Docker 部署
