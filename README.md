@@ -303,12 +303,19 @@ helloai/
 
 ## 🚀 快速开始
 
+本仓库支持两种运行方式，按你的目的选择：
+
+| 方式 | 适用场景 | 入口 |
+|---|---|---|
+| **A · 源码开发** | 改代码 / 调试 / 贡献，后端与前端跑在宿主机 | 本页下方 5 步 |
+| **B · Docker 一键部署** | 服务器直接跑起来，不搭建开发环境 | 直接跳到 [Docker 部署](#docker-部署) |
+
 ### 环境要求
 - 硬件：建议 4C8GB（同时运行 PostgreSQL / Redis / RabbitMQ / MinIO + 后端应用 + 前端 Dev Server；最低 2C4GB 可运行但构建较慢）
 - JDK 17（项目红线）
 - Maven 3.8+
 - Node.js 18+
-- Docker + Docker Compose（PostgreSQL / Redis / RabbitMQ / MinIO 基础设施）
+- Docker + Docker Compose（仅用于拉起 PostgreSQL / Redis / RabbitMQ / MinIO 基础设施）
 
 ### 1. 克隆项目
 ```bash
@@ -317,21 +324,22 @@ cd helloai
 ```
 
 ### 2. 启动基础设施
+> 仅启动中间件；需要服务器一键部署请直接走 [Docker 部署](#docker-部署)。
 ```bash
 docker compose up -d
 # PostgreSQL(15432) / Redis(26379) / RabbitMQ(25672) / MinIO(29000)
 ```
 
 ### 3. 配置后端
-编辑 `helloai-start/src/main/resources/application.yml`（或通过环境变量覆盖）：
-- 数据库 / Redis / RabbitMQ 连接（本地 Docker 默认即可）
-- **唯一必需的部署配置**：`HELLOAI_CREDENTIAL_AES_KEY_BASE64`（凭证加密密钥，AES-GCM；yml 内默认值仅供开发环境）
-- LLM Provider 的 API Key **无需在部署前配置**（先启动后配置）：启动后管理员登录 "系统设置 → 模型配置（LLM Provider）" 页填写/轮换，加密写入 `credential_vault`，实时生效无需重启；yml 中 `helloai.providers.<name>.api-key` 已置空，仅作为环境变量兜底（`DEEPSEEK_API_KEY` / `MOONSHOT_API_KEY` / `MINIMAX_API_KEY` / `DASHSCOPE_API_KEY`）
+本地开发**无需编辑任何 yml**，默认配置即可直接启动：
+- 数据库 / Redis / RabbitMQ 连接（本地 Docker 默认值）
+- **凭证加密密钥**：`HELLOAI_CREDENTIAL_AES_KEY_BASE64`（AES-GCM，yml 内为开发占位符）——本地开发可不配，生产部署必配（见 [Docker 部署](#docker-部署)步骤 3）
+- **API Key 无需在启动前配置**：先启动，后登录管理端「系统设置 → 模型配置（LLM Provider）」页填写 / 轮换，加密落库、实时生效，详见 [配置 API Key](#配置-api-key) 章节
 
 ### 4. 启动后端（Flyway 自动执行数据库迁移）
 ```bash
 mvn clean package -DskipTests
-java -jar helloai-start/target/helloai-start.jar
+java -jar helloai-start/target/helloai-start-1.0.0-SNAPSHOT.jar
 ```
 
 后端启动后访问：
@@ -350,19 +358,21 @@ npm run dev
 
 ## 🐳 Docker 部署
 
-如果你不想配置开发环境，只想在服务器上跑起来，`docker-compose.server.yml` 会拉起 PostgreSQL / Redis / RabbitMQ / MinIO + 后端 jar + Nginx 一整套，对外只暴露 80 端口。
+适合在服务器上直接跑起来，不搭建开发环境。`docker-compose.server.yml` 会拉起 PostgreSQL / Redis / RabbitMQ / MinIO + 后端 jar + Nginx 一整套，对外只暴露 80 端口。
+
+> **注意两个 compose 文件的区别**：仓库根目录的 `docker-compose.yml` 是**开发环境**用的（只拉中间件，供快速开始使用）；本部署用的是仓库根目录的 **`docker-compose.server.yml`**（含 app + web 全套服务）。两者不可混用。
 
 ### 前置条件
 - 服务器安装 [Docker](https://docs.docker.com/engine/install/) + Docker Compose
-- 构建好的后端 jar（`helloai-start-1.0.0-SNAPSHOT.jar`）与前端 `dist/`（从源码构建，或从 Release 拉取预构建产物）
-- 一个 AES 加密密钥（生产环境必须替换默认占位符，见步骤 3 写入 .env）
+- 后端 jar（`helloai-start-1.0.0-SNAPSHOT.jar`）与前端 `dist/`——从 Release 拉取，或按下方步骤 1 从源码构建
+- AES 加密密钥（生产必配置，见步骤 3）
 
 ### 部署步骤
 
-**1. 构建产物（源码路径）**
+**1. 准备产物（如不使用 Release 预构建产物）**
 
 ```bash
-mvn clean package -DskipTests          # 后端：产出 helloai-start/target/helloai-start-1.0.0-SNAPSHOT.jar
+mvn clean package -DskipTests                    # 后端：产出 helloai-start/target/helloai-start-1.0.0-SNAPSHOT.jar
 cd helloai-ui && npm install && npm run build && cd ..   # 前端：产出 helloai-ui/dist/
 ```
 
