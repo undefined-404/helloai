@@ -1,6 +1,8 @@
 # HelloAI —— 你说人话，它带一支 AI 团队把活干完
 
 <p align="center">
+  <a href="http://39.106.204.43:5173/#/login"><img src="https://img.shields.io/badge/在线体验-Demo-2EA44F" alt="在线体验"></a>
+  <a href="doc/README.md"><img src="https://img.shields.io/badge/文档-文档地图-8A2BE2" alt="文档地图"></a>
   <img src="https://img.shields.io/badge/License-MIT-7C3AED" alt="License MIT">
   <img src="https://img.shields.io/badge/Spring%20Boot-3.4.10-6DB33F?logo=springboot&logoColor=white" alt="Spring Boot 3.4.10">
   <img src="https://img.shields.io/badge/Vue-3.x-4FC08D?logo=vuedotjs&logoColor=white" alt="Vue 3">
@@ -15,7 +17,7 @@
 ![一句话看懂 HelloAI](doc/images/helloai一句话看懂.png)
 
 <p align="center">
-  <a href="http://your-server:5173/#/login">🌐 在线体验</a> •
+  <a href="http://39.106.204.43:5173/#/login">🌐 在线体验</a> •
   <a href="#快速开始">🚀 5 分钟跑起来</a> •
   <a href="doc/README.md">📖 文档地图</a> •
   <a href="#核心功能开发者详解">🔍 开发者详解</a>
@@ -23,33 +25,108 @@
 
 ---
 
+## 📰 动态
+
+- **2026-08-26:** 分布式健壮性改造启动 —— Redisson RLock 业务锁 + ShedLock 定时任务单例锁双锁体系、RabbitMQ 容量治理（x-max-length + reject-publish）、死信台账告警，为水平扩容打底
+- **2026-08-25:** 子任务详情页改版 —— 双栏网格布局 + 时间线事件卡片化 + 时序图迁至对话流页签；审查中心 / Agent 打卡上班页统一设计系统
+- **2026-08-24:** 模型配置中心升级 —— 添加模型两步式弹窗 + 计费类型字段 + API Key 连通性验证；质量度量看板默认开放
+- **2026-08-23:** 质量度量看板上线 —— review / agent 双域质量统计（通过率 / 返工率 / 驳回 TOP / 时长分布），7/30/90 天窗口 + 明暗主题；Reviewer 双审并行化
+- **2026-08-22:** 反馈回路 Phase 4 —— Reviewer 双审共识 + 抽检复审机制（候选池强制 2 个异模型 REVIEWER）
+- **2026-08-19:** Planner 对话联网搜索系列（V42-V45）—— 博查 / Tavily / DeepSeek 原生多供应商、URL 自动提取直取、SPA 元数据兜底、折叠查验条与查询规划器
+
+> 完整迭代史见 [`doc/log/HelloAI_迭代执行记录.md`](doc/log/HelloAI_迭代执行记录.md)（160+ 条目，追加式记录，含决策演进注记）。
+
+---
+
 ## 🗺️ 一个任务的真实旅程
 
 ![任务旅程](doc/images/helloai任务旅程.png)
 
-<!-- TODO(发布前)：下文"5 个子任务"与两幅配图中的"拆成 5 个子任务 / 打回重做 2 轮"均为占位数字，发布前请替换为一次真实案例的真实数字（旅程图需按新数字重绘） -->
+<!-- 真实案例：trade-cloud 分布式交易支付系统全面 Code Review（5 个子任务，#5 被驳回 1 轮返工后通过 + 抽检一致）；旅程图为示意插画，与真实案例数字已对齐 -->
 
 1. **你说需求**：「帮我写一份竞品分析报告」
 2. **它先问清楚**：报告给谁看？要多详细？什么时候要？（像真人 PM 一样追问，还能联网查资料）
-3. **它拆任务**：拆成 5 个互相衔接的子任务（占位数字），**你确认后才开工**
+3. **它拆任务**：拆成互相衔接的子任务（真实案例：Code Review 需求拆为 5 个子任务——规范 / 安全 / 性能 / Bug 审查 + 合并报告，三批拓扑），**你确认后才开工**
 4. **它派活**：分给最合适的 AI 员工并行执行——卡住了自动换人，出错多了自动熔断兜底
 5. **它验收**：AI 质检员逐条对照验收标准审核，不合格打回重做（附具体修改意见）
 6. **它交付**：全部成果整合成一份连贯报告 + 产出打包 zip，一键下载
 
-## ⚖️ 它擅长什么 / 不擅长什么
+## 💎 为什么选 HelloAI
 
-✅ **擅长**：调研分析、文档生成、代码审查、独立工具开发——凡是"每个部分能独立验证对错"的任务
-
-⚠️ **不擅长**：需要全局强一致性的任务（完整项目架构设计、大规模重构、统一风格的整套 UI）——拆开会放大不一致，这类任务建议人工把关后小粒度拆解
+- 与 CrewAI / LangGraph 侧重"如何写 Agent"不同，HelloAI 侧重"**如何管 Agent**"：调度、容错、可视化、审计——**解决多 Agent 协作中的调度混乱、上下文断裂、执行不可追踪问题**
+- 基于 Spring Boot + Spring AI MCP 协议，外部 AI（Qoder / Trae / Codex CLI / Claude Code）免改造一键接入，像调度微服务一样派发子任务并回收执行结果
+- 生产级可靠性：事务性 Outbox、三层幂等、熔断降级、死信人工兜底（详见下文「7. 生产级可靠性」表）
+- 诚实的边界：✅ **擅长**调研分析、文档生成、代码审查、独立工具开发——凡是"每个部分能独立验证对错"的任务；⚠️ **不擅长**需要全局强一致性的任务（完整项目架构设计、大规模重构、统一风格的整套 UI）——拆开会放大不一致，这类任务建议人工把关后小粒度拆解
 
 > 诚实的能力边界比夸大的宣传更省你的时间。详细判断依据见 [适用场景与能力边界](#适用场景与能力边界)。
 
-## 🔍 它是怎么做到的（开发者看这里）
+---
 
-- 与 CrewAI / LangGraph 侧重"如何写 Agent"不同，HelloAI 侧重"**如何管 Agent**"：调度、容错、可视化、审计
-- 基于 Spring Boot + Spring AI MCP 协议，外部 AI 一键接入后像调度微服务一样派发子任务，并回收执行结果
-- 生产级可靠性：事务性 Outbox、三层幂等、熔断降级、死信人工兜底（详见下文「7. 生产级可靠性」表）
-- 核心定位：**解决多 Agent 协作中的调度混乱、上下文断裂、执行不可追踪问题**
+## 🎬 工作方式
+
+### Planner 是你的 AI 项目经理
+
+它先追问澄清你的真实意图，**你确认后才开工**。以下为一次真实会话（「AI 核心概念大串联」）：
+
+```text
+你：AI 核心概念大串联：LLM, Token, Context Window……
+
+Planner：为了把它整理成真正可落地的方案，我需要再确认两个关键点：
+         [结构化选项卡] 这份方案的主要用途是什么？
+           ◉ 内部培训/团队新人科普（推荐） ○ 对外内容发布 ○ 产品/课程立项方案
+         [结构化选项卡] 你期望的交付物是哪种形态？（可多选）
+           ◉ 方案文档（含背景、目标、大纲、执行步骤/排期） ○ PPT 大纲 ○ 视频课程脚本
+         🔍 已联网搜索 5 个来源 router→bocha · 193ms（折叠查验条，可展开核验搜索词/来源）
+
+你：（点选）内部培训 + 方案文档
+
+Planner：已基于对话内容整理出需求要点，生成结构化任务描述（终稿）——
+         「AI 核心概念内部培训方案文档」，确认后即自动拆解立项
+```
+
+![需求澄清对话](doc/images/clarify-chat.png)
+
+确认草案后，依赖 DAG 自动排产（真实案例：trade-cloud 全面 Code Review，拆为 5 个子任务三批执行）：
+
+![依赖 DAG](doc/images/dag-view.png)
+
+### Reviewer 是较真的 AI 质检员
+
+执行中，子任务 #5（改进建议清单与合并报告）被真实驳回（评分 2/5）：
+
+```text
+Reviewer：验收证据存在自相矛盾且关键 Top 10 内容因附件截断无法核验，本次交付不予通过。
+         [defect] Top 10 关键内容无法核验，且 VERIFICATION 中 emoji 计数命令与声称输出自相矛盾
+         [location] docs/review-report.md §Top 10 最关键问题清单；VERIFICATION 第 11 条命令
+         [impact] 验收标准第 5 条无法确认；grep 未加 -E 按基本正则不可能输出 10，证据与结论矛盾
+         [evidence] 平台直读附件在「合并建议」段截断；grep -c "🔴|🟡|🔵" output: 10，与语义冲突
+
+执行者：已修正 grep 命令为 -oE 并调整章节顺序，VERIFICATION 新增字段计数命令输出 40，Top 10 每项四字段齐全
+
+Reviewer：核验通过（4/5）——交付物满足全部验收标准，未发现工程纪律 blocker
+         （4 小时后）抽检复审：与原判定一致
+```
+
+驳回 → 返工 → 复审 → 抽检的全过程，在子任务详情页完整可回看：
+
+![子任务详情](doc/images/subtask-detail.png)
+
+### 没有黑盒
+
+卡在哪个环节、谁在执行、被驳回了几次、驳回意见是什么——依赖 DAG、时间线、时序图、质量看板全部可视化、可回看。质量看板汇总一次通过率、返工轮次、驳回原因分布、Reviewer 放水率：
+
+![质量度量看板](doc/images/quality-dashboard.png)
+
+## ⚖️ HelloAI vs 其他方案
+
+| | CrewAI / LangGraph | Dify | HelloAI |
+|---|---|---|---|
+| 关注点 | 如何写 Agent（框架） | LLM 应用工作流编排 | **如何管 Agent**：调度、验收、审计 |
+| 技术生态 | Python | Python | Java 企业级（Spring Boot） |
+| 外部 Agent 接入 | 按框架 API 开发 | 限于平台内节点 | MCP 协议，CLI Agent 免改造接入 |
+| 质量闭环 | 自行实现 | 工作流内自行拼装 | 内置 Reviewer 双轨审核 + 多轮驳回返工 + 死信兜底 |
+| 执行可追踪 | 日志为主 | 流程编排视图 | 依赖 DAG / 时间线 / 时序图 / 质量看板 |
+| 部署形态 | 库 / 服务 | SaaS / 私有部署 | Docker Compose 完全私有化 |
 
 ---
 
@@ -176,6 +253,18 @@
 - 任务感知：外部 Agent 以 `pullTasks` 轮询收件箱为唯一感知通道（建议 30s）；门铃 SSE（`/api/agents/doorbell/sse`）已搁置（2026-08-07，外部 Agent 无法消费平台推送，代码保留运行待复用）
 - MCP 工具集：`pullTasks` / `ack` / `claimSubTask` / `heartbeat` / `getDepsSummary` / `uploadArtifact` / `submitResult` / `reportBlocked` / `getAgentStatus` / `checkIn` / `checkOut`，工具数量以 `tools/list` 实际返回为准
 
+**运行时组件职责**
+
+| 组件 | 职责 |
+|------|------|
+| Planner | 双模需求澄清（CHAT / CLARIFY + 联网搜索）、任务拆解 DAG、最终整合报告 |
+| 弹性调度器 | 外部优先 / 空闲优先 / 值班优先 / LLM 保底；per-agent 熔断与改派 |
+| MCP Server（Spring AI） | 外部 Agent 唯一主通道（SSE），11 个工具：pullTasks / claimSubTask / submitResult / checkIn 等 |
+| Outbox + RabbitMQ | 事务性投递（PENDING/SENT/CONFIRMED/FAILED 四态）+ publisher confirms + DLX 死信归档 |
+| Reviewer | 双轨纪律制审核（验收标准 + 工程纪律 C1-C4 / D1-D3），blocker 级驳回触发返工 |
+| 死信池 | 重分配达阈值转 `DEAD_LETTER`，人工审核后一键重新派发 |
+| 后台作业（helloai-job） | Outbox 中继、执行超时补偿、Agent 健康巡检、值班租约过期（ShedLock 单实例执行） |
+
 ---
 
 ## 🛠️ 技术栈
@@ -216,6 +305,7 @@ helloai/
 ## 🚀 快速开始
 
 ### 环境要求
+- 硬件：建议 4C8GB（同时运行 PostgreSQL / Redis / RabbitMQ / MinIO + 后端应用 + 前端 Dev Server；最低 2C4GB 可运行但构建较慢）
 - JDK 17（项目红线）
 - Maven 3.8+
 - Node.js 18+
@@ -292,18 +382,18 @@ npm run dev
 
 ## 🖼️ 功能预览
 
-> 在线演示：http://your-server:5173/#/login
+> 在线演示：http://39.106.204.43:5173/#/login（admin / admin123）
 
-| 功能 | 说明 |
-|------|------|
-| 登录页 | AI 主题动态交互设计（星空背景 + 原创虚拟人物） |
-| 需求澄清对话 | 与 Planner 双模对话（CHAT 闲聊 / CLARIFY 方案澄清），结构化选项点选 + 任意模式联网搜索（折叠查验条）+ /planner 直达，终稿一键立项 |
-| 自动拆解 | 需求确认后自动生成子任务草案，用户确认/拒绝 |
-| 依赖图 | 拓扑分层流水线，展示子任务依赖关系 |
-| 时间线 / 时序图 | 记录每一步操作详情，泳道式展示单任务执行周期 |
-| 值班看板 | 外部 Agent 值班租约列表与状态概览 |
-| 质量度量看板 | review/agent 双域执行质量统计（通过率/返工率/驳回 TOP/时长分布），7/30/90 天窗口切换 + 明暗主题 |
-| 报告下载 | 最终整合报告 + 全子任务产出 zip 一键下载 |
+| 功能 | 说明 | 截图 |
+|------|------|------|
+| 登录页 | AI 主题动态交互设计（星空背景 + 原创虚拟人物） | [查看](doc/images/login.png) |
+| 需求澄清对话 | 与 Planner 双模对话（CHAT 闲聊 / CLARIFY 方案澄清），结构化选项点选 + 任意模式联网搜索（折叠查验条）+ /planner 直达，终稿一键立项 | [查看](doc/images/clarify-chat.png) |
+| 自动拆解 | 需求确认后自动生成子任务草案，用户确认/拒绝 | [查看](doc/images/task-list.png) |
+| 依赖图 | 拓扑分层流水线，展示子任务依赖关系 | [查看](doc/images/dag-view.png) |
+| 时间线 / 时序图 | 记录每一步操作详情，泳道式展示单任务执行周期 | [查看](doc/images/subtask-detail.png) |
+| 值班看板 | 外部 Agent 值班租约列表与状态概览 | — |
+| 质量度量看板 | review/agent 双域执行质量统计（通过率/返工率/驳回 TOP/时长分布），7/30/90 天窗口切换 + 明暗主题 | [查看](doc/images/quality-dashboard.png) |
+| 报告下载 | 最终整合报告 + 全子任务产出 zip 一键下载 | — |
 
 ---
 
@@ -356,7 +446,7 @@ npm run dev
 
 **Q：与 CrewAI / LangGraph / Dify 这类框架有什么区别？**
 
-A：CrewAI / LangGraph 侧重"如何写 Agent"（Python 生态），Dify 更接近 LLM 应用工作流编排；HelloAI 侧重"**如何管 Agent**"——任务拆解、弹性调度、验收审计、全链路可视化，且基于 Java 企业级技术栈。
+A：一句话：它们解决"如何写 Agent / 编排应用"，HelloAI 解决"**如何管 Agent**"——任务拆解、弹性调度、验收审计、全链路可视化，且基于 Java 企业级技术栈。逐项对比见 [HelloAI vs 其他方案](#helloai-vs-其他方案)。
 
 **Q：必须部署 Java 环境吗？**
 
