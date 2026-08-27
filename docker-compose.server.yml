@@ -124,6 +124,9 @@ services:
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin123
       MINIO_BUCKET: helloai-artifacts
+      # 凭据加密密钥入口：application.yml 默认值已随开源仓库随机化，
+      # 生产必须在部署目录 .env 写入 HELLOAI_CREDENTIAL_AES_KEY_BASE64=<原密钥>（.env 已被 .gitignore 排除）
+      HELLOAI_CREDENTIAL_AES_KEY_BASE64: ${HELLOAI_CREDENTIAL_AES_KEY_BASE64:-}
     depends_on:
       postgres:
         condition: service_healthy

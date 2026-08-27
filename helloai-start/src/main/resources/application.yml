@@ -237,7 +237,11 @@ helloai:
       default-model: ${DASHSCOPE_CHAT_MODEL:qwen-plus}
   security:
     credential:
-      aes-key-base64: ${HELLOAI_CREDENTIAL_AES_KEY_BASE64:MEsmol1MWDTT69/lAOGeYGmDa9/a6S/lfHdfmekX0MM=}
+      # 凭据加密密钥（credential_vault / 系统设置页 API Key 落库加密）：
+      # 默认值为随机占位符（开源仓库不含生产密钥），生产必须用环境变量
+      # HELLOAI_CREDENTIAL_AES_KEY_BASE64 注入原密钥（docker-compose.server.yml 有 .env 入口）；
+      # 未注入而服务器已有历史凭据时，解密会失败（启动/读取报错，属预期保护行为）
+      aes-key-base64: ${HELLOAI_CREDENTIAL_AES_KEY_BASE64:cWXZTi5+S2WtnVBc+jQeJ5VCMviW+pPGB8QZN45mKFM=}
   # 执行产出物化存储（方案2）：执行成功后把 lastExecution.output 物化为附件文件，
   # type=local 落到本地磁盘（storageUrl=local://{bucket}/{objectKey}），
   # type=minio 落到对象存储（storageUrl=minio://{bucket}/{objectKey}）；

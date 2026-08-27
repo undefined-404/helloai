@@ -1,0 +1,37 @@
+# ============================================================
+# HelloAI - dev 环境配置（云服务器）
+# 激活方式：spring.profiles.active=dev
+# 连接地址均支持环境变量覆盖，不设置则用默认的本地地址（开源仓库不包含服务器地址）：
+#   DATASOURCE_URL / DATASOURCE_USERNAME / DATASOURCE_PASSWORD / DATASOURCE_POOL_SIZE
+#   REDIS_HOST / REDIS_PORT / RABBITMQ_HOST / RABBITMQ_PORT
+# 需连远程服务器时：IDEA Run Configuration → Environment variables 或系统环境变量注入；
+# 服务器 docker compose 部署由 docker-compose.server.yml 的 SPRING_* 环境变量
+# 直接覆盖属性（优先级更高），两套链路互不影响。
+# ============================================================
+
+spring:
+  datasource:
+    # 默认连本地 docker compose 中间件；连远程时设 DATASOURCE_URL 环境变量即可覆盖
+    url: "${DATASOURCE_URL:jdbc:postgresql://localhost:15432/helloai?currentSchema=public&reWriteBatchedInserts=true}"
+    username: "${DATASOURCE_USERNAME:postgres}"
+    password: "${DATASOURCE_PASSWORD:postgres}"
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: "${DATASOURCE_POOL_SIZE:20}"
+  data:
+    redis:
+      host: "${REDIS_HOST:localhost}"
+      # 修复：port 原缩进错误（挂在 data 下不生效），恢复至 redis 层级
+      port: "${REDIS_PORT:26379}"
+  rabbitmq:
+    host: "${RABBITMQ_HOST:localhost}"
+    port: "${RABBITMQ_PORT:25672}"
+
+# 整合报告生成耗时长（大 prompt + 长输出），切到 deepseek-v4-pro（输出上限 384K tokens）
+helloai:
+  execution:
+    sync-timeout-seconds: 1200
+  providers:
+    deepseek:
+      default-model: deepseek-v4-pro
+      read-timeout-ms: 600000

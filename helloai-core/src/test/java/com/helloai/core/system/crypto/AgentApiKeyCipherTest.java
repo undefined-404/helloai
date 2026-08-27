@@ -17,8 +17,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayName("AgentApiKeyCipher（agent.api_key 等保存储加密）")
 class AgentApiKeyCipherTest {
 
-    /** 32 字节（AES-256）测试密钥，仅测试使用。 */
-    private static final String TEST_KEY_BASE64 = "MEsmol1MWDTT69/lAOGeYGmDa9/a6S/lfHdfmekX0MM=";
+    /** 32 字节（AES-256）测试密钥，仅测试使用（与 application.yml 默认值同钥，仓库不含生产密钥）。 */
+    private static final String TEST_KEY_BASE64 = "cWXZTi5+S2WtnVBc+jQeJ5VCMviW+pPGB8QZN45mKFM=";
 
     private AgentApiKeyCipher cipher;
 
