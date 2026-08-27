@@ -1,7 +1,6 @@
 # HelloAI —— 你说人话，它带一支 AI 团队把活干完
 
 <p align="center">
-  <a href="http://39.106.204.43:5173/#/login"><img src="https://img.shields.io/badge/在线体验-Demo-2EA44F" alt="在线体验"></a>
   <a href="doc/README.md"><img src="https://img.shields.io/badge/文档-文档地图-8A2BE2" alt="文档地图"></a>
   <img src="https://img.shields.io/badge/License-MIT-7C3AED" alt="License MIT">
   <img src="https://img.shields.io/badge/Spring%20Boot-3.4.10-6DB33F?logo=springboot&logoColor=white" alt="Spring Boot 3.4.10">
@@ -17,7 +16,7 @@
 ![一句话看懂 HelloAI](doc/images/helloai一句话看懂.png)
 
 <p align="center">
-  <a href="http://39.106.204.43:5173/#/login">🌐 在线体验</a> •
+  <a href="#工作方式">🎬 工作方式</a> •
   <a href="#快速开始">🚀 5 分钟跑起来</a> •
   <a href="doc/README.md">📖 文档地图</a> •
   <a href="#核心功能开发者详解">🔍 开发者详解</a>
@@ -42,7 +41,7 @@
 
 ![任务旅程](doc/images/helloai任务旅程.png)
 
-<!-- 真实案例：trade-cloud 分布式交易支付系统全面 Code Review（5 个子任务，#5 被驳回 1 轮返工后通过 + 抽检一致）；旅程图为示意插画，与真实案例数字已对齐 -->
+<!-- 真实案例：trade-cloud 分布式交易支付系统全面 Code Review（5 个子任务，#5 被驳回 1 轮返工后通过 + 抽检一致）；旅程图按此案例重绘 -->
 
 1. **你说需求**：「帮我写一份竞品分析报告」
 2. **它先问清楚**：报告给谁看？要多详细？什么时候要？（像真人 PM 一样追问，还能联网查资料）
@@ -382,7 +381,8 @@ npm run dev
 
 ## 🖼️ 功能预览
 
-> 在线演示：http://39.106.204.43:5173/#/login（admin / admin123）
+> 以下截图均采集自真实运行环境。
+<!-- TODO(演示环境)：待只读演示账号就绪后，在此补充在线演示入口与账号（绝不使用 admin 管理账号） -->
 
 | 功能 | 说明 | 截图 |
 |------|------|------|
