@@ -682,8 +682,7 @@ A：支持完全私有化部署（Docker Compose 一键拉起），任务、产�
 
 ## 💌 联系我们
 
-- **使用问题 / Bug 反馈**：优先提 [Issue](https://gitee.com/undefined_404/helloai/issues)（附运行日志与复现步骤可大幅加速定位）
-- **商务合作 / 部署咨询 / 其他**：📮 [456qwe-3@163.com](mailto:456qwe-3@163.com)（邮件标题请注明主题，便于分类处理）
+- **使用问题 / Bug 反馈**：优先提 [Issue](https://gitee.com/undefined_404/helloai/issues)（附运行日志与复现步骤可大幅加速定位）[456qwe-3@163.com](mailto:456qwe-3@163.com)（邮件标题请注明主题，便于分类处理）
 
 ---
 
