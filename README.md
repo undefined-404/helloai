@@ -9,9 +9,9 @@
   <img src="https://img.shields.io/badge/协议-MCP-blue" alt="MCP">
 </p>
 
-**HelloAI 把散落各处的 AI 助手与终端算力，组织成一支可调度、可验收、可审计的分布式工程团队**：任何一台终端上的任何一款 AI 助手（Qoder / Trae / Codex CLI / Claude Code……）经 MCP 协议接入，即成为受平台调度的"数字员工"——平台负责拆解需求、派发任务、回收产出、质检验收。**算力上限取决于你有多少台终端，而不是某台服务器的 CPU / 显存 / JVM 堆**。
+**HelloAI 把散落各处的 AI 助手与终端算力，组织成一支可调度、可验收、可审计的分布式工程团队**：任何一台终端上的任何一款 AI 助手（Qoder / Trae / Codex CLI / Claude Code……）经 MCP 协议接入，即成为受平台调度的"数字员工"--平台负责拆解需求、派发任务、回收产出、质检验收。**任何能跑 CLI Agent 的笔记本、台式机等终端设备，都是 HelloAI 的算力节点**；算力上限取决于你有多少台终端，而不是某台服务器的 CPU / 显存 / JVM 堆。
 
-调度之上，它像一个 AI 项目经理：你用日常语言说一个需求（比如"帮我对比三家竞品的定价策略"），它先追问澄清你的真实意图，把任务拆成带依赖的子任务，派给最合适的 AI 并行执行，AI 质检员逐个验收——不合格自动打回重做，最后整合成一份完整报告。全程你只需说一次需求、点一次确认；卡在哪个环节、谁在执行、被驳回了几次，全部可视化、可回看。
+调度之上，它像一个 AI 项目经理：你用日常语言说一个需求（比如"帮我对比三家竞品的定价策略"），它先追问澄清你的真实意图，把任务拆成带依赖的子任务，跨终端派给最合适的 AI 并行执行，AI 质检员逐个验收——不合格自动打回重做，最后整合成一份完整报告。全程你只需说一次需求、点一次确认；卡在哪个环节、谁在执行、被驳回了几次，全部可视化、可回看。
 
 ![HelloAI 跨终端跨产品架构](doc/diagrams/helloai-architecture.svg)
 
@@ -47,7 +47,7 @@
 1. **你说需求**：「帮我写一份竞品分析报告」
 2. **它先问清楚**：报告给谁看？要多详细？什么时候要？（像真人 PM 一样追问，还能联网查资料）
 3. **它拆任务**：拆成互相衔接的子任务（真实案例：Code Review 需求拆为 5 个子任务——规范 / 安全 / 性能 / Bug 审查 + 合并报告，三批拓扑），**你确认后才开工**
-4. **它派活**：分给最合适的 AI 员工并行执行——卡住了自动换人，出错多了自动熔断兜底
+4. **它派活**：跨终端分给最合适的 AI 员工并行执行——卡住了自动换人，出错多了自动熔断兜底
 5. **它验收**：AI 质检员逐条对照验收标准审核，不合格打回重做（附具体修改意见）
 6. **它交付**：全部成果整合成一份连贯报告 + 产出打包 zip，一键下载
 
@@ -161,7 +161,7 @@ Reviewer：核验通过（4/5）——交付物满足全部验收标准，未发
 
 ![子任务端到端协作流水线](doc/diagrams/subtask-pipeline.svg)
 
-Planner 结构化拆解（`planner-decompose.md` 提示词 → LLM JSON 数组 → Kahn 环检测 → 草案态 `PENDING_PLAN_REVIEW`）→ AgentSelector 选人并熔断降级 → Executor 异步执行（平台内走 Outbox → RabbitMQ；CLI Agent 走 MCP 拉取）→ Reviewer 规则门控 + LLM 双轨核验。驳回则补发执行命令返工，通过则 DONE 解锁下游依赖。
+Planner 结构化拆解（`planner-decompose.md` 提示词 → LLM JSON 数组 → Kahn 环检测 → 草案态 `PENDING_PLAN_REVIEW`）→ AgentSelector 选人并熔断降级 → Executor 异步执行（平台内走 Outbox -> RabbitMQ；CLI Agent 跨终端走 MCP 拉取）→ Reviewer 规则门控 + LLM 双轨核验。驳回则补发执行命令返工，通过则 DONE 解锁下游依赖。
 
 ### 2. Agent 选人：12 层硬过滤 + 4 级软排序
 
@@ -194,7 +194,7 @@ Planner 结构化拆解（`planner-decompose.md` 提示词 → LLM JSON 数组 �
 
 ### 2. 多 Agent 弹性调度（Executor）
 - **平台内 API_KEY_LLM**：平台托管的 API-Key 型 Agent（DeepSeek 等），自动执行链路，保底执行
-- **外部 CLI Agent**：Qoder / Trae / Codex CLI / Claude Code 等经 MCP 一键接入，实测可用
+- **外部 CLI Agent**：Qoder / Trae / Codex CLI / Claude Code 等经 MCP 一键跨终端接入（跑在你自己的设备上），实测可用
 - **弹性策略**：外部优先 + 空闲优先 + 值班优先（STRICT 独占）+ LLM 保底，策略可配置（`preferExternal` / `requireIdle` / `forceAccessType` / `autoAssignOnCreate`）
 - **值班打卡**：外部 Agent `checkIn`/`checkOut` 值班租约（ACTIVE/CLOSED/EXPIRED 状态机 + 到期自动扫描），值班 Agent 优先派单；`checkIn` 可顺带 `skills` 上报已加载技能标签（与既有技能取并集、只增不减），任务 `required_skills` 匹配立即生效
 - **任务感知轮询**：外部 Agent 靠 `pullTasks` 周期轮询收件箱感知新任务（建议 30s 一次）；服务端门铃 SSE 推送通道已交付但已搁置（外部 Agent 为单向执行器无法消费推送，代码保留运行，待未来 Agent 端常驻 daemon 落地后可复用）
@@ -566,7 +566,7 @@ environment:
 | **Executor** | 消费子任务、调用 LLM/Agent 执行、记录执行日志 | 开发团队 |
 | **Reviewer** | 审核产出质量、提出修改意见、触发返工 | QA / 架构师 |
 | **API_KEY_LLM** | 平台托管的 API-Key 模型 Agent，保底执行 | 正式员工 |
-| **CLI_CLIENT** | 通过 MCP 接入的外部 AI（Qoder / Trae / Codex / Claude Code） | 外包人员 |
+| **CLI_CLIENT** | 跨终端经 MCP 接入的外部 AI（Qoder / Trae / Codex / Claude Code，跑在你自己的各台终端上） | 外包人员 |
 
 ### 任务生命周期
 ```
@@ -585,7 +585,7 @@ environment:
 
 ### 外部 AI Agent 快速接入
 1. 管理端创建 Agent（角色 EXECUTOR，类型 CLI_CLIENT），复制一键生成的 SKILL 说明；
-2. 在外部 AI（如 Qoder / Trae）中粘贴执行该 SKILL，AI 将自动完成：注册鉴权 → MCP 连接 → `checkIn` 打卡 → 周期 `pullTasks` 轮询值守；
+2. 在任意一台终端的外部 AI（如 Qoder / Trae）中粘贴执行该 SKILL，该终端即成为平台的算力节点；AI 将自动完成：注册鉴权 -> MCP 连接 -> `checkIn` 打卡 -> 周期 `pullTasks` 轮询值守；
 3. 平台派单后 AI 经 `pullTasks` 轮询感知新消息，按 SKILL 规则 `claimSubTask` → 执行 → `submitResult`；
 4. 异常路径：执行受阻调 `reportBlocked`（带证据链）；超时未提交由平台自动补偿并改派同角色值班 Agent。
 
