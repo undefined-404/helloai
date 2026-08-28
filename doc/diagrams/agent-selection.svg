@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 412" width="720" height="412" role="img" aria-label="Agent 选择逻辑">
+  <style>
+    svg {
+      --surface: #F7F7F8;
+      --surface-muted: #EFEFF2;
+      --text: #171717;
+      --text-muted: #52525B;
+      --border: rgba(23, 23, 23, 0.12);
+      --brand: #4B3FE3;
+      --brand-soft: #F2F7FF;
+      --brand-text: #1A1759;
+      --font-sans: "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    .title { fill: var(--text); font: 500 16px/24px var(--font-sans); }
+    .pt { fill: var(--text); font: 500 14px/20px var(--font-sans); }
+    .row { fill: var(--text); font: 400 12px/18px var(--font-sans); }
+    .note { fill: var(--text-muted); font: 400 11px/16px var(--font-sans); }
+    .tag { fill: var(--brand-text); font: 500 11px/16px var(--font-sans); }
+    .num { fill: var(--brand-text); font: 500 12px/16px var(--font-sans); }
+    .panel { fill: var(--surface-muted); stroke: var(--border); stroke-width: 1; }
+    .foot-box { fill: none; stroke: var(--border); stroke-width: 1; stroke-dasharray: 5 4; }
+  </style>
+  <rect x="1" y="1" width="718" height="410" rx="12" style="fill: var(--surface); stroke: var(--border);"/>
+  <text class="title" x="20" y="34">Agent 选择：12 层硬过滤 + 4 级软排序取最优</text>
+  <rect class="panel" x="16" y="52" width="344" height="238" rx="8"/>
+  <text class="pt" x="30" y="78">硬过滤 · 候选须全部通过</text>
+  <g>
+    <rect x="30" y="92" width="40" height="18" rx="9" style="fill: var(--brand-soft);"/><text class="tag" x="50" y="105" text-anchor="middle">角色</text>
+    <text class="row" x="78" y="105">同 role 候选池（EXECUTOR / REVIEWER / PLANNER）</text>
+    <rect x="30" y="118" width="40" height="18" rx="9" style="fill: var(--brand-soft);"/><text class="tag" x="50" y="131" text-anchor="middle">约束</text>
+    <text class="row" x="78" y="131">executorAgentIds 白名单 + 技能 AND 匹配</text>
+    <rect x="30" y="144" width="40" height="18" rx="9" style="fill: var(--brand-soft);"/><text class="tag" x="50" y="157" text-anchor="middle">在线</text>
+    <text class="row" x="78" y="157">非 SLEEPING · CLI 需在线 + 心跳 ≤5min</text>
+    <rect x="30" y="170" width="40" height="18" rx="9" style="fill: var(--brand-soft);"/><text class="tag" x="50" y="183" text-anchor="middle">负载</text>
+    <text class="row" x="78" y="183">空闲优先 + 并发额度 canAccept</text>
+    <rect x="30" y="196" width="40" height="18" rx="9" style="fill: var(--brand-soft);"/><text class="tag" x="50" y="209" text-anchor="middle">凭证</text>
+    <text class="row" x="78" y="209">ACTIVE 启用 · API_KEY_LLM 有托管凭证</text>
+    <rect x="30" y="222" width="40" height="18" rx="9" style="fill: var(--brand-soft);"/><text class="tag" x="50" y="235" text-anchor="middle">保护</text>
+    <text class="row" x="78" y="235">跳过 STRICT 值班独占 · 熔断 OPEN 跳过</text>
+    <text class="note" x="30" y="264">另有 6 层隐性校验：状态机合法转移 / 依赖就绪守卫 /</text>
+    <text class="note" x="30" y="282">额度预扣 / 角色兜底链 / 时间窗 / 去重</text>
+  </g>
+  <rect class="panel" x="376" y="52" width="328" height="238" rx="8"/>
+  <text class="pt" x="390" y="78">软排序 · 多级比较 max() 取最优</text>
+  <g>
+    <rect x="390" y="92" width="20" height="20" rx="10" style="fill: var(--brand-soft);"/><text class="num" x="400" y="106" text-anchor="middle">1</text>
+    <text class="row" x="418" y="105">值班优先 —— 软优先级最高档</text>
+    <rect x="390" y="118" width="20" height="20" rx="10" style="fill: var(--brand-soft);"/><text class="num" x="400" y="132" text-anchor="middle">2</text>
+    <text class="row" x="418" y="131">接入类型 —— prefer-external 可选开关</text>
+    <rect x="390" y="144" width="20" height="20" rx="10" style="fill: var(--brand-soft);"/><text class="num" x="400" y="158" text-anchor="middle">3</text>
+    <text class="row" x="418" y="157">质量画像 —— 档位 × 0.1 权重回灌</text>
+    <rect x="390" y="170" width="20" height="20" rx="10" style="fill: var(--brand-soft);"/><text class="num" x="400" y="184" text-anchor="middle">4</text>
+    <text class="row" x="418" y="183">score 评分 —— 最终 tie-breaker 降序</text>
+    <line x1="390" y1="204" x2="690" y2="204" style="stroke: var(--border); stroke-width: 1;"/>
+    <text class="note" x="390" y="226">选定后经 ResilientDispatcher 双层熔断（整体 + per-agent）</text>
+    <text class="note" x="390" y="244">校验落库；任一环节失败即 fallback 换同角色替代者</text>
+    <text class="note" x="390" y="270">fallback 链：指定 Agent → 优选 → 值班 → 平台内</text>
+    <text class="note" x="390" y="288">API_KEY_LLM 保底（REVIEWER 不足时 PLANNER 兜底）</text>
+  </g>
+  <rect class="foot-box" x="16" y="308" width="688" height="78" rx="8"/>
+  <text class="note" x="32" y="334">重派熔断：reassign_attempt_count ≥ 5（max-reassign-attempts）→ 转 DEAD_LETTER 死信池，</text>
+  <text class="note" x="32" y="352">仅人工指派 / 人工放弃可恢复；死信不自动重派，由管理端「审查中心」处置。</text>
+  <text class="note" x="32" y="376">双审选人（pickDual）：候选 ≥2 且 modelType 互异才成对，不足自动降级单审（timeline 可观测）。</text>
+</svg>

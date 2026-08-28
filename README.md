@@ -1,4 +1,4 @@
-# HelloAI —— 你说人话，它带一支 AI 团队把活干完
+# HelloAI —— 分布式跨终端 AI Agent 调度平台
 
 <p align="center">
   <a href="doc/README.md"><img src="https://img.shields.io/badge/文档-文档地图-8A2BE2" alt="文档地图"></a>
@@ -9,17 +9,18 @@
   <img src="https://img.shields.io/badge/协议-MCP-blue" alt="MCP">
 </p>
 
-**HelloAI 是一个"AI 项目经理"**：你用日常语言说一个需求（比如"帮我对比三家竞品的定价策略"），它会先追问澄清你的真实意图，把任务拆成几件小任务，派给不同的 AI（Qoder / Trae / Codex / Claude Code……）并行干活，再由 AI 质检员逐个验收——不合格的自动打回重做，最后把所有成果整合成一份完整报告交给你。
+**HelloAI 把散落各处的 AI 助手与终端算力，组织成一支可调度、可验收、可审计的分布式工程团队**：任何一台终端上的任何一款 AI 助手（Qoder / Trae / Codex CLI / Claude Code……）经 MCP 协议接入，即成为受平台调度的"数字员工"——平台负责拆解需求、派发任务、回收产出、质检验收。**算力上限取决于你有多少台终端，而不是某台服务器的 CPU / 显存 / JVM 堆**。
 
-全程你只需说一次需求、点一次确认。卡在哪个环节、谁在执行、被驳回了几次，全部可视化、可回看。
+调度之上，它像一个 AI 项目经理：你用日常语言说一个需求（比如"帮我对比三家竞品的定价策略"），它先追问澄清你的真实意图，把任务拆成带依赖的子任务，派给最合适的 AI 并行执行，AI 质检员逐个验收——不合格自动打回重做，最后整合成一份完整报告。全程你只需说一次需求、点一次确认；卡在哪个环节、谁在执行、被驳回了几次，全部可视化、可回看。
 
-![一句话看懂 HelloAI](doc/images/helloai一句话看懂.png)
+![HelloAI 跨终端跨产品架构](doc/diagrams/helloai-architecture.svg)
 
 <p align="center">
+  <a href="#differentiators">🌐 核心差异化</a> •
   <a href="#how-it-works">🎬 工作方式</a> •
+  <a href="#how-it-runs">🔬 运行机制（流程图）</a> •
   <a href="#quick-start">🚀 5 分钟跑起来</a> •
-  <a href="doc/README.md">📖 文档地图</a> •
-  <a href="#for-developers">🔍 开发者详解</a>
+  <a href="doc/README.md">📖 文档地图</a>
 </p>
 
 ---
@@ -50,7 +51,23 @@
 5. **它验收**：AI 质检员逐条对照验收标准审核，不合格打回重做（附具体修改意见）
 6. **它交付**：全部成果整合成一份连贯报告 + 产出打包 zip，一键下载
 
-## 💎 为什么选 HelloAI
+<a id="differentiators"></a>
+
+## 💎 核心差异化：分布式终端调度
+
+### 算力形态：从"一台服务器"到"你的每一台终端"
+
+| | 传统单机 / 容器化多 Agent | HelloAI 分布式终端调度 |
+|---|---|---|
+| 算力上限 | 单台服务器的 CPU / 显存 / JVM 堆 | **聚合 N 台终端的碎片化算力**，终端越多池越大，无上限 |
+| Agent 生态 | 框架内自研 Agent / 同生态节点 | **跨终端、跨产品**：Qoder / Trae / Codex CLI / Claude Code 免改造接入 |
+| 扩容方式 | 升级硬件 / 改造成集群 | 多开一台终端 + 粘贴一段 SKILL 即完成"扩容" |
+| 协作方式 | 进程内调用，强绑定框架 | MCP 协议标准化通信（打卡 / 领任务 / 执行 / 提交 / 心跳） |
+| 跨产品协作 | 各产品间互不相通 | 同一主任务的子任务可由**不同终端上的不同厂商 AI** 接力完成 |
+
+> **诚实说明**：Agent 侧算力天然是分布式的（子任务在各自终端本地执行，平台只做调度与验收）；调度核心当前为单实例部署，Redisson + ShedLock 双锁体系已为多实例水平扩容打底（见[路线图](#roadmap)）。
+
+### 管理而非编写
 
 - 与 CrewAI / LangGraph 侧重"如何写 Agent"不同，HelloAI 侧重"**如何管 Agent**"：调度、容错、可视化、审计——**解决多 Agent 协作中的调度混乱、上下文断裂、执行不可追踪问题**
 - 基于 Spring Boot + Spring AI MCP 协议，外部 AI（Qoder / Trae / Codex CLI / Claude Code）免改造一键接入，像调度微服务一样派发子任务并回收执行结果
@@ -125,11 +142,44 @@ Reviewer：核验通过（4/5）——交付物满足全部验收标准，未发
 | | CrewAI / LangGraph | Dify | HelloAI |
 |---|---|---|---|
 | 关注点 | 如何写 Agent（框架） | LLM 应用工作流编排 | **如何管 Agent**：调度、验收、审计 |
+| 算力形态 | 单机 / 容器内 | 平台节点内 | **分布式终端聚合**（N 台终端 × 跨产品 CLI Agent） |
 | 技术生态 | Python | Python | Java 企业级（Spring Boot） |
 | 外部 Agent 接入 | 按框架 API 开发 | 限于平台内节点 | MCP 协议，CLI Agent 免改造接入 |
 | 质量闭环 | 自行实现 | 工作流内自行拼装 | 内置 Reviewer 双轨审核 + 多轮驳回返工 + 死信兜底 |
 | 执行可追踪 | 日志为主 | 流程编排视图 | 依赖 DAG / 时间线 / 时序图 / 质量看板 |
 | 部署形态 | 库 / 服务 | SaaS / 私有部署 | Docker Compose 完全私有化 |
+
+---
+
+<a id="how-it-runs"></a>
+
+## 🔬 运行机制（工程视角）
+
+四张流程图讲清楚一个子任务从诞生到终态的完整链路，**均按代码实际行为绘制**（含每一步的触发条件、异常出口与人工兜底）。矢量版可直接在下文阅读，完整 HTML 版本在 [`doc/diagrams/`](doc/diagrams/) 目录，下载后用浏览器打开可无损缩放细看。
+
+### 1. 端到端协作流水线
+
+![子任务端到端协作流水线](doc/diagrams/subtask-pipeline.svg)
+
+Planner 结构化拆解（`planner-decompose.md` 提示词 → LLM JSON 数组 → Kahn 环检测 → 草案态 `PENDING_PLAN_REVIEW`）→ AgentSelector 选人并熔断降级 → Executor 异步执行（平台内走 Outbox → RabbitMQ；CLI Agent 走 MCP 拉取）→ Reviewer 规则门控 + LLM 双轨核验。驳回则补发执行命令返工，通过则 DONE 解锁下游依赖。
+
+### 2. Agent 选人：12 层硬过滤 + 4 级软排序
+
+![Agent 选择逻辑](doc/diagrams/agent-selection.svg)
+
+候选池先过 12 层硬过滤（角色 / 白名单约束 / 在线心跳 / 空闲并发 / 凭证 / 熔断保护等），再按**值班 > 接入类型 > 质量画像 > score 评分**四级比较取最优；选定后经 ResilientDispatcher 双层熔断校验落库，任一环节失败即 fallback 换同角色替代者，重派达 5 次转死信池人工兜底。
+
+### 3. 子任务全状态机（11 态）
+
+![子任务全状态机](doc/diagrams/subtask-state-machine.svg)
+
+主线 `PENDING_PLAN_REVIEW → PENDING → ASSIGNED → IN_PROGRESS → REVIEW → DONE`；异常路径覆盖 PAUSED（恢复 / 换人组合转移）、BLOCKED、REWORK、DEAD_LETTER 与 CANCELLED 级联取消。唯二终态：DONE / CANCELLED——死信不自动重派，仅人工指派或人工放弃。
+
+### 4. Reviewer 审核全流程
+
+![Reviewer 审核全流程](doc/diagrams/reviewer-full-flow.svg)
+
+三路触发容错（L1 事件 / L2 MQ / L3 孤儿扫描）→ 互斥锁 → 规则门控（fail-close：不确定即不改状态、停审等人工）→ 双审判定（`difficulty=HIGH` 且未指定 reviewer 时，双互异模型并行核验，候选不足自动降级单审）→ 核验执行（产出 + 附件正文 + 验收标准三方一致性核对）→ 通过 DONE / 驳回 REWORK。事后按 5% 比例抽检复审已通过的记录，分歧记为 Reviewer"放水"标记，只度量不放行。
 
 ---
 
@@ -169,6 +219,7 @@ Reviewer：核验通过（4/5）——交付物满足全部验收标准，未发
 - 独立 Reviewer Agent 对产出进行审核，支持多轮驳回-修正循环
 - **双轨纪律制**：对照**验收标准**（轨道 A）+ **工程纪律清单**（轨道 B：代码 C1-C4 接口契约 / 生命周期并发 / 验证强度 / 范围必要性，文档 D1-D3 契约完整 / 无思维链泄漏 / 结构清晰），任一轨道 blocker 级问题即驳回（pass=false），issues 用四元组格式 `[defect][location][impact][evidence]` 可直接指导返工
 - 审核意见（`subtask_review_result`）与执行对话流一起可视化展示
+- **双审共识与抽检复审**：高难度任务由两个互异模型并行核验（分歧即停审转人工），已通过的记录按比例抽样复审，分歧记为 Reviewer"放水"标记——完整判定链路见 [Reviewer 审核全流程图](#how-it-runs)
 - 最终由 Planner 整合所有子任务产出，生成连贯的最终整合报告
 
 ### 6. 报告生成与交付物
@@ -528,6 +579,8 @@ environment:
 异常路径：外部 Agent 超时/失败 → 熔断回退 API_KEY_LLM → 重分配达阈值 → DEAD_LETTER 人工兜底
 ```
 
+> 完整 11 态状态机（含 PAUSED 换人、级联取消等全部转移路径）见 [子任务全状态机](#how-it-runs)。
+
 <a id="agent-quick-connect"></a>
 
 ### 外部 AI Agent 快速接入
@@ -555,6 +608,8 @@ environment:
 | 报告下载 | 最终整合报告 + 全子任务产出 zip 一键下载 | — |
 
 ---
+
+<a id="roadmap"></a>
 
 ## 🗺️ 路线图
 
@@ -584,7 +639,7 @@ environment:
 - [ ] 浏览器型 Agent（WEB_BROWSER）真实接入链路
 - [ ] 工作流模板与 Team 编排
 - [ ] 多租户与权限隔离
-- [ ] 分布式调度扩展
+- [ ] 调度核心多实例水平扩容（Redisson / ShedLock 双锁体系已打底；Agent 侧算力本身已跨终端分布式）
 
 ---
 
@@ -597,7 +652,7 @@ environment:
 - 实现差距：[`doc/HelloAI_实现差距表.md`](doc/HelloAI_实现差距表.md)
 - 当前进度：[`doc/项目进度.md`](doc/项目进度.md)
 
-其他：EXECUTOR 接入指南 [`.executor-onboarding.md`](.executor-onboarding.md) / 设计系统 [`DESIGN.md`](DESIGN.md) / 产品定义 [`PRODUCT.md`](PRODUCT.md) / English [`README.en.md`](README.en.md)
+其他：EXECUTOR 接入指南 [`.executor-onboarding.md`](.executor-onboarding.md) / 设计系统 [`DESIGN.md`](DESIGN.md) / 产品定义 [`PRODUCT.md`](PRODUCT.md) / 核心流程图 [`doc/diagrams/`](doc/diagrams/) / English [`README.en.md`](README.en.md)
 
 ---
 

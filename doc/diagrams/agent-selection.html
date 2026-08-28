@@ -1,0 +1,76 @@
+<style>
+:root {
+  color-scheme: light;
+  --surface: #F7F7F8;
+  --surface-muted: #EFEFF2;
+  --text: #171717;
+  --text-muted: #52525B;
+  --border: rgba(23, 23, 23, 0.12);
+  --brand: #4B3FE3;
+  --brand-soft: #F2F7FF;
+  --brand-text: #1A1759;
+  --font-sans: "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --text-caption: 12px/18px;
+  --text-body: 14px/20px;
+  --radius: 8px;
+  --radius-card: 12px;
+  --spacer-4: 4px;
+  --spacer-8: 8px;
+  --spacer-12: 12px;
+  --spacer-16: 16px;
+  --spacer-20: 20px;
+}
+:root[data-widget-theme="dark"] {
+  color-scheme: dark;
+  --surface: #171717;
+  --surface-muted: #262626;
+  --text: #E5E5E5;
+  --text-muted: #A1A1AA;
+  --border: rgba(229, 229, 229, 0.12);
+  --brand: #6054F1;
+  --brand-soft: #1A1759;
+  --brand-text: #CFD8FF;
+}
+.widget { color: var(--text); font: var(--weight-regular) var(--text-body) var(--font-sans); }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); padding: var(--spacer-20); }
+.card-title { font: var(--weight-medium) 16px/24px var(--font-sans); color: var(--text); margin-bottom: var(--spacer-16); }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: var(--spacer-16); }
+.panel { background: var(--surface-muted); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--spacer-16); }
+.panel-title { font: var(--weight-medium) 14px/20px var(--font-sans); color: var(--text); margin-bottom: var(--spacer-12); }
+.row { display: flex; align-items: baseline; gap: var(--spacer-8); padding: var(--spacer-4) 0; font: var(--weight-regular) var(--text-caption) var(--font-sans); color: var(--text); }
+.tag { flex: none; font: var(--weight-medium) var(--text-caption) var(--font-sans); color: var(--brand-text); background: var(--brand-soft); border-radius: 999px; padding: 1px 10px; }
+.rank { display: flex; align-items: center; gap: var(--spacer-8); padding: var(--spacer-4) 0; font: var(--weight-regular) var(--text-caption) var(--font-sans); color: var(--text); }
+.num { flex: none; width: 20px; height: 20px; border-radius: 999px; background: var(--brand-soft); color: var(--brand-text); font: var(--weight-medium) 12px/20px var(--font-sans); text-align: center; }
+.note { margin-top: var(--spacer-12); padding-top: var(--spacer-12); border-top: 1px solid var(--border); font: var(--weight-regular) var(--text-caption) var(--font-sans); color: var(--text-muted); }
+.foot { margin-top: var(--spacer-16); padding: var(--spacer-12); border: 1px dashed var(--border); border-radius: var(--radius); font: var(--weight-regular) var(--text-caption) var(--font-sans); color: var(--text-muted); }
+.foot code { font-family: var(--font-mono); color: var(--text); }
+@media (max-width: 640px) { .cols { grid-template-columns: 1fr; } }
+</style>
+<div class="widget" data-dynamic-ui-widget data-template="explanation-panel">
+  <div class="card">
+    <div class="card-title">Agent 选择：12 层硬过滤 + 4 级软排序取最优</div>
+    <div class="cols">
+      <div class="panel">
+        <div class="panel-title">硬过滤 · 候选须全部通过</div>
+        <div class="row"><span class="tag">角色</span><span>同 role 候选池（EXECUTOR / REVIEWER / PLANNER）</span></div>
+        <div class="row"><span class="tag">约束</span><span>executorAgentIds 白名单 + 技能 AND 匹配</span></div>
+        <div class="row"><span class="tag">在线</span><span>非 SLEEPING · CLI 需在线 + 心跳 ≤5min</span></div>
+        <div class="row"><span class="tag">负载</span><span>空闲优先 + 并发额度 canAccept</span></div>
+        <div class="row"><span class="tag">凭证</span><span>ACTIVE 启用 · API_KEY_LLM 有托管凭证</span></div>
+        <div class="row"><span class="tag">保护</span><span>跳过 STRICT 值班独占 · 熔断 OPEN 跳过</span></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">软排序 · 多级比较 max() 取最优</div>
+        <div class="rank"><span class="num">1</span><span>值班优先 —— 软优先级最高档</span></div>
+        <div class="rank"><span class="num">2</span><span>接入类型 —— prefer-external 可选开关</span></div>
+        <div class="rank"><span class="num">3</span><span>质量画像 —— 档位 × 0.1 权重回灌</span></div>
+        <div class="rank"><span class="num">4</span><span>score 评分 —— 最终 tie-breaker 降序</span></div>
+        <div class="note">选定后经 ResilientDispatcher 双层熔断（整体 + per-agent）校验落库；任一环节失败即 fallback 换同角色替代者</div>
+      </div>
+    </div>
+    <div class="foot">重派熔断：<code>reassign_attempt_count ≥ 5</code>（max-reassign-attempts）-> 转 <code>DEAD_LETTER</code> 死信池，仅人工指派 / 人工放弃可恢复</div>
+  </div>
+</div>

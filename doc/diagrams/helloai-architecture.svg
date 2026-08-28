@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 720" width="960" height="720" role="img" aria-label="HelloAI 分布式跨终端架构图">
+  <style>
+    svg {
+      --surface: #F7F7F8;
+      --surface-muted: #EFEFF2;
+      --text: #171717;
+      --text-muted: #52525B;
+      --border: rgba(23, 23, 23, 0.12);
+      --brand: #4B3FE3;
+      --brand-soft: #F2F7FF;
+      --brand-text: #1A1759;
+      --font-sans: "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    .title { fill: var(--text); font: 600 18px/26px var(--font-sans); }
+    .subtitle { fill: var(--text-muted); font: 400 12px/18px var(--font-sans); }
+    .th { fill: #FFFFFF; font: 600 14px/20px var(--font-sans); }
+    .ts { fill: #FFFFFF; font: 400 12px/18px var(--font-sans); opacity: 0.92; }
+    .leg { fill: var(--text-muted); font: 400 12px/18px var(--font-sans); }
+    .layer-label { fill: var(--text-muted); font: 600 12px/18px var(--font-sans); letter-spacing: 1px; }
+    .g-you rect { fill: #6E8EFB; stroke: #6E8EFB; stroke-width: 1.5; }
+    .g-orch rect { fill: #8B5CF6; stroke: #8B5CF6; stroke-width: 1.5; }
+    .g-meta rect { fill: #0D9488; stroke: #0D9488; stroke-width: 1.5; }
+    .g-exec rect { fill: #F97316; stroke: #F97316; stroke-width: 1.5; }
+    .g-cap rect { fill: #6B7280; stroke: #6B7280; stroke-width: 1.5; }
+    .e-arrow { stroke: var(--text-muted); stroke-width: 2; stroke-linecap: round; fill: none; }
+    .e-mcp { stroke: var(--brand); stroke-width: 2; stroke-linecap: round; stroke-dasharray: 6 4; fill: none; }
+  </style>
+  <defs>
+    <marker id="mk-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" style="fill: var(--text-muted);"/>
+    </marker>
+    <marker id="mk-m" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" style="fill: var(--brand);"/>
+    </marker>
+  </defs>
+  <rect x="1" y="1" width="958" height="718" rx="12" style="fill: var(--surface); stroke: var(--border);"/>
+  <text class="title" x="24" y="34">HelloAI -- 跨终端、跨产品的分布式 AI Agent 调度</text>
+  <text class="subtitle" x="24" y="56">分 4 层看：编排 -> 微编排 -> 跨终端执行 -> 异构算力</text>
+
+  <!-- 右上：差异化徽标 + 注记卡（避开中央"你"块，独占右侧列） -->
+  <rect x="800" y="60" width="140" height="22" rx="11" style="fill: var(--brand);"/>
+  <text x="870" y="75" text-anchor="middle" style="fill: #FFFFFF; font: 600 11px/16px var(--font-sans);">与同类的关键差异</text>
+  <rect x="800" y="92" width="140" height="112" rx="8" style="fill: var(--brand-soft); stroke: var(--brand); stroke-width: 1.5;"/>
+  <text x="812" y="114" style="fill: var(--brand-text); font: 600 12px/18px var(--font-sans);">差异化一句话</text>
+  <text x="812" y="136" style="fill: var(--text); font: 400 11px/17px var(--font-sans);">任务可跨终端，跨AI：</text>
+  <text x="812" y="154" style="fill: var(--text); font: 400 11px/17px var(--font-sans);">同一主任务的子任务</text>
+  <text x="812" y="172" style="fill: var(--text); font: 400 11px/17px var(--font-sans);">可由不同终端的不同</text>
+  <text x="812" y="190" style="fill: var(--text); font: 400 11px/17px var(--font-sans);">产品AI Agent接力完成</text>
+
+  <!-- 编排层 -->
+  <text class="layer-label" x="40" y="110">编排</text>
+  <g class="g-you">
+    <rect x="280" y="84" width="400" height="52" rx="8"/>
+    <text class="th" x="480" y="108" text-anchor="middle">你（任务发起者 / 需求方）</text>
+    <text class="ts" x="480" y="126" text-anchor="middle">说人话 · 确认草案 · 看进度 · 收报告</text>
+  </g>
+  <g class="g-orch">
+    <rect x="160" y="164" width="640" height="92" rx="8"/>
+    <text class="th" x="480" y="192" text-anchor="middle">HelloAI 编排层（宏观调度）</text>
+    <text class="ts" x="480" y="212" text-anchor="middle">需求澄清 · 任务拆解 · 依赖 DAG · Agent 选人 · 验收 · 报告整合</text>
+    <text class="ts" x="480" y="232" text-anchor="middle">跨产品/跨终端调度：不只 AI 编码，还包括搜索、文档、数据等异构任务</text>
+    <text class="ts" x="480" y="248" text-anchor="middle">MCP Server · Spring AI 1.1.8 · 11 个 MCP 工具 · 12 层过滤 + 4 级排序</text>
+  </g>
+  <path class="e-arrow" d="M480 136 L480 164" marker-end="url(#mk-a)"/>
+
+  <!-- 微编排层 -->
+  <text class="layer-label" x="40" y="337">微编排</text>
+  <g class="g-meta">
+    <rect x="160" y="290" width="640" height="86" rx="8"/>
+    <text class="th" x="480" y="318" text-anchor="middle">微编排层（Agent Harness）</text>
+    <text class="ts" x="480" y="338" text-anchor="middle">执行命令派发 · 状态机收敛 · 互斥锁（RLock）· Outbox 事务性投递</text>
+    <text class="ts" x="480" y="356" text-anchor="middle">三级触发容错（L1 事件 / L2 MQ / L3 孤儿扫描）· 双层熔断 · 三层幂等</text>
+    <text class="ts" x="480" y="372" text-anchor="middle">依赖就绪守卫 · 死信池人工兜底 · 抽检复审</text>
+  </g>
+  <path class="e-arrow" d="M480 256 L480 290" marker-end="url(#mk-a)"/>
+
+  <!-- 执行层：终端 #1 / #2 -->
+  <text class="layer-label" x="40" y="467">执行</text>
+  <g class="g-exec">
+    <rect x="160" y="422" width="310" height="80" rx="8"/>
+    <text class="th" x="315" y="450" text-anchor="middle">终端 #1 · 跨产品接入</text>
+    <text class="ts" x="315" y="470" text-anchor="middle">Qoder · Trae · Codex CLI · Claude Code</text>
+    <text class="ts" x="315" y="488" text-anchor="middle">本地算力 · 私有上下文 · 隔离执行</text>
+  </g>
+  <g class="g-exec">
+    <rect x="490" y="422" width="310" height="80" rx="8"/>
+    <text class="th" x="645" y="450" text-anchor="middle">终端 #2 · 同一时刻并行</text>
+    <text class="ts" x="645" y="470" text-anchor="middle">可挂不同厂商的 AI 助手</text>
+    <text class="ts" x="645" y="488" text-anchor="middle">MCP 协议 · 标准化通信</text>
+  </g>
+  <path class="e-mcp" d="M315 376 L315 422" marker-end="url(#mk-m)"/>
+  <path class="e-mcp" d="M645 376 L645 422" marker-end="url(#mk-m)"/>
+  <rect x="335" y="388" width="290" height="20" rx="10" style="fill: var(--brand-soft);"/>
+  <text x="480" y="402" text-anchor="middle" style="fill: var(--brand-text); font: 600 11px/16px var(--font-sans);">MCP · 跨终端标准化通道</text>
+
+  <!-- 终端 #N：并列延续（省略号，非流程箭头） -->
+  <circle cx="460" cy="513" r="2.5" style="fill: var(--text-muted);"/>
+  <circle cx="480" cy="513" r="2.5" style="fill: var(--text-muted);"/>
+  <circle cx="500" cy="513" r="2.5" style="fill: var(--text-muted);"/>
+  <rect x="160" y="524" width="640" height="44" rx="8" style="fill: var(--surface-muted); stroke: var(--border); stroke-width: 1.5;"/>
+  <text class="layer-label" x="480" y="551" text-anchor="middle" style="letter-spacing: 0.5px;">终端 #3 · 终端 #4 · 终端 #N …… 平台无上限</text>
+
+  <!-- 能力层 -->
+  <text class="layer-label" x="40" y="610">能力</text>
+  <g class="g-cap">
+    <rect x="160" y="580" width="640" height="50" rx="8"/>
+    <text class="th" x="480" y="600" text-anchor="middle" style="font-size: 13px;">LLM 提供方（按终端任选：DeepSeek · Claude · GPT · Gemini · Moonshot · Qwen）</text>
+    <text class="ts" x="480" y="620" text-anchor="middle">凭证托管 · 模型能力驱动 · 动态热加载</text>
+  </g>
+  <path class="e-arrow" d="M480 568 L480 580" marker-end="url(#mk-a)"/>
+
+  <!-- 图例 -->
+  <g>
+    <line x1="40" y1="680" x2="76" y2="680" style="stroke: var(--text-muted); stroke-width: 2; stroke-linecap: round;"/>
+    <text class="leg" x="84" y="684">主流程</text>
+    <line x1="148" y1="680" x2="184" y2="680" style="stroke: var(--brand); stroke-width: 2; stroke-linecap: round; stroke-dasharray: 6 4;"/>
+    <text class="leg" x="192" y="684">MCP 协议通道</text>
+    <rect x="316" y="671" width="18" height="18" rx="4" style="fill: #6E8EFB;"/>
+    <text class="leg" x="342" y="684">你</text>
+    <rect x="376" y="671" width="18" height="18" rx="4" style="fill: #8B5CF6;"/>
+    <text class="leg" x="402" y="684">编排</text>
+    <rect x="442" y="671" width="18" height="18" rx="4" style="fill: #0D9488;"/>
+    <text class="leg" x="468" y="684">微编排</text>
+    <rect x="518" y="671" width="18" height="18" rx="4" style="fill: #F97316;"/>
+    <text class="leg" x="544" y="684">跨终端执行</text>
+    <rect x="618" y="671" width="18" height="18" rx="4" style="fill: #6B7280;"/>
+    <text class="leg" x="644" y="684">异构算力</text>
+  </g>
+</svg>
