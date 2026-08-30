@@ -6,13 +6,32 @@
 本文档是你接入 HelloAI 调度平台的**完整说明书 + 全套工具清单**。用哪些工具、何时用，
 由你自行决策；下面把平台提供的全部能力一次讲清。
 
+## 两种执行模式
+
+HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响应**：
+
+| 模式 | 说明 | 适用场景 |
+|---|---|---|
+| **当前对话被动响应**（推荐） | Agent 在对话中等待用户提示"有新任务了"，然后拉取收件箱并逐条处理。不占用后台常驻进程，随用随走。 | Trae / Qoder / Codex 等 LLM 型 Agent；串行执行，每次只处理一条任务 |
+| **后台常驻脚本** | 启动一个长期运行的轮询循环（while true），自动拉取收件箱并处理任务。需要独立终端/进程守护。 | 脚本型 Agent；需要 7×24 无人值守自动处理 |
+
+> **为什么推荐"当前对话"模式？** 外部 AI Agent（如 Trae、Qoder）在对话中运行，每次对话有独立的上下文窗口。后台常驻脚本在 Trae 中无法持久运行（对话结束即终止），且 `start-sleep` 主循环会阻塞对话交互。当前对话模式把"值班"变成被动响应——用户说"有新任务了"，Agent 立即拉取并处理，处理完回到等待状态，不占用后台资源。
+
+> 💡 本目录 `scripts/` 下的脚本包专为"当前对话"模式设计：Windows 用 `.ps1`（PowerShell），macOS/Linux 用 `.sh`（bash + curl + jq）。`clock` 打卡/续租/下班，`pull_tasks` 拉取收件箱，`process_one` 处理单条子任务。详见下方「快速上手：值班执行器脚本包」。
+
 ## 认证信息
 - API Key: `<注册后填入>`（`ak_` 开头；由平台注册时下发/注入，不要硬编码进脚本仓库或对外分发）
 - 服务地址: `{{BASE_URL}}`（注册时由平台注入；本地单机通常为 `http://localhost:6565`，服务器部署按实际域名/端口）
 - 所有请求（REST 与 MCP）都需携带 Header：`Authorization: Bearer <API_KEY>`
 
-> 📎 **最快上手**：替换上面两个占位符后，直接照抄 §1.5.7「值班闭环最小示例」即可完成
-> 打卡 → 轮询 → 认领 → 执行 → 提交 → ack → 下班的完整闭环；本文档其余章节是遇到问题
+> 📎 **最快上手（推荐）**：使用 `scripts/` 目录下的脚本包（Windows 用 `.ps1`，macOS/Linux 用 `.sh`）：
+> 1. 复制 `scripts/config.example.json` 为 `scripts/config.json`，填入 `baseUrl` 和 `apiKey`
+> 2. 打卡上班：`powershell -File scripts/clock.ps1 -Action onDuty`（Win）或 `chmod +x scripts/clock.sh && ./scripts/clock.sh onDuty`（Mac/Linux，需 `jq`）
+> 3. 拉取收件箱：`powershell -File scripts/pull_tasks.ps1` 或 `./scripts/pull_tasks.sh`
+> 4. 处理任务：`powershell -File scripts/process_one.ps1 -SubTaskId <id> -FilePath <文件> -MessageId <消息ID>` 或 `./scripts/process_one.sh -s <id> -f <文件> -m <消息ID>`
+> 5. 打卡下班：`powershell -File scripts/clock.ps1 -Action checkOut` 或 `./scripts/clock.sh checkOut`
+>
+> 也可照抄 §1.5.7「值班闭环最小示例」（纯 PowerShell 内联版）。本文档其余章节是遇到问题
 > （握手失败 / 返工 / 依赖装配 / 编码约定）时按需查阅的参考手册，不必全部读完才开工。
 
 ## 技能标签（skills）与平台技能规范（eng-*）
@@ -753,6 +772,26 @@ python task-cli.py --key <API_KEY> skill         # 获取本 SKILL 文档（Key 
 python task-cli.py --key <API_KEY> version       # 查看版本
 python task-cli.py --key <API_KEY> update        # 更新 CLI + SKILL
 ```
+
+---
+
+## 已知坑（来自外部 Agent 实测）
+
+下表是 Trae / Qoder 等外部 Agent 在接入 HelloAI 平台时踩过的坑，按此处理可避免反复试错：
+
+| 坑 | 现象 | 解法 |
+|---|---|---|
+| `checkIn` 工具名 | Trae 原版 skill 使用 `clockIn`，平台实际工具名为 `checkIn` | 使用 `checkIn`（本目录 `scripts/` 脚本已修正） |
+| `startById` MCP 工具返 500 | `tools/call startById` 返回 500 错误 | 改用 REST 端点 `POST /api/sub-tasks/startById/{id}`（`process_one.ps1` 已内置） |
+| `ack` 返回字段 | 响应中成功标记是 `result.acknowledged`，不是 `result.ok` | 检查 `acknowledged === true` |
+| `submitResult` 必传 `resultId` | 漏传 `resultId` 会报参数校验失败 | 使用 `r-{subTaskId}-{v1}` 命名（`process_one.ps1` 已内置） |
+| 附件 ID 不在任务详情中 | `getById` 返回的附件字段可能为空 | 真正 ID 在 `POST /api/artifacts/upload` 响应的 `data.attachmentId` |
+| `pullTasks` 默认过滤已读 | 未 ack 的消息下次 pull 仍出现（`read=false`），但已读消息默认不返回 | 需要回看历史时传 `includeRead: true` |
+| 后台脚本主循环只跑一轮 | Trae 等 IDE 中 `while true` 循环会阻塞对话 | 改用"当前对话被动响应"模式（见 §两种执行模式） |
+| 中文日志乱码 | PowerShell 5.1 在中文 Windows 下默认 GBK 输出 | 脚本开头加 UTF-8 编码强制头（本目录所有脚本已内置，见项目规则 6） |
+| 双引号 + CJK 导致解析器异常 | `Write-Host "[$Scenario] PASS : $Detail（成功）"` 可能抛 `Unexpected token '}'` | 改用单引号 + `+` 拼接（本目录所有脚本已照此改写） |
+| `checkIn` 参数名 | Trae 原版使用 `concurrencyMax`，平台实际参数为 `maxConcurrent` | 使用 `maxConcurrent`（本目录脚本已修正） |
+| jq 依赖 | 官方参考示例依赖 `jq`，Windows 默认不含；macOS/Linux 也可能未预装 | Windows：`.ps1` 脚本纯 PowerShell，无需 `jq`；macOS/Linux：`.sh` 脚本需 `jq`，安装 `brew install jq`（Mac）或 `apt-get install jq`（Linux） |
 
 ---
 
