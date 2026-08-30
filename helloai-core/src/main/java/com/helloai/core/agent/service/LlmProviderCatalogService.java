@@ -5,7 +5,7 @@ import com.helloai.core.agent.entity.Agent;
 import java.util.List;
 
 /**
- * LLM Provider 目录服务：枚举平台已配置的 provider 及可用性，支持按 provider 绑定平台级 API Key。
+ * LLM Provider 目录服务：枚举平台已配置的 provider 及可用性。
  */
 public interface LlmProviderCatalogService {
 
@@ -27,14 +27,11 @@ public interface LlmProviderCatalogService {
     boolean isProviderAvailable(String provider);
 
     /**
-     * 为 Agent 绑定平台级 API Key（仅当 Agent 未配置自身 API Key 时绑定）。
+     * 为 API_KEY_LLM Agent 核对注册前的平台凭证就绪性（内部 LLM Agent 注册后置检查）。
      *
-     * @return true=绑定成功或已存在绑定；false=平台无可用 API Key
-     */
-    boolean bindPlatformApiKeyIfAbsent(Long agentId, String provider);
-
-    /**
-     * 为 Agent 预置平台级凭证（外部 Agent 注册/上线前调用）。
+     * <p>内部 LLM Agent 不再持有 AGENT 级 API Key 副本，执行链按 modelType 关联
+     * 平台级凭证实时取 Key（见 AgentLlmCredentialResolver）；本方法仅确认
+     * provider 可用，返回 false 表示跳过（不阻断注册）。</p>
      */
     boolean provisionPlatformCredential(Agent agent);
 }

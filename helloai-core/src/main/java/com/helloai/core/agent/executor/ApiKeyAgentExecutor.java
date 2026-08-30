@@ -3,13 +3,13 @@ package com.helloai.core.agent.executor;
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentAccessType;
+import com.helloai.core.agent.AgentLlmCredentialResolver;
 import com.helloai.core.agent.chat.AgentProviderResolver;
 import com.helloai.core.agent.chat.ChatResponseContentExtractor;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.AgentChatClientService;
-import com.helloai.core.system.service.CredentialVaultBindingService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.metadata.Usage;
@@ -36,15 +36,15 @@ import java.util.Map;
 public class ApiKeyAgentExecutor implements AgentExecutor {
 
     private final AgentChatClientService agentChatClientService;
-    private final CredentialVaultBindingService credentialVaultBindingService;
+    private final AgentLlmCredentialResolver agentLlmCredentialResolver;
     private final AgentExecutionProperties executionProperties;
 
     public ApiKeyAgentExecutor(
             AgentChatClientService agentChatClientService,
-            CredentialVaultBindingService credentialVaultBindingService,
+            AgentLlmCredentialResolver agentLlmCredentialResolver,
             AgentExecutionProperties executionProperties) {
         this.agentChatClientService = agentChatClientService;
-        this.credentialVaultBindingService = credentialVaultBindingService;
+        this.agentLlmCredentialResolver = agentLlmCredentialResolver;
         this.executionProperties = executionProperties;
     }
 
@@ -143,7 +143,8 @@ public class ApiKeyAgentExecutor implements AgentExecutor {
                     "provider", provider
             ));
             try {
-                vaultApiKey = credentialVaultBindingService.getAgentApiKeyPlaintext(agent.getId(), provider);
+                // 平台级（模型配置）密钥优先，Agent 级兜底：系统管理轮换 API Key 后实时生效
+                vaultApiKey = agentLlmCredentialResolver.resolveApiKey(agent);
             } catch (Exception e) {
                 Throwable root = e;
                 while (root.getCause() != null && root.getCause() != root) {
@@ -174,7 +175,8 @@ public class ApiKeyAgentExecutor implements AgentExecutor {
                     "subTaskId", task.getSubTaskId(),
                     "provider", provider
             ));
-            throw new BizException("Agent 未配置启用态托管凭证: agentId=" + agent.getId() + ", provider=" + provider);
+            throw new BizException("未配置可用的平台级或 Agent 级 API Key: agentId=" + agent.getId()
+                                + ", provider=" + provider + "，请先在系统管理中配置模型 API Key");
         }
         try {
             ChatResponse response = agentChatClientService.generate(

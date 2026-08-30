@@ -3,6 +3,7 @@ package com.helloai.core.agent.service.impl;
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentAccessType;
+import com.helloai.core.agent.AgentLlmCredentialResolver;
 import com.helloai.core.agent.chat.ChatResponseContentExtractor;
 import com.helloai.core.agent.domain.AgentExecutionConnectivityResult;
 import com.helloai.core.agent.entity.Agent;
@@ -10,7 +11,6 @@ import com.helloai.core.agent.service.AgentChatClientService;
 import com.helloai.core.agent.service.AgentExecutionConnectivityService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.system.entity.CredentialVault;
-import com.helloai.core.system.service.CredentialVaultBindingService;
 import com.helloai.core.system.service.CredentialVaultService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.metadata.Usage;
@@ -34,7 +34,7 @@ public class AgentExecutionConnectivityServiceImpl implements AgentExecutionConn
     private final AgentService agentService;
     private final AgentChatClientService agentChatClientService;
     private final CredentialVaultService credentialVaultService;
-    private final CredentialVaultBindingService credentialVaultBindingService;
+    private final AgentLlmCredentialResolver agentLlmCredentialResolver;
     private final AgentExecutionProperties executionProperties;
 
     /**
@@ -78,11 +78,13 @@ public class AgentExecutionConnectivityServiceImpl implements AgentExecutionConn
             String vaultApiKey = null;
             if (!executionProperties.isMockMode()) {
                 stage = "vault_fetch";
-                vaultApiKey = credentialVaultBindingService.getAgentApiKeyPlaintext(agentId, provider);
+                // 平台级（模型配置）密钥优先，Agent 级兜底：系统管理轮换 API Key 后探活实时生效
+                vaultApiKey = agentLlmCredentialResolver.resolveApiKey(agent);
                 builder.credentialReady(vaultApiKey != null && !vaultApiKey.isBlank());
                 if (vaultApiKey == null || vaultApiKey.isBlank()) {
                     return fail(builder, startedAt, stage,
-                            "未取到可用的托管 API Key: agentId=" + agentId + ", provider=" + provider, null);
+                            "未取到可用的平台级或 Agent 级 API Key: agentId=" + agentId + ", provider=" + provider
+                                    + "，请先在系统管理中配置模型 API Key", null);
                 }
             } else {
                 builder.credentialReady(true);

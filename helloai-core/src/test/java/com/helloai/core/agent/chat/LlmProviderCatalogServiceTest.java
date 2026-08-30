@@ -1,16 +1,12 @@
 package com.helloai.core.agent.chat;
 
-import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.core.agent.chat.provider.LlmProviderChatClientFactoryRegistry;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.LlmProviderCatalogService;
 import com.helloai.core.agent.service.PlatformProviderConfigService;
 import com.helloai.core.agent.service.impl.LlmProviderCatalogServiceImpl;
-import com.helloai.core.system.entity.CredentialVault;
 import com.helloai.core.system.entity.LlmProvider;
-import com.helloai.core.system.service.CredentialVaultBindingService;
-import com.helloai.core.system.service.CredentialVaultService;
 import com.helloai.core.system.service.LlmProviderQueryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -20,10 +16,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -34,8 +27,8 @@ import static org.mockito.Mockito.when;
  *     <li>listProviders：factorySupported 判定（deepseek 特判 / 协议类型 / 未知协议）；</li>
  *     <li>available = enabled && apiKeyConfigured && factorySupported 组合；</li>
  *     <li>isProviderAvailable：null/blank 拒绝、大小写不敏感匹配；</li>
- *     <li>bindPlatformApiKeyIfAbsent：不可用抛错 / 已有 ACTIVE 凭证幂等跳过 / 正常绑定 / 平台 Key 缺失抛错；</li>
- *     <li>provisionPlatformCredential：modelType 前缀解析 + execution.provider 兜底 + 不可用静默跳过。</li>
+ *     <li>provisionPlatformCredential：modelType 前缀解析 + execution.provider 兜底
+ *         + 不可用静默跳过（内部 LLM Agent 不再持有 AGENT 级密钥快照）。</li>
  * </ul>
  */
 @DisplayName("LlmProviderCatalogService")
@@ -44,8 +37,6 @@ class LlmProviderCatalogServiceTest {
     private LlmProviderQueryService queryService;
     private AgentExecutionProperties executionProperties;
     private LlmProviderChatClientFactoryRegistry factoryRegistry;
-    private CredentialVaultService credentialVaultService;
-    private CredentialVaultBindingService credentialVaultBindingService;
     private PlatformProviderConfigService platformProviderConfigService;
     private LlmProviderCatalogService catalogService;
 
@@ -54,12 +45,9 @@ class LlmProviderCatalogServiceTest {
         queryService = mock(LlmProviderQueryService.class);
         executionProperties = mock(AgentExecutionProperties.class);
         factoryRegistry = mock(LlmProviderChatClientFactoryRegistry.class);
-        credentialVaultService = mock(CredentialVaultService.class);
-        credentialVaultBindingService = mock(CredentialVaultBindingService.class);
         platformProviderConfigService = mock(PlatformProviderConfigService.class);
         catalogService = new LlmProviderCatalogServiceImpl(queryService, executionProperties,
-                factoryRegistry, credentialVaultService, credentialVaultBindingService,
-                platformProviderConfigService);
+                factoryRegistry, platformProviderConfigService);
     }
 
     private LlmProvider llmProvider(String providerCode, String providerName,
@@ -219,110 +207,34 @@ class LlmProviderCatalogServiceTest {
     }
 
     @Nested
-    @DisplayName("bindPlatformApiKeyIfAbsent")
-    class BindPlatformApiKey {
-
-        @Test
-        @DisplayName("provider 不可用时抛 BizException")
-        void shouldThrowWhenProviderUnavailable() {
-            when(queryService.listAll()).thenReturn(List.of(
-                    llmProvider("moonshot", "Moonshot", "OPENAI_COMPATIBLE", 1)));
-            when(platformProviderConfigService.isApiKeyConfigured("moonshot")).thenReturn(false);
-
-            assertThatThrownBy(() -> catalogService.bindPlatformApiKeyIfAbsent(1L, "moonshot"))
-                    .isInstanceOf(BizException.class)
-                    .hasMessageContaining("未配置平台 API Key 或缺少 Factory 实现");
-            verify(credentialVaultBindingService, never()).bindAgentApiKey(
-                    org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
-                    org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
-                    org.mockito.ArgumentMatchers.any());
-        }
-
-        @Test
-        @DisplayName("已有 ACTIVE 凭证时幂等跳过，返回 false")
-        void shouldSkipWhenCredentialExists() {
-            when(queryService.listAll()).thenReturn(List.of(
-                    llmProvider("moonshot", "Moonshot", "OPENAI_COMPATIBLE", 1)));
-            when(platformProviderConfigService.isApiKeyConfigured("moonshot")).thenReturn(true);
-            when(credentialVaultService.getActiveAgentApiKey(1L, "moonshot"))
-                    .thenReturn(new CredentialVault());
-
-            boolean bound = catalogService.bindPlatformApiKeyIfAbsent(1L, "moonshot");
-
-            assertThat(bound).isFalse();
-            verify(credentialVaultBindingService, never()).bindAgentApiKey(
-                    org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
-                    org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
-                    org.mockito.ArgumentMatchers.any());
-        }
-
-        @Test
-        @DisplayName("平台 Key 缺失时抛 BizException")
-        void shouldThrowWhenPlatformApiKeyMissing() {
-            when(queryService.listAll()).thenReturn(List.of(
-                    llmProvider("moonshot", "Moonshot", "OPENAI_COMPATIBLE", 1)));
-            when(platformProviderConfigService.isApiKeyConfigured("moonshot")).thenReturn(true);
-            when(credentialVaultService.getActiveAgentApiKey(1L, "moonshot")).thenReturn(null);
-            when(platformProviderConfigService.getApiKey("moonshot")).thenReturn("  ");
-
-            assertThatThrownBy(() -> catalogService.bindPlatformApiKeyIfAbsent(1L, "moonshot"))
-                    .isInstanceOf(BizException.class)
-                    .hasMessageContaining("未配置平台 API Key，无法注册");
-        }
-
-        @Test
-        @DisplayName("正常绑定：调用 bindAgentApiKey 并返回 true")
-        void shouldBindPlatformApiKey() {
-            when(queryService.listAll()).thenReturn(List.of(
-                    llmProvider("moonshot", "Moonshot", "OPENAI_COMPATIBLE", 1)));
-            when(platformProviderConfigService.isApiKeyConfigured("moonshot")).thenReturn(true);
-            when(credentialVaultService.getActiveAgentApiKey(1L, "moonshot")).thenReturn(null);
-            when(platformProviderConfigService.getApiKey("moonshot")).thenReturn("sk-platform");
-
-            boolean bound = catalogService.bindPlatformApiKeyIfAbsent(1L, "moonshot");
-
-            assertThat(bound).isTrue();
-            verify(credentialVaultBindingService).bindAgentApiKey(1L, "moonshot", "sk-platform",
-                    null, "平台配置自动绑定（平台级凭证/yml 兜底）");
-        }
-    }
-
-    @Nested
-    @DisplayName("provisionPlatformCredential")
+    @DisplayName("provisionPlatformCredential 平台凭证核对")
     class ProvisionPlatformCredential {
 
         @Test
-        @DisplayName("modelType 为空时回退 execution.provider")
+        @DisplayName("modelType 为空时回退 execution.provider，核对通过返回 true")
         void shouldFallbackToExecutionProvider() {
             when(executionProperties.getProvider()).thenReturn("deepseek");
             when(queryService.listAll()).thenReturn(List.of(
                     llmProvider("deepseek", "DeepSeek", "OPENAI_COMPATIBLE", 1)));
             when(platformProviderConfigService.isApiKeyConfigured("deepseek")).thenReturn(true);
-            when(credentialVaultService.getActiveAgentApiKey(1L, "deepseek")).thenReturn(null);
-            when(platformProviderConfigService.getApiKey("deepseek")).thenReturn("sk-deepseek");
 
             boolean bound = catalogService.provisionPlatformCredential(agent(null));
 
+            // 语义：仅核对平台级凭证，不再向 credential_vault 写入 AGENT 级密钥快照
             assertThat(bound).isTrue();
-            verify(credentialVaultBindingService).bindAgentApiKey(1L, "deepseek", "sk-deepseek",
-                    null, "平台配置自动绑定（平台级凭证/yml 兜底）");
         }
 
         @Test
-        @DisplayName("modelType 带前缀时按前缀解析 provider")
+        @DisplayName("modelType 带前缀时按前缀解析 provider，核对通过返回 true")
         void shouldResolveProviderFromModelTypePrefix() {
             when(queryService.listAll()).thenReturn(List.of(
                     llmProvider("moonshot", "Moonshot", "OPENAI_COMPATIBLE", 1)));
             when(platformProviderConfigService.isApiKeyConfigured("moonshot")).thenReturn(true);
-            when(credentialVaultService.getActiveAgentApiKey(1L, "moonshot")).thenReturn(null);
-            when(platformProviderConfigService.getApiKey("moonshot")).thenReturn("sk-moonshot");
 
             boolean bound = catalogService.provisionPlatformCredential(
                     agent("moonshot:moonshot-v1-8k"));
 
             assertThat(bound).isTrue();
-            verify(credentialVaultBindingService).bindAgentApiKey(1L, "moonshot", "sk-moonshot",
-                    null, "平台配置自动绑定（平台级凭证/yml 兜底）");
         }
 
         @Test
@@ -336,10 +248,19 @@ class LlmProviderCatalogServiceTest {
             boolean bound = catalogService.provisionPlatformCredential(agent(null));
 
             assertThat(bound).isFalse();
-            verify(credentialVaultBindingService, never()).bindAgentApiKey(
-                    org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
-                    org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
-                    org.mockito.ArgumentMatchers.any());
+        }
+
+        @Test
+        @DisplayName("平台 Key 已配置但 provider 未启用时同样跳过返回 false")
+        void shouldSkipWhenProviderDisabled() {
+            when(queryService.listAll()).thenReturn(List.of(
+                    llmProvider("moonshot", "Moonshot", "OPENAI_COMPATIBLE", 0)));
+            when(platformProviderConfigService.isApiKeyConfigured("moonshot")).thenReturn(true);
+
+            boolean bound = catalogService.provisionPlatformCredential(
+                    agent("moonshot:moonshot-v1-8k"));
+
+            assertThat(bound).isFalse();
         }
     }
 }

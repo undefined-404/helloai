@@ -3,10 +3,10 @@ package com.helloai.core.agent.executor;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.core.agent.AgentLlmCredentialResolver;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.AgentChatClientService;
-import com.helloai.core.system.service.CredentialVaultBindingService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -28,10 +28,10 @@ class ApiKeyAgentExecutorTest {
         properties.setProvider("mock");
 
         AgentChatClientService chatClientService = mock(AgentChatClientService.class);
-        CredentialVaultBindingService credentialVaultBindingService = mock(CredentialVaultBindingService.class);
+        AgentLlmCredentialResolver agentLlmCredentialResolver = mock(AgentLlmCredentialResolver.class);
         ApiKeyAgentExecutor executor = new ApiKeyAgentExecutor(
                 chatClientService,
-                credentialVaultBindingService,
+                agentLlmCredentialResolver,
                 properties
         );
 

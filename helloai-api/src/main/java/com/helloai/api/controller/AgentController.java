@@ -191,8 +191,9 @@ public class AgentController {
         // 持久化所有可选字段变更
         agentService.updateAgentExtras(agent);
 
-        // 6) API_KEY_LLM：注册后按 modelType/默认 provider 尝试补绑平台密钥（尽力而为，
-        //    不阻断注册；脚本注册后自行绑定自定义密钥的既有链路保持不变）
+        // 6) API_KEY_LLM：注册后核对平台凭证就绪性（尽力而为，不阻断注册）——执行链
+        //    按 modelType 关联平台级凭证实时取 Key，内部 LLM Agent 不再持有
+        //    AGENT 级密钥快照，系统管理轮换 API Key 后已注册 Agent 实时生效
         if (accessType == AgentAccessType.API_KEY_LLM) {
             llmProviderCatalogService.provisionPlatformCredential(agent);
         }

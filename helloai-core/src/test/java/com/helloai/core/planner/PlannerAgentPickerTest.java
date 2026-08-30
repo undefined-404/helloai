@@ -7,13 +7,13 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
+import com.helloai.core.agent.AgentLlmCredentialResolver;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.service.RequirementConversationService;
-import com.helloai.core.system.service.CredentialVaultService;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.policy.TaskAgentPolicy;
 import com.helloai.core.task.service.TaskService;
@@ -60,7 +60,7 @@ class PlannerAgentPickerTest {
     private AgentDutyLeaseService agentDutyLeaseService;
 
     @Mock
-    private CredentialVaultService credentialVaultService;
+    private AgentLlmCredentialResolver agentLlmCredentialResolver;
 
     @Mock
     private TaskService taskService;
@@ -70,9 +70,9 @@ class PlannerAgentPickerTest {
     @BeforeEach
     void setUp() {
         picker = new PlannerAgentPicker(agentService, conversationService,
-                agentDutyLeaseService, credentialVaultService, taskService);
+                agentDutyLeaseService, agentLlmCredentialResolver, taskService);
         // 默认：全部凭证可用（单测按需覆盖）
-        lenient().when(credentialVaultService.hasActiveAgentCredential(any())).thenReturn(true);
+        lenient().when(agentLlmCredentialResolver.hasUsableCredential(any())).thenReturn(true);
     }
 
     private Agent llmPlanner(long id) {
@@ -162,8 +162,8 @@ class PlannerAgentPickerTest {
         Agent eligible = llmPlanner(4L);
         when(agentService.listByRole(AgentRole.PLANNER))
                 .thenReturn(List.of(sleeping, external, noCredential, eligible));
-        when(credentialVaultService.hasActiveAgentCredential(3L)).thenReturn(false);
-        when(credentialVaultService.hasActiveAgentCredential(4L)).thenReturn(true);
+        when(agentLlmCredentialResolver.hasUsableCredential(noCredential)).thenReturn(false);
+        when(agentLlmCredentialResolver.hasUsableCredential(eligible)).thenReturn(true);
 
         assertThat(picker.pick(null).getId()).isEqualTo(4L);
     }
@@ -298,8 +298,8 @@ class PlannerAgentPickerTest {
         Agent internalNoCred = llmPlanner(2L);
         when(agentService.listByRole(AgentRole.PLANNER))
                 .thenReturn(List.of(internal, internalNoCred));
-        when(credentialVaultService.hasActiveAgentCredential(1L)).thenReturn(true);
-        when(credentialVaultService.hasActiveAgentCredential(2L)).thenReturn(false);
+        when(agentLlmCredentialResolver.hasUsableCredential(internal)).thenReturn(true);
+        when(agentLlmCredentialResolver.hasUsableCredential(internalNoCred)).thenReturn(false);
 
         Agent onDutyExternal = cliAgent(3L);
         Agent offDutyExternal = cliAgent(4L);

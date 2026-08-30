@@ -3,6 +3,7 @@ package com.helloai.core.agent.execution;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.core.agent.AgentLlmCredentialResolver;
 import com.helloai.core.agent.service.AgentChatClientService;
 import com.helloai.core.agent.chat.LlmCallConcurrencyGuard;
 import com.helloai.core.agent.chat.provider.LlmProviderChatClientFactoryRegistry;
@@ -31,7 +32,6 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.agent.service.impl.AgentChatClientServiceImpl;
 import com.helloai.core.agent.service.impl.PlatformAgentExecutionServiceImpl;
-import com.helloai.core.system.service.CredentialVaultBindingService;
 
 /**
  * PlatformAgentExecutionService 单元测试。
@@ -46,7 +46,7 @@ class PlatformAgentExecutionServiceTest {
     private AgentService agentService;
 
     @Mock
-    private CredentialVaultBindingService credentialVaultBindingService;
+    private AgentLlmCredentialResolver agentLlmCredentialResolver;
 
     @Mock
     private HeartbeatService heartbeatService;
@@ -69,7 +69,7 @@ class PlatformAgentExecutionServiceTest {
         LlmCallConcurrencyGuard guard = new LlmCallConcurrencyGuard(properties);
         AgentChatClientService chatClientService = new AgentChatClientServiceImpl(properties, builderProvider, registry, guard);
         ApiKeyAgentExecutor apiKeyAgentExecutor =
-                new ApiKeyAgentExecutor(chatClientService, credentialVaultBindingService, properties);
+                new ApiKeyAgentExecutor(chatClientService, agentLlmCredentialResolver, properties);
         AgentExecutorRouter router = new AgentExecutorRouter(List.of(apiKeyAgentExecutor));
         platformAgentExecutionService = new PlatformAgentExecutionServiceImpl(
                 agentService, router, heartbeatService, properties);

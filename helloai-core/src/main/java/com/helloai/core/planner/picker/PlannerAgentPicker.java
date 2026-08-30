@@ -5,12 +5,12 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
+import com.helloai.core.agent.AgentLlmCredentialResolver;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.service.RequirementConversationService;
-import com.helloai.core.system.service.CredentialVaultService;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.policy.TaskAgentPolicy;
 import com.helloai.core.task.port.TaskPlannerPickerPort;
@@ -47,7 +47,7 @@ public class PlannerAgentPicker implements TaskPlannerPickerPort {
     private final AgentService agentService;
     private final RequirementConversationService conversationService;
     private final AgentDutyLeaseService agentDutyLeaseService;
-    private final CredentialVaultService credentialVaultService;
+    private final AgentLlmCredentialResolver agentLlmCredentialResolver;
     private final TaskService taskService;
 
     /**
@@ -172,16 +172,16 @@ public class PlannerAgentPicker implements TaskPlannerPickerPort {
                 && agent.getAccessType() == AgentAccessType.API_KEY_LLM;
     }
 
-    /** 凭证可用性检查（照 AgentSelector.hasUsableCredential 的防御式降级）。 */
+    /**
+     * 凭证可用性检查（委托 AgentLlmCredentialResolver：平台级模型配置密钥优先，
+     * Agent 级凭证兜底，与执行链解析顺序一致；防御式降级照旧）。
+     */
     private boolean hasUsableCredential(Agent agent) {
-        if (agent == null || agent.getAccessType() != AgentAccessType.API_KEY_LLM) {
-            return true;
-        }
         try {
-            return credentialVaultService.hasActiveAgentCredential(agent.getId());
+            return agentLlmCredentialResolver.hasUsableCredential(agent);
         } catch (Exception e) {
-            log.debug("hasUsableCredential fallback to false for agent {}: {}",
-                    agent.getId(), e.getMessage());
+            log.debug("凭证可用性判定异常，防御式降级为排除: agentId={}, reason={}",
+                    agent != null ? agent.getId() : null, e.getMessage());
             return false;
         }
     }

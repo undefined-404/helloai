@@ -7,6 +7,7 @@ import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.WorkMode;
+import com.helloai.core.agent.AgentLlmCredentialResolver;
 import com.helloai.core.agent.SkillNormalizer;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
@@ -14,7 +15,6 @@ import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.ConcurrencyQuotaService;
-import com.helloai.core.system.service.CredentialVaultService;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import lombok.Data;
@@ -48,7 +48,7 @@ public class AgentSelector {
     private final AgentDispatchProperties agentDispatchProperties;
     private final AgentHealthProperties agentHealthProperties;
     private final AgentDutyLeaseService agentDutyLeaseService;
-    private final CredentialVaultService credentialVaultService;
+    private final AgentLlmCredentialResolver agentLlmCredentialResolver;
     private final ConcurrencyQuotaService concurrencyQuotaService;
     private final AgentQualityProfileService agentQualityProfileService;
 
@@ -209,25 +209,20 @@ public class AgentSelector {
     }
 
     /**
-     * 凭证可用性检查：API_KEY_LLM 候选必须在 credential_vault 中有启用态凭证。
+     * 凭证可用性检查：API_KEY_LLM 候选必须有可用执行凭证。
      *
      * <p>API_KEY_LLM 享有心跳/OFFLINE 双重豁免，若不校验凭证，历史遗留的无凭证 Agent
-     * 永远是合格候选，选中即执。其它 accessType 不依赖 vault，直接放行。
-     * 防御式：查询异常降级为排除（选中无凭证 Agent 必败，排除更安全）。</p>
+     * 永远是合格候选，选中即执。可用判定委托 {@link AgentLlmCredentialResolver}
+     * （平台级模型配置密钥优先，Agent 级凭证兜底，与执行链解析顺序一致）。
+     * 其它 accessType 不依赖凭证，直接放行。防御式：查询异常降级为排除
+     * （选中无凭证 Agent 必败，排除更安全）。</p>
      */
     private boolean hasUsableCredential(Agent agent) {
-        if (agent == null || agent.getAccessType() != AgentAccessType.API_KEY_LLM) {
-            return true;
-        }
         try {
-            boolean has = credentialVaultService.hasActiveAgentCredential(agent.getId());
-            if (!has) {
-                log.debug("Agent {} 无启用态托管凭证，跳过选人", agent.getId());
-            }
-            return has;
+            return agentLlmCredentialResolver.hasUsableCredential(agent);
         } catch (Exception e) {
-            log.debug("hasUsableCredential fallback to false for agent {}: {}",
-                    agent.getId(), e.getMessage());
+            log.debug("凭证可用性判定异常，防御式降级为排除: agentId={}, reason={}",
+                    agent != null ? agent.getId() : null, e.getMessage());
             return false;
         }
     }

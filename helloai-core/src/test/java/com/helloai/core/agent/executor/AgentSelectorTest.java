@@ -6,6 +6,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.config.AgentHealthProperties;
+import com.helloai.core.agent.AgentLlmCredentialResolver;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
@@ -27,6 +28,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -35,7 +37,6 @@ import static org.mockito.Mockito.when;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.ConcurrencyQuotaService;
-import com.helloai.core.system.service.CredentialVaultService;
 
 /**
  * AgentSelector 单元测试。
@@ -58,7 +59,7 @@ class AgentSelectorTest {
     private AgentDutyLeaseService agentDutyLeaseService;
 
     @Mock
-    private CredentialVaultService credentialVaultService;
+    private AgentLlmCredentialResolver agentLlmCredentialResolver;
 
     @Mock
     private ConcurrencyQuotaService concurrencyQuotaService;
@@ -81,7 +82,7 @@ class AgentSelectorTest {
         lenient().when(agentDutyLeaseService.isOnDuty(anyLong())).thenReturn(false);
         // 默认所有候选均有有效凭证，避免 API_KEY_LLM 用例被 hasUsableCredential 过滤；
         // 无凭证用例请单独 stub 返回 false
-        lenient().when(credentialVaultService.hasActiveAgentCredential(anyLong())).thenReturn(true);
+        lenient().when(agentLlmCredentialResolver.hasUsableCredential(any())).thenReturn(true);
         // E2 默认所有候选额度未满；满额用例请单独 stub 返回 false
         lenient().when(concurrencyQuotaService.canAccept(anyLong())).thenReturn(true);
         // 质量画像默认缺失（computeQualityScore=null → qualityRank 记 0 档不参与排序）；
@@ -89,7 +90,7 @@ class AgentSelectorTest {
         lenient().when(agentQualityProfileService.computeQualityScore(anyLong())).thenReturn(null);
         agentSelector = new AgentSelector(
                 agentService, circuitBreakerRegistry, props, health, agentDutyLeaseService,
-                credentialVaultService, concurrencyQuotaService, agentQualityProfileService);
+                agentLlmCredentialResolver, concurrencyQuotaService, agentQualityProfileService);
     }
 
     // ════════════════════════════════════════════════════════════
@@ -453,7 +454,7 @@ class AgentSelectorTest {
             policyHealth.setOfflineMinutes(5);
             policySelector = new AgentSelector(
                     agentService, circuitBreakerRegistry, policyProps, policyHealth, agentDutyLeaseService,
-                    credentialVaultService, concurrencyQuotaService, agentQualityProfileService);
+                    agentLlmCredentialResolver, concurrencyQuotaService, agentQualityProfileService);
         }
 
         private Agent agentWith(Long id, Integer score,
@@ -506,7 +507,7 @@ class AgentSelectorTest {
             AgentSelector forceSelector =
                     new AgentSelector(
                             agentService, circuitBreakerRegistry, forceProps, forceHealth, agentDutyLeaseService,
-                            credentialVaultService, concurrencyQuotaService, agentQualityProfileService);
+                            agentLlmCredentialResolver, concurrencyQuotaService, agentQualityProfileService);
 
             when(agentService.listByRole(AgentRole.EXECUTOR))
                     .thenReturn(List.of(cli, api));
@@ -661,7 +662,7 @@ class AgentSelectorTest {
             zeroHealth.setOfflineMinutes(0);
             AgentSelector zeroSelector = new AgentSelector(
                     agentService, circuitBreakerRegistry, zeroProps, zeroHealth, agentDutyLeaseService,
-                    credentialVaultService, concurrencyQuotaService, agentQualityProfileService);
+                    agentLlmCredentialResolver, concurrencyQuotaService, agentQualityProfileService);
 
             Agent stale = agentWithHeartbeat(2L, 90, AgentOnlineStatus.ONLINE,
                     AgentStatus.ACTIVE, 120L);  // 2 小时前
@@ -685,7 +686,7 @@ class AgentSelectorTest {
             customHealth.setOfflineMinutes(3);
             AgentSelector customSelector = new AgentSelector(
                     agentService, circuitBreakerRegistry, customProps, customHealth, agentDutyLeaseService,
-                    credentialVaultService, concurrencyQuotaService, agentQualityProfileService);
+                    agentLlmCredentialResolver, concurrencyQuotaService, agentQualityProfileService);
 
             Agent stale = agentWithHeartbeat(2L, 90, AgentOnlineStatus.ONLINE,
                     AgentStatus.ACTIVE, 9L);  // 9 分钟前 > 3 分钟阈值
@@ -713,7 +714,7 @@ class AgentSelectorTest {
         void shouldFilterOutApiAgentWithoutCredential() {
             Agent api = apiAgent(2L, 100);
             when(agentService.listByRole(AgentRole.EXECUTOR)).thenReturn(List.of(api));
-            when(credentialVaultService.hasActiveAgentCredential(2L)).thenReturn(false);
+            when(agentLlmCredentialResolver.hasUsableCredential(api)).thenReturn(false);
 
             Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR);
 
@@ -721,11 +722,11 @@ class AgentSelectorTest {
         }
 
         @Test
-        @DisplayName("API_KEY_LLM 有启用态凭证 → 入选")
+        @DisplayName("API_KEY_LLM 有可用凭证 → 入选")
         void shouldSelectApiAgentWithCredential() {
             Agent api = apiAgent(2L, 100);
             when(agentService.listByRole(AgentRole.EXECUTOR)).thenReturn(List.of(api));
-            when(credentialVaultService.hasActiveAgentCredential(2L)).thenReturn(true);
+            when(agentLlmCredentialResolver.hasUsableCredential(api)).thenReturn(true);
             when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
 
             Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR);
@@ -739,8 +740,8 @@ class AgentSelectorTest {
         void shouldExcludeWhenCredentialQueryThrows() {
             Agent api = apiAgent(2L, 100);
             when(agentService.listByRole(AgentRole.EXECUTOR)).thenReturn(List.of(api));
-            when(credentialVaultService.hasActiveAgentCredential(2L))
-                    .thenThrow(new RuntimeException("vault down"));
+            when(agentLlmCredentialResolver.hasUsableCredential(api))
+                    .thenThrow(new RuntimeException("credential resolver down"));
 
             Agent result = agentSelector.pickAlternative(1L, AgentRole.EXECUTOR);
 
@@ -758,7 +759,8 @@ class AgentSelectorTest {
 
             assertThat(result).isNotNull();
             assertThat(result.getId()).isEqualTo(2L);
-            verify(credentialVaultService, never()).hasActiveAgentCredential(2L);
+            // CLI_CLIENT 委托 resolver 判定但直接放行（resolver 内部不查 vault）
+            verify(agentLlmCredentialResolver).hasUsableCredential(cli);
         }
     }
 
@@ -968,7 +970,7 @@ class AgentSelectorTest {
             health.setOfflineMinutes(5);
             AgentSelector disabledSelector = new AgentSelector(
                     agentService, circuitBreakerRegistry, disabledProps, health,
-                    agentDutyLeaseService, credentialVaultService, concurrencyQuotaService,
+                    agentDutyLeaseService, agentLlmCredentialResolver, concurrencyQuotaService,
                     agentQualityProfileService);
 
             Agent result = disabledSelector.pickAlternative(1L, AgentRole.EXECUTOR);
@@ -996,7 +998,7 @@ class AgentSelectorTest {
             health.setOfflineMinutes(5);
             qualitySelector = new AgentSelector(
                     agentService, circuitBreakerRegistry, props, health, agentDutyLeaseService,
-                    credentialVaultService, concurrencyQuotaService, agentQualityProfileService);
+                    agentLlmCredentialResolver, concurrencyQuotaService, agentQualityProfileService);
         }
 
         @Test
@@ -1069,7 +1071,7 @@ class AgentSelectorTest {
             health.setOfflineMinutes(5);
             AgentSelector zeroWeightSelector = new AgentSelector(
                     agentService, circuitBreakerRegistry, zeroWeightProps, health, agentDutyLeaseService,
-                    credentialVaultService, concurrencyQuotaService, agentQualityProfileService);
+                    agentLlmCredentialResolver, concurrencyQuotaService, agentQualityProfileService);
 
             Agent lowQualityHighScore = agent(2L, 95, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
             Agent highQualityLowScore = agent(3L, 30, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
