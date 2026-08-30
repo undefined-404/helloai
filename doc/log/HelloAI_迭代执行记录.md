@@ -7376,3 +7376,95 @@ _时间：2026-08-25（用户提供设计图，要求保留布局只润色元素
 - 影响：① 系统管理轮换 API Key 后，已注册内部 LLM Agent 执行/探活/选人三项链路实时用新 Key；② 注册不再产生 AGENT 级密钥快照，credential_vault 数据量不再随注册膨胀；③ 存量 AGENT 级快照不清理——平台级优先后自动失效（具旧 Key 的快照不再被读取），手工绑定自定义密钥（`bindApiKeyByAgentId`）仍会在平台级未配置时兜底生效。
 - 遗留：① 本轮改动未 git 提交；② 前端注册提示文案「平台密钥已自动绑定」（AgentList.vue）与后端新语义（不再绑定快照）存在轻度口径差，未纳入本轮改动范围；③ 真实环境回归（重启 + 轮换 Key + 旧 agent 执行）待后端重启后执行。
 
+### 6.165 对话式需求澄清入口重构：意图词正则退役，LLM auto 意图路由 + /planner 双通道（2026-08-30）
+
+#### 1. 背景与结论
+
+V40/V40.1 的意图词正则对口语话术仍敏感（「帮我整理成技术方案文档吧」类说法不命中，V40.2 已引入 /planner 显式命令兜底），正则词表维护成本高且存在「该转没转」的漏判风险；用户决策借鉴 ZLAgent auto 模式，把意图识别从「正则硬匹配」升级为「**LLM auto 意图路由 + /planner 显式命令**」双通道——CHAT 轮 LLM 回复末尾携带隐藏意图标记 `{"__intent__": "chat"|"clarify"}`，服务端解析后自动决策是否建议转入 CLARIFY；意图词正则引擎（IntentDetectionService）整体删除。结论：CLARIFY 模式完整保留，触发通道收敛为两条（系统侧 LLM 意图标记 + 用户侧 /planner 命令）；意图解析失败默认 chat（宁可漏判不误判）；确认卡点「确认」与 /planner 命令为 CHAT 50 轮上限的逃生通道。明确不做：PlannerAnalysisService / Task 实体 / 调度链不动，无 Flyway（无表结构变更）。
+
+#### 2. 实际落地
+
+- **prompt 层**：`requirement-chat.md` 末尾追加意图标记段（隐藏指令，要求 LLM 回复末行输出 `{"__intent__": "chat"|"clarify"}`，为系统信号不展示给用户，沿 §6.46 口嗨治理口径禁止 LLM 在正文预告/扮演切换）。
+- **意图解析**：`ClarifyReplyParser` 新增 `parseIntent()`（正则优先匹配 + JSON 兜底解析，失败默认 chat）+ `IntentResult`；确认卡协议沿用 `ConfirmCardProtocol`（buildAskPayload / buildAskText `CONFIRM_ASK_TEXT` / isAcceptSelected，CONFIRM_QUESTION_ID=confirm-switch，选项仅「确认/取消」）。
+- **服务收口**：`RequirementClarifyServiceImpl` 删除 IntentDetectionService 依赖——CHAT 分支改 `parseIntent` 判定意图：命中 clarify 置 `pending_clarify_confirm` + 确认卡 payload 落库（不调 LLM、不加轮数）；`sendMessage` 重构：确认卡点「确认」（selections 快照 `isAcceptSelected`）与 `/planner` 命令为逃生通道，绕过 CHAT 50 轮上限（上限提示语本身引导 /planner）；`resolveSearchSource` 对确认卡提交轮次（payload 含 `"selections"`）回退历史最近一条有检索语义的 user 消息（跳过确认卡题面前缀 + `SHORT_INTENT_LEN=8` 字短句阈值），无可回退返回空串不发起搜索。
+- **契约清理**：`RequirementClarifyService.create` 四参→三参（删 `initialMode`）、`ClarifyMessageRequest.initialMode` 删除、Controller 去 initialMode（新会话恒 CHAT）；`IntentDetectionService` 及意图词短语库整体删除。
+- **前端**：移除模式切换按钮（新会话去模式选择）；新增 `/planner` 命令识别（`PLANNER_COMMAND_RE` + `handlePlannerCommand` → 已有会话 `toClarify` 带附加文本）；占位提示与确认卡交互保持 V40.2/V41 形态。
+
+#### 3. 验证结果
+
+- `mvn -pl helloai-core test -DskipTests=false -Dtest=RequirementClarifyServiceTest`：**66/66 全绿**——旧意图词测试重写为 LLM auto 意图路由语义（stub 回复 `__intent__: clarify`，断言 pending 置位 + 确认卡落库 + CONFIRM_ASK_TEXT）；`createRejectsInvalidInitialMode` 重写为 `createIgnoresDeprecatedInitialMode`（initialMode 忽略仍建 CHAT）；`confirmAtChatLimitStillSwitches` 改走确认卡逃生通道（selections=确认，断言 mode=CLARIFY / roundCount=51）；两个搜索词回退用例（fallsBackToHistoryTopic / noMeaningfulHistory）依赖实现修复自动通过、测试未改。
+- helloai-core 全量 **944/944** BUILD SUCCESS；helloai-api `-am` 编译 Reactor 全 SUCCESS；前端 `npm run build`（含 vue-tsc）通过（仅 chunk size 警告）。
+- 用户手动改过的 `RequirementChat.vue` 契约核验：create 三参无 initialMode、`PLANNER_COMMAND_RE` / `handlePlannerCommand` 调 `toClarify(id, extra)`，与后端一致。
+
+#### 4. 影响与遗留
+
+- 影响：意图识别不再依赖正则词表，口语话术漏判由 /planner 显式命令兜底；意图标记为用户不可见的系统信号；确认卡点「确认」不再被轮数上限拦截，上限提示语引导 /planner 出口。
+- 遗留：① 真实环境不同模型对意图标记 prompt 指令的遵循稳定性待回归（解析失败默认 chat 已兜底）；② 本轮改动未 git 提交（11 个文件含 1 删除），待用户确认后提交。
+
+### 6.166 修复：重试轮（retryRound）对齐联网搜索语义（2026-08-30）
+
+#### 1. 背景与结论
+
+用户验收时发现「没有触发联网搜索功能」：实际操作为旧会话点「重试」（`POST /api/requirement-conversations/retryById`）且会话 LLM 已恢复回复，但回复无任何联网资料。取证（进程启动 22:43:12 重启后日志）确认：重启后仅有 retryById 一次消息动作，日志无任何 `ClarifyWebSearchOrchestrator` 行——根因是 `retryRound` 原本直接 `runLlmRound(conversation, null)`，重试轮设计上不检索（旧注释「重试场景不复用预检索资料」与传 null 的行为自相矛盾），与「发消息/新建会话即搜索」的用户心智不一致（首次触发 500 时该会话曾成功发起搜索，修复后重试反而完全没有搜索）。用户决策：重试轮改为与 sendMessage 同语义——按会话开关触发联网搜索，而非保持不搜索。明确不做：改 `ClarifyWebSearchOrchestrator`、`resolveSearchSource` 判定逻辑、Controller/facade 层。
+
+#### 2. 实际落地
+
+- `RequirementClarifyServiceImpl.retryRound`：`isWebSearchEnabled(conversation)` 门控下，取最后一条 user 消息（content 为 null 归一空串）经 `resolveSearchSource(conversationId, content, payload)` 解析搜索词后调 `webSearchOrchestrator.doWebSearch(...)`——确认卡提交轮次（payload 含 `"selections"`）自动复用历史回退词 + 短句阈值 + URL 直取语义，与 sendMessage 完全一致；再 `runLlmRound(conversation, webSearchOutcome)` 使结果注入 Prompt 与 assistant payload（webSearch 查验键）。搜索逻辑零新增（纯复用既有组件），仅接线。
+
+#### 3. 验证结果
+
+- `mvn -pl helloai-core test -DskipTests=false -Dtest=RequirementClarifyServiceTest`：**67/67 全绿**（主用例 `shouldRetryLlmRoundWithoutNewUserMessage` 重写：断言 `webSearchService.search(eq("做一个报表"), eq(5))` + payload 含 `"webSearch"`/结果标题/`"total":1`；新增 `shouldRetryWithoutWebSearchWhenDisabled`：开关 false 时 never search + payload NULL；拒绝重试用例不变）。
+
+#### 4. 影响与遗留
+
+- 影响：重试轮重新发起搜索（与发消息路径同成本口径）；LLM 失败重试后回复携带最新联网资料，不再出现「重试后无搜索信息」的体验断层。
+- 遗留：① 本次设置过程背景（500 根因）为临时 AES 密钥脱敏导致，修复方式为 IDEA Run Configuration 注入 `HELLOAI_CREDENTIAL_AES_KEY_BASE64` 原密钥后重启（22:43:12 生效，链路已恢复）；② 本轮及 §6.165 合计改动未 git 提交，待用户确认后提交。
+
+### 6.167 Chat 联合决策路由重构：前置一次联合决策调用（意图 + 理由 + 澄清问题 + 搜索决策）（2026-08-31）
+
+#### 1. 背景与结论
+
+§6.165 的「主回复末尾顺带隐藏意图标记」存在三处短板：① 意图质量依赖主回复 LLM 顺带输出，与正文耦合（主回复因搜索/解析问题失败时意图连同丢失）；② 搜索决策仍走规则（无 LLM 优化词，搜索词质量受限）；③ clarify 分支先产出可见回复再落确认卡，与 ZLAgent「响应即问题」（CLARIFY 直接返回澄清问题、不先生成回复）不一致。用户决策参考 ZLAgent `GeneralAgent`/`JsonIntentRouter`（前置独立路由调用、`response_format=json_object` 低预算、严格 JSON 白名单校验、reason_code 稳定词表）与分析文档（`WebSearchDecision` 结构化输出、三搜索模式 ALWAYS_ON/AUTO/OFF），将「顺带标记」升级为「**前置一次联合决策调用**」——每轮 CHAT 先低预算 executeSync 一次输出 意图 + 理由 + 澄清问题 + 搜索决策 双决策 JSON。结论：intent=clarify 直接落库单条确认卡（题面=LLM 澄清问题）不生成主回复；intent=chat 走搜索三态（NULL=AUTO 决策 need + LLM 优化词 / true=ALWAYS_ON 每轮搜只取优化词 / false=OFF 不搜，不落库）后主回复；决策执行/解析失败降级 chat + AUTO 规则搜索兜底，绝不阻塞主流程；CLARIFY 模式绕过决策保持 V45 语义；`retryRound` 经抽公共 `runRoundCore` 与 sendMessage 完全同语义（决策 → 搜索 → 主回复重跑）。明确不做：SSE 流式输出（P0 首位，Agent 执行面 executeSync 无流式 + 前端重构，留待独立迭代，用户已确认）、搜索三态落库（Flyway 新列 + 前端设置页，用户已确认不落库）、会话级 PLANNING/AUTO 持久态、PlannerAnalysisService / 调度链 / Reviewer 链 / requirement-clarify.md / CLARIFY 模式内部逻辑。
+
+#### 2. 实际落地
+
+- **决策模板**：新增 `prompts/requirement-decision.md`（classpath）——intent 判定规则（做事/核实性请求但目标或关键细节缺失 → clarify；纯咨询/概念解释 → chat；模糊 → ambiguous 归 chat）、`intent_reason` 词表与 intent 映射表、web_search 三态判定（时效信息/最新动态/竞品行情/未结信息 → need_search=true；概念解释/纯讨论 → false）、搜索词生成规范（中文关键词化、去敬语、≤30 字）、严格 JSON 输出示例；占位符 `{{USER_MESSAGE}}` / `{{CONVERSATION_HISTORY}}` / `{{SEARCH_POLICY}}`。
+- **决策解析**：新增 `ChatRoundDecisionParser`（planner/clarify/）——嵌套 record `ChatRoundDecision(intent, intentReason, clarificationQuestion, webSearch)` + `SearchDecision(needSearch, searchQuery, reason)`；白名单字段校验（未知字段拒绝，对齐 ZLAgent）、intent 词表、intent_reason 词表与 intent 映射约束、clarify 必带非空问题（chat 携带则宽容忽略）、`need_search=true` 缺词空串兜底不丢搜索、`need_search=false` 时保留非空 query（ALWAYS_ON 只取优化词不看 need，AUTO 分支不读 query 无副作用）、`defaults()` 降级工厂、`DecisionParseException` 专用异常（调用方捕获降级）。
+- **确认卡重载**：`ConfirmCardProtocol` 新增 `buildAskPayload(String questionText)` / `buildAskText(String questionText)`（null/blank 回退 `CONFIRM_QUESTION_TEXT` / `CONFIRM_ASK_TEXT`，非空时文本为 `CONFIRM_ASK_TEXT + "\n\n" + 问题`）；原无参方法委托。
+- **搜索编排重载**：`ClarifyWebSearchOrchestrator` 新增 `doWebSearch(String, List<String> priorityQueries)`——`candidates = priorityQueries（非空过滤+去重） + planQueries 结果` 合并，顺序降级/兜底截断/URL 分离/域名前置增强原样复用；原方法委托。
+- **服务决策链**：`RequirementClarifyServiceImpl`——`DECISION_SCENE="requirement_chat_decision"`、`DECISION_HISTORY_LIMIT=6`、`PLANNER_COMMAND_PREFIXES=["/planner","/plan","/task"]`；新增 `runRoundCore`（CLARIFY → runClarifySearchRound / CHAT → makeRoundDecision → clarify 则 applyClarifyDecision（落库单条确认卡 + pendingClarifyConfirm=true + 返回）否则 resolveChatSearchOutcome + runLlmRound）；`doRound` 命令别名检测（`isPlannerCommand` 前缀枚举匹配、忽略大小写、前缀后必须空白或结束，`/tasking` 不误伤）及 `plannerCommandExtra` 取附加文本走 `switchToClarify(extra)`；`retryRound` 复用 runRoundCore（保留「最后一条是 user」校验，不落消息不加轮数）；`makeRoundDecision` 返回 `RoundDecision(decision, degraded)`（执行异常/解析失败 → `degradedDefaults()`：intent=chat + degraded=true）；`resolveChatSearchOutcome` 四分支——ALWAYS_ON 忽略 need_search 取 LLM 优化词 / OFF 不搜 / AUTO 按 needSearch / AUTO+degraded 规则搜索兜底（决策不可用不丢搜索机会）；`doChatWebSearch`（LLM 词空白 → 规则兜底）；`renderDecisionPrompt`（模板加载 + 历史裁剪最近 ≤6 条并剔除本轮 user 消息 + 三态 `{{SEARCH_POLICY}}` 提示）；`SearchPolicy` 枚举（web_search_enabled NULL→AUTO / true→ALWAYS_ON / false→OFF）；`runLlmRound` CHAT 分支删除 `parseIntent`/确认卡落库段，纯回复落库（webSearch payload 携带保留）；`requirement-chat.md` 移除「内部意图标记」节并更新头注释三态语义与输出要求；`ClarifyReplyParser.parseIntent` 退役保留（不再被 CHAT 主回复调用，注释标明）。
+- **前端**：`RequirementChat.vue` `PLANNER_COMMAND_RE` 扩展为 `/^(?:\/planner|\/plan|\/task)(?:\s+([\s\S]+))?$/i`；确认卡 structured 卡片题面由 payload.question.text 自动展示澄清问题，零 UI 改动。
+
+#### 3. 验证结果
+
+- `mvn -pl helloai-core test -DskipTests=false`：**972/972 全绿 BUILD SUCCESS**——`RequirementClarifyServiceTest` 意图用例重写为决策前置语义（决策 stub 按 `AgentTask.context.scene` argThat 精确匹配 + Mockito 后注册优先串联主回复 any stub；3 个 llmClarifyIntent 用例断言确认卡单条落库 content=CONFIRM_ASK_TEXT+"\n\n"+问题、payload 题面=问题、决策轮恰一次/主回复轮 never；`chatRoundUsesChatPromptTemplate` 等 verify 改 times(2)/getAllValues().get(1) 取主回复轮 prompt）；新增用例——决策解析失败 → 降级 chat + AUTO 规则搜索 + 主回复正常、AUTO need_search=true LLM 优化词优先于规划器规则词（`never search(规则词)`）、ALWAYS_ON 每轮搜（need_search=false 也搜、只取优化词）、OFF 不搜（存量 `chatRoundWebSearchDisabled` 回归）、CHAT retryRound 决策 + 搜索 + 主回复、`/plan`/`/task`/大写别名转澄清（命令本身不落库、附加文本进上下文、零决策轮）；`ChatRoundDecisionParserTest` 18/18（含新增 need=false 保留优化词）、`ConfirmCardProtocolTest` 4/4、`ClarifyWebSearchOrchestratorTest` 存量回退。
+- helloai-api `-am` 编译 Reactor 全 SUCCESS；前端 `npm run build`（含 vue-tsc）通过（仅 chunk size 警告）。
+- 期间发现并修复一处**设计缺陷**：解析器初版将 `need_search=false` 的 `search_query` 收敛为 null，导致 ALWAYS_ON 模式拿不到 LLM 优化词（`chatRoundAlwaysOn_searchesEveryRound` 测试暴露零搜索交互）——改为保留非空 query，模板第三节同步补充三态约束（ALWAYS_ON 时须给出优化词），解析器测试补绑定向。
+
+#### 4. 影响与遗留
+
+- 影响：历史会话 web_search_enabled=NULL 的 CHAT 轮行为从「每轮规则搜索」收敛为「AUTO 决策搜索」（用户拍板的语义映射，属预期行为变化）；每轮 CHAT 多一次低预算决策调用（小 prompt），换来意图质量（明确澄清问题、不先生成回复）与搜索词质量（LLM 优化词 + 规则兜底）双提升；确认卡交互零改动（structured 卡片题面自动展示澄清问题）。
+- 遗留：① 真实环境不同模型对决策模板的遵循率待回归（解析失败默认 chat + AUTO 规则搜索兜底已闭环，不新增重试语义）；② §6.165/§6.166/§6.167 合计改动未 git 提交，待用户确认后提交。
+
+### 6.168 已放弃会话删除：后端软删端点 + 前端列表删除按钮（2026-08-31）
+
+#### 1. 背景与结论
+
+- V29 交付时「会话删除（用 abandon）」为明确不做项——abandon 仅置 ABANDONED，记录保留可查看。用户本次拍板：先为已放弃会话提供删除入口。
+- 结论：新增删除能力但**只对 ABANDONED 放行**（ACTIVE/FINALIZED 拒绝；FINALIZED 承载任务追溯保留）。删除采用软删（deleted=1）而非物理删：V29 建表即带 `deleted` 列 + partial index（`idx_req_conv_status_create WHERE deleted=0` 就是为列表软删排除设计），全局 `@TableLogic` 下列表/详情查询侧零改动自动隐藏；ABANDONED 会话按 abandon 前置校验必然无 task_id（终稿未确认），删除不触碰任务侧。
+
+#### 2. 实际落地
+
+- **后端**：`RequirementClarifyService.delete(conversationId)`（校验 ABANDONED → 消息软删 → 会话软删，方法级 `@Transactional(rollbackFor = Exception.class)` 两表同事务，不占用 LLM 长事务路径）；`RequirementMessageService.removeByConversation`（`lambdaUpdate().eq(conversationId).remove()` 逻辑删）；Controller 新增 `POST /requirement-conversations/deleteById/{id}`（§8.2 ById 风格，返回 `R<Void>`，与 abandonById 并列）；软删语义下 `requirement_message.conversation_id` 真 FK 不受影响（不删行）。
+- **前端**：paths.ts 增 `deleteById`、clarify.ts 增 `deleteConversation`；RequirementChat.vue 会话列表 ABANDONED 项 meta 区常驻删除图标按钮（Delete 图标、`@click.stop` 防触发选中、悬停可见防误触、`ElMessageBox.confirm` 二次确认；删除的是当前激活会话时 `startNew()` 回新会话占位，随后 `loadList()` 刷新自动隐藏）。
+
+#### 3. 验证结果
+
+- `mvn -pl helloai-core test -DskipTests=false`：**975/975 全绿 BUILD SUCCESS**——`RequirementClarifyServiceTest` 新增 3 用例：`shouldDeleteAbandonedConversation`（ABANDONED 放行，`removeByConversation` + `removeById` 各恰一次）/ `shouldRejectDeleteNonAbandonedConversation`（ACTIVE 拒绝 BizException「仅已放弃的会话可删除」，never 删）/ `shouldRejectDeleteMissingConversation`（不存在拒绝，never 删）。
+- helloai-api `-am` 编译五模块 SUCCESS；前端 `npm run build`（`vue-tsc -b && vite build`）EXIT=0 通过（仅 chunk size 警告）。
+
+#### 4. 影响与遗留
+
+- 影响：V29「会话删除（用 abandon）」口径从「用 abandon 代替」扩展为「abandon 置放弃态 + 已放弃会话可删除」；已放弃会话删除后列表/详情均不可再查看（逻辑删除不可恢复）；无 Flyway、无新配置，重启后端生效。
+- 遗留：① 未做批量删除/回收站/软删行物理清理任务（deleted=1 行留存，后续如需物理清理可加定时任务）；② 本轮改动未 git 提交，与 §6.165/§6.166/§6.167 合计待用户确认后提交；③ 真实环境（浏览器交互 + 删除后列表消失）待回归。
+
