@@ -71,6 +71,18 @@
                 方案
               </el-tag>
               <span class="conv-time">{{ fmtTime(conv.createTime) }}</span>
+              <!-- 已放弃会话删除（软删，不可恢复；仅 ABANDONED 显示，悬停列表项时可见） -->
+              <el-button
+                v-if="conv.status === 'ABANDONED'"
+                class="conv-del-btn"
+                type="danger"
+                link
+                size="small"
+                title="删除该会话及其全部对话记录（不可恢复）"
+                @click.stop="handleDeleteConversation(String(conv.id), conv.title)"
+              >
+                <el-icon><Delete /></el-icon>
+              </el-button>
             </div>
           </div>
           <el-empty
@@ -261,23 +273,6 @@
                 @keydown.enter.exact.prevent="handleSend"
               />
               <div class="input-actions">
-                <!-- V39 新会话开始模式：自由对话（缺省）/ 直接方案澄清快捷直达 -->
-                <div
-                  v-if="activeId == null"
-                  class="mode-select"
-                >
-                  <el-radio-group
-                    v-model="newConversationMode"
-                    size="small"
-                  >
-                    <el-radio-button value="CHAT">
-                      自由对话
-                    </el-radio-button>
-                    <el-radio-button value="CLARIFY">
-                      直接方案澄清
-                    </el-radio-button>
-                  </el-radio-group>
-                </div>
                 <!-- V34 会话级联网搜索开关：ima copilot 样式（默认开启；仅新会话可改；老会话只读取会话原值） -->
                 <div class="web-search-switch">
                   <el-tooltip
@@ -375,7 +370,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Loading, Connection } from '@element-plus/icons-vue'
+import { Loading, Connection, Delete } from '@element-plus/icons-vue'
 import { clarifyApi } from '@/api/clarify'
 import { taskApi } from '@/api/task'
 import { fmtTime } from '@/utils/tableConfig'
@@ -394,8 +389,6 @@ const taskExists = computed(() => detail.value?.taskExists === true)
 
 // V39 双模式：CHAT 自由对话 / CLARIFY 方案澄清（mode 为 null 的老数据视为 CLARIFY）
 const isChatMode = computed(() => conversation.value?.mode === 'CHAT')
-// 新会话开始模式（缺省自由对话；选「直接方案澄清」时 create 传 initialMode=CLARIFY 快捷直达）
-const newConversationMode = ref<'CHAT' | 'CLARIFY'>('CHAT')
 
 // 输入框占位文案按会话模式区分（V39；V40.2 补 /planner 斜杠命令入口提示）
 const inputPlaceholder = computed(() => {
@@ -405,8 +398,8 @@ const inputPlaceholder = computed(() => {
     : '继续补充需求，Enter 发送'
 })
 
-// V40.2 /planner 斜杠命令：显式进入方案澄清模式（CLARIFY）；可带附加文本（落库进上下文后再切）
-const PLANNER_COMMAND_RE = /^\/planner(?:\s+([\s\S]+))?$/i
+// V40.2 计划类斜杠命令（/planner|/plan|/task 别名）：显式进入方案澄清模式（CLARIFY）；可带附加文本（落库进上下文后再切）
+const PLANNER_COMMAND_RE = /^(?:\/planner|\/plan|\/task)(?:\s+([\s\S]+))?$/i
 
 const input = ref('')
 const pendingText = ref('')
@@ -588,9 +581,9 @@ async function handleSend() {
   try {
     const plannerId = selectedPlanner.value === '__auto__' ? null : (selectedPlanner.value || null)
     // V34：仅新会话向 create 传联网搜索开关；老会话发送消息接口忽略此值
-    // V39：仅新会话向 create 传 initialMode（自由对话缺省 / 直接方案澄清快捷直达）
+    // 新会话始终 CHAT 模式（LLM auto 意图路由 + /planner 命令触发转方案）
     const result = activeId.value == null
-      ? await clarifyApi.create(text, plannerId, webSearchEnabled.value, newConversationMode.value)
+      ? await clarifyApi.create(text, plannerId, webSearchEnabled.value)
       : await clarifyApi.send(activeId.value, text)
     detail.value = result
     activeId.value = String(result.conversation.id)
@@ -623,7 +616,7 @@ async function handleSend() {
   }
 }
 
-// V40.2 /planner 命令处理：新会话 initialMode=CLARIFY 直达；已有会话调 toClarifyById
+// V40.2 /planner 命令处理：新会话先建 CHAT 会话再调 toClarify；已有会话直接调 toClarifyById
 // （附加文本落库进上下文后切 CLARIFY，首轮强制 structured → 推荐卡片）
 async function handlePlannerCommand(extra: string) {
   if (sending.value) return
@@ -632,9 +625,17 @@ async function handlePlannerCommand(extra: string) {
   sending.value = true
   scrollToBottom()
   try {
-    const result = activeId.value == null
-      ? await clarifyApi.create(extra || '请帮我整理一份技术方案', selectedPlanner.value === '__auto__' ? null : selectedPlanner.value, webSearchEnabled.value, 'CLARIFY')
-      : await clarifyApi.toClarify(activeId.value, extra || null)
+    const plannerId = selectedPlanner.value === '__auto__' ? null : (selectedPlanner.value || null)
+    let result: ClarifyConversationDetail
+    if (activeId.value == null) {
+      // 新会话：先建 CHAT 会话，再调 toClarify 切换
+      const initMsg = extra || '请帮我整理一份技术方案'
+      result = await clarifyApi.create(initMsg, plannerId, webSearchEnabled.value)
+      activeId.value = String(result.conversation.id)
+      result = await clarifyApi.toClarify(activeId.value, extra || null)
+    } else {
+      result = await clarifyApi.toClarify(activeId.value, extra || null)
+    }
     detail.value = result
     activeId.value = String(result.conversation.id)
     loadList()
@@ -748,6 +749,26 @@ async function handleAbandon() {
   } catch { /* 拦截器已弹错 */ }
 }
 
+// 删除已放弃会话：软删（会话与全部消息 deleted=1），列表刷新后自动隐藏
+async function handleDeleteConversation(id: LongId, title?: string | null) {
+  try {
+    await ElMessageBox.confirm(
+      `删除后会话「${title || '(无标题)'}」及其全部对话记录将不可再查看（逻辑删除，不可恢复）。仅已放弃的会话可删除。是否删除？`,
+      '删除会话',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    )
+  } catch { return }
+  try {
+    await clarifyApi.deleteConversation(id)
+    ElMessage.success('会话已删除')
+    // 当前详情正是被删会话时回到新会话占位
+    if (activeId.value != null && String(activeId.value) === String(id)) {
+      startNew()
+    }
+    loadList()
+  } catch { /* 拦截器已弹错（非 ABANDONED / 不存在等） */ }
+}
+
 onMounted(() => {
   loadList()
   loadPlannerOptions()
@@ -797,6 +818,10 @@ onMounted(() => {
 
 .conv-meta { display: flex; align-items: center; gap: 8px; }
 .conv-time { font-size: 12px; color: var(--ha-muted); }
+
+/* 已放弃会话删除按钮：默认隐藏，悬停列表项时可见（防误触；abandoned 半透明不作用于按钮） */
+.conv-del-btn { visibility: hidden; opacity: 1 !important; }
+.conv-item:hover .conv-del-btn { visibility: visible; }
 
 /* ── 右栏气泡流 ── */
 .chat-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }

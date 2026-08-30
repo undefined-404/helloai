@@ -132,7 +132,8 @@ export const paths = {
     detail: (id: string | number) => `/requirement-conversations/getById/${enc(id)}`,
     finalize: (id: string | number) => `/requirement-conversations/finalizeById/${enc(id)}`,
     regenerate: (id: string | number) => `/requirement-conversations/regenerateById/${enc(id)}`,
-    abandon: (id: string | number) => `/requirement-conversations/abandonById/${enc(id)}`
+    abandon: (id: string | number) => `/requirement-conversations/abandonById/${enc(id)}`,
+    deleteById: (id: string | number) => `/requirement-conversations/deleteById/${enc(id)}`
   },
   dashboard: {
     stats: '/dashboard/getStats'

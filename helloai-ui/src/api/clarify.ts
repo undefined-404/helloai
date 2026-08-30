@@ -5,15 +5,13 @@ import type { ClarifyConversationDetail, ClarifySelection, PlannerOption, Requir
 // V29 对话式需求澄清: 每轮走一次 LLM，耗时远超全局 30s，create/send/retry 单请求覆盖 timeout
 // v1.1 修复: 澄清会话 ID 为 Snowflake 长整型，URL/比较一律按 string 处理防 JS Number 精度丢失
 // V39: create 支持 initialMode（'CHAT' 自由对话缺省 / 'CLARIFY' 方案澄清快捷直达）
-// V40: 「转为方案」按钮已移除，转方案改为意图词触发 + 对话内二次确认（后端状态机）；
-//      切换端点按代码规范 8.2 整改为 POST /toClarifyById/{id}、/toChatById/{id}
+// V46: initialMode 已废弃，新会话始终 CHAT 模式
 export const clarifyApi = {
-  // 新建会话（首条用户消息触发一轮 LLM；plannerAgentId 空=系统自动选择；initialMode 缺省 'CHAT'）
-  create(message: string, plannerAgentId?: LongId | null, webSearchEnabled?: boolean | null,
-    initialMode: 'CHAT' | 'CLARIFY' = 'CHAT') {
+  // 新建会话（首条用户消息触发一轮 LLM；plannerAgentId 空=系统自动选择；新会话始终 CHAT 模式）
+  create(message: string, plannerAgentId?: LongId | null, webSearchEnabled?: boolean | null) {
     return request.post<any, ClarifyConversationDetail>(
       paths.clarifications.create,
-      { message, plannerAgentId: plannerAgentId ?? null, webSearchEnabled: webSearchEnabled ?? null, initialMode },
+      { message, plannerAgentId: plannerAgentId ?? null, webSearchEnabled: webSearchEnabled ?? null },
       { timeout: 120_000 })
   },
   // 追加用户消息并走一轮 LLM 澄清（可附 V33 结构化选项回答快照）
@@ -63,5 +61,9 @@ export const clarifyApi = {
   // 放弃会话: ACTIVE → ABANDONED
   abandon(id: LongId) {
     return request.post<any, void>(paths.clarifications.abandon(id))
+  },
+  // 删除已放弃会话: 仅 ABANDONED 可删（软删，列表自动隐藏; ACTIVE/FINALIZED 后端拒绝）
+  deleteConversation(id: LongId) {
+    return request.post<any, void>(paths.clarifications.deleteById(id))
   }
 }
