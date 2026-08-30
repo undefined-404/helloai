@@ -27,7 +27,9 @@ public class ClarifyMessageRequest {
 
     /**
      * 初始对话模式（仅新建会话生效；append 消息接口忽略）。
-     * <p>'CHAT'=自由对话（缺省）/ 'CLARIFY'=方案澄清快捷直达；非法值后端抛 BizException。</p>
+     * <p>已废弃：新会话始终 CHAT 模式，LLM auto 意图路由 + /planner 命令触发转方案。</p>
+     * @deprecated 使用 /planner 命令替代
      */
+    @Deprecated
     private String initialMode;
 }

@@ -25,13 +25,13 @@ public class RequirementConversationController {
 
     private final RequirementClarifyService requirementClarifyService;
 
-    /** 新建澄清会话（首条用户消息触发一轮 LLM；可选手动指定 Planner；可带联网搜索开关；可带初始对话模式）。 */
+    /** 新建澄清会话（首条用户消息触发一轮 LLM；可选手动指定 Planner；可带联网搜索开关；新会话始终 CHAT 模式）。 */
     @PostMapping
     public R<ClarifyConversationDetail> create(@Valid @RequestBody ClarifyMessageRequest req) {
         // 联网搜索开关透传：NULL 走默认开启语义（与老数据兼容）；
-        // initialMode 透传：缺省 CHAT 自由对话，'CLARIFY' 快捷直达方案澄清
+        // initialMode 已废弃，新会话始终 CHAT 模式
         return R.ok(requirementClarifyService.create(
-                req.getMessage(), req.getPlannerAgentId(), req.getWebSearchEnabled(), req.getInitialMode()));
+                req.getMessage(), req.getPlannerAgentId(), req.getWebSearchEnabled()));
     }
 
     /** Planner 下拉选数据源（平台内 PLANNER 可选 + 在班外部 Agent 置灰）。 */
@@ -96,6 +96,13 @@ public class RequirementConversationController {
     @PostMapping("/abandonById/{id}")
     public R<Void> abandonById(@PathVariable("id") Long id) {
         requirementClarifyService.abandon(id);
+        return R.ok(null);
+    }
+
+    /** 删除已放弃会话：仅 ABANDONED 可删（软删，列表自动隐藏；ACTIVE/FINALIZED 拒绝）。 */
+    @PostMapping("/deleteById/{id}")
+    public R<Void> deleteById(@PathVariable("id") Long id) {
+        requirementClarifyService.delete(id);
         return R.ok(null);
     }
 }
