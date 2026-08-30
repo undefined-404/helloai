@@ -1,5 +1,6 @@
 package com.helloai.core.planner.clarify;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
 import com.helloai.core.planner.search.WebPageContent;
@@ -14,6 +15,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * 澄清对话的 LLM 输出解析与消息协议构造（双模解析 + assistant/user payload 组装）。
@@ -41,6 +43,35 @@ public class ClarifyReplyParser {
 
     /** assistant 消息 payload 的联网搜索查验键（与 mode/progress/questions 同级）。 */
     private static final String PAYLOAD_KEY_WEB_SEARCH = "webSearch";
+
+    /** LLM auto 意图标记的 JSON 键名（CHAT 轮次 LLM 输出末尾隐藏行）。 */
+    private static final String INTENT_KEY = "__intent__";
+
+    /** 意图标记值：chat 普通对话 / clarify 需要转入方案澄清。 */
+    private static final String INTENT_CHAT = "chat";
+    private static final String INTENT_CLARIFY = "clarify";
+
+    /** 意图标记 JSON 行模式：{ "__intent__": "chat|clarify" }（前面无任何字符，末尾无逗号）。 */
+    private static final Pattern INTENT_LINE_PATTERN = Pattern.compile(
+            "\\{\"__intent__\"\\s*:\\s*\"(chat|clarify)\"\\s*\\}");
+
+    /** 意图标记解析结果（不可变）。 */
+    public static class IntentResult {
+        private final String intent;
+        private final String visibleText;
+
+        public IntentResult(String intent, String visibleText) {
+            this.intent = intent;
+            this.visibleText = visibleText;
+        }
+
+        /** 意图类型：chat 或 clarify。 */
+        public String getIntent() { return intent; }
+        /** 剥离意图标记后的用户可见文本。 */
+        public String getVisibleText() { return visibleText; }
+        /** 是否为 clarify 意图。 */
+        public boolean isClarify() { return INTENT_CLARIFY.equals(intent); }
+    }
 
     private final ObjectMapper objectMapper;
 
@@ -339,6 +370,59 @@ public class ClarifyReplyParser {
             }
         }
         return cleaned;
+    }
+
+    /**
+     * 解析 CHAT 轮 LLM 输出末尾的隐藏意图标记（ZLAgent auto 模式）。
+     *
+     * <p>取最后一行，尝试匹配 {@code {"__intent__": "chat"|"clarify"}} 模式；
+     * 匹配成功返回意图类型 + 剥离标记后的可见文本；匹配失败/解析异常默认返回 chat + 原文本。
+     * 保守原则：宁可漏判不误判，LLM 偶尔不遵守格式时用户仍可通过 /planner 命令手动触发。</p>
+     *
+     * @param rawOutput LLM 完整输出（含末尾意图标记）
+     * @return 意图解析结果（非 null）
+     */
+    public IntentResult parseIntent(String rawOutput) {
+        if (rawOutput == null || rawOutput.isBlank()) {
+            return new IntentResult(INTENT_CHAT, rawOutput == null ? "" : rawOutput);
+        }
+        String trimmed = rawOutput.trim();
+        int lastNewline = trimmed.lastIndexOf('\n');
+        String lastLine = lastNewline >= 0 ? trimmed.substring(lastNewline + 1).trim() : trimmed;
+        // 宽松正则匹配：{"__intent__": "chat"} 或 {"__intent__": "clarify"}
+        java.util.regex.Matcher m = INTENT_LINE_PATTERN.matcher(lastLine);
+        if (m.matches()) {
+            String intent = m.group(1);
+            // 剥离最后一行（保留可见文本）
+            String visible = lastNewline >= 0 ? trimmed.substring(0, lastNewline).trim() : "";
+            if (visible.isEmpty()) {
+                // 防御：LLM 只输出了意图标记没有正文，回退原文本
+                return new IntentResult(INTENT_CHAT, trimmed);
+            }
+            // 只接受 chat/clarify，其他值保守视为 chat
+            if (INTENT_CHAT.equals(intent) || INTENT_CLARIFY.equals(intent)) {
+                return new IntentResult(intent, visible);
+            }
+            return new IntentResult(INTENT_CHAT, visible);
+        }
+        // 尝试 JSON 解析（兼容 LLM 可能带尾部空格或逗号的情况）
+        try {
+            JsonNode node = objectMapper.readTree(lastLine);
+            if (node.has(INTENT_KEY)) {
+                String intent = node.get(INTENT_KEY).asText();
+                String visible = lastNewline >= 0 ? trimmed.substring(0, lastNewline).trim() : "";
+                if (visible.isEmpty()) {
+                    return new IntentResult(INTENT_CHAT, trimmed);
+                }
+                if (INTENT_CHAT.equals(intent) || INTENT_CLARIFY.equals(intent)) {
+                    return new IntentResult(intent, visible);
+                }
+                return new IntentResult(INTENT_CHAT, visible);
+            }
+        } catch (Exception ignored) {
+            // JSON 解析失败，默认 chat
+        }
+        return new IntentResult(INTENT_CHAT, trimmed);
     }
 
     private String summarize(String raw) {

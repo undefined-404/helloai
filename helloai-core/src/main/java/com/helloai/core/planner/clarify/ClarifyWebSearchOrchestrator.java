@@ -52,12 +52,24 @@ public class ClarifyWebSearchOrchestrator {
     }
 
     /**
-     * 联网搜索一次：URL 分离 + 查询规划 → 直取页面 + 顺序降级搜索 → 归一化结果记录。
+     * 联网搜索一次（无优先候选词版本，委托 {@link #doWebSearch(String, List)}）。
+     */
+    public WebSearchOutcome doWebSearch(String userMessage) {
+        return doWebSearch(userMessage, null);
+    }
+
+    /**
+     * 联网搜索一次：URL 分离 + 候选词合并（优先词 + 查询规划）→ 直取页面 + 顺序降级搜索 → 归一化结果记录。
      *
      * <p>查询规划（引入）：剥离 URL 后的语义文本不再原样截前 40 字当搜索词
      * （疑问句式/敬语/标点/多主题长句对关键词检索命中率极低），改由
      * {@link SearchQueryPlannerService} 产出 1~N 个候选词（规则清洗总是执行，
      * LLM 改写条件触发，失败降级规则结果）；规划器无产出时兜底规则截断。</p>
+     *
+     * <p>优先候选词（引入，前置联合决策的 LLM 优化词注入）：priorityQueries 非空过滤后
+     * 置于候选词列表头部，规则规划词补后——LLM 优化词命中即停，优化词零结果时顺序降级
+     * 规则词；两源合并去重，避免同一词重复检索。空串/空白即跳过（决策降级侧约定搜索词
+     * 缺失以空串表达，此处直接落到规则词）。</p>
      *
      * <p>顺序降级（引入）：候选词逐个尝试，首个非空结果即停（命中场景成本不变）；
      * 全零结果时 outcome.total=0 且已尝试词全量落 payload，不再静默放弃。</p>
@@ -73,10 +85,15 @@ public class ClarifyWebSearchOrchestrator {
      *
      * <p>异常降级为 failed outcome（落 payload 可查验，不阻断澄清主流程）；
      * 候选词全部空白且无成功直取页面时返回 null（未获得任何资料，不落 webSearch 键）。</p>
+     *
+     * @param userMessage    用户消息（URL 分离与规则兜底的语义文本来源，语义与旧版本一致）
+     * @param priorityQueries 优先候选词（如 LLM 联合决策的优化搜索词），可 null；内部空白项忽略
      */
-    public WebSearchOutcome doWebSearch(String userMessage) {
+    public WebSearchOutcome doWebSearch(String userMessage, List<String> priorityQueries) {
         List<String> urls = extractUrls(userMessage);
-        List<String> candidates = searchQueryPlannerService.planQueries(stripUrls(userMessage));
+        List<String> candidates = new ArrayList<>();
+        mergeCandidates(candidates, priorityQueries);
+        mergeCandidates(candidates, searchQueryPlannerService.planQueries(stripUrls(userMessage)));
         if (candidates.isEmpty()) {
             // 规划器无产出（极端消息清洗后为空）时兜底规则截断，不丢搜索机会
             String fallback = extractQueryKeyword(stripUrls(userMessage));
@@ -147,6 +164,18 @@ public class ClarifyWebSearchOrchestrator {
                     .failed(true)
                     .reason(e.getMessage())
                     .build();
+        }
+    }
+
+    /** 候选词合并（非空过滤 + 去重，保持源内顺序）：优先词在前、规则规划词补后。 */
+    private void mergeCandidates(List<String> target, List<String> source) {
+        if (source == null) {
+            return;
+        }
+        for (String q : source) {
+            if (q != null && !q.isBlank() && !target.contains(q)) {
+                target.add(q);
+            }
         }
     }
 

@@ -34,6 +34,11 @@ public class ConfirmCardProtocol {
     public static final String CONFIRM_OPTION_ACCEPT = "确认";
     public static final String CONFIRM_OPTION_CANCEL = "取消";
 
+    /** 意图确认卡可读正文（转录 transcript 用，与 payload 结构化卡片配对）。 */
+    public static final String CONFIRM_ASK_TEXT =
+            "我注意到你想把这段对话整理成方案。回复「确认」将进入方案澄清模式，"
+                    + "我会基于全部对话内容梳理需求并产出方案草案；回复其他内容则继续自由对话。";
+
     private final ObjectMapper objectMapper;
 
     /**
@@ -50,12 +55,27 @@ public class ConfirmCardProtocol {
      *
      * <p>为什么用 structured 卡片替代纯文本确认：用户点选后经 selections 快照通道判定
      * （点「确认」走切换分支；点「取消」走继续对话分支，见 {@link #isAcceptSelected}），
-     * 手写确认词仍兼容 {@code CONFIRM_PHRASE_PATTERN}（IntentDetectionService），
+     * 手写确认词仍兼容（IntentDetectionService 已删除，改为 LLM auto 意图路由），
      * 后端状态机零改动，交互形态与方案细则确认卡片一致。</p>
+     *
+     * <p>重载 {@link #buildAskPayload(String)} 供前置联合决策（intent=clarify）使用：
+     * 题面直接展示 LLM 生成的澄清问题；本无参版本保留默认题面文案，委托新重载。</p>
      *
      * @return payload JSON；序列化失败降级 null（回退纯文本确认，不阻断主流程）
      */
     public String buildAskPayload() {
+        return buildAskPayload(null);
+    }
+
+    /**
+     * 意图确认卡 structured payload 重载：题面文案可替换为澄清问题。
+     *
+     * @param questionText 澄清问题文本；null/空白回退默认题面 {@link #CONFIRM_QUESTION_TEXT}
+     * @return payload JSON；序列化失败降级 null（回退纯文本确认，不阻断主流程）
+     */
+    public String buildAskPayload(String questionText) {
+        String text = (questionText == null || questionText.isBlank())
+                ? CONFIRM_QUESTION_TEXT : questionText;
         RequirementClarifyService.ClarifyOption accept = new RequirementClarifyService.ClarifyOption();
         accept.setLabel(CONFIRM_OPTION_ACCEPT);
         accept.setValue(CONFIRM_OPTION_ACCEPT);
@@ -65,7 +85,7 @@ public class ConfirmCardProtocol {
 
         RequirementClarifyService.ClarifyQuestion question = new RequirementClarifyService.ClarifyQuestion();
         question.setId(CONFIRM_QUESTION_ID);
-        question.setText(CONFIRM_QUESTION_TEXT);
+        question.setText(text);
         question.setMultiple(false);
         question.setAllowCustom(false);
         question.setOptions(List.of(accept, cancel));
@@ -82,6 +102,30 @@ public class ConfirmCardProtocol {
             log.warn("意图确认卡 payload 序列化失败，降级纯文本确认", e);
             return null;
         }
+    }
+
+    /**
+     * 确认卡可读正文（transcript 转录用，与 {@link #buildAskPayload()} 结构化卡片配对）。
+     * LLM auto 意图路由检测到 clarify 意图时，先落库可见回复，再落库此正文 + payload 卡片。
+     *
+     * @return 确认卡可读文本（非 null）
+     */
+    public String buildAskText() {
+        return buildAskText(null);
+    }
+
+    /**
+     * 确认卡可读正文重载：可携带澄清问题（与 {@link #buildAskPayload(String)} 配对），
+     * 无标题可读正文也承担澄清问题展示（转录用）。
+     *
+     * @param questionText 澄清问题文本；null/空白回退默认正文 {@link #CONFIRM_ASK_TEXT}
+     * @return 确认卡可读文本（非 null）
+     */
+    public String buildAskText(String questionText) {
+        if (questionText == null || questionText.isBlank()) {
+            return CONFIRM_ASK_TEXT;
+        }
+        return CONFIRM_ASK_TEXT + "\n\n" + questionText;
     }
 
     /**

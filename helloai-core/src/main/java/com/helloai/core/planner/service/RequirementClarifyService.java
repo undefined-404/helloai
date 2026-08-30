@@ -31,10 +31,9 @@ public interface RequirementClarifyService {
     String MODE_CHAT = "CHAT";
     String MODE_CLARIFY = "CLARIFY";
 
-    /** 意图词命中后的固定确认询问文案（服务端直发，不调 LLM、不消耗轮数）。 */
-    String CONFIRM_ASK_MESSAGE =
-            "我注意到你想把这段对话整理成方案。回复「确认」将进入方案澄清模式，"
-                    + "我会基于全部对话内容梳理需求并产出方案草案；回复其他内容则继续自由对话。";
+    /** 意图词命中后的固定确认询问文案（已迁移至 {@link com.helloai.core.planner.clarify.ConfirmCardProtocol#CONFIRM_ASK_TEXT}）。 */
+    @Deprecated
+    String CONFIRM_ASK_MESSAGE = com.helloai.core.planner.clarify.ConfirmCardProtocol.CONFIRM_ASK_TEXT;
 
     /**
      * 新建澄清会话：首条用户消息截断为标题 → 存 user 消息 → 走一轮 LLM。
@@ -49,12 +48,13 @@ public interface RequirementClarifyService {
     ClarifyConversationDetail create(String firstMessage, Long plannerAgentId, Boolean webSearchEnabled);
 
     /**
-     * 新建会话（双模式入口）。
+     * 新建会话（双模式入口，已废弃：新会话始终 CHAT，initialMode 参数不再生效）。
      *
-     * @param initialMode 初始对话模式：'CHAT'=自由对话（缺省）/ 'CLARIFY'=方案澄清快捷直达；
-     *                    非法值抛 BizException
+     * @param initialMode 已废弃，新会话始终以 CHAT 模式创建
      * @return 会话 + 全部消息
+     * @deprecated 使用 {@link #create(String, Long, Boolean)} 替代
      */
+    @Deprecated
     ClarifyConversationDetail create(String firstMessage, Long plannerAgentId, Boolean webSearchEnabled,
                                      String initialMode);
 
@@ -111,6 +111,12 @@ public interface RequirementClarifyService {
 
     /** 放弃会话：ACTIVE → ABANDONED。 */
     void abandon(Long conversationId);
+
+    /**
+     * 删除已放弃会话：仅 ABANDONED 可删（ACTIVE/FINALIZED 拒绝，FINALIZED 承载任务追溯保留）。
+     * 会话与全部消息逻辑删除（deleted=1），列表查询侧全局过滤自动隐藏；删除不可恢复。
+     */
+    void delete(Long conversationId);
 
     /**
      * 切换到方案澄清模式（斜杠命令路径）：先落库附加文本（用户消息，进 LLM 上下文），

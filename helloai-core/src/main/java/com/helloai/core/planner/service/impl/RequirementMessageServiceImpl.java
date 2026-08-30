@@ -63,4 +63,11 @@ public class RequirementMessageServiceImpl
                 .orderByAsc(RequirementMessage::getSeq)
                 .list();
     }
+
+    @Override
+    public void removeByConversation(Long conversationId) {
+        lambdaUpdate()
+                .eq(RequirementMessage::getConversationId, conversationId)
+                .remove();
+    }
 }

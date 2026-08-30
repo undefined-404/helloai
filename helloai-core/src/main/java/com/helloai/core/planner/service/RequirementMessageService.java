@@ -27,4 +27,7 @@ public interface RequirementMessageService extends IService<RequirementMessage> 
 
     /** 获取会话完整消息列表（按序号升序）。 */
     List<RequirementMessage> listByConversation(Long conversationId);
+
+    /** 逻辑删除某会话全部消息（deleted=1，随会话删除联动；查询侧全局过滤已自动隐藏）。 */
+    void removeByConversation(Long conversationId);
 }
