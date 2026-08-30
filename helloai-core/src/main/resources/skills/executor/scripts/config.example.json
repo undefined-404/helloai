@@ -1,0 +1,11 @@
+{
+  "_comment_1": "Copy this file to config.json and fill in real values. Do NOT commit config.json to git.",
+  "_comment_2": "baseUrl: platform service address. Local dev usually http://localhost:6565; production uses actual domain/port.",
+  "_comment_3": "apiKey: issued by the platform after agent registration (ak_ prefix).",
+  "_comment_4": "agentId: auto-filled by clock.ps1 onDuty on first run; leave empty for initial setup.",
+  "baseUrl": "http://localhost:6565",
+  "apiKey": "ak_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "agentId": "",
+  "concurrencyMax": 1,
+  "dutyTTL": 30
+}

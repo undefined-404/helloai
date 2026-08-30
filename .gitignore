@@ -69,6 +69,8 @@ tmp/
 .dbg/
 # --- Qoder IDE 缓存（plans / skills 缓存目录，不入仓） ---
 .qoder/
+# --- Executor 值班脚本运行时配置（含真实 apiKey / agentId，勿入库） ---
+**/skills/**/config.json
 # --- Runtime data (ArtifactStorage 本地落盘产出物) ---
 data/
 
