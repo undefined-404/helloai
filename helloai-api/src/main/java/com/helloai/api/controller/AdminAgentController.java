@@ -7,6 +7,7 @@ import com.helloai.api.dto.admin.AgentUpdateRequest;
 import com.helloai.api.dto.admin.SleepBatchRequest;
 import com.helloai.api.dto.agent.*;
 import com.helloai.api.support.AgentBaseUrlResolver;
+import com.helloai.common.base.BizException;
 import com.helloai.common.base.R;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
@@ -20,10 +21,12 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.system.crypto.AgentApiKeyCipher;
 import com.helloai.core.system.service.PromptTemplateService;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -357,6 +360,39 @@ public class AdminAgentController {
         resp.setSkillContent(skillContent);
 
         return R.ok(resp);
+    }
+
+    /**
+     * 下载技能包 ZIP（整体交付）：SKILL.md（占位符已渲染）+ scripts/ 全量脚本 + config.example.json（baseUrl 预填）。
+     * zip 内顶层目录为 <role>-skill/，整体解压/复制到 IDE 的 skills 目录即可使用；
+     * 只下载单个 SKILL.md 会导致 scripts/ 脚本缺失（找不到 clock.ps1 / config.json），故走整体打包。
+     */
+    @GetMapping("/getMySkillZipByAgentId/{id}")
+    public void getSkillZip(@PathVariable("id") Long id,
+                            HttpServletRequest request,
+                            HttpServletResponse response) throws IOException {
+        Agent agent = agentService.getById(id);
+        if (agent == null) {
+            throw new BizException("Agent 不存在");
+        }
+        // 与 onboarding 同规则：内部 LLM Agent 平台密钥自动绑定，无接入内容流程
+        if (agent.getAccessType() == AgentAccessType.API_KEY_LLM) {
+            throw new BizException("内部 LLM Agent 无需接入内容（平台密钥已自动绑定）");
+        }
+
+        // 1. 解析 baseUrl（外网地址统一解析：sys_config > yml > 请求推导 > localhost 兜底）
+        String baseUrl = agentBaseUrlResolver.resolve(request);
+
+        // 2. 构建技能包（SKILL.md 渲染 + scripts/ 全量脚本）；api_key 存库为密文，渲染前解密为明文
+        String plainApiKey = agentApiKeyCipher.decrypt(agent.getApiKey());
+        byte[] zip = promptTemplateService.buildSkillPackageZip(
+                agent.getRole().name(), plainApiKey, baseUrl, agent.getName(), agent.getId());
+
+        // 3. zip 流响应（role 为 ASCII 标识，用 ASCII filename 避免编码问题）
+        response.setContentType("application/zip");
+        response.setHeader("Content-Disposition",
+                "attachment; filename=\"hello_ai_" + agent.getRole().name().toLowerCase() + "-skill.zip\"");
+        response.getOutputStream().write(zip);
     }
 
     // ══════════════════════════════════════════════════════════════
