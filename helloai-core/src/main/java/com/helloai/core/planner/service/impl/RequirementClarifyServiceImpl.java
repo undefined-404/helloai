@@ -13,6 +13,7 @@ import com.helloai.core.planner.clarify.ChatRoundDecisionParser;
 import com.helloai.core.planner.clarify.ClarifyReplyParser;
 import com.helloai.core.planner.clarify.ClarifyWebSearchOrchestrator;
 import com.helloai.core.planner.clarify.ConfirmCardProtocol;
+import com.helloai.core.planner.clarify.SystemTimeContextBuilder;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
@@ -28,6 +29,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import reactor.core.publisher.Flux;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -83,8 +85,11 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     /** 联合决策历史裁剪条数（决策只看近期上下文，控制 token 预算）。 */
     private static final int DECISION_HISTORY_LIMIT = 6;
 
-    /** 计划类斜杠命令前缀（与前端 PLANNER_COMMAND_RE 对齐：前缀后只接受空白或结束）。 */
-    private static final List<String> PLANNER_COMMAND_PREFIXES = List.of("/planner", "/plan", "/task");
+    /** 转方案类斜杠命令前缀（/planner|/plan，与前端 PLANNER_COMMAND_RE 对齐：前缀后只接受空白或结束）。 */
+    private static final List<String> PLANNER_COMMAND_PREFIXES = List.of("/planner", "/plan");
+
+    /** 直达拆解命令（/task：需求描述即终稿输入，跳过多轮澄清直接产出终稿并建任务）。 */
+    private static final String TASK_COMMAND_PREFIX = "/task";
 
     /** 会话标题取首条用户消息的截断长度。 */
     private static final int TITLE_LIMIT = 50;
@@ -93,6 +98,9 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     private static final int LIST_LIMIT = 50;
 
     private static final String PROMPT_TEMPLATE_PATH = "prompts/requirement-clarify.md";
+
+    /** /task 直达拆解终稿直出模板（信息严重不足时最多一轮结构化追问，其余直接产 final）。 */
+    private static final String FINALIZE_TEMPLATE_PATH = "prompts/requirement-finalize.md";
 
     private static final String ROLE_USER = "user";
     private static final String ROLE_ASSISTANT = "assistant";
@@ -109,6 +117,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     private final ConfirmCardProtocol confirmCardProtocol;
     private final ClarifyWebSearchOrchestrator webSearchOrchestrator;
     private final ChatRoundDecisionParser decisionParser;
+    private final SystemTimeContextBuilder systemTimeContextBuilder;
 
     /**
      * 显式全参构造器（绕开 Lombok {@code @RequiredArgsConstructor} 在
@@ -126,7 +135,8 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                                          ClarifyReplyParser replyParser,
                                          ConfirmCardProtocol confirmCardProtocol,
                                          ClarifyWebSearchOrchestrator webSearchOrchestrator,
-                                         ChatRoundDecisionParser decisionParser) {
+                                         ChatRoundDecisionParser decisionParser,
+                                         SystemTimeContextBuilder systemTimeContextBuilder) {
         this.conversationService = conversationService;
         this.messageService = messageService;
         this.taskService = taskService;
@@ -139,6 +149,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         this.confirmCardProtocol = confirmCardProtocol;
         this.webSearchOrchestrator = webSearchOrchestrator;
         this.decisionParser = decisionParser;
+        this.systemTimeContextBuilder = systemTimeContextBuilder;
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -177,9 +188,17 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
             plannerAgentPicker.validateSelectable(plannerAgentId);
         }
         String trimmed = firstMessage.trim();
+        // /task 直达命令的会话标题取附加文本（命令前缀不落标题）
+        String title = trimmed;
+        if (isTaskCommand(trimmed)) {
+            title = taskCommandExtra(trimmed);
+            if (title.isEmpty()) {
+                title = "/task";
+            }
+        }
         RequirementConversation conversation = new RequirementConversation();
-        conversation.setTitle(trimmed.length() <= TITLE_LIMIT
-                ? trimmed : trimmed.substring(0, TITLE_LIMIT));
+        conversation.setTitle(title.length() <= TITLE_LIMIT
+                ? title : title.substring(0, TITLE_LIMIT));
         conversation.setStatus(STATUS_ACTIVE);
         conversation.setRoundCount(0);
         conversation.setPlannerAgentId(plannerAgentId);
@@ -232,10 +251,10 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         boolean pendingConfirm = isChatMode(conversation)
                 && Boolean.TRUE.equals(conversation.getPendingClarifyConfirm());
         boolean confirmAccepted = pendingConfirm && confirmCardProtocol.isAcceptSelected(selections);
-        // 逃生通道（不被轮数上限挡住）：计划类斜杠命令（/planner|/plan|/task）、确认卡点「确认」
+        // 逃生通道（不被轮数上限挡住）：斜杠命令（/planner|/plan 转澄清、/task 直达拆解）、确认卡点「确认」
         // —— 上限提示语本身引导用户输 /planner 转方案，命令/确认必须放行
-        boolean plannerCommand = isChatMode(conversation) && isPlannerCommand(trimmed);
-        if (!confirmAccepted && !plannerCommand) {
+        boolean anyCommand = isPlannerCommand(trimmed) || isTaskCommand(trimmed);
+        if (!confirmAccepted && !anyCommand) {
             // 轮数上限按模式分派：CHAT 用独立上限；CLARIFY（含 NULL 老数据）沿用既有 20 轮上限
             if (isChatMode(conversation) && rounds >= MAX_CHAT_ROUNDS) {
                 throw new BizException("自由对话轮数已达上限 " + MAX_CHAT_ROUNDS
@@ -283,6 +302,97 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         return runRoundCore(conversation,
                 lastUser.getContent() == null ? "" : lastUser.getContent(),
                 lastUser.getPayload());
+    }
+
+    /**
+     * 流式对话轮（S1 最小闭环，Chat SSE）：与 {@link #sendMessage(Long, String, List)}
+     * 同语义的同步前置（校验会话 / 落 user 消息并 round+1 / 意图决策 / 三态搜索），
+     * 仅主回复 LLM 调用走 token 增量流；主回复完成后一次性落库并发出 {@code done}。
+     *
+     * <p>事件协议：token（主回复增量块）→ done（落库完成，[DONE]）/ error（任意失败，
+     * 用户消息可能已落库，可走 {@link #retryRound} 重试）。任何异常不经抛出路径，统一转
+     * error 事件，Controller 层无需再做异常兜底。</p>
+     */
+    @Override
+    public Flux<ChatStreamEvent> streamRound(Long conversationId, String message,
+                                             List<ClarifySelection> selections) {
+        return Flux.defer(() -> runStreamRound(conversationId, message, selections))
+                .onErrorResume(e -> {
+                    log.warn("流式对话轮失败: conversationId={}, err={}", conversationId, e.getMessage());
+                    return Flux.just(ChatStreamEvent.error(streamErrorMessage(e)));
+                });
+    }
+
+    /** 流式轮实现：同步前置段（校验/落库/决策/搜索）在订阅线程执行，主回复段返回 token 流。 */
+    private Flux<ChatStreamEvent> runStreamRound(Long conversationId, String message,
+                                                 List<ClarifySelection> selections) {
+        String trimmed = message == null ? "" : message.trim();
+        if (trimmed.isEmpty()) {
+            throw new BizException("消息不能为空");
+        }
+        RequirementConversation conversation = requireActive(conversationId);
+        // S1 支持范围防御（与前端分流约定一致）：仅 CHAT 模式普通消息走流式通道
+        if (isTaskCommand(trimmed) || isPlannerCommand(trimmed)) {
+            throw new BizException("斜杠命令暂不支持流式，请使用普通发送");
+        }
+        if (isClarifyMode(conversation)) {
+            throw new BizException("方案澄清模式暂不支持流式，请切回自由对话或使用普通发送");
+        }
+        if (isChatMode(conversation) && Boolean.TRUE.equals(conversation.getPendingClarifyConfirm())) {
+            throw new BizException("存在待确认卡片，请使用普通发送回答确认卡");
+        }
+        int rounds = conversation.getRoundCount() != null ? conversation.getRoundCount() : 0;
+        if (rounds >= MAX_CHAT_ROUNDS) {
+            throw new BizException("自由对话轮数已达上限 " + MAX_CHAT_ROUNDS
+                    + "，可输入 /planner 转为方案模式，或新建会话");
+        }
+        String userPayload = replyParser.buildSelectionPayload(selections);
+        messageService.addMessage(conversationId, ROLE_USER, trimmed, userPayload);
+        conversation.setRoundCount(rounds + 1);
+        conversationService.updateById(conversation);
+        log.info("流式对话轮开始: conversationId={}, round={}", conversationId, rounds + 1);
+
+        // 前置决策 + 三态搜索（与 runRoundCore 完全同语义，S1 不流式）
+        RoundDecision roundDecision = makeRoundDecision(conversation, trimmed);
+        if (roundDecision.decision().isClarify()) {
+            applyClarifyDecision(conversation, roundDecision.decision());
+            return Flux.just(ChatStreamEvent.done());
+        }
+        WebSearchOutcome webSearchOutcome = resolveChatSearchOutcome(conversation, trimmed, userPayload,
+                roundDecision.decision(), roundDecision.degraded());
+
+        // 主回复 prompt 构造（与 runLlmRound CHAT 分支同构：流式仅 CHAT 模式，固定 CHAT 模板）
+        String webSearchContext = webSearchOutcome != null ? webSearchOutcome.toContextText() : "";
+        Agent planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
+        AgentTask agentTask = AgentTask.builder()
+                .systemPrompt("")
+                .userPrompt(renderPrompt(conversationId, webSearchContext, CHAT_PROMPT_TEMPLATE_PATH))
+                .context(Map.of("conversationId", conversationId, "scene", "requirement_chat"))
+                .requiredCapabilities(Map.of())
+                .build();
+        // 流式主回复：增量转发 → 完成后与 runLlmRound 同语义落库 → done
+        StringBuilder buffer = new StringBuilder();
+        return platformAgentExecutionService.executeStream(planner, agentTask)
+                .map(token -> {
+                    buffer.append(token);
+                    return token;
+                })
+                .map(ChatStreamEvent::token)
+                .concatWith(Flux.defer(() -> {
+                    persistChatOutcome(conversation, buffer.toString(), webSearchOutcome);
+                    log.info("流式对话轮完成并落库: conversationId={}, round={}", conversationId, rounds + 1);
+                    return Flux.just(ChatStreamEvent.done());
+                }));
+    }
+
+    /** 流式错误事件文本：取根因 message（BizException 友好信息），缺失时回落类名。 */
+    private String streamErrorMessage(Throwable e) {
+        Throwable root = e;
+        while (root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
+        }
+        return root.getMessage() == null || root.getMessage().isBlank()
+                ? root.getClass().getSimpleName() : root.getMessage();
     }
 
     /** Planner 下拉选数据源（平台内 PLANNER 可选 + 在班外部 Agent 置灰）。 */
@@ -498,7 +608,12 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     private ClarifyConversationDetail doRound(RequirementConversation conversation, String userMessage,
                                               String userPayload) {
         Long conversationId = conversation.getId();
-        // 计划类斜杠命令检测（/planner|/plan|/task，跳过决策）：直接 switchToClarify
+        // /task 直达拆解命令（任意模式优先）：切 CLARIFY + 终稿直出轮，
+        // LLM 产出 final 即自动建任务（信息严重不足自动降级追问，不建任务）
+        if (isTaskCommand(userMessage)) {
+            return runTaskDirectRound(conversation, userMessage);
+        }
+        // 转方案类斜杠命令检测（/planner|/plan，跳过决策）：直接 switchToClarify
         if (isChatMode(conversation) && isPlannerCommand(userMessage)) {
             String extraText = plannerCommandExtra(userMessage);
             log.info("CHAT 会话斜杠命令触发转方案: conversationId={}, extraLen={}",
@@ -545,6 +660,90 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                     resolveSearchSource(conversation.getId(), userMessage, userPayload));
         }
         return runLlmRound(conversation, webSearchOutcome);
+    }
+
+    /**
+     * /task 直达拆解轮：需求描述即终稿输入，跳过多轮澄清直接产出终稿并建任务。
+     *
+     * <p>流程：切 CLARIFY（置位落库 + 防御性清待确认）→ 附加文本落库（user 消息、round+1；
+     * 无附加文本不落库不加轮数）→ 开关开启时按 CLARIFY 语义规则搜索注入 → 终稿直出模板一次
+     * LLM：final → 落库终稿 + 回填终稿字段 + 自动 finalize（建 PENDING Task，事件
+     * task_created_from_clarify_direct）；question（信息严重不足）→ 降级为普通追问，
+     * 会话保持 ACTIVE 不建任务。</p>
+     *
+     * <p>与既有轮次一致：无类级事务（LLM 耗时不占 DB 事务），LLM/解析失败抛 BizException，
+     * user 消息已落库可重试（重试为普通澄清轮语义）；前端收到 FINALIZED + taskId 后自动
+     * planById 触发异步拆解并打开草案审阅（与「创建任务并自动拆解」联动同构）。</p>
+     */
+    private ClarifyConversationDetail runTaskDirectRound(RequirementConversation conversation,
+                                                         String userMessage) {
+        Long conversationId = conversation.getId();
+        if (!MODE_CLARIFY.equals(conversation.getMode())) {
+            conversation.setMode(MODE_CLARIFY);
+            conversation.setPendingClarifyConfirm(false);
+            conversationService.updateById(conversation);
+        }
+        String extraText = taskCommandExtra(userMessage);
+        if (!extraText.isEmpty()) {
+            messageService.addMessage(conversationId, ROLE_USER, extraText, null);
+            int rounds = conversation.getRoundCount() != null ? conversation.getRoundCount() : 0;
+            conversation.setRoundCount(rounds + 1);
+            conversationService.updateById(conversation);
+        }
+        log.info("/task 直达拆解轮: conversationId={}, extraLen={}",
+                conversationId, extraText.length());
+        WebSearchOutcome webSearchOutcome = null;
+        if (isWebSearchEnabled(conversation)) {
+            webSearchOutcome = webSearchOrchestrator.doWebSearch(
+                    resolveSearchSource(conversationId, extraText, null));
+        }
+        return runFinalizeLlmRound(conversation, webSearchOutcome);
+    }
+
+    /** 终稿直出 LLM 轮（/task 专用）：final 自动建任务、question 降级为普通追问。 */
+    private ClarifyConversationDetail runFinalizeLlmRound(RequirementConversation conversation,
+                                                          WebSearchOutcome webSearchOutcome) {
+        Long conversationId = conversation.getId();
+        String webSearchContext = webSearchOutcome != null ? webSearchOutcome.toContextText() : "";
+        Agent planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
+        String prompt = renderPrompt(conversationId, webSearchContext, FINALIZE_TEMPLATE_PATH);
+        AgentTask agentTask = AgentTask.builder()
+                .systemPrompt("")
+                .userPrompt(prompt)
+                .context(Map.of("conversationId", conversationId, "scene", "requirement_finalize"))
+                .requiredCapabilities(Map.of())
+                .build();
+        AgentResult result = platformAgentExecutionService.executeSync(planner, agentTask);
+        if (!result.isSuccess()) {
+            throw new BizException("终稿产出 LLM 调用失败: " + result.getErrorMessage());
+        }
+        ClarifyReply reply = replyParser.parseReply(result.getOutput());
+        if ("final".equals(reply.getType())) {
+            String note = reply.getMessage() != null && !reply.getMessage().isBlank()
+                    ? reply.getMessage() : "已生成终稿";
+            if (webSearchOutcome != null) {
+                messageService.addMessage(conversationId, ROLE_ASSISTANT, note,
+                        replyParser.buildWebSearchOnlyPayload(webSearchOutcome));
+            } else {
+                messageService.addMessage(conversationId, ROLE_ASSISTANT, note);
+            }
+            conversation.setFinalTitle(reply.getTitle());
+            conversation.setFinalDescription(reply.getDescription());
+            // 自动终稿确认：FINALIZED + 建任务，前端随详情联动 planById 拆解
+            conversation.setStatus(STATUS_FINALIZED);
+            conversationService.updateById(conversation);
+            Task task = buildTaskFromDraft(conversation, "task_created_from_clarify_direct");
+            log.info("/task 直达拆解产出终稿并建任务: conversationId={}, taskId={}",
+                    conversationId, task.getId());
+        } else {
+            // 信息严重不足：LLM 输出追问，降级为普通澄清轮（不建任务，会话保持 ACTIVE）
+            messageService.addMessage(conversationId, ROLE_ASSISTANT,
+                    replyParser.composeAssistantContent(reply),
+                    replyParser.buildQuestionPayload(reply, webSearchOutcome));
+            log.info("/task 终稿直出降级为追问: conversationId={}", conversationId);
+        }
+        return new ClarifyConversationDetail(conversation,
+                messageService.listByConversation(conversationId));
     }
 
     /**
@@ -676,7 +875,10 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                 .replace("{{USER_MESSAGE}}", userMessage == null ? "" : userMessage)
                 .replace("{{CONVERSATION_HISTORY}}",
                         historyText.isEmpty() ? "（无历史）" : historyText)
-                .replace("{{SEARCH_POLICY}}", policyHint);
+                .replace("{{SEARCH_POLICY}}", policyHint)
+                // 每轮调用前注入系统当前时间（第一层防线：LLM 无系统时钟，
+                // 跨天对话时须以实时时间锚定"今天"，不得用历史日期推断）
+                .replace("{{SYSTEM_TIME_CONTEXT}}", systemTimeContextBuilder.build());
     }
 
     /**
@@ -729,21 +931,33 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         return v ? SearchPolicy.ALWAYS_ON : SearchPolicy.OFF;
     }
 
-    /** 是否计划类斜杠命令（/planner|/plan|/task，忽略大小写；前缀后只接受空白或结束，防误伤普通文本）。 */
+    /**
+     * 是否转方案类斜杠命令（/planner|/plan，忽略大小写；前缀后只接受空白或结束，防误伤普通文本）。
+     */
     private boolean isPlannerCommand(String message) {
+        for (String prefix : PLANNER_COMMAND_PREFIXES) {
+            if (commandMatches(message, prefix)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 是否直达拆解命令（/task，语义见 {@link #runTaskDirectRound}）。 */
+    private boolean isTaskCommand(String message) {
+        return commandMatches(message, TASK_COMMAND_PREFIX);
+    }
+
+    /** 斜杠命令通用匹配：忽略大小写，前缀后只接受空白或结束（防误伤普通文本）。 */
+    private boolean commandMatches(String message, String prefix) {
         if (message == null || message.isBlank()) {
             return false;
         }
         String trimmed = message.trim();
         String lower = trimmed.toLowerCase();
-        for (String prefix : PLANNER_COMMAND_PREFIXES) {
-            if (lower.startsWith(prefix)
-                    && (trimmed.length() == prefix.length()
-                    || Character.isWhitespace(trimmed.charAt(prefix.length())))) {
-                return true;
-            }
-        }
-        return false;
+        return lower.startsWith(prefix)
+                && (trimmed.length() == prefix.length()
+                || Character.isWhitespace(trimmed.charAt(prefix.length())));
     }
 
     /** 斜杠命令后的附加文本（如「/planner 帮我建电商系统」→「帮我建电商系统」）；非命令返回空串。 */
@@ -752,11 +966,22 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
             return "";
         }
         String trimmed = message.trim();
-        String lower = trimmed.toLowerCase();
         for (String prefix : PLANNER_COMMAND_PREFIXES) {
-            if (lower.startsWith(prefix)) {
+            if (trimmed.toLowerCase().startsWith(prefix)) {
                 return trimmed.substring(prefix.length()).trim();
             }
+        }
+        return "";
+    }
+
+    /** /task 命令附加文本（需求描述体，即终稿直出轮的输入）；非 /task 命令返回空串。 */
+    private String taskCommandExtra(String message) {
+        if (message == null) {
+            return "";
+        }
+        String trimmed = message.trim();
+        if (trimmed.toLowerCase().startsWith(TASK_COMMAND_PREFIX)) {
+            return trimmed.substring(TASK_COMMAND_PREFIX.length()).trim();
         }
         return "";
     }
@@ -805,27 +1030,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         //   决策=clarify 的轮次在 runRoundCore 已落单条确认卡返回，不会走到这里；
         //   主回复 LLM 不再输出/解析 __intent__ 标记，只承担回答正文（结构化追问 / 纯文本）
         if (!clarifyMode) {
-            String output = result.getOutput();
-            if (output == null || output.isBlank()) {
-                throw new BizException("自由对话 LLM 返回内容为空");
-            }
-            String visible = output.trim();
-            // 正常 CHAT 回复（结构化追问 / 纯文本）
-            ClarifyReply chatReply = replyParser.tryParseChatStructured(visible);
-            if (chatReply != null) {
-                messageService.addMessage(conversationId, ROLE_ASSISTANT,
-                        replyParser.composeAssistantContent(chatReply),
-                        replyParser.buildQuestionPayload(chatReply, webSearchOutcome));
-                log.info("自由对话结构化追问落库: conversationId={}", conversationId);
-            } else {
-                if (webSearchOutcome != null) {
-                    messageService.addMessage(conversationId, ROLE_ASSISTANT, visible,
-                            replyParser.buildWebSearchOnlyPayload(webSearchOutcome));
-                } else {
-                    messageService.addMessage(conversationId, ROLE_ASSISTANT, visible, null);
-                }
-                log.info("自由对话回复落库: conversationId={}", conversationId);
-            }
+            persistChatOutcome(conversation, result.getOutput(), webSearchOutcome);
             return new ClarifyConversationDetail(conversation,
                     messageService.listByConversation(conversationId));
         }
@@ -852,6 +1057,37 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         }
         return new ClarifyConversationDetail(conversation,
                 messageService.listByConversation(conversationId));
+    }
+
+    /**
+     * CHAT 模式主回复落库（同步 runLlmRound 与流式 runStreamRound 共用）：
+     * 结构化追问（tryParseChatStructured 命中）按卡片协议落 payload；纯文本按
+     * 是否携带联网搜索资料落 webSearchOnly payload / 无 payload。
+     *
+     * @throws BizException 输出为空时（与同步路径语义一致，流式路径转发为 error 事件）
+     */
+    private void persistChatOutcome(RequirementConversation conversation, String output,
+                                    WebSearchOutcome webSearchOutcome) {
+        Long conversationId = conversation.getId();
+        if (output == null || output.isBlank()) {
+            throw new BizException("自由对话 LLM 返回内容为空");
+        }
+        String visible = output.trim();
+        ClarifyReply chatReply = replyParser.tryParseChatStructured(visible);
+        if (chatReply != null) {
+            messageService.addMessage(conversationId, ROLE_ASSISTANT,
+                    replyParser.composeAssistantContent(chatReply),
+                    replyParser.buildQuestionPayload(chatReply, webSearchOutcome));
+            log.info("自由对话结构化追问落库: conversationId={}", conversationId);
+        } else {
+            if (webSearchOutcome != null) {
+                messageService.addMessage(conversationId, ROLE_ASSISTANT, visible,
+                        replyParser.buildWebSearchOnlyPayload(webSearchOutcome));
+            } else {
+                messageService.addMessage(conversationId, ROLE_ASSISTANT, visible, null);
+            }
+            log.info("自由对话回复落库: conversationId={}", conversationId);
+        }
     }
 
     /** 校验会话存在且处于 ACTIVE。 */
@@ -897,7 +1133,10 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                 ? "（无可用联网资料）" : webSearchContext;
         return template
                 .replace("{{CONVERSATION_HISTORY}}", transcript.toString().trim())
-                .replace("{{WEB_SEARCH_CONTEXT}}", contextSection);
+                .replace("{{WEB_SEARCH_CONTEXT}}", contextSection)
+                // 系统当前时间逐轮注入（第一层防线），保证 CHAT/CLARIFY/FINALIZE
+                // 三个模板在回答时效性问题时均以服务器实时日期为基准
+                .replace("{{SYSTEM_TIME_CONTEXT}}", systemTimeContextBuilder.build());
     }
 
 }

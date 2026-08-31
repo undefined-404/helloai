@@ -7,6 +7,7 @@ import com.helloai.core.planner.entity.RequirementMessage;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.task.entity.Task;
 import lombok.Data;
+import reactor.core.publisher.Flux;
 
 import java.util.List;
 
@@ -86,6 +87,50 @@ public interface RequirementClarifyService {
      * @return 会话 + 全部消息
      */
     ClarifyConversationDetail retryRound(Long conversationId);
+
+    /**
+     * 流式对话轮（S1 最小闭环，Chat SSE）：以事件流返回一轮 CHAT 主回复。
+     *
+     * <p>与 {@link #sendMessage(Long, String, List)} 同语义的前置：校验会话、落 user 消息
+     * 并 round+1、同步完成意图决策与搜索（S1 决策/搜索不流式），仅主回复 LLM 调用走
+     * token 增量流；主回复完成后一次性落库并发出 {@code done} 事件（前端收到后拉
+     * 会话详情对齐权威内容）。任何前置/流式异常统一转 {@code error} 事件，不抛出。</p>
+     *
+     * <p>S1 支持范围（与前端分流约定一致，服务端同样防御）：仅 CHAT 模式普通消息；
+     * CLARIFY 模式、斜杠命令、确认卡待回答场景一律 error 事件拒绝（不消费消息）。</p>
+     *
+     * @param conversationId 会话 ID
+     * @param message        用户消息（非空）
+     * @param selections     结构化选项回答快照（可为 null；S1 流式下通常为 null）
+     * @return token 增量事件流，恒以 {@link ChatStreamEvent.Type#DONE} 或
+     *         {@link ChatStreamEvent.Type#ERROR} 收尾
+     */
+    Flux<ChatStreamEvent> streamRound(Long conversationId, String message, List<ClarifySelection> selections);
+
+    /** 流式轮事件：type 决定事件名（token / done / error），data 为载荷文本。 */
+    record ChatStreamEvent(Type type, String data) {
+
+        public enum Type {
+            /** 主回复增量文本块。 */
+            TOKEN,
+            /** 本轮完成（data 为 [DONE]，前端随后拉 detail 对齐落库）。 */
+            DONE,
+            /** 本轮失败（data 为错误描述；消息可能已落库，可走 retryRound 重试）。 */
+            ERROR
+        }
+
+        public static ChatStreamEvent token(String text) {
+            return new ChatStreamEvent(Type.TOKEN, text);
+        }
+
+        public static ChatStreamEvent done() {
+            return new ChatStreamEvent(Type.DONE, "[DONE]");
+        }
+
+        public static ChatStreamEvent error(String message) {
+            return new ChatStreamEvent(Type.ERROR, message);
+        }
+    }
 
     /** Planner 下拉选数据源（平台内 PLANNER 可选 + 在班外部 Agent 置灰）。 */
     List<PlannerAgentPicker.PlannerOption> listPlannerOptions();

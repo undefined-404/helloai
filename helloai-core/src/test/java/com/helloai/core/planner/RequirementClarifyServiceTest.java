@@ -16,6 +16,8 @@ import com.helloai.core.planner.clarify.ChatRoundDecisionParser;
 import com.helloai.core.planner.clarify.ClarifyReplyParser;
 import com.helloai.core.planner.clarify.ClarifyWebSearchOrchestrator;
 import com.helloai.core.planner.clarify.ConfirmCardProtocol;
+import com.helloai.core.planner.clarify.RelativeTimeNormalizer;
+import com.helloai.core.planner.clarify.SystemTimeContextBuilder;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
 import com.helloai.core.planner.service.WebSearchService;
@@ -39,6 +41,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import reactor.core.publisher.Flux;
 
 import java.util.List;
 
@@ -120,8 +123,9 @@ class RequirementClarifyServiceTest {
                 taskTimelineService, new ClarifyReplyParser(new ObjectMapper()),
                 new ConfirmCardProtocol(new ObjectMapper()),
                 new ClarifyWebSearchOrchestrator(webSearchService, webSearchProperties,
-                        pageFetchService, searchQueryPlannerService),
-                new ChatRoundDecisionParser(new ObjectMapper()));
+                        pageFetchService, searchQueryPlannerService, new RelativeTimeNormalizer()),
+                new ChatRoundDecisionParser(new ObjectMapper()),
+                new SystemTimeContextBuilder());
     }
 
     private RequirementConversation activeConversation() {
@@ -674,6 +678,136 @@ class RequirementClarifyServiceTest {
                 .hasMessageContaining("澄清会话不存在");
         verify(messageService, never()).removeByConversation(anyLong());
         verify(conversationService, never()).removeById(anyLong());
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  TaskDirect：/task 直达拆解（终稿直出轮，final 自动建任务）
+    // ══════════════════════════════════════════════════════════════
+
+    /** 终稿直出轮返回的 final JSON（含 fence，parseReply 容错）。 */
+    private static final String DIRECT_FINAL_JSON = """
+            ```json
+            {"type":"final","progress":100,"title":"搭建电商后台","message":"已整理需求要点，可直接创建任务","description":"## 背景与目标\\n电商后台；## 范围与边界\\n登录/商品/订单；## 交付物\\n可用系统；## 验收标准\\n三模块可用"}
+            ```
+            """;
+
+    /** 终稿直出轮返回的 structured 追问 JSON（信息严重不足降级路径）。 */
+    private static final String DIRECT_QUESTION_JSON = """
+            ```json
+            {"type":"question","mode":"structured","progress":30,"message":"请补充关键信息：","questions":[{"id":"q1","text":"使用什么技术栈？","multiple":false,"allowCustom":true,"customPlaceholder":"补充说明","options":[{"label":"Spring Boot","value":"sb","recommended":true},{"label":"Vue","value":"vue","recommended":false}]}]}
+            ```
+            """;
+
+    /** 构造 /task 直达拆解轮的标准 stub：选人 + 历史 + LLM 结果。
+     *  联网搜索不 stub（webSearchProperties 未钉 → getQueryKeywordLimit 默认 0 → 候选词截断为空
+     *  → 编排器直接返回 null 不触发搜索，与既有 CLARIFY 用例同构，不引入多余 stub）。 */
+    private void stubTaskDirectLlmRound(String output, String userContent) {
+        when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+        when(messageService.listByConversation(anyLong()))
+                .thenReturn(List.of(message("user", userContent, 1)));
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(output, "stop", "llm", 100));
+    }
+
+    /** 建任务 stub：save 回填 id 300L，通知 PLANNER 返回在班 Agent。 */
+    private void stubCreateTask() {
+        when(taskService.save(any(Task.class))).thenAnswer(inv -> {
+            Task t = inv.getArgument(0);
+            t.setId(300L);
+            return true;
+        });
+        when(agentService.listByRole(AgentRole.PLANNER)).thenReturn(List.of(llmPlanner()));
+    }
+
+    @Test
+    @DisplayName("/task：附加文本落库切 CLARIFY，产出 final 自动建任务并 FINALIZED")
+    void shouldTaskCommandDirectlyFinalizeAndCreateTask() {
+        RequirementConversation conversation = activeConversation();
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        stubTaskDirectLlmRound(DIRECT_FINAL_JSON, "搭建一个电商后台：用户登录、商品管理、订单管理");
+        stubCreateTask();
+
+        RequirementClarifyService.ClarifyConversationDetail detail =
+                clarifyService.sendMessage(CONV_ID, "/task 搭建一个电商后台：用户登录、商品管理、订单管理");
+
+        assertThat(detail.getConversation().getStatus())
+                .isEqualTo(RequirementClarifyService.STATUS_FINALIZED);
+        assertThat(detail.getConversation().getTaskId()).isEqualTo(300L);
+        assertThat(detail.getConversation().getMode()).isEqualTo(RequirementClarifyService.MODE_CLARIFY);
+        assertThat(conversation.getFinalTitle()).isEqualTo("搭建电商后台");
+        // 命令前缀不落消息，仅附加文本落库，轮数 +1
+        verify(messageService).addMessage(eq(CONV_ID), eq("user"),
+                eq("搭建一个电商后台：用户登录、商品管理、订单管理"), isNull());
+        assertThat(conversation.getRoundCount()).isEqualTo(2);
+        verify(taskService).save(any(Task.class));
+        verify(taskTimelineService).recordEvent(
+                eq(300L), isNull(), eq("task_created_from_clarify_direct"),
+                eq(AgentRole.PLANNER), isNull(), anyMap());
+    }
+
+    @Test
+    @DisplayName("/task：LLM 输出追问（信息不足）降级普通澄清，不建任务不 FINALIZED")
+    void shouldTaskCommandDegradeToQuestionWhenInfoInsufficient() {
+        RequirementConversation conversation = activeConversation();
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        stubTaskDirectLlmRound(DIRECT_QUESTION_JSON, "搭建一个电商后台");
+
+        RequirementClarifyService.ClarifyConversationDetail detail =
+                clarifyService.sendMessage(CONV_ID, "/task 搭建一个电商后台");
+
+        assertThat(detail.getConversation().getStatus())
+                .isEqualTo(RequirementClarifyService.STATUS_ACTIVE);
+        assertThat(conversation.getFinalTitle()).isNull();
+        assertThat(conversation.getMode()).isEqualTo(RequirementClarifyService.MODE_CLARIFY);
+        // 追问落库（结构化卡），不触发建任务
+        verify(messageService).addMessage(eq(CONV_ID), eq("assistant"), anyString(), any());
+        verify(taskService, never()).save(any(Task.class));
+    }
+
+    @Test
+    @DisplayName("/task 裸命令（无附加文本）：不落 user 消息不加轮数，基于历史直出终稿")
+    void shouldTaskCommandWithoutExtraKeepExistingMessages() {
+        RequirementConversation conversation = activeConversation();
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        stubTaskDirectLlmRound(DIRECT_FINAL_JSON, "历史需求描述");
+        stubCreateTask();
+
+        clarifyService.sendMessage(CONV_ID, "/task");
+
+        verify(messageService, never()).addMessage(eq(CONV_ID), eq("user"), anyString(), any());
+        assertThat(conversation.getRoundCount()).isEqualTo(1);
+        verify(taskService).save(any(Task.class));
+    }
+
+    @Test
+    @DisplayName("/task：澄清轮数已达上限仍放行（逃生通道），直达建任务")
+    void shouldTaskCommandBypassRoundLimit() {
+        RequirementConversation conversation = activeConversation();
+        conversation.setRoundCount(20);
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        stubTaskDirectLlmRound(DIRECT_FINAL_JSON, "搭建一个电商后台");
+        stubCreateTask();
+
+        clarifyService.sendMessage(CONV_ID, "/task 搭建一个电商后台");
+
+        verify(taskService).save(any(Task.class));
+    }
+
+    @Test
+    @DisplayName("create 首条 /task：会话标题取附加文本（命令前缀不落标题）")
+    void shouldCreateTitleUseTaskCommandExtra() {
+        ArgumentCaptor<RequirementConversation> captor = ArgumentCaptor.forClass(RequirementConversation.class);
+        when(conversationService.save(captor.capture())).thenAnswer(inv -> {
+            RequirementConversation saved = captor.getValue();
+            saved.setId(201L);
+            return true;
+        });
+        stubTaskDirectLlmRound(DIRECT_FINAL_JSON, "帮我建一个博客系统");
+        stubCreateTask();
+
+        clarifyService.create("/task 帮我建一个博客系统", null, null);
+
+        assertThat(captor.getValue().getTitle()).isEqualTo("帮我建一个博客系统");
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -1957,5 +2091,113 @@ class RequirementClarifyServiceTest {
             // 规划器空产出 → 兜底前 40 字截断（与改造前行为一致）
             verify(webSearchService).search(eq("做一个报表"), eq(5));
         }
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  streamRound（Chat SSE 流式轮，S1）
+    // ══════════════════════════════════════════════════════════════
+
+    /** 顶层版 CHAT 模式会话（流式轮仅支持 CHAT；@Nested ChatModeAndSwitch 内有同名方法）。 */
+    private RequirementConversation streamChatConversation() {
+        RequirementConversation conversation = activeConversation();
+        conversation.setMode(RequirementClarifyService.MODE_CHAT);
+        return conversation;
+    }
+
+    /** stub 流式轮：决策轮（chat 意图不搜索，经 scene 精确匹配）+ 主回复流式通道分片。 */
+    private void stubChatStreamRound(String... tokenChunks) {
+        when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+        when(messageService.listByConversation(CONV_ID))
+                .thenReturn(List.of(message("user", "你好", 1)));
+        stubDecisionRound(DECISION_CHAT_NO_SEARCH);
+        when(platformAgentExecutionService.executeStream(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(Flux.just(tokenChunks));
+    }
+
+    @Test
+    @DisplayName("流式轮：token 增量拼接 == 落库全文，事件序列以 done 收尾")
+    void streamRound_tokensJoinedPersistMatchesSyncSemantics() {
+        RequirementConversation conversation = streamChatConversation();
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        stubChatStreamRound("你好，自由模式的回答", " 分片二", " 分片三");
+
+        List<RequirementClarifyService.ChatStreamEvent> events =
+                clarifyService.streamRound(CONV_ID, "你好", null).collectList().block();
+
+        assertThat(events).isNotNull();
+        assertThat(events.get(events.size() - 1).type())
+                .isEqualTo(RequirementClarifyService.ChatStreamEvent.Type.DONE);
+        String joined = events.stream()
+                .filter(e -> e.type() == RequirementClarifyService.ChatStreamEvent.Type.TOKEN)
+                .map(RequirementClarifyService.ChatStreamEvent::data)
+                .reduce("", String::concat);
+        assertThat(joined).isEqualTo("你好，自由模式的回答 分片二 分片三");
+        // 与同步路径同语义：user 消息（payload null）+ assistant 全文一次性落库
+        verify(messageService).addMessage(CONV_ID, "user", "你好", null);
+        verify(messageService).addMessage(CONV_ID, "assistant", "你好，自由模式的回答 分片二 分片三", null);
+        verify(conversationService).updateById(conversation);
+    }
+
+    @Test
+    @DisplayName("流式轮拒绝：CLARIFY 模式消息不被消费，error 事件带原因")
+    void streamRound_rejectedWhenClarifyMode() {
+        RequirementConversation conversation = activeConversation(); // mode=null → CLARIFY
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+
+        List<RequirementClarifyService.ChatStreamEvent> events =
+                clarifyService.streamRound(CONV_ID, "你好", null).collectList().block();
+
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).type())
+                .isEqualTo(RequirementClarifyService.ChatStreamEvent.Type.ERROR);
+        assertThat(events.get(0).data()).contains("方案澄清模式暂不支持流式");
+        verify(messageService, never()).addMessage(anyLong(), anyString(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("流式轮失败：主回复流异常转 error 事件，user 已落库可重试，assistant 未落")
+    void streamRound_errorWhenStreamFails() {
+        when(conversationService.getById(CONV_ID)).thenReturn(streamChatConversation());
+        when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+        when(messageService.listByConversation(CONV_ID))
+                .thenReturn(List.of(message("user", "你好", 1)));
+        stubDecisionRound(DECISION_CHAT_NO_SEARCH);
+        when(platformAgentExecutionService.executeStream(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(Flux.error(new RuntimeException("上游 LLM 超时")));
+
+        List<RequirementClarifyService.ChatStreamEvent> events =
+                clarifyService.streamRound(CONV_ID, "你好", null).collectList().block();
+
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).type())
+                .isEqualTo(RequirementClarifyService.ChatStreamEvent.Type.ERROR);
+        assertThat(events.get(0).data()).contains("上游 LLM 超时");
+        verify(messageService).addMessage(CONV_ID, "user", "你好", null);
+        verify(messageService, never()).addMessage(eq(CONV_ID), eq("assistant"), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("流式轮决策=clarify：不流式主回复，落确认卡后直接 done")
+    void streamRound_doneWhenDecisionIsClarify() {
+        when(conversationService.getById(CONV_ID)).thenReturn(streamChatConversation());
+        when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+        when(messageService.listByConversation(CONV_ID))
+                .thenReturn(List.of(message("user", "你好", 1)));
+        stubDecisionRound("""
+                {"intent":"clarify","intent_reason":"need_clarification",
+                 "clarification_question":"方案的第一期范围怎么定？",
+                 "web_search":{"need_search":false,"search_query":null,"reason":"澄清轮不搜"}}
+                """);
+
+        List<RequirementClarifyService.ChatStreamEvent> events =
+                clarifyService.streamRound(CONV_ID, "你好", null).collectList().block();
+
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).type())
+                .isEqualTo(RequirementClarifyService.ChatStreamEvent.Type.DONE);
+        // 确认卡单条落库（applyClarifyDecision），主回复流式通道零调用
+        verify(messageService).addMessage(eq(CONV_ID), eq("assistant"), anyString(), anyString());
+        verify(platformAgentExecutionService, never())
+                .executeStream(any(Agent.class), any(AgentTask.class));
     }
 }
