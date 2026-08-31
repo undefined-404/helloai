@@ -14,6 +14,47 @@
 
 ## 2. 近期关键轮次
 
+### 2026-08-31 Chat 流式输出改造（S1 最小闭环，N29 落地，§6.170）
+
+#### 1. 背景
+
+- V29 起对话链路每轮都是同步 `executeSync → ChatClient.call()`，前端只能靠 120s 超时等待全量返回，CHAT 长回复期间只显示「思考中…」；外部 AI 建议（《建议.md》第二章）与 `helloai_chat_refactor_analysis.md` P0 均点名流式是对话链路唯一真实 P0 缺口。N29 于 2026-08-31 登记，阶段边界见 `doc/design/HelloAI_流式输出改造分析.md`（S1 最小闭环：token/done/error 三事件 + 前端增量渲染；S2/S3 后续）。
+
+#### 2. 实际落地
+
+- **执行链流式通道**：`AgentChatClientService.generateStream` 两重载（`chatClient.stream().content()` 过滤空串帧；MockChatModel 伪流式——`call()` 结果按 8 字符分片 + 20ms 延时，不携带 metadata/usage）；限流与同步语义一致——真实 provider 模式方法体 `acquire()`，`Flux.defer` 惰性订阅 + `doFinally` release（完成/异常/取消均释放）；`AgentExecutor.executeStream` 默认抛 BizException，`ApiKeyAgentExecutor` 实现（抽 `resolveApiKey` 与 execute 共用，dbg 埋点保留）；`PlatformAgentExecutionService.executeStream`（route/checkCapability/heartbeat 前置与 execute 对齐）。
+- **流式轮编排**：`RequirementClarifyService.streamRound/runStreamRound`——守卫链（空消息/斜杠命令/CLARIFY 模式/待确认卡/轮数上限拒绝且不消费消息）→ 落 user 消息 + round+1 → `makeRoundDecision`（LLM 联合决策）→ clarify 决策直接 done → 否则 `resolveChatSearchOutcome` → 构造 CHAT 模板 AgentTask → `executeStream` + StringBuilder buffer → `persistChatOutcome`（抽公共方法，同步/流式共用落库全文）→ done 事件；外层 `Flux.defer + onErrorResume` 转 `ChatStreamEvent.error`（根因 message）。事件协议 `ChatStreamEvent(Type{TOKEN,DONE,ERROR}, data)` + 静态工厂，core 不依赖 servlet。
+- **Controller 端点**：`POST /api/requirement-conversations/streamSendById/{id}`（produces=text/event-stream）——SseEmitter 120s + `X-Accel-Buffering: no` + `Cache-Control: no-cache`；`chatStreamExecutor` 线程池（4/8/200/CallerRuns）执行订阅，`StreamFrameAggregator` 按「≥50 字符或距上次发送 ≥100ms」聚合 token 防高频小帧打爆连接，done/error 前先 flush，连接断开静默停止发送（LLM 流照跑落库，前端刷新可见）。
+- **前端消费**：`chatStream.ts`（fetch + ReadableStream + TextDecoder(stream:true) + `\n\n` 分帧解析 event/data；手动携带 X-Admin-Token/Bearer 鉴权头；HTTP 非 2xx 优先取 R 包裹体 msg；流非正常截断兜底 error，Promise 不 reject）；`RequirementChat.vue` 发送分流——已有 CHAT 会话普通消息走 SSE（新会话 create / CLARIFY 模式老会话 / 结构化卡提交保持同步链路），60ms 节流 buffer 驱动 MarkdownView 增量渲染，done 后 `settleStream` 拉 detail 收敛（同 tick 清空无闪烁，落库全文 == 流式拼接），error 弹错后刷新详情暴露重试条（user 消息已落库可 retry）。
+- **验证**：`AgentChatClientServiceTest` +1（流式拼接 == 同步全量）；`RequirementClarifyServiceTest` +4（token 拼接落库语义 / CLARIFY 模式拒绝 / 流失败 error 且 user 已落 assistant 未落 / clarify 决策直接 done 零执行）；helloai-core 全量 **998/998** 全绿 + helloai-api compile；前端 vue-tsc 0 error + eslint 本次改动文件 0 问题（全量 lint 仅遗留 QualityDashboard.vue no-extra-semi 1 个历史 error）。
+
+#### 3. 遗留 / 不做的事
+
+- S2（中间态事件、生成中占位、L0 快通道）与 S3（StreamProfile / TTFT 观测）按设计文档留待后续阶段；流式仅在 CHAT 模式普通消息生效，新会话首轮 create 仍同步。
+- 未做浏览器端 E2E：mock 模式下前后端流式链路已由单测锁定，真实环境（真实 provider + Nginx 反代透传）冒烟待后续脚本化。
+- error 事件实现为「error 帧 + complete()」而非 completeWithError（对 fetch/ReadableStream 更友好），属对设计文档的可接受偏差。
+
+### 2026-08-31 LLM 时间感知缺失修复：系统时间强制注入 + 搜索词相对时间归一化（两层防线）
+
+#### 1. 背景
+
+- 跨天对话场景：会话首条消息在 8.30，8.31 用户问"今天上证指数走势 + 上周五数据"，Planner 无系统时钟，以对话历史 8.30 锚定"今天"，联网搜索查询到错误日期。LLM 时间感知缺失是业界共性问题（Open WebUI CURRENT_DATE / Hermes build_temporal_context / LangChain DateTimeTool 均为此而生）。
+
+#### 2. 实际落地
+
+- **第一层防线（每轮 LLM 调用前强制注入系统时间）**：新增无状态组件 `planner/clarify/SystemTimeContextBuilder`——按服务器实时时钟生成"当前日期（含星期）/当前时间/时区/相对时间词→绝对日期映射/历史日期不可当当前时间"文本节，作为 `{{SYSTEM_TIME_CONTEXT}}` 占位符替换值。
+- **第二层防线（搜索词规则归一化）**：新增无状态组件 `planner/clarify/RelativeTimeNormalizer`——纯正则规则把"今天/昨日/明天/前天/后天/上周X/本周X/上周/本周/最近一周/近N天"等相对时间词转 yyyy-MM-dd 绝对日期（ISO 周起算，替换顺序自长到短防止子串覆盖，幂等，未命中时间词原样返回）。
+- **注入点位**（5 个 LLM 模板全部覆盖）：`RequirementClarifyServiceImpl.renderPrompt`（CHAT/CLARIFY/FINALIZE 三模板共用）与 `renderDecisionPrompt`（联合决策模板）逐轮注入；`SearchQueryPlannerServiceImpl.llmRewrite`（搜索词 LLM 改写）逐轮注入；`ClarifyWebSearchOrchestrator.doWebSearch` 在候选词定稿后统一归一化（LLM 优化词/规则规划词/兜底截断全量覆盖，含域名前置增强词，幂等）。
+- **模板规则增强**：requirement-chat.md / requirement-decision.md / requirement-clarify.md / requirement-finalize.md 均新增"## 系统当前时间（时间语义的唯一基准）"节（置顶）；decision 模板 search_query 规范新增"时间词必须转绝对日期不得保留相对词"；websearch-query-rewrite.md 新增系统时间节 + 时间词转换规则第 6 条。
+- **测试**：新增 `RelativeTimeNormalizerTest`（9 用例：单点词/周内点/周区间/天区间/组合场景/幂等/null 安全，锚点 2026-08-31 周一验证上周五=08-28）、`SystemTimeContextBuilderTest`（4 用例：实时日期/映射齐全/防锚定规则/节形态）；更新 `RequirementClarifyServiceTest` / `SearchQueryPlannerServiceImplTest` 构造调用（新组件真实实例，与既有拆分组件测试口径一致）。
+- **验证**：`mvn -pl helloai-core -am test -DskipTests=false -Dtest=...`（父 pom 默认 skipTests=true，必须显式 false 才真正执行）——RelativeTimeNormalizer 9 + SystemTimeContextBuilder 4 + RequirementClarifyService(ChatModeAndSwitch) 80 + SearchQueryPlanner 7 = 100 用例 0 失败 0 错误；`mvn compile` BUILD SUCCESS。
+
+#### 3. 遗留 / 风险
+
+- 未做第三层（get_current_datetime 工具）：HelloAI 是 prompt 渲染 + executeSync 架构，非 function calling 工具链，两层防线已覆盖该场景，后续如引入工具链再评估。
+- 任务拆解链路（planner-decompose.md）未注入系统时间（时间敏感度低，超本次范围）。
+- `ClarifyWebSearchOrchestrator.doWebSearch` 新增带时钟参数重载（供测试固定日期），生产路径 today=null 用实时时钟；接口数量 +1 不影响既有调用方。
+
 ### 2026-08-28 README 定位重构：分布式跨终端调度差异化 + 运行机制四图入库
 
 #### 1. 背景
@@ -7467,4 +7508,28 @@ V40/V40.1 的意图词正则对口语话术仍敏感（「帮我整理成技术�
 
 - 影响：V29「会话删除（用 abandon）」口径从「用 abandon 代替」扩展为「abandon 置放弃态 + 已放弃会话可删除」；已放弃会话删除后列表/详情均不可再查看（逻辑删除不可恢复）；无 Flyway、无新配置，重启后端生效。
 - 遗留：① 未做批量删除/回收站/软删行物理清理任务（deleted=1 行留存，后续如需物理清理可加定时任务）；② 本轮改动未 git 提交，与 §6.165/§6.166/§6.167 合计待用户确认后提交；③ 真实环境（浏览器交互 + 删除后列表消失）待回归。
+
+### 6.169 /task 直达拆解：命令分流 + 终稿直出轮 + 自动建任务（2026-08-31）
+
+#### 1. 背景与结论
+
+- 用户提供外部评审报告 `helloai_chat_refactor_analysis.md`，结合分析确认 P1「Intent Router 部分落地」存在结构性缺口：TASK_ORIENTED 意图（需求已明确，如「帮我搭一个电商后台」）现状仍需 多轮澄清 → 终稿 → finalize → planById，链路冗长。经用户决策（多选仅选本项），本次新增 `/task <描述>` 命令直达拆解。
+- 结论：命令语义拆分——`/task` = 需求已明确直达终稿（任意模式优先分流，切 CLARIFY + 终稿直出轮，LLM 产 final 自动建任务）；`/planner|/plan` = 保持原转澄清语义零回归。信息严重不足时 LLM 输出最多一轮 structured 追问，降级为普通澄清轮不建任务。明确不做：SSE 流式输出（项目两次记录明确不做）、模型级搜索能力元数据、会话分页、终稿人工微调（未选）。
+
+#### 2. 实际落地
+
+- **后端**（`RequirementClarifyServiceImpl`，净增约 126 行）：常量 `TASK_COMMAND_PREFIX="/task"` / `PLANNER_COMMAND_PREFIXES=List.of("/planner","/plan")`（收缩）/ `FINALIZE_TEMPLATE_PATH`；命令工具重构——`commandMatches`（忽略大小写 + 前缀后只接受空白或结束防误伤）与 `commandExtra` 通用化，派生 `isPlannerCommand` / `isTaskCommand` / `plannerCommandExtra` / `taskCommandExtra`；create 首条 /task 会话标题取附加文本（空则 "/task"）；sendMessage 轮数上限逃生通道扩充为 `anyCommand = isPlannerCommand || isTaskCommand`；doRound 命令分流（isTaskCommand 优先于 /planner 判断）；新轮次 `runTaskDirectRound`（切 CLARIFY + 附加文本落库 round+1 + 开关开启时按 CLARIFY 语义搜索注入）+ `runFinalizeLlmRound`（终稿直出模板一次 LLM：final → 回填终稿字段 + STATUS_FINALIZED + `buildTaskFromDraft(..., "task_created_from_clarify_direct")` 建 PENDING Task + PLANNER 通知 + timeline 事件；question → 追问落库，会话保持 ACTIVE 不建任务）。与既有轮次一致无类级事务（LLM 耗时不占 DB 事务），LLM/解析失败抛 BizException，user 消息已落库可重试（重试为普通澄清轮语义）。
+- **模板**（`prompts/requirement-finalize.md`，52 行）：注释头 + 职责 3 条（默认直接产 final 不追问；仅信息严重不足才允许最多一轮 structured 追问；六维度自检 + 推断项显式标注（推断））+ final/question 双形态 strict JSON + description 四段式（背景与目标 / 范围与边界 / 交付物 / 验收标准，内容全部来自对话不得虚构）。
+- **前端**（`RequirementChat.vue`）：`PLANNER_COMMAND_RE` 收缩为 /planner|/plan；/task 不拦截、原样发送（命令前缀由后端 doRound 消费）；发送成功响应 `status==='FINALIZED' && taskId!=null` 时自动 `taskApi.plan` + `router.push({path:'/tasks', query:{review:taskId}})` 打开草案审阅——抽公共函数 `triggerTaskReview` 与「创建任务并自动拆解」（handleFinalize 后半段）共用；输入框占位文案补 /task 直达拆解提示。paths.ts / clarify.ts 无新端点（无新后端端点，单一事实源不受影响）。
+
+#### 3. 验证结果
+
+- `mvn -pl helloai-core test -DskipTests=false`：**980/980 全绿 BUILD SUCCESS**——`RequirementClarifyServiceTest` 新增 5 用例（TaskDirect 节）：直达 final 建任务（FINALIZED / taskId=300 / 附加文本落库 / roundCount=2 / `task_created_from_clarify_direct`）/ LLM 追问降级（ACTIVE 不建任务）/ 裸 /task 不落消息不加轮数基于历史直出 / 20 轮上限逃生直达建任务 / create 首条会话标题取附加文本。
+- 首轮实测修复：5 新用例报 UnnecessaryStubbing（`webSearchService.search` stub 未消耗）——根因 `WebSearchProperties.getQueryKeywordLimit()` 为 primitive int，mock 默认 0 → 候选词截断为空 → `doWebSearch` 直接返回 null 不触发搜索（与既有 CLARIFY 用例 stubLlmRound 行为同构）；删除多余搜索 stub 后全绿。
+- helloai-api `-am` compile SUCCESS；前端 `npm run build`（vue-tsc + vite）EXIT=0 通过（仅既有 chunk size 警告）。
+
+#### 4. 影响与遗留
+
+- 影响：N17 需求澄清链路新增「直达拆解」通道——`/task` 一条命令 = 跳过多轮澄清 + 终稿直出 + 自动建任务 + 前端自动提交拆解并进入草案审阅；`/planner|/plan` 与普通消息行为零回归（前端既有的 `/task 转澄清` 语义被本次 /task 直达替代，属预期语义升级）。无 Flyway、无新端点、无新配置，重启后端生效。
+- 遗留：① 真实环境（浏览器 /task 交互 + 任务创建 + 草案审阅跳转）待回归；② 本轮改动未 git 提交，与 §6.165~§6.168 合计待用户确认后提交；③ `RequirementClarifyServiceImpl` 类规模约 1031 行超红线（§6.136 四拆后既有事实），本轮纯增量未再拆分，后续重构收口。
 
