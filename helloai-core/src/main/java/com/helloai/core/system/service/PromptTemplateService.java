@@ -53,6 +53,12 @@ public interface PromptTemplateService extends IService<PromptTemplate> {
     String getSkillForAgent(String role, String apiKey, String baseUrl, String agentName, Long agentId);
 
     /**
+     * 构建技能包 ZIP（内存字节）：SKILL.md（占位符已渲染）+ scripts/ 全量脚本 + config.example.json（baseUrl 预填，apiKey 保留占位）。
+     * zip 内顶层目录为 <role>-skill/，整体解压/复制到 IDE 的 skills 目录即可使用，避免只拿单个 md 导致脚本缺失（找不到 clock.ps1 / config.json）。
+     */
+    byte[] buildSkillPackageZip(String role, String apiKey, String baseUrl, String agentName, Long agentId);
+
+    /**
      * 拼装完整接入内容（Agent 信息摘要 + 执行要求 + SKILL）。
      * 生成结果可直接复制到 Trae / Qoder 供外部 Agent 接入使用。
      */

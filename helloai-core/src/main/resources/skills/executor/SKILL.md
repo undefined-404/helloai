@@ -33,6 +33,8 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 >
 > 也可照抄 §1.5.7「值班闭环最小示例」（纯 PowerShell 内联版）。本文档其余章节是遇到问题
 > （握手失败 / 返工 / 依赖装配 / 编码约定）时按需查阅的参考手册，不必全部读完才开工。
+>
+> ⚠️ **整体复制（重要）**：本技能以技能包（zip）整体交付——SKILL.md 与 `scripts/` 目录必须在一起。请把整个 `<role>-skill` 目录解压/复制到 IDE 的 skills 目录（如 `~/.trae/skills/`），**不要只拿单个 SKILL.md**：脚本通过 `Split-Path` 定位同目录 `config.json`，仅复制 md 会报"找不到 clock.ps1 / config.json"。
 
 ## 技能标签（skills）与平台技能规范（eng-*）
 

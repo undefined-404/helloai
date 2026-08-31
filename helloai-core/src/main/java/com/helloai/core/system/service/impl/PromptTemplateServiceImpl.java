@@ -9,13 +9,20 @@ import com.helloai.core.system.service.RuleService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 @Slf4j
 @Service
@@ -168,6 +175,71 @@ public class PromptTemplateServiceImpl extends ServiceImpl<PromptTemplateMapper,
         content = content.replace("<你的ID>", String.valueOf(agentId));
         content = content.replace("<你的 ID>", String.valueOf(agentId));
         return content;
+    }
+
+    /**
+     * 构建技能包 ZIP：SKILL.md（占位符已渲染）+ scripts/ 全量脚本 + config.example.json（baseUrl 预填，apiKey 保留占位）。
+     * zip 内以 <role>-skill/ 为顶层目录，整体复制到 IDE 的 skills 目录即可，防止只拿单个 md 导致脚本缺失。
+     */
+    @Override
+    public byte[] buildSkillPackageZip(String role, String apiKey, String baseUrl, String agentName, Long agentId) {
+        String roleDir = role.toLowerCase();
+        String skillContent = getSkillForAgent(role, apiKey, baseUrl, agentName, agentId);
+        try {
+            // classpath 下枚举 skills/<role>/ 内全部文件（SKILL.md + scripts/*），jar 内同样可用
+            PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
+            Resource[] resources = resolver.getResources("classpath:skills/" + roleDir + "/**/*");
+            List<Resource> files = Arrays.stream(resources)
+                    .filter(Resource::isReadable)
+                    .sorted(Comparator.comparing(r -> {
+                        try {
+                            return r.getURL().toString();
+                        } catch (IOException e) {
+                            return "";
+                        }
+                    }))
+                    .toList();
+
+            String topDir = roleDir + "-skill";
+            String prefix = "/skills/" + roleDir + "/";
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            try (ZipOutputStream zos = new ZipOutputStream(bos)) {
+                // SKILL.md（渲染后）置于顶层目录根部
+                byte[] skillBytes = skillContent.getBytes(StandardCharsets.UTF_8);
+                zos.putNextEntry(new ZipEntry(topDir + "/SKILL.md"));
+                zos.write(skillBytes);
+                zos.closeEntry();
+
+                for (Resource r : files) {
+                    String url = r.getURL().toString();
+                    int idx = url.indexOf(prefix);
+                    if (idx < 0) {
+                        continue;
+                    }
+                    String rel = url.substring(idx + prefix.length());
+                    // SKILL.md 已在上方以渲染后的完整版写入，跳过原始文件避免 zip 重复条目
+                    if (rel.equals("SKILL.md")) {
+                        continue;
+                    }
+                    byte[] content;
+                    try (InputStream in = r.getInputStream()) {
+                        content = in.readAllBytes();
+                    }
+                    // config.example.json：预填 baseUrl（外网地址），apiKey 保留模板占位由下载者填写
+                    if (rel.equals("scripts/config.example.json")) {
+                        String text = new String(content, StandardCharsets.UTF_8)
+                                .replaceAll("\"baseUrl\"\\s*:\\s*\"[^\"]*\"", "\"baseUrl\": \"" + baseUrl + "\"");
+                        content = text.getBytes(StandardCharsets.UTF_8);
+                    }
+                    zos.putNextEntry(new ZipEntry(topDir + "/" + rel));
+                    zos.write(content);
+                    zos.closeEntry();
+                }
+            }
+            return bos.toByteArray();
+        } catch (IOException e) {
+            throw new BizException("构建技能包失败: " + e.getMessage());
+        }
     }
 
     /**
