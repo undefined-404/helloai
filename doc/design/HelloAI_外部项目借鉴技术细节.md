@@ -9,7 +9,7 @@
 **版本**：2026-07-11
 **适用范围**：HelloAI 多 Agent 协作调度平台
 
-> **状态注记（2026-08-23 文档核查）**：本文档"HelloAI 落点"表是 2026-07-11 时的目标态描述，部分状态列已过时：§1.1 落点表 `ExecutionCommandConsumer`（MQ/DB Poller 已落地）与 `ExecutionResultHandler`（已固化为唯一执行结果入口）、§3.2 "PLANNER 自动拆解尚未完整闭环"（V26 已闭环）、§6 速查表"调度分离-进行中"（已落地）与"防晚到结果覆盖-待补"（`ExecutionResultHandler` 状态前置校验已固化）等条目以《实现差距表》为准。2026-08-23 另按本地源码校准了 OpenMOSS 精确文件路径（§3.1/§3.4，本地参考目录 `E:\workspace\openMoss\OpenMOSS-main`）与 HelloAI onboarding 接口路径（§3.1）。本文档正文保留历史原貌，仅作外部项目借鉴思路参考。
+> **状态注记（2026-08-23 文档核查）**：本文档"HelloAI 落点"表是 2026-07-11 时的目标态描述，部分状态列已过时：§1.1 落点表 `ExecutionCommandConsumer`（MQ/DB Poller 已落地）与 `ExecutionResultHandler`（已固化为唯一执行结果入口）、§3.2 "PLANNER 自动拆解尚未完整闭环"（V26 已闭环）、§6 速查表"调度分离-进行中"（已落地）与"防晚到结果覆盖-待补"（`ExecutionResultHandler` 状态前置校验已固化）等条目以《实现差距表》为准。2026-08-23 另按本地源码校准了 OpenMOSS 精确文件路径（§3.1/§3.4， `openMoss\OpenMOSS-main`）与 HelloAI onboarding 接口路径（§3.1）。本文档正文保留历史原貌，仅作外部项目借鉴思路参考。
 
 ---
 
@@ -346,7 +346,7 @@ XL → L（单人串行），L → M（跳过部分验证）
 
 ### 3.1 Agent 自注册与 Onboarding
 
-**参考文件**（已按 2026-08-23 本地源码 `E:\workspace\openMoss\OpenMOSS-main` 校准，仓库根下存在嵌套副本 `OpenMOSS-main\OpenMOSS-main\`）：
+**参考文件**（已按 2026-08-23 `openMoss\OpenMOSS-main` 校准，仓库根下存在嵌套副本 `OpenMOSS-main\OpenMOSS-main\`）：
 
 - `app/routers/agents.py` — Agent 注册端点（处理注册的 HTTP 端点，含角色白名单校验）
 - `app/services/agent_service.py` — 注册核心逻辑——名称去重、UUID 生成、API Key（`"ak_" + secrets.token_hex(16)`）生成、DB 写入
@@ -449,7 +449,7 @@ update
 
 ### 3.4 规则合并（Rules Merging）
 
-**参考文件**（已按 2026-08-23 本地源码 `E:\workspace\openMoss\OpenMOSS-main` 校准）：
+**参考文件**（已按 2026-08-23 `openMoss\OpenMOSS-main` 校准）：
 
 - `app/routers/rules.py` — 规则合并端点（对外暴露规则合并 API，含 CLI 版本检查 `cli_version < latest → update_available=true`）
 - `app/services/rule_service.py` — 规则合并服务（实现全局规则 + 任务规则 + 子任务规则 + 模块规则的合并优先级逻辑）
