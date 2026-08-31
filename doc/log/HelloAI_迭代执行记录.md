@@ -14,6 +14,25 @@
 
 ## 2. 近期关键轮次
 
+### 2026-08-31 技能包 zip 整体交付（§6.171）
+
+#### 1. 背景
+
+- 平台 executor/planner/reviewer 的 SKILL.md 在 `resources/skills/<role>/` 维护，executor 已配齐 `scripts/`（ps1 + sh + config.example.json）双平台脚本；但 onboarding 弹窗只能下载单个 `hello_ai_<name>.md`，后端无任何接口暴露 `scripts/`——外部 Agent 按 md 指引敲 `scripts/clock.ps1` 会因脚本缺失报错（Trae 侧 duty-executor 已实测踩坑，其 SKILL.md §9 明确「必须整个文件夹复制，只复制 SKILL.md → 找不到 clock.ps1 / config.json」）。决定改为 zip 技能包整体交付。
+
+#### 2. 实际落地
+
+- **技能包构建**：`PromptTemplateService.buildSkillPackageZip`——classpath 枚举 `skills/<role>/**`（jar 内同样可用），内存 ZipOutputStream 构建 `<role>-skill/` 顶层目录（SKILL.md 占位符已渲染 + scripts/ 全量）；`config.example.json` 正则替换 baseUrl 字段值（预填实际服务地址），apiKey 保留模板占位由下载者填写；循环内跳过原始 SKILL.md 防 zip 重复条目（新增单测首轮即捕获该 bug：`**/*` 会同时匹配根 SKILL.md）。
+- **下载端点**：`GET /api/admin/agents/getMySkillZipByAgentId/{id}`（AdminAgentController）——与 onboarding 同规则（API_KEY_LLM 内部 Agent 拦截、baseUrl 统一解析、apiKey 解密），zip 流响应 + ASCII `Content-Disposition`（role 为 ASCII 标识，文件名 `hello_ai_<role>-skill.zip`）。
+- **前端**：`AgentOnboardingDialog.vue` 新增「⬇️ 下载技能包(.zip)」按钮（axios `responseType: 'blob'` + 拦截器放行返回完整 response，文件名 `hello_ai_<role>-skill.zip`）；`paths.ts`/`agent.ts` 新增 skillZip 路径与 `getSkillZip`；弹窗文案区同步提示「整体解压到 IDE 的 skills 目录，勿只拿单个 md」。
+- **SKILL.md 提示**：executor/SKILL.md 头部 📎 快速上手块补「⚠️ 整体复制」说明——SKILL.md 与 scripts/ 必须在一起，脚本经 `Split-Path` 定位同目录 config.json，仅复制 md 会报错。
+- **验证**：`PromptTemplateServiceImplTest` +2 用例（zip 8 条目结构 / SKILL.md 渲染 apiKey·baseUrl·agentId / config baseUrl 预填且 apiKey 占位保留 / 未知角色抛「未找到角色」）；helloai-core + helloai-api 全量回归 1000+ 用例全绿；前端 vue-tsc 0 error + eslint 本次改动文件 0 error。
+
+#### 3. 遗留
+
+- duty-executor（Trae 侧）为独立项目，未纳入本仓库交付管道（其 SKILL.md §9 已自行沉淀整体复制说明）。
+- 外部 Agent 侧 Bearer 鉴权自取 zip 的端点暂无（getMySkill 仍只返回 md），当前按管理端分发场景设计；如外部 Agent 需要自取可后续对称补 `getMySkillZip`。
+
 ### 2026-08-31 Chat 流式输出改造（S1 最小闭环，N29 落地，§6.170）
 
 #### 1. 背景
