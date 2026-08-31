@@ -4,13 +4,19 @@ import com.helloai.api.dto.requirement.ClarifyMessageRequest;
 import com.helloai.common.base.R;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.service.RequirementClarifyService;
+import com.helloai.core.planner.service.RequirementClarifyService.ChatStreamEvent;
 import com.helloai.core.planner.service.RequirementClarifyService.ClarifyConversationDetail;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.task.entity.Task;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.MediaType;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.List;
 
@@ -24,6 +30,114 @@ import java.util.List;
 public class RequirementConversationController {
 
     private final RequirementClarifyService requirementClarifyService;
+    private final @Qualifier("chatStreamExecutor") ThreadPoolTaskExecutor chatStreamExecutor;
+
+    /** SseEmitter 显式超时（与前端 120s 对话超时档位对齐，超时后连接自动关闭）。 */
+    private static final long STREAM_EMITTER_TIMEOUT_MS = 120_000L;
+
+    /** Chat SSE 流式发送（S1 最小闭环）：快速建立连接 → 线程池内执行
+     *  「决策/搜索同步前置 + 主回复 token 流」，事件协议 token/done/error。 */
+    @PostMapping(value = "/streamSendById/{id}", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamSendById(@PathVariable("id") Long id,
+                                     @Valid @RequestBody ClarifyMessageRequest req,
+                                     HttpServletResponse response) {
+        // 反代缓冲关闭（Nginx 需逐帧透传，X-Accel-Buffering 对 1.7.11+ 生效）：SSE 帧不被中间层攒批
+        response.setHeader("X-Accel-Buffering", "no");
+        response.setHeader("Cache-Control", "no-cache");
+        SseEmitter emitter = new SseEmitter(STREAM_EMITTER_TIMEOUT_MS);
+        emitter.onTimeout(() -> {
+            log.warn("流式对话连接超时: conversationId={}", id);
+            try {
+                emitter.complete();
+            } catch (Exception ignore) {
+                // 连接可能已断，忽略二次异常
+            }
+        });
+        emitter.onError(e -> log.warn("流式对话连接异常: conversationId={}, err={}", id, e.toString()));
+        StreamFrameAggregator aggregator = new StreamFrameAggregator(emitter);
+        chatStreamExecutor.execute(() -> {
+            requirementClarifyService.streamRound(id, req.getMessage(), req.getSelectedOptions())
+                    .subscribe(aggregator::onEvent,
+                            // 服务层已将异常转 error 事件（onErrorResume），此处为订阅侧防御
+                            error -> aggregator.onEvent(ChatStreamEvent.error(fallbackErrorMessage(error))),
+                            () -> {
+                                aggregator.flush();
+                                completeQuietly(emitter);
+                            });
+        });
+        return emitter;
+    }
+
+    /** 订阅侧防御错误文本（正常路径不会触发）：取根因 message，缺失回落类名。 */
+    private static String fallbackErrorMessage(Throwable e) {
+        Throwable root = e;
+        while (root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
+        }
+        return root.getMessage() == null || root.getMessage().isBlank()
+                ? root.getClass().getSimpleName() : root.getMessage();
+    }
+
+    private static void completeQuietly(SseEmitter emitter) {
+        try {
+            emitter.complete();
+        } catch (Exception ignore) {
+            // 连接已不可用，忽略
+        }
+    }
+
+    /**
+     * SseEmitter 帧聚合器：token 增量按「长度 ≥ 50 字符或距上次发送 ≥ 100ms」聚合发射，
+     * 防止真实 provider 高频小帧打爆连接；done/error 终帧前先 flush 剩余 token。
+     * 连接断开后置 dead 静默停止发送（LLM 流照常跑完并落库，前端刷新后可见）。
+     */
+    private static final class StreamFrameAggregator {
+
+        private static final int FLUSH_CHAR_THRESHOLD = 50;
+        private static final long FLUSH_INTERVAL_MS = 100L;
+
+        private final SseEmitter emitter;
+        private final StringBuilder pending = new StringBuilder();
+        private long lastSendAt;
+        private boolean alive = true;
+
+        StreamFrameAggregator(SseEmitter emitter) {
+            this.emitter = emitter;
+        }
+
+        void onEvent(ChatStreamEvent event) {
+            if (event.type() == ChatStreamEvent.Type.TOKEN) {
+                pending.append(event.data());
+                long now = System.currentTimeMillis();
+                if (pending.length() >= FLUSH_CHAR_THRESHOLD
+                        || now - lastSendAt >= FLUSH_INTERVAL_MS) {
+                    flush();
+                }
+            } else {
+                flush();
+                send(event.type().name().toLowerCase(), event.data());
+            }
+        }
+
+        void flush() {
+            if (pending.length() > 0) {
+                send("token", pending.toString());
+                pending.setLength(0);
+            }
+        }
+
+        private void send(String eventName, String data) {
+            if (!alive) {
+                return;
+            }
+            try {
+                emitter.send(SseEmitter.event().name(eventName).data(data));
+                lastSendAt = System.currentTimeMillis();
+            } catch (Exception e) {
+                alive = false;
+            }
+        }
+    }
 
     /** 新建澄清会话（首条用户消息触发一轮 LLM；可选手动指定 Planner；可带联网搜索开关；新会话始终 CHAT 模式）。 */
     @PostMapping
