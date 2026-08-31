@@ -133,7 +133,14 @@
                   :class="row.msg.role === 'user' ? 'from-user' : 'from-assistant'"
                 >
                   <div class="msg-bubble">
-                    {{ row.intro }}
+                    <!-- 用户消息原样展示；assistant 回复渲染 Markdown（标题/表格/列表/引用，流式与历史回显统一） -->
+                    <template v-if="row.msg.role === 'user'">
+                      {{ row.intro }}
+                    </template>
+                    <MarkdownView
+                      v-else
+                      :content="row.intro"
+                    />
                   </div>
                 </div>
                 <!-- V33 历史结构化追问：只读卡片回显当时的选项与选择 -->
@@ -203,7 +210,17 @@
               v-if="sending"
               class="msg-row from-assistant"
             >
-              <div class="msg-bubble msg-loading">
+              <!-- S1 流式回复：token 增量渲染 Markdown；尚未产出 token 时保持思考中占位 -->
+              <div
+                v-if="streamText"
+                class="msg-bubble msg-streaming"
+              >
+                <MarkdownView :content="streamText" />
+              </div>
+              <div
+                v-else
+                class="msg-bubble msg-loading"
+              >
                 <el-icon class="is-loading">
                   <Loading />
                 </el-icon>
@@ -225,7 +242,10 @@
                 </el-tag>
                 <span class="final-title">{{ conversation.finalTitle }}</span>
               </div>
-              <pre class="final-desc">{{ conversation.finalDescription }}</pre>
+              <div class="final-desc">
+                <!-- 终稿描述为 Markdown 小节组织（模板要求），渲染富文本而非原样裸露 -->
+                <MarkdownView :content="conversation.finalDescription" />
+              </div>
               <div class="final-actions">
                 <template v-if="conversation.status === 'ACTIVE'">
                   <el-button
@@ -373,9 +393,11 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading, Connection, Delete } from '@element-plus/icons-vue'
 import { clarifyApi } from '@/api/clarify'
 import { taskApi } from '@/api/task'
+import { streamSendConversation } from '@/api/chatStream'
 import { fmtTime } from '@/utils/tableConfig'
 import StructuredQuestionCard from './StructuredQuestionCard.vue'
 import WebSearchBar from './WebSearchBar.vue'
+import MarkdownView from '@/components/MarkdownView.vue'
 import type { ClarifyAssistantPayload, ClarifyConversationDetail, ClarifySelection, PlannerOption, RequirementConversation, RequirementConversationStatus, RequirementMessage, LongId, WebSearchTrace } from '@/types'
 
 const router = useRouter()
@@ -390,22 +412,28 @@ const taskExists = computed(() => detail.value?.taskExists === true)
 // V39 双模式：CHAT 自由对话 / CLARIFY 方案澄清（mode 为 null 的老数据视为 CLARIFY）
 const isChatMode = computed(() => conversation.value?.mode === 'CHAT')
 
-// 输入框占位文案按会话模式区分（V39；V40.2 补 /planner 斜杠命令入口提示）
+// 输入框占位文案按会话模式区分（V39；V40.2 补 /planner 斜杠命令入口提示；§6.169 补 /task 直达拆解提示）
 const inputPlaceholder = computed(() => {
-  if (activeId.value == null) return '描述你想做的事情，或直接提问，Enter 发送'
+  if (activeId.value == null) return '描述你想做的事情，或直接提问；输入 /task 可直达拆解，Enter 发送'
   return isChatMode.value
-    ? '和 AI 助手自由对话；输入 /planner 直接进入方案整理'
+    ? '和 AI 助手自由对话；输入 /planner 进入方案整理，/task 直达拆解'
     : '继续补充需求，Enter 发送'
 })
 
-// V40.2 计划类斜杠命令（/planner|/plan|/task 别名）：显式进入方案澄清模式（CLARIFY）；可带附加文本（落库进上下文后再切）
-const PLANNER_COMMAND_RE = /^(?:\/planner|\/plan|\/task)(?:\s+([\s\S]+))?$/i
+// V40.2 计划类斜杠命令（/planner|/plan）：显式进入方案澄清模式（CLARIFY）；可带附加文本（落库进上下文后再切）。
+// §6.169 /task 直达拆解命令不在此列：后端 doRound 按前缀分流终稿直出轮，前端原样发送不拦截
+const PLANNER_COMMAND_RE = /^(?:\/planner|\/plan)(?:\s+([\s\S]+))?$/i
 
 const input = ref('')
 const pendingText = ref('')
 const sending = ref(false)
 const finalizing = ref(false)
 const streamEl = ref<HTMLElement | null>(null)
+
+// S1 Chat SSE 流式：streamText 为流式回复增量全文（60ms 节流写入），done 后拉 detail 收敛清空
+const streamText = ref('')
+let streamBuffer = ''
+let streamFlushTimer: number | null = null
 
 // Planner 下拉选：'__auto__' = 系统自动选择（等权重，优先空闲）
 const plannerOptions = ref<PlannerOption[]>([])
@@ -580,6 +608,12 @@ async function handleSend() {
   scrollToBottom()
   try {
     const plannerId = selectedPlanner.value === '__auto__' ? null : (selectedPlanner.value || null)
+    // S1 流式分流：已有 CHAT 会话的普通消息走 SSE 流式（token 增量渲染 + done 后收敛）；
+    // 新会话（create）/ CLARIFY 模式老会话（同步 send）/ 结构化卡提交（handleStructuredSubmit）保持同步链路
+    if (activeId.value != null && isChatMode.value) {
+      await streamSendActiveMessage(activeId.value, text)
+      return
+    }
     // V34：仅新会话向 create 传联网搜索开关；老会话发送消息接口忽略此值
     // 新会话始终 CHAT 模式（LLM auto 意图路由 + /planner 命令触发转方案）
     const result = activeId.value == null
@@ -589,6 +623,10 @@ async function handleSend() {
     activeId.value = String(result.conversation.id)
     loadList()
     scrollToBottom()
+    // §6.169 /task 直达拆解：后端已自动建任务，联动提交拆解并打开草案审阅
+    if (result.conversation.status === 'FINALIZED' && result.conversation.taskId != null) {
+      await triggerTaskReview(String(result.conversation.taskId))
+    }
   } catch {
     // 拦截器已弹错；user 消息多半已落库，刷新详情后靠重试按钮续跑
     if (activeId.value != null) {
@@ -611,6 +649,67 @@ async function handleSend() {
       && msgs[msgs.length - 1].content === text
     if (!lastIsSameUserText) input.value = text
   } finally {
+    pendingText.value = ''
+    sending.value = false
+  }
+}
+
+// ── S1 Chat SSE 流式发送：节流渲染 + done 后 detail 收敛 ──
+
+// 60ms 节流：token 累积到 buffer，定时 flush 进 streamText 驱动 MarkdownView 全量重渲染
+function flushStreamText() {
+  streamFlushTimer = null
+  if (streamBuffer) {
+    streamText.value += streamBuffer
+    streamBuffer = ''
+    scrollToBottom()
+  }
+}
+
+function appendStreamToken(token: string) {
+  streamBuffer += token
+  if (streamFlushTimer == null) {
+    streamFlushTimer = window.setTimeout(flushStreamText, 60)
+  }
+}
+
+// 流收尾：冲残留 buffer → 拉 detail 对齐落库全文（同 tick 内 streamText 清空，无闪烁）；
+// 失败场景刷新详情暴露重试条（user 消息已落库）
+async function settleStream(id: LongId, success: boolean) {
+  flushStreamText()
+  try {
+    detail.value = await clarifyApi.detail(id)
+    activeId.value = String(detail.value?.conversation.id ?? id)
+    loadList()
+    streamText.value = ''
+    scrollToBottom()
+  } catch {
+    // 拦截器已弹错；流式占位随 sending 结束不再渲染，重试条/重新进入会话兜底
+    streamText.value = ''
+    if (success) ElMessage.warning('回复已生成，但详情刷新失败，请重新进入会话查看')
+  }
+}
+
+// 已有 CHAT 会话：普通消息走 SSE 流式（token 增量渲染 + done 后收敛）
+async function streamSendActiveMessage(id: LongId, text: string) {
+  streamText.value = ''
+  streamBuffer = ''
+  try {
+    await streamSendConversation(id, text, null, {
+      onToken: appendStreamToken,
+      onDone: () => { void settleStream(id, true) },
+      onError: (msg) => {
+        ElMessage.error(msg)
+        void settleStream(id, false)
+      }
+    })
+  } finally {
+    // 兜底清理（正常路径 settleStream 已清空/收敛）
+    if (streamFlushTimer != null) {
+      window.clearTimeout(streamFlushTimer)
+      streamFlushTimer = null
+    }
+    streamBuffer = ''
     pendingText.value = ''
     sending.value = false
   }
@@ -684,6 +783,18 @@ async function handleStructuredSubmit(payload: { text: string; selections: Clari
   }
 }
 
+// §6.169 任务创建后联动：提交拆解 + 打开草案审阅（/task 直达拆解与「创建任务并自动拆解」共用）
+async function triggerTaskReview(taskId: string) {
+  ElMessage.success('任务已创建，正在后台拆解…')
+  try {
+    await taskApi.plan(taskId)
+    router.push({ path: '/tasks', query: { review: taskId } })
+  } catch {
+    // 拦截器已弹错；任务已创建成功，跳任务列表可手动重拆
+    router.push('/tasks')
+  }
+}
+
 async function handleFinalize() {
   const conv = conversation.value
   if (!conv) return
@@ -697,14 +808,7 @@ async function handleFinalize() {
   finalizing.value = true
   try {
     const task = await clarifyApi.finalize(conv.id)
-    ElMessage.success('任务已创建，正在后台拆解…')
-    try {
-      await taskApi.plan(String(task.id))
-      router.push({ path: '/tasks', query: { review: String(task.id) } })
-    } catch {
-      // 拦截器已弹错；任务已创建成功，跳任务列表可手动重拆
-      router.push('/tasks')
-    }
+    await triggerTaskReview(String(task.id))
   } catch { /* 拦截器已弹错（无终稿/非 ACTIVE 等） */ }
   finally { finalizing.value = false }
 }

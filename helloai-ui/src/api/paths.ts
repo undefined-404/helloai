@@ -124,6 +124,8 @@ export const paths = {
   clarifications: {
     create: '/requirement-conversations',
     send: (id: string | number) => `/requirement-conversations/sendMessageById/${enc(id)}`,
+    // S1 Chat SSE 流式发送（fetch 流消费，不走 axios 拦截器）
+    streamSend: (id: string | number) => `/requirement-conversations/streamSendById/${enc(id)}`,
     retry: (id: string | number) => `/requirement-conversations/retryById/${enc(id)}`,
     toClarify: (id: string | number) => `/requirement-conversations/toClarifyById/${enc(id)}`,
     toChat: (id: string | number) => `/requirement-conversations/toChatById/${enc(id)}`,
