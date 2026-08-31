@@ -7,6 +7,8 @@ import com.helloai.core.planner.search.WebSearchResult;
 import com.helloai.core.planner.service.SearchQueryPlannerService;
 import com.helloai.core.planner.service.WebPageFetchService;
 import com.helloai.core.planner.service.WebSearchService;
+
+import java.time.LocalDate;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -36,6 +38,7 @@ public class ClarifyWebSearchOrchestrator {
     private final WebSearchProperties webSearchProperties;
     private final WebPageFetchService pageFetchService;
     private final SearchQueryPlannerService searchQueryPlannerService;
+    private final RelativeTimeNormalizer relativeTimeNormalizer;
 
     /**
      * 显式构造器（绕开 Lombok {@code @RequiredArgsConstructor} 在
@@ -44,11 +47,13 @@ public class ClarifyWebSearchOrchestrator {
     public ClarifyWebSearchOrchestrator(WebSearchService webSearchService,
                                         WebSearchProperties webSearchProperties,
                                         WebPageFetchService pageFetchService,
-                                        SearchQueryPlannerService searchQueryPlannerService) {
+                                        SearchQueryPlannerService searchQueryPlannerService,
+                                        RelativeTimeNormalizer relativeTimeNormalizer) {
         this.webSearchService = webSearchService;
         this.webSearchProperties = webSearchProperties;
         this.pageFetchService = pageFetchService;
         this.searchQueryPlannerService = searchQueryPlannerService;
+        this.relativeTimeNormalizer = relativeTimeNormalizer;
     }
 
     /**
@@ -90,6 +95,15 @@ public class ClarifyWebSearchOrchestrator {
      * @param priorityQueries 优先候选词（如 LLM 联合决策的优化搜索词），可 null；内部空白项忽略
      */
     public WebSearchOutcome doWebSearch(String userMessage, List<String> priorityQueries) {
+        return doWebSearch(userMessage, priorityQueries, null);
+    }
+
+    /**
+     * 联网搜索一次（带权威时钟注入版本，供测试固定日期）：委托
+     * {@link #doWebSearch(String, List, LocalDate)}；生产路径 today 传 null 用服务器实时日期。
+     */
+    public WebSearchOutcome doWebSearch(String userMessage, List<String> priorityQueries, LocalDate today) {
+        LocalDate anchor = today == null ? LocalDate.now() : today;
         List<String> urls = extractUrls(userMessage);
         List<String> candidates = new ArrayList<>();
         mergeCandidates(candidates, priorityQueries);
@@ -121,6 +135,11 @@ public class ClarifyWebSearchOrchestrator {
                 log.info("澄清联网搜索：直取失败，域名前置增强搜索词: query={}", prefixed.get(0));
             }
         }
+        // 第二层防线：候选词统一做相对时间词→绝对日期归一化（LLM 优化词/规则词/兜底词
+        // 全量覆盖，幂等）。搜索引擎不理解"今天/上周五"等相对时间语义，跨天对话时
+        // LLM 可能以历史日期为锚，规则层兜底修正后才发起检索
+        candidates = normalizeCandidates(candidates, anchor);
+
         if (candidates.isEmpty() && !hasOkPage) {
             return null;
         }
@@ -165,6 +184,24 @@ public class ClarifyWebSearchOrchestrator {
                     .reason(e.getMessage())
                     .build();
         }
+    }
+
+    /** 候选词统一时间归一化（原样返回不可变列表时新建 ArrayList，不原地修改）。 */
+    private List<String> normalizeCandidates(List<String> candidates, LocalDate today) {
+        if (candidates == null || candidates.isEmpty()) {
+            return candidates;
+        }
+        List<String> normalized = new ArrayList<>(candidates.size());
+        for (String q : candidates) {
+            if (q == null) {
+                continue;
+            }
+            String n = relativeTimeNormalizer.normalize(q, today);
+            if (n != null && !n.isBlank() && !normalized.contains(n)) {
+                normalized.add(n);
+            }
+        }
+        return normalized;
     }
 
     /** 候选词合并（非空过滤 + 去重，保持源内顺序）：优先词在前、规则规划词补后。 */

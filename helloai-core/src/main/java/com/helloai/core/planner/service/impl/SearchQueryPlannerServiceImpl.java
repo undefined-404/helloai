@@ -3,6 +3,7 @@ package com.helloai.core.planner.service.impl;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.config.WebSearchProperties;
+import com.helloai.core.planner.clarify.SystemTimeContextBuilder;
 import com.helloai.core.planner.service.SearchQueryPlannerService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
@@ -81,11 +82,14 @@ public class SearchQueryPlannerServiceImpl implements SearchQueryPlannerService 
 
     private final WebSearchProperties properties;
     private final ObjectMapper objectMapper;
+    private final SystemTimeContextBuilder systemTimeContextBuilder;
     private final HttpClient httpClient;
 
-    public SearchQueryPlannerServiceImpl(WebSearchProperties properties, ObjectMapper objectMapper) {
+    public SearchQueryPlannerServiceImpl(WebSearchProperties properties, ObjectMapper objectMapper,
+                                         SystemTimeContextBuilder systemTimeContextBuilder) {
         this.properties = properties;
         this.objectMapper = objectMapper;
+        this.systemTimeContextBuilder = systemTimeContextBuilder;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(properties.getQueryRewriteTimeoutMs()))
                 .build();
@@ -177,7 +181,11 @@ public class SearchQueryPlannerServiceImpl implements SearchQueryPlannerService 
     private List<String> llmRewrite(String text) {
         long t0 = System.currentTimeMillis();
         try {
-            String prompt = loadRewritePrompt().replace("{{USER_MESSAGE}}", text);
+            String prompt = loadRewritePrompt()
+                    .replace("{{USER_MESSAGE}}", text)
+                    // 每轮改写前注入系统当前时间（第一层防线）：
+                    // 改写器把"今天/上周五"等相对时间词转绝对日期时以服务器实时时钟为准
+                    .replace("{{SYSTEM_TIME_CONTEXT}}", systemTimeContextBuilder.build());
             String body = objectMapper.writeValueAsString(Map.of(
                     "model", properties.getQueryRewriteModel(),
                     "max_tokens", REWRITE_MAX_TOKENS,

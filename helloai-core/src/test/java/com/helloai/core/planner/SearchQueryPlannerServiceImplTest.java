@@ -2,6 +2,7 @@ package com.helloai.core.planner;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.config.WebSearchProperties;
+import com.helloai.core.planner.clarify.SystemTimeContextBuilder;
 import com.helloai.core.planner.service.impl.SearchQueryPlannerServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -27,7 +28,8 @@ class SearchQueryPlannerServiceImplTest {
         // properties/ObjectMapper 用真实实例（默认值与 JSON 解析是被测逻辑的一部分）；
         // deepseekApiKey 默认空串 = LLM 改写自动禁用，纯规则路径无外部调用
         properties = new WebSearchProperties();
-        planner = new SearchQueryPlannerServiceImpl(properties, new ObjectMapper());
+        planner = new SearchQueryPlannerServiceImpl(properties, new ObjectMapper(),
+                new SystemTimeContextBuilder());
     }
 
     @Test
