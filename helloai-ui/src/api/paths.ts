@@ -66,7 +66,9 @@ export const paths = {
     deleteById: (id: string | number) => `/admin/agents/deleteById/${enc(id)}`,
     scoreLogs: (id: string | number) => `/admin/agents/listScoreLogsByAgentId/${enc(id)}`,
     activityLogs: (id: string | number) => `/admin/agents/listActivityLogsByAgentId/${enc(id)}`,
-    onboarding: (id: string | number) => `/admin/agents/getOnboardingContentByAgentId/${enc(id)}`
+    onboarding: (id: string | number) => `/admin/agents/getOnboardingContentByAgentId/${enc(id)}`,
+    // 技能包 zip 下载（SKILL.md + scripts/ 整体交付）
+    skillZip: (id: string | number) => `/admin/agents/getMySkillZipByAgentId/${enc(id)}`
   },
   setup: {
     getStatus: '/setup/getStatus',

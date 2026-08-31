@@ -40,6 +40,7 @@
         以下是 HelloAI 平台为该 Agent 生成的接入内容。请按需使用底部按钮：
         <strong>复制全部</strong> 用于人工交接；
         <strong style="color:var(--el-color-success)">下载 hello_ai_skills.md</strong> 用于保存到 IDE 的 skills 目录；
+        <strong style="color:var(--el-color-success)">下载技能包(.zip)</strong> 用于整体交付（SKILL.md + scripts/ 脚本，需整体解压到 IDE 的 skills 目录，勿只拿单个 md）；
         <strong style="color:var(--el-color-info)">下载 daemon 脚本</strong> 用于拉起常驻打卡进程（§1.5 协议、门铃推送）后免手动打卡；
         <strong style="color:var(--el-color-warning)">一键上班口令</strong> 用于在新会话第一句话里激活 AI Agent。
       </div>
@@ -65,6 +66,14 @@
         @click="downloadSkill"
       >
         ⬇️ 下载 hello_ai_skills.md
+      </el-button>
+      <el-button
+        type="success"
+        plain
+        :loading="skillZipLoading"
+        @click="downloadSkillZip"
+      >
+        ⬇️ 下载技能包(.zip)
       </el-button>
       <el-button
         type="info"
@@ -104,6 +113,7 @@ const emit = defineEmits<{
 
 const loading = ref(false)
 const daemonLoading = ref(false)
+const skillZipLoading = ref(false)
 const data = ref<AgentOnboardingResponse | null>(null)
 
 async function fetchData() {
@@ -157,6 +167,31 @@ function downloadSkill() {
   document.body.removeChild(a)
   URL.revokeObjectURL(url)
   ElMessage.success('已下载 hello_ai_skills.md，请保存到 IDE 的 skills 目录')
+}
+
+// 下载技能包(.zip)：SKILL.md（已渲染）+ scripts/ 全量脚本整体打包；
+// 解压后把 <role>-skill 目录整体复制到 IDE 的 skills 目录（勿只拿单个 md，脚本随包交付）
+async function downloadSkillZip() {
+  if (!data.value || !props.agentId) return
+  skillZipLoading.value = true
+  try {
+    const resp = await agentApi.getSkillZip(String(props.agentId))
+    const blob = resp.data
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `hello_ai_${sanitizeFilename(String(data.value.role || 'agent'))}-skill.zip`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    ElMessage.success('已下载技能包(.zip)，请整体解压到 IDE 的 skills 目录')
+  } catch (e: any) {
+    const msg = e?.response?.data?.msg || e?.message || '下载技能包失败'
+    ElMessage.error(msg)
+  } finally {
+    skillZipLoading.value = false
+  }
 }
 
 // 复制一键上班口令：粘到 IDE 对话框第一句话即可触发 AI Agent 自检接入

@@ -1,5 +1,6 @@
 import request from './request'
 import { paths } from './paths'
+import type { AxiosResponse } from 'axios'
 import type { Agent, AgentListItem, AgentDetail, AgentOnboardingResponse, AgentRelatedCounts, AgentDeleteResult, ScoreLogItem, ActivityLogItem, PageResult } from '@/types'
 
 /**
@@ -112,5 +113,10 @@ export const agentApi = {
   // ── 接入内容生成 ──
   getOnboardingContent(id: string) {
     return request.get<any, AgentOnboardingResponse>(paths.agents.onboarding(id))
+  },
+
+  // 技能包 zip 下载（SKILL.md + scripts/ 整体交付）；blob 响应在拦截器放行，返回完整 response
+  getSkillZip(id: string) {
+    return request.get<any, AxiosResponse<Blob>>(paths.agents.skillZip(id), { responseType: 'blob' })
   },
 }
