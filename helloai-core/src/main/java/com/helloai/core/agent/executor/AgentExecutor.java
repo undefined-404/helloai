@@ -1,8 +1,10 @@
 package com.helloai.core.agent.executor;
 
+import com.helloai.common.base.BizException;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.entity.Agent;
+import reactor.core.publisher.Flux;
 
 import java.util.Map;
 import java.util.Objects;
@@ -18,6 +20,17 @@ public interface AgentExecutor {
      * 同步执行任务。
      */
     AgentResult execute(Agent agent, AgentTask task);
+
+    /**
+     * 流式执行任务（token 增量 Flux，订阅时发起调用）。
+     *
+     * <p>默认实现直接拒绝：仅实现流式通道的执行器（当前为 {@link ApiKeyAgentExecutor}）
+     * 覆写本方法；上层（{\@link PlatformAgentExecutionService#executeStream}）通过
+     * BizException 失败路径回退同步语义，绝不静默吞掉流式请求。</p>
+     */
+    default Flux<String> executeStream(Agent agent, AgentTask task) {
+        throw new BizException(getName() + " 暂不支持流式执行（agentId=" + agent.getId() + "）");
+    }
 
     /**
      * 当前执行器是否支持该 Agent。

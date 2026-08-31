@@ -12,6 +12,7 @@ import com.helloai.core.agent.entity.Agent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -165,5 +166,23 @@ public class PlatformAgentExecutionServiceImpl implements PlatformAgentExecution
      */
     public AgentResult executeSync(Long agentId, AgentTask task) {
         return execute(agentId, task);
+    }
+
+    /**
+     * 流式执行：路由 → 能力校验 → 心跳保活 → 执行器流式通道，与同步
+     * {@link #executeSync(Agent, AgentTask)} 同构；全部包进 Flux.defer 保证惰性
+     * （订阅时才路由/打卡，供上层在业务线程池里订阅）。
+     */
+    @Override
+    public Flux<String> executeStream(Agent agent, AgentTask task) {
+        return Flux.defer(() -> {
+            AgentExecutor executor = agentExecutorRouter.route(agent);
+            if (!executor.checkCapability(agent, task.getRequiredCapabilities())) {
+                throw new BizException("Agent 能力不足: agentId=" + agent.getId()
+                        + ", executor=" + executor.getName());
+            }
+            heartbeatService.active(agent.getId());
+            return executor.executeStream(agent, task);
+        });
     }
 }

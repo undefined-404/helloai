@@ -19,7 +19,10 @@ import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+import reactor.core.publisher.Flux;
 
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -71,27 +74,7 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
 
     private ChatResponse doGenerate(Agent agent, String systemPrompt, String userPrompt,
                                     String provider, String apiKeyPlaintext) {
-        ChatClient chatClient;
-        if (executionProperties.isMockMode()) {
-            chatClient = ChatClient.create(new MockChatModel(
-                    executionProperties.getProvider(),
-                    executionProperties.getModel(),
-                    executionProperties.getMockResponsePrefix(),
-                    agent));
-        } else {
-            if (apiKeyPlaintext != null && !apiKeyPlaintext.isBlank()) {
-                String effectiveProvider = provider != null && !provider.isBlank()
-                        ? provider : executionProperties.getProvider();
-                String model = AgentProviderResolver.resolveModel(agent, null);
-                chatClient = providerRegistry.createChatClient(effectiveProvider, apiKeyPlaintext, agent, model);
-            } else {
-                ChatClient.Builder builder = chatClientBuilderProvider.getIfAvailable();
-                if (builder == null) {
-                    throw new BizException("未检测到 ChatClient.Builder，请接入 Spring AI Provider starter 并配置 API Key");
-                }
-                chatClient = builder.build();
-            }
-        }
+        ChatClient chatClient = buildChatClient(agent, provider, apiKeyPlaintext);
 
         ChatClient.ChatClientRequestSpec prompt = chatClient.prompt();
         if (StringUtils.hasText(systemPrompt)) {
@@ -101,6 +84,83 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
                 .user(userPrompt != null ? userPrompt : "")
                 .call()
                 .chatResponse();
+    }
+
+    /**
+     * 流式生成：token 增量以 {@link Flux} 输出，订阅时发起调用。
+     *
+     * <p>限流语义与同步 {@link #generate(Agent, String, String, String, String)} 一致：
+     * 仅真实 Provider 模式占用许可，mock 模式不占；许可在订阅前获取、doFinally 保证
+     * 完成/异常/取消路径都释放（流式时长不定，不能依赖 try/finally 的同步释放）。</p>
+     */
+    public Flux<String> generateStream(Agent agent, String systemPrompt, String userPrompt) {
+        return generateStream(agent, systemPrompt, userPrompt, null, null);
+    }
+
+    public Flux<String> generateStream(Agent agent, String systemPrompt, String userPrompt,
+                                       String provider, String apiKeyPlaintext) {
+        if (!executionProperties.isEnabled()) {
+            throw new BizException("平台内 Agent 执行链已关闭");
+        }
+        boolean throttled = !executionProperties.isMockMode();
+        if (throttled) {
+            llmCallConcurrencyGuard.acquire();
+        }
+        return Flux.defer(() -> doGenerateStream(agent, systemPrompt, userPrompt, provider, apiKeyPlaintext))
+                .doFinally(signal -> {
+                    if (throttled) {
+                        llmCallConcurrencyGuard.release();
+                    }
+                });
+    }
+
+    /**
+     * 流式主实现：与 {@link #doGenerate} 同构组装 ChatClient，仅末端由
+     * {@code call().chatResponse()} 换成 {@code stream().content()}（正文增量）。
+     *
+     * <p>空串帧过滤：mock 分片不产生空串，真实 provider 首帧/流间隙可能出现空串帧；
+     * 只丢弃空串、保留空白与换行（它们是正文的一部分）。</p>
+     */
+    private Flux<String> doGenerateStream(Agent agent, String systemPrompt, String userPrompt,
+                                          String provider, String apiKeyPlaintext) {
+        ChatClient chatClient = buildChatClient(agent, provider, apiKeyPlaintext);
+
+        ChatClient.ChatClientRequestSpec prompt = chatClient.prompt();
+        if (StringUtils.hasText(systemPrompt)) {
+            prompt = prompt.system(systemPrompt);
+        }
+        return prompt
+                .user(userPrompt != null ? userPrompt : "")
+                .stream()
+                .content()
+                .filter(token -> token != null && !token.isEmpty());
+    }
+
+    /**
+     * 组装 ChatClient（同步与流式共用入口）。
+     *
+     * <p>mock 模式直接 ChatClient.create 包最小 mock 模型；真实模式优先显式
+     * provider + API Key 走 registry，否则容器内 ChatClient.Builder。</p>
+     */
+    private ChatClient buildChatClient(Agent agent, String provider, String apiKeyPlaintext) {
+        if (executionProperties.isMockMode()) {
+            return ChatClient.create(new MockChatModel(
+                    executionProperties.getProvider(),
+                    executionProperties.getModel(),
+                    executionProperties.getMockResponsePrefix(),
+                    agent));
+        }
+        if (apiKeyPlaintext != null && !apiKeyPlaintext.isBlank()) {
+            String effectiveProvider = provider != null && !provider.isBlank()
+                    ? provider : executionProperties.getProvider();
+            String model = AgentProviderResolver.resolveModel(agent, null);
+            return providerRegistry.createChatClient(effectiveProvider, apiKeyPlaintext, agent, model);
+        }
+        ChatClient.Builder builder = chatClientBuilderProvider.getIfAvailable();
+        if (builder == null) {
+            throw new BizException("未检测到 ChatClient.Builder，请接入 Spring AI Provider starter 并配置 API Key");
+        }
+        return builder.build();
     }
 
     /**
@@ -118,6 +178,29 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
             this.model = model;
             this.prefix = prefix;
             this.agent = agent;
+        }
+
+        /**
+         * 分片伪流式：对 {@link #call(Prompt)} 的同一份完整 content 按固定块长切片，
+         * 每片以固定延时发射，保证流式链路与同步链路输出完全一致（测试可断言拼接文本相等）。
+         *
+         * <p>不带 usage/metadata（流式为增量帧，prompt/completion token 计数在分片粒度无意义；
+         * 消耗统计仅同步路径承担）。分片按 char 切，emoji 等代理对可能被切断，mock 用途可接受。</p>
+         */
+        @Override
+        public Flux<ChatResponse> stream(Prompt prompt) {
+            ChatResponse full = call(prompt);
+            String content = full.getResult() != null && full.getResult().getOutput() != null
+                    ? full.getResult().getOutput().getText() : "";
+            List<String> chunks = new ArrayList<>();
+            for (int i = 0; i < content.length(); i += MOCK_STREAM_CHUNK_SIZE) {
+                chunks.add(content.substring(i, Math.min(content.length(), i + MOCK_STREAM_CHUNK_SIZE)));
+            }
+            return Flux.fromIterable(chunks)
+                    .map(chunk -> new ChatResponse(
+                            List.of(new Generation(new AssistantMessage(chunk))),
+                            null))
+                    .delayElements(Duration.ofMillis(MOCK_STREAM_DELAY_MS));
         }
 
         @Override
@@ -152,4 +235,10 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
             return value.length() <= 240 ? value : value.substring(0, 240) + "...";
         }
     }
+
+    /** 伪流式分片大小（字符）。 */
+    private static final int MOCK_STREAM_CHUNK_SIZE = 8;
+
+    /** 伪流式分片间延时（毫秒）。 */
+    private static final long MOCK_STREAM_DELAY_MS = 20L;
 }
