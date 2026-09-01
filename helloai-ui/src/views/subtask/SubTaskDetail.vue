@@ -649,11 +649,22 @@ const EVENT_META: Record<string, { label: string; desc: string }> = {
 
 const TRIGGER_LABEL: Record<string, string> = {
   auto_assign: '自动分配', manual: '手动触发', blocked_reassign: '阻塞后重新调度',
-  dead_letter_redispatch: '死信重投', poll_recovery: '巡检恢复'
+  dead_letter_redispatch: '死信重投', poll_recovery: '巡检恢复',
+  agent_offline: 'Agent 离线（心跳丢失）', assigned_timeout: '分配后超时未领取',
+  external_fallback: '外部失败回退'
 }
 
 function eventLabel(eventType: string): string {
   return EVENT_META[eventType]?.label || eventType
+}
+
+// payload 内英文枚举值人话化（避免用户看到裸英文，如 dependency_not_ready）
+const REASON_LABEL: Record<string, string> = {
+  dependency_not_ready: '依赖任务未完成'
+}
+function reasonText(reason: unknown): string {
+  const r = String(reason || '')
+  return REASON_LABEL[r] || r
 }
 
 // 语义分类（设计图：事件卡顶部类型徽标），供 el-tag 展示简短分类词
@@ -713,7 +724,7 @@ function eventDescription(ev: TaskTimelineItem): string {
   }
   const extras: string[] = []
   if (p.trigger) extras.push('触发方式：' + (TRIGGER_LABEL[p.trigger] || p.trigger))
-  if (p.reason) extras.push('原因：' + p.reason)
+  if (p.reason) extras.push('原因：' + reasonText(p.reason))
   if (p.error) extras.push('错误：' + p.error)
   const attempt = p.attempt ?? p.reassignAttemptCount
   if (attempt) extras.push('第 ' + attempt + ' 次尝试')
