@@ -711,6 +711,17 @@ function dualVerdictText(pass: boolean | undefined, score: number | undefined): 
 function eventDescription(ev: TaskTimelineItem): string {
   const base = EVENT_META[ev.eventType]?.desc || ev.eventType
   const p = ev.payload || {}
+  // 改派专属事件：标注改派前的原负责人（从 Agent 名单解析名字，失败降级短 ID）
+  if (ev.eventType === 'sub_task_offline_reassign'
+      || ev.eventType === 'sub_task_unclaimed_timeout_reassign'
+      || ev.eventType === 'sub_task_execution_timeout_reassign') {
+    const prev = p.previousAgentId ?? ev.agentId
+    if (prev) return base + '（原负责人：' + resolveAgentName(prev) + '）'
+  }
+  // 自动派单：标注派往的 Agent（事件列 agent_id 即目标）
+  if (ev.eventType === 'sub_task_auto_execute_dispatch' && ev.agentId) {
+    return base + '（派往：' + resolveAgentName(ev.agentId) + '）'
+  }
   // 双审并行校验结果：后端事件 payload 已含双方结论，此处翻译成人话展示（2026-09-01）
   if (ev.eventType === 'sub_task_dual_review_consented' || ev.eventType === 'sub_task_reviewer_disagreement') {
     const dp = p as DualVerdictPayload
@@ -724,6 +735,14 @@ function eventDescription(ev: TaskTimelineItem): string {
   }
   const extras: string[] = []
   if (p.trigger) extras.push('触发方式：' + (TRIGGER_LABEL[p.trigger] || p.trigger))
+  // 准备分发：具体到 Agent 名字——有原负责人先标原负责人，否则标首选目标（如自动分配）
+  const prevAgent = p.previousAgentId
+  const targetAgent = p.preferredAgentId
+  if (prevAgent !== undefined && prevAgent !== null && prevAgent !== '') {
+    extras.push('原负责人：' + resolveAgentName(prevAgent))
+  } else if (targetAgent !== undefined && targetAgent !== null && targetAgent !== '') {
+    extras.push('目标 Agent：' + resolveAgentName(targetAgent))
+  }
   if (p.reason) extras.push('原因：' + reasonText(p.reason))
   if (p.error) extras.push('错误：' + p.error)
   const attempt = p.attempt ?? p.reassignAttemptCount
