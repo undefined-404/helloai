@@ -569,7 +569,7 @@ function eventTypeColor(eventType: string): '' | 'success' | 'warning' | 'danger
   if (!eventType) return 'info'
   // 异常优先判定（避免 auto_review_rejected 含 review 被误判为 success）
   if (eventType.includes('failed') || eventType.includes('rejected') || eventType.includes('blocked') || eventType.includes('dead_letter')) return 'danger'
-  if (eventType.includes('paused') || eventType.includes('warning') || eventType.includes('unparseable') || eventType.includes('degraded') || eventType.includes('disagreement') || eventType.includes('discrepancy') || eventType.includes('incomplete') || eventType.includes('timeout')) return 'warning'
+  if (eventType.includes('paused') || eventType.includes('warning') || eventType.includes('unparseable') || eventType.includes('degraded') || eventType.includes('disagreement') || eventType.includes('discrepancy') || eventType.includes('incomplete') || eventType.includes('timeout') || eventType.includes('offline_reassign')) return 'warning'
   if (eventType.includes('completed') || eventType.includes('submitted') || eventType.includes('passed') || eventType.includes('ok') || eventType.includes('materialized') || eventType.includes('consistent') || eventType.includes('consented')) return 'success'
   if (eventType.includes('assigned') || eventType.includes('created') || eventType.includes('dispatch') || eventType.includes('command')) return 'primary'
   return 'info'
@@ -590,6 +590,7 @@ const EVENT_META: Record<string, { label: string; desc: string }> = {
   // 超时改派（2026-09-01：关键调度节点可观测——超时未领取 / 执行超时）
   sub_task_unclaimed_timeout_reassign: { label: '超时未领取改派', desc: '分配后 Agent 超时未领取，系统自动改派其他 Agent' },
   sub_task_execution_timeout_reassign: { label: '执行超时改派', desc: '执行超过时限，系统判定超时并转入失败回退链重新分发' },
+  sub_task_offline_reassign: { label: '离线改派', desc: '分配后 Agent 心跳丢失（离线），系统自动改派其他 Agent' },
   // 执行
   sub_task_execute_enter: { label: '开始执行', desc: '执行 Agent 开始处理子任务' },
   sub_task_execute_start: { label: '开始执行', desc: '执行 Agent 开始处理子任务' },
@@ -660,7 +661,7 @@ type EventCategory = '分发' | '执行' | '核验' | '人工介入' | '任务' 
 function eventCategory(eventType: string): EventCategory {
   if (/review|recheck/.test(eventType)) return '核验'
   if (/dead_letter|manual|blocked|intervention|rework/.test(eventType)) return '人工介入'
-  if (/dispatch|command|assigned|timeout_reassign/.test(eventType)) return '分发'
+  if (/dispatch|command|assigned|timeout_reassign|offline_reassign/.test(eventType)) return '分发'
   if (/^task_|task_auto/.test(eventType)) return '任务'
   if (/execute|llm|artifact|context_loaded|thinking|report/.test(eventType)) return '执行'
   return '流程'

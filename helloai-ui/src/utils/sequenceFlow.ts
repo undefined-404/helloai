@@ -69,9 +69,10 @@ export function classifySwimlane(ev: TaskTimelineItem): Swimlane {
   if (t === 'sub_task_dead_letter' || t === 'sub_task_review_dead_letter') return 'DLQ'
   // 核验 → 核验 Agent
   if (t.startsWith('subtask_review_') || t.startsWith('sub_task_auto_review_')) return 'RVW'
-  // 超时改派（2026-09-01）：调度引擎的关键决策节点，归 SCH 泳道；
+  // 超时/离线改派（2026-09-01）：调度引擎的关键决策节点，归 SCH 泳道；
   // execution_timeout 以 sub_task_execute_ 开头，不显式拦截会被下方规则误归 EXT
-  if (t === 'sub_task_unclaimed_timeout_reassign' || t === 'sub_task_execution_timeout_reassign') return 'SCH'
+  if (t === 'sub_task_unclaimed_timeout_reassign' || t === 'sub_task_execution_timeout_reassign'
+      || t === 'sub_task_offline_reassign') return 'SCH'
   // 执行 → 执行 Agent
   if (t.startsWith('sub_task_execute_') || t.startsWith('sub_task_llm_call_')
       || t === 'sub_task_deps_context_loaded' || t === 'sub_task_spec_context_loaded'
@@ -92,6 +93,7 @@ const LABEL: Record<string, string> = {
   sub_task_dispatch_prepare: '准备派单',
   sub_task_unclaimed_timeout_reassign: '超时未领取改派',
   sub_task_execution_timeout_reassign: '执行超时改派',
+  sub_task_offline_reassign: '离线改派',
   sub_task_auto_execute_dispatch: '发起自动派单',
   sub_task_auto_execute_dispatch_enter: '进入派单流程',
   sub_task_auto_execute_dispatch_ok: '派单成功',
@@ -189,6 +191,9 @@ function inferNote(prev: TaskTimelineItem | undefined, cur: TaskTimelineItem, at
   if (t === 'sub_task_execution_timeout_reassign') {
     const mins = p.timeoutMinutes !== undefined ? String(p.timeoutMinutes) : '限'
     return `执行超过 ${mins} 分钟，判定超时改派`
+  }
+  if (t === 'sub_task_offline_reassign') {
+    return 'Agent 离线（心跳丢失），自动改派'
   }
   // 死信（调度维度）
   if (t === 'sub_task_dead_letter') {

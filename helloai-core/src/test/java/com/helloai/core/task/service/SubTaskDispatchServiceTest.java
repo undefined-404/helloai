@@ -116,6 +116,14 @@ class SubTaskDispatchServiceTest {
 
         subTaskDispatchService.redispatchOfflineSubTask(22L, 12L);
 
+        // 专属可观测事件：离线改派（先于通用 dispatch_prepare 留痕）
+        verify(taskTimelineService).recordEvent(
+                32L,
+                22L,
+                "sub_task_offline_reassign",
+                AgentRole.SYSTEM,
+                12L,
+                Map.of("previousAgentId", 12L));
         verify(taskTimelineService).recordEvent(
                 32L,
                 22L,
@@ -147,6 +155,9 @@ class SubTaskDispatchServiceTest {
                 12L,
                 Map.of("trigger", "agent_offline", "reason", "dependency_not_ready",
                         "dependsOn", subTask.dependsOnIdList()));
+        // 依赖未就绪未发生改派 → 不记离线改派专属事件
+        verify(taskTimelineService, never()).recordEvent(
+                anyLong(), anyLong(), eq("sub_task_offline_reassign"), any(), any(), any());
         verify(taskDispatchPort, never()).assignNext(anyLong(), anyLong(), any());
     }
 

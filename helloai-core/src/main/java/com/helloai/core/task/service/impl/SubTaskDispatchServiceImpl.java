@@ -94,6 +94,15 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
                     subTaskId, subTask.dependsOnIdList());
             return;
         }
+        // 关键调度节点：离线改派（用户可观测）——独立于通用 dispatch_prepare，
+        // 让用户在时间线上直观看到“Agent 心跳丢失 → 自动改派”的调度决策
+        taskTimelineService.recordEvent(
+                subTask.getTaskId(),
+                subTask.getId(),
+                "sub_task_offline_reassign",
+                AgentRole.SYSTEM,
+                offlineAgentId,
+                Map.of("previousAgentId", offlineAgentId));
         taskTimelineService.recordEvent(
                 subTask.getTaskId(),
                 subTask.getId(),
