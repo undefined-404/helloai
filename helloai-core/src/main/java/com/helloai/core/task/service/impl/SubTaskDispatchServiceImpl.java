@@ -335,6 +335,17 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         }
         SubTask subTask = subTaskService.resetToPendingForDispatch(
                 subTaskId, Set.of(SubTaskStatus.ASSIGNED));
+        // 关键调度节点：超时未领取改派（用户可观测）——独立于通用 dispatch_prepare，
+        // 让用户在时间线上直观看到“分配后无人领取 → 自动改派”的调度决策
+        taskTimelineService.recordEvent(
+                subTask.getTaskId(),
+                subTask.getId(),
+                "sub_task_unclaimed_timeout_reassign",
+                AgentRole.SYSTEM,
+                originalAgentId,
+                Map.of(
+                        "previousAgentId", originalAgentId,
+                        "role", role != null ? role.name() : AgentRole.EXECUTOR.name()));
         taskTimelineService.recordEvent(
                 subTask.getTaskId(),
                 subTask.getId(),

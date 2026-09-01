@@ -3,6 +3,7 @@ package com.helloai.job.task;
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentAccessType;
+import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.Agent;
@@ -15,6 +16,7 @@ import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
 import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskTimelineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
@@ -25,6 +27,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @Component
@@ -39,6 +42,7 @@ public class ExecutionCompensationTask {
     private final TransactionTemplate transactionTemplate;
     private final ExternalAgentFailureTracker failureTracker;
     private final AgentMapper agentMapper;
+    private final TaskTimelineService taskTimelineService;
 
     @Scheduled(fixedRate = 30000)
     @SchedulerLock(name = "executionCompensation", lockAtMostFor = "PT60S")
@@ -85,6 +89,23 @@ public class ExecutionCompensationTask {
 
                 SubTask subTask = subTaskService.getById(record.getSubTaskId());
                 if (subTask != null && subTask.getStatus() == SubTaskStatus.IN_PROGRESS) {
+                    // 关键调度节点：执行超时判定（用户可观测）——后续经 BLOCKED →
+                    // 失败回退/孤儿巡检/人工改派链重新分发，时间线先行留痕“超时未完成”
+                    try {
+                        taskTimelineService.recordEvent(
+                                subTask.getTaskId(),
+                                subTask.getId(),
+                                "sub_task_execution_timeout_reassign",
+                                AgentRole.SYSTEM,
+                                record.getAgentId(),
+                                Map.of(
+                                        "previousAgentId", record.getAgentId() != null ? record.getAgentId() : "",
+                                        "timeoutMinutes", executionProperties.getRunningTimeoutMinutes(),
+                                        "eventId", record.getEventId() != null ? record.getEventId() : ""));
+                    } catch (Exception timelineEx) {
+                        log.warn("执行超时时间线记录失败（不阻断补偿主链路）: subTaskId={}, err={}",
+                                record.getSubTaskId(), timelineEx.getMessage());
+                    }
                     executionResultHandler.handleFailure(
                             record.getSubTaskId(),
                             null,

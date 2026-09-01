@@ -383,6 +383,10 @@ class SubTaskDispatchServiceTest {
         verify(agentSelector).pickAlternative(11L, AgentRole.EXECUTOR, null);
         verify(agentSelector, never()).pickPreferred(any(), any());
         verify(taskDispatchPort).assignNext(99L, 61L, null);
+        // 关键调度节点：超时未领取改派事件留痕（用户可观测，独立于通用 dispatch_prepare）
+        verify(taskTimelineService).recordEvent(
+                71L, 61L, "sub_task_unclaimed_timeout_reassign", AgentRole.SYSTEM, 11L,
+                Map.of("previousAgentId", 11L, "role", "EXECUTOR"));
     }
 
     @Test
@@ -401,6 +405,10 @@ class SubTaskDispatchServiceTest {
 
         verify(agentSelector).pickAlternative(11L, AgentRole.EXECUTOR, null);
         verify(taskDispatchPort, never()).assignNext(any(), any(), any());
+        // 无候选时超时未领取的调度决策本身仍应留痕（便于后续死信排查）
+        verify(taskTimelineService).recordEvent(
+                72L, 62L, "sub_task_unclaimed_timeout_reassign", AgentRole.SYSTEM, 11L,
+                Map.of("previousAgentId", 11L, "role", "EXECUTOR"));
     }
 
     // ══════════════════════════════════════════════════════════

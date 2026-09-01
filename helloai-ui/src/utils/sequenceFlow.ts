@@ -69,6 +69,9 @@ export function classifySwimlane(ev: TaskTimelineItem): Swimlane {
   if (t === 'sub_task_dead_letter' || t === 'sub_task_review_dead_letter') return 'DLQ'
   // 核验 → 核验 Agent
   if (t.startsWith('subtask_review_') || t.startsWith('sub_task_auto_review_')) return 'RVW'
+  // 超时改派（2026-09-01）：调度引擎的关键决策节点，归 SCH 泳道；
+  // execution_timeout 以 sub_task_execute_ 开头，不显式拦截会被下方规则误归 EXT
+  if (t === 'sub_task_unclaimed_timeout_reassign' || t === 'sub_task_execution_timeout_reassign') return 'SCH'
   // 执行 → 执行 Agent
   if (t.startsWith('sub_task_execute_') || t.startsWith('sub_task_llm_call_')
       || t === 'sub_task_deps_context_loaded' || t === 'sub_task_spec_context_loaded'
@@ -87,6 +90,8 @@ const LABEL: Record<string, string> = {
   task_auto_completed: '任务最终完成',
 
   sub_task_dispatch_prepare: '准备派单',
+  sub_task_unclaimed_timeout_reassign: '超时未领取改派',
+  sub_task_execution_timeout_reassign: '执行超时改派',
   sub_task_auto_execute_dispatch: '发起自动派单',
   sub_task_auto_execute_dispatch_enter: '进入派单流程',
   sub_task_auto_execute_dispatch_ok: '派单成功',
@@ -173,9 +178,17 @@ function inferNote(prev: TaskTimelineItem | undefined, cur: TaskTimelineItem, at
     const head = attempt > 1 ? `第 ${attempt} 次失败` : '失败'
     return reason ? `${head}：${String(reason).slice(0, 60)}` : head
   }
-  // 重派
+  // 重派（巡检恢复）
   if (t === 'sub_task_execution_command_poll_recovery') {
     return '巡检恢复遗漏指令'
+  }
+  // 超时改派（2026-09-01）：调度决策留痕，Note 标注改派原因便于回溯
+  if (t === 'sub_task_unclaimed_timeout_reassign') {
+    return '分配后超时未领取，自动改派'
+  }
+  if (t === 'sub_task_execution_timeout_reassign') {
+    const mins = p.timeoutMinutes !== undefined ? String(p.timeoutMinutes) : '限'
+    return `执行超过 ${mins} 分钟，判定超时改派`
   }
   // 死信（调度维度）
   if (t === 'sub_task_dead_letter') {

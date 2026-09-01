@@ -1,6 +1,7 @@
 package com.helloai.job.task;
 
 import com.helloai.common.config.AgentExecutionProperties;
+import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.AgentExecutionRecord;
@@ -8,7 +9,9 @@ import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.agent.mapper.AgentExecutionRecordMapper;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.command.ExecutionResultHandler;
+import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
 import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskTimelineService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -21,6 +24,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -54,6 +58,12 @@ class ExecutionCompensationTaskTest {
 
     @Mock
     private TransactionTemplate transactionTemplate;
+
+    @Mock
+    private TaskTimelineService taskTimelineService;
+
+    @Mock
+    private ExternalAgentFailureTracker failureTracker;
 
     @InjectMocks
     private ExecutionCompensationTask executionCompensationTask;
@@ -93,6 +103,8 @@ class ExecutionCompensationTaskTest {
 
         verify(agentExecutionRecordService).markTimeout(101L);
         verify(executionResultHandler, never()).handleFailure(anyLong(), any(), any());
+        // 非 IN_PROGRESS 子任务不记执行超时改派事件（仅记录超时标记）
+        verify(taskTimelineService, never()).recordEvent(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -102,10 +114,12 @@ class ExecutionCompensationTaskTest {
         runningRecord.setId(102L);
         runningRecord.setEventId("evt-running");
         runningRecord.setSubTaskId(202L);
+        runningRecord.setAgentId(909L);
         runningRecord.setStartTime(OffsetDateTime.now().minusMinutes(30));
 
         SubTask subTask = new SubTask();
         subTask.setId(202L);
+        subTask.setTaskId(502L);
         subTask.setStatus(SubTaskStatus.IN_PROGRESS);
 
         when(executionRecordMapper.selectByStatusAndCreateTimeBefore(eq(ExecutionStatus.PENDING), any()))
@@ -124,6 +138,14 @@ class ExecutionCompensationTaskTest {
                 argThat(ex -> ex != null
                         && ex.getMessage() != null
                         && ex.getMessage().contains("RUNNING timeout")));
+        // 关键调度节点：执行超时改派事件先于失败回写留痕（用户可观测）
+        verify(taskTimelineService).recordEvent(
+                502L, 202L, "sub_task_execution_timeout_reassign", AgentRole.SYSTEM, 909L,
+                Map.of("previousAgentId", 909L,
+                        "timeoutMinutes", 10,
+                        "eventId", "evt-running"));
+        // N11 阈值回退：超时计为执行失败，累加原 Agent 连续失败计数
+        verify(failureTracker).recordFailure(909L);
     }
 
     @Test
