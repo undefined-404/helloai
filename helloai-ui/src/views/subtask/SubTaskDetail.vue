@@ -1336,7 +1336,6 @@ onBeforeUnmount(() => {
   color: var(--ha-ink-secondary, inherit);
   white-space: pre-wrap;
   word-break: break-word;
-  max-width: 72ch;
 }
 
 /* §6.52 人工介入面板 */
