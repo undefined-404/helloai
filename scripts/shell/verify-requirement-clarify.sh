@@ -7,7 +7,7 @@
 #   GET  /api/requirement-conversations/{id}           会话详情（含消息）
 #   POST /api/requirement-conversations/{id}/finalize  终稿建任务（PENDING）
 #   POST /api/tasks/{id}/plan                          顺路断言拆解草案生成
-# Ref:  doc/HelloAI_实现差距表.md（V29 对话式需求澄清）
+# Ref:  doc/HelloAI_实现差距表_V1.md（V29 对话式需求澄清）
 # Pre-conditions（fail-fast，本脚本不负责启动服务）：
 #   - helloai-start 已在 6565 运行且包含 V29 迁移与新接口
 #   - helloai.providers 已配置可用 LLM（deepseek）

@@ -123,9 +123,9 @@ All verification scripts live in `scripts/powershell/` (Windows) and `scripts/sh
 
 Start with [`doc/README.md`](doc/README.md) (the doc map: positioning and fact level of each document). Four sources of truth:
 
-- Code style: [`doc/HelloAI_CODE_STYLE.md`](doc/HelloAI_CODE_STYLE.md) (V1.4 — must read before changing code)
-- Project baseline: [`doc/HelloAI_项目基线文档.md`](doc/HelloAI_项目基线文档.md)
-- Implementation gap: [`doc/HelloAI_实现差距表.md`](doc/HelloAI_实现差距表.md)
+- Code style: [`doc/HelloAI_CODE_STYLE.md`](doc/HelloAI_CODE_STYLE.md) (V2.0 — must read before changing code)
+- Project baseline: [`doc/HelloAI 项目基线文档.md`](doc/HelloAI%20项目基线文档.md)
+- Implementation gap: [`doc/HelloAI 实现差距表.md`](doc/HelloAI%20实现差距表.md)
 - Current progress: [`doc/项目进度.md`](doc/项目进度.md)
 
 Also: EXECUTOR onboarding guide [`.executor-onboarding.md`](.executor-onboarding.md) / design system [`DESIGN.md`](DESIGN.md) / product definition [`PRODUCT.md`](PRODUCT.md).

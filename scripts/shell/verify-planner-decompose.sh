@@ -9,7 +9,7 @@
 #   POST /api/tasks/{id}/plan/confirm  草案转正 PENDING（Task → IN_PROGRESS，
 #                                      按 autoAssignOnCreate 触发分发链）
 #   POST /api/tasks/{id}/plan/reject   草案翻 CANCELLED（Task 回退 PENDING）
-# Ref:  doc/HelloAI_实现差距表.md（V26 Planner 平台内拆解）
+# Ref:  doc/HelloAI_实现差距表_V1.md（V26 Planner 平台内拆解）
 # Pre-conditions（fail-fast，本脚本不负责启动服务）：
 #   - helloai-start 已在 6565 运行（IDEA 或 mvn spring-boot:run）
 #   - helloai.providers 已配置可用 LLM（deepseek）

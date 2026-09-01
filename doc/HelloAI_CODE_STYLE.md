@@ -1,2243 +1,3326 @@
 # HelloAI 代码开发规范
 
 > 适用项目：HelloAI（AI Agent 协作调度平台）  
-> 生效范围：后端单体服务 + 前端管理后台（Vue 3 / Element Plus）  
-> 版本：V1.16  
-> 最后更新：2026-08-26  
-> 本版重点 V1.16：分布式健壮性改造收口（§6.163）——新增 §3.y 分布式锁选型铁律（ShedLock 定时任务单例锁 + Redisson 业务互斥锁双选型，禁止新增手写 setIfAbsent 锁；含 5 个无锁 @Scheduled 豁免清单）与 §3.z MQ 容量治理（x-max-length + x-overflow=reject-publish（需 RabbitMQ ≥ 3.10）+ prefetch ≤ 10 + 死信台账 mq_dead_letter_archive + DlxAlertConsumer 先台账后 ACK + 载荷 ≤ 10KB）；§12 分布式锁章节按新口径整体重写（旧 RedisLockUtil 封装与 scheduler:lock: 手写锁口径为文档失真，作废改写）；§2 版本表新增 Redisson 4.0.0 / ShedLock 6.6.0 两行
-> 本版重点 V1.15：§3.x 质量看板聚合归属与 P2/P3 修正——Phase 5 质量度量看板落地（§6.147）：review 域统计挂 ReviewRecordMapper 4 投影 SQL + ReviewService 4 方法（趋势/驳回原因/返工轮次/放水率），review 域新增 dto 子包（QualityTrendPoint / DefectDistribution / ReworkRoundPoint / ReviewerLeniency / QualityDashboardResponse）；agent 域 AgentQualityProfileMapper 2 投影 SQL（overview/rankings，qualityScore 口径唯一收口 Java `computeQualityScore` 防 SQL 漂移，排行补名走 AgentService.listByIds）；看板聚合归 review 域 `QualityDashboardService`（Controller 零编排只透传）；P2 修正——`ReviewProperties.dualReviewTimeoutSeconds` 默认 120→90s（deadline 加锁后才起算，90s 保证双审窗口收进核验锁 TTL 120s 内，防锁过期竞态重复双审）；P3 修正——规则 3 端口反转示例 ReviewServiceImpl 改 `ReviewPortAdapter`（独立适配器断环，消费方 task.port.ReviewPort 由 review 域 ReviewPortAdapter 实现）
-> 本版重点 V1.14：§3.x 业务域分包修订——review 域由「仅 service 族」扩为完整子包（entity / mapper / service / service.impl / mqconsumer / picker / support），评审相关实体（ReviewRecord / ReviewRecheckLog）与审核服务（ReviewService）自 task 域归位 review 域（§6.146 域迁移；task 域消费方改经 task.port.ReviewPort 端口反转，agent 域 QualityProfileUpdater 改原子参数签名）；「审核产物归审核域」消除历史归属错位
-> 本版重点 V1.13：§7.1 事务口径修正——"单语句原子写不豁免"改为"**单语句原子写可豁免**"（单实体单条 UPDATE/DELETE 且无跨实体一致性诉求，豁免时须在 Javadoc 注明；追加第二条写操作必须补注解；best-effort 降级写豁免但须声明降级语义，参考 `SubTaskServiceImpl.markManualIntervention`）；`SubTaskServiceImpl.getByIdForUpdate` 实现类补 Javadoc 强制注明"必须在调用方事务内调用"（行锁随调用方事务存续，接口注释原已有同款语义，迭代记录 §6.141）
-> 本版重点 V1.12：§3.x 依赖方向红线双向化——"禁止跨域直捅 Mapper"对所有方向生效（含合法向下依赖），task 域对 `agent.mapper` import 清零（TaskServiceImpl 5 个 / FeedServiceImpl / SubTaskServiceImpl 共 7 处直调收口为 AgentService 接口方法，迭代记录 §6.140）；规则 5 配套脚本新增 @MapperScan 登记断言（所有 `*Mapper.java` 包路径必须登记，防启动期炸）；§7.1 事务注解明确"单语句原子写不豁免 @Transactional"（SubTaskServiceImpl.updateDependsOn 已补注解）
-> 本版重点 V1.11：§3.x 依赖方向红线配套落地（评审报告 P1 阶段五）——agent 域对 `task.mapper` import 清零（6 处直捅收口为 `SubTaskService` 接口），task↔agent 调度分发改 `TaskDispatchPort` 端口反转（task 域定义、agent 域实现）；ObjectProvider 登记制执行：主代码 8 处减半——4 处 Optional 化（存在性探测场景：AgentChatClientServiceImpl / McpAuthFilterConfig / ExecutionDispatchValidator / OutboxRelayTask），4 处保留理由登记（多候选 orderedStream 路由：CompositeArtifactStorage / WebSearchServiceRouter；懒解析打破循环：SubTaskServiceImpl / ExecutorIssueResolutionAssessor）；配套 `verify-dependency-direction.ps1` 9 项全 PASS
-> 本版重点 V1.10：§7.8 类规模红线存量清单三巨头全数拆分完成（RequirementClarify 1342→675 四拆 / SubTaskReview 888→546 两拆 / AgentServiceImpl 856→553 四组件，迭代记录 §6.136）；§8.2 删除端点特例——DELETE 带 body 不符合 HTTP 语义，改 `POST /deleteById/{id}`（TaskController.deleteById 已落地）；§19 新增 19.0「前端 API 路径常量准则」（src/api/paths.ts 单一事实源，16 个 api 文件全量收口，来源：后端代码评审报告 P2）
-> 本版重点 V1.9：新增 §3.x「依赖方向红线」——core 六业务域单向依赖（planner/review → task → agent → system → shared），system 不得 import task/agent，task 不得 import planner/review，跨域禁止直捅对方 Mapper；配套防回归脚本 `scripts/powershell/verify-dependency-direction.ps1`（来源：后端代码评审报告 P0 领域依赖方向失控）。system 域附件/模块/看板/上传类迁出（Attachment/Module/Dashboard/ArtifactUpload → task 域），AuthServiceImpl 抽 `AgentAuthPort` 下沉 agent 域；反向能力诉求走端口反转（task 域 `TaskPlannerPickerPort` 由 planner 域 `PlannerAgentPicker` 实现，消除 task→planner 孤点）
-> 本版重点 V1.8：新增 §6.8「授权拦截红线」——认证（AuthInterceptor）与授权（AdminOnlyInterceptor）分离，`/api/admin/**` 强制 admin 身份，agent 身份一律 403；配套防回归脚本 `scripts/powershell/verify-admin-authz.ps1`（来源：后端代码评审报告 P0 admin 授权缺口）
-> 本版重点 V1.7：第 8 章「接口路径规范」重写为**内外双轨制**——对内平台轨 `/api/**` 维持描述性驼峰（原 8.1/8.2 规则原样保留），新增开放轨 `/open/**` 强制 kebab-case（服务手机端与第三方集成）；Agent 接入面路径契约冻结不迁；新增 8.4 审查红线与 AI 判定流程；20 章校验清单同步双轨条目
-> 本版重点：对齐 core 业务域分包重构后的代码事实——修正 3.2 启动类 @MapperScan 示例、3.x 资源文件位置、4.1 包命名示例、9.4 Flyway 规范与多版本迁移现实的冲突；补写 6.3 Controller 职责边界（含分层红线与待收口清单）；3.x 业务域分包规则补全子包清单与 outbox 归属决策；9.5 实施要点追加"变更残留检查范围"
-> 本版重点 V1.5：新增第 8 章「接口路径规范」（8.1 描述性风格 / 8.2 路径命名规则表 / 8.3 全局 URI 清理），废弃 6.4 嵌套资源路径规范，改写 6.5 状态操作端点为 `POST /xxxById/{id}`，6.6 分页端点改为 `POST /page`；原第 8～20 章顺延为第 9～21 章；20 章（原 19 章）校验清单路径条目同步新规范
-> 本版重点 V1.6：3.x 业务域分包规则补充 `system` 域「LLM Provider」职责补丁（`llm_provider` 表及 `LlmProviderQueryService` 归属 `system`；ChatClient 路由分发仍走 `agent.chat.provider` 的 `LlmProviderChatClientFactoryRegistry`）；同步注脚 chat.provider 责任与新增 LLM 厂商的动限范围
-> 致敬：Hello World! —— 每一位程序员的第一行代码
----
-
-## 摘要
-
-### 文档定位
-
-本文件是 HelloAI 的代码事实规范，目标是减少以下歧义：
-
-- 当前仓库真实技术栈与历史文档不一致
-- 示例代码与当前项目推荐写法不一致
-- 开发时不知道“该参考技术方案、路线图，还是代码规范”
-
-### 使用要求
-
-- 每次新增或修改代码前，先对照本文件确认是否存在明确规范。
-- 若当前代码实现与本文件不一致，应优先判断是旧代码待收口，还是规范本身过时；不要绕过规范直接新增第三种写法。
-- 若修改引入新的公共约定，应同步更新本文件，而不是只留在 PR、聊天记录或临时说明中。
-- 若与项目基线文档、实现差距表存在冲突，以代码事实和项目基线为准，并尽快回写本文件。
-- 若修改涉及调度、执行链、异步回写、MQ 解耦，开发前必须先阅读 `doc/design/HelloAI_调度解耦重构分析.md`，并按任务计划节点回看 `E:\workspace\AgentTeams-main` 相关源码，确认没有偏离当前收敛方向。
-
-### 维护边界
-
-- 本文件负责“怎么写代码”
-- `HelloAI_项目基线文档.md` 负责“当前项目是什么”
-- `HelloAI_实现差距表.md` 负责“计划与现实差在哪里”
-- `log/HelloAI_迭代执行记录.md` 负责“这一轮到底做了什么”
+> 生效范围：后端单体服务 + 前端管理后台  
+> 当前架构：Spring Boot 单体 + DDD 业务域 + RabbitMQ + PostgreSQL + Redis + Vue 3  
+> 文档定位：**当前有效的代码与架构工程规范**  
+> 版本：V2.0  
+> 最后更新：2026-09-01
+>
+> **重要：本文件只描述“当前有效规则”，不记录历史迭代过程。**
+>
+> 历史变更请记录在：
+>
+> `log/HelloAI 迭代执行记录.md`
 
 ---
 
-## 目录
+# 0. 使用方式
 
-1. [总体原则](#1-总体原则)
-   - [1.x 代码注释规范](#1x-代码注释规范)
-2. [技术栈与版本约束](#2-技术栈与版本约束)
-3. [项目结构与模块职责](#3-项目结构与模块职责)
-   - [3.x 配置属性类规范](#3x-配置属性类规范)
-   - [3.x 资源文件存放规范](#3x-资源文件存放规范)
-4. [命名规范](#4-命名规范)
-   - [4.5 接口使用原则](#45-接口使用原则)
-   - [4.6 常量与枚举命名](#46-常量与枚举命名)
-5. [实体类规范](#5-实体类规范)
-   - [5.5 日期时间处理规范](#55-日期时间处理规范)
-6. [Controller 规范](#6-controller-规范)
-7. [Service 规范](#7-service-规范)
-   - [7.6 空值与 Optional 处理规范](#76-空值与-optional-处理规范)
-8. [接口路径规范（内外双轨制）](#8-接口路径规范内外双轨制)
-   - [8.1 双轨总览](#81-双轨总览)
-   - [8.2 对内平台轨 /api/**](#82-对内平台轨-api)
-   - [8.3 开放轨 /open/**](#83-开放轨-open)
-   - [8.4 审查红线与 AI 判定流程](#84-审查红线与-ai-判定流程)
-   - [8.5 全局 URI 清理](#85-全局-uri-清理)
-9. [数据库设计规范](#9-数据库设计规范)
-10. [Outbox 事务性消息规范](#10-outbox-事务性消息规范)
-11. [消息队列编码规范](#11-消息队列编码规范)
-12. [分布式锁编码规范](#12-分布式锁编码规范)
-13. [异常处理规范](#13-异常处理规范)
-14. [日志与链路追踪规范](#14-日志与链路追踪规范)
-15. [定时任务编码规范](#15-定时任务编码规范)
-16. [Agent 驱动层编码规范](#16-agent-驱动层编码规范)
-17. [代码模板（附录）](#17-代码模板附录)
-18. [开发高频校验清单（附录）](#18-开发高频校验清单附录)
-19. [Vue 页面规范](#19-vue-页面规范)
-20. [新增代码前校验清单](#20-新增代码前校验清单)
-21. [测试规范](#21-测试规范)
-   - [21.6 验证脚本准则（ps1 优先）](#216-验证脚本准则ps1-优先)
+## 0.1 本文件解决什么问题
+
+本规范用于约束：
+
+1. 新增代码应该放在哪里；
+2. 不同业务域之间如何依赖；
+3. Controller / Service / Mapper 如何分工；
+4. 数据库、事务、MQ、Outbox、分布式锁如何使用；
+5. Agent / Planner / Task / Review 如何保持职责边界；
+6. AI Coding Agent 修改代码时必须遵守什么原则；
+7. 哪些问题属于架构红线，哪些只是代码风格建议。
 
 ---
 
-## 1. 总体原则
+## 0.2 修改代码前的阅读顺序
 
-| 条目 | 规范 |
-|------|------|
-| 文件编码 | **所有 `.java` 文件必须使用 UTF-8 without BOM**，禁止 BOM 头 (`EF BB BF`) |
-| 统一返回 | 使用 `R` 类：`R.ok(data)` / `R.fail(msg)` / `R.fail(code, msg)` |
-| 实体继承 | 业务实体继承 `BaseEntity` + `@Data`；关系表只需 `@Data` + `@TableName`（详见 5.2） |
-| 异常处理 | 业务异常使用 `BizException`，由 `GlobalExceptionHandler` 统一捕获 |
-| ID 策略 | `IdType.ASSIGN_ID`（雪花算法 Long），**不使用 String/UUID** |
-| 依赖注入 | **构造器注入**（不用 `@Autowired` 字段注入） |
-| 事务注解 | `@Transactional(rollbackFor = Exception.class)` |
-| 逻辑删除 | `@TableLogic` 标注 `deleted` 字段，0=未删除 / 1=已删除 |
-| 乐观锁 | 使用 `@Version` 注解，禁止手动写 `version = version + 1` SQL |
-| 状态常量 | **禁止硬编码**，统一使用枚举类（`SubTaskStatus`、`AgentRole` 等） |
-| 代码修改准则（强制） | **所有代码修改（Java/前端/脚本/SQL/配置/文档）必须先读本规范，且修改结果必须符合本规范要求**；确需偏离本规范时，必须同步在本规范补充例外说明，否则视为不合格改动 |
-| 开发入口 | **每次改代码前先读本规范，再对照 `HelloAI_项目基线文档.md`、`HelloAI_实现差距表.md` 与 `design/HelloAI_调度解耦重构分析.md` 判断边界** |
+涉及已有代码修改时，推荐：
 
-> **强制要求**：如果本文件已有明确规范，开发实现必须优先遵守；若确需例外，必须同时更新文档说明例外条件。
+```text
+1. 当前任务 / 用户需求
+        ↓
+2. 本文件
+        ↓
+3. 当前代码实现
+        ↓
+4. 相关调用方 / 接口 / 配置 / 数据库
+        ↓
+5. 相关设计文档
+        ↓
+6. 实施修改
+        ↓
+7. 编译 / 测试 / 校验脚本
+```
+
+如果文档与代码存在冲突：
+
+```text
+当前代码事实
+    +
+实际运行行为
+    +
+数据库结构
+    ↓
+优先判断真实情况
+    ↓
+再修正文档
+```
+
+**禁止仅依据旧文档猜测代码结构。**
 
 ---
 
-### 1.x 代码注释规范
+# 1. 规则优先级
 
-| 场景 | 规范 |
-|------|------|
-| 类注释 | 所有 `@Service`、`@Component`、`@RestController` 类**必须**写 Javadoc 类注释，说明职责和主要依赖 |
-| 公共方法 | `public` 方法**建议**写 Javadoc，说明参数、返回值、异常；私有方法用单行注释说明"为什么这样做" |
-| 复杂逻辑 | 超过 10 行的业务逻辑块**必须**加注释，说明意图而非描述代码 |
-| TODO | `// TODO(author): 描述` — 必须带作者和日期 |
-| FIXME | `// FIXME: 描述 (关联Issue)` — 必须关联 Issue 或限期修复 |
+当多个规范发生冲突时，按以下优先级处理：
 
-```java
-/**
- * Agent 收件箱服务。
- * 负责将 MQ 事件投递到各 Agent 的持久化收件箱，支持离线积攒、上线补处理。
- *
- * 核心设计：同一 (eventId, agentId) 最多投递一次（联合唯一约束）。
- */
-@Service
-public class AgentInboxService {
-
-    /**
-     * 向指定 Agent 投递收件箱消息。幂等。
-     *
-     * @param agentId 目标 Agent ID
-     * @param event   MQ 领域事件，含 eventId / type / entityId
-     * @throws BizException 当 Agent 不存在或已禁用时
-     */
-    public void send(Long agentId, DomainEvent event) { ... }
-}
-```
-
-> **原则**: 注释解释"为什么"（Why），代码解释"是什么"（What）。不写 `// i++ 自增` 这类无意义注释。
-
----
-
-## 2. 技术栈与版本约束
-
-| 组件 | 版本 | 备注 |
-|------|------|------|
-| Java | 17 | 编译目标 17，LTS 版本 |
-| Spring Boot | 3.4.10 | 当前主线稳定版本 |
-| Spring AI | 1.1.8 | 当前父 POM 实际版本，MCP 主线依赖 |
-| MyBatis-Plus | 3.5.9 | 使用 `mybatis-plus-spring-boot3-starter` |
-| MyBatis-Spring | 3.0.4 | Spring Boot 3.x 配套版本 |
-| PostgreSQL | 16 | 主数据库，支持 JSONB、pgvector 扩展 |
-| PostgreSQL Driver | 42.7.3 | JDBC 驱动 |
-| Redis | 7.x | 缓存 + 去重 + 上下文存储（锁底层载体：ShedLock 锁记录 / Redisson RLock 复用同一 Redis） |
-| Redisson | 4.0.0 | 业务级分布式锁（redisson-spring-boot-starter + redisson-spring-data-34 适配 Boot 3.4） |
-| ShedLock | 6.6.0 | 定时任务实例级互斥（@SchedulerLock；shedlock-provider-redis-spring 复用 Lettuce） |
-| RabbitMQ | 3.12+ | 消息中间件，Topic Exchange + DLX |
-| MinIO | Docker Compose 当前为 `latest` | 开发环境以仓库当前配置为准 |
-| SpringDoc | 2.8.0 | OpenAPI 3 文档 |
-| Flyway | 10.14.0 | 数据库版本迁移 |
-| Lombok | - | Spring Boot 管理版本 |
-| Guava | 33.2.0-jre | 工具库 |
-
-**版本锁定原则：** 所有依赖版本由父 POM `dependencyManagement` 统一管理，子模块**禁止**自行指定版本号。
-
-**单体架构说明：** 当前为单体 Spring Boot 应用（端口 6565），按 DDD 分层拆分为 6 个 Maven 模块。未来微服务化时，通过 Nacos + Spring Cloud Gateway 拆分，当前预留扩展点。
-
----
-
-## 3. 项目结构与模块职责
-
-### 3.1 单体模块拆分
-
-```
-helloai/
-├── helloai-common/          # 基础工具：BaseEntity、R、BizException、常量、工具类
-├── helloai-mq/              # MQ 层：RabbitMQ 配置、Producer、幂等消费基类、去重服务
-├── helloai-job/             # 定时任务：Outbox 补偿、通知重试、超时巡检、健康检查、执行记录补偿
-├── helloai-core/            # 核心领域：实体、Mapper、Service、状态机、Outbox、Agent 驱动层、存储层
-├── helloai-api/             # REST 层：Controller、DTO、认证、请求日志拦截器、全局异常处理
-└── helloai-start/           # 启动入口：HelloAIApplication、application.yml、Flyway 脚本
-```
-
-| 层 | 职责 | 可被依赖 |
-|----|------|----------|
-| `helloai-common` | 基础实体、统一返回、业务异常、常量枚举 | 是（所有模块） |
-| `helloai-mq` | RabbitMQ 配置、消息发布、幂等消费抽象 | 是（helloai-core） |
-| `helloai-job` | 定时任务调度、补偿逻辑 | 是（helloai-core） |
-| `helloai-core` | 领域实体、Mapper、Service、状态机、Agent 驱动、存储 | 是（helloai-api） |
-| `helloai-api` | REST 接口、DTO、认证、拦截器 | 否 |
-| `helloai-start` | 启动类、配置文件、资源 | 否 |
-
-### 3.2 启动类配置
-
-```java
-package com.helloai;
-
-@SpringBootApplication(scanBasePackages = "com.helloai")
-@EnableConfigurationProperties(AgentProviderProperties.class)
-@MapperScan({
-        "com.helloai.core.agent.mapper",
-        "com.helloai.core.agent.quality.mapper",
-        "com.helloai.core.task.mapper",
-        "com.helloai.core.review.mapper",
-        "com.helloai.core.system.mapper",
-        "com.helloai.core.planner.mapper"
-})
-@EnableScheduling
-@EnableAsync(proxyTargetClass = true)
-public class HelloAIApplication {
-    public static void main(String[] args) {
-        // 禁用 CGLIB 类缓存（spring-ai 1.x + spring-boot 3.4 + McpAuthFilterConfig
-        // CGLIB 增强在异常退出后偶发导致下次启动失败），详见启动类注释
-        SpringApplication.run(HelloAIApplication.class, args);
-    }
-}
-```
-
-> ⚠️ `scanBasePackages` **必须**设为 `"com.helloai"`，确保所有模块的 Bean 能被扫描到。
-> ⚠️ `@MapperScan` **必须**显式列出全部业务域的 mapper 包（含子包如 `agent.quality.mapper`，`@MapperScan` 不递归子包；core 域分包重构后已不存在统一的 `core.mapper` 包）；新增业务域时在此追加对应 mapper 包。
-
-### 3.3 服务端口
-
-| 服务 | 端口 | 说明 |
-|------|------|------|
-| HelloAI API | 6565 | 单体应用主端口 |
-| PostgreSQL | 15432 | Docker Compose 开发环境映射端口 |
-| Redis | 26379 | Docker Compose 开发环境映射端口 |
-| RabbitMQ | 25672 / 25673 | 消息队列 / 管理后台 |
-| MinIO | 29000 / 29001 | 对象存储 / Console |
-
-### 3.x 配置属性类规范
-
-```java
-@Data
-@ConfigurationProperties(prefix = "moss.thread.pool")
-public class MossThreadPoolProperties {
-    /** 核心线程数 */
-    private int coreSize = 8;
-    /** 最大线程数（线上可调至 128/256） */
-    private int maxSize = 64;
-    /** 队列容量 */
-    private int queueCapacity = 1000;
-    /** 空闲线程存活秒数 */
-    private int keepAliveSeconds = 60;
-}
-```
-
-| 规则 | 说明 |
-|------|------|
-| 命名 | `XxxProperties`，如 `AgentConfigProperties`、`MossThreadPoolProperties` |
-| 注解 | `@Data` + `@ConfigurationProperties(prefix = "...")` |
-| 放置位置 | `com.helloai.common.config` |
-| 默认值 | **必须**提供合理默认值，避免配置缺失导致启动失败 |
-| 校验 | 复杂配置类用 `@Validated` + `@Min`/`@Max`/`@NotEmpty` 等约束注解 |
-| 前缀 | 小写 + 点号分隔（`helloai.agent`、`moss.thread.pool`） |
-
-### 3.x 资源文件存放规范
-
-```
-helloai-start/src/main/resources/
-├── application.yml                  # 主配置
-└── db/
-    └── migration/                   # Flyway 多版本迁移脚本（V1__init_all.sql ～ V23__field_naming_normalization.sql）
-
-helloai-core/src/main/resources/
-├── mapper/                          # 自定义 Mapper XML（AgentMapper.xml 等 5 个）
-├── scripts/
-│   └── task-cli.py                  # Agent CLI 工具（可执行脚本）
-└── skills/
-    ├── planner/SKILL.md             # Planner 技能文档
-    ├── executor/SKILL.md            # Executor 技能文档
-    └── reviewer/SKILL.md            # Reviewer 技能文档
-```
-
-| 目录 | 模块 | 用途 |
-|------|------|------|
-| `db/migration/` | helloai-start | Flyway 数据库迁移脚本（多版本，详见 9.4） |
-| `mapper/` | helloai-core | 需要覆盖 BaseMapper 或自定义 SQL 的 Mapper XML |
-| `scripts/` | helloai-core | 可执行脚本（Python CLI 等） |
-| `skills/` | helloai-core | 角色技能文档（SKILL.md），运行时可替换变量 |
-
-> **强制**：所有资源文件**必须通过 `ClassPathResource` 读取**，禁止硬编码绝对路径。
-
-### 3.x 业务域分包规则
-
-core 模块统一采用"业务域分包 + 域内技术分层"，禁止新增顶层 entity/mapper/service 平铺包：
-
-- com.helloai.core.agent   智能体域（注册、调度、执行、对话、MCP、可观测）
-- com.helloai.core.task    任务域（任务、子任务、评分、时间线、状态机）
-- com.helloai.core.planner 规划域（需求澄清、自动拆解、联网搜索、Planner 选型）
-- com.helloai.core.review  核验域（评审实体、自动审查、返工闭环、MQ 消费）
-- com.helloai.core.system  系统支撑域（用户、配置、规则、模块、凭据、附件、存储、 **LLM Provider**）
-- com.helloai.core.shared  跨域基础设施（event、doorbell、handler、util）
-
-业务域（agent / task / planner / review / system）固定子包：entity / mapper / service / service.impl；review 域完整子包：entity / mapper / service / service.impl / dto / mqconsumer / picker / support；评审相关实体（ReviewRecord / ReviewRecheckLog）与审核服务（ReviewService）归 review 域——审核产物归审核域，消除历史归属错位（§6.146 域迁移）；shared 域为跨域基础设施无实体层；按域需要可扩展。当前各域完整子包（v2.8 拆分后实际结构）：
-
-- **agent**：entity / mapper / service / service.impl / domain / chat / command / dispatcher / executor / mqconsumer / mcp / observability / output
-- **task**：entity / mapper / service / service.impl / policy / spec / statemachine / score / listener
-- **planner**：entity / mapper / service / service.impl / picker / search
-- **review**：entity / mapper / service / service.impl / mqconsumer / picker / support
-- **system**：entity / mapper / service / service.impl / storage / crypto
-- **shared**：event / doorbell / handler / util
-
-> **v2.8 起（2026-08 批次 b0-b4）：Service 层统一"接口 + impl"成对拆分**——业务 Service 一律拆为接口 `XxxService`（放 `{domain}.service`，继承 `IService<Entity>`）+ 实现 `XxxServiceImpl`（放 `{domain}.service.impl`，继承 `ServiceImpl<Mapper, Entity>`）；跨域引用、Controller 一律只依赖接口。已拆分域：agent（10 个移入拆）、task（11 + spec 3 拆）、planner（4 拆 + search 迁移）、review（1 拆）、system（13 拆）；策略/选型类归位专用子包（task/policy、planner/picker）。批次详情见迭代记录 §6.84。
-
-语义边界（强制）：
-- xxx.entity = 映射数据库表的持久化实体
-- xxx.domain = 不映射表的纯内存领域对象/值对象（如 ExecutionCommand、AgentTask）
-- xxx.service.impl = Service 接口实现（`@Service` + `@RequiredArgsConstructor` + 构造器注入，**禁止**在 impl 之外书写业务逻辑类）
-- agent.chat = 面向业务的 ChatClient 服务层（路由入口、Provider 目录、provider/model 解析）；agent.chat.provider = Provider 接入族（Factory 契约 + 各厂商实现 + ChatModel 缓存 + LlmProviderChatClientFactoryRegistry 路由分发）。**新增 LLM 厂商或调整 Provider 协议仅动 `llm_provider` 表 + chat.provider；`system.entity.LlmProvider` 是平台级 Provider 配置的持久化载体（不是 chat 域的事），全表送 `LlmProviderQueryService`、套餐 ChatClient 路由仍走 chat.provider；chat 父包零感知**
-- task.policy = 任务级策略的纯静态工具类（如 `TaskAgentPolicy` 解析 `task.agent_policy` JSONB，防御式回落默认）
-- planner.picker = Planner 选型职责（如 `PlannerAgentPicker`，会话钉住 / 任务指定 / 自动选择三级决策）
-
-新增类的放置判断：先问"它服务哪个业务域"，再问"它在域内承担什么技术角色"。
-跨域通用设施才允许放 shared，放 shared 前需在提交说明中写明理由。
-
-**outbox 归属决策**：事务性 outbox 的两张表（agent_outbox_event、agent_command_outbox）及其 entity / mapper / service 归属 agent 域（它们服务的就是 agent 命令与事件分发）；中继调度 OutboxRelayTask 属 helloai-job，MQ 收发侧属 helloai-mq。当第二个业务域引入 outbox 时，再评估将 entity/mapper/service 下沉至 shared/outbox；不要提前建空包占位。
-
-**start 模块配置类归属**：启动模块配置类统一放在 `com.helloai.start.config`；`MyBatisPlusMetaObjectHandler`、`AdminInitializer` 已并入该包，`DeepSeekProviderChatClientFactory` 已迁至 `core.agent.chat.provider`（与 ChatClient 工厂族同源）。新配置类一律放 `start.config`，不允许再出现分裂包。
-
-### 3.x 依赖方向红线（V1.9 新增）
-
-【必须】core 六个业务域实行单向依赖，方向固定：
-
-    planner ─┐
-             ├─→ task ─→ agent ─→ system ─→ shared
-    review ──┘
-
-规则：
-1. 只允许向下依赖，禁止反向依赖与横向回指（如 system 不得 import task/agent/planner/review，task 不得 import planner/review，agent 不得 import planner/review）。
-2. 跨域只允许依赖对方的 service 接口与 entity；**禁止跨域直捅对方 Mapper**（Mapper 是持久层实现细节，跨域直捅是最深耦合；禁令对所有方向生效，合法向下依赖同样不豁免，一律收口为对方域 service 接口方法）。验收标准：agent 域对 `task.mapper` 包的 import 必须为零，task 域对 `agent.mapper` 包的 import 必须为零（§6.140 已双向清零：TaskServiceImpl / FeedServiceImpl / SubTaskServiceImpl 的 agent Mapper 直调全部收口为 AgentService 接口方法——`lockByIdForUpdate` / `listSummaries` / `countExecutionByTaskId` / `countUnreadInboxByTaskRef` / `physicalDeleteTaskTrace`，task 域复用 `listByIds` / `listByRole` 等既有接口）。
-3. 反向能力诉求走**端口反转（依赖倒置）**：接口定义在"消费方域"（如 `task.port.TaskPlannerPickerPort`、`agent.port.AgentAuthPort`、`task.port.ReviewPort`），由"实现方域"（planner 的 `PlannerAgentPicker`、agent 的 `AgentServiceImpl`、review 的 `ReviewPortAdapter`）落实 `implements`——消费方域不 import 实现方域，实现方域下依赖消费方域属于合法向下依赖。端口实现独立于业务服务（如 ReviewPort 由 review/service/impl 的 ReviewPortAdapter 实现而非 ReviewService，避免业务服务同时背端口职责，断环理由见类 Javadoc）。
-4. 禁止用 ObjectProvider / @Lazy 掩盖设计性循环依赖。确需使用时，必须在类 Javadoc 注明"为解 X↔Y 循环而引入，目标解耦方案为 Z"，并在实现差距表登记为待办。存量 ObjectProvider 逐步通过事件解耦或接口下沉消除。
-5. 验证：`scripts/powershell/verify-dependency-direction.ps1`，任何涉及跨域 import 的改动后必跑，红色命中即阻断合入。脚本同时断言：所有 `*Mapper.java` 的包路径必须登记在 `HelloAIApplication` 的 `@MapperScan` 显式清单中（漏登记会在启动期炸），新增/搬迁 mapper 包后必须同步登记并过脚本。
-
-> **归属判断**：新增/搬迁类先问"它服务哪个业务域"——附件（Attachment）与产出物上传（ArtifactUpload）归 task 域（owner 是 sub_task）；模块（Module）是任务的子结构归 task 域；看板聚合（Dashboard / AdminDashboard）归 task 域 observability 子包。system 域只保留用户、凭据、配置、存储抽象、LLM Provider 目录类设施。
-
-### 3.y 分布式锁选型（V1.16 新增）
-
-【必须】分布式锁只允许两种实现，**禁止新增手写 setIfAbsent 锁**：
-
-1. **定时任务单例锁**（@Scheduled 防多实例并发）→ ShedLock `@SchedulerLock`：name 用任务名，lockAtMostFor = 原 TTL 口径，lockAtLeastFor 不设；
-2. **业务互斥锁**（动态 key / 请求级并发互斥）→ Redisson `RLock`：
-   - 一律 `tryLock(0, leaseTime, unit)`，显式传 leaseTime；
-   - 【禁止】裸 `lock()` / `tryLock()` 不带 leaseTime——看门狗自动续期会改变"崩溃残留自动过期"的既有语义（review 锁 TTL=120s 与双审 deadline 90s 的配合依赖该语义，§6.142）；
-   - 释放仅 `unlock()`，持锁校验由 RLock 保证（结构上不可能误删他人锁）；
-3. `RedisTemplate` 仅保留缓存/会话/队列用途，不再承担锁职责；
-4. **豁免清单**（多实例并行无害，无需 ShedLock；**新增任何 @Scheduled 必须先对照本表决定归口**，§6.163 已穷尽核对全工程 16 处 @Scheduled）：
-
-| 位置 | 任务 | 豁免理由 |
+| 等级 | 类型 | 说明 |
 |---|---|---|
-| core | `SubTaskReviewServiceImpl.scanReviewOrphans` | 孤儿核验逐条走 `review:lock:{subTaskId}` 业务锁兜底，DB 扫描幂等 |
-| core | `ExecutionCommandPoller` | DB 悲观条件更新（WHERE status=PENDING）幂等 |
-| core | `DoorbellKeepaliveTask` | 本地 SseEmitter 集合，每实例只推自己的连接 |
-| core | `SessionAuthCleaner` | JVM 本地内存缓存，实例私有 |
-| job | `McpSessionAuthCleanupTask` | JVM 本地内存缓存，实例私有 |
+| P0 | 安全 / 数据完整性 / 架构红线 | 必须遵守 |
+| P1 | 并发 / 事务 / MQ / 状态机 / 跨域边界 | 原则上必须遵守 |
+| P2 | 项目统一开发规范 | 新代码必须遵守 |
+| P3 | 代码风格 / 可读性建议 | 推荐遵守 |
 
-> §12 分布式锁章节（旧 RedisLockUtil 封装与 `scheduler:lock:` 手写锁口径，文档失真）已并入本节口径，见 §12.1。
+例如：
 
-### 3.z MQ 容量治理（V1.16 新增）
+```text
+P0 架构安全要求
+    >
+P1 数据一致性要求
+    >
+P2 项目编码规范
+    >
+P3 代码风格
+```
 
-【必须】消息队列实行容量治理，防止"消息不丢但系统被压垮"：
-
-1. 每个业务队列声明必须带容量阈值与溢出策略：`x-max-length`（核心队列 50000 / 非核心 1000~10000 起步，按实测深度校准）、`x-overflow=reject-publish`（队列满时 broker 拒绝发布，显式失败而非静默堆积；**前置：RabbitMQ ≥ 3.10**，低于该版本只声明 x-max-length 并记录例外）；
-2. 监听端必须配 prefetch，**禁止默认值 250**（慢消费者囤积、快消费者饿死）；LLM 等秒级消费 prefetch ≤ 10（当前全局 `listener.simple.prefetch=10`，生效于全部 3 个手动 ACK 消费者：MqReviewCommandConsumer / MqExecutionCommandConsumer / NotificationConsumer）；
-3. 死信队列必须有告警出口（`DlxAlertConsumer`），死信消息必须落台账（`mq_dead_letter_archive`）**后再 ACK**，禁止死信静默堆积或无法追溯；dlxQueue 未挂 DLX，消费异常 `basicNack(requeue=false)` 任何情况下不得 requeue；
-4. 消息体必须瘦身（**载荷 ≤ 10KB**），超阈值先落 MinIO/DB 再传引用；
-5. 生产端 ConfirmCallback 的 NACK 日志必须带"可能是队列满"提示，便于快速分辨 reject-publish 触发的快速失败。
+如果为了满足 P3 而破坏 P0/P1，必须优先保证 P0/P1。
 
 ---
 
-## 4. 命名规范
+# 2. 总体原则
 
-### 4.1 包命名
+## 2.1 核心原则
 
+HelloAI 遵循以下原则：
+
+```text
+简单优先
+明确边界
+最小改动
+复用优先
+避免重复抽象
+数据一致性优先
+可测试
+可观测
+AI 可理解
 ```
-com.helloai.{模块名}.{层}
-```
-
-示例：
-- `com.helloai.common.base`
-- `com.helloai.common.constant`
-- `com.helloai.core.agent.entity` / `com.helloai.core.agent.mapper` / `com.helloai.core.agent.service` / `com.helloai.core.agent.service.impl`
-- `com.helloai.core.agent.executor` / `com.helloai.core.agent.mqconsumer` / `com.helloai.core.agent.mcp`
-- `com.helloai.core.task.entity` / `com.helloai.core.task.statemachine` / `com.helloai.core.task.score` / `com.helloai.core.task.policy`
-- `com.helloai.core.planner.entity` / `com.helloai.core.planner.service` / `com.helloai.core.planner.service.impl` / `com.helloai.core.planner.picker`
-- `com.helloai.core.review.entity` / `com.helloai.core.review.mapper` / `com.helloai.core.review.service` / `com.helloai.core.review.service.impl` / `com.helloai.core.review.dto`
-- `com.helloai.core.system.entity` / `com.helloai.core.system.service` / `com.helloai.core.system.service.impl` / `com.helloai.core.system.storage`
-- `com.helloai.core.shared.event` / `com.helloai.core.shared.doorbell`
-- `com.helloai.api.controller` / `com.helloai.api.dto` / `com.helloai.api.config`
-- `com.helloai.job.task`
-- `com.helloai.mq.config` / `com.helloai.mq.consumer`
-
-> **禁止**新增 `com.helloai.core.entity` / `core.mapper` / `core.service` 等顶层平铺包（已随业务域分包重构废弃）；core 下新增类必须先定位业务域，详见 3.x 业务域分包规则。
-
-### 4.2 类命名
-
-| 类型 | 命名模式 | 示例 |
-|------|----------|------|
-| 实体 | `{Name}` | `Task`、`SubTask`、`Agent`、`ReviewRecord` |
-| Mapper | `{Entity}Mapper` | `SubTaskMapper`、`AgentMapper` |
-| Service 接口 | `{Name}Service` | `SubTaskService`、`ReviewService` |
-| Service 实现 | `{Name}ServiceImpl` | `SubTaskServiceImpl`（v2.8 起 Service 层强制接口 + impl 拆分，见 §4.5 接口使用原则） |
-| Controller | `{Name}Controller` | `SubTaskController`、`AgentController` |
-| DTO | `{Action}Request` / `{Action}Response` | `CreateTaskRequest`、`TaskResponse` |
-| MQ 消费者 | `{Name}Consumer` | `ExecutorEventConsumer`、`ReviewerEventConsumer` |
-| 定时任务 | `{Name}Task` | `AgentEventCompensationTask`、`SubTaskTimeoutTask` |
-| 常量类 | `{Name}Status` / `{Name}Role` | `SubTaskStatus`、`AgentRole` |
-| 状态机 | `{Name}StateMachine` | `SubTaskStateMachine` |
-| 异常 | `BizException` | `BizException` |
-| 执行器 | `{Name}Executor` | `CodexExecutor`、`ClaudeExecutor` |
-| 回调处理器 | `{Name}CallbackHandler` | `AgentCallbackHandler` |
-| 存储服务 | `{Name}StorageService` | `MinioStorageService`、`AttachmentService` |
-
-### 4.3 方法命名
-
-| 动作 | 前缀 | 示例 |
-|------|------|------|
-| 创建 | `create` | `createTask`、`createReview` |
-| 查询单个 | `getBy{Field}` / `selectById` | `getById`、`selectBySubTaskId` |
-| 查询列表 | `list` / `query` | `listByStatus`、`queryPending` |
-| 更新 | `update` / `change` / `mark` | `changeStatus`、`markBlocked` |
-| 删除 | `delete` / `remove` | `deleteById` |
-| 状态机校验 | `validate` | `validateTransition` |
-| 评分计算 | `calculate` | `calculateCompositeScore` |
-| AI 执行 | `execute` | `execute`、`executeAsync` |
-| 回调处理 | `handle` | `handle`、`handleFailure` |
-| 归档 | `archive` | `archiveOnComplete` |
-| 补偿 | `compensate` | `compensateOutbox`、`compensateExecution` |
-
-### 4.4 数据库字段命名
-
-- 表名：蛇形（`task`、`sub_task`、`agent_execution_record`）
-- 字段名：蛇形（`task_id`、`assigned_agent_id`、`create_time`）
-- 时间字段：`create_time` / `update_time`（**非** `created_at` / `updated_at`）
-- JSONB 字段：`context`、`score_factors`、`detail`、`payload`
-- 布尔/状态：`status`、`deleted`、`result`
-
-> 字段命名的强制细则（时间 `xxx_time`、外键 `xxx_id`、计量 `xxx_count`、避开关键字、主键策略）以 **9.5 字段命名强制规则** 为唯一权威。
-
-### 4.5 接口使用原则
-
-| 场景 | 是否强制接口 | 说明 |
-|------|:----------:|------|
-| Service 层 | **强制**（v2.8 起） | 一律拆为 `{Name}Service` 接口（`{domain}.service`，继承 `IService<Entity>`）+ `{Name}ServiceImpl` 实现（`{domain}.service.impl`，继承 `ServiceImpl<Mapper, Entity>`）；跨域引用与 Controller 只依赖接口（单一实现也要拆，为分层契约与可测试性，见 §3.x v2.8 说明） |
-| Mapper 层 | 不强制 | MyBatis-Plus `BaseMapper` 已满足，自定义方法直接写在 Mapper 接口中即可 |
-| 策略模式 | **强制** | 如 `AgentExecutor`（Claude/Codex/Local 三实现），必须有接口 |
-| Feign 客户端 | **强制** | 未来微服务化时 API 层必须定义接口 |
-
-> **原则**: 接口是抽象边界的产物，不是代码模板的填充物。v2.8 拆分后，Service 接口应保持"业务契约视角"——只声明对外提供的能力，不把内部实现细节（Mapper、私有方法、静态工具）泄漏到接口上。
-
-### 4.6 常量与枚举命名
-
-| 类型 | 命名规则 | 示例 |
-|------|----------|------|
-| 常量类 | `XxxConstant`（单数） | `CacheConstant`、`MqConstant` |
-| 常量值 | 全大写 + 下划线 | `MAX_RETRY_COUNT = 5` |
-| 枚举类 | `XxxStatus`、`XxxType`、`XxxRole` | `SubTaskStatus`、`AgentRole` |
-| 枚举值 | 全大写 | `PENDING`、`ASSIGNED`、`IN_PROGRESS` |
-| 配置项前缀 | 小写 + 点号 | `moss.thread.pool.core-size` |
-
-> **禁止**: 在业务代码中硬编码魔法数字（如 `if (status == 3)`、`if ("active".equals(s))`），必须改用枚举。
 
 ---
 
-## 5. 实体类规范
+## 2.2 禁止无意义重构
 
-### 5.1 BaseEntity 定义
+一个功能需求只允许修改实现该需求所必需的代码。
 
-```java
-package com.helloai.common.base;
+禁止：
 
-import com.baomidou.mybatisplus.annotation.*;
-import lombok.Data;
-import java.time.OffsetDateTime;
-
-@Data
-public abstract class BaseEntity {
-
-    @TableId(type = IdType.ASSIGN_ID)
-    private Long id;
-
-    @TableLogic
-    @TableField(fill = FieldFill.INSERT)
-    private Integer deleted;
-
-    @TableField(fill = FieldFill.INSERT)
-    private String createBy;
-
-    @TableField(fill = FieldFill.INSERT_UPDATE)
-    private String updateBy;
-
-    @TableField(fill = FieldFill.INSERT)
-    private OffsetDateTime createTime;
-
-    @TableField(fill = FieldFill.INSERT_UPDATE)
-    private OffsetDateTime updateTime;
-
-    private String remark;
-}
+```text
+修改一个 Controller
+    ↓
+顺便重构整个 Service
+    ↓
+顺便修改 Entity
+    ↓
+顺便调整整个包结构
 ```
 
-> ⚠️ **时间戳使用 `OffsetDateTime`**（带时区），对应 PostgreSQL `TIMESTAMPTZ`。
+除非现有结构已经直接阻碍需求实现。
 
-### 5.2 业务实体 vs 关系表
+---
 
-**业务实体**（承载业务数据，需要审计追踪）必须遵循以下规则：
+## 2.3 新增抽象前必须回答
 
-1. **必须继承 `BaseEntity`**
-2. **必须使用 `@Data` + `@EqualsAndHashCode(callSuper = true)`**（不手写 getter/setter，确保继承字段参与 equals/hashCode）
-3. **必须使用 `@TableName`** 指定数据库表名
-4. **只定义业务字段**，公共字段由 `BaseEntity` 提供
-5. 非数据库字段使用 `@TableField(exist = false)`
-6. **JSONB 字段使用 `@TableField(typeHandler = JacksonTypeHandler.class)`**
+新增：
 
-**关系表**（多对多关联）仅记录外键关联，不承载审计信息：
-- `@Data` + `@TableName`，无需继承 `BaseEntity`，仅定义外键字段
-- **复合主键**：`PRIMARY KEY (fk1, fk2)`，不需要独立 `id`
-- 不需要 `deleted`/`create_by`/`update_by`/`create_time`/`update_time`/`remark`
-- **更新逻辑**：先 `DELETE` 旧关联再批量 `INSERT` 新关联，无需逐行更新
+- Service
+- Manager
+- Helper
+- Handler
+- Strategy
+- Adapter
+- Port
+- Factory
+- Registry
+
+之前，必须先确认：
+
+```text
+现有代码是否已经存在相同能力？
+        ↓
+能否直接复用？
+        ↓
+能否扩展已有抽象？
+        ↓
+只有确实无法复用时才新增。
+```
+
+**禁止为了“看起来更符合设计模式”而新增抽象。**
+
+---
+
+# 3. 技术栈
+
+当前主线技术以仓库实际 `pom.xml` / 配置为准。
+
+| 组件 | 当前约束 |
+|---|---|
+| Java | 17 |
+| Spring Boot | 3.x |
+| Spring AI | 以父 POM 当前版本为准 |
+| MyBatis-Plus | 3.x |
+| PostgreSQL | 16 |
+| Redis | 7.x |
+| RabbitMQ | 3.x |
+| Flyway | 10.x |
+| Vue | Vue 3 |
+| UI | Element Plus |
+
+依赖版本：
+
+```text
+统一由父 POM dependencyManagement 管理。
+```
+
+子模块：
+
+```text
+禁止自行指定已有依赖的版本号。
+```
+
+如果确需新增版本：
+
+```text
+先确认父 POM 是否已经存在统一版本。
+```
+
+---
+
+# 4. Maven 模块边界
+
+当前项目保持单体架构，不因为业务增长提前拆微服务。
+
+```text
+helloai/
+├── helloai-common
+├── helloai-mq
+├── helloai-job
+├── helloai-core
+├── helloai-api
+└── helloai-start
+```
+
+## 4.1 helloai-common
+
+职责：
+
+```text
+基础实体
+统一返回
+业务异常
+公共枚举
+基础工具
+公共常量
+```
+
+允许：
+
+```text
+被其他模块依赖
+```
+
+禁止：
+
+```text
+依赖 core / api / job
+```
+
+---
+
+## 4.2 helloai-mq
+
+职责：
+
+```text
+RabbitMQ 配置
+消息发布
+消费者基础设施
+幂等消费基础能力
+```
+
+原则：
+
+```text
+MQ 基础设施属于 mq 模块。
+业务消费者属于对应业务域。
+```
+
+---
+
+## 4.3 helloai-job
+
+职责：
+
+```text
+定时任务
+补偿任务
+超时巡检
+健康检查
+周期性后台任务
+```
+
+业务逻辑：
+
+```text
+尽量调用 core Service。
+```
+
+禁止：
+
+```text
+在 job 中直接操作业务 Mapper。
+```
+
+---
+
+## 4.4 helloai-core
+
+核心业务域：
+
+```text
+agent
+task
+planner
+review
+system
+shared
+```
+
+---
+
+## 4.5 helloai-api
+
+职责：
+
+```text
+Controller
+请求 DTO
+响应 DTO
+认证
+授权
+Web 拦截器
+全局异常处理
+```
+
+Controller：
+
+```text
+禁止承载复杂业务逻辑。
+```
+
+---
+
+## 4.6 helloai-start
+
+职责：
+
+```text
+Spring Boot 启动入口
+application.yml
+Flyway
+启动配置
+基础设施装配
+```
+
+---
+
+# 5. Core 业务域结构
+
+当前 core 采用：
+
+> **业务域分包 + 域内技术分层**
+
+禁止重新建立：
+
+```text
+core/entity
+core/mapper
+core/service
+```
+
+这种全局平铺结构。
+
+---
+
+## 5.1 agent 域
+
+职责：
+
+```text
+Agent 注册
+Agent 生命周期
+Agent 调度
+Agent 执行
+Agent Chat
+Agent MCP
+Agent 凭据
+Agent Skill
+Agent 可观测
+Agent Execution
+```
+
+典型结构：
+
+```text
+agent/
+├── entity
+├── mapper
+├── service
+├── service.impl
+├── domain
+├── chat
+├── command
+├── dispatcher
+├── executor
+├── mqconsumer
+├── mcp
+├── observability
+└── output
+```
+
+---
+
+## 5.2 task 域
+
+职责：
+
+```text
+Task
+SubTask
+状态机
+评分
+时间线
+任务策略
+任务事件
+任务执行生命周期
+```
+
+典型结构：
+
+```text
+task/
+├── entity
+├── mapper
+├── service
+├── service.impl
+├── policy
+├── spec
+├── statemachine
+├── score
+└── listener
+```
+
+---
+
+## 5.3 planner 域
+
+职责：
+
+```text
+需求理解
+需求澄清
+任务规划
+自动拆解
+搜索
+Planner Agent 选择
+Prompt 输入增强
+```
+
+典型结构：
+
+```text
+planner/
+├── entity
+├── mapper
+├── service
+├── service.impl
+├── picker
+├── search
+└── prompt
+```
+
+其中：
+
+```text
+prompt
+```
+
+用于 Planner 相关的 Prompt 能力。
+
+例如：
+
+```text
+PromptEnhancer
+```
+
+只负责：
+
+```text
+用户当前输入
+    ↓
+LLM
+    ↓
+优化后的输入
+```
+
+禁止：
+
+```text
+PromptEnhancer
+    ↓
+MCP
+```
+
+或：
+
+```text
+PromptEnhancer
+    ↓
+数据库查询
+```
+
+或：
+
+```text
+PromptEnhancer
+    ↓
+任务执行
+```
+
+Prompt Enhancement 是 Planner 的**辅助能力**，不是新的 Planner 状态。
+
+---
+
+## 5.4 review 域
+
+职责：
+
+```text
+评审
+核验
+ReviewRecord
+ReviewRecheckLog
+自动审查
+双审
+返工
+质量统计
+Review MQ Consumer
+```
+
+评审产生的业务产物归 review 域。
+
+---
+
+## 5.5 system 域
+
+职责：
+
+```text
+用户
+系统配置
+规则
+凭据
+附件
+存储
+LLM Provider
+系统级能力
+```
+
+system 是平台支撑域。
+
+禁止将具体业务流程塞入 system。
+
+---
+
+## 5.6 shared 域
+
+职责：
+
+```text
+跨域基础设施
+Domain Event
+Doorbell
+公共 Handler
+真正跨域复用的 Util
+```
+
+禁止：
+
+```text
+把业务 Service 放进 shared。
+```
+
+禁止：
+
+```text
+为了绕过跨域依赖，
+把任意业务对象放进 shared。
+```
+
+---
+
+# 6. Core 域依赖方向
+
+当前核心依赖方向：
+
+```text
+planner
+   ↓
+review
+   ↓
+task
+   ↓
+agent
+   ↓
+system
+   ↓
+shared
+```
+
+更准确地说：
+
+```text
+planner → task
+review  → task
+task    → agent
+agent   → system
+*       → shared
+```
+
+并且：
+
+```text
+禁止反向依赖。
+```
+
+例如：
+
+```text
+task → planner      ❌
+task → review       ❌
+agent → task        ❌
+system → agent      ❌
+system → task       ❌
+```
+
+---
+
+# 7. 跨域依赖
+
+## 7.1 禁止跨域直捅 Mapper
+
+例如：
 
 ```java
-// ✅ 业务实体 — 正确示范（SubTask.java）
+// ❌
+private final AgentMapper agentMapper;
+```
+
+如果代码属于 task：
+
+```text
+task → agent.mapper
+```
+
+禁止。
+
+正确方式：
+
+```text
+task
+ ↓
+AgentService
+```
+
+或者：
+
+```text
+task
+ ↓
+TaskDispatchPort
+ ↓
+agent 实现
+```
+
+---
+
+## 7.2 Port 反转
+
+当：
+
+```text
+A 需要 B 的能力
+```
+
+但直接依赖会造成：
+
+```text
+A → B
+B → A
+```
+
+优先使用：
+
+```text
+A
+ ↓
+A 自己定义 Port
+ ↓
+B 实现 Port
+```
+
+例如：
+
+```text
+task.port.ReviewPort
+        ↑
+        │
+review.ReviewPortAdapter
+```
+
+原则：
+
+> **Port 应该定义在能力需求方，而不是能力提供方。**
+
+---
+
+## 7.3 Adapter
+
+Adapter 用于：
+
+```text
+跨域接口适配
+外部协议适配
+旧接口兼容
+第三方能力适配
+```
+
+禁止为了简单调用新增 Adapter。
+
+只有存在：
+
+```text
+协议差异
+依赖方向问题
+职责隔离
+兼容要求
+```
+
+时才使用。
+
+---
+
+# 8. Service 规范
+
+## 8.1 当前 Service 结构
+
+当前项目业务 Service 统一采用：
+
+```text
+{domain}.service
+    XxxService
+
+{domain}.service.impl
+    XxxServiceImpl
+```
+
+Controller 和跨域调用：
+
+```text
+只依赖 XxxService
+```
+
+不得依赖：
+
+```text
+XxxServiceImpl
+```
+
+---
+
+## 8.2 Service 职责
+
+Service 负责：
+
+```text
+业务规则
+事务边界
+数据查询
+业务状态变化
+跨 Service 编排
+一致性控制
+```
+
+Service 不负责：
+
+```text
+HTTP 协议细节
+前端页面逻辑
+MQ 基础设施配置
+复杂 UI 数据格式
+```
+
+---
+
+## 8.3 ServiceImpl 不要变成“万能类”
+
+如果一个 Service 同时包含：
+
+```text
+解析
+LLM 调用
+数据库编排
+协议构造
+状态机
+MQ
+文件处理
+统计
+```
+
+应评估拆分。
+
+拆分优先按照：
+
+```text
+业务职责
+```
+
+而不是：
+
+```text
+方法数量
+```
+
+---
+
+# 9. 类规模治理
+
+类规模不是绝对规则，而是复杂度预警。
+
+建议：
+
+| 规模 | 处理方式 |
+|---|---|
+| < 400 行 | 正常 |
+| 400~600 行 | 关注 |
+| 600~800 行 | 新增功能前评估职责 |
+| > 800 行 | 原则上不得继续无脑堆功能 |
+| > 1000 行 | 必须进行拆分评估 |
+
+同时关注：
+
+```text
+构造器依赖数量
+方法数量
+职责数量
+分支复杂度
+外部依赖数量
+```
+
+---
+
+## 9.1 什么时候应该拆
+
+满足以下任意情况时优先考虑拆分：
+
+```text
+一个类存在明显的两个以上业务职责
+```
+
+例如：
+
+```text
+RequirementClarifyService
+    ├── 意图识别
+    ├── Web Search 编排
+    ├── Reply Parser
+    └── Confirm Card Protocol
+```
+
+这种情况适合按职责拆分。
+
+---
+
+## 9.2 什么时候不要拆
+
+以下情况不要为了“行数”机械拆：
+
+```text
+一个强内聚状态机
+一个简单 CRUD Service
+一个非常稳定的领域对象
+一个生命周期完整的小型业务闭环
+```
+
+不要出现：
+
+```text
+FooService
+FooManager
+FooHelper
+FooUtil
+FooProcessor
+FooHandler
+```
+
+每个只有十几个方法、相互转发的情况。
+
+---
+
+# 10. Controller 规范
+
+Controller 只负责：
+
+```text
+1. 接收请求
+2. 参数校验 / 转换
+3. 调用 Service
+4. 返回结果
+```
+
+禁止：
+
+```text
+Controller → Mapper
+Controller → QueryWrapper
+Controller → SQL
+Controller → @Transactional
+Controller → 复杂业务判断
+Controller → MQ 业务编排
+```
+
+---
+
+## 10.1 返回值
+
+统一：
+
+```java
+R<T>
+```
+
+例如：
+
+```java
+return R.ok(data);
+```
+
+失败：
+
+```java
+return R.fail("message");
+```
+
+业务异常：
+
+```java
+throw new BizException("message");
+```
+
+由：
+
+```text
+GlobalExceptionHandler
+```
+
+统一处理。
+
+---
+
+# 11. DTO / Entity
+
+## 11.1 Entity
+
+业务实体通常：
+
+```java
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TableName("sub_task")
-public class SubTask extends BaseEntity {
-    private Long taskId;
-    private Long moduleId;
-    private String title;
-
-    @TableField("status")
-    private SubTaskStatus status;
-
-    private Long assignedAgent;
-    private String content;
-
-    @TableField(typeHandler = JacksonTypeHandler.class)
-    private Map<String, Object> context;
-
-    @TableField(typeHandler = JacksonTypeHandler.class)
-    private Map<String, Object> scoreFactors;
-
-    private Integer compositeScore;
-    private String scoreGrade;
-    private OffsetDateTime deadline;
-
-    @Version
-    private Integer version;
-
-    private Integer timeoutCount;
+@TableName("xxx")
+public class Xxx extends BaseEntity {
 }
 ```
 
-```java
-// ❌ 错误示范
-@Data
-@TableName("sub_task")
-public class SubTask {  // 缺少继承 BaseEntity
-    private Long id;              // ❌ BaseEntity 已包含
-    private String title;
-    private OffsetDateTime createTime;  // ❌ BaseEntity 已包含
-    private OffsetDateTime updateTime;  // ❌ BaseEntity 已包含
-}
+Entity 只描述数据库持久化模型。
+
+---
+
+## 11.2 禁止 Entity 重复定义 BaseEntity 字段
+
+如果 BaseEntity 已包含：
+
+```text
+id
+deleted
+createBy
+updateBy
+createTime
+updateTime
+remark
 ```
 
-```java
-// ✅ 关系表 — 正确示范
-@Data
-@TableName("sys_user_role")
-public class SysUserRole {
-    private Long userId;
-    private Long roleId;
-}
+业务 Entity 不得重复定义。
+
+---
+
+## 11.3 DTO
+
+API 层：
+
+```text
+Request DTO
+Response DTO
 ```
 
-```sql
--- 对应的 DDL
-CREATE TABLE sys_user_role (
-    user_id BIGINT NOT NULL,
-    role_id BIGINT NOT NULL,
-    PRIMARY KEY (user_id, role_id)
-);
+放在：
+
+```text
+helloai-api
 ```
 
-### 5.3 自动填充机制
+Controller：
 
-`MyBatisPlusMetaObjectHandler` 使用 `setFieldValByName` 实现自动填充：
-
-```java
-@Component
-public class MyBatisPlusMetaObjectHandler implements MetaObjectHandler {
-
-    @Override
-    public void insertFill(MetaObject metaObject) {
-        this.setFieldValByName("deleted", 0, metaObject);
-        this.setFieldValByName("createBy", getCurrentUser(), metaObject);
-        this.setFieldValByName("updateBy", getCurrentUser(), metaObject);
-        this.setFieldValByName("createTime", OffsetDateTime.now(), metaObject);
-        this.setFieldValByName("updateTime", OffsetDateTime.now(), metaObject);
-    }
-
-    @Override
-    public void updateFill(MetaObject metaObject) {
-        this.setFieldValByName("updateTime", OffsetDateTime.now(), metaObject);
-        this.setFieldValByName("updateBy", getCurrentUser(), metaObject);
-    }
-
-    private String getCurrentUser() {
-        // 从 SecurityContext 获取当前用户，未登录返回 "system"
-        return "system";
-    }
-}
+```text
+DTO → Service
+Service → DTO / VO
 ```
 
-> ⚠️ **使用 `setFieldValByName`，不使用 `strictInsertFill` / `strictUpdateFill`**
+原则：
 
-### 5.4 JSONB 字段规范
+> API 层不要直接暴露数据库 Entity。
 
-PostgreSQL JSONB 字段在实体中的映射：
+---
 
-```java
-// 方式 1：Map<String, Object>（通用）
-@TableField(typeHandler = JacksonTypeHandler.class)
-private Map<String, Object> context;
+# 12. ID 与状态
 
-// 方式 2：自定义对象（类型安全）
-@TableField(typeHandler = JacksonTypeHandler.class)
-private ScoreFactors scoreFactors;
+## 12.1 ID
 
-// 方式 3：String（原始 JSON，不推荐）
-@TableField(typeHandler = JacksonTypeHandler.class)
-private String payload;
+业务主键：
+
+```text
+Long
+ASSIGN_ID
 ```
 
-**JSONB 查询规范**（MyBatis-Plus Wrapper）：
+禁止新业务主键使用：
 
-```java
-// 查 score_factors->>'grade' = 'S' 的任务
-LambdaQueryWrapper<SubTask> wrapper = new LambdaQueryWrapper<>();
-wrapper.apply("score_factors->>'grade' = {0}", "S")
-       .eq(SubTask::getDeleted, 0);
-
-// 查 context 中包含特定 key 的任务
-wrapper.apply("context @> {0}::jsonb", "{\"hasError\": true}");
+```text
+String UUID
 ```
 
-### 5.5 日期时间处理规范
+除非存在明确的外部协议需求。
 
-| 场景 | Java 类型 | 数据库类型 | 序列化格式 |
-|------|----------|-----------|-----------|
-| 创建/更新时间戳 | `OffsetDateTime` | `timestamptz` | ISO 8601 (`2026-07-03T12:00:00+08:00`) |
-| 纯日期（如交付日期） | `LocalDate` | `date` | `YYYY-MM-DD` |
-| 纯时间（如定时触发） | `LocalTime` | `time` | `HH:mm:ss` |
-| 持续时间 | `java.time.Duration` | — | — |
+---
 
-> **禁止**:
-> - 禁止使用 `java.util.Date` 和 `java.sql.Timestamp`（已过时）
-> - 禁止在数据库使用 `timestamp without time zone`，一律用 `timestamptz`
-> - 禁止在 Controller 层手动格式化时间为字符串，前端负责格式化
+## 12.2 状态
 
-**序列化示例**:
+禁止：
+
 ```java
-// 实体中
-private OffsetDateTime createTime;     // MyBatis-Plus 自动映射 timestamptz
-private LocalDate deadlineDate;        // 纯日期字段
+if (status == 3)
+```
 
-// JSON 序列化时自动输出 ISO 8601 格式
-// {"createTime": "2026-07-03T12:00:00+08:00", "deadlineDate": "2026-07-10"}
+使用：
+
+```java
+SubTaskStatus.REVIEW
+```
+
+状态机必须明确合法状态转换。
+
+---
+
+# 13. 状态机
+
+复杂业务状态必须集中定义状态流转。
+
+例如：
+
+```text
+PENDING
+  ↓
+ASSIGNED
+  ↓
+IN_PROGRESS
+  ↓
+REVIEW
+  ├── DONE
+  └── REWORK
+```
+
+禁止：
+
+```text
+在多个 Service 方法中散落状态转移规则。
+```
+
+对外状态操作：
+
+```text
+claim
+start
+submit
+complete
+rework
+block
+```
+
+等方法必须：
+
+```text
+先校验合法状态
+再修改状态
 ```
 
 ---
 
-### 6.1 基本规则
+# 14. 事务规范
 
-- 使用 `@RestController` + `@RequestMapping("/api/{业务}")`
-- 返回值统一用 `R<T>`
-- 构造器注入依赖
-- 日志使用 SLF4J
-- Controller 保持薄，只负责请求入口、参数转换、返回封装
-- 复杂业务编排放在 Service 层
+## 14.1 默认规则
 
-### 6.2 标准示例
-
-```java
-@RestController
-@RequestMapping("/api/sub-tasks")
-public class SubTaskController {
-
-    private static final Logger log = LoggerFactory.getLogger(SubTaskController.class);
-    private final SubTaskService subTaskService;
-
-    public SubTaskController(SubTaskService subTaskService) {
-        this.subTaskService = subTaskService;
-    }
-
-    @PostMapping("/changeStatusById/{id}")
-    public R<Void> changeStatus(@PathVariable Long id, @RequestBody ChangeStatusRequest request) {
-        subTaskService.changeStatus(id, request.getNewStatus(), request.getAgentId());
-        return R.ok();
-    }
-
-    @GetMapping("/getById/{id}")
-    public R<SubTaskResponse> getById(@PathVariable Long id) {
-        SubTask subTask = subTaskService.getById(id);
-        if (subTask == null) return R.fail("SubTask not found");
-        // ... 转换 Response DTO
-        return R.ok(dto);
-    }
-}
-```
-
-### 6.3 Controller 职责边界
-
-Controller 只允许做三件事：**参数接收与校验、调用 Service、封装返回**。
-
-**分层红线（强制）**：
-
-1. **禁止注入 Mapper**——任何查询/写入都必须经过 Service，Controller 出现 `private final XxxMapper` 即违规；
-2. **禁止书写 SQL / QueryWrapper 条件**——条件构造属 Service 层职责；
-3. **禁止事务注解**——`@Transactional` 只允许出现在 Service；
-4. 返回 DTO 不返回 Entity（见 6.7）；异常统一交 `GlobalExceptionHandler`，不在 Controller 里 try-catch 业务异常。
-
-> ✅ 收口完成：6 个历史违规 Controller（ActivityController、AdminDashboardController、AgentDutyLeaseController、AttachmentController、DashboardController、FeedController）已全部迁回 Service，对应 Mapper 调用与 QueryWrapper 已下移至对应 Service 新增方法（ActivityLogService / AdminDashboardService / AgentDutyLeaseService / AttachmentService / DashboardService / FeedService）。上述四条分层红线作为硬约束持续生效，新增接口不得再次触发。
-
-### 6.4 嵌套资源路径规范（已废弃）
-
-> ⚠️ **V1.5 起废弃**：嵌套资源路径风格 `/{parent}/{parentId}/{child}` 与第 8 章「接口路径规范」对内平台轨（8.2）的描述性风格冲突，**对内轨新代码禁止使用**（开放轨 `/open/**` 的资源+动作后缀风格不受此限，见 8.3）；历史接口（如 ModuleController `/api/tasks/{taskId}/modules`）在整改计划内迁出该风格。
-> 子资源查询/设置统一改用描述性风格：查询 `GET /findXxxByYyyId/{id}`，设置 `POST /setXxxByYyyId/{id}`（见 8.2 规则表）。
-
-```java
-// 废弃写法（历史，仅存于存量代码）：RESTful 子资源嵌套
-@RestController
-@RequestMapping("/api/tasks/{taskId}/modules")
-public class ModuleController {
-    @GetMapping
-    public R<List<Module>> list(@PathVariable Long taskId) { ... }
-    
-    @PostMapping
-    public R<Module> create(@PathVariable Long taskId, @RequestBody @Valid ModuleCreateRequest req) { ... }
-}
-
-// 现行写法（V1.5 起）：描述性风格，见 8.2
-@RestController
-@RequestMapping("/api/modules")
-public class ModuleController {
-    @GetMapping("/findModulesByTaskId/{taskId}")
-    public R<List<ModuleResponse>> findModulesByTaskId(@PathVariable Long taskId) { ... }
-
-    @PostMapping("/setModulesByTaskId/{taskId}")
-    public R<Void> setModulesByTaskId(@PathVariable Long taskId, @RequestBody @Valid SetModulesRequest req) { ... }
-}
-```
-
-### 6.5 状态操作端点规范
-
-状态变更使用专用动作端点，统一按第 8 章 8.2 规则表书写：`POST /{action}ById/{id}`（动作动词 + `ById` + 路径参数），标识参数放在路径末尾，一个动作对应一个独立方法。历史 `/{id}/{action}`、`/{action}/{id}` 形态不再用于新代码。
-
-```java
-// 子任务状态操作（每个动作一个独立端点）
-@PostMapping("/claimById/{id}")
-public R<Void> claim(@PathVariable Long id, @RequestBody ClaimRequest req) { ... }
-
-@PostMapping("/startById/{id}")
-public R<Void> start(@PathVariable Long id) { ... }
-
-@PostMapping("/submitById/{id}")
-public R<Void> submit(@PathVariable Long id) { ... }
-```
-
-### 6.6 分页查询规范
-
-分页查询端点统一为 `POST /page`（见 8.2 规则表），非分页列表用 `GET /list`。分页接口统一接收 `page` 和 `pageSize` 参数，默认值 `page=1, pageSize=20`。
-当使用 `@RequestParam(defaultValue = "...")` 时，必须显式声明参数名，避免运行时因未开启参数名保留而绑定失败。
-
-```java
-@PostMapping("/page")
-public R<PageResult<T>> page(
-        @RequestParam(value = "page", defaultValue = "1") int page,
-        @RequestParam(value = "pageSize", defaultValue = "20") int pageSize,
-        // ... 过滤参数
-) {
-    Page<T> result = service.page(page, pageSize, /* 过滤条件 */); // 条件构造在 Service 层完成（见 6.3）
-    return R.ok(PageResult.of(result));
-}
-```
-
-如果列表接口对外返回 `Response DTO`，则在 Controller 中完成实体到 DTO 的轻量映射，推荐统一使用 `PageResult.of(page, mapper)`：
-
-```java
-@PostMapping("/page")
-public R<PageResult<TaskResponse>> page(
-        @RequestParam(value = "page", defaultValue = "1") int page,
-        @RequestParam(value = "pageSize", defaultValue = "20") int pageSize
-) {
-    Page<Task> result = taskService.page(page, pageSize); // 条件构造在 Service 层完成（见 6.3）
-    return R.ok(PageResult.of(result, this::toResponse));
-}
-```
-
-分页响应封装：
-
-```java
-@Data
-public class PageResult<T> {
-    private List<T> list;
-    private long total;
-    private long pages;
-    private long current;
-    
-    public static <T> PageResult<T> of(Page<T> page) {
-        PageResult<T> r = new PageResult<>();
-        r.setList(page.getRecords());
-        r.setTotal(page.getTotal());
-        r.setPages(page.getPages());
-        r.setCurrent(page.getCurrent());
-        return r;
-    }
-
-    public static <S, T> PageResult<T> of(Page<S> page, Function<S, T> mapper) {
-        PageResult<T> r = new PageResult<>();
-        r.setList(page.getRecords().stream().map(mapper).toList());
-        r.setTotal(page.getTotal());
-        r.setPages(page.getPages());
-        r.setCurrent(page.getCurrent());
-        return r;
-    }
-}
-```
-
-### 6.7 Request/Response DTO 分类规范
-
-| 类型 | 包路径 | 命名规则 | 示例 |
-|------|--------|----------|------|
-| 请求 DTO | `dto/{domain}/` | `{Action}Request` | `CreateTaskRequest` |
-| 响应 DTO | `dto/{domain}/` | `{Action}Response` | `TaskResponse` |
-| 通用分页 | `dto/` | `PageResult<T>` | `PageResult<SubTask>` |
-
-默认规则：
-
-- 查询接口、详情接口、列表接口默认返回 `Response DTO`
-- 创建/更新接口如果返回资源快照，也默认返回 `Response DTO`
-- 纯命令型接口（如状态推进、删除、触发动作）优先返回 `R<Void>`
-- 聚合看板、技能下发、简单 KV 响应可返回专用聚合 DTO 或 `Map<String, Object>`，但不直接暴露实体
-
-
-| 允许 | 禁止 |
-|------|------|
-| 参数校验 | 业务逻辑 |
-| 调用 Service | 在普通业务接口中直接操作 Mapper/DB |
-| DTO 转换 | 事务管理 |
-| 返回 R | 跨服务调用逻辑（当前单体，未来微服务化后走 Feign） |
-
-### 6.8 授权拦截红线（V1.8 新增）
-
-【必须】认证（你是谁）与授权（你能干什么）分离：
-
-1. `AuthInterceptor` 只负责认证（校验 `X-Admin-Token` / `Bearer` API Key 有效、写入 `_authType`/`_authId`/`_authName`），不做角色判断。
-2. 凡 `/api/admin/**` 路径，必须经过 `AdminOnlyInterceptor` 校验 `_authType == "admin"`，否则抛 `BizException(403, ...)`。新增任何 admin 端点只要落在该路径前缀下即自动被拦截器覆盖，无需逐端点注解；因此**管理端点一律使用 `/api/admin/**` 前缀**，不得散落在其他前缀下绕过授权。
-3. 外部 Agent（`_authType == "agent"`）只允许访问 MCP 工具面、Agent 接入面（`/api/agents/**` 中面向 Agent 的端点）与其自身收件箱，禁止访问任何 admin 端点。
-4. 不在 `/api/admin/**` 前缀下但需要管理员权限的端点（如 `SubTaskController.executeById`、`CredentialController` 凭证读写），在 Controller 内用 `requireAdmin()` 显式检查 `_authType`，作为纵深防御保留。
-5. 单角色现状说明：`sys_user.role` 字段目前仅展示不生效（存量均为 ADMIN），授权边界即 `_authType == "admin"`；多角色演进时再在拦截器内引入 role 校验。
-6. 验证：`scripts/powershell/verify-admin-authz.ps1` —— 用 agent token 探全部 `/api/admin/**` 前缀端点必须全部 403，admin token 同一批端点必须 200，无凭证必须 401。涉及授权面的改动后必跑。
-
----
-
-## 7. Service 规范
-
-### 7.1 基本规则
-
-- **接口 + impl 成对拆分（v2.8 起强制）**：接口 `XxxService` 放 `{domain}.service`（继承 `IService<Entity>`），实现 `XxxServiceImpl` 放 `{domain}.service.impl`（继承 `ServiceImpl<Mapper, Entity>`）；Controller 与跨域引用一律只依赖接口
-- 实现类 `@Service` + `@RequiredArgsConstructor`，构造器注入所有依赖
-- 方法级 `@Transactional(rollbackFor = Exception.class)`：写方法一律带注解；**单语句原子写可豁免**——方法内仅对单个实体执行单条 UPDATE/DELETE（含 getById + updateById 组合）且无跨实体一致性诉求时，可暂不加注解，但必须在方法 Javadoc 注明"单语句原子写，无事务"；一旦追加第二条写操作（第二张表 / 跨 Service 写），必须补注解，防止悄悄破窗。best-effort 降级写（try-catch 包裹、失败仅告警不影响主链路）同样豁免，但须在 Javadoc 声明降级语义（参考 `SubTaskServiceImpl.markManualIntervention`）；已有注解的写方法（如 `updateDependsOn`）保持注解，不因豁免条款倒退
-- 使用 LambdaQueryWrapper / LambdaUpdateWrapper
-- `ServiceImpl` 可以注入多个 Mapper，但仅限当前模块所属 Mapper
-- 若一个 `ServiceImpl` 同时承担"本地领域逻辑 + 多流程聚合"，应考虑拆分为领域 Service 与编排型 Service
-
-### 7.2 标准编写模式
-
-```java
-// 接口（{domain}.service.XxxService）
-public interface SubTaskService extends IService<SubTask> {
-
-    void changeStatus(Long subTaskId, SubTaskStatus newStatus, Long agentId);
-
-    List<SubTask> listByStatus(SubTaskStatus status);
-}
-
-// 实现（{domain}.service.impl.SubTaskServiceImpl）
-@Service
-@RequiredArgsConstructor
-public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask> implements SubTaskService {
-
-    private final AgentOutboxService agentOutboxService;
-    private final AgentExecutionRecordService executionRecordService;
-
-    @Transactional(rollbackFor = Exception.class)
-    @Override
-    public void changeStatus(Long subTaskId, SubTaskStatus newStatus, Long agentId) {
-        // 1. 查询
-        SubTask subTask = getById(subTaskId);
-        if (subTask == null) {
-            throw new BizException("子任务不存在: " + subTaskId);
-        }
-
-        // 2. 状态机校验
-        SubTaskStateMachine.validate(subTask.getStatus(), newStatus);
-
-        // 3. CAS 更新（@Version 乐观锁）
-        subTask.setStatus(newStatus);
-        subTask.setAssignedAgent(agentId);
-
-        boolean updated = updateById(subTask);
-        if (!updated) {
-            throw new BizException("并发修改，请重试");
-        }
-
-        // 4. 同事务写入 Outbox
-        agentOutboxService.createEvent(subTask, newStatus);
-    }
-
-    @Override
-    public List<SubTask> listByStatus(SubTaskStatus status) {
-        List<SubTask> list = lambdaQuery().eq(SubTask::getStatus, status).list();
-        return list != null ? list : Collections.emptyList();
-    }
-}
-```
-
-### 7.3 查询规范
-
-```java
-// 单条查询
-SubTask subTask = subTaskMapper.selectOne(
-    new LambdaQueryWrapper<SubTask>()
-        .eq(SubTask::getId, subTaskId)
-        .eq(SubTask::getDeleted, 0));
-
-// 更新（MyBatis-Plus @Version 自动处理）
-subTask.setStatus(SubTaskStatus.ASSIGNED);
-subTaskMapper.updateById(subTask);
-
-// 条件更新
-subTaskMapper.update(null,
-    new LambdaUpdateWrapper<SubTask>()
-        .eq(SubTask::getId, subTaskId)
-        .eq(SubTask::getVersion, subTask.getVersion())
-        .set(SubTask::getStatus, SubTaskStatus.ASSIGNED));
-```
-
-> ⚠️ **乐观锁必须使用 `@Version` + `updateById`**，禁止手动拼接 `setSql("version = version + 1")`。
-
----
-
-### 7.4 状态机模式
-
-
-复杂状态流转（如子任务状态机）需要在 Service 层明确定义合法转移表：
-
-```java
-public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask> implements SubTaskService {
-
-    private static final Map<SubTaskStatus, Set<SubTaskStatus>> VALID_TRANSITIONS = Map.of(
-        SubTaskStatus.PENDING,     Set.of(SubTaskStatus.ASSIGNED),
-        SubTaskStatus.ASSIGNED,    Set.of(SubTaskStatus.IN_PROGRESS, SubTaskStatus.PENDING),
-        SubTaskStatus.IN_PROGRESS, Set.of(SubTaskStatus.REVIEW),
-        SubTaskStatus.REVIEW,      Set.of(SubTaskStatus.DONE, SubTaskStatus.REWORK),
-        SubTaskStatus.REWORK,      Set.of(SubTaskStatus.IN_PROGRESS),
-        SubTaskStatus.BLOCKED,     Set.of(SubTaskStatus.PENDING),
-        SubTaskStatus.DONE,        Set.of(),
-        SubTaskStatus.CANCELLED,   Set.of()
-    );
-
-    private void validateTransition(SubTaskStatus from, SubTaskStatus to) {
-        Set<SubTaskStatus> allowed = VALID_TRANSITIONS.get(from);
-        if (allowed == null || !allowed.contains(to)) {
-            throw new BizException(String.format(
-                "状态转移不合法: %s → %s", from, to));
-        }
-    }
-}
-```
-
-每个对外状态操作方法（`claim`、`start`、`submit`、`complete`、`rework`、`block`）内部先调用 `validateTransition()`，再执行字段更新 + 事务提交。
-
-### 7.5 跨 Service 事务协作模式
-
-当一个操作需要跨多个 Service 更新数据时（例如审查通过 → 修改子任务状态 + 加积分），使用以下模式：
-
-```java
-@Service
-@RequiredArgsConstructor  // 所有依赖通过构造器注入
-public class ReviewService {
-
-    private final SubTaskService subTaskService;  // 跨 Service 注入
-    private final RewardService rewardService;
-
-    @Transactional(rollbackFor = Exception.class)  // 统一事务边界
-    public ReviewRecord createReview(...) {
-        // 1. 写审查记录
-        save(reviewRecord);
-
-        // 2. 推进子任务状态（跨 Service，同一事务）
-        if ("approved".equals(result)) {
-            subTaskService.complete(subTaskId);       // 同事务
-            rewardService.grant(subTaskId, score);    // 同事务
-        } else {
-            subTaskService.rework(subTaskId, reworkAgent);
-        }
-    }
-}
-```
-
-> ⚠️ **禁止**在跨 Service 调用中使用 `@Transactional(propagation = Propagation.REQUIRES_NEW)`，除非有明确的异步隔离需求。默认使用 `REQUIRED`（同一事务）。
-> ✅ **best-effort 副链路隔离例外（2026-08-21 起）**：同事务内的降级类副链路（如 `QualityProfileUpdater` 画像增量）必须用 `Propagation.NESTED`（savepoint）而非 `REQUIRES_NEW`——与主事务同提交（主事务回滚则副链路一并回滚，保持同事务口径），但副链路 SQL 失败只回滚 savepoint，主事务不进入 PG aborted 状态（否则 catch 后后续语句报 25P02，主链路被拖死）。无事务上下文时 NESTED 等价 REQUIRED。先例：`QualityProfileUpdater.onReviewRecordPersisted`。
-
-### 7.6 空值与 Optional 处理规范
-
-| 场景 | 规范 |
-|------|------|
-| Service 返回单个实体 | 查不到返回 `null`，调用方用 `Objects.requireNonNullElse` 或判空后抛 `BizException` |
-| Service 返回列表 | 查不到返回 `Collections.emptyList()`，**绝不**返回 `null` |
-| Mapper 查询 | `selectOne` 可能返回 `null`，Controller 层**必须**判空 |
-| Optional | 仅在链式操作中使用（`Optional.ofNullable(x).map(...).orElse(...)`），**禁止**作为方法参数、类字段或返回值类型 |
-
-```java
-// ✅ 推荐：列表方法绝不返回 null
-public List<SubTask> listByStatus(SubTaskStatus status) {
-    List<SubTask> list = lambdaQuery().eq(SubTask::getStatus, status).list();
-    return list != null ? list : Collections.emptyList();
-}
-
-// ❌ 禁止：列表方法可能返回 null
-public List<SubTask> listByStatus(SubTaskStatus status) {
-    return lambdaQuery().eq(SubTask::getStatus, status).list();
-}
-```
-
-> **原则**: 方法返回集合类型时，"没有数据"和"出错"是两个概念。前者返回空集合，后者抛异常。
-
-### 7.7 循环依赖处理规范（2026-08-21 起强制）
-
-Spring Boot 3.x 默认 `spring.main.allow-circular-references=false`，**构造器循环依赖会导致启动直接失败**，必须主动规避。
-
-| 条目 | 规范 |
-|------|------|
-| 硬性禁止 | 禁止构造器注入形成循环依赖（A → B → A）；**禁止**通过 `spring.main.allow-circular-references=true` 全局放开 |
-| 检测时机 | 新增跨域 Service/Component 依赖时，先用 `mvn -pl helloai-start -am compile` + 启动自检；启动失败提示 `The dependencies of some of the beans in the application context form a cycle` 即为本规范违规 |
-| 打破方式 | 循环边上的**重量级基础设施依赖侧**改用 `ObjectProvider<T>` 懒解析：构造时不解析，运行时 `getIfAvailable()` 取容器已完成单例（无性能损失）；取不到时按 best-effort 降级，不抛异常 |
-| 断开点选择 | 优先断开"依赖方向反向"的一侧：即被依赖方（如 LLM 工厂 Registry、附件服务）的依赖链反向引用本组件时，在本组件侧懒解析被依赖方 |
-| 注释要求 | 懒解析字段必须注释说明循环链路（谁 → 谁 → 回到本组件）与为何运行时解析安全 |
-
-```java
-// 懒解析打破循环：AttachmentServiceImpl 依赖 SubTaskService（register 归属校验），
-// 构造注入会形成 SubTaskServiceImpl → AttachmentServiceImpl → SubTaskServiceImpl 环
-private final ObjectProvider<AttachmentService> attachmentServiceProvider;
-```
-
-仓库内已有先例：`SubTaskServiceImpl.attachmentServiceProvider`（AttachmentServiceImpl 反向依赖 SubTaskService）、`ExecutorIssueResolutionAssessor.chatClientFactoryRegistryProvider`（Registry 依赖链经 MCP tool 链 → mcpToolServiceImpl → executionResultHandler → executorDoneIssuesBackfiller 反向回到本组件）。新增同类懒解析时沿用此模式。
-
-> **原则**: 循环依赖不是靠"放开开关"解决的配置问题，而是依赖方向设计缺陷；构造注入阶段就必须单向化。
-
-### 7.8 类规模红线（V1.9 新增）
-
-【必须】ServiceImpl 满足任一条件即触发拆分评审：
-- 代码超过 500 行；或
-- 构造器注入依赖超过 8 个。
-
-触发后二选一：拆分，或在类 Javadoc 书面说明"不拆"的理由（如强内聚的状态机）。拆分方向优先按"单一职责聚类"：解析器、外部服务编排、协议构造等可独立测试的职责优先剥离为独立类。
-
-理由：AI 协作开发时，超大类的完整上下文无法装入模型窗口，是改错率的主要来源；类规模红线本质上是 AI 协作的生产率红线。
-
-> **存量清单**（评审报告 P1，2026-08-22 起逐批拆分，**当日全部完成**）：`RequirementClarifyServiceImpl`（1342→675 行，四拆：IntentDetectionService / ClarifyWebSearchOrchestrator / ClarifyReplyParser / ConfirmCardProtocol）、`SubTaskReviewServiceImpl`（888→546 行，两拆：ReviewEvidenceAssembler / VerdictParser）、`AgentServiceImpl`（856→553 行，四组件：AgentCredentialService / AgentSkillPolicyService / AgentLifecycleService / AgentStatsService）；每一拆独立小闭环（编译 + 相关单测 + 依赖方向脚本），拆分未改变业务行为。详见迭代记录 §6.136。
-
-
-## 8. 接口路径规范（内外双轨制）
-
-> 本章是接口路径命名的唯一权威：6.4 嵌套资源路径规范（V1.5 起废弃）、6.5 状态操作端点规范、6.6 分页查询规范均以本章为准。
-> **V1.7 起实行"内外双轨"**：两条轨道以路径前缀物理隔离，每轨强制单一命名风格，禁止混写、禁止同一接口双轨双发。
-
-### 8.1 双轨总览
-
-| 轨道 | 路径前缀 | 命名风格 | 消费方 | 现状 |
-|------|----------|----------|--------|------|
-| A 对内平台轨 | `/api/**` | 描述性驼峰（动作 + By + 参数） | Vue 管理前端、平台内部调用 | 存量全量接口，维持现状 |
-| B 开放轨 | `/open/**` | kebab-case（全小写 + 短横线） | 手机端、第三方系统集成 | V1.7 设立，首批端点随手机端需求落地 |
-
-强制边界：
-
-- **Agent 接入面不属开放轨**：`/api/mcp/**`、`/api/agents/register`、`/mcp/` SSE 等是已对外暴露的**存量契约**（SKILL.md / task-cli.py 引用），路径冻结不迁；Agent 侧新能力继续走 MCP 协议扩展。
-- **禁止双发**：同一接口不允许同时提供两套 URL（维护成本翻倍）；跨轨复用能力时，两轨 Controller 各自定义路径与 DTO，调用同一个 Service。
-- **禁止混写**：任何 Controller 内部不得混用两种风格；新增对外端点一律进 `/open/**`，不得再往 `/api/**` 添加面向外部消费方的接口。
-
-### 8.2 对内平台轨 `/api/**`
-
-【必须】统一使用描述性风格：`动作 + By + 参数名 / {参数值}`。不使用 RESTful 子资源嵌套风格。多词资源名允许短横线（如 `/api/sub-tasks`），动作段必须驼峰。
-
-```java
-@GetMapping("/list")                                // 列表
-@PostMapping("/page")                               // 分页
-@GetMapping("/getById/{id}")                        // 按 ID 查询
-@GetMapping("/listByOrg/{orgId}")                   // 按外键列表
-@GetMapping("/listByDevice/{deviceCode}")           // 按业务编码列表
-@GetMapping("/findDevicesByRouteId/{routeId}")      // 查询子资源
-@PostMapping("/setDevicesByRouteId/{routeId}")      // 设置子资源
-@PostMapping("/publishById/{id}")                   // 状态操作
-@DeleteMapping("/deleteById/{id}")                  // 删除
-```
-
-路径命名规则：
-
-| 场景 | HTTP 方法 | 路径格式 | 示例 |
-|------|-----------|----------|------|
-| 列表 | GET | `/list` | `GET /api/tasks/list` |
-| 分页 | POST | `/page` | `POST /api/tasks/page` |
-| 按 ID 查询 | GET | `/getById/{id}` | `GET /api/tasks/getById/1001` |
-| 按外键查询列表 | GET | `/listByXxx/{xxx}` | `GET /api/sub-tasks/listByTaskId/1001` |
-| 查询子资源 | GET | `/findXxxByYyyId/{id}` | `GET /api/modules/findByTaskId/1001` |
-| 设置子资源 | POST | `/setXxxByYyyId/{id}` | `POST /api/modules/setByTaskId/1001` |
-| 状态操作 | POST | `/xxxById/{id}` | `POST /api/sub-tasks/startById/1001` |
-| 新增 | POST | `/` | `POST /api/tasks` |
-| 修改 | PUT | `/` | `PUT /api/tasks` |
-| 删除 | DELETE | `/deleteById/{id}` | `DELETE /api/tasks/deleteById/1001` |
-
-> **特例**：删除需携带确认信息的 body 时（如 `TaskController.deleteById` 的 `confirmTitle` 级联删除确认），
-> DELETE 带 body 不符合 HTTP 语义，改用 `POST /deleteById/{id}`（前端 `request.post` 同步）。
-
-### 8.3 开放轨 `/open/**`
-
-【必须】路径全小写，单词间短横线分隔，资源名用复数名词；**严禁出现大写字母、下划线与驼峰**。风格以 RESTful 资源为主、动作为后缀：
-
-| 场景 | HTTP 方法 | 路径格式 | 示例 |
-|------|-----------|----------|------|
-| 列表 / 筛选 | GET | `/{resources}?查询参数` | `GET /open/tasks?status=PENDING&page=1&page-size=20` |
-| 按 ID 查询 | GET | `/{resources}/{id}` | `GET /open/tasks/1001` |
-| 新增 | POST | `/{resources}` | `POST /open/tasks`（手机端创建任务） |
-| 修改 | PUT/PATCH | `/{resources}/{id}` | `PUT /open/tasks/1001` |
-| 删除 | DELETE | `/{resources}/{id}` | `DELETE /open/tasks/1001` |
-| 状态操作 | POST | `/{resources}/{id}/{action}` | `POST /open/tasks/1001/dispatch`（分发）、`POST /open/tasks/1001/cancel` |
-
-补充规则：
-
-- 查询参数名同样 kebab-case（`page-size`，非 `pageSize`）。
-- 路径变量占位符（`{taskId}`）不参与风格检查，但同一 Controller 内写法保持统一。
-- 动作后缀只允许单个小写动词（`dispatch` / `cancel` / `start`），禁止动宾短语堆叠。
-- **版本化**：未来不兼容变更启用新前缀 `/open/v2/**`，禁止原地修改已发布路径语义。
-- 鉴权策略按前缀独立声明（`/open/**` 不走 admin token，另行定义 API Key / 签名机制），不与 `/api/**` 共用会话。
-
-内外语义对照（同一 Service 能力在两轨的写法）：
-
-| 对内 `/api/**` | 对外 `/open/**` |
-|----------------|-----------------|
-| `POST /api/tasks` | `POST /open/tasks` |
-| `GET /api/tasks/getById/{id}` | `GET /open/tasks/{id}` |
-| `GET /api/tasks/list` | `GET /open/tasks` |
-| `POST /api/sub-tasks/startById/{id}` | `POST /open/sub-tasks/{id}/start` |
-
-### 8.4 审查红线与 AI 判定流程
-
-AI / Reviewer 审查接口路径时**先判前缀，再套规则**：
-
-1. 路径以 `/api/` 开头 → 按 8.2 审查：动作段必须描述性驼峰（`getById`、`changeStatusById`），出现 kebab-case 动作段（`get-by-id`）或 snake_case（`get_by_id`）为错误；多词资源名短横线（`sub-tasks`）合法。
-2. 路径以 `/open/` 开头 → 按 8.3 审查：出现任何大写字母、下划线、驼峰为错误。
-3. 路径以 `/api/mcp/`、`/api/agents/` 开头 → 存量 Agent 契约，冻结不审风格，只审是否破坏既有路径。
-
-Blocker 级红线（一律必须修复）：
-
-- `/open/**` 下出现驼峰或下划线；
-- `/api/**` 下新增面向外部消费方（手机端 / 第三方）的端点；
-- 同一接口双轨双发（两套 URL 指向同一端点）；
-- `/open/**` 已发布路径发生语义变更而未启用新版本前缀。
-
-### 8.5 全局 URI 清理
-
-项目通过 `UriCleanFilter` 对请求 URI 的每个路径段自动清理首尾包围字符，兼容前端 URL 拼接误差（如末尾多余斜杠、路径段两侧多余引号/空格等），后端接口路径书写时无需额外防御。双轨均适用。
-
-> ⚠️ **代码核查（2026-08-03）**：当前仓库（helloai-api / helloai-start）未发现 `UriCleanFilter` 实现——全仓库检索无结果，`WebMvcConfig` 仅注册 `RequestLogInterceptor` 与 `AuthInterceptor`。本节暂为契约描述/目标状态，待补实现后删除本注记。
-
----
-
-## 9. 数据库设计规范
-
-### 9.1 业务表必备公共字段
-
-**业务数据表**必须包含以下审计字段（关系表除外，见 5.2）：
-
-```sql
-id          bigint NOT NULL,                                                  -- 雪花ID（ASSIGN_ID）
-deleted     smallint NOT NULL DEFAULT 0,                                     -- 逻辑删除: 0=未删除, 1=已删除
-create_by   varchar(64) NOT NULL DEFAULT '',                                  -- 创建人
-update_by   varchar(64) NOT NULL DEFAULT '',                                  -- 更新人
-create_time timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,                  -- 创建时间
-update_time timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,                   -- 更新时间（PG 用触发器更新）
-remark      varchar(255) DEFAULT NULL                                         -- 备注
-```
-
-### 9.2 JDBC 连接配置
-
-```yaml
-spring:
-  datasource:
-    url: jdbc:postgresql://localhost:15432/helloai?currentSchema=public&reWriteBatchedInserts=true
-    username: postgres
-    password: postgres
-    driver-class-name: org.postgresql.Driver
-    hikari:
-      maximum-pool-size: 20
-      minimum-idle: 5
-      connection-timeout: 30000
-```
-
-### 9.3 建表规范
-
-- **业务表**主键：`id bigint NOT NULL`，应用层生成雪花 ID
-- **关系表**主键：`PRIMARY KEY (fk1, fk2)`，复合主键，不需要独立 `id`
-- 时间戳：`timestamptz`（带时区），不用 `datetime`
-- 布尔值：`smallint`（0/1），不用 `boolean`（与 Java 映射兼容性更好）
-- 金额字段：`decimal(18,2)` 或 `decimal(20,4)`
-- 状态字段：`varchar(32)` 或 `smallint`，配合常量类
-- JSON 字段：`jsonb`（不要用 `json`，`jsonb` 支持索引和压缩）
-- 索引：业务唯一键建唯一索引（如 `event_id`）
-- **PG 触发器**：`update_time` 通过触发器自动更新（PG 无 `ON UPDATE CURRENT_TIMESTAMP`）
-
-```sql
--- 触发器函数
-CREATE OR REPLACE FUNCTION update_update_time_column()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.update_time = CURRENT_TIMESTAMP;
-    RETURN NEW;
-END;
-$$ language 'plpgsql';
-
--- 绑定到表
-CREATE TRIGGER update_sub_task_update_time BEFORE UPDATE ON sub_task
-    FOR EACH ROW EXECUTE FUNCTION update_update_time_column();
-```
-
-### 9.4 Flyway 迁移规范
-
-- 仓库实际为多版本迁移（`V1__init_all.sql` ～ `V23__field_naming_normalization.sql`），**禁止再修改已执行的 V1～V23 历史脚本**（改历史脚本会导致已有环境 checksum 校验失败）
-- 所有新增 DDL（建表、加字段、索引、种子数据、字段改名）**必须新建 `V{N+1}__<用途>.sql`**，版本号顺延，用途用小写蛇形描述
-- 所有 DDL 必须使用 `IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` / `ON CONFLICT DO NOTHING` 等幂等语法；脚本末尾附 `DO $$ ... RAISE NOTICE` 验证块（参照 V16/V17/V23 样式）
-- `application.yml` 中 Flyway 配置只保留 `enabled: true` + `locations`，**不加** `baseline-on-migrate` 和 `repair-on-migrate`
-- 字段改名类迁移必须与 entity 字段改名、XML 裸列名、Java 裸列名字符串在同一提交内完成（参照 9.5 实施要点）
-
-### 9.5 字段命名强制规则
-
-> 来源：V23 字段命名规范化迁移（`helloai-start/src/main/resources/db/migration/V23__field_naming_normalization.sql`，2026-07-18 落地 20 列）。
-> 本节是字段命名的"唯一权威"，与本规范 9.1～9.4 冲突时以本节为准。
-
-| 类别 | 强制规则 |
-|------|----------|
-| 时间字段 | 一律 `xxx_time`（对齐 `create_time` / `update_time`），**禁止** `_at` 后缀；DATE 类型一律 `xxx_date` |
-| 外键 / ID 引用 | 一律 `xxx_id`；同一 ID 多角色引用必须加角色前缀：`assigned_agent_id`、`reviewer_agent_id` |
-| 状态字段 | `varchar` + 枚举字符串（不使用数字枚举） |
-| 计量字段 | 一律 `xxx_count`（如 `consecutive_failure_count`、`timeout_count`），**禁止** `total_xxx` / `num_xxx` 混用 |
-| 关键字 | 列名必须避开数据库关键字（`trigger` / `order` / `level` / `user` 等）；无法避开时使用 `xxx_type` / `xxx_source` 形式（如 `trigger_type`） |
-| 主键 | 新增表主键一律 `BIGINT` + 应用层雪花 ID，**禁止**新增 `bigserial` 自增主键 |
-
-实施要点：
-
-1. **DB 列改名后 Java 字段必须同步改名**——项目采用 `map-underscore-to-camel-case: true`，不能靠 `@TableField(value="旧列名")` 挂旧名。
-2. **DTO 字段保持稳定**——API 契约不因 entity 改名而变；`AgentResponse.lastSeenAt`、`SubTaskResponse.assignedAgent` 等仍保留旧名，entity→DTO 装配点显式 `response.setXxx(entity.getNewName())`。
-3. **MyBatis-Plus 自定义 XML 需手改两处**：SQL 裸列名 + `#{et.xxx}` OGNL 引用（IDEA Rename Field **不会**联动）。
-4. **Java 端裸列名 UpdateWrapper 字符串**也需手改（项目内唯一已知位置：`AgentHealthCheckTask` L138-139 UpdateWrapper）。
-5. **PG `RENAME COLUMN` 自动更新**引用该列的索引 / 约束定义，本项目 4 个索引（`idx_agent_command_outbox_pending_scan` / `idx_agent_command_outbox_sent_scan` / `idx_exec_record_pending_attempt` / `idx_agent_external_failure_scan`）无需重建；列注释随列保留。
-6. 迁移文件管理按 9.4 执行（历史脚本冻结、新建 `V_NN__<用途>.sql`）。
-7. **变更残留检查范围（强制）**：字段改名 / 包重构完成后，旧名残留 grep 的检查范围 = **Java 源码 + mapper XML + `scripts/`（PowerShell 与 shell 验证脚本）+ `doc/`**。scripts 不参与编译启动，是残留高发区；消息契约除外——jsonb payload 内的键名（如 `trigger`）属域对象序列化契约，不随 DB 列改名。
-
----
-
-## 10. Outbox 事务性消息规范
-
-### 10.1 核心思路
-
-业务操作与事件写入同一本地事务，确保一致性。Outbox 表由定时任务补偿发送。
+业务写操作默认：
 
 ```java
 @Transactional(rollbackFor = Exception.class)
-public void changeStatus(Long subTaskId, SubTaskStatus newStatus, Long agentId) {
-    // 1. 业务操作
-    subTask.setStatus(newStatus);
-    updateById(subTask);
-
-    // 2. 同事务写入 Outbox 事件（关键！）
-    AgentOutboxEvent outbox = new AgentOutboxEvent();
-    outbox.setEventId(UUID.randomUUID().toString().replace("-", ""));
-    outbox.setEventType("sub_task." + newStatus.name().toLowerCase());
-    outbox.setRoutingKey(resolveRoutingKey(newStatus));
-    outbox.setPayload(buildPayload(subTask, newStatus));
-    outbox.setStatus(OutboxStatus.PENDING);
-    outboxEventMapper.insert(outbox);
-
-    // 3. 尝试立即发布（失败不影响事务）
-    try {
-        eventPublisher.publish(outbox.getRoutingKey(), outbox.getPayload());
-        outbox.setStatus(OutboxStatus.SUCCESS);
-        outboxEventMapper.updateById(outbox);
-    } catch (Exception e) {
-        log.error("发布失败，定时任务将补偿", e);
-    }
-}
 ```
 
-### 10.2 Outbox 状态流转
+事务边界优先放在：
 
-`PENDING(0)` → `SUCCESS(1)` / `FAILED(2)` → 重试 → 超过最大重试次数 → 人工介入
-
-### 10.3 补偿任务
-
-```java
-@Scheduled(fixedRate = 15000) // 15秒
-public void compensate() {
-    // 查询 PENDING 且超过一定时间的记录
-    // 重新发送 MQ
-    // 更新状态或增加重试计数
-}
+```text
+Service
 ```
 
 ---
 
-## 11. 消息队列编码规范
+## 14.2 哪些操作必须考虑事务
 
-### 11.1 Exchange / Queue / RoutingKey 命名
+以下场景必须使用事务：
 
+```text
+多表写入
+状态变化 + 业务记录
+业务写入 + Outbox
+多实体一致性更新
+跨 Service 的同一业务事务
 ```
-Exchange:   helloai.{角色}.exchange
-Queue:      helloai.{角色}.queue
-RoutingKey: agent.{角色}.{动作}
-DLX:        helloai.dlx.exchange
-DLQ:        helloai.dlx.queue
-```
-
-项目实际命名：
-
-| 名称 | 值 |
-|------|------|
-| AGENT_TOPIC_EXCHANGE | `helloai.agent.exchange` |
-| DLX_EXCHANGE | `helloai.dlx.exchange` |
-| EXECUTOR_QUEUE | `helloai.executor.queue` |
-| REVIEWER_QUEUE | `helloai.reviewer.queue` |
-| PLANNER_QUEUE | `helloai.planner.queue` |
-| DLX_QUEUE | `helloai.dlx.queue` |
-
-### 11.2 队列配置要点
-
-```java
-@Bean
-public Queue executorQueue() {
-    return QueueBuilder.durable(EXECUTOR_QUEUE)
-        .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
-        .withArgument("x-dead-letter-routing-key", DLX_QUEUE)
-        .build();
-}
-```
-
-**关键配置：**
-- 所有业务队列**必须绑定 DLX**（死信交换机）
-- Publisher Confirm + Mandatory 模式
-- Consumer ACK 模式：MANUAL（手动确认）
-
-### 11.3 幂等消费者编写规范
-
-所有消费者**必须继承 `AbstractIdempotentConsumer`**，提供 Redis + DB 双层去重：
-
-```java
-@Component
-@RabbitListener(queues = RabbitMQConfig.EXECUTOR_QUEUE, ackMode = "MANUAL")
-public class ExecutorEventConsumer extends AbstractIdempotentConsumer {
-
-    public ExecutorEventConsumer(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper,
-                                 MessageDeduplicationService deduplicationService) {
-        super(jdbcTemplate, objectMapper, deduplicationService);
-    }
-
-    @RabbitHandler
-    public void onMessage(String payload) {
-        String messageId = extractMessageId(payload);
-
-        tryConsume(messageId, "ExecutorEventConsumer", () -> {
-            // 业务逻辑
-        });
-    }
-}
-```
-
-### 11.4 消费顺序（防 ACK 丢失）
-
-```java
-// 正确顺序：
-// 1. 插入 agent_execution_record（PENDING）
-// 2. channel.basicAck()（ACK）
-// 3. 提交线程池异步执行
-// 4. 更新 execution_record（RUNNING）
-// 5. AI 执行
-// 6. 更新 execution_record（SUCCESS/FAILED）
-```
-
-> ⚠️ **绝对禁止先 ACK 再持久化**。ACK 后 JVM 崩溃，消息永久丢失且无法追踪。
 
 ---
 
-## 12. 分布式锁编码规范
+## 14.3 单语句写操作
 
-### 12.1 锁选型铁律（V1.16 重写）
+如果是：
 
-【必须】分布式锁只允许两种实现，**禁止新增手写 setIfAbsent 锁**：
+```text
+单实体
+单条 UPDATE / DELETE
+不存在跨实体一致性要求
+```
 
-1. 定时任务单例锁（@Scheduled 防多实例并发）→ ShedLock `@SchedulerLock`；
-2. 业务互斥锁（动态 key / 请求级并发互斥）→ Redisson `RLock`。
+可以根据实际情况不增加事务。
 
-> V1.16 前本节为 `RedisLockUtil` 封装 + `scheduler:lock:` 手写 setIfAbsent 口径（代码中不存在该工具类，属文档失真）；V1.16 起按 §3.y 选型铁律并入口径：两类锁各用各的库，由库本身保证持锁校验，结构上消除"无条件 delete 误删他人锁"隐患。依赖与版本见 §2 版本表。
+但必须确保：
 
-### 12.2 ShedLock 定时任务锁（§3.y 细则）
+```text
+不存在依赖当前事务边界的后续操作。
+```
 
-模板：
+如果该方法要求：
+
+```text
+必须在调用方事务内执行
+```
+
+必须在接口 / Javadoc 明确说明。
+
+---
+
+## 14.4 不允许滥用事务
+
+不要：
+
+```text
+@Transactional
+public void querySomething() {
+}
+```
+
+只读查询默认不增加事务。
+
+---
+
+# 15. 乐观锁
+
+使用：
+
+```java
+@Version
+```
+
+更新优先：
+
+```java
+updateById(entity)
+```
+
+禁止手动：
+
+```sql
+version = version + 1
+```
+
+禁止绕过 MyBatis-Plus 乐观锁机制。
+
+---
+
+# 16. 数据库规范
+
+数据库：
+
+```text
+PostgreSQL
+```
+
+时间字段优先：
+
+```text
+timestamptz
+```
+
+Java：
+
+```text
+OffsetDateTime
+```
+
+---
+
+## 16.1 Flyway
+
+数据库结构变更必须使用：
+
+```text
+Flyway migration
+```
+
+禁止直接修改已经执行过的历史 migration。
+
+正确方式：
+
+```text
+V23__xxx.sql
+V24__new_change.sql
+```
+
+版本号必须递增。
+
+---
+
+## 16.2 数据库命名
+
+推荐：
+
+```text
+snake_case
+```
+
+例如：
+
+```text
+sub_task
+execution_record
+review_record
+```
+
+---
+
+## 16.3 JSONB
+
+JSONB 映射：
+
+```java
+@TableField(typeHandler = JacksonTypeHandler.class)
+private Map<String, Object> context;
+```
+
+或者：
+
+```java
+@TableField(typeHandler = JacksonTypeHandler.class)
+private XxxContext context;
+```
+
+优先使用：
+
+```text
+类型安全对象
+```
+
+而不是全部使用：
+
+```text
+String
+```
+
+---
+
+# 17. MyBatis / Mapper
+
+Mapper 只负责：
+
+```text
+数据库访问
+SQL
+持久化映射
+```
+
+业务逻辑放：
+
+```text
+Service
+```
+
+禁止：
+
+```text
+Mapper 中编排业务流程
+```
+
+禁止：
+
+```text
+跨域 Service 直接调用其他域 Mapper
+```
+
+---
+
+# 18. 查询规范
+
+查询必须考虑：
+
+```text
+数据量
+索引
+分页
+N+1
+批量查询
+```
+
+尤其禁止：
+
+```java
+for (...) {
+xxxMapper.select...
+        }
+```
+
+如果数据量可能较大：
+
+```text
+优先批量查询
+```
+
+例如：
+
+```text
+提取唯一 ID
+    ↓
+IN 查询
+    ↓
+Map 分组
+    ↓
+回填结果
+```
+
+---
+
+# 19. N+1 查询
+
+以下模式必须警惕：
+
+```text
+查询 100 条主记录
+        ↓
+循环查询 100 次子表
+```
+
+优先：
+
+```text
+主表查询
+    ↓
+提取 ID
+    ↓
+批量查询子表
+    ↓
+Map 分组
+    ↓
+组装
+```
+
+如果确实只能逐条查询：
+
+```text
+必须有明确理由。
+```
+
+---
+
+# 20. Redis
+
+Redis 用于：
+
+```text
+缓存
+上下文
+去重
+临时状态
+分布式锁底层存储
+```
+
+禁止把 Redis 当成：
+
+```text
+关系数据库
+```
+
+---
+
+## 20.1 Key
+
+统一使用：
+
+```text
+helloai:{domain}:{resource}:{id}
+```
+
+示例：
+
+```text
+helloai:context:subtask:123
+```
+
+---
+
+## 20.2 TTL
+
+临时数据必须设置 TTL。
+
+禁止新增：
+
+```text
+永不过期临时 Key
+```
+
+除非有明确设计。
+
+---
+
+# 21. 分布式锁
+
+当前只允许两类实现：
+
+```text
+定时任务单例锁 → ShedLock
+业务互斥锁     → Redisson RLock
+```
+
+禁止新增：
+
+```text
+RedisTemplate.setIfAbsent
+```
+
+手写分布式锁。
+
+---
+
+## 21.1 ShedLock
+
+用于：
+
+```text
+@Scheduled
+```
+
+防止多实例重复执行。
+
+示例：
 
 ```java
 @Scheduled(fixedRate = 30_000)
-@SchedulerLock(name = "subTaskTimeout", lockAtMostFor = "PT60S")
+@SchedulerLock(
+        name = "subTaskTimeout",
+        lockAtMostFor = "PT60S"
+)
 public void scan() {
-    // 业务逻辑（不再有 tryLock / unlock / token / Lua 仪式）
 }
 ```
 
 规则：
 
-- `name` 用任务名（与任务类名驼峰对应），`lockAtMostFor` = 原 TTL 口径，`lockAtLeastFor` **不设**；
-- 锁存储 Redis，key 前缀 `helloai:schedlock:`（helloai-start `ShedLockConfig` 统一装配，`RedisLockProvider` 复用 Lettuce 连接，不新增客户端；自动包装既有 taskScheduler Bean，无需改调度配置）；
-- 已迁移 11 任务对照表（§6.163）：assignedSubTaskTimeout/PT60S、agentEventCompensation/PT30S、agentHealthCheck/PT55S、dutyLeaseExpiration/PT60S、executionCompensation/PT60S、externalAgentFallback/PT60S、outboxRelay/PT30S、planningTimeout/PT60S、reviewerRecheck/PT300S、subTaskPendingOrphan/PT60S、subTaskTimeout/PT60S；
-- **豁免清单见 §3.y 第 4 条**（5 个多实例并行无害的任务；新增 @Scheduled 先对照归口表）。
+```text
+name 使用稳定任务名
+lockAtMostFor 必须合理
+不要自行实现 token + unlock
+```
 
-### 12.3 Redisson 业务互斥锁（§3.y 细则）
+---
 
-模板（review 锁，SubTaskReviewServiceImpl）：
+## 21.2 Redisson
+
+用于：
+
+```text
+业务级互斥
+请求级互斥
+动态 key
+```
+
+示例：
 
 ```java
 RLock lock = redissonClient.getLock("review:lock:" + subTaskId);
+
 if (!lock.tryLock(0, 120, TimeUnit.SECONDS)) {
-    return; // 抢不到立即跳过，保持既有语义，不引入等待
-}
-try {
-    // 核验逻辑（LLM 双审窗口）
-} finally {
-    // 防御持锁期间超时丢锁：unlock 前先校验持有，finally 不炸
-    if (lock.isHeldByCurrentThread()) {
+        return;
+        }
+
+        try {
+        // business
+        } finally {
+        if (lock.isHeldByCurrentThread()) {
         lock.unlock();
     }
-}
+            }
+```
+
+原则：
+
+```text
+显式 leaseTime
+```
+
+禁止无明确理由使用：
+
+```java
+lock.lock();
+```
+
+---
+
+# 22. 定时任务
+
+定时任务统一放：
+
+```text
+helloai-job
 ```
 
 规则：
 
-- **一律 `tryLock(0, leaseTime, unit)` 并显式传 leaseTime**；【禁止】裸 `lock()` / `tryLock()` 不带 leaseTime——看门狗自动续期会改变"崩溃残留自动过期"的既有语义（review 锁 TTL=120s 与双审 deadline 90s 的配合依赖该语义，§6.142）；
-- 释放仅 `unlock()`，持锁校验由 RLock 保证（结构上不可能误删他人锁）；
-- `RedisTemplate` 仅保留缓存/会话/队列用途，不承担锁职责。
+```text
+@Scheduled
++
+ShedLock（除非属于明确豁免任务）
++
+幂等
++
+可观测日志
+```
 
-### 12.4 锁键命名
+定时任务不得：
 
-| 类型 | key 格式 |
-|------|----------|
-| ShedLock 定时任务锁 | `helloai:schedlock:{name}`（Redis，LockProvider 自动管理，勿手动操作） |
-| Redisson 业务锁 | `{业务}:lock:{动态Id}`（如 `review:lock:{subTaskId}`，前缀常量类、全小写 + 冒号） |
+```text
+直接操作业务 Mapper
+```
+
+应该：
+
+```text
+Job
+ ↓
+Service
+```
 
 ---
 
-## 13. 异常处理规范
+# 23. RabbitMQ
 
-### 13.1 异常体系
+MQ 用于：
 
+```text
+异步解耦
+跨域事件
+Agent 调度
+执行结果
+补偿
+通知
 ```
-RuntimeException
-└── BizException(code, msg)    -- 业务异常（可预期）
-    ├── code = 500（默认）
-    └── code = 自定义业务码
+
+---
+
+## 23.1 Producer
+
+消息发送必须考虑：
+
+```text
+消息 ID
+Publisher Confirm
+Mandatory
+失败处理
+幂等
 ```
 
-### 13.2 使用方式
+---
+
+## 23.2 Consumer
+
+Consumer 必须考虑：
+
+```text
+幂等
+ACK
+异常
+重试
+DLX
+```
+
+当前消费者统一使用：
+
+```text
+AbstractIdempotentConsumer
+```
+
+或项目已有等价基础能力。
+
+---
+
+## 23.3 ACK
+
+核心原则：
+
+> **消息不能在业务状态无法恢复之前被 ACK。**
+
+当前执行链必须保持：
+
+```text
+持久化必要的执行记录
+        ↓
+ACK
+        ↓
+异步执行
+        ↓
+更新 execution_record
+```
+
+禁止：
+
+```text
+先 ACK
+    ↓
+再持久化唯一业务记录
+```
+
+否则 JVM 在中间崩溃可能导致：
+
+```text
+消息丢失
+且无法追踪
+```
+
+---
+
+# 24. Outbox
+
+涉及：
+
+```text
+数据库业务变更
++
+MQ 事件
+```
+
+必须优先考虑 Outbox。
+
+正确模式：
+
+```text
+业务变更
+   +
+Outbox Event
+   ↓
+同一数据库事务
+   ↓
+提交
+   ↓
+异步 Relay
+   ↓
+RabbitMQ
+```
+
+---
+
+## 24.1 禁止
+
+禁止：
+
+```text
+业务事务提交
+    ↓
+再直接发送 MQ
+```
+
+如果 MQ 发送失败：
+
+```text
+数据库已经成功
+消息却丢失
+```
+
+---
+
+# 25. Outbox 状态
+
+推荐：
+
+```text
+PENDING
+   ↓
+SUCCESS
+```
+
+失败：
+
+```text
+PENDING
+   ↓
+FAILED
+   ↓
+重试
+   ↓
+人工介入
+```
+
+Outbox 补偿任务必须：
+
+```text
+幂等
+可重复执行
+可观测
+```
+
+---
+
+# 26. 异常处理
+
+业务异常：
 
 ```java
-// 简洁形式
-throw new BizException("子任务不存在");
-
-// 带错误码
-throw new BizException(4001, "并发修改，请重试");
-
-// 资源校验模式
-SubTask subTask = subTaskMapper.selectById(subTaskId);
-if (subTask == null) {
-    throw new BizException("子任务不存在: " + subTaskId);
-}
+throw new BizException("xxx");
 ```
 
-### 13.3 禁止事项
+统一由：
 
-- ❌ 不要 `catch (Exception e)` 后吞掉异常不处理
-- ❌ 不要在 Controller 层手动 try-catch 返回 R.fail（交给全局异常处理器）
-- ❌ 不要抛出 checked exception（如 `throws IOException`）
-- ✅ 业务校验失败统一抛 `BizException`
-- ✅ JSON 序列化异常包装为 `RuntimeException` 抛出
+```text
+GlobalExceptionHandler
+```
 
----
+处理。
 
-## 14. 日志与链路追踪规范
-
-### 14.1 日志框架
-
-- 使用 SLF4J + Logback
-- Logger 声明：`private static final Logger log = LoggerFactory.getLogger(当前类.class);`
-
-### 14.2 日志级别使用
-
-| 级别 | 场景 |
-|------|------|
-| ERROR | 系统异常、不可恢复错误、AI API 调用失败 |
-| WARN | 可恢复异常、降级操作、Outbox 补偿失败、执行记录超时 |
-| INFO | 关键业务节点（任务创建/状态变更/审查完成/积分变动） |
-| DEBUG | 锁获取/释放、详细中间状态、Prompt 模板渲染 |
-
-### 14.3 日志内容规范
+Controller 不应：
 
 ```java
-// ✅ 包含关键业务标识
-log.info("任务状态变更: subTaskId={}, from={}, to={}, agentId={}", 
-    subTaskId, oldStatus, newStatus, agentId);
-log.info("审查完成: subTaskId={}, result={}, score={}", 
-    subTaskId, reviewResult, score);
-log.warn("Execution PENDING timeout: eventId={}, subTaskId={}", 
-    eventId, subTaskId);
-log.error("AI 调用失败: subTaskId={}, model={}, error={}", 
-    subTaskId, modelType, e.getMessage());
-
-// ❌ 缺少业务标识
-log.info("任务完成");
-log.error("发送失败");
+try {
+        ...
+        } catch (BizException e) {
+        }
 ```
 
-### 14.4 链路追踪
-
-- 使用 `traceId` 贯穿请求全链路
-- `RequestLogInterceptor` 生成 traceId，放入 MDC
-- 所有日志自动携带 traceId
-- AI 调用时 traceId 传入 Prompt，便于追踪
+除非存在明确的协议转换需求。
 
 ---
 
-## 15. 定时任务编码规范
+# 27. 日志
 
-### 15.1 任务放置位置
+日志必须包含能够定位业务上下文的字段。
 
-所有定时任务统一放在 `helloai-job` 模块的 `task` 包下。
+例如：
 
-### 15.2 编写规范
+```text
+subTaskId
+taskId
+agentId
+executionId
+eventId
+traceId
+```
 
-- 使用 `@Scheduled` 注解
-- 任务内加 Redis 分布式锁防并发
-- 幂等设计（重复执行不产生副作用）
-- 记录开始/结束日志
+推荐：
 
-### 15.3 典型场景
+```java
+log.info(
+    "任务状态变更: subTaskId={}, from={}, to={}, agentId={}",
+    subTaskId,
+    oldStatus,
+    newStatus,
+    agentId
+    );
+```
 
-| 任务 | 功能 | 间隔 |
-|------|------|------|
-| AgentEventCompensationTask | 重试发送 PENDING 状态的 Outbox 事件 | 15s |
-| AgentNotifyRetryTask | 阶梯退避重试通知 | 10s |
-| SubTaskTimeoutTask | 检查超时子任务，触发 BLOCKED | 30s |
-| AgentHealthCheckTask | 检查 Agent 健康状态 | 60s |
-| **ExecutionCompensationTask** | **扫描 PENDING/RUNNING 超时执行记录** | **30s** |
+禁止只有：
 
-### 15.4 线程池参数化（关键）
+```text
+任务完成
+发送失败
+执行失败
+```
 
-Agent 驱动层的线程池参数外置到 `application.yml`：
+这种无法定位上下文的日志。
+
+---
+
+# 28. 日志级别
+
+```text
+INFO
+正常业务生命周期
+
+WARN
+可恢复异常 / 降级 / 重试 / 数据异常
+
+ERROR
+真正需要关注的失败
+```
+
+禁止：
+
+```text
+正常重试
+正常 fallback
+正常用户输入错误
+```
+
+全部使用 ERROR。
+
+---
+
+# 29. TraceId
+
+请求链路使用：
+
+```text
+traceId
+```
+
+并通过：
+
+```text
+MDC
+```
+
+进入日志。
+
+异步任务 / MQ / Agent 执行链路必须尽量保持：
+
+```text
+traceId
++
+业务 ID
+```
+
+可追踪。
+
+---
+
+# 30. Agent 架构
+
+Agent 层是 HelloAI 的核心能力之一。
+
+基本链路：
+
+```text
+Planner
+   ↓
+Task / SubTask
+   ↓
+Agent Dispatcher
+   ↓
+Agent Executor
+   ↓
+AI Model / MCP / Tool
+   ↓
+Execution Record
+   ↓
+Callback
+   ↓
+Task State
+   ↓
+Review
+```
+
+---
+
+## 30.1 AgentExecutor
+
+负责：
+
+```text
+执行 AgentTask
+调用具体 Agent 能力
+返回 AgentResult
+```
+
+不负责：
+
+```text
+Task 状态机
+Review 业务逻辑
+Planner 决策
+```
+
+---
+
+## 30.2 AgentRouter
+
+负责：
+
+```text
+根据角色 / 能力选择 Agent
+```
+
+不要把：
+
+```text
+业务状态判断
+```
+
+全部塞进 Router。
+
+---
+
+## 30.3 AgentTask
+
+用于描述：
+
+```text
+subTaskId
+role
+prompt
+context
+workingDir
+```
+
+原则：
+
+> AgentTask 是执行输入，不承担业务状态。
+
+---
+
+## 30.4 AgentResult
+
+用于描述：
+
+```text
+output
+tokenUsage
+errorMsg
+finishReason
+```
+
+执行结果和业务状态更新分离。
+
+---
+
+# 31. Planner
+
+Planner 负责：
+
+```text
+需求理解
+需求澄清
+任务规划
+任务拆解
+Agent 选择
+搜索
+```
+
+Planner 不负责：
+
+```text
+真正执行代码
+直接修改任务执行结果
+Review
+```
+
+---
+
+# 32. Planner Chat
+
+Planner Chat 的职责：
+
+```text
+用户
+ ↓
+对话
+ ↓
+需求理解
+ ↓
+必要时澄清
+ ↓
+形成可执行需求
+```
+
+如果增加输入优化能力：
+
+```text
+用户当前输入
+      ↓
+PromptEnhancer
+      ↓
+优化结果
+      ↓
+用户确认
+      ↓
+Planner Chat
+```
+
+---
+
+## 32.1 PromptEnhancer
+
+PromptEnhancer 只做：
+
+> **当前用户输入的语义增强和结构化表达。**
+
+输入：
+
+```text
+当前用户输入
+```
+
+输出：
+
+```text
+优化后的用户输入
+```
+
+第一阶段：
+
+```text
+不读取完整 Conversation
+不调用 MCP
+不查询数据库
+不执行代码
+不执行 Planner
+不创建 Task
+```
+
+---
+
+## 32.2 PromptEnhancer 的语义保护
+
+优化过程中：
+
+```text
+不能改变用户明确表达的业务含义。
+```
+
+禁止：
+
+```text
+用户：最低底价
+
+优化后：
+qualityStatus
+```
+
+禁止擅自创造：
+
+```text
+数据库表
+字段
+接口
+路径
+业务规则
+```
+
+允许：
+
+```text
+结构化
+补充表达
+整理业务逻辑
+整理边界条件
+提出待确认事项
+```
+
+---
+
+# 33. Reviewer
+
+Reviewer 负责：
+
+```text
+结果核验
+代码审查
+质量判断
+返工建议
+Review Record
+```
+
+Reviewer 不负责：
+
+```text
+Planner 任务拆解
+Agent 执行
+用户输入优化
+```
+
+---
+
+# 34. MCP
+
+MCP 是：
+
+```text
+外部工具 / 外部能力接入协议
+```
+
+MCP 的使用必须由业务 Agent / Planner / Executor 根据任务需要决定。
+
+禁止：
+
+```text
+PromptEnhancer
+    ↓
+直接执行 MCP
+```
+
+Prompt 中可以表达：
+
+```text
+可以使用 postgres_oa MCP 查询数据库校验。
+```
+
+但：
+
+```text
+“描述需要使用工具”
+```
+
+与：
+
+```text
+“实际执行工具”
+```
+
+必须严格区分。
+
+---
+
+# 35. Skill
+
+Skill 用于：
+
+```text
+角色能力说明
+Prompt 约束
+领域知识
+操作规范
+```
+
+Skill 不等同于：
+
+```text
+Java Service
+```
+
+也不应该把大量业务逻辑直接写入 Skill。
+
+如果逻辑需要：
+
+```text
+事务
+数据库
+状态机
+权限
+一致性
+```
+
+应该落到代码中。
+
+---
+
+# 36. LLM Provider
+
+LLM Provider 属于：
+
+```text
+system
+```
+
+负责：
+
+```text
+模型配置
+Provider 信息
+模型信息
+平台级 LLM 配置
+```
+
+具体 Agent 使用什么模型：
+
+```text
+由 Agent / Router / 配置策略决定
+```
+
+禁止在业务代码中大量硬编码：
+
+```text
+model = "xxx"
+```
+
+---
+
+# 37. LLM 调用规范
+
+LLM 调用必须考虑：
+
+```text
+timeout
+异常
+重试
+token
+模型
+traceId
+上下文
+```
+
+AI 调用失败不能导致：
+
+```text
+业务线程永久阻塞
+```
+
+必须有：
+
+```text
+合理 timeout
+```
+
+---
+
+# 38. Prompt 规范
+
+Prompt 分为：
+
+```text
+System Prompt
+User Prompt
+Context
+Tool Description
+```
+
+原则：
+
+```text
+职责单一
+变量明确
+避免隐式上下文
+不要把业务规则散落在 Java 字符串中
+```
+
+复杂 Prompt 应优先：
+
+```text
+独立资源文件
+```
+
+或：
+
+```text
+独立 Prompt Template
+```
+
+而不是在 Service 中拼接几百行字符串。
+
+---
+
+# 39. Resource 规范
+
+资源文件：
+
+```text
+helloai-core/src/main/resources
+```
+
+典型：
+
+```text
+mapper/
+scripts/
+skills/
+prompt/
+```
+
+读取资源：
+
+```text
+ClassPathResource
+```
+
+禁止：
+
+```text
+硬编码本机绝对路径
+```
+
+例如：
+
+```text
+E:\workspace\...
+/Users/xxx/...
+```
+
+---
+
+# 40. 配置规范
+
+配置类：
+
+```java
+@ConfigurationProperties
+```
+
+命名：
+
+```text
+XxxProperties
+```
+
+例如：
+
+```text
+AgentProviderProperties
+MossThreadPoolProperties
+ReviewProperties
+```
+
+配置前缀：
+
+```text
+小写 + 点号
+```
+
+例如：
 
 ```yaml
-moss:
-  thread:
-    pool:
-      core-size: 8          # 核心线程数
-      max-size: 64          # 最大线程数（线上可调至 128/256）
-      queue-capacity: 1000  # 队列容量
-      keep-alive-seconds: 60 # 空闲线程存活时间
-```
-
-> ⚠️ **生产环境建议初始 `max-size: 128`**。如果 CPU 闲置但任务堆积，直接改配置重启，无需改代码。
-
----
-
-## 16. Agent 驱动层编码规范
-
-### 16.1 模块结构
-
-```
-helloai-core/agent/
-├── domain/
-│   ├── AgentTask.java              # 任务封装：subTaskId, role, prompt, context, workingDir
-│   └── AgentResult.java            # 结果封装：output, tokenUsage, errorMsg, finishReason
-├── executor/
-│   ├── AgentExecutor.java          # 接口：execute(AgentTask) → CompletableFuture<AgentResult>
-│   ├── CodexExecutor.java          # Codex 实现（OpenAI API）
-│   ├── ClaudeExecutor.java         # Claude 实现（Anthropic API）
-│   └── AgentRouter.java            # 按角色路由模型
-├── prompt/
-│   └── PromptTemplateEngine.java   # Prompt 模板引擎（从 rule 表读取模板）
-├── callback/
-│   └── AgentCallbackHandler.java   # 统一回调处理，驱动状态机
-├── context/
-│   └── ContextManager.java         # 对话历史管理（Redis 主存 + PostgreSQL/归档表）
-└── mqconsumer/
-    ├── ExecutorEventConsumer.java  # 消费 executor 队列
-    ├── ReviewerEventConsumer.java  # 消费 reviewer 队列
-    └── PlannerEventConsumer.java   # 消费 planner 队列
-```
-
-### 16.2 消费顺序（强制规范）
-
-```java
-@RabbitListener(queues = EXECUTOR_QUEUE, ackMode = "MANUAL")
-public void onMessage(Message message, Channel channel, long tag) {
-    // 1. 先插入 agent_execution_record（PENDING）
-    // 2. ACK（channel.basicAck）
-    // 3. 提交线程池异步执行
-    // 4. 更新 execution_record（RUNNING）
-    // 5. 调用 AI API（120s 超时）
-    // 6. 回调处理
-    // 7. 更新 execution_record（SUCCESS/FAILED）
-}
-```
-
-> ⚠️ **步骤 1 必须在 ACK 之前完成**。如果先 ACK 再插入记录，JVM 崩溃后消息丢失且无法追踪。
-
-### 16.3 AI 调用超时控制
-
-```java
-// 虚拟线程内同步等待（JDK 17 用平台线程池）
-AgentResult result = agentExecutor.execute(task).get(120, TimeUnit.SECONDS);
-```
-
-- 超时：120 秒
-- 超时后：标记 execution_record 为 FAILED，触发 SubTask BLOCKED
-- 重试：指数退避，最多 3 次
-
-### 16.4 模型路由策略
-
-| 角色 | 模型 | 理由 |
-|------|------|------|
-| PLANNER | Claude Opus | 强推理能力，适合任务分解 |
-| EXECUTOR | Codex | 代码生成能力最强 |
-| REVIEWER | Claude Sonnet | 代码审查，平衡性能与成本 |
-
-### 16.5 上下文管理
-
-```java
-@Service
-@RequiredArgsConstructor
-public class ContextManager {
-
-    private final StringRedisTemplate redis;
-
-    // 热数据：Redis，活跃任务上下文
-    public void appendMessage(Long subTaskId, String role, String content) {
-        String key = "helloai:context:" + subTaskId;
-        // ... 写入 Redis List，TTL 24h
-    }
-
-    // 冷归档：任务完成后异步写入 PostgreSQL / 对应归档表
-    public void archiveOnComplete(Long subTaskId) {
-        // ... 读取 Redis → 写入 conversation_archive → 删除 Redis
-    }
-}
+helloai:
+   agent:
+      ...
 ```
 
 ---
 
-## 17. 代码模板（附录）
+# 41. 配置默认值
 
-> **注意**: 本章为快速拷贝模板，内容与正文第 5-7 章、第 15 章有重叠。**正文规范优先于模板**——模板仅作参考，实际编码以正文规范为准。
+新增配置：
 
-### 17.1 Entity 模板
-
-```java
-package com.helloai.core.{domain}.entity;
-
-import com.baomidou.mybatisplus.annotation.TableName;
-import com.baomidou.mybatisplus.annotation.TableField;
-import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
-import com.helloai.common.base.BaseEntity;
-import lombok.Data;
-import lombok.EqualsAndHashCode;
-
-import java.time.OffsetDateTime;
-import java.util.Map;
-
-@Data
-@EqualsAndHashCode(callSuper = true)
-@TableName("{table_name}")
-public class {Name} extends BaseEntity {
-    // 只写业务字段，BaseEntity 已含 id/deleted/createBy/updateBy/createTime/updateTime/remark
-
-    private Long taskId;
-    private String title;
-
-    @TableField(typeHandler = JacksonTypeHandler.class)
-    private Map<String, Object> context;
-
-    private OffsetDateTime deadline;
-}
+```text
+尽量提供合理默认值。
 ```
 
-### 17.2 DTO 模板
+但以下情况除外：
 
-```java
-package com.helloai.api.dto.{domain};
-
-import lombok.Data;
-import java.time.OffsetDateTime;
-
-@Data
-public class {Name}Response {
-    private Long id;
-    private String title;
-    private String status;
-    private OffsetDateTime createTime;
-}
+```text
+缺失配置必须阻止应用启动
 ```
 
-### 17.3 Controller 模板
+例如：
 
-```java
-package com.helloai.api.controller;
-
-import com.helloai.common.base.R;
-import com.helloai.api.dto.{domain}.{Name}Response;
-import com.helloai.core.{domain}.service.{Name}Service;
-import lombok.RequiredArgsConstructor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.web.bind.annotation.*;
-
-@RestController
-@RequestMapping("/api/{name}s")
-@RequiredArgsConstructor
-public class {Name}Controller {
-
-    private static final Logger log = LoggerFactory.getLogger({Name}Controller.class);
-    private final {Name}Service service;
-
-    @PostMapping("/changeStatusById/{id}")
-    public R<Void> changeStatus(@PathVariable Long id, @RequestBody ChangeStatusRequest request) {
-        service.changeStatus(id, request.getNewStatus(), request.getAgentId());
-        log.info("{} status changed: id={}, status={}", "{Name}", id, request.getNewStatus());
-        return R.ok();
-    }
-
-    @GetMapping("/getById/{id}")
-    public R<{Name}Response> getById(@PathVariable Long id) {
-        return R.ok(service.getResponseById(id));
-    }
-}
+```text
+生产环境必须配置的 Secret
 ```
 
-### 17.4 ServiceImpl 模板
+不得使用：
 
-```java
-package com.helloai.core.{domain}.service;
-
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.helloai.common.base.BizException;
-import com.helloai.core.{domain}.entity.{Name};
-import com.helloai.core.{domain}.mapper.{Name}Mapper;
-import lombok.RequiredArgsConstructor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-
-@Service
-@RequiredArgsConstructor
-public class {Name}Service extends ServiceImpl<{Name}Mapper, {Name}> {
-
-    private static final Logger log = LoggerFactory.getLogger({Name}Service.class);
-
-    @Transactional(rollbackFor = Exception.class)
-    public void create({Name}Request request) {
-        // 1. 幂等检查
-        // 2. 构造实体
-        // 3. 持久化
-        // 4. 写入 Outbox（如需要）
-        // 5. 返回结果
-    }
-}
+```text
+fake-secret
+123456
 ```
 
-### 17.5 MQ Consumer 模板
+作为默认生产凭据。
 
-```java
-package com.helloai.core.agent.mqconsumer;
+---
 
-import com.helloai.core.agent.callback.AgentCallbackHandler;
-import com.helloai.core.agent.domain.AgentResult;
-import com.helloai.core.agent.domain.AgentTask;
-import com.helloai.core.agent.executor.AgentExecutor;
-import com.helloai.core.agent.executor.AgentRouter;
-import com.helloai.core.agent.entity.AgentExecutionRecord;
-import com.helloai.core.agent.mapper.AgentExecutionRecordMapper;
-import com.helloai.core.task.service.SubTaskService;
-import com.helloai.mq.config.RabbitMQConfig;
-import com.rabbitmq.client.Channel;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.amqp.core.Message;
-import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.amqp.support.AmqpHeaders;
-import org.springframework.messaging.handler.annotation.Header;
-import org.springframework.stereotype.Component;
+# 42. 安全规范
 
-import java.net.InetAddress;
-import java.util.concurrent.*;
+禁止：
 
-@Slf4j
-@Component
-@RequiredArgsConstructor
-public class {Name}EventConsumer {
-
-    private final AgentRouter agentRouter;
-    private final AgentCallbackHandler callbackHandler;
-    private final AgentExecutionRecordMapper executionRecordMapper;
-    private final SubTaskService subTaskService;
-    private final ThreadPoolExecutor executor;  // 从配置注入
-
-    @RabbitListener(queues = RabbitMQConfig.{QUEUE_NAME}, ackMode = "MANUAL")
-    public void onMessage(Message message, Channel channel, 
-                          @Header(AmqpHeaders.DELIVERY_TAG) long tag) {
-        try {
-            AgentEvent event = parseEvent(message);
-
-            // 1. 先持久化 execution_record（PENDING）
-            AgentExecutionRecord record = new AgentExecutionRecord();
-            record.setEventId(event.getEventId());
-            record.setSubTaskId(event.getSubTaskId());
-            record.setStatus(ExecutionStatus.PENDING);
-            record.setWorkerNode(InetAddress.getLocalHost().getHostName());
-            executionRecordMapper.insert(record);
-            Long recordId = record.getId();
-
-            // 2. ACK
-            channel.basicAck(tag, false);
-
-            // 3. 提交线程池
-            executor.submit(() -> {
-                try {
-                    executionRecordMapper.updateStatus(recordId, ExecutionStatus.RUNNING.name(), null);
-
-                    AgentTask task = buildAgentTask(event);
-                    AgentExecutor agentExecutor = agentRouter.route(task.getRole());
-                    AgentResult result = agentExecutor.execute(task).get(120, TimeUnit.SECONDS);
-
-                    callbackHandler.handle(task.getSubTaskId(), result);
-
-                    executionRecordMapper.updateStatus(recordId, ExecutionStatus.SUCCESS.name(), null);
-                } catch (Exception ex) {
-                    log.error("Agent执行失败", ex);
-                    executionRecordMapper.updateStatus(recordId, ExecutionStatus.FAILED.name(), 
-                        ex.getMessage());
-                    subTaskService.changeStatus(event.getSubTaskId(), SubTaskStatus.BLOCKED, null);
-                }
-            });
-        } catch (Exception ex) {
-            log.error("Consumer处理失败", ex);
-            try { channel.basicNack(tag, false, false); } catch (Exception ignored) {}
-        }
-    }
-}
+```text
+密码写入代码
+API Key 写入代码
+Token 写入代码
+数据库密码提交 Git
 ```
 
-### 17.6 状态机模板
+敏感配置：
 
-```java
-package com.helloai.core.task.statemachine;
-
-import com.helloai.common.base.BizException;
-import com.helloai.common.constant.SubTaskStatus;
-
-import java.util.EnumMap;
-import java.util.Map;
-import java.util.Set;
-
-public class SubTaskStateMachine {
-
-    private static final Map<SubTaskStatus, Set<SubTaskStatus>> TRANSITIONS = new EnumMap<>(SubTaskStatus.class);
-
-    static {
-        TRANSITIONS.put(SubTaskStatus.PENDING,     Set.of(SubTaskStatus.ASSIGNED, SubTaskStatus.CANCELLED));
-        TRANSITIONS.put(SubTaskStatus.ASSIGNED,     Set.of(SubTaskStatus.IN_PROGRESS, SubTaskStatus.PENDING));
-        TRANSITIONS.put(SubTaskStatus.IN_PROGRESS,  Set.of(SubTaskStatus.REVIEW, SubTaskStatus.BLOCKED));
-        TRANSITIONS.put(SubTaskStatus.REVIEW,       Set.of(SubTaskStatus.DONE, SubTaskStatus.REWORK));
-        TRANSITIONS.put(SubTaskStatus.REWORK,       Set.of(SubTaskStatus.IN_PROGRESS));
-        TRANSITIONS.put(SubTaskStatus.BLOCKED,      Set.of(SubTaskStatus.PENDING));
-        TRANSITIONS.put(SubTaskStatus.DONE,        Set.of());
-        TRANSITIONS.put(SubTaskStatus.CANCELLED,   Set.of());
-    }
-
-    public static boolean canTransition(SubTaskStatus from, SubTaskStatus to) {
-        Set<SubTaskStatus> allowed = TRANSITIONS.get(from);
-        return allowed != null && allowed.contains(to);
-    }
-
-    public static void validate(SubTaskStatus from, SubTaskStatus to) {
-        if (!canTransition(from, to)) {
-            throw new BizException(String.format("非法状态转换: %s -> %s", from, to));
-        }
-    }
-}
+```text
+application-local.yml
+环境变量
+Secret
 ```
 
-### 17.7 定时任务模板
+具体采用项目现有配置体系。
 
-```java
-package com.helloai.job.task;
+---
 
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.stereotype.Component;
+# 43. 权限规范
 
-import java.util.concurrent.TimeUnit;
+认证与授权分离：
 
-@Slf4j
-@Component
-@RequiredArgsConstructor
-public class {Name}CompensationTask {
+```text
+Authentication
+    ↓
+Authorization
+```
 
-    private final StringRedisTemplate redis;
-    private static final String LOCK_KEY = "scheduler:lock:{Name}";
+`/api/admin/**`：
 
-    @Scheduled(fixedRate = 15000)
-    public void compensate() {
-        if (!tryLock()) return;
-        try {
-            // 补偿逻辑
-        } finally {
-            unlock();
-        }
-    }
+```text
+必须经过 Admin 授权。
+```
 
-    private boolean tryLock() {
-        Boolean acquired = redis.opsForValue().setIfAbsent(LOCK_KEY, "1", 30, TimeUnit.SECONDS);
-        return Boolean.TRUE.equals(acquired);
-    }
+禁止仅因为：
 
-    private void unlock() {
-        redis.delete(LOCK_KEY);
-    }
-}
+```text
+用户已经登录
+```
+
+就允许：
+
+```text
+Admin API
 ```
 
 ---
 
-## 18. 开发高频校验清单（附录）
+# 44. 前端 API 路径
 
-> **用途**: 开发中的速查卡片，按类别分类，适合打印贴在显示器旁。提交前的完整 Checklist 见第 20 章。
+前端 API 路径统一通过：
 
-### 18.1 后端速查
-
-| 类别 | 快速检查 | 参考章节 |
-|------|----------|----------|
-| 文件编码 | `.java` 文件必须是 UTF-8 without BOM，文件首字节直接是 `package` | [1. 总体原则](#1-总体原则) |
-| 实体与主键 | 业务实体继承 `BaseEntity`，关系表不用；ID 使用 `Long + ASSIGN_ID` | [5. 实体类规范](#5-实体类规范) |
-| 自动填充 | 使用 `setFieldValByName`，不手动补 `createTime` / `updateTime` / `deleted` | [5.3 自动填充机制](#53-自动填充机制) |
-| 启动类 | `scanBasePackages` 保持 `"com.helloai"`，`@MapperScan` 显式列出 `core.agent/task/system` 三个 mapper 包 | [3.2 启动类配置](#32-启动类配置) |
-| 数据库连接 | JDBC URL 指向 PostgreSQL，使用 `timestamptz` | [9.2 JDBC 连接配置](#92-jdbc-连接配置) |
-| Controller 与 Service | Controller 只做参数接收、DTO 转换、返回封装；查询默认返回 `Response DTO`；事务放在 Service 层 | [6. Controller 规范](#6-controller-规范)、[7. Service 规范](#7-service-规范) |
-| 接口路径 | 内外双轨：`/api/**` 描述性驼峰（`GET /list`、`POST /page`、`GET /getById/{id}`），`/open/**` kebab-case 资源风；先判前缀再套规则 | [8. 接口路径规范](#8-接口路径规范内外双轨制) |
-| 依赖注入 | 使用构造器注入，非 `@Autowired` 字段注入 | [1. 总体原则](#1-总体原则) |
-| 状态与常量 | 禁止硬编码状态值，统一使用枚举类（`SubTaskStatus`、`AgentRole`） | [4. 命名规范](#4-命名规范)、[17.6 状态机模板](#176-状态机模板) |
-| 事务与一致性 | `@Transactional(rollbackFor = Exception.class)`；Outbox 与业务操作同一事务 | [10. Outbox 事务性消息规范](#10-outbox-事务性消息规范) |
-| MQ 与幂等 | 消费者继承 `AbstractIdempotentConsumer`，队列绑定 DLX，ACK 前插入 execution_record | [11. 消息队列编码规范](#11-消息队列编码规范)、[16.2 消费顺序](#162-消费顺序) |
-| 分布式锁 | 定时任务使用 Redis `setIfAbsent` 分布式锁 | [12. 分布式锁编码规范](#12-分布式锁编码规范) |
-| 乐观锁 | 使用 `@Version` + `updateById`，禁止手动写 `version = version + 1` | [1. 总体原则](#1-总体原则) |
-| JSONB 字段 | 使用 `@TableField(typeHandler = JacksonTypeHandler.class)` | [5.4 JSONB 字段规范](#54-jsonb-字段规范) |
-| 线程池 | Agent 驱动层线程池参数外置到 `application.yml` | [15.4 线程池参数化](#154-线程池参数化) |
-| 日志 | 包含关键业务标识（subTaskId、eventId、agentId） | [14.3 日志内容规范](#143-日志内容规范) |
-
-### 18.2 前端速查
-
-| 类别 | 快速检查 | 参考章节 |
-|------|----------|----------|
-| 页面骨架 | 列表页优先使用 `<el-card>`，Header 保持"标题 + 操作按钮" | [19.1 列表页标准结构](#191-列表页标准结构) |
-| 表格布局 | 表格整体流式，主体数据列 `min-width`，功能列固定 `width` | [19.1 列表页标准结构](#191-列表页标准结构) |
-| 操作列 | 统一 `fixed="right"`，宽度按按钮数量预留 | [19.1 列表页标准结构](#191-列表页标准结构) |
-| 长文本列 | 流水号、事件ID 等统一使用 `show-overflow-tooltip` | [19.1 列表页标准结构](#191-列表页标准结构) |
-| 脚本分区 | `data → computed → filters → created → methods` | [19.2 Script 结构](#192-script-结构) |
-| 样式边界 | 使用 `<style scoped>`，不额外重写页面外层布局 | [19.3 样式规范](#193-样式规范) |
-
----
-
-## 19. Vue 页面规范
-
-### 19.0 前端 API 路径常量准则（V1.10 新增）
-
-【必须】前端请求路径统一引用 `src/api/paths.ts` 导出的 `paths` 常量字典，禁止在 api 模块或页面内联路径字符串：
-
-- 路径按资源分组（tasks / subTasks / agents / setup / admin / attachments / clarifications 等），静态路径直接字符串，带参路径用箭头函数 `(id) => \`/xxx/${enc(id)}\``
-- `enc()` 统一 `encodeURIComponent(String(s))`，调用方禁止重复 `encodeURIComponent`
-- 新增接口路径只改 paths.ts 一处，api 模块与页面全部引用常量
-- 存量 16 个 api 文件已于 2026-08-22 全量收口（评审整改阶段四-3）；防回归：grep 内联 `/api/` 路径字符串应零命中；**2026-08-23 升级为脚本双通道校验 `scripts/powershell/verify-code-style-p1-ui-sync.ps1`**——通道 A：paths.ts 全部路径字面量（含 `${...}` 模板归一）须存在对应后端端点（方法无关）；通道 B：api 文件 request 调用必须引用 `paths.<block>.<key>`，内联路径/未知键/方法不匹配均报违规
-
-理由：路径单一事实源，前后端契约变更只改一处；AI 协作下避免散落字符串漂移。
-
-### 19.1 列表页标准结构
-
-前端使用 Vue 3 + Element Plus，列表页遵循以下约定：
-
-- 列表页优先使用 `<el-card>` 作为根容器，Header 保持"标题 + 右侧操作按钮"的统一结构
-- 表格整体保持流式布局：`<el-table ... style="width:100%">`
-- 主体数据列使用 `min-width`，保证不同分辨率下仍有最小可读宽度
-- 功能列使用固定 `width`，如 `ID`、选择列、状态列、排序列、数量列、操作列
-- 操作列统一 `fixed="right"`，宽度按按钮数量预留，单个按钮通常 `80` 到 `90`
-- 长文本列配合 `show-overflow-tooltip`，如事件ID、Prompt 摘要、路径
-
-```html
-<template>
-   <el-card>
-      <div slot="header">
-         <span><i class="el-icon-s-xxx"></i> 任务列表</span>
-         <el-button size="mini" type="primary" style="float:right" @click="load">刷新</el-button>
-      </div>
-
-      <el-table :data="list" border stripe style="width:100%" v-loading="loading">
-         <el-table-column prop="id" label="ID" width="80" />
-         <el-table-column prop="title" label="标题" min-width="160" show-overflow-tooltip />
-         <el-table-column label="状态" width="100">
-            <template slot-scope="{row}">
-               <el-tag :type="tagMap(row.status)" size="small">{{ row.status }}</el-tag>
-            </template>
-         </el-table-column>
-         <el-table-column label="评分" width="80">
-            <template slot-scope="{row}">
-               <el-tag :type="scoreTagMap(row.scoreGrade)" size="small">{{ row.scoreGrade }}</el-tag>
-            </template>
-         </el-table-column>
-         <el-table-column label="时间" min-width="160" />
-         <el-table-column label="操作" width="120" fixed="right">
-            <template slot-scope="{row}">
-               <el-button size="mini" @click="handleDetail(row)">详情</el-button>
-            </template>
-         </el-table-column>
-      </el-table>
-
-      <!-- 空状态 -->
-      <div v-if="!list.length && !loading" style="text-align:center;padding:60px;color:#909399">
-         <i class="el-icon-s-xxx" style="font-size:64px;display:block;margin-bottom:12px"></i>
-         <p>暂无数据</p>
-      </div>
-
-      <!-- 分页 -->
-      <el-pagination v-if="total > 0" background layout="prev, pager, next" :total="total"
-                     :page-size="20" @current-change="load" style="margin-top:16px;text-align:center" />
-   </el-card>
-</template>
+```text
+helloai-ui/src/api/paths.ts
 ```
 
-### 19.2 Script 结构
+维护。
 
-`<script>` 块按固定顺序分区，导入 → 组件定义 → data → computed → filters → 生命周期 → methods：
+禁止在多个页面中散落：
 
 ```javascript
-<script>
-   import { apiFunction } from '@/api/module'
-
-   export default {
-   // 1. data — 响应式状态
-   data() {
-   return { list: [], total: 0, loading: false }
-},
-   // 2. computed — 派生状态（如 Pinia store getters）
-   computed: {
-   isAdmin() { return this.$store.getters.isAdmin }
-},
-   // 3. filters — 格式化（时间、金额等）
-   filters: {
-   fmt(v) { return v || '-' }
-},
-   // 4. 生命周期 — 初始化加载
-   created() { this.load(1) },
-   // 5. methods — 按功能分组（加载 → 搜索 → 操作 → 工具）
-   methods: {
-   load(page) { /* API 调用 */ },
-   search() { this.load(1) },
-   handleDetail(row) { /* ... */ },
-   tagMap(v) { /* 状态颜色映射 */ },
-   scoreTagMap(v) { /* S/A/B/C/D 颜色映射 */ }
-}
-}
-</script>
+request('/api/xxx')
 ```
 
-### 19.3 样式规范
+新增接口：
 
-- `<style scoped>` — 只用 scoped 样式
-- **不写**外层包装样式（`max-width` / `margin` / `padding`），由 `<el-main>` 统一控制
-- **不写**卡片圆角覆盖（`border-radius`），使用 Element UI 默认
-- 只定义弹窗、特殊布局等页面独有的样式
+```text
+先增加 paths.ts
+再由 API 模块引用。
+```
 
-### 19.4 要素检查清单
+路径参数统一：
 
-| 要素 | 要求 |
-|------|------|
-| 根元素 | `<el-card>`，无外层 div 包装 |
-| Header | `<div slot="header">` — 标题 + 操作按钮 |
-| 表格 | `<el-table border stripe v-loading>` |
-| 表格列宽 | 主体数据列用 `min-width`，功能列用固定 `width` |
-| 操作列 | `fixed="right"`，宽度按按钮数量预留 |
-| 空状态 | `v-if="!list.length && !loading"` — 图标 + 文案 |
-| 分页 | 数据量大时用 `<el-pagination>`，数据少时用刷新按钮 |
-| 弹窗 | `<el-dialog>` + `top="10vh"` |
-| Script 分区 | data → computed → filters → created → methods |
-| 样式 | scoped，不写外层布局 |
+```text
+encodeURIComponent
+```
+
+避免重复编码。
 
 ---
 
-## 20. 新增代码前校验清单
+# 45. 前端 Vue
 
-> **用途**: 提交 PR 前的完整逐项 Checklist。开发中快速查阅用第 18 章速查卡片。
+项目使用：
 
-- [ ] `.java` 文件为 UTF-8 without BOM
-- [ ] 业务实体继承 `BaseEntity` + `@Data` + `@TableName`；关系表不继承 `BaseEntity`，复合主键
-- [ ] 业务实体未重复定义 id/deleted/createBy/updateBy/createTime/updateTime
-- [ ] ID 类型为 Long（雪花），非 String/UUID
-- [ ] 乐观锁使用 `@Version`，禁止手动写 `version = version + 1`
-- [ ] Controller 返回 `R<T>`，Logger 有实际使用
-- [ ] Service 写操作加 `@Transactional(rollbackFor = Exception.class)`
-- [ ] Service 层接口 + impl 成对拆分（`{Name}Service` 在 `{domain}.service`，`{Name}ServiceImpl` 在 `{domain}.service.impl`），跨域/Controller 只依赖接口（v2.8 起）
-- [ ] 使用构造器注入，非 `@Autowired` 字段注入
-- [ ] 启动类 `scanBasePackages = "com.helloai"`
-- [ ] JDBC URL 指向 PostgreSQL，使用 `timestamptz`
-- [ ] 状态值使用枚举类（`SubTaskStatus`、`AgentRole`），不硬编码数字
-- [ ] Outbox 与业务操作同一事务
-- [ ] MQ 消费者先插入 `execution_record` 再 ACK
-- [ ] 定时任务使用 Redis 分布式锁
-- [ ] JSONB 字段使用 `@TableField(typeHandler = JacksonTypeHandler.class)`
-- [ ] 线程池参数外置到 `application.yml`
-- [ ] 日志包含关键业务标识（subTaskId、eventId、agentId）
-- [ ] Vue 列表页：根元素 `<el-card>` + header，表格 `<el-table border stripe>`，空状态占位
-- [ ] Vue 页面：`data()` / `computed` / `filters` / `created()` / `methods` 分区清晰
-- [ ] 状态机转移在 Service 层明确定义 `VALID_TRANSITIONS`，不散落在各方法中
-- [ ] 跨 Service 事务调用使用 `@Transactional(rollbackFor = Exception.class)` 统一管理事务边界
-- [ ] SKILL.md 等静态资源文件放在 `resources/skills/` 下，不硬编码在 Java 代码中
-- [ ] 接口路径先判前缀再套规则：`/api/**` 用描述性驼峰（动作+By+参数名/参数值），`/open/**` 用 kebab-case，两轨禁止混写与双发（见 8.1、8.4）
-- [ ] 对内轨列表用 `GET /list`、分页用 `POST /page`、按 ID 查询用 `GET /getById/{id}`（见 8.2）
-- [ ] 对内轨状态操作端点使用 `POST /{action}ById/{id}` 格式，一个动作对应一个独立方法（见 8.2）
-- [ ] 面向手机端 / 第三方的新增端点一律放 `/open/**`（资源名词复数 + 动作后缀，如 `POST /open/tasks/{id}/dispatch`），不在 `/api/**` 新增对外端点（见 8.3）
+```text
+Vue 3
+Element Plus
+```
+
+页面原则：
+
+```text
+结构清晰
+状态明确
+API 调用集中
+避免页面直接承担复杂业务逻辑
+```
 
 ---
 
-## 21. 测试规范
+## 45.1 页面职责
 
-### 21.1 测试分层
+Vue 页面负责：
 
-| 层级 | 类命名 | 包路径 | 工具 |
-|------|--------|--------|------|
-| 单元测试 | `XxxTest` | `src/test/java/...` | JUnit 5 + Mockito |
-| 集成测试 | `XxxIntegrationTest` | `src/test/java/...` | Testcontainers (PG+Redis+RabbitMQ) |
-| API 测试 | `postman/` | 项目根目录 | Postman Collection |
-
-### 21.2 单元测试规范
-
-```java
-@ExtendWith(MockitoExtension.class)
-class SubTaskStateMachineTest {
-
-   @Test
-   @DisplayName("PENDING → ASSIGNED 是合法转换")
-   void pendingToAssigned_shouldPass() {
-      assertDoesNotThrow(() ->
-              SubTaskStateMachine.validate(PENDING, ASSIGNED));
-   }
-
-   @Test
-   @DisplayName("PENDING → DONE 是非法转换，应抛出 BizException")
-   void pendingToDone_shouldThrow() {
-      BizException ex = assertThrows(BizException.class, () ->
-              SubTaskStateMachine.validate(PENDING, DONE));
-      assertEquals("非法状态转换: PENDING -> DONE", ex.getMessage());
-   }
-}
+```text
+展示
+交互
+表单
+调用 API
+页面状态
 ```
 
-| 规则 | 说明 |
-|------|------|
-| 测试类命名 | `被测类名 + Test`（测 impl 时为 `{Name}ServiceImplTest`） |
-| 测试方法命名 | `方法名_场景_预期结果`（英文下划线） |
-| `@DisplayName` | 写中文描述，清晰表达测试意图 |
-| Mock | 纯 mock 单测使用 `@Mock` + `@InjectMocks`，不手动 new 对象 |
-| 断言 | 优先使用 `assertThrows` / `assertDoesNotThrow`，再用 `assertEquals` |
-| Service 实现测试 | 测试目标是实现类自身时允许 `spy(new XxxServiceImpl(...))` 包裹真实实现（豁免“不手动 new 对象”规则，适用基类 `ServiceImpl` 的 `lambdaQuery()` 链 stub，见 AgentServiceTest 先例）；stub 链式写法 `doReturn(chain).when(service).lambdaQuery()`（LambdaQueryChainWrapper 在 `com.baomidou.mybatisplus.extension.conditions.query` 包），`orderByDesc` 等泛型方法用 `ArgumentMatchers.<SFunction<T, ?>>any()` 消歧义 |
+不应该：
 
-### 21.3 集成测试规范
-
-```java
-@SpringBootTest
-@Testcontainers
-class NotificationConsumerIntegrationTest extends BaseIntegrationTest {
-   // 继承 BaseIntegrationTest（已定义 PG + Redis + RabbitMQ 容器）
-   // 测试真实 MQ 消费 → inbox 投递 → Agent 查询的完整链路
-}
+```text
+在页面中复制大量业务规则。
 ```
 
-### 21.4 强制覆盖要求
+---
 
-| 模块 | 行覆盖率目标 | 说明 |
-|------|:----------:|------|
-| `helloai-core/statemachine` | **100%** | 状态机所有转换路径必须覆盖 |
-| `helloai-core/task/score` | **100%** | 评分计算器所有档位必须覆盖 |
-| `helloai-mq/consumer` | ≥ 70% | MQ 消费逻辑覆盖 ACK/补偿/幂等 |
-| `helloai-job/task` | ≥ 50% | 补偿任务覆盖超时/正常路径 |
-| `helloai-core/{各域}.service` | ≥ 60% | 业务逻辑覆盖主流程 |
+## 45.2 API
 
-### 21.5 关键测试场景
+建议：
 
-```
-☐ 状态机: 所有 9 种状态的合法/非法转换全覆盖
-☐ Outbox: 事件创建 → MQ 发送成功 → 状态更新
-☐ Outbox: 事件创建 → MQ 发送失败 → 补偿重试
-☐ Inbox: 同一 (event_id, agent_id) 投递两次，第二次被去重
-☐ 评分: 5 个档位（S/A/B/C/D）的分数计算正确
-☐ ACK 丢失: kill -9 模拟 → ExecutionCompensationTask 30s 内补偿
-☐ 认证: 错误 API Key → 401，错误 Registration Token → 403
-☐ 暂停/恢复: PAUSED 后恢复，Agent 能获取完整上下文
+```text
+页面
+ ↓
+api/*.ts
+ ↓
+HTTP
 ```
 
-### 21.6 验证脚本准则（ps1 优先）
+不要：
 
-| 规则 | 说明 |
-|------|------|
-| 验证形态优先级 | 功能改动 / 缺陷修复的验证**优先交付 `verify-*.ps1` 冒烟脚本**（真实环境接口级验证，如"同名附件上传 → 旧版去活 → 核验清单只剩有效版"这类链路语义，单测无法体现） |
-| 单测并行 | ps1 脚本**不是单测的替代品**：单元测试保逻辑正确（含 mock 边界），ps1 脚本证真实链路行为，两者并行交付；纯内部逻辑改动无法脚本化验证时，以单测为准并在迭代记录说明原因 |
-| 脚本规范 | `verify-*.ps1` 必须遵循 AGENTS.md / helloai-preflight 的 UTF-8 编码强制头（`[Console]::OutputEncoding` + 无 BOM `$OutputEncoding`）、单引号 + 拼接输出、源文件 UTF-8 with BOM；涉及 CJK JSON body 先落 UTF-8 临时文件再引用 |
-| 交付位置 | `scripts/` 目录（与既有 verify-*.ps1 同区），运行方式写入脚本头注释 |
+```text
+多个页面重复写请求 URL
+```
+
+---
+
+# 46. 前端复杂度治理
+
+当一个 Vue 页面同时包含：
+
+```text
+大量 API
+大量状态
+大量弹窗
+大量计算逻辑
+大量业务规则
+```
+
+应考虑拆分：
+
+```text
+components/
+composables/
+api/
+utils/
+```
+
+但同样：
+
+> 不为了文件数量而机械拆分。
+
+---
+
+# 47. 测试
+
+新增重要业务逻辑必须考虑测试。
+
+优先测试：
+
+```text
+状态机
+权限
+事务边界
+幂等
+MQ
+Outbox
+Prompt Parser
+核心业务规则
+```
+
+---
+
+## 47.1 单元测试
+
+适合：
+
+```text
+纯业务逻辑
+状态转换
+Parser
+Calculator
+Policy
+```
+
+---
+
+## 47.2 集成测试
+
+适合：
+
+```text
+数据库
+Redis
+MQ
+Spring Bean
+事务
+Mapper
+```
+
+---
+
+# 48. 验证方式
+
+代码修改后至少根据影响范围执行：
+
+```text
+编译
+单元测试
+相关集成测试
+依赖方向检查
+前端检查
+启动检查
+```
+
+后端基本验证：
+
+```bash
+mvn -pl helloai-start -am compile
+```
+
+如果修改 MQ / 数据库 / Spring 配置：
+
+```text
+必须增加对应启动或集成验证。
+```
+
+---
+
+# 49. 自动化校验
+
+能通过脚本检查的规则：
+
+> **优先脚本化，而不是继续增加 Markdown 文字。**
+
+例如：
+
+```text
+verify-dependency-direction.ps1
+verify-admin-authz.ps1
+verify-code-style-p1-ui-sync.ps1
+```
+
+自动化检查优先覆盖：
+
+```text
+跨域依赖
+权限
+前端 API 路径
+Mapper 登记
+禁止模式
+```
+
+---
+
+# 50. AI Coding Agent 开发协议
+
+HelloAI 经常使用：
+
+```text
+Qoder
+Trae
+Cursor
+Claude Code
+Codex
+```
+
+等 AI Coding Agent 进行开发。
+
+因此 AI 修改代码必须遵守以下协议。
+
+---
+
+## 50.1 修改前
+
+必须先：
+
+```text
+1. 找到真实代码
+2. 找到调用方
+3. 找到接口
+4. 找到实现
+5. 找到配置
+6. 找到数据库 / MQ / MCP 等相关依赖
+```
+
+禁止：
+
+```text
+仅凭类名猜测代码结构。
+```
+
+---
+
+## 50.2 先搜索，再修改
+
+修改一个类之前：
+
+```text
+搜索类
+    ↓
+搜索接口
+    ↓
+搜索调用方
+    ↓
+搜索相关字段
+    ↓
+搜索配置
+    ↓
+确认影响范围
+```
+
+---
+
+## 50.3 最小修改原则
+
+AI 不得因为一个小需求：
+
+```text
+重构整个模块
+```
+
+除非：
+
+```text
+现有结构已经阻碍需求实现
+```
+
+---
+
+## 50.4 优先复用
+
+新增代码前必须搜索：
+
+```text
+是否已有相同 Service
+是否已有 Mapper
+是否已有工具类
+是否已有 DTO
+是否已有状态枚举
+是否已有异常
+是否已有配置
+是否已有 Prompt
+是否已有 MCP
+```
+
+禁止：
+
+```text
+同能力创建第二套实现。
+```
+
+---
+
+## 50.5 禁止猜测
+
+AI 不得擅自创造：
+
+```text
+数据库字段
+数据库表
+接口
+文件路径
+业务规则
+状态
+枚举值
+MCP 工具
+```
+
+如果无法确认：
+
+```text
+保留不确定性
+```
+
+或者：
+
+```text
+向用户确认。
+```
+
+---
+
+## 50.6 文档与代码冲突
+
+如果：
+
+```text
+CODE_STYLE
+    ≠
+实际代码
+```
+
+AI 必须：
+
+```text
+先确认当前代码事实
+```
+
+然后：
+
+```text
+如果代码正确：
+更新文档
+
+如果代码错误：
+修代码
+
+如果无法判断：
+暂停并询问。
+```
+
+禁止：
+
+```text
+为了满足旧文档
+强行把当前代码改回旧实现。
+```
+
+---
+
+## 50.7 不新增平行架构
+
+禁止出现：
+
+```text
+OldService
+NewService
+V2Service
+EnhancedService
+```
+
+仅仅为了绕开旧代码。
+
+如果确实需要新架构：
+
+```text
+明确迁移策略
+```
+
+并最终：
+
+```text
+删除旧路径。
+```
+
+---
+
+# 51. AI 修改复杂类的规则
+
+如果目标类：
+
+```text
+> 800 行
+```
+
+AI 在继续增加大量逻辑之前，必须先判断：
+
+```text
+是否已经存在职责混杂？
+```
+
+但：
+
+```text
+本次需求 ≠ 自动触发全类重构
+```
+
+正确方式：
+
+```text
+先完成需求
++
+必要时抽取本需求涉及的独立职责
+```
+
+不要：
+
+```text
+借需求之名
+重写整个 Service。
+```
+
+---
+
+# 52. AI 修改数据库的规则
+
+涉及数据库：
+
+```text
+先查看 Entity
+再查看 Mapper
+再查看现有 SQL
+再查看 migration
+再查看调用方
+```
+
+新增字段必须考虑：
+
+```text
+数据库
+Entity
+DTO
+Mapper
+查询
+写入
+前端
+兼容旧数据
+```
+
+禁止：
+
+```text
+只修改 Entity
+不修改数据库。
+```
+
+---
+
+# 53. AI 修改 MQ 的规则
+
+涉及 MQ：
+
+```text
+先查看 Producer
+再查看 Exchange
+再查看 Queue
+再查看 RoutingKey
+再查看 Consumer
+再查看 ACK
+再查看幂等
+再查看 DLX
+```
+
+禁止只修改其中一个环节。
+
+---
+
+# 54. AI 修改 MCP 的规则
+
+涉及 MCP：
+
+```text
+先确认 Tool 定义
+再确认参数
+再确认调用方
+再确认异常处理
+再确认超时
+```
+
+禁止：
+
+```text
+仅凭 Tool 名称猜参数。
+```
+
+---
+
+# 55. AI 修改 Prompt 的规则
+
+Prompt 修改属于：
+
+```text
+业务行为修改
+```
+
+不能简单视为：
+
+```text
+字符串修改。
+```
+
+修改 Prompt 后必须检查：
+
+```text
+输入
+输出
+变量
+上下文
+Tool
+JSON 格式
+边界情况
+```
+
+Prompt 如果承担核心业务规则：
+
+```text
+必须有对应测试样例。
+```
+
+---
+
+# 56. Prompt Enhancement 测试原则
+
+PromptEnhancer 至少测试：
+
+```text
+简单需求
+模糊需求
+接口修改
+数据库修改
+Bug 修复
+性能优化
+MCP 请求
+多条件业务规则
+```
+
+重点检查：
+
+```text
+语义是否保持
+字段是否保持
+数字是否保持
+接口是否保持
+工具名称是否保持
+约束是否保持
+```
+
+禁止：
+
+```text
+用户说 A
+AI 自己变成 B。
+```
+
+---
+
+# 57. Git 修改原则
+
+提交前检查：
+
+```text
+是否存在无关文件修改
+是否存在调试代码
+是否存在临时日志
+是否存在本地绝对路径
+是否存在密钥
+是否存在无关格式化
+```
+
+禁止：
+
+```text
+一次功能提交顺便修改几十个无关文件。
+```
+
+---
+
+# 58. 重构原则
+
+HelloAI 已经经历多轮重构。
+
+后续重构必须遵循：
+
+```text
+先发现问题
+    ↓
+证明问题真实存在
+    ↓
+明确收益
+    ↓
+最小范围重构
+    ↓
+验证
+    ↓
+删除旧代码
+```
+
+禁止：
+
+```text
+因为“感觉不够优雅”
+```
+
+就进行大规模架构重构。
+
+---
+
+# 59. 重构触发条件
+
+以下情况可以触发重构：
+
+```text
+明显循环依赖
+跨域 Mapper 直连
+同一能力出现多套实现
+核心 Service 持续膨胀
+大量重复代码
+状态机散落
+事务边界错误
+MQ 一致性问题
+安全问题
+性能问题
+AI 修改错误率明显升高
+```
+
+---
+
+# 60. 不触发重构的情况
+
+以下通常不值得单独重构：
+
+```text
+命名略有不同
+一个类多几十行
+某个方法还能更优雅
+某个工具类还能再抽象
+某个 DTO 可以换成另一种写法
+```
+
+除非：
+
+```text
+已经形成实际维护成本。
+```
+
+---
+
+# 61. 代码质量目标
+
+HelloAI 的目标不是：
+
+> “代码看起来像教科书。”
+
+而是：
+
+> **代码结构能够支撑持续快速迭代，并且让人和 AI 都能安全修改。**
+
+核心指标：
+
+```text
+边界清晰
+依赖单向
+职责明确
+修改可控
+失败可追踪
+数据可恢复
+AI 可理解
+```
+
+---
+
+# 62. 新功能开发标准流程
+
+新增功能推荐：
+
+```text
+需求
+ ↓
+确认业务边界
+ ↓
+搜索已有实现
+ ↓
+确定所属业务域
+ ↓
+确定调用链
+ ↓
+确定数据变化
+ ↓
+确定事务 / MQ / MCP
+ ↓
+实现
+ ↓
+测试
+ ↓
+自动化校验
+ ↓
+更新必要文档
+```
+
+---
+
+# 63. 新增文件前检查
+
+新增类前问：
+
+```text
+这个类是否真的需要？
+```
+
+如果答案是：
+
+```text
+“只是为了符合某种设计模式”
+```
+
+则不要新增。
+
+如果答案是：
+
+```text
+“已有类职责已经明显不同”
+```
+
+才新增。
+
+---
+
+# 64. 最终提交前 Checklist
+
+## 架构
+
+- [ ] 所属业务域正确
+- [ ] 没有跨域直捅 Mapper
+- [ ] 没有新增循环依赖
+- [ ] 没有创建平行架构
+- [ ] 没有无意义新增抽象
+
+## Java
+
+- [ ] 构造器注入
+- [ ] Entity 没有重复 BaseEntity 字段
+- [ ] 状态使用枚举
+- [ ] Service 事务边界正确
+- [ ] 异常统一处理
+- [ ] 日志包含业务标识
+
+## 数据库
+
+- [ ] Migration 已增加
+- [ ] Entity 已同步
+- [ ] Mapper 已同步
+- [ ] 索引已考虑
+- [ ] 没有明显 N+1
+
+## MQ
+
+- [ ] Producer / Consumer 链路完整
+- [ ] 消息幂等
+- [ ] ACK 顺序正确
+- [ ] DLX 正确
+- [ ] Outbox 一致性正确
+
+## Redis
+
+- [ ] Key 命名统一
+- [ ] 临时数据有 TTL
+- [ ] 锁使用正确实现
+- [ ] 没有新增手写 setIfAbsent 锁
+
+## Agent / Planner
+
+- [ ] Planner 不承担 Executor 职责
+- [ ] Executor 不承担 Planner 职责
+- [ ] Reviewer 不承担执行职责
+- [ ] MCP 使用边界正确
+- [ ] PromptEnhancer 不执行工具
+
+## 前端
+
+- [ ] API 路径使用 paths.ts
+- [ ] 页面没有重复 URL
+- [ ] 页面没有大量业务逻辑
+- [ ] 修改范围可控
+
+## AI Coding Agent
+
+- [ ] 修改前已搜索真实代码
+- [ ] 已搜索调用方
+- [ ] 已搜索配置
+- [ ] 没有根据猜测创建字段 / 接口
+- [ ] 没有进行无关重构
+- [ ] 没有新增重复能力
+- [ ] 已执行必要测试 / 编译 / 校验
+
+---
+
+# 65. 一句话原则
+
+如果只能记住这份规范的十句话：
+
+```text
+1. 先看代码，再写代码。
+
+2. 先找已有能力，再新增能力。
+
+3. 一个需求尽量只改一个闭环。
+
+4. 业务域边界优先于类结构。
+
+5. 跨域不要直捅 Mapper。
+
+6. 一致性问题优先考虑事务、Outbox、幂等。
+
+7. 定时任务用 ShedLock，业务互斥用 Redisson。
+
+8. 不要为了设计模式而增加抽象。
+
+9. AI 不允许猜测业务事实。
+
+10. 让代码既适合人维护，也适合 AI 安全修改。
+```
+
+---
+
+# 66. 规范维护原则
+
+本文件只保留：
+
+```text
+当前有效规则
+```
+
+不记录：
+
+```text
+历史版本
+重构过程
+某次修复过程
+某个具体 Bug
+已经废弃的实现
+```
+
+这些内容分别进入：
+
+```text
+log/
+doc/design/
+HelloAI 项目基线文档.md
+HelloAI 实现差距表.md
+```
+
+当代码事实发生长期变化时：
+
+```text
+先修改代码
+    ↓
+验证
+    ↓
+更新本规范
+```
+
+保证：
+
+> **CODE_STYLE 永远描述当前有效工程规则，而不是项目历史。**

@@ -2,8 +2,8 @@
 # ============================================================
 # helloai AgentHub V1 P0/P1 + N12 A1/A2 全场景验证脚本 (macOS/Linux)
 # Ref:
-#   doc/HelloAI_迭代执行记录.md   (AgentHub V1 P0 / N12 A1/A2)
-#   doc/HelloAI_实现差距表.md     (N12)
+#   doc/HelloAI_迭代执行记录_V1.md   (AgentHub V1 P0 / N12 A1/A2)
+#   doc/HelloAI_实现差距表_V1.md     (N12)
 #   .agents/skills/helloai-preflight/SKILL.md   (规则 6: 脚本 UTF-8 编码头)
 #
 # 覆盖八个真实环境场景（IDEA 启动后端 + docker compose 起 postgres / redis / rabbitmq）：

@@ -34,7 +34,7 @@
 - **2026-08-22:** 反馈回路 Phase 4 —— Reviewer 双审共识 + 抽检复审机制（候选池强制 2 个异模型 REVIEWER）
 - **2026-08-19:** Planner 对话联网搜索系列（V42-V45）—— 博查 / Tavily / DeepSeek 原生多供应商、URL 自动提取直取、SPA 元数据兜底、折叠查验条与查询规划器
 
-> 完整迭代史见 [`doc/log/HelloAI_迭代执行记录.md`](doc/log/HelloAI_迭代执行记录.md)（160+ 条目，追加式记录，含决策演进注记）。
+> 历史迭代记录见 [`doc/archive/HelloAI_迭代执行记录_V1.md`](doc/archive/HelloAI_迭代执行记录_V1.md)（160+ 条目，追加式记录，含决策演进注记），新记录按月归档于 `doc/log/`。
 
 ---
 
@@ -648,8 +648,8 @@ environment:
 先看 [`doc/README.md`](doc/README.md)（文档地图：每份文档的定位与事实等级），四份事实源：
 
 - 代码规范：[`doc/HelloAI_CODE_STYLE.md`](doc/HelloAI_CODE_STYLE.md)（改代码前必读）
-- 项目基线：[`doc/HelloAI_项目基线文档.md`](doc/HelloAI_项目基线文档.md)
-- 实现差距：[`doc/HelloAI_实现差距表.md`](doc/HelloAI_实现差距表.md)
+- 项目基线：[`doc/HelloAI 项目基线文档.md`](doc/HelloAI%20项目基线文档.md)
+- 实现差距：[`doc/HelloAI 实现差距表.md`](doc/HelloAI%20实现差距表.md)
 - 当前进度：[`doc/项目进度.md`](doc/项目进度.md)
 
 其他：EXECUTOR 接入指南 [`.executor-onboarding.md`](.executor-onboarding.md) / 设计系统 [`DESIGN.md`](DESIGN.md) / 产品定义 [`PRODUCT.md`](PRODUCT.md) / 核心流程图 [`doc/diagrams/`](doc/diagrams/) / English [`README.en.md`](README.en.md)

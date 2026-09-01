@@ -6,7 +6,7 @@
 #   - 开启路径（webSearchEnabled=true）：会话落库 web_search_enabled=true；首轮 LLM 正常返回
 #   - 不传字段（NULL）：落库为 NULL，读取侧按默认开启语义处理（兼容老数据）
 #   - 关闭路径里的后续 sendMessage 不受影响（开关仅建会话生效）
-# Ref:  doc/HelloAI_实现差距表.md（V34 对话式需求澄清联网搜索）
+# Ref:  doc/HelloAI_实现差距表_V1.md（V34 对话式需求澄清联网搜索）
 # Pre-conditions（fail-fast，本脚本不负责启动服务）：
 #   - helloai-start 已在 6565 运行，且已包含 V34 迁移 + WebSearch 配置
 #   - 默认 provider=bocha；服务器能联通 api.bochaai.com 才有"联网可用"的真实检索

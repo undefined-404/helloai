@@ -7,7 +7,7 @@
 #   POST /api/auth/logout    登出，使 token 失效
 # 负面用例：空用户名/空密码、用户不存在、密码错误、
 #           非法登录类型（旧版 api/agent 登录入口已被登录页移除）
-# Ref:  doc/HelloAI_实现差距表.md（登录页去除 API 登录）
+# Ref:  doc/HelloAI_实现差距表_V1.md（登录页去除 API 登录）
 # Pre-conditions（fail-fast，本脚本不负责启动服务）：
 #   - helloai-start 已在 6565 运行，且包含最新登录改造
 #   - 默认管理员账号 admin/admin123 可用（可用环境变量覆盖）

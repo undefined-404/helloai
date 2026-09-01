@@ -8,7 +8,7 @@
 #   断言链：ASSIGNED(A) -> start -> IN_PROGRESS(A) -> redispatch -> ASSIGNED(B)
 #   正向用例 2：PAUSED 换人（先自动恢复再 block 再重派，同样到 ASSIGNED(B)）
 #   负面用例：PENDING 状态调用必须被拒绝（只有 IN_PROGRESS/PAUSED 才能改派）
-# Ref:  doc/log/HelloAI_迭代执行记录.md（2026-08-26 子任务「执行中卡死改派」）
+# Ref:  doc/log/HelloAI_迭代执行记录_V1.md（2026-08-26 子任务「执行中卡死改派」）
 # Pre-conditions（fail-fast，本脚本不负责启动服务）：
 #   - helloai-start 已在 6565 运行（IDEA 或 mvn spring-boot:run）
 #   - docker compose 已起 postgres/redis（agent 打卡租约与心跳依赖）

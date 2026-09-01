@@ -9,7 +9,7 @@
 #      EXECUTION_RECORD 并发回填不互覆）
 #   4. 双前置 DONE 后 claim sub3（自动执行）→ 从 conversation_message 取 sub_task_execute_user_prompt
 #   5. 断言 prompt 同时包含 sub1 与 sub2 的产出内容（双前置不覆盖）
-# Ref:  doc/log/HelloAI_迭代执行记录.md §6.43（依赖感知双轨上下文注入）
+# Ref:  doc/log/HelloAI_迭代执行记录_V1.md §6.43（依赖感知双轨上下文注入）
 # Pre-conditions:
 #   - helloai-start 已在 6565 运行（本脚本自行启动或复用现有实例）
 #   - docker helloai-postgres 在 15432（psql 经 docker exec 访问）

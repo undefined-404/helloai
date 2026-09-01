@@ -8,8 +8,8 @@
 # 并自动触发一次「最小执行」产生 minio:// 附件（无需 LLM 凭证）：
 #   建 Agent -> 建任务 -> 建子任务(指派) -> claim -> submitResult(output 非空)
 #   -> ExecutionResultHandler 物化链 -> ExecutionArtifactService.store 写入 MinIO
-# Ref:  doc/HelloAI_实现差距表.md (A0-5 遗留②：minio:// 外部存储平台不可直读)
-#       doc/log/HelloAI_迭代执行记录.md §6.76
+# Ref:  doc/HelloAI_实现差距表_V1.md (A0-5 遗留②：minio:// 外部存储平台不可直读)
+#       doc/log/HelloAI_迭代执行记录_V1.md §6.76
 # 前置：docker compose up -d 起 helloai-minio；后端已重启（storage.type=minio）；
 #       后端 6565 可访问（本脚本不负责启动服务）。
 # 用法（项目根）：

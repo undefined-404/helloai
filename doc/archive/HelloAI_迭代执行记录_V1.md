@@ -14,6 +14,27 @@
 
 ## 2. 近期关键轮次
 
+### 2026-09-01 Planner Chat 输入优化（PromptEnhancer，CODE_STYLE V2 §32 落地）
+
+#### 1. 背景
+
+- 用户在 Planner Chat 输入框描述需求时表达常偏口语化/缺结构，直接影响后续澄清与拆解质量。按设计方案《输入润色优化功能》落地「优化输入」辅助能力：点按钮后后端调现有 LLM 抽象把当前输入改写为更清晰、结构化、适合 Planner / Coding Agent 理解的表达；第一版只优化当前输入，不引入会话上下文 / MCP / Skill / Planner State / DAG，不自动发送、不自动覆盖原文。
+
+#### 2. 实际落地
+
+- **独立辅助链路（不进会话/任务编排）**：`planner/prompt` 子包（V2 §5.3）——`PromptEnhancerService` 接口 + `PromptEnhancerServiceImpl`：功能开关/空输入守卫 → `PlannerAgentPicker.pick(null)` 自动选型（与澄清链同一语义）→ 加载 `prompts/prompt-enhance.md` 独立 System Prompt（12 条语义保护规则：不擅改字段名/接口名/数值/实体，不凭空编造，信息不足保留不确定性并进「待确认事项」）→ `PlatformAgentExecutionService.executeSync`；输出校验失败抛 BizException。
+- **temperature 增量打通（需人工确认的设计决策）**：现有 LLM 抽象全链路无温度入口，本轮增量补齐——`AgentTask` 新增可选 `Double temperature`（null=模型默认，现有调用方零影响）→ `ApiKeyAgentExecutor.execute` 透传（流式路径不动）→ `AgentChatClientService` 新增 6 参重载 → `AgentChatClientServiceImpl.doGenerate` 非 null 时 `prompt.options(ChatOptions.builder().temperature(t).build())`（Spring AI 1.1.8 无 ChatOptionsBuilder，用接口静态 builder）。
+- **配置外置**：`PromptEnhancerProperties`（前缀 `helloai.planner.prompt-enhance`）：enabled 开关 + temperature 默认 0.2（建议区间 0.1~0.3），application.yml 同步落配置。
+- **API 层**：`POST /api/planner/prompt/enhance`（PromptEnhancerController 薄转发，自动被 AuthInterceptor 覆盖）；Request `{ prompt }` @NotBlank，Response `R<PromptEnhanceResult>`（originalPrompt + optimizedPrompt）。
+- **前端**：`paths.ts` 新增 `planner.promptEnhance` 收口；`api/promptEnhance.ts`（120s 超时档）；`RequirementChat.vue` 输入区新增「优化输入」按钮（MagicStick 图标，loading 态）+ 预览面板（可编辑草稿 + 重新优化 / 使用此版本 / 关闭）；回填仅写入输入框不发送，切会话/新会话/发送时收面板。
+- **验证**：`PromptEnhancerServiceTest` 5 用例（成功路径断言 systemPrompt/userPrompt/temperature/scene；disabled/blank/LLM 失败/空输出抛 BizException 且不触达执行链）+ `AgentChatClientServiceTest` 2 用例全绿（项目默认 `-DskipTests=true`，需 `-DskipTests=false`）；`mvn -pl helloai-start -am compile` 通过；前端 `vue-tsc` 0 error。
+
+#### 3. 遗留 / 不做的事
+
+- 第一版不带会话上下文（历史消息/Planner State）参与改写；不做「优化后直接发送」快捷路径；不改 CHAT/CLARIFY/MCP/任务 DAG 任何现有行为。
+- temperature 增量打通仅覆盖同步路径；流式 `generateStream` 未加温度参数（本轮无流式改写需求）。
+- 真实环境（真实 provider）下的改写质量冒烟待人工验证；开关默认开启，如需关闭改 `helloai.planner.prompt-enhance.enabled`。
+
 ### 2026-08-31 技能包 zip 整体交付（§6.171）
 
 #### 1. 背景

@@ -10,7 +10,7 @@
 #   CHAT 结构化追问容错双模（V40.2）：发"需要你问我几个问题" → 宽松断言（payload 非空则必须合法 structured）
 #   意图词路径（V40）：CHAT 会话发"整理方案"（V40.1 口语化意图词扩展）→ 置待确认 + 固定确认询问（不调 LLM）→
 #   回复「确认」→ 转入 CLARIFY 跑澄清轮；回复其他内容则清标记继续自由对话
-# Ref:  doc/HelloAI_实现差距表.md（N17 Planner 对话双模式，V39+V40 意图词二次确认 + V40.2 /planner 命令）
+# Ref:  doc/HelloAI_实现差距表_V1.md（N17 Planner 对话双模式，V39+V40 意图词二次确认 + V40.2 /planner 命令）
 # Pre-conditions（fail-fast，本脚本不负责启动服务）：
 #   - helloai-start 已在 6565 运行且包含 V39/V40 迁移与新接口
 #   - helloai.providers 已配置可用 LLM（deepseek）
