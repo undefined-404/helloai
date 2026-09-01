@@ -38,3 +38,16 @@ export interface AdjustScoreRequest {
   reason: string
   subTaskId: LongId | null
 }
+
+// Planner Chat 输入优化（PromptEnhancer）
+export interface PromptEnhanceRequest {
+  /** 用户当前输入（待优化的原始内容） */
+  prompt: string
+}
+
+export interface PromptEnhanceResult {
+  /** 原文（服务端 trim 后原样返回） */
+  originalPrompt: string
+  /** 优化后的结构化表达 */
+  optimizedPrompt: string
+}

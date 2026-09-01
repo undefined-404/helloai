@@ -16,6 +16,7 @@ import org.springframework.ai.chat.metadata.DefaultUsage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -54,6 +55,11 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
 
     public ChatResponse generate(Agent agent, String systemPrompt, String userPrompt,
                                  String provider, String apiKeyPlaintext) {
+        return generate(agent, systemPrompt, userPrompt, provider, apiKeyPlaintext, null);
+    }
+
+    public ChatResponse generate(Agent agent, String systemPrompt, String userPrompt,
+                                 String provider, String apiKeyPlaintext, Double temperature) {
         if (!executionProperties.isEnabled()) {
             throw new BizException("平台内 Agent 执行链已关闭");
         }
@@ -64,7 +70,7 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
             llmCallConcurrencyGuard.acquire();
         }
         try {
-            return doGenerate(agent, systemPrompt, userPrompt, provider, apiKeyPlaintext);
+            return doGenerate(agent, systemPrompt, userPrompt, provider, apiKeyPlaintext, temperature);
         } finally {
             if (throttled) {
                 llmCallConcurrencyGuard.release();
@@ -73,12 +79,16 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
     }
 
     private ChatResponse doGenerate(Agent agent, String systemPrompt, String userPrompt,
-                                    String provider, String apiKeyPlaintext) {
+                                    String provider, String apiKeyPlaintext, Double temperature) {
         ChatClient chatClient = buildChatClient(agent, provider, apiKeyPlaintext);
 
         ChatClient.ChatClientRequestSpec prompt = chatClient.prompt();
         if (StringUtils.hasText(systemPrompt)) {
             prompt = prompt.system(systemPrompt);
+        }
+        // temperature 仅显式传入时覆盖模型默认（null = 不附加 options，现有链路行为不变）
+        if (temperature != null) {
+            prompt = prompt.options(ChatOptions.builder().temperature(temperature).build());
         }
         return prompt
                 .user(userPrompt != null ? userPrompt : "")

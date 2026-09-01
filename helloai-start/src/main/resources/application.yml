@@ -124,6 +124,12 @@ helloai:
       # PLANNING 超时回收阈值（分钟）：PlanningTimeoutTask 按 update_time 扫描卡死任务回退 PENDING。
       # 最坏拆解耗时约 4 分钟（排队 60s + 连接 5s + 读取 180s），默认 10 分钟余量充足。
       planning-timeout-minutes: 10
+    # Planner Chat 输入优化（PromptEnhancer）：把用户当前输入改写为更清晰的结构化表达，
+    # 独立辅助链路，不经过会话/任务执行编排（CODE_STYLE V2 §32）。
+    prompt-enhance:
+      enabled: true
+      # 采样温度：保持语义 + 结构化改写而非创作，取低值保证稳定（建议 0.1~0.3）。
+      temperature: 0.2
   # Phase 2B 调度策略 3：外部优先 / 空闲优先 / 平台内 LLM 保底
   dispatch:
     auto-assign-on-create: false

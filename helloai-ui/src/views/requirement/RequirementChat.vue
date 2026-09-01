@@ -283,6 +283,48 @@
 
           <div class="chat-input">
             <template v-if="!conversation || conversation.status === 'ACTIVE'">
+              <!-- Planner Chat 输入优化（PromptEnhancer）：预览面板，确认后回填输入框，不自动发送、不自动覆盖原文 -->
+              <div
+                v-if="enhancePanelVisible"
+                class="enhance-panel"
+              >
+                <div class="enhance-panel-header">
+                  <span class="enhance-panel-title">优化后的输入（可编辑）</span>
+                  <span class="enhance-panel-tip">确认后点「使用此版本」回填输入框，不会自动发送</span>
+                </div>
+                <el-input
+                  v-model="enhancedDraft"
+                  type="textarea"
+                  :rows="6"
+                  resize="vertical"
+                  :disabled="enhancing"
+                />
+                <div class="enhance-panel-actions">
+                  <el-button
+                    size="small"
+                    :loading="enhancing"
+                    @click="handleEnhanceInput"
+                  >
+                    重新优化
+                  </el-button>
+                  <el-button
+                    size="small"
+                    type="primary"
+                    :disabled="!enhancedDraft.trim() || enhancing"
+                    @click="applyEnhancedInput"
+                  >
+                    使用此版本
+                  </el-button>
+                  <el-button
+                    size="small"
+                    text
+                    :disabled="enhancing"
+                    @click="closeEnhancePanel"
+                  >
+                    关闭
+                  </el-button>
+                </div>
+              </div>
               <el-input
                 v-model="input"
                 type="textarea"
@@ -352,6 +394,18 @@
                   </el-tag>
                 </div>
                 <div class="input-actions-right">
+                  <!-- 输入优化：调 LLM 把当前输入改写为结构化表达（仅预览，不自动发送、不覆盖输入框） -->
+                  <el-button
+                    size="small"
+                    plain
+                    :loading="enhancing"
+                    :disabled="!input.trim() || sending || finalizing"
+                    title="调用 AI 把当前输入优化为更清晰的结构化表达（仅预览，不自动发送）"
+                    @click="handleEnhanceInput"
+                  >
+                    <el-icon v-if="!enhancing"><MagicStick /></el-icon>
+                    优化输入
+                  </el-button>
                   <el-button
                     v-if="activeId && conversation?.status === 'ACTIVE'"
                     size="small"
@@ -390,8 +444,9 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Loading, Connection, Delete } from '@element-plus/icons-vue'
+import { Loading, Connection, Delete, MagicStick } from '@element-plus/icons-vue'
 import { clarifyApi } from '@/api/clarify'
+import { promptEnhanceApi } from '@/api/promptEnhance'
 import { taskApi } from '@/api/task'
 import { streamSendConversation } from '@/api/chatStream'
 import { fmtTime } from '@/utils/tableConfig'
@@ -429,6 +484,11 @@ const pendingText = ref('')
 const sending = ref(false)
 const finalizing = ref(false)
 const streamEl = ref<HTMLElement | null>(null)
+
+// 输入优化（PromptEnhancer）：先预览、用户自行回填；不自动发送、不自动覆盖原文本输入框
+const enhancing = ref(false)
+const enhancePanelVisible = ref(false)
+const enhancedDraft = ref('')
 
 // S1 Chat SSE 流式：streamText 为流式回复增量全文（60ms 节流写入），done 后拉 detail 收敛清空
 const streamText = ref('')
@@ -578,6 +638,7 @@ async function scrollToBottom() {
 
 async function selectConversation(id: LongId) {
   if (sending.value) return
+  closeEnhancePanel()
   const sid = String(id)
   activeId.value = sid
   try {
@@ -588,9 +649,38 @@ async function selectConversation(id: LongId) {
 
 function startNew() {
   if (sending.value) return
+  closeEnhancePanel()
   activeId.value = null
   detail.value = null
   input.value = ''
+}
+
+// ── 输入优化（PromptEnhancer）：独立辅助链路，不进会话/任务链路 ──
+
+// 优化输入：基于当前输入框内容调 LLM 生成结构化表达，结果进预览面板（不改动输入框、不发送）
+async function handleEnhanceInput() {
+  const text = input.value.trim()
+  if (!text || enhancing.value || sending.value || finalizing.value) return
+  enhancing.value = true
+  try {
+    const result = await promptEnhanceApi.enhance(text)
+    enhancedDraft.value = result.optimizedPrompt
+    enhancePanelVisible.value = true
+  } catch { /* 拦截器已弹错；失败保留原输入 */ }
+  finally { enhancing.value = false }
+}
+
+// 使用此版本：把（用户可能已编辑的）草稿回填输入框并收起面板，由用户自行点发送
+function applyEnhancedInput() {
+  const text = enhancedDraft.value.trim()
+  if (!text) return
+  input.value = text
+  closeEnhancePanel()
+}
+
+function closeEnhancePanel() {
+  enhancePanelVisible.value = false
+  enhancedDraft.value = ''
 }
 
 async function handleSend() {
@@ -602,6 +692,7 @@ async function handleSend() {
     await handlePlannerCommand(cmd[1]?.trim() ?? '')
     return
   }
+  closeEnhancePanel()
   input.value = ''
   pendingText.value = text
   sending.value = true
@@ -1009,6 +1100,19 @@ onMounted(() => {
 .input-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
 .input-actions-right { display: flex; gap: 8px; }
 .chat-readonly-tip { color: var(--ha-muted); font-size: 13px; text-align: center; padding: 8px 0; }
+
+/* ── 输入优化（PromptEnhancer）预览面板 ── */
+.enhance-panel {
+  border: 1px solid var(--ha-border);
+  border-radius: var(--ha-radius-md);
+  background: var(--ha-surface-elevated);
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+.enhance-panel-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.enhance-panel-title { font-size: 13px; font-weight: 600; flex-shrink: 0; }
+.enhance-panel-tip { font-size: 12px; color: var(--ha-muted); }
+.enhance-panel-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 
 /* ── V34 联网搜索开关（仿 ima copilot 风格） ── */
 .web-search-switch {

@@ -27,6 +27,14 @@ public interface AgentChatClientService {
                           String provider, String apiKeyPlaintext);
 
     /**
+     * 使用 Spring AI ChatClient 生成回复（显式采样温度）。
+     *
+     * @param temperature 采样温度；null = 不覆盖模型默认值（与 5 参重载行为完全一致）
+     */
+    ChatResponse generate(Agent agent, String systemPrompt, String userPrompt,
+                          String provider, String apiKeyPlaintext, Double temperature);
+
+    /**
      * 流式生成回复（默认平台通道）：以 token 增量 {@link Flux} 输出，订阅时发起调用。
      *
      * <p>语义与 {@link #generate(Agent, String, String)} 完全一致，仅传输形态不同：

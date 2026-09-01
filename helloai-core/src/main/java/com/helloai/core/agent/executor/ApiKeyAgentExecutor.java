@@ -141,7 +141,8 @@ public class ApiKeyAgentExecutor implements AgentExecutor {
                     task.getSystemPrompt(),
                     task.getUserPrompt(),
                     provider,
-                    vaultApiKey
+                    vaultApiKey,
+                    task.getTemperature()
             );
             // 分离正文与思考过程：推理模型（如 Minimax ）的 thinking 块不混入 output
             ChatResponseContentExtractor.ExtractedContent extracted = ChatResponseContentExtractor.extract(response);

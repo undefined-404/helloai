@@ -31,4 +31,10 @@ public class AgentTask {
     /** 执行前要求的能力。 */
     @Builder.Default
     Map<String, Object> requiredCapabilities = Collections.emptyMap();
+
+    /**
+     * 采样温度（可选）。null = 使用模型默认值（现有全部链路行为不变）；
+     * 仅稳定改写类辅助场景（如 PromptEnhancer 输入优化）显式设置低值。
+     */
+    Double temperature;
 }

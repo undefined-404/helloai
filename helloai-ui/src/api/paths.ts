@@ -139,6 +139,10 @@ export const paths = {
     abandon: (id: string | number) => `/requirement-conversations/abandonById/${enc(id)}`,
     deleteById: (id: string | number) => `/requirement-conversations/deleteById/${enc(id)}`
   },
+  planner: {
+    // Planner Chat 输入优化（PromptEnhancer）：当前输入 → 结构化优化版，预览后用户自行回填
+    promptEnhance: '/planner/prompt/enhance'
+  },
   dashboard: {
     stats: '/dashboard/getStats'
   },
