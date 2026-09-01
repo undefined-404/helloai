@@ -688,9 +688,28 @@ function resolveAgentName(agentId: string | number | null): string {
   return agentNameMap.value[s] || ('Agent #' + s.slice(-4))
 }
 
+// 双审单侧结论人话化：通过/驳回（评分 N/5）；字段缺失返回空串由调用方降级
+type DualVerdictPayload = { pass1?: boolean; pass2?: boolean; score1?: number; score2?: number }
+function dualVerdictText(pass: boolean | undefined, score: number | undefined): string {
+  if (pass === undefined || pass === null) return ''
+  const text = pass ? '通过' : '驳回'
+  return score !== undefined && score !== null ? text + '（评分 ' + score + '/5）' : text
+}
+
 function eventDescription(ev: TaskTimelineItem): string {
   const base = EVENT_META[ev.eventType]?.desc || ev.eventType
   const p = ev.payload || {}
+  // 双审并行校验结果：后端事件 payload 已含双方结论，此处翻译成人话展示（2026-09-01）
+  if (ev.eventType === 'sub_task_dual_review_consented' || ev.eventType === 'sub_task_reviewer_disagreement') {
+    const dp = p as DualVerdictPayload
+    const v1 = dualVerdictText(dp.pass1, dp.score1)
+    const v2 = dualVerdictText(dp.pass2, dp.score2)
+    if (v1 && v2) return base + '（评审1：' + v1 + '；评审2：' + v2 + '）'
+  }
+  // 双审降级：候选数人话化（避免裸露英文 reason 键值）
+  if (ev.eventType === 'sub_task_dual_review_degraded' && p.available !== undefined) {
+    return base + '（可用核验候选 ' + p.available + ' 个）'
+  }
   const extras: string[] = []
   if (p.trigger) extras.push('触发方式：' + (TRIGGER_LABEL[p.trigger] || p.trigger))
   if (p.reason) extras.push('原因：' + p.reason)
