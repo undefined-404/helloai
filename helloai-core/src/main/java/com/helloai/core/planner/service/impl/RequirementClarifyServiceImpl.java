@@ -402,19 +402,51 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     }
 
     /**
-     * 终稿确认：创建 Task（PENDING）→ best-effort 通知 PLANNER →
-     * 会话回填 task_id、状态 FINALIZED → timeline 记录。
+     * 终稿产出后的建任务段（手动确认与 /task 直达共用）：幂等校验 + CAS 推进
+     * ACTIVE → FINALIZED + 建任务。直达轮与手动确认按钮并发时只有一方 CAS 成功，
+     * 另一方拒绝建任务，避免重复建任务与状态回退。
+     */
+    private Task finalizeAfterDraft(RequirementConversation conversation, String timelineEvent) {
+        Long conversationId = conversation.getId();
+        if (conversation.getFinalTitle() == null || conversation.getFinalTitle().isBlank()) {
+            throw new BizException("会话尚无终稿，请先对话至 LLM 产出终稿: conversationId=" + conversationId);
+        }
+        // 幂等防御：已关联存活任务则拒绝重复创建（防竞态脏数据 / 重复点击造成双任务）
+        if (conversation.getTaskId() != null && taskService.getById(conversation.getTaskId()) != null) {
+            throw new BizException("会话已创建关联任务，请勿重复创建: taskId=" + conversation.getTaskId());
+        }
+        // CAS 推进 ACTIVE → FINALIZED：失败即并发已推进，拒绝建任务避免重复
+        if (!casFinalize(conversationId)) {
+            throw new BizException("会话状态已变化（可能已被终稿确认），请刷新后重试: conversationId=" + conversationId);
+        }
+        conversation.setStatus(STATUS_FINALIZED);
+        return buildTaskFromDraft(conversation, timelineEvent);
+    }
+
+    /**
+     * 终稿确认：校验会话存在且 ACTIVE 后，经 {@link #finalizeAfterDraft} 建任务。
      *
      * @return 创建的任务
      */
     @Override
     public Task finalize(Long conversationId) {
-        RequirementConversation conversation = requireActive(conversationId);
-        if (conversation.getFinalTitle() == null || conversation.getFinalTitle().isBlank()) {
-            throw new BizException("会话尚无终稿，请先对话至 LLM 产出终稿: conversationId=" + conversationId);
-        }
-        conversation.setStatus(STATUS_FINALIZED);
-        return buildTaskFromDraft(conversation, "task_created_from_clarify");
+        return finalizeAfterDraft(requireActive(conversationId), "task_created_from_clarify");
+    }
+
+    /**
+     * CAS 推进会话状态：ACTIVE → FINALIZED（定点更新，只写 status）。
+     *
+     * <p>全字段 updateById 会用加载期陈旧快照整体写回，与正在跑的澄清轮并发时互相覆盖
+     * （FINALIZED 被回退成 ACTIVE 的丢失更新事故）；CAS 按行条件推进，仅一方可成功。</p>
+     *
+     * @return true=推进成功；false=状态已变化（并发已终稿确认 / 放弃等）
+     */
+    private boolean casFinalize(Long conversationId) {
+        return conversationService.lambdaUpdate()
+                .eq(RequirementConversation::getId, conversationId)
+                .eq(RequirementConversation::getStatus, STATUS_ACTIVE)
+                .set(RequirementConversation::getStatus, STATUS_FINALIZED)
+                .update();
     }
 
     /**
@@ -449,7 +481,8 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
 
     /**
      * 复用会话终稿创建 PENDING Task、best-effort 通知全部 PLANNER、回填 task_id 并写 timeline。
-     * 会话状态沿用调用方已设置的值（finalize 置 FINALIZED，regenerate 保持 FINALIZED）。
+     * 状态由调用方提前推进（finalize / /task 直达走 CAS，regenerate 保持 FINALIZED）；
+     * task_id 定点字段写入，避免全字段 updateById 用陈旧快照覆盖并发写入。
      */
     private Task buildTaskFromDraft(RequirementConversation conversation, String timelineEvent) {
         Long conversationId = conversation.getId();
@@ -477,7 +510,12 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         }
 
         conversation.setTaskId(task.getId());
-        conversationService.updateById(conversation);
+        // 定点更新只写 task_id：全字段 updateById 会用加载期陈旧快照覆盖并发澄清轮
+        // 已落库的终稿字段 / 轮数（丢失更新竞态），只写本路径负责的状态字段
+        conversationService.lambdaUpdate()
+                .eq(RequirementConversation::getId, conversationId)
+                .set(RequirementConversation::getTaskId, task.getId())
+                .update();
 
         taskTimelineService.recordEvent(task.getId(), null, timelineEvent,
                 AgentRole.PLANNER, null, Map.of("conversationId", conversationId));
@@ -729,10 +767,11 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
             }
             conversation.setFinalTitle(reply.getTitle());
             conversation.setFinalDescription(reply.getDescription());
-            // 自动终稿确认：FINALIZED + 建任务，前端随详情联动 planById 拆解
-            conversation.setStatus(STATUS_FINALIZED);
-            conversationService.updateById(conversation);
-            Task task = buildTaskFromDraft(conversation, "task_created_from_clarify_direct");
+            // 终稿字段定点写入：不全字段覆盖，避免盖掉并发写入的 status / task_id
+            updateFinalDraftFields(conversationId, reply.getTitle(), reply.getDescription());
+            // 复用手动终稿确认：幂等校验 + CAS 推进 + 建任务（事件区分直达路径），
+            // 与用户在澄清轮在跑时并发点「创建任务并自动拆解」的竞态由同一套守卫兼顾
+            Task task = finalizeAfterDraft(conversation, "task_created_from_clarify_direct");
             log.info("/task 直达拆解产出终稿并建任务: conversationId={}, taskId={}",
                     conversationId, task.getId());
         } else {
@@ -1048,7 +1087,9 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
             }
             conversation.setFinalTitle(reply.getTitle());
             conversation.setFinalDescription(reply.getDescription());
-            conversationService.updateById(conversation);
+            // 终稿字段定点写入：本轮实体是轮开始时的快照，全字段 updateById 会盖掉期间并发
+            // finalize 已写入的 status=FINALIZED / task_id（生产实际丢失更新竞态）
+            updateFinalDraftFields(conversationId, reply.getTitle(), reply.getDescription());
             log.info("澄清会话产出终稿: conversationId={}, finalTitle={}",
                     conversationId, reply.getTitle());
         } else {
@@ -1101,6 +1142,19 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                     + "），请新建会话: conversationId=" + conversationId);
         }
         return conversation;
+    }
+
+    /**
+     * 终稿字段定点写入：只更新 final_title / final_description 两列（description 保持
+     * NOT_NULL 语义），避免长窗口轮末全字段 updateById 用陈旧快照覆盖并发写入的
+     * status / task_id（丢失更新）。轮内实体同步 set 仅供本次返回的视图展示使用。
+     */
+    private void updateFinalDraftFields(Long conversationId, String title, String description) {
+        conversationService.lambdaUpdate()
+                .eq(RequirementConversation::getId, conversationId)
+                .set(RequirementConversation::getFinalTitle, title)
+                .set(description != null, RequirementConversation::getFinalDescription, description)
+                .update();
     }
 
     /**

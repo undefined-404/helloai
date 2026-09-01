@@ -251,6 +251,7 @@
                   <el-button
                     type="primary"
                     :loading="finalizing"
+                    :disabled="sending || finalizing"
                     @click="handleFinalize"
                   >
                     创建任务并自动拆解
@@ -270,6 +271,7 @@
                     <el-button
                       type="primary"
                       :loading="finalizing"
+                      :disabled="sending || finalizing"
                       @click="handleRegenerate"
                     >
                       重新生成任务和子任务
@@ -888,7 +890,9 @@ async function triggerTaskReview(taskId: string) {
 
 async function handleFinalize() {
   const conv = conversation.value
-  if (!conv) return
+  // 并发守卫：对话轮在跑（sending）或已在终稿确认中（finalizing）时拒绝重复提交，
+  // 防重复点击与轮中并发 finalize 竞态（后端另有 CAS + 幂等兜底）
+  if (!conv || sending.value || finalizing.value) return
   try {
     await ElMessageBox.confirm(
       `将以终稿「${conv.finalTitle}」创建任务，并提交 AI 拆解（草案在后台生成，通常需要一段时间：几十秒到几分钟不等，视任务复杂程度而定）。是否继续？`,
@@ -906,7 +910,8 @@ async function handleFinalize() {
 
 async function handleRegenerate() {
   const conv = conversation.value
-  if (!conv) return
+  // 并发守卫：与 handleFinalize 同语义，防对话轮在跑时重复提交重建任务
+  if (!conv || sending.value || finalizing.value) return
   try {
     await ElMessageBox.confirm(
       `原任务已不存在，将以终稿「${conv.finalTitle}」重新创建任务，并提交 AI 拆解（草案在后台生成，通常需要一段时间：几十秒到几分钟不等，视任务复杂程度而定）。是否继续？`,

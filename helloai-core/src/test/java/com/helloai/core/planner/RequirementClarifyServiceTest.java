@@ -1,5 +1,6 @@
 package com.helloai.core.planner;
 
+import com.baomidou.mybatisplus.extension.conditions.update.LambdaUpdateChainWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentAccessType;
@@ -48,6 +49,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
@@ -56,6 +58,8 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -109,6 +113,12 @@ class RequirementClarifyServiceTest {
     @Mock
     private SearchQueryPlannerService searchQueryPlannerService;
 
+    /** 会话定点更新链式 mock（与 PlannerAnalysisServiceTest 同惯例）：
+     *  finalize CAS / task_id 回填 / 终稿字段定点写均走 lambdaUpdate。 */
+    @SuppressWarnings("unchecked")
+    private final LambdaUpdateChainWrapper<RequirementConversation> convUpdateChain =
+            mock(LambdaUpdateChainWrapper.class);
+
     private RequirementClarifyService clarifyService;
 
     @BeforeEach
@@ -126,6 +136,14 @@ class RequirementClarifyServiceTest {
                         pageFetchService, searchQueryPlannerService, new RelativeTimeNormalizer()),
                 new ChatRoundDecisionParser(new ObjectMapper()),
                 new SystemTimeContextBuilder());
+
+        // 会话 lambdaUpdate 链式 stub：默认全部成功；CAS 失败用例在测试内重钉 update() 返回 false。
+        // eq/set 用 lenient：非 finalize 路径用例不触发链，避免 UnnecessaryStubbingException
+        lenient().when(conversationService.lambdaUpdate()).thenReturn(convUpdateChain);
+        lenient().when(convUpdateChain.eq(any(), any())).thenReturn(convUpdateChain);
+        lenient().when(convUpdateChain.set(any(), any())).thenReturn(convUpdateChain);
+        lenient().when(convUpdateChain.set(anyBoolean(), any(), any())).thenReturn(convUpdateChain);
+        lenient().when(convUpdateChain.update()).thenReturn(true);
     }
 
     private RequirementConversation activeConversation() {
@@ -303,8 +321,9 @@ class RequirementClarifyServiceTest {
         assertThat(conversation.getFinalTitle()).isEqualTo("搭建日报模块");
         assertThat(conversation.getFinalDescription()).isEqualTo("## 背景\n做日报");
         verify(messageService).addMessage(CONV_ID, "assistant", "需求已清晰");
-        // round_count+1 与终稿回填各一次 updateById
-        verify(conversationService, org.mockito.Mockito.times(2)).updateById(conversation);
+        // round_count+1 一次 updateById；终稿字段改走定点字段写入（防长窗口丢失更新）
+        verify(conversationService, org.mockito.Mockito.times(1)).updateById(conversation);
+        verify(conversationService).lambdaUpdate();
     }
 
     @Test
@@ -600,12 +619,47 @@ class RequirementClarifyServiceTest {
         assertThat(task.getStatus()).isEqualTo(TaskStatus.PENDING);
         assertThat(conversation.getTaskId()).isEqualTo(300L);
         assertThat(conversation.getStatus()).isEqualTo(RequirementClarifyService.STATUS_FINALIZED);
-        verify(conversationService).updateById(conversation);
+        // CAS 推进 + task_id 定点回填各走一次 lambdaUpdate（不再有全字段 updateById）
+        verify(conversationService, times(2)).lambdaUpdate();
+        verify(conversationService, never()).updateById(any());
         verify(agentInboxService).send(eq(9L), anyString(), eq("task.created"),
                 anyString(), anyString(), eq("task"), eq(300L), eq("HIGH"));
         verify(taskTimelineService).recordEvent(
                 eq(300L), isNull(), eq("task_created_from_clarify"),
                 eq(AgentRole.PLANNER), isNull(), anyMap());
+    }
+
+    @Test
+    @DisplayName("finalize：CAS 推进失败（并发已终稿）拒绝建任务")
+    void shouldRejectFinalizeWhenCasFails() {
+        RequirementConversation conversation = activeConversation();
+        conversation.setFinalTitle("标题");
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        // 覆盖 setUp 默认链：CAS 条件更新影响行数 0 → 并发一方已推进 FINALIZED
+        when(convUpdateChain.update()).thenReturn(false);
+
+        assertThatThrownBy(() -> clarifyService.finalize(CONV_ID))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("会话状态已变化");
+        verify(taskService, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("finalize：会话已关联存活任务时拒绝重复创建（幂等防御）")
+    void shouldRejectFinalizeWhenTaskAlreadyLinked() {
+        RequirementConversation conversation = activeConversation();
+        conversation.setFinalTitle("标题");
+        conversation.setTaskId(300L);
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        Task existing = new Task();
+        existing.setId(300L);
+        when(taskService.getById(300L)).thenReturn(existing);
+
+        assertThatThrownBy(() -> clarifyService.finalize(CONV_ID))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("请勿重复创建");
+        verify(taskService, never()).save(any());
+        verify(conversationService, never()).lambdaUpdate();
     }
 
     @Test
