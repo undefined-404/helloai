@@ -44,7 +44,8 @@ public class LlmProviderKeyVerifyServiceImpl implements LlmProviderKeyVerifyServ
     /** 内置供应商兜底模型（default_model 为空时使用，仅作最小探测）。 */
     private static final Map<String, String> FALLBACK_MODELS = Map.of(
             "deepseek", "deepseek-chat",
-            "moonshot", "moonshot-v1-8k",
+            // moonshot-v1 系列已于 2026-08-31 官方下线（404），兜底模型同步切 kimi-k3
+            "moonshot", "kimi-k3",
             "minimax", "MiniMax-Text-01",
             "dashscope", "qwen-turbo"
     );

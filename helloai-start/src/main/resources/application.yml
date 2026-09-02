@@ -231,7 +231,8 @@ helloai:
     moonshot:
       api-key: ${MOONSHOT_API_KEY:}
       base-url: ${MOONSHOT_BASE_URL:https://api.moonshot.cn}
-      default-model: ${MOONSHOT_CHAT_MODEL:moonshot-v1-8k}
+      # moonshot-v1 系列已于 2026-08-31 官方下线（404），默认值切 kimi-k3（V61 迁移同步）
+      default-model: ${MOONSHOT_CHAT_MODEL:kimi-k3}
     minimax:
       api-key: ${MINIMAX_API_KEY:}
       base-url: ${MINIMAX_BASE_URL:https://api.minimaxi.com/anthropic}

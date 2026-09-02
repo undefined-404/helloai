@@ -521,9 +521,11 @@ LLM API Key 支持两种配置方式，**推荐方式一**（系统设置页，�
 | Provider | 协议 | 默认 Base URL | 默认模型 | 获取地址 |
 |---|---|---|---|---|
 | **DeepSeek** | 官方 SDK（OpenAI 兼容） | `https://api.deepseek.com` | `deepseek-chat` | [platform.deepseek.com](https://platform.deepseek.com/) |
-| **Moonshot (Kimi)** | OpenAI 兼容 | `https://api.moonshot.cn` | `moonshot-v1-8k` | [platform.moonshot.cn](https://platform.moonshot.cn/) |
+| **Moonshot (Kimi)** | OpenAI 兼容 | `https://api.moonshot.cn` | `kimi-k3` | [platform.moonshot.cn](https://platform.moonshot.cn/) |
 | **MiniMax** | Anthropic 兼容 | `https://api.minimaxi.com/anthropic` | `MiniMax-M2.5` | [MiniMax 开放平台](https://api.minimaxi.com/) |
 | **DashScope (通义千问)** | OpenAI 兼容 | `https://dashscope.aliyuncs.com/compatible-mode` | `qwen-plus` | [dashscope.console.aliyun.com](https://dashscope.console.aliyun.com/) |
+
+> 注：Moonshot 的 `moonshot-v1` 全系列与 `kimi-k2.5` 已于 2026-08-31 官方下线（调用返回 404），默认模型已切换为 `kimi-k3`（V61 迁移 + 配置默认值同步）。
 
 <!-- TODO(添加模型弹窗截图)：待浏览器代理可用后补一张「添加模型」两步式弹窗截图（占位文件 doc/images/settings-model-add.png 暂未生成） -->
 
