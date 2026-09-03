@@ -32,27 +32,29 @@ public interface SubTaskMapper extends BaseMapper<SubTask> {
                                        @Param("now") OffsetDateTime now);
 
     /**
-     * 原子累加 sub_task.reassign_attempt_count（重分配熔断计数器）。
+     * 原子累加 sub_task.attempt_total（全局共享重试预算，Phase 0 A3）。
      *
-     * <p>所有类型的重分配入口（离线重派、超时回收、N11回退、阻塞重试）都通过
-     * 本方法累加计数。达到 max-reassign-attempts 阈值后由
-     * {@link com.helloai.core.task.service.SubTaskDispatchService} 判定熔断。</p>
+     * <p>替代原 reassign_attempt_count 计数：所有类型的重分配入口
+     * （离线重派、超时回收、N11回退、阻塞重试）都通过本方法累加。
+     * 达到 max-reassign-attempts 阈值后由
+     * {@link com.helloai.core.task.service.SubTaskDispatchService} 判定熔断
+     * （坑点 3「单一权威」：同预算还供返工 / 超时后续并入）。</p>
      *
      * @return 1 = 成功累加；0 = 子任务不存在或已删除
      */
-    int incrementReassignAttemptCount(@Param("subTaskId") Long subTaskId,
-                                      @Param("now") OffsetDateTime now);
+    int incrementAttemptTotal(@Param("subTaskId") Long subTaskId,
+                              @Param("now") OffsetDateTime now);
 
     /**
-     * 重置 sub_task.reassign_attempt_count 为 0（死信人工兜底）。
+     * 重置 sub_task.attempt_total 为 0（死信人工兜底）。
      *
      * <p>仅由 {@link com.helloai.core.task.service.SubTaskDispatchService#redispatchDeadLetter}
      * 在人工指派 DEAD_LETTER 子任务前调用，避免重新投入调度链后立即再次熔断。</p>
      *
      * @return 1 = 成功重置；0 = 子任务不存在或已删除
      */
-    int resetReassignAttemptCount(@Param("subTaskId") Long subTaskId,
-                                  @Param("now") OffsetDateTime now);
+    int resetAttemptTotal(@Param("subTaskId") Long subTaskId,
+                          @Param("now") OffsetDateTime now);
 
     /**
      * 写入子任务依赖 id 数组（JSON 字符串，SQL 内显式 ::jsonb 转换）。

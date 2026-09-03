@@ -3,10 +3,14 @@ package com.helloai.core.agent.mqconsumer;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.runtime.AgentContext;
+import com.helloai.core.agent.runtime.AgentExecutionResult;
+import com.helloai.core.agent.runtime.AgentRuntime;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.shared.event.ExecutionCommandCreatedEvent;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
@@ -22,7 +26,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
+import java.util.List;
 import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -55,6 +61,9 @@ class LocalExecutionCommandConsumerTest {
 
     @Mock
     private ExecutionResultHandler executionResultHandler;
+
+    @Mock
+    private AgentRuntime agentRuntime;
 
     @InjectMocks
     private LocalExecutionCommandConsumer localExecutionCommandConsumer;
@@ -230,6 +239,132 @@ class LocalExecutionCommandConsumerTest {
             verify(agentExecutionRecordService, never()).markRunning(any());
             verify(subTaskExecutionService, never()).executeOnce(any(), any());
         }
+    }
+
+    @Nested
+    @DisplayName("Phase 0 C3 双轨灰度路由")
+    class RuntimeRoutePath {
+
+        @Test
+        @DisplayName("should run runtime path with record CAS + timeline when gray hits")
+        void shouldRouteToRuntimeAndMarkSuccess() {
+            enableRuntimeRoute(49); // taskId=33 → 33 % 100 = 33 < 49 → 命中路由
+            SubTask subTask = subTask();
+            Agent agent = agent();
+
+            when(subTaskService.getById(22L)).thenReturn(subTask);
+            when(agentService.getById(11L)).thenReturn(agent);
+            when(agentExecutionRecordService.markRunning(44L)).thenReturn(true);
+            when(agentExecutionRecordService.markSuccess(44L)).thenReturn(true);
+            when(agentRuntime.execute(any(AgentContext.class)))
+                    .thenReturn(AgentExecutionResult.builder()
+                            .status(ExecutionStatus.SUCCESS)
+                            .output("out")
+                            .build());
+
+            localExecutionCommandConsumer.consume(baseCommand());
+
+            // AgentContext 与 B2 埋点同源：run-{taskId}-1 / turn=1 / step=0
+            verify(agentRuntime).execute(argThat(ctx ->
+                    ctx != null
+                            && "run-33-1".equals(ctx.getRunId())
+                            && ctx.getTaskId() != null && ctx.getTaskId() == 33L
+                            && ctx.getSubTaskId() != null && ctx.getSubTaskId() == 22L
+                            && ctx.getTurn() == 1
+                            && ctx.getStep() == 0
+                            && ctx.getAgentId() != null && ctx.getAgentId() == 11L));
+            // record CAS 补齐（旧直连独有职责，路由层代理执行）
+            verify(agentExecutionRecordService).markRunning(44L);
+            verify(agentExecutionRecordService).markSuccess(44L);
+            verify(agentExecutionRecordService, never()).markFailed(any(), any());
+            // timeline 观察点（route 标记区分路径）
+            verify(taskTimelineService).recordEvent(
+                    eq(33L), eq(22L), eq("sub_task_execution_command_consume"),
+                    eq(AgentRole.EXECUTOR), eq(11L),
+                    argThat((Map<String, Object> m) -> "agent_runtime".equals(m.get("route"))));
+            verify(taskTimelineService).recordEvent(
+                    33L, 22L, "sub_task_execute_start", AgentRole.EXECUTOR, 11L,
+                    Map.of("executor", "agent_runtime"));
+            // 旧直连编排不再执行（状态推进 / 执行 / 回写交给 Runtime 实现内部）
+            verify(subTaskExecutionService, never()).startIfNeeded(any(), any());
+            verify(subTaskExecutionService, never()).executeOnce(any(), any());
+            verify(executionResultHandler, never()).handleReport(any());
+        }
+
+        @Test
+        @DisplayName("should markFailed when runtime returns FAILED")
+        void shouldRouteToRuntimeAndMarkFailed() {
+            enableRuntimeRoute(49);
+            SubTask subTask = subTask();
+            Agent agent = agent();
+
+            when(subTaskService.getById(22L)).thenReturn(subTask);
+            when(agentService.getById(11L)).thenReturn(agent);
+            when(agentExecutionRecordService.markRunning(44L)).thenReturn(true);
+            when(agentExecutionRecordService.markFailed(44L, "run failed")).thenReturn(true);
+            when(agentRuntime.execute(any(AgentContext.class)))
+                    .thenReturn(AgentExecutionResult.builder()
+                            .status(ExecutionStatus.FAILED)
+                            .output("run failed")
+                            .build());
+
+            localExecutionCommandConsumer.consume(baseCommand());
+
+            verify(agentExecutionRecordService).markRunning(44L);
+            verify(agentExecutionRecordService).markFailed(44L, "run failed");
+            verify(agentExecutionRecordService, never()).markSuccess(any());
+            // Runtime 失败同样不进入旧直连编排
+            verify(subTaskExecutionService, never()).startIfNeeded(any(), any());
+            verify(executionResultHandler, never()).handleReport(any());
+        }
+
+        @Test
+        @DisplayName("should skip runtime execution when markRunning returns false")
+        void shouldSkipWhenMarkRunningFalseOnRuntimePath() {
+            enableRuntimeRoute(49);
+            SubTask subTask = subTask();
+            Agent agent = agent();
+
+            when(subTaskService.getById(22L)).thenReturn(subTask);
+            when(agentService.getById(11L)).thenReturn(agent);
+            when(agentExecutionRecordService.markRunning(44L)).thenReturn(false);
+
+            localExecutionCommandConsumer.consume(baseCommand());
+
+            verify(agentExecutionRecordService).markRunning(44L);
+            verify(agentRuntime, never()).execute(any(AgentContext.class));
+            verify(agentExecutionRecordService, never()).markSuccess(any());
+            verify(agentExecutionRecordService, never()).markFailed(any(), any());
+            verify(subTaskExecutionService, never()).startIfNeeded(any(), any());
+        }
+
+        @Test
+        @DisplayName("should keep legacy path when taskId % 100 >= grayPercent (33 vs 33)")
+        void shouldNotRouteWhenTaskIdExceedsGrayPercent() {
+            enableRuntimeRoute(33); // taskId=33 → 33 % 100 = 33 不 < 33 → 不命中路由
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.ASSIGNED);
+            Agent agent = agent();
+
+            when(subTaskService.getById(22L)).thenReturn(subTask);
+            when(agentService.getById(11L)).thenReturn(agent);
+            when(agentExecutionRecordService.markRunning(44L)).thenReturn(true);
+            when(agentExecutionRecordService.markSuccess(44L)).thenReturn(true);
+            when(subTaskExecutionService.executeOnce(same(subTask), same(agent)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+
+            localExecutionCommandConsumer.consume(baseCommand());
+
+            verify(agentRuntime, never()).execute(any(AgentContext.class));
+            // 走旧直连：startIfNeeded + executeOnce
+            verify(subTaskExecutionService).startIfNeeded(22L, SubTaskStatus.ASSIGNED);
+            verify(subTaskExecutionService).executeOnce(subTask, agent);
+        }
+    }
+
+    private void enableRuntimeRoute(int grayPercent) {
+        ReflectionTestUtils.setField(localExecutionCommandConsumer, "grayPercent", grayPercent);
+        ReflectionTestUtils.setField(localExecutionCommandConsumer, "agentRuntimes", List.of(agentRuntime));
     }
 
     private static SubTask subTask() {

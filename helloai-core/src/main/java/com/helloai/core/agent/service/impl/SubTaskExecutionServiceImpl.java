@@ -3,12 +3,15 @@ package com.helloai.core.agent.service.impl;
 import com.helloai.core.agent.service.SubTaskExecutionService;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.event.AgentEventContextResolver;
+import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.service.AttachmentService;
@@ -90,6 +93,8 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
     private final ConversationService conversationService;
     private final AttachmentService attachmentService;
     private final AgentQualityProfileService agentQualityProfileService;
+    /** Phase 0 B2：事件记录器（Turn/Step 级埋点；事件 write-only，失败仅告警不阻断执行链）。 */
+    private final AgentEventRecorder agentEventRecorder;
 
     // #region debug-point redispatch-stuck-blocked
     private static final ObjectMapper DBG_MAPPER = new ObjectMapper();
@@ -231,6 +236,15 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
             throw new BizException("子任务不可执行: status=" + subTask.getStatus());
         }
 
+        // Phase 0 B2：AGENT_STARTED（Turn 起点，step=1）
+        // turn 按 ADR-001 §3.2 从 reworkCount/attemptTotal 推导，本轮执行期间固定复用
+        int runTurn = AgentEventContextResolver.resolveTurn(subTask);
+        recordEventSafely(AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
+                subTask.getTaskId(), subTaskId, runTurn, 1,
+                AgentEventType.AGENT_STARTED, agent.getId(),
+                safeMap("status", subTask.getStatus() != null ? subTask.getStatus().name() : null,
+                        "assignedAgentId", subTask.getAssignedAgentId()));
+
         dbg("sub_task_execute_enter", safeMap(
                 "subTaskId", subTaskId,
                 "status", subTask.getStatus() != null ? subTask.getStatus().name() : null,
@@ -261,6 +275,13 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
                 .context(context)
                 .requiredCapabilities(Map.of())
                 .build();
+        // Phase 0 B2：CONTEXT_BUILT（Turn 内上下文装配完成，step=2）
+        recordEventSafely(AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
+                subTask.getTaskId(), subTaskId, runTurn, 2,
+                AgentEventType.CONTEXT_BUILT, agent.getId(),
+                safeMap("promptChars", task.getUserPrompt() != null ? task.getUserPrompt().length() : 0,
+                        "depCount", dependencySection.depCount));
+
         dbg("sub_task_execute_before_platform", safeMap(
                 "subTaskId", subTaskId,
                 "agentId", agent.getId()
@@ -288,7 +309,19 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
         } catch (Exception e) {
             log.warn("执行请求对话流写入失败（不阻断主链路）: subTaskId={}, err={}", subTaskId, e.getMessage());
         }
+        // Phase 0 B2：TOOL_CALL_STARTED（step=3，旧 Executor 的 Agent 调用视作一次原子动作）
+        recordEventSafely(AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
+                subTask.getTaskId(), subTaskId, runTurn, 3,
+                AgentEventType.TOOL_CALL_STARTED, agent.getId(),
+                safeMap("agentName", agent.getName()));
         AgentResult result = platformAgentExecutionService.executeSync(agent, task);
+        // Phase 0 B2：TOOL_CALL_COMPLETED（step=4）；失败终态不发事件（ADR §5.3）
+        recordEventSafely(AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
+                subTask.getTaskId(), subTaskId, runTurn, 4,
+                AgentEventType.TOOL_CALL_COMPLETED, agent.getId(),
+                safeMap("success", result.isSuccess(),
+                        "finishReason", result.getFinishReason(),
+                        "tokens", result.getTokenUsage()));
         taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_llm_call_end",
                 AgentRole.EXECUTOR, agent.getId(),
                 safeMap("agentId", agent.getId(), "success", result.isSuccess(),
@@ -314,6 +347,19 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
             return;
         }
         throw new BizException("子任务状态不允许执行: subTaskId=" + subTaskId + ", status=" + status);
+    }
+
+    /**
+     * Phase 0 B2：事件记录降级封装（事件 write-only，失败仅告警不阻断执行主链路）。
+     */
+    private void recordEventSafely(String runId, Long taskId, Long subTaskId, int turn, int step,
+                                   AgentEventType eventType, Long agentId, Map<String, Object> payload) {
+        try {
+            agentEventRecorder.record(runId, taskId, subTaskId, turn, step, eventType, agentId, payload);
+        } catch (Exception e) {
+            log.warn("Agent 事件记录失败（事件 write-only，降级不阻断主链路）: type={}, subTaskId={}, err={}",
+                    eventType, subTaskId, e.getMessage());
+        }
     }
 
     /**

@@ -435,7 +435,7 @@ class SubTaskDispatchServiceTest {
         subTask.setId(81L);
         subTask.setTaskId(91L);
         subTask.setStatus(SubTaskStatus.PENDING);
-        subTask.setReassignAttemptCount(5);
+        subTask.setAttemptTotal(5);
         when(subTaskService.getById(81L)).thenReturn(subTask);
         // ready 守卫在熔断检查前，无依赖子任务视为就绪
         when(subTaskService.isReady(subTask)).thenReturn(true);
@@ -445,7 +445,7 @@ class SubTaskDispatchServiceTest {
         assertThat(result).isNull();
         verify(subTaskService).changeStatus(81L, SubTaskStatus.DEAD_LETTER, null,
                 Map.of("dead_letter_reason", "reassign_attempt_exceeded",
-                        "reassign_attempt_count", "5",
+                        "attempt_total", "5",
                         "max_reassign_attempts", "5"));
         verify(taskTimelineService).recordEvent(
                 91L,
@@ -454,7 +454,7 @@ class SubTaskDispatchServiceTest {
                 AgentRole.SYSTEM,
                 null,
                 Map.of("reason", "reassign_attempt_exceeded",
-                        "reassign_attempt_count", 5,
+                        "attempt_total", 5,
                         "max_reassign_attempts", 5));
         verify(agentSelector, never()).pickPreferred(any(), any());
         verify(taskDispatchPort, never()).assignNext(any(), any(), any());
@@ -469,7 +469,7 @@ class SubTaskDispatchServiceTest {
         subTask.setId(82L);
         subTask.setTaskId(92L);
         subTask.setStatus(SubTaskStatus.PENDING);
-        subTask.setReassignAttemptCount(2);
+        subTask.setAttemptTotal(2);
         when(subTaskService.getById(82L)).thenReturn(subTask);
         // ready 守卫在熔断检查前，无依赖子任务视为就绪
         when(subTaskService.isReady(subTask)).thenReturn(true);
@@ -481,7 +481,7 @@ class SubTaskDispatchServiceTest {
         Long result = subTaskDispatchService.dispatchPendingSubTaskAuto(82L, AgentRole.EXECUTOR);
 
         assertThat(result).isEqualTo(99L);
-        verify(subTaskMapper).incrementReassignAttemptCount(eq(82L), any(OffsetDateTime.class));
+        verify(subTaskMapper).incrementAttemptTotal(eq(82L), any(OffsetDateTime.class));
         verify(subTaskService, never()).changeStatus(anyLong(), any(), any(), any());
         verify(taskDispatchPort).assignNext(99L, 82L, null);
     }
@@ -502,7 +502,7 @@ class SubTaskDispatchServiceTest {
 
         subTaskDispatchService.redispatchDeadLetter(83L, 15L);
 
-        verify(subTaskMapper).resetReassignAttemptCount(eq(83L), any(OffsetDateTime.class));
+        verify(subTaskMapper).resetAttemptTotal(eq(83L), any(OffsetDateTime.class));
         verify(subTaskService).changeStatus(83L, SubTaskStatus.ASSIGNED, 15L);
         verify(taskTimelineService).recordEvent(
                 93L,
@@ -528,7 +528,7 @@ class SubTaskDispatchServiceTest {
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("DEAD_LETTER");
 
-        verify(subTaskMapper, never()).resetReassignAttemptCount(anyLong(), any());
+        verify(subTaskMapper, never()).resetAttemptTotal(anyLong(), any());
         verify(subTaskService, never()).changeStatus(anyLong(), any(), anyLong());
     }
 

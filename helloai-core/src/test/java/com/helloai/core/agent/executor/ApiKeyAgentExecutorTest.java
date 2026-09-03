@@ -48,7 +48,8 @@ class ApiKeyAgentExecutorTest {
                 .build();
 
         RuntimeException root = new RuntimeException();
-        when(chatClientService.generate(agent, "system", "user", "deepseek", null))
+        // LOG-20260901-001 后 generate 为 6 参重载（含 temperature）；stub 需同步，否则 mock 返回 null 触发 NPE
+        when(chatClientService.generate(agent, "system", "user", "deepseek", null, null))
                 .thenThrow(root);
 
         assertThatThrownBy(() -> executor.execute(agent, task))

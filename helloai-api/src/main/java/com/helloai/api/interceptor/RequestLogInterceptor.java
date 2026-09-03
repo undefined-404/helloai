@@ -13,7 +13,13 @@ import java.util.UUID;
 public class RequestLogInterceptor implements HandlerInterceptor {
 
     private static final String TRACE_ID_KEY = "traceId";
+    private static final String RUN_ID_KEY = "run_id";
+    private static final String TASK_ID_KEY = "task_id";
+    private static final String STEP_ID_KEY = "step_id";
     private static final String START_TIME_KEY = "_startTime";
+
+    /** 请求级 MDC 键集：preHandle 写入、afterCompletion 统一清理（含 Phase 0 C4 事件链业务键）。 */
+    private static final String[] MDC_REQUEST_KEYS = {TRACE_ID_KEY, RUN_ID_KEY, TASK_ID_KEY, STEP_ID_KEY};
 
     private final RequestLogMapper requestLogMapper;
 
@@ -28,8 +34,20 @@ public class RequestLogInterceptor implements HandlerInterceptor {
             traceId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
         }
         MDC.put(TRACE_ID_KEY, traceId);
+        // Phase 0 C4：事件链业务标识入 MDC（下游执行链/RabbitMQ 消费端按同键续传，无头则跳过不影响主流程）
+        putHeaderIfPresent(request, "X-Run-Id", RUN_ID_KEY);
+        putHeaderIfPresent(request, "X-Task-Id", TASK_ID_KEY);
+        putHeaderIfPresent(request, "X-Step-Id", STEP_ID_KEY);
         request.setAttribute(START_TIME_KEY, System.currentTimeMillis());
         return true;
+    }
+
+    /** 请求头非空时写入 MDC；头缺失/空白时跳过（可选业务标识，不强制）。 */
+    private void putHeaderIfPresent(HttpServletRequest request, String header, String mdcKey) {
+        String value = request.getHeader(header);
+        if (value != null && !value.isBlank()) {
+            MDC.put(mdcKey, value);
+        }
     }
 
     @Override
@@ -62,9 +80,10 @@ public class RequestLogInterceptor implements HandlerInterceptor {
             requestLogMapper.insert(log);
         } catch (Exception e) {
             // 日志记录异常不应影响主流程
-            MDC.remove(TRACE_ID_KEY);
         } finally {
-            MDC.remove(TRACE_ID_KEY);
+            for (String key : MDC_REQUEST_KEYS) {
+                MDC.remove(key);
+            }
         }
     }
 }

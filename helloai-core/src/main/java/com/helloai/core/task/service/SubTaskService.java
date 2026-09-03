@@ -8,6 +8,7 @@ import com.helloai.core.task.port.TaskDispatchPort;
 import lombok.Data;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -227,6 +228,49 @@ public interface SubTaskService extends IService<SubTask> {
      * @return REVIEW 孤儿子任务列表
      */
     List<SubTask> listReviewOrphans(int thresholdSeconds, int limit);
+
+    /**
+     * 列出最近有变更的子任务（Phase 0 B3 事件对账候选源）。
+     *
+     * <p>事件是业务状态的投影（ADR-001 §5.3），对账必须<b>以业务表为候选源</b>：
+     * 只扫描最近变更的子任务，校验其是否发出了与当前状态匹配的终态事件；
+     * 若以事件流为候选源，埋点失败/缺失的子任务永远不会进入对账视野。</p>
+     *
+     * @param since 只统计 update_time &gt;= since 的子任务（对账窗口）
+     * @param limit 返回上限（窗口内变更量超限时本轮截断，下一轮继续）
+     * @return 最近变更子任务列表（按更新时间倒序，绝不返回 null）
+     */
+    List<SubTask> listRecentlyChanged(OffsetDateTime since, int limit);
+
+    /**
+     * 看门狗续期：更新当前节点持有的全部执行租约（Phase 0 A2.3）。
+     *
+     * <p>由 {@code WatchdogLeaseRenewTask}（helloai-job，每节点独立运行、不加 ShedLock）
+     * 周期调用，仅续 {@code owner = 当前节点名} 的 IN_PROGRESS 子任务租约；
+     * 单条基于 {@code SubTask.@Version} 乐观锁 CAS，若该行已被 Reconciler 回收
+     * （状态离开 IN_PROGRESS / version 变更）则跳过。</p>
+     *
+     * @param newLeaseUntil 统一的续期目标时间（{@code now + ttl}）
+     * @param limit         单轮续期上限
+     * @return 实际续期成功条数
+     */
+    @Transactional(rollbackFor = Exception.class)
+    int renewCurrentNodeLeases(OffsetDateTime newLeaseUntil, int limit);
+
+    /**
+     * 租约过期回收：把 {@code lease_until < now} 的 IN_PROGRESS 子任务退回 PENDING（Phase 0 A2.4）。
+     *
+     * <p>由 {@code LeaseReconcilerTask}（helloai-job，ShedLock 集群单例）周期调用，
+     * 处理 Worker 崩溃 / 宕机后无人续租的任务：回收为 PENDING + 清空
+     * assignedAgentId / owner / leaseUntil，交由既有分发链重新派发；同时写
+     * {@code task_timeline} 回收事件供审计。单条基于 @Version 乐观锁 CAS，
+     * 与 Watchdog 续期并发竞争时失败方自动跳过（赢者生效）。</p>
+     *
+     * @param limit 单轮回收上限
+     * @return 实际回收条数
+     */
+    @Transactional(rollbackFor = Exception.class)
+    int reclaimExpiredLeases(int limit);
 
     // ══════════════════════════════════════════════════════════════
     //  阶段五 agent→task.mapper 清零承接（agent 域只依赖本服务接口）

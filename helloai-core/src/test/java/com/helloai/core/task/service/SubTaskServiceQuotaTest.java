@@ -3,7 +3,9 @@ package com.helloai.core.task.service;
 import com.helloai.common.base.AgentUnavailableException;
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentDispatchProperties;
+import com.helloai.common.config.WatchdogProperties;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.agent.service.AgentService;
@@ -66,6 +68,7 @@ class SubTaskServiceQuotaTest {
     @Mock private AttachmentService attachmentService;
     @SuppressWarnings("unchecked")
     @Mock private org.springframework.beans.factory.ObjectProvider<AttachmentService> attachmentServiceProvider;
+    @Mock private AgentEventRecorder agentEventRecorder;
 
     private SubTaskService subTaskService;
     private AgentDispatchProperties dispatchProps;
@@ -78,7 +81,9 @@ class SubTaskServiceQuotaTest {
                 agentOutboxService, agentInboxService, agentServiceProvider,
                 heartbeatService, reviewPort, implicitScoreCalculator,
                 rewardService, applicationEventPublisher, taskTimelineService,
-                dispatchProps, concurrencyQuotaService, attachmentServiceProvider));
+                dispatchProps, concurrencyQuotaService,
+                // Phase 0 A2：租约看门狗配置（assignNext 不涉及租约，默认值即可）
+                new WatchdogProperties(), attachmentServiceProvider, agentEventRecorder));
         // §6.140 收口：行锁改走 AgentService.lockByIdForUpdate（ObjectProvider 懒解析）；
         // lenient：状态校验失败路径不触发行锁，避免 UnnecessaryStubbing
         lenient().when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);

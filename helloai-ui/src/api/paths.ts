@@ -53,6 +53,8 @@ export const paths = {
   },
   agents: {
     list: '/agents/list',
+    // 可指派执行者候选（改派/认领/死信重派选择器数据源）：EXECUTOR + ACTIVE，内部 LLM 恒可用、外部需在线
+    listAssignableExecutors: '/agents/listAssignableExecutors',
     listAvailableModels: '/agents/listAvailableModels',
     getById: (id: string | number) => `/agents/getById/${enc(id)}`,
     register: '/agents/register',

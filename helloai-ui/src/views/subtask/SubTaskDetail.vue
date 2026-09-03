@@ -637,6 +637,8 @@ const EVENT_META: Record<string, { label: string; desc: string }> = {
   // 核验熔断 / 人工介入（2026-08-19：与调度死信对称，OPS/DLQ 泳道可回溯）
   sub_task_review_dead_letter: { label: '核验熔断', desc: '核验返工超过上限，子任务进入死信池，等待人工决定通过/改派' },
   sub_task_manual_intervention_required: { label: '人工介入', desc: '系统判定该子任务需要人工处置（改派/人工通过/人工驳回）' },
+  sub_task_manual_review_passed: { label: '人工验收通过', desc: '管理员人工审定通过，子任务完成（LOG-20260903-005 新增，与自动核验对称）' },
+  sub_task_manual_review_rejected: { label: '人工驳回', desc: '管理员人工驳回返工/改派（LOG-20260903-005 新增，与自动核验对称）' },
   sub_task_manual_rework_reset: { label: '人工改派', desc: '人工驳回并改派执行者，同时重置返工计数' },
   // 任务级
   task_plan_generated: { label: '生成拆解', desc: '已生成任务拆解草案' },
@@ -768,10 +770,11 @@ const currentExecutorName = computed(() => {
   return resolveAgentName(item.value.assignedAgent)
 })
 
-// REVIEW 卡死判定：context 有人工介入标记，或返工次数已达后端默认上限
-// （autoReviewMaxRework=3，兼容标记落库前的存量卡死任务）
+// 人工介入判定：context 有人工介入标记（核验熔断后状态已转 DEAD_LETTER，
+// 与 REVIEW 同样需人工处置面板；返工次数达后端默认上限也视为待介入）
 const needsManualIntervention = computed(() => {
-  if (!item.value || item.value.status !== 'REVIEW') return false
+  if (!item.value) return false
+  if (item.value.status !== 'REVIEW' && item.value.status !== 'DEAD_LETTER') return false
   if (item.value.context?.manualIntervention) return true
   return item.value.reworkCount >= 3
 })
@@ -788,11 +791,15 @@ const manualReasonText = computed(() => {
 // 在线优先（外部/内部 Agent 均可选）；当前负责人若为唯一内部 Agent 时仍可通过
 // 「原执行者重做」选项（reworkAgentId=null）回到原执行者，避免候选列表出现外部 Agent
 // 一枝独秀、内部 Agent 完全不可选的情况（§6.55/§6.57 决策）
+// 外部 Agent 要求在线（ONLINE/IDLE）：人工改派给离线 CLI/网页 Agent 后命令无人消费
 const manualCandidates = computed(() => {
   if (!item.value) return []
   const current = item.value.assignedAgent != null ? String(item.value.assignedAgent) : ''
   return agents.value
     .filter(a => a.role === 'EXECUTOR' && a.status === 'ACTIVE' && String(a.id) !== current)
+    .filter(a => a.accessType === 'API_KEY_LLM'
+      || a.onlineStatus === 'ONLINE'
+      || a.onlineStatus === 'IDLE')
     .sort((a, b) => {
       const rank = (x: Agent) => (x.onlineStatus === 'IDLE' || x.onlineStatus === 'ONLINE' ? 0 : 1)
       return rank(a) - rank(b)

@@ -7,6 +7,7 @@ import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.ExecutionArtifactService;
 import com.helloai.core.agent.service.AgentService;
@@ -82,13 +83,16 @@ class ExecutionResultHandlerIntegrationTest {
     @Mock
     private ExecutorDoneIssuesBackfiller executorDoneIssuesBackfiller;
 
+    @Mock
+    private AgentEventRecorder agentEventRecorder;
+
     private ExecutionResultHandler handler;
 
     @BeforeEach
     void setUp() {
         handler = new ExecutionResultHandler(subTaskService, taskTimelineService, failureTracker, agentService,
                 applicationEventPublisher, conversationService, executionArtifactService, taskRunningSpecService,
-                new ExecutionOutputParser(), executorDoneIssuesBackfiller);
+                new ExecutionOutputParser(), executorDoneIssuesBackfiller, agentEventRecorder);
         // 模拟 Spring @Transactional 已开启（afterCommit 注册需要激活的同步管理器）
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.initSynchronization();

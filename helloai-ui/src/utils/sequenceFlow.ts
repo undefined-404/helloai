@@ -63,6 +63,8 @@ export function classifySwimlane(ev: TaskTimelineItem): Swimlane {
   // 人工介入（死信重派 / 手动触发 / 人工介入标记 / 人工驳回改派）→ 人工运维台
   if (t === 'sub_task_dead_letter_manual_assign'
       || t === 'sub_task_manual_intervention_required'
+      || t === 'sub_task_manual_review_passed'
+      || t === 'sub_task_manual_review_rejected'
       || t === 'sub_task_manual_rework_reset') return 'OPS'
   if (trigger === 'manual' || trigger === 'dead_letter_redispatch') return 'OPS'
   // 死信（系统判定：调度重分配熔断 / 核验返工熔断）→ 死信队列
@@ -147,6 +149,8 @@ const LABEL: Record<string, string> = {
   sub_task_review_dead_letter: '核验熔断入死信',
   sub_task_dead_letter_manual_assign: '人工指派',
   sub_task_manual_intervention_required: '人工介入待处理',
+  sub_task_manual_review_passed: '人工验收通过',
+  sub_task_manual_review_rejected: '人工驳回',
   sub_task_manual_rework_reset: '人工驳回改派'
 }
 
@@ -212,6 +216,13 @@ function inferNote(prev: TaskTimelineItem | undefined, cur: TaskTimelineItem, at
   // 人工驳回改派（OPS 泳道）：提示改派目标与原执行者重做语义
   if (t === 'sub_task_manual_rework_reset') {
     return `改派执行者并重置返工计数`
+  }
+  // 人工审查结果（OPS 泳道）：验收通过/驳回留痕（LOG-20260903-005）
+  if (t === 'sub_task_manual_review_passed') {
+    return `人工验收通过（评分 ${p.score ?? '-'}）`
+  }
+  if (t === 'sub_task_manual_review_rejected') {
+    return `人工驳回（评分 ${p.score ?? '-'}）：${String(p.issues || '重新执行').slice(0, 60)}`
   }
   // 人工介入
   if (t === 'sub_task_dead_letter_manual_assign') {

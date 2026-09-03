@@ -1,10 +1,13 @@
 package com.helloai.core.agent.command;
 
 import com.helloai.common.constant.AgentAccessType;
+import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.event.AgentEventContextResolver;
+import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.output.ExecutionOutputParser;
 import com.helloai.core.agent.output.ParsedOutput;
 import com.helloai.core.agent.quality.ExecutorDoneIssuesBackfiller;
@@ -56,6 +59,8 @@ public class ExecutionResultHandler {
     private final TaskRunningSpecService taskRunningSpecService;
     private final ExecutionOutputParser executionOutputParser;
     private final ExecutorDoneIssuesBackfiller executorDoneIssuesBackfiller;
+    /** Phase 0 B2：事件记录器（AGENT_COMPLETED 埋点；事件 write-only，失败仅告警不阻断回写）。 */
+    private final AgentEventRecorder agentEventRecorder;
 
     @Transactional(rollbackFor = Exception.class)
     public void handleSuccess(Long subTaskId, Long agentId, AgentResult result) {
@@ -232,6 +237,22 @@ public class ExecutionResultHandler {
                             "executor", report.getExecutorName(),
                             "tokens", report.getTokenUsage(),
                             "idempotencyKey", report.getIdempotencyKey()));
+            // Phase 0 B2：AGENT_COMPLETED（Turn 端点事件 step=0；失败路径不发，ADR §5.3）
+            try {
+                agentEventRecorder.record(
+                        AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
+                        subTask.getTaskId(), report.getSubTaskId(),
+                        AgentEventContextResolver.resolveTurn(subTask), 0,
+                        AgentEventType.AGENT_COMPLETED, report.getAgentId(),
+                        safeMap("success", report.isSuccess(),
+                                "source", report.getSource(),
+                                "executor", report.getExecutorName(),
+                                "finishReason", report.getFinishReason(),
+                                "tokens", report.getTokenUsage()));
+            } catch (Exception e) {
+                log.warn("Agent 事件记录失败（事件 write-only，降级不阻断主链路）: type={}, subTaskId={}, err={}",
+                        AgentEventType.AGENT_COMPLETED, report.getSubTaskId(), e.getMessage());
+            }
             // 核验门控：事务提交后异步触发 LLM 自动核验（AFTER_COMMIT 监听），
             // 核验 LLM 调用不阻塞结果回报事务；是否启用由监听侧按配置判定
             applicationEventPublisher.publishEvent(

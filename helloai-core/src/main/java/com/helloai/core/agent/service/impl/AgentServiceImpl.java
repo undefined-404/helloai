@@ -33,6 +33,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -257,6 +258,20 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     public List<Agent> listActive() {
         return lambdaQuery().eq(Agent::getStatus, AgentStatus.ACTIVE)
                 .orderByDesc(Agent::getScore).list();
+    }
+
+    @Override
+    public List<Agent> listAssignableExecutors() {
+        // 内部 LLM Agent（API_KEY_LLM）由平台代为调用，无视在线态恒可指派；
+        // 外部 Agent 要求在线（ONLINE/IDLE），避免改派给离线 Agent 后命令无人消费
+        return listByRole(AgentRole.EXECUTOR).stream()
+                .filter(a -> a.getStatus() == AgentStatus.ACTIVE)
+                .filter(a -> a.getAccessType() == AgentAccessType.API_KEY_LLM
+                        || a.getOnlineStatus() == AgentOnlineStatus.ONLINE
+                        || a.getOnlineStatus() == AgentOnlineStatus.IDLE)
+                .sorted(Comparator.comparingInt((Agent a) -> a.getAccessType() == AgentAccessType.API_KEY_LLM ? 0 : 1)
+                        .thenComparing(Comparator.comparing(Agent::getScore, Comparator.nullsLast(Comparator.reverseOrder()))))
+                .toList();
     }
 
     @Override

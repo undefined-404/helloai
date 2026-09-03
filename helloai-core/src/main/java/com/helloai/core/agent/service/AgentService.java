@@ -85,6 +85,15 @@ public interface AgentService extends IService<Agent> {
     List<Agent> listActive();
 
     /**
+     * 可指派执行者候选：role=EXECUTOR 且 ACTIVE。
+     *
+     * <p>内部 LLM Agent（API_KEY_LLM）由平台代为调用，无视在线态恒可指派；
+     * 外部 Agent（CLI_CLIENT/WEB_BROWSER）要求在线（ONLINE/IDLE），
+     * 避免人工改派给离线 Agent 后执行命令无人消费（与 §6.57 人工驳回改派语义对齐）。</p>
+     */
+    List<Agent> listAssignableExecutors();
+
+    /**
      * 更新 Agent 状态。
      */
     void updateStatus(Long agentId, AgentStatus status);

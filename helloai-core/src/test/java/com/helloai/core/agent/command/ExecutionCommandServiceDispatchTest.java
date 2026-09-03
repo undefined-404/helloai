@@ -6,6 +6,7 @@ import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.mqconsumer.ExecutionCommandMqMessage;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentExecutionRecord;
+import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.core.agent.service.impl.ExecutionCommandServiceImpl;
 import com.helloai.core.task.entity.SubTask;
@@ -67,6 +68,8 @@ class ExecutionCommandServiceDispatchTest {
     private ApplicationEventPublisher applicationEventPublisher;
     @Mock
     private AgentCommandOutboxService agentCommandOutboxService;
+    @Mock
+    private AgentEventRecorder agentEventRecorder;
 
     private final AgentExecutionProperties executionProperties = new AgentExecutionProperties();
 
@@ -82,7 +85,7 @@ class ExecutionCommandServiceDispatchTest {
     void setUp() {
         service = new ExecutionCommandServiceImpl(
                 subTaskService, agentService, agentExecutionRecordService, taskTimelineService,
-                applicationEventPublisher, executionProperties, agentCommandOutboxService);
+                applicationEventPublisher, executionProperties, agentCommandOutboxService, agentEventRecorder);
     }
 
     /**

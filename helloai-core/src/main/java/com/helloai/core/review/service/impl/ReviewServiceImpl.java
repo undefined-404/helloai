@@ -4,9 +4,13 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentAccessType;
+import com.helloai.common.constant.AgentEventType;
+import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.event.AgentEventContextResolver;
+import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.quality.DefectLabelParser;
 import com.helloai.core.agent.quality.QualityProfileUpdater;
 import com.helloai.core.agent.service.AgentService;
@@ -23,6 +27,7 @@ import com.helloai.core.review.service.ReviewService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.RewardService;
 import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskTimelineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -47,6 +52,9 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
     private final RewardService rewardService;
     private final AgentService agentService;
     private final ExecutionCommandService executionCommandService;
+    private final TaskTimelineService taskTimelineService;
+    /** Phase 0 B2：Agent 事件记录器（人工审核终态事件 REVIEW_APPROVED/REVIEW_REJECTED）。 */
+    private final AgentEventRecorder agentEventRecorder;
     /** 反馈回路第 1 层：review_record 落库后同事务增量维护质量画像（best-effort 不阻断）。 */
     private final QualityProfileUpdater qualityProfileUpdater;
     /** 反馈回路 Phase 4：抽检候选查询与抽检日志落库（review_recheck_log，同域 Mapper）。 */
@@ -77,8 +85,12 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
         if (subTask == null) {
             throw new BizException("子任务不存在: " + subTaskId);
         }
-        if (subTask.getStatus() != SubTaskStatus.REVIEW) {
-            throw new BizException("子任务状态为 " + subTask.getStatus() + "，只有 REVIEW 状态才能审查");
+        // 核验熔断（返工达上限）后子任务已转入 DEAD_LETTER 死信池，
+        // 人工介入面板仍通过 reviewApi 处置（直接通过 → complete；驳回改派 → reworkFresh），
+        // 故 DEAD_LETTER 与 REVIEW 同等可审查。
+        if (subTask.getStatus() != SubTaskStatus.REVIEW
+                && subTask.getStatus() != SubTaskStatus.DEAD_LETTER) {
+            throw new BizException("子任务状态为 " + subTask.getStatus() + "，只有 REVIEW/DEAD_LETTER 状态才能审查");
         }
 
         Long executorAgentId = subTask.getAssignedAgentId();
@@ -104,7 +116,21 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
         if (result == ReviewResult.APPROVED) {
             // 修复: APPROVED 走 complete() 触发 5 因子隐式评分（score_factors/composite_score/score_grade/completed_at + reward_log）
             subTaskService.complete(subTaskId);
+            // 可观测：人工验收通过落 timeline（OPS 泳道），与自动核验 sub_task_auto_review_passed 对称；
+            // 修复前人工审查路径无任何 timeline 事件，死信回收后时间线断层（LOG-20260903-005）
+            recordManualReviewEvent(subTask, reviewerAgentId, result, score, issues, comment, reworkAgentId, round);
+            // Phase 0 B2 埋点补齐（Step 2 对账发现）：人工验收仅落 timeline、不落 agent_event，
+            // 导致 DONE 终态末条事件非 review_approved（对账 WARN 41 条，命中样本 c3gs-r1 同源）；
+            // 补发 REVIEW_APPROVED 使终态投影一致（与自动核验 recordReviewEventSafely 同构降级）
+            recordReviewEventSafely(subTask, reviewerAgentId, AgentEventType.REVIEW_APPROVED,
+                    score, issues, comment, round);
         } else {
+            // 人工驳回同样落 timeline（人工驳回审查事件；改派/重置由 reworkFresh 落 sub_task_manual_rework_reset）
+            recordManualReviewEvent(subTask, reviewerAgentId, result, score, issues, comment, reworkAgentId, round);
+            // Phase 0 B2 埋点补齐：人工驳回补发 REVIEW_REJECTED（reworkFresh 后 REWORK 期望末条
+            // 为 review_rejected/rework_started），与自动核验驳回路径对称
+            recordReviewEventSafely(subTask, reviewerAgentId, AgentEventType.REVIEW_REJECTED,
+                    score, issues, comment, round);
             // §6.57 人工驳回 = 用户拍板开启新一轮：reworkFresh 重置返工计数并清除人工介入标记，
             // 避免改派后的新执行者提交时仍命中 skip_max_rework 跳过自动核验、无节点流转
             subTaskService.reworkFresh(subTaskId, reworkAgentId);
@@ -138,6 +164,64 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
         log.info("审查完成: subTaskId={}, result={}, score={}, round={}",
                 subTaskId, result.name(), score, round);
         return record;
+    }
+
+    /**
+     * 人工审查结果落 timeline（LOG-20260903-005）：approve/reject 均写入，
+     * 与自动核验 sub_task_auto_review_passed/rejected 对称；失败不阻断审查主链路。
+     */
+    private void recordManualReviewEvent(SubTask subTask, Long reviewerAgentId, ReviewResult result,
+                                         int score, String issues, String comment, Long reworkAgentId, long round) {
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("score", score);
+            payload.put("round", round);
+            if (comment != null && !comment.isBlank()) {
+                payload.put("comment", comment);
+            }
+            if (issues != null && !issues.isBlank()) {
+                payload.put("issues", issues);
+            }
+            if (reworkAgentId != null) {
+                payload.put("reworkAgentId", reworkAgentId);
+            }
+            String eventType = result == ReviewResult.APPROVED
+                    ? "sub_task_manual_review_passed" : "sub_task_manual_review_rejected";
+            taskTimelineService.recordEvent(subTask.getTaskId(), subTask.getId(),
+                    eventType, AgentRole.REVIEWER, reviewerAgentId, payload);
+        } catch (Exception e) {
+            log.warn("人工审查 timeline 记录失败（不影响审查主链路）: subTaskId={}, result={}, err={}",
+                    subTask.getId(), result, e.getMessage());
+        }
+    }
+
+    /**
+     * Phase 0 B2：人工审核终态事件记录（REVIEW_APPROVED / REVIEW_REJECTED，Run 级 turn=0/step=0）。
+     * 与自动核验 recordReviewEventSafely 同构：同事务双写 agent_event + outbox，
+     * 供 B3 对账终态投影校验（DONE → review_approved、REWORK → review_rejected/rework_started）；
+     * 事件 write-only，失败仅告警不阻断审查主链路。
+     */
+    private void recordReviewEventSafely(SubTask subTask, Long reviewerAgentId, AgentEventType eventType,
+                                         int score, String issues, String comment, long round) {
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("reviewerAgentId", reviewerAgentId);
+            payload.put("score", score);
+            payload.put("round", round);
+            if (comment != null && !comment.isBlank()) {
+                payload.put("comment", comment);
+            }
+            if (issues != null && !issues.isBlank()) {
+                payload.put("issues", issues);
+            }
+            agentEventRecorder.record(
+                    AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
+                    subTask.getTaskId(), subTask.getId(), 0, 0,
+                    eventType, reviewerAgentId, payload);
+        } catch (Exception e) {
+            log.warn("Agent 事件记录失败（事件 write-only，降级不阻断主链路）: type={}, subTaskId={}, err={}",
+                    eventType, subTask.getId(), e.getMessage());
+        }
     }
 
     @Override

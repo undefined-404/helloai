@@ -318,6 +318,7 @@
             <AgentSelect
               v-model="claimDialog.agentId"
               placeholder="选择认领的 Agent"
+              executor-only
             />
           </el-form-item>
         </el-form>
@@ -352,6 +353,7 @@
             <AgentSelect
               v-model="redispatchDialog.agentId"
               placeholder="选择重新指派的 Agent"
+              executor-only
             />
           </el-form-item>
         </el-form>
@@ -395,6 +397,7 @@
             <AgentSelect
               v-model="reassignDialog.agentId"
               placeholder="选择重新调度的 Agent"
+              executor-only
             />
           </el-form-item>
         </el-form>

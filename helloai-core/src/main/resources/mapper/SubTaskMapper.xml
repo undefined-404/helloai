@@ -169,28 +169,29 @@
     </select>
 
     <!--
-        V24 重分配熔断：原子累加 sub_task.reassign_attempt_count。
+        V24 重分配熔断（Phase 0 A3 起原子累加 attempt_total，替代 reassign_attempt_count）：
         与 incrementExternalFallbackCount 平行但语义独立：
         external_fallback_count 仅计 N11 外部→LLM 回退，
-        reassign_attempt_count 计所有类型的重分配入口。
+        attempt_total 是全局共享重试预算（坑点3「单一权威」），计所有类型的重分配入口，
+        后续返工 / 超时逐步并入同一预算；判定语义见 RetryPolicy.exceedsMax。
         并发安全：UPDATE 同时满足 id + deleted；不依赖读后写。
     -->
-        <update id="incrementReassignAttemptCount">
+        <update id="incrementAttemptTotal">
         UPDATE sub_task
-        SET reassign_attempt_count = COALESCE(reassign_attempt_count, 0) + 1,
+        SET attempt_total = COALESCE(attempt_total, 0) + 1,
             update_time = #{now}
         WHERE id = #{subTaskId}
           AND deleted = 0
     </update>
 
     <!--
-        V25 死信人工兜底：重置 reassign_attempt_count 为 0。
+        V25 死信人工兜底（Phase 0 A3 起重置 attempt_total）：
         仅由 SubTaskDispatchService.redispatchDeadLetter 在人工指派前调用，
         保证重新投入调度链后熔断计数从头开始。
     -->
-    <update id="resetReassignAttemptCount">
+    <update id="resetAttemptTotal">
         UPDATE sub_task
-        SET reassign_attempt_count = 0,
+        SET attempt_total = 0,
             update_time = #{now}
         WHERE id = #{subTaskId}
           AND deleted = 0

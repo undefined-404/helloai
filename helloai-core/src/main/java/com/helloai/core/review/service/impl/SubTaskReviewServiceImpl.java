@@ -3,9 +3,12 @@ package com.helloai.core.review.service.impl;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.config.ReviewProperties;
 import com.helloai.common.constant.AgentAccessType;
+import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.core.agent.event.AgentEventContextResolver;
+import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.core.agent.entity.Agent;
@@ -110,6 +113,8 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
     private final AgentQualityProfileService agentQualityProfileService;
     /** §6.142 双审并行化：两路核验共享的专用线程池（helloai-start ReviewDualExecutorConfig）。 */
     private final Executor reviewDualExecutor;
+    /** Phase 0 B2：事件记录器（REVIEW_STARTED/APPROVED/REJECTED 埋点；事件 write-only，失败仅告警）。 */
+    private final AgentEventRecorder agentEventRecorder;
 
     /**
      * 显式全参构造器（绕开 Lombok {@code @RequiredArgsConstructor} 在
@@ -130,7 +135,8 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                                     ReviewerPicker reviewerPicker,
                                     ReviewProperties reviewProperties,
                                     AgentQualityProfileService agentQualityProfileService,
-                                    @Qualifier("reviewDualExecutor") Executor reviewDualExecutor) {
+                                    @Qualifier("reviewDualExecutor") Executor reviewDualExecutor,
+                                    AgentEventRecorder agentEventRecorder) {
         this.subTaskService = subTaskService;
         this.agentService = agentService;
         this.reviewExecutionEngine = reviewExecutionEngine;
@@ -146,6 +152,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         this.reviewProperties = reviewProperties;
         this.agentQualityProfileService = agentQualityProfileService;
         this.reviewDualExecutor = reviewDualExecutor;
+        this.agentEventRecorder = agentEventRecorder;
     }
 
     /** AFTER_COMMIT 异步监听：结果回报事务提交后触发自动核验。 */
@@ -266,6 +273,12 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                     "sub_task_review_dead_letter", AgentRole.SYSTEM, null,
                     Map.of("reason", "rework_limit_exceeded",
                             "reworkCount", reworkCount, "maxRework", maxRework));
+            // 状态真正转入 DEAD_LETTER 死信池（REVIEW → DEAD_LETTER，状态机已放行）：
+            // 前端"死信待人工"筛选/死信池菜单据此可见，不再伪装成"审查中"卡死；
+            // 人工可通过死信重派（ASSIGNED）/人工介入面板（DONE/REWORK）打捞。
+            // changeStatus 副作用已核：outbox 无消费者、inbox 默认分支不通知、
+            // agent 不变不触发 handover，与调度维度熔断行为一致。
+            subTaskService.changeStatus(subTaskId, SubTaskStatus.DEAD_LETTER, null);
             // §6.52 人工介入标记：前端据此展示"人工介入"面板（用户选 agent 驳回改派 / 直接通过）
             subTaskService.markManualIntervention(subTaskId, "rework_limit",
                     Map.of("reworkCount", reworkCount, "maxRework", maxRework));
@@ -308,6 +321,19 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                             "attachmentCount", evidence.attachmentCount(),
                             "outputPresent", evidence.outputPresent()));
             return;
+        }
+
+        // Phase 0 B2：REVIEW_STARTED（Run 级事件 turn=0/step=0）。
+        // 已过返工上限/能力预检/证据硬检查，正式进入核验；审核者此刻尚未选出，agentId 留空
+        try {
+            agentEventRecorder.record(
+                    AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
+                    subTask.getTaskId(), subTaskId, 0, 0,
+                    AgentEventType.REVIEW_STARTED, null,
+                    VerdictParser.safeMap("submitterAgentId", submitterId));
+        } catch (Exception e) {
+            log.warn("Agent 事件记录失败（事件 write-only，降级不阻断主链路）: type={}, subTaskId={}, err={}",
+                    AgentEventType.REVIEW_STARTED, subTaskId, e.getMessage());
         }
 
         // §6.142 双审入口：difficulty=HIGH 且未指定 reviewerAgentId 时优先双审；
@@ -373,8 +399,31 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                     VerdictParser.safeMap("score", verdict.getScore(), "comment", verdict.getComment()));
             log.info("自动核验通过: subTaskId={}, reviewerAgentId={}, score={}",
                     subTaskId, reviewer.getId(), verdict.getScore());
+            recordReviewEventSafely(subTask, reviewer.getId(), AgentEventType.REVIEW_APPROVED, verdict, channel);
         } else {
             rejectAndRework(subTask, executorAgentId, reviewer.getId(), verdict);
+            recordReviewEventSafely(subTask, reviewer.getId(), AgentEventType.REVIEW_REJECTED, verdict, channel);
+        }
+    }
+
+    /**
+     * Phase 0 B2：审核终态事件记录（REVIEW_APPROVED / REVIEW_REJECTED，Run 级 turn=0/step=0）。
+     * 单审/双审共识共用同一落地口，此处统一降级封装（事件 write-only，失败仅告警）。
+     */
+    private void recordReviewEventSafely(SubTask subTask, Long reviewerAgentId, AgentEventType eventType,
+                                         ReviewVerdict verdict, ReviewChannel channel) {
+        try {
+            agentEventRecorder.record(
+                    AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
+                    subTask.getTaskId(), subTask.getId(), 0, 0,
+                    eventType, reviewerAgentId,
+                    VerdictParser.safeMap("reviewerAgentId", reviewerAgentId,
+                            "score", verdict.getScore(),
+                            "comment", verdict.getComment(),
+                            "channel", channel != null ? channel.name() : null));
+        } catch (Exception e) {
+            log.warn("Agent 事件记录失败（事件 write-only，降级不阻断主链路）: type={}, subTaskId={}, err={}",
+                    eventType, subTask.getId(), e.getMessage());
         }
     }
 

@@ -30,6 +30,10 @@ export const agentApi = {
   list(params?: { role?: string; status?: string }) {
     return request.get<any, Agent[]>(paths.agents.list, { params })
   },
+  // 可指派执行者候选（改派/认领/死信重派选择器）：仅 EXECUTOR + ACTIVE，内部 LLM 恒可用、外部需在线
+  listAssignableExecutors() {
+    return request.get<any, Agent[]>(paths.agents.listAssignableExecutors)
+  },
   // V49：注册弹窗模型选择数据源（内部 LLM 用），仅返回可用 Provider + 启用模型
   listAvailableModels() {
     return request.get<any, AvailableModelGroup[]>(paths.agents.listAvailableModels)

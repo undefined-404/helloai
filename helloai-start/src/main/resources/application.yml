@@ -110,6 +110,13 @@ helloai:
       max-ttl-minutes: 240
       default-ttl-minutes: 30
       full-score: 100
+    # Phase 0 C2 双轨执行开关：true 时注册 LegacyExecutorAdapter（AgentRuntime 旧链契约适配）；
+    # 灰度验证期间默认开启（LOG-20260903-002）；如需回退改 false 并重启即恢复旧消费链行为。
+    runtime:
+      v2-enabled: true
+      # Phase 0 C3 双轨灰度（与 v2-enabled 语义分离）：运行期路由比例 0~100；100 = Step 4 全量档（LOG-20260903-012，25% 档验收通过后放量）。
+      # subTask.taskId % 100 < gray-percent 时经 AgentRuntime 执行；改回 0 并重启即可全量回退。
+      gray-percent: 100
   # 对话并发优化 A 项：active() 写节流窗口（毫秒，<=0 不节流）。
   # 每轮对话 LLM 前都会 active()，窗口内同一 Agent 只做一次完整双写，消除 DB 行锁排队与写放大。
   heartbeat:

@@ -18,6 +18,7 @@ import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
@@ -117,6 +118,9 @@ class SubTaskReviewServiceTest {
     @Mock
     private AgentQualityProfileService agentQualityProfileService;
 
+    @Mock
+    private AgentEventRecorder agentEventRecorder;
+
     private SubTaskReviewService reviewService;
 
     @BeforeEach
@@ -153,7 +157,7 @@ class SubTaskReviewServiceTest {
                 conversationService, recordReviewService, redissonClient,
                 new ReviewEvidenceAssembler(attachmentService, dispatchProperties),
                 new VerdictParser(new ObjectMapper()),
-                reviewerPicker, reviewProperties, agentQualityProfileService, executor);
+                reviewerPicker, reviewProperties, agentQualityProfileService, executor, agentEventRecorder);
     }
 
     private SubTask reviewSubTask() {
@@ -293,6 +297,8 @@ class SubTaskReviewServiceTest {
                 eq(AgentRole.REVIEWER), any(), anyMap());
         // §6.52：返工达上限须写入人工介入标记（前端面板据此展示）
         verify(subTaskService).markManualIntervention(eq(SUB_TASK_ID), eq("rework_limit"), anyMap());
+        // 核验返工熔断后状态须真正转入 DEAD_LETTER（前端"死信待人工"筛选据此可见）
+        verify(subTaskService).changeStatus(eq(SUB_TASK_ID), eq(SubTaskStatus.DEAD_LETTER), isNull());
         // 核验返工熔断显式入死信（与调度维度 sub_task_dead_letter 对称），DLQ 泳道可回溯
         ArgumentCaptor<Map> deadLetterPayload = ArgumentCaptor.forClass(Map.class);
         verify(taskTimelineService).recordEvent(

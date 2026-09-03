@@ -3,11 +3,14 @@ package com.helloai.core.agent.service.impl;
 import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentExecutionProperties;
+import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.mqconsumer.ExecutionCommandMqMessage;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentExecutionRecord;
+import com.helloai.core.agent.event.AgentEventContextResolver;
+import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.shared.event.ExecutionCommandCreatedEvent;
 import com.helloai.core.agent.service.AgentCommandOutboxService;
@@ -50,6 +53,8 @@ public class ExecutionCommandServiceImpl implements ExecutionCommandService {
     private final ApplicationEventPublisher applicationEventPublisher;
     private final AgentExecutionProperties executionProperties;
     private final AgentCommandOutboxService agentCommandOutboxService;
+    /** Phase 0 B2：事件记录器（TASK_ASSIGNED 埋点；事件 write-only，失败仅告警不阻断调度链）。 */
+    private final AgentEventRecorder agentEventRecorder;
 
     /**
      * 为已分配子任务创建执行命令。
@@ -131,6 +136,20 @@ public class ExecutionCommandServiceImpl implements ExecutionCommandService {
             log.debug("执行命令已创建（dispatch-mode=NONE，只落库，交给 Poller 兜底）: subTaskId={}, recordId={}",
                     subTaskId, record.getId());
         }
+
+        // Phase 0 B2：TASK_ASSIGNED（Run 级事件，turn=0/step=0）。
+        // 重派/死信兜底重新分配同样走本入口，每次发命令即代表一次分配事实。
+        try {
+            agentEventRecorder.record(
+                    AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
+                    subTask.getTaskId(), subTaskId, 0, 0,
+                    AgentEventType.TASK_ASSIGNED, agentId,
+                    Map.of("agentId", agentId, "subTaskId", subTaskId, "trigger", trigger));
+        } catch (Exception e) {
+            log.warn("Agent 事件记录失败（事件 write-only，降级不阻断主链路）: type={}, subTaskId={}, err={}",
+                    AgentEventType.TASK_ASSIGNED, subTaskId, e.getMessage());
+        }
+
         log.info("执行命令已创建: subTaskId={}, agentId={}, recordId={}, trigger={}, dispatch-mode={}, consumer-mode={}",
                 subTaskId, agentId, record.getId(), trigger, dispatchMode, executionProperties.getConsumerMode());
         return command;

@@ -1,8 +1,10 @@
 package com.helloai.core.agent.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.ExecutionStatus;
+import com.helloai.common.util.HostNameUtils;
 import com.helloai.core.agent.entity.AgentExecutionRecord;
 import com.helloai.core.agent.mapper.AgentExecutionRecordMapper;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
@@ -11,8 +13,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.net.InetAddress;
-import java.net.UnknownHostException;
 import java.time.OffsetDateTime;
 import java.util.List;
 
@@ -39,59 +39,87 @@ public class AgentExecutionRecordServiceImpl extends ServiceImpl<AgentExecutionR
         record.setAccessType(accessType);
         record.setTriggerType(trigger);
         record.setStatus(ExecutionStatus.PENDING);
-        record.setWorkerNode(getHostName());
+        record.setWorkerNode(HostNameUtils.getHostName());
         record.setRetryCount(0);
         save(record);
         return record;
     }
 
+    /**
+     * PENDING → RUNNING（CAS：status + @Version 乐观锁双条件）。
+     *
+     * <p>Phase 0 A2.1：由 lambdaUpdate 链式改为 {@code update(entity, wrapper)} 形式——
+     * 链式更新不触发 MyBatis-Plus OptimisticLockerInnerInterceptor（规范 §15），
+     * entity 快照带 version 才能启用拦截器的 version 比较与自增，杜绝并发状态覆盖。</p>
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean markRunning(Long id) {
-        return lambdaUpdate()
+        AgentExecutionRecord record = getById(id);
+        if (record == null) {
+            return false;
+        }
+        record.setStatus(ExecutionStatus.RUNNING);
+        record.setStartTime(OffsetDateTime.now());
+        return update(record, new LambdaUpdateWrapper<AgentExecutionRecord>()
                 .eq(AgentExecutionRecord::getId, id)
-                .eq(AgentExecutionRecord::getStatus, ExecutionStatus.PENDING)
-                .set(AgentExecutionRecord::getStatus, ExecutionStatus.RUNNING)
-                .set(AgentExecutionRecord::getStartTime, OffsetDateTime.now())
-                .update();
+                .eq(AgentExecutionRecord::getStatus, ExecutionStatus.PENDING));
     }
 
+    /**
+     * RUNNING → SUCCESS（CAS：status + @Version 乐观锁双条件）。
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean markSuccess(Long id) {
-        return lambdaUpdate()
+        AgentExecutionRecord record = getById(id);
+        if (record == null) {
+            return false;
+        }
+        record.setStatus(ExecutionStatus.SUCCESS);
+        record.setEndTime(OffsetDateTime.now());
+        return update(record, new LambdaUpdateWrapper<AgentExecutionRecord>()
                 .eq(AgentExecutionRecord::getId, id)
-                .eq(AgentExecutionRecord::getStatus, ExecutionStatus.RUNNING)
-                .set(AgentExecutionRecord::getStatus, ExecutionStatus.SUCCESS)
-                .set(AgentExecutionRecord::getEndTime, OffsetDateTime.now())
-                .update();
+                .eq(AgentExecutionRecord::getStatus, ExecutionStatus.RUNNING));
     }
 
+    /**
+     * RUNNING → FAILED（CAS：status + @Version 乐观锁双条件，errorMsg 截断 500 字符）。
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean markFailed(Long id, String errorMsg) {
         String truncated = errorMsg != null && errorMsg.length() > 500
                 ? errorMsg.substring(0, 500)
                 : errorMsg;
-        return lambdaUpdate()
+        AgentExecutionRecord record = getById(id);
+        if (record == null) {
+            return false;
+        }
+        record.setStatus(ExecutionStatus.FAILED);
+        record.setEndTime(OffsetDateTime.now());
+        record.setErrorMsg(truncated);
+        return update(record, new LambdaUpdateWrapper<AgentExecutionRecord>()
                 .eq(AgentExecutionRecord::getId, id)
-                .eq(AgentExecutionRecord::getStatus, ExecutionStatus.RUNNING)
-                .set(AgentExecutionRecord::getStatus, ExecutionStatus.FAILED)
-                .set(AgentExecutionRecord::getEndTime, OffsetDateTime.now())
-                .set(AgentExecutionRecord::getErrorMsg, truncated)
-                .update();
+                .eq(AgentExecutionRecord::getStatus, ExecutionStatus.RUNNING));
     }
 
+    /**
+     * PENDING/RUNNING → TIMEOUT（CAS：status + @Version 乐观锁双条件）。
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean markTimeout(Long id) {
-        return lambdaUpdate()
+        AgentExecutionRecord record = getById(id);
+        if (record == null) {
+            return false;
+        }
+        record.setStatus(ExecutionStatus.TIMEOUT);
+        record.setEndTime(OffsetDateTime.now());
+        record.setErrorMsg("执行命令超时");
+        return update(record, new LambdaUpdateWrapper<AgentExecutionRecord>()
                 .eq(AgentExecutionRecord::getId, id)
-                .in(AgentExecutionRecord::getStatus, ExecutionStatus.PENDING, ExecutionStatus.RUNNING)
-                .set(AgentExecutionRecord::getStatus, ExecutionStatus.TIMEOUT)
-                .set(AgentExecutionRecord::getEndTime, OffsetDateTime.now())
-                .set(AgentExecutionRecord::getErrorMsg, "执行命令超时")
-                .update();
+                .in(AgentExecutionRecord::getStatus, ExecutionStatus.PENDING, ExecutionStatus.RUNNING));
     }
 
     @Override
@@ -146,13 +174,5 @@ public class AgentExecutionRecordServiceImpl extends ServiceImpl<AgentExecutionR
                 .eq(AgentExecutionRecord::getId, id)
                 .set(AgentExecutionRecord::getLastAttemptTime, OffsetDateTime.now())
                 .update();
-    }
-
-    private String getHostName() {
-        try {
-            return InetAddress.getLocalHost().getHostName();
-        } catch (UnknownHostException e) {
-            return "unknown";
-        }
     }
 }

@@ -25,6 +25,10 @@ WHERE provider_code = 'moonshot'
        OR default_model = 'kimi-k2.5');
 
 -- 2) 模型目录：新增场景下 kimi-k3 可能尚未建行（V49 已种，防御补齐）
+-- 注意：V50 已把物理唯一约束 uk_provider_model 改为部分唯一索引
+--   uk_provider_model_active (provider_id, model_name) WHERE deleted = 0，
+--   ON CONFLICT 列推断必须带与索引一致的 WHERE 谓词，否则报 42P10
+--   （there is no unique or exclusion constraint matching the ON CONFLICT specification）。
 INSERT INTO llm_provider_model (id, provider_id, provider_code, model_name, is_default, enabled, sort_order, create_by, update_by)
 SELECT
     (SELECT COALESCE(MAX(id), 0) FROM llm_provider_model) + 1,
@@ -34,7 +38,7 @@ WHERE p.provider_code = 'moonshot' AND p.deleted = 0
   AND NOT EXISTS (
       SELECT 1 FROM llm_provider_model m
       WHERE m.provider_id = p.id AND m.model_name = 'kimi-k3')
-ON CONFLICT (provider_id, model_name) DO NOTHING;
+ON CONFLICT (provider_id, model_name) WHERE deleted = 0 DO NOTHING;
 
 -- 3) 默认位切换：kimi-k2.5（已下线）让出默认 → kimi-k3；同 provider 唯一默认
 UPDATE llm_provider_model

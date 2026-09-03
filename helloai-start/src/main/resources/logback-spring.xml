@@ -2,7 +2,7 @@
 <configuration>
     <!-- Log file path (default ./logs, overridable via LOG_PATH env/VM prop) -->
     <property name="LOG_PATH" value="${LOG_PATH:-./logs}"/>
-    <property name="LOG_PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"/>
+    <property name="LOG_PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} [%X{traceId} %X{run_id} %X{task_id} %X{sub_task_id} %X{step_id}] - %msg%n"/>
 
     <!-- Console appender (captured by docker logs) -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">

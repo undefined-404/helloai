@@ -5,6 +5,7 @@ import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
+import com.helloai.common.constant.RetryPolicy;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.executor.AgentSelector;
@@ -25,6 +26,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.OffsetDateTime;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -182,9 +184,25 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         if (agent == null) {
             throw new BizException("Agent 不存在: " + agentId);
         }
+        // 人工兜底指派语义 = 选执行者；PLANNER/REVIEWER 不参与执行（与改派候选接口同口径）
+        if (agent.getRole() != AgentRole.EXECUTOR) {
+            throw new BizException("死信重派只支持执行者（EXECUTOR）Agent，实际角色: " + agent.getRole());
+        }
 
-        // 清零熔断计数，重新投入调度链后从头计数
-        subTaskMapper.resetReassignAttemptCount(subTaskId, OffsetDateTime.now());
+        // 清零共享重试预算（Phase 0 A3：attempt_total），重新投入调度链后从头计数
+        subTaskMapper.resetAttemptTotal(subTaskId, OffsetDateTime.now());
+
+        // §6.57 语义对齐：人工死信重派 = 用户拍板开启新一轮，与人工驳回（reworkFresh）
+        // 一致地重置核验返工计数并清除人工介入标记；否则新执行者提交后仍命中
+        // skip_max_rework 跳过自动核验再次入死信（实测：c3gs-r4 重派 inner 新 agent 后
+        // reworkCount=3 仍被跳核验，DEAD_LETTER 死循环）。
+        subTask.setReworkCount(0);
+        Map<String, Object> ctx = new HashMap<>(subTask.getContext() != null
+                ? subTask.getContext() : Map.of());
+        if (ctx.remove("manualIntervention") != null) {
+            subTask.setContext(ctx);
+        }
+        subTaskService.updateById(subTask);
 
         // 直接指派（DEAD_LETTER → ASSIGNED，状态机已允许）
         subTaskService.changeStatus(subTaskId, SubTaskStatus.ASSIGNED, agentId);
@@ -198,7 +216,8 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
                 Map.of(
                         "trigger", "manual_dead_letter_redispatch",
                         "assignedAgentId", agentId,
-                        "agentName", agent.getName() != null ? agent.getName() : "unknown"));
+                        "agentName", agent.getName() != null ? agent.getName() : "unknown",
+                        "reworkCountReset", true));
         log.info("死信子任务人工兜底指派完成: subTaskId={}, agentId={}", subTaskId, agentId);
     }
 
@@ -469,9 +488,10 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
      * <ol>
      *   <li>{@code max-reassign-attempts <= 0} → 熔断禁用，返回 false</li>
      *   <li>子任务不存在或已是终态/死信（DONE/CANCELLED/DEAD_LETTER）→ 返回 true（跳过）</li>
-     *   <li>{@code reassign_attempt_count >= max-reassign-attempts}
+     *   <li>{@code attempt_total >= max-reassign-attempts}（Phase 0 A3 共享预算，
+     *       判定语义见 {@code RetryPolicy.exceedsMax}）
      *       → 标记子任务为 DEAD_LETTER（死信池，待人工兜底）+ 记录 timeline → 返回 true（熔断）</li>
-     *   <li>否则 → 原子累加 {@code reassign_attempt_count} → 返回 false（放行）</li>
+     *   <li>否则 → 原子累加 {@code attempt_total} → 返回 false（放行）</li>
      * </ol>
      * </p>
      *
@@ -501,16 +521,16 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
             return true;
         }
 
-        int currentCount = subTask.getReassignAttemptCount() != null
-                ? subTask.getReassignAttemptCount() : 0;
+        int currentCount = subTask.getAttemptTotal() != null
+                ? subTask.getAttemptTotal() : 0;
 
-        if (currentCount >= maxAttempts) {
-            log.warn("子任务重分配熔断触发: subTaskId={}, reassignAttemptCount={}, maxReassignAttempts={}, 将子任务转入 DEAD_LETTER 死信池待人工兜底",
+        if (RetryPolicy.exceedsMax(currentCount, maxAttempts)) {
+            log.warn("子任务重分配熔断触发: subTaskId={}, attemptTotal={}, maxReassignAttempts={}, 将子任务转入 DEAD_LETTER 死信池待人工兜底",
                     subTaskId, currentCount, maxAttempts);
             try {
                 subTaskService.changeStatus(subTaskId, SubTaskStatus.DEAD_LETTER, null,
                         Map.of("dead_letter_reason", "reassign_attempt_exceeded",
-                                "reassign_attempt_count", String.valueOf(currentCount),
+                                "attempt_total", String.valueOf(currentCount),
                                 "max_reassign_attempts", String.valueOf(maxAttempts)));
                 taskTimelineService.recordEvent(
                         subTask.getTaskId(),
@@ -520,7 +540,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
                         null,
                         Map.of(
                                 "reason", "reassign_attempt_exceeded",
-                                "reassign_attempt_count", currentCount,
+                                "attempt_total", currentCount,
                                 "max_reassign_attempts", maxAttempts));
             } catch (Exception e) {
                 log.error("子任务重分配熔断-转死信失败: subTaskId={}", subTaskId, e);
@@ -528,8 +548,8 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
             return true;
         }
 
-        // 原子累加重分配计数
-        subTaskMapper.incrementReassignAttemptCount(subTaskId, OffsetDateTime.now());
+        // 原子累加共享重试预算（Phase 0 A3：attempt_total 替代 reassign_attempt_count）
+        subTaskMapper.incrementAttemptTotal(subTaskId, OffsetDateTime.now());
         log.debug("子任务重分配计数累加: subTaskId={}, currentCount={}", subTaskId, currentCount);
         return false;
     }

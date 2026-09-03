@@ -7,9 +7,14 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.AgentUnavailableException;
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentDispatchProperties;
+import com.helloai.common.config.WatchdogProperties;
+import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.common.util.HostNameUtils;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.event.AgentEventContextResolver;
+import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentOutboxService;
@@ -80,8 +85,12 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     private final TaskTimelineService taskTimelineService;
     private final AgentDispatchProperties agentDispatchProperties;
     private final ConcurrencyQuotaService concurrencyQuotaService;
+    // Phase 0 A2：执行租约看门狗配置（TTL / 开关）
+    private final WatchdogProperties watchdogProperties;
     // 懒解析打破循环：AttachmentServiceImpl 依赖 SubTaskService（register 归属校验）
     private final ObjectProvider<AttachmentService> attachmentServiceProvider;
+    /** Phase 0 B2：事件记录器（REWORK_STARTED 埋点；事件 write-only，失败仅告警不阻断返工链）。 */
+    private final AgentEventRecorder agentEventRecorder;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -214,6 +223,14 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
             subTask.setAssignedAgentId(null);
         } else if (agentId != null) {
             subTask.setAssignedAgentId(agentId);
+        }
+
+        // Phase 0 A2.2：进入 IN_PROGRESS 时写执行租约（owner + lease_until = now + TTL），
+        // 由 WatchdogLeaseRenewTask 周期续期、LeaseReconcilerTask 过期回收；
+        // 开关关闭时不再写入，完全回归存量行为。
+        if (newStatus == SubTaskStatus.IN_PROGRESS && watchdogProperties.isEnabled()) {
+            subTask.setOwner(HostNameUtils.getHostName());
+            subTask.setLeaseUntil(OffsetDateTime.now().plusSeconds(watchdogProperties.getTtlSeconds()));
         }
 
         boolean updated = updateById(subTask);
@@ -575,6 +592,8 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         // 摘要携带最近一轮 review 结果（评分/评语/问题），外部 Agent 轮询 pullTasks 即可感知返工原因
         sendReworkInboxNotification(subTask);
         agentOutboxService.createEvent(subTask, SubTaskStatus.REWORK);
+        // Phase 0 B2：REWORK_STARTED（Run 级事件 turn=0/step=0；reworkCount 已递增）
+        recordReworkStartedSafely(subTask, reworkAgentId, false);
         // §6.104 打回失效：旧提交附件全部置 INACTIVE，返工必须重新上传最新版
         // （与核验/装载/打包的 listActive 可信视角闭环，旧证据不再进入下次核验）
         invalidateAttachmentsOnRework(subTaskId);
@@ -592,6 +611,15 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         subTask.setStatus(SubTaskStatus.REWORK);
         subTask.setReworkCount(0);
         if (reworkAgentId != null) {
+            // 人工驳回改派语义 = 选执行者；与改派候选接口/死信重派同口径，防御 API 直调绕过
+            AgentService agentService = agentServiceProvider.getIfAvailable();
+            Agent target = agentService != null ? agentService.getById(reworkAgentId) : null;
+            if (target == null) {
+                throw new BizException("改派目标 Agent 不存在: " + reworkAgentId);
+            }
+            if (target.getRole() != AgentRole.EXECUTOR) {
+                throw new BizException("驳回改派只支持执行者（EXECUTOR）Agent，实际角色: " + target.getRole());
+            }
             subTask.setAssignedAgentId(reworkAgentId);
         }
         // 人工已拍板：清除人工介入标记，避免前端面板残留、PENDING 兜底巡检继续跳过
@@ -605,6 +633,8 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         // 人工驳回同样补发收件箱通知（携带 review 摘要，无历史时回退默认文案）
         sendReworkInboxNotification(subTask);
         agentOutboxService.createEvent(subTask, SubTaskStatus.REWORK);
+        // Phase 0 B2：REWORK_STARTED（Run 级事件 turn=0/step=0；reworkFresh 已重置 reworkCount）
+        recordReworkStartedSafely(subTask, reworkAgentId, true);
         // 注意：Map.of 不接受 null 值，reworkAgentId 可能为 null（不换派原执行者重做），必须用 HashMap
         Map<String, Object> extra = new HashMap<>();
         extra.put("reworkCountReset", "true");
@@ -614,6 +644,26 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         // §6.104 打回失效：人工驳回同步让旧 ACTIVE 附件失效，新执行者重新产出后须 uploadArtifact 重建 ACTIVE
         invalidateAttachmentsOnRework(subTaskId);
         log.info("人工驳回重置返工计数: subTaskId={}, reworkCount=0, reworkAgentId={}", subTaskId, reworkAgentId);
+    }
+
+    /**
+     * Phase 0 B2：REWORK_STARTED 事件记录（Run 级 turn=0/step=0，事件 write-only，失败仅告警）。
+     * rework / reworkFresh 共用（reworkCountReset 区分重置语义）。
+     */
+    private void recordReworkStartedSafely(SubTask subTask, Long reworkAgentId, boolean reworkCountReset) {
+        try {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("reworkCount", subTask.getReworkCount());
+            payload.put("reworkAgentId", reworkAgentId);
+            payload.put("reworkCountReset", reworkCountReset);
+            agentEventRecorder.record(
+                    AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
+                    subTask.getTaskId(), subTask.getId(), 0, 0,
+                    AgentEventType.REWORK_STARTED, subTask.getAssignedAgentId(), payload);
+        } catch (Exception e) {
+            log.warn("Agent 事件记录失败（事件 write-only，降级不阻断主链路）: type={}, subTaskId={}, err={}",
+                    AgentEventType.REWORK_STARTED, subTask.getId(), e.getMessage());
+        }
     }
 
     /**
@@ -775,6 +825,80 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    public int renewCurrentNodeLeases(OffsetDateTime newLeaseUntil, int limit) {
+        String owner = HostNameUtils.getHostName();
+        List<SubTask> owned = lambdaQuery()
+                .eq(SubTask::getOwner, owner)
+                .eq(SubTask::getStatus, SubTaskStatus.IN_PROGRESS)
+                .orderByAsc(SubTask::getLeaseUntil)
+                .last("LIMIT " + limit)
+                .list();
+        int renewed = 0;
+        for (SubTask subTask : owned) {
+            subTask.setLeaseUntil(newLeaseUntil);
+            if (updateById(subTask)) {
+                renewed++;
+            } else {
+                // 与 Reconciler 并发竞争失败（状态离开 IN_PROGRESS / version 变更），赢者生效，跳过即可
+                log.warn("租约续期 CAS 冲突，跳过: subTaskId={}", subTask.getId());
+            }
+        }
+        if (renewed > 0) {
+            log.info("看门狗续期完成: owner={}, 续期条数={}", owner, renewed);
+        }
+        return renewed;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public int reclaimExpiredLeases(int limit) {
+        OffsetDateTime now = OffsetDateTime.now();
+        // 存量数据 owner 为 NULL：不受本机制管理，继续走既有超时巡检路径
+        List<SubTask> expired = lambdaQuery()
+                .eq(SubTask::getStatus, SubTaskStatus.IN_PROGRESS)
+                .isNotNull(SubTask::getOwner)
+                .lt(SubTask::getLeaseUntil, now)
+                .orderByAsc(SubTask::getLeaseUntil)
+                .last("LIMIT " + limit)
+                .list();
+        int reclaimed = 0;
+        for (SubTask subTask : expired) {
+            Long subTaskId = subTask.getId();
+            try {
+                // 租约回收显式走状态机校验：IN_PROGRESS → PENDING（A2.5 补充的回收转换）
+                SubTaskStateMachine.validate(subTask.getStatus(), SubTaskStatus.PENDING);
+                String oldOwner = subTask.getOwner();
+                Long taskId = subTask.getTaskId();
+                subTask.setStatus(SubTaskStatus.PENDING);
+                subTask.setAssignedAgentId(null);
+                subTask.setOwner(null);
+                subTask.setLeaseUntil(null);
+                if (!updateById(subTask)) {
+                    // 与 Watchdog 续期并发竞争失败（version 已变更），赢者生效，跳过即可
+                    log.warn("租约回收 CAS 冲突，跳过: subTaskId={}", subTaskId);
+                    continue;
+                }
+                reclaimed++;
+                try {
+                    // 回收事件仅审计用途，写入失败不阻断回收主链路
+                    taskTimelineService.recordEvent(taskId, subTaskId,
+                            "sub_task_lease_reclaimed", AgentRole.SYSTEM, null,
+                            Map.of("owner", oldOwner, "reason", "lease_expired"));
+                } catch (Exception e) {
+                    log.warn("租约回收 timeline 事件写入失败，不影响回收: subTaskId={}", subTaskId, e);
+                }
+            } catch (Exception e) {
+                log.warn("租约回收单条处理异常，跳过: subTaskId={}", subTaskId, e);
+            }
+        }
+        if (reclaimed > 0) {
+            log.info("租约过期回收完成: 回收条数={}", reclaimed);
+        }
+        return reclaimed;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
     public void reassign(Long subTaskId, Long newAgentId) {
         resetToPendingForDispatch(subTaskId, Set.of(SubTaskStatus.BLOCKED));
         changeStatus(subTaskId, SubTaskStatus.ASSIGNED, newAgentId);
@@ -821,6 +945,17 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
             return ctx != null && ctx.get("manualIntervention") != null;
         });
         return candidates;
+    }
+
+    @Override
+    public List<SubTask> listRecentlyChanged(OffsetDateTime since, int limit) {
+        // Phase 0 B3：事件对账候选源，按 update_time 倒序截断（update_time 由 MetaObjectHandler
+        // 自动填充，每次状态/字段变更都会推进；配合对账窗口扫描最近活跃子任务）
+        return lambdaQuery()
+                .ge(SubTask::getUpdateTime, since)
+                .orderByDesc(SubTask::getUpdateTime)
+                .last("LIMIT " + limit)
+                .list();
     }
 
     // ══════════════════════════════════════════════════════════════

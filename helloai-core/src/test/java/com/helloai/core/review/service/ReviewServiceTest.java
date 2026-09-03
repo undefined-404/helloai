@@ -2,15 +2,18 @@ package com.helloai.core.review.service;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentAccessType;
+import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.quality.QualityProfileUpdater;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.RewardService;
+import com.helloai.core.task.service.TaskTimelineService;
 import com.helloai.core.review.dto.DefectDistribution;
 import com.helloai.core.review.dto.QualityTrendPoint;
 import com.helloai.core.review.dto.ReviewerLeniency;
@@ -75,14 +78,21 @@ class ReviewServiceTest {
     private QualityProfileUpdater qualityProfileUpdater;
 
     @Mock
+    private TaskTimelineService taskTimelineService;
+
+    @Mock
     private ReviewRecheckLogMapper reviewRecheckLogMapper;
+
+    @Mock
+    private AgentEventRecorder agentEventRecorder;
 
     private ReviewService reviewService;
 
     @BeforeEach
     void setUp() {
         reviewService = new ReviewServiceImpl(subTaskService, rewardService, agentService,
-                executionCommandService, qualityProfileUpdater, reviewRecheckLogMapper);
+                executionCommandService, taskTimelineService, agentEventRecorder,
+                qualityProfileUpdater, reviewRecheckLogMapper);
         // createReview 内部 round 计数与 record 落库依赖父类 baseMapper；
         // lenient：校验失败路径（如 issues 为空）在 count 之前就返回，stub 不必然被消费
         ReflectionTestUtils.setField(reviewService, "baseMapper", reviewRecordMapper);
@@ -118,6 +128,9 @@ class ReviewServiceTest {
         // 核心断言：人工驳回必须走重置链路（而非累加或原样流转）
         verify(subTaskService).reworkFresh(SUB_TASK_ID, NEW_AGENT_ID);
         verify(subTaskService, never()).complete(SUB_TASK_ID);
+        // Phase 0 B2：人工驳回补发 REVIEW_REJECTED（终态投影与自动核验驳回对称）
+        verify(agentEventRecorder).record(any(), eq(TASK_ID), eq(SUB_TASK_ID), eq(0), eq(0),
+                eq(AgentEventType.REVIEW_REJECTED), eq(REVIEWER_ID), any());
         // 原执行者按评分扣分（与 兼容）
         verify(rewardService).addReward(eq(EXECUTOR_ID), any(), eq(-5), eq(SUB_TASK_ID));
     }
@@ -146,6 +159,9 @@ class ReviewServiceTest {
 
         verify(subTaskService).complete(SUB_TASK_ID);
         verify(subTaskService, never()).reworkFresh(anyLong(), any());
+        // Phase 0 B2：人工验收补发 REVIEW_APPROVED（DONE 终态投影一致，Step 2 对账修复）
+        verify(agentEventRecorder).record(any(), eq(TASK_ID), eq(SUB_TASK_ID), eq(0), eq(0),
+                eq(AgentEventType.REVIEW_APPROVED), eq(REVIEWER_ID), any());
     }
 
     @Test

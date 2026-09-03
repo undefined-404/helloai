@@ -1,11 +1,13 @@
 package com.helloai.core.task.service;
 
+import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConcurrencyQuotaService;
 import com.helloai.common.config.AgentDispatchProperties;
+import com.helloai.common.config.WatchdogProperties;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.port.ReviewPort;
@@ -68,6 +70,7 @@ class SubTaskServiceHandoverTest {
     @Mock private ConcurrencyQuotaService concurrencyQuotaService;
     @Mock private AttachmentService attachmentService;
     @Mock private ObjectProvider<AttachmentService> attachmentServiceProvider;
+    @Mock private AgentEventRecorder agentEventRecorder;
 
     private SubTaskService subTaskService;
 
@@ -79,7 +82,9 @@ class SubTaskServiceHandoverTest {
                 agentOutboxService, agentInboxService, agentServiceProvider,
                 heartbeatService, reviewPort, implicitScoreCalculator,
                 rewardService, applicationEventPublisher, taskTimelineService,
-                dispatchProps, concurrencyQuotaService, attachmentServiceProvider));
+                dispatchProps, concurrencyQuotaService,
+                // Phase 0 A2：租约看门狗配置（changeStatus 进 IN_PROGRESS 时会读，默认值即可）
+                new WatchdogProperties(), attachmentServiceProvider, agentEventRecorder));
         doReturn(true).when(subTaskService).updateById(any(SubTask.class));
         // §6.104 打回失效：让 ObjectProvider 返回 mock，便于断言 invalidateBySubTask 被调
         //（类级 @MockitoSettings(strictness = Strictness.LENIENT) 已开启，无需 Mockito.lenient()）

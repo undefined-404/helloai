@@ -18,6 +18,8 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Phase 2D N6：MQ 维度的执行命令消费者骨架。
@@ -78,6 +80,18 @@ public class MqExecutionCommandConsumer extends AbstractIdempotentConsumer imple
     }
 
     /**
+     * 组装消费期 MDC 上下文：消息体业务标识。消息体无 run_id（事件链层级），
+     * 消费端不做跨域查库，仅续传本链路可得的 sub_task_id（Phase 0 C4）。
+     */
+    private Map<String, String> mdcOf(ExecutionCommandMqMessage msg) {
+        Map<String, String> mdc = new HashMap<>();
+        if (msg.getSubTaskId() != null) {
+            mdc.put(AbstractIdempotentConsumer.MDC_SUB_TASK_ID, String.valueOf(msg.getSubTaskId()));
+        }
+        return mdc;
+    }
+
+    /**
      * RabbitMQ 入口：解析 → 幂等 → 委托 → ACK / NACK。
      *
      * <p>解析失败或缺 eventId 时直接 ACK（避免坏消息无限重投阻塞队列）。</p>
@@ -104,7 +118,8 @@ public class MqExecutionCommandConsumer extends AbstractIdempotentConsumer imple
         ExecutionCommand command = mqMessage.toDomain();
         boolean processed = false;
         try {
-            processed = tryConsume(mqMessage.getEventId(), CONSUMER_NAME, () -> consume(command));
+            processed = tryConsume(mqMessage.getEventId(), CONSUMER_NAME, mdcOf(mqMessage),
+                    () -> consume(command));
         } catch (Exception e) {
             log.error("MQ 执行命令消费失败: eventId={}, subTaskId={}, agentId={}",
                     mqMessage.getEventId(), mqMessage.getSubTaskId(), mqMessage.getAgentId(), e);

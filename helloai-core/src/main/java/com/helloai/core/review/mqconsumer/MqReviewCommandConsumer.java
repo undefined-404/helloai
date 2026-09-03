@@ -17,6 +17,7 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -94,6 +95,7 @@ public class MqReviewCommandConsumer extends AbstractIdempotentConsumer {
             channel.basicAck(tag, false);
             return;
         }
+        Long taskId = toLong(payload.get("taskId"));
         // payload.agentId = 执行者（assignedAgentId），0 为 null 占位 → 归一为 null
         Long rawAgentId = toLong(payload.get("agentId"));
         Long executorAgentId = (rawAgentId != null && rawAgentId == 0L) ? null : rawAgentId;
@@ -103,7 +105,7 @@ public class MqReviewCommandConsumer extends AbstractIdempotentConsumer {
 
         boolean processed = false;
         try {
-            processed = tryConsume(messageId, CONSUMER_NAME,
+            processed = tryConsume(messageId, CONSUMER_NAME, mdcOf(subTaskId, taskId),
                     () -> subTaskReviewService.reviewSubTask(subTaskId, executorAgentId));
         } catch (Exception e) {
             log.error("MQ 核验命令消费失败: messageId={}, subTaskId={}, agentId={}",
@@ -120,6 +122,20 @@ public class MqReviewCommandConsumer extends AbstractIdempotentConsumer {
             channel.basicNack(tag, false, false);
             log.warn("MQ 核验命令 NACK (→ DLX): messageId={}, subTaskId={}", messageId, subTaskId);
         }
+    }
+
+    /**
+     * 组装消费期 MDC 上下文：payload 业务标识（review 消息自带 taskId/subTaskId，Phase 0 C4）。
+     */
+    private static Map<String, String> mdcOf(Long subTaskId, Long taskId) {
+        Map<String, String> mdc = new HashMap<>();
+        if (subTaskId != null) {
+            mdc.put(AbstractIdempotentConsumer.MDC_SUB_TASK_ID, String.valueOf(subTaskId));
+        }
+        if (taskId != null) {
+            mdc.put(AbstractIdempotentConsumer.MDC_TASK_ID, String.valueOf(taskId));
+        }
+        return mdc;
     }
 
     /** Jackson 反序列化 Map 时小整数默认 Integer，统一转 Long。 */

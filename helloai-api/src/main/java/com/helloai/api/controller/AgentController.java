@@ -46,6 +46,18 @@ public class AgentController {
         return R.ok(agentService.list().stream().map(this::toResponse).toList());
     }
 
+    /**
+     * 可指派执行者候选（改派/认领/死信重派选择器数据源）。
+     *
+     * <p>仅返回 role=EXECUTOR 且 ACTIVE 的 Agent：内部 LLM（API_KEY_LLM）
+     * 由平台代为调用恒可用，外部 Agent 要求在线（ONLINE/IDLE）——
+     * 避免人工改派给 PLANNER/REVIEWER 或离线执行者后任务无人消费。</p>
+     */
+    @GetMapping("/listAssignableExecutors")
+    public R<List<AgentResponse>> listAssignableExecutors() {
+        return R.ok(agentService.listAssignableExecutors().stream().map(this::toResponse).toList());
+    }
+
     @GetMapping("/getById/{id}")
     public R<AgentResponse> getById(@PathVariable("id") Long id) {
         Agent agent = agentService.getById(id);
