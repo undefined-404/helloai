@@ -193,7 +193,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
                         .eq(SubTask::getStatus, SubTaskStatus.DEAD_LETTER)).intValue());
         counts.put("moduleCount", moduleMapper.selectCount(
                 new LambdaQueryWrapper<Module>().eq(Module::getTaskId, taskId)).intValue());
-        counts.put("reviewCount", reviewPort.countByTaskId(taskId));
+        // reviewPort.countByTaskId 签名返回 long，必须显式 (int) 收口，
+        // 否则 Map 装箱为 Long，Controller.toRelatedCounts 的 (Integer) 强转会抛 ClassCastException → related-counts 接口稳定 500。
+        counts.put("reviewCount", (int) reviewPort.countByTaskId(taskId));
         counts.put("executionCount", agentService.countExecutionByTaskId(taskId));
         counts.put("unreadInboxCount", agentService.countUnreadInboxByTaskRef(taskId));
         counts.put("timelineCount", taskTimelineMapper.selectCount(

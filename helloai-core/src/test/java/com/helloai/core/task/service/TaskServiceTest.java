@@ -36,13 +36,22 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
- * TaskService 创建/更新单测（收尾）。
+ * TaskService 创建/更新与关联统计单测。
  *
- * <p>回归背景：agentPolicy/requiredSkills 经任务创建/编辑透传落库（createTask 五参重载
- *  与 updateTask 六参扩展）。本测试验证 policy 随创建落库，
- * 以及更新侧"null=不更新（MP NOT_NULL 策略跳过）、空集合=显式清空"的语义。</p>
+ * <p>回归背景：
+ * <ul>
+ *   <li>agentPolicy/requiredSkills 经任务创建/编辑透传落库（createTask 五参重载
+ *       与 updateTask 六参扩展）。本测试验证 policy 随创建落库，
+ *       以及更新侧"null=不更新（MP NOT_NULL 策略跳过）、空集合=显式清空"的语义；</li>
+ *   <li>getRelatedCounts 曾因 reviewPort.countByTaskId 返回 long 而把
+ *       reviewCount 装箱为 Long 存入 Map，Controller.toRelatedCounts 的
+ *       (Integer) 强转抛 ClassCastException → 删除任务前后相关接口稳定 500。
+ *       本测试断言 8 个计数字段在 Map 中均为 Integer 实例。</li>
+ * </ul>
+ * </p>
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -245,5 +254,48 @@ class TaskServiceTest {
         assertThat(result).isNull();
         verify(service, never()).updateById(any(Task.class));
         verify(subTaskService, never()).lambdaQuery();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  关联统计（删除前风险提示）—— 回归：装箱类型必须全部为 Integer
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("getRelatedCounts：8 个计数字段必须为 Integer（Controller 侧 (Integer) 强转，Long 会 500）")
+    void getRelatedCounts_allFieldsAreInteger() {
+        TaskService service = newSpyService();
+        Task existing = new Task();
+        existing.setId(42L);
+        existing.setTitle("回归任务");
+        doReturn(existing).when(service).getById(42L);
+
+        // 关键回归：reviewPort 返回 long > Integer.MAX_VALUE，
+        // 若 Service 不显式 (int) 收口，Map 装 Long → Controller (Integer) 强转抛 ClassCastException。
+        long reviewOverflow = (long) Integer.MAX_VALUE + 1L;
+        when(reviewPort.countByTaskId(42L)).thenReturn(reviewOverflow);
+        // MyBatis-Plus BaseMapper.selectCount 返回 long
+        when(subTaskMapper.selectCount(any())).thenReturn(3L);
+        when(moduleMapper.selectCount(any())).thenReturn(2L);
+        when(taskTimelineMapper.selectCount(any())).thenReturn(7L);
+        // agent 域两个接口返回 int
+        when(agentService.countExecutionByTaskId(42L)).thenReturn(5);
+        when(agentService.countUnreadInboxByTaskRef(42L)).thenReturn(1);
+
+        Map<String, Object> counts = service.getRelatedCounts(42L);
+
+        // 回归断言：8 个计数全部为 Integer 实例
+        assertThat(counts.get("subTaskCount")).isInstanceOf(Integer.class).isEqualTo(3);
+        assertThat(counts.get("activeSubTaskCount")).isInstanceOf(Integer.class).isEqualTo(3);
+        assertThat(counts.get("deadLetterCount")).isInstanceOf(Integer.class).isEqualTo(3);
+        assertThat(counts.get("moduleCount")).isInstanceOf(Integer.class).isEqualTo(2);
+        // 关键断言：reviewCount 必须是 Integer（修复前会是 Long）
+        assertThat(counts.get("reviewCount")).isInstanceOf(Integer.class);
+        assertThat(counts.get("executionCount")).isInstanceOf(Integer.class).isEqualTo(5);
+        assertThat(counts.get("unreadInboxCount")).isInstanceOf(Integer.class).isEqualTo(1);
+        assertThat(counts.get("timelineCount")).isInstanceOf(Integer.class).isEqualTo(7);
+
+        // 直接断言 (Integer) 强转不再抛 ClassCastException
+        Integer reviewCount = (Integer) counts.get("reviewCount");
+        assertThat(reviewCount).isNotNull();
     }
 }
