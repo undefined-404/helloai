@@ -9,10 +9,12 @@ import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.task.port.TaskDispatchPort;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.springboot3.circuitbreaker.autoconfigure.CircuitBreakerAutoConfiguration;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -30,7 +32,10 @@ import org.springframework.context.annotation.EnableAspectJAutoProxy;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 
+import java.lang.reflect.Method;
 import java.time.OffsetDateTime;
+import java.util.Arrays;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -153,6 +158,72 @@ class ResilientDispatcherAopIntegrationTest {
         Advised advised = (Advised) resilientDispatcher;
         Class<?> targetClass = advised.getTargetClass();
         assertThat(targetClass).isEqualTo(ResilientDispatcher.class);
+    }
+
+    @Test
+    @DisplayName("fallback 契约：所有 @CircuitBreaker fallbackMethod 必须在同参签名（±Throwable 尾参），否则降级静默失效（锁定 2026-09-04 签名 500 回归）")
+    void shouldMatchFallbackSignaturesForAllCircuitBreakerMethods() {
+        for (Method protectedMethod : ResilientDispatcher.class.getDeclaredMethods()) {
+            CircuitBreaker cb = protectedMethod.getAnnotation(CircuitBreaker.class);
+            if (cb == null) {
+                continue;
+            }
+            Class<?>[] originalParams = protectedMethod.getParameterTypes();
+            Method fallback = Arrays.stream(ResilientDispatcher.class.getDeclaredMethods())
+                    .filter(f -> f.getName().equals(cb.fallbackMethod()))
+                    .filter(f -> {
+                        Class<?>[] fp = f.getParameterTypes();
+                        if (fp.length == originalParams.length) {
+                            return Arrays.equals(fp, originalParams);
+                        }
+                        return fp.length == originalParams.length + 1
+                                && fp[fp.length - 1] == Throwable.class
+                                && Arrays.equals(Arrays.copyOf(fp, originalParams.length), originalParams);
+                    })
+                    .findFirst()
+                    .orElse(null);
+            assertThat(fallback)
+                    .as("@CircuitBreaker(fallbackMethod=%s) 必须存在签名匹配的 fallback 方法", cb.fallbackMethod())
+                    .isNotNull();
+        }
+    }
+
+    @Test
+    @DisplayName("首选不在任务级白名单 → 约束版 fallback 触发 → 同角色白名单内替代成功重分配（500 回归锁）")
+    void shouldTriggerConstrainedFallbackWhenPreferredOutsideWhitelist() {
+        // 首选：ONLINE API_KEY_LLM EXECUTOR（不在白名单，score 高但被任务级约束排除）
+        Agent preferred = new Agent();
+        preferred.setId(101L);
+        preferred.setName("preferred-outside-whitelist");
+        preferred.setRole(AgentRole.EXECUTOR);
+        preferred.setAccessType(AgentAccessType.API_KEY_LLM);
+        preferred.setStatus(AgentStatus.ACTIVE);
+        preferred.setOnlineStatus(AgentOnlineStatus.ONLINE);
+        preferred.setLastSeenTime(OffsetDateTime.now().minusMinutes(1));
+
+        // 替代：白名单内健康 EXECUTOR
+        Agent whitelisted = new Agent();
+        whitelisted.setId(202L);
+        whitelisted.setName("whitelisted-agent");
+        whitelisted.setRole(AgentRole.EXECUTOR);
+        whitelisted.setAccessType(AgentAccessType.API_KEY_LLM);
+        whitelisted.setStatus(AgentStatus.ACTIVE);
+        whitelisted.setOnlineStatus(AgentOnlineStatus.ONLINE);
+        whitelisted.setScore(60);
+        whitelisted.setLastSeenTime(OffsetDateTime.now().minusMinutes(1));
+
+        when(agentService.getById(101L)).thenReturn(preferred);
+        when(agentService.getById(202L)).thenReturn(whitelisted);
+        when(agentSelector.pickAlternative(eq(101L), any(), any())).thenReturn(whitelisted);
+
+        // 任务级白名单只允许 202L；首选 101L 不在其内 → fast-fail → fallback 选 202L
+        TaskDispatchPort.DispatchConstraints constraints =
+                TaskDispatchPort.DispatchConstraints.of(List.of(202L), null);
+        resilientDispatcher.assignNext(101L, 999L, constraints);
+
+        verify(agentSelector, times(1)).pickAlternative(eq(101L), any(), any());
+        verify(subTaskService, times(1)).assignNext(eq(202L), eq(999L));
+        verify(subTaskService, never()).assignNext(eq(101L), anyLong());
     }
 
     /**

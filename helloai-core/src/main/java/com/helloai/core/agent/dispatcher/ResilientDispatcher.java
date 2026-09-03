@@ -218,11 +218,23 @@ public class ResilientDispatcher implements TaskDispatchPort {
         doAssignNextFallback(agentId, subTaskId, null, t);
     }
 
-    /** 带任务级约束的熔断降级（替代选人同样受约束，见 {@link #assignNext(Long, Long, TaskDispatchPort.DispatchConstraints)}）。 */
+    /** 带任务级约束的熔断降级（替代选人同样受约束，见 {@link #assignNext(Long, Long, TaskDispatchPort.DispatchConstraints)}）。
+     *
+     * <p>注意：fallback 参数类型必须与原方法保持一致（{@code TaskDispatchPort.DispatchConstraints}），
+     * 否则 Resilience4j 按签名匹配不到 fallback（日志 WARN "No fallback method match found"），
+     * 降级静默失效、原异常直接冒泡（2026-09-04 blocked_reassign 500 根因，契约测试锁定）。</p>
+     *
+     * @param agentId   原始分配目标 Agent ID
+     * @param subTaskId 待分配的子任务 ID
+     * @param constraints 任务级选人约束（port 类型；与原方法签名一致）
+     * @param t         原始异常（CallNotPermittedException 或 AgentUnavailableException）
+     */
     @SuppressWarnings("unused")
     private void assignNextFallbackWithConstraints(Long agentId, Long subTaskId,
-                                                   AgentSelectionConstraints constraints, Throwable t) {
-        doAssignNextFallback(agentId, subTaskId, constraints, t);
+                                                   TaskDispatchPort.DispatchConstraints constraints, Throwable t) {
+        AgentSelectionConstraints converted = constraints == null ? null
+                : AgentSelectionConstraints.of(constraints.allowedAgentIds(), constraints.requiredSkills());
+        doAssignNextFallback(agentId, subTaskId, converted, t);
     }
 
     private void doAssignNextFallback(Long agentId, Long subTaskId,
