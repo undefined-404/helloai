@@ -110,7 +110,7 @@ Planner
 | N-004 | Credential Vault | PARTIAL | P1 | 已有基础轮换语义，但完整迁移 / 权限模型不足 |
 | N-005 | Provider Factory | PARTIAL | P1 | Provider Catalog 已存在，但部分 Provider Factory 尚不完整 |
 | N-006 | 优先级调度 | TODO | P2 | 当前缺少完整优先级队列与抢占机制 |
-| N-007 | 执行恢复 | PARTIAL | P1 | 已有超时 / 补偿，但缺少完整执行快照与恢复上下文 |
+| N-007 | 执行恢复 | PARTIAL | P1 | 已有超时 / 补偿 / 租约回收，但缺少完整执行快照与恢复上下文 |
 | N-008 | Message 超时转派 | PARTIAL | P1 | 尚无统一 inbox/message 超时消费转派机制 |
 | N-009 | 跨会话记忆 | TODO | P2 | 尚无独立长期记忆平面 |
 | N-010 | MQ 业务治理 | PARTIAL | P2 | 基础 Outbox / Confirm 已有，但 DLQ / 业务级治理尚未完整 |
@@ -395,6 +395,11 @@ Agent
 - Outbox
 - Reconcile
 - DEAD_LETTER
+- 执行租约（Phase 0 A2：sub_task.owner + lease_until，Watchdog 每节点续期 + Reconciler 过期回收重派）
+- 事件轨迹（Phase 0 B1：agent_event 表 + AgentEventRecorder Outbox 双写，ADR-001 Run/Turn/Step，对账/回放地基）
+- 埋点事件流（Phase 0 B2：TASK_ASSIGNED / AGENT_STARTED / CONTEXT_BUILT / TOOL_CALL_STARTED / TOOL_CALL_COMPLETED / AGENT_COMPLETED / REVIEW_STARTED / REVIEW_APPROVED / REVIEW_REJECTED / REWORK_STARTED 共 10 类事件埋点，覆盖分配/执行/完成/核验/返工旧执行链路与人工审核路径（2026-09-03 补齐人工 APPROVED/REJECTED 埋点，LOG-20260903-007），AgentEventContextResolver 静态 runId（轮次固定 1）/ turn（1+reworkCount+attemptTotal）计算）
+- 事件流对账（Phase 0 B3：EventReconciliationTask 60s 集群单例 + EventReconciliationService 以业务表最近变更（10 分钟窗口）为候选源，状态 → 末条事件单向投影校验（ASSIGNED/IN_PROGRESS/REVIEW/REWORK/DONE 五状态映射，PENDING 等无事件语义状态跳过），不一致仅 WARN 告警不修正）
+- 共享重试预算（Phase 0 A3：sub_task.attempt_total + RetryPolicy 判定，重分配熔断已切换）
 
 ## 差距
 
