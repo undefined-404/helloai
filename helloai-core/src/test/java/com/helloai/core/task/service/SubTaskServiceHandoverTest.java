@@ -6,9 +6,12 @@ import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConcurrencyQuotaService;
+import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.config.WatchdogProperties;
+import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ReviewResult;
+import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.port.ReviewSummary;
@@ -32,6 +35,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -89,6 +93,14 @@ class SubTaskServiceHandoverTest {
         // §6.104 打回失效：让 ObjectProvider 返回 mock，便于断言 invalidateBySubTask 被调
         //（类级 @MockitoSettings(strictness = Strictness.LENIENT) 已开启，无需 Mockito.lenient()）
         when(attachmentServiceProvider.getIfAvailable()).thenReturn(attachmentService);
+        // LOG-20260903-011：reworkFresh 换派目标必须 EXECUTOR（校验经 agentServiceProvider 懒解析）
+        AgentService agentService = mock(AgentService.class);
+        Agent target = new Agent();
+        target.setId(NEW_AGENT);
+        target.setName("new-executor");
+        target.setRole(AgentRole.EXECUTOR);
+        when(agentService.getById(NEW_AGENT)).thenReturn(target);
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
     }
 
     private SubTask subTask(SubTaskStatus status, Long assignedAgentId) {
@@ -182,6 +194,27 @@ class SubTaskServiceHandoverTest {
                 anyString(), anyString(), eq("sub_task"), eq(SUB_TASK_ID), anyString());
         // §6.104 打回失效：reworkFresh 触发附件 ACTIVE → INACTIVE
         verify(attachmentService).invalidateBySubTask(SUB_TASK_ID);
+    }
+
+    @Test
+    @DisplayName("人工驳回换派目标非 EXECUTOR（PLANNER）→ BizException（LOG-20260903-011 契约）")
+    void shouldRejectNonExecutorWhenReworkFreshSwitchesAgent() {
+        doReturn(subTask(SubTaskStatus.REVIEW, OLD_AGENT))
+                .when(subTaskService).getById(SUB_TASK_ID);
+        // 覆盖 setUp 的 EXECUTOR stub：本次改派目标为 PLANNER
+        AgentService agentService = mock(AgentService.class);
+        Agent planner = new Agent();
+        planner.setId(NEW_AGENT);
+        planner.setName("planner-agent");
+        planner.setRole(AgentRole.PLANNER);
+        when(agentService.getById(NEW_AGENT)).thenReturn(planner);
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+
+        assertThatThrownBy(() -> subTaskService.reworkFresh(SUB_TASK_ID, NEW_AGENT))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("只支持执行者");
+        verify(agentInboxService, never()).send(
+                any(), any(), eq("sub_task.reassigned"), any(), any(), any(), any(), any());
     }
 
     @Test

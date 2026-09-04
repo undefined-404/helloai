@@ -498,6 +498,8 @@ class SubTaskDispatchServiceTest {
         Agent agent = new Agent();
         agent.setId(15L);
         agent.setName("manual-agent");
+        // LOG-20260903-011：死信重派目标必须 EXECUTOR 角色
+        agent.setRole(AgentRole.EXECUTOR);
         when(agentService.getById(15L)).thenReturn(agent);
 
         subTaskDispatchService.redispatchDeadLetter(83L, 15L);
@@ -512,7 +514,8 @@ class SubTaskDispatchServiceTest {
                 15L,
                 Map.of("trigger", "manual_dead_letter_redispatch",
                         "assignedAgentId", 15L,
-                        "agentName", "manual-agent"));
+                        "agentName", "manual-agent",
+                        "reworkCountReset", true));
     }
 
     @Test
@@ -529,6 +532,27 @@ class SubTaskDispatchServiceTest {
                 .hasMessageContaining("DEAD_LETTER");
 
         verify(subTaskMapper, never()).resetAttemptTotal(anyLong(), any());
+        verify(subTaskService, never()).changeStatus(anyLong(), any(), anyLong());
+    }
+
+    @Test
+    @DisplayName("死信重派目标非 EXECUTOR（PLANNER）→ BizException（LOG-20260903-011 契约）")
+    void shouldRejectNonExecutorWhenRedispatchDeadLetter() {
+        SubTask subTask = new SubTask();
+        subTask.setId(85L);
+        subTask.setTaskId(95L);
+        subTask.setStatus(SubTaskStatus.DEAD_LETTER);
+        when(subTaskService.getById(85L)).thenReturn(subTask);
+
+        Agent planner = new Agent();
+        planner.setId(16L);
+        planner.setName("planner-agent");
+        planner.setRole(AgentRole.PLANNER);
+        when(agentService.getById(16L)).thenReturn(planner);
+
+        assertThatThrownBy(() -> subTaskDispatchService.redispatchDeadLetter(85L, 16L))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("只支持执行者");
         verify(subTaskService, never()).changeStatus(anyLong(), any(), anyLong());
     }
 
