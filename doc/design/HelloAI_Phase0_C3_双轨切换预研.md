@@ -71,10 +71,10 @@ Step 0（前置实现，C3 一部分）✅ 已落地（LOG-20260902-010，LocalE
 Step 1  灰度 5%：gray-percent=5，观察 ≥ N 个 Run 完成 ✅ 已执行（LOG-20260903-003，命中样本 c3gs-r1 全链闭环）
 Step 2  对账确认：B3 窗口内 0 不一致 + 事件成对 + 终态投影一致（验收标准见 §六）✅ 已执行（LOG-20260903-007；人工审核路径埋点缺口已修复，存量例外 1 例已出窗口）
 Step 3  阶梯放量 25% ✅ 已执行（LOG-20260903-009：gray-percent 5→25 重启生效，造数 20 任务命中 5 个（占比精确 25%），验收通过：违例 0 行 / 对账 0 WARN / P1 成对 / P3 无滞留 / 新样本终态投影 5/5 ok；脚本升级 v1.1 -WindowMinutes 按档位窗口统计占比）；100% 档放量由用户决策
-Step 4  全量稳定：100% 保持 ≥ 1 天（建议），无新增 WARN/ERROR 类型
-Step 5  下线旧直连路径（校准 4 边界）→ 执行统一走 AgentRuntime
+Step 4  全量稳定：100% 保持 ≥ 1 天（建议），无新增 WARN/ERROR 类型 ✅ 已执行（LOG-20260904-001 多模型实测；用户决策：24h 观察提前收口，观察首轮全绿记录于 LOG-20260904-005，以回滚演练实测替代长期观察作为 Step 5 前置）
+Step 5  下线旧直连路径（校准 4 边界）→ 执行统一走 AgentRuntime ✅ 已执行（LOG-20260904-006：回滚演练实测通过后删除 consume 旧直连分支，执行统一经 Runtime；全量回归 1047 全绿；4 类 inner agent 冒烟闭环）
 Step 6  清理：gray-percent 固定 100（或移除路由分支）、v2-enabled 固化 true；
-        删除路由层灰度分支，保留 AgentRuntime 接口为唯一执行契约
+        删除路由层灰度分支，保留 AgentRuntime 接口为唯一执行契约 ✅ 已执行（LOG-20260904-006：routeToRuntime/grayPercent 字段删除，LegacyExecutorAdapter 去 @ConditionalOnProperty 恒注册；yml 键保留仅作文档语义，verify-c3 脚本继续兼容）
 ```
 
 回滚预案（任意阶段）：
