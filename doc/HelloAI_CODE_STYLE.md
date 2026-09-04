@@ -620,6 +620,22 @@ system → agent      ❌
 system → task       ❌
 ```
 
+### 6.1 补充说明（2026-09-04，agent → task 存量标债）
+
+`agent → task` 反向依赖为【已知技术债】：现存约 66 处 import（service 36 / entity 25 /
+port·spec 5；盘点口径：helloai-core agent 域主代码 import task 域，2026-09-04）。
+
+约束：
+
+```text
+禁止新增；
+新增 agent → task 依赖必须在 code review 显式豁免并记录理由。
+```
+
+回收方向：随 AgentRuntime 改造逐步回收（Port 反转 / 职责上移）。本注记仅标记债务与
+禁增边界，不构成对既有先例的合规背书——§7.1「跨域走 Service 不直捅 Mapper」只约束
+依赖方式，不豁免本节的依赖方向。
+
 ---
 
 # 7. 跨域依赖

@@ -55,17 +55,17 @@
 
 - **文件**：[LocalExecutionCommandConsumer.java](../../helloai-core/src/main/java/com/helloai/core/agent/mqconsumer/LocalExecutionCommandConsumer.java#L149-L159)
 - **现状**：`runViaRuntime` 构造 AgentContext 只填 6 个定位字段（L152-159），`skills` 落 `@Builder.Default` 空列表（[AgentContext.java L43-45](../../helloai-core/src/main/java/com/helloai/core/agent/runtime/AgentContext.java#L43-L45)）。
-- **改动**：
-  1. 新增注入 `TaskService`（任务域接口，先例成立——同 consumer 已注 `SubTaskService` / `TaskTimelineService`）；
-  2. `runViaRuntime` 内 `task = taskService.getById(subTask.getTaskId())`，**null / requiredSkills=null → `Collections.emptyList()`，不阻断执行**；
-  3. `.skills(...)` 注入 builder。
-- **验收**：[LocalExecutionCommandConsumerTest](../../helloai-core/src/test/java/com/helloai/core/agent/mqconsumer/LocalExecutionCommandConsumerTest.java) 新增 `@Mock TaskService`；[L83-90 argThat](../../helloai-core/src/test/java/com/helloai/core/agent/mqconsumer/LocalExecutionCommandConsumerTest.java#L83-L90) 扩展 `getSkills()` 断言；现有 3 条 RuntimeExecutionPath 用例补 stub。
-- **注意**：纯契约完备性——`LegacyExecutorAdapter.execute`（L41-66）只消费 subTaskId/agentId，运行时行为**零变化**，价值在于为 SkillRegistry/ToolRegistry 消费定型模式。
+- **改动（2026-09-04 修订为命令装箱方案，LOG-20260904-009）**：
+  1. `ExecutionCommand` 新增 `requiredSkills` 装箱字段（与 `Task.requiredSkills` 同名对应，D4）；
+  2. 命令创建方在 task 域内查询后装箱：`SubTaskService.requiredSkillsOf(taskId)`（懒解析 `ObjectProvider<TaskService>`，破构造环）——Dispatcher / Review（人工打回）/ SubTaskReview（自动打回）/ 管理端执行 4 处 `createAssignedCommand(..., requiredSkillsOf(...))`；
+  3. Consumer **不注入 TaskService**（§6 依赖方向红线：agent → task 禁止新增），`runViaRuntime` 改从 `command.getRequiredSkills()` 取 skills 注入 builder；`null → Collections.emptyList()` 不阻断执行。
+- **验收（修订）**：[LocalExecutionCommandConsumerTest](../../helloai-core/src/test/java/com/helloai/core/agent/mqconsumer/LocalExecutionCommandConsumerTest.java) **不加** `@Mock TaskService`；skills 断言改为命令装箱值透传（L83-90 argThat 扩展 `getSkills()`）；3 条 RuntimeExecutionPath 用例断言 command 携带 requiredSkills。
+- **注意**：纯契约完备性——`LegacyExecutorAdapter.execute`（L41-66）透传 `ctx.getSkills()`（consume 侧已由 Task 查询改为 command 装箱值），运行时行为**零变化**，价值在于为 SkillRegistry/ToolRegistry 消费定型模式。
 
 ### T2 — `SKILL_RESOLVED` 埋点（step=5）
 
 - **文件**：[SubTaskExecutionServiceImpl.java L263-L283](../../helloai-core/src/main/java/com/helloai/core/agent/service/impl/SubTaskExecutionServiceImpl.java#L263-L283)
-- **改动**：L263 `pluginSkillSpecService.renderSection(...)` 之后、L278 CONTEXT_BUILT（step=2）之前插入（复用 L241 `runTurn`、L233 `subTaskId`、L159 `safeMap`、L355 `recordEventSafely`）：
+- **改动**：[L216 `agentSkillSpecService.resolve(requiredSkills)`（requiredSkills 由命令装箱传入，纯函数入参，不再按 taskId 反查）](../../helloai-core/src/main/java/com/helloai/core/agent/service/impl/SubTaskExecutionServiceImpl.java#L216) 之后、CONTEXT_BUILT（step=2）之前插入（复用 L241 `runTurn`、L233 `subTaskId`、L159 `safeMap`、L355 `recordEventSafely`）：
 
   ```java
   recordEventSafely(AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
@@ -113,13 +113,23 @@
 |---|---|---|---|---|
 | **D1** | `SKILL_RESOLVED` payload 内容 | A: 只记 requiredSkills / **B: requiredSkills + resolvedSpecs** | **B** | ✅ 已拍 B（用户确认） |
 | **D2** | SkillRegistry 是否本期收拢 | A: 只做 T1-T3 / B: 同步抽象 | **A** | ✅ 已拍 A（用户确认） |
+| **D3** | git 处置（6be38cf 违规实现） | A: reset 重写历史 / **B: 保留 6be38cf + 追加 fix commit** | **B** | ✅ 已拍 B（用户确认） |
+| **D4** | 装箱字段命名 | skills / requiredSkills / taskRequiredSkills | **requiredSkills**（与 `Task.requiredSkills` 一致，装箱来源直接对应） | ✅ 已拍（用户确认） |
+| **D5** | Skill 资源位置 | 迁模块 / 新增模块 / **原地不动** | **原地不动**（资源已在 helloai-core，仅 service 类迁包） | ✅ 已定（用户确认） |
+| **D6** | CODE_STYLE §6 加注 | A: 本轮一起 / B: 后续单独 | **A**（技术债 + 禁新增 + 定回收，不是洗白先例） | ✅ 已拍 A（用户确认） |
 
-### D1 决策说明（已拍 B）
+### D1 决策说明（已拍 B，2026-09-04 实施方式修订见下）
 
-- **payload 字段**：`requiredSkills`（原始声明）+ `resolvedSpecs`（命中的 `eng-*` 标签，两层过滤：标签命中 + 速览非空，与 [renderSection L42-71](../../helloai-core/src/main/java/com/helloai/core/task/service/impl/PluginSkillSpecServiceImpl.java#L42-L71) 注入事实一致）。
-- **PluginSkillSpecService 改动**：新增 `ResolvedSpec resolve(Long taskId)` 方法（接口 + 实现），内部一次性读 task + normalize + 命中 + loadSpeedSummary，返回 record（`requiredSkills` + `matchedLabels` + `section`）；`renderSection` 改为委托 `resolve(taskId).section()`（保留旧签名，向后兼容）。
-- **executeOnce 改动**：调 `resolve()` 一次得 record，从 record 取 `section` 用于 prompt 装配，取 `requiredSkills` + `matchedLabels` 写 SKILL_RESOLVED payload。
-- **代价**：executeOnce 多一次 task 读取（`pluginSkillSpecServiceImpl.resolve` 内部读一次），与旧 `renderSection` 内部读 task 等价，**不增加** task 读取次数；record 是新引入的内部 DTO，落在 `task.service` 同目录。
+- **payload 字段**：`requiredSkills`（原始声明）+ `resolvedSpecs`（命中的 `eng-*` 标签，两层过滤：标签命中 + 速览非空，与 [AgentSkillSpecServiceImpl L40-69](../../helloai-core/src/main/java/com/helloai/core/agent/skill/AgentSkillSpecServiceImpl.java#L40-L69) 注入事实一致）。
+- **AgentSkillSpecService 改动（迁域 + 纯函数化）**：接口 + 实现由 task 域 `PluginSkillSpecServiceImpl` 迁至 agent 域 `agent.skill` 包；`ResolvedSpec resolve(List<String> requiredSkills)` 入参即装箱的 requiredSkills，不再接收 taskId，实现与 task 域零依赖（§6 依赖方向红线）。
+- **executeOnce 改动**：调 `resolve(command.getRequiredSkills())` 一次得 record，从 record 取 `section` 用于 prompt 装配，取 `requiredSkills` + `matchedLabels` 写 SKILL_RESOLVED payload。
+- **代价**：executeOnce 零 task 读取（读取发生在命令创建方的 `requiredSkillsOf`，随命令装箱）；record 是迁域时引入的内部 DTO，落在 `agent.skill` 包。
+
+### D1 落地形态修订说明（2026-09-04，LOG-20260904-009）
+
+- 6be38cf 的初版实现（Consumer 注入 `TaskService` + `PluginSkillSpecService.resolve(Long taskId)` 反查 task）违反 CODE_STYLE §6「agent → task 禁止反向依赖」——§7.1「走 Service」只约束依赖方式，不豁免依赖方向；
+- 落地改为命令装箱：`ExecutionCommand.requiredSkills` 由 4 处命令创建方（Dispatcher / Review 人工打回 / SubTaskReview 自动打回 / 管理端执行）经 `SubTaskService.requiredSkillsOf(taskId)`（task 域内查询，`ObjectProvider<TaskService>` 懒解析破构造环）装箱，沿命令链路正向传入 agent 域；`PluginSkillSpecServiceImpl` 三件套删除；
+- git 按 D3=B 处置：保留 6be38cf（审计记录），追加 fix commit。
 
 ### D2 决策说明（已拍 A）
 
