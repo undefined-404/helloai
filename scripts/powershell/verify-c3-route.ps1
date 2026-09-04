@@ -118,6 +118,8 @@ if ($WindowMinutes -gt 0) {
 $staSql = @'
 -- C3 灰度路由统计（只读，验收标准 1）：Runtime 命中 task 占比 vs gray-percent 偏差 <= +-10%。
 -- {WINNOTE}样本过少（< 10 task）时不判定，先积累。
+-- 口径（LOG-20260904-001 修复）：all_tasks 分母过滤 payload->>'route' IS NOT NULL，
+-- 排除双轨切换前旧协议 consume（无 route 键）task，避免稀释占比。
 SELECT
   (SELECT COUNT(DISTINCT task_id) FROM task_timeline
     WHERE event_type = 'sub_task_execution_command_consume'
@@ -125,6 +127,7 @@ SELECT
 {WINCOND}  ) AS rt_tasks,
   (SELECT COUNT(DISTINCT task_id) FROM task_timeline
     WHERE event_type = 'sub_task_execution_command_consume'
+      AND payload->>'route' IS NOT NULL
 {WINCOND}  ) AS all_tasks,
   {GRAY} AS gray;
 '@

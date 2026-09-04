@@ -69,8 +69,11 @@ ORDER BY rt.sub_task_id;
 -- P2 终态投影：route=agent_runtime 子任务业务状态 vs 末条事件（B3 五态映射）。
 -- 期望：无 mismatch 行（DONE 末条应为 review_approved；REVIEW 为 agent_completed/review_started；
 --       REWORK 为 review_rejected/rework_started）。人工验收路径埋点已补齐（LOG-20260903-007）。
--- 契约对齐：复刻后端 EventReconciliationServiceImpl——非语义状态（PENDING/PENDING_PLAN_REVIEW/
+-- 契约对齐 1：复刻后端 EventReconciliationServiceImpl——非语义状态（PENDING/PENDING_PLAN_REVIEW/
 --       PAUSED/BLOCKED/CANCELLED/DEAD_LETTER）跳过校验，标 'SKIP' 而非 'MISMATCH'。
+-- 契约对齐 2：人工验收存量豁免（LOG-20260904-004）——B2 埋点补齐（74993cc）前的人工验收
+--       仅落 timeline 不落 agent_event，存在 sub_task_manual_review_passed 的 DONE 允许
+--       末条为 agent_completed（修复后新验收均落 review_approved，不受影响）。
 WITH rt AS (
     SELECT DISTINCT sub_task_id
     FROM task_timeline
@@ -92,7 +95,12 @@ SELECT p.id, p.status, p.last_event,
            (p.status='IN_PROGRESS' AND p.last_event IN ('agent_started','context_built','tool_call_started','tool_call_completed')) OR
            (p.status='REVIEW' AND p.last_event IN ('agent_completed','review_started')) OR
            (p.status='REWORK' AND p.last_event IN ('review_rejected','rework_started')) OR
-           (p.status='DONE' AND p.last_event='review_approved')
+           (p.status='DONE' AND p.last_event='review_approved') OR
+           (p.status='DONE' AND p.last_event='agent_completed' AND EXISTS (
+               SELECT 1 FROM task_timeline tt
+               WHERE tt.sub_task_id = p.id
+                 AND tt.event_type = 'sub_task_manual_review_passed'
+                 AND tt.deleted = 0))
        THEN 'ok' ELSE 'MISMATCH' END AS verdict
 FROM proj p
 ORDER BY p.id;
