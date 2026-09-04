@@ -150,6 +150,8 @@ attempt_total（全局上限，如 5）
 - **两层共享** `attempt_total` 计数器，任一层达上限即停
 - 关键：杜绝 "Executor 3 × MQ 3 × Agent 3 = 27 次" 的实际执行
 
+> ✅ **状态（LOG-20260904-007）：本地化落地。** 共享计数器 = `sub_task.attempt_total`（原子 SQL 累加/重置）+ `RetryPolicy.exceedsMax` 纯判定（helloai-common）。覆盖：调度重派 4 入口（dispatchBlocked / redispatchOffline / fallback / assigned-timeout）与 review 自动驳回返工（rework 打回前消耗预算，耗尽转 DEAD_LETTER 人工兜底）；人工驳回（reworkFresh）与死信重派清零预算。未纳入本轮：Executor 内层 retry 与 MQ DLX 共读同一计数器的完整形态（MQ DLX 仍由 outbox retryCount + 死信台账兜底，进程崩溃场景职责独立）。
+
 ---
 
 ## 七、与整体路线图的衔接
