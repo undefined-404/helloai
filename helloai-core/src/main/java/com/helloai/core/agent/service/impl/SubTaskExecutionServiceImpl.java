@@ -260,7 +260,13 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
         // 4) 依赖段 = 直接前置（dependsOnIdList）的结构化摘要 + 完成内容本体（物化附件优先、原始产出回退）
         //    综合注入供 LLM 结合"前置做了什么 + 本轮任务要求"分析执行
         String promptSection = taskRunningSpecService.buildExecutorPromptSection(subTask.getTaskId());
-        String pluginSection = pluginSkillSpecService.renderSection(subTask.getTaskId());
+        // Phase 1 T2（D1=B）：一次解析拿 requiredSkills + matchedLabels + section，三件套共用于 Prompt 装配 + SKILL_RESOLVED 埋点
+        // 接口契约：resolve() 永不为 null（实现 best-effort 保证三字段恒在）；此处 null 防御仅兜底非 best-effort 替换实现
+        PluginSkillSpecService.ResolvedSpec resolved = pluginSkillSpecService.resolve(subTask.getTaskId());
+        if (resolved == null) {
+            resolved = new PluginSkillSpecService.ResolvedSpec(List.of(), List.of(), "");
+        }
+        String pluginSection = resolved.section();
         promptSection = mergeSpecSections(promptSection, pluginSection);
         String historySection = renderHistorySectionSafely(agent);
         promptSection = mergeSpecSections(promptSection, historySection);
@@ -275,6 +281,12 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
                 .context(context)
                 .requiredCapabilities(Map.of())
                 .build();
+        // Phase 1 T2：SKILL_RESOLVED（step=5，解析完成恒发；D1=B payload 含 requiredSkills + resolvedSpecs）
+        recordEventSafely(AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
+                subTask.getTaskId(), subTaskId, runTurn, 5,
+                AgentEventType.SKILL_RESOLVED, agent.getId(),
+                safeMap("requiredSkills", resolved.requiredSkills(),
+                        "resolvedSpecs", resolved.matchedLabels()));
         // Phase 0 B2：CONTEXT_BUILT（Turn 内上下文装配完成，step=2）
         recordEventSafely(AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
                 subTask.getTaskId(), subTaskId, runTurn, 2,

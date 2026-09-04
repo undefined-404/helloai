@@ -25,8 +25,8 @@ import java.util.Set;
  * <p>状态 → 期望事件映射（B2 埋点事实）：
  * <ul>
  *   <li>ASSIGNED → TASK_ASSIGNED（分配/重派/死信兜底重派均发）</li>
- *   <li>IN_PROGRESS → AGENT_STARTED/CONTEXT_BUILT/TOOL_CALL_STARTED/TOOL_CALL_COMPLETED
- *       （executeOnce 内 step 1-4 递增，任一时刻最后事件必属执行链）</li>
+ *   <li>IN_PROGRESS → AGENT_STARTED/CONTEXT_BUILT/TOOL_CALL_STARTED/TOOL_CALL_COMPLETED/SKILL_RESOLVED
+ *       （executeOnce 内 step 1-5 槽位，任一时刻最后事件必属执行链）</li>
  *   <li>REVIEW → AGENT_COMPLETED（提交核验）/REVIEW_STARTED（核验开始）</li>
  *   <li>REWORK → REVIEW_REJECTED（驳回落地）/REWORK_STARTED（rework 入口）</li>
  *   <li>DONE → REVIEW_APPROVED（审核通过）</li>
@@ -55,7 +55,8 @@ public class EventReconciliationServiceImpl implements EventReconciliationServic
                     AgentEventType.AGENT_STARTED.code(),
                     AgentEventType.CONTEXT_BUILT.code(),
                     AgentEventType.TOOL_CALL_STARTED.code(),
-                    AgentEventType.TOOL_CALL_COMPLETED.code()),
+                    AgentEventType.TOOL_CALL_COMPLETED.code(),
+                    AgentEventType.SKILL_RESOLVED.code()),
             SubTaskStatus.REVIEW, Set.of(
                     AgentEventType.AGENT_COMPLETED.code(),
                     AgentEventType.REVIEW_STARTED.code()),

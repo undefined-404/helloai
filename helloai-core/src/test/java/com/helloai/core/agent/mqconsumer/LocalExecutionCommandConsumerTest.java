@@ -10,10 +10,12 @@ import com.helloai.core.agent.runtime.AgentContext;
 import com.helloai.core.agent.runtime.AgentExecutionResult;
 import com.helloai.core.agent.runtime.AgentRuntime;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.entity.Task;
 import com.helloai.core.shared.event.ExecutionCommandCreatedEvent;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -53,6 +55,10 @@ class LocalExecutionCommandConsumerTest {
     @Mock
     private AgentRuntime agentRuntime;
 
+    /** Phase 1 T1：契约供电所需 TaskService（与生产代码 LocalExecutionCommandConsumer 新增注入对齐）。 */
+    @Mock
+    private TaskService taskService;
+
     @InjectMocks
     private LocalExecutionCommandConsumer localExecutionCommandConsumer;
 
@@ -69,6 +75,8 @@ class LocalExecutionCommandConsumerTest {
 
             when(subTaskService.getById(22L)).thenReturn(subTask);
             when(agentService.getById(11L)).thenReturn(agent);
+            // Phase 1 T1：契约供电单测断言——AgentContext.skills == task.requiredSkills
+            when(taskService.getById(33L)).thenReturn(task());
             when(agentExecutionRecordService.markRunning(44L)).thenReturn(true);
             when(agentExecutionRecordService.markSuccess(44L)).thenReturn(true);
             when(agentRuntime.execute(any(AgentContext.class)))
@@ -80,6 +88,7 @@ class LocalExecutionCommandConsumerTest {
             localExecutionCommandConsumer.consume(baseCommand());
 
             // AgentContext 与 B2 埋点同源：run-{taskId}-1 / turn=1 / step=0
+            // Phase 1 T1：新增 skills 断言（与 task.requiredSkills 同表示）
             verify(agentRuntime).execute(argThat(ctx ->
                     ctx != null
                             && "run-33-1".equals(ctx.getRunId())
@@ -87,7 +96,9 @@ class LocalExecutionCommandConsumerTest {
                             && ctx.getSubTaskId() != null && ctx.getSubTaskId() == 22L
                             && ctx.getTurn() == 1
                             && ctx.getStep() == 0
-                            && ctx.getAgentId() != null && ctx.getAgentId() == 11L));
+                            && ctx.getAgentId() != null && ctx.getAgentId() == 11L
+                            && ctx.getSkills() != null
+                            && ctx.getSkills().equals(task().getRequiredSkills())));
             // record CAS 由消费侧代理执行
             verify(agentExecutionRecordService).markRunning(44L);
             verify(agentExecutionRecordService).markSuccess(44L);
@@ -241,6 +252,14 @@ class LocalExecutionCommandConsumerTest {
         subTask.setAssignedAgentId(11L);
         subTask.setStatus(SubTaskStatus.ASSIGNED);
         return subTask;
+    }
+
+    /** Phase 1 T1：契约供电单测用 task（含 requiredSkills，验证 AgentContext.skills 赋值）。 */
+    private static Task task() {
+        Task task = new Task();
+        task.setId(33L);
+        task.setRequiredSkills(List.of("eng-code-review", "eng-doc-standard"));
+        return task;
     }
 
     private static Agent agent() {

@@ -1,16 +1,20 @@
 package com.helloai.core.agent.execution;
 
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.service.PluginSkillSpecService;
 import com.helloai.core.task.spec.ExecutionRecord;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -26,8 +30,11 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -80,8 +87,23 @@ class SubTaskExecutionServiceTest {
     @Mock
     private AgentQualityProfileService agentQualityProfileService;  // 反馈回路第 2 层：历史表现节注入
 
+    /** Phase 1 T2：事件记录器（用于 SKILL_RESOLVED 埋点断言；Phase 0 B2 已落执行链）。 */
+    @Mock
+    private AgentEventRecorder agentEventRecorder;
+
     @InjectMocks
     private SubTaskExecutionServiceImpl subTaskExecutionService;
+
+    /**
+     * Phase 1 T2：默认 stub pluginSkillSpecService.resolve() 返回空 ResolvedSpec，
+     * 覆盖所有 executeOnce 调用路径（生产代码对 null 防御兜底）。lenient 避免 L135 状态守卫
+     * 异常用例走不到 resolve 时报 UnnecessaryStubbing。
+     */
+    @BeforeEach
+    void setUpResolvedSpec() {
+        lenient().when(pluginSkillSpecService.resolve(any()))
+                .thenReturn(new PluginSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
+    }
 
     @Nested
     @DisplayName("executeOnce — 纯执行入口")
@@ -135,6 +157,97 @@ class SubTaskExecutionServiceTest {
             assertThatThrownBy(() -> subTaskExecutionService.executeOnce(subTask, agent))
                     .isInstanceOf(BizException.class)
                     .hasMessageContaining("不可执行");
+        }
+    }
+
+    @Nested
+    @DisplayName("executeOnce — SKILL_RESOLVED 埋点（Phase 1 T2，D1=B）")
+    class SkillResolved {
+
+        @Test
+        @DisplayName("should record SKILL_RESOLVED step=5 with requiredSkills + resolvedSpecs payload")
+        void shouldRecordSkillResolvedStep5WithBothPayloadFields() {
+            // D1=B payload：声明非空 + 命中非空，覆盖正常路径
+            PluginSkillSpecService.ResolvedSpec resolved = new PluginSkillSpecService.ResolvedSpec(
+                    List.of("eng-code-review", "eng-doc-standard"),
+                    List.of("eng-code-review"),
+                    "## 平台技能规范\n### eng-code-review\n速览...");
+            // 覆盖 @BeforeEach 默认 stub 为非空值（同名 stub 后置覆盖）
+            lenient().when(pluginSkillSpecService.resolve(any())).thenReturn(resolved);
+
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            Agent agent = agent();
+
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+
+            subTaskExecutionService.executeOnce(subTask, agent);
+
+            // 过滤 executeOnce 链路上的 5 次 recordEventSafely 调用，只断言 SKILL_RESOLVED 埋点（step=5 + type=SKILL_RESOLVED + payload 两键）
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(agentEventRecorder, atLeastOnce()).record(
+                    anyString(), any(), any(), anyInt(),
+                    eq(5), eq(AgentEventType.SKILL_RESOLVED), any(),
+                    payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue())
+                    .containsEntry("requiredSkills", List.of("eng-code-review", "eng-doc-standard"))
+                    .containsEntry("resolvedSpecs", List.of("eng-code-review"));
+        }
+
+        @Test
+        @DisplayName("should record SKILL_RESOLVED step=5 even when requiredSkills is empty (D1=B 恒发纪律)")
+        void shouldRecordSkillResolvedEvenWhenRequiredSkillsEmpty() {
+            // @BeforeEach 已 stub 空 ResolvedSpec；本用例显式覆盖以确认 requiredSkills 为空时仍发
+            PluginSkillSpecService.ResolvedSpec emptyResolved = new PluginSkillSpecService.ResolvedSpec(
+                    List.of(), List.of(), "");
+            lenient().when(pluginSkillSpecService.resolve(any())).thenReturn(emptyResolved);
+
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            Agent agent = agent();
+
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+
+            subTaskExecutionService.executeOnce(subTask, agent);
+
+            // 只断言 SKILL_RESOLVED 埋点（requiredSkills 为空时仍恒发，payload 两键值为空数组）
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(agentEventRecorder, atLeastOnce()).record(
+                    anyString(), any(), any(), anyInt(),
+                    eq(5), eq(AgentEventType.SKILL_RESOLVED), any(),
+                    payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue())
+                    .containsEntry("requiredSkills", List.of())
+                    .containsEntry("resolvedSpecs", List.of());
+        }
+
+        @Test
+        @DisplayName("should fall back to empty ResolvedSpec when pluginSkillSpecService.resolve returns null (防御非 best-effort 实现)")
+        void shouldFallBackWhenResolveReturnsNull() {
+            // 覆盖为 null 模拟非 best-effort 实现；production 代码 null 防御
+            lenient().when(pluginSkillSpecService.resolve(any())).thenReturn(null);
+
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            Agent agent = agent();
+
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+
+            // 不应抛 NPE
+            subTaskExecutionService.executeOnce(subTask, agent);
+
+            // 仍埋 SKILL_RESOLVED（payload 两键恒在，值为空数组）
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(agentEventRecorder, atLeastOnce()).record(
+                    anyString(), any(), any(), anyInt(),
+                    eq(5), eq(AgentEventType.SKILL_RESOLVED), any(),
+                    payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue())
+                    .containsEntry("requiredSkills", List.of())
+                    .containsEntry("resolvedSpecs", List.of());
         }
     }
 

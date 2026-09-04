@@ -97,13 +97,13 @@ SELECT status,
        COUNT(*)                                   AS total,
        COUNT(*) FILTER (WHERE
            (status='ASSIGNED' AND last_event='task_assigned') OR
-           (status='IN_PROGRESS' AND last_event IN ('agent_started','context_built','tool_call_started','tool_call_completed')) OR
+           (status='IN_PROGRESS' AND last_event IN ('agent_started','context_built','tool_call_started','tool_call_completed','skill_resolved')) OR
            (status='REVIEW' AND last_event IN ('agent_completed','review_started')) OR
            (status='REWORK' AND last_event IN ('review_rejected','rework_started')) OR
            (status='DONE' AND last_event='review_approved')) AS matched,
        COUNT(*) FILTER (WHERE NOT (
            (status='ASSIGNED' AND last_event='task_assigned') OR
-           (status='IN_PROGRESS' AND last_event IN ('agent_started','context_built','tool_call_started','tool_call_completed')) OR
+           (status='IN_PROGRESS' AND last_event IN ('agent_started','context_built','tool_call_started','tool_call_completed','skill_resolved')) OR
            (status='REVIEW' AND last_event IN ('agent_completed','review_started')) OR
            (status='REWORK' AND last_event IN ('review_rejected','rework_started')) OR
            (status='DONE' AND last_event='review_approved'))) AS mismatches

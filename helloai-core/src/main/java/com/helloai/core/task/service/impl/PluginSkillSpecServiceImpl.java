@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -39,16 +40,27 @@ public class PluginSkillSpecServiceImpl implements PluginSkillSpecService {
 
     private final TaskService taskService;
 
+    /**
+     * 一次性解析任务平台技能规范（Phase 1 T2 D1=B）：声明 / 命中 / 渲染三件套，命中语义与
+     * renderSection 注入事实严格一致（两层过滤：标签命中 + 速览非空）。
+     *
+     * <p>best-effort：null taskId / 任务不存在 / required_skills 空或未命中均返回空三字段。
+     */
     @Override
-    public String renderSection(Long taskId) {
+    public ResolvedSpec resolve(Long taskId) {
         if (taskId == null) {
-            return "";
+            return new ResolvedSpec(List.of(), List.of(), "");
         }
         Task task = taskService.getById(taskId);
-        if (task == null || task.getRequiredSkills() == null || task.getRequiredSkills().isEmpty()) {
-            return "";
+        if (task == null) {
+            return new ResolvedSpec(List.of(), List.of(), "");
         }
-        List<String> normalized = SkillNormalizer.normalizeAll(task.getRequiredSkills());
+        List<String> required = task.getRequiredSkills() == null ? List.of() : task.getRequiredSkills();
+        if (required.isEmpty()) {
+            return new ResolvedSpec(required, List.of(), "");
+        }
+        List<String> normalized = SkillNormalizer.normalizeAll(required);
+        List<String> matched = new ArrayList<>();
         StringBuilder specs = new StringBuilder();
         for (Map.Entry<String, String> entry : KNOWN_SPECS.entrySet()) {
             if (!normalized.contains(entry.getKey())) {
@@ -58,16 +70,27 @@ public class PluginSkillSpecServiceImpl implements PluginSkillSpecService {
             if (summary == null || summary.isBlank()) {
                 continue;
             }
+            matched.add(entry.getKey());
             specs.append("\n### ").append(entry.getKey()).append('\n');
             specs.append(summary).append('\n');
         }
-        if (specs.length() == 0) {
-            return "";
+        if (matched.isEmpty()) {
+            return new ResolvedSpec(required, List.of(), "");
         }
-        return "## 平台技能规范（任务所需技能命中 eng-* 规范）\n"
+        String section = "## 平台技能规范（任务所需技能命中 eng-* 规范）\n"
                 + "> 以下规范由平台按任务 required_skills 命中注入；产出必须按此执行，"
                 + "审查侧按同一清单核验。\n"
                 + specs;
+        return new ResolvedSpec(required, matched, section);
+    }
+
+    /**
+     * 向后兼容：Phase 1 起改为 {@link #resolve(Long)} 内部委托，仅取 {@code section} 字段。
+     * 调用方迁移：直接调 {@code resolve(taskId).section()}。
+     */
+    @Override
+    public String renderSection(Long taskId) {
+        return resolve(taskId).section();
     }
 
     /**
