@@ -7,11 +7,10 @@ import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.service.SubTaskExecutionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
- * 旧 Executor 适配器（Phase 0 C2，双轨接线）。
+ * 旧 Executor 适配器（Phase 0 C2，双轨接线；Step 6 后恒注册）。
  *
  * <p>以 {@link AgentRuntime} 契约包装旧执行链：委托 {@code SubTaskExecutionService.executeCommand}
  * （完整编排入口：参数校验 → startIfNeeded 状态推进 → executeOnce 执行 → ExecutionResultHandler 回写），
@@ -22,17 +21,15 @@ import org.springframework.stereotype.Component;
  * 已由旧链 executeOnce / ExecutionResultHandler 埋点发出），只做契约翻译。
  * 旧链结果无 TIMEOUT 区分（boolean success），TIMEOUT 终态留给新 Runtime。</p>
  *
- * <p>装配开关（项目惯例：条件装配直标 Bean 类，见 WatchdogLeaseRenewTask / WebSearch 多实现
- * 等 16 处先例）：{@code helloai.agent.runtime.v2-enabled=true} 时注册本适配器；
- * 默认关闭，旧消费链（MQ / DB Poller / 调度器）不受影响。</p>
+ * <p>装配（Phase 0 C3 Step 6，LOG-20260904-006）：v2-enabled 已固化 true，本适配器恒注册——
+ * {@code LocalExecutionCommandConsumer} 依赖它作为唯一执行契约；下线后回退需代码回滚
+ * （预研回滚表格「下线后」行）。</p>
  *
  * @see AgentRuntime
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
-@ConditionalOnProperty(prefix = "helloai.agent.runtime", name = "v2-enabled",
-        havingValue = "true", matchIfMissing = false)
 public class LegacyExecutorAdapter implements AgentRuntime {
 
     /** 命令触发来源标识：区分 Runtime 契约路径与旧消费者路径（仅落库 / 事件 payload，无分支逻辑）。 */
