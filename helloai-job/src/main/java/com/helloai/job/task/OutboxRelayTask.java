@@ -276,6 +276,8 @@ public class OutboxRelayTask {
                         .agentId(command.getAgentId())
                         .trigger(command.getTrigger())
                         .accessType(command.getAccessType())
+                        // Phase 1 Step 1 fix：重建时透传 requiredSkills（toDomain 已规范化非 null）
+                        .requiredSkills(command.getRequiredSkills())
                         .build();
             } catch (NumberFormatException ignored) {
                 // aggregateId 非数字（如未来 UUID 形态），保留 null

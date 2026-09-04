@@ -20,6 +20,7 @@ import com.helloai.core.task.score.ImplicitScoreCalculator;
 import com.helloai.core.task.service.impl.SubTaskServiceImpl;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.task.service.AttachmentService;
+import com.helloai.core.task.service.TaskService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -75,6 +76,8 @@ class SubTaskServiceHandoverTest {
     @Mock private ConcurrencyQuotaService concurrencyQuotaService;
     @Mock private AttachmentService attachmentService;
     @Mock private ObjectProvider<AttachmentService> attachmentServiceProvider;
+    // LOG-20260904-009：装箱出口 requiredSkillsOf 懒解析 TaskService（换派用例不触达，防 NPE）
+    @Mock private ObjectProvider<TaskService> taskServiceProvider;
     @Mock private AgentEventRecorder agentEventRecorder;
     // Phase 0 A3：共享预算原子累加 mapper（rework 预算消费 / reworkFresh 清零）
     @Mock private SubTaskMapper subTaskMapper;
@@ -91,7 +94,7 @@ class SubTaskServiceHandoverTest {
                 rewardService, applicationEventPublisher, taskTimelineService,
                 dispatchProps, concurrencyQuotaService,
                 // Phase 0 A2：租约看门狗配置（changeStatus 进 IN_PROGRESS 时会读，默认值即可）
-                new WatchdogProperties(), attachmentServiceProvider, agentEventRecorder,
+                new WatchdogProperties(), attachmentServiceProvider, taskServiceProvider, agentEventRecorder,
                 // Phase 0 A3：共享预算 mapper（rework 预算消费 / reworkFresh 清零）
                 subTaskMapper));
         doReturn(true).when(subTaskService).updateById(any(SubTask.class));

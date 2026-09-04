@@ -328,8 +328,11 @@ public class SubTaskController {
             return R.fail("子任务已有进行中的执行记录，请勿重复触发");
         }
 
+        // Phase 1 Step 1 fix（LOG-20260904-009）：requiredSkills 装箱透传
+        // （task 域数据随命令正向传入执行侧，执行侧不再反向查询 task）
         ExecutionCommand command = executionCommandService.createAssignedCommand(
-                id, subTask.getAssignedAgentId(), "admin-execute");
+                id, subTask.getAssignedAgentId(), "admin-execute",
+                subTaskService.requiredSkillsOf(subTask.getTaskId()));
 
         return R.ok(Map.of(
                 "recordId", command.getRecordId(),

@@ -24,6 +24,7 @@ import com.helloai.core.agent.service.ConcurrencyQuotaService;
 import com.helloai.core.shared.event.SubTaskAssignedEvent;
 import com.helloai.core.shared.event.SubTaskCompletedEvent;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.port.ReviewFact;
 import com.helloai.core.task.port.ReviewPort;
@@ -32,6 +33,7 @@ import com.helloai.core.task.score.ImplicitScoreCalculator;
 import com.helloai.core.task.score.ImplicitScoreCalculator.ScoreResult;
 import com.helloai.core.task.service.RewardService;
 import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import com.helloai.core.task.statemachine.SubTaskStateMachine;
 import com.helloai.core.task.service.AttachmentService;
@@ -90,6 +92,10 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     private final WatchdogProperties watchdogProperties;
     // 懒解析打破循环：AttachmentServiceImpl 依赖 SubTaskService（register 归属校验）
     private final ObjectProvider<AttachmentService> attachmentServiceProvider;
+    // 懒解析打破循环（Phase 1 Step 1 fix，LOG-20260904-009）：TaskServiceImpl 已注入
+    // SubTaskService（反链依赖），直接注入 TaskService 会形成构造器环；仅 requiredSkillsOf
+    // 在 task 域内查询 required_skills（装箱出口），不持有长生命周期跨域引用
+    private final ObjectProvider<TaskService> taskServiceProvider;
     /** Phase 0 B2：事件记录器（REWORK_STARTED 埋点；事件 write-only，失败仅告警不阻断返工链）。 */
     private final AgentEventRecorder agentEventRecorder;
     /**
@@ -98,6 +104,24 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
      * 因此显式注入 mapper 以保证 rework/reworkFresh 的预算读写可测。
      */
     private final SubTaskMapper subTaskMapper;
+
+    @Override
+    public List<String> requiredSkillsOf(Long taskId) {
+        // Phase 1 Step 1 fix（LOG-20260904-009）：task 域查询出口，供跨域装箱。
+        // 全部异常路径（taskId null / 服务不可用 / 任务不存在 / 字段 null）统一返回空列表，
+        // 保证装箱调用方拿到恒非 null 值，消费端无需再判空。
+        if (taskId == null) {
+            return List.of();
+        }
+        TaskService taskService = taskServiceProvider.getIfAvailable();
+        if (taskService == null) {
+            log.warn("Task 服务不可用，返回空技能标签: taskId={}", taskId);
+            return List.of();
+        }
+        Task task = taskService.getById(taskId);
+        List<String> required = task == null ? null : task.getRequiredSkills();
+        return required == null ? List.of() : required;
+    }
 
     @Override
     @Transactional(rollbackFor = Exception.class)

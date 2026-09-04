@@ -253,12 +253,14 @@ class SubTaskReviewServiceTest {
         when(agentService.getById(EXECUTOR_ID)).thenReturn(llmAgent(EXECUTOR_ID, AgentRole.EXECUTOR));
         // Phase 0 A3：预算充足返回 true（mock 默认 false 会误判为预算熔断分支）
         when(subTaskService.rework(SUB_TASK_ID, EXECUTOR_ID)).thenReturn(true);
+        // Phase 1 Step 1 fix：requiredSkills 由命令创建方装箱（task 域查询出口返回空列表）
+        when(subTaskService.requiredSkillsOf(TASK_ID)).thenReturn(List.of());
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
         verify(subTaskService).rework(SUB_TASK_ID, EXECUTOR_ID);
         verify(subTaskService, never()).complete(anyLong());
-        verify(executionCommandService).createAssignedCommand(SUB_TASK_ID, EXECUTOR_ID, "auto-review-rework");
+        verify(executionCommandService).createAssignedCommand(SUB_TASK_ID, EXECUTOR_ID, "auto-review-rework", List.of());
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_auto_review_rejected"),
                 eq(AgentRole.REVIEWER), eq(9L), anyMap());
@@ -276,7 +278,7 @@ class SubTaskReviewServiceTest {
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
         verify(subTaskService).rework(SUB_TASK_ID, EXECUTOR_ID);
-        verify(executionCommandService, never()).createAssignedCommand(anyLong(), anyLong(), anyString());
+        verify(executionCommandService, never()).createAssignedCommand(anyLong(), anyLong(), anyString(), any());
         verify(subTaskService, never()).complete(anyLong());
     }
 

@@ -24,6 +24,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -63,7 +64,8 @@ public class ExecutionCommandServiceImpl implements ExecutionCommandService {
      * 三表同事务写入；NONE 路径不写 outbox，EVENT 路径不写 outbox。</p>
      */
     @Transactional(rollbackFor = Exception.class)
-    public ExecutionCommand createAssignedCommand(Long subTaskId, Long agentId, String trigger) {
+    public ExecutionCommand createAssignedCommand(Long subTaskId, Long agentId, String trigger,
+                                                  List<String> requiredSkills) {
         // 先锁定子任务，再做二次判重与命令落库，避免并发重复发命令。
         SubTask subTask = subTaskService.getByIdForUpdate(subTaskId);
         if (subTask == null) {
@@ -94,6 +96,9 @@ public class ExecutionCommandServiceImpl implements ExecutionCommandService {
         AgentExecutionRecord record = agentExecutionRecordService.createPending(
                 eventId, subTaskId, agentId, agent.getAccessType(), trigger);
 
+        // Phase 1 Step 1 fix：requiredSkills 装箱透传（调用方可能传 null，显式 null 会覆盖
+        // @Builder.Default，这里规范化为空列表，保证消费端恒非 null）
+        List<String> skills = requiredSkills != null ? requiredSkills : List.of();
         ExecutionCommand command = ExecutionCommand.builder()
                 .recordId(record.getId())
                 .eventId(eventId)
@@ -101,6 +106,7 @@ public class ExecutionCommandServiceImpl implements ExecutionCommandService {
                 .agentId(agentId)
                 .trigger(trigger)
                 .accessType(agent.getAccessType())
+                .requiredSkills(skills)
                 .build();
 
         taskTimelineService.recordEvent(

@@ -152,7 +152,10 @@ public class SubTaskAutoExecutionDispatcher {
                 Map.of("trigger", "assigned", "accessType", agent.getAccessType().name()));
 
         try {
-            executionCommandService.createAssignedCommand(event.getSubTaskId(), agent.getId(), "assigned");
+            // Phase 1 Step 1 fix（LOG-20260904-009）：requiredSkills 装箱透传
+            // （task 域数据随命令正向传入执行侧，执行侧不再反向查询 task）
+            executionCommandService.createAssignedCommand(event.getSubTaskId(), agent.getId(), "assigned",
+                    subTaskService.requiredSkillsOf(subTask.getTaskId()));
             log.info("执行命令派发成功: subTaskId={}, agentId={}", event.getSubTaskId(), agent.getId());
             dbg("sub_task_auto_execute_dispatch_ok", safeMap(
                     "subTaskId", event.getSubTaskId(),

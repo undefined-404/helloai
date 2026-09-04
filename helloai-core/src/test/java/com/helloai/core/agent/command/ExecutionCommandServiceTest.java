@@ -27,6 +27,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -115,7 +116,7 @@ class ExecutionCommandServiceTest {
         when(executionProperties.getDispatchMode()).thenReturn(AgentExecutionProperties.DispatchMode.EVENT);
         when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.EVENT);
 
-        ExecutionCommand command = executionCommandService.createAssignedCommand(22L, 11L, "assigned");
+        ExecutionCommand command = executionCommandService.createAssignedCommand(22L, 11L, "assigned", List.of());
 
         assertEquals(44L, command.getRecordId());
         assertEquals(22L, command.getSubTaskId());
@@ -169,7 +170,7 @@ class ExecutionCommandServiceTest {
         when(executionProperties.getDispatchMode()).thenReturn(AgentExecutionProperties.DispatchMode.NONE);
         when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.POLLER);
 
-        ExecutionCommand command = executionCommandService.createAssignedCommand(22L, 11L, "assigned");
+        ExecutionCommand command = executionCommandService.createAssignedCommand(22L, 11L, "assigned", List.of());
 
         assertEquals(44L, command.getRecordId());
         verify(applicationEventPublisher, never()).publishEvent(any());
@@ -204,7 +205,7 @@ class ExecutionCommandServiceTest {
         when(executionProperties.getDispatchMode()).thenReturn(AgentExecutionProperties.DispatchMode.MQ);
         when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.POLLER);
 
-        executionCommandService.createAssignedCommand(22L, 11L, "assigned");
+        executionCommandService.createAssignedCommand(22L, 11L, "assigned", List.of());
 
         verify(applicationEventPublisher, never()).publishEvent(any(ExecutionCommandCreatedEvent.class));
         ArgumentCaptor<ExecutionCommand> cmdCaptor = ArgumentCaptor.forClass(ExecutionCommand.class);
@@ -230,7 +231,7 @@ class ExecutionCommandServiceTest {
         when(subTaskService.getByIdForUpdate(22L)).thenReturn(subTask);
         when(agentExecutionRecordService.hasPendingOrRunning(22L)).thenReturn(true);
 
-        assertThatThrownBy(() -> executionCommandService.createAssignedCommand(22L, 11L, "assigned"))
+        assertThatThrownBy(() -> executionCommandService.createAssignedCommand(22L, 11L, "assigned", List.of()))
                 .isInstanceOf(com.helloai.common.base.BizException.class)
                 .hasMessageContaining("进行中的执行记录");
 
@@ -265,7 +266,7 @@ class ExecutionCommandServiceTest {
         when(executionProperties.getDispatchMode()).thenReturn(AgentExecutionProperties.DispatchMode.EVENT);
         when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.EVENT);
 
-        executionCommandService.createAssignedCommand(22L, 11L, "assigned");
+        executionCommandService.createAssignedCommand(22L, 11L, "assigned", List.of());
 
         var inOrder = org.mockito.Mockito.inOrder(subTaskService, agentExecutionRecordService);
         inOrder.verify(subTaskService).getByIdForUpdate(22L);

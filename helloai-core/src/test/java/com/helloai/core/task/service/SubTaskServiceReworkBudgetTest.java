@@ -16,6 +16,7 @@ import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
 import com.helloai.core.task.service.impl.SubTaskServiceImpl;
 import com.helloai.core.task.service.AttachmentService;
+import com.helloai.core.task.service.TaskService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -67,6 +68,8 @@ class SubTaskServiceReworkBudgetTest {
     @Mock private TaskTimelineService taskTimelineService;
     @Mock private ConcurrencyQuotaService concurrencyQuotaService;
     @Mock private ObjectProvider<AttachmentService> attachmentServiceProvider;
+    // LOG-20260904-009：装箱出口 requiredSkillsOf 懒解析 TaskService（rework 用例不触达，防 NPE）
+    @Mock private ObjectProvider<TaskService> taskServiceProvider;
     @Mock private AgentEventRecorder agentEventRecorder;
     @Mock private SubTaskMapper subTaskMapper;
 
@@ -81,7 +84,7 @@ class SubTaskServiceReworkBudgetTest {
                 heartbeatService, reviewPort, implicitScoreCalculator,
                 rewardService, applicationEventPublisher, taskTimelineService,
                 dispatchProps, concurrencyQuotaService,
-                new WatchdogProperties(), attachmentServiceProvider, agentEventRecorder,
+                new WatchdogProperties(), attachmentServiceProvider, taskServiceProvider, agentEventRecorder,
                 subTaskMapper));
         doReturn(true).when(subTaskService).updateById(any(SubTask.class));
         // 懒解析 bean：附件失效 / 执行者通知路径触达时返回 mock，防 NPE

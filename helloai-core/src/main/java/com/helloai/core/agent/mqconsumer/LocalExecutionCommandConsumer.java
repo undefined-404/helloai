@@ -9,12 +9,10 @@ import com.helloai.core.agent.runtime.AgentContext;
 import com.helloai.core.agent.runtime.AgentExecutionResult;
 import com.helloai.core.agent.runtime.AgentRuntime;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.entity.Task;
 import com.helloai.core.shared.event.ExecutionCommandCreatedEvent;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -56,8 +54,6 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
     private final TaskTimelineService taskTimelineService;
     private final SubTaskService subTaskService;
     private final AgentService agentService;
-    /** Phase 1 T1：契约供电所需 TaskService（agent 域 → task 域接口依赖，先例同 SubTaskService/TaskTimelineService）。 */
-    private final TaskService taskService;
 
     /**
      * Runtime 实现列表（Phase 0 C3 双轨）：v2-enabled 已固化 true（Step 6），
@@ -154,11 +150,11 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
         // 3. 构造 Runtime 上下文并执行（run_id / turn 与 B2 埋点同源，见 AgentEventContextResolver）
         AgentExecutionResult result;
         try {
-            // Phase 1 T1：契约供电——按主任务 requiredSkills 注入 AgentContext.skills（与 AgentSelector.requiredSkills 同表示）
-            // task 缺失/requiredSkills 为 null 防御：与现有 consume 防御风格一致，不阻断执行
-            Task task = taskService.getById(subTask.getTaskId());
-            List<String> skills = (task != null && task.getRequiredSkills() != null)
-                    ? task.getRequiredSkills() : Collections.emptyList();
+            // Phase 1 Step 1 fix（LOG-20260904-009）：requiredSkills 改由命令装箱传入，
+            // 本层不再反向查询 task（§6 依赖方向红线）；command.requiredSkills 恒非 null
+            // （创建方与 MQ 反序列化均已规范化），这里仅保留防御
+            List<String> skills = command.getRequiredSkills() != null
+                    ? command.getRequiredSkills() : Collections.emptyList();
             result = agentRuntimes.get(0).execute(AgentContext.builder()
                     .runId(AgentEventContextResolver.resolveRunId(subTask.getTaskId()))
                     .taskId(subTask.getTaskId())

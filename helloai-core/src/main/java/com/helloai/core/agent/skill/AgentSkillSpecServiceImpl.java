@@ -1,10 +1,6 @@
-package com.helloai.core.task.service.impl;
+package com.helloai.core.agent.skill;
 
 import com.helloai.core.agent.SkillNormalizer;
-import com.helloai.core.task.entity.Task;
-import com.helloai.core.task.service.PluginSkillSpecService;
-import com.helloai.core.task.service.TaskService;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
@@ -17,20 +13,17 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * {@link PluginSkillSpecService} 实现——classpath 读取平台 eng-* 规范库，
- * 按任务 {@code required_skills} 命中渲染「执行速览」段。
+ * {@link AgentSkillSpecService} 实现——classpath 读取平台 eng-* 规范库，
+ * 把任务声明的 required_skills（装箱传入）解析为命中标签 + 渲染速览段。
  *
- * <p>约定：每份规范文件（skills/plugins/{name}.md）以「执行速览」开头、
- * 首个 {@code ---} 分隔详细规范；渲染时只取速览部分（控制注入 token 成本），
- * 完整文件保留供外部 Agent 参考与产出对齐。</p>
- *
- * <p>失败语义：任务不存在 / 无 required_skills / 未命中 / 文件缺失均返回空串，
- * 绝不抛异常阻断执行链（best-effort，与依赖上下文装配哲学一致）。</p>
+ * <p>Phase 1 Step 1 fix（LOG-20260904-009）：由 task 域 {@code PluginSkillSpecServiceImpl}
+ * 迁域而来，<b>纯函数式</b>——入参即 requiredSkills，不再反向查询 task（§6 依赖方向红线），
+ * 因此不持有任何 task 域依赖；资源仍从 classpath {@code skills/plugins/*.md} 读取
+ * （helloai-core 模块内，迁域不改资源位置）。</p>
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
-public class PluginSkillSpecServiceImpl implements PluginSkillSpecService {
+public class AgentSkillSpecServiceImpl implements AgentSkillSpecService {
 
     /** 已登记插件标签 → classpath 文件名（LinkedHashMap 保序，渲染顺序按声明顺序）。 */
     private static final Map<String, String> KNOWN_SPECS = knownSpecs();
@@ -38,24 +31,15 @@ public class PluginSkillSpecServiceImpl implements PluginSkillSpecService {
     /** 规范文件内「执行速览」与「详细规范」的分隔标记（速览在前）。 */
     private static final String DETAIL_SEPARATOR = "\n---\n";
 
-    private final TaskService taskService;
-
     /**
-     * 一次性解析任务平台技能规范（Phase 1 T2 D1=B）：声明 / 命中 / 渲染三件套，命中语义与
-     * renderSection 注入事实严格一致（两层过滤：标签命中 + 速览非空）。
+     * 一次性解析任务平台技能规范（D1=B）：声明 / 命中 / 渲染三件套，命中语义与
+     * Prompt 注入事实严格一致（两层过滤：标签命中 + 速览非空）。
      *
-     * <p>best-effort：null taskId / 任务不存在 / required_skills 空或未命中均返回空三字段。
+     * <p>best-effort：requiredSkills 为 null / 空 / 未命中均返回空三字段，不抛异常。</p>
      */
     @Override
-    public ResolvedSpec resolve(Long taskId) {
-        if (taskId == null) {
-            return new ResolvedSpec(List.of(), List.of(), "");
-        }
-        Task task = taskService.getById(taskId);
-        if (task == null) {
-            return new ResolvedSpec(List.of(), List.of(), "");
-        }
-        List<String> required = task.getRequiredSkills() == null ? List.of() : task.getRequiredSkills();
+    public ResolvedSpec resolve(List<String> requiredSkills) {
+        List<String> required = requiredSkills == null ? List.of() : requiredSkills;
         if (required.isEmpty()) {
             return new ResolvedSpec(required, List.of(), "");
         }
@@ -82,15 +66,6 @@ public class PluginSkillSpecServiceImpl implements PluginSkillSpecService {
                 + "审查侧按同一清单核验。\n"
                 + specs;
         return new ResolvedSpec(required, matched, section);
-    }
-
-    /**
-     * 向后兼容：Phase 1 起改为 {@link #resolve(Long)} 内部委托，仅取 {@code section} 字段。
-     * 调用方迁移：直接调 {@code resolve(taskId).section()}。
-     */
-    @Override
-    public String renderSection(Long taskId) {
-        return resolve(taskId).section();
     }
 
     /**

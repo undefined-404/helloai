@@ -17,6 +17,7 @@ import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
 import com.helloai.core.task.service.impl.SubTaskServiceImpl;
 import com.helloai.core.task.service.AttachmentService;
+import com.helloai.core.task.service.TaskService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -69,6 +70,8 @@ class SubTaskServiceQuotaTest {
     @Mock private AttachmentService attachmentService;
     @SuppressWarnings("unchecked")
     @Mock private org.springframework.beans.factory.ObjectProvider<AttachmentService> attachmentServiceProvider;
+    // LOG-20260904-009：装箱出口 requiredSkillsOf 懒解析 TaskService（quota 用例不触达，防 NPE）
+    @Mock private org.springframework.beans.factory.ObjectProvider<TaskService> taskServiceProvider;
     @Mock private AgentEventRecorder agentEventRecorder;
     // Phase 0 A3：共享预算原子累加 mapper（构造注入，quota 用例不触达，仅防 NPE）
     @Mock private SubTaskMapper subTaskMapper;
@@ -86,7 +89,7 @@ class SubTaskServiceQuotaTest {
                 rewardService, applicationEventPublisher, taskTimelineService,
                 dispatchProps, concurrencyQuotaService,
                 // Phase 0 A2：租约看门狗配置（assignNext 不涉及租约，默认值即可）
-                new WatchdogProperties(), attachmentServiceProvider, agentEventRecorder,
+                new WatchdogProperties(), attachmentServiceProvider, taskServiceProvider, agentEventRecorder,
                 // Phase 0 A3：共享预算 mapper（构造注入）
                 subTaskMapper));
         // §6.140 收口：行锁改走 AgentService.lockByIdForUpdate（ObjectProvider 懒解析）；

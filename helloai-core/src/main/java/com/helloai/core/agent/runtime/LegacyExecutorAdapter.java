@@ -45,10 +45,13 @@ public class LegacyExecutorAdapter implements AgentRuntime {
             return fail("subTaskId / agentId 不可为空");
         }
 
+        // Phase 1 Step 1 fix（LOG-20260904-009）：requiredSkills 由上下文透传
+        // （消费侧已从命令装箱，ctx.skills 恒非 null 由 AgentContext 保证）
         ExecutionCommand command = ExecutionCommand.builder()
                 .subTaskId(ctx.getSubTaskId())
                 .agentId(ctx.getAgentId())
                 .trigger(TRIGGER_AGENT_RUNTIME)
+                .requiredSkills(ctx.getSkills())
                 .build();
 
         try {

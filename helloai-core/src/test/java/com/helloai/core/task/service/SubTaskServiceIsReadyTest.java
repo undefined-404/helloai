@@ -62,6 +62,8 @@ class SubTaskServiceIsReadyTest {
                 new WatchdogProperties(),
                 // §6.104 打回失效：ObjectProvider mock 不返任何 bean，getIfAvailable 返回 null 内部判空跳过
                 mock(org.springframework.beans.factory.ObjectProvider.class),
+                // LOG-20260904-009：装箱出口 requiredSkillsOf 懒解析 TaskService（isReady 不触达，仅防 NPE）
+                mock(org.springframework.beans.factory.ObjectProvider.class),
                 // Phase 0 B2：事件记录器 mock（rework/reworkFresh 埋点不验证，仅防 NPE）
                 mock(AgentEventRecorder.class),
                 // Phase 0 A3：共享预算 mapper mock（isReady 不触达，仅防 NPE）

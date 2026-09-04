@@ -42,8 +42,8 @@ import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import com.helloai.core.task.service.TaskRunningSpecService;
-import com.helloai.core.task.service.PluginSkillSpecService;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
+import com.helloai.core.agent.skill.AgentSkillSpecService;
 
 /**
  * 子任务执行服务。
@@ -51,7 +51,7 @@ import com.helloai.core.agent.quality.service.AgentQualityProfileService;
  * <p>职责划分（对齐架构设计参考 §3.1 调度分离）：</p>
  * <ul>
  *     <li>{@link #executeCommand(ExecutionCommand)}：完整编排入口，含参数校验、加载、状态推进、执行、回写。</li>
- *     <li>{@link #executeOnce(SubTask, Agent)}：纯执行入口，只负责组装 AgentTask + 调平台执行器 + 观测 timeline。</li>
+ *     <li>{@link #executeOnce(SubTask, Agent, List)}：纯执行入口，只负责组装 AgentTask + 调平台执行器 + 观测 timeline。</li>
  *     <li>{@link #startIfNeeded(Long, SubTaskStatus)}：状态推进前置，允许消费者在调 {@link #executeOnce} 之前调用。</li>
  * </ul>
  *
@@ -63,7 +63,7 @@ import com.helloai.core.agent.quality.service.AgentQualityProfileService;
  * 8 依赖红线，按 §7.8 选项二书面声明不继续拆分：</p>
  * <ul>
  *     <li>已剥离：任务运行规范装配（TaskRunningSpecService）、平台技能规范渲染
- *         （PluginSkillSpecService）、执行者画像（AgentQualityProfileService）、
+ *         （AgentSkillSpecService）、执行者画像（AgentQualityProfileService）、
  *         依赖产出物化读取（AttachmentService / SubTaskOutputExtractor）、对话流落库
  *         （ConversationService）、结果回写（ExecutionResultHandler）；</li>
  *     <li>剩余职责：执行编排三入口（executeCommand / executeOnce / startIfNeeded）+
@@ -89,7 +89,9 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
     private final TaskTimelineService taskTimelineService;
     private final ExecutionResultHandler executionResultHandler;
     private final TaskRunningSpecService taskRunningSpecService;
-    private final PluginSkillSpecService pluginSkillSpecService;
+    // Phase 1 Step 1 fix（LOG-20260904-009）：由 task 域 PluginSkillSpecService 迁域而来，
+    // 纯函数式 resolve(requiredSkills)，执行侧不再反向查询 task（§6 依赖方向红线）
+    private final AgentSkillSpecService agentSkillSpecService;
     private final ConversationService conversationService;
     private final AttachmentService attachmentService;
     private final AgentQualityProfileService agentQualityProfileService;
@@ -210,7 +212,8 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
         startIfNeeded(subTask.getId(), subTask.getStatus());
 
         try {
-            AgentResult result = executeOnce(subTask, agent);
+            // Phase 1 Step 1 fix（LOG-20260904-009）：requiredSkills 随命令装箱透传执行侧
+            AgentResult result = executeOnce(subTask, agent, command.getRequiredSkills());
             executionResultHandler.handleSuccess(command.getSubTaskId(), command.getAgentId(), result);
             return result;
         } catch (Exception e) {
@@ -225,11 +228,15 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
      * <p>负责：状态守卫、组装 AgentTask、调平台执行器、记录 LLM 调用 timeline。
      * 不做：状态推进（{@link #startIfNeeded}）、结果回写（由调用方负责）。</p>
      *
+     * <p>Phase 1 Step 1 fix（LOG-20260904-009）：requiredSkills 装箱入参——required_skills
+     * 属 task 域数据，由执行命令创建方装箱并沿命令链路透传，本侧不再反向查询 task
+     * （§6 依赖方向红线）；null 由 resolve 的 best-effort 防御兜底为空。</p>
+     *
      * <p>设计参考 §3.1 调度分离：执行层只负责消费命令 + 执行 + 回传原始结果，
      * 不再携带状态机推进与回写职责，让 {@link LocalExecutionCommandConsumer}
      * 或未来 MQ/DB poller 消费者统一拿到「调度 + 回写」两端能力。</p>
      */
-    public AgentResult executeOnce(SubTask subTask, Agent agent) {
+    public AgentResult executeOnce(SubTask subTask, Agent agent, List<String> requiredSkills) {
         Long subTaskId = subTask.getId();
 
         if (subTask.getStatus() == SubTaskStatus.DONE || subTask.getStatus() == SubTaskStatus.CANCELLED) {
@@ -260,11 +267,13 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
         // 4) 依赖段 = 直接前置（dependsOnIdList）的结构化摘要 + 完成内容本体（物化附件优先、原始产出回退）
         //    综合注入供 LLM 结合"前置做了什么 + 本轮任务要求"分析执行
         String promptSection = taskRunningSpecService.buildExecutorPromptSection(subTask.getTaskId());
-        // Phase 1 T2（D1=B）：一次解析拿 requiredSkills + matchedLabels + section，三件套共用于 Prompt 装配 + SKILL_RESOLVED 埋点
+        // Phase 1 T2（D1=B）+ Phase 1 Step 1 fix（LOG-20260904-009）：一次解析拿 requiredSkills +
+        // matchedLabels + section，三件套共用于 Prompt 装配 + SKILL_RESOLVED 埋点；
+        // requiredSkills 由执行命令装箱传入（本方法参数），不再反向查询 task（§6 依赖方向红线）
         // 接口契约：resolve() 永不为 null（实现 best-effort 保证三字段恒在）；此处 null 防御仅兜底非 best-effort 替换实现
-        PluginSkillSpecService.ResolvedSpec resolved = pluginSkillSpecService.resolve(subTask.getTaskId());
+        AgentSkillSpecService.ResolvedSpec resolved = agentSkillSpecService.resolve(requiredSkills);
         if (resolved == null) {
-            resolved = new PluginSkillSpecService.ResolvedSpec(List.of(), List.of(), "");
+            resolved = new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), "");
         }
         String pluginSection = resolved.section();
         promptSection = mergeSpecSections(promptSection, pluginSection);

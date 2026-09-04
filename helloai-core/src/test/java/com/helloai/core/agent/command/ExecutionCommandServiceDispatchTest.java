@@ -25,6 +25,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -121,7 +123,7 @@ class ExecutionCommandServiceDispatchTest {
             executionProperties.setDispatchMode(AgentExecutionProperties.DispatchMode.NONE);
             primeCommonMocks();
 
-            ExecutionCommand command = service.createAssignedCommand(SUB_TASK_ID, AGENT_ID, TRIGGER);
+            ExecutionCommand command = service.createAssignedCommand(SUB_TASK_ID, AGENT_ID, TRIGGER, List.of());
 
             assertEquals(RECORD_ID, command.getRecordId());
             verify(applicationEventPublisher, never()).publishEvent(any(ExecutionCommandCreatedEvent.class));
@@ -134,7 +136,7 @@ class ExecutionCommandServiceDispatchTest {
             executionProperties.setDispatchMode(AgentExecutionProperties.DispatchMode.EVENT);
             primeCommonMocks();
 
-            service.createAssignedCommand(SUB_TASK_ID, AGENT_ID, TRIGGER);
+            service.createAssignedCommand(SUB_TASK_ID, AGENT_ID, TRIGGER, List.of());
 
             verify(applicationEventPublisher, times(1)).publishEvent(any(ExecutionCommandCreatedEvent.class));
             verify(agentCommandOutboxService, never()).createPending(any(), any());
@@ -146,7 +148,7 @@ class ExecutionCommandServiceDispatchTest {
             executionProperties.setDispatchMode(AgentExecutionProperties.DispatchMode.MQ);
             primeCommonMocks();
 
-            service.createAssignedCommand(SUB_TASK_ID, AGENT_ID, TRIGGER);
+            service.createAssignedCommand(SUB_TASK_ID, AGENT_ID, TRIGGER, List.of());
 
             verify(applicationEventPublisher, never()).publishEvent(any(ExecutionCommandCreatedEvent.class));
             verify(agentCommandOutboxService, times(1))
@@ -159,7 +161,7 @@ class ExecutionCommandServiceDispatchTest {
             executionProperties.setDispatchMode(AgentExecutionProperties.DispatchMode.BOTH);
             primeCommonMocks();
 
-            service.createAssignedCommand(SUB_TASK_ID, AGENT_ID, TRIGGER);
+            service.createAssignedCommand(SUB_TASK_ID, AGENT_ID, TRIGGER, List.of());
 
             verify(applicationEventPublisher, times(1)).publishEvent(any(ExecutionCommandCreatedEvent.class));
             verify(agentCommandOutboxService, times(1))

@@ -12,6 +12,8 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.List;
+
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -53,13 +55,15 @@ class SubTaskAutoExecutionDispatcherTest {
 
         when(agentService.getById(11L)).thenReturn(agent);
         when(subTaskService.getById(22L)).thenReturn(subTask);
+        // Phase 1 Step 1 fix：requiredSkills 由命令创建方装箱（task 域查询出口返回空列表）
+        when(subTaskService.requiredSkillsOf(33L)).thenReturn(List.of());
 
         dispatcher.onAssigned(new SubTaskAssignedEvent(22L, 11L));
 
         verify(taskTimelineService).recordEvent(
                 33L, 22L, "sub_task_auto_execute_dispatch", AgentRole.SYSTEM, 11L,
                 java.util.Map.of("trigger", "assigned", "accessType", "API_KEY_LLM"));
-        verify(executionCommandService).createAssignedCommand(22L, 11L, "assigned");
+        verify(executionCommandService).createAssignedCommand(22L, 11L, "assigned", List.of());
     }
 
     @Test
@@ -78,6 +82,6 @@ class SubTaskAutoExecutionDispatcherTest {
                 org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyMap());
-        verify(executionCommandService, never()).createAssignedCommand(22L, 11L, "assigned");
+        verify(executionCommandService, never()).createAssignedCommand(22L, 11L, "assigned", List.of());
     }
 }

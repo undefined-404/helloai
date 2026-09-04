@@ -18,6 +18,20 @@ import java.util.Set;
  */
 public interface SubTaskService extends IService<SubTask> {
 
+    /**
+     * 读取主任务声明的技能标签清单（task 域查询出口，Phase 1 Step 1 fix）。
+     *
+     * <p>供跨域装箱使用：执行命令创建方（agent 域 dispatcher / review 域）需要
+     * {@code task.requiredSkills} 数据随命令装箱传入执行侧，但不能反向持有 task 域引用
+     * （§6 依赖方向红线，见 CODE_STYLE §6.1 技术债回收与新增禁止）。由本方法在
+     * <b>task 域内</b>完成 task 查询，跨域调用方复用既有 {@code SubTaskService}
+     * 依赖边即可，零新增跨域依赖。</p>
+     *
+     * @param taskId 主任务 ID，可为 null
+     * @return 任务声明的技能标签清单；taskId 为 null / 任务不存在 / required_skills 为 null 时返回空列表（恒非 null）
+     */
+    List<String> requiredSkillsOf(Long taskId);
+
     @Transactional(rollbackFor = Exception.class)
     SubTask create(SubTask subTask, Long assignedAgentId);
 

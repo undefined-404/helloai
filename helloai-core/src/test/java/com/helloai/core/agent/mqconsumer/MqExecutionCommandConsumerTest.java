@@ -11,13 +11,16 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.amqp.core.Message;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doThrow;
@@ -72,6 +75,7 @@ class MqExecutionCommandConsumerTest {
     /**
      * 真实消息体构造器。
      */
+    /** 消息体含 requiredSkills（Phase 1 Step 1 fix：装箱字段经 MQ 反序列化不丢）。 */
     private byte[] buildMessageBody(String eventId, Long subTaskId, Long agentId, String accessType) {
         ExecutionCommandMqMessage msg = ExecutionCommandMqMessage.builder()
                 .recordId(1001L)
@@ -80,6 +84,7 @@ class MqExecutionCommandConsumerTest {
                 .agentId(agentId)
                 .trigger("assigned")
                 .accessType(accessType)
+                .requiredSkills(List.of("eng-code-review"))
                 .build();
         try {
             return MAPPER.writeValueAsBytes(msg);
@@ -101,7 +106,10 @@ class MqExecutionCommandConsumerTest {
 
             consumer.onMessage(amqpMessage, channel, 99L);
 
-            verify(localDelegate).consume(any(ExecutionCommand.class));
+            // Phase 1 Step 1 fix：requiredSkills 装箱字段经 MQ 反序列化后不丢（toDomain 透传）
+            ArgumentCaptor<ExecutionCommand> cmdCaptor = ArgumentCaptor.forClass(ExecutionCommand.class);
+            verify(localDelegate).consume(cmdCaptor.capture());
+            assertThat(cmdCaptor.getValue().getRequiredSkills()).isEqualTo(List.of("eng-code-review"));
             verify(deduplicationService).markConsumed("evt-1", MqExecutionCommandConsumer.CONSUMER_NAME);
             verify(channel).basicAck(eq(99L), eq(false));
             verify(channel, never()).basicNack(anyLong(), any(Boolean.class), any(Boolean.class));

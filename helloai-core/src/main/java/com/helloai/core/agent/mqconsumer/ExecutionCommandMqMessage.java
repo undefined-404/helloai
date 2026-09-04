@@ -8,6 +8,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 /**
  * Phase 2D N6：执行命令的 MQ 序列化载体。
  *
@@ -41,6 +43,9 @@ public class ExecutionCommandMqMessage {
     /** 目标 Agent 的接入类型（字符串形式落地）。 */
     private String accessType;
 
+    /** 任务声明的技能标签清单（Phase 1 Step 1 fix 装箱透传；老消息缺该字段时 toDomain 按空列表还原）。 */
+    private List<String> requiredSkills;
+
     /**
      * 从领域命令构建 MQ 消息。
      */
@@ -55,6 +60,7 @@ public class ExecutionCommandMqMessage {
                 .agentId(command.getAgentId())
                 .trigger(command.getTrigger())
                 .accessType(command.getAccessType() != null ? command.getAccessType().name() : null)
+                .requiredSkills(command.getRequiredSkills())
                 .build();
     }
 
@@ -78,6 +84,8 @@ public class ExecutionCommandMqMessage {
                 .agentId(agentId)
                 .trigger(trigger)
                 .accessType(access)
+                // 老消息缺该字段时为 null，显式 null 会覆盖 @Builder.Default，规范化兜底
+                .requiredSkills(requiredSkills != null ? requiredSkills : List.of())
                 .build();
     }
 }

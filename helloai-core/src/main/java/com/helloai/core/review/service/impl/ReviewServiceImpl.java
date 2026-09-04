@@ -142,7 +142,10 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
                 Agent executor = agentService.getById(targetExecutor);
                 if (executor != null && executor.getAccessType() == AgentAccessType.API_KEY_LLM) {
                     try {
-                        executionCommandService.createAssignedCommand(subTaskId, targetExecutor, "manual-review-rework");
+                        // Phase 1 Step 1 fix（LOG-20260904-009）：requiredSkills 装箱透传
+                        // （task 域数据随命令正向传入执行侧，禁止执行侧反向依赖 task）
+                        executionCommandService.createAssignedCommand(subTaskId, targetExecutor, "manual-review-rework",
+                                subTaskService.requiredSkillsOf(subTask.getTaskId()));
                         log.info("人工驳回返工执行命令已下发: subTaskId={}, executorAgentId={}",
                                 subTaskId, targetExecutor);
                     } catch (Exception e) {

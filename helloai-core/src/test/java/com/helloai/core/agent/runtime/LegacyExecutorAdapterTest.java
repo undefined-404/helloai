@@ -13,6 +13,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -37,7 +39,7 @@ class LegacyExecutorAdapterTest {
     }
 
     @Test
-    @DisplayName("成功委托：executeCommand 成功 → SUCCESS + output 透传 + command 携带 subTaskId/agentId/trigger")
+    @DisplayName("成功委托：executeCommand 成功 → SUCCESS + output 透传 + command 携带 subTaskId/agentId/trigger/requiredSkills")
     void shouldDelegateToExecuteCommandAndMapSuccess() {
         when(subTaskExecutionService.executeCommand(anyCommand())).thenReturn(AgentResult.success("done", "stop", "ApiKeyAgentExecutor", 12));
 
@@ -51,6 +53,8 @@ class LegacyExecutorAdapterTest {
         assertThat(captor.getValue().getSubTaskId()).isEqualTo(22L);
         assertThat(captor.getValue().getAgentId()).isEqualTo(11L);
         assertThat(captor.getValue().getTrigger()).isEqualTo(LegacyExecutorAdapter.TRIGGER_AGENT_RUNTIME);
+        // Phase 1 Step 1 fix：requiredSkills 由 AgentContext.skills 透传（消费侧装箱，本层不反向查询）
+        assertThat(captor.getValue().getRequiredSkills()).isEqualTo(List.of("eng-code-review"));
     }
 
     @Test
@@ -93,6 +97,7 @@ class LegacyExecutorAdapterTest {
                 .turn(1)
                 .step(0)
                 .agentId(agentId)
+                .skills(List.of("eng-code-review"))
                 .build();
     }
 
