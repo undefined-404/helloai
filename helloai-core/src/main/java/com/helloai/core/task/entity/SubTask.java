@@ -99,10 +99,11 @@ public class SubTask extends BaseEntity {
     /**
      * 全局共享重试计数器（Phase 0 A3，坑点 3「单一权威」）。
      *
-     * <p>同一子任务所有重试（重分配 / 返工 / 超时，后续逐步并入）共享一个预算：
+     * <p>同一子任务所有重试（重分配 / 自动驳回返工，LOG-20260904-007 返工已并入）共享一个预算：
      * 任何一层重试前用 {@code RetryPolicy.exceedsMax(attemptTotal, max)} 判定达上限即停，
      * 杜绝多层独立计数叠加导致实际执行次数失控。上限复用
-     * {@code helloai.dispatch.max-reassign-attempts}（默认 5，不新建配置）。</p>
+     * {@code helloai.dispatch.max-reassign-attempts}（默认 5，不新建配置）。
+     * 人工裁定开启新一轮（人工驳回 reworkFresh / 死信重派 redispatchDeadLetter）时清零重计。</p>
      */
     private Integer attemptTotal;
 

@@ -10,6 +10,7 @@ import com.helloai.core.agent.service.ConcurrencyQuotaService;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.config.WatchdogProperties;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
 import com.helloai.core.task.service.impl.SubTaskServiceImpl;
@@ -62,7 +63,9 @@ class SubTaskServiceIsReadyTest {
                 // §6.104 打回失效：ObjectProvider mock 不返任何 bean，getIfAvailable 返回 null 内部判空跳过
                 mock(org.springframework.beans.factory.ObjectProvider.class),
                 // Phase 0 B2：事件记录器 mock（rework/reworkFresh 埋点不验证，仅防 NPE）
-                mock(AgentEventRecorder.class));
+                mock(AgentEventRecorder.class),
+                // Phase 0 A3：共享预算 mapper mock（isReady 不触达，仅防 NPE）
+                mock(SubTaskMapper.class));
         subTaskService = spy(real);
         // lambdaQuery 链式 mock：绕开无 Spring 上下文时的 baseMapper 依赖
         lenient().doReturn(queryChain).when(subTaskService).lambdaQuery();

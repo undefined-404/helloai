@@ -10,6 +10,7 @@ import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.config.WatchdogProperties;
 import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.RetryPolicy;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.util.HostNameUtils;
 import com.helloai.core.agent.entity.Agent;
@@ -91,6 +92,12 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     private final ObjectProvider<AttachmentService> attachmentServiceProvider;
     /** Phase 0 B2：事件记录器（REWORK_STARTED 埋点；事件 write-only，失败仅告警不阻断返工链）。 */
     private final AgentEventRecorder agentEventRecorder;
+    /**
+     * Phase 0 A3：共享重试预算原子累加（attempt_total）。
+     * Schema 基类 ServiceImpl 的 baseMapper 在单元测试手动 new 场景为 null，
+     * 因此显式注入 mapper 以保证 rework/reworkFresh 的预算读写可测。
+     */
+    private final SubTaskMapper subTaskMapper;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -574,10 +581,17 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void rework(Long subTaskId, Long reworkAgentId) {
+    public boolean rework(Long subTaskId, Long reworkAgentId) {
         SubTask subTask = getById(subTaskId);
         if (subTask == null) throw new BizException("子任务不存在: " + subTaskId);
         SubTaskStateMachine.validate(subTask.getStatus(), SubTaskStatus.REWORK);
+        // Phase 0 A3 收口（LOG-20260904-007）：自动驳回返工 = 新一轮执行尝试，
+        // 计入共享预算 attempt_total（与调度重分配同源，判定语义统一收敛于
+        // RetryPolicy.exceedsMax）；预算耗尽不再打回重执行，直接 DEAD_LETTER 待人工，
+        // 杜绝「返工 3 次 × 重派 5 次 = 8 次实际执行」的叠加放大（坑点 3 单一权威）。
+        if (!consumeReworkBudget(subTask)) {
+            return false;
+        }
         // 变更前执行者快照（自动驳回一般保持原执行者，防御性兼容换人）
         Long oldAgentId = subTask.getAssignedAgentId();
         subTask.setStatus(SubTaskStatus.REWORK);
@@ -598,6 +612,52 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         // （与核验/装载/打包的 listActive 可信视角闭环，旧证据不再进入下次核验）
         invalidateAttachmentsOnRework(subTaskId);
         log.info("子任务驳回返工: subTaskId={}, reworkCount={}", subTaskId, subTask.getReworkCount());
+        return true;
+    }
+
+    /**
+     * 返工共享预算消费（Phase 0 A3，LOG-20260904-007）。
+     *
+     * <p>预算充足：原子累加 {@code attempt_total}（与调度重分配 incrementAttemptTotal 同款 SQL），
+     * 返回 true；预算耗尽（{@code attempt_total >= max-reassign-attempts}，判定语义
+     * {@code RetryPolicy.exceedsMax}）：REVIEW → DEAD_LETTER + timeline + 人工介入标记，
+     * 返回 false。与 {@code SubTaskDispatchServiceImpl.checkReassignCircuitBreaker}
+     * 共用同一预算与判定语义（坑点 3「单一权威」）。</p>
+     *
+     * @param subTask 已加载的子任务实体（attemptTotal 取自实体，避免二次查询）
+     * @return true = 预算充足已累加；false = 预算耗尽已转 DEAD_LETTER
+     */
+    private boolean consumeReworkBudget(SubTask subTask) {
+        int maxAttempts = agentDispatchProperties.getMaxReassignAttempts();
+        if (maxAttempts <= 0) {
+            // 熔断禁用（逃生口，与调度维度同口径，不推荐生产使用）
+            return true;
+        }
+        int currentCount = subTask.getAttemptTotal() != null ? subTask.getAttemptTotal() : 0;
+        if (RetryPolicy.exceedsMax(currentCount, maxAttempts)) {
+            log.warn("返工预算熔断触发: subTaskId={}, attemptTotal={}, maxReassignAttempts={}, 子任务转入 DEAD_LETTER 待人工兜底",
+                    subTask.getId(), currentCount, maxAttempts);
+            try {
+                changeStatus(subTask.getId(), SubTaskStatus.DEAD_LETTER, null,
+                        Map.of("dead_letter_reason", "rework_budget_exceeded",
+                                "attempt_total", String.valueOf(currentCount),
+                                "max_reassign_attempts", String.valueOf(maxAttempts)));
+                taskTimelineService.recordEvent(subTask.getTaskId(), subTask.getId(),
+                        "sub_task_dead_letter", AgentRole.SYSTEM, null,
+                        Map.of("reason", "rework_budget_exceeded",
+                                "attempt_total", currentCount,
+                                "max_reassign_attempts", maxAttempts));
+                // §6.52 人工介入标记：与核验返工熔断（rework_limit）对称，前端据此展示人工兜底面板
+                markManualIntervention(subTask.getId(), "rework_budget",
+                        Map.of("attemptTotal", currentCount, "maxReassignAttempts", maxAttempts));
+            } catch (Exception e) {
+                log.error("返工预算熔断-转死信失败: subTaskId={}", subTask.getId(), e);
+            }
+            return false;
+        }
+        // 原子累加共享重试预算（与调度重分配同款 SQL：COALESCE(attempt_total,0)+1）
+        subTaskMapper.incrementAttemptTotal(subTask.getId(), OffsetDateTime.now());
+        return true;
     }
 
     @Override
@@ -610,6 +670,10 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         Long oldAgentId = subTask.getAssignedAgentId();
         subTask.setStatus(SubTaskStatus.REWORK);
         subTask.setReworkCount(0);
+        // Phase 0 A3 语义闭环（LOG-20260904-007）：人工驳回 = 用户拍板开启新一轮，
+        // 与死信重派（redispatchDeadLetter）对称重置共享预算 attempt_total ——
+        // 否则改派后的重执行仍消耗旧预算，一次自动驳回即再入死信，违背人工裁定意图
+        subTaskMapper.resetAttemptTotal(subTaskId, OffsetDateTime.now());
         if (reworkAgentId != null) {
             // 人工驳回改派语义 = 选执行者；与改派候选接口/死信重派同口径，防御 API 直调绕过
             AgentService agentService = agentServiceProvider.getIfAvailable();

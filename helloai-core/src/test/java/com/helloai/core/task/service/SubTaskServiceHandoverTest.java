@@ -13,6 +13,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.port.ReviewSummary;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
@@ -75,6 +76,8 @@ class SubTaskServiceHandoverTest {
     @Mock private AttachmentService attachmentService;
     @Mock private ObjectProvider<AttachmentService> attachmentServiceProvider;
     @Mock private AgentEventRecorder agentEventRecorder;
+    // Phase 0 A3：共享预算原子累加 mapper（rework 预算消费 / reworkFresh 清零）
+    @Mock private SubTaskMapper subTaskMapper;
 
     private SubTaskService subTaskService;
 
@@ -88,7 +91,9 @@ class SubTaskServiceHandoverTest {
                 rewardService, applicationEventPublisher, taskTimelineService,
                 dispatchProps, concurrencyQuotaService,
                 // Phase 0 A2：租约看门狗配置（changeStatus 进 IN_PROGRESS 时会读，默认值即可）
-                new WatchdogProperties(), attachmentServiceProvider, agentEventRecorder));
+                new WatchdogProperties(), attachmentServiceProvider, agentEventRecorder,
+                // Phase 0 A3：共享预算 mapper（rework 预算消费 / reworkFresh 清零）
+                subTaskMapper));
         doReturn(true).when(subTaskService).updateById(any(SubTask.class));
         // §6.104 打回失效：让 ObjectProvider 返回 mock，便于断言 invalidateBySubTask 被调
         //（类级 @MockitoSettings(strictness = Strictness.LENIENT) 已开启，无需 Mockito.lenient()）

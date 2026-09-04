@@ -172,8 +172,9 @@
         V24 重分配熔断（Phase 0 A3 起原子累加 attempt_total，替代 reassign_attempt_count）：
         与 incrementExternalFallbackCount 平行但语义独立：
         external_fallback_count 仅计 N11 外部→LLM 回退，
-        attempt_total 是全局共享重试预算（坑点3「单一权威」），计所有类型的重分配入口，
-        后续返工 / 超时逐步并入同一预算；判定语义见 RetryPolicy.exceedsMax。
+        attempt_total 是全局共享重试预算（坑点3「单一权威」），计所有类型的重分配入口
+        及自动驳回返工（LOG-20260904-007：SubTaskServiceImpl.consumeReworkBudget 同款调用）；
+        判定语义见 RetryPolicy.exceedsMax，超限由各入口转 DEAD_LETTER 待人工兜底。
         并发安全：UPDATE 同时满足 id + deleted；不依赖读后写。
     -->
         <update id="incrementAttemptTotal">

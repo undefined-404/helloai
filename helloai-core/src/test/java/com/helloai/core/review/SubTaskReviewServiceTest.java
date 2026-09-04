@@ -251,6 +251,8 @@ class SubTaskReviewServiceTest {
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 2, \"issues\": \"缺 3 个端点\", \"comment\": \"\"}", "stop", "llm", 100));
         when(agentService.getById(EXECUTOR_ID)).thenReturn(llmAgent(EXECUTOR_ID, AgentRole.EXECUTOR));
+        // Phase 0 A3：预算充足返回 true（mock 默认 false 会误判为预算熔断分支）
+        when(subTaskService.rework(SUB_TASK_ID, EXECUTOR_ID)).thenReturn(true);
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
@@ -260,6 +262,22 @@ class SubTaskReviewServiceTest {
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_auto_review_rejected"),
                 eq(AgentRole.REVIEWER), eq(9L), anyMap());
+    }
+
+    @Test
+    @DisplayName("A3 预算耗尽：rework 返回 false → 不补发执行命令（子任务已转死信待人工）")
+    void shouldSkipExecutionCommandWhenReworkBudgetExhausted() {
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 2, \"issues\": \"缺 3 个端点\", \"comment\": \"\"}", "stop", "llm", 100));
+        // Phase 0 A3：返工预算耗尽（attempt_total 达 max-reassign-attempts），rework 已转 DEAD_LETTER
+        when(subTaskService.rework(SUB_TASK_ID, EXECUTOR_ID)).thenReturn(false);
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        verify(subTaskService).rework(SUB_TASK_ID, EXECUTOR_ID);
+        verify(executionCommandService, never()).createAssignedCommand(anyLong(), anyLong(), anyString());
+        verify(subTaskService, never()).complete(anyLong());
     }
 
     @Test

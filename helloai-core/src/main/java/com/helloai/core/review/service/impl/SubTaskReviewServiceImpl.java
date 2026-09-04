@@ -605,7 +605,14 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             log.warn("核验意见写入 context 失败（不阻断返工）: subTaskId={}, err={}", subTaskId, e.getMessage());
         }
 
-        subTaskService.rework(subTaskId, targetExecutor);
+        // Phase 0 A3（LOG-20260904-007）：rework 返回 false = 共享预算耗尽（attempt_total 达
+        // max-reassign-attempts），子任务已转 DEAD_LETTER 待人工——不再补发执行命令，
+        // 避免给死信子任务触发新一轮执行尝试（执行预算已封顶）。
+        if (!subTaskService.rework(subTaskId, targetExecutor)) {
+            log.warn("自动核验驳回跳过执行命令补发（返工预算已耗尽，子任务转死信）: subTaskId={}, executorAgentId={}",
+                    subTaskId, targetExecutor);
+            return;
+        }
         recordAutoReviewQuietly(subTaskId, reviewerAgentId, ReviewResult.REJECTED, verdict);
         taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId,
                 "sub_task_auto_review_rejected", AgentRole.REVIEWER, reviewerAgentId,

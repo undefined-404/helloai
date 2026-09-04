@@ -12,6 +12,7 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConcurrencyQuotaService;
 import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
 import com.helloai.core.task.service.impl.SubTaskServiceImpl;
@@ -69,6 +70,8 @@ class SubTaskServiceQuotaTest {
     @SuppressWarnings("unchecked")
     @Mock private org.springframework.beans.factory.ObjectProvider<AttachmentService> attachmentServiceProvider;
     @Mock private AgentEventRecorder agentEventRecorder;
+    // Phase 0 A3：共享预算原子累加 mapper（构造注入，quota 用例不触达，仅防 NPE）
+    @Mock private SubTaskMapper subTaskMapper;
 
     private SubTaskService subTaskService;
     private AgentDispatchProperties dispatchProps;
@@ -83,7 +86,9 @@ class SubTaskServiceQuotaTest {
                 rewardService, applicationEventPublisher, taskTimelineService,
                 dispatchProps, concurrencyQuotaService,
                 // Phase 0 A2：租约看门狗配置（assignNext 不涉及租约，默认值即可）
-                new WatchdogProperties(), attachmentServiceProvider, agentEventRecorder));
+                new WatchdogProperties(), attachmentServiceProvider, agentEventRecorder,
+                // Phase 0 A3：共享预算 mapper（构造注入）
+                subTaskMapper));
         // §6.140 收口：行锁改走 AgentService.lockByIdForUpdate（ObjectProvider 懒解析）；
         // lenient：状态校验失败路径不触发行锁，避免 UnnecessaryStubbing
         lenient().when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);

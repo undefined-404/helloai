@@ -113,9 +113,15 @@ public interface SubTaskService extends IService<SubTask> {
      * 驳回统一补发收件箱通知（自动核验 rejectAndRework 与人工驳回 rework/reworkFresh 共用），
      * 摘要携带最近一轮 review 结果（评分/评语/问题），外部 Agent 轮询 pullTasks 即可感知返工原因。
      * 发送失败只 warn 不阻断（返工主链路优先）。
+     *
+     * <p>自动驳回返工（Phase 0 A3 共享预算，LOG-20260904-007）：打回 = 新一轮执行尝试，
+     * 计入 {@code attempt_total}（与调度重分配同源）；预算耗尽直接转 DEAD_LETTER 不再打回。</p>
+     *
+     * @return true = 已打回 REWORK；false = 共享预算耗尽，已转 DEAD_LETTER（调用方需跳过
+     *         执行命令补发等"将开启新一次执行尝试"的后续动作）
      */
     @Transactional(rollbackFor = Exception.class)
-    void rework(Long subTaskId, Long reworkAgentId);
+    boolean rework(Long subTaskId, Long reworkAgentId);
 
     /**
      * §6.57 人工驳回重置：返工计数归零并清除人工介入标记，开启新一轮执行。

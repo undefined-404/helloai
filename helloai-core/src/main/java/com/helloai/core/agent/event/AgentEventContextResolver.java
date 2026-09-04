@@ -30,9 +30,10 @@ public final class AgentEventContextResolver {
     /**
      * Turn 序号（ADR-001 §3.2）：{@code 1 + reworkCount + attemptTotal}。
      *
-     * <p>rework（{@code reworkCount} +1）、超时回收重派 / N11 回退（{@code attemptTotal} +1）
-     * 均产生新 Turn；起始值为 1。{@code reworkFresh} 清零 reworkCount、死信兜底
-     * （{@code redispatchDeadLetter}）清零 attemptTotal 与 reworkCount 导致的序号回落为已知近似——
+     * <p>rework（{@code reworkCount} +1）、自动驳回返工 / 超时回收重派 / N11 回退（{@code attemptTotal} +1）
+     * 均产生新 Turn；起始值为 1。{@code reworkFresh} 清零 reworkCount 与 attemptTotal（Phase 0 A3 起，
+     * LOG-20260904-007：人工驳回 = 用户拍板新一轮，与死信兜底对称重置共享预算）、死信兜底
+     * （{@code redispatchDeadLetter}）同样清零 attemptTotal 与 reworkCount 导致的序号回落为已知近似——
      * 事件仅 write-only 不参与业务决策，回落不影响 B3 对账（对账只校验终态事件 vs 业务表状态）。</p>
      *
      * @param subTask 子任务实体（可空，空时返回 1）
