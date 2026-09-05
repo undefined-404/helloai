@@ -102,6 +102,8 @@ Run #1
 
   - `5`：`SKILL_RESOLVED`（Phase 1 Skill 供电新增槽位）；
 
+  - `6`：`TOOL_RESOLVED`（Phase 1 Step 2 工具解析新增槽位，与 SKILL_RESOLVED 对称）；
+
   - **step 不承担时序职责**：事件顺序以 `create_time + id` 为准（append-only 单调），
     事件类型逻辑序以 §5.2 为准，二者与 step 数值不等价；
 
@@ -251,6 +253,35 @@ create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 ***
 
 ## 修订记录
+
+### R3（2026-09-05）：TOOL_RESOLVED 新增槽位（Phase 1 Step 2 Tool 供电 + ToolRegistry）
+
+**背景**：Phase 1 Step 2 把 Tool 提升为 AgentRuntime 一等公民（`AgentContext.tools`
+显式供电 + ToolRegistry 元数据注册面，长期思路 P0-1 成员落位）。按「契约供电 + 埋点 +
+对账同步」三件套模式（Step 1 Skill 同款），执行链新增 `TOOL_RESOLVED` 埋点。
+
+**决策**：`TOOL_RESOLVED` 分配新槽位 **step=6**（与 `SKILL_RESOLVED`=5 对称，
+同为「解析完成」语义；step 为事件类型槽位，不承担时序）。事实依据与 R1 同源：
+step 无唯一约束、消费方按 `create_time DESC, id DESC` 排序，无 step 数值断言。
+
+**伴生约束**（实现 `TOOL_RESOLVED` 埋点时同一闭环完成，IN_PROGRESS 合法末条事件集
+均需加 `TOOL_RESOLVED`，否则探针误报 MISMATCH）：
+
+- 对账契约同步（**6 处同构映射，必须同一次提交全部修改**）：
+  1. `EventReconciliationServiceImpl` 的 IN_PROGRESS 期望集合 + javadoc
+     「step 1-5 槽位」→「step 1-6 槽位」；
+  2. `verify-c3-events.ps1` P2 的 IN_PROGRESS 映射；
+  3. `verify-c3-events.sh` P2 的 IN_PROGRESS 映射（ps1 同构移植）；
+  4. `verify-c3-reconcile.ps1` 的 matched/mismatches 两处判定；
+  5. `verify-c3-reconcile.sh` 的 matched/mismatches 两处判定（ps1 同构移植）；
+- 埋点**恒发**（`tools` 为空时 payload 两键为空数组），保持每个 Turn 事件骨架完整；
+- 埋点位置：`executeOnce`（`SubTaskExecutionServiceImpl`）内 skill 解析之后、
+  `CONTEXT_BUILT`（step=2）之前；payload 含 `tools`（启用清单）+ `resolvedTools`
+  （ToolRegistry 命中元数据 name/description，承载 Registry 元数据消费面）。
+
+**不做**：AgentContext.tools 仅作为契约输入 + 埋点观测，不改动 Prompt 装配（运行时
+行为零变化，与 Step 1 的「纯契约完备性」哲学一致）；ToolRegistry 仅覆盖平台当前
+MCP 工具（12 个），GitTool/ShellTool 等未来工具类型（长期思路 P1）注册进同一目录。
 
 ### R2（2026-09-04）：as-is 事实对齐修正（文档核查，无方案变更）
 

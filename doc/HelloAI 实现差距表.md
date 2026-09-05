@@ -400,16 +400,17 @@ Agent
 - 埋点事件流（Phase 0 B2：TASK_ASSIGNED / AGENT_STARTED / CONTEXT_BUILT / TOOL_CALL_STARTED / TOOL_CALL_COMPLETED / AGENT_COMPLETED / REVIEW_STARTED / REVIEW_APPROVED / REVIEW_REJECTED / REWORK_STARTED 共 10 类事件埋点，覆盖分配/执行/完成/核验/返工旧执行链路与人工审核路径（2026-09-03 补齐人工 APPROVED/REJECTED 埋点，LOG-20260903-007），AgentEventContextResolver 静态 runId（轮次固定 1）/ turn（1+reworkCount+attemptTotal）计算）
 - 事件流对账（Phase 0 B3：EventReconciliationTask 60s 集群单例 + EventReconciliationService 以业务表最近变更（10 分钟窗口）为候选源，状态 → 末条事件单向投影校验（ASSIGNED/IN_PROGRESS/REVIEW/REWORK/DONE 五状态映射，PENDING 等无事件语义状态跳过），不一致仅 WARN 告警不修正）
 - 共享重试预算（Phase 0 A3：sub_task.attempt_total + RetryPolicy 判定，重分配熔断已切换）
+- 执行会话（Phase 1 Step 3：agent_session 表 + AgentSessionService——Turn 级执行快照 / 中断点 / 恢复上下文载体；executeOnce start/advance + ExecutionResultHandler 终态 + 租约回收路径读 session 落 timeline `sub_task_session_interrupted` 并 ABORT 幂等防重入，LOG-20260905-002）
 
 ## 差距
 
 尚缺：
 
-- 执行快照
-- 恢复上下文
-- 中断点
-- 可恢复执行
-- 恢复幂等策略
+- 执行快照 ✅（AgentSession 已承载：turn/step/snapshot JSONB）
+- 恢复上下文 ✅（AgentSession.snapshot 已承载装配事实；租约回收中断点可观测）
+- 中断点 ✅（AgentSession turn/step 即中断点）
+- 可恢复执行 ⚠️ PARTIAL（已记录中断点 + ABORT 幂等，但重派后恢复上下文注入 prompt 的续接体验未做——Step 3 D3 决策（LOG-20260905-002）留待评估）
+- 恢复幂等策略 ⚠️ PARTIAL（ABORT 幂等防重入已落地；会话终态防重写已具备）
 
 ## 目标
 

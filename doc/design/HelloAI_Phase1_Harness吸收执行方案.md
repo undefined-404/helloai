@@ -2,7 +2,7 @@
 
 > 主轴：把 `AgentRuntime` 从「唯一执行契约」（Phase 0 C3 已落地）扩展为「显式一等公民的 Harness 能力面」，让 SkillRegistry / ToolRegistry / Session / EventStream / SandboxProvider 成为 Runtime 的可消费维度，而不是旧链内部的隐式依赖。
 >
-> 文档约定：§0 全景路线；§1 本期 Step 1 范围；§2 任务分解；§3 决策记录；§4 与 ADR-001 关系；§5 依赖与提交；§6 后续 Step 2/3/4 预告。
+> 文档约定：§0 全景路线（1.1/1.2/1.3 已落地）；§1 本期 Step 1 范围（Step 1 时点锚定，Step 2/3 已后续落地，见 §0/§6）；§2 任务分解；§3 决策记录；§4 与 ADR-001 关系；§5 依赖与提交；§6 后续 Step 2/3/4（Step 2/3 已落地，Step 4 预告）。
 
 ***
 
@@ -11,9 +11,9 @@
 | 子阶段 | 主题 | 状态 | 关键产出 | 落点 |
 |---|---|---|---|---|
 | **1.0 Runtime 固化** | `AgentContext` + `AgentRuntime` + `LegacyExecutorAdapter` 唯一执行入口 | ✅ 已落地 | AgentContext 六字段契约 + C1/C2/C3 双轨切换（LOG-20260904-006） | Phase 0 C1-C3 |
-| **1.1 Session Manager** | N-007 执行恢复载体（快照/恢复上下文/断点续接） | ⏳ 后续批 | `AgentSession` 实体 + 中断点机制 + 可恢复执行 | N-007 PARTIAL P1 |
-| **1.2 Skill Registry** | 抽 `KNOWN_SPECS` 为 SkillRegistry 元数据消费面 | ⏸ **本期决策：暂不做**（D2=A） | 与 1.3 Tool Registry 一起定型 Registry 模式 | 等 Step 2 |
-| **1.3 Tool Registry** | `AgentContext.tools` 供电 + ToolRegistry 描述层 | ⏳ 后续 | Tool 注册元数据 + 启用/匹配契约 | Step 2 |
+| **1.1 Session Manager** | N-007 执行恢复载体（快照/恢复上下文/断点续接） | ✅ 已落地（Step 3） | `agent_session` 表 + AgentSessionService（Turn 级执行会话：快照/中断点/恢复上下文）+ 租约回收落 `sub_task_session_interrupted` + ABORT 幂等（LOG-20260905-002） | N-007 PARTIAL→收口中 |
+| **1.2 Skill Registry** | 抽 `KNOWN_SPECS` 为 SkillRegistry 元数据消费面 | ✅ 模式已定型（不建平行类） | 与 ToolRegistry 同「resolve → matched 元数据」形态收拢；`AgentSkillSpecService` 即 skill 侧元数据面（§50.7 不另建 SkillRegistry 类） | Step 2（LOG-20260905） |
+| **1.3 Tool Registry** | `AgentContext.tools` 供电 + ToolRegistry 描述层 | ✅ 已落地（Step 2） | `agent.tool` 包 ToolDefinition + ToolRegistry（从 ToolCallbackProvider 收集平台 12 工具元数据）+ TOOL_RESOLVED 埋点 + 对账同步（LOG-20260905） | Step 2 |
 | **1.4 SandboxProvider** | 仅接口 + RemoteAgent + LocalProcess；不引 Docker/K8s | ⏳ 后续 | `ExecutionEnvironment` 实现 + `AgentContext.environment` 供电 | Step 3 |
 
 ### 不做项（明文边界）
@@ -36,12 +36,12 @@
 1. **契约输入**：`AgentContext.skills` 从默认空列表变为显式供电；
 2. **事件可观测**：`SKILL_RESOLVED` 从「有定义零埋点」变为「恒发落库、对账无差」。
 
-### Out of scope（本期明确不做）
+### Out of scope（Step 1 落地时点锚定；→ ✅ 项已由后续 Step 落地）
 
-- Tool 供电（Step 2）；
-- Session 收拢（Step 3）；
+- Tool 供电（Step 2）→ ✅ 已落地（LOG-20260905-001，见 §0 1.3 / §6）；
+- Session 收拢（Step 3）→ ✅ 已落地（LOG-20260905-002，见 §0 1.1 / §6）；
 - SandboxProvider（Step 4）；
-- **SkillRegistry 抽象（D2=A 暂缓）**。
+- **SkillRegistry 抽象（D2=A 暂缓）** → ✅ 模式已定型（§50.7 不建平行类，见 §0 1.2）。
 
 ### 前置已就绪
 
@@ -165,12 +165,12 @@ T2（依赖 D1=B 已定 payload）──┘
 
 ***
 
-## §6 后续 Step 2/3/4 预告（不展开，本期不做）
+## §6 后续 Step 2/3/4（Step 2 已落地，Step 3/4 预告）
 
 | 阶段 | 主题 | 衔接 |
 |---|---|---|
-| Step 2 | Tool 供电 + ToolRegistry | 沿用 Step 1 的「契约供电 + 埋点 + 对账同步」三件套模式；Tool 启用/匹配契约定型 Registry 模式（连同 1.2 Skill Registry 收拢） |
-| Step 3 | Session Manager（N-007 收口） | 执行快照/恢复上下文/断点续接；`AgentSession` 实体；中断点机制 |
+| Step 2 | Tool 供电 + ToolRegistry | ✅ **已落地**（LOG-20260905）：`AgentContext.tools` 显式供电（消费侧 agent 域直读 `getEnabledTools`）+ `agent.tool` 包 ToolRegistry（从 spring-ai ToolCallbackProvider 收集平台 12 工具元数据）+ `TOOL_RESOLVED` 埋点（step=6）+ 6 处对账契约同步；Skill 侧以同「resolve → matched」形态收拢（§50.7 不建平行类）。契约供电 + 埋点 + 对账三件套全闭环 |
+| Step 3 | Session Manager（N-007 收口） | ✅ **已落地**（LOG-20260905-002）：`agent_session` 表 + AgentSessionService（Turn 级执行会话，3 个写入点：start/advance/终态）+ 租约回收路径读 session 落 `sub_task_session_interrupted` 中断点 timeline + ABORT 幂等防重入。执行快照/中断点/恢复上下文载体闭环；「重派注入恢复上下文」「LLM 级断点续接」明确留待后续 |
 | Step 4 | SandboxProvider（仅接口 + RemoteAgent + LocalProcess） | `ExecutionEnvironment` 实现；`AgentContext.environment` 供电；为外部 Agent 单向架构补完 sandbox 抽象 |
 
 > 每个 Step 落地时仍按「小而闭环」原则：契约 + 埋点 + 对账 + 文档，不平行架构。
