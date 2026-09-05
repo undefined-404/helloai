@@ -45,4 +45,13 @@ public class ExecutionCommand {
      */
     @Builder.Default
     List<String> requiredSkills = List.of();
+
+    /**
+     * 执行时可用工具名清单（Phase 1 Step 2：agent 域消费侧解析 agent_mcp_server
+     * 注入，随 AgentContext 透传；与 {@code AgentMcpServerService.getEnabledTools}
+     * 同表示，非命令创建方装箱——工具是 agent 域数据，无 §6 跨域问题；
+     * null 由 builder 默认值规范化，消费端恒非 null）。
+     */
+    @Builder.Default
+    List<String> tools = List.of();
 }

@@ -116,7 +116,7 @@ SELECT p.id, p.status, p.last_event,
            WHEN p.status IN ('PENDING','PENDING_PLAN_REVIEW','PAUSED','BLOCKED','CANCELLED','DEAD_LETTER') THEN 'SKIP'
            WHEN
            (p.status='ASSIGNED' AND p.last_event='task_assigned') OR
-           (p.status='IN_PROGRESS' AND p.last_event IN ('agent_started','context_built','tool_call_started','tool_call_completed','skill_resolved')) OR
+           (p.status='IN_PROGRESS' AND p.last_event IN ('agent_started','context_built','tool_call_started','tool_call_completed','skill_resolved','tool_resolved')) OR
            (p.status='REVIEW' AND p.last_event IN ('agent_completed','review_started')) OR
            (p.status='REWORK' AND p.last_event IN ('review_rejected','rework_started')) OR
            (p.status='DONE' AND p.last_event='review_approved') OR

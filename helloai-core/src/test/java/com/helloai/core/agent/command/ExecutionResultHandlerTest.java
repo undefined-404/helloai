@@ -29,6 +29,7 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
 import com.helloai.core.agent.output.ExecutionOutputParser;
 import com.helloai.core.agent.output.ParsedOutput;
+import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskRunningSpecService;
 import com.helloai.core.task.service.TaskTimelineService;
@@ -64,6 +65,10 @@ class ExecutionResultHandlerTest {
 
     @Mock
     private ExecutionOutputParser executionOutputParser;
+
+    // Phase 1 Step 3：执行会话服务（终态 COMPLETED/FAILED；@InjectMocks 缺 mock 会注入 null 导致 NPE）
+    @Mock
+    private AgentSessionService agentSessionService;
 
     @InjectMocks
     private ExecutionResultHandler executionResultHandler;
@@ -102,6 +107,8 @@ class ExecutionResultHandlerTest {
                 .containsEntry("output", "done");
 
         verify(subTaskService).submit(22L);
+        // Phase 1 Step 3：执行会话终态 COMPLETED（turn=1+rework+attempt=1）
+        verify(agentSessionService).complete(22L, 11L, 1);
         verify(taskTimelineService).recordEvent(
                 eq(33L), eq(22L), eq("sub_task_execute_submit"), eq(AgentRole.EXECUTOR), eq(11L),
                 argThat((Map<String, Object> payload) ->
@@ -134,6 +141,8 @@ class ExecutionResultHandlerTest {
                 .containsEntry("error", "boom");
 
         verify(subTaskService).block(22L);
+        // Phase 1 Step 3：执行会话终态 FAILED（error 摘要；turn=1）
+        verify(agentSessionService).fail(22L, 11L, 1, "boom");
         verify(taskTimelineService).recordEvent(
                 eq(33L), eq(22L), eq("sub_task_execute_failed"), eq(AgentRole.EXECUTOR), eq(11L),
                 argThat((Map<String, Object> payload) ->

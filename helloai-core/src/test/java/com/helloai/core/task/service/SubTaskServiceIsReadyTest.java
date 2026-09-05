@@ -7,6 +7,7 @@ import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.agent.service.ConcurrencyQuotaService;
+import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.config.WatchdogProperties;
 import com.helloai.core.task.entity.SubTask;
@@ -60,6 +61,8 @@ class SubTaskServiceIsReadyTest {
                 new AgentDispatchProperties(), mock(ConcurrencyQuotaService.class),
                 // Phase 0 A2：租约看门狗配置（默认值即可，isReady 不涉及租约）
                 new WatchdogProperties(),
+                // Phase 1 Step 3：执行会话服务 mock（isReady 不触达，仅防 NPE）
+                mock(AgentSessionService.class),
                 // §6.104 打回失效：ObjectProvider mock 不返任何 bean，getIfAvailable 返回 null 内部判空跳过
                 mock(org.springframework.beans.factory.ObjectProvider.class),
                 // LOG-20260904-009：装箱出口 requiredSkillsOf 懒解析 TaskService（isReady 不触达，仅防 NPE）

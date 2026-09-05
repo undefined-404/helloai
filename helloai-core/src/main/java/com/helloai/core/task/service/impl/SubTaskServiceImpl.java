@@ -21,6 +21,7 @@ import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConcurrencyQuotaService;
+import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.shared.event.SubTaskAssignedEvent;
 import com.helloai.core.shared.event.SubTaskCompletedEvent;
 import com.helloai.core.task.entity.SubTask;
@@ -90,6 +91,8 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     private final ConcurrencyQuotaService concurrencyQuotaService;
     // Phase 0 A2：执行租约看门狗配置（TTL / 开关）
     private final WatchdogProperties watchdogProperties;
+    /** Phase 1 Step 3：执行会话服务（租约回收时记录中断点 + ABORT，N-007 恢复载体）。 */
+    private final AgentSessionService agentSessionService;
     // 懒解析打破循环：AttachmentServiceImpl 依赖 SubTaskService（register 归属校验）
     private final ObjectProvider<AttachmentService> attachmentServiceProvider;
     // 懒解析打破循环（Phase 1 Step 1 fix，LOG-20260904-009）：TaskServiceImpl 已注入
@@ -974,6 +977,25 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
                             Map.of("owner", oldOwner, "reason", "lease_expired"));
                 } catch (Exception e) {
                     log.warn("租约回收 timeline 事件写入失败，不影响回收: subTaskId={}", subTaskId, e);
+                }
+                // Phase 1 Step 3（N-007 恢复载体）：识别未完成执行 → 记录中断点
+                // （turn/step/agentId/恢复上下文快照）→ ABORT 幂等防重入；best-effort 不阻断回收
+                try {
+                    AgentSessionService.InterruptedSession interrupted =
+                            agentSessionService.interrupt(subTaskId);
+                    if (interrupted != null) {
+                        Map<String, Object> interruptPayload = new HashMap<>();
+                        interruptPayload.put("sessionId", interrupted.sessionId());
+                        interruptPayload.put("turn", interrupted.turn());
+                        interruptPayload.put("step", interrupted.step());
+                        interruptPayload.put("contextSummary",
+                                interrupted.snapshot() != null ? interrupted.snapshot() : Map.of());
+                        taskTimelineService.recordEvent(taskId, subTaskId,
+                                "sub_task_session_interrupted", AgentRole.SYSTEM,
+                                interrupted.agentId(), interruptPayload);
+                    }
+                } catch (Exception e) {
+                    log.warn("执行会话中断点记录失败（best-effort，不影响回收）: subTaskId={}", subTaskId, e);
                 }
             } catch (Exception e) {
                 log.warn("租约回收单条处理异常，跳过: subTaskId={}", subTaskId, e);

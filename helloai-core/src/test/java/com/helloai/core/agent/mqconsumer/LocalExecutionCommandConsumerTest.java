@@ -12,6 +12,7 @@ import com.helloai.core.agent.runtime.AgentRuntime;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.shared.event.ExecutionCommandCreatedEvent;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
+import com.helloai.core.agent.service.AgentMcpServerService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
@@ -50,6 +51,10 @@ class LocalExecutionCommandConsumerTest {
     @Mock
     private AgentService agentService;
 
+    /** Phase 1 Step 2：启用工具解析（agent_mcp_server），消费侧 agent 域直读注入 ctx.tools。 */
+    @Mock
+    private AgentMcpServerService agentMcpServerService;
+
     @Mock
     private AgentRuntime agentRuntime;
 
@@ -76,11 +81,15 @@ class LocalExecutionCommandConsumerTest {
                             .status(ExecutionStatus.SUCCESS)
                             .output("out")
                             .build());
+            // Phase 1 Step 2：启用工具由消费侧 agent 域直读注入 ctx.tools
+            when(agentMcpServerService.getEnabledTools(11L))
+                    .thenReturn(List.of("pullTasks", "submitResult"));
 
             localExecutionCommandConsumer.consume(baseCommand());
 
             // AgentContext 与 B2 埋点同源：run-{taskId}-1 / turn=1 / step=0
             // Phase 1 Step 1 fix：skills 断言——AgentContext.skills == command.requiredSkills（命令装箱透传）
+            // Phase 1 Step 2：tools 断言——AgentContext.tools == getEnabledTools(agentId)（agent 域直读注入）
             verify(agentRuntime).execute(argThat(ctx ->
                     ctx != null
                             && "run-33-1".equals(ctx.getRunId())
@@ -90,7 +99,9 @@ class LocalExecutionCommandConsumerTest {
                             && ctx.getStep() == 0
                             && ctx.getAgentId() != null && ctx.getAgentId() == 11L
                             && ctx.getSkills() != null
-                            && ctx.getSkills().equals(List.of("eng-code-review", "eng-doc-standard"))));
+                            && ctx.getSkills().equals(List.of("eng-code-review", "eng-doc-standard"))
+                            && ctx.getTools() != null
+                            && ctx.getTools().equals(List.of("pullTasks", "submitResult"))));
             // record CAS 由消费侧代理执行
             verify(agentExecutionRecordService).markRunning(44L);
             verify(agentExecutionRecordService).markSuccess(44L);

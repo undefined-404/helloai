@@ -15,6 +15,7 @@ import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
 import com.helloai.core.agent.output.ExecutionOutputParser;
 import com.helloai.core.agent.quality.ExecutorDoneIssuesBackfiller;
+import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
@@ -86,13 +87,17 @@ class ExecutionResultHandlerIntegrationTest {
     @Mock
     private AgentEventRecorder agentEventRecorder;
 
+    // Phase 1 Step 3：执行会话服务（终态 best-effort，集成用例仅防 NPE）
+    @Mock
+    private AgentSessionService agentSessionService;
+
     private ExecutionResultHandler handler;
 
     @BeforeEach
     void setUp() {
         handler = new ExecutionResultHandler(subTaskService, taskTimelineService, failureTracker, agentService,
                 applicationEventPublisher, conversationService, executionArtifactService, taskRunningSpecService,
-                new ExecutionOutputParser(), executorDoneIssuesBackfiller, agentEventRecorder);
+                new ExecutionOutputParser(), executorDoneIssuesBackfiller, agentEventRecorder, agentSessionService);
         // 模拟 Spring @Transactional 已开启（afterCommit 注册需要激活的同步管理器）
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.initSynchronization();

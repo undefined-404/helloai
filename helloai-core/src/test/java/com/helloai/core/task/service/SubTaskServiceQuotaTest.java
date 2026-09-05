@@ -11,6 +11,7 @@ import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConcurrencyQuotaService;
 import com.helloai.core.agent.service.HeartbeatService;
+import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.port.ReviewPort;
@@ -75,6 +76,8 @@ class SubTaskServiceQuotaTest {
     @Mock private AgentEventRecorder agentEventRecorder;
     // Phase 0 A3：共享预算原子累加 mapper（构造注入，quota 用例不触达，仅防 NPE）
     @Mock private SubTaskMapper subTaskMapper;
+    // Phase 1 Step 3：执行会话服务（quota 用例不触达，仅防 NPE）
+    @Mock private AgentSessionService agentSessionService;
 
     private SubTaskService subTaskService;
     private AgentDispatchProperties dispatchProps;
@@ -89,7 +92,7 @@ class SubTaskServiceQuotaTest {
                 rewardService, applicationEventPublisher, taskTimelineService,
                 dispatchProps, concurrencyQuotaService,
                 // Phase 0 A2：租约看门狗配置（assignNext 不涉及租约，默认值即可）
-                new WatchdogProperties(), attachmentServiceProvider, taskServiceProvider, agentEventRecorder,
+                new WatchdogProperties(), agentSessionService, attachmentServiceProvider, taskServiceProvider, agentEventRecorder,
                 // Phase 0 A3：共享预算 mapper（构造注入）
                 subTaskMapper));
         // §6.140 收口：行锁改走 AgentService.lockByIdForUpdate（ObjectProvider 懒解析）；

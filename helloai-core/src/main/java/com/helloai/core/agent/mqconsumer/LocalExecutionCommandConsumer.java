@@ -11,6 +11,7 @@ import com.helloai.core.agent.runtime.AgentRuntime;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.shared.event.ExecutionCommandCreatedEvent;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
+import com.helloai.core.agent.service.AgentMcpServerService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
@@ -54,6 +55,8 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
     private final TaskTimelineService taskTimelineService;
     private final SubTaskService subTaskService;
     private final AgentService agentService;
+    /** Phase 1 Step 2：启用工具为 agent 域数据（agent_mcp_server），消费侧 agent 域内直读注入 ctx.tools。 */
+    private final AgentMcpServerService agentMcpServerService;
 
     /**
      * Runtime 实现列表（Phase 0 C3 双轨）：v2-enabled 已固化 true（Step 6），
@@ -155,6 +158,13 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
             // （创建方与 MQ 反序列化均已规范化），这里仅保留防御
             List<String> skills = command.getRequiredSkills() != null
                     ? command.getRequiredSkills() : Collections.emptyList();
+            // Phase 1 Step 2：AgentContext.tools 显式供电——启用工具为 agent 域数据
+            // （agent_mcp_server），消费侧 agent 域内直读注入（与 skills 的 task 域装箱
+            // 不同，无 §6 跨域问题）；getEnabledTools 恒非 null，此处仅防御
+            List<String> tools = agentMcpServerService.getEnabledTools(command.getAgentId());
+            if (tools == null) {
+                tools = Collections.emptyList();
+            }
             result = agentRuntimes.get(0).execute(AgentContext.builder()
                     .runId(AgentEventContextResolver.resolveRunId(subTask.getTaskId()))
                     .taskId(subTask.getTaskId())
@@ -163,6 +173,7 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
                     .step(0)
                     .agentId(command.getAgentId())
                     .skills(skills)
+                    .tools(tools)
                     .build());
         } catch (Exception e) {
             // 契约承诺失败以 status 表达不抛异常；此处防御未来 Runtime 实现的违约实现

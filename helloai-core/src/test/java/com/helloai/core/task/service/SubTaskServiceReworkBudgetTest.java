@@ -10,6 +10,7 @@ import com.helloai.core.agent.service.AgentOutboxService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConcurrencyQuotaService;
 import com.helloai.core.agent.service.HeartbeatService;
+import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.port.ReviewPort;
@@ -72,6 +73,8 @@ class SubTaskServiceReworkBudgetTest {
     @Mock private ObjectProvider<TaskService> taskServiceProvider;
     @Mock private AgentEventRecorder agentEventRecorder;
     @Mock private SubTaskMapper subTaskMapper;
+    // Phase 1 Step 3：执行会话服务（rework 用例不触达，仅防 NPE）
+    @Mock private AgentSessionService agentSessionService;
 
     private AgentDispatchProperties dispatchProps;
     private SubTaskService subTaskService;
@@ -84,7 +87,7 @@ class SubTaskServiceReworkBudgetTest {
                 heartbeatService, reviewPort, implicitScoreCalculator,
                 rewardService, applicationEventPublisher, taskTimelineService,
                 dispatchProps, concurrencyQuotaService,
-                new WatchdogProperties(), attachmentServiceProvider, taskServiceProvider, agentEventRecorder,
+                new WatchdogProperties(), agentSessionService, attachmentServiceProvider, taskServiceProvider, agentEventRecorder,
                 subTaskMapper));
         doReturn(true).when(subTaskService).updateById(any(SubTask.class));
         // 懒解析 bean：附件失效 / 执行者通知路径触达时返回 mock，防 NPE

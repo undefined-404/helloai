@@ -47,11 +47,13 @@ public class LegacyExecutorAdapter implements AgentRuntime {
 
         // Phase 1 Step 1 fix（LOG-20260904-009）：requiredSkills 由上下文透传
         // （消费侧已从命令装箱，ctx.skills 恒非 null 由 AgentContext 保证）
+        // Phase 1 Step 2：tools 同由上下文透传（消费侧 agent 域直读注入，ctx.tools 恒非 null）
         ExecutionCommand command = ExecutionCommand.builder()
                 .subTaskId(ctx.getSubTaskId())
                 .agentId(ctx.getAgentId())
                 .trigger(TRIGGER_AGENT_RUNTIME)
                 .requiredSkills(ctx.getSkills())
+                .tools(ctx.getTools())
                 .build();
 
         try {

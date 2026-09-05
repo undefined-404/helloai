@@ -44,6 +44,9 @@ import com.helloai.core.task.service.TaskTimelineService;
 import com.helloai.core.task.service.TaskRunningSpecService;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
+import com.helloai.core.agent.session.service.AgentSessionService;
+import com.helloai.core.agent.tool.ToolDefinition;
+import com.helloai.core.agent.tool.ToolRegistry;
 
 /**
  * 子任务执行服务。
@@ -97,6 +100,10 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
     private final AgentQualityProfileService agentQualityProfileService;
     /** Phase 0 B2：事件记录器（Turn/Step 级埋点；事件 write-only，失败仅告警不阻断执行链）。 */
     private final AgentEventRecorder agentEventRecorder;
+    /** Phase 1 Step 2：工具注册表（按启用工具名解析命中的工具元数据，供 TOOL_RESOLVED 埋点）。 */
+    private final ToolRegistry toolRegistry;
+    /** Phase 1 Step 3：执行会话服务（执行快照/中断点/恢复上下文；best-effort 不阻断执行链）。 */
+    private final AgentSessionService agentSessionService;
 
     // #region debug-point redispatch-stuck-blocked
     private static final ObjectMapper DBG_MAPPER = new ObjectMapper();
@@ -213,7 +220,8 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
 
         try {
             // Phase 1 Step 1 fix（LOG-20260904-009）：requiredSkills 随命令装箱透传执行侧
-            AgentResult result = executeOnce(subTask, agent, command.getRequiredSkills());
+            // Phase 1 Step 2：tools 同由命令透传（消费侧 agent 域直读注入）
+            AgentResult result = executeOnce(subTask, agent, command.getRequiredSkills(), command.getTools());
             executionResultHandler.handleSuccess(command.getSubTaskId(), command.getAgentId(), result);
             return result;
         } catch (Exception e) {
@@ -232,11 +240,15 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
      * 属 task 域数据，由执行命令创建方装箱并沿命令链路透传，本侧不再反向查询 task
      * （§6 依赖方向红线）；null 由 resolve 的 best-effort 防御兜底为空。</p>
      *
+     * <p>Phase 1 Step 2：tools 入参——执行时可用工具名清单，由消费侧 agent 域直读
+     * （agent_mcp_server）并经命令链路透传（与 requiredSkills 的 task 域装箱路径不同）；
+     * null 兜底为空，仅用于 ToolRegistry 解析与 TOOL_RESOLVED 埋点，不改动 Prompt 装配。</p>
+     *
      * <p>设计参考 §3.1 调度分离：执行层只负责消费命令 + 执行 + 回传原始结果，
      * 不再携带状态机推进与回写职责，让 {@link LocalExecutionCommandConsumer}
      * 或未来 MQ/DB poller 消费者统一拿到「调度 + 回写」两端能力。</p>
      */
-    public AgentResult executeOnce(SubTask subTask, Agent agent, List<String> requiredSkills) {
+    public AgentResult executeOnce(SubTask subTask, Agent agent, List<String> requiredSkills, List<String> tools) {
         Long subTaskId = subTask.getId();
 
         if (subTask.getStatus() == SubTaskStatus.DONE || subTask.getStatus() == SubTaskStatus.CANCELLED) {
@@ -296,12 +308,38 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
                 AgentEventType.SKILL_RESOLVED, agent.getId(),
                 safeMap("requiredSkills", resolved.requiredSkills(),
                         "resolvedSpecs", resolved.matchedLabels()));
+        // Phase 1 Step 2：TOOL_RESOLVED（step=6，工具解析完成恒发；与 SKILL_RESOLVED 对称，
+        // payload 含 tools 启用清单 + resolvedTools 命中元数据 name/description；
+        // ToolDefinition 构造器已归一化 name/description 非 null，Map.of 安全）
+        List<String> enabledTools = tools != null ? tools : List.of();
+        List<ToolDefinition> resolvedTools = toolRegistry.resolve(enabledTools);
+        if (resolvedTools == null) {
+            // 契约承诺 resolve 恒非 null（best-effort 返回空列表）；此处防御非 best-effort 替换实现
+            resolvedTools = List.of();
+        }
+        recordEventSafely(AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
+                subTask.getTaskId(), subTaskId, runTurn, 6,
+                AgentEventType.TOOL_RESOLVED, agent.getId(),
+                safeMap("tools", enabledTools,
+                        "resolvedTools", resolvedTools.stream()
+                                .map(td -> Map.of("name", td.name(), "description", td.description()))
+                                .toList()));
         // Phase 0 B2：CONTEXT_BUILT（Turn 内上下文装配完成，step=2）
         recordEventSafely(AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
                 subTask.getTaskId(), subTaskId, runTurn, 2,
                 AgentEventType.CONTEXT_BUILT, agent.getId(),
                 safeMap("promptChars", task.getUserPrompt() != null ? task.getUserPrompt().length() : 0,
                         "depCount", dependencySection.depCount));
+
+        // Phase 1 Step 3：执行会话开始（ACTIVE，step=2=上下文装配完成/LLM 前；快照承载恢复
+        // 上下文装配事实，供租约回收/重派识别中断点；best-effort 不阻断执行链）
+        agentSessionService.start(subTask.getTaskId(), subTaskId, agent.getId(), runTurn, 2,
+                safeMap("agentId", agent.getId(),
+                        "skills", requiredSkills != null ? requiredSkills : List.of(),
+                        "tools", enabledTools,
+                        "depCount", dependencySection.depCount,
+                        "loadedCount", dependencySection.loadedCount,
+                        "truncatedCount", dependencySection.truncatedCount));
 
         dbg("sub_task_execute_before_platform", safeMap(
                 "subTaskId", subTaskId,
@@ -343,6 +381,8 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
                 safeMap("success", result.isSuccess(),
                         "finishReason", result.getFinishReason(),
                         "tokens", result.getTokenUsage()));
+        // Phase 1 Step 3：执行会话推进中断点（step=4=LLM 调用完成，进入结果回写；best-effort）
+        agentSessionService.advance(subTaskId, agent.getId(), runTurn, 4);
         taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_llm_call_end",
                 AgentRole.EXECUTOR, agent.getId(),
                 safeMap("agentId", agent.getId(), "success", result.isSuccess(),

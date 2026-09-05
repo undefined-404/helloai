@@ -39,7 +39,7 @@ class LegacyExecutorAdapterTest {
     }
 
     @Test
-    @DisplayName("成功委托：executeCommand 成功 → SUCCESS + output 透传 + command 携带 subTaskId/agentId/trigger/requiredSkills")
+    @DisplayName("成功委托：executeCommand 成功 → SUCCESS + output 透传 + command 携带 subTaskId/agentId/trigger/requiredSkills/tools")
     void shouldDelegateToExecuteCommandAndMapSuccess() {
         when(subTaskExecutionService.executeCommand(anyCommand())).thenReturn(AgentResult.success("done", "stop", "ApiKeyAgentExecutor", 12));
 
@@ -55,6 +55,8 @@ class LegacyExecutorAdapterTest {
         assertThat(captor.getValue().getTrigger()).isEqualTo(LegacyExecutorAdapter.TRIGGER_AGENT_RUNTIME);
         // Phase 1 Step 1 fix：requiredSkills 由 AgentContext.skills 透传（消费侧装箱，本层不反向查询）
         assertThat(captor.getValue().getRequiredSkills()).isEqualTo(List.of("eng-code-review"));
+        // Phase 1 Step 2：tools 由 AgentContext.tools 透传（消费侧 agent 域直读注入后随命令重建透传）
+        assertThat(captor.getValue().getTools()).isEqualTo(List.of("pullTasks"));
     }
 
     @Test
@@ -98,6 +100,7 @@ class LegacyExecutorAdapterTest {
                 .step(0)
                 .agentId(agentId)
                 .skills(List.of("eng-code-review"))
+                .tools(List.of("pullTasks"))
                 .build();
     }
 

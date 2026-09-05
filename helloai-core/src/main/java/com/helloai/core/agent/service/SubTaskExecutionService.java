@@ -29,8 +29,12 @@ public interface SubTaskExecutionService {
      * <p>Phase 1 Step 1 fix（LOG-20260904-009）：requiredSkills 由调用方装箱传入——
      * 执行侧不再反向查询 task（§6 依赖方向红线），由 {@code ExecutionCommand.requiredSkills}
      * 经执行命令链路透传到本参数。</p>
+     *
+     * <p>Phase 1 Step 2：tools（执行时可用工具名清单）由消费侧 agent 域直读注入并经
+     * {@code ExecutionCommand.tools} 透传到本参数——工具是 agent 域数据，与 requiredSkills
+     * 的 task 域装箱路径不同。</p>
      */
-    AgentResult executeOnce(SubTask subTask, Agent agent, List<String> requiredSkills);
+    AgentResult executeOnce(SubTask subTask, Agent agent, List<String> requiredSkills, List<String> tools);
 
     /**
      * 子任务状态进入指定状态时按需启动执行（幂等，仅未执行过且状态匹配时触发）。

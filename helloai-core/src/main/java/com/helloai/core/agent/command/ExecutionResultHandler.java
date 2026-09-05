@@ -11,6 +11,7 @@ import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.output.ExecutionOutputParser;
 import com.helloai.core.agent.output.ParsedOutput;
 import com.helloai.core.agent.quality.ExecutorDoneIssuesBackfiller;
+import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.shared.event.SubTaskSubmittedForReviewEvent;
 import com.helloai.core.agent.service.ExecutionArtifactService;
@@ -61,6 +62,8 @@ public class ExecutionResultHandler {
     private final ExecutorDoneIssuesBackfiller executorDoneIssuesBackfiller;
     /** Phase 0 B2：事件记录器（AGENT_COMPLETED 埋点；事件 write-only，失败仅告警不阻断回写）。 */
     private final AgentEventRecorder agentEventRecorder;
+    /** Phase 1 Step 3：执行会话服务（终态 COMPLETED/FAILED；best-effort 不阻断回写）。 */
+    private final AgentSessionService agentSessionService;
 
     @Transactional(rollbackFor = Exception.class)
     public void handleSuccess(Long subTaskId, Long agentId, AgentResult result) {
@@ -225,6 +228,9 @@ public class ExecutionResultHandler {
 
         if (report.isSuccess()) {
             subTaskService.submit(report.getSubTaskId());
+            // Phase 1 Step 3：执行会话终态 COMPLETED（best-effort 不阻断回写）
+            agentSessionService.complete(report.getSubTaskId(), report.getAgentId(),
+                    AgentEventContextResolver.resolveTurn(subTask));
             taskTimelineService.recordEvent(
                     subTask.getTaskId(),
                     report.getSubTaskId(),
@@ -294,6 +300,9 @@ public class ExecutionResultHandler {
             }
         } else {
             subTaskService.block(report.getSubTaskId());
+            // Phase 1 Step 3：执行会话终态 FAILED（error 摘要；best-effort 不阻断回写）
+            agentSessionService.fail(report.getSubTaskId(), report.getAgentId(),
+                    AgentEventContextResolver.resolveTurn(subTask), report.getError());
             taskTimelineService.recordEvent(
                     subTask.getTaskId(),
                     report.getSubTaskId(),
