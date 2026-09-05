@@ -221,7 +221,9 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
         try {
             // Phase 1 Step 1 fix（LOG-20260904-009）：requiredSkills 随命令装箱透传执行侧
             // Phase 1 Step 2：tools 同由命令透传（消费侧 agent 域直读注入）
-            AgentResult result = executeOnce(subTask, agent, command.getRequiredSkills(), command.getTools());
+            // Phase 1 Step 4：environment 同由命令透传（消费侧 agent 域解析注入）
+            AgentResult result = executeOnce(subTask, agent, command.getRequiredSkills(), command.getTools(),
+                    command.getEnvironment());
             executionResultHandler.handleSuccess(command.getSubTaskId(), command.getAgentId(), result);
             return result;
         } catch (Exception e) {
@@ -244,11 +246,16 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
      * （agent_mcp_server）并经命令链路透传（与 requiredSkills 的 task 域装箱路径不同）；
      * null 兜底为空，仅用于 ToolRegistry 解析与 TOOL_RESOLVED 埋点，不改动 Prompt 装配。</p>
      *
+     * <p>Phase 1 Step 4：environment 入参——执行环境标识（remote-agent / local-process），
+     * 由消费侧 agent 域按 accessType 解析并经命令链路透传；仅用于 ENVIRONMENT_RESOLVED
+     * 埋点与会话快照，未解析为 null（按事实记录，不阻断执行链）。</p>
+     *
      * <p>设计参考 §3.1 调度分离：执行层只负责消费命令 + 执行 + 回传原始结果，
      * 不再携带状态机推进与回写职责，让 {@link LocalExecutionCommandConsumer}
      * 或未来 MQ/DB poller 消费者统一拿到「调度 + 回写」两端能力。</p>
      */
-    public AgentResult executeOnce(SubTask subTask, Agent agent, List<String> requiredSkills, List<String> tools) {
+    public AgentResult executeOnce(SubTask subTask, Agent agent, List<String> requiredSkills, List<String> tools,
+                                   String environment) {
         Long subTaskId = subTask.getId();
 
         if (subTask.getStatus() == SubTaskStatus.DONE || subTask.getStatus() == SubTaskStatus.CANCELLED) {
@@ -324,6 +331,14 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
                         "resolvedTools", resolvedTools.stream()
                                 .map(td -> Map.of("name", td.name(), "description", td.description()))
                                 .toList()));
+        // Phase 1 Step 4：ENVIRONMENT_RESOLVED（step=7，执行环境解析完成恒发；与 SKILL/TOOL
+        // 对称，payload 含 environment 环境标识 + accessType 接入类型两键；未解析时
+        // environment 为 null——按事实记录，不阻断执行链）
+        recordEventSafely(AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
+                subTask.getTaskId(), subTaskId, runTurn, 7,
+                AgentEventType.ENVIRONMENT_RESOLVED, agent.getId(),
+                safeMap("environment", environment,
+                        "accessType", agent.getAccessType() != null ? agent.getAccessType().name() : null));
         // Phase 0 B2：CONTEXT_BUILT（Turn 内上下文装配完成，step=2）
         recordEventSafely(AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
                 subTask.getTaskId(), subTaskId, runTurn, 2,
@@ -337,6 +352,7 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
                 safeMap("agentId", agent.getId(),
                         "skills", requiredSkills != null ? requiredSkills : List.of(),
                         "tools", enabledTools,
+                        "environment", environment,
                         "depCount", dependencySection.depCount,
                         "loadedCount", dependencySection.loadedCount,
                         "truncatedCount", dependencySection.truncatedCount));

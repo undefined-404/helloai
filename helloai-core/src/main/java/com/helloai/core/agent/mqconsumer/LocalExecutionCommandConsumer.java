@@ -8,6 +8,8 @@ import com.helloai.core.agent.event.AgentEventContextResolver;
 import com.helloai.core.agent.runtime.AgentContext;
 import com.helloai.core.agent.runtime.AgentExecutionResult;
 import com.helloai.core.agent.runtime.AgentRuntime;
+import com.helloai.core.agent.runtime.ExecutionEnvironment;
+import com.helloai.core.agent.runtime.ExecutionEnvironmentProvider;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.shared.event.ExecutionCommandCreatedEvent;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
@@ -57,6 +59,8 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
     private final AgentService agentService;
     /** Phase 1 Step 2：启用工具为 agent 域数据（agent_mcp_server），消费侧 agent 域内直读注入 ctx.tools。 */
     private final AgentMcpServerService agentMcpServerService;
+    /** Phase 1 Step 4：执行环境为 agent 域数据（agent.accessType），消费侧 agent 域内解析注入 ctx.environment。 */
+    private final ExecutionEnvironmentProvider executionEnvironmentProvider;
 
     /**
      * Runtime 实现列表（Phase 0 C3 双轨）：v2-enabled 已固化 true（Step 6），
@@ -165,6 +169,10 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
             if (tools == null) {
                 tools = Collections.emptyList();
             }
+            // Phase 1 Step 4：AgentContext.environment 显式供电——执行环境为 agent 域数据
+            // （agent.accessType 随命令透传），消费侧 agent 域内解析注入（与 tools 同路径，
+            // 无 §6 跨域问题）；accessType 为 null 或无命中时保持 null（Phase 0 语义兼容）
+            ExecutionEnvironment environment = executionEnvironmentProvider.resolve(command.getAccessType());
             result = agentRuntimes.get(0).execute(AgentContext.builder()
                     .runId(AgentEventContextResolver.resolveRunId(subTask.getTaskId()))
                     .taskId(subTask.getTaskId())
@@ -174,6 +182,7 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
                     .agentId(command.getAgentId())
                     .skills(skills)
                     .tools(tools)
+                    .environment(environment)
                     .build());
         } catch (Exception e) {
             // 契约承诺失败以 status 表达不抛异常；此处防御未来 Runtime 实现的违约实现

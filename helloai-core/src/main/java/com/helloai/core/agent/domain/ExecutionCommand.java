@@ -54,4 +54,13 @@ public class ExecutionCommand {
      */
     @Builder.Default
     List<String> tools = List.of();
+
+    /**
+     * 执行环境标识（Phase 1 Step 4：remote-agent / local-process）：agent 域消费侧
+     * 经 {@code ExecutionEnvironmentProvider.resolve(agent.accessType)} 解析后随
+     * {@code AgentContext.environment} 透传（与 tools 同为 agent 域数据直读路径，无 §6 跨域
+     * 问题；取 {@code ExecutionEnvironment.name()} 存 String，MQ/Outbox 序列化安全）；
+     * 未解析时为 null（消费端 ENVIRONMENT_RESOLVED 埋点按 null 事实记录，不阻断执行链）。
+     */
+    String environment;
 }

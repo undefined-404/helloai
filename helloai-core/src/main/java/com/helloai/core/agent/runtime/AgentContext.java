@@ -52,8 +52,10 @@ public class AgentContext {
     AgentEventRecorder eventRecorder;
 
     /**
-     * 执行环境（坑 4 预留）：Phase 0 不实现任何 Sandbox，恒为 null；
-     * Phase 1 提供 RemoteAgentEnvironment / LocalProcessEnvironment 实现后注入。
+     * 执行环境（坑 4 预留；Phase 1 Step 4 起显式供电）：由消费侧经
+     * {@code ExecutionEnvironmentProvider.resolve(agent.accessType)} 解析注入
+     * （RemoteAgentEnvironment / LocalProcessEnvironment，agent 域数据直读）；
+     * accessType 为 null 或无命中时保持 null（Phase 0 语义兼容，调用方不得依赖非 null）。
      */
     ExecutionEnvironment environment;
 }

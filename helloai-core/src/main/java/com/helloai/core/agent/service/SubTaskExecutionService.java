@@ -33,8 +33,13 @@ public interface SubTaskExecutionService {
      * <p>Phase 1 Step 2：tools（执行时可用工具名清单）由消费侧 agent 域直读注入并经
      * {@code ExecutionCommand.tools} 透传到本参数——工具是 agent 域数据，与 requiredSkills
      * 的 task 域装箱路径不同。</p>
+     *
+     * <p>Phase 1 Step 4：environment（执行环境标识）由消费侧 agent 域按 accessType 解析
+     * 并经 {@code ExecutionCommand.environment} 透传到本参数——仅用于 ENVIRONMENT_RESOLVED
+     * 埋点与会话快照，未解析为 null（按事实记录，不阻断执行链）。</p>
      */
-    AgentResult executeOnce(SubTask subTask, Agent agent, List<String> requiredSkills, List<String> tools);
+    AgentResult executeOnce(SubTask subTask, Agent agent, List<String> requiredSkills, List<String> tools,
+                            String environment);
 
     /**
      * 子任务状态进入指定状态时按需启动执行（幂等，仅未执行过且状态匹配时触发）。

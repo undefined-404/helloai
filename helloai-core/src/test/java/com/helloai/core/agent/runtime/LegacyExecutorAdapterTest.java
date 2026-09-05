@@ -39,7 +39,7 @@ class LegacyExecutorAdapterTest {
     }
 
     @Test
-    @DisplayName("成功委托：executeCommand 成功 → SUCCESS + output 透传 + command 携带 subTaskId/agentId/trigger/requiredSkills/tools")
+    @DisplayName("成功委托：executeCommand 成功 → SUCCESS + output 透传 + command 携带 subTaskId/agentId/trigger/requiredSkills/tools/environment")
     void shouldDelegateToExecuteCommandAndMapSuccess() {
         when(subTaskExecutionService.executeCommand(anyCommand())).thenReturn(AgentResult.success("done", "stop", "ApiKeyAgentExecutor", 12));
 
@@ -57,6 +57,8 @@ class LegacyExecutorAdapterTest {
         assertThat(captor.getValue().getRequiredSkills()).isEqualTo(List.of("eng-code-review"));
         // Phase 1 Step 2：tools 由 AgentContext.tools 透传（消费侧 agent 域直读注入后随命令重建透传）
         assertThat(captor.getValue().getTools()).isEqualTo(List.of("pullTasks"));
+        // Phase 1 Step 4：environment 由 AgentContext.environment 透传（消费侧 agent 域解析后随命令重建透传）
+        assertThat(captor.getValue().getEnvironment()).isEqualTo(LocalProcessEnvironment.NAME);
     }
 
     @Test
@@ -101,6 +103,7 @@ class LegacyExecutorAdapterTest {
                 .agentId(agentId)
                 .skills(List.of("eng-code-review"))
                 .tools(List.of("pullTasks"))
+                .environment(new LocalProcessEnvironment())
                 .build();
     }
 

@@ -130,7 +130,7 @@ class SubTaskExecutionServiceTest {
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenReturn(ok);
 
-            AgentResult result = subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of());
+            AgentResult result = subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
 
             assertThat(result).isSameAs(ok);
             // 纯执行：不应调用状态推进、不应回写
@@ -150,7 +150,7 @@ class SubTaskExecutionServiceTest {
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenThrow(root);
 
-            assertThatThrownBy(() -> subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of()))
+            assertThatThrownBy(() -> subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null))
                     .isSameAs(root);
 
             // 纯执行：异常直接传播，不应回写
@@ -164,7 +164,7 @@ class SubTaskExecutionServiceTest {
             subTask.setStatus(SubTaskStatus.DONE);
             Agent agent = agent();
 
-            assertThatThrownBy(() -> subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of()))
+            assertThatThrownBy(() -> subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null))
                     .isInstanceOf(BizException.class)
                     .hasMessageContaining("不可执行");
         }
@@ -192,7 +192,7 @@ class SubTaskExecutionServiceTest {
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenReturn(AgentResult.builder().success(true).build());
 
-            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of());
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
 
             // 过滤 executeOnce 链路上的 5 次 recordEventSafely 调用，只断言 SKILL_RESOLVED 埋点（step=5 + type=SKILL_RESOLVED + payload 两键）
             ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
@@ -220,7 +220,7 @@ class SubTaskExecutionServiceTest {
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenReturn(AgentResult.builder().success(true).build());
 
-            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of());
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
 
             // 只断言 SKILL_RESOLVED 埋点（requiredSkills 为空时仍恒发，payload 两键值为空数组）
             ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
@@ -247,7 +247,7 @@ class SubTaskExecutionServiceTest {
                     .thenReturn(AgentResult.builder().success(true).build());
 
             // 不应抛 NPE
-            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of());
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
 
             // 仍埋 SKILL_RESOLVED（payload 两键恒在，值为空数组）
             ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
@@ -281,7 +281,7 @@ class SubTaskExecutionServiceTest {
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenReturn(AgentResult.builder().success(true).build());
 
-            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of("pullTasks", "submitResult"));
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of("pullTasks", "submitResult"), "local-process");
 
             // 过滤 executeOnce 链路上的 recordEventSafely 调用，只断言 TOOL_RESOLVED 埋点（step=6 + type + payload 两键）
             ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
@@ -307,7 +307,7 @@ class SubTaskExecutionServiceTest {
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenReturn(AgentResult.builder().success(true).build());
 
-            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of());
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
 
             ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
             verify(agentEventRecorder, atLeastOnce()).record(
@@ -332,7 +332,7 @@ class SubTaskExecutionServiceTest {
                     .thenReturn(AgentResult.builder().success(true).build());
 
             // 不应抛 NPE
-            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of("pullTasks"));
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of("pullTasks"), null);
 
             ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
             verify(agentEventRecorder, atLeastOnce()).record(
@@ -342,6 +342,79 @@ class SubTaskExecutionServiceTest {
             assertThat(payloadCaptor.getValue())
                     .containsEntry("tools", List.of("pullTasks"))
                     .containsEntry("resolvedTools", List.of());
+        }
+    }
+
+    @Nested
+    @DisplayName("executeOnce — ENVIRONMENT_RESOLVED 埋点（Phase 1 Step 4）")
+    class EnvironmentResolved {
+
+        @Test
+        @DisplayName("should record ENVIRONMENT_RESOLVED step=7 with environment + accessType payload")
+        void shouldRecordEnvironmentResolvedStep7WithBothPayloadFields() {
+            // 正常路径：环境已解析（remote-agent）+ agent 带 accessType（CLI_CLIENT）
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            Agent agent = agent();
+            agent.setAccessType(com.helloai.common.constant.AgentAccessType.CLI_CLIENT);
+
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), "remote-agent");
+
+            // 过滤 executeOnce 链路上的 recordEventSafely 调用，只断言 ENVIRONMENT_RESOLVED 埋点（step=7 + type + payload 两键）
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(agentEventRecorder, atLeastOnce()).record(
+                    anyString(), any(), any(), anyInt(),
+                    eq(7), eq(AgentEventType.ENVIRONMENT_RESOLVED), any(),
+                    payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue())
+                    .containsEntry("environment", "remote-agent")
+                    .containsEntry("accessType", "CLI_CLIENT");
+        }
+
+        @Test
+        @DisplayName("should record ENVIRONMENT_RESOLVED step=7 even when environment unresolved (恒发纪律，null 事实)")
+        void shouldRecordEnvironmentResolvedEvenWhenNull() {
+            // 未解析（null）+ accessType 缺失：恒发埋点，payload 两键按事实记录为 null
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            Agent agent = agent();
+
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
+
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(agentEventRecorder, atLeastOnce()).record(
+                    anyString(), any(), any(), anyInt(),
+                    eq(7), eq(AgentEventType.ENVIRONMENT_RESOLVED), any(),
+                    payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue())
+                    .containsEntry("environment", null)
+                    .containsEntry("accessType", null);
+        }
+
+        @Test
+        @DisplayName("should carry environment into session snapshot (恢复上下文含执行环境事实)")
+        void shouldCarryEnvironmentIntoSessionSnapshot() {
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            Agent agent = agent();
+
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), "local-process");
+
+            org.mockito.ArgumentCaptor<Map<String, Object>> snapshotCaptor =
+                    org.mockito.ArgumentCaptor.forClass(Map.class);
+            verify(agentSessionService).start(eq(33L), eq(22L), eq(44L), eq(1), eq(2),
+                    snapshotCaptor.capture());
+            assertThat(snapshotCaptor.getValue())
+                    .containsEntry("environment", "local-process");
         }
     }
 
@@ -359,7 +432,7 @@ class SubTaskExecutionServiceTest {
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenReturn(AgentResult.builder().success(true).build());
 
-            subTaskExecutionService.executeOnce(subTask, agent, List.of("eng-code-review"), List.of("pullTasks"));
+            subTaskExecutionService.executeOnce(subTask, agent, List.of("eng-code-review"), List.of("pullTasks"), null);
 
             // 会话开始：step=2（上下文装配完成/LLM 前），快照承载恢复上下文装配事实
             org.mockito.ArgumentCaptor<Map<String, Object>> snapshotCaptor =
@@ -384,7 +457,7 @@ class SubTaskExecutionServiceTest {
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenReturn(AgentResult.builder().success(true).build());
 
-            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of());
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
 
             org.mockito.ArgumentCaptor<Map<String, Object>> snapshotCaptor =
                     org.mockito.ArgumentCaptor.forClass(Map.class);
@@ -473,7 +546,7 @@ class SubTaskExecutionServiceTest {
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenReturn(AgentResult.builder().success(true).build());
 
-            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of());
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
 
             // 无依赖：零注入，不查前置、不查附件
             verify(subTaskService, never()).listByIds(any());
@@ -512,7 +585,7 @@ class SubTaskExecutionServiceTest {
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenReturn(AgentResult.builder().success(true).build());
 
-            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of());
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
 
             ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
             verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
@@ -563,7 +636,7 @@ class SubTaskExecutionServiceTest {
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenReturn(AgentResult.builder().success(true).build());
 
-            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of());
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
 
             ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
             verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
@@ -606,7 +679,7 @@ class SubTaskExecutionServiceTest {
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenReturn(AgentResult.builder().success(true).build());
 
-            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of());
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
 
             ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
             verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
@@ -639,7 +712,7 @@ class SubTaskExecutionServiceTest {
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenReturn(AgentResult.builder().success(true).build());
 
-            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of());
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
 
             ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
             verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
@@ -664,7 +737,7 @@ class SubTaskExecutionServiceTest {
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenReturn(AgentResult.builder().success(true).build());
 
-            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of());
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
 
             ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
             verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
@@ -690,7 +763,7 @@ class SubTaskExecutionServiceTest {
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenReturn(AgentResult.builder().success(true).build());
 
-            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of());
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
 
             ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
             verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
@@ -716,7 +789,7 @@ class SubTaskExecutionServiceTest {
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenReturn(AgentResult.builder().success(true).build());
 
-            AgentResult result = subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of());
+            AgentResult result = subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
 
             assertThat(result.isSuccess()).isTrue();
             ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
@@ -792,7 +865,7 @@ class SubTaskExecutionServiceTest {
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenReturn(AgentResult.builder().success(true).build());
 
-            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of());
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
 
             verify(conversationService).addMessage(
                     eq(22L), eq(44L),
@@ -811,7 +884,7 @@ class SubTaskExecutionServiceTest {
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenThrow(new RuntimeException("llm down"));
 
-            assertThatThrownBy(() -> subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of()))
+            assertThatThrownBy(() -> subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null))
                     .hasMessage("llm down");
 
             // 失败路径：prompt 仍落库（先 addMessage 后 executeSync）
@@ -840,7 +913,7 @@ class SubTaskExecutionServiceTest {
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenReturn(AgentResult.builder().success(true).build());
 
-            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of());
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
 
             ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
             verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
@@ -868,7 +941,7 @@ class SubTaskExecutionServiceTest {
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenReturn(AgentResult.builder().success(true).build());
 
-            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of());
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
 
             ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
             verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
@@ -889,7 +962,7 @@ class SubTaskExecutionServiceTest {
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenReturn(AgentResult.builder().success(true).build());
 
-            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of());
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
 
             ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
             verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
@@ -919,7 +992,7 @@ class SubTaskExecutionServiceTest {
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenReturn(AgentResult.builder().success(true).build());
 
-            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of());
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
 
             ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
             verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
@@ -945,7 +1018,7 @@ class SubTaskExecutionServiceTest {
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenReturn(AgentResult.builder().success(true).build());
 
-            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of());
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
 
             ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
             verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
@@ -968,7 +1041,7 @@ class SubTaskExecutionServiceTest {
             when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                     .thenReturn(AgentResult.builder().success(true).build());
 
-            AgentResult result = subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of());
+            AgentResult result = subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
 
             assertThat(result.isSuccess()).isTrue();
             ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);

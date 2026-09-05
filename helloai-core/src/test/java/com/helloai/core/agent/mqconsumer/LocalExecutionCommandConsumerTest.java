@@ -9,6 +9,8 @@ import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.runtime.AgentContext;
 import com.helloai.core.agent.runtime.AgentExecutionResult;
 import com.helloai.core.agent.runtime.AgentRuntime;
+import com.helloai.core.agent.runtime.ExecutionEnvironmentProvider;
+import com.helloai.core.agent.runtime.LocalProcessEnvironment;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.shared.event.ExecutionCommandCreatedEvent;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
@@ -55,6 +57,10 @@ class LocalExecutionCommandConsumerTest {
     @Mock
     private AgentMcpServerService agentMcpServerService;
 
+    /** Phase 1 Step 4：执行环境解析（agent.accessType），消费侧 agent 域解析注入 ctx.environment。 */
+    @Mock
+    private ExecutionEnvironmentProvider executionEnvironmentProvider;
+
     @Mock
     private AgentRuntime agentRuntime;
 
@@ -71,6 +77,7 @@ class LocalExecutionCommandConsumerTest {
             setAgentRuntime();
             SubTask subTask = subTask();
             Agent agent = agent();
+            agent.setAccessType(AgentAccessType.API_KEY_LLM);
 
             when(subTaskService.getById(22L)).thenReturn(subTask);
             when(agentService.getById(11L)).thenReturn(agent);
@@ -84,12 +91,16 @@ class LocalExecutionCommandConsumerTest {
             // Phase 1 Step 2：启用工具由消费侧 agent 域直读注入 ctx.tools
             when(agentMcpServerService.getEnabledTools(11L))
                     .thenReturn(List.of("pullTasks", "submitResult"));
+            // Phase 1 Step 4：执行环境由消费侧 agent 域按 accessType 解析注入 ctx.environment
+            when(executionEnvironmentProvider.resolve(AgentAccessType.API_KEY_LLM))
+                    .thenReturn(new LocalProcessEnvironment());
 
             localExecutionCommandConsumer.consume(baseCommand());
 
             // AgentContext 与 B2 埋点同源：run-{taskId}-1 / turn=1 / step=0
             // Phase 1 Step 1 fix：skills 断言——AgentContext.skills == command.requiredSkills（命令装箱透传）
             // Phase 1 Step 2：tools 断言——AgentContext.tools == getEnabledTools(agentId)（agent 域直读注入）
+            // Phase 1 Step 4：environment 断言——AgentContext.environment == resolve(agent.accessType)
             verify(agentRuntime).execute(argThat(ctx ->
                     ctx != null
                             && "run-33-1".equals(ctx.getRunId())
@@ -101,7 +112,9 @@ class LocalExecutionCommandConsumerTest {
                             && ctx.getSkills() != null
                             && ctx.getSkills().equals(List.of("eng-code-review", "eng-doc-standard"))
                             && ctx.getTools() != null
-                            && ctx.getTools().equals(List.of("pullTasks", "submitResult"))));
+                            && ctx.getTools().equals(List.of("pullTasks", "submitResult"))
+                            && ctx.getEnvironment() != null
+                            && "local-process".equals(ctx.getEnvironment().name())));
             // record CAS 由消费侧代理执行
             verify(agentExecutionRecordService).markRunning(44L);
             verify(agentExecutionRecordService).markSuccess(44L);

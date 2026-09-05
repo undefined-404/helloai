@@ -25,6 +25,7 @@ public enum AgentEventType {
     AGENT_STARTED("agent_started"),
     SKILL_RESOLVED("skill_resolved"),
     TOOL_RESOLVED("tool_resolved"),
+    ENVIRONMENT_RESOLVED("environment_resolved"),
     CONTEXT_BUILT("context_built"),
     TOOL_CALL_STARTED("tool_call_started"),
     TOOL_CALL_COMPLETED("tool_call_completed"),
