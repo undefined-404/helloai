@@ -1,7 +1,9 @@
 package com.helloai.core.agent.service.impl;
 
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
+import com.helloai.common.config.AgentInboxProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentInbox;
@@ -31,6 +33,8 @@ public class AgentInboxServiceImpl extends ServiceImpl<AgentInboxMapper, AgentIn
     private final ApplicationEventPublisher eventPublisher;
     // 直接注入 Mapper 而非 AgentService，避免 service 层依赖环
     private final AgentMapper agentMapper;
+    /** N-008 消息 TTL 单一来源（helloai.agent.inbox.expire-hours，默认 168h）。 */
+    private final AgentInboxProperties inboxProperties;
 
     /**
      * 向指定 Agent 投递收件箱消息。幂等。
@@ -62,6 +66,10 @@ public class AgentInboxServiceImpl extends ServiceImpl<AgentInboxMapper, AgentIn
         inbox.setIsRead(0);
         inbox.setIsArchived(0);
         inbox.setPriority(priority != null ? priority : "NORMAL");
+        // N-008 消息生命周期（Phase 2 A3）：落库即写 TTL。expireHours <= 0 视为关闭（留 NULL，存量语义）
+        if (inboxProperties.getExpireHours() > 0) {
+            inbox.setExpireTime(OffsetDateTime.now().plusHours(inboxProperties.getExpireHours()));
+        }
 
         try {
             save(inbox);
@@ -80,6 +88,9 @@ public class AgentInboxServiceImpl extends ServiceImpl<AgentInboxMapper, AgentIn
 
     /**
      * 查询 Agent 未读消息列表
+     *
+     * <p>N-008（Phase 2 A3）：过滤已过期消息（expire_time IS NULL OR &gt; now），
+     * 防清理任务周期窗口内投递过期消息；存量 NULL 消息行为不变。</p>
      */
     @Override
     public List<AgentInbox> getUnread(Long agentId, int limit) {
@@ -87,6 +98,8 @@ public class AgentInboxServiceImpl extends ServiceImpl<AgentInboxMapper, AgentIn
                 .eq(AgentInbox::getAgentId, agentId)
                 .eq(AgentInbox::getIsRead, 0)
                 .eq(AgentInbox::getIsArchived, 0)
+                .and(w -> w.isNull(AgentInbox::getExpireTime)
+                        .or().gt(AgentInbox::getExpireTime, OffsetDateTime.now()))
                 .orderByDesc(AgentInbox::getPriority)
                 .orderByDesc(AgentInbox::getCreateTime)
                 .last("LIMIT " + Math.min(limit, 500))
@@ -108,7 +121,7 @@ public class AgentInboxServiceImpl extends ServiceImpl<AgentInboxMapper, AgentIn
     }
 
     /**
-     * 未读消息数量
+     * 未读消息数量（与 {@link #getUnread} 同口径：过滤已过期）
      */
     @Override
     public long countUnread(Long agentId) {
@@ -116,6 +129,8 @@ public class AgentInboxServiceImpl extends ServiceImpl<AgentInboxMapper, AgentIn
                 .eq(AgentInbox::getAgentId, agentId)
                 .eq(AgentInbox::getIsRead, 0)
                 .eq(AgentInbox::getIsArchived, 0)
+                .and(w -> w.isNull(AgentInbox::getExpireTime)
+                        .or().gt(AgentInbox::getExpireTime, OffsetDateTime.now()))
                 .count();
     }
 
@@ -162,5 +177,36 @@ public class AgentInboxServiceImpl extends ServiceImpl<AgentInboxMapper, AgentIn
                 .eq(AgentInbox::getAgentId, agentId)
                 .set(AgentInbox::getIsArchived, 1)
                 .update();
+    }
+
+    /**
+     * 过期归档：expire_time 已过且未归档的消息批量软删（is_archived=1）。
+     *
+     * <p>先查后更（SELECT LIMIT + 按 id 集中 UPDATE，参照 {@code AgentDutyLeaseServiceImpl.expireLeases}
+     * 的批量模式）：PostgreSQL 不支持 {@code UPDATE ... LIMIT}，LIMIT 只能落在 SELECT 上；
+     * UPDATE 侧重验 is_archived=0，与并发手动归档天然无冲突（谁先归档谁生效）。</p>
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public int archiveExpired(int batchLimit) {
+        if (batchLimit <= 0) {
+            return 0;
+        }
+        List<Long> expiredIds = lambdaQuery()
+                .lt(AgentInbox::getExpireTime, OffsetDateTime.now())
+                .eq(AgentInbox::getIsArchived, 0)
+                .last("LIMIT " + Math.min(batchLimit, 1000))
+                .list()
+                .stream()
+                .map(AgentInbox::getId)
+                .toList();
+        if (expiredIds.isEmpty()) {
+            return 0;
+        }
+        return baseMapper.update(null,
+                Wrappers.<AgentInbox>lambdaUpdate()
+                        .in(AgentInbox::getId, expiredIds)
+                        .eq(AgentInbox::getIsArchived, 0)
+                        .set(AgentInbox::getIsArchived, 1));
     }
 }

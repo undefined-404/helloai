@@ -117,6 +117,14 @@ helloai:
       v2-enabled: true
       # Phase 0 C3 双轨灰度（Step 6 后代码不再读取，保留仅作文档语义；100 = 全量档已固化）。
       gray-percent: 100
+    # N-008 统一消息生命周期（Phase 2 A3）：收件箱消息 TTL 与过期归档。
+    # expire-hours：send 落库即写 expire_time（默认 7 天，远大于 ASSIGNED 10min 消费窗口，
+    # 只兜「Agent 长期不拉单」堆积）；InboxExpireCleanupTask 5min 一扫软删（is_archived=1）。
+    # 「超时未消费→重新分派」由子任务层承担（dispatch.assigned-timeout-minutes），
+    # 通知类载体不重派、不重试——统一口径见 doc/design/HelloAI_Phase2_A3_消息生命周期执行方案.md §3。
+    inbox:
+      expire-hours: 168
+      cleanup-enabled: true
   # 对话并发优化 A 项：active() 写节流窗口（毫秒，<=0 不节流）。
   # 每轮对话 LLM 前都会 active()，窗口内同一 Agent 只做一次完整双写，消除 DB 行锁排队与写放大。
   heartbeat:
