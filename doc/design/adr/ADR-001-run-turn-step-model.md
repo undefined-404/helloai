@@ -104,6 +104,8 @@ Run #1
 
   - `6`：`TOOL_RESOLVED`（Phase 1 Step 2 工具解析新增槽位，与 SKILL_RESOLVED 对称）；
 
+  - `7`：`ENVIRONMENT_RESOLVED`（Phase 1 Step 4 执行环境解析新增槽位，与 SKILL/TOOL 对称）；
+
   - **step 不承担时序职责**：事件顺序以 `create_time + id` 为准（append-only 单调），
     事件类型逻辑序以 §5.2 为准，二者与 step 数值不等价；
 
@@ -253,6 +255,39 @@ create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 ***
 
 ## 修订记录
+
+### R4（2026-09-05）：ENVIRONMENT_RESOLVED 新增槽位（Phase 1 Step 4 执行环境供电 + SandboxProvider 落位）
+
+**背景**：Phase 1 Step 4 把执行环境提升为 AgentRuntime 一等公民（`ExecutionEnvironment`
+抽象 + RemoteAgent / LocalProcess 两实现 + `ExecutionEnvironmentProvider` 解析注入
+`AgentContext.environment`，长期思路 P0-1 SandboxProvider 当期落位）。沿用「契约供电 +
+埋点 + 对账同步」三件套模式（Step 1 Skill / Step 2 Tool 同款），执行链新增
+`ENVIRONMENT_RESOLVED` 埋点。
+
+**决策**：`ENVIRONMENT_RESOLVED` 分配新槽位 **step=7**（与 `SKILL_RESOLVED`=5 /
+`TOOL_RESOLVED`=6 对称，同为「解析完成」语义；step 为事件类型槽位，不承担时序）。
+事实依据与 R1 同源：step 无唯一约束、消费方按 `create_time DESC, id DESC` 排序，
+无 step 数值断言。
+
+**伴生约束**（实现 `ENVIRONMENT_RESOLVED` 埋点时同一闭环完成，IN_PROGRESS 合法末条
+事件集均需加 `ENVIRONMENT_RESOLVED`，否则探针误报 MISMATCH）：
+
+- 对账契约同步（**6 处同构映射，必须同一次提交全部修改**）：
+  1. `EventReconciliationServiceImpl` 的 IN_PROGRESS 期望集合 + javadoc
+     「step 1-6 槽位」→「step 1-7 槽位」；
+  2. `verify-c3-events.ps1` P2 的 IN_PROGRESS 映射；
+  3. `verify-c3-events.sh` P2 的 IN_PROGRESS 映射（ps1 同构移植）；
+  4. `verify-c3-reconcile.ps1` 的 matched/mismatches 两处判定；
+  5. `verify-c3-reconcile.sh` 的 matched/mismatches 两处判定（ps1 同构移植）；
+- 埋点**恒发**（environment 未解析时 payload 两键按 null 事实记录），保持每个 Turn
+  事件骨架完整；
+- 埋点位置：`executeOnce`（`SubTaskExecutionServiceImpl`）内 tool 解析之后、
+  `CONTEXT_BUILT`（step=2）之前；payload 含 `environment`（环境标识 remote-agent /
+  local-process）+ `accessType`（接入类型，审计归因用）。
+
+**不做**：`AgentContext.environment` 仅作为契约输入 + 埋点观测 + session 快照事实，不改动
+Prompt 装配与路由行为（运行时行为零变化，与 Step 1/2 的「纯契约完备性」哲学一致）；
+DockerSandbox 推迟 P2、K8sSandbox 推迟 P3（执行方案坑 4 结论）。
 
 ### R3（2026-09-05）：TOOL_RESOLVED 新增槽位（Phase 1 Step 2 Tool 供电 + ToolRegistry）
 
