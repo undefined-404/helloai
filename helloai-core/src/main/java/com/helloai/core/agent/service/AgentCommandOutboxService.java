@@ -1,5 +1,6 @@
 package com.helloai.core.agent.service;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.entity.AgentCommandOutboxEvent;
@@ -65,4 +66,27 @@ public interface AgentCommandOutboxService extends IService<AgentCommandOutboxEv
      * SENT → FAILED 终态，与 {@link #markFailedFromSent} 共同覆盖"发送后失败"两路收尾。
      */
     void markFinalFailedFromSent(Long id, String error, int retryCount);
+
+    /**
+     * A4 S1：FAILED 行窗口分页（outbox 人工恢复的列表查询）。
+     *
+     * <p>仅返回 {@code status = FAILED} 且创建时间落在 {@code [from, to]} 窗口内的行，
+     * 按创建时间倒序；供运维挑选故障窗口后按 id 单条 {@link #requeueFailed(Long)}。</p>
+     *
+     * <p>由 Mapper {@code @Select} 显式 SQL 承接（窗口过滤 + 逻辑删除过滤），
+     * 不依赖 MyBatis-Plus lambda 缓存。</p>
+     */
+    IPage<AgentCommandOutboxEvent> listFailed(OffsetDateTime from, OffsetDateTime to, long page, long size);
+
+    /**
+     * A4 S1：把指定 FAILED 行重入 PENDING（outbox 人工恢复入口）。
+     *
+     * <p>CAS：仅 {@code status = FAILED} 行可重入；重入即重置投递计数
+     * （{@code retry_count = 0}、{@code next_retry_at = now}、清空 {@code errorMsg}），
+     * 由 {@code OutboxRelayTask} 下一轮扫描自然拾回，重新走完整投递链。</p>
+     *
+     * <p><b>fail-close</b>：影响 0 行（非 FAILED / 已确认 / 不存在）时抛
+     * {@link com.helloai.common.base.BizException}，不静默吞掉冲突。</p>
+     */
+    void requeueFailed(Long id);
 }

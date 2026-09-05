@@ -1,6 +1,7 @@
 package com.helloai.core.agent.mqconsumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.helloai.common.base.BizException;
 import com.helloai.common.config.MqExecutionCommandProperties;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.mq.config.RabbitMQConfig;
@@ -39,7 +40,9 @@ import java.util.Map;
  * <ol>
  *     <li>仅在 {@code helloai.mq.execution-command.consumer-enabled=true} 时生效，关闭后整个 Bean 不存在，不影响既有 POLLER / EVENT 主链路</li>
  *     <li>消息体为 {@link ExecutionCommandMqMessage} JSON；解析失败按 ACK 处理（写入死信也无意义）</li>
- *     <li>采用 MANUAL ACK：消费成功 → basicAck；消费失败 → basicNack(requeue=false) 走 DLX</li>
+ *     <li>采用 MANUAL ACK：消费成功 → basicAck；消费失败分类（A4 S3）：
+ *         {@link BizException}（含 cause 链）业务终态 → ACK 跳过；
+ *         其余技术异常 → basicNack(requeue=false) 走 DLX</li>
  *     <li>幂等由父类 {@link AbstractIdempotentConsumer#tryConsume} 提供 Redis + DB 双层去重</li>
  *     <li>执行链与现有主路径完全一致：本地消费链自身已带 CAS 防覆盖，MQ 路径不需要额外防重逻辑</li>
  * </ol>
@@ -121,9 +124,17 @@ public class MqExecutionCommandConsumer extends AbstractIdempotentConsumer imple
             processed = tryConsume(mqMessage.getEventId(), CONSUMER_NAME, mdcOf(mqMessage),
                     () -> consume(command));
         } catch (Exception e) {
-            log.error("MQ 执行命令消费失败: eventId={}, subTaskId={}, agentId={}",
-                    mqMessage.getEventId(), mqMessage.getSubTaskId(), mqMessage.getAgentId(), e);
-            processed = false;
+            if (isBusinessTerminal(e)) {
+                // A4 S3：业务终态失败分类——执行链已落失败/跳过，重投只会再次抛同错；
+                // ACK 跳过防 poison 死信噪音（区别于技术故障 NACK → DLX 等人工重放）
+                log.warn("MQ 执行命令业务终态失败，跳过(ACK): eventId={}, subTaskId={}, agentId={}",
+                        mqMessage.getEventId(), mqMessage.getSubTaskId(), mqMessage.getAgentId(), e);
+                processed = true;
+            } else {
+                log.error("MQ 执行命令消费技术失败，NACK(→ DLX): eventId={}, subTaskId={}, agentId={}",
+                        mqMessage.getEventId(), mqMessage.getSubTaskId(), mqMessage.getAgentId(), e);
+                processed = false;
+            }
         }
 
         if (processed) {
@@ -135,6 +146,22 @@ public class MqExecutionCommandConsumer extends AbstractIdempotentConsumer imple
             channel.basicNack(tag, false, false);
             log.warn("MQ 执行命令 NACK (→ DLX): eventId={}", mqMessage.getEventId());
         }
+    }
+
+    /**
+     * A4 S3：消费失败分类——{@link BizException}（含 cause 链命中）属业务终态
+     * （执行链已落失败/跳过，重投无意义，不再产生死信）；其余异常（DB/Redis 抖动、
+     * 装配意外等技术故障）NACK 直达 DLX，等待死信台账人工重放。
+     */
+    private boolean isBusinessTerminal(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof BizException) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     /**

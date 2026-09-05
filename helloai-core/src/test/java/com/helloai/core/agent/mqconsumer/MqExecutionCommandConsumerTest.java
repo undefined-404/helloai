@@ -1,6 +1,7 @@
 package com.helloai.core.agent.mqconsumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.helloai.common.base.BizException;
 import com.helloai.common.config.MqExecutionCommandProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.core.agent.domain.ExecutionCommand;
@@ -175,7 +176,7 @@ class MqExecutionCommandConsumerTest {
         }
 
         @Test
-        @DisplayName("委托抛异常 → NACK(requeue=false) → 走 DLX")
+        @DisplayName("委托抛技术异常（RuntimeException）→ NACK(requeue=false) → 走 DLX")
         void shouldNackWhenDelegateThrows() throws Exception {
             byte[] body = buildMessageBody("evt-bad", 11L, 22L, "API_KEY_LLM");
             when(amqpMessage.getBody()).thenReturn(body);
@@ -188,6 +189,38 @@ class MqExecutionCommandConsumerTest {
             verify(deduplicationService).markFailed("evt-bad");
             verify(channel).basicNack(eq(103L), eq(false), eq(false));
             verify(channel, never()).basicAck(anyLong(), any(Boolean.class));
+        }
+
+        @Test
+        @DisplayName("委托抛 BizException（业务终态）→ ACK 不 NACK（A4 S3 分类）")
+        void shouldAckWhenDelegateThrowsBizException() throws Exception {
+            byte[] body = buildMessageBody("evt-biz", 11L, 22L, "API_KEY_LLM");
+            when(amqpMessage.getBody()).thenReturn(body);
+            when(deduplicationService.isDuplicate("evt-biz")).thenReturn(false);
+            doThrow(new BizException("Agent 不存在"))
+                    .when(localDelegate).consume(any(ExecutionCommand.class));
+
+            consumer.onMessage(amqpMessage, channel, 106L);
+
+            verify(deduplicationService).markFailed("evt-biz");
+            verify(channel).basicAck(eq(106L), eq(false));
+            verify(channel, never()).basicNack(anyLong(), any(Boolean.class), any(Boolean.class));
+        }
+
+        @Test
+        @DisplayName("委托抛包装异常（cause 链命中 BizException）→ ACK 不 NACK")
+        void shouldAckWhenBizExceptionIsCause() throws Exception {
+            byte[] body = buildMessageBody("evt-biz-cause", 11L, 22L, "API_KEY_LLM");
+            when(amqpMessage.getBody()).thenReturn(body);
+            when(deduplicationService.isDuplicate("evt-biz-cause")).thenReturn(false);
+            doThrow(new IllegalStateException("wrap", new BizException("业务终态断言")))
+                    .when(localDelegate).consume(any(ExecutionCommand.class));
+
+            consumer.onMessage(amqpMessage, channel, 107L);
+
+            verify(deduplicationService).markFailed("evt-biz-cause");
+            verify(channel).basicAck(eq(107L), eq(false));
+            verify(channel, never()).basicNack(anyLong(), any(Boolean.class), any(Boolean.class));
         }
     }
 

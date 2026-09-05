@@ -1,7 +1,10 @@
 package com.helloai.core.agent.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentCommandOutboxRelayProperties;
 import com.helloai.common.constant.AgentCommandOutboxStatus;
 import com.helloai.common.constant.OutboxAggregateType;
@@ -223,6 +226,48 @@ public class AgentCommandOutboxServiceImpl extends ServiceImpl<AgentCommandOutbo
         if (!ok) {
             log.warn("markFinalFailedFromSent skipped: outbox id={} not in SENT (race / already processed)", id);
         }
+    }
+
+    /**
+     * A4 S1：FAILED 行窗口分页（outbox 人工恢复的列表查询）。
+     *
+     * <p>直接委托 Mapper {@code @Select} 显式 SQL；窗口过滤与逻辑删除过滤均在 SQL 内。</p>
+     */
+    @Override
+    public IPage<AgentCommandOutboxEvent> listFailed(OffsetDateTime from, OffsetDateTime to, long page, long size) {
+        return baseMapper.listFailed(new Page<>(page, size), from, to);
+    }
+
+    /**
+     * A4 S1：把指定 FAILED 行重入 PENDING（outbox 人工恢复入口）。
+     *
+     * <p>CAS：仅 {@code status = FAILED} 行可重入；重入即重置投递计数
+     * （{@code retry_count = 0}、{@code next_retry_at = now}、清空 {@code errorMsg}）。
+     * PENDING / SENT 由 Relay 在管，CONFIRMED 终态禁手改——防止「confirmed 后重发」
+     * 引入重复执行窗口。</p>
+     *
+     * <p><b>fail-close</b>：CAS 影响 0 行（非 FAILED / 已确认 / 不存在）时抛
+     * {@link BizException}，不静默吞掉冲突。</p>
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void requeueFailed(Long id) {
+        if (id == null) {
+            throw new BizException("outbox 重入参数缺失：id 不能为空");
+        }
+        boolean ok = lambdaUpdate()
+                .eq(AgentCommandOutboxEvent::getId, id)
+                .eq(AgentCommandOutboxEvent::getStatus, AgentCommandOutboxStatus.FAILED)
+                .set(AgentCommandOutboxEvent::getStatus, AgentCommandOutboxStatus.PENDING)
+                .set(AgentCommandOutboxEvent::getRetryCount, 0)
+                .set(AgentCommandOutboxEvent::getNextRetryTime, OffsetDateTime.now())
+                .set(AgentCommandOutboxEvent::getErrorMsg, null)
+                .update();
+        if (!ok) {
+            throw new BizException(
+                    "outbox 行非 FAILED 态或不存在，禁止重入（CAS 冲突）: id=" + id);
+        }
+        log.info("AgentCommandOutbox FAILED row requeued to PENDING: id={}", id);
     }
 
     /**
