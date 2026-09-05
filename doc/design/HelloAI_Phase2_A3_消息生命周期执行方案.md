@@ -86,8 +86,8 @@
 | inbox 消息 | `McpToolServiceImpl.ack` | —（通知无认领） | **A3 新增**：`InboxExpireCleanupTask` 过期归档 | —（通知不重试） | —（子任务层覆盖） | 归档即软死信（`isArchived=1`，保留审计） |
 | SubTask | — | `claimSubTask` | `SubTaskTimeoutTask` / `AssignedSubTaskTimeoutTask` | —（fail-close） | 4 条重派链（见 §0.1） | BLOCKED（人工介入，唯一出口） |
 | 执行记录 | markSuccess/markFailed | markRunning | `ExecutionCompensationTask` | — | `ExecutionCommandPoller`（孤儿重放） | —（超时即失败记账） |
-| outbox | CONFIRMED | — | relay 超时 | 指数退避（有限次） | — | FAILED（A4 补人工恢复入口） |
-| MQ 消息 | basicAck | — | —（无 TTL，靠业务侧超时链） | —（不重试，防毒消息循环） | — | DLX→台账+告警（`DlxAlertConsumer`） |
+| outbox | CONFIRMED | — | relay 超时 | 指数退避（有限次） | — | FAILED（人工入口 A4 已落地：`requeueFailed` CAS + `listFailed`） |
+| MQ 消息 | basicAck | — | —（无 TTL，靠业务侧超时链） | —（不重试，防毒消息循环） | — | DLX→台账+告警（`DlxAlertConsumer`；A4 补 `replay` 人工重放） |
 
 ### 3.3 inbox 过期机制设计（最小补缺）
 
@@ -164,3 +164,8 @@ InboxExpireCleanupTask（helloai-job，5min 一扫，批 200）
 - **关键修正**：`archiveExpired` 初版直接 `UPDATE ... LIMIT`（PostgreSQL 非法语法，定向单测的 mock 层无法暴露）——实施中按 `expireLeases` 先查后更惯例重写（SELECT LIMIT + 按 id 集中 UPDATE，UPDATE 重验 is_archived=0 防并发手动归档冲突）。
 - **验证**：`AgentInboxServiceTest` 12 例（+6）、`InboxExpireCleanupTaskTest` 3 例全绿；core 全量 1091（基线 1085 + 6）、job 全量 66（+3），Failures/Errors=0。
 - **回填**：差距表 N-008 按完成规则移除（总览行 + §13 章节，后续章节重排编号，最后更新日期 2026-09-05）；e2e（真实 DB 行为）与门铃/duty/N11 同批待环境。
+
+### R3（2026-09-05）：A4 实施同步修订
+
+- **背景**：A4（N-010 MQ 业务治理）已实施（LOG-20260905-010），本方案 §0.1 / §0.3 / §3.2 中「A4 待办」口径需按实施事实修订，避免矩阵与代码事实脱节。
+- **修订**：§0.1 outbox 行「FAILED 无人工恢复入口」→ 已落地（`requeueFailed` / `listFailed`）；§0.1 MQ 行补人工重放入口（`DeadLetterRecoveryService.replay`）；§0.3 A4 前瞻标注实施完毕；§3.2 矩阵 outbox / MQ Dead Letter 两格同步。六动词语义定义与其余单元格不变——零 DDL、MQ 不业务重试、fail-close 死信语义维持。
