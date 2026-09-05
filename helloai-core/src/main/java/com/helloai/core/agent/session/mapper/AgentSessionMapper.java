@@ -28,6 +28,19 @@ public interface AgentSessionMapper extends BaseMapper<AgentSession> {
     AgentSession selectLatestActiveBySubTaskId(@Param("subTaskId") Long subTaskId);
 
     /**
+     * 读取指定子任务的最新会话（任意状态；无则返回 null）。
+     *
+     * <p>N-007 B1 prompt 续接查询源：由服务层判定是否 ABORTED/FAILED 中断会话——
+     * 不能按状态过滤，否则「最新 COMPLETED」之后的更早中断会话会被误当续接上下文
+     * （返工场景已有 reviewHistory 注入，不得重复）。同前例用显式 SQL，
+     * 纯单元测试（无 MyBatis 容器）下 lambda 缓存不可用。</p>
+     */
+    @Select("SELECT * FROM agent_session "
+            + "WHERE sub_task_id = #{subTaskId} AND deleted = 0 "
+            + "ORDER BY create_time DESC, id DESC LIMIT 1")
+    AgentSession selectLatestBySubTaskId(@Param("subTaskId") Long subTaskId);
+
+    /**
      * 把指定子任务的全部 ACTIVE 会话置为 ABORTED（回收/重派中断，幂等防重入）。
      *
      * @return 实际更新行数

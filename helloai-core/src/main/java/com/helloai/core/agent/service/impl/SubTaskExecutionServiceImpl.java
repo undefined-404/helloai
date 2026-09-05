@@ -299,13 +299,16 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
         String historySection = renderHistorySectionSafely(agent);
         promptSection = mergeSpecSections(promptSection, historySection);
         DependencySectionResult dependencySection = buildDependencySection(subTask);
+        // Phase 1 Step 3 + N-007 B1：重派接续恢复上下文（上一次被中断尝试 ABORTED/FAILED
+        // 会话摘要；查询发生在本 turn 会话 start 之前，天然只会命中上一尝试；best-effort）
+        AgentSessionService.InterruptedSession recovery = findRecoverySafely(subTaskId);
         Map<String, Object> context = new HashMap<>();
         context.put("taskId", subTask.getTaskId());
         context.put("subTaskId", subTaskId);
         AgentTask task = AgentTask.builder()
                 .subTaskId(subTaskId)
                 .systemPrompt("")
-                .userPrompt(buildUserPrompt(subTask, promptSection, dependencySection.section))
+                .userPrompt(buildUserPrompt(subTask, promptSection, dependencySection.section, recovery))
                 .context(context)
                 .requiredCapabilities(Map.of())
                 .build();
@@ -344,7 +347,8 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
                 subTask.getTaskId(), subTaskId, runTurn, 2,
                 AgentEventType.CONTEXT_BUILT, agent.getId(),
                 safeMap("promptChars", task.getUserPrompt() != null ? task.getUserPrompt().length() : 0,
-                        "depCount", dependencySection.depCount));
+                        "depCount", dependencySection.depCount,
+                        "recoveryInjected", recovery != null));
 
         // Phase 1 Step 3：执行会话开始（ACTIVE，step=2=上下文装配完成/LLM 前；快照承载恢复
         // 上下文装配事实，供租约回收/重派识别中断点；best-effort 不阻断执行链）
@@ -370,7 +374,8 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
                         "truncatedCount", dependencySection.truncatedCount,
                         "degraded", dependencySection.degraded,
                         "pluginSpec", pluginSection != null && !pluginSection.isBlank(),
-                        "historySummary", historySection != null && !historySection.isBlank()));
+                        "historySummary", historySection != null && !historySection.isBlank(),
+                        "recoveryInjected", recovery != null));
         taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_llm_call_start",
                 AgentRole.EXECUTOR, agent.getId(),
                 Map.of("agentId", agent.getId(), "agentName", agent.getName()));
@@ -470,14 +475,31 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
     }
 
     /**
-     * 组装执行 Prompt：任务全局上下文 + 依赖产出参考（直接前置）+ 当前子任务四要素 + 回填要求。
+     * 恢复上下文安全查询（N-007 B1）：会话查询异常一律降级为 null（零注入零阻断），
+     * 与依赖段 / 历史表现段同款 best-effort 纪律。
+     */
+    private AgentSessionService.InterruptedSession findRecoverySafely(Long subTaskId) {
+        try {
+            return agentSessionService.findLatestInterrupted(subTaskId);
+        } catch (Exception e) {
+            log.debug("恢复上下文查询失败（best-effort 降级，零注入）: subTaskId={}, err={}",
+                    subTaskId, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 组装执行 Prompt：任务全局上下文 + 依赖产出参考（直接前置）+ 当前子任务四要素 +
+     * 执行恢复上下文（重派接续，仅命中时注入）+ 返工修正指引 + 回填要求。
      *
      * <p>全局上下文来自 Task Running Spec（Baseline + ContextSummary）；依赖产出参考由
      * {@link #buildDependencySection} 按 dependsOnIdList 收集直接前置的结构化摘要与内容本体，
      * 供 LLM 将"前置已完成的内容"与"本轮任务要求"综合分析后执行。回填要求指导 executor
-     * 按 EXECUTION_RECORD 协议输出结构化摘要，供后续下游 executor 消费。</p>
+     * 按 EXECUTION_RECORD 协议输出结构化摘要，供后续下游 executor 消费。恢复上下文
+     * （N-007 B1）由上轮中断会话摘要注入，无中断零注入。</p>
      */
-    private String buildUserPrompt(SubTask subTask, String runningSpecSection, String dependencySection) {
+    private String buildUserPrompt(SubTask subTask, String runningSpecSection, String dependencySection,
+                                   AgentSessionService.InterruptedSession recovery) {
         StringBuilder sb = new StringBuilder();
 
         // 任务全局上下文（Task Running Spec）
@@ -504,6 +526,10 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
         if (subTask.getAcceptance() != null && !subTask.getAcceptance().isBlank()) {
             sb.append("验收标准: ").append(subTask.getAcceptance()).append("\n");
         }
+
+        // 执行恢复上下文（N-007 B1）：重派接续时注入上一次被中断尝试的摘要，
+        // 无中断/快照缺失零注入；与返工修正指引互补（返工场景由 reviewHistory 覆盖）
+        appendRecoveryContext(sb, recovery);
 
         // 返工上下文：上次提交被审核驳回，需参考驳回意见修正
         appendReworkContext(sb, subTask);
@@ -538,6 +564,90 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
                 + "summary 概括本次产出，并在文件概览后保留 EXECUTION_RECORD 回填块。\n");
 
         return sb.toString();
+    }
+
+    /**
+     * 执行恢复上下文注入（N-007 B1 prompt 续接）：重派后把上一次被中断尝试
+     * （ABORTED=租约回收 / FAILED=执行失败）的会话摘要（中断点/中断原因/装配事实）
+     * 注入 Prompt，让 executor 以「接续者」视角重新完成任务；无中断摘要零注入。
+     *
+     * <p>与 {@link #appendReworkContext} 互补不重叠：返工场景（最新会话 COMPLETED）
+     * 查询端已返回 null，由 reviewHistory 修正指引覆盖；本段只承载「未完成执行被
+     * 重派」的续接语义。快照字段缺失一律跳过（容错 JSONB 反序列化形态）。</p>
+     */
+    private void appendRecoveryContext(StringBuilder sb, AgentSessionService.InterruptedSession recovery) {
+        if (recovery == null) {
+            return;
+        }
+        sb.append("\n---\n\n");
+        sb.append("## 执行恢复上下文（接续执行）\n");
+        sb.append("本任务之前的一次执行尝试被中断，本次为接续执行。上次尝试中断情况：\n");
+        sb.append("- 会话 ID：").append(recovery.sessionId()).append("\n");
+        sb.append("- 中断点：").append(stepLabel(recovery.step())).append("\n");
+        sb.append("- 中断状态：").append(statusLabel(recovery.status())).append("\n");
+        if (recovery.error() != null && !recovery.error().isBlank()) {
+            sb.append("- 中断原因摘要：").append(recovery.error()).append("\n");
+        }
+        Map<String, Object> snapshot = recovery.snapshot();
+        if (snapshot != null && !snapshot.isEmpty()) {
+            sb.append("上次执行上下文装配事实：\n");
+            Object skills = snapshot.get("skills");
+            if (skills instanceof List<?> skillList && !skillList.isEmpty()) {
+                sb.append("- 声明技能：").append(skillList.stream()
+                        .map(Object::toString).collect(Collectors.joining("、"))).append("\n");
+            }
+            Object tools = snapshot.get("tools");
+            if (tools instanceof List<?> toolList && !toolList.isEmpty()) {
+                sb.append("- 启用工具：").append(toolList.stream()
+                        .map(Object::toString).collect(Collectors.joining("、"))).append("\n");
+            }
+            Object environment = snapshot.get("environment");
+            if (environment instanceof String envStr && !envStr.isBlank()) {
+                sb.append("- 执行环境：").append(envStr).append("\n");
+            }
+            Object depCount = snapshot.get("depCount");
+            if (depCount instanceof Number depNum && depNum.intValue() > 0) {
+                sb.append("- 依赖装载：声明 ").append(depNum.intValue()).append(" 条");
+                Object loadedCount = snapshot.get("loadedCount");
+                Object truncatedCount = snapshot.get("truncatedCount");
+                if (loadedCount instanceof Number || truncatedCount instanceof Number) {
+                    sb.append("（实际装载 ");
+                    sb.append(loadedCount instanceof Number loadedNum ? loadedNum.intValue() : 0);
+                    sb.append(" 条");
+                    if (truncatedCount instanceof Number truncatedNum && truncatedNum.intValue() > 0) {
+                        sb.append("，截断 ").append(truncatedNum.intValue()).append(" 条");
+                    }
+                    sb.append("）");
+                }
+                sb.append("\n");
+            }
+        }
+        sb.append("请以接续者身份结合上述上下文重新完成本任务，输出交付物并按协议回填，不要复述以上中断事实。\n");
+    }
+
+    /** 中断点（step）语义标签：2=LLM 前 / 4=LLM 完成回写前 / 其他原样。 */
+    private static String stepLabel(int step) {
+        if (step == 2) {
+            return "step=2（上下文装配已完成，LLM 调用尚未开始）";
+        }
+        if (step == 4) {
+            return "step=4（LLM 调用已完成，结果回写前中断）";
+        }
+        return "step=" + step;
+    }
+
+    /** 中断状态语义标签：ABORTED=租约回收 / FAILED=执行失败 / 其他原样。 */
+    private static String statusLabel(String status) {
+        if (status == null) {
+            return "UNKNOWN";
+        }
+        if ("ABORTED".equals(status)) {
+            return "ABORTED（租约过期被回收中断）";
+        }
+        if ("FAILED".equals(status)) {
+            return "FAILED（上次执行失败）";
+        }
+        return status;
     }
 
     /**

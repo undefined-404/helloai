@@ -108,7 +108,7 @@ class SubTaskServiceLeaseReclaimTest {
 
         doReturn(true).when(subTaskService).updateById(any(SubTask.class));
         AgentSessionService.InterruptedSession interrupted =
-                new AgentSessionService.InterruptedSession(7L, AGENT_ID, 3, 2, Map.of("depCount", 1));
+                new AgentSessionService.InterruptedSession(7L, AGENT_ID, 3, 2, "ABORTED", null, Map.of("depCount", 1));
         when(agentSessionService.interrupt(SUB_TASK_ID)).thenReturn(interrupted);
 
         subTaskService.reclaimExpiredLeases(10);

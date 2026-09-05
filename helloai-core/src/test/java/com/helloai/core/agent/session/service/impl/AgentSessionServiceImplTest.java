@@ -164,4 +164,80 @@ class AgentSessionServiceImplTest {
         assertThat(agentSessionService.interrupt(22L)).isNull();
         verify(agentSessionMapper, never()).abortActiveBySubTaskId(any());
     }
+
+    @Test
+    @DisplayName("findLatestInterrupted：最新会话 ABORTED → 返回中断摘要（status/error/snapshot 全量）")
+    void shouldReturnInterruptedWhenLatestAborted() {
+        AgentSession aborted = new AgentSession();
+        aborted.setId(8L);
+        aborted.setSubTaskId(22L);
+        aborted.setAgentId(11L);
+        aborted.setTurn(2);
+        aborted.setStep(2);
+        aborted.setStatus(SessionStatus.ABORTED.name());
+        aborted.setError(null);
+        aborted.setSnapshot(Map.of("skills", List.of("eng"), "depCount", 1));
+        when(agentSessionMapper.selectLatestBySubTaskId(22L)).thenReturn(aborted);
+
+        InterruptedSession recovery = agentSessionService.findLatestInterrupted(22L);
+
+        assertThat(recovery).isNotNull();
+        assertThat(recovery.sessionId()).isEqualTo(8L);
+        assertThat(recovery.agentId()).isEqualTo(11L);
+        assertThat(recovery.turn()).isEqualTo(2);
+        assertThat(recovery.step()).isEqualTo(2);
+        assertThat(recovery.status()).isEqualTo("ABORTED");
+        assertThat(recovery.error()).isNull();
+        assertThat(recovery.snapshot()).containsEntry("skills", List.of("eng"));
+    }
+
+    @Test
+    @DisplayName("findLatestInterrupted：最新会话 FAILED → 返回中断摘要（含 error）")
+    void shouldReturnInterruptedWhenLatestFailed() {
+        AgentSession failed = new AgentSession();
+        failed.setId(9L);
+        failed.setSubTaskId(22L);
+        failed.setAgentId(11L);
+        failed.setTurn(2);
+        failed.setStep(4);
+        failed.setStatus(SessionStatus.FAILED.name());
+        failed.setError("llm down");
+        failed.setSnapshot(Map.of());
+        when(agentSessionMapper.selectLatestBySubTaskId(22L)).thenReturn(failed);
+
+        InterruptedSession recovery = agentSessionService.findLatestInterrupted(22L);
+
+        assertThat(recovery).isNotNull();
+        assertThat(recovery.status()).isEqualTo("FAILED");
+        assertThat(recovery.error()).isEqualTo("llm down");
+        assertThat(recovery.step()).isEqualTo(4);
+    }
+
+    @Test
+    @DisplayName("findLatestInterrupted：最新会话 COMPLETED（返工场景）→ null 零注入（不回退更早中断会话）")
+    void shouldReturnNullWhenLatestCompleted() {
+        AgentSession completed = new AgentSession();
+        completed.setId(10L);
+        completed.setSubTaskId(22L);
+        completed.setStatus(SessionStatus.COMPLETED.name());
+        when(agentSessionMapper.selectLatestBySubTaskId(22L)).thenReturn(completed);
+
+        assertThat(agentSessionService.findLatestInterrupted(22L)).isNull();
+    }
+
+    @Test
+    @DisplayName("findLatestInterrupted：无会话 → null")
+    void shouldReturnNullWhenNoSession() {
+        when(agentSessionMapper.selectLatestBySubTaskId(22L)).thenReturn(null);
+
+        assertThat(agentSessionService.findLatestInterrupted(22L)).isNull();
+    }
+
+    @Test
+    @DisplayName("findLatestInterrupted：查询异常 → best-effort 返回 null")
+    void shouldReturnNullWhenQueryFails() {
+        when(agentSessionMapper.selectLatestBySubTaskId(22L)).thenThrow(new RuntimeException("db down"));
+
+        assertThat(agentSessionService.findLatestInterrupted(22L)).isNull();
+    }
 }

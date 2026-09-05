@@ -15,9 +15,12 @@ import java.util.Map;
  */
 public interface AgentSessionService {
 
-    /** 恢复消费端返回的被中断会话摘要（供 timeline 落「执行中断点」）。 */
+    /**
+     * 恢复消费端返回的被中断会话摘要：供 timeline 落「执行中断点」
+     * 与 N-007 B1 prompt 续接（status/error 描述中断原因，snapshot 承载装配事实）。
+     */
     record InterruptedSession(Long sessionId, Long agentId, int turn, int step,
-                              Map<String, Object> snapshot) {
+                              String status, String error, Map<String, Object> snapshot) {
     }
 
     /**
@@ -61,4 +64,14 @@ public interface AgentSessionService {
      * 保证「识别未完成执行 → 恢复上下文 → 重新调度」闭环可观测。</p>
      */
     InterruptedSession interrupt(Long subTaskId);
+
+    /**
+     * 恢复上下文查询（N-007 B1 prompt 续接消费端）：读取该子任务最近一次执行会话；
+     * 状态为 ABORTED（租约回收中断）/ FAILED（执行失败）时返回中断摘要
+     * （turn/step/status/error/snapshot），其余（无会话 / ACTIVE / COMPLETED）返回 null。
+     *
+     * <p>判定放在服务层而非 SQL 过滤：SQL 只取最新一条，若最新会话是 COMPLETED
+     * （返工场景，由 reviewHistory 覆盖），不得回退注入更早的中断会话。</p>
+     */
+    InterruptedSession findLatestInterrupted(Long subTaskId);
 }

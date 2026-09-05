@@ -107,9 +107,35 @@ public class AgentSessionServiceImpl implements AgentSessionService {
             return new InterruptedSession(active.getId(), active.getAgentId(),
                     active.getTurn() != null ? active.getTurn() : 0,
                     active.getStep() != null ? active.getStep() : 0,
+                    active.getStatus(), active.getError(),
                     active.getSnapshot());
         } catch (Exception e) {
             log.warn("AgentSession.interrupt 失败（best-effort）: subTaskId={}, err={}", subTaskId, e.getMessage());
+            return null;
+        }
+    }
+
+    @Override
+    public InterruptedSession findLatestInterrupted(Long subTaskId) {
+        try {
+            AgentSession latest = agentSessionMapper.selectLatestBySubTaskId(subTaskId);
+            if (latest == null || latest.getStatus() == null) {
+                return null;
+            }
+            // 仅 ABORTED（租约回收中断）/ FAILED（执行失败）视为「被中断尝试」；
+            // ACTIVE 说明本次执行已启动（重入），COMPLETED 走 reviewHistory 返工注入，均零注入
+            if (SessionStatus.ABORTED.name().equals(latest.getStatus())
+                    || SessionStatus.FAILED.name().equals(latest.getStatus())) {
+                return new InterruptedSession(latest.getId(), latest.getAgentId(),
+                        latest.getTurn() != null ? latest.getTurn() : 0,
+                        latest.getStep() != null ? latest.getStep() : 0,
+                        latest.getStatus(), latest.getError(),
+                        latest.getSnapshot());
+            }
+            return null;
+        } catch (Exception e) {
+            log.warn("AgentSession.findLatestInterrupted 读取失败（best-effort 零注入）: subTaskId={}, err={}",
+                    subTaskId, e.getMessage());
             return null;
         }
     }

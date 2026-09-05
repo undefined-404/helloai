@@ -470,6 +470,118 @@ class SubTaskExecutionServiceTest {
     }
 
     @Nested
+    @DisplayName("executeOnce — 执行恢复上下文注入（N-007 B1 prompt 续接）")
+    class ExecuteOnceRecoveryContext {
+
+        @Test
+        @DisplayName("TC-1 should inject recovery context when previous attempt ABORTED (租约回收重派)")
+        void shouldInjectRecoveryWhenPreviousAborted() {
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            Agent agent = agent();
+
+            Map<String, Object> snapshot = new HashMap<>();
+            snapshot.put("skills", List.of("eng-code-review"));
+            snapshot.put("tools", List.of("pullTasks"));
+            snapshot.put("environment", "remote-agent");
+            snapshot.put("depCount", 2);
+            snapshot.put("loadedCount", 1);
+            snapshot.put("truncatedCount", 1);
+            when(agentSessionService.findLatestInterrupted(22L)).thenReturn(
+                    new AgentSessionService.InterruptedSession(7L, 44L, 1, 2, "ABORTED", null, snapshot));
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
+
+            ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            assertThat(taskCaptor.getValue().getUserPrompt())
+                    .contains("## 执行恢复上下文（接续执行）")
+                    .contains("step=2（上下文装配已完成，LLM 调用尚未开始）")
+                    .contains("ABORTED（租约过期被回收中断）")
+                    .contains("声明技能：eng-code-review")
+                    .contains("启用工具：pullTasks")
+                    .contains("执行环境：remote-agent")
+                    .contains("依赖装载：声明 2 条（实际装载 1 条，截断 1 条）")
+                    .contains("请以接续者身份结合上述上下文重新完成本任务");
+            // 装配观测：recoveryInjected=true
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(taskTimelineService).recordEvent(eq(33L), eq(22L), eq("sub_task_spec_context_loaded"),
+                    eq(AgentRole.EXECUTOR), eq(44L), payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue()).containsEntry("recoveryInjected", true);
+        }
+
+        @Test
+        @DisplayName("TC-2 should inject failure reason when previous attempt FAILED (执行失败重派)")
+        void shouldInjectFailureReasonWhenPreviousFailed() {
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            Agent agent = agent();
+
+            when(agentSessionService.findLatestInterrupted(22L)).thenReturn(
+                    new AgentSessionService.InterruptedSession(8L, 44L, 1, 4, "FAILED", "llm down", Map.of()));
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
+
+            ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            assertThat(taskCaptor.getValue().getUserPrompt())
+                    .contains("## 执行恢复上下文（接续执行）")
+                    .contains("step=4（LLM 调用已完成，结果回写前中断）")
+                    .contains("FAILED（上次执行失败）")
+                    .contains("中断原因摘要：llm down");
+        }
+
+        @Test
+        @DisplayName("TC-3 should skip recovery section when no interrupted session (零注入)")
+        void shouldSkipRecoveryWhenNoInterruptedSession() {
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            Agent agent = agent();
+
+            when(agentSessionService.findLatestInterrupted(22L)).thenReturn(null);
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+
+            subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
+
+            ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            assertThat(taskCaptor.getValue().getUserPrompt())
+                    .doesNotContain("执行恢复上下文");
+            // 装配观测：recoveryInjected=false
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(taskTimelineService).recordEvent(eq(33L), eq(22L), eq("sub_task_spec_context_loaded"),
+                    eq(AgentRole.EXECUTOR), eq(44L), payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue()).containsEntry("recoveryInjected", false);
+        }
+
+        @Test
+        @DisplayName("TC-4 should degrade to zero injection when recovery query throws (best-effort)")
+        void shouldDegradeWhenRecoveryQueryThrows() {
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            Agent agent = agent();
+
+            when(agentSessionService.findLatestInterrupted(22L))
+                    .thenThrow(new RuntimeException("session db down"));
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+
+            AgentResult result = subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
+
+            assertThat(result.isSuccess()).isTrue();
+            ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            assertThat(taskCaptor.getValue().getUserPrompt())
+                    .doesNotContain("执行恢复上下文");
+        }
+    }
+
+    @Nested
     @DisplayName("executeCommand — 完整编排入口（向后兼容）")
     class ExecuteCommand {
 
