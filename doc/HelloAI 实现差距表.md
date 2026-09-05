@@ -1,4 +1,4 @@
-# HelloAI 实现差距表
+﻿# HelloAI 实现差距表
 
 > **文档版本：V2**
 >
@@ -12,7 +12,7 @@
 >
 > 最终事实以当前代码、数据库及可复现实验为准。
 >
-> 最后更新：2026-09-01
+> 最后更新：2026-09-05
 
 ---
 
@@ -111,7 +111,6 @@ Planner
 | N-005 | Provider Factory | PARTIAL | P1 | Provider Catalog 已存在，但部分 Provider Factory 尚不完整 |
 | N-006 | 优先级调度 | TODO | P2 | 当前缺少完整优先级队列与抢占机制 |
 | N-007 | 执行恢复 | PARTIAL | P1 | 已有超时 / 补偿 / 租约回收，但缺少完整执行快照与恢复上下文 |
-| N-008 | Message 超时转派 | PARTIAL | P1 | 尚无统一 inbox/message 超时消费转派机制 |
 | N-009 | 跨会话记忆 | TODO | P2 | 尚无独立长期记忆平面 |
 | N-010 | MQ 业务治理 | PARTIAL | P2 | 基础 Outbox / Confirm 已有，但 DLQ / 业务级治理尚未完整 |
 | N-012 | Planner Context 管理 | PARTIAL | P1 | 当前上下文能力存在，但尚需建立更明确的 Context 分层策略 |
@@ -426,54 +425,7 @@ Agent
 
 ---
 
-# 13. N-008 Message 超时转派
-
-**状态：** `PARTIAL`
-
-**优先级：** P1
-
-## 当前问题
-
-当前已经存在多种：
-
-```text
-timeout
-reconcile
-reassign
-poll
-```
-
-机制。
-
-但缺少统一：
-
-```text
-Message / Inbox
-       ↓
-超时未消费
-       ↓
-重新分派
-```
-
-机制。
-
-## 目标
-
-统一定义：
-
-- 消息生命周期
-- ACK
-- Claim
-- Timeout
-- Retry
-- Reassign
-- Dead Letter
-
-避免不同业务各自实现一套。
-
----
-
-# 14. N-009 跨会话记忆
+# 13. N-009 跨会话记忆
 
 **状态：** `TODO`
 
@@ -503,7 +455,7 @@ Agent Memory
 
 ---
 
-# 15. N-010 MQ 业务治理
+# 14. N-010 MQ 业务治理
 
 **状态：** `PARTIAL`
 
@@ -536,7 +488,7 @@ MQ 是执行链基础设施，不应成为第二业务控制面。
 
 ---
 
-# 16. N-012 Planner Context 管理
+# 15. N-012 Planner Context 管理
 
 **状态：** `PARTIAL`
 
@@ -587,7 +539,7 @@ Context 越多不代表 Agent 越聪明。
 
 ---
 
-# 17. Gap 新增规则
+# 16. Gap 新增规则
 
 新增 Gap 必须至少包含：
 
@@ -618,7 +570,7 @@ ID
 
 ---
 
-# 18. Gap 完成规则
+# 17. Gap 完成规则
 
 当一个 Gap 满足：
 
@@ -652,7 +604,7 @@ doc/design/
 
 ---
 
-# 19. Gap 与 Design 的关系
+# 18. Gap 与 Design 的关系
 
 推荐：
 
@@ -678,7 +630,7 @@ N-001
 
 ---
 
-# 20. Gap 与 Log 的关系
+# 19. Gap 与 Log 的关系
 
 Gap：
 
@@ -699,7 +651,7 @@ Log = 历史状态
 
 ---
 
-# 21. 当前 Gap 使用原则
+# 20. 当前 Gap 使用原则
 
 AI Agent 读取本文件时：
 
@@ -711,7 +663,7 @@ AI Agent 读取本文件时：
 
 ---
 
-# 22. 最终原则
+# 21. 最终原则
 
 实现差距表不是：
 
