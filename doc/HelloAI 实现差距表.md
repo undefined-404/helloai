@@ -1,4 +1,4 @@
-﻿# HelloAI 实现差距表
+# HelloAI 实现差距表
 
 > **文档版本：V2**
 >
@@ -93,10 +93,8 @@ Planner
 3. Credential Vault 完整化
 4. Provider Factory 完整化
 5. 高级调度能力
-6. 执行恢复能力
-7. 跨会话记忆
-8. 统一消息超时与转派
-9. MQ / 异步链路进一步治理
+6. 跨会话记忆
+7. MQ / 异步链路进一步治理
 
 ---
 
@@ -110,7 +108,6 @@ Planner
 | N-004 | Credential Vault | PARTIAL | P1 | 已有基础轮换语义，但完整迁移 / 权限模型不足 |
 | N-005 | Provider Factory | PARTIAL | P1 | Provider Catalog 已存在，但部分 Provider Factory 尚不完整 |
 | N-006 | 优先级调度 | TODO | P2 | 当前缺少完整优先级队列与抢占机制 |
-| N-007 | 执行恢复 | PARTIAL | P1 | 已有超时 / 补偿 / 租约回收，但缺少完整执行快照与恢复上下文 |
 | N-009 | 跨会话记忆 | TODO | P2 | 尚无独立长期记忆平面 |
 | N-010 | MQ 业务治理 | PARTIAL | P2 | 基础 Outbox / Confirm 已有，但 DLQ / 业务级治理尚未完整 |
 | N-012 | Planner Context 管理 | PARTIAL | P1 | 当前上下文能力存在，但尚需建立更明确的 Context 分层策略 |
@@ -381,51 +378,7 @@ Agent
 
 ---
 
-# 12. N-007 执行恢复
-
-**状态：** `PARTIAL`
-
-**优先级：** P1
-
-## 已有
-
-- 超时补偿
-- Poller
-- Outbox
-- Reconcile
-- DEAD_LETTER
-- 执行租约（Phase 0 A2：sub_task.owner + lease_until，Watchdog 每节点续期 + Reconciler 过期回收重派）
-- 事件轨迹（Phase 0 B1：agent_event 表 + AgentEventRecorder Outbox 双写，ADR-001 Run/Turn/Step，对账/回放地基）
-- 埋点事件流（Phase 0 B2：TASK_ASSIGNED / AGENT_STARTED / CONTEXT_BUILT / TOOL_CALL_STARTED / TOOL_CALL_COMPLETED / AGENT_COMPLETED / REVIEW_STARTED / REVIEW_APPROVED / REVIEW_REJECTED / REWORK_STARTED 共 10 类事件埋点，覆盖分配/执行/完成/核验/返工旧执行链路与人工审核路径（2026-09-03 补齐人工 APPROVED/REJECTED 埋点，LOG-20260903-007），AgentEventContextResolver 静态 runId（轮次固定 1）/ turn（1+reworkCount+attemptTotal）计算）
-- 事件流对账（Phase 0 B3：EventReconciliationTask 60s 集群单例 + EventReconciliationService 以业务表最近变更（10 分钟窗口）为候选源，状态 → 末条事件单向投影校验（ASSIGNED/IN_PROGRESS/REVIEW/REWORK/DONE 五状态映射，PENDING 等无事件语义状态跳过），不一致仅 WARN 告警不修正）
-- 共享重试预算（Phase 0 A3：sub_task.attempt_total + RetryPolicy 判定，重分配熔断已切换）
-- 执行会话（Phase 1 Step 3：agent_session 表 + AgentSessionService——Turn 级执行快照 / 中断点 / 恢复上下文载体；executeOnce start/advance + ExecutionResultHandler 终态 + 租约回收路径读 session 落 timeline `sub_task_session_interrupted` 并 ABORT 幂等防重入，LOG-20260905-002）
-
-## 差距
-
-尚缺：
-
-- 执行快照 ✅（AgentSession 已承载：turn/step/snapshot JSONB）
-- 恢复上下文 ✅（AgentSession.snapshot 已承载装配事实；租约回收中断点可观测）
-- 中断点 ✅（AgentSession turn/step 即中断点）
-- 可恢复执行 ⚠️ PARTIAL（已记录中断点 + ABORT 幂等，但重派后恢复上下文注入 prompt 的续接体验未做——Step 3 D3 决策（LOG-20260905-002）留待评估）
-- 恢复幂等策略 ⚠️ PARTIAL（ABORT 幂等防重入已落地；会话终态防重写已具备）
-
-## 目标
-
-系统重启或 Agent 异常后能够：
-
-```text
-识别未完成执行
-      ↓
-恢复执行上下文
-      ↓
-继续执行 / 重新调度
-```
-
----
-
-# 13. N-009 跨会话记忆
+# 12. N-009 跨会话记忆
 
 **状态：** `TODO`
 
@@ -455,7 +408,7 @@ Agent Memory
 
 ---
 
-# 14. N-010 MQ 业务治理
+# 13. N-010 MQ 业务治理
 
 **状态：** `PARTIAL`
 
@@ -488,7 +441,7 @@ MQ 是执行链基础设施，不应成为第二业务控制面。
 
 ---
 
-# 15. N-012 Planner Context 管理
+# 14. N-012 Planner Context 管理
 
 **状态：** `PARTIAL`
 
@@ -539,7 +492,7 @@ Context 越多不代表 Agent 越聪明。
 
 ---
 
-# 16. Gap 新增规则
+# 15. Gap 新增规则
 
 新增 Gap 必须至少包含：
 
@@ -570,7 +523,7 @@ ID
 
 ---
 
-# 17. Gap 完成规则
+# 16. Gap 完成规则
 
 当一个 Gap 满足：
 
@@ -604,7 +557,7 @@ doc/design/
 
 ---
 
-# 18. Gap 与 Design 的关系
+# 17. Gap 与 Design 的关系
 
 推荐：
 
@@ -630,7 +583,7 @@ N-001
 
 ---
 
-# 19. Gap 与 Log 的关系
+# 18. Gap 与 Log 的关系
 
 Gap：
 
@@ -651,7 +604,7 @@ Log = 历史状态
 
 ---
 
-# 20. 当前 Gap 使用原则
+# 19. 当前 Gap 使用原则
 
 AI Agent 读取本文件时：
 
@@ -663,7 +616,7 @@ AI Agent 读取本文件时：
 
 ---
 
-# 21. 最终原则
+# 20. 最终原则
 
 实现差距表不是：
 

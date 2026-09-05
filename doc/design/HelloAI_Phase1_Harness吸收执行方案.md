@@ -11,7 +11,7 @@
 | 子阶段 | 主题 | 状态 | 关键产出 | 落点 |
 |---|---|---|---|---|
 | **1.0 Runtime 固化** | `AgentContext` + `AgentRuntime` + `LegacyExecutorAdapter` 唯一执行入口 | ✅ 已落地 | AgentContext 六字段契约 + C1/C2/C3 双轨切换（LOG-20260904-006） | Phase 0 C1-C3 |
-| **1.1 Session Manager** | N-007 执行恢复载体（快照/恢复上下文/断点续接） | ✅ 已落地（Step 3） | `agent_session` 表 + AgentSessionService（Turn 级执行会话：快照/中断点/恢复上下文）+ 租约回收落 `sub_task_session_interrupted` + ABORT 幂等（LOG-20260905-002） | N-007 PARTIAL→收口中 |
+| **1.1 Session Manager** | N-007 执行恢复载体（快照/恢复上下文/断点续接） | ✅ 已落地（Step 3 + P2-B B1） | `agent_session` 表 + AgentSessionService（Turn 级执行会话：快照/中断点/恢复上下文）+ 租约回收落 `sub_task_session_interrupted` + ABORT 幂等（LOG-20260905-002）+ 重派接续 prompt 注入（`findLatestInterrupted` → `appendRecoveryContext`，LOG-20260905-009） | N-007 已收口移除（LLM 级断点续接明确不做） |
 | **1.2 Skill Registry** | 抽 `KNOWN_SPECS` 为 SkillRegistry 元数据消费面 | ✅ 模式已定型（不建平行类） | 与 ToolRegistry 同「resolve → matched 元数据」形态收拢；`AgentSkillSpecService` 即 skill 侧元数据面（§50.7 不另建 SkillRegistry 类） | Step 2（LOG-20260905） |
 | **1.3 Tool Registry** | `AgentContext.tools` 供电 + ToolRegistry 描述层 | ✅ 已落地（Step 2） | `agent.tool` 包 ToolDefinition + ToolRegistry（从 ToolCallbackProvider 收集平台 12 工具元数据）+ TOOL_RESOLVED 埋点 + 对账同步（LOG-20260905） | Step 2 |
 | **1.4 SandboxProvider** | 仅接口 + RemoteAgent + LocalProcess；不引 Docker/K8s | ✅ 已落地（Step 4） | `agent.runtime` 包 ExecutionEnvironment（name/supports）+ RemoteAgent/LocalProcess 实现 + ExecutionEnvironmentProvider 解析注入 `AgentContext.environment` + ENVIRONMENT_RESOLVED 埋点（step=7）+ 6 处对账契约同步（LOG-20260905-003） | Step 4 |
@@ -170,7 +170,7 @@ T2（依赖 D1=B 已定 payload）──┘
 | 阶段 | 主题 | 衔接 |
 |---|---|---|
 | Step 2 | Tool 供电 + ToolRegistry | ✅ **已落地**（LOG-20260905）：`AgentContext.tools` 显式供电（消费侧 agent 域直读 `getEnabledTools`）+ `agent.tool` 包 ToolRegistry（从 spring-ai ToolCallbackProvider 收集平台 12 工具元数据）+ `TOOL_RESOLVED` 埋点（step=6）+ 6 处对账契约同步；Skill 侧以同「resolve → matched」形态收拢（§50.7 不建平行类）。契约供电 + 埋点 + 对账三件套全闭环 |
-| Step 3 | Session Manager（N-007 收口） | ✅ **已落地**（LOG-20260905-002）：`agent_session` 表 + AgentSessionService（Turn 级执行会话，3 个写入点：start/advance/终态）+ 租约回收路径读 session 落 `sub_task_session_interrupted` 中断点 timeline + ABORT 幂等防重入。执行快照/中断点/恢复上下文载体闭环；「重派注入恢复上下文」「LLM 级断点续接」明确留待后续 |
+| Step 3 | Session Manager（N-007 收口） | ✅ **已落地**（LOG-20260905-002）：`agent_session` 表 + AgentSessionService（Turn 级执行会话，3 个写入点：start/advance/终态）+ 租约回收路径读 session 落 `sub_task_session_interrupted` 中断点 timeline + ABORT 幂等防重入。执行快照/中断点/恢复上下文载体闭环；「重派注入恢复上下文」已由 P2-B B1 落地（LOG-20260905-009：`findLatestInterrupted` + prompt 续接段），「LLM 级断点续接」明确不做 |
 | Step 4 | SandboxProvider（仅接口 + RemoteAgent + LocalProcess） | ✅ **已落地**（LOG-20260905-003）：`agent.runtime` 包 `ExecutionEnvironment` 接口（name/supports，路由契约与 AgentExecutorRouter 同构）+ `RemoteAgentEnvironment`（CLI_CLIENT/WEB_BROWSER）/`LocalProcessEnvironment`（API_KEY_LLM）+ `ExecutionEnvironmentProvider.resolve(accessType)` 消费侧解析注入 `AgentContext.environment`（agent 域数据直读，无 §6 跨域）+ `ENVIRONMENT_RESOLVED` 埋点（step=7，ADR-001 R4）+ session 快照补 environment + 6 处对账契约同步。DockerSandbox 推迟 P2、K8sSandbox 推迟 P3 |
 
 > 每个 Step 落地时仍按「小而闭环」原则：契约 + 埋点 + 对账 + 文档，不平行架构。
