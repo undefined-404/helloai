@@ -168,7 +168,7 @@
 
 | Step | 内容 | 依赖 | 验收口径 |
 |---|---|---|---|
-| **S0 = A1a** 服务端门铃验收收口 | 跑门铃 5 个测试类回归；环境可用时 e2e：curl 建连收 `connected` 握手 → 造一条 inbox 消息 → 秒级收到 `type=inbox` → 断连后轮询仍可消费 → 未鉴权/未在岗拒连（对照门铃设计 §11 六条） | 无 | 六条全过 + LOG 回填；**发现退化则先修复再继续**（重点核对 Phase 0/1 改造是否碰过 `AgentInboxServiceImpl.send()` 事件链） |
+| **S0 = A1a** 服务端门铃验收收口 | 跑门铃 5 个测试类回归；环境可用时 e2e：curl 建连收 `connected` 握手 → 造一条 inbox 消息 → 秒级收到 `type=inbox` → 断连后轮询仍可消费 → 未鉴权/未在岗拒连（对照门铃设计 §11 六条） | 无 | 六条全过 + LOG 回填；**发现退化则先修复再继续**（重点核对 Phase 0/1 改造是否碰过 `AgentInboxServiceImpl.send()` 事件链）。**已完成（2026-09-05，LOG-20260905-005）**：静态链路四重核对无退化 + 31 例单测全绿；e2e 六条中 4 条运行时确认因环境不可用（平台未启 + Docker 未启）挂起待补 |
 | **S1** Bridge 骨架 + MCP 会话 + 值班代管 | `bridge/` 目录建 Python 工程；config.yaml（platform base-url / api-key / heartbeat 间隔 / CLI 命令模板 / 轮询间隔）；MCP client（握手 → initialize → tools/call 封装）；checkIn → 定时 heartbeat → Ctrl+C 优雅 checkOut | S0 | 平台侧租约 ACTIVE 且持续续期 ≥5 分钟；checkOut 后租约 CLOSED；kill -9 后平台租约到期自然回收 |
 | **S2** 门铃订阅 + 任务拉取 | 门铃 SSE 订阅（Bearer）→ `type=inbox` → pullTasks(EXECUTOR) → ack → claimSubTask；门铃断连退避重连；兜底轮询 30s | S1 | 平台派单 → 门铃秒级响 → Bridge claim 成功（DB 认领原子）；杀门铃连接 → 轮询兜底仍消费到同一条；重复 pull 无副作用（幂等） |
 | **S3** CLI 执行编排 + 结果回传 | claim 后组装提示词 → spawn 本机 CLI（模板可配）→ 超时控制 → 采集结果；submitResult 两路 + reportBlocked；串行单任务槽 | S2 | 全链 e2e：平台派单 → 子任务 IN_PROGRESS → CLI 执行 → submitResult → 子任务进 REVIEW（与内部 Agent 同回写链）；CLI 失败 → submitResult(failed) 路径；CLI 超时 → 超时路径 |
