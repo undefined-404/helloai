@@ -99,58 +99,13 @@ Planner
 
 | ID | 能力 | 状态 | 优先级 | Gap |
 |---|---|---|---|---|
-| N-002 | Team 编排 | TODO | P1 | 当前缺少稳定的 Team / Agent 组合编排模型 |
 | N-003 | Browser Agent | TODO | P2 | 尚无完整真实 Browser Agent 执行链路 |
 | N-006 | 优先级调度 | TODO | P2 | 当前缺少完整优先级队列与抢占机制 |
 | N-009 | 跨会话记忆 | TODO | P2 | 尚无独立长期记忆平面 |
 
 ---
 
-# 6. N-002 Team 编排
-
-**状态：** `TODO`
-
-**优先级：** P1
-
-## 当前状态
-
-当前 Agent 已支持角色、状态和调度。
-
-但：
-
-```text
-Agent
-```
-
-与：
-
-```text
-Team
-```
-
-之间尚未形成稳定模型。
-
-## 差距
-
-缺少：
-
-- Team
-- Team Member
-- Team Role
-- Team Policy
-- Team 生命周期
-
-## 原则
-
-Team 不应复制 Scheduler。
-
-Team 应该是：
-
-> Agent 的组织 / 编排抽象。
-
----
-
-# 7. N-003 Browser Agent
+# 6. N-003 Browser Agent
 
 **状态：** `TODO`
 
@@ -219,7 +174,7 @@ Agent
 
 ---
 
-# 9. N-009 跨会话记忆
+# 8. N-009 跨会话记忆
 
 **状态：** `TODO`
 
@@ -314,14 +269,14 @@ doc/design/
 
 ---
 
-# 12. Gap 与 Design 的关系
+# 11. Gap 与 Design 的关系
 
 推荐：
 
 ```text
-N-002
+N-003
   ↓
-design/team.md
+design/browser.md
   ↓
 代码实现
   ↓
@@ -333,7 +288,7 @@ log/2026-xx.md
 而不是：
 
 ```text
-N-002
+N-003
   ↓
 不断向表格追加 500 行实现细节
 ```
@@ -361,7 +316,7 @@ Log = 历史状态
 
 ---
 
-# 15. 当前 Gap 使用原则
+# 13. 当前 Gap 使用原则
 
 AI Agent 读取本文件时：
 
@@ -373,7 +328,7 @@ AI Agent 读取本文件时：
 
 ---
 
-# 15. 最终原则
+# 14. 最终原则
 
 实现差距表不是：
 
