@@ -507,7 +507,6 @@ PostgreSQL metrics
 
 | 能力 | 当前状态 |
 |---|---|
-| Workflow 模板 | 未完整交付 |
 | Team 编排 | 未完整交付 |
 | Browser Agent | 未完整交付 |
 | 优先级调度 | 未完整交付 |

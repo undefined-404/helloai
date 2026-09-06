@@ -12,7 +12,7 @@
 >
 > 最终事实以当前代码、数据库及可复现实验为准。
 >
-> 最后更新：2026-09-05
+> 最后更新：2026-09-06
 
 ---
 
@@ -88,7 +88,7 @@ Planner
 
 当前主要差距集中在：
 
-1. Workflow / Team 编排
+1. Team 编排
 2. Browser Agent
 3. 高级调度能力
 4. 跨会话记忆
@@ -99,7 +99,6 @@ Planner
 
 | ID | 能力 | 状态 | 优先级 | Gap |
 |---|---|---|---|---|
-| N-001 | Workflow 模板 | TODO | P1 | 当前缺少完整 Workflow 模型与模板化编排能力 |
 | N-002 | Team 编排 | TODO | P1 | 当前缺少稳定的 Team / Agent 组合编排模型 |
 | N-003 | Browser Agent | TODO | P2 | 尚无完整真实 Browser Agent 执行链路 |
 | N-006 | 优先级调度 | TODO | P2 | 当前缺少完整优先级队列与抢占机制 |
@@ -107,79 +106,7 @@ Planner
 
 ---
 
-# 6. N-001 Workflow 模板
-
-**状态：** `TODO`
-
-**优先级：** P1
-
-## 当前状态
-
-当前已经具备：
-
-```text
-Task
-SubTask
-depends_on
-Scheduler
-Agent
-Execution
-```
-
-但还没有形成独立、稳定、可复用的 Workflow 模板模型。
-
-## 差距
-
-缺少：
-
-- Workflow 定义
-- Workflow Template
-- Workflow Version
-- 节点模型
-- 节点依赖
-- 参数化
-- 模板实例化
-- Workflow 执行状态
-
-## 目标
-
-支持：
-
-```text
-Workflow Template
-      ↓
-Workflow Instance
-      ↓
-Task / SubTask
-      ↓
-Agent Execution
-```
-
-## 建议
-
-独立设计，不直接修改现有 Task 模型硬塞 Workflow 语义。
-
-设计文档：
-
-```text
-doc/design/
-```
-
-## 验证
-
-至少覆盖：
-
-- 模板创建
-- 模板实例化
-- 节点依赖
-- 节点失败
-- 重试
-- Workflow 完成
-- Workflow 恢复
-
----
-
-# 7. N-002 Team 编排
+# 6. N-002 Team 编排
 
 **状态：** `TODO`
 
@@ -223,7 +150,7 @@ Team 应该是：
 
 ---
 
-# 8. N-003 Browser Agent
+# 7. N-003 Browser Agent
 
 **状态：** `TODO`
 
@@ -259,7 +186,7 @@ Browser Agent 应作为一种 Agent 类型接入已有执行体系。
 
 ---
 
-# 9. N-006 优先级调度
+# 8. N-006 优先级调度
 
 **状态：** `TODO`
 
@@ -292,7 +219,7 @@ Agent
 
 ---
 
-# 10. N-009 跨会话记忆
+# 9. N-009 跨会话记忆
 
 **状态：** `TODO`
 
@@ -322,7 +249,7 @@ Agent Memory
 
 ---
 
-# 11. Gap 新增规则
+# 10. Gap 新增规则
 
 新增 Gap 必须至少包含：
 
@@ -353,7 +280,7 @@ ID
 
 ---
 
-# 12. Gap 完成规则
+# 11. Gap 完成规则
 
 当一个 Gap 满足：
 
@@ -387,14 +314,14 @@ doc/design/
 
 ---
 
-# 13. Gap 与 Design 的关系
+# 12. Gap 与 Design 的关系
 
 推荐：
 
 ```text
-N-001
+N-002
   ↓
-design/workflow.md
+design/team.md
   ↓
 代码实现
   ↓
@@ -406,14 +333,14 @@ log/2026-xx.md
 而不是：
 
 ```text
-N-001
+N-002
   ↓
 不断向表格追加 500 行实现细节
 ```
 
 ---
 
-# 14. Gap 与 Log 的关系
+# 13. Gap 与 Log 的关系
 
 Gap：
 
@@ -446,7 +373,7 @@ AI Agent 读取本文件时：
 
 ---
 
-# 16. 最终原则
+# 15. 最终原则
 
 实现差距表不是：
 
