@@ -428,3 +428,21 @@ export interface RequirementMessage {
   payload?: string | null
   createTime: string
 }
+
+// --- Team 组合（N-002，C2） ---
+export interface Team {
+  id: LongId
+  name: string
+  description: string | null
+  status: 'DRAFT' | 'ACTIVE' | 'ARCHIVED' | string
+  createTime: string
+  updateTime: string
+}
+
+export interface TeamMember {
+  id: LongId
+  teamId: LongId
+  agentId: LongId
+  slotRole: AgentRole
+  weight: number
+}

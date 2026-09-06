@@ -114,7 +114,14 @@ export const paths = {
     // Phase 5 质量度量看板三查询端点
     qualityOverview: '/admin/quality/overview',
     qualityAgents: '/admin/quality/agents',
-    qualityDashboard: '/admin/quality/dashboard'
+    qualityDashboard: '/admin/quality/dashboard',
+    // N-002 Team 组合管理（C2：命名组合 + 槽位填充，展开喂任务白名单）
+    teams: '/admin/teams',
+    teamById: (id: string | number) => `/admin/teams/${enc(id)}`,
+    teamPublish: (id: string | number) => `/admin/teams/${enc(id)}/publish`,
+    teamArchive: (id: string | number) => `/admin/teams/${enc(id)}/archive`,
+    teamMembers: (id: string | number) => `/admin/teams/${enc(id)}/members`,
+    teamMember: (id: string | number, agentId: string | number) => `/admin/teams/${enc(id)}/members/${enc(agentId)}`
   },
   activity: {
     list: '/activity/list'

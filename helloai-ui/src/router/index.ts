@@ -25,6 +25,7 @@ const routes = [
       { path: 'sub-tasks/:id', component: () => import('@/views/subtask/SubTaskDetail.vue'), meta: { title: '子任务详情' } },
       { path: 'agents',     component: () => import('@/views/agent/AgentList.vue'), meta: { title: 'Agent管理' } },
       { path: 'agents/:id', component: () => import('@/views/agent/AgentDetail.vue'), meta: { title: 'Agent详情' } },
+      { path: 'teams',      component: () => import('@/views/team/TeamList.vue'), meta: { title: 'Team组合' } },
       { path: 'reviews',    component: () => import('@/views/review/ReviewList.vue'), meta: { title: '审查中心' } },
       { path: 'quality-dashboard', component: () => import('@/views/quality/QualityDashboard.vue'), meta: { title: '质量看板' } },
       { path: 'rewards',    component: () => import('@/views/reward/RewardList.vue'), meta: { title: '积分流水' } },

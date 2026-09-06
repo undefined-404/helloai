@@ -65,6 +65,10 @@
           <el-icon><User /></el-icon>
           <span>Agent管理</span>
         </el-menu-item>
+        <el-menu-item index="/teams">
+          <el-icon><UserFilled /></el-icon>
+          <span>Team组合</span>
+        </el-menu-item>
         <!-- v2.0: Prompt 管理菜单移除，Agent 接入改用 onboarding 弹窗 -->
         <!-- <el-menu-item index="/prompts">
           <el-icon><EditPen /></el-icon>
