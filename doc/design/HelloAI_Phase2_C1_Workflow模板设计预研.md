@@ -225,17 +225,19 @@ createWorkflowInstance(templateId, params)
 
 ---
 
-## §7 验证方案（差距表要求）
+## §7 验证汇总（C1-S4 已实施，2026-09-05）
 
-| 验证项 | 方式 |
-|---|---|
-| 模板创建 | 单测：模板 + 版本发布（definition JSONB 校验） |
-| 模板实例化 | 单测：实例化产出 task/sub_task 数量、依赖映射、参数渲染正确 |
-| 节点依赖 | 单测：依赖边 → sub_task.depends_on 正确；ready 语义由现有链测试覆盖 |
-| 节点失败 | 复用现有 BLOCKED/重派链测试 + 实例状态聚合测试（节点失败 → 实例 RUNNING 不终态） |
-| 重试 | 复用现有重派/重试测试 + 实例重试上限 → FAILED 聚合测试 |
-| Workflow 完成 | 单测：全部节点 DONE + final_report → 实例 DONE |
-| Workflow 恢复 | 现有收敛链（回收/孤儿兜底）+ 人工重派；实例 FAILED 后人工重建 |
+| 验证项 | 落点（测试类 / 方式） | 状态 |
+|---|---|---|
+| 模板创建 | `WorkflowTemplateServiceImplTest`（模板创建/更新/归档/发布版本不可变/version_no 递增）+ `WorkflowDefinitionValidatorTest`（definition JSONB 校验） | 通过（S1） |
+| 模板实例化 | `WorkflowInstanceServiceImplTest.shouldMaterializeTemplate`（task 渲染创建/节点→sub_task 数量/依赖映射/参数渲染/context 单顶级键） | 通过（S2） |
+| 节点依赖 | 同实例化用例断言 `updateDependsOn(implement→[contract])` + `WorkflowDefinitionValidatorTest`（依赖引用存在/DAG 无环）；ready 语义由现有调度链测试（既有回归）覆盖 | 通过（S2） |
+| 节点失败 | `WorkflowInstanceStatusAggregatorTest.shouldStayRunningOnBlocked` + `WorkflowInstanceServiceImplTest.shouldStayRunningOnBlockedNode`（节点 BLOCKED fail-close → 实例 RUNNING 不终态，且聚合不反锁 task/sub_task）；现有 BLOCKED/重派链测试（既有回归） | 通过（S3/S4） |
+| 重试 | `WorkflowInstanceStatusAggregatorTest.shouldAggregateDeadLetter`（DEAD_LETTER 熔断 → FAILED）；现有重派/重试测试（既有回归） | 通过（S3） |
+| Workflow 完成 | `WorkflowInstanceStatusAggregatorTest.shouldAggregateDone` + `WorkflowInstanceServiceImplTest.shouldAggregateDone`（全节点 DONE + task DONE → 实例 DONE） | 通过（S3） |
+| Workflow 恢复 | 现有收敛链测试（Lease 回收/孤儿兜底，既有回归）+ 人工重建语义（C1 §4.2：新实例新 task，旧 task 留失败现场）；实例状态纯查询聚合天然支持重建 | 通过（复用 + 语义） |
+
+**全量回归**：core Tests run: 1178（基线 1158 + C1 新增 20，Failures/Errors=0）/ api Tests run: 41。既有回归（BLOCKED 链/重派/重试/收敛链/Planner）全部保持绿色，无行为回退。
 
 ---
 
@@ -300,3 +302,10 @@ C1-S5 文档回填（差距表 N-001 收口口径 + LOG）
 - **审阅修正（V1 事实校准）**：`sub_task` 无 `required_skills` 列（task 级 V47）；`task.agent_policy` 为任务级单值，无"节点级覆盖"——节点级差异化是 N-002 Team 真实缺口。D2 落点段已删除不现实表述。
 - **决策拍板**：D1=spec 落 context 单顶级键 `workflow`（不平铺散键）/ D2=失败续跑首版砍，实例状态纯查询聚合（方案 A，不落权威列）+ 反锁禁令 / D3=LLM 微调首版不接（正确接点在实例化前）/ D4=Workflow 管流程形状、Team 管槽位填充（节点不绑 agent，单向依赖）。
 - **新增 D6**：context 单顶级键 + 实例状态纯查询聚合 + 反锁禁令（§4.2 两级恢复语义拆清，§10 决策记录落稿）。
+
+### R3（2026-09-05）：实施完成 + 验证汇总（S1~S4）
+
+- **S1**：V68 两表 + 枚举/实体/Mapper + `WorkflowDefinitionValidator`（nodeKey 唯一/角色白名单/依赖引用/DAG 无环）+ 模板/版本 CRUD（发布 CAS 不可变 + current_version 回填）。core 1158 / api 39 全绿。
+- **S2**：V69 `workflow_instance`（无权威 status 列，D6-2）+ `WorkflowInstanceService.createWorkflowInstance`（params 必填校验 → taskDefaults 渲染 → createTask → 逐节点 sub_task 物化（spec 渲染 + context 单顶级键 workflow{nodeKey,spec,templateVersionId}）→ depends_on node_key 映射回填 → 创建实例 → dispatchPendingSubTaskAuto（ready 守卫）→ task IN_PROGRESS）+ `WorkflowParamRenderer`。core 1165 / api 40 全绿。
+- **S3**：`WorkflowInstanceStatusAggregator` 纯函数（ALL_DONE / CANCELED / DEAD_LETTER→FAILED / SLA_TIMEOUT→FAILED / IN_PROGRESS）+ `aggregateStatus` 纯查询聚合（不落权威列、无反锁）+ api `GET /workflow-instances/{id}/status`。core 1177 / api 41 全绿。
+- **S4**：补服务层"节点失败 → RUNNING 不终态"集成用例（含反锁禁令断言）；§7 七项验证全部落点核对（见 §7 汇总表）；全量回归 core 1178 / api 41 全绿，既有 BLOCKED/重派/重试/收敛链回归无回退。
