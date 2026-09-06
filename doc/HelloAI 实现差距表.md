@@ -99,49 +99,12 @@ Planner
 
 | ID | 能力 | 状态 | 优先级 | Gap |
 |---|---|---|---|---|
-| N-003 | Browser Agent | TODO | P2 | 尚无完整真实 Browser Agent 执行链路 |
 | N-006 | 优先级调度 | TODO | P2 | 当前缺少完整优先级队列与抢占机制 |
 | N-009 | 跨会话记忆 | TODO | P2 | 尚无独立长期记忆平面 |
 
 ---
 
-# 6. N-003 Browser Agent
-
-**状态：** `TODO`
-
-**优先级：** P2
-
-## 当前状态
-
-平台已经具备外部 Agent / MCP 执行基础设施。
-
-## 差距
-
-缺少完整：
-
-```text
-Browser Agent
-↓
-Browser Session
-↓
-Tool
-↓
-Artifact
-↓
-Result
-```
-
-执行链路。
-
-## 目标
-
-Browser Agent 应作为一种 Agent 类型接入已有执行体系。
-
-不得新增第二套任务调度系统。
-
----
-
-# 8. N-006 优先级调度
+# 6. N-006 优先级调度
 
 **状态：** `TODO`
 
@@ -174,7 +137,7 @@ Agent
 
 ---
 
-# 8. N-009 跨会话记忆
+# 7. N-009 跨会话记忆
 
 **状态：** `TODO`
 
@@ -204,7 +167,7 @@ Agent Memory
 
 ---
 
-# 10. Gap 新增规则
+# 8. Gap 新增规则
 
 新增 Gap 必须至少包含：
 
@@ -235,7 +198,7 @@ ID
 
 ---
 
-# 11. Gap 完成规则
+# 9. Gap 完成规则
 
 当一个 Gap 满足：
 
@@ -269,14 +232,14 @@ doc/design/
 
 ---
 
-# 11. Gap 与 Design 的关系
+# 10. Gap 与 Design 的关系
 
 推荐：
 
 ```text
-N-003
+N-006
   ↓
-design/browser.md
+design/priority.md
   ↓
 代码实现
   ↓
@@ -288,14 +251,14 @@ log/2026-xx.md
 而不是：
 
 ```text
-N-003
+N-006
   ↓
 不断向表格追加 500 行实现细节
 ```
 
 ---
 
-# 13. Gap 与 Log 的关系
+# 11. Gap 与 Log 的关系
 
 Gap：
 
@@ -316,7 +279,7 @@ Log = 历史状态
 
 ---
 
-# 13. 当前 Gap 使用原则
+# 12. 当前 Gap 使用原则
 
 AI Agent 读取本文件时：
 
@@ -328,7 +291,7 @@ AI Agent 读取本文件时：
 
 ---
 
-# 14. 最终原则
+# 13. 最终原则
 
 实现差距表不是：
 
