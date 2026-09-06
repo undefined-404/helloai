@@ -33,6 +33,7 @@ import reactor.core.publisher.Flux;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -84,6 +85,15 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
 
     /** 联合决策历史裁剪条数（决策只看近期上下文，控制 token 预算）。 */
     private static final int DECISION_HISTORY_LIMIT = 6;
+
+    /**
+     * 主回复历史窗口条数（N-012 Planner Context 管理收口）。
+     *
+     * <p>长会话（&gt;窗口）只保留最近 {@code HISTORY_WINDOW} 条 + 首条用户消息锚点，
+     * 消除全量拼接导致的 O(n²) token 膨胀；决策调用另有更小窗口
+     * （{@link #DECISION_HISTORY_LIMIT}，6 条已证近期上下文足够意图识别）。</p>
+     */
+    private static final int HISTORY_WINDOW = 40;
 
     /** 转方案类斜杠命令前缀（/planner|/plan，与前端 PLANNER_COMMAND_RE 对齐：前缀后只接受空白或结束）。 */
     private static final List<String> PLANNER_COMMAND_PREFIXES = List.of("/planner", "/plan");
@@ -1158,9 +1168,12 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     }
 
     /**
-     * 加载 classpath 模板并替换两个占位符：
+     * 加载 classpath 模板并替换占位符（N-012 Context 分层收口）：
      * <ul>
-     *   <li>{@code {{CONVERSATION_HISTORY}}} — transcript 全量历史；</li>
+     *   <li>{@code {{CURRENT_USER_MESSAGE}}} — 本轮最新用户消息，独立分层注入
+     *       （从历史中抽离，避免与历史末行重复）；</li>
+     *   <li>{@code {{CONVERSATION_HISTORY}}} — 窗口内历史（最近 {@link #HISTORY_WINDOW} 条
+     *       + 首条用户消息锚点，服务端裁剪，不含本轮最新用户消息）；</li>
      *   <li>{@code {{WEB_SEARCH_CONTEXT}}} — 首轮预检索的联网资料；空串代表无资料，
      *       渲染为"（无可用联网资料）"占位符，保证 Prompt 该节语义节稳定。</li>
      * </ul>
@@ -1178,8 +1191,21 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         } catch (Exception e) {
             throw new BizException("读取 Prompt 模板失败: " + e.getMessage());
         }
+        List<RequirementMessage> messages = messageService.listByConversation(conversationId);
+        // Current User Input 层：抽离最新用户消息（从后往前找第一条 user 角色）
+        String currentUserInput = null;
+        List<RequirementMessage> history = new ArrayList<>(messages);
+        for (int i = history.size() - 1; i >= 0; i--) {
+            if (ROLE_USER.equals(history.get(i).getRole())) {
+                currentUserInput = history.get(i).getContent();
+                history.remove(i);
+                break;
+            }
+        }
+        // Conversation 层：窗口裁剪（最近 HISTORY_WINDOW 条 + 首条用户消息锚点）
+        List<RequirementMessage> windowed = windowHistory(history, HISTORY_WINDOW);
         StringBuilder transcript = new StringBuilder();
-        for (RequirementMessage msg : messageService.listByConversation(conversationId)) {
+        for (RequirementMessage msg : windowed) {
             transcript.append(ROLE_USER.equals(msg.getRole()) ? "用户：" : "助手：")
                     .append(msg.getContent()).append('\n');
         }
@@ -1187,10 +1213,35 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                 ? "（无可用联网资料）" : webSearchContext;
         return template
                 .replace("{{CONVERSATION_HISTORY}}", transcript.toString().trim())
+                .replace("{{CURRENT_USER_MESSAGE}}", currentUserInput != null ? currentUserInput : "")
                 .replace("{{WEB_SEARCH_CONTEXT}}", contextSection)
                 // 系统当前时间逐轮注入（第一层防线），保证 CHAT/CLARIFY/FINALIZE
                 // 三个模板在回答时效性问题时均以服务器实时日期为基准
                 .replace("{{SYSTEM_TIME_CONTEXT}}", systemTimeContextBuilder.build());
+    }
+
+    /**
+     * 对话历史窗口裁剪（N-012 Context 分层收口，纯函数可单测）。
+     *
+     * <p>窗内（size ≤ window）原样返回；超窗保留最近 {@code window} 条，
+     * 并把首条用户消息（需求起点）作为锚点前置——长会话不丢失原始意图。</p>
+     */
+    static List<RequirementMessage> windowHistory(List<RequirementMessage> history, int window) {
+        if (history == null || history.isEmpty() || history.size() <= window) {
+            return history;
+        }
+        List<RequirementMessage> tail = new ArrayList<>(history.subList(history.size() - window, history.size()));
+        RequirementMessage firstUser = null;
+        for (RequirementMessage m : history) {
+            if (ROLE_USER.equals(m.getRole())) {
+                firstUser = m;
+                break;
+            }
+        }
+        if (firstUser != null && tail.indexOf(firstUser) < 0) {
+            tail.add(0, firstUser);
+        }
+        return tail;
     }
 
 }

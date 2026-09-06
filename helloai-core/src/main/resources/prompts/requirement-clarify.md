@@ -2,8 +2,10 @@
 <!--
   由 RequirementClarifyService 加载渲染（classpath:prompts/requirement-clarify.md）。
   占位符：
+    {{CURRENT_USER_MESSAGE}} 本轮最新用户输入（服务端独立注入，聚焦当前请求）。
     {{CONVERSATION_HISTORY}} 由服务端替换（transcript 文本，
-      `用户：…` / `助手：…` 逐行拼接，含本轮最新用户消息）。
+      `用户：…` / `助手：…` 逐行拼接；服务端窗口裁剪：最近 40 条 + 首轮意图锚点，
+      不含本轮最新用户消息——后者由 {{CURRENT_USER_MESSAGE}} 单独承载）。
     {{WEB_SEARCH_CONTEXT}} 由服务端在每轮对话前按需检索注入；
       无联网资料时该占位符会被替换为"（无可用联网资料）"，Prompt 内固定有这一节避免关注点漂移。
     {{SYSTEM_TIME_CONTEXT}} 系统当前时间上下文（服务端每轮实时渲染，含"今天"等相对时间词
@@ -44,6 +46,10 @@
 6. 边界与排除项：明确不做什么——不覆盖的场景、不支持的平台/用户、不含的交付物，必须显式写清，杜绝隐含承诺（scope 必须显式）。
 
 progress 字段是你对"需求已澄清程度"的 0~100 自评（按上面六维度覆盖情况估算），仅用于向用户展示进度；当自评达到 85 以上时应倾向于产出终稿而不是继续追问。
+
+## 当前用户输入
+
+{{CURRENT_USER_MESSAGE}}
 
 ## 对话历史
 

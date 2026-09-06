@@ -2254,4 +2254,33 @@ class RequirementClarifyServiceTest {
         verify(platformAgentExecutionService, never())
                 .executeStream(any(Agent.class), any(AgentTask.class));
     }
+
+    @Test
+    @DisplayName("B4：主回复 Current User Input 独立注入——最新 user 消息从历史抽离单独承载")
+    void chatRoundInjectsCurrentUserMessageSeparately() {
+        RequirementConversation conversation = activeConversation();
+        conversation.setMode(RequirementClarifyService.MODE_CHAT);
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+        when(messageService.listByConversation(CONV_ID)).thenReturn(List.of(
+                message("user", "需求起点：做一个报表", 1),
+                message("assistant", "追问：范围多大？", 2),
+                message("user", "本期先做核心报表", 3)));
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success("明白。", "stop", "llm", 100));
+        stubDecisionRound(DECISION_CHAT_NO_SEARCH);
+
+        clarifyService.sendMessage(CONV_ID, "本期先做核心报表");
+
+        ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+        verify(platformAgentExecutionService, times(2)).executeSync(any(Agent.class), taskCaptor.capture());
+        String mainPrompt = taskCaptor.getAllValues().get(1).getUserPrompt();
+        // Current User Input 层：最新用户消息独立注入（N-012 Context 分层）
+        assertThat(mainPrompt).contains("## 当前用户输入").contains("本期先做核心报表");
+        // 历史层不含本轮最新用户消息（已被抽离到 Current User Input 层，避免重复）
+        assertThat(mainPrompt).doesNotContain("用户：本期先做核心报表");
+        // 历史层保留窗口内消息（含需求起点与助手追问）
+        assertThat(mainPrompt).contains("用户：需求起点：做一个报表")
+                .contains("助手：追问：范围多大？");
+    }
 }
