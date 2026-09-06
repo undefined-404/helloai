@@ -510,7 +510,6 @@ PostgreSQL metrics
 | Workflow 模板 | 未完整交付 |
 | Team 编排 | 未完整交付 |
 | Browser Agent | 未完整交付 |
-| 完整 Provider Factory | 部分完成 |
 | 优先级调度 | 未完整交付 |
 | 抢占式打断 / 恢复 | 未完整交付 |
 | 执行进度快照 | 未完整交付 |

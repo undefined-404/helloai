@@ -90,9 +90,8 @@ Planner
 
 1. Workflow / Team 编排
 2. Browser Agent
-3. Provider Factory 完整化
-4. 高级调度能力
-5. 跨会话记忆
+3. 高级调度能力
+4. 跨会话记忆
 
 ---
 
@@ -103,7 +102,6 @@ Planner
 | N-001 | Workflow 模板 | TODO | P1 | 当前缺少完整 Workflow 模型与模板化编排能力 |
 | N-002 | Team 编排 | TODO | P1 | 当前缺少稳定的 Team / Agent 组合编排模型 |
 | N-003 | Browser Agent | TODO | P2 | 尚无完整真实 Browser Agent 执行链路 |
-| N-005 | Provider Factory | PARTIAL | P1 | Provider Catalog 已存在，但部分 Provider Factory 尚不完整 |
 | N-006 | 优先级调度 | TODO | P2 | 当前缺少完整优先级队列与抢占机制 |
 | N-009 | 跨会话记忆 | TODO | P2 | 尚无独立长期记忆平面 |
 | N-012 | Planner Context 管理 | PARTIAL | P1 | 当前上下文能力存在，但尚需建立更明确的 Context 分层策略 |
@@ -262,48 +260,7 @@ Browser Agent 应作为一种 Agent 类型接入已有执行体系。
 
 ---
 
-# 9. N-005 Provider Factory
-
-**状态：** `PARTIAL`
-
-**优先级：** P1
-
-## 当前状态
-
-当前已经具备 Provider Catalog / Model 管理基础。
-
-## 差距
-
-部分 Provider 尚未形成完整统一 Factory。
-
-## 目标
-
-统一：
-
-```text
-Provider
-+
-Model
-+
-ChatClient
-+
-Config
-```
-
-创建方式。
-
-## 原则
-
-不得在业务 Service 中大量出现：
-
-```text
-if provider == xxx
-if provider == yyy
-```
-
----
-
-# 10. N-006 优先级调度
+# 9. N-006 优先级调度
 
 **状态：** `TODO`
 
@@ -336,7 +293,7 @@ Agent
 
 ---
 
-# 11. N-009 跨会话记忆
+# 10. N-009 跨会话记忆
 
 **状态：** `TODO`
 
@@ -366,7 +323,7 @@ Agent Memory
 
 ---
 
-# 12. N-012 Planner Context 管理
+# 11. N-012 Planner Context 管理
 
 **状态：** `PARTIAL`
 
@@ -417,7 +374,7 @@ Context 越多不代表 Agent 越聪明。
 
 ---
 
-# 13. Gap 新增规则
+# 12. Gap 新增规则
 
 新增 Gap 必须至少包含：
 
@@ -448,7 +405,7 @@ ID
 
 ---
 
-# 14. Gap 完成规则
+# 13. Gap 完成规则
 
 当一个 Gap 满足：
 
@@ -482,7 +439,7 @@ doc/design/
 
 ---
 
-# 15. Gap 与 Design 的关系
+# 14. Gap 与 Design 的关系
 
 推荐：
 
@@ -508,7 +465,7 @@ N-001
 
 ---
 
-# 16. Gap 与 Log 的关系
+# 15. Gap 与 Log 的关系
 
 Gap：
 
@@ -529,7 +486,7 @@ Log = 历史状态
 
 ---
 
-# 17. 当前 Gap 使用原则
+# 16. 当前 Gap 使用原则
 
 AI Agent 读取本文件时：
 
@@ -541,7 +498,7 @@ AI Agent 读取本文件时：
 
 ---
 
-# 18. 最终原则
+# 17. 最终原则
 
 实现差距表不是：
 
