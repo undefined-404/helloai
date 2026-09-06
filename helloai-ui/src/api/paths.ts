@@ -121,7 +121,10 @@ export const paths = {
     teamPublish: (id: string | number) => `/admin/teams/${enc(id)}/publish`,
     teamArchive: (id: string | number) => `/admin/teams/${enc(id)}/archive`,
     teamMembers: (id: string | number) => `/admin/teams/${enc(id)}/members`,
-    teamMember: (id: string | number, agentId: string | number) => `/admin/teams/${enc(id)}/members/${enc(agentId)}`
+    teamMember: (id: string | number, agentId: string | number) => `/admin/teams/${enc(id)}/members/${enc(agentId)}`,
+    // N-003 Browser 会话展示（C3 配套：登记/展示语义，无反向写端点）
+    browserSessions: '/admin/browser-sessions',
+    browserSessionById: (id: string | number) => `/admin/browser-sessions/${enc(id)}`
   },
   activity: {
     list: '/activity/list'

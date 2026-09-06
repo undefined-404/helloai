@@ -446,3 +446,16 @@ export interface TeamMember {
   slotRole: AgentRole
   weight: number
 }
+
+// --- Browser 会话（N-003，C3 配套） ---
+export interface BrowserSession {
+  id: LongId
+  agentId: LongId
+  taskId: LongId | null
+  status: 'BEGIN' | 'ACTIVE' | 'CLOSED' | 'FAILED' | string
+  currentUrl: string | null
+  lastScreenshotRef: string | null
+  beginTime: string | null
+  closeTime: string | null
+  createTime: string
+}
