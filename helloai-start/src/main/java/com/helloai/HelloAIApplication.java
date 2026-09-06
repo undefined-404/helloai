@@ -12,6 +12,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @EnableConfigurationProperties(AgentProviderProperties.class)
 @MapperScan({
         "com.helloai.core.agent.mapper",
+        "com.helloai.core.agent.session.mapper",
         "com.helloai.core.agent.quality.mapper",
         "com.helloai.core.task.mapper",
         "com.helloai.core.review.mapper",
