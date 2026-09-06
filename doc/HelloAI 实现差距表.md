@@ -104,7 +104,6 @@ Planner
 | N-003 | Browser Agent | TODO | P2 | 尚无完整真实 Browser Agent 执行链路 |
 | N-006 | 优先级调度 | TODO | P2 | 当前缺少完整优先级队列与抢占机制 |
 | N-009 | 跨会话记忆 | TODO | P2 | 尚无独立长期记忆平面 |
-| N-012 | Planner Context 管理 | PARTIAL | P1 | 当前上下文能力存在，但尚需建立更明确的 Context 分层策略 |
 
 ---
 
@@ -323,58 +322,7 @@ Agent Memory
 
 ---
 
-# 11. N-012 Planner Context 管理
-
-**状态：** `PARTIAL`
-
-**优先级：** P1
-
-## 当前问题
-
-Planner 当前同时涉及：
-
-```text
-Chat
-Clarify
-Search
-Plan
-Task
-Memory
-```
-
-如果所有信息全部进入一个 Prompt，Context 会持续膨胀。
-
-## 目标
-
-建立分层 Context：
-
-```text
-System Context
-    ↓
-Project Context
-    ↓
-Conversation Context
-    ↓
-Current User Input
-    ↓
-Optional Search Context
-    ↓
-Optional MCP Context
-```
-
-不同任务只注入需要的信息。
-
-## 原则
-
-Context 越多不代表 Agent 越聪明。
-
-目标是：
-
-> 在正确任务中提供正确上下文。
-
----
-
-# 12. Gap 新增规则
+# 11. Gap 新增规则
 
 新增 Gap 必须至少包含：
 
@@ -405,7 +353,7 @@ ID
 
 ---
 
-# 13. Gap 完成规则
+# 12. Gap 完成规则
 
 当一个 Gap 满足：
 
@@ -439,7 +387,7 @@ doc/design/
 
 ---
 
-# 14. Gap 与 Design 的关系
+# 13. Gap 与 Design 的关系
 
 推荐：
 
@@ -465,7 +413,7 @@ N-001
 
 ---
 
-# 15. Gap 与 Log 的关系
+# 14. Gap 与 Log 的关系
 
 Gap：
 
@@ -486,7 +434,7 @@ Log = 历史状态
 
 ---
 
-# 16. 当前 Gap 使用原则
+# 15. 当前 Gap 使用原则
 
 AI Agent 读取本文件时：
 
@@ -498,7 +446,7 @@ AI Agent 读取本文件时：
 
 ---
 
-# 17. 最终原则
+# 16. 最终原则
 
 实现差距表不是：
 
