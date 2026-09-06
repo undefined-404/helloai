@@ -304,6 +304,26 @@ class WorkflowInstanceServiceImplTest {
             assertThat(view.getStatus()).isEqualTo(WorkflowInstanceStatus.FAILED);
             assertThat(view.getReason()).isEqualTo("SLA_TIMEOUT");
         }
+
+        @Test
+        @DisplayName("节点 BLOCKED（fail-close 待人工）→ RUNNING 不终态（§7 节点失败验证）")
+        void shouldStayRunningOnBlockedNode() {
+            when(instanceMapper.selectById(20L)).thenReturn(instance(TASK_ID));
+            Task task = new Task();
+            task.setId(TASK_ID);
+            task.setStatus(TaskStatus.IN_PROGRESS);
+            when(taskService.getById(TASK_ID)).thenReturn(task);
+            when(subTaskService.list(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class))).thenReturn(List.of(
+                    node(201L, "contract", SubTaskStatus.DONE),
+                    node(202L, "implement", SubTaskStatus.BLOCKED)));
+
+            WorkflowInstanceStatusView view = service.aggregateStatus(20L);
+
+            assertThat(view.getStatus()).isEqualTo(WorkflowInstanceStatus.RUNNING);
+            assertThat(view.getReason()).isEqualTo("IN_PROGRESS");
+            // 反锁禁令：聚合投影不含任何写操作，task/sub_task 保持原状
+            verify(taskService, org.mockito.Mockito.never()).updateStatus(any(), any());
+        }
     }
 
     private Task taskOf() {
