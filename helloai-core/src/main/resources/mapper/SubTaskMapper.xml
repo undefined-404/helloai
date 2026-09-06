@@ -164,7 +164,14 @@
               SELECT 1 FROM agent_execution_record aer
               WHERE aer.sub_task_id = st.id
           )
-        ORDER BY st.id ASC
+        ORDER BY
+            /* N-006：优先级出队（HIGH=3/MEDIUM=2/LOW=1）+ aging（等待≥30min +1、≥60min +2，cap +2）防饿死 + 同档 FIFO */
+            (CASE st.priority WHEN 'HIGH' THEN 3 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 1 ELSE 2 END
+             + CASE
+                 WHEN st.create_time &lt; (CURRENT_TIMESTAMP - INTERVAL '60 minutes') THEN 2
+                 WHEN st.create_time &lt; (CURRENT_TIMESTAMP - INTERVAL '30 minutes') THEN 1
+                 ELSE 0 END) DESC,
+            st.create_time ASC
         LIMIT #{limit}
     </select>
 
@@ -247,7 +254,14 @@
               WHERE aer2.sub_task_id = st.id
                 AND aer2.status IN ('PENDING', 'RUNNING')
           )
-        ORDER BY st.id ASC
+        ORDER BY
+            /* N-006：优先级出队 + aging 防饿死 + 同档 FIFO（与 selectStalePendingWithoutExecutionRecord 同款排序） */
+            (CASE st.priority WHEN 'HIGH' THEN 3 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 1 ELSE 2 END
+             + CASE
+                 WHEN st.create_time &lt; (CURRENT_TIMESTAMP - INTERVAL '60 minutes') THEN 2
+                 WHEN st.create_time &lt; (CURRENT_TIMESTAMP - INTERVAL '30 minutes') THEN 1
+                 ELSE 0 END) DESC,
+            st.create_time ASC
         LIMIT #{limit}
     </select>
 

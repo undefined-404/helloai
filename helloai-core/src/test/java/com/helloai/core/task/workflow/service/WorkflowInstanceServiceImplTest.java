@@ -287,6 +287,31 @@ class WorkflowInstanceServiceImplTest {
         }
 
         @Test
+        @DisplayName("优先级继承：task.priority=HIGH → 物化 sub_task 继承 HIGH（C4-S1）")
+        void shouldInheritTaskPriority() {
+            when(templateService.getById(TEMPLATE_ID)).thenReturn(activeTemplate());
+            when(templateService.getVersion(VERSION_ID)).thenReturn(version(Map.of(
+                    "nodes", List.of(Map.of("nodeKey", "a", "role", "executor", "spec", Map.of())),
+                    "taskDefaults", Map.of("titleTemplate", "tpl"))));
+            Task task = new Task();
+            task.setId(TASK_ID);
+            task.setPriority("HIGH");
+            when(taskService.createTask(any(), any(), any(), any(), any())).thenReturn(task);
+            when(subTaskService.create(any(SubTask.class), any())).thenAnswer(inv -> {
+                SubTask st = inv.getArgument(0);
+                st.setId(601L);
+                return st;
+            });
+            doReturn(true).when(service).save(any(WorkflowInstance.class));
+
+            service.createWorkflowInstance(TEMPLATE_ID, Map.of());
+
+            ArgumentCaptor<SubTask> captor = ArgumentCaptor.forClass(SubTask.class);
+            verify(subTaskService).create(captor.capture(), any());
+            assertThat(captor.getValue().getPriority()).isEqualTo("HIGH");
+        }
+
+        @Test
         @DisplayName("spec 缺 title/goal → title 用 nodeKey 兜底")
         void shouldFallbackTitleToNodeKey() {
             when(templateService.getById(TEMPLATE_ID)).thenReturn(activeTemplate());

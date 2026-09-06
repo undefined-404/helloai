@@ -12,6 +12,7 @@ import com.helloai.common.base.R;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.common.constant.TaskPriority;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.ConversationMessage;
@@ -59,7 +60,7 @@ public class SubTaskController {
 
     @PostMapping
     public R<SubTaskResponse> create(@Valid @RequestBody CreateSubTaskRequest req) {
-        SubTask subTask = toEntity(req);
+        SubTask subTask = toEntity(req, resolveTaskPriority(req.getTaskId()));
         subTask = subTaskService.create(subTask, req.getAssignedAgent());
         log.info("子任务创建: id={}, title={}, taskId={}", subTask.getId(), req.getTitle(), req.getTaskId());
 
@@ -85,7 +86,7 @@ public class SubTaskController {
         List<SubTaskService.BatchCreateItem> items = new ArrayList<>(reqs.size());
         for (CreateSubTaskRequest req : reqs) {
             SubTaskService.BatchCreateItem it = new SubTaskService.BatchCreateItem();
-            it.setSubTask(toEntity(req));
+            it.setSubTask(toEntity(req, resolveTaskPriority(req.getTaskId())));
             it.setAssignedAgentId(req.getAssignedAgent());
             items.add(it);
         }
@@ -121,7 +122,7 @@ public class SubTaskController {
     }
 
     /** 从 CreateSubTaskRequest 装配 SubTask 实体（Controller 唯一装配点）。 */
-    private SubTask toEntity(CreateSubTaskRequest req) {
+    private SubTask toEntity(CreateSubTaskRequest req, String taskPriority) {
         SubTask subTask = new SubTask();
         subTask.setTaskId(req.getTaskId());
         subTask.setModuleId(req.getModuleId());
@@ -129,9 +130,19 @@ public class SubTaskController {
         subTask.setContent(req.getDescription());
         subTask.setDeliverable(req.getDeliverable());
         subTask.setAcceptance(req.getAcceptance());
-        subTask.setPriority(req.getPriority() != null ? req.getPriority() : "MEDIUM");
+        // 优先级继承（N-006，C4-S1）：请求显式值优先；未给 → 继承 task.priority
+        subTask.setPriority(req.getPriority() != null ? req.getPriority() : TaskPriority.normalize(taskPriority));
         subTask.setStatus(SubTaskStatus.PENDING);
         return subTask;
+    }
+
+    /** 解析任务级优先级（N-006 继承用）；task 缺失返回 null（回落 MEDIUM）。 */
+    private String resolveTaskPriority(Long taskId) {
+        if (taskId == null) {
+            return null;
+        }
+        Task task = taskService.getById(taskId);
+        return task != null ? task.getPriority() : null;
     }
 
     /** TaskTimeline 实体 → TaskTimelineItem DTO。 */

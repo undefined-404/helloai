@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.common.constant.TaskPriority;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
@@ -125,7 +126,7 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
 
         List<PlanDraftItem> items = parseDraftItems(result.getOutput());
         validateDependencies(items);
-        List<SubTask> drafts = buildDrafts(taskId, items, planner);
+        List<SubTask> drafts = buildDrafts(taskId, task.getPriority(), items, planner);
         subTaskService.saveBatch(drafts);
         // 防御：ServiceImpl.saveBatch 的 @Transactional 边界可能导致实体 ID 未回填，
         // 从 DB 重加载保证 applyDependsOn 拿到的是持久化后的真实 ID（Snowflake 精度）。
@@ -245,7 +246,7 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
     }
 
     /** 草案实体装配：status=PENDING_PLAN_REVIEW，context 记录拆解来源审计信息。 */
-    private List<SubTask> buildDrafts(Long taskId, List<PlanDraftItem> items, Agent planner) {
+    private List<SubTask> buildDrafts(Long taskId, String taskPriority, List<PlanDraftItem> items, Agent planner) {
         List<SubTask> drafts = new ArrayList<>(items.size());
         String generatedAt = OffsetDateTime.now().toString();
         for (PlanDraftItem item : items) {
@@ -255,7 +256,8 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
             draft.setContent(item.getContent());
             draft.setDeliverable(item.getDeliverable());
             draft.setAcceptance(item.getAcceptance());
-            draft.setPriority(normalizePriority(item.getPriority()));
+            // 优先级继承（N-006，C4-S1）：LLM 显式合法值优先；未给/非法 → 继承 task.priority
+            draft.setPriority(resolveSubTaskPriority(item.getPriority(), taskPriority));
             // 契约先行拆解（Phase 2）：contract=true → is_contract=1；
             // null/缺省/非法值一律按普通子任务（0）降级，不阻断拆解
             draft.setIsContract(Boolean.TRUE.equals(item.getContract()) ? 1 : 0);
@@ -276,6 +278,18 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
         }
         String upper = priority.trim().toUpperCase();
         return VALID_PRIORITIES.contains(upper) ? upper : "MEDIUM";
+    }
+
+    /**
+     * 子任务优先级解析（N-006，C4-S1 优先级继承）：LLM 显式合法值优先；
+     * 未给 / 空白 / 非法 → 继承 task.priority（task 缺失时回落 MEDIUM）。
+     */
+    private String resolveSubTaskPriority(String itemPriority, String taskPriority) {
+        if (itemPriority != null && !itemPriority.isBlank()
+                && VALID_PRIORITIES.contains(itemPriority.trim().toUpperCase())) {
+            return itemPriority.trim().toUpperCase();
+        }
+        return TaskPriority.normalize(taskPriority);
     }
 
     /**

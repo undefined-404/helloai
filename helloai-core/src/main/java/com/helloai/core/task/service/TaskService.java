@@ -92,6 +92,12 @@ public interface TaskService extends IService<Task> {
     Task updateTask(Long id, String title, String description);
 
     /**
+     * 更新任务优先级（N-006，C4-S1）：HIGH / MEDIUM / LOW，非法值回落 MEDIUM。
+     * 任务不存在时返回 null。
+     */
+    Task updatePriority(Long id, String priority);
+
+    /**
      * 更新任务基本信息、SLA 与执行策略（收尾）；任务不存在时返回 null。
      *
      * <p>更新语义：null 字段不 set（保持现状，不进入 UPDATE 语句）；

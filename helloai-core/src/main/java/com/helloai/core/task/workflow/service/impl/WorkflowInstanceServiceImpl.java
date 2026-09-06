@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.TaskPriority;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.common.constant.WorkflowTemplateStatus;
 import com.helloai.core.task.entity.SubTask;
@@ -96,6 +97,7 @@ public class WorkflowInstanceServiceImpl
             SubTask st = new SubTask();
             st.setTaskId(task.getId());
             st.setTitle(renderTitle(renderedSpec, nodeKey));
+            st.setPriority(TaskPriority.normalize(task.getPriority()));
             st.setContent(str(renderedSpec.get("goal")));
             st.setDeliverable(str(renderedSpec.get("deliverable")));
             st.setAcceptance(pick(renderedSpec, "acceptance", "definition_of_done"));

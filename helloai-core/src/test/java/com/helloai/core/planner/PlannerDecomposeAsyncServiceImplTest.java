@@ -151,6 +151,32 @@ class PlannerDecomposeAsyncServiceImplTest {
     // ══════════════════════════════════════════════════════════════
 
     @Test
+    @DisplayName("优先级继承：task.priority=HIGH，item 未给优先级 → 继承 HIGH（C4-S1）")
+    void shouldInheritTaskPriority() {
+        Task task = planningTask();
+        task.setPriority("HIGH");
+        when(taskService.getById(TASK_ID)).thenReturn(task);
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        ```json
+                        [{"title":"仅标题","content":"c","deliverable":"d","acceptance":"a"}]
+                        ```
+                        """, "stop", "llm", 100));
+        SubTask reloaded = draft(11L);
+        reloaded.setPriority("HIGH");
+        when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(reloaded));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<SubTask>> captor = ArgumentCaptor.forClass(List.class);
+        verify(subTaskService).saveBatch(captor.capture());
+        assertThat(captor.getValue()).hasSize(1);
+        assertThat(captor.getValue().get(0).getPriority()).isEqualTo("HIGH");
+    }
+
+    @Test
     @DisplayName("正常拆解：markdown fence 容错解析，草案落库 PENDING_PLAN_REVIEW，start/end/generated timeline 齐全")
     void shouldDecomposeAndPersistDrafts() {
         when(taskService.getById(TASK_ID)).thenReturn(planningTask());

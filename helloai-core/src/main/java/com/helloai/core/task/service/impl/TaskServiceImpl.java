@@ -7,6 +7,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.common.constant.TaskPriority;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.common.constant.TeamStatus;
 import com.helloai.core.agent.entity.Agent;
@@ -85,6 +86,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         task.setSlaMinutes(slaMinutes);
         task.setAgentPolicy(expandAgentPolicy(agentPolicy));
         task.setRequiredSkills(requiredSkills);
+        task.setPriority(TaskPriority.DEFAULT().name());
         task.setStatus(TaskStatus.PENDING);
         save(task);
         log.info("任务创建: id={}, title={}, slaMinutes={}, agentPolicy={}, requiredSkills={}",
@@ -162,6 +164,19 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
             taskTimelineMapper.insert(tl);
         }
         log.info("任务状态变更: id={}, status={}", id, status);
+        return task;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Task updatePriority(Long id, String priority) {
+        Task task = getById(id);
+        if (task == null) {
+            return null;
+        }
+        task.setPriority(TaskPriority.normalize(priority));
+        updateById(task);
+        log.info("任务优先级更新: id={}, priority={}", id, task.getPriority());
         return task;
     }
 

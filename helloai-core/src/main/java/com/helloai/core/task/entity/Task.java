@@ -77,4 +77,12 @@ public class Task extends BaseEntity {
      * 子任务完成后 ImplicitScoreCalculator 依据 deadline 计算时间分。</p>
      */
     private Integer slaMinutes;
+
+    /**
+     * 任务优先级（N-006，C4-S1）：HIGH / MEDIUM / LOW，默认 MEDIUM。
+     *
+     * <p>sub_task 创建时未显式指定 priority 则继承本值（优先级继承三入口）；
+     * 调度候选取数按优先级出队（C4 设计 §3.1/§3.2）。</p>
+     */
+    private String priority;
 }
