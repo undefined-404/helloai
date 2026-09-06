@@ -10,6 +10,7 @@ import com.helloai.common.constant.WorkflowInstanceStatus;
 import com.helloai.common.constant.WorkflowTemplateStatus;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.policy.TaskAgentPolicy;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
@@ -209,6 +210,80 @@ class WorkflowInstanceServiceImplTest {
             assertThat(result.getStatusSnapshot()).isEqualTo("RUNNING");
             verify(subTaskDispatchService).dispatchPendingSubTaskAuto(201L, AgentRole.EXECUTOR);
             verify(subTaskDispatchService).dispatchPendingSubTaskAuto(202L, AgentRole.EXECUTOR);
+        }
+
+        @Test
+        @DisplayName("params.teamId 注入 agent_policy.teamId（C2-S2：Team 喂 Workflow，单向依赖）")
+        void shouldInjectTeamIdFromParams() {
+            when(templateService.getById(TEMPLATE_ID)).thenReturn(activeTemplate());
+            when(templateService.getVersion(VERSION_ID)).thenReturn(version(definition()));
+            when(taskService.createTask(any(), any(), any(), any(), any())).thenReturn(taskOf());
+            when(subTaskService.create(any(SubTask.class), any())).thenAnswer(inv -> {
+                SubTask st = inv.getArgument(0);
+                st.setId(401L);
+                return st;
+            });
+            doReturn(true).when(service).save(any(WorkflowInstance.class));
+
+            service.createWorkflowInstance(TEMPLATE_ID,
+                    Map.of("goal", "报表", "platform", "web", "teamId", 55L));
+
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Map<String, Object>> policyCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(taskService).createTask(any(), any(), any(), policyCaptor.capture(), any());
+            assertThat(policyCaptor.getValue())
+                    .containsEntry(TaskAgentPolicy.KEY_TEAM_ID, 55L)
+                    .containsEntry("difficulty", "MEDIUM");
+            // 展开仍统一在 TaskService.createTask 内完成（本服务只做参数源注入，不编排）
+            verify(subTaskService, times(2)).create(any(SubTask.class), any());
+        }
+
+        @Test
+        @DisplayName("agent_policy 已带 teamId 时 params.teamId 不覆盖（显式优先）")
+        void shouldKeepExplicitTeamId() {
+            when(templateService.getById(TEMPLATE_ID)).thenReturn(activeTemplate());
+            when(templateService.getVersion(VERSION_ID)).thenReturn(version(Map.of(
+                    "taskDefaults", Map.of("agentPolicy", Map.of(TaskAgentPolicy.KEY_TEAM_ID, 88L)),
+                    "nodes", List.of(Map.of("nodeKey", "x", "role", "executor", "spec", Map.of())))));
+            when(taskService.createTask(any(), any(), any(), any(), any())).thenReturn(taskOf());
+            when(subTaskService.create(any(SubTask.class), any())).thenAnswer(inv -> {
+                SubTask st = inv.getArgument(0);
+                st.setId(402L);
+                return st;
+            });
+            doReturn(true).when(service).save(any(WorkflowInstance.class));
+
+            service.createWorkflowInstance(TEMPLATE_ID, Map.of("teamId", 55L));
+
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Map<String, Object>> policyCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(taskService).createTask(any(), any(), any(), policyCaptor.capture(), any());
+            assertThat(policyCaptor.getValue()).containsEntry(TaskAgentPolicy.KEY_TEAM_ID, 88L);
+        }
+
+        @Test
+        @DisplayName("节点级差异化：按节点 role 派发（C2-S3 方案 A），role 缺失回退 EXECUTOR")
+        void shouldDispatchByNodeRole() {
+            when(templateService.getById(TEMPLATE_ID)).thenReturn(activeTemplate());
+            when(templateService.getVersion(VERSION_ID)).thenReturn(version(Map.of(
+                    "nodes", List.of(
+                            Map.of("nodeKey", "a", "role", "executor", "spec", Map.of()),
+                            Map.of("nodeKey", "b", "role", "reviewer", "spec", Map.of()),
+                            Map.of("nodeKey", "c", "spec", Map.of())),
+                    "taskDefaults", Map.of("titleTemplate", "tpl"))));
+            when(taskService.createTask(any(), any(), any(), any(), any())).thenReturn(taskOf());
+            when(subTaskService.create(any(SubTask.class), any())).thenAnswer(inv -> {
+                SubTask st = inv.getArgument(0);
+                st.setId("a".equals(st.getTitle()) ? 501L : "b".equals(st.getTitle()) ? 502L : 503L);
+                return st;
+            });
+            doReturn(true).when(service).save(any(WorkflowInstance.class));
+
+            service.createWorkflowInstance(TEMPLATE_ID, Map.of());
+
+            verify(subTaskDispatchService).dispatchPendingSubTaskAuto(501L, AgentRole.EXECUTOR);
+            verify(subTaskDispatchService).dispatchPendingSubTaskAuto(502L, AgentRole.REVIEWER);
+            verify(subTaskDispatchService).dispatchPendingSubTaskAuto(503L, AgentRole.EXECUTOR);
         }
 
         @Test

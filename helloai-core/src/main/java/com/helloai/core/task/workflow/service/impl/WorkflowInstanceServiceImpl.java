@@ -8,6 +8,7 @@ import com.helloai.common.constant.TaskStatus;
 import com.helloai.common.constant.WorkflowTemplateStatus;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.policy.TaskAgentPolicy;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
@@ -28,6 +29,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -78,13 +80,13 @@ public class WorkflowInstanceServiceImpl
         String description = WorkflowParamRenderer.render(str(defaults.get("descriptionTemplate")), safeParams);
         Integer slaMinutes = defaults.get("slaMinutes") instanceof Number n ? n.intValue() : null;
         Map<String, Object> agentPolicy = castMap(defaults.get("agentPolicy"));
+        agentPolicy = injectTeamId(safeParams, agentPolicy);
         List<String> requiredSkills = castStringList(defaults.get("requiredSkills"));
         Task task = taskService.createTask(title, description, slaMinutes, agentPolicy, requiredSkills);
 
         // 4) 遍历节点创建 sub_task（创建即 PENDING，直接进入分发视野）
         List<Object> nodes = castNodeList(definition.get("nodes"));
         Map<String, Long> nodeKeyToSubTaskId = new HashMap<>();
-        List<Long> subTaskIds = new ArrayList<>();
         for (Object nodeObj : nodes) {
             Map<String, Object> node = castMap(nodeObj);
             String nodeKey = str(node.get("nodeKey"));
@@ -108,7 +110,6 @@ public class WorkflowInstanceServiceImpl
 
             SubTask saved = subTaskService.create(st, null);
             nodeKeyToSubTaskId.put(nodeKey, saved.getId());
-            subTaskIds.add(saved.getId());
         }
 
         // 5) depends_on 回填（node_key 依赖 → 真实 sub_task id）
@@ -135,9 +136,14 @@ public class WorkflowInstanceServiceImpl
         instance.setStatusSnapshot(STATUS_RUNNING);
         save(instance);
 
-        // 7) 触发分发（依赖未就绪被 ready 守卫自动拦截）+ Task 置 IN_PROGRESS
-        for (Long subTaskId : subTaskIds) {
-            subTaskDispatchService.dispatchPendingSubTaskAuto(subTaskId, AgentRole.EXECUTOR);
+        // 7) 触发分发（依赖未就绪被 ready 守卫自动拦截；按节点 role 派发 = C2 方案 A 节点级差异化）
+        //    + Task 置 IN_PROGRESS
+        for (Object nodeObj : nodes) {
+            Map<String, Object> node = castMap(nodeObj);
+            Long subTaskId = nodeKeyToSubTaskId.get(str(node.get("nodeKey")));
+            if (subTaskId != null) {
+                subTaskDispatchService.dispatchPendingSubTaskAuto(subTaskId, resolveRole(node));
+            }
         }
         taskService.updateStatus(task.getId(), TaskStatus.IN_PROGRESS);
 
@@ -232,5 +238,53 @@ public class WorkflowInstanceServiceImpl
 
     private static String str(Object o) {
         return o == null ? null : String.valueOf(o);
+    }
+
+    /**
+     * 节点派发角色（C2-S3 方案 A 节点级差异化）：读节点 {@code role}
+     * （planner/executor/reviewer 白名单，C1 校验）映射 AgentRole；
+     * 缺失/非法回退 EXECUTOR（与 C1 首版默认派发一致）。
+     */
+    private AgentRole resolveRole(Map<String, Object> node) {
+        Object role = node.get("role");
+        if (role instanceof String s && !s.isBlank()) {
+            try {
+                return AgentRole.valueOf(s.trim().toUpperCase());
+            } catch (IllegalArgumentException e) {
+                return AgentRole.EXECUTOR;
+            }
+        }
+        return AgentRole.EXECUTOR;
+    }
+
+    /**
+     * 将 {@code params.teamId} 作为可选参数源注入 {@code agent_policy.teamId}（N-002，C2-S2）。
+     *
+     * <p>单向依赖（C1 决策 4 切分线）：Workflow 不引用 Team；Team 以 params 喂 Workflow——
+     * 实例化时把 teamId 写入 agent_policy，由 TaskService.createTask 统一展开槽位快照。
+     * agent_policy 已显式带 teamId 或 params 无 teamId 时直通。</p>
+     */
+    private Map<String, Object> injectTeamId(Map<String, Object> params, Map<String, Object> agentPolicy) {
+        if (TaskAgentPolicy.teamId(agentPolicy) != null) {
+            return agentPolicy;
+        }
+        Object raw = params == null ? null : params.get("teamId");
+        Long teamId;
+        if (raw instanceof Number n) {
+            teamId = n.longValue();
+        } else if (raw instanceof String s && !s.isBlank()) {
+            try {
+                teamId = Long.parseLong(s.trim());
+            } catch (NumberFormatException e) {
+                return agentPolicy;
+            }
+        } else {
+            return agentPolicy;
+        }
+        Map<String, Object> merged = agentPolicy == null
+                ? new LinkedHashMap<>()
+                : new LinkedHashMap<>(agentPolicy);
+        merged.put(TaskAgentPolicy.KEY_TEAM_ID, teamId);
+        return merged;
     }
 }

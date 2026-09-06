@@ -40,6 +40,9 @@ public final class TaskAgentPolicy {
     /** policy 键：任务难度。 */
     public static final String KEY_DIFFICULTY = "difficulty";
 
+    /** policy 键：Team 组合引用（N-002，C2-S2；创建/实例化时按 Team 展开槽位快照）。 */
+    public static final String KEY_TEAM_ID = "teamId";
+
     /** N11 外部 Agent 失败后的保底回退策略。 */
     public enum FallbackPolicy {
         /** 默认：N11 正常回退 API_KEY_LLM 保底。 */
@@ -76,6 +79,11 @@ public final class TaskAgentPolicy {
     /** 指定自动核验 Reviewer Agent ID；未指定或类型异常返回 null。 */
     public static Long reviewerAgentId(Map<String, Object> policy) {
         return asLong(raw(policy, KEY_REVIEWER_AGENT_ID));
+    }
+
+    /** Team 组合引用 ID（N-002，C2-S2）；未指定或类型异常返回 null。 */
+    public static Long teamId(Map<String, Object> policy) {
+        return asLong(raw(policy, KEY_TEAM_ID));
     }
 
     /** N11 回退策略；未指定或非法值回落 AUTO。 */

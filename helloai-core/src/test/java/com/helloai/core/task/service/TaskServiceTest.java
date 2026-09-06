@@ -5,6 +5,7 @@ import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.agent.service.TeamService;
 import com.helloai.core.task.mapper.AttachmentMapper;
 import com.helloai.core.task.mapper.ModuleMapper;
 import com.helloai.core.task.entity.SubTask;
@@ -75,12 +76,14 @@ class TaskServiceTest {
     @Mock
     private SubTaskService subTaskService;
     @Mock
+    private TeamService teamService;
+    @Mock
     private LambdaQueryChainWrapper<SubTask> subTaskChain;
 
     private TaskService newSpyService() {
         return spy(new TaskServiceImpl(subTaskMapper, moduleMapper, reviewPort,
                 taskTimelineMapper, attachmentMapper, agentInboxService,
-                agentService, subTaskService));
+                agentService, subTaskService, teamService));
     }
 
     private static Map<String, Object> policy() {

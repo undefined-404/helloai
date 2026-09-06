@@ -8,9 +8,13 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskStatus;
+import com.helloai.common.constant.TeamStatus;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.entity.Team;
+import com.helloai.core.agent.entity.TeamMember;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.agent.service.TeamService;
 import com.helloai.core.task.entity.Module;
 import com.helloai.core.task.mapper.AttachmentMapper;
 import com.helloai.core.task.mapper.ModuleMapper;
@@ -20,6 +24,8 @@ import com.helloai.core.task.entity.TaskTimeline;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.mapper.TaskMapper;
 import com.helloai.core.task.mapper.TaskTimelineMapper;
+import com.helloai.core.task.policy.TaskAgentPolicy;
+import com.helloai.core.task.policy.TeamPolicyExpander;
 import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
@@ -51,6 +57,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     private final AgentInboxService agentInboxService;
     private final AgentService agentService;
     private final SubTaskService subTaskService;
+    private final TeamService teamService;
 
     // ══════════════════════════════════════════════════════════════
     //  基础 CRUD（§6.3 收口：条件构造与写操作归 Service）
@@ -76,13 +83,36 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         task.setTitle(title);
         task.setDescription(description);
         task.setSlaMinutes(slaMinutes);
-        task.setAgentPolicy(agentPolicy);
+        task.setAgentPolicy(expandAgentPolicy(agentPolicy));
         task.setRequiredSkills(requiredSkills);
         task.setStatus(TaskStatus.PENDING);
         save(task);
         log.info("任务创建: id={}, title={}, slaMinutes={}, agentPolicy={}, requiredSkills={}",
                 task.getId(), title, slaMinutes, agentPolicy, requiredSkills);
         return task;
+    }
+
+    /**
+     * 任务创建时展开 {@code agent_policy.teamId} 槽位快照（N-002，C2-S2）。
+     *
+     * <p>无 teamId 零开销直通；有 teamId 校验 Team 已 ACTIVE 后按成员展开
+     * executor/planner/reviewer 槽位（显式指定槽位保留），展开结果落库，
+     * 后续派发不受 Team 成员变更影响（快照隔离，C2 决策 2）。</p>
+     */
+    private Map<String, Object> expandAgentPolicy(Map<String, Object> agentPolicy) {
+        Long teamId = TaskAgentPolicy.teamId(agentPolicy);
+        if (teamId == null) {
+            return agentPolicy;
+        }
+        Team team = teamService.getTeam(teamId);
+        if (team.getStatus() != TeamStatus.ACTIVE) {
+            throw new BizException("Team 未发布（非 ACTIVE），不可作为 agent_policy 展开源: teamId=" + teamId);
+        }
+        List<TeamMember> members = teamService.listMembers(teamId);
+        if (members.isEmpty()) {
+            throw new BizException("Team 无成员，无法展开 agent_policy: teamId=" + teamId);
+        }
+        return TeamPolicyExpander.expand(agentPolicy, members);
     }
 
     @Override

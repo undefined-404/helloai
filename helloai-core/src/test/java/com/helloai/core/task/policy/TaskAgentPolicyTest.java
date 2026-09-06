@@ -42,12 +42,14 @@ class TaskAgentPolicyTest {
                 TaskAgentPolicy.KEY_PLANNER_AGENT_ID, 123L,
                 TaskAgentPolicy.KEY_EXECUTOR_AGENT_IDS, List.of(1, 2L, "3"),
                 TaskAgentPolicy.KEY_REVIEWER_AGENT_ID, "456",
+                TaskAgentPolicy.KEY_TEAM_ID, "789",
                 TaskAgentPolicy.KEY_FALLBACK_POLICY, "restricted",
                 TaskAgentPolicy.KEY_DIFFICULTY, "high");
 
         assertThat(TaskAgentPolicy.plannerAgentId(policy)).isEqualTo(123L);
         assertThat(TaskAgentPolicy.executorAgentIds(policy)).containsExactly(1L, 2L, 3L);
         assertThat(TaskAgentPolicy.reviewerAgentId(policy)).isEqualTo(456L);
+        assertThat(TaskAgentPolicy.teamId(policy)).isEqualTo(789L);
         assertThat(TaskAgentPolicy.fallbackPolicy(policy)).isEqualTo(TaskAgentPolicy.FallbackPolicy.RESTRICTED);
         assertThat(TaskAgentPolicy.difficulty(policy)).isEqualTo(TaskAgentPolicy.Difficulty.HIGH);
         assertThat(TaskAgentPolicy.isFallbackForbidden(policy)).isTrue();
