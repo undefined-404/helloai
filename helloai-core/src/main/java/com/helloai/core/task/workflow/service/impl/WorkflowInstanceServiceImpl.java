@@ -1,5 +1,6 @@
 package com.helloai.core.task.workflow.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentRole;
@@ -10,6 +11,8 @@ import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
+import com.helloai.core.task.workflow.aggregator.WorkflowInstanceStatusAggregator;
+import com.helloai.core.task.workflow.domain.WorkflowInstanceStatusView;
 import com.helloai.core.task.workflow.entity.WorkflowInstance;
 import com.helloai.core.task.workflow.entity.WorkflowTemplate;
 import com.helloai.core.task.workflow.entity.WorkflowTemplateVersion;
@@ -141,6 +144,18 @@ public class WorkflowInstanceServiceImpl
         log.info("Workflow 实例化完成: instanceId={}, templateId={}, versionId={}, taskId={}, nodeCount={}",
                 instance.getId(), templateId, version.getId(), task.getId(), nodes.size());
         return instance;
+    }
+
+    @Override
+    public WorkflowInstanceStatusView aggregateStatus(Long instanceId) {
+        WorkflowInstance instance = getById(instanceId);
+        if (instance == null) {
+            throw new BizException("Workflow 实例不存在: id=" + instanceId);
+        }
+        Task task = taskService.getById(instance.getTaskId());
+        List<SubTask> subTasks = subTaskService.list(
+                new LambdaQueryWrapper<SubTask>().eq(SubTask::getTaskId, instance.getTaskId()));
+        return WorkflowInstanceStatusAggregator.aggregate(instanceId, subTasks, task, OffsetDateTime.now());
     }
 
     // ══════════════════════════════════════════════════════════════

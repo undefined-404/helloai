@@ -1,6 +1,7 @@
 package com.helloai.core.task.workflow.service;
 
 import com.baomidou.mybatisplus.extension.service.IService;
+import com.helloai.core.task.workflow.domain.WorkflowInstanceStatusView;
 import com.helloai.core.task.workflow.entity.WorkflowInstance;
 
 import java.util.Map;
@@ -23,4 +24,13 @@ public interface WorkflowInstanceService extends IService<WorkflowInstance> {
      * @return 已落库实例（含 taskId）
      */
     WorkflowInstance createWorkflowInstance(Long templateId, Map<String, Object> params);
+
+    /**
+     * 聚合实例状态（纯查询投影，不落权威列，D6-2 方案 A）：
+     * 由物化出的 task + 全部 sub_task 状态现算 RUNNING/DONE/FAILED/CANCELLED + 进度。
+     * 展示用，无状态机、无约束力，绝不反向约束 task/sub_task 操作（D6-3）。
+     *
+     * @param instanceId 实例 ID
+     */
+    WorkflowInstanceStatusView aggregateStatus(Long instanceId);
 }

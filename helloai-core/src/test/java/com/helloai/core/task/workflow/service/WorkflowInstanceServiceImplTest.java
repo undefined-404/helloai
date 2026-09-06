@@ -4,13 +4,16 @@ import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskStatus;
+import com.helloai.common.constant.WorkflowInstanceStatus;
 import com.helloai.common.constant.WorkflowTemplateStatus;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
+import com.helloai.core.task.workflow.domain.WorkflowInstanceStatusView;
 import com.helloai.core.task.workflow.entity.WorkflowInstance;
 import com.helloai.core.task.workflow.entity.WorkflowTemplate;
 import com.helloai.core.task.workflow.entity.WorkflowTemplateVersion;
@@ -62,6 +65,7 @@ class WorkflowInstanceServiceImplTest {
     private TaskService taskService;
     private SubTaskService subTaskService;
     private SubTaskDispatchService subTaskDispatchService;
+    private WorkflowInstanceMapper instanceMapper;
     private WorkflowInstanceServiceImpl service;
 
     @BeforeEach
@@ -70,9 +74,10 @@ class WorkflowInstanceServiceImplTest {
         taskService = mock(TaskService.class);
         subTaskService = mock(SubTaskService.class);
         subTaskDispatchService = mock(SubTaskDispatchService.class);
+        instanceMapper = mock(WorkflowInstanceMapper.class);
         service = spy(new WorkflowInstanceServiceImpl(
                 templateService, taskService, subTaskService, subTaskDispatchService));
-        ReflectionTestUtils.setField(service, "baseMapper", mock(WorkflowInstanceMapper.class));
+        ReflectionTestUtils.setField(service, "baseMapper", instanceMapper);
     }
 
     private WorkflowTemplate activeTemplate() {
@@ -226,6 +231,78 @@ class WorkflowInstanceServiceImplTest {
             ArgumentCaptor<SubTask> captor = ArgumentCaptor.forClass(SubTask.class);
             verify(subTaskService).create(captor.capture(), any());
             assertThat(captor.getValue().getTitle()).isEqualTo("x"); // nodeKey 兜底
+        }
+    }
+
+    @Nested
+    @DisplayName("实例状态聚合（纯查询投影）")
+    class StatusAggregation {
+
+        private WorkflowInstance instance(Long taskId) {
+            WorkflowInstance inst = new WorkflowInstance();
+            inst.setId(20L);
+            inst.setTemplateId(TEMPLATE_ID);
+            inst.setVersionId(VERSION_ID);
+            inst.setTaskId(taskId);
+            return inst;
+        }
+
+        private SubTask node(Long id, String nodeKey, SubTaskStatus status) {
+            SubTask st = new SubTask();
+            st.setId(id);
+            st.setStatus(status);
+            st.setContext(Map.of("workflow", Map.of("nodeKey", nodeKey)));
+            return st;
+        }
+
+        @Test
+        @DisplayName("实例不存在 → BizException")
+        void shouldRejectMissingInstance() {
+            when(instanceMapper.selectById(20L)).thenReturn(null);
+
+            assertThatThrownBy(() -> service.aggregateStatus(20L))
+                    .isInstanceOf(BizException.class)
+                    .hasMessageContaining("实例不存在");
+        }
+
+        @Test
+        @DisplayName("全部节点 DONE + task DONE → DONE（纯查询聚合，不落权威列）")
+        void shouldAggregateDone() {
+            when(instanceMapper.selectById(20L)).thenReturn(instance(TASK_ID));
+            Task task = new Task();
+            task.setId(TASK_ID);
+            task.setStatus(TaskStatus.DONE);
+            when(taskService.getById(TASK_ID)).thenReturn(task);
+            when(subTaskService.list(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class))).thenReturn(List.of(
+                    node(201L, "contract", SubTaskStatus.DONE),
+                    node(202L, "implement", SubTaskStatus.DONE)));
+
+            WorkflowInstanceStatusView view = service.aggregateStatus(20L);
+
+            assertThat(view.getStatus()).isEqualTo(WorkflowInstanceStatus.DONE);
+            assertThat(view.getReason()).isEqualTo("ALL_DONE");
+            assertThat(view.getDoneCount()).isEqualTo(2);
+            assertThat(view.getNodeStatuses()).containsEntry("contract", "DONE");
+        }
+
+        @Test
+        @DisplayName("SLA 超时仍有未终态节点 → FAILED（投影展示，不反锁 task/sub_task）")
+        void shouldAggregateSlaTimeout() {
+            when(instanceMapper.selectById(20L)).thenReturn(instance(TASK_ID));
+            Task task = new Task();
+            task.setId(TASK_ID);
+            task.setStatus(TaskStatus.IN_PROGRESS);
+            task.setSlaMinutes(60);
+            task.setCreateTime(java.time.OffsetDateTime.now().minusHours(2));
+            when(taskService.getById(TASK_ID)).thenReturn(task);
+            when(subTaskService.list(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class))).thenReturn(List.of(
+                    node(201L, "contract", SubTaskStatus.DONE),
+                    node(202L, "implement", SubTaskStatus.ASSIGNED)));
+
+            WorkflowInstanceStatusView view = service.aggregateStatus(20L);
+
+            assertThat(view.getStatus()).isEqualTo(WorkflowInstanceStatus.FAILED);
+            assertThat(view.getReason()).isEqualTo("SLA_TIMEOUT");
         }
     }
 
