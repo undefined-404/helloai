@@ -55,6 +55,10 @@ progress 字段是你对"需求已澄清程度"的 0~100 自评（按上面六�
 
 {{CONVERSATION_HISTORY}}
 
+## 历史记忆参考（N-009 跨会话记忆，受控注入）
+
+{{LONG_TERM_MEMORY_CONTEXT}}
+
 ## 输出格式（严格遵守）
 
 只输出一个 JSON 对象，不要输出任何解释、前后缀或 Markdown 代码块标记。三种形态三选一：

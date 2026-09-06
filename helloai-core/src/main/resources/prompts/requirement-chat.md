@@ -39,6 +39,10 @@
 
 {{CONVERSATION_HISTORY}}
 
+## 历史记忆参考（N-009 跨会话记忆，受控注入）
+
+{{LONG_TERM_MEMORY_CONTEXT}}
+
 ## 联网资料
 
 {{WEB_SEARCH_CONTEXT}}

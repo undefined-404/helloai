@@ -113,6 +113,9 @@ class RequirementClarifyServiceTest {
     @Mock
     private SearchQueryPlannerService searchQueryPlannerService;
 
+    @Mock
+    private com.helloai.core.planner.memory.service.LongTermMemoryService longTermMemoryService;
+
     /** 会话定点更新链式 mock（与 PlannerAnalysisServiceTest 同惯例）：
      *  finalize CAS / task_id 回填 / 终稿字段定点写均走 lambdaUpdate。 */
     @SuppressWarnings("unchecked")
@@ -135,7 +138,8 @@ class RequirementClarifyServiceTest {
                 new ClarifyWebSearchOrchestrator(webSearchService, webSearchProperties,
                         pageFetchService, searchQueryPlannerService, new RelativeTimeNormalizer()),
                 new ChatRoundDecisionParser(new ObjectMapper()),
-                new SystemTimeContextBuilder());
+                new SystemTimeContextBuilder(),
+                longTermMemoryService);
 
         // 会话 lambdaUpdate 链式 stub：默认全部成功；CAS 失败用例在测试内重钉 update() 返回 false。
         // eq/set 用 lenient：非 finalize 路径用例不触发链，避免 UnnecessaryStubbingException

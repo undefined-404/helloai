@@ -16,6 +16,8 @@ import com.helloai.core.planner.clarify.ConfirmCardProtocol;
 import com.helloai.core.planner.clarify.SystemTimeContextBuilder;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
+import com.helloai.core.planner.memory.entity.LongTermMemory;
+import com.helloai.core.planner.memory.service.LongTermMemoryService;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.search.WebSearchOutcome;
 import com.helloai.core.planner.service.RequirementClarifyService;
@@ -128,6 +130,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     private final ClarifyWebSearchOrchestrator webSearchOrchestrator;
     private final ChatRoundDecisionParser decisionParser;
     private final SystemTimeContextBuilder systemTimeContextBuilder;
+    private final LongTermMemoryService longTermMemoryService;
 
     /**
      * 显式全参构造器（绕开 Lombok {@code @RequiredArgsConstructor} 在
@@ -146,7 +149,8 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                                          ConfirmCardProtocol confirmCardProtocol,
                                          ClarifyWebSearchOrchestrator webSearchOrchestrator,
                                          ChatRoundDecisionParser decisionParser,
-                                         SystemTimeContextBuilder systemTimeContextBuilder) {
+                                         SystemTimeContextBuilder systemTimeContextBuilder,
+                                         LongTermMemoryService longTermMemoryService) {
         this.conversationService = conversationService;
         this.messageService = messageService;
         this.taskService = taskService;
@@ -160,6 +164,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         this.webSearchOrchestrator = webSearchOrchestrator;
         this.decisionParser = decisionParser;
         this.systemTimeContextBuilder = systemTimeContextBuilder;
+        this.longTermMemoryService = longTermMemoryService;
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -529,6 +534,8 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
 
         taskTimelineService.recordEvent(task.getId(), null, timelineEvent,
                 AgentRole.PLANNER, null, Map.of("conversationId", conversationId));
+        // 会话摘要归档（N-009，C5-S2）：finalize 建任务后 best-effort 归档，失败不阻断
+        archiveSessionMemory(conversationId);
         return task;
     }
 
@@ -1217,7 +1224,56 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                 .replace("{{WEB_SEARCH_CONTEXT}}", contextSection)
                 // 系统当前时间逐轮注入（第一层防线），保证 CHAT/CLARIFY/FINALIZE
                 // 三个模板在回答时效性问题时均以服务器实时日期为基准
-                .replace("{{SYSTEM_TIME_CONTEXT}}", systemTimeContextBuilder.build());
+                .replace("{{SYSTEM_TIME_CONTEXT}}", systemTimeContextBuilder.build())
+                // 长期记忆受控 recall（N-009，C5-S3）：有限条数 + 无结果占位 + 失败降级不阻断
+                .replace("{{LONG_TERM_MEMORY_CONTEXT}}", resolveMemoryContext(conversationId));
+    }
+
+    /**
+     * 会话摘要归档（N-009，C5-S2）：finalize 建任务后 best-effort 归档，失败不阻断主链路。
+     */
+    private void archiveSessionMemory(Long conversationId) {
+        try {
+            RequirementConversation conv = conversationService.getById(conversationId);
+            List<RequirementMessage> messages = messageService.listByConversation(conversationId);
+            longTermMemoryService.archiveSession(conv, messages);
+        } catch (Exception e) {
+            log.warn("会话摘要归档失败（不阻断）: conversationId={}, err={}", conversationId, e.getMessage());
+        }
+    }
+
+    /**
+     * 受控 recall（N-009，C5-S3）：按会话标题检索历史记忆摘要（≤5 条，单条截断）；
+     * 无结果占位"（无相关历史记忆）"；检索失败降级不阻断。
+     */
+    private String resolveMemoryContext(Long conversationId) {
+        try {
+            RequirementConversation conv = conversationService.getById(conversationId);
+            String keyword = conv != null && conv.getTitle() != null ? conv.getTitle() : null;
+            if (keyword == null || keyword.isBlank()) {
+                return "（无相关历史记忆）";
+            }
+            List<LongTermMemory> memories = longTermMemoryService.searchForRecall(keyword, 5);
+            if (memories.isEmpty()) {
+                return "（无相关历史记忆）";
+            }
+            StringBuilder sb = new StringBuilder();
+            for (LongTermMemory m : memories) {
+                sb.append("- ").append(m.getTitle()).append("：")
+                        .append(truncateContent(m.getContent(), 500)).append('\n');
+            }
+            return sb.toString().trim();
+        } catch (Exception e) {
+            log.warn("记忆 recall 检索失败（降级不阻断）: conversationId={}, err={}", conversationId, e.getMessage());
+            return "（无相关历史记忆）";
+        }
+    }
+
+    private static String truncateContent(String s, int max) {
+        if (s == null || s.length() <= max) {
+            return s;
+        }
+        return s.substring(0, max) + "...";
     }
 
     /**
