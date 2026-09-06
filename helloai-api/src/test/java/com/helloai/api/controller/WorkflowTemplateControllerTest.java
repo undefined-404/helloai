@@ -3,6 +3,8 @@ package com.helloai.api.controller;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.helloai.api.dto.PageResult;
+import com.helloai.api.dto.workflow.WorkflowInstanceRequest;
+import com.helloai.api.dto.workflow.WorkflowInstanceResponse;
 import com.helloai.api.dto.workflow.WorkflowTemplateRequest;
 import com.helloai.api.dto.workflow.WorkflowTemplateResponse;
 import com.helloai.api.dto.workflow.WorkflowVersionRequest;
@@ -10,8 +12,10 @@ import com.helloai.api.dto.workflow.WorkflowVersionResponse;
 import com.helloai.common.base.R;
 import com.helloai.common.constant.WorkflowTemplateStatus;
 import com.helloai.common.constant.WorkflowVersionStatus;
+import com.helloai.core.task.workflow.entity.WorkflowInstance;
 import com.helloai.core.task.workflow.entity.WorkflowTemplate;
 import com.helloai.core.task.workflow.entity.WorkflowTemplateVersion;
+import com.helloai.core.task.workflow.service.WorkflowInstanceService;
 import com.helloai.core.task.workflow.service.WorkflowTemplateService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -43,6 +47,9 @@ class WorkflowTemplateControllerTest {
 
     @Mock
     private WorkflowTemplateService workflowTemplateService;
+
+    @Mock
+    private WorkflowInstanceService workflowInstanceService;
 
     @InjectMocks
     private WorkflowTemplateController controller;
@@ -177,5 +184,30 @@ class WorkflowTemplateControllerTest {
         assertThat(resp.getData().get(0).getVersionNo()).isEqualTo(1);
         verify(workflowTemplateService).listVersions(TEMPLATE_ID);
         verifyNoMoreInteractions(workflowTemplateService);
+    }
+
+    @Test
+    @DisplayName("createInstance：templateId + params 透传，返回实例（含 taskId）")
+    void shouldCreateInstance() {
+        WorkflowInstanceRequest req = new WorkflowInstanceRequest();
+        req.setParams(Map.of("goal", "报表"));
+        WorkflowInstance inst = new WorkflowInstance();
+        inst.setId(20L);
+        inst.setTemplateId(TEMPLATE_ID);
+        inst.setVersionId(VERSION_ID);
+        inst.setTaskId(100L);
+        inst.setParams(req.getParams());
+        inst.setStatusSnapshot("RUNNING");
+        when(workflowInstanceService.createWorkflowInstance(TEMPLATE_ID, req.getParams())).thenReturn(inst);
+
+        R<WorkflowInstanceResponse> resp = controller.createInstance(TEMPLATE_ID, req);
+
+        assertThat(resp.getCode()).isEqualTo(200);
+        assertThat(resp.getData().getTaskId()).isEqualTo(100L);
+        assertThat(resp.getData().getTemplateId()).isEqualTo(TEMPLATE_ID);
+        assertThat(resp.getData().getVersionId()).isEqualTo(VERSION_ID);
+        assertThat(resp.getData().getStatusSnapshot()).isEqualTo("RUNNING");
+        verify(workflowInstanceService).createWorkflowInstance(TEMPLATE_ID, req.getParams());
+        verifyNoMoreInteractions(workflowInstanceService);
     }
 }
