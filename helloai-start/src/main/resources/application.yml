@@ -264,6 +264,12 @@ helloai:
       # HELLOAI_CREDENTIAL_AES_KEY_BASE64 注入原密钥（docker-compose.server.yml 有 .env 入口）；
       # 未注入而服务器已有历史凭据时，解密会失败（启动/读取报错，属预期保护行为）
       aes-key-base64: ${HELLOAI_CREDENTIAL_AES_KEY_BASE64:cWXZTi5+S2WtnVBc+jQeJ5VCMviW+pPGB8QZN45mKFM=}
+      # N-004 Credential Vault 收口（Phase 2 B2）：凭证过期扫描开关。
+      # CredentialExpireTask 5min 一扫：ACTIVE 且 expire_time 已过 → EXPIRED + EXPIRE 审计，
+      # 激活 expireTime 死字段，到期凭证自动退出路由；不物理删除（状态隔离 + 审计保留）。
+      # 关闭 = 逃生口：过期凭证不再自动失效，仅人工 revoke 可停用。
+      lifecycle:
+        expire-scan-enabled: true
   # 执行产出物化存储（方案2）：执行成功后把 lastExecution.output 物化为附件文件，
   # type=local 落到本地磁盘（storageUrl=local://{bucket}/{objectKey}），
   # type=minio 落到对象存储（storageUrl=minio://{bucket}/{objectKey}）；

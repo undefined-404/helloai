@@ -1,6 +1,9 @@
 package com.helloai.core.system.service;
 
 import com.baomidou.mybatisplus.extension.service.IService;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.helloai.common.constant.CredentialOwnerType;
+import com.helloai.core.system.entity.CredentialAuditLog;
 import com.helloai.core.system.entity.CredentialVault;
 
 import java.time.OffsetDateTime;
@@ -97,4 +100,34 @@ public interface CredentialVaultService extends IService<CredentialVault> {
     CredentialVault rotatePlatformApiKey(String provider,
                                          String encryptedValue, String secretRef,
                                          String remark);
+
+    /**
+     * 人工停用凭证（Phase 2 B2，N-004 收口）。
+     *
+     * <p>复用 {@link CredentialStatus#DISABLED} 人为停用语义（与 bind 旧凭证一致），
+     * 不新增状态。仅 ACTIVE / DISABLED 可停用；EXPIRED（轮换淘汰）不可逆，禁止停用。</p>
+     *
+     * @param id       凭证 ID
+     * @param operator 操作者（admin）
+     * @return 停用后的凭证
+     * @throws com.helloai.common.base.BizException 凭证不存在或已 EXPIRED（fail-close）
+     */
+    CredentialVault revokeCredential(Long id, String operator);
+
+    /**
+     * 过期扫描：将 ACTIVE 且 {@code expire_time < now} 的凭证批量置为 EXPIRED（Phase 2 B2）。
+     *
+     * <p>Secret 生命周期治理——激活 {@code expireTime} 死字段：到期凭证自动退出路由
+     * （{@code getActive*} 只查 ACTIVE）。逐行 CAS（WHERE status='ACTIVE'）防并发双写。</p>
+     *
+     * @param batchLimit 单轮上限（≤0 返回 0 空转）
+     * @return 实际失效行数
+     */
+    int expireOverdue(int batchLimit);
+
+    /**
+     * 分页查询凭证操作审计（Phase 2 B2）。
+     */
+    IPage<CredentialAuditLog> listAudits(Long credentialId, CredentialOwnerType ownerType,
+                                         Long ownerId, long page, long size);
 }

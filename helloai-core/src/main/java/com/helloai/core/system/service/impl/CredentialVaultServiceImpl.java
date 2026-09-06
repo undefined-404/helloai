@@ -1,12 +1,20 @@
 package com.helloai.core.system.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.helloai.common.base.BizException;
+import com.helloai.common.constant.CredentialAuditAction;
 import com.helloai.common.constant.CredentialOwnerType;
 import com.helloai.common.constant.CredentialStatus;
 import com.helloai.common.constant.CredentialType;
+import com.helloai.core.system.entity.CredentialAuditLog;
 import com.helloai.core.system.entity.CredentialVault;
 import com.helloai.core.system.mapper.CredentialVaultMapper;
+import com.helloai.core.system.service.CredentialAuditService;
 import com.helloai.core.system.service.CredentialVaultService;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,7 +25,10 @@ import java.util.List;
  * 凭证保险库服务实现。
  */
 @Service
+@RequiredArgsConstructor
 public class CredentialVaultServiceImpl extends ServiceImpl<CredentialVaultMapper, CredentialVault> implements CredentialVaultService {
+
+    private final CredentialAuditService credentialAuditService;
 
     /**
      * 查询 Agent 的当前启用 API Key 凭证。
@@ -39,15 +50,16 @@ public class CredentialVaultServiceImpl extends ServiceImpl<CredentialVaultMappe
     }
 
     private CredentialVault getActiveApiKey(CredentialOwnerType ownerType, Long ownerId, String provider) {
-        return lambdaQuery()
+        // 显式 baseMapper + LambdaQueryWrapper：规避 lambdaQuery() chain 在隔离测试环境下
+        // 的 MybatisMapperProxy 解析限制（MP 3.5.9）
+        return baseMapper.selectOne(new LambdaQueryWrapper<CredentialVault>()
                 .eq(CredentialVault::getOwnerType, ownerType)
                 .eq(CredentialVault::getOwnerId, ownerId)
                 .eq(provider != null && !provider.isBlank(), CredentialVault::getProvider, provider)
                 .eq(CredentialVault::getCredentialType, CredentialType.API_KEY)
                 .eq(CredentialVault::getStatus, CredentialStatus.ACTIVE)
                 .orderByDesc(CredentialVault::getCreateTime)
-                .last("LIMIT 1")
-                .one();
+                .last("LIMIT 1"));
     }
 
     /**
@@ -146,6 +158,9 @@ public class CredentialVaultServiceImpl extends ServiceImpl<CredentialVaultMappe
         vault.setExpireTime(expiresAt);
         vault.setRemark(remark);
         save(vault);
+        // Phase 2 B2：绑定/保存动作审计（同事务，fail-close——审计失败整体回滚）
+        recordAudit(vault, CredentialAuditAction.BIND, CredentialAuditAction.OPERATOR_ADMIN,
+                "save/bind credential");
         return vault;
     }
 
@@ -227,6 +242,94 @@ public class CredentialVaultServiceImpl extends ServiceImpl<CredentialVaultMappe
         newVault.setStatus(CredentialStatus.ACTIVE);
         newVault.setRemark(finalRemark);
         save(newVault);
+        // Phase 2 B2：轮换动作审计（同事务；detail 记录 rotated_from_id 审计链）
+        recordAudit(newVault, CredentialAuditAction.ROTATE, CredentialAuditAction.OPERATOR_ADMIN,
+                oldVault != null ? "rotated_from_id=" + oldVault.getId() : "first credential");
         return newVault;
+    }
+
+    /**
+     * 人工停用凭证（Phase 2 B2，N-004 收口）。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public CredentialVault revokeCredential(Long id, String operator) {
+        CredentialVault vault = getById(id);
+        if (vault == null) {
+            throw new BizException("凭证不存在，禁止停用: id=" + id);
+        }
+        if (vault.getStatus() == CredentialStatus.EXPIRED) {
+            throw new BizException("EXPIRED 凭证为轮换淘汰终态，不可逆，禁止停用: id=" + id);
+        }
+        boolean ok = lambdaUpdate()
+                .eq(CredentialVault::getId, id)
+                .in(CredentialVault::getStatus,
+                        List.of(CredentialStatus.ACTIVE, CredentialStatus.DISABLED))
+                .set(CredentialVault::getStatus, CredentialStatus.DISABLED)
+                .update();
+        if (!ok) {
+            throw new BizException("凭证状态冲突，停用失败（CAS）: id=" + id);
+        }
+        recordAudit(vault, CredentialAuditAction.REVOKE,
+                operator != null ? operator : CredentialAuditAction.OPERATOR_ADMIN,
+                "manual revoke (status=" + vault.getStatus().name() + ")");
+        vault.setStatus(CredentialStatus.DISABLED);
+        return vault;
+    }
+
+    /**
+     * 过期扫描：ACTIVE 且 expire_time < now 的凭证批量置为 EXPIRED（Phase 2 B2）。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public int expireOverdue(int batchLimit) {
+        if (batchLimit <= 0) {
+            return 0;
+        }
+        List<CredentialVault> overdue = baseMapper.selectList(new LambdaQueryWrapper<CredentialVault>()
+                .eq(CredentialVault::getStatus, CredentialStatus.ACTIVE)
+                .isNotNull(CredentialVault::getExpireTime)
+                .lt(CredentialVault::getExpireTime, OffsetDateTime.now())
+                .orderByAsc(CredentialVault::getExpireTime)
+                .last("LIMIT " + batchLimit));
+        int count = 0;
+        for (CredentialVault vault : overdue) {
+            boolean ok = lambdaUpdate()
+                    .eq(CredentialVault::getId, vault.getId())
+                    .eq(CredentialVault::getStatus, CredentialStatus.ACTIVE)
+                    .set(CredentialVault::getStatus, CredentialStatus.EXPIRED)
+                    .set(CredentialVault::getRemark, appendRemark(vault, "expired at " + OffsetDateTime.now()))
+                    .update();
+            if (ok) {
+                recordAudit(vault, CredentialAuditAction.EXPIRE,
+                        CredentialAuditAction.OPERATOR_SYSTEM,
+                        "expire_time elapsed (expiresAt=" + vault.getExpireTime() + ")");
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * 分页查询凭证操作审计（Phase 2 B2）。
+     */
+    @Override
+    public IPage<CredentialAuditLog> listAudits(Long credentialId, CredentialOwnerType ownerType,
+                                                Long ownerId, long page, long size) {
+        return credentialAuditService.listAudits(credentialId, ownerType, ownerId, page, size);
+    }
+
+    /**
+     * 审计落点：与凭证主操作同事务（审计失败整体回滚，fail-close）。
+     */
+    private void recordAudit(CredentialVault vault, String action, String operator, String detail) {
+        credentialAuditService.record(vault.getId(), vault.getOwnerType(), vault.getOwnerId(),
+                vault.getProvider(), action, operator, detail);
+    }
+
+    private String appendRemark(CredentialVault vault, String segment) {
+        return (vault.getRemark() != null && !vault.getRemark().isBlank())
+                ? vault.getRemark() + " | " + segment
+                : segment;
     }
 }
