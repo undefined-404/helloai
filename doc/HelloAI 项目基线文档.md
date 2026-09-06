@@ -459,16 +459,19 @@ Agent API Key
 
 # 14. Credential Vault
 
-当前已具备 Agent API Key 的基础 Vault 能力。
+当前已具备 LLM Provider 凭证托管能力（`credential_vault`，AES-GCM 加密）。
 
-当前支持最小生命周期：
+当前支持：
 
 ```text
-ACTIVE
-EXPIRED
+AGENT / PLATFORM 两级归属
+ACTIVE / DISABLED / EXPIRED 状态
+绑定 / 轮换 / 人工停用（revoke）/ 过期自动失效（CredentialExpireTask 扫描）
+操作审计（credential_audit_log：bind / rotate / revoke / expire 可查）
+双活过渡：平台级 vault > yml 兜底（管理端可标注来源）
 ```
 
-完整 Vault 迁移、双活、细粒度权限模型等不作为当前完整交付能力。
+最小暴露原则：明文仅执行链内部解析，管理端只见脱敏标志（N-004 收口口径，Phase 2 B2）。
 
 ---
 
@@ -507,7 +510,6 @@ PostgreSQL metrics
 | Workflow 模板 | 未完整交付 |
 | Team 编排 | 未完整交付 |
 | Browser Agent | 未完整交付 |
-| Credential Vault 完整迁移 | 未完整交付 |
 | 完整 Provider Factory | 部分完成 |
 | 优先级调度 | 未完整交付 |
 | 抢占式打断 / 恢复 | 未完整交付 |

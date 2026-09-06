@@ -90,10 +90,9 @@ Planner
 
 1. Workflow / Team 编排
 2. Browser Agent
-3. Credential Vault 完整化
-4. Provider Factory 完整化
-5. 高级调度能力
-6. 跨会话记忆
+3. Provider Factory 完整化
+4. 高级调度能力
+5. 跨会话记忆
 
 ---
 
@@ -104,7 +103,6 @@ Planner
 | N-001 | Workflow 模板 | TODO | P1 | 当前缺少完整 Workflow 模型与模板化编排能力 |
 | N-002 | Team 编排 | TODO | P1 | 当前缺少稳定的 Team / Agent 组合编排模型 |
 | N-003 | Browser Agent | TODO | P2 | 尚无完整真实 Browser Agent 执行链路 |
-| N-004 | Credential Vault | PARTIAL | P1 | 已有基础轮换语义，但完整迁移 / 权限模型不足 |
 | N-005 | Provider Factory | PARTIAL | P1 | Provider Catalog 已存在，但部分 Provider Factory 尚不完整 |
 | N-006 | 优先级调度 | TODO | P2 | 当前缺少完整优先级队列与抢占机制 |
 | N-009 | 跨会话记忆 | TODO | P2 | 尚无独立长期记忆平面 |
@@ -264,45 +262,7 @@ Browser Agent 应作为一种 Agent 类型接入已有执行体系。
 
 ---
 
-# 9. N-004 Credential Vault
-
-**状态：** `PARTIAL`
-
-**优先级：** P1
-
-## 已有
-
-- API Key 基础存储
-- ACTIVE
-- EXPIRED
-- 基础轮换语义
-
-## 差距
-
-仍缺少：
-
-- 完整迁移
-- 旧字段下线
-- 双活过渡策略
-- 更细粒度权限
-- 审计
-- Secret 生命周期治理
-
-## 完成标准
-
-必须能够明确回答：
-
-```text
-谁可以读取？
-谁可以轮换？
-谁可以失效？
-旧 Key 什么时候删除？
-异常情况下如何恢复？
-```
-
----
-
-# 10. N-005 Provider Factory
+# 9. N-005 Provider Factory
 
 **状态：** `PARTIAL`
 
@@ -343,7 +303,7 @@ if provider == yyy
 
 ---
 
-# 11. N-006 优先级调度
+# 10. N-006 优先级调度
 
 **状态：** `TODO`
 
@@ -376,7 +336,7 @@ Agent
 
 ---
 
-# 12. N-009 跨会话记忆
+# 11. N-009 跨会话记忆
 
 **状态：** `TODO`
 
@@ -406,7 +366,7 @@ Agent Memory
 
 ---
 
-# 13. N-012 Planner Context 管理
+# 12. N-012 Planner Context 管理
 
 **状态：** `PARTIAL`
 
@@ -457,7 +417,7 @@ Context 越多不代表 Agent 越聪明。
 
 ---
 
-# 15. Gap 新增规则
+# 13. Gap 新增规则
 
 新增 Gap 必须至少包含：
 
@@ -488,7 +448,7 @@ ID
 
 ---
 
-# 16. Gap 完成规则
+# 14. Gap 完成规则
 
 当一个 Gap 满足：
 
@@ -522,7 +482,7 @@ doc/design/
 
 ---
 
-# 16. Gap 与 Design 的关系
+# 15. Gap 与 Design 的关系
 
 推荐：
 
@@ -548,7 +508,7 @@ N-001
 
 ---
 
-# 18. Gap 与 Log 的关系
+# 16. Gap 与 Log 的关系
 
 Gap：
 
@@ -569,7 +529,7 @@ Log = 历史状态
 
 ---
 
-# 19. 当前 Gap 使用原则
+# 17. 当前 Gap 使用原则
 
 AI Agent 读取本文件时：
 
@@ -581,7 +541,7 @@ AI Agent 读取本文件时：
 
 ---
 
-# 19. 最终原则
+# 18. 最终原则
 
 实现差距表不是：
 
