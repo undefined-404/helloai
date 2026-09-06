@@ -88,10 +88,7 @@ Planner
 
 当前主要差距集中在：
 
-1. Team 编排
-2. Browser Agent
-3. 高级调度能力
-4. 跨会话记忆
+（当前无 TODO 项：N-001 Workflow / N-002 Team / N-003 Browser / N-006 优先级调度 / N-009 跨会话记忆 均已按完成规则移除）
 
 ---
 
@@ -99,75 +96,11 @@ Planner
 
 | ID | 能力 | 状态 | 优先级 | Gap |
 |---|---|---|---|---|
-| N-006 | 优先级调度 | TODO | P2 | 当前缺少完整优先级队列与抢占机制 |
-| N-009 | 跨会话记忆 | TODO | P2 | 尚无独立长期记忆平面 |
+| （无活动 TODO 项） | | | | 全部 TODO 均已按完成规则移除 |
 
 ---
 
-# 6. N-006 优先级调度
-
-**状态：** `TODO`
-
-**优先级：** P2
-
-## 差距
-
-当前调度基础能力已经存在，但缺少：
-
-- 优先级队列
-- starvation 防护
-- 抢占
-- 恢复
-- 优先级继承
-- 调度公平性策略
-
-## 目标
-
-形成：
-
-```text
-Task Priority
-      ↓
-Queue
-      ↓
-Scheduler
-      ↓
-Agent
-```
-
----
-
-# 7. N-009 跨会话记忆
-
-**状态：** `TODO`
-
-**优先级：** P2
-
-## 当前状态
-
-Planner 已具备会话上下文。
-
-## 差距
-
-尚缺独立长期记忆平面：
-
-```text
-Session Memory
-Long Term Memory
-User Memory
-Task Memory
-Agent Memory
-```
-
-之间的明确边界。
-
-## 原则
-
-不要把所有历史 Conversation 直接当 Memory。
-
----
-
-# 8. Gap 新增规则
+# 6. Gap 新增规则
 
 新增 Gap 必须至少包含：
 
@@ -198,7 +131,7 @@ ID
 
 ---
 
-# 9. Gap 完成规则
+# 7. Gap 完成规则
 
 当一个 Gap 满足：
 
@@ -232,14 +165,14 @@ doc/design/
 
 ---
 
-# 10. Gap 与 Design 的关系
+# 8. Gap 与 Design 的关系
 
 推荐：
 
 ```text
-N-006
+Gap（示例编号，当前已无活动 TODO）
   ↓
-design/priority.md
+design/xxx.md
   ↓
 代码实现
   ↓
@@ -251,14 +184,14 @@ log/2026-xx.md
 而不是：
 
 ```text
-N-006
+Gap
   ↓
 不断向表格追加 500 行实现细节
 ```
 
 ---
 
-# 11. Gap 与 Log 的关系
+# 9. Gap 与 Log 的关系
 
 Gap：
 
@@ -279,7 +212,7 @@ Log = 历史状态
 
 ---
 
-# 12. 当前 Gap 使用原则
+# 10. 当前 Gap 使用原则
 
 AI Agent 读取本文件时：
 
@@ -291,7 +224,7 @@ AI Agent 读取本文件时：
 
 ---
 
-# 13. 最终原则
+# 11. 最终原则
 
 实现差距表不是：
 
