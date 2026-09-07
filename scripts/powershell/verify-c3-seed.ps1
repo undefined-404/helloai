@@ -274,7 +274,7 @@ foreach ($k in $script:DoneMap.Keys) {
 foreach ($k in ($dist.Keys | Sort-Object)) {
     Write-Output ('[seed] status distribution: ' + $k + '=' + $dist[$k])
 }
-Write-Output ('[seed] taskIds (route key = taskId % 100 < 5): ' + ($script:TaskIds -join ','))
+Write-Output ('[seed] taskIds (恒走 AgentRuntime 路由): ' + ($script:TaskIds -join ','))
 
 Write-Output ('SUMMARY: PASS=' + $script:PassCount + ' FAIL=' + $script:FailCount)
 if ($script:FailCount -gt 0) {

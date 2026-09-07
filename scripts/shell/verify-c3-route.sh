@@ -2,10 +2,11 @@
 # ============================================================
 # helloai Phase0 C3 gray route verifier (verify-c3-route.sh, macOS/Linux)
 # 移植自 scripts/powershell/verify-c3-route.ps1（含 v1.1 的 -WindowMinutes）。
-#   S1 解析 application.yml gray-percent，断言与期望值一致
+# v2.0（LOG-20260907）：路由分支已删除（LOG-20260904-006），断言口径改为「恒 100% / 无灰度分支」。
+#   S1 解析 application.yml gray-percent，断言恒为 100（固化值；路由分支已删除，仅留档位观测）
 #   S2 生成只读 SQL 探针（.tmp/c3-route-violation.sql / c3-route-stats.sql）：
-#      - 反侧违例：route=agent_runtime 观察点的 taskId % 100 必须 < gray（路由确定性，期望 0 行）
-#      - 正侧统计：Runtime 命中 task 占比 vs gray% 偏差 <= +-10%（验收标准 1，样本 >= 10 才判定）
+#      - 反侧违例：consume 观察点存在非 agent_runtime 的 route 值（无第二路由分支，期望 0 行）
+#      - 正侧统计：Runtime 命中 task 占比 vs 100% 偏差 <= +-10%（验收标准 1，样本 >= 10 才判定）
 #        all_tasks 仅统计新协议消费（consume 事件带 route 键）：旧协议执行（切换前存量，
 #        无 route 键）永远不产生 runtime 消费，不应稀释分母；WINDOW_MINUTES>0 可再缩窗
 #   S3 有 psql 或 docker(helloai-postgres) 时自动执行断言；否则提示走会话内 MCP
@@ -14,10 +15,10 @@
 # 口径：route 观察点 = task_timeline event_type='sub_task_execution_command_consume'
 #       AND payload->>'route'='agent_runtime'（LocalExecutionCommandConsumer.runViaRuntime 写入）
 # 用法（项目根）：
-#   ./scripts/shell/verify-c3-route.sh                       # 默认期望 gray=5
-#   GRAY_PERCENT=100 ./scripts/shell/verify-c3-route.sh      # Step 4 全量档
+#   ./scripts/shell/verify-c3-route.sh                       # 默认期望 gray=100（恒 100% 无灰度分支）
+#   GRAY_PERCENT=100 ./scripts/shell/verify-c3-route.sh
 #   GRAY_PERCENT=100 WINDOW_MINUTES=120 ./scripts/shell/verify-c3-route.sh
-# 参数（环境变量）：GRAY_PERCENT(5) WINDOW_MINUTES(0=全量) YML_PATH('') DB_HOST PG_CONTAINER
+# 参数（环境变量）：GRAY_PERCENT(100) WINDOW_MINUTES(0=全量) YML_PATH('') DB_HOST PG_CONTAINER
 # ============================================================
 
 set -uo pipefail
@@ -26,7 +27,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/c3-common.sh"
 
-GRAY_PERCENT="${GRAY_PERCENT:-5}"
+# 恒 100% / 无灰度分支（LOG-20260904-006 路由分支已删除；旧默认 5 已废弃）
+GRAY_PERCENT="${GRAY_PERCENT:-100}"
 WINDOW_MINUTES="${WINDOW_MINUTES:-0}"
 YML_PATH="${YML_PATH:-}"
 
@@ -62,17 +64,19 @@ win_note=""
 [[ "$WINDOW_MINUTES" -gt 0 ]] && win_note="窗口 ${WINDOW_MINUTES}min："
 
 {
-  print -r -- "-- C3 灰度路由反侧违例（只读）：期望 0 行。"
-  print -r -- "-- route=agent_runtime 观察点的 taskId % 100 必须 < gray-percent（路由确定性）。"
-  print -r -- "SELECT DISTINCT task_id, sub_task_id, (task_id % 100)::int AS mod100"
+  print -r -- "-- C3 路由反侧违例（只读）：期望 0 行。"
+  print -r -- "-- LOG-20260904-006 后路由分支已删除、AgentRuntime 为唯一执行契约，consume 观察点的"
+  print -r -- "-- route 键只允许 'agent_runtime'；出现其它 route 值 = 第二路由分支残留，需人工核对。"
+  print -r -- "-- 旧协议消费（双轨切换前存量，payload 无 route 键）为历史样本，不视为违例。"
+  print -r -- "SELECT DISTINCT task_id, sub_task_id, payload->>'route' AS route"
   print -r -- "FROM task_timeline"
   print -r -- "WHERE event_type = 'sub_task_execution_command_consume'"
-  print -r -- "  AND payload->>'route' = 'agent_runtime'"
-  print -r -- "  AND (task_id % 100) >= ${GRAY_PERCENT};"
+  print -r -- "  AND payload->>'route' IS NOT NULL"
+  print -r -- "  AND payload->>'route' <> 'agent_runtime';"
 } >"$viol_file"
 
 {
-  print -r -- "-- C3 灰度路由统计（只读，验收标准 1）：Runtime 命中 task 占比 vs gray 偏差 <= +-10%。"
+  print -r -- "-- C3 路由统计（只读，验收标准 1）：Runtime 命中 task 占比 vs 100% 偏差 <= +-10%（恒 100% 无灰度分支）。"
   print -r -- "-- ${win_note}样本过少（< 10 task）时不判定，先积累。"
   print -r -- "-- 口径：仅新协议消费（consume 事件带 route 键）；旧协议执行（双轨切换前存量，payload 无"
   print -r -- "--       route 键）不产生 runtime 消费、永远进不了分子，故从分母排除，避免稀释占比。"

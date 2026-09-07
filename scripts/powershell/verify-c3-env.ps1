@@ -1,7 +1,7 @@
 ﻿# ============================================================
 # helloai Phase0 C3 Step1 dev-env verifier (verify-c3-env, v1.0)
-# 用途：C3 Step 1 灰度前置的 dev 环境就绪检查（预研文档 7 章验收脚本之一）。
-#       全 PASS 才允许灰度（gray-percent>0）：
+# 用途：C3 Step 1 dev 环境就绪检查（预研文档 7 章验收脚本之一；v2.0：恒 100% 无灰度分支，LOG-20260907）。
+#       全 PASS 才允许执行（gray-percent 固化 100，路由分支已删除，LOG-20260904-006）：
 #   S1 服务端口存活：后端 6565（TCP + /api/health）+ dev 中间件
 #      PG 15432 / Redis 26379 / RabbitMQ 25672（TCP）
 #   S2 对账任务窗口：扫描日志最近 N 分钟（默认 12 >= B3 10min 窗口），
@@ -32,7 +32,8 @@ param(
     [int]$ReconcileWindowMinutes = 12,
     [int]$FreshMinutes = 5,
     [int]$LogTailLines = 10000,
-    [int]$ExpectedGrayPercent = 5,
+    # 恒 100% / 无灰度分支（LOG-20260904-006 路由分支已删除；旧默认 5 已废弃）
+    [int]$ExpectedGrayPercent = 100,
     [string]$LogFile = ''
 )
 

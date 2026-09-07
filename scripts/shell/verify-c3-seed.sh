@@ -250,7 +250,7 @@ done
 for k in "${(@ko)DIST}"; do
   print -r -- "[seed] status distribution: $k=${DIST[$k]}"
 done
-print -r -- "[seed] taskIds (route key = taskId % 100 < gray-percent): ${(j:,:)TASK_IDS}"
+print -r -- "[seed] taskIds (恒走 AgentRuntime 路由): ${(j:,:)TASK_IDS}"
 
 if [[ "$FAIL_COUNT" -gt 0 ]]; then
   print -r -- "SUMMARY: PASS=$PASS_COUNT FAIL=$FAIL_COUNT"

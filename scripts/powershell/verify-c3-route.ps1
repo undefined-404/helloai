@@ -21,7 +21,7 @@
 # ============================================================
 
 param(
-    [int]$GrayPercent = 5,
+    [int]$GrayPercent = 100,
     [int]$WindowMinutes = 0,
     [string]$YmlPath = ''
 )
@@ -98,16 +98,16 @@ if (-not (Test-Path $probeDir)) { New-Item -ItemType Directory -Path $probeDir -
 
 $violFile = Join-Path $probeDir 'c3-route-violation.sql'
 $vioSql = @'
--- C3 灰度路由反侧违例（只读）：期望 0 行。
--- route=agent_runtime 观察点的 taskId % 100 必须 < gray-percent（路由确定性：未命中必走旧直连，
--- 旧直连路径不写 route 字段）。违例行 = 灰度规则被破坏（含运行期变更 gray-percent 窗口），需人工核对。
-SELECT DISTINCT task_id, sub_task_id, (task_id % 100)::int AS mod100
+-- C3 路由反侧违例（只读）：期望 0 行。
+-- LOG-20260904-006 后路由分支已删除、AgentRuntime 为唯一执行契约，consume 观察点的
+-- route 键只允许 'agent_runtime'；出现其它 route 值 = 第二路由分支残留，需人工核对。
+-- 旧协议消费（双轨切换前存量，payload 无 route 键）为历史样本，不视为违例。
+SELECT DISTINCT task_id, sub_task_id, payload->>'route' AS route
 FROM task_timeline
 WHERE event_type = 'sub_task_execution_command_consume'
-  AND payload->>'route' = 'agent_runtime'
-  AND (task_id % 100) >= {GRAY};
+  AND payload->>'route' IS NOT NULL
+  AND payload->>'route' <> 'agent_runtime';
 '@
-$vioSql = $vioSql.Replace('{GRAY}', [string]$GrayPercent)
 [System.IO.File]::WriteAllText($violFile, $vioSql.TrimStart([char]0xFEFF), $script:Utf8NoBom)
 
 $statFile = Join-Path $probeDir 'c3-route-stats.sql'
@@ -116,7 +116,7 @@ if ($WindowMinutes -gt 0) {
     $winCond = "  AND create_time >= now() - interval '" + $WindowMinutes + " minutes'`n"
 }
 $staSql = @'
--- C3 灰度路由统计（只读，验收标准 1）：Runtime 命中 task 占比 vs gray-percent 偏差 <= +-10%。
+-- C3 路由统计（只读，验收标准 1）：Runtime 命中 task 占比 vs 100% 偏差 <= +-10%（恒 100% 无灰度分支）。
 -- {WINNOTE}样本过少（< 10 task）时不判定，先积累。
 -- 口径（LOG-20260904-001 修复）：all_tasks 分母过滤 payload->>'route' IS NOT NULL，
 -- 排除双轨切换前旧协议 consume（无 route 键）task，避免稀释占比。

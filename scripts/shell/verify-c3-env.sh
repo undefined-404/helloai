@@ -11,10 +11,10 @@
 # Ref: doc/design/HelloAI_Phase0_C3_双轨切换预研.md（七章验收脚本表）
 #      doc/log/2026-09.md（LOG-20260902-011 预检落地 / LOG-20260903-012 Step 4 全量档）
 # 用法（项目根）：
-#   ./scripts/shell/verify-c3-env.sh                 # 默认期望 gray=5
-#   EXPECTED_GRAY_PERCENT=100 ./scripts/shell/verify-c3-env.sh   # Step 4 全量档
+#   ./scripts/shell/verify-c3-env.sh                 # 默认期望 gray=100（恒 100% 无灰度分支）
+#   EXPECTED_GRAY_PERCENT=100 ./scripts/shell/verify-c3-env.sh
 #   DB_HOST=localhost LOG_FILE=... ./scripts/shell/verify-c3-env.sh
-# 参数（环境变量）：EXPECTED_GRAY_PERCENT(5) RECONCILE_WINDOW_MINUTES(12) FRESH_MINUTES(5)
+# 参数（环境变量）：EXPECTED_GRAY_PERCENT(100) RECONCILE_WINDOW_MINUTES(12) FRESH_MINUTES(5)
 #                   LOG_TAIL_LINES(10000) LOG_FILE('') BASE_URL DB_HOST
 # ============================================================
 
@@ -24,7 +24,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/c3-common.sh"
 
-EXPECTED_GRAY_PERCENT="${EXPECTED_GRAY_PERCENT:-5}"
+# 恒 100% / 无灰度分支（LOG-20260904-006 路由分支已删除；旧默认 5 已废弃）
+EXPECTED_GRAY_PERCENT="${EXPECTED_GRAY_PERCENT:-100}"
 RECONCILE_WINDOW_MINUTES="${RECONCILE_WINDOW_MINUTES:-12}"
 FRESH_MINUTES="${FRESH_MINUTES:-5}"
 LOG_TAIL_LINES="${LOG_TAIL_LINES:-10000}"
