@@ -2357,8 +2357,8 @@ ReviewProperties
 
 ```yaml
 helloai:
-   agent:
-      ...
+  agent:
+    ...
 ```
 
 ***

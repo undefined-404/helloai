@@ -1,248 +1,128 @@
 # HelloAI 实现差距表
 
-> **文档版本：V2**
+> **状态：CURRENT GAP**
 >
-> 本文档只记录 HelloAI **当前仍然存在的实现差距、风险、待决策事项和未完整交付能力**。
+> 本文只记录当前 → 目标的真实差距。
 >
-> 已完成事项不在本文档长期保留。
->
-> 历史实现过程请查看 `doc/log/`。
->
-> 具体设计请查看 `doc/design/`。
->
-> 最终事实以当前代码、数据库及可复现实验为准。
->
-> 最后更新：2026-09-06
+> 最后更新：2026-09-07
 
----
+# 1. 总体矩阵
 
-# 1. 文档定位
+| ID | 能力 | 当前状态 | 目标 | 优先级 | 处置 |
+|---|---|---|---|---|---|
+| G-001 | Agent Event Stream | 已有 Run/Turn/Step + Event 基础 | 统一事件契约和消费体系 | **P0** | 当前主线 |
+| G-002 | Executor 迁移 | Runtime 已有，Legacy 通过 Adapter 接入 | Runtime 成为唯一执行契约，旧实现退出 | **P0** | 双轨迁移 |
+| G-003 | AgentRuntime | 已具备基本 Context / Execute / Event / Environment | Context + Session + Skill + Tool + Loop + Event + Sandbox | **P0** | 增量提取 |
+| G-004 | Skill Capability | 已有 Skill resolve / resolvedSpecs | Metadata / Version / Tools / Schema / Dependencies | **P1** | 兼容演进 |
+| G-005 | Sandbox Provider | 已有 Environment / Provider | 真正 Provider 化执行环境与隔离策略 | **P1** | 先契约 |
+| G-006 | Replay / Audit | 有执行轨迹基础 | 基于统一 Event 查询/回放 | **P1** | Event 后建设 |
+| G-007 | Quality Gate | Reviewer 闭环已存在 | Rule + Test + LLM 统一决策 | **P2** | 现有链上增强 |
+| G-008 | Agent Fleet Routing | 已有 Agent 选择机制 | Capability + Health + Load + Policy | **P2** | 渐进升级 |
+| G-009 | Dynamic Workflow | 已有模板/实例化/DAG | 动态分支、复杂运行期编排 | **P3** | 后置 |
 
-本文档用于回答：
+# 2. P0 主线
 
-```text
-现在还缺什么？
-为什么说它还缺？
-优先级是什么？
-下一步应该做什么？
-如何验证完成？
-```
+## G-001 Event Stream
 
-本文档不负责：
+验收：
 
-- 记录历史版本
-- 保存已经完成的需求
-- 记录完整代码修改
-- 保存详细设计方案
-- 保存开发流水账
-- 替代项目基线
-- 替代 Issue / Git
+- Legacy 与 Runtime 产生同一 Event Model；
+- Timeline / Audit 逐步统一从 Event 获取事实；
+- 一个 Run 可以按 sequence 重建轨迹；
+- Event 不成为第二业务状态源；
+- 写入具备幂等和可对账能力。
 
----
+## G-002 Dual Executor
 
-# 2. 状态定义
+原则：
 
-| 状态 | 含义 |
-|---|---|
-| `TODO` | 尚未开始 |
-| `DESIGNING` | 正在设计 |
-| `DOING` | 开发中 |
-| `VERIFYING` | 已开发，等待验证 |
-| `BLOCKED` | 存在明确阻塞 |
-| `PARTIAL` | 已有主路径，但能力不完整 |
-| `DONE` | 已完成并验证 |
-| `WONTFIX` | 当前明确不做 |
-
-其中：
-
-> `DONE` 项原则上应从当前差距表移除，仅在 Log 中保留历史记录。
-
----
-
-# 3. 优先级定义
-
-| 优先级 | 含义 |
-|---|---|
-| P0 | 阻断主链路 / 严重数据风险 |
-| P1 | 核心能力缺失 / 明显可靠性问题 |
-| P2 | 重要能力增强 |
-| P3 | 优化项 / 体验项 |
-
----
-
-# 4. 当前总体结论
-
-当前 HelloAI 已经形成：
+> Dual Executor 只是迁移策略，不是长期架构。
 
 ```text
-Planner
-→ Task
-→ SubTask
-→ Agent
-→ Execution
-→ Review
-→ Artifact
+ExecutionRouter
+      ↓
+ ┌────┴─────┐
+ ↓          ↓
+Runtime    LegacyAdapter
 ```
 
-的核心闭环。
-
-当前主要差距集中在：
-
-（当前无 TODO 项：N-001 Workflow / N-002 Team / N-003 Browser / N-006 优先级调度 / N-009 跨会话记忆 均已按完成规则移除）
-
----
-
-# 5. 当前 Gap 总览
-
-| ID | 能力 | 状态 | 优先级 | Gap |
-|---|---|---|---|---|
-| （无活动 TODO 项） | | | | 全部 TODO 均已按完成规则移除 |
-
----
-
-# 6. Gap 新增规则
-
-新增 Gap 必须至少包含：
+禁止：
 
 ```text
-ID
-能力
-状态
-优先级
-当前状态
-差距
-目标
-下一步
-验证方式
+复制完整业务链
+复制第二套状态机
+复制第二套 Review
+无幂等地再次执行副作用
 ```
 
-禁止新增：
+## G-003 AgentRuntime
 
-- 纯想法
-- 模糊愿望
-- 已完成事项
-- 历史记录
-- 完整代码
-- 大段技术方案
-
-如果还没有形成明确 Gap：
-
-> 不要进入本文档。
-
----
-
-# 7. Gap 完成规则
-
-当一个 Gap 满足：
+推荐提取顺序：
 
 ```text
-代码完成
-+
-测试完成
-+
-关键路径验证完成
+1. Context
+2. EventRecorder
+3. ToolRegistry / ToolExecutor
+4. AgentLoop
+5. Session
+6. Sandbox
 ```
 
-则：
+# 3. P1
+
+### Skill Capability
+
+保持 Markdown 兼容，同时增加：
 
 ```text
-Gap → DONE
+version
+requiredTools
+dependencies
+inputSchema
+outputSchema
+validationRules
 ```
 
-随后从当前表移除。
+### Sandbox Provider
 
-历史信息写入：
+第一阶段只完成 Provider Contract，不把 Docker/K8s 当作已完成安全隔离。
+
+### Event Consumers
+
+顺序：
 
 ```text
-doc/log/
+Timeline / Replay
+→ Audit
+→ Recovery
+→ Fork
 ```
 
-如果产生长期有效的架构知识：
+# 4. P2
 
 ```text
-doc/design/
+Quality Gate
+Capability-based Agent Routing
+Historical Success
+Cost / Latency
 ```
 
----
-
-# 8. Gap 与 Design 的关系
-
-推荐：
+# 5. P3
 
 ```text
-Gap（示例编号，当前已无活动 TODO）
-  ↓
-design/xxx.md
-  ↓
-代码实现
-  ↓
-E2E
-  ↓
-log/2026-xx.md
+Dynamic Workflow
+LLM-generated branching
+Advanced Sandbox
+Cross-session optimization
 ```
 
-而不是：
+# 6. 明确不再作为开发要求的口径
 
 ```text
-Gap
-  ↓
-不断向表格追加 500 行实现细节
+❌ 为了凑 Harness 功能而复制 Harness
+❌ SkillRegistry 作为独立“大框架”重新建设
+❌ Sandbox = Local/Remote Environment 的同义词
+❌ Dual Executor 永久双轨
+❌ Planner / Executor / Reviewer 各自拥有完整执行能力
+❌ 新建第二套 Workflow Runtime
 ```
-
----
-
-# 9. Gap 与 Log 的关系
-
-Gap：
-
-> 现在还有什么问题？
-
-Log：
-
-> 这个问题过去怎么处理过？
-
-因此：
-
-```text
-Gap = 当前状态
-Log = 历史状态
-```
-
-两者不能混用。
-
----
-
-# 10. 当前 Gap 使用原则
-
-AI Agent 读取本文件时：
-
-1. 可以用于判断当前缺失能力。
-2. 可以用于判断项目正在解决什么问题。
-3. 不得据此推断具体代码结构。
-4. 不得把 Gap 描述当成已经存在的代码。
-5. 修改代码前必须检查实际代码。
-
----
-
-# 11. 最终原则
-
-实现差距表不是：
-
-> “HelloAI 做过什么的百科全书”。
-
-而是：
-
-> **HelloAI 当前待解决问题的实时索引。**
-
-因此：
-
-```text
-完成 → 移除
-失效 → 移除
-改为设计 → 链接 design/
-进入开发 → 更新状态
-```
-
-保持表格小、准、当前。
-
----
