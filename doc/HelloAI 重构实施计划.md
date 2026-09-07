@@ -59,6 +59,12 @@ A6 Timeline 消费迁移
 A7 Replay / Audit 最小读取
 ```
 
+## 现状基线（2026-09-07 代码核查）
+
+A1~A5 已落地：`agent_event` 三层模型（Run / Turn / Step，append-only）+ EventType（含 SKILL_RESOLVED=5 / TOOL_RESOLVED=6 / ENVIRONMENT_RESOLVED=7 step 槽位）+ AgentEventRecorder（write-only）。验证：`verify-c3-events.ps1`。
+
+**当前动作从 A6 起步**：Timeline 仍为独立载体（`task_timeline`），未从 Event Stream 消费；A7（Replay / Audit 最小读取）随后。
+
 # 3. P0-B：Executor 双轨迁移
 
 ```text
@@ -87,6 +93,12 @@ Legacy    Runtime
 → 5/95
 → Runtime 主路径
 ```
+
+## 现状基线（2026-09-07 代码核查）
+
+契约层已是单轨：`LocalExecutionCommandConsumer` 与 `MqExecutionCommandConsumer`（委托本地消费）统一经 `AgentRuntime#execute`——唯一执行契约，旧直连执行链已下线；唯一实现 `LegacyExecutorAdapter` 转发旧链（SubTaskExecutionService）。
+
+即当前 100% 流量经 Runtime 契约、0% Runtime 真身。本阶段实际工作不是"建轨"，而是：① 让 Runtime 侧长出真身（能力提取见 P0-C）；② 真身可用后补 Legacy ↔ Runtime 灰度切换与回滚口径。
 
 # 4. P0-C：AgentRuntime
 
@@ -128,6 +140,12 @@ Reviewer Decision
 Task Service
 ```
 
+## 现状基线（2026-09-07 代码核查）
+
+八件套现状：Context / EventRecorder / Environment 已落地；ToolRegistry 为元数据面（12 平台工具，仅注入 prompt 描述，无执行回路）；Session 为中断恢复检查点（AgentSessionService）；ToolExecutor / AgentLoop / SandboxProvider 未建。旧链编排仍在 `SubTaskExecutionServiceImpl`（约 790 行）。
+
+**当前动作从第二阶段（ToolRegistry / ToolExecutor）起步**——第一阶段（Context + EventRecorder）已落地。
+
 # 5. P1：Skill Capability Package
 
 从：
@@ -150,6 +168,8 @@ Skill Package
 
 保持现有 Markdown 兼容，不建立第二套 Skill Runtime。
 
+现状（2026-09-07 代码核查）：`KNOWN_SPECS` 为标签 → Markdown 文本（无 version / requiredTools / Schema）。本阶段即增加元数据层，保持 resolve 行为兼容。
+
 # 6. P1：Sandbox Provider
 
 第一阶段只建立：
@@ -167,6 +187,8 @@ Docker
 Remote
 K8s
 ```
+
+现状（2026-09-07 代码核查）：已有 ExecutionEnvironment / ExecutionEnvironmentProvider（remote-agent / local-process，场所标签，非安全沙箱）；SandboxProvider Contract 未建。
 
 # 7. P1：Event Consumers
 
@@ -186,6 +208,8 @@ Audit
 Recovery
 Fork
 ```
+
+现状（2026-09-07 代码核查）：Timeline 为独立载体（`task_timeline`），未从 Event Stream 消费；Replay / Audit 零实现。本阶段从 Timeline 迁移起步。
 
 # 8. P2：Quality Gate / Agent Fleet
 

@@ -126,3 +126,23 @@ Cross-session optimization
 ❌ Planner / Executor / Reviewer 各自拥有完整执行能力
 ❌ 新建第二套 Workflow Runtime
 ```
+
+# 7. Gap 登记与回流规则
+
+## 7.1 孤儿项回流
+
+设计文档（专项设计 / 执行方案 / ADR）中作出「推迟到 X 期」「划远期」「降级交付」的决定时，必须在本表同步登记对应条目或显式记 WONTFIX，不得只留存在设计文档内——否则该承诺会随批次闭环从索引中消失。
+
+## 7.2 历史编号映射（2026-09-07 文档重构）
+
+| 旧编号（已归档） | 新编号 | 能力 |
+|---|---|---|
+| N-013 | G-003 | Harness 执行循环（AgentLoop / ToolExecutor） |
+| N-014 | G-004 | Skill 元数据结构化 |
+| N-015 | G-005 | Sandbox Provider 化 |
+| N-016 | G-006 | Event Stream 消费侧（Replay / Audit） |
+| N-017 | G-008 | Agent Fleet 能力化选人 |
+| N-018 | G-007 | Quality Gate |
+| N-019 | G-009 | Workflow Engine 增强（远期） |
+
+旧编号明细与登记背景见 `archive/legacy/V1_HelloAI 实现差距表.md` 与 `archive/logs/2026-09.md`（LOG-20260907-001）。

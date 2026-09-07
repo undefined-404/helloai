@@ -15,6 +15,7 @@
 | `HelloAI 实现差距表.md` | Current → Target 差距 | ✅ |
 | `HelloAI 重构实施计划.md` | 当前实施顺序 | ✅ |
 | `HelloAI_CODE_STYLE.md` | 代码与工程规范 | ✅ |
+| `HelloAI_AI开发协作规约.md` | AI Agent 开发行为规约（生命周期 / 验证体系 / 红线） | ✅ |
 | `log/HelloAI 架构变更记录.md` | 架构决策 | 参考 |
 
 ## 2. 专项设计
