@@ -22,6 +22,9 @@ import java.util.Map;
 @Builder
 public class AgentEventTraceItem {
 
+    /** agent_event 主键（雪花 Long，全局唯一）；供合并时间线的前端 key 与排序标识。 */
+    Long id;
+
     String eventId;
 
     String runId;

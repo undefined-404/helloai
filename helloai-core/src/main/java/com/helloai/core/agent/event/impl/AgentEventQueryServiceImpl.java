@@ -35,6 +35,7 @@ public class AgentEventQueryServiceImpl implements AgentEventQueryService {
 
     private AgentEventTraceItem toItem(AgentEvent e) {
         return AgentEventTraceItem.builder()
+                .id(e.getId())
                 .eventId(e.getEventId())
                 .runId(e.getRunId())
                 .taskId(e.getTaskId())

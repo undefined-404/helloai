@@ -43,8 +43,8 @@ class AgentEventQueryServiceImplTest {
     @Test
     @DisplayName("按序投影：entity 字段完整映射到 VO 且顺序透传")
     void shouldProjectAndPreserveOrder() {
-        AgentEvent first = entity("e1", "run-1-1", 1, 1, "agent_started", OffsetDateTime.now());
-        AgentEvent second = entity("e2", "run-1-1", 1, 3, "tool_call_started", OffsetDateTime.now());
+        AgentEvent first = entity(1L, "e1", "run-1-1", 1, 1, "agent_started", OffsetDateTime.now());
+        AgentEvent second = entity(2L, "e2", "run-1-1", 1, 3, "tool_call_started", OffsetDateTime.now());
         when(agentEventMapper.selectBySubTaskIdOrdered(10L)).thenReturn(List.of(first, second));
 
         List<AgentEventTraceItem> items = queryService.traceBySubTaskId(10L);
@@ -52,6 +52,7 @@ class AgentEventQueryServiceImplTest {
         assertThat(items).hasSize(2);
 
         AgentEventTraceItem a = items.get(0);
+        assertThat(a.getId()).isEqualTo(1L);
         assertThat(a.getEventId()).isEqualTo("e1");
         assertThat(a.getRunId()).isEqualTo("run-1-1");
         assertThat(a.getTaskId()).isEqualTo(100L);
@@ -74,9 +75,10 @@ class AgentEventQueryServiceImplTest {
         assertThat(queryService.traceBySubTaskId(10L)).isEmpty();
     }
 
-    private AgentEvent entity(String eventId, String runId, int turn, int step,
+    private AgentEvent entity(Long id, String eventId, String runId, int turn, int step,
                               String eventType, OffsetDateTime createTime) {
         AgentEvent e = new AgentEvent();
+        e.setId(id);
         e.setEventId(eventId);
         e.setRunId(runId);
         e.setTaskId(100L);

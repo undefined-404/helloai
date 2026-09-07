@@ -58,6 +58,11 @@ export interface SequenceMessage {
 export function classifySwimlane(ev: TaskTimelineItem): Swimlane {
   const t = ev.eventType
   const trigger = ev.payload?.trigger
+  // A6 并轨：agent_event 执行轨迹（Run/Task 级 → BIZ；执行链 → EXT；核验/返工 → RVW）
+  if (t === 'run_created' || t === 'run_completed' || t === 'task_created' || t === 'task_assigned') return 'BIZ'
+  if (t === 'review_started' || t === 'review_approved' || t === 'review_rejected' || t === 'rework_started') return 'RVW'
+  if (t === 'agent_started' || t === 'skill_resolved' || t === 'tool_resolved' || t === 'environment_resolved'
+      || t === 'context_built' || t === 'tool_call_started' || t === 'tool_call_completed' || t === 'agent_completed') return 'EXT'
   // 任务级：业务系统视角
   if (t.startsWith('task_plan_') || t === 'task_auto_completed') return 'BIZ'
   // 人工介入（死信重派 / 手动触发 / 人工介入标记 / 人工驳回改派）→ 人工运维台
@@ -151,7 +156,25 @@ const LABEL: Record<string, string> = {
   sub_task_manual_intervention_required: '人工介入待处理',
   sub_task_manual_review_passed: '人工验收通过',
   sub_task_manual_review_rejected: '人工驳回',
-  sub_task_manual_rework_reset: '人工驳回改派'
+  sub_task_manual_rework_reset: '人工驳回改派',
+
+  // A6 并轨：agent_event 执行轨迹短标签
+  run_created: 'Run 创建',
+  run_completed: 'Run 完成',
+  task_created: '任务创建',
+  task_assigned: '任务分配',
+  agent_started: 'Agent 开始执行',
+  skill_resolved: '技能解析',
+  tool_resolved: '工具解析',
+  environment_resolved: '环境解析',
+  context_built: '装配上下文',
+  tool_call_started: '调用工具',
+  tool_call_completed: '工具返回',
+  agent_completed: 'Agent 完成提交',
+  review_started: '发起核验',
+  review_rejected: '核验驳回',
+  rework_started: '进入返工',
+  review_approved: '核验通过'
 }
 
 // ── 人工介入原因映射（markManualIntervention 的 reason 值 → 人话）──

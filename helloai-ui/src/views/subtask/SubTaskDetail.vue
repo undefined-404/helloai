@@ -495,7 +495,14 @@ const COMPACT_HIDDEN_EVENTS = new Set([
   'subtask_dual_review_prompt',
   'subtask_dual_review_thinking',
   'subtask_recheck_prompt',
-  'subtask_recheck_thinking'
+  'subtask_recheck_thinking',
+  // A6 并轨：agent_event 例行执行轨迹（列表默认隐藏，时序图仍全量展示）
+  'skill_resolved',
+  'tool_resolved',
+  'environment_resolved',
+  'context_built',
+  'tool_call_started',
+  'tool_call_completed'
 ])
 
 const viewTimeline = computed(() => {
@@ -646,7 +653,24 @@ const EVENT_META: Record<string, { label: string; desc: string }> = {
   task_plan_rejected: { label: '驳回拆解', desc: '拆解草案被驳回' },
   task_plan_failed: { label: '拆解失败', desc: '任务拆解失败' },
   task_plan_llm_call_start: { label: '拆解调模型', desc: '开始请求大模型进行任务拆解' },
-  task_auto_completed: { label: '任务完成', desc: '所有子任务完成，主任务自动收尾' }
+  task_auto_completed: { label: '任务完成', desc: '所有子任务完成，主任务自动收尾' },
+  // A6 并轨：agent_event 执行轨迹（Run / Turn / Step 细粒度事件）
+  run_created: { label: 'Run 创建', desc: '一次需求完整执行启动' },
+  run_completed: { label: 'Run 完成', desc: '一次需求完整执行完成' },
+  task_created: { label: '任务创建', desc: '主任务已创建' },
+  task_assigned: { label: '任务分配', desc: '子任务已分配给执行 Agent' },
+  agent_started: { label: 'Agent 开始', desc: '执行 Agent 开始处理子任务' },
+  skill_resolved: { label: '技能解析', desc: '已解析执行所需技能' },
+  tool_resolved: { label: '工具解析', desc: '已解析启用的工具清单' },
+  environment_resolved: { label: '环境解析', desc: '已确定执行环境' },
+  context_built: { label: '上下文装配', desc: '执行上下文已装配' },
+  tool_call_started: { label: '工具调用', desc: 'Agent 开始调用工具' },
+  tool_call_completed: { label: '工具返回', desc: '工具调用已返回结果' },
+  agent_completed: { label: 'Agent 完成', desc: '执行 Agent 完成本轮处理并提交' },
+  review_started: { label: '核验开始', desc: '系统开始核验产出' },
+  review_rejected: { label: '核验驳回', desc: '核验未通过，需要返工' },
+  rework_started: { label: '返工开始', desc: '子任务进入返工流程' },
+  review_approved: { label: '核验通过', desc: '核验通过，子任务完成' }
 }
 
 const TRIGGER_LABEL: Record<string, string> = {
@@ -675,8 +699,8 @@ function eventCategory(eventType: string): EventCategory {
   if (/review|recheck/.test(eventType)) return '核验'
   if (/dead_letter|manual|blocked|intervention|rework/.test(eventType)) return '人工介入'
   if (/dispatch|command|assigned|timeout_reassign|offline_reassign/.test(eventType)) return '分发'
-  if (/^task_|task_auto/.test(eventType)) return '任务'
-  if (/execute|llm|artifact|context_loaded|thinking|report/.test(eventType)) return '执行'
+  if (/^task_|^run_|task_auto/.test(eventType)) return '任务'
+  if (/execute|llm|artifact|context_loaded|thinking|report|skill_resolved|tool_resolved|environment_resolved|context_built|tool_call|agent_/.test(eventType)) return '执行'
   return '流程'
 }
 

@@ -65,7 +65,9 @@ A1~A5 已落地：`agent_event` 三层模型（Run / Turn / Step，append-only�
 
 A6 路线 B（2026-09-07 已落地）：新增 `AgentEventQueryService#traceBySubTaskId` 读侧投影（`agent_event` 按 subTaskId 以 `createTime ASC, id ASC` 有序重建轨迹），仅后端读侧，未接 UI；单测 3 用例 + dev 库连库验证 PASS。
 
-**当前动作**：A6 后续（`/timeline` 读侧并轨 `agent_event`，作为 Timeline / Replay 共用读消费面）与 A7（Replay / Audit 最小读取）待续。Timeline 仍为独立载体（`task_timeline`），未从 Event Stream 消费。
+A6 收口（2026-09-07 已落地）：`/timeline` 读侧并轨 `agent_event`——`TaskTimelineService.listBySubTaskId` 合并 task_timeline 粗事件 + agent_event 细轨迹（createTime ASC + id ASC 二级排序）；前端 SubTaskDetail 时间线/时序图补 agent_event 事件字典与泳道映射（COMPACT_HIDDEN 隐藏例行 Step 事件防刷屏）；后端单测 7 用例 + 前端 vue-tsc type-check PASS。`task_timeline` 保持不迁移（ADR-001 §4）。
+
+**当前动作**：A7（Replay / Audit 最小读取）起步。Timeline 已从 Event Stream 获取执行轨迹事实——G-001 验收「Timeline / Audit 逐步统一从 Event 获取事实」成立（Audit 侧后续）。
 
 # 3. P0-B：Executor 双轨迁移
 

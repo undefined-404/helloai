@@ -44,13 +44,15 @@ public interface TaskTimelineService extends IService<TaskTimeline> {
                      Map<String, Object> payload);
 
     /**
-     * 查询指定子任务的时间线条目，按 id 升序（ 派发控制台联调）。
+     * 查询指定子任务的时间线条目，按时间升序（ 派发控制台联调）。
      *
      * <p>供 {@code GET /api/sub-tasks/{id}/timeline} 调用。
-     * 仅返回该子任务的事件，不含系统级事件（如 agent_offline）。</p>
+     * 返回该子任务的 <b>合并时间线</b>：task_timeline 粗粒度业务/角色事件
+     * + agent_event 细粒度执行轨迹（A6 并轨），按 createTime ASC（同刻按 id）有序；
+     * 不含系统级事件（如 agent_offline）。</p>
      *
      * @param subTaskId 子任务 ID；为空时返回空集合
-     * @return 时间线条目列表（按 id 升序）；不存在子任务时返回空集合
+     * @return 时间线条目列表（按时间升序）；不存在子任务时返回空集合
      */
     List<TaskTimeline> listBySubTaskId(Long subTaskId);
 }
