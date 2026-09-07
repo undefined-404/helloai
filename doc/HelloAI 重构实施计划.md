@@ -67,7 +67,9 @@ A6 路线 B（2026-09-07 已落地）：新增 `AgentEventQueryService#traceBySu
 
 A6 收口（2026-09-07 已落地）：`/timeline` 读侧并轨 `agent_event`——`TaskTimelineService.listBySubTaskId` 合并 task_timeline 粗事件 + agent_event 细轨迹（createTime ASC + id ASC 二级排序）；前端 SubTaskDetail 时间线/时序图补 agent_event 事件字典与泳道映射（COMPACT_HIDDEN 隐藏例行 Step 事件防刷屏）；后端单测 7 用例 + 前端 vue-tsc type-check PASS。`task_timeline` 保持不迁移（ADR-001 §4）。
 
-**当前动作**：A7（Replay / Audit 最小读取）起步。Timeline 已从 Event Stream 获取执行轨迹事实——G-001 验收「Timeline / Audit 逐步统一从 Event 获取事实」成立（Audit 侧后续）。
+A7（2026-09-07 已落地）：Replay / Audit 最小读取——`AgentEventQueryService` 新增 `traceByRunId`（按 runId 以 `createTime ASC, id ASC` 重建 Run 级轨迹，Replay 读侧，G-001 验收「一个 Run 可以按 sequence 重建轨迹」成立）与 `pageAuditByTaskId`（按 taskId 分页查执行事实，eventType 可选过滤，最新在前）；`AgentEventMapper` 对应新增 `selectByRunIdOrdered` / `selectPageAuditByTaskId`（`idx_agent_event_run` 索引支撑）；纯后端读侧，未接 API/UI（与 A6 路线 B 同形态）；单测 8 用例 + dev 库连库探针 PASS。
+
+**当前动作**：P0-A 完整闭环（A1~A7 已落地）——G-001 Event Stream 验收全量成立。下一主线动作回到 P0-C 第二阶段（ToolRegistry → ToolExecutor 真身起步）。
 
 # 3. P0-B：Executor 双轨迁移
 
@@ -100,9 +102,15 @@ Legacy    Runtime
 
 ## 现状基线（2026-09-07 代码核查）
 
-契约层已是单轨：`LocalExecutionCommandConsumer` 与 `MqExecutionCommandConsumer`（委托本地消费）统一经 `AgentRuntime#execute`——唯一执行契约，旧直连执行链已下线；唯一实现 `LegacyExecutorAdapter` 转发旧链（SubTaskExecutionService）。
+契约层已是单轨：`LocalExecutionCommandConsumer` 与 `MqExecutionCommandConsumer`（委托本地消费）统一经 `AgentRuntime#execute`——唯一执行契约，旧直连执行链已下线；`LegacyExecutorAdapter` 转发旧链（SubTaskExecutionService）。
 
 即当前 100% 流量经 Runtime 契约、0% Runtime 真身。本阶段实际工作不是"建轨"，而是：① 让 Runtime 侧长出真身（能力提取见 P0-C）；② 真身可用后补 Legacy ↔ Runtime 灰度切换与回滚口径。
+
+P0-B 落地（2026-09-07）：**Runtime 真身已装配**——`RuntimeTurnExecutor`（AgentContext 输入 + AgentLoop / ToolExecutor / ToolRegistry / AgentSkillSpecService / SandboxProvider 组装；Turn 事件骨架 AGENT_STARTED→SKILL/TOOL/ENVIRONMENT_RESOLVED→CONTEXT_BUILT→[Loop TOOL_CALL]→AGENT_COMPLETED + 沙箱策略观测；prompt/chatModel 由调用方注入，不复制旧链业务编排）+ `RuntimeAgentRuntimeRouter`（`@Primary` + `@Order(1)`，`agentRuntimes.get(0)` 恒命中；按 `helloai.execution.runtime-enabled` 二进制切换，默认 `false`=Legacy 零变化，回滚=置回 false）。`AgentContext` 扩展 `accessType / systemPrompt / userPrompt / chatModel`；消费者注入 accessType。单测 6 用例 + 回归 38 用例 PASS（44 用例 0 失败）。
+
+P0-B-2 落地（2026-09-07）：**主链接线注入完成，P0 主线收官**——LLM 工厂暴露 ChatModel（`ProviderChatClientFactory`/`ProtocolFactory` 三工厂 + `LlmProviderChatClientFactoryRegistry.createChatModel`，与 ChatClient 共享缓存实例）；`AgentChatClientService.buildChatModel`（mock → MockChatModel；真实 → 工厂出口）；新增 `TurnLlmCaller`（executeOnce LLM 调用点封装 Legacy 单次 / Runtime AgentLoop 切换，同一 `runtime-enabled` 开关；Runtime 路径 ChatModel + ToolExecutor + 循环内 TOOL_CALL 事件，Legacy 路径维持手动 TOOL_CALL 标记防双记）；`Router` 增加驱动性感知（runtimeEnabled 且 ctx 携带 chatModel 才走真身，dispatch 上下文回落 Legacy）。单测 TurnLlmCaller 4 + Router 3 + 工厂套回归，累计 **75 用例 0 失败**。
+
+**当前动作**：**P0 主线（P0-A / P0-B / P0-C）完整收官**——Event Stream 统一、Runtime 真身 + 主链接线注入、八件套落地全部完成。后续主线程回到 P1（Skill Capability Package / Sandbox 隔离能力 / Event Consumer 消费面）或治理项。
 
 # 4. P0-C：AgentRuntime
 
@@ -146,9 +154,9 @@ Task Service
 
 ## 现状基线（2026-09-07 代码核查）
 
-八件套现状：Context / EventRecorder / Environment 已落地；ToolRegistry 为元数据面（12 平台工具，仅注入 prompt 描述，无执行回路）；Session 为中断恢复检查点（AgentSessionService）；ToolExecutor / AgentLoop / SandboxProvider 未建。旧链编排仍在 `SubTaskExecutionServiceImpl`（约 790 行）。
+八件套现状：Context / EventRecorder / Environment 已落地；ToolRegistry 为元数据面（12 平台工具，仅注入 prompt 描述）；ToolExecutor 已落地（P0-C Phase 2，执行回路真身）；AgentLoop 已落地（P0-C Phase 3，`runtime/loop` 手动工具循环——ChatModel 契约 + ToolExecutor 执行 + TOOL_CALL 事件，maxIterations 硬上限防死循环）；Session 为中断恢复检查点（AgentSessionService）；SandboxProvider 未建。旧链编排仍在 `SubTaskExecutionServiceImpl`（约 790 行）。
 
-**当前动作从第二阶段（ToolRegistry / ToolExecutor）起步**——第一阶段（Context + EventRecorder）已落地。
+**当前动作从第四阶段（Session / Sandbox）起步**——第一~三阶段（Context + EventRecorder / ToolRegistry + ToolExecutor / AgentLoop）已落地。
 
 # 5. P1：Skill Capability Package
 
@@ -192,7 +200,7 @@ Remote
 K8s
 ```
 
-现状（2026-09-07 代码核查）：已有 ExecutionEnvironment / ExecutionEnvironmentProvider（remote-agent / local-process，场所标签，非安全沙箱）；SandboxProvider Contract 未建。
+现状（2026-09-07 代码核查）：已有 ExecutionEnvironment / ExecutionEnvironmentProvider（remote-agent / local-process，场所标签，非安全沙箱）；SandboxProvider Contract 已落地（P0-C Phase 4：SandboxProvider / SandboxContext / Sandbox / ExecutionPolicy 五边界，复用环境解析 + 诚实策略无 ISOLATED）；第二阶段（Docker / Remote / K8s）后置。
 
 # 7. P1：Event Consumers
 
@@ -213,7 +221,7 @@ Recovery
 Fork
 ```
 
-现状（2026-09-07 代码核查）：Timeline 为独立载体（`task_timeline`），未从 Event Stream 消费；Replay / Audit 零实现。本阶段从 Timeline 迁移起步。
+现状（2026-09-07 代码核查）：Timeline 已并轨 Event（A6）、Replay / Audit 读侧已落地（A7，见 P0-A）；Recovery / Fork 消费面待建。
 
 # 8. P2：Quality Gate / Agent Fleet
 

@@ -151,20 +151,35 @@ AgentExecutionResult
 ExecutionEnvironment
 ExecutionEnvironmentProvider
 LegacyExecutorAdapter
+ToolExecutor
+ToolExecutionResult
+AgentLoop
+AgentLoopInput
+AgentLoopResult
+SandboxProvider
+SandboxContext
+Sandbox
+ExecutionPolicy
+RuntimeTurnExecutor
+RuntimeAgentRuntimeRouter
 ```
 
 当前含义：
 
 - `AgentRuntime` 已成为统一执行契约；
 - 旧 Executor 已通过 Adapter 与新执行入口衔接；
-- Runtime 已开始承接 Context / Event / Environment 等能力。
+- Runtime 已开始承接 Context / Event / Environment 等能力；
+- `ToolExecutor` 已具备执行回路真身（懒加载 spring-ai ToolCallback 目录按名调用，与 ToolRegistry 元数据面同源同构；未知工具 / 空参 / 执行异常 best-effort 返回失败不抛）；
+- `AgentLoop` 已具备手动工具循环真身（`runtime/loop`：ChatModel 契约 + ToolExecutor 执行 + TOOL_CALL 事件，`internalToolExecutionEnabled=false` 由循环接管工具执行，maxIterations 硬上限防死循环；真实 provider 行为待 Runtime 真身接线时联调）；
+- `RuntimeTurnExecutor` 已具备（P0-B：AgentLoop/ToolExecutor/ToolRegistry/Skill/SandboxProvider 组装的 Turn 真身，事件骨架 + 沙箱观测）；`RuntimeAgentRuntimeRouter` 已具备（@Primary + @Order(1)，按 `runtime-enabled` 二进制切换，默认 false=Legacy）。
 
 当前仍不能宣称已完成完整 Harness Runtime：
 
 ```text
-ToolExecutor      → 尚需完善
-AgentLoop         → 尚需完善
-Session 协调      → 尚需继续收敛
+ToolExecutor      → 契约+真身已具备（Phase 2），AgentLoop 已接线
+AgentLoop         → 契约+真身已具备（Phase 3），待 Runtime 真身组装
+Session 协调      → 已确认收敛口径（AgentSessionService 承载，Phase 1 Step 3）
+SandboxProvider   → 契约已具备（Phase 4），隔离能力后置（Docker/K8s P2/P3）
 Capability 体系   → 尚需完善
 ```
 
@@ -189,7 +204,7 @@ Event
 Timeline / Review 的事实输入
 ```
 
-读侧已具备 `AgentEventQueryService#traceBySubTaskId`（按 subTaskId 以 `createTime + id` 有序投影轨迹，A6 路线 B），但 Timeline / Audit 尚未从 Event 消费（`task_timeline` 仍为独立载体）。
+读侧已具备 `AgentEventQueryService` 三消费面：`traceBySubTaskId`（按 subTaskId 以 `createTime + id` 有序投影，Timeline 消费面，A6 已并轨 `/timeline`）、`traceByRunId`（按 runId 重建 Run 级轨迹，Replay 读侧，A7）、`pageAuditByTaskId`（按 taskId 分页查执行事实，eventType 可选过滤，Audit 读侧，A7）——Timeline / Replay / Audit 已从 Event Stream 获取事实；Recovery / Fork 消费面后续建设。`task_timeline` 保持独立载体不迁移（ADR-001 §4）。
 
 原则：
 
