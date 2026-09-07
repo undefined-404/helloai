@@ -189,6 +189,8 @@ Event
 Timeline / Review 的事实输入
 ```
 
+读侧已具备 `AgentEventQueryService#traceBySubTaskId`（按 subTaskId 以 `createTime + id` 有序投影轨迹，A6 路线 B），但 Timeline / Audit 尚未从 Event 消费（`task_timeline` 仍为独立载体）。
+
 原则：
 
 > `AgentEvent` 记录执行事实；业务状态机仍然是业务状态权威。

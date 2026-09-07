@@ -10,7 +10,7 @@
 
 | ID | 能力 | 当前状态 | 目标 | 优先级 | 处置 |
 |---|---|---|---|---|---|
-| G-001 | Agent Event Stream | 已有 Run/Turn/Step + Event 基础 | 统一事件契约和消费体系 | **P0** | 当前主线 |
+| G-001 | Agent Event Stream | 已有 Run/Turn/Step + Event 基础 + 读侧投影（A6 路线 B） | 统一事件契约和消费体系 | **P0** | 当前主线（A6 读侧投影已落地） |
 | G-002 | Executor 迁移 | Runtime 已有，Legacy 通过 Adapter 接入 | Runtime 成为唯一执行契约，旧实现退出 | **P0** | 双轨迁移 |
 | G-003 | AgentRuntime | 已具备基本 Context / Execute / Event / Environment | Context + Session + Skill + Tool + Loop + Event + Sandbox | **P0** | 增量提取 |
 | G-004 | Skill Capability | 已有 Skill resolve / resolvedSpecs | Metadata / Version / Tools / Schema / Dependencies | **P1** | 兼容演进 |

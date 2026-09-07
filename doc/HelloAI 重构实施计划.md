@@ -63,7 +63,9 @@ A7 Replay / Audit 最小读取
 
 A1~A5 已落地：`agent_event` 三层模型（Run / Turn / Step，append-only）+ EventType（含 SKILL_RESOLVED=5 / TOOL_RESOLVED=6 / ENVIRONMENT_RESOLVED=7 step 槽位）+ AgentEventRecorder（write-only）。验证：`verify-c3-events.ps1`。
 
-**当前动作从 A6 起步**：Timeline 仍为独立载体（`task_timeline`），未从 Event Stream 消费；A7（Replay / Audit 最小读取）随后。
+A6 路线 B（2026-09-07 已落地）：新增 `AgentEventQueryService#traceBySubTaskId` 读侧投影（`agent_event` 按 subTaskId 以 `createTime ASC, id ASC` 有序重建轨迹），仅后端读侧，未接 UI；单测 3 用例 + dev 库连库验证 PASS。
+
+**当前动作**：A6 后续（`/timeline` 读侧并轨 `agent_event`，作为 Timeline / Replay 共用读消费面）与 A7（Replay / Audit 最小读取）待续。Timeline 仍为独立载体（`task_timeline`），未从 Event Stream 消费。
 
 # 3. P0-B：Executor 双轨迁移
 
