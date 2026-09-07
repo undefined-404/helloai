@@ -38,6 +38,11 @@ public class DeepSeekProviderChatClientFactory implements ProviderChatClientFact
 
     @Override
     public ChatClient createChatClient(String apiKeyPlaintext, Agent agent, String model) {
+        return ChatClient.create(createChatModel(apiKeyPlaintext, agent, model));
+    }
+
+    @Override
+    public ChatModel createChatModel(String apiKeyPlaintext, Agent agent, String model) {
         if (apiKeyPlaintext == null || apiKeyPlaintext.isBlank()) {
             throw new BizException("apiKey 不能为空");
         }
@@ -53,8 +58,7 @@ public class DeepSeekProviderChatClientFactory implements ProviderChatClientFact
         // 后自动重建实例（2026-08-22 修复，此前缺 model 需重启才生效）。
         String cacheKey = ProviderChatModelCache.buildKey(PROVIDER, apiKeyPlaintext, baseUrl, PROVIDER, model);
 
-        ChatModel chatModel = cache.getOrCompute(cacheKey, () -> buildChatModel(apiKeyPlaintext, config, baseUrl, model));
-        return ChatClient.create(chatModel);
+        return cache.getOrCompute(cacheKey, () -> buildChatModel(apiKeyPlaintext, config, baseUrl, model));
     }
 
     /**

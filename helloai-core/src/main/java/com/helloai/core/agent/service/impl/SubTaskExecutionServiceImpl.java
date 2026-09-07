@@ -1,8 +1,8 @@
 package com.helloai.core.agent.service.impl;
 
 import com.helloai.core.agent.service.SubTaskExecutionService;
-import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.common.base.BizException;
+import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
@@ -38,7 +38,8 @@ import java.util.stream.Collectors;
 import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConversationService;
-import com.helloai.core.agent.service.PlatformAgentExecutionService;
+import com.helloai.core.agent.service.TurnLlmCaller;
+import com.helloai.core.agent.service.TurnLlmCallContext;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import com.helloai.core.task.service.TaskRunningSpecService;
@@ -88,7 +89,10 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
 
     private final SubTaskService subTaskService;
     private final AgentService agentService;
-    private final PlatformAgentExecutionService platformAgentExecutionService;
+    /** P0-B-2：主链接线注入——LLM 调用点经 TurnLlmCaller 切换（Legacy 单次 / Runtime 循环）。 */
+    private final TurnLlmCaller turnLlmCaller;
+    /** P0-B-2：执行属性（runtime-enabled 等）。 */
+    private final AgentExecutionProperties executionProperties;
     private final TaskTimelineService taskTimelineService;
     private final ExecutionResultHandler executionResultHandler;
     private final TaskRunningSpecService taskRunningSpecService;
@@ -389,19 +393,30 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
         } catch (Exception e) {
             log.warn("执行请求对话流写入失败（不阻断主链路）: subTaskId={}, err={}", subTaskId, e.getMessage());
         }
-        // Phase 0 B2：TOOL_CALL_STARTED（step=3，旧 Executor 的 Agent 调用视作一次原子动作）
-        recordEventSafely(AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
-                subTask.getTaskId(), subTaskId, runTurn, 3,
-                AgentEventType.TOOL_CALL_STARTED, agent.getId(),
-                safeMap("agentName", agent.getName()));
-        AgentResult result = platformAgentExecutionService.executeSync(agent, task);
-        // Phase 0 B2：TOOL_CALL_COMPLETED（step=4）；失败终态不发事件（ADR §5.3）
-        recordEventSafely(AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
-                subTask.getTaskId(), subTaskId, runTurn, 4,
-                AgentEventType.TOOL_CALL_COMPLETED, agent.getId(),
-                safeMap("success", result.isSuccess(),
-                        "finishReason", result.getFinishReason(),
-                        "tokens", result.getTokenUsage()));
+        // P0-B-2：主链接线注入——LLM 调用点经 TurnLlmCaller 切换。
+        // Legacy 路径：手动 TOOL_CALL_STARTED/COMPLETED（step=3/4，旧 Executor 调用视作一次原子动作）；
+        // Runtime 路径：AgentLoop 循环内逐工具记录 TOOL_CALL 事件，此处不再手动记录（防双记）。
+        boolean runtimeLlm = turnLlmCaller.isRuntimeEnabled();
+        if (!runtimeLlm) {
+            // Phase 0 B2：TOOL_CALL_STARTED（step=3）
+            recordEventSafely(AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
+                    subTask.getTaskId(), subTaskId, runTurn, 3,
+                    AgentEventType.TOOL_CALL_STARTED, agent.getId(),
+                    safeMap("agentName", agent.getName()));
+        }
+        AgentResult result = turnLlmCaller.call(new TurnLlmCallContext(
+                agent, task, enabledTools,
+                AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
+                subTask.getTaskId(), subTaskId, runTurn, agentEventRecorder));
+        if (!runtimeLlm) {
+            // Phase 0 B2：TOOL_CALL_COMPLETED（step=4）；失败终态不发事件（ADR §5.3）
+            recordEventSafely(AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
+                    subTask.getTaskId(), subTaskId, runTurn, 4,
+                    AgentEventType.TOOL_CALL_COMPLETED, agent.getId(),
+                    safeMap("success", result.isSuccess(),
+                            "finishReason", result.getFinishReason(),
+                            "tokens", result.getTokenUsage()));
+        }
         // Phase 1 Step 3：执行会话推进中断点（step=4=LLM 调用完成，进入结果回写；best-effort）
         agentSessionService.advance(subTaskId, agent.getId(), runTurn, 4);
         taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_llm_call_end",

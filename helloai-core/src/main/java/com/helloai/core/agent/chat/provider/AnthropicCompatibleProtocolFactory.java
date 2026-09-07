@@ -48,6 +48,11 @@ public class AnthropicCompatibleProtocolFactory implements LlmProviderChatClient
 
     @Override
     public ChatClient createChatClient(LlmProvider provider, String apiKeyPlaintext, Agent agent, String model) {
+        return ChatClient.create(createChatModel(provider, apiKeyPlaintext, agent, model));
+    }
+
+    @Override
+    public ChatModel createChatModel(LlmProvider provider, String apiKeyPlaintext, Agent agent, String model) {
         if (apiKeyPlaintext == null || apiKeyPlaintext.isBlank()) {
             throw new BizException("apiKey 不能为空");
         }
@@ -55,9 +60,8 @@ public class AnthropicCompatibleProtocolFactory implements LlmProviderChatClient
         String cacheKey = ProviderChatModelCache.buildKey(
                 provider.getProviderCode(), apiKeyPlaintext, baseUrl, PROTOCOL_TYPE, model);
 
-        ChatModel chatModel = cache.getOrCompute(cacheKey,
+        return cache.getOrCompute(cacheKey,
                 () -> buildChatModel(provider, apiKeyPlaintext, baseUrl, model));
-        return ChatClient.create(chatModel);
     }
 
     private ChatModel buildChatModel(LlmProvider provider,

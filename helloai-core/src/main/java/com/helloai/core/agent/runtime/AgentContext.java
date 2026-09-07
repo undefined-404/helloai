@@ -1,17 +1,20 @@
 package com.helloai.core.agent.runtime;
 
+import com.helloai.common.constant.AgentAccessType;
 import com.helloai.core.agent.event.AgentEventRecorder;
 import lombok.Builder;
 import lombok.Value;
+import org.springframework.ai.chat.model.ChatModel;
 
 import java.util.Collections;
 import java.util.List;
 
 /**
- * Agent 运行时执行上下文（Phase 0 C1）。
+ * Agent 运行时执行上下文（Phase 0 C1；P0-B 扩展 Runtime 真身输入）。
  *
  * <p>一次 {@link AgentRuntime#execute} 的完整输入：Run/Turn/Step 定位 + 执行主体 + 能力（技能/工具）
- * + 事件记录器。风格与旧执行链输入 {@code agent.domain.AgentTask} 一致：不可变值对象 + Builder。</p>
+ * + 事件记录器 + 执行环境 + 接入类型 + 提示词与底层模型（P0-B：Runtime 真身消费）。
+ * 风格与旧执行链输入 {@code agent.domain.AgentTask} 一致：不可变值对象 + Builder。</p>
  *
  * <p>Phase 0 仅定义契约（供 C2 LegacyExecutorAdapter / C3 新 Runtime 实现消费），
  * 本上下文的生产方在双轨切换后才出现。</p>
@@ -58,4 +61,16 @@ public class AgentContext {
      * accessType 为 null 或无命中时保持 null（Phase 0 语义兼容，调用方不得依赖非 null）。
      */
     ExecutionEnvironment environment;
+
+    /** 接入类型（P0-B：Runtime 真身沙箱解析输入；可空，null 时沙箱策略观测跳过）。 */
+    AgentAccessType accessType;
+
+    /** 系统提示词（P0-B：Runtime 真身经 AgentLoop 执行输入；可空，与 userPrompt 至少一者非空）。 */
+    String systemPrompt;
+
+    /** 用户提示词（P0-B：Runtime 真身经 AgentLoop 执行输入；可空，与 systemPrompt 至少一者非空）。 */
+    String userPrompt;
+
+    /** 底层模型（P0-B：Runtime 真身经 AgentLoop 执行输入；可空——缺失时 Runtime 真身契约化失败）。 */
+    ChatModel chatModel;
 }

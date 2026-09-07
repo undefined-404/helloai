@@ -183,6 +183,7 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
                     .skills(skills)
                     .tools(tools)
                     .environment(environment)
+                    .accessType(command.getAccessType())
                     .build());
         } catch (Exception e) {
             // 契约承诺失败以 status 表达不抛异常；此处防御未来 Runtime 实现的违约实现

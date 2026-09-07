@@ -7,6 +7,7 @@ import com.helloai.core.system.service.LlmProviderQueryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -92,6 +93,34 @@ public class LlmProviderChatClientFactoryRegistry {
     }
 
     /**
+     * 按 providerCode 创建 ChatModel（P0-B-2：Runtime AgentLoop 直接持有底层模型；
+     * 路由与 {@link #createChatClient} 完全一致，且共享缓存实例）。
+     *
+     * @param providerCode    provider 唯一标识（如 deepseek / moonshot / custom-gpt-4）
+     * @param apiKeyPlaintext API Key 明文
+     * @param agent           Agent 实体（用于上下文）
+     * @param model           请求模型（可空，使用 DB 配置的默认模型）
+     * @return ChatModel
+     * @throws BizException 当 provider 不存在 / 未启用 / 协议不支持时
+     */
+    public ChatModel createChatModel(String providerCode, String apiKeyPlaintext, Agent agent, String model) {
+        LlmProvider provider = queryService.findByCode(providerCode)
+                .orElseThrow(() -> new BizException("Provider 未找到或未启用: " + providerCode));
+
+        // DeepSeek 走官方 SDK（DeepSeekChatModel），优先匹配专用 Factory
+        if ("deepseek".equalsIgnoreCase(provider.getProviderCode()) && deepSeekFactory.supports(provider.getProviderCode())) {
+            return deepSeekFactory.createChatModel(apiKeyPlaintext, agent, model);
+        }
+
+        ProtocolFactory factory = protocolFactoryMap().get(normalizeProtocolType(provider.getProtocolType()));
+        if (factory == null) {
+            throw new BizException("不支持的 protocol_type: " + provider.getProtocolType()
+                    + "（provider=" + provider.getProviderCode() + "）");
+        }
+        return factory.createChatModel(provider, apiKeyPlaintext, agent, model);
+    }
+
+    /**
      * 通用协议工厂接口（按协议类型聚合 ChatClient 构建逻辑）。
      */
     public interface ProtocolFactory {
@@ -105,5 +134,10 @@ public class LlmProviderChatClientFactoryRegistry {
          * 根据 LlmProvider 配置创建 ChatClient。
          */
         ChatClient createChatClient(LlmProvider provider, String apiKeyPlaintext, Agent agent, String model);
+
+        /**
+         * 根据 LlmProvider 配置创建 ChatModel（P0-B-2：与 createChatClient 共享缓存实例）。
+         */
+        ChatModel createChatModel(LlmProvider provider, String apiKeyPlaintext, Agent agent, String model);
     }
 }

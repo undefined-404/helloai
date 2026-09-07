@@ -66,6 +66,15 @@ public class AgentExecutionProperties {
     /** 是否启用稳定 mock 模式。默认 true。 */
     private boolean mockMode = true;
 
+    /**
+     * Runtime 真身开关（P0-B）：false = LegacyExecutorAdapter 主路径（现状不变）；
+     * true = RuntimeTurnExecutor（AgentLoop 组装真身）。
+     *
+     * <p>二进制切换 + 回滚口径（不重建已删除的 taskId%100 灰度路由，LOG-20260904-006）；
+     * 回滚 = 置回 false 重启。主链接线 prompt/chatModel 注入就绪前保持 false。</p>
+     */
+    private boolean runtimeEnabled = false;
+
     /** real 模式是否强制要求 vault 已绑定凭证。默认 false（先兼容全局 Provider 配置）。 */
     private boolean requireVault = false;
 

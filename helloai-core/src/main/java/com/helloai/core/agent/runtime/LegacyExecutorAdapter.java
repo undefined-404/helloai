@@ -7,6 +7,7 @@ import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.service.SubTaskExecutionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 /**
@@ -29,6 +30,7 @@ import org.springframework.stereotype.Component;
  */
 @Slf4j
 @Component
+@Order(2)
 @RequiredArgsConstructor
 public class LegacyExecutorAdapter implements AgentRuntime {
 

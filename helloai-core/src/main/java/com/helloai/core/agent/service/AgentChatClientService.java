@@ -1,6 +1,7 @@
 package com.helloai.core.agent.service;
 
 import com.helloai.core.agent.entity.Agent;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import reactor.core.publisher.Flux;
 
@@ -48,4 +49,19 @@ public interface AgentChatClientService {
      */
     Flux<String> generateStream(Agent agent, String systemPrompt, String userPrompt,
                                 String provider, String apiKeyPlaintext);
+
+    /**
+     * 构建底层 ChatModel（P0-B-2：Runtime AgentLoop 直接持有模型而非 ChatClient）。
+     *
+     * <p>mock 模式返回 MockChatModel（分片伪流式与同步 call 一致）；真实模式经
+     * {@code LlmProviderChatClientFactoryRegistry.createChatModel} 返回缓存实例；
+     * 显式 provider + API Key 缺失时抛 BizException（Runtime 循环需可解析凭据，
+     * 容器内 ChatClient.Builder 无 ChatModel 出口，不在此路径兜底）。</p>
+     *
+     * @param agent           Agent 实体（mock 前缀 / 模型解析）
+     * @param provider        显式 provider；null/空 = 走执行属性默认 provider
+     * @param apiKeyPlaintext 明文 API Key（mock 模式可为 null）
+     * @return ChatModel（永不为 null）
+     */
+    ChatModel buildChatModel(Agent agent, String provider, String apiKeyPlaintext);
 }

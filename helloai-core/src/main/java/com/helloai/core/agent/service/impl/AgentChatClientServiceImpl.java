@@ -147,6 +147,33 @@ public class AgentChatClientServiceImpl implements AgentChatClientService {
     }
 
     /**
+     * 构建底层 ChatModel（P0-B-2）：mock 模式返回 MockChatModel；真实模式经
+     * providerRegistry.createChatModel 返回缓存实例（与 buildChatClient 共享同一模型）。
+     *
+     * <p>与 {@link #buildChatClient} 的凭据路径差异：容器内 ChatClient.Builder 无
+     * ChatModel 出口，本方法要求显式 provider + API Key（Runtime AgentLoop 循环调用需要），
+     * 缺失时抛 BizException（契约化，不静默回退）。</p>
+     */
+    @Override
+    public ChatModel buildChatModel(Agent agent, String provider, String apiKeyPlaintext) {
+        if (executionProperties.isMockMode()) {
+            return new MockChatModel(
+                    executionProperties.getProvider(),
+                    executionProperties.getModel(),
+                    executionProperties.getMockResponsePrefix(),
+                    agent);
+        }
+        if (apiKeyPlaintext != null && !apiKeyPlaintext.isBlank()) {
+            String effectiveProvider = provider != null && !provider.isBlank()
+                    ? provider : executionProperties.getProvider();
+            String model = AgentProviderResolver.resolveModel(agent, null);
+            return providerRegistry.createChatModel(effectiveProvider, apiKeyPlaintext, agent, model);
+        }
+        throw new BizException("Runtime 循环需可解析的 provider + API Key（真实模式）；"
+                + "容器内 ChatClient.Builder 无 ChatModel 出口，请走显式凭据或 mock 模式");
+    }
+
+    /**
      * 组装 ChatClient（同步与流式共用入口）。
      *
      * <p>mock 模式直接 ChatClient.create 包最小 mock 模型；真实模式优先显式
