@@ -51,6 +51,11 @@ export const paths = {
     pause: (id: string | number) => `/sub-tasks/pauseById/${enc(id)}`,
     resume: (id: string | number) => `/sub-tasks/resumeById/${enc(id)}`
   },
+  // G-006：agent_event 读侧端点（Replay 轨迹 / Audit 分页），Controller: AgentEventController
+  agentEvents: {
+    traceByRunId: (runId: string) => `/agent-events/traceByRunId/${enc(runId)}`,
+    pageAuditByTaskId: (taskId: string | number) => `/agent-events/pageAuditByTaskId/${enc(taskId)}`
+  },
   agents: {
     list: '/agents/list',
     // 可指派执行者候选（改派/认领/死信重派选择器数据源）：EXECUTOR + ACTIVE，内部 LLM 恒可用、外部需在线

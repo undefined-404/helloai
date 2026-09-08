@@ -1,12 +1,14 @@
 package com.helloai.core.agent.mcp;
 
 import com.helloai.common.constant.AgentDutyLeaseStatus;
+import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
 import com.helloai.core.agent.entity.AgentInbox;
+import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.McpToolService;
@@ -37,8 +39,10 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -58,6 +62,7 @@ import static org.mockito.Mockito.when;
 class McpToolServiceTest {
 
     private static final long AGENT_ID = 1L;
+    private static final long TASK_ID = 100L;
     private static final long SUB_TASK_ID = 5L;
     private static final long OTHER_AGENT = 999L;
 
@@ -68,6 +73,7 @@ class McpToolServiceTest {
     @Mock private HeartbeatService heartbeatService;
     @Mock private AttachmentService attachmentService;
     @Mock private ExecutionResultHandler executionResultHandler;
+    @Mock private AgentEventRecorder agentEventRecorder;
     @Mock private AgentDutyLeaseService agentDutyLeaseService;
     @Mock private TaskRunningSpecService taskRunningSpecService;
 
@@ -78,8 +84,8 @@ class McpToolServiceTest {
         mcpToolService = new McpToolServiceImpl(
                 agentService, agentInboxService, agentMcpServerService,
                 subTaskService, heartbeatService,
-                attachmentService, executionResultHandler, agentDutyLeaseService,
-                taskRunningSpecService);
+                attachmentService, executionResultHandler, agentEventRecorder,
+                agentDutyLeaseService, taskRunningSpecService);
 
         Agent agent = new Agent();
         agent.setId(AGENT_ID);
@@ -618,5 +624,86 @@ class McpToolServiceTest {
 
         assertThat(result.getMessages()).hasSize(1);
         assertThat(result.getMessages().get(0).getMessageId()).isEqualTo("inbox-" + SUB_TASK_ID);
+    }
+
+    @Test
+    @DisplayName("认领成功：记录 AGENT_STARTED 事件（外部执行 Turn 起点，G-006 C2）")
+    void shouldRecordAgentStartedOnClaimSuccess() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("claimSubTask"))).thenReturn(true);
+
+        SubTask pending = subTask(null);
+        pending.setTaskId(TASK_ID);
+        pending.setStatus(SubTaskStatus.PENDING);
+        SubTask claimed = subTask(AGENT_ID);
+        claimed.setTaskId(TASK_ID);
+        claimed.setStatus(SubTaskStatus.IN_PROGRESS);
+        claimed.setVersion(2);
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(pending, claimed);
+        when(subTaskService.claimAtomic(SUB_TASK_ID, AGENT_ID)).thenReturn(true);
+
+        McpToolService.ClaimSubTaskResult result = mcpToolService.claimSubTask(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(result.isClaimed()).isTrue();
+        // run-{taskId}-1 / turn=1（无 rework/attempt 增量）→ 坐标与内部 Turn 同型
+        verify(agentEventRecorder).record(
+                eq("run-" + TASK_ID + "-1"),
+                eq(TASK_ID), eq(SUB_TASK_ID), eq(1), eq(0),
+                eq(AgentEventType.AGENT_STARTED), eq(AGENT_ID),
+                eq(Map.of("scenario", "claim")));
+    }
+
+    @Test
+    @DisplayName("已归属自己幂等认领：不重复埋点（重复认领非工作起点）")
+    void shouldNotRecordEventOnIdempotentClaim() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("claimSubTask"))).thenReturn(true);
+
+        SubTask mine = subTask(AGENT_ID);
+        mine.setStatus(SubTaskStatus.ASSIGNED);
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(mine);
+
+        McpToolService.ClaimSubTaskResult result = mcpToolService.claimSubTask(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(result.isClaimed()).isTrue();
+        verifyNoInteractions(agentEventRecorder);
+    }
+
+    @Test
+    @DisplayName("他人已认领：认领未成功不埋点")
+    void shouldNotRecordEventWhenClaimedByOther() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("claimSubTask"))).thenReturn(true);
+
+        SubTask others = subTask(OTHER_AGENT);
+        others.setStatus(SubTaskStatus.PENDING);
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(others);
+
+        McpToolService.ClaimSubTaskResult result = mcpToolService.claimSubTask(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(result.isClaimed()).isFalse();
+        assertThat(result.getReason()).isEqualTo("already_claimed_by_other");
+        verifyNoInteractions(agentEventRecorder);
+    }
+
+    @Test
+    @DisplayName("事件记录失败：write-only 降级不阻断认领")
+    void shouldNotFailClaimWhenEventRecordThrows() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("claimSubTask"))).thenReturn(true);
+
+        SubTask pending = subTask(null);
+        pending.setTaskId(TASK_ID);
+        pending.setStatus(SubTaskStatus.PENDING);
+        SubTask claimed = subTask(AGENT_ID);
+        claimed.setTaskId(TASK_ID);
+        claimed.setStatus(SubTaskStatus.IN_PROGRESS);
+        claimed.setVersion(3);
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(pending, claimed);
+        when(subTaskService.claimAtomic(SUB_TASK_ID, AGENT_ID)).thenReturn(true);
+        doThrow(new RuntimeException("event db down"))
+                .when(agentEventRecorder)
+                .record(any(), any(), any(), anyInt(), anyInt(), any(), any(), any());
+
+        McpToolService.ClaimSubTaskResult result = mcpToolService.claimSubTask(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(result.isClaimed()).isTrue();
+        assertThat(result.getVersion()).isEqualTo(3);
     }
 }

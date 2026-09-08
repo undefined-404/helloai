@@ -20,8 +20,11 @@ import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.WorkMode;
 import com.helloai.core.agent.entity.AgentDutyLease;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.common.constant.AgentEventType;
 import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.agent.command.ExecutionResultReport;
+import com.helloai.core.agent.event.AgentEventContextResolver;
+import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.entity.*;
 import com.helloai.core.task.entity.*;
 import com.helloai.core.system.entity.*;
@@ -74,6 +77,8 @@ public class McpToolServiceImpl implements McpToolService {
     private final HeartbeatService heartbeatService;
     private final AttachmentService attachmentService;
     private final ExecutionResultHandler executionResultHandler;
+    /** G-006 C2：外部轨迹可观测——认领成功埋点 AGENT_STARTED（事件 write-only，失败仅告警不阻断）。 */
+    private final AgentEventRecorder agentEventRecorder;
     private final AgentDutyLeaseService agentDutyLeaseService;
     private final TaskRunningSpecService taskRunningSpecService;
 
@@ -265,6 +270,9 @@ public class McpToolServiceImpl implements McpToolService {
         // 重新读取获取最新 version
         SubTask updated = subTaskService.getById(subTaskId);
 
+        // G-006 C2：认领成功 = 外部执行 Turn 起点（AGENT_STARTED；write-only，失败不阻断）
+        recordClaimStarted(updated != null ? updated.getTaskId() : subTask.getTaskId(), subTaskId, updated, agentId);
+
         ClaimSubTaskResult result = new ClaimSubTaskResult();
         result.setOk(true);
         result.setClaimed(true);
@@ -272,6 +280,26 @@ public class McpToolServiceImpl implements McpToolService {
         result.setSubTaskId(subTaskId);
         result.setVersion(updated != null ? updated.getVersion() : subTask.getVersion() + 1);
         return result;
+    }
+
+    /**
+     * G-006 C2 外部轨迹可观测：认领成功埋点 AGENT_STARTED（外部 Agent 工作周期起点）。
+     *
+     * <p>坐标规则与内部 Turn 同型（run-{taskId}-{roundNum} / 1+rework+attempt，ADR-001）；
+     * 事件 write-only 不参与业务决策，失败仅告警不阻断认领（ExecutionResultHandler 同款降级范式）。</p>
+     */
+    private void recordClaimStarted(Long taskId, Long subTaskId, SubTask subTask, Long agentId) {
+        try {
+            agentEventRecorder.record(
+                    AgentEventContextResolver.resolveRunId(taskId),
+                    taskId, subTaskId,
+                    AgentEventContextResolver.resolveTurn(subTask), 0,
+                    AgentEventType.AGENT_STARTED, agentId,
+                    Map.of("scenario", "claim"));
+        } catch (Exception e) {
+            log.warn("Agent 事件记录失败（事件 write-only，降级不阻断认领）: type={}, subTaskId={}, agentId={}, err={}",
+                    AgentEventType.AGENT_STARTED, subTaskId, agentId, e.getMessage());
+        }
     }
 
     // ================================================================

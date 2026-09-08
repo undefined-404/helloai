@@ -418,7 +418,7 @@ import { useRouter } from 'vue-router'
 import { browserSessionApi } from '@/api/browserSession'
 import { agentApi } from '@/api/agent'
 import type { Agent, BrowserSession } from '@/types'
-import { fmtTime } from '@/utils/tableConfig'
+import { ACTION, fmtTime } from '@/utils/tableConfig'
 
 const router = useRouter()
 

@@ -86,6 +86,11 @@
           <el-icon><Select /></el-icon>
           <span>审查中心</span>
         </el-menu-item>
+        <!-- G-006 Replay/Audit：Agent 事件回溯工作台（事件流只读查询） -->
+        <el-menu-item index="/event-stream">
+          <el-icon><DataLine /></el-icon>
+          <span>事件流</span>
+        </el-menu-item>
         <!-- Phase 5 质量度量看板 -->
         <el-menu-item index="/quality-dashboard">
           <el-icon><DataAnalysis /></el-icon>
@@ -207,7 +212,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowDown, Clock, DataAnalysis, Expand, Fold, Moon, Sunny, Warning } from '@element-plus/icons-vue'
+import { ArrowDown, Clock, DataAnalysis, DataLine, Expand, Fold, Moon, Sunny, Warning } from '@element-plus/icons-vue'
 import { authApi } from '@/api/auth'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'

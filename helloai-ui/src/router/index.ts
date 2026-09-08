@@ -28,6 +28,7 @@ const routes = [
       { path: 'teams',      component: () => import('@/views/team/TeamList.vue'), meta: { title: 'Team组合' } },
       { path: 'browser-sessions', component: () => import('@/views/browser/BrowserSessionList.vue'), meta: { title: 'Browser会话' } },
       { path: 'reviews',    component: () => import('@/views/review/ReviewList.vue'), meta: { title: '审查中心' } },
+      { path: 'event-stream', component: () => import('@/views/event/EventStreamWorkbench.vue'), meta: { title: '事件流' } },
       { path: 'quality-dashboard', component: () => import('@/views/quality/QualityDashboard.vue'), meta: { title: '质量看板' } },
       { path: 'rewards',    component: () => import('@/views/reward/RewardList.vue'), meta: { title: '积分流水' } },
       { path: 'activity',   component: () => import('@/views/activity/ActivityList.vue'), meta: { title: '活动流' } },

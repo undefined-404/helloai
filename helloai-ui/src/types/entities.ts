@@ -299,6 +299,29 @@ export interface ModuleItem {
   sortOrder?: number
 }
 
+// G-006 Replay / Audit：agent_event 读侧投影（对齐后端 AgentEventItem，Long ID 序列化为 string）
+export interface AgentEventItem {
+  id: LongId
+  eventId: string
+  runId: string
+  taskId: LongId | null
+  subTaskId: LongId | null
+  turn: number | null
+  step: number | null
+  eventType: string
+  agentId: LongId | null
+  payload: Record<string, any> | null
+  createTime: string
+}
+
+// G-006 Audit 查询参数（GET /agent-events/pageAuditByTaskId/{taskId}）
+export interface AgentEventAuditQuery {
+  taskId: LongId
+  eventType?: string
+  page: number
+  pageSize?: number
+}
+
 export interface TaskTimelineItem {
   id: LongId
   eventType: string
