@@ -22,20 +22,34 @@ export const ACTION = {
 } as const
 
 // ---- 时间格式化 ----
+// 把时间字符串规范成浏览器本地时区的 "YYYY-MM-DD HH:mm:ss"。
+// 后端 OffsetDateTime 会序列化成带时区偏移的 ISO8601（如 ...Z 或 ...+08:00），
+// 旧实现直接 substring(0,19) 把偏移砍掉，UTC 值会显示成比北京时间少 8 小时；
+// 这里对带时区语义的串用 Date 正确转换到本地时区，无时区信息的串回退为去后缀原样展示。
+function normalizeTime(t: string | null | undefined): string | null {
+  if (!t) return null
+  const s = t.trim()
+  if (!s) return null
+  const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(s)
+  if (!hasZone) return t.replace('T', ' ').substring(0, 19)
+  const d = new Date(s)
+  if (Number.isNaN(d.getTime())) return t.replace('T', ' ').substring(0, 19)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
 export function fmtTime(t: string | null | undefined): string {
-  if (!t) return '-'
-  return t.replace('T', ' ').substring(0, 19)
+  return normalizeTime(t) ?? '-'
 }
 
 // ---- 时间拆为日期/时分秒两部分 ----
 // 窄列场景下上下两行展示，节省横向空间；返回结构含 null 让模板走占位分支
 export function splitDateTime(t: string | null | undefined): { date: string; time: string } | null {
-  if (!t) return null
-  const normalized = t.replace('T', ' ')
-  const s = normalized.substring(0, 19)
-  const sp = s.indexOf(' ')
-  if (sp < 0) return { date: s, time: '' }
-  return { date: s.substring(0, sp), time: s.substring(sp + 1) }
+  const n = normalizeTime(t)
+  if (!n) return null
+  const sp = n.indexOf(' ')
+  if (sp < 0) return { date: n, time: '' }
+  return { date: n.substring(0, sp), time: n.substring(sp + 1) }
 }
 
 // ---- 文件大小格式化 ----
