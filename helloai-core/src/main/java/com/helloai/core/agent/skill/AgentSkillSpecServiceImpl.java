@@ -25,8 +25,8 @@ import java.util.Map;
 @Service
 public class AgentSkillSpecServiceImpl implements AgentSkillSpecService {
 
-    /** 已登记插件标签 → classpath 文件名（LinkedHashMap 保序，渲染顺序按声明顺序）。 */
-    private static final Map<String, String> KNOWN_SPECS = knownSpecs();
+    /** 已登记插件标签 → 技能包元数据（LinkedHashMap 保序，渲染顺序按声明顺序）。 */
+    private static final Map<String, SkillPackage> KNOWN_SPECS = knownSpecs();
 
     /** 规范文件内「执行速览」与「详细规范」的分隔标记（速览在前）。 */
     private static final String DETAIL_SEPARATOR = "\n---\n";
@@ -46,11 +46,12 @@ public class AgentSkillSpecServiceImpl implements AgentSkillSpecService {
         List<String> normalized = SkillNormalizer.normalizeAll(required);
         List<String> matched = new ArrayList<>();
         StringBuilder specs = new StringBuilder();
-        for (Map.Entry<String, String> entry : KNOWN_SPECS.entrySet()) {
+        for (Map.Entry<String, SkillPackage> entry : KNOWN_SPECS.entrySet()) {
             if (!normalized.contains(entry.getKey())) {
                 continue;
             }
-            String summary = loadSpeedSummary(entry.getKey(), entry.getValue());
+            SkillPackage pkg = entry.getValue();
+            String summary = loadSpeedSummary(pkg.name(), pkg.fileName());
             if (summary == null || summary.isBlank()) {
                 continue;
             }
@@ -66,6 +67,33 @@ public class AgentSkillSpecServiceImpl implements AgentSkillSpecService {
                 + "审查侧按同一清单核验。\n"
                 + specs;
         return new ResolvedSpec(required, matched, section);
+    }
+
+    @Override
+    public List<SkillPackage> listPackages() {
+        return List.copyOf(KNOWN_SPECS.values());
+    }
+
+    @Override
+    public List<SkillPackage> resolvePackages(List<String> requiredSkills) {
+        List<String> required = requiredSkills == null ? List.of() : requiredSkills;
+        if (required.isEmpty()) {
+            return List.of();
+        }
+        List<String> normalized = SkillNormalizer.normalizeAll(required);
+        List<SkillPackage> matched = new ArrayList<>();
+        for (Map.Entry<String, SkillPackage> entry : KNOWN_SPECS.entrySet()) {
+            if (!normalized.contains(entry.getKey())) {
+                continue;
+            }
+            SkillPackage pkg = entry.getValue();
+            String summary = loadSpeedSummary(pkg.name(), pkg.fileName());
+            if (summary == null || summary.isBlank()) {
+                continue;
+            }
+            matched.add(pkg);
+        }
+        return matched;
     }
 
     /**
@@ -104,11 +132,20 @@ public class AgentSkillSpecServiceImpl implements AgentSkillSpecService {
         }
     }
 
-    private static Map<String, String> knownSpecs() {
-        Map<String, String> map = new LinkedHashMap<>();
-        map.put("eng-code-review", "eng-code-review.md");
-        map.put("eng-doc-standard", "eng-doc-standard.md");
-        map.put("eng-verification", "eng-verification.md");
+    private static Map<String, SkillPackage> knownSpecs() {
+        Map<String, SkillPackage> map = new LinkedHashMap<>();
+        map.put("eng-code-review", new SkillPackage(
+                "eng-code-review", "1.0.0",
+                "代码评审规范：接口契约 / 生命周期与并发 / 验证强度 / 范围与必要性（C1~C4）",
+                List.of(), "eng-code-review.md"));
+        map.put("eng-doc-standard", new SkillPackage(
+                "eng-doc-standard", "1.0.0",
+                "文档规范：接口文档化、自查产出四元组格式",
+                List.of(), "eng-doc-standard.md"));
+        map.put("eng-verification", new SkillPackage(
+                "eng-verification", "1.0.0",
+                "验证规范：最小证据集 / 证据真实可复现 / 断言有效性 / 环境可复现",
+                List.of(), "eng-verification.md"));
         return map;
     }
 }

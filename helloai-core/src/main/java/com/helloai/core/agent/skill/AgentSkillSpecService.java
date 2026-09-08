@@ -45,4 +45,21 @@ public interface AgentSkillSpecService {
      * @return 解析结果，永不为 null
      */
     ResolvedSpec resolve(List<String> requiredSkills);
+
+    /**
+     * 全部已登记技能包元数据（KNOWN_SPECS 声明顺序）。
+     *
+     * @return 技能包列表（永不为 null；无技能时为空列表）
+     */
+    List<SkillPackage> listPackages();
+
+    /**
+     * 命中且速览可加载的技能包元数据（与 {@link #resolve} 同命中语义：标签命中 + 速览非空）。
+     *
+     * <p>best-effort：requiredSkills 为 null / 空 / 全未命中均返回空列表。</p>
+     *
+     * @param requiredSkills 任务声明的原始技能标签列表（装箱传入；null 视为空）
+     * @return 命中技能包列表（KNOWN_SPECS 声明顺序），永不为 null
+     */
+    List<SkillPackage> resolvePackages(List<String> requiredSkills);
 }

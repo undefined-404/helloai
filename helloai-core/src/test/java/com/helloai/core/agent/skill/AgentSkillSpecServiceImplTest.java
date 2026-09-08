@@ -96,4 +96,42 @@ class AgentSkillSpecServiceImplTest {
         assertThat(resolved.matchedLabels()).isEmpty();
         assertThat(resolved.section()).isEmpty();
     }
+
+    @Test
+    @DisplayName("listPackages：声明顺序返回全部技能包，元数据字段非空")
+    void shouldListAllPackagesInDeclarationOrder() {
+        List<SkillPackage> packages = service.listPackages();
+        assertThat(packages).hasSize(3);
+        assertThat(packages).extracting(SkillPackage::name)
+                .containsExactly("eng-code-review", "eng-doc-standard", "eng-verification");
+        packages.forEach(p -> {
+            assertThat(p.version()).isNotBlank();
+            assertThat(p.description()).isNotBlank();
+            assertThat(p.fileName()).endsWith(".md");
+            assertThat(p.requiredTools()).isNotNull();
+        });
+    }
+
+    @Test
+    @DisplayName("resolvePackages：命中返回技能包元数据（与 resolve 同命中语义）")
+    void shouldResolvePackagesOnHit() {
+        List<SkillPackage> packages = service.resolvePackages(List.of("eng-code-review"));
+        assertThat(packages).hasSize(1);
+        SkillPackage p = packages.get(0);
+        assertThat(p.name()).isEqualTo("eng-code-review");
+        assertThat(p.version()).isEqualTo("1.0.0");
+        assertThat(p.fileName()).isEqualTo("eng-code-review.md");
+        assertThat(p.description()).isNotBlank();
+    }
+
+    @Test
+    @DisplayName("resolvePackages：未知忽略、空输入返回空、多命中按声明顺序")
+    void shouldResolvePackagesEdgeCases() {
+        assertThat(service.resolvePackages(List.of("unknown-skill-a"))).isEmpty();
+        assertThat(service.resolvePackages(null)).isEmpty();
+        assertThat(service.resolvePackages(List.of())).isEmpty();
+        assertThat(service.resolvePackages(List.of("eng-doc-standard", "eng-code-review")))
+                .extracting(SkillPackage::name)
+                .containsExactly("eng-code-review", "eng-doc-standard");
+    }
 }
