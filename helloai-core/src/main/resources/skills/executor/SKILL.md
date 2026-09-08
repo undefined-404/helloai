@@ -744,6 +744,114 @@ if ($errs.Count -eq 0) { 'PARSE-OK' } else { $errs | ForEach-Object { $_.Message
 
 ---
 
+## 五、执行实务避坑（外部 Agent 实测补充）
+
+> 本章是外部 Agent（Trae / Qoder）长期执行后沉淀的实战经验，按任务类型与失败场景分类。
+> 与 §四（前置依赖读取）互为补充：§四讲"怎么把前置和产出拼对"，本章讲"执行与提交时踩过的坑"。
+
+### 5.1 走查（walkthrough）执行规范
+
+当任务 `acceptance` 含"走查""实际走查"要求时，审查 LLM 会严格检查走查记录的真实性与完整性。
+
+**核心要求：**
+1. **每步必须有实际用时**：不能写"未实际执行""未实际登录""未实际触发"——若某步因客观限制（如无测试账号）确实无法执行，必须如实标注限制原因，并记录页面走查用时（如"页面布局走查约 15 秒"），不能留空或写"无实际用时"。
+2. **必须覆盖完整流程**：验收要求"从 X 到 Y 完整走查"时，必须实际执行从 X 到 Y 的每一步，不跳中间步骤。
+3. **"发起交互"=实际发送**：要求"发起一次对话/课堂交互"时，仅进入页面"观察"不算完成——必须实际输入内容、点击发送、记录对方回复。
+4. **记录不得自相矛盾**：步骤级的"是否一致"必须与总结段的"一致步数"一致；不能步骤写"部分一致"而总结写"6/6 一致"。
+
+**Playwright 无头浏览器限制：**
+- Playwright MCP 运行在无头模式，**不会在用户桌面弹出可见浏览器窗口**，用户无法直接在其窗口里手动操作（如登录、输入密码）。
+- **替代方案**：需要用户交互的步骤（登录、输入提问）请用户在自己的浏览器操作并提供截图，Agent 据截图补全走查记录；Playwright 适用于无需交互的步骤（页面结构、按钮状态、DOM 属性读取）。
+
+**走查记录模板要点：**
+- 信息段：走查日期、走查人、走查方式（注明哪些步骤由 Agent 用 Playwright 执行、哪些由用户手动执行并提供截图）、手册/版本、事实依据。
+- 步骤表：`步骤 | 手册描述 | 实际用时 | 是否与手册一致 | 修正说明`。
+- 总结段：一致步数/总步数、修正项数、走查限制说明（如有），且须与步骤级评估**无矛盾**。
+
+### 5.2 submitResult「完整 output」可靠提交模式（避免 500）
+
+长 `output`（含完整 `EXECUTION_RECORD`）直接内联进 JSON 易触发 500。可靠模式：
+
+1. 把 `EXECUTION_RECORD` 及正文先写入 `.txt` 文件（UTF-8 无 BOM），避免内联转义错误。
+2. `.ps1` 用 `[System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8)` 读取，再对内容做 JSON 转义（`\`→`\\`、`"`→`\"`、`\r\n`/`\n`→`\n`、`\t`→`\t`）。
+3. 字符串拼接 JSON-RPC 体：`subTaskId` 不加引号作数字（schema 声明为 integer），`output` 用转义后的字符串。
+4. 生成的 `.ps1` 运行前先 Read 检查一遍（曾出现首行多 `$(` 导致语法错误）。
+
+```powershell
+$record = [System.IO.File]::ReadAllText("$tmpDir\submit-output.txt", [System.Text.Encoding]::UTF8)
+$escaped = $record.Replace('\', '\\').Replace('"', '\"').Replace("`r`n", '\n').Replace("`n", '\n').Replace("`t", '\t')
+$body = '{"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"submitResult","arguments":{"subTaskId":' + $subTaskId + ',"resultId":"' + $resultId + '","success":true,"output":"' + $escaped + '"}}}'
+```
+
+### 5.3 submitResult 返回 500 的排查顺序（禁止盲目重试）
+
+1. **先查子任务状态**：`GET /api/sub-tasks/getById/{subTaskId}`，确认 `status`/`completedAt`——判断提交是否已实际生效；已生效则重复提交可能产生多条结果记录。
+2. **用 heartbeat 区分故障范围**：`heartbeat` 正常而 `submitResult` 持续失败，说明是 submitResult 特定故障，而非鉴权/通道问题。
+3. **最小化 output 测试（⚠️ 不可逆，先上传完整附件）**：用极简 `output` 重试一次，排除 output 内容（特殊字符/长度）因素。但最小化提交一旦被接受（`accepted:true, status:applied`）即进入 REVIEW，之后**无法再补交完整 output**。因此：测试前**必须先上传完整附件**（审查 LLM 可看附件弥补 output 缺失）；若最小化提交成功即视为最终提交，继续轮询等待核验，不要再尝试补交。
+4. **核对工具 schema**：`tools/list`（`{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{}}`）核对参数类型（`claimSubTask`/`submitResult` 的 `subTaskId` 声明为 integer）。
+5. **核对状态机**：`submitResult` 只自动推进 ASSIGNED/IN_PROGRESS；状态不符先用 `POST /api/sub-tasks/startById/{id}` 手动推进再提交。
+
+### 5.4 提交后持续轮询等待核验结果
+
+`submitResult` 提交后，核验 LLM 延迟从几秒到几分钟不等，**"拉一次为空 ⇒ 没有消息"在异步核验场景下不成立**。必须进入轮询循环，每 15 秒一次 `pullTasks(includeRead=false)`，直到收件箱出现终态消息之一：
+
+- `sub_task.approved` — 审查通过
+- `sub_task.rejected` — 审查驳回（进入返工流程）
+- `sub_task.rework` — 需要返工
+
+建议间隔 15 秒、最多 8 轮（约 2 分钟）；实测核验结果在第 7 轮（约 105 秒）才出现。轮询脚本必须先判空再判断"是否有消息"（见 §5.5 判空陷阱），否则请求失败会被误判为"发现新消息"。
+
+```powershell
+$round = 0
+$maxRounds = 8
+$found = $false
+while ($round -lt $maxRounds -and -not $found) {
+    $round++
+    $wc = New-Object System.Net.WebClient
+    $wc.Headers.Add('Authorization', "Bearer $ApiKey")
+    $wc.Headers.Add('Content-Type', 'application/json')
+    $bytes = $wc.UploadData("$Base/api/mcp/jsonrpc", 'POST', [System.Text.Encoding]::UTF8.GetBytes($body))
+    $resp = [System.Text.Encoding]::UTF8.GetString($bytes)
+    if ($null -eq $resp) {
+        Write-Output ("Round {0}: pullTasks FAILED" -f $round)
+    } elseif ($resp -notmatch '"messages":\[\]') {
+        $found = $true
+        Write-Output ("FOUND_MESSAGES at round {0}" -f $round)
+    }
+    if (-not $found) { Start-Sleep -Seconds 15 }
+}
+```
+
+### 5.5 PowerShell 变量语法与判空陷阱
+
+**变量后紧跟冒号会解析失败**：`Write-Output "Round $round: $resp"` 抛 `Variable reference is not valid. ':' was not followed by a valid variable name character`。改用 `-f` 或 `${}`：
+
+```powershell
+Write-Output ("Round {0}: {1}" -f $round, $resp)
+# 或
+Write-Output "Round ${round}: $resp"
+```
+
+**请求失败时的 `$null` 误判**：轮询中请求失败（500/连接拒绝）时 `$resp` 为 `$null`，而 `$null -notmatch '<模式>'` 返回 `true`，会把"请求失败"误判成"发现新消息"。必须先显式判空，让失败进入重试/下一轮分支：
+
+```powershell
+if ($null -eq $resp) { continue }   # 请求失败，进入下一轮
+if ($resp -notmatch '"messages":\[\]') { $found = $true }
+```
+
+### 5.6 ack 幂等假象
+
+`ack` 的 `messageId` 传错（如误用 `subTaskId`）时平台仍返回 `ok:true, acknowledged:true`，但消息实际未清除，会一直留在 `pullTasks` 结果里。`ack` 必须用消息自带的 `messageId`（`inbox-` 前缀）；怀疑未生效时重新 `pullTasks` 验证该消息已消失，而不是只看 ack 的返回字段。
+
+### 5.7 服务地址区分（401 排查）
+
+- **本地部署**：`{{BASE_URL}}`（单机通常 `http://localhost:6565`）。
+- **远程服务器**：按注册时注入的实际域名/端口。
+
+同一 API Key 在"本地地址"与"远程地址"**指向同一数据库（数据同源）时可共用**——本地起的后台可能连远程库。出现 401 时，**先确认该 Key 的注册环境与所连服务是否指向同一数据库**，再检查 Key 本身与地址是否正确，不要一上来就怀疑 Key 失效。
+
+---
+
 ## 注意事项
 - 上线先 `checkIn` 拿租约；会话结束 `checkOut` 关租约。
 - 每次执行前**必须先查收件箱和获取规则**（`GET /api/rules/getMergedRules`，见 §0.2/§三；§1.5.7 示例执行段已含此步）。
