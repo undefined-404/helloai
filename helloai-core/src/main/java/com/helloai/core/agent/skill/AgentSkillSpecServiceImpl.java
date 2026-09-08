@@ -134,18 +134,53 @@ public class AgentSkillSpecServiceImpl implements AgentSkillSpecService {
 
     private static Map<String, SkillPackage> knownSpecs() {
         Map<String, SkillPackage> map = new LinkedHashMap<>();
+        // eng-code-review：输出为自查问题四元组（[defect][location][impact][evidence]，文件明示）；
+        // 验证规则提炼自 C1~C4
         map.put("eng-code-review", new SkillPackage(
                 "eng-code-review", "1.0.0",
                 "代码评审规范：接口契约 / 生命周期与并发 / 验证强度 / 范围与必要性（C1~C4）",
-                List.of(), "eng-code-review.md"));
+                List.of(), List.of(), Map.of(),
+                Map.of("type", "array", "items", Map.of(
+                        "type", "object",
+                        "properties", Map.of(
+                                "defect", Map.of("type", "string"),
+                                "location", Map.of("type", "string"),
+                                "impact", Map.of("type", "string"),
+                                "evidence", Map.of("type", "string")))),
+                List.of(
+                        "接口契约必须文档化：函数签名 / 返回值区分 / 异常约定 / 边界条件（C1）",
+                        "资源创建与释放成对出现，共享状态说明锁粒度与竞态处理（C2）",
+                        "每个关键行为至少一条真断言，禁止永真冒烟充当证据（C3）",
+                        "不写投机泛化与过度抽象，新增依赖须说明必要性（C4）"),
+                "eng-code-review.md"));
+        // eng-doc-standard：文档类产出无结构化输出声明（outputSchema 置空）；验证规则提炼自 D1~D3 + 信息密度
         map.put("eng-doc-standard", new SkillPackage(
                 "eng-doc-standard", "1.0.0",
                 "文档规范：接口文档化、自查产出四元组格式",
-                List.of(), "eng-doc-standard.md"));
+                List.of(), List.of(), Map.of(), Map.of(),
+                List.of(
+                        "命题完整保留：每条必须/不得陈述含主体 + 条件 + 模态 + 失败模式（D1）",
+                        "tutorial / reference 分离，不混写（D3）",
+                        "无思维链泄漏：8 类实现/评审叙事不得出现在面向使用者文档（D2）",
+                        "信息密度：删掉后信息不减的语句必须删"),
+                "eng-doc-standard.md"));
+        // eng-verification：输出为验证证据结构（命令 + 实测输出 + 结论 + 环境，文件明示）；
+        // 验证规则提炼自最小证据集 / 证据真实可复现 / 断言有效 / 环境可复现
         map.put("eng-verification", new SkillPackage(
                 "eng-verification", "1.0.0",
                 "验证规范：最小证据集 / 证据真实可复现 / 断言有效性 / 环境可复现",
-                List.of(), "eng-verification.md"));
+                List.of(), List.of(), Map.of(),
+                Map.of("type", "object", "properties", Map.of(
+                        "command", Map.of("type", "string"),
+                        "output", Map.of("type", "string"),
+                        "conclusion", Map.of("type", "string"),
+                        "environment", Map.of("type", "string"))),
+                List.of(
+                        "最小证据集：所选验证组合必须覆盖目标行为本身",
+                        "证据真实可复现：写明验证命令与实测输出关键片段",
+                        "断言必须因目标回归而失败，写死预期等于无验证",
+                        "注明验证环境（JDK 版本 / 服务版本 / profile / 关键配置）"),
+                "eng-verification.md"));
         return map;
     }
 }

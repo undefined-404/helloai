@@ -109,6 +109,10 @@ class AgentSkillSpecServiceImplTest {
             assertThat(p.description()).isNotBlank();
             assertThat(p.fileName()).endsWith(".md");
             assertThat(p.requiredTools()).isNotNull();
+            assertThat(p.dependencies()).isNotNull();
+            assertThat(p.inputSchema()).isNotNull();
+            assertThat(p.outputSchema()).isNotNull();
+            assertThat(p.validationRules()).isNotNull();
         });
     }
 
@@ -122,6 +126,28 @@ class AgentSkillSpecServiceImplTest {
         assertThat(p.version()).isEqualTo("1.0.0");
         assertThat(p.fileName()).isEqualTo("eng-code-review.md");
         assertThat(p.description()).isNotBlank();
+        // P1 后续字段：dependencies/inputSchema 无声明置空；outputSchema=四元组；validationRules=4 条 C 规则
+        assertThat(p.dependencies()).isEmpty();
+        assertThat(p.inputSchema()).isEmpty();
+        assertThat(p.outputSchema())
+                .containsEntry("type", "array")
+                .containsKey("items");
+        assertThat(p.validationRules()).hasSize(4);
+    }
+
+    @Test
+    @DisplayName("SkillPackage 构造器将 null 字段规范化为默认值")
+    void shouldNormalizeNullFieldsInSkillPackage() {
+        SkillPackage pkg = new SkillPackage(null, null, null, null, null, null, null, null, null);
+        assertThat(pkg.name()).isEmpty();
+        assertThat(pkg.version()).isEmpty();
+        assertThat(pkg.description()).isEmpty();
+        assertThat(pkg.requiredTools()).isEmpty();
+        assertThat(pkg.dependencies()).isEmpty();
+        assertThat(pkg.inputSchema()).isEmpty();
+        assertThat(pkg.outputSchema()).isEmpty();
+        assertThat(pkg.validationRules()).isEmpty();
+        assertThat(pkg.fileName()).isEmpty();
     }
 
     @Test
