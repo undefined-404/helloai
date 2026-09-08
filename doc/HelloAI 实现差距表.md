@@ -11,8 +11,8 @@
 | ID | 能力 | 当前状态 | 目标 | 优先级 | 处置 |
 |---|---|---|---|---|---|
 | G-001 | Agent Event Stream | 已有 Run/Turn/Step + Event 基础 + Timeline 并轨（A6）+ Replay/Audit 读侧（A7） | 统一事件契约和消费体系 | **P0** | P0-A 完整闭环（A1~A7 已落地，验收全量成立） |
-| G-002 | Executor 迁移 | Runtime 契约单轨 + 真身 + 主链接线注入（runtime-enabled 开关，默认 Legacy 零变化） | Runtime 成为唯一执行契约，旧实现退出 | **P0** | P0 主线收官；真灰度生效待 dev 环境联调 |
-| G-003 | AgentRuntime | 八件套已全部落地（Context / Session / Skill / Tool / Loop / Event / Environment / SandboxProvider 契约） | Context + Session + Skill + Tool + Loop + Event + Sandbox | **P0** | P0 完整闭环（P0-A/B/C 收官，真灰度待 dev 联调） |
+| G-002 | Executor 迁移 | Runtime 契约单轨 + 真身 + 主链接线注入（runtime-enabled 开关，默认 Legacy 零变化） | Runtime 成为唯一执行契约，旧实现退出 | **P0** | P0 主线收官 + 真灰度闭环：2026-09-08 dev 真身联调（RuntimeAgentLoop 点亮）/ 对账全绿 / 回滚零差异 / 外部 Agent 回归通过 |
+| G-003 | AgentRuntime | 八件套已全部落地（Context / Session / Skill / Tool / Loop / Event / Environment / SandboxProvider 契约） | Context + Session + Skill + Tool + Loop + Event + Sandbox | **P0** | P0 完整闭环（P0-A/B/C 收官）；真实 provider tool-calling 循环 2026-09-08 联调通过，无边界问题 |
 | G-004 | Skill Capability | 已有 Skill resolve / resolvedSpecs | Metadata / Version / Tools / Schema / Dependencies | **P1** | 兼容演进 |
 | G-005 | Sandbox Provider | 已有 Environment / Provider + SandboxProvider 契约（诚实策略，无 ISOLATED） | 真正 Provider 化执行环境与隔离策略 | **P1** | 契约已落地；Docker/K8s 隔离能力后置 |
 | G-006 | Replay / Audit | 有执行轨迹基础 | 基于统一 Event 查询/回放 | **P1** | Event 后建设 |
