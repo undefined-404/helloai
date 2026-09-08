@@ -41,11 +41,14 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
+import com.helloai.core.agent.service.TurnLlmCallContext;
+import com.helloai.core.agent.service.TurnLlmCaller;
 import com.helloai.core.agent.service.impl.SubTaskExecutionServiceImpl;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
@@ -99,6 +102,14 @@ class SubTaskExecutionServiceTest {
     @Mock
     private AgentSessionService agentSessionService;
 
+    /** P0-B-2：主链接线注入——LLM 调用点切换（Legacy 单次 / Runtime 循环）；mock 委托 Legacy 路径。 */
+    @Mock
+    private TurnLlmCaller turnLlmCaller;
+
+    /** P0-B-2：执行属性（runtime-enabled 默认 false=Legacy，与生产默认一致）。 */
+    @Mock
+    private AgentExecutionProperties executionProperties;
+
     @InjectMocks
     private SubTaskExecutionServiceImpl subTaskExecutionService;
 
@@ -113,6 +124,13 @@ class SubTaskExecutionServiceTest {
                 .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
         // Phase 1 Step 2：默认 stub toolRegistry.resolve() 返回空列表（同上 lenient 理由）
         lenient().when(toolRegistry.resolve(any())).thenReturn(List.of());
+        // P0-B-2：默认 stub turnLlmCaller 走 Legacy 路径——isRuntimeEnabled=false；
+        // call() 委托到已 stub 的 platformAgentExecutionService.executeSync（保持各用例 isSameAs(ok) 语义）
+        lenient().when(turnLlmCaller.isRuntimeEnabled()).thenReturn(false);
+        lenient().when(turnLlmCaller.call(any())).thenAnswer(inv -> {
+            TurnLlmCallContext ctx = inv.getArgument(0);
+            return platformAgentExecutionService.executeSync(ctx.agent(), ctx.task());
+        });
     }
 
     @Nested
