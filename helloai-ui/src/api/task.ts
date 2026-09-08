@@ -1,7 +1,7 @@
 import request, { TIMEOUT } from './request'
 import { paths } from './paths'
 import type { AxiosResponse } from 'axios'
-import type { Task, TaskAgentPolicy, TaskRelatedCounts, TaskFinalReport, TaskIteration, SubTask, LongId } from '@/types'
+import type { Task, TaskAgentPolicy, TaskRelatedCounts, TaskFinalReport, TaskIteration, SubTask, LongId, PageResult } from '@/types'
 
 // A1: 任务创建/编辑公共载荷（SLA + V47 执行策略/技能；update 时 null 字段后端不更新、空集合=清空）
 export interface TaskFormPayload {
@@ -13,8 +13,13 @@ export interface TaskFormPayload {
 }
 
 export const taskApi = {
-  list(params?: { status?: string }) {
-    return request.get<any, Task[]>(paths.tasks.list, { params })
+  /**
+   * 任务列表：
+   * - 传 page 时后端返回 PageResult（list/total）真分页
+   * - 不传 page 时返回全量数组（兼容旧契约：对话新建跳转需要全量匹配 review query）
+   */
+  list(params?: { status?: string; page?: number; pageSize?: number }) {
+    return request.get<any, Task[] | PageResult<Task>>(paths.tasks.list, { params })
   },
   // v1.1 修复: LongID 后端已全局序列化为 string，传 string 避免任何 Number() 精度丢
   getById(id: LongId) {

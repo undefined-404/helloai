@@ -233,7 +233,7 @@
         </el-table-column>
         <el-table-column
           label="操作"
-          :width="ACTION.ONE"
+          :width="ACTION.TWO"
           fixed="right"
         >
           <template #default="{ row }">
@@ -249,12 +249,14 @@
       <el-pagination
         v-if="filteredList.length > 0"
         background
-        layout="prev, pager, next, total"
+        layout="total, sizes, prev, pager, next, jumper"
         :total="filteredList.length"
+        :page-sizes="[10, 20, 50, 100]"
         :page-size="pageSize"
         :current-page="currentPage"
         style="margin-top: 16px; text-align: center"
         @current-change="onPageChange"
+        @size-change="onSizeChange"
       />
       <el-empty
         v-if="!filteredList.length && !loading"
@@ -337,6 +339,12 @@ const paginatedList = computed(() => {
 // 分页变化回调
 function onPageChange(p: number) {
   currentPage.value = p
+}
+
+// 每页条数变化：切页号回到第一页，避免新 pageSize 下越界
+function onSizeChange(s: number) {
+  pageSize.value = s
+  currentPage.value = 1
 }
 
 // 防御边界：当前页越界（总页数缩小、比如最后一页被过滤掉）时回退到末页，

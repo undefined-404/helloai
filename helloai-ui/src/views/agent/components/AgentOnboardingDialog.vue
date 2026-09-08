@@ -39,9 +39,7 @@
       >
         以下是 HelloAI 平台为该 Agent 生成的接入内容。请按需使用底部按钮：
         <strong>复制全部</strong> 用于人工交接；
-        <strong style="color:var(--el-color-success)">下载 hello_ai_skills.md</strong> 用于保存到 IDE 的 skills 目录；
         <strong style="color:var(--el-color-success)">下载技能包(.zip)</strong> 用于整体交付（SKILL.md + scripts/ 脚本，需整体解压到 IDE 的 skills 目录，勿只拿单个 md）；
-        <strong style="color:var(--el-color-info)">下载 daemon 脚本</strong> 用于拉起常驻打卡进程（§1.5 协议、门铃推送）后免手动打卡；
         <strong style="color:var(--el-color-warning)">一键上班口令</strong> 用于在新会话第一句话里激活 AI Agent。
       </div>
       <el-input
@@ -63,24 +61,11 @@
       </el-button>
       <el-button
         type="success"
-        @click="downloadSkill"
-      >
-        ⬇️ 下载 hello_ai_skills.md
-      </el-button>
-      <el-button
-        type="success"
         plain
         :loading="skillZipLoading"
         @click="downloadSkillZip"
       >
         ⬇️ 下载技能包(.zip)
-      </el-button>
-      <el-button
-        type="info"
-        :loading="daemonLoading"
-        @click="downloadDaemon"
-      >
-        ⬇️ 下载常驻打卡脚本（PowerShell）
       </el-button>
       <el-button
         type="warning"
@@ -112,7 +97,6 @@ const emit = defineEmits<{
 }>()
 
 const loading = ref(false)
-const daemonLoading = ref(false)
 const skillZipLoading = ref(false)
 const data = ref<AgentOnboardingResponse | null>(null)
 
@@ -154,21 +138,6 @@ function sanitizeFilename(name: string): string {
   return safe || 'agent'
 }
 
-// 下载 hello_ai_skills.md（方案 C：hello_ai_<agentName>.md）
-function downloadSkill() {
-  if (!data.value) return
-  const blob = new Blob([data.value.skillContent], { type: 'text/markdown;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `hello_ai_${sanitizeFilename(String(data.value.agentName || ''))}.md`
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
-  ElMessage.success('已下载 hello_ai_skills.md，请保存到 IDE 的 skills 目录')
-}
-
 // 下载技能包(.zip)：SKILL.md（已渲染）+ scripts/ 全量脚本整体打包；
 // 解压后把 <role>-skill 目录整体复制到 IDE 的 skills 目录（勿只拿单个 md，脚本随包交付）
 async function downloadSkillZip() {
@@ -200,34 +169,6 @@ async function copyActivation() {
   const cmd = `你是 HelloAI 平台的 ${data.value.agentName}（ID=${data.value.agentId}），请按平台 SKILL 接入并开始工作。`
   // 使用带降级的剪贴板写入，兼容 HTTP 公网部署下 navigator.clipboard 不可用的情况
   await copyTextWithToast(cmd, '已复制激活口令，粘到 IDE 对话框即可触发接入')
-}
-
-// 下载 daemon 脚本（B 类）：从 public 静态资源拉取参考实现，浏览器触发下载
-// 说明：本轮不改 DTO（暂不含 daemonScript 字段），脚本中 agentId/ApiKey 需手动改或下轮补 DTO
-async function downloadDaemon() {
-  if (!data.value) return
-  daemonLoading.value = true
-  try {
-    const resp = await fetch('/scripts/powershell/qoder-ceshi-daemon.ps1', { cache: 'no-cache' })
-    if (!resp.ok) {
-      throw new Error('HTTP ' + resp.status)
-    }
-    const text = await resp.text()
-    const blob = new Blob([text], { type: 'application/octet-stream;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `hello_ai_${sanitizeFilename(String(data.value.agentName || 'agent'))}_daemon.ps1`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-    ElMessage.success('已下载 daemon 脚本，powershell -NoProfile -ExecutionPolicy Bypass -File 启动；本轮需手动改 AgentId/ApiKey')
-  } catch (e: any) {
-    ElMessage.error('下载 daemon 失败：' + (e?.message || '未知错误'))
-  } finally {
-    daemonLoading.value = false
-  }
 }
 
 function close() {

@@ -31,7 +31,7 @@
       </template>
       <el-table
         v-loading="loading"
-        :data="list"
+        :data="pagedList"
         border
         stripe
         style="width:100%"
@@ -176,6 +176,18 @@
         v-if="!list.length && !loading"
         description="暂无任务"
       />
+      <el-pagination
+        v-if="list.length > 0"
+        background
+        layout="total, sizes, prev, pager, next, jumper"
+        :total="list.length"
+        :page-sizes="[10, 20, 50, 100]"
+        :page-size="pageSize"
+        :current-page="currentPage"
+        style="margin-top:16px;text-align:center"
+        @current-change="onPageChange"
+        @size-change="onSizeChange"
+      />
     </el-card>
 
     <TaskDeleteDialog
@@ -219,7 +231,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown } from '@element-plus/icons-vue'
@@ -239,23 +251,51 @@ const route = useRoute()
 const router = useRouter()
 const list = ref<any[]>([])
 const loading = ref(false)
+// 分页：前端按 pageSize 切片（任务量小，列表全量加载后再分页，避免每次翻页都重新拉接口）
+const pageSize = ref(20)
+const currentPage = ref(1)
 
 // taskId query 参数支持：筛选展示对应主任务（来源：子任务页"所属任务"、对话页"查看任务"等）
 const taskIdQuery = ref(queryString(route.query, 'taskId') || '')
 watch(
   () => route.query.taskId,
-  () => { taskIdQuery.value = queryString(route.query, 'taskId') || ''; load() }
+  () => { taskIdQuery.value = queryString(route.query, 'taskId') || ''; currentPage.value = 1; load() }
 )
+
+// 客户端分页切片：filter 后总数较小，前端切片减少接口往返
+const pagedList = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return list.value.slice(start, start + pageSize.value)
+})
+
+// 切页：仅切当前页码，重新从 list 切片
+function onPageChange(p: number) {
+  currentPage.value = p
+}
+// 切每页条数：回到第一页避免越界
+function onSizeChange(s: number) {
+  pageSize.value = s
+  currentPage.value = 1
+}
 
 async function load() {
   loading.value = true
   try {
+    // 不传 page：后端按旧契约返回全量数组，前端做切片分页（与 ReviewList 同构）
+    // 这样维持对话新建跳转全量匹配 review query 的旧契约，同时给用户分页体验
     const all = await taskApi.list()
     if (taskIdQuery.value) {
-      list.value = all.filter((t: any) => String(t.id) === String(taskIdQuery.value))
+      list.value = (all as any[]).filter((t: any) => String(t.id) === String(taskIdQuery.value))
     } else {
-      list.value = all
+      list.value = all as any[]
     }
+    // 防御边界：当前页越界（taskId 筛选后总数缩小）时回退到末页
+    const totalPages = Math.max(1, Math.ceil(list.value.length / pageSize.value))
+    if (currentPage.value > totalPages) currentPage.value = totalPages
+  } catch {
+    // 网络/后端异常：拦截器已弹通用错误，这里清空列表避免展示脏数据
+    list.value = []
+    ElMessage.error('任务列表加载失败，请稍后重试')
   } finally { loading.value = false }
 }
 

@@ -355,7 +355,7 @@ public class AdminAgentController {
         resp.setRole(agent.getRole().name());
         resp.setApiKey(plainApiKey);
         resp.setBaseUrl(baseUrl);
-        resp.setTitle("复制到 Trae / Qoder 的接入内容");
+        resp.setTitle("复制到 外部GUI 的接入内容");
         resp.setContent(content);
         resp.setSkillContent(skillContent);
 

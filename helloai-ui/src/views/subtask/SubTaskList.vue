@@ -293,12 +293,14 @@
         <el-pagination
           v-if="total > 0"
           background
-          layout="prev, pager, next"
+          layout="total, sizes, prev, pager, next, jumper"
           :total="total"
+          :page-sizes="[10, 20, 50, 100]"
           :page-size="pageSize"
           :current-page="currentPage"
           style="margin-top:16px;text-align:center"
           @current-change="loadPage"
+          @size-change="onSizeChange"
         />
       </template>
 
@@ -448,7 +450,7 @@ const router = useRouter()
 const list = ref<SubTask[]>([])
 const total = ref(0)
 const currentPage = ref(1)
-const pageSize = 20
+const pageSize = ref(20)
 const loading = ref(false)
 const statusFilter = ref<SubTaskStatus | ''>('')
 const dispatchVisible = ref(false)
@@ -542,7 +544,7 @@ async function loadParentTask() {
 async function load(page = 1) {
   loading.value = true
   try {
-    const params: { taskId?: string; status?: string; page: number; pageSize: number } = { page, pageSize }
+    const params: { taskId?: string; status?: string; page: number; pageSize: number } = { page, pageSize: pageSize.value }
     if (taskId.value) params.taskId = taskId.value
     if (statusFilter.value) params.status = statusFilter.value
     // 后端真分页：传 page 返回 PageResult（list/total）
@@ -555,6 +557,13 @@ async function load(page = 1) {
   } finally { loading.value = false }
 }
 function loadPage(page: number) { load(page) }
+
+// 切换每页条数：回到第一页避免新 pageSize 下越界
+function onSizeChange(s: number) {
+  pageSize.value = s
+  currentPage.value = 1
+  load(1)
+}
 
 function clearTaskFilter() { router.replace('/sub-tasks') }
 
