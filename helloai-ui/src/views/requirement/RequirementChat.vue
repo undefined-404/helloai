@@ -8,7 +8,7 @@
             <span class="chat-header-sub">与 AI 助手自由对话；输入 /planner 进入方案整理，/task 直达拆解</span>
           </div>
           <div class="header-actions">
-            <!-- 设计图左组：自由对话/方案澄清 chip + 新会话 primary -->
+            <!-- 模式 chip + 操作组（刷新 / 分享 / 更多）；新建会话入口收敛在左栏顶部「新建对话」 -->
             <el-tag
               v-if="conversation"
               :type="isChatMode ? 'info' : 'warning'"
@@ -16,14 +16,7 @@
             >
               {{ isChatMode ? '自由对话' : '方案澄清' }}
             </el-tag>
-            <el-button
-              size="small"
-              type="primary"
-              @click="startNew"
-            >
-              新会话
-            </el-button>
-            <!-- 设计图右组：刷新 / 分享 / 更多（更多 = dropdown） -->
+            <!-- 操作组：刷新 / 分享 / 更多（更多 = dropdown） -->
             <el-button
               size="small"
               :icon="Refresh"
