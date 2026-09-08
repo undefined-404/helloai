@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HelloAI 包结构 → 目标架构五层归位</title>
+<style>
+body{margin:0;padding:24px;background:#f6f8fb;font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+.pmap{--bg:#f6f8fb;--surface:#fff;--surface2:#eef2f8;--border:#d9dfe9;--text:#1b2430;--text2:#55617a;--text3:#8b96aa;--ok:#14855a;--okbg:#e3f4eb;--okbd:#b3dfc9;--warn:#96690a;--warnbg:#faf1da;--warnbd:#e9d49e;--bad:#c24848;--badbg:#fbe8e8;--badbd:#efc0c0;--accent:#3a6ee0;background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:14px 16px;max-width:1100px;margin:0 auto;color:var(--text)}
+:root[data-widget-theme="dark"] .pmap{--bg:#141a23;--surface:#1b2330;--surface2:#232d3d;--border:#334054;--text:#e7ecf4;--text2:#a4b0c3;--text3:#76829a;--ok:#3ecf9b;--okbg:#10322a;--okbd:#1f5c47;--warn:#e5b45c;--warnbg:#332a12;--warnbd:#5c4d1f;--bad:#ef8585;--badbg:#3b1e1e;--badbd:#6b3434;--accent:#7aa5ff}
+.pmap .hd{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;flex-wrap:wrap;gap:4px}
+.pmap .hd .t{font-size:15px;font-weight:700}
+.pmap .hd .s{font-size:11.5px;color:var(--text3)}
+.pmap .lg{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;font-size:11.5px;color:var(--text3)}
+.pmap .lg b{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;vertical-align:baseline}
+.pmap .lg .ok b{background:var(--ok)} .pmap .lg .wa b{background:var(--warn)} .pmap .lg .ga b{background:var(--bad)}
+.pmap .layer{display:grid;grid-template-columns:118px 1fr;gap:0;margin-bottom:6px;background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+.pmap .lb{padding:9px 10px;background:var(--surface2);border-right:1px solid var(--border)}
+.pmap .lb .n{font-size:12.5px;font-weight:700;line-height:1.3}
+.pmap .lb .e{font-size:11px;color:var(--text3);margin-top:2px}
+.pmap .chips{padding:8px 10px;display:flex;flex-wrap:wrap;gap:5px;align-content:center}
+.pmap .chip{border:1px solid var(--border);border-radius:7px;padding:3px 8px;font-size:11.5px;line-height:1.35;background:var(--surface);color:var(--text)}
+.pmap .chip i{display:block;font-style:normal;font-size:11px;color:var(--text3)}
+.pmap .chip.ok{border-left:3px solid var(--ok)}
+.pmap .chip.wa{border-left:3px solid var(--warn);background:var(--warnbg)}
+.pmap .chip.ga{border-left:3px solid var(--bad);background:var(--badbg);color:var(--text2)}
+.pmap .chip.ac{border-left:3px solid var(--accent)}
+.pmap .cross{margin-top:8px;border:1px dashed var(--border);border-radius:10px;padding:8px 10px;background:var(--surface2)}
+.pmap .cross .cn{font-size:12.5px;font-weight:700;margin-bottom:6px}
+.pmap .cross .chips{padding:0}
+.pmap .note{margin-top:8px;font-size:12.5px;color:var(--text2);line-height:1.55;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px 11px}
+.pmap .note b{color:var(--text)}
+</style>
+</head>
+<body>
+<div class="pmap" data-template="package-target-mapping">
+  <div class="hd"><span class="t">现有包结构 → 目标架构五层归位</span><span class="s">2026-09-08 全库代码核查 · helloai-core 6 域 47 子包</span></div>
+  <div class="lg"><span class="ok"><b></b>职责与目标层一致</span><span class="wa"><b></b>职责正确 / 待搬家或深化（G-00x 锚点）</span><span class="ga"><b></b>目标层缺口</span></div>
+
+  <div class="layer"><div class="lb"><div class="n">接入层</div><div class="e">api / start</div></div><div class="chips">
+    <span class="chip ok">helloai-api<i>controller · dto · interceptor：HTTP 转发</i></span>
+    <span class="chip ok">helloai-start<i>启动装配 + 线程池 + Admin 初始化</i></span>
+  </div></div>
+
+  <div class="layer"><div class="lb"><div class="n">Role 层</div><div class="e">Planner / Reviewer</div></div><div class="chips">
+    <span class="chip ok">planner.clarify<i>需求澄清会话</i></span>
+    <span class="chip ok">planner.service<i>拆解 Task / SubTask</i></span>
+    <span class="chip ok">planner.picker<i>选 Planner Agent</i></span>
+    <span class="chip ok">planner.prompt / search<i>Prompt 渲染 · 联网搜索</i></span>
+    <span class="chip ok">planner.memory<i>跨会话记忆</i></span>
+    <span class="chip ok">review.support<i>审查引擎 · 裁决解析 · 证据装配</i></span>
+    <span class="chip ok">review.picker<i>选 Reviewer</i></span>
+    <span class="chip wa">review 整体<i>Quality Gate 化 → G-007</i></span>
+  </div></div>
+
+  <div class="layer"><div class="lb"><div class="n">Orchestration 层</div><div class="e">任务 / DAG / 调度</div></div><div class="chips">
+    <span class="chip ok">task.statemachine<i>SubTaskStateMachine（业务状态权威）</i></span>
+    <span class="chip ok">task.entity<i>Task / SubTask + depends_on DAG</i></span>
+    <span class="chip ok">task.workflow<i>模板 / 版本 / 实例化（物化器）</i></span>
+    <span class="chip ok">task.policy<i>agent_policy + Team 展开</i></span>
+    <span class="chip ok">task.spec<i>运行规格 / 执行记录契约</i></span>
+    <span class="chip ok">task.port<i>ReviewPort / DispatchPort（依赖倒置）</i></span>
+    <span class="chip ac">agent.dispatcher<i>派发器 / Poller —— Scheduler 现住址</i></span>
+    <span class="chip wa">task.observability<i>timeline 载体 · A6 已并轨</i></span>
+  </div></div>
+
+  <div class="layer"><div class="lb"><div class="n">Runtime 层</div><div class="e">一次 Turn 执行</div></div><div class="chips">
+    <span class="chip ok">agent.runtime<i>AgentRuntime / Context / Router / TurnExecutor / Adapter / Environment</i></span>
+    <span class="chip ok">agent.mqconsumer<i>统一执行入口（全路径经 Runtime 契约）</i></span>
+    <span class="chip wa">agent.service.SubTaskExecutionService<i>Legacy 编排真身（默认路径，runtime-enabled=false）</i></span>
+    <span class="chip wa">agent.session<i>恢复检查点（暂居独立包）→ 并轨 runtime/loop 为后续项</i></span>
+    <span class="chip ok">RuntimeTurnExecutor / AgentLoop / ToolExecutor<i>八件套组装真身（G-003）· runtime-enabled 开关默认 Legacy，真灰度待联调</i></span>
+  </div></div>
+
+  <div class="layer"><div class="lb"><div class="n">Capability 层</div><div class="e">Skill / Tool / Sandbox</div></div><div class="chips">
+    <span class="chip wa">agent.skill<i>SkillPackage 元数据已落地（8 字段 + eng-* 三包物化）→ 消费面接线待续 G-004</i></span>
+    <span class="chip ok">agent.tool<i>ToolRegistry 12 工具元数据 + ToolCallbackToolExecutor 执行回路（同源）</i></span>
+    <span class="chip ok">agent.mcp<i>MCP 工具面（拉取 / 回报 / 心跳）</i></span>
+    <span class="chip ok">system.storage<i>产物存储 Local / MinIO</i></span>
+    <span class="chip wa">SandboxProvider<i>契约已落地（Phase 4 五边界）· Docker/K8s 隔离后置</i></span>
+  </div></div>
+
+  <div class="layer"><div class="lb"><div class="n">Provider 层</div><div class="e">异构 Agent 接入</div></div><div class="chips">
+    <span class="chip ok">agent.chat<i>Provider 工厂族（DeepSeek / OpenAI 兼容 / Anthropic + Registry）</i></span>
+    <span class="chip ok">agent.executor<i>执行器路由（ApiKey / Browser + Router + Selector）</i></span>
+    <span class="chip ok">agent.browser<i>Browser 桥接 Gateway</i></span>
+    <span class="chip ac">agent.mcp 拉取面<i>pullTasks / submitResult：外部 CLI Agent 自驱接入</i></span>
+  </div></div>
+
+  <div class="layer"><div class="lb"><div class="n">Event Stream</div><div class="e">执行事实底座</div></div><div class="chips">
+    <span class="chip ok">agent.event<i>AgentEventRecorder 写侧 + 事件对账</i></span>
+    <span class="chip ok">agent.entity.AgentEvent<i>Run / Turn / Step 三层</i></span>
+    <span class="chip ok">task.observability<i>Timeline 已并轨（A6）</i></span>
+    <span class="chip wa">Replay / Audit<i>读侧已落地（A7）· 待接 UI</i></span>
+    <span class="chip ga">Recovery / Fork<i>未建 → G-006</i></span>
+  </div></div>
+
+  <div class="cross"><div class="cn">横向基础设施（贯穿所有层）</div><div class="chips">
+    <span class="chip ok">helloai-job（17 定时任务）<i>Lease / Timeout / Compensation / Orphan / OutboxRelay / 事件对账 —— State Convergence 现住址</i></span>
+    <span class="chip ok">dlx<i>死信恢复 + 告警</i></span>
+    <span class="chip ok">shared<i>事务内领域事件 / 门铃 / TypeHandler</i></span>
+    <span class="chip ok">system<i>凭证 Vault + 加密 + 产物存储</i></span>
+    <span class="chip ok">helloai-mq<i>Producer / Consumer 封装</i></span>
+    <span class="chip ok">helloai-common<i>常量 / 枚举 / 工具 / 加密原语</i></span>
+    <span class="chip wa">Fleet 选人现状<i>AgentSelector（角色槽位）+ quality 画像 + Heartbeat / Stats → G-008</i></span>
+  </div></div>
+
+  <div class="note"><b>核心张力：agent 是横跨 4 个目标层的巨域</b>（Runtime / Capability / Provider / Fleet 全在 com.helloai.core.agent 下），且 agent.service 按"域内服务聚集"而非按目标层聚集（28 个 Service 混装 Legacy 编排 / 平台执行 / 心跳统计 / 凭证 / Team）。G-002 / G-003 的提取工作全部发生在这个域内部——这也是为什么不推倒重来、而是从旧执行链逐件提取组件。</div>
+</div>
+</body>
+</html>

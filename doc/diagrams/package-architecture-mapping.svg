@@ -1,0 +1,256 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1220" height="790" viewBox="0 0 1220 790" font-family="-apple-system,'Segoe UI','Microsoft YaHei',sans-serif">
+  <rect x="8" y="8" width="1204" height="774" rx="14" fill="#f6f8fb" stroke="#d9dfe9"/>
+  <text x="28" y="38" font-size="15" font-weight="700" fill="#1b2430">现有包结构 → 目标架构五层归位</text>
+  <text x="28" y="58" font-size="10.5" fill="#8b96aa">2026-09 代码核查 · helloai-core 6 域 47 子包 · 逐包状态与职责标注</text>
+  <rect x="1010" y="28" width="10" height="10" rx="2" fill="#14855a"/>
+  <text x="1024" y="37" font-size="11" fill="#55617a">已归位</text>
+  <rect x="1078" y="28" width="10" height="10" rx="2" fill="#96690a"/>
+  <text x="1092" y="37" font-size="11" fill="#55617a">演进中</text>
+  <rect x="1146" y="28" width="10" height="10" rx="2" fill="#c24848"/>
+  <text x="1160" y="37" font-size="11" fill="#55617a">缺口</text>
+
+  <!-- 接入层 -->
+  <rect x="20" y="70" width="1180" height="60" rx="10" fill="#ffffff" stroke="#d9dfe9"/>
+  <rect x="21" y="71" width="130" height="58" rx="9" fill="#eef2f8"/>
+  <rect x="131" y="71" width="20" height="58" fill="#eef2f8"/>
+  <line x1="151" y1="71" x2="151" y2="129" stroke="#d9dfe9"/>
+  <text x="32" y="97" font-size="13" font-weight="700" fill="#1b2430">接入层</text>
+  <text x="32" y="111" font-size="10" fill="#8b96aa">api · start</text>
+  <rect x="162" y="83" width="150" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="163" y="84" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="174" y="97" font-size="12" font-weight="600" fill="#1b2430">helloai-api</text>
+  <text x="174" y="110" font-size="10.5" fill="#55617a">Controller · HTTP 转发</text>
+  <rect x="318" y="83" width="116" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="319" y="84" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="330" y="97" font-size="12" font-weight="600" fill="#1b2430">helloai-start</text>
+  <text x="330" y="110" font-size="10.5" fill="#55617a">启动装配 · 线程池</text>
+
+  <!-- Role 层 -->
+  <rect x="20" y="138" width="1180" height="100" rx="10" fill="#ffffff" stroke="#d9dfe9"/>
+  <rect x="21" y="139" width="130" height="98" rx="9" fill="#eef2f8"/>
+  <rect x="131" y="139" width="20" height="98" fill="#eef2f8"/>
+  <line x1="151" y1="139" x2="151" y2="237" stroke="#d9dfe9"/>
+  <text x="32" y="183" font-size="13" font-weight="700" fill="#1b2430">Role 层</text>
+  <text x="32" y="197" font-size="10" fill="#8b96aa">Planner · Reviewer</text>
+  <rect x="162" y="151" width="115" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="163" y="152" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="174" y="165" font-size="12" font-weight="600" fill="#1b2430">planner.clarify</text>
+  <text x="174" y="178" font-size="10.5" fill="#55617a">需求澄清会话</text>
+  <rect x="283" y="151" width="128" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="284" y="152" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="295" y="165" font-size="12" font-weight="600" fill="#1b2430">planner.service</text>
+  <text x="295" y="178" font-size="10.5" fill="#55617a">拆解 Task / SubTask</text>
+  <rect x="417" y="151" width="113" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="418" y="152" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="429" y="165" font-size="12" font-weight="600" fill="#1b2430">planner.picker</text>
+  <text x="429" y="178" font-size="10.5" fill="#55617a">选 Planner Agent</text>
+  <rect x="536" y="151" width="168" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="537" y="152" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="548" y="165" font-size="12" font-weight="600" fill="#1b2430">planner.prompt · search</text>
+  <text x="548" y="178" font-size="10.5" fill="#55617a">提示词渲染 · 联网搜索</text>
+  <rect x="162" y="191" width="108" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="163" y="192" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="174" y="205" font-size="12" font-weight="600" fill="#1b2430">planner.memory</text>
+  <text x="174" y="218" font-size="10.5" fill="#55617a">跨会话记忆</text>
+  <rect x="276" y="191" width="116" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="277" y="192" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="288" y="205" font-size="12" font-weight="600" fill="#1b2430">review.support</text>
+  <text x="288" y="218" font-size="10.5" fill="#55617a">审查引擎 · 证据装配</text>
+  <rect x="398" y="191" width="102" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="399" y="192" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="410" y="205" font-size="12" font-weight="600" fill="#1b2430">review.picker</text>
+  <text x="410" y="218" font-size="10.5" fill="#55617a">选审</text>
+  <rect x="506" y="191" width="172" height="34" rx="7" fill="#faf1da" stroke="#e9d49e"/>
+  <rect x="507" y="192" width="3" height="32" rx="1.5" fill="#96690a"/>
+  <text x="518" y="205" font-size="12" font-weight="600" fill="#1b2430">review 整体</text>
+  <text x="518" y="218" font-size="10.5" fill="#55617a">Quality Gate 化（G-007）</text>
+
+  <!-- Orchestration 层 -->
+  <rect x="20" y="246" width="1180" height="100" rx="10" fill="#ffffff" stroke="#d9dfe9"/>
+  <rect x="21" y="247" width="130" height="98" rx="9" fill="#eef2f8"/>
+  <rect x="131" y="247" width="20" height="98" fill="#eef2f8"/>
+  <line x1="151" y1="247" x2="151" y2="345" stroke="#d9dfe9"/>
+  <text x="32" y="291" font-size="13" font-weight="700" fill="#1b2430">Orchestration 层</text>
+  <text x="32" y="305" font-size="10" fill="#8b96aa">任务 · DAG · 调度</text>
+  <rect x="162" y="259" width="134" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="163" y="260" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="174" y="273" font-size="12" font-weight="600" fill="#1b2430">task.statemachine</text>
+  <text x="174" y="286" font-size="10.5" fill="#55617a">业务状态权威</text>
+  <rect x="302" y="259" width="120" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="303" y="260" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="314" y="273" font-size="12" font-weight="600" fill="#1b2430">task.entity</text>
+  <text x="314" y="286" font-size="10.5" fill="#55617a">Task / SubTask + DAG</text>
+  <rect x="428" y="259" width="112" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="429" y="260" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="440" y="273" font-size="12" font-weight="600" fill="#1b2430">task.workflow</text>
+  <text x="440" y="286" font-size="10.5" fill="#55617a">模板 · 版本 · 实例化</text>
+  <rect x="546" y="259" width="156" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="547" y="260" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="558" y="273" font-size="12" font-weight="600" fill="#1b2430">task.policy</text>
+  <text x="558" y="286" font-size="10.5" fill="#55617a">agent_policy + Team 展开</text>
+  <rect x="708" y="259" width="112" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="709" y="260" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="720" y="273" font-size="12" font-weight="600" fill="#1b2430">task.spec</text>
+  <text x="720" y="286" font-size="10.5" fill="#55617a">运行规格 · 执行记录</text>
+  <rect x="162" y="299" width="87" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="163" y="300" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="174" y="313" font-size="12" font-weight="600" fill="#1b2430">task.port</text>
+  <text x="174" y="326" font-size="10.5" fill="#55617a">依赖倒置锚点</text>
+  <rect x="255" y="299" width="148" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="256" y="300" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="267" y="313" font-size="12" font-weight="600" fill="#1b2430">task.listener · score</text>
+  <text x="267" y="326" font-size="10.5" fill="#55617a">完成联动 · 隐式评分</text>
+  <rect x="409" y="299" width="143" height="34" rx="7" fill="#faf1da" stroke="#e9d49e"/>
+  <rect x="410" y="300" width="3" height="32" rx="1.5" fill="#96690a"/>
+  <text x="421" y="313" font-size="12" font-weight="600" fill="#1b2430">task.observability</text>
+  <text x="421" y="326" font-size="10.5" fill="#55617a">timeline 载体 · A6 已并轨</text>
+  <rect x="558" y="299" width="166" height="34" rx="7" fill="#eaf1fd" stroke="#b9cdf5"/>
+  <rect x="559" y="300" width="3" height="32" rx="1.5" fill="#3a6ee0"/>
+  <text x="570" y="313" font-size="12" font-weight="600" fill="#1b2430">agent.dispatcher</text>
+  <text x="570" y="326" font-size="10.5" fill="#55617a">Scheduler 现住址</text>
+
+  <!-- Runtime 层 -->
+  <rect x="20" y="354" width="1180" height="60" rx="10" fill="#ffffff" stroke="#d9dfe9"/>
+  <rect x="21" y="355" width="130" height="58" rx="9" fill="#eef2f8"/>
+  <rect x="131" y="355" width="20" height="58" fill="#eef2f8"/>
+  <line x1="151" y1="355" x2="151" y2="413" stroke="#d9dfe9"/>
+  <text x="32" y="381" font-size="13" font-weight="700" fill="#1b2430">Runtime 层</text>
+  <text x="32" y="395" font-size="10" fill="#8b96aa">一次 Turn 执行</text>
+  <rect x="162" y="367" width="152" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="163" y="368" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="174" y="381" font-size="12" font-weight="600" fill="#1b2430">agent.runtime</text>
+  <text x="174" y="394" font-size="10.5" fill="#55617a">契约 · Context · Adapter</text>
+  <rect x="320" y="367" width="123" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="321" y="368" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="332" y="381" font-size="12" font-weight="600" fill="#1b2430">agent.mqconsumer</text>
+  <text x="332" y="394" font-size="10.5" fill="#55617a">统一执行入口</text>
+  <rect x="449" y="367" width="167" height="34" rx="7" fill="#faf1da" stroke="#e9d49e"/>
+  <rect x="450" y="368" width="3" height="32" rx="1.5" fill="#96690a"/>
+  <text x="461" y="381" font-size="12" font-weight="600" fill="#1b2430">SubTaskExecutionService</text>
+  <text x="461" y="394" font-size="10.5" fill="#55617a">Legacy 编排（默认路径）</text>
+  <rect x="622" y="367" width="149" height="34" rx="7" fill="#faf1da" stroke="#e9d49e"/>
+  <rect x="623" y="368" width="3" height="32" rx="1.5" fill="#96690a"/>
+  <text x="634" y="381" font-size="12" font-weight="600" fill="#1b2430">agent.session</text>
+  <text x="634" y="394" font-size="10.5" fill="#55617a">恢复检查点 → loop 载体</text>
+  <rect x="777" y="367" width="196" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="778" y="368" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="789" y="381" font-size="12" font-weight="600" fill="#1b2430">AgentLoop · ToolExecutor</text>
+  <text x="789" y="394" font-size="10.5" fill="#55617a">已落地 · 待灰度接线</text>
+
+  <!-- Capability 层 -->
+  <rect x="20" y="422" width="1180" height="60" rx="10" fill="#ffffff" stroke="#d9dfe9"/>
+  <rect x="21" y="423" width="130" height="58" rx="9" fill="#eef2f8"/>
+  <rect x="131" y="423" width="20" height="58" fill="#eef2f8"/>
+  <line x1="151" y1="423" x2="151" y2="481" stroke="#d9dfe9"/>
+  <text x="32" y="449" font-size="13" font-weight="700" fill="#1b2430">Capability 层</text>
+  <text x="32" y="463" font-size="10" fill="#8b96aa">Skill · Tool · Sandbox</text>
+  <rect x="162" y="435" width="124" height="34" rx="7" fill="#faf1da" stroke="#e9d49e"/>
+  <rect x="163" y="436" width="3" height="32" rx="1.5" fill="#96690a"/>
+  <text x="174" y="449" font-size="12" font-weight="600" fill="#1b2430">agent.skill</text>
+  <text x="174" y="462" font-size="10.5" fill="#55617a">元数据化（G-004）</text>
+  <rect x="292" y="435" width="114" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="293" y="436" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="304" y="449" font-size="12" font-weight="600" fill="#1b2430">agent.tool</text>
+  <text x="304" y="462" font-size="10.5" fill="#55617a">Registry + Executor 回路</text>
+  <rect x="412" y="435" width="84" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="413" y="436" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="424" y="449" font-size="12" font-weight="600" fill="#1b2430">agent.mcp</text>
+  <text x="424" y="462" font-size="10.5" fill="#55617a">MCP 工具面</text>
+  <rect x="502" y="435" width="112" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="503" y="436" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="514" y="449" font-size="12" font-weight="600" fill="#1b2430">system.storage</text>
+  <text x="514" y="462" font-size="10.5" fill="#55617a">产物 Local / MinIO</text>
+  <rect x="620" y="435" width="126" height="34" rx="7" fill="#faf1da" stroke="#e9d49e"/>
+  <rect x="621" y="436" width="3" height="32" rx="1.5" fill="#96690a"/>
+  <text x="632" y="449" font-size="12" font-weight="600" fill="#1b2430">SandboxProvider</text>
+  <text x="632" y="462" font-size="10.5" fill="#55617a">契约已落地 · 隔离后置</text>
+
+  <!-- Provider 层 -->
+  <rect x="20" y="490" width="1180" height="60" rx="10" fill="#ffffff" stroke="#d9dfe9"/>
+  <rect x="21" y="491" width="130" height="58" rx="9" fill="#eef2f8"/>
+  <rect x="131" y="491" width="20" height="58" fill="#eef2f8"/>
+  <line x1="151" y1="491" x2="151" y2="549" stroke="#d9dfe9"/>
+  <text x="32" y="517" font-size="13" font-weight="700" fill="#1b2430">Provider 层</text>
+  <text x="32" y="531" font-size="10" fill="#8b96aa">异构 Agent 接入</text>
+  <rect x="162" y="503" width="98" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="163" y="504" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="174" y="517" font-size="12" font-weight="600" fill="#1b2430">agent.chat</text>
+  <text x="174" y="530" font-size="10.5" fill="#55617a">Provider 工厂族</text>
+  <rect x="266" y="503" width="110" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="267" y="504" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="278" y="517" font-size="12" font-weight="600" fill="#1b2430">agent.executor</text>
+  <text x="278" y="530" font-size="10.5" fill="#55617a">执行器路由 · 选人</text>
+  <rect x="382" y="503" width="102" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="383" y="504" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="394" y="517" font-size="12" font-weight="600" fill="#1b2430">agent.browser</text>
+  <text x="394" y="530" font-size="10.5" fill="#55617a">Browser 桥接</text>
+  <rect x="490" y="503" width="165" height="34" rx="7" fill="#eaf1fd" stroke="#b9cdf5"/>
+  <rect x="491" y="504" width="3" height="32" rx="1.5" fill="#3a6ee0"/>
+  <text x="502" y="517" font-size="12" font-weight="600" fill="#1b2430">agent.mcp 拉取面</text>
+  <text x="502" y="530" font-size="10.5" fill="#55617a">pullTasks · submitResult</text>
+
+  <!-- Event Stream -->
+  <rect x="20" y="558" width="1180" height="60" rx="10" fill="#ffffff" stroke="#d9dfe9"/>
+  <rect x="21" y="559" width="130" height="58" rx="9" fill="#eef2f8"/>
+  <rect x="131" y="559" width="20" height="58" fill="#eef2f8"/>
+  <line x1="151" y1="559" x2="151" y2="617" stroke="#d9dfe9"/>
+  <text x="32" y="585" font-size="13" font-weight="700" fill="#1b2430">Event Stream</text>
+  <text x="32" y="599" font-size="10" fill="#8b96aa">执行事实底座</text>
+  <rect x="162" y="571" width="141" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="163" y="572" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="174" y="585" font-size="12" font-weight="600" fill="#1b2430">agent.event</text>
+  <text x="174" y="598" font-size="10.5" fill="#55617a">EventRecorder 写侧·对账</text>
+  <rect x="309" y="571" width="169" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="310" y="572" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="321" y="585" font-size="12" font-weight="600" fill="#1b2430">agent.entity.AgentEvent</text>
+  <text x="321" y="598" font-size="10.5" fill="#55617a">Run / Turn / Step</text>
+  <rect x="484" y="571" width="143" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="485" y="572" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="496" y="585" font-size="12" font-weight="600" fill="#1b2430">task.observability</text>
+  <text x="496" y="598" font-size="10.5" fill="#55617a">Timeline 已并轨（A6）</text>
+  <rect x="633" y="571" width="126" height="34" rx="7" fill="#faf1da" stroke="#e9d49e"/>
+  <rect x="634" y="572" width="3" height="32" rx="1.5" fill="#96690a"/>
+  <text x="645" y="585" font-size="12" font-weight="600" fill="#1b2430">Replay · Audit</text>
+  <text x="645" y="598" font-size="10.5" fill="#55617a">读侧已落地（A7）· 待接 UI</text>
+  <rect x="765" y="571" width="126" height="34" rx="7" fill="#fbe8e8" stroke="#efc0c4" stroke-dasharray="4 2"/>
+  <rect x="766" y="572" width="3" height="32" rx="1.5" fill="#c24848"/>
+  <text x="777" y="585" font-size="12" font-weight="600" fill="#1b2430">Recovery · Fork</text>
+  <text x="777" y="598" font-size="10.5" fill="#55617a">未建（G-006）</text>
+
+  <!-- 横向基础设施 -->
+  <rect x="20" y="626" width="1180" height="74" rx="10" fill="#f0f3f9" stroke="#b9c3d4" stroke-dasharray="6 3"/>
+  <text x="36" y="646" font-size="12.5" font-weight="700" fill="#1b2430">横向基础设施（贯穿所有层）</text>
+  <rect x="36" y="656" width="186" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="37" y="657" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="48" y="669" font-size="12" font-weight="600" fill="#1b2430">helloai-job</text>
+  <text x="48" y="682" font-size="10.5" fill="#55617a">17 收敛任务 · 最终一致兜底</text>
+  <rect x="228" y="656" width="105" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="229" y="657" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="240" y="669" font-size="12" font-weight="600" fill="#1b2430">dlx</text>
+  <text x="240" y="682" font-size="10.5" fill="#55617a">死信恢复 + 告警</text>
+  <rect x="339" y="656" width="150" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="340" y="657" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="351" y="669" font-size="12" font-weight="600" fill="#1b2430">shared</text>
+  <text x="351" y="682" font-size="10.5" fill="#55617a">领域事件 · TypeHandler</text>
+  <rect x="495" y="656" width="116" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="496" y="657" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="507" y="669" font-size="12" font-weight="600" fill="#1b2430">system</text>
+  <text x="507" y="682" font-size="10.5" fill="#55617a">凭证 Vault · 加密</text>
+  <rect x="617" y="656" width="149" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="618" y="657" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="629" y="669" font-size="12" font-weight="600" fill="#1b2430">helloai-mq</text>
+  <text x="629" y="682" font-size="10.5" fill="#55617a">Producer / Consumer</text>
+  <rect x="772" y="656" width="112" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="773" y="657" width="3" height="32" rx="1.5" fill="#14855a"/>
+  <text x="784" y="669" font-size="12" font-weight="600" fill="#1b2430">helloai-common</text>
+  <text x="784" y="682" font-size="10.5" fill="#55617a">常量 · 枚举 · 工具</text>
+  <rect x="890" y="656" width="157" height="34" rx="7" fill="#faf1da" stroke="#e9d49e"/>
+  <rect x="891" y="657" width="3" height="32" rx="1.5" fill="#96690a"/>
+  <text x="902" y="669" font-size="12" font-weight="600" fill="#1b2430">Fleet 选人现状</text>
+  <text x="902" y="682" font-size="10.5" fill="#55617a">Selector + 画像 → G-008</text>
+
+  <!-- 核心张力 -->
+  <rect x="20" y="708" width="1180" height="60" rx="10" fill="#ffffff" stroke="#d9dfe9"/>
+  <text x="36" y="730" font-size="12" fill="#1b2430"><tspan font-weight="700">核心张力：</tspan>agent 是横跨 Runtime / Capability / Provider / Fleet 四个目标层的巨域（28 个 Service 混装）</text>
+  <text x="36" y="750" font-size="12" fill="#55617a">G-002 / G-003 的组件提取全部发生在该域内部 —— 这正是「演进、不推倒」的原因。</text>
+</svg>
