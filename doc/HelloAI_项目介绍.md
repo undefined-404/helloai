@@ -5,7 +5,7 @@
 > 本文回答两个问题：V1 做成了一个什么产品；V2 基于 DeepSeek Harness 做怎样的改造升级。
 > 技术事实以 `HelloAI 项目基线文档.md` 为准，目标边界以 `HelloAI 目标架构.md` 为准；本文不作为开发实施依据。
 >
-> 最后更新：2026-09-08（回填 P0 主线收官 + G-004 SkillPackage 元数据层落地进度）
+> 最后更新：2026-09-08（回填 P1 增量：G-004 Skill 联动接线与拆解技能通路、G-006 Replay / Audit API+UI 暴露与外部轨迹加厚、G-002 / G-003 灰度联调闭合口径）
 
 ---
 
@@ -329,10 +329,10 @@ Event Stream 统一 → Dual Executor 迁移 → AgentRuntime 收敛
 |---|---|---|---|
 | **执行契约** | 执行命令直连旧执行链 | `AgentRuntime#execute` 统一契约，全部执行路径单轨接入 | ✅ 已落地 |
 | **执行过程观测** | 结果回写可见，过程黑盒（timeline 独立载体） | `Run → Turn → Step` Event Stream 全程记录，append-only | ✅ 写侧闭环 |
-| **事件消费** | timeline 单点展示 | Timeline / Replay / Audit / Metrics 统一消费面 | 🔶 Timeline 并轨（A6）+ Replay / Audit 读侧（A7）已落地；Recovery / Fork 待建（G-006） |
-| **Skill** | `eng-*` Markdown 规范注入 | Capability Package（元数据 + 版本 + Instructions + Schema） | 🔶 元数据层已落地（SkillPackage 8 字段 + eng-* 三包物化，2026-09-08）；Instructions 结构化 / 消费面接线待续（G-004） |
-| **Tool** | Prompt 里的描述文本 | ToolRegistry 元数据 + ToolExecutor 真实调用回路 | ✅ 已落地（G-003 Phase 2，待灰度联调） |
-| **执行循环** | 单发 LLM 调用（一次请求一次产出） | AgentLoop 多轮循环：推理 → 工具调用 → 观察 → 再推理 | ✅ 已落地（G-003 Phase 3，待灰度联调） |
+| **事件消费** | timeline 单点展示 | Timeline / Replay / Audit / Metrics 统一消费面 | 🔶 Timeline 并轨（A6）+ Replay / Audit 读侧（A7）+ API / UI 工作台（C1）+ 外部认领埋点（C2）已落地；Recovery / Fork 待建（G-006） |
+| **Skill** | `eng-*` Markdown 规范注入 | Capability Package（元数据 + 版本 + Instructions + Schema） | 🔶 元数据层 + 联动接线 + 拆解通路已落地（SkillPackage 8 字段 + eng-* 三包物化；requiredTools→tools 双链并集、SKILL_RESOLVED 携带版本、required_skills 进拆解 Prompt 四段贯通）；Instructions 结构化 / 真实任务行使待续（G-004） |
+| **Tool** | Prompt 里的描述文本 | ToolRegistry 元数据 + ToolExecutor 真实调用回路 | ✅ 已落地（G-003 Phase 2，dev 灰度联调已通过） |
+| **执行循环** | 单发 LLM 调用（一次请求一次产出） | AgentLoop 多轮循环：推理 → 工具调用 → 观察 → 再推理 | ✅ 已落地（G-003 Phase 3，dev 灰度联调已通过） |
 | **执行环境** | 场所标签（RemoteAgent / LocalProcess） | SandboxProvider：文件 / 网络 / 进程 / 资源 / 凭证五类边界 | 🔶 契约已落地（Phase 4）；Docker / K8s 隔离后置（G-005） |
 | **选人策略** | 12 层硬过滤 + 4 级软排序（角色槽位优先） | Capability Match + Health + Cost + 历史成功率打分 | ⏳ G-008 |
 | **质量审查** | 双轨纪律制 + 双审 + 抽检 | Quality Gate：Rule + Test + LLM Review → 结构化 Decision | ⏳ G-007 |
@@ -394,7 +394,7 @@ flowchart TB
     SESS["Session<br/>loop 状态与恢复检查点"] -.-> LOOP
 ```
 
-落地进度：八件套已全部落地——AgentContext / EventRecorder / SkillResolver / ToolRegistry / Session 先期就位（Session 现为恢复检查点，随 Loop 落地演进为循环状态载体）；ToolExecutor（G-003 Phase 2 执行回路真身）与 AgentLoop（G-003 Phase 3 手动工具循环，循环内 TOOL_CALL 事件成对）与 SandboxProvider 契约（G-005 Phase 4 五边界 ExecutionPolicy，诚实策略不标 ISOLATED）于 2026-09-07 补齐。真身经 `RuntimeTurnExecutor` 组装，受 `runtime-enabled` 开关控制（默认 `false`=Legacy 零变化），真实 provider 工具循环待有 Key 的 dev 环境灰度联调。
+落地进度：八件套已全部落地——AgentContext / EventRecorder / SkillResolver / ToolRegistry / Session 先期就位（Session 现为恢复检查点，随 Loop 落地演进为循环状态载体）；ToolExecutor（G-003 Phase 2 执行回路真身）与 AgentLoop（G-003 Phase 3 手动工具循环，循环内 TOOL_CALL 事件成对）与 SandboxProvider 契约（G-005 Phase 4 五边界 ExecutionPolicy，诚实策略不标 ISOLATED）于 2026-09-07 补齐。真身经 `RuntimeTurnExecutor` 组装，受 `runtime-enabled` 开关控制（默认 `false`=Legacy 零变化）；真实 provider 工具循环已于 2026-09-08 dev 灰度联调通过（真身点亮 / 回滚零差异 / 外部 Agent 回归通过）。
 
 ### 3. Event Stream 三层模型与消费面
 
@@ -412,7 +412,7 @@ flowchart LR
     STORE -.->|事实输入| QG["Quality Gate"]
 ```
 
-三层模型是 Event Stream 的骨架（ADR-001）：Run 承载一次子任务执行，Turn 承载一轮交互，Step 承载一步具体动作（含 SKILL_RESOLVED / TOOL_RESOLVED / ENVIRONMENT_RESOLVED 等类型槽位）。**Event 只记录发生过什么，业务状态机仍是状态权威**——两者职责分离，不搞 Event Sourcing 推翻状态机。写侧与对账已闭环；消费侧已落地三件——Timeline 并轨（A6，经既有 `/timeline` API + UI 时间线视图对外暴露）+ Replay（A7 `traceByRunId`）/ Audit（A7 `pageAuditByTaskId`）读侧（服务层就绪，API / UI 暴露待做）；Recovery / Fork 消费面为 G-006 后续项。
+三层模型是 Event Stream 的骨架（ADR-001）：Run 承载一次子任务执行，Turn 承载一轮交互，Step 承载一步具体动作（含 SKILL_RESOLVED / TOOL_RESOLVED / ENVIRONMENT_RESOLVED 等类型槽位）。**Event 只记录发生过什么，业务状态机仍是状态权威**——两者职责分离，不搞 Event Sourcing 推翻状态机。写侧与对账已闭环；消费侧已落地——Timeline 并轨（A6，经既有 `/timeline` API + UI 时间线视图对外暴露）+ Replay（`traceByRunId`）/ Audit（`pageAuditByTaskId`）读侧 API 已暴露（`/api/agent-events`）+ UI 事件流工作台已上线（`/event-stream`：Replay 轨迹时间线 + Audit 分页表格 + run 级汇总卡）；外部执行轨迹经认领埋点（AGENT_STARTED）加厚为「认领 → 完成 → 审查」四事件链。Recovery / Fork 消费面为 G-006 后续项。
 
 ---
 
@@ -433,7 +433,7 @@ flowchart LR
 
 ![现有包结构 → 目标架构五层归位](diagrams/package-architecture-mapping.svg)
 
-图中逐包标注状态与职责：**绿色 = 职责与目标层一致**；**黄色 = 职责正确但待搬家或深化**（标注 G 项锚点）；**红色虚线 = 目标层缺口**（如 Recovery / Fork 消费面、Sandbox 隔离实现等未建项；AgentLoop / ToolExecutor、SandboxProvider 契约、Replay / Audit 读侧已随 P0 收官由缺口转绿 / 黄，见 §6）；**蓝色 = 跨层关键住址**（agent.dispatcher 是 Scheduler 的实际住址、MCP 拉取面是外部 CLI Agent 的接入通道）。底部两条带：横向基础设施（17 收敛任务 / 死信 / Vault / Fleet 选人现状）与「agent 巨域横跨四层」的核心张力说明。
+图中逐包标注状态与职责：**绿色 = 职责与目标层一致**；**黄色 = 职责正确但待搬家或深化**（标注 G 项锚点）；**红色虚线 = 目标层缺口**（如 Recovery / Fork 消费面、Sandbox 隔离实现等未建项；AgentLoop / ToolExecutor、SandboxProvider 契约已随 P0 收官由缺口转绿 / 黄，Replay / Audit 消费面（API + UI）已随 P1 增量转绿，见 §6）；**蓝色 = 跨层关键住址**（agent.dispatcher 是 Scheduler 的实际住址、MCP 拉取面是外部 CLI Agent 的接入通道）。底部两条带：横向基础设施（17 收敛任务 / 死信 / Vault / Fleet 选人现状）与「agent 巨域横跨四层」的核心张力说明。
 
 > 交互版（可缩放、逐包完整职责标注）：[package-architecture-mapping.html](diagrams/package-architecture-mapping.html)
 
@@ -480,13 +480,13 @@ helloai/
         │   ├── runtime/           Runtime 层（P0-B 已落真身）
         │   │   ├── AgentRuntime / AgentContext          [已就位]
         │   │   ├── RuntimeTurnExecutor（八件套组装真身） [已就位]
-        │   │   ├── RuntimeAgentRuntimeRouter（灰度开关）  [已就位 · 默认 Legacy，真灰度待联调]
+        │   │   ├── RuntimeAgentRuntimeRouter（灰度开关）  [已就位 · 默认 Legacy，dev 灰度第 0 步已闭合]
         │   │   ├── ExecutionEnvironment / Provider       [已就位]
         │   │   ├── loop/ AgentLoop（手动工具循环）        [已就位 G-003 ✅]
         │   │   ├── sandbox/ SandboxProvider（契约+诚实策略）[已就位 G-005 · 真隔离后置]
         │   │   └── Session（→ loop 状态载体）             [演进中]
         │   ├── skill/             Capability 层
-        │   │   └── SkillPackage 元数据（version / requiredTools / dependencies / schema / validationRules）[元数据层已落地 · 消费面接线待续 G-004]
+        │   │   └── SkillPackage 元数据 + 联动接线（requiredTools→tools / 携带版本）[元数据层+联动+拆解通路已落地 · Instructions 结构化待续 G-004]
         │   ├── tool/              Capability 层
         │   │   ├── ToolRegistry（元数据面）               [已就位]
         │   │   └── ToolExecutor + 执行回路（与 Registry 同源）[已就位 G-003 ✅]
@@ -498,7 +498,7 @@ helloai/
         │   ├── browser/           Provider 层（Browser 桥接）[已就位]
         │   └── event/             Event Stream
         │       ├── 写侧（AgentEventRecorder：Run / Turn / Step + 对账）[已就位]
-        │       └── 消费侧（Timeline ✅ / Replay / Audit 读侧 service 已落，API+UI 待暴露）[演进中 G-006]
+        │       └── 消费侧（Timeline ✅ / Replay · Audit 读侧 API+UI 已暴露）[演进中 G-006 · Recovery / Fork 待建]
         └── dlx/ shared/ system/   [已就位] 横向基础设施
 ```
 
@@ -512,7 +512,7 @@ helloai/
 |---|---|---|---|
 | agent.service.SubTaskExecutionService（Legacy 编排） | 组件化拆入 agent.runtime（ToolExecutor ✅ / AgentLoop ✅ 已提取，剩余 Session 协调与旧链解剖） | 提取 | G-003 |
 | LegacyExecutorAdapter（Runtime 唯一实现，转发旧链） | Runtime 真身逐步承接，Adapter 退化为历史接缝 | 演进 | G-002 |
-| agent.skill（KNOWN_SPECS 标签 → 文本） | 结构化 Skill Package 元数据（✅ 元数据层已落地 2026-09-08：SkillPackage 8 字段 + eng-code-review / eng-doc-standard / eng-verification 三包物化 + listPackages / resolvePackages 消费面；Instructions 结构化待续） | 增强 | G-004 |
+| agent.skill（KNOWN_SPECS 标签 → 文本） | 结构化 Skill Package 元数据（✅ 元数据层 + 联动接线 + 拆解技能通路已落地 2026-09-08：SkillPackage 8 字段 + eng-code-review / eng-doc-standard / eng-verification 三包物化 + listPackages / resolvePackages 消费面 + requiredTools→tools 双链并集 + SKILL_RESOLVED 携带版本 + required_skills 进拆解 Prompt；Instructions 结构化 / 真实任务行使待续） | 增强 | G-004 |
 | ExecutionEnvironment（场所标签） | SandboxProvider 五类边界（文件 / 网络 / 进程 / 资源 / 凭证） | 新增契约 ✅ 已落（EnvironmentSandboxProvider，真隔离后置） | G-005 |
 | task.observability（timeline 独立载体） | 从 Event Stream 消费 | 迁移 ✅ 已完成（A6 收口） | A6 / G-006 |
 | review 域（双审收敛链） | Quality Gate（Rule + Test + LLM Review → Decision） | 叠加 | G-007 |
@@ -534,9 +534,9 @@ helloai/
 | Event Stream 写侧（Run / Turn / Step + 对账） | G-001 | ✅ 已闭环（A1~A7 全落地，验收全量成立） |
 | Runtime 契约统一（全路径经 AgentRuntime#execute） | G-002 | ✅ P0 收官：契约单轨 + Runtime 真身 + 主链接线注入（`runtime-enabled` 开关，默认 `false`=Legacy 零变化）；2026-09-08 灰度第 0 步闭合（真身点亮/回滚零差异/外部 Agent 回归通过） |
 | ToolExecutor / AgentLoop | G-003 | ✅ P0-C 八件套齐：ToolExecutor（Phase 2 执行回路）+ AgentLoop（Phase 3 手动循环）+ Sandbox 契约（Phase 4）；真实 provider 循环 2026-09-08 联调通过（无边界问题） |
-| Skill Capability Package | G-004 | 🔶 元数据层已落地（2026-09-08：SkillPackage 8 字段 + 三技能包物化，消费面 listPackages / resolvePackages 就绪）；Instructions 结构化 / 驱动接线待续 |
+| Skill Capability Package | G-004 | 🔶 元数据层 + 联动接线 + 拆解技能通路已落地（2026-09-08：SkillPackage 8 字段 + 三技能包物化；requiredTools→tools 双链并集、SKILL_RESOLVED 携带版本、task.required_skills 创建→拆解→派发→执行四段贯通）；Instructions 结构化 / 真实任务 required_skills 实测待续（BLOCKED：本机无 dev 环境） |
 | Sandbox Provider | G-005 | 🔶 契约已落地（五边界 ExecutionPolicy，诚实策略无 ISOLATED）；Docker / K8s 隔离后置 |
-| Event 消费侧（Timeline → Replay / Audit） | G-006 | 🔶 Timeline 并轨（A6，已暴露 API + UI）+ Replay / Audit 读侧（A7，服务层就绪、API / UI 待做）；Recovery / Fork 待建 |
+| Event 消费侧（Timeline → Replay / Audit） | G-006 | 🔶 Timeline 并轨（A6，已暴露 API + UI）+ Replay / Audit 读侧 API + UI 工作台已暴露（增量 C1：/api/agent-events + /event-stream 事件流）+ 外部认领埋点 AGENT_STARTED 与 Replay 汇总卡（增量 C2，外部轨迹加厚为四事件）；Recovery / Fork 待建 |
 | Quality Gate | G-007 | ⏳ 规划 |
 | Agent Fleet 能力化选人 | G-008 | ⏳ 规划 |
 | Workflow Engine 增强 | G-009 | ⏳ 远期 |
@@ -547,6 +547,6 @@ helloai/
 
 **V1 做成了什么：**一个分布式跨终端 AI Agent 调度平台——把散落各处的 AI 助手与终端算力组织成可调度、可验收、可审计的工程团队，任何能跑 CLI Agent 的终端都是算力节点。你说一次需求、点一次确认：Planner 双模对话澄清并拆解为依赖 DAG，弹性调度跨终端派给最合适的 AI（12 层过滤 + 4 级排序 + 值班优先 + LLM 保底），Reviewer 双轨纪律审核（四元组驳回意见、双审共识、抽检复审），最终整合报告 + zip 交付。底座是事务性 Outbox、三层幂等、熔断降级、死信兜底的分布式可靠性体系。
 
-**V2 在升级什么：**借鉴 DeepSeek Harness 的三个核心思想，把平台从"能调度"升级为"执行过程可观测（Event Stream 统一）、能力可组合（Skill Capability Package）、环境可控（Sandbox Provider）"。改造走五层目标架构（Role / Orchestration / Runtime / Capability / Provider），以 AgentRuntime 收敛为中心，演进式推进——**P0 主线已收官**：Event Stream 写侧 + 消费读侧闭环，Runtime 真身组装并注入主链（`runtime-enabled` 开关灰度，默认走 Legacy），八件套全部落地；P1 起进入 Skill 元数据化 / Sandbox 隔离实现 / Recovery 消费面。
+**V2 在升级什么：**借鉴 DeepSeek Harness 的三个核心思想，把平台从"能调度"升级为"执行过程可观测（Event Stream 统一）、能力可组合（Skill Capability Package）、环境可控（Sandbox Provider）"。改造走五层目标架构（Role / Orchestration / Runtime / Capability / Provider），以 AgentRuntime 收敛为中心，演进式推进——**P0 主线已收官**：Event Stream 写侧闭环，Runtime 真身组装并注入主链（`runtime-enabled` 开关灰度，默认走 Legacy；dev 灰度第 0 步已闭合），八件套全部落地；**P1 进行中**：Replay / Audit 消费面 API + UI 已暴露、外部执行轨迹加厚，Skill 元数据化联动与拆解技能通路贯通，剩余 Instructions 结构化 / Sandbox 隔离实现 / Recovery 消费面。
 
 **这个项目的独特价值：**不是又一个 Agent 框架，而是**让异构 Agent 在同一套状态机、同一条事件流、同一个质量门下协同工作的分布式平台**——借鉴 Harness 的执行体系思想，但服务的是多 Agent 编排的更大图景。
