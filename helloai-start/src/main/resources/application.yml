@@ -13,7 +13,7 @@ spring:
     exclude: org.springframework.ai.model.deepseek.autoconfigure.DeepSeekChatAutoConfiguration
   # === 默认激活 local 环境（本地 Docker），切换到 dev 使用 spring.profiles.active=dev ===
   profiles:
-    active: dev
+    active: local
   # === 时区锁定：与 HelloAIApplication.main() 的 TimeZone.setDefault 一致 ===
   # Date / LocalDateTime 等不带时区偏移的类型也按北京时间序列化，避免 UTC 少 8 小时
   jackson:
@@ -179,6 +179,8 @@ helloai:
   execution:
     enabled: true
     mock-mode: false
+    # P0-B：Runtime 真身开关（false=Legacy 主路径，true=RuntimeTurnExecutor；回滚=置回 false 重启）
+    runtime-enabled: false
     require-vault: true
     provider: deepseek
     model: deepseek-chat

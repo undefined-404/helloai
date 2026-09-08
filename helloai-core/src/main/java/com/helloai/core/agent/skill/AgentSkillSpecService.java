@@ -1,6 +1,7 @@
 package com.helloai.core.agent.skill;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Agent 技能规范库（eng-*）解析服务（§5.1 Agent Skill 职责归属 agent 域；Phase 1 Step 1 fix：
@@ -21,17 +22,30 @@ public interface AgentSkillSpecService {
     /**
      * 解析结果 record（D1=B：SKILL_RESOLVED 事件 payload 字段源 + Prompt 装配共用）。
      *
-     * <p>三字段恒在（null/空串规范化），Replay 无需特判。
+     * <p>五字段恒在（null/空集规范化），Replay 无需特判。
      *
      * @param requiredSkills 任务声明的原始技能标签列表（不可为 null，空时为 {@link List#of()}）
      * @param matchedLabels 命中且成功加载速览的 eng-* 规范标签（不可为 null，空时为 {@link List#of()}）
      * @param section 渲染后的 Markdown 段（不可为 null，空时为 {@code ""}）
+     * @param resolvedVersions 命中标签 → {@link SkillPackage#version()}（不可为 null，空时为 {@link Map#of()}）
+     * @param requiredTools 命中技能 requiredTools 并集（去重、保持 KNOWN_SPECS 声明序追加；不可为 null，空时为 {@link List#of()}）
      */
-    record ResolvedSpec(List<String> requiredSkills, List<String> matchedLabels, String section) {
+    record ResolvedSpec(List<String> requiredSkills, List<String> matchedLabels, String section,
+                        Map<String, String> resolvedVersions, List<String> requiredTools) {
         public ResolvedSpec {
             requiredSkills = requiredSkills == null ? List.of() : requiredSkills;
             matchedLabels = matchedLabels == null ? List.of() : matchedLabels;
             section = section == null ? "" : section;
+            resolvedVersions = resolvedVersions == null ? Map.of() : Map.copyOf(resolvedVersions);
+            requiredTools = requiredTools == null ? List.of() : List.copyOf(requiredTools);
+        }
+
+        /**
+         * 便捷构造器（G-004 增量 A）：无命中场景（空技能 / 全未命中）等价于版本空映射 + 工具空并集。
+         * 跨包调用（Legacy / Runtime 执行链兜底与测试 stub），显式 public。
+         */
+        public ResolvedSpec(List<String> requiredSkills, List<String> matchedLabels, String section) {
+            this(requiredSkills, matchedLabels, section, Map.of(), List.of());
         }
     }
 

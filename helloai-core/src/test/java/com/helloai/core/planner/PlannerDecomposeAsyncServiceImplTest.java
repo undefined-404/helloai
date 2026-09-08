@@ -250,6 +250,57 @@ class PlannerDecomposeAsyncServiceImplTest {
     }
 
     // ══════════════════════════════════════════════════════════════
+    //  G-004 增量 B：任务技能要求注入拆解 Prompt（真实流量行使收口）
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("G-004 增量 B：任务声明技能 → 拆解 Prompt 注入技能清单与对齐要求（占位符实渲染）")
+    void shouldInjectRequiredSkillsIntoDecomposePrompt() {
+        Task task = planningTask();
+        task.setRequiredSkills(List.of("eng-doc-standard", "eng-verification"));
+        when(taskService.getById(TASK_ID)).thenReturn(task);
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"文档产出","content":"c","deliverable":"d","acceptance":"a"}]
+                        """, "stop", "llm", 100));
+        when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(draft(11L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        ArgumentCaptor<AgentTask> captor = ArgumentCaptor.forClass(AgentTask.class);
+        verify(platformAgentExecutionService).executeSync(any(Agent.class), captor.capture());
+        String prompt = captor.getValue().getUserPrompt();
+        // 声明序逗号拼接 + 技能对齐要求（与执行侧注入、审查侧核验同一清单）
+        assertThat(prompt)
+                .contains("任务技能要求：eng-doc-standard, eng-verification")
+                .contains("技能对齐")
+                .doesNotContain("{{TASK_REQUIRED_SKILLS}}");
+    }
+
+    @Test
+    @DisplayName("G-004 增量 B：任务未声明技能 → 占位符降级文案，无标签泄漏（行为零变化）")
+    void shouldUseFallbackWordingWhenNoRequiredSkills() {
+        when(taskService.getById(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"普通执行","content":"c","deliverable":"d","acceptance":"a"}]
+                        """, "stop", "llm", 100));
+        when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(draft(11L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        ArgumentCaptor<AgentTask> captor = ArgumentCaptor.forClass(AgentTask.class);
+        verify(platformAgentExecutionService).executeSync(any(Agent.class), captor.capture());
+        String prompt = captor.getValue().getUserPrompt();
+        assertThat(prompt).contains("任务技能要求：（任务未声明技能要求）");
+        // 占位符已完全渲染无残留（模板第 7 条示例含技能名是固定模板文案，非泄漏；
+        // 降级语义 = 占位符被降级文案替换且无未渲染残留）
+        assertThat(prompt).doesNotContain("{{TASK_REQUIRED_SKILLS}}");
+    }
+
+    // ══════════════════════════════════════════════════════════════
     //  契约先行拆解（Phase 2）：contract 字段解析与落库
     // ══════════════════════════════════════════════════════════════
 

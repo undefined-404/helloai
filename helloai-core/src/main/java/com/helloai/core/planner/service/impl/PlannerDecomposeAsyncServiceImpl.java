@@ -174,7 +174,8 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
     //  内部实现
     // ══════════════════════════════════════════════════════════════
 
-    /** 加载 classpath 模板并替换占位符。 */
+    /** 加载 classpath 模板并替换占位符。G-004 增量 B：注入任务技能要求（task.required_skills，
+     * 与执行侧 resolve 命中注入、审查侧核验同一清单——拆解规划须与技能规范对齐）。 */
     private String renderPrompt(Task task) {
         ClassPathResource resource = new ClassPathResource(PROMPT_TEMPLATE_PATH);
         if (!resource.exists()) {
@@ -190,7 +191,16 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
                 .replace("{{TASK_TITLE}}", task.getTitle() != null ? task.getTitle() : "")
                 .replace("{{TASK_DESCRIPTION}}",
                         task.getDescription() != null && !task.getDescription().isBlank()
-                                ? task.getDescription() : "（无补充描述，请依据标题拆解）");
+                                ? task.getDescription() : "（无补充描述，请依据标题拆解）")
+                .replace("{{TASK_REQUIRED_SKILLS}}", renderRequiredSkills(task.getRequiredSkills()));
+    }
+
+    /** 技能要求占位符渲染：保持声明序逗号拼接；null/空 → 显式降级文案（行为零变化）。 */
+    private static String renderRequiredSkills(List<String> requiredSkills) {
+        if (requiredSkills == null || requiredSkills.isEmpty()) {
+            return "（任务未声明技能要求）";
+        }
+        return String.join(", ", requiredSkills);
     }
 
     /** 解析 LLM 输出为草案条目：strip markdown fence 容错 + 逐条校验必填字段与数量上限。 */

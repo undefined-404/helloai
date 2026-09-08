@@ -193,13 +193,14 @@ class SubTaskExecutionServiceTest {
     class SkillResolved {
 
         @Test
-        @DisplayName("should record SKILL_RESOLVED step=5 with requiredSkills + resolvedSpecs payload")
+        @DisplayName("should record SKILL_RESOLVED step=5 with requiredSkills + resolvedSpecs + resolvedVersions payload")
         void shouldRecordSkillResolvedStep5WithBothPayloadFields() {
-            // D1=B payload：声明非空 + 命中非空，覆盖正常路径
+            // D1=B payload：声明非空 + 命中非空 + 版本映射（G-004 增量 A），覆盖正常路径
             AgentSkillSpecService.ResolvedSpec resolved = new AgentSkillSpecService.ResolvedSpec(
                     List.of("eng-code-review", "eng-doc-standard"),
                     List.of("eng-code-review"),
-                    "## 平台技能规范\n### eng-code-review\n速览...");
+                    "## 平台技能规范\n### eng-code-review\n速览...",
+                    Map.of("eng-code-review", "1.0.0"), List.of());
             // 覆盖 @BeforeEach 默认 stub 为非空值（同名 stub 后置覆盖）
             lenient().when(agentSkillSpecService.resolve(any())).thenReturn(resolved);
 
@@ -212,7 +213,7 @@ class SubTaskExecutionServiceTest {
 
             subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
 
-            // 过滤 executeOnce 链路上的 5 次 recordEventSafely 调用，只断言 SKILL_RESOLVED 埋点（step=5 + type=SKILL_RESOLVED + payload 两键）
+            // 过滤 executeOnce 链路上的 5 次 recordEventSafely 调用，只断言 SKILL_RESOLVED 埋点（step=5 + type=SKILL_RESOLVED + payload 三键）
             ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
             verify(agentEventRecorder, atLeastOnce()).record(
                     anyString(), any(), any(), anyInt(),
@@ -220,7 +221,8 @@ class SubTaskExecutionServiceTest {
                     payloadCaptor.capture());
             assertThat(payloadCaptor.getValue())
                     .containsEntry("requiredSkills", List.of("eng-code-review", "eng-doc-standard"))
-                    .containsEntry("resolvedSpecs", List.of("eng-code-review"));
+                    .containsEntry("resolvedSpecs", List.of("eng-code-review"))
+                    .containsEntry("resolvedVersions", Map.of("eng-code-review", "1.0.0"));
         }
 
         @Test
@@ -240,7 +242,7 @@ class SubTaskExecutionServiceTest {
 
             subTaskExecutionService.executeOnce(subTask, agent, List.of(), List.of(), null);
 
-            // 只断言 SKILL_RESOLVED 埋点（requiredSkills 为空时仍恒发，payload 两键值为空数组）
+            // 只断言 SKILL_RESOLVED 埋点（requiredSkills 为空时仍恒发，payload 三键值为空）
             ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
             verify(agentEventRecorder, atLeastOnce()).record(
                     anyString(), any(), any(), anyInt(),
@@ -248,7 +250,8 @@ class SubTaskExecutionServiceTest {
                     payloadCaptor.capture());
             assertThat(payloadCaptor.getValue())
                     .containsEntry("requiredSkills", List.of())
-                    .containsEntry("resolvedSpecs", List.of());
+                    .containsEntry("resolvedSpecs", List.of())
+                    .containsEntry("resolvedVersions", Map.of());
         }
 
         @Test
@@ -360,6 +363,43 @@ class SubTaskExecutionServiceTest {
             assertThat(payloadCaptor.getValue())
                     .containsEntry("tools", List.of("pullTasks"))
                     .containsEntry("resolvedTools", List.of());
+        }
+
+        @Test
+        @DisplayName("G-004 增量 A：命中技能 requiredTools 并入启用工具（TOOL_RESOLVED 前合并）")
+        void shouldMergeSkillRequiredToolsIntoEnabledTools() {
+            AgentSkillSpecService.ResolvedSpec resolved = new AgentSkillSpecService.ResolvedSpec(
+                    List.of("eng-code-review"), List.of("eng-code-review"), "",
+                    Map.of("eng-code-review", "1.0.0"), List.of("skillToolA"));
+            lenient().when(agentSkillSpecService.resolve(any())).thenReturn(resolved);
+            // 并集：命令 tools 在前、技能声明工具按 resolve 序追加
+            when(toolRegistry.resolve(List.of("pullTasks", "skillToolA")))
+                    .thenReturn(List.of(
+                            new ToolDefinition("pullTasks", "拉取待处理收件箱"),
+                            new ToolDefinition("skillToolA", "技能声明工具")));
+
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            Agent agent = agent();
+
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+
+            subTaskExecutionService.executeOnce(subTask, agent, List.of("eng-code-review"),
+                    List.of("pullTasks"), null);
+
+            // Registry 收到并集 + payload tools 呈现并集（含命中 resolveTool 元数据）
+            verify(toolRegistry).resolve(List.of("pullTasks", "skillToolA"));
+            ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(agentEventRecorder, atLeastOnce()).record(
+                    anyString(), any(), any(), anyInt(),
+                    eq(6), eq(AgentEventType.TOOL_RESOLVED), any(),
+                    payloadCaptor.capture());
+            assertThat(payloadCaptor.getValue())
+                    .containsEntry("tools", List.of("pullTasks", "skillToolA"))
+                    .containsEntry("resolvedTools", List.of(
+                            Map.of("name", "pullTasks", "description", "拉取待处理收件箱"),
+                            Map.of("name", "skillToolA", "description", "技能声明工具")));
         }
     }
 

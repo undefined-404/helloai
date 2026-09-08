@@ -21,6 +21,7 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.tool.ToolCallbackProvider;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -146,6 +147,73 @@ class RuntimeTurnExecutorTest {
 
         assertThat(result.getStatus()).isEqualTo(ExecutionStatus.SUCCESS);
         verifyNoInteractions(eventRecorder);
+    }
+
+    @Test
+    @DisplayName("G-004 增量 A：SKILL_RESOLVED payload 携带命中技能版本（resolvedVersions）")
+    void shouldRecordSkillResolvedWithVersions() {
+        when(agentSkillSpecService.resolve(any()))
+                .thenReturn(new AgentSkillSpecService.ResolvedSpec(
+                        List.of("s1"), List.of("s1"), "", Map.of("s1", "1.0.0"), List.of()));
+        when(toolRegistry.resolve(any())).thenReturn(List.of());
+        when(toolCallbackProvider.getToolCallbacks()).thenReturn(new org.springframework.ai.tool.ToolCallback[0]);
+        when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("ok", null, 1, 0));
+
+        new RuntimeTurnExecutor(
+                agentLoop, toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider)
+                .execute(context());
+
+        org.mockito.ArgumentCaptor<Map<String, Object>> payloadCaptor =
+                org.mockito.ArgumentCaptor.forClass(Map.class);
+        verify(eventRecorder).record(eqRun("run-1-1"), eqLong(1L), eqLong(10L), eqInt(1), eqInt(5),
+                eqType(AgentEventType.SKILL_RESOLVED), eqLong(3L), payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue())
+                .containsEntry("requiredSkills", List.of("s1"))
+                .containsEntry("resolvedSpecs", List.of("s1"))
+                .containsEntry("resolvedVersions", Map.of("s1", "1.0.0"));
+    }
+
+    @Test
+    @DisplayName("G-004 增量 A：启用工具 = 上下文 tools ∪ 技能 requiredTools（并集去重保序）")
+    void shouldMergeSkillRequiredToolsIntoEnabledTools() {
+        when(agentSkillSpecService.resolve(any()))
+                .thenReturn(new AgentSkillSpecService.ResolvedSpec(
+                        List.of("s1"), List.of("s1"), "", Map.of("s1", "1.0.0"), List.of("t2", "t3")));
+        when(toolRegistry.resolve(List.of("t1", "t2", "t3")))
+                .thenReturn(List.of(new ToolDefinition("t3", "skill tool")));
+        when(toolCallbackProvider.getToolCallbacks()).thenReturn(new org.springframework.ai.tool.ToolCallback[0]);
+        when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("ok", null, 1, 0));
+
+        new RuntimeTurnExecutor(
+                agentLoop, toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider)
+                .execute(context());
+
+        // Registry 收到并集（上下文工具在前、技能声明工具按 resolve 序追加）
+        verify(toolRegistry).resolve(List.of("t1", "t2", "t3"));
+        // TOOL_RESOLVED payload 呈现并集
+        org.mockito.ArgumentCaptor<Map<String, Object>> payloadCaptor =
+                org.mockito.ArgumentCaptor.forClass(Map.class);
+        verify(eventRecorder).record(eqRun("run-1-1"), eqLong(1L), eqLong(10L), eqInt(1), eqInt(6),
+                eqType(AgentEventType.TOOL_RESOLVED), eqLong(3L), payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue())
+                .containsEntry("tools", List.of("t1", "t2", "t3"));
+    }
+
+    @Test
+    @DisplayName("G-004 增量 A：无技能声明工具时启用清单与上下文一致（兼容回归）")
+    void shouldKeepEnabledToolsUnchangedWhenSkillsDeclareNone() {
+        when(agentSkillSpecService.resolve(any()))
+                .thenReturn(new AgentSkillSpecService.ResolvedSpec(
+                        List.of("s1"), List.of("s1"), "", Map.of("s1", "1.0.0"), List.of()));
+        when(toolRegistry.resolve(List.of("t1"))).thenReturn(List.of());
+        when(toolCallbackProvider.getToolCallbacks()).thenReturn(new org.springframework.ai.tool.ToolCallback[0]);
+        when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("ok", null, 1, 0));
+
+        new RuntimeTurnExecutor(
+                agentLoop, toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider)
+                .execute(context());
+
+        verify(toolRegistry).resolve(List.of("t1"));
     }
 
     private AgentContext context() {

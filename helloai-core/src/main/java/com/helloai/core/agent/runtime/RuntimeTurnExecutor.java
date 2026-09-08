@@ -23,6 +23,7 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -72,16 +73,21 @@ public class RuntimeTurnExecutor implements AgentRuntime {
                 safeMap("status", "IN_PROGRESS", "assignedAgentId", ctx.getAgentId()));
 
         // 3. SKILL_RESOLVED（step=5）：按上下文 skills 解析（接口契约 resolve 恒非 null，此处防御兜底）
+        // G-004 增量 A：payload 携带命中技能版本（resolvedVersions）
         List<String> skills = ctx.getSkills() != null ? ctx.getSkills() : List.of();
         AgentSkillSpecService.ResolvedSpec resolved = agentSkillSpecService.resolve(skills);
         if (resolved == null) {
             resolved = new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), "");
         }
         record(ctx, 5, AgentEventType.SKILL_RESOLVED,
-                safeMap("requiredSkills", resolved.requiredSkills(), "resolvedSpecs", resolved.matchedLabels()));
+                safeMap("requiredSkills", resolved.requiredSkills(),
+                        "resolvedSpecs", resolved.matchedLabels(),
+                        "resolvedVersions", resolved.resolvedVersions()));
 
         // 4. TOOL_RESOLVED（step=6）：启用工具解析元数据（ToolRegistry 契约恒非 null）
-        List<String> enabledTools = ctx.getTools() != null ? ctx.getTools() : List.of();
+        // G-004 增量 A：启用清单 = 上下文 tools ∪ 命中技能 requiredTools（并集去重保序），
+        // 无技能时行为与旧版一致（mergeTools 原样返回）
+        List<String> enabledTools = mergeTools(ctx.getTools(), resolved.requiredTools());
         List<ToolDefinition> resolvedTools = toolRegistry.resolve(enabledTools);
         if (resolvedTools == null) {
             resolvedTools = List.of();
@@ -154,6 +160,23 @@ public class RuntimeTurnExecutor implements AgentRuntime {
             log.warn("RuntimeTurnExecutor: 工具回调解析失败（循环内无工具）: err={}", e.getMessage());
         }
         return callbacks;
+    }
+
+    /**
+     * 启用工具并集（G-004 增量 A）：上下文 tools（agent 侧可用工具）∪ 命中技能
+     * requiredTools（技能声明工具）。LinkedHashSet 去重保序——上下文工具在前、技能声明
+     * 工具按 resolve 返回序追加；纯函数式，不查询任何域。技能未声明工具时原样返回。
+     */
+    private static List<String> mergeTools(List<String> tools, List<String> skillRequiredTools) {
+        if (skillRequiredTools == null || skillRequiredTools.isEmpty()) {
+            return tools != null ? tools : List.of();
+        }
+        LinkedHashSet<String> merged = new LinkedHashSet<>();
+        if (tools != null) {
+            merged.addAll(tools);
+        }
+        merged.addAll(skillRequiredTools);
+        return List.copyOf(merged);
     }
 
     /** 沙箱策略观测（best-effort 日志，不参与业务决策）。 */

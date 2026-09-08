@@ -1,7 +1,7 @@
 # Planner 任务拆解 Prompt 模板
 <!--
   由 PlannerAnalysisService 加载渲染（classpath:prompts/planner-decompose.md）。
-  占位符：{{TASK_TITLE}} / {{TASK_DESCRIPTION}} 由服务端替换。
+  占位符：{{TASK_TITLE}} / {{TASK_DESCRIPTION}} / {{TASK_REQUIRED_SKILLS}} 由服务端替换。
   设计参考 openMoss task-planner.md 拆分四要素：目标 / 交付物 / 验收标准 / 优先级。
 -->
 
@@ -11,6 +11,7 @@
 
 - 任务标题：{{TASK_TITLE}}
 - 任务描述：{{TASK_DESCRIPTION}}
+- 任务技能要求：{{TASK_REQUIRED_SKILLS}}
 
 ## 拆解要求（四要素）
 
@@ -21,6 +22,7 @@
 4. **优先级（priority）**：HIGH / MEDIUM / LOW 之一；被其他子任务依赖的前置工作优先级更高。
 5. **依赖（dependsOn）**：本子任务开工前必须先完成的前置子任务序号数组（从 1 开始，指向本数组中更早的元素）；无前置依赖时为空数组 []。
 6. **契约（contract）**：本子任务是否为「契约定义」子任务（true / false）。契约定义子任务的 deliverable 是接口签名 / 数据模型 / 错误码表等跨子任务契约文档，其产出会全局注入所有下游子任务的执行上下文，因此必须排在整个 DAG 的最上游（第 1 位、无前置依赖），且一个任务至多 1 个。
+7. **技能对齐（仅当任务技能要求非空）**：任务声明了技能要求时，子任务的规划内容与验收标准必须与对应技能规范对齐（例如声明 eng-doc-standard 时产出须符合文档规范、声明 eng-verification 时验收须含可复现验证证据）；平台会按同一技能清单在执行侧注入规范、审查侧核验，拆解侧必须与之一致。
 
 ## 拆解原则
 

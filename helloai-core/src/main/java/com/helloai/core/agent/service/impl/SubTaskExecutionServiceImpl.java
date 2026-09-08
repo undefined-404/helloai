@@ -32,6 +32,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -316,16 +317,20 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
                 .context(context)
                 .requiredCapabilities(Map.of())
                 .build();
-        // Phase 1 T2：SKILL_RESOLVED（step=5，解析完成恒发；D1=B payload 含 requiredSkills + resolvedSpecs）
+        // Phase 1 T2：SKILL_RESOLVED（step=5，解析完成恒发；D1=B payload 含 requiredSkills +
+        // resolvedSpecs + resolvedVersions；G-004 增量 A 起携带命中技能版本）
         recordEventSafely(AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
                 subTask.getTaskId(), subTaskId, runTurn, 5,
                 AgentEventType.SKILL_RESOLVED, agent.getId(),
                 safeMap("requiredSkills", resolved.requiredSkills(),
-                        "resolvedSpecs", resolved.matchedLabels()));
+                        "resolvedSpecs", resolved.matchedLabels(),
+                        "resolvedVersions", resolved.resolvedVersions()));
         // Phase 1 Step 2：TOOL_RESOLVED（step=6，工具解析完成恒发；与 SKILL_RESOLVED 对称，
         // payload 含 tools 启用清单 + resolvedTools 命中元数据 name/description；
         // ToolDefinition 构造器已归一化 name/description 非 null，Map.of 安全）
-        List<String> enabledTools = tools != null ? tools : List.of();
+        // G-004 增量 A：启用清单 = 命令 tools ∪ 命中技能 requiredTools（并集去重保序），
+        // 技能声明工具依赖生效；无技能时行为与旧版逐字节一致（mergeTools 原样返回）
+        List<String> enabledTools = mergeTools(tools, resolved.requiredTools());
         List<ToolDefinition> resolvedTools = toolRegistry.resolve(enabledTools);
         if (resolvedTools == null) {
             // 契约承诺 resolve 恒非 null（best-effort 返回空列表）；此处防御非 best-effort 替换实现
@@ -827,6 +832,24 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
                     dep.getId(), e.getMessage());
         }
         return SubTaskOutputExtractor.extractExecutionOutput(dep);
+    }
+
+    /**
+     * 启用工具并集（G-004 增量 A）：命令装箱 tools（agent 侧可用工具）∪ 命中技能
+     * requiredTools（技能声明工具）。LinkedHashSet 去重保序——命令工具在前、技能声明
+     * 工具按 resolve 返回序追加；纯函数式，不查询任何域。技能未声明工具时原样返回，
+     * 与旧行为一致。
+     */
+    private static List<String> mergeTools(List<String> tools, List<String> skillRequiredTools) {
+        if (skillRequiredTools == null || skillRequiredTools.isEmpty()) {
+            return tools != null ? tools : List.of();
+        }
+        LinkedHashSet<String> merged = new LinkedHashSet<>();
+        if (tools != null) {
+            merged.addAll(tools);
+        }
+        merged.addAll(skillRequiredTools);
+        return List.copyOf(merged);
     }
 
     /** 依赖产出段装配结果：渲染文本 + 可观测统计（depCount/loadedCount/truncatedCount/degraded）。 */

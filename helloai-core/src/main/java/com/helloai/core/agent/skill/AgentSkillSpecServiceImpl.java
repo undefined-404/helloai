@@ -32,10 +32,15 @@ public class AgentSkillSpecServiceImpl implements AgentSkillSpecService {
     private static final String DETAIL_SEPARATOR = "\n---\n";
 
     /**
-     * 一次性解析任务平台技能规范（D1=B）：声明 / 命中 / 渲染三件套，命中语义与
-     * Prompt 注入事实严格一致（两层过滤：标签命中 + 速览非空）。
+     * 一次性解析任务平台技能规范（D1=B）：声明 / 命中 / 渲染三件套 + 版本映射 + 工具并集，
+     * 命中语义与 Prompt 注入事实严格一致（两层过滤：标签命中 + 速览非空）。
      *
-     * <p>best-effort：requiredSkills 为 null / 空 / 未命中均返回空三字段，不抛异常。</p>
+     * <p>G-004 增量 A（联动接线）：resolvedVersions 供 SKILL_RESOLVED 事件携带版本；
+     * requiredTools 为命中技能的声明工具并集（去重、保持 KNOWN_SPECS 声明序追加），
+     * 供执行侧并入启用工具清单（TOOL_RESOLVED 前合并）。当前 3 个 eng-* 技能 requiredTools
+     * 均未声明（不臆造），并集为空——结构就位，待技能声明工具依赖后生效。</p>
+     *
+     * <p>best-effort：requiredSkills 为 null / 空 / 未命中均返回空五字段，不抛异常。</p>
      */
     @Override
     public ResolvedSpec resolve(List<String> requiredSkills) {
@@ -45,6 +50,8 @@ public class AgentSkillSpecServiceImpl implements AgentSkillSpecService {
         }
         List<String> normalized = SkillNormalizer.normalizeAll(required);
         List<String> matched = new ArrayList<>();
+        Map<String, String> versions = new LinkedHashMap<>();
+        List<String> tools = new ArrayList<>();
         StringBuilder specs = new StringBuilder();
         for (Map.Entry<String, SkillPackage> entry : KNOWN_SPECS.entrySet()) {
             if (!normalized.contains(entry.getKey())) {
@@ -56,6 +63,12 @@ public class AgentSkillSpecServiceImpl implements AgentSkillSpecService {
                 continue;
             }
             matched.add(entry.getKey());
+            versions.put(entry.getKey(), pkg.version());
+            for (String tool : pkg.requiredTools()) {
+                if (tool != null && !tool.isBlank() && !tools.contains(tool)) {
+                    tools.add(tool);
+                }
+            }
             specs.append("\n### ").append(entry.getKey()).append('\n');
             specs.append(summary).append('\n');
         }
@@ -66,7 +79,7 @@ public class AgentSkillSpecServiceImpl implements AgentSkillSpecService {
                 + "> 以下规范由平台按任务 required_skills 命中注入；产出必须按此执行，"
                 + "审查侧按同一清单核验。\n"
                 + specs;
-        return new ResolvedSpec(required, matched, section);
+        return new ResolvedSpec(required, matched, section, versions, tools);
     }
 
     @Override

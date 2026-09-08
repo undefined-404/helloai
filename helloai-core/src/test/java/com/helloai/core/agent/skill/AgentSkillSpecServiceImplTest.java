@@ -3,7 +3,9 @@ package com.helloai.core.agent.skill;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -159,5 +161,63 @@ class AgentSkillSpecServiceImplTest {
         assertThat(service.resolvePackages(List.of("eng-doc-standard", "eng-code-review")))
                 .extracting(SkillPackage::name)
                 .containsExactly("eng-code-review", "eng-doc-standard");
+    }
+
+    @Test
+    @DisplayName("G-004 增量 A：命中返回标签→版本映射（SKILL_RESOLVED payload 字段源）")
+    void shouldResolveVersionsOnHit() {
+        AgentSkillSpecService.ResolvedSpec resolved = service.resolve(
+                List.of("eng-code-review", "eng-doc-standard"));
+        assertThat(resolved.resolvedVersions())
+                .containsEntry("eng-code-review", "1.0.0")
+                .containsEntry("eng-doc-standard", "1.0.0");
+        // 命中标签逐键对应（与 matchedLabels 同构，不引入未命中项）
+        assertThat(resolved.resolvedVersions()).hasSameSizeAs(resolved.matchedLabels());
+    }
+
+    @Test
+    @DisplayName("G-004 增量 A：当前技能 requiredTools 均未声明（不臆造），并集恒空")
+    void shouldKeepRequiredToolsEmptyWhenSkillsDeclareNone() {
+        AgentSkillSpecService.ResolvedSpec resolved = service.resolve(
+                List.of("eng-code-review", "eng-verification"));
+        assertThat(resolved.requiredTools()).isEmpty();
+        assertThat(resolved.matchedLabels()).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("G-004 增量 A：空输入与未知标签 → 版本映射与工具并集均空")
+    void shouldKeepVersionsAndToolsEmptyOnNoHit() {
+        AgentSkillSpecService.ResolvedSpec empty = service.resolve(List.of());
+        assertThat(empty.resolvedVersions()).isEmpty();
+        assertThat(empty.requiredTools()).isEmpty();
+
+        AgentSkillSpecService.ResolvedSpec unknown = service.resolve(List.of("unknown-skill-a"));
+        assertThat(unknown.resolvedVersions()).isEmpty();
+        assertThat(unknown.requiredTools()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("G-004 增量 A：resolve 工具并集 = 命中技能 requiredTools 声明的忠实并集（契约式结构回归）")
+    void shouldUnionRequiredToolsFreshlyFromDeclarations() {
+        // 事实源为 knownSpecs 元数据（不反射替换 static final——JDK 17 禁止写入）；
+        // 以 listPackages 手动重算期望并集，断言 resolve 忠实传递全部命中声明（去重为
+        // 消费侧 mergeTools 语义；本用例保证未来技能声明 requiredTools 后并集自动生效）
+        List<String> requested = List.of("eng-code-review", "eng-verification");
+        List<String> expected = new ArrayList<>();
+        for (SkillPackage pkg : service.listPackages()) {
+            if (!requested.contains(pkg.name())) {
+                continue;
+            }
+            for (String tool : pkg.requiredTools()) {
+                if (tool != null && !tool.isBlank() && !expected.contains(tool)) {
+                    expected.add(tool);
+                }
+            }
+        }
+        AgentSkillSpecService.ResolvedSpec resolved = service.resolve(requested);
+        assertThat(resolved.requiredTools()).containsExactlyElementsOf(expected);
+        assertThat(resolved.resolvedVersions())
+                .containsEntry("eng-code-review", "1.0.0")
+                .containsEntry("eng-verification", "1.0.0");
     }
 }
