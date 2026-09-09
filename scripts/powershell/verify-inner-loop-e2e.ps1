@@ -2,8 +2,10 @@
 # helloai 内循环最小流程 E2E 验证脚本（V27）
 # 用途：真实链路验证"拆解(带依赖) → ready 分发 → 平台 LLM 执行 → LLM 自动核验
 #       → 下游解锁 → Task 自动收尾"完整闭环（不使用 mock，全程走 DB + LLM）：
-#       POST /api/tasks/{id}/plan          LLM 拆解（草案带 dependsOn）
-#       POST /api/tasks/{id}/plan/confirm  转正 + 环校验 + 序号→id 映射落库
+#       POST /api/tasks/planById/{id}           触发 LLM 拆解（拆解异步化：同步段只做状态
+#                                                推进并立即返回空列表，草案经
+#                                                findPlanByTaskId 轮询获取，草案带 dependsOn）
+#       POST /api/tasks/confirmPlanByTaskId/{id}  转正 + 环校验 + 序号→id 映射落库
 #       （后台）依赖 ready 放行 → 自动执行 → submit(REVIEW) → 自动核验 → DONE
 #       （后台）complete 后解锁下游 → 全部 DONE 后 Task 自动 DONE
 # Ref:  doc/HelloAI_实现差距表.md（V27 内循环最小流程）
@@ -24,7 +26,7 @@ param(
     # require-vault=true 时绑定给 Agent 的托管 API Key；默认取环境变量，
     # 再回退 application.yml 中 spring.ai.deepseek.api-key 的同款默认值
     [string]$LlmApiKey = $env:DEEPSEEK_API_KEY,
-    [int]$PlanTimeoutSec = 180,
+    [int]$PlanTimeoutSec = 360,
     [int]$LoopTimeoutSec = 900,
     [int]$PollIntervalSec = 10
 )
@@ -55,9 +57,23 @@ function Get-SubTasks([string]$TaskId, [hashtable]$Headers) {
 }
 
 function Get-Task([string]$TaskId, [hashtable]$Headers) {
-    $resp = Invoke-Json -Method "Get" -Url ($BaseUrl + "/api/tasks/" + $TaskId) -Body $null -Headers $Headers
+    $resp = Invoke-Json -Method "Get" -Url ($BaseUrl + "/api/tasks/getById/" + $TaskId) -Body $null -Headers $Headers
     Assert-True ($resp.code -eq 200) ("get task code=" + $resp.code + " msg=" + $resp.msg)
     return $resp.data
+}
+
+# 拆解异步化契约：planById 同步段只做校验与状态推进并立即返回空列表，
+# 草案经 findPlanByTaskId 轮询获取（每 3s 一次，直到 >=1 或超过 MaxSecs）
+function Wait-Drafts([string]$TaskId, [int]$MaxSecs, [hashtable]$Headers) {
+    $waited = 0
+    while ($waited -lt $MaxSecs) {
+        $listResp = Invoke-Json -Method "Get" -Url ($BaseUrl + "/api/tasks/findPlanByTaskId/" + $TaskId) -Body $null -Headers $Headers
+        $drafts = @($listResp.data)
+        if ($drafts.Count -ge 1) { return $drafts }
+        Start-Sleep -Seconds 3
+        $waited = $waited + 3
+    }
+    return @($listResp.data)
 }
 
 function Register-LlmAgent([string]$Name, [string]$Role, [hashtable]$Headers) {
@@ -127,11 +143,11 @@ Assert-True ($taskResp.code -eq 200) ("create task code=" + $taskResp.code + " m
 $taskId = [string]$taskResp.data.id
 Write-Host ("taskId=" + $taskId)
 
-Write-Host ("STEP4: trigger decompose (LLM call, timeout=" + $PlanTimeoutSec + "s)")
-$planResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/tasks/" + $taskId + "/plan") -Body @{} `
-    -Headers $adminHeaders -TimeoutSec $PlanTimeoutSec
+Write-Host ("STEP4: trigger decompose (async: planById returns after state transition, poll drafts; timeout=" + $PlanTimeoutSec + "s)")
+$planResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/tasks/planById/" + $taskId) -Body @{} `
+    -Headers $adminHeaders -TimeoutSec 30
 Assert-True ($planResp.code -eq 200) ("plan code=" + $planResp.code + " msg=" + $planResp.msg)
-$drafts = @($planResp.data)
+$drafts = @(Wait-Drafts -TaskId $taskId -MaxSecs $PlanTimeoutSec -Headers $adminHeaders)
 Assert-True ($drafts.Count -ge 1) ("expected >=1 drafts, actual=" + $drafts.Count)
 $withDeps = 0
 foreach ($d in $drafts) {
@@ -146,7 +162,7 @@ if ($withDeps -eq 0) {
 }
 
 Write-Host "STEP5: confirm plan (cycle validation + seq->id mapping happens server-side)"
-$confirmResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/tasks/" + $taskId + "/plan/confirm") -Body @{} -Headers $adminHeaders
+$confirmResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/tasks/confirmPlanByTaskId/" + $taskId) -Body @{} -Headers $adminHeaders
 Assert-True ($confirmResp.code -eq 200) ("confirm code=" + $confirmResp.code + " msg=" + $confirmResp.msg)
 
 Write-Host "STEP6: assert ready-gating right after confirm"

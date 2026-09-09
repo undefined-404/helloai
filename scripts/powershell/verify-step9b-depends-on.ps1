@@ -31,6 +31,20 @@ function Invoke-Json([string]$Method, [string]$Url, [object]$Body, [hashtable]$H
     return Invoke-RestMethod -Method $Method -Uri $Url -Headers $Headers -ContentType 'application/json' -Body $json -TimeoutSec $TimeoutSec
 }
 
+# 拆解异步化契约：planById 同步段只做校验与状态推进并立即返回空列表，
+# 草案经 findPlanByTaskId 轮询获取（每 3s 一次，直到 >=1 或超过 MaxSecs）
+function Wait-Drafts([string]$TaskId, [int]$MaxSecs, [hashtable]$Headers) {
+    $waited = 0
+    while ($waited -lt $MaxSecs) {
+        $listResp = Invoke-Json -Method 'Get' -Url ($BaseUrl + '/api/tasks/findPlanByTaskId/' + $TaskId) -Body $null -Headers $Headers
+        $drafts = @($listResp.data)
+        if ($drafts.Count -ge 1) { return $drafts }
+        Start-Sleep -Seconds 3
+        $waited = $waited + 3
+    }
+    return @($listResp.data)
+}
+
 function Run-Psql {
     param([Parameter(Mandatory=$true)][string]$Sql)
     $tmpSql = [System.IO.Path]::GetTempFileName()
@@ -148,14 +162,14 @@ Assert-True ($taskResp.code -eq 200) 'create task failed'
 $taskId = [string]$taskResp.data.id
 Write-Output ("taskId=" + $taskId)
 
-$planResp = Invoke-Json -Method 'Post' -Url ($BaseUrl + '/api/tasks/' + $taskId + '/plan') -Body @{} `
-    -Headers $adminHeaders -TimeoutSec 180
+$planResp = Invoke-Json -Method 'Post' -Url ($BaseUrl + '/api/tasks/planById/' + $taskId) -Body @{} `
+    -Headers $adminHeaders -TimeoutSec 30
 Assert-True ($planResp.code -eq 200) 'plan failed'
-$drafts = @($planResp.data)
+$drafts = @(Wait-Drafts -TaskId $taskId -MaxSecs 360 -Headers $adminHeaders)
 $draftCount = $drafts.Count
 Write-Output ("draftCount=" + $draftCount)
 
-$confirmResp = Invoke-Json -Method 'Post' -Url ($BaseUrl + '/api/tasks/' + $taskId + '/plan/confirm') -Body @{} `
+$confirmResp = Invoke-Json -Method 'Post' -Url ($BaseUrl + '/api/tasks/confirmPlanByTaskId/' + $taskId) -Body @{} `
     -Headers $adminHeaders
 Assert-True ($confirmResp.code -eq 200) 'confirm failed'
 $confirmed = @($confirmResp.data)

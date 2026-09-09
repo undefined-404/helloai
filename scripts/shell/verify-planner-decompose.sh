@@ -3,12 +3,12 @@
 # helloai Planner 平台内自动拆解验证脚本（V26，macOS/Linux）
 # 等价迁移自 scripts/powershell/verify-planner-decompose.ps1
 # 用途：验证"需求 → 自动拆解 → 用户确认/拒绝 → 进入既有分发链"闭环：
-#   POST /api/tasks/{id}/plan          触发 LLM 拆解（Task PENDING → PLANNING，
+#   POST /api/tasks/planById/{id}                触发 LLM 拆解（Task PENDING → PLANNING，
 #                                      草案落库 PENDING_PLAN_REVIEW）
-#   GET  /api/tasks/{id}/plan          查看草案列表
-#   POST /api/tasks/{id}/plan/confirm  草案转正 PENDING（Task → IN_PROGRESS，
+#   GET  /api/tasks/findPlanByTaskId/{id}       查看草案列表
+#   POST /api/tasks/confirmPlanByTaskId/{id}    草案转正 PENDING（Task → IN_PROGRESS，
 #                                      按 autoAssignOnCreate 触发分发链）
-#   POST /api/tasks/{id}/plan/reject   草案翻 CANCELLED（Task 回退 PENDING）
+#   POST /api/tasks/rejectPlanByTaskId/{id}     草案翻 CANCELLED（Task 回退 PENDING）
 # Ref:  doc/HelloAI_实现差距表_V1.md（V26 Planner 平台内拆解）
 # Pre-conditions（fail-fast，本脚本不负责启动服务）：
 #   - helloai-start 已在 6565 运行（IDEA 或 mvn spring-boot:run）
@@ -33,7 +33,7 @@ BASE_URL="${BASE_URL:-http://localhost:6565}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin123}"
 PLANNER_MODEL_TYPE="${PLANNER_MODEL_TYPE:-deepseek:deepseek-chat}"
-PLAN_TIMEOUT_SEC="${PLAN_TIMEOUT_SEC:-180}"
+PLAN_TIMEOUT_SEC="${PLAN_TIMEOUT_SEC:-360}"
 # require-vault=true 时拆解必须有托管凭证；与 helloai-start application.yml
 # spring.ai.deepseek.api-key 默认值保持一致（对齐 verify-inner-loop-e2e.ps1 做法）
 LLM_API_KEY="${DEEPSEEK_API_KEY:-sk-a36fdda1d4ad4e0386e78fc435be0d16}"
@@ -103,17 +103,31 @@ create_task() {
 # get_task_status <taskId> — 输出 status
 get_task_status() {
   local task_id="$1" resp
-  resp="$(http_json GET "$BASE_URL/api/tasks/$task_id" "-")"
+  resp="$(http_json GET "$BASE_URL/api/tasks/getById/$task_id" "-")"
   assert_r200 "$resp" "get task"
   print -r -- "$resp" | jq -r '.data.status'
 }
 
-# draft_count <taskId> — 输出 GET /plan 草案数
+# draft_count <taskId> — 输出 GET /findPlanByTaskId 草案数
 draft_count() {
   local task_id="$1" resp
-  resp="$(http_json GET "$BASE_URL/api/tasks/$task_id/plan" "-")"
+  resp="$(http_json GET "$BASE_URL/api/tasks/findPlanByTaskId/$task_id" "-")"
   assert_r200 "$resp" "list drafts"
   print -r -- "$resp" | jq -r '.data | length'
+}
+
+# wait_for_drafts <taskId> <maxSeconds> — 拆解异步化后 planById 立即返回空列表，
+# 草案需经 findPlanByTaskId 轮询获取；每 3s 轮询一次，输出最终草案数
+wait_for_drafts() {
+  local task_id="$1" max_secs="$2" waited=0 count=0
+  while (( waited < max_secs )); do
+    count="$(draft_count "$task_id")"
+    (( count >= 1 )) && { print -r -- "$count"; return 0; }
+    sleep 3
+    (( waited = waited + 3 ))
+  done
+  print -r -- "$count"
+  return 1
 }
 
 need_cmd curl
@@ -138,7 +152,7 @@ PLANNER_AGENT_ID="$(print -r -- "$PLANNER_RESP" | jq -r '.data.id')"
 log "plannerAgentId=$PLANNER_AGENT_ID"
 
 log "STEP2.1: bind agent api-key credential (provider=$VAULT_PROVIDER)"
-BIND_RESP="$(http_json POST "$BASE_URL/api/credentials/agents/$PLANNER_AGENT_ID/api-key" \
+BIND_RESP="$(http_json POST "$BASE_URL/api/credentials/bindApiKeyByAgentId/$PLANNER_AGENT_ID" \
   "{\"provider\":\"$VAULT_PROVIDER\",\"apiKey\":\"$LLM_API_KEY\",\"remark\":\"verify-planner-decompose\"}")"
 assert_r200 "$BIND_RESP" "bind api-key"
 
@@ -151,13 +165,15 @@ TASK_ID="$(create_task "planner-e2e-confirm-$TS" \
   "Build a daily report module: DB schema, statistics REST API, frontend chart page, unit tests and deployment doc.")"
 log "taskId=$TASK_ID"
 
-log "STEP4: trigger decompose (LLM call, timeout=${PLAN_TIMEOUT_SEC}s)"
-PLAN_RESP="$(http_json POST "$BASE_URL/api/tasks/$TASK_ID/plan" "{}" "$PLAN_TIMEOUT_SEC")"
+log "STEP4: trigger decompose (async: planById returns empty, poll drafts; timeout=${PLAN_TIMEOUT_SEC}s)"
+PLAN_RESP="$(http_json POST "$BASE_URL/api/tasks/planById/$TASK_ID" "{}" "30")"
 assert_r200 "$PLAN_RESP" "plan"
-DRAFT_COUNT="$(print -r -- "$PLAN_RESP" | jq -r '.data | length')"
+DRAFT_COUNT="$(wait_for_drafts "$TASK_ID" "$PLAN_TIMEOUT_SEC")" || true
 (( DRAFT_COUNT >= 1 )) || fail "expected >=1 drafts, actual=$DRAFT_COUNT"
 (( DRAFT_COUNT <= 10 )) || fail "expected <=10 drafts, actual=$DRAFT_COUNT"
-BAD_DRAFTS="$(print -r -- "$PLAN_RESP" | jq -r '[.data[] | select(.status != "PENDING_PLAN_REVIEW")] | length')"
+# 草案状态断言：轮询拿到草案后重新拉全量（LLM 异步段已收敛落库）
+DRAFTS_RESP="$(http_json GET "$BASE_URL/api/tasks/findPlanByTaskId/$TASK_ID" "-")"
+BAD_DRAFTS="$(print -r -- "$DRAFTS_RESP" | jq -r '[.data[] | select(.status != "PENDING_PLAN_REVIEW")] | length')"
 assert_eq "$BAD_DRAFTS" "0" "some drafts not in PENDING_PLAN_REVIEW"
 log "draftCount=$DRAFT_COUNT all PENDING_PLAN_REVIEW"
 
@@ -168,7 +184,7 @@ LIST_COUNT="$(draft_count "$TASK_ID")"
 assert_eq "$LIST_COUNT" "$DRAFT_COUNT" "draft list mismatch"
 
 log "STEP6: confirm plan"
-CONFIRM_RESP="$(http_json POST "$BASE_URL/api/tasks/$TASK_ID/plan/confirm" "{}")"
+CONFIRM_RESP="$(http_json POST "$BASE_URL/api/tasks/confirmPlanByTaskId/$TASK_ID" "{}")"
 assert_r200 "$CONFIRM_RESP" "confirm"
 CONFIRMED_COUNT="$(print -r -- "$CONFIRM_RESP" | jq -r '.data | length')"
 assert_eq "$CONFIRMED_COUNT" "$DRAFT_COUNT" "confirmed count mismatch"
@@ -192,14 +208,14 @@ TASK_ID2="$(create_task "planner-e2e-reject-$TS" \
   "Prototype an internal FAQ chatbot: knowledge ingestion, retrieval API and a simple web UI.")"
 log "taskId2=$TASK_ID2"
 
-log "STEP9: trigger decompose again"
-PLAN_RESP2="$(http_json POST "$BASE_URL/api/tasks/$TASK_ID2/plan" "{}" "$PLAN_TIMEOUT_SEC")"
+log "STEP9: trigger decompose again (async, poll drafts)"
+PLAN_RESP2="$(http_json POST "$BASE_URL/api/tasks/planById/$TASK_ID2" "{}" "30")"
 assert_r200 "$PLAN_RESP2" "plan2"
-DRAFT_COUNT2="$(print -r -- "$PLAN_RESP2" | jq -r '.data | length')"
+DRAFT_COUNT2="$(wait_for_drafts "$TASK_ID2" "$PLAN_TIMEOUT_SEC")" || true
 (( DRAFT_COUNT2 >= 1 )) || fail "expected >=1 drafts, actual=$DRAFT_COUNT2"
 
 log "STEP10: reject plan"
-REJECT_RESP="$(http_json POST "$BASE_URL/api/tasks/$TASK_ID2/plan/reject" "{}")"
+REJECT_RESP="$(http_json POST "$BASE_URL/api/tasks/rejectPlanByTaskId/$TASK_ID2" "{}")"
 assert_r200 "$REJECT_RESP" "reject"
 CANCELLED_COUNT="$(print -r -- "$REJECT_RESP" | jq -r '.data.cancelledCount')"
 assert_eq "$CANCELLED_COUNT" "$DRAFT_COUNT2" "cancelledCount mismatch"
@@ -212,7 +228,7 @@ assert_eq "$LEFT_COUNT2" "0" "expected 0 drafts left after reject"
 
 log "STEP12: duplicate decompose on IN_PROGRESS task must fail"
 # 平台统一 R 响应以 code!=200 表达业务失败（BizException），HTTP 层仍 200
-DUP_RESP="$(http_json POST "$BASE_URL/api/tasks/$TASK_ID/plan" "{}" "$PLAN_TIMEOUT_SEC")"
+DUP_RESP="$(http_json POST "$BASE_URL/api/tasks/planById/$TASK_ID" "{}" "$PLAN_TIMEOUT_SEC")"
 DUP_CODE="$(print -r -- "$DUP_RESP" | jq -r '.code // empty')"
 [[ "$DUP_CODE" != "200" ]] || fail "duplicate decompose unexpectedly succeeded"
 log "duplicate decompose rejected as expected (code=$DUP_CODE)"

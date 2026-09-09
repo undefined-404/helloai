@@ -2,10 +2,10 @@
 # ============================================================
 # helloai 对话式需求澄清验证脚本（V29，macOS/Linux）
 # 用途：验证"模糊需求 → 多轮澄清 → 终稿 → 建任务 → 顺路 AI 拆解"闭环：
-#   POST /api/requirement-conversations                创建会话（首条消息即走一轮 LLM）
-#   POST /api/requirement-conversations/{id}/messages  追加消息再走一轮 LLM
-#   GET  /api/requirement-conversations/{id}           会话详情（含消息）
-#   POST /api/requirement-conversations/{id}/finalize  终稿建任务（PENDING）
+#   POST /api/requirement-conversations                      创建会话（首条消息即走一轮 LLM）
+#   POST /api/requirement-conversations/sendMessageById/{id} 追加消息再走一轮 LLM
+#   GET  /api/requirement-conversations/getById/{id}         会话详情（含消息）
+#   POST /api/requirement-conversations/finalizeById/{id}    终稿建任务（PENDING）
 #   POST /api/tasks/{id}/plan                          顺路断言拆解草案生成
 # Ref:  doc/HelloAI_实现差距表_V1.md（V29 对话式需求澄清）
 # Pre-conditions（fail-fast，本脚本不负责启动服务）：
@@ -29,7 +29,7 @@ BASE_URL="${BASE_URL:-http://localhost:6565}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin123}"
 PLANNER_MODEL_TYPE="${PLANNER_MODEL_TYPE:-deepseek:deepseek-chat}"
-LLM_TIMEOUT_SEC="${LLM_TIMEOUT_SEC:-180}"
+LLM_TIMEOUT_SEC="${LLM_TIMEOUT_SEC:-360}"
 # require-vault=true 时 LLM 调用必须有托管凭证；与 helloai-start application.yml
 # spring.ai.deepseek.api-key 默认值保持一致（对齐 verify-planner-decompose.sh 做法）
 LLM_API_KEY="${DEEPSEEK_API_KEY:-sk-a36fdda1d4ad4e0386e78fc435be0d16}"
@@ -87,13 +87,38 @@ assert_r200() {
   }
 }
 
+# send_confirm_card <convId> — 确认卡 selections 快照点「确认」（确认卡协议 questionId=confirm-switch），
+# 输出会话响应 body
+send_confirm_card() {
+  local conv_id="$1" resp
+  resp="$(http_json POST "$BASE_URL/api/requirement-conversations/sendMessageById/$conv_id" \
+    '{"message":"确认","selectedOptions":[{"questionId":"confirm-switch","questionText":"检测到你想把讨论整理成落地方案，是否切换到方案澄清模式？","values":["确认"],"labels":["确认"],"custom":false,"customText":null}]}' \
+    "$LLM_TIMEOUT_SEC")"
+  assert_r200 "$resp" "confirm card"
+  print -r -- "$resp"
+}
+
 # send_clarify_message <convId> <message> — 输出会话响应 body
 send_clarify_message() {
   local conv_id="$1" message="$2" resp
-  resp="$(http_json POST "$BASE_URL/api/requirement-conversations/$conv_id/messages" \
+  resp="$(http_json POST "$BASE_URL/api/requirement-conversations/sendMessageById/$conv_id" \
     "{\"message\":\"$message\"}" "$LLM_TIMEOUT_SEC")"
   assert_r200 "$resp" "send message"
   print -r -- "$resp"
+}
+
+# wait_for_drafts <taskId> <maxSeconds> — 拆解异步化后 planById 立即返回空列表，
+# 草案需经 findPlanByTaskId 轮询获取；每 3s 轮询一次，输出最终草案数
+wait_for_drafts() {
+  local task_id="$1" max_secs="$2" waited=0 count=0
+  while (( waited < max_secs )); do
+    count="$(http_json GET "$BASE_URL/api/tasks/findPlanByTaskId/$task_id" "-" | jq -r '.data | length')"
+    (( count >= 1 )) && { print -r -- "$count"; return 0; }
+    sleep 3
+    (( waited = waited + 3 ))
+  done
+  print -r -- "$count"
+  return 1
 }
 
 need_cmd curl
@@ -116,7 +141,7 @@ PLANNER_AGENT_ID="$(print -r -- "$PLANNER_RESP" | jq -r '.data.id')"
 log "plannerAgentId=$PLANNER_AGENT_ID"
 
 log "STEP2.1: bind agent api-key credential (provider=$VAULT_PROVIDER)"
-BIND_RESP="$(http_json POST "$BASE_URL/api/credentials/agents/$PLANNER_AGENT_ID/api-key" \
+BIND_RESP="$(http_json POST "$BASE_URL/api/credentials/bindApiKeyByAgentId/$PLANNER_AGENT_ID" \
   "{\"provider\":\"$VAULT_PROVIDER\",\"apiKey\":\"$LLM_API_KEY\",\"remark\":\"verify-requirement-clarify\"}")"
 assert_r200 "$BIND_RESP" "bind api-key"
 
@@ -139,6 +164,16 @@ log "conversationId=$CONV_ID messages=$MSG_COUNT"
 
 log "STEP4: push to final draft (max $MAX_PUSH_ROUNDS extra rounds)"
 FINAL_TITLE="$(print -r -- "$CREATE_RESP" | jq -r '.data.conversation.finalTitle // empty')"
+# 首轮 LLM auto 意图路由命中 clarify 时会挂确认卡（pendingClarifyConfirm=true）：
+# 切换分支只认 selections 快照点「确认」（纯文本不吃），先应答再视情况追推
+if [[ -z "$FINAL_TITLE" ]]; then
+  PENDING_CONFIRM="$(print -r -- "$CREATE_RESP" | jq -r '.data.conversation.pendingClarifyConfirm // false')"
+  if [[ "$PENDING_CONFIRM" == "true" ]]; then
+    log "  confirm card detected (pendingClarifyConfirm=true), answering 确认 with selections snapshot"
+    ACCEPT_RESP="$(send_confirm_card "$CONV_ID")"
+    FINAL_TITLE="$(print -r -- "$ACCEPT_RESP" | jq -r '.data.conversation.finalTitle // empty')"
+  fi
+fi
 ROUND=0
 while [[ -z "$FINAL_TITLE" ]] && (( ROUND < MAX_PUSH_ROUNDS )); do
   (( ROUND = ROUND + 1 ))
@@ -150,7 +185,7 @@ done
 log "finalTitle=$FINAL_TITLE"
 
 log "STEP5: finalize -> task created (PENDING)"
-FINALIZE_RESP="$(http_json POST "$BASE_URL/api/requirement-conversations/$CONV_ID/finalize" "{}")"
+FINALIZE_RESP="$(http_json POST "$BASE_URL/api/requirement-conversations/finalizeById/$CONV_ID" "{}")"
 assert_r200 "$FINALIZE_RESP" "finalize"
 TASK_ID="$(print -r -- "$FINALIZE_RESP" | jq -r '.data.id')"
 [[ -n "$TASK_ID" && "$TASK_ID" != "null" ]] || fail "task id is empty"
@@ -159,7 +194,7 @@ assert_eq "$TASK_STATUS" "PENDING" "task status after finalize"
 log "taskId=$TASK_ID"
 
 log "STEP6: assert conversation FINALIZED + taskId backfilled"
-DETAIL_RESP="$(http_json GET "$BASE_URL/api/requirement-conversations/$CONV_ID" "-")"
+DETAIL_RESP="$(http_json GET "$BASE_URL/api/requirement-conversations/getById/$CONV_ID" "-")"
 assert_r200 "$DETAIL_RESP" "detail"
 CONV_STATUS="$(print -r -- "$DETAIL_RESP" | jq -r '.data.conversation.status')"
 assert_eq "$CONV_STATUS" "FINALIZED" "conversation status after finalize"
@@ -168,16 +203,16 @@ assert_eq "$BACK_TASK_ID" "$TASK_ID" "conversation.taskId backfill"
 
 log "STEP7: send to FINALIZED conversation must fail"
 # 平台统一 R 响应以 code!=200 表达业务失败（BizException），HTTP 层仍 200
-DUP_RESP="$(http_json POST "$BASE_URL/api/requirement-conversations/$CONV_ID/messages" \
+DUP_RESP="$(http_json POST "$BASE_URL/api/requirement-conversations/sendMessageById/$CONV_ID" \
   "{\"message\":\"再补充一点\"}")"
 DUP_CODE="$(print -r -- "$DUP_RESP" | jq -r '.code // empty')"
 [[ "$DUP_CODE" != "200" ]] || fail "send to FINALIZED conversation unexpectedly succeeded"
 log "send to FINALIZED rejected as expected (code=$DUP_CODE)"
 
-log "STEP8: trigger decompose on created task (LLM call)"
-PLAN_RESP="$(http_json POST "$BASE_URL/api/tasks/$TASK_ID/plan" "{}" "$LLM_TIMEOUT_SEC")"
+log "STEP8: trigger decompose on created task (async, poll drafts; LLM call)"
+PLAN_RESP="$(http_json POST "$BASE_URL/api/tasks/planById/$TASK_ID" "{}" "30")"
 assert_r200 "$PLAN_RESP" "plan"
-DRAFT_COUNT="$(print -r -- "$PLAN_RESP" | jq -r '.data | length')"
+DRAFT_COUNT="$(wait_for_drafts "$TASK_ID" "$LLM_TIMEOUT_SEC")" || true
 (( DRAFT_COUNT >= 1 )) || fail "expected >=1 drafts, actual=$DRAFT_COUNT"
 log "draftCount=$DRAFT_COUNT"
 
@@ -190,9 +225,9 @@ CREATE_RESP2="$(http_json POST "$BASE_URL/api/requirement-conversations" \
   "{\"message\":\"想做点跟数据可视化有关的东西，还没想清楚。\"}" "$LLM_TIMEOUT_SEC")"
 assert_r200 "$CREATE_RESP2" "create conversation 2"
 CONV_ID2="$(print -r -- "$CREATE_RESP2" | jq -r '.data.conversation.id')"
-ABANDON_RESP="$(http_json POST "$BASE_URL/api/requirement-conversations/$CONV_ID2/abandon" "{}")"
+ABANDON_RESP="$(http_json POST "$BASE_URL/api/requirement-conversations/abandonById/$CONV_ID2" "{}")"
 assert_r200 "$ABANDON_RESP" "abandon"
-DETAIL_RESP2="$(http_json GET "$BASE_URL/api/requirement-conversations/$CONV_ID2" "-")"
+DETAIL_RESP2="$(http_json GET "$BASE_URL/api/requirement-conversations/getById/$CONV_ID2" "-")"
 CONV_STATUS2="$(print -r -- "$DETAIL_RESP2" | jq -r '.data.conversation.status')"
 assert_eq "$CONV_STATUS2" "ABANDONED" "conversation status after abandon"
 

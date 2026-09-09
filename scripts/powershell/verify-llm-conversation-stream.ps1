@@ -31,7 +31,7 @@ param(
     [string]$AdminPassword = "admin123",
     [string]$LlmModelType = "deepseek:deepseek-chat",
     [string]$LlmApiKey = $env:DEEPSEEK_API_KEY,
-    [int]$PlanTimeoutSec = 180,
+    [int]$PlanTimeoutSec = 360,
     [int]$LoopTimeoutSec = 1200,
     [int]$PollTimeoutExtraSec = 600,
     [int]$PollIntervalSec = 10,
@@ -54,6 +54,20 @@ function Invoke-Json([string]$Method, [string]$Url, [object]$Body, [hashtable]$H
         $json = ($Body | ConvertTo-Json -Depth 10)
     }
     return Invoke-RestMethod -Method $Method -Uri $Url -Headers $Headers -ContentType "application/json" -Body $json -TimeoutSec $TimeoutSec
+}
+
+# 拆解异步化契约：planById 同步段只做校验与状态推进并立即返回空列表，
+# 草案经 findPlanByTaskId 轮询获取（每 3s 一次，直到 >=1 或超过 MaxSecs）
+function Wait-Drafts([string]$TaskId, [int]$MaxSecs, [hashtable]$Headers) {
+    $waited = 0
+    while ($waited -lt $MaxSecs) {
+        $listResp = Invoke-Json -Method "Get" -Url ($BaseUrl + "/api/tasks/findPlanByTaskId/" + $TaskId) -Body $null -Headers $Headers
+        $drafts = @($listResp.data)
+        if ($drafts.Count -ge 1) { return $drafts }
+        Start-Sleep -Seconds 3
+        $waited = $waited + 3
+    }
+    return @($listResp.data)
 }
 
 function Get-SubTasks([string]$TaskId, [hashtable]$Headers) {
@@ -127,16 +141,16 @@ Assert-True ($taskResp.code -eq 200) ("create task code=" + $taskResp.code + " m
 $taskId = [string]$taskResp.data.id
 Write-Host ("taskId=" + $taskId)
 
-Write-Host ("STEP4: trigger decompose (LLM call, timeout=" + $PlanTimeoutSec + "s)")
-$planResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/tasks/" + $taskId + "/plan") -Body @{} `
-    -Headers $adminHeaders -TimeoutSec $PlanTimeoutSec
+Write-Host ("STEP4: trigger decompose (async: planById returns after state transition, poll drafts; timeout=" + $PlanTimeoutSec + "s)")
+$planResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/tasks/planById/" + $taskId) -Body @{} `
+    -Headers $adminHeaders -TimeoutSec 30
 Assert-True ($planResp.code -eq 200) ("plan code=" + $planResp.code + " msg=" + $planResp.msg)
-$drafts = @($planResp.data)
+$drafts = @(Wait-Drafts -TaskId $taskId -MaxSecs $PlanTimeoutSec -Headers $adminHeaders)
 Assert-True ($drafts.Count -ge 1) ("expected >=1 drafts, actual=" + $drafts.Count)
 Write-Host ("draftCount=" + $drafts.Count)
 
 Write-Host "STEP5: confirm plan"
-$confirmResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/tasks/" + $taskId + "/plan/confirm") -Body @{} -Headers $adminHeaders
+$confirmResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/tasks/confirmPlanByTaskId/" + $taskId) -Body @{} -Headers $adminHeaders
 Assert-True ($confirmResp.code -eq 200) ("confirm code=" + $confirmResp.code + " msg=" + $confirmResp.msg)
 
 Write-Host ("STEP6: watch inner loop until all terminal, timeout=" + $LoopTimeoutSec + "s")

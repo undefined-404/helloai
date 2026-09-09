@@ -134,7 +134,7 @@ if ($payloadMode -eq "structured") {
     $q1 = $questions[0]
     $opt1 = @($q1.options)[0]
     $answerText = [string]$q1.text + ": " + [string]$opt1.label
-    $sendResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/requirement-conversations/" + $convId + "/messages") -Body @{
+    $sendResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/requirement-conversations/sendMessageById/" + $convId) -Body @{
         message = $answerText
         selectedOptions = @(
             @{
@@ -164,7 +164,7 @@ if ($payloadMode -eq "structured") {
 }
 
 Write-Host "STEP7: abandon conversation (cleanup)"
-$abandonResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/requirement-conversations/" + $convId + "/abandon") -Body @{} -Headers $adminHeaders
+$abandonResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/requirement-conversations/abandonById/" + $convId) -Body @{} -Headers $adminHeaders
 Assert-True ($abandonResp.code -eq 200) ("abandon code=" + $abandonResp.code + " msg=" + $abandonResp.msg)
 
 Write-Host ""
