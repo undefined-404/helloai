@@ -21,6 +21,8 @@ import com.helloai.core.planner.clarify.RelativeTimeNormalizer;
 import com.helloai.core.planner.clarify.SystemTimeContextBuilder;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
+import com.helloai.core.planner.mapper.RequirementConversationMapper;
+import com.helloai.core.planner.memory.service.LongTermMemoryService;
 import com.helloai.core.planner.service.WebSearchService;
 import com.helloai.core.planner.service.WebPageFetchService;
 import com.helloai.core.planner.service.SearchQueryPlannerService;
@@ -44,7 +46,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import reactor.core.publisher.Flux;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -58,6 +62,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -116,8 +121,11 @@ class RequirementClarifyServiceTest {
     @Mock
     private com.helloai.core.planner.memory.service.LongTermMemoryService longTermMemoryService;
 
+    @Mock
+    private RequirementConversationMapper requirementConversationMapper;
+
     /** 会话定点更新链式 mock（与 PlannerAnalysisServiceTest 同惯例）：
-     *  finalize CAS / task_id 回填 / 终稿字段定点写均走 lambdaUpdate。 */
+     *  finalize CAS / task_id 回填仍走 lambdaUpdate（终稿字段定点写已改走 Mapper）。 */
     @SuppressWarnings("unchecked")
     private final LambdaUpdateChainWrapper<RequirementConversation> convUpdateChain =
             mock(LambdaUpdateChainWrapper.class);
@@ -139,7 +147,9 @@ class RequirementClarifyServiceTest {
                         pageFetchService, searchQueryPlannerService, new RelativeTimeNormalizer()),
                 new ChatRoundDecisionParser(new ObjectMapper()),
                 new SystemTimeContextBuilder(),
-                longTermMemoryService);
+                longTermMemoryService,
+                new ObjectMapper(),
+                requirementConversationMapper);
 
         // 会话 lambdaUpdate 链式 stub：默认全部成功；CAS 失败用例在测试内重钉 update() 返回 false。
         // eq/set 用 lenient：非 finalize 路径用例不触发链，避免 UnnecessaryStubbingException
@@ -148,6 +158,9 @@ class RequirementClarifyServiceTest {
         lenient().when(convUpdateChain.set(any(), any())).thenReturn(convUpdateChain);
         lenient().when(convUpdateChain.set(anyBoolean(), any(), any())).thenReturn(convUpdateChain);
         lenient().when(convUpdateChain.update()).thenReturn(true);
+        // 终稿字段定点写改走 Mapper（jsonb ::jsonb 转换，见 RequirementConversationMapper.xml）
+        lenient().when(requirementConversationMapper.updateFinalDraftFields(anyLong(), any(), any(), any()))
+                .thenReturn(1);
     }
 
     private RequirementConversation activeConversation() {
@@ -325,9 +338,11 @@ class RequirementClarifyServiceTest {
         assertThat(conversation.getFinalTitle()).isEqualTo("搭建日报模块");
         assertThat(conversation.getFinalDescription()).isEqualTo("## 背景\n做日报");
         verify(messageService).addMessage(CONV_ID, "assistant", "需求已清晰");
-        // round_count+1 一次 updateById；终稿字段改走定点字段写入（防长窗口丢失更新）
+        // round_count+1 一次 updateById；终稿字段改走定点字段写入（防长窗口丢失更新），
+        // final_package 为 null 时不动列（条件写语义）
         verify(conversationService, org.mockito.Mockito.times(1)).updateById(conversation);
-        verify(conversationService).lambdaUpdate();
+        verify(requirementConversationMapper).updateFinalDraftFields(
+                CONV_ID, "搭建日报模块", "## 背景\n做日报", null);
     }
 
     @Test
@@ -340,6 +355,64 @@ class RequirementClarifyServiceTest {
         clarifyService.sendMessage(CONV_ID, "直接生成吧");
 
         verify(messageService).addMessage(CONV_ID, "assistant", "已生成终稿");
+    }
+
+    @Test
+    @DisplayName("final 带 package（G-011 S2）：需求包解析落库，定点写 Mapper 携带 JSON 字符串")
+    void shouldHandleFinalReplyWithRequirementPackage() {
+        RequirementConversation conversation = activeConversation();
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        stubLlmRound("{\"type\":\"final\",\"title\":\"搭建日报模块\","
+                + "\"description\":\"## 背景\\n做日报\","
+                + "\"package\":{\"goal\":\"每日自动出报\",\"scope\":[\"日报生成\",\"推送\"],"
+                + "\"outOfScope\":[],\"assumptions\":[\"数据源已就绪（推断）\"],"
+                + "\"openQuestions\":[\"推送渠道未确认\"]}}");
+
+        clarifyService.sendMessage(CONV_ID, "没有其他要求了");
+
+        // 解析结果同步到轮内实体视图（落库走定点写 Mapper，见下方捕获断言）
+        assertThat(conversation.getFinalPackage())
+                .containsEntry("goal", "每日自动出报")
+                .containsEntry("scope", List.of("日报生成", "推送"))
+                .containsEntry("openQuestions", List.of("推送渠道未确认"));
+        // 定点写 Mapper：需求包序列化为 JSON 字符串参数（SQL 内 ::jsonb 转换）
+        ArgumentCaptor<String> packageJsonCaptor = ArgumentCaptor.forClass(String.class);
+        verify(requirementConversationMapper).updateFinalDraftFields(
+                eq(CONV_ID), eq("搭建日报模块"), eq("## 背景\n做日报"), packageJsonCaptor.capture());
+        assertThat(packageJsonCaptor.getValue())
+                .contains("\"goal\":\"每日自动出报\"")
+                .contains("\"scope\"")
+                .contains("\"openQuestions\":[\"推送渠道未确认\"]");
+    }
+
+    @Test
+    @DisplayName("final 无 package（G-011 S2）：不落库不初始化，定点写 Mapper 传 null 不动列（行为零变化）")
+    void shouldHandleFinalReplyWithoutPackageKeepsNull() {
+        RequirementConversation conversation = activeConversation();
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        stubLlmRound("{\"type\":\"final\",\"title\":\"搭建日报模块\","
+                + "\"description\":\"## 背景\\n做日报\"}");
+
+        clarifyService.sendMessage(CONV_ID, "没有其他要求了");
+
+        assertThat(conversation.getFinalPackage()).isNull();
+        // 无需求包：JSON 参数为 null，条件写语义不动列（行为零变化）
+        verify(requirementConversationMapper).updateFinalDraftFields(
+                CONV_ID, "搭建日报模块", "## 背景\n做日报", null);
+    }
+
+    @Test
+    @DisplayName("final 带非法 package（字符串形态）：防御降级 null，不阻断终稿落库")
+    void shouldHandleFinalReplyWithMalformedPackage() {
+        RequirementConversation conversation = activeConversation();
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        stubLlmRound("{\"type\":\"final\",\"title\":\"标题\",\"description\":\"描述\","
+                + "\"package\":\"非法形态\"}");
+
+        clarifyService.sendMessage(CONV_ID, "直接生成吧");
+
+        assertThat(conversation.getFinalTitle()).isEqualTo("标题");
+        assertThat(conversation.getFinalPackage()).isNull();
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -621,6 +694,8 @@ class RequirementClarifyServiceTest {
         assertThat(task.getId()).isEqualTo(300L);
         assertThat(task.getTitle()).isEqualTo("搭建日报模块");
         assertThat(task.getStatus()).isEqualTo(TaskStatus.PENDING);
+        // 无需求包会话：不初始化 context（行为零变化）
+        assertThat(task.getContext()).isNull();
         assertThat(conversation.getTaskId()).isEqualTo(300L);
         assertThat(conversation.getStatus()).isEqualTo(RequirementClarifyService.STATUS_FINALIZED);
         // CAS 推进 + task_id 定点回填各走一次 lambdaUpdate（不再有全字段 updateById）
@@ -667,6 +742,33 @@ class RequirementClarifyServiceTest {
     }
 
     @Test
+    @DisplayName("finalize：会话终稿需求包双写 task.context.requirementPackage（G-011 S2）")
+    void shouldFinalizeAndWriteRequirementPackageToTaskContext() {
+        RequirementConversation conversation = activeConversation();
+        conversation.setFinalTitle("搭建日报模块");
+        conversation.setFinalDescription("## 背景\n做日报");
+        Map<String, Object> pkg = new HashMap<>();
+        pkg.put("goal", "每日自动出报");
+        pkg.put("scope", List.of("日报生成"));
+        conversation.setFinalPackage(pkg);
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        when(taskService.save(any(Task.class))).thenAnswer(inv -> {
+            Task t = inv.getArgument(0);
+            t.setId(300L);
+            return true;
+        });
+        when(agentService.listByRole(AgentRole.PLANNER)).thenReturn(List.of(llmPlanner()));
+
+        Task task = clarifyService.finalize(CONV_ID);
+
+        // 需求包原样双写，键名与 runningSpec 键空间隔离（拆解链经 RequirementPackageParser 读取）
+        assertThat(task.getContext())
+                .containsEntry("requirementPackage", pkg);
+        assertThat(task.getContext().get("requirementPackage"))
+                .isSameAs(pkg);
+    }
+
+    @Test
     @DisplayName("finalize：通知 PLANNER 失败不阻断建任务")
     void shouldFinalizeEvenWhenInboxNotifyFails() {
         RequirementConversation conversation = activeConversation();
@@ -684,6 +786,35 @@ class RequirementClarifyServiceTest {
 
         assertThat(task.getId()).isEqualTo(301L);
         assertThat(conversation.getStatus()).isEqualTo(RequirementClarifyService.STATUS_FINALIZED);
+    }
+
+    @Test
+    @DisplayName("regenerate：会话终稿需求包复用双写（原任务已删悬挂重建）")
+    void shouldRegenerateAndRewriteRequirementPackage() {
+        RequirementConversation conversation = activeConversation();
+        conversation.setStatus(RequirementClarifyService.STATUS_FINALIZED);
+        conversation.setFinalTitle("搭建日报模块");
+        conversation.setFinalDescription("描述");
+        conversation.setTaskId(300L);
+        Map<String, Object> pkg = new HashMap<>();
+        pkg.put("goal", "每日自动出报");
+        conversation.setFinalPackage(pkg);
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        // 原任务已删除（悬挂软引用）→ 放行重建
+        when(taskService.getById(300L)).thenReturn(null);
+        when(taskService.save(any(Task.class))).thenAnswer(inv -> {
+            Task t = inv.getArgument(0);
+            t.setId(301L);
+            return true;
+        });
+        when(agentService.listByRole(AgentRole.PLANNER)).thenReturn(List.of(llmPlanner()));
+
+        Task task = clarifyService.regenerate(CONV_ID);
+
+        assertThat(task.getId()).isEqualTo(301L);
+        assertThat(conversation.getTaskId()).isEqualTo(301L);
+        // regenerate 复用会话侧需求包（权威存储于会话），不依赖旧任务
+        assertThat(task.getContext()).containsEntry("requirementPackage", pkg);
     }
 
     @Test

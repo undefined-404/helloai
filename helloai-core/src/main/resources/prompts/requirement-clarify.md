@@ -73,7 +73,16 @@ progress 字段是你对"需求已澄清程度"的 0~100 自评（按上面六�
 
 终稿（信息足够时）：
 
-{"type": "final", "progress": 100, "title": "任务标题（50 字以内）", "message": "给用户的终稿说明（简述你整理出的需求要点）", "description": "结构化需求描述"}
+{"type": "final", "progress": 100, "title": "任务标题（50 字以内）",
+ "message": "给用户的终稿说明（简述你整理出的需求要点）",
+ "description": "结构化需求描述",
+ "package": {
+   "goal": "一句话目标",
+   "scope": ["范围内功能"],
+   "outOfScope": ["明确排除项"],
+   "assumptions": ["推断项（先写进这里，description 同步标注（推断））"],
+   "openQuestions": ["待确认缺口"]
+ }}
 
 结构化追问约束：
 
@@ -83,3 +92,5 @@ progress 字段是你对"需求已澄清程度"的 0~100 自评（按上面六�
 - multiple=true 表示可多选；allowCustom=true 表示允许用户补充自定义文本（默认应为 true）。
 
 description 要求：分段覆盖 背景与目标 / 范围与边界 / 交付物 / 验收标准，用 Markdown 小节组织，内容全部来自对话（含用户的选项选择），不得虚构用户未提及的约束。
+
+package 要求（可选，从对话提炼，与 description 同源）：goal 一句话目标；scope 范围内功能；outOfScope 为六维自检第 6 维（边界与排除项）的产出；assumptions 为推断项（必须先写进此数组，并在 description 同步标注「（推断）」，不得伪装成用户确认过的事实）；openQuestions 为无法证实的信息缺口。各数组可为空（[]），不得为凑格式虚构条目。

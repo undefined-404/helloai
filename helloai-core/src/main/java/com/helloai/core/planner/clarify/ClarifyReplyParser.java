@@ -1,5 +1,6 @@
 package com.helloai.core.planner.clarify;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
@@ -129,6 +130,27 @@ public class ClarifyReplyParser {
             throw new BizException("澄清 LLM 输出 type 非法: " + reply.getType());
         }
         return reply;
+    }
+
+    /**
+     * 终稿需求包防御式解析（G-011 S2）：{@code ClarifyReply.packageNode}（JsonNode）→
+     * {@code Map<String,Object>} 原样返回。
+     *
+     * <p>缺失（null）或非 JSON 对象（字符串 / 数组 / 数字）→ null（降级纯文本终稿 =
+     * 现状行为，不落库不阻断）；合法对象不二次加工——五字段结构校验与消费统一由
+     * {@code RequirementPackageParser} 承担（拆解链读取入口，键空间与 runningSpec 隔离）。</p>
+     */
+    public Map<String, Object> resolvePackage(RequirementClarifyService.ClarifyReply reply) {
+        if (reply == null || reply.getPackageNode() == null || !reply.getPackageNode().isObject()) {
+            return null;
+        }
+        try {
+            return objectMapper.convertValue(reply.getPackageNode(),
+                    new TypeReference<Map<String, Object>>() { });
+        } catch (Exception e) {
+            log.warn("澄清终稿 package 转 Map 失败，降级无需求包: {}", e.getMessage());
+            return null;
+        }
     }
 
     /**

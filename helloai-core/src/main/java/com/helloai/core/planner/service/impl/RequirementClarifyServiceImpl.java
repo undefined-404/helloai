@@ -1,5 +1,6 @@
 package com.helloai.core.planner.service.impl;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.TaskStatus;
@@ -16,9 +17,11 @@ import com.helloai.core.planner.clarify.ConfirmCardProtocol;
 import com.helloai.core.planner.clarify.SystemTimeContextBuilder;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
+import com.helloai.core.planner.mapper.RequirementConversationMapper;
 import com.helloai.core.planner.memory.entity.LongTermMemory;
 import com.helloai.core.planner.memory.service.LongTermMemoryService;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
+import com.helloai.core.planner.policy.RequirementPackageParser;
 import com.helloai.core.planner.search.WebSearchOutcome;
 import com.helloai.core.planner.service.RequirementClarifyService;
 import com.helloai.core.planner.service.RequirementConversationService;
@@ -36,6 +39,7 @@ import reactor.core.publisher.Flux;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -131,6 +135,8 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     private final ChatRoundDecisionParser decisionParser;
     private final SystemTimeContextBuilder systemTimeContextBuilder;
     private final LongTermMemoryService longTermMemoryService;
+    private final ObjectMapper objectMapper;
+    private final RequirementConversationMapper requirementConversationMapper;
 
     /**
      * 显式全参构造器（绕开 Lombok {@code @RequiredArgsConstructor} 在
@@ -150,7 +156,9 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                                          ClarifyWebSearchOrchestrator webSearchOrchestrator,
                                          ChatRoundDecisionParser decisionParser,
                                          SystemTimeContextBuilder systemTimeContextBuilder,
-                                         LongTermMemoryService longTermMemoryService) {
+                                         LongTermMemoryService longTermMemoryService,
+                                         ObjectMapper objectMapper,
+                                         RequirementConversationMapper requirementConversationMapper) {
         this.conversationService = conversationService;
         this.messageService = messageService;
         this.taskService = taskService;
@@ -165,6 +173,8 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         this.decisionParser = decisionParser;
         this.systemTimeContextBuilder = systemTimeContextBuilder;
         this.longTermMemoryService = longTermMemoryService;
+        this.objectMapper = objectMapper;
+        this.requirementConversationMapper = requirementConversationMapper;
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -505,6 +515,15 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         task.setTitle(conversation.getFinalTitle());
         task.setDescription(conversation.getFinalDescription());
         task.setStatus(TaskStatus.PENDING);
+        // G-011 双写：会话终稿需求包原样进 task.context.requirementPackage（S3 拆解链经
+        // RequirementPackageParser.fromContext 防御式读取；无需求包不初始化 context，
+        // 行为零变化；与 runningSpec 键空间隔离互不影响）
+        if (conversation.getFinalPackage() != null && !conversation.getFinalPackage().isEmpty()) {
+            Map<String, Object> context = new LinkedHashMap<>();
+            context.put(RequirementPackageParser.CONTEXT_KEY_REQUIREMENT_PACKAGE,
+                    conversation.getFinalPackage());
+            task.setContext(context);
+        }
         taskService.save(task);
         log.info("澄清终稿建任务: conversationId={}, taskId={}, title={}, event={}",
                 conversationId, task.getId(), task.getTitle(), timelineEvent);
@@ -784,8 +803,10 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
             }
             conversation.setFinalTitle(reply.getTitle());
             conversation.setFinalDescription(reply.getDescription());
+            Map<String, Object> finalPackage = replyParser.resolvePackage(reply);
+            conversation.setFinalPackage(finalPackage);
             // 终稿字段定点写入：不全字段覆盖，避免盖掉并发写入的 status / task_id
-            updateFinalDraftFields(conversationId, reply.getTitle(), reply.getDescription());
+            updateFinalDraftFields(conversationId, reply.getTitle(), reply.getDescription(), finalPackage);
             // 复用手动终稿确认：幂等校验 + CAS 推进 + 建任务（事件区分直达路径），
             // 与用户在澄清轮在跑时并发点「创建任务并自动拆解」的竞态由同一套守卫兼顾
             Task task = finalizeAfterDraft(conversation, "task_created_from_clarify_direct");
@@ -1104,9 +1125,12 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
             }
             conversation.setFinalTitle(reply.getTitle());
             conversation.setFinalDescription(reply.getDescription());
+            // 终稿需求包防御式解析（G-011 S2）：缺失 / 非法形态 → null，行为零变化
+            Map<String, Object> finalPackage = replyParser.resolvePackage(reply);
+            conversation.setFinalPackage(finalPackage);
             // 终稿字段定点写入：本轮实体是轮开始时的快照，全字段 updateById 会盖掉期间并发
             // finalize 已写入的 status=FINALIZED / task_id（生产实际丢失更新竞态）
-            updateFinalDraftFields(conversationId, reply.getTitle(), reply.getDescription());
+            updateFinalDraftFields(conversationId, reply.getTitle(), reply.getDescription(), finalPackage);
             log.info("澄清会话产出终稿: conversationId={}, finalTitle={}",
                     conversationId, reply.getTitle());
         } else {
@@ -1162,16 +1186,26 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     }
 
     /**
-     * 终稿字段定点写入：只更新 final_title / final_description 两列（description 保持
-     * NOT_NULL 语义），避免长窗口轮末全字段 updateById 用陈旧快照覆盖并发写入的
-     * status / task_id（丢失更新）。轮内实体同步 set 仅供本次返回的视图展示使用。
+     * 终稿字段定点写入：只更新 final_title / final_description / final_package 三列
+     * （description / finalPackage 保持条件写：null 不动列，防陈旧快照覆盖并发写入的
+     * status / task_id 丢失更新）。final_package 以 JSON 字符串参数 + SQL 内显式
+     * {@code ::jsonb} 转换（wrapper set 不套用实体 JacksonTypeHandler，jsonb 列拒绝
+     * varchar 隐式转换；序列化失败降级跳过该列）。轮内实体同步 set 仅供本次返回的
+     * 视图展示使用。
      */
-    private void updateFinalDraftFields(Long conversationId, String title, String description) {
-        conversationService.lambdaUpdate()
-                .eq(RequirementConversation::getId, conversationId)
-                .set(RequirementConversation::getFinalTitle, title)
-                .set(description != null, RequirementConversation::getFinalDescription, description)
-                .update();
+    private void updateFinalDraftFields(Long conversationId, String title, String description,
+                                        Map<String, Object> finalPackage) {
+        String packageJson = null;
+        if (finalPackage != null) {
+            try {
+                packageJson = objectMapper.writeValueAsString(finalPackage);
+            } catch (Exception e) {
+                log.warn("终稿需求包序列化失败，跳过 final_package 列写入: conversationId={}",
+                        conversationId, e);
+            }
+        }
+        requirementConversationMapper.updateFinalDraftFields(
+                conversationId, title, description, packageJson);
     }
 
     /**

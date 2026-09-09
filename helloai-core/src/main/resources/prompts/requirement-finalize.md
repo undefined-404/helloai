@@ -55,7 +55,15 @@
 
 直接产出终稿（默认路径）：
 
-{"type": "final", "progress": 100, "title": "任务标题（50 字以内）", "message": "给用户的终稿说明（简述你整理出的需求要点，一两句话）", "description": "结构化需求描述"}
+{"type": "final", "progress": 100, "title": "任务标题（50 字以内）", "message": "给用户的终稿说明（简述你整理出的需求要点，一两句话）",
+ "description": "结构化需求描述",
+ "package": {
+   "goal": "一句话目标",
+   "scope": ["范围内功能"],
+   "outOfScope": ["明确排除项"],
+   "assumptions": ["推断项（先写进这里，description 同步标注（推断））"],
+   "openQuestions": ["待确认缺口"]
+ }}
 
 信息严重不足时的结构化追问（罕见路径，最多一轮）：
 
@@ -66,3 +74,4 @@
 - title 50 字以内；message 为终稿说明。
 - questions 每轮最多 2 个问题，每问 2~4 个选项，recommended 每题至多 1 个；仅信息严重不足时使用。
 - description 要求：分段覆盖 背景与目标 / 范围与边界 / 交付物 / 验收标准，用 Markdown 小节组织，内容全部来自对话（含用户 /task 命令后的完整描述），不得虚构用户未提及的约束；合理推断项显式标注（推断）。
+- package 要求（可选，从对话提炼，与 description 同源）：goal 一句话目标；scope 范围内功能；outOfScope 为边界与排除项的产出；assumptions 为推断项（必须先写进此数组，并在 description 同步标注「（推断）」，不得伪装成用户确认过的事实）；openQuestions 为无法证实的信息缺口。各数组可为空（[]），不得为凑格式虚构条目。

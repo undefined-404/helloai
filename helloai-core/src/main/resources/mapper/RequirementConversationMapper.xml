@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.helloai.core.planner.mapper.RequirementConversationMapper">
+
+    <!--
+        终稿字段定点写入：final_package 以 JSON 字符串 + ::jsonb 显式类型转换。
+        修复 lambdaUpdate().set(..) 传 Map 时 "column final_package is of type jsonb
+        but expression is of type character varying" 报错（wrapper set 不套用实体
+        JacksonTypeHandler，PostgreSQL jsonb 列不接受 varchar 隐式转换）。
+        不走 updateById 全列覆盖：终稿轮实体是轮开始时的快照，全字段更新会盖掉
+        并发 finalize 已写入的 status / task_id（丢失更新竞态）；
+        final_description / final_package 条件写：null 不动列。
+    -->
+    <update id="updateFinalDraftFields">
+        UPDATE requirement_conversation
+        <set>
+            final_title = #{finalTitle},
+            <if test="finalDescription != null">
+                final_description = #{finalDescription},
+            </if>
+            <if test="finalPackageJson != null">
+                final_package = #{finalPackageJson}::jsonb,
+            </if>
+        </set>
+        WHERE id = #{conversationId}
+          AND deleted = 0
+    </update>
+
+</mapper>

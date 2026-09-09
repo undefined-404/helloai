@@ -2,12 +2,15 @@ package com.helloai.core.planner.entity;
 
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import com.helloai.common.base.BaseEntity;
 import com.helloai.core.shared.handler.SmallIntBooleanTypeHandler;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+
+import java.util.Map;
 
 /**
  * 需求澄清会话（对话式新建任务入口）。
@@ -35,6 +38,18 @@ public class RequirementConversation extends BaseEntity {
 
     /** LLM 最近一次终稿的需求描述（等用户确认） */
     private String finalDescription;
+
+    /**
+     * 澄清终稿结构化需求包（G-011，V75 显式 JSONB 列）。
+     *
+     * <p>五字段形态：goal / scope / outOfScope / assumptions / openQuestions（解析统一走
+     * {@code RequirementPackageParser} 防御式读取）。每次终稿轮覆盖写（与
+     * finalTitle / finalDescription 同模式）；终稿确认建任务时双写
+     * {@code task.context.requirementPackage} 供拆解链读取。NULL = 老数据兼容
+     * （无需求包，拆解渲染占位文案，行为等于现状）。</p>
+     */
+    @TableField(typeHandler = JacksonTypeHandler.class)
+    private Map<String, Object> finalPackage;
 
     /** 用户消息轮数（服务端硬上限防失控） */
     private Integer roundCount;

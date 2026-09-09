@@ -1,6 +1,8 @@
 package com.helloai.core.planner.service;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
@@ -216,6 +218,16 @@ public interface RequirementClarifyService {
         private String description;
         /** mode=structured 时的问题列表 */
         private List<ClarifyQuestion> questions;
+        /**
+         * 终稿需求包（G-011，可选）：goal / scope / outOfScope / assumptions / openQuestions 五字段。
+         *
+         * <p>用 JsonNode 承接：Jackson 对任意 JSON 形态（对象 / 字符串 / 数组）都能容忍，
+         * 避免 {@code "package"} 非法类型直接击穿整轮 JSON 解析（设计要求"缺失 / 非法 →
+         * null 降级纯文本终稿"）；解析动作由 {@code ClarifyReplyParser.resolvePackage} 承担。
+         * 键名 {@code package} 为 Java 关键字，以 {@link JsonProperty} 映射。</p>
+         */
+        @JsonProperty("package")
+        private JsonNode packageNode;
     }
 
     /** 结构化追问单题。 */

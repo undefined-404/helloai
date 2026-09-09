@@ -1,6 +1,8 @@
 package com.helloai.core.planner.service;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import lombok.Data;
@@ -92,5 +94,14 @@ public interface PlannerAnalysisService {
          * {@code SubTask.constraints}；FINE/STANDARD 档可为 null。
          */
         private String constraints;
+
+        /**
+         * 不确定性申报（G-011，可选）：kind=ASSUMPTION（已申报假设）/ UNCONFIRMED（待确认缺口）
+         * + note。用 JsonNode 承接（同 ClarifyReply.package 防御模式）：LLM 输出非法形态
+         * （字符串 / 数字 / 嵌套对象）不击穿整批拆解解析；数组元素级校验与 kind 非法值
+         * 降级 UNCONFIRMED + 审计在 {@code PlannerDecomposeAsyncServiceImpl} 统一处理（D3）。
+         */
+        @JsonProperty("uncertainties")
+        private JsonNode uncertaintiesNode;
     }
 }
