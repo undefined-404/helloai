@@ -2,9 +2,9 @@
 
 > **状态：ACTIVE**
 >
-> 当前主线：**Event Stream → Dual Executor → AgentRuntime → Skill Capability → Sandbox Provider**。
+> 当前主线：**Event Stream → Dual Executor → AgentRuntime → Skill Capability → Sandbox Provider**；P0 收官后并行推进两条线——**Planner 增强**（G-010 能力感知与自适应粒度 / G-011 需求包准入与不确定性显式管理）与 P1 Capability / Sandbox / 消费面。
 >
-> 最后更新：2026-09-08
+> 最后更新：2026-09-09
 
 # 1. 重构目标
 
@@ -246,7 +246,47 @@ Fork
 
 现状（2026-09-07 代码核查）：Timeline 已并轨 Event（A6）、Replay / Audit 读侧已落地（A7，见 P0-A）；Recovery / Fork 消费面待建。
 
-# 8. P2：Quality Gate / Agent Fleet
+# 8. P1：Planner 能力感知与自适应粒度（G-010）
+
+Planner 拆解不再"闭眼规划"，而是感知平台真实能力后再拆：
+
+```text
+技能目录（Skill Capability Package 元数据面）
+        ↓
+拆解 Prompt 注入（能力感知：目录 + 执行者画像 + 难度 + 粒度）
+        ↓
+子任务级技能指派 + 执行约束（V74 新列，与任务级并集装箱）
+```
+
+三档粒度（rule-based 决策矩阵：执行者画像 × 难度调制；LLM 自判粒度后置）：
+
+- **FINE**：有序步骤 + 每步指定 Skill + 输入/输出契约 + DoD；
+- **STANDARD**：默认档（白名单为空 / 常规场景）；
+- **COARSE**：目标 + 约束 + DoD——"不许改的事"（constraints）必填。
+
+现状基线（2026-09-09）：**S1~S3 已落地**——S1 数据层（V74 sub_task.required_skills JSONB + constraints TEXT）、S2 拆解侧（技能目录常驻注入 / 三档粒度 / 目录过滤 task_plan_skill_filtered 审计 / 超 20 项截断）、S3 传递链（mergeSkills 并集五装箱点同源 / inbox 技能要求行 / REST 下行 / 草案确认 UI 展示编辑 + updateDraftById fail-close 端点 / executor SKILL.md 增量）。S4 双场景实测 BLOCKED（待 dev 环境 + LLM Key + 外部 agent）；后置缺口 ①~④ 已登记差距表。设计：`doc/design/Planner_Capability_Awareness.md`。
+
+# 9. P1：需求包准入与不确定性显式管理（G-011）
+
+G-010 解决「Planner 不知道平台有什么能力」，G-011 解决「Planner 不知道需求边界在哪、哪些前提是猜的」：
+
+```text
+Raw Requirement
+      ↓
+Requirement Package（goal / scope / outOfScope / assumptions / openQuestions）
+      ↓
+能力感知拆解（拆解推断分级登记 → sub_task.uncertainties）
+      ↓
+执行侧注入（缺失边界不再静默补全：ASSUMPTION 自验证 / UNCONFIRMED 上报裁决）
+      ↓
+审查侧分级语义（假设不成立 ≠ 执行缺陷；并清偿 G-010 constraints 审查核验缺口）
+```
+
+定界原则：**不建自动闸门**——openQuestions 不阻断拆解/派发，裁决点在草案确认（人工逐条处理）与执行侧（fail-close 走既有 BLOCKED 链）；不建平行架构（需求包解析=静态工具类，uncertainties 消费并入既有审查轨道 A）；gap_kind 实现路径分类与任务后蒸馏闭环后置批次二/三。
+
+现状基线（2026-09-09）：**设计落稿待实施**——`doc/design/Requirement_Package_Uncertainty.md`（S1~S4 实施顺序已定，S5 实测与 G-010 S4 合并执行：同一环境一轮双场景）。
+
+# 10. P2：Quality Gate / Agent Fleet
 
 Quality Gate：
 
@@ -272,7 +312,7 @@ Policy
 Provider Selection
 ```
 
-# 9. P3：Dynamic Workflow
+# 11. P3：Dynamic Workflow
 
 只有 Runtime / Event / Capability 稳定之后才开展：
 
@@ -286,7 +326,7 @@ Workflow Engine
 Dynamic Branching
 ```
 
-# 10. 当前禁止扩张
+# 12. 当前禁止扩张
 
 ```text
 ❌ Agent Swarm
@@ -297,7 +337,7 @@ Dynamic Branching
 ❌ 为了 Harness 一一复制全部插件实现
 ```
 
-# 11. 最终验收问题
+# 13. 最终验收问题
 
 本轮完成后必须能够清楚回答：
 
@@ -308,3 +348,5 @@ Dynamic Branching
 5. Agent 如何与执行环境解耦？
 6. 新增一个厂商 Agent 需要实现什么？
 7. 失败执行如何恢复且避免重复副作用？
+8. Planner 如何不幻觉指派？（明确要平台技能目录过滤 + 子任务级技能/约束显式化 + 粒度自适应）
+9. 需求边界与推断如何不靠猜？（明确要需求包五字段 + uncertainties 分级登记 + 人工裁决 + fail-close 上报）

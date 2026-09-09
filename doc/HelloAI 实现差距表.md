@@ -19,7 +19,8 @@
 | G-007 | Quality Gate | Reviewer 闭环已存在 | Rule + Test + LLM 统一决策 | **P2** | 现有链上增强 |
 | G-008 | Agent Fleet Routing | 已有 Agent 选择机制；单外部执行者场景下 preferred 指定（真实任务 5 子任务同一 agent）；外部执行 tokens=null（成本观测盲区，submitResult 未回传） | Capability + Health + Load + Policy | **P2** | 渐进升级；多外部执行者对照与 token 回传为前置验证场景（见 log 2026-09-08 观察点 3/4） |
 | G-009 | Dynamic Workflow | 已有模板/实例化/DAG | 动态分支、复杂运行期编排 | **P3** | 后置 |
-| G-010 | Planner 能力感知与自适应粒度 | **S1~S3 已落地（2026-09-09）**：S1 数据层（V74 sub_task.required_skills JSONB + constraints TEXT）+ S2 拆解侧（技能目录常驻注入 / 子任务级 requiredSkills+constraints 指派 / 目录过滤 task_plan_skill_filtered 审计 / rule-based 粒度三档 FINE/STANDARD/COARSE + 目录超 20 项截断）+ S3 传递链（mergeSkills 并集装箱 5 装箱点同源 / inbox 技能要求行 / REST 下行 / 草案确认 UI 展示编辑 + updateDraftById 端点 / SKILL.md 增量） | 技能目录注入拆解 Prompt + 子任务级 requiredSkills/constraints 指派（V74 新列，并集装箱）+ 粒度三档 FINE/STANDARD/COARSE 自适应（**rule-based 决策矩阵**：执行者画像 × difficulty 调制，2026-09-09 拍板）+ 外部感知下行通道（可选字段向后兼容）+ 技能回流贡献规范 | **P1** | S1~S3 PASS（2026-09-09，见 log）；S4 双场景实测 BLOCKED（本机无 dev 环境 + LLM Key + 外部 agent）；**后置缺口**：①技能回流贡献规范（D5-3 DB 化）②verify-skill-packages.ps1 校验脚本（D5-2 未交付）③审查侧 constraints/requiredSkills 注入核验（D4 验收口径，ReviewExecutionEngine 未消费两字段）④COARSE 档 constraints 缺失的 timeline WARN 级事件（设计 §2.3 承诺未实现） |
+| G-010 | Planner 能力感知与自适应粒度 | **S1~S3 已落地（2026-09-09）**：S1 数据层（V74 sub_task.required_skills JSONB + constraints TEXT）+ S2 拆解侧（技能目录常驻注入 / 子任务级 requiredSkills+constraints 指派 / 目录过滤 task_plan_skill_filtered 审计 / rule-based 粒度三档 FINE/STANDARD/COARSE + 目录超 20 项截断）+ S3 传递链（mergeSkills 并集装箱 5 装箱点同源 / inbox 技能要求行 / REST 下行 / 草案确认 UI 展示编辑 + updateDraftById 端点 / SKILL.md 增量） | 技能目录注入拆解 Prompt + 子任务级 requiredSkills/constraints 指派（V74 新列，并集装箱）+ 粒度三档 FINE/STANDARD/COARSE 自适应（**rule-based 决策矩阵**：执行者画像 × difficulty 调制，2026-09-09 拍板）+ 外部感知下行通道（可选字段向后兼容）+ 技能回流贡献规范 | **P1** | S1~S3 PASS（2026-09-09，见 log）；S4 双场景实测 BLOCKED（本机无 dev 环境 + LLM Key + 外部 agent）；**后置缺口**：①技能回流贡献规范（D5-3 DB 化）②verify-skill-packages.ps1 校验脚本（D5-2 未交付）③审查侧 constraints/requiredSkills 注入核验（D4 验收口径，ReviewExecutionEngine 未消费两字段）④COARSE 档 constraints 缺失的 timeline WARN 级事件（设计 §2.3 承诺未实现）；③④由 G-011 本批一并清偿 |
+| G-011 | 需求包准入与不确定性显式管理 | **设计落稿待实施（2026-09-09）**：双模澄清六维自检已有，但终稿压平为纯文本（`task.title` / `task.description`，无需求包结构）；拆解推断静默写进计划、缺口无分级出口（执行者唯一出口是整体失败）；`sub_task.constraints` 落库后执行/审查侧无消费点（G-010 后置缺口③④） | 结构化需求包（goal / scope / outOfScope / assumptions / openQuestions，会话列 + task.context 双写）+ 拆解继承为 sub_task.uncertainties[ASSUMPTION|UNCONFIRMED] 显式 JSONB 列 + 执行侧注入（含 constraints 补偿）+ 审查侧分级语义（假设不成立 ≠ 执行缺陷）+ 外部下行可选字段向后兼容 | **P1** | 设计落稿（2026-09-09，`doc/design/Requirement_Package_Uncertainty.md`）；S1~S4 实施顺序已定，S5 实测与 G-010 S4 合并执行（BLOCKED 不阻塞 S1~S4 开工）；**不建自动闸门**（openQuestions 不阻断，人工裁决 + fail-close BLOCKED 链上报）；gap_kind 实现路径分类与任务后蒸馏闭环后置批次二/三 |
 
 # 2. P0 主线
 
@@ -123,6 +124,23 @@ constraints：显式列（仅 COARSE 必填）
 - S4 双场景实测：BLOCKED（本机无 dev 环境 + LLM Key + 外部 agent，口径与历轮一致）。
 
 验证基线：core 全量单测 0 失败；api 模块编译通过；UI type-check 通过。
+
+### 需求包准入与不确定性显式管理（G-011）
+
+设计：`doc/design/Requirement_Package_Uncertainty.md`（2026-09-09 落稿，§8 决策 1~10 全部拍板）。
+
+已拍板：
+
+```text
+登记口径：新 G-011（G-010=拆解侧，G-011=准入侧+契约侧，同 G-010 D7 边界论证）
+需求包：5 字段压缩版（goal / scope / outOfScope / assumptions / openQuestions）
+存储：会话列 + task.context 双写
+uncertainties：显式 JSONB 列（kind=ASSUMPTION / UNCONFIRMED；命名与 gap_kind 消歧）
+gap_kind：后置到批次二（「已有能力」须可最小验证，依赖 G-008 能力可验证基线）
+闸门：不建自动闸门（openQuestions 不阻断；人工裁决 + fail-close BLOCKED 链上报）
+```
+
+实施状态（2026-09-09）：设计落稿待实施——S1~S4 实施顺序已定（S5 实测与 G-010 S4 合并执行：同一环境一轮双场景）；本批净增量含 G-010 后置缺口清偿（constraints 执行侧注入 + 审查侧核验 {{CONSTRAINTS}} + COARSE 缺失 timeline WARN）；批次二（gap_kind 分类 + 成本路由接入）与批次三（任务后蒸馏闭环）不进本批验收口径。
 
 # 4. P2
 

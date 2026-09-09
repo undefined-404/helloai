@@ -4,7 +4,7 @@
 >
 > 本文档定义未来稳定架构边界，不表示所有能力当前已经落地。
 >
-> 最后更新：2026-09-07
+> 最后更新：2026-09-09（Planner 增强定界：G-010 能力感知与自适应粒度 / G-011 需求包准入与不确定性显式管理）
 
 # 1. 目标定位
 
@@ -29,7 +29,9 @@ Planning
                 │                               │
              Planning                     Governance
                 │                               │
-             Planner                     Quality Gate
+        Requirement Package                Quality Gate
+                │                               │
+             Planner                            │
                 │                               │
                 └───────────────┬───────────────┘
                                 ↓
@@ -81,6 +83,30 @@ Governance
 ```
 
 只表达平台角色职责，不包含具体 Agent Provider 实现。
+
+### Planner 目标形态（G-010 / G-011 定界，2026-09-09）
+
+V2 目标态的 Planner 拆解链路（两次增强后）：
+
+```text
+Requirement Package（需求包：goal / scope / outOfScope / assumptions / openQuestions）
+        ↓
+能力感知拆解（技能目录注入 + 执行者画像 + 难度感知）
+        ↓
+粒度自适应（FINE / STANDARD / COARSE，rule-based 矩阵；LLM 自判后置）
+        ↓
+子任务契约（requiredSkills / constraints / uncertainties[ASSUMPTION|UNCONFIRMED]）
+```
+
+定界原则：
+
+- **拆解不虚构能力**：技能指派必须命中平台技能目录，未命中丢弃并审计（幻觉标签零容忍）；
+- **推断不伪装成事实**：不确定性显式分级登记——ASSUMPTION 执行者自验证、UNCONFIRMED 上报人工裁决；
+- **粒度不是越细越好**：细=步骤 + 每步 Skill + 输入/输出契约 + DoD；粗=目标 + 约束 + DoD；
+- **不建自动闸门**：openQuestions 不阻断拆解/派发，裁决点在草案确认（人工）与执行侧（fail-close 走既有 BLOCKED 链）；不建"需求管理中心"平行架构；
+- **契约向后兼容**：REST / inbox 只增可选字段，外部 Agent 未升级无感知。
+
+设计文档：`doc/design/Planner_Capability_Awareness.md`（G-010，S1~S3 已落地）、`doc/design/Requirement_Package_Uncertainty.md`（G-011，设计落稿待实施）。
 
 ## Orchestration Layer
 
@@ -262,7 +288,9 @@ Agent Selection
 ```text
 Requirement
    ↓
-Planner
+Requirement Package（goal / scope / outOfScope / assumptions / openQuestions）
+   ↓
+Planner（能力感知 + 粒度自适应；子任务级技能指派 / 约束 / 不确定性登记）
    ↓
 Workflow
    ↓

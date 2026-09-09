@@ -5,7 +5,7 @@
 > 本文回答两个问题：V1 做成了一个什么产品；V2 基于 DeepSeek Harness 做怎样的改造升级。
 > 技术事实以 `HelloAI 项目基线文档.md` 为准，目标边界以 `HelloAI 目标架构.md` 为准；本文不作为开发实施依据。
 >
-> 最后更新：2026-09-08（回填 P1 增量：G-004 Skill 联动接线与拆解技能通路、G-006 Replay / Audit API+UI 暴露与外部轨迹加厚、G-002 / G-003 灰度联调闭合口径）
+> 最后更新：2026-09-09（回填 G-010 Planner 能力感知与自适应粒度 S1~S3：技能目录注入 / 三档粒度 / 子任务级技能与约束 / 草案确认编辑；G-011 需求包准入与不确定性显式管理设计落稿）
 
 ---
 
@@ -31,7 +31,7 @@ Planning → Orchestration → Distributed Execution → Review → Governance
 | MCP 接入工具 | 11 个（pullTasks / claimSubTask / submitResult / checkIn …） |
 | LLM Provider | 4 家动态接入（DeepSeek / Moonshot / MiniMax / DashScope） |
 | 定时收敛任务 | 17 个（Outbox 中继 / 超时补偿 / 健康巡检 / 租约过期 …） |
-| 数据库增量迁移 | 63 个（Flyway V1 → V73，已提交 DDL 永不修改） |
+| 数据库增量迁移 | 74 个（Flyway V1 → V74，已提交 DDL 永不修改） |
 | 验证脚本 | 70 个（PowerShell，脚本输出即事实源） |
 | 迭代执行记录 | 160+ 条目（追加式，含决策演进注记） |
 | 代码规范 | 66 章（`HelloAI_CODE_STYLE.md`） |
@@ -320,10 +320,11 @@ Event Stream 统一 → Dual Executor 迁移 → AgentRuntime 收敛
 | **Team 编排** | 团队定义 + 成员角色槽位，展开为任务级策略 | 不做嵌套 Team / 第二调度器 |
 | **Browser Agent** | `WEB_BROWSER` 第三种接入类型：会话登记 + 推式桥接执行器 | 复用现有调度 / 选人 / 产物链 |
 | **跨会话记忆** | Planner 澄清会话记忆归档与复用 | 只存摘要，不做对话全量记忆 |
+| **Planner 能力感知（G-010）** | 技能目录注入 + 执行者画像 / 难度感知 + 三档粒度自适应 + 子任务级技能指派与执行约束 + 草案确认人工修订 | 不建第二套规划运行时；粒度 rule-based 矩阵，LLM 自判后置 |
 
 ## 3.7 V1 → V2 升级点对照
 
-十个维度的机制级对照（不是功能清单，是同一件事在两个版本里的不同做法）：
+十一个维度的机制级对照（不是功能清单，是同一件事在两个版本里的不同做法）：
 
 | 维度 | V1（已交付） | V2（改造中 / 规划） | 进度 |
 |---|---|---|---|
@@ -331,6 +332,7 @@ Event Stream 统一 → Dual Executor 迁移 → AgentRuntime 收敛
 | **执行过程观测** | 结果回写可见，过程黑盒（timeline 独立载体） | `Run → Turn → Step` Event Stream 全程记录，append-only | ✅ 写侧闭环 |
 | **事件消费** | timeline 单点展示 | Timeline / Replay / Audit / Metrics 统一消费面 | 🔶 Timeline 并轨（A6）+ Replay / Audit 读侧（A7）+ API / UI 工作台（C1）+ 外部认领埋点（C2）已落地；Recovery / Fork 待建（G-006） |
 | **Skill** | `eng-*` Markdown 规范注入 | Capability Package（元数据 + 版本 + Instructions + Schema） | 🔶 元数据层 + 联动接线 + 拆解通路已落地（SkillPackage 8 字段 + eng-* 三包物化；requiredTools→tools 双链并集、SKILL_RESOLVED 携带版本、required_skills 进拆解 Prompt 四段贯通）；Instructions 结构化 / 真实任务行使待续（G-004） |
+| **Planner 拆解（G-010）** | 任务级技能透传（纯 Prompt 拼接，无平台能力感知） | 能力感知拆解：技能目录注入 + 执行者画像 / 难度感知 + rule-based 三档粒度 + 子任务级技能指派与执行约束（V74 新列）+ 草案确认人工修订；G-011 需求包准入（goal / scope / outOfScope / assumptions / openQuestions）与不确定性分级登记为下一批次 | 🔶 G-010 S1~S3 已落地（2026-09-09）；S4 双场景实测 BLOCKED（待 dev 环境）；G-011 设计落稿待实施 |
 | **Tool** | Prompt 里的描述文本 | ToolRegistry 元数据 + ToolExecutor 真实调用回路 | ✅ 已落地（G-003 Phase 2，dev 灰度联调已通过） |
 | **执行循环** | 单发 LLM 调用（一次请求一次产出） | AgentLoop 多轮循环：推理 → 工具调用 → 观察 → 再推理 | ✅ 已落地（G-003 Phase 3，dev 灰度联调已通过） |
 | **执行环境** | 场所标签（RemoteAgent / LocalProcess） | SandboxProvider：文件 / 网络 / 进程 / 资源 / 凭证五类边界 | 🔶 契约已落地（Phase 4）；Docker / K8s 隔离后置（G-005） |
@@ -537,6 +539,8 @@ helloai/
 | Skill Capability Package | G-004 | 🔶 元数据层 + 联动接线 + 拆解技能通路已落地（2026-09-08：SkillPackage 8 字段 + 三技能包物化；requiredTools→tools 双链并集、SKILL_RESOLVED 携带版本、task.required_skills 创建→拆解→派发→执行四段贯通）；Instructions 结构化 / 真实任务 required_skills 实测待续（BLOCKED：本机无 dev 环境） |
 | Sandbox Provider | G-005 | 🔶 契约已落地（五边界 ExecutionPolicy，诚实策略无 ISOLATED）；Docker / K8s 隔离后置 |
 | Event 消费侧（Timeline → Replay / Audit） | G-006 | 🔶 Timeline 并轨（A6，已暴露 API + UI）+ Replay / Audit 读侧 API + UI 工作台已暴露（增量 C1：/api/agent-events + /event-stream 事件流）+ 外部认领埋点 AGENT_STARTED 与 Replay 汇总卡（增量 C2，外部轨迹加厚为四事件）；Recovery / Fork 待建 |
+| Planner 能力感知与自适应粒度 | G-010 | 🔶 S1~S3 已落地（2026-09-09：V74 子任务级技能/约束新列 + 技能目录注入与三档粒度 + mergeSkills 传递链与草案确认编辑 UI）；S4 双场景实测 BLOCKED（待 dev 环境 + LLM Key + 外部 agent） |
+| 需求包准入与不确定性显式管理 | G-011 | ⏳ 设计落稿待实施（`doc/design/Requirement_Package_Uncertainty.md`；S5 实测与 G-010 S4 合并执行） |
 | Quality Gate | G-007 | ⏳ 规划 |
 | Agent Fleet 能力化选人 | G-008 | ⏳ 规划 |
 | Workflow Engine 增强 | G-009 | ⏳ 远期 |
@@ -547,6 +551,6 @@ helloai/
 
 **V1 做成了什么：**一个分布式跨终端 AI Agent 调度平台——把散落各处的 AI 助手与终端算力组织成可调度、可验收、可审计的工程团队，任何能跑 CLI Agent 的终端都是算力节点。你说一次需求、点一次确认：Planner 双模对话澄清并拆解为依赖 DAG，弹性调度跨终端派给最合适的 AI（12 层过滤 + 4 级排序 + 值班优先 + LLM 保底），Reviewer 双轨纪律审核（四元组驳回意见、双审共识、抽检复审），最终整合报告 + zip 交付。底座是事务性 Outbox、三层幂等、熔断降级、死信兜底的分布式可靠性体系。
 
-**V2 在升级什么：**借鉴 DeepSeek Harness 的三个核心思想，把平台从"能调度"升级为"执行过程可观测（Event Stream 统一）、能力可组合（Skill Capability Package）、环境可控（Sandbox Provider）"。改造走五层目标架构（Role / Orchestration / Runtime / Capability / Provider），以 AgentRuntime 收敛为中心，演进式推进——**P0 主线已收官**：Event Stream 写侧闭环，Runtime 真身组装并注入主链（`runtime-enabled` 开关灰度，默认走 Legacy；dev 灰度第 0 步已闭合），八件套全部落地；**P1 进行中**：Replay / Audit 消费面 API + UI 已暴露、外部执行轨迹加厚，Skill 元数据化联动与拆解技能通路贯通，剩余 Instructions 结构化 / Sandbox 隔离实现 / Recovery 消费面。
+**V2 在升级什么：**借鉴 DeepSeek Harness 的三个核心思想，把平台从"能调度"升级为"执行过程可观测（Event Stream 统一）、能力可组合（Skill Capability Package）、环境可控（Sandbox Provider）"。改造走五层目标架构（Role / Orchestration / Runtime / Capability / Provider），以 AgentRuntime 收敛为中心，演进式推进——**P0 主线已收官**：Event Stream 写侧闭环，Runtime 真身组装并注入主链（`runtime-enabled` 开关灰度，默认走 Legacy；dev 灰度第 0 步已闭合），八件套全部落地；**P1 进行中**：Replay / Audit 消费面 API + UI 已暴露、外部执行轨迹加厚，Skill 元数据化联动与拆解技能通路贯通，**Planner 从"闭眼拆解"升级为"能力感知拆解"（G-010 S1~S3 已落地：技能目录注入、三档粒度自适应、子任务级技能与约束显式化、草案人工修订；G-011 需求包准入与不确定性显式管理设计落稿）**，剩余 Instructions 结构化 / Sandbox 隔离实现 / Recovery 消费面。
 
 **这个项目的独特价值：**不是又一个 Agent 框架，而是**让异构 Agent 在同一套状态机、同一条事件流、同一个质量门下协同工作的分布式平台**——借鉴 Harness 的执行体系思想，但服务的是多 Agent 编排的更大图景。
