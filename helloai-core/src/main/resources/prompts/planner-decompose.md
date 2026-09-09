@@ -1,7 +1,9 @@
 # Planner 任务拆解 Prompt 模板
 <!--
   由 PlannerAnalysisService 加载渲染（classpath:prompts/planner-decompose.md）。
-  占位符：{{TASK_TITLE}} / {{TASK_DESCRIPTION}} / {{TASK_REQUIRED_SKILLS}} 由服务端替换。
+  占位符：{{TASK_TITLE}} / {{TASK_DESCRIPTION}} / {{TASK_REQUIRED_SKILLS}} /
+          {{SKILL_CATALOG}} / {{EXECUTOR_PROFILE}} / {{TASK_DIFFICULTY}} / {{GRANULARITY}}
+  由服务端替换。
   设计参考 openMoss task-planner.md 拆分四要素：目标 / 交付物 / 验收标准 / 优先级。
 -->
 
@@ -13,6 +15,24 @@
 - 任务描述：{{TASK_DESCRIPTION}}
 - 任务技能要求：{{TASK_REQUIRED_SKILLS}}
 
+## 平台技能目录（可指派给子任务）
+
+{{SKILL_CATALOG}}
+
+> 子任务的 `requiredSkills` 只能取上面目录内已登记的标签；未登记的标签会在落库时被丢弃。
+
+## 执行环境与拆解粒度
+
+- 预期执行者：{{EXECUTOR_PROFILE}}
+- 任务难度：{{TASK_DIFFICULTY}}
+- 本次拆解粒度：{{GRANULARITY}}
+
+### 粒度指令（严格遵守）
+
+- [FINE]  content 必须给出有序步骤，每步含动作与预期中间产物；逐步指派 requiredSkills；acceptance 每步至少一个可检查验证点；多模块协作必须评估契约先行。
+- [STANDARD] 按下方四要素拆解（现状规则，不额外加细）。
+- [COARSE] 只拆目标与边界，禁止步骤级拆分；constraints 必填（列出不许改动/不许越界的事项）；acceptance 必含止损回退动作与幂等性要求（如「重复执行不得产生重复副作用」）。
+
 ## 拆解要求（四要素）
 
 对每个子任务必须给出：
@@ -23,6 +43,8 @@
 5. **依赖（dependsOn）**：本子任务开工前必须先完成的前置子任务序号数组（从 1 开始，指向本数组中更早的元素）；无前置依赖时为空数组 []。
 6. **契约（contract）**：本子任务是否为「契约定义」子任务（true / false）。契约定义子任务的 deliverable 是接口签名 / 数据模型 / 错误码表等跨子任务契约文档，其产出会全局注入所有下游子任务的执行上下文，因此必须排在整个 DAG 的最上游（第 1 位、无前置依赖），且一个任务至多 1 个。
 7. **技能对齐（仅当任务技能要求非空）**：任务声明了技能要求时，子任务的规划内容与验收标准必须与对应技能规范对齐（例如声明 eng-doc-standard 时产出须符合文档规范、声明 eng-verification 时验收须含可复现验证证据）；平台会按同一技能清单在执行侧注入规范、审查侧核验，拆解侧必须与之一致。
+8. **技能指派（requiredSkills，G-010）**：本子任务需要什么平台技能（只能取「平台技能目录」内已登记标签）；FINE 粒度逐步指派、STANDARD/COARSE 可空。声明了 requiredSkills 的子任务，执行侧会按该技能注入规范、审查侧按同一清单核验。
+9. **约束（constraints，G-010）**：本子任务"不许改的事"（边界 / 红线 / 不许越界事项）；仅 COARSE 粒度必填，其余档位可空。
 
 ## 拆解原则
 
@@ -46,8 +68,10 @@
     "acceptance": "验收标准",
     "priority": "HIGH",
     "dependsOn": [],
-    "contract": false
+    "contract": false,
+    "requiredSkills": ["eng-doc-standard"],
+    "constraints": "不得修改对外接口签名；失败时停止并上报，不得自动重试写操作"
   }
 ]
 
-字段全部必填；priority 只能取 HIGH / MEDIUM / LOW；dependsOn 是整数数组（前置子任务序号，无依赖填 []）；contract 只能取 true / false（契约定义子任务，全任务至多 1 个且必须排第 1 位）。
+字段全部必填；priority 只能取 HIGH / MEDIUM / LOW；dependsOn 是整数数组（前置子任务序号，无依赖填 []）；contract 只能取 true / false（契约定义子任务，全任务至多 1 个且必须排第 1 位）；requiredSkills 只能取「平台技能目录」内已登记标签（无则填 []）；constraints 仅 COARSE 粒度必填、其余档位可空。

@@ -119,6 +119,9 @@ export interface SubTask {
   deliverable?: string | null
   acceptance?: string | null
   priority?: string | null
+  // G-010 能力感知：子任务级技能标签（拆解侧指派/草案编辑修订）与执行约束
+  requiredSkills?: string[] | null
+  constraints?: string | null
   // V27 依赖编排：前置子任务 id 列表（全部 DONE 才分发），旧数据为空数组
   dependsOn?: LongId[]
   context: Record<string, any> | null

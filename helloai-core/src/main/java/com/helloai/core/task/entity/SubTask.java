@@ -119,6 +119,24 @@ public class SubTask extends BaseEntity {
     private List<Long> dependsOn;
 
     /**
+     * 子任务级技能标签（Planner 能力感知 G-010）。
+     *
+     * <p>拆解侧 LLM 按注入的技能目录指派，落库前经目录命中过滤；装箱时
+     * 与 task.required_skills 取并集（子任务级在前，去重保序），保持
+     * 任务级全局约束语义不变。空数组=无子任务级指派，行为与现状一致。</p>
+     */
+    @TableField(typeHandler = JacksonTypeHandler.class)
+    private List<String> requiredSkills;
+
+    /**
+     * 执行约束（不许改的事，Planner 能力感知 G-010 COARSE 粒度必填）。
+     *
+     * <p>COARSE 粒度拆解的一等公民字段：用户可在草案确认时编辑，
+     * 审查侧可核验约束是否被遵守；FINE/STANDARD 档为 NULL。</p>
+     */
+    private String constraints;
+
+    /**
      * 依赖 id 归一化读取：把 Jackson 反序列化出的 Integer/Long/String 统一转为 Long。
      * 永不返回 null（空依赖返回空列表）。
      *

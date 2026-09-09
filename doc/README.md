@@ -30,6 +30,7 @@ design/
 ├── Agent_Runtime.md
 ├── Skill_Capability.md
 ├── Sandbox_Provider.md
+├── Planner_Capability_Awareness.md
 └── adr/
     └── ADR-001-run-turn-step-model.md
 ```

@@ -634,8 +634,9 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         try {
             // Phase 1 Step 1 fix（LOG-20260904-009）：requiredSkills 装箱透传
             // （task 域数据随命令正向传入执行侧，执行侧不再反向查询 task）
+            // G-010：改用并集装箱（子任务级 ∪ 任务级），核验与执行同清单
             executionCommandService.createAssignedCommand(subTaskId, targetExecutor, "auto-review-rework",
-                    subTaskService.requiredSkillsOf(subTask.getTaskId()));
+                    subTaskService.mergeSkills(subTask));
             log.info("返工重执行命令已下发: subTaskId={}, executorAgentId={}", subTaskId, targetExecutor);
         } catch (Exception e) {
             log.warn("返工重执行命令下发失败（子任务停留 REWORK 等兜底）: subTaskId={}, err={}",

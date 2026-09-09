@@ -46,6 +46,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -124,6 +125,46 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         Task task = taskService.getById(taskId);
         List<String> required = task == null ? null : task.getRequiredSkills();
         return required == null ? List.of() : required;
+    }
+
+    @Override
+    public List<String> mergeSkills(SubTask subTask) {
+        // G-010 并集装箱：子任务级（拆解侧指派）在前，任务级声明在后；去重保序。
+        // 存量子任务 required_skills 为空数组时退化为纯任务级，行为零变化。
+        List<String> merged = new ArrayList<>();
+        if (subTask != null && subTask.getRequiredSkills() != null) {
+            for (String skill : subTask.getRequiredSkills()) {
+                if (skill != null && !skill.isBlank() && !merged.contains(skill)) {
+                    merged.add(skill);
+                }
+            }
+        }
+        for (String skill : requiredSkillsOf(subTask == null ? null : subTask.getTaskId())) {
+            if (!merged.contains(skill)) {
+                merged.add(skill);
+            }
+        }
+        return merged;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void updateDraft(Long id, List<String> requiredSkills, String constraints) {
+        SubTask subTask = getById(id);
+        if (subTask == null) {
+            throw new BizException("草案不存在: " + id);
+        }
+        // fail-close：仅草案态可编辑；已转正子任务走返工/改派链路，不得绕过状态机直改
+        if (subTask.getStatus() != SubTaskStatus.PENDING_PLAN_REVIEW) {
+            throw new BizException("仅草案待审状态可编辑，当前状态: " + subTask.getStatus());
+        }
+        if (requiredSkills != null) {
+            subTask.setRequiredSkills(requiredSkills);
+        }
+        if (constraints != null) {
+            subTask.setConstraints(constraints);
+        }
+        updateById(subTask);
     }
 
     @Override
@@ -500,9 +541,15 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
             switch (newStatus) {
                 case ASSIGNED -> {
                     if (agentId != null) {
+                        // G-010 下行通道：合并技能标签随通知摘要下发（文本形态，不动 inbox 契约面）；
+                        // 外部 agent 据此按需装配自身技能包，未升级的 agent 对该行无感
+                        List<String> mergedSkills = mergeSkills(subTask);
+                        String skillLine = mergedSkills.isEmpty() ? ""
+                                : "\n技能要求: " + String.join(", ", mergedSkills);
                         agentInboxService.send(agentId, eventId, "sub_task.assigned",
                                 "新任务已分配: " + title,
-                                "交付物: " + (subTask.getDeliverable() != null ? subTask.getDeliverable() : "待确认"),
+                                "交付物: " + (subTask.getDeliverable() != null ? subTask.getDeliverable() : "待确认")
+                                        + skillLine,
                                 "sub_task", subTask.getId(), "HIGH");
                     }
                 }

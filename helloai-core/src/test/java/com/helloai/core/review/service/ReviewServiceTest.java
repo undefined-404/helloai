@@ -173,8 +173,6 @@ class ReviewServiceTest {
         reworkAgent.setId(NEW_AGENT_ID);
         reworkAgent.setAccessType(AgentAccessType.API_KEY_LLM);
         when(agentService.getById(NEW_AGENT_ID)).thenReturn(reworkAgent);
-        // Phase 1 Step 1 fix：requiredSkills 由命令创建方装箱（task 域查询出口返回空列表）
-        when(subTaskService.requiredSkillsOf(TASK_ID)).thenReturn(List.of());
 
         reviewService.createReview(SUB_TASK_ID, REVIEWER_ID, ReviewResult.REJECTED,
                 1, "产出质量不达标", "人工驳回并改派", NEW_AGENT_ID);
@@ -192,8 +190,6 @@ class ReviewServiceTest {
         executor.setId(EXECUTOR_ID);
         executor.setAccessType(AgentAccessType.API_KEY_LLM);
         when(agentService.getById(EXECUTOR_ID)).thenReturn(executor);
-        // Phase 1 Step 1 fix：requiredSkills 由命令创建方装箱（task 域查询出口返回空列表）
-        when(subTaskService.requiredSkillsOf(TASK_ID)).thenReturn(List.of());
 
         reviewService.createReview(SUB_TASK_ID, REVIEWER_ID, ReviewResult.REJECTED,
                 2, "需补充验收证据", "人工驳回重做", null);
@@ -228,7 +224,6 @@ class ReviewServiceTest {
         reworkAgent.setId(NEW_AGENT_ID);
         reworkAgent.setAccessType(AgentAccessType.API_KEY_LLM);
         when(agentService.getById(NEW_AGENT_ID)).thenReturn(reworkAgent);
-        when(subTaskService.requiredSkillsOf(TASK_ID)).thenReturn(List.of());
         when(executionCommandService.createAssignedCommand(SUB_TASK_ID, NEW_AGENT_ID, "manual-review-rework", List.of()))
                 .thenThrow(new RuntimeException("MQ 不可用"));
 

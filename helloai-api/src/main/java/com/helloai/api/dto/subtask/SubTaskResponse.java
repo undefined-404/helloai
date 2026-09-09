@@ -30,6 +30,10 @@ public class SubTaskResponse {
     private String assignedAgentName;
     private String content;
     private Integer reworkCount;
+    /** 子任务级技能标签（拆解侧指派；子任务级 ∪ 任务级 = 下发执行/审查的合并清单，G-010） */
+    private List<String> requiredSkills;
+    /** 执行约束（COARSE 粒度必填：不许改的事；其余档位可空） */
+    private String constraints;
     /** 执行上下文（JSONB）：含人工介入标记 manualIntervention，§6.52 前端人工介入面板判定依赖此字段 */
     private Map<String, Object> context;
     /** 依赖的子任务 id 列表（同 Task 内；空列表=无依赖） */

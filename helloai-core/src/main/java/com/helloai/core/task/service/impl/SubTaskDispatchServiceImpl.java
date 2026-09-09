@@ -437,7 +437,9 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
             return null;
         }
         List<Long> executorAgentIds = TaskAgentPolicy.executorAgentIds(task.getAgentPolicy());
-        List<String> requiredSkills = task.getRequiredSkills();
+        // G-010：选人技能约束用并集装箱（子任务级 ∪ 任务级）——子任务级指派的技能
+        // 同样要求执行者具备；与执行/审查装箱同源（mergeSkills）
+        List<String> requiredSkills = subTaskService.mergeSkills(subTask);
         return DispatchConstraints.of(executorAgentIds, requiredSkills);
     }
 

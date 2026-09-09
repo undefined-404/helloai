@@ -34,6 +34,8 @@ export const paths = {
   subTasks: {
     list: '/sub-tasks/list',
     getById: (id: string | number) => `/sub-tasks/getById/${enc(id)}`,
+    // G-010 草案人工修订：确认前编辑技能指派与执行约束（仅 PENDING_PLAN_REVIEW 可编辑）
+    updateDraft: (id: string | number) => `/sub-tasks/updateDraftById/${enc(id)}`,
     create: '/sub-tasks',
     batch: '/sub-tasks/batch',
     timeline: (id: string | number) => `/sub-tasks/listTimelineBySubTaskId/${enc(id)}`,

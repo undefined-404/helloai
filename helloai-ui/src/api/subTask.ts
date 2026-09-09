@@ -16,6 +16,10 @@ export const subTaskApi = {
   getById(id: LongId) {
     return request.get<any, SubTask>(paths.subTasks.getById(id))
   },
+  // G-010 草案人工修订：确认前编辑技能指派与执行约束（null=不修改该字段）
+  updateDraft(id: LongId, data: { requiredSkills?: string[] | null; constraints?: string | null }) {
+    return request.put(paths.subTasks.updateDraft(id), data)
+  },
   // M4.5: 快速派发单建（QuickDispatchDialog 逐项调用）
   create(data: CreateSubTaskPayload) {
     return request.post<any, SubTask>(paths.subTasks.create, data)

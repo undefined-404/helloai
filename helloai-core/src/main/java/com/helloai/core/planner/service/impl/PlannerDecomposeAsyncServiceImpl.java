@@ -4,19 +4,26 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskPriority;
 import com.helloai.common.constant.TaskStatus;
+import com.helloai.core.agent.SkillNormalizer;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
+import com.helloai.core.agent.skill.AgentSkillSpecService;
+import com.helloai.core.agent.skill.SkillPackage;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
+import com.helloai.core.planner.policy.PlannerGranularityResolver;
 import com.helloai.core.planner.service.PlannerAnalysisService.PlanDraftItem;
 import com.helloai.core.planner.service.PlannerDecomposeAsyncService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.policy.TaskAgentPolicy;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
@@ -61,6 +68,9 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
     /** 单次拆解允许落库的草案数量上限（与 Prompt 模板的 3~10 约定对齐，服务端只做硬上限）。 */
     private static final int MAX_DRAFT_COUNT = 10;
 
+    /** G-010 §5 防御：技能目录注入 Prompt 的条数上限（超限截断至前 N 项并提示，防提示词膨胀）。 */
+    private static final int MAX_SKILL_CATALOG_SIZE = 20;
+
     /** timeline detail 中 LLM 原始输出摘要的截断长度。 */
     private static final int RAW_OUTPUT_SUMMARY_LIMIT = 500;
 
@@ -73,6 +83,8 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
     private final PlannerAgentPicker plannerAgentPicker;
     private final PlatformAgentExecutionService platformAgentExecutionService;
     private final TaskTimelineService taskTimelineService;
+    private final AgentService agentService;
+    private final AgentSkillSpecService agentSkillSpecService;
     private final ObjectMapper objectMapper;
 
     /**
@@ -187,12 +199,56 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
         } catch (Exception e) {
             throw new BizException("读取拆解 Prompt 模板失败: " + e.getMessage());
         }
+        PlannerGranularityResolver.GranularityDecision decision = granularityDecision(task);
         return template
                 .replace("{{TASK_TITLE}}", task.getTitle() != null ? task.getTitle() : "")
                 .replace("{{TASK_DESCRIPTION}}",
                         task.getDescription() != null && !task.getDescription().isBlank()
                                 ? task.getDescription() : "（无补充描述，请依据标题拆解）")
-                .replace("{{TASK_REQUIRED_SKILLS}}", renderRequiredSkills(task.getRequiredSkills()));
+                .replace("{{TASK_REQUIRED_SKILLS}}", renderRequiredSkills(task.getRequiredSkills()))
+                .replace("{{SKILL_CATALOG}}", renderSkillCatalog())
+                .replace("{{EXECUTOR_PROFILE}}", decision.profile())
+                .replace("{{TASK_DIFFICULTY}}", TaskAgentPolicy.difficulty(task.getAgentPolicy()).name())
+                .replace("{{GRANULARITY}}", decision.granularity().name());
+    }
+
+    /** G-010：按任务执行者画像 + 难度定位拆解粒度；白名单内 accessType 一次批量查询，避免 N+1。 */
+    private PlannerGranularityResolver.GranularityDecision granularityDecision(Task task) {
+        List<Long> executorIds = TaskAgentPolicy.executorAgentIds(task.getAgentPolicy());
+        List<AgentAccessType> accessTypes;
+        if (executorIds.isEmpty()) {
+            accessTypes = List.of();
+        } else {
+            accessTypes = agentService.listByIds(executorIds).stream()
+                    .map(Agent::getAccessType).toList();
+        }
+        return PlannerGranularityResolver.resolve(task.getAgentPolicy(), accessTypes);
+    }
+
+    /** 技能目录渲染：每技能一行「标签 v版本 — 描述（依赖工具: a, b）」；空目录降级文案。超 20 项截断至前 20。 */
+    private String renderSkillCatalog() {
+        List<SkillPackage> packages = agentSkillSpecService.listPackages();
+        if (packages == null || packages.isEmpty()) {
+            return "（平台暂无已登记技能包）";
+        }
+        List<SkillPackage> visible = packages.size() > MAX_SKILL_CATALOG_SIZE
+                ? packages.subList(0, MAX_SKILL_CATALOG_SIZE)
+                : packages;
+        StringBuilder sb = new StringBuilder();
+        for (SkillPackage pkg : visible) {
+            sb.append("- ").append(pkg.name()).append(" v").append(pkg.version())
+              .append(" — ").append(pkg.description());
+            if (pkg.requiredTools() != null && !pkg.requiredTools().isEmpty()) {
+                sb.append("（依赖工具: ").append(String.join(", ", pkg.requiredTools())).append("）");
+            }
+            sb.append('\n');
+        }
+        if (packages.size() > MAX_SKILL_CATALOG_SIZE) {
+            sb.append("（技能目录共 ").append(packages.size())
+              .append(" 项，仅展示前 ").append(MAX_SKILL_CATALOG_SIZE)
+              .append(" 项；未展示技能不参与指派）");
+        }
+        return sb.toString().trim();
     }
 
     /** 技能要求占位符渲染：保持声明序逗号拼接；null/空 → 显式降级文案（行为零变化）。 */
@@ -271,6 +327,9 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
             // 契约先行拆解（Phase 2）：contract=true → is_contract=1；
             // null/缺省/非法值一律按普通子任务（0）降级，不阻断拆解
             draft.setIsContract(Boolean.TRUE.equals(item.getContract()) ? 1 : 0);
+            // G-010 能力感知：子任务级技能指派经目录过滤；constraints 直接落库
+            draft.setRequiredSkills(filterRequiredSkills(taskId, item.getRequiredSkills(), planner));
+            draft.setConstraints(item.getConstraints());
             draft.setStatus(SubTaskStatus.PENDING_PLAN_REVIEW);
             Map<String, Object> context = new HashMap<>();
             context.put("plannerAgentId", planner.getId());
@@ -280,6 +339,31 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
             drafts.add(draft);
         }
         return drafts;
+    }
+
+    /**
+     * G-010：子任务级技能目录过滤。仅保留目录内命中的标签（归一化后精确命中），
+     * 未命中（幻觉 / 未登记）标签丢弃并记 timeline {@code task_plan_skill_filtered}；
+     * 空指派返回空列表，不阻断拆解。
+     */
+    private List<String> filterRequiredSkills(Long taskId, List<String> assigned, Agent planner) {
+        if (assigned == null || assigned.isEmpty()) {
+            return List.of();
+        }
+        Set<String> known = agentSkillSpecService.listPackages().stream()
+                .map(SkillPackage::name).collect(Collectors.toSet());
+        List<String> kept = new ArrayList<>();
+        for (String raw : assigned) {
+            String normalized = SkillNormalizer.normalize(raw);
+            if (normalized != null && known.contains(normalized)) {
+                kept.add(normalized);
+            } else {
+                taskTimelineService.recordEvent(taskId, null, "task_plan_skill_filtered",
+                        AgentRole.PLANNER, planner.getId(),
+                        Map.of("skill", raw, "reason", "未命中平台技能目录"));
+            }
+        }
+        return kept;
     }
 
     private String normalizePriority(String priority) {

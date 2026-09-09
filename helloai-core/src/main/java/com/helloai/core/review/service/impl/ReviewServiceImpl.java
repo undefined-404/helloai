@@ -144,8 +144,9 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
                     try {
                         // Phase 1 Step 1 fix（LOG-20260904-009）：requiredSkills 装箱透传
                         // （task 域数据随命令正向传入执行侧，禁止执行侧反向依赖 task）
+                        // G-010：改用并集装箱（子任务级 ∪ 任务级），核验与执行同清单
                         executionCommandService.createAssignedCommand(subTaskId, targetExecutor, "manual-review-rework",
-                                subTaskService.requiredSkillsOf(subTask.getTaskId()));
+                                subTaskService.mergeSkills(subTask));
                         log.info("人工驳回返工执行命令已下发: subTaskId={}, executorAgentId={}",
                                 subTaskId, targetExecutor);
                     } catch (Exception e) {

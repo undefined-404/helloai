@@ -4,7 +4,7 @@
 >
 > 本文只记录当前 → 目标的真实差距。
 >
-> 最后更新：2026-09-08
+> 最后更新：2026-09-09
 
 # 1. 总体矩阵
 
@@ -19,6 +19,7 @@
 | G-007 | Quality Gate | Reviewer 闭环已存在 | Rule + Test + LLM 统一决策 | **P2** | 现有链上增强 |
 | G-008 | Agent Fleet Routing | 已有 Agent 选择机制；单外部执行者场景下 preferred 指定（真实任务 5 子任务同一 agent）；外部执行 tokens=null（成本观测盲区，submitResult 未回传） | Capability + Health + Load + Policy | **P2** | 渐进升级；多外部执行者对照与 token 回传为前置验证场景（见 log 2026-09-08 观察点 3/4） |
 | G-009 | Dynamic Workflow | 已有模板/实例化/DAG | 动态分支、复杂运行期编排 | **P3** | 后置 |
+| G-010 | Planner 能力感知与自适应粒度 | **S1~S3 已落地（2026-09-09）**：S1 数据层（V74 sub_task.required_skills JSONB + constraints TEXT）+ S2 拆解侧（技能目录常驻注入 / 子任务级 requiredSkills+constraints 指派 / 目录过滤 task_plan_skill_filtered 审计 / rule-based 粒度三档 FINE/STANDARD/COARSE + 目录超 20 项截断）+ S3 传递链（mergeSkills 并集装箱 5 装箱点同源 / inbox 技能要求行 / REST 下行 / 草案确认 UI 展示编辑 + updateDraftById 端点 / SKILL.md 增量） | 技能目录注入拆解 Prompt + 子任务级 requiredSkills/constraints 指派（V74 新列，并集装箱）+ 粒度三档 FINE/STANDARD/COARSE 自适应（**rule-based 决策矩阵**：执行者画像 × difficulty 调制，2026-09-09 拍板）+ 外部感知下行通道（可选字段向后兼容）+ 技能回流贡献规范 | **P1** | S1~S3 PASS（2026-09-09，见 log）；S4 双场景实测 BLOCKED（本机无 dev 环境 + LLM Key + 外部 agent）；**后置缺口**：①技能回流贡献规范（D5-3 DB 化）②verify-skill-packages.ps1 校验脚本（D5-2 未交付）③审查侧 constraints/requiredSkills 注入核验（D4 验收口径，ReviewExecutionEngine 未消费两字段）④COARSE 档 constraints 缺失的 timeline WARN 级事件（设计 §2.3 承诺未实现） |
 
 # 2. P0 主线
 
@@ -97,6 +98,31 @@ Timeline / Replay
 → Recovery
 → Fork
 ```
+
+### Planner 能力感知（G-010）
+
+设计：`doc/design/Planner_Capability_Awareness.md`（2026-09-09 落稿，§7 决策 1~7 全部拍板）。
+
+已拍板：
+
+```text
+登记口径：新 G-010（不并入 G-004）
+粒度决策：rule-based 矩阵（执行者画像 × difficulty；LLM 自判后置）
+装箱语义：并集（子任务级 ∪ 任务级，去重保序，子任务级在前）
+目录注入：常驻（每技能一行摘要，超 20 项截断）
+constraints：显式列（仅 COARSE 必填）
+回流：classpath 声明态（DB 化/热加载后置）
+混合粒度：FINE（白名单为空 = STANDARD）
+```
+
+实施状态（2026-09-09）：
+
+- S1 数据层：PASS（V74 迁移 + SubTask 实体/DTO + 单测）；
+- S2 拆解侧：PASS（提示词三段 + PlanDraftItem 扩展 + PlannerGranularityResolver 矩阵单测 + buildDrafts 目录过滤落库）；
+- S3 传递链：PASS（mergeSkills 并集装箱：SubTaskAutoExecutionDispatcher / ReviewServiceImpl / SubTaskReviewServiceImpl / SubTaskController.execute / SubTaskDispatchServiceImpl 选人约束五点同源；inbox summary 技能要求行；SubTaskResponse REST 下行；草案确认 UI 展示/编辑 + updateDraftById fail-close 端点；executor SKILL.md 子任务级指派说明）；
+- S4 双场景实测：BLOCKED（本机无 dev 环境 + LLM Key + 外部 agent，口径与历轮一致）。
+
+验证基线：core 全量单测 0 失败；api 模块编译通过；UI type-check 通过。
 
 # 4. P2
 

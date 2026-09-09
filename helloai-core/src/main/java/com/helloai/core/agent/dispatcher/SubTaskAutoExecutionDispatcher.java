@@ -154,8 +154,9 @@ public class SubTaskAutoExecutionDispatcher {
         try {
             // Phase 1 Step 1 fix（LOG-20260904-009）：requiredSkills 装箱透传
             // （task 域数据随命令正向传入执行侧，执行侧不再反向查询 task）
+            // G-010：改用并集装箱（子任务级 ∪ 任务级），与审查核验同源
             executionCommandService.createAssignedCommand(event.getSubTaskId(), agent.getId(), "assigned",
-                    subTaskService.requiredSkillsOf(subTask.getTaskId()));
+                    subTaskService.mergeSkills(subTask));
             log.info("执行命令派发成功: subTaskId={}, agentId={}", event.getSubTaskId(), agent.getId());
             dbg("sub_task_auto_execute_dispatch_ok", safeMap(
                     "subTaskId", event.getSubTaskId(),

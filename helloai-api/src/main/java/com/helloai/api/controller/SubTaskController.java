@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.helloai.api.dto.PageResult;
 import com.helloai.api.dto.subtask.ConversationMessageItem;
 import com.helloai.api.dto.subtask.CreateSubTaskRequest;
+import com.helloai.api.dto.subtask.DraftUpdateRequest;
 import com.helloai.api.dto.subtask.ReassignRequest;
 import com.helloai.api.dto.subtask.ReworkRequest;
 import com.helloai.api.dto.subtask.SubTaskResponse;
@@ -207,6 +208,22 @@ public class SubTaskController {
         return R.ok(response);
     }
 
+    /**
+     * 草案人工修订（G-010 草案确认 UI）：确认前编辑技能指派与执行约束。
+     *
+     * <p>仅 PENDING_PLAN_REVIEW 状态可编辑（fail-close 由 Service 层门禁校验）；
+     * requiredSkills/constraints 传 null 表示不修改该字段（局部更新语义）。
+     * 人工指派的标签不做目录强校验（人工编辑为权威输入），执行侧 resolve 两层过滤兜底。</p>
+     */
+    @PutMapping("/updateDraftById/{id}")
+    public R<Void> updateDraft(@PathVariable("id") Long id,
+                               @Valid @RequestBody DraftUpdateRequest req) {
+        subTaskService.updateDraft(id, req.getRequiredSkills(), req.getConstraints());
+        log.info("草案修订: id={}, requiredSkills={}, constraintsEdited={}",
+                id, req.getRequiredSkills(), req.getConstraints() != null);
+        return R.ok();
+    }
+
     @PostMapping("/changeStatus")
     public R<Void> changeStatus(@RequestBody Map<String, Object> body) {
         Long subTaskId = Long.valueOf(body.get("subTaskId").toString());
@@ -341,9 +358,10 @@ public class SubTaskController {
 
         // Phase 1 Step 1 fix（LOG-20260904-009）：requiredSkills 装箱透传
         // （task 域数据随命令正向传入执行侧，执行侧不再反向查询 task）
+        // G-010：改用并集装箱（子任务级 ∪ 任务级），与执行链其余装箱点同源
         ExecutionCommand command = executionCommandService.createAssignedCommand(
                 id, subTask.getAssignedAgentId(), "admin-execute",
-                subTaskService.requiredSkillsOf(subTask.getTaskId()));
+                subTaskService.mergeSkills(subTask));
 
         return R.ok(Map.of(
                 "recordId", command.getRecordId(),
@@ -417,6 +435,8 @@ public class SubTaskController {
         response.setAssignedAgent(subTask.getAssignedAgentId());
         response.setContent(subTask.getContent());
         response.setReworkCount(subTask.getReworkCount());
+        response.setRequiredSkills(subTask.getRequiredSkills());
+        response.setConstraints(subTask.getConstraints());
         response.setContext(subTask.getContext());
         response.setDependsOn(subTask.dependsOnIdList());
         response.setDeadline(subTask.getDeadline());

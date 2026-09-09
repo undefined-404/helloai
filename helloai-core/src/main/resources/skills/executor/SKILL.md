@@ -44,6 +44,7 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
   - `eng-doc-standard`：文档规范（命题完整保留 / tutorial-reference 分离 / 无思维链泄漏 / 信息密度）
   - `eng-verification`：验证规范（最小证据集 / 证据可复现 / 断言有效性）
 - **命中即注入**：当任务 `required_skills` 包含上述标签时，平台会把对应规范的「执行速览」自动注入你的执行 Prompt（`## 平台技能规范` 章节）。你的产出**必须**按该规范执行——审查侧（Reviewer）按同一清单核验，产出格式不达标会被驳回。
+- **子任务级指派（G-010）**：AI 拆解会在子任务上额外指派 `requiredSkills`（收件箱「技能要求」行 / `SubTask.requiredSkills` 字段，为子任务级 ∪ 任务级合并清单）。收到后按你自身技能包对应装配（可选行为，不强制）；未命中你能力范围的标签可跳过，不影响任务提交。
 - **示例**：注册时声明 `"skills": ["shell", "eng-code-review"]` 后，接到带 `eng-code-review` 的任务时：接口须文档化（签名/异常/边界）、资源成对释放、验证断言真实；自查问题按四元组 `[defect] 缺陷 [location] 位置 [impact] 影响 [evidence] 依据` 记录。
 
 ---

@@ -80,5 +80,17 @@ public interface PlannerAnalysisService {
          * {@code SubTask.isContract}；null/缺省=false 按普通子任务处理。
          */
         private Boolean contract;
+
+        /**
+         * 子任务级技能指派（Planner 能力感知 G-010）：
+         * 只能取平台技能目录内的标签；未命中目录的标签落库前被过滤（可选）。
+         */
+        private List<String> requiredSkills;
+
+        /**
+         * 执行约束（不许改的事，G-010 COARSE 粒度必填）：直接落地
+         * {@code SubTask.constraints}；FINE/STANDARD 档可为 null。
+         */
+        private String constraints;
     }
 }

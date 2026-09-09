@@ -81,6 +81,51 @@
             {{ fmtDepends(row.dependsOn) }}
           </template>
         </el-table-column>
+        <el-table-column
+          label="技能"
+          min-width="120"
+        >
+          <template #default="{ row }">
+            <template v-if="row.requiredSkills?.length">
+              <el-tag
+                v-for="s in row.requiredSkills"
+                :key="s"
+                size="small"
+                type="primary"
+                style="margin-right:4px"
+              >
+                {{ s }}
+              </el-tag>
+            </template>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+        <el-table-column
+          prop="constraints"
+          label="约束"
+          min-width="120"
+          show-overflow-tooltip
+        >
+          <template #default="{ row }">
+            {{ row.constraints || '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column
+          label="操作"
+          width="70"
+          fixed="right"
+        >
+          <template #default="{ row }">
+            <el-button
+              link
+              type="primary"
+              size="small"
+              @click="openEdit(row)"
+            >
+              编辑
+            </el-button>
+          </template>
+        </el-table-column>
       </el-table>
       <el-empty
         v-else-if="!loadingDrafts && !generating"
@@ -108,13 +153,66 @@
         确认并分发
       </el-button>
     </template>
+
+    <!-- G-010 草案人工修订：技能指派 + 执行约束（可选编辑，空值放行） -->
+    <el-dialog
+      v-model="editVisible"
+      :title="`修订草案：${editingRow?.title || ''}`"
+      width="560px"
+      append-to-body
+    >
+      <el-form label-width="80px">
+        <el-form-item label="技能标签">
+          <el-select
+            v-model="editForm.requiredSkills"
+            multiple
+            filterable
+            allow-create
+            default-first-option
+            placeholder="选择或输入技能标签（留空=不指派）"
+            style="width:100%"
+          >
+            <el-option
+              v-for="s in skillOptions"
+              :key="s"
+              :label="s"
+              :value="s"
+            />
+          </el-select>
+          <div style="font-size:12px;color:var(--ha-ink-2);line-height:1.6;margin-top:4px">
+            拆解时由 AI 从平台技能目录指派；人工修订不做目录强校验，执行侧按命中技能注入规范，未命中标签自动跳过。
+          </div>
+        </el-form-item>
+        <el-form-item label="执行约束">
+          <el-input
+            v-model="editForm.constraints"
+            type="textarea"
+            :rows="3"
+            placeholder="不许改的事（边界/红线）；COARSE 粒度建议必填，其余可空"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editVisible = false">
+          取消
+        </el-button>
+        <el-button
+          type="primary"
+          :loading="savingDraft"
+          @click="saveEdit"
+        >
+          保存
+        </el-button>
+      </template>
+    </el-dialog>
   </el-dialog>
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { taskApi } from '@/api/task'
+import { subTaskApi } from '@/api/subTask'
 import type { Task, SubTask, LongId } from '@/types'
 
 const props = defineProps<{ modelValue: boolean; task: Task | null }>()
@@ -213,6 +311,46 @@ function fmtDepends(dependsOn?: LongId[] | null): string {
     .map(id => drafts.value.findIndex(d => String(d.id) === String(id)) + 1)
     .filter(seq => seq > 0)
   return seqs.length ? `依赖 #${seqs.join(',')}` : '-'
+}
+
+// --- G-010 草案人工修订（技能指派 + 执行约束） ---
+const editVisible = ref(false)
+const savingDraft = ref(false)
+const editingRow = ref<SubTask | null>(null)
+const editForm = ref<{ requiredSkills: string[]; constraints: string }>({ requiredSkills: [], constraints: '' })
+
+// 技能下拉候选：全部草案已指派标签的并集（目录端点本批未暴露，allow-create 兜自由输入）
+const skillOptions = computed(() => {
+  const set = new Set<string>()
+  drafts.value.forEach(d => d.requiredSkills?.forEach(s => set.add(s)))
+  return [...set]
+})
+
+function openEdit(row: SubTask) {
+  editingRow.value = row
+  editForm.value = {
+    requiredSkills: [...(row.requiredSkills ?? [])],
+    constraints: row.constraints ?? ''
+  }
+  editVisible.value = true
+}
+
+async function saveEdit() {
+  const row = editingRow.value
+  if (!row) return
+  savingDraft.value = true
+  try {
+    await subTaskApi.updateDraft(row.id, {
+      requiredSkills: editForm.value.requiredSkills,
+      constraints: editForm.value.constraints
+    })
+    // 本地同步，免整表重拉
+    row.requiredSkills = [...editForm.value.requiredSkills]
+    row.constraints = editForm.value.constraints
+    ElMessage.success('草案已修订')
+    editVisible.value = false
+  } catch { /* 拦截器已弹错 */ }
+  finally { savingDraft.value = false }
 }
 
 async function handleConfirm() {

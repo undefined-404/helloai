@@ -55,8 +55,6 @@ class SubTaskAutoExecutionDispatcherTest {
 
         when(agentService.getById(11L)).thenReturn(agent);
         when(subTaskService.getById(22L)).thenReturn(subTask);
-        // Phase 1 Step 1 fix：requiredSkills 由命令创建方装箱（task 域查询出口返回空列表）
-        when(subTaskService.requiredSkillsOf(33L)).thenReturn(List.of());
 
         dispatcher.onAssigned(new SubTaskAssignedEvent(22L, 11L));
 

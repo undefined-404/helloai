@@ -32,6 +32,31 @@ public interface SubTaskService extends IService<SubTask> {
      */
     List<String> requiredSkillsOf(Long taskId);
 
+    /**
+     * 合并子任务级与任务级技能标签（G-010 并集装箱：子任务级 ∪ 任务级）。
+     *
+     * <p>语义：去重保序，<b>子任务级在前</b>（拆解侧指派的具体技能优先展示），
+     * 任务级声明追加在后。存量子任务 {@code required_skills} 恒为空数组时，
+     * 合并结果数学等价于纯任务级（行为零变化）。执行装箱、审查核验、选人约束
+     * 必须使用同一合并结果（核验与执行同清单）。</p>
+     *
+     * @param subTask 子任务实体，可为 null（null 时退化为纯任务级查询）
+     * @return 合并后的技能标签清单；恒非 null
+     */
+    List<String> mergeSkills(SubTask subTask);
+
+    /**
+     * 草案人工修订（G-010 草案确认 UI）：仅更新技能指派与执行约束两字段。
+     *
+     * <p>fail-close：仅 PENDING_PLAN_REVIEW 状态允许编辑，其余状态抛业务异常
+     * （草案已转正后走返工/改派链路，不得绕过状态机直改）。</p>
+     *
+     * @param id             草案子任务 ID
+     * @param requiredSkills 技能标签；null=不修改，非 null（含空数组）=覆盖
+     * @param constraints    执行约束；null=不修改
+     */
+    void updateDraft(Long id, List<String> requiredSkills, String constraints);
+
     @Transactional(rollbackFor = Exception.class)
     SubTask create(SubTask subTask, Long assignedAgentId);
 

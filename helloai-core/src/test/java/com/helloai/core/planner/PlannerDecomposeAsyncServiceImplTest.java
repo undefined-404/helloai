@@ -11,7 +11,10 @@ import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
+import com.helloai.core.agent.skill.AgentSkillSpecService;
+import com.helloai.core.agent.skill.SkillPackage;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.service.PlannerAnalysisService;
 import com.helloai.core.planner.service.impl.PlannerDecomposeAsyncServiceImpl;
@@ -28,6 +31,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -74,6 +78,12 @@ class PlannerDecomposeAsyncServiceImplTest {
     @Mock
     private TaskTimelineService taskTimelineService;
 
+    @Mock
+    private AgentService agentService;
+
+    @Mock
+    private AgentSkillSpecService agentSkillSpecService;
+
     private PlannerDecomposeAsyncServiceImpl asyncService;
 
     @SuppressWarnings("unchecked")
@@ -84,7 +94,8 @@ class PlannerDecomposeAsyncServiceImplTest {
         // ObjectMapper 用真实实例（JSON 解析是被测逻辑本身，不 mock）
         asyncService = new PlannerDecomposeAsyncServiceImpl(
                 taskService, subTaskService, plannerAgentPicker,
-                platformAgentExecutionService, taskTimelineService, new ObjectMapper());
+                platformAgentExecutionService, taskTimelineService,
+                agentService, agentSkillSpecService, new ObjectMapper());
 
         lenient().when(taskService.lambdaUpdate()).thenReturn(taskUpdateChain);
         lenient().when(taskUpdateChain.eq(any(), any())).thenReturn(taskUpdateChain);
@@ -298,6 +309,70 @@ class PlannerDecomposeAsyncServiceImplTest {
         // 占位符已完全渲染无残留（模板第 7 条示例含技能名是固定模板文案，非泄漏；
         // 降级语义 = 占位符被降级文案替换且无未渲染残留）
         assertThat(prompt).doesNotContain("{{TASK_REQUIRED_SKILLS}}");
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  G-010 能力感知：子任务级技能目录过滤 + constraints 落库
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("G-010：requiredSkills 目录过滤——命中保留、幻觉丢弃并审计；constraints 直接落库")
+    void shouldFilterRequiredSkillsAndPersistConstraints() {
+        when(agentSkillSpecService.listPackages()).thenReturn(List.of(
+                new SkillPackage("eng-doc-standard", "1.0.0", "文档规范",
+                        List.of(), List.of(), Map.of(), Map.of(), List.of(), "eng-doc-standard.md")));
+        when(taskService.getById(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [
+                          {"title":"文档产出","content":"c","deliverable":"d","acceptance":"a",
+                           "requiredSkills":["eng-doc-standard","幻觉技能"],"constraints":"不得改对外接口"}
+                        ]
+                        """, "stop", "llm", 100));
+        when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(draft(11L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<SubTask>> captor = ArgumentCaptor.forClass(List.class);
+        verify(subTaskService).saveBatch(captor.capture());
+        SubTask saved = captor.getValue().get(0);
+        // 目录命中保留、幻觉标签丢弃
+        assertThat(saved.getRequiredSkills()).containsExactly("eng-doc-standard");
+        assertThat(saved.getConstraints()).isEqualTo("不得改对外接口");
+        // 幻觉标签被过滤并记审计
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_skill_filtered"),
+                eq(AgentRole.PLANNER), eq(9L), anyMap());
+    }
+
+    @Test
+    @DisplayName("G-010 §5 防御：技能目录超 20 项截断至前 20 并提示，不泄漏未展示项")
+    void shouldTruncateSkillCatalogOver20() {
+        List<SkillPackage> many = new ArrayList<>();
+        for (int i = 1; i <= 21; i++) {
+            many.add(new SkillPackage("skill-" + i, "1.0.0", "描述" + i,
+                    List.of(), List.of(), Map.of(), Map.of(), List.of(), "skill-" + i + ".md"));
+        }
+        when(agentSkillSpecService.listPackages()).thenReturn(many);
+        when(taskService.getById(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"第一步"}]
+                        """, "stop", "llm", 100));
+        when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(draft(11L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        ArgumentCaptor<AgentTask> captor = ArgumentCaptor.forClass(AgentTask.class);
+        verify(platformAgentExecutionService).executeSync(any(Agent.class), captor.capture());
+        String prompt = captor.getValue().getUserPrompt();
+        assertThat(prompt).contains("skill-1 v1.0.0")
+                .contains("skill-20 v1.0.0")
+                .contains("仅展示前 20 项");
+        assertThat(prompt).doesNotContain("skill-21");
     }
 
     // ══════════════════════════════════════════════════════════════
