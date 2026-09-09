@@ -2,6 +2,7 @@ package com.helloai.core.planner.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentAccessType;
@@ -18,11 +19,15 @@ import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.skill.SkillPackage;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
+import com.helloai.core.planner.policy.PlannerGranularity;
 import com.helloai.core.planner.policy.PlannerGranularityResolver;
+import com.helloai.core.planner.policy.RequirementPackage;
+import com.helloai.core.planner.policy.RequirementPackageParser;
 import com.helloai.core.planner.service.PlannerAnalysisService.PlanDraftItem;
 import com.helloai.core.planner.service.PlannerDecomposeAsyncService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.entity.Uncertainty;
 import com.helloai.core.task.policy.TaskAgentPolicy;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
@@ -117,7 +122,9 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
     private void doDecompose(Task task) {
         Long taskId = task.getId();
         Agent planner = plannerAgentPicker.pickForTask(taskId);
-        String prompt = renderPrompt(task);
+        // G-010：粒度判定提前到主流程，renderPrompt 渲染与 buildDrafts 的 COARSE 校验共用一次判定
+        PlannerGranularityResolver.GranularityDecision decision = granularityDecision(task);
+        String prompt = renderPrompt(task, decision);
 
         AgentTask agentTask = AgentTask.builder()
                 .systemPrompt("")
@@ -138,7 +145,7 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
 
         List<PlanDraftItem> items = parseDraftItems(result.getOutput());
         validateDependencies(items);
-        List<SubTask> drafts = buildDrafts(taskId, task.getPriority(), items, planner);
+        List<SubTask> drafts = buildDrafts(task, items, planner, decision);
         subTaskService.saveBatch(drafts);
         // 防御：ServiceImpl.saveBatch 的 @Transactional 边界可能导致实体 ID 未回填，
         // 从 DB 重加载保证 applyDependsOn 拿到的是持久化后的真实 ID（Snowflake 精度）。
@@ -187,8 +194,9 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
     // ══════════════════════════════════════════════════════════════
 
     /** 加载 classpath 模板并替换占位符。G-004 增量 B：注入任务技能要求（task.required_skills，
-     * 与执行侧 resolve 命中注入、审查侧核验同一清单——拆解规划须与技能规范对齐）。 */
-    private String renderPrompt(Task task) {
+     * 与执行侧 resolve 命中注入、审查侧核验同一清单——拆解规划须与技能规范对齐）。
+     * G-011：注入需求包段（{{REQUIREMENT_PACKAGE}}，防御式读取 task.context.requirementPackage）。 */
+    private String renderPrompt(Task task, PlannerGranularityResolver.GranularityDecision decision) {
         ClassPathResource resource = new ClassPathResource(PROMPT_TEMPLATE_PATH);
         if (!resource.exists()) {
             throw new BizException("未找到拆解 Prompt 模板: " + PROMPT_TEMPLATE_PATH);
@@ -199,7 +207,6 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
         } catch (Exception e) {
             throw new BizException("读取拆解 Prompt 模板失败: " + e.getMessage());
         }
-        PlannerGranularityResolver.GranularityDecision decision = granularityDecision(task);
         return template
                 .replace("{{TASK_TITLE}}", task.getTitle() != null ? task.getTitle() : "")
                 .replace("{{TASK_DESCRIPTION}}",
@@ -209,7 +216,15 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
                 .replace("{{SKILL_CATALOG}}", renderSkillCatalog())
                 .replace("{{EXECUTOR_PROFILE}}", decision.profile())
                 .replace("{{TASK_DIFFICULTY}}", TaskAgentPolicy.difficulty(task.getAgentPolicy()).name())
-                .replace("{{GRANULARITY}}", decision.granularity().name());
+                .replace("{{GRANULARITY}}", decision.granularity().name())
+                .replace("{{REQUIREMENT_PACKAGE}}", renderRequirementPackage(task));
+    }
+
+    /** G-011：需求包段渲染——task.context.requirementPackage 经防御式解析后五字段逐项列表；
+     * 无需求包（非澄清链路任务）→ 渲染占位文案，行为等于现状。 */
+    private String renderRequirementPackage(Task task) {
+        return RequirementPackageParser.render(
+                RequirementPackageParser.fromContext(task.getContext()));
     }
 
     /** G-010：按任务执行者画像 + 难度定位拆解粒度；白名单内 accessType 一次批量查询，避免 N+1。 */
@@ -311,8 +326,12 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
         return cleaned;
     }
 
-    /** 草案实体装配：status=PENDING_PLAN_REVIEW，context 记录拆解来源审计信息。 */
-    private List<SubTask> buildDrafts(Long taskId, String taskPriority, List<PlanDraftItem> items, Agent planner) {
+    /** 草案实体装配：status=PENDING_PLAN_REVIEW，context 记录拆解来源审计信息。
+     * G-011：uncertainties 落库（kind 降级审计）+ COARSE constraints 缺失 WARN（G-010 缺口④清偿）
+     * + D5 兜底审计（openQuestions 无 UNCONFIRMED 继承 WARN）。 */
+    private List<SubTask> buildDrafts(Task task, List<PlanDraftItem> items, Agent planner,
+                                      PlannerGranularityResolver.GranularityDecision decision) {
+        Long taskId = task.getId();
         List<SubTask> drafts = new ArrayList<>(items.size());
         String generatedAt = OffsetDateTime.now().toString();
         for (PlanDraftItem item : items) {
@@ -323,13 +342,22 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
             draft.setDeliverable(item.getDeliverable());
             draft.setAcceptance(item.getAcceptance());
             // 优先级继承（N-006，C4-S1）：LLM 显式合法值优先；未给/非法 → 继承 task.priority
-            draft.setPriority(resolveSubTaskPriority(item.getPriority(), taskPriority));
+            draft.setPriority(resolveSubTaskPriority(item.getPriority(), task.getPriority()));
             // 契约先行拆解（Phase 2）：contract=true → is_contract=1；
             // null/缺省/非法值一律按普通子任务（0）降级，不阻断拆解
             draft.setIsContract(Boolean.TRUE.equals(item.getContract()) ? 1 : 0);
             // G-010 能力感知：子任务级技能指派经目录过滤；constraints 直接落库
             draft.setRequiredSkills(filterRequiredSkills(taskId, item.getRequiredSkills(), planner));
             draft.setConstraints(item.getConstraints());
+            // G-011：uncertainties 落库（kind 非法值降级 UNCONFIRMED + 审计，非法形态回落空列表）
+            draft.setUncertainties(normalizeUncertainties(taskId, resolveUncertainties(item), planner));
+            // G-010 缺口④清偿：COARSE 粒度 constraints 缺失记 timeline WARN（不阻断落库）
+            if (decision.granularity() == PlannerGranularity.COARSE
+                    && (item.getConstraints() == null || item.getConstraints().isBlank())) {
+                taskTimelineService.recordEvent(taskId, null, "task_plan_constraints_missing",
+                        AgentRole.PLANNER, planner.getId(),
+                        Map.of("draftSeq", drafts.size() + 1, "title", item.getTitle()));
+            }
             draft.setStatus(SubTaskStatus.PENDING_PLAN_REVIEW);
             Map<String, Object> context = new HashMap<>();
             context.put("plannerAgentId", planner.getId());
@@ -338,7 +366,76 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
             draft.setContext(context);
             drafts.add(draft);
         }
+        // D5 兜底审计：任务 openQuestions 非空但拆解产物无任何 UNCONFIRMED 继承 → WARN（不阻断）
+        auditOpenQuestionsInheritance(task, drafts, planner);
         return drafts;
+    }
+
+    /**
+     * G-011：LLM uncertainties 字段（JsonNode，防御承接）→ 元素列表。
+     * 缺失 / 非数组 / 转换失败 → 空列表（不阻断拆解）；数组元素级 kind 非法值
+     * 由 {@link #normalizeUncertainties} 逐个降级审计。
+     */
+    private List<Uncertainty> resolveUncertainties(PlanDraftItem item) {
+        JsonNode node = item.getUncertaintiesNode();
+        if (node == null || node.isNull() || !node.isArray()) {
+            return List.of();
+        }
+        try {
+            return objectMapper.convertValue(node, new TypeReference<List<Uncertainty>>() { });
+        } catch (Exception e) {
+            log.warn("拆解 uncertainties 解析失败，回落空列表（不阻断）: title={}, err={}",
+                    item.getTitle(), e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
+     * G-011 D3：kind 合法性归一——非 ASSUMPTION / UNCONFIRMED 的值降级 UNCONFIRMED 并记
+     * timeline {@code task_plan_uncertainty_degraded}（不丢弃：降级到更严语义符合 fail-close，
+     * 与 G-010 幻觉标签丢弃模式差异理由见设计 D3）；note 空白条目丢弃（无信息量，消费侧无法使用）。
+     */
+    private List<Uncertainty> normalizeUncertainties(Long taskId, List<Uncertainty> raw, Agent planner) {
+        if (raw == null || raw.isEmpty()) {
+            return List.of();
+        }
+        List<Uncertainty> kept = new ArrayList<>(raw.size());
+        for (Uncertainty u : raw) {
+            if (u.getNote() == null || u.getNote().isBlank()) {
+                continue;
+            }
+            if (!Uncertainty.KIND_ASSUMPTION.equals(u.getKind())
+                    && !Uncertainty.KIND_UNCONFIRMED.equals(u.getKind())) {
+                taskTimelineService.recordEvent(taskId, null, "task_plan_uncertainty_degraded",
+                        AgentRole.PLANNER, planner.getId(),
+                        Map.of("note", u.getNote(), "rawKind", String.valueOf(u.getKind()),
+                                "degradedTo", Uncertainty.KIND_UNCONFIRMED));
+                u.setKind(Uncertainty.KIND_UNCONFIRMED);
+            }
+            kept.add(u);
+        }
+        return kept;
+    }
+
+    /**
+     * G-011 D5 兜底审计：任务需求包 openQuestions 非空，但拆解产物无任何子任务携带
+     * UNCONFIRMED 继承 → timeline 记 WARN 级 {@code task_plan_uncertainty_missing}
+     * （仅审计 openQuestions → UNCONFIRMED，不审计 assumptions；不阻断落库）。
+     */
+    private void auditOpenQuestionsInheritance(Task task, List<SubTask> drafts, Agent planner) {
+        RequirementPackage pkg = RequirementPackageParser.fromContext(task.getContext());
+        if (pkg.openQuestions().isEmpty()) {
+            return;
+        }
+        boolean hasUnconfirmed = drafts.stream()
+                .flatMap(d -> d.getUncertainties() == null
+                        ? java.util.stream.Stream.<Uncertainty>empty() : d.getUncertainties().stream())
+                .anyMatch(u -> Uncertainty.KIND_UNCONFIRMED.equals(u.getKind()));
+        if (!hasUnconfirmed) {
+            taskTimelineService.recordEvent(task.getId(), null, "task_plan_uncertainty_missing",
+                    AgentRole.PLANNER, planner.getId(),
+                    Map.of("openQuestions", pkg.openQuestions()));
+        }
     }
 
     /**

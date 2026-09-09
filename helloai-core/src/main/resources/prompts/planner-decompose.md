@@ -2,7 +2,8 @@
 <!--
   由 PlannerAnalysisService 加载渲染（classpath:prompts/planner-decompose.md）。
   占位符：{{TASK_TITLE}} / {{TASK_DESCRIPTION}} / {{TASK_REQUIRED_SKILLS}} /
-          {{SKILL_CATALOG}} / {{EXECUTOR_PROFILE}} / {{TASK_DIFFICULTY}} / {{GRANULARITY}}
+          {{SKILL_CATALOG}} / {{EXECUTOR_PROFILE}} / {{TASK_DIFFICULTY}} / {{GRANULARITY}} /
+          {{REQUIREMENT_PACKAGE}}
   由服务端替换。
   设计参考 openMoss task-planner.md 拆分四要素：目标 / 交付物 / 验收标准 / 优先级。
 -->
@@ -14,6 +15,14 @@
 - 任务标题：{{TASK_TITLE}}
 - 任务描述：{{TASK_DESCRIPTION}}
 - 任务技能要求：{{TASK_REQUIRED_SKILLS}}
+
+## 需求包（结构化准入产物）
+
+{{REQUIREMENT_PACKAGE}}
+
+> 需求包来自澄清链路终稿（goal / scope / outOfScope / assumptions / openQuestions）；
+> 本任务未经过澄清链路时渲染占位文案（按任务描述拆解）。openQuestions 是「经人工确认的待确认缺口」，
+> assumptions 是「已申报的推断项」——拆解时两者必须按下文第 10 条继承规则逐条评估。
 
 ## 平台技能目录（可指派给子任务）
 
@@ -45,6 +54,7 @@
 7. **技能对齐（仅当任务技能要求非空）**：任务声明了技能要求时，子任务的规划内容与验收标准必须与对应技能规范对齐（例如声明 eng-doc-standard 时产出须符合文档规范、声明 eng-verification 时验收须含可复现验证证据）；平台会按同一技能清单在执行侧注入规范、审查侧核验，拆解侧必须与之一致。
 8. **技能指派（requiredSkills，G-010）**：本子任务需要什么平台技能（只能取「平台技能目录」内已登记标签）；FINE 粒度逐步指派、STANDARD/COARSE 可空。声明了 requiredSkills 的子任务，执行侧会按该技能注入规范、审查侧按同一清单核验。
 9. **约束（constraints，G-010）**：本子任务"不许改的事"（边界 / 红线 / 不许越界事项）；仅 COARSE 粒度必填，其余档位可空。
+10. **不确定性申报（uncertainties，G-011）**：拆解中做出的推断标注为 {"kind":"ASSUMPTION"}，无法证实的信息缺口标注为 {"kind":"UNCONFIRMED"}。继承规则：需求包 assumptions 中与该子任务强相关的条目须继承（kind=ASSUMPTION）；需求包 openQuestions 中与该子任务相关的条目必须继承（kind=UNCONFIRMED）。禁止把推断 silently 写进目标而不申报。
 
 ## 拆解原则
 
@@ -55,6 +65,7 @@
 - 每条验收标准必须至少含一个可观察验证点（判定动作 + 预期结果），与 VERIFICATION 围栏形成拆解侧 / 审查侧闭环。
 - 不要生成"测试一下""收尾"这类无具体交付物的空泛子任务。
 - **契约先行**：任务涉及多模块接口 / 多组件协作（如"前后端联调""服务间对接""库表 + 接口 + 页面联合交付"）时，必须把最上游子任务指定为「契约定义」子任务（`"contract": true`）：deliverable 写清要产出哪些契约（接口签名 / 数据模型 / 错误码表），acceptance 必须含"契约内容明确到下游可直接照做实现"的可检查验证点。普通单模块任务不需要契约子任务（全部 `"contract": false` 或缺省）。
+- **边界硬约束（G-011）**：需求包 outOfScope 内条目不得出现在任何子任务的目标、内容或交付物中（明确排除项绝不拆进来）。
 
 ## 输出格式（严格遵守）
 
@@ -70,8 +81,9 @@
     "dependsOn": [],
     "contract": false,
     "requiredSkills": ["eng-doc-standard"],
-    "constraints": "不得修改对外接口签名；失败时停止并上报，不得自动重试写操作"
+    "constraints": "不得修改对外接口签名；失败时停止并上报，不得自动重试写操作",
+    "uncertainties": [{"kind": "UNCONFIRMED", "note": "该接口是否有存量调用方未确认"}]
   }
 ]
 
-字段全部必填；priority 只能取 HIGH / MEDIUM / LOW；dependsOn 是整数数组（前置子任务序号，无依赖填 []）；contract 只能取 true / false（契约定义子任务，全任务至多 1 个且必须排第 1 位）；requiredSkills 只能取「平台技能目录」内已登记标签（无则填 []）；constraints 仅 COARSE 粒度必填、其余档位可空。
+字段全部必填；priority 只能取 HIGH / MEDIUM / LOW；dependsOn 是整数数组（前置子任务序号，无依赖填 []）；contract 只能取 true / false（契约定义子任务，全任务至多 1 个且必须排第 1 位）；requiredSkills 只能取「平台技能目录」内已登记标签（无则填 []）；constraints 仅 COARSE 粒度必填、其余档位可空；uncertainties 可空数组（无不确定性时填 []，kind 只能取 ASSUMPTION / UNCONFIRMED）。

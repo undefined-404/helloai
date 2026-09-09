@@ -16,10 +16,13 @@ import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.skill.SkillPackage;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
+import com.helloai.core.planner.policy.RequirementPackageParser;
 import com.helloai.core.planner.service.PlannerAnalysisService;
 import com.helloai.core.planner.service.impl.PlannerDecomposeAsyncServiceImpl;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.entity.Uncertainty;
+import com.helloai.core.task.policy.TaskAgentPolicy;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
@@ -52,7 +55,7 @@ import static org.mockito.Mockito.when;
  * PlannerDecomposeAsyncServiceImpl 单元测试（拆解异步化改造，LLM 段用例迁移自
  * PlannerAnalysisServiceTest）：幂等守卫 / 成功落库 / markdown fence 容错 /
  * JSON 解析失败回退 / LLM 调用失败回退 / 幽灵依赖 / dependsOn 回写 /
- * validateDependencies 依赖环校验。
+ * validateDependencies 依赖环校验 / G-011 需求包渲染与 uncertainties 管理。
  *
  * <p>异步方法在测试中同步直调（不经 Spring 代理），失败路径内部闭环不抛异常，
  * 断言回退 PENDING（lambdaUpdate）与 task_plan_failed timeline。</p>
@@ -594,5 +597,289 @@ class PlannerDecomposeAsyncServiceImplTest {
                 List.of(item(List.of(1)))))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("不得依赖自身");
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  G-011 需求包渲染：{{REQUIREMENT_PACKAGE}} 占位符
+    // ══════════════════════════════════════════════════════════════
+
+    private Task taskWithRequirementPackage(Map<String, Object> pkgFields) {
+        Task task = planningTask();
+        task.setContext(Map.of(RequirementPackageParser.CONTEXT_KEY_REQUIREMENT_PACKAGE, pkgFields));
+        return task;
+    }
+
+    /** COARSE 粒度用例：白名单内全部 CLI_CLIENT（外部强执行者）执行者。 */
+    private Agent cliExecutor() {
+        Agent agent = new Agent();
+        agent.setId(1L);
+        agent.setAccessType(AgentAccessType.CLI_CLIENT);
+        return agent;
+    }
+
+    private String captureUserPrompt() {
+        ArgumentCaptor<AgentTask> captor = ArgumentCaptor.forClass(AgentTask.class);
+        verify(platformAgentExecutionService).executeSync(any(Agent.class), captor.capture());
+        return captor.getValue().getUserPrompt();
+    }
+
+    @Test
+    @DisplayName("G-011：任务带需求包 → Prompt 渲染五字段列表，占位符无残留")
+    void shouldRenderRequirementPackageIntoPrompt() {
+        Task task = taskWithRequirementPackage(Map.of(
+                "goal", "每日自动出日报",
+                "scope", List.of("报表生成", "定时调度"),
+                "outOfScope", List.of("不做 UI 改造"),
+                "assumptions", List.of("数据源可达且口径与昨日一致"),
+                "openQuestions", List.of("接口是否有存量调用方未确认")));
+        when(taskService.getById(TASK_ID)).thenReturn(task);
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"第一步","content":"c","deliverable":"d","acceptance":"a"}]
+                        """, "stop", "llm", 100));
+        when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(draft(11L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        String prompt = captureUserPrompt();
+        assertThat(prompt)
+                .contains("- 目标：每日自动出日报")
+                .contains("- 范围：")
+                .contains("报表生成")
+                .contains("明确不做（outOfScope）")
+                .contains("不做 UI 改造")
+                .contains("关键假设（推断项，须标注）")
+                .contains("数据源可达且口径与昨日一致")
+                .contains("待确认事项（openQuestions）")
+                .contains("接口是否有存量调用方未确认");
+        assertThat(prompt).doesNotContain("{{REQUIREMENT_PACKAGE}}");
+    }
+
+    @Test
+    @DisplayName("G-011：任务无需求包（未走澄清链路）→ 占位文案渲染，行为零变化")
+    void shouldRenderPlaceholderWhenNoRequirementPackage() {
+        when(taskService.getById(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"第一步"}]
+                        """, "stop", "llm", 100));
+        when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(draft(11L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        assertThat(captureUserPrompt())
+                .contains("（本任务未经过澄清链路，无结构化需求包——按任务描述拆解）")
+                .doesNotContain("{{REQUIREMENT_PACKAGE}}");
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  G-011 uncertainties：落库 / kind 降级审计 / 非法形态防御
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("G-011：uncertainties 落库——ASSUMPTION/UNCONFIRMED 原样保留")
+    void shouldPersistUncertainties() {
+        when(taskService.getById(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"第一步","content":"c","deliverable":"d","acceptance":"a",
+                          "uncertainties":[
+                            {"kind":"ASSUMPTION","note":"数据源可达"},
+                            {"kind":"UNCONFIRMED","note":"接口是否有存量调用方未确认"}
+                          ]}]
+                        """, "stop", "llm", 100));
+        when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(draft(11L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<SubTask>> captor = ArgumentCaptor.forClass(List.class);
+        verify(subTaskService).saveBatch(captor.capture());
+        List<Uncertainty> uncertainties = captor.getValue().get(0).getUncertainties();
+        assertThat(uncertainties).hasSize(2)
+                .extracting(Uncertainty::getKind)
+                .containsExactly(Uncertainty.KIND_ASSUMPTION, Uncertainty.KIND_UNCONFIRMED);
+        assertThat(uncertainties).extracting(Uncertainty::getNote)
+                .containsExactly("数据源可达", "接口是否有存量调用方未确认");
+    }
+
+    @Test
+    @DisplayName("G-011 D3：非法 kind 降级 UNCONFIRMED 并审计（不丢弃）；空白 note 丢弃")
+    void shouldDegradeIllegalKindAndDropBlankNote() {
+        when(taskService.getById(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"第一步","content":"c",
+                          "uncertainties":[
+                            {"kind":"MAYBE","note":"猜测性推断"},
+                            {"kind":"UNCONFIRMED","note":"   "},
+                            {"kind":"UNCONFIRMED","note":"正常缺口"}
+                          ]}]
+                        """, "stop", "llm", 100));
+        when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(draft(11L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<SubTask>> captor = ArgumentCaptor.forClass(List.class);
+        verify(subTaskService).saveBatch(captor.capture());
+        List<Uncertainty> uncertainties = captor.getValue().get(0).getUncertainties();
+        // 非法 kind 降级不丢弃；空白 note 条目丢弃
+        assertThat(uncertainties).hasSize(2);
+        assertThat(uncertainties.get(0).getKind()).isEqualTo(Uncertainty.KIND_UNCONFIRMED);
+        assertThat(uncertainties.get(0).getNote()).isEqualTo("猜测性推断");
+        assertThat(uncertainties.get(1).getKind()).isEqualTo(Uncertainty.KIND_UNCONFIRMED);
+        assertThat(uncertainties.get(1).getNote()).isEqualTo("正常缺口");
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_uncertainty_degraded"),
+                eq(AgentRole.PLANNER), eq(9L), payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue())
+                .containsEntry("rawKind", "MAYBE")
+                .containsEntry("degradedTo", Uncertainty.KIND_UNCONFIRMED);
+    }
+
+    @Test
+    @DisplayName("G-011 防御：uncertainties 非数组形态 → 回落空列表，不阻断拆解")
+    void shouldFallbackToEmptyWhenUncertaintiesNotArray() {
+        when(taskService.getById(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"第一步","content":"c","uncertainties":"非法形态"}]
+                        """, "stop", "llm", 100));
+        when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(draft(11L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<SubTask>> captor = ArgumentCaptor.forClass(List.class);
+        verify(subTaskService).saveBatch(captor.capture());
+        assertThat(captor.getValue().get(0).getUncertainties()).isEmpty();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  G-010 缺口④清偿：COARSE constraints 缺失 WARN（不阻断落库）
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("G-010 缺口④：COARSE 粒度 constraints 缺失 → task_plan_constraints_missing WARN")
+    void shouldWarnWhenCoarseConstraintsMissing() {
+        Task task = planningTask();
+        task.setAgentPolicy(TaskAgentPolicy.build(null, List.of(1L), null, null, null));
+        when(taskService.getById(TASK_ID)).thenReturn(task);
+        when(agentService.listByIds(List.of(1L))).thenReturn(List.of(cliExecutor()));
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"只拆目标","content":"c","deliverable":"d","acceptance":"a"}]
+                        """, "stop", "llm", 100));
+        when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(draft(11L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        verify(subTaskService).saveBatch(any());
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_constraints_missing"),
+                eq(AgentRole.PLANNER), eq(9L), payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue())
+                .containsEntry("draftSeq", 1)
+                .containsEntry("title", "只拆目标");
+    }
+
+    @Test
+    @DisplayName("G-010：COARSE 粒度 constraints 齐全 → 不记 WARN")
+    void shouldNotWarnWhenCoarseConstraintsPresent() {
+        Task task = planningTask();
+        task.setAgentPolicy(TaskAgentPolicy.build(null, List.of(1L), null, null, null));
+        when(taskService.getById(TASK_ID)).thenReturn(task);
+        when(agentService.listByIds(List.of(1L))).thenReturn(List.of(cliExecutor()));
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"只拆目标","content":"c","deliverable":"d","acceptance":"a",
+                          "constraints":"不得改线上配置"}]
+                        """, "stop", "llm", 100));
+        when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(draft(11L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        verify(subTaskService).saveBatch(any());
+        verify(taskTimelineService, never()).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_constraints_missing"),
+                eq(AgentRole.PLANNER), eq(9L), anyMap());
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  G-011 D5 兜底审计：openQuestions 无 UNCONFIRMED 继承 → WARN
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("G-011 D5：openQuestions 非空但拆解产物无 UNCONFIRMED → task_plan_uncertainty_missing WARN")
+    void shouldWarnWhenOpenQuestionsNotInherited() {
+        Task task = taskWithRequirementPackage(Map.of(
+                "openQuestions", List.of("接口是否有存量调用方未确认")));
+        when(taskService.getById(TASK_ID)).thenReturn(task);
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        // LLM 只申报 ASSUMPTION（推断），未按继承规则转出 UNCONFIRMED → 兜底 WARN
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"第一步","content":"c",
+                          "uncertainties":[{"kind":"ASSUMPTION","note":"数据源可达"}]}]
+                        """, "stop", "llm", 100));
+        when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(draft(11L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_uncertainty_missing"),
+                eq(AgentRole.PLANNER), eq(9L), anyMap());
+    }
+
+    @Test
+    @DisplayName("G-011 D5：拆解产物含 UNCONFIRMED 继承 → 不记 WARN")
+    void shouldNotWarnWhenOpenQuestionsInherited() {
+        Task task = taskWithRequirementPackage(Map.of(
+                "openQuestions", List.of("接口是否有存量调用方未确认")));
+        when(taskService.getById(TASK_ID)).thenReturn(task);
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"第一步","content":"c",
+                          "uncertainties":[{"kind":"UNCONFIRMED","note":"接口是否有存量调用方未确认"}]}]
+                        """, "stop", "llm", 100));
+        when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(draft(11L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        verify(taskTimelineService, never()).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_uncertainty_missing"),
+                eq(AgentRole.PLANNER), eq(9L), anyMap());
+    }
+
+    @Test
+    @DisplayName("G-011 D5：无需求包（openQuestions 空）→ 不记 WARN，行为零变化")
+    void shouldNotWarnWhenNoRequirementPackage() {
+        when(taskService.getById(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [{"title":"第一步"}]
+                        """, "stop", "llm", 100));
+        when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(draft(11L)));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        verify(taskTimelineService, never()).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_uncertainty_missing"),
+                eq(AgentRole.PLANNER), eq(9L), anyMap());
     }
 }
