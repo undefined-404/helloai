@@ -14,6 +14,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.entity.Uncertainty;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.port.ReviewSummary;
@@ -172,6 +173,58 @@ class SubTaskServiceHandoverTest {
         subTaskService.changeStatus(SUB_TASK_ID, SubTaskStatus.ASSIGNED, NEW_AGENT);
 
         assertThat(capturedEventTypes()).containsExactly("sub_task.assigned");
+    }
+
+    @Test
+    @DisplayName("G-011 分配通知摘要：UNCONFIRMED 计数>0 追加「待确认: N 项」（ASSUMPTION 不计入）")
+    void shouldAppendPendingUncertaintyLineInAssignedSummary() {
+        SubTask subTask = subTask(SubTaskStatus.PENDING, null);
+        Uncertainty assumed = new Uncertainty();
+        assumed.setKind(Uncertainty.KIND_ASSUMPTION);
+        assumed.setNote("分区口径可自行核验");
+        Uncertainty pending1 = new Uncertainty();
+        pending1.setKind(Uncertainty.KIND_UNCONFIRMED);
+        pending1.setNote("归档分区待确认");
+        Uncertainty pending2 = new Uncertainty();
+        pending2.setKind(Uncertainty.KIND_UNCONFIRMED);
+        pending2.setNote("批量窗口待确认");
+        subTask.setUncertainties(List.of(assumed, pending1, pending2));
+        doReturn(subTask).when(subTaskService).getById(SUB_TASK_ID);
+
+        subTaskService.changeStatus(SUB_TASK_ID, SubTaskStatus.ASSIGNED, NEW_AGENT);
+
+        ArgumentCaptor<String> summaryCaptor = ArgumentCaptor.forClass(String.class);
+        verify(agentInboxService).send(eq(NEW_AGENT), anyString(), eq("sub_task.assigned"),
+                anyString(), summaryCaptor.capture(), eq("sub_task"), eq(SUB_TASK_ID), anyString());
+        assertThat(summaryCaptor.getValue()).contains("\n待确认: 2 项");
+    }
+
+    @Test
+    @DisplayName("G-011 仅 ASSUMPTION 或无申报：分配摘要不含「待确认:」行")
+    void shouldSkipUncertaintyLineWhenOnlyAssumptionsOrNone() {
+        SubTask assumedOnly = subTask(SubTaskStatus.PENDING, null);
+        Uncertainty assumed = new Uncertainty();
+        assumed.setKind(Uncertainty.KIND_ASSUMPTION);
+        assumed.setNote("历史数据可忽略");
+        assumedOnly.setUncertainties(List.of(assumed));
+        doReturn(assumedOnly).when(subTaskService).getById(SUB_TASK_ID);
+
+        subTaskService.changeStatus(SUB_TASK_ID, SubTaskStatus.ASSIGNED, NEW_AGENT);
+
+        ArgumentCaptor<String> summaryCaptor = ArgumentCaptor.forClass(String.class);
+        verify(agentInboxService).send(eq(NEW_AGENT), anyString(), eq("sub_task.assigned"),
+                anyString(), summaryCaptor.capture(), eq("sub_task"), eq(SUB_TASK_ID), anyString());
+        assertThat(summaryCaptor.getValue()).doesNotContain("待确认:");
+
+        // 无申报：同样不追加
+        SubTask noUncertainty = subTask(SubTaskStatus.PENDING, null);
+        doReturn(noUncertainty).when(subTaskService).getById(SUB_TASK_ID);
+        subTaskService.changeStatus(SUB_TASK_ID, SubTaskStatus.ASSIGNED, NEW_AGENT);
+
+        ArgumentCaptor<String> summaryCaptor2 = ArgumentCaptor.forClass(String.class);
+        verify(agentInboxService, times(2)).send(eq(NEW_AGENT), anyString(), eq("sub_task.assigned"),
+                anyString(), summaryCaptor2.capture(), eq("sub_task"), eq(SUB_TASK_ID), anyString());
+        assertThat(summaryCaptor2.getAllValues().get(1)).doesNotContain("待确认:");
     }
 
     @Test

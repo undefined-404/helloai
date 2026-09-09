@@ -14,8 +14,9 @@ import com.helloai.core.agent.event.AgentEventContextResolver;
 import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.task.entity.Attachment;
-import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.entity.Uncertainty;
+import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.spec.ExecutionRecord;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -546,6 +547,29 @@ public class SubTaskExecutionServiceImpl implements SubTaskExecutionService {
         if (subTask.getAcceptance() != null && !subTask.getAcceptance().isBlank()) {
             sb.append("验收标准: ").append(subTask.getAcceptance()).append("\n");
         }
+
+        // G-011 D6 三段增量（空值零注入）：执行约束补偿（G-010 缺口清偿：约束落库后执行者不可见）
+        // + 不确定性分级申报 + 事实回源声明（固定文本常驻）
+        if (subTask.getConstraints() != null && !subTask.getConstraints().isBlank()) {
+            sb.append("执行约束（不许改的事）: ").append(subTask.getConstraints()).append("\n");
+        }
+        if (subTask.getUncertainties() != null && !subTask.getUncertainties().isEmpty()) {
+            sb.append("不确定性申报:\n");
+            for (Uncertainty u : subTask.getUncertainties()) {
+                if (u.getNote() == null || u.getNote().isBlank()) {
+                    continue;
+                }
+                // ASSUMPTION 可自行验证 / 推翻；其余（含人工编辑引入的非法值）一律按
+                // UNCONFIRMED 语义后缀（fail-close，与落库侧 D3 降级口径一致），须先验证再动手
+                String suffix = Uncertainty.KIND_ASSUMPTION.equals(u.getKind())
+                        ? "（可自行验证，推翻即上报）"
+                        : "（须先验证再动手，无法验证则 BLOCKED 上报）";
+                sb.append("- [").append(u.getKind()).append("] ").append(u.getNote())
+                  .append(suffix).append("\n");
+            }
+        }
+        sb.append("验收事实回源：生产系统当前行为以代码与配置为准；业务意图以本任务描述与已确认需求包为准；"
+                + "历史兼容行为不得在未声明的情况下「优化」移除。\n");
 
         // 执行恢复上下文（N-007 B1）：重派接续时注入上一次被中断尝试的摘要，
         // 无中断/快照缺失零注入；与返工修正指引互补（返工场景由 reviewHistory 覆盖）

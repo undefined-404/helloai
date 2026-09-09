@@ -1,6 +1,7 @@
 package com.helloai.api.dto.subtask;
 
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.core.task.entity.Uncertainty;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import lombok.Data;
@@ -34,6 +35,8 @@ public class SubTaskResponse {
     private List<String> requiredSkills;
     /** 执行约束（COARSE 粒度必填：不许改的事；其余档位可空） */
     private String constraints;
+    /** 不确定性申报（G-011：kind=ASSUMPTION/UNCONFIRMED + note；拆解侧指派，草案确认 UI 可编辑，外部 agent 下行可见） */
+    private List<Uncertainty> uncertainties;
     /** 执行上下文（JSONB）：含人工介入标记 manualIntervention，§6.52 前端人工介入面板判定依赖此字段 */
     private Map<String, Object> context;
     /** 依赖的子任务 id 列表（同 Task 内；空列表=无依赖） */

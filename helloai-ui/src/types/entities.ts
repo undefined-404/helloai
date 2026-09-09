@@ -122,6 +122,8 @@ export interface SubTask {
   // G-010 能力感知：子任务级技能标签（拆解侧指派/草案编辑修订）与执行约束
   requiredSkills?: string[] | null
   constraints?: string | null
+  // G-011 不确定性申报：拆解侧识别出的假设与待确认项（草案编辑/任务详情展示）
+  uncertainties?: Uncertainty[] | null
   // V27 依赖编排：前置子任务 id 列表（全部 DONE 才分发），旧数据为空数组
   dependsOn?: LongId[]
   context: Record<string, any> | null
@@ -133,6 +135,14 @@ export interface SubTask {
   timeoutCount: number
   createTime: string
   updateTime: string
+}
+
+// G-011 不确定性申报条目（对齐后端 Uncertainty 实体）：
+// kind=ASSUMPTION 可自行验证、推翻即上报；kind=UNCONFIRMED 须先验证再动手，无法验证则 BLOCKED 上报
+// 草案编辑侧不做 kind 强校验（授权输入），非法值由服务端降级 UNCONFIRMED
+export interface Uncertainty {
+  kind: 'ASSUMPTION' | 'UNCONFIRMED' | string
+  note: string
 }
 
 // --- Agent ---

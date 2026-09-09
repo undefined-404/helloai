@@ -1,6 +1,6 @@
 import request from './request'
 import { paths } from './paths'
-import type { SubTask, ChangeStatusRequest, PageResult, LongId, CreateSubTaskPayload, TaskTimelineItem, ConversationMessageItem } from '@/types'
+import type { SubTask, ChangeStatusRequest, PageResult, LongId, CreateSubTaskPayload, TaskTimelineItem, ConversationMessageItem, Uncertainty } from '@/types'
 
 export const subTaskApi = {
   // taskId: 按主任务过滤（任务管理页跳转携带），LongId 传 string 防精度丢
@@ -17,7 +17,8 @@ export const subTaskApi = {
     return request.get<any, SubTask>(paths.subTasks.getById(id))
   },
   // G-010 草案人工修订：确认前编辑技能指派与执行约束（null=不修改该字段）
-  updateDraft(id: LongId, data: { requiredSkills?: string[] | null; constraints?: string | null }) {
+  // G-011 不确定性逐条编辑同入口下发；空数组=清空，null=不修改
+  updateDraft(id: LongId, data: { requiredSkills?: string[] | null; constraints?: string | null; uncertainties?: Uncertainty[] | null }) {
     return request.put(paths.subTasks.updateDraft(id), data)
   },
   // M4.5: 快速派发单建（QuickDispatchDialog 逐项调用）

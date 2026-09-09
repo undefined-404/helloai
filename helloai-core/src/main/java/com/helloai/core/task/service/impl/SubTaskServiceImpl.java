@@ -26,6 +26,7 @@ import com.helloai.core.shared.event.SubTaskAssignedEvent;
 import com.helloai.core.shared.event.SubTaskCompletedEvent;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.entity.Uncertainty;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.port.ReviewFact;
 import com.helloai.core.task.port.ReviewPort;
@@ -149,7 +150,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void updateDraft(Long id, List<String> requiredSkills, String constraints) {
+    public void updateDraft(Long id, List<String> requiredSkills, String constraints, List<Uncertainty> uncertainties) {
         SubTask subTask = getById(id);
         if (subTask == null) {
             throw new BizException("草案不存在: " + id);
@@ -163,6 +164,22 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         }
         if (constraints != null) {
             subTask.setConstraints(constraints);
+        }
+        if (uncertainties != null) {
+            // G-011：人工编辑为权威输入不做 kind 强校验，但落库侧保持数据不变量——
+            // 空白 note 条目丢弃（无信息量）、非法 kind 降级 UNCONFIRMED（D3 fail-close 同口径）
+            List<Uncertainty> normalized = new ArrayList<>();
+            for (Uncertainty u : uncertainties) {
+                if (u == null || u.getNote() == null || u.getNote().isBlank()) {
+                    continue;
+                }
+                if (!Uncertainty.KIND_ASSUMPTION.equals(u.getKind())
+                        && !Uncertainty.KIND_UNCONFIRMED.equals(u.getKind())) {
+                    u.setKind(Uncertainty.KIND_UNCONFIRMED);
+                }
+                normalized.add(u);
+            }
+            subTask.setUncertainties(normalized);
         }
         updateById(subTask);
     }
@@ -546,10 +563,21 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
                         List<String> mergedSkills = mergeSkills(subTask);
                         String skillLine = mergedSkills.isEmpty() ? ""
                                 : "\n技能要求: " + String.join(", ", mergedSkills);
+                        // G-011 D6：uncertainties 中 UNCONFIRMED 条目数 >0 时追加「待确认: N 项」
+                        // （ASSUMPTION 可自行验证无需提示；纯文本形态与技能要求行同款，不动 inbox 契约面）
+                        String uncertaintyLine = "";
+                        if (subTask.getUncertainties() != null) {
+                            long pendingCount = subTask.getUncertainties().stream()
+                                    .filter(u -> Uncertainty.KIND_UNCONFIRMED.equals(u.getKind()))
+                                    .count();
+                            if (pendingCount > 0) {
+                                uncertaintyLine = "\n待确认: " + pendingCount + " 项";
+                            }
+                        }
                         agentInboxService.send(agentId, eventId, "sub_task.assigned",
                                 "新任务已分配: " + title,
                                 "交付物: " + (subTask.getDeliverable() != null ? subTask.getDeliverable() : "待确认")
-                                        + skillLine,
+                                        + skillLine + uncertaintyLine,
                                 "sub_task", subTask.getId(), "HIGH");
                     }
                 }

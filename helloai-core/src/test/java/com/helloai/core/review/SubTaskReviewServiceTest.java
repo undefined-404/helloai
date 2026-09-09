@@ -26,6 +26,7 @@ import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.entity.Uncertainty;
 import com.helloai.core.review.service.ReviewService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
@@ -665,6 +666,51 @@ class SubTaskReviewServiceTest {
         assertThat(prompt).contains("api-docs.md");
         assertThat(prompt).contains("平台可直读");
         assertThat(prompt).contains("声称的交付物必须与**物化附件清单**对应");
+    }
+
+    @Test
+    @DisplayName("G-011 D7：核验 Prompt 注入执行约束与不确定性申报（分级条目逐条渲染）")
+    void shouldInjectConstraintsAndUncertaintiesIntoReviewPrompt() {
+        SubTask subTask = reviewSubTask();
+        subTask.setConstraints("不得改动既有接口签名");
+        Uncertainty assumed = new Uncertainty();
+        assumed.setKind(Uncertainty.KIND_ASSUMPTION);
+        assumed.setNote("仅在线表参与统计");
+        Uncertainty pending = new Uncertainty();
+        pending.setKind(Uncertainty.KIND_UNCONFIRMED);
+        pending.setNote("归档分区口径待确认");
+        subTask.setUncertainties(List.of(assumed, pending));
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 4, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        String prompt = captureReviewPrompt();
+        assertThat(prompt)
+                .contains("- 执行约束：不得改动既有接口签名")
+                .contains("- 不确定性申报：")
+                .contains("- [ASSUMPTION] 仅在线表参与统计")
+                .contains("- [UNCONFIRMED] 归档分区口径待确认");
+    }
+
+    @Test
+    @DisplayName("G-011 D7：无约束无申报时占位渲染「（无）」，不残留双大括号占位符")
+    void shouldRenderPlaceholderWhenNoConstraintsOrUncertainties() {
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        String prompt = captureReviewPrompt();
+        assertThat(prompt)
+                .contains("- 执行约束：（无）")
+                .contains("- 不确定性申报：（无）")
+                .doesNotContain("{{CONSTRAINTS}}")
+                .doesNotContain("{{UNCERTAINTIES}}");
     }
 
     // ══════════════════════════════════════════════════════════════

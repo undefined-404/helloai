@@ -8,6 +8,7 @@ import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.review.service.SubTaskReviewService;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.entity.Uncertainty;
 import com.helloai.core.task.service.TaskTimelineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -123,7 +124,11 @@ public class ReviewExecutionEngine {
         return verdict;
     }
 
-    /** 加载核验 Prompt 模板并替换占位符（证据/附件占位由装配器产出）。 */
+    /**
+     * 加载核验 Prompt 模板并替换占位符（证据/附件占位由装配器产出）。
+     * G-011 D7：增 {{CONSTRAINTS}} + {{UNCERTAINTIES}} 渲染（空时「（无）」），
+     * 清偿 G-010 后置缺口③（审查侧 constraints 此前未消费）。
+     */
     private String renderPrompt(SubTask subTask) {
         ClassPathResource resource = new ClassPathResource(PROMPT_TEMPLATE_PATH);
         String template;
@@ -137,10 +142,33 @@ public class ReviewExecutionEngine {
                 .replace("{{SUB_TASK_CONTENT}}", VerdictParser.nullToEmpty(subTask.getContent()))
                 .replace("{{DELIVERABLE}}", VerdictParser.nullToEmpty(subTask.getDeliverable()))
                 .replace("{{ACCEPTANCE}}", VerdictParser.nullToEmpty(subTask.getAcceptance()))
+                .replace("{{CONSTRAINTS}}", renderConstraints(subTask))
+                .replace("{{UNCERTAINTIES}}", renderUncertainties(subTask))
                 .replace("{{EXECUTION_OUTPUT}}", reviewEvidenceAssembler.extractExecutionOutput(subTask))
                 .replace("{{ATTACHMENT_LIST}}", reviewEvidenceAssembler.buildAttachmentList(subTask))
                 .replace("{{ATTACHMENT_CONTENT}}", reviewEvidenceAssembler.buildAttachmentContent(subTask))
                 .replace("{{VERIFICATION_SIGNAL}}",
                         reviewEvidenceAssembler.verificationSignal(reviewEvidenceAssembler.extractRawOutput(subTask)));
+    }
+
+    /** D7：执行约束渲染——非空注入「执行约束：…」，空时「（无）」（G-010 缺口③清偿）。 */
+    private String renderConstraints(SubTask subTask) {
+        return subTask.getConstraints() != null && !subTask.getConstraints().isBlank()
+                ? subTask.getConstraints() : "（无）";
+    }
+
+    /** D7：不确定性申报渲染——逐条「[kind] note」，空时「（无）」（空白 note 条目跳过）。 */
+    private String renderUncertainties(SubTask subTask) {
+        if (subTask.getUncertainties() == null || subTask.getUncertainties().isEmpty()) {
+            return "（无）";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (Uncertainty u : subTask.getUncertainties()) {
+            if (u.getNote() == null || u.getNote().isBlank()) {
+                continue;
+            }
+            sb.append("- [").append(u.getKind()).append("] ").append(u.getNote()).append('\n');
+        }
+        return sb.length() > 0 ? sb.toString().trim() : "（无）";
     }
 }

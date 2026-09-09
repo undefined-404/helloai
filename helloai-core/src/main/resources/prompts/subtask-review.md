@@ -2,7 +2,7 @@
 <!--
   由 SubTaskReviewService 加载渲染（classpath:prompts/subtask-review.md）。
   占位符：{SUB_TASK_TITLE} / {SUB_TASK_CONTENT} / {DELIVERABLE} /
-         {ACCEPTANCE} / {EXECUTION_OUTPUT} / {ATTACHMENT_LIST} /
+         {ACCEPTANCE} / {CONSTRAINTS} / {UNCERTAINTIES} / {EXECUTION_OUTPUT} / {ATTACHMENT_LIST} /
          {ATTACHMENT_CONTENT} / {VERIFICATION_SIGNAL} 由服务端替换。
   核验模型为双轨纪律制：轨道 A（验收标准）+ 轨道 B（工程纪律，按交付物类型条件激活）。
   工程纪律维度提炼自 DeepSeek Harness dsh-code-review / dsh-prose-standard / dsh-trim-cot-leakage，
@@ -17,6 +17,8 @@
 - 执行内容：{{SUB_TASK_CONTENT}}
 - 交付物要求：{{DELIVERABLE}}
 - 验收标准：{{ACCEPTANCE}}
+- 执行约束：{{CONSTRAINTS}}
+- 不确定性申报：{{UNCERTAINTIES}}
 
 ## 执行产出
 
@@ -47,6 +49,8 @@
 5. 无法确定验收标准是否满足时（证据不足、无法核实），不得判 pass=true——宁可停留返工，不可放行存疑交付。
 6. 声称的交付物必须与**物化附件清单**对应：交付物声明为文件（如 .ps1/.sh/.jar/.py 等脚本或程序）但附件清单无对应文件时，即使产出文本声称"已创建/已运行/203 行 errors=0"，也判 pass=false 并在 issues 中指出缺失；附件清单仅含产出文本物化（.md）而交付物声明为可执行文件时同样不通过；附件标注"外部存储（平台不可直读）"的不可作为平台可验证的证据。
 7. 必须基于**物化附件内容**核对交付物："声称交付物 ↔ 文件正文 ↔ 验收标准"三者一致性是判定依据——附件正文与声称结论矛盾（如声称"main.py 含错误处理"但正文无对应代码）、正文明显残缺或与验收标准不符的，判 pass=false 并在 issues 中指出差异；附件标注"内容不可读/为空"或"无平台可直读附件"时，不得臆断文件内容，仅凭文件名与产出文本从严判定。
+8. **执行约束遵守核验（G-011 D7，清偿 G-010 缺口③）**："执行约束"非"（无）"时，逐条核验产出是否违反约束中列出的"不许改 / 不许越界"事项，违反即按不达标处理（pass=false）；无法确认是否触碰边界时从严核验。
+9. **不确定性分级核验（G-011 D7）**："不确定性申报"非"（无）"时——ASSUMPTION 类申报不构成驳回理由（按"假设是否被产出尊重"核验，而非"假设是否存在"）；UNCONFIRMED 类申报的产出中须含验证结论或 BLOCKED 上报痕迹，既未验证也未上报的按不达标处理。
 
 ### 轨道 B：工程纪律核验（按交付物类型条件激活）
 

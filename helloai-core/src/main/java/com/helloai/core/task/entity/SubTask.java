@@ -137,6 +137,17 @@ public class SubTask extends BaseEntity {
     private String constraints;
 
     /**
+     * 不确定性申报（需求准入与不确定性显式管理 G-011，V75 显式 JSONB 列）。
+     *
+     * <p>拆解侧指派，kind 二值分级：ASSUMPTION 已申报假设（执行者可自行验证 / 推翻，
+     * 审查不因假设存在而驳回）/ UNCONFIRMED 待确认缺口（执行者须先验证再动手，
+     * 验证不了走既有 BLOCKED 链上报）。空数组（默认）=无申报，执行/审查侧零注入，
+     * 存量数据行为与现状完全一致。</p>
+     */
+    @TableField(typeHandler = JacksonTypeHandler.class)
+    private List<Uncertainty> uncertainties;
+
+    /**
      * 依赖 id 归一化读取：把 Jackson 反序列化出的 Integer/Long/String 统一转为 Long。
      * 永不返回 null（空依赖返回空列表）。
      *

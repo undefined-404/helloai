@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.entity.Uncertainty;
 import com.helloai.core.task.port.TaskDispatchPort;
 import lombok.Data;
 import org.springframework.transaction.annotation.Transactional;
@@ -46,7 +47,7 @@ public interface SubTaskService extends IService<SubTask> {
     List<String> mergeSkills(SubTask subTask);
 
     /**
-     * 草案人工修订（G-010 草案确认 UI）：仅更新技能指派与执行约束两字段。
+     * 草案人工修订（G-010 草案确认 UI）：仅更新技能指派、执行约束与不确定性申报。
      *
      * <p>fail-close：仅 PENDING_PLAN_REVIEW 状态允许编辑，其余状态抛业务异常
      * （草案已转正后走返工/改派链路，不得绕过状态机直改）。</p>
@@ -54,8 +55,10 @@ public interface SubTaskService extends IService<SubTask> {
      * @param id             草案子任务 ID
      * @param requiredSkills 技能标签；null=不修改，非 null（含空数组）=覆盖
      * @param constraints    执行约束；null=不修改
+     * @param uncertainties  不确定性申报（G-011）；null=不修改，非 null（含空数组）=覆盖（空数组=清空）；
+     *                       空白 note 条目丢弃、非法 kind 降级 UNCONFIRMED（D3 fail-close 同口径）
      */
-    void updateDraft(Long id, List<String> requiredSkills, String constraints);
+    void updateDraft(Long id, List<String> requiredSkills, String constraints, List<Uncertainty> uncertainties);
 
     @Transactional(rollbackFor = Exception.class)
     SubTask create(SubTask subTask, Long assignedAgentId);

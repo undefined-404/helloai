@@ -110,6 +110,15 @@
             {{ row.constraints || '-' }}
           </template>
         </el-table-column>
+        <!-- G-011 不确定性申报列：压缩展示「N 项待确认 · M 项假设」，明细在编辑弹窗内逐条修订 -->
+        <el-table-column
+          label="不确定性"
+          min-width="130"
+        >
+          <template #default="{ row }">
+            {{ fmtUncertainties(row.uncertainties) }}
+          </template>
+        </el-table-column>
         <el-table-column
           label="操作"
           width="70"
@@ -191,6 +200,44 @@
             placeholder="不许改的事（边界/红线）；COARSE 粒度建议必填，其余可空"
           />
         </el-form-item>
+        <!-- G-011 不确定性申报逐条编辑：kind 分级 + note；未填 note 的条目保存时由服务端丢弃 -->
+        <el-form-item label="不确定性">
+          <div style="width:100%">
+            <div
+              v-for="(u, idx) in editForm.uncertainties"
+              :key="idx"
+              style="display:flex;gap:8px;margin-bottom:8px;align-items:flex-start"
+            >
+              <el-select
+                v-model="u.kind"
+                style="width:130px"
+              >
+                <el-option label="待确认" value="UNCONFIRMED" />
+                <el-option label="假设" value="ASSUMPTION" />
+              </el-select>
+              <el-input
+                v-model="u.note"
+                placeholder="不确定性描述（如：目标表是否含已归档分区）"
+              />
+              <el-button
+                link
+                type="danger"
+                @click="removeUncertainty(idx)"
+              >
+                删除
+              </el-button>
+            </div>
+            <el-button
+              size="small"
+              @click="addUncertainty"
+            >
+              + 添加一项
+            </el-button>
+            <div style="font-size:12px;color:var(--ha-ink-2);line-height:1.6;margin-top:4px">
+              假设（ASSUMPTION）执行侧可自行验证、推翻即上报；待确认（UNCONFIRMED）须先验证再动手，无法验证则 BLOCKED 上报。保存时未填描述的条目会被丢弃。
+            </div>
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="editVisible = false">
@@ -213,7 +260,7 @@ import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { taskApi } from '@/api/task'
 import { subTaskApi } from '@/api/subTask'
-import type { Task, SubTask, LongId } from '@/types'
+import type { Task, SubTask, LongId, Uncertainty } from '@/types'
 
 const props = defineProps<{ modelValue: boolean; task: Task | null }>()
 const emit = defineEmits<{ 'update:modelValue': [v: boolean]; close: []; done: [] }>()
@@ -313,11 +360,25 @@ function fmtDepends(dependsOn?: LongId[] | null): string {
   return seqs.length ? `依赖 #${seqs.join(',')}` : '-'
 }
 
+// G-011 不确定性压缩展示：「N 项待确认 · M 项假设」（全空时显示 -）
+function fmtUncertainties(uncertainties?: Uncertainty[] | null): string {
+  if (!uncertainties?.length) return '-'
+  const pending = uncertainties.filter(u => u.kind === 'UNCONFIRMED').length
+  const assumed = uncertainties.filter(u => u.kind === 'ASSUMPTION').length
+  const parts: string[] = []
+  if (pending > 0) parts.push(`${pending} 项待确认`)
+  if (assumed > 0) parts.push(`${assumed} 项假设`)
+  return parts.length ? parts.join(' · ') : `${uncertainties.length} 项`
+}
+
 // --- G-010 草案人工修订（技能指派 + 执行约束） ---
+// --- G-011 扩展：不确定性逐条编辑（kind + note，空行保存时由服务端丢弃） ---
 const editVisible = ref(false)
 const savingDraft = ref(false)
 const editingRow = ref<SubTask | null>(null)
-const editForm = ref<{ requiredSkills: string[]; constraints: string }>({ requiredSkills: [], constraints: '' })
+const editForm = ref<{ requiredSkills: string[]; constraints: string; uncertainties: { kind: string; note: string }[] }>(
+  { requiredSkills: [], constraints: '', uncertainties: [] }
+)
 
 // 技能下拉候选：全部草案已指派标签的并集（目录端点本批未暴露，allow-create 兜自由输入）
 const skillOptions = computed(() => {
@@ -330,9 +391,19 @@ function openEdit(row: SubTask) {
   editingRow.value = row
   editForm.value = {
     requiredSkills: [...(row.requiredSkills ?? [])],
-    constraints: row.constraints ?? ''
+    constraints: row.constraints ?? '',
+    uncertainties: (row.uncertainties ?? []).map(u => ({ kind: u.kind ?? 'UNCONFIRMED', note: u.note ?? '' }))
   }
   editVisible.value = true
+}
+
+// 新增一条默认「待确认」空行（note 留空保存时服务端丢弃）
+function addUncertainty() {
+  editForm.value.uncertainties.push({ kind: 'UNCONFIRMED', note: '' })
+}
+
+function removeUncertainty(idx: number) {
+  editForm.value.uncertainties.splice(idx, 1)
 }
 
 async function saveEdit() {
@@ -340,13 +411,19 @@ async function saveEdit() {
   if (!row) return
   savingDraft.value = true
   try {
+    // 保存前过滤空行（与服务端空白 note 丢弃口径一致），kind 下拉限定两值无需强校验
+    const uncertainties = editForm.value.uncertainties
+      .filter(u => u.note.trim() !== '')
+      .map(u => ({ kind: u.kind, note: u.note }))
     await subTaskApi.updateDraft(row.id, {
       requiredSkills: editForm.value.requiredSkills,
-      constraints: editForm.value.constraints
+      constraints: editForm.value.constraints,
+      uncertainties
     })
     // 本地同步，免整表重拉
     row.requiredSkills = [...editForm.value.requiredSkills]
     row.constraints = editForm.value.constraints
+    row.uncertainties = uncertainties
     ElMessage.success('草案已修订')
     editVisible.value = false
   } catch { /* 拦截器已弹错 */ }

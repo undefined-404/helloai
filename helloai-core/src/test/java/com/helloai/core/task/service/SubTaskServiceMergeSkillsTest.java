@@ -13,6 +13,7 @@ import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.config.WatchdogProperties;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.entity.Uncertainty;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
@@ -30,6 +31,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doReturn;
@@ -40,6 +42,7 @@ import static org.mockito.Mockito.spy;
 /**
  * SubTaskService.mergeSkills / updateDraft 单元测试（G-010 能力感知传递链）：
  * 并集装箱去重保序 / 存量退化零变化 / 草案态 fail-close 编辑门禁。
+ * G-011 扩展：uncertainties 归一化（空白丢弃 / 非法 kind 降级 / null 不改 / 空数组清空）。
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("SubTaskService.mergeSkills / updateDraft")
@@ -137,7 +140,7 @@ class SubTaskServiceMergeSkillsTest {
             doReturn(stored).when(subTaskService).getById(1L);
             doReturn(true).when(subTaskService).updateById(any(SubTask.class));
 
-            subTaskService.updateDraft(1L, List.of("eng-doc-standard"), "不得改接口");
+            subTaskService.updateDraft(1L, List.of("eng-doc-standard"), "不得改接口", null);
 
             assertThat(stored.getRequiredSkills()).containsExactly("eng-doc-standard");
             assertThat(stored.getConstraints()).isEqualTo("不得改接口");
@@ -151,7 +154,7 @@ class SubTaskServiceMergeSkillsTest {
             doReturn(stored).when(subTaskService).getById(1L);
             doReturn(true).when(subTaskService).updateById(any(SubTask.class));
 
-            subTaskService.updateDraft(1L, null, null);
+            subTaskService.updateDraft(1L, null, null, null);
 
             assertThat(stored.getRequiredSkills()).containsExactly("keep");
             assertThat(stored.getConstraints()).isEqualTo("keep-c");
@@ -164,7 +167,7 @@ class SubTaskServiceMergeSkillsTest {
             assigned.setStatus(SubTaskStatus.ASSIGNED);
             doReturn(assigned).when(subTaskService).getById(1L);
 
-            assertThatThrownBy(() -> subTaskService.updateDraft(1L, List.of("x"), null))
+            assertThatThrownBy(() -> subTaskService.updateDraft(1L, List.of("x"), null, null))
                     .isInstanceOf(BizException.class)
                     .hasMessageContaining("仅草案待审状态可编辑");
         }
@@ -174,9 +177,75 @@ class SubTaskServiceMergeSkillsTest {
         void shouldRejectMissingDraft() {
             doReturn(null).when(subTaskService).getById(2L);
 
-            assertThatThrownBy(() -> subTaskService.updateDraft(2L, null, null))
+            assertThatThrownBy(() -> subTaskService.updateDraft(2L, null, null, null))
                     .isInstanceOf(BizException.class)
                     .hasMessageContaining("草案不存在");
+        }
+
+        @Test
+        @DisplayName("uncertainties 归一化：空白/null 条目丢弃、非法 kind 降级 UNCONFIRMED、合法值保序")
+        void shouldNormalizeUncertainties() {
+            SubTask stored = draft(List.of());
+            doReturn(stored).when(subTaskService).getById(1L);
+            doReturn(true).when(subTaskService).updateById(any(SubTask.class));
+
+            Uncertainty ok = new Uncertainty();
+            ok.setKind(Uncertainty.KIND_UNCONFIRMED);
+            ok.setNote("分区口径待确认");
+            Uncertainty assumed = new Uncertainty();
+            assumed.setKind(Uncertainty.KIND_ASSUMPTION);
+            assumed.setNote("历史数据可忽略");
+            Uncertainty blank = new Uncertainty();
+            blank.setKind(Uncertainty.KIND_UNCONFIRMED);
+            blank.setNote("  ");
+            Uncertainty weird = new Uncertainty();
+            weird.setKind("WEIRD");
+            weird.setNote("非法形态");
+
+            // List.of 拒 null 元素，用 Arrays.asList 覆盖「null 条目丢弃」分支（同 L126 全限定风格）
+            subTaskService.updateDraft(1L, null, null,
+                    java.util.Arrays.asList(ok, assumed, blank, weird, null));
+
+            assertThat(stored.getUncertainties())
+                    .extracting(Uncertainty::getKind, Uncertainty::getNote)
+                    .containsExactly(
+                            tuple(Uncertainty.KIND_UNCONFIRMED, "分区口径待确认"),
+                            tuple(Uncertainty.KIND_ASSUMPTION, "历史数据可忽略"),
+                            tuple(Uncertainty.KIND_UNCONFIRMED, "非法形态"));
+        }
+
+        @Test
+        @DisplayName("uncertainties null 不覆盖（保留存量申报）")
+        void shouldKeepUncertaintiesWhenNull() {
+            SubTask stored = draft(List.of());
+            Uncertainty existing = new Uncertainty();
+            existing.setKind(Uncertainty.KIND_UNCONFIRMED);
+            existing.setNote("存量");
+            stored.setUncertainties(List.of(existing));
+            doReturn(stored).when(subTaskService).getById(1L);
+            doReturn(true).when(subTaskService).updateById(any(SubTask.class));
+
+            subTaskService.updateDraft(1L, null, null, null);
+
+            assertThat(stored.getUncertainties())
+                    .extracting(Uncertainty::getNote)
+                    .containsExactly("存量");
+        }
+
+        @Test
+        @DisplayName("uncertainties 空数组清空存量申报")
+        void shouldClearUncertaintiesWhenEmptyList() {
+            SubTask stored = draft(List.of());
+            Uncertainty existing = new Uncertainty();
+            existing.setKind(Uncertainty.KIND_UNCONFIRMED);
+            existing.setNote("存量");
+            stored.setUncertainties(List.of(existing));
+            doReturn(stored).when(subTaskService).getById(1L);
+            doReturn(true).when(subTaskService).updateById(any(SubTask.class));
+
+            subTaskService.updateDraft(1L, null, null, List.of());
+
+            assertThat(stored.getUncertainties()).isEmpty();
         }
     }
 }

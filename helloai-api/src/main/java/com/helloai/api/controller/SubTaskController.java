@@ -209,18 +209,19 @@ public class SubTaskController {
     }
 
     /**
-     * 草案人工修订（G-010 草案确认 UI）：确认前编辑技能指派与执行约束。
+     * 草案人工修订（G-010 草案确认 UI）：确认前编辑技能指派、执行约束与不确定性申报。
      *
      * <p>仅 PENDING_PLAN_REVIEW 状态可编辑（fail-close 由 Service 层门禁校验）；
-     * requiredSkills/constraints 传 null 表示不修改该字段（局部更新语义）。
-     * 人工指派的标签不做目录强校验（人工编辑为权威输入），执行侧 resolve 两层过滤兜底。</p>
+     * requiredSkills/constraints/uncertainties 传 null 表示不修改该字段（局部更新语义）。
+     * 人工指派的标签不做目录强校验（人工编辑为权威输入），执行侧 resolve 两层过滤兜底；
+     * uncertainties 非法 kind 由 Service 落库侧降级 UNCONFIRMED（D3 fail-close 同口径）。</p>
      */
     @PutMapping("/updateDraftById/{id}")
     public R<Void> updateDraft(@PathVariable("id") Long id,
                                @Valid @RequestBody DraftUpdateRequest req) {
-        subTaskService.updateDraft(id, req.getRequiredSkills(), req.getConstraints());
-        log.info("草案修订: id={}, requiredSkills={}, constraintsEdited={}",
-                id, req.getRequiredSkills(), req.getConstraints() != null);
+        subTaskService.updateDraft(id, req.getRequiredSkills(), req.getConstraints(), req.getUncertainties());
+        log.info("草案修订: id={}, requiredSkills={}, constraintsEdited={}, uncertaintiesEdited={}",
+                id, req.getRequiredSkills(), req.getConstraints() != null, req.getUncertainties() != null);
         return R.ok();
     }
 
@@ -437,6 +438,7 @@ public class SubTaskController {
         response.setReworkCount(subTask.getReworkCount());
         response.setRequiredSkills(subTask.getRequiredSkills());
         response.setConstraints(subTask.getConstraints());
+        response.setUncertainties(subTask.getUncertainties());
         response.setContext(subTask.getContext());
         response.setDependsOn(subTask.dependsOnIdList());
         response.setDeadline(subTask.getDeadline());

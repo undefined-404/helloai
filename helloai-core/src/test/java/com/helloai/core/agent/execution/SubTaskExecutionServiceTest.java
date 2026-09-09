@@ -12,6 +12,7 @@ import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.entity.Uncertainty;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.agent.tool.ToolDefinition;
@@ -973,6 +974,103 @@ class SubTaskExecutionServiceTest {
             assertThat(payloadCaptor.getValue())
                     .containsEntry("depCount", 1)
                     .containsEntry("degraded", true);
+        }
+    }
+
+    @Nested
+    @DisplayName("buildUserPrompt — G-011 D6 三段增量（执行约束/不确定性申报/事实回源）")
+    class BuildUserPromptG011 {
+
+        @Test
+        @DisplayName("约束与假设/待确认均注入（分级后缀各自语义）")
+        void shouldInjectConstraintsAndUncertainties() {
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            subTask.setConstraints("不得改动既有接口签名");
+            Uncertainty assumed = new Uncertainty();
+            assumed.setKind(Uncertainty.KIND_ASSUMPTION);
+            assumed.setNote("目标表假设仅含近 30 天分区");
+            Uncertainty pending = new Uncertainty();
+            pending.setKind(Uncertainty.KIND_UNCONFIRMED);
+            pending.setNote("归档分区是否参与统计待确认");
+            subTask.setUncertainties(List.of(assumed, pending));
+
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+
+            subTaskExecutionService.executeOnce(subTask, agent(), List.of(), List.of(), null);
+
+            ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            String prompt = taskCaptor.getValue().getUserPrompt();
+            assertThat(prompt)
+                    .contains("执行约束（不许改的事）: 不得改动既有接口签名")
+                    .contains("不确定性申报:")
+                    .contains("- [ASSUMPTION] 目标表假设仅含近 30 天分区（可自行验证，推翻即上报）")
+                    .contains("- [UNCONFIRMED] 归档分区是否参与统计待确认（须先验证再动手，无法验证则 BLOCKED 上报）")
+                    .contains("验收事实回源：生产系统当前行为以代码与配置为准");
+        }
+
+        @Test
+        @DisplayName("零注入：约束与不确定性为空时不出现对应段，事实回源声明常驻")
+        void shouldSkipWhenEmptyAndKeepSourceStatement() {
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+            subTaskExecutionService.executeOnce(subTask, agent(), List.of(), List.of(), null);
+
+            ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            String prompt = taskCaptor.getValue().getUserPrompt();
+            assertThat(prompt)
+                    .doesNotContain("执行约束")
+                    .doesNotContain("不确定性申报")
+                    .contains("验收事实回源：生产系统当前行为以代码与配置为准");
+        }
+
+        @Test
+        @DisplayName("空列表不确定性零注入（isEmpty 判定，不渲染空头）")
+        void shouldSkipWhenUncertaintiesEmptyList() {
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            subTask.setUncertainties(List.of());
+
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+            subTaskExecutionService.executeOnce(subTask, agent(), List.of(), List.of(), null);
+
+            ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            assertThat(taskCaptor.getValue().getUserPrompt())
+                    .doesNotContain("不确定性申报");
+        }
+
+        @Test
+        @DisplayName("非法 kind 渲染原文但按 UNCONFIRMED 后缀（fail-close），空白 note 条目跳过")
+        void shouldDegradeKindAndSkipBlankNote() {
+            SubTask subTask = subTask();
+            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            Uncertainty weird = new Uncertainty();
+            weird.setKind("WEIRD");
+            weird.setNote("来源不明的申报");
+            Uncertainty blank = new Uncertainty();
+            blank.setKind(Uncertainty.KIND_UNCONFIRMED);
+            blank.setNote("   ");
+            subTask.setUncertainties(List.of(weird, blank));
+
+            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                    .thenReturn(AgentResult.builder().success(true).build());
+            subTaskExecutionService.executeOnce(subTask, agent(), List.of(), List.of(), null);
+
+            ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
+            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            String prompt = taskCaptor.getValue().getUserPrompt();
+            // 非法 kind 渲染原文但后缀按 UNCONFIRMED 语义；空白 note 不渲染（该用例仅 blank 一条 UNCONFIRMED）
+            assertThat(prompt)
+                    .contains("- [WEIRD] 来源不明的申报（须先验证再动手，无法验证则 BLOCKED 上报）")
+                    .doesNotContain("[UNCONFIRMED]");
         }
     }
 
