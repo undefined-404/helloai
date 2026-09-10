@@ -25,6 +25,8 @@ import java.util.List;
  * <p>所属端点：
  * <ul>
  *   <li>GET /api/agent-events/traceByRunId/{runId}</li>
+ *   <li>GET /api/agent-events/traceByTaskId/{taskId}</li>
+ *   <li>GET /api/agent-events/traceBySubTaskId/{subTaskId}</li>
  *   <li>GET /api/agent-events/pageAuditByTaskId/{taskId}</li>
  * </ul>
  * </p>
@@ -49,6 +51,32 @@ public class AgentEventController {
     @GetMapping("/traceByRunId/{runId}")
     public R<List<AgentEventItem>> traceByRunId(@PathVariable("runId") String runId) {
         List<AgentEventTraceItem> trace = agentEventQueryService.traceByRunId(runId);
+        List<AgentEventItem> items = trace.stream().map(this::toItem).toList();
+        return R.ok(items);
+    }
+
+    /**
+     * Replay：按 Task 读取 Run 级完整轨迹（任务维度入口，免传 runId）。
+     *
+     * <p>由 service 按 ADR-001 §3.1 标识规则内部推导 runId，语义等价
+     * {@link #traceByRunId(String)}；任务列表 / 子任务详情页深链与工作台任务选择器均走此端点。</p>
+     */
+    @GetMapping("/traceByTaskId/{taskId}")
+    public R<List<AgentEventItem>> traceByTaskId(@PathVariable("taskId") Long taskId) {
+        List<AgentEventTraceItem> trace = agentEventQueryService.traceByTaskId(taskId);
+        List<AgentEventItem> items = trace.stream().map(this::toItem).toList();
+        return R.ok(items);
+    }
+
+    /**
+     * Replay：按子任务读取有序执行轨迹（子任务维度聚焦过滤）。
+     *
+     * <p>透传 service 已有的 {@code traceBySubTaskId} 读侧投影（A6），供工作台
+     * 子任务选择器聚焦查看单个子任务的 Turn / Step 轨迹。</p>
+     */
+    @GetMapping("/traceBySubTaskId/{subTaskId}")
+    public R<List<AgentEventItem>> traceBySubTaskId(@PathVariable("subTaskId") Long subTaskId) {
+        List<AgentEventTraceItem> trace = agentEventQueryService.traceBySubTaskId(subTaskId);
         List<AgentEventItem> items = trace.stream().map(this::toItem).toList();
         return R.ok(items);
     }

@@ -33,6 +33,18 @@ public interface AgentEventQueryService {
     List<AgentEventTraceItem> traceByRunId(String runId);
 
     /**
+     * 按 Task 读取 Run 级完整轨迹（G-006 消费面易用性：任务维度入口，免传 runId）。
+     *
+     * <p>内部按 ADR-001 §3.1 标识规则由 taskId 推导 runId（{@code AgentEventContextResolver.resolveRunId}），
+     * 语义等价 {@link #traceByRunId(String)}；runId 生成规则今后升级（如 planInstanceId）时
+     * 仅本方法受影响，调用方不感知规则。</p>
+     *
+     * @param taskId Task ID；为空时返回空列表
+     * @return 按 {@code createTime ASC, id ASC} 有序的轨迹投影，永不为 null
+     */
+    List<AgentEventTraceItem> traceByTaskId(Long taskId);
+
+    /**
      * 按 Task 分页读取事件审计列表（Phase 0 A7 Audit 读侧）。
      *
      * <p>按 task 维度查询执行事实（谁在何时做了什么），支持可选 {@code eventType}

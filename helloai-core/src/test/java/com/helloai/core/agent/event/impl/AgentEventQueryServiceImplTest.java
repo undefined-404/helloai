@@ -27,8 +27,9 @@ import static org.mockito.Mockito.when;
  * Phase 0 A6 / A7：Agent 事件流读侧投影测试。
  *
  * <p>验证 {@link AgentEventQueryServiceImpl#traceBySubTaskId} / {@link #traceByRunId} /
- * {@link #pageAuditByTaskId} 的投影口径（entity → VO 字段一一映射）与顺序透传；
- * 排序本身由 mapper 保证，不在此重复编排。</p>
+ * {@link #traceByTaskId} / {@link #pageAuditByTaskId} 的投影口径（entity → VO 字段一一映射）与顺序透传；
+ * 排序本身由 mapper 保证，不在此重复编排。{@code traceByTaskId} 额外验证 runId 规则
+ * 收敛在 service 层（ADR-001 §3.1，G-006 消费面易用性增量）。</p>
  */
 @ExtendWith(MockitoExtension.class)
 class AgentEventQueryServiceImplTest {
@@ -104,6 +105,28 @@ class AgentEventQueryServiceImplTest {
         assertThat(items.get(1).getTurn()).isEqualTo(2);
         assertThat(items.get(1).getStep()).isEqualTo(5);
         assertThat(items.get(1).getEventType()).isEqualTo("skill_resolved");
+    }
+
+    @Test
+    @DisplayName("traceByTaskId：按 run-{taskId}-1 规则委托 Run 级查询 + 投影完整")
+    void shouldDelegateTaskIdToRunIdRule() {
+        AgentEvent first = entity(1L, "e1", "run-42-1", 1, 1, "agent_started", OffsetDateTime.now());
+        when(agentEventMapper.selectByRunIdOrdered("run-42-1")).thenReturn(List.of(first));
+
+        List<AgentEventTraceItem> items = queryService.traceByTaskId(42L);
+
+        assertThat(items).hasSize(1);
+        assertThat(items.get(0).getRunId()).isEqualTo("run-42-1");
+        assertThat(items.get(0).getTaskId()).isEqualTo(100L);
+        assertThat(items.get(0).getEventType()).isEqualTo("agent_started");
+        verify(agentEventMapper).selectByRunIdOrdered("run-42-1");
+    }
+
+    @Test
+    @DisplayName("traceByTaskId：taskId 为空 → 空列表且不触达 mapper")
+    void shouldReturnEmptyWhenTaskIdNull() {
+        assertThat(queryService.traceByTaskId(null)).isEmpty();
+        verifyNoInteractions(agentEventMapper);
     }
 
     @Test

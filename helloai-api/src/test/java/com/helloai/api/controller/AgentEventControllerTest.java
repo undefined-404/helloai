@@ -100,6 +100,41 @@ class AgentEventControllerTest {
     }
 
     @Test
+    @DisplayName("Replay：taskId 透传 + 映射（runId 推导在 service 层，Controller 不感知规则）")
+    void traceByTaskId() {
+        when(agentEventQueryService.traceByTaskId(TASK_ID))
+                .thenReturn(List.of(traceItem()));
+
+        R<List<AgentEventItem>> resp = controller.traceByTaskId(TASK_ID);
+
+        assertThat(resp.getCode()).isEqualTo(200);
+        assertThat(resp.getData()).hasSize(1);
+        AgentEventItem item = resp.getData().get(0);
+        assertThat(item.getRunId()).isEqualTo("run-2097277905774018561-1");
+        assertThat(item.getTaskId()).isEqualTo(TASK_ID);
+        assertThat(item.getEventType()).isEqualTo("tool_call_completed");
+        verify(agentEventQueryService).traceByTaskId(TASK_ID);
+        verifyNoMoreInteractions(agentEventQueryService);
+    }
+
+    @Test
+    @DisplayName("Replay：subTaskId 透传 + 映射（子任务维度聚焦过滤）")
+    void traceBySubTaskId() {
+        when(agentEventQueryService.traceBySubTaskId(SUB_TASK_ID))
+                .thenReturn(List.of(traceItem()));
+
+        R<List<AgentEventItem>> resp = controller.traceBySubTaskId(SUB_TASK_ID);
+
+        assertThat(resp.getCode()).isEqualTo(200);
+        assertThat(resp.getData()).hasSize(1);
+        assertThat(resp.getData().get(0).getSubTaskId()).isEqualTo(SUB_TASK_ID);
+        assertThat(resp.getData().get(0).getTurn()).isEqualTo(1);
+        assertThat(resp.getData().get(0).getStep()).isEqualTo(3);
+        verify(agentEventQueryService).traceBySubTaskId(SUB_TASK_ID);
+        verifyNoMoreInteractions(agentEventQueryService);
+    }
+
+    @Test
     @DisplayName("Audit：taskId/eventType/page/pageSize 透传 + PageResult 封装")
     void pageAuditByTaskId() {
         Page<AgentEventTraceItem> page = new Page<>(2, 20);

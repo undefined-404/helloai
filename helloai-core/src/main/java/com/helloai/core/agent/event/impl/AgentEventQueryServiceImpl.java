@@ -3,6 +3,7 @@ package com.helloai.core.agent.event.impl;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.helloai.core.agent.entity.AgentEvent;
+import com.helloai.core.agent.event.AgentEventContextResolver;
 import com.helloai.core.agent.event.AgentEventQueryService;
 import com.helloai.core.agent.event.AgentEventTraceItem;
 import com.helloai.core.agent.mapper.AgentEventMapper;
@@ -15,7 +16,7 @@ import java.util.List;
 /**
  * Agent 事件流读侧查询实现（Phase 0 A6 / A7）。
  *
- * <p>纯读服务：{@link #traceBySubTaskId} / {@link #traceByRunId} /
+ * <p>纯读服务：{@link #traceBySubTaskId} / {@link #traceByRunId} / {@link #traceByTaskId} /
  * {@link #pageAuditByTaskId} 将 {@code agent_event}（mapper 已按对应时序返回）
  * 投影为不可变 {@link AgentEventTraceItem}，不落库、不写状态。</p>
  */
@@ -43,6 +44,14 @@ public class AgentEventQueryServiceImpl implements AgentEventQueryService {
         return agentEventMapper.selectByRunIdOrdered(runId).stream()
                 .map(this::toItem)
                 .toList();
+    }
+
+    @Override
+    public List<AgentEventTraceItem> traceByTaskId(Long taskId) {
+        if (taskId == null) {
+            return Collections.emptyList();
+        }
+        return traceByRunId(AgentEventContextResolver.resolveRunId(taskId));
     }
 
     @Override
