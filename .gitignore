@@ -71,6 +71,11 @@ tmp/
 .qoder/
 # --- Executor 值班脚本运行时配置（含真实 apiKey / agentId，勿入库） ---
 **/skills/**/config.json
+# executor-onboard.ps1 生成的运行时配置（真实 apiKey，勿入库）
+scripts/powershell/executor-config.json
+# executor-onboard.ps1 生成的上手文档与平台导出 SKILL（含真实 apiKey，勿入库）
+.executor-onboarding.md
+scripts/powershell/executor-SKILL.md
 # --- Runtime data (ArtifactStorage 本地落盘产出物) ---
 data/
 
