@@ -4,7 +4,7 @@
 >
 > 定位：G-010（拆解侧能力感知与自适应粒度）之后的**准入侧 + 契约侧**深化批次。方法论依据：阿里《"架构师 Agent" 系统化落地》需求准入（prd-digest）/ Gap 三分类 / 待确认项显式登记 / 事实回源原则，结合 ChatGPT / Kimi / 元宝三方反馈交叉验证（2026-09-09 讨论），压缩到 HelloAI 最小可执行形态。设计依据 2026-09-09 代码事实核查（见 §0.2）。
 >
-> **状态：设计落稿待实施（2026-09-09）**。拍板记录：2026-09-09 上轮方案讨论 ①登记=新 G-011 ②需求包=5 字段压缩版 ③存储=会话列+task.context 双写 ④uncertainties=显式 JSONB 列 ⑤gap_kind=后置到中期 ⑥不建自动闸门（人工裁决 + fail-close 上报）。
+> **状态：S1~S5 已落地（含实测，2026-09-10 口径）**——S5 实测 PASS：平台内链（2026-09-09，与 G-010 S4 合并；verify-requirement-clarify 10 步 + verify-planner-decompose 12 步全过）+ 外部执行链（2026-09-10 双轮全链闭环，Round2/Round3——审查者引用 uncertainties 申报作驳回依据实证）。技术债：Agent 注册幂等顺序缺陷仍在（`validateModelType` 先于 `registerOrGet`）；配套 JSONB uncertainties CCE 死锁已修复（2026-09-10，无配套单测，登记待补）。拍板记录：2026-09-09 上轮方案讨论 ①登记=新 G-011 ②需求包=5 字段压缩版 ③存储=会话列+task.context 双写 ④uncertainties=显式 JSONB 列 ⑤gap_kind=后置到中期 ⑥不建自动闸门（人工裁决 + fail-close 上报）。
 
 ---
 
@@ -23,7 +23,7 @@
 - [RequirementClarifyServiceImpl.buildTaskFromDraft](../../helloai-core/src/main/java/com/helloai/core/planner/service/impl/RequirementClarifyServiceImpl.java) 仅写 `task.title` / `task.description`，`task.context` JSONB 只承载 runningSpec，无需求包概念；
 - [requirement-clarify.md](../../helloai-core/src/main/resources/prompts/requirement-clarify.md) / [requirement-finalize.md](../../helloai-core/src/main/resources/prompts/requirement-finalize.md) 的 `final` 形态只有 `title` / `message` / `description` 三字段，六维自检产出无结构化出口；
 - [planner-decompose.md](../../helloai-core/src/main/resources/prompts/planner-decompose.md) 拆解要求 9 条、子任务 schema 9 字段，无任何不确定性 / 实现路径申报字段；
-- **G-010 后置缺口（本轮新发现）**：`sub_task.constraints` 落库后全项目无消费点（`getConstraints()` 仅拆解落库一处调用），[SubTaskExecutionServiceImpl.buildUserPrompt](../../helloai-core/src/main/java/com/helloai/core/agent/service/impl/SubTaskExecutionServiceImpl.java)「当前子任务四要素」段不含 constraints——约束声明了但执行者看不见，本批一并清偿。
+- **G-010 后置缺口（本轮新发现）**：`sub_task.constraints` 落库后全项目无消费点（`getConstraints()` 仅拆解落库一处调用），[SubTaskExecutionServiceImpl.buildUserPrompt](../../helloai-core/src/main/java/com/helloai/core/agent/service/impl/SubTaskExecutionServiceImpl.java)「当前子任务四要素」段不含 constraints——约束声明了但执行者看不见，本批一并清偿。**〔已清偿 2026-09-09〕** S4 执行注入（D6）+ 审查核验（D7）双落点闭环（见差距表 G-011 S4）。
 
 ### 0.2 事实基线（已落地，本批不重做）
 
@@ -96,7 +96,7 @@
 后置理由（2026-09-09 上轮结论修正）：
 
 1. **「已有能力」须可最小验证，而非纯文本匹配**：REUSE/EXTEND 的判定依据是「平台/仓库确有可验证、可行使的能力」。当前拆解 LLM 仅经 G-010 看到平台技能目录（文本态清单），既不能区分「平台技能」与「仓库代码级能力」的边界，也无法验证该能力「实实在在可用」——此刻采集 gap_kind 的标注可靠度不足，产出是噪声而非资产。
-2. **能力可验证基线后置**：判定「已有能力」的权威基线 = 能力完成核验后才计入目录。外部 AI agent 注册的技能须经「技能测试任务」核验通过后方可采信（非注册即采信，属后续功能优化方向）；内部技能须经 G-010 后置缺口 D5-2 `verify-skill-packages.ps1` 校验锚定。基线就绪后 gap_kind 才有客观分类依据，届时随 G-008 成本路由一并接入（采集侧 schema 扩展同步补，避免现在加无用列）。
+2. **能力可验证基线后置**：判定「已有能力」的权威基线 = 能力完成核验后才计入目录。外部 AI agent 注册的技能须经「技能测试任务」核验通过后方可采信（非注册即采信，属后续功能优化方向）；内部技能须经 G-010 D5-2 `verify-skill-packages.ps1` 校验锚定（脚本已交付 2026-09-10）。基线就绪后 gap_kind 才有客观分类依据，届时随 G-008 成本路由一并接入（采集侧 schema 扩展同步补，避免现在加无用列）。
 3. **价值预埋不变**：REUSE → 近零成本（内部弱模型优先）/ EXTEND → 中档 / NEW_BUILD → 最高（外部强执行者）。接入时序归口 G-008，本批不占列、不占 schema。
 
 ### D5：拆解继承 = 提示词硬约束 + timeline WARN 兜底，不建代码校验拦截
@@ -253,11 +253,11 @@ COMMENT ON COLUMN requirement_conversation.final_package IS '澄清终稿结构�
 | S2 澄清侧 | 两处终稿提示词 package 扩展 + ClarifyReplyParser + 会话落库 + buildTaskFromDraft 双写 | final 带 package 全链落库；package 缺失/非法降级纯文本终稿（= 现状）；regenerate 双写复用 |
 | S3 拆解侧 | planner-decompose.md 一段一要求 + PlanDraftItem 一字段 + buildDrafts 降级/审计落库 + D5 兜底 WARN | openQuestions 继承可见；非法 kind 降级 UNCONFIRMED；越界拆解由实测核验 |
 | S4 传递链 | buildUserPrompt 三段 + ReviewExecutionEngine + subtask-review.md 语义 + REST / inbox 下行 + 草案确认 UI | 内部执行 prompt 三段贯通（空值零注入）；审查 prompt 含 constraints + uncertainties；外部 REST 可见；UI 可编辑 |
-| S5 实测收口 | 真实任务双场景 + 文档回填（差距表 G-011 / 迭代日志 / 介绍文档） | **与 G-010 S4 合并执行**（同一环境一轮双场景：场景 A 内部兜底 / 场景 B 外部 agent，同时核验 G-010 六维与 G-011 五维验收口径） |
+| S5 实测收口 | 真实任务双场景 + 文档回填（差距表 G-011 / 迭代日志 / 介绍文档） | **与 G-010 S4 合并执行**（同一环境一轮双场景：场景 A 内部兜底 / 场景 B 外部 agent，同时核验 G-010 六维与 G-011 五维验收口径）。<br>**〔实测落地 2026-09-09/10〕** 平台内链全闭环（含 jsonb 定点写 bug 修复 + 脚本端点失配修复）+ 外部双轮全链闭环（审查者引用 uncertainties 申报作驳回依据）——见差距表 G-011 S5。 |
 
-依赖顺序：S1 → S2 → S3 → S4 严格串行；S5 与 G-010 S4 合并（两者改动面在执行实测处汇合，省一次环境搭建）。G-010 S4 的 BLOCKED（dev 环境 + LLM Key + 外部 agent）**不阻塞** G-011 S1~S4 开工——本批改动面是澄清侧 + 提示词 + 装配链，与实测解耦。
+依赖顺序：S1 → S2 → S3 → S4 严格串行；S5 与 G-010 S4 合并（两者改动面在执行实测处汇合，省一次环境搭建）**〔2026-09-10 收口：合并实测已执行完毕——平台内链 2026-09-09 + 外部双轮 2026-09-10〕**。G-010 S4 设计期 BLOCKED（dev 环境 + LLM Key + 外部 agent）未阻塞本批 S1~S4 开工——本批改动面是澄清侧 + 提示词 + 装配链，与实测解耦。
 
-**批次边界**（上轮方案批次划分的落点）：本文档承载批次一（G-011 主体）；批次二（gap_kind 采集与成本路由接入，依赖 G-008 能力可验证基线 + 六维审阅清单 UI 侧栏 + G-010 欠账 verify-skill-packages.ps1）与批次三（任务后蒸馏闭环：DONE 后 best-effort 跑 distill 模板 → 候选知识 markdown → 人工按 G-010 D5 贡献规范合入，不自动回写）另行登记，不进本批验收口径。
+**批次边界**（上轮方案批次划分的落点）：本文档承载批次一（G-011 主体）；批次二（gap_kind 采集与成本路由接入，依赖 G-008 能力可验证基线 + 六维审阅清单 UI 侧栏；G-010 欠账 verify-skill-packages.ps1 已于 2026-09-10 交付，不再构成批次二前置）与批次三（任务后蒸馏闭环：DONE 后 best-effort 跑 distill 模板 → 候选知识 markdown → 人工按 G-010 D5 贡献规范合入，不自动回写）另行登记，不进本批验收口径。
 
 ---
 

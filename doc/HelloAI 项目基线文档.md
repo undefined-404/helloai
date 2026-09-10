@@ -231,7 +231,7 @@ Skill 已从隐式 Prompt 拼接迁移为显式 Runtime 输入 + 元数据面，
 
 ```text
 Instructions 结构化
-技能回流贡献规范（verify-skill-packages 校验脚本未交付）
+技能回流贡献规范（D5-3 未交付；校验脚本 D5-2 verify-skill-packages 已交付 2026-09-10）
 ```
 
 # 10. 当前 Environment / Sandbox 基线

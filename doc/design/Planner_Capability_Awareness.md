@@ -4,7 +4,7 @@
 >
 > 定位：G-004 增量 A/B（requiredTools 联动 + 任务级技能透传）之后的拆解侧深化批次。设计依据 2026-09-09 代码事实核查（见 §0.2）。
 >
-> **状态：S1~S3 已实施（2026-09-09），S4 双场景实测 BLOCKED（待 dev 环境 + LLM Key + 外部 agent）**。拍板记录：2026-09-09 ①登记=新 G-010 ②粒度=rule-based ③装箱=并集 ④目录注入=常驻 ⑤constraints=显式列 ⑥回流=classpath ⑦混合粒度=FINE（白名单为空=STANDARD）。实施记录见 `doc/log/2026-09.md` 同日条目。
+> **状态：S1~S4 已落地（含实测，2026-09-10 口径）**——S4 双场景实测 PASS：平台内链（2026-09-09，与 G-011 S5 合并）+ 外部执行链（2026-09-10 双轮全链闭环，Round2/Round3）。实测粒度覆盖：外部白名单全 CLI_CLIENT = COARSE（外部任务共 4 个带数据样本）；平台内链未设白名单 = STANDARD 档；**FINE 档（内部执行者白名单）无真实场景样本，仅矩阵单测覆盖（登记待补）**。后置缺口：①技能回流贡献规范（D5-3）；②`verify-skill-packages.ps1`（D5-2）已交付（2026-09-10，见 `scripts/powershell/verify-skill-packages.ps1`）；③④已由 G-011 清偿（见差距表 G-010）。拍板记录：2026-09-09 ①登记=新 G-010 ②粒度=rule-based ③装箱=并集 ④目录注入=常驻 ⑤constraints=显式列 ⑥回流=classpath ⑦混合粒度=FINE（白名单为空=STANDARD）。实施记录见 `doc/log/2026-09.md` 同日及 2026-09-10 条目。
 
 ---
 
@@ -102,7 +102,7 @@ rule-based 先行的理由：粒度决策可解释、可回归（矩阵单测全
 回流最小形态（外部自升级 agent 迭代技能 → 融入平台技能包）：
 
 1. **贡献规范**：`skills/plugins/*.md` 文件承载 instructions；元数据登记于 `AgentSkillSpecServiceImpl.KNOWN_SPECS`（Java 声明，SkillPackage 构造）——两步合入即完成一个新技能包；
-2. **校验脚本**：新增 `verify-skill-packages.ps1`（UTF-8 头强制）——校验 KNOWN_SPECS 声明的 fileName 均存在于 classpath、requiredTools 均命中 ToolRegistry、版本格式合法；<br>**〔后置缺口 2026-09-09〕本批未交付**，未在 S1~S3 内落地，登记待后续技能目录规模增长时补；
+2. **校验脚本**：新增 `verify-skill-packages.ps1`（UTF-8 头强制）——校验 KNOWN_SPECS 声明的 fileName 均存在于 classpath、requiredTools 均命中 ToolRegistry、版本格式合法；<br>**〔已交付 2026-09-10〕** 落地于 `scripts/powershell/verify-skill-packages.ps1`（UTF-8 BOM）：校验 fileName 存在于 classpath（src 必有 / target 同步核对 + 孤儿 WARN）、requiredTools 均命中 ToolRegistry 注册事实（@Tool 注解静态收集，无事实禁止全绿）、version 三段式数字、name / fileName / map.put 键唯一。真实仓库 18 PASS + 破坏样本 5 FAIL 双验证；
 3. **DB 化 / 热加载**：明确不做。§50.7 不建平行 Registry 的边界解读：元数据从「代码内声明」演进为「运行时可写」是形态升级，涉及管理端/权限/版本治理，超出本批——登记为后续决策点，待技能目录规模（>10 个）或回流频次证明必要时再立项。
 
 ### D6：外部 agent 技能感知 = 下行通道增量（可选字段，向后兼容）
@@ -176,7 +176,7 @@ class PlanDraftItem {
 
 - `renderPrompt` 扩展 4 个占位符渲染（目录 / 画像 / 难度 / 粒度）；
 - 新增 `PlannerGranularityResolver`（task.policy 包，纯函数）：入参 policy + agent 域查询结果（`AgentService.listByIds` 批量取 accessType，一次调用），出粒度枚举 + 画像文案；
-- `buildDrafts` 增量：`requiredSkills` 目录过滤（`SkillNormalizer.normalize` + KNOWN_SPECS 命中，未命中丢弃 + timeline 记 `task_plan_skill_filtered`，不阻断）；`constraints` 直接落库（COARSE 档缺失不阻断）。<br>**〔后置缺口 2026-09-09〕COARSE 档 constraints 缺失的 timeline WARN 级事件未实现**，与本节承诺不符，登记待补（见差距表 G-010 后置缺口④）。
+- `buildDrafts` 增量：`requiredSkills` 目录过滤（`SkillNormalizer.normalize` + KNOWN_SPECS 命中，未命中丢弃 + timeline 记 `task_plan_skill_filtered`，不阻断）；`constraints` 直接落库（COARSE 档缺失不阻断）。<br>**〔已清偿 2026-09-09〕COARSE 档 constraints 缺失的 timeline WARN（`task_plan_constraints_missing`）由 G-011 S3 实现**（见差距表 G-010 缺口④ / G-011 S3）。
 
 ---
 
@@ -214,7 +214,7 @@ COMMENT ON COLUMN sub_task.constraints IS '执行约束（不许改的事；COAR
 | S1 数据层 | V74 迁移 + SubTask 实体/DTO + 单测（默认值/TypeHandler） | 存量回归：无新字段数据时全链行为零变化（编译 + 全量单测） |
 | S2 拆解侧 | 提示词三段 + PlanDraftItem 扩展 + GranularityResolver + buildDrafts 过滤落库 | 矩阵单测全覆盖（4 画像 × 3 难度）；幻觉指派被过滤；非法 constraints 不阻断 |
 | S3 传递链 | mergeSkills 装箱 4 点 + 审查同源 + inbox/REST 下行 + 草案确认 UI | required_skills 四段贯通（创建→拆解→派发→执行）；外部 agent 收到技能标签（dev 实测）；SKILL.md 增量 |
-| S4 验证收口 | 真实任务双场景 + 文档回填（差距表 G-010 状态 / 迭代日志 / 介绍文档） | 场景 A（内部兜底）：FINE 拆解 + 技能注入 + requiredTools 联动生效（SKILL_RESOLVED 带版本）；场景 B（外部）：COARSE 拆解 + constraints 落库 + 外部按标签装配 |
+| S4 验证收口 | 真实任务双场景 + 文档回填（差距表 G-010 状态 / 迭代日志 / 介绍文档） | 场景 A（内部兜底）：FINE 拆解 + 技能注入 + requiredTools 联动生效（SKILL_RESOLVED 带版本）；场景 B（外部）：COARSE 拆解 + constraints 落库 + 外部按标签装配。<br>**〔实测落地 2026-09-09/10〕** 平台内链全闭环（未设白名单 = STANDARD 档）+ 外部双轮全链闭环（白名单全 CLI_CLIENT = COARSE 档）；**FINE 档无真实样本（仅矩阵单测覆盖）**。 |
 
 依赖顺序：S1 → S2 → S3 → S4 严格串行（S2 提示词依赖 S1 字段存在，S3 依赖 S2 产出）；S3 的 UI 部分可与 S3 后端并行。
 
@@ -236,7 +236,7 @@ COMMENT ON COLUMN sub_task.constraints IS '执行约束（不许改的事；COAR
 ## §6 验收口径（最终验收问答）
 
 1. **能力感知**：给定带技能目录的平台，Planner 拆解产物中至少一个子任务携带合法 requiredSkills 指派，且执行侧 SKILL_RESOLVED 事件 payload 含该技能与版本（G-004 增量 A 链路自动衔接）。
-2. **粒度自适应**：同一需求在「内部兜底」与「外部强执行者」两种 policy 下拆解，粒度分别为 FINE / COARSE，产物形态符合 §1-D3 表格定义；difficulty=HIGH 时 COARSE 场景上移为 STANDARD。
+2. **粒度自适应**：同一需求在「内部兜底」与「外部强执行者」两种 policy 下拆解，粒度分别为 FINE / COARSE，产物形态符合 §1-D3 表格定义；difficulty=HIGH 时 COARSE 场景上移为 STANDARD。**〔2026-09-10 实测口径〕COARSE 档已实证（外部任务）/ STANDARD 档已实证（平台内链）；FINE 档无真实场景样本，仅矩阵单测覆盖，登记待补。**
 3. **约束落库**：COARSE 产物 constraints 非空且出现在草案确认 UI；审查侧可引用约束核验。
 4. **外部感知**：外部 agent 拉取任务详情/inbox 可见 requiredSkills；未升级的外部 agent（旧 zip）行为无任何变化。
 5. **存量回归**：agent_policy 缺省 + required_skills 空的存量任务，拆解产物结构、装箱行为、执行链事件序列与现状一致（粒度 STANDARD = 现状提示词规则）。

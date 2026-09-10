@@ -67,7 +67,7 @@ A6 路线 B（2026-09-07 已落地）：新增 `AgentEventQueryService#traceBySu
 
 A6 收口（2026-09-07 已落地）：`/timeline` 读侧并轨 `agent_event`——`TaskTimelineService.listBySubTaskId` 合并 task_timeline 粗事件 + agent_event 细轨迹（createTime ASC + id ASC 二级排序）；前端 SubTaskDetail 时间线/时序图补 agent_event 事件字典与泳道映射（COMPACT_HIDDEN 隐藏例行 Step 事件防刷屏）；后端单测 7 用例 + 前端 vue-tsc type-check PASS。`task_timeline` 保持不迁移（ADR-001 §4）。
 
-A7（2026-09-07 已落地）：Replay / Audit 最小读取——`AgentEventQueryService` 新增 `traceByRunId`（按 runId 以 `createTime ASC, id ASC` 重建 Run 级轨迹，Replay 读侧，G-001 验收「一个 Run 可以按 sequence 重建轨迹」成立）与 `pageAuditByTaskId`（按 taskId 分页查执行事实，eventType 可选过滤，最新在前）；`AgentEventMapper` 对应新增 `selectByRunIdOrdered` / `selectPageAuditByTaskId`（`idx_agent_event_run` 索引支撑）；纯后端读侧，未接 API/UI（与 A6 路线 B 同形态）；单测 8 用例 + dev 库连库探针 PASS。
+A7（2026-09-07 已落地）：Replay / Audit 最小读取——`AgentEventQueryService` 新增 `traceByRunId`（按 runId 以 `createTime ASC, id ASC` 重建 Run 级轨迹，Replay 读侧，G-001 验收「一个 Run 可以按 sequence 重建轨迹」成立）与 `pageAuditByTaskId`（按 taskId 分页查执行事实，eventType 可选过滤，按写入时序正序）；`AgentEventMapper` 对应新增 `selectByRunIdOrdered` / `selectPageAuditByTaskId`（`idx_agent_event_run` 索引支撑）；纯后端读侧，未接 API/UI（与 A6 路线 B 同形态）；单测 8 用例 + dev 库连库探针 PASS。
 
 **当前动作**：P0-A 完整闭环（A1~A7 已落地）——G-001 Event Stream 验收全量成立；消费面已在 P1 补齐至全链暴露（G-006 增量 C1/C2/D，2026-09-08~10，见 §7）。剩余：Recovery / Fork 消费面。
 
@@ -264,7 +264,7 @@ Planner 拆解不再"闭眼规划"，而是感知平台真实能力后再拆：
 - **STANDARD**：默认档（白名单为空 / 常规场景）；
 - **COARSE**：目标 + 约束 + DoD——"不许改的事"（constraints）必填。
 
-现状基线（2026-09-10）：**S1~S4 已落地（含实测）**——S1 数据层（V74 sub_task.required_skills JSONB + constraints TEXT）、S2 拆解侧（技能目录常驻注入 / 三档粒度 / 目录过滤 task_plan_skill_filtered 审计 / 超 20 项截断）、S3 传递链（mergeSkills 并集五装箱点同源 / inbox 技能要求行 / REST 下行 / 草案确认 UI 展示编辑 + updateDraftById fail-close 端点 / executor SKILL.md 增量）、S4 双场景实测 PASS：平台内链（2026-09-09，与 G-011 S5 合并）+ 外部执行链（2026-09-10 双轮全链闭环——Round2 eng-doc-standard 硬门槛准入 / Round3 技能分布派单与 135:20 分排序实证）。后置缺口：①技能回流贡献规范（D5-3）②verify-skill-packages.ps1（D5-2）；③④已由 G-011 清偿（见差距表 G-010）。设计：`doc/design/Planner_Capability_Awareness.md`。
+现状基线（2026-09-10）：**S1~S4 已落地（含实测）**——S1 数据层（V74 sub_task.required_skills JSONB + constraints TEXT）、S2 拆解侧（技能目录常驻注入 / 三档粒度 / 目录过滤 task_plan_skill_filtered 审计 / 超 20 项截断）、S3 传递链（mergeSkills 并集五装箱点同源 / inbox 技能要求行 / REST 下行 / 草案确认 UI 展示编辑 + updateDraftById fail-close 端点 / executor SKILL.md 增量）、S4 双场景实测 PASS：平台内链（2026-09-09，与 G-011 S5 合并）+ 外部执行链（2026-09-10 双轮全链闭环——Round2 eng-doc-standard 硬门槛准入 / Round3 技能分布派单与 135:20 分排序实证）。后置缺口：①技能回流贡献规范（D5-3）；②verify-skill-packages.ps1（D5-2）已交付（2026-09-10，18 PASS 双验证）；③④已由 G-011 清偿（见差距表 G-010）。设计：`doc/design/Planner_Capability_Awareness.md`。
 
 # 9. P1：需求包准入与不确定性显式管理（G-011）
 
