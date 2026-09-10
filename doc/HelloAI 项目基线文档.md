@@ -4,7 +4,7 @@
 >
 > 本文档只描述当前真实代码与已落地能力，不描述未来愿景。
 >
-> 最后更新：2026-09-07
+> 最后更新：2026-09-10
 
 # 1. 当前项目定位
 
@@ -170,14 +170,14 @@ RuntimeAgentRuntimeRouter
 - 旧 Executor 已通过 Adapter 与新执行入口衔接；
 - Runtime 已开始承接 Context / Event / Environment 等能力；
 - `ToolExecutor` 已具备执行回路真身（懒加载 spring-ai ToolCallback 目录按名调用，与 ToolRegistry 元数据面同源同构；未知工具 / 空参 / 执行异常 best-effort 返回失败不抛）；
-- `AgentLoop` 已具备手动工具循环真身（`runtime/loop`：ChatModel 契约 + ToolExecutor 执行 + TOOL_CALL 事件，`internalToolExecutionEnabled=false` 由循环接管工具执行，maxIterations 硬上限防死循环；真实 provider 行为待 Runtime 真身接线时联调）；
-- `RuntimeTurnExecutor` 已具备（P0-B：AgentLoop/ToolExecutor/ToolRegistry/Skill/SandboxProvider 组装的 Turn 真身，事件骨架 + 沙箱观测）；`RuntimeAgentRuntimeRouter` 已具备（@Primary + @Order(1)，按 `runtime-enabled` 二进制切换，默认 false=Legacy）。
+- `AgentLoop` 已具备手动工具循环真身（`runtime/loop`：ChatModel 契约 + ToolExecutor 执行 + TOOL_CALL 事件，`internalToolExecutionEnabled=false` 由循环接管工具执行，maxIterations 硬上限防死循环；真实 provider tool-calling 已于 2026-09-08 dev 灰度联调通过——真实 DeepSeek 3 轮工具调用成对跑通）；
+- `RuntimeTurnExecutor` 已具备（P0-B：AgentLoop/ToolExecutor/ToolRegistry/Skill/SandboxProvider 组装的 Turn 真身，事件骨架 + 沙箱观测）；`RuntimeAgentRuntimeRouter` 已具备（@Primary + @Order(1)，按 `runtime-enabled` 二进制切换，默认 false=Legacy）；`TurnLlmCaller` 主链接线注入已就位（executeOnce 调用点按同一开关切换 Legacy / Runtime 循环），dev 灰度第 0 步已闭合（真身点亮 / 对账全绿 / 回滚零差异，2026-09-08）。
 
 当前仍不能宣称已完成完整 Harness Runtime：
 
 ```text
 ToolExecutor      → 契约+真身已具备（Phase 2），AgentLoop 已接线
-AgentLoop         → 契约+真身已具备（Phase 3），待 Runtime 真身组装
+AgentLoop         → 契约+真身已具备（Phase 3），已组装进 RuntimeTurnExecutor 并经 dev 灰度联调
 Session 协调      → 已确认收敛口径（AgentSessionService 承载，Phase 1 Step 3）
 SandboxProvider   → 契约已具备（Phase 4），隔离能力后置（Docker/K8s P2/P3）
 Capability 体系   → 尚需完善
@@ -204,7 +204,7 @@ Event
 Timeline / Review 的事实输入
 ```
 
-读侧已具备 `AgentEventQueryService` 三消费面：`traceBySubTaskId`（按 subTaskId 以 `createTime + id` 有序投影，Timeline 消费面，A6 已并轨 `/timeline`）、`traceByRunId`（按 runId 重建 Run 级轨迹，Replay 读侧，A7）、`pageAuditByTaskId`（按 taskId 分页查执行事实，eventType 可选过滤，Audit 读侧，A7）——Timeline / Replay / Audit 已从 Event Stream 获取事实；Recovery / Fork 消费面后续建设。`task_timeline` 保持独立载体不迁移（ADR-001 §4）。
+读侧已具备 `AgentEventQueryService` 多消费面：`traceBySubTaskId`（按 subTaskId 以 `createTime + id` 有序投影，Timeline 消费面，A6 已并轨 `/timeline`；增量 D 起亦经 REST 暴露）、`traceByRunId`（按 runId 重建 Run 级轨迹，Replay 读侧，A7）、`traceByTaskId`（任务维度轨迹，免传 runId 由 service 内部推导，增量 D）、`pageAuditByTaskId`（按 taskId 分页查执行事实，eventType 可选过滤，Audit 读侧，A7）——Timeline / Replay / Audit 已从 Event Stream 获取事实，并经 REST API（`/api/agent-events` 四端点）+ UI 事件流工作台（`/event-stream`，增量 C1/C2/D）全链暴露；Recovery / Fork 消费面后续建设。`task_timeline` 保持独立载体不迁移（ADR-001 §4）。
 
 原则：
 
@@ -217,23 +217,21 @@ Timeline / Review 的事实输入
 当前 Skill 已具备：
 
 ```text
-requiredSkills
+requiredSkills（任务级 + 子任务级 V74 新列，装箱并集）
 Skill resolve
 resolvedSpecs
-SKILL_RESOLVED
+SKILL_RESOLVED（携带 resolvedVersions）
+SkillPackage 元数据层（version / requiredTools / dependencies / inputSchema / outputSchema / validationRules）
+SKILL_CATALOG 目录注入（拆解侧能力感知，G-010 S2）
 ```
 
-Skill 已开始从隐式 Prompt 拼接向显式 Runtime 输入迁移，但还没有完整形成 Capability Package。
+Skill 已从隐式 Prompt 拼接迁移为显式 Runtime 输入 + 元数据面，required_skills 创建 → 拆解 → 派发 → 执行四段贯通，并经真实任务实测闭环（2026-09-10 外部执行者双轮，见 log）。
 
-当前缺口主要是：
+当前尚未全量形成的 Capability Package 剩余缺口主要是：
 
 ```text
-version
-requiredTools
-dependencies
-inputSchema
-outputSchema
-validationRules
+Instructions 结构化
+技能回流贡献规范（verify-skill-packages 校验脚本未交付）
 ```
 
 # 10. 当前 Environment / Sandbox 基线
@@ -246,6 +244,7 @@ ExecutionEnvironmentProvider
 RemoteAgent
 LocalProcess
 ENVIRONMENT_RESOLVED
+SandboxProvider / SandboxContext / Sandbox / ExecutionPolicy（契约层 Phase 4；诚实策略无 ISOLATED）
 ```
 
 当前准确定位是：
@@ -309,4 +308,4 @@ REWORK
 
 # 14. 当前基线一句话
 
-> **HelloAI 已经具备异步执行、分布式调度、异构 Agent 接入、可靠性治理和基础执行环境抽象；下一阶段的核心是统一 Agent Event Stream，并在双轨迁移基础上继续收敛 AgentRuntime、Skill Capability 和 Sandbox Provider。**
+> **HelloAI 已经具备异步执行、分布式调度、异构 Agent 接入、可靠性治理和基础执行环境抽象；Agent Event Stream 与 AgentRuntime 已统一收敛（2026-09 收官，经 dev 灰度联调与外部执行者双轮全链实测），下一阶段的核心是继续收敛 Skill Capability 剩余缺口与 Sandbox Provider 隔离能力，并补齐 Event 消费面的 Recovery / Fork。**
