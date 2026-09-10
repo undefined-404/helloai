@@ -11,17 +11,21 @@
         并对 NULL 兜底 '[]'（V47 NOT NULL DEFAULT '[]'，实体未声明时不允许写 NULL）。
         注意：本 insert 的 parameterType 为实体本身，字段直接用 #{xxx} 引用；
               仅 updateById 的入参被 MyBatis-Plus 包装为 @Param("et")（见下方 updateById）。
+
+        2026-09-10 补列（同 SubTaskMapper 落库缺陷修复）：api_key_hash 此前未同步——
+        register()/registerOrGet() 新建 Agent 时 save() 走本 SQL，sha256 hash 被静默丢弃，
+        导致 getByApiKey 主路径（hash 点查）失效、被迫走 O(n) 明文兜底路径，注册幂等名存实亡。
     -->
     <insert id="insert" parameterType="com.helloai.core.agent.entity.Agent">
         INSERT INTO agent (
-            id, name, role, api_key, model_type, model_config,
+            id, name, role, api_key, api_key_hash, model_type, model_config,
             specialization_slug, status, score,
             access_type, capabilities, labels, skills,
             last_seen_time, last_active_time, online_status, offline_reason, offline_time,
             consecutive_failure_count, last_failure_time, last_fallback_time,
             deleted, create_by, update_by, create_time, update_time, remark
         ) VALUES (
-            #{id}, #{name}, #{role}, #{apiKey}, #{modelType},
+            #{id}, #{name}, #{role}, #{apiKey}, #{apiKeyHash}, #{modelType},
             #{modelConfig,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
             #{specializationSlug}, #{status}, #{score},
             #{accessType},
@@ -44,12 +48,17 @@
         skills（V47 JSONB[]）用 PgJsonbTypeHandler，并对 NULL 兜底 '[]'（NOT NULL 约束）。
         注意：MyBatis-Plus updateById 的入参被包装为 @Param("et")，所有实体字段需通过 et.xxx 访问；
               @Param("MP_OPTLOCK_VERSION_ORIGINAL") 是乐观锁拦截器附加参数。
+
+        2026-09-10 补列：api_key_hash（同 insert）。采用保护写 COALESCE(..., api_key_hash)：
+        resetApiKey 轮换后若与 seen() 等并发回写旧快照，不会把新 hash 覆盖为 NULL
+        （hash 为空会迫使认证降级到 O(n) 明文兜底路径）。本表无乐观锁 version 列。
     -->
     <update id="updateById" parameterType="com.helloai.core.agent.entity.Agent">
         UPDATE agent
         SET name = #{et.name},
             role = #{et.role},
             api_key = #{et.apiKey},
+            api_key_hash = COALESCE(#{et.apiKeyHash}, api_key_hash),
             model_type = #{et.modelType},
             model_config = #{et.modelConfig,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
             specialization_slug = #{et.specializationSlug},
