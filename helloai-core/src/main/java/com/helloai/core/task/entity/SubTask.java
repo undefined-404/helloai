@@ -14,7 +14,9 @@ import java.util.Map;
 
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TableName("sub_task")
+// autoResultMap：让 @TableField(typeHandler) 参与 SELECT 结果映射。uncertainties 强类型读取依赖
+// （全局 List→JacksonTypeHandler 注册会把 JSON 数组读成 List<LinkedHashMap>，见该字段 Javadoc）
+@TableName(value = "sub_task", autoResultMap = true)
 public class SubTask extends BaseEntity {
 
     private Long taskId;
@@ -143,8 +145,14 @@ public class SubTask extends BaseEntity {
      * 审查不因假设存在而驳回）/ UNCONFIRMED 待确认缺口（执行者须先验证再动手，
      * 验证不了走既有 BLOCKED 链上报）。空数组（默认）=无申报，执行/审查侧零注入，
      * 存量数据行为与现状完全一致。</p>
+     *
+     * <p>读取必须走 {@link UncertaintyListTypeHandler}（而非内置 JacksonTypeHandler）：
+     * MyBatisPlusConfig 全局把 {@code List.class} 注册为 JacksonTypeHandler，自动映射
+     * 按擦除后的 List 读取会把 JSON 数组反序列化为 {@code List<LinkedHashMap>}，
+     * 强类型消费点（sendInboxNotification 统计 UNCONFIRMED 等）ClassCastException，
+     * 导致派单 inbox 通知失败、调度链死锁（2026-09-10 排查修复）。</p>
      */
-    @TableField(typeHandler = JacksonTypeHandler.class)
+    @TableField(typeHandler = UncertaintyListTypeHandler.class)
     private List<Uncertainty> uncertainties;
 
     /**

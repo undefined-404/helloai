@@ -3,11 +3,33 @@
 <mapper namespace="com.helloai.core.task.mapper.SubTaskMapper">
 
     <!--
+        SubTask 局部结果映射（2026-09-10 CCE 修复）。
+        只声明需要强类型 handler 的列，其余列由 MyBatis 自动映射（PARTIAL 行为不变）：
+        uncertainties 之前经全局 List→JacksonTypeHandler 注册被读成 List<LinkedHashMap>，
+        强类型消费点（sendInboxNotification / 审查链 / 执行链）CCE。此处显式绑定
+        UncertaintyListTypeHandler，恒读出 List<Uncertainty>。
+        仅本文件 resultType 自定义查询需要；MP 内置方法走实体 @TableName(autoResultMap=true)。
+    -->
+    <resultMap id="subTaskResultMap" type="com.helloai.core.task.entity.SubTask">
+        <result property="uncertainties" column="uncertainties"
+                typeHandler="com.helloai.core.task.entity.UncertaintyListTypeHandler"/>
+    </resultMap>
+
+    <!--
         覆盖 BaseMapper.insert：PostgreSQL 的 JSONB 列不接受未指定类型的字符串参数，
         这里显式用 ::jsonb 进行类型转换，避免 "column context is of type jsonb but expression is of type character varying"。
         修复 V27 PlannerAnalysisService 拆解落库（saveBatch 写入带 context 审计信息的草案）时的报错；
         此前 sub_task 插入时 context/score_factors 恒为 null 才未暴露。
         NOT NULL 且带数据库默认值的列用 COALESCE 兜底，保持与表默认值语义一致。
+
+        2026-09-10 补列（G-010/G-011 落库缺陷修复）：本 SQL 自 V27 引入后历次实体加列均未同步——
+        owner/lease_until（A2.2 租约）、is_contract（V56 契约标记）、required_skills/constraints（V74 G-010）、
+        uncertainties（V75 G-011）此前全部被静默丢弃（INSERT 不含列 → 落 DB 默认值），
+        导致拆解草案的技能指派/执行约束/不确定性申报与租约字段从未真正落库。本次一次性补齐。
+        uncertainties 的 typeHandler 同批换为 UncertaintyListTypeHandler（写侧序列化兼容，
+        读侧强类型说明见类注释与本文件 subTaskResultMap）。
+        attempt_total 保持不写：A3 起由 incrementAttemptTotal 原子累加独占（坑点 3「单一权威」），
+        不参与本 SQL 的全列覆盖，避免读改写竞态覆盖累计值。
     -->
     <insert id="insert" parameterType="com.helloai.core.task.entity.SubTask">
         INSERT INTO sub_task (
@@ -15,7 +37,8 @@
             assigned_agent_id, content, context, score_factors,
             composite_score, score_grade, deadline, rework_count, complete_time,
             version, timeout_count, external_fallback_count, reassign_attempt_count,
-            depends_on,
+            depends_on, owner, lease_until, is_contract,
+            required_skills, constraints, uncertainties,
             deleted, create_by, update_by, create_time, update_time, remark
         ) VALUES (
             #{id}, #{taskId}, #{moduleId}, #{title}, #{deliverable}, #{acceptance},
@@ -28,6 +51,10 @@
             COALESCE(#{version}, 0), COALESCE(#{timeoutCount}, 0),
             COALESCE(#{externalFallbackCount}, 0), COALESCE(#{reassignAttemptCount}, 0),
             COALESCE(#{dependsOn,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb, '[]'::jsonb),
+            #{owner}, #{leaseUntil}, COALESCE(#{isContract}, 0),
+            COALESCE(#{requiredSkills,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb, '[]'::jsonb),
+            #{constraints},
+            COALESCE(#{uncertainties,typeHandler=com.helloai.core.task.entity.UncertaintyListTypeHandler}::jsonb, '[]'::jsonb),
             COALESCE(#{deleted}, 0), COALESCE(#{createBy}, ''), COALESCE(#{updateBy}, ''),
             COALESCE(#{createTime}, CURRENT_TIMESTAMP), COALESCE(#{updateTime}, CURRENT_TIMESTAMP), #{remark}
         )
@@ -39,6 +66,12 @@
         修复 ReviewService 走 complete() 后写入 5 因子评分时的更新报错。
         注意：MyBatis-Plus updateById 的入参被包装为 @Param("et")，所有实体字段需通过 et.xxx 访问；
               @Param("MP_OPTLOCK_VERSION_ORIGINAL") 是乐观锁拦截器附加参数。
+
+        2026-09-10 补列（与 insert 同批修复）：owner/lease_until（changeStatus 写租约、续期/回收清空）、
+        is_contract、required_skills/constraints/uncertainties（G-010/G-011 落库）此前同样被静默丢弃。
+        uncertainties 的 typeHandler 同批换为 UncertaintyListTypeHandler（写侧序列化兼容，读侧强类型）。
+        NOT NULL 列用 COALESCE 兜底防越界写 NULL；attempt_total 保持不写（incrementAttemptTotal 原子独占，
+        防止「读出旧值-修改-回写」窗口覆盖并发累计）。
     -->
     <update id="updateById" parameterType="com.helloai.core.task.entity.SubTask">
         UPDATE sub_task
@@ -58,6 +91,12 @@
             deadline = #{et.deadline},
             rework_count = #{et.reworkCount},
             depends_on = #{et.dependsOn,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb,
+            owner = #{et.owner},
+            lease_until = #{et.leaseUntil},
+            is_contract = COALESCE(#{et.isContract}, 0),
+            required_skills = COALESCE(#{et.requiredSkills,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}::jsonb, '[]'::jsonb),
+            constraints = #{et.constraints},
+            uncertainties = COALESCE(#{et.uncertainties,typeHandler=com.helloai.core.task.entity.UncertaintyListTypeHandler}::jsonb, '[]'::jsonb),
             complete_time = #{et.completeTime},
             version = #{et.version},
             timeout_count = #{et.timeoutCount},
@@ -104,7 +143,7 @@
         供 ExternalAgentFallbackTask 触发重新分发时使用。
         只返回仍在跑（未结束、未取消）的子任务。
     -->
-    <select id="selectInFlightByAgent" resultType="com.helloai.core.task.entity.SubTask">
+    <select id="selectInFlightByAgent" resultMap="subTaskResultMap">
         SELECT * FROM sub_task
         WHERE assigned_agent_id = #{agentId}
           AND status IN ('ASSIGNED', 'IN_PROGRESS', 'REWORK')
@@ -130,7 +169,7 @@
         用于 AssignedSubTaskTimeoutTask 回收长时间无人 claim 的子任务。
         按 update_time 升序（最早超时的优先处理），limit 防止单轮扫描过多。
     -->
-    <select id="selectTimedOutAssigned" resultType="com.helloai.core.task.entity.SubTask">
+    <select id="selectTimedOutAssigned" resultMap="subTaskResultMap">
         SELECT * FROM sub_task
         WHERE status = 'ASSIGNED'
           AND update_time &lt; #{deadline}
