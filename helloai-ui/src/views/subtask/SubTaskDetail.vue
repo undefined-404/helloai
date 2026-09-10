@@ -25,12 +25,20 @@
             评分 {{ SCORE_GRADE_MAP[item.scoreGrade]?.label || item.scoreGrade }}
           </el-tag>
         </div>
-        <el-button
-          size="small"
-          @click="goBackToList"
-        >
-          返回列表
-        </el-button>
+        <div class="head-actions">
+          <el-button
+            size="small"
+            @click="goEventStream"
+          >
+            事件流
+          </el-button>
+          <el-button
+            size="small"
+            @click="goBackToList"
+          >
+            返回列表
+          </el-button>
+        </div>
       </div>
       <h1 class="head-title">
         {{ item.title }}
@@ -668,6 +676,15 @@ function goBackToList() {
   router.push(tid ? { path: '/sub-tasks', query: { taskId: String(tid) } } : '/sub-tasks')
 }
 
+// 事件流工作台：带 taskId + subTaskId 深链（Replay 自动聚焦该子任务的执行轨迹）
+function goEventStream() {
+  if (!item.value) return
+  router.push({
+    path: '/event-stream',
+    query: { taskId: String(item.value.taskId), subTaskId: String(item.value.id) }
+  })
+}
+
 // ── §6.52 人工介入：返工达上限 / 降级能力不匹配时，用户自主选择 agent 改派或直接通过 ──
 const manualTargetAgentId = ref<string>('')
 const manualSubmitting = ref(false)
@@ -1162,6 +1179,7 @@ onBeforeUnmount(() => {
   gap: 12px;
   margin-bottom: 6px;
 }
+.head-actions { display: flex; gap: 8px; flex: none; }
 .head-badges {
   display: flex;
   align-items: center;

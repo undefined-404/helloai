@@ -112,6 +112,101 @@ export function eventCategory(eventType: string): EventCategory {
   return '流程'
 }
 
+// ── payload 结构化解构（G-006 增强：把关键字段从 JSON 原文中解锁为可读行） ──
+// 高频 payload 键 → 中文标签；未命中键回退原始键名
+const PAYLOAD_KEY_LABEL: Record<string, string> = {
+  submitterAgentId: '提交人',
+  reviewerAgentId: '核验人',
+  reworkAgentId: '改派人',
+  executorAgentId: '执行人',
+  previousAgentId: '原执行者',
+  preferredAgentId: '目标执行者',
+  assigneeAgentId: '负责人',
+  agentId: 'Agent',
+  score: '评分',
+  round: '轮次',
+  comment: '评语',
+  issues: '问题',
+  reason: '原因',
+  error: '错误',
+  executor: '执行方式',
+  source: '来源',
+  success: '是否成功',
+  finishReason: '结束原因',
+  tokens: 'Token 用量',
+  channel: '核验通道',
+  toolName: '工具',
+  skill: '技能',
+  attempt: '尝试次数',
+  reassignAttemptCount: '改派次数',
+  attachmentCount: '附件数',
+  outputPresent: '有产出文本',
+  turn: '环节',
+  step: '步骤',
+  taskId: '任务',
+  subTaskId: '子任务'
+}
+
+// 明确无疑的枚举值翻译（其余值原样展示，避免失真）
+const PAYLOAD_VALUE_LABEL: Record<string, string> = {
+  SINGLE: '单审',
+  DUAL: '双审',
+  cli_client: 'CLI 客户端',
+  EXTERNAL: '外部 Agent'
+}
+
+export interface PayloadField {
+  key: string
+  label: string
+  value: string
+  /** agent=按 Agent ID 解析名称；score=评分；bool=是/否；text=长文本块；plain=直接展示 */
+  kind: 'agent' | 'score' | 'bool' | 'text' | 'plain'
+}
+
+const AGENT_KEY_RE = /agentid$/i
+const TEXT_KEYS = new Set(['comment', 'issues', 'reason', 'error', 'output', 'message', 'description'])
+
+/**
+ * payload 结构化解构：把可读标量字段拆成 label/value 行（agent ID 交由调用方解析名称），
+ * 对象/数组与超长内容不拆、留在原文折叠中（审计原文始终可达）。
+ */
+export function payloadFields(payload: Record<string, any> | null | undefined): PayloadField[] {
+  if (!payload) return []
+  const fields: PayloadField[] = []
+  for (const [key, raw] of Object.entries(payload)) {
+    if (raw === null || raw === undefined || raw === '') continue
+    const label = PAYLOAD_KEY_LABEL[key] || key
+    if (typeof raw === 'boolean') {
+      fields.push({ key, label, value: raw ? '是' : '否', kind: 'bool' })
+    } else if (typeof raw === 'number') {
+      if (AGENT_KEY_RE.test(key)) fields.push({ key, label, value: String(raw), kind: 'agent' })
+      else if (key === 'score') fields.push({ key, label, value: `${raw}/5`, kind: 'score' })
+      else fields.push({ key, label, value: String(raw), kind: 'plain' })
+    } else if (typeof raw === 'string') {
+      if (AGENT_KEY_RE.test(key) && /^\d+$/.test(raw)) {
+        fields.push({ key, label, value: raw, kind: 'agent' })
+      } else if (key === 'score' && /^\d+$/.test(raw)) {
+        fields.push({ key, label, value: `${raw}/5`, kind: 'score' })
+      } else if (TEXT_KEYS.has(key) || raw.length > 80) {
+        fields.push({ key, label, value: raw, kind: 'text' })
+      } else {
+        fields.push({ key, label, value: PAYLOAD_VALUE_LABEL[raw] || raw, kind: 'plain' })
+      }
+    }
+    // 其余（对象/数组）留在 payload 原文折叠中
+  }
+  return fields
+}
+
+/**
+ * payload 是否含未解构内容（对象/数组）。
+ * 仅此类 payload 的"完整原文"有增量价值——纯标量 payload 已被 payloadFields 全部解锁为可读行。
+ */
+export function payloadHasNested(payload: Record<string, any> | null | undefined): boolean {
+  if (!payload) return false
+  return Object.values(payload).some((v) => v !== null && typeof v === 'object')
+}
+
 // 语义色（el-tag / el-timeline 节点 / 卡片 tone-* 底色共用）
 export type EventTone = '' | 'success' | 'warning' | 'danger' | 'info' | 'primary'
 export function eventTypeColor(eventType: string): EventTone {

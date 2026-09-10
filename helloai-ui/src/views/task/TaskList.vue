@@ -150,6 +150,9 @@
                     >
                       编辑
                     </el-dropdown-item>
+                    <el-dropdown-item command="events">
+                      事件流
+                    </el-dropdown-item>
                     <el-dropdown-item command="republish">
                       重新发布
                     </el-dropdown-item>
@@ -302,6 +305,9 @@ async function load() {
 // 标题点击 → 跳转子任务列表
 function goSubTasks(row: any) { router.push('/sub-tasks?taskId=' + String(row.id)) }
 
+// 事件流工作台：按任务维度回放 / 审计（深链自动带入 taskId 并查询）
+function goEvents(row: any) { router.push('/event-stream?taskId=' + String(row.id)) }
+
 // 描述点击 → 弹窗展示
 const descVisible = ref(false)
 const descTitle = ref('')
@@ -370,9 +376,10 @@ const editingTask = ref<Task | null>(null)
 function openCreate() { editingTask.value = null; formVisible.value = true }
 function openEdit(row: Task) { editingTask.value = row; formVisible.value = true }
 
-// ── 更多下拉：次要操作统一分派（编辑/重新发布/停止/删除） ──
+// ── 更多下拉：次要操作统一分派（编辑/事件流/重新发布/停止/删除） ──
 function handleCommand(command: string, row: Task) {
   if (command === 'edit') openEdit(row)
+  else if (command === 'events') goEvents(row)
   else if (command === 'republish') handleRepublish(row)
   else if (command === 'stop') handleStop(row)
   else if (command === 'delete') openDelete(row)

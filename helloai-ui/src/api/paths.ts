@@ -56,6 +56,10 @@ export const paths = {
   // G-006：agent_event 读侧端点（Replay 轨迹 / Audit 分页），Controller: AgentEventController
   agentEvents: {
     traceByRunId: (runId: string) => `/agent-events/traceByRunId/${enc(runId)}`,
+    // 任务维度入口（免传 runId，service 内部按 ADR-001 §3.1 规则推导）
+    traceByTaskId: (taskId: string | number) => `/agent-events/traceByTaskId/${enc(taskId)}`,
+    // 子任务维度聚焦过滤（单子任务 Turn/Step 轨迹）
+    traceBySubTaskId: (subTaskId: string | number) => `/agent-events/traceBySubTaskId/${enc(subTaskId)}`,
     pageAuditByTaskId: (taskId: string | number) => `/agent-events/pageAuditByTaskId/${enc(taskId)}`
   },
   agents: {
