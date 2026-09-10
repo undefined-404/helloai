@@ -72,7 +72,7 @@ public interface AgentEventMapper extends BaseMapper<AgentEvent> {
     }
 
     /**
-     * 按 Task 分页读取事件审计列表，最新在前（{@code create_time DESC, id DESC}）。
+     * 按 Task 分页读取事件审计列表，按写入时序正序（{@code create_time ASC, id ASC}）。
      *
      * <p>Phase 0 A7 Audit 读侧：按 task 维度查询执行事实（谁在何时做了什么），
      * 支持可选 {@code eventType} 过滤；纯读、不参与业务状态决策。分页走
@@ -87,7 +87,7 @@ public interface AgentEventMapper extends BaseMapper<AgentEvent> {
         return selectPage(page, new LambdaQueryWrapper<AgentEvent>()
                 .eq(AgentEvent::getTaskId, taskId)
                 .eq(eventType != null && !eventType.isBlank(), AgentEvent::getEventType, eventType)
-                .orderByDesc(AgentEvent::getCreateTime)
-                .orderByDesc(AgentEvent::getId));
+                .orderByAsc(AgentEvent::getCreateTime)
+                .orderByAsc(AgentEvent::getId));
     }
 }

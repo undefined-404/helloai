@@ -16,7 +16,7 @@ export const agentEventApi = {
   traceBySubTaskId(subTaskId: LongId) {
     return request.get<any, AgentEventItem[]>(paths.agentEvents.traceBySubTaskId(subTaskId))
   },
-  // Audit：按 taskId 分页查执行事实，eventType 可选过滤，最新在前
+  // Audit：按 taskId 分页查执行事实，eventType 可选过滤，按时间正序（执行顺序）
   audit(query: AgentEventAuditQuery) {
     return request.get<any, PageResult<AgentEventItem>>(paths.agentEvents.pageAuditByTaskId(query.taskId), {
       params: {

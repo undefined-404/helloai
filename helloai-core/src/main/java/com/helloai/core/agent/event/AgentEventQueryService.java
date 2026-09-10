@@ -48,7 +48,7 @@ public interface AgentEventQueryService {
      * 按 Task 分页读取事件审计列表（Phase 0 A7 Audit 读侧）。
      *
      * <p>按 task 维度查询执行事实（谁在何时做了什么），支持可选 {@code eventType}
-     * 过滤，最新在前（{@code createTime DESC, id DESC}）；供 Audit 消费面从
+     * 过滤，按写入时序正序（{@code createTime ASC, id ASC}）；供 Audit 消费面从
      * Event Stream 获取事实（G-001 验收）。</p>
      *
      * @param taskId    Task ID；为空时返回空分页

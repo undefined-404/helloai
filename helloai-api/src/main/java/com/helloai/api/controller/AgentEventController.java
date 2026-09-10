@@ -82,7 +82,7 @@ public class AgentEventController {
     }
 
     /**
-     * Audit：按 Task 分页读取事件审计列表，可选事件类型过滤，最新在前。
+     * Audit：按 Task 分页读取事件审计列表，可选事件类型过滤，按写入时序正序。
      *
      * <p>page/pageSize 做最小归一（非正回默认值、pageSize 上限 100），
      * 不限制事件类型集合（由消费方按需传入，service 层空白透传不过滤）。</p>

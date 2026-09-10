@@ -270,14 +270,6 @@
               </template>
             </el-table-column>
             <el-table-column
-              label="环节"
-              width="80"
-            >
-              <template #default="{ row }">
-                {{ row.turn ?? '-' }}/{{ row.step ?? '-' }}
-              </template>
-            </el-table-column>
-            <el-table-column
               label="执行方"
               min-width="140"
               show-overflow-tooltip
@@ -492,7 +484,7 @@ async function runReplay() {
   }
 }
 
-// ── Audit：按 taskId 分页查询执行事实（eventType 可选过滤，最新在前） ──
+// ── Audit：按 taskId 分页查询执行事实（eventType 可选过滤，按时间正序） ──
 const auditTaskId = ref('')
 const auditEventType = ref('')
 const auditLoading = ref(false)
