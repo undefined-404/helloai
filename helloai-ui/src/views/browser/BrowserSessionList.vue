@@ -136,10 +136,22 @@
             class="filter-select"
             @change="reload"
           >
-            <el-option label="进行中" value="ACTIVE" />
-            <el-option label="开始" value="BEGIN" />
-            <el-option label="已关闭" value="CLOSED" />
-            <el-option label="异常终止" value="FAILED" />
+            <el-option
+              label="进行中"
+              value="ACTIVE"
+            />
+            <el-option
+              label="开始"
+              value="BEGIN"
+            />
+            <el-option
+              label="已关闭"
+              value="CLOSED"
+            />
+            <el-option
+              label="异常终止"
+              value="FAILED"
+            />
           </el-select>
           <el-select
             v-model="timeRange"
@@ -148,9 +160,18 @@
             class="filter-select"
             @change="reload"
           >
-            <el-option label="今天" value="today" />
-            <el-option label="近 7 天" value="7d" />
-            <el-option label="近 30 天" value="30d" />
+            <el-option
+              label="今天"
+              value="today"
+            />
+            <el-option
+              label="近 7 天"
+              value="7d"
+            />
+            <el-option
+              label="近 30 天"
+              value="30d"
+            />
           </el-select>
           <el-select
             v-model="agentFilter"
@@ -174,11 +195,20 @@
             plain
             @click="onExport"
           >
-            <el-icon style="margin-right: 4px"><Download /></el-icon>
+            <el-icon style="margin-right: 4px">
+              <Download />
+            </el-icon>
             导出
           </el-button>
-          <el-dropdown trigger="click" @command="onMoreAction">
-            <el-button size="small" plain :icon="MoreFilled" />
+          <el-dropdown
+            trigger="click"
+            @command="onMoreAction"
+          >
+            <el-button
+              size="small"
+              plain
+              :icon="MoreFilled"
+            />
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item command="refresh">
@@ -200,7 +230,10 @@
           row-key="id"
           style="width: 100%"
         >
-          <el-table-column label="Agent" min-width="160">
+          <el-table-column
+            label="Agent"
+            min-width="160"
+          >
             <template #default="{ row }">
               <div class="agent-cell">
                 <el-avatar
@@ -222,36 +255,72 @@
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="任务 ID" width="110">
+          <el-table-column
+            label="任务 ID"
+            width="110"
+          >
             <template #default="{ row }">
-              <span v-if="row.taskId" class="task-id">#{{ row.taskId }}</span>
-              <span v-else class="mut-m">--</span>
+              <span
+                v-if="row.taskId"
+                class="task-id"
+              >#{{ row.taskId }}</span>
+              <span
+                v-else
+                class="mut-m"
+              >--</span>
             </template>
           </el-table-column>
-          <el-table-column label="状态" width="100">
+          <el-table-column
+            label="状态"
+            width="100"
+          >
             <template #default="{ row }">
-              <el-tag :type="statusTag(row.status)" size="small" effect="light">
+              <el-tag
+                :type="statusTag(row.status)"
+                size="small"
+                effect="light"
+              >
                 {{ statusLabel(row.status) }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="当前 URL" min-width="240" show-overflow-tooltip>
+          <el-table-column
+            label="当前 URL"
+            min-width="240"
+            show-overflow-tooltip
+          >
             <template #default="{ row }">
-              <span v-if="row.currentUrl" class="url-cell">{{ row.currentUrl }}</span>
-              <span v-else class="mut-m">--</span>
+              <span
+                v-if="row.currentUrl"
+                class="url-cell"
+              >{{ row.currentUrl }}</span>
+              <span
+                v-else
+                class="mut-m"
+              >--</span>
             </template>
           </el-table-column>
-          <el-table-column label="开始时间" width="170">
+          <el-table-column
+            label="开始时间"
+            width="170"
+          >
             <template #default="{ row }">
               {{ fmtTime(row.beginTime) }}
             </template>
           </el-table-column>
-          <el-table-column label="关闭时间" width="170">
+          <el-table-column
+            label="关闭时间"
+            width="170"
+          >
             <template #default="{ row }">
               {{ fmtTime(row.closeTime) }}
             </template>
           </el-table-column>
-          <el-table-column label="操作" :width="ACTION.TWO" fixed="right">
+          <el-table-column
+            label="操作"
+            :width="ACTION.TWO"
+            fixed="right"
+          >
             <template #default="{ row }">
               <el-button
                 size="small"
@@ -289,7 +358,9 @@
               plain
               @click="onViewDocs"
             >
-              <el-icon style="margin-right: 4px"><Document /></el-icon>
+              <el-icon style="margin-right: 4px">
+                <Document />
+              </el-icon>
               查看文档
             </el-button>
             <el-button
@@ -316,7 +387,10 @@
     </el-card>
 
     <!-- 快速入门：三步引导卡组，与设计图紫色/蓝色/绿色渐变一致 -->
-    <section class="quick-start ha-entrance-up" style="animation-delay: 160ms">
+    <section
+      class="quick-start ha-entrance-up"
+      style="animation-delay: 160ms"
+    >
       <div class="quick-start-head">
         <div class="quick-start-title">
           <span class="quick-start-bulb">
@@ -346,7 +420,9 @@
             @click="goAgentCreate"
           >
             去创建
-            <el-icon style="margin-left: 2px"><ArrowRight /></el-icon>
+            <el-icon style="margin-left: 2px">
+              <ArrowRight />
+            </el-icon>
           </el-button>
         </div>
 
@@ -367,7 +443,9 @@
             @click="goBrowserConfig"
           >
             查看配置
-            <el-icon style="margin-left: 2px"><ArrowRight /></el-icon>
+            <el-icon style="margin-left: 2px">
+              <ArrowRight />
+            </el-icon>
           </el-button>
         </div>
 
@@ -388,7 +466,9 @@
             @click="goDispatch"
           >
             立即体验
-            <el-icon style="margin-left: 2px"><ArrowRight /></el-icon>
+            <el-icon style="margin-left: 2px">
+              <ArrowRight />
+            </el-icon>
           </el-button>
         </div>
       </div>

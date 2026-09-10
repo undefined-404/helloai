@@ -31,7 +31,10 @@
             >
               分享
             </el-button>
-            <el-dropdown trigger="click" @command="handleMoreAction">
+            <el-dropdown
+              trigger="click"
+              @command="handleMoreAction"
+            >
               <el-button
                 size="small"
                 :icon="MoreFilled"
@@ -42,7 +45,10 @@
                   <el-dropdown-item command="export">
                     <el-icon><Download /></el-icon>导出全部会话
                   </el-dropdown-item>
-                  <el-dropdown-item command="clear-all" divided>
+                  <el-dropdown-item
+                    command="clear-all"
+                    divided
+                  >
                     <span class="dropdown-danger">清空已放弃会话</span>
                   </el-dropdown-item>
                   <el-dropdown-item command="docs">
@@ -64,7 +70,9 @@
             size="default"
             @click="startNew"
           >
-            <el-icon style="margin-right: 6px"><Plus /></el-icon>
+            <el-icon style="margin-right: 6px">
+              <Plus />
+            </el-icon>
             新建对话
           </el-button>
           <el-input
@@ -74,7 +82,9 @@
             class="conv-search"
           >
             <template #prefix>
-              <el-icon style="color: var(--ha-muted)"><Search /></el-icon>
+              <el-icon style="color: var(--ha-muted)">
+                <Search />
+              </el-icon>
             </template>
           </el-input>
           <div class="conv-tabs">
@@ -201,97 +211,115 @@
           >
             <div class="thread">
               <template v-if="detail">
-              <template
-                v-for="row in renderMessages"
-                :key="String(row.msg.id)"
-              >
-                <!-- V41 联网搜索折叠查验条（对齐 DeepSeek/Kimi 形态：挂在 assistant 回复上方） -->
-                <div
-                  v-if="row.webSearch"
-                  class="msg-row from-assistant"
+                <template
+                  v-for="row in renderMessages"
+                  :key="String(row.msg.id)"
                 >
-                  <div class="msg-avatar">
-                    AI
-                  </div>
-                  <div class="msg-col">
-                    <WebSearchBar
-                      class="ws-wrap"
-                      :trace="row.webSearch"
-                    />
-                  </div>
-                </div>
-                <!-- 结构化追问：引导语气泡（问题正文由卡片呈现，不重复展示） -->
-                <div
-                  v-if="row.intro"
-                  class="msg-row"
-                  :class="row.msg.role === 'user' ? 'from-user' : 'from-assistant'"
-                >
-                  <div class="msg-avatar">
-                    {{ row.msg.role === 'user' ? '我' : 'AI' }}
-                  </div>
-                  <div class="msg-col">
-                    <div class="msg-bubble">
-                      <!-- 用户消息原样展示；assistant 回复渲染 Markdown（标题/表格/列表/引用，流式与历史回显统一） -->
-                      <template v-if="row.msg.role === 'user'">
-                        {{ row.intro }}
-                      </template>
-                      <MarkdownView
-                        v-else
-                        :content="row.intro"
+                  <!-- V41 联网搜索折叠查验条（对齐 DeepSeek/Kimi 形态：挂在 assistant 回复上方） -->
+                  <div
+                    v-if="row.webSearch"
+                    class="msg-row from-assistant"
+                  >
+                    <div class="msg-avatar">
+                      AI
+                    </div>
+                    <div class="msg-col">
+                      <WebSearchBar
+                        class="ws-wrap"
+                        :trace="row.webSearch"
                       />
                     </div>
-                    <!-- 助手消息下的轻量操作工具条 -->
-                    <div
-                      v-if="row.msg.role === 'assistant'"
-                      class="msg-actions"
-                    >
-                      <button
-                        type="button"
-                        class="msg-action-btn"
-                        title="复制内容"
-                        @click="copyMsgContent(row.msg.content)"
+                  </div>
+                  <!-- 结构化追问：引导语气泡（问题正文由卡片呈现，不重复展示） -->
+                  <div
+                    v-if="row.intro"
+                    class="msg-row"
+                    :class="row.msg.role === 'user' ? 'from-user' : 'from-assistant'"
+                  >
+                    <div class="msg-avatar">
+                      {{ row.msg.role === 'user' ? '我' : 'AI' }}
+                    </div>
+                    <div class="msg-col">
+                      <div class="msg-bubble">
+                        <!-- 用户消息原样展示；assistant 回复渲染 Markdown（标题/表格/列表/引用，流式与历史回显统一） -->
+                        <template v-if="row.msg.role === 'user'">
+                          {{ row.intro }}
+                        </template>
+                        <MarkdownView
+                          v-else
+                          :content="row.intro"
+                        />
+                      </div>
+                      <!-- 助手消息下的轻量操作工具条 -->
+                      <div
+                        v-if="row.msg.role === 'assistant'"
+                        class="msg-actions"
                       >
-                        <el-icon><CopyDocument /></el-icon>
-                      </button>
-                      <button
-                        type="button"
-                        class="msg-action-btn"
-                        :class="{ 'is-on': row.liked }"
-                        title="有帮助"
-                        @click="likeMsg(row.msg.id)"
-                      >
-                        <el-icon><CaretTop /></el-icon>
-                      </button>
-                      <button
-                        type="button"
-                        class="msg-action-btn"
-                        title="没帮助"
-                        @click="dislikeMsg(row.msg.id)"
-                      >
-                        <el-icon><CaretBottom /></el-icon>
-                      </button>
-                      <button
-                        type="button"
-                        class="msg-action-btn"
-                        title="重新生成"
-                        @click="regenerateMsg(row.msg.id)"
-                      >
-                        <el-icon><Refresh /></el-icon>
-                      </button>
-                      <button
-                        type="button"
-                        class="msg-action-btn"
-                        title="更多"
-                        @click="moreMsg(row.msg.id)"
-                      >
-                        <el-icon><MoreFilled /></el-icon>
-                      </button>
+                        <button
+                          type="button"
+                          class="msg-action-btn"
+                          title="复制内容"
+                          @click="copyMsgContent(row.msg.content)"
+                        >
+                          <el-icon><CopyDocument /></el-icon>
+                        </button>
+                        <button
+                          type="button"
+                          class="msg-action-btn"
+                          :class="{ 'is-on': row.liked }"
+                          title="有帮助"
+                          @click="likeMsg(row.msg.id)"
+                        >
+                          <el-icon><CaretTop /></el-icon>
+                        </button>
+                        <button
+                          type="button"
+                          class="msg-action-btn"
+                          title="没帮助"
+                          @click="dislikeMsg(row.msg.id)"
+                        >
+                          <el-icon><CaretBottom /></el-icon>
+                        </button>
+                        <button
+                          type="button"
+                          class="msg-action-btn"
+                          title="重新生成"
+                          @click="regenerateMsg(row.msg.id)"
+                        >
+                          <el-icon><Refresh /></el-icon>
+                        </button>
+                        <button
+                          type="button"
+                          class="msg-action-btn"
+                          title="更多"
+                          @click="moreMsg(row.msg.id)"
+                        >
+                          <el-icon><MoreFilled /></el-icon>
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </div>
-                <!-- V33 历史结构化追问：只读卡片回显当时的选项与选择 -->
+                  <!-- V33 历史结构化追问：只读卡片回显当时的选项与选择 -->
+                  <div
+                    v-if="row.structured"
+                    class="msg-row from-assistant"
+                  >
+                    <div class="msg-avatar">
+                      AI
+                    </div>
+                    <div class="msg-col">
+                      <StructuredQuestionCard
+                        class="sq-wrap"
+                        :questions="row.structured.questions!"
+                        readonly
+                        :selections="row.selections"
+                      />
+                    </div>
+                  </div>
+                </template>
+                <!-- V33 结构化选项卡片：仅最后一条 assistant 结构化追问且会话 ACTIVE 时可交互 -->
                 <div
-                  v-if="row.structured"
+                  v-if="activeStructured"
                   class="msg-row from-assistant"
                 >
                   <div class="msg-avatar">
@@ -299,159 +327,141 @@
                   </div>
                   <div class="msg-col">
                     <StructuredQuestionCard
+                      :key="String(lastMessageId)"
                       class="sq-wrap"
-                      :questions="row.structured.questions!"
-                      readonly
-                      :selections="row.selections"
+                      :questions="activeStructured.questions!"
+                      :disabled="sending || finalizing"
+                      :loading="sending"
+                      @submit="handleStructuredSubmit"
                     />
                   </div>
                 </div>
               </template>
-              <!-- V33 结构化选项卡片：仅最后一条 assistant 结构化追问且会话 ACTIVE 时可交互 -->
               <div
-                v-if="activeStructured"
+                v-else
+                class="chat-placeholder"
+              >
+                <p>描述你想做的事情，或直接向 AI 助手提问——它会解答疑问、帮你梳理思路。</p>
+                <p class="placeholder-tip">
+                  说「整理成方案」可把讨论转成可落地方案；信息足够时可生成任务终稿并自动拆解。
+                </p>
+              </div>
+              <!-- 上轮 LLM 失败（最后一条是 user 消息）：重试条 -->
+              <div
+                v-if="canRetry"
                 class="msg-row from-assistant"
               >
                 <div class="msg-avatar">
                   AI
                 </div>
                 <div class="msg-col">
-                  <StructuredQuestionCard
-                    :key="String(lastMessageId)"
-                    class="sq-wrap"
-                    :questions="activeStructured.questions!"
-                    :disabled="sending || finalizing"
-                    :loading="sending"
-                    @submit="handleStructuredSubmit"
-                  />
+                  <div class="msg-bubble msg-retry">
+                    <span>回复生成失败</span>
+                    <el-button
+                      size="small"
+                      type="primary"
+                      plain
+                      @click="handleRetry"
+                    >
+                      重试
+                    </el-button>
+                  </div>
                 </div>
               </div>
-            </template>
-            <div
-              v-else
-              class="chat-placeholder"
-            >
-              <p>描述你想做的事情，或直接向 AI 助手提问——它会解答疑问、帮你梳理思路。</p>
-              <p class="placeholder-tip">
-                说「整理成方案」可把讨论转成可落地方案；信息足够时可生成任务终稿并自动拆解。
-              </p>
-            </div>
-            <!-- 上轮 LLM 失败（最后一条是 user 消息）：重试条 -->
-            <div
-              v-if="canRetry"
-              class="msg-row from-assistant"
-            >
-              <div class="msg-avatar">
-                AI
+              <!-- 发送中占位气泡 -->
+              <div
+                v-if="sending && pendingText"
+                class="msg-row from-user"
+              >
+                <div class="msg-avatar">
+                  我
+                </div>
+                <div class="msg-col">
+                  <div class="msg-bubble">
+                    {{ pendingText }}
+                  </div>
+                </div>
               </div>
-              <div class="msg-col">
-                <div class="msg-bubble msg-retry">
-                  <span>回复生成失败</span>
-                  <el-button
-                    size="small"
-                    type="primary"
-                    plain
-                    @click="handleRetry"
+              <div
+                v-if="sending"
+                class="msg-row from-assistant"
+              >
+                <div class="msg-avatar">
+                  AI
+                </div>
+                <div class="msg-col">
+                  <!-- S1 流式回复：token 增量渲染 Markdown；尚未产出 token 时保持思考中占位 -->
+                  <div
+                    v-if="streamText"
+                    class="msg-bubble msg-streaming"
                   >
-                    重试
-                  </el-button>
+                    <MarkdownView :content="streamText" />
+                  </div>
+                  <div
+                    v-else
+                    class="msg-bubble msg-loading"
+                  >
+                    <el-icon class="is-loading">
+                      <Loading />
+                    </el-icon>
+                    思考中…
+                  </div>
                 </div>
               </div>
-            </div>
-            <!-- 发送中占位气泡 -->
-            <div
-              v-if="sending && pendingText"
-              class="msg-row from-user"
-            >
-              <div class="msg-avatar">
-                我
-              </div>
-              <div class="msg-col">
-                <div class="msg-bubble">
-                  {{ pendingText }}
-                </div>
-              </div>
-            </div>
-            <div
-              v-if="sending"
-              class="msg-row from-assistant"
-            >
-              <div class="msg-avatar">
-                AI
-              </div>
-              <div class="msg-col">
-                <!-- S1 流式回复：token 增量渲染 Markdown；尚未产出 token 时保持思考中占位 -->
-                <div
-                  v-if="streamText"
-                  class="msg-bubble msg-streaming"
-                >
-                  <MarkdownView :content="streamText" />
-                </div>
-                <div
-                  v-else
-                  class="msg-bubble msg-loading"
-                >
-                  <el-icon class="is-loading">
-                    <Loading />
-                  </el-icon>
-                  思考中…
-                </div>
-              </div>
-            </div>
 
-            <!-- 终稿卡片（有终稿即渲染；V39 CHAT 自由对话模式不渲染，仅 CLARIFY/老会话；ACTIVE 可确认，FINALIZED 只读） -->
-            <div
-              v-if="conversation?.finalTitle && !isChatMode"
-              class="final-card"
-            >
-              <div class="final-card-header">
-                <el-tag
-                  type="success"
-                  size="small"
-                >
-                  终稿
-                </el-tag>
-                <span class="final-title">{{ conversation.finalTitle }}</span>
-              </div>
-              <div class="final-desc">
-                <!-- 终稿描述为 Markdown 小节组织（模板要求），渲染富文本而非原样裸露 -->
-                <MarkdownView :content="conversation.finalDescription" />
-              </div>
-              <div class="final-actions">
-                <template v-if="conversation.status === 'ACTIVE'">
-                  <el-button
-                    type="primary"
-                    :loading="finalizing"
-                    :disabled="sending || finalizing"
-                    @click="handleFinalize"
+              <!-- 终稿卡片（有终稿即渲染；V39 CHAT 自由对话模式不渲染，仅 CLARIFY/老会话；ACTIVE 可确认，FINALIZED 只读） -->
+              <div
+                v-if="conversation?.finalTitle && !isChatMode"
+                class="final-card"
+              >
+                <div class="final-card-header">
+                  <el-tag
+                    type="success"
+                    size="small"
                   >
-                    创建任务并自动拆解
-                  </el-button>
-                  <span class="final-tip">不满意可继续对话，让 AI 修正终稿</span>
-                </template>
-                <template v-else-if="conversation.status === 'FINALIZED'">
-                  <el-button
-                    v-if="taskExists"
-                    type="primary"
-                    plain
-                    @click="router.push({ path: '/tasks', query: { review: String(conversation.taskId) } })"
-                  >
-                    查看任务
-                  </el-button>
-                  <template v-else>
+                    终稿
+                  </el-tag>
+                  <span class="final-title">{{ conversation.finalTitle }}</span>
+                </div>
+                <div class="final-desc">
+                  <!-- 终稿描述为 Markdown 小节组织（模板要求），渲染富文本而非原样裸露 -->
+                  <MarkdownView :content="conversation.finalDescription" />
+                </div>
+                <div class="final-actions">
+                  <template v-if="conversation.status === 'ACTIVE'">
                     <el-button
                       type="primary"
                       :loading="finalizing"
                       :disabled="sending || finalizing"
-                      @click="handleRegenerate"
+                      @click="handleFinalize"
                     >
-                      重新生成任务和子任务
+                      创建任务并自动拆解
                     </el-button>
-                    <span class="final-tip">原任务已删除，可用此终稿重新建任务并自动拆解</span>
+                    <span class="final-tip">不满意可继续对话，让 AI 修正终稿</span>
                   </template>
-                </template>
+                  <template v-else-if="conversation.status === 'FINALIZED'">
+                    <el-button
+                      v-if="taskExists"
+                      type="primary"
+                      plain
+                      @click="router.push({ path: '/tasks', query: { review: String(conversation.taskId) } })"
+                    >
+                      查看任务
+                    </el-button>
+                    <template v-else>
+                      <el-button
+                        type="primary"
+                        :loading="finalizing"
+                        :disabled="sending || finalizing"
+                        @click="handleRegenerate"
+                      >
+                        重新生成任务和子任务
+                      </el-button>
+                      <span class="final-tip">原任务已删除，可用此终稿重新建任务并自动拆解</span>
+                    </template>
+                  </template>
+                </div>
               </div>
-            </div>
             </div>
           </div>
 
@@ -581,7 +591,9 @@
                         title="调用 AI 把当前输入优化为更清晰的结构化表达（仅预览，不自动发送）"
                         @click="handleEnhanceInput"
                       >
-                        <el-icon v-if="!enhancing"><MagicStick /></el-icon>
+                        <el-icon v-if="!enhancing">
+                          <MagicStick />
+                        </el-icon>
                         优化输入
                       </el-button>
                       <el-button

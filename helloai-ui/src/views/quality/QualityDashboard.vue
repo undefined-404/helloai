@@ -1,74 +1,170 @@
 <template>
-  <div v-loading="loading" class="page ha-entrance-up">
+  <div
+    v-loading="loading"
+    class="page ha-entrance-up"
+  >
     <!-- 窗口选择 + 全局概览 -->
     <div class="dash-toolbar">
       <div class="dash-title">
-        <el-icon style="color: var(--ha-primary)"><DataAnalysis /></el-icon>
+        <el-icon style="color: var(--ha-primary)">
+          <DataAnalysis />
+        </el-icon>
         <span>质量度量看板</span>
       </div>
-      <el-radio-group v-model="windowDays" size="small" @change="onWindowChange">
-        <el-radio-button :value="7">近 7 天</el-radio-button>
-        <el-radio-button :value="30">近 30 天</el-radio-button>
-        <el-radio-button :value="90">近 90 天</el-radio-button>
+      <el-radio-group
+        v-model="windowDays"
+        size="small"
+        @change="onWindowChange"
+      >
+        <el-radio-button :value="7">
+          近 7 天
+        </el-radio-button>
+        <el-radio-button :value="30">
+          近 30 天
+        </el-radio-button>
+        <el-radio-button :value="90">
+          近 90 天
+        </el-radio-button>
       </el-radio-group>
     </div>
 
-    <el-alert v-if="errorMsg" :title="errorMsg" type="error" show-icon :closable="false" class="dash-error" />
+    <el-alert
+      v-if="errorMsg"
+      :title="errorMsg"
+      type="error"
+      show-icon
+      :closable="false"
+      class="dash-error"
+    />
 
-    <div v-if="!errorMsg" class="stats-grid ha-stagger-entrance">
-      <div v-for="stat in stats" :key="stat.label" class="stat-card ha-card-lift">
-        <div class="stat-dot" :class="stat.color" aria-hidden="true" />
+    <div
+      v-if="!errorMsg"
+      class="stats-grid ha-stagger-entrance"
+    >
+      <div
+        v-for="stat in stats"
+        :key="stat.label"
+        class="stat-card ha-card-lift"
+      >
+        <div
+          class="stat-dot"
+          :class="stat.color"
+          aria-hidden="true"
+        />
         <div class="stat-body">
-          <div class="stat-label">{{ stat.label }}</div>
-          <div class="stat-value">{{ stat.value }}</div>
+          <div class="stat-label">
+            {{ stat.label }}
+          </div>
+          <div class="stat-value">
+            {{ stat.value }}
+          </div>
         </div>
       </div>
     </div>
 
     <!-- 图表区 -->
     <template v-if="!errorMsg">
-      <div class="charts-grid ha-entrance-up" style="animation-delay: 100ms">
+      <div
+        class="charts-grid ha-entrance-up"
+        style="animation-delay: 100ms"
+      >
         <div class="chart-card">
           <div class="chart-header">
-            <el-icon style="color: var(--ha-primary)"><DataLine /></el-icon>
+            <el-icon style="color: var(--ha-primary)">
+              <DataLine />
+            </el-icon>
             <span>审查质量趋势</span>
           </div>
-          <div v-if="hasTrends" ref="trendChart" class="chart-body" />
-          <el-empty v-else description="窗口内暂无审查记录" :image-size="80" />
+          <div
+            v-if="hasTrends"
+            ref="trendChart"
+            class="chart-body"
+          />
+          <el-empty
+            v-else
+            description="窗口内暂无审查记录"
+            :image-size="80"
+          />
         </div>
-        <div class="chart-card" style="animation-delay: 150ms">
+        <div
+          class="chart-card"
+          style="animation-delay: 150ms"
+        >
           <div class="chart-header">
-            <el-icon style="color: var(--ha-warning)"><Trophy /></el-icon>
+            <el-icon style="color: var(--ha-warning)">
+              <Trophy />
+            </el-icon>
             <span>Agent 一次通过率排行 TOP10</span>
           </div>
-          <div v-if="hasRanks" ref="rankChart" class="chart-body" />
-          <el-empty v-else description="暂无可排行 Agent" :image-size="80" />
+          <div
+            v-if="hasRanks"
+            ref="rankChart"
+            class="chart-body"
+          />
+          <el-empty
+            v-else
+            description="暂无可排行 Agent"
+            :image-size="80"
+          />
         </div>
       </div>
-      <div class="charts-grid three ha-entrance-up" style="animation-delay: 200ms">
+      <div
+        class="charts-grid three ha-entrance-up"
+        style="animation-delay: 200ms"
+      >
         <div class="chart-card">
           <div class="chart-header">
-            <el-icon style="color: var(--ha-danger)"><WarningFilled /></el-icon>
+            <el-icon style="color: var(--ha-danger)">
+              <WarningFilled />
+            </el-icon>
             <span>驳回原因分布</span>
           </div>
-          <div v-if="hasDefects" ref="defectChart" class="chart-body" />
-          <el-empty v-else description="窗口内无驳回标签" :image-size="80" />
+          <div
+            v-if="hasDefects"
+            ref="defectChart"
+            class="chart-body"
+          />
+          <el-empty
+            v-else
+            description="窗口内无驳回标签"
+            :image-size="80"
+          />
         </div>
         <div class="chart-card">
           <div class="chart-header">
-            <el-icon style="color: var(--ha-success)"><RefreshLeft /></el-icon>
+            <el-icon style="color: var(--ha-success)">
+              <RefreshLeft />
+            </el-icon>
             <span>返工轮次分布</span>
           </div>
-          <div v-if="hasReworks" ref="reworkChart" class="chart-body" />
-          <el-empty v-else description="窗口内暂无审查记录" :image-size="80" />
+          <div
+            v-if="hasReworks"
+            ref="reworkChart"
+            class="chart-body"
+          />
+          <el-empty
+            v-else
+            description="窗口内暂无审查记录"
+            :image-size="80"
+          />
         </div>
         <div class="chart-card">
           <div class="chart-header">
-            <el-icon style="color: var(--ha-info)"><Select /></el-icon>
+            <el-icon style="color: var(--ha-info)">
+              <Select />
+            </el-icon>
             <span>Reviewer 放水率</span>
           </div>
-          <div v-if="hasReviewers" ref="reviewerChart" class="chart-body" />
-          <el-empty v-else description="窗口内暂无审查者" :image-size="80" />
+          <div
+            v-if="hasReviewers"
+            ref="reviewerChart"
+            class="chart-body"
+          />
+          <el-empty
+            v-else
+            description="窗口内暂无审查者"
+            :image-size="80"
+          />
         </div>
       </div>
     </template>
@@ -148,7 +244,7 @@ watch(() => themeStore.theme, async () => {
 })
 
 function disposeCharts() {
-  ;[trendInstance, rankInstance, defectInstance, reworkInstance, reviewerInstance].forEach((inst) => {
+  [trendInstance, rankInstance, defectInstance, reworkInstance, reviewerInstance].forEach((inst) => {
     if (inst) {
       inst.dispose()
     }

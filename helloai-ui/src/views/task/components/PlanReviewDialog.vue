@@ -212,8 +212,14 @@
                 v-model="u.kind"
                 style="width:130px"
               >
-                <el-option label="待确认" value="UNCONFIRMED" />
-                <el-option label="假设" value="ASSUMPTION" />
+                <el-option
+                  label="待确认"
+                  value="UNCONFIRMED"
+                />
+                <el-option
+                  label="假设"
+                  value="ASSUMPTION"
+                />
               </el-select>
               <el-input
                 v-model="u.note"

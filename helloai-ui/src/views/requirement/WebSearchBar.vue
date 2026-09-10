@@ -53,7 +53,9 @@
             target="_blank"
             rel="noopener"
           >[{{ i + 1 }}] {{ r.title }}</a>
-          <template v-else>[{{ i + 1 }}] {{ r.title }}</template>
+          <template v-else>
+            [{{ i + 1 }}] {{ r.title }}
+          </template>
           <span
             v-if="r.siteName"
             class="ws-site"

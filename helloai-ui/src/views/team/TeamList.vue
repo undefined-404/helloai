@@ -13,9 +13,18 @@
           class="filter-select"
           @change="reload"
         >
-          <el-option label="草稿" value="DRAFT" />
-          <el-option label="已发布" value="ACTIVE" />
-          <el-option label="已归档" value="ARCHIVED" />
+          <el-option
+            label="草稿"
+            value="DRAFT"
+          />
+          <el-option
+            label="已发布"
+            value="ACTIVE"
+          />
+          <el-option
+            label="已归档"
+            value="ARCHIVED"
+          />
         </el-select>
         <el-input
           v-model="keyword"
@@ -114,7 +123,10 @@
           style="width: 100%"
           empty-text="暂无 Team"
         >
-          <el-table-column label="名称" min-width="180">
+          <el-table-column
+            label="名称"
+            min-width="180"
+          >
             <template #default="{ row }">
               <div class="team-name-cell">
                 <span class="team-name">{{ row.name }}</span>
@@ -122,32 +134,59 @@
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="描述" min-width="220" show-overflow-tooltip>
+          <el-table-column
+            label="描述"
+            min-width="220"
+            show-overflow-tooltip
+          >
             <template #default="{ row }">
               <span class="desc-cell">{{ row.description || '—' }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="状态" width="100">
+          <el-table-column
+            label="状态"
+            width="100"
+          >
             <template #default="{ row }">
-              <el-tag :type="statusTag(row.status)" size="small" effect="light">
+              <el-tag
+                :type="statusTag(row.status)"
+                size="small"
+                effect="light"
+              >
                 {{ statusLabel(row.status) }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="成员数" width="90" align="center">
+          <el-table-column
+            label="成员数"
+            width="90"
+            align="center"
+          >
             <template #default="{ row }">
               {{ memberCountMap[row.id] ?? 0 }} 人
             </template>
           </el-table-column>
-          <el-table-column label="创建时间" width="170">
+          <el-table-column
+            label="创建时间"
+            width="170"
+          >
             <template #default="{ row }">
               {{ fmtTime(row.createTime) }}
             </template>
           </el-table-column>
-          <el-table-column label="操作" :width="ACTION.FOUR" fixed="right">
+          <el-table-column
+            label="操作"
+            :width="ACTION.FOUR"
+            fixed="right"
+          >
             <template #default="{ row }">
               <div class="action-cell">
-                <el-button size="small" link type="primary" @click="openMembers(row)">
+                <el-button
+                  size="small"
+                  link
+                  type="primary"
+                  @click="openMembers(row)"
+                >
                   成员
                 </el-button>
                 <el-button
@@ -201,16 +240,34 @@
       width="480px"
     >
       <el-form label-width="80px">
-        <el-form-item label="名称" required>
-          <el-input v-model="editForm.name" placeholder="如：前端专项组" maxlength="128" />
+        <el-form-item
+          label="名称"
+          required
+        >
+          <el-input
+            v-model="editForm.name"
+            placeholder="如：前端专项组"
+            maxlength="128"
+          />
         </el-form-item>
         <el-form-item label="描述">
-          <el-input v-model="editForm.description" type="textarea" :rows="3" maxlength="500" />
+          <el-input
+            v-model="editForm.description"
+            type="textarea"
+            :rows="3"
+            maxlength="500"
+          />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="editVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="onSave">
+        <el-button @click="editVisible = false">
+          取消
+        </el-button>
+        <el-button
+          type="primary"
+          :loading="saving"
+          @click="onSave"
+        >
           保存
         </el-button>
       </template>
@@ -222,23 +279,50 @@
       :title="`成员管理：${currentTeam?.name ?? ''}`"
       width="560px"
     >
-      <el-table :data="currentMembers" size="small">
-        <el-table-column label="Agent" min-width="140">
+      <el-table
+        :data="currentMembers"
+        size="small"
+      >
+        <el-table-column
+          label="Agent"
+          min-width="140"
+        >
           <template #default="{ row }">
             {{ agentName(row.agentId) }}
           </template>
         </el-table-column>
-        <el-table-column label="槽位角色" width="110">
+        <el-table-column
+          label="槽位角色"
+          width="110"
+        >
           <template #default="{ row }">
-            <el-tag size="small" :type="roleTag(row.slotRole)" effect="light">
+            <el-tag
+              size="small"
+              :type="roleTag(row.slotRole)"
+              effect="light"
+            >
               {{ row.slotRole }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="weight" label="权重" width="70" align="center" />
-        <el-table-column label="操作" width="80" align="center">
+        <el-table-column
+          prop="weight"
+          label="权重"
+          width="70"
+          align="center"
+        />
+        <el-table-column
+          label="操作"
+          width="80"
+          align="center"
+        >
           <template #default="{ row }">
-            <el-button size="small" link type="danger" @click="onRemoveMember(row)">
+            <el-button
+              size="small"
+              link
+              type="danger"
+              @click="onRemoveMember(row)"
+            >
               移除
             </el-button>
           </template>
@@ -264,9 +348,18 @@
           placeholder="槽位角色"
           style="width: 140px"
         >
-          <el-option label="PLANNER" value="PLANNER" />
-          <el-option label="EXECUTOR" value="EXECUTOR" />
-          <el-option label="REVIEWER" value="REVIEWER" />
+          <el-option
+            label="PLANNER"
+            value="PLANNER"
+          />
+          <el-option
+            label="EXECUTOR"
+            value="EXECUTOR"
+          />
+          <el-option
+            label="REVIEWER"
+            value="REVIEWER"
+          />
         </el-select>
         <el-button
           type="primary"
