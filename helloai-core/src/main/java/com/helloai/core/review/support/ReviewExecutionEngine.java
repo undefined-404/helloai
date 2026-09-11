@@ -92,24 +92,22 @@ public class ReviewExecutionEngine {
 
         // 对话流双写：核验 Prompt + REVIEWER 分析原文全量落 conversation_message
         // （消息类型随链路来源切换：subtask_review_* / subtask_dual_review_* / subtask_recheck_*），
-        // 不可解析时同样保留原始输出（正是人工兜底最需要看的内容）；失败不阻断核验主链路
-        try {
-            conversationService.addMessage(subTaskId, null,
-                    "user", "platform", prompt, channel.toolName("prompt"));
-            // 推理模型的思考过程单独落一条消息（保留 thinking，供前端动态展示）
-            if (result.getThinking() != null && !result.getThinking().isBlank()) {
-                conversationService.addMessage(subTaskId, reviewer.getId(),
-                        "assistant", "agent",
-                        result.getThinking(),
-                        channel.toolName("thinking"));
-            }
-            conversationService.addMessage(subTaskId, reviewer.getId(),
+        // 不可解析时同样保留原始输出（正是人工兜底最需要看的内容）；失败不阻断核验主链路。
+        // 三条消息经 writeConversationQuietly 逐条独立 try-catch：单条偶发写入失败
+        // （如连接短暂不可用）不连带丢失其余消息，避免复盘只见结论不见请求/思考/分析
+        writeConversationQuietly(subTaskId, null,
+                "user", "platform", prompt, channel.toolName("prompt"));
+        // 推理模型的思考过程单独落一条消息（保留 thinking，供前端动态展示）
+        if (result.getThinking() != null && !result.getThinking().isBlank()) {
+            writeConversationQuietly(subTaskId, reviewer.getId(),
                     "assistant", "agent",
-                    result.getOutput() != null ? result.getOutput() : "",
-                    channel.toolName("verdict"));
-        } catch (Exception e) {
-            log.warn("核验对话流写入失败（不阻断核验）: subTaskId={}, err={}", subTaskId, e.getMessage());
+                    result.getThinking(),
+                    channel.toolName("thinking"));
         }
+        writeConversationQuietly(subTaskId, reviewer.getId(),
+                "assistant", "agent",
+                result.getOutput() != null ? result.getOutput() : "",
+                channel.toolName("verdict"));
 
         SubTaskReviewService.ReviewVerdict verdict = verdictParser.parseVerdict(result.getOutput());
         if (verdict == null) {
@@ -122,6 +120,18 @@ public class ReviewExecutionEngine {
             return null;
         }
         return verdict;
+    }
+
+    /** 核验对话流单条消息写入：失败仅告警（WARN 带异常栈）不阻断核验主链路。 */
+    private void writeConversationQuietly(Long subTaskId, Long senderId,
+                                          String role, String senderType,
+                                          String content, String toolName) {
+        try {
+            conversationService.addMessage(subTaskId, senderId, role, senderType, content, toolName);
+        } catch (Exception e) {
+            log.warn("核验对话流写入失败（不阻断核验）: subTaskId={}, toolName={}, err={}",
+                    subTaskId, toolName, e.getMessage(), e);
+        }
     }
 
     /**
