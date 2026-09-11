@@ -21,12 +21,14 @@
 #     when present, otherwise presets its own APPROVED record via direct SQL (S5 precedent).
 # Ref: doc/HelloAI_迭代执行记录.md (Phase 4 反馈回路: Reviewer 双审 + 抽检)
 #      .qoder/skills/helloai-preflight/SKILL.md (rule 6: UTF-8 BOM + single-quote concat)
-# Preconditions: docker compose up -d (helloai-postgres:15432);
-#                helloai-start running at :6565 with Phase 4 assembly (V57 migration applied).
+# Preconditions: helloai-start running at :6565 with Phase 4 assembly (V57 migration applied);
+#                SQL channel: docker compose up -d (helloai-postgres:15432) OR JDBC fallback
+#                (JAVA_HOME + maven postgresql jar + scripts/powershell/tools/PgExec.java;
+#                point DATASOURCE_URL/USERNAME/PASSWORD at the DB the app actually uses).
 # Usage (repo root, PowerShell 5.1):
 #   powershell -ExecutionPolicy Bypass -File .\scripts\powershell\verify-reviewer-dual.ps1
 #   powershell -ExecutionPolicy Bypass -File .\scripts\powershell\verify-reviewer-dual.ps1 -Scene S1
-#   powershell -ExecutionPolicy Bypass -File .\scripts\powershell\verify-reviewer-dual.ps1 -ReviewerModelA deepseek:deepseek-chat -ReviewerModelB deepseek:deepseek-reasoner
+#   powershell -ExecutionPolicy Bypass -File .\scripts\powershell\verify-reviewer-dual.ps1 -ReviewerModelA deepseek:deepseek-v4-flash -ReviewerModelB deepseek:deepseek-v4-pro
 # ============================================================
 
 param(
@@ -39,9 +41,15 @@ param(
     [int]$ReviewWaitSec = 240,
     [int]$RecheckWindowDays = 7,
     # provider:model pairs for the two reviewers; must be available in llm_provider_model
-    # (register pre-validates). Override when the default models are not in the catalog.
-    [string]$ReviewerModelA = 'deepseek:deepseek-chat',
-    [string]$ReviewerModelB = 'deepseek:deepseek-reasoner'
+    # (register pre-validates). V49 catalog current names: deepseek-v4-flash / v4-pro.
+    [string]$ReviewerModelA = 'deepseek:deepseek-v4-flash',
+    [string]$ReviewerModelB = 'deepseek:deepseek-v4-pro',
+    # JDBC fallback for the SQL channel when docker daemon is unavailable.
+    # Defaults fall back to compose-style localhost:15432; override via env vars
+    # DATASOURCE_URL / DATASOURCE_USERNAME / DATASOURCE_PASSWORD (dev profile names).
+    [string]$JdbcUrl = $env:DATASOURCE_URL,
+    [string]$JdbcUser = $env:DATASOURCE_USERNAME,
+    [string]$JdbcPassword = $env:DATASOURCE_PASSWORD
 )
 
 $ErrorActionPreference = 'Stop'
@@ -50,8 +58,10 @@ $ErrorActionPreference = 'Stop'
 # UTF-8 encoding header (rule 6) - avoid CJK garbled output
 # ------------------------------------------------------------
 $script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-[Console]::InputEncoding  = [System.Text.Encoding]::UTF8
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+# NoBom on both console encodings: PS 5.1 pipes TO native commands via [Console]::OutputEncoding,
+# and a BOM preamble would corrupt piped SQL (PgExec) / psql stdin.
+[Console]::InputEncoding  = $script:Utf8NoBom
+[Console]::OutputEncoding = $script:Utf8NoBom
 $OutputEncoding           = $script:Utf8NoBom
 
 Add-Type -AssemblyName System.Net.Http
@@ -148,7 +158,10 @@ function Invoke-Json {
         }
         elseif ($Method -eq 'POST')   { $resp = $client.PostAsync($Uri, $content).Result }
         elseif ($Method -eq 'PUT')    { $resp = $client.PutAsync($Uri, $content).Result }
-        return @{ Code = [int]$resp.StatusCode; Body = $resp.Content.ReadAsStringAsync().Result }
+        # byte-level UTF-8 decode: .NET Framework ReadAsStringAsync defaults to ISO-8859-1
+        # when the response Content-Type carries no charset (CJK payloads would corrupt)
+        $bodyBytes = $resp.Content.ReadAsByteArrayAsync().Result
+        return @{ Code = [int]$resp.StatusCode; Body = [System.Text.Encoding]::UTF8.GetString($bodyBytes) }
     } catch {
         return @{ Code = -1; Body = $_.Exception.Message }
     } finally {
@@ -157,8 +170,35 @@ function Invoke-Json {
 }
 
 # ============================================================
-# helper: docker exec psql (temp file + no-BOM UTF-8, rule 6)
+# helper: SQL channel - `docker exec psql` (local compose, default)
+#         or JDBC fallback (PgExec.java + maven postgresql jar) when
+#         the docker daemon is unavailable. Both share the same
+#         stdin / exit-code / output contract: temp file + no-BOM UTF-8
+#         (rule 6), psql -X -t -A -F '|' tuple format.
 # ============================================================
+$script:SqlMode   = 'docker'
+$script:JavaExe   = ''
+$script:PgJar     = ''
+$script:PgExecSrc = Join-Path $scriptDir 'scripts\powershell\tools\PgExec.java'
+
+# probe local tooling for the JDBC fallback; returns $true when usable
+function Resolve-JdbcTooling {
+    if (-not (Test-Path $script:PgExecSrc)) { return $false }
+    $javaHome = $env:JAVA_HOME
+    if ($javaHome) { $script:JavaExe = Join-Path $javaHome 'bin\java.exe' }
+    if (-not $script:JavaExe -or -not (Test-Path $script:JavaExe)) {
+        $cmd = Get-Command java -ErrorAction SilentlyContinue
+        if ($cmd) { $script:JavaExe = $cmd.Source }
+    }
+    if (-not $script:JavaExe -or -not (Test-Path $script:JavaExe)) { return $false }
+    $jarRoot = Join-Path $env:USERPROFILE '.m2\repository\org\postgresql\postgresql'
+    $jar = Get-ChildItem $jarRoot -Recurse -Filter 'postgresql-*.jar' -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending | Select-Object -First 1
+    if (-not $jar) { return $false }
+    $script:PgJar = $jar.FullName
+    return $true
+}
+
 function Run-Psql {
     param(
         [Parameter(Mandatory=$true)][string]$Sql,
@@ -169,14 +209,26 @@ function Run-Psql {
     [System.IO.File]::WriteAllText($tmpSql, $Sql, $script:Utf8NoBom)
     Remove-Item $OutFile -ErrorAction SilentlyContinue
 
-    $dockerArgs = @('exec', '-i', $pgContainer, 'psql',
-        '-v', 'ON_ERROR_STOP=1',
-        '-X', '-t', '-A', '-F', '|',
-        '-U', $pgUser, '-d', $pgDb)
-
     $sqlContent = Get-Content -Raw -Encoding UTF8 $tmpSql
-    $output = $sqlContent | & docker @dockerArgs 2>&1
-    $rc = $LASTEXITCODE
+    # native stderr must not become a terminating error under $ErrorActionPreference=Stop
+    $output = ''
+    $rc = 0
+    $prevEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        if ($script:SqlMode -eq 'jdbc') {
+            $output = $sqlContent | & $script:JavaExe -cp $script:PgJar $script:PgExecSrc $JdbcUrl $JdbcUser $JdbcPassword 2>&1
+        } else {
+            $dockerArgs = @('exec', '-i', $pgContainer, 'psql',
+                '-v', 'ON_ERROR_STOP=1',
+                '-X', '-t', '-A', '-F', '|',
+                '-U', $pgUser, '-d', $pgDb)
+            $output = $sqlContent | & docker @dockerArgs 2>&1
+        }
+        $rc = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
     $output | Out-File -FilePath $OutFile -Encoding UTF8
     Remove-Item $tmpSql -ErrorAction SilentlyContinue
     return $rc
@@ -472,12 +524,48 @@ function Wait-Until {
 # STEP S0: pre-flight
 # ============================================================
 Write-Output '=== [S0] pre-flight ==='
-$dockerCheck = & docker ps --format '{{.Names}}|{{.Status}}' --filter "name=$pgContainer" 2>&1
-if ($LASTEXITCODE -ne 0 -or -not ($dockerCheck -match "$pgContainer\|Up")) {
-    Write-Output 'FAIL : postgres container is NOT up. Run: docker compose up -d'
+# native stderr must not become a terminating error under $ErrorActionPreference=Stop
+$dockerOk = $false
+$dockerCheck = ''
+$prevEap = $ErrorActionPreference
+try {
+    $ErrorActionPreference = 'Continue'
+    $dockerCheck = & docker ps --format '{{.Names}}|{{.Status}}' --filter "name=$pgContainer" 2>&1
+    $dockerOk = ($LASTEXITCODE -eq 0 -and ($dockerCheck -match "$pgContainer\|Up"))
+} catch {
+    $dockerOk = $false
+} finally {
+    $ErrorActionPreference = $prevEap
+}
+if ($dockerOk) {
+    $script:SqlMode = 'docker'
+    Write-Output '[S0] sql channel : docker exec psql (postgres container up)'
+} elseif (Resolve-JdbcTooling) {
+    if (-not $JdbcUser) { $JdbcUser = 'postgres' }
+    if (-not $JdbcPassword) { $JdbcPassword = 'postgres' }
+    if (-not $JdbcUrl) { $JdbcUrl = 'jdbc:postgresql://localhost:15432/helloai?currentSchema=public' }
+    $probe = ''
+    $probeRc = 0
+    $prevEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $probe = 'SELECT 1;' | & $script:JavaExe -cp $script:PgJar $script:PgExecSrc $JdbcUrl $JdbcUser $JdbcPassword 2>&1
+        $probeRc = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+    if ($probeRc -ne 0) {
+        Write-Output ('FAIL : SQL channel unavailable (docker daemon down and JDBC probe failed): ' + ($probe -join ' '))
+        Write-Output '       Start docker compose, or set DATASOURCE_URL/USERNAME/PASSWORD for JDBC fallback.'
+        exit 1
+    }
+    $script:SqlMode = 'jdbc'
+    Write-Output ('[S0] sql channel : JDBC fallback -> ' + $JdbcUrl)
+} else {
+    Write-Output 'FAIL : SQL channel unavailable (docker daemon down and JDBC tooling not found).'
+    Write-Output '       Need: JAVA_HOME, maven postgresql jar, scripts/powershell/tools/PgExec.java.'
     exit 1
 }
-Write-Output '[S0] postgres container up'
 
 try {
     $ping = [System.Net.Http.HttpClient]::new()
