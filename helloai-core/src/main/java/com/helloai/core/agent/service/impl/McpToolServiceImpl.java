@@ -235,6 +235,8 @@ public class McpToolServiceImpl implements McpToolService {
             result.setAssignedAgent(agentId);
             result.setSubTaskId(subTaskId);
             result.setVersion(subTask.getVersion());
+            // 幂等路径同样下发详情：重连 / 重复认领后执行者仍需拿到验收标准与执行边界
+            result.setDetail(buildSubTaskDetail(subTask));
             return result;
         }
 
@@ -279,6 +281,9 @@ public class McpToolServiceImpl implements McpToolService {
         result.setAssignedAgent(agentId);
         result.setSubTaskId(subTaskId);
         result.setVersion(updated != null ? updated.getVersion() : subTask.getVersion() + 1);
+        // 认领即下发子任务全文（含 acceptance / content / constraints / uncertainties）：
+        // 免除「认领后再补一次详情调用」的往返，也让未升级到新工具的外部 Agent 直接拿到验收标准
+        result.setDetail(buildSubTaskDetail(updated != null ? updated : subTask));
         return result;
     }
 
@@ -795,8 +800,72 @@ public class McpToolServiceImpl implements McpToolService {
     }
 
     // ================================================================
+    // getSubTaskDetail（子任务详情：验收标准 / 执行边界下发）
+    // ================================================================
+
+    /**
+     * 查询子任务详情（执行内容 / 交付物 / 验收标准 / 约束 / 不确定性）。
+     *
+     * <p>缺口背景：外部执行者此前只能从收件箱摘要看到「交付物」，而审查侧轨道 A 按
+     * {@code acceptance} 核验——执行者看不到验收标准却要被按验收标准判定，是独立的
+     * 结构性错配。本工具把开工所需的子任务全文一次性下发，字段口径与平台内执行 Prompt
+     * 的「当前任务」四要素同源，不做事后截断（截断验收标准正是缺口成因之一）。</p>
+     *
+     * <p>授权（最小必要）：仅「已分配给本 Agent」或「未分配且 PENDING（可认领）」的
+     * 子任务可查——前者覆盖认领后开工 / 返工 / 重连，后者覆盖认领前评估；已转给他人、
+     * 已回收或已终结的子任务对非归属者不可见。</p>
+     */
+    public SubTaskDetail getSubTaskDetail(Long agentId, Long subTaskId) {
+        assertAgentActive(agentId);
+        assertToolEnabled(agentId, "getSubTaskDetail");
+        refreshDutyLease(agentId); // 查看任务详情顺带续租
+
+        SubTask subTask = subTaskService.getById(subTaskId);
+        if (subTask == null) {
+            throw new BizException("子任务不存在: " + subTaskId);
+        }
+        boolean assignedToMe = agentId.equals(subTask.getAssignedAgentId());
+        boolean claimable = subTask.getAssignedAgentId() == null
+                && subTask.getStatus() == SubTaskStatus.PENDING;
+        if (!assignedToMe && !claimable) {
+            throw new BizException("无权查看该子任务: subTaskId=" + subTaskId
+                    + ", assignedAgentId=" + subTask.getAssignedAgentId()
+                    + ", status=" + subTask.getStatus());
+        }
+        return buildSubTaskDetail(subTask);
+    }
+
+    /**
+     * 子任务实体 → 详情 DTO（claimSubTask 成功路径与 getSubTaskDetail 共用，避免两处口径漂移）。
+     *
+     * <p>{@code requiredSkills} 走 {@link SubTaskService#mergeSkills}（子任务级 ∪ 任务级），
+     * 与执行侧注入 / 审查侧核验同一清单；服务返回 null 时回落空列表（防御，不阻断下发）。</p>
+     */
+    private SubTaskDetail buildSubTaskDetail(SubTask subTask) {
+        SubTaskDetail detail = new SubTaskDetail();
+        detail.setSubTaskId(subTask.getId());
+        detail.setTaskId(subTask.getTaskId());
+        detail.setTitle(subTask.getTitle());
+        detail.setContent(subTask.getContent());
+        detail.setDeliverable(subTask.getDeliverable());
+        detail.setAcceptance(subTask.getAcceptance());
+        detail.setConstraints(subTask.getConstraints());
+        detail.setUncertainties(subTask.getUncertainties());
+        List<String> mergedSkills = subTaskService.mergeSkills(subTask);
+        detail.setRequiredSkills(mergedSkills != null ? mergedSkills : Collections.emptyList());
+        detail.setPriority(subTask.getPriority());
+        detail.setStatus(subTask.getStatus() != null ? subTask.getStatus().name() : null);
+        detail.setContract(Integer.valueOf(1).equals(subTask.getIsContract()));
+        detail.setDependsOn(subTask.dependsOnIdList());
+        detail.setDeadline(subTask.getDeadline() != null ? subTask.getDeadline().toString() : null);
+        detail.setReworkCount(subTask.getReworkCount());
+        return detail;
+    }
+
+    // ================================================================
     // helpers
     // ================================================================
+
     private void assertAgentActive(Long agentId) {
         Agent agent = agentService.getById(agentId);
         if (agent == null) {

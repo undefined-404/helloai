@@ -50,22 +50,24 @@ pullTasks(agentId, role="EXECUTOR", max=20)
 |---|---|
 | `messageId` | 消息 ID（格式 `inbox-{id}`），用于 ack |
 | `type` / `subTaskId` / `taskId` | 消息类型与任务定位 |
-| `title` / `summary` / `priority` / `deadline` | 任务标题、摘要、优先级、截止 |
+| `title` / `summary` / `priority` / `deadline` | 任务标题、摘要（交付物 + 验收标准 + 执行约束 + 待确认事项）、优先级、截止 |
 | `reassigned` / `currentAgentId` | true = 该子任务已转给他人，**跳过即可，不要认领** |
 
 - 无未读消息 → 告知用户当前没有待领任务，结束本轮。
 - 有消息 → 向用户简报任务清单（标题 + 优先级 + 截止），按优先级从高到低处理。
 
-### 3. 确认与认领 — ack → claimSubTask
+### 3. 确认、认领与读取详情 — ack → claimSubTask → getSubTaskDetail
 
 ```
 ack(agentId, messageId)                    # 确认收到（幂等）
 claimSubTask(agentId, subTaskId)           # 认领（乐观锁防并发抢占）
+getSubTaskDetail(agentId, subTaskId)       # 读取子任务全文（必做）
 ```
 
-- `claimed=true` → 认领成功，进入执行。
+- `claimed=true` → 认领成功，进入执行；返回体已内联 `detail`（子任务全文），可直接使用。
 - `claimed=false`（`reason` 通常是已被他人抢走）→ 告知用户，回到第 2 步处理下一条。
 - **一次只认领一个子任务**，完成并提交后再领下一个。
+- **认领后必须取得子任务全文**：优先用 `claimSubTask` 返回的 `detail`；缺失（重连 / 需要复核 / 旧服务端）时补调 `getSubTaskDetail`。收件箱摘要只是速览，**验收标准（`acceptance`）与执行边界（`content`）以全文为准**。
 
 ### 4. 获取前置产出 — getDepsSummary
 
@@ -80,7 +82,8 @@ getDepsSummary(agentId, subTaskId)
 
 ### 5. 执行任务
 
-- 按 `title` + `summary` + 前置产出理解任务目标，在本仓库内完成实际工作（代码 / 文档 / 脚本）。
+- **按子任务全文理解目标与边界**：`content` 定义做什么、边界在哪；`acceptance` 是审查侧核验用的验收标准，**提交前必须逐条自检**；`constraints` 是硬边界（违反即被驳回）；`uncertainties` 中 `UNCONFIRMED` 条目须先验证，验证不了走第 6b 步上报。
+- 结合前置产出（第 4 步）在本仓库内完成实际工作（代码 / 文档 / 脚本）。
 - 遵守仓库开发规范：动手前先读 `AGENTS.md` 与 `doc/HelloAI_CODE_STYLE.md`（若加载了 helloai-preflight skill 则按其执行）。
 - 遇到无法自行解决的问题（外部依赖不可用、环境缺失、前置内容矛盾）：**不要硬扛，进入第 6b 步 reportBlocked**。
 
@@ -121,7 +124,8 @@ checkOut(agentId, reason="session_end")
 | checkIn | agentId, workMode, maxConcurrent, ttlMinutes, skills | leaseId, expiresAt, mergedSkills | 重复调用安全 |
 | pullTasks | agentId, role, max, includeRead | messages[] | 只读不改状态，可放心重试 |
 | ack | agentId, messageId | ok, acknowledged | 幂等 |
-| claimSubTask | agentId, subTaskId | ok, claimed, reason, version | DB 原子认领，抢不到是正常结果 |
+| claimSubTask | agentId, subTaskId | ok, claimed, reason, version, detail | DB 原子认领，抢不到是正常结果；claimed=true 内联子任务全文 |
+| getSubTaskDetail | agentId, subTaskId | content, deliverable, acceptance, constraints, uncertainties, requiredSkills | 子任务全文（开工前必读）；仅本人名下或可认领子任务可查 |
 | getDepsSummary | agentId, subTaskId | deps[], depCount, degraded | 前置产出 |
 | submitResult | agentId, subTaskId, resultId, success, output, error, finishReason | ok, accepted, idempotent, status | resultId 幂等 |
 | reportBlocked | agentId, subTaskId, reason | ok, blocked | 一个子任务最多一次 |
@@ -135,3 +139,4 @@ checkOut(agentId, reason="session_end")
 - **reassigned 消息跳过**：已转给他人（`reassigned=true`）的消息 ack 后跳过，不要尝试认领。
 - **诚实汇报**：success 只反映真实执行结果；不确定的结论写进 output 让 Review 链判断，不虚构完成。
 - **失败重试上限**：同一子任务 submitResult 提交失败（网络类）最多重试 3 次，仍失败则保留现场并告知用户。
+- **不裸奔执行**：未取得子任务全文（`content` 执行边界 + `acceptance` 验收标准）不得开工；只凭 `title` + 摘要动手等于放弃验收自检。

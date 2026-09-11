@@ -62,13 +62,13 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 
 ## 〇、工具与动作速查总表（A0-3 新增，机器可解析）
 
-> 全平台**三通道工具面已对齐为 11 个执行工具**（A0-3 起 REST 直通补齐 `checkIn`/`checkOut`/`getAgentStatus`，
-> A0-4 新增 `getDepsSummary`，与 MCP SSE、REST 别名 `POST /api/mcp/jsonrpc` 完全一致）。
+> 全平台**三通道工具面已对齐为 12 个执行工具**（A0-3 起 REST 直通补齐 `checkIn`/`checkOut`/`getAgentStatus`，
+> A0-4 新增 `getDepsSummary`；验收标准下发批次新增 `getSubTaskDetail`，与 MCP SSE、REST 别名 `POST /api/mcp/jsonrpc` 完全一致）。
 > 下表是**权威动作清单**：`scripts/powershell/verify-tool-matrix.ps1` 会把它与服务器 `tools/list` 实时 diff，防再次漂移。
 > 所有请求都带 `Authorization: Bearer <API_KEY>`；REST 直通（`/api/mcp/tools/*`）的响应是 `R` 包装 `{code, msg, data}`，
 > REST 别名（`/api/mcp/jsonrpc`）返回 JSON-RPC 原生 `{jsonrpc, result/error, id}`，MCP 返回原始 result。
 
-### 0.1 三通道执行工具（11 个，与 tools/list 同名集合一致）
+### 0.1 三通道执行工具（12 个，与 tools/list 同名集合一致）
 
 | 工具 | MCP SSE | REST 别名 jsonrpc | REST 直通 /api/mcp/tools/* | 请求体（JSON） | 返回要点（data/result） |
 |---|---|---|---|---|---|
@@ -77,12 +77,13 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 | `getAgentStatus` | ✓ | ✓ | `POST .../getAgentStatus` | `{}` | `{status, dbOnlineStatus, computedOnlineStatus, lastSeenAt, lastActiveAt, offlineReason, offlineAt, serverTime}` |
 | `pullTasks` | ✓ | ✓ | `POST .../pullTasks` | `{"role":"EXECUTOR","max":20,"includeRead":false}` | `{messages:[{messageId, type, subTaskId, taskId, title, priority, deadline, summary, read, reassigned, currentAgentId}]}` |
 | `ack` | ✓ | ✓ | `POST .../ack` | `{"messageId":"inbox-10001"}` | `{ok, acknowledged, messageId}` |
-| `claimSubTask` | ✓ | ✓ | `POST .../claimSubTask` | `{"subTaskId":123}` | `{ok, claimed, reason, assignedAgent, subTaskId, version}` |
+| `claimSubTask` | ✓ | ✓ | `POST .../claimSubTask` | `{"subTaskId":123}` | `{ok, claimed, reason, assignedAgent, subTaskId, version, detail}`（`claimed=true` 时 `detail` 内联子任务全文，免再调 `getSubTaskDetail`） |
 | `heartbeat` | ✓ | ✓ | `POST .../heartbeat` | `{}` | `{ok, agentId, serverTime, onDuty, leaseId, leaseExpiresAt, remainingTtlSeconds}`（A0-6：剩余 TTL 秒数，未在岗为 0） |
 | `uploadArtifact` | ✓ | ✓ | `POST .../uploadArtifact` | `{"subTaskId":123,"fileName":"a.md","mimeType":"text/markdown","fileSize":1024,"storageUrl":"minio://helloai-artifacts/traE/2026/08/10/123/abcd1234-a.md"}` | `{ok, attachmentId, storageUrl}` |
 | `submitResult` | ✓ | ✓ | `POST .../submitResult` | `{"subTaskId":123,"resultId":"r-1","success":true,"output":"...","finishReason":"completed"}` | `{ok, accepted, idempotent, status, reason, subTaskId, resultId}` |
 | `reportBlocked` | ✓ | ✓ | `POST .../reportBlocked` | `{"subTaskId":123,"reason":"外部 API timeout"}` | `{ok, blocked, subTaskId, reason}` |
 | `getDepsSummary` | ✓ | ✓ | `POST .../getDepsSummary` | `{"subTaskId":123}` | `{subTaskId, taskId, depCount, loadedCount, truncatedCount, degraded, deps:[{subTaskId, title, status, summary, content, truncated}]}` |
+| `getSubTaskDetail` | ✓ | ✓ | `POST .../getSubTaskDetail` | `{"subTaskId":123}` | `{subTaskId, taskId, title, content, deliverable, acceptance, constraints, uncertainties, requiredSkills, priority, status, contract, dependsOn, deadline, reworkCount}`（子任务全文，不截断；开工前必读，验收标准 `acceptance` 为审查侧同一份判定依据） |
 
 > 通道选择：MCP SSE 是标准协议（需 4 步握手，session 绑定长连接）；REST 别名与 REST 直通**免 session、同步返回**，断连后仍可用。
 > MCP 通道的 `arguments` 里需额外带 `agentId` 与 `sessionId`（§1.4(2)）；REST 通道不需要（鉴权取自 Bearer 头）。
@@ -145,8 +146,8 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 
 在 Trae / Qoder 等 MCP 客户端里把上述 SSE 端点与 Bearer 头配好，即可自动发现下列工具（`tools/list`）。
 
-### 1.2 全套 MCP 工具（11 个）
-你注册后这 11 个工具**默认全部授权**，参数 schema 由 MCP 客户端 `tools/list` 自动获取：
+### 1.2 全套 MCP 工具（12 个）
+你注册后这 12 个工具**默认全部授权**，参数 schema 由 MCP 客户端 `tools/list` 自动获取：
 
 | 工具 | 何时使用 |
 |---|---|
@@ -161,6 +162,7 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 | `submitResult` | 完成子任务后上交执行结果（成功或失败）；同轮重试须带相同 `resultId` 保证幂等，返工重提必须换新 `resultId`（§注意事项） |
 | `reportBlocked` | 遇到外部依赖不可用 / 环境缺失等无法自行解决的阻塞时上报。平台只收 `reason` 文本（无附件字段），请把**证据内嵌进 reason**：报错原文、失败命令、已重试次数与环境信息 |
 | `getDepsSummary` | 开工前主动拉取前置产出摘要（每条前置的标题/状态/执行摘要/内容本体），避免重复调研或遗漏上游结论；无依赖时 `depCount=0` |
+| `getSubTaskDetail` | **认领后开工前必读**：拉取子任务全文（`content` 执行内容与边界 / `deliverable` 交付物 / `acceptance` 验收标准 / `constraints` 执行约束 / `uncertainties` 不确定性申报）。收件箱摘要只是速览，**验收标准与执行边界以本工具为准**——审查侧按同一份 `acceptance` 判定；`claimSubTask` 成功返回体已内联同一份 `detail`，缺失（重连 / 旧服务端）时补调本工具 |
 
 > 🧭 **产物文件内容上传（服务器版必读，§6.99）**
 > - 服务器版部署中 MinIO 仅绑定服务器 127.0.0.1（公网不可达），**不要尝试直连 MinIO PUT 文件**（单机版 `localhost:29000` 的写法在服务器版必然失败）。

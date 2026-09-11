@@ -563,21 +563,23 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
                         List<String> mergedSkills = mergeSkills(subTask);
                         String skillLine = mergedSkills.isEmpty() ? ""
                                 : "\n技能要求: " + String.join(", ", mergedSkills);
-                        // G-011 D6：uncertainties 中 UNCONFIRMED 条目数 >0 时追加「待确认: N 项」
-                        // （ASSUMPTION 可自行验证无需提示；纯文本形态与技能要求行同款，不动 inbox 契约面）
-                        String uncertaintyLine = "";
-                        if (subTask.getUncertainties() != null) {
-                            long pendingCount = subTask.getUncertainties().stream()
-                                    .filter(u -> Uncertainty.KIND_UNCONFIRMED.equals(u.getKind()))
-                                    .count();
-                            if (pendingCount > 0) {
-                                uncertaintyLine = "\n待确认: " + pendingCount + " 项";
-                            }
-                        }
+                        // P0 验收标准下发：摘要不再只是「交付物」——审查侧按 acceptance 逐条核验
+                        // （subtask-review 轨道 A），执行者必须从收件箱即可看到验收标准与硬边界；
+                        // 纯文本形态与技能要求行同款，不动 inbox 契约面
+                        String acceptanceLine = "\n验收标准: "
+                                + (subTask.getAcceptance() != null && !subTask.getAcceptance().isBlank()
+                                        ? subTask.getAcceptance()
+                                        : "（未填写，开工前请调用 getSubTaskDetail 核对）");
+                        String constraintsLine = subTask.getConstraints() != null && !subTask.getConstraints().isBlank()
+                                ? "\n执行约束（不许改的事）: " + subTask.getConstraints() : "";
+                        // G-011 D6 升级：uncertainties 逐条下发正文（此前只给「待确认: N 项」计数，
+                        // 执行者不知道要验证什么）；空/全空白零注入
+                        String uncertaintyLine = buildUncertaintyLines(subTask.getUncertainties());
                         agentInboxService.send(agentId, eventId, "sub_task.assigned",
                                 "新任务已分配: " + title,
                                 "交付物: " + (subTask.getDeliverable() != null ? subTask.getDeliverable() : "待确认")
-                                        + skillLine + uncertaintyLine,
+                                        + acceptanceLine + constraintsLine + skillLine + uncertaintyLine
+                                        + "\n完整执行内容与边界请调用 getSubTaskDetail 查看",
                                 "sub_task", subTask.getId(), "HIGH");
                     }
                 }
@@ -638,6 +640,32 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
             log.error("收件箱通知发送失败: subTaskId={}, status={}", subTask.getId(), newStatus, e);
             // 通知失败不影响主流程
         }
+    }
+
+    /**
+     * 不确定性申报下行渲染（P0 增量）：逐条「[kind] note + 分级后缀」正文，替代此前的
+     * 「待确认: N 项」计数——计数无法告诉执行者要验证什么。后缀语义与执行侧注入同源
+     * （SubTaskExecutionServiceImpl.buildUserPrompt）：ASSUMPTION 可自行验证 / 推翻；
+     * 其余（含人工编辑引入的非法值）一律按 UNCONFIRMED 的 fail-close 语义处理。
+     *
+     * @return 每条前缀换行；空列表 / 全空白返回空串（零注入，存量行为不变）
+     */
+    private String buildUncertaintyLines(List<Uncertainty> uncertainties) {
+        if (uncertainties == null || uncertainties.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (Uncertainty uncertainty : uncertainties) {
+            if (uncertainty == null || uncertainty.getNote() == null || uncertainty.getNote().isBlank()) {
+                continue;
+            }
+            String suffix = Uncertainty.KIND_ASSUMPTION.equals(uncertainty.getKind())
+                    ? "（可自行验证，推翻即上报）"
+                    : "（须先验证再动手，无法验证则 reportBlocked 上报）";
+            sb.append("\n- [").append(uncertainty.getKind()).append("] ")
+              .append(uncertainty.getNote()).append(suffix);
+        }
+        return sb.toString();
     }
 
     /**

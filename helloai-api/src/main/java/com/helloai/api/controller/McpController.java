@@ -42,17 +42,17 @@ public class McpController {
     private final McpToolService mcpToolService;
 
     // ================================================================
-    // REST 通道 — 11 个工具（getAgentStatus/checkIn/checkOut；
-    // getDepsSummary，与 MCP SSE / JSON-RPC 三通道工具面完全对齐）
+    // REST 通道 — 12 个工具（getAgentStatus/checkIn/checkOut；
+    // getDepsSummary/getSubTaskDetail，与 MCP SSE / JSON-RPC 三通道工具面完全对齐）
     // ================================================================
 
     /** 三通道统一工具清单（MCP SSE / REST 别名 jsonrpc / REST 直通 tools/*），防声明与实现漂移。 */
     private static final List<String> TOOL_NAMES = List.of(
             "pullTasks", "ack", "claimSubTask", "heartbeat", "uploadArtifact",
             "submitResult", "reportBlocked", "getAgentStatus", "getDepsSummary",
-            "checkIn", "checkOut");
+            "getSubTaskDetail", "checkIn", "checkOut");
 
-    /** GET /api/mcp/tools — 列出当前 Agent 可用的工具（与 MCP SSE / JSON-RPC 通道一致，11 个） */
+    /** GET /api/mcp/tools — 列出当前 Agent 可用的工具（与 MCP SSE / JSON-RPC 通道一致，12 个） */
     @GetMapping("/tools")
     public R<?> listTools(@RequestAttribute("_authId") Long agentId) {
         return R.ok(TOOL_NAMES);
@@ -172,6 +172,18 @@ public class McpController {
         return R.ok(mcpToolService.getDepsSummary(agentId, subTaskId));
     }
 
+    /** POST /api/mcp/tools/getSubTaskDetail（直通端点；body 必填 subTaskId） */
+    @PostMapping("/tools/getSubTaskDetail")
+    public R<SubTaskDetail> getSubTaskDetail(
+            @RequestAttribute("_authId") Long agentId,
+            @RequestBody Map<String, Object> body) {
+        Long subTaskId = toLong(body.get("subTaskId"));
+        if (subTaskId == null) {
+            return R.fail("subTaskId 不能为空");
+        }
+        return R.ok(mcpToolService.getSubTaskDetail(agentId, subTaskId));
+    }
+
     /** POST /api/mcp/tools/checkIn（直通端点；body 可选 workMode / maxConcurrent / ttlMinutes） */
     @PostMapping("/tools/checkIn")
     public R<CheckInResult> checkIn(
@@ -246,6 +258,9 @@ public class McpController {
                     Map.of("name", "getAgentStatus", "description", "查询 Agent 自身状态（管理态/在线态/实时计算态）",
                             "inputSchema", Map.of("type", "object", "properties", Map.of())),
                     Map.of("name", "getDepsSummary", "description", "主动拉取前置产出摘要（标题/状态/执行摘要/内容本体）",
+                            "inputSchema", Map.of("type", "object", "properties", Map.of(
+                                    "subTaskId", Map.of("type", "integer")))),
+                    Map.of("name", "getSubTaskDetail", "description", "查询子任务详情（执行内容与边界/交付物/验收标准/执行约束/不确定性申报）",
                             "inputSchema", Map.of("type", "object", "properties", Map.of(
                                     "subTaskId", Map.of("type", "integer")))),
                     Map.of("name", "checkIn", "description", "打卡上班，获取 ACTIVE 打卡租约（无状态，无需 MCP session）",
@@ -343,6 +358,12 @@ public class McpController {
                 Long subTaskId = toLong(args.get("subTaskId"));
                 if (subTaskId == null) throw new BizException("subTaskId is required");
                 yield mcpToolService.getDepsSummary(agentId, subTaskId);
+            }
+            // REST 别名通道提供子任务详情工具（验收标准 / 执行边界下发）
+            case "getSubTaskDetail" -> {
+                Long subTaskId = toLong(args.get("subTaskId"));
+                if (subTaskId == null) throw new BizException("subTaskId is required");
+                yield mcpToolService.getSubTaskDetail(agentId, subTaskId);
             }
             case "checkIn" -> {
                 String workMode = (String) args.get("workMode");

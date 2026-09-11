@@ -11,7 +11,7 @@
 #       + fixHint 修复提示（重新握手 / REST 别名通道）
 #   S4) 断连后复用旧 sessionId -> 观察输出（SDK 回收有时延窗口,
 #       回收时序不保证, 不做硬断言）
-#   S5) REST 别名 POST /api/mcp/jsonrpc tools/list -> 10 工具 + inputSchema
+#   S5) REST 别名 POST /api/mcp/jsonrpc tools/list -> 12 工具 + inputSchema
 #       （无需 session，断连后仍可用 = 免握手复用）
 #   S6) REST 别名 tools/call heartbeat -> 同步 result（非 SSE 静默空 body）
 #   S7) REST 别名 tools/call checkIn/checkOut -> 同步租约回执
@@ -306,7 +306,7 @@ try { $gObj = $gResp.Body | ConvertFrom-Json } catch {}
 Assert-True ($gObj -ne $null -and $gObj.result -ne $null) "S5 REST alias tools/list: sync result returned"
 if ($gObj -ne $null -and $gObj.result -ne $null) {
     $tools = @($gObj.result.tools)
-    Assert-True ($tools.Count -eq 10) "S5 REST alias tools/list: 10 tools declared (got $($tools.Count))"
+    Assert-True ($tools.Count -eq 12) "S5 REST alias tools/list: 12 tools declared (got $($tools.Count))"
     $noSchema = @($tools | Where-Object { $_.inputSchema -eq $null })
     Assert-True ($noSchema.Count -eq 0) "S5 REST alias tools/list: every tool has inputSchema (JSON Schema)"
 }

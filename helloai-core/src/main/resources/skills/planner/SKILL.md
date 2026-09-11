@@ -40,8 +40,8 @@
 
 在 Trae / Qoder 等 MCP 客户端里把上述 SSE 端点与 Bearer 头配好，即可自动发现下列工具（`tools/list`）。
 
-### 1.2 全套 MCP 工具（11 个）
-你注册后这 11 个工具**默认全部授权**，参数 schema 由 MCP 客户端 `tools/list` 自动获取：
+### 1.2 全套 MCP 工具（12 个）
+你注册后这 12 个工具**默认全部授权**，参数 schema 由 MCP 客户端 `tools/list` 自动获取：
 
 | 工具 | Planner 何时使用 |
 |---|---|
@@ -56,6 +56,7 @@
 | `submitResult` | 完成自己名下子任务后上交结果；重复提交须带相同 `resultId` 保证幂等 |
 | `reportBlocked` | 规划本身遇到外部依赖不可用等无法自行解决的阻塞时上报 |
 | `getDepsSummary` | 开工前主动拉取前置产出摘要（每条前置的标题/状态/执行摘要/内容本体）；无依赖时 `depCount=0` |
+| `getSubTaskDetail` | 查看子任务全文（`content` 执行边界 / `deliverable` 交付物 / `acceptance` 验收标准 / `constraints` 执行约束 / `uncertainties` 不确定性申报）：排障与拆解质量自检入口——核对「执行者据以开工的验收标准」是否清晰，blocked 上报时先看这里 |
 
 > 🧭 **`checkIn` 租约机制（实测必看）**
 > - 租约签发：`expires_at = now + ttlMinutes`，默认 30 分钟；到期后翻为 EXPIRED，即视为离岗（不在调度候选），需重新 `checkIn` 拿新租约。

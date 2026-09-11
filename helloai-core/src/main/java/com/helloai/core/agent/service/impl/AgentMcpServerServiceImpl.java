@@ -24,7 +24,7 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
         implements AgentMcpServerService {
 
     /**
-     * EXECUTOR 默认启用的 10 个 MCP 工具清单（外部 Agent 一键接入即拿全套能力）。
+     * EXECUTOR 默认启用的 12 个 MCP 工具清单（外部 Agent 一键接入即拿全套能力）。
      * <p>
      * 设计原则：一键注册应交付外部 Agent
      * 使用 HelloAI 调度平台的<b>完整工具集</b>——用哪些、何时用是外部 Agent 的决策，
@@ -40,7 +40,8 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
      * <ul>
      *   <li>{@code pullTasks}      —— 拉取 Agent 待处理收件箱</li>
      *   <li>{@code ack}            —— 确认收件箱消息已处理</li>
-     *   <li>{@code claimSubTask}   —— 原子认领子任务</li>
+     *   <li>{@code claimSubTask}   —— 原子认领子任务（成功返回体内联子任务全文）</li>
+     *   <li>{@code getSubTaskDetail} —— 查询子任务详情（content/deliverable/acceptance/constraints）</li>
      *   <li>{@code heartbeat}      —— 心跳上报</li>
      *   <li>{@code uploadArtifact} —— 上传产物附件元数据</li>
      *   <li>{@code submitResult}   —— 上交子任务执行结果</li>
@@ -54,6 +55,7 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
             "pullTasks",
             "ack",
             "claimSubTask",
+            "getSubTaskDetail",
             "heartbeat",
             "uploadArtifact",
             "submitResult",
@@ -72,17 +74,17 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
     private static final String SYSTEM_OPERATOR = "system_agent_register";
 
     /**
-     * 为新建 Agent 启用 EXECUTOR 默认 10 工具（已存在跳过，安全幂等）。
+     * 为新建 Agent 启用 EXECUTOR 默认 12 工具（已存在跳过，安全幂等）。
      * <p>
      * 由 {@link AgentService#register(String, com.helloai.common.constant.AgentRole, String)}
      * 在 {@code save(agent)} 之后调用，纳入同一事务。
      * </p>
      * <p>
      * 注意：AgentService.register() 对 role 不做限制（PLANNER / EXECUTOR / REVIEWER
-     * 均可注册），但默认 10 工具按 EXECUTOR 业务循环 + 值班打卡最优集设计。
+     * 均可注册），但默认 12 工具按 EXECUTOR 业务循环 + 值班打卡最优集设计。
      * 若未来 PLANNER/REVIEWER 注册需要差异化工具集，
      * 应在 AgentService.register() 之前/之后按 role 分流。
-     * 当前实现统一给非 EXECUTOR 也启用 10 工具 —— 因为 ON CONFLICT + 已存在跳过不会出错，
+     * 当前实现统一给非 EXECUTOR 也启用 12 工具 —— 因为 ON CONFLICT + 已存在跳过不会出错，
      * 且后续若需为 PLANNER 启用 planner_tools（如 decomposePlan），
      * 独立走 {@code enableSpecificTools(agentId, names)} 方法叠加即可。
      * </p>

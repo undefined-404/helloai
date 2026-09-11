@@ -176,19 +176,19 @@ class SubTaskServiceHandoverTest {
     }
 
     @Test
-    @DisplayName("G-011 分配通知摘要：UNCONFIRMED 计数>0 追加「待确认: N 项」（ASSUMPTION 不计入）")
-    void shouldAppendPendingUncertaintyLineInAssignedSummary() {
+    @DisplayName("P0 分配通知摘要：验收标准 + 执行约束 + 不确定性逐条正文（不再只给计数）")
+    void shouldAppendAcceptanceAndUncertaintyLinesInAssignedSummary() {
         SubTask subTask = subTask(SubTaskStatus.PENDING, null);
+        subTask.setDeliverable("运维手册定稿");
+        subTask.setAcceptance("运行 verify 脚本输出全 PASS");
+        subTask.setConstraints("不得改动对外接口签名");
         Uncertainty assumed = new Uncertainty();
         assumed.setKind(Uncertainty.KIND_ASSUMPTION);
         assumed.setNote("分区口径可自行核验");
-        Uncertainty pending1 = new Uncertainty();
-        pending1.setKind(Uncertainty.KIND_UNCONFIRMED);
-        pending1.setNote("归档分区待确认");
-        Uncertainty pending2 = new Uncertainty();
-        pending2.setKind(Uncertainty.KIND_UNCONFIRMED);
-        pending2.setNote("批量窗口待确认");
-        subTask.setUncertainties(List.of(assumed, pending1, pending2));
+        Uncertainty pending = new Uncertainty();
+        pending.setKind(Uncertainty.KIND_UNCONFIRMED);
+        pending.setNote("归档分区待确认");
+        subTask.setUncertainties(List.of(assumed, pending));
         doReturn(subTask).when(subTaskService).getById(SUB_TASK_ID);
 
         subTaskService.changeStatus(SUB_TASK_ID, SubTaskStatus.ASSIGNED, NEW_AGENT);
@@ -196,12 +196,18 @@ class SubTaskServiceHandoverTest {
         ArgumentCaptor<String> summaryCaptor = ArgumentCaptor.forClass(String.class);
         verify(agentInboxService).send(eq(NEW_AGENT), anyString(), eq("sub_task.assigned"),
                 anyString(), summaryCaptor.capture(), eq("sub_task"), eq(SUB_TASK_ID), anyString());
-        assertThat(summaryCaptor.getValue()).contains("\n待确认: 2 项");
+        String summary = summaryCaptor.getValue();
+        assertThat(summary).contains("交付物: 运维手册定稿");
+        assertThat(summary).contains("验收标准: 运行 verify 脚本输出全 PASS");
+        assertThat(summary).contains("执行约束（不许改的事）: 不得改动对外接口签名");
+        assertThat(summary).contains("- [UNCONFIRMED] 归档分区待确认（须先验证再动手，无法验证则 reportBlocked 上报）");
+        assertThat(summary).contains("- [ASSUMPTION] 分区口径可自行核验（可自行验证，推翻即上报）");
+        assertThat(summary).contains("getSubTaskDetail");
     }
 
     @Test
-    @DisplayName("G-011 仅 ASSUMPTION 或无申报：分配摘要不含「待确认:」行")
-    void shouldSkipUncertaintyLineWhenOnlyAssumptionsOrNone() {
+    @DisplayName("P0 分配通知摘要：仅 ASSUMPTION 只注入假设行；无申报零注入")
+    void shouldRenderOnlyDeclaredUncertaintyKinds() {
         SubTask assumedOnly = subTask(SubTaskStatus.PENDING, null);
         Uncertainty assumed = new Uncertainty();
         assumed.setKind(Uncertainty.KIND_ASSUMPTION);
@@ -214,9 +220,10 @@ class SubTaskServiceHandoverTest {
         ArgumentCaptor<String> summaryCaptor = ArgumentCaptor.forClass(String.class);
         verify(agentInboxService).send(eq(NEW_AGENT), anyString(), eq("sub_task.assigned"),
                 anyString(), summaryCaptor.capture(), eq("sub_task"), eq(SUB_TASK_ID), anyString());
-        assertThat(summaryCaptor.getValue()).doesNotContain("待确认:");
+        assertThat(summaryCaptor.getValue()).contains("[ASSUMPTION] 历史数据可忽略");
+        assertThat(summaryCaptor.getValue()).doesNotContain("[UNCONFIRMED]");
 
-        // 无申报：同样不追加
+        // 无申报：不注入任何不确定性行（零注入）
         SubTask noUncertainty = subTask(SubTaskStatus.PENDING, null);
         doReturn(noUncertainty).when(subTaskService).getById(SUB_TASK_ID);
         subTaskService.changeStatus(SUB_TASK_ID, SubTaskStatus.ASSIGNED, NEW_AGENT);
@@ -224,7 +231,8 @@ class SubTaskServiceHandoverTest {
         ArgumentCaptor<String> summaryCaptor2 = ArgumentCaptor.forClass(String.class);
         verify(agentInboxService, times(2)).send(eq(NEW_AGENT), anyString(), eq("sub_task.assigned"),
                 anyString(), summaryCaptor2.capture(), eq("sub_task"), eq(SUB_TASK_ID), anyString());
-        assertThat(summaryCaptor2.getAllValues().get(1)).doesNotContain("待确认:");
+        assertThat(summaryCaptor2.getAllValues().get(1)).doesNotContain("[UNCONFIRMED]");
+        assertThat(summaryCaptor2.getAllValues().get(1)).doesNotContain("[ASSUMPTION]");
     }
 
     @Test

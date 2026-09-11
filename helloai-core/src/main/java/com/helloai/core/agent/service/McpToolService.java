@@ -1,5 +1,6 @@
 package com.helloai.core.agent.service;
 
+import com.helloai.core.task.entity.Uncertainty;
 import lombok.Data;
 
 import java.util.List;
@@ -58,6 +59,17 @@ public interface McpToolService {
     /** 汇总前置子任务产出内容（物化附件优先，回退执行记录输出）。 */
     GetDepsSummaryResult getDepsSummary(Long agentId, Long subTaskId);
 
+    /**
+     * 查询子任务详情（执行内容 / 交付物 / 验收标准 / 执行约束 / 不确定性申报）。
+     *
+     * <p>「验收标准下发」缺口补齐：外部执行者经 MCP 此前只能看到收件箱摘要（仅交付物），
+     * 但审查侧按 {@code acceptance} 核验——本工具把执行者据此开工所需的子任务全文
+     * 一次性下发，与平台内执行 Prompt（SubTaskExecutionServiceImpl.buildUserPrompt）
+     * 的「当前任务」四要素同源。授权：仅当前已分配给本 Agent 的子任务，
+     * 或尚未分配且状态为 PENDING（可认领）的子任务可查。</p>
+     */
+    SubTaskDetail getSubTaskDetail(Long agentId, Long subTaskId);
+
     // ================================================================
     // result DTOs (used by Controller to serialize)
     // ================================================================
@@ -101,6 +113,52 @@ public interface McpToolService {
         private Long assignedAgent;
         private Long subTaskId;
         private Integer version;
+        /** 认领成功（claimed=true）时携带子任务详情，供执行者立即开工，无需再调 getSubTaskDetail。 */
+        private SubTaskDetail detail;
+    }
+
+    /**
+     * 子任务详情（getSubTaskDetail 返回体 / ClaimSubTaskResult.detail）。
+     *
+     * <p>字段与子任务实体一一对应，不做事后截断：验收标准与执行边界被截断正是
+     * 「执行者看不到验收标准」缺口的成因，故全文下发（内容长度由拆解侧 LLM 产物约束）。</p>
+     *
+     * <p>§6.1 豁免记录（2026-09-11，code review 显式豁免）：{@code uncertainties} 字段
+     * 直接使用 task 域 {@link Uncertainty} 值对象，使本接口新增 1 处 agent → task entity
+     * 类型引用（此前本文件无 task 域 import）。豁免理由：该字段为只读投影，kind 常量
+     * （ASSUMPTION / UNCONFIRMED）语义必须与 task 域执行注入、审查核验链保持单源，
+     * 另建同形值对象将引入双源漂移；本引用不注入 task 域 Service、不产生任何写操作。
+     * 回收方向：随 §6.1 AgentRuntime 改造（Port 反转 / 职责上移）统一处理。</p>
+     */
+    @Data
+    class SubTaskDetail {
+        private Long subTaskId;
+        private Long taskId;
+        private String title;
+        /** 执行内容与边界（做什么、边界在哪里）——外部执行者此前完全不可见的字段。 */
+        private String content;
+        /** 交付物要求（完成后产出什么，必须具体可检查）。 */
+        private String deliverable;
+        /** 验收标准（审查侧按此核验，执行侧开工前必须逐条自检）。 */
+        private String acceptance;
+        /** 执行约束（不许改 / 不许越界事项；COARSE 档必填，其余档位可空）。 */
+        private String constraints;
+        /** 不确定性申报（ASSUMPTION 可自行验证 / 推翻；UNCONFIRMED 须先验证，验证不了走 reportBlocked）。 */
+        private List<Uncertainty> uncertainties;
+        /** 子任务级 ∪ 任务级技能标签（合并清单，与执行侧注入 / 审查侧核验同源）。 */
+        private List<String> requiredSkills;
+        /** 优先级：HIGH / MEDIUM / LOW。 */
+        private String priority;
+        /** SubTaskStatus：PENDING / ASSIGNED / IN_PROGRESS / REVIEW / DONE / ... */
+        private String status;
+        /** true=契约定义子任务（产出全局注入所有下游子任务执行上下文）。 */
+        private Boolean contract;
+        /** 前置子任务 ID 列表（同任务内），空数组=无依赖。 */
+        private List<Long> dependsOn;
+        /** 截止时间（ISO8601）；null=无时限。 */
+        private String deadline;
+        /** 已发生的返工次数；>0 说明上一轮被审查驳回，开工前应结合审查评语修正。 */
+        private Integer reworkCount;
     }
 
     @Data

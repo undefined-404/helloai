@@ -1,6 +1,7 @@
 package com.helloai.core.agent.mcp;
 
 import com.helloai.common.constant.AgentDutyLeaseStatus;
+import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.SubTaskStatus;
@@ -19,6 +20,7 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.entity.Uncertainty;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.spec.ExecutionRecord;
 import com.helloai.core.task.service.TaskRunningSpecService;
@@ -34,6 +36,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -705,5 +708,124 @@ class McpToolServiceTest {
 
         assertThat(result.isClaimed()).isTrue();
         assertThat(result.getVersion()).isEqualTo(3);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  getSubTaskDetail 子任务详情（验收标准 / 执行边界下发）
+    //  ══════════════════════════════════════════════════════════════
+
+    private SubTask detailedSubTask(Long assignedAgentId, SubTaskStatus status) {
+        SubTask subTask = new SubTask();
+        subTask.setId(SUB_TASK_ID);
+        subTask.setTaskId(TASK_ID);
+        subTask.setAssignedAgentId(assignedAgentId);
+        subTask.setStatus(status);
+        subTask.setTitle("示例子任务");
+        subTask.setContent("执行内容与边界");
+        subTask.setDeliverable("交付物");
+        subTask.setAcceptance("验收标准：运行 X 输出 Y");
+        subTask.setConstraints("不得修改对外接口签名");
+        subTask.setPriority("HIGH");
+        subTask.setReworkCount(1);
+        subTask.setUncertainties(List.of(
+                new Uncertainty(Uncertainty.KIND_UNCONFIRMED, "存量调用方是否受影响未确认")));
+        subTask.setDependsOn(List.of(11L));
+        return subTask;
+    }
+
+    @Test
+    @DisplayName("getSubTaskDetail：本人名下子任务返回全文，技能为合并清单")
+    void shouldReturnFullDetailForAssignedSubTask() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("getSubTaskDetail"))).thenReturn(true);
+        SubTask assigned = detailedSubTask(AGENT_ID, SubTaskStatus.IN_PROGRESS);
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(assigned);
+        when(subTaskService.mergeSkills(assigned)).thenReturn(List.of("eng-doc-standard", "shell"));
+
+        McpToolService.SubTaskDetail detail = mcpToolService.getSubTaskDetail(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(detail.getSubTaskId()).isEqualTo(SUB_TASK_ID);
+        assertThat(detail.getTaskId()).isEqualTo(TASK_ID);
+        assertThat(detail.getContent()).isEqualTo("执行内容与边界");
+        assertThat(detail.getDeliverable()).isEqualTo("交付物");
+        assertThat(detail.getAcceptance()).isEqualTo("验收标准：运行 X 输出 Y");
+        assertThat(detail.getConstraints()).isEqualTo("不得修改对外接口签名");
+        assertThat(detail.getUncertainties()).extracting(Uncertainty::getKind)
+                .containsExactly(Uncertainty.KIND_UNCONFIRMED);
+        assertThat(detail.getRequiredSkills()).containsExactly("eng-doc-standard", "shell");
+        assertThat(detail.getPriority()).isEqualTo("HIGH");
+        assertThat(detail.getStatus()).isEqualTo("IN_PROGRESS");
+        assertThat(detail.getContract()).isFalse();
+        assertThat(detail.getDependsOn()).containsExactly(11L);
+        assertThat(detail.getReworkCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("getSubTaskDetail：未分配且 PENDING（可认领）放行；mergeSkills 返回 null 回落空列表")
+    void shouldAllowClaimablePendingSubTask() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("getSubTaskDetail"))).thenReturn(true);
+        when(subTaskService.getById(SUB_TASK_ID))
+                .thenReturn(detailedSubTask(null, SubTaskStatus.PENDING));
+
+        McpToolService.SubTaskDetail detail = mcpToolService.getSubTaskDetail(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(detail.getSubTaskId()).isEqualTo(SUB_TASK_ID);
+        assertThat(detail.getAcceptance()).isEqualTo("验收标准：运行 X 输出 Y");
+        assertThat(detail.getRequiredSkills()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("getSubTaskDetail：已转给他人的子任务拒绝下发（不泄露在办任务）")
+    void shouldRejectSubTaskAssignedToOtherAgent() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("getSubTaskDetail"))).thenReturn(true);
+        when(subTaskService.getById(SUB_TASK_ID))
+                .thenReturn(detailedSubTask(OTHER_AGENT, SubTaskStatus.IN_PROGRESS));
+
+        assertThatThrownBy(() -> mcpToolService.getSubTaskDetail(AGENT_ID, SUB_TASK_ID))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("无权查看该子任务");
+    }
+
+    @Test
+    @DisplayName("getSubTaskDetail：子任务不存在抛 BizException")
+    void shouldRejectMissingSubTask() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("getSubTaskDetail"))).thenReturn(true);
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(null);
+
+        assertThatThrownBy(() -> mcpToolService.getSubTaskDetail(AGENT_ID, SUB_TASK_ID))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("子任务不存在");
+    }
+
+    @Test
+    @DisplayName("claimSubTask：认领成功返回体内联子任务详情（验收标准随认领下发）")
+    void shouldInlineDetailOnClaimSuccess() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("claimSubTask"))).thenReturn(true);
+        SubTask pending = detailedSubTask(null, SubTaskStatus.PENDING);
+        SubTask claimed = detailedSubTask(AGENT_ID, SubTaskStatus.ASSIGNED);
+        claimed.setVersion(2);
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(pending, claimed);
+        when(subTaskService.claimAtomic(SUB_TASK_ID, AGENT_ID)).thenReturn(true);
+
+        McpToolService.ClaimSubTaskResult result = mcpToolService.claimSubTask(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(result.isClaimed()).isTrue();
+        assertThat(result.getVersion()).isEqualTo(2);
+        assertThat(result.getDetail()).isNotNull();
+        assertThat(result.getDetail().getContent()).isEqualTo("执行内容与边界");
+        assertThat(result.getDetail().getAcceptance()).isEqualTo("验收标准：运行 X 输出 Y");
+        assertThat(result.getDetail().getConstraints()).isEqualTo("不得修改对外接口签名");
+    }
+
+    @Test
+    @DisplayName("claimSubTask：抢不到（已归属他人）不下发详情")
+    void shouldNotLeakDetailWhenClaimLost() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("claimSubTask"))).thenReturn(true);
+        when(subTaskService.getById(SUB_TASK_ID))
+                .thenReturn(detailedSubTask(OTHER_AGENT, SubTaskStatus.IN_PROGRESS));
+
+        McpToolService.ClaimSubTaskResult result = mcpToolService.claimSubTask(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(result.isClaimed()).isFalse();
+        assertThat(result.getDetail()).isNull();
     }
 }

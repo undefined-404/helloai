@@ -25,6 +25,7 @@ import java.util.List;
  *   <li>{@code reportBlocked} —— 上报任务阻塞（自动通知所有 PLANNER 排障）</li>
  *   <li>{@code getAgentStatus} —— 查询 Agent 自身状态（协议列要求）</li>
  *   <li>{@code getDepsSummary} —— 主动拉取前置产出摘要（数据口径与执行链 buildDependencySection 同源）</li>
+ *   <li>{@code getSubTaskDetail} —— 查询子任务详情（执行内容 / 交付物 / 验收标准 / 执行约束 / 不确定性申报）</li>
  * </ol>
  * <p>
  * 设计原则：业务逻辑 <b>完全委托</b>给现有 {@link McpToolService}，本类只承担
@@ -133,8 +134,11 @@ public class McpMcpServer {
             - DB 原子条件更新保证并发安全：仅 status=PENDING 且 assigned_agent IS NULL 才成功
             - 重复 claim 同一子任务（已归属自己）：claimed=true 幂等成功
             - 已被他人抢走或状态已变：claimed=false（reason: already_claimed_by_other / invalid_status:xxx）
+            - claimed=true 时返回体额外携带 detail（子任务全文：content 执行边界 / deliverable 交付物 /
+              acceptance 验收标准 / constraints 执行约束 / uncertainties 不确定性申报），
+              开工前必须按 acceptance 逐条自检；同样内容也可用 getSubTaskDetail 单独拉取（含重连场景）
             - claimed=true 后应继续调用 start（REST POST /api/sub-tasks/start/{id}）推进到 IN_PROGRESS
-            【相关工具】pullTasks
+            【相关工具】pullTasks、getSubTaskDetail、getDepsSummary
             """)
     public McpToolService.ClaimSubTaskResult claimSubTask(
             @ToolParam(description = "Agent ID（协议字段鉴权后会被服务端覆盖）", required = true) Long agentId,
@@ -328,6 +332,39 @@ public class McpMcpServer {
             log.warn("MCP getDepsSummary: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
         }
         return mcpToolService.getDepsSummary(authAgentId, subTaskId);
+    }
+
+    // ================================================================
+    // 8ter. getSubTaskDetail（子任务详情：验收标准 / 执行边界下发）
+    // ================================================================
+
+    @Tool(name = "getSubTaskDetail", description = """
+            【何时使用】认领子任务后开工前必读（拉取子任务全文）；重连 / 补看 / claimSubTask 未带详情时使用。
+            【调用频率】每个子任务开工前一次；重复调用无副作用。
+            【效果】返回子任务全文：content（执行内容与边界）/ deliverable（交付物要求）/
+                    acceptance（验收标准）/ constraints（执行约束：不许改、不许越界事项）/
+                    uncertainties（不确定性申报：ASSUMPTION 可自行验证，UNCONFIRMED 须先验证）/
+                    requiredSkills / priority / status / contract / dependsOn / deadline / reworkCount。
+            【Gotchas】
+            - 收件箱摘要（pullTasks.summary）只是速览，验收标准与执行边界以本工具返回为准；
+              提交前必须逐条对照 acceptance 自检——审查侧按同一份 acceptance 判定（subtask-review 轨道 A）
+            - constraints 非空时是硬边界，产出违反即被驳回
+            - uncertainties 中 UNCONFIRMED 条目必须先验证；无法验证时走 reportBlocked，不要硬扛
+            - 字段全文下发不截断；仅「已分配给本 Agent」或「未分配且 PENDING（可认领）」的子任务可查
+            - 审查驳回（reworkCount>0）后重做前，先看审查评语再按同一份 acceptance 修正
+            【相关工具】claimSubTask、getDepsSummary、submitResult
+            """)
+    public McpToolService.SubTaskDetail getSubTaskDetail(
+            @ToolParam(description = "Agent ID（协议字段鉴权后会被服务端覆盖）", required = true) Long agentId,
+            @ToolParam(description = "子任务 ID（要查看详情的子任务）", required = true) Long subTaskId,
+            @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
+            @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
+        // 鉴权：强制覆盖（与客户端传值无关，永远查 token 解析的 agent）
+        Long authAgentId = requireAuthId(sessionId, _sessionId);
+        if (agentId == null || !authAgentId.equals(agentId)) {
+            log.warn("MCP getSubTaskDetail: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
+        }
+        return mcpToolService.getSubTaskDetail(authAgentId, subTaskId);
     }
 
     // ================================================================
