@@ -19,7 +19,8 @@ param(
     [string]$BaseUrl = "http://localhost:6565",
     [string]$AdminUsername = "admin",
     [string]$AdminPassword = "admin123",
-    [string]$LlmModelType = "deepseek:deepseek-chat",
+    # 平台 llm_provider_model 现役模型（V49 模型管理启用后注册会校验）：deepseek→v4-flash/v4-pro
+    [string]$LlmModelType = "deepseek:deepseek-v4-flash",
     [string]$LlmApiKey = $env:DEEPSEEK_API_KEY,
     [int]$RoundTimeoutSec = 180
 )
@@ -28,6 +29,8 @@ $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::InputEncoding  = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
+# PS5.1 非交互会话不预载 System.Net.Http，HttpClient 类型需显式加载（与 tool-matrix 等脚本一致）
+Add-Type -AssemblyName System.Net.Http
 
 function Assert-True([bool]$Cond, [string]$Msg) {
     if (-not $Cond) {
@@ -36,14 +39,50 @@ function Assert-True([bool]$Cond, [string]$Msg) {
 }
 
 function Invoke-Json([string]$Method, [string]$Url, [object]$Body, [hashtable]$Headers, [int]$TimeoutSec = 30) {
-    # JSON 体先转 UTF-8 字节再发送：LLM 回包中的选项 label 是中文，回填进请求体后
-    # 若按控制台默认编码（GBK）发出会触发后端 Invalid UTF-8 middle byte 报错
-    $bodyBytes = $null
+    # 请求体：JSON 字符串以 UTF-8 字节发出（LLM 回包中的中文选项 label 回填时防 GBK 混淆）
+    # 响应体：必须按字节读 + 显式 UTF-8 解码 —— PS5.1 的 Invoke-RestMethod 对 Content-Type
+    # 不带 charset 的 application/json 响应按 ISO-8859-1 解码，中文选项值（"确认"）乱码回传，
+    # 服务端 isAcceptSelected 匹配失败 —— P2-2 终稿回归堵点的根因（2026-09-11 定位）
+    $client = [System.Net.Http.HttpClient]::new()
+    $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSec)
+    foreach ($k in $Headers.Keys) {
+        $client.DefaultRequestHeaders.Add($k, [string]$Headers[$k]) | Out-Null
+    }
+    $content = $null
     if ($Body -ne $null) {
         $json = ($Body | ConvertTo-Json -Depth 10)
-        $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+        $content = [System.Net.Http.StringContent]::new($json, [System.Text.Encoding]::UTF8, "application/json")
     }
-    return Invoke-RestMethod -Method $Method -Uri $Url -Headers $Headers -ContentType "application/json; charset=utf-8" -Body $bodyBytes -TimeoutSec $TimeoutSec
+    try {
+        try {
+            if ($Method -eq "Get")      { $resp = $client.GetAsync($Url).Result }
+            elseif ($Method -eq "Post") { $resp = $client.PostAsync($Url, $content).Result }
+            elseif ($Method -eq "Put")  { $resp = $client.PutAsync($Url, $content).Result }
+            else { throw ("unsupported method: " + $Method) }
+        } finally {
+            if ($content -ne $null) { $content.Dispose() }
+        }
+        $respBytes = $resp.Content.ReadAsByteArrayAsync().Result
+        $respText = [System.Text.Encoding]::UTF8.GetString($respBytes)
+        $statusCode = [int]$resp.StatusCode
+        $resp.Dispose()
+        if ($statusCode -lt 200 -or $statusCode -ge 300) {
+            $errText = $respText
+            if ($errText.Length -gt 500) { $errText = $errText.Substring(0, 500) }
+            throw ("HTTP " + $statusCode + ": " + $errText)
+        }
+        if ([string]::IsNullOrWhiteSpace($respText)) { return $null }
+        return ($respText | ConvertFrom-Json)
+    } catch {
+        # PS 方法调用包 MethodInvocationException、Task.Result 包 AggregateException，逐层解包
+        $ex = $_.Exception
+        while (($ex -is [System.Management.Automation.MethodInvocationException] -or $ex -is [System.AggregateException]) -and $ex.InnerException -ne $null) {
+            $ex = $ex.InnerException
+        }
+        throw $ex
+    } finally {
+        $client.Dispose()
+    }
 }
 
 Write-Host "STEP1: admin login"
@@ -77,7 +116,8 @@ $plannerAgentId = [string]$regResp.data.id
 Write-Host ("plannerAgentId=" + $plannerAgentId)
 
 Write-Host ("STEP2.5: bind vault api-key for planner (provider=" + $llmProvider + ")")
-$bindResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/credentials/agents/" + $plannerAgentId + "/api-key") -Body @{
+# 端点已更名：旧 /api/credentials/agents/{id}/api-key 已下线（Phase 2 B2 凭证管理面收口）
+$bindResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/credentials/bindApiKeyByAgentId/" + $plannerAgentId) -Body @{
     provider = $llmProvider
     apiKey = $LlmApiKey
     remark = "verify-requirement-clarify-structured"
