@@ -118,6 +118,14 @@ HTTP 500
 
 在 `{收到 sub_task.reassigned 或 sub_task.unassigned}` 条件下，`{执行者}` **必须**立即停止执行，且**不得**再提交（契约 §5.4）；两条消息带 `reassigned=true` 与 `currentAgentId` 用于识别“通知到了但任务已不是我的”。
 
+### 2.3.5 认领后读取子任务全文（必做）
+
+认领成功后，`{执行者}` **必须**先取得子任务全文再动手：`claimSubTask` 返回体的 `detail` 字段内联子任务全文——`content`（做什么、边界在哪）/ `deliverable`（交付物）/ `acceptance`（验收标准）/ `constraints`（执行约束）/ `uncertainties`（不确定性申报）/ `requiredSkills`（技能要求）。在 `{detail 缺失}`（重连、旧服务端、需要复核）条件下，**必须**补调 `getSubTaskDetail(agentId, subTaskId)` 取同一份全文。
+
+`pullTasks` 的 `summary` 只是速览（见第 00 章 §2.4）：在 `{只凭 title 与 summary 开工}` 条件下，等于放弃验收自检，**不得**作为唯一依据；`acceptance` 未取得前 **不得**提交结果。
+
+来源：SKILL §5 · 2026-09-11 P0 工具面（`claimSubTask` 内联 `detail` + 新增 `getSubTaskDetail`，三通道 12 工具对齐）。
+
 ## 2.4 幂等键与并发控制
 
 | 操作 | 幂等键 / 并发控制 | 语义 | 来源 |

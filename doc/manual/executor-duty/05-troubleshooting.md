@@ -61,7 +61,7 @@
 | MCP 返回 404 `Session not found` | 确认 SSE 长连接是否断开 | 旧 sessionId 无法复活（契约 §6） | 切 REST 别名 `POST /api/mcp/jsonrpc` 继续本轮，不中断任务 |
 | POST `/mcp/messages` 返回 400 `Invalid message format` | 检查请求头是否带 `charset=utf-8` | 带 UTF-8 后正常 | 修正请求后再试 |
 | 返回 404（路径） | 核对路径是否为历史写法 | 正确写法为 `/api/agents/getById/{id}`、`/api/rules/getMergedRules`（契约 §6） | 改用正确路径 |
-| 返回 500 `Unknown tool: xxx` | 用 `tools/list` 取权威清单 | 仅 11 个工具可用（契约 §2.1） | 改用正确工具名 |
+| 返回 500 `Unknown tool: xxx` | 用 `tools/list` 取权威清单 | 仅 12 个工具可用（契约 §2.1） | 改用正确工具名 |
 | GET `startById` 返回 405 | 确认请求方法 | 开始执行必须用 POST（契约 §2.4） | 改用 POST 重试 |
 
 ## 5.3 需要立即升级人工的情形

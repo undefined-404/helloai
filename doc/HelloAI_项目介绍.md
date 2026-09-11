@@ -141,14 +141,14 @@ flowchart TB
 - **最终整合报告**：四态防重（NONE / GENERATING / DONE / FAILED）+ CAS 防重入 + 失败一键重试；
 - **交付物体系**：拓扑序 zip 打包下载；LLM 产出自动物化为附件（`local://` / `minio://` 存储抽象）；结构化多文件产出物化（LLM manifest 协议）；附件版本管理（同名去活 / 打回失效 / 历史回查）。
 
-### 异构接入：MCP 协议 + 11 个工具
+### 异构接入：MCP 协议 + 12 个工具
 
 | 接入类型 | 执行方式 | 典型代表 |
 |---|---|---|
 | `API_KEY_LLM` | 平台托管代理执行，模型工厂族统一适配 | DeepSeek / Moonshot / MiniMax / DashScope |
 | `CLI_CLIENT` | 外部自驱：MCP `pullTasks` 拉取 → 本地执行 → `submitResult` 回报 | Qoder / Trae / Codex CLI / Claude Code |
 
-- **MCP 工具集**（SSE 主通道）：`pullTasks` / `ack` / `claimSubTask` / `heartbeat` / `getDepsSummary` / `uploadArtifact` / `submitResult` / `reportBlocked` / `getAgentStatus` / `checkIn` / `checkOut`；
+- **MCP 工具集**（SSE 主通道）：`pullTasks` / `ack` / `claimSubTask` / `heartbeat` / `getDepsSummary` / `getSubTaskDetail` / `uploadArtifact` / `submitResult` / `reportBlocked` / `getAgentStatus` / `checkIn` / `checkOut`；
 - **接入体验**：管理端创建 Agent 一键生成 SKILL 说明 → 粘贴给任意终端上的外部 AI → 自动完成注册鉴权 → MCP 连接 → 值班打卡 → 轮询值守，该终端即成为平台算力节点；
 - **模型配置中心**：四家 Provider 的 API Key 动态配置 / 轮换，AES-GCM 加密落库、实时生效无需重启、添加模型触发连通性验证、模型能力锁定（`capability_skills` + 可选技能白名单）。
 

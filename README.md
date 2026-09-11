@@ -310,7 +310,7 @@ Planner 结构化拆解（`planner-decompose.md` 提示词 → LLM JSON 数组 �
 
 - MCP SSE（`/mcp/sse` + `/mcp/messages`）是外部 Agent 的唯一主协议通道；REST `tools/list` / `tools/call` 为兼容保留
 - 任务感知：外部 Agent 以 `pullTasks` 轮询收件箱为唯一感知通道（建议 30s）；门铃 SSE（`/api/agents/doorbell/sse`）已搁置（2026-08-07，外部 Agent 无法消费平台推送，代码保留运行待复用）
-- MCP 工具集：`pullTasks` / `ack` / `claimSubTask` / `heartbeat` / `getDepsSummary` / `uploadArtifact` / `submitResult` / `reportBlocked` / `getAgentStatus` / `checkIn` / `checkOut`，工具数量以 `tools/list` 实际返回为准
+- MCP 工具集：`pullTasks` / `ack` / `claimSubTask` / `heartbeat` / `getDepsSummary` / `getSubTaskDetail` / `uploadArtifact` / `submitResult` / `reportBlocked` / `getAgentStatus` / `checkIn` / `checkOut`，工具数量以 `tools/list` 实际返回为准
 
 **运行时组件职责**
 
@@ -318,7 +318,7 @@ Planner 结构化拆解（`planner-decompose.md` 提示词 → LLM JSON 数组 �
 |------|------|
 | Planner | 双模需求澄清（CHAT / CLARIFY + 联网搜索）、任务拆解 DAG、最终整合报告 |
 | 弹性调度器 | 外部优先 / 空闲优先 / 值班优先 / LLM 保底；per-agent 熔断与改派 |
-| MCP Server（Spring AI） | 外部 Agent 唯一主通道（SSE），11 个工具：pullTasks / claimSubTask / submitResult / checkIn 等 |
+| MCP Server（Spring AI） | 外部 Agent 唯一主通道（SSE），12 个工具：pullTasks / claimSubTask / getSubTaskDetail / submitResult / checkIn 等 |
 | Outbox + RabbitMQ | 事务性投递（PENDING/SENT/CONFIRMED/FAILED 四态）+ publisher confirms + DLX 死信归档 |
 | Reviewer | 双轨纪律制审核（验收标准 + 工程纪律 C1-C4 / D1-D3），blocker 级驳回触发返工 |
 | 死信池 | 重分配达阈值转 `DEAD_LETTER`，人工审核后一键重新派发 |

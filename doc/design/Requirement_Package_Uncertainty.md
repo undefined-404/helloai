@@ -8,6 +8,8 @@
 
 ---
 
+> **2026-09-11 P1/P2 修订（决策反转登记）**：需求包补回任务级 `acceptanceCriteria`（D1 与 §7 决策表 #2 已同步修订，新增决策 11~14）；description 信息量不减（§2.2 职责写死）；拆解必填字段 fail-close（P1-2）。P2 批次（新增决策 15~17）：终稿信息量回归防线（P2-2）、主任务详情可见需求包（P2-1）、驳回返工缺失证据清单（P2-4）。不修订文档 = 静默推翻，故此处显式登记。
+
 ## §0 设计输入与约束
 
 ### 0.1 问题定义（为什么做）
@@ -56,19 +58,28 @@
 
 ## §1 核心设计决策
 
-### D1：需求包 schema = 5 字段压缩版（三方建议并集的裁剪）
+### D1：需求包 schema = 6 字段（三方建议并集的裁剪 + P1 修订补回任务级验收条目）
 
 ```json
 {
   "goal": "可验收目标（一句话）",
   "scope": ["需求范围条目"],
   "outOfScope": ["明确不做项"],
+  "acceptanceCriteria": ["任务级验收条目（用户视角，封闭集合）"],
   "assumptions": ["关键假设（推断项，须标注）"],
   "openQuestions": ["待确认 / 阻断项"]
 }
 ```
 
-裁剪口径：元宝的 `reviewTriggers`（专项评审触发项）不取——组织级评审节奏，违反判断标准；`blockers` 不独立成列，并入 `openQuestions`（是否阻断由草案确认人工裁决，不建自动闸门）；不加任务级 `acceptanceCriteria`——子任务 acceptance 已承接验收职责，避免双份验收口径漂移。`goal` / `scope` 与 description 文本部分重叠，保留理由：拆解提示词需要**可机器引用的边界字段**（D5 继承规则按字段引用），重叠成本可接受（渲染时三者并列注入）。
+裁剪口径：元宝的 `reviewTriggers`（专项评审触发项）不取——组织级评审节奏，违反判断标准；`blockers` 不独立成列，并入 `openQuestions`（是否阻断由草案确认人工裁决，不建自动闸门）。`goal` / `scope` 与 description 文本部分重叠，保留理由：拆解提示词需要**可机器引用的边界字段**（D5 继承规则按字段引用），重叠成本可接受（渲染时并列注入）。
+
+**P1 修订（2026-09-11，决策反转登记）**：原口径「不加任务级 `acceptanceCriteria`——子任务 acceptance 已承接验收职责，避免双份验收口径漂移」**予以推翻**。反转理由：实证发现「执行者看不到验收标准」与「任务级验收无权威条目」是两个独立缺口——子任务 acceptance 是**执行级验证点**，任务级 acceptanceCriteria 是**用户视角验收条目**（当初承诺交付什么，封闭集合），二者不是同一口径的两份副本，原「避免双份口径漂移」的顾虑不成立；缺失任务级条目时，拆解产物可以逐条自洽验收、却整体未覆盖用户真正要的东西，且无任何机器可核的覆盖判据。新口径：
+
+- **任务级条目为权威封闭集合**：拆解产物必须对其**全覆盖**（每条至少被一个子任务的验收标准覆盖，不得遗漏，也不得新增集合之外的验收条目）；
+- **子任务 acceptance 为执行级验证点**：适用时须**回溯锚定**到某条任务级条目（措辞「对应任务级验收条目 N」）——是**锚定**而非复制；契约定义子任务与纯过程性（脚手架 / 环境准备）子任务可不锚定；
+- **无需求包任务不做回溯要求**：`acceptanceCriteria` 为空数组（存量任务 / 未走澄清链路）时，拆解行为与现状一致；
+- **校验方式**：与 D5 同模式（提示词硬约束 + 软审计），不做 fail-close——LLM 输出不可控，硬闸门会因格式问题卡死建任务；
+- **无 DDL 迁移**：`final_package` 与 `task.context.requirementPackage` 均为 JSONB，加键零迁移；`ClarifyReplyParser.resolvePackage` 整体透传，无需改动。
 
 ### D2：存储 = 会话列 + task.context 双写
 
@@ -132,6 +143,7 @@
 - 轨道 A 补两条：
   - **ASSUMPTION 类申报不构成驳回理由**（按「假设是否被产出尊重」核验，而非「假设是否存在」）；**UNCONFIRMED 类申报的产出中须含验证结论或 BLOCKED 上报痕迹**，既未验证也未上报的按不达标处理；
   - **执行约束（constraints）核验**：产出不得违反 constraints 声明的「不许改/不许越界」项（例：constraints=「不得改对外接口签名」而产出含接口签名变更 → 按不达标驳回）；constraints 为空时本条跳过。
+- **〔P2 批次 2026-09-11 补强〕轨道 A 第 10 条：缺失证据清单（P2-4）**——判定不通过且缺陷与验收标准相关时，输出 `missingEvidence`（`acceptanceRef` 用被驳回验收标准的**原文子串**便于机械核对 / `missing` 缺什么证据 / `howTo` 怎样补齐；通过或缺陷仅属纪律条款时为空数组），只作返工指引，不参与 pass 判定。落库：`rejectAndRework` 把归一后的清单写入 `context.reviewHistory` 当前轮（JSONB 加键零迁移，同 `executorDoneIssues` 先例）；下行：`buildReworkSummary` 追加「缺失证据清单」段，外部 agent 经返工 inbox 摘要自然携带；解析侧 `VerdictParser.normalizeMissingEvidence` 防御归一（缺失/非数组/元素非对象 → 空清单，零影响）。
 
 ---
 
@@ -145,7 +157,7 @@
 ## 需求包（结构化准入产物）
 
 {{REQUIREMENT_PACKAGE}}
-<!-- 渲染规则：五字段逐项列表（空数组字段不渲染）；无需求包时渲染
+<!-- 渲染规则：六字段逐项列表（空数组字段不渲染）；无需求包时渲染
 「（本任务未经过澄清链路，无结构化需求包——按任务描述拆解）」 -->
 ```
 
@@ -163,6 +175,11 @@
 
 ```markdown
 - 需求包 outOfScope 内条目不得出现在任何子任务的目标、内容或交付物中（边界硬约束）。
+- **任务级验收覆盖（P1-1）**：需求包 acceptanceCriteria 非空时，其中每一条都必须被至少一个子任务的
+  验收标准覆盖（封闭集合全覆盖——不得遗漏，也不得新增需求包之外的验收条目）；每个子任务的
+  acceptance 在适用时须标注它服务的是哪一条（如「（对应任务级验收条目 2）」），契约定义子任务与
+  纯过程性（脚手架 / 环境准备）子任务可不标注。acceptanceCriteria 为空（未走澄清链路的任务）时
+  本项不做要求。
 ```
 
 **输出 schema 扩展**
@@ -189,11 +206,14 @@
  "description": "结构化需求描述",
  "package": {
    "goal": "...", "scope": ["..."], "outOfScope": ["..."],
+   "acceptanceCriteria": ["..."],
    "assumptions": ["..."], "openQuestions": ["..."]
  }}
 ```
 
-提示词约束增补：package 从对话中提炼，**推断项必须进 assumptions 并在 description 同步标注（推断），不得伪装成用户确认过的事实**；六维自检第 6 维（边界与排除项）的产出落 outOfScope；各数组可为空（`[]`），不得为凑格式虚构条目。
+提示词约束增补：package 从对话中提炼，**推断项必须进 assumptions 并在 description 同步标注（推断），不得伪装成用户确认过的事实**；六维自检第 6 维（边界与排除项）的产出落 outOfScope；`acceptanceCriteria` 为**用户视角的任务级验收条目**（封闭集合，每条都要能判定通过与否——拆解侧据此做全覆盖校验、子任务验收据此回溯锚定）；各数组可为空（`[]`），不得为凑格式虚构条目。
+
+**职责划分（P1-3，两模板同步写死）**：description 是人类可读的**完整规格**（四个小节正文必须完整给出，不得只写摘要或压缩复述）；package 是 description 的**结构化边界索引**（供机器引用），禁止以 package 概括代替 description 正文，两者须同时给出且口径一致。原「package 与 description 同源」表述正是「压缩复述」的土壤，故改为上述显式职责划分。
 
 ### 2.3 解析与落库（PlannerAnalysisService / RequirementClarifyService）
 
@@ -250,10 +270,10 @@ COMMENT ON COLUMN requirement_conversation.final_package IS '澄清终稿结构�
 | 步 | 内容 | 验证口径 |
 |---|---|---|
 | S1 数据层 | V75 迁移 + SubTask / RequirementConversation 实体 + RequirementPackageParser + 单测 | 存量回归：无新字段数据时全链行为零变化（编译 + 全量单测）；解析器防御式用例全覆盖 |
-| S2 澄清侧 | 两处终稿提示词 package 扩展 + ClarifyReplyParser + 会话落库 + buildTaskFromDraft 双写 | final 带 package 全链落库；package 缺失/非法降级纯文本终稿（= 现状）；regenerate 双写复用 |
-| S3 拆解侧 | planner-decompose.md 一段一要求 + PlanDraftItem 一字段 + buildDrafts 降级/审计落库 + D5 兜底 WARN | openQuestions 继承可见；非法 kind 降级 UNCONFIRMED；越界拆解由实测核验 |
+| S2 澄清侧 | 两处终稿提示词 package 扩展（**P1：六字段 + description/package 职责写死**）+ ClarifyReplyParser + 会话落库 + buildTaskFromDraft 双写 | final 带 package 全链落库（含 acceptanceCriteria）；package 缺失/非法降级纯文本终稿（= 现状）；regenerate 双写复用；description 四小节完整（P1-3 校验 + 重试） |
+| S3 拆解侧 | planner-decompose.md 一段一要求 + **P1：任务级验收覆盖硬约束** + PlanDraftItem 一字段 + **P1：必填字段 fail-close 校验** + buildDrafts 降级/审计落库 + D5 兜底 WARN | openQuestions 继承可见；非法 kind 降级 UNCONFIRMED；越界拆解由实测核验；**P1：acceptanceCriteria 非空时产物全覆盖（人工核验）；title/content/deliverable/acceptance 缺失即整批拒绝并记 task_plan_draft_field_missing** |
 | S4 传递链 | buildUserPrompt 三段 + ReviewExecutionEngine + subtask-review.md 语义 + REST / inbox 下行 + 草案确认 UI | 内部执行 prompt 三段贯通（空值零注入）；审查 prompt 含 constraints + uncertainties；外部 REST 可见；UI 可编辑 |
-| S5 实测收口 | 真实任务双场景 + 文档回填（差距表 G-011 / 迭代日志 / 介绍文档） | **与 G-010 S4 合并执行**（同一环境一轮双场景：场景 A 内部兜底 / 场景 B 外部 agent，同时核验 G-010 六维与 G-011 五维验收口径）。<br>**〔实测落地 2026-09-09/10〕** 平台内链全闭环（含 jsonb 定点写 bug 修复 + 脚本端点失配修复）+ 外部双轮全链闭环（审查者引用 uncertainties 申报作驳回依据）——见差距表 G-011 S5。 |
+| S5 实测收口 | 真实任务双场景 + 文档回填（差距表 G-011 / 迭代日志 / 介绍文档） | **与 G-010 S4 合并执行**（同一环境一轮双场景：场景 A 内部兜底 / 场景 B 外部 agent，同时核验 G-010 六维与 G-011 五维验收口径）。<br>**〔实测落地 2026-09-09/10〕** 平台内链全闭环（含 jsonb 定点写 bug 修复 + 脚本端点失配修复）+ 外部双轮全链闭环（审查者引用 uncertainties 申报作驳回依据）——见差距表 G-011 S5。<br>**〔P2 批次 2026-09-11〕** 回归口径升级：`verify-requirement-clarify-structured.ps1` 由「追问即 abandon」扩至「澄清 → 终稿」全链，软断言 description 小节组命中 ≥3 / 长度 ≥300 / `final_package` 存在（LLM 输出不可控，不 hard fail，沿用脚本既有 SOFT 先例）。 |
 
 依赖顺序：S1 → S2 → S3 → S4 严格串行；S5 与 G-010 S4 合并（两者改动面在执行实测处汇合，省一次环境搭建）**〔2026-09-10 收口：合并实测已执行完毕——平台内链 2026-09-09 + 外部双轮 2026-09-10〕**。G-010 S4 设计期 BLOCKED（dev 环境 + LLM Key + 外部 agent）未阻塞本批 S1~S4 开工——本批改动面是澄清侧 + 提示词 + 装配链，与实测解耦。
 
@@ -283,6 +303,11 @@ COMMENT ON COLUMN requirement_conversation.final_package IS '澄清终稿结构�
 4. **执行注入**：内部执行 prompt 含不确定性申报段（分级后缀）+ 事实回源声明 + constraints（COARSE 非空时）；外部 agent 经任务详情 REST 可见 uncertainties；旧外部 agent（未升级 zip）行为无变化。
 5. **审查语义**：ASSUMPTION 类申报不构成驳回理由（审查提示词实测：假设被产出尊重即通过）；UNCONFIRMED 既未验证也未上报 → 按不达标驳回；constraints 非空时产出违反「不许改/不许越界」项 → 按不达标驳回。
 6. **存量回归**：无 package / uncertainties=[] 的存量任务，澄清、拆解、执行、审查全链行为与现状一致（编译 + 全量单测 + 双场景实测对照组）。
+7. **任务级验收覆盖（P1-1）**：需求包 `acceptanceCriteria` 非空时，拆解产物每条任务级验收条目都被至少一个子任务的验收标准覆盖（封闭集合全覆盖，无遗漏无新增）；子任务 acceptance 适用时标注了对应条目；`acceptanceCriteria` 为空的存量任务不做回溯要求、行为与现状一致。校验方式为提示词硬约束 + 人工核验（软审计），不做 fail-close。
+8. **描述信息量不减（P1-3）**：澄清/终稿产物中 description 四个小节正文完整（非 package 概括复述）；缺小节时同轮追加纠偏指令重试 1 次，重试后仍缺则放行并记 timeline WARN（fail-open，不阻断建任务）。
+9. **终稿信息量回归（P2-2）**：`verify-requirement-clarify-structured.ps1` 覆盖「澄清 → 终稿」全链，软断言 description 小节组命中 ≥3 / 长度 ≥300 字 / `final_package` 存在；同时保留「人工核对 description 信息量」口径（LLM 输出不可控，脚本软断言 + 人工抽查双轨，不设硬阈值）。
+10. **主任务详情可见（P2-1）**：主任务列表描述弹窗已扩展为「任务详情」——任务描述 + 需求包六字段（含任务级验收标准块）；`task.context.requirementPackage` 缺失/非法/六字段全空时需求包整块隐藏，存量任务展示零变化（后端零改动，`Task.context` 在 list / getById 响应中本就可见）。
+11. **驳回返工可执行（P2-4）**：审查驳回时 `missingEvidence` 逐条给出「验收标准原文子串 + 缺什么证据 + 怎样补齐」，经 `context.reviewHistory` 落库并由返工 inbox 摘要以「缺失证据清单」段携带；LLM 未产出/形态非法时降级空清单，不影响 pass 判定与状态流转（防御承接）。
 
 ---
 
@@ -291,7 +316,7 @@ COMMENT ON COLUMN requirement_conversation.final_package IS '澄清终稿结构�
 | # | 决策 | 选项 | 拍板 | 状态 |
 |---|---|---|---|---|
 | 1 | 登记口径 | 新 G-011 vs 并入 G-010 | **新 G-011**（G-010=拆解侧，G-011=准入侧+契约侧，同 G-010 D7 边界论证） | ✅ 已拍板 |
-| 2 | 需求包 schema | 三方并集 vs 压缩版 | **5 字段压缩版**（不取 reviewTriggers / blockers 并入 openQuestions / 不加任务级 acceptanceCriteria） | ✅ 已拍板 |
+| 2 | 需求包 schema | 三方并集 vs 压缩版 | ~~5 字段压缩版（不取 reviewTriggers / blockers 并入 openQuestions / 不加任务级 acceptanceCriteria）~~ → **2026-09-11 P1 修订：6 字段（补回任务级 acceptanceCriteria）**，反转理由与落地口径见 D1 P1 修订段 | ✅ 已拍板（2026-09-11 反转修订） |
 | 3 | 需求包存储 | 会话列 vs task.context vs 双写 | **双写**（会话列为权威源，regenerate 依赖会话终稿；task.context 为拆解链读取点） | ✅ 已拍板 |
 | 4 | uncertainties 载体 | 显式列 vs context JSONB | **显式 JSONB 列**（同 G-010 D4 论证：草案 UI 可编辑、审查可引用；kind=ASSUMPTION/UNCONFIRMED 消歧命名） | ✅ 已拍板 |
 | 5 | gap_kind 时机 | 采集即路由 vs 采集先行 vs 后置 | **后置到中期**（G-008 能力可验证基线就绪后随成本路由一并接入；REUSE→弱 / EXTEND→中 / NEW_BUILD→强） | ✅ 已拍板（2026-09-09 上轮二次修正） |
@@ -305,3 +330,15 @@ COMMENT ON COLUMN requirement_conversation.final_package IS '澄清终稿结构�
 | 8 | G-010 constraints 执行侧缺口 | 本批 S4 一并清偿 | 缺口为 G-011 注入点的同一改动面（buildUserPrompt），拆开做两次无意义 |
 | 9 | D5 兜底 WARN 与 G-010 缺口④ | 本批 S3 一并实现 | 同为 buildDrafts 的 timeline WARN 模式，顺手清偿欠账 |
 | 10 | G-010 constraints 审查侧缺口 | 本批 S4 一并清偿 | 审查侧注入 {{CONSTRAINTS}} + 轨道 A 约束遵守核验（D7），与执行侧注入（决策 8）构成 constraints 完整闭环，避免留半截 |
+
+**P1 批次新增决策（2026-09-11）**：
+
+| # | 决策 | 取值 | 理由 |
+|---|---|---|---|
+| 11 | 任务级 `acceptanceCriteria`（反转决策 2） | 补回需求包第 4 字段（字符串数组，用户视角封闭集合）；拆解侧全覆盖校验 + 子任务 acceptance 回溯锚定；无需求包任务不做要求 | 子任务 acceptance 是执行级验证点、任务级条目是用户视角验收口径，二者不是同一口径的两份副本，原「双份验收口径漂移」顾虑不成立；缺失任务级条目时整体覆盖无机器可判据 |
+| 12 | P1-1 校验强度 | 提示词硬约束 + 人工核验（软审计），不做 fail-close | 与 D5 同模式：LLM 输出不可控，硬闸门会因格式问题卡死建任务；落库侧残缺草案由 P1-2 必填 fail-close 兜住 |
+| 13 | description 与 package 职责（P1-3） | description=人类可读完整规格（四小节正文完整）；package=结构化边界索引；禁止以 package 概括代替 description 正文 | 原「同源」表述是压缩复述的土壤；职责写死（提示词）+ 小节校验/重试（代码，fail-open）双保险 |
+| 14 | 拆解必填字段强度（P1-2） | title/content/deliverable/acceptance 任一缺失即整批拒绝（BizException）+ timeline `task_plan_draft_field_missing` 审计 | 落库残缺草案（acceptance=null）会让执行侧失去验收依据、审查侧无标准可核，代价远高于拆解失败；失败可经 republish / planById 重触发（入口既有） |
+| 15 | 终稿信息量回归防线（P2-2） | 脚本软断言 + 人工核对，不设硬门槛 | `verify-requirement-clarify-structured.ps1` 原走到追问即 abandon，「澄清 → 终稿」描述信息量无任何回归防线（真缺口）；LLM 输出不可控，硬断言会让脚本日常飘红，沿用脚本既有 SOFT 先例（参考 freeform 路径处理） |
+| 16 | 主任务详情可见性（P2-1） | 前端描述弹窗扩展为「任务详情」，后端零改动 | `task.context.requirementPackage` 已在 list / getById 响应中（`Task.context` 无 `@JsonIgnore`），前端全库此前 0 命中 = 需求包对用户完全不可见；无需求包整块隐藏，存量任务零变化 |
+| 17 | 审查驳回返工线索（P2-4） | 轻方案 A：审查输出补 `missingEvidence` 结构化清单；不做 acceptance 编号化协议（方案 B） | acceptance 是自由文本无编号，「对应验收条目」无法硬锚定；`acceptanceRef` 用「验收标准原文子串」实现机械可核（子串匹配）；`reviewHistory` JSONB 加键零迁移（同 `executorDoneIssues` 先例），`buildReworkSummary` 渲染后外部 agent inbox 自然携带 |
