@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1220" height="790" viewBox="0 0 1220 790" font-family="-apple-system,'Segoe UI','Microsoft YaHei',sans-serif">
   <rect x="8" y="8" width="1204" height="774" rx="14" fill="#f6f8fb" stroke="#d9dfe9"/>
   <text x="28" y="38" font-size="15" font-weight="700" fill="#1b2430">现有包结构 → 目标架构五层归位</text>
-  <text x="28" y="58" font-size="10.5" fill="#8b96aa">2026-09 代码核查 · helloai-core 6 域 47 子包 · 逐包状态与职责标注</text>
+  <text x="28" y="58" font-size="10.5" fill="#8b96aa">2026-09-11 代码核查 · helloai-core 6 域 47 子包 · 逐包状态与职责标注</text>
   <rect x="1010" y="28" width="10" height="10" rx="2" fill="#14855a"/>
   <text x="1024" y="37" font-size="11" fill="#55617a">已归位</text>
   <rect x="1078" y="28" width="10" height="10" rx="2" fill="#96690a"/>
@@ -135,7 +135,7 @@
   <rect x="777" y="367" width="196" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
   <rect x="778" y="368" width="3" height="32" rx="1.5" fill="#14855a"/>
   <text x="789" y="381" font-size="12" font-weight="600" fill="#1b2430">AgentLoop · ToolExecutor</text>
-  <text x="789" y="394" font-size="10.5" fill="#55617a">已落地 · 待灰度接线</text>
+  <text x="789" y="394" font-size="10.5" fill="#55617a">已落地 · 灰度第 0 步闭合</text>
 
   <!-- Capability 层 -->
   <rect x="20" y="422" width="1180" height="60" rx="10" fill="#ffffff" stroke="#d9dfe9"/>
@@ -147,7 +147,7 @@
   <rect x="162" y="435" width="124" height="34" rx="7" fill="#faf1da" stroke="#e9d49e"/>
   <rect x="163" y="436" width="3" height="32" rx="1.5" fill="#96690a"/>
   <text x="174" y="449" font-size="12" font-weight="600" fill="#1b2430">agent.skill</text>
-  <text x="174" y="462" font-size="10.5" fill="#55617a">元数据化（G-004）</text>
+  <text x="174" y="462" font-size="10.5" fill="#55617a">Instructions 结构化待续</text>
   <rect x="292" y="435" width="114" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
   <rect x="293" y="436" width="3" height="32" rx="1.5" fill="#14855a"/>
   <text x="304" y="449" font-size="12" font-weight="600" fill="#1b2430">agent.tool</text>
@@ -208,10 +208,10 @@
   <rect x="485" y="572" width="3" height="32" rx="1.5" fill="#14855a"/>
   <text x="496" y="585" font-size="12" font-weight="600" fill="#1b2430">task.observability</text>
   <text x="496" y="598" font-size="10.5" fill="#55617a">Timeline 已并轨（A6）</text>
-  <rect x="633" y="571" width="126" height="34" rx="7" fill="#faf1da" stroke="#e9d49e"/>
-  <rect x="634" y="572" width="3" height="32" rx="1.5" fill="#96690a"/>
+  <rect x="633" y="571" width="126" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
+  <rect x="634" y="572" width="3" height="32" rx="1.5" fill="#14855a"/>
   <text x="645" y="585" font-size="12" font-weight="600" fill="#1b2430">Replay · Audit</text>
-  <text x="645" y="598" font-size="10.5" fill="#55617a">读侧已落地（A7）· 待接 UI</text>
+  <text x="645" y="598" font-size="10.5" fill="#55617a">API + UI 已落地</text>
   <rect x="765" y="571" width="126" height="34" rx="7" fill="#fbe8e8" stroke="#efc0c4" stroke-dasharray="4 2"/>
   <rect x="766" y="572" width="3" height="32" rx="1.5" fill="#c24848"/>
   <text x="777" y="585" font-size="12" font-weight="600" fill="#1b2430">Recovery · Fork</text>
@@ -247,7 +247,7 @@
   <rect x="890" y="656" width="157" height="34" rx="7" fill="#faf1da" stroke="#e9d49e"/>
   <rect x="891" y="657" width="3" height="32" rx="1.5" fill="#96690a"/>
   <text x="902" y="669" font-size="12" font-weight="600" fill="#1b2430">Fleet 选人现状</text>
-  <text x="902" y="682" font-size="10.5" fill="#55617a">Selector + 画像 → G-008</text>
+  <text x="902" y="682" font-size="10.5" fill="#55617a">硬门槛+分排序实证 → G-008</text>
 
   <!-- 核心张力 -->
   <rect x="20" y="708" width="1180" height="60" rx="10" fill="#ffffff" stroke="#d9dfe9"/>

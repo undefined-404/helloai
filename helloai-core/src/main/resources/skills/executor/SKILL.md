@@ -136,7 +136,7 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 > ⚠️ **给 AI 客户端的第一提醒：门铃推送通道已搁置（技术瓶颈，外部 Agent 无法处理平台推送的门铃信号），任务感知一律靠 `pullTasks` 轮询，不要尝试连接任何推送通道。**
 > - 上线后**第一步必须用 MCP 工具 `checkIn` 打卡**（拿到 ACTIVE 打卡租约，在岗状态与租约入口）。
 > - **三通道工具面已对齐**：`checkIn` / `checkOut` / `getAgentStatus` 在 MCP SSE、REST 别名 `POST /api/mcp/jsonrpc`、REST 直通 `POST /api/mcp/tools/*` 均可调用（A0-3 起，§0.1 总表）。
-> - **REST 别名通道（A0-2 新增）**：`POST {{BASE_URL}}/api/mcp/jsonrpc` 已补齐全部 11 工具（含 `checkIn`/`checkOut`/`getAgentStatus`/`getDepsSummary`），**无状态、同步响应、不依赖 MCP session**——SSE 断开（Session not found）时用它兜底，无需重新 4 步握手。
+> - **REST 别名通道（A0-2 新增）**：`POST {{BASE_URL}}/api/mcp/jsonrpc` 已补齐全部 12 工具（含 `checkIn`/`checkOut`/`getAgentStatus`/`getDepsSummary`/`getSubTaskDetail`），**无状态、同步响应、不依赖 MCP session**——SSE 断开（Session not found）时用它兜底，无需重新 4 步握手。
 > - 若确实没有 MCP 客户端，可用 REST 轮询兜底（见第三节），但优先走 MCP。
 
 ### 1.1 连接配置
@@ -178,7 +178,7 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 
 > 🧭 **`checkIn` 租约机制（实测必看）**
 > - 租约签发：`expires_at = now + ttlMinutes`，默认 30 分钟；到期后被 `DutyLeaseExpirationTask`（30s 周期）翻为 EXPIRED，即视为离岗（不在调度候选），需重新 `checkIn` 拿新租约。
-> - **工具调用自动续约（A0-8）**：除 `checkIn`/`checkOut` 外，任一工具调用（`pullTasks` / `heartbeat` / `claimSubTask` / `submitResult` / `reportBlocked` / `uploadArtifact` / `ack` / `getAgentStatus` / `getDepsSummary`）都会把当前 ACTIVE 租约按**原 TTL 窗口**顺带延长（`expires_at = 调用时刻 + 原TTL`）。**长任务执行期间正常调用工具即可保活，无需周期性重做 checkIn**；只有超过 TTL 无任何工具调用才会掉线。
+> - **工具调用自动续约（A0-8）**：除 `checkIn`/`checkOut` 外，任一工具调用（`pullTasks` / `heartbeat` / `claimSubTask` / `submitResult` / `reportBlocked` / `uploadArtifact` / `ack` / `getAgentStatus` / `getDepsSummary` / `getSubTaskDetail`）都会把当前 ACTIVE 租约按**原 TTL 窗口**顺带延长（`expires_at = 调用时刻 + 原TTL`）。**长任务执行期间正常调用工具即可保活，无需周期性重做 checkIn**；只有超过 TTL 无任何工具调用才会掉线。
 > - DB 部分唯一索引 `uk_duty_lease_agent_active` 阻止同一 Agent 多条 ACTIVE 行；需要更换 TTL / 工作模式等参数时，仍可 `checkOut` 旧租约后再 `checkIn` 一次。
 > - **建议节奏**：任务执行期间按 30 秒~1 分钟节奏 `pullTasks` 轮询 + 关键节点 `heartbeat` 自检即可持续在岗，TTL 用尽前无需手动重做 checkIn。
 > - **租约 sessionId 与 MCP session 是两回事（A0-6 澄清）**：`agent_duty_lease.session_id` 是平台签发的**租约会话标识**（UUID，checkIn 返回，仅标识这份租约）；MCP transport session 是 **SSE 长连接的传输会话**（4 步握手建立）。两者相互独立——SSE 断开/重连不失效租约，租约过期也不影响重连。断连重连后先用 `getAgentStatus` / `heartbeat` 自检租约是否仍 ACTIVE，再决定是继续值班还是重新 `checkIn`。
@@ -253,7 +253,7 @@ T+60s     : heartbeat + pullTasks
 **(3) Session 失效（Session not found）与 REST 别名兜底（A0-2）**
 - spring-ai 的 MCP session **严格绑定 SSE 长连接**：连接断开/超时（网络抖动、客户端重启、空闲超时）即失效，之后 `POST /mcp/messages?sessionId=<旧sid>` 会报 **404 Session not found**——这是服务端协议行为，旧 sessionId 无法复活。
 - **修复路径 A（推荐）**：重新走四步握手（重新 GET /mcp/sse 拿新 sessionId）。
-- **修复路径 B（免握手）**：改走 **REST 别名通道 `POST {{BASE_URL}}/api/mcp/jsonrpc`**——A0-2 起已补齐全部 11 工具（含 `checkIn`/`checkOut`/`getAgentStatus`/`getDepsSummary`），**无状态、同步响应**，只带 `Authorization: Bearer <API_KEY>` 即可，不依赖任何 session。请求格式：`{"jsonrpc":"2.0","method":"tools/call","params":{"name":"checkIn","arguments":{"workMode":"AUTO"}},"id":1}`；工具清单与参数 Schema 可先调 `tools/list` 获取。
+- **修复路径 B（免握手）**：改走 **REST 别名通道 `POST {{BASE_URL}}/api/mcp/jsonrpc`**——A0-2 起已补齐全部 12 工具（含 `checkIn`/`checkOut`/`getAgentStatus`/`getDepsSummary`/`getSubTaskDetail`），**无状态、同步响应**，只带 `Authorization: Bearer <API_KEY>` 即可，不依赖任何 session。请求格式：`{"jsonrpc":"2.0","method":"tools/call","params":{"name":"checkIn","arguments":{"workMode":"AUTO"}},"id":1}`；工具清单与参数 Schema 可先调 `tools/list` 获取。
 - 推荐节奏：优先 MCP SSE 通道；一旦遇到 `Session not found` / `session 未鉴权或已过期`，切 REST 别名通道继续本轮轮询，不必中断任务。
 
 **(4) 心跳是唯一的在线证明**
@@ -919,6 +919,6 @@ python task-cli.py --key <API_KEY> update        # 更新 CLI + SKILL
 | 405 | GET `startById` | 开始执行是 POST 端点 | 用 `POST /api/sub-tasks/startById/{id}`（无 body） |
 | 500 | `Agent 未在岗（无 ACTIVE 打卡租约）` | 未 checkIn 就调用依赖在岗状态的能力 | 先调 `checkIn`（MCP / REST 别名 / REST 直通均可）再调用 |
 | 500 | `sessionId 不能为空` | tool arguments 漏 `sessionId` 字段 | 把 SSE endpoint 帧拿到的 sid **同时**拼进 URL `?sessionId=` 与 arguments `sessionId` |
-| 500 | `Unknown tool: xxx` | 工具名拼错 | 先 `tools/list`（或 `GET /api/mcp/tools`）拿权威清单（§0.1 三通道 11 工具） |
+| 500 | `Unknown tool: xxx` | 工具名拼错 | 先 `tools/list`（或 `GET /api/mcp/tools`）拿权威清单（§0.1 三通道 12 工具） |
 
 > **建议**：优先走 MCP（全套工具 + 统一心跳/租约语义）；无 MCP 客户端时用 REST curl 轮询兜底；CLI 仅覆盖 poll/submit/status 三个高频操作。

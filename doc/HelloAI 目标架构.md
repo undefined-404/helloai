@@ -4,7 +4,7 @@
 >
 > 本文档定义未来稳定架构边界，不表示所有能力当前已经落地。
 >
-> 最后更新：2026-09-09（Planner 增强定界：G-010 能力感知与自适应粒度 / G-011 需求包准入与不确定性显式管理）
+> 最后更新：2026-09-11（Planner 增强定界：G-010 能力感知与自适应粒度 / G-011 需求包准入与不确定性显式管理；定界（2026-09-09）后两者均已实施并双场景实测，见需求包与不确定性设计文档）
 
 # 1. 目标定位
 
@@ -106,7 +106,7 @@ Requirement Package（需求包：goal / scope / outOfScope / assumptions / open
 - **不建自动闸门**：openQuestions 不阻断拆解/派发，裁决点在草案确认（人工）与执行侧（fail-close 走既有 BLOCKED 链）；不建"需求管理中心"平行架构；
 - **契约向后兼容**：REST / inbox 只增可选字段，外部 Agent 未升级无感知。
 
-设计文档：`doc/design/Planner_Capability_Awareness.md`（G-010，S1~S3 已落地）、`doc/design/Requirement_Package_Uncertainty.md`（G-011，设计落稿待实施）。
+设计文档：`doc/design/Planner_Capability_Awareness.md`（G-010，S1~S4 已落地含双场景实测，2026-09-09~10）、`doc/design/Requirement_Package_Uncertainty.md`（G-011，S1~S5 已落地含双场景实测，2026-09-09~10）。
 
 ## Orchestration Layer
 

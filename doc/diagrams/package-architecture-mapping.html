@@ -34,7 +34,7 @@ body{margin:0;padding:24px;background:#f6f8fb;font-family:-apple-system,"Segoe U
 </head>
 <body>
 <div class="pmap" data-template="package-target-mapping">
-  <div class="hd"><span class="t">现有包结构 → 目标架构五层归位</span><span class="s">2026-09-08 全库代码核查 · helloai-core 6 域 47 子包</span></div>
+  <div class="hd"><span class="t">现有包结构 → 目标架构五层归位</span><span class="s">2026-09-11 全库代码核查 · helloai-core 6 域 47 子包</span></div>
   <div class="lg"><span class="ok"><b></b>职责与目标层一致</span><span class="wa"><b></b>职责正确 / 待搬家或深化（G-00x 锚点）</span><span class="ga"><b></b>目标层缺口</span></div>
 
   <div class="layer"><div class="lb"><div class="n">接入层</div><div class="e">api / start</div></div><div class="chips">
@@ -69,11 +69,11 @@ body{margin:0;padding:24px;background:#f6f8fb;font-family:-apple-system,"Segoe U
     <span class="chip ok">agent.mqconsumer<i>统一执行入口（全路径经 Runtime 契约）</i></span>
     <span class="chip wa">agent.service.SubTaskExecutionService<i>Legacy 编排真身（默认路径，runtime-enabled=false）</i></span>
     <span class="chip wa">agent.session<i>恢复检查点（暂居独立包）→ 并轨 runtime/loop 为后续项</i></span>
-    <span class="chip ok">RuntimeTurnExecutor / AgentLoop / ToolExecutor<i>八件套组装真身（G-003）· runtime-enabled 开关默认 Legacy，真灰度待联调</i></span>
+    <span class="chip ok">RuntimeTurnExecutor / AgentLoop / ToolExecutor<i>八件套组装真身（G-003）· runtime-enabled 开关默认 Legacy；灰度第 0 步已闭合（2026-09-08）</i></span>
   </div></div>
 
   <div class="layer"><div class="lb"><div class="n">Capability 层</div><div class="e">Skill / Tool / Sandbox</div></div><div class="chips">
-    <span class="chip wa">agent.skill<i>SkillPackage 元数据已落地（8 字段 + eng-* 三包物化）→ 消费面接线待续 G-004</i></span>
+    <span class="chip wa">agent.skill<i>SkillPackage 元数据 + 联动接线 + 拆解通路已落地（8 字段 + eng-* 三包物化）；Instructions 结构化待续 → G-004</i></span>
     <span class="chip ok">agent.tool<i>ToolRegistry 12 工具元数据 + ToolCallbackToolExecutor 执行回路（同源）</i></span>
     <span class="chip ok">agent.mcp<i>MCP 工具面（拉取 / 回报 / 心跳）</i></span>
     <span class="chip ok">system.storage<i>产物存储 Local / MinIO</i></span>
@@ -91,7 +91,7 @@ body{margin:0;padding:24px;background:#f6f8fb;font-family:-apple-system,"Segoe U
     <span class="chip ok">agent.event<i>AgentEventRecorder 写侧 + 事件对账</i></span>
     <span class="chip ok">agent.entity.AgentEvent<i>Run / Turn / Step 三层</i></span>
     <span class="chip ok">task.observability<i>Timeline 已并轨（A6）</i></span>
-    <span class="chip wa">Replay / Audit<i>读侧已落地（A7）· 待接 UI</i></span>
+    <span class="chip ok">Replay / Audit<i>API + UI 已落地（A7 读侧 + C1 工作台 + D 端点）</i></span>
     <span class="chip ga">Recovery / Fork<i>未建 → G-006</i></span>
   </div></div>
 
@@ -102,7 +102,7 @@ body{margin:0;padding:24px;background:#f6f8fb;font-family:-apple-system,"Segoe U
     <span class="chip ok">system<i>凭证 Vault + 加密 + 产物存储</i></span>
     <span class="chip ok">helloai-mq<i>Producer / Consumer 封装</i></span>
     <span class="chip ok">helloai-common<i>常量 / 枚举 / 工具 / 加密原语</i></span>
-    <span class="chip wa">Fleet 选人现状<i>AgentSelector（角色槽位）+ quality 画像 + Heartbeat / Stats → G-008</i></span>
+    <span class="chip wa">Fleet 选人现状<i>AgentSelector（技能硬门槛 + 分排序已实证 2026-09-10）+ quality 画像 + Heartbeat / Stats → G-008</i></span>
   </div></div>
 
   <div class="note"><b>核心张力：agent 是横跨 4 个目标层的巨域</b>（Runtime / Capability / Provider / Fleet 全在 com.helloai.core.agent 下），且 agent.service 按"域内服务聚集"而非按目标层聚集（28 个 Service 混装 Legacy 编排 / 平台执行 / 心跳统计 / 凭证 / Team）。G-002 / G-003 的提取工作全部发生在这个域内部——这也是为什么不推倒重来、而是从旧执行链逐件提取组件。</div>

@@ -2,9 +2,9 @@
 
 > **状态：ACTIVE**
 >
-> 当前主线：**Event Stream → Dual Executor → AgentRuntime → Skill Capability → Sandbox Provider**；P0 全链收官，P1 主体推进——G-004 / G-006 / G-010 / G-011 落地并完成 2026-09-10 外部执行者双轮全链闭环（Round2/Round3）。后续：P1 剩余项（Recovery/Fork 消费面 / Skill 回流规范 / Sandbox 第二阶段）+ 技术债清偿。
+> 当前主线：**Event Stream → Dual Executor → AgentRuntime → Skill Capability → Sandbox Provider**；P0 全链收官，P1 主体推进——G-004 / G-006 / G-010 / G-011 落地并完成 2026-09-10 外部执行者双轮全链闭环（Round2/Round3）。后续：P1 剩余项（Recovery/Fork 消费面 / Skill 回流规范 / Sandbox 第二阶段）+ 技术债清偿。近况增量：2026-09-11 外部上下文供给打通（子任务详情 MCP 工具 V76 + REST/inbox 三通道，提交 8fa09e0）。
 >
-> 最后更新：2026-09-10
+> 最后更新：2026-09-11
 
 # 1. 重构目标
 
@@ -244,7 +244,7 @@ Recovery
 Fork
 ```
 
-现状（2026-09-10）：Timeline 已并轨 Event（A6）；Replay / Audit 全链暴露——读侧（A7，见 P0-A）→ API + UI 工作台（增量 C1）→ 外部认领埋点 + run 级汇总卡（增量 C2）→ 任务/子任务维度端点（免传 runId，service 内部推导）+ 工作台选择器/名称解析/payload 结构化展开/事件流深链（增量 D）；外部执行轨迹加厚为四事件（AGENT_STARTED → AGENT_COMPLETED → REVIEW_STARTED → REVIEW_APPROVED），agent_execution_record 仍 0 行（细线状态，登记 G-006 剩余缺口）。Recovery / Fork 消费面待建（当前下一动作）。
+现状（2026-09-10）：Timeline 已并轨 Event（A6）；Replay / Audit 全链暴露——读侧（A7，见 P0-A）→ API + UI 工作台（增量 C1）→ 外部认领埋点 + run 级汇总卡（增量 C2）→ 任务/子任务维度端点（免传 runId，service 内部推导）+ 工作台选择器/名称解析/payload 结构化展开/事件流深链（增量 D）；外部执行轨迹加厚为四事件（AGENT_STARTED → AGENT_COMPLETED → REVIEW_STARTED → REVIEW_APPROVED），agent_execution_record 仍 0 行（细线状态，登记 G-006 剩余缺口）。Recovery / Fork 消费面待建（当前下一动作；注：MQ 级死信恢复 dlx 包——DeadLetterRecoveryService / DlxAlertConsumer / V60 mq_dead_letter_archive——为子任务重派兑底，属命令/结果链路，**非** Event Stream 消费面，两者勿混）。
 
 # 8. P1：Planner 能力感知与自适应粒度（G-010）
 
