@@ -112,6 +112,19 @@ export function eventCategory(eventType: string): EventCategory {
   return '流程'
 }
 
+// 分类 → 语义色（G-006 事件流工作台时间线节点 / 事件卡左侧色条共用）
+// 与 el-tag / stat-tile-icon / EP timeline dot 同色族，亮暗双主题自动跟随。
+export function eventCategoryColor(cat: EventCategory): EventTone {
+  switch (cat) {
+    case '分发': return 'primary'
+    case '执行': return 'info'
+    case '核验': return 'success'
+    case '任务': return 'primary'
+    case '人工介入': return 'warning'
+    case '流程': return 'info'
+  }
+}
+
 // ── payload 结构化解构（G-006 增强：把关键字段从 JSON 原文中解锁为可读行） ──
 // 高频 payload 键 → 中文标签；未命中键回退原始键名
 const PAYLOAD_KEY_LABEL: Record<string, string> = {

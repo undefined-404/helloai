@@ -1,14 +1,113 @@
 <template>
   <div class="page ha-entrance-up">
-    <el-card class="head-card full-row">
-      <template #header>
-        <div class="card-header">
-          <span>事件流工作台</span>
-          <span class="head-note">G-006：Agent 事件回放（Replay）与审计（Audit），数据源 agent_event 执行轨迹表（只读）</span>
+    <!-- ── 1. 页面标题区（与 ReviewList / BrowserSessionList 同构） ── -->
+    <div class="page-head">
+      <div class="page-head-title">
+        <div class="dash-icon-block primary">
+          <el-icon><Share /></el-icon>
         </div>
-      </template>
+        <div>
+          <h2 class="page-heading">
+            事件流工作台
+            <span
+              v-if="activeEvents.length"
+              class="query-stats"
+              style="margin-left: 4px"
+            >共 {{ activeEvents.length }} 条</span>
+          </h2>
+          <p class="page-subheading">
+            Agent 事件回放与审计
+          </p>
+        </div>
+      </div>
+      <div class="page-head-actions">
+        <button
+          class="link-text"
+          @click="toggleAdvanced"
+        >
+          <el-icon><Setting /></el-icon>
+          {{ advanced ? '收起高级模式' : '高级模式（手工输入 ID）' }}
+        </button>
+        <span class="query-stats">
+          <el-icon style="color: var(--ha-primary)"><InfoFilled /></el-icon>
+          G-006：数据源 agent_event 执行轨迹表（只读）
+        </span>
+      </div>
+    </div>
 
-      <!-- 级联入口：按任务维度选择（免记 ID）；任务列表 / 子任务详情页深链自动带入并查询 -->
+    <!-- ── 2. 顶部 4 张统计卡（G-006 增强：汇总条数字化） ── -->
+    <div class="stats-grid ha-stagger-entrance">
+      <div class="stat-tile ha-card-lift">
+        <div class="stat-tile-head">
+          <div class="stat-tile-label">
+            事件总数
+          </div>
+          <div class="stat-tile-icon primary">
+            <el-icon><List /></el-icon>
+          </div>
+        </div>
+        <div class="stat-tile-value">
+          {{ activeEvents.length }}
+        </div>
+        <div class="stat-tile-extra">
+          <span class="query-stats">覆盖 {{ activeRunCount }} 个 Run</span>
+        </div>
+      </div>
+
+      <div class="stat-tile ha-card-lift">
+        <div class="stat-tile-head">
+          <div class="stat-tile-label">
+            涉及子任务
+          </div>
+          <div class="stat-tile-icon success">
+            <el-icon><Connection /></el-icon>
+          </div>
+        </div>
+        <div class="stat-tile-value">
+          {{ activeSubTaskCount }}
+        </div>
+        <div class="stat-tile-extra">
+          <span class="query-stats">按拓扑正序聚合</span>
+        </div>
+      </div>
+
+      <div class="stat-tile ha-card-lift">
+        <div class="stat-tile-head">
+          <div class="stat-tile-label">
+            执行环节
+          </div>
+          <div class="stat-tile-icon info">
+            <el-icon><Operation /></el-icon>
+          </div>
+        </div>
+        <div class="stat-tile-value">
+          {{ activeTurnCount }}
+        </div>
+        <div class="stat-tile-extra">
+          <span class="query-stats">去重 turn</span>
+        </div>
+      </div>
+
+      <div class="stat-tile ha-card-lift">
+        <div class="stat-tile-head">
+          <div class="stat-tile-label">
+            时间跨度
+          </div>
+          <div class="stat-tile-icon warning">
+            <el-icon><Timer /></el-icon>
+          </div>
+        </div>
+        <div class="stat-tile-value">
+          {{ activeSpanShort }}
+        </div>
+        <div class="stat-tile-extra">
+          <span class="query-stats">{{ activeSpanRange }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 3. 查询入口卡（任务选择 + 子任务聚焦 + 高级模式面板） ── -->
+    <div class="query-card">
       <div class="query-row">
         <el-select
           v-model="selectedTaskId"
@@ -25,316 +124,561 @@
             :value="String(t.id)"
           />
         </el-select>
-        <el-button
-          link
-          type="primary"
-          @click="toggleAdvanced"
+        <el-select
+          v-if="selectedTaskId && activeTab === 'replay'"
+          v-model="selectedSubTaskId"
+          placeholder="全部子任务（可选聚焦）"
+          clearable
+          filterable
+          class="subtask-select"
+          @change="onSubTaskChange"
         >
-          {{ advanced ? '收起高级模式' : '高级模式（手工输入 ID）' }}
-        </el-button>
+          <el-option
+            v-for="s in subTaskOptions"
+            :key="s.id"
+            :label="subTaskOptionLabel(s)"
+            :value="String(s.id)"
+          />
+        </el-select>
       </div>
 
-      <el-tabs v-model="activeTab">
-        <!-- Replay：按 Run ID 重建一次需求完整执行的细粒度轨迹 -->
-        <el-tab-pane
-          label="Replay 轨迹追溯"
-          name="replay"
-        >
-          <div class="query-row">
-            <el-select
-              v-if="selectedTaskId"
-              v-model="selectedSubTaskId"
-              placeholder="全部子任务（可选聚焦）"
-              clearable
-              filterable
-              class="subtask-select"
-              @change="onSubTaskChange"
-            >
-              <el-option
-                v-for="s in subTaskOptions"
-                :key="s.id"
-                :label="subTaskOptionLabel(s)"
-                :value="String(s.id)"
-              />
-            </el-select>
-            <el-button
-              type="primary"
-              :loading="replayLoading"
-              @click="runReplay"
-            >
-              追溯
-            </el-button>
+      <!-- 高级模式面板（默认折叠） -->
+      <div
+        v-if="advanced"
+        class="advanced-panel"
+      >
+        <div class="advanced-panel-head">
+          <div class="advanced-panel-title">
+            <el-icon><Filter /></el-icon>
+            手工输入 ID 覆盖查询
+          </div>
+          <span class="readonly-tag">只读模式</span>
+        </div>
+        <div class="advanced-panel-fields">
+          <div class="field">
+            <div class="field-label">
+              执行 ID（run_id）
+            </div>
             <el-input
-              v-if="advanced"
               v-model="replayRunId"
-              placeholder="手工 Run ID（如 run-2084256044640505858-1）"
+              placeholder="如 run-2084256044640505858-1"
               clearable
-              style="width: 320px"
               @keyup.enter="runReplay"
             />
-            <span
-              v-if="replayEvents.length"
-              class="query-stats"
-            >共 {{ replayEvents.length }} 条事件</span>
           </div>
+          <div class="field">
+            <div class="field-label">
+              子任务 ID（可空）
+            </div>
+            <el-input
+              v-model="advancedSubTaskId"
+              placeholder="如 #6"
+              clearable
+              @keyup.enter="runReplay"
+            />
+          </div>
+          <div class="field">
+            <div class="field-label">
+              时间下界
+            </div>
+            <el-date-picker
+              v-model="advancedTimeStart"
+              type="datetime"
+              placeholder="开始时间"
+              value-format="YYYY-MM-DD HH:mm:ss"
+              style="width: 100%"
+            />
+          </div>
+          <div class="field">
+            <div class="field-label">
+              时间上界
+            </div>
+            <el-date-picker
+              v-model="advancedTimeEnd"
+              type="datetime"
+              placeholder="结束时间"
+              value-format="YYYY-MM-DD HH:mm:ss"
+              style="width: 100%"
+            />
+          </div>
+        </div>
+        <div class="advanced-panel-actions">
+          <button
+            class="btn-secondary"
+            @click="resetAdvanced"
+          >
+            <el-icon><RefreshLeft /></el-icon>
+            重置
+          </button>
+          <el-button
+            type="primary"
+            :loading="replayLoading || auditLoading"
+            @click="onAdvancedTrace"
+          >
+            <el-icon><Search /></el-icon>
+            按 ID 追溯
+          </el-button>
+        </div>
+        <div class="advanced-panel-warn">
+          <el-icon><WarningFilled /></el-icon>
+          手工 ID 绕过场景选择器，仅用于排障；查询结果不写入审计流水。
+        </div>
+      </div>
+    </div>
 
-          <el-empty
-            v-if="!replayLoading && !replayEvents.length"
-            :description="replayEmptyText"
+    <!-- ── 4. 自定义 Tabs（紫下划线） ── -->
+    <div class="tabs-bar">
+      <button
+        class="tab"
+        :class="{ active: activeTab === 'replay' }"
+        @click="switchTab('replay')"
+      >
+        Replay <span class="tab-sub">轨迹追溯</span>
+      </button>
+      <button
+        class="tab"
+        :class="{ active: activeTab === 'audit' }"
+        @click="switchTab('audit')"
+      >
+        Audit <span class="tab-sub">审计查询</span>
+      </button>
+    </div>
+
+    <!-- ── 5. Replay 区 ── -->
+    <div
+      v-show="activeTab === 'replay'"
+      class="ha-entrance-fade"
+    >
+      <div
+        v-if="replaySummary"
+        class="summary-strip"
+      >
+        <span class="summary-chip">去重环节 {{ replaySummary.turnCount }} 个</span>
+        <span
+          v-for="[cat, count] in replaySummary.cats"
+          :key="cat"
+          class="summary-chip"
+        >{{ cat }} ×{{ count }}</span>
+        <span
+          v-for="s in replaySummary.subTaskSpans"
+          :key="'sub-' + s.id"
+          class="summary-chip"
+          :title="s.tip"
+        >{{ s.name }} 耗时 {{ s.text }}</span>
+        <span class="summary-chip summary-span">{{ replaySummary.spanText }}</span>
+      </div>
+
+      <!-- Replay 加载态：3 行骨架 -->
+      <div
+        v-if="replayLoading"
+        class="tl"
+        aria-busy="true"
+      >
+        <div
+          v-for="i in 3"
+          :key="i"
+          class="tl-skeleton-row"
+        >
+          <div
+            class="ha-skeleton tl-skeleton-bar"
+            style="width: 40%"
           />
           <div
-            v-if="replaySummary"
-            class="summary-strip"
+            class="ha-skeleton tl-skeleton-bar"
+            style="width: 70%"
+          />
+          <div
+            class="ha-skeleton tl-skeleton-bar"
+            style="width: 55%"
+          />
+        </div>
+      </div>
+
+      <!-- Replay 空态 -->
+      <div
+        v-else-if="!replayEvents.length"
+        class="empty-state"
+      >
+        <div class="empty-icon">
+          <el-icon><DocumentRemove /></el-icon>
+        </div>
+        <h3 class="empty-title">
+          暂无符合条件的事件
+        </h3>
+        <p class="empty-desc">
+          {{ replayEmptyText }}
+        </p>
+        <div class="empty-actions">
+          <button
+            class="btn-secondary"
+            @click="resetAdvanced"
           >
-            <span class="query-stats">去重环节 {{ replaySummary.turnCount }} 个</span>
-            <span
-              v-for="[cat, count] in replaySummary.cats"
-              :key="cat"
-              class="summary-chip"
-            >{{ cat }} ×{{ count }}</span>
-            <span
-              v-for="s in replaySummary.subTaskSpans"
-              :key="'sub-' + s.id"
-              class="summary-chip"
-              :title="s.tip"
-            >{{ s.name }} 耗时 {{ s.text }}</span>
-            <span class="query-stats summary-span">{{ replaySummary.spanText }}</span>
-          </div>
-          <el-timeline
-            v-if="replayEvents.length"
-            class="tl"
+            <el-icon><RefreshLeft /></el-icon>
+            重置筛选条件
+          </button>
+          <el-button
+            type="primary"
+            @click="loadAllEvents"
           >
-            <el-timeline-item
-              v-for="(ev, idx) in replayEvents"
-              :key="ev.id"
-              :type="eventTypeColor(ev.eventType)"
+            <el-icon><View /></el-icon>
+            查看全部事件
+          </el-button>
+        </div>
+        <div class="empty-hint">
+          <el-icon><InfoFilled /></el-icon>
+          提示：可尝试放宽时间范围，或使用上方「高级模式」按 run_id / 子任务 ID 精确追溯
+        </div>
+      </div>
+
+      <!-- Replay 时间线：自定义节点 + 卡片化事件 -->
+      <div
+        v-else
+        class="tl tl-stagger"
+      >
+        <div
+          v-for="(ev, idx) in replayEvents"
+          :key="ev.id"
+          class="tl-item"
+        >
+          <span
+            class="tl-node"
+            :class="eventCategoryColor(eventCategory(ev.eventType))"
+          />
+          <span class="tl-line" />
+          <span
+            class="tl-item-stripe"
+            :class="eventCategoryColor(eventCategory(ev.eventType))"
+          />
+          <div class="tl-top">
+            <span
+              class="tl-tag"
+              :class="['tone-' + eventCategoryColor(eventCategory(ev.eventType)),
+                       'bg-' + eventCategoryColor(eventCategory(ev.eventType))]"
             >
-              <div class="tl-item">
-                <div class="tl-top">
-                  <el-tag
-                    size="small"
-                    effect="light"
-                    :type="eventTypeColor(ev.eventType)"
-                  >
-                    {{ eventCategory(ev.eventType) }}
-                  </el-tag>
-                  <span class="tl-time">
-                    {{ fmtTime(ev.createTime) }}
-                    <span
-                      v-if="gapOf(idx)"
-                      class="tl-gap"
-                    >{{ gapOf(idx) }}</span>
-                  </span>
-                </div>
-                <div class="tl-title">
-                  {{ eventLabel(ev.eventType) }}
-                </div>
-                <div class="tl-desc">
-                  {{ descOf(ev) }}
-                  <span
-                    v-if="ev.turn != null || ev.step != null"
-                    class="tl-pos"
-                  >环节 #{{ ev.turn ?? '-' }}/{{ ev.step ?? '-' }}</span>
-                </div>
-                <!-- 归属与执行方：子任务可点击跳转详情（免手记 ID），Agent 显示注册名 -->
-                <div
-                  v-if="ev.subTaskId != null || ev.agentId != null"
-                  class="tl-meta"
+              {{ eventCategory(ev.eventType) }}
+            </span>
+            <span class="tl-time">
+              {{ fmtTime(ev.createTime) }}
+              <span
+                v-if="gapOf(idx)"
+                class="tl-gap"
+              >{{ gapOf(idx) }}</span>
+            </span>
+          </div>
+          <div class="tl-title">
+            {{ eventLabel(ev.eventType) }}
+          </div>
+          <div class="tl-desc">
+            {{ descOf(ev) }}
+            <span
+              v-if="ev.turn != null || ev.step != null"
+              class="tl-pos"
+            >环节 #{{ ev.turn ?? '-' }}/{{ ev.step ?? '-' }}</span>
+          </div>
+          <div
+            v-if="ev.subTaskId != null || ev.agentId != null"
+            class="tl-meta"
+          >
+            <el-button
+              v-if="ev.subTaskId != null"
+              link
+              type="primary"
+              class="tl-link"
+              @click="goSubTask(ev.subTaskId)"
+            >
+              子任务 {{ subTaskRef(ev.subTaskId) }}
+            </el-button>
+            <span v-if="ev.agentId != null">{{ resolveAgentName(ev.agentId) }}</span>
+          </div>
+          <div
+            v-if="payloadFields(ev.payload).length"
+            class="tl-fields"
+          >
+            <div
+              v-for="f in payloadFields(ev.payload)"
+              :key="f.key"
+              class="pf-row"
+              :class="{ 'pf-text': f.kind === 'text' }"
+            >
+              <span class="pf-label">{{ f.label }}</span>
+              <span class="pf-value">{{ f.kind === 'agent' ? resolveAgentName(f.value) : f.value }}</span>
+            </div>
+          </div>
+          <el-collapse
+            v-if="ev.payload && payloadHasNested(ev.payload)"
+            class="payload-collapse"
+          >
+            <el-collapse-item
+              title="payload 完整原文"
+              name="p"
+            >
+              <pre class="payload-pre">{{ jsonOf(ev.payload) }}</pre>
+            </el-collapse-item>
+          </el-collapse>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 6. Audit 区 ── -->
+    <div
+      v-show="activeTab === 'audit'"
+      class="ha-entrance-fade"
+    >
+      <div class="query-card">
+        <div class="query-row">
+          <el-select
+            v-model="auditEventType"
+            placeholder="事件类型（全部）"
+            clearable
+            filterable
+            class="event-type-select"
+            @change="runAudit(1)"
+          >
+            <el-option
+              v-for="(meta, type) in EVENT_META"
+              :key="type"
+              :label="meta.label + '（' + type + '）'"
+              :value="type"
+            />
+          </el-select>
+          <el-date-picker
+            v-model="auditTimeRange"
+            type="datetimerange"
+            range-separator="→"
+            start-placeholder="开始时间"
+            end-placeholder="结束时间"
+            value-format="YYYY-MM-DD HH:mm:ss"
+            class="time-range"
+            @change="runAudit(1)"
+          />
+          <el-button
+            type="primary"
+            :loading="auditLoading"
+            @click="runAudit(1)"
+          >
+            <el-icon><Search /></el-icon>
+            查询
+          </el-button>
+          <button
+            class="btn-secondary"
+            :disabled="auditLoading"
+            @click="resetAudit"
+          >
+            <el-icon><RefreshLeft /></el-icon>
+            重置
+          </button>
+          <span
+            v-if="!auditLoading && auditTotal"
+            class="query-stats"
+          >共 {{ auditTotal }} 条</span>
+          <span
+            v-if="auditLoading"
+            class="query-stats"
+          >
+            <span class="dot" />
+            正在统计…
+          </span>
+        </div>
+      </div>
+
+      <div class="query-card">
+        <el-table
+          :data="auditEvents"
+          class="audit-table"
+          :empty-text="' '"
+        >
+          <el-table-column
+            label="事件类型"
+            width="180"
+          >
+            <template #default="{ row }">
+              <span
+                class="cell-tag"
+                :class="['tone-' + eventCategoryColor(eventCategory(row.eventType)),
+                         'bg-' + eventCategoryColor(eventCategory(row.eventType))]"
+              >
+                {{ eventLabel(row.eventType) }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="eventId"
+            label="eventId"
+            min-width="150"
+            show-overflow-tooltip
+          />
+          <el-table-column
+            label="归属"
+            min-width="220"
+          >
+            <template #default="{ row }">
+              <div class="cell-stack">
+                <span>run {{ row.runId }}</span>
+                <span v-if="row.taskId != null">task {{ row.taskId }}</span>
+                <el-button
+                  v-if="row.subTaskId != null"
+                  link
+                  type="primary"
+                  class="cell-link"
+                  @click="goSubTask(row.subTaskId)"
                 >
-                  <el-button
-                    v-if="ev.subTaskId != null"
-                    link
-                    type="primary"
-                    class="tl-link"
-                    @click="goSubTask(ev.subTaskId)"
-                  >
-                    子任务 {{ subTaskRef(ev.subTaskId) }}
-                  </el-button>
-                  <span v-if="ev.agentId != null">{{ resolveAgentName(ev.agentId) }}</span>
-                </div>
-                <!-- payload 关键字段结构化解构（纯标量已全覆盖；完整原文仅含数组/嵌套时出现） -->
-                <div
-                  v-if="payloadFields(ev.payload).length"
-                  class="tl-fields"
-                >
-                  <div
-                    v-for="f in payloadFields(ev.payload)"
-                    :key="f.key"
-                    class="pf-row"
-                    :class="{ 'pf-text': f.kind === 'text' }"
-                  >
-                    <span class="pf-label">{{ f.label }}</span>
-                    <span class="pf-value">{{ f.kind === 'agent' ? resolveAgentName(f.value) : f.value }}</span>
-                  </div>
-                </div>
+                  sub {{ subTaskRef(row.subTaskId) }}
+                </el-button>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column
+            label="执行方"
+            min-width="140"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">
+              {{ row.agentId != null ? resolveAgentName(row.agentId) : '-' }}
+            </template>
+          </el-table-column>
+          <el-table-column
+            label="时间"
+            width="172"
+          >
+            <template #default="{ row }">
+              {{ fmtTime(row.createTime) }}
+            </template>
+          </el-table-column>
+          <el-table-column
+            label="payload"
+            min-width="220"
+          >
+            <template #default="{ row }">
+              <div
+                v-if="row.payload"
+                class="cell-payload"
+              >
+                <span
+                  v-if="payloadBrief(row.payload)"
+                  class="cell-brief"
+                  :title="payloadBrief(row.payload)"
+                >{{ payloadBrief(row.payload) }}</span>
                 <el-collapse
-                  v-if="ev.payload && payloadHasNested(ev.payload)"
+                  v-if="payloadHasNested(row.payload)"
                   class="payload-collapse"
                 >
                   <el-collapse-item
-                    title="payload 完整原文"
+                    title="完整原文"
                     name="p"
                   >
-                    <pre class="payload-pre">{{ jsonOf(ev.payload) }}</pre>
+                    <pre class="payload-pre">{{ jsonOf(row.payload) }}</pre>
                   </el-collapse-item>
                 </el-collapse>
               </div>
-            </el-timeline-item>
-          </el-timeline>
-        </el-tab-pane>
+              <span
+                v-else
+                class="cell-muted"
+              >-</span>
+            </template>
+          </el-table-column>
+        </el-table>
 
-        <!-- Audit：按 Task ID 分页查执行事实，事件类型可过滤 -->
-        <el-tab-pane
-          label="Audit 审计查询"
-          name="audit"
+        <!-- Audit 加载态：6 行表格骨架 -->
+        <div
+          v-if="auditLoading && !auditEvents.length"
+          aria-busy="true"
         >
-          <div class="query-row">
-            <el-input
-              v-if="advanced"
-              v-model="auditTaskId"
-              placeholder="手工 Task ID（数字）"
-              clearable
-              style="width: 240px"
-              @keyup.enter="runAudit(1)"
+          <div
+            v-for="i in 6"
+            :key="i"
+            class="audit-skeleton-row"
+          >
+            <div
+              class="ha-skeleton audit-skeleton-bar"
+              style="width: 14%"
             />
-            <el-select
-              v-model="auditEventType"
-              placeholder="事件类型（全部）"
-              clearable
-              filterable
-              style="width: 280px"
+            <div
+              class="ha-skeleton audit-skeleton-bar"
+              style="width: 18%"
+            />
+            <div
+              class="ha-skeleton audit-skeleton-bar"
+              style="width: 22%"
+            />
+            <div
+              class="ha-skeleton audit-skeleton-bar"
+              style="width: 12%"
+            />
+            <div
+              class="ha-skeleton audit-skeleton-bar"
+              style="width: 14%"
+            />
+            <div
+              class="ha-skeleton audit-skeleton-bar"
+              style="width: 18%; margin-left: auto"
+            />
+          </div>
+        </div>
+
+        <!-- Audit 空态 -->
+        <div
+          v-else-if="!auditLoading && !auditEvents.length"
+          class="empty-state"
+        >
+          <div class="empty-icon">
+            <el-icon><FolderOpened /></el-icon>
+          </div>
+          <h3 class="empty-title">
+            暂无符合条件的事件
+          </h3>
+          <p class="empty-desc">
+            当前筛选条件下没有查询到审计事件，请调整事件类型或时间范围后重试
+          </p>
+          <div class="empty-actions">
+            <button
+              class="btn-secondary"
+              @click="resetAudit"
             >
-              <el-option
-                v-for="(meta, type) in EVENT_META"
-                :key="type"
-                :label="meta.label + '（' + type + '）'"
-                :value="type"
-              />
-            </el-select>
+              <el-icon><RefreshLeft /></el-icon>
+              重置筛选条件
+            </button>
             <el-button
               type="primary"
-              :loading="auditLoading"
-              @click="runAudit(1)"
+              @click="loadAllEvents"
             >
-              查询
+              <el-icon><View /></el-icon>
+              查看全部事件
             </el-button>
-            <span
-              v-if="auditTotal"
-              class="query-stats"
-            >共 {{ auditTotal }} 条</span>
           </div>
+          <div class="empty-hint">
+            <el-icon><InfoFilled /></el-icon>
+            提示：可尝试放宽时间范围，或使用上方「高级模式」按 run_id / 子任务 ID 精确追溯
+          </div>
+        </div>
 
-          <el-table
-            v-loading="auditLoading"
-            :data="auditEvents"
-            class="audit-table"
+        <!-- Audit 读取数据横幅 -->
+        <div
+          v-if="auditLoading"
+          class="audit-loading-banner"
+        >
+          <el-icon
+            class="is-loading"
           >
-            <el-table-column
-              label="事件类型"
-              min-width="180"
-            >
-              <template #default="{ row }">
-                <el-tag
-                  size="small"
-                  effect="light"
-                  :type="eventTypeColor(row.eventType)"
-                >
-                  {{ eventLabel(row.eventType) }}
-                </el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column
-              prop="eventId"
-              label="eventId"
-              min-width="150"
-              show-overflow-tooltip
-            />
-            <el-table-column
-              label="归属"
-              min-width="200"
-            >
-              <template #default="{ row }">
-                <div class="cell-stack">
-                  <span>run {{ row.runId }}</span>
-                  <span v-if="row.taskId != null">task {{ row.taskId }}</span>
-                  <el-button
-                    v-if="row.subTaskId != null"
-                    link
-                    type="primary"
-                    class="tl-link"
-                    @click="goSubTask(row.subTaskId)"
-                  >
-                    sub {{ subTaskRef(row.subTaskId) }}
-                  </el-button>
-                </div>
-              </template>
-            </el-table-column>
-            <el-table-column
-              label="执行方"
-              min-width="140"
-              show-overflow-tooltip
-            >
-              <template #default="{ row }">
-                {{ row.agentId != null ? resolveAgentName(row.agentId) : '-' }}
-              </template>
-            </el-table-column>
-            <el-table-column
-              label="时间"
-              width="172"
-            >
-              <template #default="{ row }">
-                {{ fmtTime(row.createTime) }}
-              </template>
-            </el-table-column>
-            <el-table-column
-              label="payload"
-              min-width="220"
-            >
-              <template #default="{ row }">
-                <div
-                  v-if="row.payload"
-                  class="cell-payload"
-                >
-                  <span
-                    v-if="payloadBrief(row.payload)"
-                    class="cell-brief"
-                    :title="payloadBrief(row.payload)"
-                  >{{ payloadBrief(row.payload) }}</span>
-                  <el-collapse
-                    v-if="payloadHasNested(row.payload)"
-                    class="payload-collapse"
-                  >
-                    <el-collapse-item
-                      title="完整原文"
-                      name="p"
-                    >
-                      <pre class="payload-pre">{{ jsonOf(row.payload) }}</pre>
-                    </el-collapse-item>
-                  </el-collapse>
-                </div>
-                <span
-                  v-else
-                  class="tl-muted"
-                >-</span>
-              </template>
-            </el-table-column>
-          </el-table>
-          <div
-            v-if="auditTotal"
-            class="pager-row"
-          >
-            <el-pagination
-              background
-              layout="total, prev, pager, next"
-              :total="auditTotal"
-              :page-size="auditPageSize"
-              :current-page="auditPage"
-              @current-change="runAudit"
-            />
-          </div>
-        </el-tab-pane>
-      </el-tabs>
-    </el-card>
+            <Loading />
+          </el-icon>
+          正在从 agent_event 执行轨迹表读取数据，请稍候…
+        </div>
+
+        <!-- Audit 分页 -->
+        <el-pagination
+          v-if="auditTotal"
+          background
+          layout="total, sizes, prev, pager, next, jumper"
+          :total="auditTotal"
+          :page-sizes="[10, 14, 20, 50, 100]"
+          :page-size="auditPageSize"
+          :current-page="auditPage"
+          class="pager-row"
+          @current-change="runAudit"
+          @size-change="onAuditSizeChange"
+        />
+      </div>
+    </div>
   </div>
 </template>
 
@@ -342,11 +686,35 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import {
+  Connection,
+  DocumentRemove,
+  Filter,
+  FolderOpened,
+  InfoFilled,
+  List,
+  Loading,
+  Operation,
+  RefreshLeft,
+  Search,
+  Setting,
+  Share,
+  Timer,
+  View,
+  WarningFilled
+} from '@element-plus/icons-vue'
 import { agentEventApi } from '@/api/agentEvent'
 import { subTaskApi } from '@/api/subTask'
 import { taskApi } from '@/api/task'
 import { useAgentNames } from '@/composables/useAgentNames'
-import { EVENT_META, eventCategory, eventLabel, eventTypeColor, payloadFields, payloadHasNested } from '@/utils/eventMeta'
+import {
+  EVENT_META,
+  eventCategory,
+  eventCategoryColor,
+  eventLabel,
+  payloadFields,
+  payloadHasNested
+} from '@/utils/eventMeta'
 import { fmtTime } from '@/utils/tableConfig'
 import { orderByDependency } from '@/utils/subTaskDag'
 import { SUB_TASK_STATUS_MAP, TASK_STATUS_MAP } from '@/types'
@@ -358,7 +726,7 @@ const router = useRouter()
 // Agent ID → 注册名解析（事件卡 / Audit 表展示人话名称而非裸 ID）
 const { loadAgentNames, resolveAgentName } = useAgentNames()
 
-const activeTab = ref('replay')
+const activeTab = ref<'replay' | 'audit'>('replay')
 
 // ── 级联入口：任务（必选）/ 子任务（可选聚焦）选择器，免手记 ID；
 //    任务列表 / 子任务详情页深链（?taskId=&subTaskId=&tab=）自动带入并查询 ──
@@ -451,6 +819,11 @@ function toggleAdvanced() {
   advanced.value = !advanced.value
 }
 
+function switchTab(tab: 'replay' | 'audit') {
+  activeTab.value = tab
+  autoRun()
+}
+
 function autoRun() {
   if (activeTab.value === 'replay') void runReplay()
   else void runAudit(1)
@@ -484,14 +857,20 @@ async function runReplay() {
   }
 }
 
-// ── Audit：按 taskId 分页查询执行事实（eventType 可选过滤，按时间正序） ──
+// ── Audit：按 taskId 分页查询执行事实（eventType / 时间范围可选过滤，按时间正序） ──
 const auditTaskId = ref('')
 const auditEventType = ref('')
+const auditTimeRange = ref<[string, string] | null>(null)
 const auditLoading = ref(false)
 const auditEvents = ref<AgentEventItem[]>([])
 const auditTotal = ref(0)
 const auditPage = ref(1)
-const auditPageSize = ref(20)
+const auditPageSize = ref(14)
+
+// 高级模式面板的额外字段（runId / 子任务 ID / 时间范围）
+const advancedSubTaskId = ref('')
+const advancedTimeStart = ref('')
+const advancedTimeEnd = ref('')
 
 async function runAudit(page = auditPage.value) {
   const taskId = (advanced.value && auditTaskId.value.trim()) || selectedTaskId.value
@@ -502,6 +881,10 @@ async function runAudit(page = auditPage.value) {
   auditPage.value = page
   auditLoading.value = true
   try {
+    // TODO(G-006 follow-up): 后端 AgentEventAudit 暂未支持 timeStart/timeEnd 参数，
+    // 这里 UI 已就位（advancedTimeStart/End + auditTimeRange），等后端补齐 DDL 后切换为：
+    //   timeStart: advanced.value ? advancedTimeStart.value : auditTimeRange.value?.[0],
+    //   timeEnd:   advanced.value ? advancedTimeEnd.value   : auditTimeRange.value?.[1],
     const result = await agentEventApi.audit({
       taskId,
       eventType: auditEventType.value || undefined,
@@ -516,6 +899,42 @@ async function runAudit(page = auditPage.value) {
   } finally {
     auditLoading.value = false
   }
+}
+
+function onAuditSizeChange(s: number) {
+  auditPageSize.value = s
+  auditPage.value = 1
+  void runAudit(1)
+}
+
+// 高级模式「按 ID 追溯」按钮：按当前 activeTab 触发对应查询
+function onAdvancedTrace() {
+  if (activeTab.value === 'replay') void runReplay()
+  else void runAudit(1)
+}
+
+// 重置高级模式字段
+function resetAdvanced() {
+  replayRunId.value = ''
+  advancedSubTaskId.value = ''
+  advancedTimeStart.value = ''
+  advancedTimeEnd.value = ''
+  auditTaskId.value = ''
+}
+
+// 重置 Audit 筛选
+function resetAudit() {
+  auditEventType.value = ''
+  auditTimeRange.value = null
+  void runAudit(1)
+}
+
+// 查看全部事件（空态跳转）：清空筛选 → 重新查询
+function loadAllEvents() {
+  auditEventType.value = ''
+  auditTimeRange.value = null
+  if (activeTab.value === 'audit') void runAudit(1)
+  else void runReplay()
 }
 
 // 深链：任务列表 / 子任务详情页跳转自动带入并查询（?tab=audit 直达审计位）
@@ -539,6 +958,57 @@ const replayEmptyText = computed(() => {
     !!selectedTaskId.value ||
     (advanced.value && !!replayRunId.value.trim())
   return hasSource ? '该范围内暂无事件记录（确认任务已执行且事件已写入）' : '请先选择任务，或打开高级模式手工输入 Run ID'
+})
+
+// 当前 tab 的事件列表（stat-tile 数据源）
+const activeEvents = computed<AgentEventItem[]>(() => {
+  if (activeTab.value === 'replay') return replayEvents.value
+  return auditEvents.value
+})
+
+// 覆盖的 Run 数（按 runId 去重）
+const activeRunCount = computed(() => {
+  const set = new Set<string>()
+  for (const ev of activeEvents.value) {
+    if (ev.runId) set.add(String(ev.runId))
+  }
+  return set.size
+})
+
+// 涉及的子任务数（按 subTaskId 去重，仅含非空）
+const activeSubTaskCount = computed(() => {
+  const set = new Set<string>()
+  for (const ev of activeEvents.value) {
+    if (ev.subTaskId != null) set.add(String(ev.subTaskId))
+  }
+  return set.size
+})
+
+// 去重 turn 数（执行环节）
+const activeTurnCount = computed(() => {
+  const set = new Set<number>()
+  for (const ev of activeEvents.value) {
+    if (ev.turn != null) set.add(ev.turn)
+  }
+  return set.size
+})
+
+// 时间跨度短描述（如 "28 秒" / "2 时 15 分"）
+const activeSpanShort = computed(() => {
+  const times = activeEvents.value.map((e) => tsOf(e.createTime)).filter((t) => !Number.isNaN(t))
+  if (times.length < 2) return times.length ? '单点' : '—'
+  return fmtDuration(Math.max(...times) - Math.min(...times))
+})
+
+// 时间跨度区间（首末事件）
+const activeSpanRange = computed(() => {
+  const evs = activeEvents.value
+  if (!evs.length) return '等待数据'
+  const first = evs[0]
+  const last = evs[evs.length - 1]
+  if (!first) return '等待数据'
+  if (first === last) return fmtTime(first.createTime)
+  return `${fmtTime(first.createTime)} → ${fmtTime(last.createTime)}`
 })
 
 // ── 时间与归属展示辅助（后端 createTime 为 'yyyy-MM-dd HH:mm:ss' 形态，统一解析） ──
@@ -601,7 +1071,7 @@ const replaySummary = computed(() => {
     const ms = Math.max(0, Math.max(...times) - Math.min(...times))
     const day = Math.floor(ms / 86400000)
     const hour = Math.floor((ms % 86400000) / 3600000)
-    const min = Math.floor((ms % 3600000) / 60000)
+    const min = Math.floor((ms % 36000000) / 60000)
     const span =
       day > 0 ? `${day} 天 ${hour} 时 ${min} 分` : hour > 0 ? `${hour} 时 ${min} 分` : `${min} 分`
     spanText = `${fmtTime(evs[0].createTime)} → ${fmtTime(evs[evs.length - 1].createTime)}（${span}）`
@@ -657,212 +1127,35 @@ function jsonOf(payload: Record<string, any>): string {
 </script>
 
 <style scoped>
-.page {
-  max-width: var(--ha-content-width);
-  margin: 0 auto;
-}
-.head-card {
-  border: 1px solid var(--ha-border);
-  box-shadow: var(--ha-shadow-sm);
-  transition: box-shadow var(--ha-duration-normal) var(--ha-ease-out);
-}
-.head-card:hover { box-shadow: var(--ha-shadow-md); }
-.card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.head-note { font-size: 12px; color: var(--ha-muted); }
-.query-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 16px;
-  flex-wrap: wrap;
-}
-.query-stats { font-size: 12px; color: var(--ha-muted); }
-.task-select { width: 380px; }
-.subtask-select { width: 300px; }
+/* 页面宽度与外层间距（沿用 design-system.css .page 已 token 化的全局 padding） */
+.page { max-width: var(--ha-content-width); }
 
-/* ── Replay run 汇总条（G-006 C2） ── */
-.summary-strip {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin: 0 0 14px;
-  padding: 8px 12px;
-  border: 1px dashed var(--ha-border);
-  border-radius: var(--ha-radius-md);
-  background: var(--ha-surface-muted, var(--ha-surface, transparent));
-}
-.summary-chip {
-  padding: 0 8px;
-  border-radius: 999px;
-  border: 1px solid var(--ha-border);
-  font-size: 12px;
-  color: var(--ha-muted);
-}
-.summary-span { font-variant-numeric: tabular-nums; }
-
-/* ── Replay 时间线：事件卡片化（与 SubTaskDetail 执行时间线同体系） ── */
-.tl { padding-left: 4px; }
-.tl :deep(.el-timeline-item__wrapper) { padding-left: 14px; top: -2px; }
-.tl :deep(.el-timeline-item__timestamp) { display: none; }
-.tl-item {
-  min-width: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--ha-border);
-  border-radius: var(--ha-radius-md);
-  background: var(--ha-surface, transparent);
-  transition: border-color var(--ha-duration-fast, 150ms) var(--ha-ease-out, ease-out);
-}
-.tl-item:hover { border-color: var(--ha-primary); }
-.tl-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-.tl-top :deep(.el-tag) { border-radius: 999px; font-size: 11px; }
-.tl-title {
-  min-width: 0;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--ha-ink, inherit);
-  letter-spacing: -0.005em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.tl-time {
-  font-size: 12px;
-  color: var(--ha-muted);
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-.tl-desc {
-  margin: 4px 0 0;
-  font-size: 12.5px;
-  line-height: 1.6;
-  color: var(--ha-muted);
-  word-break: break-word;
-}
-.tl-pos {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 0 6px;
-  border-radius: 999px;
-  border: 1px solid var(--ha-border);
-  font-size: 11px;
-  color: var(--ha-muted);
-  font-variant-numeric: tabular-nums;
-}
-.tl-gap {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 0 6px;
-  border-radius: 999px;
-  border: 1px solid var(--ha-border);
-  font-size: 11px;
-  color: var(--ha-muted);
-  font-variant-numeric: tabular-nums;
-}
-.tl-meta {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 6px;
-  font-size: 12px;
-  color: var(--ha-muted);
-}
-.tl-link {
-  height: auto;
-  padding: 0;
-  font-size: 12px;
-}
-
-/* ── payload 关键字段解构（审计原文仍保留在下方折叠） ── */
-.tl-fields {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-top: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--ha-border-light);
-  border-radius: var(--ha-radius-sm);
-  background: var(--ha-surface-muted, var(--ha-surface, transparent));
-}
-.pf-row {
-  display: flex;
-  gap: 10px;
-  font-size: 12px;
-  line-height: 1.6;
-}
-.pf-label {
-  flex: none;
-  min-width: 64px;
-  color: var(--ha-muted);
-}
-.pf-value {
-  color: var(--ha-ink-secondary, inherit);
-  word-break: break-word;
-}
-.pf-text .pf-value {
-  white-space: pre-wrap;
-  max-height: 200px;
-  overflow: auto;
-}
-
-/* ── payload 原文折叠面板 ── */
-.payload-collapse { margin-top: 8px; }
-:deep(.payload-collapse .el-collapse-item__header) {
-  height: auto;
-  min-height: 24px;
-  font-size: 12px;
-  color: var(--ha-muted);
-}
-:deep(.payload-collapse .el-collapse-item__content) { padding-bottom: 8px; }
-.payload-pre {
-  margin: 0;
-  padding: 8px 10px;
-  border: 1px solid var(--ha-border-light);
-  border-radius: var(--ha-radius-sm);
-  background: var(--ha-surface);
-  font-size: 11.5px;
-  line-height: 1.6;
-  color: var(--ha-ink-secondary, inherit);
-  max-height: 260px;
-  overflow: auto;
-}
-
-/* ── Audit 表格 ── */
-.audit-table { width: 100%; }
-.cell-stack {
-  display: flex;
-  flex-direction: column;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--ha-muted);
-  font-variant-numeric: tabular-nums;
-}
-.tl-muted { color: var(--ha-muted); font-size: 12px; }
-.cell-payload { min-width: 0; }
-.cell-brief {
-  display: block;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--ha-ink-secondary, inherit);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* 分页右对齐（Audit 表格尾部） */
 .pager-row {
   display: flex;
   justify-content: flex-end;
   margin-top: 14px;
+}
+
+/* 分类色背景/文字对（事件卡 .tl-tag / 表格 .cell-tag 共用） */
+/* tone-X 决定文字色，bg-X 决定背景色，与 design-system.css 的 --ha-* token 对齐 */
+.tone-primary { color: var(--ha-primary); }
+.tone-success { color: var(--ha-success-text); }
+.tone-warning { color: var(--ha-warning-text); }
+.tone-danger { color: var(--ha-danger-text); }
+.tone-info { color: var(--ha-info-text); }
+.bg-primary { background: var(--ha-primary-light); }
+.bg-success { background: var(--ha-success-bg); }
+.bg-warning { background: var(--ha-warning-bg); }
+.bg-danger { background: var(--ha-danger-bg); }
+.bg-info { background: var(--ha-info-bg); }
+html.dark .bg-primary { background: var(--ha-primary-muted); }
+
+/* 响应式：stats-grid 已在 design-system.css 全局 token 化；查询行/面板在 768px 以下单列堆叠 */
+@media (max-width: 768px) {
+  .query-row .task-select,
+  .query-row .subtask-select,
+  .query-row .event-type-select,
+  .query-row .time-range { width: 100% }
 }
 </style>
