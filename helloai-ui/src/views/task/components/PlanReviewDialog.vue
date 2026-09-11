@@ -29,6 +29,99 @@
         size="small"
         style="width:100%"
       >
+        <!-- 行展开：草案详细信息（内容/交付物/验收标准/约束/技能/不确定性明细全文），点击行首箭头展开/收缩 -->
+        <el-table-column
+          type="expand"
+          width="48"
+        >
+          <template #default="{ row }">
+            <div class="draft-detail">
+              <div
+                v-if="row.content"
+                class="dd-sec"
+              >
+                <div class="dd-label">
+                  内容
+                </div>
+                <div class="dd-text">
+                  {{ row.content }}
+                </div>
+              </div>
+              <div
+                v-if="row.deliverable"
+                class="dd-sec"
+              >
+                <div class="dd-label">
+                  交付物
+                </div>
+                <div class="dd-text">
+                  {{ row.deliverable }}
+                </div>
+              </div>
+              <div
+                v-if="row.acceptance"
+                class="dd-sec"
+              >
+                <div class="dd-label">
+                  验收标准
+                </div>
+                <div class="dd-text">
+                  {{ row.acceptance }}
+                </div>
+              </div>
+              <div
+                v-if="row.constraints"
+                class="dd-sec"
+              >
+                <div class="dd-label">
+                  执行约束
+                </div>
+                <div class="dd-text">
+                  {{ row.constraints }}
+                </div>
+              </div>
+              <div
+                v-if="row.requiredSkills?.length"
+                class="dd-sec"
+              >
+                <div class="dd-label">
+                  技能指派
+                </div>
+                <div class="dd-tags">
+                  <el-tag
+                    v-for="s in row.requiredSkills"
+                    :key="s"
+                    size="small"
+                    type="primary"
+                  >
+                    {{ s }}
+                  </el-tag>
+                </div>
+              </div>
+              <div
+                v-if="row.uncertainties?.length"
+                class="dd-sec"
+              >
+                <div class="dd-label">
+                  不确定性明细
+                </div>
+                <div
+                  v-for="(u, idx) in row.uncertainties"
+                  :key="idx"
+                  class="dd-unc"
+                >
+                  <el-tag
+                    size="small"
+                    :type="u.kind === 'ASSUMPTION' ? 'info' : 'warning'"
+                  >
+                    {{ u.kind === 'ASSUMPTION' ? '假设' : '待确认' }}
+                  </el-tag>
+                  <span>{{ u.note }}</span>
+                </div>
+              </div>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column
           type="index"
           label="#"
@@ -474,3 +567,34 @@ async function handleReject() {
   finally { rejecting.value = false }
 }
 </script>
+
+<style scoped>
+/* 行展开：草案详细信息（完整内容，点击行首箭头展开/收缩） */
+.draft-detail { padding: 4px 12px 8px 48px; }
+.dd-sec { margin-top: 8px; }
+.dd-sec:first-child { margin-top: 0; }
+.dd-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ha-muted);
+  margin-bottom: 2px;
+}
+.dd-text {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--ha-ink-secondary, inherit);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.dd-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.dd-unc {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  margin-top: 4px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--ha-ink-secondary, inherit);
+  word-break: break-word;
+}
+</style>

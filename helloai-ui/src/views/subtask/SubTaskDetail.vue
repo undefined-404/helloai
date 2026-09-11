@@ -79,16 +79,141 @@
           </el-tag>
         </template>
       </div>
-      <!-- 任务摘要并入头部卡（用户要求：与子任务详情同框），虚线分隔保持层次感 -->
+      <!-- 任务详情：完整展示子任务具体内容而非仅摘要（内容/交付物/验收标准/约束/技能/不确定性），长文本可展开/收缩 -->
       <div
-        v-if="item.content"
+        v-if="hasDetailInfo"
         class="head-summary"
       >
         <div class="head-summary-label">
-          任务摘要
+          任务详情
         </div>
-        <div class="summary-text">
-          {{ item.content }}
+        <!-- 内容：长文本折叠 3 行 + 展开全文（与对话流折叠同款交互） -->
+        <div
+          v-if="item.content"
+          class="detail-sec"
+        >
+          <div class="detail-sec-label">
+            内容
+          </div>
+          <div
+            :ref="(el) => bindDetailEl('content', el)"
+            class="detail-text"
+            :class="{ 'ha-line-clamp': !detailExpanded['content'] }"
+          >
+            {{ item.content }}
+          </div>
+          <span
+            v-if="detailOverflow['content']"
+            class="detail-toggle"
+            @click="toggleDetail('content')"
+          >
+            {{ detailToggleText('content', item.content) }}
+          </span>
+        </div>
+        <div
+          v-if="item.deliverable"
+          class="detail-sec"
+        >
+          <div class="detail-sec-label">
+            交付物
+          </div>
+          <div
+            :ref="(el) => bindDetailEl('deliverable', el)"
+            class="detail-text"
+            :class="{ 'ha-line-clamp': !detailExpanded['deliverable'] }"
+          >
+            {{ item.deliverable }}
+          </div>
+          <span
+            v-if="detailOverflow['deliverable']"
+            class="detail-toggle"
+            @click="toggleDetail('deliverable')"
+          >
+            {{ detailToggleText('deliverable', item.deliverable) }}
+          </span>
+        </div>
+        <div
+          v-if="item.acceptance"
+          class="detail-sec"
+        >
+          <div class="detail-sec-label">
+            验收标准
+          </div>
+          <div
+            :ref="(el) => bindDetailEl('acceptance', el)"
+            class="detail-text"
+            :class="{ 'ha-line-clamp': !detailExpanded['acceptance'] }"
+          >
+            {{ item.acceptance }}
+          </div>
+          <span
+            v-if="detailOverflow['acceptance']"
+            class="detail-toggle"
+            @click="toggleDetail('acceptance')"
+          >
+            {{ detailToggleText('acceptance', item.acceptance) }}
+          </span>
+        </div>
+        <div
+          v-if="item.constraints"
+          class="detail-sec"
+        >
+          <div class="detail-sec-label">
+            执行约束
+          </div>
+          <div
+            :ref="(el) => bindDetailEl('constraints', el)"
+            class="detail-text"
+            :class="{ 'ha-line-clamp': !detailExpanded['constraints'] }"
+          >
+            {{ item.constraints }}
+          </div>
+          <span
+            v-if="detailOverflow['constraints']"
+            class="detail-toggle"
+            @click="toggleDetail('constraints')"
+          >
+            {{ detailToggleText('constraints', item.constraints) }}
+          </span>
+        </div>
+        <div
+          v-if="item.requiredSkills?.length"
+          class="detail-sec"
+        >
+          <div class="detail-sec-label">
+            技能要求
+          </div>
+          <div class="detail-skills">
+            <el-tag
+              v-for="s in item.requiredSkills"
+              :key="s"
+              size="small"
+              type="primary"
+            >
+              {{ s }}
+            </el-tag>
+          </div>
+        </div>
+        <div
+          v-if="item.uncertainties?.length"
+          class="detail-sec"
+        >
+          <div class="detail-sec-label">
+            不确定性
+          </div>
+          <div
+            v-for="(u, idx) in item.uncertainties"
+            :key="idx"
+            class="detail-unc-row"
+          >
+            <el-tag
+              size="small"
+              :type="u.kind === 'ASSUMPTION' ? 'info' : 'warning'"
+            >
+              {{ u.kind === 'ASSUMPTION' ? '假设' : '待确认' }}
+            </el-tag>
+            <span>{{ u.note }}</span>
+          </div>
         </div>
       </div>
     </el-card>
@@ -451,7 +576,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import type { ComponentPublicInstance } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowRight } from '@element-plus/icons-vue'
@@ -523,6 +649,62 @@ const viewTimeline = computed(() => {
 // 可被精简过滤的例行事件数（基于全量稳定计数，不随展开态变化，否则展开后按钮消失）
 // >0 时卡头露出「展开全部 / 只看关键节点」切换入口
 const hiddenEventCount = computed(() => timeline.value.filter(ev => COMPACT_HIDDEN_EVENTS.has(ev.eventType)).length)
+
+// ── 任务详情展开/收缩（完整展示子任务具体内容：内容/交付物/验收标准/约束/技能/不确定性）──
+// 折叠判定 = 渲染后实测溢出（scrollHeight > clientHeight），宽屏/窄屏均精确：
+// 溢出长文本折叠 3 行 + 「展开全文（N 字）/收起」；未溢出直接全量展示、不出开关
+const detailExpanded = ref<Record<string, boolean>>({})
+const detailOverflow = ref<Record<string, boolean>>({})
+const detailEls = new Map<string, HTMLElement>()
+
+function bindDetailEl(key: string, el: Element | ComponentPublicInstance | null) {
+  if (el instanceof HTMLElement) {
+    detailEls.set(key, el)
+  } else {
+    detailEls.delete(key)
+  }
+}
+
+function detailToggleText(key: string, text?: string | null): string {
+  return detailExpanded.value[key] ? '收起' : ('展开全文（' + (text?.length || 0) + '字）')
+}
+
+function toggleDetail(key: string) {
+  detailExpanded.value[key] = !detailExpanded.value[key]
+}
+
+// 折叠态测量溢出（展开态保留上次结论，避免按钮闪失）；数据刷新/窗口缩放后重测
+function measureDetailOverflow() {
+  detailEls.forEach((el, key) => {
+    if (detailExpanded.value[key]) return
+    detailOverflow.value[key] = el.scrollHeight - el.clientHeight > 2
+  })
+}
+
+let detailMeasureRaf: number | null = null
+function scheduleDetailMeasure() {
+  if (detailMeasureRaf !== null) return
+  detailMeasureRaf = requestAnimationFrame(() => {
+    detailMeasureRaf = null
+    measureDetailOverflow()
+  })
+}
+
+watch(item, () => nextTick(scheduleDetailMeasure))
+
+onMounted(() => window.addEventListener('resize', scheduleDetailMeasure))
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', scheduleDetailMeasure)
+  if (detailMeasureRaf !== null) cancelAnimationFrame(detailMeasureRaf)
+})
+
+// 头部详情块显隐：任一详情字段有值即展示（存量数据 content 恒有，窄化不影响既有展示）
+const hasDetailInfo = computed(() => {
+  const it = item.value
+  if (!it) return false
+  return !!(it.content || it.deliverable || it.acceptance || it.constraints
+    || it.requiredSkills?.length || it.uncertainties?.length)
+})
 
 const TERMINAL_STATUSES: SubTask['status'][] = ['DONE', 'CANCELLED']
 
@@ -1265,11 +1447,40 @@ onBeforeUnmount(() => {
   margin-bottom: 6px;
   letter-spacing: 0.01em;
 }
-.summary-text {
+/* 任务详情小节（内容/交付物/验收标准/约束/技能/不确定性）；长文本折叠 3 行 + 展开全文 */
+.detail-sec { margin-top: 10px; }
+.detail-sec:first-of-type { margin-top: 2px; }
+.detail-sec-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ha-muted);
+  margin-bottom: 4px;
+}
+.detail-text {
   font-size: 13px;
   line-height: 1.75;
   color: var(--ha-ink-secondary, inherit);
   white-space: pre-wrap;
+  word-break: break-word;
+}
+.detail-toggle {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--el-color-primary);
+  cursor: pointer;
+  user-select: none;
+}
+.detail-toggle:hover { text-decoration: underline; }
+.detail-skills { display: flex; flex-wrap: wrap; gap: 4px; }
+.detail-unc-row {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  margin-top: 4px;
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--ha-ink-secondary, inherit);
   word-break: break-word;
 }
 
