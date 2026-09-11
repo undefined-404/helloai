@@ -13,36 +13,41 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@link RequirementPackageParser} 防御式解析与渲染单测（G-011 S1 数据层）。
  *
  * <p>覆盖键缺失 / 类型异常 / 元素混杂回落空集合、task.context 键空间隔离
- * （requirementPackage 与 runningSpec 共存互不影响）与五字段逐项渲染
+ * （requirementPackage 与 runningSpec 共存互不影响）与六字段逐项渲染
  * （空数组字段不渲染、全空占位文案），锚定「无需求包全链行为零变化」。</p>
  */
 @DisplayName("RequirementPackageParser")
 class RequirementPackageParserTest {
 
     private Map<String, Object> packageWith(String goal, List<String> scope, List<String> outOfScope,
-                                            List<String> assumptions, List<String> openQuestions) {
+                                            List<String> acceptanceCriteria, List<String> assumptions,
+                                            List<String> openQuestions) {
         Map<String, Object> map = new HashMap<>();
         map.put(RequirementPackageParser.KEY_GOAL, goal);
         map.put(RequirementPackageParser.KEY_SCOPE, scope);
         map.put(RequirementPackageParser.KEY_OUT_OF_SCOPE, outOfScope);
+        map.put(RequirementPackageParser.KEY_ACCEPTANCE_CRITERIA, acceptanceCriteria);
         map.put(RequirementPackageParser.KEY_ASSUMPTIONS, assumptions);
         map.put(RequirementPackageParser.KEY_OPEN_QUESTIONS, openQuestions);
         return map;
     }
 
     @Test
-    @DisplayName("五字段全量正常解析：goal 与四数组原样透传")
+    @DisplayName("六字段全量正常解析：goal 与五数组原样透传")
     void parseFullPackage() {
         RequirementPackage pkg = RequirementPackageParser.parse(packageWith(
                 "完成订单模块改造",
                 List.of("订单创建", "订单列表"),
                 List.of("不做支付渠道接入"),
+                List.of("验收条目一：订单创建接口返回 201", "验收条目二：列表分页参数生效"),
                 List.of("假设用户环境为 JDK17"),
                 List.of("存量调用方数量未确认")));
 
         assertThat(pkg.goal()).isEqualTo("完成订单模块改造");
         assertThat(pkg.scope()).containsExactly("订单创建", "订单列表");
         assertThat(pkg.outOfScope()).containsExactly("不做支付渠道接入");
+        assertThat(pkg.acceptanceCriteria())
+                .containsExactly("验收条目一：订单创建接口返回 201", "验收条目二：列表分页参数生效");
         assertThat(pkg.assumptions()).containsExactly("假设用户环境为 JDK17");
         assertThat(pkg.openQuestions()).containsExactly("存量调用方数量未确认");
         assertThat(pkg.isEmpty()).isFalse();
@@ -56,13 +61,14 @@ class RequirementPackageParserTest {
     }
 
     @Test
-    @DisplayName("键缺失：goal 回落 null、四数组回落空列表（不抛异常）")
+    @DisplayName("键缺失：goal 回落 null、五数组回落空列表（不抛异常）")
     void parseMissingKeysDefensive() {
         RequirementPackage pkg = RequirementPackageParser.parse(Map.of("goal", "只有目标"));
 
         assertThat(pkg.goal()).isEqualTo("只有目标");
         assertThat(pkg.scope()).isEmpty();
         assertThat(pkg.outOfScope()).isEmpty();
+        assertThat(pkg.acceptanceCriteria()).isEmpty();
         assertThat(pkg.assumptions()).isEmpty();
         assertThat(pkg.openQuestions()).isEmpty();
     }
@@ -108,7 +114,7 @@ class RequirementPackageParserTest {
         Map<String, Object> context = new HashMap<>();
         context.put("runningSpec", Map.of("baseline", "存量 runningSpec 数据"));
         context.put(RequirementPackageParser.CONTEXT_KEY_REQUIREMENT_PACKAGE,
-                packageWith("双写需求包目标", List.of("范围条目"), List.of(), List.of(), List.of()));
+                packageWith("双写需求包目标", List.of("范围条目"), List.of(), List.of(), List.of(), List.of()));
 
         RequirementPackage pkg = RequirementPackageParser.fromContext(context);
         assertThat(pkg.goal()).isEqualTo("双写需求包目标");
@@ -125,12 +131,13 @@ class RequirementPackageParserTest {
     }
 
     @Test
-    @DisplayName("render：五字段逐项列表，空数组字段不渲染（防提示词膨胀）")
+    @DisplayName("render：六字段逐项列表，空数组字段不渲染（防提示词膨胀）")
     void renderSkipsEmptyArrayFields() {
         RequirementPackage pkg = new RequirementPackage(
                 "完成订单模块改造",
                 List.of("订单创建", "订单列表"),
                 List.of(),
+                List.of("订单创建接口返回 201"),
                 List.of("假设用户环境为 JDK17"),
                 List.of());
 
@@ -139,6 +146,8 @@ class RequirementPackageParserTest {
         assertThat(rendered).contains("- 范围：");
         assertThat(rendered).contains("  - 订单创建");
         assertThat(rendered).contains("  - 订单列表");
+        assertThat(rendered).contains("- 任务级验收标准（acceptanceCriteria）：");
+        assertThat(rendered).contains("  - 订单创建接口返回 201");
         assertThat(rendered).contains("- 关键假设（推断项，须标注）：");
         assertThat(rendered).contains("  - 假设用户环境为 JDK17");
         // 空数组字段（outOfScope / openQuestions）不渲染
@@ -147,11 +156,42 @@ class RequirementPackageParserTest {
     }
 
     @Test
-    @DisplayName("isEmpty：goal 空白且四数组全空判空，任一字段有内容判非空")
+    @DisplayName("render：acceptanceCriteria 为空数组时不渲染该行（存量任务零变化）")
+    void renderSkipsAcceptanceCriteriaWhenEmpty() {
+        RequirementPackage pkg = new RequirementPackage(
+                "存量任务目标", List.of(), List.of(), List.of(), List.of(), List.of());
+
+        assertThat(RequirementPackageParser.render(pkg))
+                .doesNotContain("acceptanceCriteria")
+                .doesNotContain("任务级验收标准");
+    }
+
+    @Test
+    @DisplayName("acceptanceCriteria 类型异常 / 元素混杂：回落空集合与仅保留字符串")
+    void parseAcceptanceCriteriaDefensive() {
+        Map<String, Object> wrongType = new HashMap<>();
+        wrongType.put(RequirementPackageParser.KEY_ACCEPTANCE_CRITERIA, "验收条目");
+        assertThat(RequirementPackageParser.parse(wrongType).acceptanceCriteria()).isEmpty();
+
+        Map<String, Object> mixed = new HashMap<>();
+        mixed.put(RequirementPackageParser.KEY_ACCEPTANCE_CRITERIA,
+                List.of("有效条目", 7, false, "   "));
+        assertThat(RequirementPackageParser.parse(mixed).acceptanceCriteria())
+                .containsExactly("有效条目");
+    }
+
+    @Test
+    @DisplayName("isEmpty：goal 空白且五数组全空判空，任一字段有内容判非空")
     void isEmptySemantics() {
         assertThat(RequirementPackage.EMPTY.isEmpty()).isTrue();
-        assertThat(new RequirementPackage("", List.of(), List.of(), List.of(), List.of()).isEmpty()).isTrue();
-        assertThat(new RequirementPackage("目标", List.of(), List.of(), List.of(), List.of()).isEmpty()).isFalse();
-        assertThat(new RequirementPackage(null, List.of("范围"), List.of(), List.of(), List.of()).isEmpty()).isFalse();
+        assertThat(new RequirementPackage("", List.of(), List.of(), List.of(), List.of(), List.of())
+                .isEmpty()).isTrue();
+        assertThat(new RequirementPackage("目标", List.of(), List.of(), List.of(), List.of(), List.of())
+                .isEmpty()).isFalse();
+        assertThat(new RequirementPackage(null, List.of("范围"), List.of(), List.of(), List.of(), List.of())
+                .isEmpty()).isFalse();
+        // 仅有 acceptanceCriteria 时同样判非空（P1 新增字段参与判空）
+        assertThat(new RequirementPackage(null, List.of(), List.of(),
+                List.of("验收条目"), List.of(), List.of()).isEmpty()).isFalse();
     }
 }

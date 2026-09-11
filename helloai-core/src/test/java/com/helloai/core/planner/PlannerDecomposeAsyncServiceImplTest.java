@@ -43,6 +43,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
@@ -200,7 +201,7 @@ class PlannerDecomposeAsyncServiceImplTest {
                         ```json
                         [
                           {"title":"设计表结构","content":"建表","deliverable":"DDL","acceptance":"评审通过","priority":"high"},
-                          {"title":"实现统计接口","priority":"不合法优先级"}
+                          {"title":"实现统计接口","content":"实现接口","deliverable":"接口代码","acceptance":"返回 200","priority":"不合法优先级"}
                         ]
                         ```
                         """, "stop", "llm", 100));
@@ -245,7 +246,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"第一步"}]
+                        [{"title":"第一步","content":"c","deliverable":"d","acceptance":"a"}]
                         """, "stop", "llm", 100));
         when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(draft(11L)));
 
@@ -363,7 +364,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"第一步"}]
+                        [{"title":"第一步","content":"c","deliverable":"d","acceptance":"a"}]
                         """, "stop", "llm", 100));
         when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(draft(11L)));
 
@@ -390,10 +391,10 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
                         [
-                          {"title":"契约定义","content":"接口签名","contract":true,"dependsOn":[]},
-                          {"title":"下游实现","content":"照契约实现","contract":false,"dependsOn":[1]},
-                          {"title":"普通子任务","content":"缺省 contract","dependsOn":[1]},
-                          {"title":"字符串布尔","content":"contract 给字符串","contract":"true","dependsOn":[1]}
+                          {"title":"契约定义","content":"接口签名","deliverable":"契约文档","acceptance":"下游可照做","contract":true,"dependsOn":[]},
+                          {"title":"下游实现","content":"照契约实现","deliverable":"实现代码","acceptance":"契约用例通过","contract":false,"dependsOn":[1]},
+                          {"title":"普通子任务","content":"缺省 contract","deliverable":"交付物","acceptance":"验证点通过","dependsOn":[1]},
+                          {"title":"字符串布尔","content":"contract 给字符串","deliverable":"交付物","acceptance":"验证点通过","contract":"true","dependsOn":[1]}
                         ]
                         """, "stop", "llm", 100));
         when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(
@@ -437,6 +438,57 @@ class PlannerDecomposeAsyncServiceImplTest {
     // ══════════════════════════════════════════════════════════════
     //  失败路径：内部闭环回退 PENDING（不再抛出）
     // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("P1 必填兜底：草案缺 acceptance（空白占位）→ fail-close 回退 PENDING + 定位审计")
+    void shouldRollbackWhenDraftMissingAcceptance() {
+        when(taskService.getById(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [
+                          {"title":"完整条目","content":"内容","deliverable":"交付物","acceptance":"运行 X 输出 Y"},
+                          {"title":"残缺条目","content":"内容","deliverable":"交付物","acceptance":"   "}
+                        ]
+                        """, "stop", "llm", 100));
+
+        asyncService.executeDecompose(TASK_ID);
+
+        // 整批拒绝：不落库任何草案（残缺草案比拆解失败更贵——执行/审查侧将失去验收依据）
+        verify(subTaskService, never()).saveBatch(any());
+        verify(taskService).lambdaUpdate();
+        // 审计先于抛出：draftSeq / field 精确指向第 2 条 acceptance
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_draft_field_missing"),
+                eq(AgentRole.PLANNER), eq(9L),
+                argThat(payload -> "acceptance".equals(payload.get("field"))
+                        && Integer.valueOf(2).equals(payload.get("draftSeq"))));
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_failed"),
+                eq(AgentRole.PLANNER), isNull(), anyMap());
+    }
+
+    @Test
+    @DisplayName("P1 必填兜底：四字段齐全（含边界空白裁剪后非空）→ 正常落库，不记审计")
+    void shouldNotFireFieldAuditWhenRequiredFieldsPresent() {
+        when(taskService.getById(TASK_ID)).thenReturn(planningTask());
+        when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
+                AgentResult.success("""
+                        [
+                          {"title":"条目一","content":"内容一","deliverable":"交付物一","acceptance":"运行 X 输出 Y"},
+                          {"title":"条目二","content":"内容二","deliverable":"交付物二","acceptance":"接口 Z 返回 200"}
+                        ]
+                        """, "stop", "llm", 100));
+        when(subTaskService.saveBatch(any())).thenReturn(true);
+        lenient().when(subTaskService.list(any(Wrapper.class))).thenReturn(new ArrayList<>());
+
+        asyncService.executeDecompose(TASK_ID);
+
+        verify(taskTimelineService, never()).recordEvent(
+                eq(TASK_ID), isNull(), eq("task_plan_draft_field_missing"),
+                any(), any(), anyMap());
+    }
 
     @Test
     @DisplayName("JSON 解析失败：回退 PENDING 并记录 task_plan_failed，不落库")
@@ -503,8 +555,8 @@ class PlannerDecomposeAsyncServiceImplTest {
                 AgentResult.success("""
                         ```json
                         [
-                          {"title":"第一步","content":"准备","dependsOn":[]},
-                          {"title":"第二步","content":"执行","dependsOn":[1]}
+                          {"title":"第一步","content":"准备","deliverable":"d","acceptance":"a","dependsOn":[]},
+                          {"title":"第二步","content":"执行","deliverable":"d","acceptance":"a","dependsOn":[1]}
                         ]
                         ```
                         """, "stop", "llm", 100));
@@ -534,8 +586,8 @@ class PlannerDecomposeAsyncServiceImplTest {
                 AgentResult.success("""
                         ```json
                         [
-                          {"title":"第一步","content":"准备","dependsOn":[]},
-                          {"title":"第二步","content":"执行","dependsOn":[1]}
+                          {"title":"第一步","content":"准备","deliverable":"d","acceptance":"a","dependsOn":[]},
+                          {"title":"第二步","content":"执行","deliverable":"d","acceptance":"a","dependsOn":[1]}
                         ]
                         ```
                         """, "stop", "llm", 100));
@@ -624,12 +676,13 @@ class PlannerDecomposeAsyncServiceImplTest {
     }
 
     @Test
-    @DisplayName("G-011：任务带需求包 → Prompt 渲染五字段列表，占位符无残留")
+    @DisplayName("G-011：任务带需求包 → Prompt 渲染六字段列表（含 P1-1 任务级验收标准），占位符无残留")
     void shouldRenderRequirementPackageIntoPrompt() {
         Task task = taskWithRequirementPackage(Map.of(
                 "goal", "每日自动出日报",
                 "scope", List.of("报表生成", "定时调度"),
                 "outOfScope", List.of("不做 UI 改造"),
+                "acceptanceCriteria", List.of("每日 08:00 前产出日报且字段齐全"),
                 "assumptions", List.of("数据源可达且口径与昨日一致"),
                 "openQuestions", List.of("接口是否有存量调用方未确认")));
         when(taskService.getById(TASK_ID)).thenReturn(task);
@@ -649,6 +702,8 @@ class PlannerDecomposeAsyncServiceImplTest {
                 .contains("报表生成")
                 .contains("明确不做（outOfScope）")
                 .contains("不做 UI 改造")
+                .contains("任务级验收标准（acceptanceCriteria）")
+                .contains("每日 08:00 前产出日报且字段齐全")
                 .contains("关键假设（推断项，须标注）")
                 .contains("数据源可达且口径与昨日一致")
                 .contains("待确认事项（openQuestions）")
@@ -663,7 +718,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"第一步"}]
+                        [{"title":"第一步","content":"c","deliverable":"d","acceptance":"a"}]
                         """, "stop", "llm", 100));
         when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(draft(11L)));
 
@@ -713,7 +768,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"第一步","content":"c",
+                        [{"title":"第一步","content":"c","deliverable":"d","acceptance":"a",
                           "uncertainties":[
                             {"kind":"MAYBE","note":"猜测性推断"},
                             {"kind":"UNCONFIRMED","note":"   "},
@@ -752,7 +807,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"第一步","content":"c","uncertainties":"非法形态"}]
+                        [{"title":"第一步","content":"c","deliverable":"d","acceptance":"a","uncertainties":"非法形态"}]
                         """, "stop", "llm", 100));
         when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(draft(11L)));
 
@@ -832,7 +887,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         // LLM 只申报 ASSUMPTION（推断），未按继承规则转出 UNCONFIRMED → 兜底 WARN
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"第一步","content":"c",
+                        [{"title":"第一步","content":"c","deliverable":"d","acceptance":"a",
                           "uncertainties":[{"kind":"ASSUMPTION","note":"数据源可达"}]}]
                         """, "stop", "llm", 100));
         when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(draft(11L)));
@@ -853,7 +908,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"第一步","content":"c",
+                        [{"title":"第一步","content":"c","deliverable":"d","acceptance":"a",
                           "uncertainties":[{"kind":"UNCONFIRMED","note":"接口是否有存量调用方未确认"}]}]
                         """, "stop", "llm", 100));
         when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(draft(11L)));
@@ -872,7 +927,7 @@ class PlannerDecomposeAsyncServiceImplTest {
         when(plannerAgentPicker.pickForTask(TASK_ID)).thenReturn(llmPlanner());
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class))).thenReturn(
                 AgentResult.success("""
-                        [{"title":"第一步"}]
+                        [{"title":"第一步","content":"c","deliverable":"d","acceptance":"a"}]
                         """, "stop", "llm", 100));
         when(subTaskService.list(any(Wrapper.class))).thenReturn(List.of(draft(11L)));
 

@@ -346,6 +346,76 @@ class RequirementClarifyServiceTest {
     }
 
     @Test
+    @DisplayName("P1-3：description 缺小节 → 同轮纠偏重试一次，采用补全后的终稿")
+    void shouldRetryOnceWhenDescriptionSectionsMissing() {
+        RequirementConversation conversation = activeConversation();
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+        when(messageService.listByConversation(CONV_ID))
+                .thenReturn(List.of(message("user", "做一个报表", 1)));
+        // 首轮：只有「背景」一节 → 触发纠偏重试；重试轮：四小节齐全
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"type\":\"final\",\"title\":\"首轮标题\",\"description\":\"## 背景\\n要一个报表\"}",
+                        "stop", "llm", 100))
+                .thenReturn(AgentResult.success(
+                        "{\"type\":\"final\",\"title\":\"补全标题\",\"description\":\""
+                                + "## 背景与目标\\n做报表\\n## 范围与边界\\n只做日报\\n"
+                                + "## 交付物\\n脚本\\n## 验收标准\\n运行 X 输出 Y\"}",
+                        "stop", "llm", 100));
+
+        clarifyService.sendMessage(CONV_ID, "直接生成吧");
+
+        // 恰好一次重试（不多不少），且采用补全后的终稿
+        verify(platformAgentExecutionService, times(2))
+                .executeSync(any(Agent.class), any(AgentTask.class));
+        assertThat(conversation.getFinalTitle()).isEqualTo("补全标题");
+        verify(messageService).addMessage(CONV_ID, "assistant", "已生成终稿");
+        // 补全成功不记缺失审计
+        verify(taskTimelineService, never()).recordEvent(isNull(), isNull(),
+                eq("requirement_description_section_missing"), any(), any(), anyMap());
+    }
+
+    @Test
+    @DisplayName("P1-3：重试后仍缺小节 → 放行首轮终稿 + timeline WARN（fail-open 不阻断）")
+    void shouldFailOpenWhenSectionsStillMissingAfterRetry() {
+        RequirementConversation conversation = activeConversation();
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        // 首轮与重试轮输出一致（仍只有「背景」一节）
+        stubLlmRound("{\"type\":\"final\",\"title\":\"标题\",\"description\":\"## 背景\\n描述\"}");
+
+        clarifyService.sendMessage(CONV_ID, "直接生成吧");
+
+        verify(platformAgentExecutionService, times(2))
+                .executeSync(any(Agent.class), any(AgentTask.class));
+        // 放行首轮结果：不因小节格式卡死终稿
+        assertThat(conversation.getFinalTitle()).isEqualTo("标题");
+        verify(messageService).addMessage(CONV_ID, "assistant", "已生成终稿");
+        verify(taskTimelineService).recordEvent(isNull(), isNull(),
+                eq("requirement_description_section_missing"), eq(AgentRole.PLANNER), isNull(),
+                argThat(payload -> "still_missing".equals(payload.get("reason"))
+                        && CONV_ID.equals(payload.get("conversationId"))));
+    }
+
+    @Test
+    @DisplayName("P1-3：description 四小节齐全 → 不触发重试（单次 LLM 调用）")
+    void shouldNotRetryWhenAllDescriptionSectionsPresent() {
+        RequirementConversation conversation = activeConversation();
+        when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        stubLlmRound("{\"type\":\"final\",\"title\":\"标题\",\"description\":\""
+                + "## 背景与目标\\n做报表\\n## 范围与边界\\n只做日报\\n"
+                + "## 交付物\\n脚本\\n## 验收标准\\n运行 X 输出 Y\"}");
+
+        clarifyService.sendMessage(CONV_ID, "直接生成吧");
+
+        verify(platformAgentExecutionService, times(1))
+                .executeSync(any(Agent.class), any(AgentTask.class));
+        assertThat(conversation.getFinalTitle()).isEqualTo("标题");
+        verify(taskTimelineService, never()).recordEvent(isNull(), isNull(),
+                eq("requirement_description_section_missing"), any(), any(), anyMap());
+    }
+
+    @Test
     @DisplayName("final 路径：message 为空时 assistant 消息兜底「已生成终稿」")
     void shouldFallbackFinalNoteWhenMessageBlank() {
         RequirementConversation conversation = activeConversation();

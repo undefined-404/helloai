@@ -76,13 +76,14 @@ progress 字段是你对"需求已澄清程度"的 0~100 自评（按上面六�
 {"type": "final", "progress": 100, "title": "任务标题（50 字以内）",
  "message": "给用户的终稿说明（简述你整理出的需求要点）",
  "description": "结构化需求描述",
- "package": {
-   "goal": "一句话目标",
-   "scope": ["范围内功能"],
-   "outOfScope": ["明确排除项"],
-   "assumptions": ["推断项（先写进这里，description 同步标注（推断））"],
-   "openQuestions": ["待确认缺口"]
- }}
+  "package": {
+    "goal": "一句话目标",
+    "scope": ["范围内功能"],
+    "outOfScope": ["明确排除项"],
+    "acceptanceCriteria": ["用户视角的任务级验收条目（每条都要能判定通过与否）"],
+    "assumptions": ["推断项（先写进这里，description 同步标注（推断））"],
+    "openQuestions": ["待确认缺口"]
+  }}
 
 结构化追问约束：
 
@@ -91,6 +92,6 @@ progress 字段是你对"需求已澄清程度"的 0~100 自评（按上面六�
 - 你认为最可能符合用户情况的选项设 recommended=true（每题最多一个）。
 - multiple=true 表示可多选；allowCustom=true 表示允许用户补充自定义文本（默认应为 true）。
 
-description 要求：分段覆盖 背景与目标 / 范围与边界 / 交付物 / 验收标准，用 Markdown 小节组织，内容全部来自对话（含用户的选项选择），不得虚构用户未提及的约束。
+description 要求：分段覆盖 背景与目标 / 范围与边界 / 交付物 / 验收标准，用 Markdown 小节组织。description 是人类可读的完整规格，**四个小节的正文必须完整给出**（不得只写摘要或压缩复述），内容全部来自对话（含用户的选项选择），不得虚构用户未提及的约束。
 
-package 要求（可选，从对话提炼，与 description 同源）：goal 一句话目标；scope 范围内功能；outOfScope 为六维自检第 6 维（边界与排除项）的产出；assumptions 为推断项（必须先写进此数组，并在 description 同步标注「（推断）」，不得伪装成用户确认过的事实）；openQuestions 为无法证实的信息缺口。各数组可为空（[]），不得为凑格式虚构条目。
+package 要求（可选，从对话提炼）：package 是 description 的结构化边界索引（供机器引用），**禁止以 package 概括代替 description 正文**——两者须同时给出且口径一致。goal 一句话目标；scope 范围内功能；outOfScope 为六维自检第 6 维（边界与排除项）的产出；acceptanceCriteria 为用户视角的任务级验收条目（封闭集合，每条都要能判定通过与否——拆解侧据此做全覆盖校验，子任务验收据此回溯锚定）；assumptions 为推断项（必须先写进此数组，并在 description 同步标注「（推断）」，不得伪装成用户确认过的事实）；openQuestions 为无法证实的信息缺口。各数组可为空（[]），不得为凑格式虚构条目。

@@ -118,6 +118,27 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     /** /task 直达拆解终稿直出模板（信息严重不足时最多一轮结构化追问，其余直接产 final）。 */
     private static final String FINALIZE_TEMPLATE_PATH = "prompts/requirement-finalize.md";
 
+    /**
+     * 终稿 description 四小节分组关键词（P1-3，宽容匹配）：每组命中任一关键词即视为该组齐全，
+     * 四组全中才判定「四小节完整」。不硬编码「## 背景与目标」这类标题措辞——LLM 变体极多，
+     * 硬匹配误判率高到会白耗重试额度。
+     */
+    private static final List<List<String>> DESCRIPTION_SECTION_KEYWORDS = List.of(
+            List.of("背景", "目标"),
+            List.of("范围", "边界"),
+            List.of("交付物", "交付"),
+            List.of("验收"));
+
+    /** 终稿 description 缺小节时的单次纠偏指令（追加到原 prompt 之后，仅重试轮使用）。 */
+    private static final String DESCRIPTION_SECTION_RETRY_HINT = """
+
+            补充要求（上一轮输出被判定不合格，请只重出一次完整 JSON）：
+            你上一次返回的 description 没有完整覆盖四个小节。请重新输出完整的 final JSON，
+            其中 description 必须用 Markdown 小节**完整写清**下列四部分（缺一不可）：
+            背景与目标 / 范围与边界 / 交付物 / 验收标准。description 是完整规格正文，
+            不得用 package 字段概括代替。
+            """;
+
     private static final String ROLE_USER = "user";
     private static final String ROLE_ASSISTANT = "assistant";
 
@@ -792,6 +813,9 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
             throw new BizException("终稿产出 LLM 调用失败: " + result.getErrorMessage());
         }
         ClarifyReply reply = replyParser.parseReply(result.getOutput());
+        // P1-3：description 四小节不全 → 同轮纠偏重试一次（fail-open，不阻断建任务）
+        reply = applyDescriptionSectionGuard(conversation, planner, prompt,
+                "requirement_finalize", reply);
         if ("final".equals(reply.getType())) {
             String note = reply.getMessage() != null && !reply.getMessage().isBlank()
                     ? reply.getMessage() : "已生成终稿";
@@ -821,6 +845,100 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         }
         return new ClarifyConversationDetail(conversation,
                 messageService.listByConversation(conversationId));
+    }
+
+    /**
+     * 终稿 description 四小节纠偏重试（P1-3）：首次 {@code final} 输出若 description 小节不全，
+     * 在**同一轮内**追加纠偏指令重调一次——仅 1 次，不留重试循环。
+     *
+     * <p>fail-open 边界（红线 4「LLM 输出防御模式不阻断主流程」）：重试调用异常 / 超时、
+     * 重试输出仍缺小节、或重试降级为非 final —— 一律放行首轮结果并记 timeline WARN。
+     * 不能拿小节格式卡死用户建任务（{@code runFinalizeLlmRound} 中 final 后立即建任务）。</p>
+     *
+     * <p>耗时提示：重试是**额外一次同步 LLM 调用**，只在缺小节（少数失败态）时触发；
+     * 单轮最坏耗时约为常规轮的两倍，调用侧脚本的超时窗口需覆盖该边界。</p>
+     *
+     * @param scene AgentTask context 中的 scene 值（requirement_finalize / requirement_clarify）
+     * @return 重试后小节齐全的 final 结果；未触发重试或重试无效时原样返回首轮结果
+     */
+    private ClarifyReply applyDescriptionSectionGuard(RequirementConversation conversation,
+                                                      Agent planner, String prompt,
+                                                      String scene, ClarifyReply firstReply) {
+        if (!isFinalMissingSections(firstReply)) {
+            return firstReply;
+        }
+        Long conversationId = conversation.getId();
+        log.warn("终稿 description 四小节不全，触发单次纠偏重试: conversationId={}, descriptionLength={}",
+                conversationId, firstReply.getDescription() != null
+                        ? firstReply.getDescription().length() : 0);
+        ClarifyReply retried;
+        try {
+            AgentTask retryTask = AgentTask.builder()
+                    .systemPrompt("")
+                    .userPrompt(prompt + DESCRIPTION_SECTION_RETRY_HINT)
+                    .context(Map.of("conversationId", conversationId, "scene", scene))
+                    .requiredCapabilities(Map.of())
+                    .build();
+            AgentResult retryResult = platformAgentExecutionService.executeSync(planner, retryTask);
+            if (!retryResult.isSuccess()) {
+                throw new BizException("重试 LLM 调用失败: " + retryResult.getErrorMessage());
+            }
+            retried = replyParser.parseReply(retryResult.getOutput());
+        } catch (Exception e) {
+            log.warn("终稿小节纠偏重试失败，放行首轮结果: conversationId={}, err={}",
+                    conversationId, e.getMessage());
+            recordDescriptionSectionWarn(conversationId, "retry_failed");
+            return firstReply;
+        }
+        if (!"final".equals(retried.getType())) {
+            // 重试降级为追问：不覆盖首轮终稿（追问不建任务，终稿才是用户要的结果）
+            log.warn("终稿小节纠偏重试未产出 final，放行首轮结果: conversationId={}, type={}",
+                    conversationId, retried.getType());
+            recordDescriptionSectionWarn(conversationId, "retry_not_final");
+            return firstReply;
+        }
+        if (isFinalMissingSections(retried)) {
+            log.warn("终稿小节纠偏重试后仍缺小节，放行首轮结果: conversationId={}", conversationId);
+            recordDescriptionSectionWarn(conversationId, "still_missing");
+            return firstReply;
+        }
+        log.info("终稿 description 四小节纠偏重试成功: conversationId={}", conversationId);
+        return retried;
+    }
+
+    /** final 形态且 description 未覆盖四小节（非 final / 空 description 由各自的必填校验负责）。 */
+    private boolean isFinalMissingSections(ClarifyReply reply) {
+        return reply != null && "final".equals(reply.getType())
+                && !hasAllDescriptionSections(reply.getDescription());
+    }
+
+    /** 宽容匹配四小节：按 {@link #DESCRIPTION_SECTION_KEYWORDS} 分组，命中组数达 4 即视为完整。 */
+    private boolean hasAllDescriptionSections(String description) {
+        if (description == null || description.isBlank()) {
+            return false;
+        }
+        int hit = 0;
+        for (List<String> group : DESCRIPTION_SECTION_KEYWORDS) {
+            for (String keyword : group) {
+                if (description.contains(keyword)) {
+                    hit++;
+                    break;
+                }
+            }
+        }
+        return hit >= DESCRIPTION_SECTION_KEYWORDS.size();
+    }
+
+    /** 小节缺失审计：会话尚未建任务，按系统级事件记（taskId 可空 + payload 带 conversationId）。 */
+    private void recordDescriptionSectionWarn(Long conversationId, String reason) {
+        try {
+            taskTimelineService.recordEvent(null, null, "requirement_description_section_missing",
+                    AgentRole.PLANNER, null,
+                    Map.of("conversationId", conversationId, "reason", reason));
+        } catch (Exception e) {
+            log.warn("终稿小节缺失审计写入失败（不阻断）: conversationId={}, err={}",
+                    conversationId, e.getMessage());
+        }
     }
 
     /**
@@ -1113,6 +1231,9 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         }
 
         ClarifyReply reply = replyParser.parseReply(result.getOutput());
+        // P1-3：description 四小节不全 → 同轮纠偏重试一次（fail-open，不阻断终稿落库）
+        reply = applyDescriptionSectionGuard(conversation, planner, prompt,
+                "requirement_clarify", reply);
         if ("final".equals(reply.getType())) {
             String note = reply.getMessage() != null && !reply.getMessage().isBlank()
                     ? reply.getMessage() : "已生成终稿";

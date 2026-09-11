@@ -143,7 +143,7 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
             throw new BizException("Planner LLM 调用失败: " + result.getErrorMessage());
         }
 
-        List<PlanDraftItem> items = parseDraftItems(result.getOutput());
+        List<PlanDraftItem> items = parseDraftItems(taskId, planner, result.getOutput());
         validateDependencies(items);
         List<SubTask> drafts = buildDrafts(task, items, planner, decision);
         subTaskService.saveBatch(drafts);
@@ -274,8 +274,15 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
         return String.join(", ", requiredSkills);
     }
 
-    /** 解析 LLM 输出为草案条目：strip markdown fence 容错 + 逐条校验必填字段与数量上限。 */
-    private List<PlanDraftItem> parseDraftItems(String rawOutput) {
+    /**
+     * 解析 LLM 输出为草案条目：strip markdown fence 容错 + 逐条校验必填字段与数量上限。
+     *
+     * <p>必填校验（P1）覆盖 title / content / deliverable / acceptance 四字段，任一缺失
+     * 即 fail-close：落库残缺草案（acceptance=null）会让执行侧失去验收依据、审查侧无标准
+     * 可核，代价远高于拆解失败——失败已可经 republish / planById 重触发（入口既有）。
+     * 与提示词 planner-decompose.md「字段全部必填」对齐，把提示词约定落到代码兜底。</p>
+     */
+    private List<PlanDraftItem> parseDraftItems(Long taskId, Agent planner, String rawOutput) {
         if (rawOutput == null || rawOutput.isBlank()) {
             throw new BizException("Planner LLM 返回内容为空");
         }
@@ -295,11 +302,41 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
         }
         for (int i = 0; i < items.size(); i++) {
             PlanDraftItem item = items.get(i);
-            if (item.getTitle() == null || item.getTitle().isBlank()) {
-                throw new BizException("拆解结果第 " + (i + 1) + " 条缺少 title");
+            String missing = missingRequiredField(item);
+            if (missing != null) {
+                // 审计先于抛出：失败原因可回溯到具体字段与原始输出（timeline 记录不阻断主流程）
+                taskTimelineService.recordEvent(taskId, null, "task_plan_draft_field_missing",
+                        AgentRole.PLANNER, planner.getId(),
+                        Map.of("draftSeq", i + 1, "field", missing,
+                                "title", item.getTitle() != null ? item.getTitle() : "",
+                                "rawOutputSummary", summarize(rawOutput)));
+                throw new BizException("拆解结果第 " + (i + 1) + " 条缺少 " + missing
+                        + " 字段; 原始输出摘要: " + summarize(rawOutput));
             }
         }
         return items;
+    }
+
+    /**
+     * 草案必填字段探测：title / content / deliverable / acceptance 四字段任一为 null 或
+     * 空白即视为缺失（LLM 常以空串或纯空白占位，需按内容为空处理）。
+     *
+     * @return 首个缺失字段名；四字段齐全返回 {@code null}
+     */
+    private static String missingRequiredField(PlanDraftItem item) {
+        if (item.getTitle() == null || item.getTitle().isBlank()) {
+            return "title";
+        }
+        if (item.getContent() == null || item.getContent().isBlank()) {
+            return "content";
+        }
+        if (item.getDeliverable() == null || item.getDeliverable().isBlank()) {
+            return "deliverable";
+        }
+        if (item.getAcceptance() == null || item.getAcceptance().isBlank()) {
+            return "acceptance";
+        }
+        return null;
     }
 
     /** 剥离 markdown 代码块围栏，并兜底截取首尾方括号之间的 JSON 数组。 */
