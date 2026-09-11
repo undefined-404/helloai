@@ -88,6 +88,10 @@ class RequirementPromptTemplateContractTest {
                 .contains("执行约束遵守核验")
                 .contains("不确定性分级核验")
                 .contains("ASSUMPTION 类申报不构成驳回理由")
-                .contains("须含验证结论或 BLOCKED 上报痕迹");
+                .contains("须含验证结论或 BLOCKED 上报痕迹")
+                // P2-4 缺失证据清单（返工可执行性）：轨道 A 第 10 条 + 输出 schema 键
+                .contains("缺失证据清单")
+                .contains("missingEvidence")
+                .contains("acceptanceRef");
     }
 }

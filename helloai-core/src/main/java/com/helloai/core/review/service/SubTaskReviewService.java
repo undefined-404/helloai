@@ -1,5 +1,6 @@
 package com.helloai.core.review.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.helloai.core.shared.event.SubTaskSubmittedForReviewEvent;
 import lombok.Data;
 
@@ -68,5 +69,12 @@ public interface SubTaskReviewService {
         private String comment;
         /** 逐条对照验收标准的核验分析过程（人工复核判定思路的材料，全文进对话流） */
         private String analysis;
+        /**
+         * 驳回时的结构化「缺失证据清单」（P2-4，防御承接）：数组元素形如
+         * {acceptanceRef: 被驳回验收标准的原文子串, missing: 缺什么证据, howTo: 怎样补齐}。
+         * 用 JsonNode 承接防非法形态击穿判定解析（缺失/非数组/元素非对象一律降级空清单），
+         * 消费前经 {@code VerdictParser.normalizeMissingEvidence} 归一。仅作返工指引，不参与 pass 判定。
+         */
+        private JsonNode missingEvidence;
     }
 }

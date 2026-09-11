@@ -228,6 +228,41 @@ class SubTaskReviewServiceTest {
     // ══════════════════════════════════════════════════════════════
     //  reviewSubTask：判定后动作
     // ══════════════════════════════════════════════════════════════
+    @Test
+    @DisplayName("parseVerdict + normalizeMissingEvidence：结构化缺失证据原样承接，非法元素逐条丢弃")
+    void shouldParseAndNormalizeMissingEvidence() {
+        SubTaskReviewService.ReviewVerdict verdict = reviewService.parseVerdict(
+                "{\"pass\": false, \"score\": 2, \"issues\": \"缺端点\", \"comment\": \"\","
+                        + " \"missingEvidence\": ["
+                        + "{\"acceptanceRef\": \"覆盖全部端点\", \"missing\": \"DELETE /x 无证据\", \"howTo\": \"补 curl 输出\"},"
+                        + "\" 裸字符串 \", {}, {\"acceptanceRef\": \"   \"}, {\"missing\": \"只有缺什么\"}]}");
+        assertThat(verdict).isNotNull();
+
+        List<Map<String, String>> normalized = VerdictParser.normalizeMissingEvidence(verdict.getMissingEvidence());
+        assertThat(normalized).hasSize(2);
+        assertThat(normalized.get(0)).containsEntry("acceptanceRef", "覆盖全部端点")
+                .containsEntry("missing", "DELETE /x 无证据")
+                .containsEntry("howTo", "补 curl 输出");
+        // 非对象元素、三键全空条目被丢弃；仅个别键有效的条目保留有效键
+        assertThat(normalized.get(1)).containsOnlyKeys("missing");
+    }
+
+    @Test
+    @DisplayName("normalizeMissingEvidence：缺失 / 非数组 / 非对象一律降级空清单（防御零影响）")
+    void shouldNormalizeMissingEvidenceToEmptyList() {
+        assertThat(VerdictParser.normalizeMissingEvidence(null)).isEmpty();
+        SubTaskReviewService.ReviewVerdict absent = reviewService.parseVerdict(
+                "{\"pass\": false, \"score\": 2, \"issues\": \"x\", \"comment\": \"\"}");
+        assertThat(VerdictParser.normalizeMissingEvidence(absent.getMissingEvidence())).isEmpty();
+        SubTaskReviewService.ReviewVerdict textForm = reviewService.parseVerdict(
+                "{\"pass\": false, \"score\": 2, \"issues\": \"x\", \"comment\": \"\", \"missingEvidence\": \"none\"}");
+        assertThat(VerdictParser.normalizeMissingEvidence(textForm.getMissingEvidence())).isEmpty();
+        SubTaskReviewService.ReviewVerdict objectForm = reviewService.parseVerdict(
+                "{\"pass\": false, \"score\": 2, \"issues\": \"x\", \"comment\": \"\","
+                        + " \"missingEvidence\": {\"acceptanceRef\": \"a\"}}");
+        assertThat(VerdictParser.normalizeMissingEvidence(objectForm.getMissingEvidence())).isEmpty();
+    }
+
 
     @Test
     @DisplayName("核验通过 → complete（REVIEW→DONE）并记 timeline")
@@ -517,6 +552,52 @@ class SubTaskReviewServiceTest {
         Object done = first.get("executorDoneIssues");
         assertThat(done).isInstanceOf(List.class);
         assertThat((List<?>) done).isEmpty();
+    }
+
+    @Test
+    @DisplayName("P2-4 驳回 → reviewHistory 当前轮写入归一后的 missingEvidence 清单")
+    void shouldPersistMissingEvidenceIntoReviewHistory() {
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": false, \"score\": 2, \"issues\": \"缺端点\", \"comment\": \"请补\","
+                                + " \"missingEvidence\": [{\"acceptanceRef\": \"覆盖全部端点\","
+                                + " \"missing\": \"DELETE 端点无验证\", \"howTo\": \"补 curl 命令与输出\"},"
+                                + " {\"acceptanceRef\": \"   \"}]}",
+                        "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        ArgumentCaptor<SubTask> captor = ArgumentCaptor.forClass(SubTask.class);
+        verify(subTaskService).updateById(captor.capture());
+        List<?> history = (List<?>) captor.getValue().getContext().get("reviewHistory");
+        Map<?, ?> first = (Map<?, ?>) history.get(0);
+        Object raw = first.get("missingEvidence");
+        assertThat(raw).isInstanceOf(List.class);
+        List<?> evidence = (List<?>) raw;
+        assertThat(evidence).hasSize(1);
+        assertThat(evidence.get(0)).isEqualTo(Map.of(
+                "acceptanceRef", "覆盖全部端点",
+                "missing", "DELETE 端点无验证",
+                "howTo", "补 curl 命令与输出"));
+    }
+
+    @Test
+    @DisplayName("P2-4 驳回：LLM 未产出 missingEvidence → 落库空清单（形状稳定，零影响）")
+    void shouldPersistEmptyMissingEvidenceWhenAbsent() {
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": false, \"score\": 2, \"issues\": \"缺端点\", \"comment\": \"请补\"}",
+                        "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        ArgumentCaptor<SubTask> captor = ArgumentCaptor.forClass(SubTask.class);
+        verify(subTaskService).updateById(captor.capture());
+        List<?> history = (List<?>) captor.getValue().getContext().get("reviewHistory");
+        Map<?, ?> first = (Map<?, ?>) history.get(0);
+        assertThat((List<?>) first.get("missingEvidence")).isEmpty();
     }
 
     // ══════════════════════════════════════════════════════════════

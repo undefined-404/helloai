@@ -592,6 +592,8 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                 current.put("comment", verdict.getComment());
                 current.put("score", verdict.getScore());
                 current.put("executorDoneIssues", List.of());  // 留待执行回填 hook（不在本轮范围）
+                // P2-4：驳回携带结构化缺失证据清单（LLM 未产出/形态非法 → 空清单，零影响）
+                current.put("missingEvidence", VerdictParser.normalizeMissingEvidence(verdict.getMissingEvidence()));
                 history.add(current);
 
                 ctx.put("reviewHistory", history);

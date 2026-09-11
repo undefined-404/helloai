@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # helloai 结构化选项式需求澄清验证脚本（V33）
 # 用途：真实链路验证 requirement_message.payload 双模协议：
 #       ① 创建澄清会话（模糊需求 + 钉定 PLANNER），断言 assistant 消息落库
@@ -7,7 +7,9 @@
 #       ③ mode=structured 时按第一题第一选项构造 selectedOptions 提交，
 #          断言 user 消息 payload 含 selections 选择快照
 #       ④ freeform / 无 payload 时验证纯文本兼容路径（payload 为 NULL）
-#       ⑤ abandon 会话清理
+#       ⑤ 终稿信息量回归（P2-2，SOFT）：推进至终稿，软断言 description 小节组命中 >= 3、
+#          长度 >= 300、context.requirementPackage 存在（LLM 输出不可控，不 hard fail）
+#       ⑥ abandon 会话清理（已 FINALIZED 时跳过，改提示人工清理测试数据）
 # Ref:  doc/HelloAI_实现差距表.md（V33 结构化选项式需求澄清）
 # 前置：helloai-start 已运行 + LLM 可用（DEEPSEEK_API_KEY 或 application.yml 默认 key）
 # 用法（项目根）：
@@ -163,9 +165,52 @@ if ($payloadMode -eq "structured") {
     Write-Host "SOFT: LLM did not return structured mode this round, skip STEP5/6 (freeform is a valid first-class path)"
 }
 
-Write-Host "STEP7: abandon conversation (cleanup)"
-$abandonResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/requirement-conversations/abandonById/" + $convId) -Body @{} -Headers $adminHeaders
-Assert-True ($abandonResp.code -eq 200) ("abandon code=" + $abandonResp.code + " msg=" + $abandonResp.msg)
+# ── 终稿信息量回归（P2-2，SOFT）：澄清 → 终稿链路的 description 信息量此前无任何回归防线 ──
+Write-Host ("STEP7: final draft info-volume regression (LLM call, timeout=" + $RoundTimeoutSec + "s; SOFT)")
+$finalized = $false
+$createdTaskId = $null
+try {
+    # 终稿触发：用户明确"没有其他要求"时提示词要求立即产出终稿（requirement-clarify.md 第 4 条）
+    $nudgeResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/requirement-conversations/sendMessageById/" + $convId) -Body @{
+        message = "没有其他要求，请直接生成终稿（描述须完整给出「背景与目标」「范围与边界」「交付物」「验收标准」四个小节的正文）。"
+    } -Headers $adminHeaders -TimeoutSec $RoundTimeoutSec
+    Assert-True ($nudgeResp.code -eq 200) ("finalize nudge code=" + $nudgeResp.code + " msg=" + $nudgeResp.msg)
+
+    $finalResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/requirement-conversations/finalizeById/" + $convId) -Body @{} -Headers $adminHeaders -TimeoutSec $RoundTimeoutSec
+    Assert-True ($finalResp.code -eq 200) ("finalize code=" + $finalResp.code + " msg=" + $finalResp.msg)
+    $createdTask = $finalResp.data
+    $createdTaskId = [string]$createdTask.id
+    $finalized = $true
+
+    # 软断言（LLM 输出不可控，硬断言会让脚本日常飘红）：小节组命中 / 描述长度 / 需求包存在
+    $finalDesc = [string]$createdTask.description
+    $sectionHits = 0
+    if ($finalDesc -match "背景|目标") { $sectionHits++ }
+    if ($finalDesc -match "范围|边界") { $sectionHits++ }
+    if ($finalDesc -match "交付物|交付") { $sectionHits++ }
+    if ($finalDesc -match "验收") { $sectionHits++ }
+    $finalPkg = $null
+    if ($createdTask.context -ne $null) { $finalPkg = $createdTask.context.requirementPackage }
+    $acceptanceCount = 0
+    if ($finalPkg -ne $null) { $acceptanceCount = @($finalPkg.acceptanceCriteria).Count }
+    Write-Host ("final draft: taskId=" + $createdTaskId + " descLength=" + $finalDesc.Length + " sectionHits=" + $sectionHits + "/4 package=" + ($finalPkg -ne $null) + " acceptanceCriteria=" + $acceptanceCount)
+    if ($sectionHits -ge 3 -and $finalDesc.Length -ge 300 -and $finalPkg -ne $null) {
+        Write-Host "final description regression verified (P2-2 soft assertions passed)"
+    } else {
+        Write-Host "SOFT: final description info-volume below conservative threshold (sections>=3 / length>=300 / package present) - LLM output is not deterministic, not a hard failure"
+    }
+} catch {
+    Write-Host ("SOFT: final draft regression skipped (LLM 未产出终稿 / 调用异常): " + $_.Exception.Message)
+}
+
+Write-Host "STEP8: cleanup"
+if ($finalized) {
+    # FINALIZED 会话承载任务追溯（禁止 abandon / 删除），测试任务与草案需人工清理
+    Write-Host ("SKIP abandon: conversation FINALIZED with test task taskId=" + $createdTaskId + "（可用 cleanup-test-data.sql 清理残留）")
+} else {
+    $abandonResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/requirement-conversations/abandonById/" + $convId) -Body @{} -Headers $adminHeaders
+    Assert-True ($abandonResp.code -eq 200) ("abandon code=" + $abandonResp.code + " msg=" + $abandonResp.msg)
+}
 
 Write-Host ""
 Write-Host "=== verify-requirement-clarify-structured PASSED ==="

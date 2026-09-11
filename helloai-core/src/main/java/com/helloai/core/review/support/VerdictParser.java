@@ -1,12 +1,16 @@
 package com.helloai.core.review.support;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.core.review.service.SubTaskReviewService;
 import com.helloai.core.shared.util.LlmJsonSanitizer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -19,13 +23,17 @@ import java.util.Map;
  *         （调用方据此停留 REVIEW 等人工兜底）；</li>
  *     <li>判定渲染与工具：{@link #formatReviewResult}（前端可读中文结论）、
  *         {@link #summarize}（长文本摘要）、{@link #safeMap}（键值对安全组装）、
- *         {@link #nullToEmpty}（空值兜底）。</li>
+ *         {@link #nullToEmpty}（空值兜底）、
+ *         {@link #normalizeMissingEvidence}（P2-4 缺失证据清单防御归一）。</li>
  * </ul>
  *
  * <p>纯解析无状态：不触发任何状态变更，只做字符串 ↔ 结构化对象转换。</p>
  */
 @Component
 public class VerdictParser {
+
+    /** 缺失证据清单条目上限（防 LLM 超量输出把下游注入文本撑爆）。 */
+    private static final int MAX_MISSING_EVIDENCE = 20;
 
     private final ObjectMapper objectMapper;
 
@@ -123,5 +131,44 @@ public class VerdictParser {
     /** 空值兜底：null → 空串（Prompt 占位替换防 NPE）。 */
     public static String nullToEmpty(String s) {
         return s != null ? s : "";
+    }
+
+    /**
+     * 归一核验输出的 missingEvidence（P2-4 轻方案）：缺失/非数组/空数组 → 空清单；
+     * 非对象元素、三键全空条目一律丢弃；文本键去首尾空白后保留；数值/布尔容忍 toString。
+     * 任意非法形态零影响（纯防御承接，不改变 pass 判定与状态流转）。
+     */
+    public static List<Map<String, String>> normalizeMissingEvidence(JsonNode raw) {
+        if (raw == null || !raw.isArray() || raw.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, String>> normalized = new ArrayList<>();
+        for (JsonNode node : raw) {
+            if (normalized.size() >= MAX_MISSING_EVIDENCE) {
+                break;
+            }
+            if (node == null || !node.isObject()) {
+                continue;
+            }
+            Map<String, String> item = new LinkedHashMap<>();
+            putIfText(item, "acceptanceRef", node.get("acceptanceRef"));
+            putIfText(item, "missing", node.get("missing"));
+            putIfText(item, "howTo", node.get("howTo"));
+            if (!item.isEmpty()) {
+                normalized.add(item);
+            }
+        }
+        return normalized;
+    }
+
+    /** 提取文本值写入目标 Map：空/缺失/容器类型一律跳过（防御式，不抛异常）。 */
+    private static void putIfText(Map<String, String> target, String key, JsonNode node) {
+        if (node == null || node.isNull() || node.isObject() || node.isArray()) {
+            return;
+        }
+        String text = node.asText();
+        if (text != null && !text.isBlank()) {
+            target.put(key, text.trim());
+        }
     }
 }

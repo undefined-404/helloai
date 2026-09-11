@@ -344,6 +344,49 @@ class SubTaskServiceHandoverTest {
     }
 
     @Test
+    @DisplayName("P2-4 驳回补发通知：摘要携带缺失证据清单（验收条目引用 + 缺什么 + 怎样补齐）")
+    void shouldRenderMissingEvidenceInReworkSummary() {
+        SubTask reviewTask = subTask(SubTaskStatus.REVIEW, OLD_AGENT);
+        reviewTask.setContext(Map.of("reviewHistory", List.of(
+                Map.of("round", 1, "score", 2, "comment", "实现不完整",
+                        "issues", List.of("缺异常处理"),
+                        "missingEvidence", List.of(
+                                Map.of("acceptanceRef", "覆盖全部端点", "missing", "DELETE 端点无验证",
+                                        "howTo", "补 curl 命令与输出"),
+                                Map.of("missing", "无单测")))
+        )));
+        doReturn(reviewTask).when(subTaskService).getById(SUB_TASK_ID);
+
+        subTaskService.rework(SUB_TASK_ID, null);
+
+        ArgumentCaptor<String> summaryCaptor = ArgumentCaptor.forClass(String.class);
+        verify(agentInboxService).send(eq(OLD_AGENT), anyString(), eq("sub_task.rejected"),
+                anyString(), summaryCaptor.capture(), eq("sub_task"), eq(SUB_TASK_ID), eq("HIGH"));
+        String summary = summaryCaptor.getValue();
+        assertThat(summary).contains("缺失证据清单")
+                .contains("「覆盖全部端点」缺: DELETE 端点无验证；补齐: 补 curl 命令与输出")
+                .contains("缺: 无单测");
+    }
+
+    @Test
+    @DisplayName("P2-4 驳回补发通知：missingEvidence 缺失或为空时不追加清单段（零影响）")
+    void shouldSkipMissingEvidenceSectionWhenAbsent() {
+        SubTask reviewTask = subTask(SubTaskStatus.REVIEW, OLD_AGENT);
+        reviewTask.setContext(Map.of("reviewHistory", List.of(
+                Map.of("round", 1, "score", 2, "comment", "实现不完整",
+                        "issues", List.of("缺异常处理"), "missingEvidence", List.of())
+        )));
+        doReturn(reviewTask).when(subTaskService).getById(SUB_TASK_ID);
+
+        subTaskService.rework(SUB_TASK_ID, null);
+
+        ArgumentCaptor<String> summaryCaptor = ArgumentCaptor.forClass(String.class);
+        verify(agentInboxService).send(eq(OLD_AGENT), anyString(), eq("sub_task.rejected"),
+                anyString(), summaryCaptor.capture(), eq("sub_task"), eq(SUB_TASK_ID), eq("HIGH"));
+        assertThat(summaryCaptor.getValue()).doesNotContain("缺失证据清单");
+    }
+
+    @Test
     @DisplayName("自动驳回换人（rework 防御性兼容）：旧执行者收到 sub_task.reassigned，新执行者收到 sub_task.rejected")
     void shouldNotifyOldAgentWhenReworkSwitchesAgent() {
         doReturn(subTask(SubTaskStatus.REVIEW, OLD_AGENT))

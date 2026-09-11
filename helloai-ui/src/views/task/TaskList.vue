@@ -215,7 +215,7 @@
       @done="load"
     />
 
-    <!-- 描述详情弹窗 -->
+    <!-- 任务详情弹窗：任务描述 + 需求包（任务级验收标准含在内）；无需求包时整块隐藏（存量任务零变化） -->
     <el-dialog
       v-model="descVisible"
       :title="descTitle"
@@ -225,10 +225,52 @@
       :show-close="true"
       :close-on-click-modal="false"
     >
-      <MarkdownView
-        :content="descContent"
-        class="desc-md"
-      />
+      <div class="detail-block">
+        <div class="detail-caption">
+          任务描述
+        </div>
+        <MarkdownView
+          v-if="descContent"
+          :content="descContent"
+          class="desc-md"
+        />
+        <p
+          v-else
+          class="detail-empty"
+        >
+          —
+        </p>
+      </div>
+      <div
+        v-if="descPackage"
+        class="detail-block"
+      >
+        <div class="detail-caption">
+          需求包
+        </div>
+        <div
+          v-if="descPackage.goal"
+          class="detail-row"
+        >
+          <span class="detail-label">目标</span>
+          <span class="detail-value">{{ descPackage.goal }}</span>
+        </div>
+        <div
+          v-for="group in descPackageGroups"
+          :key="group.label"
+          class="detail-row"
+        >
+          <span class="detail-label">{{ group.label }}</span>
+          <ul class="detail-list">
+            <li
+              v-for="(item, idx) in group.items"
+              :key="idx"
+            >
+              {{ item }}
+            </li>
+          </ul>
+        </div>
+      </div>
     </el-dialog>
   </div>
 </template>
@@ -308,13 +350,64 @@ function goSubTasks(row: any) { router.push('/sub-tasks?taskId=' + String(row.id
 // 事件流工作台：按任务维度回放 / 审计（深链自动带入 taskId 并查询）
 function goEvents(row: any) { router.push('/event-stream?taskId=' + String(row.id)) }
 
-// 描述点击 → 弹窗展示
+// 描述点击 → 「任务详情」弹窗（任务描述 + 需求包；上下文字段缺失/为空时需求包整块隐藏）
 const descVisible = ref(false)
 const descTitle = ref('')
 const descContent = ref('')
+const descPackage = ref<DescRequirementPackage | null>(null)
+
+interface DescRequirementPackage {
+  goal: string
+  scope: string[]
+  outOfScope: string[]
+  acceptanceCriteria: string[]
+  assumptions: string[]
+  openQuestions: string[]
+}
+
+/** 数组字段防御式归一：非数组 / 非字符串元素 / 空白项一律丢弃（与后端解析同口径）。 */
+function stringList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((v): v is string => typeof v === 'string' && v.trim() !== '')
+    .map(v => v.trim())
+}
+
+/** context.requirementPackage 归一：非法形态或六字段全空回落 null（整块隐藏，存量任务零变化）。 */
+function normalizeRequirementPackage(raw: unknown): DescRequirementPackage | null {
+  if (!raw || typeof raw !== 'object') return null
+  const src = raw as Record<string, unknown>
+  const pkg: DescRequirementPackage = {
+    goal: typeof src.goal === 'string' ? src.goal.trim() : '',
+    scope: stringList(src.scope),
+    outOfScope: stringList(src.outOfScope),
+    acceptanceCriteria: stringList(src.acceptanceCriteria),
+    assumptions: stringList(src.assumptions),
+    openQuestions: stringList(src.openQuestions),
+  }
+  const empty = !pkg.goal
+    && !pkg.scope.length && !pkg.outOfScope.length && !pkg.acceptanceCriteria.length
+    && !pkg.assumptions.length && !pkg.openQuestions.length
+  return empty ? null : pkg
+}
+
+// 需求包分组：只渲染有条目的组（字段顺序与后端 RequirementPackageParser.render 一致）
+const descPackageGroups = computed((): { label: string; items: string[] }[] => {
+  const pkg = descPackage.value
+  if (!pkg) return []
+  return [
+    { label: '范围', items: pkg.scope },
+    { label: '明确不做（outOfScope）', items: pkg.outOfScope },
+    { label: '任务级验收标准（acceptanceCriteria）', items: pkg.acceptanceCriteria },
+    { label: '关键假设（推断项）', items: pkg.assumptions },
+    { label: '待确认事项（openQuestions）', items: pkg.openQuestions },
+  ].filter(group => group.items.length > 0)
+})
+
 function openDesc(row: any) {
-  descTitle.value = row.title || '任务描述'
+  descTitle.value = row.title ? `${row.title} · 任务详情` : '任务详情'
   descContent.value = row.description || ''
+  descPackage.value = normalizeRequirementPackage(row.context?.requirementPackage)
   descVisible.value = true
 }
 // V29 对话新建跳转带 ?review=taskId 时，按状态分流：
@@ -442,4 +535,13 @@ async function handlePlan(row: Task) {
 .desc-md :deep(h2),
 .desc-md :deep(h3),
 .desc-md :deep(h4) { margin-bottom: 0; }
+/* 任务详情弹窗：描述 / 需求包分区，标签定宽 + 条目列表紧凑行高 */
+.detail-block + .detail-block { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--el-border-color-lighter); }
+.detail-caption { margin-bottom: 8px; font-weight: 600; color: var(--el-text-color-primary); }
+.detail-row { display: flex; gap: 8px; margin-bottom: 6px; }
+.detail-label { flex: none; min-width: 72px; color: var(--el-text-color-secondary); }
+.detail-value { flex: 1; word-break: break-word; }
+.detail-list { flex: 1; margin: 0; padding-left: 16px; }
+.detail-list li { line-height: 1.6; }
+.detail-empty { margin: 0; color: var(--el-text-color-placeholder); }
 </style>

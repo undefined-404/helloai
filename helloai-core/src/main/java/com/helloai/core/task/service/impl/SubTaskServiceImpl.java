@@ -490,10 +490,47 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
                 } else if (issues instanceof String issueStr && !issueStr.isBlank()) {
                     sb.append("；问题: ").append(clip(issueStr, 150));
                 }
+                Object missingEvidence = m.get("missingEvidence");
+                if (missingEvidence instanceof List<?> evidenceList && !evidenceList.isEmpty()) {
+                    String joined = evidenceList.stream()
+                            .map(SubTaskServiceImpl::formatMissingEvidence)
+                            .filter(s -> !s.isBlank())
+                            .collect(Collectors.joining("；"));
+                    if (!joined.isBlank()) {
+                        sb.append("；缺失证据清单: ").append(clip(joined, 300));
+                    }
+                }
                 return sb.toString();
             }
         }
         return "请查审查记录了解具体问题";
+    }
+
+    /**
+     * 渲染单条缺失证据（P2-4）：引用验收条目原文子串 + 缺什么证据 + 怎样补齐。
+     * 键缺失/非文本一律跳过（与 VerdictParser.normalizeMissingEvidence 同源的防御口径）。
+     */
+    private static String formatMissingEvidence(Object raw) {
+        if (!(raw instanceof Map<?, ?> m)) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        Object acceptanceRef = m.get("acceptanceRef");
+        if (acceptanceRef instanceof String ref && !ref.isBlank()) {
+            sb.append("「").append(ref).append("」");
+        }
+        Object missing = m.get("missing");
+        if (missing instanceof String missingStr && !missingStr.isBlank()) {
+            sb.append("缺: ").append(missingStr);
+        }
+        Object howTo = m.get("howTo");
+        if (howTo instanceof String howToStr && !howToStr.isBlank()) {
+            if (sb.length() > 0) {
+                sb.append("；");
+            }
+            sb.append("补齐: ").append(howToStr);
+        }
+        return sb.toString();
     }
 
     /**
