@@ -1,5 +1,6 @@
 package com.helloai.core.system.service;
 
+import cn.dev33.satoken.stp.StpUtil;
 import com.helloai.common.base.BizException;
 import com.helloai.core.system.entity.SysUser;
 import com.helloai.core.system.mapper.SysUserMapper;
@@ -9,8 +10,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
+import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
@@ -18,40 +19,37 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 
-import java.time.Duration;
-
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * AuthService 单测（管理员会话 Redis 化， 落地）。
+ * AuthService 单测（Sa-Token 会话化）。
  *
  * <p>覆盖契约：
  * <ol>
- *   <li>登录成功后会话以 JSON 写入 Redis（key 前缀 auth:admin:token:，TTL 8h）</li>
- *   <li>校验命中后滑动续期（expire 重置 TTL）</li>
- *   <li>token 未命中 / 缓存值损坏 → 401，损坏 key 被清理</li>
- *   <li>登出删除 Redis key</li>
- *   <li>Agent API Key 校验已下沉至 agent 域 AgentAuthPort（见 AgentServiceTest），本测试不再覆盖</li>
+ *   <li>登录成功后调用 {@code StpUtil.login} 建立会话，返回 token + 用户信息</li>
+ *   <li>密码错误 / 用户不存在 → 抛 BizException 且不建立会话</li>
+ *   <li>token 校验：{@code StpUtil.getLoginIdByToken} 命中 → 回读用户返回会话</li>
+ *   <li>token 未登录（NotLoginException）→ 401；对应用户缺失/禁用 → 401</li>
+ *   <li>登出调用 {@code StpUtil.logoutByTokenValue}</li>
  * </ol>
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
-@DisplayName("AuthService 管理员会话 Redis 化")
+@DisplayName("AuthService Sa-Token 会话")
 class AuthServiceTest {
 
     @Mock
     private SysUserMapper sysUserMapper;
-
     @Mock
     private StringRedisTemplate redis;
-
     @Mock
     private ValueOperations<String, String> valueOps;
 
@@ -60,7 +58,6 @@ class AuthServiceTest {
     @BeforeEach
     void setUp() {
         authService = new AuthServiceImpl(sysUserMapper, redis);
-        // LENIENT 模式：部分用例不触 Redis，此 stubbing 不是"未使用"而是被跳过
         when(redis.opsForValue()).thenReturn(valueOps);
     }
 
@@ -80,34 +77,31 @@ class AuthServiceTest {
     class AdminLogin {
 
         @Test
-        @DisplayName("登录成功后会话 JSON 写入 Redis，key 前缀 + TTL 符合约定")
-        void adminLogin_success_shouldWriteSessionToRedis() {
+        @DisplayName("登录成功后建立 Sa-Token 会话并返回 token")
+        void adminLogin_success_shouldLoginAndReturnToken() {
             when(sysUserMapper.selectOne(any())).thenReturn(newActiveUser("pass123"));
 
-            AuthService.AdminSession session = authService.adminLogin("admin", "pass123");
+            try (MockedStatic<StpUtil> stp = mockStatic(StpUtil.class)) {
+                stp.when(() -> StpUtil.login(any())).thenAnswer(inv -> null);
+                stp.when(StpUtil::getTokenValue).thenReturn("tok-1");
 
-            assertThat(session.token()).isNotBlank();
-            assertThat(session.id()).isEqualTo(1001L);
+                AuthService.AdminSession session = authService.adminLogin("admin", "pass123");
 
-            ArgumentCaptor<String> keyCaptor = ArgumentCaptor.forClass(String.class);
-            ArgumentCaptor<String> valueCaptor = ArgumentCaptor.forClass(String.class);
-            ArgumentCaptor<Duration> ttlCaptor = ArgumentCaptor.forClass(Duration.class);
-            verify(valueOps).set(keyCaptor.capture(), valueCaptor.capture(), ttlCaptor.capture());
-
-            assertThat(keyCaptor.getValue())
-                    .isEqualTo(AuthService.ADMIN_TOKEN_KEY_PREFIX + session.token());
-            assertThat(valueCaptor.getValue()).contains("\"username\":\"admin\"");
-            assertThat(ttlCaptor.getValue()).isEqualTo(AuthService.ADMIN_TOKEN_TTL);
+                assertThat(session.token()).isEqualTo("tok-1");
+                assertThat(session.id()).isEqualTo(1001L);
+                stp.verify(() -> StpUtil.login(1001L));
+            }
         }
 
         @Test
-        @DisplayName("密码错误应抛 BizException 且不写 Redis")
-        void adminLogin_wrongPassword_shouldThrowAndSkipRedis() {
+        @DisplayName("密码错误应抛 BizException 且不建会话")
+        void adminLogin_wrongPassword_shouldThrowAndSkipLogin() {
             when(sysUserMapper.selectOne(any())).thenReturn(newActiveUser("pass123"));
 
-            assertThrows(BizException.class, () -> authService.adminLogin("admin", "wrong"));
-
-            verify(valueOps, never()).set(anyString(), anyString(), any(Duration.class));
+            try (MockedStatic<StpUtil> stp = mockStatic(StpUtil.class)) {
+                assertThrows(BizException.class, () -> authService.adminLogin("admin", "wrong"));
+                stp.verify(() -> StpUtil.login(any()), never());
+            }
         }
 
         @Test
@@ -126,44 +120,105 @@ class AuthServiceTest {
     class ValidateAdminToken {
 
         @Test
-        @DisplayName("Redis 命中应返回会话并滑动续期")
-        void validateAdminToken_hit_shouldReturnSessionAndRenewTtl() {
-            String token = "tok-1";
-            String key = AuthService.ADMIN_TOKEN_KEY_PREFIX + token;
-            when(valueOps.get(key)).thenReturn(
-                    "{\"token\":\"tok-1\",\"id\":1001,\"username\":\"admin\","
-                            + "\"displayName\":\"管理员\",\"role\":\"ADMIN\"}");
+        @DisplayName("token 命中应回读用户并返回会话")
+        void validateAdminToken_hit_shouldReturnSession() {
+            when(sysUserMapper.selectById(1001L)).thenReturn(newActiveUser("pass123"));
 
-            AuthService.AdminSession session = authService.validateAdminToken(token);
+            try (MockedStatic<StpUtil> stp = mockStatic(StpUtil.class)) {
+                stp.when(() -> StpUtil.getLoginIdByToken("tok-1")).thenReturn(1001L);
 
-            assertThat(session.id()).isEqualTo(1001L);
-            assertThat(session.username()).isEqualTo("admin");
-            verify(redis).expire(key, AuthService.ADMIN_TOKEN_TTL);
+                AuthService.AdminSession session = authService.validateAdminToken("tok-1");
+
+                assertThat(session.id()).isEqualTo(1001L);
+                assertThat(session.username()).isEqualTo("admin");
+            }
         }
 
         @Test
-        @DisplayName("Redis 未命中应抛 401")
-        void validateAdminToken_miss_shouldThrow401() {
-            when(valueOps.get(anyString())).thenReturn(null);
+        @DisplayName("token 未登录应抛 401")
+        void validateAdminToken_notLogin_shouldThrow401() {
+            try (MockedStatic<StpUtil> stp = mockStatic(StpUtil.class)) {
+                stp.when(() -> StpUtil.getLoginIdByToken(anyString()))
+                        .thenReturn(null);
 
-            BizException ex = assertThrows(BizException.class,
-                    () -> authService.validateAdminToken("expired-token"));
-            assertEquals(401, ex.getCode());
+                BizException ex = assertThrows(BizException.class,
+                        () -> authService.validateAdminToken("bad-tok"));
+                assertEquals(401, ex.getCode());
+            }
         }
 
         @Test
-        @DisplayName("缓存值损坏应清理 key 并抛 401")
-        void validateAdminToken_corruptValue_shouldEvictAndThrow401() {
-            String token = "tok-bad";
-            String key = AuthService.ADMIN_TOKEN_KEY_PREFIX + token;
-            when(valueOps.get(key)).thenReturn("not-a-json");
+        @DisplayName("对应用户不存在应抛 401")
+        void validateAdminToken_userMissing_shouldThrow401() {
+            when(sysUserMapper.selectById(1001L)).thenReturn(null);
 
-            BizException ex = assertThrows(BizException.class,
-                    () -> authService.validateAdminToken(token));
+            try (MockedStatic<StpUtil> stp = mockStatic(StpUtil.class)) {
+                stp.when(() -> StpUtil.getLoginIdByToken("tok-1")).thenReturn(1001L);
 
-            assertEquals(401, ex.getCode());
-            verify(redis).delete(key);
-            verify(redis, never()).expire(anyString(), any(Duration.class));
+                BizException ex = assertThrows(BizException.class,
+                        () -> authService.validateAdminToken("tok-1"));
+                assertEquals(401, ex.getCode());
+            }
+        }
+    }
+
+    @Nested
+    @DisplayName("存量会话无缝迁移")
+    class LegacySessionMigration {
+
+        @Test
+        @DisplayName("Sa-Token 未命中但旧 Redis 会话存在 → 以原 token 重建会话并删除旧 key")
+        void legacyHit_shouldRebuildWithSameToken() {
+            when(valueOps.get("auth:admin:token:legacy-tok"))
+                    .thenReturn("{\"token\":\"legacy-tok\",\"id\":1001,\"username\":\"admin\",\"displayName\":\"管理员\",\"role\":\"ADMIN\"}");
+            when(sysUserMapper.selectById(1001L)).thenReturn(newActiveUser("pass123"));
+
+            try (MockedStatic<StpUtil> stp = mockStatic(StpUtil.class)) {
+                stp.when(() -> StpUtil.getLoginIdByToken("legacy-tok"))
+                        .thenReturn(null);
+                stp.when(() -> StpUtil.login(any(), any(cn.dev33.satoken.stp.parameter.SaLoginParameter.class)))
+                        .thenAnswer(inv -> null);
+
+                AuthService.AdminSession session = authService.validateAdminToken("legacy-tok");
+
+                assertThat(session.id()).isEqualTo(1001L);
+                // 原 token 值保留 → 前端零改动
+                assertThat(session.token()).isEqualTo("legacy-tok");
+                verify(redis).delete("auth:admin:token:legacy-tok");
+                stp.verify(() -> StpUtil.login(any(), any(cn.dev33.satoken.stp.parameter.SaLoginParameter.class)));
+            }
+        }
+
+        @Test
+        @DisplayName("旧会话 JSON 损坏 → 清理旧 key 并抛 401")
+        void legacyCorrupted_shouldCleanAndThrow401() {
+            when(valueOps.get("auth:admin:token:bad-tok")).thenReturn("{not-json");
+
+            try (MockedStatic<StpUtil> stp = mockStatic(StpUtil.class)) {
+                stp.when(() -> StpUtil.getLoginIdByToken("bad-tok"))
+                        .thenReturn(null);
+
+                BizException ex = assertThrows(BizException.class,
+                        () -> authService.validateAdminToken("bad-tok"));
+                assertEquals(401, ex.getCode());
+                verify(redis).delete("auth:admin:token:bad-tok");
+            }
+        }
+
+        @Test
+        @DisplayName("旧会话与 Sa-Token 均未命中 → 401")
+        void legacyMiss_shouldThrow401() {
+            when(valueOps.get("auth:admin:token:ghost")).thenReturn(null);
+
+            try (MockedStatic<StpUtil> stp = mockStatic(StpUtil.class)) {
+                stp.when(() -> StpUtil.getLoginIdByToken("ghost"))
+                        .thenReturn(null);
+
+                BizException ex = assertThrows(BizException.class,
+                        () -> authService.validateAdminToken("ghost"));
+                assertEquals(401, ex.getCode());
+                verify(redis, never()).delete(anyString());
+            }
         }
     }
 
@@ -172,11 +227,12 @@ class AuthServiceTest {
     class AdminLogout {
 
         @Test
-        @DisplayName("登出应删除 Redis 会话 key")
-        void adminLogout_shouldDeleteRedisKey() {
-            authService.adminLogout("tok-1");
-
-            verify(redis).delete(AuthService.ADMIN_TOKEN_KEY_PREFIX + "tok-1");
+        @DisplayName("登出应调用按 token 值销毁会话")
+        void adminLogout_shouldLogoutByTokenValue() {
+            try (MockedStatic<StpUtil> stp = mockStatic(StpUtil.class)) {
+                authService.adminLogout("tok-1");
+                stp.verify(() -> StpUtil.logoutByTokenValue("tok-1"));
+            }
         }
     }
 }

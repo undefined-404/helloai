@@ -65,6 +65,16 @@
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-crypto</artifactId>
         </dependency>
+        <!-- Sa-Token：RBAC 鉴权底座（登录会话 + @SaCheckPermission/StpInterface） -->
+        <dependency>
+            <groupId>cn.dev33</groupId>
+            <artifactId>sa-token-spring-boot3-starter</artifactId>
+        </dependency>
+        <!-- Sa-Token Redis 集成（Jackson 序列化，复用 spring-data-redis，独立 satoken: 前缀） -->
+        <dependency>
+            <groupId>cn.dev33</groupId>
+            <artifactId>sa-token-redis-jackson</artifactId>
+        </dependency>
         <!-- Resilience4j 熔断降级（v2.4 §4.4） -->
         <dependency>
             <groupId>io.github.resilience4j</groupId>

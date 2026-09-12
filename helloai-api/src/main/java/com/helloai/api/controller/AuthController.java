@@ -8,12 +8,15 @@ import com.helloai.common.base.R;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.port.AgentAuthPort;
 import com.helloai.core.system.service.AuthService;
+import com.helloai.core.system.service.SysPermissionQueryService;
 import com.helloai.core.system.service.SysUserService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 @Slf4j
 @RestController
@@ -24,6 +27,7 @@ public class AuthController {
     private final AuthService authService;
     private final AgentAuthPort agentAuthPort;
     private final SysUserService sysUserService;
+    private final SysPermissionQueryService sysPermissionQueryService;
 
     @PostMapping("/login")
     public R<LoginResponse> login(@Valid @RequestBody LoginRequest req, HttpServletRequest httpReq) {
@@ -33,11 +37,12 @@ public class AuthController {
                         req.getUsername() != null ? req.getUsername() : "admin", req.getCredential());
                 // 记录最后登录信息
                 sysUserService.updateLoginInfo(session.id(), httpReq.getRemoteAddr());
-                yield R.ok(new LoginResponse(session.token(), "admin", session.displayName(), session.role()));
+                yield R.ok(buildAdminResponse(session));
             }
             case "agent" -> {
                 Agent agent = agentAuthPort.validateApiKey(req.getCredential());
-                yield R.ok(new LoginResponse(agent.getApiKey(), "agent", agent.getName(), agent.getRole().name()));
+                yield R.ok(new LoginResponse(agent.getApiKey(), "agent", agent.getName(), agent.getRole().name(),
+                        List.of(), List.of()));
             }
             default -> R.fail("登录类型无效，仅支持 admin/agent");
         };
@@ -72,13 +77,23 @@ public class AuthController {
             @RequestHeader(value = "Authorization", required = false) String authorization) {
         if (adminToken != null && !adminToken.isBlank()) {
             AuthService.AdminSession session = authService.validateAdminToken(adminToken);
-            return R.ok(new LoginResponse(session.token(), "admin", session.displayName(), session.role()));
+            return R.ok(buildAdminResponse(session));
         }
         if (authorization != null && authorization.startsWith("Bearer ")) {
             String apiKey = authorization.substring(7);
             Agent agent = agentAuthPort.validateApiKey(apiKey);
-            return R.ok(new LoginResponse(agent.getApiKey(), "agent", agent.getName(), agent.getRole().name()));
+            return R.ok(new LoginResponse(agent.getApiKey(), "agent", agent.getName(), agent.getRole().name(),
+                    List.of(), List.of()));
         }
         return R.fail(401, "未登录");
+    }
+
+    /**
+     * 组装 admin 登录响应：附带该用户的权限码与角色码（供前端按权限码过滤菜单）。
+     */
+    private LoginResponse buildAdminResponse(AuthService.AdminSession session) {
+        List<String> permissions = sysPermissionQueryService.listPermissionCode(session.id());
+        List<String> roles = sysPermissionQueryService.listRoleCode(session.id());
+        return new LoginResponse(session.token(), "admin", session.displayName(), session.role(), permissions, roles);
     }
 }

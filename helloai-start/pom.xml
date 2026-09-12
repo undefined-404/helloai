@@ -27,6 +27,13 @@
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
         </dependency>
+        <!-- 分页插件依赖（mybatis-plus 3.5.9+ 把 PaginationInnerInterceptor 拆到 jsqlparser
+             独立模块且为 optional，需显式引入，否则分页 COUNT/LIMIT 不生效，见 G-012） -->
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-jsqlparser-4.9</artifactId>
+            <version>${mybatis-plus.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-core</artifactId>

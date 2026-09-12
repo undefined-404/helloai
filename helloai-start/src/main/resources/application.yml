@@ -312,6 +312,21 @@ logging:
     com.helloai.core.agent.mapper.AgentCommandOutboxEventMapper: INFO
     com.helloai.core.agent.mapper.AgentOutboxEventMapper: INFO
 
+# === Sa-Token 鉴权底座（RBAC：登录会话 + @SaCheckPermission 权限码）===
+# token 从 X-Admin-Token 头读取（与前端 request.ts 现有 header 一字不差，前端零改动）。
+# admin 会话语义对齐旧自建会话（AuthService 自建 Redis TTL 8h 滑动续期）：
+#   active-timeout=28800（秒）= 8h 内必须有操作，访问即自动续期；timeout=-1 不设固定过期。
+# agent 侧不建 Sa-Token 会话（外部 CLI Agent 走 API Key / MCP 契约不变）。
+sa-token:
+  token-name: X-Admin-Token
+  timeout: -1
+  active-timeout: 28800
+  is-concurrent: true
+  is-share: true
+  token-style: uuid
+  is-log: false
+  is-print: false
+
 # === Resilience4j 熔断降级（v2.4 §4.5） ===
 resilience4j:
   circuitbreaker:

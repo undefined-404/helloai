@@ -1,5 +1,7 @@
 package com.helloai.api.advice;
 
+import cn.dev33.satoken.exception.NotLoginException;
+import cn.dev33.satoken.exception.NotPermissionException;
 import com.helloai.common.base.BizException;
 import com.helloai.common.base.R;
 import jakarta.servlet.http.HttpServletResponse;
@@ -39,6 +41,22 @@ public class GlobalExceptionHandler {
     public R<Void> handleNotFound(NoResourceFoundException e) {
         log.debug("资源不存在: {}", e.getMessage());
         return R.fail(404, "请求的接口不存在");
+    }
+
+    /** Sa-Token 未登录：会话缺失/过期（@SaCheckPermission 等注解鉴权触发）→ HTTP 401。 */
+    @ExceptionHandler(NotLoginException.class)
+    @ResponseStatus(HttpStatus.UNAUTHORIZED)
+    public R<Void> handleNotLogin(NotLoginException e) {
+        log.debug("Sa-Token 未登录: {}", e.getMessage());
+        return R.fail(401, "登录已过期，请重新登录");
+    }
+
+    /** Sa-Token 权限不足：@SaCheckPermission 校验失败 → HTTP 403。 */
+    @ExceptionHandler(NotPermissionException.class)
+    @ResponseStatus(HttpStatus.FORBIDDEN)
+    public R<Void> handleNotPermission(NotPermissionException e) {
+        log.debug("Sa-Token 权限不足: {}", e.getMessage());
+        return R.fail(403, "无权限执行该操作");
     }
 
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)

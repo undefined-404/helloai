@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
 import com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor;
 // 注意：mybatis-plus 3.5.9 的 namespace 是 'mybatisplus'（不带连字符）
 import com.baomidou.mybatisplus.extension.plugins.inner.OptimisticLockerInnerInterceptor;
+import com.baomidou.mybatisplus.extension.plugins.inner.PaginationInnerInterceptor;
 import org.apache.ibatis.type.TypeHandlerRegistry;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -15,7 +16,8 @@ import org.springframework.context.annotation.Configuration;
  * 关键点：
  * - 必须注册 OptimisticLockerInnerInterceptor，否则 @Version 字段更新会失败
  *   （表现为 BindingException: Parameter 'MP_OPTLOCK_VERSION_ORIGINAL' not found）
- * - 分页插件默认由 spring-boot-starter 自带，这里只需补充乐观锁
+ * - 分页插件不随 starter 自动注册，需显式加 PaginationInnerInterceptor，
+ *   否则 IPage.page() 不执行 COUNT、total 恒为 0 且不分页（G-012 用户分页 API 实测暴露）
  * - 通过 ConfigurationCustomizer 显式注册 JacksonTypeHandler，
  *   解决 agent_outbox_event.payload 等 JSONB 列 SELECT 读出为 null 的问题
  */
@@ -26,7 +28,10 @@ public class MyBatisPlusConfig {
     public MybatisPlusInterceptor mybatisPlusInterceptor() {
         MybatisPlusInterceptor interceptor = new MybatisPlusInterceptor();
 
-        // 1. 乐观锁拦截器（修复 测试中 updateById 失败的问题）
+        // 1. 分页拦截器（PostgreSQL）
+        interceptor.addInnerInterceptor(new PaginationInnerInterceptor(DbType.POSTGRE_SQL));
+
+        // 2. 乐观锁拦截器（修复 测试中 updateById 失败的问题）
         interceptor.addInnerInterceptor(new OptimisticLockerInnerInterceptor());
 
         return interceptor;

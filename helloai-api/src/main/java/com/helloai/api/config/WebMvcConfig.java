@@ -1,5 +1,6 @@
 package com.helloai.api.config;
 
+import cn.dev33.satoken.interceptor.SaInterceptor;
 import com.helloai.api.interceptor.AdminOnlyInterceptor;
 import com.helloai.api.interceptor.AuthInterceptor;
 import com.helloai.api.interceptor.RequestLogInterceptor;
@@ -48,5 +49,11 @@ public class WebMvcConfig implements WebMvcConfigurer {
         // 注册顺序在 AuthInterceptor 之后，执行时 _authType 已由认证阶段写入
         registry.addInterceptor(new AdminOnlyInterceptor())
                 .addPathPatterns("/api/admin/**");
+
+        // Sa-Token 注解鉴权（@SaCheckPermission / @SaCheckRole，BASE-1.6 动作级权限码落地）
+        // 依赖 AuthInterceptor 已建立 Sa-Token 会话（X-Admin-Token 头 → StpUtil）；
+        // 无注解的请求不受影响，仅对带鉴权注解的 Controller 方法校验权限码。
+        registry.addInterceptor(new SaInterceptor())
+                .addPathPatterns("/api/**");
     }
 }
