@@ -387,27 +387,28 @@ html.dark {
 }
 
 /* ---- Dialog ---- */
-/* 尺寸自适应（与数据量无关）：
-   · dialog 用 viewport-based 高度限制：6vh 顶部 + 8vh 底部 + 24vh 安全余量
-     （Element Plus 默认 margin-top:15vh 太重，把 dialog 挤出视口）；
-   · dialog 外层 padding:0，把视觉 padding 下放到 header/body/footer（避免双层 padding 吃掉可用高度）；
-   · dialog 内部 flex column：header 固定、body 是 flex:1 滚动区、footer 固定；
-   · body scrollbar-gutter:stable 保证 footer 出现时不抖动；
-   · 标记 ha-dialog--scrollable 后 body 不限高，按内容撑开；
-   · 标记 ha-dialog--form 启用表单列宽节奏。 */
+/* 尺寸自适应（与数据量、视口大小均无关）：
+   · dialog 高度自适应内容，上限为「视口高 - 上下 margin」，任何视口下都不溢出；
+   · min-height 用 viewport 相对的 min()，小视口自动收缩（绝不能用绝对值，否则
+     视口小于该值时 dialog 超出视口、footer 被推出可视区）；
+   · dialog 用 flex column，header/body/footer 三段式；
+   · body 是唯一滚动区（flex:1 + min-height:0 + overflow-y:auto），
+     内容多时 body 滚动，header/footer 始终可见；
+   · 标记 ha-dialog--scrollable 后 body 不限高，按内容自然撑开（适合很长的表单）；
+   · 标记 ha-dialog--form 启用统一表单列宽节奏。 */
 .el-dialog {
   --el-dialog-border-radius: var(--ha-radius-xl) !important;
   --el-dialog-margin-top: 6vh !important;
   box-shadow: var(--ha-shadow-lg) !important;
-  margin: 6vh auto 6vh !important;
+  margin: 6vh auto !important;
   padding: 0 !important;
   width: var(--el-dialog-width, 50%) !important;
   display: flex !important;
   flex-direction: column !important;
-  /* 强制按视口计算高度，避免 Element Plus 默认按内容收缩把 footer 挤出视口 */
-  height: calc(100vh - 12vh - 32px) !important;
-  min-height: 420px !important;
-  max-height: calc(100vh - 12vh - 32px) !important;
+  /* 上限：视口高 - 上下各 6vh margin - 16px 余量，保证 dialog + margin 永不超视口 */
+  max-height: calc(100vh - 12vh - 16px) !important;
+  /* 下限：内容少时弹窗不塌，且不得大于上限（小视口自动收缩，避免溢出） */
+  min-height: min(240px, calc(100vh - 12vh - 16px)) !important;
 }
 .el-dialog__header {
   flex: 0 0 auto !important;
@@ -425,8 +426,8 @@ html.dark {
   right: 18px !important;
 }
 .el-dialog__body {
-  /* 关键：flex:1 1 0 + min-height:0 让 body 占据 dialog 剩余空间并出现滚动条 */
-  flex: 1 1 0 !important;
+  /* 唯一滚动区：flex:1 + min-height:0 让 body 占据剩余空间并在内容溢出时滚动 */
+  flex: 1 1 auto !important;
   min-height: 0 !important;
   padding: 18px 24px 4px !important;
   overflow-y: auto !important;
@@ -441,14 +442,12 @@ html.dark {
   background: inherit;
 }
 
-/* ha-dialog--scrollable：内容较长的表单/列表弹窗，body 不限高，按内容自适应 */
+/* ha-dialog--scrollable：只放宽外层上限，滚动仍由 body 承担 */
 .el-dialog.ha-dialog--scrollable {
-  height: auto !important;
   max-height: calc(100vh - 10vh) !important;
 }
 .el-dialog.ha-dialog--scrollable .el-dialog__body {
   max-height: none !important;
-  overflow-y: visible !important;
 }
 
 /* ha-dialog--form：统一表单列宽（label 80px） */

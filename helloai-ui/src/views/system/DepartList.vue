@@ -112,7 +112,7 @@
       :title="editingId ? '编辑部门' : '新增部门'"
       width="480px"
       class="ha-dialog--form"
-      :style="{ height: 'calc(100vh - 12vh - 32px)', minHeight: '420px', display: 'flex', flexDirection: 'column' }"
+      :style="{ maxHeight: 'calc(100vh - 12vh - 16px)', minHeight: 'min(240px, calc(100vh - 12vh - 16px))', display: 'flex', flexDirection: 'column' }"
       destroy-on-close
     >
       <el-form

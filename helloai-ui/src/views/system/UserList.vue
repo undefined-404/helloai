@@ -208,7 +208,7 @@
       title="编辑用户"
       width="460px"
       class="ha-dialog--form"
-      :style="{ height: 'calc(100vh - 12vh - 32px)', minHeight: '420px', display: 'flex', flexDirection: 'column' }"
+      :style="{ maxHeight: 'calc(100vh - 12vh - 16px)', minHeight: 'min(240px, calc(100vh - 12vh - 16px))', display: 'flex', flexDirection: 'column' }"
       destroy-on-close
     >
       <el-form
@@ -335,7 +335,7 @@
       :title="`重置密码：${passwordTarget?.username ?? ''}`"
       width="420px"
       class="ha-dialog--form"
-      :style="{ height: 'calc(100vh - 12vh - 32px)', minHeight: '420px', display: 'flex', flexDirection: 'column' }"
+      :style="{ maxHeight: 'calc(100vh - 12vh - 16px)', minHeight: 'min(240px, calc(100vh - 12vh - 16px))', display: 'flex', flexDirection: 'column' }"
       destroy-on-close
     >
       <el-form
