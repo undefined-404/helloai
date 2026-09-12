@@ -8,6 +8,8 @@
 *.war
 *.ear
 target/
+# JVM/JIT profiling 临时产物（mvn test 生成，不入仓）
+*.profraw
 pom.xml.tag
 pom.xml.releaseBackup
 pom.xml.versionsBackup
@@ -69,6 +71,8 @@ tmp/
 .dbg/
 # --- Qoder IDE 缓存（plans / skills 缓存目录，不入仓） ---
 .qoder/
+# --- impeccable 工具缓存（critique 快照等本地产物，不入仓） ---
+.impeccable/
 # --- Executor 值班脚本运行时配置（含真实 apiKey / agentId，勿入库） ---
 **/skills/**/config.json
 # executor-onboard.ps1 生成的运行时配置（真实 apiKey，勿入库）
