@@ -1,4 +1,4 @@
-﻿/* ========================================
+/* ========================================
    HelloAI Design System — CSS Variables
    Purple-primary, cool-neutral, Linear-inspired
    ======================================== */
@@ -387,20 +387,73 @@ html.dark {
 }
 
 /* ---- Dialog ---- */
+/* 尺寸自适应（与数据量无关）：
+   · dialog 用 viewport-based 高度限制：6vh 顶部 + 8vh 底部 + 24vh 安全余量
+     （Element Plus 默认 margin-top:15vh 太重，把 dialog 挤出视口）；
+   · dialog 外层 padding:0，把视觉 padding 下放到 header/body/footer（避免双层 padding 吃掉可用高度）；
+   · dialog 内部 flex column：header 固定、body 是 flex:1 滚动区、footer 固定；
+   · body scrollbar-gutter:stable 保证 footer 出现时不抖动；
+   · 标记 ha-dialog--scrollable 后 body 不限高，按内容撑开；
+   · 标记 ha-dialog--form 启用表单列宽节奏。 */
 .el-dialog {
   --el-dialog-border-radius: var(--ha-radius-xl) !important;
+  --el-dialog-margin-top: 6vh !important;
   box-shadow: var(--ha-shadow-lg) !important;
+  margin: 6vh auto 6vh !important;
+  padding: 0 !important;
+  width: var(--el-dialog-width, 50%) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  /* 强制按视口计算高度，避免 Element Plus 默认按内容收缩把 footer 挤出视口 */
+  height: calc(100vh - 12vh - 32px) !important;
+  min-height: 420px !important;
+  max-height: calc(100vh - 12vh - 32px) !important;
 }
 .el-dialog__header {
-  padding: 20px 24px 0 !important;
+  flex: 0 0 auto !important;
+  padding: 18px 24px 14px !important;
   font-weight: 600;
   font-size: 16px;
+  border-bottom: 1px solid var(--ha-border-light) !important;
+  margin-right: 0 !important;
+}
+.el-dialog__title {
+  line-height: 1.4;
+}
+.el-dialog__headerbtn {
+  top: 14px !important;
+  right: 18px !important;
 }
 .el-dialog__body {
-  padding: 16px 24px !important;
+  /* 关键：flex:1 1 0 + min-height:0 让 body 占据 dialog 剩余空间并出现滚动条 */
+  flex: 1 1 0 !important;
+  min-height: 0 !important;
+  padding: 18px 24px 4px !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  scrollbar-gutter: stable;
 }
 .el-dialog__footer {
-  padding: 0 24px 20px !important;
+  flex: 0 0 auto !important;
+  padding: 14px 24px 16px !important;
+  border-top: 1px solid var(--ha-border-light) !important;
+  text-align: right !important;
+  background: inherit;
+}
+
+/* ha-dialog--scrollable：内容较长的表单/列表弹窗，body 不限高，按内容自适应 */
+.el-dialog.ha-dialog--scrollable {
+  height: auto !important;
+  max-height: calc(100vh - 10vh) !important;
+}
+.el-dialog.ha-dialog--scrollable .el-dialog__body {
+  max-height: none !important;
+  overflow-y: visible !important;
+}
+
+/* ha-dialog--form：统一表单列宽（label 80px） */
+.el-dialog.ha-dialog--form .el-form-item__label {
+  font-weight: 500;
 }
 
 /* ---- Breadcrumb ---- */

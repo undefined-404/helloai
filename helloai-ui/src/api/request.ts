@@ -102,6 +102,12 @@ instance.interceptors.response.use(
     if (!canceled) {
       ElMessage.error(data?.msg || message || '网络错误')
     }
+    // HTTP 401（认证失败/会话失效）：统一清登录态并回登录页，避免残留无效 token
+    // 导致后续请求循环 401、动态路由构建失败后页面落 404 的误导现象。
+    if (error.response?.status === 401) {
+      const auth = useAuthStore()
+      auth.logout()
+    }
     return Promise.reject(error)
   }
 )

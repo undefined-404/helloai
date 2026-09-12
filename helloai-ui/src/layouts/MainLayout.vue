@@ -37,94 +37,37 @@
         :collapse="collapsed"
         :collapse-transition="false"
         class="sidebar-menu"
-        router
+        @select="onMenuSelect"
       >
-        <el-menu-item index="/dashboard">
-          <el-icon><Odometer /></el-icon>
-          <span>概述</span>
-        </el-menu-item>
-        <!-- V29 对话式需求澄清入口（置于概述与任务管理之间） -->
-        <el-menu-item index="/requirement-chat">
-          <el-icon><ChatDotRound /></el-icon>
-          <span>对话新建</span>
-        </el-menu-item>
-        <el-menu-item index="/tasks">
-          <el-icon><List /></el-icon>
-          <span>任务管理</span>
-        </el-menu-item>
-        <el-menu-item index="/sub-tasks">
-          <el-icon><Document /></el-icon>
-          <span>子任务</span>
-        </el-menu-item>
-        <!-- V25 死信池：复用子任务列表页 + 状态筛选，不建独立页面 -->
-        <el-menu-item index="/sub-tasks?status=DEAD_LETTER">
-          <el-icon><Warning /></el-icon>
-          <span>死信池</span>
-        </el-menu-item>
-        <el-menu-item index="/agents">
-          <el-icon><User /></el-icon>
-          <span>Agent管理</span>
-        </el-menu-item>
-        <el-menu-item index="/teams">
-          <el-icon><UserFilled /></el-icon>
-          <span>Team组合</span>
-        </el-menu-item>
-        <el-menu-item index="/browser-sessions">
-          <el-icon><Monitor /></el-icon>
-          <span>Browser会话</span>
-        </el-menu-item>
-        <!-- v2.0: Prompt 管理菜单移除，Agent 接入改用 onboarding 弹窗 -->
-        <!-- <el-menu-item index="/prompts">
-          <el-icon><EditPen /></el-icon>
-          <span>Prompt 管理</span>
-        </el-menu-item> -->
-        <el-menu-item index="/inbox">
-          <el-icon><Message /></el-icon>
-          <span>收件箱</span>
-        </el-menu-item>
-        <el-menu-item index="/reviews">
-          <el-icon><Select /></el-icon>
-          <span>审查中心</span>
-        </el-menu-item>
-        <!-- G-006 Replay/Audit：Agent 事件回溯工作台（事件流只读查询） -->
-        <el-menu-item index="/event-stream">
-          <el-icon><DataLine /></el-icon>
-          <span>事件流</span>
-        </el-menu-item>
-        <!-- Phase 5 质量度量看板 -->
-        <el-menu-item index="/quality-dashboard">
-          <el-icon><DataAnalysis /></el-icon>
-          <span>质量看板</span>
-        </el-menu-item>
-        <!-- 2026-08-16: 积分流水 / 活动流 / 规则配置 暂未启用，先隐藏菜单入口（页面文件保留） -->
-        <!-- <el-menu-item index="/rewards">
-          <el-icon><Coin /></el-icon>
-          <span>积分流水</span>
-        </el-menu-item>
-        <el-menu-item index="/activity">
-          <el-icon><Notification /></el-icon>
-          <span>活动流</span>
-        </el-menu-item>
-        <el-menu-item index="/rules">
-          <el-icon><Setting /></el-icon>
-          <span>规则配置</span>
-        </el-menu-item> -->
-        <el-menu-item index="/duty-leases">
-          <el-icon><Clock /></el-icon>
-          <span>打卡上班</span>
-        </el-menu-item>
-        <el-menu-item index="/attachments">
-          <el-icon><Folder /></el-icon>
-          <span>附件管理</span>
-        </el-menu-item>
-        <!-- 系统设置：管理员一级入口（头像下拉保留作为冗余入口） -->
-        <el-menu-item
-          v-if="isAdmin"
-          index="/settings"
+        <template
+          v-for="menu in visibleMenus"
+          :key="menu.path"
         >
-          <el-icon><Tools /></el-icon>
-          <span>系统设置</span>
-        </el-menu-item>
+          <el-sub-menu
+            v-if="menu.children && menu.children.length > 0"
+            :index="menu.path || menu.code"
+          >
+            <template #title>
+              <el-icon><component :is="iconOf(menu.icon)" /></el-icon>
+              <span>{{ menu.name }}</span>
+            </template>
+            <el-menu-item
+              v-for="child in menu.children"
+              :key="child.path"
+              :index="child.path || child.code"
+            >
+              <el-icon><component :is="iconOf(child.icon)" /></el-icon>
+              <span>{{ child.name }}</span>
+            </el-menu-item>
+          </el-sub-menu>
+          <el-menu-item
+            v-else
+            :index="menu.path || menu.code"
+          >
+            <el-icon><component :is="iconOf(menu.icon)" /></el-icon>
+            <span>{{ menu.name }}</span>
+          </el-menu-item>
+        </template>
       </el-menu>
 
       <div
@@ -162,8 +105,8 @@
                 <el-icon><Lock /></el-icon>修改密码
               </el-dropdown-item>
               <el-dropdown-item
-                v-if="isAdmin"
-                @click="router.push('/settings')"
+                v-if="settingsTarget"
+                @click="router.push(settingsTarget)"
               >
                 <el-icon><Tools /></el-icon>系统设置
               </el-dropdown-item>
@@ -197,7 +140,10 @@
           name="page-fade"
           mode="out-in"
         >
-          <component :is="Component" />
+          <!-- keep-alive：仅缓存 meta.keepAlive 的页面（BASE-3.1，默认不缓存） -->
+          <keep-alive :include="cachedViews">
+            <component :is="Component" />
+          </keep-alive>
         </transition>
       </router-view>
     </el-main>
@@ -210,13 +156,27 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowDown, Clock, DataAnalysis, DataLine, Expand, Fold, Moon, Sunny, Warning } from '@element-plus/icons-vue'
+import * as ElementPlusIconsVue from '@element-plus/icons-vue'
+import {
+  ArrowDown, Expand, Fold, Lock, Menu, Moon, Sunny, SwitchButton, Tools, UserFilled
+} from '@element-plus/icons-vue'
 import { authApi } from '@/api/auth'
+import { rbacApi } from '@/api/rbac'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import ChangePasswordDialog from '@/components/ChangePasswordDialog.vue'
+import type { SysPermission } from '@/types'
+
+/** DB 菜单图标列存 @element-plus/icons-vue 组件名，动态映射；未知图标回退 Menu */
+function iconOf(name?: string | null): Component {
+  if (name) {
+    const icons = ElementPlusIconsVue as Record<string, Component>
+    if (icons[name]) return icons[name]
+  }
+  return Menu
+}
 
 const route = useRoute()
 const router = useRouter()
@@ -228,6 +188,98 @@ const passwordDialogVisible = ref(false)
 // 单一来源：store 已是 sessionStorage 的唯一镜像
 const isAdmin = auth.isAdmin
 const userName = computed(() => auth.displayName)
+
+// G-012 菜单树 DB 化：菜单结构来自 /api/admin/menus/tree（服务端按权限码过滤 + parent 挂接），
+// 不再由前端路由硬编码菜单结构；非 admin（外部 Agent）无菜单。
+const menus = ref<SysPermission[]>([])
+/** keep-alive 缓存白名单（BASE-3.1）：keepAlive=1 菜单的组件名（SFC 文件名） */
+const cachedViews = ref<string[]>([])
+
+async function loadMenuTree() {
+  if (!isAdmin) return
+  try {
+    menus.value = await rbacApi.menuTree()
+  } catch {
+    // 菜单树拉取失败不阻塞页面：保留空菜单，仅顶部入口可用
+    menus.value = []
+  }
+  cachedViews.value = collectKeepAliveNames(menus.value)
+}
+
+/** 收集 keepAlive=1 菜单的组件名（用于 <keep-alive :include>） */
+function collectKeepAliveNames(nodes: SysPermission[]): string[] {
+  const names: string[] = []
+  for (const n of nodes) {
+    if (n.keepAlive === 1 && n.component) {
+      names.push(n.component.split('/').pop() as string)
+    }
+    if (n.children?.length) {
+      names.push(...collectKeepAliveNames(n.children))
+    }
+  }
+  return names
+}
+
+/**
+ * 侧边栏可见菜单（BASE-3.1）：
+ * hidden=1 的菜单不在侧边栏显示（路由仍注册可达）；子项全隐藏时父节点整体不显示。
+ */
+const visibleMenus = computed(() => {
+  const filter = (nodes: SysPermission[]): SysPermission[] => {
+    const out: SysPermission[] = []
+    for (const n of nodes) {
+      if (n.hidden === 1) continue
+      if (n.children?.length) {
+        const kids = filter(n.children)
+        if (kids.length === 0) continue
+        out.push({ ...n, children: kids })
+      } else {
+        out.push({ ...n, children: undefined })
+      }
+    }
+    return out
+  }
+  return filter(menus.value)
+})
+
+/** 外链菜单映射（index → externalLink）：点击新窗口打开，不走前端路由 */
+const externalMap = computed(() => {
+  const map: Record<string, string> = {}
+  const collect = (nodes: SysPermission[]) => {
+    for (const n of nodes) {
+      const key = n.path || n.code
+      if (n.externalLink) map[key] = n.externalLink
+      if (n.children?.length) collect(n.children)
+    }
+  }
+  collect(menus.value)
+  return map
+})
+
+/** el-menu 选择处理：外链 → 新窗口；普通菜单 → 路由跳转 */
+function onMenuSelect(index: string) {
+  const ext = externalMap.value[index]
+  if (ext) {
+    window.open(ext, '_blank', 'noopener,noreferrer')
+    return
+  }
+  if (index && index !== route.path) {
+    router.push(index)
+  }
+}
+
+// 「系统设置」入口 = 菜单树中 settings 父节点第一个可见子菜单；
+// 无可见子（如 ADMIN 无 user/role/permission:view）时隐藏入口，避免跳 404。
+const settingsTarget = computed(() => {
+  const node = menus.value.find((m) => m.path === '/settings')
+  if (node?.children?.length) {
+    const firstVisible = node.children.find((c) => c.hidden !== 1)
+    return firstVisible?.path || null
+  }
+  return null
+})
+
+onMounted(loadMenuTree)
 
 const activeMenu = computed(() => {
   const path = route.path

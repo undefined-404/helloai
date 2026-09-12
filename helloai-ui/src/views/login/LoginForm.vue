@@ -156,7 +156,7 @@ async function handleLogin() {
 
     // 单一来源：store.setAdmin 会同步更新 sessionStorage 与 store 状态
     const auth = useAuthStore()
-    auth.setAdmin(res.token, res.displayName || username || 'Admin')
+    auth.setAdmin(res.token, res.displayName || username || 'Admin', res.permissions, res.roles)
     ElMessage.success(msg.login.success)
     emit('success')
   } catch (e: any) {

@@ -6,6 +6,8 @@ export interface LoginResponse {
   type: 'admin' | 'agent'
   displayName?: string
   role?: string
+  permissions?: string[]
+  roles?: string[]
 }
 
 export const authApi = {

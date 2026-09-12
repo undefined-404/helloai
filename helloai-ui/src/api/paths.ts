@@ -196,6 +196,30 @@ export const paths = {
     create: '/rules',
     update: (id: string | number) => `/rules/updateById/${enc(id)}`,
     delete: (id: string | number) => `/rules/deleteById/${enc(id)}`
+  },
+  // G-012 RBAC 管理端（Sa-Token 权限体系）：角色 CRUD + 权限绑定 / 用户分页 + 角色分配 / 菜单树
+  rbac: {
+    roles: '/admin/roles',
+    roleById: (id: string | number) => `/admin/roles/${enc(id)}`,
+    rolePermissions: (id: string | number) => `/admin/roles/${enc(id)}/permissions`,
+    permissions: '/admin/permissions',
+    // BASE-2.1 菜单/权限管理：全量权限树 + CRUD（MENU 挂层级 + API 平铺）
+    permissionTree: '/admin/permissions/tree',
+    permissionCreate: '/admin/permissions',
+    permissionUpdate: (id: string | number) => `/admin/permissions/${enc(id)}`,
+    permissionDelete: (id: string | number) => `/admin/permissions/${enc(id)}`,
+    // BASE-3.3 权限数据规则（受控枚举）
+    permissionDataRule: (id: string | number) => `/admin/permissions/${enc(id)}/data-rule`,
+    userPage: '/admin/users/page',
+    userById: (id: string | number) => `/admin/users/${enc(id)}`,
+    userRoles: (id: string | number) => `/admin/users/${enc(id)}/roles`,
+    userPassword: (id: string | number) => `/admin/users/${enc(id)}/password`,
+    // BASE-3.2 部门组织架构
+    departs: '/admin/departs',
+    departTree: '/admin/departs/tree',
+    departById: (id: string | number) => `/admin/departs/${enc(id)}`,
+    userDeparts: (id: string | number) => `/admin/users/${enc(id)}/departs`,
+    menuTree: '/admin/menus/tree'
   }
 }
 

@@ -7,6 +7,7 @@ import 'element-plus/dist/index.css'
 /* Element Plus 官方暗色变量：兜底 message/notification/popper 等 append-to-body 弹层 */
 import 'element-plus/theme-chalk/dark/css-vars.css'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
+import { auth } from './directives/permission'
 
 /* ---- Design System ---- */
 import './styles/design-system.css'
@@ -29,6 +30,9 @@ const app = createApp(App)
 for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
   app.component(key, component)
 }
+
+// 按钮级权限指令（BASE-1.5）：v-auth="'user:add'"
+app.directive('auth', auth)
 
 app.use(createPinia())
 app.use(router)

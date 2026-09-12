@@ -10,9 +10,24 @@ export type LoginType = 'admin' | 'agent'
 
 const KEY_ADMIN_TOKEN = 'adminToken'
 const KEY_ADMIN_USER = 'adminUser'
+const KEY_ADMIN_PERMISSIONS = 'adminPermissions'
+const KEY_ADMIN_ROLES = 'adminRoles'
 const KEY_AGENT_KEY = 'agentKey'
 const KEY_AGENT_NAME = 'agentName'
 const KEY_LOGIN_TYPE = 'loginType'
+
+/** 权限码/角色码的 sessionStorage 存取：JSON 数组，读写都收口在这里 */
+function readStringList(key: string): string[] {
+  try {
+    const raw = sessionStorage.getItem(key)
+    return raw ? (JSON.parse(raw) as string[]) : []
+  } catch {
+    return []
+  }
+}
+function writeStringList(key: string, value: string[]) {
+  sessionStorage.setItem(key, JSON.stringify(value))
+}
 
 /**
  * 认证状态管理。
@@ -22,6 +37,9 @@ const KEY_LOGIN_TYPE = 'loginType'
 export const useAuthStore = defineStore('auth', () => {
   const adminToken = ref(sessionStorage.getItem(KEY_ADMIN_TOKEN) || '')
   const adminUser = ref(sessionStorage.getItem(KEY_ADMIN_USER) || '')
+  // RBAC：登录响应下发的权限码 / 角色码（sessionStorage 持久化，刷新后仍在）
+  const permissions = ref<string[]>(readStringList(KEY_ADMIN_PERMISSIONS))
+  const roles = ref<string[]>(readStringList(KEY_ADMIN_ROLES))
   const agentKey = ref(sessionStorage.getItem(KEY_AGENT_KEY) || '')
   const agentName = ref(sessionStorage.getItem(KEY_AGENT_NAME) || '')
   // 兼容历史值：store 接管前已经写过 loginType / 仅凭 token/key 推断
@@ -33,6 +51,7 @@ export const useAuthStore = defineStore('auth', () => {
   const isLoggedIn = computed(() => !!adminToken.value || !!agentKey.value)
   const isAdmin = computed(() => !!adminToken.value)
   const isAgent = computed(() => !!agentKey.value && !adminToken.value)
+  const isSuperAdmin = computed(() => roles.value.includes('SUPER_ADMIN'))
   // 给 template 用的展示名：admin 取 adminUser / 'Admin'，agent 取 agentName / 'Agent'
   const displayName = computed(() => {
     if (isAdmin.value) return adminUser.value || 'Admin'
@@ -40,11 +59,25 @@ export const useAuthStore = defineStore('auth', () => {
     return ''
   })
 
-  function setAdmin(token: string, username: string) {
+  /**
+   * 权限码校验（前端菜单显隐）。
+   * 后端 StpInterface 对 SUPER_ADMIN 下发 "*" 全权限码；此处同步兜底，避免前端与后端口径分叉。
+   */
+  function hasPermission(code: string): boolean {
+    if (!isAdmin.value) return false
+    if (permissions.value.includes('*')) return true
+    return permissions.value.includes(code)
+  }
+
+  function setAdmin(token: string, username: string, userPermissions: string[] = [], userRoles: string[] = []) {
     adminToken.value = token
     adminUser.value = username
+    permissions.value = userPermissions
+    roles.value = userRoles
     sessionStorage.setItem(KEY_ADMIN_TOKEN, token)
     sessionStorage.setItem(KEY_ADMIN_USER, username)
+    writeStringList(KEY_ADMIN_PERMISSIONS, userPermissions)
+    writeStringList(KEY_ADMIN_ROLES, userRoles)
     sessionStorage.removeItem(KEY_AGENT_KEY)
     sessionStorage.removeItem(KEY_AGENT_NAME)
     loginType.value = 'admin'
@@ -54,10 +87,14 @@ export const useAuthStore = defineStore('auth', () => {
   function setAgent(key: string, name?: string) {
     agentKey.value = key
     agentName.value = name || ''
+    permissions.value = []
+    roles.value = []
     sessionStorage.setItem(KEY_AGENT_KEY, key)
     if (name) sessionStorage.setItem(KEY_AGENT_NAME, name)
     sessionStorage.removeItem(KEY_ADMIN_TOKEN)
     sessionStorage.removeItem(KEY_ADMIN_USER)
+    sessionStorage.removeItem(KEY_ADMIN_PERMISSIONS)
+    sessionStorage.removeItem(KEY_ADMIN_ROLES)
     loginType.value = 'agent'
     sessionStorage.setItem(KEY_LOGIN_TYPE, 'agent')
   }
@@ -65,6 +102,8 @@ export const useAuthStore = defineStore('auth', () => {
   function logout() {
     adminToken.value = ''
     adminUser.value = ''
+    permissions.value = []
+    roles.value = []
     agentKey.value = ''
     agentName.value = ''
     loginType.value = 'admin'
@@ -75,13 +114,17 @@ export const useAuthStore = defineStore('auth', () => {
   return {
     adminToken,
     adminUser,
+    permissions,
+    roles,
     agentKey,
     agentName,
     loginType,
     isLoggedIn,
     isAdmin,
     isAgent,
+    isSuperAdmin,
     displayName,
+    hasPermission,
     setAdmin,
     setAgent,
     logout
@@ -99,6 +142,8 @@ export const authStorage = {
   clear: () => {
     sessionStorage.removeItem(KEY_ADMIN_TOKEN)
     sessionStorage.removeItem(KEY_ADMIN_USER)
+    sessionStorage.removeItem(KEY_ADMIN_PERMISSIONS)
+    sessionStorage.removeItem(KEY_ADMIN_ROLES)
     sessionStorage.removeItem(KEY_AGENT_KEY)
     sessionStorage.removeItem(KEY_AGENT_NAME)
     sessionStorage.removeItem(KEY_LOGIN_TYPE)
