@@ -191,7 +191,7 @@ Runtime / Capability / Provider）不做任何改造，本专项**不触碰**：
 | 批次三 | 扩展能力（路由渲染增强 / 部门 / 数据权限） | BASE-3.1 ~ BASE-3.3 | **已落地（2026-09-12，PASS）** |
 | 授权补充 | ADMIN 角色绑定部门管理权限 | BASE-3.2 授权补充 | **已落地（2026-09-12，PASS）** |
 | 收口 | 岗位能力移除 + 拆出独立「菜单管理」入口 | BASE-3.2 / BASE-2.2 收口 | **已落地（2026-09-12，PASS）** |
-| 批次四 | 认证收口 + 角色体系 + 全量接口授权化 | BASE-4.1 ~ BASE-4.5 | **部分落地（BASE-4.1 / 4.2 PASS；4.3~4.5 待实施）** |
+| 批次四 | 认证收口 + 角色体系 + 全量接口授权化 | BASE-4.1 ~ BASE-4.5 | **部分落地（4.1 / 4.2 / 4.3+4.4 合并 已实施；4.5 待实施）** |
 
 > 三批次落地详情见 `doc/log/2026-09.md` 两段记录；
 > 验证基线：core 1437 用例 0 失败（V85 移除岗位 7 用例后）/ api 58 用例 0 失败 / UI type-check + build / Docker API 全链路 / 浏览器实测；
@@ -440,8 +440,12 @@ SUPER_ADMIN 由 StpInterfaceImpl 返回 "*" 通配，自动覆盖全部新增码
 | 版本 | 内容 | 可逆性 |
 |---|---|---|
 | **V87** | 身份模型收口：防御性补齐 `sys_user.role` → `sys_user_role`；`ALTER TABLE sys_user DROP COLUMN role` | DDL 不可逆（列删除）；补齐段幂等 |
-| **V88** | 角色扩充：新增 NORMAL_USER / GUEST 2 角色 + 权限绑定 + 菜单绑定 | 按 `code` 反向 DELETE 可逆 |
-| **V89** | 权限码扩充：管理面 + 业务面动作码种子（§9.4.2 / §9.4.3）+ 粗粒度码软删 + 角色重绑 | 按 `code` 反向 DELETE 可逆 |
+| **V88** | **权限码扩充**：管理面动作码 32 个（id 49~80）+ 业务面动作码 39 个（id 81~119，含 `workflow-instance:add`）；粗粒度码解绑 + 软删（`agent:manage` / `task:assign` / `review:approve` / `system:manage` / `user:manage` / `role:manage`） | 按 `code` 反向 DELETE 可逆 |
+| **V89** | **角色扩充 + 权限绑定**：新增 NORMAL_USER（id=3）/ GUEST（id=4）；ADMIN 绑运维管理面 + 业务写码（57 码）；NORMAL_USER 绑业务菜单 + 业务写码（55 码）；GUEST 仅绑 16 个只读菜单码（零写码） | 按 `code` 反向 DELETE 可逆 |
+
+> **顺序修正（2026-09-13）**：原计划为 V88=角色、V89=权限码；但角色绑定依赖权限码先落库
+> （`sys_role_permission.permission_id` 取自 `sys_permission`），**顺序必须颠倒**：
+> **V88=权限码 → V89=角色与绑定**。已按此实施。
 
 > V77~V86 只读（红线）；新变更一律 V87+ 递增。
 
@@ -485,6 +489,57 @@ SUPER_ADMIN 由 StpInterfaceImpl 返回 "*" 通配，自动覆盖全部新增码
 - **权限规范**（§43）：认证与授权分离，`/api/admin/**` 必须经 Admin 授权，不以「已登录」放行。
 - **安全**（§42）：不写死密码 / Key；注册开关默认关闭。
 - **文档回填**（§32）：目标边界变化 → 目标架构 §12；专项变化 → 本文档；差距项 → 差距表 G-012/G-013 行内登记。
+
+## 9.9 实施口径与偏差登记（BASE-4.3 / 4.4 合并实施，2026-09-13）
+
+### 9.9.1 授权覆盖实测
+
+- `@SaCheckPermission` 覆盖：**131 处**（原有 24 + 本批新增 **107**：管理面 60 / 业务面 47），分布于 23 个控制器。
+- **码 ↔ 注解双向核对**：V88 新增 **71 码全部被至少一个注解引用（零幽灵码）**；注解引用共 88 码 = V88 的 71 + 既有迁移的 17（`depart:*` / `role:*` / `user:*` / `permission:*`）。
+- Agent / 公开白名单通道 **12 个控制器实测 0 注解**（McpController / AgentController / AgentDoorbellController / AgentInboxController / ArtifactUploadController / ActivityController / SetupController / AuthController / HealthController / ToolsController / FeedController / AgentEventController），红线未越界。
+
+### 9.9.2 登记偏差
+
+| # | 项 | 说明 | 处置 |
+|---|---|---|---|
+| 1 | **ADMIN 未授予平台配置码** | `llm-provider:*` / `config:*` / `prompt-template:*` / `platform-provider:*` / `mq-recovery:*` 按 §9.4.4 归 SUPER_ADMIN 专有。ADMIN 仍持有 `settings:view`（V77 绑定；为保留「系统设置 → 部门管理」子树所必需——父菜单不可见则子菜单整体消失） | 无可见回归，原因见 #2 |
+| 2 | **`Settings.vue` 当前不可达** | `settings:view` 的 `component` 为 NULL（聚合父菜单），`/settings` 被 `dynamic.ts` redirect 到首个可见子；前端 `router/` 无任何 `Settings.vue` 引用 | 本批**未做** Settings.vue 的 v-auth（页面进不去）。该页可达性属既有问题，另行登记 |
+| 3 | **`sys_permission` 存在历史测试残留** | 6 行雪藏 id（2098…）测试数据（`DOCKER:TEST` / `PERM:PROBE` / `UI:TEST` / `TMP:MENU:VERIFY*`），均 `deleted=1`；与 V88 的 id 49~119 **无数字冲突** | 建议清理，非本批范围 |
+| 4 | **前端失配 6 处**（子代理如实上报） | ① `SubTaskDetail.vue` 无 subtask 状态按钮，其「人工介入」2 按钮实调 `reviewApi.create` → 按**实际生效码** `review:add` 标注；② `ReviewList.vue` 无提交按钮；③ `QualityDashboard.vue` 无重算/派发按钮（后端有码、前端无落点）；④ `agent:key` 落点在 `AgentDetail.vue`；⑤ `SubTaskList.vue` 无独立「新建/编辑草稿/开始/提交/完成/返工/阻塞」按钮（「快速派发」是唯一新建入口 → `subtask:add`）；⑥ `conversation:mode` 无前端落点 | 按实际生效码标注；无落点的码保留供后端使用 |
+| 5 | **补漏 4 处**（父任务收口） | `AgentDetail.vue` 操作区（`agent:edit` ×2 / `agent:key` / `agent:delete`）、`TaskList.vue` 停止（`task:edit`）、`TeamList.vue` 发布（`team:edit`）、`TaskIterationView.vue` 回填历史迭代（`task:report`） | 已补 v-auth |
+
+### 9.9.3 方案 B：管理面路径限定放宽（2026-09-13，经用户确认）
+
+**触发问题（E2E 实测暴露）**：BASE-4.1 把 `AdminOnlyInterceptor` 从「`_authType=="admin"`」收紧为
+「`SUPER_ADMIN|ADMIN`」时非管理角色尚不存在；BASE-4.3 引入 NORMAL_USER / GUEST 后，
+其可见菜单的**数据接口仍在 `/api/admin/**` 前缀下**，被角色闸在动作码之前拦成 403：
+
+| 菜单码 | 前端数据接口 | 修复前 |
+|---|---|---|
+| `agent:view` | `/api/admin/agents/list` | 403 |
+| `team:view` | `/api/admin/teams` | 403 |
+| `browser:view` | `/api/admin/browser-sessions` | 403 |
+| `quality:view` | `/api/admin/quality/*` | 403 |
+| `duty:view` | `/api/admin/duty-leases` | 403 |
+
+**决策（方案 B，用户选定）**：`AdminOnlyInterceptor` 放宽为**仅判定「平台账号身份」**
+（`StpUtil.isLogin()`，即拒绝外部 Agent 的 API Key），不再判角色；授权一律交给动作级权限码。
+
+**同批连带修正**：
+- `MenuController` 路径 `/api/admin/menus/tree` → **`/api/menus/tree`**（+ 前端 `paths.ts` 与 2 处注释）。
+  理由：「我的可见菜单」属自身资源而非管理面操作；置于 admin 前缀下会被平台账号外的闸拦下，
+  移出后仅需登录，且**不违反** §43（它不再是 admin API）。细粒度过滤仍由服务层按当前账号权限码完成。
+- `CODE_STYLE §43` 口径修订并留痕：原「`/api/admin/**` 必须经 Admin 授权、不以已登录放行」
+  → 现「**授权一律以动作级权限码为准**，路径前缀只承担『平台账号 vs 外部 Agent』的通道区分」。
+
+**代价与风险（已接受）**：
+1. 管理面**无动作码的读接口**（agent list / teams / quality overview / duty leases / browser sessions）
+   对**任何已登录账号**开放。缓解：这些接口均为只读；写操作全部有动作码守护（131 处覆盖）。
+2. 「管理面路径归位」（把业务只读接口迁出 `/api/admin/**`）登记为**后续专项**——
+   届时可恢复更严的路径语义。
+3. 类名 `AdminOnlyInterceptor` 与现语义不符（历史命名），登记为技术债。
+
+**验证**：`AdminOnlyInterceptorTest` 重写为 2 例（平台账号放行 / 未登录 403）；api 单测 58 → 57（预期）；UI type-check 0 error；全 reactor BUILD SUCCESS。
 
 
 # 10. 红线与约束
