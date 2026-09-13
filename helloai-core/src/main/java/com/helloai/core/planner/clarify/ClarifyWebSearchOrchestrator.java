@@ -15,7 +15,9 @@ import org.springframework.stereotype.Component;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -146,18 +148,32 @@ public class ClarifyWebSearchOrchestrator {
         long t0 = System.currentTimeMillis();
         List<String> attempted = new ArrayList<>();
         try {
-            // 顺序降级：候选词逐个尝试，首个非空结果即停；全零结果时 attempted 完整记录已尝试词
-            List<WebSearchResult> searched = Collections.emptyList();
+            // 多查询词合并（对齐 Kimi/DeepSeek 网页版 query expansion）：
+            // 对全部候选词都搜索、按 URL 去重合并，总条数 cap 到 maxResults；
+            // 每词条数 = ceil(maxResults / 候选词数)，避免单次吃满上限、多词覆盖不全。
+            int maxResults = Math.max(1, webSearchProperties.getMaxResults());
+            int perQuery = Math.max(1, (int) Math.ceil((double) maxResults / Math.max(1, candidates.size())));
+            List<WebSearchResult> searched = new ArrayList<>();
+            Set<String> seenUrls = new HashSet<>();
             for (String q : candidates) {
                 if (q == null || q.isBlank()) {
                     continue;
                 }
                 attempted.add(q);
-                searched = webSearchService.search(q, webSearchProperties.getMaxResults());
-                if (!searched.isEmpty()) {
+                List<WebSearchResult> hits = webSearchService.search(q, perQuery);
+                for (WebSearchResult r : hits) {
+                    if (r.getUrl() != null && !r.getUrl().isBlank() && !seenUrls.add(r.getUrl())) {
+                        continue; // 跨词同 URL 去重
+                    }
+                    searched.add(r);
+                    if (searched.size() >= maxResults) {
+                        break;
+                    }
+                }
+                log.info("澄清联网搜索：候选词命中 {} 条: query={}", hits.size(), q);
+                if (searched.size() >= maxResults) {
                     break;
                 }
-                log.info("澄清联网搜索：零结果，顺序降级尝试下一候选词: tried={}", q);
             }
             long costMs = System.currentTimeMillis() - t0;
             List<WebSearchResult> merged = mergeFetchedIntoResults(pages, searched);

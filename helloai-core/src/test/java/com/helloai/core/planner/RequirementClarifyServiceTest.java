@@ -1299,7 +1299,7 @@ class RequirementClarifyServiceTest {
             when(webSearchService.provider()).thenReturn("bocha");
             when(searchQueryPlannerService.planQueries(anyString()))
                     .thenReturn(List.of("规则候选词"));
-            when(webSearchService.search(eq("最新 AI 编程动态"), eq(5))).thenReturn(List.of(
+            when(webSearchService.search(eq("最新 AI 编程动态"), eq(3))).thenReturn(List.of(
                     WebSearchResult.builder().title("AI 编程最新进展")
                             .url("https://a.example/1").snippet("摘要").build()));
             when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
@@ -1311,9 +1311,10 @@ class RequirementClarifyServiceTest {
 
             clarifyService.sendMessage(CONV_ID, "你好");
 
-            // LLM 优化词命中即停，规划器规则词永远不尝试（候选词顺序降级：LLM 词优先）
-            verify(webSearchService).search(eq("最新 AI 编程动态"), eq(5));
-            verify(webSearchService, never()).search(eq("规则候选词"), anyInt());
+            // 多词合并：LLM 优化词 + 规划器规则词都搜索（每词 perQuery=ceil(5/2)=3），URL 去重合并；
+            // LLM 词命中 1 条、规则词零结果，total=1
+            verify(webSearchService).search(eq("最新 AI 编程动态"), eq(3));
+            verify(webSearchService).search(eq("规则候选词"), eq(3));
             ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
             verify(messageService).addMessage(eq(CONV_ID), eq("assistant"), eq("最近 AI 编程这么火："),
                     payloadCaptor.capture());
@@ -2283,9 +2284,9 @@ class RequirementClarifyServiceTest {
             when(webSearchService.provider()).thenReturn("bocha");
             when(searchQueryPlannerService.planQueries(anyString()))
                     .thenReturn(List.of("快速学习Python", "Python 项目搭建教程"));
-            // 首候选词零结果 → 降级次词命中
-            when(webSearchService.search(eq("快速学习Python"), eq(5))).thenReturn(List.of());
-            when(webSearchService.search(eq("Python 项目搭建教程"), eq(5))).thenReturn(List.of(
+            // 首候选词零结果 → 次词命中；多词合并下两词都搜（每词 perQuery=ceil(5/2)=3）
+            when(webSearchService.search(eq("快速学习Python"), eq(3))).thenReturn(List.of());
+            when(webSearchService.search(eq("Python 项目搭建教程"), eq(3))).thenReturn(List.of(
                     WebSearchResult.builder().title("Python 实战教程")
                             .url("https://p.example/1").snippet("摘要").build()));
             stubLlmRound("{\"type\":\"question\",\"message\":\"验收标准是什么？\"}");
@@ -2293,7 +2294,7 @@ class RequirementClarifyServiceTest {
             clarifyService.sendMessage(CONV_ID,
                     "能否给我提供一份快速学习Python + 快速搭建项目的完整方案");
 
-            // 顺序降级：两词各试一次，命中即停（共 2 次调用）
+            // 多词合并：两词各搜 perQuery=3 条（共 2 次调用），URL 去重合并，total=1
             verify(webSearchService, times(2)).search(anyString(), anyInt());
             ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
             verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
