@@ -62,17 +62,33 @@ public class WebSearchOutcome {
     private String reason;
 
     /**
+     * 搜索结果的大模型总结答案（供应商能力，如博查 AI Search {@code answer=true}
+     * 由博查侧模型对结果生成；其他供应商/未开启时为 null）。
+     * 注入 Prompt 时置于结果列表之前——对齐 DeepSeek 网页版「搜索后给出总结」形态。
+     */
+    private String answer;
+
+    /** 本轮实际搜索轮数（含 Deep Research 风格补搜；1=单轮，>1=发生过补搜）。 */
+    @Builder.Default
+    private int rounds = 1;
+
+    /**
      * 渲染为注入 Prompt 的资料文本：直取页面节（用户给出的站点第一手资料）+
-     * 搜索引擎结果节（每条双行：标题（链接）+ 摘要）。两节均空时输出占位符
-     * 保证 Prompt 该节语义稳定。
+     * 搜索总结节（供应商大模型总结，若有）+ 搜索引擎结果节（每条双行：标题（链接）+ 摘要）。
+     * 各节均空时输出占位符保证 Prompt 该节语义稳定。
      */
     public String toContextText() {
         boolean hasPages = fetchedPages != null && fetchedPages.stream().anyMatch(WebPageContent::isOk);
         boolean hasResults = results != null && !results.isEmpty();
-        if (!hasPages && !hasResults) {
+        boolean hasAnswer = answer != null && !answer.isBlank();
+        if (!hasPages && !hasResults && !hasAnswer) {
             return "（无可用联网资料）";
         }
         StringBuilder sb = new StringBuilder();
+        if (hasAnswer) {
+            sb.append("以下是联网检索结果的大模型总结（供参考，引用细节请以下方来源为准）：\n")
+                    .append(answer.strip()).append("\n\n");
+        }
         if (hasPages) {
             long okCount = fetchedPages.stream().filter(WebPageContent::isOk).count();
             sb.append("以下是直接访问用户提供的网页后抓取的内容（共 ").append(okCount).append(" 页，第一手资料优先）：\n");

@@ -78,6 +78,20 @@ public class WebSearchProperties {
      */
     private int aiSearchMaxResults = 15;
 
+    /**
+     * 博查 AI Search 是否启用大模型总结（{@code answer=true}，默认开）。
+     * 开启后博查侧模型对搜索结果生成一段总结答案，随结果注入 Prompt——
+     * 对齐 DeepSeek 网页版「搜索后最后给出总结」；代价为每次搜索的额外 LLM 计费。
+     */
+    private boolean aiSearchAnswer = true;
+
+    /**
+     * 联网搜索最大轮数（Deep Research 风格补搜，默认 2 = 首轮 + 最多 1 轮补搜）。
+     * 首轮结果信息不足时由 LLM 缺口评估生成补充查询词再搜一轮，合并去重；
+     * 设 1 关闭补搜（单轮）。每轮均为独立搜索 API 调用 + 评估 LLM 调用，注意成本。
+     */
+    private int aiSearchMaxRounds = 2;
+
     /** 博查 API Key（env BOCHA_API_KEY 注入；未配置/空字符串=该供应商未启用）。 */
     private String bochaApiKey = "${BOCHA_API_KEY:}";
 

@@ -18,6 +18,7 @@ import com.helloai.core.planner.clarify.ClarifyReplyParser;
 import com.helloai.core.planner.clarify.ClarifyWebSearchOrchestrator;
 import com.helloai.core.planner.clarify.ConfirmCardProtocol;
 import com.helloai.core.planner.clarify.RelativeTimeNormalizer;
+import com.helloai.core.planner.clarify.SearchGapAssessor;
 import com.helloai.core.planner.clarify.SystemTimeContextBuilder;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
@@ -144,7 +145,9 @@ class RequirementClarifyServiceTest {
                 taskTimelineService, new ClarifyReplyParser(new ObjectMapper()),
                 new ConfirmCardProtocol(new ObjectMapper()),
                 new ClarifyWebSearchOrchestrator(webSearchService, webSearchProperties,
-                        pageFetchService, searchQueryPlannerService, new RelativeTimeNormalizer()),
+                        pageFetchService, searchQueryPlannerService, new RelativeTimeNormalizer(),
+                        new SearchGapAssessor(webSearchProperties, new ObjectMapper(),
+                                new SystemTimeContextBuilder())),
                 new ChatRoundDecisionParser(new ObjectMapper()),
                 new SystemTimeContextBuilder(),
                 longTermMemoryService,

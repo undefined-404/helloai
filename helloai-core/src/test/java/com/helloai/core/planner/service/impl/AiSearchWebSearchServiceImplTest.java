@@ -170,4 +170,32 @@ class AiSearchWebSearchServiceImplTest {
         assertThat(results).hasSize(1);
         assertThat(results.get(0).getTitle()).isEqualTo("有摘要");
     }
+
+    @Test
+    @DisplayName("answer 消息解析：大模型总结落 answerSummary（与结果条数无关）")
+    void parseAnswerMessage() throws Exception {
+        when(properties.getMaxSnippetChars()).thenReturn(200);
+        String body = """
+                {
+                  "messages": [
+                    {"role": "assistant", "type": "answer", "content": "这是博查侧生成的需求总结：平台应包含任务/里程碑/协作三模块。"},
+                    {
+                      "role": "assistant", "type": "source", "content_type": "webpage",
+                      "content": {"value": [
+                        {"name": "参考页", "url": "https://g.com/7", "snippet": "摘要"}
+                      ]}
+                    }
+                  ]
+                }
+                """;
+        AiSearchWebSearchServiceImpl service = newService();
+        Method m = AiSearchWebSearchServiceImpl.class
+                .getDeclaredMethod("parseResponse", String.class, int.class);
+        m.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        List<WebSearchResult> results = (List<WebSearchResult>) m.invoke(service, body, 15);
+
+        assertThat(results).hasSize(1);
+        assertThat(service.answerSummary("q")).contains("博查侧生成的需求总结");
+    }
 }

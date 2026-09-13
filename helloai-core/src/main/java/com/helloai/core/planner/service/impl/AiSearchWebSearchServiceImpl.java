@@ -53,6 +53,10 @@ public class AiSearchWebSearchServiceImpl implements WebSearchService {
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
 
+    /** 最近一次 {@link #search} 的大模型总结答案（answer=true 时博查侧生成）。
+     * 搜索为串行调用（澄清轮内一次），每次 search 覆盖；供 {@link #answerSummary} 读取。 */
+    private volatile String lastAnswer;
+
     public AiSearchWebSearchServiceImpl(WebSearchProperties properties,
                                         WebSearchCredentialKeyStore credentialKeyStore,
                                         ObjectMapper objectMapper) {
@@ -66,6 +70,12 @@ public class AiSearchWebSearchServiceImpl implements WebSearchService {
 
     @Override
     public String provider() { return "bocha-ai-search"; }
+
+    /** 最近一次搜索的大模型总结（answer=true 时博查侧生成；answer=false 或无则为 null）。 */
+    @Override
+    public String answerSummary(String query) {
+        return lastAnswer;
+    }
 
     @Override
     public Map<String, Object> verifyApiKey() {
@@ -131,12 +141,13 @@ public class AiSearchWebSearchServiceImpl implements WebSearchService {
         // provider 级容量：AI Search 是高容量检索，走专用条数（默认 15，上限 50），
         // 不受通用 maxResults 护栏约束（见类注释）
         int limit = Math.max(1, Math.min(properties.getAiSearchMaxResults(), MAX_AI_SEARCH_COUNT));
+        lastAnswer = null; // 每次搜索重置，供 answerSummary 读取本次总结（避免上次残留）
         try {
             String body = objectMapper.writeValueAsString(Map.of(
                     "query", query,
                     "freshness", "noLimit",
                     "count", limit,
-                    "answer", false,
+                    "answer", properties.isAiSearchAnswer(),
                     "stream", false
             ));
             HttpRequest request = HttpRequest.newBuilder()
@@ -183,13 +194,22 @@ public class AiSearchWebSearchServiceImpl implements WebSearchService {
                 }
                 return out;
             }
-            // 路径二：messages[] → source/webpage → content → value[]
+            // 路径二：messages[] → source/webpage → content → value[]（answer 消息另取）
             JsonNode messages = root.path("messages");
             if (messages.isArray()) {
                 for (JsonNode msg : messages) {
-                    if (out.size() >= limit) break;
-                    if (!"source".equals(textOrNull(msg.path("type")))) continue;
+                    String type = textOrNull(msg.path("type"));
+                    // 大模型总结消息（answer=true 时博查侧生成）：与结果条数无关，必取
+                    if ("answer".equals(type)) {
+                        String ans = textOrNull(msg.path("content"));
+                        if (ans != null) {
+                            lastAnswer = ans;
+                        }
+                        continue;
+                    }
+                    if (!"source".equals(type)) continue;
                     if (!"webpage".equals(textOrNull(msg.path("content_type")))) continue;
+                    if (out.size() >= limit) continue; // 结果已满仍继续扫描（后方可能仍有 answer 消息）
                     JsonNode content = msg.path("content");
                     if (content.isTextual()) {
                         try {

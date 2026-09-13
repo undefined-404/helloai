@@ -60,6 +60,18 @@ public class WebSearchServiceRouter implements WebSearchService {
     }
 
     /**
+     * 委托当前激活供应商的大模型总结（如博查 AI Search {@code answer=true}）。
+     *
+     * <p>与 {@link #search} 配对使用（search 先行）：Router 本身不缓存，
+     * 直接转发到 delegate，由实现侧返回其最近一次搜索的总结文本。</p>
+     */
+    @Override
+    public String answerSummary(String query) {
+        WebSearchService delegate = resolve();
+        return delegate == null ? null : delegate.answerSummary(query);
+    }
+
+    /**
      * 委托当前激活的供应商实现验证 API Key。
      *
      * <p>不受总开关 {@code enabled} 短路：验证是管理员显式操作，即使搜索开关关闭

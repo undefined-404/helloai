@@ -182,9 +182,13 @@ helloai:
   #   （最接近 Kimi/DeepSeek 网页版检索体验；复用同一博查 API Key）。
   # ai-search-max-results：AI Search 单次条数（默认 15，API 上限 50）。
   # max-results：基础搜索（bocha/tavily/deepseek-native）单次条数（默认 15）。
+  # ai-search-answer：博查侧大模型总结（默认 true，搜索后给出总结）。
+  # ai-search-max-rounds：搜索轮数上限（默认 2 = 首轮 + 最多 1 轮缺口补搜；1=关闭补搜）。
   web-search:
     provider: bocha-ai-search
     ai-search-max-results: 15
+    # ai-search-answer: true
+    # ai-search-max-rounds: 2
   execution:
     enabled: true
     mock-mode: false

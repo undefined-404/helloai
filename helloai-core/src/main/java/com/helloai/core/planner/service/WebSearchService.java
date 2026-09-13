@@ -33,6 +33,21 @@ public interface WebSearchService {
     String provider();
 
     /**
+     * 获取最近一次 {@link #search} 的大模型总结答案（供应商能力扩展）。
+     *
+     * <p>仅支持大模型总结的供应商（博查 AI Search {@code answer=true}）覆盖返回；
+     * 不支持返回 null。调用方（搜索编排）在 {@code search} 之后取本次结果附带的
+     * 总结文本，注入 Prompt 对齐「搜索后给出总结」的网页版体验。
+     * 语义约束：与 {@link #search} 配对使用（search 先行），非配对调用返回 null/旧值。</p>
+     *
+     * @param query 与最近一次 {@link #search} 相同的查询词（实现侧可不使用，仅语义锚定）
+     * @return 本次搜索结果的大模型总结文本；供应商不支持返回 null
+     */
+    default String answerSummary(String query) {
+        return null;
+    }
+
+    /**
      * 验证当前供应商 API Key 是否有效（系统设置页保存密钥后调用）。
      *
      * <p>实现侧应发送最小探测请求（如 count=1 的搜索）。默认实现返回不支持；

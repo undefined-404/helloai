@@ -41,6 +41,7 @@ public class ClarifyWebSearchOrchestrator {
     private final WebPageFetchService pageFetchService;
     private final SearchQueryPlannerService searchQueryPlannerService;
     private final RelativeTimeNormalizer relativeTimeNormalizer;
+    private final SearchGapAssessor searchGapAssessor;
 
     /**
      * 显式构造器（绕开 Lombok {@code @RequiredArgsConstructor} 在
@@ -50,12 +51,14 @@ public class ClarifyWebSearchOrchestrator {
                                         WebSearchProperties webSearchProperties,
                                         WebPageFetchService pageFetchService,
                                         SearchQueryPlannerService searchQueryPlannerService,
-                                        RelativeTimeNormalizer relativeTimeNormalizer) {
+                                        RelativeTimeNormalizer relativeTimeNormalizer,
+                                        SearchGapAssessor searchGapAssessor) {
         this.webSearchService = webSearchService;
         this.webSearchProperties = webSearchProperties;
         this.pageFetchService = pageFetchService;
         this.searchQueryPlannerService = searchQueryPlannerService;
         this.relativeTimeNormalizer = relativeTimeNormalizer;
+        this.searchGapAssessor = searchGapAssessor;
     }
 
     /**
@@ -155,12 +158,20 @@ public class ClarifyWebSearchOrchestrator {
             int perQuery = Math.max(1, (int) Math.ceil((double) maxResults / Math.max(1, candidates.size())));
             List<WebSearchResult> searched = new ArrayList<>();
             Set<String> seenUrls = new HashSet<>();
+            String answer = null;
             for (String q : candidates) {
                 if (q == null || q.isBlank()) {
                     continue;
                 }
                 attempted.add(q);
                 List<WebSearchResult> hits = webSearchService.search(q, perQuery);
+                // 大模型总结取首个成功候选词的（主查询优先；answer=false 的供应商返回 null）
+                if (answer == null) {
+                    String a = webSearchService.answerSummary(q);
+                    if (a != null && !a.isBlank()) {
+                        answer = a;
+                    }
+                }
                 for (WebSearchResult r : hits) {
                     if (r.getUrl() != null && !r.getUrl().isBlank() && !seenUrls.add(r.getUrl())) {
                         continue; // 跨词同 URL 去重
@@ -175,10 +186,33 @@ public class ClarifyWebSearchOrchestrator {
                     break;
                 }
             }
+            int rounds = 1;
+            // Deep Research 风格补搜：首轮有结果且配置允许多轮时，LLM 评估缺口 → 补搜 1 轮
+            if (!searched.isEmpty() && webSearchProperties.getAiSearchMaxRounds() > 1) {
+                String gapQuery = searchGapAssessor.assessGap(
+                        stripUrls(userMessage), new ArrayList<>(searched), attempted);
+                if (gapQuery != null && !gapQuery.isBlank()) {
+                    attempted.add(gapQuery);
+                    List<WebSearchResult> hits = webSearchService.search(gapQuery, perQuery);
+                    for (WebSearchResult r : hits) {
+                        if (r.getUrl() != null && !r.getUrl().isBlank() && !seenUrls.add(r.getUrl())) {
+                            continue;
+                        }
+                        searched.add(r);
+                        if (searched.size() >= maxResults) {
+                            break;
+                        }
+                    }
+                    rounds = 2;
+                    log.info("澄清联网搜索：缺口补搜完成 gapQuery={}, hits={}, total={}",
+                            gapQuery, hits.size(), searched.size());
+                }
+            }
             long costMs = System.currentTimeMillis() - t0;
             List<WebSearchResult> merged = mergeFetchedIntoResults(pages, searched);
-            log.info("澄清联网搜索结束: provider={}, queries={}, pages={}, results={}, costMs={}",
-                    webSearchService.provider(), attempted, pages.size(), merged.size(), costMs);
+            log.info("澄清联网搜索结束: provider={}, queries={}, rounds={}, answer={}, pages={}, results={}, costMs={}",
+                    webSearchService.provider(), attempted, rounds,
+                    answer != null ? "有" : "无", pages.size(), merged.size(), costMs);
             return WebSearchOutcome.builder()
                     .provider(webSearchService.provider())
                     .query(attempted.isEmpty() ? "" : attempted.get(0))
@@ -187,6 +221,8 @@ public class ClarifyWebSearchOrchestrator {
                     .total(merged.size())
                     .results(merged)
                     .fetchedPages(pages)
+                    .answer(answer)
+                    .rounds(rounds)
                     .build();
         } catch (Exception e) {
             log.warn("澄清联网搜索异常降级（不动澄清主流程）: queries={}, err={}", attempted, e.getMessage());
