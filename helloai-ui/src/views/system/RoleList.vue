@@ -23,15 +23,16 @@
       </div>
     </div>
 
-    <el-card class="ha-entrance-up">
-      <el-table
-        v-loading="loading"
-        :data="list"
-        border
-        stripe
-        style="width: 100%"
-        empty-text="暂无角色"
-      >
+    <el-card class="ha-entrance-up list-card">
+      <div class="table-wrapper">
+        <el-table
+          v-loading="loading"
+          :data="list"
+          border
+          stripe
+          style="width: 100%"
+          empty-text="暂无角色"
+        >
         <el-table-column
           label="角色编码"
           min-width="140"
@@ -117,6 +118,7 @@
           </template>
         </el-table-column>
       </el-table>
+      </div>
     </el-card>
 
     <!-- 新建 / 编辑角色 -->
@@ -379,7 +381,15 @@ onMounted(() => load())
 </script>
 
 <style scoped>
-.page { max-width: var(--ha-content-width); }
+/* Page wrapper: 与外层 .app-content (overflow-y: auto) 协作，
+   用 min-height: 100% 让页面占满 .app-content 的可视区，
+   然后用 flex 列向子级分配高度，确保数据少时 el-card 也能拉伸到底。 */
+.page {
+  max-width: var(--ha-content-width);
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
 .page-head {
   display: flex;
   align-items: center;
@@ -387,6 +397,7 @@ onMounted(() => load())
   margin-bottom: 16px;
   gap: 16px;
   flex-wrap: wrap;
+  flex-shrink: 0;
 }
 .page-heading {
   font-size: 20px;
@@ -396,6 +407,33 @@ onMounted(() => load())
   margin: 0;
 }
 .page-actions { display: flex; align-items: center; gap: 8px; }
+
+/* 列表卡片：flex:1 吸收 .page 剩余高度，让数据少时卡片仍撑到底；
+    display:flex 让内部 el-table 也能按卡片高度排版 */
+.list-card {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.list-card :deep(.el-card__body) {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+/* 表格容器：吸收卡片内除分页外的全部高度，
+   让 el-table 即使只有 1~2 行也能撑满卡片底部；空数据时由 el-empty 居中 */
+.table-wrapper {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+.table-wrapper :deep(.el-table) {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .muted { color: var(--ha-muted); font-size: 12px; }
 .perm-group { margin-bottom: 16px; }
 .perm-group-label {

@@ -30,7 +30,7 @@
       </div>
     </div>
 
-    <el-card class="ha-entrance-up">
+    <el-card class="ha-entrance-up list-card">
       <el-alert
         type="info"
         :closable="false"
@@ -38,15 +38,16 @@
         class="page-tip"
         title="本页维护接口动作级权限码（type=API，如 user:add）。菜单/目录的维护见「菜单管理」。"
       />
-      <el-table
-        v-loading="loading"
-        :data="filteredList"
-        row-key="id"
-        border
-        stripe
-        style="width: 100%"
-        empty-text="暂无接口权限码"
-      >
+      <div class="table-wrapper">
+        <el-table
+          v-loading="loading"
+          :data="filteredList"
+          row-key="id"
+          border
+          stripe
+          style="width: 100%"
+          empty-text="暂无接口权限码"
+        >
         <el-table-column
           prop="name"
           label="名称"
@@ -102,6 +103,7 @@
           </template>
         </el-table-column>
       </el-table>
+      </div>
     </el-card>
 
     <!-- 新增 / 编辑 接口权限码 -->
@@ -403,7 +405,15 @@ onMounted(() => load())
 </script>
 
 <style scoped>
-.page { max-width: var(--ha-content-width); }
+/* Page wrapper: 与外层 .app-content (overflow-y: auto) 协作，
+   用 min-height: 100% 让页面占满 .app-content 的可视区，
+   然后用 flex 列向子级分配高度，确保数据少时 el-card 也能拉伸到底。 */
+.page {
+  max-width: var(--ha-content-width);
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
 .page-head {
   display: flex;
   align-items: center;
@@ -411,6 +421,7 @@ onMounted(() => load())
   margin-bottom: 16px;
   gap: 16px;
   flex-wrap: wrap;
+  flex-shrink: 0;
 }
 .page-heading {
   font-size: 20px;
@@ -421,14 +432,41 @@ onMounted(() => load())
 }
 .page-actions { display: flex; align-items: center; gap: 8px; }
 .filter-search { width: 260px; }
-.page-tip { margin-bottom: 12px; }
+
+/* 列表卡片：flex:1 吸收 .page 剩余高度，让数据少时卡片仍撑到底；
+    display:flex 让内部 el-table 也能按卡片高度排版 */
+.list-card {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.list-card :deep(.el-card__body) {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+/* 表格容器：吸收卡片内除 alert 头/分页外的全部高度，
+   让 el-table 即使只有 1~2 行也能撑满卡片底部；空数据时由 el-empty 居中 */
+.table-wrapper {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+.table-wrapper :deep(.el-table) {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.page-tip { margin-bottom: 12px; flex-shrink: 0; }
 .perm-code {
   font-family: var(--ha-font-mono);
   font-size: 12px;
-  color: var(--ha-primary);
   background: var(--ha-surface-hover);
+  color: var(--ha-ink-secondary);
   padding: 1px 6px;
-  border-radius: 4px;
+  border-radius: var(--ha-radius-sm);
 }
 .muted { color: var(--ha-muted); font-size: 12px; }
 </style>
