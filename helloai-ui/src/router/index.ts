@@ -68,7 +68,7 @@ let builtForToken = ''
 let rebuiltForMenuDrift = false
 
 async function ensureDynamicRoutes(auth: ReturnType<typeof useAuthStore>): Promise<boolean> {
-  const type: 'admin' | 'agent' | null = !!auth.adminToken ? 'admin' : !!auth.agentKey ? 'agent' : null
+  const type: 'admin' | 'agent' | null = auth.adminToken ? 'admin' : auth.agentKey ? 'agent' : null
   if (type === null) return false
   const token = auth.adminToken || auth.agentKey || ''
   // 同一登录态（类型 + token 一致）已构建 → 直接复用；否则重建（登出/切换账号）
@@ -106,7 +106,7 @@ router.beforeEach(async (to) => {
   }
 
   // 已登录：确保动态路由就绪（首次进入 / 登录类型变化时构建）
-  if (!routesBuilt || builtForType !== (!!auth.adminToken ? 'admin' : 'agent')) {
+  if (!routesBuilt || builtForType !== (auth.adminToken ? 'admin' : 'agent')) {
     // 登录 / 登出 / 切换账号触发的重建 → 重置漂移自愈标记，让新会话重新获得一次自愈机会
     rebuiltForMenuDrift = false
     try {
