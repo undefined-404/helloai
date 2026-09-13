@@ -20,4 +20,19 @@ public interface RuleService extends IService<Rule> {
     List<Rule> listByType(String ruleType);
 
     String getGlobalRuleContent();
+
+    /**
+     * 新建规则（校验名称/类型/内容后落库）。
+     */
+    Rule createRule(Rule rule);
+
+    /**
+     * 更新规则（id 不存在时抛业务异常）。
+     */
+    Rule updateRule(Long id, Rule rule);
+
+    /**
+     * 删除规则（id 不存在时抛业务异常）。
+     */
+    void deleteRule(Long id);
 }
