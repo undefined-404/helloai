@@ -2,10 +2,10 @@ package com.helloai.core.planner.entity;
 
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
-import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import com.helloai.common.base.BaseEntity;
+import com.helloai.core.shared.handler.PgJsonbTypeHandler;
 import com.helloai.core.shared.handler.SmallIntBooleanTypeHandler;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -47,8 +47,13 @@ public class RequirementConversation extends BaseEntity {
      * finalTitle / finalDescription 同模式）；终稿确认建任务时双写
      * {@code task.context.requirementPackage} 供拆解链读取。NULL = 老数据兼容
      * （无需求包，拆解渲染占位文案，行为等于现状）。</p>
+     *
+     * <p><b>必须用 {@link PgJsonbTypeHandler}</b>（非内置 {@code JacksonTypeHandler}）：
+     * 后者 write 侧走 {@code setString}，PostgreSQL 拒绝 varchar → jsonb 隐式转换；
+     * 全字段 {@code updateById}（如 abandon 放弃会话）曾因此 500：
+     * {@code column "final_package" is of type jsonb but expression is of type character varying}。</p>
      */
-    @TableField(typeHandler = JacksonTypeHandler.class)
+    @TableField(typeHandler = PgJsonbTypeHandler.class)
     private Map<String, Object> finalPackage;
 
     /** 用户消息轮数（服务端硬上限防失控） */
