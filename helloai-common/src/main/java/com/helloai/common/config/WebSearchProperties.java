@@ -24,7 +24,9 @@ public class WebSearchProperties {
 
     /**
      * 供应商选择：bocha（默认，国内）/ tavily（境外）/ deepseek-native
-     * （DeepSeek 原生 web_search 服务端工具，当"搜索引擎"用）。
+     * （DeepSeek 原生 web_search 服务端工具，当"搜索引擎"用）/ bocha-ai-search
+     * （博查 AI Search：内置 Query 改写 + 多模态卡 + 更大结果容量，最接近 Kimi/DeepSeek
+     * 网页版检索体验；复用博查 API Key）。
      * 切换时不存在的 Bean 自动跳过，避免启动期 fail-fast 阻塞。
      */
     private String provider = "bocha";
@@ -35,8 +37,8 @@ public class WebSearchProperties {
      */
     private long timeoutMs = 8_000L;
 
-    /** 每次搜索最多返回的条目数。默认 5 条，每条截断到 {@link #maxSnippetChars} 字符。 */
-    private int maxResults = 5;
+    /** 每次搜索最多返回的条目数。默认 15 条（博查/Tavily 单次最多 50），每条截断到 {@link #maxSnippetChars} 字符。 */
+    private int maxResults = 15;
 
     /** 单条 snippet 最大字符数。超出截断，防止注入占位符后总长爆 token。 */
     private int maxSnippetChars = 200;
@@ -65,6 +67,16 @@ public class WebSearchProperties {
 
     /** 博查 Web Search API 端点。 */
     private String bochaBaseUrl = "https://api.bochaai.com/v1/web-search";
+
+    /** 博查 AI Search API 端点（高级搜索：内置 Query 改写 + 多模态卡，单次最多 50 条）。 */
+    private String aiSearchBaseUrl = "https://api.bochaai.com/v1/ai-search";
+
+    /**
+     * 博查 AI Search 单次返回条数（专用容量配置，默认 15，API 上限 50）。
+     * 独立于 {@link #maxResults}：AI Search 是「高容量检索」专用供应商，走 provider 级
+     * 容量上限而非通用护栏，让同一需求拿到的参考网页显著多于基础搜索。
+     */
+    private int aiSearchMaxResults = 15;
 
     /** 博查 API Key（env BOCHA_API_KEY 注入；未配置/空字符串=该供应商未启用）。 */
     private String bochaApiKey = "${BOCHA_API_KEY:}";
