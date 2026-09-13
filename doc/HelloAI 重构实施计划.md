@@ -2,9 +2,9 @@
 
 > **状态：ACTIVE**
 >
-> 当前主线：**Event Stream → Dual Executor → AgentRuntime → Skill Capability → Sandbox Provider**；P0 全链收官，P1 主体推进——G-004 / G-006 / G-010 / G-011 落地并完成 2026-09-10 外部执行者双轮全链闭环（Round2/Round3）。后续：P1 剩余项（Recovery/Fork 消费面 / Skill 回流规范 / Sandbox 第二阶段）+ 技术债清偿。近况增量：2026-09-11 外部上下文供给打通（子任务详情 MCP 工具 V76 + REST/inbox 三通道，提交 8fa09e0）。
+> 当前主线：**Event Stream → Dual Executor → AgentRuntime → Skill Capability → Sandbox Provider**；P0 全链收官，P1 主体推进——G-004 / G-006 / G-010 / G-011 落地并完成 2026-09-10 外部执行者双轮全链闭环（Round2/Round3）。后续：P1 剩余项（Recovery/Fork 消费面 / Skill 回流规范 / Sandbox 第二阶段）+ 技术债清偿。近况增量：2026-09-11 外部上下文供给打通（子任务详情 MCP 工具 V76 + REST/inbox 三通道，提交 8fa09e0）；2026-09-13 Sa-Token 异步上下文修复（SSE 流式接口 500：拦截器 ASYNC 放行 + 异常处理器 SSE 分支，提交 dd3bd18，见 §14）。
 >
-> 最后更新：2026-09-11
+> 最后更新：2026-09-13
 
 # 1. 重构目标
 
@@ -350,3 +350,58 @@ Dynamic Branching
 7. 失败执行如何恢复且避免重复副作用？
 8. Planner 如何不幻觉指派？（明确要平台技能目录过滤 + 子任务级技能/约束显式化 + 粒度自适应）
 9. 需求边界与推断如何不靠猜？（明确要需求包五字段 + uncertainties 分级登记 + 人工裁决 + fail-close 上报）
+
+# 14. 运行时缺陷清偿记录
+
+> 定位：V2 改造主线下暴露的**运行时缺陷**（非规划能力项）的根因、修复方案与验证留档。
+> 这些缺陷不改变 P0~P3 目标边界，但直接决定线上可用性，登记在此供后续排障与决策参考。
+
+## 2026-09-13 Sa-Token 异步上下文修复（SSE 流式接口 500）
+
+**现象**：`POST /api/requirement-conversations/streamSendById/{id}`（SseEmitter 流式）每次请求 500 刷屏，
+`GlobalExceptionHandler` 连续报两个异常——`SaTokenContextException: SaTokenContext 上下文尚未初始化`
+（拦截器链）+ `HttpMessageNotWritableException: No converter for [class R] with preset Content-Type
+'text/event-stream'`（异常响应二次异常，吞掉真实错误）。
+
+**根因（两层）**：
+
+1. **Sa-Token 1.44 Context Filter 仅注册 `REQUEST`**（官方 v1.46 发布说明直证：新版本才把 Filter 注册为
+   `REQUEST + ASYNC`）。`SseEmitter` 返回后容器触发 **ASYNC 二次分派**，Spring MVC 在异步线程重新执行
+   拦截器链，而异步线程没有 Sa-Token 的 ThreadLocal 上下文 → 所有调 `StpUtil` 的拦截器
+   （`AuthInterceptor` / `AdminOnlyInterceptor` / `SaInterceptor` 的 `@SaCheckPermission`）全部抛异常。
+2. **SSE 接口异常响应无 converter**：`@PostMapping(produces=TEXT_EVENT_STREAM_VALUE)` 下异常处理器返回
+   `R` 对象，内容协商选中 `text/event-stream` 却无对应 converter → 二次异常。
+
+**修复方案（语义 = 官方 v1.46「Context Filter 覆盖 ASYNC」，提交 `dd3bd18`）**：
+
+```text
+REQUEST 阶段（主线程）                    ASYNC 阶段（异步线程）
+  AuthInterceptor 鉴权 ✅                   拦截器链重跑 → 直接放行（不重复鉴权）
+  AdminOnlyInterceptor ✅                 ├ AuthInterceptor / AdminOnlyInterceptor / SaInterceptor
+  SaInterceptor 注解鉴权 ✅                    → DispatcherType.ASYNC 短路 return true
+  Controller 返回 SseEmitter               └ RequestLogInterceptor → 不重复 put MDC / 覆盖 START_TIME
+        ↓
+  异常路径：GlobalExceptionHandler 判定 SSE（ASYNC 分派 / Accept / Content-Type 三通道）
+        → 写 event:error\ndata:<msg>\n\n 帧（HTTP 200，对齐前端事件协议），不再返回 R 对象
+```
+
+- **拦截器 ASYNC 放行（3 处同模式）**：`AuthInterceptor` / `AdminOnlyInterceptor` 的 preHandle 开头
+  `request.getDispatcherType() == DispatcherType.ASYNC` 直接 `return true`（同一请求 REQUEST 阶段已完成
+  鉴权，异步分派不重复鉴权、不依赖异步线程上下文）；`WebMvcConfig` 的 `SaInterceptor` 改匿名子类覆盖
+  preHandle（`@SaCheckPermission` 注解鉴权不再炸）。
+- **RequestLogInterceptor ASYNC 放行**：不重复 put MDC / 覆盖 START_TIME——traceId 与计时沿用
+  REQUEST 阶段值，afterCompletion 在 ASYNC 结束统一落一条日志。
+- **GlobalExceptionHandler SSE 兼容**：新增 `sseRequest`（三通道：ASYNC 分派 / Accept 含
+  `text/event-stream` / Content-Type 含 `text/event-stream`）与 `writeSseError`（写 `event:error` 帧，
+  HTTP 保持 200；data 压平换行；响应已提交则放弃改写记 warn）。8 个 handler 全部加 SSE 分支——
+  SSE 场景返回 null（Spring 对 null 返回体跳过写入），不再二次异常。
+- **前端 chatStream.ts**：fetch 显式 `Accept: text/event-stream`（语义正确 + 服务端据 header 精准识别
+  SSE 场景）。
+
+**验证**：新增 `GlobalExceptionHandlerTest` 6 用例全绿（Accept 命中写 error 帧返回 null / ASYNC 分派命中
+401 也写帧 / 兜底异常压平换行 / 普通 JSON 请求 401 保持 R+状态码零回归 / 兜底 R.fail 500）；core 全量
+**1457 用例 0 失败**、api 全量 **66 用例 0 失败**（含既有 AdminOnlyInterceptorTest / RequestLogInterceptorTest
+零回归）；`vue-tsc --noEmit` 0 错误。注：父 POM `skipTests=true` 默认跳过，跑测试须显式 `-DskipTests=false`。
+
+**后续可选**：Sa-Token 升级 v1.46（Context Filter 原生覆盖 ASYNC）可替代拦截器放行方案；属可选优化，
+不阻塞当前修复。
