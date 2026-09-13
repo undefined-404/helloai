@@ -2,6 +2,7 @@ package com.helloai.core.agent.mcp;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import cn.dev33.satoken.exception.SaTokenException;
 import com.helloai.common.base.BizException;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.port.AgentAuthPort;
@@ -153,19 +154,36 @@ public class McpAuthFilter extends OncePerRequestFilter {
             writeUnauthorized(response, "MCP 鉴权失败：缺少 X-Admin-Token 或 Authorization Bearer <apiKey>");
 
         } catch (BizException e) {
-            if (request.getHeader("X-Admin-Token") != null && !request.getHeader("X-Admin-Token").isBlank()) {
-                adminFailure.increment();
-            } else if (request.getHeader("Authorization") != null && request.getHeader("Authorization").startsWith("Bearer ")) {
-                agentFailure.increment();
-            } else {
-                missingCredentialFailure.increment();
-            }
+            countFailure(request);
             log.warn("MCP 鉴权业务异常: code={}, msg={}", e.getCode(), e.getMessage());
             writeUnauthorized(response, e.getMessage());
+        } catch (SaTokenException e) {
+            // Sa-Token 标准异常（NotLoginException / NotRoleException / SaTokenContextException…）
+            // 其父类是 RuntimeException 而非 BizException，若不单独捕获会被下面的 Exception 分支
+            // 误计为「内部异常」并把类名回显给外部 Agent。统一按凭证问题 → 401。
+            countFailure(request);
+            log.warn("MCP 鉴权 Sa-Token 异常: type={}, msg={}", e.getClass().getSimpleName(), e.getMessage());
+            writeUnauthorized(response, "MCP 鉴权失败：登录状态无效或已过期，请重新获取凭证");
         } catch (Exception e) {
             exceptionFailure.increment();
             log.error("MCP 鉴权内部异常", e);
-            writeUnauthorized(response, "MCP 鉴权失败：" + e.getClass().getSimpleName());
+            // 不回显异常类名：该 body 面向外部 Agent，暴露内部实现无助于排查，只记服务端日志
+            writeUnauthorized(response, "MCP 鉴权失败：服务内部错误，请稍后重试");
+        }
+    }
+
+    /**
+     * 按请求携带的凭证类型累加失败计数（admin / agent / 缺失）。
+     */
+    private void countFailure(HttpServletRequest request) {
+        String adminToken = request.getHeader("X-Admin-Token");
+        String authorization = request.getHeader("Authorization");
+        if (adminToken != null && !adminToken.isBlank()) {
+            adminFailure.increment();
+        } else if (authorization != null && authorization.startsWith("Bearer ")) {
+            agentFailure.increment();
+        } else {
+            missingCredentialFailure.increment();
         }
     }
 
@@ -209,8 +227,18 @@ public class McpAuthFilter extends OncePerRequestFilter {
 
     /**
      * 写 401 + JSON-RPC 2.0 风格 error body。
+     *
+     * <p><b>为何先判 {@code isCommitted}</b>：本方法在 catch 块内被调用，而异常可能发生在
+     * {@code filterChain.doFilter} 之后（如 {@link BufferedResponseWrapper#flushToUnderlying()}
+     * 已把 body 写回底层流、响应已 commit）。此时再调 {@code setStatus} / {@code getWriter}
+     * 会抛 {@code IllegalStateException} 从 catch 块逃出 filter，被容器渲染为 <b>500</b>——
+     * 把客户端的凭证类错误（401）反倒变成服务端错误。已提交时放弃改写并记日志即可。</p>
      */
     private void writeUnauthorized(HttpServletResponse response, String message) throws IOException {
+        if (response.isCommitted()) {
+            log.warn("MCP 鉴权失败但响应已提交，放弃改写为 401（避免 IllegalStateException 逃逸成 500）: msg={}", message);
+            return;
+        }
         response.setStatus(HttpStatus.UNAUTHORIZED.value());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.setCharacterEncoding("UTF-8");

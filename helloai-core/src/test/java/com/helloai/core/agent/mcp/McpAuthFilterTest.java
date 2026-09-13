@@ -1,5 +1,6 @@
 package com.helloai.core.agent.mcp;
 
+import cn.dev33.satoken.exception.SaTokenException;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.port.AgentAuthPort;
 import com.helloai.core.system.service.AuthService;
@@ -18,6 +19,7 @@ import org.springframework.mock.web.MockHttpServletResponse;
 
 import java.nio.charset.StandardCharsets;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -184,5 +186,53 @@ class McpAuthFilterTest {
         filter.doFilter(request, response, chainWithSdk404());
 
         assertEquals(404, response.getStatus());
+    }
+
+    @Test
+    @DisplayName("Sa-Token 异常（RuntimeException 体系）：401 且不回显异常类名")
+    void saTokenException_mapsTo401WithoutClassName() throws Exception {
+        // 覆盖统一化后的场景：Sa-Token 的 checkLogin 抛出的异常不是 BizException，
+        // 若不单独捕获会被 Exception 分支误计为「内部异常」并回显类名
+        when(agentAuthPort.validateApiKey("fake-api-key")).thenThrow(new SaTokenException("登录状态无效"));
+
+        filter.doFilter(request, response, (req, resp) -> {
+            throw new AssertionError("chain 不应被调用");
+        });
+
+        assertEquals(401, response.getStatus());
+        String body = response.getContentAsString(StandardCharsets.UTF_8);
+        assertTrue(body.contains("登录状态无效或已过期"), "应返回稳定的凭证失效提示");
+        assertFalse(body.contains("SaTokenException"), "不应把异常类名回显给外部 Agent");
+    }
+
+    @Test
+    @DisplayName("未预期内部异常：401 且不回显异常类名（回归）")
+    void internalException_noClassNameLeak() throws Exception {
+        when(agentAuthPort.validateApiKey("fake-api-key")).thenThrow(new IllegalStateException("boom"));
+
+        filter.doFilter(request, response, (req, resp) -> {
+            throw new AssertionError("chain 不应被调用");
+        });
+
+        assertEquals(401, response.getStatus());
+        String body = response.getContentAsString(StandardCharsets.UTF_8);
+        assertFalse(body.contains("IllegalStateException"), "不应把异常类名回显给外部 Agent");
+        assertTrue(body.contains("服务内部错误"), "应返回稳定的内部错误提示");
+    }
+
+    @Test
+    @DisplayName("鉴权失败但响应已提交：不抛异常（否则 401 会被容器渲染成 500）")
+    void unauthorizedAfterCommitted_doesNotEscalateTo500() throws Exception {
+        when(agentAuthPort.validateApiKey("fake-api-key"))
+                .thenThrow(new com.helloai.common.base.BizException(401, "无效的 API Key"));
+        // 模拟响应已被提交（如 filterChain 内已写回底层输出流）
+        response.setCommitted(true);
+
+        // 关键断言：不得有 IllegalStateException 从 filter 逃出（逃出即被容器渲染为 500）
+        assertDoesNotThrow(() -> filter.doFilter(request, response, (req, resp) -> {
+            throw new AssertionError("chain 不应被调用");
+        }));
+        // 已提交 → 放弃改写，状态保持原值（既没被改成 401，更没因异常变 500）
+        assertEquals(200, response.getStatus());
     }
 }
