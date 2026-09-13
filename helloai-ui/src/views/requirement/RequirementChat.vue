@@ -702,6 +702,9 @@ const enhancedDraft = ref('')
 const streamText = ref('')
 let streamBuffer = ''
 let streamFlushTimer: number | null = null
+// CLARIFY 模式流式：LLM 输出「正文 + ```json 块」——检测到围栏后截断显示（只展示正文打字机，
+// JSON 结构不裸露，done 后收敛为卡片/终稿）；CHAT 模式不截断（正文可能含用户要求的代码块）
+let jsonFenceSeen = false
 
 // Planner 下拉选：'__auto__' = 系统自动选择（等权重，优先空闲）
 const plannerOptions = ref<PlannerOption[]>([])
@@ -1003,7 +1006,26 @@ function flushStreamText() {
 }
 
 function appendStreamToken(token: string) {
-  streamBuffer += token
+  // CHAT 模式：纯文本正文不截断（正文可能含用户要求的 ``` 代码块）
+  if (!isChatMode.value) {
+    if (jsonFenceSeen) return
+    streamBuffer += token
+    const shown = streamText.value + streamBuffer
+    const fence = shown.indexOf('```')
+    if (fence !== -1) {
+      // 截断：只保留 json 围栏前的正文，后续 token 全部忽略（done 后收敛卡片/终稿）
+      streamText.value = shown.slice(0, fence)
+      streamBuffer = ''
+      jsonFenceSeen = true
+      if (streamFlushTimer != null) {
+        window.clearTimeout(streamFlushTimer)
+        streamFlushTimer = null
+      }
+      return
+    }
+  } else {
+    streamBuffer += token
+  }
   if (streamFlushTimer == null) {
     streamFlushTimer = window.setTimeout(flushStreamText, 60)
   }
@@ -1030,6 +1052,7 @@ async function settleStream(id: LongId, success: boolean) {
 async function streamSendActiveMessage(id: LongId, text: string) {
   streamText.value = ''
   streamBuffer = ''
+  jsonFenceSeen = false
   try {
     await streamSendConversation(id, text, null, {
       onToken: appendStreamToken,
