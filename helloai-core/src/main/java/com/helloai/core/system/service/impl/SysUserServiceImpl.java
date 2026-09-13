@@ -62,7 +62,8 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
         String roleCode = (role == null || role.isBlank()) ? DEFAULT_ROLE_CODE : role;
         SysRole target = sysRoleService.lambdaQuery().eq(SysRole::getCode, roleCode).one();
         if (target == null) {
-            throw new BizException("角色码不存在: " + roleCode);
+            // 400：角色码由调用方传入，属客户端输入错误（非服务端故障）
+            throw new BizException(400, "角色码不存在: " + roleCode);
         }
 
         SysUser user = new SysUser();

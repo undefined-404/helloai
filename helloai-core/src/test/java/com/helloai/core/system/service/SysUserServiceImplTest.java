@@ -21,6 +21,7 @@ import java.lang.reflect.Field;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -159,6 +160,8 @@ class SysUserServiceImplTest {
                     () -> spy.create("newuser", "pwd123", "新用户", "NO_SUCH_ROLE", null));
 
             assertThat(ex.getMessage()).contains("角色码不存在");
+            // 400：角色码为客户端输入，属参数错误而非服务端故障
+            assertEquals(400, ex.getCode().intValue());
             verify(spy, never()).save(any(SysUser.class));
             verify(sysRoleService, never()).assignUserRoles(any(), any());
         }

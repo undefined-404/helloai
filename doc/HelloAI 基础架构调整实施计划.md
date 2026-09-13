@@ -544,6 +544,19 @@ SUPER_ADMIN 由 StpInterfaceImpl 返回 "*" 通配，自动覆盖全部新增码
 
 **验证**：`AdminOnlyInterceptorTest` 重写为 2 例（平台账号放行 / 未登录 403）；api 单测 58 → 57（预期）；UI type-check 0 error；全 reactor BUILD SUCCESS。
 
+### 9.9.4 技术债清理（2026-09-13，用户确认「先清理 §9.9 的 6 项」）
+
+| # | 项 | 清理方式 | 状态 |
+|---|---|---|---|
+| 1 | ADMIN 未授予平台配置码 | **V92** 将「平台配置」页显式登记为「系统设置」子菜单 `platform-config:view`（仅 SUPER_ADMIN，`"*"` 通配无需绑定）；`settings:view` 因此回归**纯聚合父菜单**语义——ADMIN 持有父菜单（部门管理子树所需）但不持配置码，语义自洽，不再依赖「Settings.vue 不可达」来兜底 | **已清理** |
+| 2 | `Settings.vue` 不可达 | 同 **V92**：为其补 MENU（`path=/system/platform`、`component=Settings`）。`lazyLoad('Settings')` 映射到 `/src/views/Settings.vue`（已核实 `views.ts` 的 glob 覆盖顶层页面），页面恢复可达——SUPER_ADMIN 经「系统设置 → 平台配置」进入 | **已清理** |
+| 3 | `sys_permission` 测试残留 | **V91** 物理删除 6 行（`DOCKER:TEST` / `DOCKER:CHILD` / `PERM:PROBE` / `UI:TEST` / `TMP:MENU:VERIFY*`），含关联表防御性清理；与 V86 清理岗位残留同构 | **已清理** |
+| 4 | 前端失配 6 处 | 6 处已按**实际生效码**处理完毕；其中无前端落点的码（`quality:rebuild` / `quality:dispatch` / `conversation:mode`）**属设计如此**——它们是后端防御性授权（接口存在即需授权码），UI 入口按产品需要再补，不构成缺陷 | **已处理/设计如此** |
+| 5 | 补漏 4 处 v-auth | `AgentDetail.vue` 操作区、`TaskList.vue` 停止、`TeamList.vue` 发布、`TaskIterationView.vue` 回填历史迭代 | **已完成** |
+| 6 | 非法 roleCode 返回 HTTP 500（应为 400） | `SysUserServiceImpl.create()` 改为 `throw new BizException(400, "角色码不存在: …")`（roleCode 属客户端输入）；`SysUserServiceImplTest` 补 `assertEquals(400, ex.getCode())` | **已清理** |
+
+**验证**：全 reactor 编译 + 单测全绿（api 57 例）；V91 / V92 事务内干跑通过（`DELETE 6` / `INSERT 0 1`，ROLLBACK 无副作用）。**E2E 待重启复验**（V91/V92 需启动时由 Flyway 应用）：预期 SUPER_ADMIN 菜单树出现「系统设置 → 平台配置」且页面可达；ADMIN 菜单树不变（仅「部门管理」）；`/api/admin/users` 传非法 roleCode 返回 HTTP 400。
+
 
 # 10. 红线与约束
 
