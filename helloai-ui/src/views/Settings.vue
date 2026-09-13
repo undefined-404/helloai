@@ -842,7 +842,7 @@ async function verifyProviderKey(providerId: number) {
     } else {
       ElMessage({ message: res.message, type: 'error', duration: 8000 })
     }
-  } catch (e: any) {
+  } catch {
     ElMessage.error('验证请求失败')
   } finally {
     loading.close()
@@ -865,7 +865,7 @@ async function verifyWebSearchKey(manual = false) {
     } else {
       ElMessage({ message: res.message, type: 'error', duration: 8000 })
     }
-  } catch (e: any) {
+  } catch {
     ElMessage.error('博查 Key 验证请求失败')
   } finally {
     loading?.close()
@@ -949,7 +949,7 @@ async function load() {
       webSearchKeyLoaded.value = form.webSearchApiKey
       webSearchKeyConfigured.value = !!form.webSearchApiKey
     }
-  } catch (e: any) {
+  } catch {
     ElMessage.error('加载配置失败')
   }
 }
@@ -965,7 +965,7 @@ async function loadProviders() {
     } else if (selectedId.value && !providers.value.find(p => p.id === selectedId.value)) {
       selectedId.value = providers.value.length > 0 ? providers.value[0].id : null
     }
-  } catch (e: any) {
+  } catch {
     providers.value = []
     ElMessage.error('加载 LLM Provider 列表失败')
   } finally {
@@ -986,7 +986,7 @@ async function loadModels() {
     providerModels.value = list
     checkedModels.value = list.filter(m => m.enabled === 1).map(m => m.modelName)
     selectedDefaultModel.value = list.find(m => m.isDefault === 1)?.modelName || ''
-  } catch (e: any) {
+  } catch {
     providerModels.value = []
     checkedModels.value = []
     selectedDefaultModel.value = ''
@@ -1037,7 +1037,7 @@ async function handleSaveModels() {
     ElMessage.success('模型配置已保存')
     await loadModels()
     await loadProviders()
-  } catch (e: any) {
+  } catch {
     ElMessage.error('保存失败')
   } finally {
     modelSaving.value = false
@@ -1066,7 +1066,7 @@ async function handleSave() {
     loadedExternalUrl.value = form.externalUrl
     loadedQualityGate.value = form.qualityGateEnabled
     ElMessage.success('保存成功')
-  } catch (e: any) {
+  } catch {
     ElMessage.error('保存失败')
   } finally {
     saving.value = false
@@ -1095,7 +1095,7 @@ async function handleSaveKey() {
     await loadProviders()
     // 保存后自动验证连通性（最小请求探测）
     await verifyProviderKey(providerId)
-  } catch (e: any) {
+  } catch {
     ElMessage.error('保存失败')
   }
 }
@@ -1147,7 +1147,7 @@ async function handleSubmitForm() {
     }
     formDialogVisible.value = false
     await loadProviders()
-  } catch (e: any) {
+  } catch {
     ElMessage.error('保存失败')
   }
 }
@@ -1157,7 +1157,7 @@ async function handleToggle(row: LlmProviderResponse) {
     await settingsApi.toggleLlmProvider(row.id)
     ElMessage.success(row.enabled === 1 ? '已禁用' : '已启用')
     await loadProviders()
-  } catch (e: any) {
+  } catch {
     ElMessage.error('操作失败')
   }
 }
@@ -1177,7 +1177,7 @@ async function handleDelete(row: LlmProviderResponse) {
     ElMessage.success('已删除')
     selectedId.value = providers.value.length > 0 ? providers.value[0].id : null
     await loadProviders()
-  } catch (e: any) {
+  } catch {
     ElMessage.error('删除失败')
   }
 }
