@@ -5,7 +5,6 @@ export interface LoginResponse {
   token: string
   type: 'admin' | 'agent'
   displayName?: string
-  role?: string
   permissions?: string[]
   roles?: string[]
 }

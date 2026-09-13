@@ -10,9 +10,16 @@ import com.helloai.core.system.entity.SysUser;
 public interface SysUserService extends IService<SysUser> {
 
     /**
-     * 创建管理员用户
+     * 创建系统用户（建号即签发角色）。
+     *
+     * <p>身份单事实源为 {@code sys_user_role}（BASE-4.2 起 {@code sys_user.role} 已退场）：
+     * 用户落库后立即按 {@code role} 解析角色码 → {@code sys_role.id} 并写入关联表，
+     * 二者同一事务，避免出现「建了号却无角色」的空权限账号。</p>
+     *
+     * @param role   角色码（如 SUPER_ADMIN / ADMIN）；为空时取默认 ADMIN
+     * @param remark 备注（可空）
      */
-    SysUser create(String username, String password, String nickname, String role);
+    SysUser create(String username, String password, String nickname, String role, String remark);
 
     /**
      * 更新最后登录信息

@@ -41,7 +41,7 @@ public class AuthController {
             }
             case "agent" -> {
                 Agent agent = agentAuthPort.validateApiKey(req.getCredential());
-                yield R.ok(new LoginResponse(agent.getApiKey(), "agent", agent.getName(), agent.getRole().name(),
+                yield R.ok(new LoginResponse(agent.getApiKey(), "agent", agent.getName(),
                         List.of(), List.of()));
             }
             default -> R.fail("登录类型无效，仅支持 admin/agent");
@@ -82,7 +82,7 @@ public class AuthController {
         if (authorization != null && authorization.startsWith("Bearer ")) {
             String apiKey = authorization.substring(7);
             Agent agent = agentAuthPort.validateApiKey(apiKey);
-            return R.ok(new LoginResponse(agent.getApiKey(), "agent", agent.getName(), agent.getRole().name(),
+            return R.ok(new LoginResponse(agent.getApiKey(), "agent", agent.getName(),
                     List.of(), List.of()));
         }
         return R.fail(401, "未登录");
@@ -94,6 +94,6 @@ public class AuthController {
     private LoginResponse buildAdminResponse(AuthService.AdminSession session) {
         List<String> permissions = sysPermissionQueryService.listPermissionCode(session.id());
         List<String> roles = sysPermissionQueryService.listRoleCode(session.id());
-        return new LoginResponse(session.token(), "admin", session.displayName(), session.role(), permissions, roles);
+        return new LoginResponse(session.token(), "admin", session.displayName(), permissions, roles);
     }
 }

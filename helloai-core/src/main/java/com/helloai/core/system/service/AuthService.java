@@ -56,7 +56,11 @@ public interface AuthService {
     boolean matchesPassword(String rawPassword, String encodedPassword);
 
     /**
-     * 管理员会话信息
+     * 管理员会话信息。
+     *
+     * <p>不含角色字段：角色是 {@code sys_user_role} 的多对多事实源（BASE-4.2 起
+     * {@code sys_user.role} 单字段已退场），角色/权限码由登录响应单独下发
+     * （{@code permissions} / {@code roles}），不随会话快照走。</p>
      */
-    record AdminSession(String token, Long id, String username, String displayName, String role) {}
+    record AdminSession(String token, Long id, String username, String displayName) {}
 }

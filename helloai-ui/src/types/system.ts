@@ -48,8 +48,6 @@ export interface SysUserItem {
   email?: string | null
   phone?: string | null
   status: string
-  /** 存量 sys_user.role 单字段（兼容展示，新分配以关联表 sys_user_role 为准） */
-  role?: string | null
   lastLoginTime?: string | null
   lastLoginIp?: string | null
   /** 已分配角色码列表（如 [SUPER_ADMIN] / [ADMIN]） */

@@ -21,8 +21,6 @@ public class SysUserItem {
     private String email;
     private String phone;
     private String status;
-    /** 存量 sys_user.role 单字段（兼容展示，新分配以关联表 sys_user_role 为准） */
-    private String role;
     private OffsetDateTime lastLoginTime;
     private String lastLoginIp;
     /** 已分配角色码列表（如 [SUPER_ADMIN] / [ADMIN]） */

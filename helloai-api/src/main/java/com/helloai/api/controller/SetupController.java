@@ -49,7 +49,7 @@ public class SetupController {
         // 创建管理员用户
         if (req.getAdminUsername() != null && req.getAdminPassword() != null) {
             sysUserService.create(req.getAdminUsername(), req.getAdminPassword(),
-                    "系统管理员", "SUPER_ADMIN");
+                    "系统管理员", "SUPER_ADMIN", "初始化向导创建的首个管理员账号");
         }
 
         // 更新系统配置

@@ -60,7 +60,6 @@ public class SysUserRoleController {
             item.setEmail(u.getEmail());
             item.setPhone(u.getPhone());
             item.setStatus(u.getStatus());
-            item.setRole(u.getRole());
             item.setLastLoginTime(u.getLastLoginTime());
             item.setLastLoginIp(u.getLastLoginIp());
             item.setRoleCodes(roleCodesByUser.getOrDefault(u.getId(), List.of()));

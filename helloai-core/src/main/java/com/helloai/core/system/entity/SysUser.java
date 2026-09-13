@@ -15,7 +15,6 @@ public class SysUser extends BaseEntity {
     private String username;
     private String password;
     private String nickname;
-    private String role;
     private String status;
     private OffsetDateTime lastLoginTime;
     private String lastLoginIp;

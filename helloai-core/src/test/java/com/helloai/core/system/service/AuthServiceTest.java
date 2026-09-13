@@ -68,7 +68,6 @@ class AuthServiceTest {
         user.setId(1001L);
         user.setUsername("admin");
         user.setNickname("管理员");
-        user.setRole("ADMIN");
         user.setStatus("ACTIVE");
         user.setPassword(new BCryptPasswordEncoder().encode(rawPassword));
         return user;

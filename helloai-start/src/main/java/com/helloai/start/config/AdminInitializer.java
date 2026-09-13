@@ -1,22 +1,27 @@
 package com.helloai.start.config;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.helloai.common.constant.SysUserStatus;
-import com.helloai.core.system.entity.SysUser;
 import com.helloai.core.system.mapper.SysUserMapper;
-import com.helloai.core.system.service.AuthService;
+import com.helloai.core.system.service.SysUserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
 
+/**
+ * 默认管理员兜底初始化（表内无任何系统用户时创建 admin）。
+ *
+ * <p>BASE-4.2 起委托 {@link SysUserService#create} 建号——与初始化向导
+ * （{@code SetupController}）共用同一路径，保证「用户落库 + {@code sys_user_role}
+ * 角色签发」在同一事务内完成（身份单事实源，不再写已退场的 {@code sys_user.role}）。</p>
+ */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class AdminInitializer implements CommandLineRunner {
 
     private final SysUserMapper sysUserMapper;
-    private final AuthService authService;
+    private final SysUserService sysUserService;
 
     @Override
     public void run(String... args) {
@@ -26,14 +31,8 @@ public class AdminInitializer implements CommandLineRunner {
             return;
         }
 
-        SysUser admin = new SysUser();
-        admin.setUsername("admin");
-        admin.setPassword(authService.encodePassword("helloai123"));
-        admin.setNickname("系统管理员");
-        admin.setRole("SUPER_ADMIN");
-        admin.setStatus(SysUserStatus.ACTIVE.name());
-        admin.setRemark("默认超级管理员，首次启动自动创建");
-        sysUserMapper.insert(admin);
+        sysUserService.create("admin", "helloai123", "系统管理员", "SUPER_ADMIN",
+                "默认超级管理员，首次启动自动创建");
 
         log.info("默认管理员已创建: username=admin, password=helloai123");
     }

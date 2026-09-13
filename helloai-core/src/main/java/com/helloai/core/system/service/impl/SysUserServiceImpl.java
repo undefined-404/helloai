@@ -6,12 +6,14 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.SysUserStatus;
+import com.helloai.core.system.entity.SysRole;
 import com.helloai.core.system.entity.SysUser;
 import com.helloai.core.system.entity.SysUserDepart;
 import com.helloai.core.system.mapper.SysUserDepartMapper;
 import com.helloai.core.system.mapper.SysUserMapper;
 import com.helloai.core.system.service.AuthService;
 import com.helloai.core.system.service.SysPermissionDataRuleService;
+import com.helloai.core.system.service.SysRoleService;
 import com.helloai.core.system.service.SysUserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,30 +30,52 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> implements SysUserService {
 
+    /** 建号未显式指定角色时的默认角色码。 */
+    private static final String DEFAULT_ROLE_CODE = "ADMIN";
+
     private final AuthService authService;
     private final SysUserDepartMapper sysUserDepartMapper;
     private final SysPermissionDataRuleService sysPermissionDataRuleService;
+    private final SysRoleService sysRoleService;
 
     /**
-     * 创建管理员用户
+     * 创建系统用户（建号即签发角色）。
+     *
+     * <p><b>身份单事实源</b>：BASE-4.2 起 {@code sys_user.role} 单字段已退场（V87），
+     * 用户 ↔ 角色只经 {@code sys_user_role}。本方法在用户落库后即按角色码解析出
+     * {@code sys_role.id} 并写入关联表，二者同一事务——避免出现「建了号却无角色」
+     * 的空权限账号（登录后菜单树为空、接口全 403）。</p>
+     *
+     * <p>角色码解析放在建号之前，非法角色码直接失败且不落库（fail-close）。</p>
+     *
+     * @param role   角色码（如 SUPER_ADMIN / ADMIN）；为空时取默认 {@value #DEFAULT_ROLE_CODE}
+     * @param remark 备注（可空，落库到 {@code sys_user.remark}）
      */
     @Transactional(rollbackFor = Exception.class)
     @Override
-    public SysUser create(String username, String password, String nickname, String role) {
+    public SysUser create(String username, String password, String nickname, String role, String remark) {
         var existing = lambdaQuery().eq(SysUser::getUsername, username).one();
         if (existing != null) {
             throw new BizException("用户名 '" + username + "' 已存在");
+        }
+
+        String roleCode = (role == null || role.isBlank()) ? DEFAULT_ROLE_CODE : role;
+        SysRole target = sysRoleService.lambdaQuery().eq(SysRole::getCode, roleCode).one();
+        if (target == null) {
+            throw new BizException("角色码不存在: " + roleCode);
         }
 
         SysUser user = new SysUser();
         user.setUsername(username);
         user.setPassword(authService.encodePassword(password));
         user.setNickname(nickname);
-        user.setRole(role != null ? role : "ADMIN");
+        user.setRemark(remark);
         user.setStatus(SysUserStatus.ACTIVE.name());
         save(user);
 
-        log.info("管理员用户创建: username={}, role={}", username, user.getRole());
+        sysRoleService.assignUserRoles(user.getId(), List.of(target.getId()));
+
+        log.info("系统用户创建: username={}, role={}", username, roleCode);
         return user;
     }
 

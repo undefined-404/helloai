@@ -65,7 +65,7 @@ public class AuthServiceImpl implements AuthService {
 
         StpUtil.login(user.getId());
         String token = StpUtil.getTokenValue();
-        AdminSession session = new AdminSession(token, user.getId(), user.getUsername(), user.getNickname(), user.getRole());
+        AdminSession session = new AdminSession(token, user.getId(), user.getUsername(), user.getNickname());
 
         log.info("管理员登录成功: username={}, id={}", username, user.getId());
         return session;
@@ -93,7 +93,7 @@ public class AuthServiceImpl implements AuthService {
         if (user == null || !SysUserStatus.ACTIVE.name().equals(user.getStatus())) {
             throw new BizException(401, "管理员登录已过期，请重新登录");
         }
-        return new AdminSession(token, user.getId(), user.getUsername(), user.getNickname(), user.getRole());
+        return new AdminSession(token, user.getId(), user.getUsername(), user.getNickname());
     }
 
     /**
@@ -120,7 +120,7 @@ public class AuthServiceImpl implements AuthService {
         if (user == null || !SysUserStatus.ACTIVE.name().equals(user.getStatus())) {
             throw new BizException(401, "管理员登录已过期，请重新登录");
         }
-        return new AdminSession(token, user.getId(), user.getUsername(), user.getNickname(), user.getRole());
+        return new AdminSession(token, user.getId(), user.getUsername(), user.getNickname());
     }
 
     /**
