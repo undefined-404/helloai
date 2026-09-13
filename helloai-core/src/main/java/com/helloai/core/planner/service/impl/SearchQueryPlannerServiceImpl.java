@@ -3,7 +3,12 @@ package com.helloai.core.planner.service.impl;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.config.WebSearchProperties;
+import com.helloai.core.agent.domain.AgentResult;
+import com.helloai.core.agent.domain.AgentTask;
+import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.planner.clarify.SystemTimeContextBuilder;
+import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.service.SearchQueryPlannerService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
@@ -11,12 +16,7 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -32,12 +32,12 @@ import java.util.regex.Pattern;
  *       截断去重，零成本覆盖大多数场景；</li>
  *   <li>条件触发判定：规则产出 ≤1 条候选词，且原文超 30 字或含疑问句式才进 LLM，
  *       短而干净的消息（如「Python 教程」）直接搜，零额外成本；</li>
- *   <li>LLM 改写：JDK HttpClient 直连快模型 chat/completions 端点（仿
- *       {@link DeepSeekNativeSearchServiceImpl} 轻量范式），独立超时、不占 LLM 并发信号量；
- *       复用 {@code helloai.web-search.deepseek-api-key}，Key 未配置时自动禁用改写。</li>
+ *   <li>LLM 改写：走平台内执行链（{@link PlatformAgentExecutionService#executeSync} +
+ *       Planner 角色 Agent），复用系统设置页的平台级凭证——无需单独维护快模型 Key，
+ *       与澄清主回复同源（早期实现为直连 {@code deepseek-api-key}，Key 未配置即静默禁用）。</li>
  * </ul>
  *
- * <p>失败语义：LLM 超时/非 2xx/解析失败/空数组一律降级规则结果；
+ * <p>失败语义：LLM 失败/解析失败/空数组一律降级规则结果；
  * 规则也为空时返回空列表（调用方按空白查询词语义处理），绝不抛异常。</p>
  */
 @Slf4j
@@ -47,14 +47,14 @@ public class SearchQueryPlannerServiceImpl implements SearchQueryPlannerService 
     /** 查询改写 Prompt 模板（占位符 {{USER_MESSAGE}}），与澄清模板同目录。 */
     private static final String REWRITE_PROMPT_TEMPLATE_PATH = "prompts/websearch-query-rewrite.md";
 
+    /** 查询改写 AgentTask 的 scene 标识（日志可观测 / 测试 stub 精确匹配）。 */
+    public static final String REWRITE_SCENE = "websearch_query_rewrite";
+
     /** 单条候选搜索词最大字数：过长查询词检索命中率低，强制截断。 */
     private static final int QUERY_CHAR_LIMIT = 20;
 
     /** LLM 改写条件触发的原文长度阈值（配合"规则仅单候选词"判定）。 */
     private static final int LLM_REWRITE_TEXT_LIMIT = 30;
-
-    /** 改写输出生成 token 上限（输出仅 1~3 个搜索词的小 JSON，压低控成本）。 */
-    private static final int REWRITE_MAX_TOKENS = 256;
 
     /**
      * 前导噪音（敬语/疑问句式开头）：反复从头部剥离直到不再命中。
@@ -83,16 +83,18 @@ public class SearchQueryPlannerServiceImpl implements SearchQueryPlannerService 
     private final WebSearchProperties properties;
     private final ObjectMapper objectMapper;
     private final SystemTimeContextBuilder systemTimeContextBuilder;
-    private final HttpClient httpClient;
+    private final PlatformAgentExecutionService platformAgentExecutionService;
+    private final PlannerAgentPicker plannerAgentPicker;
 
     public SearchQueryPlannerServiceImpl(WebSearchProperties properties, ObjectMapper objectMapper,
-                                         SystemTimeContextBuilder systemTimeContextBuilder) {
+                                         SystemTimeContextBuilder systemTimeContextBuilder,
+                                         PlatformAgentExecutionService platformAgentExecutionService,
+                                         PlannerAgentPicker plannerAgentPicker) {
         this.properties = properties;
         this.objectMapper = objectMapper;
         this.systemTimeContextBuilder = systemTimeContextBuilder;
-        this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(properties.getQueryRewriteTimeoutMs()))
-                .build();
+        this.platformAgentExecutionService = platformAgentExecutionService;
+        this.plannerAgentPicker = plannerAgentPicker;
     }
 
     @Override
@@ -157,15 +159,12 @@ public class SearchQueryPlannerServiceImpl implements SearchQueryPlannerService 
     }
 
     /**
-     * LLM 改写条件触发判定：开关开 + Key 已配置 + 规则仅产出单候选词，
+     * LLM 改写条件触发判定：开关开 + 规则仅产出单候选词，
      * 且（原文超阈值长度 或 含疑问句式）才改写；短而干净的消息零额外成本。
+     * 凭证由平台内执行链供给（系统设置页平台级 Key），不再检查独立快模型 Key。
      */
     private boolean shouldLlmRewrite(String text, List<String> ruleQueries) {
         if (!properties.isQueryRewriteEnabled()) {
-            return false;
-        }
-        String key = properties.getDeepseekApiKey();
-        if (key == null || key.isBlank()) {
             return false;
         }
         if (ruleQueries.size() > 1) {
@@ -175,8 +174,8 @@ public class SearchQueryPlannerServiceImpl implements SearchQueryPlannerService 
     }
 
     /**
-     * LLM 改写：HttpClient 直连快模型 chat/completions，独立超时；
-     * 任何异常/非 2xx/解析失败返回空列表，由 {@link #planQueries} 降级规则结果。
+     * LLM 改写：走平台内执行链（Planner Agent + {@code executeSync}），凭证取系统设置页
+     * 平台级 Key；任何失败返回空列表，由 {@link #planQueries} 降级规则结果。
      */
     private List<String> llmRewrite(String text) {
         long t0 = System.currentTimeMillis();
@@ -186,28 +185,19 @@ public class SearchQueryPlannerServiceImpl implements SearchQueryPlannerService 
                     // 每轮改写前注入系统当前时间（第一层防线）：
                     // 改写器把"今天/上周五"等相对时间词转绝对日期时以服务器实时时钟为准
                     .replace("{{SYSTEM_TIME_CONTEXT}}", systemTimeContextBuilder.build());
-            String body = objectMapper.writeValueAsString(Map.of(
-                    "model", properties.getQueryRewriteModel(),
-                    "max_tokens", REWRITE_MAX_TOKENS,
-                    "temperature", 0,
-                    "messages", List.of(Map.of("role", "user", "content", prompt))));
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(properties.getQueryRewriteBaseUrl()))
-                    .timeout(Duration.ofMillis(properties.getQueryRewriteTimeoutMs()))
-                    .header("Content-Type", "application/json")
-                    .header("Authorization", "Bearer " + properties.getDeepseekApiKey())
-                    .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
+            Agent planner = plannerAgentPicker.pick(null); // 自动选择平台内 PLANNER
+            AgentTask agentTask = AgentTask.builder()
+                    .systemPrompt("")
+                    .userPrompt(prompt)
+                    .context(Map.of("scene", REWRITE_SCENE))
+                    .requiredCapabilities(Map.of())
                     .build();
-            HttpResponse<String> response = httpClient.send(request,
-                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            if (response.statusCode() / 100 != 2) {
-                log.warn("搜索词改写返回非 2xx（降级规则结果）: status={}, body={}",
-                        response.statusCode(), truncate(response.body(), 200));
+            AgentResult result = platformAgentExecutionService.executeSync(planner, agentTask);
+            if (!result.isSuccess()) {
+                log.warn("搜索词 LLM 改写失败（降级规则结果）: err={}", result.getErrorMessage());
                 return List.of();
             }
-            JsonNode root = objectMapper.readTree(response.body());
-            String content = root.path("choices").path(0).path("message").path("content").asText("");
-            List<String> parsed = parseQueries(content);
+            List<String> parsed = parseQueries(result.getOutput());
             log.info("搜索词 LLM 改写调用结束: costMs={}, parsed={}", System.currentTimeMillis() - t0, parsed);
             return parsed;
         } catch (Exception e) {
@@ -264,12 +254,5 @@ public class SearchQueryPlannerServiceImpl implements SearchQueryPlannerService 
             log.warn("搜索词改写输出解析失败（降级规则结果）: err={}", e.getMessage());
         }
         return out;
-    }
-
-    private static String truncate(String s, int max) {
-        if (s == null) {
-            return "";
-        }
-        return s.length() <= max ? s : s.substring(0, max) + "…";
     }
 }

@@ -2,7 +2,11 @@ package com.helloai.core.planner;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.config.WebSearchProperties;
+import com.helloai.core.agent.domain.AgentTask;
+import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.planner.clarify.SystemTimeContextBuilder;
+import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.service.impl.SearchQueryPlannerServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -11,25 +15,36 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * SearchQueryPlannerServiceImpl 单元测试：
  * 规则清洗（敬语剥离/多主题拆分/标点清洗/截断去重）/ 空输入 /
  * LLM 改写失败降级规则结果（用户零结果原句回归用例）。
+ *
+ * <p>LLM 改写已改走平台内执行链（Planner Agent + executeSync），测试以 mock 的平台
+ * 执行服务模拟失败（抛异常）验证降级；规则路径不触达任何外部调用。</p>
  */
 @DisplayName("SearchQueryPlannerServiceImpl")
 class SearchQueryPlannerServiceImplTest {
 
     private WebSearchProperties properties;
+    private PlatformAgentExecutionService platformAgentExecutionService;
+    private PlannerAgentPicker plannerAgentPicker;
     private SearchQueryPlannerServiceImpl planner;
 
     @BeforeEach
     void setUp() {
         // properties/ObjectMapper 用真实实例（默认值与 JSON 解析是被测逻辑的一部分）；
-        // deepseekApiKey 默认空串 = LLM 改写自动禁用，纯规则路径无外部调用
+        // 平台执行服务与 Planner 选择器用 mock（LLM 改写触发时可控失败降级）
         properties = new WebSearchProperties();
+        platformAgentExecutionService = mock(PlatformAgentExecutionService.class);
+        plannerAgentPicker = mock(PlannerAgentPicker.class);
         planner = new SearchQueryPlannerServiceImpl(properties, new ObjectMapper(),
-                new SystemTimeContextBuilder());
+                new SystemTimeContextBuilder(), platformAgentExecutionService, plannerAgentPicker);
     }
 
     @Test
@@ -85,11 +100,12 @@ class SearchQueryPlannerServiceImplTest {
     }
 
     @Test
-    @DisplayName("LLM 改写失败（端点不可达）：降级规则结果，不抛异常")
+    @DisplayName("LLM 改写失败（平台执行抛异常）：降级规则结果，不抛异常")
     void planQueries_llmRewriteFails_degradesToRuleResult() {
-        // Key 已配置 + 长疑问句 + 规则仅单候选词 → 触发 LLM 改写；端点不可达 → 降级规则结果
-        properties.setDeepseekApiKey("sk-test");
-        properties.setQueryRewriteBaseUrl("http://127.0.0.1:9/chat/completions");
+        // 长疑问句 + 规则仅单候选词 → 触发 LLM 改写；平台执行抛异常 → 降级规则结果
+        when(plannerAgentPicker.pick(isNull())).thenReturn(mock(Agent.class));
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenThrow(new RuntimeException("LLM 不可用"));
 
         List<String> queries = planner.planQueries(
                 "怎么系统性地学习 Kubernetes 并在生产环境中落地实施呢？");
@@ -104,13 +120,11 @@ class SearchQueryPlannerServiceImplTest {
     @DisplayName("LLM 改写开关关闭：不发起改写（纯规则运行）")
     void planQueries_rewriteDisabled_pureRuleRuns() {
         properties.setQueryRewriteEnabled(false);
-        properties.setDeepseekApiKey("sk-test");
-        properties.setQueryRewriteBaseUrl("http://127.0.0.1:9/chat/completions");
 
         List<String> queries = planner.planQueries(
                 "怎么系统性地学习 Kubernetes 并在生产环境中落地实施呢？");
 
-        // 开关关闭时与规则层行为一致：单候选词、无外部调用（不抛异常即证明未发起）
+        // 开关关闭时与规则层行为一致：单候选词、无外部调用（未 stub 平台执行即证明未触达）
         assertThat(queries).hasSize(1);
         assertThat(queries.get(0)).contains("Kubernetes");
     }

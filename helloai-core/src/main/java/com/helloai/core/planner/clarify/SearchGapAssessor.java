@@ -2,42 +2,42 @@ package com.helloai.core.planner.clarify;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.helloai.common.config.WebSearchProperties;
+import com.helloai.core.agent.domain.AgentResult;
+import com.helloai.core.agent.domain.AgentTask;
+import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.service.PlatformAgentExecutionService;
+import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.search.WebSearchResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
 
 import java.io.InputStream;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
 /**
  * 检索充分性评估器（Deep Research 风格补搜的决策环节）。
  *
- * <p>首轮搜索完成后，把「用户需求 + 已检索查询词 + 首轮结果标题/摘要」交给快模型，
+ * <p>首轮搜索完成后，把「用户需求 + 已检索查询词 + 首轮结果标题/摘要」交给平台内 LLM，
  * 判断信息是否已覆盖需求主要方面；若明显不足则产出 1 个补充查询词，交编排器发起补搜。
  * 对齐 DeepSeek 网页版 / Kimi 的「搜索 → 发现缺口 → 再检索」行为。</p>
  *
- * <p>复用查询改写的轻量 LLM 通道（{@link WebSearchProperties#getQueryRewriteBaseUrl()}
- * 快模型 + 独立超时，不占主链 LLM 并发信号量）。失败语义：无 Key / 超时 / 非 2xx /
- * 解析失败 / 空结果一律返回 null（不补搜），绝不抛异常——搜索是辅助增强，不阻断澄清主流程。</p>
+ * <p><b>LLM 通道</b>：走平台内执行链（{@link PlatformAgentExecutionService#executeSync} +
+ * Planner 角色 Agent），复用系统设置页配置的平台级凭证——无需为搜索单独维护第二个 Key，
+ * 与澄清主回复同源。失败语义：无可用 Planner / 超时 / 失败 / 解析失败一律返回 null（不补搜），
+ * 绝不抛异常——搜索是辅助增强，不阻断澄清主流程。</p>
  */
 @Slf4j
 @Component
 public class SearchGapAssessor {
 
+    /** 缺口评估 AgentTask 的 scene 标识（日志可观测 / 测试 stub 精确匹配）。 */
+    public static final String GAP_SCENE = "websearch_gap_assess";
+
     /** 缺口评估 Prompt 模板（占位符见模板内注释）。 */
     private static final String GAP_PROMPT_TEMPLATE_PATH = "prompts/websearch-gap-assess.md";
-
-    /** 输出仅 1 个补充词的小 JSON，压低生成 token 控成本。 */
-    private static final int GAP_MAX_TOKENS = 256;
 
     /** 注入评估 Prompt 的结果条数上限（每条形如「标题：摘要」单行，控 prompt 长度）。 */
     private static final int RESULTS_IN_PROMPT_LIMIT = 12;
@@ -45,21 +45,19 @@ public class SearchGapAssessor {
     /** 单条结果摘要注入评估 Prompt 的字符上限。 */
     private static final int SNIPPET_IN_PROMPT_CHARS = 120;
 
-    private final WebSearchProperties properties;
-    private final ObjectMapper objectMapper;
+    private final PlatformAgentExecutionService platformAgentExecutionService;
+    private final PlannerAgentPicker plannerAgentPicker;
     private final SystemTimeContextBuilder systemTimeContextBuilder;
-    private final HttpClient httpClient;
+    private final ObjectMapper objectMapper;
 
-    public SearchGapAssessor(WebSearchProperties properties, ObjectMapper objectMapper,
-                             SystemTimeContextBuilder systemTimeContextBuilder) {
-        this.properties = properties;
-        this.objectMapper = objectMapper;
+    public SearchGapAssessor(PlatformAgentExecutionService platformAgentExecutionService,
+                             PlannerAgentPicker plannerAgentPicker,
+                             SystemTimeContextBuilder systemTimeContextBuilder,
+                             ObjectMapper objectMapper) {
+        this.platformAgentExecutionService = platformAgentExecutionService;
+        this.plannerAgentPicker = plannerAgentPicker;
         this.systemTimeContextBuilder = systemTimeContextBuilder;
-        this.httpClient = HttpClient.newBuilder()
-                // 防御非法配置（0/负值会让 HttpClient.connectTimeout 抛 PT0S）：
-                // 毫秒级下限，配置缺失时退化为最小可用超时
-                .connectTimeout(Duration.ofMillis(Math.max(1L, properties.getQueryRewriteTimeoutMs())))
-                .build();
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -75,13 +73,6 @@ public class SearchGapAssessor {
         if (firstRound == null || firstRound.isEmpty()) {
             return null; // 首轮无结果：无可评估素材，交由上层按原语义处理
         }
-        if (!properties.isQueryRewriteEnabled()) {
-            return null;
-        }
-        String key = properties.getDeepseekApiKey();
-        if (key == null || key.isBlank()) {
-            return null; // 未配置快模型 Key：不评估（无额外 LLM 依赖）
-        }
         long t0 = System.currentTimeMillis();
         try {
             String prompt = loadPrompt()
@@ -90,27 +81,19 @@ public class SearchGapAssessor {
                     .replace("{{EXISTING_QUERIES}}", existingQueries == null || existingQueries.isEmpty()
                             ? "（无）" : String.join("、", existingQueries))
                     .replace("{{SEARCH_RESULTS}}", renderResults(firstRound));
-            String body = objectMapper.writeValueAsString(Map.of(
-                    "model", properties.getQueryRewriteModel(),
-                    "max_tokens", GAP_MAX_TOKENS,
-                    "temperature", 0,
-                    "messages", List.of(Map.of("role", "user", "content", prompt))));
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(properties.getQueryRewriteBaseUrl()))
-                    .timeout(Duration.ofMillis(properties.getQueryRewriteTimeoutMs()))
-                    .header("Content-Type", "application/json")
-                    .header("Authorization", "Bearer " + key)
-                    .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
+            Agent planner = plannerAgentPicker.pick(null); // 自动选择平台内 PLANNER
+            AgentTask agentTask = AgentTask.builder()
+                    .systemPrompt("")
+                    .userPrompt(prompt)
+                    .context(Map.of("scene", GAP_SCENE))
+                    .requiredCapabilities(Map.of())
                     .build();
-            HttpResponse<String> response = httpClient.send(request,
-                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            if (response.statusCode() / 100 != 2) {
-                log.warn("检索缺口评估返回非 2xx（不补搜）: status={}", response.statusCode());
+            AgentResult result = platformAgentExecutionService.executeSync(planner, agentTask);
+            if (!result.isSuccess()) {
+                log.warn("检索缺口评估 LLM 失败（不补搜）: err={}", result.getErrorMessage());
                 return null;
             }
-            JsonNode root = objectMapper.readTree(response.body());
-            String content = root.path("choices").path(0).path("message").path("content").asText("");
-            String gap = parseGapQuery(content);
+            String gap = parseGapQuery(result.getOutput());
             log.info("检索缺口评估结束: costMs={}, gapQuery={}", System.currentTimeMillis() - t0, gap);
             return gap;
         } catch (Exception e) {
