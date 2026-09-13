@@ -1,5 +1,6 @@
 package com.helloai.api.controller;
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.helloai.api.dto.PageResult;
 import com.helloai.api.dto.team.TeamMemberRequest;
@@ -31,21 +32,25 @@ public class TeamController {
 
     private final TeamService teamService;
 
+    @SaCheckPermission("team:add")
     @PostMapping
     public R<TeamResponse> create(@RequestBody TeamRequest req) {
         return R.ok(toTeam(teamService.createTeam(req.getName(), req.getDescription())));
     }
 
+    @SaCheckPermission("team:edit")
     @PutMapping("/{id}")
     public R<TeamResponse> update(@PathVariable("id") Long id, @RequestBody TeamRequest req) {
         return R.ok(toTeam(teamService.updateTeam(id, req.getName(), req.getDescription())));
     }
 
+    @SaCheckPermission("team:edit")
     @PostMapping("/{id}/publish")
     public R<TeamResponse> publish(@PathVariable("id") Long id) {
         return R.ok(toTeam(teamService.publish(id)));
     }
 
+    @SaCheckPermission("team:archive")
     @PostMapping("/{id}/archive")
     public R<TeamResponse> archive(@PathVariable("id") Long id) {
         return R.ok(toTeam(teamService.archive(id)));
@@ -73,6 +78,7 @@ public class TeamController {
         return R.ok(list);
     }
 
+    @SaCheckPermission("team:member")
     @PostMapping("/{id}/members")
     public R<TeamMemberResponse> addMember(@PathVariable("id") Long id,
                                            @RequestBody TeamMemberRequest req) {
@@ -88,6 +94,7 @@ public class TeamController {
         return R.ok(toMember(teamService.addMember(id, req.getAgentId(), role)));
     }
 
+    @SaCheckPermission("team:member")
     @DeleteMapping("/{id}/members/{agentId}")
     public R<Void> removeMember(@PathVariable("id") Long id, @PathVariable("agentId") Long agentId) {
         teamService.removeMember(id, agentId);

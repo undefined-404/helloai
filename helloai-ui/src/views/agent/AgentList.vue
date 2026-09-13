@@ -32,6 +32,7 @@
           刷新
         </el-button>
         <el-button
+          v-auth="'agent:add'"
           type="primary"
           @click="registerDialog = true"
         >

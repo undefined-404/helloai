@@ -1,5 +1,6 @@
 package com.helloai.api.controller;
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.helloai.api.dto.admin.PromptTemplateResponse;
 import com.helloai.common.base.R;
 import com.helloai.core.system.entity.PromptTemplate;
@@ -22,6 +23,7 @@ public class AdminPromptController {
     /**
      * 获取模板列表（可按角色、分类筛选）
      */
+    @SaCheckPermission("prompt-template:view")
     @GetMapping
     public R<List<PromptTemplateResponse>> list(
             @RequestParam(value = "role", required = false) String role,
@@ -38,6 +40,7 @@ public class AdminPromptController {
     /**
      * 获取单个模板
      */
+    @SaCheckPermission("prompt-template:view")
     @GetMapping("/getById/{id}")
     public R<PromptTemplateResponse> getById(@PathVariable("id") Long id) {
         PromptTemplate template = promptTemplateService.getById(id);
@@ -48,6 +51,7 @@ public class AdminPromptController {
     /**
      * 创建模板
      */
+    @SaCheckPermission("prompt-template:add")
     @PostMapping
     public R<PromptTemplateResponse> create(@RequestBody PromptTemplate template) {
         return R.ok(toResponse(promptTemplateService.create(template)));
@@ -56,6 +60,7 @@ public class AdminPromptController {
     /**
      * 更新模板
      */
+    @SaCheckPermission("prompt-template:edit")
     @PutMapping("/updateById/{id}")
     public R<PromptTemplateResponse> updateById(@PathVariable("id") Long id, @RequestBody PromptTemplate template) {
         template.setId(id);
@@ -65,6 +70,7 @@ public class AdminPromptController {
     /**
      * 删除模板
      */
+    @SaCheckPermission("prompt-template:delete")
     @DeleteMapping("/deleteById/{id}")
     public R<Void> deleteById(@PathVariable("id") Long id) {
         promptTemplateService.removeById(id);
@@ -74,6 +80,7 @@ public class AdminPromptController {
     /**
      * 获取角色的默认模板
      */
+    @SaCheckPermission("prompt-template:view")
     @GetMapping("/getDefaultByRole")
     public R<PromptTemplateResponse> getDefaultByRole(@RequestParam("role") String role) {
         PromptTemplate template = promptTemplateService.getDefaultByRole(role);
@@ -84,6 +91,7 @@ public class AdminPromptController {
     /**
      * 组合提示词（默认模板 + Agent 特定内容）
      */
+    @SaCheckPermission("prompt-template:view")
     @PostMapping("/compose")
     public R<Map<String, String>> compose(@RequestBody Map<String, String> body) {
         String role = body.get("role");

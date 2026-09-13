@@ -42,6 +42,7 @@
           刷新
         </el-button>
         <el-button
+          v-auth="'team:add'"
           size="small"
           type="primary"
           @click="openCreate"
@@ -182,6 +183,7 @@
             <template #default="{ row }">
               <div class="action-cell">
                 <el-button
+                  v-auth="'team:member'"
                   size="small"
                   link
                   type="primary"
@@ -194,12 +196,14 @@
                   size="small"
                   link
                   type="primary"
+                  v-auth="'team:edit'"
                   @click="onPublish(row)"
                 >
                   发布
                 </el-button>
                 <el-button
                   v-if="row.status !== 'ARCHIVED'"
+                  v-auth="'team:edit'"
                   size="small"
                   link
                   @click="openEdit(row)"
@@ -208,6 +212,7 @@
                 </el-button>
                 <el-button
                   v-if="row.status !== 'ARCHIVED'"
+                  v-auth="'team:archive'"
                   size="small"
                   link
                   type="warning"

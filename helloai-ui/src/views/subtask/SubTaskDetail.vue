@@ -265,6 +265,7 @@
               />
             </el-select>
             <el-button
+              v-auth="'review:add'"
               type="warning"
               :loading="manualSubmitting"
               :disabled="!manualTargetAgentId"
@@ -276,6 +277,7 @@
           <div class="manual-row">
             <span class="manual-label">或</span>
             <el-button
+              v-auth="'review:add'"
               type="success"
               :loading="manualSubmitting"
               @click="submitManualApprove"

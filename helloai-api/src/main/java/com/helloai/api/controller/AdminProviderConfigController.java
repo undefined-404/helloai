@@ -1,5 +1,6 @@
 package com.helloai.api.controller;
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.helloai.api.dto.admin.ProviderApiKeyRequest;
 import com.helloai.api.dto.admin.ProviderConfigItem;
 import com.helloai.api.dto.admin.ProviderSettingsRequest;
@@ -32,6 +33,7 @@ public class AdminProviderConfigController {
     /**
      * 枚举全部已配置 provider 及其实时状态（不含 api-key 明文）。
      */
+    @SaCheckPermission("platform-provider:view")
     @GetMapping("/list")
     public R<List<ProviderConfigItem>> list() {
         List<ProviderConfigItem> items = new ArrayList<>();
@@ -52,6 +54,7 @@ public class AdminProviderConfigController {
     /**
      * 写入（轮换）平台级 API Key，实时生效无需重启。
      */
+    @SaCheckPermission("platform-provider:edit")
     @PutMapping("/saveApiKeyByProvider/{provider}")
     public R<Void> saveApiKey(@PathVariable("provider") String provider,
                               @RequestBody ProviderApiKeyRequest req) {
@@ -66,6 +69,7 @@ public class AdminProviderConfigController {
     /**
      * 更新 provider 的 Base URL / 默认模型（均可选；传空表示清除覆盖，回到 yml 默认）。
      */
+    @SaCheckPermission("platform-provider:edit")
     @PutMapping("/saveSettingsByProvider/{provider}")
     public R<Void> saveSettings(@PathVariable("provider") String provider,
                                 @RequestBody ProviderSettingsRequest req) {

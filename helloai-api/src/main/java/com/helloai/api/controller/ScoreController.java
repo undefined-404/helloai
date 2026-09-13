@@ -1,5 +1,6 @@
 package com.helloai.api.controller;
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.helloai.common.base.R;
 import com.helloai.api.dto.AdjustScoreRequest;
@@ -53,6 +54,7 @@ public class ScoreController {
         return R.ok(result);
     }
 
+    @SaCheckPermission("score:adjust")
     @PostMapping("/adjust")
     public R<Void> adjust(@RequestBody AdjustScoreRequest request) {
         String reason = "[手动调整] " + request.getReason();

@@ -46,6 +46,7 @@
                     <el-icon><Download /></el-icon>导出全部会话
                   </el-dropdown-item>
                   <el-dropdown-item
+                    v-auth="'conversation:delete'"
                     command="clear-all"
                     divided
                   >
@@ -65,6 +66,7 @@
         <!-- 左栏：会话列表（设计图：新建对话 + 搜索 + 状态 tabs + 分组） -->
         <div class="conv-list">
           <el-button
+            v-auth="'conversation:add'"
             class="conv-new-btn"
             type="primary"
             size="default"
@@ -164,6 +166,7 @@
                     <!-- 已放弃会话删除（软删，不可恢复；仅 ABANDONED 显示，悬停列表项时可见） -->
                     <el-button
                       v-if="conv.status === 'ABANDONED'"
+                      v-auth="'conversation:delete'"
                       class="conv-del-btn"
                       type="danger"
                       link
@@ -281,6 +284,7 @@
                           <el-icon><CaretBottom /></el-icon>
                         </button>
                         <button
+                          v-auth="'conversation:regenerate'"
                           type="button"
                           class="msg-action-btn"
                           title="重新生成"
@@ -358,6 +362,7 @@
                   <div class="msg-bubble msg-retry">
                     <span>回复生成失败</span>
                     <el-button
+                      v-auth="'conversation:retry'"
                       size="small"
                       type="primary"
                       plain
@@ -430,6 +435,7 @@
                 <div class="final-actions">
                   <template v-if="conversation.status === 'ACTIVE'">
                     <el-button
+                      v-auth="'conversation:finalize'"
                       type="primary"
                       :loading="finalizing"
                       :disabled="sending || finalizing"
@@ -450,6 +456,7 @@
                     </el-button>
                     <template v-else>
                       <el-button
+                        v-auth="'conversation:regenerate'"
                         type="primary"
                         :loading="finalizing"
                         :disabled="sending || finalizing"
@@ -598,6 +605,7 @@
                       </el-button>
                       <el-button
                         v-if="activeId && conversation?.status === 'ACTIVE'"
+                        v-auth="'conversation:abandon'"
                         size="small"
                         type="danger"
                         plain
@@ -607,6 +615,7 @@
                         放弃会话
                       </el-button>
                       <el-button
+                        v-auth="'conversation:send'"
                         type="primary"
                         :loading="sending"
                         :disabled="!input.trim() || finalizing"

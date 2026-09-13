@@ -70,18 +70,21 @@
         生成接入内容
       </el-button>
       <el-button
+        v-auth="'agent:edit'"
         size="small"
         @click="$emit('edit', agent)"
       >
         编辑
       </el-button>
       <el-button
+        v-auth="'agent:edit'"
         size="small"
         @click="$emit('toggle-status', agent)"
       >
         {{ agent.status === 'ACTIVE' ? '注销' : '恢复注册' }}
       </el-button>
       <el-button
+        v-auth="'agent:delete'"
         size="small"
         type="danger"
         @click="$emit('delete', agent)"

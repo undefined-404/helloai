@@ -1,5 +1,6 @@
 package com.helloai.api.controller;
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.helloai.api.dto.admin.ConfigBatchRequest;
 import com.helloai.common.base.R;
 import com.helloai.core.planner.search.WebSearchCredentialKeyStore;
@@ -31,6 +32,7 @@ public class AdminConfigController {
     /**
      * 获取所有配置
      */
+    @SaCheckPermission("config:view")
     @GetMapping
     public R<Map<String, String>> getAll() {
         return R.ok(sysConfigService.getAllAsMap());
@@ -39,6 +41,7 @@ public class AdminConfigController {
     /**
      * 获取单个配置
      */
+    @SaCheckPermission("config:view")
     @GetMapping("/getByKey/{key}")
     public R<Map<String, String>> getByKey(@PathVariable("key") String key) {
         String value = sysConfigService.getValue(key);
@@ -53,6 +56,7 @@ public class AdminConfigController {
      * <p>明文仅入参态存在，落库前经 AES-GCM 加密写 sys_config；
      * blank 视为清除。实时生效，无需重启。</p>
      */
+    @SaCheckPermission("config:edit")
     @PutMapping("/webSearchApiKey")
     public R<Void> saveWebSearchApiKey(@RequestBody Map<String, String> body) {
         webSearchCredentialKeyStore.saveBochaApiKey(body.get("value"));
@@ -65,6 +69,7 @@ public class AdminConfigController {
      * <p>返回 {@code success / message / supported / elapsedMs}；验证失败不抛异常，
      * success=false + 可读 message，前端直接展示。</p>
      */
+    @SaCheckPermission("config:edit")
     @PostMapping("/verifyWebSearchApiKey")
     public R<Map<String, Object>> verifyWebSearchApiKey() {
         return R.ok(webSearchService.verifyApiKey());
@@ -73,6 +78,7 @@ public class AdminConfigController {
     /**
      * 更新单个配置
      */
+    @SaCheckPermission("config:edit")
     @PutMapping("/updateByKey/{key}")
     public R<Void> updateByKey(@PathVariable("key") String key, @RequestBody Map<String, String> body) {
         sysConfigService.setValue(key, body.get("value"));
@@ -82,6 +88,7 @@ public class AdminConfigController {
     /**
      * 批量更新配置
      */
+    @SaCheckPermission("config:edit")
     @PutMapping("/batch")
     public R<Void> batchUpdate(@RequestBody ConfigBatchRequest req) {
         sysConfigService.batchUpdate(req.getConfig());

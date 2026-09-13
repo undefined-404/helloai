@@ -9,6 +9,7 @@
       description="暂无迭代记录（任务执行后自动回填）"
     >
       <el-button
+        v-auth="'task:report'"
         type="primary"
         :loading="backfilling"
         @click="$emit('backfill')"

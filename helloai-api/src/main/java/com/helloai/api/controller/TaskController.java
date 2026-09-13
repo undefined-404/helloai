@@ -1,5 +1,6 @@
 package com.helloai.api.controller;
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.helloai.api.dto.PageResult;
 import com.helloai.api.dto.task.CreateTaskRequest;
@@ -49,6 +50,7 @@ public class TaskController {
     private final TaskFinalReportService taskFinalReportService;
     private final TaskIterationService taskIterationService;
 
+    @SaCheckPermission("task:add")
     @PostMapping
     public R<Task> create(@Valid @RequestBody CreateTaskRequest req) {
         Task task = taskService.createTask(req.getTitle(), req.getDescription(), req.getSlaMinutes(),
@@ -94,6 +96,7 @@ public class TaskController {
         return R.ok(task);
     }
 
+    @SaCheckPermission("task:edit")
     @PostMapping("/updateStatusById/{id}")
     public R<Task> updateStatus(@PathVariable("id") Long id,
                                  @Valid @RequestBody UpdateTaskStatusRequest req) {
@@ -102,6 +105,7 @@ public class TaskController {
         return R.ok(task);
     }
 
+    @SaCheckPermission("task:edit")
     @PutMapping("/updateById/{id}")
     public R<Task> update(@PathVariable("id") Long id, @RequestBody CreateTaskRequest req) {
         Task task = taskService.updateTask(id, req.getTitle(), req.getDescription(), req.getSlaMinutes(),
@@ -114,6 +118,7 @@ public class TaskController {
     //  重新发布（重置 PENDING + 重新通知 PLANNER，不触碰子任务）
     // ══════════════════════════════════════════════════════════
 
+    @SaCheckPermission("task:republish")
     @PostMapping("/republishById/{id}")
     public R<Task> republish(@PathVariable("id") Long id) {
         return R.ok(taskService.republish(id));
@@ -123,6 +128,7 @@ public class TaskController {
     //  Planner 平台内拆解（草案生成 / 查看 / 确认 / 拒绝，编排全在 core）
     // ══════════════════════════════════════════════════════
 
+    @SaCheckPermission("task:plan")
     @PostMapping("/planById/{id}")
     public R<List<SubTask>> plan(@PathVariable("id") Long id) {
         return R.ok(plannerAnalysisService.decompose(id));
@@ -133,11 +139,13 @@ public class TaskController {
         return R.ok(plannerAnalysisService.listDrafts(id));
     }
 
+    @SaCheckPermission("task:confirm-plan")
     @PostMapping("/confirmPlanByTaskId/{id}")
     public R<List<SubTask>> confirmPlan(@PathVariable("id") Long id) {
         return R.ok(plannerAnalysisService.confirmPlan(id));
     }
 
+    @SaCheckPermission("task:reject-plan")
     @PostMapping("/rejectPlanByTaskId/{id}")
     public R<Map<String, Object>> rejectPlan(@PathVariable("id") Long id) {
         int cancelled = plannerAnalysisService.rejectPlan(id);
@@ -172,6 +180,7 @@ public class TaskController {
         return R.ok(toFinalReportResponse(task));
     }
 
+    @SaCheckPermission("task:report")
     @PostMapping("/generateFinalReportByTaskId/{id}")
     public R<TaskFinalReportResponse> generateFinalReport(@PathVariable("id") Long id) {
         return R.ok(toFinalReportResponse(taskFinalReportService.generate(id)));
@@ -181,6 +190,7 @@ public class TaskController {
     //  历史任务迭代记录回填（一次性，按需触发）
     // ══════════════════════════════════════════════════════════
 
+    @SaCheckPermission("task:report")
     @PostMapping("/backfillTaskIterations")
     public R<Map<String, Object>> backfillTaskIterations() {
         int count = taskIterationService.backfillHistory();
@@ -220,6 +230,7 @@ public class TaskController {
     //  注：DELETE 带 body 不符合语义，按 §10.2 路由风格改为 POST
     // ══════════════════════════════════════════════════════════
 
+    @SaCheckPermission("task:delete")
     @PostMapping("/deleteById/{id}")
     public R<TaskRelatedCounts> delete(@PathVariable("id") Long id,
                                        @RequestBody Map<String, String> body) {

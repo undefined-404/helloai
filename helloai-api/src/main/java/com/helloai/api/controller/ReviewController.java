@@ -1,5 +1,6 @@
 package com.helloai.api.controller;
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.helloai.api.dto.CreateReviewRequest;
 import com.helloai.api.dto.review.ReviewResponse;
 import com.helloai.api.interceptor.AuthInterceptor;
@@ -24,6 +25,7 @@ public class ReviewController {
 
     private final ReviewService reviewService;
 
+    @SaCheckPermission("review:add")
     @PostMapping
     public R<ReviewResponse> create(@Valid @RequestBody CreateReviewRequest request,
                                    @RequestHeader(value = "X-Agent-Id", required = false) Long agentId,

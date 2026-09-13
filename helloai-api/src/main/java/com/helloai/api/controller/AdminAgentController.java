@@ -1,5 +1,6 @@
 package com.helloai.api.controller;
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.helloai.api.dto.PageResult;
 import com.helloai.api.dto.admin.AgentCreateRequest;
@@ -166,6 +167,7 @@ public class AdminAgentController {
     //  创建
     // ══════════════════════════════════════════════════════════════
 
+    @SaCheckPermission("agent:add")
     @PostMapping
     public R<AgentRegistrationResponse> create(@RequestBody AgentCreateRequest req) {
         AgentRole role = AgentRole.valueOf(req.getRole().toUpperCase());
@@ -184,6 +186,7 @@ public class AdminAgentController {
     //  更新
     // ══════════════════════════════════════════════════════════════
 
+    @SaCheckPermission("agent:edit")
     @PutMapping("/updateById/{id}")
     public R<Void> update(@PathVariable("id") Long id, @RequestBody AgentUpdateRequest req) {
         log.info("更新 Agent 请求: id={}, body={}", id, req);
@@ -197,6 +200,7 @@ public class AdminAgentController {
     //  状态
     // ══════════════════════════════════════════════════════════════
 
+    @SaCheckPermission("agent:edit")
     @PostMapping("/updateStatusById/{id}")
     public R<Void> updateStatus(@PathVariable("id") Long id, @RequestBody Map<String, String> body) {
         AgentStatus status = AgentStatus.valueOf(body.get("status").toUpperCase());
@@ -215,6 +219,7 @@ public class AdminAgentController {
      * <p>设 online_status=SLEEPING，不动 AgentStatus/oldline_reason/offline_time。
      * <br>仅 X-Admin-Token 鉴权的管理员可调用（AuthInterceptor 已拦截）。
      */
+    @SaCheckPermission("agent:edit")
     @PostMapping("/sleepById/{id}")
     public R<Map<String, Object>> sleep(@PathVariable("id") Long id,
                                          @RequestBody(required = false) Map<String, String> body,
@@ -230,6 +235,7 @@ public class AdminAgentController {
      * <p>设 online_status=OFFLINE（不强行 ONLINE，让系统心跳自然计算 IDLE/ONLINE）。
      * <br>仅 X-Admin-Token 鉴权的管理员可调用。
      */
+    @SaCheckPermission("agent:edit")
     @PostMapping("/wakeById/{id}")
     public R<Map<String, Object>> wake(@PathVariable("id") Long id,
                                         @RequestBody(required = false) Map<String, String> body,
@@ -246,6 +252,7 @@ public class AdminAgentController {
      * <p>支持部分成功/失败：返回结构见 {@code AgentService.sleepAgentBatch}。
      * <br>仅 X-Admin-Token 鉴权的管理员可调用。
      */
+    @SaCheckPermission("agent:edit")
     @PostMapping("/sleepBatch")
     public R<Map<String, Object>> sleepBatch(@RequestBody SleepBatchRequest req,
                                               HttpServletRequest request) {
@@ -312,6 +319,7 @@ public class AdminAgentController {
     //  重置 Key
     // ══════════════════════════════════════════════════════════════
 
+    @SaCheckPermission("agent:key")
     @PostMapping("/resetKeyById/{id}")
     public R<ApiKeyResponse> resetKey(@PathVariable("id") Long id) {
         String newKey = agentService.resetApiKey(id);
@@ -416,6 +424,7 @@ public class AdminAgentController {
     //  级联删除
     // ══════════════════════════════════════════════════════════════
 
+    @SaCheckPermission("agent:delete")
     @DeleteMapping("/deleteById/{id}")
     public R<AgentDeleteResult> delete(@PathVariable("id") Long id,
                                         @RequestBody Map<String, String> body) {

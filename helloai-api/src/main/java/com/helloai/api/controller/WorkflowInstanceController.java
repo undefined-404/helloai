@@ -1,5 +1,6 @@
 package com.helloai.api.controller;
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.helloai.api.dto.workflow.WorkflowInstanceStatusResponse;
 import com.helloai.common.base.R;
 import com.helloai.core.task.workflow.domain.WorkflowInstanceStatusView;
@@ -24,6 +25,7 @@ public class WorkflowInstanceController {
 
     private final WorkflowInstanceService workflowInstanceService;
 
+    @SaCheckPermission("workflow-instance:view")
     @GetMapping("/{id}/status")
     public R<WorkflowInstanceStatusResponse> status(@PathVariable("id") Long id) {
         WorkflowInstanceStatusView view = workflowInstanceService.aggregateStatus(id);

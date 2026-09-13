@@ -1,5 +1,6 @@
 package com.helloai.api.controller;
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.helloai.api.dto.requirement.ClarifyMessageRequest;
 import com.helloai.common.base.R;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
@@ -37,6 +38,7 @@ public class RequirementConversationController {
 
     /** Chat SSE 流式发送（S1 最小闭环）：快速建立连接 → 线程池内执行
      *  「决策/搜索同步前置 + 主回复 token 流」，事件协议 token/done/error。 */
+    @SaCheckPermission("conversation:send")
     @PostMapping(value = "/streamSendById/{id}", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamSendById(@PathVariable("id") Long id,
                                      @Valid @RequestBody ClarifyMessageRequest req,
@@ -140,6 +142,7 @@ public class RequirementConversationController {
     }
 
     /** 新建澄清会话（首条用户消息触发一轮 LLM；可选手动指定 Planner；可带联网搜索开关；新会话始终 CHAT 模式）。 */
+    @SaCheckPermission("conversation:add")
     @PostMapping
     public R<ClarifyConversationDetail> create(@Valid @RequestBody ClarifyMessageRequest req) {
         // 联网搜索开关透传：NULL 走默认开启语义（与老数据兼容）；
@@ -155,6 +158,7 @@ public class RequirementConversationController {
     }
 
     /** 追加一条用户消息并走一轮 LLM 澄清（可附结构化选项回答快照）。 */
+    @SaCheckPermission("conversation:send")
     @PostMapping("/sendMessageById/{id}")
     public R<ClarifyConversationDetail> sendMessageById(@PathVariable("id") Long id,
                                                     @Valid @RequestBody ClarifyMessageRequest req) {
@@ -162,6 +166,7 @@ public class RequirementConversationController {
     }
 
     /** 重试上一轮 LLM（仅当最后一条是用户消息，即上轮 LLM 失败时可用）。 */
+    @SaCheckPermission("conversation:retry")
     @PostMapping("/retryById/{id}")
     public R<ClarifyConversationDetail> retryById(@PathVariable("id") Long id) {
         return R.ok(requirementClarifyService.retryRound(id));
@@ -169,6 +174,7 @@ public class RequirementConversationController {
 
     /** 切换到方案澄清模式：置位落库 + 一轮 LLM 基于全量历史产终稿草案/结构化追问；
      *  支持可选 body.message（斜杠命令 /planner 附加文本，先落库进上下文再切）。 */
+    @SaCheckPermission("conversation:mode")
     @PostMapping("/toClarifyById/{id}")
     public R<ClarifyConversationDetail> toClarify(@PathVariable("id") Long id,
                                                   @RequestBody(required = false) ClarifyMessageRequest req) {
@@ -177,6 +183,7 @@ public class RequirementConversationController {
     }
 
     /** 切回自由对话模式：仅置位，不调用 LLM。 */
+    @SaCheckPermission("conversation:mode")
     @PostMapping("/toChatById/{id}")
     public R<ClarifyConversationDetail> toChat(@PathVariable("id") Long id) {
         return R.ok(requirementClarifyService.switchToChat(id));
@@ -195,18 +202,21 @@ public class RequirementConversationController {
     }
 
     /** 终稿确认：创建任务并回填会话。 */
+    @SaCheckPermission("conversation:finalize")
     @PostMapping("/finalizeById/{id}")
     public R<Task> finalizeById(@PathVariable("id") Long id) {
         return R.ok(requirementClarifyService.finalize(id));
     }
 
     /** 重新生成：FINALIZED 会话原任务已删除时，复用终稿重建任务并回填。 */
+    @SaCheckPermission("conversation:regenerate")
     @PostMapping("/regenerateById/{id}")
     public R<Task> regenerateById(@PathVariable("id") Long id) {
         return R.ok(requirementClarifyService.regenerate(id));
     }
 
     /** 放弃会话。 */
+    @SaCheckPermission("conversation:abandon")
     @PostMapping("/abandonById/{id}")
     public R<Void> abandonById(@PathVariable("id") Long id) {
         requirementClarifyService.abandon(id);
@@ -214,6 +224,7 @@ public class RequirementConversationController {
     }
 
     /** 删除已放弃会话：仅 ABANDONED 可删（软删，列表自动隐藏；ACTIVE/FINALIZED 拒绝）。 */
+    @SaCheckPermission("conversation:delete")
     @PostMapping("/deleteById/{id}")
     public R<Void> deleteById(@PathVariable("id") Long id) {
         requirementClarifyService.delete(id);

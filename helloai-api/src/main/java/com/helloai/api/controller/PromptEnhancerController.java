@@ -1,5 +1,6 @@
 package com.helloai.api.controller;
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.helloai.api.dto.prompt.PromptEnhanceRequest;
 import com.helloai.common.base.R;
 import com.helloai.core.planner.prompt.PromptEnhanceResult;
@@ -26,6 +27,7 @@ public class PromptEnhancerController {
     private final PromptEnhancerService promptEnhancerService;
 
     /** 优化用户当前输入，返回原文 + 优化后版本（前端预览后由用户自行回填）。 */
+    @SaCheckPermission("prompt:enhance")
     @PostMapping("/enhance")
     public R<PromptEnhanceResult> enhance(@Valid @RequestBody PromptEnhanceRequest req) {
         return R.ok(promptEnhancerService.enhance(req.getPrompt()));

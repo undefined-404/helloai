@@ -219,6 +219,7 @@
         >
           <template #default="{ row }">
             <el-button
+              v-auth="'subtask:edit'"
               link
               type="primary"
               size="small"
@@ -239,6 +240,7 @@
         取消
       </el-button>
       <el-button
+        v-auth="'task:reject-plan'"
         type="danger"
         plain
         :loading="rejecting"
@@ -247,6 +249,7 @@
         拒绝重拆
       </el-button>
       <el-button
+        v-auth="'task:confirm-plan'"
         type="primary"
         :loading="confirming"
         :disabled="!drafts.length"

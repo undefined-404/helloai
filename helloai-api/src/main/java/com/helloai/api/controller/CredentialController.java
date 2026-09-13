@@ -1,5 +1,6 @@
 package com.helloai.api.controller;
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.helloai.api.dto.PageResult;
 import com.helloai.api.dto.credential.AuditLogResponse;
@@ -34,6 +35,7 @@ public class CredentialController {
     private final CredentialVaultService credentialVaultService;
     private final HttpServletRequest request;
 
+    @SaCheckPermission("credential:bind")
     @PostMapping("/bindApiKeyByAgentId/{agentId}")
     public R<CredentialInfoResponse> bindApiKeyByAgentId(@PathVariable("agentId") Long agentId,
                                                      @RequestBody BindAgentApiKeyRequest req) {
@@ -48,6 +50,7 @@ public class CredentialController {
         return R.ok(toInfo(vault));
     }
 
+    @SaCheckPermission("credential:rotate")
     @PostMapping("/rotateByAgentId/{agentId}")
     public R<CredentialInfoResponse> rotateByAgentId(@PathVariable("agentId") Long agentId,
                                                      @RequestBody RotateAgentApiKeyRequest req) {
@@ -57,6 +60,7 @@ public class CredentialController {
         return R.ok(toInfo(vault));
     }
 
+    @SaCheckPermission("credential:revoke")
     @PostMapping("/revoke/{id}")
     public R<Void> revoke(@PathVariable("id") Long id) {
         requireAdmin();
@@ -64,6 +68,7 @@ public class CredentialController {
         return R.ok();
     }
 
+    @SaCheckPermission("credential:view")
     @GetMapping("/listByAgentId/{agentId}")
     public R<List<CredentialInfoResponse>> listByAgentId(@PathVariable("agentId") Long agentId) {
         requireAdmin();
@@ -74,6 +79,7 @@ public class CredentialController {
         return R.ok(list);
     }
 
+    @SaCheckPermission("credential:view")
     @GetMapping("/audits")
     public R<PageResult<AuditLogResponse>> listAudits(
             @RequestParam(value = "credentialId", required = false) Long credentialId,

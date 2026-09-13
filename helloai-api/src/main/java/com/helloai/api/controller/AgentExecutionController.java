@@ -1,5 +1,6 @@
 package com.helloai.api.controller;
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.helloai.api.dto.agent.AgentExecutionConnectivityRequest;
 import com.helloai.api.dto.agent.AgentExecutionConnectivityResponse;
 import com.helloai.api.dto.agent.AgentExecutionPreviewRequest;
@@ -28,6 +29,7 @@ public class AgentExecutionController {
     private final AgentExecutionPreviewService agentExecutionPreviewService;
     private final AgentService agentService;
 
+    @SaCheckPermission("agent-execution:preview")
     @PostMapping("/checkConnectivityByAgentId/{agentId}")
     public R<AgentExecutionConnectivityResponse> checkConnectivityByAgentId(
             @PathVariable("agentId") Long agentId,
@@ -62,6 +64,7 @@ public class AgentExecutionController {
         return R.ok(response);
     }
 
+    @SaCheckPermission("agent-execution:preview")
     @PostMapping("/previewByAgentId/{agentId}")
     public R<AgentExecutionPreviewResponse> previewByAgentId(@PathVariable("agentId") Long agentId,
                                                     @RequestBody AgentExecutionPreviewRequest request) {

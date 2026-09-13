@@ -7,6 +7,7 @@
           <div class="header-actions">
             <!-- A1: 表单直建入口（含 V47 执行策略） -->
             <el-button
+              v-auth="'task:add'"
               size="small"
               type="primary"
               @click="openCreate"
@@ -14,6 +15,7 @@
               新建任务
             </el-button>
             <el-button
+              v-auth="'task:add'"
               size="small"
               type="primary"
               @click="router.push('/requirement-chat')"
@@ -101,6 +103,7 @@
               <!-- 主操作：按状态驱动，每行至多一个内联主按钮 -->
               <el-button
                 v-if="row.status === 'PENDING'"
+                v-auth="'task:plan'"
                 size="small"
                 type="primary"
                 plain
@@ -119,6 +122,7 @@
               </el-button>
               <el-button
                 v-else-if="row.status === 'DONE'"
+                v-auth="'task:report'"
                 size="small"
                 type="primary"
                 plain
@@ -145,6 +149,7 @@
                 <template #dropdown>
                   <el-dropdown-menu>
                     <el-dropdown-item
+                      v-auth="'task:edit'"
                       command="edit"
                       :disabled="row.status === 'DONE'"
                     >
@@ -153,16 +158,21 @@
                     <el-dropdown-item command="events">
                       事件流
                     </el-dropdown-item>
-                    <el-dropdown-item command="republish">
+                    <el-dropdown-item
+                      v-auth="'task:republish'"
+                      command="republish"
+                    >
                       重新发布
                     </el-dropdown-item>
                     <el-dropdown-item
                       v-if="row.status !== 'DONE' && row.status !== 'CANCELLED'"
+                      v-auth="'task:edit'"
                       command="stop"
                     >
                       停止
                     </el-dropdown-item>
                     <el-dropdown-item
+                      v-auth="'task:delete'"
                       command="delete"
                       divided
                     >

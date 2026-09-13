@@ -121,10 +121,14 @@
           操作
         </div>
         <div class="ops-row">
-          <el-button @click="openEdit">
+          <el-button
+            v-auth="'agent:edit'"
+            @click="openEdit"
+          >
             编辑信息
           </el-button>
           <el-button
+            v-auth="'agent:edit'"
             :type="agent.status === 'ACTIVE' ? 'warning' : 'success'"
             @click="openToggleStatus"
           >
@@ -140,12 +144,14 @@
             生成接入内容
           </el-button>
           <el-button
+            v-auth="'agent:key'"
             type="primary"
             @click="handleResetKey"
           >
             重置 API Key
           </el-button>
           <el-button
+            v-auth="'agent:delete'"
             type="danger"
             @click="openDelete"
           >

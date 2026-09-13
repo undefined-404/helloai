@@ -1,5 +1,6 @@
 package com.helloai.api.controller;
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.helloai.api.dto.module.CreateModuleRequest;
 import com.helloai.api.dto.module.ModuleResponse;
 import com.helloai.common.base.R;
@@ -27,6 +28,7 @@ public class ModuleController {
         return R.ok(resp);
     }
 
+    @SaCheckPermission("module:edit")
     @PostMapping("/setModulesByTaskId/{taskId}")
     public R<ModuleResponse> setModulesByTaskId(@PathVariable("taskId") Long taskId,
                                     @Valid @RequestBody CreateModuleRequest req) {

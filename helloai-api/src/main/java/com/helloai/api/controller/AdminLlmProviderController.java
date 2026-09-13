@@ -1,5 +1,6 @@
 package com.helloai.api.controller;
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.helloai.api.dto.admin.CreateLlmProviderRequest;
 import com.helloai.api.dto.admin.LlmProviderModelResponse;
 import com.helloai.api.dto.admin.LlmProviderResponse;
@@ -68,6 +69,7 @@ public class AdminLlmProviderController {
     private final LlmProviderModelService llmProviderModelService;
     private final LlmProviderModelQueryService llmProviderModelQueryService;
 
+    @SaCheckPermission("llm-provider:view")
     @GetMapping("/list")
     public R<List<LlmProviderResponse>> list() {
         List<LlmProviderResponse> items = queryService.listAll().stream()
@@ -76,6 +78,7 @@ public class AdminLlmProviderController {
         return R.ok(items);
     }
 
+    @SaCheckPermission("llm-provider:view")
     @GetMapping("/getById/{id}")
     public R<LlmProviderResponse> getById(@PathVariable("id") Long id) {
         LlmProvider p = providerService.getById(id);
@@ -85,6 +88,7 @@ public class AdminLlmProviderController {
         return R.ok(toResponse(p));
     }
 
+    @SaCheckPermission("llm-provider:add")
     @PostMapping
     public R<LlmProviderResponse> create(@RequestBody @Valid CreateLlmProviderRequest req) {
         LlmProvider entity = new LlmProvider();
@@ -105,6 +109,7 @@ public class AdminLlmProviderController {
         return R.ok(toResponse(saved));
     }
 
+    @SaCheckPermission("llm-provider:edit")
     @PutMapping("/updateById/{id}")
     public R<Void> updateById(@PathVariable("id") Long id,
                               @RequestBody @Valid UpdateLlmProviderRequest req) {
@@ -123,12 +128,14 @@ public class AdminLlmProviderController {
         return R.ok();
     }
 
+    @SaCheckPermission("llm-provider:delete")
     @DeleteMapping("/deleteById/{id}")
     public R<Void> deleteById(@PathVariable("id") Long id) {
         providerService.deleteById(id);
         return R.ok();
     }
 
+    @SaCheckPermission("llm-provider:edit")
     @PutMapping("/toggleById/{id}")
     public R<Void> toggleById(@PathVariable("id") Long id) {
         LlmProvider p = providerService.getById(id);
@@ -148,6 +155,7 @@ public class AdminLlmProviderController {
      * <p>请求体为纯字符串（apiKey 明文），使用 {@link String} 直接接收避免 Jackson 把数字等
      * 误识别为 JSON 节点。空值返回 400。</p>
      */
+    @SaCheckPermission("llm-provider:key")
     @PutMapping("/saveApiKeyById/{id}")
     public R<Void> saveApiKey(@PathVariable("id") Long id, @RequestBody String apiKey) {
         if (apiKey == null || apiKey.isBlank()) {
@@ -169,6 +177,7 @@ public class AdminLlmProviderController {
      * <p>返回 {@code success / message / model / elapsedMs}；验证失败不抛异常，
      * success=false + 可读 message，前端直接展示。</p>
      */
+    @SaCheckPermission("llm-provider:key")
     @PostMapping("/verifyApiKeyById/{id}")
     public R<Map<String, Object>> verifyApiKey(@PathVariable("id") Long id) {
         return R.ok(llmProviderKeyVerifyService.verifyById(id));
@@ -181,6 +190,7 @@ public class AdminLlmProviderController {
     /**
      * 查询 Provider 的模型列表（含禁用）。
      */
+    @SaCheckPermission("llm-provider:view")
     @GetMapping("/listModelsByProviderId/{id}")
     public R<List<LlmProviderModelResponse>> listModels(@PathVariable("id") Long id) {
         LlmProvider p = providerService.getById(id);
@@ -196,6 +206,7 @@ public class AdminLlmProviderController {
     /**
      * 添加单个模型到 Provider。
      */
+    @SaCheckPermission("llm-provider:model")
     @PostMapping("/addModelByProviderId/{id}")
     public R<LlmProviderModelResponse> addModel(@PathVariable("id") Long id,
                                                  @RequestBody Map<String, Object> body) {
@@ -212,6 +223,7 @@ public class AdminLlmProviderController {
     /**
      * 批量保存 Provider 的模型配置（多选）。
      */
+    @SaCheckPermission("llm-provider:model")
     @PutMapping("/saveAllModelsByProviderId/{id}")
     public R<Void> saveAllModels(@PathVariable("id") Long id,
                                   @RequestBody Map<String, Object> body) {
@@ -229,6 +241,7 @@ public class AdminLlmProviderController {
     /**
      * 删除模型。
      */
+    @SaCheckPermission("llm-provider:model")
     @DeleteMapping("/deleteModelByProviderIdAndName/{providerId}/{modelName}")
     public R<Void> deleteModel(@PathVariable("providerId") Long id,
                                 @PathVariable("modelName") String modelName) {
@@ -243,6 +256,7 @@ public class AdminLlmProviderController {
     /**
      * 启用/禁用模型。
      */
+    @SaCheckPermission("llm-provider:model")
     @PutMapping("/toggleModelByProviderIdAndName/{providerId}/{modelName}")
     public R<Void> toggleModel(@PathVariable("providerId") Long id,
                                 @PathVariable("modelName") String modelName,
@@ -262,6 +276,7 @@ public class AdminLlmProviderController {
     /**
      * 设置默认模型。
      */
+    @SaCheckPermission("llm-provider:model")
     @PutMapping("/setDefaultModelByProviderIdAndName/{providerId}/{modelName}")
     public R<Void> setDefaultModel(@PathVariable("providerId") Long id,
                                     @PathVariable("modelName") String modelName) {
@@ -282,6 +297,7 @@ public class AdminLlmProviderController {
      * 模型未识别（表中不存在/已删除）时返回降级默认值并标注 {@code degraded=true}，
      * 前端提示「模型未上架，建议使用已上架模型」。</p>
      */
+    @SaCheckPermission("llm-provider:view")
     @GetMapping("/getSkillOptionsByModelType/{modelType}")
     public R<Map<String, Object>> getSkillOptions(@PathVariable("modelType") String modelType) {
         Map<String, Object> body = new LinkedHashMap<>();

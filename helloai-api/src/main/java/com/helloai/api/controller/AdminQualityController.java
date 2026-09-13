@@ -1,5 +1,6 @@
 package com.helloai.api.controller;
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.helloai.common.base.R;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.quality.dto.AgentQualityRank;
@@ -74,6 +75,7 @@ public class AdminQualityController {
      *
      * @param agentId Agent ID
      */
+    @SaCheckPermission("quality:rebuild")
     @PostMapping("/rebuildById/{agentId}")
     public R<Void> rebuild(@PathVariable("agentId") Long agentId) {
         if (!isEnabled()) {
@@ -89,6 +91,7 @@ public class AdminQualityController {
      *
      * @param subTaskId 子任务 ID
      */
+    @SaCheckPermission("quality:dispatch")
     @PostMapping("/dispatchById/{subTaskId}")
     public R<Long> dispatch(@PathVariable("subTaskId") Long subTaskId) {
         if (!isEnabled()) {

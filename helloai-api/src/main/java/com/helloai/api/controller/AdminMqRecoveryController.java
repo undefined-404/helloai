@@ -1,5 +1,6 @@
 package com.helloai.api.controller;
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.helloai.api.dto.PageResult;
 import com.helloai.api.dto.mq.DeadLetterArchiveResponse;
@@ -47,6 +48,7 @@ public class AdminMqRecoveryController {
     /**
      * outbox FAILED 行窗口分页列表（供运维挑选重入）。
      */
+    @SaCheckPermission("mq-recovery:view")
     @GetMapping("/outbox/failed")
     public R<PageResult<OutboxFailedResponse>> listFailedOutbox(
             @RequestParam("from") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) OffsetDateTime from,
@@ -60,6 +62,7 @@ public class AdminMqRecoveryController {
     /**
      * 把指定 FAILED outbox 行重入 PENDING（CAS；非 FAILED 行由服务层 fail-close 报错）。
      */
+    @SaCheckPermission("mq-recovery:replay")
     @PostMapping("/outbox/requeue/{id}")
     public R<Void> requeueOutbox(@PathVariable("id") Long id) {
         outboxService.requeueFailed(id);
@@ -69,6 +72,7 @@ public class AdminMqRecoveryController {
     /**
      * 死信台账窗口分页列表（默认仅未重放行；重放前可核对原始投递坐标与消息体）。
      */
+    @SaCheckPermission("mq-recovery:view")
     @GetMapping("/dead-letter")
     public R<PageResult<DeadLetterArchiveResponse>> listDeadLetters(
             @RequestParam("from") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) OffsetDateTime from,
@@ -84,6 +88,7 @@ public class AdminMqRecoveryController {
     /**
      * 按台账 id 重放一条死信（已重放 / 无消息标识 / 发送失败由服务层 fail-close 报错）。
      */
+    @SaCheckPermission("mq-recovery:replay")
     @PostMapping("/dead-letter/replay/{id}")
     public R<Void> replayDeadLetter(@PathVariable("id") long id) {
         deadLetterRecoveryService.replay(id);

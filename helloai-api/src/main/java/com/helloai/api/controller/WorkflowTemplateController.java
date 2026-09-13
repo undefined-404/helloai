@@ -1,5 +1,6 @@
 package com.helloai.api.controller;
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.helloai.api.dto.PageResult;
 import com.helloai.api.dto.workflow.WorkflowInstanceRequest;
@@ -33,6 +34,7 @@ public class WorkflowTemplateController {
     private final WorkflowTemplateService workflowTemplateService;
     private final WorkflowInstanceService workflowInstanceService;
 
+    @SaCheckPermission("workflow-template:add")
     @PostMapping
     public R<WorkflowTemplateResponse> create(@RequestBody WorkflowTemplateRequest req) {
         WorkflowTemplate t = workflowTemplateService.createTemplate(
@@ -40,6 +42,7 @@ public class WorkflowTemplateController {
         return R.ok(toTemplate(t));
     }
 
+    @SaCheckPermission("workflow-template:edit")
     @PutMapping("/{id}")
     public R<WorkflowTemplateResponse> update(@PathVariable("id") Long id,
                                               @RequestBody WorkflowTemplateRequest req) {
@@ -48,11 +51,13 @@ public class WorkflowTemplateController {
         return R.ok(toTemplate(t));
     }
 
+    @SaCheckPermission("workflow-template:archive")
     @PostMapping("/{id}/archive")
     public R<WorkflowTemplateResponse> archive(@PathVariable("id") Long id) {
         return R.ok(toTemplate(workflowTemplateService.archiveTemplate(id)));
     }
 
+    @SaCheckPermission("workflow-template:view")
     @GetMapping
     public R<PageResult<WorkflowTemplateResponse>> page(
             @RequestParam(value = "page", defaultValue = "1") long page,
@@ -61,6 +66,7 @@ public class WorkflowTemplateController {
         return R.ok(PageResult.of(result, this::toTemplate));
     }
 
+    @SaCheckPermission("workflow-template:edit")
     @PostMapping("/{templateId}/versions")
     public R<WorkflowVersionResponse> createVersion(@PathVariable("templateId") Long templateId,
                                                     @RequestBody WorkflowVersionRequest req) {
@@ -68,11 +74,13 @@ public class WorkflowTemplateController {
         return R.ok(toVersion(v));
     }
 
+    @SaCheckPermission("workflow-template:publish")
     @PostMapping("/versions/{versionId}/publish")
     public R<WorkflowVersionResponse> publish(@PathVariable("versionId") Long versionId) {
         return R.ok(toVersion(workflowTemplateService.publishVersion(versionId)));
     }
 
+    @SaCheckPermission("workflow-template:view")
     @GetMapping("/{templateId}/versions")
     public R<List<WorkflowVersionResponse>> listVersions(@PathVariable("templateId") Long templateId) {
         List<WorkflowVersionResponse> list = workflowTemplateService.listVersions(templateId)
@@ -82,6 +90,7 @@ public class WorkflowTemplateController {
         return R.ok(list);
     }
 
+    @SaCheckPermission("workflow-instance:add")
     @PostMapping("/{templateId}/instances")
     public R<WorkflowInstanceResponse> createInstance(@PathVariable("templateId") Long templateId,
                                                       @RequestBody WorkflowInstanceRequest req) {

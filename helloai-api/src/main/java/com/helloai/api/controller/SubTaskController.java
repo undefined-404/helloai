@@ -1,5 +1,6 @@
 package com.helloai.api.controller;
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.helloai.api.dto.PageResult;
 import com.helloai.api.dto.subtask.ConversationMessageItem;
@@ -59,6 +60,7 @@ public class SubTaskController {
     private final TaskTimelineService taskTimelineService;
     private final ConversationService conversationService;
 
+    @SaCheckPermission("subtask:add")
     @PostMapping
     public R<SubTaskResponse> create(@Valid @RequestBody CreateSubTaskRequest req) {
         SubTask subTask = toEntity(req, resolveTaskPriority(req.getTaskId()));
@@ -79,6 +81,7 @@ public class SubTaskController {
      * <p>同内容 fan-out 派发给多个 Agent；逐项独立创建（每项自身独立事务），
      * 单项失败不影响其余；返回成功创建的列表（不含失败项）。</p>
      */
+    @SaCheckPermission("subtask:add")
     @PostMapping("/batch")
     public R<List<SubTaskResponse>> createBatch(@Valid @RequestBody List<CreateSubTaskRequest> reqs) {
         if (reqs == null || reqs.isEmpty()) {
@@ -216,6 +219,7 @@ public class SubTaskController {
      * 人工指派的标签不做目录强校验（人工编辑为权威输入），执行侧 resolve 两层过滤兜底；
      * uncertainties 非法 kind 由 Service 落库侧降级 UNCONFIRMED（D3 fail-close 同口径）。</p>
      */
+    @SaCheckPermission("subtask:edit")
     @PutMapping("/updateDraftById/{id}")
     public R<Void> updateDraft(@PathVariable("id") Long id,
                                @Valid @RequestBody DraftUpdateRequest req) {
@@ -225,6 +229,7 @@ public class SubTaskController {
         return R.ok();
     }
 
+    @SaCheckPermission("subtask:status")
     @PostMapping("/changeStatus")
     public R<Void> changeStatus(@RequestBody Map<String, Object> body) {
         Long subTaskId = Long.valueOf(body.get("subTaskId").toString());
@@ -246,42 +251,49 @@ public class SubTaskController {
         return R.ok();
     }
 
+    @SaCheckPermission("subtask:claim")
     @PostMapping("/claimById/{id}")
     public R<Void> claim(@PathVariable("id") Long id, @RequestParam("agentId") Long agentId) {
         subTaskService.claim(id, agentId);
         return R.ok();
     }
 
+    @SaCheckPermission("subtask:execute")
     @PostMapping("/startById/{id}")
     public R<Void> start(@PathVariable("id") Long id) {
         subTaskService.start(id);
         return R.ok();
     }
 
+    @SaCheckPermission("subtask:submit")
     @PostMapping("/submitById/{id}")
     public R<Void> submit(@PathVariable("id") Long id) {
         subTaskService.submit(id);
         return R.ok();
     }
 
+    @SaCheckPermission("subtask:complete")
     @PostMapping("/completeById/{id}")
     public R<Void> complete(@PathVariable("id") Long id) {
         subTaskService.complete(id);
         return R.ok();
     }
 
+    @SaCheckPermission("subtask:rework")
     @PostMapping("/reworkById/{id}")
     public R<Void> rework(@PathVariable("id") Long id, @RequestBody ReworkRequest req) {
         subTaskService.rework(id, req.getReworkAgentId());
         return R.ok();
     }
 
+    @SaCheckPermission("subtask:block")
     @PostMapping("/blockById/{id}")
     public R<Void> block(@PathVariable("id") Long id) {
         subTaskService.block(id);
         return R.ok();
     }
 
+    @SaCheckPermission("subtask:reassign")
     @PostMapping("/reassignById/{id}")
     public R<Void> reassign(@PathVariable("id") Long id, @Valid @RequestBody ReassignRequest req) {
         subTaskDispatchService.dispatchBlockedSubTask(id, req.getAgentId());
@@ -296,6 +308,7 @@ public class SubTaskController {
      * {@code dispatchBlockedSubTask} 走既有熔断 + 选人 + fallback 重调度链。
      * 重派失败时任务停留在 BLOCKED，可再次调用重新调度接口。</p>
      */
+    @SaCheckPermission("subtask:redispatch")
     @PostMapping("/redispatchInProgressById/{id}")
     public R<Void> redispatchInProgress(@PathVariable("id") Long id,
                                         @Valid @RequestBody ReassignRequest req) {
@@ -310,6 +323,7 @@ public class SubTaskController {
      * 由人工确认目标 Agent 后调用本接口：熔断计数清零 + 直接 ASSIGNED。
      * 死信列表复用现有列表接口按 status=DEAD_LETTER 过滤。</p>
      */
+    @SaCheckPermission("subtask:redispatch")
     @PostMapping("/redispatchDeadLetterById/{id}")
     public R<Void> redispatchDeadLetter(@PathVariable("id") Long id,
                                         @Valid @RequestBody ReassignRequest req) {
@@ -317,18 +331,21 @@ public class SubTaskController {
         return R.ok();
     }
 
+    @SaCheckPermission("subtask:pause")
     @PostMapping("/pauseById/{id}")
     public R<Void> pause(@PathVariable("id") Long id) {
         subTaskService.pause(id);
         return R.ok();
     }
 
+    @SaCheckPermission("subtask:resume")
     @PostMapping("/resumeById/{id}")
     public R<Void> resume(@PathVariable("id") Long id) {
         subTaskService.resume(id);
         return R.ok();
     }
 
+    @SaCheckPermission("subtask:execute")
     @PostMapping("/executeById/{id}")
     public R<Map<String, Object>> execute(@PathVariable("id") Long id) {
         requireAdmin();

@@ -37,6 +37,7 @@
               />
             </el-select>
             <el-button
+              v-auth="'subtask:add'"
               size="small"
               type="primary"
               style="margin-right:8px"
@@ -242,18 +243,21 @@
                     <el-dropdown-menu>
                       <el-dropdown-item
                         v-if="row.status==='PENDING'"
+                        v-auth="'subtask:claim'"
                         command="claim"
                       >
                         认领
                       </el-dropdown-item>
                       <el-dropdown-item
                         v-if="row.status==='IN_PROGRESS'"
+                        v-auth="'subtask:pause'"
                         command="pause"
                       >
                         暂停
                       </el-dropdown-item>
                       <el-dropdown-item
                         v-if="row.status==='PAUSED'"
+                        v-auth="'subtask:resume'"
                         command="resume"
                       >
                         恢复
@@ -261,6 +265,7 @@
                       <!-- 暂停后换人：PAUSED 是人工处置窗口（恢复/换人二选一），后端先自动恢复再标 BLOCKED 进重调度链 -->
                       <el-dropdown-item
                         v-if="row.status==='PAUSED'"
+                        v-auth="'subtask:reassign'"
                         command="reassign"
                       >
                         <span class="dropdown-danger">换人</span>
@@ -268,6 +273,7 @@
                       <!-- V25 死信人工兜底：重新指派给指定 Agent（DEAD_LETTER → ASSIGNED） -->
                       <el-dropdown-item
                         v-if="row.status==='DEAD_LETTER'"
+                        v-auth="'subtask:redispatch'"
                         command="redispatch"
                       >
                         <span class="dropdown-danger">重新指派</span>
@@ -275,6 +281,7 @@
                       <!-- BLOCKED 阻塞子任务：重新调度（reset → PENDING 后交调度链） -->
                       <el-dropdown-item
                         v-if="row.status==='BLOCKED'"
+                        v-auth="'subtask:reassign'"
                         command="reassign"
                       >
                         重新调度
