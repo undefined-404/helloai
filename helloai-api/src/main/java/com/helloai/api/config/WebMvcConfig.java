@@ -47,8 +47,8 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 // 活动流公开接口
                 .excludePathPatterns("/api/feed/**");
 
-        // 授权拦截器：/api/admin/** 强制管理身份（认证与授权分离，见 CODE_STYLE §43）
-        // 事实源为 Sa-Token 登录态 + sys_user_role 角色码（不依赖认证阶段手写的 attribute）
+        // 管理面路径限定：/api/admin/** 仅允许平台账号（拒绝外部 Agent 的 API Key）
+        // 认证与授权分离：本拦截器不判角色；细粒度授权由 @SaCheckPermission 动作码承担
         registry.addInterceptor(new AdminOnlyInterceptor())
                 .addPathPatterns("/api/admin/**");
 

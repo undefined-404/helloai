@@ -7,25 +7,30 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.web.servlet.HandlerInterceptor;
 
 /**
- * 授权拦截器：校验已通过认证的请求是否具备 admin 身份。
- * <p>
- * 认证（你是谁）与授权（你能干什么）分离：{@link AuthInterceptor} 只负责认证并写入
- * {@code _authType}，本拦截器在其之后对 {@code /api/admin/**} 路径强制要求管理身份。
- * 新增任何 admin 端点只要落在该路径前缀下即自动被覆盖，无需逐端点注解。
+ * 管理面路径限定拦截器：{@code /api/admin/**} 只允许<strong>平台账号</strong>访问。
  *
- * <p><b>事实源为 Sa-Token 登录态 + {@code sys_user_role} 角色码</b>（BASE-4.1）：
- * 不再依赖认证阶段手写的 {@code _authType} request attribute——该 attribute 仅供
- * Controller 读取身份信息（如 {@code AuthController#changePassword}），不作授权依据。
- * 外部 Agent（API Key）不进入 Sa-Token 会话体系，{@code isLogin()} 为 false → 403。</p>
+ * <p><b>语义（BASE-4.4 修订）</b>：本拦截器现在只区分「平台账号会话」与「外部 Agent API Key」，
+ * <strong>不</strong>做角色判定——授权（你能干什么）一律交给动作级权限码
+ * （{@code @SaCheckPermission} + Sa-Token StpInterface），见 CODE_STYLE §43。</p>
+ *
+ * <p><b>为何去掉角色闸</b>：BASE-4.1 曾在此强制 {@code SUPER_ADMIN|ADMIN}，但业务只读页面
+ * （Agent 管理 / Team 组合 / Browser 会话 / 质量看板 / 打卡上班）的数据接口仍在
+ * {@code /api/admin/**} 前缀下——角色闸会在动作码之前拦下 NORMAL_USER / GUEST，
+ * 使其可见菜单全部 403。去掉角色闸后：写操作由动作码守住（GUEST 零写码 → 写接口 403），
+ * 管理面无动作码的读接口对已登录账号开放（见实施计划 §9.9.3）。</p>
+ *
+ * <p>外部 Agent（API Key）不进入 Sa-Token 会话体系，{@code isLogin()} 为 false → 403。</p>
+ *
+ * <p><b>命名遗留</b>：类名仍为 {@code AdminOnlyInterceptor}（历史上确为 admin 角色闸），
+ * 当前语义是「平台账号限定」；重命名触及文档与验证脚本多处引用，登记为技术债。</p>
  */
 public class AdminOnlyInterceptor implements HandlerInterceptor {
 
-    /** 平台管理角色码：任一命中即视为管理身份（SUPER_ADMIN 在权限侧为 "*" 通配）。 */
-    private static final String[] ADMIN_ROLE_CODES = {"SUPER_ADMIN", "ADMIN"};
-
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
-        if (!StpUtil.isLogin() || !StpUtil.hasRoleOr(ADMIN_ROLE_CODES)) {
+        // 仅判定「平台账号身份」：Agent（API Key）不得访问管理面路径。
+        // 细粒度授权由 @SaCheckPermission 动作码承担，不在此判角色。
+        if (!StpUtil.isLogin()) {
             throw new BizException(403, "需要管理员权限");
         }
         return true;

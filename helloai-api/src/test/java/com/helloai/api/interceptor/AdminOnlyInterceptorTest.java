@@ -14,22 +14,21 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mockStatic;
 
 /**
- * AdminOnlyInterceptor 单测：认证与授权分离中的授权分支。
+ * AdminOnlyInterceptor 单测：平台账号路径限定（{@code /api/admin/**}）。
  *
- * <p>BASE-4.1 起事实源为 Sa-Token 登录态 + {@code sys_user_role} 角色码：</p>
+ * <p>BASE-4.4 起语义修订为<strong>只区分平台账号与外部 Agent</strong>，不再判角色
+ * （授权交给动作级权限码，见 CODE_STYLE §43）：</p>
  *
  * <ul>
- *   <li>管理身份（SUPER_ADMIN / ADMIN）放行</li>
- *   <li>已登录但无管理角色（如 NORMAL_USER / GUEST）→ 403</li>
- *   <li>未登录（含外部 Agent API Key，不进 Sa-Token 会话体系）→ 403</li>
+ *   <li>平台账号会话（任意角色，含 NORMAL_USER / GUEST）→ 放行</li>
+ *   <li>未登录（含外部 Agent API Key：不进 Sa-Token 会话体系）→ 403</li>
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("AdminOnlyInterceptor 管理身份授权拦截")
+@DisplayName("AdminOnlyInterceptor 平台账号路径限定")
 class AdminOnlyInterceptorTest {
 
     private final AdminOnlyInterceptor interceptor = new AdminOnlyInterceptor();
@@ -41,26 +40,12 @@ class AdminOnlyInterceptorTest {
     private HttpServletResponse response;
 
     @Test
-    @DisplayName("管理身份（isLogin + 命中管理角色）放行")
-    void adminPasses() throws Exception {
+    @DisplayName("平台账号（已登录）放行")
+    void loggedInPasses() throws Exception {
         try (MockedStatic<StpUtil> stp = mockStatic(StpUtil.class)) {
             stp.when(StpUtil::isLogin).thenReturn(true);
-            stp.when(() -> StpUtil.hasRoleOr(any(String[].class))).thenReturn(true);
 
             assertTrue(interceptor.preHandle(request, response, new Object()));
-        }
-    }
-
-    @Test
-    @DisplayName("已登录但无管理角色返回 403")
-    void loggedInWithoutAdminRoleRejected() {
-        try (MockedStatic<StpUtil> stp = mockStatic(StpUtil.class)) {
-            stp.when(StpUtil::isLogin).thenReturn(true);
-            stp.when(() -> StpUtil.hasRoleOr(any(String[].class))).thenReturn(false);
-
-            BizException ex = assertThrows(BizException.class,
-                    () -> interceptor.preHandle(request, response, new Object()));
-            assertEquals(403, ex.getCode());
         }
     }
 

@@ -219,7 +219,7 @@ export const paths = {
     departTree: '/admin/departs/tree',
     departById: (id: string | number) => `/admin/departs/${enc(id)}`,
     userDeparts: (id: string | number) => `/admin/users/${enc(id)}/departs`,
-    menuTree: '/admin/menus/tree'
+    menuTree: '/menus/tree'
   }
 }
 

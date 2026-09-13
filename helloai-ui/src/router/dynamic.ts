@@ -1,6 +1,6 @@
 // ============================================================
 // 动态路由构建（BASE-1.3）：权限 = 路由可达性
-// 菜单树接口（/api/admin/menus/tree）下发用户可见菜单，
+// 菜单树接口（/api/menus/tree）下发用户可见菜单，
 // 本模块据此生成 Vue Router 路由并 addRoute 到 MainLayout 根下。
 // - 叶子菜单（有 component）→ 独立路由（path 绝对，与原静态路由一致）
 // - 聚合父菜单（无 component，如 settings）→ redirect 到第一个可见子

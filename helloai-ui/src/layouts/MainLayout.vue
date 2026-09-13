@@ -189,7 +189,7 @@ const passwordDialogVisible = ref(false)
 const isAdmin = auth.isAdmin
 const userName = computed(() => auth.displayName)
 
-// G-012 菜单树 DB 化：菜单结构来自 /api/admin/menus/tree（服务端按权限码过滤 + parent 挂接），
+// G-012 菜单树 DB 化：菜单结构来自 /api/menus/tree（服务端按权限码过滤 + parent 挂接），
 // 不再由前端路由硬编码菜单结构；非 admin（外部 Agent）无菜单。
 const menus = ref<SysPermission[]>([])
 /** keep-alive 缓存白名单（BASE-3.1）：keepAlive=1 菜单的组件名（SFC 文件名） */

@@ -2419,31 +2419,36 @@ Secret
 
 # 43. 权限规范
 
+> **口径修订（2026-09-13，BASE-4.4）**：本节原口径为「`/api/admin/**` 必须经过 Admin 授权，
+> 禁止仅因为『用户已经登录』就允许 Admin API」。随角色体系落地（NORMAL_USER / GUEST），
+> 该口径与事实冲突——业务只读页面（Agent 管理 / Team 组合 / Browser 会话 / 质量看板 /
+> 打卡上班）的数据接口仍位于 `/api/admin/**` 前缀下，角色闸会在动作码之前把非管理角色全部拦成 403。
+> 现修订为：**授权一律由动作级权限码承担**，路径前缀只承担「平台账号 vs 外部 Agent」的通道区分。
+
 认证与授权分离：
 
 ```text
-Authentication
+Authentication（你是谁）      AuthInterceptor：平台账号 Sa-Token 会话 / 外部 Agent API Key
     ↓
-Authorization
+Authorization（你能干什么）   @SaCheckPermission 动作级权限码 + Sa-Token StpInterface
 ```
 
-`/api/admin/**`：
+核心规则：
 
 ```text
-必须经过 Admin 授权。
+接口授权一律以「动作级权限码」为准，
+不以路径前缀或单一角色代替授权判定。
 ```
 
-禁止仅因为：
-
-```text
-用户已经登录
-```
-
-就允许：
-
-```text
-Admin API
-```
+- **管理面路径**（`/api/admin/**`）：由 `AdminOnlyInterceptor` 限定为**平台账号**
+  （拒绝外部 Agent 的 API Key，其不进 Sa-Token 会话体系）；角色与动作差异一律由权限码承担。
+- **禁止**「路径在前缀下即视为已授权」：新增管理面接口必须声明动作级权限码；
+  读接口若确认为「登录即可读」，须在专项目档中显式登记为已定口径（不允许静默无授权）。
+- **外部 Agent 通道**（`/api/mcp/**` 等）不得加动作码注解（见《基础架构调整实施计划》§10 红线）。
+- **唯一事实源**：`sys_permission` + `sys_role_permission` + `sys_user_role`
+  （经 Sa-Token `StpInterface` 读取），不建第二套权限体系、不做权限双写。
+- **不依赖角色判定的例外**：`/api/admin/**` 的「是否为管理角色」不再由拦截器判定，
+  由该接口自身的动作码决定（如 `user:view` / `llm-provider:view`）。
 
 ***
 
