@@ -241,47 +241,44 @@
                   </el-button>
                   <template #dropdown>
                     <el-dropdown-menu>
+                      <!-- 注意：下拉项不能用 v-auth。ElDropdownItem 根节点是 el-roving-focus-item 的
+                           slot（fragment，非单一元素），Vue 会忽略其上的自定义指令，v-auth 静默失效。
+                           故一律用 v-if + hasPermission 过滤。 -->
                       <el-dropdown-item
-                        v-if="row.status==='PENDING'"
-                        v-auth="'subtask:claim'"
+                        v-if="row.status==='PENDING' && auth.hasPermission('subtask:claim')"
                         command="claim"
                       >
                         认领
                       </el-dropdown-item>
                       <el-dropdown-item
-                        v-if="row.status==='IN_PROGRESS'"
-                        v-auth="'subtask:pause'"
+                        v-if="row.status==='IN_PROGRESS' && auth.hasPermission('subtask:pause')"
                         command="pause"
                       >
                         暂停
                       </el-dropdown-item>
                       <el-dropdown-item
-                        v-if="row.status==='PAUSED'"
-                        v-auth="'subtask:resume'"
+                        v-if="row.status==='PAUSED' && auth.hasPermission('subtask:resume')"
                         command="resume"
                       >
                         恢复
                       </el-dropdown-item>
                       <!-- 暂停后换人：PAUSED 是人工处置窗口（恢复/换人二选一），后端先自动恢复再标 BLOCKED 进重调度链 -->
                       <el-dropdown-item
-                        v-if="row.status==='PAUSED'"
-                        v-auth="'subtask:reassign'"
+                        v-if="row.status==='PAUSED' && auth.hasPermission('subtask:reassign')"
                         command="reassign"
                       >
                         <span class="dropdown-danger">换人</span>
                       </el-dropdown-item>
                       <!-- V25 死信人工兜底：重新指派给指定 Agent（DEAD_LETTER → ASSIGNED） -->
                       <el-dropdown-item
-                        v-if="row.status==='DEAD_LETTER'"
-                        v-auth="'subtask:redispatch'"
+                        v-if="row.status==='DEAD_LETTER' && auth.hasPermission('subtask:redispatch')"
                         command="redispatch"
                       >
                         <span class="dropdown-danger">重新指派</span>
                       </el-dropdown-item>
                       <!-- BLOCKED 阻塞子任务：重新调度（reset → PENDING 后交调度链） -->
                       <el-dropdown-item
-                        v-if="row.status==='BLOCKED'"
-                        v-auth="'subtask:reassign'"
+                        v-if="row.status==='BLOCKED' && auth.hasPermission('subtask:reassign')"
                         command="reassign"
                       >
                         重新调度
@@ -450,10 +447,12 @@ import { fmtTime } from '@/utils/tableConfig'
 import { orderByDependency } from '@/utils/subTaskDag'
 import { queryString } from '@/utils/queryParam'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { useAuthStore } from '@/stores/auth'
 import type { Task, SubTask, SubTaskStatus, TaskIteration } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
 const list = ref<SubTask[]>([])
 const total = ref(0)
 const currentPage = ref(1)
@@ -691,10 +690,14 @@ async function doReassign() {
 }
 
 // ── 更多下拉：状态操作统一分派（认领/暂停/恢复/换人/重新指派/重新调度） ──
-// 仅当当前状态存在可执行操作时展示「更多」（无操作状态只留「详情」）
+// 仅当当前状态存在可执行操作时展示「更多」（无操作状态只留「详情」）；
+// 下拉内每一项都是写动作（模板里各自 v-auth 门控），若角色一个动作码都没有
+// （如 GUEST），再展示「更多」只会得到一个点开为空的下拉，故一并按权限收口。
 const MORE_ACTION_STATUSES: readonly SubTask['status'][] = ['PENDING', 'IN_PROGRESS', 'PAUSED', 'BLOCKED', 'DEAD_LETTER']
+const MORE_ACTION_CODES = ['subtask:claim', 'subtask:pause', 'subtask:resume', 'subtask:reassign', 'subtask:redispatch'] as const
 function hasMoreActions(row: SubTask) {
-  return MORE_ACTION_STATUSES.includes(row.status)
+  if (!MORE_ACTION_STATUSES.includes(row.status)) return false
+  return MORE_ACTION_CODES.some(code => auth.hasPermission(code))
 }
 
 function handleCommand(command: string, row: SubTask) {

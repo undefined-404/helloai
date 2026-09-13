@@ -220,9 +220,12 @@
 
     <!-- 版本三第四轮修正：概览统计卡已移除（数字与下方各卡头计数重复）；任务摘要已并入头部卡 -->
 
-    <!-- §6.52 人工介入：返工达上限 / 降级能力不匹配时，用户自主选择 agent 驳回改派或直接通过 -->
+    <!-- §6.52 人工介入：返工达上限 / 降级能力不匹配时，用户自主选择 agent 驳回改派或直接通过。
+         整卡按 review:add 门控：只读角色（GUEST）既不能驳回改派也不能人工通过，
+         保留卡片只会留下一个无法提交的选择器，故整卡不展示。 -->
     <el-card
       v-if="item && needsManualIntervention"
+      v-auth="'review:add'"
       class="manual-card full-row"
     >
       <template #header>

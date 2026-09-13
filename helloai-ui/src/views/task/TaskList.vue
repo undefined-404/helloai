@@ -114,6 +114,7 @@
               </el-button>
               <el-button
                 v-else-if="row.status === 'PLANNING'"
+                v-auth="['task:confirm-plan', 'task:reject-plan']"
                 size="small"
                 type="warning"
                 @click="openPlanReview(row)"
@@ -148,8 +149,12 @@
                 </el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
+                    <!-- 注意：这里不能用 v-auth。ElDropdownItem 根节点是 el-roving-focus-item 的
+                         slot（fragment，非单一元素），Vue 会忽略挂在它上面的自定义指令，
+                         v-auth 会静默失效（实测游客仍能看到编辑/重新发布/停止/删除）。
+                         故下拉项一律用 v-if + hasPermission 过滤。 -->
                     <el-dropdown-item
-                      v-auth="'task:edit'"
+                      v-if="auth.hasPermission('task:edit')"
                       command="edit"
                       :disabled="row.status === 'DONE'"
                     >
@@ -159,20 +164,19 @@
                       事件流
                     </el-dropdown-item>
                     <el-dropdown-item
-                      v-auth="'task:republish'"
+                      v-if="auth.hasPermission('task:republish')"
                       command="republish"
                     >
                       重新发布
                     </el-dropdown-item>
                     <el-dropdown-item
-                      v-if="row.status !== 'DONE' && row.status !== 'CANCELLED'"
-                      v-auth="'task:edit'"
+                      v-if="auth.hasPermission('task:edit') && row.status !== 'DONE' && row.status !== 'CANCELLED'"
                       command="stop"
                     >
                       停止
                     </el-dropdown-item>
                     <el-dropdown-item
-                      v-auth="'task:delete'"
+                      v-if="auth.hasPermission('task:delete')"
                       command="delete"
                       divided
                     >
@@ -301,9 +305,11 @@ import FinalReportDialog from './components/FinalReportDialog.vue'
 import TaskFormDialog from './components/TaskFormDialog.vue'
 import { TASK_STATUS_MAP } from '@/types'
 import type { Task, TaskStatus, LongId } from '@/types'
+import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
 const list = ref<any[]>([])
 const loading = ref(false)
 // 分页：前端按 pageSize 切片（任务量小，列表全量加载后再分页，避免每次翻页都重新拉接口）

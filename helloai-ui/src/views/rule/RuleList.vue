@@ -5,6 +5,7 @@
         <div class="card-header">
           <span>规则配置</span>
           <el-button
+            v-auth="'rule:add'"
             size="small"
             type="primary"
             @click="openCreate"
@@ -54,17 +55,26 @@
         </el-table-column>
         <el-table-column
           label="操作"
-          width="160"
+          width="220"
           fixed="right"
         >
           <template #default="{ row }">
             <el-button
+              v-auth="'rule:view'"
+              size="small"
+              @click="openView(row)"
+            >
+              查看
+            </el-button>
+            <el-button
+              v-auth="'rule:edit'"
               size="small"
               @click="openEdit(row)"
             >
               编辑
             </el-button>
             <el-button
+              v-auth="'rule:delete'"
               size="small"
               type="danger"
               @click="handleDelete(row)"
@@ -157,6 +167,40 @@
           </el-button>
         </template>
       </el-dialog>
+
+      <!-- 只读查看弹窗：GUEST 等只读角色唯一的规则内容入口 -->
+      <el-dialog
+        v-model="viewDialog"
+        title="查看规则"
+        width="650px"
+        top="5vh"
+        append-to-body
+      >
+        <el-form label-width="80px">
+          <el-form-item label="名称">
+            {{ viewRow?.name || '-' }}
+          </el-form-item>
+          <el-form-item label="类型">
+            {{ viewRow?.ruleType || '-' }}
+          </el-form-item>
+          <el-form-item label="优先级">
+            {{ viewRow?.priority ?? '-' }}
+          </el-form-item>
+          <el-form-item label="更新时间">
+            {{ fmtTime(viewRow?.updateTime) }}
+          </el-form-item>
+          <el-form-item label="内容">
+            <div class="rule-content">
+              {{ viewRow?.content || '-' }}
+            </div>
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="viewDialog=false">
+            关闭
+          </el-button>
+        </template>
+      </el-dialog>
     </el-card>
   </div>
 </template>
@@ -166,10 +210,13 @@ import { ref, onMounted, reactive } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ruleApi } from '@/api/rule'
 import { fmtTime } from '@/utils/tableConfig'
+import type { Rule } from '@/types'
 
 const list = ref<any[]>([])
 const loading = ref(false)
 const editDialog = ref(false)
+const viewDialog = ref(false)
+const viewRow = ref<Rule | null>(null)
 const saving = ref(false)
 const formRef = ref()
 const editing = reactive<Partial<any>>({})
@@ -187,6 +234,11 @@ function openEdit(row: any) {
   Object.assign(editing, row)
   Object.assign(editForm, { name: row.name, ruleType: row.ruleType, priority: row.priority, content: row.content })
   editDialog.value = true
+}
+// 只读查看：直接用列表行数据渲染，不再回查接口（列表已含全字段）
+function openView(row: Rule) {
+  viewRow.value = row
+  viewDialog.value = true
 }
 async function handleSave() {
   const valid = await formRef.value?.validate().catch(() => false)
@@ -208,4 +260,6 @@ onMounted(() => load())
 
 <style scoped>
 .page { max-width: var(--ha-content-width); }
+/* 查看弹窗：规则内容保留换行，超长内部滚动 */
+.rule-content { max-height: 50vh; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
 </style>

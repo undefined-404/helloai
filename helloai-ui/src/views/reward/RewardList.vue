@@ -6,6 +6,7 @@
           <span>积分流水</span>
           <div>
             <el-button
+              v-auth="'score:adjust'"
               size="small"
               type="primary"
               @click="adjustDialog=true"
