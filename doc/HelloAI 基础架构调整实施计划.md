@@ -191,7 +191,7 @@ Runtime / Capability / Provider）不做任何改造，本专项**不触碰**：
 | 批次三 | 扩展能力（路由渲染增强 / 部门 / 数据权限） | BASE-3.1 ~ BASE-3.3 | **已落地（2026-09-12，PASS）** |
 | 授权补充 | ADMIN 角色绑定部门管理权限 | BASE-3.2 授权补充 | **已落地（2026-09-12，PASS）** |
 | 收口 | 岗位能力移除 + 拆出独立「菜单管理」入口 | BASE-3.2 / BASE-2.2 收口 | **已落地（2026-09-12，PASS）** |
-| 批次四 | 认证收口 + 角色体系 + 全量接口授权化 | BASE-4.1 ~ BASE-4.5 | **部分落地（4.1 / 4.2 / 4.3+4.4 合并 已实施；4.5 待实施）** |
+| 批次四 | 认证收口 + 角色体系 + 全量接口授权化 | BASE-4.1 ~ BASE-4.5 | **已实施（4.1~4.5；4.5 E2E 待重启复验）** |
 
 > 三批次落地详情见 `doc/log/2026-09.md` 两段记录；
 > 验证基线：core 1437 用例 0 失败（V85 移除岗位 7 用例后）/ api 58 用例 0 失败 / UI type-check + build / Docker API 全链路 / 浏览器实测；
@@ -310,10 +310,11 @@ Runtime / Capability / Provider）不做任何改造，本专项**不触碰**：
 
 ## 9.3 任务明细
 
-> **落地进度（2026-09-13）**：BASE-4.1 **PASS**、BASE-4.2 **PASS**（V87 已应用；
-> core 1453 / api 58 / job 69 用例 0 失败；E2E 覆盖授权断言一致性、滑动续期、存量会话迁移、
-> 建号签发角色与 remark 落库）；BASE-4.3 ~ BASE-4.5 待实施。详见 `doc/log/2026-09.md`
-> 「批次四首批落地」段。
+> **落地进度（2026-09-13）**：BASE-4.1 ~ BASE-4.4 **PASS**（V87~V89 已应用；core 1453 / api 57 /
+> job 69 用例 0 失败；E2E 覆盖授权断言一致性、滑动续期、存量会话迁移、建号签发角色与 remark 落库、
+> 四角色差异）；**BASE-4.5 已实施**（管理员建号 `POST /api/admin/users` + 自助注册
+> `POST /api/auth/register` 受 `sys_config.auth.register.enabled` 门控，默认关闭 —— V90；
+> E2E 待重启复验）。详见 `doc/log/2026-09.md`「批次四首批落地」「批次四续」两段。
 
 ### BASE-4.1 认证收口到 Sa-Token 标准链路
 
@@ -442,6 +443,7 @@ SUPER_ADMIN 由 StpInterfaceImpl 返回 "*" 通配，自动覆盖全部新增码
 | **V87** | 身份模型收口：防御性补齐 `sys_user.role` → `sys_user_role`；`ALTER TABLE sys_user DROP COLUMN role` | DDL 不可逆（列删除）；补齐段幂等 |
 | **V88** | **权限码扩充**：管理面动作码 32 个（id 49~80）+ 业务面动作码 39 个（id 81~119，含 `workflow-instance:add`）；粗粒度码解绑 + 软删（`agent:manage` / `task:assign` / `review:approve` / `system:manage` / `user:manage` / `role:manage`） | 按 `code` 反向 DELETE 可逆 |
 | **V89** | **角色扩充 + 权限绑定**：新增 NORMAL_USER（id=3）/ GUEST（id=4）；ADMIN 绑运维管理面 + 业务写码（57 码）；NORMAL_USER 绑业务菜单 + 业务写码（55 码）；GUEST 仅绑 16 个只读菜单码（零写码） | 按 `code` 反向 DELETE 可逆 |
+| **V90** | 建号与注册开关：`sys_config.auth.register.enabled` 种子（**默认 `'0'` 关闭**；管理员经 `PUT /api/admin/config/updateByKey/{key}` 开启） | 按 key 反向 DELETE 可逆 |
 
 > **顺序修正（2026-09-13）**：原计划为 V88=角色、V89=权限码；但角色绑定依赖权限码先落库
 > （`sys_role_permission.permission_id` 取自 `sys_permission`），**顺序必须颠倒**：
@@ -507,6 +509,7 @@ SUPER_ADMIN 由 StpInterfaceImpl 返回 "*" 通配，自动覆盖全部新增码
 | 3 | **`sys_permission` 存在历史测试残留** | 6 行雪藏 id（2098…）测试数据（`DOCKER:TEST` / `PERM:PROBE` / `UI:TEST` / `TMP:MENU:VERIFY*`），均 `deleted=1`；与 V88 的 id 49~119 **无数字冲突** | 建议清理，非本批范围 |
 | 4 | **前端失配 6 处**（子代理如实上报） | ① `SubTaskDetail.vue` 无 subtask 状态按钮，其「人工介入」2 按钮实调 `reviewApi.create` → 按**实际生效码** `review:add` 标注；② `ReviewList.vue` 无提交按钮；③ `QualityDashboard.vue` 无重算/派发按钮（后端有码、前端无落点）；④ `agent:key` 落点在 `AgentDetail.vue`；⑤ `SubTaskList.vue` 无独立「新建/编辑草稿/开始/提交/完成/返工/阻塞」按钮（「快速派发」是唯一新建入口 → `subtask:add`）；⑥ `conversation:mode` 无前端落点 | 按实际生效码标注；无落点的码保留供后端使用 |
 | 5 | **补漏 4 处**（父任务收口） | `AgentDetail.vue` 操作区（`agent:edit` ×2 / `agent:key` / `agent:delete`）、`TaskList.vue` 停止（`task:edit`）、`TeamList.vue` 发布（`team:edit`）、`TaskIterationView.vue` 回填历史迭代（`task:report`） | 已补 v-auth |
+| 6 | **非法角色码返回 HTTP 500（应为 400）** | BASE-4.5 E2E 实测：`POST /api/admin/users` 传不存在 roleCode → `{"code":500,"msg":"角色码不存在: …"}`。行为正确（fail-close、未落库），仅 HTTP 语义不当（`BizException` 单参构造默认 code=500） | 登记为后续小项（1 行改动：`BizException(400, …)`）；未在本批改动，避免引入未复验的行为变更 |
 
 ### 9.9.3 方案 B：管理面路径限定放宽（2026-09-13，经用户确认）
 
