@@ -60,6 +60,12 @@ const router = createRouter({
 let routesBuilt = false
 let builtForType: 'admin' | 'agent' | null = null
 let builtForToken = ''
+/**
+ * 本次页面会话内是否已因「菜单漂移」强制重建过动态路由。
+ * 服务端菜单/权限变更后（如新增菜单），同一 SPA 会话的已构建路由不会自动包含新路径，
+ * 点击新菜单会落到兜底 404；此标志保证「命中兜底时重建一次」且不产生重入死循环。
+ */
+let rebuiltForMenuDrift = false
 
 async function ensureDynamicRoutes(auth: ReturnType<typeof useAuthStore>): Promise<boolean> {
   const type: 'admin' | 'agent' | null = !!auth.adminToken ? 'admin' : !!auth.agentKey ? 'agent' : null
@@ -101,6 +107,8 @@ router.beforeEach(async (to) => {
 
   // 已登录：确保动态路由就绪（首次进入 / 登录类型变化时构建）
   if (!routesBuilt || builtForType !== (!!auth.adminToken ? 'admin' : 'agent')) {
+    // 登录 / 登出 / 切换账号触发的重建 → 重置漂移自愈标记，让新会话重新获得一次自愈机会
+    rebuiltForMenuDrift = false
     try {
       const ok = await ensureDynamicRoutes(auth)
       if (ok) {
@@ -126,6 +134,23 @@ router.beforeEach(async (to) => {
         // 明确提示加载失败（区别于真正的 404 无权限），用户可刷新重试
         ElMessage.error('菜单加载失败，请刷新页面重试')
       }
+    }
+  }
+
+  // 菜单漂移自愈：命中兜底路由（路径未注册）且本会话尚未自愈过 → 服务端菜单可能已变更
+  // （如新增菜单、调整权限），强制重建动态路由一次并重入；重建后仍兜底则放行（真正的无权限/不存在）。
+  if (to.name === 'not-found' && !rebuiltForMenuDrift) {
+    rebuiltForMenuDrift = true
+    routesBuilt = false
+    builtForType = null
+    builtForToken = ''
+    try {
+      const ok = await ensureDynamicRoutes(auth)
+      if (ok) {
+        return { path: to.path, query: to.query, hash: to.hash, replace: true }
+      }
+    } catch (e) {
+      console.error('[router] 菜单漂移自愈重建失败', e)
     }
   }
   return true
