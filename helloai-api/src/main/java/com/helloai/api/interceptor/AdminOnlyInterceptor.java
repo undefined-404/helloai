@@ -2,6 +2,7 @@ package com.helloai.api.interceptor;
 
 import cn.dev33.satoken.stp.StpUtil;
 import com.helloai.common.base.BizException;
+import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.web.servlet.HandlerInterceptor;
@@ -28,6 +29,11 @@ public class AdminOnlyInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+        // 异步接口（SseEmitter 等）的 ASYNC 二次分派：与 AuthInterceptor 同模式直接放行——
+        // 异步线程无 Sa-Token ThreadLocal 上下文，且 REQUEST 阶段已鉴权（幂等）。
+        if (request.getDispatcherType() == DispatcherType.ASYNC) {
+            return true;
+        }
         // 仅判定「平台账号身份」：Agent（API Key）不得访问管理面路径。
         // 细粒度授权由 @SaCheckPermission 动作码承担，不在此判角色。
         if (!StpUtil.isLogin()) {

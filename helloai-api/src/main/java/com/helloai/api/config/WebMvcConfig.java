@@ -7,6 +7,9 @@ import com.helloai.api.interceptor.RequestLogInterceptor;
 import com.helloai.core.agent.port.AgentAuthPort;
 import com.helloai.core.system.mapper.RequestLogMapper;
 import com.helloai.core.system.service.AuthService;
+import jakarta.servlet.DispatcherType;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
@@ -57,7 +60,18 @@ public class WebMvcConfig implements WebMvcConfigurer {
         // Sa-Token 注解鉴权（@SaCheckPermission / @SaCheckRole，BASE-1.6 动作级权限码落地）
         // 仅对带鉴权注解的方法生效，不承担认证守门（守门由上面的 AuthInterceptor 完成）；
         // Agent / 公开白名单通道的方法不得加鉴权注解（§10 红线），因而天然不受影响。
-        registry.addInterceptor(new SaInterceptor())
-                .addPathPatterns("/api/**");
+        // ASYNC 二次分派（SseEmitter 等异步接口）直接放行：同一请求 REQUEST 阶段已完成注解鉴权，
+        // 异步线程无 Sa-Token ThreadLocal 上下文（1.44 Context Filter 仅注册 REQUEST），
+        // 与 AuthInterceptor / AdminOnlyInterceptor 同模式（语义 = 官方 v1.46 覆盖 ASYNC）。
+        registry.addInterceptor(new SaInterceptor() {
+            @Override
+            public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler)
+                    throws Exception {
+                if (request.getDispatcherType() == DispatcherType.ASYNC) {
+                    return true;
+                }
+                return super.preHandle(request, response, handler);
+            }
+        }).addPathPatterns("/api/**");
     }
 }

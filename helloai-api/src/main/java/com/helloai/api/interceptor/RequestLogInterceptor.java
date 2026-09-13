@@ -2,6 +2,7 @@ package com.helloai.api.interceptor;
 
 import com.helloai.core.system.entity.RequestLog;
 import com.helloai.core.system.mapper.RequestLogMapper;
+import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.MDC;
@@ -29,6 +30,11 @@ public class RequestLogInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+        // 异步接口（SseEmitter 等）的 ASYNC 二次分派：不重复 put MDC / 覆盖 START_TIME——
+        // traceId 与计时沿用 REQUEST 阶段值，afterCompletion 在 ASYNC 结束统一落一条日志。
+        if (request.getDispatcherType() == DispatcherType.ASYNC) {
+            return true;
+        }
         String traceId = request.getHeader("X-Trace-Id");
         if (traceId == null || traceId.isBlank()) {
             traceId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);

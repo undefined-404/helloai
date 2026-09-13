@@ -4,6 +4,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.port.AgentAuthPort;
 import com.helloai.core.system.service.AuthService;
+import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -21,6 +22,14 @@ public class AuthInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+        // 异步接口（SseEmitter 等）会触发容器 ASYNC 二次分派：同一请求的 REQUEST 阶段已完成鉴权，
+        // 而异步线程没有 Sa-Token ThreadLocal 上下文（Sa-Token 1.44 Context Filter 仅注册 REQUEST，
+        // 官方 v1.46 才补 ASYNC），此处直接放行，避免 SaTokenContextException 500 刷屏。
+        // 语义 = 官方 v1.46「Context Filter 覆盖 ASYNC」：异步分派不再重复鉴权。
+        if (request.getDispatcherType() == DispatcherType.ASYNC) {
+            return true;
+        }
+
         // ① 平台账号通道：Sa-Token 会话（token 走 X-Admin-Token 头）
         //    守门走标准 StpUtil.checkLogin，方能使 active-timeout 校验与滑动续期生效
         String adminToken = request.getHeader("X-Admin-Token");

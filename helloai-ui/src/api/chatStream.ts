@@ -33,7 +33,12 @@ export async function streamSendConversation(
   signal?: AbortSignal
 ): Promise<void> {
   const auth = useAuthStore()
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    // 显式声明 SSE 媒体类型：①语义正确（fetch 默认 */* 会被服务端按 produces 兜底协商）；
+    // ②服务端 GlobalExceptionHandler 据此识别 SSE 场景，异常时写 event:error 帧而非 JSON R 体
+    Accept: 'text/event-stream'
+  }
   if (auth.adminToken) {
     headers['X-Admin-Token'] = auth.adminToken
   }
