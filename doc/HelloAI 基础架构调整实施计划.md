@@ -555,7 +555,7 @@ SUPER_ADMIN 由 StpInterfaceImpl 返回 "*" 通配，自动覆盖全部新增码
 | 5 | 补漏 4 处 v-auth | `AgentDetail.vue` 操作区、`TaskList.vue` 停止、`TeamList.vue` 发布、`TaskIterationView.vue` 回填历史迭代 | **已完成** |
 | 6 | 非法 roleCode 返回 HTTP 500（应为 400） | `SysUserServiceImpl.create()` 改为 `throw new BizException(400, "角色码不存在: …")`（roleCode 属客户端输入）；`SysUserServiceImplTest` 补 `assertEquals(400, ex.getCode())` | **已清理** |
 
-**验证**：全 reactor 编译 + 单测全绿（api 57 例）；V91 / V92 事务内干跑通过（`DELETE 6` / `INSERT 0 1`，ROLLBACK 无副作用）。**E2E 待重启复验**（V91/V92 需启动时由 Flyway 应用）：预期 SUPER_ADMIN 菜单树出现「系统设置 → 平台配置」且页面可达；ADMIN 菜单树不变（仅「部门管理」）；`/api/admin/users` 传非法 roleCode 返回 HTTP 400。
+**验证（PASS，2026-09-13 重启复验）**：全 reactor 编译 + 单测全绿（api 57 例）；V91 / V92 事务内干跑通过（`DELETE 6` / `INSERT 0 1`，ROLLBACK 无副作用）；**E2E 实测**——Flyway V91/V92 `success=t`；`sys_permission` 测试残留 **0**；`platform-config:view` 就位（`id=120` / `parent_id=17` / `path=/system/platform` / `component=Settings` / `sort=22`）；**SUPER_ADMIN 菜单树 24 → 25 节点且含该码 → Settings.vue 恢复可达**；**ADMIN 菜单树 20 节点不变**（无 `platform-config:view`，保留 `settings:view` + `depart:view`）→ #1 语义自洽（持父菜单但不持配置码，且因权限码不匹配而不可见，不再依赖「页面不可达」兜底）；NORMAL_USER / GUEST 未绑定新码（`role3/role4_bindings=0`）→ 结构性不受影响；非法 roleCode → **HTTP 400**；顺带复验 4.5 建号接口（`roleCode=ADMIN` 建号 200）。测试数据与会话已清理（零残留）。
 
 
 # 10. 红线与约束
