@@ -38,6 +38,7 @@ import reactor.core.publisher.Flux;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -76,6 +77,12 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
 
     /** CHAT 自由对话轮数硬上限（独立于 CLARIFY 的 MAX_ROUNDS；达上限引导转方案或新会话）。 */
     private static final int MAX_CHAT_ROUNDS = 50;
+
+    /** 确认卡（intent=clarify）流式播放分片大小（字符/片）：question 按此切片发射 token 帧驱动打字机。 */
+    private static final int CLARIFY_PLAY_CHUNK_SIZE = 5;
+
+    /** 确认卡流式播放片间延时（毫秒）：模拟逐字节奏，避免瞬间整段出现。 */
+    private static final long CLARIFY_PLAY_DELAY_MS = 12L;
 
     /** 确认卡提交轮次搜索词回退时的短句阈值（<N 字视为无检索语义的意图句，仅影响搜索词质量）。 */
     private static final int SHORT_INTENT_LEN = 8;
@@ -377,37 +384,40 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
             throw new BizException("消息不能为空");
         }
         RequirementConversation conversation = requireActive(conversationId);
-        // S1 支持范围防御（与前端分流约定一致）：仅 CHAT 模式普通消息走流式通道
+        // 斜杠命令（/planner /task）暂不支持流式，保持普通发送（结构化轮次前端走同步）
         if (isTaskCommand(trimmed) || isPlannerCommand(trimmed)) {
             throw new BizException("斜杠命令暂不支持流式，请使用普通发送");
-        }
-        if (isClarifyMode(conversation)) {
-            throw new BizException("方案澄清模式暂不支持流式，请切回自由对话或使用普通发送");
         }
         if (isChatMode(conversation) && Boolean.TRUE.equals(conversation.getPendingClarifyConfirm())) {
             throw new BizException("存在待确认卡片，请使用普通发送回答确认卡");
         }
         int rounds = conversation.getRoundCount() != null ? conversation.getRoundCount() : 0;
         if (rounds >= MAX_CHAT_ROUNDS) {
-            throw new BizException("自由对话轮数已达上限 " + MAX_CHAT_ROUNDS
+            throw new BizException("对话轮数已达上限 " + MAX_CHAT_ROUNDS
                     + "，可输入 /planner 转为方案模式，或新建会话");
         }
         String userPayload = replyParser.buildSelectionPayload(selections);
         messageService.addMessage(conversationId, ROLE_USER, trimmed, userPayload);
         conversation.setRoundCount(rounds + 1);
         conversationService.updateById(conversation);
-        log.info("流式对话轮开始: conversationId={}, round={}", conversationId, rounds + 1);
+        log.info("流式对话轮开始: conversationId={}, round={}, mode={}",
+                conversationId, rounds + 1, conversation.getMode());
 
-        // 前置决策 + 三态搜索（与 runRoundCore 完全同语义，S1 不流式）
+        // CLARIFY 模式：绕过意图决策，规则搜索后真流式主回复（结构化 JSON 正文流式展示）
+        if (isClarifyMode(conversation)) {
+            return runClarifyStream(conversation, trimmed, userPayload);
+        }
+
+        // CHAT 模式：联合决策（intent + 澄清问题 + 搜索决策）
         RoundDecision roundDecision = makeRoundDecision(conversation, trimmed);
         if (roundDecision.decision().isClarify()) {
-            applyClarifyDecision(conversation, roundDecision.decision());
-            return Flux.just(ChatStreamEvent.done());
+            // 确认卡流式播放：question 分片打字机 → 落库确认卡 → done（前端 done 后收敛为卡片）
+            return playClarifyQuestion(conversation, roundDecision.decision());
         }
         WebSearchOutcome webSearchOutcome = resolveChatSearchOutcome(conversation, trimmed, userPayload,
                 roundDecision.decision(), roundDecision.degraded());
 
-        // 主回复 prompt 构造（与 runLlmRound CHAT 分支同构：流式仅 CHAT 模式，固定 CHAT 模板）
+        // 主回复 prompt 构造（与 runLlmRound CHAT 分支同构：固定 CHAT 模板）
         String webSearchContext = webSearchOutcome != null ? webSearchOutcome.toContextText() : "";
         Agent planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
         AgentTask agentTask = AgentTask.builder()
@@ -427,6 +437,70 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                 .concatWith(Flux.defer(() -> {
                     persistChatOutcome(conversation, buffer.toString(), webSearchOutcome);
                     log.info("流式对话轮完成并落库: conversationId={}, round={}", conversationId, rounds + 1);
+                    return Flux.just(ChatStreamEvent.done());
+                }));
+    }
+
+    /**
+     * CLARIFY 模式流式主回复：与同步 {@link #runClarifySearchRound} 同语义（绕过决策、
+     * 开关开启则规则搜索），仅 LLM 调用走 {@code executeStream} 增量流——token 转发给前端
+     * 打字机展示，完整 output 收集后按 {@link #persistClarifyOutcome} 落库（追问卡/终稿）→ done。
+     */
+    private Flux<ChatStreamEvent> runClarifyStream(RequirementConversation conversation,
+                                                   String userMessage, String userPayload) {
+        Long conversationId = conversation.getId();
+        WebSearchOutcome webSearchOutcome;
+        if (isWebSearchEnabled(conversation)) {
+            webSearchOutcome = webSearchOrchestrator.doWebSearch(
+                    resolveSearchSource(conversationId, userMessage, userPayload));
+        } else {
+            webSearchOutcome = null;
+        }
+        String webSearchContext = webSearchOutcome != null ? webSearchOutcome.toContextText() : "";
+        Agent planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
+        String prompt = renderPrompt(conversationId, webSearchContext, PROMPT_TEMPLATE_PATH);
+        AgentTask agentTask = AgentTask.builder()
+                .systemPrompt("")
+                .userPrompt(prompt)
+                .context(Map.of("conversationId", conversationId, "scene", "requirement_clarify"))
+                .requiredCapabilities(Map.of())
+                .build();
+        StringBuilder buffer = new StringBuilder();
+        return platformAgentExecutionService.executeStream(planner, agentTask)
+                .map(token -> {
+                    buffer.append(token);
+                    return token;
+                })
+                .map(ChatStreamEvent::token)
+                .concatWith(Flux.defer(() -> {
+                    // 与 runLlmRound 同语义解析落库（描述守卫纠偏走同步 LLM，罕见路径可接受）
+                    ClarifyReply reply = replyParser.parseReply(buffer.toString());
+                    reply = applyDescriptionSectionGuard(conversation, planner, prompt,
+                            "requirement_clarify", reply);
+                    persistClarifyOutcome(conversation, reply, webSearchOutcome);
+                    log.info("流式澄清轮完成并落库: conversationId={}", conversationId);
+                    return Flux.just(ChatStreamEvent.done());
+                }));
+    }
+
+    /**
+     * 确认卡流式播放（intent=clarify）：question 文本按小块分片、小延时发射 token 帧，
+     * 打字机效果；播放完成后按 {@link #applyClarifyDecision} 落库确认卡并置待确认标记 → done。
+     * question 由联合决策 LLM 整段产出，此处为体验层播放（非重复生成），分片延时仅驱动 UI。
+     */
+    private Flux<ChatStreamEvent> playClarifyQuestion(RequirementConversation conversation,
+                                                      ChatRoundDecisionParser.ChatRoundDecision decision) {
+        String question = decision.clarificationQuestion();
+        List<String> chunks = new ArrayList<>();
+        for (int i = 0; i < question.length(); i += CLARIFY_PLAY_CHUNK_SIZE) {
+            chunks.add(question.substring(i, Math.min(question.length(), i + CLARIFY_PLAY_CHUNK_SIZE)));
+        }
+        return Flux.fromIterable(chunks)
+                .delayElements(Duration.ofMillis(CLARIFY_PLAY_DELAY_MS))
+                .map(ChatStreamEvent::token)
+                .concatWith(Flux.defer(() -> {
+                    applyClarifyDecision(conversation, decision);
+                    log.info("确认卡播放完成并落库: conversationId={}", conversation.getId());
                     return Flux.just(ChatStreamEvent.done());
                 }));
     }
@@ -1234,6 +1308,22 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         // P1-3：description 四小节不全 → 同轮纠偏重试一次（fail-open，不阻断终稿落库）
         reply = applyDescriptionSectionGuard(conversation, planner, prompt,
                 "requirement_clarify", reply);
+        persistClarifyOutcome(conversation, reply, webSearchOutcome);
+        return new ClarifyConversationDetail(conversation,
+                messageService.listByConversation(conversationId));
+    }
+
+    /**
+     * CLARIFY 模式主回复落库（同步 {@link #runLlmRound} 与流式 {@link #runClarifyStream} 共用）：
+     * 解析后的 reply 按类型落库——final 终稿（标题/描述/需求包定点写）或 question 追问卡。
+     *
+     * @param conversation 会话实体（final 分支会就地 set 终稿字段供视图展示，定点写走 Mapper）
+     * @param reply        已解析并过描述守卫的澄清回复
+     * @param webSearchOutcome 本轮联网搜索归一化记录（未搜索/重试/切换轮传 null）
+     */
+    private void persistClarifyOutcome(RequirementConversation conversation, ClarifyReply reply,
+                                       WebSearchOutcome webSearchOutcome) {
+        Long conversationId = conversation.getId();
         if ("final".equals(reply.getType())) {
             String note = reply.getMessage() != null && !reply.getMessage().isBlank()
                     ? reply.getMessage() : "已生成终稿";
@@ -1258,8 +1348,6 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
             messageService.addMessage(conversationId, ROLE_ASSISTANT, replyParser.composeAssistantContent(reply),
                     replyParser.buildQuestionPayload(reply, webSearchOutcome));
         }
-        return new ClarifyConversationDetail(conversation,
-                messageService.listByConversation(conversationId));
     }
 
     /**

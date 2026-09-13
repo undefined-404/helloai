@@ -943,9 +943,10 @@ async function handleSend() {
   scrollToBottom()
   try {
     const plannerId = selectedPlanner.value === '__auto__' ? null : (selectedPlanner.value || null)
-    // S1 流式分流：已有 CHAT 会话的普通消息走 SSE 流式（token 增量渲染 + done 后收敛）；
-    // 新会话（create）/ CLARIFY 模式老会话（同步 send）/ 结构化卡提交（handleStructuredSubmit）保持同步链路
-    if (activeId.value != null && isChatMode.value) {
+    // S1 流式分流：已有会话（CHAT 自由对话 / CLARIFY 方案澄清老会话）普通消息走 SSE 流式
+    // （token 增量渲染 + done 后收敛卡片/终稿）；新会话（create）/ 斜杠命令 /
+    // 结构化卡提交（handleStructuredSubmit）保持同步链路
+    if (activeId.value != null) {
       await streamSendActiveMessage(activeId.value, text)
       return
     }

@@ -61,18 +61,23 @@ progress 字段是你对"需求已澄清程度"的 0~100 自评（按上面六�
 
 ## 输出格式（严格遵守）
 
-只输出一个 JSON 对象，不要输出任何解释、前后缀或 Markdown 代码块标记。三种形态三选一：
+先输出给用户看的 1~3 句自然语言说明（追问引导语 / 终稿要点说明，作为流式展示正文；必须与下方 JSON 对象的 `message` 字段语义一致），换行后用 Markdown json 代码块输出结构化对象（除正文与 json 块外不要输出任何其他文字）。三种形态三选一：
 
 结构化追问（信息不足且可枚举选项时，优先使用）：
 
+```json
 {"type": "question", "mode": "structured", "progress": 40, "message": "本轮追问的引导语（一两句话说明为什么问这些）", "questions": [{"id": "q1", "text": "问题文本", "multiple": false, "allowCustom": true, "customPlaceholder": "其他情况请补充说明", "options": [{"label": "选项的通俗描述", "value": "opt_a", "recommended": true}, {"label": "另一个选项", "value": "opt_b", "recommended": false}]}]}
+```
 
 自由文本追问（问题无法枚举选项时）：
 
+```json
 {"type": "question", "mode": "freeform", "progress": 40, "message": "追问内容（每轮最多 3 个问题，可用换行分隔）"}
+```
 
 终稿（信息足够时）：
 
+```json
 {"type": "final", "progress": 100, "title": "任务标题（50 字以内）",
  "message": "给用户的终稿说明（简述你整理出的需求要点）",
  "description": "结构化需求描述",
@@ -84,6 +89,7 @@ progress 字段是你对"需求已澄清程度"的 0~100 自评（按上面六�
     "assumptions": ["推断项（先写进这里，description 同步标注（推断））"],
     "openQuestions": ["待确认缺口"]
   }}
+```
 
 结构化追问约束：
 

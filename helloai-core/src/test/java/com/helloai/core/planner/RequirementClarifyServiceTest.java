@@ -2398,19 +2398,33 @@ class RequirementClarifyServiceTest {
     }
 
     @Test
-    @DisplayName("流式轮拒绝：CLARIFY 模式消息不被消费，error 事件带原因")
-    void streamRound_rejectedWhenClarifyMode() {
+    @DisplayName("流式轮 CLARIFY 模式：真流式主回复 token 增量 + 追问卡落库 + done")
+    void streamRound_clarifyModeStreamsMainReply() {
         RequirementConversation conversation = activeConversation(); // mode=null → CLARIFY
         when(conversationService.getById(CONV_ID)).thenReturn(conversation);
+        when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
+        when(messageService.listByConversation(CONV_ID))
+                .thenReturn(List.of(message("user", "你好", 1)));
+        // CLARIFY 模式绕过意图决策，主回复真流式：正文分片 + 末尾 JSON 块（与 prompt 输出格式一致）
+        when(platformAgentExecutionService.executeStream(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(Flux.just("先确认一下：", "目标规模是？",
+                        " {\"type\":\"question\",\"mode\":\"freeform\",\"progress\":40,\"message\":\"先确认一下：目标规模是？\"}"));
 
         List<RequirementClarifyService.ChatStreamEvent> events =
                 clarifyService.streamRound(CONV_ID, "你好", null).collectList().block();
 
-        assertThat(events).hasSize(1);
-        assertThat(events.get(0).type())
-                .isEqualTo(RequirementClarifyService.ChatStreamEvent.Type.ERROR);
-        assertThat(events.get(0).data()).contains("方案澄清模式暂不支持流式");
-        verify(messageService, never()).addMessage(anyLong(), anyString(), anyString(), any());
+        assertThat(events).isNotNull();
+        assertThat(events.get(events.size() - 1).type())
+                .isEqualTo(RequirementClarifyService.ChatStreamEvent.Type.DONE);
+        String joined = events.stream()
+                .filter(e -> e.type() == RequirementClarifyService.ChatStreamEvent.Type.TOKEN)
+                .map(RequirementClarifyService.ChatStreamEvent::data)
+                .reduce("", String::concat);
+        // 完整 output 含正文与 JSON 块：流式逐段展示，done 后按结构落库
+        assertThat(joined).contains("先确认一下：目标规模是？");
+        // user 消息落库 + assistant 追问卡落库（persistClarifyOutcome question 分支）
+        verify(messageService).addMessage(CONV_ID, "user", "你好", null);
+        verify(messageService).addMessage(eq(CONV_ID), eq("assistant"), anyString(), anyString());
     }
 
     @Test
@@ -2436,8 +2450,8 @@ class RequirementClarifyServiceTest {
     }
 
     @Test
-    @DisplayName("流式轮决策=clarify：不流式主回复，落确认卡后直接 done")
-    void streamRound_doneWhenDecisionIsClarify() {
+    @DisplayName("流式轮决策=clarify：确认卡 question 流式播放 + 落库 + done（主回复流式零调用）")
+    void streamRound_playQuestionWhenDecisionIsClarify() {
         when(conversationService.getById(CONV_ID)).thenReturn(streamChatConversation());
         when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
         when(messageService.listByConversation(CONV_ID))
@@ -2451,9 +2465,15 @@ class RequirementClarifyServiceTest {
         List<RequirementClarifyService.ChatStreamEvent> events =
                 clarifyService.streamRound(CONV_ID, "你好", null).collectList().block();
 
-        assertThat(events).hasSize(1);
-        assertThat(events.get(0).type())
+        assertThat(events).isNotNull();
+        // question 分片播放为 token 帧，最后 done
+        assertThat(events.get(events.size() - 1).type())
                 .isEqualTo(RequirementClarifyService.ChatStreamEvent.Type.DONE);
+        String joined = events.stream()
+                .filter(e -> e.type() == RequirementClarifyService.ChatStreamEvent.Type.TOKEN)
+                .map(RequirementClarifyService.ChatStreamEvent::data)
+                .reduce("", String::concat);
+        assertThat(joined).isEqualTo("方案的第一期范围怎么定？");
         // 确认卡单条落库（applyClarifyDecision），主回复流式通道零调用
         verify(messageService).addMessage(eq(CONV_ID), eq("assistant"), anyString(), anyString());
         verify(platformAgentExecutionService, never())
