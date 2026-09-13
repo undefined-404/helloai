@@ -70,7 +70,8 @@
             <groupId>cn.dev33</groupId>
             <artifactId>sa-token-spring-boot3-starter</artifactId>
         </dependency>
-        <!-- Sa-Token Redis 集成（Jackson 序列化，复用 spring-data-redis，独立 satoken: 前缀） -->
+        <!-- Sa-Token Redis 集成（Jackson 序列化，复用 spring-data-redis）；
+             会话键前缀取自 sa-token.token-name（本项目 X-Admin-Token:），非库默认 satoken: -->
         <dependency>
             <groupId>cn.dev33</groupId>
             <artifactId>sa-token-redis-jackson</artifactId>

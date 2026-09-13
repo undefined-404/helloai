@@ -27,15 +27,17 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 .addPathPatterns("/api/**");
 
         // 认证拦截器
+        // 通道分流：X-Admin-Token → Sa-Token 会话（标准 checkLogin，含滑动续期）；
+        //          Authorization: Bearer → 外部 Agent API Key（显式旁路，不进 Sa-Token）
         registry.addInterceptor(new AuthInterceptor(authService, agentAuthPort))
                 .addPathPatterns("/api/**")
                 // 登录/登出不需要认证
                 .excludePathPatterns("/api/auth/login")
                 .excludePathPatterns("/api/auth/logout")
                 .excludePathPatterns("/api/auth/me")
-                // Agent 自助注册不需要认证
+                // Agent 自助注册不需要认证（端点自带 registrationToken 校验 + 注册开关门控）
                 .excludePathPatterns("/api/agents/register")
-                .excludePathPatterns("/api/agents/register-with-token")
+                .excludePathPatterns("/api/agents/registerWithToken")
                 // 工具下载不需要认证（CLI 内自带 Bearer）
                 .excludePathPatterns("/api/tools/cli")
                 // 健康检查
@@ -45,14 +47,14 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 // 活动流公开接口
                 .excludePathPatterns("/api/feed/**");
 
-        // 授权拦截器：/api/admin/** 强制 admin 身份（认证与授权分离，见 CODE_STYLE §6.8）
-        // 注册顺序在 AuthInterceptor 之后，执行时 _authType 已由认证阶段写入
+        // 授权拦截器：/api/admin/** 强制管理身份（认证与授权分离，见 CODE_STYLE §43）
+        // 事实源为 Sa-Token 登录态 + sys_user_role 角色码（不依赖认证阶段手写的 attribute）
         registry.addInterceptor(new AdminOnlyInterceptor())
                 .addPathPatterns("/api/admin/**");
 
         // Sa-Token 注解鉴权（@SaCheckPermission / @SaCheckRole，BASE-1.6 动作级权限码落地）
-        // 依赖 AuthInterceptor 已建立 Sa-Token 会话（X-Admin-Token 头 → StpUtil）；
-        // 无注解的请求不受影响，仅对带鉴权注解的 Controller 方法校验权限码。
+        // 仅对带鉴权注解的方法生效，不承担认证守门（守门由上面的 AuthInterceptor 完成）；
+        // Agent / 公开白名单通道的方法不得加鉴权注解（§10 红线），因而天然不受影响。
         registry.addInterceptor(new SaInterceptor())
                 .addPathPatterns("/api/**");
     }

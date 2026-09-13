@@ -20,7 +20,8 @@ import org.springframework.stereotype.Service;
 /**
  * 统一鉴权服务实现。
  *
- * <p>管理员会话自 Sa-Token 承担（登录态存 Redis {@code satoken:} 前缀，替换旧自建
+ * <p>管理员会话自 Sa-Token 承担（登录态存 Redis，键前缀取自 {@code sa-token.token-name}，
+ * 本项目为 {@code X-Admin-Token:}，非库默认 {@code satoken:}；替换旧自建
  * {@code auth:admin:token:} 会话）；Agent API Key 验证已按 §3.x 依赖方向红线下沉至 agent 域
  * {@code AgentAuthPort}（由 AgentServiceImpl 实现），本实现只保留管理员认证。</p>
  *
@@ -68,6 +69,31 @@ public class AuthServiceImpl implements AuthService {
 
         log.info("管理员登录成功: username={}, id={}", username, user.getId());
         return session;
+    }
+
+    /**
+     * 认证 admin 请求：Sa-Token 标准守门（{@code checkLogin}）+ 存量会话迁移回退。
+     *
+     * <p><b>为何必须走 checkLogin</b>：Sa-Token 的 active-timeout 校验与滑动续期只发生在
+     * 标准链路（{@code getLoginId()} / {@code checkLogin()} → {@code checkActiveTimeout} +
+     * {@code updateLastActiveToNow}）。此前认证走 {@code getLoginIdByToken(token)}（纯读），
+     * 既不校验也不续期，导致 {@code sa-token.active-timeout: 28800} 实际失效。</p>
+     */
+    @Override
+    public AdminSession authenticateAdmin(String token) {
+        if (!StpUtil.isLogin()) {
+            // Sa-Token 未命中：回退存量自建 Redis 会话（以原 token 值重建）；
+            // 无旧会话则迁移返回 null，由下面 checkLogin 统一抛 NotLoginException → 401
+            migrateLegacySession(token);
+        }
+        // 标准守门：校验登录态并触发 active-timeout 校验 + 滑动续期
+        StpUtil.checkLogin();
+        Long userId = Long.valueOf(StpUtil.getLoginId().toString());
+        SysUser user = sysUserMapper.selectById(userId);
+        if (user == null || !SysUserStatus.ACTIVE.name().equals(user.getStatus())) {
+            throw new BizException(401, "管理员登录已过期，请重新登录");
+        }
+        return new AdminSession(token, user.getId(), user.getUsername(), user.getNickname(), user.getRole());
     }
 
     /**

@@ -21,17 +21,19 @@ public class AuthInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
-        // 优先检查管理员 token
+        // ① 平台账号通道：Sa-Token 会话（token 走 X-Admin-Token 头）
+        //    守门走标准 StpUtil.checkLogin，方能使 active-timeout 校验与滑动续期生效
         String adminToken = request.getHeader("X-Admin-Token");
         if (adminToken != null && !adminToken.isBlank()) {
-            AuthService.AdminSession session = authService.validateAdminToken(adminToken);
+            AuthService.AdminSession session = authService.authenticateAdmin(adminToken);
             request.setAttribute(AUTH_TYPE_KEY, "admin");
             request.setAttribute(AUTH_ID_KEY, session.id());
             request.setAttribute(AUTH_NAME_KEY, session.displayName());
             return true;
         }
 
-        // 其次检查 Agent API Key
+        // ② 外部 Agent 通道：API Key（Bearer）——显式旁路，不进入 Sa-Token 会话体系
+        //    §10 红线：CLI_CLIENT 走 API Key / MCP，契约不变
         String authorization = request.getHeader("Authorization");
         if (authorization != null && authorization.startsWith("Bearer ")) {
             String apiKey = authorization.substring(7);
@@ -44,7 +46,7 @@ public class AuthInterceptor implements HandlerInterceptor {
             }
         }
 
-        // 都没有认证信息
+        // ③ 无认证信息
         throw new BizException(401, "未登录或凭证已过期");
     }
 }

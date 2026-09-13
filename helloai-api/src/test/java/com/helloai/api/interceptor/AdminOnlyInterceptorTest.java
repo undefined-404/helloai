@@ -1,5 +1,6 @@
 package com.helloai.api.interceptor;
 
+import cn.dev33.satoken.stp.StpUtil;
 import com.helloai.common.base.BizException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -7,24 +8,28 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mockStatic;
 
 /**
  * AdminOnlyInterceptor 单测：认证与授权分离中的授权分支。
  *
+ * <p>BASE-4.1 起事实源为 Sa-Token 登录态 + {@code sys_user_role} 角色码：</p>
+ *
  * <ul>
- *   <li>admin 身份放行</li>
- *   <li>agent 身份（外部 AI API Key）一律 403</li>
- *   <li>_authType 缺失（理论上认证阶段已拦截，此处兜底）同样 403</li>
+ *   <li>管理身份（SUPER_ADMIN / ADMIN）放行</li>
+ *   <li>已登录但无管理角色（如 NORMAL_USER / GUEST）→ 403</li>
+ *   <li>未登录（含外部 Agent API Key，不进 Sa-Token 会话体系）→ 403</li>
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("AdminOnlyInterceptor admin 授权拦截")
+@DisplayName("AdminOnlyInterceptor 管理身份授权拦截")
 class AdminOnlyInterceptorTest {
 
     private final AdminOnlyInterceptor interceptor = new AdminOnlyInterceptor();
@@ -36,27 +41,38 @@ class AdminOnlyInterceptorTest {
     private HttpServletResponse response;
 
     @Test
-    @DisplayName("admin 身份放行")
+    @DisplayName("管理身份（isLogin + 命中管理角色）放行")
     void adminPasses() throws Exception {
-        when(request.getAttribute(AuthInterceptor.AUTH_TYPE_KEY)).thenReturn("admin");
-        assertTrue(interceptor.preHandle(request, response, new Object()));
+        try (MockedStatic<StpUtil> stp = mockStatic(StpUtil.class)) {
+            stp.when(StpUtil::isLogin).thenReturn(true);
+            stp.when(() -> StpUtil.hasRoleOr(any(String[].class))).thenReturn(true);
+
+            assertTrue(interceptor.preHandle(request, response, new Object()));
+        }
     }
 
     @Test
-    @DisplayName("agent 身份访问 admin 端点返回 403")
-    void agentRejected() {
-        when(request.getAttribute(AuthInterceptor.AUTH_TYPE_KEY)).thenReturn("agent");
-        BizException ex = assertThrows(BizException.class,
-                () -> interceptor.preHandle(request, response, new Object()));
-        assertEquals(403, ex.getCode());
+    @DisplayName("已登录但无管理角色返回 403")
+    void loggedInWithoutAdminRoleRejected() {
+        try (MockedStatic<StpUtil> stp = mockStatic(StpUtil.class)) {
+            stp.when(StpUtil::isLogin).thenReturn(true);
+            stp.when(() -> StpUtil.hasRoleOr(any(String[].class))).thenReturn(false);
+
+            BizException ex = assertThrows(BizException.class,
+                    () -> interceptor.preHandle(request, response, new Object()));
+            assertEquals(403, ex.getCode());
+        }
     }
 
     @Test
-    @DisplayName("缺失 _authType 属性返回 403")
-    void missingAuthTypeRejected() {
-        when(request.getAttribute(AuthInterceptor.AUTH_TYPE_KEY)).thenReturn(null);
-        BizException ex = assertThrows(BizException.class,
-                () -> interceptor.preHandle(request, response, new Object()));
-        assertEquals(403, ex.getCode());
+    @DisplayName("未登录（含外部 Agent API Key）返回 403")
+    void notLoginRejected() {
+        try (MockedStatic<StpUtil> stp = mockStatic(StpUtil.class)) {
+            stp.when(StpUtil::isLogin).thenReturn(false);
+
+            BizException ex = assertThrows(BizException.class,
+                    () -> interceptor.preHandle(request, response, new Object()));
+            assertEquals(403, ex.getCode());
+        }
     }
 }

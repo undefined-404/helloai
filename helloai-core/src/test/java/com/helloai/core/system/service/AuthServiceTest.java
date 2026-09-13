@@ -1,5 +1,6 @@
 package com.helloai.core.system.service;
 
+import cn.dev33.satoken.exception.NotLoginException;
 import cn.dev33.satoken.stp.StpUtil;
 import com.helloai.common.base.BizException;
 import com.helloai.core.system.entity.SysUser;
@@ -24,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -157,6 +159,99 @@ class AuthServiceTest {
 
                 BizException ex = assertThrows(BizException.class,
                         () -> authService.validateAdminToken("tok-1"));
+                assertEquals(401, ex.getCode());
+            }
+        }
+    }
+
+    @Nested
+    @DisplayName("请求认证（Sa-Token 标准守门）")
+    class AuthenticateAdmin {
+
+        @Test
+        @DisplayName("Sa-Token 命中：走标准 checkLogin 并返回会话")
+        void authenticateAdmin_hit_shouldCheckLoginAndReturnSession() {
+            when(sysUserMapper.selectById(1001L)).thenReturn(newActiveUser("pass123"));
+
+            try (MockedStatic<StpUtil> stp = mockStatic(StpUtil.class)) {
+                stp.when(() -> StpUtil.isLogin()).thenReturn(true);
+                stp.when(() -> StpUtil.getLoginId()).thenReturn(1001L);
+
+                AuthService.AdminSession session = authService.authenticateAdmin("tok-1");
+
+                assertThat(session.id()).isEqualTo(1001L);
+                assertThat(session.username()).isEqualTo("admin");
+                assertThat(session.token()).isEqualTo("tok-1");
+                // 标准守门必须被调用：active-timeout 校验 + 滑动续期的触发点
+                stp.verify(() -> StpUtil.checkLogin());
+            }
+        }
+
+        @Test
+        @DisplayName("Sa-Token 未命中 + 存量会话迁移成功 → 原 token 重建后放行")
+        void authenticateAdmin_legacyMigrated_shouldPass() {
+            when(valueOps.get("auth:admin:token:legacy-tok"))
+                    .thenReturn("{\"token\":\"legacy-tok\",\"id\":1001,\"username\":\"admin\",\"displayName\":\"管理员\",\"role\":\"ADMIN\"}");
+            when(sysUserMapper.selectById(1001L)).thenReturn(newActiveUser("pass123"));
+
+            try (MockedStatic<StpUtil> stp = mockStatic(StpUtil.class)) {
+                stp.when(() -> StpUtil.isLogin()).thenReturn(false);
+                stp.when(() -> StpUtil.login(any(), any(cn.dev33.satoken.stp.parameter.SaLoginParameter.class)))
+                        .thenAnswer(inv -> null);
+                stp.when(() -> StpUtil.getLoginId()).thenReturn(1001L);
+
+                AuthService.AdminSession session = authService.authenticateAdmin("legacy-tok");
+
+                assertThat(session.id()).isEqualTo(1001L);
+                assertThat(session.token()).isEqualTo("legacy-tok");
+                verify(redis).delete("auth:admin:token:legacy-tok");
+                stp.verify(() -> StpUtil.checkLogin());
+            }
+        }
+
+        @Test
+        @DisplayName("Sa-Token 未命中且无存量会话 → checkLogin 抛 NotLoginException（全局处理器转 401）")
+        void authenticateAdmin_noSession_shouldPropagateNotLogin() {
+            when(valueOps.get("auth:admin:token:ghost")).thenReturn(null);
+
+            try (MockedStatic<StpUtil> stp = mockStatic(StpUtil.class)) {
+                stp.when(() -> StpUtil.isLogin()).thenReturn(false);
+                stp.when(() -> StpUtil.checkLogin()).thenThrow(mock(NotLoginException.class));
+
+                assertThrows(NotLoginException.class,
+                        () -> authService.authenticateAdmin("ghost"));
+                verify(redis, never()).delete(anyString());
+            }
+        }
+
+        @Test
+        @DisplayName("会话有效但对应用户缺失 → 401")
+        void authenticateAdmin_userMissing_shouldThrow401() {
+            when(sysUserMapper.selectById(1001L)).thenReturn(null);
+
+            try (MockedStatic<StpUtil> stp = mockStatic(StpUtil.class)) {
+                stp.when(() -> StpUtil.isLogin()).thenReturn(true);
+                stp.when(() -> StpUtil.getLoginId()).thenReturn(1001L);
+
+                BizException ex = assertThrows(BizException.class,
+                        () -> authService.authenticateAdmin("tok-1"));
+                assertEquals(401, ex.getCode());
+            }
+        }
+
+        @Test
+        @DisplayName("会话有效但用户已禁用 → 401")
+        void authenticateAdmin_userDisabled_shouldThrow401() {
+            SysUser disabled = newActiveUser("pass123");
+            disabled.setStatus("DISABLED");
+            when(sysUserMapper.selectById(1001L)).thenReturn(disabled);
+
+            try (MockedStatic<StpUtil> stp = mockStatic(StpUtil.class)) {
+                stp.when(() -> StpUtil.isLogin()).thenReturn(true);
+                stp.when(() -> StpUtil.getLoginId()).thenReturn(1001L);
+
+                BizException ex = assertThrows(BizException.class,
+                        () -> authService.authenticateAdmin("tok-1"));
                 assertEquals(401, ex.getCode());
             }
         }

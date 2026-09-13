@@ -4,7 +4,8 @@ package com.helloai.core.system.service;
  * 统一鉴权服务。
  * 负责管理员登录（DB 查 sys_user + BCrypt 校验）、管理员会话维护与 Agent API Key 验证。
  *
- * <p><b>会话存储</b>：管理员会话由 Sa-Token 承担（登录态存 Redis {@code satoken:} 前缀，
+ * <p><b>会话存储</b>：管理员会话由 Sa-Token 承担（登录态存 Redis，键前缀取自
+ * {@code sa-token.token-name}，本项目为 {@code X-Admin-Token:}，非库默认 {@code satoken:}；
  * token 从 {@code X-Admin-Token} 头读取，见 application.yml sa-token 配置；滑动续期
  * active-timeout=28800s），后端重启不再导致会话丢失。</p>
  *
@@ -19,7 +20,21 @@ public interface AuthService {
     AdminSession adminLogin(String username, String rawPassword);
 
     /**
-     * 验证管理员 token（Sa-Token 会话校验 + 回读用户信息）
+     * 认证 admin 请求（Sa-Token 标准守门）。
+     *
+     * <p>走 Sa-Token 标准链路 {@code StpUtil.checkLogin()}——会触发 active-timeout 校验与
+     * 滑动续期（{@code updateLastActiveToNow}），因此是本项目 admin 认证的**守门入口**。
+     * Sa-Token 未命中时回退存量自建会话迁移（以原 token 值重建），仍失败则抛 401。</p>
+     *
+     * @throws com.helloai.common.base.BizException 401 当会话不存在、已过期或对应用户失效时
+     */
+    AdminSession authenticateAdmin(String token);
+
+    /**
+     * 按 token 回读管理员会话信息（不触发校验与续期）。
+     *
+     * <p>供已知 token 的回读场景使用（{@code /api/auth/me}）；请求守门请用
+     * {@link #authenticateAdmin(String)}。</p>
      *
      * @throws com.helloai.common.base.BizException 401 当 token 不存在、已过期或对应用户失效时
      */
