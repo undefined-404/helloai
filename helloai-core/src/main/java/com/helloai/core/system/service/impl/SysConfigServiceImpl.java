@@ -22,6 +22,9 @@ public class SysConfigServiceImpl extends ServiceImpl<SysConfigMapper, SysConfig
     /** 脱敏占位值：仅表达"已配置"，不回显任何凭证内容。 */
     private static final String SENSITIVE_MASKED = "********";
 
+    /** 自助注册开关配置键（BASE-4.5；缺省关闭）。 */
+    private static final String REGISTER_ENABLED_KEY = "auth.register.enabled";
+
     /**
      * 获取所有配置为 Map
      */
@@ -86,5 +89,14 @@ public class SysConfigServiceImpl extends ServiceImpl<SysConfigMapper, SysConfig
     public boolean isSetupFinished() {
         String val = getValue("system.setup_finished");
         return "1".equals(val);
+    }
+
+    /**
+     * 是否开放自助注册（缺省关闭；1 / true 视为开启）
+     */
+    @Override
+    public boolean isRegisterEnabled() {
+        String val = getValue(REGISTER_ENABLED_KEY);
+        return "1".equals(val) || "true".equalsIgnoreCase(val);
     }
 }

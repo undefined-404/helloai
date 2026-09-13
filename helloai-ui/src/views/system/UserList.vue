@@ -5,6 +5,14 @@
         用户管理
       </h2>
       <div class="page-actions">
+        <el-button
+          v-auth="'user:add'"
+          size="small"
+          type="primary"
+          @click="openCreate"
+        >
+          新增用户
+        </el-button>
         <el-input
           v-model="keyword"
           placeholder="搜索用户名/昵称"
@@ -259,6 +267,85 @@
       </template>
     </el-dialog>
 
+    <!-- 新增用户（BASE-4.5：建号即签发角色） -->
+    <el-dialog
+      v-model="createVisible"
+      title="新增用户"
+      width="460px"
+      class="ha-dialog--form"
+      :style="{ maxHeight: 'calc(100vh - 12vh - 16px)', minHeight: 'min(240px, calc(100vh - 12vh - 16px))', display: 'flex', flexDirection: 'column' }"
+      destroy-on-close
+    >
+      <el-form
+        ref="createFormRef"
+        :model="createForm"
+        :rules="createRules"
+        label-width="80px"
+      >
+        <el-form-item
+          label="用户名"
+          prop="username"
+        >
+          <el-input
+            v-model="createForm.username"
+            placeholder="登录用户名，2-64 位"
+          />
+        </el-form-item>
+        <el-form-item
+          label="初始密码"
+          prop="password"
+        >
+          <el-input
+            v-model="createForm.password"
+            type="password"
+            show-password
+            placeholder="6-64 位"
+          />
+        </el-form-item>
+        <el-form-item label="昵称">
+          <el-input
+            v-model="createForm.nickname"
+            placeholder="昵称（可空）"
+          />
+        </el-form-item>
+        <el-form-item
+          label="角色"
+          prop="roleCode"
+        >
+          <el-select
+            v-model="createForm.roleCode"
+            placeholder="选择初始角色"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="r in roleOptions"
+              :key="r.code"
+              :label="`${r.name}（${r.code}）`"
+              :value="r.code"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input
+            v-model="createForm.remark"
+            placeholder="备注（可空）"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="createVisible = false">
+          取消
+        </el-button>
+        <el-button
+          type="primary"
+          :loading="saving"
+          @click="submitCreate"
+        >
+          保存
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- 分配角色 -->
     <el-dialog
       v-model="assignVisible"
@@ -438,6 +525,51 @@ async function submitEdit() {
     ElMessage.success('保存成功')
     editVisible.value = false
     load(currentPage.value)
+  } finally {
+    saving.value = false
+  }
+}
+
+// ── 新增用户（BASE-4.5：建号即签发角色） ──
+const createVisible = ref(false)
+const createFormRef = ref()
+const createForm = ref({ username: '', password: '', nickname: '', roleCode: 'NORMAL_USER', remark: '' })
+const createRules = {
+  username: [
+    { required: true, message: '请输入用户名', trigger: 'blur' },
+    { min: 2, max: 64, message: '长度需在 2-64 位之间', trigger: 'blur' }
+  ],
+  password: [
+    { required: true, message: '请输入初始密码', trigger: 'blur' },
+    { min: 6, max: 64, message: '长度需在 6-64 位之间', trigger: 'blur' }
+  ],
+  roleCode: [{ required: true, message: '请选择初始角色', trigger: 'change' }]
+}
+
+async function openCreate() {
+  createForm.value = { username: '', password: '', nickname: '', roleCode: 'NORMAL_USER', remark: '' }
+  if (roleOptions.value.length === 0) {
+    roleOptions.value = await rbacApi.roles()
+  }
+  createVisible.value = true
+  createFormRef.value?.clearValidate()
+}
+
+async function submitCreate() {
+  const valid = await createFormRef.value?.validate().catch(() => false)
+  if (!valid) return
+  saving.value = true
+  try {
+    await rbacApi.createUser({
+      username: createForm.value.username.trim(),
+      password: createForm.value.password,
+      nickname: createForm.value.nickname || undefined,
+      roleCode: createForm.value.roleCode,
+      remark: createForm.value.remark || undefined
+    })
+    ElMessage.success('用户已创建')
+    createVisible.value = false
+    load(1)
   } finally {
     saving.value = false
   }

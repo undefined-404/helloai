@@ -10,42 +10,64 @@
       </button>
     </div>
 
-    <div class="register-card">
+    <!-- 自助注册开放（BASE-4.5）：渲染真实注册表单；注册账号默认为 GUEST（只读） -->
+    <div
+      v-if="setupStatus.registerEnabled"
+      class="register-card"
+    >
       <div class="register-card-header">
         <div>
           <p class="register-card-title">
-            管理员账号
+            注册账号
           </p>
           <p class="register-card-desc">
-            {{ setupStatus.setupFinished && setupStatus.hasUsers
-              ? '管理员账号由平台管理员统一开通。'
-              : '当前环境未初始化，可先创建管理员账号。' }}
+            注册后为「游客」角色：可浏览业务数据，不可修改或创建。
           </p>
         </div>
-        <span class="register-badge">
-          {{ setupStatus.loading
-            ? '检查中'
-            : setupStatus.setupFinished && setupStatus.hasUsers
-              ? '已初始化'
-              : '首次部署' }}
-        </span>
+        <span class="register-badge">开放注册</span>
       </div>
+
+      <el-form
+        ref="formRef"
+        :model="form"
+        :rules="rules"
+        label-width="72px"
+      >
+        <el-form-item
+          label="用户名"
+          prop="username"
+        >
+          <el-input
+            v-model="form.username"
+            placeholder="2-64 位"
+          />
+        </el-form-item>
+        <el-form-item
+          label="密码"
+          prop="password"
+        >
+          <el-input
+            v-model="form.password"
+            type="password"
+            show-password
+            placeholder="6-64 位"
+          />
+        </el-form-item>
+        <el-form-item label="昵称">
+          <el-input
+            v-model="form.nickname"
+            placeholder="昵称（可空）"
+          />
+        </el-form-item>
+      </el-form>
 
       <div class="register-card-actions">
         <el-button
-          v-if="!setupStatus.setupFinished || !setupStatus.hasUsers"
           type="primary"
-          @click="$emit('goto-setup')"
+          :loading="submitting"
+          @click="submit"
         >
-          前往初始化
-        </el-button>
-        <el-button
-          v-else
-          type="primary"
-          plain
-          @click="$emit('contact')"
-        >
-          联系管理员开通
+          注册
         </el-button>
         <el-button
           text
@@ -56,32 +78,119 @@
       </div>
     </div>
 
-    <p class="register-tip">
-      账号由平台管理员统一开通；首次部署时可通过「前往初始化」创建首个管理员账号。
-    </p>
+    <!-- 未开放自助注册：保留原有引导文案 -->
+    <template v-else>
+      <div class="register-card">
+        <div class="register-card-header">
+          <div>
+            <p class="register-card-title">
+              管理员账号
+            </p>
+            <p class="register-card-desc">
+              {{ setupStatus.setupFinished && setupStatus.hasUsers
+                ? '管理员账号由平台管理员统一开通。'
+                : '当前环境未初始化，可先创建管理员账号。' }}
+            </p>
+          </div>
+          <span class="register-badge">
+            {{ setupStatus.loading
+              ? '检查中'
+              : setupStatus.setupFinished && setupStatus.hasUsers
+                ? '已初始化'
+                : '首次部署' }}
+          </span>
+        </div>
+
+        <div class="register-card-actions">
+          <el-button
+            v-if="!setupStatus.setupFinished || !setupStatus.hasUsers"
+            type="primary"
+            @click="$emit('goto-setup')"
+          >
+            前往初始化
+          </el-button>
+          <el-button
+            v-else
+            type="primary"
+            plain
+            @click="$emit('contact')"
+          >
+            联系管理员开通
+          </el-button>
+          <el-button
+            text
+            @click="$emit('back')"
+          >
+            已有账号
+          </el-button>
+        </div>
+      </div>
+
+      <p class="register-tip">
+        账号由平台管理员统一开通；首次部署时可通过「前往初始化」创建首个管理员账号。
+      </p>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
-// 注册视图：基于 setupStatus 渲染两种 CTA（前往初始化 / 联系管理员）
-// 自身不持有状态，所有 setupStatus 数据由父组件传入
+// 注册视图（BASE-4.5）：
+//   · 自助注册开启（setupStatus.registerEnabled）→ 渲染真实注册表单（注册账号默认 GUEST 只读）
+//   · 未开启 → 保留引导文案（前往初始化 / 联系管理员开通）
+
+import { ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import { authApi } from '@/api/auth'
 
 export interface SetupStatus {
   loading: boolean
   setupFinished: boolean
   hasUsers: boolean
   userCount: number
+  /** 是否开放自助注册（sys_config: auth.register.enabled） */
+  registerEnabled: boolean
 }
 
 defineProps<{
   setupStatus: SetupStatus
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   'back': []
   'goto-setup': []
   'contact': []
 }>()
+
+const formRef = ref()
+const submitting = ref(false)
+const form = ref({ username: '', password: '', nickname: '' })
+const rules = {
+  username: [
+    { required: true, message: '请输入用户名', trigger: 'blur' },
+    { min: 2, max: 64, message: '长度需在 2-64 位之间', trigger: 'blur' }
+  ],
+  password: [
+    { required: true, message: '请输入密码', trigger: 'blur' },
+    { min: 6, max: 64, message: '长度需在 6-64 位之间', trigger: 'blur' }
+  ]
+}
+
+async function submit() {
+  const valid = await formRef.value?.validate().catch(() => false)
+  if (!valid) return
+  submitting.value = true
+  try {
+    await authApi.register({
+      username: form.value.username.trim(),
+      password: form.value.password,
+      nickname: form.value.nickname || undefined
+    })
+    ElMessage.success('注册成功，请使用新账号登录')
+    emit('back')
+  } finally {
+    submitting.value = false
+  }
+}
 </script>
 
 <style scoped>

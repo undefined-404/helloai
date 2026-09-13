@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.helloai.api.dto.system.AssignUserDepartsRequest;
 import com.helloai.api.dto.system.AssignUserRolesRequest;
 import com.helloai.api.dto.system.ResetPasswordRequest;
+import com.helloai.api.dto.system.SysUserCreateRequest;
 import com.helloai.api.dto.system.SysUserItem;
 import com.helloai.api.dto.system.SysUserUpdateRequest;
 import com.helloai.common.base.R;
@@ -35,6 +36,19 @@ public class SysUserRoleController {
     private final SysRoleService sysRoleService;
     private final SysUserService sysUserService;
     private final SysDepartService sysDepartService;
+
+    /**
+     * 新增用户（BASE-4.5）：建号即按 roleCode 签发角色（同一事务）。
+     *
+     * <p>角色码为空时服务层取默认 ADMIN；非法角色码 fail-close（不落库）。</p>
+     */
+    @SaCheckPermission("user:add")
+    @PostMapping
+    public R<Void> create(@Valid @RequestBody SysUserCreateRequest req) {
+        sysUserService.create(req.getUsername(), req.getPassword(), req.getNickname(),
+                req.getRoleCode(), req.getRemark());
+        return R.ok();
+    }
 
     /**
      * 用户分页列表（附带角色码 / 部门）。

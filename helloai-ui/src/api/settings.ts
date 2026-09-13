@@ -99,7 +99,7 @@ export interface ApiKeyVerifyResult {
 
 export const settingsApi = {
   getStatus() {
-    return request.get<any, { setupFinished: boolean; hasUsers: boolean; userCount: number }>(paths.setup.getStatus)
+    return request.get<any, { setupFinished: boolean; hasUsers: boolean; userCount: number; registerEnabled?: boolean }>(paths.setup.getStatus)
   },
   initialize(data: { adminPassword: string; systemName: string; systemDescription?: string; adminUsername?: string }) {
     return request.post(paths.setup.initialize, data)

@@ -33,7 +33,9 @@ public class SetupController {
         return R.ok(Map.of(
                 "setupFinished", finished,
                 "hasUsers", userCount > 0,
-                "userCount", userCount
+                "userCount", userCount,
+                // BASE-4.5：登录页据此决定「注册」入口渲染引导文案还是真实注册表单
+                "registerEnabled", sysConfigService.isRegisterEnabled()
         ));
     }
 

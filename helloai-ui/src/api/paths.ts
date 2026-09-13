@@ -9,7 +9,9 @@ export const paths = {
     login: '/auth/login',
     logout: '/auth/logout',
     changePassword: '/auth/changePassword',
-    me: '/auth/me'
+    me: '/auth/me',
+    /** 自助注册（BASE-4.5；是否开放由后端 sys_config.auth.register.enabled 门控） */
+    register: '/auth/register'
   },
   tasks: {
     list: '/tasks/list',
@@ -211,6 +213,8 @@ export const paths = {
     // BASE-3.3 权限数据规则（受控枚举）
     permissionDataRule: (id: string | number) => `/admin/permissions/${enc(id)}/data-rule`,
     userPage: '/admin/users/page',
+    /** 新增用户（BASE-4.5，需 user:add） */
+    userCreate: '/admin/users',
     userById: (id: string | number) => `/admin/users/${enc(id)}`,
     userRoles: (id: string | number) => `/admin/users/${enc(id)}/roles`,
     userPassword: (id: string | number) => `/admin/users/${enc(id)}/password`,

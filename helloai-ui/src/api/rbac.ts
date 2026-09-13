@@ -69,6 +69,10 @@ export const rbacApi = {
   userPage(params: { page?: number; size?: number; keyword?: string; departId?: string | number }) {
     return request.get<any, PageRecords<SysUserItem>>(paths.rbac.userPage, { params })
   },
+  /** 新增用户（BASE-4.5，需 user:add；roleCode 为空时后端取默认 ADMIN） */
+  createUser(data: { username: string; password: string; nickname?: string; roleCode?: string; remark?: string }) {
+    return request.post<any, void>(paths.rbac.userCreate, data)
+  },
   userRoleIds(userId: string | number) {
     return request.get<any, Array<string | number>>(paths.rbac.userRoles(userId))
   },

@@ -35,6 +35,8 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 .excludePathPatterns("/api/auth/login")
                 .excludePathPatterns("/api/auth/logout")
                 .excludePathPatterns("/api/auth/me")
+                // 自助注册不需要认证（是否开放由 sys_config.auth.register.enabled 在端点内门控）
+                .excludePathPatterns("/api/auth/register")
                 // Agent 自助注册不需要认证（端点自带 registrationToken 校验 + 注册开关门控）
                 .excludePathPatterns("/api/agents/register")
                 .excludePathPatterns("/api/agents/registerWithToken")

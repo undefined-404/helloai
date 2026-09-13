@@ -3,11 +3,13 @@ package com.helloai.api.controller;
 import com.helloai.api.dto.auth.ChangePasswordRequest;
 import com.helloai.api.dto.auth.LoginRequest;
 import com.helloai.api.dto.auth.LoginResponse;
+import com.helloai.api.dto.auth.RegisterRequest;
 import com.helloai.api.interceptor.AuthInterceptor;
 import com.helloai.common.base.R;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.port.AgentAuthPort;
 import com.helloai.core.system.service.AuthService;
+import com.helloai.core.system.service.SysConfigService;
 import com.helloai.core.system.service.SysPermissionQueryService;
 import com.helloai.core.system.service.SysUserService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -28,6 +30,27 @@ public class AuthController {
     private final AgentAuthPort agentAuthPort;
     private final SysUserService sysUserService;
     private final SysPermissionQueryService sysPermissionQueryService;
+    private final SysConfigService sysConfigService;
+
+    /** 自助注册默认角色码（最小权限：只读）。 */
+    private static final String REGISTER_DEFAULT_ROLE = "GUEST";
+
+    /**
+     * 自助注册（BASE-4.5）：**默认关闭**，由 {@code sys_config.auth.register.enabled} 门控。
+     *
+     * <p>开启后任何人可建号，故注册账号固定绑定 {@link #REGISTER_DEFAULT_ROLE}（只读、零写码），
+     * 不开放角色选择；需要更高权限须由管理员通过用户管理开通。</p>
+     */
+    @PostMapping("/register")
+    public R<Void> register(@Valid @RequestBody RegisterRequest req) {
+        if (!sysConfigService.isRegisterEnabled()) {
+            return R.fail(403, "自助注册未开放，请联系平台管理员开通账号");
+        }
+        sysUserService.create(req.getUsername(), req.getPassword(), req.getNickname(),
+                REGISTER_DEFAULT_ROLE, "自助注册");
+        log.info("自助注册成功: username={}, role={}", req.getUsername(), REGISTER_DEFAULT_ROLE);
+        return R.ok();
+    }
 
     @PostMapping("/login")
     public R<LoginResponse> login(@Valid @RequestBody LoginRequest req, HttpServletRequest httpReq) {

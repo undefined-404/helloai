@@ -151,7 +151,8 @@ const setupStatus = reactive<SetupStatus>({
   loading: true,
   setupFinished: true,
   hasUsers: true,
-  userCount: 1
+  userCount: 1,
+  registerEnabled: false
 })
 
 const pageTitle = computed(() => {
@@ -256,6 +257,7 @@ async function loadSetupStatus() {
     setupStatus.setupFinished = status.setupFinished
     setupStatus.hasUsers = status.hasUsers
     setupStatus.userCount = status.userCount
+    setupStatus.registerEnabled = !!status.registerEnabled
   } catch {
     // 保持保守默认值，避免把已初始化系统误判成首次部署
   } finally {
