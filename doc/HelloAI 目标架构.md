@@ -5,6 +5,10 @@
 > 本文档定义未来稳定架构边界，不表示所有能力当前已经落地。
 >
 > 最后更新：2026-09-12（新增 §12 基础架构（平台底座）：RBAC 用户/角色/权限/菜单底座纳入目标架构，与业务五层正交；实施见《HelloAI 基础架构调整实施计划》BASE-xxx 批次）
+>
+> 最后更新：2026-09-13（§12 目标边界收敛——批次四（BASE-4.x）立项：认证收口到 Sa-Token 标准链路、
+> 身份单事实源（`sys_user.role` 退场）、角色分层（管理 / 操作 / 只读）、适用接口全量动作级授权化。
+> 实施见《HelloAI 基础架构调整实施计划》§9）
 
 # 1. 目标定位
 
@@ -360,28 +364,48 @@ RBAC 是平台治理（Governance）之下、所有业务模块共用的支撑�
 数据模型（唯一事实源）
   sys_user / sys_role / sys_permission（type=MENU|API，parent_id 承载菜单树）
   sys_user_role / sys_role_permission
-  ├── 权限码动作级（:view / :add / :edit / :delete），SUPER_ADMIN 通配 "*"
-  └── 菜单树字段：path / icon / component / sort（可扩展 hidden / keepAlive / 外链）
+  ├── 身份单事实源：用户 ↔ 角色只经 sys_user_role（多对多）
+  │   （sys_user.role 单字段已退场 —— 批次四 BASE-4.2 / V87）
+  ├── 权限码动作级（资源:动作，如 task:add / subtask:execute / role:assign-perm）
+  │   SUPER_ADMIN 由 StpInterface 返回 "*" 通配，自动覆盖全部权限码
+  └── 菜单树字段：path / icon / component / sort / hidden / keepAlive / externalLink
 
 会话与鉴权
-  登录会话：Sa-Token（X-Admin-Token 头，active-timeout 滑动续期，Redis 存储）
+  登录会话：Sa-Token 标准链路（X-Admin-Token 头，StpUtil.checkLogin，
+             active-timeout 滑动续期真实生效，Redis 存储）
   存量会话无缝迁移：旧自建 Redis 会话以原 token 重建，前端零感知
+  外部 Agent 通道：API Key / MCP 显式旁路，不进入 Sa-Token 会话（契约不变）
   接口鉴权：@SaCheckPermission（动作级权限码）→ 401 / 403 语义
+            认证与授权分离：/api/admin/** 必须经 Admin 授权，不以「已登录」放行
+  授权覆盖：适用接口 100% 动作级权限码化
+            （管理面 109 接口 + 业务面适用写接口；Agent / 公开白名单通道除外）
   前端权限：动态路由（权限 = 路由可达性，无权限 URL 404）+ v-auth 按钮级
 
+角色分层
+  SUPER_ADMIN  通配 "*"：平台全能力
+  ADMIN        管理面运维：系统设置（用户/角色/权限/菜单/部门）+ 业务读写
+  NORMAL_USER  业务操作者：业务读写，无系统设置与平台配置
+  GUEST        只读演示：仅 *:view 菜单 + 只读接口，全部写接口 403
+
 管理面
-  用户管理（分页 / 分配角色 / 重置密码）
+  用户管理（分页 / 建号 / 分配角色 / 重置密码）
   角色管理（CRUD + 权限绑定，差异更新）
   菜单管理（可视化菜单树 CRUD，DB 化可运维）
   权限查询（权限码列表 / 菜单树按用户过滤）
+  自助注册：受 sys_config 开关（auth.register.enabled，默认关闭）门控
 ```
 
 ## 12.3 边界原则
 
-- **单事实源**：权限判定只走 sys_role_permission → sys_permission + Sa-Token StpInterface，
-  不建第二套权限体系、不做权限双写；
+- **单事实源**：权限判定只走 sys_user_role → sys_role_permission → sys_permission +
+  Sa-Token StpInterface，不建第二套权限体系、不做权限双写；身份不设 legacy 冗余字段。
+- **认证收口**：登录态判定一律经 Sa-Token（`StpUtil.checkLogin` / `isLogin` / `StpInterface`），
+  不自建并行的守门判定；Agent 通道作为显式旁路，不进会话体系。
 - **与业务正交**：本底座不触碰 Agent Event Stream / 业务状态机 / Scheduler / Workflow /
-  Review Runtime；业务模块按需声明权限码即可接入；
-- **外部 Agent 不迁移**：CLI_CLIENT 契约（API Key / MCP）保持不变，不进 Sa-Token 会话体系；
-- **渐进演进**：按 `doc/HelloAI 基础架构调整实施计划.md` 分批次实施（动态路由 / 按钮权限 →
-  菜单管理 / 差异更新 → 扩展能力），完成后回填基线。
+  Review Runtime；业务模块按需声明权限码即可接入。
+- **授权完整性**：新增业务接口默认须声明动作级权限码；确属 Agent / 系统 / 公开通道的，
+  须在文档中显式登记为例外，禁止「静默无授权」。
+- **外部 Agent 不迁移**：CLI_CLIENT 契约（API Key / MCP）保持不变，不进 Sa-Token 会话体系。
+- **渐进演进**：按 `doc/HelloAI 基础架构调整实施计划.md` 分批次实施（批次一~三已落地：
+  动态路由 / 按钮权限 / 菜单管理 / 差异更新 / 部门 / 数据权限；批次四 BASE-4.x 已立项：
+  认证收口 / 身份单事实源 / 角色分层 / 全量授权化 / 建号），完成后回填基线。

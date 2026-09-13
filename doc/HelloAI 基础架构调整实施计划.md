@@ -12,6 +12,16 @@
 > 迭代记录按日期——**互不混用，不沿用任何既有编号**。
 >
 > 最后更新：2026-09-12（**三批次（BASE-1.x / 2.x / 3.x）全部落地 PASS**：V79~V83 迁移 + 动作级权限码 + SaInterceptor 注册修复 + 前端动态路由 + v-auth + 菜单管理页 + 授权差异更新 + 路由渲染增强 + 部门 + 数据权限（受控枚举）；**授权补充 V84**：ADMIN 角色绑定部门管理权限；**收口 V85 / V86**：岗位能力彻底移除（含遗留数据物理清理）+ 拆出独立「菜单管理」入口。core 1437 用例 0 失败 / UI build / Docker + 浏览器实测通过，实测修复 4 个缺陷。详见 `log/2026-09.md`。合规基线见 §4）
+>
+> 最后更新：2026-09-13（**批次四（BASE-4.x）立项**——三批次落地后代码核查暴露三处缺口：
+> ① Sa-Token 认证未收口（全仓 0 处 `StpUtil.checkLogin()`，`active-timeout` 滑动续期实际失效）；
+> ② 身份数据双写不一致（`sys_user.role` 死字段 + `create()` 漏写权威关联表）；
+> ③ 接口授权覆盖极低（`@SaCheckPermission` 仅 24 / 234，业务面 125 接口全无授权，只读角色无法落地）。
+> 批次四任务明细见 §9（权限矩阵见 §9.4），全批次红线见 §10，验收见 §11）
+>
+> 最后更新：2026-09-13（**勘误**：Sa-Token 会话 Redis 键前缀为 `X-Admin-Token:`——取自配置项
+> `sa-token.token-name`，非 Sa-Token 库默认的 `satoken:`；§2 S2、差距表 G-012、`log/2026-09.md`
+> 同步更正，证据与影响见 §12）
 
 # 1. 背景与定位
 
@@ -52,7 +62,8 @@ Runtime / Capability / Provider）不做任何改造，本专项**不触碰**：
   + 内置种子（SUPER_ADMIN 全权限 `"*"` / ADMIN 显式权限码）+ 存量 sys_user.role 单字段迁移关联表；
   V78 扩展 sys_permission 增加 parent_id / path / icon（菜单树 DB 化数据底座）。
 - **S2 会话层**：AuthServiceImpl 切 Sa-Token（StpUtil.login / getLoginIdByToken / logoutByTokenValue，
-  X-Admin-Token 头，active-timeout=28800s 滑动续期，Redis `satoken:` 前缀）；
+  X-Admin-Token 头，active-timeout=28800s 滑动续期，Redis 会话键前缀 = `sa-token.token-name`
+  （本项目为 `X-Admin-Token:`，**非** Sa-Token 库默认的 `satoken:`——勘误见文末 §12）；
   **存量会话无缝迁移**：Sa-Token 未命中时回退旧 Redis key（`auth:admin:token:{token}`），
   以原 token 值重建会话并删旧 key（前端零改动）。
 - **S3 授权层**：StpInterfaceImpl（用户 → 角色码 + 权限码，SUPER_ADMIN 返回 `"*"`）；
@@ -180,6 +191,7 @@ Runtime / Capability / Provider）不做任何改造，本专项**不触碰**：
 | 批次三 | 扩展能力（路由渲染增强 / 部门 / 数据权限） | BASE-3.1 ~ BASE-3.3 | **已落地（2026-09-12，PASS）** |
 | 授权补充 | ADMIN 角色绑定部门管理权限 | BASE-3.2 授权补充 | **已落地（2026-09-12，PASS）** |
 | 收口 | 岗位能力移除 + 拆出独立「菜单管理」入口 | BASE-3.2 / BASE-2.2 收口 | **已落地（2026-09-12，PASS）** |
+| 批次四 | 认证收口 + 角色体系 + 全量接口授权化 | BASE-4.1 ~ BASE-4.5 | **已立项（2026-09-13，待实施）** |
 
 > 三批次落地详情见 `doc/log/2026-09.md` 两段记录；
 > 验证基线：core 1437 用例 0 失败（V85 移除岗位 7 用例后）/ api 58 用例 0 失败 / UI type-check + build / Docker API 全链路 / 浏览器实测；
@@ -267,19 +279,224 @@ Runtime / Capability / Provider）不做任何改造，本专项**不触碰**：
 
 批次一/二验收通过后，按产品需求决定是否开展；无需求则挂起不实施。
 
-# 9. 红线与约束
+# 9. 批次四：认证收口 + 角色体系 + 全量接口授权化（BASE-4.x）
+
+> 立项：2026-09-13。承接批次一~三（RBAC 数据底座 + 管理面闭环），闭合代码核查暴露的三处缺口。
+> 本批次是本专项在「底座」定位内的收口批次，**不触碰** Event / 状态机 / Scheduler / Workflow / Review Runtime。
+
+## 9.1 立项背景（2026-09-13 代码核查）
+
+批次一~三交付了「RBAC 四表 + 管理面 4 控制器动作级授权 + 前端动态路由 / v-auth」，但核查发现三处未闭合：
+
+| # | 缺口 | 代码证据 | 实际影响 |
+|---|---|---|---|
+| 1 | **Sa-Token 认证未收口** | 全仓（除测试）0 处 `StpUtil.checkLogin()`；admin 认证走自建 `AuthInterceptor` → `AuthService.validateAdminToken()` → `StpUtil.getLoginIdByToken()`（只读、不校验 active-timeout、不续期） | `sa-token.active-timeout: 28800` **实际失效**；叠加 `timeout: -1` 后会话永不过期。Sa-Token 退化为「会话存储 + 注解校验器」，与「统一鉴权体系」目标不符 |
+| 2 | **身份数据双写不一致** | `sys_user.role` 单字段：授权侧不读（`listPermissionCode` 只查 `sys_user_role`）、前端不渲染（登录消费 `roles[]`、用户列表消费 `roleCodes[]`）→ 已退化为死字段；而 `SysUserServiceImpl.create()` / `AdminInitializer` **只写该字段、不插 `sys_user_role`** | 走 `create()` 建出的账号，授权侧角色为空 → 登录后菜单树空、`@SaCheckPermission` 全 403。当前被 V1 种子 + V77 一次性迁移掩盖，批次四建号功能会直接踩中 |
+| 3 | **接口授权覆盖极低** | `@SaCheckPermission` 仅出现在 4 个控制器 / 24 个方法（`SysUserRoleController` / `SysRoleController` / `SysPermissionController` / `SysDepartController`）；全仓 234 个接口中，**管理面 85 个无动作码、业务面 125 个全部无授权** | 任何「只读角色」无法落地：GUEST 登录后仍可 `POST /api/tasks` 建任务、`POST /api/requirement-conversations` 建对话、`POST /api/reviews` 提交审查 |
+
+> 附带缺陷：`WebMvcConfig` 认证白名单排除的是 `/api/agents/register-with-token`（连字符），
+> 而 `AgentController` 实际映射为 `/registerWithToken`（驼峰）——白名单未命中，该端点仍要过认证。
+
+## 9.2 目标状态
+
+```text
+认证   Sa-Token 标准链路（StpUtil.checkLogin + active-timeout 滑动续期真实生效）
+       agent 通道（API Key / MCP）显式旁路，不进 Sa-Token 会话（契约不变）
+身份   单事实源 sys_user_role（sys_user.role 物理退场）
+角色   SUPER_ADMIN（通配 "*"）/ ADMIN（管理面）/ NORMAL_USER（业务读写）/ GUEST（只读）
+授权   适用接口 100% 动作级权限码化：管理面存量补齐 + 业务面写接口授权化 + 前端按钮级对齐
+建号   管理员建号（user:add）+ 自助注册（sys_config 开关，默认关闭）
+```
+
+## 9.3 任务明细
+
+### BASE-4.1 认证收口到 Sa-Token 标准链路
+
+- **认证分支改写**：`AuthInterceptor` 的 admin 分支由 `authService.validateAdminToken(token)`
+  改为标准 `StpUtil.checkLogin()`——token 由 Sa-Token 依 `token-name: X-Admin-Token` 自行解析，
+  从而触发 `checkActiveTimeout` 校验与 `updateLastActiveToNow` 滑动续期（修复缺口 1）。
+- **`validateAdminToken` 语义收敛**：仅保留「按 token 回读用户信息」用途（`/api/auth/me` 复用），
+  不再作为守门路径；`migrateLegacySession` 存量会话迁移逻辑保留不动（前端零感知）。
+- **授权守门改写**：`AdminOnlyInterceptor` 从「读手写 `_authType` attribute」改为
+  「`StpUtil.isLogin()` + 角色判定（`SUPER_ADMIN` / `ADMIN`）」，事实源回到 Sa-Token。
+- **agent 旁路显式化**：Agent API Key 通道（`/api/mcp/**`、`/api/agents/doorbell/**`、
+  `/api/agent/**`、`/api/artifacts/**`、`/api/activities` 写侧等）在认证分发处短路，
+  明确「不进 Sa-Token 会话」，保持现有 Bearer 契约不变。
+- **修白名单不匹配**：`/api/agents/register-with-token` → `/api/agents/registerWithToken`。
+
+### BASE-4.2 身份数据模型清理（`sys_user.role` 退场）
+
+- **修正建号写入**：`SysUserServiceImpl.create()` 与 `AdminInitializer` 补插 `sys_user_role`
+  （角色码 → `sys_role.id` 解析，事务内），杜绝「建了号却无角色」。
+- **V87 迁移**：
+  ① 防御性补齐历史 join 行（`sys_user.role` → `sys_user_role`，`ON CONFLICT DO NOTHING` 幂等）；
+  ② `ALTER TABLE sys_user DROP COLUMN role`。
+- **DTO 字段清理**：删 `SysUserItem.role`、`LoginResponse.role`、`AdminSession.role`；
+  前端 `types/system.ts` 同步删字段。
+- **`SysUserItem` / `LoginResponse` 契约收敛**：角色一律以 `roles[]` / `roleCodes[]` 表达。
+
+### BASE-4.3 角色体系扩充（NORMAL_USER / GUEST）
+
+- **V88 迁移**：新增 2 个内置角色 + 权限绑定（幂等）：
+  - **NORMAL_USER（普通用户）**：业务操作者——全部 `*:view` 菜单码 + 业务写动作码
+    （任务 / 子任务 / 需求对话 / 审查 / 积分 / 模块 等），**不含**系统设置与管理面
+    （user / role / permission / menu / depart / llm-provider / config）。
+  - **GUEST（游客）**：**纯只读**——仅 `*:view` 菜单码，**零写动作码**。
+    用途：平台公网发布时提供「可浏览系统功能、不可改数据」的演示账户。
+- **菜单差异**：GUEST 可见全部只读菜单；系统设置类菜单（`settings:view` 及其子项）不绑定。
+- **前端零改动**：动态路由 / 侧边栏 / `hasPermission` 均已按权限码驱动，无需改代码。
+
+### BASE-4.4 全量接口动作级权限化
+
+- **4.4a 管理面存量补齐**：85 个无动作码的管理面接口按「资源:动作」补 `@SaCheckPermission`
+  （矩阵见 §9.4）。
+- **4.4b 业务面写接口授权化**：业务面 68 个写接口中，**剔除 Agent / 系统身份通道与公开白名单**
+  （`McpController` 13、`AgentController` 注册 2、`AgentInboxController` 2、`ArtifactUploadController` 1、
+  `ActivityController` 1、`SetupController` 1、`AuthController` login+logout 2，共 22），
+  对其余 **46 个**补动作码；业务面读接口保持「登录即可读」，不补码。
+- **4.4c 前端按钮级对齐**：业务页面按新动作码补 `v-auth`（与后端码一一对应），
+  避免只读角色看到必然 403 的按钮。
+- **粗粒度码退役**：`agent:manage` / `user:manage` / `role:manage` / `system:manage` 软删，
+  不再新增引用（其覆盖能力由动作码替代）。
+- **`CredentialController` 归位**：路径在业务面、语义是管理面（现依赖方法内 `requireAdmin()`），
+  本批次纳入动作码统一口径。
+
+### BASE-4.5 建号与注册开关
+
+- **管理员建号**：`POST /api/admin/users`（`@SaCheckPermission("user:add")`）——
+  透出 `SysUserService.create()` 能力，支持同时指定角色；UserList.vue 增「新增用户」按钮 + 对话框。
+- **自助注册（默认关闭）**：`POST /api/auth/register` 由 `sys_config` 键
+  `auth.register.enabled`（**默认 `'0'`**）门控；开启后注册用户默认绑 `GUEST`（最小权限）。
+- **登录页注册栈**：开关关闭时保留现有引导文案；开启时渲染真实注册表单。
+
+## 9.4 权限码矩阵（治理口径）
+
+### 9.4.1 命名规范
+
+```text
+资源:动作        动作 ∈ { view, add, edit, delete, assign, approve, execute,
+                        dispatch, publish, archive, replay, rebuild, claim,
+                        submit, complete, rework, block, reassign, pause, resume,
+                        send, finalize, regenerate, abandon, retry, adjust, key, ... }
+菜单码（type=MENU）沿用既有 `xxx:view`；接口动作码（type=API）一律 `资源:动作`
+SUPER_ADMIN 由 StpInterfaceImpl 返回 "*" 通配，自动覆盖全部新增码（无需绑定）
+```
+
+### 9.4.2 管理面动作码（BASE-4.4a，新增约 40 码）
+
+| 资源 | 现有码 | 新增动作码 | 覆盖控制器（接口数） |
+|---|---|---|---|
+| agent 管理 | agent:view(MENU)、agent:manage(退役) | agent:add / agent:edit / agent:delete / agent:key | AdminAgentController（17） |
+| llm-provider | — | llm-provider:view / add / edit / delete / key / model | AdminLlmProviderController（15） |
+| team | team:view(MENU) | team:add / team:edit / team:archive / team:member | TeamController（9） |
+| workflow-template | — | workflow-template:view / add / edit / publish / archive | WorkflowTemplateController（8） |
+| workflow-instance | — | workflow-instance:view | WorkflowInstanceController（1） |
+| prompt-template | — | prompt-template:view / add / edit / delete | AdminPromptController（7） |
+| config | — | config:view / config:edit（替代 system:manage） | AdminConfigController（6） |
+| platform-provider | — | platform-provider:view / edit | AdminProviderConfigController（3） |
+| quality | quality:view(MENU) | quality:rebuild / quality:dispatch | AdminQualityController（6） |
+| mq-recovery | — | mq-recovery:view / mq-recovery:replay | AdminMqRecoveryController（4） |
+| duty-lease / browser-session / dashboard / menu | duty:view / browser:view / dashboard:view / menu:view（均 MENU） | 全读接口不补动作码；menu:add / edit / delete 复用 permission:* | 3 / 2 / 3 / 1 |
+| RBAC 四控制器 | user:* / role:* / permission:* / depart:*（已授权） | 无需新增 | 24（现状基线） |
+
+### 9.4.3 业务面动作码（BASE-4.4b，新增约 46 码）
+
+| 资源 | 新增动作码 | 覆盖控制器（写接口数） |
+|---|---|---|
+| task | task:add / task:edit / task:delete / task:plan / task:republish / task:confirm-plan / task:reject-plan / task:report | TaskController（10） |
+| subtask | subtask:edit / subtask:claim / subtask:execute / subtask:submit / subtask:complete / subtask:rework / subtask:block / subtask:reassign / subtask:redispatch / subtask:pause / subtask:resume / subtask:status | SubTaskController（16） |
+| conversation | conversation:add / conversation:send / conversation:finalize / conversation:regenerate / conversation:abandon / conversation:delete / conversation:retry / conversation:mode | RequirementConversationController（10） |
+| review | review:add（review:approve 已有） | ReviewController（1） |
+| score | score:adjust | ScoreController（1） |
+| module | module:edit | ModuleController（1） |
+| prompt-enhance | prompt:enhance | PromptEnhancerController（1） |
+| credential | credential:view / credential:bind / credential:rotate / credential:revoke | CredentialController（5） |
+| agent-execution | agent-execution:preview | AgentExecutionController（2） |
+
+> **不加权限码的接口**（Agent / 系统身份通道 + 公开白名单，共约 22 个写 + 若干读）：
+> `McpController`（13 写）、`AgentController#register / registerWithToken`（2）、
+> `AgentInboxController#markRead / archive`（2）、`ArtifactUploadController#upload`（1）、
+> `ActivityController#create`（1）、`SetupController#initialize`（1）、`AuthController#login / logout`（2）。
+> 这些走 `Bearer` API Key 或公开白名单，加 `@SaCheckPermission` 会直接阻断外部 Agent 与首启流程。
+
+### 9.4.4 角色 × 能力矩阵
+
+| 能力域 | SUPER_ADMIN | ADMIN | NORMAL_USER | GUEST |
+|---|:--:|:--:|:--:|:--:|
+| 全部菜单可见 | ✅（`"*"`） | 管理面 + 业务面 | 业务面 | 业务面只读菜单 |
+| 系统设置（user/role/permission/menu/depart） | ✅ | ✅（按 V77/V84 显式码） | ❌ | ❌ |
+| 平台配置（llm-provider / config / prompt-template / platform-provider） | ✅ | ❌（守 V77「管理类仅超管」口径） | ❌ | ❌ |
+| 业务读写（任务/子任务/对话/审查/积分/模块） | ✅ | ✅ | ✅ | ❌（写 403） |
+| 业务只读（全部 `*:view`） | ✅ | ✅ | ✅ | ✅ |
+| 建号入组 | ✅ | ❌（user:add 仅超管） | ❌ | ❌ |
+
+## 9.5 迁移清单（Flyway）
+
+| 版本 | 内容 | 可逆性 |
+|---|---|---|
+| **V87** | 身份模型收口：防御性补齐 `sys_user.role` → `sys_user_role`；`ALTER TABLE sys_user DROP COLUMN role` | DDL 不可逆（列删除）；补齐段幂等 |
+| **V88** | 角色扩充：新增 NORMAL_USER / GUEST 2 角色 + 权限绑定 + 菜单绑定 | 按 `code` 反向 DELETE 可逆 |
+| **V89** | 权限码扩充：管理面 + 业务面动作码种子（§9.4.2 / §9.4.3）+ 粗粒度码软删 + 角色重绑 | 按 `code` 反向 DELETE 可逆 |
+
+> V77~V86 只读（红线）；新变更一律 V87+ 递增。
+
+## 9.6 验收
+
+1. **Sa-Token 收口**：admin 会话闲置超过 `active-timeout` 后请求返回 401（滑动续期生效）；
+   持续活动不断连；`/api/auth/me` 正常回读。
+2. **身份单事实源**：`sys_user.role` 列已删除；新建用户后 `sys_user_role` 有对应行；
+   登录响应 `permissions` 非空、菜单树非空。
+3. **四角色差异可复现**（Docker + 浏览器实测）：
+   - SUPER_ADMIN：全量菜单 + 全接口 200；
+   - ADMIN：管理面可用、平台配置类 403；
+   - NORMAL_USER：业务读写可用、`/api/admin/**` 403、无系统设置菜单；
+   - GUEST：`GET /api/tasks` 200、`POST /api/tasks` 403、
+     `POST /api/requirement-conversations` 403、`POST /api/reviews` 403。
+4. **覆盖度**：适用接口 100% 有动作码（管理面 109 / 业务面适用写 46）；
+   Agent 与公开通道零改动（MCP / duty e2e 回归通过）。
+5. **回归**：`verify-admin-authz.ps1` 改造前后断言一致；
+   core / api 单测全绿；UI `type-check` + 构建通过。
+
+## 9.7 风险与缓解
+
+| 风险 | 等级 | 缓解 |
+|---|---|---|
+| 补动作码后 ADMIN / NORMAL_USER 未绑定新码 → 功能回归 | **高** | V89 必须同步为 ADMIN 绑定管理面码、为 NORMAL_USER 绑定业务写码；四角色实测逐条断言 |
+| 认证链路改写可能放开 admin 端点 | **高** | 先跑 `verify-admin-authz.ps1` 建基线，改造后同组断言必须一致 |
+| `checkLogin()` 误伤 Agent 请求 | **高** | agent 通道显式旁路 + MCP / duty e2e 回归 |
+| `DROP COLUMN sys_user.role` 不可逆 | 中 | V87 先补齐 join 行再删列；本地 dev 库先行验证；生产前备份 |
+| 自助注册被滥用 | 中 | 默认关闭；开启后默认绑 GUEST 最小权限；开关留审计日志 |
+| 全量补码工作量大、易漏 | 中 | 以 §9.4 矩阵为清单逐控制器勾选；补权限单测（正/反向） |
+
+## 9.8 合规基线
+
+沿用 §4（规约 §9/§13/§34 生命周期、§16/§23/§25/§27 验证体系、CODE_STYLE §42~§48），并补充：
+
+- **Step 3 实现计划**：本批次每个子任务实施前按规约 §13 的 14 项输出（本 §9 为批次级计划）。
+- **域归属**（CODE_STYLE §5.5/§6）：RBAC 归 `system` 域，不反向依赖 agent / task / planner / review。
+- **DTO 投影**（§11.3）：`SysUserItem` / `LoginResponse` 字段变更属契约变更，须同步前端类型。
+- **事务**（§14）：`create()` 的用户 + 角色写入须在同一事务内。
+- **Flyway**（§16.1）：V87+ 递增，V77~V86 只读。
+- **权限规范**（§43）：认证与授权分离，`/api/admin/**` 必须经 Admin 授权，不以「已登录」放行。
+- **安全**（§42）：不写死密码 / Key；注册开关默认关闭。
+- **文档回填**（§32）：目标边界变化 → 目标架构 §12；专项变化 → 本文档；差距项 → 差距表 G-012/G-013 行内登记。
+
+
+# 10. 红线与约束
 
 - **不新增第二套权限体系**：唯一事实源仍是 sys_user_role / sys_role_permission /
   sys_permission + Sa-Token StpInterface；不做权限双写。
+- **认证与授权分离**（CODE_STYLE §43）：`/api/admin/**` 必须经 Admin 授权，不以「已登录」放行；
+  `@SaCheckPermission` 不得加在 Agent（API Key / MCP）与公开白名单通道上。
 - **Event / 状态机不变**：本专项不触碰 Agent Event Stream、业务状态机、Scheduler /
   Workflow / Review Runtime。
 - **外部 Agent 契约不变**：CLI_CLIENT 走 API Key / MCP，不进入 Sa-Token 会话。
-- **已提交 Flyway DDL 不改**：V77/V78 只读，新变更一律新增迁移（V79+）。
+- **已提交 Flyway DDL 不改**：V77~V86 只读，新变更一律新增迁移（V87+）。
 - **编号纪律**：本专项任务一律 `BASE-xxx`，不占用 G-xxx / P0~P3 / A1~A7 / S1~S8；
   迭代记录按日期写入 `doc/log/`。
 - **完成 ≠ PASS**：每批次结束按《HelloAI_AI开发协作规约》执行 git diff/status 回填。
 
-# 10. 验收问题（全部批次完成后）
+# 11. 验收问题（全部批次完成后）
 
 1. 无权限页面 URL 直达是否 404？（路由层面，非仅菜单隐藏）
 2. 页面内按钮是否按权限码显隐？（v-auth）
@@ -287,3 +504,39 @@ Runtime / Capability / Provider）不做任何改造，本专项**不触碰**：
 4. 角色授权是否为差异更新？
 5. SUPER_ADMIN / ADMIN 差异是否在 Docker 实测可复现？
 6. 外部 Agent 与业务事件流是否零影响（回归）？
+7. **（批次四）** Sa-Token 认证是否真正收口——`active-timeout` 滑动续期可实测？
+8. **（批次四）** 身份是否单事实源——`sys_user.role` 已退场、建号即签发角色？
+9. **（批次四）** 只读角色是否成立——GUEST 全写接口 403、只读接口 200？
+10. **（批次四）** 授权覆盖度是否达标——适用接口 100% 动作码化且四角色差异可复现？
+
+# 12. 勘误记录
+
+> 记录本文档及关联文档中与代码 / 运行事实现状**不符**的描述。
+> 冲突判定按《HelloAI_AI开发协作规约》事实源优先级：**代码与运行行为 > Flyway/库结构 >
+> 可复现验证结果 > 差距表 > 基线文档 > 历史文档**。
+
+## 12.1 Sa-Token 会话 Redis 键前缀（2026-09-13 修正）
+
+- **原描述**：本文档 §2「S2 会话层」、`doc/log/2026-09.md`（S2 会话层）、
+  `doc/HelloAI 实现差距表.md`（G-012 S2 会话层）均记为「Redis `satoken:` 前缀」。
+- **事实**：Sa-Token 的会话键前缀取自 `SaTokenConfig.getTokenName()`，即配置项
+  **`sa-token.token-name`**；`satoken` 只是该配置在库内的**默认值**。本项目
+  `application.yml` 已覆盖为 `token-name: X-Admin-Token`，故实际键前缀是 **`X-Admin-Token:`**。
+- **证据**：
+  1. 字节码（sa-token-core 1.44.0，`cn.dev33.satoken.stp.StpLogic`）：
+     - `splicingKeyTokenValue(t)` = `getTokenName() + ":" + loginType + ":token:" + t`
+     - `splicingKeySession(id)` = `getTokenName() + ":" + loginType + ":session:" + id`
+     - `SaTokenConfig` 构造器仅把 `tokenName` 初始化为 `"satoken"`，且无 `tokenPrefix` 默认赋值
+       （即键前缀不来自 `token-prefix`）。
+  2. 本机 Redis 实测键（BASE-4.1 E2E，2026-09-13）：
+     `X-Admin-Token:login:token:<tokenValue>`、
+     `X-Admin-Token:login:session:<loginId>`、
+     `X-Admin-Token:login:last-active:<tokenValue>`
+     （`login` 为 Sa-Token 默认 loginType；`last-active` 以 tokenValue 为后缀）。
+- **影响面**：仅影响会话排查 / 调试的检索预期——按 `satoken:*` 模式扫描 Redis 会扫不到键，
+  可能被误判为「会话未落 Redis」。会话存储介质（Redis，经 `sa-token-redis-jackson` 复用
+  spring-data-redis）与 `active-timeout` 滑动续期行为**均不受影响**。
+- **连带修正**：`helloai-core/pom.xml` 依赖注释、`AuthService` / `AuthServiceImpl` javadoc
+  中的同类描述同步更正。
+- **验证**：BASE-4.1 E2E 已用正确前缀完成滑动续期实证（`last-active` 时间戳静默不刷新、
+  活动即刷新），见 §9.6 验收项 1。
