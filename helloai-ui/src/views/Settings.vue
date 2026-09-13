@@ -699,7 +699,6 @@ import {
   Plus,
   CircleCheckFilled,
   CircleCloseFilled,
-  WarningFilled,
   Setting,
   RefreshLeft,
   CircleCheck,
@@ -1099,17 +1098,6 @@ async function handleSaveKey() {
   } catch (e: any) {
     ElMessage.error('保存失败')
   }
-}
-
-function openCreateDialog() {
-  formDialogMode.value = 'create'
-  formDraft.providerCode = ''
-  formDraft.providerName = ''
-  formDraft.protocolType = 'OPENAI_COMPATIBLE'
-  formDraft.baseUrl = ''
-  formDraft.apiKey = ''
-  formDialogVisible.value = true
-  formDialogRef.value?.clearValidate()
 }
 
 function openEditDialog(row: LlmProviderResponse) {
