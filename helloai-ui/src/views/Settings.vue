@@ -409,7 +409,7 @@
                     <el-checkbox
                       v-for="m in providerModels"
                       :key="m.modelName"
-                      :label="m.modelName"
+                      :value="m.modelName"
                       :disabled="isBuiltinSelected"
                       class="model-checkbox"
                     >
@@ -525,9 +525,13 @@
             </div>
             <el-form-item label="通知方式">
               <div class="switch-field">
+                <!--
+                  独立 checkbox（非 el-checkbox-group）：modelValue 须为布尔/字符串/数字，
+                  不能直接绑定数组（会触发 EP 的 Invalid prop 告警且勾选态不可靠）；
+                  此处为只读展示，故用 notifyChannels 派生布尔值，并去掉已废弃的 label 属性。
+                -->
                 <el-checkbox
-                  v-model="form.notifyChannels"
-                  label="web"
+                  :model-value="form.notifyChannels.includes('web')"
                   disabled
                   class="notify-checkbox"
                 >
