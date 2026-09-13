@@ -72,6 +72,24 @@ public class WebSearchProperties {
     private String aiSearchBaseUrl = "https://api.bochaai.com/v1/ai-search";
 
     /**
+     * 搜索阶段总时间预算（毫秒，默认 30 秒）。
+     *
+     * <p>多候选词为串行搜索，单次可能耗时较长（AI Search + 总结 25 秒量级）；
+     * 预算耗尽即停止后续候选词与补搜，保留已得结果——保证澄清轮不会被搜索拖成分钟级。
+     * 设 0 或负值关闭预算限制（不推荐）。</p>
+     */
+    private long searchBudgetMs = 30_000L;
+
+    /**
+     * 博查 AI Search 请求超时（毫秒，默认 25 秒）。
+     *
+     * <p>独立于 {@link #timeoutMs}（基础搜索 8 秒）：AI Search 是「检索 + 博查侧大模型总结」
+     * 两步，开启 {@link #aiSearchAnswer} 后耗时显著高于基础搜索（实测 8 秒超时全量降级），
+     * 需放宽到 25 秒量级；仍失败则降级空列表，不阻断澄清主流程。</p>
+     */
+    private long aiSearchTimeoutMs = 25_000L;
+
+    /**
      * 博查 AI Search 单次返回条数（专用容量配置，默认 15，API 上限 50）。
      * 独立于 {@link #maxResults}：AI Search 是「高容量检索」专用供应商，走 provider 级
      * 容量上限而非通用护栏，让同一需求拿到的参考网页显著多于基础搜索。

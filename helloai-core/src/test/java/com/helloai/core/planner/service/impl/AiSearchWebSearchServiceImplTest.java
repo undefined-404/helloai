@@ -38,7 +38,7 @@ class AiSearchWebSearchServiceImplTest {
     private WebSearchCredentialKeyStore credentialKeyStore;
 
     private AiSearchWebSearchServiceImpl newService() {
-        when(properties.getTimeoutMs()).thenReturn(8000L); // HttpClient.connectTimeout 需 >0
+        when(properties.getAiSearchTimeoutMs()).thenReturn(25_000L); // HttpClient.connectTimeout 需 >0
         return new AiSearchWebSearchServiceImpl(properties, credentialKeyStore, new ObjectMapper());
     }
 

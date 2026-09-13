@@ -64,7 +64,7 @@ public class AiSearchWebSearchServiceImpl implements WebSearchService {
         this.credentialKeyStore = credentialKeyStore;
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(properties.getTimeoutMs()))
+                .connectTimeout(Duration.ofMillis(Math.max(1L, properties.getAiSearchTimeoutMs())))
                 .build();
     }
 
@@ -94,7 +94,7 @@ public class AiSearchWebSearchServiceImpl implements WebSearchService {
             ));
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(properties.getAiSearchBaseUrl()))
-                    .timeout(Duration.ofMillis(properties.getTimeoutMs()))
+                    .timeout(Duration.ofMillis(Math.max(1L, properties.getAiSearchTimeoutMs())))
                     .header("Content-Type", "application/json")
                     .header("Authorization", "Bearer " + apiKey)
                     .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
@@ -152,7 +152,7 @@ public class AiSearchWebSearchServiceImpl implements WebSearchService {
             ));
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(properties.getAiSearchBaseUrl()))
-                    .timeout(Duration.ofMillis(properties.getTimeoutMs()))
+                    .timeout(Duration.ofMillis(Math.max(1L, properties.getAiSearchTimeoutMs())))
                     .header("Content-Type", "application/json")
                     .header("Authorization", "Bearer " + apiKey)
                     .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))

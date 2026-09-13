@@ -159,9 +159,16 @@ public class ClarifyWebSearchOrchestrator {
             List<WebSearchResult> searched = new ArrayList<>();
             Set<String> seenUrls = new HashSet<>();
             String answer = null;
+            long budgetMs = webSearchProperties.getSearchBudgetMs();
             for (String q : candidates) {
                 if (q == null || q.isBlank()) {
                     continue;
+                }
+                // 时间预算：多候选词串行，预算耗尽即停止后续（保留已有结果），
+                // 避免 AI Search + 总结的 25 秒量级单次耗时把澄清轮拖成分钟级
+                if (budgetMs > 0 && System.currentTimeMillis() - t0 > budgetMs) {
+                    log.info("澄清联网搜索：时间预算 {}ms 耗尽，停止后续候选词: tried={}", budgetMs, attempted);
+                    break;
                 }
                 attempted.add(q);
                 List<WebSearchResult> hits = webSearchService.search(q, perQuery);
@@ -188,7 +195,9 @@ public class ClarifyWebSearchOrchestrator {
             }
             int rounds = 1;
             // Deep Research 风格补搜：首轮有结果且配置允许多轮时，LLM 评估缺口 → 补搜 1 轮
-            if (!searched.isEmpty() && webSearchProperties.getAiSearchMaxRounds() > 1) {
+            // （同样受时间预算约束：首轮已耗尽预算则不再补搜）
+            boolean budgetLeft = budgetMs <= 0 || System.currentTimeMillis() - t0 <= budgetMs;
+            if (!searched.isEmpty() && webSearchProperties.getAiSearchMaxRounds() > 1 && budgetLeft) {
                 String gapQuery = searchGapAssessor.assessGap(
                         stripUrls(userMessage), new ArrayList<>(searched), attempted);
                 if (gapQuery != null && !gapQuery.isBlank()) {
