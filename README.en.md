@@ -28,6 +28,62 @@ You describe  →  Planner clarifies + decomposes  →  Multi-AI parallel execut
 
 ## 💎 Why HelloAI?
 
+### Why do you need an AI team?
+
+As AI agents evolve rapidly, a new problem emerges:
+
+```text
+A single Agent
+   │
+   ├── writes code
+   ├── searches
+   ├── analyzes
+   ├── runs commands
+   └── calls tools
+```
+
+But as tasks grow more complex:
+
+```text
+Build a complete business feature
+        │
+        ├── Requirements analysis
+        ├── Technical design
+        ├── Database design
+        ├── Backend
+        ├── Frontend
+        ├── Testing
+        └── Code review
+```
+
+Having one agent do everything alone isn't necessarily the best approach.
+
+HelloAI organizes multiple agents instead:
+
+```text
+                    Complex Task
+                         │
+                         ▼
+                      Planner
+                         │
+              ┌──────────┼──────────┐
+              │          │          │
+              ▼          ▼          ▼
+          Backend     Frontend    Research
+           Agent        Agent       Agent
+              │          │          │
+              └──────────┼──────────┘
+                         ▼
+                      Reviewer
+                         │
+                         ▼
+                    Final Result
+```
+
+This means:
+
+> **AI is no longer just a "chatbot" — it's a digital team that can be organized, scheduled, supervised, and reused.**
+
 ### The industry gap we fill
 
 | Layer | Problem it solves | Status |
