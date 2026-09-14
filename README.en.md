@@ -1,149 +1,240 @@
-# HelloAI
+# HelloAI — Put AI from Different Vendors on One Team
 
-> A2A Collaboration Platform — Let AI from different vendors work as one team
+**An open-source A2A collaboration platform: heterogeneous AI agents — Qoder / Trae / Codex CLI / Claude Code — team up across terminals to deliver complex tasks together.**
 
-#### Introduction
+<p align="center">
+  <img src="https://img.shields.io/badge/License-MIT-7C3AED" alt="License MIT">
+  <img src="https://img.shields.io/badge/JDK-17-orange" alt="JDK 17">
+  <img src="https://img.shields.io/badge/Spring%20Boot-3.4.10-6DB33F" alt="Spring Boot 3.4.10">
+  <img src="https://img.shields.io/badge/Vue-3.x-4FC08D" alt="Vue 3">
+  <img src="https://img.shields.io/badge/Protocol-MCP-blue" alt="MCP">
+</p>
 
-- **MCP solved "agents can use tools"; A2A targets "agents can work with each other"** — but a protocol only gets agents talking: it does not decide who splits the work, who dispatches it, who accepts the result, who catches failures, or how everything is reconciled afterwards. **HelloAI is that missing half** — not another protocol, but the collaboration mechanism that makes agents from different vendors, running on different machines, actually deliver.
-- **What you get**: you state one requirement in plain language; the platform clarifies your intent, decomposes it into dependent sub-tasks, dispatches them in parallel to the most suitable agents, has an AI reviewer check every deliverable against the acceptance criteria (rejecting with concrete fix notes when it fails), and consolidates everything into one deliverable. You state it once and confirm once; every step stays visible and replayable.
-- Any CLI agent (Qoder / Trae / Codex CLI / Claude Code …) **joins over MCP with no code changes** and becomes a platform-dispatched "digital employee"; **any laptop or desktop that can run a CLI agent is a compute node**, so capacity scales with how many terminals you have — not with one server's CPU / VRAM / JVM heap. Built on the Spring AI MCP protocol, HelloAI hands business tasks to those agents much like scheduling microservices, and reaps the execution results.
-- The platform communicates with Agents via **MCP SSE** (`/mcp/sse`); external Agents perceive new tasks by polling their inbox with `pullTasks` (recommended every ~30s). A **doorbell SSE push channel** (`/api/agents/doorbell/sse`) was fully built but is **shelved** (2026-08-07) — external AI clients are one-way executors that cannot consume server push; the code stays running for future Agent-side daemon reuse.
-- Runtime red-line: **JDK 17**. No Spring AI 2.0 / Spring Boot 4.0 upgrades unless the project explicitly opens a JDK upgrade window.
+> **Your compute ceiling isn't your server — it's how many terminals you have.**
 
-**Core capabilities**
+Have you ever handed a slightly complex task to an AI, only to watch it drift off-course midway, or loop on one step while you babysit and keep correcting it?
 
-| Capability | Description |
-|---|---|
-| Dual-mode planner dialogue | CHAT free chat / CLARIFY structured clarification (option cards + progress bar, one-click task creation from the final draft); intent words trigger an in-dialogue confirmation popup, or type the `/planner` command (optionally with extra text) to switch explicitly. Optional **web search** — session-level switch, auto-searches every round in either mode (Bocha / Tavily / DeepSeek-native providers + direct URL fetch with SPA metadata fallback + collapsible verification bar showing query/sources/latency; failures degrade silently without blocking the dialogue) |
-| One-click onboarding | After registration, an external AI receives an auto-generated skills brief; following it walks the AI through connect / check-in / pick-task end-to-end |
-| Duty check-in | `checkIn` / `checkOut` duty lease (`ACTIVE` / `CLOSED` / `EXPIRED` state machine + auto expiration scan); on-duty Agents are dispatched first |
-| Task perception | External Agents poll the inbox via `pullTasks` (recommended every ~30s) as the only perception channel; the doorbell SSE push channel is shelved (2026-08-07) and kept running for future reuse |
-| MCP tool protocol | `pullTasks` / `claimSubTask` / `submitResult` / `reportBlocked` / `heartbeat` / `uploadArtifact` and others — tool count is whatever `tools/list` actually returns |
-| Elastic scheduling | External-first + idle-first + LLM fallback; external Agents that fail consecutively beyond the threshold auto-fall-back to in-platform `API_KEY_LLM`; same-role replacement |
-| Reliable delivery | Transactional Outbox (`PENDING` / `SENT` / `CONFIRMED` / `FAILED` four states) + publisher confirms + timeout-driven retry |
-| Stability | Resilience4j per-agent circuit breaker, Reconcile health checks, execution-timeout compensation, three-layer idempotent consumption (DB CAS + Redis + consumption log) |
+HelloAI takes a different approach. You describe what you need; it **asks clarifying questions first** to pin down your real intent, **decomposes the work into dependency-aware subtasks**, and dispatches them across terminals to the best-suited AIs in parallel — **anything that falls short is sent back for rework by an AI reviewer, with concrete fixes attached** — then merges everything into a single deliverable. You speak once and confirm once.
 
-**Supported Agent types**
+```text
+You describe  →  Planner clarifies + decomposes  →  Multi-AI parallel execution across terminals  →  AI reviewer accepts  →  Merged delivery
+```
 
-- `CLI_CLIENT` — external AI Agents (Qoder / Trae / Codex CLI / Claude Code and others; onboarded and verified)
-- `API_KEY_LLM` — platform-hosted API-key Agents (auto execution chain)
-- `WEB_BROWSER` — web-based AI (enum reserved, integration chain on the roadmap)
+**The AIs doing the work don't have to come from the same vendor, sit on the same machine, or change a single line of code.** Qoder / Trae / Codex CLI / Claude Code — any AI assistant on any terminal becomes a "digital employee" of the platform once connected over MCP.
 
-#### Software Architecture
+![HelloAI cross-terminal, cross-vendor architecture](doc/diagrams/helloai-architecture.svg)
 
-**Tech stack**
+---
 
-| Layer | Technology | Version |
+## 💎 Why HelloAI?
+
+### The industry gap we fill
+
+| Layer | Problem it solves | Status |
 |---|---|---|
-| Runtime | JDK | **17** (project red-line, permanently locked) |
-| Backend framework | Spring Boot | **3.4.10** |
-| AI protocol | Spring AI | **1.1.8** |
-| Persistence | PostgreSQL + MyBatis-Plus + Flyway | — |
-| Cache | Redis (Lettuce) | — |
-| Message queue | RabbitMQ (with publisher confirms / DLX) | — |
-| Resilience | Resilience4j CircuitBreaker | — |
-| Observability | Spring Boot Actuator | — |
-| Frontend | Vue 3 + TypeScript + Vite + Element Plus | — |
+| Agent ↔ Tools | Agents querying databases, calling APIs, reading/writing files | ✅ MCP is the de facto standard |
+| Agent ↔ Agent | Agents from different vendors discovering, messaging, delegating | ⚠️ Protocol standards exist, but the operational mechanisms don't |
+| **Team ↔ Task** | **A group of heterogeneous agents delivering one task as a team** | ✅ **This is where HelloAI sits** |
 
-**Repository structure**
+> **Honest note**: HelloAI is not an implementation of the A2A protocol specification — agents onboard over MCP. The semantics A2A calls for (capability discovery / task delegation / result receipts / long-running tasks with human-in-the-loop) are carried by the platform's own role model + subtask state machine + unified event stream. **We fill in the collaboration mechanics, not another protocol.**
 
+### Compute model: from "one server" to "every terminal you own"
+
+| | Traditional single-host / containerized multi-agent | HelloAI distributed terminal scheduling |
+|---|---|---|
+| **Compute ceiling** | One server's CPU / VRAM / JVM heap | **Aggregates fragmented compute across N terminals** — the more terminals, the bigger the pool |
+| **Agent ecosystem** | In-framework agents / same-ecosystem nodes | **Cross-terminal, cross-vendor**: Qoder / Trae / Codex CLI / Claude Code connect unmodified |
+| **Scaling** | Buy bigger hardware / re-architect into a cluster | **Open one more terminal and paste a SKILL** — that's your "scale-out" |
+| **Collaboration** | In-process calls, tightly bound to the framework | Standardized MCP messaging (check-in / pull task / execute / submit / heartbeat) |
+| **Cross-vendor teamwork** | Vendors' products don't talk to each other | Subtasks of one parent task can be **relayed between AIs from different vendors on different terminals** |
+
+### How we differ from mainstream options
+
+| | CrewAI / LangGraph | Dify | **HelloAI** |
+|---|---|---|---|
+| **Focus** | How to **write** agents (framework) | LLM app workflow orchestration | **How to manage agents**: scheduling, acceptance, audit |
+| **Compute model** | Single host / in-container | Inside platform nodes | **Distributed terminal aggregation** |
+| **Tech stack** | Python | Python | **Enterprise Java** (Spring Boot) |
+| **External agent onboarding** | Build against the framework API | Limited to platform-native nodes | **MCP protocol — CLI agents connect unmodified** |
+| **Quality loop** | Build it yourself | Assemble inside the workflow | **Built-in dual-track Reviewer + multi-round rework + dead-letter fallback** |
+| **Execution traceability** | Mostly logs | Workflow orchestration view | **Dependency DAG / timeline / sequence diagram / quality dashboard** |
+| **Deployment** | Library / service | SaaS / self-hosted | **Fully private via Docker Compose** |
+
+---
+
+## 🎬 How It Works (30-second version)
+
+```text
+You: Build an order payment module.
+
+HelloAI: clarify → decompose into a dependency-aware subtask draft → you confirm → dispatch across terminals
+
+        API design ──→ Backend ──→ Testing ──→ Review
+          (Qoder)     (Codex)    (Claude)    (Trae)
+
+        Failed → sent back for rework with concrete fixes
+        Passed → merged into one deliverable + zip download
 ```
-helloai/                          # Multi-module Maven project
-├── helloai-common/               # Common utilities (constants, enums, exceptions, config props)
-├── helloai-mq/                   # Message queue (RabbitMQ config + idempotent-consumer base)
-├── helloai-core/                 # Core business (business-domain sub-packages)
-│   └── com.helloai.core/
-│       ├── agent/                #   Agent domain: register / schedule / execute / chat / MCP / doorbell observability
-│       ├── task/                 #   Task domain: task / sub-task / review / score / state machine / timeline
-│       ├── system/               #   System support domain: user / config / rule / credential / attachment
-│       └── shared/               #   Cross-domain facilities: domain events / doorbell channel
-├── helloai-api/                  # REST API layer (Controller + DTO; Mapper access forbidden)
-├── helloai-job/                  # Scheduled jobs (Outbox relay / timeout compensation / health check / lease expiry)
-├── helloai-start/                # Bootstrap (Application + application.yml + Flyway)
-├── helloai-ui/                   # Frontend (Vue 3 SPA)
-├── scripts/                      # Verification scripts (powershell/ + shell/)
-└── doc/                          # Project docs (see doc/README.md doc map)
-```
 
-#### Installation
+**You only do two things**: describe the requirement and confirm the draft. Everything else flows automatically.
 
-**Prerequisites**
+![Task journey: from one sentence to one report](doc/images/helloai任务旅程.png)
 
-- JDK 17
-- Maven 3.8+
-- Docker + Docker Compose (infrastructure)
+**Want the full picture?** → [Dual-mode Planner](doc/design/Planner_Capability_Awareness.md) · [Reviewer acceptance flow](doc/diagrams/reviewer-full-flow.svg) · [Task lifecycle](doc/diagrams/subtask-state-machine.svg)
 
-**Steps**
+---
+
+<a id="quick-start"></a>
+
+## 🚀 Quick Start
+
+**Requirements**: JDK 17 · Maven 3.8+ · Node.js 18+ · Docker + Docker Compose · 4C8GB recommended
+
+### Option A: Build from source (5 minutes)
 
 ```bash
-# 1. Start infrastructure (PostgreSQL / Redis / RabbitMQ / MinIO)
+# 1. Clone
+git clone https://gitee.com/undefined_404/helloai.git && cd helloai
+
+# 2. Start middleware
 docker compose up -d
 
-# 2. Build + start backend (Flyway auto-runs the database migrations)
+# 3. Start the backend (Flyway migrates the schema automatically)
 mvn clean package -DskipTests
-java -jar helloai-start/target/helloai-start.jar
+java -jar helloai-start/target/helloai-start-1.0.0-SNAPSHOT.jar
 
-# 3. Start frontend
-cd helloai-ui
-npm install
-npm run dev
+# 4. Start the frontend
+cd helloai-ui && npm install && npm run dev
 ```
 
-After backend startup:
-- API: <http://localhost:6565>
-- Swagger UI: <http://localhost:6565/swagger-ui.html>
-- Health check: <http://localhost:6565/actuator/health>
+API docs: `http://localhost:6565/swagger-ui.html`
 
-#### Usage
+### Option B: One-command Docker deployment
 
-**External AI Agent quick onboarding**
+For running directly on a server. See [`docker-compose.server.yml`](docker-compose.server.yml). Key steps:
 
-1. In the admin console create an Agent (role `EXECUTOR`, type `CLI_CLIENT`) and copy the auto-generated skills brief.
-2. Paste the skills brief into the external AI (e.g. Qoder / Trae); the AI will automatically complete: register & auth → MCP connect → `checkIn` → poll `pullTasks` for duty.
-3. After the platform dispatches a task, the AI notices a new inbox message via `pullTasks` and follows the skills rules: `claimSubTask` → execute → `submitResult`.
-4. Exception path: if execution is blocked, call `reportBlocked` (with evidence chain); if the platform times out without submission, it auto-compensates and re-dispatches to another on-duty Agent of the same role.
+```bash
+# 1. Build artifacts
+mvn clean package -DskipTests
+cd helloai-ui && npm run build
 
-**Verification & regression scripts**
+# 2. Generate an AES key and write it into .env
+openssl rand -base64 32  # write the output into HELLOAI_CREDENTIAL_AES_KEY_BASE64
 
-All verification scripts live in `scripts/powershell/` (Windows) and `scripts/shell/` (macOS); script output is the source of truth:
+# 3. Start
+docker compose -f docker-compose.server.yml up -d
+```
 
-| Script | Coverage |
+> ⚠️ **Keep the AES key safe**: every API key in the `credential_vault` table is encrypted with it. Changing the key makes all configured providers fail to decrypt.
+
+**Configuring API keys**: after startup, sign in to the admin console and fill them in under **System Settings → Model Configuration**. Keys are encrypted at rest, take effect immediately, and require no restart.
+
+---
+
+## 📸 Screenshots
+
+| Requirement clarification | Dependency DAG | Quality dashboard |
+|---|---|---|
+| ![Requirement clarification with Planner](doc/images/clarify-chat.png) | ![Dependency DAG view](doc/images/dag-view.png) | ![Quality dashboard](doc/images/quality-dashboard.png) |
+
+More screenshots in [`doc/images/`](doc/images/).
+
+---
+
+## 📚 Documentation
+
+| What you want to do | Where to go |
 |---|---|
-| `verify-mcp-auth.*` | MCP auth regression |
-| `verify-mcp-e2e.*` | MCP end-to-end business loop |
-| `verify-onboarding*.ps1` | External Agent five-step onboarding (register / check-in / pull / submit) |
-| `verify-doorbell-e2e.ps1` | Doorbell long-lived connection (shelved 2026-08-07; code retained) |
-| `verify-agenthub-duty-e2e.ps1` | Duty lease (checkIn / checkOut / expiry scan / STRICT exclusive) |
-| `verify-poller-e2e.ps1` | DB Poller fallback consumption |
+| **Understand the architecture** | [Documentation map](doc/README.md) → project baseline / target architecture / design docs |
+| **Connect an external AI agent** | [Executor onboarding guide](.executor-onboarding.md) — SKILL generation, MCP connection, check-in |
+| **Read the executor duty manual** | [Duty manual](doc/manual/executor-duty/manual-assembled.md) — on duty / pull task / submit / heartbeat / troubleshooting |
+| **Inspect the subtask state machine** | [Subtask state machine (11 states)](doc/diagrams/subtask-state-machine.svg) |
+| **Understand the boundaries** | [Honest capability boundaries](doc/HelloAI_项目介绍.md) §2.6 (Chinese) |
+| **Contribute code** | [Code style](doc/HelloAI_CODE_STYLE.md) · [Project baseline](doc/HelloAI%20项目基线文档.md) |
+| **Browse iteration history** | [doc/log/](doc/log/) — grouped by feature line, archived monthly |
+| **中文版** | [README.md](README.md) |
 
-**MCP channel conventions**
+---
 
-- Primary channel: MCP SSE (`/mcp/sse` + `/mcp/messages`) is the only primary channel; REST `tools/list` / `tools/call` are kept for backward compatibility.
-- Heartbeat refresh: `last_seen_time` / online-state refresh uses the `heartbeat` tool as the primary trigger.
+## 🗺️ Roadmap
 
-**Documentation**
+**Shipped ✅**
 
-Start with [`doc/README.md`](doc/README.md) (the doc map: positioning and fact level of each document). Four sources of truth:
+- [x] Dual-mode Planner (CHAT / CLARIFY + web search) and automatic task decomposition
+- [x] Elastic scheduling: external-first + idle-first + on-duty-first + LLM fallback + circuit-breaker degradation
+- [x] MCP external agent onboarding (12 tools) + duty lease + task-aware polling
+- [x] Reviewer dual-track discipline + multi-round rework + dual-model consensus + sampled re-review
+- [x] Production-grade reliability: 4-state Outbox + three-layer idempotency + dead-letter human fallback + Reconcile
+- [x] End-to-end visibility: dependency DAG / timeline / sequence diagram / event stream workbench / quality dashboard
+- [x] Final merged report (4-state re-entry guard) + one-click zip of all artifacts
+- [x] Fully private deployment via Docker Compose
 
-- Code style: [`doc/HelloAI_CODE_STYLE.md`](doc/HelloAI_CODE_STYLE.md) (V2.0 — must read before changing code)
-- Project baseline: [`doc/HelloAI 项目基线文档.md`](doc/HelloAI%20项目基线文档.md)
-- Implementation gap: [`doc/HelloAI 实现差距表.md`](doc/HelloAI%20实现差距表.md)
-- Current progress: [`doc/项目进度.md`](doc/项目进度.md)
+**Planned 🔜**
 
-Also: EXECUTOR onboarding guide [`.executor-onboarding.md`](.executor-onboarding.md) / design system [`DESIGN.md`](DESIGN.md) / product definition [`PRODUCT.md`](PRODUCT.md).
+- [ ] Domain template marketplace (technical proposals / code review / doc generation)
+- [ ] Real browser-based agent (WEB_BROWSER) integration path
+- [ ] Multi-tenancy and permission isolation
+- [ ] Horizontal scaling of the scheduling core (dual-lock foundation in place)
+- [ ] More external agent adapters
 
-#### Contributing
+> Full roadmap and history: [doc/log/](doc/log/) and the [project baseline](doc/HelloAI%20项目基线文档.md).
+
+---
+
+## ❓ FAQ
+
+**Q: What is A2A, and how does HelloAI relate to it?**
+
+A: MCP lets agents use tools; A2A lets agents from different vendors collaborate. The protocol standards are here, but the layer answering "who breaks down the work, who gets dispatched, what counts as accepted, what happens on failure, how do we reconcile afterwards" is still missing — that's the gap HelloAI fills. Strictly speaking, HelloAI is not an implementation of the A2A specification (agents onboard over MCP); we fill in the collaboration mechanics.
+
+**Q: How is this different from CrewAI / LangGraph / Dify?**
+
+A: In one sentence: they solve "how to write agents / orchestrate applications"; HelloAI solves "**how to manage agents**" — task decomposition, elastic scheduling, acceptance and audit, end-to-end visibility — on an enterprise Java stack.
+
+**Q: Do I need a Java environment?**
+
+A: Yes. JDK 17 is a hard project baseline, plus Docker Compose to bring up PostgreSQL / Redis / RabbitMQ / MinIO. See [Quick Start](#quick-start).
+
+**Q: Which LLMs are supported?**
+
+A: DeepSeek is tested and working; Moonshot / MiniMax / DashScope are preset. Add your API key under System Settings → Model Configuration after startup — encrypted storage, immediate effect, no restart.
+
+**Q: Do I have to modify external AIs (Qoder / Trae / Codex CLI / Claude Code) to connect them?**
+
+A: No. Create the agent in the admin console, generate a SKILL description in one click, and paste it into the external AI. It then handles registration and authentication → MCP connection → duty check-in → polling on its own.
+
+**Q: Does my data leave my server?**
+
+A: No — it supports fully private deployment. Tasks, artifacts, and audit records stay in your own database, and LLM API keys are encrypted with AES-GCM in the credential vault. Task content is only sent to the model provider whose API key you configured yourself.
+
+---
+
+## 🤝 Contributing
 
 1. Fork this repository
-2. Create a branch `feat_xxx` or `fix_xxx`
-3. Read `doc/HelloAI_CODE_STYLE.md` before changing code; for scheduling / execution-chain changes also read `doc/design/HelloAI_调度解耦重构分析.md`
-4. Before submitting, run the `scripts/` verification scripts relevant to your change and attach script output to the PR
+2. Create a `feat_xxx` or `fix_xxx` branch
+3. Read [`doc/HelloAI_CODE_STYLE.md`](doc/HelloAI_CODE_STYLE.md) before touching code; for scheduling / execution-chain changes, read [`doc/design/Agent_Runtime.md`](doc/design/Agent_Runtime.md) and [`doc/design/Agent_Event_Stream.md`](doc/design/Agent_Event_Stream.md) first
+4. Run the `scripts/` verification scripts covering your change and attach the output to your PR
 
-#### Tips
+---
 
-1. Chinese: [`README.md`](README.md)
-2. Always start from the source-of-truth docs (baseline / gap / progress); historical design docs are archived in `doc/archive/` and no longer serve as development references
+## 🙏 Acknowledgements
 
-#### License
+This project drew on the following open-source projects during design and implementation (see the archived docs for details):
 
-Licensed under the [MIT License](https://opensource.org/licenses/MIT). See [LICENSE](LICENSE).
+- **[OpenMOSS](https://github.com/undefined-404/OpenMOSS)** — agent onboarding layer + role modeling + prompt/skill assets
+- **[AgentTeams](https://github.com/agentscope-ai/AgentTeams)** — scheduling core + execution boundaries + state convergence model
+- **[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)** — the `eng-*` platform skill library and the Reviewer dual-track discipline
+- **[Vibe-Skills](https://github.com/foryourhealth111-pixel/Vibe-Skills)** — workflow runtime design reference
+
+License compatibility is governed by each upstream LICENSE.
+
+---
+
+## 📄 License
+
+Released under the [MIT License](https://opensource.org/licenses/MIT). See [LICENSE](LICENSE).
+
+---
+
+**Let AI Agents Work as a Team.**
