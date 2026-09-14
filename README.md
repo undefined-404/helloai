@@ -1,4 +1,4 @@
-# HelloAI —— 分布式跨终端 AI Agent 调度平台
+# HelloAI —— A2A 协作平台：让不同厂商的 AI 组成一支团队
 
 <p align="center">
   <a href="doc/README.md"><img src="https://img.shields.io/badge/文档-文档地图-8A2BE2" alt="文档地图"></a>
@@ -9,9 +9,11 @@
   <img src="https://img.shields.io/badge/协议-MCP-blue" alt="MCP">
 </p>
 
-**HelloAI 把散落各处的 AI 助手与终端算力，组织成一支可调度、可验收、可审计的分布式工程团队**：任何一台终端上的任何一款 AI 助手（Qoder / Trae / Codex CLI / Claude Code……）经 MCP 协议接入，即成为受平台调度的"数字员工"--平台负责拆解需求、派发任务、回收产出、质检验收。**任何能跑 CLI Agent 的笔记本、台式机等终端设备，都是 HelloAI 的算力节点**；算力上限取决于你有多少台终端，而不是某台服务器的 CPU / 显存 / JVM 堆。
+**MCP 解决了"Agent 会用工具"，A2A 要解决"Agent 之间能协作"**——但协议只让 Agent 能互相通信，没有解决谁拆活、谁派单、谁验收、失败了谁兜、事后怎么对账。**HelloAI 补的正是这一段**：它不是一个新协议，而是一套让不同厂商、不同终端上的 AI 真正把活干成的协作机制。
 
-调度之上，它像一个 AI 项目经理：你用日常语言说一个需求（比如"帮我对比三家竞品的定价策略"），它先追问澄清你的真实意图，把任务拆成带依赖的子任务，跨终端派给最合适的 AI 并行执行，AI 质检员逐个验收——不合格自动打回重做，最后整合成一份完整报告。全程你只需说一次需求、点一次确认；卡在哪个环节、谁在执行、被驳回了几次，全部可视化、可回看。
+**你能得到什么**：你用日常语言说一个需求（比如"帮我对比三家竞品的定价策略"），它先追问澄清你的真实意图，把任务拆成带依赖的子任务，跨终端派给最合适的 AI 并行执行，AI 质检员逐个对照验收标准验收——不合格就带着具体修改意见打回重做，最后整合成一份完整交付。全程你只说一次需求、点一次确认；卡在哪个环节、谁在执行、被驳回了几次，全部可视化、可回看。
+
+**它特别在哪**：干活的 AI 不必是同一厂商、不必在同一台机器上，也不必改一行代码。Qoder / Trae / Codex CLI / Claude Code……任何一台终端上的任何一款 AI 助手，经 MCP 协议接入后即成为平台里的"数字员工"；**任何能跑 CLI Agent 的笔记本、台式机等终端设备，都是 HelloAI 的算力节点**——算力上限取决于你有多少台终端，而不是某台服务器的 CPU / 显存 / JVM 堆。
 
 ![HelloAI 跨终端跨产品架构](doc/diagrams/helloai-architecture.svg)
 
@@ -27,20 +29,15 @@
 
 ## 📰 动态
 
-- **2026-09-11:** 外部上下文供给三通道打通（MCP 新增 `getSubTaskDetail`，12 工具，V76）+ 需求包 P1/P2 生成能力退化修复（任务级验收 / 拆解必填 fail-close / 终稿结构校验 / 驳回缺失证据清单）；子任务详情六小节展示 + 拆解草案弹窗行展开
-- **2026-09-10:** 外部执行者双轮全链闭环（Round2 四层 DAG 7 子任务 / Round3 三执行者同台、竞态唯一赢家 231ms、技能硬门槛 135:20 分排序）+ JSONB 反序列化 CCE 死锁修复；事件流工作台任务/子任务维度增强（G-006 增量 D）
-- **2026-09-09:** Planner 能力感知拆解（G-010）与需求包准入 / 不确定性显式管理（G-011）落地——技能目录注入、三档粒度自适应、子任务级技能与约束、需求包六字段、uncertainties 分级登记，平台内链实测 PASS
-- **2026-09-08:** V2 Runtime 真身灰度第 0 步闭合（真身点亮 / 回滚零差异 / 外部 Agent 回归通过）；外部端到端真实任务 14 分钟 5 子任务零故障
-- **2026-09-07:** V2 P0 主线收官——Event Stream 统一（Run/Turn/Step）+ AgentRuntime 八件套 + Replay / Audit 消费面（API + UI 事件流工作台）
-- **2026-09-01:** Planner Chat 输入优化上线（PromptEnhancer）—— 输入区一键「优化输入」，语义保护型 System Prompt（增强表达不改需求），复用 Planner 模型链；文档体系 V2 重组（基线 / 差距 / Log 按职责分离，旧文档归档）
-- **2026-08-26:** 分布式健壮性改造启动 —— Redisson RLock 业务锁 + ShedLock 定时任务单例锁双锁体系、RabbitMQ 容量治理（x-max-length + reject-publish）、死信台账告警，为水平扩容打底
-- **2026-08-25:** 子任务详情页改版 —— 双栏网格布局 + 时间线事件卡片化 + 时序图迁至对话流页签；审查中心 / Agent 打卡上班页统一设计系统
-- **2026-08-24:** 模型配置中心升级 —— 添加模型两步式弹窗 + 计费类型字段 + API Key 连通性验证；质量度量看板默认开放
-- **2026-08-23:** 质量度量看板上线 —— review / agent 双域质量统计（通过率 / 返工率 / 驳回 TOP / 时长分布），7/30/90 天窗口 + 明暗主题；Reviewer 双审并行化
-- **2026-08-22:** 反馈回路 Phase 4 —— Reviewer 双审共识 + 抽检复审机制（候选池强制 2 个异模型 REVIEWER）
-- **2026-08-19:** Planner 对话联网搜索系列（V42-V45）—— 博查 / Tavily / DeepSeek 原生多供应商、URL 自动提取直取、SPA 元数据兜底、折叠查验条与查询规划器
+- **2026-09-12 ~ 09-14｜联网搜索优化**：总结 + 来源 + 补充检索，形态对齐网页版AI平台。
+- **2026-09-10 ~ 09-11｜外部 AI 接入：多个 AI 同台不抢活、不跑偏**：多执行者同台先过技能硬门槛、再按分排序（实测同一任务三个 AI 竞态，231ms 内决出唯一赢家）；新增子任务详情查询工具，外部 AI 认领任务时就能拿到依赖产出摘要与需求要点（MCP 工具至此 12 个）。解决的是外部 AI 拿不到上下文就开跑，以及多个 AI 重复抢同一个任务。
+  - **2026-09-09 ~ 09-11｜V2改造：：Planner从「闭眼拆」到「看着能力拆」**：拆解时注入平台技能目录与执行者画像，粒度按任务自适应（细 / 中 / 粗三档），子任务级技能要求与执行约束显式落库、草案页可人工修订；需求里的假设与待确认项分级登记——能自证的交给执行者自验，要人拍板的上报。同批修掉需求包生成的质量退化：补任务级验收标准、拆解必填项缺失整批拦截、终稿结构校验、驳回意见必须带缺失证据。解决的是「拆出来的活平台不一定干得了」和「需求含糊时只能靠猜」。
+- **2026-09-07 ~ 09-10｜V2改造：执行过程可追、可重放、可审计**：统一 Run / Turn / Step 三层事件模型，AgentRuntime抽象为无业务接口，增加审计和事件流工作台。解决的「只看得见结果对不对，看不见中间怎么走的」。
+- **2026-09-01｜Planner 输入优化**：输入框加「优化输入」，协助用户润色输入内容。
+- **2026-08-26｜分布式加固：为多实例与消息高峰打底**：业务锁（Redisson）+ 定时任务单例锁（ShedLock）双锁体系；消息队列加容量上限、超限直接拒收，死信统一进台账并告警。解决的是定时任务在多实例重复执行、消息堆积打爆服务、坏消息丢了没人知道。
+- **2026-08-22 ~ 08-25｜质量闭环与界面统一**：高难度任务由两个不同模型并行核验（分歧即停审转人工），已通过的按比例抽检复审、分歧记为「放水」纳入度量；质量看板上线（一次通过率 / 平均返工轮数 / 驳回原因 TOP / 时长分布，7·30·90 天窗口 + 明暗主题）；模型配置改两步式添加并强制连通性验证（不通过不给保存）；子任务详情改双栏 + 时间线卡片化 + 时序图独立页签，审查中心与打卡上班页统一设计系统。解决的是「审核结论不可度量、模型配错要跑到任务里才炸」。
 
-> 历史迭代记录见 [`doc/archive/HelloAI_迭代执行记录_V1.md`](doc/archive/HelloAI_迭代执行记录_V1.md)（160+ 条目，追加式记录，含决策演进注记），新记录按月归档于 `doc/log/`。
+> 上面按**功能线**归拢、按结束日期倒序，不逐条罗列提交记录；更早的迭代按月归档于 [`doc/log/`](doc/log/)，V1 期 160+ 条历史记录见 [`doc/archive/legacy/HelloAI_迭代执行记录_V1.md`](doc/archive/legacy/HelloAI_迭代执行记录_V1.md)（追加式，含决策演进注记）；按能力归拢的完整已交付清单见[路线图](#roadmap)。
 
 ---
 
@@ -59,7 +56,17 @@
 
 <a id="differentiators"></a>
 
-## 💎 核心差异化：分布式终端调度
+## 💎 核心差异化：A2A 协作层——行业缺的那一段
+
+先看行业分工，谁补了哪一段？
+
+| 层次 | 解决什么问题 | 现状 |
+|---|---|---|
+| Agent ↔ 工具 / 数据 | 让 Agent 会查库、调 API、读写文件 | ✅ MCP 已成事实标准；HelloAI 直接复用，不重复造 |
+| Agent ↔ Agent | 让不同厂商的 Agent 互相发现、通信、委派 | ⚠️ 协议标准已有（A2A / MCP），但"派给谁、验收什么、失败怎么兜、事后怎么对账"的落地机制仍缺 |
+| **团队 ↔ 任务** | 让一群异构 Agent 像一支团队交付同一个任务 | ✅ **HelloAI 在这里** |
+
+> **诚实说明**：HelloAI 不是 A2A 协议规范的实现，Agent 接入走的是 MCP；A2A 所需的语义（能力发现 / 任务委派 / 结果回执 / 长任务与人工介入）由平台自己的角色模型 + 11 态子任务状态机 + 统一事件流承载。我们补的是**协作机制**，不是又一个协议。
 
 ### 算力形态：从"一台服务器"到"你的每一台终端"
 
@@ -75,10 +82,9 @@
 
 ### 管理而非编写
 
-- 与 CrewAI / LangGraph 侧重"如何写 Agent"不同，HelloAI 侧重"**如何管 Agent**"：调度、容错、可视化、审计——**解决多 Agent 协作中的调度混乱、上下文断裂、执行不可追踪问题**
+- 与 CrewAI / LangGraph 侧重"如何写 Agent"不同，HelloAI 侧重"**如何管 Agent**"——也就是 A2A 里最缺的那半段：调度、容错、验收、可视化、审计，**解决多 Agent 协作中的调度混乱、上下文断裂、执行不可追踪问题**
 - 基于 Spring Boot + Spring AI MCP 协议，外部 AI（Qoder / Trae / Codex CLI / Claude Code）免改造一键接入，像调度微服务一样派发子任务并回收执行结果
 - 生产级可靠性：事务性 Outbox、三层幂等、熔断降级、死信人工兜底（详见下文「7. 生产级可靠性」表）
-- 诚实的边界：✅ **擅长**调研分析、文档生成、代码审查、独立工具开发——凡是"每个部分能独立验证对错"的任务；⚠️ **不擅长**需要全局强一致性的任务（完整项目架构设计、大规模重构、统一风格的整套 UI）——拆开会放大不一致，这类任务建议人工把关后小粒度拆解
 
 > 诚实的能力边界比夸大的宣传更省你的时间。详细判断依据见 [适用场景与能力边界](#scenarios)。
 
@@ -197,8 +203,8 @@ Planner 结构化拆解（`planner-decompose.md` 提示词 → LLM JSON 数组 �
 - **双模对话式需求澄清**：同一会话内自由切换——**CHAT 自由对话**（通用 AI 助手，闲聊/咨询不被打断）+ **CLARIFY 方案澄清**（结构化选项点选 + 完成度进度条，产出终稿一键立项）；两种模式均可开启**联网搜索**（会话级开关，任意模式每轮自动检索——博查 / Tavily / DeepSeek 原生多供应商，用户消息中的 URL 自动提取直取，折叠查验条展示搜索词/来源/耗时，失败自动降级不阻断对话）；CHAT 中表达「整理成方案」等意图词经**对话内二次确认**（弹窗选项卡）后转入方案模式，或直接输入 **`/planner` 斜杠命令**（可带附加文本）显式直达
 - **自动任务拆解**：需求确认后自动拆解为带依赖关系的子任务草案（`PENDING_PLAN_REVIEW` 草案态，不进分发链），用户确认/拒绝后进入既有分发链
 - **依赖 DAG**：子任务支持 `depends_on` 依赖，拓扑排序保证执行顺序，上游产出自动注入下游上下文
-- **能力感知拆解（G-010）**：拆解 Prompt 注入平台技能目录 + 执行者画像与难度感知，三档粒度自适应（FINE / STANDARD / COARSE）；子任务级技能指派与执行约束显式化（未命中目录的幻觉标签落库前过滤并审计），草案确认页支持人工修订
-- **需求包准入（G-011）**：终稿结构化为需求包（goal / scope / outOfScope / assumptions / openQuestions + 任务级验收标准），拆解继承 uncertainties 分级登记——ASSUMPTION 执行者自验证、UNCONFIRMED 上报人工裁决；拆解四必填字段（标题 / 内容 / 交付物 / 验收标准）缺失即整批拦截
+- **能力感知拆解**：拆解 Prompt 注入平台技能目录 + 执行者画像与难度感知，三档粒度自适应（FINE / STANDARD / COARSE）；子任务级技能指派与执行约束显式化（未命中目录的幻觉标签落库前过滤并审计），草案确认页支持人工修订
+- **需求包准入**：终稿结构化为需求包（goal / scope / outOfScope / assumptions / openQuestions + 任务级验收标准），拆解继承 uncertainties 分级登记——ASSUMPTION 执行者自验证、UNCONFIRMED 上报人工裁决；拆解四必填字段（标题 / 内容 / 交付物 / 验收标准）缺失即整批拦截
 
 ### 2. 多 Agent 弹性调度（Executor）
 - **平台内 API_KEY_LLM**：平台托管的 API-Key 型 Agent（DeepSeek 等），自动执行链路，保底执行
@@ -317,7 +323,7 @@ Planner 结构化拆解（`planner-decompose.md` 提示词 → LLM JSON 数组 �
 **关键通道口径**
 
 - MCP SSE（`/mcp/sse` + `/mcp/messages`）是外部 Agent 的唯一主协议通道；REST `tools/list` / `tools/call` 为兼容保留
-- 任务感知：外部 Agent 以 `pullTasks` 轮询收件箱为唯一感知通道（建议 30s）；门铃 SSE（`/api/agents/doorbell/sse`）已搁置（2026-08-07，外部 Agent 无法消费平台推送，代码保留运行待复用）
+- 任务感知：外部 Agent 以 `pullTasks` 轮询收件箱为唯一感知通道（建议 30s）
 - MCP 工具集：`pullTasks` / `ack` / `claimSubTask` / `heartbeat` / `getDepsSummary` / `getSubTaskDetail` / `uploadArtifact` / `submitResult` / `reportBlocked` / `getAgentStatus` / `checkIn` / `checkOut`，工具数量以 `tools/list` 实际返回为准
 
 **运行时组件职责**
@@ -326,7 +332,7 @@ Planner 结构化拆解（`planner-decompose.md` 提示词 → LLM JSON 数组 �
 |------|------|
 | Planner | 双模需求澄清（CHAT / CLARIFY + 联网搜索）、任务拆解 DAG、最终整合报告 |
 | 弹性调度器 | 外部优先 / 空闲优先 / 值班优先 / LLM 保底；per-agent 熔断与改派 |
-| MCP Server（Spring AI） | 外部 Agent 唯一主通道（SSE），12 个工具：pullTasks / claimSubTask / getSubTaskDetail / submitResult / checkIn 等 |
+| MCP Server（Spring AI） | 外部 Agent 唯一主通道（SSE），承载任务拉取 / 认领 / 详情查询 / 结果提交 / 打卡等工具 |
 | Outbox + RabbitMQ | 事务性投递（PENDING/SENT/CONFIRMED/FAILED 四态）+ publisher confirms + DLX 死信归档 |
 | Reviewer | 双轨纪律制审核（验收标准 + 工程纪律 C1-C4 / D1-D3），blocker 级驳回触发返工 |
 | 死信池 | 重分配达阈值转 `DEAD_LETTER`，人工审核后一键重新派发 |
@@ -347,7 +353,7 @@ Planner 结构化拆解（`planner-decompose.md` 提示词 → LLM JSON 数组 �
 | 消息队列 | RabbitMQ | 3.12（publisher confirms / DLX / 手动 ACK / 容量治理：x-max-length + reject-publish + prefetch / 死信台账 mq_dead_letter_archive） |
 | 对象存储 | MinIO + 本地物化存储 | `minio://` 默认 / `local://` 兜底（v2.7 起 minio:// 附件平台可直读） |
 | 弹性 | Resilience4j CircuitBreaker | — |
-| 协议 | MCP（SSE）主通道 / 门铃 SSE 长连接（已搁置） | Spring AI MCP Server |
+| 协议 | MCP（SSE），外部 Agent 唯一主通道 | Spring AI MCP Server |
 | 前端 | Vue 3 + TypeScript + Vite + Element Plus | + ECharts / Mermaid |
 | 监控 | Spring Boot Actuator | health / metrics / circuitbreakers |
 | 部署 | Docker Compose + Nginx | 见 `docker-compose.yml` / `docker-compose.server.yml` |
@@ -533,7 +539,7 @@ LLM API Key 支持两种配置方式，**推荐方式一**（系统设置页，�
 | **MiniMax** | Anthropic 兼容 | `https://api.minimaxi.com/anthropic` | `MiniMax-M2.5` | [MiniMax 开放平台](https://api.minimaxi.com/) |
 | **DashScope (通义千问)** | OpenAI 兼容 | `https://dashscope.aliyuncs.com/compatible-mode` | `qwen-plus` | [dashscope.console.aliyun.com](https://dashscope.console.aliyun.com/) |
 
-> 注：Moonshot 的 `moonshot-v1` 全系列与 `kimi-k2.5` 已于 2026-08-31 官方下线（调用返回 404），默认模型已切换为 `kimi-k3`（V61 迁移 + 配置默认值同步）。
+> 注：Moonshot 的 `moonshot-v1` 全系列与 `kimi-k2.5` 已于 2026-08-31 官方下线（调用返回 404），默认模型已随数据库迁移切换为 `kimi-k3`。
 
 <!-- TODO(添加模型弹窗截图)：待浏览器代理可用后补一张「添加模型」两步式弹窗截图（占位文件 doc/images/settings-model-add.png 暂未生成） -->
 
@@ -549,7 +555,7 @@ LLM API Key 支持两种配置方式，**推荐方式一**（系统设置页，�
 
 ### 方式二：环境变量（仅启动期生效）
 
-适合自动化部署 / CI 场景。值在容器启动时通过环境变量注入 yml 占位符 `${XXX_API_KEY:}`：
+适合纯自动化部署 / CI 场景。值在容器启动时通过环境变量注入 yml 占位符 `${XXX_API_KEY:}`：
 
 | 环境变量 | 对应 Provider |
 |---|---|
@@ -558,14 +564,7 @@ LLM API Key 支持两种配置方式，**推荐方式一**（系统设置页，�
 | `MINIMAX_API_KEY` | MiniMax |
 | `DASHSCOPE_API_KEY` | DashScope |
 
-`docker-compose.server.yml` 默认**未**预填这些变量。你可以在 compose 文件里追加（例）：
-
-```yaml
-environment:
-  DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
-```
-
-并把真值写入 `.env`。**注意**：环境变量写入的 Key 也可被系统设置页读取 / 覆盖**——推荐两个通道都用系统设置页统一管理，避免配置分散。
+`docker-compose.server.yml` 默认**未**预填这些变量；如需使用，在 compose 文件的 `environment` 段追加 `${XXX_API_KEY:-}`，并把真值写入 `.env`。环境变量写入的 Key 同样会被系统设置页读取 / 覆盖——**推荐统一走方式一，避免配置分散**。
 
 ---
 
@@ -626,26 +625,17 @@ environment:
 
 **已交付 ✅**
 
-- [x] 多 LLM 模型统一接入（DeepSeek 实测 + Moonshot / MiniMax / DashScope 预置）
-- [x] 双模对话式需求澄清（CHAT / CLARIFY / 意图词确认卡 / /planner 直达 / 推荐卡片 / 任意模式联网搜索）
-- [x] Planner 联网搜索（博查 / Tavily / DeepSeek 原生多供应商 + URL 自动直取 + SPA 元数据兜底 + 折叠查验条）
-- [x] 任务自动拆解 + 草案确认（依赖 DAG / 拓扑排序 / 双轨依赖注入 / 拆解异步化：提交即返回 + 前端轮询 + 超时兜底回收）
-- [x] 上下文连续性保障（Task Running Spec 双轨注入 + reviewHistory 多轮累积）
-- [x] 多轮审核-修正机制
-- [x] Reviewer 双轨纪律制 + 平台 eng-* 技能规范库（代码审查 / 文档标准 / 验证强度，任务技能标签命中自动注入）
-- [x] 可视化依赖图 / 时间线 / 时序图
-- [x] 弹性调度（外部优先 + 空闲优先 + 值班优先 + LLM 保底 + 熔断降级）
-- [x] MCP 外部 Agent 接入 + 值班打卡 + 任务感知轮询（门铃 SSE 已交付后搁置）
-- [x] 值班租约增强（动态 TTL 自适应 / concurrency 预扣）
-- [x] 可靠投递（Outbox 四态 + publisher confirms + 三层幂等 + 死信人工兜底）
-- [x] 报告生成与交付物（四态防重最终报告 + zip 下载 + 产出物化 + 附件版本管理：同名去活 / 打回失效 / 历史回查）
-- [x] 结构化多文件产出物化（方案 3：LLM manifest 协议 + 多文件附件 + Reviewer 内容级核验，迭代记录 §6.93）
-- [x] LLM Provider 动态化与模型多选配置（模型能力驱动默认配置 + 多选校验，迭代记录 §6.89）
-- [x] 反馈回路体系（历史表现摘要注入 §6.130 + Reviewer 双审共识与抽检复审 §6.142 + 质量度量看板 §6.147）
-- [x] V2 执行体系改造 P0 收官 + P1 主体（Event Stream 统一 Run/Turn/Step / AgentRuntime 八件套 / Replay · Audit 事件流工作台 / 外部执行轨迹加厚）
-- [x] Planner 能力感知与自适应粒度（技能目录注入 / 三档粒度 / 子任务级技能与约束 / 外部上下文三通道 12 工具）
+- [x] 模型接入与配置：多 LLM 统一接入（DeepSeek 实测 + Moonshot / MiniMax / DashScope 预置）+ Provider 动态化与模型多选配置（模型能力驱动默认值 + 多选校验）
+- [x] 需求澄清：双模对话 + 联网搜索（CHAT / CLARIFY / 意图词确认卡 / `/planner` 直达 / 推荐卡片；博查 / Tavily / DeepSeek 原生多供应商 + URL 自动直取 + SPA 元数据兜底 + 折叠查验条）
+- [x] 任务拆解：自动拆解 + 草案确认（依赖 DAG / 拓扑排序 / 双轨依赖注入 / 异步拆解与超时兜底回收）+ 能力感知与三档粒度自适应（技能目录注入 / 子任务级技能与约束 / 草案人工修订）
 - [x] 需求包准入与不确定性显式管理（需求包六字段 / uncertainties 分级登记 / 审查分级核验与缺失证据清单）
-- [x] 外部执行者多并发全链闭环（双轮实测：多执行者同台 / 竞态唯一赢家 / 技能硬门槛准入 / 死信熔断与人工重派恢复）
+- [x] 上下文连续性保障（Task Running Spec 双轨注入 + reviewHistory 多轮累积）
+- [x] 调度与接入：弹性调度（外部优先 + 空闲优先 + 值班优先 + LLM 保底 + 熔断降级）+ 值班租约增强（动态 TTL / concurrency 预扣）+ MCP 外部 Agent 接入与任务感知轮询 + 外部执行者多并发全链闭环
+- [x] 质量闭环：Reviewer 双轨纪律制 + 平台 `eng-*` 技能规范库 + 多轮审核-修正 + 双审共识与抽检复审 + 质量度量看板（反馈回路体系）
+- [x] 可靠投递（Outbox 四态 + publisher confirms + 三层幂等 + 死信人工兜底）
+- [x] 交付物：最终整合报告（四态防重）+ zip 下载 + 产出物化与附件版本管理 + 结构化多文件产出物化（LLM manifest 协议 + 多文件附件 + Reviewer 内容级核验）
+- [x] 可视化：依赖图 / 时间线 / 时序图 + 事件流工作台（Replay / Audit 消费面）
+- [x] V2 执行体系改造 P0 收官 + P1 主体（Event Stream 统一 Run/Turn/Step / AgentRuntime 八件套 / 外部执行轨迹加厚）
 - [x] 工作流模板与 Team 编排（存量件保留不扩张：模板物化 + Team 展开 + Browser 网关；动态分支等运行期增强后置）
 
 **待办 🔜**
@@ -660,12 +650,14 @@ environment:
 
 ## 📚 文档导航
 
-先看 [`doc/README.md`](doc/README.md)（文档地图：每份文档的定位与事实等级），四份事实源：
+先看 [`doc/README.md`](doc/README.md)（文档地图：每份文档的定位与权威优先级），主要事实源：
 
-- 代码规范：[`doc/HelloAI_CODE_STYLE.md`](doc/HelloAI_CODE_STYLE.md)（改代码前必读）
-- 项目基线：[`doc/HelloAI 项目基线文档.md`](doc/HelloAI%20项目基线文档.md)
+- 项目基线：[`doc/HelloAI 项目基线文档.md`](doc/HelloAI%20项目基线文档.md)（当前代码与已落地能力）
+- 目标架构：[`doc/HelloAI 目标架构.md`](doc/HelloAI%20目标架构.md)
 - 实现差距：[`doc/HelloAI 实现差距表.md`](doc/HelloAI%20实现差距表.md)
-- 当前进度：[`doc/项目进度.md`](doc/项目进度.md)
+- 实施计划：[`doc/HelloAI 重构实施计划.md`](doc/HelloAI%20重构实施计划.md)
+- 进度日志：[`doc/log/`](doc/log/)（按月归档，最新事实优先）
+- 代码规范：[`doc/HelloAI_CODE_STYLE.md`](doc/HelloAI_CODE_STYLE.md)（改代码前必读）
 
 其他：EXECUTOR 接入指南 [`.executor-onboarding.md`](.executor-onboarding.md) / 设计系统 [`DESIGN.md`](DESIGN.md) / 产品定义 [`PRODUCT.md`](PRODUCT.md) / 核心流程图 [`doc/diagrams/`](doc/diagrams/) / English [`README.en.md`](README.en.md)
 
@@ -673,9 +665,13 @@ environment:
 
 ## ❓ FAQ
 
+**Q：A2A 是什么？HelloAI 和它是什么关系？**
+
+A：MCP 让 Agent 会用工具（Agent ↔ 工具），A2A 让不同厂商的 Agent 能互相协作（Agent ↔ Agent）。协议标准已经有了，但"谁拆活、派给谁、验收什么、失败怎么兜、事后怎么对账"这一层落地机制仍然缺——这正是 HelloAI 补的位置。**严格说，HelloAI 不是 A2A 协议规范的实现**（Agent 接入走 MCP）：A2A 所需的语义由平台自己的角色模型 + 11 态子任务状态机 + 统一事件流承载——补的是协作机制，不是又一个协议。
+
 **Q：与 CrewAI / LangGraph / Dify 这类框架有什么区别？**
 
-A：一句话：它们解决"如何写 Agent / 编排应用"，HelloAI 解决"**如何管 Agent**"——任务拆解、弹性调度、验收审计、全链路可视化，且基于 Java 企业级技术栈。逐项对比见 [HelloAI vs 其他方案](#comparison)。
+A：一句话：它们解决"如何写 Agent / 编排应用"，HelloAI 解决"**如何管 Agent**"——也就是 A2A 里最缺的那段落地机制：任务拆解、弹性调度、验收审计、全链路可视化，且基于 Java 企业级技术栈。逐项对比见 [HelloAI vs 其他方案](#comparison)。
 
 **Q：必须部署 Java 环境吗？**
 
@@ -705,14 +701,14 @@ A：支持完全私有化部署（Docker Compose 一键拉起），任务、产�
 
 1. Fork 本仓库
 2. 新建 `feat_xxx` 或 `fix_xxx` 分支
-3. 改代码前必读 `doc/HelloAI_CODE_STYLE.md`；涉及调度/执行链改动需先读 `doc/design/HelloAI_调度解耦重构分析.md`
+3. 改代码前必读 `doc/HelloAI_CODE_STYLE.md`；涉及调度 / 执行链改动先读 `doc/design/Agent_Runtime.md` 与 `doc/design/Agent_Event_Stream.md`
 4. 提交前跑通与改动面相关的 `scripts/` 验证脚本，PR 附上脚本输出
 
 ---
 
 ## 🙏 致谢与参考借鉴
 
-本项目在设计与实现过程中参考了以下开源项目（具体吸收定位与落点详见 [`doc/design/HelloAI_外部项目借鉴技术细节.md`](doc/design/HelloAI_外部项目借鉴技术细节.md) 与 [`doc/design/HelloAI_DeepSeek_Harness_Skills借鉴方案.md`](doc/design/HelloAI_DeepSeek_Harness_Skills借鉴方案.md)）：
+本项目在设计与实现过程中参考了以下开源项目（具体吸收定位与落点详见归档留存的两份借鉴文档 [`doc/archive/reference/HelloAI_外部项目借鉴技术细节.md`](doc/archive/reference/HelloAI_外部项目借鉴技术细节.md) 与 [`doc/archive/implemented/HelloAI_DeepSeek_Harness_Skills借鉴方案.md`](doc/archive/implemented/HelloAI_DeepSeek_Harness_Skills借鉴方案.md)）：
 
 - **[OpenMOSS](https://github.com/undefined-404/OpenMOSS)** —— Agent 接入层 + 角色建模层 + Prompt/Skill 资产层（HelloAI 三角色模型收敛受其启发；PATROL 已移除，由熔断降级 / 死信池 / 定时补偿覆盖）
 - **[AgentTeams](https://github.com/agentscope-ai/AgentTeams)** —— 调度内核 + 执行边界 + 状态收敛模型（Manager/Worker 职责分离、Heartbeat 7 步主动巡检、`.processing` 工作区协调锁、任务恢复流思路）

@@ -1,10 +1,12 @@
 # HelloAI
 
-> AI Agent Collaboration & Scheduling Platform — Schedule AI Agents like microservices
+> A2A Collaboration Platform — Let AI from different vendors work as one team
 
 #### Introduction
 
-- **HelloAI** is an AI Agent collaboration & scheduling platform built on the Spring AI MCP protocol. Once an external AI (Qoder, Trae, Codex CLI, Claude Code, etc.) is onboarded with one click, the platform dispatches business tasks to them just like scheduling microservices, and reaps the execution results.
+- **MCP solved "agents can use tools"; A2A targets "agents can work with each other"** — but a protocol only gets agents talking: it does not decide who splits the work, who dispatches it, who accepts the result, who catches failures, or how everything is reconciled afterwards. **HelloAI is that missing half** — not another protocol, but the collaboration mechanism that makes agents from different vendors, running on different machines, actually deliver.
+- **What you get**: you state one requirement in plain language; the platform clarifies your intent, decomposes it into dependent sub-tasks, dispatches them in parallel to the most suitable agents, has an AI reviewer check every deliverable against the acceptance criteria (rejecting with concrete fix notes when it fails), and consolidates everything into one deliverable. You state it once and confirm once; every step stays visible and replayable.
+- Any CLI agent (Qoder / Trae / Codex CLI / Claude Code …) **joins over MCP with no code changes** and becomes a platform-dispatched "digital employee"; **any laptop or desktop that can run a CLI agent is a compute node**, so capacity scales with how many terminals you have — not with one server's CPU / VRAM / JVM heap. Built on the Spring AI MCP protocol, HelloAI hands business tasks to those agents much like scheduling microservices, and reaps the execution results.
 - The platform communicates with Agents via **MCP SSE** (`/mcp/sse`); external Agents perceive new tasks by polling their inbox with `pullTasks` (recommended every ~30s). A **doorbell SSE push channel** (`/api/agents/doorbell/sse`) was fully built but is **shelved** (2026-08-07) — external AI clients are one-way executors that cannot consume server push; the code stays running for future Agent-side daemon reuse.
 - Runtime red-line: **JDK 17**. No Spring AI 2.0 / Spring Boot 4.0 upgrades unless the project explicitly opens a JDK upgrade window.
 
@@ -77,7 +79,7 @@ helloai/                          # Multi-module Maven project
 # 1. Start infrastructure (PostgreSQL / Redis / RabbitMQ / MinIO)
 docker compose up -d
 
-# 2. Build + start backend (Flyway auto-runs V1~V23 migrations)
+# 2. Build + start backend (Flyway auto-runs the database migrations)
 mvn clean package -DskipTests
 java -jar helloai-start/target/helloai-start.jar
 
