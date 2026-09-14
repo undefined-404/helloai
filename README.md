@@ -140,6 +140,32 @@ HelloAI：追问澄清 → 拆解为带依赖的子任务草案 → 你确认 �
 
 ---
 
+## 🛠️ 技术概览
+
+### 模块结构
+
+| 模块 | 职责 |
+|---|---|
+| `helloai-api` | REST 接口层：澄清会话 / 任务 / Agent 管理 / 质量看板 / SSE 流式推送 |
+| `helloai-core` | 领域核心：Planner 澄清与拆解 / 调度内核 / Agent 执行链 / Reviewer / 事件流 |
+| `helloai-common` | 公共基础：统一响应 / 异常体系 / 配置模型 / 常量 |
+| `helloai-start` | 启动装配：Flyway 迁移 / 配置加载 / 运行时入口 |
+| `helloai-ui` | Vue 3 管理端：澄清对话 / 依赖 DAG / 时间线 / 时序图 / 质量看板 |
+
+### 技术栈
+
+| 层 | 选型 |
+|---|---|
+| 后端框架 | Spring Boot 3.4 · JDK 17 · MyBatis-Plus · Flyway · Sa-Token |
+| 前端 | Vue 3 · Vite · TypeScript · Element Plus · ECharts · Pinia · Mermaid |
+| 基础设施 | PostgreSQL · Redis · RabbitMQ · MinIO · Docker Compose 完全私有化 |
+| AI 集成 | Spring AI · DeepSeek（实测）/ Moonshot / MiniMax / DashScope · MCP 协议接入外部 Agent |
+| 关键机制 | SSE 流式对话 · Outbox 四态消息 · 三层幂等 · Reviewer 双轨纪律制 · 事件流工作台 |
+
+> 后端与前端独立构建部署；任务拆解 / 调度 / 验收等协作机制全部内置，不依赖任何商业平台。
+
+---
+
 <a id="quick-start"></a>
 
 ## 🚀 快速开始
