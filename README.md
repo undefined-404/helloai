@@ -126,7 +126,7 @@ HelloAI 希望把多个 Agent 组织起来：
 HelloAI：追问澄清 → 拆解为带依赖的子任务草案 → 你确认 → 跨终端派活
 
         API设计 ──→ Backend ──→ 测试 ──→ Review
-         (Qoder)    (Codex)   (Claude)  (Trae)
+         (Qoder)    (Codex)   (Claude)  (平台内 LLM)
 
         不合格 → 带着修改意见打回重做
         合格   → 整合为完整交付 + zip 下载

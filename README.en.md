@@ -126,7 +126,7 @@ You: Build an order payment module.
 HelloAI: clarify → decompose into a dependency-aware subtask draft → you confirm → dispatch across terminals
 
         API design ──→ Backend ──→ Testing ──→ Review
-          (Qoder)     (Codex)    (Claude)    (Trae)
+          (Qoder)     (Codex)    (Claude)    (built-in LLM)
 
         Failed → sent back for rework with concrete fixes
         Passed → merged into one deliverable + zip download
