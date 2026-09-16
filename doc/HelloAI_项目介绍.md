@@ -5,7 +5,7 @@
 > 本文回答两个问题：V1 做成了一个什么产品；V2 基于 DeepSeek Harness 做怎样的改造升级。
 > 技术事实以 `HelloAI 项目基线文档.md` 为准，目标边界以 `HelloAI 目标架构.md` 为准；本文不作为开发实施依据。
 >
-> 最后更新：2026-09-11（回填：外部上下文供给三通道打通（getSubTaskDetail MCP 工具 V76，12 工具对齐）+ G-011 P1/P2 生成能力退化修复批次 + G-010 D5-2 校验脚本交付 + 子任务详情与拆解草案弹窗前端增强；复核：G-004/G-010 完成状态与剩余项口径对齐差距表/实施计划）
+> 最后更新：2026-09-16（回填：G-012 登录鉴权与 RBAC 权限体系、G-013 基础架构深化（批次一~四全部落地）、联网搜索「总结 + 来源 + 补充检索」、2026-09-13~14 运行时缺陷清偿（SSE 异步上下文 500 / 澄清对话全流式 / 放弃会话 500）；核心数字与改造进度速览对齐差距表 / 实施计划 / 基线文档）
 
 ---
 
@@ -31,7 +31,8 @@ Planning → Orchestration → Distributed Execution → Review → Governance
 | MCP 接入工具 | 12 个（pullTasks / claimSubTask / getSubTaskDetail / submitResult / checkIn …） |
 | LLM Provider | 4 家动态接入（DeepSeek / Moonshot / MiniMax / DashScope） |
 | 定时收敛任务 | 17 个（Outbox 中继 / 超时补偿 / 健康巡检 / 租约过期 …） |
-| 数据库增量迁移 | 66 个（Flyway V1 → V76，已提交 DDL 永不修改） |
+| 数据库增量迁移 | 83 个（Flyway V1 → V93，已提交 DDL 永不修改） |
+| 权限体系 | 4 角色分层（SUPER_ADMIN / ADMIN / NORMAL_USER / GUEST）+ 131 处动作级权限码（含业务面适用接口） |
 | 验证脚本 | 76 个（PowerShell，脚本输出即事实源） |
 | 迭代执行记录 | 160+ 条目（追加式，含决策演进注记） |
 | 代码规范 | 66 章（`HelloAI_CODE_STYLE.md`） |
@@ -308,11 +309,11 @@ Event Stream 统一 → Dual Executor 迁移 → AgentRuntime 收敛
 → Skill Capability 演进 → Sandbox 解耦 → Governance
 ```
 
-每一步都有明确的差距登记（G-001 ~ G-011）与验证口径，改造是**演进式的**：旧执行链通过 LegacyExecutorAdapter 接入新契约，组件从旧链逐步提取，不推倒重来。
+每一步都有明确的差距登记（G-001 ~ G-013）与验证口径，改造是**演进式的**：旧执行链通过 LegacyExecutorAdapter 接入新契约，组件从旧链逐步提取，不推倒重来。
 
 ## 3.6 V2 期间同步交付的编排扩展
 
-执行体系主线之外，V2 批次同时清账了编排类能力缺口。共同纪律是**复用现有调度链，克制扩展**：
+执行体系主线之外，V2 批次同时清账了编排类能力缺口与平台基础架构。共同纪律是**复用现有调度链，克制扩展**；基础架构（RBAC 底座）与业务五层正交：
 
 | 能力 | 交付内容 | 边界 |
 |---|---|---|
@@ -322,6 +323,7 @@ Event Stream 统一 → Dual Executor 迁移 → AgentRuntime 收敛
 | **跨会话记忆** | Planner 澄清会话记忆归档与复用 | 只存摘要，不做对话全量记忆 |
 | **Planner 能力感知（G-010）** | 技能目录注入 + 执行者画像 / 难度感知 + 三档粒度自适应 + 子任务级技能指派与执行约束 + 草案确认人工修订 | 不建第二套规划运行时；粒度 rule-based 矩阵，LLM 自判后置 |
 | **需求包准入（G-011）** | 需求包六字段结构化终稿（含任务级验收）+ 子任务 uncertainties 分级登记（ASSUMPTION / UNCONFIRMED）+ 执行侧注入与审查分级核验 + 驳回缺失证据清单 | 不建自动闸门：人工裁决 + 执行侧 fail-close 上报；不建「需求管理中心」平行架构 |
+| **基础架构底座（G-012 / G-013）** | Sa-Token 统一登录会话 + RBAC 权限体系（用户 / 角色 / 权限码 / 菜单树 / 部门 / 数据权限）+ 认证收口与身份单事实源 + 四角色分层（SUPER_ADMIN / ADMIN / NORMAL_USER / GUEST）+ 建号与自助注册开关 | 与业务五层正交；外部 Agent（CLI_CLIENT）通道显式旁路，不进 Sa-Token 会话体系 |
 
 ## 3.7 V1 → V2 升级点对照
 
@@ -426,7 +428,7 @@ flowchart LR
 | 模块 | 职责 | 架构归位 |
 |---|---|---|
 | helloai-common | 常量 / 枚举 / 工具 / 加密原语 | 全局基础库 |
-| helloai-api | 37 个 Controller，纯 HTTP 转发（编排不进 Controller） | 接入层 |
+| helloai-api | 42 个 Controller，纯 HTTP 转发（编排不进 Controller） | 接入层 |
 | helloai-start | 启动装配 / 线程池 / Flyway / 初始化 | 接入层 |
 | helloai-mq | Producer / Consumer 声明封装 | 横向基础设施 |
 | helloai-job | 17 个定时收敛任务 | State Convergence |
@@ -530,7 +532,7 @@ helloai/
 
 ---
 
-# 6. 改造进度速览（截至 2026-09-11）
+# 6. 改造进度速览（截至 2026-09-16）
 
 | 主线 | 差距项 | 状态 |
 |---|---|---|
@@ -542,6 +544,8 @@ helloai/
 | Event 消费侧（Timeline → Replay / Audit） | G-006 | 🔶 Timeline 并轨（A6，已暴露 API + UI）+ Replay / Audit 读侧 API + UI 工作台已暴露（增量 C1：/api/agent-events + /event-stream 事件流）+ 外部认领埋点 AGENT_STARTED 与 Replay 汇总卡（增量 C2，外部轨迹加厚为四事件）+ 任务/子任务维度端点与工作台增强（增量 D，2026-09-10）；Recovery / Fork 待建 |
 | Planner 能力感知与自适应粒度 | G-010 | 🔶 S1~S4 已落地：2026-09-09 S1~S3（V74 子任务级技能/约束新列 + 技能目录注入与三档粒度 + mergeSkills 传递链与草案确认编辑 UI）；S4 双场景实测 PASS（平台内链 2026-09-09 + 外部执行链 2026-09-10 双轮全链闭环）；2026-09-11 外部上下文供给三通道（getSubTaskDetail V76 + 认领内联 + inbox 摘要升级，MCP 12 工具）+ D5-2 技能包校验脚本交付；后置：技能回流贡献规范（D5-3）、FINE 档真实样本 |
 | 需求包准入与不确定性显式管理 | G-011 | 🔶 S1~S5 已落地（V75 子任务 uncertainties + 会话 final_package 双列；澄清五字段结构化终稿 / 拆解继承与降级审计 / 执行注入与审查核验 / REST + inbox + 草案 UI 传递链）；S5 实测 PASS（平台内链 2026-09-09 + 外部执行链 2026-09-10 双轮全链闭环）；2026-09-11 P1/P2 批次（生成能力退化修复：任务级验收六字段 / 拆解必填 fail-close / 终稿结构校验 / 主任务详情需求包 / 驳回缺失证据清单） |
+| 登录鉴权与 RBAC 权限体系（Sa-Token） | G-012 | ✅ 已闭环（2026-09-12）：V77 四表 + SUPER_ADMIN / ADMIN 内置 + 存量用户角色迁移 + StpInterfaceImpl + @SaCheckPermission + 三管理页 + 菜单树 DB 化 + 存量会话无缝迁移；配套修复用户分页 total 恒 0（mybatis-plus jsqlparser + 3.5.12） |
+| 基础架构深化（RBAC 底座，参考 JeecgBoot） | G-013 | ✅ 批次一~四全部落地（2026-09-12~13）：动态路由 / v-auth 按钮级 / 动作级权限码 / 菜单树 CRUD / 授权差集 / 部门与数据权限 / 认证收口（StpUtil.checkLogin）/ 身份单事实源（sys_user.role 退场）/ 四角色分层 / 131 处动作级权限码（业务面适用接口全量）/ 建号 + 自助注册开关（默认关闭）；同批清偿 SSE 异步上下文 500、澄清对话全流式、联网搜索增强 |
 | Quality Gate | G-007 | 🔶 Reviewer 闭环已存在（双轨纪律 + 双审 + 抽检；画像底座 AgentQualityProfile V54 + 双审 V57 的调度回灌 / Prompt 注入已接线，best-effort 不阻断主链）；Rule + Test 自动化门槛管线未启动 |
 | Agent Fleet 能力化选人 | G-008 | 🔶 选路大部分在产（技能硬门槛 + 分数排序 + 白名单 + SLA 派单；多外部执行者同台已实证 2026-09-10 Round3——双执行者背靠背竞态唯一赢家 / 技能硬门槛内按分排序）；Health / Load / Policy / Provider Selection 完整选路未启动；外部执行 tokens=null（成本观测盲区） |
 | Workflow Engine 增强 | G-009 | ⏳ 远期（存量：Workflow 模板 / 实例化 / DAG；Dynamic Branching 运行期引擎未启动） |
@@ -552,6 +556,6 @@ helloai/
 
 **V1 做成了什么：**一个分布式跨终端 AI Agent 调度平台——把散落各处的 AI 助手与终端算力组织成可调度、可验收、可审计的工程团队，任何能跑 CLI Agent 的终端都是算力节点。你说一次需求、点一次确认：Planner 双模对话澄清并拆解为依赖 DAG，弹性调度跨终端派给最合适的 AI（12 层过滤 + 4 级排序 + 值班优先 + LLM 保底），Reviewer 双轨纪律审核（四元组驳回意见、双审共识、抽检复审），最终整合报告 + zip 交付。底座是事务性 Outbox、三层幂等、熔断降级、死信兜底的分布式可靠性体系。
 
-**V2 在升级什么：**借鉴 DeepSeek Harness 的三个核心思想，把平台从"能调度"升级为"执行过程可观测（Event Stream 统一）、能力可组合（Skill Capability Package）、环境可控（Sandbox Provider）"。改造走五层目标架构（Role / Orchestration / Runtime / Capability / Provider），以 AgentRuntime 收敛为中心，演进式推进——**P0 主线已收官**：Event Stream 写侧闭环，Runtime 真身组装并注入主链（`runtime-enabled` 开关灰度，默认走 Legacy；dev 灰度第 0 步已闭合），八件套全部落地；**P1 主体已落地**：Replay / Audit 消费面全链暴露（含任务/子任务维度端点与工作台增强，增量 C1/C2/D）、外部执行轨迹加厚，Skill 真实任务实测闭环，**Planner 从"闭眼拆解"升级为"能力感知拆解"（G-010 S1~S4：技能目录注入、三档粒度自适应、子任务级技能与约束显式化、草案人工修订）+ 需求包准入与不确定性显式管理（G-011 S1~S5）**——2026-09-10 外部执行者双轮全链闭环（Round2 四层 DAG / Round3 三执行者同台竞态与 135:20 分排序印证）；2026-09-11 外部上下文供给三通道打通（getSubTaskDetail V76 / 认领内联 / inbox 摘要，MCP 12 工具）与需求包 P1/P2 生成能力退化修复（任务级验收 / 拆解必填 fail-close / 终稿结构校验 / 驳回缺失证据清单）。剩余：Instructions 结构化 / Sandbox 隔离实现 / Recovery · Fork 消费面 / 技能回流规范 / FINE 档真实样本。
+**V2 在升级什么：**借鉴 DeepSeek Harness 的三个核心思想，把平台从"能调度"升级为"执行过程可观测（Event Stream 统一）、能力可组合（Skill Capability Package）、环境可控（Sandbox Provider）"。改造走五层目标架构（Role / Orchestration / Runtime / Capability / Provider），以 AgentRuntime 收敛为中心，演进式推进——**P0 主线已收官**：Event Stream 写侧闭环，Runtime 真身组装并注入主链（`runtime-enabled` 开关灰度，默认走 Legacy；dev 灰度第 0 步已闭合），八件套全部落地；**P1 主体已落地**：Replay / Audit 消费面全链暴露（含任务/子任务维度端点与工作台增强，增量 C1/C2/D）、外部执行轨迹加厚，Skill 真实任务实测闭环，**Planner 从"闭眼拆解"升级为"能力感知拆解"（G-010 S1~S4：技能目录注入、三档粒度自适应、子任务级技能与约束显式化、草案人工修订）+ 需求包准入与不确定性显式管理（G-011 S1~S5）**——2026-09-10 外部执行者双轮全链闭环（Round2 四层 DAG / Round3 三执行者同台竞态与 135:20 分排序印证）；2026-09-11 外部上下文供给三通道打通（getSubTaskDetail V76 / 认领内联 / inbox 摘要，MCP 12 工具）与需求包 P1/P2 生成能力退化修复（任务级验收 / 拆解必填 fail-close / 终稿结构校验 / 驳回缺失证据清单）；**2026-09-12~13 基础架构底座（G-012 / G-013）批次一~四全部落地**：Sa-Token 统一会话 + 四角色分层 + 131 处动作级权限码 + 动态路由与按钮级权限 + 部门 / 菜单 / 数据权限管理，外部 Agent 通道显式旁路零影响，并清偿 SSE 异步上下文 500、澄清对话全流式、联网搜索「总结 + 来源 + 补充检索」等运行时缺口。剩余：Instructions 结构化 / Sandbox 隔离实现（Docker · K8s）/ Recovery · Fork 消费面 / 技能回流规范 / Quality Gate 决策门 / Agent Fleet 完整选路（含外部成本回传）/ FINE 档真实样本。
 
 **这个项目的独特价值：**不是又一个 Agent 框架，而是**让异构 Agent 在同一套状态机、同一条事件流、同一个质量门下协同工作的分布式平台**——借鉴 Harness 的执行体系思想，但服务的是多 Agent 编排的更大图景。

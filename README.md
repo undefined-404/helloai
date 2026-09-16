@@ -160,7 +160,7 @@ HelloAI：追问澄清 → 拆解为带依赖的子任务草案 → 你确认 �
 | 前端 | Vue 3 · Vite · TypeScript · Element Plus · ECharts · Pinia · Mermaid |
 | 基础设施 | PostgreSQL · Redis · RabbitMQ · MinIO · Docker Compose 完全私有化 |
 | AI 集成 | Spring AI · DeepSeek（实测）/ Moonshot / MiniMax / DashScope · MCP 协议接入外部 Agent |
-| 关键机制 | SSE 流式对话 · Outbox 四态消息 · 三层幂等 · Reviewer 双轨纪律制 · 事件流工作台 |
+| 关键机制 | SSE 流式对话 · 能力感知拆解 + 需求包准入 · Outbox 四态消息 · 三层幂等 · Reviewer 双轨纪律制 · 事件流工作台 · Sa-Token RBAC |
 
 > 后端与前端独立构建部署；任务拆解 / 调度 / 验收等协作机制全部内置，不依赖任何商业平台。
 
@@ -242,20 +242,29 @@ docker compose -f docker-compose.server.yml up -d
 
 **已交付 ✅**
 
-- [x] 双模 Planner（CHAT / CLARIFY + 联网搜索）与自动任务拆解
-- [x] 弹性调度：外部优先 + 空闲优先 + 值班优先 + LLM 保底 + 熔断降级
-- [x] MCP 外部 Agent 接入（12 个工具）+ 值班租约 + 任务感知轮询
-- [x] Reviewer 双轨纪律制 + 多轮驳回返工 + 双审共识 + 抽检复审
+- [x] 双模 Planner（CHAT / CLARIFY）+ 联网搜索（总结 + 来源 + 补充检索）+ 自动任务拆解
+- [x] 能力感知拆解：技能目录注入 + 三档粒度自适应（细 / 中 / 粗）+ 子任务级技能 / 约束显式化 + 草案人工修订
+- [x] 需求包准入：目标 / 范围 / 排除项 / 假设 / 待确认五字段 + 不确定性分级（自证 / 上报人工裁决）
+- [x] 弹性调度：外部优先 + 空闲优先 + 值班优先 + LLM 保底 + 熔断降级 + 多外部执行者同台按分排序
+- [x] MCP 外部 Agent 接入（12 个工具）+ 值班租约 + 任务感知轮询 + 子任务上下文三通道供给
+- [x] Reviewer 双轨纪律制 + 多轮驳回返工（缺失证据清单）+ 双审共识 + 抽检复审
+- [x] V2 执行体系：统一事件流（Run / Turn / Step）+ AgentRuntime 八件套 + Replay / Audit 事件流工作台
 - [x] 生产级可靠性：Outbox 四态 + 三层幂等 + 死信人工兜底 + Reconcile
 - [x] 全链路可视化：依赖 DAG / 时间线 / 时序图 / 事件流工作台 / 质量看板
 - [x] 最终整合报告（四态防重）+ 交付物 zip 一键下载
+- [x] RBAC 权限体系：Sa-Token 登录 + 用户 / 角色 / 菜单 / 部门 + 动作级权限码 + 数据权限
 - [x] Docker Compose 完全私有化部署
 
 **待办 🔜**
 
+- [ ] Sandbox 真实隔离：Docker / Remote / K8s 执行环境（Provider 契约已就绪）
+- [ ] Event 消费面补齐：Recovery 恢复 / Fork 分支消费
+- [ ] Quality Gate 自动化门槛：Rule + Test + LLM 统一决策
+- [ ] Agent Fleet 能力化选人：Health / Load / Cost 完整选路 + 外部执行成本回传
+- [ ] Dynamic Workflow：动态分支与运行期编排（远期）
 - [ ] 领域模板市场（技术方案 / 代码审查 / 文档生成）
 - [ ] 浏览器型 Agent（WEB_BROWSER）真实接入链路
-- [ ] 多租户与权限隔离
+- [ ] 多租户（数据级租户隔离）
 - [ ] 调度核心多实例水平扩容（双锁体系已打底）
 - [ ] 更多外部 Agent 适配器
 
