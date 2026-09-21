@@ -1,7 +1,7 @@
 # ============================================================
-# HelloAI - Docker Compose 开发环境
-# 技术栈: PostgreSQL 16.4 + Redis 7.2.5 + RabbitMQ 3.12.14 + MinIO latest
-# 使用: docker-compose up -d
+# HelloAI - Local Dev Docker Compose
+# Stack: PostgreSQL 16.4 + Redis 7.2.5 + RabbitMQ 3.12.14 + MinIO
+# Usage: docker-compose up -d
 # ============================================================
 
 version: '3.8'
@@ -42,23 +42,23 @@ services:
       timeout: 3s
       retries: 5
 
-  # --- RabbitMQ 3.12.14 (含管理插件) ---
+  # --- RabbitMQ 3.12.14 (with management plugin) ---
   rabbitmq:
     image: rabbitmq:3.12.14-management-alpine
     container_name: helloai-rabbitmq
     restart: unless-stopped
     ports:
       - "25672:5672"    # AMQP
-      - "25673:15672"   # 管理后台
+      - "25673:15672"   # Management UI
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
 
-  # --- MinIO 对象存储 ---
+  # --- MinIO Object Storage ---
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     container_name: helloai-minio
     restart: unless-stopped
     ports:
