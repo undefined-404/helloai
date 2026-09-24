@@ -26,6 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -248,5 +249,42 @@ class AgentDutyLeaseAdaptiveTtlTest {
         service.adaptiveRenew(AGENT_ID);
 
         verify(service).renewLease(AGENT_ID, 5);
+    }
+
+    @Test
+    @DisplayName("P2-10: renewLease 窗口收缩时到期时刻不倒退（同租约单调不减）")
+    void renewLeaseShouldNotMoveExpireTimeBackwards() {
+        AgentDutyLease lease = new AgentDutyLease();
+        lease.setId(10L);
+        lease.setAgentId(AGENT_ID);
+        lease.setStatus(AgentDutyLeaseStatus.ACTIVE);
+        OffsetDateTime farFuture = OffsetDateTime.now().plusMinutes(200);
+        lease.setExpireTime(farFuture);
+        doReturn(lease).when(service).getActiveLease(AGENT_ID);
+        doReturn(true).when(service).updateById(org.mockito.ArgumentMatchers.any(AgentDutyLease.class));
+        doCallRealMethod().when(service).renewLease(eq(AGENT_ID), anyInt());
+
+        AgentDutyLease renewed = service.renewLease(AGENT_ID, 5);
+
+        // 小窗口（5 分钟）续约不得把已到 200 分钟后的到期时刻拉回来
+        assertThat(renewed.getExpireTime()).isEqualTo(farFuture);
+    }
+
+    @Test
+    @DisplayName("P2-10: renewLease 窗口扩大时到期时刻正常前移")
+    void renewLeaseShouldExtendWhenWindowLarger() {
+        AgentDutyLease lease = new AgentDutyLease();
+        lease.setId(10L);
+        lease.setAgentId(AGENT_ID);
+        lease.setStatus(AgentDutyLeaseStatus.ACTIVE);
+        OffsetDateTime soon = OffsetDateTime.now().plusMinutes(1);
+        lease.setExpireTime(soon);
+        doReturn(lease).when(service).getActiveLease(AGENT_ID);
+        doReturn(true).when(service).updateById(org.mockito.ArgumentMatchers.any(AgentDutyLease.class));
+        doCallRealMethod().when(service).renewLease(eq(AGENT_ID), anyInt());
+
+        AgentDutyLease renewed = service.renewLease(AGENT_ID, 30);
+
+        assertThat(renewed.getExpireTime()).isAfter(soon);
     }
 }

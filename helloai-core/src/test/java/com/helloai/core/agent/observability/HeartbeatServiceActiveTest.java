@@ -7,6 +7,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentMapper;
+import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.impl.HeartbeatServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,6 +20,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
@@ -67,6 +69,13 @@ class HeartbeatServiceActiveTest {
     @Mock
     private ValueOperations<String, String> valueOps;
 
+    /** P1-5：租约查询默认返回无租约，既有用例保持原心跳判定行为（不注入租约豁免）。 */
+    @Mock
+    private ObjectProvider<AgentDutyLeaseService> agentDutyLeaseServiceProvider;
+
+    @Mock
+    private AgentDutyLeaseService agentDutyLeaseService;
+
     private HeartbeatService heartbeatService;
 
     @BeforeEach
@@ -74,9 +83,37 @@ class HeartbeatServiceActiveTest {
         HeartbeatProperties properties = new HeartbeatProperties();
         // 测试默认不节流（保持原行为），节流场景在 Throttle 嵌套类内单独构造
         properties.setActiveThrottleMs(0);
-        heartbeatService = new HeartbeatServiceImpl(agentMapper, redis, properties);
+        heartbeatService = new HeartbeatServiceImpl(agentMapper, redis, properties, agentDutyLeaseServiceProvider);
         // LENIENT 模式：部分用例不调 redis，此 stubbing 不是"未使用"而是被跳过
         when(redis.opsForValue()).thenReturn(valueOps);
+    }
+
+    @Test
+    @DisplayName("P1-5：心跳过期但持 ACTIVE 值班租约 → IDLE（不判 OFFLINE）")
+    void shouldNotMarkOfflineWhenLeaseActive() {
+        when(agentDutyLeaseServiceProvider.getIfAvailable()).thenReturn(agentDutyLeaseService);
+        when(agentDutyLeaseService.isOnDuty(601L)).thenReturn(true);
+        Agent agent = newAgent(601L, AgentOnlineStatus.ONLINE);
+        agent.setLastSeenTime(OffsetDateTime.now().minusMinutes(10));
+
+        AgentOnlineStatus status = ((HeartbeatServiceImpl) heartbeatService)
+                .checkOnlineStatus(agent, OffsetDateTime.now());
+
+        assertThat(status).isEqualTo(AgentOnlineStatus.IDLE);
+    }
+
+    @Test
+    @DisplayName("P1-5：心跳过期且无 ACTIVE 租约 → OFFLINE（保持原行为）")
+    void shouldMarkOfflineWhenLeaseInactive() {
+        when(agentDutyLeaseServiceProvider.getIfAvailable()).thenReturn(agentDutyLeaseService);
+        when(agentDutyLeaseService.isOnDuty(602L)).thenReturn(false);
+        Agent agent = newAgent(602L, AgentOnlineStatus.ONLINE);
+        agent.setLastSeenTime(OffsetDateTime.now().minusMinutes(10));
+
+        AgentOnlineStatus status = ((HeartbeatServiceImpl) heartbeatService)
+                .checkOnlineStatus(agent, OffsetDateTime.now());
+
+        assertThat(status).isEqualTo(AgentOnlineStatus.OFFLINE);
     }
 
     @Nested
@@ -228,7 +265,7 @@ class HeartbeatServiceActiveTest {
         void shouldSkipSecondCallWithinWindow() {
             HeartbeatProperties properties = new HeartbeatProperties();
             properties.setActiveThrottleMs(60_000L);
-            HeartbeatService throttled = new HeartbeatServiceImpl(agentMapper, redis, properties);
+            HeartbeatService throttled = new HeartbeatServiceImpl(agentMapper, redis, properties, agentDutyLeaseServiceProvider);
 
             Agent agent = newAgent(501L, AgentOnlineStatus.ONLINE);
             when(agentMapper.selectById(501L)).thenReturn(agent);
@@ -245,7 +282,7 @@ class HeartbeatServiceActiveTest {
         void shouldWriteAgainAfterWindowExpires() {
             HeartbeatProperties properties = new HeartbeatProperties();
             properties.setActiveThrottleMs(30_000L);
-            HeartbeatService throttled = new HeartbeatServiceImpl(agentMapper, redis, properties);
+            HeartbeatService throttled = new HeartbeatServiceImpl(agentMapper, redis, properties, agentDutyLeaseServiceProvider);
 
             Agent agent = newAgent(502L, AgentOnlineStatus.ONLINE);
             when(agentMapper.selectById(502L)).thenReturn(agent);
@@ -275,7 +312,7 @@ class HeartbeatServiceActiveTest {
         void shouldNotThrottleAcrossAgents() {
             HeartbeatProperties properties = new HeartbeatProperties();
             properties.setActiveThrottleMs(60_000L);
-            HeartbeatService throttled = new HeartbeatServiceImpl(agentMapper, redis, properties);
+            HeartbeatService throttled = new HeartbeatServiceImpl(agentMapper, redis, properties, agentDutyLeaseServiceProvider);
 
             Agent a = newAgent(511L, AgentOnlineStatus.ONLINE);
             Agent b = newAgent(512L, AgentOnlineStatus.ONLINE);

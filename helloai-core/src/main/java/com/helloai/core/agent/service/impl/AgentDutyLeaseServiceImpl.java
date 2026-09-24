@@ -216,7 +216,12 @@ public class AgentDutyLeaseServiceImpl extends ServiceImpl<AgentDutyLeaseMapper,
         }
         OffsetDateTime now = OffsetDateTime.now();
         active.setLastRenewTime(now);
-        active.setExpireTime(now.plusMinutes(ttlMinutes));
+        // P2-10：到期时刻单调钳制——同一租约内只增不减。续约窗口随「有无在跑子任务」
+        // 在 maxTtlMinutes(240) 与动态值之间伸缩，若直接取 now+ttl 会让 leaseExpiresAt 倒退
+        // （实测 7 分钟内回退近 3 小时），Agent 无法据此判断是否需要重签租约。
+        OffsetDateTime renewed = now.plusMinutes(ttlMinutes);
+        OffsetDateTime current = active.getExpireTime();
+        active.setExpireTime(current != null && current.isAfter(renewed) ? current : renewed);
         updateById(active);
         log.info("Agent {} 值班租约已续约: expiresAt={}", agentId, active.getExpireTime());
         return active;

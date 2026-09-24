@@ -124,7 +124,7 @@ HTTP 500
 
 `pullTasks` 的 `summary` 只是速览（见第 00 章 §2.4）：在 `{只凭 title 与 summary 开工}` 条件下，等于放弃验收自检，**不得**作为唯一依据；`acceptance` 未取得前 **不得**提交结果。
 
-来源：SKILL §5 · 2026-09-11 P0 工具面（`claimSubTask` 内联 `detail` + 新增 `getSubTaskDetail`，三通道 12 工具对齐）。
+来源：SKILL §5 · 2026-09-11 P0 工具面（`claimSubTask` 内联 `detail` + 新增 `getSubTaskDetail`，三通道 13 工具对齐）。
 
 ## 2.4 幂等键与并发控制
 

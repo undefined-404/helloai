@@ -1,6 +1,7 @@
 package com.helloai.core.agent.service.impl;
 
 import com.helloai.common.config.HeartbeatProperties;
+import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentStatus;
@@ -8,6 +9,7 @@ import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -57,6 +59,15 @@ public class HeartbeatServiceImpl implements HeartbeatService {
     private final AgentMapper agentMapper;
     private final StringRedisTemplate redis;
     private final HeartbeatProperties heartbeatProperties;
+
+    /**
+     * 值班租约服务（懒解析）。
+     *
+     * <p>P1-5：在线判定需结合「是否持 ACTIVE 值班租约」。此处用 {@link ObjectProvider} 而非直接注入，
+     * 以规避 agent 域构造器循环：HeartbeatServiceImpl → AgentDutyLeaseServiceImpl →
+     * SubTaskServiceImpl → HeartbeatServiceImpl（子任务执行期续租会调 active()）。</p>
+     */
+    private final ObjectProvider<AgentDutyLeaseService> agentDutyLeaseServiceProvider;
 
     /**
      * active() 节流时间戳（agentId → 最近一次完整双写时刻，尽力而为不追求强一致）：
@@ -188,6 +199,14 @@ public class HeartbeatServiceImpl implements HeartbeatService {
         OffsetDateTime cutoff = now.minusMinutes(5);
         OffsetDateTime lastSeen = agent.getLastSeenTime();
         if (lastSeen == null || lastSeen.isBefore(cutoff)) {
+            // P1-5：心跳过期但持 ACTIVE 值班租约 → 视为在岗（至少 IDLE），不判 OFFLINE。
+            // 「连接存活」（last_seen_time，5 分钟窗口，仅 heartbeat/checkIn 显式刷新）与
+            // 「声明在岗」（值班租约，业务调用顺带续期、最长 240 分钟）是两个时钟：
+            // Agent 长时间埋头干活不显式调 heartbeat 时租约仍在，若仍判 OFFLINE，
+            // AgentHealthCheckTask 会把它在飞的任务重派出去，已完成的工作白做。
+            if (hasActiveDutyLease(agent.getId())) {
+                return AgentOnlineStatus.IDLE;
+            }
             return AgentOnlineStatus.OFFLINE;
         }
         OffsetDateTime lastActive = agent.getLastActiveTime();
@@ -195,6 +214,24 @@ public class HeartbeatServiceImpl implements HeartbeatService {
             return AgentOnlineStatus.ONLINE;
         }
         return AgentOnlineStatus.IDLE;
+    }
+
+    /**
+     * 是否持 ACTIVE 值班租约（P1-5：作为在线判定的一等存活证据）。
+     *
+     * <p>懒解析 + 异常降级为 false：租约查询失败时回退既有心跳判定，不放宽离线结论。</p>
+     */
+    private boolean hasActiveDutyLease(Long agentId) {
+        if (agentId == null) {
+            return false;
+        }
+        try {
+            AgentDutyLeaseService leaseService = agentDutyLeaseServiceProvider.getIfAvailable();
+            return leaseService != null && leaseService.isOnDuty(agentId);
+        } catch (Exception e) {
+            log.debug("值班租约查询失败（按无租约处理）: agentId={}, err={}", agentId, e.getMessage());
+            return false;
+        }
     }
 
     /**

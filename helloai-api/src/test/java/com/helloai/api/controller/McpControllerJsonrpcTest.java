@@ -89,10 +89,10 @@ class McpControllerJsonrpcTest {
 
         JsonNode tools = root.get("result").get("tools");
         assertNotNull(tools, "tools 数组不应为空");
-        assertEquals(12, tools.size(), "应声明 12 个工具（与 MCP SSE 通道对齐，含 getDepsSummary / getSubTaskDetail）");
+        assertEquals(13, tools.size(), "应声明 13 个工具（与 MCP SSE 通道对齐，含 getDepsSummary / getSubTaskDetail / startSubTask）");
 
         List<String> expectedNames = List.of(
-                "pullTasks", "ack", "claimSubTask", "heartbeat", "uploadArtifact",
+                "pullTasks", "ack", "claimSubTask", "startSubTask", "heartbeat", "uploadArtifact",
                 "submitResult", "reportBlocked", "getAgentStatus", "getDepsSummary",
                 "getSubTaskDetail", "checkIn", "checkOut");
         for (String name : expectedNames) {
@@ -266,7 +266,7 @@ class McpControllerJsonrpcTest {
             declared.add(t.asText());
         }
         List<String> expected = List.of(
-                "pullTasks", "ack", "claimSubTask", "heartbeat", "uploadArtifact",
+                "pullTasks", "ack", "claimSubTask", "startSubTask", "heartbeat", "uploadArtifact",
                 "submitResult", "reportBlocked", "getAgentStatus", "getDepsSummary",
                 "getSubTaskDetail", "checkIn", "checkOut");
         assertEquals(expected, declared, "GET /api/mcp/tools 声明应与三通道统一清单一致");

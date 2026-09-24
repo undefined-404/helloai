@@ -23,6 +23,18 @@ public interface McpToolService {
     /** 认领子任务（乐观锁防并发）。 */
     ClaimSubTaskResult claimSubTask(Long agentId, Long subTaskId);
 
+    /**
+     * 子任务开工：把已归属自己的 ASSIGNED / REWORK / PAUSED 子任务推进到 IN_PROGRESS。
+     *
+     * <p>P0-2 返工死锁修复：此前 REWORK 在外部 Agent 通道无任何出口——claimSubTask 要求
+     * PENDING、submitResult 只放行 ASSIGNED/IN_PROGRESS、startById 需平台账号会话，
+     * 被驳回的任务只能等人工放行。本工具为 Agent 通道补齐该状态转换出口。</p>
+     *
+     * <p>授权：仅子任务当前 assigned_agent 可调用（服务端取鉴权 agentId，不信任入参）；
+     * 状态限 ASSIGNED / REWORK / PAUSED（三者 → IN_PROGRESS 均为状态机合法转换）。</p>
+     */
+    StartSubTaskResult startSubTask(Long agentId, Long subTaskId);
+
     /** 心跳（含值班租约状态）。 */
     HeartbeatResult heartbeat(Long agentId);
 
@@ -118,6 +130,23 @@ public interface McpToolService {
     }
 
     /**
+     * 子任务开工结果（startSubTask 返回体）。
+     */
+    @Data
+    class StartSubTaskResult {
+        private boolean ok;
+        /** true=已推进到 IN_PROGRESS（已是该状态的幂等调用同样返回 true）。 */
+        private boolean started;
+        /** 拒绝原因：subtask_not_found / not_task_owner / invalid_status:XXX。 */
+        private String reason;
+        private Long subTaskId;
+        private Long assignedAgent;
+        /** 推进后的子任务状态；成功时为 IN_PROGRESS。 */
+        private String status;
+        private Integer version;
+    }
+
+    /**
      * 子任务详情（getSubTaskDetail 返回体 / ClaimSubTaskResult.detail）。
      *
      * <p>字段与子任务实体一一对应，不做事后截断：验收标准与执行边界被截断正是
@@ -159,6 +188,35 @@ public interface McpToolService {
         private String deadline;
         /** 已发生的返工次数；>0 说明上一轮被审查驳回，开工前应结合审查评语修正。 */
         private Integer reworkCount;
+        /** 本子任务当前有效（ACTIVE）的产出附件清单；空列表=尚未上传（P1-4-b 可发现性）。 */
+        private List<AttachmentItem> attachments;
+        /**
+         * 贡献者 Agent ID 清单（P1-7 产出归属可见性）：执行记录 ∪ 当前执行者，去重保序（当前执行者优先）。
+         *
+         * <p>供「独立验证」类任务在认领前自评利益冲突（平台暂不强制校验冲突，仅提供可见性；
+         * 详见 doc/design/HelloAI_外部Agent执行通道缺陷修复方案 §C-6）。</p>
+         */
+        private List<Long> contributors;
+    }
+
+    /**
+     * 子任务产出附件（{@link SubTaskDetail#getAttachments()} 元素）。
+     *
+     * <p>P1-4-b：此前 Agent 通道缺少可发现的附件标识（详情不返回 attachmentId、
+     * MCP 工具面亦无附件读取），下游拿不到前置交付文件只能凭自报值执行。内联 attachmentId
+     * 后，Agent 可经 REST {@code GET /api/attachments/downloadById/{id}} 读取正文。</p>
+     */
+    @Data
+    class AttachmentItem {
+        private Long attachmentId;
+        private String fileName;
+        private String fileType;
+        private String mimeType;
+        private Long fileSize;
+        /** ACTIVE / INACTIVE（仅 ACTIVE 为当前有效版本）。 */
+        private String status;
+        /** 平台是否可直接读取正文（true 时可用 downloadById 取字节流）。 */
+        private Boolean loadable;
     }
 
     @Data
@@ -264,6 +322,16 @@ public interface McpToolService {
         private Integer truncatedCount;
         /** true=收集异常降级（deps 为空），不阻断调用。 */
         private Boolean degraded;
+        /**
+         * true=全部前置均已 DONE（就绪）；false=存在未完成前置，此时 content 为空属<b>预期</b>而非异常。
+         *
+         * <p>P1-3：此前仅 {@code degraded} 表达「采集异常」，消费方无法区分「前置未就绪 → 无内容」
+         * 与「无前置」。本字段与 {@code degraded} 正交：{@code ready=false && degraded=false}
+         * 即「前置尚未产出」。采集异常（{@code degraded=true}）时本字段保持 null（不表态）。</p>
+         */
+        private Boolean ready;
+        /** 未 DONE 的前置数（ready=false 时的成因量化）。 */
+        private Integer notReadyCount;
         private List<DepItem> deps;
 
         @Data
@@ -278,6 +346,10 @@ public interface McpToolService {
             private String content;
             /** true=内容超过 4000 字符被截断。 */
             private Boolean truncated;
+            /** true=本条读到产出内容（content 非空）；false=前置未产出或无内容。 */
+            private Boolean loaded;
+            /** 实际下发的内容字符数（未读到为 0）。 */
+            private Integer contentChars;
         }
     }
 }

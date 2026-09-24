@@ -49,6 +49,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -220,10 +221,42 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
 
     @Override
     public List<SubTask> listAvailable() {
-        return lambdaQuery()
+        List<SubTask> pending = lambdaQuery()
                 .eq(SubTask::getStatus, SubTaskStatus.PENDING)
                 .orderByDesc(SubTask::getCreateTime)
                 .list();
+        return filterReady(pending);
+    }
+
+    /**
+     * 批量就绪过滤：依赖未全部 DONE 的候选不返回（与 {@link #isReady} 同源口径）。
+     *
+     * <p>P0-1 依赖门禁：可认领列表此前只按 status=PENDING 过滤，导致前置尚未产出的
+     * 子任务被当作可认领任务抛出，外部 Agent 可抢单并交出"无前置上下文"的脱节产出。
+     * 此处一次性取出候选集全部依赖 id 做批量判定，避免逐条 count 造成 N+1。</p>
+     */
+    private List<SubTask> filterReady(List<SubTask> candidates) {
+        if (candidates == null || candidates.isEmpty()) {
+            return Collections.emptyList();
+        }
+        Set<Long> depIds = new HashSet<>();
+        for (SubTask candidate : candidates) {
+            depIds.addAll(candidate.dependsOnIdList());
+        }
+        if (depIds.isEmpty()) {
+            return candidates;
+        }
+        Set<Long> doneIds = lambdaQuery()
+                .select(SubTask::getId)
+                .in(SubTask::getId, depIds)
+                .eq(SubTask::getStatus, SubTaskStatus.DONE)
+                .list()
+                .stream()
+                .map(SubTask::getId)
+                .collect(Collectors.toSet());
+        return candidates.stream()
+                .filter(candidate -> doneIds.containsAll(candidate.dependsOnIdList()))
+                .toList();
     }
 
     @Override

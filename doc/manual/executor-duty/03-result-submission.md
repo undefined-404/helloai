@@ -65,7 +65,7 @@ Content-Type: application/json; charset=utf-8
 {"id":1,"result":{"ok":false,"accepted":false,"idempotent":false,"status":null,"reason":"invalid_status:DONE","subTaskId":null,"resultId":null},"jsonrpc":"2.0"}
 ```
 
-状态守卫优先于幂等判定：在 `{子任务状态不在 ASSIGNED/IN_PROGRESS}` 条件下，提交直接返回 `invalid_status:<状态>`，**不会**进入幂等比对；`REWORK` 状态**必须**先 `POST /api/sub-tasks/startById/{id}` 拉回 `IN_PROGRESS`（契约 §2.5）。
+状态守卫优先于幂等判定：在 `{子任务状态不在 ASSIGNED/IN_PROGRESS}` 条件下，提交直接返回 `invalid_status:<状态>`，**不会**进入幂等比对；`REWORK` 状态**必须**先调 MCP 工具 `startSubTask` 拉回 `IN_PROGRESS`（契约 §2.5）。
 
 部分完成的处理：平台的提交请求只有布尔 `success` 与自由字符串 `finishReason`，**没有**“部分完成”状态值。在 `{只完成部分交付物}` 条件下，`{执行者}` **不得**以 `success=true` 伪报完成，**必须**置 `success=false` 并在 `finishReason` 与 `EXECUTION_RECORD` 中说明已完成与未完成部分，或改用 `reportBlocked` 上报（契约 §2.5）。
 
@@ -90,7 +90,7 @@ Content-Type: application/json; charset=utf-8
 | 结果 | 后续动作 |
 |---|---|
 | `sub_task.approved` | `ack` 该消息，进入下一任务 |
-| `sub_task.rejected` | 查 `GET /api/reviews?subTaskId={id}` 取 `issues`/`comment`/`score`，按返工四步重提（第 02 章 §2.3.2 同理：`startById` → 新 `resultId` → 重新上传附件 → 附 `EXECUTION_RECORD`） |
+| `sub_task.rejected` | 查 `GET /api/reviews?subTaskId={id}` 取 `issues`/`comment`/`score`，按返工四步重提（第 02 章 §2.3.2 同理：`startSubTask` → 新 `resultId` → 重新上传附件 → 附 `EXECUTION_RECORD`） |
 
 ## 3.6 提交失败的重试边界与升级路径
 

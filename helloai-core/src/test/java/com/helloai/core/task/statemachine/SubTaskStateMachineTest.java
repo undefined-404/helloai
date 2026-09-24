@@ -40,6 +40,19 @@ class SubTaskStateMachineTest {
     }
 
     // ══════════════════════════════════════════════════════════════
+    //  返工态出口（P0-2 附带修复：REWORK → BLOCKED）
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("REWORK → IN_PROGRESS / BLOCKED 合法（开工出口 + 返工途中可上报阻塞）")
+    void shouldAllowReworkExits() {
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.REWORK, SubTaskStatus.IN_PROGRESS)).isTrue();
+        assertThat(SubTaskStateMachine.canTransition(SubTaskStatus.REWORK, SubTaskStatus.BLOCKED)).isTrue();
+        assertThatCode(() -> SubTaskStateMachine.validate(SubTaskStatus.REWORK, SubTaskStatus.BLOCKED))
+                .doesNotThrowAnyException();
+    }
+
+    // ══════════════════════════════════════════════════════════════
     //  死信态：离开 DEAD_LETTER（仅人工处置：指派 / 放弃 / 直接验收 / 驳回改派）
     // ══════════════════════════════════════════════════════════════
 

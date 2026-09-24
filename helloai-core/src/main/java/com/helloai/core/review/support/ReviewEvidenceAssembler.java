@@ -195,14 +195,24 @@ public class ReviewEvidenceAssembler {
                         .append("，内容不可读/为空）\n");
                 continue;
             }
+            String attName = att.getFileName() != null ? att.getFileName() : "unknown";
+            int originalChars = content.length();
+            boolean perFileTruncated = false;
             if (content.length() > ATTACHMENT_CONTENT_PER_FILE_LIMIT) {
                 content = content.substring(0, ATTACHMENT_CONTENT_PER_FILE_LIMIT);
                 truncated = true;
+                perFileTruncated = true;
             }
             if (totalChars + content.length() > ATTACHMENT_CONTENT_TOTAL_LIMIT) {
                 int remaining = ATTACHMENT_CONTENT_TOTAL_LIMIT - totalChars;
                 if (remaining > 0) {
                     appendAttachmentContent(sb, att, content.substring(0, remaining));
+                    // P1-4-c：结构化标注行——让核验模型精确知道「哪些字节不可见」，
+                    // 而非仅凭自然语言标记（后者无法被消费方机器读取）。
+                    sb.append("[TRUNCATED] file=").append(attName)
+                            .append(" shown=").append(remaining)
+                            .append(" total=").append(originalChars)
+                            .append(" reason=total_limit\n");
                     truncated = true;
                 }
                 totalExceeded = true;
@@ -210,6 +220,13 @@ public class ReviewEvidenceAssembler {
             }
             totalChars += content.length();
             appendAttachmentContent(sb, att, content);
+            if (perFileTruncated) {
+                // P1-4-c：单附件超限的结构化标注行
+                sb.append("[TRUNCATED] file=").append(attName)
+                        .append(" shown=").append(content.length())
+                        .append(" total=").append(originalChars)
+                        .append(" reason=per_file_limit\n");
+            }
         }
         if (truncated) {
             sb.append("（部分附件内容已截断至限额）\n");

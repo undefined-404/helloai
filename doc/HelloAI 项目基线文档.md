@@ -135,7 +135,8 @@ Credential
 - Lease / Heartbeat / Reconcile；
 - Retry / Timeout / Compensation；
 - DLQ / 死信台账；
-- Agent 在线状态治理；
+- Agent 在线状态治理（**2026-09-24 更新**：ACTIVE 值班租约作为一等存活证据——心跳过期不直接判 OFFLINE，避免在岗 Agent 被误判离线触发在飞任务重派；`renewLease` 到期时刻同租约内单调不减）；
+- 外部 Agent 通道与内部分发链约束同口径（**2026-09-24，G-014**：`claimSubTask` 复用 `isReady` 依赖门禁、`listAvailable` 就绪过滤；新增 MCP `startSubTask` 打通 REWORK 返工出口；`SubTaskDetail` 内联产出附件与贡献者，产物可发现）；
 - 失败重派和结果收敛。
 
 这些属于 HelloAI 的**分布式编排与可靠性基础设施**。
@@ -294,6 +295,8 @@ REWORK
 ```
 
 后续目标是把它收敛为 Quality Gate，但现阶段不建立第二套 Review Runtime。
+
+**核验证据边界（2026-09-24，P1-4-c / P1-6）**：附件正文注入进核验 Prompt 时按限额截断（每份 8000 字符 / 总量 24000 字符），截断处输出结构化标注行 `[TRUNCATED] file=… shown=… total=… reason=…`；核验 Prompt 明确要求「不可见部分一律视为未提供证据，禁止以提交方自报数值/自检清单补全，依赖不可见内容的验收项不得判 pass」。
 
 # 13. 当前明确边界
 

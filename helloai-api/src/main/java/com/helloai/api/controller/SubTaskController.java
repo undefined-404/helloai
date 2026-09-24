@@ -10,6 +10,7 @@ import com.helloai.api.dto.subtask.ReassignRequest;
 import com.helloai.api.dto.subtask.ReworkRequest;
 import com.helloai.api.dto.subtask.SubTaskResponse;
 import com.helloai.api.dto.subtask.TaskTimelineItem;
+import com.helloai.common.base.BizException;
 import com.helloai.common.base.R;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentRole;
@@ -106,7 +107,10 @@ public class SubTaskController {
      * <p>按 id 升序返回该子任务相关的所有 TaskTimeline 事件；不含系统级事件（如 agent_offline）。</p>
      */
     @GetMapping("/listTimelineBySubTaskId/{id}")
-    public R<List<TaskTimelineItem>> listTimeline(@PathVariable("id") Long id) {
+    public R<List<TaskTimelineItem>> listTimeline(@PathVariable("id") Long id,
+                                                  @RequestAttribute(value = "_authType", required = false) String authType,
+                                                  @RequestAttribute(value = "_authId", required = false) Long agentId) {
+        assertSubTaskReadableByAgent(id, authType, agentId);
         List<TaskTimeline> rows = taskTimelineService.listBySubTaskId(id);
         List<TaskTimelineItem> items = rows.stream().map(this::toTimelineItem).toList();
         return R.ok(items);
@@ -119,10 +123,35 @@ public class SubTaskController {
      * 来源由 toolName 区分；只做实体→DTO 映射，不含编排。</p>
      */
     @GetMapping("/listConversationBySubTaskId/{id}")
-    public R<List<ConversationMessageItem>> listConversation(@PathVariable("id") Long id) {
+    public R<List<ConversationMessageItem>> listConversation(@PathVariable("id") Long id,
+                                                             @RequestAttribute(value = "_authType", required = false) String authType,
+                                                             @RequestAttribute(value = "_authId", required = false) Long agentId) {
+        assertSubTaskReadableByAgent(id, authType, agentId);
         List<ConversationMessage> rows = conversationService.getMessages(id);
         List<ConversationMessageItem> items = rows.stream().map(this::toConversationItem).toList();
         return R.ok(items);
+    }
+
+    /**
+     * Agent 通道子任务归属校验（G-014 T04b 安全修复）。
+     *
+     * <p>时间线/对话流端点无鉴权注解（平台账号可用），但 Agent 通道（Bearer API Key 注入
+     * {@code _authId}）此前可读**任意**子任务的执行产出与核验 Prompt 原文。此处按
+     * 「请求属性 + 服务层归属比对」收口：Agent 仅可读自己名下子任务。</p>
+     *
+     * <p><b>通道判定以 {@code _authType} 为准</b>：平台账号的 {@code _authId} 是 admin
+     * session id（非空），不能用「{@code _authId} 为空」判平台账号，否则管理端会被误伤 403。
+     * 按 §10 红线不加 {@code @SaCheckPermission}。</p>
+     */
+    private void assertSubTaskReadableByAgent(Long subTaskId, String authType, Long agentId) {
+        if (!"agent".equals(authType) || agentId == null) {
+            return; // 平台账号 / 无主体：由管理侧鉴权覆盖
+        }
+        SubTask subTask = subTaskService.getById(subTaskId);
+        if (subTask == null || subTask.getAssignedAgentId() == null
+                || !agentId.equals(subTask.getAssignedAgentId())) {
+            throw new BizException(403, "无权访问该子任务（非其执行者）");
+        }
     }
 
     /** 从 CreateSubTaskRequest 装配 SubTask 实体（Controller 唯一装配点）。 */

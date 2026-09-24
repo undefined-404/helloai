@@ -33,6 +33,7 @@ design/
 ├── Sandbox_Provider.md
 ├── Planner_Capability_Awareness.md
 ├── Requirement_Package_Uncertainty.md
+├── HelloAI_外部Agent执行通道缺陷修复方案.md
 └── adr/
     └── ADR-001-run-turn-step-model.md
 ```

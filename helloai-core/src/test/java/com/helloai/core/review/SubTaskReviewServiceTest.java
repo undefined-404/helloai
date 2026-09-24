@@ -902,6 +902,36 @@ class SubTaskReviewServiceTest {
     }
 
     @Test
+    @DisplayName("P1-4-c: 附件超限时输出结构化 [TRUNCATED] 标注行（file/shown/total/reason）")
+    void shouldEmitStructuredTruncationMarker() {
+        String longContent = "行".repeat(12000);
+        readableAttachment(504L, "big2.log", "text/plain", 24000L, longContent.getBytes(StandardCharsets.UTF_8));
+        stubReviewerPass();
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        String prompt = captureReviewPrompt();
+        assertThat(prompt).contains("[TRUNCATED] file=big2.log");
+        assertThat(prompt).contains("shown=8000");
+        assertThat(prompt).contains("reason=per_file_limit");
+    }
+
+    @Test
+    @DisplayName("P1-6: 核验 Prompt 含「不可见内容不得补全」条款与截断标注说明")
+    void shouldIncludeInvisibleContentRule() {
+        readableAttachment(505L, "small.log", "text/plain", 10L, "短内容".getBytes(StandardCharsets.UTF_8));
+        stubReviewerPass();
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        String prompt = captureReviewPrompt();
+        assertThat(prompt).contains("不可见内容不得补全");
+        // 断言「截断标注说明块」独有文本："[TRUNCATED]" 字面量在规则 11 正文中也出现，
+        // 用它做存在性断言会恒真（变异测试已证），必须用说明块独有片段。
+        assertThat(prompt).contains("shown=<可见字符数>");
+    }
+
+    @Test
     @DisplayName("方案3 F2: 多个附件总计超限（24000）时停止注入后续附件正文")
     void shouldStopWhenTotalLimitExceeded() {
         // 4 个 10000 字符附件：前 3 个吃满总限 24000，第 4 个不再注入正文

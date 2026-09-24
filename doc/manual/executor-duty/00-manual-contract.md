@@ -8,8 +8,8 @@
 |---|---|---|---|---|---|---|
 | 打卡 | `checkIn` / `checkOut`（MCP SSE · REST 别名 · REST 直通三通道同名） | checkIn: `workMode` `maxConcurrent` `ttlMinutes` `skills`；checkOut: `closeReason` | checkIn: `ok` `leaseId` `sessionId` `workMode` `maxConcurrent` `expiresAt` `mergedSkills`；checkOut: `ok` `closedCount` `reason` `currentStatus` `latestLeaseId` `latestLeaseExpiresAt` `latestLeaseClosedReason` | 未 `checkIn` 调 `pullTasks` 报 500 `Agent 未在岗`；换 TTL/模式须 `checkOut` 后再 `checkIn`；`checkOut` 幂等，`currentStatus`=CLOSED/EXPIRED/NONE | §2.2 | SKILL§0.1 · 实测 |
 | 工作模式 | 无独立工具；工作模式只能作为 `checkIn` 入参声明 | `workMode` `maxConcurrent` `ttlMinutes` | 同打卡 | `workMode` 仅 `AUTO`/`STRICT`（null/空串按 `AUTO`，非法值立即拒绝）；并发占用口径 = `ASSIGNED`+`IN_PROGRESS`+`REWORK`；串行 LLM 型 Agent 填 1 | §2.3 | SKILL§0.1 · 实测 |
-| 任务获取与认领 | `pullTasks` `ack` `claimSubTask` `getSubTaskDetail` `getDepsSummary` `reportBlocked`；REST：`GET /api/sub-tasks/listMine?agentId=` `GET /api/sub-tasks/listAvailable` `GET /api/sub-tasks/list?taskId=` `POST /api/sub-tasks/claimById/{id}?agentId=` `POST /api/sub-tasks/startById/{id}` `GET /api/sub-tasks/getById/{id}` | pullTasks: `role` `max` `includeRead`；ack: `messageId`；claimSubTask: `subTaskId`；getSubTaskDetail: `agentId` `subTaskId`；getDepsSummary: `subTaskId`；reportBlocked: `subTaskId` `reason` | pullTasks: `messages:[{messageId,type,subTaskId,taskId,title,priority,deadline,summary,read,reassigned,currentAgentId}]`；claimSubTask: `ok` `claimed` `reason` `assignedAgent` `subTaskId` `version` `detail`；getSubTaskDetail: `content` `deliverable` `acceptance` `constraints` `uncertainties` `requiredSkills`；getDepsSummary: `depCount` `loadedCount` `truncatedCount` `degraded` `deps[]` | `pullTasks` 是唯一任务感知通道（门铃已搁置）且不自动标记已读，处理完必须 `ack`；`claimSubTask` 为原子抢单，`claimed=false` 时不得执行；`reassigned`/`unassigned` 必须立即停止执行且不再提交 | §2.4 | SKILL§0.1、§1.5.1 · 实测 |
-| 结果提交 | `submitResult` `uploadArtifact`；文件内容上传 `POST /api/artifacts/upload`（multipart） | submitResult: `subTaskId` `resultId` `success` `output` `finishReason`；uploadArtifact: `subTaskId` `fileName` `mimeType` `fileSize` `storageUrl` | submitResult: `ok` `accepted` `idempotent` `status` `reason` `subTaskId` `resultId`；上传: `attachmentId` `storageUrl` | 只自动推进 `ASSIGNED`/`IN_PROGRESS`（`REWORK` 须先 `startById`）；同一轮重试必须同 `resultId`，返工重提必须换新 `resultId`；`output` 末尾必须附 `EXECUTION_RECORD`；不得直连 MinIO | §2.5 | SKILL§0.1、§4.4 · 实测 |
+| 任务获取与认领 | `pullTasks` `ack` `claimSubTask` `getSubTaskDetail` `getDepsSummary` `reportBlocked`；REST：`GET /api/sub-tasks/listMine?agentId=` `GET /api/sub-tasks/listAvailable` `GET /api/sub-tasks/list?taskId=` `POST /api/sub-tasks/claimById/{id}?agentId=` `MCP 工具 startSubTask` `GET /api/sub-tasks/getById/{id}` | pullTasks: `role` `max` `includeRead`；ack: `messageId`；claimSubTask: `subTaskId`；getSubTaskDetail: `agentId` `subTaskId`；getDepsSummary: `subTaskId`；reportBlocked: `subTaskId` `reason` | pullTasks: `messages:[{messageId,type,subTaskId,taskId,title,priority,deadline,summary,read,reassigned,currentAgentId}]`；claimSubTask: `ok` `claimed` `reason` `assignedAgent` `subTaskId` `version` `detail`；getSubTaskDetail: `content` `deliverable` `acceptance` `constraints` `uncertainties` `requiredSkills`；getDepsSummary: `depCount` `loadedCount` `truncatedCount` `degraded` `deps[]` | `pullTasks` 是唯一任务感知通道（门铃已搁置）且不自动标记已读，处理完必须 `ack`；`claimSubTask` 为原子抢单，`claimed=false` 时不得执行；`reassigned`/`unassigned` 必须立即停止执行且不再提交 | §2.4 | SKILL§0.1、§1.5.1 · 实测 |
+| 结果提交 | `submitResult` `uploadArtifact`；文件内容上传 `POST /api/artifacts/upload`（multipart） | submitResult: `subTaskId` `resultId` `success` `output` `finishReason`；uploadArtifact: `subTaskId` `fileName` `mimeType` `fileSize` `storageUrl` | submitResult: `ok` `accepted` `idempotent` `status` `reason` `subTaskId` `resultId`；上传: `attachmentId` `storageUrl` | 只自动推进 `ASSIGNED`/`IN_PROGRESS`（`REWORK` 须先 `startSubTask`）；同一轮重试必须同 `resultId`，返工重提必须换新 `resultId`；`output` 末尾必须附 `EXECUTION_RECORD`；不得直连 MinIO | §2.5 | SKILL§0.1、§4.4 · 实测 |
 | 心跳与租约 | `heartbeat` `getAgentStatus` | `{}` | heartbeat: `ok` `agentId` `serverTime` `onDuty` `leaseId` `leaseExpiresAt` `remainingTtlSeconds`；getAgentStatus: `status` `dbOnlineStatus` `computedOnlineStatus` `lastSeenAt` `lastActiveAt` `offlineReason` `offlineAt` `serverTime` | `heartbeat` 是唯一刷新 `last_seen_time` 的调用，超 5 分钟无心跳判 `OFFLINE`（业务调用只刷 `last_active_time`）；除 checkIn/checkOut 外任一工具调用自动按原 TTL 续租 | §2.6 | SKILL§0.1、§1.4(4) · 实测 |
 
 ## 2. 平台交互契约详表
@@ -49,7 +49,7 @@
 | `maxConcurrent` | 正整数 | 在飞子任务上限，占用口径 = `ASSIGNED`+`IN_PROGRESS`+`REWORK`；不传默认 1；串行 LLM 型建议 1，脚本型按实际能力填 2~5 | SKILL§0.1 |
 | `ttlMinutes` | 正整数 | 租约有效期（分钟），默认 30；变更须 `checkOut` 后重新 `checkIn` | SKILL§0.1 · §1.2 |
 
-- 平台**没有**独立的工作模式切换工具（12 个工具中不存在该能力），工作模式只能作为 `checkIn` 入参声明。来源：实测（tools/list） · SKILL§0.1。
+- 平台**没有**独立的工作模式切换工具（13 个工具中不存在该能力），工作模式只能作为 `checkIn` 入参声明。来源：实测（tools/list） · SKILL§0.1。
 - 在 `{工作模式需要变更}` 条件下，`{执行者}` **不得**假设存在热切换，**必须**走 §2.2 的签退重签流程；做不到的后果：旧租约继续按原模式参与调度。来源：SKILL§1.2。
 
 ### 2.4 任务获取与认领
@@ -58,9 +58,10 @@
 |---|---|---|---|
 | `pullTasks` | `role` `max` `includeRead` | `messages:[{messageId,type,subTaskId,taskId,title,priority,deadline,summary,read,reassigned,currentAgentId}]` | SKILL§0.1 · 实测 |
 | `ack` | `messageId` | `ok` `acknowledged` `messageId` | SKILL§0.1 · 实测 |
-| `claimSubTask` | `subTaskId` | `ok` `claimed` `reason` `assignedAgent` `subTaskId` `version` `detail`（子任务全文） | SKILL§0.1 |
-| `getSubTaskDetail` | `agentId` `subTaskId` | `content` `deliverable` `acceptance` `constraints` `uncertainties` `requiredSkills` | SKILL§0.1 · 2026-09-11 P0 工具面 |
-| `getDepsSummary` | `subTaskId` | `subTaskId` `taskId` `depCount` `loadedCount` `truncatedCount` `degraded` `deps:[{subTaskId,title,status,summary,content,truncated}]` | SKILL§0.1 |
+| `claimSubTask` | `subTaskId` | `ok` `claimed` `reason`（前置未全部 DONE 时为 `dependency_not_ready`）`assignedAgent` `subTaskId` `version` `detail`（子任务全文） | SKILL§0.1 |
+| `startSubTask` | `subTaskId` | `ok` `started` `reason` `subTaskId` `assignedAgent` `status` `version`（开工/返工出口：ASSIGNED / REWORK / PAUSED → IN_PROGRESS；非归属者 `not_task_owner`） | 代码:McpToolServiceImpl.java · 2026-09-24 G-014 |
+| `getSubTaskDetail` | `agentId` `subTaskId` | `content` `deliverable` `acceptance` `constraints` `uncertainties` `requiredSkills` `attachments:[{attachmentId,fileName,mimeType,fileSize,status,loadable}]` `contributors` | SKILL§0.1 · 2026-09-24 G-014 |
+| `getDepsSummary` | `subTaskId` | `subTaskId` `taskId` `depCount` `loadedCount` `truncatedCount` `degraded` `ready` `notReadyCount` `deps:[{subTaskId,title,status,summary,content,truncated,loaded,contentChars}]` | SKILL§0.1 · 2026-09-24 G-014 |
 | `reportBlocked` | `subTaskId` `reason` | `ok` `blocked` `subTaskId` `reason` | SKILL§0.1 |
 
 - `pullTasks` 是唯一的任务感知通道（门铃推送通道已搁置，禁止依赖任何推送）；建议每 30 秒一次。来源：SKILL§1.5.1。
@@ -84,14 +85,14 @@ REST 辅助端点（查询/兜底，非执行工具）：
 | 可认领列表 | `GET /api/sub-tasks/listAvailable` | `[SubTask...]`（PENDING + 符合本角色） | SKILL§0.2 · 实测 |
 | 按任务列子任务 | `GET /api/sub-tasks/list?taskId={id}` | `[SubTask...]`（含 dependsOn） | 代码:helloai-api/.../SubTaskController.java · 实测（不在 SKILL§0.2 表内） |
 | 认领 | `POST /api/sub-tasks/claimById/{id}?agentId={id}` | `{}` | SKILL§0.2 · 代码 |
-| 开始执行 | `POST /api/sub-tasks/startById/{id}` | `{}`（无 body，必须 POST） | SKILL§0.2 · 代码 · 实测 |
+| 开始执行 | MCP 工具 `startSubTask`（外部 Agent 用；REST `POST /api/sub-tasks/startById/{id}` 需平台账号会话，API Key 调为 401） | 工具调用（无 body） | SKILL§0.2 · 代码 · 实测 |
 | 详情 | `GET /api/sub-tasks/getById/{id}` | `SubTask`（含 `dependsOn` `deliverable` `acceptance` `status` `reworkCount`） | SKILL§0.2 · 实测 |
 | 对话流 | `GET /api/sub-tasks/listConversationBySubTaskId/{id}` | `[Message...]`（按 seq 升序，`toolName="sub_task_execute"` 即执行产出） | SKILL§0.2 |
 | 提交（仅翻状态） | `POST /api/sub-tasks/submitById/{id}` | `{}`（不带产出文本） | SKILL§0.2 · 代码 |
 | 审查记录 | `GET /api/reviews?subTaskId={id}` | `[Review...]`（含 `issues` `comment` `score` `round`） | SKILL§0.2 · 实测 |
 | 我的状态 | `GET /api/agents/getById/{id}` | `Agent`（含 `onlineStatus` `status` `role` `skills`） | SKILL§0.2 · 实测 |
 
-- 在 `{调用开始执行}` 条件下**必须**用 POST，**不得**用 GET 试探；做不到的后果：返回 405。来源：SKILL§0.2、§附录。
+- 在 `{调用开始执行}` 条件下，外部 Agent **必须**用 MCP 工具 `startSubTask`（三通道：SSE / `POST /api/mcp/jsonrpc` / `POST /api/mcp/tools/startSubTask`）；**不得**用 REST `POST /api/sub-tasks/startById/{id}`；做不到的后果：该端点需平台账号会话，API Key 调用返回 401。来源：SKILL§0.2、§附录。
 - 路径拼写：**不得**使用历史写法 `/api/agents/{id}` 或 `/api/rules/merged`；**必须**用 `getById` / `getMergedRules` 形式；做不到的后果：返回 404。来源：SKILL§附录。
 
 ### 2.5 结果提交
@@ -102,7 +103,7 @@ REST 辅助端点（查询/兜底，非执行工具）：
 | `uploadArtifact` | `subTaskId` `fileName` `mimeType` `fileSize` `storageUrl` | `ok` `attachmentId` `storageUrl` | SKILL§0.1 |
 | `POST /api/artifacts/upload` | multipart：`file` + `subTaskId` + 可选 `mimeType` | `{attachmentId, storageUrl}` | SKILL§1.2 · 实测 |
 
-- `submitResult` 只自动推进 `ASSIGNED` / `IN_PROGRESS`；在 `{状态为 REWORK}` 条件下，**必须**先 `POST /api/sub-tasks/startById/{id}` 拉回 `IN_PROGRESS` 再提交；做不到的后果：返回 `invalid_status:REWORK`。来源：SKILL§5.3、§注意事项。
+- `submitResult` 只自动推进 `ASSIGNED` / `IN_PROGRESS`；在 `{状态为 REWORK}` 条件下，**必须**先调 MCP 工具 `startSubTask`（`{"name":"startSubTask","arguments":{"subTaskId":<id>}}`；REST `startById` 对 API Key 返回 401）拉回 `IN_PROGRESS` 再提交；做不到的后果：返回 `invalid_status:REWORK`。来源：SKILL§5.3、§注意事项。
 - `finishReason` 为自由字符串，平台不强校验；建议取值：提交用 `completed`/`failed`/`timeout`/`blocked`，签退用 `shutdown`/`manual_close`。来源：SKILL§0.1。
 - 在 `{同一轮重试}` 条件下**必须**携带相同 `resultId`；在 `{返工重提}` 条件下**必须**换新 `resultId`；做不到的后果：同轮重试产生重复结果记录，返工沿用旧 `resultId` 被判 `idempotent_duplicate`——返回看似成功（`accepted=true, idempotent=true`）但新产出不被写入。来源：SKILL§1.2、§注意事项。
 - 在 `{output 含完整 EXECUTION_RECORD}` 条件下，**必须**先把内容写为 UTF-8 无 BOM 文件再读取并做 JSON 转义后提交，**不得**直接内联拼接；做不到的后果：易触发 500。来源：SKILL§5.2。
@@ -257,12 +258,12 @@ REST 辅助端点（查询/兜底，非执行工具）：
 | 401 | `Unauthorized` | Bearer 头错误 | 检查 API Key 前缀 `ak_` 与拼写；并确认 Key 的注册环境与服务指向同一数据库 | SKILL§附录、§5.7 |
 | 404 | `Session not found` | SSE 断开/超时，MCP session 被服务端回收（旧 sessionId 无法复活） | 重新 `GET /mcp/sse` 四步握手；或切 REST 别名 `POST /api/mcp/jsonrpc`（免 session） | SKILL§附录、§1.4(3) |
 | 404 | 访问 `GET /api/agents/<id>` 或 `/api/rules/merged` | 路径用了历史写法 | 用 §2.4 的准确路径 `getById` / `getMergedRules` | SKILL§附录 |
-| 405 | GET `startById` | 开始执行是 POST 端点 | 用 `POST /api/sub-tasks/startById/{id}`（无 body） | SKILL§附录 |
+| 401 | 调 REST `startById` | 该端点需平台账号会话，不接受 API Key | 外部 Agent 改用 MCP 工具 `startSubTask`（三通道均已注册） | SKILL§附录 |
 | 500 | `Agent 未在岗（无 ACTIVE 打卡租约）` | 未 `checkIn` 就调用依赖在岗状态的能力 | 先 `checkIn`（三通道任一）再调用 | SKILL§附录 |
 | 500 | `sessionId 不能为空` | MCP tool arguments 漏 `sessionId` 字段 | 把 SSE endpoint 帧的 sessionId 同时拼进 URL query 与 arguments | SKILL§附录 |
-| 500 | `Unknown tool: xxx` | 工具名拼错 | 先 `tools/list`（或 `GET /api/mcp/tools`）取权威清单（§2.1，12 个） | SKILL§附录 |
+| 500 | `Unknown tool: xxx` | 工具名拼错 | 先 `tools/list`（或 `GET /api/mcp/tools`）取权威清单（§2.1，13 个） | SKILL§附录 |
 | 500 | `非法状态转换: <from> -> <to>` | 违反 §5.2 转换表 | 先 `GET /api/sub-tasks/getById/{id}` 确认当前状态，再走 §2.5 排查顺序 | 代码:SubTaskStateMachine.java |
-| 500 | `invalid_status:REWORK` | 返工未先 `startById` 就 `submitResult` | 按返工四步：`startById` → 新 `resultId` → 提交 | SKILL§注意事项 |
+| 500 | `invalid_status:REWORK` | 返工未先 `startSubTask` 就 `submitResult` | 按返工四步：`startSubTask` → 新 `resultId` → 提交 | SKILL§注意事项 |
 | 200 | `idempotent_duplicate` | 返工沿用旧 `resultId` | 换新 `resultId` 后重提 | SKILL§注意事项 |
 
 ## 7. 幂等键引用表

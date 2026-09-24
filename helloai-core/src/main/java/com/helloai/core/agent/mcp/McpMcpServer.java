@@ -137,8 +137,8 @@ public class McpMcpServer {
             - claimed=true 时返回体额外携带 detail（子任务全文：content 执行边界 / deliverable 交付物 /
               acceptance 验收标准 / constraints 执行约束 / uncertainties 不确定性申报），
               开工前必须按 acceptance 逐条自检；同样内容也可用 getSubTaskDetail 单独拉取（含重连场景）
-            - claimed=true 后应继续调用 start（REST POST /api/sub-tasks/start/{id}）推进到 IN_PROGRESS
-            【相关工具】pullTasks、getSubTaskDetail、getDepsSummary
+            - claimed=true 后应继续调用 startSubTask（MCP 工具）推进到 IN_PROGRESS
+            【相关工具】pullTasks、startSubTask、getSubTaskDetail、getDepsSummary
             """)
     public McpToolService.ClaimSubTaskResult claimSubTask(
             @ToolParam(description = "Agent ID（协议字段鉴权后会被服务端覆盖）", required = true) Long agentId,
@@ -152,6 +152,33 @@ public class McpMcpServer {
         }
         agentId = authAgentId;
         return mcpToolService.claimSubTask(agentId, subTaskId);
+    }
+
+    // ================================================================
+    // 3b. startSubTask
+    // ================================================================
+
+    @Tool(name = "startSubTask", description = """
+            【何时使用】EXECUTOR 认领后（ASSIGNED）、返工被驳回后（REWORK）或暂停恢复（PAUSED）重新开工，
+            需要把子任务推进到 IN_PROGRESS 时调用。
+            【调用频率】认领/返工开工前调用一次；已是 IN_PROGRESS 时重复调用幂等返回成功。
+            【Gotchas】
+            - 只能操作自己名下的子任务（assigned_agent 必须等于鉴权 agentId），非归属者返回 not_task_owner
+            - 状态限 ASSIGNED / REWORK / PAUSED；其它状态返回 invalid_status:XXX
+            - 返工场景（REWORK）必须先调本工具，否则 submitResult 会以 invalid_status:REWORK 拒绝
+            【相关工具】claimSubTask、submitResult、reportBlocked
+            """)
+    public McpToolService.StartSubTaskResult startSubTask(
+            @ToolParam(description = "Agent ID（协议字段鉴权后会被服务端覆盖）", required = true) Long agentId,
+            @ToolParam(description = "SubTask ID（要开工的子任务）", required = true) Long subTaskId,
+            @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
+            @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
+        Long authAgentId = requireAuthId(sessionId, _sessionId);
+        if (agentId == null || !authAgentId.equals(agentId)) {
+            log.warn("MCP startSubTask: 客户端传 agentId={} 被服务端覆盖为鉴权 agentId={}", agentId, authAgentId);
+        }
+        agentId = authAgentId;
+        return mcpToolService.startSubTask(agentId, subTaskId);
     }
 
     // ================================================================
@@ -344,7 +371,9 @@ public class McpMcpServer {
             【效果】返回子任务全文：content（执行内容与边界）/ deliverable（交付物要求）/
                     acceptance（验收标准）/ constraints（执行约束：不许改、不许越界事项）/
                     uncertainties（不确定性申报：ASSUMPTION 可自行验证，UNCONFIRMED 须先验证）/
-                    requiredSkills / priority / status / contract / dependsOn / deadline / reworkCount。
+                    requiredSkills / priority / status / contract / dependsOn / deadline / reworkCount /
+                    attachments（本子任务当前 ACTIVE 产出附件清单：attachmentId / fileName / mimeType /
+                    fileSize / status / loadable）。
             【Gotchas】
             - 收件箱摘要（pullTasks.summary）只是速览，验收标准与执行边界以本工具返回为准；
               提交前必须逐条对照 acceptance 自检——审查侧按同一份 acceptance 判定（subtask-review 轨道 A）
@@ -352,6 +381,8 @@ public class McpMcpServer {
             - uncertainties 中 UNCONFIRMED 条目必须先验证；无法验证时走 reportBlocked，不要硬扛
             - 字段全文下发不截断；仅「已分配给本 Agent」或「未分配且 PENDING（可认领）」的子任务可查
             - 审查驳回（reworkCount>0）后重做前，先看审查评语再按同一份 acceptance 修正
+            - attachments 空列表=该子任务尚未上传产出；取正文用 REST
+              GET /api/attachments/downloadById/{attachmentId}（loadable=true 时平台可直接读字节流）
             【相关工具】claimSubTask、getDepsSummary、submitResult
             """)
     public McpToolService.SubTaskDetail getSubTaskDetail(

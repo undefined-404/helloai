@@ -18,6 +18,7 @@ import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentMcpServerService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.entity.Attachment;
+import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Uncertainty;
@@ -75,6 +76,7 @@ class McpToolServiceTest {
     @Mock private SubTaskService subTaskService;
     @Mock private HeartbeatService heartbeatService;
     @Mock private AttachmentService attachmentService;
+    @Mock private AgentExecutionRecordService agentExecutionRecordService;
     @Mock private ExecutionResultHandler executionResultHandler;
     @Mock private AgentEventRecorder agentEventRecorder;
     @Mock private AgentDutyLeaseService agentDutyLeaseService;
@@ -87,7 +89,7 @@ class McpToolServiceTest {
         mcpToolService = new McpToolServiceImpl(
                 agentService, agentInboxService, agentMcpServerService,
                 subTaskService, heartbeatService,
-                attachmentService, executionResultHandler, agentEventRecorder,
+                attachmentService, agentExecutionRecordService, executionResultHandler, agentEventRecorder,
                 agentDutyLeaseService, taskRunningSpecService);
 
         Agent agent = new Agent();
@@ -100,6 +102,7 @@ class McpToolServiceTest {
         lenient().when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("checkIn"))).thenReturn(true);
         lenient().when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("checkOut"))).thenReturn(true);
         lenient().when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("heartbeat"))).thenReturn(true);
+        lenient().when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("startSubTask"))).thenReturn(true);
     }
 
     private AgentInbox subTaskInbox(Long refId) {
@@ -367,6 +370,47 @@ class McpToolServiceTest {
 
         assertThat(result.getLoadedCount()).isEqualTo(1);
         assertThat(result.getDeps().get(0).getContent()).contains("执行输出摘要");
+    }
+
+    @Test
+    @DisplayName("getDepsSummary：前置未全部 DONE → ready=false + notReadyCount=1 + loaded=false（P1-3）")
+    void shouldReportNotReadyWhenDependencyNotDone() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("getDepsSummary"))).thenReturn(true);
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(taskWithDeps(SUB_TASK_ID, List.of(11L)));
+        SubTask dep = new SubTask();
+        dep.setId(11L);
+        dep.setTitle("前置任务D");
+        dep.setStatus(SubTaskStatus.IN_PROGRESS);
+        when(subTaskService.listByIds(List.of(11L))).thenReturn(List.of(dep));
+        when(attachmentService.listActive(11L)).thenReturn(List.of());
+
+        McpToolService.GetDepsSummaryResult result = mcpToolService.getDepsSummary(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(result.getReady()).isFalse();
+        assertThat(result.getNotReadyCount()).isEqualTo(1);
+        assertThat(result.getDegraded()).isFalse();
+        McpToolService.GetDepsSummaryResult.DepItem item = result.getDeps().get(0);
+        assertThat(item.getLoaded()).isFalse();
+        assertThat(item.getContentChars()).isZero();
+    }
+
+    @Test
+    @DisplayName("getDepsSummary：全部前置 DONE → ready=true + notReadyCount=0（P1-3）")
+    void shouldReportReadyWhenAllDepsDone() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("getDepsSummary"))).thenReturn(true);
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(taskWithDeps(SUB_TASK_ID, List.of(11L)));
+        SubTask dep = new SubTask();
+        dep.setId(11L);
+        dep.setTitle("前置任务E");
+        dep.setStatus(SubTaskStatus.DONE);
+        when(subTaskService.listByIds(List.of(11L))).thenReturn(List.of(dep));
+        when(attachmentService.listActive(11L)).thenReturn(List.of());
+
+        McpToolService.GetDepsSummaryResult result = mcpToolService.getDepsSummary(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(result.getReady()).isTrue();
+        assertThat(result.getNotReadyCount()).isZero();
+        assertThat(result.getDeps().get(0).getLoaded()).isFalse();
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -642,6 +686,7 @@ class McpToolServiceTest {
         claimed.setStatus(SubTaskStatus.IN_PROGRESS);
         claimed.setVersion(2);
         when(subTaskService.getById(SUB_TASK_ID)).thenReturn(pending, claimed);
+        when(subTaskService.isReady(pending)).thenReturn(true);
         when(subTaskService.claimAtomic(SUB_TASK_ID, AGENT_ID)).thenReturn(true);
 
         McpToolService.ClaimSubTaskResult result = mcpToolService.claimSubTask(AGENT_ID, SUB_TASK_ID);
@@ -699,6 +744,7 @@ class McpToolServiceTest {
         claimed.setStatus(SubTaskStatus.IN_PROGRESS);
         claimed.setVersion(3);
         when(subTaskService.getById(SUB_TASK_ID)).thenReturn(pending, claimed);
+        when(subTaskService.isReady(pending)).thenReturn(true);
         when(subTaskService.claimAtomic(SUB_TASK_ID, AGENT_ID)).thenReturn(true);
         doThrow(new RuntimeException("event db down"))
                 .when(agentEventRecorder)
@@ -804,6 +850,7 @@ class McpToolServiceTest {
         SubTask claimed = detailedSubTask(AGENT_ID, SubTaskStatus.ASSIGNED);
         claimed.setVersion(2);
         when(subTaskService.getById(SUB_TASK_ID)).thenReturn(pending, claimed);
+        when(subTaskService.isReady(pending)).thenReturn(true);
         when(subTaskService.claimAtomic(SUB_TASK_ID, AGENT_ID)).thenReturn(true);
 
         McpToolService.ClaimSubTaskResult result = mcpToolService.claimSubTask(AGENT_ID, SUB_TASK_ID);
@@ -817,6 +864,26 @@ class McpToolServiceTest {
     }
 
     @Test
+    @DisplayName("claimSubTask：前置未全部 DONE → claimed=false + dependency_not_ready（P0-1 依赖门禁）")
+    void shouldRejectClaimWhenDependencyNotReady() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("claimSubTask"))).thenReturn(true);
+        SubTask pending = subTask(null);
+        pending.setTaskId(TASK_ID);
+        pending.setStatus(SubTaskStatus.PENDING);
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(pending);
+        when(subTaskService.isReady(pending)).thenReturn(false);
+
+        McpToolService.ClaimSubTaskResult result = mcpToolService.claimSubTask(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(result.isOk()).isTrue();
+        assertThat(result.isClaimed()).isFalse();
+        assertThat(result.getReason()).isEqualTo("dependency_not_ready");
+        // 门禁为读侧前置校验：未就绪不得进入原子认领，也不得埋点
+        verify(subTaskService, never()).claimAtomic(eq(SUB_TASK_ID), eq(AGENT_ID));
+        verifyNoInteractions(agentEventRecorder);
+    }
+
+    @Test
     @DisplayName("claimSubTask：抢不到（已归属他人）不下发详情")
     void shouldNotLeakDetailWhenClaimLost() {
         when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("claimSubTask"))).thenReturn(true);
@@ -827,5 +894,116 @@ class McpToolServiceTest {
 
         assertThat(result.isClaimed()).isFalse();
         assertThat(result.getDetail()).isNull();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  getSubTaskDetail 附件可发现性（P1-4-b）
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("getSubTaskDetail：内联 ACTIVE 附件清单（P1-4-b 可发现性）")
+    void shouldInlineActiveAttachmentsInDetail() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("getSubTaskDetail"))).thenReturn(true);
+        SubTask subTask = detailedSubTask(AGENT_ID, SubTaskStatus.IN_PROGRESS);
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
+        Attachment attachment = new Attachment();
+        attachment.setId(9001L);
+        attachment.setFileName("报告.md");
+        attachment.setMimeType("text/markdown");
+        attachment.setFileSize(2048L);
+        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(attachment));
+        when(attachmentService.isContentLoadable(attachment)).thenReturn(true);
+
+        McpToolService.SubTaskDetail detail = mcpToolService.getSubTaskDetail(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(detail.getAttachments()).hasSize(1);
+        assertThat(detail.getAttachments().get(0).getAttachmentId()).isEqualTo(9001L);
+        assertThat(detail.getAttachments().get(0).getFileName()).isEqualTo("报告.md");
+        assertThat(detail.getAttachments().get(0).getLoadable()).isTrue();
+        // P1-7：执行记录查询在 mock 下不可用（降级路径），contributors 至少含当前执行者
+        assertThat(detail.getContributors()).contains(AGENT_ID);
+    }
+
+    @Test
+    @DisplayName("getSubTaskDetail：无附件时返回空清单（不阻断详情下发）")
+    void shouldReturnEmptyAttachmentsWhenNone() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("getSubTaskDetail"))).thenReturn(true);
+        SubTask subTask = detailedSubTask(AGENT_ID, SubTaskStatus.IN_PROGRESS);
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
+        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of());
+
+        McpToolService.SubTaskDetail detail = mcpToolService.getSubTaskDetail(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(detail.getAttachments()).isEmpty();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  startSubTask 开工/返工出口（P0-2）
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("startSubTask：归属者 REWORK → 推进 IN_PROGRESS（P0-2 返工出口）")
+    void shouldStartReworkSubTaskByOwner() {
+        SubTask rework = subTask(AGENT_ID);
+        rework.setTaskId(TASK_ID);
+        rework.setStatus(SubTaskStatus.REWORK);
+        rework.setVersion(7);
+        SubTask started = subTask(AGENT_ID);
+        started.setTaskId(TASK_ID);
+        started.setStatus(SubTaskStatus.IN_PROGRESS);
+        started.setVersion(8);
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(rework, started);
+
+        McpToolService.StartSubTaskResult result = mcpToolService.startSubTask(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(result.isOk()).isTrue();
+        assertThat(result.isStarted()).isTrue();
+        assertThat(result.getStatus()).isEqualTo("IN_PROGRESS");
+        assertThat(result.getVersion()).isEqualTo(8);
+        verify(subTaskService).start(eq(SUB_TASK_ID));
+    }
+
+    @Test
+    @DisplayName("startSubTask：非归属者被拒（not_task_owner），不得推进状态")
+    void shouldRejectStartWhenNotOwner() {
+        SubTask others = subTask(OTHER_AGENT);
+        others.setStatus(SubTaskStatus.REWORK);
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(others);
+
+        McpToolService.StartSubTaskResult result = mcpToolService.startSubTask(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(result.isOk()).isFalse();
+        assertThat(result.isStarted()).isFalse();
+        assertThat(result.getReason()).isEqualTo("not_task_owner");
+        verify(subTaskService, never()).start(eq(SUB_TASK_ID));
+    }
+
+    @Test
+    @DisplayName("startSubTask：已是 IN_PROGRESS 幂等返回成功")
+    void shouldReturnIdempotentWhenAlreadyInProgress() {
+        SubTask running = subTask(AGENT_ID);
+        running.setStatus(SubTaskStatus.IN_PROGRESS);
+        running.setVersion(9);
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(running);
+
+        McpToolService.StartSubTaskResult result = mcpToolService.startSubTask(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(result.isOk()).isTrue();
+        assertThat(result.isStarted()).isTrue();
+        verify(subTaskService, never()).start(eq(SUB_TASK_ID));
+    }
+
+    @Test
+    @DisplayName("startSubTask：非法状态（如 DONE）被拒（invalid_status）")
+    void shouldRejectStartWhenInvalidStatus() {
+        SubTask done = subTask(AGENT_ID);
+        done.setStatus(SubTaskStatus.DONE);
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(done);
+
+        McpToolService.StartSubTaskResult result = mcpToolService.startSubTask(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(result.isOk()).isFalse();
+        assertThat(result.getReason()).isEqualTo("invalid_status:DONE");
+        verify(subTaskService, never()).start(eq(SUB_TASK_ID));
     }
 }

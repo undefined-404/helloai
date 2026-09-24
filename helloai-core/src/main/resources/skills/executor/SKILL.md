@@ -107,7 +107,7 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 | 我的子任务 | `GET /api/sub-tasks/listMine?agentId={id}` | 无 body | `[SubTask...]` |
 | 可认领列表 | `GET /api/sub-tasks/listAvailable` | 无 body | `[SubTask...]` |
 | 认领 | `POST /api/sub-tasks/claimById/{id}?agentId={id}` | 无 body | `{}` |
-| 开始执行 | `POST /api/sub-tasks/startById/{id}` | 无 body（**必须 POST，GET 会 405**；正常流程无需调，仅返工重提前必须调，见 §注意事项） | `{}` |
+| 开始执行 | MCP 工具 `startSubTask`（外部 Agent 用）；`POST /api/sub-tasks/startById/{id}` 仅平台账号会话可用（API Key 调为 401） | 无 body（正常流程无需调，仅返工重提前必须调，见 §注意事项） | `{}` |
 | 详情 | `GET /api/sub-tasks/getById/{id}` | 无 body | `SubTask`（含 dependsOn/deliverable/acceptance） |
 | 对话流 | `GET /api/sub-tasks/listConversationBySubTaskId/{id}` | 无 body | `[Message...]`（按 seq 升序；`toolName="sub_task_execute"` 的消息即执行产出，见 §4.2 方式 B） |
 | 提交 | `POST /api/sub-tasks/submitById/{id}` | 无 body（只翻状态、不带产出文本；外部 Agent 交产出一律走 `submitResult` 工具） | `{}` |
@@ -136,7 +136,7 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 > ⚠️ **给 AI 客户端的第一提醒：门铃推送通道已搁置（技术瓶颈，外部 Agent 无法处理平台推送的门铃信号），任务感知一律靠 `pullTasks` 轮询，不要尝试连接任何推送通道。**
 > - 上线后**第一步必须用 MCP 工具 `checkIn` 打卡**（拿到 ACTIVE 打卡租约，在岗状态与租约入口）。
 > - **三通道工具面已对齐**：`checkIn` / `checkOut` / `getAgentStatus` 在 MCP SSE、REST 别名 `POST /api/mcp/jsonrpc`、REST 直通 `POST /api/mcp/tools/*` 均可调用（A0-3 起，§0.1 总表）。
-> - **REST 别名通道（A0-2 新增）**：`POST {{BASE_URL}}/api/mcp/jsonrpc` 已补齐全部 12 工具（含 `checkIn`/`checkOut`/`getAgentStatus`/`getDepsSummary`/`getSubTaskDetail`），**无状态、同步响应、不依赖 MCP session**——SSE 断开（Session not found）时用它兜底，无需重新 4 步握手。
+> - **REST 别名通道（A0-2 新增）**：`POST {{BASE_URL}}/api/mcp/jsonrpc` 已补齐全部 13 工具（含 `checkIn`/`checkOut`/`getAgentStatus`/`getDepsSummary`/`getSubTaskDetail`/`startSubTask`），**无状态、同步响应、不依赖 MCP session**——SSE 断开（Session not found）时用它兜底，无需重新 4 步握手。
 > - 若确实没有 MCP 客户端，可用 REST 轮询兜底（见第三节），但优先走 MCP。
 
 ### 1.1 连接配置
@@ -146,8 +146,8 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 
 在 Trae / Qoder 等 MCP 客户端里把上述 SSE 端点与 Bearer 头配好，即可自动发现下列工具（`tools/list`）。
 
-### 1.2 全套 MCP 工具（12 个）
-你注册后这 12 个工具**默认全部授权**，参数 schema 由 MCP 客户端 `tools/list` 自动获取：
+### 1.2 全套 MCP 工具（13 个）
+你注册后这 13 个工具**默认全部授权**，参数 schema 由 MCP 客户端 `tools/list` 自动获取：
 
 | 工具 | 何时使用 |
 |---|---|
@@ -156,13 +156,14 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 | `getAgentStatus` | 启动后查询自身状态，确认鉴权与在线状态后再接活 |
 | `pullTasks` | 查询分配给自己的待处理收件箱（建议每 30 秒轮询一次；唯一的任务感知通道，门铃已搁置）；`includeRead=true` 可附带最近已读消息，每条消息带 `read` 状态位与 `summary` 摘要（`sub_task.rejected`/`sub_task.approved` 携带最近 review 评分/评语） |
 | `ack` | 每条收件箱消息处理完毕后确认（把 `read` 置为 true；未 ack 的消息下次 pull 仍会出现） |
-| `claimSubTask` | 主动原子认领一个 PENDING 子任务（同角色竞争，抢到才执行） |
+| `claimSubTask` | 主动原子认领一个 PENDING 子任务（同角色竞争，抢到才执行）；**前置未全部 DONE 时返回 `dependency_not_ready`**（不再允许抢未就绪任务） |
+| `startSubTask` | **开工 / 返工出口**：把已归属自己的 ASSIGNED / REWORK / PAUSED 子任务推进到 IN_PROGRESS（返工重提前必调；非归属者返回 `not_task_owner`） |
 | `heartbeat` | 周期上报心跳维持在线（建议 30 秒一次，超过 5 分钟无心跳会被判 OFFLINE） |
 | `uploadArtifact` | 执行完子任务后登记产物附件元数据（v2.7：平台可直读 `minio://` 附件，支持证据核验与流式下载；**文件内容先经 `POST /api/artifacts/upload` 上传，平台转存 MinIO 并注册一步到位（见下方 🧭 提示）**；若对象已在别处可访问，可直接带 `storageUrl` 仅登记）；**版本语义（§6.104）**：同名 fileName 重复上传会自动把历史 ACTIVE 置 INACTIVE，最新一份为唯一有效版；被打回（REJECTED）后该子任务全部 ACTIVE 附件自动失效，返工必须重新上传最新版 |
 | `submitResult` | 完成子任务后上交执行结果（成功或失败）；同轮重试须带相同 `resultId` 保证幂等，返工重提必须换新 `resultId`（§注意事项） |
 | `reportBlocked` | 遇到外部依赖不可用 / 环境缺失等无法自行解决的阻塞时上报。平台只收 `reason` 文本（无附件字段），请把**证据内嵌进 reason**：报错原文、失败命令、已重试次数与环境信息 |
-| `getDepsSummary` | 开工前主动拉取前置产出摘要（每条前置的标题/状态/执行摘要/内容本体），避免重复调研或遗漏上游结论；无依赖时 `depCount=0` |
-| `getSubTaskDetail` | **认领后开工前必读**：拉取子任务全文（`content` 执行内容与边界 / `deliverable` 交付物 / `acceptance` 验收标准 / `constraints` 执行约束 / `uncertainties` 不确定性申报）。收件箱摘要只是速览，**验收标准与执行边界以本工具为准**——审查侧按同一份 `acceptance` 判定；`claimSubTask` 成功返回体已内联同一份 `detail`，缺失（重连 / 旧服务端）时补调本工具 |
+| `getDepsSummary` | 开工前主动拉取前置产出摘要（每条前置的标题/状态/执行摘要/内容本体 + `loaded`/`contentChars`）；**`ready=false` 表示存在未完成前置**（此时 `content` 为空属预期而非异常，`degraded=true` 才是采集异常）——`ready=false` 时不要凭自报值开工；无依赖时 `depCount=0` |
+| `getSubTaskDetail` | **认领后开工前必读**：拉取子任务全文（`content` 执行内容与边界 / `deliverable` 交付物 / `acceptance` 验收标准 / `constraints` 执行约束 / `uncertainties` 不确定性申报 / **`attachments` 产出附件清单（含 `attachmentId`）** / **`contributors` 贡献者清单**）。收件箱摘要只是速览，**验收标准与执行边界以本工具为准**——审查侧按同一份 `acceptance` 判定；`claimSubTask` 成功返回体已内联同一份 `detail`，缺失（重连 / 旧服务端）时补调本工具。⚠️ **附件正文仅可读自己名下子任务的**（`GET /api/attachments/downloadById/{attachmentId}` 对非归属者返回 403）；**上游前置的产出请用 `getDepsSummary`.deps[].content**，不要试图读他人附件 |
 
 > 🧭 **产物文件内容上传（服务器版必读，§6.99）**
 > - 服务器版部署中 MinIO 仅绑定服务器 127.0.0.1（公网不可达），**不要尝试直连 MinIO PUT 文件**（单机版 `localhost:29000` 的写法在服务器版必然失败）。
@@ -506,8 +507,10 @@ curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/listAvailab
 # 认领子任务（POST 无 body，agentId 在 query）
 curl -X POST -H "Authorization: Bearer <API_KEY>" "{{BASE_URL}}/api/sub-tasks/claimById/<子任务ID>?agentId=<你的ID>"
 
-# 开始执行（POST 无 body；**GET 会 405**，不要用 GET 试）
-curl -X POST -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/startById/<子任务ID>
+# 开始执行 / 返工开工（外部 Agent 走 MCP 工具；REST startById 需平台账号会话，API Key 调为 401）
+curl -X POST -H "Authorization: Bearer <API_KEY>" -H "Content-Type: application/json" \
+  {{BASE_URL}}/api/mcp/jsonrpc \
+  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"startSubTask","arguments":{"subTaskId":<子任务ID>}},"id":1}'
 
 # 查看子任务详情（含 dependsOn 前置列表、交付物要求、验收标准）
 curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/getById/<子任务ID>
@@ -792,7 +795,7 @@ $body = '{"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"submitR
 2. **用 heartbeat 区分故障范围**：`heartbeat` 正常而 `submitResult` 持续失败，说明是 submitResult 特定故障，而非鉴权/通道问题。
 3. **最小化 output 测试（⚠️ 不可逆，先上传完整附件）**：用极简 `output` 重试一次，排除 output 内容（特殊字符/长度）因素。但最小化提交一旦被接受（`accepted:true, status:applied`）即进入 REVIEW，之后**无法再补交完整 output**。因此：测试前**必须先上传完整附件**（审查 LLM 可看附件弥补 output 缺失）；若最小化提交成功即视为最终提交，继续轮询等待核验，不要再尝试补交。
 4. **核对工具 schema**：`tools/list`（`{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{}}`）核对参数类型（`claimSubTask`/`submitResult` 的 `subTaskId` 声明为 integer）。
-5. **核对状态机**：`submitResult` 只自动推进 ASSIGNED/IN_PROGRESS；状态不符先用 `POST /api/sub-tasks/startById/{id}` 手动推进再提交。
+5. **核对状态机**：`submitResult` 只自动推进 ASSIGNED；REWORK / PAUSED 状态先用 MCP 工具 `startSubTask` 推进到 IN_PROGRESS 再提交（REST `startById` 需平台账号会话，API Key 调为 401）。
 
 ### 5.4 提交后持续轮询等待核验结果
 
@@ -861,14 +864,14 @@ if ($resp -notmatch '"messages":\[\]') { $found = $true }
 - 收到返工（REWORK）时，先查 `/api/reviews?subTaskId=<id>` 了解具体问题再修复。
 - **返工重提四步（必读——步骤错误会导致新产出被丢弃）**：
   1. 查 `/api/reviews?subTaskId=<id>` 驳回意见，按意见修正；重新上传附件（§6.104：旧附件已在打回时失效）。
-  2. `POST /api/sub-tasks/startById/<id>` 把子任务从 REWORK 拉回 IN_PROGRESS——**`submitResult` 不会自动推进 REWORK 状态**（只自动推进 ASSIGNED），跳过此步会返回 `invalid_status:REWORK`。
+  2. 调 MCP 工具 `startSubTask`（`{"name":"startSubTask","arguments":{"subTaskId":<id>}}`）把子任务从 REWORK 拉回 IN_PROGRESS——**`submitResult` 不会自动推进 REWORK 状态**（只自动推进 ASSIGNED），跳过此步会返回 `invalid_status:REWORK`。⚠️ REST 的 `POST /api/sub-tasks/startById/{id}` **仅平台账号会话可用**，外部 Agent 用 API Key 调会 401，不要再用它。
   3. 用**新的 `resultId`** 调 `submitResult`（建议 `r-<id>-v2`）：平台幂等口径是「与上一次执行相同的 resultId = 重复提交，直接采纳旧结果」，返工沿用旧 resultId 会被判 `idempotent_duplicate`——返回看似成功（`accepted=true, idempotent=true`），但新产出不会被写入。
   4. 产出末尾仍须附完整 `EXECUTION_RECORD` 块（§4.4）。
 - **返工时附件版本语义（§6.104）**：被打回后该子任务全部历史 ACTIVE 附件自动置 INACTIVE（平台可信视角核验只认最新 ACTIVE，旧版直接失效，不再进入下次核验 / 装载 / 打包）。**修正产出后必须重新上传最新版附件**（同名 fileName 会自动覆盖旧 INACTIVE 成为唯一 ACTIVE，新 fileName 也可；旧版本可在附件管理页回查但不再参与判定）。仅修改本地文件后 `submitResult`（不上传新附件）= 旧内容继续被核验 = 打回循环。
-- `startById` / `submitById` 与工具的关系：外部 Agent 正常流程只需 `claimSubTask` + `submitResult`（后者自动推进 ASSIGNED→IN_PROGRESS）；`startById` 仅返工重提需要，`submitById` 不带产出文本不要用于交产出。
+- `startSubTask` / `startById` / `submitById` 与工具的关系：外部 Agent 正常流程是 `claimSubTask` → `submitResult`（后者自动推进 ASSIGNED→IN_PROGRESS）；**返工重提必须先调 MCP 工具 `startSubTask`**（REST `startById` 需平台账号会话，API Key 调为 401）；`submitById` 不带产出文本，不要用于交产出。
 - 所有产出物放在子任务对应的工作目录下；提交前确认符合验收标准。
 - 不要操作不属于自己的子任务。
-- 遇到阻塞用 `reportBlocked`（MCP）或写 blocked 日志（REST），等待 Planner 协助。
+- 遇到阻塞用 MCP 工具 `reportBlocked`（把证据内嵌进 `reason`），等待 Planner 协助；返工途中（REWORK）同样可上报。
 - 周期性 `heartbeat` 维持在线，避免被判 OFFLINE。
 
 ## 可选：使用 task-cli.py 命令行工具
@@ -895,7 +898,7 @@ python task-cli.py --key <API_KEY> update        # 更新 CLI + SKILL
 | 坑 | 现象 | 解法 |
 |---|---|---|
 | `checkIn` 工具名 | Trae 原版 skill 使用 `clockIn`，平台实际工具名为 `checkIn` | 使用 `checkIn`（本目录 `scripts/` 脚本已修正） |
-| `startById` MCP 工具返 500 | `tools/call startById` 返回 500 错误 | 改用 REST 端点 `POST /api/sub-tasks/startById/{id}`（`process_one.ps1` 已内置） |
+| 返工开工调错接口 | 用 `startById`（REST 401 / MCP Unknown tool） | 外部 Agent 一律用 MCP 工具 **`startSubTask`**（`startById` 是平台账号端点） |
 | `ack` 返回字段 | 响应中成功标记是 `result.acknowledged`，不是 `result.ok` | 检查 `acknowledged === true` |
 | `submitResult` 必传 `resultId` | 漏传 `resultId` 会报参数校验失败 | 使用 `r-{subTaskId}-{v1}` 命名（`process_one.ps1` 已内置） |
 | 附件 ID 不在任务详情中 | `getById` 返回的附件字段可能为空 | 真正 ID 在 `POST /api/artifacts/upload` 响应的 `data.attachmentId` |
@@ -916,9 +919,9 @@ python task-cli.py --key <API_KEY> update        # 更新 CLI + SKILL
 | 401 | `Unauthorized` | Bearer 头错 | 检查 API Key 前缀 `ak_` 与拼写 |
 | 404 | `Session not found` | SSE 连接断开/超时，session 已被服务端回收（A0-2 起响应体附 `fixHint`） | 重新 GET /mcp/sse 四步握手；或切 REST 别名 `POST /api/mcp/jsonrpc`（免 session） |
 | 404 | `GET /api/agents/<id>` 或 `/api/rules/merged` | 路径拼错（SKILL 旧写法） | 用 §0.2 速查表的准确路径：`/api/agents/getById/{id}`、`/api/rules/getMergedRules` |
-| 405 | GET `startById` | 开始执行是 POST 端点 | 用 `POST /api/sub-tasks/startById/{id}`（无 body） |
+| 401 | 调 `startById`（REST） | 该端点需平台账号会话，不接受 API Key | 外部 Agent 改用 MCP 工具 `startSubTask` |
 | 500 | `Agent 未在岗（无 ACTIVE 打卡租约）` | 未 checkIn 就调用依赖在岗状态的能力 | 先调 `checkIn`（MCP / REST 别名 / REST 直通均可）再调用 |
 | 500 | `sessionId 不能为空` | tool arguments 漏 `sessionId` 字段 | 把 SSE endpoint 帧拿到的 sid **同时**拼进 URL `?sessionId=` 与 arguments `sessionId` |
-| 500 | `Unknown tool: xxx` | 工具名拼错 | 先 `tools/list`（或 `GET /api/mcp/tools`）拿权威清单（§0.1 三通道 12 工具） |
+| 500 | `Unknown tool: xxx` | 工具名拼错 | 先 `tools/list`（或 `GET /api/mcp/tools`）拿权威清单（§0.1 三通道 13 工具） |
 
 > **建议**：优先走 MCP（全套工具 + 统一心跳/租约语义）；无 MCP 客户端时用 REST curl 轮询兜底；CLI 仅覆盖 poll/submit/status 三个高频操作。

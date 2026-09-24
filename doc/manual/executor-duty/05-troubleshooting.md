@@ -37,7 +37,7 @@
 
 | 症状 | 检查动作 | 预期结果 | 止损动作 |
 |---|---|---|---|
-| `submitResult` 返回 `reason=invalid_status:<状态>` | 用 `getById` 查 `status` | 提交仅自动推进 `ASSIGNED` / `IN_PROGRESS`；`REWORK` 需先 `startById`（契约 §2.5） | 按返工四步重提；**不得**盲目重试同一结果 |
+| `submitResult` 返回 `reason=invalid_status:<状态>` | 用 `getById` 查 `status` | 提交仅自动推进 `ASSIGNED` / `IN_PROGRESS`；`REWORK` 需先 `startSubTask`（契约 §2.5） | 按返工四步重提；**不得**盲目重试同一结果 |
 | 返回 `accepted=true, idempotent=true` 但产出未更新 | 核对返回的 `resultId` 与上一轮是否相同 | 平台判定为重复提交，采纳旧结果（契约 §7） | **必须**换新 `resultId` 重提；旧产出不会被写入 |
 | 提交后长时间无核验消息 | 每 15 秒 `pullTasks` 轮询，最多 8 轮 | 出现 `sub_task.approved` / `sub_task.rejected` / `sub_task.rework` 之一（契约 §2.5） | 超过窗口仍无消息 → 用 `getById` 查状态；状态未推进则 `reportBlocked` |
 | 核验驳回但看不出原因 | `GET /api/reviews?subTaskId={id}` 取 `issues` / `comment` / `score` | 给出可执行的缺陷定位（契约 §2.4） | 按意见修正；`issues` 为空或不可操作 → 升级 |
@@ -61,8 +61,8 @@
 | MCP 返回 404 `Session not found` | 确认 SSE 长连接是否断开 | 旧 sessionId 无法复活（契约 §6） | 切 REST 别名 `POST /api/mcp/jsonrpc` 继续本轮，不中断任务 |
 | POST `/mcp/messages` 返回 400 `Invalid message format` | 检查请求头是否带 `charset=utf-8` | 带 UTF-8 后正常 | 修正请求后再试 |
 | 返回 404（路径） | 核对路径是否为历史写法 | 正确写法为 `/api/agents/getById/{id}`、`/api/rules/getMergedRules`（契约 §6） | 改用正确路径 |
-| 返回 500 `Unknown tool: xxx` | 用 `tools/list` 取权威清单 | 仅 12 个工具可用（契约 §2.1） | 改用正确工具名 |
-| GET `startById` 返回 405 | 确认请求方法 | 开始执行必须用 POST（契约 §2.4） | 改用 POST 重试 |
+| 返回 500 `Unknown tool: xxx` | 用 `tools/list` 取权威清单 | 仅 13 个工具可用（契约 §2.1） | 改用正确工具名 |
+| 调 REST `startById` 返回 401 | 确认走的是哪条通道 | 该端点需平台账号会话，不接受 API Key（契约 §2.4） | 外部 Agent 改用 MCP 工具 `startSubTask` |
 
 ## 5.3 需要立即升级人工的情形
 
@@ -72,7 +72,7 @@
 
 - 子任务为 `DEAD_LETTER` 且 `context.dead_letter_reason=reassign_attempt_exceeded` 时，表示自动重派次数已耗尽，属调度层问题。
 - 在 `{遇到该情形}` 条件下，`{执行者}` **必须**停止自行处置并升级；**不得**自行认定该子任务应归自己所有。
-- 平台提供再派单入口 `POST /api/sub-tasks/redispatchDeadLetterById/{id}`（body `{"agentId":"..."}`）。实测以执行者 API Key 调用返回 HTTP 200，且目标子任务由 `DEAD_LETTER` 转为 `ASSIGNED`（其后需 `startById` 才会进入执行态）：
+- 平台提供再派单入口 `POST /api/sub-tasks/redispatchDeadLetterById/{id}`（body `{"agentId":"..."}`）。实测以执行者 API Key 调用返回 HTTP 200，且目标子任务由 `DEAD_LETTER` 转为 `ASSIGNED`（其后需 `startSubTask` 才会进入执行态）：
   `{"code":200,"msg":"success","data":null,"traceId":"11594d74ecbf46e3"}`
 - 该入口属调度处置动作；在 `{未获授权}` 条件下，`{执行者}` **不得**自行调用，**必须**先升级（其授权范围 [待确认]，见 §5.5 TBD-05-2）。
 - 在 `{同一 Task 下存在待执行子任务但其依赖因死信而无法满足}` 条件下，同样按上条升级；本章不给出绕过依赖的替代路径。
