@@ -189,6 +189,27 @@ public class AgentDispatchProperties {
      */
     private int autoFinalReportMaxReview = 1;
 
+    /**
+     * 最终报告审查孤儿兜底阈值（秒，§12.2 审查链三级容错 L3）。
+     *
+     * <p>报告状态停留 {@code REVIEWING} 且 {@code final_report_time} 早于
+     * {@code now - 本阈值} 时，判定审查触发链（L1 事件 / L2 Outbox→MQ）已全部丢失，
+     * 由 {@code FinalReportReviewOrphanTask} 收敛为 {@code DONE} 并落
+     * {@code task_final_report_review_orphan_converged} 审计事件。</p>
+     *
+     * <p><b>为什么收敛 DONE 而不是重投审查</b>：审查是增值质量闭环，报告正文此时
+     * 早已落库并交付（UI 正常可读、交付物 zip 含报告）；重复重投会在审查持续失败时
+     * 反复消耗 LLM 配额。收敛 DONE 是确定性、零 token、无循环的最优止血。
+     * 若确实需要补跑审查，UI 的「重新生成」按钮可人工触发。默认 300（5 分钟）——
+     * 正常审查 LLM 判定约 30s，5 分钟足以排除正常在途。</p>
+     */
+    private int finalReportReviewOrphanThresholdSeconds = 300;
+
+    /**
+     * 最终报告审查孤儿兜底单轮批量上限（§12.2 L3）。默认 20。
+     */
+    private int finalReportReviewOrphanBatchSize = 20;
+
     // 注：原 heartbeatFreshMinutes 字段已迁移至
     //     AgentHealthProperties.offlineMinutes，作为 Selector / Reconcile / SQL 回退候选
     //     共用的单一心跳阈值来源。详见 com.helloai.common.config.AgentHealthProperties。

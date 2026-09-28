@@ -2,6 +2,7 @@ package com.helloai.core.agent.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.helloai.common.constant.FinalReportReviewConst;
 import com.helloai.common.constant.OutboxStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.AgentOutboxEvent;
@@ -61,8 +62,34 @@ public class AgentOutboxServiceImpl extends ServiceImpl<AgentOutboxEventMapper, 
     }
 
     @Override
-    public List<AgentOutboxEvent> pollPending(int limit) {
-        return list(new LambdaQueryWrapper<AgentOutboxEvent>()
+    @Transactional(rollbackFor = Exception.class)
+    public AgentOutboxEvent createReportReviewEvent(Long taskId, OffsetDateTime reportTime,
+                                                    int attempt, int reportLength) {
+        AgentOutboxEvent event = new AgentOutboxEvent();
+        event.setEventId(UUID.randomUUID().toString().replace("-", ""));
+        event.setEventType(FinalReportReviewConst.EVENT_TYPE);
+        event.setRoutingKey(FinalReportReviewConst.ROUTING_KEY);
+        Map<String, Object> payload = new HashMap<>();
+        // eventId 随 payload 下发：MQ 消费者以其为幂等键（同一事件重投不重复消费；
+        // 同任务的首次生成 / 驳回返工 / 兜底重投各自独立消息）
+        payload.put(FinalReportReviewConst.FIELD_EVENT_ID, event.getEventId());
+        payload.put(FinalReportReviewConst.FIELD_TASK_ID, taskId);
+        // reportTime 显式 toString 为 ISO-8601（带偏移）：消费端 OffsetDateTime.parse 可确定性还原，
+        // 不依赖 Jackson JSR310 配置；该值是审查链陈旧守卫锚点，必须无损往返
+        payload.put(FinalReportReviewConst.FIELD_REPORT_TIME, reportTime != null ? reportTime.toString() : null);
+        payload.put(FinalReportReviewConst.FIELD_ATTEMPT, attempt);
+        payload.put(FinalReportReviewConst.FIELD_REPORT_LENGTH, reportLength);
+        event.setPayload(payload);
+        event.setStatus(OutboxStatus.PENDING);
+        event.setRetryCount(0);
+        save(event);
+        log.info("报告审查 Outbox 事件已创建: eventId={}, taskId={}, attempt={}",
+                event.getEventId(), taskId, attempt);
+        return event;
+    }
+
+    @Override
+    public List<AgentOutboxEvent> pollPending(int limit) {        return list(new LambdaQueryWrapper<AgentOutboxEvent>()
                 .eq(AgentOutboxEvent::getStatus, OutboxStatus.PENDING)
                 .lt(AgentOutboxEvent::getRetryCount, 5)
                 .and(w -> w.isNull(AgentOutboxEvent::getNextRetryTime)

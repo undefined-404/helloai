@@ -23,6 +23,15 @@ public class RabbitMQConfig {
     public static final String REVIEWER_QUEUE = "helloai.reviewer.queue";
     public static final String PLANNER_QUEUE = "helloai.planner.queue";
     public static final String NOTIFICATION_QUEUE = "helloai.notification.queue";
+    /**
+     * 最终报告审查专用队列（§12.2 审查链三级容错 L2）。
+     *
+     * <p><b>为什么独立队列而不复用 {@link #REVIEWER_QUEUE}</b>：后者绑定
+     * {@code agent.reviewer.*} 且被 {@code MqReviewCommandConsumer} 按「payload 必须含
+     * subTaskId」消费——报告审查消息没有 subTaskId，复用会被该消费者判定为坏消息
+     * 直接 ACK 丢弃（静默丢失，且不落死信）。独立队列保证两类审查的消费语义互不干扰。</p>
+     */
+    public static final String REPORT_REVIEW_QUEUE = "helloai.report-review.queue";
     public static final String DLX_QUEUE = "helloai.dlx.queue";
 
     @Bean
@@ -65,6 +74,22 @@ public class RabbitMQConfig {
     @Bean
     public Queue plannerQueue() {
         return QueueBuilder.durable(PLANNER_QUEUE)
+                .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
+                .withArgument("x-dead-letter-routing-key", DLX_QUEUE)
+                .withArgument("x-max-length", 50000)
+                .withArgument("x-overflow", "reject-publish")
+                .build();
+    }
+
+    /**
+     * 最终报告审查队列（§12.2 审查链三级容错 L2）。
+     *
+     * <p>容量参数与既有队列对齐：死信走统一 DLX，溢出 reject-publish 快速失败
+     * （报告审查是增值质量闭环，宁可拒投落死信也不拖垮节点）。</p>
+     */
+    @Bean
+    public Queue reportReviewQueue() {
+        return QueueBuilder.durable(REPORT_REVIEW_QUEUE)
                 .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
                 .withArgument("x-dead-letter-routing-key", DLX_QUEUE)
                 .withArgument("x-max-length", 50000)
@@ -122,6 +147,17 @@ public class RabbitMQConfig {
     @Bean
     public Binding plannerBinding() {
         return BindingBuilder.bind(plannerQueue()).to(agentExchange()).with("agent.planner.*");
+    }
+
+    /**
+     * 报告审查绑定：{@code agent.report-review.*} → 报告审查专用队列。
+     *
+     * <p>与 {@code agent.reviewer.*}（子任务核验）严格分离，见
+     * {@link #REPORT_REVIEW_QUEUE} 的说明。</p>
+     */
+    @Bean
+    public Binding reportReviewBinding() {
+        return BindingBuilder.bind(reportReviewQueue()).to(agentExchange()).with("agent.report-review.*");
     }
 
     @Bean

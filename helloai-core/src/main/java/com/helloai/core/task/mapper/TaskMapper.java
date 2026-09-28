@@ -54,4 +54,26 @@ public interface TaskMapper extends BaseMapper<Task> {
             "ORDER BY t.update_time ASC LIMIT #{limit}")
     List<Task> selectTimedOutPlanning(@Param("deadline") OffsetDateTime deadline,
                                       @Param("limit") int limit);
+
+    /**
+     * 查询「审查链丢失」的最终报告孤儿：{@code final_report_status = REVIEWING}
+     * 且 {@code final_report_time} 早于 deadline。
+     *
+     * <p>用于 {@code FinalReportReviewOrphanTask} 兜底巡检（§12.2 审查链三级容错 L3）：
+     * 审查触发链（L1 内存事件 / L2 Outbox→MQ）全部丢失时报告会永久停在 REVIEWING，
+     * 本查询提供 DB 侧的事实源兜底。</p>
+     *
+     * <p>只选轻量列（不选 final_report 大字段），避免注解式查询绕开 typeHandler 映射。</p>
+     *
+     * @param deadline final_report_time 早于该时刻视为超时
+     * @param limit    单轮最多返回条数
+     */
+    @Select("SELECT t.id, t.title, t.status, t.final_report_status, t.final_report_time, "
+            + "t.create_time, t.update_time "
+            + "FROM task t "
+            + "WHERE t.final_report_status = 'REVIEWING' AND t.final_report_time < #{deadline} "
+            + "AND t.deleted = 0 "
+            + "ORDER BY t.final_report_time ASC LIMIT #{limit}")
+    List<Task> selectStaleFinalReportReviewing(@Param("deadline") OffsetDateTime deadline,
+                                               @Param("limit") int limit);
 }

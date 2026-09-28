@@ -7,6 +7,7 @@ import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
 import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapper;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.FinalReportStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
@@ -34,6 +35,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -45,7 +48,9 @@ import java.util.concurrent.RejectedExecutionException;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
@@ -57,17 +62,18 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * FinalReportReviewListener 单元测试：最终报告质量审查闭环（3A）。
+ * FinalReportReviewServiceImpl 单元测试：最终报告质量审查闭环（3A）。
  *
  * <p>覆盖：开关关闭跳过、报告缺失跳过、无可用 reviewer 跳过、自审自过硬守卫
  * （review_skipped 而非静默 pass）、解析不可用落 unparseable、pass=true 落 passed、
  * 驳回在返工上限内回调 rework、达上限落 max_review_reached 不再重写、
- * 审查 Prompt 注入报告正文与子任务产出证据（与报告链同口径）。</p>
+ * 审查 Prompt 注入报告正文与子任务产出证据（与报告链同口径）、
+ * §12.2 状态守卫（非 REVIEWING 幂等跳过）与 Redis 防双审锁。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
-@DisplayName("FinalReportReviewListener 最终报告质量审查闭环")
-class FinalReportReviewListenerTest {
+@DisplayName("FinalReportReviewServiceImpl 最终报告质量审查闭环")
+class FinalReportReviewServiceImplTest {
 
     private static final Long TASK_ID = 1L;
     /** 报告写作者（Planner）AgentId。 */
@@ -95,6 +101,11 @@ class FinalReportReviewListenerTest {
     private ReviewEvidenceAssembler reviewEvidenceAssembler;
     @Mock
     private TaskTimelineService taskTimelineService;
+    /** §12.2 防双审互斥锁（L1/L2/L3 三路触发并发时仅一路进入审查体）。 */
+    @Mock
+    private RedissonClient redissonClient;
+    @Mock
+    private RLock reviewLock;
     /** §12.2 审查专用池（mock；默认同步执行以保持单测断言语义，池满/提交用例内单独覆盖）。 */
     @Mock
     private Executor reportReviewExecutor;
@@ -104,14 +115,12 @@ class FinalReportReviewListenerTest {
     @SuppressWarnings("unchecked")
     private final LambdaQueryChainWrapper<SubTask> subTaskQueryChain = mock(LambdaQueryChainWrapper.class);
 
-    private FinalReportReviewListener listener;
+    private FinalReportReviewServiceImpl reviewService;
     private Agent reviewer;
 
     /**
-     * §12.2 收敛写回使用 {@code new LambdaUpdateWrapper<Task>()}，其 lambda 解析依赖
-     * MyBatis-Plus TableInfo 缓存；单测无 Spring 上下文，需手动注册 Task 的 TableInfo
-     * （与 TaskFinalReportServiceTest 同款先例），否则构造 wrapper 时抛
-     * "can not find lambda cache for this entity"。
+     * §12.2 收敛写回经 {@code taskService.convergeFinalReportToDone}（mock），本类不再自建
+     * {@code LambdaUpdateWrapper}；保留 TableInfo 初始化以兼容其它直接构造 wrapper 的断言路径。
      */
     @BeforeAll
     static void initTableInfo() {
@@ -120,16 +129,20 @@ class FinalReportReviewListenerTest {
     }
 
     @BeforeEach
-    void setUp() {
-        listener = new FinalReportReviewListener(taskFinalReportService, taskService, subTaskService,
+    void setUp() throws InterruptedException {
+        reviewService = new FinalReportReviewServiceImpl(taskFinalReportService, taskService, subTaskService,
                 taskRunningSpecService, reviewerPicker, platformAgentExecutionService,
                 verdictParser, reviewEvidenceAssembler, taskTimelineService, dispatchProperties,
-                reportReviewExecutor);
+                redissonClient, reportReviewExecutor);
         // §12.2 异步化：默认同步执行 Runnable（单测断言仍按顺序生效）；池满用例内改为抛拒绝异常
         doAnswer(inv -> {
             ((Runnable) inv.getArgument(0)).run();
             return null;
         }).when(reportReviewExecutor).execute(any());
+        // §12.2 防双审锁：默认占锁成功（并发占锁失败用例内单独覆盖）
+        when(redissonClient.getLock(anyString())).thenReturn(reviewLock);
+        when(reviewLock.tryLock(anyLong(), anyLong(), any())).thenReturn(true);
+        when(reviewLock.isHeldByCurrentThread()).thenReturn(true);
 
         when(subTaskService.lambdaQuery()).thenReturn(subTaskQueryChain);
         when(subTaskQueryChain.eq(any(), any())).thenReturn(subTaskQueryChain);
@@ -138,7 +151,7 @@ class FinalReportReviewListenerTest {
         when(subTaskQueryChain.list()).thenReturn(List.of());
         when(reviewEvidenceAssembler.extractExecutionOutput(any())).thenReturn("（产出概览：物化附件摘要）");
         // §12.2 REVIEWING 收敛写回：默认成功（收敛失败用例内单独覆盖为 false）
-        when(taskService.update(any())).thenReturn(true);
+        when(taskService.convergeFinalReportToDone(any(), any())).thenReturn(true);
 
         reviewer = mock(Agent.class);
         when(reviewer.getId()).thenReturn(REVIEWER_AGENT_ID);
@@ -151,13 +164,13 @@ class FinalReportReviewListenerTest {
     void shouldSkipReviewWhenDisabled() {
         dispatchProperties.setAutoFinalReportReviewEnabled(false);
 
-        listener.onFinalReportGenerated(event(1));
+        reviewService.onFinalReportGenerated(event(1));
 
         verify(taskService, never()).getById(any());
         verify(reviewerPicker, never()).pickSingle(any());
         verify(taskFinalReportService, never()).rework(any(), any(), anyInt());
         // §12.2 收敛兜底：开关关闭时条件写回 DONE（版本未变才生效）
-        verify(taskService).update(any());
+        verify(taskService).convergeFinalReportToDone(eq(TASK_ID), eq(REPORT_TIME));
     }
 
     @Test
@@ -165,7 +178,7 @@ class FinalReportReviewListenerTest {
     void shouldSkipWhenReportNotPersisted() {
         when(taskService.getById(TASK_ID)).thenReturn(task(TASK_ID, null));
 
-        listener.onFinalReportGenerated(event(1));
+        reviewService.onFinalReportGenerated(event(1));
 
         verify(reviewerPicker, never()).pickSingle(any());
         verify(taskFinalReportService, never()).rework(any(), any(), anyInt());
@@ -177,7 +190,7 @@ class FinalReportReviewListenerTest {
         when(taskService.getById(TASK_ID)).thenReturn(task(TASK_ID, "# 整合报告"));
         when(reviewerPicker.pickSingle(any())).thenReturn(null);
 
-        listener.onFinalReportGenerated(event(1));
+        reviewService.onFinalReportGenerated(event(1));
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
@@ -188,7 +201,7 @@ class FinalReportReviewListenerTest {
         verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
         verify(taskFinalReportService, never()).rework(any(), any(), anyInt());
         // §12.2 REVIEWING 收敛：审查跳过即收敛 DONE
-        verify(taskService).update(any());
+        verify(taskService).convergeFinalReportToDone(eq(TASK_ID), eq(REPORT_TIME));
     }
 
     @Test
@@ -199,7 +212,7 @@ class FinalReportReviewListenerTest {
         when(writerReviewer.getId()).thenReturn(WRITER_AGENT_ID);
         when(reviewerPicker.pickSingle(any())).thenReturn(writerReviewer);
 
-        listener.onFinalReportGenerated(event(1));
+        reviewService.onFinalReportGenerated(event(1));
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
@@ -210,7 +223,36 @@ class FinalReportReviewListenerTest {
         verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
         verify(taskFinalReportService, never()).rework(any(), any(), anyInt());
         // §12.2 REVIEWING 收敛：审查跳过即收敛 DONE
-        verify(taskService).update(any());
+        verify(taskService).convergeFinalReportToDone(eq(TASK_ID), eq(REPORT_TIME));
+    }
+
+    // ---------- §12.2 三路触发幂等（状态守卫 + 防双审锁） ----------
+
+    @Test
+    @DisplayName("§12.2 状态守卫：状态已非 REVIEWING（被兄弟链路收敛）→ 幂等跳过，不选人不再收敛")
+    void shouldSkipWhenStatusAlreadyConverged() {
+        Task converged = task(TASK_ID, "# 整合报告");
+        converged.setFinalReportStatus(FinalReportStatus.DONE);
+        when(taskService.getById(TASK_ID)).thenReturn(converged);
+
+        reviewService.onFinalReportGenerated(event(1));
+
+        verify(reviewerPicker, never()).pickSingle(any());
+        verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
+        verify(taskFinalReportService, never()).rework(any(), any(), anyInt());
+        verify(taskService, never()).convergeFinalReportToDone(any(), any());
+    }
+
+    @Test
+    @DisplayName("§12.2 防双审锁：抢占失败（已有审查在跑）→ 直接跳过，不读任务不调 LLM")
+    void shouldSkipWhenReviewLockNotAcquired() throws InterruptedException {
+        when(reviewLock.tryLock(anyLong(), anyLong(), any())).thenReturn(false);
+
+        reviewService.onFinalReportGenerated(event(1));
+
+        verify(taskService, never()).getById(any());
+        verify(reviewerPicker, never()).pickSingle(any());
+        verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
     }
 
     // ---------- §12.2 审查异步化与陈旧守卫 ----------
@@ -226,7 +268,7 @@ class FinalReportReviewListenerTest {
 
         // 覆盖 setUp 同步执行 stub：本次只提交不执行，手动 run 验证「提交与执行分离」
         doNothing().when(reportReviewExecutor).execute(any());
-        listener.onFinalReportGenerated(event(1));
+        reviewService.onFinalReportGenerated(event(1));
 
         // 审查体整体作为 Runnable 提交到专用池；发布线程内审查体尚未执行（未选人）
         ArgumentCaptor<Runnable> runnableCaptor = ArgumentCaptor.forClass(Runnable.class);
@@ -247,7 +289,7 @@ class FinalReportReviewListenerTest {
         doThrow(new RejectedExecutionException("queue full"))
                 .when(reportReviewExecutor).execute(any());
 
-        listener.onFinalReportGenerated(event(1));
+        reviewService.onFinalReportGenerated(event(1));
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
@@ -255,7 +297,7 @@ class FinalReportReviewListenerTest {
                 eq("task_final_report_review_skipped"), eq(AgentRole.REVIEWER), isNull(),
                 payloadCaptor.capture());
         assertThat(payloadCaptor.getValue()).containsEntry("reason", "executor_saturated");
-        verify(taskService).update(any());
+        verify(taskService).convergeFinalReportToDone(eq(TASK_ID), eq(REPORT_TIME));
         verify(reviewerPicker, never()).pickSingle(any());
     }
 
@@ -271,7 +313,7 @@ class FinalReportReviewListenerTest {
                 .thenReturn(AgentResult.success("{\"pass\":true,\"score\":4}", "stop", "test-executor", 0));
         when(verdictParser.parseVerdict(any())).thenReturn(passedVerdict());
 
-        listener.onFinalReportGenerated(event(1));
+        reviewService.onFinalReportGenerated(event(1));
 
         // 不得误判陈旧：不落 discarded_stale、不跳过审查
         verify(taskTimelineService, never()).recordEvent(eq(TASK_ID), isNull(),
@@ -289,7 +331,7 @@ class FinalReportReviewListenerTest {
         stale.setFinalReportTime(REPORT_TIME.plusSeconds(30)); // 版本已被新生成/回滚接管
         when(taskService.getById(TASK_ID)).thenReturn(stale);
 
-        listener.onFinalReportGenerated(event(1));
+        reviewService.onFinalReportGenerated(event(1));
 
         verify(taskTimelineService).recordEvent(eq(TASK_ID), isNull(),
                 eq("task_final_report_review_discarded_stale"), eq(AgentRole.REVIEWER), isNull(),
@@ -297,7 +339,7 @@ class FinalReportReviewListenerTest {
         verify(reviewerPicker, never()).pickSingle(any());
         verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
         // 旧链丢弃：不收敛新链状态（新链接管，收敛由新链负责）
-        verify(taskService, never()).update(any());
+        verify(taskService, never()).convergeFinalReportToDone(any(), any());
     }
 
     @Test
@@ -312,7 +354,7 @@ class FinalReportReviewListenerTest {
                 .thenReturn(AgentResult.success("{\"pass\":false,\"score\":2}", "stop", "test-executor", 0));
         when(verdictParser.parseVerdict(any())).thenReturn(rejectedVerdict());
 
-        listener.onFinalReportGenerated(event(1));
+        reviewService.onFinalReportGenerated(event(1));
 
         verify(taskTimelineService).recordEvent(eq(TASK_ID), isNull(),
                 eq("task_final_report_review_rejected"), eq(AgentRole.REVIEWER),
@@ -324,7 +366,7 @@ class FinalReportReviewListenerTest {
     }
 
     @Test
-    @DisplayName("§12.2 收敛写回携带事件锚点：pass 后条件更新 `final_report_time = 事件 reportTime` 置 DONE")
+    @DisplayName("§12.2 收敛写回携带事件锚点：pass 后以 `final_report_time = 事件 reportTime` 为条件收敛 DONE")
     void shouldConvergeWithReportTimeGuard() {
         when(taskService.getById(TASK_ID)).thenReturn(task(TASK_ID, "# 整合报告"));
         when(reviewerPicker.pickSingle(any())).thenReturn(reviewer);
@@ -332,35 +374,33 @@ class FinalReportReviewListenerTest {
                 .thenReturn(AgentResult.success("{\"pass\":true,\"score\":4}", "stop", "test-executor", 0));
         when(verdictParser.parseVerdict(any())).thenReturn(passedVerdict());
 
-        listener.onFinalReportGenerated(event(1));
+        reviewService.onFinalReportGenerated(event(1));
 
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<LambdaUpdateWrapper<Task>> wrapperCaptor =
-                ArgumentCaptor.forClass(LambdaUpdateWrapper.class);
-        verify(taskService).update(wrapperCaptor.capture());
-        assertThat(wrapperCaptor.getValue().getSqlSet()).contains("final_report_status");
+        // §12.5 收敛写口收口到 TaskService.convergeFinalReportToDone：状态 + 时间双条件 CAS
+        // 具体 SQL 条件由 TaskServiceImpl 单测覆盖，此处断言锚点透传正确
+        verify(taskService).convergeFinalReportToDone(eq(TASK_ID), eq(REPORT_TIME));
     }
 
     @Test
-    @DisplayName("§12.2 收敛竞争：版本已被接管（update 0 行）→ 不抛异常，新链状态不被覆盖")
+    @DisplayName("§12.2 收敛竞争：版本已被接管（CAS 0 行）→ 不抛异常，新链状态不被覆盖")
     void shouldNotOverwriteWhenConvergenceCompetes() {
         when(taskService.getById(TASK_ID)).thenReturn(task(TASK_ID, "# 整合报告"));
         when(reviewerPicker.pickSingle(any())).thenReturn(reviewer);
         when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\":true,\"score\":4}", "stop", "test-executor", 0));
         when(verdictParser.parseVerdict(any())).thenReturn(passedVerdict());
-        when(taskService.update(any())).thenReturn(false); // 条件写回 0 行（版本已变）
+        when(taskService.convergeFinalReportToDone(any(), any())).thenReturn(false); // CAS 0 行（版本已变）
 
-        listener.onFinalReportGenerated(event(1));
+        reviewService.onFinalReportGenerated(event(1));
 
         verify(taskTimelineService).recordEvent(eq(TASK_ID), isNull(),
                 eq("task_final_report_review_passed"), eq(AgentRole.REVIEWER),
                 eq(REVIEWER_AGENT_ID), anyMap());
         // 收敛失败静默放弃：报告已交付事实不变，状态归属新链
-        verify(taskService).update(any());
+        verify(taskService).convergeFinalReportToDone(eq(TASK_ID), eq(REPORT_TIME));
     }
 
-    // 下面用例中涉及的 LambdaUpdateWrapper 收敛断言（pass/驳回达上限等出口）
+    // 下面用例中涉及的收敛断言（pass/驳回达上限等出口）
     @Test
     @DisplayName("§12.2 收敛全覆盖：LLM 输出不可解析出口同样收敛 DONE")
     void shouldConvergeOnUnparseable() {
@@ -370,12 +410,12 @@ class FinalReportReviewListenerTest {
                 .thenReturn(AgentResult.success("乱七八糟", "stop", "test-executor", 0));
         when(verdictParser.parseVerdict(any())).thenReturn(null);
 
-        listener.onFinalReportGenerated(event(1));
+        reviewService.onFinalReportGenerated(event(1));
 
         verify(taskTimelineService).recordEvent(eq(TASK_ID), isNull(),
                 eq("task_final_report_review_unparseable"), eq(AgentRole.REVIEWER),
                 eq(REVIEWER_AGENT_ID), anyMap());
-        verify(taskService).update(any());
+        verify(taskService).convergeFinalReportToDone(eq(TASK_ID), eq(REPORT_TIME));
     }
 
     @Test
@@ -387,7 +427,7 @@ class FinalReportReviewListenerTest {
                 .thenReturn(AgentResult.success("乱七八糟的回复", "stop", "test-executor", 0));
         when(verdictParser.parseVerdict(any())).thenReturn(null);
 
-        listener.onFinalReportGenerated(event(1));
+        reviewService.onFinalReportGenerated(event(1));
 
         verify(taskTimelineService).recordEvent(eq(TASK_ID), isNull(),
                 eq("task_final_report_review_unparseable"), eq(AgentRole.REVIEWER),
@@ -404,7 +444,7 @@ class FinalReportReviewListenerTest {
                 .thenReturn(AgentResult.success("{\"pass\":true,\"score\":4}", "stop", "test-executor", 0));
         when(verdictParser.parseVerdict(any())).thenReturn(passedVerdict());
 
-        listener.onFinalReportGenerated(event(1));
+        reviewService.onFinalReportGenerated(event(1));
 
         verify(taskTimelineService).recordEvent(eq(TASK_ID), isNull(),
                 eq("task_final_report_review_passed"), eq(AgentRole.REVIEWER),
@@ -421,7 +461,7 @@ class FinalReportReviewListenerTest {
                 .thenReturn(AgentResult.success("{\"pass\":false,\"score\":2}", "stop", "test-executor", 0));
         when(verdictParser.parseVerdict(any())).thenReturn(rejectedVerdict());
 
-        listener.onFinalReportGenerated(event(1));
+        reviewService.onFinalReportGenerated(event(1));
 
         verify(taskTimelineService).recordEvent(eq(TASK_ID), isNull(),
                 eq("task_final_report_review_rejected"), eq(AgentRole.REVIEWER),
@@ -439,7 +479,7 @@ class FinalReportReviewListenerTest {
                 .thenReturn(AgentResult.success("{\"pass\":false,\"score\":2}", "stop", "test-executor", 0));
         when(verdictParser.parseVerdict(any())).thenReturn(rejectedVerdict());
 
-        listener.onFinalReportGenerated(event(2));
+        reviewService.onFinalReportGenerated(event(2));
 
         verify(taskTimelineService).recordEvent(eq(TASK_ID), isNull(),
                 eq("task_final_report_review_rejected"), eq(AgentRole.REVIEWER),
@@ -460,7 +500,7 @@ class FinalReportReviewListenerTest {
                 .thenReturn(AgentResult.success("{\"pass\":false,\"score\":2}", "stop", "test-executor", 0));
         when(verdictParser.parseVerdict(any())).thenReturn(rejectedVerdict());
 
-        listener.onFinalReportGenerated(event(1));
+        reviewService.onFinalReportGenerated(event(1));
 
         verify(taskTimelineService).recordEvent(eq(TASK_ID), isNull(),
                 eq("task_final_report_max_review_reached"), eq(AgentRole.REVIEWER),
@@ -476,7 +516,7 @@ class FinalReportReviewListenerTest {
         when(taskService.getById(TASK_ID)).thenReturn(task(TASK_ID,
                 "# 整合报告\n## 1. 开源矩阵\n完整 11×8 矩阵取值见分册第4章。\n"));
 
-        listener.onFinalReportGenerated(event(1));
+        reviewService.onFinalReportGenerated(event(1));
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> payloadCaptor = ArgumentCaptor.forClass(Map.class);
@@ -500,7 +540,7 @@ class FinalReportReviewListenerTest {
                 .thenReturn(AgentResult.success("{\"pass\":true,\"score\":4}", "stop", "test-executor", 0));
         when(verdictParser.parseVerdict(any())).thenReturn(passedVerdict());
 
-        listener.onFinalReportGenerated(event(1));
+        reviewService.onFinalReportGenerated(event(1));
 
         verify(taskTimelineService).recordEvent(eq(TASK_ID), isNull(),
                 eq("task_final_report_review_warned"), eq(AgentRole.REVIEWER),
@@ -527,7 +567,7 @@ class FinalReportReviewListenerTest {
                 .thenReturn(AgentResult.success("{\"pass\":true,\"score\":5}", "stop", "test-executor", 0));
         when(verdictParser.parseVerdict(any())).thenReturn(passedVerdict());
 
-        listener.onFinalReportGenerated(event(1));
+        reviewService.onFinalReportGenerated(event(1));
 
         ArgumentCaptor<AgentTask> agentTaskCaptor = ArgumentCaptor.forClass(AgentTask.class);
         verify(platformAgentExecutionService).executeSync(eq(reviewer), agentTaskCaptor.capture());
@@ -560,6 +600,8 @@ class FinalReportReviewListenerTest {
         task.setFinalReport(finalReport);
         task.setFinalReportAgentId(WRITER_AGENT_ID);
         task.setFinalReportTime(REPORT_TIME);
+        // §12.2 状态守卫：审查体只在 REVIEWING 时继续（三路触发的幂等前提）
+        task.setFinalReportStatus(FinalReportStatus.REVIEWING);
         return task;
     }
 

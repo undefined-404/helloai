@@ -1,6 +1,5 @@
 package com.helloai.core.review.service.impl;
 
-import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.FinalReportStatus;
@@ -10,6 +9,7 @@ import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.review.picker.ReviewerPicker;
+import com.helloai.core.review.service.FinalReportReviewService;
 import com.helloai.core.review.service.SubTaskReviewService;
 import com.helloai.core.review.support.FinalReportFidelityChecker;
 import com.helloai.core.review.support.ReviewEvidenceAssembler;
@@ -25,10 +25,13 @@ import com.helloai.core.task.service.TaskTimelineService;
 import com.helloai.core.task.spec.ExecutionRecord;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.context.event.EventListener;
 import org.springframework.core.io.ClassPathResource;
-import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -38,15 +41,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 
 /**
- * 最终整合报告质量审查监听器（3A 核验/返工闭环）。
+ * 最终整合报告质量审查实现（3A 核验/返工闭环 + §12.2 审查链三级容错）。
  *
- * <p>承接 {@link TaskFinalReportGeneratedEvent}：<b>先跑确定性机械前置门</b>
- * （{@link FinalReportFidelityChecker}：空壳引用 / 围栏失衡命中即机械驳回，不给 LLM 放过的机会）→
- * 选 Reviewer（复用 {@link ReviewerPicker}，报告无子任务实体——传仅填 taskId 的探针，
- * 任务级 {@code reviewerAgentId} 同样生效）→ 渲染质量审查 Prompt（验收标准镜像 3B 条款，
- * 输出 VerdictParser 可解析 JSON）→ 判定：</p>
+ * <p><b>承接 {@link TaskFinalReportGeneratedEvent}（L1）</b>：报告写回事务<b>提交后</b>
+ * 触发（{@link TransactionalEventListener} AFTER_COMMIT）→ 提交报告审查专用线程池执行：
+ * 先跑确定性机械前置门（{@link FinalReportFidelityChecker}：空壳引用 / 围栏失衡命中即机械驳回，
+ * 不给 LLM 放过的机会）→ 选 Reviewer（复用 {@link ReviewerPicker}，报告无子任务实体——传仅填
+ * taskId 的探针，任务级 {@code reviewerAgentId} 同样生效）→ 渲染质量审查 Prompt（验收标准镜像
+ * 3B 条款，输出 VerdictParser 可解析 JSON）→ 判定：</p>
  * <ul>
  *   <li><b>机械硬违规</b>：落 {@code task_final_report_review_rejected}（source=mechanical）并回调返工，
  *       不消耗审查 LLM 调用；</li>
@@ -54,23 +59,47 @@ import java.util.concurrent.RejectedExecutionException;
  *       告警事件，交审查 LLM 重点关注（不直接驳回）；</li>
  *   <li><b>pass=true</b>：落 {@code task_final_report_review_passed}，闭环结束；</li>
  *   <li><b>pass=false 且未达返工上限</b>：落 rejected 事件并回调 {@link TaskFinalReportService#rework}
- *        （驳回意见注入重写 prompt 逐条响应）；</li>
+ *       （驳回意见注入重写 prompt 逐条响应）；</li>
  *   <li><b>pass=false 且已达上限</b>：落 {@code task_final_report_max_review_reached}，
- *        保留当前报告等人工/手动重生成；</li>
+ *       保留当前报告等人工/手动重生成；</li>
  *   <li><b>自审自过硬守卫</b>：reviewer 与写作者同 Agent 或选不到 reviewer 时，
- *        落 {@code task_final_report_review_skipped}（不得静默判 pass）。</li>
+ *       落 {@code task_final_report_review_skipped}（不得静默判 pass）。</li>
+ * </ul>
+ *
+ * <p><b>§12.2 改造要点（L1/L2/L3 三路触发下的正确性）</b>：</p>
+ * <ul>
+ *   <li><b>L1 相位修正</b>：由普通 {@code @EventListener} 改为
+ *       {@code @TransactionalEventListener(AFTER_COMMIT)}——发布点现在位于
+ *       {@code FinalReportPersistService} 的事务内，若仍用普通监听器会在<b>提交前</b>触发，
+ *       审查读到未提交的旧 {@code final_report_time} 会命中陈旧守卫被丢弃（静默卡死）。</li>
+ *   <li><b>防双审互斥锁</b>：L1/L2/L3 可能并发触发同一任务审查，Redis 锁
+ *       （{@code final_report_review:{taskId}}）保证 LLM 调用窗口内仅一路进入，
+ *       与子任务核验链（§6.82）同款。</li>
+ *   <li><b>状态守卫</b>：进入审查体后若 {@code final_report_status != REVIEWING}，
+ *       说明已被兄弟链路收敛 → 幂等跳过，不再选人、不再调 LLM。</li>
+ *   <li><b>收敛出口统一</b>：所有出口的 DONE 写回都走
+ *       {@link TaskService#convergeFinalReportToDone}（带 {@code final_report_status} +
+ *       {@code final_report_time} 双条件 CAS），杜绝旧链覆盖新链状态。</li>
  * </ul>
  *
  * <p>审查失败/异常仅影响质量闭环，不影响任务 DONE 与报告已落库事实（与报告生成同哲学）。</p>
  */
 @Slf4j
-@Component
+@Service
 @RequiredArgsConstructor
-public class FinalReportReviewListener {
+public class FinalReportReviewServiceImpl implements FinalReportReviewService {
 
     private static final String REVIEW_TEMPLATE_PATH = "prompts/task-final-report-review.md";
     /** 审查证据注入的子任务数量上限（防上下文爆炸；超出仅注入前 N 个，其余以清单为准）。 */
     private static final int MAX_EVIDENCE_SUB_TASKS = 10;
+    /** 防双审互斥锁键前缀。 */
+    private static final String REVIEW_LOCK_PREFIX = "final_report_review:";
+    /**
+     * 锁租期（秒）：覆盖「审查 LLM 判定 + 可能的驳回落库」窗口。驳回返工会同步触发
+     * 一次完整重写（出纲 + 正文，可达数分钟），故取 600s；显式 leaseTime 禁用看门狗，
+     * 崩溃残留由 TTL 自动释放（即使提前释放，状态守卫 + 陈旧守卫仍是第二道防线）。
+     */
+    private static final long REVIEW_LOCK_TTL_SECONDS = 600L;
 
     private final TaskFinalReportService taskFinalReportService;
     private final TaskService taskService;
@@ -82,19 +111,21 @@ public class FinalReportReviewListener {
     private final ReviewEvidenceAssembler reviewEvidenceAssembler;
     private final TaskTimelineService taskTimelineService;
     private final AgentDispatchProperties dispatchProperties;
+    private final RedissonClient redissonClient;
     /** §12.2 审查专用池（helloai-start {@code ReportReviewExecutorConfig}）：审查提交后发布线程立即返回。 */
     @Qualifier("reportReviewExecutor")
     private final Executor reportReviewExecutor;
 
     /**
-     * 同步入口：只做<b>提交</b>不阻塞发布线程。<p>
+     * L1 入口：AFTER_COMMIT 只做<b>提交</b>不阻塞发布线程。<p>
      *
      * <p>§12.2 审查异步化：审查体（选人 + LLM 判定 + 返工）提交到专用池执行。不用 {@code @Async}——
      * 其拒绝异常走 {@code AsyncUncaughtExceptionHandler} 不会回到发布线程，无法落
      * {@code review_skipped(executor_saturated)}；手动 {@code execute} + try-catch
      * {@link RejectedExecutionException} 才能在发布线程兜底。</p>
      */
-    @EventListener
+    @Override
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onFinalReportGenerated(TaskFinalReportGeneratedEvent event) {
         if (!dispatchProperties.isAutoFinalReportReviewEnabled()) {
             log.debug("最终报告自动审查未启用，跳过: taskId={}, attempt={}", event.getTaskId(), event.getAttempt());
@@ -110,29 +141,57 @@ public class FinalReportReviewListener {
         }
     }
 
+    @Override
+    public void review(Long taskId, OffsetDateTime reportTime, int attempt, int reportLength) {
+        // sectionCount 仅为事件度量，审查 Prompt 不用它（用 reportLength），L2 路径传 0 即可
+        reviewInternal(new TaskFinalReportGeneratedEvent(taskId, reportLength, 0, attempt, reportTime));
+    }
+
     /** 异步审查体：异常吞掉（审查失败/异常不影响报告交付，与报告生成同哲学）。 */
     private void reviewQuietly(TaskFinalReportGeneratedEvent event) {
         try {
-            review(event);
+            reviewInternal(event);
         } catch (Exception e) {
             log.warn("最终报告审查异常（不影响报告交付）: taskId={}, err={}", event.getTaskId(), e.getMessage());
         }
     }
 
     /**
-     * §12.2 REVIEWING 收敛：条件写回 DONE（{@code final_report_time} 未被替换才生效）。
-     * 影响行数 0 = 版本已被新生成/回滚接管，本链放弃收敛，不覆盖新链状态（陈旧守卫第三条防线）。
+     * 审查体（L1/L2 共用）：Redis 防双审锁 → 陈旧守卫 → 状态守卫 → 机械门 → LLM 判定 → 处置。
+     */
+    private void reviewInternal(TaskFinalReportGeneratedEvent event) {
+        RLock lock = redissonClient.getLock(REVIEW_LOCK_PREFIX + event.getTaskId());
+        try {
+            // waitTime=0 保持"抢占失败即跳过"语义；显式 leaseTime 禁看门狗，TTL 兜底崩溃残留
+            boolean locked = lock.tryLock(0, REVIEW_LOCK_TTL_SECONDS, TimeUnit.SECONDS);
+            if (!locked) {
+                log.debug("最终报告审查跳过：已有审查进行中（防双审）: taskId={}, attempt={}",
+                        event.getTaskId(), event.getAttempt());
+                return;
+            }
+            try {
+                doReview(event);
+            } finally {
+                // isHeldByCurrentThread 防御：锁已过期被他人接管时，本线程不得释放他人持有的锁
+                if (lock.isHeldByCurrentThread()) {
+                    lock.unlock();
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("最终报告审查获取锁被中断: taskId={}", event.getTaskId());
+        } catch (Exception e) {
+            log.warn("最终报告审查加锁异常（不影响报告交付）: taskId={}, err={}", event.getTaskId(), e.getMessage());
+        }
+    }
+
+    /**
+     * §12.2 REVIEWING 收敛：条件写回 DONE（{@code final_report_status=REVIEWING} 且
+     * {@code final_report_time} 未被替换才生效）。影响行数 0 = 版本已被新生成/回滚接管
+     * 或已被兄弟链路收敛，本链放弃收敛，不覆盖新链状态。
      */
     private void convergeToDone(TaskFinalReportGeneratedEvent event) {
-        // 注：此处条件等值由 PG 侧按 timestamptz 语义判定，**天然是瞬间比较**（不由 JVM 侧偏移决定），
-        // 故与 isStale 的 isEqual 口径一致，无需改造；请勿"对称地"改回 Java 侧 equals 比较
-        boolean updated = taskService.update(new LambdaUpdateWrapper<Task>()
-                .eq(Task::getId, event.getTaskId())
-                .eq(Task::getFinalReportTime, event.getReportTime())
-                .set(Task::getFinalReportStatus, FinalReportStatus.DONE));
-        if (!updated) {
-            log.debug("最终报告审查收敛放弃（版本已更新，新链接管状态）: taskId={}", event.getTaskId());
-        }
+        taskService.convergeFinalReportToDone(event.getTaskId(), event.getReportTime());
     }
 
     /**
@@ -153,10 +212,17 @@ public class FinalReportReviewListener {
         return !dbTime.isEqual(eventTime);
     }
 
-    private void review(TaskFinalReportGeneratedEvent event) {
+    private void doReview(TaskFinalReportGeneratedEvent event) {
         Task task = taskService.getById(event.getTaskId());
         if (task == null || task.getFinalReport() == null || task.getFinalReport().isBlank()) {
             log.debug("报告不存在或为空，跳过审查: taskId={}", event.getTaskId());
+            return;
+        }
+        // §12.2 状态守卫：已被兄弟链路（L1/L2/L3）收敛或审查开关关闭时写回的 DONE → 幂等跳过。
+        // 这是三路触发不重复审查的关键守卫（Redis 锁只挡并发窗口，退出后到达的路径靠本守卫挡住）。
+        if (task.getFinalReportStatus() != FinalReportStatus.REVIEWING) {
+            log.debug("最终报告审查跳过：状态已非 REVIEWING（已被收敛/接管）: taskId={}, status={}",
+                    event.getTaskId(), task.getFinalReportStatus());
             return;
         }
         // §12.2 陈旧守卫（审查前）：期间被重新生成/回滚接管 → 旧链审查丢弃，不选人不动用 LLM

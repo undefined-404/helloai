@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.FinalReportStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskPriority;
 import com.helloai.common.constant.TaskStatus;
@@ -30,11 +31,13 @@ import com.helloai.core.task.policy.TeamPolicyExpander;
 import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
+import com.helloai.core.task.statemachine.FinalReportStateMachine;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -310,5 +313,52 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         }
         log.info("任务重新发布: id={}, title={}, 已通知 {} 个 PLANNER", taskId, task.getTitle(), planners.size());
         return task;
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  最终整合报告状态机写口（§12.5）
+    // ══════════════════════════════════════════════════════════════
+
+    @Override
+    public boolean transitFinalReportStatus(Long taskId, FinalReportStatus from, FinalReportStatus to) {
+        // 迁移合法性单点校验：非法迁移是编程错误，快速失败暴露（不静默改状态）
+        FinalReportStateMachine.assertTransit(from, to);
+        boolean updated = lambdaUpdate()
+                .eq(Task::getId, taskId)
+                .eq(Task::getFinalReportStatus, from)
+                .set(Task::getFinalReportStatus, to)
+                .update();
+        if (!updated) {
+            log.debug("最终报告状态迁移 CAS 未命中（已被其它链路接管）: taskId={}, {} -> {}",
+                    taskId, from, to);
+        }
+        return updated;
+    }
+
+    @Override
+    public boolean convergeFinalReportToDone(Long taskId, OffsetDateTime reportTime) {
+        boolean updated = lambdaUpdate()
+                .eq(Task::getId, taskId)
+                .eq(Task::getFinalReportStatus, FinalReportStatus.REVIEWING)
+                // 陈旧守卫：report_time 变了说明版本已被新生成/回滚接管，旧链不得覆盖新链状态。
+                // 注：此处等值由 PG 侧按 timestamptz 语义判定，**天然是瞬间比较**（不由 JVM 侧偏移决定），
+                // 与 FinalReportReviewServiceImpl 的 isStale 口径一致；请勿"对称地"改回 Java 侧 equals 比较。
+                .eq(Task::getFinalReportTime, reportTime)
+                .set(Task::getFinalReportStatus, FinalReportStatus.DONE)
+                .update();
+        if (!updated) {
+            log.debug("最终报告审查收敛放弃（版本已更新或已被收敛）: taskId={}, reportTime={}",
+                    taskId, reportTime);
+        }
+        return updated;
+    }
+
+    @Override
+    public List<Task> listFinalReportReviewOrphans(int thresholdSeconds, int limit) {
+        int threshold = thresholdSeconds > 0 ? thresholdSeconds : 300;
+        int batch = limit > 0 ? limit : 20;
+        OffsetDateTime deadline = OffsetDateTime.now().minusSeconds(threshold);
+        List<Task> orphans = baseMapper.selectStaleFinalReportReviewing(deadline, batch);
+        return orphans != null ? orphans : List.of();
     }
 }

@@ -290,7 +290,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown } from '@element-plus/icons-vue'
@@ -358,6 +358,8 @@ async function load() {
     // 防御边界：当前页越界（taskId 筛选后总数缩小）时回退到末页
     const totalPages = Math.max(1, Math.ceil(list.value.length / pageSize.value))
     if (currentPage.value > totalPages) currentPage.value = totalPages
+    // 列表刷新后若存在在途报告行（GENERATING/REVIEWING），启动列表级兜底轮询
+    ensureReportPolling()
   } catch {
     // 网络/后端异常：拦截器已弹通用错误，这里清空列表避免展示脏数据
     list.value = []
@@ -514,7 +516,45 @@ function onReportStatusChange(status: string) {
   if (!reportTask.value) return
   const target = list.value.find(t => String(t.id) === String(reportTask.value!.id))
   if (target) (target as any).finalReportStatus = status
+  // patch 后可能新增/消除在途行（如弹窗在 REVIEWING 期间关闭），重新校准兜底轮询
+  ensureReportPolling()
 }
+
+// ── 报告在途行的列表级兜底轮询 ──
+// FinalReportDialog 关闭后其内部轮询即停；若后端在弹窗关闭后才把 REVIEWING/GENERATING 收敛为
+// DONE/FAILED，列表行会永久停在旧状态（显示「报告审查中」、按钮禁用），用户离开页面前无从刷新。
+// 这里在列表层兜底：只要存在在途报告行，就每 5s 拉一次这些行的报告状态并 patch，全部收敛后自动停表。
+// 只轮询在途行（通常 0~1 行），走轻量 GET，不重拉整个列表、不打断用户操作。
+const REPORT_POLL_INTERVAL = 5000
+let reportPollTimer: ReturnType<typeof setInterval> | null = null
+
+function inFlightReportRows() {
+  return list.value.filter((t: any) => reportInFlight(t.finalReportStatus))
+}
+function stopReportPolling() {
+  if (reportPollTimer) { clearInterval(reportPollTimer); reportPollTimer = null }
+}
+async function pollInFlightReports() {
+  const rows = inFlightReportRows()
+  if (!rows.length) { stopReportPolling(); return }
+  await Promise.all(rows.map(async (row: any) => {
+    try {
+      const r = await taskApi.getFinalReport(String(row.id))
+      if (r.status && row.finalReportStatus !== r.status) row.finalReportStatus = r.status
+    } catch { /* 单行异常不中断整体轮询，下轮重试 */ }
+  }))
+  // 本轮拉取后若已全部收敛则停表
+  if (!inFlightReportRows().length) stopReportPolling()
+}
+// 幂等起表：有在途行且未起表才新建；无在途行则确保停表
+function ensureReportPolling() {
+  if (inFlightReportRows().length) {
+    if (!reportPollTimer) reportPollTimer = setInterval(pollInFlightReports, REPORT_POLL_INTERVAL)
+  } else {
+    stopReportPolling()
+  }
+}
+onBeforeUnmount(stopReportPolling)
 
 // ── V26 AI 拆解 + 草案审阅 ──
 const planningId = ref<LongId | null>(null)

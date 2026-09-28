@@ -90,7 +90,13 @@ const visible = ref(props.modelValue)
 watch(() => props.modelValue, v => { visible.value = v })
 watch(visible, v => {
   emit('update:modelValue', v)
-  if (!v) stopPolling()
+  if (!v) {
+    stopPolling()
+    // 关闭弹窗时补一次状态广播：轮询收敛前关闭（如 REVIEWING 期间）也把最后已知状态同步给父组件，
+    // 否则列表行会停在被 patch 的旧状态
+    const lastStatus = report.value?.status
+    if (lastStatus) emit('status-change', lastStatus)
+  }
 })
 
 const loadingReport = ref(false)
@@ -123,6 +129,9 @@ function startPolling() {
     try {
       const r = await taskApi.getFinalReport(String(props.task.id))
       report.value = r
+      // 每轮广播状态：收敛（非 GENERATING/REVIEWING）时必须让父组件同步，否则列表行永久停在
+      // 被 patch 的 REVIEWING —— 显示「报告审查中」且「审查中」按钮禁用，而库里其实早已 DONE
+      if (r.status) emit('status-change', r.status)
       if (!isInFlight(r.status)) stopPolling()
     } catch { /* 网络异常不中断轮询 */ }
   }, 5000)

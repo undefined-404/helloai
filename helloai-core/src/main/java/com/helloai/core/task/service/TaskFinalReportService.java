@@ -52,10 +52,10 @@ public interface TaskFinalReportService {
     /**
      * 审查驳回后返工重写（复用 {@link #generate} 生成主链）。
      *
-     * <p>由 {@code FinalReportReviewListener} 在审查驳回且未达 {@code auto-final-report-max-review}
+     * <p>由 {@code FinalReportReviewService} 在审查驳回且未达 {@code auto-final-report-max-review}
      * 上限时回调；驳回意见注入 {@code {{REVIEW_FEEDBACK}}} 占位符供模板逐条响应。
      * 本轮次取 {@code 1}（全新一轮，无历史返工计数）。
-     * 返工轮次上限由编排层（监听器）控制，本方法不自行截断。内部接口，无外部端点。</p>
+     * 返工轮次上限由编排层（审查服务）控制，本方法不自行截断。内部接口，无外部端点。</p>
      *
      * @param taskId         顶层任务 ID
      * @param reviewFeedback 上轮审查驳回意见（不可为空，将注入重写 prompt）

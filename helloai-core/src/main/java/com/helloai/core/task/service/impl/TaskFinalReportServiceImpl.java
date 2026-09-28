@@ -28,11 +28,10 @@ import com.helloai.core.task.service.TaskRunningSpecService;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import com.helloai.core.task.spec.ExecutionRecord;
-import com.helloai.core.shared.event.TaskFinalReportGeneratedEvent;
+import com.helloai.core.task.statemachine.FinalReportStateMachine;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
@@ -81,8 +80,12 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
     private final TaskRunningSpecService taskRunningSpecService;
     /** 物化附件读取：报告链附件优先（与核验链同口径）。 */
     private final AttachmentService attachmentService;
-    /** 3A 闭环事件发布：报告生成成功后发 {@link TaskFinalReportGeneratedEvent}（审查触发源）。 */
-    private final ApplicationEventPublisher applicationEventPublisher;
+    /**
+     * 报告写回 + 审查触发的事务边界（§12.2）：写 final_report、L2 Outbox 落库、
+     * L1 事件发布在同一短事务内完成。独立 Bean 保证 @Transactional 真正生效
+     * （本类内自调用不走代理）。
+     */
+    private final FinalReportPersistService finalReportPersistService;
 
     /** 任务自动收口后异步生成报告；已有报告或开关关闭时跳过，异常吞掉（手动端点兜底）。 */
     @Override
@@ -146,6 +149,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
             throw new BizException(409, "没有可恢复的上一版整合报告: taskId=" + taskId);
         }
         // CAS 并发拦截：生成在途（GENERATING）时禁止互换，避免回滚写回与生成写回互相覆盖
+        FinalReportStatus statusBeforeRollback = task.getFinalReportStatus();
         boolean casOk = taskService.update(new LambdaUpdateWrapper<Task>()
                 .eq(Task::getId, taskId)
                 .ne(Task::getFinalReportStatus, FinalReportStatus.GENERATING)
@@ -159,6 +163,12 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
         if (!casOk) {
             throw new BizException(409, "任务整合报告正在生成中，暂不能恢复上一版: taskId=" + taskId);
         }
+        // §12.5 状态机单点校验：CAS 通过后才校验迁移合法性。
+        // GENERATING -> DONE 已被上面的并发拦截分支拦下并给出可读业务异常，不应落到这里抛
+        // IllegalStateException；prev 槽非空 ⇒ 历史上一定存在过已落库的报告，故当前状态只可能
+        // 是 DONE / REVIEWING，两者 -> DONE 均合法。断言失败说明状态被非状态机路径改写，
+        // 属于编程错误需暴露。
+        FinalReportStateMachine.assertTransit(statusBeforeRollback, FinalReportStatus.DONE);
         taskTimelineService.recordEvent(taskId, null, "task_final_report_rolled_back",
                 AgentRole.PLANNER, task.getFinalReportPrevAgentId(),
                 Map.of("restoredGeneratedAt",
@@ -190,6 +200,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
         }
 
         // CAS 防重入：仅当当前状态非 GENERATING 时置位成功；失败说明另一条路径正在生成
+        FinalReportStatus statusBeforeGenerate = task.getFinalReportStatus();
         boolean casOk = taskService.update(new LambdaUpdateWrapper<Task>()
                 .eq(Task::getId, taskId)
                 .ne(Task::getFinalReportStatus, FinalReportStatus.GENERATING)
@@ -197,6 +208,10 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
         if (!casOk) {
             throw new BizException("任务整合报告正在生成中，请稍候后再试: taskId=" + taskId);
         }
+        // §12.5 状态机单点校验：CAS 通过后才校验迁移合法性
+        // （NONE/DONE/REVIEWING/FAILED -> GENERATING 均合法；GENERATING -> GENERATING 已被上面的
+        //  防重入分支拦下并给出可读业务异常，不应落到这里抛 IllegalStateException）
+        FinalReportStateMachine.assertTransit(statusBeforeGenerate, FinalReportStatus.GENERATING);
 
         Agent planner = plannerPickerPort.pickForTask(taskId);
         // 3C 大纲先行两段式：先归并出纲（覆盖追溯表/主线论点/章节顺序/矛盾清单），
@@ -232,25 +247,18 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
                     throw new BizException("Planner LLM 返回空报告");
                 }
                 OffsetDateTime now = OffsetDateTime.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
-                // §12.2 审查异步化：审查开启时写回 REVIEWING（待审查链收敛 DONE，UI 显示审查中）；
+                // §12.2/§12.3：写回 + 审查触发（L1 事件 + L2 Outbox）由 FinalReportPersistService
+                // 在同一事务内完成——审查开启时写回 REVIEWING（待审查链收敛 DONE，UI 显示审查中），
                 // 关闭时直接 DONE（无审查链存在，避免状态无人收敛）
-                FinalReportStatus writtenStatus = dispatchProperties.isAutoFinalReportReviewEnabled()
-                        ? FinalReportStatus.REVIEWING : FinalReportStatus.DONE;
-                taskService.lambdaUpdate()
-                        .eq(Task::getId, taskId)
-                        // §12.1 单槽列：覆盖前把被覆盖的那一版整体（正文/生成 Agent/时间）落入 prev 槽；
-                        // setSql 内列引用取本语句执行前的行值，不受 Java 侧快照陈旧影响；无旧版保持 null
-                        .setSql("final_report_prev = CASE WHEN final_report IS NOT NULL AND final_report <> '' "
-                                + "THEN final_report END, "
-                                + "final_report_prev_agent_id = CASE WHEN final_report IS NOT NULL "
-                                + "AND final_report <> '' THEN final_report_agent_id END, "
-                                + "final_report_prev_time = CASE WHEN final_report IS NOT NULL "
-                                + "AND final_report <> '' THEN final_report_time END")
-                        .set(Task::getFinalReport, report)
-                        .set(Task::getFinalReportAgentId, planner.getId())
-                        .set(Task::getFinalReportTime, now)
-                        .set(Task::getFinalReportStatus, writtenStatus)
-                        .update();
+                boolean reviewEnabled = dispatchProperties.isAutoFinalReportReviewEnabled();
+                boolean persisted = finalReportPersistService.persistAndRequestReview(
+                        taskId, report, planner.getId(), now, attempt, sections.size(), reviewEnabled);
+                if (!persisted) {
+                    // CAS 未命中 = 状态已被其它链路接管：本次写回与审查触发一并作废，
+                    // 不覆盖别人刚写入的状态，也不误判 FAILED（PersistService 内已告警）
+                    log.warn("报告写回被接管，放弃本轮生成结果: taskId={}, attempt={}", taskId, attempt);
+                    return taskService.getById(taskId);
+                }
                 taskTimelineService.recordEvent(taskId, null, "task_final_report_generated",
                         AgentRole.PLANNER, planner.getId(),
                         Map.of("agentId", planner.getId(),
@@ -261,10 +269,6 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
                                 "reportSummary", summarize(report)));
                 log.info("任务整合报告生成完成: taskId={}, plannerAgentId={}, reportLength={}, sectionOutputLimit={}",
                         taskId, planner.getId(), report.length(), limit);
-                // 3A：报告生成成功发布事件（FinalReportReviewListener 承接质量审查闭环；
-                // 审查失败/驳回不影响报告落库事实）；reportTime 为陈旧守卫锚点（§12.2）
-                applicationEventPublisher.publishEvent(new TaskFinalReportGeneratedEvent(
-                        taskId, report.length(), sections.size(), attempt, now));
                 // 回填 task_iteration 表（失败不阻断报告生成）
                 backfillIterationsQuietly(taskId, sections, planner);
                 return taskService.getById(taskId);
@@ -789,12 +793,13 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
      */
     private void markFailed(Long taskId, String error) {
         try {
-            taskService.update(new LambdaUpdateWrapper<Task>()
-                    .eq(Task::getId, taskId)
-                    .set(Task::getFinalReportStatus, FinalReportStatus.FAILED));
+            // §12.5 状态机收口：GENERATING -> FAILED 经 CAS 迁移，不直接改状态字段。
+            // CAS 未命中（状态已被接管）时静默跳过——不覆盖新链状态。
+            taskService.transitFinalReportStatus(taskId, FinalReportStatus.GENERATING, FinalReportStatus.FAILED);
         } catch (Exception e) {
             log.warn("标记整合报告生成失败状态异常: taskId={}, err={}", taskId, e.getMessage());
         }
+        log.debug("整合报告生成失败已标记: taskId={}, reason={}", taskId, error);
     }
 
     private static String summarize(String raw) {

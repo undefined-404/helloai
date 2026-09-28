@@ -247,6 +247,13 @@ helloai:
     #   Outbox 补偿投递补位；与 L1 AFTER_COMMIT / L3 孤儿扫描由核验互斥锁防双审）
     review:
       consumer-enabled: true
+    # §12.2 最终报告审查链 L2 MQ consumer 开关（三级容错 L2 补齐）
+    #   consumer-enabled=true 时 MqFinalReportReviewConsumer 才会注册（默认开启）；
+    #   报告写回与审查请求 Outbox 同事务落库，AgentEventCompensationTask 负责投递到
+    #   helloai.report-review.queue —— 进程重启/线程丢失后仍可补投，不再依赖 L1 内存事件。
+    #   与 L1 AFTER_COMMIT / L3 孤儿巡检由「Redis 防双审锁 + final_report_status 状态守卫」防重复审查。
+    report-review:
+      consumer-enabled: true
   # N9: 多Provider统一配置入口，替代各factory中散落的@Value
   # 平台级 API Key 可在"系统设置"页动态配置/轮换（写入 credential_vault，实时生效无需重启），
   # 此处 api-key 为空时 provider 未生效（目录不可选、注册平台内 LLM Agent 被拒）；

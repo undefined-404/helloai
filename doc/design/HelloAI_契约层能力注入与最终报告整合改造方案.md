@@ -635,6 +635,96 @@ LLM 可调用能力  → 技能包 + AgentTask.skills 声明
 
 ---
 
+### 12.5 报告审查链三级容错补齐 + 事务边界 + 状态机收口（2026-09-28 二次改造）
+
+> **触发**：线上任务「AI短剧快速上手图文教程（抖音竖屏）」重新生成后**永久停在「报告审查中」**。
+> 排查结论：**报告链后端本身跑通**（DB 实证 `final_report_status=DONE`，19:11:05 由 `max_review_reached` 收敛），
+> **直接原因是前端**（§12.5.4）；但排查同时暴露了一个**后端结构性缺口**——§12.2 只给报告审查链补了
+> 「异步 + 陈旧守卫」，**没有像子任务核验链那样补齐三级容错**，且「写回」与「审查触发」是双写。
+
+#### 12.5.1 缺口：双写无原子性 + 只有 L1
+
+**改造前事实** `[代码事实]`：
+
+- `TaskFinalReportServiceImpl.generateWithAttempt` 写回用 `taskService.lambdaUpdate()...set(final_report_status, REVIEWING)`，
+  **紧接着**另行 `applicationEventPublisher.publishEvent(new TaskFinalReportGeneratedEvent(...))`——
+  两步之间**无任何原子性**（该类全程无 `@Transactional`）。进程在两步之间挂掉即「报告已落库、审查永不触发」的永久 `REVIEWING`。
+- `FinalReportReviewListener` 入口是**普通 `@EventListener`**（非 `AFTER_COMMIT`）：一旦给生成主链补上事务，它会在**提交前**触发并命中陈旧守卫被丢弃（潜在的相位 bug）。
+- `grep "TaskFinalReportGeneratedEvent|task_final_report"` 在 `helloai-job` / `helloai-mq` / `review/mqconsumer` 下**为空**：
+  报告审查链**只有 L1（进程内事件）**，无 L2 Outbox/MQ 补投、无 L3 兜底巡检。对比子任务核验链的「三级容错」，报告链是「一级容错」。
+- 日志实证：`07-31 20:49:41` 存在一条 `task_final_report_generated`，**无配对的审查事件**——该链真的丢过一次。
+- `review_discarded_stale` / `rework_discarded_stale` 两条分支**明确不收敛**（旧实现注释自认「需人工介入」），进一步放大卡死面。
+
+**是不是「写成了一个长事务」** `[分析判断]`：**不是**。改造前后 `TaskFinalReportServiceImpl` 全类都**没有 `@Transactional`**，
+这是刻意的——主链含 1~3 次 LLM 调用（出纲 + 正文 + 降档重试），进事务就会长事务持锁。
+真正的缺陷不是「事务过长」，而是**缺三件事**：① 缺事务边界（一次**短**事务包住写回+触发，而非包住 LLM）；② 缺持久化触发（L1 进程内事件重启即丢）；③ 缺补偿（无 L2 补投、无 L3 巡检）。
+
+#### 12.5.2 修法 A + B + C（与子任务核验链同构）
+
+| 层 | 改动 | 落点 |
+|---|---|---|
+| **B-①** 事务边界 | 新增 `FinalReportPersistService.persistAndRequestReview(...)`，`@Transactional(rollbackFor = Exception.class)` 内一次性完成：报告写回（含 §12.1 prev 槽）→ L2 Outbox 落库 → L1 事件发布 | 新建 `core/task/service/impl/FinalReportPersistService` |
+| **B-②** L2 持久化 | `AgentOutboxService.createReportReviewEvent(...)` 落 `agent_outbox_event`；由既有 `AgentEventCompensationTask`（`@Scheduled` 15s）补投 | `core/agent/service` + 既有 job |
+| **B-③** L2 队列/消费者 | `RabbitMQConfig` 加 `helloai.report-review.queue`（DLX + `x-max-length` + `reject-publish`）；新建 `MqFinalReportReviewConsumer extends AbstractIdempotentConsumer` | `helloai-mq` + `core/review/mqconsumer` |
+| **B-④** L1 相位 | 监听改 `@TransactionalEventListener(phase = AFTER_COMMIT)`；收敛体抽成 `FinalReportReviewService.onFinalReportGenerated`（L1/L2/L3 三路共用执行体） | `core/review/service(+impl)` |
+| **A** L3 兜底 | 新建 `FinalReportReviewOrphanTask`：`@Scheduled(fixedDelay)` + `@SchedulerLock` 扫 `final_report_status=REVIEWING AND final_report_time < now() - threshold`，**收敛 DONE**（不重投审查） | `helloai-job/task` |
+| **C** 状态机 | 新建 `FinalReportStateMachine`（显式合法迁移表 + `assertTransit`）；状态写口收口到 `TaskService.transitFinalReportStatus` / `convergeFinalReportToDone` | `core/task/statemachine` + `TaskService` |
+
+**为什么不允许长事务** `[分析判断]`：本项目既有范式（子任务核验链 §12.2 三级容错 + Outbox）就是
+「**状态机定当前态 + 事件记录发生过什么 + Outbox/MQ 解耦最终一致**」。本批把这套范式**抄全**到报告链，
+而不是把 LLM 调用与状态写回塞进一个事务——后者才是真正的架构倒退。
+
+**A 为什么收敛 DONE 而不是重投审查** `[分析判断]`：超过阈值仍停在 `REVIEWING`，说明触发链已丢失。
+此时报告正文**已落库且已交付**（`final_report` 列有值，只是没走完审查）。重投审查会**无界消耗 LLM**
+（且若触发链本身有 bug，重投仍会再卡住）；收敛 `DONE` 让 UI 立刻可用，用户若要补审查可点「重新生成」。
+
+**三路触发的幂等**（L1/L2/L3 会各触发一次审查，必须幂等）：
+- **Redis 防双审锁** `final_report_review:{taskId}`（`tryLock(0, 600s)`，抢不到直接跳过）；
+- **状态守卫**：审查体入口 `if (task.getFinalReportStatus() != REVIEWING) return;`；
+- **陈旧守卫**（沿用 §12.2）：`reportTime` 锚点 + `isEqual` 比较（**非 `.equals`**——后者比 offset，跨时区必假，是已修的线上 bug）。
+
+**配置**：`finalReportReviewOrphanThresholdSeconds`（默认 300s；正常审查 LLM 判定约 30s）、
+`finalReportReviewOrphanBatchSize`（默认 20）、`helloai.mq.report-review.consumer-enabled`（默认 true）。
+
+#### 12.5.3 实施结果（2026-09-28）`[代码事实]`
+
+- **新增生产类 7 个**：`FinalReportStateMachine`、`FinalReportReviewConst`、`FinalReportPersistService`、
+  `FinalReportReviewService`(+`Impl`)、`MqFinalReportReviewConsumer`、`FinalReportReviewOrphanTask`；
+  **删除** `FinalReportReviewListener`（职责由 `FinalReportReviewServiceImpl` 承接）。
+- **修改**：`TaskFinalReportServiceImpl`（写回改走事务边界 Bean；`markFailed` 改走状态机迁移；
+  **`rollback` 的 `assertTransit` 从 CAS 之前移到 CAS 之后**——否则任务快照为 `GENERATING` 时会抛
+  `IllegalStateException` 而非可读的 409，属本次自查发现并修正）、`TaskService`(+`Impl`)（3 个状态机写口）、
+  `TaskMapper`（孤儿巡检轻量列查询）、`AgentOutboxService`(+`Impl`)、`RabbitMQConfig`、`AgentDispatchProperties`、`application.yml`。
+- **状态机迁移表**（`from → 允许的 to`）：`NONE→GENERATING`；`GENERATING→REVIEWING|DONE|FAILED`；
+  `REVIEWING→GENERATING|DONE`；`DONE→GENERATING|DONE`；`FAILED→GENERATING`。
+  （`REVIEWING→GENERATING` 合法 = 审查驳回触发返工重写；`DONE→DONE` 合法 = §12.1 回滚与审查收敛的幂等写回。）
+- **测试**：新增 `FinalReportStateMachineTest`(5) / `FinalReportPersistServiceTest`(3) / `FinalReportReviewOrphanTaskTest`(6)；
+  `FinalReportReviewListenerTest` 改名 `FinalReportReviewServiceImplTest`(22，新增「状态守卫幂等跳过」「防双审锁抢占失败」2 例)；
+  `TaskFinalReportServiceTest`(36) 断言由「`taskUpdateChain.set/update`」迁移为「`persistAndRequestReview` 入参」
+  （写回已不在本类，`taskUpdateChain` 桩随之删除）。
+- **全量验证**：`mvn -o -pl helloai-core,helloai-job -am test -DskipTests=false` → **1686 例，0 失败 0 错误**
+  （注意 `-DskipTests=false` 必需：根 pom `properties` 里 `<skipTests>true</skipTests>` 是打包默认）；
+  前端 `npm run type-check` 见 §12.5.4。
+- **红线复查**：未新建 Runtime / Scheduler / Workflow（L3 复用既有 `@Scheduled` + ShedLock 范式）；
+  报告状态机是既有 `FinalReportStatus` 的**显式化**，不是第二套状态机；Event 仍单一事实流（沿用 `task_timeline`）。
+
+#### 12.5.4 遗留：前端误报「报告审查中」（本批一并修）`[代码事实]`
+
+**根因**：`helloai-ui/src/views/task/components/FinalReportDialog.vue` 的 `startPolling()` 每轮只更新弹窗本地
+`report.value`，**收敛时直接 `stopPolling()` 却不 `emit('status-change')`**；而父组件 `TaskList.vue` 的
+`onReportStatusChange` 只 patch 列表行的 `finalReportStatus`，且列表**无自动刷新**——于是列表行永久停在
+被 patch 的 `REVIEWING`（状态列显示「报告审查中」、「审查中」按钮禁用），**而此时库里其实早已是 `DONE`**。
+用户的观感就是「卡在报告审核中」。
+
+**修法（本批已改）**：
+1. `startPolling()` 的轮询回调**每轮 `emit('status-change', r.status)`**（收敛轮同样广播）；
+2. 弹窗**关闭时补一次广播**（`watch(visible)` 的 `!v` 分支 `stopPolling()` 后 emit 最后已知状态）。
+
+**残留（未修，独立小需求）**：用户**在 `REVIEWING` 期间关闭弹窗**后随即离开页面，则既无轮询也无列表刷新——
+列表行仍会显示旧状态，需手动刷新或重新进页面才会更正。彻底解法是列表订阅/定时刷新该行，属独立 UI 需求。
+
+---
+
 ## 附：本阶段产出边界与回填建议
 
 - **本阶段仅新增本文档**：`doc/design/HelloAI_契约层能力注入与最终报告整合改造方案.md`。**未**修改任何生产/测试代码、Migration、配置、手册（符合任务纪律）。

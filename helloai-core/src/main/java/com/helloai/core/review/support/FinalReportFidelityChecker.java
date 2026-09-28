@@ -12,7 +12,7 @@ import java.util.regex.Pattern;
 /**
  * 最终报告交付保真**确定性**校验器（3A 机械前置门）。
  *
- * <p><b>动机</b>：报告链的核验闭环（{@code FinalReportReviewListener}）此前只有 LLM 单轨判定，
+ * <p><b>动机</b>：报告链的核验闭环（{@code FinalReportReviewService}）此前只有 LLM 单轨判定，
  * 实测出现「报告正文写『完整矩阵见分册第4章』、违反模板《绝对禁止清单》却仍被判 {@code pass}」的漏检。
  * 本类把**可机械判定**的违规项从 LLM 判定中剥离出来，在调用审查 LLM 之前先跑一遍，
  * 命中硬违规即机械驳回——不给 LLM 放过的机会，且零 token 成本、结果可复现。</p>

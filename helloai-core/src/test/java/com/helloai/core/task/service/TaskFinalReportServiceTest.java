@@ -5,7 +5,6 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
 import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapper;
-import com.baomidou.mybatisplus.extension.conditions.update.LambdaUpdateChainWrapper;
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentAccessType;
@@ -18,12 +17,12 @@ import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.shared.event.TaskAutoCompletedEvent;
-import com.helloai.core.shared.event.TaskFinalReportGeneratedEvent;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.port.TaskPlannerPickerPort;
 import com.helloai.core.task.service.TaskIterationService;
+import com.helloai.core.task.service.impl.FinalReportPersistService;
 import com.helloai.core.task.service.impl.TaskFinalReportServiceImpl;
 import com.helloai.core.task.spec.ExecutionRecord;
 import org.junit.jupiter.api.BeforeAll;
@@ -36,7 +35,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
-import org.springframework.context.ApplicationEventPublisher;
 
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
@@ -48,7 +46,10 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.atLeastOnce;
@@ -85,16 +86,17 @@ class TaskFinalReportServiceTest {
     private TaskRunningSpecService taskRunningSpecService;
     @Mock
     private AttachmentService attachmentService;
+    /**
+     * 报告写回 + 审查触发的事务边界（§12.2）。写回已从本类抽出，故单测里替换为 mock，
+     * 断言由「taskUpdateChain.set/update」改为「persistAndRequestReview 的入参」。
+     */
     @Mock
-    private ApplicationEventPublisher applicationEventPublisher;
+    private FinalReportPersistService finalReportPersistService;
 
     private final AgentDispatchProperties dispatchProperties = new AgentDispatchProperties();
 
     @SuppressWarnings("unchecked")
     private final LambdaQueryChainWrapper<SubTask> subTaskQueryChain = mock(LambdaQueryChainWrapper.class);
-
-    @SuppressWarnings("unchecked")
-    private final LambdaUpdateChainWrapper<Task> taskUpdateChain = mock(LambdaUpdateChainWrapper.class);
 
     private TaskFinalReportService service;
 
@@ -114,7 +116,7 @@ class TaskFinalReportServiceTest {
         service = new TaskFinalReportServiceImpl(taskService, subTaskService, plannerPickerPort,
                 platformAgentExecutionService, taskTimelineService, dispatchProperties,
                 taskIterationService, taskRunningSpecService, attachmentService,
-                applicationEventPublisher);
+                finalReportPersistService);
 
         when(subTaskService.lambdaQuery()).thenReturn(subTaskQueryChain);
         when(subTaskQueryChain.eq(any(), any())).thenReturn(subTaskQueryChain);
@@ -122,14 +124,11 @@ class TaskFinalReportServiceTest {
                 .thenReturn(subTaskQueryChain);
         when(subTaskQueryChain.list()).thenReturn(List.of());
 
-        when(taskService.lambdaUpdate()).thenReturn(taskUpdateChain);
-        when(taskUpdateChain.eq(any(), any())).thenReturn(taskUpdateChain);
-        when(taskUpdateChain.set(any(), any())).thenReturn(taskUpdateChain);
-        // §12.1 prev 槽落槽用原生 SQL 片段（setSql），默认链式返回自身
-        when(taskUpdateChain.setSql(any())).thenReturn(taskUpdateChain);
-        when(taskUpdateChain.update()).thenReturn(true);
         // CAS 防重入：置 GENERATING 默认成功（防重入用例内单独覆盖为 false）
         when(taskService.update(any())).thenReturn(true);
+        // 写回 + 审查触发事务边界：默认写回成功（CAS 未命中场景单独覆盖为 false）
+        when(finalReportPersistService.persistAndRequestReview(
+                any(), any(), any(), any(), anyInt(), anyInt(), anyBoolean())).thenReturn(true);
     }
 
     private Task doneTask() {
@@ -138,7 +137,21 @@ class TaskFinalReportServiceTest {
         task.setTitle("调度分析");
         task.setDescription("梳理调度链路");
         task.setStatus(TaskStatus.DONE);
+        // §12.5 状态机校验锚点：报告已落地（DONE）是 generate/rollback 的常规起点
+        task.setFinalReportStatus(FinalReportStatus.DONE);
         return task;
+    }
+
+    /**
+     * 抓取写回 + 审查触发事务边界的调用次数与轮次序列。
+     * 写回已从本类抽到 {@link FinalReportPersistService}，故「attempt 轮次」这一原由事件承载的
+     * 断言锚点改为直接断言 {@code persistAndRequestReview} 的入参。
+     */
+    private List<Integer> capturePersistAttempts(int expectedTimes) {
+        ArgumentCaptor<Integer> attemptCaptor = ArgumentCaptor.forClass(Integer.class);
+        verify(finalReportPersistService, times(expectedTimes)).persistAndRequestReview(
+                any(), anyString(), any(), any(), attemptCaptor.capture(), anyInt(), anyBoolean());
+        return attemptCaptor.getAllValues();
     }
 
     private Agent planner() {
@@ -203,9 +216,10 @@ class TaskFinalReportServiceTest {
         assertThat(taskCaptor.getValue().getUserPrompt())
                 .contains("调度分析").contains("架构梳理").contains("# 架构梳理产出");
         assertThat(taskCaptor.getValue().getContext()).containsEntry("scene", "task_final_report");
-        // 写回只更新四列（final_report / agent_id / time / status）
-        verify(taskUpdateChain, org.mockito.Mockito.times(4)).set(any(), any());
-        verify(taskUpdateChain).update();
+        // 写回（含 §12.1 prev 槽换入）+ L1/L2 审查触发同事务委托给 FinalReportPersistService：
+        // 报告正文 / 生成者 / 轮次 / 子任务数 / 审查开关一并透传
+        verify(finalReportPersistService).persistAndRequestReview(
+                eq(TASK_ID), eq("# 整合报告\n\n全局结论"), eq(9L), any(), eq(1), eq(1), eq(true));
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_final_report_generated"),
                 eq(AgentRole.PLANNER), eq(9L), anyMap());
@@ -260,7 +274,8 @@ class TaskFinalReportServiceTest {
         assertThatThrownBy(() -> service.generate(TASK_ID))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("LLM 调用失败");
-        verify(taskService, never()).lambdaUpdate();
+        verify(finalReportPersistService, never())
+                .persistAndRequestReview(any(), any(), any(), any(), anyInt(), anyInt(), anyBoolean());
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_final_report_failed"),
                 eq(AgentRole.PLANNER), eq(9L), anyMap());
@@ -291,7 +306,8 @@ class TaskFinalReportServiceTest {
         List<AgentTask> calls = taskCaptor.getAllValues();
         assertThat(calls.get(1).getUserPrompt().length())
                 .isLessThan(calls.get(0).getUserPrompt().length());
-        verify(taskUpdateChain).update();
+        verify(finalReportPersistService).persistAndRequestReview(
+                eq(TASK_ID), eq("# 整合报告"), eq(9L), any(), eq(1), eq(1), eq(true));
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_final_report_generated"),
                 eq(AgentRole.PLANNER), eq(9L), anyMap());
@@ -317,7 +333,8 @@ class TaskFinalReportServiceTest {
         // 3C 后共 4 次：①出纲调用（失败→降级）②③④ 三档阶梯全部尝试后才失败
         verify(platformAgentExecutionService, org.mockito.Mockito.times(4))
                 .executeSync(any(Agent.class), any(AgentTask.class));
-        verify(taskService, never()).lambdaUpdate();
+        verify(finalReportPersistService, never())
+                .persistAndRequestReview(any(), any(), any(), any(), anyInt(), anyInt(), anyBoolean());
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_final_report_failed"),
                 eq(AgentRole.PLANNER), eq(9L), anyMap());
@@ -374,7 +391,7 @@ class TaskFinalReportServiceTest {
     }
 
     @Test
-    @DisplayName("LLM 最终失败：状态置 FAILED（CAS 置 GENERATING + 失败置 FAILED 共两次 update）")
+    @DisplayName("LLM 最终失败：状态置 FAILED（入口 CAS 一次 + 状态机迁移 GENERATING→FAILED）")
     void shouldMarkFailedStatusWhenLlmFails() {
         when(taskService.getById(TASK_ID)).thenReturn(doneTask());
         when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
@@ -386,8 +403,10 @@ class TaskFinalReportServiceTest {
         assertThatThrownBy(() -> service.generate(TASK_ID))
                 .isInstanceOf(BizException.class);
 
-        // 第一次 update = CAS 置 GENERATING；第二次 = markFailed 置 FAILED
-        verify(taskService, org.mockito.Mockito.times(2)).update(any());
+        // 唯一一次直接 update = 入口 CAS 置 GENERATING；失败置 FAILED 改走状态机单点迁移
+        verify(taskService, org.mockito.Mockito.times(1)).update(any());
+        verify(taskService).transitFinalReportStatus(TASK_ID,
+                FinalReportStatus.GENERATING, FinalReportStatus.FAILED);
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_final_report_failed"),
                 eq(AgentRole.PLANNER), eq(9L), anyMap());
@@ -659,7 +678,7 @@ class TaskFinalReportServiceTest {
     }
 
     @Test
-    @DisplayName("3A 事件发布：generate 成功发 attempt=1 事件，rework 后 attempt=2")
+    @DisplayName("3A 写回透传：generate 以 attempt=1 + 子任务数触发写回，rework 追加 attempt=2")
     void shouldPublishGeneratedEventWithAttempt() {
         when(taskService.getById(TASK_ID)).thenReturn(doneTask());
         when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
@@ -670,22 +689,23 @@ class TaskFinalReportServiceTest {
 
         service.generate(TASK_ID);
 
-        ArgumentCaptor<TaskFinalReportGeneratedEvent> eventCaptor =
-                ArgumentCaptor.forClass(TaskFinalReportGeneratedEvent.class);
-        verify(applicationEventPublisher, times(1)).publishEvent(eventCaptor.capture());
-        assertThat(eventCaptor.getValue().getTaskId()).isEqualTo(TASK_ID);
-        assertThat(eventCaptor.getValue().getAttempt()).isEqualTo(1);
-        assertThat(eventCaptor.getValue().getSectionCount()).isEqualTo(1);
-        assertThat(eventCaptor.getValue().getReportLength()).isEqualTo("# 整合报告".length());
+        ArgumentCaptor<String> reportCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<Integer> attemptCaptor = ArgumentCaptor.forClass(Integer.class);
+        ArgumentCaptor<Integer> sectionCaptor = ArgumentCaptor.forClass(Integer.class);
+        verify(finalReportPersistService, times(1)).persistAndRequestReview(
+                eq(TASK_ID), reportCaptor.capture(), eq(9L), any(),
+                attemptCaptor.capture(), sectionCaptor.capture(), eq(true));
+        assertThat(reportCaptor.getValue()).isEqualTo("# 整合报告");
+        assertThat(attemptCaptor.getValue()).isEqualTo(1);
+        assertThat(sectionCaptor.getValue()).isEqualTo(1);
 
         service.rework(TASK_ID, "覆盖追溯表不完整", 2);
 
-        verify(applicationEventPublisher, times(2)).publishEvent(eventCaptor.capture());
-        assertThat(eventCaptor.getValue().getAttempt()).isEqualTo(2);
+        assertThat(capturePersistAttempts(2)).containsExactly(1, 2);
     }
 
     @Test
-    @DisplayName("3A 去状态化：同轮返工轮次由监听器显式传入，事件原样透传（attempt=3）")
+    @DisplayName("3A 去状态化：同轮返工轮次由监听器显式传入，写回原样透传（attempt=3）")
     void shouldPropagateExplicitAttemptFromRework() {
         when(taskService.getById(TASK_ID)).thenReturn(doneTask());
         when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
@@ -697,11 +717,7 @@ class TaskFinalReportServiceTest {
         // 监听器持 event.getAttempt()=2，同轮返工显式传 3（2 + 1）；无计数器可依赖
         service.rework(TASK_ID, "覆盖追溯表不完整", 3);
 
-        ArgumentCaptor<TaskFinalReportGeneratedEvent> eventCaptor =
-                ArgumentCaptor.forClass(TaskFinalReportGeneratedEvent.class);
-        verify(applicationEventPublisher, times(1)).publishEvent(eventCaptor.capture());
-        assertThat(eventCaptor.getValue().getAttempt()).isEqualTo(3);
-        assertThat(eventCaptor.getValue().getReportLength()).isEqualTo("# 整合报告".length());
+        assertThat(capturePersistAttempts(1)).containsExactly(3);
     }
 
     @Test
@@ -718,13 +734,8 @@ class TaskFinalReportServiceTest {
         service.generate(TASK_ID);
         service.generate(TASK_ID);
 
-        ArgumentCaptor<TaskFinalReportGeneratedEvent> eventCaptor =
-                ArgumentCaptor.forClass(TaskFinalReportGeneratedEvent.class);
-        verify(applicationEventPublisher, times(3)).publishEvent(eventCaptor.capture());
         // 复位语义：手动重新生成不继承上一轮轮次，审查返工额度与首次生成一致
-        assertThat(eventCaptor.getAllValues())
-                .extracting(TaskFinalReportGeneratedEvent::getAttempt)
-                .containsExactly(1, 1, 1);
+        assertThat(capturePersistAttempts(3)).containsExactly(1, 1, 1);
     }
 
     @Test
@@ -741,13 +752,8 @@ class TaskFinalReportServiceTest {
         service.rework(TASK_ID, "覆盖追溯表不完整", 2);
         service.generate(TASK_ID);
 
-        ArgumentCaptor<TaskFinalReportGeneratedEvent> eventCaptor =
-                ArgumentCaptor.forClass(TaskFinalReportGeneratedEvent.class);
-        verify(applicationEventPublisher, times(3)).publishEvent(eventCaptor.capture());
         // 去状态化：同轮返工显式传 2（监听器 1+1），跨轮 generate 恒为 1（无历史轮次残留）
-        assertThat(eventCaptor.getAllValues())
-                .extracting(TaskFinalReportGeneratedEvent::getAttempt)
-                .containsExactly(1, 2, 1);
+        assertThat(capturePersistAttempts(3)).containsExactly(1, 2, 1);
     }
 
     @Test
@@ -768,10 +774,7 @@ class TaskFinalReportServiceTest {
         when(taskService.update(any())).thenReturn(true);
         service.generate(TASK_ID);
 
-        ArgumentCaptor<TaskFinalReportGeneratedEvent> eventCaptor =
-                ArgumentCaptor.forClass(TaskFinalReportGeneratedEvent.class);
-        verify(applicationEventPublisher, times(1)).publishEvent(eventCaptor.capture());
-        assertThat(eventCaptor.getValue().getAttempt()).isEqualTo(1);
+        assertThat(capturePersistAttempts(1)).containsExactly(1);
     }
 
     @Test
@@ -853,7 +856,7 @@ class TaskFinalReportServiceTest {
     // ══════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("§12.1 覆盖生成：写回携带落 prev 槽的 setSql（正文/Agent/时间三列同行落槽）")
+    @DisplayName("§12.1 写回委托：报告写回（含 prev 槽换入）整体交给 FinalReportPersistService 事务边界")
     void shouldWritePrevSlotOnGenerate() {
         when(taskService.getById(TASK_ID)).thenReturn(doneTask());
         when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
@@ -864,13 +867,11 @@ class TaskFinalReportServiceTest {
 
         service.generate(TASK_ID);
 
-        // prev 落槽是原生 SQL 片段（更新前值取行内旧值），setSql 必须携带三列
-        verify(taskUpdateChain).setSql(org.mockito.ArgumentMatchers.argThat(sql ->
-                sql.contains("final_report_prev")
-                        && sql.contains("final_report_prev_agent_id")
-                        && sql.contains("final_report_prev_time")));
-        // 原有四列写回不受影响
-        verify(taskUpdateChain, org.mockito.Mockito.times(4)).set(any(), any());
+        // prev 落槽的 setSql 已随写回一并迁入事务边界 Bean（由 FinalReportPersistServiceTest
+        // 覆盖）；本类只断言委托发生，且不再自行拼 task 表更新语句
+        verify(finalReportPersistService).persistAndRequestReview(
+                eq(TASK_ID), eq("# 整合报告"), eq(9L), any(), eq(1), eq(1), eq(true));
+        verify(taskService, never()).lambdaUpdate();
     }
 
     @Test
@@ -919,11 +920,12 @@ class TaskFinalReportServiceTest {
     }
 
     @Test
-    @DisplayName("§12.1 回滚：生成在途（CAS 失败）抛 409")
+    @DisplayName("§12.1 回滚：生成在途（快照 GENERATING + CAS 拒绝）抛 409 而非状态机异常")
     void shouldRejectRollbackWhenGenerating() {
         Task task = doneTask();
         task.setFinalReport("V2新版正文");
         task.setFinalReportPrev("V1旧版正文");
+        task.setFinalReportStatus(FinalReportStatus.GENERATING);
         when(taskService.getById(TASK_ID)).thenReturn(task);
         when(taskService.update(any())).thenReturn(false);
 

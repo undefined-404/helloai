@@ -2,9 +2,11 @@ package com.helloai.core.task.service;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.IService;
+import com.helloai.common.constant.FinalReportStatus;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.task.entity.Task;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -146,4 +148,55 @@ public interface TaskService extends IService<Task> {
      * @return 重新发布后的任务
      */
     Task republish(Long taskId);
+
+    // ══════════════════════════════════════════════════════════════
+    //  最终整合报告状态机写口（§12.5：状态迁移唯一收口点）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 最终报告状态迁移（CAS）：仅当库中当前状态等于 {@code from} 时置为 {@code to}。
+     *
+     * <p>这是 {@link com.helloai.common.constant.FinalReportStatus} <b>纯状态迁移</b>的唯一写口：
+     * 迁移合法性由 {@link com.helloai.core.task.statemachine.FinalReportStateMachine} 校验，
+     * 并发安全由 {@code WHERE final_report_status = from} 的 CAS 条件保证。
+     * 调用方不得再自行 {@code lambdaUpdate().set(状态)} 直写本字段。</p>
+     *
+     * <p>携带其它列（正文/Agent/时间）的复合写回不属于本方法职责，由
+     * {@code FinalReportPersistService} 在同一事务内完成，并在写回前调用
+     * {@code FinalReportStateMachine.assertTransit} 校验。</p>
+     *
+     * @param taskId 任务 ID
+     * @param from   期望的当前状态（CAS 条件）
+     * @param to     目标状态
+     * @return true=迁移成功；false=当前状态不是 {@code from}（已被其它链路接管）
+     * @throws IllegalStateException 迁移非法（编程错误，快速失败）
+     */
+    boolean transitFinalReportStatus(Long taskId, FinalReportStatus from, FinalReportStatus to);
+
+    /**
+     * 审查链收敛：把 {@code REVIEWING} 的条件写回 {@code DONE}（§12.2 收敛出口收口）。
+     *
+     * <p>CAS 双条件：{@code final_report_status = REVIEWING} 且
+     * {@code final_report_time = reportTime}。后者是<b>陈旧守卫</b>——审查耗时期间报告可能已被
+     * 新生成/回滚接管，此时旧链不得覆盖新链状态（返回 false，调用方静默放弃）。
+     * 前者保证已被兄弟链路（L1/L2/L3 任一路）收敛过的行不会被重复写。</p>
+     *
+     * @param taskId     任务 ID
+     * @param reportTime 事件锚点（= 写回时的 final_report_time）
+     * @return true=已收敛；false=版本已变或已被收敛（静默放弃，不是错误）
+     */
+    boolean convergeFinalReportToDone(Long taskId, OffsetDateTime reportTime);
+
+    /**
+     * 列出「审查链丢失」的最终报告孤儿：状态停留 {@code REVIEWING} 且报告写回时间
+     * 早于 {@code now - thresholdSeconds}。
+     *
+     * <p>供 {@code FinalReportReviewOrphanTask} 兜底巡检使用（§12.2 审查链三级容错 L3）。
+     * 只返回轻量列（不选 final_report 大字段），避免注解式查询绕开 typeHandler 映射。</p>
+     *
+     * @param thresholdSeconds 超时阈值（秒）
+     * @param limit            单轮批量上限
+     * @return 超时未收敛的报告任务（按 final_report_time 升序）
+     */
+    List<Task> listFinalReportReviewOrphans(int thresholdSeconds, int limit);
 }

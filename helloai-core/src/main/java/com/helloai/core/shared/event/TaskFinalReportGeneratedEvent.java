@@ -7,9 +7,11 @@ import java.time.OffsetDateTime;
 /**
  * 任务最终整合报告生成完成事件（报告质量审查触发源）。
  *
- * <p>由 {@code TaskFinalReportServiceImpl} 在报告写回成功后发布（{@code ApplicationEventPublisher}）；
- * 消费方 {@code FinalReportReviewListener} 以普通 {@code @EventListener} 承接（本发布点与
- * {@link TaskAutoCompletedEvent} 同款：无事务上下文，不能用 {@code @TransactionalEventListener}）。
+ * <p>由 {@code TaskFinalReportServiceImpl} 经 {@code FinalReportPersistService} 在
+ * <b>报告写回事务内</b>发布（{@code ApplicationEventPublisher}）；消费方
+ * {@code FinalReportReviewServiceImpl} 以 {@code @TransactionalEventListener(AFTER_COMMIT)}
+ * 承接——提交后才触发，避免审查读到未提交的报告（改造前是普通 {@code @EventListener}，
+ * 一旦调用方引入事务就会在提交前触发并命中陈旧守卫被静默丢弃）。
  * 审查失败/驳回仅影响报告质量闭环，不影响任务 DONE 与报告已落库事实。</p>
  *
  * <p>§12.2 审查异步化：事件携带 {@link #reportTime}（= 写回时的 {@code final_report_time}，微秒截断），
