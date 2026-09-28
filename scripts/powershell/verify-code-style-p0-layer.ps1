@@ -3,6 +3,9 @@
 # 用途：静态断言 8 个 Controller 无 QueryWrapper/lambdaQuery/updateById/save/select
 #       直调，然后打包 -> 启动 jar -> 等待就绪 -> 4 接口冒烟（非 5xx）-> 收尾。
 # 说明：本阶段不改接口路径，冒烟使用当前路径；阶段2 路径整改后另行验证。
+# 修复（2026-09-28）：原步骤 2/3/4 引用的 tmp\package-backend.ps1 /
+#       tmp\kill-backend.ps1 / tmp\wait-backend.ps1 三个助手已不存在（脚本此前必然
+#       在 [2/5] 失败），已按 start-sb.ps1 / kill-old.ps1 同口径内联，本机无 pwsh 未实跑。
 # 用法（项目根）：
 #   powershell -File .\scripts\powershell\verify-code-style-p0-layer.ps1
 # ============================================================
@@ -53,7 +56,8 @@ Write-Host '  STATIC_PASS (0 hits)'
 
 # ---------- 2) 打包 ----------
 Write-Host '== [2/5] package backend =='
-& (Join-Path $Root 'tmp\package-backend.ps1')
+# 内联打包（替代已删除的 tmp\package-backend.ps1，与 start-sb.ps1 同口径；-f 定位根 pom，位置无关）
+mvn -f (Join-Path $Root 'pom.xml') -pl helloai-start -am -DskipTests package | Out-Null
 if ($LASTEXITCODE -ne 0) {
     throw 'BUILD_FAILED'
 }
@@ -62,7 +66,8 @@ Write-Host '  PACKAGE_PASS'
 # ---------- 3) 启动 jar ----------
 Write-Host '== [3/5] start backend jar =='
 # 先停旧进程，保证幂等
-& (Join-Path $Root 'tmp\kill-backend.ps1')
+# 改用既有 kill-old.ps1（替代已删除的 tmp\kill-backend.ps1，同为释放 6565 端口）
+& (Join-Path $PSScriptRoot 'kill-old.ps1')
 $javaHome = $env:JAVA_HOME
 if (-not $javaHome) {
     throw 'JAVA_HOME_NOT_SET'
@@ -87,8 +92,18 @@ Write-Host '  PROC_ALIVE_AFTER_10S'
 
 # ---------- 4) 等待就绪 + 冒烟 ----------
 Write-Host '== [4/5] wait ready =='
-& (Join-Path $Root 'tmp\wait-backend.ps1')
-if ($LASTEXITCODE -ne 0) {
+# 内联健康等待（替代已删除的 tmp\wait-backend.ps1；/api/health 与 verify-c3-env 同口径，最长 120s）
+$ready = $false
+foreach ($i in 1..40) {
+    try {
+        $null = Invoke-RestMethod -Uri ($BaseUrl + '/api/health') -TimeoutSec 3
+        $ready = $true
+        break
+    } catch {
+        Start-Sleep -Seconds 3
+    }
+}
+if (-not $ready) {
     throw 'BACKEND_NOT_READY'
 }
 Write-Host '  BACKEND_UP'

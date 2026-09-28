@@ -3,5 +3,8 @@ node_modules/
 dist/
 dist.zip
 *.tsbuildinfo
+# tsc 对 vite.config.ts 的编译产物（源是 vite.config.ts，产物勿入库）
+vite.config.js
+vite.config.d.ts
 .env.local
 *.log

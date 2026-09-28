@@ -1,4 +1,4 @@
-# HelloAI ¡ª PRODUCT.md
+# HelloAI â€” PRODUCT.md
 
 ## Register
 product
@@ -12,15 +12,15 @@ HelloAI is an intelligent Agent management platform that enables administrators 
 - **Reviewers** who evaluate agent outputs through structured review cycles
 
 ## Brand Personality
-- **Calm & composed** ¡ª the interface is a tool, not a spectacle. Users manage complex workflows; the UI steps back and stays out of the way.
-- **Precise & trustworthy** ¡ª every data point, status, and action is unambiguous. Agents handle critical work; the interface reflects that seriousness without being heavy.
-- **Modern & refined** ¡ª Linear-inspired minimalism. Clean spacing, purposeful color, restrained motion. Familiar to users of modern tools like Linear, Notion, and Figma.
-- **AI-native without gimmicks** ¡ª the product manages AI agents, but the UI doesn't rely on purple gradients, sci-fi motifs, or excessive glassmorphism to signal "AI." Earned sophistication over genre signifiers.
+- **Calm & composed** â€” the interface is a tool, not a spectacle. Users manage complex workflows; the UI steps back and stays out of the way.
+- **Precise & trustworthy** â€” every data point, status, and action is unambiguous. Agents handle critical work; the interface reflects that seriousness without being heavy.
+- **Modern & refined** â€” Linear-inspired minimalism. Clean spacing, purposeful color, restrained motion. Familiar to users of modern tools like Linear, Notion, and Figma.
+- **AI-native without gimmicks** â€” the product manages AI agents, but the UI doesn't rely on sci-fi motifs, glowing effects, or decorative gradient washes to signal "AI." Earned sophistication over genre signifiers. (The restrained purple primary `#7C3AED` and the single sidebar gradient defined in DESIGN.md are the adopted brand identity â€” a deliberate, sanctioned exception, not a genre clichÃ©.)
 
 ## Anti-References
 - Generic Element Plus boilerplate dashboards (what the current UI looks like)
 - Heavy enterprise admin panels with crowded sidebars, dense data, and mismatched controls
-- Over-decorated AI dashboards with purple gradients, orbiting animations, and glowing elements
+- Over-decorated AI dashboards with full-bleed gradient backgrounds, orbiting animations, and glowing elements (distinct from the brand's own purple-primary system in DESIGN.md, which is intentional identity)
 - Bootstrap-era card-everything layouts
 
 ## Strategic Design Principles
@@ -29,16 +29,16 @@ HelloAI is an intelligent Agent management platform that enables administrators 
 Every element earns its place. White space is a feature, not waste. Data is readable at a glance. Status indicators are unambiguous at 16px.
 
 ### 2. Consistency is the brand
-One button vocabulary, one form language, one spacing scale across all surfaces. The sidebar, the table toolbar, the dialog footer ¡ª all follow the same rules.
+One button vocabulary, one form language, one spacing scale across all surfaces. The sidebar, the table toolbar, the dialog footer â€” all follow the same rules.
 
 ### 3. Calm technology
 Motion is 150-250ms, state-driven, never decorative. No page-load sequences. No gratuitous entrance animations. Users are in flow; the interface doesn't demand attention it doesn't need.
 
 ### 4. Earned familiarity
-Users of Linear, Notion, and modern SaaS should feel at home. Standard affordances for standard actions. Tables, filters, pagination, forms ¡ª refined but recognizable.
+Users of Linear, Notion, and modern SaaS should feel at home. Standard affordances for standard actions. Tables, filters, pagination, forms â€” refined but recognizable.
 
 ### 5. Accessibility as baseline
-Body text ¡Ý4.5:1 contrast. Interactive elements have hover, focus, active, disabled, and loading states. Empty states teach, skeleton loading over spinners where possible.
+Body text â‰¥4.5:1 contrast. Interactive elements have hover, focus, active, disabled, and loading states. Empty states teach, skeleton loading over spinners where possible.
 
 ### 6. Identity through craft, not decoration
-The brand lives in precise spacing, thoughtful typography, a refined color palette, and micro-interactions ¡ª not in decorative flourishes.
+The brand lives in precise spacing, thoughtful typography, a refined color palette, and micro-interactions â€” not in decorative flourishes.

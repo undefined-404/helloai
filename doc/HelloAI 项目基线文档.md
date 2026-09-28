@@ -131,10 +131,15 @@ Credential
 读取口径：物化附件优先（UTF-8 正文）→ ExecutionRecord SUMMARY/DELIVERABLES 注入 → output 兜底
 限额单源：AttachmentContentPolicy（shared/util，附件限额 + 文本/媒体族判定）
 状态机：NONE → GENERATING → REVIEWING → DONE（/ FAILED）；REVIEWING 为异步审查在途态，
-        审查链全部出口（pass / unparseable / LLM failed / max_review / skipped / 开关关闭）收敛 DONE
-审查异步：FinalReportReviewListener 同步入口 + reportReviewExecutor 专用池（core1/max2/queue50/AbortPolicy）
-        执行；事件携带 reportTime（微秒截断）作三重陈旧守卫（审查前 / rework 前 / 收敛条件写回）
-轮次：无状态——generate 恒为 1，同轮返工由监听器显式传 attempt+1（不落库）
+        审查链全部出口（pass / unparseable / LLM failed / max_review / skipped / 开关关闭 / L3 超时兜底）收敛 DONE；
+        迁移合法性由 FinalReportStateMachine 显式迁移表校验，写口收口 TaskService.transitFinalReportStatus / convergeFinalReportToDone
+审查异步：FinalReportReviewServiceImpl（@TransactionalEventListener(AFTER_COMMIT) 入口）+ reportReviewExecutor
+        专用池（core1/max2/queue50/AbortPolicy）执行；事件携带 reportTime（微秒截断）作三重陈旧守卫
+        （审查前 / rework 前 / 收敛条件写回）；入口 Redisson 防双审锁 + status != REVIEWING 幂等跳过
+三级容错：L1 内存事件（AFTER_COMMIT）+ L2 Outbox（FinalReportPersistService 写回与 agent_outbox_event 同事务 →
+        AgentEventCompensationTask 补投 → helloai.report-review.queue → MqFinalReportReviewConsumer 幂等消费）+
+        L3 FinalReportReviewOrphanTask 巡检（REVIEWING 超阈值收敛 DONE，刻意不重投审查避免无界烧 LLM）
+轮次：无状态——generate 恒为 1，同轮返工由审查服务显式传 attempt+1（不落库）
 版本：V95 单槽列 final_report_prev(_agent_id/_time)——覆盖前现值落槽；
         POST /api/tasks/rollbackFinalReportByTaskId/{id}：current↔prev 整体互换可反复切换，无 prev 409；
         事件 task_final_report_rolled_back
