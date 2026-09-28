@@ -46,10 +46,16 @@ public class ArtifactUploadServiceImpl implements ArtifactUploadService {
 
         SubTask subTask = subTaskService.getById(subTaskId);
         if (subTask == null) {
-            throw new BizException("子任务不存在: " + subTaskId);
+            throw new BizException(404, "子任务不存在: " + subTaskId);
+        }
+        // G-015 B4.4：区分「无归属」与「归属他人」两种拒绝原因。
+        // 原先两种情况都抛单参 BizException（默认 code=500）并压成同一句话，
+        // 外部 Agent 只看到 500 +「无权上传」，会误判为自身 Key/权限问题而反复重试。
+        if (subTask.getAssignedAgentId() == null) {
+            throw new BizException(409, "子任务当前无执行者，无法上传产物（可能已被回收或改派）: subTaskId=" + subTaskId);
         }
         if (!agentId.equals(subTask.getAssignedAgentId())) {
-            throw new BizException("无权为该子任务上传产物: subTaskId=" + subTaskId + ", agentId=" + agentId);
+            throw new BizException(403, "无权为该子任务上传产物（该子任务归属其他 Agent）: subTaskId=" + subTaskId);
         }
 
         // objectKey 首层目录使用执行 Agent 注册名（username 维度），与物化链路口径一致

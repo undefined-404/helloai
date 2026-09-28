@@ -9,6 +9,7 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.Optional;
 
 /**
  * 存储路由（引入）：聚合所有 {@link ArtifactStorage} 实现，对外提供统一入口。
@@ -49,6 +50,31 @@ public class CompositeArtifactStorage implements ArtifactStorage {
         return resolvedStorages().stream().anyMatch(s -> s.supports(storageUrl));
     }
 
+    @Override
+    public boolean exists(String storageUrl) {
+        // 无实现支持 = 平台管不到这个地址（如外部 https://），不判定、不阻断
+        return matchingOrNull(storageUrl).map(s -> s.exists(storageUrl)).orElse(true);
+    }
+
+    @Override
+    public void validateAddress(String storageUrl) {
+        matchingOrNull(storageUrl).ifPresent(s -> s.validateAddress(storageUrl));
+    }
+
+    /**
+     * 对象枚举与删除都面向<b>主存储</b>（{@code helloai.storage.type} 的路由目标）：
+     * 对账巡检清的是平台自己的桶，不跨实现扫别的介质。
+     */
+    @Override
+    public List<StoredObject> listObjects(String bucket, String prefix) {
+        return primary().listObjects(bucket, prefix);
+    }
+
+    @Override
+    public void removeObject(String bucket, String objectKey) {
+        primary().removeObject(bucket, objectKey);
+    }
+
     /** 全部存储实现（排除自身，避免循环解析）。 */
     private List<ArtifactStorage> resolvedStorages() {
         return storageProvider.orderedStream().filter(s -> s != this).toList();
@@ -64,9 +90,13 @@ public class CompositeArtifactStorage implements ArtifactStorage {
     }
 
     private ArtifactStorage matching(String storageUrl) {
+        return matchingOrNull(storageUrl)
+                .orElseThrow(() -> new BizException("无存储实现支持该地址: " + storageUrl));
+    }
+
+    private Optional<ArtifactStorage> matchingOrNull(String storageUrl) {
         return resolvedStorages().stream()
                 .filter(s -> s.supports(storageUrl))
-                .findFirst()
-                .orElseThrow(() -> new BizException("无存储实现支持该地址: " + storageUrl));
+                .findFirst();
     }
 }

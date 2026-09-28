@@ -39,4 +39,18 @@ public class AgentHealthProperties {
      * </ul>
      */
     private int offlineMinutes = 5;
+
+    /**
+     * 在飞子任务宽限阈值（分钟）。G-015 B1 止血：当 Agent 仍持在飞子任务
+     * （{@code status ∈ {ASSIGNED, IN_PROGRESS}}）时，Reconcile 用本阈值（而非
+     * {@link #offlineMinutes}）判断心跳超时——避免外部 Agent 埋头执行长任务
+     * （写文档/推理数分钟不触网）被误判离线并触发重派，进而把在飞子任务打入死信。
+     *
+     * <p>语义：阈值放宽而非取消。超过本阈值仍会标 OFFLINE 并重派，
+     * 保留「真死」的可恢复性（不会因宽限而永久卡住）。</p>
+     *
+     * <p>取值应严格大于 {@link #offlineMinutes}（小于等于时退化为旧行为，不报错）。
+     * 默认 30 分钟。</p>
+     */
+    private int inFlightGraceMinutes = 30;
 }

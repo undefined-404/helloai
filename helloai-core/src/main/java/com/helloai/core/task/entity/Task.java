@@ -34,6 +34,15 @@ public class Task extends BaseEntity {
     /** 报告生成状态（NONE/GENERATING/DONE/FAILED，与任务主状态解耦）。 */
     private FinalReportStatus finalReportStatus;
 
+    /** 上一版最终整合报告正文（§12.1 单槽列：覆盖生成前落槽，回滚时与 current 互换；null=无上一版）。 */
+    private String finalReportPrev;
+
+    /** 上一版报告的生成 Planner Agent ID（软引用无 FK，随 prev 槽整体互换）。 */
+    private Long finalReportPrevAgentId;
+
+    /** 上一版报告生成时间。 */
+    private OffsetDateTime finalReportPrevTime;
+
     /**
      * 任务扩展上下文（JSONB）。
      *

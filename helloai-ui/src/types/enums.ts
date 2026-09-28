@@ -11,8 +11,9 @@ export type SubTaskStatus = 'PENDING' | 'ASSIGNED' | 'IN_PROGRESS' | 'PAUSED'
 // PLANNING: V26 拆解草案已生成待审阅（confirm→IN_PROGRESS / reject→回 PENDING）
 export type TaskStatus = 'PENDING' | 'PLANNING' | 'IN_PROGRESS' | 'DONE' | 'CANCELLED'
 
-// V41: 任务最终整合报告生成状态（与 TaskStatus 解耦，报告生成是增值物）
-export type FinalReportStatus = 'NONE' | 'GENERATING' | 'DONE' | 'FAILED'
+// V41/V12.2: 任务最终整合报告生成状态（与 TaskStatus 解耦，报告生成是增值物；
+// REVIEWING = 已生成待自动审查收敛，审查链各出口收敛 DONE）
+export type FinalReportStatus = 'NONE' | 'GENERATING' | 'REVIEWING' | 'DONE' | 'FAILED'
 
 // --- Agent 相关 ---
 export type AgentRole = 'PLANNER' | 'EXECUTOR' | 'REVIEWER'

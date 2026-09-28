@@ -30,6 +30,7 @@ export const paths = {
     downloadDeliverables: (id: string | number) => `/tasks/downloadDeliverablesByTaskId/${enc(id)}`,
     finalReport: (id: string | number) => `/tasks/findFinalReportByTaskId/${enc(id)}`,
     generateFinalReport: (id: string | number) => `/tasks/generateFinalReportByTaskId/${enc(id)}`,
+    rollbackFinalReport: (id: string | number) => `/tasks/rollbackFinalReportByTaskId/${enc(id)}`,
     iterations: (id: string | number) => `/tasks/findTaskIterationsByTaskId/${enc(id)}`,
     backfillIterations: '/tasks/backfillTaskIterations'
   },

@@ -48,6 +48,17 @@ public class AgentDutyLease extends BaseEntity {
     /** 租约过期时间（start_time + lease TTL）。 */
     private OffsetDateTime expireTime;
 
+    /**
+     * 签发租约时解析出的租约窗口（分钟，G-015 B4.3 / V94）。
+     *
+     * <p>持久化后 {@code adaptiveRenew} 的空闲续约复用同一窗口，不再每轮按表现分重算——
+     * 消除 P2-10「租约窗口反复跳变、与 checkIn 承诺的 expiresAt 口径不一致」。</p>
+     *
+     * <p>{@code NULL} 表示历史行未持久化，空闲续约回退既有动态推断（行为与迁移前一致）。
+     * 续约不改写本字段：在飞保活用的 {@code maxTtlMinutes} 只体现在 {@code expireTime} 上。</p>
+     */
+    private Integer ttlMinutes;
+
     /** 关闭原因（仅在 status=CLOSED 时填写）。 */
     private String closeReason;
 }

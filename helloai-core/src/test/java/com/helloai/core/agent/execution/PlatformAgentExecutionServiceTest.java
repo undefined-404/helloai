@@ -5,6 +5,7 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.AgentLlmCredentialResolver;
 import com.helloai.core.agent.service.AgentChatClientService;
+import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.chat.LlmCallConcurrencyGuard;
 import com.helloai.core.agent.chat.provider.LlmProviderChatClientFactoryRegistry;
 import com.helloai.core.agent.domain.AgentResult;
@@ -26,7 +27,11 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
@@ -51,6 +56,9 @@ class PlatformAgentExecutionServiceTest {
     @Mock
     private HeartbeatService heartbeatService;
 
+    @Mock
+    private AgentSkillSpecService agentSkillSpecService;
+
     private PlatformAgentExecutionService platformAgentExecutionService;
 
     @BeforeEach
@@ -72,7 +80,19 @@ class PlatformAgentExecutionServiceTest {
                 new ApiKeyAgentExecutor(chatClientService, agentLlmCredentialResolver, properties);
         AgentExecutorRouter router = new AgentExecutorRouter(List.of(apiKeyAgentExecutor));
         platformAgentExecutionService = new PlatformAgentExecutionServiceImpl(
-                agentService, router, heartbeatService, properties);
+                agentService, router, heartbeatService, properties, agentSkillSpecService);
+    }
+
+    /** 最小 API_KEY_LLM Agent（mock 链路可路由到 ApiKeyAgentExecutor）。 */
+    private Agent newExecutorAgent() {
+        Agent agent = new Agent();
+        agent.setId(101L);
+        agent.setName("mock-executor-agent");
+        agent.setRole(AgentRole.EXECUTOR);
+        agent.setAccessType(AgentAccessType.API_KEY_LLM);
+        agent.setModelType("mock:helloai-mock-executor");
+        agent.setCapabilities(Map.of("supportsPull", false, "maxConcurrentTasks", 5));
+        return agent;
     }
 
     @Test
@@ -100,5 +120,45 @@ class PlatformAgentExecutionServiceTest {
         assertThat(result.getOutput()).contains("请输出一句最小验证结果");
         assertThat(result.getTokenUsage()).isNotNull();
         verify(heartbeatService).active(101L);
+    }
+
+    @Test
+    @DisplayName("skills 为空：契约层技能零注入（resolve 不触发，行为不变）")
+    void shouldNotInjectWhenSkillsEmpty() {
+        Agent agent = newExecutorAgent();
+        AgentTask task = AgentTask.builder()
+                .subTaskId(2002L)
+                .systemPrompt("你是一个执行者")
+                .userPrompt("请输出一句最小验证结果")
+                .build();
+
+        AgentResult result = platformAgentExecutionService.executeSync(agent, task);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput()).doesNotContain("平台技能规范（执行速览）");
+        verify(agentSkillSpecService, never()).resolve(any());
+    }
+
+    @Test
+    @DisplayName("skills 非空：契约层 resolve 注入执行速览段到 systemPrompt")
+    void shouldInjectResolvedSkillSectionWhenSkillsPresent() {
+        Agent agent = newExecutorAgent();
+        when(agentSkillSpecService.resolve(anyList())).thenReturn(new AgentSkillSpecService.ResolvedSpec(
+                List.of("eng-test"),
+                List.of("eng-test"),
+                "### 测试规范速览\n- 断言粒度：契约层注入\n"));
+        AgentTask task = AgentTask.builder()
+                .subTaskId(2003L)
+                .systemPrompt("你是一个执行者")
+                .userPrompt("请输出一句最小验证结果")
+                .skills(List.of("eng-test"))
+                .build();
+
+        AgentResult result = platformAgentExecutionService.executeSync(agent, task);
+
+        assertThat(result.isSuccess()).isTrue();
+        // MockChatModel 回显 SYSTEM 段（前 240 字符截断），注入标题与速览必在截断范围前排
+        assertThat(result.getOutput()).contains("## 平台技能规范（执行速览）");
+        assertThat(result.getOutput()).contains("### 测试规范速览");
     }
 }

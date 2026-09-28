@@ -10,13 +10,16 @@ package com.helloai.common.constant;
  * <ul>
  *   <li>{@code NONE}：尚未生成（默认值）</li>
  *   <li>{@code GENERATING}：生成中（CAS 置位防重入，手动/自动两条路径互斥）</li>
- *   <li>{@code DONE}：已生成（final_report 非空）</li>
+ *   <li>{@code REVIEWING}：已生成、待自动审查收敛（§12.2 审查异步化；审查链各出口统一收敛 DONE，
+ *       审查开关关闭时写回直接置 DONE 不进入本态）</li>
+ *   <li>{@code DONE}：已生成（final_report 非空；审查通过或跳过后的收敛态）</li>
  *   <li>{@code FAILED}：最近一次生成失败（可手动重试）</li>
  * </ul>
  */
 public enum FinalReportStatus {
     NONE,
     GENERATING,
+    REVIEWING,
     DONE,
     FAILED
 }

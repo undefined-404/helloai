@@ -48,4 +48,45 @@ public interface TaskFinalReportService {
      * @return 生成成功后的最新 Task
      */
     Task generate(Long taskId);
+
+    /**
+     * 审查驳回后返工重写（复用 {@link #generate} 生成主链）。
+     *
+     * <p>由 {@code FinalReportReviewListener} 在审查驳回且未达 {@code auto-final-report-max-review}
+     * 上限时回调；驳回意见注入 {@code {{REVIEW_FEEDBACK}}} 占位符供模板逐条响应。
+     * 本轮次取 {@code 1}（全新一轮，无历史返工计数）。
+     * 返工轮次上限由编排层（监听器）控制，本方法不自行截断。内部接口，无外部端点。</p>
+     *
+     * @param taskId         顶层任务 ID
+     * @param reviewFeedback 上轮审查驳回意见（不可为空，将注入重写 prompt）
+     * @return 重写成功后的最新 Task
+     */
+    Task rework(Long taskId, String reviewFeedback);
+
+    /**
+     * 审查驳回后返工重写（显式轮次版，主调用路径）。
+     *
+     * <p>去状态化约定（§12.3）：轮次不在任何存储中保存——新一轮生成恒为 {@code 1}，
+     * 同轮返工由编排层（监听器手握 {@code event.getAttempt()}）显式传 {@code attempt + 1}，
+     * 链路自洽、无需任何计数器。</p>
+     *
+     * @param taskId         顶层任务 ID
+     * @param reviewFeedback 上轮审查驳回意见（不可为空，将注入重写 prompt）
+     * @param attempt        本轮生成轮次（事件度量 + 返工上限判断的唯一输入）
+     * @return 重写成功后的最新 Task
+     */
+    Task rework(Long taskId, String reviewFeedback, int attempt);
+
+    /**
+     * 恢复上一版整合报告（§12.1 单槽列回滚）。
+     *
+     * <p>将 current 与 prev 槽<b>整体互换</b>（正文 + 生成 Agent + 时间戳），可反复切换——
+     * 每次覆盖生成前都把被覆盖的那一版整体落入 prev 槽。无上一版抛 {@code 409}；
+     * 生成在途（GENERATING）抛 {@code 409}（CAS 拦截，防与生成写回互相覆盖）。
+     * 恢复后报告状态恒为 DONE（上一版是已完成的报告），不重触发审查。</p>
+     *
+     * @param taskId 顶层任务 ID
+     * @return 恢复后的最新 Task
+     */
+    Task rollback(Long taskId);
 }

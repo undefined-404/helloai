@@ -1,10 +1,13 @@
 package com.helloai.core.agent.mcp;
 
+import com.helloai.core.agent.tool.ToolCallbackContributor;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.util.List;
 
 /**
  * spring-ai 1.0 GA / 1.1 MCP Server 工具注册配置。
@@ -31,6 +34,8 @@ import org.springframework.context.annotation.Configuration;
  * <ul>
  *   <li>{@link EchoMcpTool} —— 连通性诊断工具（1 个 @Tool）</li>
  *   <li>{@link McpMcpServer} —— §9.1 协议 6 工具 + getAgentStatus（7 个 @Tool）</li>
+ *   <li>{@link ToolCallbackContributor} 实现 —— 各域贡献的平台内置工具（阶段四
+ *       联网搜索 Capability 化：planner 域 web_search 经本端口并入，agent 域不反向引用）</li>
  * </ul>
  * </p>
  *
@@ -42,11 +47,19 @@ public class McpToolConfig {
 
     private final EchoMcpTool echoMcpTool;
     private final McpMcpServer mcpMcpServer;
+    /** 平台内置工具贡献（各域 +@Tool 实例；空列表时不影响既有 MCP 工具注册）。 */
+    private final List<ToolCallbackContributor> toolContributors;
 
     @Bean
     public ToolCallbackProvider mcpToolCallbacks() {
+        Object[] contributed = toolContributors == null ? new Object[0]
+                : toolContributors.stream().map(ToolCallbackContributor::toolObject).toArray();
+        Object[] all = new Object[2 + contributed.length];
+        all[0] = echoMcpTool;
+        all[1] = mcpMcpServer;
+        System.arraycopy(contributed, 0, all, 2, contributed.length);
         return MethodToolCallbackProvider.builder()
-                .toolObjects(echoMcpTool, mcpMcpServer)
+                .toolObjects(all)
                 .build();
     }
 }

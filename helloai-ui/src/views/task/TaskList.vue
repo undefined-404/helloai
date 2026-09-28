@@ -68,13 +68,13 @@
           width="110"
         >
           <template #default="{ row }">
-            <!-- V41: 报告生成中覆盖主状态显示（任务本体仍是 DONE） -->
+            <!-- V41/V12.2: 报告生成/审查中覆盖主状态显示（任务本体仍是 DONE） -->
             <el-tag
-              v-if="row.finalReportStatus === 'GENERATING'"
+              v-if="reportInFlight(row.finalReportStatus)"
               type="primary"
               size="small"
             >
-              报告生成中
+              {{ row.finalReportStatus === 'REVIEWING' ? '报告审查中' : '报告生成中' }}
             </el-tag>
             <el-tag
               v-else
@@ -127,11 +127,11 @@
                 size="small"
                 type="primary"
                 plain
-                :loading="row.finalReportStatus === 'GENERATING'"
-                :disabled="row.finalReportStatus === 'GENERATING'"
+                :loading="reportInFlight(row.finalReportStatus)"
+                :disabled="reportInFlight(row.finalReportStatus)"
                 @click="openReport(row)"
               >
-                {{ row.finalReportStatus === 'GENERATING' ? '生成中' : '报告' }}
+                {{ reportInFlight(row.finalReportStatus) ? (row.finalReportStatus === 'REVIEWING' ? '审查中' : '生成中') : '报告' }}
               </el-button>
               <!-- 次要操作：统一收进更多下拉 -->
               <el-dropdown
@@ -312,6 +312,11 @@ const router = useRouter()
 const auth = useAuthStore()
 const list = ref<any[]>([])
 const loading = ref(false)
+
+// §12.2: GENERATING/REVIEWING 均视为报告处理中（生成/审查中）——按钮禁用 + 状态列覆盖展示
+function reportInFlight(status?: string) {
+  return status === 'GENERATING' || status === 'REVIEWING'
+}
 // 分页：前端按 pageSize 切片（任务量小，列表全量加载后再分页，避免每次翻页都重新拉接口）
 const pageSize = ref(20)
 const currentPage = ref(1)

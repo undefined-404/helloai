@@ -85,7 +85,8 @@ class ReviewRecheckExecutorTest {
         ReviewExecutionEngine engine = new ReviewExecutionEngine(
                 platformAgentExecutionService, conversationService, taskTimelineService,
                 new VerdictParser(new ObjectMapper()),
-                new ReviewEvidenceAssembler(attachmentService, dispatchProperties));
+                new ReviewEvidenceAssembler(attachmentService, dispatchProperties),
+                subTaskService);
         executor = new ReviewRecheckExecutor(recordReviewService, subTaskService,
                 reviewerPicker, taskTimelineService, agentQualityProfileService, engine,
                 conversationService);

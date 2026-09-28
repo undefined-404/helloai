@@ -4,9 +4,15 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.config.ArtifactStorageProperties;
 import io.minio.BucketExistsArgs;
 import io.minio.GetObjectArgs;
+import io.minio.ListObjectsArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
+import io.minio.RemoveObjectArgs;
+import io.minio.Result;
+import io.minio.StatObjectArgs;
+import io.minio.errors.ErrorResponseException;
+import io.minio.messages.Item;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -15,6 +21,8 @@ import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -77,6 +85,11 @@ public class MinioArtifactStorage implements ArtifactStorage {
                 .object(objectKey)
                 .build())) {
             return in.readAllBytes();
+        } catch (ErrorResponseException e) {
+            // 对象/桶不存在 → 404（"文件缺失"）；其余（鉴权、网络、超时）→ 500（"服务故障"）。
+            // 二者必须区分：曾有 106 条附件因环境切换悬空，若统一按 500 报，运维无法从状态码
+            // 判断到底是"文件真没了"还是"存储服务坏了"。
+            throw notFoundOrFailure(e, "产物读取失败", storageUrl);
         } catch (Exception e) {
             throw new BizException("产物读取失败: " + e.getMessage());
         }
@@ -85,6 +98,98 @@ public class MinioArtifactStorage implements ArtifactStorage {
     @Override
     public boolean supports(String storageUrl) {
         return storageUrl != null && storageUrl.startsWith(URL_PREFIX);
+    }
+
+    @Override
+    public boolean exists(String storageUrl) {
+        String objectKey = parseObjectKey(storageUrl);
+        try {
+            client().statObject(StatObjectArgs.builder()
+                    .bucket(minioBucketFrom(storageUrl))
+                    .object(objectKey)
+                    .build());
+            return true;
+        } catch (ErrorResponseException e) {
+            if (isNotFound(e)) {
+                return false;
+            }
+            // 鉴权/网络类错误必须抛出，不得当作"不存在"——见接口约定。
+            throw new BizException("产物存在性校验失败: " + e.getMessage());
+        } catch (Exception e) {
+            throw new BizException("产物存在性校验失败: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public void validateAddress(String storageUrl) {
+        if (!supports(storageUrl)) {
+            return;
+        }
+        String rest = storageUrl.substring(URL_PREFIX.length());
+        int slash = rest.indexOf('/');
+        String bucket = slash > 0 ? rest.substring(0, slash) : "";
+        String objectKey = slash > 0 ? rest.substring(slash + 1) : "";
+        // 桶白名单：storageUrl 的 bucket 段必须是平台配置桶，不允许外部 Agent 用自身注册名当桶。
+        if (!minioBucket().equals(bucket)) {
+            throw new BizException(400, "storageUrl 的 bucket 段必须为平台桶 '" + minioBucket()
+                    + "'，实际为 '" + bucket + "'；正确格式为 "
+                    + URL_PREFIX + minioBucket() + "/{ownerName}/{yyyy}/{MM}/{taskId}/{subTaskId}/{文件名}");
+        }
+        if (objectKey.isBlank() || objectKey.startsWith("/") || objectKey.contains("..")) {
+            throw new BizException(400, "非法 objectKey: " + objectKey);
+        }
+    }
+
+    @Override
+    public List<StoredObject> listObjects(String bucket, String prefix) {
+        List<StoredObject> out = new ArrayList<>();
+        try {
+            Iterable<Result<Item>> results = client().listObjects(ListObjectsArgs.builder()
+                    .bucket(bucket)
+                    .prefix(prefix == null ? "" : prefix)
+                    .recursive(true)
+                    .build());
+            for (Result<Item> result : results) {
+                Item item = result.get();
+                out.add(new StoredObject(bucket, item.objectName(), item.size(),
+                        item.lastModified() == null ? null : item.lastModified().toOffsetDateTime()));
+            }
+        } catch (Exception e) {
+            // 枚举失败必须抛出：静默返回空列表会让调用方误以为"桶是空的"
+            throw new BizException("产物列表读取失败: " + e.getMessage());
+        }
+        return out;
+    }
+
+    @Override
+    public void removeObject(String bucket, String objectKey) {
+        try {
+            client().removeObject(RemoveObjectArgs.builder()
+                    .bucket(bucket)
+                    .object(objectKey)
+                    .build());
+        } catch (ErrorResponseException e) {
+            if (isNotFound(e)) {
+                return; // 幂等：对象已不存在视为删除成功
+            }
+            throw new BizException("产物删除失败: " + e.getMessage());
+        } catch (Exception e) {
+            throw new BizException("产物删除失败: " + e.getMessage());
+        }
+    }
+
+    /** 判定 S3 错误码是否属于"对象/桶不存在"。 */
+    static boolean isNotFound(ErrorResponseException e) {
+        String code = e.errorResponse() != null ? e.errorResponse().code() : null;
+        return "NoSuchKey".equals(code) || "NoSuchObject".equals(code) || "NoSuchBucket".equals(code);
+    }
+
+    /** 对象不存在 → {@code BizException(404)}；其余基础设施故障 → {@code BizException(500)}。 */
+    private BizException notFoundOrFailure(ErrorResponseException e, String action, String storageUrl) {
+        if (isNotFound(e)) {
+            return new BizException(404, action + ": 对象不存在 " + storageUrl);
+        }
+        return new BizException(action + ": " + e.getMessage());
     }
 
     /** 从 minio://{bucket}/{objectKey} 解析 objectKey；格式非法抛 BizException。 */

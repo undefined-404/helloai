@@ -186,6 +186,12 @@ public class TaskController {
         return R.ok(toFinalReportResponse(taskFinalReportService.generate(id)));
     }
 
+    @SaCheckPermission("task:report")
+    @PostMapping("/rollbackFinalReportByTaskId/{id}")
+    public R<TaskFinalReportResponse> rollbackFinalReport(@PathVariable("id") Long id) {
+        return R.ok(toFinalReportResponse(taskFinalReportService.rollback(id)));
+    }
+
     // ══════════════════════════════════════════════════════════
     //  历史任务迭代记录回填（一次性，按需触发）
     // ══════════════════════════════════════════════════════════
@@ -209,6 +215,9 @@ public class TaskController {
         vo.setAgentId(task.getFinalReportAgentId());
         vo.setGeneratedAt(task.getFinalReportTime());
         vo.setStatus(task.getFinalReportStatus());
+        // §12.1 上一版槽：hasPrev 驱动前端「恢复上一版」按钮显隐；prevGeneratedAt 供展示上一版生成时间
+        vo.setHasPrev(task.getFinalReportPrev() != null && !task.getFinalReportPrev().isBlank());
+        vo.setPrevGeneratedAt(task.getFinalReportPrevTime());
         if (task.getFinalReportAgentId() != null) {
             Agent agent = agentService.getById(task.getFinalReportAgentId());
             vo.setAgentName(agent != null ? agent.getName() : null);

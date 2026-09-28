@@ -194,6 +194,18 @@ public class AgentSkillSpecServiceImpl implements AgentSkillSpecService {
                         "断言必须因目标回归而失败，写死预期等于无验证",
                         "注明验证环境（JDK 版本 / 服务版本 / profile / 关键配置）"),
                 "eng-verification.md"));
+        // eng-web-research（阶段四）：任务需外部实时资料时声明；requiredTools 声明 web_search，
+        // G-004 联动（resolve 工具并集）自动并入启用工具清单
+        map.put("eng-web-research", new SkillPackage(
+                "eng-web-research", "1.0.0",
+                "联网调研规范：检索目标先行 / 多词覆盖 / 来源可追溯 / 信息时效标注",
+                List.of("web_search"), List.of(), Map.of(), Map.of(),
+                List.of(
+                        "检索目标先行：先写要回答的问题清单再检索，不让搜索词替代问题",
+                        "多词覆盖：同一问题按多候选词检索合并，单一搜索词不足以支撑结论",
+                        "来源可追溯：每条关键事实必须带 url 溯源，禁止无出处事实",
+                        "信息时效：注明检索时间与资料时效前提，过期信息不充当现状"),
+                "eng-web-research.md"));
         return map;
     }
 }

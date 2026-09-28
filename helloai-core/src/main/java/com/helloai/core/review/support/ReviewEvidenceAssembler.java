@@ -1,6 +1,7 @@
 package com.helloai.core.review.support;
 
 import com.helloai.common.config.AgentDispatchProperties;
+import com.helloai.core.shared.util.AttachmentContentPolicy;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.entity.SubTask;
@@ -13,7 +14,6 @@ import org.springframework.stereotype.Component;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * 自动核验证据装配器：把子任务的"产出证据"装配为核验 Prompt 可消费的内容。
@@ -33,27 +33,6 @@ import java.util.Set;
 @Slf4j
 @Component
 public class ReviewEvidenceAssembler {
-
-    private static final int OUTPUT_SUMMARY_LIMIT = 4000;
-
-    /** 附件内容注入限额（方案3 F2）：每附件 8000 字符，超限截断并标注。 */
-    private static final int ATTACHMENT_CONTENT_PER_FILE_LIMIT = 8000;
-    /** 附件内容注入限额（方案3 F2）：总计 24000 字符，超限停止注入后续附件正文。 */
-    private static final int ATTACHMENT_CONTENT_TOTAL_LIMIT = 24000;
-    /** 文本族 MIME 精确值集（text/* 前缀另判）：命中才允许注入附件正文。 */
-    private static final Set<String> TEXTUAL_MIME_EXACT = Set.of(
-            "application/json", "application/xml", "application/x-yaml", "application/yaml", "application/sql");
-    /** 文本扩展名兜底集（mimeType 缺失或 octet-stream 时用）：命中才允许注入附件正文。 */
-    private static final Set<String> TEXTUAL_EXTENSIONS = Set.of(
-            "md", "markdown", "txt", "log", "json", "xml", "yaml", "yml", "csv", "tsv", "sql",
-            "java", "py", "js", "ts", "sh", "ps1", "html", "css", "properties", "ini", "toml");
-    /** 媒体类 MIME 前缀：图片/音频/视频。 */
-    private static final List<String> MEDIA_MIME_PREFIXES = List.of("image/", "audio/", "video/");
-    /** 媒体扩展名兜底集（mimeType 缺失或 octet-stream 时用）。 */
-    private static final Set<String> MEDIA_EXTENSIONS = Set.of(
-            "png", "jpg", "jpeg", "gif", "webp", "bmp",
-            "mp3", "wav", "m4a", "ogg", "flac",
-            "mp4", "avi", "mov", "mkv", "webm");
 
     private final AttachmentService attachmentService;
     private final AgentDispatchProperties dispatchProperties;
@@ -162,7 +141,8 @@ public class ReviewEvidenceAssembler {
      * 注入核验 Prompt，让 Reviewer 基于真实文件内容核对"声称交付物 ↔ 文件正文 ↔ 验收标准"，
      * 而非仅凭文件名猜测（消除"Reviewer 审查靠摘要+文件名"的幻觉缺口）。
      *
-     * <p>限额策略：每附件 8000 字符、总计 24000 字符，超限截断并标注；不可直读/读取失败/
+     * <p>限额策略：每附件 8000 字符、总计 24000 字符（常量单源见 {@link AttachmentContentPolicy}），
+     * 超限截断并标注；不可直读/读取失败/
      * 空内容附件不注入正文（清单仍全量展示）；开关 {@code helloai.dispatch.attachment-content-enabled}
      * 关闭时退化为仅清单（与开关引入前行为一致）。</p>
      *
@@ -184,7 +164,7 @@ public class ReviewEvidenceAssembler {
         boolean truncated = false;
         boolean totalExceeded = false;
         for (Attachment att : attachments) {
-            if (!isTextualAttachment(att)) {
+            if (!AttachmentContentPolicy.isTextual(att.getMimeType(), att.getFileName())) {
                 // 非文本附件（图片/音频/视频等）不注入正文，避免二进制乱码；媒体可见性标注已覆盖
                 continue;
             }
@@ -198,13 +178,13 @@ public class ReviewEvidenceAssembler {
             String attName = att.getFileName() != null ? att.getFileName() : "unknown";
             int originalChars = content.length();
             boolean perFileTruncated = false;
-            if (content.length() > ATTACHMENT_CONTENT_PER_FILE_LIMIT) {
-                content = content.substring(0, ATTACHMENT_CONTENT_PER_FILE_LIMIT);
+            if (content.length() > AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT) {
+                content = content.substring(0, AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT);
                 truncated = true;
                 perFileTruncated = true;
             }
-            if (totalChars + content.length() > ATTACHMENT_CONTENT_TOTAL_LIMIT) {
-                int remaining = ATTACHMENT_CONTENT_TOTAL_LIMIT - totalChars;
+            if (totalChars + content.length() > AttachmentContentPolicy.ATTACHMENT_CONTENT_TOTAL_LIMIT) {
+                int remaining = AttachmentContentPolicy.ATTACHMENT_CONTENT_TOTAL_LIMIT - totalChars;
                 if (remaining > 0) {
                     appendAttachmentContent(sb, att, content.substring(0, remaining));
                     // P1-4-c：结构化标注行——让核验模型精确知道「哪些字节不可见」，
@@ -271,7 +251,7 @@ public class ReviewEvidenceAssembler {
             return "";
         }
         List<String> mediaNames = attachments.stream()
-                .filter(this::isMediaAttachment)
+                .filter(att -> AttachmentContentPolicy.isMedia(att.getMimeType(), att.getFileName()))
                 .map(Attachment::getFileName)
                 .toList();
         if (mediaNames.isEmpty()) {
@@ -282,51 +262,12 @@ public class ReviewEvidenceAssembler {
     }
 
     /**
-     * 附件是否文本类（仅文本类注入正文）。优先按 mimeType 判定（text/* 与文本族
-     * application 类型）；mimeType 缺失或 octet-stream 时回退扩展名；仍无法判定则
-     * fail-close 按非文本处理，宁可不注入正文也不把二进制字节当文本读入 Prompt。
+     * 从 context.lastExecution.output 提取执行产出，缺失时给出占位说明。
      */
-    private boolean isTextualAttachment(Attachment att) {
-        String mime = att.getMimeType() != null ? att.getMimeType().toLowerCase() : null;
-        if (mime != null && !"application/octet-stream".equals(mime)) {
-            if (mime.startsWith("text/")) {
-                return true;
-            }
-            return TEXTUAL_MIME_EXACT.contains(mime);
-        }
-        return TEXTUAL_EXTENSIONS.contains(extensionOf(att.getFileName()));
-    }
-
-    /** 附件是否媒体类（图片/音频/视频）：mimeType 前缀优先，缺失时回退扩展名。 */
-    private boolean isMediaAttachment(Attachment att) {
-        String mime = att.getMimeType() != null ? att.getMimeType().toLowerCase() : null;
-        if (mime != null) {
-            for (String prefix : MEDIA_MIME_PREFIXES) {
-                if (mime.startsWith(prefix)) {
-                    return true;
-                }
-            }
-        }
-        return MEDIA_EXTENSIONS.contains(extensionOf(att.getFileName()));
-    }
-
-    /** fileName 扩展名小写（不含点）；缺失返回空串。 */
-    private String extensionOf(String fileName) {
-        if (fileName == null) {
-            return "";
-        }
-        int idx = fileName.lastIndexOf('.');
-        if (idx < 0 || idx == fileName.length() - 1) {
-            return "";
-        }
-        return fileName.substring(idx + 1).toLowerCase();
-    }
-
-    /** 从 context.lastExecution.output 提取执行产出，缺失时给出占位说明。 */
     public String extractExecutionOutput(SubTask subTask) {
         String raw = extractRawOutput(subTask);
         if (!raw.isBlank()) {
-            return summarize(raw, OUTPUT_SUMMARY_LIMIT);
+            return summarize(raw, AttachmentContentPolicy.OUTPUT_SUMMARY_LIMIT);
         }
         return "（执行产出为空或缺失，请据交付物/验收标准审慎判定）";
     }

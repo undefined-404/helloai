@@ -2190,6 +2190,36 @@ Java Service
 
 应该落到代码中。
 
+## 35.1 平台能力接线规则
+
+平台能力接线按能力类型区分：
+
+```text
+LLM 可调用能力（对话、检索、搜索等生成性能力）→ 技能包（SkillPackage）+ 契约层注入（AgentTask.skills）
+程序化能力（确定性逻辑、第三方 API、DB 操作等）→ ToolRegistry / 工具回调（ToolCallbackContributor）
+```
+
+禁止：
+
+```text
+域内 Service 直给 LLM（绕过技能包与统一注入挂点）
+```
+
+例外（双轨边界）：
+
+```text
+子任务执行链继续走 ExecutionCommand.requiredSkills（既有链路，与契约层注入并行）
+```
+
+契约层统一注入挂点（同步 LLM 调用在 checkCapability 之后、调执行器之前统一获得技能解析注入）：
+
+```text
+PlatformAgentExecutionService.execute / executeStream
+AgentTask.skills（空不注入，行为零变化）
+```
+
+新增能力接线检查：LLM 可调用能力必须登记技能包 + 至少一个 AgentTask.skills 挂点；程序化能力必须经工具注册端口（ToolCallbackContributor / 工具回调），不得给 LLM 直插域内 Service。
+
 ***
 
 # 36. LLM Provider
@@ -3289,6 +3319,10 @@ AI 可理解
 - [ ] MCP 使用边界正确
 
 - [ ] PromptEnhancer 不执行工具
+
+- [ ] 新 LLM 可调用能力已登记技能包 + AgentTask.skills 挂点
+
+- [ ] 新程序化能力已走工具回调（ToolCallbackContributor），未直给 LLM
 
 ## 前端
 

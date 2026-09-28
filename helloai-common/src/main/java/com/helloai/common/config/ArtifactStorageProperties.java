@@ -51,4 +51,37 @@ public class ArtifactStorageProperties {
 
     /** 单文件最大字节数，超限文件跳过物化。默认 5MB（产出为文本，足够宽裕）。 */
     private long maxFileSize = 5_242_880L;
+
+    // ================================================================
+    // 存储对账巡检（DB attachment ↔ 对象存储真实对象）
+    // ================================================================
+
+    /**
+     * 对账巡检开关（只读，默认开启）。
+     * 每轮枚举桶内真实对象与 attachment 表双向比对，悬空记录 / 孤儿对象 / 字节不符
+     * 一律只告警不修数据，供人工排查环境切换、存储漂移。
+     */
+    private boolean reconcileEnabled = true;
+
+    /**
+     * 孤儿对象清理开关（<b>会删除对象，默认关闭</b>）。
+     *
+     * <p>首次引入删除能力：全仓此前没有任何删除对象的代码。开启前必须先跑若干轮
+     * dry-run 巡检、人工确认孤儿清单无误。关闭时巡检照常报告孤儿，只是不删。</p>
+     */
+    private boolean orphanCleanupEnabled = false;
+
+    /**
+     * 孤儿判定时间窗（小时，默认 24）：对象 {@code lastModified} 早于
+     * {@code now - 该值} 才视为可清理孤儿。
+     *
+     * <p>用于规避"已上传对象、尚未写 attachment 记录"的时间窗——平台侧
+     * {@code store()} 与 {@code register()} 是两步，外部 Agent 先传对象再登记也是两步，
+     * 窗口内对象暂时无人引用属正常，不得当垃圾删除。时间窗不足或无法取得
+     * {@code lastModified} 的对象一律跳过。</p>
+     */
+    private int orphanMinAgeHours = 24;
+
+    /** 单轮最多删除的孤儿对象数（默认 200），防止误判导致批量损伤。 */
+    private int orphanMaxDeletesPerRound = 200;
 }

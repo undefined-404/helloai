@@ -1,6 +1,7 @@
 package com.helloai.core.task.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentRole;
@@ -13,18 +14,25 @@ import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.task.port.TaskPlannerPickerPort;
 import com.helloai.core.shared.event.TaskAutoCompletedEvent;
+import com.helloai.core.shared.util.AttachmentContentPolicy;
 import com.helloai.core.shared.util.SubTaskDependencyOrder;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
+import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskFinalReportService;
 import com.helloai.core.task.service.TaskIterationService;
+import com.helloai.core.task.service.TaskRunningSpecService;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.task.spec.ExecutionRecord;
+import com.helloai.core.shared.event.TaskFinalReportGeneratedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
@@ -33,8 +41,11 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 任务最终整合报告生成实现。
@@ -48,6 +59,7 @@ import java.util.Map;
 public class TaskFinalReportServiceImpl implements TaskFinalReportService {
 
     private static final String PROMPT_TEMPLATE_PATH = "prompts/task-final-report.md";
+    private static final String OUTLINE_TEMPLATE_PATH = "prompts/task-final-report-outline.md";
     /**
      * 单个子任务产出喂给 LLM 的截断上限阶梯（字符）。首档 8000 面向大上下文模型保信息量；
      * 命中模型 token 上限错误时逐档收紧重试，适配 8k 级小上下文模型（子任务多时
@@ -55,6 +67,8 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
      */
     private static final int[] SECTION_OUTPUT_LIMITS = {8000, 2000, 500};
     private static final int TIMELINE_SUMMARY_LIMIT = 300;
+    /** 大纲 JSON 解析器（record 反序列化；LLM 输出经模板约束为标准 JSON）。 */
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final TaskService taskService;
     private final SubTaskService subTaskService;
@@ -63,6 +77,12 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
     private final TaskTimelineService taskTimelineService;
     private final AgentDispatchProperties dispatchProperties;
     private final TaskIterationService taskIterationService;
+    /** 结构化执行记录/全局上下文（基线 + Context Summary）：报告链与子任务执行链同口径读取事实源。 */
+    private final TaskRunningSpecService taskRunningSpecService;
+    /** 物化附件读取：报告链附件优先（与核验链同口径）。 */
+    private final AttachmentService attachmentService;
+    /** 3A 闭环事件发布：报告生成成功后发 {@link TaskFinalReportGeneratedEvent}（审查触发源）。 */
+    private final ApplicationEventPublisher applicationEventPublisher;
 
     /** 任务自动收口后异步生成报告；已有报告或开关关闭时跳过，异常吞掉（手动端点兜底）。 */
     @Override
@@ -96,6 +116,66 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
 
     @Override
     public Task generate(Long taskId) {
+        return generateWithAttempt(taskId, null, 1);
+    }
+
+    @Override
+    public Task rework(Long taskId, String reviewFeedback) {
+        return rework(taskId, reviewFeedback, 1);
+    }
+
+    @Override
+    public Task rework(Long taskId, String reviewFeedback, int attempt) {
+        if (reviewFeedback == null || reviewFeedback.isBlank()) {
+            throw new BizException("reviewFeedback 不能为空");
+        }
+        log.info("最终报告审查驳回返工重写: taskId={}, attempt={}, feedback={}", taskId, attempt,
+                reviewFeedback.length() > 200
+                        ? reviewFeedback.substring(0, 200) + "..." : reviewFeedback);
+        return generateWithAttempt(taskId, reviewFeedback, attempt);
+    }
+
+    @Override
+    public Task rollback(Long taskId) {
+        Task task = taskService.getById(taskId);
+        if (task == null) {
+            throw new BizException(404, "任务不存在: " + taskId);
+        }
+        String prev = task.getFinalReportPrev();
+        if (prev == null || prev.isBlank()) {
+            throw new BizException(409, "没有可恢复的上一版整合报告: taskId=" + taskId);
+        }
+        // CAS 并发拦截：生成在途（GENERATING）时禁止互换，避免回滚写回与生成写回互相覆盖
+        boolean casOk = taskService.update(new LambdaUpdateWrapper<Task>()
+                .eq(Task::getId, taskId)
+                .ne(Task::getFinalReportStatus, FinalReportStatus.GENERATING)
+                .set(Task::getFinalReport, task.getFinalReportPrev())
+                .set(Task::getFinalReportAgentId, task.getFinalReportPrevAgentId())
+                .set(Task::getFinalReportTime, task.getFinalReportPrevTime())
+                .set(Task::getFinalReportStatus, FinalReportStatus.DONE)
+                .set(Task::getFinalReportPrev, task.getFinalReport())
+                .set(Task::getFinalReportPrevAgentId, task.getFinalReportAgentId())
+                .set(Task::getFinalReportPrevTime, task.getFinalReportTime()));
+        if (!casOk) {
+            throw new BizException(409, "任务整合报告正在生成中，暂不能恢复上一版: taskId=" + taskId);
+        }
+        taskTimelineService.recordEvent(taskId, null, "task_final_report_rolled_back",
+                AgentRole.PLANNER, task.getFinalReportPrevAgentId(),
+                Map.of("restoredGeneratedAt",
+                        task.getFinalReportPrevTime() != null ? String.valueOf(task.getFinalReportPrevTime()) : "",
+                        "restoredAgentId",
+                        task.getFinalReportPrevAgentId() != null ? task.getFinalReportPrevAgentId() : ""));
+        log.info("最终整合报告已回滚恢复上一版: taskId={}, restoredAgentId={}, restoredAt={}",
+                taskId, task.getFinalReportPrevAgentId(), task.getFinalReportPrevTime());
+        return taskService.getById(taskId);
+    }
+
+    /**
+     * 生成主链（generate/rework 共用；轮次为<b>显式入参</b>，无任何状态存储——全新一轮
+     * 恒传 {@code 1}，同轮返工由监听器传 {@code event.getAttempt() + 1}）；
+     * 驳回意见非 null 时注入 {@code {{REVIEW_FEEDBACK}}}。
+     */
+    private Task generateWithAttempt(Long taskId, String reviewFeedback, int attempt) {
         Task task = taskService.getById(taskId);
         if (task == null) {
             throw new BizException(404, "任务不存在: " + taskId);
@@ -119,11 +199,14 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
         }
 
         Agent planner = plannerPickerPort.pickForTask(taskId);
+        // 3C 大纲先行两段式：先归并出纲（覆盖追溯表/主线论点/章节顺序/矛盾清单），
+        // 失败/解析失败/开关关闭降级为 null，正文渲染走单次调用兜底（与开关引入前行为一致）
+        OutlinePlan outline = planOutlineQuietly(task, sections, planner);
         // 截断阶梯降档重试：命中模型 token 上限错误且还有更紧档位时收紧重试，其余错误直接失败
         for (int i = 0; i < SECTION_OUTPUT_LIMITS.length; i++) {
             int limit = SECTION_OUTPUT_LIMITS[i];
             boolean lastTier = i == SECTION_OUTPUT_LIMITS.length - 1;
-            String prompt = renderPrompt(task, sections, limit);
+            String prompt = renderPrompt(task, sections, outline, limit, reviewFeedback);
             taskTimelineService.recordEvent(taskId, null, "task_final_report_llm_call_start",
                     AgentRole.PLANNER, planner.getId(),
                     Map.of("agentId", planner.getId(),
@@ -136,6 +219,8 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
                         .userPrompt(prompt)
                         .context(Map.of("taskId", taskId, "scene", "task_final_report"))
                         .requiredCapabilities(Map.of())
+                        // G-016 契约层技能注入：与任务级 required_skills 同源（null 防御为 List.of()）
+                        .skills(task.getRequiredSkills() != null ? task.getRequiredSkills() : List.of())
                         .build();
                 AgentResult result = platformAgentExecutionService.executeSync(planner, agentTask);
                 if (result == null || !result.isSuccess()) {
@@ -146,13 +231,25 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
                 if (report == null || report.isBlank()) {
                     throw new BizException("Planner LLM 返回空报告");
                 }
-                OffsetDateTime now = OffsetDateTime.now();
+                OffsetDateTime now = OffsetDateTime.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+                // §12.2 审查异步化：审查开启时写回 REVIEWING（待审查链收敛 DONE，UI 显示审查中）；
+                // 关闭时直接 DONE（无审查链存在，避免状态无人收敛）
+                FinalReportStatus writtenStatus = dispatchProperties.isAutoFinalReportReviewEnabled()
+                        ? FinalReportStatus.REVIEWING : FinalReportStatus.DONE;
                 taskService.lambdaUpdate()
                         .eq(Task::getId, taskId)
+                        // §12.1 单槽列：覆盖前把被覆盖的那一版整体（正文/生成 Agent/时间）落入 prev 槽；
+                        // setSql 内列引用取本语句执行前的行值，不受 Java 侧快照陈旧影响；无旧版保持 null
+                        .setSql("final_report_prev = CASE WHEN final_report IS NOT NULL AND final_report <> '' "
+                                + "THEN final_report END, "
+                                + "final_report_prev_agent_id = CASE WHEN final_report IS NOT NULL "
+                                + "AND final_report <> '' THEN final_report_agent_id END, "
+                                + "final_report_prev_time = CASE WHEN final_report IS NOT NULL "
+                                + "AND final_report <> '' THEN final_report_time END")
                         .set(Task::getFinalReport, report)
                         .set(Task::getFinalReportAgentId, planner.getId())
                         .set(Task::getFinalReportTime, now)
-                        .set(Task::getFinalReportStatus, FinalReportStatus.DONE)
+                        .set(Task::getFinalReportStatus, writtenStatus)
                         .update();
                 taskTimelineService.recordEvent(taskId, null, "task_final_report_generated",
                         AgentRole.PLANNER, planner.getId(),
@@ -164,6 +261,10 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
                                 "reportSummary", summarize(report)));
                 log.info("任务整合报告生成完成: taskId={}, plannerAgentId={}, reportLength={}, sectionOutputLimit={}",
                         taskId, planner.getId(), report.length(), limit);
+                // 3A：报告生成成功发布事件（FinalReportReviewListener 承接质量审查闭环；
+                // 审查失败/驳回不影响报告落库事实）；reportTime 为陈旧守卫锚点（§12.2）
+                applicationEventPublisher.publishEvent(new TaskFinalReportGeneratedEvent(
+                        taskId, report.length(), sections.size(), attempt, now));
                 // 回填 task_iteration 表（失败不阻断报告生成）
                 backfillIterationsQuietly(taskId, sections, planner);
                 return taskService.getById(taskId);
@@ -251,8 +352,154 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
         return SubTaskDependencyOrder.orderByDependency(visible);
     }
 
+    /**
+     * 3C：大纲先行出纲调用（选中 Planner 归并出纲）。任何失败路径（开关关闭/调用失败/
+     * 输出非 JSON/解析后章节为空/运行期异常）一律返回 null，由调用方降级为单次调用——
+     * 大纲规划绝不阻断报告生成主链。
+     */
+    private OutlinePlan planOutlineQuietly(Task task, List<SubTask> sections, Agent planner) {
+        if (!dispatchProperties.isAutoFinalReportOutlineEnabled()) {
+            return null;
+        }
+        try {
+            String outlinePrompt = renderOutlinePrompt(task, sections);
+            AgentTask agentTask = AgentTask.builder()
+                    .systemPrompt("你是任务最终整合报告的归并出纲师。严格只输出一个 JSON 对象（不带 Markdown 围栏、不带任何其他文字）。")
+                    .userPrompt(outlinePrompt)
+                    .context(Map.of("taskId", task.getId(), "scene", "task_final_report_outline"))
+                    // G-016 契约层技能注入：与正文生成同源
+                    .skills(task.getRequiredSkills() != null ? task.getRequiredSkills() : List.of())
+                    .build();
+            AgentResult result = platformAgentExecutionService.executeSync(planner, agentTask);
+            OutlinePlan plan = (result != null && result.isSuccess()
+                    && result.getOutput() != null && !result.getOutput().isBlank())
+                    ? parseOutline(result.getOutput()) : null;
+            if (plan == null) {
+                taskTimelineService.recordEvent(task.getId(), null, "task_final_report_outline_failed",
+                        AgentRole.PLANNER, planner.getId(),
+                        Map.of("error", result != null && !result.isSuccess()
+                                ? result.getErrorMessage() : "parse_failed_or_empty"));
+                log.warn("报告大纲规划失败，降级为单次调用: taskId={}, error={}", task.getId(),
+                        result != null && !result.isSuccess() && result.getErrorMessage() != null
+                                ? result.getErrorMessage() : "parse_failed_or_empty");
+                return null;
+            }
+            taskTimelineService.recordEvent(task.getId(), null, "task_final_report_outline_ready",
+                    AgentRole.PLANNER, planner.getId(),
+                    Map.of("agentId", planner.getId(), "agentName", planner.getName(),
+                            "chapterCount", plan.sections().size(),
+                            "mainThesisCount", plan.mainTheses() != null ? plan.mainTheses().size() : 0,
+                            "conflictCount", plan.conflicts() != null ? plan.conflicts().size() : 0));
+            warnIfOutlineOrderUnchanged(task.getId(), planner.getId(), plan);
+            log.info("报告大纲规划完成: taskId={}, chapterCount={}", task.getId(), plan.sections().size());
+            return plan;
+        } catch (Exception e) {
+            log.warn("报告大纲规划异常，降级为单次调用: taskId={}, err={}", task.getId(), e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 3C 排序自检：大纲章节的引用顺序若与子任务编号顺序完全一致（#1、#2、…），
+     * 说明未按「读者理解顺序」重排（出纲模板规则3 的硬要求）——落告警事件
+     * {@code task_final_report_outline_order_suspect}，不阻断生成（重排质量由 3A 审查兜底）。
+     */
+    private void warnIfOutlineOrderUnchanged(Long taskId, Long plannerAgentId, OutlinePlan plan) {
+        List<String> flat = new ArrayList<>();
+        for (OutlinePlan.OutlineSection section : plan.sections()) {
+            if (section.subTaskRefs() != null) {
+                flat.addAll(section.subTaskRefs());
+            }
+        }
+        if (flat.size() < 2) {
+            return;
+        }
+        for (int i = 0; i < flat.size(); i++) {
+            String ref = flat.get(i) != null ? flat.get(i).trim() : "";
+            if (!("#" + (i + 1)).equals(ref)) {
+                return;
+            }
+        }
+        taskTimelineService.recordEvent(taskId, null, "task_final_report_outline_order_suspect",
+                AgentRole.PLANNER, plannerAgentId,
+                Map.of("chapterCount", plan.sections().size(),
+                        "reason", "order_equals_subtask_sequence"));
+        log.warn("报告大纲章节顺序与子任务顺序完全一致，疑似未按读者理解顺序重排: taskId={}, chapterCount={}",
+                taskId, plan.sections().size());
+    }
+
+    /** 渲染出纲 Prompt：任务信息 + 各子任务标题/交付物/验收 + 结构化执行记录摘要（不以正文为输入，控制成本）。 */
+    private String renderOutlinePrompt(Task task, List<SubTask> sections) {
+        ClassPathResource resource = new ClassPathResource(OUTLINE_TEMPLATE_PATH);
+        if (!resource.exists()) {
+            throw new BizException("未找到报告大纲 Prompt 模板: " + OUTLINE_TEMPLATE_PATH);
+        }
+        String template;
+        try (InputStream in = resource.getInputStream()) {
+            template = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw new BizException("读取报告大纲 Prompt 模板失败: " + e.getMessage());
+        }
+        StringBuilder sb = new StringBuilder();
+        int i = 1;
+        for (SubTask st : sections) {
+            sb.append("### #").append(i++).append(' ')
+                    .append(st.getTitle() != null ? st.getTitle() : "（无标题）").append('\n');
+            if (st.getDeliverable() != null && !st.getDeliverable().isBlank()) {
+                sb.append("- 交付物要求：").append(st.getDeliverable()).append('\n');
+            }
+            if (st.getAcceptance() != null && !st.getAcceptance().isBlank()) {
+                sb.append("- 验收标准：").append(st.getAcceptance()).append('\n');
+            }
+            ExecutionRecord record = taskRunningSpecService.findRecord(task.getId(), st.getId());
+            if (record != null) {
+                if (record.summary() != null && !record.summary().isBlank()) {
+                    sb.append("- 执行摘要：").append(record.summary()).append('\n');
+                }
+                if (!record.deliverables().isEmpty()) {
+                    sb.append("- 交付物清单：").append(String.join("、", record.deliverables())).append('\n');
+                }
+                if (!record.keyDecisions().isEmpty()) {
+                    sb.append("- 关键决策：").append(String.join("；", record.keyDecisions())).append('\n');
+                }
+            }
+            sb.append('\n');
+        }
+        return template
+                .replace("{{TASK_TITLE}}", task.getTitle() != null ? task.getTitle() : "")
+                .replace("{{TASK_DESCRIPTION}}",
+                        task.getDescription() != null && !task.getDescription().isBlank()
+                                ? task.getDescription() : "（无补充描述）")
+                .replace("{{SUB_TASK_OUTLINE_INPUTS}}", sb.toString().trim());
+    }
+
+    /** 解析大纲 JSON；剥离可能的 Markdown 围栏，解析失败或章节为空返回 null（调用方降级单次调用）。 */
+    private static OutlinePlan parseOutline(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String json = raw.trim();
+        if (json.startsWith("```")) {
+            int firstLineEnd = json.indexOf('\n');
+            int lastFence = json.lastIndexOf("```");
+            if (firstLineEnd > 0 && lastFence > firstLineEnd) {
+                json = json.substring(firstLineEnd, lastFence).trim();
+            }
+        }
+        try {
+            OutlinePlan plan = OBJECT_MAPPER.readValue(json, OutlinePlan.class);
+            if (plan.sections() == null || plan.sections().isEmpty()) {
+                return null;
+            }
+            return plan;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     /** 加载 classpath 模板并替换占位符（与 PlannerAnalysisService.renderPrompt 同款先例）。 */
-    private String renderPrompt(Task task, List<SubTask> sections, int sectionOutputLimit) {
+    private String renderPrompt(Task task, List<SubTask> sections, OutlinePlan outline, int sectionOutputLimit,
+                                String reviewFeedback) {
         ClassPathResource resource = new ClassPathResource(PROMPT_TEMPLATE_PATH);
         if (!resource.exists()) {
             throw new BizException("未找到整合报告 Prompt 模板: " + PROMPT_TEMPLATE_PATH);
@@ -263,39 +510,271 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
         } catch (Exception e) {
             throw new BizException("读取整合报告 Prompt 模板失败: " + e.getMessage());
         }
-        String sectionsText = buildSections(sections, sectionOutputLimit);
+        // 3C：大纲非空时按章节归属分片（每章预算独立），否则按拓扑序单次拼接（降级兜底）
+        String sectionsText = (outline == null || outline.sections().isEmpty())
+                ? buildSections(task.getId(), sections, sectionOutputLimit)
+                : buildSectionsByOutline(task.getId(), sections, outline, sectionOutputLimit);
+        // 大纲注入段：规划产物渲染为覆盖追溯表/主线论点/矛盾清单（空时模板行留空）
+        String outlineSection = outline == null ? "" : renderOutlineSection(outline);
+        // 全局上下文段（基线/进度摘要）：非空才拼（模板占位符独占一行，空时整行消失）
+        String contextSection = taskRunningSpecService.buildExecutorPromptSection(task.getId());
+        String taskContext = contextSection == null ? "" : contextSection;
         return template
                 .replace("{{TASK_TITLE}}", task.getTitle() != null ? task.getTitle() : "")
                 .replace("{{TASK_DESCRIPTION}}",
                         task.getDescription() != null && !task.getDescription().isBlank()
                                 ? task.getDescription() : "（无补充描述）")
+                .replace("{{TASK_CONTEXT_SECTION}}", taskContext)
+                .replace("{{OUTLINE_SECTION}}", outlineSection)
+                .replace("{{REVIEW_FEEDBACK}}", reviewFeedback != null ? reviewFeedback : "")
                 .replace("{{SUB_TASK_SECTIONS}}", sectionsText);
     }
 
-    /** 拼接各子任务四要素 + 产出正文（逐段截断保护上下文窗口，截断上限由降档阶梯传入）。 */
-    private static String buildSections(List<SubTask> sections, int sectionOutputLimit) {
+    /** 大纲规划产物渲染为正文模板注入段：主线论点 + 覆盖追溯表 + 矛盾清单（章节组织最高权威约束）。 */
+    private static String renderOutlineSection(OutlinePlan outline) {
+        StringBuilder sb = new StringBuilder();
+        if (outline.mainTheses() != null && !outline.mainTheses().isEmpty()) {
+            sb.append("主线论点（执行摘要必须以此为准）：\n");
+            for (String thesis : outline.mainTheses()) {
+                sb.append("- ").append(thesis).append('\n');
+            }
+        }
+        sb.append("覆盖追溯表（章节与主题已归并规划，必须严格遵守章节顺序与归属）：\n\n");
+        sb.append("| 章节编号 | 章节主题 | 覆盖子任务 |\n|---------|---------|-----------|\n");
+        int idx = 1;
+        for (OutlinePlan.OutlineSection os : outline.sections()) {
+            List<String> refs = os.subTaskRefs() != null ? os.subTaskRefs() : List.of();
+            sb.append("| §").append(idx++).append(" | ")
+                    .append(os.title()).append(" | ")
+                    .append(String.join("、", refs)).append(" |\n");
+        }
+        if (outline.conflicts() != null && !outline.conflicts().isEmpty()) {
+            sb.append("\n规划阶段矛盾清单（第4步差异与冲突澄清必须逐条覆盖）：\n");
+            for (String conflict : outline.conflicts()) {
+                sb.append("- ").append(conflict).append('\n');
+            }
+        }
+        return sb.toString().trim();
+    }
+
+    /**
+     * 拼接各子任务四要素 + 产出正文。读取口径与子任务执行链一致：
+     * ① 结构化执行记录非 null 时注入 SUMMARY/DELIVERABLES（摘要口径，不受降档截断影响）；
+     * ② 正文物化附件优先（可直读文本附件拼接入正文），displayText 兜底；
+     * ③ Markdown 块级截断（段落/围栏/表格行边界），超限按 V1 策略标注：有记录映射
+     * {@code [SUMMARIZED]}（摘要在上方完整提供），无记录标 {@code [TRUNCATED] 完整内容见附件}。
+     * 截断上限由降档阶梯传入——降档收紧的是附件正文，结构化摘要保持完整。
+     */
+    private String buildSections(Long taskId, List<SubTask> sections, int sectionOutputLimit) {
         StringBuilder sb = new StringBuilder();
         int i = 1;
         for (SubTask st : sections) {
-            sb.append("### 子任务 ").append(i++).append('：')
-                    .append(st.getTitle() != null ? st.getTitle() : "（无标题）").append('\n');
-            if (st.getDeliverable() != null && !st.getDeliverable().isBlank()) {
-                sb.append("- 交付物要求：").append(st.getDeliverable()).append('\n');
-            }
-            if (st.getAcceptance() != null && !st.getAcceptance().isBlank()) {
-                sb.append("- 验收标准：").append(st.getAcceptance()).append('\n');
-            }
-            String output = extractExecutionOutput(st);
-            sb.append("\n产出正文：\n\n");
-            if (output.length() > sectionOutputLimit) {
-                sb.append(output, 0, sectionOutputLimit)
-                        .append("\n\n（产出超长，以上为截断内容，整合时以已提供部分为准）\n");
-            } else {
-                sb.append(output).append('\n');
-            }
-            sb.append('\n');
+            appendSectionDetail(sb, taskId, st, i++, sectionOutputLimit);
         }
         return sb.toString();
+    }
+
+    /**
+     * 单个子任务产出块：编号/标题/交付物/验收/结构化执行记录/附件优先正文 + 块级截断标注。
+     * 读取口径与子任务执行链一致：① 结构化执行记录非 null 时注入 SUMMARY/DELIVERABLES
+     * （摘要口径，不受降档截断影响）；② 正文物化附件优先（可直读文本附件拼接入正文），
+     * displayText 兜底；③ Markdown 块级截断（段落/围栏/表格行边界），超限按 V1 策略标注：
+     * 有记录映射 {@code [SUMMARIZED]}（摘要在上方完整提供），无记录标 {@code [TRUNCATED] 完整内容见附件}。
+     */
+    private void appendSectionDetail(StringBuilder sb, Long taskId, SubTask st, int seq, int limit) {
+        sb.append("### 子任务 ").append(seq).append('：')
+                .append(st.getTitle() != null ? st.getTitle() : "（无标题）").append('\n');
+        if (st.getDeliverable() != null && !st.getDeliverable().isBlank()) {
+            sb.append("- 交付物要求：").append(st.getDeliverable()).append('\n');
+        }
+        if (st.getAcceptance() != null && !st.getAcceptance().isBlank()) {
+            sb.append("- 验收标准：").append(st.getAcceptance()).append('\n');
+        }
+        // 结构化执行记录（与子任务执行链同口径）：摘要/交付物/关键决策契约注入
+        ExecutionRecord record = taskRunningSpecService.findRecord(taskId, st.getId());
+        boolean hasRecord = record != null && record.summary() != null && !record.summary().isBlank();
+        if (hasRecord) {
+            sb.append("- 执行摘要：").append(record.summary()).append('\n');
+            if (!record.deliverables().isEmpty()) {
+                sb.append("- 交付物清单：").append(String.join("、", record.deliverables())).append('\n');
+            }
+            if (!record.keyDecisions().isEmpty()) {
+                sb.append("- 关键决策：").append(String.join("；", record.keyDecisions())).append('\n');
+            }
+        }
+        sb.append("\n产出正文：\n\n");
+        // 附件优先：可直读文本附件正文；无可用附件时回退 displayText
+        String body = buildAttachmentText(st.getId());
+        if (body.isBlank()) {
+            body = extractExecutionOutput(st);
+        }
+        if (body.length() > limit) {
+            sb.append(truncateAtBlockBoundary(body, limit)).append('\n');
+            sb.append(hasRecord
+                    ? "\n[SUMMARIZED] 产出正文超长已块级截断，结构化执行摘要见上方「执行摘要」行，完整内容见任务附件。\n"
+                    : "\n[TRUNCATED] 完整内容见附件。\n");
+        } else {
+            sb.append(body).append('\n');
+        }
+        sb.append('\n');
+    }
+
+    /**
+     * 3C：按大纲章节分片渲染子任务产出（每章预算独立——总预算均摊到章，超长章块级截断
+     * 不影响其余章完整注入）。章节顺序 = 大纲顺序（读者理解顺序）；大纲遗漏的子任务
+     * 兜底追加「其余产出」组，保证不丢信息（与覆盖规则闭合）。
+     */
+    private String buildSectionsByOutline(Long taskId, List<SubTask> sections, OutlinePlan outline,
+                                          int sectionOutputLimit) {
+        Map<String, SubTask> byRef = new LinkedHashMap<>();
+        for (int i = 0; i < sections.size(); i++) {
+            byRef.put("#" + (i + 1), sections.get(i));
+        }
+        int chapterCount = Math.max(1, outline.sections().size());
+        // 每章预算独立：总预算均摊（下限 100 字符保底，防止极端分段导致整章空白）
+        int perSectionLimit = Math.max(100, sectionOutputLimit / chapterCount);
+        StringBuilder sb = new StringBuilder();
+        Set<String> used = new HashSet<>();
+        int chapter = 1;
+        for (OutlinePlan.OutlineSection os : outline.sections()) {
+            sb.append("### 章节 ").append(chapter++).append('：').append(os.title())
+                    .append("（大纲归并主题）\n");
+            List<String> refs = os.subTaskRefs() != null ? os.subTaskRefs() : List.of();
+            for (String ref : refs) {
+                SubTask st = byRef.get(ref);
+                if (st == null) {
+                    continue;
+                }
+                used.add(ref);
+                appendSectionDetail(sb, taskId, st, refSeq(ref), perSectionLimit);
+            }
+        }
+        // 未归属子任务兜底（大纲遗漏时仍注入，防丢章）
+        for (int i = 0; i < sections.size(); i++) {
+            String ref = "#" + (i + 1);
+            if (!used.contains(ref)) {
+                sb.append("### 章节 ").append(chapter++).append("：其余产出（大纲未归属，按拓扑序保留）\n");
+                appendSectionDetail(sb, taskId, sections.get(i), i + 1, perSectionLimit);
+            }
+        }
+        return sb.toString();
+    }
+
+    /** 大纲引用编号 {@code #N} → 序号；非法引用按 0 处理（仅用于展示编号）。 */
+    private static int refSeq(String ref) {
+        try {
+            return Integer.parseInt(ref.substring(1));
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    /**
+     * 物化附件正文拼接（与核验链同口径）：仅平台可直读且文本族附件注入正文；
+     * 限额常量单源 {@link AttachmentContentPolicy}（每附件 / 总计上限超限截断并以结构化标注行收尾）；
+     * 无可用附件返回空串（调用方以 displayText 兜底）。
+     */
+    private String buildAttachmentText(Long subTaskId) {
+        List<Attachment> attachments = attachmentService.listActive(subTaskId);
+        if (attachments == null || attachments.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        int totalChars = 0;
+        for (Attachment att : attachments) {
+            if (!attachmentService.isContentLoadable(att)
+                    || !AttachmentContentPolicy.isTextual(att.getMimeType(), att.getFileName())) {
+                continue;
+            }
+            String content = readAttachmentUtf8(att);
+            if (content == null || content.isEmpty()) {
+                continue;
+            }
+            int originalChars = content.length();
+            boolean perFileTruncated = false;
+            if (content.length() > AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT) {
+                content = content.substring(0, AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT);
+                perFileTruncated = true;
+            }
+            if (totalChars + content.length() > AttachmentContentPolicy.ATTACHMENT_CONTENT_TOTAL_LIMIT) {
+                int remaining = AttachmentContentPolicy.ATTACHMENT_CONTENT_TOTAL_LIMIT - totalChars;
+                if (remaining > 0) {
+                    sb.append("#### 附件：").append(att.getFileName()).append('\n')
+                            .append(content, 0, remaining).append('\n');
+                }
+                sb.append("[TRUNCATED] 附件正文总量超限，完整内容见附件文件\n");
+                break;
+            }
+            totalChars += content.length();
+            sb.append("#### 附件：").append(att.getFileName()).append('\n').append(content).append('\n');
+            if (perFileTruncated) {
+                sb.append("[TRUNCATED] file=").append(att.getFileName())
+                        .append(" shown=").append(AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT)
+                        .append(" total=").append(originalChars)
+                        .append(" reason=per_file_limit\n");
+            }
+        }
+        return sb.toString().trim();
+    }
+
+    /** 读取可直读附件 UTF-8 正文；不可读/为空返回 null（跳过该附件，不阻断整体注入）。 */
+    private String readAttachmentUtf8(Attachment att) {
+        try {
+            byte[] bytes = attachmentService.loadContent(att.getId());
+            if (bytes == null || bytes.length == 0) {
+                return null;
+            }
+            return new String(bytes, StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            log.debug("附件内容读取失败，报告链跳过该附件: attachmentId={}, err={}", att.getId(), e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Markdown 块级截断：
+     * ① 段落（空行）边界首选；② limit 落在代码围栏内时回退到该块打开围栏前、
+     * 落在闭合围栏后时断在闭合处——绝不拦腰切断代码行；③ 表格行边界回退（行首断，行完整）；
+     * 找不到任何边界时按字符裸切（保底不抛）。
+     */
+    public static String truncateAtBlockBoundary(String text, int limit) {
+        if (text == null || text.length() <= limit) {
+            return text == null ? "" : text;
+        }
+        String head = text.substring(0, limit);
+        int floor = Math.max(0, limit / 2);
+        // ① 段落边界（首选：信息损失最小）
+        int paragraph = head.lastIndexOf("\n\n");
+        if (paragraph >= floor) {
+            return head.substring(0, paragraph);
+        }
+        // ② 代码围栏：围栏计数为奇数（limit 在代码块内）回退到打开围栏前；
+        // 偶数（在块外）断到最后一个闭合围栏末尾，保证输出块始终闭合
+        int fenceCount = countFenceTokens(head);
+        if (fenceCount > 0) {
+            int lastFence = head.lastIndexOf("```");
+            if (fenceCount % 2 == 1) {
+                return head.substring(0, lastFence);
+            }
+            return head.substring(0, lastFence + 3);
+        }
+        // ③ 表格行边界：断在上一个行首（该行完整，不拦腰）
+        int tableRow = head.lastIndexOf("\n|");
+        if (tableRow >= floor) {
+            return head.substring(0, tableRow);
+        }
+        return head;
+    }
+
+    /** 统计文本中 ``` 围栏标记出现次数。 */
+    private static int countFenceTokens(String text) {
+        int count = 0;
+        int idx = text.indexOf("```");
+        while (idx >= 0) {
+            count++;
+            idx = text.indexOf("```", idx + 3);
+        }
+        return count;
     }
 
     /** 读取 context.lastExecution.output（统一走 SubTaskOutputExtractor，与 TaskDeliverableService 同一事实源）。 */
@@ -342,6 +821,17 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
             taskTimelineService.recordEvent(taskId, null, "task_iteration_backfill_failed",
                     AgentRole.PLANNER, planner != null ? planner.getId() : null,
                     Map.of("error", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
+        }
+    }
+
+    /**
+     * 大纲规划产物（出纲 LLM 的 JSON 输出解析结果）：
+     * 主线论点 / 章节顺序（含子任务归属引用 #N）/ 矛盾清单。
+     */
+    record OutlinePlan(List<String> mainTheses, List<OutlineSection> sections, List<String> conflicts) {
+
+        /** 单个规划章节：主题名 + 覆盖的子任务引用编号（#N，允许多对一/一对多）。 */
+        record OutlineSection(String title, List<String> subTaskRefs) {
         }
     }
 }

@@ -218,8 +218,13 @@ public class McpMcpServer {
             【调用频率】每份产物调一次。
             【Gotchas】
             - 文件内容场景：先走 POST /api/artifacts/upload（multipart/form-data + Authorization: Bearer <API_KEY>，参数 file + subTaskId + 可选 mimeType）上传文件内容，平台转存 MinIO 并注册附件一步到位，返回 {attachmentId, storageUrl}；服务器版 MinIO 仅绑定内网（公网不可达），不要直连 MinIO PUT 文件
-            - 本工具仅适用于「对象已在别处可访问」的登记场景：把 storageUrl 指向已可访问对象，只注册 DB 元数据记录（attachment 表），不传输文件内容
-            - 平台可直读 minio:// 附件（下载、执行证据核验均可直读）；storageUrl 建议按 {自身注册名}/{yyyy}/{MM}/{taskId}/{subTaskId}/{文件名} 组织
+            - 本工具仅适用于「对象已在平台桶内」的登记场景：把 storageUrl 指向已在平台桶中的对象，只注册 DB 元数据记录（attachment 表），不传输文件内容
+            - storageUrl 格式固定为 minio://helloai-artifacts/{ownerName}/{yyyy}/{MM}/{taskId}/{subTaskId}/{文件名}：
+              * 协议头与 bucket 段**必须是 minio://helloai-artifacts**（平台桶），**不是你自己的注册名**
+              * {ownerName} 是路径的第一段（写入方执行器注册名），不是 bucket
+              * 错误示例：minio://trae-executor/2026/09/...（把注册名当 bucket）→ 平台校验 bucket 段后直接返回 400
+            - 登记前平台会校验：对象必须真实存在于平台桶，不存在直接返回 400（请先把内容上传到平台桶，不要只登记元数据）
+            - 若产物就是上游子任务已有的产出（如整合类子任务汇总上游成果），**直接复用上游附件的 storageUrl 登记即可**，平台按同一对象引用，无需重复上传一份副本
             - fileName 必填且非空；storageUrl 必填；mimeType / fileSize 选填
             - 只有自身分配的子任务（assigned_agent=agentId）才能成功上传
             - 参数约束（如 fileSize max）由 agent_mcp_server.param_constraints 强制
@@ -232,7 +237,7 @@ public class McpMcpServer {
             @ToolParam(description = "文件名（含扩展名）", required = true) String fileName,
             @ToolParam(description = "MIME 类型（如 application/json、image/png）", required = false) String mimeType,
             @ToolParam(description = "文件大小（字节），选填", required = false) Long fileSize,
-            @ToolParam(description = "已有可访问对象的存储地址（仅登记场景；文件内容场景请走 POST /api/artifacts/upload），必填", required = true) String storageUrl,
+            @ToolParam(description = "已在平台桶中的对象地址，格式 minio://helloai-artifacts/{ownerName}/{yyyy}/{MM}/{taskId}/{subTaskId}/{文件名}；文件内容场景请改用 POST /api/artifacts/upload", required = true) String storageUrl,
             @ToolParam(description = "MCP sessionId（推荐参数名 sessionId；旧客户端也可传 _sessionId）", required = false) String sessionId,
             @ToolParam(description = "兼容参数：MCP sessionId（旧字段名）", required = false) String _sessionId) {
         // 鉴权：强制覆盖

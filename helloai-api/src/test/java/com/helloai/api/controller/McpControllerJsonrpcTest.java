@@ -156,7 +156,8 @@ class McpControllerJsonrpcTest {
         lease.setWorkMode("AUTO");
         lease.setMaxConcurrent(2);
         lease.setExpiresAt("2026-08-11T18:00:00");
-        when(mcpToolService.checkIn(anyLong(), anyString(), any(), any())).thenReturn(lease);
+        // G-015 B4.2：控制器改为透传 skills 的 5 参重载（本次未上报 skills → null）
+        when(mcpToolService.checkIn(anyLong(), anyString(), any(), any(), any())).thenReturn(lease);
 
         MvcResult result = postJsonrpc(Map.of(
                 "jsonrpc", "2.0",
@@ -368,7 +369,8 @@ class McpControllerJsonrpcTest {
         lease.setWorkMode("AUTO");
         lease.setMaxConcurrent(2);
         lease.setExpiresAt("2026-08-11T20:00:00");
-        when(mcpToolService.checkIn(AGENT_ID, "AUTO", null, 45)).thenReturn(lease);
+        // G-015 B4.2：直通端点也走 5 参重载（body 未带 skills → null）
+        when(mcpToolService.checkIn(AGENT_ID, "AUTO", null, 45, null)).thenReturn(lease);
 
         MvcResult result = mockMvc.perform(post("/api/mcp/tools/checkIn")
                         .requestAttr("_authId", AGENT_ID)
@@ -379,6 +381,30 @@ class McpControllerJsonrpcTest {
         JsonNode root = MAPPER.readTree(result.getResponse().getContentAsString());
         assertEquals(88L, root.get("data").get("leaseId").asLong());
         assertEquals("AUTO", root.get("data").get("workMode").asText());
+    }
+
+    @Test
+    @DisplayName("G-015 B4.2：POST /api/mcp/tools/checkIn 透传 skills 数组到 5 参重载")
+    void directCheckIn_forwardsSkillsArray() throws Exception {
+        CheckInResult lease = new CheckInResult();
+        lease.setOk(true);
+        lease.setAgentId(AGENT_ID);
+        lease.setLeaseId(99L);
+        // 只有控制器把 skills 数组解析成 List<String>，该 stub 才会命中；
+        // 若未透传（回归），mock 返回 null → 响应 500，本用例转红。
+        when(mcpToolService.checkIn(AGENT_ID, "AUTO", null, 45,
+                java.util.List.of("doc-writing", "research"))).thenReturn(lease);
+
+        MvcResult result = mockMvc.perform(post("/api/mcp/tools/checkIn")
+                        .requestAttr("_authId", AGENT_ID)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(MAPPER.writeValueAsString(Map.of(
+                                "workMode", "AUTO", "ttlMinutes", 45,
+                                "skills", java.util.List.of("doc-writing", "research")))))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode root = MAPPER.readTree(result.getResponse().getContentAsString());
+        assertEquals(99L, root.get("data").get("leaseId").asLong());
     }
 
     @Test

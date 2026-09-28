@@ -2,8 +2,10 @@ package com.helloai.core.agent.domain;
 
 import lombok.Builder;
 import lombok.Value;
+import lombok.With;
 
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -13,6 +15,7 @@ import java.util.Map;
  */
 @Value
 @Builder
+@With
 public class AgentTask {
 
     /** 关联子任务 ID；无具体子任务时可为空。 */
@@ -31,6 +34,15 @@ public class AgentTask {
     /** 执行前要求的能力。 */
     @Builder.Default
     Map<String, Object> requiredCapabilities = Collections.emptyMap();
+
+    /**
+     * 平台技能规范标签（eng-*）声明。非空时由契约层（{@code PlatformAgentExecutionServiceImpl}）
+     * 统一 resolve 注入 {@code systemPrompt}；拆解/审查/报告三条同步链声明，子任务执行链
+     * 不填（走 {@code ExecutionCommand.requiredSkills} 自拼，保护 SKILL_RESOLVED / TOOL_RESOLVED
+     * 与 requiredTools 联动）。
+     */
+    @Builder.Default
+    List<String> skills = Collections.emptyList();
 
     /**
      * 采样温度（可选）。null = 使用模型默认值（现有全部链路行为不变）；

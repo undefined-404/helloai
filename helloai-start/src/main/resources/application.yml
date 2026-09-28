@@ -307,6 +307,16 @@ helloai:
     minio-bucket: ${MINIO_BUCKET:helloai-artifacts}
     max-files: 10
     max-file-size: 5242880
+    # --- 存储对账巡检（DB attachment ↔ 桶内真实对象，ArtifactStorageReconcileTask 6h 一轮）---
+    # 只读巡检，默认开启：比对悬空/孤儿/字节不符，只告警不修数据
+    reconcile-enabled: ${STORAGE_RECONCILE_ENABLED:true}
+    # 孤儿清理（会删除对象），默认关闭：首次引入删除能力，须先看若干轮 dry-run 报告再开
+    orphan-cleanup-enabled: ${STORAGE_ORPHAN_CLEANUP_ENABLED:false}
+    # 孤儿判定时间窗（小时）：对象最后修改时间早于此窗口才可清理，
+    # 规避"对象已上传、attachment 尚未写入"的正常中间态
+    orphan-min-age-hours: ${STORAGE_ORPHAN_MIN_AGE_HOURS:24}
+    # 单轮最多删除的孤儿对象数，防止误判导致批量损伤
+    orphan-max-deletes-per-round: ${STORAGE_ORPHAN_MAX_DELETES:200}
   alert:
     # 钉钉机器人 Webhook（v2.4 §4.8）。留空则不发送
     dingtalk-webhook-url: ""

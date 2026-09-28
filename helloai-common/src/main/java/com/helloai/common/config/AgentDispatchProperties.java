@@ -162,6 +162,33 @@ public class AgentDispatchProperties {
      */
     private boolean autoFinalReportEnabled = true;
 
+    /**
+     * 最终整合报告大纲先行两段式开关（规划 → 成文）。
+     *
+     * <p>开启后生成主链先做一次归并出纲调用（覆盖追溯表 / 主线论点 / 章节顺序 / 矛盾清单），
+     * 再按大纲章节分片渲染正文；关闭或大纲调用失败/解析失败时降级为单次调用
+     * （与开关引入前行为一致）。默认 true。</p>
+     */
+    private boolean autoFinalReportOutlineEnabled = true;
+
+    /**
+     * 最终整合报告自动质量审查开关（3A 闭环）。
+     *
+     * <p>开启后报告生成成功即触发一次 LLM 质量审查（自审自过硬守卫：审查人不得是
+     * 报告写作者，否则跳过审查并落 review_skipped 标记）；驳回且未达返工上限时
+     * 自动 rework 重写。默认 true。</p>
+     */
+    private boolean autoFinalReportReviewEnabled = true;
+
+    /**
+     * 最终整合报告驳回返工轮次上限（3A 闭环）。
+     *
+     * <p>审查驳回触发 rework 的最大轮数（首次生成不算轮数）：达到上限后不再自动重写，
+     * 当前报告保留并落 max_review_reached 标记，等待人工/手动重生成。默认 1；
+     * 设为 0 表示驳回后不返工（报告保留现状）。</p>
+     */
+    private int autoFinalReportMaxReview = 1;
+
     // 注：原 heartbeatFreshMinutes 字段已迁移至
     //     AgentHealthProperties.offlineMinutes，作为 Selector / Reconcile / SQL 回退候选
     //     共用的单一心跳阈值来源。详见 com.helloai.common.config.AgentHealthProperties。

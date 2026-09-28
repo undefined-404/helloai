@@ -45,6 +45,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -626,6 +627,33 @@ class McpToolServiceTest {
 
         // E1 起续租窗口由 adaptiveRenew 动态计算（在跑/空闲 + 表现分），不再沿用原 TTL
         verify(agentDutyLeaseService).adaptiveRenew(AGENT_ID);
+    }
+
+    @Test
+    @DisplayName("G-015 B1：持 ACTIVE 租约时只读工具调用顺带刷 last_seen_time（seen）")
+    void shouldRefreshLastSeenWhenLeaseActive() {
+        AgentDutyLease active = lease(
+                33L, AgentDutyLeaseStatus.ACTIVE, OffsetDateTime.now().plusMinutes(30), "uuid-active");
+        when(agentDutyLeaseService.adaptiveRenew(AGENT_ID)).thenReturn(active);
+        when(agentInboxService.getUnread(AGENT_ID, 10)).thenReturn(List.of());
+
+        mcpToolService.pullTasks(AGENT_ID, "EXECUTOR", 10);
+
+        // 只读工具此前只续租约不刷 last_seen_time → 租约 ACTIVE 与 dbOnlineStatus OFFLINE 并存
+        verify(heartbeatService, times(1)).seen(AGENT_ID);
+    }
+
+    @Test
+    @DisplayName("G-015 B1：heartbeat 已显式 seen()，续租路径不重复刷 last_seen_time")
+    void shouldNotDoubleRefreshSeenOnHeartbeat() {
+        AgentDutyLease active = lease(
+                33L, AgentDutyLeaseStatus.ACTIVE, OffsetDateTime.now().plusMinutes(30), "uuid-active");
+        when(agentDutyLeaseService.adaptiveRenew(AGENT_ID)).thenReturn(active);
+        when(agentDutyLeaseService.getActiveLease(AGENT_ID)).thenReturn(active);
+
+        mcpToolService.heartbeat(AGENT_ID);
+
+        verify(heartbeatService, times(1)).seen(AGENT_ID);
     }
 
     @Test

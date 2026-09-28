@@ -105,4 +105,41 @@ class CompositeArtifactStorageTest {
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("oss://b/k");
     }
+
+    @Test
+    @DisplayName("exists/validateAddress 按协议前缀委派到对应实现")
+    void shouldDispatchExistenceAndValidationByPrefix() {
+        CompositeArtifactStorage composite = composite("minio");
+        when(minio.supports("minio://b/k")).thenReturn(true);
+        when(minio.exists("minio://b/k")).thenReturn(false);
+
+        assertThat(composite.exists("minio://b/k")).isFalse();
+        composite.validateAddress("minio://b/k");
+        verify(minio).exists("minio://b/k");
+        verify(minio).validateAddress("minio://b/k");
+    }
+
+    @Test
+    @DisplayName("exists: 无实现支持的地址不判定、不阻断（外部 https 登记场景）")
+    void exists_shouldFailOpenForUnsupportedUrl() {
+        CompositeArtifactStorage composite = composite("minio");
+
+        assertThat(composite.exists("https://example.com/a.md")).isTrue();
+        composite.validateAddress("https://example.com/a.md"); // 不抛
+    }
+
+    @Test
+    @DisplayName("listObjects/removeObject 面向主存储（对账清的是平台自己的桶）")
+    void shouldDelegateListingAndRemovalToPrimary() {
+        CompositeArtifactStorage composite = composite("minio");
+        ArtifactStorage.StoredObject object = new ArtifactStorage.StoredObject("b", "k", 1L, null);
+        when(minio.listObjects("b", null)).thenReturn(java.util.List.of(object));
+
+        assertThat(composite.listObjects("b", null)).containsExactly(object);
+        composite.removeObject("b", "k");
+
+        verify(minio).listObjects("b", null);
+        verify(minio).removeObject("b", "k");
+        verify(local, never()).removeObject(any(), any());
+    }
 }

@@ -48,6 +48,18 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
     private final AgentDispatchProperties agentDispatchProperties;
     private final TaskService taskService;
 
+    /**
+     * 重派退避序列（秒）：按已消耗的 {@code attempt_total} 逐级放大（G-015 B2.2）。
+     *
+     * <p>背景（v3 实测）：心跳抖动会在 3 分钟内打满 5 次预算直入死信，导致下游 DAG 级联卡死。
+     * 加入退避后，第 1 次重派后等 60s、第 2 次后 180s、第 3 次后 600s、第 4 次及以后 1800s，
+     * 让瞬时抖动自然恢复而不是立刻耗尽预算。</p>
+     *
+     * <p>退避时刻取自 {@code sub_task.update_time}（{@code incrementAttemptTotal} 每次累加都写入），
+     * 因此**不新增列、不新增 context 键**。</p>
+     */
+    private static final int[] REASSIGN_BACKOFF_SECONDS = {60, 180, 600, 1800};
+
     @Override
     public void dispatchBlockedSubTask(Long subTaskId, Long preferredAgentId) {
         // 重分配熔断检查
@@ -121,6 +133,23 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
 
     @Override
     public Long dispatchPendingSubTaskAuto(Long subTaskId, AgentRole role) {
+        return doDispatchPendingAuto(subTaskId, role, true);
+    }
+
+    @Override
+    public Long dispatchPendingSubTaskCompensating(Long subTaskId, AgentRole role) {
+        // G-015 B2.1：离线重派的补偿路径复用同一套拦截判定但**不重复计数**——
+        // 首选 redispatchOfflineSubTask 已消耗本轮预算，二次选人是对同一次重派的补偿尝试，
+        // 若也计数会让单轮最多累加 2 次，把 attempt_total 的 5 次预算在 3 轮内打满。
+        return doDispatchPendingAuto(subTaskId, role, false);
+    }
+
+    /**
+     * {@link #dispatchPendingSubTaskAuto} 与 {@link #dispatchPendingSubTaskCompensating} 的共用实现。
+     *
+     * @param countAttempt true=消耗一次重派预算（常规入口）；false=只复用拦截判定不计数（补偿路径）
+     */
+    private Long doDispatchPendingAuto(Long subTaskId, AgentRole role, boolean countAttempt) {
         // 依赖 ready 守卫必须在熔断计数之前 —— 未就绪的 PENDING 子任务
         // 会被定时兜底任务反复扫描，若先累加 reassign_attempt_count 会被误推入死信
         SubTask readyCheck = subTaskService.getById(subTaskId);
@@ -130,10 +159,13 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
                     subTaskId, readyCheck.dependsOnIdList());
             return null;
         }
-        // 重分配熔断检查 —— 封堵定时兜底任务（PendingOrphan / recoverPendingUnassigned /
-        // HealthCheck 二次选人）经本入口无限改派的旁路
-        if (checkReassignCircuitBreaker(subTaskId)) {
+        // 重分配闸门 —— 封堵定时兜底任务（PendingOrphan / recoverPendingUnassigned /
+        // HealthCheck 二次选人）经本入口无限改派的旁路；退避窗口内同样在此拦截
+        if (isReassignBlockedOrEscalate(subTaskId)) {
             return null;
+        }
+        if (countAttempt) {
+            accumulateReassignAttempt(subTaskId);
         }
         SubTask subTask = subTaskService.getById(subTaskId);
         if (subTask == null) {
@@ -199,7 +231,14 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         subTask.setReworkCount(0);
         Map<String, Object> ctx = new HashMap<>(subTask.getContext() != null
                 ? subTask.getContext() : Map.of());
-        if (ctx.remove("manualIntervention") != null) {
+        // G-015 B3.1：清除上一轮死信的残留信号——否则死信重派成功后，
+        // getSubTaskDetail / 前端仍会读到过期的 dead_letter_reason（如 reassign_attempt_exceeded），
+        // 让执行者误判「这个任务又被判死了」。三个键与 attempt_total 是同批写入的快照，一并清理。
+        boolean ctxChanged = ctx.remove("manualIntervention") != null;
+        ctxChanged |= ctx.remove("dead_letter_reason") != null;
+        ctxChanged |= ctx.remove("attempt_total") != null;
+        ctxChanged |= ctx.remove("max_reassign_attempts") != null;
+        if (ctxChanged) {
             subTask.setContext(ctx);
         }
         subTaskService.updateById(subTask);
@@ -504,6 +543,35 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
      * @return true = 跳过本次重分配（已达熔断阈值或子任务已终态/死信）；false = 继续重分配
      */
     private boolean checkReassignCircuitBreaker(Long subTaskId) {
+        if (isReassignBlockedOrEscalate(subTaskId)) {
+            return true;
+        }
+        accumulateReassignAttempt(subTaskId);
+        return false;
+    }
+
+    /**
+     * 重派闸门判定（**只判定、不累加预算**）：G-015 B2 起同时承载"熔断"与"退避"两道判断。
+     *
+     * <p>判定顺序：</p>
+     * <ol>
+     *   <li>{@code max-reassign-attempts <= 0} → 熔断禁用（逃生口），放行；</li>
+     *   <li>子任务不存在 → 放行（交由调用方后续校验）；</li>
+     *   <li>已是终态/死信（DONE/CANCELLED/DEAD_LETTER）→ 拦截；</li>
+     *   <li>{@code attempt_total >= max-reassign-attempts} → 标记 DEAD_LETTER + timeline，拦截；</li>
+     *   <li><b>退避窗口未过</b>（距上次累加不足 {@link #REASSIGN_BACKOFF_SECONDS} 对应时长）→ 拦截。
+     *       与"熔断"的区别：退避**不改变子任务状态**、不消耗预算，只是本轮不重派，窗口过后自然恢复；</li>
+     *   <li>否则放行（调用方随后应调用 {@link #accumulateReassignAttempt}）。</li>
+     * </ol>
+     *
+     * <p>之所以把"判定"与"累加"拆开：离线重派的补偿路径
+     * （{@link #dispatchPendingSubTaskCompensating}）需要复用同一套拦截判定
+     * **但不重复计数**，避免同一轮对同一子任务累加两次、把 {@code attempt_total} 快速打满推向死信。</p>
+     *
+     * @param subTaskId 待检查的子任务 ID
+     * @return true = 跳过本次重分配（已达熔断阈值 / 处于退避窗口 / 已终态死信）
+     */
+    private boolean isReassignBlockedOrEscalate(Long subTaskId) {
         int maxAttempts = agentDispatchProperties.getMaxReassignAttempts();
         if (maxAttempts <= 0) {
             // 熔断禁用（逃生口，不推荐生产使用）
@@ -550,9 +618,29 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
             return true;
         }
 
-        // 原子累加共享重试预算（Phase 0 A3：attempt_total 替代 reassign_attempt_count）
-        subTaskMapper.incrementAttemptTotal(subTaskId, OffsetDateTime.now());
-        log.debug("子任务重分配计数累加: subTaskId={}, currentCount={}", subTaskId, currentCount);
+        // G-015 B2.2 退避窗口：距上次累加（incrementAttemptTotal 写入的 update_time）不足本档
+        // 退避时长则跳过本轮重派，且不消耗预算。只推迟不终止，窗口过后自然恢复。
+        if (currentCount > 0 && subTask.getUpdateTime() != null) {
+            int backoffSeconds = REASSIGN_BACKOFF_SECONDS[
+                    Math.min(currentCount - 1, REASSIGN_BACKOFF_SECONDS.length - 1)];
+            OffsetDateTime nextAllowed = subTask.getUpdateTime().plusSeconds(backoffSeconds);
+            if (OffsetDateTime.now().isBefore(nextAllowed)) {
+                log.debug("子任务处于重派退避窗口，跳过本轮重派: subTaskId={}, attemptTotal={}, backoffSeconds={}, nextAllowed={}",
+                        subTaskId, currentCount, backoffSeconds, nextAllowed);
+                return true;
+            }
+        }
         return false;
+    }
+
+    /**
+     * 原子累加共享重试预算（Phase 0 A3：{@code attempt_total} 替代 {@code reassign_attempt_count}）。
+     *
+     * <p>与 {@link #isReassignBlockedOrEscalate} 分离，供"复用判定但不重复计数"的补偿路径
+     * （{@link #dispatchPendingSubTaskCompensating}）选择调用。</p>
+     */
+    private void accumulateReassignAttempt(Long subTaskId) {
+        subTaskMapper.incrementAttemptTotal(subTaskId, OffsetDateTime.now());
+        log.debug("子任务重分配计数累加: subTaskId={}", subTaskId);
     }
 }

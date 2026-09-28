@@ -71,8 +71,12 @@ export interface TaskFinalReport {
   agentId: LongId | null
   agentName: string | null
   generatedAt: string | null
-  // V41: 报告生成状态 NONE/GENERATING/DONE/FAILED
+  // V41/V12.2: 报告生成状态 NONE/GENERATING/REVIEWING/DONE/FAILED
   status?: FinalReportStatus
+  // §12.1 上一版槽：true=存在可恢复的上一版，驱动「恢复上一版」按钮显隐
+  hasPrev?: boolean
+  // §12.1 上一版报告生成时间；无上一版为 null
+  prevGeneratedAt?: string | null
 }
 
 // V42 任务执行迭代记录

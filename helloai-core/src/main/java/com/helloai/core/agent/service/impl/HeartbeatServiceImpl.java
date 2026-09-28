@@ -204,6 +204,8 @@ public class HeartbeatServiceImpl implements HeartbeatService {
             // 「声明在岗」（值班租约，业务调用顺带续期、最长 240 分钟）是两个时钟：
             // Agent 长时间埋头干活不显式调 heartbeat 时租约仍在，若仍判 OFFLINE，
             // AgentHealthCheckTask 会把它在飞的任务重派出去，已完成的工作白做。
+            // G-015 B1：写侧（AgentHealthCheckTask）已加同口径租约守卫 + 在飞子任务宽限，
+            // 且只读类工具经 refreshDutyLease 顺带刷 last_seen_time，双视图分裂已消除。
             if (hasActiveDutyLease(agent.getId())) {
                 return AgentOnlineStatus.IDLE;
             }

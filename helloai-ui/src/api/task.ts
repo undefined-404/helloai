@@ -83,6 +83,10 @@ export const taskApi = {
   generateFinalReport(id: LongId) {
     return request.post<any, TaskFinalReport>(paths.tasks.generateFinalReport(id), undefined, { timeout: TIMEOUT.longReport })
   },
+  // §12.1 恢复上一版整合报告: current 与 prev 槽整体互换（可反复切换），返回互换后的最新报告
+  rollbackFinalReport(id: LongId) {
+    return request.post<any, TaskFinalReport>(paths.tasks.rollbackFinalReport(id))
+  },
   // V42 任务执行迭代记录
   findTaskIterationsByTaskId(id: LongId) {
     return request.get<any, TaskIteration[]>(paths.tasks.iterations(id))

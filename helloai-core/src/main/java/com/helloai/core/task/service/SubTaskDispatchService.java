@@ -48,6 +48,26 @@ public interface SubTaskDispatchService {
     Long dispatchPendingSubTaskAuto(Long subTaskId, AgentRole role);
 
     /**
+     * 二次自动选人（离线重派的**补偿路径**，G-015 B2.1）。
+     *
+     * <p>与 {@link #dispatchPendingSubTaskAuto} 同流程（依赖守卫 → 重派闸门 → 选人 → assignNext），
+     * 唯一区别是**不再累加共享重派预算** {@code sub_task.attempt_total}。</p>
+     *
+     * <p>存在理由：离线重派的首选路径（{@link #redispatchOfflineSubTask}）已消耗本轮预算，
+     * 二次自动选人是对**同一次**重派的补偿尝试（原 Agent 不在白名单 / Selector 无候选时兜底）。
+     * 若二次路径也计数，单轮对同一子任务最多累加 2 次，会在 3 轮内打满 5 次预算直入死信
+     * （v3 实测：长耗时任务因心跳抖动快速死信、下游 DAG 级联卡死）。</p>
+     *
+     * <p>注意：补偿路径仍然复用完整的重派闸门（熔断 + 退避 + 终态判定），
+     * 因此不会绕过熔断、也不会在退避窗口内强行改派。</p>
+     *
+     * @param subTaskId 子任务 ID
+     * @param role      期望角色（通常取原 Agent 的 role，取不到时回退 EXECUTOR）
+     * @return 实际采用的首选 Agent ID；被闸门拦截或依赖未就绪时返回 null
+     */
+    Long dispatchPendingSubTaskCompensating(Long subTaskId, AgentRole role);
+
+    /**
      * 死信人工兜底：将 DEAD_LETTER 子任务直接指派给指定 Agent。
      *
      * <p>重分配熔断触发后子任务进入 DEAD_LETTER 死信池，自动调度链不再接触。
@@ -119,7 +139,12 @@ public interface SubTaskDispatchService {
     void redispatchAssignedTimeout(Long subTaskId, Long originalAgentId, AgentRole role);
 
     /**
-     * 人工换人：执行中卡死（IN_PROGRESS）或暂停后（PAUSED）将子任务改派给新 Agent。
+     * 改派执行中（IN_PROGRESS）或暂停后（PAUSED）的子任务给新 Agent。
+     *
+     * <p><b>两个调用方</b>：① 人工一键改派（前端入口）；② G-015 B2.3 起由
+     * `AgentHealthCheckTask` 用于回收「离线 Agent 名下 PAUSED 超过在飞宽限」的子任务——
+     * 离线在飞的 IN_PROGRESS 任务会先被置 PAUSED 保留归属，超过宽限仍无心跳才经本方法改派，
+     * 避免长耗时任务在 5 分钟心跳窗口内被判死重派。</p>
      *
      * <p>背景：外部 Agent 心跳正常但任务停滞（磨洋工/静默卡住）时，IN_PROGRESS 任务
      * 只能等 {@code SubTaskTimeoutTask} 2 小时超时自动 BLOCKED，前端无人工换人入口。

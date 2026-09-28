@@ -12,6 +12,8 @@ import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentService;
+import com.helloai.core.agent.tool.ToolExecutionResult;
+import com.helloai.core.agent.tool.ToolExecutor;
 import com.helloai.common.config.WebSearchProperties;
 import com.helloai.core.planner.clarify.ChatRoundDecisionParser;
 import com.helloai.core.planner.clarify.ClarifyReplyParser;
@@ -24,7 +26,6 @@ import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
 import com.helloai.core.planner.mapper.RequirementConversationMapper;
 import com.helloai.core.planner.memory.service.LongTermMemoryService;
-import com.helloai.core.planner.service.WebSearchService;
 import com.helloai.core.planner.service.WebPageFetchService;
 import com.helloai.core.planner.service.SearchQueryPlannerService;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
@@ -48,6 +49,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import reactor.core.publisher.Flux;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -60,6 +62,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
@@ -108,7 +111,7 @@ class RequirementClarifyServiceTest {
     private TaskTimelineService taskTimelineService;
 
     @Mock
-    private WebSearchService webSearchService;
+    private ToolExecutor toolExecutor;
 
     @Mock
     private WebSearchProperties webSearchProperties;
@@ -144,10 +147,11 @@ class RequirementClarifyServiceTest {
                 plannerAgentPicker, agentInboxService, platformAgentExecutionService,
                 taskTimelineService, new ClarifyReplyParser(new ObjectMapper()),
                 new ConfirmCardProtocol(new ObjectMapper()),
-                new ClarifyWebSearchOrchestrator(webSearchService, webSearchProperties,
+                new ClarifyWebSearchOrchestrator(toolExecutor, webSearchProperties,
                         pageFetchService, searchQueryPlannerService, new RelativeTimeNormalizer(),
                         new SearchGapAssessor(platformAgentExecutionService, plannerAgentPicker,
-                                new SystemTimeContextBuilder(), new ObjectMapper())),
+                                new SystemTimeContextBuilder(), new ObjectMapper()),
+                        new ObjectMapper()),
                 new ChatRoundDecisionParser(new ObjectMapper()),
                 new SystemTimeContextBuilder(),
                 longTermMemoryService,
@@ -164,6 +168,19 @@ class RequirementClarifyServiceTest {
         // 终稿字段定点写改走 Mapper（jsonb ::jsonb 转换，见 RequirementConversationMapper.xml）
         lenient().when(requirementConversationMapper.updateFinalDraftFields(anyLong(), any(), any(), any()))
                 .thenReturn(1);
+    }
+
+    /** web_search 工具输出 JSON（provider + results；省略 answer 键 → record 反序列化缺省 null）。
+     *  LinkedHashMap 保证键序与 null 值容忍（Map.of 迭代序不定且禁 null，不适合当工具输出）。 */
+    private static String webSearchToolJson(String provider, List<WebSearchResult> results) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("provider", provider);
+        payload.put("results", results);
+        try {
+            return new ObjectMapper().writeValueAsString(payload);
+        } catch (Exception e) {
+            throw new IllegalStateException("web_search 工具测试输出序列化失败", e);
+        }
     }
 
     private RequirementConversation activeConversation() {
@@ -642,18 +659,18 @@ class RequirementClarifyServiceTest {
         when(conversationService.getById(CONV_ID)).thenReturn(conversation);
         when(webSearchProperties.getQueryKeywordLimit()).thenReturn(40);
         when(webSearchProperties.getMaxResults()).thenReturn(5);
-        when(webSearchService.provider()).thenReturn("bocha");
-        when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of(
-                WebSearchResult.builder().title("OpenMaic 官网")
-                        .url("https://open.maic.chat/").snippet("OpenMaic 开放平台官网").build()));
+        when(toolExecutor.execute(eq("web_search"), anyString())).thenReturn(
+                ToolExecutionResult.success("web_search", webSearchToolJson("bocha", List.of(
+                        WebSearchResult.builder().title("OpenMaic 官网")
+                                .url("https://open.maic.chat/").snippet("OpenMaic 开放平台官网").build()))));
         stubLlmRound("{\"type\":\"question\",\"message\":\"验收标准是什么？\"}");
 
         clarifyService.retryRound(CONV_ID);
 
         assertThat(conversation.getRoundCount()).isEqualTo(1);
         verify(messageService, never()).addMessage(eq(CONV_ID), eq("user"), anyString(), any());
-        // 重试轮同样触发联网搜索（搜索词 = 最后一条 user 消息），结果注入 Prompt 与 payload
-        verify(webSearchService).search(eq("做一个报表"), eq(5));
+        // 重试轮同样触发联网搜索（搜索词 = 最后一条 user 消息，经平台工具 web_search），结果注入 Prompt 与 payload
+        verify(toolExecutor).execute(eq("web_search"), contains("做一个报表"));
         ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
         verify(messageService).addMessage(eq(CONV_ID), eq("assistant"), eq("验收标准是什么？"),
                 payloadCaptor.capture());
@@ -673,7 +690,7 @@ class RequirementClarifyServiceTest {
 
         clarifyService.retryRound(CONV_ID);
 
-        verify(webSearchService, never()).search(anyString(), anyInt());
+        verify(toolExecutor, never()).execute(eq("web_search"), anyString());
         verify(messageService).addMessage(CONV_ID, "assistant", "验收标准是什么？", null);
     }
 
@@ -699,10 +716,10 @@ class RequirementClarifyServiceTest {
         conversation.setMode(RequirementClarifyService.MODE_CHAT);
         when(conversationService.getById(CONV_ID)).thenReturn(conversation);
         when(webSearchProperties.getMaxResults()).thenReturn(5);
-        when(webSearchService.provider()).thenReturn("bocha");
-        when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of(
-                WebSearchResult.builder().title("行情速递")
-                        .url("https://a.example/1").snippet("摘要").build()));
+        when(toolExecutor.execute(eq("web_search"), anyString())).thenReturn(
+                ToolExecutionResult.success("web_search", webSearchToolJson("bocha", List.of(
+                        WebSearchResult.builder().title("行情速递")
+                                .url("https://a.example/1").snippet("摘要").build()))));
         when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
         when(messageService.listByConversation(CONV_ID))
                 .thenReturn(List.of(message("user", "最新行情怎样", 1)));
@@ -717,7 +734,7 @@ class RequirementClarifyServiceTest {
         verify(messageService, never()).addMessage(eq(CONV_ID), eq("user"), anyString(), any());
         assertThat(conversation.getRoundCount()).isEqualTo(1);
         // LLM 优化词优先搜索，主回复落库（payload 携带 webSearch 查验键）
-        verify(webSearchService).search(eq("最新行情"), eq(5));
+        verify(toolExecutor).execute(eq("web_search"), contains("最新行情"));
         ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
         verify(messageService).addMessage(eq(CONV_ID), eq("assistant"), eq("行情如下："),
                 payloadCaptor.capture());
@@ -1114,7 +1131,7 @@ class RequirementClarifyServiceTest {
             // payload NULL：纯文本消息，不做 JSON 协议解析
             verify(messageService).addMessage(CONV_ID, "assistant", "你好！请问想了解什么？", null);
             // AUTO 决策 need_search=false：本轮不触发搜索
-            verify(webSearchService, never()).search(anyString(), anyInt());
+            verify(toolExecutor, never()).execute(eq("web_search"), anyString());
             verify(conversationService, times(1)).updateById(conversation);
         }
 
@@ -1147,7 +1164,8 @@ class RequirementClarifyServiceTest {
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
             when(webSearchProperties.getQueryKeywordLimit()).thenReturn(40);
             when(webSearchProperties.getMaxResults()).thenReturn(5);
-            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of());
+            when(toolExecutor.execute(eq("web_search"), anyString())).thenReturn(
+                    ToolExecutionResult.success("web_search", webSearchToolJson("bocha", List.of())));
             when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
             when(messageService.listByConversation(CONV_ID))
                     .thenReturn(List.of(message("user", "做一个报表", 1)));
@@ -1157,7 +1175,7 @@ class RequirementClarifyServiceTest {
 
             clarifyService.sendMessage(CONV_ID, "做一个报表");
 
-            verify(webSearchService).search(anyString(), eq(5));
+            verify(toolExecutor).execute(eq("web_search"), anyString());
             ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
             verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
             assertThat(taskCaptor.getValue().getUserPrompt()).contains("资深需求分析师");
@@ -1210,10 +1228,10 @@ class RequirementClarifyServiceTest {
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
             when(webSearchProperties.getMaxResults()).thenReturn(5);
             when(webSearchProperties.isUrlFetchEnabled()).thenReturn(false);
-            when(webSearchService.provider()).thenReturn("bocha");
-            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of(
-                    WebSearchResult.builder().title("OpenMaic 官网")
-                            .url("https://open.maic.chat/").snippet("OpenMaic 开放平台官网").build()));
+            when(toolExecutor.execute(eq("web_search"), anyString())).thenReturn(
+                    ToolExecutionResult.success("web_search", webSearchToolJson("bocha", List.of(
+                            WebSearchResult.builder().title("OpenMaic 官网")
+                                    .url("https://open.maic.chat/").snippet("OpenMaic 开放平台官网").build()))));
             when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
             when(messageService.listByConversation(CONV_ID))
                     .thenReturn(List.of(message("user", "你好", 1)));
@@ -1225,7 +1243,7 @@ class RequirementClarifyServiceTest {
             clarifyService.sendMessage(CONV_ID, "你好");
 
             // 优先使用 LLM 优化词搜索（候选词第一位）
-            verify(webSearchService).search(eq("你好"), eq(5));
+            verify(toolExecutor).execute(eq("web_search"), contains("你好"));
             // 联网资料注入 CHAT 通用助手模板（主回复轮 = 第 2 次 executeSync）
             ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
             verify(platformAgentExecutionService, times(2)).executeSync(any(Agent.class), taskCaptor.capture());
@@ -1252,7 +1270,7 @@ class RequirementClarifyServiceTest {
 
             clarifyService.sendMessage(CONV_ID, "你好");
 
-            verify(webSearchService, never()).search(anyString(), anyInt());
+            verify(toolExecutor, never()).execute(eq("web_search"), anyString());
             verify(messageService).addMessage(CONV_ID, "assistant", "你好！", null);
         }
 
@@ -1264,10 +1282,10 @@ class RequirementClarifyServiceTest {
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
             when(webSearchProperties.getQueryKeywordLimit()).thenReturn(40);
             when(webSearchProperties.getMaxResults()).thenReturn(5);
-            when(webSearchService.provider()).thenReturn("bocha");
-            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of(
-                    WebSearchResult.builder().title("行情速递")
-                            .url("https://a.example/1").snippet("摘要").build()));
+            when(toolExecutor.execute(eq("web_search"), anyString())).thenReturn(
+                    ToolExecutionResult.success("web_search", webSearchToolJson("bocha", List.of(
+                            WebSearchResult.builder().title("行情速递")
+                                    .url("https://a.example/1").snippet("摘要").build()))));
             when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
             when(messageService.listByConversation(CONV_ID))
                     .thenReturn(List.of(message("user", "帮我查一下最新行情", 1)));
@@ -1287,7 +1305,7 @@ class RequirementClarifyServiceTest {
                     .contains("\"webSearch\"")
                     .contains("行情速递");
             // AUTO 降级 → 规则搜索兜底（决策不可用不丢搜索机会，词=当前轮消息截断）
-            verify(webSearchService).search(eq("帮我查一下最新行情"), eq(5));
+            verify(toolExecutor).execute(eq("web_search"), contains("帮我查一下最新行情"));
             // 决策轮 + 主回复轮各一次
             verify(platformAgentExecutionService, times(2)).executeSync(any(Agent.class), any(AgentTask.class));
         }
@@ -1299,12 +1317,12 @@ class RequirementClarifyServiceTest {
             conversation.setRoundCount(0);
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
             when(webSearchProperties.getMaxResults()).thenReturn(5);
-            when(webSearchService.provider()).thenReturn("bocha");
             when(searchQueryPlannerService.planQueries(anyString()))
                     .thenReturn(List.of("规则候选词"));
-            when(webSearchService.search(eq("最新 AI 编程动态"), eq(3))).thenReturn(List.of(
-                    WebSearchResult.builder().title("AI 编程最新进展")
-                            .url("https://a.example/1").snippet("摘要").build()));
+            when(toolExecutor.execute(eq("web_search"), contains("最新 AI 编程动态"))).thenReturn(
+                    ToolExecutionResult.success("web_search", webSearchToolJson("bocha", List.of(
+                            WebSearchResult.builder().title("AI 编程最新进展")
+                                    .url("https://a.example/1").snippet("摘要").build()))));
             when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
             when(messageService.listByConversation(CONV_ID))
                     .thenReturn(List.of(message("user", "你好", 1)));
@@ -1316,8 +1334,8 @@ class RequirementClarifyServiceTest {
 
             // 多词合并：LLM 优化词 + 规划器规则词都搜索（每词 perQuery=ceil(5/2)=3），URL 去重合并；
             // LLM 词命中 1 条、规则词零结果，total=1
-            verify(webSearchService).search(eq("最新 AI 编程动态"), eq(3));
-            verify(webSearchService).search(eq("规则候选词"), eq(3));
+            verify(toolExecutor).execute(eq("web_search"), contains("最新 AI 编程动态"));
+            verify(toolExecutor).execute(eq("web_search"), contains("规则候选词"));
             ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
             verify(messageService).addMessage(eq(CONV_ID), eq("assistant"), eq("最近 AI 编程这么火："),
                     payloadCaptor.capture());
@@ -1332,10 +1350,10 @@ class RequirementClarifyServiceTest {
             conversation.setWebSearchEnabled(true);
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
             when(webSearchProperties.getMaxResults()).thenReturn(5);
-            when(webSearchService.provider()).thenReturn("bocha");
-            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of(
-                    WebSearchResult.builder().title("行情速递")
-                            .url("https://a.example/1").snippet("摘要").build()));
+            when(toolExecutor.execute(eq("web_search"), anyString())).thenReturn(
+                    ToolExecutionResult.success("web_search", webSearchToolJson("bocha", List.of(
+                            WebSearchResult.builder().title("行情速递")
+                                    .url("https://a.example/1").snippet("摘要").build()))));
             when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
             when(messageService.listByConversation(CONV_ID))
                     .thenReturn(List.of(message("user", "你好", 1)));
@@ -1349,7 +1367,7 @@ class RequirementClarifyServiceTest {
 
             clarifyService.sendMessage(CONV_ID, "你好");
 
-            verify(webSearchService).search(eq("最新行情"), eq(5));
+            verify(toolExecutor).execute(eq("web_search"), contains("最新行情"));
             ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
             verify(messageService).addMessage(eq(CONV_ID), eq("assistant"), eq("这是最新行情："),
                     payloadCaptor.capture());
@@ -1366,8 +1384,8 @@ class RequirementClarifyServiceTest {
             when(webSearchProperties.getMaxSnippetChars()).thenReturn(200);
             when(webSearchProperties.isUrlFetchEnabled()).thenReturn(true);
             when(webSearchProperties.getUrlFetchMaxPages()).thenReturn(2);
-            when(webSearchService.provider()).thenReturn("bocha");
-            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of());
+            when(toolExecutor.execute(eq("web_search"), anyString())).thenReturn(
+                    ToolExecutionResult.success("web_search", webSearchToolJson("bocha", List.of())));
             when(pageFetchService.fetch("https://open.maic.chat/")).thenReturn(WebPageContent.builder()
                     .url("https://open.maic.chat/").ok(true)
                     .title("OpenMaic 官网").text("这里是官网正文内容").build());
@@ -1732,7 +1750,7 @@ class RequirementClarifyServiceTest {
             assertThat(payloadCaptor.getValue()).contains("\"mode\":\"structured\"")
                     .contains("\"recommended\":true");
             // 未配置搜索参数（queryKeywordLimit mock 默认 0 → 查询词为空）时不触发联网搜索
-            verify(webSearchService, never()).search(anyString(), anyInt());
+            verify(toolExecutor, never()).execute(eq("web_search"), anyString());
         }
 
         @Test
@@ -1981,18 +1999,18 @@ class RequirementClarifyServiceTest {
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
             when(webSearchProperties.getQueryKeywordLimit()).thenReturn(40);
             when(webSearchProperties.getMaxResults()).thenReturn(5);
-            when(webSearchService.provider()).thenReturn("bocha");
-            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of(
-                    WebSearchResult.builder().title("报表方案参考")
-                            .url("https://a.example/1").snippet("摘要一").siteName("站点A").build(),
-                    WebSearchResult.builder().title("报表工具选型")
-                            .url("https://a.example/2").snippet("摘要二").siteName("站点B").build()));
+            when(toolExecutor.execute(eq("web_search"), anyString())).thenReturn(
+                    ToolExecutionResult.success("web_search", webSearchToolJson("bocha", List.of(
+                            WebSearchResult.builder().title("报表方案参考")
+                                    .url("https://a.example/1").snippet("摘要一").siteName("站点A").build(),
+                            WebSearchResult.builder().title("报表工具选型")
+                                    .url("https://a.example/2").snippet("摘要二").siteName("站点B").build()))));
             stubLlmRound("{\"type\":\"question\",\"message\":\"验收标准是什么？\"}");
 
             clarifyService.sendMessage(CONV_ID, "做一个报表");
 
             // 第 2 轮（roundCount=1）同样触发搜索，查询词取当前轮消息
-            verify(webSearchService).search(eq("做一个报表"), eq(5));
+            verify(toolExecutor).execute(eq("web_search"), contains("做一个报表"));
             ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
             verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
                     anyString(), payloadCaptor.capture());
@@ -2015,10 +2033,10 @@ class RequirementClarifyServiceTest {
             when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
             when(webSearchProperties.getQueryKeywordLimit()).thenReturn(40);
             when(webSearchProperties.getMaxResults()).thenReturn(5);
-            when(webSearchService.provider()).thenReturn("bocha");
-            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of(
-                    WebSearchResult.builder().title("OpenMaaS 介绍")
-                            .url("https://a.example/1").snippet("摘要").build()));
+            when(toolExecutor.execute(eq("web_search"), anyString())).thenReturn(
+                    ToolExecutionResult.success("web_search", webSearchToolJson("bocha", List.of(
+                            WebSearchResult.builder().title("OpenMaaS 介绍")
+                                    .url("https://a.example/1").snippet("摘要").build()))));
             // 历史：主题讨论 → 纯意图短句（应被跳过）→ 确认询问（assistant，跳过）
             when(messageService.listByConversation(CONV_ID)).thenReturn(List.of(
                     message("user", "你知道openMaic么？你知道这个怎么使用么？", 1),
@@ -2039,7 +2057,7 @@ class RequirementClarifyServiceTest {
                     "检测到你想把讨论整理成落地方案，是否切换到方案澄清模式？：确认", List.of(selection));
 
             // 搜索词回退为触发意图前的讨论主题，而非卡片提交文本/纯意图短句
-            verify(webSearchService).search(eq("你知道openMaic么？你知道这个怎么使用么？"), eq(5));
+            verify(toolExecutor).execute(eq("web_search"), contains("你知道openMaic么？你知道这个怎么使用么？"));
         }
 
         @Test
@@ -2068,7 +2086,7 @@ class RequirementClarifyServiceTest {
             clarifyService.sendMessage(CONV_ID,
                     "检测到你想把讨论整理成落地方案，是否切换到方案澄清模式？：确认", List.of(selection));
 
-            verify(webSearchService, never()).search(anyString(), anyInt());
+            verify(toolExecutor, never()).execute(eq("web_search"), anyString());
         }
 
         @Test
@@ -2078,8 +2096,7 @@ class RequirementClarifyServiceTest {
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
             when(webSearchProperties.getQueryKeywordLimit()).thenReturn(40);
             when(webSearchProperties.getMaxResults()).thenReturn(5);
-            when(webSearchService.provider()).thenReturn("bocha");
-            when(webSearchService.search(anyString(), anyInt()))
+            when(toolExecutor.execute(eq("web_search"), anyString()))
                     .thenThrow(new RuntimeException("bocha timeout"));
             stubLlmRound("{\"type\":\"question\",\"message\":\"验收标准是什么？\"}");
 
@@ -2106,10 +2123,10 @@ class RequirementClarifyServiceTest {
             when(webSearchProperties.getMaxSnippetChars()).thenReturn(200);
             when(webSearchProperties.isUrlFetchEnabled()).thenReturn(true);
             when(webSearchProperties.getUrlFetchMaxPages()).thenReturn(2);
-            when(webSearchService.provider()).thenReturn("bocha");
-            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of(
-                    WebSearchResult.builder().title("搜索结果")
-                            .url("https://s.example/1").snippet("搜索摘要").build()));
+            when(toolExecutor.execute(eq("web_search"), anyString())).thenReturn(
+                    ToolExecutionResult.success("web_search", webSearchToolJson("bocha", List.of(
+                            WebSearchResult.builder().title("搜索结果")
+                                    .url("https://s.example/1").snippet("搜索摘要").build()))));
             when(pageFetchService.fetch("https://open.maic.chat/")).thenReturn(WebPageContent.builder()
                     .url("https://open.maic.chat/").ok(true)
                     .title("OpenMaic 官网").text("这里是官网正文内容").build());
@@ -2119,9 +2136,9 @@ class RequirementClarifyServiceTest {
                     "给我一份快速上手 https://open.maic.chat/ 的操作手册");
 
             // 搜索词不含裸 URL，只用剥离后的语义文本
-            ArgumentCaptor<String> queryCaptor = ArgumentCaptor.forClass(String.class);
-            verify(webSearchService).search(queryCaptor.capture(), eq(5));
-            assertThat(queryCaptor.getValue())
+            ArgumentCaptor<String> argsCaptor = ArgumentCaptor.forClass(String.class);
+            verify(toolExecutor).execute(eq("web_search"), argsCaptor.capture());
+            assertThat(argsCaptor.getValue())
                     .doesNotContain("https://")
                     .contains("快速上手");
             // 直取被提取出的 URL
@@ -2150,8 +2167,8 @@ class RequirementClarifyServiceTest {
             when(webSearchProperties.getMaxSnippetChars()).thenReturn(200);
             when(webSearchProperties.isUrlFetchEnabled()).thenReturn(true);
             when(webSearchProperties.getUrlFetchMaxPages()).thenReturn(2);
-            when(webSearchService.provider()).thenReturn("bocha");
-            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of());
+            when(toolExecutor.execute(eq("web_search"), anyString())).thenReturn(
+                    ToolExecutionResult.success("web_search", webSearchToolJson("bocha", List.of())));
             when(pageFetchService.fetch("https://open.maic.chat/")).thenReturn(WebPageContent.builder()
                     .url("https://open.maic.chat/").ok(true)
                     .title("OpenMaic").text("正文").build());
@@ -2160,7 +2177,7 @@ class RequirementClarifyServiceTest {
             clarifyService.sendMessage(CONV_ID, "https://open.maic.chat/");
 
             // 剥离 URL 后无文本 → 回退域名作搜索词
-            verify(webSearchService).search(eq("open.maic.chat"), eq(5));
+            verify(toolExecutor).execute(eq("web_search"), contains("open.maic.chat"));
             verify(pageFetchService).fetch("https://open.maic.chat/");
         }
 
@@ -2174,10 +2191,10 @@ class RequirementClarifyServiceTest {
             when(webSearchProperties.getMaxSnippetChars()).thenReturn(200);
             when(webSearchProperties.isUrlFetchEnabled()).thenReturn(true);
             when(webSearchProperties.getUrlFetchMaxPages()).thenReturn(2);
-            when(webSearchService.provider()).thenReturn("bocha");
-            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of(
-                    WebSearchResult.builder().title("搜索结果")
-                            .url("https://s.example/1").snippet("搜索摘要").build()));
+            when(toolExecutor.execute(eq("web_search"), anyString())).thenReturn(
+                    ToolExecutionResult.success("web_search", webSearchToolJson("bocha", List.of(
+                            WebSearchResult.builder().title("搜索结果")
+                                    .url("https://s.example/1").snippet("搜索摘要").build()))));
             when(pageFetchService.fetch(anyString())).thenReturn(WebPageContent.builder()
                     .url("https://open.maic.chat/").ok(false)
                     .reason("HTTP 403").title("").text("").build());
@@ -2205,8 +2222,8 @@ class RequirementClarifyServiceTest {
             when(webSearchProperties.getMaxSnippetChars()).thenReturn(200);
             when(webSearchProperties.isUrlFetchEnabled()).thenReturn(true);
             when(webSearchProperties.getUrlFetchMaxPages()).thenReturn(2);
-            when(webSearchService.provider()).thenReturn("bocha");
-            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of());
+            when(toolExecutor.execute(eq("web_search"), anyString())).thenReturn(
+                    ToolExecutionResult.success("web_search", webSearchToolJson("bocha", List.of())));
             when(pageFetchService.fetch(anyString())).thenReturn(WebPageContent.builder()
                     .url("https://open.maic.chat/").ok(false)
                     .reason("页面正文为空且无元数据").title("").text("").build());
@@ -2215,10 +2232,10 @@ class RequirementClarifyServiceTest {
             clarifyService.sendMessage(CONV_ID, "介绍下 https://open.maic.chat/ 这个平台");
 
             // 直取失败 → 搜索词前置域名，让搜索引擎检索该站点公开资料
-            ArgumentCaptor<String> queryCaptor = ArgumentCaptor.forClass(String.class);
-            verify(webSearchService).search(queryCaptor.capture(), eq(5));
-            assertThat(queryCaptor.getValue())
-                    .startsWith("open.maic.chat ")
+            ArgumentCaptor<String> argsCaptor = ArgumentCaptor.forClass(String.class);
+            verify(toolExecutor).execute(eq("web_search"), argsCaptor.capture());
+            assertThat(argsCaptor.getValue())
+                    .contains("open.maic.chat ")
                     .contains("介绍下");
         }
 
@@ -2232,8 +2249,8 @@ class RequirementClarifyServiceTest {
             when(webSearchProperties.getMaxSnippetChars()).thenReturn(200);
             when(webSearchProperties.isUrlFetchEnabled()).thenReturn(true);
             when(webSearchProperties.getUrlFetchMaxPages()).thenReturn(2);
-            when(webSearchService.provider()).thenReturn("bocha");
-            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of());
+            when(toolExecutor.execute(eq("web_search"), anyString())).thenReturn(
+                    ToolExecutionResult.success("web_search", webSearchToolJson("bocha", List.of())));
             when(pageFetchService.fetch("https://open.maic.chat/")).thenReturn(WebPageContent.builder()
                     .url("https://open.maic.chat/").ok(true).metaOnly(true)
                     .title("OpenMaic 开放平台")
@@ -2243,9 +2260,9 @@ class RequirementClarifyServiceTest {
             clarifyService.sendMessage(CONV_ID, "介绍下 https://open.maic.chat/ 这个平台");
 
             // 元数据兜底视为成功直取 → 搜索词不加域名前缀（第一手资料已在手）
-            ArgumentCaptor<String> queryCaptor = ArgumentCaptor.forClass(String.class);
-            verify(webSearchService).search(queryCaptor.capture(), eq(5));
-            assertThat(queryCaptor.getValue()).doesNotContain("open.maic.chat");
+            ArgumentCaptor<String> argsCaptor = ArgumentCaptor.forClass(String.class);
+            verify(toolExecutor).execute(eq("web_search"), argsCaptor.capture());
+            assertThat(argsCaptor.getValue()).doesNotContain("open.maic.chat");
             // payload：metaOnly 直取来源进结果列表 + fetched 记录带 metaOnly 标记
             ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
             verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
@@ -2264,14 +2281,14 @@ class RequirementClarifyServiceTest {
             when(webSearchProperties.getQueryKeywordLimit()).thenReturn(40);
             when(webSearchProperties.getMaxResults()).thenReturn(5);
             when(webSearchProperties.isUrlFetchEnabled()).thenReturn(false);
-            when(webSearchService.provider()).thenReturn("bocha");
-            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of());
+            when(toolExecutor.execute(eq("web_search"), anyString())).thenReturn(
+                    ToolExecutionResult.success("web_search", webSearchToolJson("bocha", List.of())));
             stubLlmRound("{\"type\":\"question\",\"message\":\"验收标准是什么？\"}");
 
             clarifyService.sendMessage(CONV_ID, "介绍下 https://open.maic.chat/ 这个平台");
 
             verify(pageFetchService, never()).fetch(anyString());
-            verify(webSearchService).search(anyString(), eq(5));
+            verify(toolExecutor).execute(eq("web_search"), anyString());
         }
 
         // ════════════════════════════════════════════════════════
@@ -2284,21 +2301,22 @@ class RequirementClarifyServiceTest {
             RequirementConversation conversation = activeConversation();
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
             when(webSearchProperties.getMaxResults()).thenReturn(5);
-            when(webSearchService.provider()).thenReturn("bocha");
             when(searchQueryPlannerService.planQueries(anyString()))
                     .thenReturn(List.of("快速学习Python", "Python 项目搭建教程"));
             // 首候选词零结果 → 次词命中；多词合并下两词都搜（每词 perQuery=ceil(5/2)=3）
-            when(webSearchService.search(eq("快速学习Python"), eq(3))).thenReturn(List.of());
-            when(webSearchService.search(eq("Python 项目搭建教程"), eq(3))).thenReturn(List.of(
-                    WebSearchResult.builder().title("Python 实战教程")
-                            .url("https://p.example/1").snippet("摘要").build()));
+            when(toolExecutor.execute(eq("web_search"), contains("快速学习Python"))).thenReturn(
+                    ToolExecutionResult.success("web_search", webSearchToolJson("bocha", List.of())));
+            when(toolExecutor.execute(eq("web_search"), contains("Python 项目搭建教程"))).thenReturn(
+                    ToolExecutionResult.success("web_search", webSearchToolJson("bocha", List.of(
+                            WebSearchResult.builder().title("Python 实战教程")
+                                    .url("https://p.example/1").snippet("摘要").build()))));
             stubLlmRound("{\"type\":\"question\",\"message\":\"验收标准是什么？\"}");
 
             clarifyService.sendMessage(CONV_ID,
                     "能否给我提供一份快速学习Python + 快速搭建项目的完整方案");
 
             // 多词合并：两词各搜 perQuery=3 条（共 2 次调用），URL 去重合并，total=1
-            verify(webSearchService, times(2)).search(anyString(), anyInt());
+            verify(toolExecutor, times(2)).execute(eq("web_search"), anyString());
             ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
             verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
                     anyString(), payloadCaptor.capture());
@@ -2315,17 +2333,17 @@ class RequirementClarifyServiceTest {
             RequirementConversation conversation = activeConversation();
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
             when(webSearchProperties.getMaxResults()).thenReturn(5);
-            when(webSearchService.provider()).thenReturn("bocha");
             when(searchQueryPlannerService.planQueries(anyString()))
                     .thenReturn(List.of("快速学习Python", "Python 项目搭建"));
-            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of());
+            when(toolExecutor.execute(eq("web_search"), anyString())).thenReturn(
+                    ToolExecutionResult.success("web_search", webSearchToolJson("bocha", List.of())));
             stubLlmRound("{\"type\":\"question\",\"message\":\"验收标准是什么？\"}");
 
             clarifyService.sendMessage(CONV_ID,
                     "能否给我提供一份快速学习Python + 快速搭建项目的完整方案");
 
             // 两个候选词都尝试过（零结果不放弃），结局可查验
-            verify(webSearchService, times(2)).search(anyString(), anyInt());
+            verify(toolExecutor, times(2)).execute(eq("web_search"), anyString());
             ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
             verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
                     anyString(), payloadCaptor.capture());
@@ -2342,17 +2360,17 @@ class RequirementClarifyServiceTest {
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
             when(webSearchProperties.getQueryKeywordLimit()).thenReturn(40);
             when(webSearchProperties.getMaxResults()).thenReturn(5);
-            when(webSearchService.provider()).thenReturn("bocha");
             when(searchQueryPlannerService.planQueries(anyString())).thenReturn(List.of());
-            when(webSearchService.search(anyString(), anyInt())).thenReturn(List.of(
-                    WebSearchResult.builder().title("报表方案参考")
-                            .url("https://a.example/1").snippet("摘要").build()));
+            when(toolExecutor.execute(eq("web_search"), anyString())).thenReturn(
+                    ToolExecutionResult.success("web_search", webSearchToolJson("bocha", List.of(
+                            WebSearchResult.builder().title("报表方案参考")
+                                    .url("https://a.example/1").snippet("摘要").build()))));
             stubLlmRound("{\"type\":\"question\",\"message\":\"验收标准是什么？\"}");
 
             clarifyService.sendMessage(CONV_ID, "做一个报表");
 
             // 规划器空产出 → 兜底前 40 字截断（与改造前行为一致）
-            verify(webSearchService).search(eq("做一个报表"), eq(5));
+            verify(toolExecutor).execute(eq("web_search"), contains("做一个报表"));
         }
     }
 

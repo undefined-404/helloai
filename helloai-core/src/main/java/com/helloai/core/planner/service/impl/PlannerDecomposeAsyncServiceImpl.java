@@ -131,6 +131,8 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
                 .userPrompt(prompt)
                 .context(Map.of("taskId", taskId, "scene", "planner_decompose"))
                 .requiredCapabilities(Map.of())
+                // G-016 契约层技能注入：与任务级 required_skills 同源（null 防御为 List.of()）
+                .skills(task.getRequiredSkills() != null ? task.getRequiredSkills() : List.of())
                 .build();
         taskTimelineService.recordEvent(taskId, null, "task_plan_llm_call_start",
                 AgentRole.PLANNER, planner.getId(),

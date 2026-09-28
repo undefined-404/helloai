@@ -9,6 +9,7 @@ import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.executor.AgentExecutor;
 import com.helloai.core.agent.executor.AgentExecutorRouter;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -38,6 +39,7 @@ public class PlatformAgentExecutionServiceImpl implements PlatformAgentExecution
     private final AgentExecutorRouter agentExecutorRouter;
     private final HeartbeatService heartbeatService;
     private final AgentExecutionProperties executionProperties;
+    private final AgentSkillSpecService agentSkillSpecService;
 
     // #region debug-point redispatch-stuck-blocked
     private static final ObjectMapper DBG_MAPPER = new ObjectMapper();
@@ -138,6 +140,8 @@ public class PlatformAgentExecutionServiceImpl implements PlatformAgentExecution
             throw new BizException("Agent 能力不足: agentId=" + agent.getId()
                     + ", executor=" + executor.getName());
         }
+        // 契约层统一技能注入：skills 非空时 resolve 规范段拼入 systemPrompt（执行链不填 → 零变化）
+        task = applySkillInjection(task);
         dbg("platform_execute_before_active", dbgMap(
                 "agentId", agent.getId(),
                 "subTaskId", task.getSubTaskId()
@@ -181,8 +185,27 @@ public class PlatformAgentExecutionServiceImpl implements PlatformAgentExecution
                 throw new BizException("Agent 能力不足: agentId=" + agent.getId()
                         + ", executor=" + executor.getName());
             }
+            // 契约层统一技能注入：与同步 execute 同一点位（checkCapability 之后、执行器之前）
+            AgentTask injected = applySkillInjection(task);
             heartbeatService.active(agent.getId());
-            return executor.executeStream(agent, task);
+            return executor.executeStream(agent, injected);
         });
+    }
+
+    /**
+     * 契约层技能规范注入：{@code AgentTask.skills} 非空时把 resolve 出的「平台技能规范（执行速览）」
+     * 段拼入 systemPrompt。skills 为空 / 无命中 / 段为空时原样返回（全部既有链路行为零变化）。
+     */
+    private AgentTask applySkillInjection(AgentTask task) {
+        if (task.getSkills() == null || task.getSkills().isEmpty()) {
+            return task;
+        }
+        AgentSkillSpecService.ResolvedSpec resolved = agentSkillSpecService.resolve(task.getSkills());
+        if (resolved == null || resolved.section() == null || resolved.section().isBlank()) {
+            return task;
+        }
+        String base = task.getSystemPrompt() == null ? "" : task.getSystemPrompt();
+        String section = "## 平台技能规范（执行速览）\n" + resolved.section();
+        return task.withSystemPrompt(base.isBlank() ? section : base + "\n\n" + section);
     }
 }

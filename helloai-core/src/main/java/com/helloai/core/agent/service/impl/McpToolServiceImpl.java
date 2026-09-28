@@ -321,10 +321,10 @@ public class McpToolServiceImpl implements McpToolService {
         refreshDutyLease(agentId); // 开工顺带续租，与认领/提交同口径
         StartSubTaskResult result = new StartSubTaskResult();
         result.setSubTaskId(subTaskId);
-        result.setAssignedAgent(agentId);
 
         SubTask subTask = subTaskId != null ? subTaskService.getById(subTaskId) : null;
         if (subTask == null) {
+            result.setAssignedAgent(agentId);
             result.setOk(false);
             result.setStarted(false);
             result.setReason("subtask_not_found");
@@ -332,12 +332,17 @@ public class McpToolServiceImpl implements McpToolService {
         }
         // 归属校验：仅当前执行者可开工，防止越权推进他人任务
         if (subTask.getAssignedAgentId() == null || !agentId.equals(subTask.getAssignedAgentId())) {
+            // G-015 B3.2：回显必须反映**真实归属**（可能为 null / 他人），
+            // 不能沿用调用方入参 agentId —— 否则「不是你的任务」的响应里
+            // assignedAgent 仍写着调用者自己，语义自相矛盾、误导执行者。
+            result.setAssignedAgent(subTask.getAssignedAgentId());
             result.setOk(false);
             result.setStarted(false);
             result.setReason("not_task_owner");
             result.setStatus(subTask.getStatus() != null ? subTask.getStatus().name() : null);
             return result;
         }
+        result.setAssignedAgent(agentId);
         // 幂等：已 IN_PROGRESS 直接成功（Agent 重试无需区分）
         if (subTask.getStatus() == SubTaskStatus.IN_PROGRESS) {
             result.setOk(true);
@@ -411,7 +416,8 @@ public class McpToolServiceImpl implements McpToolService {
         heartbeatService.seen(agentId);
         // 心跳顺带续租——返回的 remainingTtlSeconds 为续租后的剩余 TTL，
         // 外部 Agent 只要保持轮询 heartbeat 即可持续在岗，无需手动重做 checkIn。
-        refreshDutyLease(agentId);
+        // 上方已显式 seen()，此处传 true 避免同一路径重复双写 last_seen_time。
+        refreshDutyLease(agentId, true);
 
         OffsetDateTime now = OffsetDateTime.now();
         HeartbeatResult result = new HeartbeatResult();
@@ -442,10 +448,16 @@ public class McpToolServiceImpl implements McpToolService {
 
     /**
      * 上传产物附件元数据。文件内容场景请先经 POST /api/artifacts/upload 上传
-     * （平台转存 MinIO 并注册一步到位）；本工具仅适用于「对象已在别处可访问」时的
+     * （平台转存 MinIO 并注册一步到位）；本工具仅适用于「对象已在平台桶内」时的
      * 登记（只注册 DB 元数据记录，不传输文件内容）。
-     * 平台可直读 minio:// 附件（下载与执行证据核验），
-     * storageUrl 建议按 {注册名}/{yyyy}/{MM}/{taskId}/{subTaskId}/ 组织。
+     *
+     * <p>storageUrl 格式：{@code minio://helloai-artifacts/{ownerName}/{yyyy}/{MM}/{taskId}/{subTaskId}/{文件名}}。
+     * 协议头与 bucket 段必须是平台桶，不是 Agent 自身注册名——历史事故中外部 Agent 写成
+     * {@code minio://trae-executor/...}，前缀被当成 bucket，附件只能登记、永远读不出内容。
+     * 平台在 {@code AttachmentService#register} 内校验 bucket 段白名单与对象存在性，
+     * 不合法直接 400。</p>
+     *
+     * <p>上游已有产出直接复用其 storageUrl 登记即可，无需重复上传副本。</p>
      */
     @Transactional(rollbackFor = Exception.class)
     public UploadArtifactResult uploadArtifact(Long agentId, Long subTaskId,
@@ -1042,7 +1054,7 @@ public class McpToolServiceImpl implements McpToolService {
     }
 
     /**
-     * 工具调用自动续租（ §6.67 + E1 动态 TTL 自适应）：有 ACTIVE 租约时顺带延长
+     * 工具调用自动续租 + 在岗续证（ §6.67 + E1 动态 TTL 自适应）：有 ACTIVE 租约时顺带延长
      * {@code expire_time}，长任务执行期间任何工具调用即可保活，无需 Agent 主动
      * 重做 checkIn；无 ACTIVE 租约时跳过（不自动打卡，保持 checkIn 的打卡语义）。
      *
@@ -1050,13 +1062,32 @@ public class McpToolServiceImpl implements McpToolService {
      * 有在跑子任务用最大窗口（任务执行期稳定保活），空闲按表现分动态窗口
      * （低分短、高分长）；续约失败仅告警不阻断工具调用（顺带动作）。
      * checkIn/checkOut 不接入本方法：前者签发新租约，后者结束租约。</p>
+     *
+     * <p><b>G-015 B1 在岗续证</b>：持 ACTIVE 租约时顺带刷 {@code last_seen_time}
+     * （经 {@link HeartbeatService#seen(Long)}）。此前只读/登记类工具（pullTasks / ack /
+     * getSubTaskDetail / getDepsSummary / getAgentStatus / uploadArtifact / reportBlocked /
+     * startSubTask）只续租约不刷 last_seen_time，导致「租约 ACTIVE + dbOnlineStatus OFFLINE」
+     * 双视图分裂，并被健康巡检误判离线触发误重派。此处补齐「任一成功工具调用即续上连接存活证据」。</p>
      */
     private void refreshDutyLease(Long agentId) {
+        refreshDutyLease(agentId, false);
+    }
+
+    /**
+     * {@link #refreshDutyLease(Long)} 的重载。
+     *
+     * @param lastSeenJustRefreshed 调用前是否已显式刷过 last_seen_time（heartbeat 工具自身
+     *                              已调 {@code seen()}，传 true 避免同一路径重复双写）
+     */
+    private void refreshDutyLease(Long agentId, boolean lastSeenJustRefreshed) {
         if (agentId == null) {
             return;
         }
         try {
-            agentDutyLeaseService.adaptiveRenew(agentId);
+            AgentDutyLease renewed = agentDutyLeaseService.adaptiveRenew(agentId);
+            if (renewed != null && !lastSeenJustRefreshed) {
+                heartbeatService.seen(agentId);
+            }
         } catch (Exception e) {
             log.warn("工具调用自动续租失败（不影响主操作）: agentId={}, err={}", agentId, e.getMessage());
         }

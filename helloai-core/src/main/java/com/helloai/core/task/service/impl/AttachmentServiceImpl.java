@@ -40,6 +40,11 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
      * 注册产物附件元数据。
      * 仅允许对归属于 agentId 的 SubTask 上传附件。
      *
+     * <p><b>前置校验</b>：storageUrl 非空 → 地址合法性（如 minio:// 的 bucket 段必须是平台桶）
+     * → 平台可读协议（{@code local://}/{@code minio://}）下对象真实存在。任一不过抛
+     * {@link BizException}(400)，不写库。外部 {@code https://} 等平台不可读地址仅在
+     * "已有对象可访问"的登记场景使用，不做探测。</p>
+     *
      * <p>版本语义：同子任务同名文件的旧 ACTIVE 版本自动置
      * INACTIVE，保证任意文件名至多一条有效版本——核验/依赖装载/交付物打包
      * 只认最新版，杜绝"同名多版本并存导致 Reviewer 反复打回"的死循环；
@@ -56,6 +61,19 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
         }
         if (!agentId.equals(subTask.getAssignedAgentId())) {
             throw new BizException("无权为该子任务上传附件: subTaskId=" + subTaskId + ", agentId=" + agentId);
+        }
+
+        // 地址校验 + 存在性校验：把"有记录无对象"的僵尸附件挡在写库之前。
+        // 修复前（尤其 MCP uploadArtifact 仅登记元数据的场景）对象不存在也能注册成功，
+        // 事后预览/证据核验才抛 500，且 attachment 表已被污染。
+        // 现在不合法 / 对象不存在直接 400；本方法带 @Transactional，抛错会连同下方
+        // 同名去活一起回滚，旧 ACTIVE 版本不受影响。
+        if (storageUrl == null || storageUrl.isBlank()) {
+            throw new BizException(400, "storageUrl 不能为空: subTaskId=" + subTaskId);
+        }
+        artifactStorage.validateAddress(storageUrl);
+        if (artifactStorage.supports(storageUrl) && !artifactStorage.exists(storageUrl)) {
+            throw new BizException(400, "产物对象不存在，拒绝注册附件（请先上传文件内容）: " + storageUrl);
         }
 
         // 同子任务同名 ACTIVE 旧版批量去活（含历史多版本），新注册版本成为唯一有效版
@@ -147,6 +165,18 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
         if (updated) {
             log.info("附件打回失效: subTaskId={}", subTaskId);
         }
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>刻意走 Mapper 的自定义全表查询：{@code @TableLogic} 会给所有 MyBatis-Plus
+     * 内置查询自动追加 {@code deleted=0}，而本方法必须看到逻辑删除行，
+     * 否则对账巡检会把"仍有已删记录指向"的对象误判成孤儿。</p>
+     */
+    @Override
+    public List<Attachment> listAllIncludingDeleted() {
+        return baseMapper.selectAllIncludingDeleted();
     }
 
     /** 回填主任务/子任务标题（transient 字段，不落库），供附件管理按层级浏览时展示名称。 */

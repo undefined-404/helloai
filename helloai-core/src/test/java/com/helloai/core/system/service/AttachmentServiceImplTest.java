@@ -3,12 +3,14 @@ package com.helloai.core.system.service;
 import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
 import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapper;
 import com.baomidou.mybatisplus.extension.conditions.update.LambdaUpdateChainWrapper;
+import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AttachmentStatus;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.service.impl.AttachmentServiceImpl;
 import com.helloai.core.system.storage.ArtifactStorage;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.mapper.AttachmentMapper;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,11 +21,13 @@ import org.springframework.http.MediaType;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
@@ -306,5 +310,88 @@ class AttachmentServiceImplTest {
         service.invalidateBySubTask(null);
 
         verify(updateChain, never()).update();
+    }
+
+    // ================================================================
+    // 存在性 / 地址合法性前置校验（僵尸附件防治）
+    // ================================================================
+
+    /** 构造一个"子任务存在且归属 agentId=7"的常见前置。 */
+    private void givenOwnedSubTask() {
+        SubTask st = subTask(100L, 10L, "子任务A");
+        st.setAssignedAgentId(7L);
+        when(subTaskService.getById(100L)).thenReturn(st);
+        when(updateChain.update()).thenReturn(false);
+    }
+
+    @Test
+    @DisplayName("register：平台可读地址但对象不存在 → 400，且不写库、不去活旧版本")
+    void register_objectMissing_shouldRejectWith400() {
+        givenOwnedSubTask();
+        when(artifactStorage.supports(anyString())).thenReturn(true);
+        when(artifactStorage.exists(anyString())).thenReturn(false);
+
+        BizException ex = catchThrowableOfType(() -> service.register(7L, 100L, "报告.md",
+                "text/markdown", 1024L, "minio://helloai-artifacts/t/100/x-报告.md"), BizException.class);
+
+        assertThat(ex.getCode()).isEqualTo(400);
+        assertThat(ex.getMessage()).contains("产物对象不存在");
+        // 关键：失败必须发生在去活旧版本之前，否则旧 ACTIVE 版会被"新坏版本"顶掉
+        verify(updateChain, never()).update();
+        verify(service, never()).save(any(Attachment.class));
+    }
+
+    @Test
+    @DisplayName("register：平台不可读地址（外部 https）跳过存在性探测，仍可登记")
+    void register_externalUrl_shouldSkipExistenceProbe() {
+        givenOwnedSubTask();
+        when(artifactStorage.supports(anyString())).thenReturn(false);
+
+        Attachment registered = service.register(7L, 100L, "外部.html", "text/html", 512L,
+                "https://example.com/report.html");
+
+        assertThat(registered.getStatus()).isEqualTo(AttachmentStatus.ACTIVE);
+        verify(artifactStorage, never()).exists(anyString());
+        verify(service).save(registered);
+    }
+
+    @Test
+    @DisplayName("register：storageUrl 为空 → 400（不再静默写出一条无地址附件）")
+    void register_blankStorageUrl_shouldRejectWith400() {
+        givenOwnedSubTask();
+
+        BizException ex = catchThrowableOfType(() -> service.register(7L, 100L, "报告.md",
+                "text/markdown", 1024L, "  "), BizException.class);
+
+        assertThat(ex.getCode()).isEqualTo(400);
+        assertThat(ex.getMessage()).contains("storageUrl");
+        verify(service, never()).save(any(Attachment.class));
+    }
+
+    @Test
+    @DisplayName("register：地址不合法（bucket 段错）由存储层抛 400，注册不落库")
+    void register_invalidAddress_shouldPropagate400() {
+        givenOwnedSubTask();
+        doThrow(new BizException(400, "storageUrl 的 bucket 段必须为平台桶 'helloai-artifacts'"))
+                .when(artifactStorage).validateAddress(anyString());
+
+        BizException ex = catchThrowableOfType(() -> service.register(7L, 100L, "报告.md",
+                "text/markdown", 1024L, "minio://trae-executor/t/100/x-报告.md"), BizException.class);
+
+        assertThat(ex.getCode()).isEqualTo(400);
+        assertThat(ex.getMessage()).contains("bucket");
+        verify(service, never()).save(any(Attachment.class));
+    }
+
+    @Test
+    @DisplayName("listAllIncludingDeleted：走 Mapper 全表查询（不过滤逻辑删除），供对账构建被引用集合")
+    void listAllIncludingDeleted_shouldDelegateToMapper() {
+        AttachmentMapper mapper = mock(AttachmentMapper.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "baseMapper", mapper);
+        List<Attachment> rows = List.of(attachment(1L, 100L, "a.md"));
+        when(mapper.selectAllIncludingDeleted()).thenReturn(rows);
+
+        assertThat(service.listAllIncludingDeleted()).isSameAs(rows);
+        verify(mapper).selectAllIncludingDeleted();
     }
 }

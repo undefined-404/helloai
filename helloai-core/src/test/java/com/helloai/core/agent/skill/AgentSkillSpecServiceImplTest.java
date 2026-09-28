@@ -103,9 +103,9 @@ class AgentSkillSpecServiceImplTest {
     @DisplayName("listPackages：声明顺序返回全部技能包，元数据字段非空")
     void shouldListAllPackagesInDeclarationOrder() {
         List<SkillPackage> packages = service.listPackages();
-        assertThat(packages).hasSize(3);
+        assertThat(packages).hasSize(4);
         assertThat(packages).extracting(SkillPackage::name)
-                .containsExactly("eng-code-review", "eng-doc-standard", "eng-verification");
+                .containsExactly("eng-code-review", "eng-doc-standard", "eng-verification", "eng-web-research");
         packages.forEach(p -> {
             assertThat(p.version()).isNotBlank();
             assertThat(p.description()).isNotBlank();
@@ -219,5 +219,13 @@ class AgentSkillSpecServiceImplTest {
         assertThat(resolved.resolvedVersions())
                 .containsEntry("eng-code-review", "1.0.0")
                 .containsEntry("eng-verification", "1.0.0");
+    }
+
+    @Test
+    @DisplayName("阶段四：eng-web-research 声明 web_search 工具，resolve 工具并集自动包含")
+    void shouldResolveWebSearchToolFromEngWebResearch() {
+        AgentSkillSpecService.ResolvedSpec resolved = service.resolve(List.of("eng-web-research"));
+        assertThat(resolved.matchedLabels()).containsExactly("eng-web-research");
+        assertThat(resolved.requiredTools()).containsExactly("web_search");
     }
 }

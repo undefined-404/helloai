@@ -162,6 +162,8 @@ public class AgentDutyLeaseServiceImpl extends ServiceImpl<AgentDutyLeaseMapper,
         lease.setStartTime(now);
         lease.setLastRenewTime(now);
         lease.setExpireTime(now.plusMinutes(ttlMinutes));
+        // G-015 B4.3（V94）：持久化签发窗口，供 adaptiveRenew 复用（不再每轮重算）
+        lease.setTtlMinutes(ttlMinutes);
         save(lease);
 
         log.info("Agent {} 值班租约已创建: sessionId={}, expiresAt={}",
@@ -222,6 +224,9 @@ public class AgentDutyLeaseServiceImpl extends ServiceImpl<AgentDutyLeaseMapper,
         OffsetDateTime renewed = now.plusMinutes(ttlMinutes);
         OffsetDateTime current = active.getExpireTime();
         active.setExpireTime(current != null && current.isAfter(renewed) ? current : renewed);
+        // G-015 B4.3（V94）：续约**不改写** ttl_minutes —— 该列语义是「签发窗口」，
+        // 由 startLease 落库；续约只是延长 expire_time。若在此覆盖，在飞保活的 240 分钟
+        // 会污染签发窗口，空闲后又回落到 240，P2-10 的窗口跳变会以另一种形态复现。
         updateById(active);
         log.info("Agent {} 值班租约已续约: expiresAt={}", agentId, active.getExpireTime());
         return active;
@@ -304,9 +309,17 @@ public class AgentDutyLeaseServiceImpl extends ServiceImpl<AgentDutyLeaseMapper,
         if (active == null) {
             return null;
         }
-        int ttlMinutes = hasInFlightSubTask(agentId)
-                ? Math.max(dutyLeaseProperties.getMaxTtlMinutes(), dutyLeaseProperties.getMinTtlMinutes())
-                : resolveTtlMinutes(agentId, null);
+        int ttlMinutes;
+        if (hasInFlightSubTask(agentId)) {
+            // 任务执行期稳定保活：用最大窗口（E1 动态 TTL 自适应既定口径）
+            ttlMinutes = Math.max(dutyLeaseProperties.getMaxTtlMinutes(), dutyLeaseProperties.getMinTtlMinutes());
+        } else if (active.getTtlMinutes() != null && active.getTtlMinutes() > 0) {
+            // G-015 B4.3（V94）：空闲续约复用**签发窗口**，不再按表现分重算——
+            // 否则同一租约的窗口会随画像变化反复跳变（P2-10 实测 14399 → 3359）。
+            ttlMinutes = active.getTtlMinutes();
+        } else {
+            ttlMinutes = resolveTtlMinutes(agentId, null);
+        }
         return renewLease(agentId, ttlMinutes);
     }
 

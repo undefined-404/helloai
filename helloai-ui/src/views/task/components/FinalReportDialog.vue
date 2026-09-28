@@ -40,6 +40,13 @@
         导出 .md
       </el-button>
       <el-button
+        v-if="report?.content && report.hasPrev"
+        :loading="rollingBack"
+        @click="handleRollback"
+      >
+        恢复上一版
+      </el-button>
+      <el-button
         type="success"
         plain
         :loading="downloading"
@@ -53,7 +60,9 @@
         :disabled="task?.status !== 'DONE' || reportGenerating"
         @click="handleGenerate"
       >
-        {{ reportGenerating ? '生成中…' : (report?.content ? '重新生成' : '生成报告') }}
+        {{ reportGenerating
+          ? (report?.status === 'REVIEWING' ? '审查中…' : '生成中…')
+          : (report?.content ? '重新生成' : '生成报告') }}
       </el-button>
     </template>
   </el-dialog>
@@ -71,7 +80,7 @@ import type { Task, TaskFinalReport } from '@/types'
 const props = defineProps<{ modelValue: boolean; task: Task | null }>()
 // status-change: 把报告生成状态回传父组件，避免直接修改 prop 对象；
 // 父组件 patch 自己 list 里对应行的 finalReportStatus，关闭弹窗后仍能看到。
-type FinalReportStatus = 'NONE' | 'GENERATING' | 'DONE' | 'FAILED'
+type FinalReportStatus = 'NONE' | 'GENERATING' | 'REVIEWING' | 'DONE' | 'FAILED'
 const emit = defineEmits<{
   'update:modelValue': [v: boolean]
   'status-change': [status: FinalReportStatus]
@@ -86,10 +95,16 @@ watch(visible, v => {
 
 const loadingReport = ref(false)
 const generating = ref(false)
+const rollingBack = ref(false)
 const report = ref<TaskFinalReport | null>(null)
 
-// V41: 生成中 = 本地请求在途 或 后端状态为 GENERATING（自动路径/其他窗口触发）
-const reportGenerating = computed(() => generating.value || report.value?.status === 'GENERATING')
+// §12.2: GENERATING/REVIEWING 均视为处理中（生成/审查中）——按钮禁用 + 轮询延续
+function isInFlight(status?: string) {
+  return status === 'GENERATING' || status === 'REVIEWING'
+}
+
+// V41/V12.2: 生成中 = 本地请求在途 或 后端状态为 GENERATING/REVIEWING（自动路径/其他窗口触发）
+const reportGenerating = computed(() => generating.value || isInFlight(report.value?.status))
 
 // 空态文案：按后端生成状态区分（GENERATING/FAILED/NONE）
 const emptyDesc = computed(() => {
@@ -99,7 +114,7 @@ const emptyDesc = computed(() => {
   return '尚未生成整合报告，点击下方按钮由 Planner 整合全部子任务产出'
 })
 
-// 生成中轮询：弹窗打开且状态为 GENERATING 时每 5s 拉取一次，直到非生成中
+// 生成中/审查中轮询：弹窗打开且状态为 GENERATING/REVIEWING 时每 5s 拉取一次，直到收敛（非处理中）
 let pollTimer: ReturnType<typeof setInterval> | null = null
 function startPolling() {
   stopPolling()
@@ -108,7 +123,7 @@ function startPolling() {
     try {
       const r = await taskApi.getFinalReport(String(props.task.id))
       report.value = r
-      if (r.status !== 'GENERATING') stopPolling()
+      if (!isInFlight(r.status)) stopPolling()
     } catch { /* 网络异常不中断轮询 */ }
   }, 5000)
 }
@@ -124,7 +139,7 @@ async function loadReport() {
   try {
     const r = await taskApi.getFinalReport(String(props.task.id))
     report.value = r
-    if (r.status === 'GENERATING') startPolling()
+    if (isInFlight(r.status)) startPolling()
     else stopPolling()
   } catch { /* 拦截器已弹错 */ }
   finally { loadingReport.value = false }
@@ -146,13 +161,33 @@ async function handleGenerate() {
   emit('status-change', 'GENERATING')
   try {
     report.value = await taskApi.generateFinalReport(String(props.task.id))
-    emit('status-change', 'DONE')
-    ElMessage.success('整合报告生成完成')
+    emit('status-change', report.value?.status ?? 'DONE')
+    ElMessage.success(report.value?.status === 'REVIEWING' ? '整合报告生成完成，自动审查中' : '整合报告生成完成')
+    if (report.value?.status === 'REVIEWING') startPolling()
   } catch {
     // 拦截器已弹错（非 DONE / 无产出 / LLM 失败由后端 BizException 统一提示）；
     // 后端失败会置 FAILED，重拉刷新状态与文案
     await loadReport()
   } finally { generating.value = false }
+}
+
+// §12.1 单槽列回滚：current 与 prev 槽整体互换（可反复切换），互换后重拉最新报告
+async function handleRollback() {
+  if (!props.task || rollingBack.value) return
+  try {
+    await ElMessageBox.confirm(
+      '将恢复上一版报告并覆盖当前版本；当前版本会存入上一版槽，可再次切换回来。是否继续？',
+      '恢复上一版',
+      { type: 'warning', confirmButtonText: '恢复', cancelButtonText: '取消' }
+    )
+  } catch { return }
+  rollingBack.value = true
+  try {
+    report.value = await taskApi.rollbackFinalReport(String(props.task.id))
+    emit('status-change', 'DONE')
+    ElMessage.success('已恢复上一版整合报告')
+  } catch { await loadReport() } // 后端 409/404 拦截器已弹错，重拉刷新状态
+  finally { rollingBack.value = false }
 }
 
 // ── 交付物 zip 下载（实时聚合；报告已生成时包内含 01-最终整合报告.md）──

@@ -1,12 +1,15 @@
 package com.helloai.core.planner.clarify;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.config.WebSearchProperties;
+import com.helloai.core.agent.tool.ToolExecutionResult;
+import com.helloai.core.agent.tool.ToolExecutor;
 import com.helloai.core.planner.search.WebPageContent;
 import com.helloai.core.planner.search.WebSearchOutcome;
 import com.helloai.core.planner.search.WebSearchResult;
 import com.helloai.core.planner.service.SearchQueryPlannerService;
 import com.helloai.core.planner.service.WebPageFetchService;
-import com.helloai.core.planner.service.WebSearchService;
+import com.helloai.core.planner.tool.WebSearchToolResult;
 
 import java.time.LocalDate;
 import lombok.extern.slf4j.Slf4j;
@@ -17,6 +20,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -27,6 +31,11 @@ import java.util.regex.Pattern;
  * <p>从 {@link com.helloai.core.planner.service.impl.RequirementClarifyServiceImpl} 拆分
  * （CODE_STYLE §7.8 类规模红线）：搜索编排族（依赖 4 个搜索服务）独立成组件后，
  * 意图状态机主类只保留状态流转决策，搜索细节可独立单测。</p>
+ *
+ * <p>阶段四 Capability 化：搜索动作按工具名经 {@link ToolExecutor} 调平台工具
+ * {@code web_search}（能力注册在 planner 域，见 web_search 工具定义），
+ * 失败/无结果保持「空列表降级」语义——webSearchEnabled 会话开关在编排层之外
+ * （RequirementClarifyService 侧），与能力注册无关。</p>
  */
 @Slf4j
 @Component
@@ -36,29 +45,33 @@ public class ClarifyWebSearchOrchestrator {
     private static final Pattern URL_IN_TEXT_PATTERN = Pattern.compile(
             "https?://[^\\s<>\"'，。；、（）()【】\\[\\]{}]+");
 
-    private final WebSearchService webSearchService;
+    private final ToolExecutor toolExecutor;
     private final WebSearchProperties webSearchProperties;
     private final WebPageFetchService pageFetchService;
     private final SearchQueryPlannerService searchQueryPlannerService;
     private final RelativeTimeNormalizer relativeTimeNormalizer;
     private final SearchGapAssessor searchGapAssessor;
+    /** web_search 工具输出 JSON 解析。 */
+    private final ObjectMapper objectMapper;
 
     /**
      * 显式构造器（绕开 Lombok {@code @RequiredArgsConstructor} 在
      * IDE 增量编译里漏抓新增 final 字段的坑，与主类口径一致）。
      */
-    public ClarifyWebSearchOrchestrator(WebSearchService webSearchService,
+    public ClarifyWebSearchOrchestrator(ToolExecutor toolExecutor,
                                         WebSearchProperties webSearchProperties,
                                         WebPageFetchService pageFetchService,
                                         SearchQueryPlannerService searchQueryPlannerService,
                                         RelativeTimeNormalizer relativeTimeNormalizer,
-                                        SearchGapAssessor searchGapAssessor) {
-        this.webSearchService = webSearchService;
+                                        SearchGapAssessor searchGapAssessor,
+                                        ObjectMapper objectMapper) {
+        this.toolExecutor = toolExecutor;
         this.webSearchProperties = webSearchProperties;
         this.pageFetchService = pageFetchService;
         this.searchQueryPlannerService = searchQueryPlannerService;
         this.relativeTimeNormalizer = relativeTimeNormalizer;
         this.searchGapAssessor = searchGapAssessor;
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -150,6 +163,7 @@ public class ClarifyWebSearchOrchestrator {
         }
         long t0 = System.currentTimeMillis();
         List<String> attempted = new ArrayList<>();
+        String provider = "web_search_tool";
         try {
             // 多查询词合并（对齐 Kimi/DeepSeek 网页版 query expansion）：
             // 对全部候选词都搜索、按 URL 去重合并，总条数 cap 到 maxResults；
@@ -171,24 +185,32 @@ public class ClarifyWebSearchOrchestrator {
                     break;
                 }
                 attempted.add(q);
-                List<WebSearchResult> hits = webSearchService.search(q, perQuery);
-                // 大模型总结取首个成功候选词的（主查询优先；answer=false 的供应商返回 null）
-                if (answer == null) {
-                    String a = webSearchService.answerSummary(q);
-                    if (a != null && !a.isBlank()) {
-                        answer = a;
+                // 阶段四：搜索动作走平台工具 web_search（能力归 planner），
+                // 失败/无结果降级空列表（与旧直调契约语义一致）；provider 取工具输出
+                WebSearchToolResult out = callWebSearchTool(q, perQuery);
+                int hits = 0;
+                if (out != null) {
+                    if (out.provider() != null && !out.provider().isBlank()
+                            && !"web_search_tool".equals(out.provider())) {
+                        provider = out.provider();
+                    }
+                    // 大模型总结取首个成功候选词的（withAnswer=true 且供应商支持才返回）
+                    if (answer == null && out.answer() != null && !out.answer().isBlank()) {
+                        answer = out.answer();
+                    }
+                    for (WebSearchResult r : out.results()) {
+                        if (r == null || r.getUrl() == null || r.getUrl().isBlank()
+                                || !seenUrls.add(r.getUrl())) {
+                            continue; // 跨词同 URL 去重
+                        }
+                        searched.add(r);
+                        hits++;
+                        if (searched.size() >= maxResults) {
+                            break;
+                        }
                     }
                 }
-                for (WebSearchResult r : hits) {
-                    if (r.getUrl() != null && !r.getUrl().isBlank() && !seenUrls.add(r.getUrl())) {
-                        continue; // 跨词同 URL 去重
-                    }
-                    searched.add(r);
-                    if (searched.size() >= maxResults) {
-                        break;
-                    }
-                }
-                log.info("澄清联网搜索：候选词命中 {} 条: query={}", hits.size(), q);
+                log.info("澄清联网搜索：候选词命中 {} 条: query={}", hits, q);
                 if (searched.size() >= maxResults) {
                     break;
                 }
@@ -202,28 +224,31 @@ public class ClarifyWebSearchOrchestrator {
                         stripUrls(userMessage), new ArrayList<>(searched), attempted);
                 if (gapQuery != null && !gapQuery.isBlank()) {
                     attempted.add(gapQuery);
-                    List<WebSearchResult> hits = webSearchService.search(gapQuery, perQuery);
-                    for (WebSearchResult r : hits) {
-                        if (r.getUrl() != null && !r.getUrl().isBlank() && !seenUrls.add(r.getUrl())) {
-                            continue;
-                        }
-                        searched.add(r);
-                        if (searched.size() >= maxResults) {
-                            break;
+                    WebSearchToolResult gap = callWebSearchTool(gapQuery, perQuery);
+                    if (gap != null) {
+                        for (WebSearchResult r : gap.results()) {
+                            if (r == null || r.getUrl() == null || r.getUrl().isBlank()
+                                    || !seenUrls.add(r.getUrl())) {
+                                continue;
+                            }
+                            searched.add(r);
+                            if (searched.size() >= maxResults) {
+                                break;
+                            }
                         }
                     }
                     rounds = 2;
                     log.info("澄清联网搜索：缺口补搜完成 gapQuery={}, hits={}, total={}",
-                            gapQuery, hits.size(), searched.size());
+                            gapQuery, gap == null ? 0 : gap.results().size(), searched.size());
                 }
             }
             long costMs = System.currentTimeMillis() - t0;
             List<WebSearchResult> merged = mergeFetchedIntoResults(pages, searched);
             log.info("澄清联网搜索结束: provider={}, queries={}, rounds={}, answer={}, pages={}, results={}, costMs={}",
-                    webSearchService.provider(), attempted, rounds,
+                    provider, attempted, rounds,
                     answer != null ? "有" : "无", pages.size(), merged.size(), costMs);
             return WebSearchOutcome.builder()
-                    .provider(webSearchService.provider())
+                    .provider(provider)
                     .query(attempted.isEmpty() ? "" : attempted.get(0))
                     .queries(attempted)
                     .costMs(costMs)
@@ -236,7 +261,7 @@ public class ClarifyWebSearchOrchestrator {
         } catch (Exception e) {
             log.warn("澄清联网搜索异常降级（不动澄清主流程）: queries={}, err={}", attempted, e.getMessage());
             return WebSearchOutcome.builder()
-                    .provider(webSearchService.provider())
+                    .provider(provider)
                     .query(attempted.isEmpty() ? "" : attempted.get(0))
                     .queries(attempted)
                     .costMs(System.currentTimeMillis() - t0)
@@ -244,6 +269,34 @@ public class ClarifyWebSearchOrchestrator {
                     .failed(true)
                     .reason(e.getMessage())
                     .build();
+        }
+    }
+
+    /**
+     * 经平台工具执行一次联网搜索（web_search，阶段四 Capability 化）。
+     *
+     * <p>入参序列化 + 工具执行 + 输出反序列化；任意环节失败（工具失败/非 JSON/缺字段）
+     * 返回 null，调用方按「空结果」降级——与旧直调契约（失败返回空列表）语义一致。</p>
+     */
+    private WebSearchToolResult callWebSearchTool(String query, int maxResults) {
+        String argsJson;
+        try {
+            argsJson = objectMapper.writeValueAsString(Map.of("query", query, "maxResults", maxResults));
+        } catch (Exception e) {
+            log.warn("澄清联网搜索：web_search 入参序列化失败，降级空结果: query={}, err={}",
+                    query, e.getMessage());
+            return null;
+        }
+        ToolExecutionResult result = toolExecutor.execute("web_search", argsJson);
+        if (result == null || !result.success()
+                || result.output() == null || result.output().isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(result.output(), WebSearchToolResult.class);
+        } catch (Exception e) {
+            log.warn("澄清联网搜索：web_search 输出解析失败，降级空结果: err={}", e.getMessage());
+            return null;
         }
     }
 

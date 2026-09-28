@@ -10,8 +10,12 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 /**
  * 本地磁盘产物存储：storageUrl 形如 {@code local://{bucket}/{objectKey}}，
@@ -80,6 +84,62 @@ public class LocalArtifactStorage implements ArtifactStorage {
     @Override
     public boolean supports(String storageUrl) {
         return storageUrl != null && storageUrl.startsWith(URL_PREFIX);
+    }
+
+    @Override
+    public boolean exists(String storageUrl) {
+        String objectKey = parseObjectKey(storageUrl);
+        Path baseDir = baseDir();
+        Path target = baseDir.resolve(objectKey).normalize();
+        // 越界路径一律视为不存在（与 load 的路径穿越防护同源）
+        return target.startsWith(baseDir) && Files.isRegularFile(target);
+    }
+
+    @Override
+    public void validateAddress(String storageUrl) {
+        if (supports(storageUrl)) {
+            // 仅校验格式（bucket 段不设白名单：local:// 的 bucket 不参与实际落盘路径，
+            // 且存量数据可能带历史 bucket 名，收紧会误伤）
+            parseObjectKey(storageUrl);
+        }
+    }
+
+    @Override
+    public List<StoredObject> listObjects(String bucket, String prefix) {
+        Path baseDir = baseDir();
+        if (!Files.isDirectory(baseDir)) {
+            return List.of();
+        }
+        String wanted = prefix == null ? "" : prefix;
+        List<StoredObject> out = new ArrayList<>();
+        try (Stream<Path> walk = Files.walk(baseDir)) {
+            for (Path file : walk.filter(Files::isRegularFile).toList()) {
+                String objectKey = baseDir.relativize(file).toString().replace('\\', '/');
+                if (!objectKey.startsWith(wanted)) {
+                    continue;
+                }
+                out.add(new StoredObject(properties.getBucket(), objectKey, Files.size(file),
+                        Files.getLastModifiedTime(file).toInstant().atOffset(ZoneOffset.UTC)));
+            }
+        } catch (IOException e) {
+            throw new BizException("产物列表读取失败: " + e.getMessage());
+        }
+        return out;
+    }
+
+    @Override
+    public void removeObject(String bucket, String objectKey) {
+        Path baseDir = baseDir();
+        Path target = baseDir.resolve(objectKey).normalize();
+        if (!target.startsWith(baseDir)) {
+            throw new BizException(400, "非法产物路径: " + objectKey);
+        }
+        try {
+            Files.deleteIfExists(target); // 幂等
+            log.info("产物删除(本地): objectKey={}", objectKey);
+        } catch (IOException e) {
+            throw new BizException("产物删除失败: " + e.getMessage());
+        }
     }
 
     /** 从 local://{bucket}/{objectKey} 解析 objectKey；格式非法抛 BizException。 */

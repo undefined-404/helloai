@@ -60,6 +60,21 @@ public interface AttachmentService extends IService<Attachment> {
     void invalidateBySubTask(Long subTaskId);
 
     /**
+     * 全量读取附件行，<b>包含逻辑删除（{@code deleted=1}）的记录</b>，供存储对账巡检
+     * 构建"被引用对象"集合。
+     *
+     * <p>口径必须保守：只要还有任意一行（任意状态、含已逻辑删除）指向某个对象，
+     * 该对象就不算孤儿，不得被清理。若只取 {@code deleted=0} 的行，
+     * 任务级联删除（{@link com.helloai.core.task.mapper.AttachmentMapper#physicalDeleteByTaskId}
+     * 之外的逻辑删除路径）留下的对象会被误判成孤儿而删除。</p>
+     *
+     * <p>仅供对账巡检使用，业务查询请走 {@link #list}/{@link #listActive}。</p>
+     *
+     * @return 全部附件行（绝不返回 null）
+     */
+    List<Attachment> listAllIncludingDeleted();
+
+    /**
      * 按 ID 查询附件；不存在时抛 {@link BizException}(404, "附件不存在")，
      * 供 Controller 统一透传给全局异常处理。
      *

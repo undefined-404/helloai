@@ -8,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -205,7 +206,43 @@ public class McpController {
         String workMode = (String) args.get("workMode");
         Integer maxConcurrent = args.get("maxConcurrent") instanceof Number n ? n.intValue() : null;
         Integer ttlMinutes = args.get("ttlMinutes") instanceof Number n ? n.intValue() : null;
-        return R.ok(mcpToolService.checkIn(agentId, workMode, maxConcurrent, ttlMinutes));
+        // G-015 B4.2：REST 通道此前不透传 skills，导致 checkIn.mergedSkills 恒 null
+        //（合并逻辑只存在于 5 参重载，REST/JSON-RPC 都调 4 参重载）。
+        return R.ok(mcpToolService.checkIn(agentId, workMode, maxConcurrent, ttlMinutes,
+                resolveSkills(args)));
+    }
+
+    /**
+     * 解析 checkIn 的 {@code skills} 入参（G-015 B4.2）。
+     *
+     * <p>兼容两种客户端形态，避免 schema 与实现漂移：</p>
+     * <ul>
+     *   <li>JSON 数组（{@code tools/list} 声明的类型，推荐）：{@code ["a","b"]}</li>
+     *   <li>逗号分隔字符串（SSE 通道历史形态）：{@code "a,b"}</li>
+     * </ul>
+     *
+     * @return 归一化后的技能列表；未上报返回 null（保持「本次未上报」语义）
+     */
+    private List<String> resolveSkills(Map<String, Object> args) {
+        Object raw = args.get("skills");
+        if (raw == null) {
+            return null;
+        }
+        List<String> skills = new ArrayList<>();
+        if (raw instanceof Iterable<?> iterable) {
+            for (Object item : iterable) {
+                if (item != null && !item.toString().isBlank()) {
+                    skills.add(item.toString().trim());
+                }
+            }
+        } else {
+            for (String part : raw.toString().split(",")) {
+                if (!part.isBlank()) {
+                    skills.add(part.trim());
+                }
+            }
+        }
+        return skills.isEmpty() ? null : skills;
     }
 
     /** POST /api/mcp/tools/checkOut（直通端点；body 可选 closeReason / reason） */
@@ -404,7 +441,9 @@ public class McpController {
                 String workMode = (String) args.get("workMode");
                 Integer maxConcurrent = args.get("maxConcurrent") instanceof Number n ? n.intValue() : null;
                 Integer ttlMinutes = args.get("ttlMinutes") instanceof Number n ? n.intValue() : null;
-                yield mcpToolService.checkIn(agentId, workMode, maxConcurrent, ttlMinutes);
+                // G-015 B4.2：JSON-RPC 通道同样透传 skills（此前恒 null）
+                yield mcpToolService.checkIn(agentId, workMode, maxConcurrent, ttlMinutes,
+                        resolveSkills(args));
             }
             case "checkOut" -> {
                 String closeReason = (String) args.get("closeReason");

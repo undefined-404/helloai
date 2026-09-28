@@ -9,6 +9,7 @@ import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.review.service.SubTaskReviewService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Uncertainty;
+import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -41,6 +42,7 @@ public class ReviewExecutionEngine {
     private final TaskTimelineService taskTimelineService;
     private final VerdictParser verdictParser;
     private final ReviewEvidenceAssembler reviewEvidenceAssembler;
+    private final SubTaskService subTaskService;
 
     /**
      * 单次核验（不改状态不落库）：渲染 Prompt → LLM 调用 → 对话流双写 → 解析判定；
@@ -78,6 +80,8 @@ public class ReviewExecutionEngine {
                     .userPrompt(prompt)
                     .context(Map.of("subTaskId", subTaskId, "scene", "subtask_review"))
                     .requiredCapabilities(Map.of())
+                    // G-016 契约层技能注入：核验与执行同一技能清单（mergeSkills 恒非 null）
+                    .skills(subTaskService.mergeSkills(subTask))
                     .build();
             result = platformAgentExecutionService.executeSync(reviewer, agentTask);
         } catch (Exception e) {

@@ -4,7 +4,7 @@
 >
 > 本文档只描述当前真实代码与已落地能力，不描述未来愿景。
 >
-> 最后更新：2026-09-10
+> 最后更新：2026-09-28（最终报告链路升级至阶段四：审查异步化 REVIEWING + 专用池 + 三重陈旧守卫、轮次无状态、V95 单槽列 + rollback 端点；外部 Agent v3 反馈闭环）
 
 # 1. 当前项目定位
 
@@ -69,6 +69,7 @@ helloai-start
 Task
 SubTask
 Agent
+AgentTask（skills：契约层技能注入载体，空列表不注入，行为零变化）
 ExecutionCommand
 AgentExecutionRecord
 Review
@@ -122,6 +123,23 @@ Credential
                 PASS        REWORK
 ```
 
+最终报告链路（阶段四，2026-09-28）：
+
+```text
+生成：出纲（Outline Prompt）→ 成文（Report Prompt）→ 审查(Review Prompt)，至多 3 次 LLM 调用
+降级：出纲失败 → 单次调用（现状兜底）；审查可配置开关关闭（autoFinalReportReviewEnabled=false 时写回直接 DONE）
+读取口径：物化附件优先（UTF-8 正文）→ ExecutionRecord SUMMARY/DELIVERABLES 注入 → output 兜底
+限额单源：AttachmentContentPolicy（shared/util，附件限额 + 文本/媒体族判定）
+状态机：NONE → GENERATING → REVIEWING → DONE（/ FAILED）；REVIEWING 为异步审查在途态，
+        审查链全部出口（pass / unparseable / LLM failed / max_review / skipped / 开关关闭）收敛 DONE
+审查异步：FinalReportReviewListener 同步入口 + reportReviewExecutor 专用池（core1/max2/queue50/AbortPolicy）
+        执行；事件携带 reportTime（微秒截断）作三重陈旧守卫（审查前 / rework 前 / 收敛条件写回）
+轮次：无状态——generate 恒为 1，同轮返工由监听器显式传 attempt+1（不落库）
+版本：V95 单槽列 final_report_prev(_agent_id/_time)——覆盖前现值落槽；
+        POST /api/tasks/rollbackFinalReportByTaskId/{id}：current↔prev 整体互换可反复切换，无 prev 409；
+        事件 task_final_report_rolled_back
+```
+
 # 6. 当前可靠性能力
 
 当前已经形成的基础能力包括：
@@ -137,7 +155,8 @@ Credential
 - DLQ / 死信台账；
 - Agent 在线状态治理（**2026-09-24 更新**：ACTIVE 值班租约作为一等存活证据——心跳过期不直接判 OFFLINE，避免在岗 Agent 被误判离线触发在飞任务重派；`renewLease` 到期时刻同租约内单调不减）；
 - 外部 Agent 通道与内部分发链约束同口径（**2026-09-24，G-014**：`claimSubTask` 复用 `isReady` 依赖门禁、`listAvailable` 就绪过滤；新增 MCP `startSubTask` 打通 REWORK 返工出口；`SubTaskDetail` 内联产出附件与贡献者，产物可发现）；
-- 失败重派和结果收敛。
+- 失败重派和结果收敛；
+- 产物存储一致性（**2026-09-28，G-017**：ArtifactStorage 抽象 + Composite 路由（local/minio 双实现、按 type/URL 前缀分派）+ `AttachmentServiceImpl.register` 前置校验（validateAddress + 存在性，不存在 400 拒绝，把预览期 500 提前成登记期 400）；`ArtifactStorageReconcileTask` 6h ShedLock 只读对账（attachment 全量含逻辑删除 ↔ 桶内对象双向比对，悬空/孤儿/字节不符三态）；孤儿清理默认关闭，三重保险——开关 + 24h 时间窗 + 单轮上限 200）。
 
 这些属于 HelloAI 的**分布式编排与可靠性基础设施**。
 
@@ -224,9 +243,12 @@ resolvedSpecs
 SKILL_RESOLVED（携带 resolvedVersions）
 SkillPackage 元数据层（version / requiredTools / dependencies / inputSchema / outputSchema / validationRules）
 SKILL_CATALOG 目录注入（拆解侧能力感知，G-010 S2）
+AgentTask.skills 契约层统一注入（execute/executeStream + 拆解/审查收口/报告 5 类同步 LLM 调用挂点，空不注入行为零变化，2026-09-28）
 ```
 
 Skill 已从隐式 Prompt 拼接迁移为显式 Runtime 输入 + 元数据面，required_skills 创建 → 拆解 → 派发 → 执行四段贯通，并经真实任务实测闭环（2026-09-10 外部执行者双轮，见 log）。
+
+已结构化技能包 4 个（eng-*）：eng-doc-standard / eng-code-review / eng-verification / eng-web-research（requiredTools=[web_search]，阶段四）。
 
 当前尚未全量形成的 Capability Package 剩余缺口主要是：
 
