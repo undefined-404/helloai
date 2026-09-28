@@ -223,7 +223,7 @@
   <rect x="36" y="656" width="186" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
   <rect x="37" y="657" width="3" height="32" rx="1.5" fill="#14855a"/>
   <text x="48" y="669" font-size="12" font-weight="600" fill="#1b2430">helloai-job</text>
-  <text x="48" y="682" font-size="10.5" fill="#55617a">17 收敛任务 · 最终一致兜底</text>
+  <text x="48" y="682" font-size="10.5" fill="#55617a">19 收敛任务 · 最终一致兜底</text>
   <rect x="228" y="656" width="105" height="34" rx="7" fill="#e3f4eb" stroke="#b3dfc9"/>
   <rect x="229" y="657" width="3" height="32" rx="1.5" fill="#14855a"/>
   <text x="240" y="669" font-size="12" font-weight="600" fill="#1b2430">dlx</text>

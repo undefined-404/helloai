@@ -58,6 +58,13 @@ Runtime 只依赖 SandboxProvider Contract，具体 Local / Docker / Remote / K8
 ### Boundary
 轮次去状态化（§12.3）：attempt 不落库、generate 恒为 1、返工轮次由监听器显式传参；版本单槽化（§12.1）：V95 三列 prev 槽 + rollback 整体互换。均不新建 Runtime / Scheduler / Workflow，不建第二套状态机。
 
+### 修订（2026-09-28，见 ARCH-20260928-003）
+本决策的「审查入口为普通 `@EventListener`、收敛出口全在进程内事件」已被 **ARCH-20260928-003** 取代：
+- 入口改 `@TransactionalEventListener(phase = AFTER_COMMIT)`（原为普通 `@EventListener`，是潜伏相位 bug——一旦生成主链补上事务，会在提交前触发并被陈旧守卫丢弃）；
+- 新增 L2 Outbox + MQ 消费、L3 巡检兜底，「不收敛则 UI 永久轮询」不再是既成事实（原文 Consequence 中的该表述已失效）；
+- 收敛写口从 `lambdaUpdate` 直写收口到 `FinalReportStateMachine` + `TaskService` 状态机写口。
+专用池 `reportReviewExecutor`（AbortPolicy）与 `reportTime` 三重陈旧守卫仍有效，本修订不改其口径。
+
 ## ARCH-20260928-002 — 产物存储抽象（ArtifactStorage）与对账巡检纪律
 
 ### Decision
@@ -75,3 +82,32 @@ register 的「先落库后校验」历史行为改变为「先校验后落库�
 
 ### Boundary
 历史悬空数据（106 条）不自动修复（不确定归属存储实例）；孤儿清理仅作用于「未被任何 attachment 行引用」的对象；R7 安全项（公网暴露 + 默认凭据）属部署侧，不在此代码变更范围内。
+
+## ARCH-20260928-003 — 报告审查链三级容错 + 状态机写口收口（取代 ARCH-20260928-001 的进程内收敛口径）
+
+### Decision
+最终报告审查链由「单级进程内事件」补齐为与子任务核验链同构的**三级容错**，并把状态写口收口到显式状态机：
+
+1. **L1 事务边界 + 正确相位**：新增 `FinalReportPersistService.persistAndRequestReview`（`@Transactional`），把「报告写回（含 prev 槽）」+「L2 Outbox 事件」+「L1 内存事件」三者放进**同一个事务**——修复原 `lambdaUpdate` 与 `publishEvent` 之间的双写窗口（无原子性：进程在中途挂掉即「报告已落库、审查永不触发」）。审查入口改 `@TransactionalEventListener(phase = AFTER_COMMIT)`。**独立 Bean 是必需的**（同类内自调用不走代理）。
+2. **L2 持久化触发 + 幂等消费**：`AgentOutboxService.createReportReviewEvent` 写 `agent_outbox_event`；由既有 `AgentEventCompensationTask`（15s）补投到新增队列 `helloai.report-review.queue`（DLX + `x-max-length=50000` + `reject-publish`）；`MqFinalReportReviewConsumer extends AbstractIdempotentConsumer` 以 `eventId` 为幂等键消费（Redis + DB 双层幂等）。
+3. **L3 巡检兜底**：新增 `FinalReportReviewOrphanTask`（`@Scheduled` 30s + ShedLock），扫「`final_report_status=REVIEWING` 且 `final_report_time` 早于阈值」的任务，**收敛到 DONE 而非重投审查**（报告已交付；重投会无界消耗 LLM），并落 timeline `task_final_report_review_orphan_converged`。
+4. **状态机写口**：新增 `FinalReportStateMachine` 显式合法迁移表（`assertTransit`），状态写口收口为 `TaskService.transitFinalReportStatus` / `convergeFinalReportToDone`；收敛使用「状态 + `final_report_time`」双条件 CAS，替代散落的 `lambdaUpdate().set(...)`。
+
+### Rationale
+原链只有 L1 一级（且相位错误），存在三类失效面：双写丢失（日志实证 07-31 有一条 `task_final_report_generated` 无配对审查事件）、进程重启丢事件（纯内存监听器）、`isStale` 分支（`review_discarded_stale` / `rework_discarded_stale`）明确不收敛 → 报告可永久停在 `REVIEWING`，无自愈入口，注释自陈「需人工介入」。子任务核验链早已是三级容错，本批即口径对齐。**不把 LLM 调用放进事务**（长事务是反模式）——用 Outbox/MQ + 状态机达成最终一致，而非加长事务。
+
+### Consequence
+`REVIEWING` 的每个收敛出口（pass / unparseable / LLM failed / max_review / skipped / 开关关闭 / L3 超时）都会落到 `DONE`；审查链具备重放与自愈能力。写回被接管（CAS 未命中）时本轮生成结果被放弃并返回库内最新状态，不再覆盖新链。
+
+### Boundary
+不新建 Runtime / Scheduler / Workflow；不新增 Flyway 迁移（复用既有 `agent_outbox_event` 与新配置项）；L3 策略为「收敛不重投」，故不解决「审查未执行但用户期望补审」的场景（如需重投属新决策）。前端修复（轮询收敛广播 `status-change`）属表现层，同批落地但不属本决策范围。
+
+### 已知遗留（代码审查发现，登记待修）
+本决策落地后经专业代码审查发现 5 项缺陷，用户决策「先登记遗留、暂不改代码」（详见 `doc/design/HelloAI_契约层能力注入与最终报告整合改造方案.md` §12.5.5）：
+- 🔴 **#1** `FinalReportStateMachine` 迁移表缺 `FAILED→DONE`，且 `rollback` 的 `assertTransit` 在 CAS 写库之后 → 生成失败(FAILED)且 prev 槽非空时点「恢复上一版」会 500（库已静默回滚、审计不落）。**确定性功能回归**。
+- 🟠 **#2** `generateWithAttempt` 断言用陈旧 Java 快照且在 try/catch 外 → 并发生成竞态下状态可能永久卡 `GENERATING`（L3 只扫 REVIEWING，无恢复口）。
+- 🟠 **#3** L3 `FinalReportReviewOrphanTask.converge()` 不抢防双审锁、阈值 300s < 锁 TTL 600s → 慢审查被误判孤儿落误导审计；迟到 reject 可把已收敛 `DONE` 翻回 `GENERATING`（迟到 pass 不覆盖，`eq(REVIEWING)` CAS 已挡）。
+- 🟠 **#4** `onFinalReportGenerated`（AFTER_COMMIT）内同步兜底落库未声明 `REQUIRES_NEW` → 审查池饱和时 `review_skipped` 审计与收敛可能静默丢。
+- 🟠 **#5** `MqFinalReportReviewConsumer` 抢锁失败被记为「消费成功」并 ACK → L1 进程崩溃后无链路重投（DLX 分支不可达）。（重复投递不会重复烧 LLM：锁 + 状态守卫 + isStale 三道防线有效。）
+
+上述缺陷与本决策的「三级容错」目标不矛盾（架构方向正确），属实现细节待打磨；修复前 Consequence 段的「每个收敛出口都会落到 DONE / 具备重放与自愈能力」在上述并发/边界场景下不成立。

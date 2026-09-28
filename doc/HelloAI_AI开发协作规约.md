@@ -982,11 +982,14 @@ LocalProcess
 
 # 23. PowerShell 验证体系
 
-当前项目已有约 70 个正式 PowerShell 脚本，主要位于：
+当前项目已有 76 个正式 PowerShell 脚本 + 24 个 macOS/Linux Shell 脚本，主要位于：
 
 ```text
-scripts/powershell/
+scripts/powershell/     # Windows 侧（pwsh / Windows PowerShell 5.1）
+scripts/shell/          # macOS/Linux 侧（zsh / bash）
 ```
+
+全量分类索引（按「验收 / 运维 / 外部 Agent 守护 / 一次性」分组，含各脚本前置条件与已知问题）见 **`scripts/README.md`**——新增脚本前先查该索引，避免重复造轮子。
 
 因此：
 

@@ -28,12 +28,12 @@ Planning → Orchestration → Distributed Execution → Review → Governance
 | Maven 模块 | 6 后端模块 + helloai-ui 前端（Vue 3 SPA） |
 | 子任务状态机 | 11 态，唯二终态（DONE / CANCELLED） |
 | Agent 选人 | 12 层硬过滤 + 4 级软排序 |
-| MCP 接入工具 | 12 个（pullTasks / claimSubTask / getSubTaskDetail / submitResult / checkIn …） |
+| MCP 接入工具 | 13 个（pullTasks / claimSubTask / startSubTask / getSubTaskDetail / submitResult / checkIn …） |
 | LLM Provider | 4 家动态接入（DeepSeek / Moonshot / MiniMax / DashScope） |
-| 定时收敛任务 | 17 个（Outbox 中继 / 超时补偿 / 健康巡检 / 租约过期 …） |
-| 数据库增量迁移 | 83 个（Flyway V1 → V93，已提交 DDL 永不修改） |
+| 定时收敛任务 | 19 个（Outbox 中继 / 超时补偿 / 健康巡检 / 租约过期 / 报告审查孤儿巡检 …） |
+| 数据库增量迁移 | 85 个（Flyway V1 → V95，已提交 DDL 永不修改） |
 | 权限体系 | 4 角色分层（SUPER_ADMIN / ADMIN / NORMAL_USER / GUEST）+ 131 处动作级权限码（含业务面适用接口） |
-| 验证脚本 | 76 个（PowerShell，脚本输出即事实源） |
+| 验证脚本 | 76 个 PowerShell + 24 个 Shell（索引见 `scripts/README.md`，脚本输出即事实源） |
 | 迭代执行记录 | 160+ 条目（追加式，含决策演进注记） |
 | 代码规范 | 66 章（`HelloAI_CODE_STYLE.md`） |
 | AI 协作规约 | 43 节开发生命周期规约 |
@@ -96,7 +96,7 @@ flowchart TB
     RW --> EXE
     RV -->|通过| DONE["DONE · 解锁下游依赖"]
     DONE --> REPORT["Planner 整合最终报告<br/>+ zip 交付"]
-    EXE -. 失败 .-> GUARD["熔断 / 重派 / 死信兜底<br/>17 个收敛任务持续对账"]
+    EXE -. 失败 .-> GUARD["熔断 / 重派 / 死信兜底<br/>19 个收敛任务持续对账"]
 ```
 
 ## 2.4 V1 能力全景
@@ -139,10 +139,10 @@ flowchart TB
 ### 可视化与交付
 
 - **四件套可视化**：依赖 DAG 视图（拓扑分层流水线）、时间线事件流、泳道式执行时序图、质量度量看板（一次通过率 / 返工轮次 / 驳回原因分布 / Reviewer 放水率，7/30/90 天窗口）；
-- **最终整合报告**：四态防重（NONE / GENERATING / DONE / FAILED）+ CAS 防重入 + 失败一键重试；
+- **最终整合报告**：五态状态机（NONE / GENERATING / REVIEWING / DONE / FAILED）+ 三级容错（L1 事务内事件 / L2 Outbox+MQ 补投 / L3 超时巡检收敛）+ 写口收口显式迁移表 + 版本回滚（current ↔ prev 互换）+ CAS 防重入 + 失败一键重试；
 - **交付物体系**：拓扑序 zip 打包下载；LLM 产出自动物化为附件（`local://` / `minio://` 存储抽象）；结构化多文件产出物化（LLM manifest 协议）；附件版本管理（同名去活 / 打回失效 / 历史回查）。
 
-### 异构接入：MCP 协议 + 12 个工具
+### 异构接入：MCP 协议 + 13 个工具
 
 | 接入类型 | 执行方式 | 典型代表 |
 |---|---|---|
@@ -166,7 +166,7 @@ flowchart TB
 | 前置任务未完成 | `depends_on` 拓扑守卫：下游不提前分发，不无效分配 |
 | 子任务滞留孤儿 | 5 分钟快速巡检兜底（依赖守卫不误伤未就绪任务） |
 | 分布式并发 | Redisson 业务互斥锁 + ShedLock 定时任务单例锁（为水平扩容打底） |
-| 兜底收敛 | helloai-job 17 个定时任务持续对账，最终一致 |
+| 兜底收敛 | helloai-job 19 个定时任务持续对账，最终一致 |
 
 ## 2.5 运行机制（工程视角）
 
@@ -213,7 +213,7 @@ Task Running Spec 与最终整合报告能显著缓解拆分带来的上下文�
 - **单一状态权威**：业务状态机唯一，观测数据只记事实；
 - **跨域依赖方向管控**：task → agent 允许，agent → task 禁止（存量技术债登记台账，只减不增）；
 - **迁移不可变**：Flyway 已提交 DDL 永不修改，只做增量；
-- **每一步可验证**：76 个验证脚本覆盖主链，脚本输出即事实源，完成报告必须区分 PASS / FAIL / NOT RUN；
+- **每一步可验证**：76 个 PowerShell + 24 个 Shell 验证脚本覆盖主链，脚本输出即事实源，完成报告必须区分 PASS / FAIL / NOT RUN；
 - **文档治理**：当前事实 / 目标架构 / 差距 / 计划 / 决策五层职责分离，历史全部归档可追溯。
 
 ## 2.8 V1 埋下的 Harness 伏笔
@@ -431,7 +431,7 @@ flowchart LR
 | helloai-api | 42 个 Controller，纯 HTTP 转发（编排不进 Controller） | 接入层 |
 | helloai-start | 启动装配 / 线程池 / Flyway / 初始化 | 接入层 |
 | helloai-mq | Producer / Consumer 声明封装 | 横向基础设施 |
-| helloai-job | 17 个定时收敛任务 | State Convergence |
+| helloai-job | 19 个定时收敛任务 | State Convergence |
 | helloai-core | 6 大业务域 47 个子包 | 五层主体 |
 
 ## 4.2 五层归位全景图
@@ -457,7 +457,7 @@ flowchart LR
 ## 4.4 两个关键观察
 
 1. **agent 是横跨四个目标层的巨域**。Runtime（runtime / mqconsumer / SubTaskExecutionService / session）、Capability（skill / tool / mcp）、Provider（chat / executor / browser / MCP 拉取面）、Fleet 现状（AgentSelector + quality 画像 + 心跳统计）全部住在 `com.helloai.core.agent` 下，28 个 Service 按域内聚集而非按层聚集。**G-002 / G-003 的全部提取工作都发生在这个域内部**——这正是"演进不推倒"的原因：不搞大搬家，从旧链逐件摘组件。
-2. **State Convergence 没有独立代码层，住址是 helloai-job**。17 个定时任务（Lease 对账 / 超时 / 补偿 / 孤儿 / Outbox 转发 / 事件对账）就是收敛层的全部实现；依赖、超时、补偿、重派语义分散在 job 任务与 task 域守卫中，未来 Workflow Engine 增强（G-009）的素材全部在此。
+2. **State Convergence 没有独立代码层，住址是 helloai-job**。19 个定时任务（Lease 对账 / 超时 / 补偿 / 孤儿 / Outbox 转发 / 事件对账 / 报告审查孤儿巡检）就是收敛层的全部实现；依赖、超时、补偿、重派语义分散在 job 任务与 task 域守卫中，未来 Workflow Engine 增强（G-009）的素材全部在此。
 
 ---
 

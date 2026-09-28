@@ -720,8 +720,33 @@ LLM 可调用能力  → 技能包 + AgentTask.skills 声明
 1. `startPolling()` 的轮询回调**每轮 `emit('status-change', r.status)`**（收敛轮同样广播）；
 2. 弹窗**关闭时补一次广播**（`watch(visible)` 的 `!v` 分支 `stopPolling()` 后 emit 最后已知状态）。
 
-**残留（未修，独立小需求）**：用户**在 `REVIEWING` 期间关闭弹窗**后随即离开页面，则既无轮询也无列表刷新——
-列表行仍会显示旧状态，需手动刷新或重新进页面才会更正。彻底解法是列表订阅/定时刷新该行，属独立 UI 需求。
+**残留已修（列表级兜底轮询）**：用户**在 `REVIEWING` 期间关闭弹窗**后随即离开页面的场景已闭合——`TaskList.vue` 新增列表级兜底轮询（`ensureReportPolling`/`pollInFlightReports`/`stopReportPolling`）：只要存在 `GENERATING/REVIEWING` 在途行，就每 5s 对这些行拉 `getFinalReport` 并 patch `finalReportStatus`，全部收敛后自动停表；`load()` 与 `onReportStatusChange` 后幂等起表、`onBeforeUnmount` 清理，只轮询在途行不重拉整表、不打断用户操作。至此弹窗内轮询（开窗时）→ 关窗补发 → 列表兜底轮询（离窗后）三段闭合，列表行不再永久停留「报告审查中」。
+
+#### 12.5.5 已知遗留（代码审查发现，登记待修）`[代码事实]`
+
+> 本节为 §12.5 落地后的专业代码审查结论。**代码与文档口径一致（迁移表/断言位置均如实记录），但存在 5 项缺陷**；用户决策「先登记遗留、暂不改代码」。修复前 §12.5.3 的「1686 例 0 失败 PASS」仅证明既有单测通过，不代表下列路径无缺陷（现有测试未覆盖这些并发/边界场景）。
+
+**🔴 严重（确定性功能回归，UI 可点触发）**
+
+1. **状态机缺 `FAILED→DONE` + `rollback` 断言在 CAS 之后** —— `FinalReportStateMachine` 迁移表 `FAILED` 只允许 `→GENERATING`；`TaskFinalReportServiceImpl.rollback` 的 `assertTransit(statusBeforeRollback, DONE)` 位于 CAS 写库（`L153-162`）**之后**（`L171`）。`markFailed` 只迁 `GENERATING→FAILED`、**不清 prev 槽**，故「生成失败(FAILED) 且 prev 非空」可达：前端 `hasPrev=true` →「恢复上一版」可点 → CAS 成功置 DONE 并换槽 → 断言抛 `IllegalStateException` → **接口 500，但库已回滚、审计事件不落、前端不刷新**。§12.5.3 line 695「assertTransit 移到 CAS 之后」的决策即此 bug 来源。**修**：迁移表补 `FAILED→DONE`；`assertTransit` 前移到 CAS 之前；同步改 `FinalReportStateMachineTest`。
+
+**🟠 中等（并发/容错语义漏洞，有 L3 兜底不致数据损坏）**
+
+2. **`generateWithAttempt` 断言用陈旧快照且在 try/catch 外** —— `L214` `assertTransit(statusBeforeGenerate, GENERATING)` 用 `L189` 的 Java 快照，而 CAS 条件是 DB 侧 `ne(GENERATING)`，口径不一致；断言在 for 循环 `try`（`L231`）之外。两条生成链并发时（快照 GENERATING 但 DB 已收敛）CAS 成功、断言抛 `GENERATING→GENERATING` 非法 → `markFailed` 不触发 → **状态永久卡 GENERATING**（手动重生成被 `ne(GENERATING)` 挡、L3 只扫 REVIEWING，无恢复口）。**修**：断言前移 + CAS 改 `eq(from)` 同源。
+
+3. **L3 孤儿巡检不抢防双审锁 + 阈值 300s < 锁 TTL 600s** —— `FinalReportReviewOrphanTask.converge()` 直接双条件 CAS，不抢 `final_report_review:{taskId}` 锁；`finalReportReviewOrphanThresholdSeconds=300`，而审查锁 TTL 600s、LLM read-timeout 单次 180s、审查池实际并发 1。L1 慢审查/排队 >300s 时被误判孤儿 → 落**误导** WARN 审计；迟到审查若判 reject，`isStale` 因 `final_report_time` 未变不成立 → rework 把已收敛 `DONE` 翻回 `GENERATING` 覆盖。（迟到审查若判 pass，`convergeFinalReportToDone` 的 `eq(REVIEWING)` CAS 会失败，**不覆盖已成功结果**——此点正确。）**修**：`converge()` 内对同锁 `tryLock(0)` 抢到才收敛、抢不到视为在途跳过；阈值提到 ≥600s 与锁 TTL 对齐。
+
+4. **AFTER_COMMIT 监听器内同步落库未声明 `REQUIRES_NEW`** —— `FinalReportReviewServiceImpl.onFinalReportGenerated`（AFTER_COMMIT）在发布线程同步执行的两条兜底落库（开关关闭 `convergeToDone`；池饱和 `skipped(executor_saturated)` 含 `recordEvent`+`convergeToDone`）会**加入已提交的事务**，Spring 之后不再提交（`convergeFinalReportToDone` 无事务注解、`recordEvent` 是 REQUIRED）。审查池饱和时 → `review_skipped` 审计缺失 + 收敛未落库 → 停 REVIEWING 等 L3 兜底（并附带 #3 误导审计）。**修**：`onFinalReportGenerated` 加 `@Transactional(propagation=REQUIRES_NEW)`，或把兜底写入下沉到 REQUIRES_NEW 服务方法。
+
+5. **L2 抢锁失败被记为「消费成功」并 ACK** —— `MqFinalReportReviewConsumer`/`reviewInternal` 抢锁失败仅 `log.debug`+`return`，外层 `catch` 吞异常 → `tryConsume` 恒 true（`AbstractIdempotentConsumer` 只要 Runnable 不抛就 `markConsumed`）→ 恒 `basicAck`、`eventId` 永久标记已消费，`basicNack→DLX` 分支不可达。`AgentEventCompensationTask` 每 15s 投递而 L1 审查常在 LLM 调用中（30~180s）→ L2 到达时锁被 L1 持有 → 空转标记已消费；此后 L1 进程崩溃则**无链路重投**，只剩 L3 收敛（不审查）。（用户关心的「重复投递重复烧 LLM」**不会**：Redis 锁 + `status!=REVIEWING` 守卫 + `isStale` 三道防线有效；问题是反向的过早判定成功。）**修**：抢锁失败/未真正执行时抛出让 `tryConsume` 走 `markFailed`+`basicNack(requeue=false)`（或改投延迟队列重试）。
+
+**🟡 轻微（可选精修）**
+
+6. **列表兜底轮询未覆盖 keep-alive 退出路径**：`MainLayout` 用 `<keep-alive :include>`，若任务列表菜单被配置为缓存，路由切换**不触发** `onBeforeUnmount` → 定时器后台继续（影响有界，收敛即自停）。建议补 `onDeactivated(stopReportPolling)` + `onActivated(ensureReportPolling)`。
+7. **兜底轮询无重入保护/失败退避**：`setInterval` 不等上一轮 `Promise.all`；单行持续报错时拦截器每 5s 弹一次错且**永不停表**。建议加 in-flight 标志 + 连续失败上限（如 3 次后停表/指数退避）。
+8. **L2 入口 `review()` 未校验审查总开关**，与 L1 `onFinalReportGenerated` 口径不一致（开关在报告写回后被关闭时，已入队 MQ 消息仍跑完整审查）。
+9. **L2 在 MQ 消费线程上同步执行完整审查**（含驳回后全量 rework，最长可达数分钟），长占消费线程并触发父类「消费耗时过长」告警。
+10. **编辑残留**：`AgentOutboxServiceImpl.java:92` `pollPending` 方法签名与语句被压成一行（不影响编译，顺手修）。
 
 ---
 

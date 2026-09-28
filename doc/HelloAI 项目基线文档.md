@@ -4,7 +4,7 @@
 >
 > 本文档只描述当前真实代码与已落地能力，不描述未来愿景。
 >
-> 最后更新：2026-09-28（最终报告链路升级至阶段四：审查异步化 REVIEWING + 专用池 + 三重陈旧守卫、轮次无状态、V95 单槽列 + rollback 端点；外部 Agent v3 反馈闭环）
+> 最后更新：2026-09-28（最终报告链路升级至阶段四：审查异步化 REVIEWING + 专用池 + 三重陈旧守卫、轮次无状态、V95 单槽列 + rollback 端点；**同日晚间补齐报告审查三级容错 + 状态机写口收口（§12.5）**；外部 Agent v3 反馈闭环）
 
 # 1. 当前项目定位
 
@@ -161,6 +161,7 @@ Credential
 - Agent 在线状态治理（**2026-09-24 更新**：ACTIVE 值班租约作为一等存活证据——心跳过期不直接判 OFFLINE，避免在岗 Agent 被误判离线触发在飞任务重派；`renewLease` 到期时刻同租约内单调不减）；
 - 外部 Agent 通道与内部分发链约束同口径（**2026-09-24，G-014**：`claimSubTask` 复用 `isReady` 依赖门禁、`listAvailable` 就绪过滤；新增 MCP `startSubTask` 打通 REWORK 返工出口；`SubTaskDetail` 内联产出附件与贡献者，产物可发现）；
 - 失败重派和结果收敛；
+- 报告审查链三级容错（**2026-09-28，§12.5**：L1 `@TransactionalEventListener(AFTER_COMMIT)` 内存事件 + L2 Outbox（报告写回与 `agent_outbox_event` 同事务 → `AgentEventCompensationTask` 补投 → `helloai.report-review.queue` → `MqFinalReportReviewConsumer` 幂等消费）+ L3 `FinalReportReviewOrphanTask` 巡检（`REVIEWING` 超阈值收敛 `DONE`，刻意不重投审查）；写口收口 `FinalReportStateMachine` 显式迁移表 + `TaskService.transitFinalReportStatus` / `convergeFinalReportToDone`；入口 Redisson 防双审锁）；
 - 产物存储一致性（**2026-09-28，G-017**：ArtifactStorage 抽象 + Composite 路由（local/minio 双实现、按 type/URL 前缀分派）+ `AttachmentServiceImpl.register` 前置校验（validateAddress + 存在性，不存在 400 拒绝，把预览期 500 提前成登记期 400）；`ArtifactStorageReconcileTask` 6h ShedLock 只读对账（attachment 全量含逻辑删除 ↔ 桶内对象双向比对，悬空/孤儿/字节不符三态）；孤儿清理默认关闭，三重保险——开关 + 24h 时间窗 + 单轮上限 200）。
 
 这些属于 HelloAI 的**分布式编排与可靠性基础设施**。
