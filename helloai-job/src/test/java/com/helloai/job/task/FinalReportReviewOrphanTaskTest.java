@@ -14,14 +14,19 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
@@ -32,7 +37,8 @@ import static org.mockito.Mockito.when;
  * FinalReportReviewOrphanTask 单元测试（§12.2 审查链三级容错 L3）。
  *
  * <p>覆盖：开关关闭不扫描、无孤儿不动作、超时孤儿经 CAS 收敛 DONE 并落审计事件、
- * CAS 未命中（版本已变）时跳过不落事件、单条异常不阻塞同轮其它记录。</p>
+ * CAS 未命中（版本已变）时跳过不落事件、防双审锁被持有（审查在途）时跳过不收敛（§12.5 #3）、
+ * 单条异常不阻塞同轮其它记录。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -45,15 +51,24 @@ class FinalReportReviewOrphanTaskTest {
     private TaskService taskService;
     @Mock
     private TaskTimelineService taskTimelineService;
+    /** §12.5 #3 防双审锁：与 L1/L2 审查体共用同一把锁；孤儿收敛前须抢到才动手。 */
+    @Mock
+    private RedissonClient redissonClient;
+    @Mock
+    private RLock reviewLock;
 
     private final AgentDispatchProperties dispatchProperties = new AgentDispatchProperties();
 
     private FinalReportReviewOrphanTask task;
 
     @BeforeEach
-    void setUp() {
-        task = new FinalReportReviewOrphanTask(taskService, taskTimelineService, dispatchProperties);
+    void setUp() throws InterruptedException {
+        task = new FinalReportReviewOrphanTask(taskService, taskTimelineService, dispatchProperties, redissonClient);
         when(taskService.convergeFinalReportToDone(any(), any())).thenReturn(true);
+        // §12.5 #3 防双审锁：默认抢锁成功（审查在途持锁跳过的用例内单独覆盖为 false）
+        when(redissonClient.getLock(anyString())).thenReturn(reviewLock);
+        when(reviewLock.tryLock(anyLong(), anyLong(), any())).thenReturn(true);
+        when(reviewLock.isHeldByCurrentThread()).thenReturn(true);
     }
 
     @Test
@@ -93,7 +108,7 @@ class FinalReportReviewOrphanTaskTest {
                 eq("task_final_report_review_orphan_converged"), eq(AgentRole.SYSTEM),
                 isNull(), payloadCaptor.capture());
         assertThat(payloadCaptor.getValue())
-                .containsEntry("thresholdSeconds", 300)
+                .containsEntry("thresholdSeconds", 660)
                 .containsKey("stuckSeconds");
     }
 
@@ -107,6 +122,20 @@ class FinalReportReviewOrphanTaskTest {
         task.scan();
 
         verify(taskService).convergeFinalReportToDone(any(), any());
+        verify(taskTimelineService, never()).recordEvent(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("§12.5 #3 防双审锁被持有（审查在途）：跳过收敛，不动 CAS 不落事件")
+    void shouldSkipWhenReviewLockHeld() throws InterruptedException {
+        Task orphan = orphan(TASK_ID, OffsetDateTime.now().minusMinutes(30));
+        when(taskService.listFinalReportReviewOrphans(anyInt(), anyInt())).thenReturn(List.of(orphan));
+        // 审查正在进行（L1/L2 持有 final_report_review:{taskId} 锁）→ 抢锁失败 → 非真孤儿，跳过
+        when(reviewLock.tryLock(anyLong(), anyLong(), any())).thenReturn(false);
+
+        task.scan();
+
+        verify(taskService, never()).convergeFinalReportToDone(any(), any());
         verify(taskTimelineService, never()).recordEvent(any(), any(), any(), any(), any(), any());
     }
 

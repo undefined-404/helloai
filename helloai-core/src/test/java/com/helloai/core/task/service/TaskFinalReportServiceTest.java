@@ -391,6 +391,24 @@ class TaskFinalReportServiceTest {
     }
 
     @Test
+    @DisplayName("§12.5 #2 回归：快照即 GENERATING 前置拦截，不动库（不到 CAS）避免永久卡死")
+    void shouldRejectGenerateWhenSnapshotAlreadyGenerating() {
+        Task task = doneTask();
+        task.setFinalReportStatus(FinalReportStatus.GENERATING);
+        when(taskService.getById(TASK_ID)).thenReturn(task);
+        when(subTaskQueryChain.list()).thenReturn(List.of(
+                doneSubTask(11L, "架构梳理", "# 架构梳理产出")));
+
+        assertThatThrownBy(() -> service.generate(TASK_ID))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("正在生成中");
+        // 前置拦截在 CAS 之前：入口 CAS 一次都不该发生（修复前 CAS 先置 GENERATING 再断言，竞态下会永久卡 GENERATING）
+        verify(taskService, never()).update(any());
+        verify(platformAgentExecutionService, never())
+                .executeSync(any(Agent.class), any(AgentTask.class));
+    }
+
+    @Test
     @DisplayName("LLM 最终失败：状态置 FAILED（入口 CAS 一次 + 状态机迁移 GENERATING→FAILED）")
     void shouldMarkFailedStatusWhenLlmFails() {
         when(taskService.getById(TASK_ID)).thenReturn(doneTask());
@@ -908,6 +926,28 @@ class TaskFinalReportServiceTest {
     }
 
     @Test
+    @DisplayName("§12.5 #1 回归：FAILED 且 prev 非空可回滚（补 FAILED→DONE + 断言前移，不再 500）")
+    void shouldRollbackFromFailedWithPrev() {
+        Task task = doneTask();
+        task.setFinalReportStatus(FinalReportStatus.FAILED);
+        task.setFinalReport("V2失败残留正文");
+        task.setFinalReportAgentId(9L);
+        task.setFinalReportTime(OffsetDateTime.parse("2026-09-28T10:00:00+08:00"));
+        task.setFinalReportPrev("V1旧版正文");
+        task.setFinalReportPrevAgentId(3L);
+        task.setFinalReportPrevTime(OffsetDateTime.parse("2026-09-28T09:00:00+08:00"));
+        when(taskService.getById(TASK_ID)).thenReturn(task);
+
+        // 修复前：CAS 先置 DONE 成功、随后 assertTransit(FAILED,DONE) 抛 IllegalStateException（库已改、500、审计不落）
+        // 修复后：迁移表补 FAILED→DONE + 断言前移到 CAS 之前，回滚正常完成并落 rolled_back 事件
+        service.rollback(TASK_ID);
+
+        verify(taskService).update(any());
+        verify(taskTimelineService).recordEvent(eq(TASK_ID), isNull(),
+                eq("task_final_report_rolled_back"), eq(AgentRole.PLANNER), eq(3L), anyMap());
+    }
+
+    @Test
     @DisplayName("§12.1 回滚：无上一版抛 409")
     void shouldRejectRollbackWithoutPrev() {
         when(taskService.getById(TASK_ID)).thenReturn(doneTask());
@@ -920,18 +960,19 @@ class TaskFinalReportServiceTest {
     }
 
     @Test
-    @DisplayName("§12.1 回滚：生成在途（快照 GENERATING + CAS 拒绝）抛 409 而非状态机异常")
+    @DisplayName("§12.1 回滚：快照 GENERATING 前置拦截抛 409（不到 CAS、不改库）")
     void shouldRejectRollbackWhenGenerating() {
         Task task = doneTask();
         task.setFinalReport("V2新版正文");
         task.setFinalReportPrev("V1旧版正文");
         task.setFinalReportStatus(FinalReportStatus.GENERATING);
         when(taskService.getById(TASK_ID)).thenReturn(task);
-        when(taskService.update(any())).thenReturn(false);
 
         assertThatThrownBy(() -> service.rollback(TASK_ID))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("正在生成中");
+        // 前置拦截在 CAS 之前：库一次都不该被改（修复前 CAS 先置 DONE 再断言，会静默改库）
+        verify(taskService, never()).update(any());
         verify(taskTimelineService, never())
                 .recordEvent(any(), any(), any(), any(), any(), any());
     }

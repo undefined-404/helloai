@@ -102,12 +102,12 @@ register 的「先落库后校验」历史行为改变为「先校验后落库�
 ### Boundary
 不新建 Runtime / Scheduler / Workflow；不新增 Flyway 迁移（复用既有 `agent_outbox_event` 与新配置项）；L3 策略为「收敛不重投」，故不解决「审查未执行但用户期望补审」的场景（如需重投属新决策）。前端修复（轮询收敛广播 `status-change`）属表现层，同批落地但不属本决策范围。
 
-### 已知遗留（代码审查发现，登记待修）
-本决策落地后经专业代码审查发现 5 项缺陷，用户决策「先登记遗留、暂不改代码」（详见 `doc/design/HelloAI_契约层能力注入与最终报告整合改造方案.md` §12.5.5）：
-- 🔴 **#1** `FinalReportStateMachine` 迁移表缺 `FAILED→DONE`，且 `rollback` 的 `assertTransit` 在 CAS 写库之后 → 生成失败(FAILED)且 prev 槽非空时点「恢复上一版」会 500（库已静默回滚、审计不落）。**确定性功能回归**。
-- 🟠 **#2** `generateWithAttempt` 断言用陈旧 Java 快照且在 try/catch 外 → 并发生成竞态下状态可能永久卡 `GENERATING`（L3 只扫 REVIEWING，无恢复口）。
-- 🟠 **#3** L3 `FinalReportReviewOrphanTask.converge()` 不抢防双审锁、阈值 300s < 锁 TTL 600s → 慢审查被误判孤儿落误导审计；迟到 reject 可把已收敛 `DONE` 翻回 `GENERATING`（迟到 pass 不覆盖，`eq(REVIEWING)` CAS 已挡）。
+### 已知遗留与修复（代码审查发现）
+本决策落地后经专业代码审查发现 5 项后端缺陷。**🔴#1 / 🟠#2 / 🟠#3 已于本次修复**（`mvn -o -pl helloai-core,helloai-job -am test -DskipTests=false` 重跑 0 失败 0 错误，新增回滚/生成/孤儿锁 3 例回归）；🟠#4 / 🟠#5 仍登记待修（详见 `doc/design/HelloAI_契约层能力注入与最终报告整合改造方案.md` §12.5.5）：
+- ✅ **#1（已修）** `FinalReportStateMachine` 迁移表缺 `FAILED→DONE`，且 `rollback` 的 `assertTransit` 在 CAS 写库之后 → 生成失败(FAILED)且 prev 槽非空时点「恢复上一版」会 500（库已静默回滚、审计不落）。**确定性功能回归**。*修法*：迁移表补 `FAILED→DONE`；`assertTransit` 前移到 CAS 之前 + `GENERATING` 显式前置拦截（给可读 409），CAS 由 `ne(GENERATING)` 改 `eq(statusBeforeRollback)` 与断言同源。
+- ✅ **#2（已修）** `generateWithAttempt` 断言用陈旧 Java 快照且在 try/catch 外 → 并发生成竞态下状态可能永久卡 `GENERATING`（L3 只扫 REVIEWING，无恢复口）。*修法*：`GENERATING` 前置拦截 + `assertTransit` 前移到 CAS 之前 + CAS 改 `eq(statusBeforeGenerate)` 与断言同源（快照陈旧则 CAS 失败、不改库、给可读重试异常），对齐既有正确范式 `TaskService.transitFinalReportStatus`。
+- ✅ **#3（已修）** L3 `FinalReportReviewOrphanTask.converge()` 不抢防双审锁、阈值 300s < 锁 TTL 600s → 慢审查被误判孤儿落误导审计；迟到 reject 可把已收敛 `DONE` 翻回 `GENERATING`（迟到 pass 不覆盖，`eq(REVIEWING)` CAS 已挡）。*修法*：抽出 `FinalReportReviewLock`（键前缀 + `TTL_SECONDS=600` 唯一事实源，L1/L2/L3 共用消除漂移）；`converge()` 先 `tryLock(0, TTL)` 抢同款锁——抢不到即审查在途、非真孤儿，跳过不收敛（`finally` 内 `isHeldByCurrentThread` 守卫释放）；阈值默认 300→660（≥ 锁 TTL + 一个扫描周期余量），`TaskServiceImpl` 兜底默认同步 660。
 - 🟠 **#4** `onFinalReportGenerated`（AFTER_COMMIT）内同步兜底落库未声明 `REQUIRES_NEW` → 审查池饱和时 `review_skipped` 审计与收敛可能静默丢。
 - 🟠 **#5** `MqFinalReportReviewConsumer` 抢锁失败被记为「消费成功」并 ACK → L1 进程崩溃后无链路重投（DLX 分支不可达）。（重复投递不会重复烧 LLM：锁 + 状态守卫 + isStale 三道防线有效。）
 
-上述缺陷与本决策的「三级容错」目标不矛盾（架构方向正确），属实现细节待打磨；修复前 Consequence 段的「每个收敛出口都会落到 DONE / 具备重放与自愈能力」在上述并发/边界场景下不成立。
+#1~#3 修复后，Consequence 段的「每个收敛出口都会落到 DONE / 具备重放与自愈能力」在「FAILED 恢复上一版」「并发生成竞态」「慢审查误判孤儿」三个场景已成立；#4/#5 涉及的「审查池饱和静默丢审计/收敛」「L1 崩溃后无链路重投」两个边界仍待修，修复前该两场景自愈能力不完整。上述缺陷与本决策「三级容错」目标不矛盾（架构方向正确），属实现细节打磨。

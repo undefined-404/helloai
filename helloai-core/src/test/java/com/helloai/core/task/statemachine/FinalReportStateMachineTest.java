@@ -39,6 +39,10 @@ class FinalReportStateMachineTest {
                 .isTrue();
         assertThat(FinalReportStateMachine.canTransit(FinalReportStatus.FAILED, FinalReportStatus.GENERATING))
                 .isTrue();
+        // §12.5 #1：markFailed 不清 prev 槽，“生成失败(FAILED) 且 prev 非空”可达；
+        // 此时点「恢复上一版」把 prev 换回当前槽并置 DONE 是合法收敛，不得抛断言
+        assertThat(FinalReportStateMachine.canTransit(FinalReportStatus.FAILED, FinalReportStatus.DONE))
+                .isTrue();
     }
 
     @Test
@@ -54,10 +58,8 @@ class FinalReportStateMachineTest {
         // REVIEWING 是"已生成待审查"，不允许直接判失败（失败只发生在生成阶段）
         assertThat(FinalReportStateMachine.canTransit(FinalReportStatus.REVIEWING, FinalReportStatus.FAILED))
                 .isFalse();
-        // FAILED 只能重试生成，不能直接跳到 REVIEWING / DONE
+        // FAILED 只能重试生成（->GENERATING）或恢复上一版（->DONE，见合法用例），不能直接跳到 REVIEWING
         assertThat(FinalReportStateMachine.canTransit(FinalReportStatus.FAILED, FinalReportStatus.REVIEWING))
-                .isFalse();
-        assertThat(FinalReportStateMachine.canTransit(FinalReportStatus.FAILED, FinalReportStatus.DONE))
                 .isFalse();
     }
 

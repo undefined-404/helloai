@@ -355,7 +355,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
 
     @Override
     public List<Task> listFinalReportReviewOrphans(int thresholdSeconds, int limit) {
-        int threshold = thresholdSeconds > 0 ? thresholdSeconds : 300;
+        // 兜底默认与 AgentDispatchProperties.finalReportReviewOrphanThresholdSeconds 同口径（660s），
+        // 同样守住「≥ 防双审锁 TTL 600s」不变量，避免非法配置回退到会把在途审查误判孤儿的 300s
+        int threshold = thresholdSeconds > 0 ? thresholdSeconds : 660;
         int batch = limit > 0 ? limit : 20;
         OffsetDateTime deadline = OffsetDateTime.now().minusSeconds(threshold);
         List<Task> orphans = baseMapper.selectStaleFinalReportReviewing(deadline, batch);

@@ -148,11 +148,20 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
         if (prev == null || prev.isBlank()) {
             throw new BizException(409, "没有可恢复的上一版整合报告: taskId=" + taskId);
         }
-        // CAS 并发拦截：生成在途（GENERATING）时禁止互换，避免回滚写回与生成写回互相覆盖
         FinalReportStatus statusBeforeRollback = task.getFinalReportStatus();
+        // 生成在途（GENERATING）禁止互换：给可读业务异常（而非让状态机断言抛 IllegalStateException）
+        if (statusBeforeRollback == FinalReportStatus.GENERATING) {
+            throw new BizException(409, "任务整合报告正在生成中，暂不能恢复上一版: taskId=" + taskId);
+        }
+        // §12.5 状态机单点校验【前移到 CAS 之前】：非法迁移必须在动库前快速失败，杜绝
+        // 「CAS 已改库、断言再抛异常」导致的库静默变更 + 接口 500 + 审计不落（#1）。
+        // prev 槽非空的可达状态为 DONE / REVIEWING / FAILED，三者 -> DONE 均合法
+        // （FAILED -> DONE：markFailed 不清 prev 槽，失败后恢复上一版是合法收敛）。
+        FinalReportStateMachine.assertTransit(statusBeforeRollback, FinalReportStatus.DONE);
+        // CAS 与断言同源：仅当库中状态仍等于快照时才互换（乐观锁），快照陈旧时不误改
         boolean casOk = taskService.update(new LambdaUpdateWrapper<Task>()
                 .eq(Task::getId, taskId)
-                .ne(Task::getFinalReportStatus, FinalReportStatus.GENERATING)
+                .eq(Task::getFinalReportStatus, statusBeforeRollback)
                 .set(Task::getFinalReport, task.getFinalReportPrev())
                 .set(Task::getFinalReportAgentId, task.getFinalReportPrevAgentId())
                 .set(Task::getFinalReportTime, task.getFinalReportPrevTime())
@@ -161,14 +170,8 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
                 .set(Task::getFinalReportPrevAgentId, task.getFinalReportAgentId())
                 .set(Task::getFinalReportPrevTime, task.getFinalReportTime()));
         if (!casOk) {
-            throw new BizException(409, "任务整合报告正在生成中，暂不能恢复上一版: taskId=" + taskId);
+            throw new BizException(409, "任务整合报告状态已变化，请刷新后重试: taskId=" + taskId);
         }
-        // §12.5 状态机单点校验：CAS 通过后才校验迁移合法性。
-        // GENERATING -> DONE 已被上面的并发拦截分支拦下并给出可读业务异常，不应落到这里抛
-        // IllegalStateException；prev 槽非空 ⇒ 历史上一定存在过已落库的报告，故当前状态只可能
-        // 是 DONE / REVIEWING，两者 -> DONE 均合法。断言失败说明状态被非状态机路径改写，
-        // 属于编程错误需暴露。
-        FinalReportStateMachine.assertTransit(statusBeforeRollback, FinalReportStatus.DONE);
         taskTimelineService.recordEvent(taskId, null, "task_final_report_rolled_back",
                 AgentRole.PLANNER, task.getFinalReportPrevAgentId(),
                 Map.of("restoredGeneratedAt",
@@ -199,19 +202,24 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
             throw new BizException("没有可整合的子任务产出（无 DONE 子任务或产出为空）: taskId=" + taskId);
         }
 
-        // CAS 防重入：仅当当前状态非 GENERATING 时置位成功；失败说明另一条路径正在生成
         FinalReportStatus statusBeforeGenerate = task.getFinalReportStatus();
-        boolean casOk = taskService.update(new LambdaUpdateWrapper<Task>()
-                .eq(Task::getId, taskId)
-                .ne(Task::getFinalReportStatus, FinalReportStatus.GENERATING)
-                .set(Task::getFinalReportStatus, FinalReportStatus.GENERATING));
-        if (!casOk) {
+        // 快照即 GENERATING：已有生成在途，给可读业务异常（不再靠“CAS 后断言”兜，避免陈旧快照误判）
+        if (statusBeforeGenerate == FinalReportStatus.GENERATING) {
             throw new BizException("任务整合报告正在生成中，请稍候后再试: taskId=" + taskId);
         }
-        // §12.5 状态机单点校验：CAS 通过后才校验迁移合法性
-        // （NONE/DONE/REVIEWING/FAILED -> GENERATING 均合法；GENERATING -> GENERATING 已被上面的
-        //  防重入分支拦下并给出可读业务异常，不应落到这里抛 IllegalStateException）
+        // §12.5 状态机单点校验【前移到 CAS 之前】：非法迁移在动库前快速失败，杜绝
+        // 「CAS 已置 GENERATING、断言再抛」把状态永久卡在 GENERATING（L3 只扫 REVIEWING，无恢复口）（#2）。
+        // 快照非 GENERATING ⇒ NONE/DONE/REVIEWING/FAILED -> GENERATING 均合法。
         FinalReportStateMachine.assertTransit(statusBeforeGenerate, FinalReportStatus.GENERATING);
+        // CAS 与断言同源：仅当库中状态仍等于快照时才置 GENERATING（乐观锁），
+        // 快照陈旧（并发被接管）时 CAS 失败、不改库、给可读重试异常
+        boolean casOk = taskService.update(new LambdaUpdateWrapper<Task>()
+                .eq(Task::getId, taskId)
+                .eq(Task::getFinalReportStatus, statusBeforeGenerate)
+                .set(Task::getFinalReportStatus, FinalReportStatus.GENERATING));
+        if (!casOk) {
+            throw new BizException("任务整合报告状态已变化（可能正在生成中），请稍候后再试: taskId=" + taskId);
+        }
 
         Agent planner = plannerPickerPort.pickForTask(taskId);
         // 3C 大纲先行两段式：先归并出纲（覆盖追溯表/主线论点/章节顺序/矛盾清单），

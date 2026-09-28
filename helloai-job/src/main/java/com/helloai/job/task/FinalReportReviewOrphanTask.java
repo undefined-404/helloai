@@ -2,12 +2,15 @@ package com.helloai.job.task;
 
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.core.review.support.FinalReportReviewLock;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -15,6 +18,7 @@ import java.time.OffsetDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 最终报告审查孤儿兜底巡检（§12.2 审查链三级容错 L3）。
@@ -43,6 +47,9 @@ import java.util.Map;
  *   <li><b>幂等</b>：收敛走 {@code TaskService.convergeFinalReportToDone} 的双条件 CAS
  *       （{@code final_report_status=REVIEWING} 且 {@code final_report_time} 未变），
  *       与 L1/L2 的收敛天然互斥——慢审查迟到收敛时 CAS 失败即跳过，不会覆盖新链状态</li>
+ *   <li><b>防双审锁互斥（§12.5 #3）</b>：收敛前先抢与 L1/L2 审查体同款的
+ *       {@code final_report_review:{taskId}} 锁——锁被持有说明审查正在进行（非真孤儿），跳过不收敛，
+ *       避免慢审查（持锁可达 600s）被误判孤儿后与迟到 reject 互相覆盖。配套将巡检阈值提到 ≥ 锁 TTL</li>
  *   <li><b>ShedLock 实例级互斥</b>（{@code @SchedulerLock}，Redis 存储锁记录）保证多实例单轮仅一实例执行</li>
  *   <li><b>批量上限</b>防止单轮扫描过多阻塞调度</li>
  *   <li><b>逐条隔离</b>：单条失败只记日志不抛异常，不阻塞同轮其它记录</li>
@@ -57,6 +64,8 @@ public class FinalReportReviewOrphanTask {
     private final TaskService taskService;
     private final TaskTimelineService taskTimelineService;
     private final AgentDispatchProperties dispatchProperties;
+    /** §12.5 #3 防双审锁客户端：与 L1/L2 审查体共用同一把 {@code final_report_review:{taskId}} 锁。 */
+    private final RedissonClient redissonClient;
 
     @Scheduled(fixedDelayString = "${helloai.dispatch.final-report-review-orphan-scan-interval-ms:30000}")
     @SchedulerLock(name = "finalReportReviewOrphan", lockAtMostFor = "PT60S")
@@ -106,20 +115,41 @@ public class FinalReportReviewOrphanTask {
             log.debug("最终报告 REVIEWING 孤儿缺少 final_report_time，跳过: taskId={}", task.getId());
             return false;
         }
-        boolean done = taskService.convergeFinalReportToDone(task.getId(), task.getFinalReportTime());
-        if (!done) {
-            log.debug("最终报告 REVIEWING 孤儿收敛跳过（版本已变或已被收敛）: taskId={}", task.getId());
+        // §12.5 #3：抢占与 L1/L2 审查体同款的防双审锁——锁被持有 = 审查正在进行（非真孤儿），
+        // 跳过不收敛，避免慢审查（持锁可达 600s）被误判孤儿收敛 DONE 后，迟到的 reject 又把它
+        // 翻回 GENERATING 覆盖。waitTime=0 保持「抢不到即跳过」；leaseTime 与审查体同源（TTL 兜底崩溃残留）。
+        RLock lock = redissonClient.getLock(FinalReportReviewLock.key(task.getId()));
+        boolean locked = false;
+        try {
+            locked = lock.tryLock(0, FinalReportReviewLock.TTL_SECONDS, TimeUnit.SECONDS);
+            if (!locked) {
+                log.debug("最终报告 REVIEWING 孤儿跳过：防双审锁被持有，审查正在进行中: taskId={}", task.getId());
+                return false;
+            }
+            boolean done = taskService.convergeFinalReportToDone(task.getId(), task.getFinalReportTime());
+            if (!done) {
+                log.debug("最终报告 REVIEWING 孤儿收敛跳过（版本已变或已被收敛）: taskId={}", task.getId());
+                return false;
+            }
+            long stuckSeconds = Math.max(0,
+                    ChronoUnit.SECONDS.between(task.getFinalReportTime(), OffsetDateTime.now()));
+            taskTimelineService.recordEvent(task.getId(), null,
+                    "task_final_report_review_orphan_converged", AgentRole.SYSTEM, null,
+                    Map.of("thresholdSeconds", thresholdSeconds,
+                            "stuckSeconds", stuckSeconds,
+                            "reportTime", task.getFinalReportTime().toString()));
+            log.warn("最终报告审查链丢失，已兜底收敛 DONE: taskId={}, 卡住 {}s（阈值 {}s）",
+                    task.getId(), stuckSeconds, thresholdSeconds);
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("最终报告 REVIEWING 孤儿收敛获取防双审锁被中断: taskId={}", task.getId());
             return false;
+        } finally {
+            // isHeldByCurrentThread 防御：锁已过期被他人接管时，本线程不得释放他人持有的锁
+            if (locked && lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            }
         }
-        long stuckSeconds = Math.max(0,
-                ChronoUnit.SECONDS.between(task.getFinalReportTime(), OffsetDateTime.now()));
-        taskTimelineService.recordEvent(task.getId(), null,
-                "task_final_report_review_orphan_converged", AgentRole.SYSTEM, null,
-                Map.of("thresholdSeconds", thresholdSeconds,
-                        "stuckSeconds", stuckSeconds,
-                        "reportTime", task.getFinalReportTime().toString()));
-        log.warn("最终报告审查链丢失，已兜底收敛 DONE: taskId={}, 卡住 {}s（阈值 {}s）",
-                task.getId(), stuckSeconds, thresholdSeconds);
-        return true;
     }
 }

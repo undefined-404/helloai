@@ -26,7 +26,7 @@ import java.util.Set;
  *   GENERATING → REVIEWING | DONE | FAILED                  生成成功（审查开/关）或生成失败
  *   REVIEWING  → GENERATING | DONE                          驳回返工重写 / 审查收敛
  *   DONE       → GENERATING | DONE                          重新生成 / 回滚上一版 / 幂等收敛
- *   FAILED     → GENERATING                                 手动重试
+ *   FAILED     → GENERATING | DONE                          手动重试 / 恢复上一版（prev 槽非空）
  * </pre>
  *
  * <p><b>为什么 REVIEWING → GENERATING 合法</b>：审查驳回触发返工时，报告正文会被
@@ -34,6 +34,11 @@ import java.util.Set;
  *
  * <p><b>为什么 DONE → DONE 合法</b>：§12.1 单槽回滚把上一版换回当前槽后状态恒为 DONE；
  * 审查收敛也是 REVIEWING → DONE。两者都需要「已经是 DONE 再写 DONE」的幂等语义。</p>
+ *
+ * <p><b>为什么 FAILED → DONE 合法</b>：{@code markFailed} 只把 GENERATING 置 FAILED、<b>不清
+ * prev 槽</b>，故「生成失败(FAILED) 且 prev 非空」是可达状态——上一次成功版本仍在 prev 槽里。
+ * 此时用户点「恢复上一版」把 prev 换回当前槽并置 DONE 是<b>合法收敛</b>（拿回失败前的旧版报告），
+ * 不是非法跳跃。缺了这条边会让回滚在 CAS 写库后撞断言抛异常（库已改、接口 500、审计不落）。</p>
  */
 public final class FinalReportStateMachine {
 
@@ -51,7 +56,7 @@ public final class FinalReportStateMachine {
         ALLOWED_TRANSITIONS.put(FinalReportStatus.DONE,
                 EnumSet.of(FinalReportStatus.GENERATING, FinalReportStatus.DONE));
         ALLOWED_TRANSITIONS.put(FinalReportStatus.FAILED,
-                EnumSet.of(FinalReportStatus.GENERATING));
+                EnumSet.of(FinalReportStatus.GENERATING, FinalReportStatus.DONE));
     }
 
     private FinalReportStateMachine() {

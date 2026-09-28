@@ -12,6 +12,7 @@ import com.helloai.core.review.picker.ReviewerPicker;
 import com.helloai.core.review.service.FinalReportReviewService;
 import com.helloai.core.review.service.SubTaskReviewService;
 import com.helloai.core.review.support.FinalReportFidelityChecker;
+import com.helloai.core.review.support.FinalReportReviewLock;
 import com.helloai.core.review.support.ReviewEvidenceAssembler;
 import com.helloai.core.review.support.VerdictParser;
 import com.helloai.core.shared.event.TaskFinalReportGeneratedEvent;
@@ -92,14 +93,12 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
     private static final String REVIEW_TEMPLATE_PATH = "prompts/task-final-report-review.md";
     /** 审查证据注入的子任务数量上限（防上下文爆炸；超出仅注入前 N 个，其余以清单为准）。 */
     private static final int MAX_EVIDENCE_SUB_TASKS = 10;
-    /** 防双审互斥锁键前缀。 */
-    private static final String REVIEW_LOCK_PREFIX = "final_report_review:";
     /**
-     * 锁租期（秒）：覆盖「审查 LLM 判定 + 可能的驳回落库」窗口。驳回返工会同步触发
-     * 一次完整重写（出纲 + 正文，可达数分钟），故取 600s；显式 leaseTime 禁用看门狗，
-     * 崩溃残留由 TTL 自动释放（即使提前释放，状态守卫 + 陈旧守卫仍是第二道防线）。
+     * 防双审互斥锁键前缀 + 租期：统一收敛到 {@link FinalReportReviewLock}——L1/L2 审查体与
+     * L3 孤儿巡检（{@code FinalReportReviewOrphanTask}）共用同一把锁，杜绝两处各写一份导致漂移。
      */
-    private static final long REVIEW_LOCK_TTL_SECONDS = 600L;
+    private static final String REVIEW_LOCK_PREFIX = FinalReportReviewLock.KEY_PREFIX;
+    private static final long REVIEW_LOCK_TTL_SECONDS = FinalReportReviewLock.TTL_SECONDS;
 
     private final TaskFinalReportService taskFinalReportService;
     private final TaskService taskService;

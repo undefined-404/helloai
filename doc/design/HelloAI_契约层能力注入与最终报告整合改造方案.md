@@ -692,17 +692,20 @@ LLM 可调用能力  → 技能包 + AgentTask.skills 声明
   `FinalReportReviewService`(+`Impl`)、`MqFinalReportReviewConsumer`、`FinalReportReviewOrphanTask`；
   **删除** `FinalReportReviewListener`（职责由 `FinalReportReviewServiceImpl` 承接）。
 - **修改**：`TaskFinalReportServiceImpl`（写回改走事务边界 Bean；`markFailed` 改走状态机迁移；
-  **`rollback` 的 `assertTransit` 从 CAS 之前移到 CAS 之后**——否则任务快照为 `GENERATING` 时会抛
-  `IllegalStateException` 而非可读的 409，属本次自查发现并修正）、`TaskService`(+`Impl`)（3 个状态机写口）、
+  **`rollback`/`generateWithAttempt` 的 `assertTransit` 前置到 CAS 之前 + `GENERATING` 显式前置拦截**给可读 409
+  ——初版曾把断言移到 CAS 之后以避开 `GENERATING` 快照抛 `IllegalStateException`，反而引入 §12.5.5 #1/#2；
+  现改回「断言前置 + 前置拦截」并令 CAS 与断言同源 `eq(from)`，详见 §12.5.5）、`TaskService`(+`Impl`)（3 个状态机写口）、
   `TaskMapper`（孤儿巡检轻量列查询）、`AgentOutboxService`(+`Impl`)、`RabbitMQConfig`、`AgentDispatchProperties`、`application.yml`。
 - **状态机迁移表**（`from → 允许的 to`）：`NONE→GENERATING`；`GENERATING→REVIEWING|DONE|FAILED`；
-  `REVIEWING→GENERATING|DONE`；`DONE→GENERATING|DONE`；`FAILED→GENERATING`。
-  （`REVIEWING→GENERATING` 合法 = 审查驳回触发返工重写；`DONE→DONE` 合法 = §12.1 回滚与审查收敛的幂等写回。）
-- **测试**：新增 `FinalReportStateMachineTest`(5) / `FinalReportPersistServiceTest`(3) / `FinalReportReviewOrphanTaskTest`(6)；
+  `REVIEWING→GENERATING|DONE`；`DONE→GENERATING|DONE`；`FAILED→GENERATING|DONE`。
+  （`REVIEWING→GENERATING` 合法 = 审查驳回触发返工重写；`DONE→DONE` 合法 = §12.1 回滚与审查收敛的幂等写回；
+  `FAILED→DONE` 合法 = `markFailed` 不清 prev 槽，失败后「恢复上一版」是合法收敛，见 §12.5.5 #1。）
+- **测试**：新增 `FinalReportStateMachineTest`(5) / `FinalReportPersistServiceTest`(3) / `FinalReportReviewOrphanTaskTest`(6→7，§12.5.5 #3 补「防双审锁被持有则跳过」)；
   `FinalReportReviewListenerTest` 改名 `FinalReportReviewServiceImplTest`(22，新增「状态守卫幂等跳过」「防双审锁抢占失败」2 例)；
-  `TaskFinalReportServiceTest`(36) 断言由「`taskUpdateChain.set/update`」迁移为「`persistAndRequestReview` 入参」
+  `TaskFinalReportServiceTest`(36→38，§12.5.5 #1/#2 补回滚/生成回归) 断言由「`taskUpdateChain.set/update`」迁移为「`persistAndRequestReview` 入参」
   （写回已不在本类，`taskUpdateChain` 桩随之删除）。
-- **全量验证**：`mvn -o -pl helloai-core,helloai-job -am test -DskipTests=false` → **1686 例，0 失败 0 错误**
+- **全量验证**：`mvn -o -pl helloai-core,helloai-job -am test -DskipTests=false` → 初版 **1686 例，0 失败 0 错误**；
+  §12.5.5 #1~#3 修复后 +3 例回归（回滚/生成/孤儿锁），重跑 **0 失败 0 错误**
   （注意 `-DskipTests=false` 必需：根 pom `properties` 里 `<skipTests>true</skipTests>` 是打包默认）；
   前端 `npm run type-check` 见 §12.5.4。
 - **红线复查**：未新建 Runtime / Scheduler / Workflow（L3 复用既有 `@Scheduled` + ShedLock 范式）；
@@ -722,19 +725,19 @@ LLM 可调用能力  → 技能包 + AgentTask.skills 声明
 
 **残留已修（列表级兜底轮询）**：用户**在 `REVIEWING` 期间关闭弹窗**后随即离开页面的场景已闭合——`TaskList.vue` 新增列表级兜底轮询（`ensureReportPolling`/`pollInFlightReports`/`stopReportPolling`）：只要存在 `GENERATING/REVIEWING` 在途行，就每 5s 对这些行拉 `getFinalReport` 并 patch `finalReportStatus`，全部收敛后自动停表；`load()` 与 `onReportStatusChange` 后幂等起表、`onBeforeUnmount` 清理，只轮询在途行不重拉整表、不打断用户操作。至此弹窗内轮询（开窗时）→ 关窗补发 → 列表兜底轮询（离窗后）三段闭合，列表行不再永久停留「报告审查中」。
 
-#### 12.5.5 已知遗留（代码审查发现，登记待修）`[代码事实]`
+#### 12.5.5 已知遗留与修复（代码审查发现）`[代码事实]`
 
-> 本节为 §12.5 落地后的专业代码审查结论。**代码与文档口径一致（迁移表/断言位置均如实记录），但存在 5 项缺陷**；用户决策「先登记遗留、暂不改代码」。修复前 §12.5.3 的「1686 例 0 失败 PASS」仅证明既有单测通过，不代表下列路径无缺陷（现有测试未覆盖这些并发/边界场景）。
+> 本节为 §12.5 落地后的专业代码审查结论（5 项后端缺陷 + 5 项轻微）。**🔴#1 / 🟠#2 / 🟠#3 已于本次修复，`mvn -o -pl helloai-core,helloai-job -am test -DskipTests=false` 重跑 0 失败 0 错误**（新增 3 例回归）；🟠#4 / 🟠#5 与 🟡#6~#10 仍登记待修。原「1686 例 PASS」仅证明既有单测通过，未覆盖下列并发/边界场景。
 
-**🔴 严重（确定性功能回归，UI 可点触发）**
+**🔴 严重（确定性功能回归，UI 可点触发）—— ✅ 已修**
 
-1. **状态机缺 `FAILED→DONE` + `rollback` 断言在 CAS 之后** —— `FinalReportStateMachine` 迁移表 `FAILED` 只允许 `→GENERATING`；`TaskFinalReportServiceImpl.rollback` 的 `assertTransit(statusBeforeRollback, DONE)` 位于 CAS 写库（`L153-162`）**之后**（`L171`）。`markFailed` 只迁 `GENERATING→FAILED`、**不清 prev 槽**，故「生成失败(FAILED) 且 prev 非空」可达：前端 `hasPrev=true` →「恢复上一版」可点 → CAS 成功置 DONE 并换槽 → 断言抛 `IllegalStateException` → **接口 500，但库已回滚、审计事件不落、前端不刷新**。§12.5.3 line 695「assertTransit 移到 CAS 之后」的决策即此 bug 来源。**修**：迁移表补 `FAILED→DONE`；`assertTransit` 前移到 CAS 之前；同步改 `FinalReportStateMachineTest`。
+1. **状态机缺 `FAILED→DONE` + `rollback` 断言在 CAS 之后** —— *原缺陷*：迁移表 `FAILED` 只允许 `→GENERATING`，而 `rollback` 的 `assertTransit(statusBeforeRollback, DONE)` 在 CAS 写库**之后**；`markFailed` 不清 prev 槽 → 「FAILED 且 prev 非空」可达 → 前端「恢复上一版」CAS 成功置 DONE 并换槽后断言抛 `IllegalStateException` → 接口 500、库已回滚、审计不落、前端不刷新。*✅ 已修*：① 迁移表补 `FAILED→DONE`（类注释说明其可达性）；② `assertTransit` 前移到 CAS 之前 + `GENERATING` 显式前置拦截（给可读 409），CAS 由 `ne(GENERATING)` 改 `eq(statusBeforeRollback)` 与断言同源；③ `FinalReportStateMachineTest` 将 `FAILED→DONE` 由非法改合法；`TaskFinalReportServiceTest` 新增 `shouldRollbackFromFailedWithPrev`、强化 `shouldRejectRollbackWhenGenerating`（前置拦截、`verify(never()).update()`）。
 
-**🟠 中等（并发/容错语义漏洞，有 L3 兜底不致数据损坏）**
+**🟠 中等（并发/容错语义漏洞）—— #2 #3 ✅ 已修，#4 #5 待修**
 
-2. **`generateWithAttempt` 断言用陈旧快照且在 try/catch 外** —— `L214` `assertTransit(statusBeforeGenerate, GENERATING)` 用 `L189` 的 Java 快照，而 CAS 条件是 DB 侧 `ne(GENERATING)`，口径不一致；断言在 for 循环 `try`（`L231`）之外。两条生成链并发时（快照 GENERATING 但 DB 已收敛）CAS 成功、断言抛 `GENERATING→GENERATING` 非法 → `markFailed` 不触发 → **状态永久卡 GENERATING**（手动重生成被 `ne(GENERATING)` 挡、L3 只扫 REVIEWING，无恢复口）。**修**：断言前移 + CAS 改 `eq(from)` 同源。
+2. **`generateWithAttempt` 断言用陈旧快照且在 try/catch 外** —— *原缺陷*：`assertTransit` 用 Java 快照而 CAS 条件是 DB 侧 `ne(GENERATING)`，口径不一致；并发生成时（快照 GENERATING 但 DB 已收敛）CAS 成功、断言抛 `GENERATING→GENERATING` 非法、`markFailed` 不触发 → 状态永久卡 GENERATING（L3 只扫 REVIEWING，无恢复口）。*✅ 已修*：① `GENERATING` 前置拦截给可读业务异常；② `assertTransit` 前移到 CAS 之前；③ CAS 改 `eq(statusBeforeGenerate)` 与断言同源（快照陈旧则 CAS 失败、不改库、给可读重试异常）——对齐既有正确范式 `TaskService.transitFinalReportStatus`；④ `TaskFinalReportServiceTest` 新增 `shouldRejectGenerateWhenSnapshotAlreadyGenerating`（快照 GENERATING → 前置拦截、`verify(never()).update()`）。
 
-3. **L3 孤儿巡检不抢防双审锁 + 阈值 300s < 锁 TTL 600s** —— `FinalReportReviewOrphanTask.converge()` 直接双条件 CAS，不抢 `final_report_review:{taskId}` 锁；`finalReportReviewOrphanThresholdSeconds=300`，而审查锁 TTL 600s、LLM read-timeout 单次 180s、审查池实际并发 1。L1 慢审查/排队 >300s 时被误判孤儿 → 落**误导** WARN 审计；迟到审查若判 reject，`isStale` 因 `final_report_time` 未变不成立 → rework 把已收敛 `DONE` 翻回 `GENERATING` 覆盖。（迟到审查若判 pass，`convergeFinalReportToDone` 的 `eq(REVIEWING)` CAS 会失败，**不覆盖已成功结果**——此点正确。）**修**：`converge()` 内对同锁 `tryLock(0)` 抢到才收敛、抢不到视为在途跳过；阈值提到 ≥600s 与锁 TTL 对齐。
+3. **L3 孤儿巡检不抢防双审锁 + 阈值 300s < 锁 TTL 600s** —— *原缺陷*：`converge()` 直接双条件 CAS，不抢 `final_report_review:{taskId}` 锁；阈值 300s < 锁 TTL 600s → 慢审查被误判孤儿收敛 DONE，迟到 reject 又把 `DONE` 翻回 `GENERATING` 覆盖。*✅ 已修*：① 抽出 `FinalReportReviewLock`（键前缀 + `TTL_SECONDS=600` 唯一事实源，L1/L2 审查体与 L3 共用，消除漂移）；② `converge()` 先 `tryLock(0, TTL)` 抢同款锁——抢不到 = 审查在途 = 非真孤儿，跳过不收敛（`finally` 内 `isHeldByCurrentThread` 守卫释放）；③ 阈值默认 300→660（≥ 锁 TTL + 一个扫描周期余量），`TaskServiceImpl` 兜底默认同步 660；④ `FinalReportReviewOrphanTaskTest` 补 `shouldSkipWhenReviewLockHeld`、构造器加 `RedissonClient`、阈值断言 300→660。
 
 4. **AFTER_COMMIT 监听器内同步落库未声明 `REQUIRES_NEW`** —— `FinalReportReviewServiceImpl.onFinalReportGenerated`（AFTER_COMMIT）在发布线程同步执行的两条兜底落库（开关关闭 `convergeToDone`；池饱和 `skipped(executor_saturated)` 含 `recordEvent`+`convergeToDone`）会**加入已提交的事务**，Spring 之后不再提交（`convergeFinalReportToDone` 无事务注解、`recordEvent` 是 REQUIRED）。审查池饱和时 → `review_skipped` 审计缺失 + 收敛未落库 → 停 REVIEWING 等 L3 兜底（并附带 #3 误导审计）。**修**：`onFinalReportGenerated` 加 `@Transactional(propagation=REQUIRES_NEW)`，或把兜底写入下沉到 REQUIRES_NEW 服务方法。
 

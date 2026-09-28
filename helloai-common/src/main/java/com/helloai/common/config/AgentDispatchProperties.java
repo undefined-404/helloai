@@ -200,10 +200,14 @@ public class AgentDispatchProperties {
      * <p><b>为什么收敛 DONE 而不是重投审查</b>：审查是增值质量闭环，报告正文此时
      * 早已落库并交付（UI 正常可读、交付物 zip 含报告）；重复重投会在审查持续失败时
      * 反复消耗 LLM 配额。收敛 DONE 是确定性、零 token、无循环的最优止血。
-     * 若确实需要补跑审查，UI 的「重新生成」按钮可人工触发。默认 300（5 分钟）——
-     * 正常审查 LLM 判定约 30s，5 分钟足以排除正常在途。</p>
+     * 若确实需要补跑审查，UI 的「重新生成」按钮可人工触发。</p>
+     *
+     * <p><b>为什么默认 660（§12.5 #3）</b>：本阈值必须 ≥ 防双审锁租期
+     * （{@code FinalReportReviewLock.TTL_SECONDS}=600s）——驳回返工会同步触发一次完整重写，
+     * 慢审查持锁可达 600s，阈值若小于它会把在途审查误判为孤儿。取 660 在锁 TTL 之上再留
+     * 约一个扫描周期（30s）的余量。孤儿收敛本身已抢同一把防双审锁兜底，阈值对齐是第二道防线。</p>
      */
-    private int finalReportReviewOrphanThresholdSeconds = 300;
+    private int finalReportReviewOrphanThresholdSeconds = 660;
 
     /**
      * 最终报告审查孤儿兜底单轮批量上限（§12.2 L3）。默认 20。
