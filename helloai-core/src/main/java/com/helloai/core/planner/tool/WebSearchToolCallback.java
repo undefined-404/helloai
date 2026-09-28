@@ -45,7 +45,7 @@ public class WebSearchToolCallback implements ToolCallbackContributor {
         return this;
     }
 
-    @Tool(description = """
+    @Tool(name = "web_search", description = """
             【何时使用】对话/任务上下文需要外部实时信息时调用：行业资料、竞品动态、技术方案、
             新闻时效内容等；也用于用户消息带 URL 时的站点资料补充检索。
             【调用频率】每次检索一批关键词调用一次；多关键词可多次调用合并结果，按需控制总数。

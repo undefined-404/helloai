@@ -1,5 +1,6 @@
 package com.helloai.core.planner.tool;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.core.planner.search.WebSearchResult;
 import com.helloai.core.planner.service.WebSearchService;
 import org.junit.jupiter.api.BeforeEach;
@@ -8,6 +9,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 
 import java.util.List;
 
@@ -112,6 +115,20 @@ class WebSearchToolCallbackTest {
     }
 
     @Test
+    @DisplayName("工具注册名：必须为 web_search（编排层按名调用 + 技能包 requiredTools 对齐，防驼峰漂移）")
+    void toolRegistrationNameShouldBeWebSearch() {
+        // 直调用例全覆盖不到注册名——只有真实构建 spring-ai 工具目录才能暴露命名漂移
+        MethodToolCallbackProvider provider = MethodToolCallbackProvider.builder()
+                .toolObjects(tool)
+                .build();
+
+        assertThat(provider.getToolCallbacks())
+                .extracting(callback -> callback.getToolDefinition().name())
+                .as("编排层按 web_search 调用（ClarifyWebSearchOrchestrator），注册名必须一致")
+                .containsExactly("web_search");
+    }
+
+    @Test
     @DisplayName("WebSearchToolResult 构造器：null 字段规范化为默认值，empty 工厂幂等")
     void shouldNormalizeNullFieldsInResult() {
         WebSearchToolResult normalized = new WebSearchToolResult(null, null, null);
@@ -122,5 +139,29 @@ class WebSearchToolCallbackTest {
         WebSearchToolResult empty = WebSearchToolResult.empty("web_search_tool");
         assertThat(empty.provider()).isEqualTo("web_search_tool");
         assertThat(empty.results()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("目录端到端往返：注册名可命中 + 工具输出 JSON 可被编排层反序列化（成功路径收口）")
+    void shouldRoundTripThroughRealCatalog() throws Exception {
+        // 修复前 unknown tool 导致服务端成功路径从未真实跑通；
+        // 本用例用真实 spring-ai 目录调用 + 裸 ObjectMapper 回读，模拟编排层取数口径
+        when(webSearchService.provider()).thenReturn("bocha-ai-search");
+        when(webSearchService.search(eq("新闻"), eq(3))).thenReturn(List.of(
+                WebSearchResult.builder().title("头条").url("https://n.example/1")
+                        .snippet("摘要").siteName("示例站").build()));
+
+        ToolCallback callback = MethodToolCallbackProvider.builder()
+                .toolObjects(tool)
+                .build()
+                .getToolCallbacks()[0];
+
+        String output = callback.call("{\"query\":\"新闻\",\"maxResults\":3}");
+
+        WebSearchToolResult parsed = new ObjectMapper().readValue(output, WebSearchToolResult.class);
+        assertThat(parsed.provider()).isEqualTo("bocha-ai-search");
+        assertThat(parsed.results()).hasSize(1);
+        assertThat(parsed.results().get(0).getUrl()).isEqualTo("https://n.example/1");
+        assertThat(parsed.results().get(0).getSiteName()).isEqualTo("示例站");
     }
 }
