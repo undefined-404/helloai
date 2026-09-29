@@ -53,14 +53,16 @@
 
 - **依据**：审计确认当前最短板不是功能，而是**验证与工程化基础设施**（无 CI、默认跳过测试、0 个真实 DB 集成测试、验证强度集中 C 级）。在此状态下继续堆功能，缺陷只能线上暴露——G-016 宣称「1686 用例 0 失败 PASS」之后仍查出确定性回归（状态机缺 `FAILED→DONE`）即为实证。
 - **本批已落地**：CI 门禁 + 可用 JDK 固定 + 架构漂移冻结守卫（见 §0.3）。
-- **未落地（待排期）**：Testcontainers 补 B 级集成（L）、R2/R3 的 A 级 E2E 补证（M）；见审计报告 §7 建议 5/6。
+- **已落地（同日续）**：Testcontainers 补 B 级集成（4 个 IT + 门禁 5；见 §0.3）。
+- **未落地（待排期）**：R2/R3 的 A 级 E2E 补证（M）；见审计报告 §7 建议 6。
 
 ## 0.3 本批落地新增事实（2026-09-29）
 
 - **CI 已落地**：`.workflow/helloai-ci.yml`（Gitee Go，对应本仓库远程）+ `.github/workflows/ci.yml`（GitHub Actions 备援）；门禁逻辑在 `scripts/ci/ci-gate.sh`（显式 `-DskipTests=false` + 断言「用例数 > 0」）。此前「无任何 CI」的 P0 缺口已闭合。
 - **可用 JDK 已固定**：`scripts/ci/lib-jdk.sh` 黑名单排除本机必然 JVM 崩溃的 `ms-17.0.19`，优先 `ms-17.0.20.1`。此前归因于 JDK 崩溃的 NOT RUN 可复用该脚本一键消除。
 - **架构漂移守卫已建立**：`scripts/ci/check-arch-freeze.sh` + `scripts/ci/arch-baseline.txt`，跨域反向依赖（agent→task 68 / planner→agent 34 / task→agent 45）计数**只降不升**。此前「无 ArchUnit、红线靠自觉」的 P1 缺口已部分闭合（编译期 ArchUnit 仍为后续项）。
-- **仍为空白（未闭合）**：B 级集成测试（0 个 Testcontainers / 0 个真实 DB 集成测试）、R2/R3 的 A 级 E2E 证据。见审计报告 §7 建议 5/6。
+- **B 级集成测试已建立（2026-09-29 续）且已在本机 Docker 实跑 8/8 全绿**：`helloai-start/src/test/java/com/helloai/it/` 4 个 IT（B1 Flyway 迁移全量 apply / B2 MQ 幂等消费 / B3 Outbox 事务边界+Relay 闭环 / B4 状态机 CAS 并发），Testcontainers PG16/Redis7/RabbitMQ3 与 docker-compose 同版本；`ci-gate.sh` 门禁 5（无 Docker 输出 [NOT RUN]，协作规约 §27 语义）。**首跑排障链**：testcontainers ≤1.20.x 被新版 Docker Desktop npipe 强制 Host 头拒 400 → 升级 2.0.5（依赖改名 testcontainers-postgresql/rabbitmq/junit-jupiter）；webEnvironment NONE→MOCK（HttpServletRequest 构造器注入）；ItTestApplication 排除 HelloAIApplication（@EnableScheduling 泄入竞态）；4 个 IT 测试代码缺陷修复（outbox SMALLINT 枚举 / B4 id 段 9302 / @MockitoBean 计数跨类累计 / relay 轮询触发）。实测：**Tests run: 8, Failures: 0, Errors: 0**（详见 log 2026-09-29 实跑条目）。
+- **仍为空白（未闭合）**：R2/R3 的 A 级 E2E 证据（建议 #6 待排期）。见审计报告 §7 建议 6。
 
 # 1. 总体矩阵
 
