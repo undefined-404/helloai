@@ -12,8 +12,10 @@ import com.helloai.core.review.picker.ReviewerPicker;
 import com.helloai.core.review.service.FinalReportReviewService;
 import com.helloai.core.review.service.SubTaskReviewService;
 import com.helloai.core.review.support.FinalReportFidelityChecker;
+import com.helloai.core.review.support.FinalReportReviewFallbackWriter;
 import com.helloai.core.review.support.FinalReportReviewLock;
 import com.helloai.core.review.support.ReviewEvidenceAssembler;
+import com.helloai.core.review.support.ReviewNotExecutedException;
 import com.helloai.core.review.support.VerdictParser;
 import com.helloai.core.shared.event.TaskFinalReportGeneratedEvent;
 import com.helloai.core.task.entity.SubTask;
@@ -114,6 +116,8 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
     /** §12.2 审查专用池（helloai-start {@code ReportReviewExecutorConfig}）：审查提交后发布线程立即返回。 */
     @Qualifier("reportReviewExecutor")
     private final Executor reportReviewExecutor;
+    /** §12.5.5 #4：AFTER_COMMIT / 池满兜底落库经 REQUIRES_NEW 独立事务，避免加入已提交事务而丢失。 */
+    private final FinalReportReviewFallbackWriter fallbackWriter;
 
     /**
      * L1 入口：AFTER_COMMIT 只做<b>提交</b>不阻塞发布线程。<p>
@@ -122,6 +126,10 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
      * 其拒绝异常走 {@code AsyncUncaughtExceptionHandler} 不会回到发布线程，无法落
      * {@code review_skipped(executor_saturated)}；手动 {@code execute} + try-catch
      * {@link RejectedExecutionException} 才能在发布线程兜底。</p>
+     *
+     * <p>§12.5.5 #4：本方法运行在报告写回事务<b>已提交</b>后的发布线程上，两处同步兜底写入
+     * （开关关闭收敛 / 池满 {@code review_skipped}+收敛）经 {@link FinalReportReviewFallbackWriter}
+     * 的 {@code REQUIRES_NEW} 独立事务落库，避免加入已提交事务而被静默丢弃。</p>
      */
     @Override
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
@@ -150,6 +158,10 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
     private void reviewQuietly(TaskFinalReportGeneratedEvent event) {
         try {
             reviewInternal(event);
+        } catch (ReviewNotExecutedException e) {
+            // §12.5.5 #5：L1 语义——另一路审查在途或锁不可用属正常跳过（L1 尽力而为，
+            // 重投/兜底由 L2 死信重放与 L3 孤儿巡检负责），记 debug 不外抛、不影响发布线程。
+            log.debug("最终报告审查跳过（L1，另一路在途或锁不可用）: {}", e.getMessage());
         } catch (Exception e) {
             log.warn("最终报告审查异常（不影响报告交付）: taskId={}, err={}", event.getTaskId(), e.getMessage());
         }
@@ -160,27 +172,38 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
      */
     private void reviewInternal(TaskFinalReportGeneratedEvent event) {
         RLock lock = redissonClient.getLock(REVIEW_LOCK_PREFIX + event.getTaskId());
+        boolean locked;
         try {
             // waitTime=0 保持"抢占失败即跳过"语义；显式 leaseTime 禁看门狗，TTL 兜底崩溃残留
-            boolean locked = lock.tryLock(0, REVIEW_LOCK_TTL_SECONDS, TimeUnit.SECONDS);
-            if (!locked) {
-                log.debug("最终报告审查跳过：已有审查进行中（防双审）: taskId={}, attempt={}",
-                        event.getTaskId(), event.getAttempt());
-                return;
-            }
-            try {
-                doReview(event);
-            } finally {
-                // isHeldByCurrentThread 防御：锁已过期被他人接管时，本线程不得释放他人持有的锁
-                if (lock.isHeldByCurrentThread()) {
-                    lock.unlock();
-                }
-            }
+            locked = lock.tryLock(0, REVIEW_LOCK_TTL_SECONDS, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            log.warn("最终报告审查获取锁被中断: taskId={}", event.getTaskId());
+            // §12.5.5 #5：被中断 = 未真正执行审查 → 抛出（L2 判失败重投；L1 由 reviewQuietly 静默跳过）
+            throw new ReviewNotExecutedException("最终报告审查获取锁被中断: taskId=" + event.getTaskId(), e);
         } catch (Exception e) {
-            log.warn("最终报告审查加锁异常（不影响报告交付）: taskId={}, err={}", event.getTaskId(), e.getMessage());
+            // §12.5.5 #5：锁不可用（Redis 异常等）同属"未执行"，抛出交调用方重投，不误判成功
+            throw new ReviewNotExecutedException(
+                    "最终报告审查获取锁异常，本次未执行: taskId=" + event.getTaskId() + ", err=" + e.getMessage(), e);
+        }
+        if (!locked) {
+            // §12.5.5 #5：抢锁失败 = 另一路审查在途 = 本次未执行任何审查逻辑。
+            // 不再静默 return（那会让 L2 误判消费成功并永久 ACK，L1 崩溃后无链路重投）——
+            // 抛出：L1 静默跳过，L2 走 markFailed + basicNack(requeue=false) 进死信台账可重放。
+            throw new ReviewNotExecutedException(
+                    "最终报告审查跳过：已有审查进行中（防双审）: taskId=" + event.getTaskId()
+                            + ", attempt=" + event.getAttempt());
+        }
+        try {
+            doReview(event);
+        } catch (Exception e) {
+            // 审查已开始执行后的异常遵循"审查失败不影响报告交付"哲学就地吞掉（不外抛，
+            // 避免 L2 重投重复烧 LLM）；仅"锁都没抢到、一行审查都没跑"才抛 ReviewNotExecutedException。
+            log.warn("最终报告审查执行异常（不影响报告交付）: taskId={}, err={}", event.getTaskId(), e.getMessage());
+        } finally {
+            // isHeldByCurrentThread 防御：锁已过期被他人接管时，本线程不得释放他人持有的锁
+            if (lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            }
         }
     }
 
@@ -190,7 +213,9 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
      * 或已被兄弟链路收敛，本链放弃收敛，不覆盖新链状态。
      */
     private void convergeToDone(TaskFinalReportGeneratedEvent event) {
-        taskService.convergeFinalReportToDone(event.getTaskId(), event.getReportTime());
+        // §12.5.5 #4：经 REQUIRES_NEW 独立事务落库——AFTER_COMMIT 发布线程上直接写会加入
+        // 已提交事务而丢失，下沉到 FinalReportReviewFallbackWriter 确保兜底收敛确定提交。
+        fallbackWriter.convergeToDone(event.getTaskId(), event.getReportTime());
     }
 
     /**
@@ -389,12 +414,11 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
 
     /** 跳过审查落库标记（reason 区分守卫/无可用 reviewer/池满），不做任何 pass 判定；审查跳过即收敛 DONE。 */
     private void skipped(TaskFinalReportGeneratedEvent event, String reason) {
-        taskTimelineService.recordEvent(event.getTaskId(), null,
-                "task_final_report_review_skipped", AgentRole.REVIEWER, null,
-                Map.of("reason", reason, "attempt", event.getAttempt()));
         log.info("最终报告审查跳过（{}）: taskId={}, attempt={}", reason, event.getTaskId(), event.getAttempt());
-        // §12.2 REVIEWING 收敛：审查跳过（无审查人/自审守卫/池满）即收敛 DONE，报告照常交付
-        convergeToDone(event);
+        // §12.5.5 #4：review_skipped 审计 + REVIEWING 收敛下沉到 REQUIRES_NEW 独立事务，两步原子提交——
+        // AFTER_COMMIT 池满兜底路径上不再因加入已提交事务而双双丢失。
+        fallbackWriter.recordSkippedAndConverge(event.getTaskId(), event.getReportTime(),
+                event.getAttempt(), reason);
     }
 
     /** 渲染审查 Prompt：任务信息 + 报告正文 + 子任务产出证据（产出摘要复用 review 域装配器同款口径）。 */

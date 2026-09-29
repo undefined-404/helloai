@@ -35,10 +35,16 @@ public interface FinalReportReviewService {
     /**
      * 执行一次报告质量审查（L1/L2 共用入口，幂等：非 REVIEWING 直接跳过）。
      *
+     * <p>§12.5.5 #5：当防双审锁被兄弟链路持有或锁不可用（本次<b>未真正执行</b>任何审查）时，
+     * 抛出 {@code ReviewNotExecutedException}——L2（{@code MqFinalReportReviewConsumer}）据此
+     * 判消费失败并 {@code basicNack(requeue=false)} 进死信台账可重放，不再被误判为消费成功而永久 ACK。
+     * 「已开始执行但失败」（LLM 异常等）不抛出，遵循审查失败不影响报告交付的哲学就地吞掉。</p>
+     *
      * @param taskId       任务 ID
      * @param reportTime   报告写回时间（陈旧守卫锚点）
      * @param attempt      生成轮次（决定是否触发返工重写）
      * @param reportLength 报告正文字符数（审查 Prompt 注入）
+     * @throws com.helloai.core.review.support.ReviewNotExecutedException 未抢到防双审锁 / 锁不可用，本次未执行审查
      */
     void review(Long taskId, OffsetDateTime reportTime, int attempt, int reportLength);
 }

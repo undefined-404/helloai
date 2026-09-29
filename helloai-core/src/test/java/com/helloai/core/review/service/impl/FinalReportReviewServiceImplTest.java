@@ -15,7 +15,9 @@ import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.review.picker.ReviewerPicker;
 import com.helloai.core.review.service.SubTaskReviewService;
+import com.helloai.core.review.support.FinalReportReviewFallbackWriter;
 import com.helloai.core.review.support.ReviewEvidenceAssembler;
+import com.helloai.core.review.support.ReviewNotExecutedException;
 import com.helloai.core.review.support.VerdictParser;
 import com.helloai.core.shared.event.TaskFinalReportGeneratedEvent;
 import com.helloai.core.task.entity.SubTask;
@@ -46,6 +48,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -133,7 +136,7 @@ class FinalReportReviewServiceImplTest {
         reviewService = new FinalReportReviewServiceImpl(taskFinalReportService, taskService, subTaskService,
                 taskRunningSpecService, reviewerPicker, platformAgentExecutionService,
                 verdictParser, reviewEvidenceAssembler, taskTimelineService, dispatchProperties,
-                redissonClient, reportReviewExecutor);
+                redissonClient, reportReviewExecutor, fallbackWriter());
         // §12.2 异步化：默认同步执行 Runnable（单测断言仍按顺序生效）；池满用例内改为抛拒绝异常
         doAnswer(inv -> {
             ((Runnable) inv.getArgument(0)).run();
@@ -244,15 +247,44 @@ class FinalReportReviewServiceImplTest {
     }
 
     @Test
-    @DisplayName("§12.2 防双审锁：抢占失败（已有审查在跑）→ 直接跳过，不读任务不调 LLM")
+    @DisplayName("§12.5.5 #5 L1 路径：抢占失败（已有审查在跑）→ reviewQuietly 静默跳过，不外抛、不读任务不调 LLM")
     void shouldSkipWhenReviewLockNotAcquired() throws InterruptedException {
         when(reviewLock.tryLock(anyLong(), anyLong(), any())).thenReturn(false);
 
+        // L1：AFTER_COMMIT → 专用池 → reviewQuietly；抢锁失败属正常跳过，异常被 reviewQuietly 吞掉不外抛
         reviewService.onFinalReportGenerated(event(1));
 
         verify(taskService, never()).getById(any());
         verify(reviewerPicker, never()).pickSingle(any());
         verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
+    }
+
+    @Test
+    @DisplayName("§12.5.5 #5 L2 路径：抢占失败 → review 抛 ReviewNotExecutedException（供 MQ 消费者 markFailed+NACK 重投）")
+    void shouldThrowWhenL2ReviewCannotAcquireLock() throws InterruptedException {
+        when(reviewLock.tryLock(anyLong(), anyLong(), any())).thenReturn(false);
+
+        // L2：MQ 消费者经 tryConsume 调用 review(...)；未真正执行必须抛出，才能触发
+        // markFailed + basicNack(requeue=false) 进死信台账，而非静默 ACK 把 eventId 永久标记已消费。
+        assertThatThrownBy(() -> reviewService.review(TASK_ID, REPORT_TIME, 1, 128))
+                .isInstanceOf(ReviewNotExecutedException.class);
+
+        // 抢锁失败即短路：一行审查逻辑都没跑
+        verify(taskService, never()).getById(any());
+        verify(reviewerPicker, never()).pickSingle(any());
+        verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
+    }
+
+    @Test
+    @DisplayName("§12.5.5 #5 边界：已抢到锁后 doReview 抛异常 → review 不外抛（已执行，吞掉不重投避免重复烧 LLM）")
+    void shouldSwallowExceptionAfterLockAcquired() {
+        when(taskService.getById(TASK_ID)).thenThrow(new RuntimeException("db down"));
+
+        // 已进审查体（抢到锁）后的异常属"已执行但失败"，就地吞掉：L2 视为已消费 ACK，不重投
+        reviewService.review(TASK_ID, REPORT_TIME, 1, 128);
+
+        verify(taskService).getById(TASK_ID);
+        verify(reviewerPicker, never()).pickSingle(any());
     }
 
     // ---------- §12.2 审查异步化与陈旧守卫 ----------
@@ -590,6 +622,16 @@ class FinalReportReviewServiceImplTest {
 
     private static TaskFinalReportGeneratedEvent event(int attempt) {
         return new TaskFinalReportGeneratedEvent(TASK_ID, 128, 3, attempt, REPORT_TIME);
+    }
+
+    /**
+     * §12.5.5 #4：兜底落库写入器用<b>真实实例</b>包装 {@code taskService} / {@code taskTimelineService}
+     * 两个 mock——写入委托到同一批 mock，故既有的 {@code verify(taskService).convergeFinalReportToDone(...)}
+     * 与 {@code verify(taskTimelineService).recordEvent(...)} 断言全部保持不变（@Transactional 属容器语义，
+     * 单测不启代理，只验证委托链路）。
+     */
+    private FinalReportReviewFallbackWriter fallbackWriter() {
+        return new FinalReportReviewFallbackWriter(taskService, taskTimelineService);
     }
 
     private Task task(Long id, String finalReport) {
