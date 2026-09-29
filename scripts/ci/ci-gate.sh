@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# ============================================================================
+# HelloAI CI 门禁 —— 「构建 + 真实单测 + 用例数>0 + 架构漂移冻结 + 前端」
+#
+# 设计原则（对应 2026-09-29 审计建议 1/2/3/7）：
+#   1. 门禁逻辑只写一遍，CI 与本地共用本脚本；平台上只放薄封装。
+#   2. 必须显式 -DskipTests=false —— 根 POM 默认 <skipTests>true</skipTests>，
+#      不加此参数时 `mvn test` 会跑 0 个用例并「假绿」通过。
+#   3. 用例数必须 > 0，否则判失败（把「零用例假绿」变成显式错误）。
+#   4. 跨域反向依赖计数只降不升（见 check-arch-freeze.sh）。
+#   5. 固定可用 JDK，消除 ms-17.0.19 崩溃类「无法验证」。
+#
+# 用法：
+#   bash scripts/ci/ci-gate.sh                 # 全量：所有模块 clean test + 前端
+#   bash scripts/ci/ci-gate.sh --quick         # 快速：仅 helloai-core 单个测试类（本地自检）
+#   bash scripts/ci/ci-gate.sh --skip-ui       # 跳过前端
+#   bash scripts/ci/ci-gate.sh --offline       # 追加 mvn -o（无网/依赖已缓存时）
+#   bash scripts/ci/ci-gate.sh --quick --skip-ui
+#
+# 退出码：0 全部门禁通过 / 非 0 表示具体门禁失败（见输出 [FAIL] 行）
+# ============================================================================
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$ROOT" || exit 1
+
+# shellcheck source=lib-jdk.sh
+source "$SCRIPT_DIR/lib-jdk.sh"
+
+MODE_FULL=1
+SKIP_UI=0
+OFFLINE=0
+for arg in "$@"; do
+  case "$arg" in
+    --quick)     MODE_FULL=0 ;;
+    --skip-ui)   SKIP_UI=1 ;;
+    --offline)   OFFLINE=1 ;;
+    -h|--help)   sed -n '2,20p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    *) printf '[ci-gate] 未知参数：%s\n' "$arg" >&2; exit 64 ;;
+  esac
+done
+
+MVN_ARGS=(-B --no-transfer-progress)
+[ "$OFFLINE" = "1" ] && MVN_ARGS+=(-o)
+
+FAILURES=0
+step() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
+ok()   { printf '  [ OK ] %s\n' "$1"; }
+bad()  { printf '  [FAIL] %s\n' "$1"; FAILURES=$((FAILURES + 1)); }
+
+# ---------------------------------------------------------------------------
+# 门禁 0：解析可用 JDK（消除 ms-17.0.19 崩溃）
+# ---------------------------------------------------------------------------
+step "门禁 0 / 4：解析可用 JDK"
+RESOLVED_JDK="$(helloai_resolve_java_home)"
+if [ -z "$RESOLVED_JDK" ]; then
+  bad "未能解析出可用 JDK 17"
+  helloai_print_jdk_help
+  exit 1
+fi
+export JAVA_HOME="$RESOLVED_JDK"
+export PATH="$JAVA_HOME/bin:$PATH"
+printf '  JAVA_HOME = %s\n' "$JAVA_HOME"
+java -version 2>&1 | sed 's/^/  /'
+ok "JDK 已固定（跳过已知崩溃的 ms-17.0.19）"
+
+# ---------------------------------------------------------------------------
+# 门禁 1：构建 + 真实单测（显式 -DskipTests=false）
+# ---------------------------------------------------------------------------
+step "门禁 1 / 4：构建与单元测试（-DskipTests=false）"
+
+# 先清掉历史 surefire 报告：否则「用例数 > 0」断言可能被上一次构建的残留报告
+# 误满足（本地实测踩到：上游模块被 SKIPPED，却因 target 残留报告数出 12 个用例）。
+STALE=0
+while IFS= read -r d; do
+  [ -n "$d" ] || continue
+  rm -rf "$d" && STALE=$((STALE + 1))
+done < <(find "$ROOT" -type d -path '*/target/surefire-reports' 2>/dev/null)
+printf '  已清理历史 surefire 报告目录：%s 个\n' "$STALE"
+
+if [ "$MODE_FULL" = "1" ]; then
+  printf '  范围：全部模块 clean test\n'
+  MVN_CMD=(mvn "${MVN_ARGS[@]}" -DskipTests=false clean test)
+else
+  printf '  范围：--quick（仅 helloai-core 的 SubTaskStateMachineTest）\n'
+  MVN_CMD=(mvn "${MVN_ARGS[@]}" -DskipTests=false -pl helloai-core -am \
+            -Dtest=SubTaskStateMachineTest \
+            -DfailIfNoSpecifiedTests=false \
+            -Dsurefire.failIfNoSpecifiedTests=false \
+            clean test)
+fi
+printf '  命令：%s\n' "${MVN_CMD[*]}"
+if "${MVN_CMD[@]}"; then
+  ok "构建与单测执行成功"
+else
+  rc=$?
+  bad "构建或单测失败（exit=$rc）——上游已输出失败明细"
+fi
+
+# ---------------------------------------------------------------------------
+# 门禁 2：用例数 > 0（杜绝「零用例假绿」）
+# ---------------------------------------------------------------------------
+step "门禁 2 / 4：用例数 > 0 断言（杜绝零用例假绿）"
+TOTAL_TESTS=0
+SUITE_FILES=0
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  n="$(grep -o 'tests="[0-9]*"' "$f" 2>/dev/null | head -1 | grep -o '[0-9]*')"
+  [ -n "$n" ] || n=0
+  TOTAL_TESTS=$((TOTAL_TESTS + n))
+  SUITE_FILES=$((SUITE_FILES + 1))
+done < <(find "$ROOT" -path '*/target/surefire-reports/TEST-*.xml' -type f 2>/dev/null)
+
+printf '  surefire 报告文件：%s 个\n' "$SUITE_FILES"
+printf '  累计用例数：%s\n' "$TOTAL_TESTS"
+if [ "$TOTAL_TESTS" -gt 0 ]; then
+  ok "用例数 $TOTAL_TESTS > 0"
+else
+  bad "用例数为 0 —— 极可能是漏传 -DskipTests=false（根 POM 默认跳过测试）"
+fi
+
+# ---------------------------------------------------------------------------
+# 门禁 3：架构漂移冻结（跨域反向依赖只降不升）
+# ---------------------------------------------------------------------------
+step "门禁 3 / 4：架构漂移冻结校验"
+if bash "$SCRIPT_DIR/check-arch-freeze.sh"; then
+  ok "跨域反向依赖计数未超冻结基线"
+else
+  bad "跨域反向依赖计数超出冻结基线（新增反向依赖须显式评审并更新基线）"
+fi
+
+# ---------------------------------------------------------------------------
+# 门禁 4：前端类型检查 + 构建
+# ---------------------------------------------------------------------------
+step "门禁 4 / 4：前端 type-check 与 build"
+if [ "$SKIP_UI" = "1" ]; then
+  printf '  已按 --skip-ui 跳过\n'
+elif ! command -v npm >/dev/null 2>&1; then
+  bad "未找到 npm，无法执行前端门禁（如需跳过请显式加 --skip-ui）"
+else
+  UI_DIR="$ROOT/helloai-ui"
+  if [ ! -d "$UI_DIR" ]; then
+    bad "前端目录不存在：$UI_DIR"
+  else
+    (
+      cd "$UI_DIR" || exit 1
+      if [ "${HELLOAI_CI:-0}" = "1" ]; then
+        # CI：装 lock 文件锁定的依赖，保证可复现
+        npm ci --no-audit --no-fund
+      elif [ ! -d node_modules ]; then
+        npm install --no-audit --no-fund
+      fi
+      npm run type-check
+      npm run build
+    )
+    if [ $? -eq 0 ]; then
+      ok "前端 type-check 与 build 通过"
+    else
+      bad "前端门禁失败"
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+step "门禁汇总"
+if [ "$FAILURES" -eq 0 ]; then
+  printf '  \033[32m全部通过（0 项失败）\033[0m\n'
+  exit 0
+fi
+printf '  \033[31m%s 项门禁失败\033[0m\n' "$FAILURES"
+exit 1

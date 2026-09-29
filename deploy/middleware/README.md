@@ -1,0 +1,129 @@
+# HelloAI 中间件独立部署（摆法 A）
+
+新服务器（4C4G）只部署中间件：PostgreSQL（HelloAI）+ MySQL（其他项目）+ Redis + RabbitMQ + MinIO。
+HelloAI 应用与另一项目应用留在原处，通过网络连接新服务器（安全组按 IP 白名单放行）。
+
+## 1. 部署包结构
+
+```text
+deploy/middleware/
+├── docker-compose.yml      # 中间件 compose（含一次性初始化容器）
+├── .env.example            # 配置模板（复制为 .env 后修改密码）
+├── rabbitmq/init.sh        # RabbitMQ vhost/用户/权限初始化（幂等）
+├── minio/
+│   ├── init.sh             # MinIO bucket/access key/policy 初始化（幂等）
+│   └── policies/           # bucket 专属 policy（Resource 限定单桶）
+└── scripts/migrate.sh      # 数据迁移脚本（pg/mysql/minio）
+```
+
+## 2. 新服务器前提
+
+1. Docker Engine + Docker Compose v2
+2. 数据盘挂载到 `/data`（`docker-compose.yml` 中所有卷都指向 `/data/*`；若路径不同请同步修改）
+3. 安全组放行（建议只对应用服务器 IP 白名单）：`15432`(PG) / `13306`(MySQL) / `26379`(Redis) / `25672`+`25673`(RabbitMQ) / `29000`+`29001`(MinIO)
+
+## 3. 快速开始
+
+```bash
+cd /home/admin/middleware
+cp .env.example .env
+vim .env                 # 修改所有 ChangeMe 密码（字母数字，勿含空格/引号）
+docker compose up -d
+docker compose ps        # 等待全部 healthy（init 容器显示 Exited 0 属正常）
+docker compose logs rabbitmq-init minio-init   # 确认初始化成功
+```
+
+Redis / RabbitMQ / MinIO 的隔离配置由 init 容器自动完成，幂等可重跑。
+
+## 4. 内存预算（4C4G）
+
+| 服务 | mem_limit | 典型占用 |
+|---|---|---|
+| PostgreSQL 16.4 | 768m | ~400MB |
+| MySQL 8.0 | 768m | ~450MB |
+| Redis 7.2.5 | 384m | ~150MB（maxmemory 256MB） |
+| RabbitMQ 3.12 | 512m | ~300MB |
+| MinIO | 512m | ~250MB |
+| **合计** | **2.9GB** | **~1.6~2.0GB** |
+
+留出 ~2GB 给系统与页缓存。若日后要把应用也塞上来，需升 8G 或加 swap 并压 JVM（-Xmx 1g）。
+
+## 5. 连接信息
+
+| 中间件 | 地址 | 端口 | 账号 |
+|---|---|---|---|
+| PostgreSQL | 新IP:15432 | db=helloai | postgres / .env |
+| MySQL | 新IP:13306 | db=other_project | root / .env |
+| Redis | 新IP:26379 | 默认用户密码 / helloai 用户密码 | ACL |
+| RabbitMQ | 新IP:25672 | vhost=/helloai | helloai / .env |
+| MinIO | 新IP:29000 | bucket=helloai-artifacts | helloai-s3 / .env |
+
+## 6. 数据迁移
+
+在旧服务器（或装有 pg/mysql 客户端 + mc 的机器）上：
+
+```bash
+OLD_HOST=旧IP NEW_HOST=新IP \
+PG_PASSWORD=旧库密码 NEW_PG_PASSWORD=新库密码 \
+OLD_MYSQL_PASSWORD=.. NEW_MYSQL_PASSWORD=.. \
+OLD_MINIO_ENDPOINT=http://旧IP:29000 OLD_MINIO_ACCESS=minioadmin OLD_MINIO_SECRET=.. \
+NEW_MINIO_ENDPOINT=http://新IP:29000 NEW_MINIO_ACCESS=helloai-s3 NEW_MINIO_SECRET=.. \
+./scripts/migrate.sh all
+```
+
+迁移完成后，切流量前先做应用验证（登录 / 附件直读 / 任务流转），再停旧中间件。
+
+## 7. HelloAI 应用连接点改造
+
+### 方式一（推荐）：修改 `docker-compose.server.yml` 的 app 环境变量
+
+| 环境变量 | 原值 | 改后 |
+|---|---|---|
+| SPRING_DATASOURCE_URL | `jdbc:postgresql://postgres:5432/helloai?currentSchema=public&reWriteBatchedInserts=true` | `jdbc:postgresql://<新IP>:15432/helloai?currentSchema=public&reWriteBatchedInserts=true` |
+| SPRING_DATA_REDIS_HOST | `redis` | `<新IP>` |
+| SPRING_DATA_REDIS_PORT | `6379` | `26379` |
+| SPRING_DATA_REDIS_USERNAME | （无） | `helloai`（新增） |
+| SPRING_DATA_REDIS_PASSWORD | （无） | `.env` 的 HELLOAI_REDIS_PASSWORD（新增） |
+| SPRING_RABBITMQ_HOST | `rabbitmq` | `<新IP>` |
+| SPRING_RABBITMQ_PORT | `5672` | `25672` |
+| SPRING_RABBITMQ_USERNAME | （无，默认 guest） | `helloai`（新增） |
+| SPRING_RABBITMQ_PASSWORD | （无） | `.env` 的 HELLOAI_RABBIT_PASSWORD（新增） |
+| MINIO_ENDPOINT | `http://minio:9000` | `http://<新IP>:29000` |
+| MINIO_ACCESS_KEY | `minioadmin` | `helloai-s3` |
+| MINIO_SECRET_KEY | `minioadmin123` | `.env` 的 HELLOAI_S3_SECRET_KEY |
+| MINIO_BUCKET | `helloai-artifacts` | 不变 |
+
+> Redis 相关（Sa-Token 会话 / RedisTemplate / 锁）统一走 `spring.data.redis`，无需逐处修改。
+> 若实际代码里有独立构建的 RedissonClient / Jedis 配置，需同步补 username/password。
+
+### 方式二：直接改 `helloai-start/src/main/resources/application-dev.yml`
+
+`DATASOURCE_URL` / `REDIS_HOST` / `REDIS_PORT` / `RABBITMQ_HOST` / `RABBITMQ_PORT` 已有 env 占位；
+需在 redis / rabbitmq 节点下补 `username` / `password` 字段（或同样走 SPRING_* env 覆盖）。
+
+## 8. 其他项目连接与共用隔离
+
+| 中间件 | 隔离机制 | 其他项目连接方式 |
+|---|---|---|
+| RabbitMQ | vhost 级完全隔离（`/helloai` 与 `/other` 互不可见） | 管理员在管理 UI（`新IP:25673`）新建 vhost+用户+权限，或仿 `rabbitmq/init.sh` 追加 |
+| Redis | ACL 用户 + 密码隔离（默认 `~*`，凭据防串用） | 新用户 `user other on >密码 ~* &* +@all ...`；应用层 key 前缀约定 `other:` |
+| MinIO | bucket + 独立 access key + bucket policy | 用 `mc mb` 建 bucket、`mc admin user add` 建用户、attach `other-project.json` policy（`minio/init.sh` 已留模板） |
+| PostgreSQL / MySQL | 各自独立实例、独立端口、独立数据目录 | 两库完全物理隔离 |
+
+**Redis 严格 key 隔离（可选）**：当前 ACL 为 `~*`（避免 HelloAI 现存 key 不带 `helloai:` 前缀导致 NOPERM）。
+如需数据级隔离，把 compose 中 helloai 用户的 `~*` 改为 `~helloai:*`，并确保 HelloAI 所有 Redis key 统一 `helloai:` 前缀后再上。
+
+## 9. 安全清单
+
+- [ ] 所有 `.env` 密码改为强密码，勿提交 git（`.env` 已被仓库 `.gitignore` 排除）
+- [ ] 安全组仅对应用服务器 IP 白名单放行上述端口，不要 `0.0.0.0/0`
+- [ ] RabbitMQ 默认 `guest` 已被管理员用户替代，管理 UI（25673）同样走白名单
+- [ ] 数据盘独立挂载，容器数据不落系统盘
+- [ ] 迁移前先 `docker compose exec postgres-helloai pg_dump ...` 做一次新库备份基线
+
+## 10. FAQ
+
+- **Redis 报 `NOPERM`**：ACL 限制了 key 前缀但应用 key 不带前缀。当前配置为 `~*` 不会触发；只有改成 `~helloai:*` 才会，需先统一 key 前缀。
+- **RabbitMQ `ACCESS_REFUSED`**：检查 vhost 与用户名密码——应用连 `helloai` 用户 + `/helloai` vhost（Spring 默认 vhost=`/`，需设 `spring.rabbitmq.virtual-host=/helloai`）。
+- **init 容器非 0 退出**：`docker compose logs rabbitmq-init / minio-init` 查看原因；修复后重新 `docker compose up -d`（幂等）。
+- **迁移后附件直读失败**：确认 `MINIO_ENDPOINT` 应用可达（公网需白名单），`MINIO_ACCESS_KEY/SECRET_KEY` 与 `.env` 一致。

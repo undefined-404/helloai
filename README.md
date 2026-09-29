@@ -211,6 +211,29 @@ docker compose -f docker-compose.server.yml up -d
 
 **配置 API Key**：推荐启动后在管理端「系统设置 → 模型配置」页面填写，加密落库、实时生效、无需重启。
 
+### 方式 C：本地验证与 CI 门禁
+
+> ⚠️ **两个高频踩坑**（2026-09-29 架构与质量审计实测）：
+> 1. **默认 `JAVA_HOME` 可能指向会崩溃的 JDK**。本机实测 `ms-17.0.19` 必然触发 JVM `EXCEPTION_ACCESS_VIOLATION`，表现成「项目编译不了 / 测试跑不起来」——这其实是环境问题，不是代码问题。请改用 `ms-17.0.20.1`（或任一可用的 JDK 17）。
+> 2. **`mvn test` 默认一个用例都不跑**。根 POM 为打包速度设了 `<skipTests>true</skipTests>`，**必须显式加 `-DskipTests=false`**，否则得到的是「0 用例通过」的假绿结论。
+
+一条命令完成「构建 + 真实单测 + 用例数>0 + 架构漂移冻结 + 前端校验」：
+
+```bash
+# 全量（等价于 CI 所跑内容）
+bash scripts/ci/ci-gate.sh
+
+# 本地快速自检（单模块单测试类，且跳过前端）
+bash scripts/ci/ci-gate.sh --quick --skip-ui
+
+# 若默认 JAVA_HOME 不可用，显式指定可用 JDK
+HELLOAI_JAVA_HOME="$HOME/.jdks/ms-17.0.20.1" bash scripts/ci/ci-gate.sh --quick --skip-ui
+```
+
+CI 配置：[`.workflow/helloai-ci.yml`](.workflow/helloai-ci.yml)（Gitee Go，对应本仓库远程）与 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)（GitHub Actions，可移植备份）。两者都只是薄封装——**门禁语义全部在 `scripts/ci/ci-gate.sh`**，本地执行同一份脚本即可复现 CI 结论。
+
+**架构红线守卫**：跨域反向依赖（`agent→task` / `planner→agent` / `task→agent`）计数**只降不升**，由 `scripts/ci/check-arch-freeze.sh` 把关。确需新增时，执行 `bash scripts/ci/check-arch-freeze.sh --update-baseline` 更新基线，并在评审中说明理由。
+
 ---
 
 ## 📸 界面预览

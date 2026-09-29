@@ -496,7 +496,7 @@ SUPER_ADMIN 由 StpInterfaceImpl 返回 "*" 通配，自动覆盖全部新增码
 
 ### 9.9.1 授权覆盖实测
 
-- `@SaCheckPermission` 覆盖：**131 处**（原有 24 + 本批新增 **107**：管理面 60 / 业务面 47），分布于 23 个控制器。
+- `@SaCheckPermission` 覆盖：**131 处**（原有 24 + 本批新增 **107**：管理面 60 / 业务面 47），分布于 23 个控制器。**（本行是 2026-09-13 的时点快照；2026-09-29 复测实际为 144 处，差额来自 BASE-4.4a 管理面存量补齐，订正记录见《HelloAI 实现差距表》§0 C-4）**
 - **码 ↔ 注解双向核对**：V88 新增 **71 码全部被至少一个注解引用（零幽灵码）**；注解引用共 88 码 = V88 的 71 + 既有迁移的 17（`depart:*` / `role:*` / `user:*` / `permission:*`）。
 - Agent / 公开白名单通道 **12 个控制器实测 0 注解**（McpController / AgentController / AgentDoorbellController / AgentInboxController / ArtifactUploadController / ActivityController / SetupController / AuthController / HealthController / ToolsController / FeedController / AgentEventController），红线未越界。
 

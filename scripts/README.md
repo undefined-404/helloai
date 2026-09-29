@@ -1,7 +1,8 @@
 # scripts/ 索引
 
-本目录是 HelloAI 的验证与运维脚本库。共 **76 个 PowerShell + 24 个 Shell + 1 个 Java 工具 + 1 个 SQL**（2026-09-28 盘点）。
+本目录是 HelloAI 的验证与运维脚本库。共 **76 个 PowerShell + 24 个 Shell + 1 个 Java 工具 + 1 个 SQL**（2026-09-28 盘点），另有 **3 个 CI 门禁脚本 + 1 个架构冻结基线**（2026-09-29 新增）。
 
+- `ci/`：**跨平台 CI 门禁与架构守卫**（bash，Git Bash / Linux CI 通用；详细见下方第六节）
 - `powershell/`：Windows 侧（pwsh / Windows PowerShell 5.1），含全部规范类与大部分 E2E 验收脚本
 - `shell/`：macOS/Linux 侧（zsh/bash），E2E 验收为主 + 少量构建运维
 - `powershell/tools/`：脚本共享工具（PgExec.java，JDBC 通道，供 verify-reviewer-dual 等在无 docker psql 时执行 SQL）
@@ -78,3 +79,26 @@ verify-login-e2e、verify-requirement-clarify、verify-websearch-e2e、verify-pl
 3. **2026-09-28 整理记录**：
    - 移除误入的外项目脚本 `powershell/下单支付E2E验收.ps1`（Trade Cloud 电商验收，gateway :8299，与本仓库零关联；如需可从 git 历史恢复）。
    - 修复 `verify-code-style-p0-layer.ps1` 对已删除的 `tmp\package-backend.ps1` / `tmp\kill-backend.ps1` / `tmp\wait-backend.ps1` 的三处坏引用（内联等价实现，未经 pwsh 实跑）。
+
+## 六、CI 门禁（ci/，2026-09-29 新增）
+
+背景：2026-09-29 架构与质量审计发现本仓库**无任何 CI**，且根 POM 默认 `skipTests=true`，导致「单测全绿」全靠人工执行、且极易得到「0 用例通过」的假绿结论。本节脚本把验证变成可自动执行、不可绕过的门禁。
+
+| 脚本 | 用途 |
+|---|---|
+| `ci/ci-gate.sh` | **主门禁**：固定可用 JDK → 构建+真实单测（显式 `-DskipTests=false`）→ 断言「用例数 > 0」→ 架构漂移冻结 → 前端 type-check/build |
+| `ci/lib-jdk.sh` | JDK 解析库：优先 `$HELLOAI_JAVA_HOME` → `$JAVA_HOME` → 探测 `~/.jdks/*`；**黑名单排除 ms-17.0.19**（本机必然 JVM 崩溃） |
+| `ci/check-arch-freeze.sh` | 跨域反向依赖「只降不升」守卫；`--update-baseline` 刷新冻结基线 |
+| `ci/arch-baseline.txt` | 冻结基线（自动生成，勿手改数字） |
+
+常用命令：
+
+```bash
+bash scripts/ci/ci-gate.sh                    # 全量，等价于 CI
+bash scripts/ci/ci-gate.sh --quick --skip-ui  # 本地快速自检
+bash scripts/ci/check-arch-freeze.sh          # 只跑架构冻结校验
+```
+
+平台接入：`.workflow/helloai-ci.yml`（Gitee Go，对应本仓库远程）与 `.github/workflows/ci.yml`（GitHub Actions 备份）。**平台配置只是薄封装**——门禁语义全在上表的脚本里，因此本地执行同一脚本即可复现 CI 结论（这正是 §5.2 约定「新增验收口径优先下沉为可跨平台执行的形式」的落地）。
+
+**尚未覆盖（后续项）**：本门禁只做「可编译 + 单测 + 依赖方向增量 + 前端」四类校验；**B 级集成测试仍为 0**（无 Testcontainers、无真实 DB/Redis/MQ 集成测试），E2E 仍依赖需 Docker 的 ps1/sh 脚本。这两项是审计建议 #5/#6，属 L/M 成本，待排期。

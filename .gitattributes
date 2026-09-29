@@ -1,0 +1,8 @@
+# CI 脚本与流水线配置：强制 LF 换行
+# 原因：CI runner 在 Linux 执行，若被 core.autocrlf 转成 CRLF 会报
+#       "bad interpreter: /bin/bash^M"，本地 Git Bash 同样会失败。
+# 仅覆盖本批新增的 CI 资产，不改动既有脚本，避免一次性全仓规范化噪音。
+scripts/ci/*.sh text eol=lf
+scripts/ci/*.txt text eol=lf
+.workflow/*.yml text eol=lf
+.github/workflows/*.yml text eol=lf

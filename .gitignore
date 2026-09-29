@@ -52,6 +52,11 @@ logs/
 # --- Spring Boot 运行态临时文件 ---
 .spring-boot-pid
 
+# --- Python（工具脚本的字节码缓存，不入仓）---
+# tools/ 下的一次性 Python 工具运行后会生成 __pycache__/*.pyc（2026-09-29 补充）
+__pycache__/
+*.pyc
+
 # --- 临时验证输出（v2.6 2026-07-09 补充）---
 # SSE 验证脚本的临时输出文件
 sse*.txt
@@ -88,3 +93,14 @@ phase-b-*.ps1
 phase-b-rs-*/
 helmet-poster-*.png
 helmet-research-*.png
+
+# --- WorkBuddy 本地工作区（含 memory / 本地缓存，不入仓 2026-09-29）---
+.workbuddy/
+
+# --- 本地一次性工具脚本（本地测试/调试工具，不入仓 2026-09-29）---
+# tools/ 下为本地运行的一次性 Python 工具（如 ai-video-search），非项目交付物
+tools/
+
+# --- Executor 配置文件（含真实 apiKey，一律不入仓 2026-09-29 安全修复）---
+# 原名 executor-config.public.json 具有误导性，实际含真实 Agent Key，扩展为通配
+scripts/powershell/executor-config*.json

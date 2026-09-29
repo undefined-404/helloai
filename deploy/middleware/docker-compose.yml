@@ -1,0 +1,191 @@
+# ============================================================
+# HelloAI - Standalone Middleware Deployment (Option A: new server runs middleware only)
+# Deploy path: /home/admin/middleware/docker-compose.yml
+# Usage:
+#   1. cp .env.example .env and update all passwords
+#   2. Make sure the data disk is mounted at /data (or change the volume paths below)
+#   3. docker compose up -d
+#   4. Verify: docker compose ps shows all healthy
+# Notes:
+#   - No app/web containers; applications stay in place and connect over the network
+#     (whitelist ports in the security group by source IP)
+#   - Ports reuse the custom ports of docker-compose.server.yml
+#     (15432/26379/25672/25673/29000/29001), so apps only change host, not port
+#   - RabbitMQ / MinIO isolation setup is done by one-shot init containers (idempotent)
+#   - Memory limits total ~2.9GB; fits a 4C4G server (typical usage ~1.8~2.3GB)
+# ============================================================
+
+services:
+
+  # --- PostgreSQL 16.4 (dedicated instance for HelloAI) ---
+  postgres-helloai:
+    image: postgres:16.4-alpine
+    container_name: middleware-postgres-helloai
+    restart: unless-stopped
+    ports:
+      - "15432:5432"
+    environment:
+      POSTGRES_DB: helloai
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: Asia/Shanghai
+    command:
+      - postgres
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - effective_cache_size=1GB
+      - -c
+      - max_connections=200
+    volumes:
+      - /data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d helloai"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    mem_limit: 768m
+
+  # --- MySQL 8.0 (dedicated instance for other project) ---
+  mysql-other:
+    image: mysql:8.0
+    container_name: middleware-mysql-other
+    restart: unless-stopped
+    ports:
+      - "13306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --innodb-buffer-pool-size=512M
+      - --max-connections=200
+    volumes:
+      - /data/mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    mem_limit: 768m
+
+  # --- Redis 7.2.5 (ACL user isolation; passwords must be alphanumeric, no spaces) ---
+  redis:
+    image: redis:7.2.5-alpine
+    container_name: middleware-redis
+    restart: unless-stopped
+    ports:
+      - "26379:6379"
+    environment:
+      REDIS_DEFAULT_PASSWORD: ${REDIS_DEFAULT_PASSWORD}
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - allkeys-lru
+      # default user: admin fallback (for keys / cluster ops)
+      - --user
+      - "default on >${REDIS_DEFAULT_PASSWORD} ~* &* +@all -FLUSHALL -FLUSHDB -CONFIG -SHUTDOWN -DEBUG -SLAVEOF -REPLICAOF -MIGRATE"
+      # helloai user: app dedicated (key prefix convention helloai:, not enforced;
+      # for strict key isolation change ~* to ~helloai:*)
+      - --user
+      - "helloai on >${HELLOAI_REDIS_PASSWORD} ~* &* +@all -FLUSHALL -FLUSHDB -CONFIG -SHUTDOWN -DEBUG -SLAVEOF -REPLICAOF -MIGRATE"
+    volumes:
+      - /data/redis:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_DEFAULT_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    mem_limit: 384m
+
+  # --- RabbitMQ 3.12.14 + Management (vhost isolation) ---
+  rabbitmq:
+    image: rabbitmq:3.12.14-management-alpine
+    container_name: middleware-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "25672:5672"    # AMQP
+      - "25673:15672"   # Management UI
+    environment:
+      # Admin is created on empty data dir (replacing guest); business users are created by rabbitmq-init
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_ADMIN_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_ADMIN_PASSWORD}
+      TZ: Asia/Shanghai
+    volumes:
+      - /data/rabbitmq:/var/lib/rabbitmq
+      - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    mem_limit: 512m
+
+  # --- MinIO (bucket + access key + bucket policy isolation) ---
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: middleware-minio
+    restart: unless-stopped
+    ports:
+      - "29000:9000"   # S3 API
+      - "29001:9001"   # Console
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      TZ: Asia/Shanghai
+    volumes:
+      - /data/minio:/data
+    command: server /data --console-address ':9001'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    mem_limit: 512m
+
+  # ============================================================
+  # One-shot init containers (restart: "no", idempotent; re-run with docker compose up -d)
+  # ============================================================
+
+  # RabbitMQ: create business vhost + user + permissions (Management HTTP API, idempotent PUT)
+  rabbitmq-init:
+    image: curlimages/curl:latest
+    container_name: middleware-rabbitmq-init
+    restart: "no"
+    entrypoint: /bin/sh
+    command: /init/init.sh
+    volumes:
+      - ./rabbitmq/init.sh:/init/init.sh:ro
+    environment:
+      RABBITMQ_ADMIN_USER: ${RABBITMQ_ADMIN_USER}
+      RABBITMQ_ADMIN_PASSWORD: ${RABBITMQ_ADMIN_PASSWORD}
+      HELLOAI_RABBIT_USER: ${HELLOAI_RABBIT_USER}
+      HELLOAI_RABBIT_PASSWORD: ${HELLOAI_RABBIT_PASSWORD}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  # MinIO: create project bucket + dedicated S3 user + least-privilege policy
+  minio-init:
+    image: minio/mc:latest
+    container_name: middleware-minio-init
+    restart: "no"
+    entrypoint: /bin/sh
+    command: /init/init.sh
+    volumes:
+      - ./minio/init.sh:/init/init.sh:ro
+      - ./minio/policies:/policies:ro
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      HELLOAI_S3_ACCESS_KEY: ${HELLOAI_S3_ACCESS_KEY}
+      HELLOAI_S3_SECRET_KEY: ${HELLOAI_S3_SECRET_KEY}
+    depends_on:
+      minio:
+        condition: service_healthy

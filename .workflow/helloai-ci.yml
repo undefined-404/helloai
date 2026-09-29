@@ -1,0 +1,66 @@
+# ============================================================================
+# HelloAI CI —— Gitee Go 流水线
+#
+# 为什么是 Gitee Go：本仓库远程为 https://gitee.com/undefined_404/helloai.git
+# （2026-09-29 核实），此前**无任何 CI**。Gitee Go 是唯一能在此远程上直接运行的方案。
+# 若后续迁移/镜像到 GitHub，等价配置见 .github/workflows/ci.yml。
+#
+# 设计约定（重要）：
+#   本文件是**薄封装**，真正的门禁逻辑全部在 scripts/ci/ci-gate.sh：
+#     - 固定可用 JDK（规避 ms-17.0.19 必然 JVM 崩溃）
+#     - 显式 -DskipTests=false（根 POM 默认跳过测试，不加会「零用例假绿」）
+#     - 断言「用例数 > 0」
+#     - 架构漂移冻结校验（跨域反向依赖只降不升）
+#   因此即便平台 YAML 字段有差异，门禁语义也不会丢失 —— 本地执行同一脚本即可复现。
+#
+# 落地步骤（配置文件本身不足以生效）：
+#   1) 推送本文件后，到 Gitee 仓库「流水线」页面新建流水线并选择本文件；
+#   2) 在「仓库设置 → 分支保护」勾选「通过 CI 检查才允许合并」，使门禁成为不可绕过的前置。
+#
+# 若平台报 schema 不匹配，请以 Gitee Go 可视化编辑器为准重存一次；
+# 字段差异不影响 scripts/ci/ci-gate.sh 的有效性。
+# ============================================================================
+
+version: '1.0'
+name: helloai-ci
+displayName: HelloAI CI
+
+triggers:
+  trigger: auto
+  push:
+    branches:
+      precise:
+        - master
+  pr:
+    branches:
+      precise:
+        - master
+
+stages:
+  - stage:
+      name: build-and-test
+      displayName: 构建 · 单测 · 架构冻结
+      trigger: auto
+      steps:
+        # 后端：构建 + 真实单测 + 用例数>0 断言 + 架构漂移冻结
+        # --skip-ui 的原因：Maven 构建插件环境不带 Node，前端拆到下一个 step。
+        - step: build@maven
+          name: maven_gate
+          displayName: Maven 构建与单测门禁
+          jdkVersion: 17
+          mavenVersion: 3.6.3
+          commands:
+            - java -version
+            - mvn -version
+            - bash scripts/ci/ci-gate.sh --skip-ui
+
+        # 前端：类型检查 + 生产构建
+        - step: build@nodejs
+          name: ui_gate
+          displayName: 前端类型检查与构建
+          nodeVersion: 20
+          commands:
+            - cd helloai-ui
+            - npm ci --no-audit --no-fund
+            - npm run type-check
+            - npm run build

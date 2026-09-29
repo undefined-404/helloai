@@ -1,0 +1,60 @@
+name: CI
+
+# HelloAI 持续集成门禁
+#
+# 存在意义（2026-09-29 架构与质量审计 §5.6 / §7）：本仓库此前**无任何 CI**
+# （无 .github/workflows、无 .gitlab-ci.yml、无 Jenkinsfile），所有「单测全绿」
+# 完全依赖人工执行；且根 POM 默认 <skipTests>true</skipTests>，默认 `mvn test`
+# 会跑 0 个用例并「假绿」通过。本工作流把验证变成不可绕过的前置条件。
+#
+# 说明：仓库实际远程为 Gitee（见 .workflow/helloai-ci.yml）。本文件为**可移植备份**，
+# 便于迁移/镜像到 GitHub 时直接生效。两者都只是薄封装，真正的门禁逻辑在
+# scripts/ci/ci-gate.sh，本地执行同一份脚本即可复现 CI 结论。
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: 构建 · 单测 · 架构冻结 · 前端
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: 安装 Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: helloai-ui/package-lock.json
+
+      # 注意：必须走 ci-gate.sh —— 它内部显式传 -DskipTests=false
+      # 并断言「用例数 > 0」，否则根 POM 的默认跳过会让流水线假绿通过。
+      - name: 执行门禁（ci-gate.sh）
+        env:
+          HELLOAI_CI: '1'
+        run: bash scripts/ci/ci-gate.sh
+
+      - name: 归档单测报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: '**/target/surefire-reports/*.xml'
+          if-no-files-found: warn
