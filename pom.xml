@@ -54,6 +54,43 @@
 
     <dependencyManagement>
         <dependencies>
+            <!-- Testcontainers BOM 2.0.5（2026-09-29 必选：须声明在 spring-boot-dependencies 之前才能覆盖其 1.20.6）：
+                 新版 Docker Desktop（4.38+ 管道中继）对 npipe 请求强制要求 HTTP Host 头，
+                 内嵌 docker-java 3.x 的 1.20.6 被 400 拒绝（本机 Docker Engine 29.2.1 实测），
+                 升级 2.0.x（非 shaded、docker-java 4.x）修复；Linux/CI 不受影响但统一版本 -->
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers-bom</artifactId>
+                <version>2.0.5</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- 2.0.5 前置 import 仍不足以覆盖 spring-boot-dependencies 对核心三件的直接版本管理，
+                 须补显式条目（直接声明 > BOM import）：保证四件套版本统一 2.0.5。
+                 注意 2.x 模块改名：junit-jupiter→testcontainers-junit-jupiter、
+                 postgresql→testcontainers-postgresql、rabbitmq→testcontainers-rabbitmq，
+                 1.x 旧名只有 1.21.x，无 2.0.5（阿里云实测与 Central 目录验证一致） -->
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers</artifactId>
+                <version>2.0.5</version>
+            </dependency>
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers-junit-jupiter</artifactId>
+                <version>2.0.5</version>
+            </dependency>
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers-postgresql</artifactId>
+                <version>2.0.5</version>
+            </dependency>
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers-rabbitmq</artifactId>
+                <version>2.0.5</version>
+            </dependency>
+
             <dependency>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-dependencies</artifactId>

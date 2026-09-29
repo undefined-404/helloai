@@ -55,6 +55,35 @@
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-model-deepseek</artifactId>
         </dependency>
+        <!-- 测试（B 级集成测试基础设施，2026-09-29：Testcontainers PG/Redis/RabbitMQ）
+             版本默认由 spring-boot-dependencies 3.4.10 管理；根 pom dependencyManagement
+             自 2026-09-29 起前置导入 testcontainers-bom 2.0.5 覆盖（兼容新版 Docker Desktop npipe 中继）；
+             2.x 模块改名：junit-jupiter→testcontainers-junit-jupiter 等（见根 pom 注释） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-rabbitmq</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

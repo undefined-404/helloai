@@ -1,0 +1,33 @@
+# B 级集成测试 profile（@ActiveProfiles("it") 激活，2026-09-29 引入，审计建议 #5）
+#
+# 定位：只承载「与生产配置的静态差异项」；容器端点（PG/Redis/RabbitMQ）由
+# AbstractItTestBase 的 @DynamicPropertySource 以最高优先级注入，此处不写死端口。
+# 其余配置继承 src/main/resources/application.yml（Spring profile 配置是叠加不是替换）。
+#
+# 差异项清单（每条都应有理由，禁止为「跑得通」盲目关装配）：
+#   1. flyway.ignore-migration-patterns = "*:missing" —— V3~V12 历史缺号（差距表 C-6），
+#      脚本合并/清理是已注册事实；真实生产库同样缺号，本项只是兜底语义，不改变 apply 行为。
+#   2. rabbitmq listener 收敛并发 —— 测试容器规格小，concurrency=1 让断言时序可预期。
+#   3. helloai.storage.enabled=false —— 产物物化（MinIO）是 B 级范围外的外部边界；
+#      附件链路由单测（MinioArtifactStorageTest，mock MinioClient）单独覆盖。
+#   4. 日志收敛 —— 集成测试只看断言证据，interest 之外的 SQL/业务日志降到 INFO。
+
+spring:
+  flyway:
+    # 容忍历史迁移缺号（V3~V12 不存在，差距表 C-6 口径）
+    ignore-migration-patterns: "*:missing"
+  rabbitmq:
+    listener:
+      simple:
+        concurrency: 1
+        max-concurrency: 2
+
+helloai:
+  storage:
+    # 物化开关：关闭 MinIO 产物上传，执行结果保持 output 原文（ExecutionArtifactService.isEnabled=false 语义）
+    enabled: false
+
+logging:
+  level:
+    com.helloai.core: INFO
+    com.helloai.job: INFO

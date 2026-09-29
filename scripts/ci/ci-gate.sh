@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # ============================================================================
-# HelloAI CI 门禁 —— 「构建 + 真实单测 + 用例数>0 + 架构漂移冻结 + 前端」
+# HelloAI CI 门禁 —— 「构建 + 真实单测 + 用例数>0 + 架构漂移冻结 + 前端 + B 级集成」
 #
-# 设计原则（对应 2026-09-29 审计建议 1/2/3/7）：
+# 设计原则（对应 2026-09-29 审计建议 1/2/3/7/5）：
 #   1. 门禁逻辑只写一遍，CI 与本地共用本脚本；平台上只放薄封装。
 #   2. 必须显式 -DskipTests=false —— 根 POM 默认 <skipTests>true</skipTests>，
 #      不加此参数时 `mvn test` 会跑 0 个用例并「假绿」通过。
 #   3. 用例数必须 > 0，否则判失败（把「零用例假绿」变成显式错误）。
 #   4. 跨域反向依赖计数只降不升（见 check-arch-freeze.sh）。
 #   5. 固定可用 JDK，消除 ms-17.0.19 崩溃类「无法验证」。
+#   6. B 级集成（Testcontainers PG/Redis/RabbitMQ）无 Docker 时输出 NOT RUN 而非 FAIL
+#      （协作规约 §27 语义：不可用环境不制造假失败，门禁仍对真实回归负责）。
 #
 # 用法：
 #   bash scripts/ci/ci-gate.sh                 # 全量：所有模块 clean test + 前端
@@ -53,7 +55,7 @@ bad()  { printf '  [FAIL] %s\n' "$1"; FAILURES=$((FAILURES + 1)); }
 # ---------------------------------------------------------------------------
 # 门禁 0：解析可用 JDK（消除 ms-17.0.19 崩溃）
 # ---------------------------------------------------------------------------
-step "门禁 0 / 4：解析可用 JDK"
+step "门禁 0 / 5：解析可用 JDK"
 RESOLVED_JDK="$(helloai_resolve_java_home)"
 if [ -z "$RESOLVED_JDK" ]; then
   bad "未能解析出可用 JDK 17"
@@ -69,7 +71,7 @@ ok "JDK 已固定（跳过已知崩溃的 ms-17.0.19）"
 # ---------------------------------------------------------------------------
 # 门禁 1：构建 + 真实单测（显式 -DskipTests=false）
 # ---------------------------------------------------------------------------
-step "门禁 1 / 4：构建与单元测试（-DskipTests=false）"
+step "门禁 1 / 5：构建与单元测试（-DskipTests=false）"
 
 # 先清掉历史 surefire 报告：否则「用例数 > 0」断言可能被上一次构建的残留报告
 # 误满足（本地实测踩到：上游模块被 SKIPPED，却因 target 残留报告数出 12 个用例）。
@@ -102,7 +104,7 @@ fi
 # ---------------------------------------------------------------------------
 # 门禁 2：用例数 > 0（杜绝「零用例假绿」）
 # ---------------------------------------------------------------------------
-step "门禁 2 / 4：用例数 > 0 断言（杜绝零用例假绿）"
+step "门禁 2 / 5：用例数 > 0 断言（杜绝零用例假绿）"
 TOTAL_TESTS=0
 SUITE_FILES=0
 while IFS= read -r f; do
@@ -124,7 +126,7 @@ fi
 # ---------------------------------------------------------------------------
 # 门禁 3：架构漂移冻结（跨域反向依赖只降不升）
 # ---------------------------------------------------------------------------
-step "门禁 3 / 4：架构漂移冻结校验"
+step "门禁 3 / 5：架构漂移冻结校验"
 if bash "$SCRIPT_DIR/check-arch-freeze.sh"; then
   ok "跨域反向依赖计数未超冻结基线"
 else
@@ -134,7 +136,7 @@ fi
 # ---------------------------------------------------------------------------
 # 门禁 4：前端类型检查 + 构建
 # ---------------------------------------------------------------------------
-step "门禁 4 / 4：前端 type-check 与 build"
+step "门禁 4 / 5：前端 type-check 与 build"
 if [ "$SKIP_UI" = "1" ]; then
   printf '  已按 --skip-ui 跳过\n'
 elif ! command -v npm >/dev/null 2>&1; then
@@ -160,6 +162,34 @@ else
     else
       bad "前端门禁失败"
     fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 门禁 5：B 级集成测试（Testcontainers PG/Redis/RabbitMQ，无 Docker 则 NOT RUN）
+# ---------------------------------------------------------------------------
+step "门禁 5 / 5：B 级集成测试（Testcontainers，无 Docker 则 NOT RUN）"
+if [ "$MODE_FULL" != "1" ]; then
+  printf '  已按 --quick 跳过（B 级集成仅全量模式执行）\n'
+elif ! command -v docker >/dev/null 2>&1; then
+  printf '  [NOT RUN] 未找到 docker 命令 —— 无容器环境，B 级集成跳过（协作规约 §27）\n'
+elif ! docker info >/dev/null 2>&1; then
+  printf '  [NOT RUN] docker 守护进程不可用 —— B 级集成跳过（协作规约 §27）\n'
+else
+  # 只跑 *IT 类：surefire 默认 includes 为 *Test.java 系列（不含 *IT），
+  # 单测门禁（1/2）与集成门禁（5）互不污染；-am 确保上游模块就位。
+  # 裸 *IT 不带引号传递：bash 数组元素中 glob 无匹配文件时不展开，安全。
+  IT_PATTERN='*IT'
+  MVN_IT=(mvn "${MVN_ARGS[@]}" -DskipTests=false -pl helloai-start -am \
+          "-Dtest=$IT_PATTERN" \
+          -Dsurefire.failIfNoSpecifiedTests=false \
+          -DfailIfNoSpecifiedTests=false \
+          test)
+  printf '  命令：%s\n' "${MVN_IT[*]}"
+  if "${MVN_IT[@]}"; then
+    ok "B 级集成测试全部通过（测试类：helloai-start/src/test/java/com/helloai/it/*IT）"
+  else
+    bad "B 级集成测试失败（需 Docker 可用环境复现；失败明细见 surefire-reports 与上方输出）"
   fi
 fi
 

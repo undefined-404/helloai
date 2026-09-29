@@ -1,6 +1,6 @@
 # scripts/ 索引
 
-本目录是 HelloAI 的验证与运维脚本库。共 **76 个 PowerShell + 24 个 Shell + 1 个 Java 工具 + 1 个 SQL**（2026-09-28 盘点），另有 **3 个 CI 门禁脚本 + 1 个架构冻结基线**（2026-09-29 新增）。
+本目录是 HelloAI 的验证与运维脚本库。共 **77 个 PowerShell（powershell/ 76 + 根目录 run-it-local.ps1）+ 24 个 Shell + 1 个 Java 工具 + 1 个 SQL**（2026-09-28 盘点，run-it-local.ps1 为 09-29 新增），另有 **4 个 CI 门禁脚本 + 1 个架构冻结基线**（2026-09-29 新增）。
 
 - `ci/`：**跨平台 CI 门禁与架构守卫**（bash，Git Bash / Linux CI 通用；详细见下方第六节）
 - `powershell/`：Windows 侧（pwsh / Windows PowerShell 5.1），含全部规范类与大部分 E2E 验收脚本
@@ -101,4 +101,17 @@ bash scripts/ci/check-arch-freeze.sh          # 只跑架构冻结校验
 
 平台接入：`.workflow/helloai-ci.yml`（Gitee Go，对应本仓库远程）与 `.github/workflows/ci.yml`（GitHub Actions 备份）。**平台配置只是薄封装**——门禁语义全在上表的脚本里，因此本地执行同一脚本即可复现 CI 结论（这正是 §5.2 约定「新增验收口径优先下沉为可跨平台执行的形式」的落地）。
 
-**尚未覆盖（后续项）**：本门禁只做「可编译 + 单测 + 依赖方向增量 + 前端」四类校验；**B 级集成测试仍为 0**（无 Testcontainers、无真实 DB/Redis/MQ 集成测试），E2E 仍依赖需 Docker 的 ps1/sh 脚本。这两项是审计建议 #5/#6，属 L/M 成本，待排期。
+**尚未覆盖（后续项）**：本门禁只做「可编译 + 单测 + 依赖方向增量 + 前端」四类校验；**B 级集成测试已同日落地并与门禁 5 一起挂接**（详见下方第七节与 §0.3），已在本机 Docker 实跑 **8/8 全绿**（`run-it-local.ps1` 一键复跑）；E2E 仍依赖需 Docker 的 ps1/sh 脚本（审计建议 #6，待排期）。
+
+## 七、本地 B 级集成测试一键跑（scripts/run-it-local.ps1，2026-09-29 新增）
+
+本机 Docker 上实跑 Testcontainers B 级 IT（B1 Flyway 全量 apply / B2 MQ 幂等 / B3 Outbox 事务边界 / B4 状态机 CAS，共 8 用例）的一条命令入口，封装三前置：会话级 PATH 清洗（剔除注册表坏项/残片，**不代改注册表**）、`DOCKER_HOST=npipe:////./pipe/dockerDesktopLinuxEngine`（新版 Docker Desktop 强制 Host 头，须配 testcontainers 2.0.5 / docker-java 4.x）、`JAVA_HOME=ms-17.0.20.1`（17.0.19 必崩，见 ci/lib-jdk.sh 黑名单），再执行 `mvn -s .tmp\settings-aliyun.xml -pl helloai-start -am test -DskipTests=false -Dtest=*IT`。
+
+```powershell
+powershell -File .\scripts\run-it-local.ps1
+```
+
+- **输出**：完整日志 `.tmp/it-run-local.log`（UTF-16，Select-String 可自动识别）；控制台汇总 4 个 IT 的 Tests run 行 + 聚合行；退出码 0 = 全绿。
+- **退出码**：2 = mvn 缺失 / 3 = docker CLI 缺失 / 4 = Docker 引擎不可达 / 5 = JDK 缺失 / 1 = IT 失败。
+- **坏项提示**：脚本开头检测系统注册表 PATH 中的「以空格结尾的坏条目」与「相对路径残片」——本机实测 `C:\Program `（坏条目）与 `iles\Docker\Docker\resources\bin`（残片）是 Docker CLI 完整路径被分号劈开的两半，脚本给出合并修复命令，但仅会话级绕过、不代改注册表。
+- **编码注意**：PS5.1 下 mvn(java) 输出为 GBK 字节流，脚本临时按 GBK(936) 解码保证日志与汇总中文正确（含 PS5.1 两个经典坑的规避：Stop 模式 stderr 会变 NativeCommandError、Tee-Object 无 -Encoding）。
