@@ -39,6 +39,7 @@ import com.helloai.core.task.service.TaskRunningSpecService;
 import com.helloai.core.task.spec.ExecutionRecord;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.shared.util.TextTruncator;
+import com.helloai.core.shared.util.UpstreamAttachmentRenderer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -858,6 +859,11 @@ public class McpToolServiceImpl implements McpToolService {
                                 + " total=" + originalChars + " reason=dep_content_limit";
                         item.setTruncated(true);
                         truncatedCount++;
+                    } else if (render.contains("[TRUNCATED] file=")) {
+                        // R2（2026-09-30 审计 §15.4）：附件路径逐附件截断标注已在 render 内
+                        // （总长受控故顶层不触发）——布尔位与计数如实反映「存在不可见内容」
+                        item.setTruncated(true);
+                        truncatedCount++;
                     }
                     item.setContent(render);
                     item.setLoaded(true);
@@ -889,14 +895,18 @@ public class McpToolServiceImpl implements McpToolService {
     }
 
     /**
-     * 读取前置子任务的完成内容本体：物化附件（local:// 平台直读，仅 ACTIVE 有效版本——
-     * 同名历史版本已由 {@code AttachmentService.register} 自动去活）优先，失败/无附件回退
-     * {@code context.lastExecution.output} 原始产出；两者均无返回 null。
+     * 读取前置子任务的完成内容本体：物化附件（local:// 平台直读，仅 ACTIVE 有效版本——同名历史版本已由 {@code AttachmentService.register} 自动去活）
+     * 优先，失败/无附件回退 {@code context.lastExecution.output} 原始产出；两者均无返回 null。
      * 与 SubTaskExecutionService.loadUpstreamContent 同源实现（消费方隔离，避免渲染逻辑耦合）。
      *
      * <p><b>P-1 修复（2026-09-30）</b>：反转 {@code listActive} 倒序为正序（最早创建在前，
      * 主文件优先）+ 拼接全部可加载 ACTIVE 附件（各带 {@code 【文件：xxx】} 来源标题行）——
      * 原实现只取倒序第一个可加载附件，后创建的附录会把主文件挤出（tku-e2e-01 事故根因）。</p>
+     *
+     * <p><b>P-1 修复 R2（2026-09-30 审计 §15.4）</b>：拼接改为
+     * {@link UpstreamAttachmentRenderer} 逐附件配额渲染（主附件保底 + 次要最低配额 +
+     * 逐附件 {@code [TRUNCATED] file=...} 标注）——替代「拼接后单点 4000 截断」，
+     * 第二个及以后附件不再整体不可见。</p>
      */
     private String loadUpstreamContent(SubTask dep) {
         try {
@@ -904,8 +914,7 @@ public class McpToolServiceImpl implements McpToolService {
             if (attachments != null && !attachments.isEmpty()) {
                 List<Attachment> ordered = new ArrayList<>(attachments);
                 Collections.reverse(ordered);
-                StringBuilder sb = new StringBuilder();
-                int loadedFiles = 0;
+                List<UpstreamAttachmentRenderer.LoadedAttachment> loaded = new ArrayList<>();
                 for (Attachment attachment : ordered) {
                     try {
                         if (!attachmentService.isContentLoadable(attachment)) {
@@ -915,21 +924,17 @@ public class McpToolServiceImpl implements McpToolService {
                         if (bytes == null || bytes.length == 0) {
                             continue;
                         }
-                        if (loadedFiles > 0) {
-                            sb.append('\n');
-                        }
                         String fileName = attachment.getFileName() != null && !attachment.getFileName().isBlank()
                                 ? attachment.getFileName() : "attachment-" + attachment.getId();
-                        sb.append("【文件：").append(fileName).append("】\n");
-                        sb.append(new String(bytes, StandardCharsets.UTF_8));
-                        loadedFiles++;
+                        loaded.add(new UpstreamAttachmentRenderer.LoadedAttachment(
+                                fileName, new String(bytes, StandardCharsets.UTF_8)));
                     } catch (Exception singleEx) {
                         log.warn("读取单个前置附件失败，跳过该附件: subTaskId={}, attachmentId={}, err={}",
                                 dep.getId(), attachment.getId(), singleEx.getMessage());
                     }
                 }
-                if (loadedFiles > 0) {
-                    return sb.toString();
+                if (!loaded.isEmpty()) {
+                    return UpstreamAttachmentRenderer.render(loaded, DEP_CONTENT_MAX_CHARS);
                 }
             }
         } catch (Exception e) {

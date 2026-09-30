@@ -362,6 +362,49 @@ class AgentRuntimeContextAssemblerTest {
         }
 
         @Test
+        @DisplayName("依赖段：主附件超预算时次附件仍可见（R2 配额渲染，不再被单点截断整体吃掉）")
+        void shouldKeepMinorAttachmentVisibleWhenMainOversized() {
+            SubTask subTask = subTask();
+            subTask.setDependsOn(List.of(7L));
+            SubTask dep = new SubTask();
+            dep.setId(7L);
+            dep.setTitle("上游子任务");
+            dep.setStatus(SubTaskStatus.DONE);
+            when(subTaskService.listByIds(anyList())).thenReturn(List.of(dep));
+
+            Attachment appendix = new Attachment();
+            appendix.setId(2L);
+            appendix.setFileName("appendix.md");
+            Attachment main = new Attachment();
+            main.setId(1L);
+            main.setFileName("main.md");
+            when(attachmentService.listActive(7L)).thenReturn(List.of(appendix, main));
+            when(attachmentService.isContentLoadable(appendix)).thenReturn(true);
+            when(attachmentService.isContentLoadable(main)).thenReturn(true);
+            // 近似 tku-e2e-01 真实规模：主文件 7809 + 附录 19294，拼接 27,103 字符——
+            // 修复前单点截断 4000 时附录整体不可见（审计 §15.4）
+            when(attachmentService.loadContent(2L))
+                    .thenReturn("A".repeat(19294).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            when(attachmentService.loadContent(1L))
+                    .thenReturn("M".repeat(7809).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+            String prompt = invokeAssemble(subTask, agent(), List.of(), List.of()).getUserPrompt();
+
+            // 次附件最低配额 500 仍可见 + 逐附件 [TRUNCATED] file= 标注可机读
+            assertThat(prompt)
+                    .contains("【文件：main.md】")
+                    .contains("【文件：appendix.md】")
+                    .contains("A".repeat(500))
+                    .contains("[TRUNCATED] file=appendix.md shown=500 total=19294 reason=dep_content_limit");
+            // R2 统计口径：附件路径逐附件截断并入 truncatedCount（顶层未触发）
+            Map<String, Object> payload = captureTimelinePayload("sub_task_spec_context_loaded");
+            assertThat(payload)
+                    .containsEntry("depCount", 1)
+                    .containsEntry("loadedCount", 1)
+                    .containsEntry("truncatedCount", 1);
+        }
+
+        @Test
         @DisplayName("依赖段：超限截断回退到行边界（回退窗口内最近换行，不拦腰切断）")
         void shouldTruncateAtLineBoundary() {
             SubTask subTask = subTask();

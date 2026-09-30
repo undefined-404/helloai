@@ -322,7 +322,7 @@ class McpToolServiceTest {
     }
 
     @Test
-    @DisplayName("getDepsSummary：单条内容超 4000 字符截断并打标 truncated=true")
+    @DisplayName("getDepsSummary：单条内容超预算 → 逐附件配额渲染截断并打标 truncated=true（R2 行为）")
     void shouldTruncateLongContent() {
         when(subTaskService.getById(SUB_TASK_ID)).thenReturn(taskWithDeps(SUB_TASK_ID, List.of(11L)));
         SubTask dep = new SubTask();
@@ -341,11 +341,13 @@ class McpToolServiceTest {
         assertThat(result.getTruncatedCount()).isEqualTo(1);
         McpToolService.GetDepsSummaryResult.DepItem item = result.getDeps().get(0);
         assertThat(item.getTruncated()).isTrue();
-        // P-1 修复：行边界回退（无换行 → 硬切 4000）+ 结构化 [TRUNCATED] 标注行
+        // R2 修复（审计 §15.4）：附件路径走 UpstreamAttachmentRenderer 逐附件配额渲染——
+        // 单附件独享预算（4000 − 预留 2×13+84=110 = 3890），无换行可回退 → 硬切 3890，
+        // [TRUNCATED] 标注补 file= 字段（与核验侧同口径）
         assertThat(item.getContent())
                 .startsWith("【文件：attachment-22】\n")
-                .contains("[TRUNCATED] shown=4000 total=5019 reason=dep_content_limit")
-                .doesNotContain("x".repeat(4001));
+                .contains("[TRUNCATED] file=attachment-22 shown=3890 total=5000 reason=dep_content_limit")
+                .doesNotContain("x".repeat(3891));
     }
 
     @Test

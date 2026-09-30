@@ -613,7 +613,8 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
 
         // P-1 防御（A2-2，2026-09-30）：重复失败短路——同一输入连续驳回相同结构性失败时，
         // 重派只是空转（tku-e2e-01 空转 4 轮烧 346K tokens 后仍进死信）。判定在 reviewHistory
-        // 落库后、返工之前：高度相似且评分未提升 → 不触发返工重派，直接 DEAD_LETTER 待人工。
+        // 落库后、返工之前：评分连续未严格提升（主判据）或文本高度相似（兜底）→ 不触发
+        // 返工重派，直接 DEAD_LETTER 待人工。
         if (dispatchProperties.isAutoReviewRepeatFailureShortCircuit()
                 && shortCircuitRepeatedFailure(subTask, reviewerAgentId, historySnapshot, verdict)) {
             return;
@@ -659,16 +660,24 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
     }
 
     /**
-     * P-1 防御（A2-2）：重复失败短路判定与处置。
+     * P-1 防御（A2-2，R1 修订 2026-09-30 审计 §15.2）：重复失败短路判定与处置。
      *
-     * <p>判定（reviewHistory 末尾两条 = 上轮 + 本轮）：两轮 issues 的字符 bigram 相似度
-     * ≥ {@code helloai.dispatch.auto-review-repeat-failure-similarity}（默认 0.85），
-     * 且本轮评分未严格提升 → 判「结构性失败」：同一输入连续驳回相同问题，重派结构上
-     * 不可能成功（tku-e2e-01：上游材料截断，空转 4 轮烧 346K tokens 后仍进死信）。</p>
+     * <p>判定（reviewHistory 末尾两条 = 上轮 + 本轮，先决条件两轮 issues 均非空）：</p>
+     * <ul>
+     *     <li><b>主判据（两轮 score 均可读）</b>：本轮评分未严格提升（curr ≤ prev）即判
+     *     「无实质进展」。评审评分是 1~5 的量级判断，比自由文本相似度稳健——tku-e2e-01
+     *     真实场景评分恒定 2→2，但 issues 每轮整篇重写（三套编号指代同一批缺失项），
+     *     bigram 相似度实测仅 0.18~0.25，旧「相似度前置门槛」永不触发、空转 4 轮
+     *     烧 346K tokens 后仍进死信。</li>
+     *     <li><b>兜底（score 任一轮缺失）</b>：退回两轮 issues 字符 bigram 相似度
+     *     ≥ {@code helloai.dispatch.auto-review-repeat-failure-similarity}（默认 0.85）。</li>
+     * </ul>
      *
      * <p>处置（复用 §6.52 熔断范式，与 {@link #doReview} 的 rework_limit 熔断对称）：
      * 跳过事件 → 显式入死信事件 → 判决落 review_record → {@code changeStatus(DEAD_LETTER)}
-     * → 人工介入标记；返回 true 表示已短路（调用方不再走返工重派）。</p>
+     * → 人工介入标记；返回 true 表示已短路（调用方不再走返工重派）。事件 / 死信 / 人工
+     * 介入 payload 均携带 {@code basis}（score_stall / text_repeat）与 {@code scoreTrend}
+     * 证据，DLQ 泳道可机读归因。</p>
      */
     private boolean shortCircuitRepeatedFailure(SubTask subTask, Long reviewerAgentId,
                                                 List<Map<String, Object>> history, ReviewVerdict verdict) {
@@ -682,27 +691,31 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         if (prevIssues.isBlank() || currIssues.isBlank()) {
             return false;
         }
-        double similarity = ReviewFailureSignature.similarity(prevIssues, currIssues);
-        double threshold = dispatchProperties.getAutoReviewRepeatFailureSimilarity();
-        if (similarity < threshold) {
-            return false;
-        }
         Integer prevScore = ReviewFailureSignature.asScore(prev.get("score"));
         Integer currScore = ReviewFailureSignature.asScore(curr.get("score"));
-        if (currScore != null && prevScore != null && currScore > prevScore) {
-            // 评分在提升：模型有实质进展，继续正常返工（防误伤进步中的迭代）
+        boolean scoreComparable = prevScore != null && currScore != null;
+        double similarity = ReviewFailureSignature.similarity(prevIssues, currIssues);
+        double threshold = dispatchProperties.getAutoReviewRepeatFailureSimilarity();
+        // 主判据：两轮 score 均可读 → 未严格提升即「无实质进展」；任一轮缺失 → 相似度兜底
+        boolean noProgress = scoreComparable ? currScore <= prevScore : similarity >= threshold;
+        if (!noProgress) {
+            // 评分提升（或文本已显著变化）：模型仍有实质进展，继续正常返工（防误伤迭代）
             return false;
         }
+        String basis = scoreComparable ? "score_stall" : "text_repeat";
+        String scoreTrend = scoreComparable ? prevScore + "->" + currScore : "n/a";
 
         Long subTaskId = subTask.getId();
         int round = curr.get("round") instanceof Number n ? n.intValue() : history.size();
         int reworkCount = subTask.getReworkCount() != null ? subTask.getReworkCount() : 0;
-        log.warn("自动核验重复失败短路：判结构性失败转死信, subTaskId={}, round={}, similarity={}, threshold={}, score={}->{}",
-                subTaskId, round, String.format("%.3f", similarity), threshold, prevScore, currScore);
+        log.warn("自动核验重复失败短路：判结构性失败转死信, subTaskId={}, basis={}, round={}, score={}, similarity={}, threshold={}",
+                subTaskId, basis, round, scoreTrend, String.format("%.3f", similarity), threshold);
         taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId,
                 "sub_task_auto_review_skip_repeated_failure", AgentRole.REVIEWER, reviewerAgentId,
                 Map.of("reason", "repeated_failure_signature",
+                        "basis", basis,
                         "round", round,
+                        "scoreTrend", scoreTrend,
                         "similarity", similarity,
                         "threshold", threshold,
                         "issues", VerdictParser.summarize(currIssues, 200)));
@@ -710,14 +723,17 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId,
                 "sub_task_review_dead_letter", AgentRole.SYSTEM, null,
                 Map.of("reason", "repeated_failure_signature",
+                        "basis", basis,
                         "round", round,
+                        "scoreTrend", scoreTrend,
                         "similarity", similarity,
                         "reworkCount", reworkCount));
         // 判决照常落 review_record（REJECTED），保留完整留痕供人工复核
         recordAutoReviewQuietly(subTaskId, reviewerAgentId, ReviewResult.REJECTED, verdict);
         subTaskService.changeStatus(subTaskId, SubTaskStatus.DEAD_LETTER, null);
         subTaskService.markManualIntervention(subTaskId, "repeated_failure_signature",
-                Map.of("round", round, "similarity", similarity, "threshold", threshold));
+                Map.of("basis", basis, "round", round, "scoreTrend", scoreTrend,
+                        "similarity", similarity, "threshold", threshold));
         return true;
     }
 

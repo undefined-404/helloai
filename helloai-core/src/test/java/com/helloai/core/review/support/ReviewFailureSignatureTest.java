@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
 /**
  * ReviewFailureSignature 单测（P-1 防御层 A2-2）：
@@ -90,5 +91,45 @@ class ReviewFailureSignatureTest {
         assertThat(ReviewFailureSignature.asScore(" 4 ")).isEqualTo(4);
         assertThat(ReviewFailureSignature.asScore("abc")).isNull();
         assertThat(ReviewFailureSignature.asScore(null)).isNull();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  真实语料回归锚点（R1 修订，2026-09-30 审计 §15.2 独立复现）
+    //  tku-e2e-01 sub3 三轮真实驳回意见（2753/1526/928 字符）：同一批缺失项
+    //  每轮以不同措辞与编号（P0+A1~A3+B1~B3 → call 1/2 → R3~R7）整篇重写，
+    //  相似度实测仅 0.18~0.26，全部低于阈值 0.85——证明相似度不可作为短路
+    //  主判据（主判据已改为「两轮 score 未严格提升」，见 SubTaskReviewService）。
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("真实语料锚点：sub3 三轮驳回意见相似度实测 0.18~0.26 全低于 0.85（旧判据失效实证）")
+    void shouldMatchRealCorpusAnchorsBelowThreshold() throws Exception {
+        String r1 = loadCorpus("tku-e2e-01-sub3-r1.txt");
+        String r2 = loadCorpus("tku-e2e-01-sub3-r2.txt");
+        String r3 = loadCorpus("tku-e2e-01-sub3-r3.txt");
+        // 逐字符快照（.gitattributes -text 保证无换行转换，见 review-corpus 目录说明）
+        assertThat(r1).hasSize(2753);
+        assertThat(r2).hasSize(1526);
+        assertThat(r3).hasSize(928);
+
+        double sim12 = ReviewFailureSignature.similarity(r1, r2);
+        double sim23 = ReviewFailureSignature.similarity(r2, r3);
+        double sim13 = ReviewFailureSignature.similarity(r1, r3);
+
+        // 锚点值来自 2026-09-30 审计复核 + Python 独立复现（与 Java 实现逐位一致）
+        assertThat(sim12).isCloseTo(0.2537, within(0.005));
+        assertThat(sim23).isCloseTo(0.1927, within(0.005));
+        assertThat(sim13).isCloseTo(0.1799, within(0.005));
+        assertThat(sim12).isLessThan(DEFAULT_THRESHOLD);
+        assertThat(sim23).isLessThan(DEFAULT_THRESHOLD);
+        assertThat(sim13).isLessThan(DEFAULT_THRESHOLD);
+    }
+
+    /** 读取 review-corpus 真实语料夹具（测试资源，UTF-8 原文）。 */
+    private static String loadCorpus(String name) throws Exception {
+        try (var in = ReviewFailureSignatureTest.class.getResourceAsStream("/review-corpus/" + name)) {
+            assertThat(in).as("语料夹具缺失: %s", name).isNotNull();
+            return new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
     }
 }

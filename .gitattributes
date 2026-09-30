@@ -7,3 +7,5 @@ scripts/ci/*.txt text eol=lf
 deploy/middleware/scripts/*.sh text eol=lf
 .workflow/*.yml text eol=lf
 .github/workflows/*.yml text eol=lf
+# 测试语料夹具：相似度回归锚点依赖逐字符原文快照（含换行），禁止任何换行转换
+helloai-core/src/test/resources/review-corpus/** -text

@@ -20,6 +20,7 @@ import com.helloai.core.agent.tool.ToolDefinition;
 import com.helloai.core.agent.tool.ToolRegistry;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.shared.util.TextTruncator;
+import com.helloai.core.shared.util.UpstreamAttachmentRenderer;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Uncertainty;
@@ -626,12 +627,16 @@ public class AgentRuntimeContextAssembler {
                 // P-1 防御：截断升级为「行边界回退 + 结构化标注 + 缺失声明指引」——
                 // 原实现硬切 substring(0, 4000) 会拦腰截断 URL/清单，且消费方无法机读缺了什么
                 String render = TextTruncator.truncateAtLineBoundary(content, DEP_CONTENT_MAX_CHARS);
-                boolean truncated = render.length() < content.length();
-                if (truncated) {
+                boolean topLevelTruncated = render.length() < content.length();
+                // R2（2026-09-30 审计 §15.4）：附件路径的逐附件截断已由 UpstreamAttachmentRenderer
+                // 内置 [TRUNCATED] file= 标注（总长受控故顶层不再触发）——统计口径并入，
+                // timeline 的 truncatedCount 如实反映「该前置存在不可见内容」
+                boolean anyTruncated = topLevelTruncated || render.contains("[TRUNCATED] file=");
+                if (anyTruncated) {
                     truncatedCount++;
                 }
                 sb.append(render).append('\n');
-                if (truncated) {
+                if (topLevelTruncated) {
                     sb.append("\n[TRUNCATED] shown=").append(render.length())
                             .append(" total=").append(content.length())
                             .append(" reason=dep_content_limit\n");
@@ -654,6 +659,11 @@ public class AgentRuntimeContextAssembler {
      * 第一个可加载附件——后创建的附录类文件会把先创建的主文件挤出（tku-e2e-01 下游关键词
      * 缺失事故根因）。现改为：反转正序（最早创建在前，主文件优先）+ 拼接全部可加载 ACTIVE
      * 附件（各带 {@code 【文件：xxx】} 来源标题行），单附件读取失败仅跳过不拖垮其余。</p>
+     *
+     * <p><b>P-1 修复 R2（2026-09-30 审计 §15.4）</b>：拼接改为
+     * {@link UpstreamAttachmentRenderer} 逐附件配额渲染（主附件保底 + 次要最低配额 +
+     * 逐附件 {@code [TRUNCATED] file=...} 标注）——替代「拼接后单点 4000 截断」，
+     * 第二个及以后附件不再整体不可见。</p>
      */
     private String loadUpstreamContent(SubTask dep) {
         try {
@@ -661,8 +671,7 @@ public class AgentRuntimeContextAssembler {
             if (attachments != null && !attachments.isEmpty()) {
                 List<Attachment> ordered = new ArrayList<>(attachments);
                 Collections.reverse(ordered);
-                StringBuilder sb = new StringBuilder();
-                int loadedFiles = 0;
+                List<UpstreamAttachmentRenderer.LoadedAttachment> loaded = new ArrayList<>();
                 for (Attachment attachment : ordered) {
                     try {
                         if (!attachmentService.isContentLoadable(attachment)) {
@@ -672,21 +681,17 @@ public class AgentRuntimeContextAssembler {
                         if (bytes == null || bytes.length == 0) {
                             continue;
                         }
-                        if (loadedFiles > 0) {
-                            sb.append('\n');
-                        }
                         String fileName = attachment.getFileName() != null && !attachment.getFileName().isBlank()
                                 ? attachment.getFileName() : "attachment-" + attachment.getId();
-                        sb.append("【文件：").append(fileName).append("】\n");
-                        sb.append(new String(bytes, StandardCharsets.UTF_8));
-                        loadedFiles++;
+                        loaded.add(new UpstreamAttachmentRenderer.LoadedAttachment(
+                                fileName, new String(bytes, StandardCharsets.UTF_8)));
                     } catch (Exception singleEx) {
                         log.warn("读取单个前置附件失败，跳过该附件: subTaskId={}, attachmentId={}, err={}",
                                 dep.getId(), attachment.getId(), singleEx.getMessage());
                     }
                 }
-                if (loadedFiles > 0) {
-                    return sb.toString();
+                if (!loaded.isEmpty()) {
+                    return UpstreamAttachmentRenderer.render(loaded, DEP_CONTENT_MAX_CHARS);
                 }
             }
         } catch (Exception e) {

@@ -305,22 +305,35 @@ class SubTaskReviewServiceTest {
 
     // ══════════════════════════════════════════════════════════════
     //  P-1 A2-2 重复失败短路（reviewHistory 连续同因驳回 → 结构性失败转死信）
+    //  R1 修订（2026-09-30 审计 §15.2）：主判据 = 两轮 score 未严格提升；
+    //  相似度降为 score 任一轮缺失时的兜底。
     // ══════════════════════════════════════════════════════════════
 
     private static final String SAME_ISSUES =
             "7 条关键词中仅 2 条出现在材料中，其余 5 条 not contained in the material";
 
-    /** 携带上轮同因驳回的 reviewHistory 子任务（P-1 事故形态复现）。 */
-    private SubTask reviewSubTaskWithRepeatedFailureHistory() {
+    /** 携带上轮驳回历史的子任务（可指定上轮 issues / score；score=null 模拟缺失场景）。 */
+    private SubTask reviewSubTaskWithFailureHistory(String prevIssues, Integer prevScore) {
         SubTask subTask = reviewSubTask();
         Map<String, Object> ctx = new HashMap<>();
         ctx.put("lastExecution", Map.of("output", "接口清单已整理完毕，覆盖全部端点。"));
-        ctx.put("reviewHistory", List.of(Map.of(
-                "round", 1, "ts", "2026-08-01T10:00:00Z",
-                "issues", SAME_ISSUES, "comment", "请补", "score", 2,
-                "executorDoneIssues", List.of())));
+        Map<String, Object> prev = new HashMap<>();
+        prev.put("round", 1);
+        prev.put("ts", "2026-08-01T10:00:00Z");
+        prev.put("issues", prevIssues);
+        prev.put("comment", "请补");
+        if (prevScore != null) {
+            prev.put("score", prevScore);
+        }
+        prev.put("executorDoneIssues", List.of());
+        ctx.put("reviewHistory", List.of(prev));
         subTask.setContext(ctx);
         return subTask;
+    }
+
+    /** 携带上轮同因驳回的 reviewHistory 子任务（P-1 事故形态复现）。 */
+    private SubTask reviewSubTaskWithRepeatedFailureHistory() {
+        return reviewSubTaskWithFailureHistory(SAME_ISSUES, 2);
     }
 
     @Test
@@ -396,6 +409,96 @@ class SubTaskReviewServiceTest {
         verify(subTaskService).rework(SUB_TASK_ID, EXECUTOR_ID);
         verify(subTaskService, never()).changeStatus(eq(SUB_TASK_ID), eq(SubTaskStatus.DEAD_LETTER), isNull());
         verify(subTaskService, never()).markManualIntervention(anyLong(), anyString(), anyMap());
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  R1 修订用例（2026-09-30 审计 §15.2）：score 主判据 + 相似度兜底
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("R1 真实语料回归：sub3 场景 score 恒定 2→2（issues 整篇重写、相似度仅 0.25）→ 主判据 score_stall 短路")
+    void shouldShortCircuitRealCorpusScoreStall() throws Exception {
+        when(dispatchProperties.isAutoReviewRepeatFailureShortCircuit()).thenReturn(true);
+        when(subTaskService.getById(SUB_TASK_ID))
+                .thenReturn(reviewSubTaskWithFailureHistory(loadCorpus("tku-e2e-01-sub3-r1.txt"), 2));
+        // 本轮评审输出 r2 全文（与 r1 措辞/编号全变，实测相似度 0.2537 < 阈值 0.85）
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        verdictJson(2, loadCorpus("tku-e2e-01-sub3-r2.txt")), "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        // 旧判据（相似度前置门槛）下此形态永不短路——新判据以 score 未提升为主判据触发
+        verify(subTaskService, never()).rework(anyLong(), any());
+        verify(executionCommandService, never()).createAssignedCommand(anyLong(), anyLong(), anyString(), any());
+        ArgumentCaptor<Map> skipPayload = ArgumentCaptor.forClass(Map.class);
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_auto_review_skip_repeated_failure"),
+                eq(AgentRole.REVIEWER), eq(9L), skipPayload.capture());
+        assertThat(skipPayload.getValue())
+                .containsEntry("basis", "score_stall")
+                .containsEntry("scoreTrend", "2->2");
+        // 关键实证：低相似度（0.25 量级）也触发——旧判据永不可能到达的路径
+        assertThat(((Number) skipPayload.getValue().get("similarity")).doubleValue()).isLessThan(0.5);
+        verify(subTaskService).changeStatus(eq(SUB_TASK_ID), eq(SubTaskStatus.DEAD_LETTER), isNull());
+        verify(subTaskService).markManualIntervention(
+                eq(SUB_TASK_ID), eq("repeated_failure_signature"), anyMap());
+    }
+
+    @Test
+    @DisplayName("R1 兜底：上轮 score 缺失且文本高度相似 → basis=text_repeat 短路（旧行为保留）")
+    void shouldShortCircuitViaTextRepeatWhenScoreMissing() {
+        when(dispatchProperties.isAutoReviewRepeatFailureShortCircuit()).thenReturn(true);
+        when(subTaskService.getById(SUB_TASK_ID))
+                .thenReturn(reviewSubTaskWithFailureHistory(SAME_ISSUES, null));
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 2, \"issues\": \""
+                        + SAME_ISSUES + "，无法完成核验\", \"comment\": \"\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        verify(subTaskService, never()).rework(anyLong(), any());
+        ArgumentCaptor<Map> skipPayload = ArgumentCaptor.forClass(Map.class);
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_auto_review_skip_repeated_failure"),
+                eq(AgentRole.REVIEWER), eq(9L), skipPayload.capture());
+        assertThat(skipPayload.getValue())
+                .containsEntry("basis", "text_repeat")
+                .containsEntry("scoreTrend", "n/a");
+        verify(subTaskService).changeStatus(eq(SUB_TASK_ID), eq(SubTaskStatus.DEAD_LETTER), isNull());
+    }
+
+    @Test
+    @DisplayName("R1 兜底不误伤：score 缺失且两轮文本不同（相似度 < 阈值）→ 正常返工")
+    void shouldReworkWhenScoreMissingAndTextDiffers() {
+        when(dispatchProperties.isAutoReviewRepeatFailureShortCircuit()).thenReturn(true);
+        when(subTaskService.getById(SUB_TASK_ID))
+                .thenReturn(reviewSubTaskWithFailureHistory("缺少订单过期接口的幂等性处理", null));
+        when(subTaskService.rework(SUB_TASK_ID, EXECUTOR_ID)).thenReturn(true);
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": false, \"score\": 2, \"issues\": \"文档格式不符，缺少目录结构说明\", \"comment\": \"\"}",
+                        "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        verify(subTaskService).rework(SUB_TASK_ID, EXECUTOR_ID);
+        verify(subTaskService, never()).changeStatus(eq(SUB_TASK_ID), eq(SubTaskStatus.DEAD_LETTER), isNull());
+        verify(subTaskService, never()).markManualIntervention(anyLong(), anyString(), anyMap());
+    }
+
+    /** 构造合法 verdict JSON（真实语料含引号/换行，必须经 ObjectMapper 转义）。 */
+    private static String verdictJson(int score, String issues) throws Exception {
+        return new ObjectMapper().writeValueAsString(Map.of(
+                "pass", false, "score", score, "issues", issues, "comment", ""));
+    }
+
+    /** 读取 review-corpus 真实语料夹具（测试资源，UTF-8 原文）。 */
+    private static String loadCorpus(String name) throws Exception {
+        try (var in = SubTaskReviewServiceTest.class.getResourceAsStream("/review-corpus/" + name)) {
+            assertThat(in).as("语料夹具缺失: %s", name).isNotNull();
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        }
     }
 
     @Test
