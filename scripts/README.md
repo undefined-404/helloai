@@ -30,10 +30,10 @@
 
 - **规范红线**：verify-dependency-direction（依赖方向）、verify-code-style-p0-layer（Controller 分层）、verify-code-style-p1-paths（路径命名）、verify-code-style-p1-ui-sync（前后端路径同步）、verify-contract-first（契约先行）、verify-tool-matrix（工具面一致）
 - **任务/拆解/澄清**：verify-a1-task-policy、verify-a2-skill-derive、verify-a3b-agent-edit-skills、verify-674-remove-specialization、verify-requirement-clarify-structured、verify-step9b-depends-on、verify-task-running-spec-phase-b、verify-inner-loop-e2e、verify-conversation-flow-e2e、verify-e2e-batch-a、verify-m5-scenarios、verify-g014
-- **执行/调度**：verify-execution-dispatch-guard（启动期 fail-fast 守卫）、verify-poller-e2e（DB Poller）、verify-subtask-redispatch-auto-execution（重派自动执行）、verify-subtask-deadletter（死信兜底）、verify-agent-execution-preview、verify-agent-llm-connectivity（真 LLM 冒烟）
+- **执行/调度**：verify-execution-dispatch-guard（启动期 fail-fast 守卫）、verify-poller-e2e（DB Poller）、verify-subtask-redispatch-auto-execution（重派自动执行）、verify-subtask-deadletter（死信兜底）、verify-agent-execution-preview、verify-agent-llm-connectivity（真 LLM 冒烟）、verify-single-track-e2e（内部单轨：计划/执行/评审/报告全绿）
 - **审查/质量**：verify-reviewer-dual（双评审）、verify-quality-profile、verify-quality-dashboard、verify-artifact-content-review、verify-llm-conversation-stream
 - **Agent/技能/配置**：verify-agent-skill-capability、verify-skill-packages、verify-platform-config、verify-api-key-verify、verify-llm-provider-models、verify-admin-authz、verify-attachment-version
-- **MCP/门铃/外部 Agent 入职**：verify-mcp（最小连通）、verify-mcp-session-e2e、verify-doorbell-e2e、verify-onboarding（+ -doorbell / -heartbeat / -pull / -submit 五步链）
+- **MCP/门铃/外部 Agent 入职**：verify-mcp（最小连通）、verify-mcp-session-e2e、verify-doorbell-e2e、verify-onboarding（+ -doorbell / -heartbeat / -pull / -submit 五步链）、verify-external-agent-e2e（外部 CLI_CLIENT 多 Agent 实接单，含 -AssertOnly 断言模式）
 - **MQ**：verify-outbox-relay-confirm-e2e（Outbox/Confirm 失败路径，配合 start-sb-e2e-mq.ps1）
 
 ### 仅 sh（macOS/Linux 侧）
@@ -87,9 +87,10 @@ verify-login-e2e、verify-requirement-clarify、verify-websearch-e2e、verify-pl
 | 脚本 | 用途 |
 |---|---|
 | `ci/ci-gate.sh` | **主门禁**：固定可用 JDK → 构建+真实单测（显式 `-DskipTests=false`）→ 断言「用例数 > 0」→ 架构漂移冻结 → 前端 type-check/build |
-| `ci/lib-jdk.sh` | JDK 解析库：优先 `$HELLOAI_JAVA_HOME` → `$JAVA_HOME` → 探测 `~/.jdks/*`；**黑名单排除 ms-17.0.19**（本机必然 JVM 崩溃） |
+| `ci/lib-jdk.sh` | JDK 解析库：优先 `$HELLOAI_JAVA_HOME` → `$JAVA_HOME` → 探测 `~/.jdks/*`；**黑名单排除 ms-17.0.19**（本机必然 JVM 崩溃）；并**实测 `java -version` 大版本必须为 17**（防 Gitee 自有主机上 Agent 自带的 JDK 8 被误用） |
 | `ci/check-arch-freeze.sh` | 跨域反向依赖「只降不升」守卫；`--update-baseline` 刷新冻结基线 |
 | `ci/arch-baseline.txt` | 冻结基线（自动生成，勿手改数字） |
+| `ci/host-prepare.sh` | **自有主机侧准备与自检**（Gitee Go 主机组跑 CI 时用）：默认只检测；`--install` 装 JDK17/Maven/Node20；`--swap 2G` 给 4G 内存机器建 swap |
 
 常用命令：
 
@@ -97,9 +98,19 @@ verify-login-e2e、verify-requirement-clarify、verify-websearch-e2e、verify-pl
 bash scripts/ci/ci-gate.sh                    # 全量，等价于 CI
 bash scripts/ci/ci-gate.sh --quick --skip-ui  # 本地快速自检
 bash scripts/ci/check-arch-freeze.sh          # 只跑架构冻结校验
+bash scripts/ci/host-prepare.sh               # 自有主机自检（只读，不改系统）
 ```
 
 平台接入：`.workflow/helloai-ci.yml`（Gitee Go，对应本仓库远程）与 `.github/workflows/ci.yml`（GitHub Actions 备份）。**平台配置只是薄封装**——门禁语义全在上表的脚本里，因此本地执行同一脚本即可复现 CI 结论（这正是 §5.2 约定「新增验收口径优先下沉为可跨平台执行的形式」的落地）。
+
+**Gitee Go 的两种执行形态（2026-09-29 补充）**
+
+| 形态 | 插件 | 消耗额度 | 环境 |
+|---|---|---|---|
+| 云端构建机（原方案） | `build@maven` / `build@nodejs` | **消耗核分**（= 运行分钟 × CPU 核数） | 开箱即用（CentOS 8.3 基础镜像 + 阿里源） |
+| 自有主机组（现方案） | `shell@agent` + `hostGroupID` | **不消耗核分** | 需自备 JDK17/Maven/Node20（用 `host-prepare.sh` 一键自检/安装） |
+
+依据：Gitee 官方计费规则「仅当您使用 Gitee 提供的云端构建资源，且流水线中的任务属于计费模型时，任务运行才会消耗核分」。回退到云端形态：`git show b02dce3:.workflow/helloai-ci.yml > .workflow/helloai-ci.yml`。
 
 **尚未覆盖（后续项）**：本门禁只做「可编译 + 单测 + 依赖方向增量 + 前端」四类校验；**B 级集成测试已同日落地并与门禁 5 一起挂接**（详见下方第七节与 §0.3），已在本机 Docker 实跑 **8/8 全绿**（`run-it-local.ps1` 一键复跑）；E2E 仍依赖需 Docker 的 ps1/sh 脚本（审计建议 #6，待排期）。
 
