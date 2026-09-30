@@ -10,6 +10,8 @@
 > 最后更新：2026-09-28（G-017 附件存储一致性登记：存储抽象 + 对账巡检落地，R1/R3/R4/R5 处置完成；依据 `doc/design/HelloAI_附件存储一致性排查报告.md` §7.1）
 > 最后更新：2026-09-29（**口径订正批次**：G-002 处置列改为诚实口径「契约层收官 60% / 生产态未收敛」、G-014 行 T04b/T08b 由「未做（挂起）」订正为「已完成」、`@SaCheckPermission` 计数 131→144；依据 `doc/review/HelloAI 架构V2进度与质量审计报告（2026-09-29）.md`。新增 §0 口径订正记录作为后续订正的统一落点）
 > 最后更新：2026-09-29（G-016 §12.5 缺陷 #4/#5 修复收口：#4 AFTER_COMMIT 兜底落库下沉 `FinalReportReviewFallbackWriter`（两方法声明 `REQUIRES_NEW`）独立事务确定提交；#5 L2 抢锁失败改抛 `ReviewNotExecutedException` → markFailed + `basicNack(requeue=false)` 入死信重投；全量 core+job+api **1756 例 0 失败 0 错误** BUILD SUCCESS。#1~#5 全部已修，前端 #6/#7 可选精修仍登记待修）
+> 最后更新：2026-09-30（**G-002 双轨→单轨硬切落地**：删除 RuntimeAgentRuntimeRouter / LegacyExecutorAdapter / TurnLlmCaller 全部旧链入口，RuntimeTurnExecutor 成为唯一 `AgentRuntime` 实现；新建 `AgentRuntimeContextAssembler` 承载装配（prompt/chatModel/会话/对话流），`LocalExecutionCommandConsumer` 重构为分层编排（startIfNeeded→markRunning CAS→装配→execute→afterTurn→CAS 终态→ExecutionResultHandler 回写）；清理 `v2-enabled`/`gray-percent`/`runtime-enabled` 死配置。验证：全量单测 BUILD SUCCESS（helloai-core 1551 例 0 失败）+ B 级 IT 8/8 全绿（本机 Docker，含 MQ 消费单轨链路）+ 修复 AgentSession.snapshot jsonb 类型不匹配（换用 PgJsonbTypeHandler）。详见 §0.1 C-7 与 `doc/log/2026-09.md` 2026-09-30 条目）
+> 最后更新：2026-09-30（**外部 CLI_CLIENT 多 Agent E2E 验证 A 级全绿**：两个真实外部 agent 接单 5 任务 15 子任务全 DONE、同名任务不重发；评审真实拦截 3 类交付缺陷；心跳掉线自动回收 + 退避重派闭环；`verify-external-agent-e2e.ps1` 修复 PS 时区误判（新鲜度判定移 SQL 侧）+ STEP6 断言适配外部链路（外部走 MCP claimSubTask 无 `task_assigned`，改断言 `sub_task_dispatch_prepare`）+ 新增 `-AssertOnly` 模式。差距项状态无变化，详见 `doc/log/2026-09.md` 2026-09-30 条目）
 
 # 0. 口径订正与文档一致性记录
 
@@ -26,6 +28,7 @@
 | C-4 | **`@SaCheckPermission` 覆盖数** | 「131 处 / 23 控制器」（截至 2026-09-13，见 §1 G-013 行与《基础架构调整实施计划》§9.5） | 实测 **144 处**（2026-09-29） | `grep -rc "@SaCheckPermission" helloai-api/src/main/java --include=*.java` 汇总 = 144 |
 | C-5 | **scripts 目录规模表述** | 审计初稿曾记「401 个脚本 / 148 jar + 105 class 二进制入库」 | **git 实际跟踪 103 个**（76 ps1 + 24 sh + 1 sql + 1 md + 1 java）；另有 298 个**未跟踪**的 jar/class/log 构建产物。**「二进制入库」不成立**——根 `.gitignore` 的 `*.jar` / `*.class` / `*.log` 已覆盖 | `git ls-files scripts \| wc -l` = 103；`git ls-files scripts \| grep -c '\.jar$'` = 0；`.gitignore` |
 | C-6 | **迁移缺号** | 未集中说明 | Flyway 迁移 **85 个**（V1、V2、V13~V95），**V3~V12 缺号**（历史合并所致，非丢失） | `ls helloai-start/src/main/resources/db/migration/` |
+| C-7 | **G-002 双轨→单轨硬切**（§G-002 章节与 09-29/09-30 审计口径） | 「契约层收官（≈60%）/ 生产态未收敛」、双轨待用户决策（09-29 审计 §8 选项 A 退场时点 / B WONTFIX） | **已硬切单轨（2026-09-30 用户决策：不设灰度不设退场，直接切）**——旧链入口全部删除，RuntimeTurnExecutor 为唯一 `AgentRuntime` 实现；`AgentExecutionProperties.runtimeEnabled` / yml `v2-enabled` / `gray-percent` / `runtime-enabled` 死配置全部删除；数据清空执行 `cleanup-test-data.sql`（43 张业务表 TRUNCATE + MinIO 清桶） | 删除文件：`RuntimeAgentRuntimeRouter` / `LegacyExecutorAdapter` / `TurnLlmCaller` / `TurnLlmCallContext`；新建 `AgentRuntimeContextAssembler`；`LocalExecutionCommandConsumer` 分层编排；全量单测 BUILD SUCCESS（helloai-core 1551 例 0 失败）+ B 级 IT 8/8 全绿（本机 Docker）；详见 `doc/log/2026-09.md` 2026-09-30 条目 |
 
 ## 0.2 范围漂移补登记与优先级取舍声明（2026-09-29）
 
@@ -121,6 +124,8 @@ Runtime    LegacyAdapter
 复制第二套 Review
 无幂等地再次执行副作用
 ```
+
+**落地状态（2026-09-30 硬切单轨，C-7）**：上述迁移结构图已随旧链删除而失效——`RuntimeAgentRuntimeRouter` / `LegacyExecutorAdapter` / `TurnLlmCaller` 及全部旧链入口已删除，`RuntimeTurnExecutor` 为唯一 `AgentRuntime` 实现，消费链路全部真实经 `AgentRuntimeContextAssembler` 装配后走入真身；「Dual Executor 只是迁移策略」的约束已达成（双轨不复存在）。
 
 ## G-003 AgentRuntime
 
