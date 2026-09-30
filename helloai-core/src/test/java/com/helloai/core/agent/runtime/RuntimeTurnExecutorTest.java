@@ -5,7 +5,9 @@ import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.runtime.loop.AgentLoop;
+import com.helloai.core.agent.runtime.loop.AgentLoopInput;
 import com.helloai.core.agent.runtime.loop.AgentLoopResult;
+import com.helloai.core.agent.runtime.loop.LoopCheckpointListener;
 import com.helloai.core.agent.runtime.sandbox.SandboxContext;
 import com.helloai.core.agent.runtime.sandbox.SandboxProvider;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
@@ -15,6 +17,7 @@ import com.helloai.core.agent.tool.ToolRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.model.ChatModel;
@@ -126,6 +129,47 @@ class RuntimeTurnExecutorTest {
 
         assertThat(result.getStatus()).isEqualTo(ExecutionStatus.FAILED);
         assertThat(result.getOutput()).isEqualTo("boom");
+    }
+
+    @Test
+    @DisplayName("checkpoint：上下文携带 listener → 透传进 AgentLoopInput（同实例）")
+    void shouldPassLoopCheckpointListenerIntoAgentLoopInput() {
+        when(agentSkillSpecService.resolve(any()))
+                .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
+        when(toolRegistry.resolve(any())).thenReturn(List.of());
+        when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("ok", null, 1, 0));
+        LoopCheckpointListener listener = checkpoint -> { };
+        AgentContext ctx = AgentContext.builder()
+                .runId("run-1-1").taskId(1L).subTaskId(10L).turn(1).agentId(3L)
+                .systemPrompt("sys").userPrompt("user")
+                .chatModel(chatModel)
+                .loopCheckpointListener(listener)
+                .build();
+
+        new RuntimeTurnExecutor(
+                agentLoop, toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider)
+                .execute(ctx);
+
+        ArgumentCaptor<AgentLoopInput> captor = ArgumentCaptor.forClass(AgentLoopInput.class);
+        verify(agentLoop).run(captor.capture());
+        assertThat(captor.getValue().loopCheckpointListener()).isSameAs(listener);
+    }
+
+    @Test
+    @DisplayName("checkpoint：上下文未携带 listener → 透传 null（不落检查点）")
+    void shouldPassNullLoopCheckpointListenerWhenAbsent() {
+        when(agentSkillSpecService.resolve(any()))
+                .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
+        when(toolRegistry.resolve(any())).thenReturn(List.of());
+        when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("ok", null, 1, 0));
+
+        new RuntimeTurnExecutor(
+                agentLoop, toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider)
+                .execute(context());
+
+        ArgumentCaptor<AgentLoopInput> captor = ArgumentCaptor.forClass(AgentLoopInput.class);
+        verify(agentLoop).run(captor.capture());
+        assertThat(captor.getValue().loopCheckpointListener()).isNull();
     }
 
     @Test

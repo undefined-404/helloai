@@ -13,6 +13,7 @@ import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.runtime.AgentContext;
 import com.helloai.core.agent.runtime.AgentExecutionResult;
 import com.helloai.core.agent.runtime.ExecutionEnvironment;
+import com.helloai.core.agent.runtime.loop.LoopCheckpointListener;
 import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.tool.ToolDefinition;
@@ -58,7 +59,8 @@ import java.util.stream.Collectors;
  *         + 重派恢复上下文 + 返工修正指引 + 产出回填要求（EXECUTION_RECORD / manifest 多文件协议）；</li>
  *     <li>底层模型：按 provider + API Key 经 {@link AgentChatClientService#buildChatModel} 构建
  *         （mock 模式 MockChatModel；真实模式 Vault/Agent 级凭据解析，requireVault 校验同旧口径）；</li>
- *     <li>执行会话：LLM 调用前 {@code AgentSessionService.start}（step=2，中断点快照，best-effort）；</li>
+ *     <li>执行会话：LLM 调用前 {@code AgentSessionService.start}（step=2，中断点快照，best-effort），
+ *         并装配循环进度回调（P0-C checkpoint：AgentLoop 每轮 merge snapshot.loop）；</li>
  *     <li>对话流落库：实际送给 LLM 的 prompt 全量入 conversation_message（user 视角，best-effort）；</li>
  *     <li>可观测 timeline：spec 装配事实 / llm 调用起止（与旧链同键同语义）。</li>
  * </ul>
@@ -210,6 +212,11 @@ public class AgentRuntimeContextAssembler {
                         "loadedCount", dependencySection.loadedCount,
                         "truncatedCount", dependencySection.truncatedCount));
 
+        // 4.1) 循环进度落库回调（P0-C checkpoint：AgentLoop 每轮 iteration 边界 merge
+        // snapshot.loop；服务侧 best-effort，lambda 只做透传）
+        LoopCheckpointListener loopCheckpointListener = checkpoint ->
+                agentSessionService.saveLoopCheckpoint(subTaskId, runTurn, checkpoint);
+
         // 5) spec 装配可观测（与旧链同键同事件名）
         taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_spec_context_loaded",
                 AgentRole.EXECUTOR, agent.getId(),
@@ -248,6 +255,7 @@ public class AgentRuntimeContextAssembler {
                 .userPrompt(userPrompt)
                 .chatModel(chatModel)
                 .eventRecorder(agentEventRecorder)
+                .loopCheckpointListener(loopCheckpointListener)
                 .build();
     }
 
@@ -463,6 +471,24 @@ public class AgentRuntimeContextAssembler {
                     sb.append("）");
                 }
                 sb.append("\n");
+            }
+            // 循环进度事实（P0-C checkpoint）：已完成轮数/工具执行（V66 边界：不回复消息历史）
+            Object loop = snapshot.get("loop");
+            if (loop instanceof Map<?, ?> loopMap) {
+                Object iteration = loopMap.get("iteration");
+                if (iteration instanceof Number iterationNum && iterationNum.intValue() > 0) {
+                    sb.append("- 上次循环进度：已完成 ").append(iterationNum.intValue()).append(" 轮 LLM 调用");
+                    Object toolCallCount = loopMap.get("toolCallCount");
+                    if (toolCallCount instanceof Number toolCount && toolCount.intValue() > 0) {
+                        sb.append("、").append(toolCount.intValue()).append(" 次工具执行");
+                    }
+                    sb.append("\n");
+                    Object executedTools = loopMap.get("executedTools");
+                    if (executedTools instanceof List<?> executedList && !executedList.isEmpty()) {
+                        sb.append("- 已执行工具：").append(executedList.stream()
+                                .map(Object::toString).collect(Collectors.joining("、"))).append("\n");
+                    }
+                }
             }
         }
         sb.append("请以接续者身份结合上述上下文重新完成本任务，输出交付物并按协议回填，不要复述以上中断事实。\n");

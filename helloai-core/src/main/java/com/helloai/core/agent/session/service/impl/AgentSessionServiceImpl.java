@@ -2,6 +2,7 @@ package com.helloai.core.agent.session.service.impl;
 
 import com.helloai.common.constant.SessionStatus;
 import com.helloai.core.agent.event.AgentEventContextResolver;
+import com.helloai.core.agent.runtime.loop.LoopCheckpoint;
 import com.helloai.core.agent.session.entity.AgentSession;
 import com.helloai.core.agent.session.mapper.AgentSessionMapper;
 import com.helloai.core.agent.session.service.AgentSessionService;
@@ -10,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -69,6 +71,42 @@ public class AgentSessionServiceImpl implements AgentSessionService {
             log.warn("AgentSession.advance 写入失败（best-effort 不阻断执行链）: subTaskId={}, turn={}, err={}",
                     subTaskId, turn, e.getMessage());
         }
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void saveLoopCheckpoint(Long subTaskId, int turn, LoopCheckpoint checkpoint) {
+        if (checkpoint == null) {
+            return;
+        }
+        try {
+            AgentSession active = agentSessionMapper.selectLatestActiveBySubTaskId(subTaskId);
+            if (active == null || active.getTurn() == null || active.getTurn() != turn) {
+                // 无匹配 ACTIVE 会话（已终态/重入竞态）：跳过，不新建行——checkpoint 是进度增量
+                log.debug("AgentSession.saveLoopCheckpoint 无匹配 ACTIVE 会话，跳过: subTaskId={}, turn={}",
+                        subTaskId, turn);
+                return;
+            }
+            // 读-改-写 merge：替换 snapshot.loop 子键，其余装配事实原样保留（仿 start 同 turn 重入模式）
+            Map<String, Object> snapshot = active.getSnapshot() != null
+                    ? new LinkedHashMap<>(active.getSnapshot()) : new LinkedHashMap<>();
+            snapshot.put("loop", loopStateMap(checkpoint));
+            active.setSnapshot(snapshot);
+            agentSessionMapper.updateById(active);
+        } catch (Exception e) {
+            log.warn("AgentSession.saveLoopCheckpoint 写入失败（best-effort 不阻断执行链）: subTaskId={}, turn={}, err={}",
+                    subTaskId, turn, e.getMessage());
+        }
+    }
+
+    /** 循环进度转 snapshot 子对象（键名与装配器恢复段渲染口径一致）。 */
+    private static Map<String, Object> loopStateMap(LoopCheckpoint checkpoint) {
+        Map<String, Object> loop = new LinkedHashMap<>();
+        loop.put("iteration", checkpoint.iteration());
+        loop.put("toolCallCount", checkpoint.toolCallCount());
+        loop.put("messageCount", checkpoint.messageCount());
+        loop.put("executedTools", checkpoint.executedToolNames());
+        return loop;
     }
 
     @Override

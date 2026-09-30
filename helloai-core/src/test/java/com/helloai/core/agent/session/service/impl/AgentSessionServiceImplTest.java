@@ -1,6 +1,7 @@
 package com.helloai.core.agent.session.service.impl;
 
 import com.helloai.common.constant.SessionStatus;
+import com.helloai.core.agent.runtime.loop.LoopCheckpoint;
 import com.helloai.core.agent.session.entity.AgentSession;
 import com.helloai.core.agent.session.mapper.AgentSessionMapper;
 import com.helloai.core.agent.session.service.AgentSessionService.InterruptedSession;
@@ -24,8 +25,8 @@ import static org.mockito.Mockito.when;
 
 /**
  * Agent 执行会话服务单元测试（Phase 1 Step 3）：
- * start 幂等（同 turn 复用 / 异 turn append）/ advance / complete / fail /
- * interrupt（ABORT + 返回中断摘要）。纯 Mockito 测试 mapper 层。
+ * start 幂等（同 turn 复用 / 异 turn append）/ advance / saveLoopCheckpoint（merge snapshot.loop）/
+ * complete / fail / interrupt（ABORT + 返回中断摘要）。纯 Mockito 测试 mapper 层。
  *
  * <p>注意：MyBatis-Plus 3.5.9 BaseMapper 新增 {@code insert(Collection)} /
  * {@code updateById(Collection)} 重载，对 insert/updateById 的 verify 必须用
@@ -129,6 +130,81 @@ class AgentSessionServiceImplTest {
         agentSessionService.advance(22L, 11L, 1, 4);
 
         verify(agentSessionMapper).advanceStep(22L, 1, 4);
+    }
+
+    @Test
+    @DisplayName("saveLoopCheckpoint：ACTIVE 会话 merge snapshot.loop（其余装配事实保留）")
+    void shouldMergeLoopCheckpointIntoSnapshot() {
+        AgentSession active = new AgentSession();
+        active.setId(9L);
+        active.setSubTaskId(22L);
+        active.setTurn(1);
+        active.setStatus(SessionStatus.ACTIVE.name());
+        active.setSnapshot(Map.of("skills", List.of("eng")));
+        when(agentSessionMapper.selectLatestActiveBySubTaskId(22L)).thenReturn(active);
+
+        agentSessionService.saveLoopCheckpoint(22L, 1,
+                new LoopCheckpoint(2, 3, 6, List.of("pullTasks", "submitResult")));
+
+        ArgumentCaptor<AgentSession> cap = ArgumentCaptor.forClass(AgentSession.class);
+        verify(agentSessionMapper).updateById(cap.capture());
+        assertThat(cap.getValue().getId()).isEqualTo(9L);
+        Map<String, Object> snapshot = cap.getValue().getSnapshot();
+        assertThat(snapshot).containsEntry("skills", List.of("eng"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> loop = (Map<String, Object>) snapshot.get("loop");
+        assertThat(loop)
+                .containsEntry("iteration", 2)
+                .containsEntry("toolCallCount", 3)
+                .containsEntry("messageCount", 6)
+                .containsEntry("executedTools", List.of("pullTasks", "submitResult"));
+    }
+
+    @Test
+    @DisplayName("saveLoopCheckpoint：无 ACTIVE 会话 → 跳过不新建行")
+    void shouldSkipLoopCheckpointWhenNoActiveSession() {
+        agentSessionService.saveLoopCheckpoint(22L, 1, new LoopCheckpoint(1, 1, 4, List.of("echo")));
+
+        verify(agentSessionMapper, never()).updateById(any(AgentSession.class));
+        verify(agentSessionMapper, never()).insert(any(AgentSession.class));
+    }
+
+    @Test
+    @DisplayName("saveLoopCheckpoint：ACTIVE 但 turn 不匹配 → 跳过")
+    void shouldSkipLoopCheckpointWhenTurnMismatch() {
+        AgentSession active = new AgentSession();
+        active.setId(9L);
+        active.setTurn(2);
+        active.setStatus(SessionStatus.ACTIVE.name());
+        when(agentSessionMapper.selectLatestActiveBySubTaskId(22L)).thenReturn(active);
+
+        agentSessionService.saveLoopCheckpoint(22L, 1, new LoopCheckpoint(1, 1, 4, List.of("echo")));
+
+        verify(agentSessionMapper, never()).updateById(any(AgentSession.class));
+    }
+
+    @Test
+    @DisplayName("saveLoopCheckpoint：checkpoint 为 null → 不触达 mapper")
+    void shouldSkipLoopCheckpointWhenCheckpointNull() {
+        agentSessionService.saveLoopCheckpoint(22L, 1, null);
+
+        verify(agentSessionMapper, never()).selectLatestActiveBySubTaskId(any());
+        verify(agentSessionMapper, never()).updateById(any(AgentSession.class));
+    }
+
+    @Test
+    @DisplayName("saveLoopCheckpoint：写入异常 → best-effort 不抛出")
+    void shouldNotThrowWhenLoopCheckpointWriteFails() {
+        AgentSession active = new AgentSession();
+        active.setId(9L);
+        active.setTurn(1);
+        active.setStatus(SessionStatus.ACTIVE.name());
+        active.setSnapshot(Map.of());
+        when(agentSessionMapper.selectLatestActiveBySubTaskId(22L)).thenReturn(active);
+        doThrow(new RuntimeException("db down")).when(agentSessionMapper).updateById(any(AgentSession.class));
+
+        agentSessionService.saveLoopCheckpoint(22L, 1, new LoopCheckpoint(1, 1, 4, List.of("echo")));
+        // 不抛异常即通过（best-effort）
     }
 
     @Test

@@ -2,6 +2,7 @@ package com.helloai.core.agent.runtime;
 
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.core.agent.event.AgentEventRecorder;
+import com.helloai.core.agent.runtime.loop.LoopCheckpointListener;
 import lombok.Builder;
 import lombok.Value;
 import org.springframework.ai.chat.model.ChatModel;
@@ -73,4 +74,11 @@ public class AgentContext {
 
     /** 底层模型（P0-B：Runtime 真身经 AgentLoop 执行输入；可空——缺失时 Runtime 真身契约化失败）。 */
     ChatModel chatModel;
+
+    /**
+     * 循环进度落库回调（P0-C checkpoint：Runtime 真身经 AgentLoop 每轮回调落库
+     * {@code agent_session.snapshot.loop}；可空 = 不落检查点，与 eventRecorder 同为
+     * write-only 旁路通道）。
+     */
+    LoopCheckpointListener loopCheckpointListener;
 }

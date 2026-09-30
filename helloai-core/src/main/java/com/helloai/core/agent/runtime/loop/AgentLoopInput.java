@@ -26,6 +26,7 @@ import java.util.List;
  * @param turn                 Turn 序号（从 1 起）
  * @param agentId              执行 Agent ID（可空）
  * @param eventRecorder        事件记录器（可空：不记录 TOOL_CALL 事件）
+ * @param loopCheckpointListener 循环进度回调（可空：不落循环检查点）
  */
 public record AgentLoopInput(
         ChatModel chatModel,
@@ -39,7 +40,8 @@ public record AgentLoopInput(
         Long subTaskId,
         int turn,
         Long agentId,
-        AgentEventRecorder eventRecorder) {
+        AgentEventRecorder eventRecorder,
+        LoopCheckpointListener loopCheckpointListener) {
 
     /** 默认最大循环轮数（LLM 调用次数硬上限，防死循环）。 */
     public static final int DEFAULT_MAX_ITERATIONS = 5;
@@ -51,5 +53,17 @@ public record AgentLoopInput(
         if (enabledToolCallbacks == null) {
             enabledToolCallbacks = List.of();
         }
+    }
+
+    /**
+     * 兼容构造器（旧 12 参签名）：循环进度回调缺省 null（不落检查点），
+     * 现有调用点（单测/历史接点）零改动。
+     */
+    public AgentLoopInput(ChatModel chatModel, String systemPrompt, String userPrompt,
+                          ToolExecutor toolExecutor, List<ToolCallback> enabledToolCallbacks,
+                          Integer maxIterations, String runId, Long taskId, Long subTaskId,
+                          int turn, Long agentId, AgentEventRecorder eventRecorder) {
+        this(chatModel, systemPrompt, userPrompt, toolExecutor, enabledToolCallbacks, maxIterations,
+                runId, taskId, subTaskId, turn, agentId, eventRecorder, null);
     }
 }

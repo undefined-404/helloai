@@ -1,5 +1,7 @@
 package com.helloai.core.agent.session.service;
 
+import com.helloai.core.agent.runtime.loop.LoopCheckpoint;
+
 import java.util.Map;
 
 /**
@@ -45,6 +47,19 @@ public interface AgentSessionService {
      * @param step 中断点推进到 4（LLM 调用完成）
      */
     void advance(Long subTaskId, Long agentId, int turn, int step);
+
+    /**
+     * 循环进度检查点落库（P0-C checkpoint；best-effort）。
+     *
+     * <p>merge 语义：把本轮循环进度写入 ACTIVE 会话 snapshot 的 {@code loop}
+     * 子键（其余装配事实保留）；无匹配 ACTIVE 会话（已终态/重入竞态）跳过、
+     * 不新建行——checkpoint 是进度增量，会话载体由 {@link #start} 创建。</p>
+     *
+     * @param subTaskId  子任务 ID
+     * @param turn       执行尝试序号（ADR-001 Turn）
+     * @param checkpoint 本轮循环进度（已完成轮序/工具执行次数/已执行工具名）
+     */
+    void saveLoopCheckpoint(Long subTaskId, int turn, LoopCheckpoint checkpoint);
 
     /**
      * 执行成功终态：ACTIVE → COMPLETED（best-effort）。

@@ -6,6 +6,8 @@ import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.runtime.loop.AgentLoop;
 import com.helloai.core.agent.runtime.loop.AgentLoopInput;
 import com.helloai.core.agent.runtime.loop.AgentLoopResult;
+import com.helloai.core.agent.runtime.loop.LoopCheckpoint;
+import com.helloai.core.agent.runtime.loop.LoopCheckpointListener;
 import com.helloai.core.agent.tool.ToolExecutionResult;
 import com.helloai.core.agent.tool.ToolExecutor;
 import lombok.extern.slf4j.Slf4j;
@@ -22,8 +24,10 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * {@link AgentLoop} 真身——手动工具循环（spring-ai ChatModel 契约，provider 无关）。
@@ -38,6 +42,10 @@ import java.util.Map;
  * <p>终止保证：maxIterations 硬上限（默认 5）防死循环；达到上限返回末轮正文的
  * MAX_ITERATIONS 结果。真实 provider 的工具调用行为需在 Runtime 真身接线时联调
  * （本构件以确定性 stub ChatModel 单测验证契约与循环逻辑）。</p>
+ *
+ * <p>循环进度检查点（P0-C checkpoint）：每轮「工具执行与回喂完成、下一轮 LLM 未开始」
+ * 边界经 {@link LoopCheckpointListener} 回调落库（V66 边界：只落进度事实，不回放消息）；
+ * write-only 纪律——回调缺失跳过、失败仅告警，不阻断循环。</p>
  */
 @Slf4j
 @Component
@@ -58,6 +66,7 @@ public class ChatModelToolLoop implements AgentLoop {
         int iterations = 0;
         int toolCallCount = 0;
         String lastText = "";
+        Set<String> executedToolNames = new LinkedHashSet<>();
 
         for (int i = 0; i < input.maxIterations(); i++) {
             iterations = i + 1;
@@ -84,6 +93,7 @@ public class ChatModelToolLoop implements AgentLoop {
                 }
                 ToolExecutionResult result = executeToolSafely(input, toolCall.name(), toolCall.arguments());
                 toolCallCount++;
+                executedToolNames.add(toolCall.name());
                 toolResponses.add(new ToolResponseMessage.ToolResponse(
                         toolCall.id(), toolCall.name(),
                         result.success() ? result.output() : "ERROR: " + result.errorMessage()));
@@ -95,6 +105,10 @@ public class ChatModelToolLoop implements AgentLoop {
                         iterations, toolCallCount);
             }
             messages.add(ToolResponseMessage.builder().responses(toolResponses).build());
+            // 循环进度检查点（P0-C checkpoint）：本轮 LLM + 工具均已完成、下一轮未开始；
+            // write-only 纪律——落库失败仅告警，不阻断循环（V66 边界：只落进度事实）
+            fireCheckpoint(input, new LoopCheckpoint(
+                    i + 1, toolCallCount, messages.size(), new ArrayList<>(executedToolNames)));
         }
         return AgentLoopResult.maxIterations(lastText, iterations, toolCallCount);
     }
@@ -132,6 +146,22 @@ public class ChatModelToolLoop implements AgentLoop {
                     step, eventType, input.agentId(), payload);
         } catch (Exception e) {
             log.warn("AgentLoop: 事件记录失败（write-only 不阻断）: type={}, err={}", eventType, e.getMessage());
+        }
+    }
+
+    /**
+     * 触发循环进度回调；回调缺失跳过、失败仅告警（write-only，不阻断循环）。
+     */
+    private void fireCheckpoint(AgentLoopInput input, LoopCheckpoint checkpoint) {
+        LoopCheckpointListener listener = input.loopCheckpointListener();
+        if (listener == null) {
+            return;
+        }
+        try {
+            listener.onCheckpoint(checkpoint);
+        } catch (Exception e) {
+            log.warn("AgentLoop: checkpoint 回调失败（write-only 不阻断）: iteration={}, err={}",
+                    checkpoint.iteration(), e.getMessage());
         }
     }
 

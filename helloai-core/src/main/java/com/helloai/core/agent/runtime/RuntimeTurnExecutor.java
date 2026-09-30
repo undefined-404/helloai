@@ -110,7 +110,8 @@ public class RuntimeTurnExecutor implements AgentRuntime {
                 + (ctx.getUserPrompt() != null ? ctx.getUserPrompt().length() : 0);
         record(ctx, 2, AgentEventType.CONTEXT_BUILT, safeMap("promptChars", promptChars));
 
-        // 7. AgentLoop 执行（内部按 TOOL_CALL_STARTED=3 / TOOL_CALL_COMPLETED=4 记录）
+        // 7. AgentLoop 执行（内部按 TOOL_CALL_STARTED=3 / TOOL_CALL_COMPLETED=4 记录；
+        // 每轮循环边界经 loopCheckpointListener 落进度快照，write-only 旁路）
         AgentLoopResult loopResult = agentLoop.run(new AgentLoopInput(
                 ctx.getChatModel(),
                 ctx.getSystemPrompt(),
@@ -119,7 +120,8 @@ public class RuntimeTurnExecutor implements AgentRuntime {
                 resolveEnabledCallbacks(enabledTools),
                 null,
                 ctx.getRunId(), ctx.getTaskId(), ctx.getSubTaskId(), ctx.getTurn(), ctx.getAgentId(),
-                ctx.getEventRecorder()));
+                ctx.getEventRecorder(),
+                ctx.getLoopCheckpointListener()));
 
         // 8. AGENT_COMPLETED（step=0，Turn 端点）；失败终态以结果表达，不发失败事件（ADR §5.3）
         record(ctx, 0, AgentEventType.AGENT_COMPLETED,

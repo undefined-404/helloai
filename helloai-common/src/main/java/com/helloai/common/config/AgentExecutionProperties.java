@@ -7,7 +7,9 @@ import org.springframework.stereotype.Component;
 /**
  * 平台内 Agent 执行链配置。
  *
- * <p>/默认启用 mock 模式，保证本地无需外部 LLM Key 也能稳定验证最小闭环。</p>
+ * <p>默认真实模式（2026-09-30 起，审计 §11.4 风险 3 修正）：mock 必须由显式配置
+ * {@code helloai.execution.mock-mode=true} 开启（如 application-it.yml 测试 profile）；
+ * 避免新增 profile / 属性绑定异常时静默走 mock（"看着执行了，其实没调 LLM"）。</p>
  */
 @Data
 @Component
@@ -63,8 +65,8 @@ public class AgentExecutionProperties {
     /** 是否启用平台内执行链。 */
     private boolean enabled = true;
 
-    /** 是否启用稳定 mock 模式。默认 true。 */
-    private boolean mockMode = true;
+    /** 是否启用稳定 mock 模式。默认 false（真实模式优先，防静默 mock 陷阱）；显式配置 mock-mode=true 才走 mock。 */
+    private boolean mockMode = false;
 
     /** real 模式是否强制要求 vault 已绑定凭证。默认 false（先兼容全局 Provider 配置）。 */
     private boolean requireVault = false;

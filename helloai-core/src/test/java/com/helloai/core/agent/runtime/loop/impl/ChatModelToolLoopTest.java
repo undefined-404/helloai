@@ -5,6 +5,8 @@ import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.runtime.loop.AgentLoop;
 import com.helloai.core.agent.runtime.loop.AgentLoopInput;
 import com.helloai.core.agent.runtime.loop.AgentLoopResult;
+import com.helloai.core.agent.runtime.loop.LoopCheckpoint;
+import com.helloai.core.agent.runtime.loop.LoopCheckpointListener;
 import com.helloai.core.agent.tool.ToolExecutionResult;
 import com.helloai.core.agent.tool.ToolExecutor;
 import org.junit.jupiter.api.DisplayName;
@@ -29,6 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -39,8 +42,8 @@ import static org.mockito.Mockito.when;
  *
  * <p>以确定性 {@link StubChatModel}（可编程响应队列 + 记录最近 messages）验证
  * {@link ChatModelToolLoop} 的手动工具循环契约：终态判定 / 工具执行与 Observation 回喂 /
- * 错误回喂 / 循环终止 / TOOL_CALL 事件记录 / 入参缺失降级。纯 Mockito + 自研 stub，
- * 不依赖 Spring 容器与真实 LLM。</p>
+ * 错误回喂 / 循环终止 / TOOL_CALL 事件记录 / 循环检查点回调（每轮触发与 write-only 容错）/
+ * 入参缺失降级。纯 Mockito + 自研 stub，不依赖 Spring 容器与真实 LLM。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("ChatModelToolLoop")
@@ -184,9 +187,75 @@ class ChatModelToolLoopTest {
         verify(toolExecutor, never()).execute(anyString(), anyString());
     }
 
+    @Test
+    @DisplayName("checkpoint：每个工具轮结束后回调一次（iteration/计数/已执行工具累积）")
+    void shouldFireCheckpointAfterEachToolIteration() {
+        StubChatModel model = new StubChatModel()
+                .enqueue(responseWithToolCall("tc1", "echo", "{}"))
+                .enqueue(responseWithToolCall("tc2", "calc", "{}"))
+                .enqueue(responseWithText("done"));
+        when(toolExecutor.execute(anyString(), anyString()))
+                .thenReturn(ToolExecutionResult.success("t", "o"));
+        List<LoopCheckpoint> checkpoints = new ArrayList<>();
+
+        AgentLoopResult result = loop.run(input(model, checkpoints::add));
+
+        assertThat(result.success()).isTrue();
+        assertThat(checkpoints).hasSize(2);
+        assertThat(checkpoints.get(0).iteration()).isEqualTo(1);
+        assertThat(checkpoints.get(0).toolCallCount()).isEqualTo(1);
+        assertThat(checkpoints.get(0).messageCount()).isEqualTo(4);
+        assertThat(checkpoints.get(0).executedToolNames()).containsExactly("echo");
+        assertThat(checkpoints.get(1).iteration()).isEqualTo(2);
+        assertThat(checkpoints.get(1).toolCallCount()).isEqualTo(2);
+        assertThat(checkpoints.get(1).messageCount()).isEqualTo(6);
+        assertThat(checkpoints.get(1).executedToolNames()).containsExactly("echo", "calc");
+    }
+
+    @Test
+    @DisplayName("checkpoint：终态轮（无工具调用）不回调")
+    void shouldNotFireCheckpointOnTerminalIteration() {
+        StubChatModel model = new StubChatModel().enqueue(responseWithText("final"));
+        LoopCheckpointListener listener = mock(LoopCheckpointListener.class);
+
+        AgentLoopResult result = loop.run(input(model, listener));
+
+        assertThat(result.success()).isTrue();
+        verifyNoInteractions(listener);
+    }
+
+    @Test
+    @DisplayName("checkpoint：回调抛异常不阻断循环（write-only 容错）")
+    void shouldContinueLoopWhenCheckpointListenerThrows() {
+        StubChatModel model = new StubChatModel()
+                .enqueue(responseWithToolCall("tc1", "echo", "{}"))
+                .enqueue(responseWithText("ok"));
+        when(toolExecutor.execute("echo", "{}")).thenReturn(ToolExecutionResult.success("echo", "o"));
+
+        AgentLoopResult result = loop.run(input(model, checkpoint -> {
+            throw new RuntimeException("sink down");
+        }));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.toolCallCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("兼容构造器（12 参）：listener 缺省 null（不落检查点）")
+    void shouldDefaultListenerToNullInLegacyConstructor() {
+        AgentLoopInput legacy = input(new StubChatModel());
+
+        assertThat(legacy.loopCheckpointListener()).isNull();
+    }
+
     private AgentLoopInput input(StubChatModel model) {
         return new AgentLoopInput(model, "sys", "user", toolExecutor, List.of(),
                 AgentLoopInput.DEFAULT_MAX_ITERATIONS, "run-1-1", 1L, 10L, 1, 3L, eventRecorder);
+    }
+
+    private AgentLoopInput input(StubChatModel model, LoopCheckpointListener listener) {
+        return new AgentLoopInput(model, "sys", "user", toolExecutor, List.of(),
+                AgentLoopInput.DEFAULT_MAX_ITERATIONS, "run-1-1", 1L, 10L, 1, 3L, eventRecorder, listener);
     }
 
     private static ChatResponse responseWithText(String text) {
