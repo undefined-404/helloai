@@ -13,7 +13,7 @@ spring:
     exclude: org.springframework.ai.model.deepseek.autoconfigure.DeepSeekChatAutoConfiguration
   # === 默认激活 dev 环境（云服务器联调），本地 Docker 开发切换 local 使用 spring.profiles.active=local ===
   profiles:
-    active: dev
+    active: local
   # === 时区锁定：与 HelloAIApplication.main() 的 TimeZone.setDefault 一致 ===
   # Date / LocalDateTime 等不带时区偏移的类型也按北京时间序列化，避免 UTC 少 8 小时
   jackson:
@@ -114,13 +114,6 @@ helloai:
       max-ttl-minutes: 240
       default-ttl-minutes: 30
       full-score: 100
-    # Phase 0 C3 Step 6（LOG-20260904-006）：v2-enabled 已固化 true，LegacyExecutorAdapter 恒注册，
-    # 代码不再读取本键与 gray-percent（路由分支已删除，AgentRuntime 为唯一执行契约）；
-    # 保留键值仅为脚本（verify-c3-env/route）与人工可读语义，下线后回退需代码回滚。
-    runtime:
-      v2-enabled: true
-      # Phase 0 C3 双轨灰度（Step 6 后代码不再读取，保留仅作文档语义；100 = 全量档已固化）。
-      gray-percent: 100
     # N-008 统一消息生命周期（Phase 2 A3）：收件箱消息 TTL 与过期归档。
     # expire-hours：send 落库即写 expire_time（默认 7 天，远大于 ASSIGNED 10min 消费窗口，
     # 只兜「Agent 长期不拉单」堆积）；InboxExpireCleanupTask 5min 一扫软删（is_archived=1）。
@@ -192,8 +185,8 @@ helloai:
   execution:
     enabled: true
     mock-mode: false
-    # P0-B：Runtime 真身开关（false=Legacy 主路径，true=RuntimeTurnExecutor；回滚=置回 false 重启）
-    runtime-enabled: false
+    # G-002 单轨（2026-09-30）：runtime-enabled / v2-enabled / gray-percent 双轨开关已随
+    # Router / Legacy 适配器删除而退役，Runtime 真身为唯一执行路径（回滚 = 代码回滚）。
     require-vault: true
     provider: deepseek
     model: deepseek-chat

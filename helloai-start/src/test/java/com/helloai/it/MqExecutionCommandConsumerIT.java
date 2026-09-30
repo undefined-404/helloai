@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.core.agent.mqconsumer.ExecutionCommandMqMessage;
 import com.helloai.core.agent.runtime.AgentContext;
 import com.helloai.core.agent.runtime.AgentExecutionResult;
-import com.helloai.core.agent.runtime.LegacyExecutorAdapter;
+import com.helloai.core.agent.runtime.RuntimeTurnExecutor;
 import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.mq.config.RabbitMQConfig;
 import org.junit.jupiter.api.DisplayName;
@@ -36,8 +36,8 @@ import static org.mockito.Mockito.when;
  * {@code LocalExecutionCommandConsumer} 执行链（markRunning CAS → timeline →
  * AgentRuntime → markSuccess）——除最外层 LLM 边界外全部真实。</p>
  *
- * <p><b>外部边界隔离</b>：{@link LegacyExecutorAdapter} 以 {@code @MockBean} 替换
- * （其内部 SubTaskExecutionService→LLM 属执行器外部边界），mock 返回 SUCCESS 结果；
+ * <p><b>外部边界隔离</b>：{@link RuntimeTurnExecutor} 以 {@code @MockBean} 替换
+ * （其内部 AgentLoop→LLM 属执行器外部边界），mock 返回 SUCCESS 结果；
  * 这正是审计批评「@MockBean 挂集成测试」之外的正当用途——只隔离不可控外部调用，
  * MQ / 幂等 / CAS / DB 落库全部走真实链路。</p>
  *
@@ -61,7 +61,7 @@ class MqExecutionCommandConsumerIT extends AbstractItTestBase {
 
     /** 执行器外部边界（LLM 调用）mock 隔离；MockitoBean 会替换原 Bean 并仍被 List<AgentRuntime> 收集。 */
     @MockitoBean
-    private LegacyExecutorAdapter legacyExecutorAdapter;
+    private RuntimeTurnExecutor runtimeTurnExecutor;
 
     @Test
     @DisplayName("同一事件投递两次：业务执行仅 1 次，幂等日志仅 1 行，状态机正常演进")
@@ -71,7 +71,7 @@ class MqExecutionCommandConsumerIT extends AbstractItTestBase {
         String eventId = UUID.randomUUID().toString().replace("-", "");
         seedPendingExecutionRecord(RECORD_ID, eventId, SUB_TASK_ID, AGENT_ID);
 
-        when(legacyExecutorAdapter.execute(any(AgentContext.class)))
+        when(runtimeTurnExecutor.execute(any(AgentContext.class)))
                 .thenReturn(AgentExecutionResult.builder()
                         .status(ExecutionStatus.SUCCESS)
                         .output("it-mock-output")
@@ -103,7 +103,7 @@ class MqExecutionCommandConsumerIT extends AbstractItTestBase {
         // 业务逻辑只执行了一次（第二次被 Redis + DB 双层幂等拦截）。
         // 按 subTaskId 精确匹配本用例调用：B2/B3 共享同一 @MockitoBean 实例
         // （TestContext 缓存复用同配置上下文），类间计数会累计（2026-09-29 实跑暴露）
-        verify(legacyExecutorAdapter, times(1)).execute(argThat(ctx -> ctx.getSubTaskId() == SUB_TASK_ID));
+        verify(runtimeTurnExecutor, times(1)).execute(argThat(ctx -> ctx.getSubTaskId() == SUB_TASK_ID));
 
         // 状态机演进：PENDING(0) → markRunning(1) → markSuccess(2)
         assertEquals("SUCCESS", recordStatus(RECORD_ID));

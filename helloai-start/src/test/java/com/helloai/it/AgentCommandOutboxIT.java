@@ -2,7 +2,7 @@ package com.helloai.it;
 
 import com.helloai.core.agent.runtime.AgentContext;
 import com.helloai.core.agent.runtime.AgentExecutionResult;
-import com.helloai.core.agent.runtime.LegacyExecutorAdapter;
+import com.helloai.core.agent.runtime.RuntimeTurnExecutor;
 import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.job.task.OutboxRelayTask;
@@ -32,7 +32,7 @@ import static org.mockito.Mockito.when;
  * {@code @RabbitListener} 消费完成执行链（幂等日志 + 执行记录终态）。</p>
  *
  * <p><b>隔离口径</b>：与 B2 相同，仅以 {@code @MockBean} 隔离
- * {@link LegacyExecutorAdapter}（LLM 外部边界），MQ / Outbox / DB 全真实。</p>
+ * {@link RuntimeTurnExecutor}（LLM 外部边界），MQ / Outbox / DB 全真实。</p>
  *
  * <p><b>时序</b>：createAssignedCommand 的 dispatch-mode=MQ（application.yml 默认）写
  * outbox PENDING → relay() 一次即可完成投递与 confirm 回写；relay 的 confirm 回调
@@ -52,13 +52,13 @@ class AgentCommandOutboxIT extends AbstractItTestBase {
     private OutboxRelayTask outboxRelayTask;
 
     @MockitoBean
-    private LegacyExecutorAdapter legacyExecutorAdapter;
+    private RuntimeTurnExecutor runtimeTurnExecutor;
 
     @Test
     @DisplayName("命令创建：三表同事务落库，Relay 投递后 outbox 到 CONFIRMED 且消费闭环")
     void outboxTransactionBoundaryAndRelayDelivery() throws Exception {
         seedAssignedSubTask(TASK_ID, AGENT_ID, SUB_TASK_ID);
-        when(legacyExecutorAdapter.execute(any(AgentContext.class)))
+        when(runtimeTurnExecutor.execute(any(AgentContext.class)))
                 .thenReturn(AgentExecutionResult.builder()
                         .status(ExecutionStatus.SUCCESS)
                         .output("it-mock-output")
@@ -113,7 +113,7 @@ class AgentCommandOutboxIT extends AbstractItTestBase {
 
         // 执行链真实走了一次（mock 只隔离 LLM）；按 subTaskId 匹配本用例调用——
         // 与 B2 共享同一 @MockitoBean（TestContext 缓存复用），计数跨类累计（2026-09-29 实跑暴露）
-        verify(legacyExecutorAdapter, times(1)).execute(argThat(ctx -> ctx.getSubTaskId() == SUB_TASK_ID));
+        verify(runtimeTurnExecutor, times(1)).execute(argThat(ctx -> ctx.getSubTaskId() == SUB_TASK_ID));
         // outbox confirms 回写字段：last_sent_time / confirmed_time 均非空
         Integer confirmedWithTimes = jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM agent_command_outbox

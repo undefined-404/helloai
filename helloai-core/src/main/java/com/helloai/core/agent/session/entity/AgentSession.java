@@ -2,8 +2,8 @@ package com.helloai.core.agent.session.entity;
 
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
-import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
 import com.helloai.common.base.BaseEntity;
+import com.helloai.core.shared.handler.PgJsonbTypeHandler;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
@@ -44,8 +44,15 @@ public class AgentSession extends BaseEntity {
     /** 会话状态（SessionStatus 枚举，见 {@code com.helloai.common.constant.SessionStatus}）。 */
     private String status;
 
-    /** 恢复上下文快照（skills/tools/depCount 等装配事实）。 */
-    @TableField(typeHandler = JacksonTypeHandler.class)
+    /**
+     * 恢复上下文快照（skills/tools/depCount 等装配事实）。
+     *
+     * <p><b>必须用 {@link PgJsonbTypeHandler}</b>（非内置 {@code JacksonTypeHandler}）：
+     * 后者 write 侧走 setString，PostgreSQL 拒绝 varchar → jsonb 隐式转换
+     * （V66 列为 JSONB；G-002 单轨消费链路真实执行时已实测报
+     * {@code column "snapshot" is of type jsonb but expression is of type character varying}）。</p>
+     */
+    @TableField(typeHandler = PgJsonbTypeHandler.class)
     private Map<String, Object> snapshot;
 
     /** 失败/中断原因摘要（截断 500 字符）。 */

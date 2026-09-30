@@ -41,8 +41,10 @@ import java.util.Set;
  * 事件 write-only（记录失败不阻断）；上下文装配（prompt 构建）由调用方完成并注入，
  * 本类不复制旧链业务编排（差距表 §6 禁止复制完整业务链）。</p>
  *
- * <p>装配：作为 {@code AgentRuntime} 候选实现之一，经 {@link RuntimeAgentRuntimeRouter}
- * 按 {@code runtime-enabled} 开关切换（本类 @Order(3)，仅路由引用；消费者 List 取序不受影响）。</p>
+ * <p>装配（G-002 单轨，2026-09-30）：作为唯一 {@code AgentRuntime} 实现，经消费者
+ * {@code List<AgentRuntime>} 注入收敛到 {@code agentRuntimes.get(0)}（Router / Legacy 适配器
+ * 已删，无切换语义）。上下文装配（prompt / chatModel / 会话）由 {@code AgentRuntimeContextAssembler}
+ * 完成，结果回写由消费者 {@code ExecutionResultHandler} 完成。</p>
  */
 @Slf4j
 @Component
@@ -128,11 +130,14 @@ public class RuntimeTurnExecutor implements AgentRuntime {
             return AgentExecutionResult.builder()
                     .status(ExecutionStatus.SUCCESS)
                     .output(loopResult.text())
+                    .thinking(loopResult.thinking())
+                    .finishReason(loopResult.finishReason())
                     .build();
         }
         return AgentExecutionResult.builder()
                 .status(ExecutionStatus.FAILED)
                 .output(loopResult.errorMessage() != null ? loopResult.errorMessage() : loopResult.text())
+                .finishReason(loopResult.finishReason())
                 .build();
     }
 

@@ -10,7 +10,11 @@
 #   2. rabbitmq listener 收敛并发 —— 测试容器规格小，concurrency=1 让断言时序可预期。
 #   3. helloai.storage.enabled=false —— 产物物化（MinIO）是 B 级范围外的外部边界；
 #      附件链路由单测（MinioArtifactStorageTest，mock MinioClient）单独覆盖。
-#   4. 日志收敛 —— 集成测试只看断言证据，interest 之外的 SQL/业务日志降到 INFO。
+#   4. helloai.execution.mock-mode=true —— G-002 单轨后消费链路真实执行上下文装配
+#      （AgentRuntimeContextAssembler.buildChatModel），真实模式 requireVault 校验会在
+#      无 API Key 时 fail-close；LLM 凭据属不可控外部边界，与 @MockitoBean RuntimeTurnExecutor
+#      同一隔离口径，mock 模式只脱敏模型构建、不改变落库/会话/回写断言语义。
+#   5. 日志收敛 —— 集成测试只看断言证据，interest 之外的 SQL/业务日志降到 INFO。
 
 spring:
   flyway:
@@ -26,6 +30,9 @@ helloai:
   storage:
     # 物化开关：关闭 MinIO 产物上传，执行结果保持 output 原文（ExecutionArtifactService.isEnabled=false 语义）
     enabled: false
+  execution:
+    # LLM 外部边界隔离（差异项 4）：单轨装配器构建模型时跳过真实 Provider / API Key 校验
+    mock-mode: true
 
 logging:
   level:
