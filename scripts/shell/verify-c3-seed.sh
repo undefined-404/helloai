@@ -11,7 +11,7 @@
 #   - 19 位雪花 ID 用 python3 解析（jq 用 double 会丢精度，日志已记录该坑）；
 #   - EXECUTOR_AGENT_ID 默认空 -> 自动从 /api/agents/list 挑第一个「ACTIVE + 内部 LLM(modelType 非空)」EXECUTOR，
 #     因本地 docker 库的 agent id 与旧 dev 服务器不同；也可显式指定 EXECUTOR_AGENT_ID 覆盖。
-# Ref: doc/design/HelloAI_Phase0_C3_双轨切换预研.md（七章验收脚本表）
+# Ref: doc/archive/implemented/HelloAI_Phase0_C3_双轨切换预研.md（七章验收脚本表）
 #      doc/log/2026-09.md（LOG-20260903-012 Step 4 全量档造数）
 # 用法（项目根，后端已启动）：
 #   ./scripts/shell/verify-c3-seed.sh

@@ -13,7 +13,7 @@
 #      - consume_new（全部执行命令消费观察点）> 0（正面证据：新任务已回旧直连路径）
 #      有 psql/docker 自动执行断言（run_probe_sql，规则 6），否则提示会话内 MCP 执行核对
 #   S4 汇总；回滚态下 FAIL>0 才 exit 1；演练完成后提示恢复灰度步骤
-# Ref:  doc/design/HelloAI_Phase0_C3_双轨切换预研.md（四章回滚表格；七章脚本表）
+# Ref:  doc/archive/implemented/HelloAI_Phase0_C3_双轨切换预研.md（四章回滚表格；七章脚本表）
 # 口径：route 观察点 = task_timeline event_type='sub_task_execution_command_consume'
 #       AND payload->>'route'='agent_runtime'（LocalExecutionCommandConsumer.runViaRuntime 写入；
 #       未命中旧直连路径不写 route 字段，gray-percent=0 时 routeToRuntime 恒 false）

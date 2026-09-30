@@ -18,8 +18,8 @@
 #   -PresetOnly  只预置 + 打印真实 AI 操作指引 + 轮询等待证据（供用户用 qoder/trae 实测）
 #                （S3/S5 无需真实 AI，两种模式执行相同）
 #   -RealAgentId 真实外部 AI 的 agent id（PresetOnly 时建议传入，写入任务白名单）
-# Ref: doc/HelloAI_迭代执行记录.md §6.94（场景 1 happy path 实测方式）
-#      .qoder/skills/helloai-preflight/SKILL.md（规则 6：UTF-8 with BOM + 单引号拼接）
+# Ref: doc/log/2026-09.md §6.94（场景 1 happy path 实测方式）
+#      本地 preflight 技能（规则 6：UTF-8 with BOM + 单引号拼接）
 # 前置：docker compose up -d（helloai-postgres:15432）；helloai-start 在 :6565 运行；
 #       S3 需要 helloai-job 实例在运行（AssignedSubTaskTimeoutTask 30s 巡检）。
 # 用法（项目根，PowerShell 5.1）：

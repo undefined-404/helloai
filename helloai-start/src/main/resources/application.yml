@@ -118,7 +118,7 @@ helloai:
     # expire-hours：send 落库即写 expire_time（默认 7 天，远大于 ASSIGNED 10min 消费窗口，
     # 只兜「Agent 长期不拉单」堆积）；InboxExpireCleanupTask 5min 一扫软删（is_archived=1）。
     # 「超时未消费→重新分派」由子任务层承担（dispatch.assigned-timeout-minutes），
-    # 通知类载体不重派、不重试——统一口径见 doc/design/HelloAI_Phase2_A3_消息生命周期执行方案.md §3。
+    # 通知类载体不重派、不重试——统一口径见 doc/archive/implemented/HelloAI_Phase2_A3_消息生命周期执行方案.md §3。
     inbox:
       expire-hours: 168
       cleanup-enabled: true
@@ -294,7 +294,7 @@ helloai:
   # type=minio 落到对象存储（storageUrl=minio://{bucket}/{objectKey}）；
   # objectKey 统一按 {ownerName}/{yyyy}/{MM}/{taskId}/{subTaskId}/{uuid8}-{safeName} 组织，
   # 下载由 AttachmentController 流式返回（v2.7 起 minio:// 附件平台可直读）。
-  # 详见 doc/design/HelloAI_执行产出物化与结构化多文件产出方案.md
+  # 详见 doc/archive/reference/HelloAI_执行产出物化与结构化多文件产出方案.md
   storage:
     enabled: true
     type: minio

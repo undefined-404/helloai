@@ -5,9 +5,9 @@
 #   G2  平台附件列表存在 minio:// 附件（storageUrl 前缀正确、bucket/objectKey 已落库）
 #   G3  minio:// 附件平台直读：下载接口返回 200 + 非空字节 + Content-Disposition
 #       （v2.7 起 isContentLoadable=true，不再 302 重定向）
-# Ref:  doc/HelloAI_实现差距表.md (A0-5 遗留②：minio:// 外部存储平台不可直读)
-#       doc/HelloAI_项目基线文档.md
-#       .agents/skills/helloai-preflight/SKILL.md (规则 6：脚本 UTF-8 编码)
+# Ref:  doc/HelloAI 实现差距表.md (A0-5 遗留②：minio:// 外部存储平台不可直读)
+#       doc/HelloAI 项目基线文档.md
+#       本地 preflight 技能 (规则 6：脚本 UTF-8 编码)
 # 前置：docker compose up -d 起 helloai-minio；后端已重启（storage.type=minio）；
 #       有任一子任务物化产出过附件（无 minio:// 附件时 G2/G3 输出 SKIP 与指引）。
 # 用法（项目根）：

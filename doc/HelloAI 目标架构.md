@@ -9,6 +9,39 @@
 > 最后更新：2026-09-13（§12 目标边界收敛——批次四（BASE-4.x）立项：认证收口到 Sa-Token 标准链路、
 > 身份单事实源（`sys_user.role` 退场）、角色分层（管理 / 操作 / 只读）、适用接口全量动作级授权化。
 > 实施见《HelloAI 基础架构调整实施计划》§9）
+>
+> 最后更新：2026-09-30（**Document V2.1 治理**：新增 §0「实现状态（Implementation Status）」逐层状态标记，
+> 各层补内联 `Status` 行。本文件自此只声明**目标边界 + 状态**；进度百分比与逐条差距一律以
+> 《HelloAI 实现差距表》为**唯一事实源**，不在本文件复述）
+
+# 0. 实现状态（Implementation Status）
+
+> **状态四值**：`Implemented`（已达成）· `Partial`（部分达成）· `Planned`（未启动，已登记）· `Non-goal`（明确非目标）。
+> **判定基线**：2026-09-30，HEAD `e2c7e8c`（代码实测 + 两份 09-30 审计，逐层实测见
+> `doc/review/HelloAI 架构V2进度与质量审计报告（2026-09-30）.md`、`HelloAI 代码规范与架构偏离专项审计报告（2026-09-30）.md`）。
+
+| 章节 | 层 / 能力 | 状态 | 差距锚点（唯一事实源 = 差距表） | 判定依据 |
+|---|---|---|---|---|
+| §3 | **Role Layer**（Planner / Reviewer·Quality Gate / Governance） | **Partial** | G-007 · G-012 · G-013 · G-016 | Planner ✅；Review 链 ✅；Governance（RBAC）✅ 批次一~四；**Quality Gate 泛化未做**（全仓无 `QualityGate` 类） |
+| §3 | **Orchestration Layer**（Workflow / Scheduler / DAG / Dependency / Parallelism / Routing） | **Partial** | G-009 · G-010 · G-015 | Task·SubTask DAG / 依赖门禁 / 并行派发 / 路由 ✅；**Dynamic Workflow 语义未抽象**（P3 后置，且 §11 禁止新建第二套 Engine） |
+| §3 | **Runtime Layer**（AgentRuntime / Context / Session / AgentLoop） | **Implemented** | G-002 · G-003 | 2026-09-30 单轨硬切，`RuntimeTurnExecutor` 为唯一 `AgentRuntime` 实现；八件套契约齐备；每轮 checkpoint 与 tokenUsage 已落库 |
+| §3 | **Capability Layer**（Skill Package / Tool / MCP / Sandbox Provider） | **Partial** | G-004 · G-005 · G-008 | Skill 元数据层 ✅、Tool / MCP ✅；**Sandbox 仅契约、无真实隔离** |
+| §3 | **Provider Layer**（Qoder / Trae / Codex …） | **Implemented** | G-014 · G-016 | 异构 Provider 契约清晰；外部 Agent 通道获 A 级端到端实证 |
+| §5 | Event Stream（Run / Turn / Step + Replay · Audit） | **Partial** | G-001 · G-006 | 写侧 + Replay / Audit / UI 已上线；**Recovery / Fork 未建** |
+| §6 | Skill Capability Package | **Partial** | G-004 | 9 个元数据字段已落地（含 `inputSchema` / `outputSchema` / `validationRules`）；**Instructions 结构化未动**；Discover→Validate 生命周期部分达成 |
+| §7 | Sandbox Provider | **Planned** | G-005 | 契约已落地；**文件 / 网络 / 进程 / 资源 / 凭证五边界隔离未实现**（`EnvironmentSandboxProvider` 一律不标 ISOLATED） |
+| §8 | Agent Fleet | **Partial** | G-008 · G-014 | Capability Match / Health ✅，多外部执行者同台已实证；**Cost / Latency 维度的 Fleet 化未做**（`tokenUsage` 已落库但未纳入选人策略） |
+| §9 | 最终执行链 | **Implemented** | G-001 · G-002 · G-016 | 需求包 → Planner → Workflow → Scheduler → Runtime → Skill/Tool/Sandbox → 异构 Agent → Event Stream → Reviewer → PASS/REWORK/HUMAN_REVIEW/BLOCK 全链 A 级实证 |
+| §10 | Harness | **Non-goal** | — | 明示为 Runtime 参考架构，非目标产品 |
+| §11 | 非目标清单 | **Non-goal** | — | 显式列出并持续生效（含禁第二套 Scheduler / Workflow Runtime） |
+| §12 | 基础架构（平台底座 RBAC） | **Implemented** | G-012 · G-013 | 批次一~四已实施（V77~V89）；BASE-4.5 建号 E2E 待重启复验 |
+
+**维护规则（2026-09-30 新增）**
+
+1. 本文件只声明**目标边界**与**状态标记**；**进度百分比、逐条差距、完成度一律以 `HelloAI 实现差距表.md` 为唯一事实源**，本文件不复述数字，避免双源漂移。
+2. 状态变更须同步更新「判定依据」列（日期 + 代码/DB 证据出处）；只改状态不改依据视为未完成。
+3. 历史迁移方案与已完成阶段性设计**不写入本文件**，一律进 `archive/`。
+4. 权威优先级与 `README.md` 一致：**代码 / 可验证事实 > 项目基线 > 目标架构 > 实现差距 > 实施计划 > 历史归档**。
 
 # 1. 目标定位
 
@@ -80,6 +113,8 @@ Planning
 
 ## Role Layer
 
+> **Status: Partial** — Planner ✅ / Reviewer ✅（Review 链）/ Governance ✅（RBAC 底座）；**Quality Gate 泛化未做**（无 `QualityGate` 类，差距表 G-007）。
+
 ```text
 Planner
 Reviewer / Quality Gate
@@ -114,6 +149,8 @@ Requirement Package（需求包：goal / scope / outOfScope / assumptions / open
 
 ## Orchestration Layer
 
+> **Status: Partial** — DAG / Dependency / Parallelism / Routing 均有实际实现；**Workflow Engine 语义未抽象**（差距表 G-009，P3 后置；§11 明确禁止新建第二套 Workflow Runtime）。
+
 ```text
 Workflow
 Scheduler
@@ -127,6 +164,8 @@ Routing
 
 ## Runtime Layer
 
+> **Status: Implemented** — 2026-09-30 单轨硬切，`RuntimeTurnExecutor` 为唯一实现（差距表 G-002）。
+
 ```text
 AgentRuntime
 Context
@@ -138,6 +177,8 @@ AgentLoop
 
 ## Capability Layer
 
+> **Status: Partial** — Skill Package 与 Tool / MCP 已落地；**Sandbox Provider 仅契约**（差距表 G-004 / G-005 / G-008）。
+
 ```text
 Skill Package
 Tool
@@ -148,6 +189,8 @@ Sandbox Provider
 负责 Runtime 可以获得哪些能力，以及在哪个环境中执行。
 
 ## Provider Layer
+
+> **Status: Implemented** — 异构 Provider 契约清晰，外部 Agent 通道 A 级实证（差距表 G-014）。
 
 ```text
 Qoder
@@ -161,6 +204,8 @@ DeepSeek
 通过统一 Provider Contract 接入。
 
 # 4. AgentRuntime 边界
+
+> **Status: Implemented** — 边界已由代码强制：`agent/runtime/` 包零 Planner / Scheduler / Reviewer / Task Service 依赖。
 
 目标：
 
@@ -188,6 +233,8 @@ Agent Fleet Routing
 
 # 5. Event Stream
 
+> **Status: Partial** — Run/Turn/Step + Replay / Audit / UI 已上线；**Recovery / Fork 未建**（差距表 G-001 / G-006）。
+
 目标统一模型：
 
 ```text
@@ -206,6 +253,8 @@ Run
 不要求通过 Event Stream 重写所有业务状态。
 
 # 6. Skill Capability Package
+
+> **Status: Partial** — 9 个元数据字段已落地；**Instructions 结构化未动**；Discover→Validate 生命周期部分达成（差距表 G-004）。
 
 目标：
 
@@ -236,6 +285,8 @@ Discover
 
 # 7. Sandbox Provider
 
+> **Status: Planned** — 契约已落地；**五边界真实隔离未实现**（`EnvironmentSandboxProvider` 一律不标 ISOLATED，差距表 G-005）。
+
 目标：
 
 ```text
@@ -258,6 +309,8 @@ K8s
 但真正安全隔离还必须覆盖文件、网络、进程、资源和凭证边界。
 
 # 8. Agent Fleet
+
+> **Status: Partial** — Capability Match / Health 已落地且多外部执行者同台已实证；**Cost / Latency 未纳入选人策略**（差距表 G-008 / G-014）。
 
 每个 Agent 应拥有：
 
@@ -289,6 +342,9 @@ Agent Selection
 
 # 9. 最终执行链
 
+> **Status: Implemented** — 全链获 A 级端到端实证（内部单轨 + 外部 CLI_CLIENT 多 Agent）。
+> 口径说明：本链按本文件原文终止于 `PASS / REWORK / HUMAN_REVIEW / BLOCK`；**Synthesis（报告整合）不是本链的独立环节**——它是 Role Layer 的待决策项（差距表 N2），不要把它读成本链既有阶段。
+
 ```text
 Requirement
    ↓
@@ -315,6 +371,8 @@ PASS / REWORK / HUMAN_REVIEW / BLOCK
 
 # 10. Harness 的角色
 
+> **Status: Non-goal** — Harness 仅为 Runtime 参考架构，明确不是目标产品。
+
 DeepSeek Harness 是**重要的 Agent Runtime 参考架构**，但不是 HelloAI 的目标产品。
 
 吸收重点：
@@ -329,6 +387,8 @@ DeepSeek Harness 是**重要的 Agent Runtime 参考架构**，但不是 HelloAI
 
 # 11. 非目标
 
+> **Status: Non-goal**（本清单本身即非目标声明，持续生效）。
+
 ```text
 ❌ DeepSeek Harness Clone
 ❌ 单一 Coding Agent Runtime
@@ -339,6 +399,8 @@ DeepSeek Harness 是**重要的 Agent Runtime 参考架构**，但不是 HelloAI
 ```
 
 # 12. 基础架构（平台底座）
+
+> **Status: Implemented** — 批次一~四已实施（V77~V89）；BASE-4.5 建号 E2E 待重启复验（差距表 G-012 / G-013）。
 
 > 定界（2026-09-12）：平台基础架构专项（用户 / 角色 / 权限 / 菜单底座）纳入目标架构，
 > 与业务五层（Planning / Orchestration / Runtime / Capability / Provider）**正交不冲突**。

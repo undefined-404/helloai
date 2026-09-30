@@ -11,7 +11,7 @@
 #        无 route 键）永远不产生 runtime 消费，不应稀释分母；WINDOW_MINUTES>0 可再缩窗
 #   S3 有 psql 或 docker(helloai-postgres) 时自动执行断言；否则提示走会话内 MCP
 #   S4 汇总；配置/探针侧 FAIL>0 才 exit 1
-# Ref: doc/design/HelloAI_Phase0_C3_双轨切换预研.md（六章验收标准 1/3；七章脚本表）
+# Ref: doc/archive/implemented/HelloAI_Phase0_C3_双轨切换预研.md（六章验收标准 1/3；七章脚本表）
 # 口径：route 观察点 = task_timeline event_type='sub_task_execution_command_consume'
 #       AND payload->>'route'='agent_runtime'（LocalExecutionCommandConsumer.runViaRuntime 写入）
 # 用法（项目根）：

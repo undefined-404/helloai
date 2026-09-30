@@ -7,7 +7,7 @@
 #          且 seq 严格递增、核验分析含 analysis 字段
 #       ② GET /api/reviews?subTaskId= 存在 remark=AUTO_REVIEW 记录且 round>=1
 #       ③ 驳回返工场景（reworkCount>0）下对话流出现多轮消息（软断言，LLM 不可控）
-# Ref:  doc/HelloAI_实现差距表.md（V28 执行对话流与核验落库）
+# Ref:  doc/HelloAI 实现差距表.md（V28 执行对话流与核验落库）
 # 前置：同 verify-inner-loop-e2e.ps1（helloai-start 已运行 + LLM 可用 +
 #       auto-review-enabled=true；require-vault=true 时脚本自动绑定托管凭证）
 # 用法（项目根）：

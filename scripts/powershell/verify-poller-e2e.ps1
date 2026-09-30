@@ -1,6 +1,6 @@
 # ============================================================
 # helloai DB Poller end-to-end verifier (v3.1 — T5 降级后 + AgentHub V1 + 主消费路径隔离)
-# Ref:  doc/HelloAI_调度解耦重构分析.md §7 阶段 1
+# Ref:  doc/archive/reference/HelloAI_调度解耦重构分析.md §7 阶段 1
 #       架构设计参考 §5.1 第一阶段
 #
 # T5 起重塑：DB Poller 已从"主消费载体"降级为"孤儿 / 超时 / 补偿兜底"。

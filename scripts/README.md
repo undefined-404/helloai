@@ -8,6 +8,11 @@
 - `powershell/tools/`：脚本共享工具（PgExec.java，JDBC 通道，供 verify-reviewer-dual 等在无 docker psql 时执行 SQL）
 - `sql/`：一次性数据回填 SQL
 - `shell/.tmp/`：E2E 运行期日志与临时产物，已被根 `.gitignore`（`.tmp/`）覆盖，不入库
+- `powershell/logs/`：脚本运行期日志与 jar 解包残留，已由根 `.gitignore`（`scripts/powershell/logs/`）覆盖，不入库
+
+> **脚本头注释里的「规则 N」**（如「规则 6：脚本 UTF-8 编码 + PS 5.1 单引号 + 拼接」）出自**本地 preflight 技能**
+>（`.agents/` / `.qoder/` 下的 `helloai-preflight`，属本地产物、不入仓 2026-09-30）——仓库内没有对应文件，
+> 按注释所述纪律执行即可，不必去找文件。2026-09-30 治理时已把脚本头里的死路径替换为「本地 preflight 技能」字样。
 
 ## 一、验收脚本（verify-*，57 ps1 + 19 sh）
 

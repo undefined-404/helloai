@@ -10,8 +10,8 @@
 #   P3 执行记录：agent_execution_record 无 RUNNING 滞留（markSuccess/markFailed 无遗漏）
 # 通道策略：本机有 psql 客户端时自动执行断言；否则将探针落盘 .tmp\c3-events-probe.sql，
 #      提示用会话内 MCP（postgres_helloai_dev）执行（预研统一约束：只读 SQL 走 MCP）。
-# Ref:  doc/design/HelloAI_Phase0_C3_双轨切换预研.md（六章验收标准 3/4/5）
-#       .qoder/skills/helloai-preflight/SKILL.md（规则 6：UTF-8 头 + 单引号拼接）
+# Ref:  doc/archive/implemented/HelloAI_Phase0_C3_双轨切换预研.md（六章验收标准 3/4/5）
+#       本地 preflight 技能（规则 6：UTF-8 头 + 单引号拼接）
 # 前置：后端已启动连 dev 库；dest 库 = dev（39.106.204.43:15432）；c3gs 灰度样本已存在。
 # 用法（项目根）：
 #   powershell -ExecutionPolicy Bypass -File .\scripts\powershell\verify-c3-events.ps1

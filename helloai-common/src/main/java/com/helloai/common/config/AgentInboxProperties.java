@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
  * 未读消息软删（{@code is_archived = 1}），消除 V1 建表以来 {@code expire_time}
  * 零读零写、unread 消息无限堆积的死置问题。</p>
  *
- * <p>统一口径（doc/design/HelloAI_Phase2_A3_消息生命周期执行方案.md §3）：
+ * <p>统一口径（doc/archive/implemented/HelloAI_Phase2_A3_消息生命周期执行方案.md §3）：
  * 通知类载体（inbox）无 Claim/Retry/Reassign——「超时未消费 → 重新分派」由子任务层
  * 承担（{@code AssignedSubTaskTimeoutTask}）；inbox 自身的过期只做归档软删，
  * 保留审计查询能力（fail-close：不丢数据）。</p>

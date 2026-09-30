@@ -13,8 +13,8 @@
 #                    (trends/defectDistributions/reworkRounds/reviewers)
 #   S6 window guard: days=0 and days=-7 still return 200 (server default 30)
 # Mode: -Scene S1|S2|S3|S4|S5|S6|all (default all)
-# Ref: doc/log/HelloAI_迭代执行记录.md (Phase 5)
-#      .qoder/skills/helloai-preflight/SKILL.md (rule 6: UTF-8 BOM + single-quote concat)
+# Ref: doc/log/2026-09.md (Phase 5)
+#      本地 preflight 技能 (rule 6: UTF-8 BOM + single-quote concat)
 # Preconditions: docker compose up -d; helloai-start running at :6565.
 # Usage (repo root, PowerShell 5.1):
 #   powershell -ExecutionPolicy Bypass -File .\scripts\powershell\verify-quality-dashboard.ps1

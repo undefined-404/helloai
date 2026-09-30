@@ -19,8 +19,8 @@
 # Mode:
 #   -Scene S1|S2|S3|all (default all). S2/S3 reuse S1 presets; S3 uses S1 approved record
 #     when present, otherwise presets its own APPROVED record via direct SQL (S5 precedent).
-# Ref: doc/HelloAI_迭代执行记录.md (Phase 4 反馈回路: Reviewer 双审 + 抽检)
-#      .qoder/skills/helloai-preflight/SKILL.md (rule 6: UTF-8 BOM + single-quote concat)
+# Ref: doc/log/2026-09.md (Phase 4 反馈回路: Reviewer 双审 + 抽检)
+#      本地 preflight 技能 (rule 6: UTF-8 BOM + single-quote concat)
 # Preconditions: helloai-start running at :6565 with Phase 4 assembly (V57 migration applied);
 #                SQL channel: docker compose up -d (helloai-postgres:15432) OR JDBC fallback
 #                (JAVA_HOME + maven postgresql jar + scripts/powershell/tools/PgExec.java;

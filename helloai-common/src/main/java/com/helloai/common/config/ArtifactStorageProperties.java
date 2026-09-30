@@ -9,7 +9,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>执行成功后由 {@code ExecutionArtifactService} 把 lastExecution.output
  * 物化为附件文件，经 {@code ArtifactStorage} 落盘并注册 attachment 元数据，
- * 详见 {@code doc/design/HelloAI_执行产出物化与结构化多文件产出方案.md}。</p>
+ * 详见 {@code doc/archive/reference/HelloAI_执行产出物化与结构化多文件产出方案.md}。</p>
  *
  * <p>本配置仿 {@link DoorbellProperties} 风格集中管理物化参数，
  * 全部字段带默认值，yml 未配置也可直接运行。</p>

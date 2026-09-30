@@ -1,6 +1,8 @@
 # Skill Capability Package
 
-> 状态：ACTIVE / P1
+> **Status: `Partial`** · **Scope: Skill Capability Package 元数据 + 生命周期（Discover→Resolve→Load→Execute→Validate）；Instructions 结构化未动** · **差距锚点：`G-004`**
+>
+> 最后更新：2026-09-30（**Document V2.1 治理**：补 Status / Scope 头。状态事实源 = [`../HelloAI 实现差距表.md`](../HelloAI%20实现差距表.md)，本文件只声明设计边界，不复述进度）
 
 ## 当前形态
 

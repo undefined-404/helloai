@@ -10,7 +10,7 @@
 #       ⑤ 终稿信息量回归（P2-2，SOFT）：推进至终稿，软断言 description 小节组命中 >= 3、
 #          长度 >= 300、context.requirementPackage 存在（LLM 输出不可控，不 hard fail）
 #       ⑥ abandon 会话清理（已 FINALIZED 时跳过，改提示人工清理测试数据）
-# Ref:  doc/HelloAI_实现差距表.md（V33 结构化选项式需求澄清）
+# Ref:  doc/HelloAI 实现差距表.md（V33 结构化选项式需求澄清）
 # 前置：helloai-start 已运行 + LLM 可用（DEEPSEEK_API_KEY 或 application.yml 默认 key）
 # 用法（项目根）：
 #   powershell -File .\scripts\powershell\verify-requirement-clarify-structured.ps1

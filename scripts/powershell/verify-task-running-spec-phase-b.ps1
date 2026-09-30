@@ -8,7 +8,7 @@
 #       5. DB 验证：V36 表已建；running_spec 行 baseline+contextSummary 非空；
 #          execution_record 行数 = 子任务数；UNIQUE INDEX 防重复 insert
 #       6. 日志验证：TaskRunningSpecDataMigrator 已触发
-# Ref:  doc/HelloAI_实现差距表.md（V36 + Phase B）
+# Ref:  doc/HelloAI 实现差距表.md（V36 + Phase B）
 # 前置：docker compose up -d（postgres:15432）；mvn package 已产出 helloai-start jar；
 #       DEEPSEEK_API_KEY 已配置（或使用 application.yml 默认）。
 # 用法（项目根）：

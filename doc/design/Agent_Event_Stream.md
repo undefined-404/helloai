@@ -1,6 +1,8 @@
 # Agent Event Stream
 
-> 状态：ACTIVE / P0
+> **Status: `Partial`** · **Scope: Run / Turn / Step 事件契约与消费体系（写侧 + Replay + Audit 读侧）** · **差距锚点：`G-001`**
+>
+> 最后更新：2026-09-30（**Document V2.1 治理**：补 Status / Scope 头。状态事实源 = [`../HelloAI 实现差距表.md`](../HelloAI%20实现差距表.md)，本文件只声明设计边界，不复述进度）
 
 ## 目标
 

@@ -14,8 +14,8 @@
 #       S10 Agent 角色唯一性（同角色同模型冲突 / 跨角色不冲突 / 同角色不同模型不冲突）
 #       S11 清理（删除测试 Agent + Provider）
 # Ref:  .qoder/plans/LLM供应商模型多选配置重构_d80b193e.md (Phase 2/5)
-#       执行记录 doc/log/HelloAI_迭代执行记录.md (V49)
-#       .agents/helloai-preflight/SKILL.md (规则 6：脚本 UTF-8 编码)
+#       执行记录 doc/log/2026-09.md (V49)
+#       本地 preflight 技能 (规则 6：脚本 UTF-8 编码)
 # 前置：docker compose up -d（helloai-postgres / redis / rabbitmq）；
 #       mvn package 已产出最新 jar；后端可访问 localhost:6565。
 # 用法（项目根）：

@@ -29,7 +29,7 @@ Add-Type -AssemblyName System.Net.Http
 
 $base       = "http://localhost:6565"
 $scriptDir  = "E:\yhzx\1027\helloai"
-$skillFile  = Join-Path $scriptDir "helloai-core\src\main\resources\skills\executor\SKILL.md"
+$skillFile  = Join-Path $scriptDir "helloai-core/src/main/resources/onboarding/executor/guide.md"
 
 $passCount = 0
 $failCount = 0

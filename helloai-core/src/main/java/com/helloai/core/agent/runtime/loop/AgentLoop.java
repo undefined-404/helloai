@@ -10,7 +10,7 @@ package com.helloai.core.agent.runtime.loop;
  * <p>与 Runtime 边界一致：不依赖 Planner / Scheduler / Reviewer / Task Service；
  * provider 无关（只依赖 spring-ai ChatModel 契约），具体模型行为由调用方注入。</p>
  *
- * <p>第一阶段不要求一次完成完整 Tool Loop（design/Agent_Runtime.md）——单轮无工具调用
+ * <p>第一阶段不要求一次完成完整 Tool Loop（doc/design/Agent_Runtime.md）——单轮无工具调用
  * 即正常终态；工具循环由实现按 maxIterations 硬上限保证终止。</p>
  */
 public interface AgentLoop {

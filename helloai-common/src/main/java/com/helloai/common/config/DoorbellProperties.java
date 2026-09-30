@@ -13,7 +13,7 @@ import org.springframework.stereotype.Component;
  * 常驻 daemon（官方插件 / CLI 包装器）落地后可复用本通道。</p>
  *
  * <p>门铃是"服务端 → 外部 Agent"的单向 SSE 长连接，只推送轻量唤醒信号，
- * 不承载任务正文，详见 {@code doc/HelloAI_门铃通知通道设计.md}。</p>
+ * 不承载任务正文，详见 {@code doc/archive/legacy/HelloAI_门铃通知通道设计.md}。</p>
  *
  * <p>本配置集中管理门铃运行参数，仿 {@link AgentExecutionProperties} 风格，
  * 避免连接超时、保活间隔等散落在业务代码里。</p>

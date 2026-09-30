@@ -2,7 +2,7 @@
 # helloai MCP M5 end-to-end business loop verifier v10
 # 用途：MCP-over-SSE 完整业务闭环 E2E（登录/建 Agent/建 Task/SubTask ->
 #       heartbeat/pullTasks/claim/uploadArtifact/ack/submit/complete 全链路）。
-# Ref: doc/HelloAI_实现差距表.md (N3 MCP Server 工具集 / N6 执行命令消费与结果回写)
+# Ref: doc/HelloAI 实现差距表.md (N3 MCP Server 工具集 / N6 执行命令消费与结果回写)
 #      v2.5 roadmap sec 3.13 / appendix E.3 M5 / appendix F.5（历史路线图，仅溯源）
 # Stages:
 #   A) admin login                                  -> adminToken

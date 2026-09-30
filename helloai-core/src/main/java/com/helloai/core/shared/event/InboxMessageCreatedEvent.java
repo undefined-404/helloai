@@ -11,7 +11,7 @@ import lombok.Getter;
  *
  * <p>三条通知路径（TaskController 直发 / SubTaskService 状态流转 / MQ NotificationConsumer）
  * 都收口于 {@code send()}，故在此一处发事件即可覆盖全部，无需逐路径接线
- * （见 {@code doc/HelloAI_门铃通知通道设计.md} §7）。</p>
+ * （见 {@code doc/archive/legacy/HelloAI_门铃通知通道设计.md} §7）。</p>
  *
  * <p>事件只携带响铃所需的最小字段——门铃只送"有事了"的轻量信号，不含正文，
  * Agent 收到后自行走 MCP {@code pullTasks} 取内容。</p>

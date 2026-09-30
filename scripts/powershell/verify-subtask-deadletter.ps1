@@ -7,7 +7,7 @@
 #       （每次调用入口 checkReassignCircuitBreaker 均累加 reassign_attempt_count，
 #         无论本次改派本身成败）→ 达阈值转 DEAD_LETTER → 人工兜底指派目标 Agent
 #       → 断言 ASSIGNED 且计数清零。
-# Ref:  doc/HelloAI_实现差距表.md（V24 重分配熔断 / V25 死信兜底）
+# Ref:  doc/HelloAI 实现差距表.md（V24 重分配熔断 / V25 死信兜底）
 # 前置：helloai-start 已在 6565 运行；helloai.dispatch.max-reassign-attempts=5（默认）。
 # 用法（项目根）：
 #   powershell -File .\scripts\powershell\verify-subtask-deadletter.ps1

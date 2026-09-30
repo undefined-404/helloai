@@ -9,7 +9,7 @@
 #        支持 -WindowMinutes 限定当前档位窗口（档位切换后历史样本按旧档位命中，全量占比会被稀释）
 #   S3 有 psql 自动执行断言（cmd /c type 透传原始字节，规则 6），否则提示会话内 MCP 执行核对
 #   S4 汇总；配置/探针侧 FAIL>0 才 exit 1；DB 侧无 psql 时由 MCP 核对后回填判定
-# Ref:  doc/design/HelloAI_Phase0_C3_双轨切换预研.md（六章验收标准 1/3；七章脚本表）
+# Ref:  doc/archive/implemented/HelloAI_Phase0_C3_双轨切换预研.md（六章验收标准 1/3；七章脚本表）
 # 口径：route 观察点 = task_timeline event_type='sub_task_execution_command_consume'
 #       AND payload->>'route'='agent_runtime'（LocalExecutionCommandConsumer.runViaRuntime 写入；
 #       未命中旧直连路径不写 route 字段，故反侧断言可行）

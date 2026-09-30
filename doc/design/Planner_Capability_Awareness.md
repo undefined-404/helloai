@@ -1,5 +1,9 @@
 # HelloAI 专项设计：Planner 能力感知与自适应粒度
 
+> **Status: `Implemented`** · **Scope: Planner 拆解侧能力感知与自适应粒度（技能目录注入 / 子任务级 requiredSkills+constraints / FINE·STANDARD·COARSE 三档）；不含技能回流 DB 化（D5-3）** · **差距锚点：`G-010`**
+>
+> 最后更新：2026-09-30（**Document V2.1 治理**：补 Status / Scope 头。状态事实源 = [`../HelloAI 实现差距表.md`](../HelloAI%20实现差距表.md)，本文件只声明设计边界，不复述进度）
+
 > 主轴：让 Planner 拆解从「能力真空中的通用常识拆解」升级为「能力感知的专业拆解」——拆解侧注入技能目录、指派子任务级技能、按执行者画像与任务难度自适应调节 Plan 粒度。
 >
 > 定位：G-004 增量 A/B（requiredTools 联动 + 任务级技能透传）之后的拆解侧深化批次。设计依据 2026-09-09 代码事实核查（见 §0.2）。

@@ -15,7 +15,7 @@ import org.springframework.stereotype.Component;
  * 批量软删（{@code is_archived = 1}）。消除 V1 建表以来 {@code expire_time}
  * 零读零写、unread 消息无限堆积、永被 pullTasks 重投的死置问题。</p>
  *
- * <p>统一口径（doc/design/HelloAI_Phase2_A3_消息生命周期执行方案.md §3）：
+ * <p>统一口径（doc/archive/implemented/HelloAI_Phase2_A3_消息生命周期执行方案.md §3）：
  * 通知类载体无 Claim/Retry/Reassign——「超时未消费 → 重新分派」由子任务层承担
  * （{@link AssignedSubTaskTimeoutTask}，ASSIGNED 10min 未认领即重派）；本任务只做
  * inbox 自身的过期卫生。归档即软死信：不删数据，保留审计查询能力（fail-close）。</p>

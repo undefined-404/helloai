@@ -8,7 +8,7 @@
 #   S3 executor Agent 在线数：admin 登录 -> /api/agents/list，
 #      统计 role=EXECUTOR 且 ACTIVE 且（内部 LLM 豁免在线/心跳 或 外部在线+心跳新鲜）>= 1
 #   S4 灰度配置：application.yml gray-percent == 期望值（Step 4 用 100）
-# Ref: doc/design/HelloAI_Phase0_C3_双轨切换预研.md（七章验收脚本表）
+# Ref: doc/archive/implemented/HelloAI_Phase0_C3_双轨切换预研.md（七章验收脚本表）
 #      doc/log/2026-09.md（LOG-20260902-011 预检落地 / LOG-20260903-012 Step 4 全量档）
 # 用法（项目根）：
 #   ./scripts/shell/verify-c3-env.sh                 # 默认期望 gray=100（恒 100% 无灰度分支）

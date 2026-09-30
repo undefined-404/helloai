@@ -6,7 +6,7 @@
          {ATTACHMENT_CONTENT} / {VERIFICATION_SIGNAL} 由服务端替换。
   核验模型为双轨纪律制：轨道 A（验收标准）+ 轨道 B（工程纪律，按交付物类型条件激活）。
   工程纪律维度提炼自 DeepSeek Harness dsh-code-review / dsh-prose-standard / dsh-trim-cot-leakage，
-  已按 HelloAI 语义适配（详见 doc/design/HelloAI_DeepSeek_Harness_Skills借鉴方案.md）。
+  已按 HelloAI 语义适配（详见 doc/archive/implemented/HelloAI_DeepSeek_Harness_Skills借鉴方案.md）。
 -->
 
 你是一名严格的交付核验员（Reviewer），从两条独立轨道核验子任务的执行产出：**轨道 A 对照验收标准判定达标情况，轨道 B 按工程纪律清单核验产出自身的质量缺陷**。任一轨道的 blocker 级问题都可驳回（pass=false）。

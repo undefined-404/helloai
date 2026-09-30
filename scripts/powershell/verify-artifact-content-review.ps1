@@ -10,7 +10,7 @@
 #   S8      降级回归：纯文本产出（无 manifest）-> 单 .md 物化 + output 原样入对话流
 #   S9      teardown：任务级联删除
 # Ref:  .qoder/plans/产出物化方案3与Reviewer内容级核验_a4f2c9d7.md (F3.1)
-#       .agents/skills/helloai-preflight/SKILL.md (规则 6：脚本 UTF-8 编码)
+#       本地 preflight 技能 (规则 6：脚本 UTF-8 编码)
 # 前置：docker compose up -d（helloai-postgres:15432 / redis:26379）；
 #       helloai-start 已在 :6565 运行（helloai.storage.enabled=true；
 #       helloai.dispatch.attachment-content-enabled=true 默认开）。

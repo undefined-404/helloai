@@ -8,7 +8,7 @@
 #       POST /api/tasks/confirmPlanByTaskId/{id}  转正 + 环校验 + 序号→id 映射落库
 #       （后台）依赖 ready 放行 → 自动执行 → submit(REVIEW) → 自动核验 → DONE
 #       （后台）complete 后解锁下游 → 全部 DONE 后 Task 自动 DONE
-# Ref:  doc/HelloAI_实现差距表.md（V27 内循环最小流程）
+# Ref:  doc/HelloAI 实现差距表.md（V27 内循环最小流程）
 # 前置：helloai-start 已在 6565 运行；helloai.providers 已配置可用 LLM；
 #       helloai.dispatch.auto-review-enabled=true（默认开启）。
 #       helloai.execution.require-vault=true 时凭证必须绑定在 Agent 上，

@@ -76,6 +76,12 @@ tmp/
 .dbg/
 # --- Qoder IDE 缓存（plans / skills 缓存目录，不入仓） ---
 .qoder/
+# --- 其他 AI 编程工具本地目录（skills / hooks / plans / repowiki 均为本地产物，不入仓 2026-09-30）---
+# 说明：.qoder/ 于 2026-09-30 之前已列入本文件但未执行 git rm --cached，
+#       导致 clone 仍然携带；本次四类目录统一 untrack（文件保留在本地工作区）。
+.agents/
+.claude/
+.cursor/
 # --- impeccable 工具缓存（critique 快照等本地产物，不入仓） ---
 .impeccable/
 # --- Executor 值班脚本运行时配置（含真实 apiKey / agentId，勿入库） ---
@@ -104,3 +110,11 @@ tools/
 # --- Executor 配置文件（含真实 apiKey，一律不入仓 2026-09-29 安全修复）---
 # 原名 executor-config.public.json 具有误导性，实际含真实 Agent Key，扩展为通配
 scripts/powershell/executor-config*.json
+
+# --- 本地 AI 技能安装器锁文件与安装目录（仅仓库根，勿用裸 skills/ —— 会误伤
+#     helloai-core/src/main/resources/skills/ 下的运行时能力包 2026-09-30）---
+/skills-lock.json
+/skills/
+
+# --- scripts 运行日志与 jar 解包残留（本地产物，不入仓 2026-09-30）---
+scripts/powershell/logs/

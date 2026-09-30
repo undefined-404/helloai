@@ -1,6 +1,6 @@
 # 外部执行者值班与任务执行手册 · 顶层契约
 
-来源标记（全文通用）：`SKILL§X` = 仓库内 `helloai-core/src/main/resources/skills/executor/SKILL.md` 第 X 节；`代码:文件` = 仓库源码（路径相对项目根）；`实测` = 对本地平台实例的真实调用；`[待确认]` = 平台现有材料无法确证的条目。完整规则见 §9。
+来源标记（全文通用）：`SKILL§X` = 仓库内 `helloai-core/src/main/resources/onboarding/executor/guide.md` 第 X 节；`代码:文件` = 仓库源码（路径相对项目根）；`实测` = 对本地平台实例的真实调用；`[待确认]` = 平台现有材料无法确证的条目。完整规则见 §9。
 
 ## 1. 五类交互契约速查（下游章节直接引用）
 
@@ -303,7 +303,7 @@ REST 辅助端点（查询/兜底，非执行工具）：
 
 | 来源标记 | 含义 |
 |---|---|
-| `SKILL§X` | 仓库内 `helloai-core/src/main/resources/skills/executor/SKILL.md` 第 X 节（平台下发给外部执行者的权威说明书） |
+| `SKILL§X` | 仓库内 `helloai-core/src/main/resources/onboarding/executor/guide.md` 第 X 节（平台下发给外部执行者的权威说明书） |
 | `代码:文件` | 仓库源码，路径相对项目根 |
 | `实测` | 本子任务对本地平台实例真实调用的观测结果，原始证据见交付记录的 VERIFICATION 区 |
 | `[待确认]` | 该项无法从平台现有材料确证，语义与义务见 §9.3 |

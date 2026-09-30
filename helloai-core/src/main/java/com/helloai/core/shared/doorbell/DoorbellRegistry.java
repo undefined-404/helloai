@@ -13,7 +13,7 @@ import java.util.function.BiConsumer;
  *
  * <p>维护 {@code agentId → SseEmitter} 的进程内映射，是门铃能"定位某个 Agent 的长连接
  * 并主动响铃"的核心——这正是 spring-ai MCP 传输层封装掉、业务侧拿不到的能力
- * （见 {@code doc/HelloAI_门铃通知通道设计.md} §4.3）。</p>
+ * （见 {@code doc/archive/legacy/HelloAI_门铃通知通道设计.md} §4.3）。</p>
  *
  * <p>设计取舍，仿 {@link com.helloai.core.agent.mcp.McpAuthContext}：</p>
  * <ul>

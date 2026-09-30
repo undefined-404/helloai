@@ -1,6 +1,8 @@
 # Sandbox Provider
 
-> 状态：ACTIVE / P1
+> **Status: `Planned`** · **Scope: 执行环境隔离 Provider 契约（文件 / 网络 / 进程 / 资源 / 凭证五边界）；当前仅契约，无真实隔离** · **差距锚点：`G-005`**
+>
+> 最后更新：2026-09-30（**Document V2.1 治理**：补 Status / Scope 头。状态事实源 = [`../HelloAI 实现差距表.md`](../HelloAI%20实现差距表.md)，本文件只声明设计边界，不复述进度）
 
 ## 目标
 

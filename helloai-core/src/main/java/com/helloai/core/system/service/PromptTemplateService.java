@@ -47,8 +47,8 @@ public interface PromptTemplateService extends IService<PromptTemplate> {
     String compose(String role, String agentSpecificContent);
 
     /**
-     * 获取 Agent 的 SKILL.md（从文件系统读取 + 运行时变量替换）。
-     * 文件路径: resources/skills/{role}/SKILL.md
+     * 获取 Agent 的角色接入手册（从文件系统读取 + 运行时变量替换）。
+     * 文件路径: resources/onboarding/{role}/guide.md
      */
     String getSkillForAgent(String role, String apiKey, String baseUrl, String agentName, Long agentId);
 

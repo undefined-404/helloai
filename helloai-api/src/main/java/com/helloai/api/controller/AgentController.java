@@ -256,20 +256,20 @@ public class AgentController {
         // 外网地址统一解析：sys_config（设置页可写）> yml > 请求推导 > localhost 兜底
         String baseUrl = agentBaseUrlResolver.resolve(request);
 
-        // 从文件系统读取 SKILL 内容
+        // 从文件系统读取角色接入手册（onboarding/{role}/guide.md）
         try {
             String content = promptTemplateService.getSkillForAgent(
                     agent.getRole().name(), apiKey, baseUrl, agent.getName(), agent.getId());
             return R.ok(Map.of("role", role, "content", content));
         } catch (Exception e) {
-            log.warn("获取 SKILL 失败，回退到文件: role={}", role, e);
+            log.warn("获取角色接入手册失败，回退到文件: role={}", role, e);
         }
 
         // 文件兜底（jar 兼容）
         try {
-            ClassPathResource resource = new ClassPathResource("skills/" + role + "/SKILL.md");
+            ClassPathResource resource = new ClassPathResource("onboarding/" + role + "/guide.md");
             if (!resource.exists()) {
-                return R.fail("未找到 " + role + " 角色的 SKILL.md");
+                return R.fail("未找到 " + role + " 角色的接入手册");
             }
             String content;
             try (InputStream in = resource.getInputStream()) {
@@ -285,7 +285,7 @@ public class AgentController {
                     "content", content
             ));
         } catch (IOException e) {
-            log.error("读取 SKILL.md 失败", e);
+            log.error("读取角色接入手册（guide.md）失败", e);
             return R.fail("读取技能文件失败");
         }
     }

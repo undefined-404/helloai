@@ -194,7 +194,7 @@ public interface McpToolService {
          * 贡献者 Agent ID 清单（P1-7 产出归属可见性）：执行记录 ∪ 当前执行者，去重保序（当前执行者优先）。
          *
          * <p>供「独立验证」类任务在认领前自评利益冲突（平台暂不强制校验冲突，仅提供可见性；
-         * 详见 doc/design/HelloAI_外部Agent执行通道缺陷修复方案 §C-6）。</p>
+         * 详见 doc/archive/implemented/HelloAI_外部Agent执行通道缺陷修复方案 §C-6）。</p>
          */
         private List<Long> contributors;
     }

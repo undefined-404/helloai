@@ -1,9 +1,9 @@
 ﻿# ============================================================
 # helloai AgentHub V1 P0 (checkIn / checkOut / DutyLeaseExpiration) real-env e2e
 # Ref:
-#   doc/HelloAI_迭代执行记录.md  (AgentHub V1 P0)
-#   doc/HelloAI_实现差距表.md   (N12)
-#   .agents/skills/helloai-preflight/SKILL.md   (规则 6：脚本 UTF-8 编码)
+#   doc/log/2026-09.md  (AgentHub V1 P0)
+#   doc/HelloAI 实现差距表.md   (N12)
+#   本地 preflight 技能   (规则 6：脚本 UTF-8 编码)
 #
 # 覆盖三个真实环境场景（IDEA 启动后端 + docker compose 起 postgres / redis / rabbitmq）：
 #   S1  MCP-over-SSE tools/call checkIn      -> agent_duty_lease 出现 status=ACTIVE 行

@@ -12,9 +12,9 @@
 #      lastSeenAt 心跳新鲜（默认 5min，对齐 AgentSelector.isHeartbeatFresh
 #      的 offlineMinutes 语义）>= 1（灰度前置：注册一律人工，脚本不代注册）
 #   S4 汇总：FAIL=0 才 exit 0（ALL PASSED - 可进入灰度）
-# Ref:  doc/design/HelloAI_Phase0_C3_双轨切换预研.md (7 章验收脚本表)
+# Ref:  doc/archive/implemented/HelloAI_Phase0_C3_双轨切换预研.md (7 章验收脚本表)
 #       doc/log/2026-09.md (LOG-20260902-010 C3 Step 0 落地）
-#       .agents/skills/helloai-preflight/SKILL.md (规则 6：脚本 UTF-8 编码)
+#       本地 preflight 技能 (规则 6：脚本 UTF-8 编码)
 # 前置：后端已启动（IDEA/jar 均可，连 dev 库）；日志目录存有 helloai.log。
 # 用法（项目根）：
 #   powershell -ExecutionPolicy Bypass -File .\scripts\powershell\verify-c3-env.ps1

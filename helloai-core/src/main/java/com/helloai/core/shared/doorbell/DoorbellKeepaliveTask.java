@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>周期性向本进程 {@link DoorbellRegistry} 中所有活跃 {@code SseEmitter} 广播一帧
  * {@code keepalive}，穿透 Nginx / 反代的空闲连接超时（通常 60s 无数据即断），
- * 让门铃长连接不被中间层提前切断（设计 {@code doc/HelloAI_门铃通知通道设计.md} §6.2）。</p>
+ * 让门铃长连接不被中间层提前切断（设计 {@code doc/archive/legacy/HelloAI_门铃通知通道设计.md} §6.2）。</p>
  *
  * <p><b>本地无锁、每实例都跑</b>：这与 {@code DutyLeaseExpirationTask} 的 Redis 选主锁
  * 模式<b>相反</b>。门铃连接是进程内状态，某个 Agent 的连接只落在持有它的那个实例上，

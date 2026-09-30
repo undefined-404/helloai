@@ -10,7 +10,7 @@
 #      -> .tmp\c3-reconcile-probe.sql；本机有 psql 时自动执行并断言，
 #         否则提示用会话内 MCP（postgres_helloai_dev）执行核对
 #   S4 汇总：日志检查 FAIL>0 才 exit 1；DB 侧由 MCP 核对后回填判定
-# Ref:  doc/design/HelloAI_Phase0_C3_双轨切换预研.md（六章验收标准 2/4；七章脚本表）
+# Ref:  doc/archive/implemented/HelloAI_Phase0_C3_双轨切换预研.md（六章验收标准 2/4；七章脚本表）
 #       预研统一约束：只读 SQL 走 MCP，DB 写操作仅提供 SQL 由用户执行
 # 前置：后端已启动连 dev 库；helloai.log 存在。
 # 用法（项目根）：

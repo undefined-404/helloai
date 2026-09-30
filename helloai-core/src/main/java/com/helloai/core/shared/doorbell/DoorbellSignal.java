@@ -10,7 +10,7 @@ import java.time.OffsetDateTime;
  *
  * <p>门铃只送"有事了"的轻量唤醒信号，<b>不含任务正文</b>：Agent 收到后自行走
  * MCP {@code pullTasks} 获取内容。因此即便门铃信号丢失，也不丢信息——这与
- * {@code doc/HelloAI_门铃通知通道设计.md} §8 的契约一致。</p>
+ * {@code doc/archive/legacy/HelloAI_门铃通知通道设计.md} §8 的契约一致。</p>
  *
  * <p>字段刻意最小化：{@code type} 决定客户端动作，{@code eventType/refType/refId}
  * 仅供日志与去抖，客户端约定"收到 {@code type=inbox} 即调用 pullTasks"。</p>

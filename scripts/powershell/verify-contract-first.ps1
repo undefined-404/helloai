@@ -12,8 +12,8 @@
 # Mode:
 #   -Scene S1|S2|S3|S4|all (default all)
 #     NOTE: S3 depends on S2 backfilled contract.
-# Ref: doc/HelloAI_迭代执行记录.md (Phase 2 contract-first)
-#      .qoder/skills/helloai-preflight/SKILL.md (rule 6: UTF-8 BOM + single-quote concat)
+# Ref: doc/log/2026-09.md (Phase 2 contract-first)
+#      本地 preflight 技能 (rule 6: UTF-8 BOM + single-quote concat)
 # Preconditions: docker compose up -d (helloai-postgres:15432);
 #                helloai-start running at :6565;
 #                Flyway V54/V55/V56 applied.

@@ -14,8 +14,8 @@
 # 约定（对齐既有 scripts/shell/verify-dashboard-duty-leases.sh）：
 #   - 由入口脚本先设置 SCRIPT_DIR / PROJECT_ROOT 再 source 本文件；
 #   - 不用 `set -e`：验收脚本需在断言失败后继续跑并累计 FAIL（对齐 ps1 Continue 语义）。
-# Ref: .agents/skills/helloai-preflight/SKILL.md (规则 6：脚本 UTF-8 编码头)
-#      doc/design/HelloAI_Phase0_C3_双轨切换预研.md (七章验收脚本表)
+# Ref: 本地 preflight 技能 (规则 6：脚本 UTF-8 编码头)
+#      doc/archive/implemented/HelloAI_Phase0_C3_双轨切换预研.md (七章验收脚本表)
 # ============================================================
 
 # ------------------------------------------------------------

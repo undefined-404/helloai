@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
  * 的凭证批量置为 EXPIRED（激活 V14 建表以来 {@code expireTime} 死字段），
  * 让到期凭证自动退出路由（{@code getActive*} 只查 ACTIVE）。</p>
  *
- * <p>清理策略口径（doc/design/HelloAI_Phase2_B2_CredentialVault收口执行方案.md §3.2）：
+ * <p>清理策略口径（doc/archive/implemented/HelloAI_Phase2_B2_CredentialVault收口执行方案.md §3.2）：
  * 过期/停用凭证不物理删除，仅状态隔离 + 审计保留（fail-close），物理清理留未来容量治理。</p>
  */
 @Data

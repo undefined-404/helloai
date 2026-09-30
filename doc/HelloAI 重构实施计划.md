@@ -102,7 +102,9 @@ Legacy    Runtime
 
 ## 现状基线（2026-09-07 代码核查）
 
-契约层已是单轨：`LocalExecutionCommandConsumer` 与 `MqExecutionCommandConsumer`（委托本地消费）统一经 `AgentRuntime#execute`——唯一执行契约，旧直连执行链已下线；`LegacyExecutorAdapter` 转发旧链（SubTaskExecutionService）。
+> **订正（2026-09-30，G-002 单轨硬切）**：本行以下、含 P0-B / P0-B-2 / 「灰度第 0 步」各段，均为 **2026-09-07~09-08 的历史过程记录**，保留用于追溯。旧链入口（`LegacyExecutorAdapter` / `RuntimeAgentRuntimeRouter` / `TurnLlmCaller` / `TurnLlmCallContext`）与 `runtime-enabled` / `v2-enabled` / `gray-percent` 开关**已于 2026-09-30 全部删除**；`RuntimeTurnExecutor` 为唯一 `AgentRuntime` 实现。**灰度机制不复存在**，「迁移节奏 100% Legacy → … → Runtime 主路径」已直接终结于最后一步；回退手段为 `git revert`。
+
+契约层已是单轨：`LocalExecutionCommandConsumer` 与 `MqExecutionCommandConsumer`（委托本地消费）统一经 `AgentRuntime#execute`——唯一执行契约，旧直连执行链已下线。
 
 即当前 100% 流量经 Runtime 契约、0% Runtime 真身。本阶段实际工作不是"建轨"，而是：① 让 Runtime 侧长出真身（能力提取见 P0-C）；② 真身可用后补 Legacy ↔ Runtime 灰度切换与回滚口径。
 

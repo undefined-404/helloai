@@ -176,7 +176,6 @@ AgentRuntime
 AgentExecutionResult
 ExecutionEnvironment
 ExecutionEnvironmentProvider
-LegacyExecutorAdapter
 ToolExecutor
 ToolExecutionResult
 AgentLoop
@@ -186,18 +185,17 @@ SandboxProvider
 SandboxContext
 Sandbox
 ExecutionPolicy
-RuntimeTurnExecutor
-RuntimeAgentRuntimeRouter
+RuntimeTurnExecutor          ← 唯一 AgentRuntime 实现
 ```
 
 当前含义：
 
-- `AgentRuntime` 已成为统一执行契约；
-- 旧 Executor 已通过 Adapter 与新执行入口衔接；
-- Runtime 已开始承接 Context / Event / Environment 等能力；
+- `AgentRuntime` 已成为统一执行契约，且**实现层已唯一化**；
+- **2026-09-30 单轨硬切（G-002）**：`LegacyExecutorAdapter` / `RuntimeAgentRuntimeRouter` / `TurnLlmCaller` / `TurnLlmCallContext` 与 `runtime-enabled` / `v2-enabled` / `gray-percent` 开关**已全部删除**——不再存在双轨，也不再存在配置级回退开关（回退手段为 `git revert`）。消费链统一由 `LocalExecutionCommandConsumer` 分层编排（startIfNeeded → markRunning CAS → `AgentRuntimeContextAssembler` 装配 → `AgentRuntime#execute` → afterTurn → 终态 CAS → `ExecutionResultHandler` 回写）；
+- `RuntimeTurnExecutor` 是**唯一** `AgentRuntime` 实现（`agentRuntimes.get(0)` 直取，无路由、无排序、无开关）；
 - `ToolExecutor` 已具备执行回路真身（懒加载 spring-ai ToolCallback 目录按名调用，与 ToolRegistry 元数据面同源同构；未知工具 / 空参 / 执行异常 best-effort 返回失败不抛）；
-- `AgentLoop` 已具备手动工具循环真身（`runtime/loop`：ChatModel 契约 + ToolExecutor 执行 + TOOL_CALL 事件，`internalToolExecutionEnabled=false` 由循环接管工具执行，maxIterations 硬上限防死循环；真实 provider tool-calling 已于 2026-09-08 dev 灰度联调通过——真实 DeepSeek 3 轮工具调用成对跑通）；
-- `RuntimeTurnExecutor` 已具备（P0-B：AgentLoop/ToolExecutor/ToolRegistry/Skill/SandboxProvider 组装的 Turn 真身，事件骨架 + 沙箱观测）；`RuntimeAgentRuntimeRouter` 已具备（@Primary + @Order(1)，按 `runtime-enabled` 二进制切换，默认 false=Legacy）；`TurnLlmCaller` 主链接线注入已就位（executeOnce 调用点按同一开关切换 Legacy / Runtime 循环），dev 灰度第 0 步已闭合（真身点亮 / 对账全绿 / 回滚零差异，2026-09-08）。
+- `AgentLoop` 已具备手动工具循环真身（`runtime/loop`：ChatModel 契约 + ToolExecutor 执行 + TOOL_CALL 事件，`internalToolExecutionEnabled=false` 由循环接管工具执行，maxIterations 硬上限防死循环）；**每轮 iteration 边界经 `LoopCheckpointListener` 落 `agent_session.snapshot.loop`**（2026-09-30，同层恢复 checkpoint，零 DDL），`tokenUsage` 逐轮累加并落 `agent_execution_record.token_usage`（V97）；
+- `RuntimeTurnExecutor` 组装 `AgentLoop` / `ToolExecutor` / `ToolRegistry` / `AgentSkillSpecService` / `SandboxProvider`；prompt / chatModel / 会话 / 对话流由 `AgentRuntimeContextAssembler` 装配后注入。
 
 当前仍不能宣称已完成完整 Harness Runtime：
 

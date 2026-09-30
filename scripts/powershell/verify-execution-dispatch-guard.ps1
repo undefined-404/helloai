@@ -6,9 +6,9 @@
 #         G1  consumer-mode=POLLER + consumer-enabled=false  -> 期望 fail-fast
 #         G2  dispatch-mode=MQ     + producer-enabled=false  -> 期望 fail-fast
 #         G3  dispatch-mode=NONE   + consumer-mode=EVENT     -> 期望 /api/health 200
-# Ref:  doc/HelloAI_实现差距表.md      (N6，S6 守卫脚本 = 本文件)
-#       doc/HelloAI_调度解耦重构分析.md (Validator 启动期 fail-fast / consumer-mode 语义)
-#       .agents/skills/helloai-preflight/SKILL.md (规则 6：脚本 UTF-8 编码)
+# Ref:  doc/HelloAI 实现差距表.md      (N6，S6 守卫脚本 = 本文件)
+#       doc/archive/reference/HelloAI_调度解耦重构分析.md (Validator 启动期 fail-fast / consumer-mode 语义)
+#       本地 preflight 技能 (规则 6：脚本 UTF-8 编码)
 # 前置：docker compose up -d 起 helloai-postgres；已 mvn package 出最新 jar。
 # 用法（项目根）：
 #   powershell -ExecutionPolicy Bypass -File .\scripts\powershell\verify-execution-dispatch-guard.ps1

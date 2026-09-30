@@ -10,8 +10,8 @@
 #        不补发 agent_completed 属预期，非事件链缺陷）
 #   P2 终态投影：route=agent_runtime 子任务业务状态 vs 末条事件（B3 五态映射），无 MISMATCH
 #   P3 执行记录：agent_execution_record RUNNING 龄 > STUCK_MINUTES 才判滞留（默认 15min）
-# Ref: doc/design/HelloAI_Phase0_C3_双轨切换预研.md（六章验收标准 3/4/5）
-#      .agents/skills/helloai-preflight/SKILL.md（规则 6：UTF-8 头）
+# Ref: doc/archive/implemented/HelloAI_Phase0_C3_双轨切换预研.md（六章验收标准 3/4/5）
+#      本地 preflight 技能（规则 6：UTF-8 头）
 # 用法（项目根）：
 #   ./scripts/shell/verify-c3-events.sh
 #   DB_HOST=localhost PG_CONTAINER=helloai-postgres ./scripts/shell/verify-c3-events.sh

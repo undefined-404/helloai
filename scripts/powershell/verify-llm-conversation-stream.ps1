@@ -11,7 +11,7 @@
 #   S3: 第二次驳回 -> reviewHistory.length == 2 + 第 2 轮段（自然 LLM 行为，软断言）
 #   S4: 前端构建产物含「执行请求」标签映射（dist 静态检查）
 #   S5: V38 回填兼容验证（DB-only 检查，由调用方用 MCP postgres_helloai 执行 SQL 验证）
-# Ref:  doc/HelloAI_实现差距表.md (§6.41)
+# Ref:  doc/HelloAI 实现差距表.md (§6.41)
 # 前置：
 #   - helloai-start 已运行（默认 6565），LLM 可用，auto-review-enabled=true
 #   - V38 Flyway 迁移已应用

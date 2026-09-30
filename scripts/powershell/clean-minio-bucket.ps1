@@ -8,9 +8,9 @@
 #           - -Prefix：只处理某前缀（如 'admin/2026/09/'），未指定则全桶。
 #   背景：tku-e2e-01 复盘（审计报告 §13）指出「无 MinIO 清桶工具」是清库前置缺口（C-11）。
 # 签名：纯 PowerShell + .NET（SHA256 / HMAC-SHA256 手写 SigV4），零外部依赖（不需要 mc / aws cli）。
-# Ref:  doc/design/HelloAI_执行产出物化与结构化多文件产出方案.md（objectKey 规则）
-#       doc/HelloAI_实现差距表.md（C-11：MinIO 清桶工具）
-#       .agents/skills/helloai-preflight/SKILL.md（规则 6：脚本 UTF-8 编码）
+# Ref:  doc/archive/reference/HelloAI_执行产出物化与结构化多文件产出方案.md（objectKey 规则）
+#       doc/HelloAI 实现差距表.md（C-11：MinIO 清桶工具）
+#       本地 preflight 技能（规则 6：脚本 UTF-8 编码）
 # 前置：Docker 起 helloai-minio（本地 29000；dev 共享实例为 39.106.204.43:29000，见 application-dev.yml）。
 # 用法（项目根）：
 #   powershell -ExecutionPolicy Bypass -File .\scripts\powershell\clean-minio-bucket.ps1

@@ -1,8 +1,8 @@
 ﻿# ============================================================
 # helloai MCP 端 to end v8
 # 用途：MCP-over-SSE 主通道最小连通验证（SSE 建连 + initialize + tools/call 冒烟）。
-# Ref:  doc/HelloAI_实现差距表.md (N3 MCP Server 工具集)
-#       .agents/skills/helloai-preflight/SKILL.md (规则 6：脚本 UTF-8 编码)
+# Ref:  doc/HelloAI 实现差距表.md (N3 MCP Server 工具集)
+#       本地 preflight 技能 (规则 6：脚本 UTF-8 编码)
 # 前置：helloai-start 已在 6565 运行；docker compose 起 postgres。
 # 用法（项目根）：powershell -File .\scripts\powershell\verify-mcp.ps1
 # - SSE: curl -N + Out-File (proven works in v2/v3)

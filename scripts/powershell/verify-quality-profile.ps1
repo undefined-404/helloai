@@ -21,8 +21,8 @@
 # Mode:
 #   -Scene S1|S2|S3|S4|S5|S6|all (default all)
 #     NOTE: S3/S4/S6 depend on S1+S2 profile data; S5 depends on S1+S2.
-# Ref: doc/HelloAI_迭代执行记录.md (Phase 1 反馈回路第 1 层)
-#      .qoder/skills/helloai-preflight/SKILL.md (rule 6: UTF-8 BOM + single-quote concat)
+# Ref: doc/log/2026-09.md (Phase 1 反馈回路第 1 层)
+#      本地 preflight 技能 (rule 6: UTF-8 BOM + single-quote concat)
 # Preconditions: docker compose up -d (helloai-postgres:15432);
 #                helloai-start running at :6565.
 # Usage (repo root, PowerShell 5.1):

@@ -11,7 +11,7 @@
 >
 > 历史变更请记录在：
 >
-> `log/HelloAI 迭代执行记录.md`
+> `doc/log/2026-09.md`
 
 ***
 
@@ -2658,7 +2658,7 @@ B 级集成测试资产（2026-09-29 建立，审计建议 #5）：
 用例：FlywayMigrationIT（迁移全量 apply）/ MqExecutionCommandConsumerIT（幂等消费）
      / AgentCommandOutboxIT（三表同事务 + relay 闭环）/ AgentExecutionRecordCasIT（状态机 CAS）
 门禁：scripts/ci/ci-gate.sh 门禁 5 —— 无 Docker 时输出 [NOT RUN]，不判 FAIL（协作规约 §27）
-约束：外部 LLM 等真实代价边界用 @MockitoBean 隔离（如 LegacyExecutorAdapter），
+约束：外部 LLM 等真实代价边界用 @MockitoBean 隔离（如 RuntimeTurnExecutor / ChatModel），
      DB / Redis / MQ / 事务本体必须真实；禁用裸 sleep 等待，用 awaitUntil 轮询。
 ```
 

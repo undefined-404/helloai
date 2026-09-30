@@ -9,7 +9,7 @@
 #       POST /api/tasks/confirmPlanByTaskId/{id}  草案转正 PENDING（Task → IN_PROGRESS，
 #                                                按 autoAssignOnCreate 触发分发链）
 #       POST /api/tasks/rejectPlanByTaskId/{id}   草案翻 CANCELLED（Task 回退 PENDING）
-# Ref:  doc/HelloAI_实现差距表.md（V26 Planner 平台内拆解）
+# Ref:  doc/HelloAI 实现差距表.md（V26 Planner 平台内拆解）
 # 前置：helloai-start 已在 6565 运行；helloai.providers 已配置可用 LLM（deepseek）。
 #       脚本自动注册 role=PLANNER + accessType=API_KEY_LLM 的 Agent 供拆解使用。
 # 用法（项目根）：

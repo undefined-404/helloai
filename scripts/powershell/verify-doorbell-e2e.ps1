@@ -1,10 +1,10 @@
 # ============================================================
 # helloai AgentHub V3 门铃通知通道 PR-3 real-env e2e
 # Ref:
-#   doc/HelloAI_门铃通知通道设计.md        (PR-3 值班鉴权收口 + 兜底验证)
-#   doc/HelloAI_迭代执行记录.md            (AgentHub V3 门铃)
-#   doc/HelloAI_实现差距表.md              (N13)
-#   .agents/skills/helloai-preflight/SKILL.md  (规则 6：脚本 UTF-8 编码)
+#   doc/archive/legacy/HelloAI_门铃通知通道设计.md        (PR-3 值班鉴权收口 + 兜底验证)
+#   doc/log/2026-09.md            (AgentHub V3 门铃)
+#   doc/HelloAI 实现差距表.md              (N13)
+#   本地 preflight 技能  (规则 6：脚本 UTF-8 编码)
 #
 # 覆盖三个真实环境场景（IDEA 启动后端 + docker compose 起 postgres / redis / rabbitmq）：
 #   S1  未在岗建连被拒     : 无 ACTIVE 租约时 GET /api/agents/doorbell/sse -> HTTP 500, body code=500

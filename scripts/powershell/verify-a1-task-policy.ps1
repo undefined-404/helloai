@@ -5,7 +5,7 @@
 #       GET  /api/tasks/getById    回显断言（DB 落库证明）
 #       PUT  /api/tasks/updateById 编辑（整体替换 policy）+ 空集合清空
 #       清理：删除验证任务
-# Ref:  doc/HelloAI_迭代执行记录.md §6.69（A1）
+# Ref:  doc/log/2026-09.md §6.69（A1）
 # 前置：helloai-start（A1 代码）已在 6565 运行。
 # 用法（项目根）：
 #   powershell -File .\scripts\powershell\verify-a1-task-policy.ps1

@@ -1,6 +1,6 @@
 # ============================================================
 # helloai Phase 2H ②b RabbitMQ failure-path verifier (v1)
-# Ref:  doc/HelloAI_迭代执行记录.md T4
+# Ref:  doc/log/2026-09.md T4
 #       差距表 N1 / 调度解耦分析 / OutboxRelayTask.handleConfirm
 #
 # Targets three real (or precisely-simulated) RabbitMQ failure paths of

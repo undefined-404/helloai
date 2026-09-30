@@ -16,7 +16,7 @@
 #   GET  /api/agent/inbox                       外部 agent 收件箱（sub_task.assigned）
 #   POST /api/sub-tasks/startById/{id}          ASSIGNED → IN_PROGRESS
 #   POST /api/sub-tasks/submitById/{id}         IN_PROGRESS → REVIEW（审查入口）
-# Ref:  doc/HelloAI_实现差距表.md（G-010/G-011 S5 实测：外部执行链缺口登记）
+# Ref:  doc/HelloAI 实现差距表.md（G-010/G-011 S5 实测：外部执行链缺口登记）
 # Pre-conditions（fail-fast，本脚本不负责启动服务）：
 #   - docker compose up -d（helloai-postgres:15432）
 #   - helloai-start 已在 6565 运行；LLM 可用（拆解 + 自动核验）

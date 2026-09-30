@@ -152,22 +152,26 @@ public class PromptTemplateServiceImpl extends ServiceImpl<PromptTemplateMapper,
     }
 
     /**
-     * 获取 Agent 的 SKILL.md（从文件系统读取 + 运行时变量替换）。
-     * 文件路径: resources/skills/{role}/SKILL.md
+     * 获取 Agent 的角色接入手册（从文件系统读取 + 运行时变量替换）。
+     * 文件路径: resources/onboarding/{role}/guide.md
+     *
+     * <p>命名口径（2026-09-30 Document V2.1 治理）：角色手册与「能力包（Skill）」是两件事，禁止混用 SKILL 一词：
+     * 本方法读的是<b>角色接入手册</b>（onboarding）；能力包见 {@code resources/skills/plugins/*.md}。
+     * 注意交付物文件名仍是 {@code SKILL.md}——那是第三方 IDE（Trae / Qoder）skills 目录的约定，不得更改。</p>
      */
     @Override
     public String getSkillForAgent(String role, String apiKey, String baseUrl, String agentName, Long agentId) {
         String content;
         ClassPathResource resource = new ClassPathResource(
-                "skills/" + role.toLowerCase() + "/SKILL.md");
+                "onboarding/" + role.toLowerCase() + "/guide.md");
         if (!resource.exists()) {
-            throw new BizException("未找到角色 " + role + " 的 SKILL 文档（文件路径: skills/"
-                    + role.toLowerCase() + "/SKILL.md）");
+            throw new BizException("未找到角色 " + role + " 的接入手册（文件路径: onboarding/"
+                    + role.toLowerCase() + "/guide.md）");
         }
         try (InputStream in = resource.getInputStream()) {
             content = new String(in.readAllBytes(), StandardCharsets.UTF_8);
         } catch (IOException e) {
-            throw new BizException("读取 SKILL 文档失败: " + e.getMessage());
+            throw new BizException("读取角色接入手册失败: " + e.getMessage());
         }
         content = content.replace("<注册后填入>", apiKey);
         content = content.replace("{{BASE_URL}}", baseUrl);
@@ -178,7 +182,7 @@ public class PromptTemplateServiceImpl extends ServiceImpl<PromptTemplateMapper,
     }
 
     /**
-     * 构建技能包 ZIP：SKILL.md（占位符已渲染）+ scripts/ 全量脚本 + config.example.json（baseUrl 预填，apiKey 保留占位）。
+     * 构建技能包 ZIP：SKILL.md（角色接入手册渲染后，交付名固定为 SKILL.md）+ scripts/ 全量脚本 + config.example.json（baseUrl 预填，apiKey 保留占位）。
      * zip 内以 <role>-skill/ 为顶层目录，整体复制到 IDE 的 skills 目录即可，防止只拿单个 md 导致脚本缺失。
      */
     @Override
@@ -186,9 +190,9 @@ public class PromptTemplateServiceImpl extends ServiceImpl<PromptTemplateMapper,
         String roleDir = role.toLowerCase();
         String skillContent = getSkillForAgent(role, apiKey, baseUrl, agentName, agentId);
         try {
-            // classpath 下枚举 skills/<role>/ 内全部文件（SKILL.md + scripts/*），jar 内同样可用
+            // classpath 下枚举 onboarding/<role>/ 内全部文件（guide.md + scripts/*），jar 内同样可用
             PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
-            Resource[] resources = resolver.getResources("classpath:skills/" + roleDir + "/**/*");
+            Resource[] resources = resolver.getResources("classpath:onboarding/" + roleDir + "/**/*");
             List<Resource> files = Arrays.stream(resources)
                     .filter(Resource::isReadable)
                     .sorted(Comparator.comparing(r -> {
@@ -201,7 +205,7 @@ public class PromptTemplateServiceImpl extends ServiceImpl<PromptTemplateMapper,
                     .toList();
 
             String topDir = roleDir + "-skill";
-            String prefix = "/skills/" + roleDir + "/";
+            String prefix = "/onboarding/" + roleDir + "/";
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
             try (ZipOutputStream zos = new ZipOutputStream(bos)) {
                 // SKILL.md（渲染后）置于顶层目录根部
@@ -217,8 +221,8 @@ public class PromptTemplateServiceImpl extends ServiceImpl<PromptTemplateMapper,
                         continue;
                     }
                     String rel = url.substring(idx + prefix.length());
-                    // SKILL.md 已在上方以渲染后的完整版写入，跳过原始文件避免 zip 重复条目
-                    if (rel.equals("SKILL.md")) {
+                    // guide.md 已在上方以渲染后的完整版写入（交付名为 SKILL.md），跳过原始文件避免 zip 重复条目
+                    if (rel.equals("guide.md")) {
                         continue;
                     }
                     byte[] content;

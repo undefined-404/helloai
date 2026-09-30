@@ -10,7 +10,7 @@
 #   S3 生成 B3 对账口径复刻 SQL 探针（只读，五态投影，窗口 10min）-> .tmp/c3-reconcile-probe.sql
 #      本机有 psql 或 docker(helloai-postgres) 时自动执行断言；否则提示走会话内 MCP
 #   S4 汇总：日志侧 FAIL>0 才 exit 1；DB 侧无通道时由 MCP 核对后回填判定
-# Ref: doc/design/HelloAI_Phase0_C3_双轨切换预研.md（六章验收标准 2/4；七章脚本表）
+# Ref: doc/archive/implemented/HelloAI_Phase0_C3_双轨切换预研.md（六章验收标准 2/4；七章脚本表）
 # 用法（项目根）：
 #   ./scripts/shell/verify-c3-reconcile.sh
 #   WINDOW_MINUTES=20 LOG_FILE=... ./scripts/shell/verify-c3-reconcile.sh

@@ -10,8 +10,8 @@
 #   S5  active-only view              -> exactly [a.md v2, b.md] (platform
 #                                        trusted view == review evidence view)
 # Ref:
-#   doc/HelloAI_实现差距表.md  (attachment versioning gap item)
-#   .agents/skills/helloai-preflight/SKILL.md (rule 6: ps1 utf-8 header)
+#   doc/HelloAI 实现差距表.md  (attachment versioning gap item)
+#   本地 preflight 技能 (rule 6: ps1 utf-8 header)
 # Prereqs:
 #   helloai-start running on :6565 (helloai.storage.enabled=true);
 #   API agent whose id == subTask.assignedAgentId, with its API key.

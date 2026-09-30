@@ -25,7 +25,7 @@ public interface AgentEventQueryService {
      *
      * <p>一个 Run（{@code run-{taskId}-{roundNum}}，见 ADR-001）跨 Turn / Step
      * 全量重建执行轨迹，支撑 G-001 验收「一个 Run 可以按 sequence 重建轨迹」；
-     * Replay 仅读取历史，不代表再次产生副作用（design/Agent_Event_Stream.md 原则 6）。</p>
+     * Replay 仅读取历史，不代表再次产生副作用（doc/design/Agent_Event_Stream.md 原则 6）。</p>
      *
      * @param runId Run 标识；为空或空白时返回空列表
      * @return 按 {@code createTime ASC, id ASC} 有序的轨迹投影，永不为 null

@@ -15,7 +15,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
  *
  * <p>为外部 Agent 提供一条"服务端 → Agent"的单向 SSE 长连接（门铃）：Agent 建连后，
  * 平台侧一旦有新收件箱消息即可秒级响铃唤醒，Agent 收到信号自行走 MCP {@code pullTasks}
- * 取正文，替代 30 秒轮询的感知延迟。详见 {@code doc/HelloAI_门铃通知通道设计.md}。</p>
+ * 取正文，替代 30 秒轮询的感知延迟。详见 {@code doc/archive/legacy/HelloAI_门铃通知通道设计.md}。</p>
  *
  * <p>认证由 AuthInterceptor 处理（从 {@code _authId} 获取 agentId），路径落在 {@code /api/**}
  * 覆盖范围内。PR-1 只做连接内核：建连、回推 {@code connected} 握手、断连清理；

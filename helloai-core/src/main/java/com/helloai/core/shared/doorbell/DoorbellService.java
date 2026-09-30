@@ -20,7 +20,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
  *
  * <p><b>可靠性原则</b>：门铃永远只是"催一下"，响铃失败/无连接一律静默——消息事实
  * 早已落 {@code agent_inbox}，Agent 始终可用 pullTasks 轮询兜底，门铃丢失不致命
- * （见 {@code doc/HelloAI_门铃通知通道设计.md} §9）。</p>
+ * （见 {@code doc/archive/legacy/HelloAI_门铃通知通道设计.md} §9）。</p>
  *
  * <p>PR-3 收口值班鉴权：{@link #connect(Long)} 前置校验 {@code isOnDuty}（先打卡再接电话）；
  * checkOut / 租约到期时由 {@code DoorbellDutyListener} 监听 {@code DutyLeaseClosedEvent} 主动 {@link #disconnect(Long)}。</p>

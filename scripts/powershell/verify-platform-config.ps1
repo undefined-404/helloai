@@ -13,8 +13,8 @@
 #       S8 外网地址断层修复：sys_config 写 helloai.base-url 后，
 #          /api/agents/getMySkill 的 SKILL 内容立即包含该地址（不重启），
 #          验证完写回空串还原
-# Ref:  doc/log/HelloAI_迭代执行记录.md (§6.51 平台配置动态化)
-#       .agents/helloai-preflight/SKILL.md (规则 6：脚本 UTF-8 编码)
+# Ref:  doc/log/2026-09.md (§6.51 平台配置动态化)
+#       本地 preflight 技能 (规则 6：脚本 UTF-8 编码)
 # 前置：docker compose up -d（helloai-postgres / redis / rabbitmq）；
 #       mvn package 已产出最新 jar。
 # 用法（项目根）：

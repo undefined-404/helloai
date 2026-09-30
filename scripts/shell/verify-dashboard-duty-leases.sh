@@ -2,9 +2,9 @@
 # ============================================================
 # helloai AgentHub V1 P1 (Dashboard 值班概览 + 列表页) + R2 + R3 验证脚本 (macOS/Linux)
 # Ref:
-#   doc/HelloAI_迭代执行记录_V1.md   (AgentHub V1 P1)
-#   doc/HelloAI_实现差距表_V1.md     (N12 P1 收尾)
-#   .agents/skills/helloai-preflight/SKILL.md   (规则 6: 脚本 UTF-8 编码头)
+#   doc/archive/legacy/HelloAI_迭代执行记录_V1.md   (AgentHub V1 P1)
+#   doc/archive/legacy/HelloAI_实现差距表_V1.md     (N12 P1 收尾)
+#   本地 preflight 技能   (规则 6: 脚本 UTF-8 编码头)
 #
 # 覆盖四个真实环境场景：
 #   S1  GET /api/admin/duty-leases/overview          -> 200,active/closed/expired/total 字段齐

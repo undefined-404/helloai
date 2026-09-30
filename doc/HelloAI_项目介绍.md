@@ -305,11 +305,13 @@ Runtime 明确不负责：全局调度、Workflow 全局状态、Planner / Revie
 ## 3.5 改造主线
 
 ```text
-Event Stream 统一 → Dual Executor 迁移 → AgentRuntime 收敛
+Event Stream 统一 → Executor 收敛（双轨 → 单轨）→ AgentRuntime 收口
 → Skill Capability 演进 → Sandbox 解耦 → Governance
 ```
 
-每一步都有明确的差距登记（G-001 ~ G-013）与验证口径，改造是**演进式的**：旧执行链通过 LegacyExecutorAdapter 接入新契约，组件从旧链逐步提取，不推倒重来。
+每一步都有明确的差距登记（G-001 ~ G-013）与验证口径。改造走**演进式提取**：组件从旧执行链逐件提取进新契约，行为对齐后再让旧链退出——**该阶段已于 2026-09-30 结束**。
+
+> **2026-09-30 单轨硬切（G-002）**：旧执行链入口（`LegacyExecutorAdapter` / `RuntimeAgentRuntimeRouter` / `TurnLlmCaller` / `TurnLlmCallContext`）与 `runtime-enabled` / `v2-enabled` / `gray-percent` 开关**已全部删除**，`RuntimeTurnExecutor` 成为**唯一** `AgentRuntime` 实现。**双轨不复存在，配置级回退开关不复存在**（回退手段为 `git revert`）。本文后续凡出现「灰度 / 双轨 / 默认走 Legacy」措辞，均属**已被单轨硬切取代的历史口径**。
 
 ## 3.6 V2 期间同步交付的编排扩展
 
@@ -399,7 +401,7 @@ flowchart TB
     SESS["Session<br/>loop 状态与恢复检查点"] -.-> LOOP
 ```
 
-落地进度：八件套已全部落地——AgentContext / EventRecorder / SkillResolver / ToolRegistry / Session 先期就位（Session 现为恢复检查点，随 Loop 落地演进为循环状态载体）；ToolExecutor（G-003 Phase 2 执行回路真身）与 AgentLoop（G-003 Phase 3 手动工具循环，循环内 TOOL_CALL 事件成对）与 SandboxProvider 契约（G-005 Phase 4 五边界 ExecutionPolicy，诚实策略不标 ISOLATED）于 2026-09-07 补齐。真身经 `RuntimeTurnExecutor` 组装，受 `runtime-enabled` 开关控制（默认 `false`=Legacy 零变化）；真实 provider 工具循环已于 2026-09-08 dev 灰度联调通过（真身点亮 / 回滚零差异 / 外部 Agent 回归通过）。
+落地进度：八件套已全部落地——AgentContext / EventRecorder / SkillResolver / ToolRegistry / Session 先期就位（Session 现为恢复检查点 + loop 状态载体）；ToolExecutor（G-003 Phase 2 执行回路真身）与 AgentLoop（G-003 Phase 3 手动工具循环，循环内 TOOL_CALL 事件成对）与 SandboxProvider 契约（G-005 Phase 4 五边界 ExecutionPolicy，诚实策略不标 ISOLATED）于 2026-09-07 补齐。真身经 `RuntimeTurnExecutor` 组装，prompt / chatModel / 会话 / 对话流由 `AgentRuntimeContextAssembler` 装配后注入；**2026-09-30 单轨硬切后 `RuntimeTurnExecutor` 为唯一实现，无开关、无路由、无 Legacy 回退**；每轮 iteration 边界落 `agent_session.snapshot.loop` 恢复检查点，`tokenUsage` 端到端落 `agent_execution_record.token_usage`（V97）。
 
 ### 3. Event Stream 三层模型与消费面
 
@@ -482,12 +484,12 @@ helloai/
         ├── task/                  [已就位] Orchestration 层
         │   └── (timeline 已并轨 Event Stream [A6 ✅ 已完成])
         ├── agent/
-        │   ├── runtime/           Runtime 层（P0-B 已落真身）
+        │   ├── runtime/           Runtime 层（P0-B 已落真身；2026-09-30 单轨硬切后为唯一实现）
         │   │   ├── AgentRuntime / AgentContext          [已就位]
-        │   │   ├── RuntimeTurnExecutor（八件套组装真身） [已就位]
-        │   │   ├── RuntimeAgentRuntimeRouter（灰度开关）  [已就位 · 默认 Legacy，dev 灰度第 0 步已闭合]
+        │   │   ├── RuntimeTurnExecutor（八件套组装真身 · 唯一 AgentRuntime 实现）[已就位 G-002 ✅]
+        │   │   ├── AgentRuntimeContextAssembler（装配 prompt/chatModel/会话/对话流）[已就位]
         │   │   ├── ExecutionEnvironment / Provider       [已就位]
-        │   │   ├── loop/ AgentLoop（手动工具循环）        [已就位 G-003 ✅]
+        │   │   ├── loop/ AgentLoop（手动工具循环 + 每轮 checkpoint）[已就位 G-003 ✅]
         │   │   ├── sandbox/ SandboxProvider（契约+诚实策略）[已就位 G-005 · 真隔离后置]
         │   │   └── Session（→ loop 状态载体）             [演进中]
         │   ├── skill/             Capability 层
@@ -507,7 +509,7 @@ helloai/
         └── dlx/ shared/ system/   [已就位] 横向基础设施
 ```
 
-> 落位说明：ToolExecutor 落在 `tool/`（与 ToolRegistry 同包同源，符合「无平行类」规范，Capability 层归属与 §4.2 归位图一致）；AgentEventRecorder 落在 `event/`（与读侧查询、事件对账同住）。`TurnLlmCaller`（主链 Legacy↔Runtime 切换缝）现住 `agent/service/`，随旧链解剖完成后迁 runtime。
+> 落位说明：ToolExecutor 落在 `tool/`（与 ToolRegistry 同包同源，符合「无平行类」规范，Capability 层归属与 §4.2 归位图一致）；AgentEventRecorder 落在 `event/`（与读侧查询、事件对账同住）。旧链历史接缝（`LegacyExecutorAdapter` / `RuntimeAgentRuntimeRouter` / `TurnLlmCaller`）**已于 2026-09-30 单轨硬切时整体删除**，不再有「切换缝」。
 >
 > Session 位置注记：目标位在 `runtime/` 下（见树形），实际暂居 `agent/session/` 独立包（entity / mapper / service 四件套，2026-09-08 核查）；语义已是「执行快照 / 中断点 / 恢复上下文载体」（Phase 1 Step 3 + N-007 B1），「并轨 runtime/loop 成为循环状态载体」为后续迁移项，不改变 [演进中] 标注。
 
@@ -515,8 +517,8 @@ helloai/
 
 | 现住址 | 目标形态 | 改动类型 | 差距项 |
 |---|---|---|---|
-| agent.service.SubTaskExecutionService（Legacy 编排） | 组件化拆入 agent.runtime（ToolExecutor ✅ / AgentLoop ✅ 已提取，剩余 Session 协调与旧链解剖） | 提取 | G-003 |
-| LegacyExecutorAdapter（Runtime 唯一实现，转发旧链） | Runtime 真身逐步承接，Adapter 退化为历史接缝 | 演进 | G-002 |
+| agent.service.SubTaskExecutionService（Legacy 编排） | ✅ 已完成：`SubTaskExecutionServiceImpl` 906 → 30 行，组件拆入 `agent.runtime`，消费链改由 `LocalExecutionCommandConsumer` 分层编排（startIfNeeded → CAS → 装配 → execute → afterTurn → 终态 CAS → 回写） | 提取（已完成） | G-003 |
+| ~~LegacyExecutorAdapter（转发旧链）~~ | ✅ 已删除（2026-09-30 单轨硬切）：`RuntimeTurnExecutor` 为唯一 `AgentRuntime` 实现，无 Adapter、无切换缝、无回退开关 | 删除（已完成） | G-002 |
 | agent.skill（KNOWN_SPECS 标签 → 文本） | 结构化 Skill Package 元数据（✅ 元数据层 + 联动接线 + 拆解技能通路已落地 2026-09-08：SkillPackage 8 字段 + eng-code-review / eng-doc-standard / eng-verification 三包物化 + listPackages / resolvePackages 消费面 + requiredTools→tools 双链并集 + SKILL_RESOLVED 携带版本 + required_skills 进拆解 Prompt；真实任务 required_skills 行使已实证（2026-09-10 双轮全链闭环）；Instructions 结构化待续） | 增强 | G-004 |
 | ExecutionEnvironment（场所标签） | SandboxProvider 五类边界（文件 / 网络 / 进程 / 资源 / 凭证） | 新增契约 ✅ 已落（EnvironmentSandboxProvider，真隔离后置） | G-005 |
 | task.observability（timeline 独立载体） | 从 Event Stream 消费 | 迁移 ✅ 已完成（A6 收口） | A6 / G-006 |
@@ -526,18 +528,20 @@ helloai/
 
 ## 5.3 迁移策略：演进，不推倒
 
-1. **契约先行**：先立接口（AgentRuntime / Event 契约 / Port），旧实现通过 Adapter 接入——当前全部执行路径已统一经 `AgentRuntime#execute` 单轨契约；
-2. **组件提取**：从 Legacy 编排链逐件提取（ToolExecutor 先于 AgentLoop），每件提取后旧链与新组件行为对齐、验证脚本跟进；
+1. **契约先行**：先立接口（AgentRuntime / Event 契约 / Port），旧实现通过 Adapter 接入——全部执行路径已统一经 `AgentRuntime#execute` 单轨契约；
+2. **组件提取**：从旧编排链逐件提取（ToolExecutor 先于 AgentLoop），每件提取后旧链与新组件行为对齐、验证脚本跟进；
 3. **单一事实源**：业务状态机始终是状态权威，Event 只追加事实；不建第二套 Scheduler / Workflow Runtime / 状态机。
+
+> **迁移过程已结束（2026-09-30 单轨硬切）**：第 1 / 2 条是**已完成的历史过程**——契约层早期由 Adapter 衔接、组件逐件提取对齐，旧链随后整体删除；第 3 条是**长期生效的架构约束**，不因迁移结束而失效。
 
 ---
 
-# 6. 改造进度速览（截至 2026-09-16）
+# 6. 改造进度速览（截至 2026-09-30）
 
 | 主线 | 差距项 | 状态 |
 |---|---|---|
 | Event Stream 写侧（Run / Turn / Step + 对账） | G-001 | ✅ 已闭环（A1~A7 全落地，验收全量成立） |
-| Runtime 契约统一（全路径经 AgentRuntime#execute） | G-002 | ✅ P0 收官：契约单轨 + Runtime 真身 + 主链接线注入（`runtime-enabled` 开关，默认 `false`=Legacy 零变化）；2026-09-08 灰度第 0 步闭合（真身点亮/回滚零差异/外部 Agent 回归通过） |
+| Runtime 契约统一（全路径经 AgentRuntime#execute） | G-002 | ✅ 已收敛为**单轨**：2026-09-30 硬切——旧链入口（`LegacyExecutorAdapter` / `RuntimeAgentRuntimeRouter` / `TurnLlmCaller` / `TurnLlmCallContext`）与 `runtime-enabled` / `v2-enabled` / `gray-percent` 开关全部删除；`RuntimeTurnExecutor` 为唯一实现，`AgentRuntimeContextAssembler` 承接装配；`SubTaskExecutionServiceImpl` 906→30 行；全量单测 BUILD SUCCESS（core 1551 例 0 失败）+ B 级 IT 8/8 绿 + DB 实证 `route=agent_runtime` 9/9 零 legacy |
 | ToolExecutor / AgentLoop | G-003 | ✅ P0-C 八件套齐：ToolExecutor（Phase 2 执行回路）+ AgentLoop（Phase 3 手动循环）+ Sandbox 契约（Phase 4）；真实 provider 循环 2026-09-08 联调通过（无边界问题） |
 | Skill Capability Package | G-004 | 🔶 元数据层 + 联动接线 + 拆解技能通路已落地（2026-09-08：SkillPackage 8 字段 + 三技能包物化；requiredTools→tools 双链并集、SKILL_RESOLVED 携带版本、task.required_skills 创建→拆解→派发→执行四段贯通）；真实任务 required_skills 实测已闭环（2026-09-10：Round2 全任务 eng-doc-standard 硬门槛准入 / Round3 技能分布派单与 135:20 分排序实证）；Instructions 结构化待续；技能回流贡献规范（D5-3，与 G-010 共用后置） |
 | Sandbox Provider | G-005 | 🔶 契约已落地（五边界 ExecutionPolicy，诚实策略无 ISOLATED）；Docker / K8s 隔离后置 |
@@ -556,6 +560,6 @@ helloai/
 
 **V1 做成了什么：**一个分布式跨终端 AI Agent 调度平台——把散落各处的 AI 助手与终端算力组织成可调度、可验收、可审计的工程团队，任何能跑 CLI Agent 的终端都是算力节点。你说一次需求、点一次确认：Planner 双模对话澄清并拆解为依赖 DAG，弹性调度跨终端派给最合适的 AI（12 层过滤 + 4 级排序 + 值班优先 + LLM 保底），Reviewer 双轨纪律审核（四元组驳回意见、双审共识、抽检复审），最终整合报告 + zip 交付。底座是事务性 Outbox、三层幂等、熔断降级、死信兜底的分布式可靠性体系。
 
-**V2 在升级什么：**借鉴 DeepSeek Harness 的三个核心思想，把平台从"能调度"升级为"执行过程可观测（Event Stream 统一）、能力可组合（Skill Capability Package）、环境可控（Sandbox Provider）"。改造走五层目标架构（Role / Orchestration / Runtime / Capability / Provider），以 AgentRuntime 收敛为中心，演进式推进——**P0 主线已收官**：Event Stream 写侧闭环，Runtime 真身组装并注入主链（`runtime-enabled` 开关灰度，默认走 Legacy；dev 灰度第 0 步已闭合），八件套全部落地；**P1 主体已落地**：Replay / Audit 消费面全链暴露（含任务/子任务维度端点与工作台增强，增量 C1/C2/D）、外部执行轨迹加厚，Skill 真实任务实测闭环，**Planner 从"闭眼拆解"升级为"能力感知拆解"（G-010 S1~S4：技能目录注入、三档粒度自适应、子任务级技能与约束显式化、草案人工修订）+ 需求包准入与不确定性显式管理（G-011 S1~S5）**——2026-09-10 外部执行者双轮全链闭环（Round2 四层 DAG / Round3 三执行者同台竞态与 135:20 分排序印证）；2026-09-11 外部上下文供给三通道打通（getSubTaskDetail V76 / 认领内联 / inbox 摘要，MCP 12 工具）与需求包 P1/P2 生成能力退化修复（任务级验收 / 拆解必填 fail-close / 终稿结构校验 / 驳回缺失证据清单）；**2026-09-12~13 基础架构底座（G-012 / G-013）批次一~四全部落地**：Sa-Token 统一会话 + 四角色分层 + 131 处动作级权限码 + 动态路由与按钮级权限 + 部门 / 菜单 / 数据权限管理，外部 Agent 通道显式旁路零影响，并清偿 SSE 异步上下文 500、澄清对话全流式、联网搜索「总结 + 来源 + 补充检索」等运行时缺口。剩余：Instructions 结构化 / Sandbox 隔离实现（Docker · K8s）/ Recovery · Fork 消费面 / 技能回流规范 / Quality Gate 决策门 / Agent Fleet 完整选路（含外部成本回传）/ FINE 档真实样本。
+**V2 在升级什么：**借鉴 DeepSeek Harness 的三个核心思想，把平台从"能调度"升级为"执行过程可观测（Event Stream 统一）、能力可组合（Skill Capability Package）、环境可控（Sandbox Provider）"。改造走五层目标架构（Role / Orchestration / Runtime / Capability / Provider），以 AgentRuntime 收敛为中心，演进式推进——**P0 主线已收官**：Event Stream 写侧闭环，Runtime 收敛**已于 2026-09-30 完成单轨硬切**（旧链与灰度开关整体删除，`RuntimeTurnExecutor` 为唯一 `AgentRuntime` 实现），八件套全部落地；**P1 主体已落地**：Replay / Audit 消费面全链暴露（含任务/子任务维度端点与工作台增强，增量 C1/C2/D）、外部执行轨迹加厚，Skill 真实任务实测闭环，**Planner 从"闭眼拆解"升级为"能力感知拆解"（G-010 S1~S4：技能目录注入、三档粒度自适应、子任务级技能与约束显式化、草案人工修订）+ 需求包准入与不确定性显式管理（G-011 S1~S5）**——2026-09-10 外部执行者双轮全链闭环（Round2 四层 DAG / Round3 三执行者同台竞态与 135:20 分排序印证）；2026-09-11 外部上下文供给三通道打通（getSubTaskDetail V76 / 认领内联 / inbox 摘要，MCP 12 工具）与需求包 P1/P2 生成能力退化修复（任务级验收 / 拆解必填 fail-close / 终稿结构校验 / 驳回缺失证据清单）；**2026-09-12~13 基础架构底座（G-012 / G-013）批次一~四全部落地**：Sa-Token 统一会话 + 四角色分层 + 131 处动作级权限码 + 动态路由与按钮级权限 + 部门 / 菜单 / 数据权限管理，外部 Agent 通道显式旁路零影响，并清偿 SSE 异步上下文 500、澄清对话全流式、联网搜索「总结 + 来源 + 补充检索」等运行时缺口。剩余：Instructions 结构化 / Sandbox 隔离实现（Docker · K8s）/ Recovery · Fork 消费面 / 技能回流规范 / Quality Gate 决策门 / Agent Fleet 完整选路（含外部成本回传）/ FINE 档真实样本。
 
 **这个项目的独特价值：**不是又一个 Agent 框架，而是**让异构 Agent 在同一套状态机、同一条事件流、同一个质量门下协同工作的分布式平台**——借鉴 Harness 的执行体系思想，但服务的是多 Agent 编排的更大图景。

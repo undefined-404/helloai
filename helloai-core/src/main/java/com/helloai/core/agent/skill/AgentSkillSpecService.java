@@ -15,7 +15,7 @@ import java.util.Map;
  * 传播，见 {@code ExecutionCommand.requiredSkills}）传入，不再反向查询 task，
  * 实现与 task 域零依赖（§6 依赖方向红线：agent 域不持有 task 域引用）。</p>
  *
- * <p>详见 doc/design/HelloAI_DeepSeek_Harness_Skills借鉴方案.md §5.3（P1）。</p>
+ * <p>详见 doc/archive/implemented/HelloAI_DeepSeek_Harness_Skills借鉴方案.md §5.3（P1）。</p>
  */
 public interface AgentSkillSpecService {
 

@@ -9,7 +9,7 @@
 # 不注册任何新 Agent：复用保留的平台内建 API_KEY_LLM Agent
 #       (planner/executor/reviewer 由 agentPolicy 显式指定，避免选到
 #        CLI_CLIENT 外部执行者导致链路等待外部客户端)
-# Ref:  doc/HelloAI_实现差距表.md（G-002 单轨硬切，2026-09-30）
+# Ref:  doc/HelloAI 实现差距表.md（G-002 单轨硬切，2026-09-30）
 # 前置：helloai-start 已在 6565 运行；数据已按 cleanup-test-data.sql 清空；
 #       平台内建 Agent 已有 ACTIVE vault 凭据（require-vault=true）。
 # 用法（项目根）：
