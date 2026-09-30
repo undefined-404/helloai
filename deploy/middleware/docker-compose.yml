@@ -72,6 +72,16 @@ services:
     mem_limit: 768m
 
   # --- Redis 7.2.5 (ACL user isolation; passwords must be alphanumeric, no spaces) ---
+  #
+  # 【ACL 写法约束 —— 不要"优化"成一行】
+  #   Redis 启动时把每个非 "--" 开头的 argv 元素单独转义成一个配置 token
+  #   （src/server.c: options = sdscatrepr(options, argv[j], ...)），因此
+  #       --user "default on >pw ~* +@all"     ← 整串会被当成「用户名」一个 token，
+  #                                               规则全部丢失（user 指令只收到 1 个参数）
+  #   正确写法是让每个 ACL token 各自成为一个 argv 元素（即下面的逐行列表形式）：
+  #       --user default on >pw ~* +@all
+  #   官方测试用例同样印证：`redis-server --port 6379 6380` 会把 6379/6380 都当作 port 的值。
+  #   若写成整串，后果是 default 用户拿不到密码 → 又开了公网端口 = 无认证裸奔。
   redis:
     image: redis:7.2.5-alpine
     container_name: middleware-redis
@@ -90,11 +100,37 @@ services:
       - allkeys-lru
       # default user: admin fallback (for keys / cluster ops)
       - --user
-      - "default on >${REDIS_DEFAULT_PASSWORD} ~* &* +@all -FLUSHALL -FLUSHDB -CONFIG -SHUTDOWN -DEBUG -SLAVEOF -REPLICAOF -MIGRATE"
+      - default
+      - "on"
+      - ">${REDIS_DEFAULT_PASSWORD}"
+      - "~*"
+      - "&*"
+      - "+@all"
+      - "-FLUSHALL"
+      - "-FLUSHDB"
+      - "-CONFIG"
+      - "-SHUTDOWN"
+      - "-DEBUG"
+      - "-SLAVEOF"
+      - "-REPLICAOF"
+      - "-MIGRATE"
       # helloai user: app dedicated (key prefix convention helloai:, not enforced;
       # for strict key isolation change ~* to ~helloai:*)
       - --user
-      - "helloai on >${HELLOAI_REDIS_PASSWORD} ~* &* +@all -FLUSHALL -FLUSHDB -CONFIG -SHUTDOWN -DEBUG -SLAVEOF -REPLICAOF -MIGRATE"
+      - helloai
+      - "on"
+      - ">${HELLOAI_REDIS_PASSWORD}"
+      - "~*"
+      - "&*"
+      - "+@all"
+      - "-FLUSHALL"
+      - "-FLUSHDB"
+      - "-CONFIG"
+      - "-SHUTDOWN"
+      - "-DEBUG"
+      - "-SLAVEOF"
+      - "-REPLICAOF"
+      - "-MIGRATE"
     volumes:
       - /data/redis:/data
     healthcheck:

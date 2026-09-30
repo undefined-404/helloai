@@ -13,7 +13,9 @@ deploy/middleware/
 ├── minio/
 │   ├── init.sh             # MinIO bucket/access key/policy 初始化（幂等）
 │   └── policies/           # bucket 专属 policy（Resource 限定单桶）
-└── scripts/migrate.sh      # 数据迁移脚本（pg/mysql/minio）
+└── scripts/
+    ├── migrate.sh          # 数据迁移脚本（pg/mysql/minio）
+    └── diagnose-redis.sh   # Redis 容器异常一键取证（只读，见 §10）
 ```
 
 ## 2. 新服务器前提
@@ -113,9 +115,25 @@ NEW_MINIO_ENDPOINT=http://新IP:29000 NEW_MINIO_ACCESS=helloai-s3 NEW_MINIO_SECR
 **Redis 严格 key 隔离（可选）**：当前 ACL 为 `~*`（避免 HelloAI 现存 key 不带 `helloai:` 前缀导致 NOPERM）。
 如需数据级隔离，把 compose 中 helloai 用户的 `~*` 改为 `~helloai:*`，并确保 HelloAI 所有 Redis key 统一 `helloai:` 前缀后再上。
 
+> ⚠️ **ACL 写法约束（踩坑，勿"优化"）**：`compose` 中 `--user` 的每个 ACL token 都必须是**独立的列表元素**。
+> Redis 启动时对每个非 `--` 开头的 argv 元素单独转义成一个配置 token（`src/server.c`：
+> `options = sdscatrepr(options, argv[j], strlen(argv[j]))`），因此把整条 ACL 规则写成一个字符串
+> （如 `- "default on >pw ~* &* +@all …"`）会让 `user` 指令只收到 **1 个参数**——规则全部丢失，
+> `default` 用户拿不到密码。配合已发布的 `26379` 端口，等同于**无认证裸奔**。
+> 官方测试用例同样印证该语义：`redis-server --port 6379 6380` 会把 `6379`、`6380` 都当作 `port` 的值。
+
 ## 9. 安全清单
 
-- [ ] 所有 `.env` 密码改为强密码，勿提交 git（`.env` 已被仓库 `.gitignore` 排除）
+> 🔴 **待处置（2026-09-29 生产实测确认）**：`deploy/middleware/.env.example` **已被 git 跟踪**，而本仓库
+> **公网匿名可读**（`https://gitee.com/undefined_404/helloai/raw/master/deploy/middleware/.env.example`
+> 返回 `HTTP 200`）。经与服务器 `/home/admin/middleware/.env` 逐键比对，**`.env` 中 13 个变量全部等于
+> `.env.example` 的值**（即 `cp .env.example .env` 后**从未修改过密码**）。叠加 §2 第 3 条尚未限制
+> 安全组、服务器 `ufw` 为 `inactive`、8 个端口经公网实测**全部可直接连通**——等同于把已公开的凭据
+> 摆在了公网上。**必须轮换全部中间件密码**（注意 PG/MySQL/RabbitMQ/MinIO 的密码只在 initialize 时
+> 生效，轮换需改容器内账号，不能只改 `.env`），并把 `.env.example` 的值改为占位符。
+
+- [ ] **【最高优先】** 轮换全部中间件凭据；`.env.example` 只保留占位符（`change-me` 之类）
+- [ ] 所有 `.env` 密码改为强密码，勿提交 git（`.env` 已被仓库 `.gitignore:44` 排除）
 - [ ] 安全组仅对应用服务器 IP 白名单放行上述端口，不要 `0.0.0.0/0`
 - [ ] RabbitMQ 默认 `guest` 已被管理员用户替代，管理 UI（25673）同样走白名单
 - [ ] 数据盘独立挂载，容器数据不落系统盘
@@ -127,3 +145,39 @@ NEW_MINIO_ENDPOINT=http://新IP:29000 NEW_MINIO_ACCESS=helloai-s3 NEW_MINIO_SECR
 - **RabbitMQ `ACCESS_REFUSED`**：检查 vhost 与用户名密码——应用连 `helloai` 用户 + `/helloai` vhost（Spring 默认 vhost=`/`，需设 `spring.rabbitmq.virtual-host=/helloai`）。
 - **init 容器非 0 退出**：`docker compose logs rabbitmq-init / minio-init` 查看原因；修复后重新 `docker compose up -d`（幂等）。
 - **迁移后附件直读失败**：确认 `MINIO_ENDPOINT` 应用可达（公网需白名单），`MINIO_ACCESS_KEY/SECRET_KEY` 与 `.env` 一致。
+- **Redis 容器 `Restarting` 崩溃循环** —— **已确认根因（2026-09-29，生产实测）**：§8 那条「ACL 写法约束」
+  就是真凶。服务器日志逐秒循环输出
+  `# Spaces not allowed in ACL usernames` → `# Critical error while loading ACLs. Exiting.`，
+  容器 `ExitCode=1`、`RestartCount=11359`。`docker inspect` 可见 `Config.Cmd` 里那条 ACL 是**一个整串元素**。
+  修复：把每个 ACL token 拆成独立列表元素（本仓库 `docker-compose.yml` 已修好）后
+  `docker compose up -d --force-recreate redis` → 容器 `Up (healthy)`，ACL 校验通过。
+  根因不一致时，仍可先跑一键取证 `bash scripts/diagnose-redis.sh`（只读，输出日志 + 退出码 + `.env` 体检 + 磁盘/权限），
+  再按输出末尾的 A~E 分支定位：ACL 参数写法 / AOF 与实例不兼容 / 磁盘或权限 / 其它 directive 报错。
+- **`vm.overcommit_memory` 警告**：Redis 启动日志常报需设为 `1`。已在服务器持久化
+  （`/etc/sysctl.d/99-redis.conf` → `vm.overcommit_memory = 1`），新机部署照此补一条即可。
+- **`.env` 变动后不生效**：`.env` 只在**容器重建**时注入，改完必须 `docker compose up -d --force-recreate <service>`；
+  仅 `restart` 无效。`.env` 须为 UTF-8 **无 BOM**、**LF**（用 Windows 编辑后上传极易带入 CRLF，污染变量值）。
+
+## 11. 修复记录
+
+### 2026-09-29 · Redis 崩溃循环修复（服务器 `49.232.210.194`）
+
+| 项 | 内容 |
+|---|---|
+| 现象 | `middleware-redis` 处于 `Restarting (1)`，**自创建起 8 天从未成功启动**（`RestartCount=11359`） |
+| 根因 | ACL 规则整串传入 `--user`，`Config.Cmd` 里是**一个含空格的元素** → `# Spaces not allowed in ACL usernames` → ACL 加载致命错误退出 |
+| 修复 | `docker-compose.yml` 的 ACL 改为逐 token 独立列表元素（37 个启动参数）；`docker compose up -d --force-recreate redis` |
+| 数据影响 | **无**。`/data/redis` 为空（容器从未成功启动，无 AOF/RDB），重建不涉及数据丢失 |
+| 备份 | 原文件留存为 `/home/admin/middleware/docker-compose.yml.bak-20260929-150856`（sha256 `6c949d59…`） |
+
+**验收证据（全部实跑）**：容器 `Up (healthy)`、`RestartCount=0`（30 秒观察无增长）、启动日志
+`Ready to accept connections tcp` 无 FATAL；`default` 与 `helloai` 用户 `PING → PONG`；
+错误口令 `WRONGPASS`、匿名 `NOAUTH`、`FLUSHALL` `NOPERM` **均按预期被拒**；
+`acl list` 两个用户的命令限制正确；`aof_enabled=1` 且写入状态 `ok`。
+
+**同批完成**：`vm.overcommit_memory` 由 `0` 改为 `1` 并持久化到 `/etc/sysctl.d/99-redis.conf`。
+
+**仍未处置（需人工拍板）**：§9 首条——凭据轮换；安全组白名单（当前 `ufw inactive`，
+经公网实测 `15432 / 13306 / 26379 / 25672 / 25673 / 29000 / 29001` **全部可直连**）。
+截至本次操作，**没有任何应用进程在连该中间件**（Redis 无外部客户端、PG 无外部会话），
+因此轮换凭据的窗口期成本最低。
