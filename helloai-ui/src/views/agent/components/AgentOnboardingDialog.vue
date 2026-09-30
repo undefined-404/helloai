@@ -140,6 +140,7 @@ function sanitizeFilename(name: string): string {
 
 // 下载技能包(.zip)：SKILL.md（已渲染）+ scripts/ 全量脚本整体打包；
 // 解压后把 <role>-skill 目录整体复制到 IDE 的 skills 目录（勿只拿单个 md，脚本随包交付）
+// 文件名带 Agent 名称（TeleAgent-executor -> hello_ai_TeleAgent_executor-skill.zip，连字符转下划线）
 async function downloadSkillZip() {
   if (!data.value || !props.agentId) return
   skillZipLoading.value = true
@@ -149,7 +150,8 @@ async function downloadSkillZip() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `hello_ai_${sanitizeFilename(String(data.value.role || 'agent'))}-skill.zip`
+    const namePart = sanitizeFilename(String(data.value.agentName || data.value.role || 'agent')).replace(/-/g, '_')
+    a.download = `hello_ai_${namePart}-skill.zip`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -164,9 +166,10 @@ async function downloadSkillZip() {
 }
 
 // 复制一键上班口令：粘到 IDE 对话框第一句话即可触发 AI Agent 自检接入
+// 口令尾部带上服务地址（本地/服务器 IP 不同，由后端 AgentBaseUrlResolver 动态解析）
 async function copyActivation() {
   if (!data.value) return
-  const cmd = `你是 HelloAI 平台的 ${data.value.agentName}（ID=${data.value.agentId}），请按平台 SKILL 接入并开始工作。`
+  const cmd = `你是 HelloAI 平台的 ${data.value.agentName}（ID=${data.value.agentId}），请按平台 SKILL 接入并开始工作。服务地址:${data.value.baseUrl}`
   // 使用带降级的剪贴板写入，兼容 HTTP 公网部署下 navigator.clipboard 不可用的情况
   await copyTextWithToast(cmd, '已复制激活口令，粘到 IDE 对话框即可触发接入')
 }
