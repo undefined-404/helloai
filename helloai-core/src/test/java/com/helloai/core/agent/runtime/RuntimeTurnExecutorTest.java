@@ -132,6 +132,43 @@ class RuntimeTurnExecutorTest {
     }
 
     @Test
+    @DisplayName("tokenUsage 映射：loop 累加值透传到结果 + AGENT_COMPLETED payload（成功）")
+    void shouldMapTokenUsageOnSuccess() {
+        when(agentSkillSpecService.resolve(any()))
+                .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
+        when(toolRegistry.resolve(any())).thenReturn(List.of());
+        when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("ok", null, 2, 1, 42));
+
+        AgentExecutionResult result = new RuntimeTurnExecutor(
+                agentLoop, toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider)
+                .execute(context());
+
+        assertThat(result.getStatus()).isEqualTo(ExecutionStatus.SUCCESS);
+        assertThat(result.getTokenUsage()).isEqualTo(42);
+        org.mockito.ArgumentCaptor<Map<String, Object>> payloadCaptor =
+                org.mockito.ArgumentCaptor.forClass(Map.class);
+        verify(eventRecorder).record(eqRun("run-1-1"), eqLong(1L), eqLong(10L), eqInt(1), eqInt(0),
+                eqType(AgentEventType.AGENT_COMPLETED), eqLong(3L), payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue()).containsEntry("tokens", 42);
+    }
+
+    @Test
+    @DisplayName("tokenUsage 映射：失败终态（MAX_ITERATIONS 部分消耗）同样携带累加值")
+    void shouldMapTokenUsageOnFailure() {
+        when(agentSkillSpecService.resolve(any()))
+                .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
+        when(toolRegistry.resolve(any())).thenReturn(List.of());
+        when(agentLoop.run(any())).thenReturn(AgentLoopResult.maxIterations("cut", 5, 4, 30));
+
+        AgentExecutionResult result = new RuntimeTurnExecutor(
+                agentLoop, toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider)
+                .execute(context());
+
+        assertThat(result.getStatus()).isEqualTo(ExecutionStatus.FAILED);
+        assertThat(result.getTokenUsage()).isEqualTo(30);
+    }
+
+    @Test
     @DisplayName("checkpoint：上下文携带 listener → 透传进 AgentLoopInput（同实例）")
     void shouldPassLoopCheckpointListenerIntoAgentLoopInput() {
         when(agentSkillSpecService.resolve(any()))

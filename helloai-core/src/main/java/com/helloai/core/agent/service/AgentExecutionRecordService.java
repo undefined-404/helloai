@@ -29,9 +29,19 @@ public interface AgentExecutionRecordService extends IService<AgentExecutionReco
     boolean markSuccess(Long id);
 
     /**
+     * RUNNING → SUCCESS（CAS，落 Token 用量：loop 全部轮次 totalTokens 累加，可为 null）。
+     */
+    boolean markSuccess(Long id, Integer tokenUsage);
+
+    /**
      * RUNNING → FAILED（CAS，errorMsg 截断 500 字符）。
      */
     boolean markFailed(Long id, String errorMsg);
+
+    /**
+     * RUNNING → FAILED（CAS，errorMsg 截断 500 字符，落 Token 用量可为 null）。
+     */
+    boolean markFailed(Long id, String errorMsg, Integer tokenUsage);
 
     /**
      * PENDING/RUNNING → TIMEOUT。

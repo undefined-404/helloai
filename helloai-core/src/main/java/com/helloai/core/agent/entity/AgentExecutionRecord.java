@@ -25,6 +25,12 @@ public class AgentExecutionRecord extends BaseEntity {
     private Integer retryCount;
 
     /**
+     * 本次执行 Token 用量（B5 token 成本观测）：loop 全部轮次 totalTokens 累加；
+     * NULL = provider 未返回 usage 或未统计（best-effort，不阻断执行）。
+     */
+    private Integer tokenUsage;
+
+    /**
      * 命令触发来源：assigned / reassigned / retry / poll-recovery。
      * <p>冗余存储：便于 DB Poller 恢复 ExecutionCommand 时还原调度上下文。</p>
      */

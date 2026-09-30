@@ -72,12 +72,22 @@ public class AgentExecutionRecordServiceImpl extends ServiceImpl<AgentExecutionR
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean markSuccess(Long id) {
+        return markSuccess(id, null);
+    }
+
+    /**
+     * RUNNING → SUCCESS（CAS：status + @Version 乐观锁双条件；落 Token 用量）。
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean markSuccess(Long id, Integer tokenUsage) {
         AgentExecutionRecord record = getById(id);
         if (record == null) {
             return false;
         }
         record.setStatus(ExecutionStatus.SUCCESS);
         record.setEndTime(OffsetDateTime.now());
+        record.setTokenUsage(tokenUsage);
         return update(record, new LambdaUpdateWrapper<AgentExecutionRecord>()
                 .eq(AgentExecutionRecord::getId, id)
                 .eq(AgentExecutionRecord::getStatus, ExecutionStatus.RUNNING));
@@ -89,6 +99,15 @@ public class AgentExecutionRecordServiceImpl extends ServiceImpl<AgentExecutionR
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean markFailed(Long id, String errorMsg) {
+        return markFailed(id, errorMsg, null);
+    }
+
+    /**
+     * RUNNING → FAILED（CAS：status + @Version 乐观锁双条件，errorMsg 截断 500 字符；落 Token 用量）。
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean markFailed(Long id, String errorMsg, Integer tokenUsage) {
         String truncated = errorMsg != null && errorMsg.length() > 500
                 ? errorMsg.substring(0, 500)
                 : errorMsg;
@@ -99,6 +118,7 @@ public class AgentExecutionRecordServiceImpl extends ServiceImpl<AgentExecutionR
         record.setStatus(ExecutionStatus.FAILED);
         record.setEndTime(OffsetDateTime.now());
         record.setErrorMsg(truncated);
+        record.setTokenUsage(tokenUsage);
         return update(record, new LambdaUpdateWrapper<AgentExecutionRecord>()
                 .eq(AgentExecutionRecord::getId, id)
                 .eq(AgentExecutionRecord::getStatus, ExecutionStatus.RUNNING));

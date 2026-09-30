@@ -211,11 +211,13 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
             return;
         }
 
-        // 5. 执行记录 CAS：终态覆盖（SUCCESS → markSuccess；FAILED / TIMEOUT → markFailed）
+        // 5. 执行记录 CAS：终态覆盖（SUCCESS → markSuccess；FAILED / TIMEOUT → markFailed）；
+        // tokenUsage 随终态落库（B5：loop 全部轮次累加，provider 未返回时为 null）
         if (command.getRecordId() != null) {
             boolean marked = result.getStatus() == ExecutionStatus.SUCCESS
-                    ? agentExecutionRecordService.markSuccess(command.getRecordId())
-                    : agentExecutionRecordService.markFailed(command.getRecordId(), result.getOutput());
+                    ? agentExecutionRecordService.markSuccess(command.getRecordId(), result.getTokenUsage())
+                    : agentExecutionRecordService.markFailed(command.getRecordId(), result.getOutput(),
+                            result.getTokenUsage());
             if (!marked) {
                 log.warn("{} 写入被拒绝(记录已超时补偿): recordId={}", result.getStatus(), command.getRecordId());
             }

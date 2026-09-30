@@ -34,7 +34,7 @@ public class AgentExecutionResult {
     /** 结束原因（"STOP" / "MAX_ITERATIONS" / "ERROR"；可为 null：契约化失败路径）。 */
     String finishReason;
 
-    /** Token 用量（可为 null：当前 AgentLoop 未统计，预留 B3 tokens 统计挂载点）。 */
+    /** Token 用量（loop 全部轮次 totalTokens 累加；provider 未返回 usage 时可为 null）。 */
     Integer tokenUsage;
 
     /** 本次 execute 按发送顺序发出的事件类型列表（snake_case，与 agent_event.event_type 同构；供对账 / 诊断）。 */

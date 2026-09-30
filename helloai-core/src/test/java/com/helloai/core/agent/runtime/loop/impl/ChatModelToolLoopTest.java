@@ -17,6 +17,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
+import org.springframework.ai.chat.metadata.ChatResponseMetadata;
+import org.springframework.ai.chat.metadata.DefaultUsage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -142,6 +144,61 @@ class ChatModelToolLoopTest {
     }
 
     @Test
+    @DisplayName("tokenUsage：多轮 usage 累加（工具轮 + 终态轮 totalTokens 求和）")
+    void shouldAccumulateTokenUsageAcrossIterations() {
+        StubChatModel model = new StubChatModel()
+                .enqueue(responseWithToolCallAndUsage("tc1", "echo", "{}", 10))
+                .enqueue(responseWithTextAndUsage("done", 15));
+        when(toolExecutor.execute("echo", "{}")).thenReturn(ToolExecutionResult.success("echo", "o"));
+
+        AgentLoopResult result = loop.run(input(model));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.tokenUsage()).isEqualTo(25);
+    }
+
+    @Test
+    @DisplayName("tokenUsage：usage 缺失（metadata null）→ 恒 null，不阻断循环")
+    void shouldReturnNullTokenUsageWhenUsageMissing() {
+        StubChatModel model = new StubChatModel().enqueue(responseWithText("final"));
+
+        AgentLoopResult result = loop.run(input(model));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.tokenUsage()).isNull();
+    }
+
+    @Test
+    @DisplayName("tokenUsage：部分轮 usage 缺失 → 只累加存在的轮次")
+    void shouldAccumulateOnlyPresentUsage() {
+        StubChatModel model = new StubChatModel()
+                .enqueue(responseWithToolCallAndUsage("tc1", "echo", "{}", 10))
+                .enqueue(responseWithText("done"));
+        when(toolExecutor.execute("echo", "{}")).thenReturn(ToolExecutionResult.success("echo", "o"));
+
+        AgentLoopResult result = loop.run(input(model));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.tokenUsage()).isEqualTo(10);
+    }
+
+    @Test
+    @DisplayName("tokenUsage：MAX_ITERATIONS 终态携带已发生轮次累加值")
+    void shouldCarryTokenUsageOnMaxIterations() {
+        StubChatModel model = new StubChatModel();
+        for (int i = 0; i < AgentLoopInput.DEFAULT_MAX_ITERATIONS; i++) {
+            model.enqueue(responseWithToolCallAndUsage("tc" + i, "echo", "{}", 3));
+        }
+        when(toolExecutor.execute(anyString(), anyString()))
+                .thenReturn(ToolExecutionResult.success("echo", "x"));
+
+        AgentLoopResult result = loop.run(input(model));
+
+        assertThat(result.finishReason()).isEqualTo("MAX_ITERATIONS");
+        assertThat(result.tokenUsage()).isEqualTo(AgentLoopInput.DEFAULT_MAX_ITERATIONS * 3);
+    }
+
+    @Test
     @DisplayName("chatModel / toolExecutor 缺失 → ERROR 结果（best-effort 不抛）")
     void shouldFailWhenRequiredInputMissing() {
         AgentLoopInput bad = new AgentLoopInput(null, "s", "u", null, List.of(),
@@ -263,12 +320,31 @@ class ChatModelToolLoopTest {
                 AssistantMessage.builder().content(text).build())), null);
     }
 
+    private static ChatResponse responseWithTextAndUsage(String text, int totalTokens) {
+        return new ChatResponse(List.of(new Generation(
+                AssistantMessage.builder().content(text).build())),
+                ChatResponseMetadata.builder()
+                        .usage(new DefaultUsage(1, 1, totalTokens))
+                        .build());
+    }
+
     private static ChatResponse responseWithToolCall(String id, String name, String args) {
         AssistantMessage message = AssistantMessage.builder()
                 .content("")
                 .toolCalls(List.of(new AssistantMessage.ToolCall(id, "function", name, args)))
                 .build();
         return new ChatResponse(List.of(new Generation(message)), null);
+    }
+
+    private static ChatResponse responseWithToolCallAndUsage(String id, String name, String args, int totalTokens) {
+        AssistantMessage message = AssistantMessage.builder()
+                .content("")
+                .toolCalls(List.of(new AssistantMessage.ToolCall(id, "function", name, args)))
+                .build();
+        return new ChatResponse(List.of(new Generation(message)),
+                ChatResponseMetadata.builder()
+                        .usage(new DefaultUsage(1, 1, totalTokens))
+                        .build());
     }
 
     /** 确定性 ChatModel stub：可编程响应队列 + 记录最近一次调用收到的 messages。 */

@@ -127,6 +127,7 @@ public class RuntimeTurnExecutor implements AgentRuntime {
         record(ctx, 0, AgentEventType.AGENT_COMPLETED,
                 safeMap("iterations", loopResult.iterations(),
                         "toolCalls", loopResult.toolCallCount(),
+                        "tokens", loopResult.tokenUsage(),
                         "finishReason", loopResult.finishReason()));
         if (loopResult.success()) {
             return AgentExecutionResult.builder()
@@ -134,12 +135,14 @@ public class RuntimeTurnExecutor implements AgentRuntime {
                     .output(loopResult.text())
                     .thinking(loopResult.thinking())
                     .finishReason(loopResult.finishReason())
+                    .tokenUsage(loopResult.tokenUsage())
                     .build();
         }
         return AgentExecutionResult.builder()
                 .status(ExecutionStatus.FAILED)
                 .output(loopResult.errorMessage() != null ? loopResult.errorMessage() : loopResult.text())
                 .finishReason(loopResult.finishReason())
+                .tokenUsage(loopResult.tokenUsage())
                 .build();
     }
 

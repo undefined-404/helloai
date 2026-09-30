@@ -16,6 +16,7 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
@@ -46,6 +47,10 @@ import java.util.Set;
  * <p>循环进度检查点（P0-C checkpoint）：每轮「工具执行与回喂完成、下一轮 LLM 未开始」
  * 边界经 {@link LoopCheckpointListener} 回调落库（V66 边界：只落进度事实，不回放消息）；
  * write-only 纪律——回调缺失跳过、失败仅告警，不阻断循环。</p>
+ *
+ * <p>Token 用量采集（B3 tokenUsage）：每轮 LLM 调用后读取 {@code response.metadata.usage.totalTokens}
+ * 并累加，经 {@link AgentLoopResult#tokenUsage()} 透出；provider 未返回 usage 时忽略
+ * （best-effort，不阻断循环，全程无 usage 则恒 null）。</p>
  */
 @Slf4j
 @Component
@@ -65,6 +70,7 @@ public class ChatModelToolLoop implements AgentLoop {
 
         int iterations = 0;
         int toolCallCount = 0;
+        Integer totalTokens = null;
         String lastText = "";
         Set<String> executedToolNames = new LinkedHashSet<>();
 
@@ -72,8 +78,10 @@ public class ChatModelToolLoop implements AgentLoop {
             iterations = i + 1;
             ChatResponse response = input.chatModel().call(new Prompt(messages, buildOptions(input)));
             if (response == null) {
-                return AgentLoopResult.error("chat model returned null response", iterations, toolCallCount);
+                return AgentLoopResult.error("chat model returned null response", iterations, toolCallCount,
+                        totalTokens);
             }
+            totalTokens = accumulateUsage(response, totalTokens);
             ChatResponseContentExtractor.ExtractedContent extracted =
                     ChatResponseContentExtractor.extract(response);
             lastText = extracted.text();
@@ -84,7 +92,7 @@ public class ChatModelToolLoop implements AgentLoop {
             if (assistant == null || !assistant.hasToolCalls()) {
                 return AgentLoopResult.stop(lastText,
                         extracted.thinking().isBlank() ? null : extracted.thinking(),
-                        iterations, toolCallCount);
+                        iterations, toolCallCount, totalTokens);
             }
             List<ToolResponseMessage.ToolResponse> toolResponses = new ArrayList<>();
             for (AssistantMessage.ToolCall toolCall : assistant.getToolCalls()) {
@@ -102,7 +110,7 @@ public class ChatModelToolLoop implements AgentLoop {
                 // 模型发了空工具调用列表（异常响应）：防死循环，按终态返回
                 return AgentLoopResult.stop(lastText,
                         extracted.thinking().isBlank() ? null : extracted.thinking(),
-                        iterations, toolCallCount);
+                        iterations, toolCallCount, totalTokens);
             }
             messages.add(ToolResponseMessage.builder().responses(toolResponses).build());
             // 循环进度检查点（P0-C checkpoint）：本轮 LLM + 工具均已完成、下一轮未开始；
@@ -110,7 +118,19 @@ public class ChatModelToolLoop implements AgentLoop {
             fireCheckpoint(input, new LoopCheckpoint(
                     i + 1, toolCallCount, messages.size(), new ArrayList<>(executedToolNames)));
         }
-        return AgentLoopResult.maxIterations(lastText, iterations, toolCallCount);
+        return AgentLoopResult.maxIterations(lastText, iterations, toolCallCount, totalTokens);
+    }
+
+    /**
+     * 累加当轮 Token 用量（B3）：读取 {@code response.metadata.usage.totalTokens}；
+     * metadata / usage / totalTokens 缺失时保持原累加值（best-effort，不阻断循环）。
+     */
+    private static Integer accumulateUsage(ChatResponse response, Integer accumulated) {
+        Usage usage = response.getMetadata() != null ? response.getMetadata().getUsage() : null;
+        if (usage == null || usage.getTotalTokens() == null) {
+            return accumulated;
+        }
+        return (accumulated != null ? accumulated : 0) + usage.getTotalTokens();
     }
 
     /**

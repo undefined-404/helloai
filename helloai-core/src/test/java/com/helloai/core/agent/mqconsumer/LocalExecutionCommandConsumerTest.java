@@ -106,7 +106,7 @@ class LocalExecutionCommandConsumerTest {
             when(subTaskService.getById(22L)).thenReturn(subTask);
             when(agentService.getById(11L)).thenReturn(agent);
             when(agentExecutionRecordService.markRunning(44L)).thenReturn(true);
-            when(agentExecutionRecordService.markSuccess(44L)).thenReturn(true);
+            when(agentExecutionRecordService.markSuccess(44L, null)).thenReturn(true);
             // Phase 1 Step 2/4：工具 / 环境由消费侧 agent 域解析注入装配器
             when(agentMcpServerService.getEnabledTools(11L))
                     .thenReturn(List.of("pullTasks", "submitResult"));
@@ -130,8 +130,8 @@ class LocalExecutionCommandConsumerTest {
             verify(contextAssembler).afterTurn(same(subTask), same(agent), eq(1), any());
             // record CAS 由消费侧代理执行
             verify(agentExecutionRecordService).markRunning(44L);
-            verify(agentExecutionRecordService).markSuccess(44L);
-            verify(agentExecutionRecordService, never()).markFailed(any(), any());
+            verify(agentExecutionRecordService).markSuccess(44L, null);
+            verify(agentExecutionRecordService, never()).markFailed(any(), any(), any());
             // 回写：AgentResult 映射（成功 + executorName=RuntimeTurnExecutor）
             verify(executionResultHandler).handleSuccess(eq(22L), eq(11L), argThat(r ->
                     r.isSuccess()
@@ -158,7 +158,7 @@ class LocalExecutionCommandConsumerTest {
             when(subTaskService.getById(22L)).thenReturn(subTask);
             when(agentService.getById(11L)).thenReturn(agent);
             when(agentExecutionRecordService.markRunning(44L)).thenReturn(true);
-            when(agentExecutionRecordService.markFailed(44L, "run failed")).thenReturn(true);
+            when(agentExecutionRecordService.markFailed(44L, "run failed", null)).thenReturn(true);
             when(contextAssembler.assemble(any(), any(), any(), any(), any()))
                     .thenReturn(assembledContext());
             when(agentRuntime.execute(any(AgentContext.class)))
@@ -171,8 +171,8 @@ class LocalExecutionCommandConsumerTest {
             localExecutionCommandConsumer.consume(baseCommand());
 
             verify(agentExecutionRecordService).markRunning(44L);
-            verify(agentExecutionRecordService).markFailed(44L, "run failed");
-            verify(agentExecutionRecordService, never()).markSuccess(any());
+            verify(agentExecutionRecordService).markFailed(44L, "run failed", null);
+            verify(agentExecutionRecordService, never()).markSuccess(any(), any());
             // 失败回写：handleFailure（BizException 承载失败正文）
             verify(executionResultHandler).handleFailure(eq(22L), eq(11L), argThat(e -> e instanceof RuntimeException));
             verify(executionResultHandler, never()).handleSuccess(any(), any(), any());
@@ -198,7 +198,7 @@ class LocalExecutionCommandConsumerTest {
 
             verify(agentExecutionRecordService).markRunning(44L);
             verify(agentExecutionRecordService).markFailed(44L, "boom");
-            verify(agentExecutionRecordService, never()).markSuccess(any());
+            verify(agentExecutionRecordService, never()).markSuccess(any(), any());
             verify(executionResultHandler).handleFailure(eq(22L), eq(11L), any());
         }
 
@@ -247,7 +247,7 @@ class LocalExecutionCommandConsumerTest {
             // IN_PROGRESS 幂等跳过状态推进；markRunning CAS 失败即放弃，不进入执行
             verify(agentExecutionRecordService).markRunning(44L);
             verify(agentRuntime, never()).execute(any(AgentContext.class));
-            verify(agentExecutionRecordService, never()).markSuccess(any());
+            verify(agentExecutionRecordService, never()).markSuccess(any(), any());
             verify(agentExecutionRecordService, never()).markFailed(any(), any());
         }
 
@@ -265,7 +265,7 @@ class LocalExecutionCommandConsumerTest {
 
             verify(agentRuntime, never()).execute(any(AgentContext.class));
             verify(agentExecutionRecordService, never()).markRunning(any());
-            verify(agentExecutionRecordService, never()).markSuccess(any());
+            verify(agentExecutionRecordService, never()).markSuccess(any(), any());
             verify(agentExecutionRecordService, never()).markFailed(any(), any());
         }
 
