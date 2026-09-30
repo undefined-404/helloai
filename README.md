@@ -234,6 +234,18 @@ CI 配置：[`.workflow/helloai-ci.yml`](.workflow/helloai-ci.yml)（Gitee Go，
 
 **架构红线守卫**：跨域反向依赖（`agent→task` / `planner→agent` / `task→agent`）计数**只降不升**，由 `scripts/ci/check-arch-freeze.sh` 把关。确需新增时，执行 `bash scripts/ci/check-arch-freeze.sh --update-baseline` 更新基线，并在评审中说明理由。
 
+**CI 跑在哪台机器上**：`.workflow/helloai-ci.yml` 使用 `shell@agent` 在**自有主机组**执行（Gitee Go 官方计费规则下，自有主机执行**不消耗**每月免费核分）。换新主机时，先在该主机跑一次自检：
+
+```bash
+bash scripts/ci/host-prepare.sh                  # 只检测，不改系统（安全）
+sudo bash scripts/ci/host-prepare.sh --install   # 安装缺失的 JDK17 / Maven / Node20
+sudo bash scripts/ci/host-prepare.sh --swap 2G   # 4G 内存机器建议加 2G swap
+```
+
+> ⚠️ Gitee 的 Agent 会自带一份 JDK 8（`…/gitee_go_agent/jdk4agent`）。`scripts/ci/lib-jdk.sh` 已改为**实测 `java -version` 大版本必须为 17**，不会再把它误判为可用 JDK（旧实现只按路径黑名单判断，会在自有主机上踩这个坑）。
+>
+> ⚠️ 流水线需在 Gitee 侧打开该任务的「**是否克隆代码**」开关，主机上才会有仓库副本（前置：主机 SSH 公钥已加入 Gitee）。脚本在找不到仓库时会以非零码明确失败，**不会假绿**。
+
 ---
 
 ## 📸 界面预览
