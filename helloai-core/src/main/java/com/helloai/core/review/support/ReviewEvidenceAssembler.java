@@ -3,6 +3,7 @@ package com.helloai.core.review.support;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.core.shared.util.AttachmentContentPolicy;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
+import com.helloai.core.shared.util.TextTruncator;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.AttachmentService;
@@ -179,18 +180,21 @@ public class ReviewEvidenceAssembler {
             int originalChars = content.length();
             boolean perFileTruncated = false;
             if (content.length() > AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT) {
-                content = content.substring(0, AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT);
+                // P-1 防御：行边界回退截断（避免拦腰切断 URL/代码行）
+                content = TextTruncator.truncateAtLineBoundary(
+                        content, AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT);
                 truncated = true;
                 perFileTruncated = true;
             }
             if (totalChars + content.length() > AttachmentContentPolicy.ATTACHMENT_CONTENT_TOTAL_LIMIT) {
                 int remaining = AttachmentContentPolicy.ATTACHMENT_CONTENT_TOTAL_LIMIT - totalChars;
                 if (remaining > 0) {
-                    appendAttachmentContent(sb, att, content.substring(0, remaining));
+                    String partial = TextTruncator.truncateAtLineBoundary(content, remaining);
+                    appendAttachmentContent(sb, att, partial);
                     // P1-4-c：结构化标注行——让核验模型精确知道「哪些字节不可见」，
                     // 而非仅凭自然语言标记（后者无法被消费方机器读取）。
                     sb.append("[TRUNCATED] file=").append(attName)
-                            .append(" shown=").append(remaining)
+                            .append(" shown=").append(partial.length())
                             .append(" total=").append(originalChars)
                             .append(" reason=total_limit\n");
                     truncated = true;

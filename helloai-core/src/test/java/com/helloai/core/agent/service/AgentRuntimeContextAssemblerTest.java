@@ -19,6 +19,7 @@ import com.helloai.core.agent.runtime.loop.LoopCheckpointListener;
 import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.tool.ToolRegistry;
+import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Uncertainty;
 import com.helloai.core.task.service.AttachmentService;
@@ -318,13 +319,66 @@ class AgentRuntimeContextAssemblerTest {
             assertThat(prompt)
                     .contains("## 依赖产出参考（直接前置）")
                     .contains("### 前置 1：上游子任务（状态：DONE）")
-                    .contains("（已截断至 4000 字符）");
+                    .contains("[TRUNCATED] shown=4000 total=5000 reason=dep_content_limit")
+                    .contains("必须在交付物中显式声明缺失项");
             Map<String, Object> payload = captureTimelinePayload("sub_task_spec_context_loaded");
             assertThat(payload)
                     .containsEntry("depCount", 1)
                     .containsEntry("loadedCount", 1)
                     .containsEntry("truncatedCount", 1)
                     .containsEntry("degraded", false);
+        }
+
+        @Test
+        @DisplayName("依赖段：多附件正序拼接并带来源标题行（P-1：不再只取倒序第一个附件）")
+        void shouldConcatenateAllAttachmentsInCreationOrder() {
+            SubTask subTask = subTask();
+            subTask.setDependsOn(List.of(7L));
+            SubTask dep = new SubTask();
+            dep.setId(7L);
+            dep.setTitle("上游子任务");
+            dep.setStatus(SubTaskStatus.DONE);
+            when(subTaskService.listByIds(anyList())).thenReturn(List.of(dep));
+
+            // listActive 按 createTime 倒序返回：附录（晚创建）在前——修复前下游只拿到附录
+            Attachment appendix = new Attachment();
+            appendix.setId(2L);
+            appendix.setFileName("appendix.md");
+            Attachment main = new Attachment();
+            main.setId(1L);
+            main.setFileName("main.md");
+            when(attachmentService.listActive(7L)).thenReturn(List.of(appendix, main));
+            when(attachmentService.isContentLoadable(appendix)).thenReturn(true);
+            when(attachmentService.isContentLoadable(main)).thenReturn(true);
+            when(attachmentService.loadContent(2L)).thenReturn("附录正文".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            when(attachmentService.loadContent(1L)).thenReturn("主文件正文".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+            String prompt = invokeAssemble(subTask, agent(), List.of(), List.of()).getUserPrompt();
+
+            assertThat(prompt)
+                    .contains("【文件：main.md】\n主文件正文")
+                    .contains("【文件：appendix.md】\n附录正文");
+            assertThat(prompt.indexOf("main.md")).isLessThan(prompt.indexOf("appendix.md"));
+        }
+
+        @Test
+        @DisplayName("依赖段：超限截断回退到行边界（回退窗口内最近换行，不拦腰切断）")
+        void shouldTruncateAtLineBoundary() {
+            SubTask subTask = subTask();
+            subTask.setDependsOn(List.of(7L));
+            SubTask dep = new SubTask();
+            dep.setId(7L);
+            dep.setTitle("上游子任务");
+            dep.setStatus(SubTaskStatus.DONE);
+            // 换行在 3500（回退窗口 floor=3488 与上限 4000 之间）→ 截点回退到 3500
+            dep.setContext(Map.of("lastExecution", Map.of("output", "x".repeat(3500) + "\n" + "y".repeat(2000))));
+            when(subTaskService.listByIds(anyList())).thenReturn(List.of(dep));
+
+            String prompt = invokeAssemble(subTask, agent(), List.of(), List.of()).getUserPrompt();
+
+            assertThat(prompt)
+                    .contains("[TRUNCATED] shown=3500 total=5501 reason=dep_content_limit")
+                    .doesNotContain("y".repeat(100));
         }
 
         @Test

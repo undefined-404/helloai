@@ -98,6 +98,24 @@ public class AgentDispatchProperties {
     private int autoReviewMaxRework = 3;
 
     /**
+     * 自动核验重复失败短路开关（P-1 防御层 A2-2，2026-09-30）。
+     *
+     * <p>开启后：本轮驳回的 issues 与上一轮高度相似（相似度 ≥
+     * {@link #autoReviewRepeatFailureSimilarity}）且评分未提升时，判为「结构性失败」
+     * （同一输入连续驳回相同问题，重派结构上不可能成功——tku-e2e-01 空转 4 轮烧
+     * 346K tokens 后仍进死信）——不再触发返工重派，直接转 DEAD_LETTER 待人工。
+     * 默认 true。</p>
+     */
+    private boolean autoReviewRepeatFailureShortCircuit = true;
+
+    /**
+     * 重复失败相似度阈值（P-1 防御层 A2-2）：连续两轮驳回 issues 的字符 bigram
+     * Jaccard 相似度，1.0 = 完全相同。默认 0.85——既容忍 LLM 措辞微漂移，又要求
+     * 两轮驳回实质同因；配合「评分未提升」联合判定防误伤进步中的返工。</p>
+     */
+    private double autoReviewRepeatFailureSimilarity = 0.85;
+
+    /**
      * §6.52：N11 外部回退时是否跳过"执行密集"任务的自动降级。
      *
      * <p>执行密集任务（需本机 shell/文件/服务操作）回退给无本机能力的 API_KEY_LLM

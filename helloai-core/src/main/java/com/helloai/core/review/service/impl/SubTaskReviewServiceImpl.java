@@ -19,6 +19,7 @@ import com.helloai.core.review.service.SubTaskReviewService;
 import com.helloai.core.review.support.ReviewChannel;
 import com.helloai.core.review.support.ReviewEvidenceAssembler;
 import com.helloai.core.review.support.ReviewExecutionEngine;
+import com.helloai.core.review.support.ReviewFailureSignature;
 import com.helloai.core.review.support.VerdictParser;
 import com.helloai.core.shared.event.SubTaskSubmittedForReviewEvent;
 import com.helloai.core.task.entity.SubTask;
@@ -555,6 +556,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         Long targetExecutor = executorAgentId != null ? executorAgentId : subTask.getAssignedAgentId();
 
         // 核验意见写入子任务 context（作为返工原因，供执行者/人工查看）
+        List<Map<String, Object>> historySnapshot = null;
         try {
             SubTask fresh = subTaskService.getById(subTaskId);
             if (fresh != null) {
@@ -600,11 +602,21 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                 // 旧字段保留读，写入收敛到 reviewHistory（不删 lastAutoReview 以保完全向后兼容）
                 ctx.put("lastAutoReview", current);
 
+                // 供写库后的重复失败短路判定使用（含本轮，末尾两条 = 上轮 + 本轮）
+                historySnapshot = history;
                 fresh.setContext(ctx);
                 subTaskService.updateById(fresh);
             }
         } catch (Exception e) {
             log.warn("核验意见写入 context 失败（不阻断返工）: subTaskId={}, err={}", subTaskId, e.getMessage());
+        }
+
+        // P-1 防御（A2-2，2026-09-30）：重复失败短路——同一输入连续驳回相同结构性失败时，
+        // 重派只是空转（tku-e2e-01 空转 4 轮烧 346K tokens 后仍进死信）。判定在 reviewHistory
+        // 落库后、返工之前：高度相似且评分未提升 → 不触发返工重派，直接 DEAD_LETTER 待人工。
+        if (dispatchProperties.isAutoReviewRepeatFailureShortCircuit()
+                && shortCircuitRepeatedFailure(subTask, reviewerAgentId, historySnapshot, verdict)) {
+            return;
         }
 
         // Phase 0 A3（LOG-20260904-007）：rework 返回 false = 共享预算耗尽（attempt_total 达
@@ -644,6 +656,69 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             log.warn("返工重执行命令下发失败（子任务停留 REWORK 等兜底）: subTaskId={}, err={}",
                     subTaskId, e.getMessage());
         }
+    }
+
+    /**
+     * P-1 防御（A2-2）：重复失败短路判定与处置。
+     *
+     * <p>判定（reviewHistory 末尾两条 = 上轮 + 本轮）：两轮 issues 的字符 bigram 相似度
+     * ≥ {@code helloai.dispatch.auto-review-repeat-failure-similarity}（默认 0.85），
+     * 且本轮评分未严格提升 → 判「结构性失败」：同一输入连续驳回相同问题，重派结构上
+     * 不可能成功（tku-e2e-01：上游材料截断，空转 4 轮烧 346K tokens 后仍进死信）。</p>
+     *
+     * <p>处置（复用 §6.52 熔断范式，与 {@link #doReview} 的 rework_limit 熔断对称）：
+     * 跳过事件 → 显式入死信事件 → 判决落 review_record → {@code changeStatus(DEAD_LETTER)}
+     * → 人工介入标记；返回 true 表示已短路（调用方不再走返工重派）。</p>
+     */
+    private boolean shortCircuitRepeatedFailure(SubTask subTask, Long reviewerAgentId,
+                                                List<Map<String, Object>> history, ReviewVerdict verdict) {
+        if (history == null || history.size() < 2) {
+            return false;
+        }
+        Map<String, Object> prev = history.get(history.size() - 2);
+        Map<String, Object> curr = history.get(history.size() - 1);
+        String prevIssues = ReviewFailureSignature.normalize(prev.get("issues"));
+        String currIssues = ReviewFailureSignature.normalize(curr.get("issues"));
+        if (prevIssues.isBlank() || currIssues.isBlank()) {
+            return false;
+        }
+        double similarity = ReviewFailureSignature.similarity(prevIssues, currIssues);
+        double threshold = dispatchProperties.getAutoReviewRepeatFailureSimilarity();
+        if (similarity < threshold) {
+            return false;
+        }
+        Integer prevScore = ReviewFailureSignature.asScore(prev.get("score"));
+        Integer currScore = ReviewFailureSignature.asScore(curr.get("score"));
+        if (currScore != null && prevScore != null && currScore > prevScore) {
+            // 评分在提升：模型有实质进展，继续正常返工（防误伤进步中的迭代）
+            return false;
+        }
+
+        Long subTaskId = subTask.getId();
+        int round = curr.get("round") instanceof Number n ? n.intValue() : history.size();
+        int reworkCount = subTask.getReworkCount() != null ? subTask.getReworkCount() : 0;
+        log.warn("自动核验重复失败短路：判结构性失败转死信, subTaskId={}, round={}, similarity={}, threshold={}, score={}->{}",
+                subTaskId, round, String.format("%.3f", similarity), threshold, prevScore, currScore);
+        taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId,
+                "sub_task_auto_review_skip_repeated_failure", AgentRole.REVIEWER, reviewerAgentId,
+                Map.of("reason", "repeated_failure_signature",
+                        "round", round,
+                        "similarity", similarity,
+                        "threshold", threshold,
+                        "issues", VerdictParser.summarize(currIssues, 200)));
+        // 与调度/返工上限熔断对称：显式入死信事件，DLQ 泳道"短路 → 人工打捞"可见
+        taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId,
+                "sub_task_review_dead_letter", AgentRole.SYSTEM, null,
+                Map.of("reason", "repeated_failure_signature",
+                        "round", round,
+                        "similarity", similarity,
+                        "reworkCount", reworkCount));
+        // 判决照常落 review_record（REJECTED），保留完整留痕供人工复核
+        recordAutoReviewQuietly(subTaskId, reviewerAgentId, ReviewResult.REJECTED, verdict);
+        subTaskService.changeStatus(subTaskId, SubTaskStatus.DEAD_LETTER, null);
+        subTaskService.markManualIntervention(subTaskId, "repeated_failure_signature",
+                Map.of("round", round, "similarity", similarity, "threshold", threshold));
+        return true;
     }
 
     /** 自动核验落 review_record（仅记录；失败不阻断主链路）。score 缺失时按判定结果兜底并限幅 1~5。 */

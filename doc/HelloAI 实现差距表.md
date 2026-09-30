@@ -16,6 +16,7 @@
 > 最后更新：2026-09-30（**checkpoint 每轮落库落地（审计 §11.7 #1 下批首任务收口）**：loop 每轮 iteration 边界经 `LoopCheckpointListener` 落 `agent_session.snapshot.loop`（循环进度事实：已完成轮数 / 工具调用次数 / 已执行工具），重派恢复段渲染接续进度；零 DDL、保持 V66 边界（不做 LLM 级断点续接、不回放消息历史）；`AgentLoopInput` 旧 12 参构造器保留，现有调用点零改动。全量 7 模块 BUILD SUCCESS（core 1585 = 1572 + 13 新增，0 失败 0 错误）。详见 §0.4 与 `doc/log/2026-09.md` 2026-09-30 条目）
 > 最后更新：2026-09-30（**checkpoint E2E DB 实证通过（审计 §12.6 #3 闭环）**：内部链路真实 deepseek 任务 `ckpt-e2e-01-inner-loop-web-search`（taskId `2105185642520064002`）3 子任务全 DONE + 自动评审通过；直查 `agent_session.snapshot->'loop'` 同一子任务随轮次增长（iteration 1→2→3、toolCallCount 3→7→10、messageCount 4→6→8），终态 executedTools 含 `web_search`；新增复验脚本 `scripts/powershell/verify-inner-loop-checkpoint-e2e.ps1`（-AssertOnly）SCRIPT_EXIT=0；过程修复本地 AES 密钥注入环境坑（Tag mismatch：本地启动须注入 `HELLOAI_CREDENTIAL_AES_KEY_BASE64` 原密钥，值见本地私有 `.env`）。详见 `doc/log/2026-09.md` 2026-09-30 条目与审计报告 §12.9）
 > 最后更新：2026-09-30（**tokenUsage 端到端落地（审计 §12.3 P2 清偿 / B5 清零）**：`ChatModelToolLoop` 每轮累加 `usage.totalTokens` → `AgentLoopResult` / `AgentExecutionResult.tokenUsage` → 终态 CAS 落 `agent_execution_record.token_usage`（V97 迁移）；`AGENT_COMPLETED` payload 增 `tokens`；内部链路真实任务 `tku-e2e-01-token-usage`（taskId `2105197269487259649`）E2E 三通道（结构化列 / 事件 payload / `sub_task.context.lastExecution.tokens`）7 个 token 值完全一致，新增复验脚本 `scripts/powershell/verify-token-usage-e2e.ps1`（-AssertOnly）SCRIPT_EXIT=0。全量 7 模块 BUILD SUCCESS（core 1591 = 1585 + 6，0 失败 0 错误）。**边界**：外部执行者（CLI_CLIENT）token 回传仍为盲区（G-008 协议未含 tokens）。详见 §0.6 与 `doc/log/2026-09.md` 2026-09-30 条目）
+> 最后更新：2026-09-30（**P-1「跨子任务产出传递截断」修复批次**：根因精化——真病灶 = 附件选择顺序（非 4000/8000 截断，见 §0.1 C-12 与审计报告 §14.1）；完整防御三层（A1 病灶选择修复 + A2-1 行边界截断与结构化标注 + A2-2 重复失败短路）+ A4 `clean-minio-bucket.ps1` 清桶工具交付（关闭 C-11）；全量 core **1614** 例 0 失败 BUILD SUCCESS。详见 §0.7 与 `doc/log/2026-09.md` 2026-09-30 条目）
 
 # 0. 口径订正与文档一致性记录
 
@@ -36,6 +37,10 @@
 | C-8 | **G-014 / G-015 的 E2E 状态**（§1 两行「处置」列）——本表**正文行滞后于表头与 §0.1** 的同类漂移 | 「**E2E 脚本与 Docker 实测 NOT RUN**」「**E2E 与生产复测 NOT RUN**（需部署 + PG/Docker）」 | 「**✅ E2E 已实跑（2026-09-30）**」——以**真实外部 CLI_CLIENT Agent 端到端 A 级实测**替代脚本级抽验 | 脚本 `verify-external-agent-e2e.ps1`（含 `-AssertOnly`）+ `verify-single-track-e2e.ps1`；**DB 独立复核（2026-09-30 午后审计）**：`task` 7/7 DONE、`sub_task` 24/24 DONE（零卡死）、`route=agent_runtime` 9/9（零 legacy）、`agent_offline`×4、`sub_task_unclaimed_timeout_reassign`×3、`sub_task_auto_review_rejected`×6、`sub_task_dispatch_prepare`×29；详见 `doc/log/2026-09.md` 2026-09-30 条目 |
 
 | C-9 | **`cleanup-test-data.sql` 覆盖范围**（§0.1 C-7、审计报告 §10「数据清空」行、`be59c3a` commit message 均记为「43 张业务表 TRUNCATE + MinIO 清桶」） | 「43 张业务表 + MinIO 清桶」 | **实测 35 张业务表**（DO 动态 TRUNCATE，缺表自动跳过）；**脚本内不含 MinIO 清桶**（无任何 minio/mc/bucket 语句） | `cleanup-test-data.sql:41-72` 的 `tables TEXT[]` 实数 = 35（任务链 13 + 执行痕迹 8 + 需求对话 4 + 审计附件 2 + 基础设施业务 8），文件自身注释亦写「35 张业务表」；`grep -iE "minio\|mc rm\|bucket" cleanup-test-data.sql` = 0 命中 |
+| C-10 | **token E2E 任务闭合口径 + 新发现「跨子任务产出传递截断」缺陷 P-1**（审计 §12.10(2) 记「3 子任务真实执行」，未登记任务本身未闭合） | 隐含「E2E 全绿」 | **token 采集验收已达成**（三通道一致为真，审计方 DB 复核证实），但**任务 `tku-e2e-01-token-usage` 本身未闭合**——子任务 3 被自动评审连续拒绝 4 次 → 死信 → 待人工，任务停在 IN_PROGRESS。**根因非模型能力**：`AgentRuntimeContextAssembler.java:84` `DEP_CONTENT_MAX_CHARS=4000`（执行侧）+ `AttachmentContentPolicy.java:25` `ATTACHMENT_CONTENT_PER_FILE_LIMIT=8000`（核验侧）把上游 22685 字符产出截断，下游物理上拿不到 7 条关键词中的 5 条 → 重派 4 次均在重试「结构性不可能」任务 | 评审 payload 原文含 `[TRUNCATED] file=… shown=8000 total=22685 reason=per_file_limit`；子任务 3 产出自述 5 条「not contained in the material available to this subtask」；`task_timeline` 事件链 `sub_task_auto_review_rejected`×4 → `sub_task_review_dead_letter` → `sub_task_manual_intervention_required`；详见审计报告 §13.2 |
+| C-11 | **MinIO 清桶工具仍缺**（C-9 遗留未解决） | C-9 记「脚本内不含 MinIO 清桶」 | **至今无任何 MinIO 清理工具**——`scripts/` 下仅有 `verify-minio-artifact.ps1/.sh`（**核验**脚本，非清理） | `grep -rlniE "mc rm\|bucket" scripts/` 无清理命中；用户已声明「可强制清理 MinIO 附件数据」，但执行前须先补清理手段（否则 TRUNCATE `attachment` 表后桶内对象成孤儿） |
+| C-12 | **P-1 根因精化 + 修复落地**（订正 C-10 根因判定；审计 §13.2 → §14.1） | C-10 记根因 = 「4000/8000 截断把 22685 字符产出截到丢 5 条关键词」 | **根因修正：真病灶 = 附件选择顺序**——sub2 两个 ACTIVE 附件中 `web_search_raw_links_appendix.md`（19294 字符）比主文件（7809 字符）晚 **34.9ms** 创建，`listActive` 按 `create_time desc` 使其排首，消费方取首个可加载附件即 return → 下游拿到的是 appendix（7 条关键词仅 2/7）；**22685 = v1 主文件（已 INACTIVE）**且其 7 条关键词全在首 4000 内（截断不丢）。修复：完整防御三层——A1 三处同源（正序 + 全附件拼接）+ A2-1（行边界截断 + 结构化标注）+ A2-2（重复失败短路），详见 §0.7 | sub3 产出原文自述 "the upstream material attached to this subtask is **the appendix link register**"（直接证认，解除审计「未取到 Prompt 快照」局限）；附件表 `create_time` 07:38:27.440192 / .475050；逐文件关键词位置实测（v1 22685 字符与 v2 主文件均 7/7 < 4000、appendix 2/7）；新增 23 用例 + 全量 core **1614** BUILD SUCCESS |
+| C-13 | **MinIO 清桶工具交付**（关闭 C-11） | C-11 记「至今无任何 MinIO 清理工具」 | **已交付** `scripts/powershell/clean-minio-bucket.ps1`——纯 PowerShell SigV4 实现（零外部依赖）；**dry-run 默认**，`-Execute` 才执行批量删除（≤1000/批 + Content-MD5）；`-Prefix` 支持隔离前缀；RFC3986 自定义编码兼容中文 key | 本地闭环实测：临时前缀 PUT 3 对象（含中文 key）→ dry-run 列出 3 → `-Execute` 删除（HTTP 200 / 失败 0 / 复核剩余 0）；远程 dev 实例 dry-run HTTP 200；`scripts/README.md` 已登记 |
 
 ## 0.2 范围漂移补登记与优先级取舍声明（2026-09-29）
 
@@ -116,6 +121,20 @@
 | 回归 | `mvn -o test -DskipTests=false` 7 模块 BUILD SUCCESS；core **1591**（= 1585 + 6 新增）、job 85、api 70，0 失败 0 错误 | `.tmp/tku-verify-full.log`；定向 3 类 35 例 `.tmp/tku-verify-targeted.log` |
 
 **边界（必须区分，避免误读为「成本观测全通」）**：本批清偿的是**平台内部 Runtime 执行链**（进程内 loop）的 token 采集与落库；**外部执行者**（CLI_CLIENT 经 MCP `submitResult`）的 token 回传仍为盲区（提交协议未含 tokens），仍属 G-008 的推进前置（该行「外部执行 tokens=null」暂不变）。
+
+## 0.7 P-1「跨子任务产出传递截断」修复批次（审计 §13.2 响应，2026-09-30）
+
+> 来源：审计报告 §13.2（P-1 缺陷）+ §13.3（口径订正 C-10/C-11）；用户决策四项全做（病灶修复 / 完整防御 / 文档+提交 / MinIO 清桶）。**根因精化**：审计初判「4000/8000 截断丢 5 条关键词」经实施方原始数据复核不成立——真病灶为**附件选择顺序**（见 §0.1 C-12 与审计报告 §14.1）。
+
+| 项 | 落地内容 | 证据 |
+|---|---|---|
+| A1 病灶 | 三处消费方同源修复：**创建时间正序 + 拼接全部可加载 ACTIVE 附件**（各带 `【文件：{name}】` 分割标题行；单附件失败仅跳过；全失败回退）——`AgentRuntimeContextAssembler` / `McpToolServiceImpl` / `SubTaskCompletionListener` | 定向 +4 用例（多附件正序拼接 / 单附件失败跳过）；修复后注入内容含全部附件且正文在前 |
+| A2-1 截断 | `TextTruncator.truncateAtLineBoundary`（行边界回退窗口 512）+ 结构化 `[TRUNCATED] shown=X total=Y reason=...`（shown=实际长度）+ 执行侧指引句（缺失显式声明、禁臆测补全）；接入执行 / 评审 / 报告三侧 | `TextTruncatorTest` 7 例；Assembler 既有断言适配（`已截断至 4000 字符` → 结构化标注） |
+| A2-2 短路 | `ReviewFailureSignature`（字符 bigram Jaccard + canonical 规范化，阈值 0.85）→ 相似重复失败**不再重派**直接 `DEAD_LETTER`（`sub_task_auto_review_skip_repeated_failure` → reason=`repeated_failure_signature`）；开关 `autoReviewRepeatFailureShortCircuit` 默认 true | 签名 8 例 + 评审 +3 例（短路触发 / score 提升不短路 / 开关关闭不短路） |
+| A4 清桶 | `scripts/powershell/clean-minio-bucket.ps1`（纯 PS SigV4；dry-run 默认；`-Execute` 批删；`-Prefix` 隔离）——**关闭 C-11** | 本地闭环（PUT 3 → 删 3 → 复核 0）+ 远程 dry-run；README 登记 |
+| 回归 | `mvn -o -DskipTests=false clean test` 7 模块 BUILD SUCCESS；core **1614**（= 1591 + 23）、job 85、api 70，0 失败 0 错误 | `.tmp/p1-full2.log`（定向 6 类 `.tmp/p1-test5.log`） |
+
+**边界**：A1 为消费方同源修复（未抽共享组件，三处消费语义不同）；`listActive` SQL 排序未动；A2-2 阈值 0.85 宁漏勿错杀（极端重写型 issue 文本可能漏判）；修复后同模式任务 E2E 再验证列入下批。
 
 # 1. 总体矩阵
 

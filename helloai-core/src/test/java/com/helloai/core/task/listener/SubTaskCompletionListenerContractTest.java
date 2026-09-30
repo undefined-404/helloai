@@ -107,12 +107,73 @@ class SubTaskCompletionListenerContractTest {
         assertThat(captor.getValue())
                 .containsEntry("subTaskId", SUB_TASK_ID)
                 .containsEntry("title", "契约定义")
-                .containsEntry("content", "接口签名：POST /api/orders")
+                // P-1：附件注入统一带来源标题行（fileName 为空回退 attachment-{id}）
+                .containsEntry("content", "【文件：attachment-5】\n接口签名：POST /api/orders")
                 .containsKey("backfilledAt");
 
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_contract_backfilled"),
                 eq(AgentRole.SYSTEM), isNull(), any());
+    }
+
+    @Test
+    @DisplayName("P-1 多附件（listActive 倒序）→ 按创建正序拼接，各带来源标题行")
+    void shouldConcatenateAttachmentsInCreationOrder() {
+        SubTask subTask = contractSubTask();
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
+        stubCompletionChain();
+
+        // listActive 语义为 createTime desc：附录（晚创建）在前、主文件（早创建）在后
+        Attachment appendix = new Attachment();
+        appendix.setId(9L);
+        appendix.setFileName("appendix.md");
+        Attachment main = new Attachment();
+        main.setId(7L);
+        main.setFileName("main.md");
+        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(appendix, main));
+        when(attachmentService.isContentLoadable(main)).thenReturn(true);
+        when(attachmentService.isContentLoadable(appendix)).thenReturn(true);
+        when(attachmentService.loadContent(7L))
+                .thenReturn("主文件正文".getBytes(StandardCharsets.UTF_8));
+        when(attachmentService.loadContent(9L))
+                .thenReturn("附录正文".getBytes(StandardCharsets.UTF_8));
+
+        listener.onSubTaskCompleted(new SubTaskCompletedEvent(SUB_TASK_ID, TASK_ID));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+        verify(taskRunningSpecService).updateContract(eq(TASK_ID), captor.capture());
+        assertThat((String) captor.getValue().get("content"))
+                .isEqualTo("【文件：main.md】\n主文件正文\n【文件：appendix.md】\n附录正文");
+    }
+
+    @Test
+    @DisplayName("P-1 单个附件读取失败 → 跳过该附件，其余附件正常拼接")
+    void shouldSkipFailedAttachmentButKeepOthers() {
+        SubTask subTask = contractSubTask();
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
+        stubCompletionChain();
+
+        Attachment broken = new Attachment();
+        broken.setId(8L);
+        broken.setFileName("broken.md");
+        Attachment main = new Attachment();
+        main.setId(7L);
+        main.setFileName("main.md");
+        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(main, broken));
+        when(attachmentService.isContentLoadable(main)).thenReturn(true);
+        when(attachmentService.isContentLoadable(broken)).thenReturn(true);
+        when(attachmentService.loadContent(7L))
+                .thenReturn("主文件正文".getBytes(StandardCharsets.UTF_8));
+        when(attachmentService.loadContent(8L)).thenThrow(new RuntimeException("object missing"));
+
+        listener.onSubTaskCompleted(new SubTaskCompletedEvent(SUB_TASK_ID, TASK_ID));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+        verify(taskRunningSpecService).updateContract(eq(TASK_ID), captor.capture());
+        assertThat((String) captor.getValue().get("content"))
+                .isEqualTo("【文件：main.md】\n主文件正文");
     }
 
     @Test

@@ -17,6 +17,7 @@ import com.helloai.core.shared.event.TaskAutoCompletedEvent;
 import com.helloai.core.shared.util.AttachmentContentPolicy;
 import com.helloai.core.shared.util.SubTaskDependencyOrder;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
+import com.helloai.core.shared.util.TextTruncator;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
@@ -705,14 +706,17 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
             int originalChars = content.length();
             boolean perFileTruncated = false;
             if (content.length() > AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT) {
-                content = content.substring(0, AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT);
+                // P-1 防御：行边界回退截断（避免拦腰切断 URL/代码行）
+                content = TextTruncator.truncateAtLineBoundary(
+                        content, AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT);
                 perFileTruncated = true;
             }
             if (totalChars + content.length() > AttachmentContentPolicy.ATTACHMENT_CONTENT_TOTAL_LIMIT) {
                 int remaining = AttachmentContentPolicy.ATTACHMENT_CONTENT_TOTAL_LIMIT - totalChars;
                 if (remaining > 0) {
+                    String partial = TextTruncator.truncateAtLineBoundary(content, remaining);
                     sb.append("#### 附件：").append(att.getFileName()).append('\n')
-                            .append(content, 0, remaining).append('\n');
+                            .append(partial).append('\n');
                 }
                 sb.append("[TRUNCATED] 附件正文总量超限，完整内容见附件文件\n");
                 break;
@@ -721,7 +725,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
             sb.append("#### 附件：").append(att.getFileName()).append('\n').append(content).append('\n');
             if (perFileTruncated) {
                 sb.append("[TRUNCATED] file=").append(att.getFileName())
-                        .append(" shown=").append(AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT)
+                        .append(" shown=").append(content.length())
                         .append(" total=").append(originalChars)
                         .append(" reason=per_file_limit\n");
             }

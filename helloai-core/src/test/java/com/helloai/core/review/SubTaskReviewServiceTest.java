@@ -135,6 +135,8 @@ class SubTaskReviewServiceTest {
         lenient().when(reviewProperties.isDualReviewEnabled()).thenReturn(false);
         lenient().when(dispatchProperties.getAutoReviewMaxRework()).thenReturn(3);
         lenient().when(dispatchProperties.getReviewEvidenceCheckWaitMs()).thenReturn(0);
+        // P-1 A2-2 重复失败短路：显式阈值 0.85（mock 默认 0.0 会把任意相似度都判为重复失败）
+        lenient().when(dispatchProperties.getAutoReviewRepeatFailureSimilarity()).thenReturn(0.85);
         // 方案3 F2 附件内容注入：默认开启（开关用例单独 stub 为 false）
         lenient().when(dispatchProperties.isAttachmentContentEnabled()).thenReturn(true);
         // §6.82 核验互斥锁：默认可获取（所有既有用例走完整核验链路）；锁用例单独 stub 为 false
@@ -299,6 +301,101 @@ class SubTaskReviewServiceTest {
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_auto_review_rejected"),
                 eq(AgentRole.REVIEWER), eq(9L), anyMap());
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  P-1 A2-2 重复失败短路（reviewHistory 连续同因驳回 → 结构性失败转死信）
+    // ══════════════════════════════════════════════════════════════
+
+    private static final String SAME_ISSUES =
+            "7 条关键词中仅 2 条出现在材料中，其余 5 条 not contained in the material";
+
+    /** 携带上轮同因驳回的 reviewHistory 子任务（P-1 事故形态复现）。 */
+    private SubTask reviewSubTaskWithRepeatedFailureHistory() {
+        SubTask subTask = reviewSubTask();
+        Map<String, Object> ctx = new HashMap<>();
+        ctx.put("lastExecution", Map.of("output", "接口清单已整理完毕，覆盖全部端点。"));
+        ctx.put("reviewHistory", List.of(Map.of(
+                "round", 1, "ts", "2026-08-01T10:00:00Z",
+                "issues", SAME_ISSUES, "comment", "请补", "score", 2,
+                "executorDoneIssues", List.of())));
+        subTask.setContext(ctx);
+        return subTask;
+    }
+
+    @Test
+    @DisplayName("P-1 A2-2 连续同因驳回（相似≥阈值 + 评分未提升）→ 短路转死信，不返工不重派")
+    void shouldShortCircuitRepeatedFailureSignatureToDeadLetter() {
+        when(dispatchProperties.isAutoReviewRepeatFailureShortCircuit()).thenReturn(true);
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTaskWithRepeatedFailureHistory());
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 2, \"issues\": \""
+                        + SAME_ISSUES + "，无法完成核验\", \"comment\": \"\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        // 不再空转：不返工、不补发执行命令、不通过
+        verify(subTaskService, never()).rework(anyLong(), any());
+        verify(executionCommandService, never()).createAssignedCommand(anyLong(), anyLong(), anyString(), any());
+        verify(subTaskService, never()).complete(anyLong());
+        // 短路事件（带相似度证据）+ 显式死信事件 + 人工介入标记
+        ArgumentCaptor<Map> skipPayload = ArgumentCaptor.forClass(Map.class);
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_auto_review_skip_repeated_failure"),
+                eq(AgentRole.REVIEWER), eq(9L), skipPayload.capture());
+        assertThat(skipPayload.getValue())
+                .containsEntry("reason", "repeated_failure_signature")
+                .containsEntry("round", 2);
+        assertThat(((Number) skipPayload.getValue().get("similarity")).doubleValue())
+                .isGreaterThanOrEqualTo(0.85);
+        ArgumentCaptor<Map> deadLetterPayload = ArgumentCaptor.forClass(Map.class);
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_review_dead_letter"),
+                eq(AgentRole.SYSTEM), isNull(), deadLetterPayload.capture());
+        assertThat(deadLetterPayload.getValue()).containsEntry("reason", "repeated_failure_signature");
+        verify(subTaskService).changeStatus(eq(SUB_TASK_ID), eq(SubTaskStatus.DEAD_LETTER), isNull());
+        verify(subTaskService).markManualIntervention(
+                eq(SUB_TASK_ID), eq("repeated_failure_signature"), anyMap());
+        // 判决仍落 review_record 留痕
+        verify(recordReviewService).recordAutoReview(
+                eq(SUB_TASK_ID), eq(9L), eq(ReviewResult.REJECTED), eq(2), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("P-1 A2-2 驳回意见相似但评分提升（2→3）→ 不短路，正常返工（防误伤进步迭代）")
+    void shouldReworkWhenSimilarFailureButScoreImproves() {
+        when(dispatchProperties.isAutoReviewRepeatFailureShortCircuit()).thenReturn(true);
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTaskWithRepeatedFailureHistory());
+        when(agentService.getById(EXECUTOR_ID)).thenReturn(llmAgent(EXECUTOR_ID, AgentRole.EXECUTOR));
+        when(subTaskService.rework(SUB_TASK_ID, EXECUTOR_ID)).thenReturn(true);
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 3, \"issues\": \""
+                        + SAME_ISSUES + "，无法完成核验\", \"comment\": \"\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        verify(subTaskService).rework(SUB_TASK_ID, EXECUTOR_ID);
+        verify(executionCommandService).createAssignedCommand(
+                SUB_TASK_ID, EXECUTOR_ID, "auto-review-rework", List.of());
+        verify(subTaskService, never()).changeStatus(eq(SUB_TASK_ID), eq(SubTaskStatus.DEAD_LETTER), any());
+        verify(subTaskService, never()).markManualIntervention(anyLong(), anyString(), anyMap());
+    }
+
+    @Test
+    @DisplayName("P-1 A2-2 短路开关关闭 → 相同驳回意见仍走正常返工（行为开关生效）")
+    void shouldReworkWhenShortCircuitSwitchDisabled() {
+        // isAutoReviewRepeatFailureShortCircuit 默认 false：两轮意见逐字相同也不短路
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTaskWithRepeatedFailureHistory());
+        when(subTaskService.rework(SUB_TASK_ID, EXECUTOR_ID)).thenReturn(true);
+        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 2, \"issues\": \""
+                        + SAME_ISSUES + "\", \"comment\": \"\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        verify(subTaskService).rework(SUB_TASK_ID, EXECUTOR_ID);
+        verify(subTaskService, never()).changeStatus(eq(SUB_TASK_ID), eq(SubTaskStatus.DEAD_LETTER), isNull());
+        verify(subTaskService, never()).markManualIntervention(anyLong(), anyString(), anyMap());
     }
 
     @Test

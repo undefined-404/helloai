@@ -19,6 +19,7 @@ import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.tool.ToolDefinition;
 import com.helloai.core.agent.tool.ToolRegistry;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
+import com.helloai.core.shared.util.TextTruncator;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Uncertainty;
@@ -41,6 +42,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -621,14 +623,20 @@ public class AgentRuntimeContextAssembler {
                 }
                 loadedCount++;
                 sb.append("**内容**:\n");
-                String render = content;
-                if (render.length() > DEP_CONTENT_MAX_CHARS) {
-                    render = render.substring(0, DEP_CONTENT_MAX_CHARS);
+                // P-1 防御：截断升级为「行边界回退 + 结构化标注 + 缺失声明指引」——
+                // 原实现硬切 substring(0, 4000) 会拦腰截断 URL/清单，且消费方无法机读缺了什么
+                String render = TextTruncator.truncateAtLineBoundary(content, DEP_CONTENT_MAX_CHARS);
+                boolean truncated = render.length() < content.length();
+                if (truncated) {
                     truncatedCount++;
                 }
                 sb.append(render).append('\n');
-                if (render.length() < content.length()) {
-                    sb.append("\n（已截断至 ").append(DEP_CONTENT_MAX_CHARS).append(" 字符）\n");
+                if (truncated) {
+                    sb.append("\n[TRUNCATED] shown=").append(render.length())
+                            .append(" total=").append(content.length())
+                            .append(" reason=dep_content_limit\n");
+                    sb.append("（提示：本前置产出超限未完整注入。若你的验收依赖不可见部分，"
+                            + "必须在交付物中显式声明缺失项，不得臆测补全）\n");
                 }
                 sb.append('\n');
             }
@@ -639,18 +647,46 @@ public class AgentRuntimeContextAssembler {
         }
     }
 
-    /** 读取前置子任务的完成内容本体：物化附件优先，失败/无附件回退 context.lastExecution.output。 */
+    /**
+     * 读取前置子任务的完成内容本体：物化附件优先，失败/无附件回退 context.lastExecution.output。
+     *
+     * <p><b>P-1 修复（2026-09-30）</b>：原实现按 {@code listActive} 倒序（最新在前）只取
+     * 第一个可加载附件——后创建的附录类文件会把先创建的主文件挤出（tku-e2e-01 下游关键词
+     * 缺失事故根因）。现改为：反转正序（最早创建在前，主文件优先）+ 拼接全部可加载 ACTIVE
+     * 附件（各带 {@code 【文件：xxx】} 来源标题行），单附件读取失败仅跳过不拖垮其余。</p>
+     */
     private String loadUpstreamContent(SubTask dep) {
         try {
             List<Attachment> attachments = attachmentService.listActive(dep.getId());
-            if (attachments != null) {
-                for (Attachment attachment : attachments) {
-                    if (attachmentService.isContentLoadable(attachment)) {
-                        byte[] bytes = attachmentService.loadContent(attachment.getId());
-                        if (bytes != null && bytes.length > 0) {
-                            return new String(bytes, StandardCharsets.UTF_8);
+            if (attachments != null && !attachments.isEmpty()) {
+                List<Attachment> ordered = new ArrayList<>(attachments);
+                Collections.reverse(ordered);
+                StringBuilder sb = new StringBuilder();
+                int loadedFiles = 0;
+                for (Attachment attachment : ordered) {
+                    try {
+                        if (!attachmentService.isContentLoadable(attachment)) {
+                            continue;
                         }
+                        byte[] bytes = attachmentService.loadContent(attachment.getId());
+                        if (bytes == null || bytes.length == 0) {
+                            continue;
+                        }
+                        if (loadedFiles > 0) {
+                            sb.append('\n');
+                        }
+                        String fileName = attachment.getFileName() != null && !attachment.getFileName().isBlank()
+                                ? attachment.getFileName() : "attachment-" + attachment.getId();
+                        sb.append("【文件：").append(fileName).append("】\n");
+                        sb.append(new String(bytes, StandardCharsets.UTF_8));
+                        loadedFiles++;
+                    } catch (Exception singleEx) {
+                        log.warn("读取单个前置附件失败，跳过该附件: subTaskId={}, attachmentId={}, err={}",
+                                dep.getId(), attachment.getId(), singleEx.getMessage());
                     }
+                }
+                if (loadedFiles > 0) {
+                    return sb.toString();
                 }
             }
         } catch (Exception e) {

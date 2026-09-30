@@ -316,7 +316,8 @@ class McpToolServiceTest {
         assertThat(item.getTitle()).isEqualTo("前置任务A");
         assertThat(item.getStatus()).isEqualTo("DONE");
         assertThat(item.getSummary()).isEqualTo("已交付接口契约");
-        assertThat(item.getContent()).isEqualTo("物化产出内容");
+        // P-1 修复：附件正文带来源标题行（fileName 为空时回退 attachment-{id}）
+        assertThat(item.getContent()).isEqualTo("【文件：attachment-21】\n物化产出内容");
         assertThat(item.getTruncated()).isNull();
     }
 
@@ -340,7 +341,43 @@ class McpToolServiceTest {
         assertThat(result.getTruncatedCount()).isEqualTo(1);
         McpToolService.GetDepsSummaryResult.DepItem item = result.getDeps().get(0);
         assertThat(item.getTruncated()).isTrue();
-        assertThat(item.getContent()).hasSize(4000);
+        // P-1 修复：行边界回退（无换行 → 硬切 4000）+ 结构化 [TRUNCATED] 标注行
+        assertThat(item.getContent())
+                .startsWith("【文件：attachment-22】\n")
+                .contains("[TRUNCATED] shown=4000 total=5019 reason=dep_content_limit")
+                .doesNotContain("x".repeat(4001));
+    }
+
+    @Test
+    @DisplayName("getDepsSummary：多附件正序拼接（最早创建在前，各带来源标题行）——P-1 修复")
+    void shouldConcatenateAllAttachmentsInCreationOrder() {
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(taskWithDeps(SUB_TASK_ID, List.of(11L)));
+        SubTask dep = new SubTask();
+        dep.setId(11L);
+        dep.setTitle("前置任务D");
+        when(subTaskService.listByIds(List.of(11L))).thenReturn(List.of(dep));
+
+        // listActive 按 createTime 倒序返回：附录（晚创建）在前、主文件（早创建）在后；
+        // 修复前只注入倒序第一个（附录），修复后正序拼接全部
+        Attachment appendix = new Attachment();
+        appendix.setId(31L);
+        appendix.setFileName("appendix.md");
+        Attachment main = new Attachment();
+        main.setId(30L);
+        main.setFileName("main.md");
+        when(attachmentService.listActive(11L)).thenReturn(List.of(appendix, main));
+        when(attachmentService.isContentLoadable(appendix)).thenReturn(true);
+        when(attachmentService.isContentLoadable(main)).thenReturn(true);
+        when(attachmentService.loadContent(31L)).thenReturn("附录正文".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        when(attachmentService.loadContent(30L)).thenReturn("主文件正文".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        McpToolService.GetDepsSummaryResult result = mcpToolService.getDepsSummary(AGENT_ID, SUB_TASK_ID);
+
+        String content = result.getDeps().get(0).getContent();
+        assertThat(content)
+                .startsWith("【文件：main.md】\n主文件正文")
+                .contains("【文件：appendix.md】\n附录正文");
+        assertThat(content.indexOf("main.md")).isLessThan(content.indexOf("appendix.md"));
     }
 
     @Test

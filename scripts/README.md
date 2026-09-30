@@ -1,6 +1,6 @@
 # scripts/ 索引
 
-本目录是 HelloAI 的验证与运维脚本库。共 **77 个 PowerShell（powershell/ 76 + 根目录 run-it-local.ps1）+ 24 个 Shell + 1 个 Java 工具 + 1 个 SQL**（2026-09-28 盘点，run-it-local.ps1 为 09-29 新增），另有 **4 个 CI 门禁脚本 + 1 个架构冻结基线**（2026-09-29 新增）。
+本目录是 HelloAI 的验证与运维脚本库。共 **82 个 PowerShell（powershell/ 81 + 根目录 run-it-local.ps1）+ 28 个 Shell + 1 个 Java 工具 + 1 个 SQL**（2026-09-30 复核计数，09-28 盘点基线 77/24），另有 **4 个 CI 门禁脚本 + 1 个架构冻结基线**（2026-09-29 新增）。
 
 - `ci/`：**跨平台 CI 门禁与架构守卫**（bash，Git Bash / Linux CI 通用；详细见下方第六节）
 - `powershell/`：Windows 侧（pwsh / Windows PowerShell 5.1），含全部规范类与大部分 E2E 验收脚本
@@ -48,6 +48,7 @@ verify-login-e2e、verify-requirement-clarify、verify-websearch-e2e、verify-pl
 | powershell/start-sb-e2e-mq.ps1 | 以 dispatch-mode=BOTH + 双开关启动，供 MQ E2E 使用 |
 | powershell/restart-sb-mock.ps1 | 以 mock 执行模式重启（poller-e2e 等需要） |
 | powershell/kill-old.ps1 | 释放 6565 端口（重启前调用） |
+| powershell/clean-minio-bucket.ps1 | MinIO 桶清理（清库前置，P-1 批次 A4）：默认 dry-run 列举统计，`-Execute` 真实批量删除（DeleteObjects ≤1000/批，删后复核），`-Prefix` 缩小范围；纯 PowerShell SigV4 零依赖，`-Endpoint` 支持本地 29000 / dev 共享 39.106.204.43:29000 |
 | powershell/run-redispatch-diagnose.ps1 | 一键编排「重启 → 等就绪 → 跑重派验收 → 打印排障 SQL」 |
 | shell/build-all.sh | 全模块编译打包（JDK17 + IntelliJ 内置 Maven，跳过测试） |
 | shell/run-core-tests.sh | 运行 helloai-core 指定单测 |

@@ -38,6 +38,7 @@ import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.service.TaskRunningSpecService;
 import com.helloai.core.task.spec.ExecutionRecord;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
+import com.helloai.core.shared.util.TextTruncator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -848,14 +849,19 @@ public class McpToolServiceImpl implements McpToolService {
                 }
                 String content = loadUpstreamContent(dep);
                 if (content != null && !content.isBlank()) {
-                    if (content.length() > DEP_CONTENT_MAX_CHARS) {
-                        content = content.substring(0, DEP_CONTENT_MAX_CHARS);
+                    // P-1 防御：行边界回退截断 + 结构化 [TRUNCATED] 标注行（与核验侧同口径，
+                    // 消费方可机读「哪些内容不可见」），替代原硬切 substring(0, 4000)
+                    int originalChars = content.length();
+                    String render = TextTruncator.truncateAtLineBoundary(content, DEP_CONTENT_MAX_CHARS);
+                    if (render.length() < originalChars) {
+                        render = render + "\n[TRUNCATED] shown=" + render.length()
+                                + " total=" + originalChars + " reason=dep_content_limit";
                         item.setTruncated(true);
                         truncatedCount++;
                     }
-                    item.setContent(content);
+                    item.setContent(render);
                     item.setLoaded(true);
-                    item.setContentChars(content.length());
+                    item.setContentChars(render.length());
                     loadedCount++;
                 } else {
                     // P1-3：显式标注「未读到内容」，让消费方与「无前置」区分开
@@ -887,18 +893,43 @@ public class McpToolServiceImpl implements McpToolService {
      * 同名历史版本已由 {@code AttachmentService.register} 自动去活）优先，失败/无附件回退
      * {@code context.lastExecution.output} 原始产出；两者均无返回 null。
      * 与 SubTaskExecutionService.loadUpstreamContent 同源实现（消费方隔离，避免渲染逻辑耦合）。
+     *
+     * <p><b>P-1 修复（2026-09-30）</b>：反转 {@code listActive} 倒序为正序（最早创建在前，
+     * 主文件优先）+ 拼接全部可加载 ACTIVE 附件（各带 {@code 【文件：xxx】} 来源标题行）——
+     * 原实现只取倒序第一个可加载附件，后创建的附录会把主文件挤出（tku-e2e-01 事故根因）。</p>
      */
     private String loadUpstreamContent(SubTask dep) {
         try {
             List<Attachment> attachments = attachmentService.listActive(dep.getId());
-            if (attachments != null) {
-                for (Attachment attachment : attachments) {
-                    if (attachmentService.isContentLoadable(attachment)) {
-                        byte[] bytes = attachmentService.loadContent(attachment.getId());
-                        if (bytes != null && bytes.length > 0) {
-                            return new String(bytes, StandardCharsets.UTF_8);
+            if (attachments != null && !attachments.isEmpty()) {
+                List<Attachment> ordered = new ArrayList<>(attachments);
+                Collections.reverse(ordered);
+                StringBuilder sb = new StringBuilder();
+                int loadedFiles = 0;
+                for (Attachment attachment : ordered) {
+                    try {
+                        if (!attachmentService.isContentLoadable(attachment)) {
+                            continue;
                         }
+                        byte[] bytes = attachmentService.loadContent(attachment.getId());
+                        if (bytes == null || bytes.length == 0) {
+                            continue;
+                        }
+                        if (loadedFiles > 0) {
+                            sb.append('\n');
+                        }
+                        String fileName = attachment.getFileName() != null && !attachment.getFileName().isBlank()
+                                ? attachment.getFileName() : "attachment-" + attachment.getId();
+                        sb.append("【文件：").append(fileName).append("】\n");
+                        sb.append(new String(bytes, StandardCharsets.UTF_8));
+                        loadedFiles++;
+                    } catch (Exception singleEx) {
+                        log.warn("读取单个前置附件失败，跳过该附件: subTaskId={}, attachmentId={}, err={}",
+                                dep.getId(), attachment.getId(), singleEx.getMessage());
                     }
+                }
+                if (loadedFiles > 0) {
+                    return sb.toString();
                 }
             }
         } catch (Exception e) {
