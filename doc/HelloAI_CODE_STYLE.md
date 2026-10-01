@@ -11,7 +11,7 @@
 >
 > 历史变更请记录在：
 >
-> `doc/log/2026-09.md`
+> `doc/log/` 按月归档（当前 `2026-10.md`；历史见 `2026-09.md`）
 
 ***
 
@@ -722,6 +722,43 @@ review.ReviewPortAdapter
 原则：
 
 > **Port 应该定义在能力需求方，而不是能力提供方。**
+
+**⚠️ 归属判据的完整表述（2026-10-01 修正）**：上式是**基本式**，但必须叠加项目特有的第二条约束 —— **实现侧依赖必须顺向**（沿 `planner > review > task > agent > system > shared` 向下依赖）。两条可能冲突，**冲突时以「顺向」为准**。原因：若把端口放消费方会强迫提供方依赖消费者，当提供方低于消费者时即产生**反向依赖**（§6 禁止），端口就沦为「用抽象掩盖违规」，反而更难回收。
+
+因此分三种情形：
+
+```text
+① 消费方【低于】提供方 —— 教科书式反转，端口放消费方
+   system(=消费方) 需要 task 的附件数据
+   system.port.ArtifactReferencePort          ← 端口放消费方 system
+   task.service.impl.ArtifactReferencePortAdapter   ← 提供方 task 实现
+   实现侧依赖：task → system = 顺向 ✅
+
+② 消费方【高于】提供方 —— 端口必须放【提供方】域（反教科书，见下）
+   task(=消费方) 需要 agent 的派发能力
+   agent.port.XxxPort                         ← 端口放提供方 agent
+   task 依赖 agent.port
+   消费方依赖：task → agent = 顺向 ✅
+   ❌ 反例：若放 task.port.XxxPort 由 agent 实现 → agent → task = 反向（存量债的主要来源）
+
+③ 多方消费（≥2 个域都要同一能力，且方向不可调和）
+   → 才考虑把【纯数据契约】放 shared（叶子域）；shared 不得 import 任何业务域
+```
+
+**判据一句话**：**让「消费方 → 提供方」或「提供方 → 消费方」的依赖落在顺向那一侧；端口就放在顺向依赖的「被依赖方」。** 不要机械套用「端口恒在消费方」。
+
+已落地先例与反例：
+
+| 先例 | 消费方 | 提供方 | 端口位置 | 实现/消费侧依赖 | 判定 |
+|---|---|---|---|---|---|
+| `system.port.ArtifactReferencePort` | system（低） | task（高） | 消费方 | `task → system` | ✅ 顺向 |
+| `task.port.ReviewPort` | task（低） | review（高） | 消费方 | `review → task` | ✅ 顺向 |
+| `task.port.TaskPlannerPickerPort` | task（低） | planner（高） | 消费方 | `planner → task` | ✅ 顺向 |
+| `task.port.TaskDispatchPort` | task（**高**） | agent（**低**） | ❌ 消费方 | `agent → task` | ❌ **反向**，存量 68 的一笔 |
+
+> `TaskDispatchPort` 为**待回收反例**：消费方 `task` 高于提供方 `agent`，端口却按教科书放在消费方 → 强迫 `agent` 依赖 `task`。回收方式 = 端口归位到 `agent.port`（见 `doc/review/HelloAI 优先级决策分析（V2架构调整 vs 代码质量）.md` §16 批次 3）。
+
+**禁止默认把 Port 放 `shared`**：`shared` 是**叶子域**（任何域都可依赖它）；把只服务单一消费方的窄接口放进去，会让契约归属与使用方分离，并诱发后续无谓扩散。仅当**多个域都是消费方**（端口确实多方共用）时才考虑。
 
 ***
 
