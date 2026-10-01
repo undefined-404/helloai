@@ -1,15 +1,17 @@
 package com.helloai.core.agent.quality;
 
 import com.helloai.common.constant.AgentRole;
-import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.agent.port.LastReviewContext;
+import com.helloai.core.agent.port.SubTaskQueryPort;
+import com.helloai.core.agent.port.SubTaskReviewContextPort;
+import com.helloai.core.agent.port.SubTaskReviewContextPort.BackfillOutcome;
+import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.port.TaskTimelinePort;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,6 +29,19 @@ import java.util.concurrent.ConcurrentHashMap;
  * 重读 context，仅当最后一轮 round 未变且 executorDoneIssues 仍为空时落笔，
  * 避免覆盖评估期间新发生的评审轮次或并发回填。全程 best-effort，
  * 三态 timeline（success/skipped/failed）观测。</p>
+ *
+ * <p><b>2026-10-01（W4）依赖反转</b>：本类原先直接 import
+ * {@code task.entity.SubTask} / {@code task.service.SubTaskService} 并自行解析
+ * {@code context.reviewHistory}。现改为：
+ * <ul>
+ *     <li>身份 + 判空走 {@link SubTaskQueryPort#findById}</li>
+ *     <li>末轮读取走 {@link SubTaskReviewContextPort#loadLastReviewContext}</li>
+ *     <li><b>条件回填整体走不透明命令</b>
+ *         {@link SubTaskReviewContextPort#backfillExecutorDoneIssues}（重读 + 判定 + 写
+ *         全在 task 域，见备忘录 §16.8）</li>
+ * </ul>
+ * 行为逐字保留：判定分支、timeline 三态的触发条件与文案均未变；本类的分段锁仍只承担
+ * 「并发回填串行化」，不承担正确性判定（与原实现一致）。</p>
  */
 @Slf4j
 @Component
@@ -39,7 +54,8 @@ public class ExecutorDoneIssuesBackfiller {
     /** subTaskId 粒度分段锁：回填的"重读-改写"串行化（单实例安全，V38 同款思想）。 */
     private final ConcurrentHashMap<Long, Object> subTaskLocks = new ConcurrentHashMap<>();
 
-    private final SubTaskService subTaskService;
+    private final SubTaskQueryPort subTaskQueryPort;
+    private final SubTaskReviewContextPort reviewContextPort;
     private final TaskTimelinePort taskTimelinePort;
     private final ExecutorIssueResolutionAssessor assessor;
 
@@ -60,49 +76,51 @@ public class ExecutorDoneIssuesBackfiller {
             return;
         }
         try {
-            SubTask subTask = subTaskService.getById(subTaskId);
-            if (subTask == null) {
+            SubTaskSnapshot snapshot = subTaskQueryPort.findById(subTaskId);
+            if (snapshot == null) {
                 return;
             }
-            ReviewRound round = peekLastRound(subTask);
+            LastReviewContext round = reviewContextPort.loadLastReviewContext(subTaskId);
             if (round == null) {
-                recordTimeline(subTask, "skipped", Map.of("reason", "no_review_history"));
+                recordTimeline(snapshot, "skipped", Map.of("reason", "no_review_history"));
                 return;
             }
-            if (!isEmpty(round.executorDoneIssues)) {
+            if (!isEmpty(round.executorDoneIssues())) {
                 // 已回填过（或人工已填），幂等跳过
                 return;
             }
-            if (round.issues == null || round.issues.isEmpty()) {
-                recordTimeline(subTask, "skipped", Map.of("reason", "no_issues"));
+            if (round.issues() == null || round.issues().isEmpty()) {
+                recordTimeline(snapshot, "skipped", Map.of("reason", "no_issues"));
                 return;
             }
 
             // LLM 语义对比（锁外长耗时；失败返回 null 由 assessor 内部降级）
             ExecutorIssueResolutionAssessor.IssueResolutionResult result =
-                    assessor.assess(round.issues, executorOutput);
+                    assessor.assess(round.issues(), executorOutput);
             if (result == null) {
-                recordTimeline(subTask, "failed", Map.of("reason", "llm_unavailable_or_parse_error"));
+                recordTimeline(snapshot, "failed", Map.of("reason", "llm_unavailable_or_parse_error"));
                 return;
             }
 
-            // 锁内重读防覆盖：round 变更或已被并发回填时放弃写入
+            // 锁内条件回填：重读/轮次校验/幂等校验/写入整体在 task 域完成
             synchronized (lockFor(subTaskId)) {
-                SubTask fresh = subTaskService.getById(subTaskId);
-                if (fresh == null) {
-                    return;
+                BackfillOutcome outcome = reviewContextPort.backfillExecutorDoneIssues(
+                        subTaskId, round.round(), result.getDoneIssues());
+                switch (outcome) {
+                    case SUB_TASK_MISSING, SKIPPED_ALREADY_FILLED -> {
+                        // 与原实现一致：这两种情形静默返回，不记 timeline
+                        return;
+                    }
+                    case SKIPPED_ROUND_CHANGED -> {
+                        recordTimeline(snapshot, "skipped", Map.of("reason", "round_changed"));
+                        return;
+                    }
+                    case WRITTEN -> {
+                        // 与原实现一致：进入写入分支后继续记 success
+                    }
                 }
-                ReviewRound freshRound = peekLastRound(fresh);
-                if (freshRound == null || freshRound.round != round.round) {
-                    recordTimeline(fresh, "skipped", Map.of("reason", "round_changed"));
-                    return;
-                }
-                if (!isEmpty(freshRound.executorDoneIssues)) {
-                    return;
-                }
-                writeDoneIssues(fresh, freshRound.round, result.getDoneIssues());
             }
-            recordTimeline(subTask, "success", Map.of(
+            recordTimeline(snapshot, "success", Map.of(
                     "doneIssues", result.getDoneIssues(),
                     "reason", result.getReason() != null ? result.getReason() : ""));
         } catch (Exception e) {
@@ -112,98 +130,24 @@ public class ExecutorDoneIssuesBackfiller {
         }
     }
 
-    /** 锁内写入：拷贝 reviewHistory，定位最后一轮，覆写 executorDoneIssues 后落库。 */
-    @SuppressWarnings("unchecked")
-    private void writeDoneIssues(SubTask subTask, int targetRound, List<String> doneIssues) {
-        Map<String, Object> ctx = new HashMap<>(
-                subTask.getContext() != null ? subTask.getContext() : Map.of());
-        List<Map<String, Object>> history = new ArrayList<>();
-        Object existing = ctx.get("reviewHistory");
-        if (existing instanceof List<?> existList) {
-            for (Object o : existList) {
-                if (o instanceof Map<?, ?> m) {
-                    history.add(new HashMap<>((Map<String, Object>) m));
-                }
-            }
-        }
-        if (history.isEmpty()) {
-            return;
-        }
-        Map<String, Object> last = history.get(history.size() - 1);
-        Object roundObj = last.get("round");
-        int lastRound = roundObj instanceof Number n ? n.intValue() : history.size();
-        if (lastRound != targetRound) {
-            return;
-        }
-        last.put("executorDoneIssues", doneIssues);
-        ctx.put("reviewHistory", history);
-        subTask.setContext(ctx);
-        subTaskService.updateById(subTask);
-        log.info("executorDoneIssues 回填完成: subTaskId={}, round={}, doneCount={}",
-                subTask.getId(), targetRound, doneIssues.size());
-    }
-
-    /** 提取 reviewHistory 最后一轮（round/issues/executorDoneIssues）；无历史返回 null。 */
-    @SuppressWarnings("unchecked")
-    private ReviewRound peekLastRound(SubTask subTask) {
-        Map<String, Object> ctx = subTask.getContext();
-        if (ctx == null) {
-            return null;
-        }
-        Object historyObj = ctx.get("reviewHistory");
-        if (!(historyObj instanceof List<?> history) || history.isEmpty()) {
-            return null;
-        }
-        Object last = history.get(history.size() - 1);
-        if (!(last instanceof Map<?, ?> m)) {
-            return null;
-        }
-        Object roundObj = m.get("round");
-        int round = roundObj instanceof Number n ? n.intValue() : history.size();
-        List<String> issues = new ArrayList<>();
-        Object issuesObj = m.get("issues");
-        if (issuesObj instanceof List<?> issueList) {
-            for (Object issue : issueList) {
-                if (issue != null) {
-                    issues.add(issue.toString());
-                }
-            }
-        } else if (issuesObj != null) {
-            issues.add(issuesObj.toString());
-        }
-        List<String> done = new ArrayList<>();
-        if (m.get("executorDoneIssues") instanceof List<?> doneList) {
-            for (Object item : doneList) {
-                if (item != null) {
-                    done.add(item.toString());
-                }
-            }
-        }
-        return new ReviewRound(round, issues, done);
-    }
-
-    private void recordTimeline(SubTask subTask, String state, Map<String, Object> extra) {
+    private void recordTimeline(SubTaskSnapshot snapshot, String state, Map<String, Object> extra) {
         try {
             Map<String, Object> payload = new HashMap<>(extra != null ? extra : Map.of());
             payload.put("state", state);
             taskTimelinePort.recordEvent(
-                    subTask.getTaskId(),
-                    subTask.getId(),
+                    snapshot.taskId(),
+                    snapshot.id(),
                     TIMELINE_EVENT,
                     AgentRole.REVIEWER,
                     null,
                     payload);
         } catch (Exception e) {
             log.debug("executorDoneIssues timeline 记录失败（忽略）: subTaskId={}, err={}",
-                    subTask.getId(), e.getMessage());
+                    snapshot.id(), e.getMessage());
         }
     }
 
     private static boolean isEmpty(List<String> list) {
         return list == null || list.isEmpty();
-    }
-
-    /** 最后一轮评审快照（仅回填判定所需字段）。 */
-    private record ReviewRound(int round, List<String> issues, List<String> executorDoneIssues) {
     }
 }

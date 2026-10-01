@@ -23,6 +23,11 @@ public class SubTaskQueryPortAdapter implements SubTaskQueryPort {
     private final SubTaskService subTaskService;
 
     @Override
+    public SubTaskSnapshot findById(Long subTaskId) {
+        return SubTaskSnapshotMapper.toSnapshot(subTaskService.getById(subTaskId));
+    }
+
+    @Override
     public List<SubTaskSnapshot> listRecentlyChanged(OffsetDateTime since, int limit) {
         return SubTaskSnapshotMapper.toSnapshots(subTaskService.listRecentlyChanged(since, limit));
     }

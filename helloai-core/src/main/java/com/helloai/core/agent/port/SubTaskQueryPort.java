@@ -21,6 +21,17 @@ import java.util.List;
 public interface SubTaskQueryPort {
 
     /**
+     * 按 ID 读取单个子任务快照。
+     *
+     * <p>语义与 {@code SubTaskService#getById(Long)} 一致：不存在返回 {@code null}
+     * （消费方原本就是「取实体后判空」，故保持 null 语义而非 {@code Optional}）。</p>
+     *
+     * @param subTaskId 子任务 ID
+     * @return 子任务快照；不存在返回 {@code null}
+     */
+    SubTaskSnapshot findById(Long subTaskId);
+
+    /**
      * 列出最近有变更的子任务（Phase 0 B3 事件对账候选源）。
      *
      * <p>语义与 {@code SubTaskService#listRecentlyChanged(OffsetDateTime, int)} 逐字一致，

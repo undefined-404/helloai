@@ -22,13 +22,14 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.when;
 
 /**
- * {@code SubTaskQueryPortAdapter} 单测（2026-10-01，W3）。
+ * {@code SubTaskQueryPortAdapter} 单测（2026-10-01，W3 建；W4 补 {@code findById}）。
  *
  * <p>覆盖「task 实体 → agent 域只读快照」的映射口径与空值边界：字段全量透传、
- * 入参为空/含 null 元素时不抛异常且绝不返回 {@code null}。</p>
+ * 入参为空/含 null 元素时不抛异常且绝不返回 {@code null}（{@code findById} 除外——
+ * 它按 {@code getById} 语义在不存在时返回 {@code null}）。</p>
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("SubTaskQueryPortAdapter.listRecentlyChanged")
+@DisplayName("SubTaskQueryPortAdapter")
 class SubTaskQueryPortAdapterTest {
 
     @Mock
@@ -36,6 +37,33 @@ class SubTaskQueryPortAdapterTest {
 
     @InjectMocks
     private SubTaskQueryPortAdapter adapter;
+
+    @Test
+    @DisplayName("findById：不存在返回 null（与 SubTaskService.getById 语义一致）")
+    void shouldReturnNullWhenSubTaskMissing() {
+        when(subTaskService.getById(9L)).thenReturn(null);
+
+        assertThat(adapter.findById(9L)).isNull();
+    }
+
+    @Test
+    @DisplayName("findById：实体 → 快照（字段全量透传）")
+    void shouldMapEntityOnFindById() {
+        SubTask subTask = new SubTask();
+        subTask.setId(7L);
+        subTask.setStatus(SubTaskStatus.ASSIGNED);
+        subTask.setTaskId(8L);
+        subTask.setAssignedAgentId(9L);
+        when(subTaskService.getById(7L)).thenReturn(subTask);
+
+        SubTaskSnapshot snapshot = adapter.findById(7L);
+
+        assertThat(snapshot).isNotNull();
+        assertThat(snapshot.id()).isEqualTo(7L);
+        assertThat(snapshot.status()).isEqualTo(SubTaskStatus.ASSIGNED);
+        assertThat(snapshot.taskId()).isEqualTo(8L);
+        assertThat(snapshot.assignedAgentId()).isEqualTo(9L);
+    }
 
     @Test
     @DisplayName("实体 → 快照：id/status/taskId/assignedAgentId/context 全量透传")

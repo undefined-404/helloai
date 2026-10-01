@@ -504,11 +504,13 @@ n="$(grep -o '<testcase' "$f" | wc -l | tr -d '[:space:]')"
 > **另注（既有失败，非本次引入）**：本轮首次全量跑时 `helloai-job` 5 个用例报 `NoClassDefFoundError: SubTaskMapper`。反编译证实其 `target/test-classes` 里是**陈旧 class**（字段描述符为默认包 `LSubTaskMapper;`，而源码是 `import com.helloai.core.task.mapper.SubTaskMapper`），且 mtime 被刷新后**令 Maven 增量编译跳过重编**；`clean` 后即消失。教训见 `doc/log/2026-10.md` 同批次条目。
 
 
-## 16. Q1-③ 第 5 条预案：`agent → task`(68) 解耦分批方案（2026-10-01；**批次 1/2 已执行，68 → 58 → 54**）
+## 16. Q1-③ 第 5 条预案：`agent → task`(68) 解耦分批方案（2026-10-01；**批次 1/2 与 W1~W4 已执行，68 → 58 → 54 → 51 → 41 → 37 → 33**）
 
 > **进度更新（2026-10-01 晚）**：§16.4 **批次 1（实体归位）已执行并锁定基线**——`agent->task` **68 → 58**（−10），预案外收益 `task->agent` **45 → 41**（−4，`FeedService`/`RewardServiceImpl` 一并归位）。本节后文（§16.1~§16.5、§16.7）的「68」均为**批次 1 执行前的实测快照**，保持原文以留痕；当前生效数字以 `scripts/ci/arch-baseline.txt` 为准。批次 1 的实际做法与原预案有一处差异（前提订正 + 搬迁范围扩至 10 文件），详见 §16.4 批次 1 行的 ✅ 记录。
 >
 > **进度更新（2026-10-01 深夜）**：§16.4 **批次 2 · 第一组（只读端口反转 / 纯计数子域）已执行并锁定基线**——`agent->task` **58 → 54**（−4）；代价是提供方适配器新增 **1 条 `task->agent`**（41 → 42，属 §6 **顺向**合法依赖，是「消费方定端口 / 提供方实现」的机械结果）。**口径订正**：预案批次 2 的「19 处」**不可直接执行**——实测 `SubTaskService` 的引用**横跨批次 2/4/5**（只读子集与写操作、实体同文件），故本批只做**最干净的一组**（`SubTaskStatsPort`：4 处 import、零实体泄漏），其余按文件粒度留待后续批次。**新发现（首次棘轮抬升）**：`task->agent` 属守卫「组 3（非 §6 反向但已冻结）」，本次为其**历史首次上升**，已按守卫契约走评审、经用户确认后 `--update-baseline` 锁定 **54 / 42**。详见 §16.4 批次 2 行。
+
+> **进度更新（2026-10-01，W1~W4 已执行）**：按 §16.9 的「按文件收敛」轮次推进完毕 **W1~W4**，`agent->task` **54 → 51（W1）→ 41（W2）→ 37（W3）→ 33（W4）**；代价 `task->agent` **43 → 50**（提供方适配器/映射器，属 §6 **顺向合法**的机械代价，已由守卫**组 3 降为「仅提示」**承接，见 §16.9）。**W2 起改版**：原计划的「领域事件族」被**端口反转**全面取代（`TaskTimelineService` 形参全为基础类型，端口即可零语义变更地收口）。**W3 起新增两条手法**：①「有判定的状态推进/读改写」一律走**整体不透明命令端口**（`SubTaskCommandPort` / `SubTaskReviewContextPort`）；② 接线后只剩「转发到端口」一个动作的类**整类删除**（`SubTaskExecutionService` / `SubTaskExecutionServiceImpl`，单测平移到提供方适配器）。**W4 计划订正**：`LocalExecutionCommandConsumer` 因「跨域类型的消费方（`AgentRuntimeContextAssembler`）先决定迁移时点」而后移至 W11 同轮。剩余 **33 处 / 11 文件**，下一轮 W5（`ExecutionCommandServiceImpl` 硬核 `getByIdForUpdate`）。
 
 ### 16.1 病灶现状
 
@@ -665,7 +667,7 @@ grep -rn "^[[:space:]]*import[[:space:]]\+com\.helloai\.core\.task" helloai-core
 
 **对 §16.4 批次 5 行的补充约束**：批次 5 描述「写操作 → 领域事件」只适用于**无判定的副作用写**（`recordEvent` 类，占 `TaskTimelineService` 11 处）；**有判定的状态推进必须走命令端口**，二者不可混用同一手法。
 
-### 16.9 可执行计划：从「按 import 类型分 5 批」改为「按文件收敛的 10 轮」（2026-10-01 批次 2 后重排）
+### 16.9 可执行计划：从「按 import 类型分 5 批」改为「按文件收敛的 W1~W11」（2026-10-01 批次 2 后重排；W4 时订正）
 
 **为什么必须重排**：§16.4 的 5 批是按 **import 类型** 切的软分段，但**执行的原子单位是文件**。实测 20 个含 task import 的 agent 文件里，**12 个同时跨 2~4 种机制**（仅 8 个是单机制）：
 
@@ -691,7 +693,7 @@ grep -rn "^[[:space:]]*import[[:space:]]\+com\.helloai\.core\.task" helloai-core
 |---|---|---|---|
 | **P1** | 快照 `record` 族 | W1 前 | ✅ `agent.port.SubTaskSnapshot`（id / **status** / taskId / assignedAgentId / context，**字段按需增长**）——W1 交付 4 字段，W3 为事件对账增补 `status`；映射统一收敛到 task 侧 `SubTaskSnapshotMapper`（W3），避免事件发布与只读查询两份口径漂移。`UncertaintySnapshot`（W7）、`AttachmentRef`（W6）待建——**照抄 §15 `system/port/ArtifactReference`（record）+ Adapter 先例** |
 | **P2** | ~~事件族~~ → **改端口**（2026-10-01 决策） | W2 | ⛔ **不采用领域事件**：`TaskTimelineService.recordEvent` 形参**全为基础类型、无实体泄漏**，反向依赖纯粹来自「持有 task 域 Service 接口类型」本身。改用 `agent.port.TaskTimelinePort` + task 侧 `TaskTimelinePortAdapter` 后**调用语义逐字相同**（同事务同步写、append-only 审计），**零语义变更**；事件方案会把「同事务写」变成「提交后 best-effort 写」，属语义变更且需端到端回归。⚠️ 由此，原 §16.4「**只有批次 5 是真领域事件解耦**」的前提**作废**——本方案**全部走端口**，不需要事件基础设施。 |
-| **P3** | 只读端口族 + 命令端口族 | W3 前 | ✅ **W3 已交付首组**：`agent.port.SubTaskQueryPort`（读，`listRecentlyChanged` 返回快照）+ `agent.port.SubTaskCommandPort`（**不透明命令**：`startIfNeeded` 的判定整体落在 task 侧适配器 + `unlinkByAssignedAgent`）。`TaskRunningSpecPort`（W6/W10/W11）、`AttachmentQueryPort`（W6/W7）待建；快照族索引见 P1 |
+| **P3** | 只读端口族 + 命令端口族 | W3 前 | ✅ **W3 已交付首组**：`agent.port.SubTaskQueryPort`（读，`listRecentlyChanged` 返回快照）+ `agent.port.SubTaskCommandPort`（**不透明命令**：`startIfNeeded` 的判定整体落在 task 侧适配器 + `unlinkByAssignedAgent`）。**W4 增补**：`SubTaskQueryPort.findById`（`SubTaskSnapshot`，不存在返回 `null`）+ `agent.port.SubTaskReviewContextPort`（`loadLastReviewContext` + 条件回填 `backfillExecutorDoneIssues`，context/`reviewHistory` 的 schema 解析整体落 task 侧）。`TaskRunningSpecPort`（W6/W10/W11）、`AttachmentQueryPort`（W6/W7）待建；快照族索引见 P1 |
 
 **轮次（每轮 = 一批文件，独立提交、独立锁基线；W2 起为改版后的实测口径）**：
 
@@ -700,18 +702,24 @@ grep -rn "^[[:space:]]*import[[:space:]]\+com\.helloai\.core\.task" helloai-core
 | **W1** ✅ **已完成（2026-10-01）** | 3 | 51 | `AgentEventContextResolver`(1)、`AgentOutboxService`(1)、`AgentOutboxServiceImpl`(1) | 计量下沉（实体 → 两个计数）+ 快照契约（`agent.port.SubTaskSnapshot`） | 低 |
 | **W2** ✅ **已完成（2026-10-01，改版）** | 10 | 41 | 10 个 agent 文件（`ExecutionResultHandler`、`ExecutionCommandPoller`、`ResilientDispatcher`、`LocalExecutionCommandConsumer`、`CircuitBreakerEventRecorder`、`ExecutorDoneIssuesBackfiller`、`AgentLifecycleService`、`AgentRuntimeContextAssembler`、`ExecutionArtifactServiceImpl`、`ExecutionCommandServiceImpl`）+ 11 个测试 | **端口反转**（`agent.port.TaskTimelinePort` + task 侧 `TaskTimelinePortAdapter`），**一次拿全 11 处** | 低 |
 | **W3** ✅ **已完成（2026-10-01）** | 4 | 37 | `EventReconciliationServiceImpl`(2)、`AgentServiceImpl`(1)、~~`SubTaskExecutionServiceImpl`(1)~~（**整类删除**，状态机归位 task 域） | 只读端口 + 快照（`SubTaskQueryPort`）+ **不透明命令端口**（`SubTaskCommandPort`，判定整体落 task 侧） | 低~中 |
-| **W4** | 6 | 31 | `ExecutorDoneIssuesBackfiller`(2)、`LocalExecutionCommandConsumer`(2)、`ExecutionCommandPoller`(2) | 快照 + 端口读 + 命令写 | 中 |
-| **W5** | 2 | 29 | `ExecutionCommandServiceImpl`(2) | **含硬核 `getByIdForUpdate` 命令端口** | 中高 |
-| **W6** | 4 | 25 | `ExecutionArtifactService`(1) + `ExecutionArtifactServiceImpl`(3)（**接口与实现同轮**） | 快照（`SubTask` / `Attachment`）+ 端口（`AttachmentService`） | 中 |
-| **W7** | 6 | 19 | `McpToolService`(1) + `McpToolServiceImpl`(5)（**接口与实现同轮**，含 `entity.*` 通配） | **含硬核 `claimAtomic` 命令端口**；`Uncertainty` → 快照 | 高 |
-| **W8** | 4 | 15 | `ResilientDispatcher`(4) | 快照 + **端口归位（原批次 3）** + 命令 | 高 |
-| **W9** | 3 | 12 | `SubTaskAutoExecutionDispatcher`(3) | 快照 + 端口 + `TaskTimelinePort`（⚠️ **依赖批次 B 先落地**） | 中 |
-| **W10** | 5 | 7 | `ExecutionResultHandler`(5) | 多机制齐用（核心执行结果回调链） | 高 |
-| **W11** | 7 | 0 | `AgentRuntimeContextAssembler`(7) | 多机制齐用；**顺带拆上帝类（678 行）** | 高 |
+| **W4** ✅ **已完成（2026-10-01，改版 −4）** | 4 | 33 | `ExecutorDoneIssuesBackfiller`(2)、`ExecutionCommandPoller`(2)（`LocalExecutionCommandConsumer`(2) **改寄 W11**，见下「W4 计划订正」） | 只读端口（`SubTaskQueryPort.findById`）+ **不透明命令端口**（`SubTaskReviewContextPort`，重读/判定/写整体落 task 侧） | 中 |
+| **W5** | 2 | 31 | `ExecutionCommandServiceImpl`(2) | **含硬核 `getByIdForUpdate` 命令端口** | 中高 |
+| **W6** | 4 | 27 | `ExecutionArtifactService`(1) + `ExecutionArtifactServiceImpl`(3)（**接口与实现同轮**） | 快照（`SubTask` / `Attachment`）+ 端口（`AttachmentService`） | 中 |
+| **W7** | 6 | 21 | `McpToolService`(1) + `McpToolServiceImpl`(5)（**接口与实现同轮**，含 `entity.*` 通配） | **含硬核 `claimAtomic` 命令端口**；`Uncertainty` → 快照 | 高 |
+| **W8** | 4 | 17 | `ResilientDispatcher`(4) | 快照 + **端口归位（原批次 3）** + 命令 | 高 |
+| **W9** | 3 | 14 | `SubTaskAutoExecutionDispatcher`(3) | 快照 + 端口 + `TaskTimelinePort`（⚠️ **依赖批次 B 先落地**） | 中 |
+| **W10** | 5 | 9 | `ExecutionResultHandler`(5) | 多机制齐用（核心执行结果回调链） | 高 |
+| **W11** | 9 | 0 | `AgentRuntimeContextAssembler`(7) + `LocalExecutionCommandConsumer`(2)（**必须同轮**，见下「W4 计划订正」） | 多机制齐用；**顺带拆上帝类（678 行）** | 高 |
 
-> 合计 **3+10+4+6+2+4+6+4+3+5+7 = 54**，与实测逐项对齐。
+> 合计 **3+10+4+4+2+4+6+4+3+5+9 = 54**，与实测逐项对齐。
 > ⚠️ **W2（改版）后「文件列」不再互斥**：W2 按「**同一机制跨文件**」一次性收口（`TaskTimelineService` 11 处一次拿全），其 10 个文件中有 6 个还会在 W6/W7/W8/W10/W11 因**其它机制**再次改动 —— 即每个文件**最多被触及两次**（一次收「跨文件共性机制」、一次收「本文件剩余机制」），比按文件切分更省事且不会漏。
 > **排序原则**：从「单机制、调用面窄、零行为变更」到「多机制、核心链路、含事务语义」；每轮都可独立验证、独立回滚。
+
+**★ W4 计划订正（2026-10-01，实测发现）——「被调方的形参类型定了，调用方就走不了」**
+
+原 W4 = 6 处（含 `LocalExecutionCommandConsumer`(2)）。实测**该文件必须后移**：它 `consume()` 里 `subTaskService.getById(...)` 拿到的 `SubTask` 会被**原样传给 agent 域自己的** `AgentRuntimeContextAssembler.assemble(command, subTask, agent, …)` / `afterTurn(subTask, …)`。而该装配器要用到实体的 **12 个字段**（`id/status/reworkCount/attemptTotal/taskId/title/content/deliverable/acceptance/constraints/uncertainties/context` + `dependsOnIdList()`，其中 `getUncertainties()` 还返回 **task 实体 `List<Uncertainty>`**）与 `subTaskService.listByIds(...)` 的依赖列表 —— 这些正是 **W7（`UncertaintySnapshot`）与 W11（装配器本体）** 的工作量。
+
+> **推论（对 W1 铁律 ② 的补充）**：W1 记的是「被调方改签名会波及其调用方」；本次是**反向**——**调用方想改类型，也得被调方先接受新类型**。当类型是**跨域实体**且被本域另一个类消费时，真正决定迁移时点的是**该类型的消费方（装配器）**，不是持有它的调用方。⇒ **`LocalExecutionCommandConsumer` 与 `AgentRuntimeContextAssembler` 必须同轮**，且该轮只能是装配器就绪的那一轮（W11）。W4 因此收窄为 4 处。
 
 **每轮纪律（§16.5 不变，2026-10-01 W3 起微调）**：一改一测 → `check-arch-freeze.sh` 确认 **组 1 `agent->task` 单调下降**（组 3 前向项已降为仅提示，不再逐轮评审）→ `--update-baseline` 锁定 → 复跑 `EXIT=0` → 全量 `clean test` + `<testcase>` 计数 → 独立一笔提交。
 
@@ -751,3 +759,17 @@ grep -rn "^[[:space:]]*import[[:space:]]\+com\.helloai\.core\.task" helloai-core
 - **验收**：定向 **41 例 / 0 失败**（含 `SubTaskCommandPortAdapterTest` 8、`SubTaskQueryPortAdapterTest` 3、`EventReconciliationServiceTest` 7、`AgentServiceTest` 14、`LocalExecutionCommandConsumerTest` 9）；`agent->task` **41 → 37**（−4，与计划一致）；全量 `clean test` **7/7 SUCCESS**、`<testcase>` 口径 **1787 / 0 / 0 / 0**（core 1632 / job 85 / api 70；净 +4 = 新增 11 − 删除 7）。
 - **治理改动（同轮）**：守卫 `check-arch-freeze.sh` **组 3 降为仅提示**（详见上文「两项必须提前处理的副作用 / 阻塞」第 1 条）；基线锁定 **37 / 48**，复跑 `EXIT=0`。
 - **退出清单**：剩余 **37 处 / 13 文件**（`SubTaskExecutionServiceImpl`、`EventReconciliationServiceImpl`、`AgentServiceImpl` 已归零退出）。
+
+**W4 执行记录（2026-10-01：只读端口补 `findById` + 评审 context 不透明命令端口；范围由 6 收窄到 4）**
+
+- **计划订正**：原 W4 = 6 处（含 `LocalExecutionCommandConsumer`(2)）。实测该文件**必须后移**——它把 `subTaskService.getById(...)` 得到的 `SubTask` **原样传给** agent 域自己的 `AgentRuntimeContextAssembler.assemble/afterTurn`，而装配器要用实体的 **12 个字段**（含 `getUncertainties()` 返回 task 实体 `List<Uncertainty>`）与 `listByIds(...)`。⇒ **「调用方想改类型，也得被调方先接受新类型」**（W1 铁律 ② 的反向形态）：真正决定迁移时点的是**跨域类型的消费方（装配器）**，故 `LocalExecutionCommandConsumer` 与 `AgentRuntimeContextAssembler` **必须同轮**（W11）。W4 收窄为 `ExecutorDoneIssuesBackfiller`(2) + `ExecutionCommandPoller`(2) = 4 处。
+- **做法**：
+  1. `agent.port.SubTaskQueryPort` **补 `findById(Long) → SubTaskSnapshot`**（不存在返回 `null`，与 `SubTaskService.getById` 同语义）→ `ExecutionCommandPoller` 只读它取 `taskId` 记 timeline，不再 import 实体/Service。
+  2. **不透明命令端口** `agent.port.SubTaskReviewContextPort`（+ `LastReviewContext` 视图 record）：
+     - `loadLastReviewContext(subTaskId)` —— 末轮 `round/issues/executorDoneIssues`；无 `reviewHistory` 返回 `null`（与原 agent 侧 `peekLastRound` 同语义）。
+     - `backfillExecutorDoneIssues(subTaskId, targetRound, doneIssues)` —— **重读 + 轮次校验 + 幂等校验 + 写库整体落 task 侧适配器**，返回 `BackfillOutcome` 四态枚举（`SUB_TASK_MISSING` / `SKIPPED_ROUND_CHANGED` / `SKIPPED_ALREADY_FILLED` / `WRITTEN`），**逐条对应原实现的四个分支与 timeline 观测行为**（含「写分支内部空写仍记 success」这一细节）。
+     - 收益：`context.reviewHistory` 的 **schema 解析从「消费方一份 + 提供方一份」收敛为提供方一处**，并把该解析逻辑（原**无专属单测**）纳入新测 `SubTaskReviewContextPortAdapterTest`（12 例）。
+  3. 消费方保留分段锁，但**职责收窄为「并发回填串行化」**（与原实现同为「单实例安全」语义），判定职责整体移交提供方 —— 并发语义不变。
+- **验收**：定向 **42 例 / 0 失败**（Poller 16 / 评审 context 适配器 12 / 查询适配器 5 / 结果回调 5 + 4）；`agent->task` **37 → 33**（−4，与订正后计划一致）；全量 `clean test` **7/7 SUCCESS**、`<testcase>` 口径 **1801 / 0 / 0 / 0**（core 1646 / job 85 / api 70；净 +14 = 评审 context 适配器 12 + 查询适配器补 2）。
+- **基线**：锁定 **33 / 50**（后者仅提示），复跑 `EXIT=0`。
+- **退出清单**：剩余 **33 处 / 11 文件**（`ExecutorDoneIssuesBackfiller`、`ExecutionCommandPoller` 已归零退出）。

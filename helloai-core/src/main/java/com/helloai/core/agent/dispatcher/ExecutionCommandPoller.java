@@ -7,7 +7,8 @@ import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.mqconsumer.ExecutionCommandConsumer;
 import com.helloai.core.agent.mqconsumer.LocalExecutionCommandConsumer;
 import com.helloai.core.agent.entity.AgentExecutionRecord;
-import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.agent.port.SubTaskQueryPort;
+import com.helloai.core.agent.port.SubTaskSnapshot;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -17,7 +18,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
-import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.agent.port.TaskTimelinePort;
 
 /**
@@ -82,7 +82,7 @@ public class ExecutionCommandPoller {
     private final AgentExecutionRecordService agentExecutionRecordService;
     private final ExecutionCommandConsumer executionCommandConsumer;
     private final TaskTimelinePort taskTimelinePort;
-    private final SubTaskService subTaskService;
+    private final SubTaskQueryPort subTaskQueryPort;
     private final AgentExecutionProperties executionProperties;
 
     /**
@@ -93,12 +93,12 @@ public class ExecutionCommandPoller {
     public ExecutionCommandPoller(AgentExecutionRecordService agentExecutionRecordService,
                                   LocalExecutionCommandConsumer executionCommandConsumer,
                                   TaskTimelinePort taskTimelinePort,
-                                  SubTaskService subTaskService,
+                                  SubTaskQueryPort subTaskQueryPort,
                                   AgentExecutionProperties executionProperties) {
         this.agentExecutionRecordService = agentExecutionRecordService;
         this.executionCommandConsumer = executionCommandConsumer;
         this.taskTimelinePort = taskTimelinePort;
-        this.subTaskService = subTaskService;
+        this.subTaskQueryPort = subTaskQueryPort;
         this.executionProperties = executionProperties;
     }
 
@@ -155,15 +155,15 @@ public class ExecutionCommandPoller {
             return;
         }
 
-        // 3. 恢复 subTask 用于 timeline 记录
-        SubTask subTask = subTaskService.getById(record.getSubTaskId());
+        // 3. 恢复 subTask 用于 timeline 记录（只读快照，消费方不再持有 task 实体）
+        SubTaskSnapshot subTask = subTaskQueryPort.findById(record.getSubTaskId());
 
         // 4. 记录 timeline：Poller 处理事件
         // scanType 恒为 listOrphanPending，timeline 事件统一使用 sub_task_execution_command_poll_recovery
         String timelineEvent = "sub_task_execution_command_poll_recovery";
         if (subTask != null) {
             taskTimelinePort.recordEvent(
-                    subTask.getTaskId(),
+                    subTask.taskId(),
                     record.getSubTaskId(),
                     timelineEvent,
                     AgentRole.SYSTEM,

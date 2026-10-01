@@ -23,7 +23,7 @@
 # ---- 组 1/2：反向依赖与跨域直捅 Mapper（严格拦截，只降不升）----
 task->planner=0
 task->review=0
-agent->task=37
+agent->task=33
 agent->planner=0
 agent->review=0
 system->planner=0
@@ -41,4 +41,4 @@ agent->task.mapper=0
 task->agent.mapper=0
 # ---- 组 3：顺向前向依赖（§6 合法；**仅提示不拦截**，端口反转的承载方向）----
 planner->agent=34
-task->agent=48
+task->agent=50

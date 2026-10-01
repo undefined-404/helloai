@@ -6,7 +6,8 @@ import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.mqconsumer.LocalExecutionCommandConsumer;
 import com.helloai.core.agent.entity.AgentExecutionRecord;
-import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.agent.port.SubTaskQueryPort;
+import com.helloai.core.agent.port.SubTaskSnapshot;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -35,7 +36,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
-import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.agent.port.TaskTimelinePort;
 
 /**
@@ -71,7 +71,7 @@ class ExecutionCommandPollerTest {
     @Mock
     private TaskTimelinePort taskTimelinePort;
     @Mock
-    private SubTaskService subTaskService;
+    private SubTaskQueryPort subTaskQueryPort;
     @Mock
     private AgentExecutionProperties executionProperties;
 
@@ -111,10 +111,8 @@ class ExecutionCommandPollerTest {
         void shouldProcessSingleOrphan() {
             AgentExecutionRecord orphan = orphanRecord(101L, 22L, 11L, AgentAccessType.API_KEY_LLM, "assigned");
             when(agentExecutionRecordService.listOrphanPending(60, 20)).thenReturn(List.of(orphan));
-            SubTask subTask = new SubTask();
-            subTask.setId(22L);
-            subTask.setTaskId(33L);
-            when(subTaskService.getById(22L)).thenReturn(subTask);
+            SubTaskSnapshot subTask = new SubTaskSnapshot(22L, null, 33L, null, null);
+            when(subTaskQueryPort.findById(22L)).thenReturn(subTask);
 
             poller.poll();
 
@@ -141,7 +139,7 @@ class ExecutionCommandPollerTest {
             AgentExecutionRecord orphan3 = orphanRecord(103L, 24L, 13L, AgentAccessType.API_KEY_LLM, "retry");
             when(agentExecutionRecordService.listOrphanPending(60, 20))
                     .thenReturn(List.of(orphan1, orphan2, orphan3));
-            when(subTaskService.getById(anyLong())).thenReturn(null);
+            when(subTaskQueryPort.findById(anyLong())).thenReturn(null);
 
             poller.poll();
 
@@ -156,7 +154,7 @@ class ExecutionCommandPollerTest {
         void shouldFallbackTriggerWhenNull() {
             AgentExecutionRecord orphan = orphanRecord(101L, 22L, 11L, AgentAccessType.API_KEY_LLM, null);
             when(agentExecutionRecordService.listOrphanPending(60, 20)).thenReturn(List.of(orphan));
-            when(subTaskService.getById(22L)).thenReturn(null);
+            when(subTaskQueryPort.findById(22L)).thenReturn(null);
 
             poller.poll();
 
@@ -223,7 +221,7 @@ class ExecutionCommandPollerTest {
         void shouldConsumeEvenWhenSubTaskIsNull() {
             AgentExecutionRecord orphan = orphanRecord(101L, 22L, 11L, AgentAccessType.API_KEY_LLM, "assigned");
             when(agentExecutionRecordService.listOrphanPending(60, 20)).thenReturn(List.of(orphan));
-            when(subTaskService.getById(22L)).thenReturn(null);
+            when(subTaskQueryPort.findById(22L)).thenReturn(null);
 
             poller.poll();
 
@@ -250,7 +248,7 @@ class ExecutionCommandPollerTest {
             AgentExecutionRecord orphan2 = orphanRecord(102L, 23L, 12L, AgentAccessType.API_KEY_LLM, "assigned");
             when(agentExecutionRecordService.listOrphanPending(60, 20))
                     .thenReturn(List.of(orphan1, orphan2));
-            when(subTaskService.getById(anyLong())).thenReturn(null);
+            when(subTaskQueryPort.findById(anyLong())).thenReturn(null);
             // 让第一条 consume 抛异常
             doThrow(new RuntimeException("模拟 LLM 异常"))
                     .when(executionCommandConsumer).consume(argThat(c -> c != null && c.getRecordId() != null && c.getRecordId().equals(101L)));
@@ -283,7 +281,7 @@ class ExecutionCommandPollerTest {
         void shouldUseListOrphanPendingInEventMode() {
             AgentExecutionRecord orphan = orphanRecord(401L, 22L, 11L, AgentAccessType.API_KEY_LLM, "assigned");
             when(agentExecutionRecordService.listOrphanPending(60, 20)).thenReturn(List.of(orphan));
-            when(subTaskService.getById(22L)).thenReturn(null);
+            when(subTaskQueryPort.findById(22L)).thenReturn(null);
 
             poller.poll();
 
@@ -298,10 +296,8 @@ class ExecutionCommandPollerTest {
             when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.POLLER);
             AgentExecutionRecord orphan = orphanRecord(402L, 22L, 11L, AgentAccessType.API_KEY_LLM, "assigned");
             when(agentExecutionRecordService.listOrphanPending(60, 20)).thenReturn(List.of(orphan));
-            SubTask subTask = new SubTask();
-            subTask.setId(22L);
-            subTask.setTaskId(33L);
-            when(subTaskService.getById(22L)).thenReturn(subTask);
+            SubTaskSnapshot subTask = new SubTaskSnapshot(22L, null, 33L, null, null);
+            when(subTaskQueryPort.findById(22L)).thenReturn(subTask);
 
             poller.poll();
 
@@ -317,7 +313,7 @@ class ExecutionCommandPollerTest {
             when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.BOTH);
             AgentExecutionRecord orphan = orphanRecord(403L, 23L, 12L, AgentAccessType.API_KEY_LLM, "reassigned");
             when(agentExecutionRecordService.listOrphanPending(60, 20)).thenReturn(List.of(orphan));
-            when(subTaskService.getById(23L)).thenReturn(null);
+            when(subTaskQueryPort.findById(23L)).thenReturn(null);
 
             poller.poll();
 
@@ -332,10 +328,8 @@ class ExecutionCommandPollerTest {
             when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.POLLER);
             AgentExecutionRecord orphan = orphanRecord(404L, 22L, 11L, AgentAccessType.API_KEY_LLM, "assigned");
             when(agentExecutionRecordService.listOrphanPending(60, 20)).thenReturn(List.of(orphan));
-            SubTask subTask = new SubTask();
-            subTask.setId(22L);
-            subTask.setTaskId(33L);
-            when(subTaskService.getById(22L)).thenReturn(subTask);
+            SubTaskSnapshot subTask = new SubTaskSnapshot(22L, null, 33L, null, null);
+            when(subTaskQueryPort.findById(22L)).thenReturn(subTask);
 
             poller.poll();
 
