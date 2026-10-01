@@ -9,14 +9,14 @@ import com.helloai.core.agent.mqconsumer.ExecutionCommandMqMessage;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentExecutionRecord;
 import com.helloai.core.agent.event.AgentEventRecorder;
-import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.agent.port.SubTaskQueryPort;
+import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.event.ExecutionCommandCreatedEvent;
 import com.helloai.core.agent.service.AgentCommandOutboxService;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.core.agent.service.impl.ExecutionCommandServiceImpl;
-import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.agent.port.TaskTimelinePort;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -56,7 +56,7 @@ import static org.mockito.Mockito.when;
 class ExecutionCommandServiceTest {
 
     @Mock
-    private SubTaskService subTaskService;
+    private SubTaskQueryPort subTaskQueryPort;
 
     @Mock
     private AgentService agentService;
@@ -84,17 +84,14 @@ class ExecutionCommandServiceTest {
     @BeforeEach
     void setUp() {
         executionCommandService = new ExecutionCommandServiceImpl(
-                subTaskService, agentService, agentExecutionRecordService, taskTimelinePort,
+                subTaskQueryPort, agentService, agentExecutionRecordService, taskTimelinePort,
                 applicationEventPublisher, executionProperties, agentCommandOutboxService, agentEventRecorder);
     }
 
     @Test
     @DisplayName("为 ASSIGNED 子任务创建 execution command 并发布事件")
     void shouldCreateExecutionCommandAndPublishEvent() {
-        SubTask subTask = new SubTask();
-        subTask.setId(22L);
-        subTask.setTaskId(33L);
-        subTask.setAssignedAgentId(11L);
+        SubTaskSnapshot subTask = new SubTaskSnapshot(22L, null, 33L, 11L, null);
 
         Agent agent = new Agent();
         agent.setId(11L);
@@ -106,7 +103,7 @@ class ExecutionCommandServiceTest {
         record.setSubTaskId(22L);
         record.setStatus(ExecutionStatus.PENDING);
 
-        when(subTaskService.getByIdForUpdate(22L)).thenReturn(subTask);
+        when(subTaskQueryPort.findByIdForUpdate(22L)).thenReturn(subTask);
         when(agentService.getById(11L)).thenReturn(agent);
         when(agentExecutionRecordService.hasPendingOrRunning(22L)).thenReturn(false);
         when(agentExecutionRecordService.createPending(any(), eq(22L), eq(11L),
@@ -145,10 +142,7 @@ class ExecutionCommandServiceTest {
     @Test
     @DisplayName("dispatch-mode=NONE 时创建 execution command 后不发布本地事件")
     void shouldNotPublishEventInPollerMode() {
-        SubTask subTask = new SubTask();
-        subTask.setId(22L);
-        subTask.setTaskId(33L);
-        subTask.setAssignedAgentId(11L);
+        SubTaskSnapshot subTask = new SubTaskSnapshot(22L, null, 33L, 11L, null);
 
         Agent agent = new Agent();
         agent.setId(11L);
@@ -160,7 +154,7 @@ class ExecutionCommandServiceTest {
         record.setSubTaskId(22L);
         record.setStatus(ExecutionStatus.PENDING);
 
-        when(subTaskService.getByIdForUpdate(22L)).thenReturn(subTask);
+        when(subTaskQueryPort.findByIdForUpdate(22L)).thenReturn(subTask);
         when(agentService.getById(11L)).thenReturn(agent);
         when(agentExecutionRecordService.hasPendingOrRunning(22L)).thenReturn(false);
         when(agentExecutionRecordService.createPending(any(), eq(22L), eq(11L),
@@ -180,10 +174,7 @@ class ExecutionCommandServiceTest {
     @Test
     @DisplayName("dispatch-mode=MQ 时调用 outbox.createPending，不发本地事件")
     void shouldEnqueueOutboxWhenDispatchMq() {
-        SubTask subTask = new SubTask();
-        subTask.setId(22L);
-        subTask.setTaskId(33L);
-        subTask.setAssignedAgentId(11L);
+        SubTaskSnapshot subTask = new SubTaskSnapshot(22L, null, 33L, 11L, null);
 
         Agent agent = new Agent();
         agent.setId(11L);
@@ -195,7 +186,7 @@ class ExecutionCommandServiceTest {
         record.setSubTaskId(22L);
         record.setStatus(ExecutionStatus.PENDING);
 
-        when(subTaskService.getByIdForUpdate(22L)).thenReturn(subTask);
+        when(subTaskQueryPort.findByIdForUpdate(22L)).thenReturn(subTask);
         when(agentService.getById(11L)).thenReturn(agent);
         when(agentExecutionRecordService.hasPendingOrRunning(22L)).thenReturn(false);
         when(agentExecutionRecordService.createPending(any(), eq(22L), eq(11L),
@@ -218,17 +209,14 @@ class ExecutionCommandServiceTest {
     @Test
     @DisplayName("子任务已有进行中执行记录时拒绝重复创建 execution command")
     void shouldRejectWhenPendingOrRunningRecordExists() {
-        SubTask subTask = new SubTask();
-        subTask.setId(22L);
-        subTask.setTaskId(33L);
-        subTask.setAssignedAgentId(11L);
+        SubTaskSnapshot subTask = new SubTaskSnapshot(22L, null, 33L, 11L, null);
 
         Agent agent = new Agent();
         agent.setId(11L);
         agent.setRole(AgentRole.EXECUTOR);
         agent.setAccessType(AgentAccessType.API_KEY_LLM);
 
-        when(subTaskService.getByIdForUpdate(22L)).thenReturn(subTask);
+        when(subTaskQueryPort.findByIdForUpdate(22L)).thenReturn(subTask);
         when(agentExecutionRecordService.hasPendingOrRunning(22L)).thenReturn(true);
 
         assertThatThrownBy(() -> executionCommandService.createAssignedCommand(22L, 11L, "assigned", List.of()))
@@ -241,10 +229,7 @@ class ExecutionCommandServiceTest {
     @Test
     @DisplayName("P2-1: 防重保护应同时使用 DB 行锁 + hasPendingOrRunning 双重检查")
     void shouldUseBothRowLockAndHasPendingOrRunningForDuplicatePrevention() {
-        SubTask subTask = new SubTask();
-        subTask.setId(22L);
-        subTask.setTaskId(33L);
-        subTask.setAssignedAgentId(11L);
+        SubTaskSnapshot subTask = new SubTaskSnapshot(22L, null, 33L, 11L, null);
 
         Agent agent = new Agent();
         agent.setId(11L);
@@ -256,7 +241,7 @@ class ExecutionCommandServiceTest {
         record.setSubTaskId(22L);
         record.setStatus(ExecutionStatus.PENDING);
 
-        when(subTaskService.getByIdForUpdate(22L)).thenReturn(subTask);
+        when(subTaskQueryPort.findByIdForUpdate(22L)).thenReturn(subTask);
         when(agentService.getById(11L)).thenReturn(agent);
         when(agentExecutionRecordService.hasPendingOrRunning(22L)).thenReturn(false);
         when(agentExecutionRecordService.createPending(any(), eq(22L), eq(11L),
@@ -268,8 +253,8 @@ class ExecutionCommandServiceTest {
 
         executionCommandService.createAssignedCommand(22L, 11L, "assigned", List.of());
 
-        var inOrder = org.mockito.Mockito.inOrder(subTaskService, agentExecutionRecordService);
-        inOrder.verify(subTaskService).getByIdForUpdate(22L);
+        var inOrder = org.mockito.Mockito.inOrder(subTaskQueryPort, agentExecutionRecordService);
+        inOrder.verify(subTaskQueryPort).findByIdForUpdate(22L);
         inOrder.verify(agentExecutionRecordService).hasPendingOrRunning(22L);
     }
 }

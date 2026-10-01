@@ -9,12 +9,12 @@ import com.helloai.core.agent.entity.AgentExecutionRecord;
 import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.core.agent.service.impl.ExecutionCommandServiceImpl;
-import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.agent.port.SubTaskQueryPort;
+import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.event.ExecutionCommandCreatedEvent;
 import com.helloai.core.agent.service.AgentCommandOutboxService;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;
-import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.agent.port.TaskTimelinePort;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -59,7 +59,7 @@ import static org.mockito.Mockito.when;
 class ExecutionCommandServiceDispatchTest {
 
     @Mock
-    private SubTaskService subTaskService;
+    private SubTaskQueryPort subTaskQueryPort;
     @Mock
     private AgentService agentService;
     @Mock
@@ -86,19 +86,16 @@ class ExecutionCommandServiceDispatchTest {
     @BeforeEach
     void setUp() {
         service = new ExecutionCommandServiceImpl(
-                subTaskService, agentService, agentExecutionRecordService, taskTimelinePort,
+                subTaskQueryPort, agentService, agentExecutionRecordService, taskTimelinePort,
                 applicationEventPublisher, executionProperties, agentCommandOutboxService, agentEventRecorder);
     }
 
     /**
-     * 组装最小可用的 SubTask / Agent / Record，让 createAssignedCommand 顺利跑到分发逻辑。
+     * 组装最小可用的 SubTask 快照 / Agent / Record，让 createAssignedCommand 顺利跑到分发逻辑。
      */
     private void primeCommonMocks() {
-        SubTask subTask = new SubTask();
-        subTask.setId(SUB_TASK_ID);
-        subTask.setTaskId(TASK_ID);
-        subTask.setAssignedAgentId(AGENT_ID);
-        when(subTaskService.getByIdForUpdate(SUB_TASK_ID)).thenReturn(subTask);
+        SubTaskSnapshot subTask = new SubTaskSnapshot(SUB_TASK_ID, null, TASK_ID, AGENT_ID, null);
+        when(subTaskQueryPort.findByIdForUpdate(SUB_TASK_ID)).thenReturn(subTask);
 
         when(agentExecutionRecordService.hasPendingOrRunning(SUB_TASK_ID)).thenReturn(false);
 

@@ -27,6 +27,18 @@ public class SubTaskQueryPortAdapter implements SubTaskQueryPort {
         return SubTaskSnapshotMapper.toSnapshot(subTaskService.getById(subTaskId));
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p><b>刻意不加 {@code @Transactional}</b>：本方法只转发 {@code SELECT ... FOR UPDATE}，
+     * 行锁须随<b>调用方事务</b>存续；在此另开事务或提前提交会立刻释放锁、失去互斥意义
+     * （与 {@code SubTaskService#getByIdForUpdate} 的既有约定一致）。</p>
+     */
+    @Override
+    public SubTaskSnapshot findByIdForUpdate(Long subTaskId) {
+        return SubTaskSnapshotMapper.toSnapshot(subTaskService.getByIdForUpdate(subTaskId));
+    }
+
     @Override
     public List<SubTaskSnapshot> listRecentlyChanged(OffsetDateTime since, int limit) {
         return SubTaskSnapshotMapper.toSnapshots(subTaskService.listRecentlyChanged(since, limit));

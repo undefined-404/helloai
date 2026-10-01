@@ -32,6 +32,23 @@ public interface SubTaskQueryPort {
     SubTaskSnapshot findById(Long subTaskId);
 
     /**
+     * 按子任务主键<b>加行级锁</b>读取快照（{@code SELECT ... FOR UPDATE}）。
+     *
+     * <p>用于「读现状 + 紧接写入」需要原子化的路径（如执行命令创建时的二次判重），
+     * 避免同一子任务上并发重复发命令。语义与 {@code SubTaskService#getByIdForUpdate(Long)}
+     * 逐字一致：不存在返回 {@code null}。</p>
+     *
+     * <p><b>⚠️ 必须在已开启的事务内调用</b>：提供方实现<b>只发 {@code SELECT ... FOR UPDATE}、
+     * 不自行开启事务</b>（适配器方法亦<b>不带</b> {@code @Transactional}）——行锁随<b>调用方事务</b>
+     * 的存续而保持；若在提供方另开 REQUIRED 之外的独立事务或方法返回即提交，锁会立刻释放、
+     * 失去互斥意义。</p>
+     *
+     * @param subTaskId 子任务 ID
+     * @return 加锁读取到的子任务快照；不存在返回 {@code null}
+     */
+    SubTaskSnapshot findByIdForUpdate(Long subTaskId);
+
+    /**
      * 列出最近有变更的子任务（Phase 0 B3 事件对账候选源）。
      *
      * <p>语义与 {@code SubTaskService#listRecentlyChanged(OffsetDateTime, int)} 逐字一致，

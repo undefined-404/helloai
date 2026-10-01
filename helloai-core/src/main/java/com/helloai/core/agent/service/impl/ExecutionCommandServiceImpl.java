@@ -11,12 +11,12 @@ import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentExecutionRecord;
 import com.helloai.core.agent.event.AgentEventContextResolver;
 import com.helloai.core.agent.event.AgentEventRecorder;
-import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.agent.port.SubTaskQueryPort;
+import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.event.ExecutionCommandCreatedEvent;
 import com.helloai.core.agent.service.AgentCommandOutboxService;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;
-import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.agent.port.TaskTimelinePort;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -47,7 +47,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class ExecutionCommandServiceImpl implements ExecutionCommandService {
 
-    private final SubTaskService subTaskService;
+    private final SubTaskQueryPort subTaskQueryPort;
     private final AgentService agentService;
     private final AgentExecutionRecordService agentExecutionRecordService;
     private final TaskTimelinePort taskTimelinePort;
@@ -67,16 +67,17 @@ public class ExecutionCommandServiceImpl implements ExecutionCommandService {
     public ExecutionCommand createAssignedCommand(Long subTaskId, Long agentId, String trigger,
                                                   List<String> requiredSkills) {
         // 先锁定子任务，再做二次判重与命令落库，避免并发重复发命令。
-        SubTask subTask = subTaskService.getByIdForUpdate(subTaskId);
+        // 加锁读经 agent 域端口（适配器不加 @Transactional，行锁随本方法事务存续）。
+        SubTaskSnapshot subTask = subTaskQueryPort.findByIdForUpdate(subTaskId);
         if (subTask == null) {
             throw new BizException("子任务不存在: " + subTaskId);
         }
-        if (subTask.getAssignedAgentId() == null) {
+        if (subTask.assignedAgentId() == null) {
             throw new BizException("子任务未分配 Agent: " + subTaskId);
         }
-        if (!subTask.getAssignedAgentId().equals(agentId)) {
+        if (!subTask.assignedAgentId().equals(agentId)) {
             throw new BizException("子任务分配 Agent 不匹配: subTaskId=" + subTaskId
-                    + ", assigned=" + subTask.getAssignedAgentId()
+                    + ", assigned=" + subTask.assignedAgentId()
                     + ", commandAgent=" + agentId);
         }
         if (agentExecutionRecordService.hasPendingOrRunning(subTaskId)) {
@@ -110,7 +111,7 @@ public class ExecutionCommandServiceImpl implements ExecutionCommandService {
                 .build();
 
         taskTimelinePort.recordEvent(
-                subTask.getTaskId(),
+                subTask.taskId(),
                 subTaskId,
                 "sub_task_execution_command_created",
                 AgentRole.SYSTEM,
@@ -147,8 +148,8 @@ public class ExecutionCommandServiceImpl implements ExecutionCommandService {
         // 重派/死信兜底重新分配同样走本入口，每次发命令即代表一次分配事实。
         try {
             agentEventRecorder.record(
-                    AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
-                    subTask.getTaskId(), subTaskId, 0, 0,
+                    AgentEventContextResolver.resolveRunId(subTask.taskId()),
+                    subTask.taskId(), subTaskId, 0, 0,
                     AgentEventType.TASK_ASSIGNED, agentId,
                     Map.of("agentId", agentId, "subTaskId", subTaskId, "trigger", trigger));
         } catch (Exception e) {
