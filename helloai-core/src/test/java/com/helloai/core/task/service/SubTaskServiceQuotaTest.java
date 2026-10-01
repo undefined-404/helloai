@@ -1,5 +1,6 @@
 package com.helloai.core.task.service;
 
+import com.helloai.core.agent.service.RewardService;
 import com.helloai.common.base.AgentUnavailableException;
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentDispatchProperties;

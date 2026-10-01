@@ -1,5 +1,6 @@
 package com.helloai.core.task.service;
 
+import com.helloai.core.agent.service.RewardService;
 import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.AgentInboxService;

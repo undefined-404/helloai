@@ -1,12 +1,12 @@
-package com.helloai.core.task.service.impl;
+package com.helloai.core.agent.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.helloai.core.task.entity.ActivityLog;
-import com.helloai.core.task.mapper.ActivityLogMapper;
-import com.helloai.core.task.service.ActivityLogService;
+import com.helloai.core.agent.entity.ActivityLog;
+import com.helloai.core.agent.mapper.ActivityLogMapper;
+import com.helloai.core.agent.service.ActivityLogService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;

@@ -1,4 +1,4 @@
-package com.helloai.core.task.entity;
+package com.helloai.core.agent.entity;
 
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.helloai.common.base.BaseEntity;

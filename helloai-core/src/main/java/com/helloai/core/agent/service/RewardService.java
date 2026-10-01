@@ -1,8 +1,8 @@
-package com.helloai.core.task.service;
+package com.helloai.core.agent.service;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.IService;
-import com.helloai.core.task.entity.RewardLog;
+import com.helloai.core.agent.entity.RewardLog;
 
 import java.util.Map;
 

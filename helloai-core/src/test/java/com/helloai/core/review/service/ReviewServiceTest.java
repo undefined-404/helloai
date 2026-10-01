@@ -12,7 +12,7 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.service.RewardService;
+import com.helloai.core.agent.service.RewardService;
 import com.helloai.core.task.service.TaskTimelineService;
 import com.helloai.core.review.dto.DefectDistribution;
 import com.helloai.core.review.dto.QualityTrendPoint;

@@ -1,8 +1,8 @@
-package com.helloai.core.task.service;
+package com.helloai.core.agent.service;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.task.entity.ActivityLog;
+import com.helloai.core.agent.entity.ActivityLog;
 
 import java.util.List;
 import java.util.Map;

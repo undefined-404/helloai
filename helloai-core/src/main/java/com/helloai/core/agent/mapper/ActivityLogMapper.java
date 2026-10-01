@@ -1,7 +1,7 @@
-package com.helloai.core.task.mapper;
+package com.helloai.core.agent.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
-import com.helloai.core.task.entity.ActivityLog;
+import com.helloai.core.agent.entity.ActivityLog;
 import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;

@@ -25,7 +25,7 @@ import com.helloai.core.review.mapper.ReviewRecheckLogMapper;
 import com.helloai.core.review.mapper.ReviewRecordMapper;
 import com.helloai.core.review.service.ReviewService;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.service.RewardService;
+import com.helloai.core.agent.service.RewardService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import lombok.RequiredArgsConstructor;

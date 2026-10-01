@@ -5,8 +5,8 @@ import com.baomidou.mybatisplus.extension.service.IService;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.task.entity.ActivityLog;
-import com.helloai.core.task.entity.RewardLog;
+import com.helloai.core.agent.entity.ActivityLog;
+import com.helloai.core.agent.entity.RewardLog;
 
 import java.time.OffsetDateTime;
 import java.util.List;

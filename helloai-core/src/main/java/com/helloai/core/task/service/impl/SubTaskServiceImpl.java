@@ -33,7 +33,7 @@ import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.port.ReviewSummary;
 import com.helloai.core.task.score.ImplicitScoreCalculator;
 import com.helloai.core.task.score.ImplicitScoreCalculator.ScoreResult;
-import com.helloai.core.task.service.RewardService;
+import com.helloai.core.agent.service.RewardService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;

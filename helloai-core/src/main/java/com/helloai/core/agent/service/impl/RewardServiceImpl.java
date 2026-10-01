@@ -1,4 +1,4 @@
-package com.helloai.core.task.service.impl;
+package com.helloai.core.agent.service.impl;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -6,9 +6,9 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.AgentService;
-import com.helloai.core.task.entity.RewardLog;
-import com.helloai.core.task.mapper.RewardLogMapper;
-import com.helloai.core.task.service.RewardService;
+import com.helloai.core.agent.entity.RewardLog;
+import com.helloai.core.agent.mapper.RewardLogMapper;
+import com.helloai.core.agent.service.RewardService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;

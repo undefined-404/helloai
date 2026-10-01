@@ -5,10 +5,10 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.helloai.common.base.BizException;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentMapper;
-import com.helloai.core.task.entity.ActivityLog;
-import com.helloai.core.task.entity.RewardLog;
-import com.helloai.core.task.service.ActivityLogService;
-import com.helloai.core.task.service.RewardService;
+import com.helloai.core.agent.entity.ActivityLog;
+import com.helloai.core.agent.entity.RewardLog;
+import com.helloai.core.agent.service.ActivityLogService;
+import com.helloai.core.agent.service.RewardService;
 import com.helloai.core.task.service.SubTaskService;
 import org.springframework.stereotype.Service;
 

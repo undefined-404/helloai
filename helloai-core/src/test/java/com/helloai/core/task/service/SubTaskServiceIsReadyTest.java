@@ -1,5 +1,6 @@
 package com.helloai.core.task.service;
 
+import com.helloai.core.agent.service.RewardService;
 import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
 import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapper;
 import com.helloai.core.agent.event.AgentEventRecorder;

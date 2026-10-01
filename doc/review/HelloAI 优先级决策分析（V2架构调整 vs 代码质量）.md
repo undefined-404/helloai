@@ -504,7 +504,9 @@ n="$(grep -o '<testcase' "$f" | wc -l | tr -d '[:space:]')"
 > **另注（既有失败，非本次引入）**：本轮首次全量跑时 `helloai-job` 5 个用例报 `NoClassDefFoundError: SubTaskMapper`。反编译证实其 `target/test-classes` 里是**陈旧 class**（字段描述符为默认包 `LSubTaskMapper;`，而源码是 `import com.helloai.core.task.mapper.SubTaskMapper`），且 mtime 被刷新后**令 Maven 增量编译跳过重编**；`clean` 后即消失。教训见 `doc/log/2026-10.md` 同批次条目。
 
 
-## 16. Q1-③ 第 5 条预案：`agent → task`(68) 解耦分批方案（2026-10-01，本轮不实现）
+## 16. Q1-③ 第 5 条预案：`agent → task`(68) 解耦分批方案（2026-10-01；**批次 1 已执行，68 → 58**）
+
+> **进度更新（2026-10-01 晚）**：§16.4 **批次 1（实体归位）已执行并锁定基线**——`agent->task` **68 → 58**（−10），预案外收益 `task->agent` **45 → 41**（−4，`FeedService`/`RewardServiceImpl` 一并归位）。本节后文（§16.1~§16.5、§16.7）的「68」均为**批次 1 执行前的实测快照**，保持原文以留痕；当前生效数字以 `scripts/ci/arch-baseline.txt` 为准（`agent->task=58` / `task->agent=41`）。批次 1 的实际做法与原预案有一处差异（前提订正 + 搬迁范围扩至 10 文件），详见 §16.4 批次 1 行的 ✅ 记录。
 
 ### 16.1 病灶现状
 
@@ -562,7 +564,7 @@ grep -rn "^[[:space:]]*import[[:space:]]\+com\.helloai\.core\.task" helloai-core
 
 | 批次 | 批次目标 | 涉及文件与行数量级 | 手法 | 预估规模 | 依赖前置 | 验收口径 |
 |---|---|---|---|---|---|---|
-| **1** | **实体归位**：`RewardLog`(3) + `ActivityLog`(3) + `RewardService`(2) + `ActivityLogService`(2) = **10** | 3 文件（`agent/service/AgentService.java`、`agent/service/AgentStatsService.java`、`agent/service/impl/AgentServiceImpl.java`） | **归属纠偏（非反转）**：核实 agent 为唯一读写域后，把错放在 task 域的实体与服务整体迁回 agent 域 | S | 无 | `agent->task` 68 → 58；定向单测 + 门禁确认下降 + `--update-baseline` + 复跑 `EXIT=0` |
+| **1** ✅ **已完成（2026-10-01）** | **实体归位**：`RewardLog`(3) + `ActivityLog`(3) + `RewardService`(2) + `ActivityLogService`(2) = **10** | 3 文件（`agent/service/AgentService.java`、`agent/service/AgentStatsService.java`、`agent/service/impl/AgentServiceImpl.java`） | **归属纠偏（非反转）**：错放在 task 域的实体与服务整体迁回 agent 域。**前提订正**：原前提「agent 为唯一读写域」**取证后不成立**——task 的 `SubTaskServiceImpl` 与 review 的 `ReviewServiceImpl` 也经 `RewardService` 写、task 的 `FeedService` 也读 `ActivityLog`；且 `FeedService(+Impl)` 与 `RewardServiceImpl` 本就错放在 task 域（各 import `agent.*`，属 task→agent 的 45 里）。**实际搬迁 10 个文件**：`RewardLog` / `ActivityLog` 实体、`RewardLogMapper` / `ActivityLogMapper`、`RewardService` / `ActivityLogService` / `FeedService` 接口与 3 个 Impl 全部迁 `agent` 域（`@MapperScan` 已含 `agent.mapper`，无 XML mapper，零配置改动）；`SubTaskServiceImpl` / `ReviewServiceImpl` 改指 `agent.service.RewardService`（task→agent / review→agent 均**顺向合法**）；4 个 api Controller + 8 个测试同步 | S | 无 | ✅ 实测：`agent->task` **68 → 58**（−10，与预案一致），`task->agent` **45 → 41**（−4，预案外收益）；定向 71 例 0 失败；`--update-baseline` 已锁定（58 / 41）；复跑 20 条全持平 `EXIT=0` |
 | **2** | **只读端口反转**：`TaskRunningSpecService`(3) + `AttachmentService`(3) + `spec.ExecutionRecord`(3) + `ExecutionRecordParser`(1) + `SubTaskService` 只读子集(9) = **19** | 9 文件（`command/ExecutionResultHandler`、`dispatcher/ExecutionCommandPoller`、`dispatcher/SubTaskAutoExecutionDispatcher`、`service/AgentRuntimeContextAssembler`、`service/AgentStatsService`、`service/impl/AgentDutyLeaseServiceImpl`、`service/impl/ExecutionCommandServiceImpl`、`service/impl/InFlightDbQuotaService`、`event/impl/EventReconciliationServiceImpl`） | **端口反转**：端口 `agent.port.XxxPort`（含只读 `record` 快照）定义在**消费方 agent**，实现 `XxxPortAdapter` 落**提供方 task**。**依据（§16.3 完整判据）**：消费方 `agent` **低于**提供方 `task`，故「端口放消费方」成立、实现侧 `task → agent` **顺向** ✅ —— **并非因为「端口一律要放消费方」** | M | 无（可与批次 1 并行） | 逐端口一改一测；`agent->task` 单调下降至 39 |
 | **3** | **端口归位**：`TaskDispatchPort`(1) + `SubTaskDispatchService`(1) = **2** | 1 文件（`agent/dispatcher/ResilientDispatcher.java:21-22`） | **端口归位**：`TaskDispatchPort` 现落**消费方** `task.port`，迫使**提供方** `agent` 反向实现它（即存量 68 的一笔）；按 §16.3 完整判据（消费方 `task` **高于**提供方 `agent`）迁到**提供方** `agent.port`，由 `agent` 自身实现，消费方 `task` 依赖它 = `task → agent` ✅ 顺向；`SubTaskDispatchService` 同法归位或并入批次 2 端口 | S | 依赖批次 2/4（`ResilientDispatcher` 同时持有 `SubTask`/`SubTaskService`/`TaskTimelineService`，需同批收敛） | `agent->task` 再降 2 → 37 |
 | **4** | **`SubTask` 快照值对象**：`SubTask` 15（含 `McpToolServiceImpl` 的 `entity.*` 通配 1）+ `Uncertainty` 2 + `Attachment` 2 = **19**（含通配计 20） | 12+ 文件（`command/ExecutionResultHandler`、`dispatcher/ExecutionCommandPoller`、`dispatcher/ResilientDispatcher`、`dispatcher/SubTaskAutoExecutionDispatcher`、`event/AgentEventContextResolver`、`event/impl/EventReconciliationServiceImpl`、`mqconsumer/LocalExecutionCommandConsumer`、`quality/ExecutorDoneIssuesBackfiller`、`service/AgentOutboxService(Impl)`、`service/ExecutionArtifactService(Impl)`、`service/impl/McpToolServiceImpl`、`service/AgentRuntimeContextAssembler`） | **快照值对象**：agent 端口返回 `record SubTaskSnapshot(…)`（**零实体泄漏**），**照抄 §15 `system/port/ArtifactReference`（record）+ `ArtifactReferencePortAdapter` 先例**；agent 不再 import `task.entity.SubTask` | L | 依赖批次 2 | 快照映射单测（正常/空值/字段截断）；`agent->task` 继续单调下降 |
@@ -599,8 +601,9 @@ grep -rn "^[[:space:]]*import[[:space:]]\+com\.helloai\.core\.task" helloai-core
 
 ### 16.6 本轮边界
 
-> **本批（2026-10-01 架构收口）不实现 `agent → task` 解耦，仅登记预案。**
-> 本轮实际开工范围仅为「反向依赖收口」的既有 4 条（`system → task` 已完成见 §15；`shared → task` / `shared → agent` / job 6 类见 §14「剩余待做」表）。`agent → task`(68) 属**下一轮单独立项**，本 §16 只提供可执行的批次预案与验收口径，**本轮不动任何 `agent` 域代码**。
+> ~~本批（2026-10-01 架构收口）不实现 `agent → task` 解耦，仅登记预案。~~
+> **已部分突破**：架构收口批（①~④）于当日入库后，用户拍板继续推进，**批次 1 已于同日晚执行完成**（`agent->task` 68→58、`task->agent` 45→41，独立一笔提交）。§16.4 批次 2~5 仍为预案。
+> 架构收口批的实际开工范围为「反向依赖收口」的既有 4 条（`system → task` 已完成见 §15；`shared → task` / `shared → agent` / job 6 类见 §14「剩余待做」表）。
 
 **分批性质说明（防误读）**：
 
