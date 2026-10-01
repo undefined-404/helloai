@@ -31,9 +31,8 @@ import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import com.helloai.core.agent.service.SubTaskExecutionService;
-import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.agent.port.TaskTimelinePort;
+import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.spec.ExecutionRecord;
 import com.helloai.core.task.spec.ExecutionRecordParser;
 import com.helloai.core.task.service.TaskRunningSpecService;
@@ -42,7 +41,7 @@ import com.helloai.core.task.service.TaskRunningSpecService;
  * 执行结果处理器。
  *
  * <p>负责把执行成功/失败结果回写到子任务状态机与时间线，
- * 让 {@link SubTaskExecutionService} 更聚焦“执行本身”，
+ * 让消费侧编排（{@code LocalExecutionCommandConsumer}）更聚焦“执行本身”，
  * 后续也便于把结果处理独立挂接到 MQ/轮询消费端。</p>
  */
 @Slf4j

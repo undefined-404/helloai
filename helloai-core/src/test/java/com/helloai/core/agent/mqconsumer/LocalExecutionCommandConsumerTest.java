@@ -16,7 +16,7 @@ import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentMcpServerService;
 import com.helloai.core.agent.service.AgentRuntimeContextAssembler;
 import com.helloai.core.agent.service.AgentService;
-import com.helloai.core.agent.service.SubTaskExecutionService;
+import com.helloai.core.agent.port.SubTaskCommandPort;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.agent.port.TaskTimelinePort;
@@ -74,7 +74,7 @@ class LocalExecutionCommandConsumerTest {
 
     /** G-002 单轨：状态推进（幂等前置）。 */
     @Mock
-    private SubTaskExecutionService subTaskExecutionService;
+    private SubTaskCommandPort subTaskCommandPort;
 
     /** G-002 单轨：Runtime 真身上下文装配（prompt / chatModel / 会话）。 */
     @Mock
@@ -124,7 +124,7 @@ class LocalExecutionCommandConsumerTest {
             localExecutionCommandConsumer.consume(baseCommand());
 
             // 编排：状态推进 → 装配 → 真身执行 → 会话推进
-            verify(subTaskExecutionService).startIfNeeded(22L, SubTaskStatus.ASSIGNED);
+            verify(subTaskCommandPort).startIfNeeded(22L, SubTaskStatus.ASSIGNED);
             verify(contextAssembler).assemble(any(), same(subTask), same(agent), any(), any());
             verify(agentRuntime).execute(same(ctx));
             verify(contextAssembler).afterTurn(same(subTask), same(agent), eq(1), any());
@@ -214,7 +214,7 @@ class LocalExecutionCommandConsumerTest {
             when(agentService.getById(11L)).thenReturn(agent);
             when(agentExecutionRecordService.markFailed(44L, "sub task not allowed")).thenReturn(true);
             doThrow(new IllegalStateException("sub task not allowed"))
-                    .when(subTaskExecutionService).startIfNeeded(22L, SubTaskStatus.REVIEW);
+                    .when(subTaskCommandPort).startIfNeeded(22L, SubTaskStatus.REVIEW);
 
             localExecutionCommandConsumer.consume(baseCommand());
 

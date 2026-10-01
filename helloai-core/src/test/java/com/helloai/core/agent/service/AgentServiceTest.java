@@ -19,7 +19,7 @@ import com.helloai.core.agent.service.impl.AgentServiceImpl;
 import com.helloai.core.system.entity.LlmProviderModel;
 import com.helloai.core.agent.service.ActivityLogService;
 import com.helloai.core.agent.service.RewardService;
-import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.agent.port.SubTaskCommandPort;
 import com.helloai.core.agent.port.TaskTimelinePort;
 import com.helloai.core.system.crypto.AgentApiKeyCipher;
 import com.helloai.core.system.service.LlmProviderModelQueryService;
@@ -52,7 +52,7 @@ import static org.mockito.Mockito.when;
 class AgentServiceTest {
 
     @Mock
-    private SubTaskService subTaskService;
+    private SubTaskCommandPort subTaskCommandPort;
     @Mock
     private SubTaskStatsPort subTaskStatsPort;
     @Mock
@@ -81,7 +81,7 @@ class AgentServiceTest {
     private AgentApiKeyCipher agentApiKeyCipher;
 
     private AgentService newSpyService() {
-        return spy(new AgentServiceImpl(subTaskService, rewardService, activityLogService,
+        return spy(new AgentServiceImpl(subTaskStatsPort, subTaskCommandPort, rewardService, activityLogService,
                 agentInboxMapper, agentDutyLeaseMapper,
                 agentExecutionRecordMapper, conversationArchiveMapper, conversationMessageMapper,
                 agentMcpServerService, agentApiKeyCipher,

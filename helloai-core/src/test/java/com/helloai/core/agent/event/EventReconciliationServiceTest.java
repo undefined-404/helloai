@@ -3,8 +3,8 @@ package com.helloai.core.agent.event;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.event.impl.EventReconciliationServiceImpl;
 import com.helloai.core.agent.mapper.AgentEventMapper;
-import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.agent.port.SubTaskQueryPort;
+import com.helloai.core.agent.port.SubTaskSnapshot;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -36,7 +36,7 @@ import static org.mockito.Mockito.when;
 class EventReconciliationServiceTest {
 
     @Mock
-    private SubTaskService subTaskService;
+    private SubTaskQueryPort subTaskQueryPort;
 
     @Mock
     private AgentEventMapper agentEventMapper;
@@ -45,17 +45,17 @@ class EventReconciliationServiceTest {
 
     @BeforeEach
     void setUp() {
-        reconciliationService = new EventReconciliationServiceImpl(subTaskService, agentEventMapper);
+        reconciliationService = new EventReconciliationServiceImpl(subTaskQueryPort, agentEventMapper);
         // 默认：候选源为空（各用例按需 stub），事件末条默认 task_assigned
         // LENIENT：跳过状态/窗口透传用例不使用部分默认 stub，避免 UnnecessaryStubbing
-        when(subTaskService.listRecentlyChanged(any(OffsetDateTime.class), anyInt())).thenReturn(List.of());
+        when(subTaskQueryPort.listRecentlyChanged(any(OffsetDateTime.class), anyInt())).thenReturn(List.of());
         when(agentEventMapper.selectLastEventTypeBySubTaskId(anyLong())).thenReturn("task_assigned");
     }
 
     @Test
     @DisplayName("全链路一致：五个有事件语义状态末条事件匹配 → 0 不一致")
     void shouldReportZeroWhenAllLastEventsMatch() {
-        when(subTaskService.listRecentlyChanged(any(OffsetDateTime.class), anyInt())).thenReturn(List.of(
+        when(subTaskQueryPort.listRecentlyChanged(any(OffsetDateTime.class), anyInt())).thenReturn(List.of(
                 subTask(1L, SubTaskStatus.ASSIGNED),
                 subTask(2L, SubTaskStatus.IN_PROGRESS),
                 subTask(3L, SubTaskStatus.REVIEW),
@@ -75,7 +75,7 @@ class EventReconciliationServiceTest {
     @Test
     @DisplayName("事件缺失：业务表 ASSIGNED 但事件流为空 → 1 不一致")
     void shouldDetectMissingEvent() {
-        when(subTaskService.listRecentlyChanged(any(OffsetDateTime.class), anyInt()))
+        when(subTaskQueryPort.listRecentlyChanged(any(OffsetDateTime.class), anyInt()))
                 .thenReturn(List.of(subTask(1L, SubTaskStatus.ASSIGNED)));
         when(agentEventMapper.selectLastEventTypeBySubTaskId(anyLong())).thenReturn(null);
 
@@ -85,7 +85,7 @@ class EventReconciliationServiceTest {
     @Test
     @DisplayName("事件错位：DONE 但末条事件是 review_rejected → 1 不一致")
     void shouldDetectWrongLastEvent() {
-        when(subTaskService.listRecentlyChanged(any(OffsetDateTime.class), anyInt()))
+        when(subTaskQueryPort.listRecentlyChanged(any(OffsetDateTime.class), anyInt()))
                 .thenReturn(List.of(subTask(1L, SubTaskStatus.DONE)));
         when(agentEventMapper.selectLastEventTypeBySubTaskId(anyLong())).thenReturn("review_rejected");
 
@@ -96,7 +96,7 @@ class EventReconciliationServiceTest {
     @DisplayName("IN_PROGRESS 执行链任一末条事件均视为一致（step 1-4 递增）")
     void shouldAcceptAnyInProgressChainEvent() {
         for (String eventType : List.of("agent_started", "context_built", "tool_call_started", "tool_call_completed")) {
-            when(subTaskService.listRecentlyChanged(any(OffsetDateTime.class), anyInt()))
+            when(subTaskQueryPort.listRecentlyChanged(any(OffsetDateTime.class), anyInt()))
                     .thenReturn(List.of(subTask(1L, SubTaskStatus.IN_PROGRESS)));
             when(agentEventMapper.selectLastEventTypeBySubTaskId(anyLong())).thenReturn(eventType);
 
@@ -110,7 +110,7 @@ class EventReconciliationServiceTest {
     @DisplayName("REVIEW 阶段 AGENT_COMPLETED 与 REVIEW_STARTED 均为合法末条事件")
     void shouldAcceptBothReviewBoundaryEvents() {
         for (String eventType : List.of("agent_completed", "review_started")) {
-            when(subTaskService.listRecentlyChanged(any(OffsetDateTime.class), anyInt()))
+            when(subTaskQueryPort.listRecentlyChanged(any(OffsetDateTime.class), anyInt()))
                     .thenReturn(List.of(subTask(1L, SubTaskStatus.REVIEW)));
             when(agentEventMapper.selectLastEventTypeBySubTaskId(anyLong())).thenReturn(eventType);
 
@@ -125,7 +125,7 @@ class EventReconciliationServiceTest {
     void shouldSkipStatusesWithoutEventSemantics() {
         for (SubTaskStatus status : List.of(SubTaskStatus.PENDING_PLAN_REVIEW, SubTaskStatus.PENDING,
                 SubTaskStatus.PAUSED, SubTaskStatus.BLOCKED, SubTaskStatus.CANCELLED, SubTaskStatus.DEAD_LETTER)) {
-            when(subTaskService.listRecentlyChanged(any(OffsetDateTime.class), anyInt()))
+            when(subTaskQueryPort.listRecentlyChanged(any(OffsetDateTime.class), anyInt()))
                     .thenReturn(List.of(subTask(1L, status)));
 
             assertThat(reconciliationService.reconcile(100))
@@ -142,7 +142,7 @@ class EventReconciliationServiceTest {
 
         ArgumentCaptor<OffsetDateTime> sinceCaptor = ArgumentCaptor.forClass(OffsetDateTime.class);
         ArgumentCaptor<Integer> limitCaptor = ArgumentCaptor.forClass(Integer.class);
-        verify(subTaskService).listRecentlyChanged(sinceCaptor.capture(), limitCaptor.capture());
+        verify(subTaskQueryPort).listRecentlyChanged(sinceCaptor.capture(), limitCaptor.capture());
 
         OffsetDateTime since = sinceCaptor.getValue();
         assertThat(since).isAfter(OffsetDateTime.now().minusMinutes(11));
@@ -150,10 +150,10 @@ class EventReconciliationServiceTest {
         assertThat(limitCaptor.getValue()).isEqualTo(42);
     }
 
-    private SubTask subTask(Long id, SubTaskStatus status) {
-        SubTask subTask = new SubTask();
-        subTask.setId(id);
-        subTask.setStatus(status);
-        return subTask;
+    /**
+     * 对账候选源快照；对账只看 id + status，其余字段留空（快照字段按需增长）。
+     */
+    private SubTaskSnapshot subTask(Long id, SubTaskStatus status) {
+        return new SubTaskSnapshot(id, status, null, null, null);
     }
 }

@@ -16,6 +16,8 @@ import com.helloai.core.agent.mapper.AgentMapper;
 import com.helloai.core.agent.mapper.ConversationArchiveMapper;
 import com.helloai.core.agent.mapper.ConversationMessageMapper;
 import com.helloai.core.agent.port.AgentAuthPort;
+import com.helloai.core.agent.port.SubTaskCommandPort;
+import com.helloai.core.agent.port.SubTaskStatsPort;
 import com.helloai.core.agent.service.AgentCredentialService;
 import com.helloai.core.agent.service.AgentLifecycleService;
 import com.helloai.core.agent.service.AgentMcpServerService;
@@ -27,7 +29,6 @@ import com.helloai.core.agent.entity.ActivityLog;
 import com.helloai.core.agent.entity.RewardLog;
 import com.helloai.core.agent.service.ActivityLogService;
 import com.helloai.core.agent.service.RewardService;
-import com.helloai.core.task.service.SubTaskService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -41,9 +42,9 @@ import java.util.Map;
 
 /**
  * Agent 核心服务实现。负责 Agent 注册、CRUD、enrichment 查询、级联删除。
- * 阶段五起：task 域数据一律经 task 域服务接口（SubTaskService/RewardService/
- * ActivityLogService），自身直捅 Mapper 仅限于 agent 域内部（含 §6.140 承接的
- * task 域跨域收口方法）。
+ * 阶段五起：task 域数据一律经 <b>agent 域端口</b>（消费方定义、task 域实现：SubTaskStatsPort /
+ * SubTaskCommandPort / RewardService / ActivityLogService），自身直捅 Mapper 仅限于 agent
+ * 域内部（含 §6.140 承接的 task 域跨域收口方法）。
  *
  * <p><b>§7.8 类规模拆分评审结论（2026-08-23）</b>：本类为 agent 域聚合汇聚点，
  * 超 500 行 / 8 依赖红线，按 §7.8 选项二书面声明不继续拆分：</p>
@@ -64,9 +65,11 @@ import java.util.Map;
 @Service
 public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements AgentService, AgentAuthPort {
 
-    // 阶段五 task↔agent 事件解耦：task 域数据一律经 task 域服务接口，
-    // 不再直捅 task.mapper（关联统计 / 级联删除 / 原子认领见 SubTaskService 等）
-    private final SubTaskService subTaskService;
+    // 阶段五 task↔agent 事件解耦：task 域数据一律经 agent 域端口（消费方定义、task 域实现），
+    // 不再直捅 task.mapper，也不再 import task 域 Service（关联统计见 SubTaskStatsPort，
+    // 状态推进 / 解绑见 SubTaskCommandPort）
+    private final SubTaskStatsPort subTaskStatsPort;
+    private final SubTaskCommandPort subTaskCommandPort;
     private final RewardService rewardService;
     private final ActivityLogService activityLogService;
     private final AgentInboxMapper agentInboxMapper;
@@ -83,7 +86,8 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     private final AgentStatsService statsService;
 
     @Autowired
-    public AgentServiceImpl(SubTaskService subTaskService,
+    public AgentServiceImpl(SubTaskStatsPort subTaskStatsPort,
+                            SubTaskCommandPort subTaskCommandPort,
                             RewardService rewardService,
                             ActivityLogService activityLogService,
                             AgentInboxMapper agentInboxMapper,
@@ -97,7 +101,8 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
                             AgentSkillPolicyService skillPolicyService,
                             AgentLifecycleService lifecycleService,
                             AgentStatsService statsService) {
-        this.subTaskService = subTaskService;
+        this.subTaskStatsPort = subTaskStatsPort;
+        this.subTaskCommandPort = subTaskCommandPort;
         this.rewardService = rewardService;
         this.activityLogService = activityLogService;
         this.agentInboxMapper = agentInboxMapper;
@@ -491,14 +496,14 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
             throw new BizException("名称不匹配，请确认后重试");
         }
 
-        // 先统计（阶段五：经 task 域服务接口，不再直捅 task.mapper）
-        int subTaskCount = (int) subTaskService.countByAssignedAgent(agentId);
-        int reviewCount = (int) subTaskService.countReviewByReviewerAgent(agentId);
+        // 先统计（阶段五：经 agent 域端口，不再直捅 task.mapper / 不再 import task Service）
+        int subTaskCount = (int) subTaskStatsPort.countByAssignedAgent(agentId);
+        int reviewCount = (int) subTaskStatsPort.countReviewByReviewerAgent(agentId);
         int rewardCount = (int) rewardService.countByAgent(agentId);
         int activityCount = (int) activityLogService.countByAgent(agentId);
 
         // unlink 子任务（assigned_agent_id 置空，保留任务与审查记录）
-        subTaskService.unlinkByAssignedAgent(agentId);
+        subTaskCommandPort.unlinkByAssignedAgent(agentId);
 
         // 清理级联数据（物理删除：@TableLogic 会把普通 delete 改写为 UPDATE deleted=1，
         // 这里走 task 域服务的自定义 DELETE SQL 真删，不留残留行）

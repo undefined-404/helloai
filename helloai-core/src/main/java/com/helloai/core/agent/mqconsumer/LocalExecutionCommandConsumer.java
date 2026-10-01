@@ -19,9 +19,9 @@ import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentMcpServerService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.agent.port.SubTaskCommandPort;
 import com.helloai.core.agent.port.TaskTimelinePort;
 import com.helloai.core.agent.service.AgentRuntimeContextAssembler;
-import com.helloai.core.agent.service.SubTaskExecutionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
@@ -46,7 +46,7 @@ import java.util.Map;
  * （RuntimeAgentRuntimeRouter / LegacyExecutorAdapter）已删除，本类为唯一执行入口，分层编排：</p>
  * <ol>
  *     <li>加载 subTask / agent，做一致性校验</li>
- *     <li>{@link SubTaskExecutionService#startIfNeeded} 幂等状态推进（ASSIGNED / REWORK / PAUSED → IN_PROGRESS）</li>
+ *     <li>{@link SubTaskCommandPort#startIfNeeded} 幂等状态推进（ASSIGNED / REWORK / PAUSED → IN_PROGRESS）</li>
  *     <li>{@link AgentExecutionRecordService#markRunning} CAS 执行记录 PENDING→RUNNING</li>
  *     <li>记录消费阶段 timeline（route 观察点，route=agent_runtime）</li>
  *     <li>{@link AgentRuntimeContextAssembler#assemble} 装配真身上下文（prompt / chatModel / 会话）</li>
@@ -68,8 +68,8 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
     private final AgentMcpServerService agentMcpServerService;
     /** Phase 1 Step 4：执行环境为 agent 域数据（agent.accessType），消费侧 agent 域内解析注入 ctx.environment。 */
     private final ExecutionEnvironmentProvider executionEnvironmentProvider;
-    /** G-002 单轨：状态推进（接口幂等入口，startIfNeeded）。 */
-    private final SubTaskExecutionService subTaskExecutionService;
+    /** G-002 单轨：状态推进（agent 域端口的不透明命令入口，判定在 task 域）。 */
+    private final SubTaskCommandPort subTaskCommandPort;
     /** G-002 单轨：Runtime 真身上下文装配（prompt / chatModel / 会话；事件骨架归真身防双写）。 */
     private final AgentRuntimeContextAssembler contextAssembler;
     /** G-002 单轨：结果回写（成功 submit → REVIEW / 失败 block，含 Task Running Spec 回填与物化）。 */
@@ -142,7 +142,7 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
         // 1. 状态推进（幂等：IN_PROGRESS 恒过；ASSIGNED / REWORK / PAUSED → IN_PROGRESS）。
         //    失败契约化：record CAS 终态 + 回写失败，不进入执行阶段
         try {
-            subTaskExecutionService.startIfNeeded(command.getSubTaskId(), subTask.getStatus());
+            subTaskCommandPort.startIfNeeded(command.getSubTaskId(), subTask.getStatus());
         } catch (Exception e) {
             log.error("子任务状态推进失败: subTaskId={}, agentId={}, err={}",
                     command.getSubTaskId(), command.getAgentId(), e.getMessage());

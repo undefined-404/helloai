@@ -13,6 +13,11 @@
 #   作为**跨平台（bash）可进 CI** 的规范实现（接入点：scripts/ci/ci-gate.sh 门禁 3）；
 #   verify-dependency-direction.ps1 退居「命名/@MapperScan 注册」补充。
 #
+#   2026-10-01（组 3 降级）：分组 3（planner->agent / task->agent，均为 §6 合法**前向**依赖）
+#   由「只降不升」降级为**仅提示**。理由：端口反转（消费方定义端口 + 提供方实现适配器）必然
+#   在提供方侧新增一条「提供方 -> 消费方」的顺向 import，属有意为之的机制性代价，不应逐轮
+#   走棘轮评审。组 1（反向依赖）与组 2（跨域直捅 Mapper）仍是**硬拦截**。
+#
 # 本脚本的定位：
 #   以**零新增依赖**的方式提供可执行的「冻结基线」守卫 —— 计数超出基线即失败，
 #   使任何新增反向依赖必须显式走评审并更新基线，而不是静默漂移。
@@ -41,14 +46,18 @@ for arg in "$@"; do
   esac
 done
 
-# 规则表：规则名|被扫描目录|被禁止的 import 前缀
+# 规则表：规则名|被扫描目录|被禁止的 import 前缀|严重级（block|warn，缺省 block）
 # ----------------------------------------------------------------------------
 # 依赖方向链（CODE_STYLE §6）：planner > review > task > agent > system > shared
 #   允许（下层向更下层，即「顺向」）：
 #       planner→task、review→task、task→agent、agent→system、*→shared
 #   禁止（组 1）：任何「下层 → 上层」的反向 import（§6「禁止反向依赖」全量）
 #   禁止（组 2）：跨域直捅 Mapper（§7.1），含顺向方向的越级（如 planner→task.mapper）
-#   组 3：2026-09-29 基线既有项，非 §6 反向但已冻结，沿用勿删。
+#   组 3（warn）：2026-09-29 基线既有项，**非 §6 反向**（planner→agent / task→agent 都是
+#       「上层 → 下层」的顺向前向依赖），2026-10-01 起由「只降不升」降级为**仅提示**：
+#       端口反转（消费方定义端口 + 提供方实现适配器）必然在提供方侧新增 1 条
+#       `提供方 → 消费方` 的顺向前向 import，这是**有意为之的机制性代价**，不应逐轮走棘轮评审。
+#       真正红线是组 1（反向依赖）与组 2（跨域 Mapper），二者仍严格拦截。
 #
 # 计数口径：匹配「行首 import（含 static）+ 前缀」，前缀后的下一字符须为 `.` / `;` / 行尾，
 #   因此域级规则（如 agent->task）**同时覆盖**其子包（task.mapper / task.entity …）。
@@ -75,9 +84,9 @@ RULES=(
   "review->task.mapper|helloai-core/src/main/java/com/helloai/core/review|com.helloai.core.task.mapper"
   "agent->task.mapper|helloai-core/src/main/java/com/helloai/core/agent|com.helloai.core.task.mapper"
   "task->agent.mapper|helloai-core/src/main/java/com/helloai/core/task|com.helloai.core.agent.mapper"
-  # ---- 组 3：2026-09-29 基线既有项（沿用，勿删）----
-  "planner->agent|helloai-core/src/main/java/com/helloai/core/planner|com.helloai.core.agent"
-  "task->agent|helloai-core/src/main/java/com/helloai/core/task|com.helloai.core.agent"
+  # ---- 组 3：2026-09-29 基线既有项（顺向前向；2026-10-01 起仅提示）----
+  "planner->agent|helloai-core/src/main/java/com/helloai/core/planner|com.helloai.core.agent|warn"
+  "task->agent|helloai-core/src/main/java/com/helloai/core/task|com.helloai.core.agent|warn"
 )
 
 count_rule() {
@@ -103,18 +112,26 @@ printf '%s\n' '-----------------------------------------------------------------
 
 EXCEEDED=0
 IMPROVED=0
+WARNED=0
 NEW_LINES=()
+PREV_SEV=""
 
 for rule in "${RULES[@]}"; do
-  IFS='|' read -r name dir prefix <<< "$rule"
+  IFS='|' read -r name dir prefix severity <<< "$rule"
+  severity="${severity:-block}"
   cur="$(count_rule "$dir" "$prefix")"
   base="$(baseline_get "$name")"
 
   if [ "$base" = "-1" ]; then
     verdict="NEW (基线缺失)"
   elif [ "$cur" -gt "$base" ]; then
-    verdict="❌ 超出 +$((cur - base))"
-    EXCEEDED=$((EXCEEDED + 1))
+    if [ "$severity" = "warn" ]; then
+      verdict="⚠️  前向 +$((cur - base))（仅提示）"
+      WARNED=$((WARNED + 1))
+    else
+      verdict="❌ 超出 +$((cur - base))"
+      EXCEEDED=$((EXCEEDED + 1))
+    fi
   elif [ "$cur" -lt "$base" ]; then
     verdict="✅ 改善 -$((base - cur))"
     IMPROVED=$((IMPROVED + 1))
@@ -123,6 +140,15 @@ for rule in "${RULES[@]}"; do
   fi
 
   printf '%-22s %10s %10s   %s\n' "$name" "$base" "$cur" "$verdict"
+
+  # 基线文件按严重级分段（warn 段加注释说明「仅提示」语义）
+  if [ "$severity" != "$PREV_SEV" ]; then
+    case "$severity" in
+      warn)  NEW_LINES+=("# ---- 组 3：顺向前向依赖（§6 合法；**仅提示不拦截**，端口反转的承载方向）----") ;;
+      *)     NEW_LINES+=("# ---- 组 1/2：反向依赖与跨域直捅 Mapper（严格拦截，只降不升）----") ;;
+    esac
+    PREV_SEV="$severity"
+  fi
   NEW_LINES+=("${name}=${cur}")
 
   if [ "$VERBOSE" = "1" ] && [ "$cur" -gt 0 ]; then
@@ -139,12 +165,18 @@ if [ "$UPDATE" = "1" ]; then
     printf '# ============================================================================\n'
     printf '# HelloAI 架构漂移冻结基线 —— 跨域反向依赖计数（CODE_STYLE §6 全量 + §7.1）\n'
     printf '#\n'
-    printf '# 语义：计数「只降不升」。\n'
-    printf '#   当前计数 > 基线 -> check-arch-freeze.sh 失败，CI 拦截；\n'
-    printf '#   当前计数 < 基线 -> 视为改善，提示刷新基线；\n'
-    printf '#   需要新增反向依赖时，必须在评审中说明理由，再执行\n'
-    printf '#       bash scripts/ci/check-arch-freeze.sh --update-baseline\n'
-    printf '#   更新本文件（不要直接手改数字）。\n'
+    printf '# 语义：分两档。\n'
+    printf '#   [严格拦截] 组 1 反向依赖 + 组 2 跨域直捅 Mapper：计数「只降不升」。\n'
+    printf '#     当前计数 > 基线 -> check-arch-freeze.sh 失败，CI 拦截；\n'
+    printf '#     当前计数 < 基线 -> 视为改善，提示刷新基线；\n'
+    printf '#     需要新增反向依赖时，必须在评审中说明理由，再执行\n'
+    printf '#        bash scripts/ci/check-arch-freeze.sh --update-baseline\n'
+    printf '#     更新本文件（不要直接手改数字）。\n'
+    printf '#   [仅提示]   组 3 前向依赖（planner->agent / task->agent）：§6 合法前向，\n'
+    printf '#     2026-10-01 起由「只降不升」降级为仅打印计数、不参与拦截。\n'
+    printf '#     理由：端口反转（消费方定义端口 + 提供方实现适配器）必然在提供方侧\n'
+    printf '#     新增 1 条「提供方 -> 消费方」的顺向 import，属有意为之的机制性代价。\n'
+    printf '#     仍照常记录，便于在 git 历史中观察前向耦合总量。\n'
     printf '#\n'
     printf '# 规则集：2026-09-30 由 3 条扩至 20 条（§6 反向依赖全量 + §7.1 Mapper 红线）。\n'
     printf '# 背景：见 doc/review/HelloAI 代码规范与架构偏离专项审计报告（2026-09-30）.md §7\n'
@@ -165,6 +197,12 @@ if [ "$EXCEEDED" -gt 0 ]; then
   printf '  若本次新增确属必要且已获认可，执行：\n'
   printf '      bash scripts/ci/check-arch-freeze.sh --update-baseline\n'
   exit 1
+fi
+
+if [ "$WARNED" -gt 0 ]; then
+  printf '[arch-freeze] ⚠️  有 %s 条「组 3 前向依赖」计数上升（仅提示，不拦截）。\n' "$WARNED"
+  printf '  它们是 §6 合法前向依赖（上层 → 下层），也是「端口反转」的承载方向；\n'
+  printf '  红线仍是组 1（反向依赖）与组 2（跨域 Mapper），二者严格拦截。\n\n'
 fi
 
 if [ "$IMPROVED" -gt 0 ]; then

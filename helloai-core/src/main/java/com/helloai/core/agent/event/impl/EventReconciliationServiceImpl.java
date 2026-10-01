@@ -4,8 +4,8 @@ import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.event.EventReconciliationService;
 import com.helloai.core.agent.mapper.AgentEventMapper;
-import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.agent.port.SubTaskQueryPort;
+import com.helloai.core.agent.port.SubTaskSnapshot;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -67,26 +67,26 @@ public class EventReconciliationServiceImpl implements EventReconciliationServic
                     AgentEventType.REWORK_STARTED.code()),
             SubTaskStatus.DONE, Set.of(AgentEventType.REVIEW_APPROVED.code()));
 
-    private final SubTaskService subTaskService;
+    private final SubTaskQueryPort subTaskQueryPort;
     private final AgentEventMapper agentEventMapper;
 
     @Override
     public int reconcile(int limit) {
         OffsetDateTime since = OffsetDateTime.now().minusMinutes(WINDOW_MINUTES);
-        List<SubTask> candidates = subTaskService.listRecentlyChanged(since, limit);
+        List<SubTaskSnapshot> candidates = subTaskQueryPort.listRecentlyChanged(since, limit);
         int mismatches = 0;
-        for (SubTask subTask : candidates) {
-            SubTaskStatus status = subTask.getStatus();
+        for (SubTaskSnapshot subTask : candidates) {
+            SubTaskStatus status = subTask.status();
             Set<String> expected = EXPECTED_LAST_EVENTS.get(status);
             if (expected == null) {
                 // 无事件语义状态：跳过（接口 Javadoc 已列边界，避免对过渡态误报）
                 continue;
             }
-            String actual = loadLastEventType(subTask.getId());
+            String actual = loadLastEventType(subTask.id());
             if (actual == null || !expected.contains(actual)) {
                 mismatches++;
                 log.warn("事件对账不一致: subTaskId={}, status={}, expected={}, actual={}",
-                        subTask.getId(), status, expected, actual == null ? "<none>" : actual);
+                        subTask.id(), status, expected, actual == null ? "<none>" : actual);
             }
         }
         return mismatches;

@@ -1,5 +1,7 @@
 package com.helloai.core.agent.port;
 
+import com.helloai.common.constant.SubTaskStatus;
+
 import java.util.Map;
 
 /**
@@ -18,9 +20,11 @@ import java.util.Map;
  * （那只是换名不换耦合）。</p>
  *
  * @param id              子任务 ID
+ * @param status          子任务当前状态（事件对账等消费方按状态判定；枚举在 {@code common}，无域耦合）
  * @param taskId          所属主任务 ID
  * @param assignedAgentId 已分配的 Agent ID（可空 —— 未分配时为 {@code null}）
  * @param context         子任务上下文（可空）
  */
-public record SubTaskSnapshot(Long id, Long taskId, Long assignedAgentId, Map<String, Object> context) {
+public record SubTaskSnapshot(Long id, SubTaskStatus status, Long taskId, Long assignedAgentId,
+                              Map<String, Object> context) {
 }
