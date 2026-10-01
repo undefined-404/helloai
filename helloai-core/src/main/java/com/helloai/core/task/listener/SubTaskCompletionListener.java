@@ -133,7 +133,7 @@ public class SubTaskCompletionListener {
 
     /**
      * 提取契约子任务产出正文：物化附件（仅 ACTIVE 有效版本）优先，
-     * 失败/无附件回退 {@link SubTaskOutputExtractor#extractExecutionOutput}；
+     * 失败/无附件回退 {@link SubTaskOutputExtractor#extractExecutionOutput(java.util.Map)}；
      * 两者均无返回 null。与 SubTaskExecutionService.loadUpstreamContent 同源口径。
      *
      * <p><b>P-1 修复（2026-09-30）</b>：与 AgentRuntimeContextAssembler / McpToolServiceImpl
@@ -178,7 +178,7 @@ public class SubTaskCompletionListener {
             log.warn("读取契约子任务物化附件失败，回退原始产出: subTaskId={}, err={}",
                     subTask.getId(), e.getMessage());
         }
-        return SubTaskOutputExtractor.extractExecutionOutput(subTask);
+        return SubTaskOutputExtractor.extractExecutionOutput(subTask.getContext());
     }
 
     /** 解锁下游：查同 Task PENDING 且依赖包含本子任务的节点，逐个尝试自动分发。 */

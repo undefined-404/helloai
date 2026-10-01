@@ -8,7 +8,6 @@ import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
@@ -58,8 +57,6 @@ class ExternalAgentFallbackTaskTest {
     @Mock
     private SubTaskDispatchService subTaskDispatchService;
     @Mock
-    private SubTaskMapper subTaskMapper;
-    @Mock
     private TaskTimelineService taskTimelineService;
     @Mock
     private SubTaskService subTaskService;
@@ -76,7 +73,7 @@ class ExternalAgentFallbackTaskTest {
         properties.setScanIntervalMs(60_000L);
 
         task = new ExternalAgentFallbackTask(
-                failureTracker, subTaskDispatchService, subTaskMapper,
+                failureTracker, subTaskDispatchService,
                 taskTimelineService, properties, subTaskService);
     }
 
@@ -93,7 +90,7 @@ class ExternalAgentFallbackTaskTest {
 
             verifyNoInteractions(failureTracker);
             verifyNoInteractions(subTaskDispatchService);
-            verifyNoInteractions(subTaskMapper);
+            verifyNoInteractions(subTaskService);
             verifyNoInteractions(taskTimelineService);
         }
 
@@ -112,7 +109,7 @@ class ExternalAgentFallbackTaskTest {
         @DisplayName("无候选 Agent → 仍要执行调度链遗留 PENDING 兜底")
         void shouldStillRunPendingRecoveryWhenNoCandidates() {
             when(failureTracker.findFallbackCandidates()).thenReturn(List.of());
-            when(subTaskMapper.selectPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
+            when(subTaskService.listPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
                     .thenReturn(List.of(5001L));
             SubTask latest = pendingUnassignedTask(5001L);
             when(subTaskService.getById(5001L)).thenReturn(latest);
@@ -122,7 +119,7 @@ class ExternalAgentFallbackTaskTest {
             verify(failureTracker, times(1)).findFallbackCandidates();
             verify(subTaskDispatchService, never()).redispatchForFallback(anyLong(), anyLong(), anyString());
             // 关键：即使无 N11 候选，也要执行 PENDING 兜底
-            verify(subTaskMapper, times(1)).selectPendingUnassignedWithoutActiveExecutionRecord(anyInt());
+            verify(subTaskService, times(1)).listPendingUnassignedWithoutActiveExecutionRecord(anyInt());
             verify(subTaskDispatchService, times(1))
                     .dispatchPendingSubTaskAuto(eq(5001L), eq(AgentRole.EXECUTOR));
         }
@@ -140,7 +137,7 @@ class ExternalAgentFallbackTaskTest {
         @DisplayName("扫描到候选 → 补读最新状态 → 仍为 PENDING 且未指派 → 自动选人")
         void shouldRecoverPendingUnassigned() {
             when(failureTracker.findFallbackCandidates()).thenReturn(List.of());
-            when(subTaskMapper.selectPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
+            when(subTaskService.listPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
                     .thenReturn(List.of(5001L, 5002L));
             when(subTaskService.getById(5001L)).thenReturn(pendingUnassignedTask(5001L));
             when(subTaskService.getById(5002L)).thenReturn(pendingUnassignedTask(5002L));
@@ -157,7 +154,7 @@ class ExternalAgentFallbackTaskTest {
         @DisplayName("扫描到的子任务状态已变化 → 跳过，不强制覆盖")
         void shouldSkipWhenStatusChanged() {
             when(failureTracker.findFallbackCandidates()).thenReturn(List.of());
-            when(subTaskMapper.selectPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
+            when(subTaskService.listPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
                     .thenReturn(List.of(5001L));
             SubTask changed = pendingUnassignedTask(5001L);
             changed.setStatus(SubTaskStatus.ASSIGNED);  // 已被其他链路推进
@@ -174,7 +171,7 @@ class ExternalAgentFallbackTaskTest {
         @DisplayName("扫描到的子任务不存在（已被删除） → 跳过")
         void shouldSkipWhenSubTaskDeleted() {
             when(failureTracker.findFallbackCandidates()).thenReturn(List.of());
-            when(subTaskMapper.selectPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
+            when(subTaskService.listPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
                     .thenReturn(List.of(5001L));
             when(subTaskService.getById(5001L)).thenReturn(null);
 
@@ -188,7 +185,7 @@ class ExternalAgentFallbackTaskTest {
         @DisplayName("扫描到子任务已被指派 → 跳过")
         void shouldSkipWhenAlreadyAssigned() {
             when(failureTracker.findFallbackCandidates()).thenReturn(List.of());
-            when(subTaskMapper.selectPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
+            when(subTaskService.listPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
                     .thenReturn(List.of(5001L));
             SubTask assigned = pendingUnassignedTask(5001L);
             assigned.setAssignedAgentId(777L);  // 已被分配
@@ -204,7 +201,7 @@ class ExternalAgentFallbackTaskTest {
         @DisplayName("单条 dispatchPendingSubTaskAuto 失败 → 不中断其他候选")
         void shouldContinueOnSingleDispatchFailure() {
             when(failureTracker.findFallbackCandidates()).thenReturn(List.of());
-            when(subTaskMapper.selectPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
+            when(subTaskService.listPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
                     .thenReturn(List.of(5001L, 5002L));
             when(subTaskService.getById(5001L)).thenReturn(pendingUnassignedTask(5001L));
             when(subTaskService.getById(5002L)).thenReturn(pendingUnassignedTask(5002L));
@@ -224,7 +221,7 @@ class ExternalAgentFallbackTaskTest {
         @DisplayName("已标记人工介入 → 跳过不自动重派")
         void shouldSkipWhenManualInterventionMarked() {
             when(failureTracker.findFallbackCandidates()).thenReturn(List.of());
-            when(subTaskMapper.selectPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
+            when(subTaskService.listPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
                     .thenReturn(List.of(5001L));
             SubTask marked = pendingUnassignedTask(5001L);
             Map<String, Object> ctx = new HashMap<>();
@@ -242,7 +239,7 @@ class ExternalAgentFallbackTaskTest {
         @DisplayName("兜底不写入 N11 冷却 / external_fallback_count")
         void shouldNotPolluteN11Counters() {
             when(failureTracker.findFallbackCandidates()).thenReturn(List.of());
-            when(subTaskMapper.selectPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
+            when(subTaskService.listPendingUnassignedWithoutActiveExecutionRecord(anyInt()))
                     .thenReturn(List.of(5001L));
             when(subTaskService.getById(5001L)).thenReturn(pendingUnassignedTask(5001L));
 
@@ -251,7 +248,7 @@ class ExternalAgentFallbackTaskTest {
             // PENDING 兜底不写 N11 冷却
             verify(failureTracker, never()).markFallbackTriggered(anyLong());
             // PENDING 兜底不累加 external_fallback_count
-            verify(subTaskMapper, never()).incrementExternalFallbackCount(anyLong(), any(OffsetDateTime.class));
+            verify(subTaskService, never()).incrementExternalFallbackCount(anyLong(), any(OffsetDateTime.class));
         }
     }
 
@@ -264,7 +261,7 @@ class ExternalAgentFallbackTaskTest {
         void shouldRedispatchAllInFlightSubTasks() {
             Agent agent = cliAgent(101L, 5);
             when(failureTracker.findFallbackCandidates()).thenReturn(List.of(agent));
-            when(subTaskMapper.selectInFlightByAgent(eq(101L), anyInt()))
+            when(subTaskService.selectInFlightByAgent(eq(101L), anyInt()))
                     .thenReturn(List.of(subTask(11L, 101L), subTask(12L, 101L), subTask(13L, 101L)));
 
             task.scan();
@@ -273,7 +270,7 @@ class ExternalAgentFallbackTaskTest {
                     any(), any(), eq("agent_external_fallback_triggered"),
                     any(), eq(101L), any());
             verify(subTaskDispatchService, times(3)).redispatchForFallback(anyLong(), eq(101L), anyString());
-            verify(subTaskMapper, times(3)).incrementExternalFallbackCount(anyLong(), any(OffsetDateTime.class));
+            verify(subTaskService, times(3)).incrementExternalFallbackCount(anyLong(), any(OffsetDateTime.class));
             verify(failureTracker, times(1)).markFallbackTriggered(101L);
         }
 
@@ -282,12 +279,12 @@ class ExternalAgentFallbackTaskTest {
         void shouldMarkCooldownWhenNoInFlight() {
             Agent agent = cliAgent(102L, 5);
             when(failureTracker.findFallbackCandidates()).thenReturn(List.of(agent));
-            when(subTaskMapper.selectInFlightByAgent(eq(102L), anyInt())).thenReturn(List.of());
+            when(subTaskService.selectInFlightByAgent(eq(102L), anyInt())).thenReturn(List.of());
 
             task.scan();
 
             verify(subTaskDispatchService, never()).redispatchForFallback(anyLong(), anyLong(), anyString());
-            verify(subTaskMapper, never()).incrementExternalFallbackCount(anyLong(), any());
+            verify(subTaskService, never()).incrementExternalFallbackCount(anyLong(), any());
             verify(failureTracker, times(1)).markFallbackTriggered(102L);
         }
 
@@ -296,7 +293,7 @@ class ExternalAgentFallbackTaskTest {
         void shouldContinueOnSingleSubTaskFailure() {
             Agent agent = cliAgent(103L, 5);
             when(failureTracker.findFallbackCandidates()).thenReturn(List.of(agent));
-            when(subTaskMapper.selectInFlightByAgent(eq(103L), anyInt()))
+            when(subTaskService.selectInFlightByAgent(eq(103L), anyInt()))
                     .thenReturn(List.of(subTask(21L, 103L), subTask(22L, 103L), subTask(23L, 103L)));
             when(subTaskDispatchService.redispatchForFallback(eq(22L), eq(103L), anyString()))
                     .thenThrow(new RuntimeException("synthetic failure"));
@@ -315,9 +312,9 @@ class ExternalAgentFallbackTaskTest {
             Agent a1 = cliAgent(201L, 5);
             Agent a2 = cliAgent(202L, 4);
             when(failureTracker.findFallbackCandidates()).thenReturn(List.of(a1, a2));
-            when(subTaskMapper.selectInFlightByAgent(eq(201L), anyInt()))
+            when(subTaskService.selectInFlightByAgent(eq(201L), anyInt()))
                     .thenReturn(List.of(subTask(31L, 201L)));
-            when(subTaskMapper.selectInFlightByAgent(eq(202L), anyInt()))
+            when(subTaskService.selectInFlightByAgent(eq(202L), anyInt()))
                     .thenReturn(List.of());
 
             task.scan();

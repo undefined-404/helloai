@@ -10,7 +10,7 @@ import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentExecutionRecord;
 import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.shared.event.ExecutionCommandCreatedEvent;
+import com.helloai.core.agent.event.ExecutionCommandCreatedEvent;
 import com.helloai.core.agent.service.AgentCommandOutboxService;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;

@@ -3,21 +3,24 @@
 # HelloAI 架构漂移冻结守卫 —— 跨域反向依赖「只降不升」
 #
 # 为什么要有这个脚本（2026-09-29 架构审计 Q4）：
-#   core 域间存在成对的反向依赖：agent→task 68 处、planner→agent 34 处、task→agent 45 处。
-#   前者与第三者构成 agent ⇄ task 双向环。项目当前**无 ArchUnit 等编译期约束**，
-#   仅靠《HelloAI_CODE_STYLE》§6.1 的**文档豁免**与 scripts/powershell/verify-dependency-direction.ps1
-#   把关，而该 ps1：① 本机无 pwsh 无法运行；② 其白名单**不禁止 agent→task**。
-#   即：架构红线当前实际上是「靠自觉」，回归无自动化拦截。
+#   项目当前**无 ArchUnit 等编译期约束**，架构红线（《HelloAI_CODE_STYLE》§6 依赖方向、
+#   §7.1 跨域直捅 Mapper）此前仅靠**文档豁免**与 scripts/powershell/verify-dependency-direction.ps1
+#   把关，而该 ps1：① 本机无 pwsh 无法运行；② 规则集只覆盖 10 条、不含 planner→task.mapper
+#   与 shared→业务域；③ 硬编码绝对路径（违反 §39）。即：架构红线实际上是「靠自觉」，
+#   回归无自动化拦截。
+#
+#   2026-09-30（Q1-② 元修复）：本脚本规则集由 3 条扩至 **§6 全量 + §7.1 Mapper 红线**（20 条），
+#   作为**跨平台（bash）可进 CI** 的规范实现（接入点：scripts/ci/ci-gate.sh 门禁 3）；
+#   verify-dependency-direction.ps1 退居「命名/@MapperScan 注册」补充。
 #
 # 本脚本的定位：
 #   以**零新增依赖**的方式提供可执行的「冻结基线」守卫 —— 计数超出基线即失败，
 #   使任何新增反向依赖必须显式走评审并更新基线，而不是静默漂移。
-#   它与 verify-dependency-direction.ps1 互补（后者管命名/路径红线，本脚本管域间耦合增量）。
 #
 # 用法：
-#   bash scripts/ci/check-arch-freeze.sh                 # 校验（超出基线 -> 退出码 1）
-#   bash scripts/ci/check-arch-freeze.sh --update-baseline   # 用当前计数刷新基线
-#   bash scripts/ci/check-arch-freeze.sh --verbose       # 打印每条规则的文件明细 Top5
+#   bash scripts/ci/check-arch-freeze.sh                       # 校验（超出基线 -> 退出码 1）
+#   bash scripts/ci/check-arch-freeze.sh --update-baseline     # 用当前计数刷新基线
+#   bash scripts/ci/check-arch-freeze.sh --verbose             # 打印每条规则的文件明细 Top5
 # ============================================================================
 
 set -uo pipefail
@@ -33,15 +36,46 @@ for arg in "$@"; do
   case "$arg" in
     --update-baseline) UPDATE=1 ;;
     --verbose|-v)      VERBOSE=1 ;;
-    -h|--help)         sed -n '2,22p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help)         sed -n '2,/^set -uo/p' "${BASH_SOURCE[0]}" | sed '$d'; exit 0 ;;
     *) printf '[arch-freeze] 未知参数：%s\n' "$arg" >&2; exit 64 ;;
   esac
 done
 
 # 规则表：规则名|被扫描目录|被禁止的 import 前缀
-# 说明：这三条是 2026-09-29 审计实测确认的反向/成环依赖对。
+# ----------------------------------------------------------------------------
+# 依赖方向链（CODE_STYLE §6）：planner > review > task > agent > system > shared
+#   允许（下层向更下层，即「顺向」）：
+#       planner→task、review→task、task→agent、agent→system、*→shared
+#   禁止（组 1）：任何「下层 → 上层」的反向 import（§6「禁止反向依赖」全量）
+#   禁止（组 2）：跨域直捅 Mapper（§7.1），含顺向方向的越级（如 planner→task.mapper）
+#   组 3：2026-09-29 基线既有项，非 §6 反向但已冻结，沿用勿删。
+#
+# 计数口径：匹配「行首 import（含 static）+ 前缀」，前缀后的下一字符须为 `.` / `;` / 行尾，
+#   因此域级规则（如 agent->task）**同时覆盖**其子包（task.mapper / task.entity …）。
+#   非 0 计数的规则均为**存量标债**，只降不升；0 计数的规则是回归护栏（任何新增即刻失败）。
+# ----------------------------------------------------------------------------
 RULES=(
-  "agent->task|helloai-core/src/main/java/com/helloai/core/agent|com.helloai.core.task"
+  # ---- 组 1：§6 反向依赖（严格禁止；目标恒为 0）----
+  "task->planner|helloai-core/src/main/java/com/helloai/core/task|com.helloai.core.planner"
+  "task->review|helloai-core/src/main/java/com/helloai/core/task|com.helloai.core.review"
+  "agent->task|helloai-core/src/main/java/com/helloai/core/agent|com.helloai.core.task"                     # 存量标债 §6.1（68）
+  "agent->planner|helloai-core/src/main/java/com/helloai/core/agent|com.helloai.core.planner"
+  "agent->review|helloai-core/src/main/java/com/helloai/core/agent|com.helloai.core.review"
+  "system->planner|helloai-core/src/main/java/com/helloai/core/system|com.helloai.core.planner"
+  "system->review|helloai-core/src/main/java/com/helloai/core/system|com.helloai.core.review"
+  "system->task|helloai-core/src/main/java/com/helloai/core/system|com.helloai.core.task"
+  "system->agent|helloai-core/src/main/java/com/helloai/core/system|com.helloai.core.agent"
+  "shared->planner|helloai-core/src/main/java/com/helloai/core/shared|com.helloai.core.planner"
+  "shared->review|helloai-core/src/main/java/com/helloai/core/shared|com.helloai.core.review"
+  "shared->task|helloai-core/src/main/java/com/helloai/core/shared|com.helloai.core.task"
+  "shared->agent|helloai-core/src/main/java/com/helloai/core/shared|com.helloai.core.agent"
+  "shared->system|helloai-core/src/main/java/com/helloai/core/shared|com.helloai.core.system"
+  # ---- 组 2：§7.1 跨域直捅 Mapper（目标恒为 0）----
+  "planner->task.mapper|helloai-core/src/main/java/com/helloai/core/planner|com.helloai.core.task.mapper"
+  "review->task.mapper|helloai-core/src/main/java/com/helloai/core/review|com.helloai.core.task.mapper"
+  "agent->task.mapper|helloai-core/src/main/java/com/helloai/core/agent|com.helloai.core.task.mapper"
+  "task->agent.mapper|helloai-core/src/main/java/com/helloai/core/task|com.helloai.core.agent.mapper"
+  # ---- 组 3：2026-09-29 基线既有项（沿用，勿删）----
   "planner->agent|helloai-core/src/main/java/com/helloai/core/planner|com.helloai.core.agent"
   "task->agent|helloai-core/src/main/java/com/helloai/core/task|com.helloai.core.agent"
 )
@@ -64,8 +98,8 @@ baseline_get() {
 
 printf '[arch-freeze] 仓库根：%s\n' "$ROOT"
 printf '[arch-freeze] 冻结基线：%s\n\n' "$BASELINE"
-printf '%-16s %10s %10s   %s\n' '规则' '冻结基线' '当前计数' '判定'
-printf '%s\n' '-------------------------------------------------------------------'
+printf '%-22s %10s %10s   %s\n' '规则' '冻结基线' '当前计数' '判定'
+printf '%s\n' '-----------------------------------------------------------------'
 
 EXCEEDED=0
 IMPROVED=0
@@ -88,7 +122,7 @@ for rule in "${RULES[@]}"; do
     verdict="✅ 持平"
   fi
 
-  printf '%-16s %10s %10s   %s\n' "$name" "$base" "$cur" "$verdict"
+  printf '%-22s %10s %10s   %s\n' "$name" "$base" "$cur" "$verdict"
   NEW_LINES+=("${name}=${cur}")
 
   if [ "$VERBOSE" = "1" ] && [ "$cur" -gt 0 ]; then
@@ -103,7 +137,7 @@ printf '\n'
 if [ "$UPDATE" = "1" ]; then
   {
     printf '# ============================================================================\n'
-    printf '# HelloAI 架构漂移冻结基线 —— 跨域反向依赖计数\n'
+    printf '# HelloAI 架构漂移冻结基线 —— 跨域反向依赖计数（CODE_STYLE §6 全量 + §7.1）\n'
     printf '#\n'
     printf '# 语义：计数「只降不升」。\n'
     printf '#   当前计数 > 基线 -> check-arch-freeze.sh 失败，CI 拦截；\n'
@@ -112,7 +146,8 @@ if [ "$UPDATE" = "1" ]; then
     printf '#       bash scripts/ci/check-arch-freeze.sh --update-baseline\n'
     printf '#   更新本文件（不要直接手改数字）。\n'
     printf '#\n'
-    printf '# 背景：见 doc/review/HelloAI 架构V2进度与质量审计报告（2026-09-29）.md §5.6\n'
+    printf '# 规则集：2026-09-30 由 3 条扩至 20 条（§6 反向依赖全量 + §7.1 Mapper 红线）。\n'
+    printf '# 背景：见 doc/review/HelloAI 代码规范与架构偏离专项审计报告（2026-09-30）.md §7\n'
     printf '#       与 scripts/README.md §5.2（新增验收口径优先下沉为可跨平台执行的形式）。\n'
     printf '#\n'
     printf '# 最后更新：%s\n' "$(date +%Y-%m-%d)"

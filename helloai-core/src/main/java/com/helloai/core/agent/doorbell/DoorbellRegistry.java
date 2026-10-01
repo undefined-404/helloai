@@ -1,4 +1,4 @@
-package com.helloai.core.shared.doorbell;
+package com.helloai.core.agent.doorbell;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;

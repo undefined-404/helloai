@@ -1,4 +1,4 @@
-package com.helloai.core.shared.util;
+package com.helloai.core.task.util;
 
 import com.helloai.core.task.entity.SubTask;
 

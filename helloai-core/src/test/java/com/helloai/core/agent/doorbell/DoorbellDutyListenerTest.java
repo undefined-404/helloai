@@ -1,4 +1,4 @@
-package com.helloai.core.shared.doorbell;
+package com.helloai.core.agent.doorbell;
 
 import com.helloai.core.shared.event.DutyLeaseClosedEvent;
 import org.junit.jupiter.api.DisplayName;

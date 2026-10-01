@@ -5,7 +5,6 @@ import com.helloai.common.config.PlannerDecomposeProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.task.entity.Task;
-import com.helloai.core.task.mapper.TaskMapper;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import org.junit.jupiter.api.BeforeEach;
@@ -47,8 +46,6 @@ import static org.mockito.Mockito.when;
 class PlanningTimeoutTaskTest {
 
     @Mock
-    private TaskMapper taskMapper;
-    @Mock
     private TaskService taskService;
     @Mock
     private TaskTimelineService taskTimelineService;
@@ -63,7 +60,7 @@ class PlanningTimeoutTaskTest {
     @BeforeEach
     void setUp() {
         task = new PlanningTimeoutTask(
-                taskMapper, taskService, taskTimelineService, plannerDecomposeProperties);
+                taskService, taskTimelineService, plannerDecomposeProperties);
 
         // 超时阈值读配置，默认桩为 10 分钟
         lenient().when(plannerDecomposeProperties.getPlanningTimeoutMinutes()).thenReturn(10);
@@ -81,7 +78,7 @@ class PlanningTimeoutTaskTest {
         @Test
         @DisplayName("无超时记录 → 跳过")
         void shouldSkipWhenNoTimedOut() {
-            when(taskMapper.selectTimedOutPlanning(any(), anyInt()))
+            when(taskService.listTimedOutPlanning(any(), anyInt()))
                     .thenReturn(List.of());
 
             task.scan();
@@ -99,7 +96,7 @@ class PlanningTimeoutTaskTest {
         @Test
         @DisplayName("单条超时 → CAS 回退 PENDING 并记录 task_plan_timeout_recovered")
         void shouldRecoverSingleTimedOut() {
-            when(taskMapper.selectTimedOutPlanning(any(), anyInt()))
+            when(taskService.listTimedOutPlanning(any(), anyInt()))
                     .thenReturn(List.of(planningTask(1L)));
 
             task.scan();
@@ -113,7 +110,7 @@ class PlanningTimeoutTaskTest {
         @Test
         @DisplayName("CAS 失败（状态已变化）→ 跳过且不记录 timeline")
         void shouldSkipWhenCasLost() {
-            when(taskMapper.selectTimedOutPlanning(any(), anyInt()))
+            when(taskService.listTimedOutPlanning(any(), anyInt()))
                     .thenReturn(List.of(planningTask(1L)));
             when(taskUpdateChain.update()).thenReturn(false);
 
@@ -126,7 +123,7 @@ class PlanningTimeoutTaskTest {
         @Test
         @DisplayName("多条超时 → 逐条回收，单条失败不中断")
         void shouldContinueOnSingleFailure() {
-            when(taskMapper.selectTimedOutPlanning(any(), anyInt()))
+            when(taskService.listTimedOutPlanning(any(), anyInt()))
                     .thenReturn(List.of(planningTask(1L), planningTask(2L)));
             // 第一条 CAS 抛异常，第二条正常回收
             when(taskUpdateChain.update())

@@ -363,4 +363,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         List<Task> orphans = baseMapper.selectStaleFinalReportReviewing(deadline, batch);
         return orphans != null ? orphans : List.of();
     }
+
+    @Override
+    public List<Task> listTimedOutPlanning(OffsetDateTime deadline, int limit) {
+        return baseMapper.selectTimedOutPlanning(deadline, limit);
+    }
 }

@@ -7,10 +7,9 @@ import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.planner.service.PlannerAnalysisService;
 import com.helloai.core.planner.service.PlannerDecomposeAsyncService;
-import com.helloai.core.shared.util.SubTaskDependencyOrder;
+import com.helloai.core.task.util.SubTaskDependencyOrder;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
-import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskRunningSpecService;
@@ -54,7 +53,6 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
 
     private final TaskService taskService;
     private final SubTaskService subTaskService;
-    private final SubTaskMapper subTaskMapper;
     private final PlannerDecomposeAsyncService plannerDecomposeAsyncService;
     private final TaskTimelineService taskTimelineService;
     private final SubTaskDispatchService subTaskDispatchService;
@@ -104,7 +102,8 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
                 .count();
         if (cancelled > 0) {
             log.info("重新拆解前物理清理 CANCELLED 旧草案: taskId={}, count={}", taskId, cancelled);
-            subTaskMapper.physicalDeleteByTaskId(taskId);
+            // §7.1：跨域物理删除经 task 域 Service 收口，不直捅 SubTaskMapper
+            subTaskService.physicalDeleteByTaskId(taskId);
         }
 
         // CAS 推进 PENDING → PLANNING，防并发重复拆解

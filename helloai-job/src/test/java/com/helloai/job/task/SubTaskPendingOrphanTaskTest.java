@@ -5,7 +5,6 @@ import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import org.junit.jupiter.api.BeforeEach;
@@ -54,8 +53,6 @@ import static org.mockito.Mockito.when;
 class SubTaskPendingOrphanTaskTest {
 
     @Mock
-    private SubTaskMapper subTaskMapper;
-    @Mock
     private SubTaskService subTaskService;
     @Mock
     private SubTaskDispatchService subTaskDispatchService;
@@ -73,7 +70,7 @@ class SubTaskPendingOrphanTaskTest {
         when(subTaskService.isReady(any(SubTask.class))).thenReturn(true);
 
         task = new SubTaskPendingOrphanTask(
-                subTaskMapper, subTaskService, subTaskDispatchService,
+                subTaskService, subTaskDispatchService,
                 executionProperties);
     }
 
@@ -88,7 +85,6 @@ class SubTaskPendingOrphanTaskTest {
 
             task.scan();
 
-            verifyNoInteractions(subTaskMapper);
             verifyNoInteractions(subTaskService);
             verifyNoInteractions(subTaskDispatchService);
         }
@@ -96,7 +92,7 @@ class SubTaskPendingOrphanTaskTest {
         @Test
         @DisplayName("无孤儿 → 不调用 dispatch")
         void shouldSkipWhenNoOrphans() {
-            when(subTaskMapper.selectStalePendingWithoutExecutionRecord(any(), anyInt()))
+            when(subTaskService.listStalePendingWithoutExecutionRecord(any(), anyInt()))
                     .thenReturn(List.of());
 
             task.scan();
@@ -113,7 +109,7 @@ class SubTaskPendingOrphanTaskTest {
         @Test
         @DisplayName("单条孤儿 → 按 EXECUTOR 角色 dispatch 一次")
         void shouldRedispatchSingleOrphan() {
-            when(subTaskMapper.selectStalePendingWithoutExecutionRecord(any(), anyInt()))
+            when(subTaskService.listStalePendingWithoutExecutionRecord(any(), anyInt()))
                     .thenReturn(List.of(1L));
 
             SubTask st = pendingSubTask(1L);
@@ -128,7 +124,7 @@ class SubTaskPendingOrphanTaskTest {
         @Test
         @DisplayName("多条孤儿 → 逐条 dispatch，每次都按 EXECUTOR")
         void shouldRedispatchMultipleOrphans() {
-            when(subTaskMapper.selectStalePendingWithoutExecutionRecord(any(), anyInt()))
+            when(subTaskService.listStalePendingWithoutExecutionRecord(any(), anyInt()))
                     .thenReturn(List.of(1L, 2L, 3L));
 
             when(subTaskService.getById(1L)).thenReturn(pendingSubTask(1L));
@@ -148,7 +144,7 @@ class SubTaskPendingOrphanTaskTest {
         @Test
         @DisplayName("子任务被其它路径删除（getById 返 null）→ skip")
         void shouldSkipWhenSubTaskNotFound() {
-            when(subTaskMapper.selectStalePendingWithoutExecutionRecord(any(), anyInt()))
+            when(subTaskService.listStalePendingWithoutExecutionRecord(any(), anyInt()))
                     .thenReturn(List.of(1L));
             when(subTaskService.getById(1L)).thenReturn(null);
 
@@ -161,7 +157,7 @@ class SubTaskPendingOrphanTaskTest {
         @Test
         @DisplayName("子任务状态已被推进（非 PENDING）→ skip，不计入失败")
         void shouldSkipWhenStatusChanged() {
-            when(subTaskMapper.selectStalePendingWithoutExecutionRecord(any(), anyInt()))
+            when(subTaskService.listStalePendingWithoutExecutionRecord(any(), anyInt()))
                     .thenReturn(List.of(1L));
             SubTask st = pendingSubTask(1L);
             st.setStatus(SubTaskStatus.ASSIGNED);  // 已被其它路径推进
@@ -176,7 +172,7 @@ class SubTaskPendingOrphanTaskTest {
         @Test
         @DisplayName("已标记人工介入 → skip 不自动重派")
         void shouldSkipWhenManualInterventionMarked() {
-            when(subTaskMapper.selectStalePendingWithoutExecutionRecord(any(), anyInt()))
+            when(subTaskService.listStalePendingWithoutExecutionRecord(any(), anyInt()))
                     .thenReturn(List.of(1L));
             SubTask st = pendingSubTask(1L);
             Map<String, Object> ctx = new HashMap<>();
@@ -193,7 +189,7 @@ class SubTaskPendingOrphanTaskTest {
         @Test
         @DisplayName("未标记人工介入但带其它 context → 仍正常重派")
         void shouldRedispatchWhenContextWithoutManualIntervention() {
-            when(subTaskMapper.selectStalePendingWithoutExecutionRecord(any(), anyInt()))
+            when(subTaskService.listStalePendingWithoutExecutionRecord(any(), anyInt()))
                     .thenReturn(List.of(1L));
             SubTask st = pendingSubTask(1L);
             st.setContext(Map.of("someKey", "someValue"));
@@ -208,7 +204,7 @@ class SubTaskPendingOrphanTaskTest {
         @Test
         @DisplayName("BizException（状态冲突）→ skip 不影响其它子任务")
         void shouldContinueOnBizException() {
-            when(subTaskMapper.selectStalePendingWithoutExecutionRecord(any(), anyInt()))
+            when(subTaskService.listStalePendingWithoutExecutionRecord(any(), anyInt()))
                     .thenReturn(List.of(1L, 2L));
 
             when(subTaskService.getById(1L)).thenReturn(pendingSubTask(1L));
@@ -231,7 +227,7 @@ class SubTaskPendingOrphanTaskTest {
         @Test
         @DisplayName("RuntimeException（非 BizException）→ 计入失败但继续其它")
         void shouldContinueOnRuntimeException() {
-            when(subTaskMapper.selectStalePendingWithoutExecutionRecord(any(), anyInt()))
+            when(subTaskService.listStalePendingWithoutExecutionRecord(any(), anyInt()))
                     .thenReturn(List.of(1L, 2L));
 
             when(subTaskService.getById(1L)).thenReturn(pendingSubTask(1L));
@@ -253,7 +249,7 @@ class SubTaskPendingOrphanTaskTest {
         @Test
         @DisplayName("混合：BizException + RuntimeException + 正常 三者互不干扰")
         void shouldHandleMixedFailures() {
-            when(subTaskMapper.selectStalePendingWithoutExecutionRecord(any(), anyInt()))
+            when(subTaskService.listStalePendingWithoutExecutionRecord(any(), anyInt()))
                     .thenReturn(List.of(1L, 2L, 3L));
 
             when(subTaskService.getById(1L)).thenReturn(pendingSubTask(1L));
@@ -281,18 +277,18 @@ class SubTaskPendingOrphanTaskTest {
         }
 
         @Test
-        @DisplayName("mapper.selectStalePendingWithoutExecutionRecord 使用配置阈值和批大小")
+        @DisplayName("service.listStalePendingWithoutExecutionRecord 使用配置阈值和批大小")
         void shouldPassConfiguredThresholdAndBatchToMapper() {
             when(executionProperties.getPendingOrphanThresholdMinutes()).thenReturn(45);
             when(executionProperties.getPendingOrphanBatchSize()).thenReturn(17);
-            when(subTaskMapper.selectStalePendingWithoutExecutionRecord(any(), eq(17)))
+            when(subTaskService.listStalePendingWithoutExecutionRecord(any(), eq(17)))
                     .thenReturn(List.of());
 
             task.scan();
 
             // offsetDate 参数无法直接 eq —— 改为用 any() 单独验证 limit=17
-            verify(subTaskMapper, times(1))
-                    .selectStalePendingWithoutExecutionRecord(any(OffsetDateTime.class), eq(17));
+            verify(subTaskService, times(1))
+                    .listStalePendingWithoutExecutionRecord(any(OffsetDateTime.class), eq(17));
         }
     }
 

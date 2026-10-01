@@ -4,7 +4,6 @@ import com.helloai.common.config.PlannerDecomposeProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.task.entity.Task;
-import com.helloai.core.task.mapper.TaskMapper;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import lombok.RequiredArgsConstructor;
@@ -40,7 +39,6 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class PlanningTimeoutTask {
 
-    private final TaskMapper taskMapper;
     private final TaskService taskService;
     private final TaskTimelineService taskTimelineService;
     private final PlannerDecomposeProperties plannerDecomposeProperties;
@@ -54,7 +52,7 @@ public class PlanningTimeoutTask {
         try {
             OffsetDateTime deadline = OffsetDateTime.now()
                     .minusMinutes(plannerDecomposeProperties.getPlanningTimeoutMinutes());
-            List<Task> timedOut = taskMapper.selectTimedOutPlanning(deadline, BATCH_LIMIT);
+            List<Task> timedOut = taskService.listTimedOutPlanning(deadline, BATCH_LIMIT);
 
             if (timedOut.isEmpty()) {
                 return;

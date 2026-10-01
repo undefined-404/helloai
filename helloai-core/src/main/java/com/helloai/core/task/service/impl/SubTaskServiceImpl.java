@@ -1307,4 +1307,59 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     public int countInFlightByAgent(Long agentId) {
         return baseMapper.countInFlightByAgent(agentId);
     }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public int physicalDeleteByTaskId(Long taskId) {
+        // ServiceImpl<SubTaskMapper, SubTask>：baseMapper 即 SubTaskMapper（同域直捅合规）
+        return baseMapper.physicalDeleteByTaskId(taskId);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  §7.1 helloai-job 去 Mapper 直连收口（同域查询出口，SQL 口径不变）
+    // ══════════════════════════════════════════════════════════════
+
+    @Override
+    public boolean existsInFlightAssignedOrInProgress(Long agentId) {
+        Long count = baseMapper.selectCount(new LambdaQueryWrapper<SubTask>()
+                .eq(SubTask::getAssignedAgentId, agentId)
+                .in(SubTask::getStatus, SubTaskStatus.ASSIGNED, SubTaskStatus.IN_PROGRESS));
+        return count != null && count > 0;
+    }
+
+    @Override
+    public List<SubTask> listInFlightAssignedOrInProgress(Long agentId) {
+        // 无 limit、无排序——与重派范围同口径，加 limit 会截断重派范围
+        return baseMapper.selectList(new LambdaQueryWrapper<SubTask>()
+                .eq(SubTask::getAssignedAgentId, agentId)
+                .in(SubTask::getStatus, SubTaskStatus.ASSIGNED, SubTaskStatus.IN_PROGRESS));
+    }
+
+    @Override
+    public List<SubTask> listPausedBefore(Long agentId, OffsetDateTime expiredBefore) {
+        return baseMapper.selectList(new LambdaQueryWrapper<SubTask>()
+                .eq(SubTask::getAssignedAgentId, agentId)
+                .eq(SubTask::getStatus, SubTaskStatus.PAUSED)
+                .le(SubTask::getUpdateTime, expiredBefore));
+    }
+
+    @Override
+    public List<SubTask> listTimedOutAssigned(OffsetDateTime deadline, int limit) {
+        return baseMapper.selectTimedOutAssigned(deadline, limit);
+    }
+
+    @Override
+    public int incrementExternalFallbackCount(Long subTaskId, OffsetDateTime now) {
+        return baseMapper.incrementExternalFallbackCount(subTaskId, now);
+    }
+
+    @Override
+    public List<Long> listPendingUnassignedWithoutActiveExecutionRecord(int limit) {
+        return baseMapper.selectPendingUnassignedWithoutActiveExecutionRecord(limit);
+    }
+
+    @Override
+    public List<Long> listStalePendingWithoutExecutionRecord(OffsetDateTime cutoff, int limit) {
+        return baseMapper.selectStalePendingWithoutExecutionRecord(cutoff, limit);
+    }
 }

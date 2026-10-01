@@ -4,9 +4,9 @@ import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.service.SubTaskDispatchService;
+import com.helloai.core.task.service.SubTaskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
@@ -40,7 +40,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class AssignedSubTaskTimeoutTask {
 
-    private final SubTaskMapper subTaskMapper;
+    private final SubTaskService subTaskService;
     private final SubTaskDispatchService subTaskDispatchService;
     private final AgentService agentService;
     private final AgentDispatchProperties agentDispatchProperties;
@@ -54,7 +54,7 @@ public class AssignedSubTaskTimeoutTask {
         try {
             OffsetDateTime deadline = OffsetDateTime.now()
                     .minusMinutes(agentDispatchProperties.getAssignedTimeoutMinutes());
-            List<SubTask> timedOut = subTaskMapper.selectTimedOutAssigned(deadline, BATCH_LIMIT);
+            List<SubTask> timedOut = subTaskService.listTimedOutAssigned(deadline, BATCH_LIMIT);
 
             if (timedOut.isEmpty()) {
                 return;

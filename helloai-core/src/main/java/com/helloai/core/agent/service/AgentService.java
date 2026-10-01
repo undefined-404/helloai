@@ -8,6 +8,7 @@ import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.ActivityLog;
 import com.helloai.core.task.entity.RewardLog;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -265,4 +266,31 @@ public interface AgentService extends IService<Agent> {
      * @return 清理的总行数
      */
     int physicalDeleteTaskTrace(Long taskId);
+
+    // ══════════════════════════════════════════════════════════════
+    //  §7.1 helloai-job 去 Mapper 直连收口（HealthCheck 巡检读写出口）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 查 last_seen_time 早于 cutoff 的 Agent 列表（Reconcile 扫描出口）。
+     *
+     * <p>承接 helloai-job {@code AgentHealthCheckTask} 直捅
+     * {@code AgentMapper.selectByLastSeenBefore}；过滤条件与 Mapper 完全一致
+     * （SLEEPING 与已删除不参与扫描）。</p>
+     *
+     * @param cutoff 心跳超时截止时间（last_seen_time &lt; cutoff 视为超时）
+     * @return 超时候选 Agent 列表（可能为空，绝不返回 null）
+     */
+    List<Agent> listStaleSince(OffsetDateTime cutoff);
+
+    /**
+     * CAS 标记超时 Agent 为 OFFLINE（原样保留 5 参 CAS 语义与返回值语义）。
+     *
+     * <p>承接 helloai-job {@code AgentHealthCheckTask} 直捅
+     * {@code AgentMapper.markOfflineIfStale}；CAS 条件与结果语义不变：
+     * 返回 0 表示 CAS 失败（seen() 已刷新 / 已 SLEEPING / 仍在飞宽限）。</p>
+     *
+     * @return 影响行数；0 = CAS 失败
+     */
+    int markOfflineIfStale(Long agentId, OffsetDateTime cutoff, String newStatus, String reason, OffsetDateTime now);
 }

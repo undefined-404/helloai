@@ -1,11 +1,11 @@
 package com.helloai.core.system.storage.impl;
 
 import com.helloai.common.config.ArtifactStorageProperties;
+import com.helloai.core.system.port.ArtifactReference;
+import com.helloai.core.system.port.ArtifactReferencePort;
 import com.helloai.core.system.storage.ArtifactReconcileReport;
 import com.helloai.core.system.storage.ArtifactStorage;
 import com.helloai.core.system.storage.ArtifactStorageReconcileService;
-import com.helloai.core.task.entity.Attachment;
-import com.helloai.core.task.service.AttachmentService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -21,7 +21,8 @@ import java.util.Map;
  *
  * <p>算法：</p>
  * <ol>
- *   <li>取 attachment <b>全量行（含逻辑删除）</b>，按"当前协议 + 当前桶"筛出被引用的
+ *   <li>经 {@link ArtifactReferencePort}（§6.146 端口反转，task 域实现）取 attachment
+ *       <b>全量行（含逻辑删除）</b>，按"当前协议 + 当前桶"筛出被引用的
  *       objectKey 集合（保守口径：任何一行指向即视为被引用）。</li>
  *   <li>枚举桶内真实对象（{@code listObjects}），建 objectKey → 摘要 索引。</li>
  *   <li>双向比对出悬空 / 孤儿 / 字节不符。</li>
@@ -46,7 +47,7 @@ public class ArtifactStorageReconcileServiceImpl implements ArtifactStorageRecon
 
     private final ArtifactStorage artifactStorage;
     private final ArtifactStorageProperties properties;
-    private final AttachmentService attachmentService;
+    private final ArtifactReferencePort artifactReferencePort;
 
     @Override
     public ArtifactReconcileReport reconcile() {
@@ -54,14 +55,14 @@ public class ArtifactStorageReconcileServiceImpl implements ArtifactStorageRecon
         String protocol = minio ? MINIO_PROTOCOL : LOCAL_PROTOCOL;
         String bucket = minio ? properties.getMinioBucket() : properties.getBucket();
 
-        List<Attachment> rows = attachmentService.listAllIncludingDeleted();
+        List<ArtifactReference> rows = artifactReferencePort.listAllIncludingDeleted();
 
         // 1) 被引用对象集合（含逻辑删除行 → 口径保守，宁可漏判孤儿也不误删）
         Map<String, Long> referencedSize = new LinkedHashMap<>();
-        for (Attachment row : rows) {
-            String key = objectKeyOf(row.getStorageUrl(), protocol, bucket);
+        for (ArtifactReference row : rows) {
+            String key = objectKeyOf(row.storageUrl(), protocol, bucket);
             if (key != null) {
-                referencedSize.putIfAbsent(key, row.getFileSize() == null ? -1L : row.getFileSize());
+                referencedSize.putIfAbsent(key, row.fileSize() == null ? -1L : row.fileSize());
             }
         }
 

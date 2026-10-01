@@ -396,4 +396,113 @@ public interface SubTaskService extends IService<SubTask> {
      */
     @Transactional(rollbackFor = Exception.class)
     boolean claimAtomic(Long subTaskId, Long agentId);
+
+    /**
+     * 物理删除指定任务下的全部子任务行（不置逻辑删除位）。
+     *
+     * <p>用途：重新拆解前清理 CANCELLED 旧草案——拒绝计划后的残留行携带幽灵依赖
+     * （回写时引用未落库 ID，导致后续 PENDING 子任务依赖校验永不就绪）。</p>
+     *
+     * <p>原由 planner 域直捅 {@code SubTaskMapper.physicalDeleteByTaskId} 实现；按
+     * CODE_STYLE §7.1「禁止跨域直捅 Mapper」与 §6 依赖方向收口到 task 域，
+     * planner 侧只依赖本契约（跨域物理删除的语义解释权归本域）。</p>
+     *
+     * @param taskId 任务 ID
+     * @return 实际删除行数
+     */
+    @Transactional(rollbackFor = Exception.class)
+    int physicalDeleteByTaskId(Long taskId);
+
+    // ══════════════════════════════════════════════════════════════
+    //  §7.1 helloai-job 去 Mapper 直连收口（巡检读写出口）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 是否存在指定 Agent 名下 ASSIGNED / IN_PROGRESS 在飞子任务。
+     *
+     * <p>承接 helloai-job {@code AgentHealthCheckTask} 直捅
+     * {@code SubTaskMapper.selectCount(wrapper)}；口径为 <b>2 状态</b>
+     * （ASSIGNED / IN_PROGRESS），与既有 {@link #countInFlightByAgent(Long)} 的
+     * <b>3 状态</b>（含 REWORK）口径不同，二者不可互相复用。</p>
+     *
+     * @param agentId Agent ID
+     * @return true = 存在 ASSIGNED/IN_PROGRESS 子任务
+     */
+    boolean existsInFlightAssignedOrInProgress(Long agentId);
+
+    /**
+     * 列出指定 Agent 名下 ASSIGNED / IN_PROGRESS 在飞子任务（重派范围口径）。
+     *
+     * <p>承接 helloai-job {@code AgentHealthCheckTask} 直捅
+     * {@code SubTaskMapper.selectList(wrapper)}；<b>无 limit、无排序</b>——加 limit
+     * 会截断重派范围。口径为 2 状态（ASSIGNED / IN_PROGRESS）。</p>
+     *
+     * @param agentId Agent ID
+     * @return 在飞子任务列表（可能为空，绝不返回 null）
+     */
+    List<SubTask> listInFlightAssignedOrInProgress(Long agentId);
+
+    /**
+     * 列出指定 Agent 名下 PAUSED 且 update_time &lt;= expiredBefore 的子任务。
+     *
+     * <p>承接 helloai-job {@code AgentHealthCheckTask} 直捅
+     * {@code SubTaskMapper.selectList(wrapper)}（PAUSED 超宽限回收）。</p>
+     *
+     * @param agentId        Agent ID
+     * @param expiredBefore  宽限截止时间（update_time &lt;= expiredBefore 视为超宽限）
+     * @return 超宽限 PAUSED 子任务列表（可能为空，绝不返回 null）
+     */
+    List<SubTask> listPausedBefore(Long agentId, OffsetDateTime expiredBefore);
+
+    /**
+     * 查询 ASSIGNED 超时未 claim 的子任务（按 update_time 升序，limit 上限）。
+     *
+     * <p>承接 helloai-job {@code AssignedSubTaskTimeoutTask} 直捅
+     * {@code SubTaskMapper.selectTimedOutAssigned}；只查 status=ASSIGNED 且
+     * update_time 早于 deadline 的记录，排序与 limit 语义与 Mapper 完全一致。</p>
+     *
+     * @param deadline 超时截止时间（update_time &lt; deadline 视为超时）
+     * @param limit    单次最多返回条数
+     * @return 超时未 claim 子任务列表（可能为空，绝不返回 null）
+     */
+    List<SubTask> listTimedOutAssigned(OffsetDateTime deadline, int limit);
+
+    /**
+     * 原子累加 sub_task.external_fallback_count（N11 外部回退计数）。
+     *
+     * <p>承接 helloai-job {@code ExternalAgentFallbackTask} 直捅
+     * {@code SubTaskMapper.incrementExternalFallbackCount}，返回值语义不变。</p>
+     *
+     * @param subTaskId 子任务 ID
+     * @param now       当前时间（写 update_time）
+     * @return 1 = 成功累加；0 = 子任务不存在或已删除
+     */
+    int incrementExternalFallbackCount(Long subTaskId, OffsetDateTime now);
+
+    /**
+     * 查询「有历史 execution record、但无活跃 PENDING/RUNNING record、PENDING 且未指派」
+     * 的调度链遗留子任务 ID 列表（按 id ASC，limit 上限）。
+     *
+     * <p>承接 helloai-job {@code ExternalAgentFallbackTask} 直捅
+     * {@code SubTaskMapper.selectPendingUnassignedWithoutActiveExecutionRecord}；
+     * 本查询不依赖时间字段，只返回 id 列表。</p>
+     *
+     * @param limit 单次返回最多条数
+     * @return 调度链遗留 PENDING 未指派子任务 ID 列表（可能为空，绝不返回 null）
+     */
+    List<Long> listPendingUnassignedWithoutActiveExecutionRecord(int limit);
+
+    /**
+     * 查询 PENDING 孤儿子任务 ID 列表（{@code status='PENDING' AND create_time &lt; cutoff
+     * AND NOT EXISTS agent_execution_record}，按 id ASC，limit 上限）。
+     *
+     * <p>承接 helloai-job {@code SubTaskPendingOrphanTask} 直捅
+     * {@code SubTaskMapper.selectStalePendingWithoutExecutionRecord}；只返回 id 列表，
+     * 调用方拿 id 后从 Service 补读最新状态后再重派（避免 TOCTOU）。</p>
+     *
+     * @param cutoff PENDING 阈值截止时间（create_time &lt; cutoff 视为孤儿）
+     * @param limit  单次返回最多条数
+     * @return PENDING 孤儿子任务 ID 列表（可能为空，绝不返回 null）
+     */
+    List<Long> listStalePendingWithoutExecutionRecord(OffsetDateTime cutoff, int limit);
 }

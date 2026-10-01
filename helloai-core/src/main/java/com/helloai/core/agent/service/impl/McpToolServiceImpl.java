@@ -940,7 +940,7 @@ public class McpToolServiceImpl implements McpToolService {
         } catch (Exception e) {
             log.warn("读取前置物化附件内容失败，回退原始产出: subTaskId={}, err={}", dep.getId(), e.getMessage());
         }
-        return SubTaskOutputExtractor.extractExecutionOutput(dep);
+        return SubTaskOutputExtractor.extractExecutionOutput(dep.getContext());
     }
 
     // ================================================================

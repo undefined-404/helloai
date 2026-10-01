@@ -4,7 +4,6 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import lombok.RequiredArgsConstructor;
@@ -71,7 +70,6 @@ import java.util.List;
 @RequiredArgsConstructor
 public class SubTaskPendingOrphanTask {
 
-    private final SubTaskMapper subTaskMapper;
     private final SubTaskService subTaskService;
     private final SubTaskDispatchService subTaskDispatchService;
     private final AgentExecutionProperties executionProperties;
@@ -95,7 +93,7 @@ public class SubTaskPendingOrphanTask {
             int batchSize = executionProperties.getPendingOrphanBatchSize();
             OffsetDateTime cutoff = OffsetDateTime.now().minusMinutes(thresholdMinutes);
 
-            List<Long> orphanIds = subTaskMapper.selectStalePendingWithoutExecutionRecord(cutoff, batchSize);
+            List<Long> orphanIds = subTaskService.listStalePendingWithoutExecutionRecord(cutoff, batchSize);
 
             if (orphanIds.isEmpty()) {
                 return;

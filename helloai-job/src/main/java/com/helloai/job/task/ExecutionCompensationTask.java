@@ -6,11 +6,8 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.common.constant.SubTaskStatus;
-import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentExecutionRecord;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.agent.mapper.AgentExecutionRecordMapper;
-import com.helloai.core.agent.mapper.AgentMapper;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.agent.service.AgentService;
@@ -34,14 +31,12 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class ExecutionCompensationTask {
 
-    private final AgentExecutionRecordMapper executionRecordMapper;
     private final AgentExecutionRecordService agentExecutionRecordService;
     private final ExecutionResultHandler executionResultHandler;
     private final SubTaskService subTaskService;
     private final AgentExecutionProperties executionProperties;
     private final TransactionTemplate transactionTemplate;
     private final ExternalAgentFailureTracker failureTracker;
-    private final AgentMapper agentMapper;
     private final TaskTimelineService taskTimelineService;
 
     @Scheduled(fixedRate = 30000)
@@ -51,8 +46,8 @@ public class ExecutionCompensationTask {
         Duration pendingTimeout = Duration.ofMinutes(executionProperties.getPendingTimeoutMinutes());
         Duration runningTimeout = Duration.ofMinutes(executionProperties.getRunningTimeoutMinutes());
 
-        List<AgentExecutionRecord> pendingStuck = executionRecordMapper
-                .selectByStatusAndCreateTimeBefore(ExecutionStatus.PENDING, now.minus(pendingTimeout));
+        List<AgentExecutionRecord> pendingStuck = agentExecutionRecordService
+                .listByStatusCreatedBefore(ExecutionStatus.PENDING, now.minus(pendingTimeout));
 
         for (AgentExecutionRecord record : pendingStuck) {
             log.warn("Execution PENDING timeout: eventId={}, subTaskId={}",
@@ -62,8 +57,8 @@ public class ExecutionCompensationTask {
                     "PENDING timeout: ACK lost or JVM crash before execution");
         }
 
-        List<AgentExecutionRecord> runningStuck = executionRecordMapper
-                .selectByStatusAndStartTimeBefore(ExecutionStatus.RUNNING, now.minus(runningTimeout));
+        List<AgentExecutionRecord> runningStuck = agentExecutionRecordService
+                .listByStatusStartedBefore(ExecutionStatus.RUNNING, now.minus(runningTimeout));
 
         for (AgentExecutionRecord record : runningStuck) {
             log.error("Execution RUNNING timeout: eventId={}, subTaskId={}",

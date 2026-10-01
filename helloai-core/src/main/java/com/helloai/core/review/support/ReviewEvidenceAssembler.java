@@ -71,7 +71,7 @@ public class ReviewEvidenceAssembler {
      */
     public EvidenceCheckResult checkEvidence(SubTask subTask) {
         List<Attachment> readable = readableAttachments(subTask.getId());
-        String output = SubTaskOutputExtractor.extractExecutionOutput(subTask);
+        String output = SubTaskOutputExtractor.extractExecutionOutput(subTask.getContext());
         boolean hasOutput = output != null && !output.isBlank();
         boolean isDense = SubTaskDispatchService.isExecutionDense(subTask);
 

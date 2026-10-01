@@ -1,10 +1,10 @@
 package com.helloai.core.system.storage.impl;
 
 import com.helloai.common.config.ArtifactStorageProperties;
+import com.helloai.core.system.port.ArtifactReference;
+import com.helloai.core.system.port.ArtifactReferencePort;
 import com.helloai.core.system.storage.ArtifactReconcileReport;
 import com.helloai.core.system.storage.ArtifactStorage;
-import com.helloai.core.task.entity.Attachment;
-import com.helloai.core.task.service.AttachmentService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -34,7 +34,7 @@ class ArtifactStorageReconcileServiceImplTest {
 
     private ArtifactStorage storage;
     private ArtifactStorageProperties properties;
-    private AttachmentService attachmentService;
+    private ArtifactReferencePort artifactReferencePort;
 
     private ArtifactStorageReconcileServiceImpl service;
 
@@ -44,17 +44,14 @@ class ArtifactStorageReconcileServiceImplTest {
         properties = new ArtifactStorageProperties();
         properties.setType("minio");
         properties.setMinioBucket(BUCKET);
-        attachmentService = mock(AttachmentService.class);
-        service = new ArtifactStorageReconcileServiceImpl(storage, properties, attachmentService);
+        artifactReferencePort = mock(ArtifactReferencePort.class);
+        service = new ArtifactStorageReconcileServiceImpl(storage, properties, artifactReferencePort);
     }
 
     // ---------- helpers ----------
 
-    private static Attachment row(String objectKey, Long size) {
-        Attachment a = new Attachment();
-        a.setStorageUrl(PROTOCOL + BUCKET + "/" + objectKey);
-        a.setFileSize(size);
-        return a;
+    private static ArtifactReference row(String objectKey, Long size) {
+        return new ArtifactReference(PROTOCOL + BUCKET + "/" + objectKey, size);
     }
 
     private static ArtifactStorage.StoredObject obj(String objectKey, long size, OffsetDateTime lastModified) {
@@ -70,7 +67,7 @@ class ArtifactStorageReconcileServiceImplTest {
     @Test
     @DisplayName("两侧一致：无悬空/孤儿/字节不符，consistent=true")
     void shouldReportConsistentWhenBothSidesMatch() {
-        when(attachmentService.listAllIncludingDeleted()).thenReturn(List.of(row("a/b/x.md", 10L)));
+        when(artifactReferencePort.listAllIncludingDeleted()).thenReturn(List.of(row("a/b/x.md", 10L)));
         when(storage.listObjects(BUCKET, null)).thenReturn(List.of(obj("a/b/x.md", 10L, daysAgo(1))));
 
         ArtifactReconcileReport report = service.reconcile();
@@ -83,7 +80,7 @@ class ArtifactStorageReconcileServiceImplTest {
     @Test
     @DisplayName("悬空：DB 有记录、桶中无对象 → dangling 命中（预览会 404）")
     void shouldDetectDanglingRecords() {
-        when(attachmentService.listAllIncludingDeleted())
+        when(artifactReferencePort.listAllIncludingDeleted())
                 .thenReturn(List.of(row("a/b/x.md", 10L), row("a/b/gone.md", 20L)));
         when(storage.listObjects(BUCKET, null)).thenReturn(List.of(obj("a/b/x.md", 10L, daysAgo(1))));
 
@@ -97,7 +94,7 @@ class ArtifactStorageReconcileServiceImplTest {
     @Test
     @DisplayName("孤儿：桶中有对象、无任何附件行引用 → orphaned 命中")
     void shouldDetectOrphanObjects() {
-        when(attachmentService.listAllIncludingDeleted()).thenReturn(List.of(row("a/b/x.md", 10L)));
+        when(artifactReferencePort.listAllIncludingDeleted()).thenReturn(List.of(row("a/b/x.md", 10L)));
         when(storage.listObjects(BUCKET, null))
                 .thenReturn(List.of(obj("a/b/x.md", 10L, daysAgo(1)), obj("a/b/orphan.md", 5L, daysAgo(1))));
 
@@ -110,7 +107,7 @@ class ArtifactStorageReconcileServiceImplTest {
     @Test
     @DisplayName("字节不符：双侧都在但大小不同 → sizeMismatch 命中")
     void shouldDetectSizeMismatch() {
-        when(attachmentService.listAllIncludingDeleted()).thenReturn(List.of(row("a/b/x.md", 10L)));
+        when(artifactReferencePort.listAllIncludingDeleted()).thenReturn(List.of(row("a/b/x.md", 10L)));
         when(storage.listObjects(BUCKET, null)).thenReturn(List.of(obj("a/b/x.md", 7L, daysAgo(1))));
 
         ArtifactReconcileReport report = service.reconcile();
@@ -122,14 +119,11 @@ class ArtifactStorageReconcileServiceImplTest {
     @Test
     @DisplayName("别的桶 / 别的协议的记录不参与本轮对账（不误判成悬空）")
     void shouldIgnoreForeignBucketOrProtocol() {
-        Attachment foreignBucket = new Attachment();
-        foreignBucket.setStorageUrl("minio://trae-executor/a/b/x.md");
-        Attachment foreignProtocol = new Attachment();
-        foreignProtocol.setStorageUrl("local://helloai-local/a/b/x.md");
-        Attachment blank = new Attachment();
-        blank.setStorageUrl(null);
+        ArtifactReference foreignBucket = new ArtifactReference("minio://trae-executor/a/b/x.md", null);
+        ArtifactReference foreignProtocol = new ArtifactReference("local://helloai-local/a/b/x.md", null);
+        ArtifactReference blank = new ArtifactReference(null, null);
 
-        when(attachmentService.listAllIncludingDeleted())
+        when(artifactReferencePort.listAllIncludingDeleted())
                 .thenReturn(List.of(foreignBucket, foreignProtocol, blank));
         when(storage.listObjects(BUCKET, null)).thenReturn(List.of());
 
@@ -144,7 +138,7 @@ class ArtifactStorageReconcileServiceImplTest {
     @Test
     @DisplayName("清理默认关闭：孤儿只报告不删除，且不触碰删除接口")
     void cleanupDisabled_shouldOnlyReport() {
-        when(attachmentService.listAllIncludingDeleted()).thenReturn(List.of());
+        when(artifactReferencePort.listAllIncludingDeleted()).thenReturn(List.of());
         when(storage.listObjects(BUCKET, null)).thenReturn(List.of(obj("orphan.md", 1L, daysAgo(10))));
 
         ArtifactReconcileReport report = service.reconcile();
@@ -159,7 +153,7 @@ class ArtifactStorageReconcileServiceImplTest {
     @DisplayName("清理开启且对象已过时间窗 → 删除，removed 记录")
     void cleanupEnabled_shouldRemoveAgedOrphan() {
         properties.setOrphanCleanupEnabled(true);
-        when(attachmentService.listAllIncludingDeleted()).thenReturn(List.of());
+        when(artifactReferencePort.listAllIncludingDeleted()).thenReturn(List.of());
         when(storage.listObjects(BUCKET, null)).thenReturn(List.of(obj("orphan.md", 1L, daysAgo(2))));
 
         ArtifactReconcileReport report = service.reconcile();
@@ -173,7 +167,7 @@ class ArtifactStorageReconcileServiceImplTest {
     void cleanupEnabled_shouldSkipTooNewOrphan() {
         properties.setOrphanCleanupEnabled(true);
         properties.setOrphanMinAgeHours(24);
-        when(attachmentService.listAllIncludingDeleted()).thenReturn(List.of());
+        when(artifactReferencePort.listAllIncludingDeleted()).thenReturn(List.of());
         when(storage.listObjects(BUCKET, null))
                 .thenReturn(List.of(obj("brand-new.md", 1L, OffsetDateTime.now().minusMinutes(5))));
 
@@ -188,7 +182,7 @@ class ArtifactStorageReconcileServiceImplTest {
     @DisplayName("时间保险：lastModified 不可知 → 保守跳过删除")
     void cleanupEnabled_shouldSkipOrphanWithUnknownTimestamp() {
         properties.setOrphanCleanupEnabled(true);
-        when(attachmentService.listAllIncludingDeleted()).thenReturn(List.of());
+        when(artifactReferencePort.listAllIncludingDeleted()).thenReturn(List.of());
         when(storage.listObjects(BUCKET, null)).thenReturn(List.of(obj("no-time.md", 1L, null)));
 
         ArtifactReconcileReport report = service.reconcile();
@@ -205,7 +199,7 @@ class ArtifactStorageReconcileServiceImplTest {
         List<ArtifactStorage.StoredObject> objects = IntStream.range(0, 10)
                 .mapToObj(i -> obj("orphan-" + i + ".md", 1L, daysAgo(5)))
                 .toList();
-        when(attachmentService.listAllIncludingDeleted()).thenReturn(List.of());
+        when(artifactReferencePort.listAllIncludingDeleted()).thenReturn(List.of());
         when(storage.listObjects(BUCKET, null)).thenReturn(objects);
 
         ArtifactReconcileReport report = service.reconcile();
@@ -218,7 +212,7 @@ class ArtifactStorageReconcileServiceImplTest {
     @DisplayName("单个删除失败不影响其余对象（异常被吞并记 error）")
     void cleanupEnabled_shouldTolerateSingleFailure() {
         properties.setOrphanCleanupEnabled(true);
-        when(attachmentService.listAllIncludingDeleted()).thenReturn(List.of());
+        when(artifactReferencePort.listAllIncludingDeleted()).thenReturn(List.of());
         when(storage.listObjects(BUCKET, null))
                 .thenReturn(List.of(obj("bad.md", 1L, daysAgo(5)), obj("good.md", 1L, daysAgo(5))));
         doThrow(new RuntimeException("boom")).when(storage).removeObject(BUCKET, "bad.md");
@@ -247,7 +241,7 @@ class ArtifactStorageReconcileServiceImplTest {
     void shouldReconcileLocalTypeWithLocalProtocol() {
         properties.setType("local");
         properties.setBucket("helloai-local");
-        when(attachmentService.listAllIncludingDeleted()).thenReturn(List.of(row("a.md", 1L)));
+        when(artifactReferencePort.listAllIncludingDeleted()).thenReturn(List.of(row("a.md", 1L)));
         when(storage.listObjects("helloai-local", null))
                 .thenReturn(List.of(obj("a.md", 1L, daysAgo(1))));
 

@@ -199,4 +199,16 @@ public interface TaskService extends IService<Task> {
      * @return 超时未收敛的报告任务（按 final_report_time 升序）
      */
     List<Task> listFinalReportReviewOrphans(int thresholdSeconds, int limit);
+
+    /**
+     * 扫描 PLANNING 超时卡死任务（status=PLANNING 且 update_time &lt; deadline，按 update_time 升序，limit 上限）。
+     *
+     * <p>承接 helloai-job {@code PlanningTimeoutTask} 直捅
+     * {@code TaskMapper.selectTimedOutPlanning}（拆解异步化改造兜底），SQL 语义不变。</p>
+     *
+     * @param deadline 超时截止时间（update_time &lt; deadline 视为超时）
+     * @param limit    单次最多返回条数
+     * @return 超时卡死任务列表（可能为空，绝不返回 null）
+     */
+    List<Task> listTimedOutPlanning(OffsetDateTime deadline, int limit);
 }

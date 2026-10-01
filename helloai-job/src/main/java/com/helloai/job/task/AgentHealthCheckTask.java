@@ -7,15 +7,12 @@ import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.agent.mapper.AgentMapper;
-import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
@@ -72,8 +69,6 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class AgentHealthCheckTask {
 
-    private final AgentMapper agentMapper;
-    private final SubTaskMapper subTaskMapper;
     private final TaskTimelineService taskTimelineService;
     private final AgentService agentService;
     private final SubTaskDispatchService subTaskDispatchService;
@@ -110,7 +105,7 @@ public class AgentHealthCheckTask {
             OffsetDateTime cutoff = now.minusMinutes(scanMinutes);
 
             // 1) 扫描超时 Agent（已排除 SLEEPING 和已删除）
-            List<Agent> staleAgents = agentMapper.selectByLastSeenBefore(cutoff);
+            List<Agent> staleAgents = agentService.listStaleSince(cutoff);
             if (staleAgents.isEmpty()) {
                 return;
             }
@@ -169,7 +164,7 @@ public class AgentHealthCheckTask {
         }
 
         // 2) CAS 标 OFFLINE（防 seen() 刷新覆盖）
-        int updated = agentMapper.markOfflineIfStale(
+        int updated = agentService.markOfflineIfStale(
                 agent.getId(),
                 effectiveCutoff,
                 OFFLINE_STATUS,
@@ -260,11 +255,7 @@ public class AgentHealthCheckTask {
             return false;
         }
         try {
-            Long count = subTaskMapper.selectCount(
-                    new LambdaQueryWrapper<SubTask>()
-                            .eq(SubTask::getAssignedAgentId, agentId)
-                            .in(SubTask::getStatus, SubTaskStatus.ASSIGNED, SubTaskStatus.IN_PROGRESS));
-            return count != null && count > 0;
+            return subTaskService.existsInFlightAssignedOrInProgress(agentId);
         } catch (Exception e) {
             log.warn("在飞子任务查询失败（按无在飞处理，不放宽阈值）: agentId={}, err={}", agentId, e.getMessage());
             return false;
@@ -308,10 +299,7 @@ public class AgentHealthCheckTask {
                 ? staleAgent.getRole() : AgentRole.EXECUTOR;
 
         // 查询待重分配任务：ASSIGNED 或 IN_PROGRESS
-        List<SubTask> staleTasks = subTaskMapper.selectList(
-                new LambdaQueryWrapper<SubTask>()
-                        .eq(SubTask::getAssignedAgentId, agentId)
-                        .in(SubTask::getStatus, SubTaskStatus.ASSIGNED, SubTaskStatus.IN_PROGRESS));
+        List<SubTask> staleTasks = subTaskService.listInFlightAssignedOrInProgress(agentId);
 
         if (staleTasks.isEmpty()) {
             log.info("Agent {} 离线，无待重分配任务", agentId);
@@ -397,11 +385,7 @@ public class AgentHealthCheckTask {
         }
         Long agentId = staleAgent.getId();
         OffsetDateTime expiredBefore = OffsetDateTime.now().minusMinutes(graceMinutes);
-        List<SubTask> pausedExpired = subTaskMapper.selectList(
-                new LambdaQueryWrapper<SubTask>()
-                        .eq(SubTask::getAssignedAgentId, agentId)
-                        .eq(SubTask::getStatus, SubTaskStatus.PAUSED)
-                        .le(SubTask::getUpdateTime, expiredBefore));
+        List<SubTask> pausedExpired = subTaskService.listPausedBefore(agentId, expiredBefore);
         if (pausedExpired.isEmpty()) {
             return 0;
         }

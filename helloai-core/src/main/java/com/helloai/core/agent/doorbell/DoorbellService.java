@@ -1,4 +1,4 @@
-package com.helloai.core.shared.doorbell;
+package com.helloai.core.agent.doorbell;
 
 import com.helloai.common.base.BizException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;

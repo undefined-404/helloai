@@ -4,7 +4,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.AgentService;
-import com.helloai.core.shared.util.SubTaskDependencyOrder;
+import com.helloai.core.task.util.SubTaskDependencyOrder;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.system.storage.ArtifactStorage;
@@ -196,9 +196,9 @@ public class TaskDeliverableServiceImpl implements TaskDeliverableService {
         return agent != null && agent.getName() != null ? agent.getName() : String.valueOf(agentId);
     }
 
-    /** 读取 context.lastExecution.output（统一走 SubTaskOutputExtractor，消除多消费方同款先例漂移）。 */
+    /** 读取 context.lastExecution.output（统一走 SubTaskOutputExtractor，读取 subTask.getContext()，消除多消费方同款先例漂移；入参可为 null）。 */
     private static String extractExecutionOutput(SubTask subTask) {
-        return SubTaskOutputExtractor.extractExecutionOutput(subTask);
+        return SubTaskOutputExtractor.extractExecutionOutput(subTask == null ? null : subTask.getContext());
     }
 
     /** Markdown 表格单元转义：竖线与换行会破坏表格结构。 */

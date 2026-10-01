@@ -15,39 +15,64 @@
 #          - every *Mapper.java package must be registered in
 #            HelloAIApplication @MapperScan (unregistered package
 #            -> startup failure, regression guard)
-# Ref:  doc/HelloAI_CODE_STYLE.md sec 3.x (V1.9)
+# Ref:  doc/HelloAI_CODE_STYLE.md sec 6 (domain dependency direction) /
+#       sec 7.1 (cross-domain mapper poke) (V1.9)
 #       backend code review report P0 domain dependency direction
-# Usage (repo root): powershell -File .\scripts\powershell\verify-dependency-direction.ps1
+# Usage (any cwd): powershell -File .\scripts\powershell\verify-dependency-direction.ps1
 # Flow: for each (domain, forbidden import prefix) scan *.java,
 #       any hit -> FAIL + list files; fail > 0 -> exit code 1.
 # NOTE: keep runtime literals ASCII (PS 5.1 CJK parsing trap),
 #       CJK text only in comments.
+# NOTE: paths are resolved RELATIVE TO THE REPO ROOT (derived from
+#       $PSScriptRoot), never hardcoded absolute (CODE_STYLE sec 39 /
+#       portability: the same checkout may live at any path / CI host).
 # ============================================================
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
-$coreRoot = 'e:\yhzx\1027\helloai\helloai-core\src\main\java\com\helloai\core'
-$appFile = 'e:\yhzx\1027\helloai\helloai-start\src\main\java\com\helloai\HelloAIApplication.java'
+# --- resolve repo root from this script's location (scripts/powershell/<file>) ---
+$repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$coreRoot = Join-Path $repoRoot 'helloai-core\src\main\java\com\helloai\core'
+$appFile = Join-Path $repoRoot 'helloai-start\src\main\java\com\helloai\HelloAIApplication.java'
 $fail = 0
 
+# sanity: expected layout must exist, otherwise fail loud (never silently pass).
+if (-not (Test-Path -LiteralPath $coreRoot)) {
+    Write-Output ('[FAIL] core domain root not found: ' + $coreRoot)
+    Write-Output ('       repoRoot resolved to: ' + $repoRoot)
+    Write-Output '       run this script from within the HelloAI repository checkout.'
+    exit 2
+}
+
 # Assert a domain has no import with given prefix.
-# Args: $1=domain dir  $2=rule label  $3=forbidden import prefix
+# Args: -Domain=domain dir  -Label=rule label  -Forbidden=forbidden import prefix
+#       -KnownDebt=N  allow up to N already-frozen hits (tracked in
+#                     scripts/ci/arch-baseline.txt) as a non-fatal [DEBT] note;
+#                     ANY hit beyond N is still a fatal [FAIL].
 function Assert-NoImport {
-    param([string]$Domain, [string]$Label, [string]$Forbidden)
+    param([string]$Domain, [string]$Label, [string]$Forbidden, [int]$KnownDebt = 0)
     $hits = @(Get-ChildItem -Path (Join-Path $coreRoot $Domain) -Recurse -Filter '*.java' -ErrorAction SilentlyContinue |
         Select-String -SimpleMatch -Pattern $Forbidden -List | Select-Object -ExpandProperty Path)
-    if ($hits.Count -gt 0) {
+    $n = $hits.Count
+    if ($n -gt $KnownDebt) {
         $script:fail = $script:fail + 1
-        Write-Output ('[FAIL] ' + $Domain + ' must not depend on [' + $Label + '], hits=' + $hits.Count + ':')
+        Write-Output ('[FAIL] ' + $Domain + ' must not depend on [' + $Label + '], hits=' + $n + ' (allowed frozen debt=' + $KnownDebt + '):')
         foreach ($h in $hits) {
             Write-Output ('    ' + $h.Substring($coreRoot.Length + 1))
         }
+    } elseif ($n -gt 0) {
+        Write-Output ('[DEBT] ' + $Domain + ' has ' + $n + ' frozen dependency on [' + $Label + '] (<= ' + $KnownDebt + '; tracked in scripts/ci/arch-baseline.txt)')
     } else {
         Write-Output ('[PASS] ' + $Domain + ' has no dependency on [' + $Label + ']')
     }
 }
 
 Write-Output '=== dependency direction guard (system/task/agent forbidden imports) ==='
+# system->task: previously a known frozen debt (ArtifactStorageReconcileServiceImpl,
+# CODE_STYLE sec 6.1 backward edge). 2026-10-01 closed via port inversion: the port
+# contract lives in com.helloai.core.system.port.ArtifactReferencePort (consumer-owned)
+# and the adapter in task domain (task -> system is a legal downward edge), so system
+# now has ZERO import of core.task -> strict zero-debt assertion.
 Assert-NoImport -Domain 'system' -Label 'task' -Forbidden 'import com.helloai.core.task'
 Assert-NoImport -Domain 'system' -Label 'agent' -Forbidden 'import com.helloai.core.agent'
 Assert-NoImport -Domain 'system' -Label 'planner' -Forbidden 'import com.helloai.core.planner'
@@ -95,7 +120,7 @@ if ($mapperPackages.Count -eq 0) {
 
 Write-Output ''
 if ($fail -gt 0) {
-    Write-Output ('RESULT: FAILED - FAIL=' + $fail + ' dependency direction violated, fix per CODE_STYLE sec 3.x')
+    Write-Output ('RESULT: FAILED - FAIL=' + $fail + ' dependency direction violated, fix per CODE_STYLE sec 6')
     exit 1
 }
 Write-Output 'RESULT: ALL PASSED - core domains comply with dependency direction red line'

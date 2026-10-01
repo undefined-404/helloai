@@ -5,7 +5,7 @@ import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskIterationConst;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.AgentService;
-import com.helloai.core.shared.util.SubTaskDependencyOrder;
+import com.helloai.core.task.util.SubTaskDependencyOrder;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.TaskIteration;
@@ -91,8 +91,8 @@ public class TaskIterationServiceImpl extends ServiceImpl<TaskIterationMapper, T
                 }
             }
 
-            // LLM 产出：统一走 SubTaskOutputExtractor
-            String output = SubTaskOutputExtractor.extractExecutionOutput(st);
+            // LLM 产出：统一走 SubTaskOutputExtractor（读取 st.getContext()）
+            String output = SubTaskOutputExtractor.extractExecutionOutput(st.getContext());
             iter.setLlmResponse(output != null ? output : "");
 
             // 执行摘要：从 EXECUTION_RECORD 段解析 SUMMARY 行
@@ -250,7 +250,7 @@ public class TaskIterationServiceImpl extends ServiceImpl<TaskIterationMapper, T
         }
         List<SubTask> visible = new ArrayList<>();
         for (SubTask st : subTasks) {
-            String output = SubTaskOutputExtractor.extractExecutionOutput(st);
+            String output = SubTaskOutputExtractor.extractExecutionOutput(st.getContext());
             if (output != null && !output.isBlank()) {
                 visible.add(st);
             }

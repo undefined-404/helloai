@@ -5,9 +5,9 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.service.SubTaskDispatchService;
+import com.helloai.core.task.service.SubTaskService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -46,7 +46,7 @@ import static org.mockito.Mockito.when;
 class AssignedSubTaskTimeoutTaskTest {
 
     @Mock
-    private SubTaskMapper subTaskMapper;
+    private SubTaskService subTaskService;
     @Mock
     private SubTaskDispatchService subTaskDispatchService;
     @Mock
@@ -59,7 +59,7 @@ class AssignedSubTaskTimeoutTaskTest {
     @BeforeEach
     void setUp() {
         task = new AssignedSubTaskTimeoutTask(
-                subTaskMapper, subTaskDispatchService, agentService, agentDispatchProperties);
+                subTaskService, subTaskDispatchService, agentService, agentDispatchProperties);
 
         // 超时阈值改读配置，默认桩为原硬编码值 10 分钟
         lenient().when(agentDispatchProperties.getAssignedTimeoutMinutes()).thenReturn(10);
@@ -72,7 +72,7 @@ class AssignedSubTaskTimeoutTaskTest {
         @Test
         @DisplayName("无超时记录 → 跳过")
         void shouldSkipWhenNoTimedOut() {
-            when(subTaskMapper.selectTimedOutAssigned(any(), anyInt()))
+            when(subTaskService.listTimedOutAssigned(any(), anyInt()))
                     .thenReturn(List.of());
 
             task.scan();
@@ -90,7 +90,7 @@ class AssignedSubTaskTimeoutTaskTest {
         @DisplayName("单条超时 + 原 Agent 存在 → 推导 role 并回收")
         void shouldRecoverSingleTimedOut() {
             SubTask st = subTask(1L, 101L);
-            when(subTaskMapper.selectTimedOutAssigned(any(), anyInt()))
+            when(subTaskService.listTimedOutAssigned(any(), anyInt()))
                     .thenReturn(List.of(st));
 
             Agent agent = agent(101L, AgentRole.PLANNER);
@@ -108,7 +108,7 @@ class AssignedSubTaskTimeoutTaskTest {
             SubTask st1 = subTask(1L, 101L);
             SubTask st2 = subTask(2L, 102L);
             SubTask st3 = subTask(3L, 103L);
-            when(subTaskMapper.selectTimedOutAssigned(any(), anyInt()))
+            when(subTaskService.listTimedOutAssigned(any(), anyInt()))
                     .thenReturn(List.of(st1, st2, st3));
 
             when(agentService.getById(101L)).thenReturn(agent(101L, AgentRole.EXECUTOR));
@@ -130,7 +130,7 @@ class AssignedSubTaskTimeoutTaskTest {
         void shouldContinueOnSingleFailure() {
             SubTask st1 = subTask(1L, 101L);
             SubTask st2 = subTask(2L, 102L);
-            when(subTaskMapper.selectTimedOutAssigned(any(), anyInt()))
+            when(subTaskService.listTimedOutAssigned(any(), anyInt()))
                     .thenReturn(List.of(st1, st2));
 
             when(agentService.getById(101L)).thenReturn(agent(101L, AgentRole.EXECUTOR));
@@ -152,7 +152,7 @@ class AssignedSubTaskTimeoutTaskTest {
         @DisplayName("原 Agent 不存在 → role 回退 EXECUTOR")
         void shouldFallbackRoleWhenAgentNotFound() {
             SubTask st = subTask(1L, 999L);
-            when(subTaskMapper.selectTimedOutAssigned(any(), anyInt()))
+            when(subTaskService.listTimedOutAssigned(any(), anyInt()))
                     .thenReturn(List.of(st));
             when(agentService.getById(999L)).thenReturn(null);
 
@@ -166,7 +166,7 @@ class AssignedSubTaskTimeoutTaskTest {
         @DisplayName("原 Agent 存在但 role 为 null → 回退 EXECUTOR")
         void shouldFallbackRoleWhenAgentRoleNull() {
             SubTask st = subTask(1L, 101L);
-            when(subTaskMapper.selectTimedOutAssigned(any(), anyInt()))
+            when(subTaskService.listTimedOutAssigned(any(), anyInt()))
                     .thenReturn(List.of(st));
 
             Agent agent = agent(101L, null);

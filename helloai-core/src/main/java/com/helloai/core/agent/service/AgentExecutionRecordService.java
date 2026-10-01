@@ -2,8 +2,10 @@ package com.helloai.core.agent.service;
 
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.helloai.common.constant.AgentAccessType;
+import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.core.agent.entity.AgentExecutionRecord;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 
 /**
@@ -71,4 +73,32 @@ public interface AgentExecutionRecordService extends IService<AgentExecutionReco
      * DB Poller 触及痕迹：更新 last_attempt_at 为当前时间（不限制 status）。
      */
     boolean markPolled(Long id);
+
+    // ══════════════════════════════════════════════════════════════
+    //  §7.1 helloai-job 去 Mapper 直连收口（补偿扫描出口）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 扫描指定状态且 create_time 早于 before 的执行记录（补偿扫描：PENDING 卡死）。
+     *
+     * <p>承接 helloai-job {@code ExecutionCompensationTask} 直捅
+     * {@code AgentExecutionRecordMapper.selectByStatusAndCreateTimeBefore}，SQL 语义不变。</p>
+     *
+     * @param status 目标状态
+     * @param before create_time &lt; before 视为超时
+     * @return 命中记录列表（可能为空，绝不返回 null）
+     */
+    List<AgentExecutionRecord> listByStatusCreatedBefore(ExecutionStatus status, OffsetDateTime before);
+
+    /**
+     * 扫描指定状态且 start_time 早于 before 的执行记录（补偿扫描：RUNNING 卡死）。
+     *
+     * <p>承接 helloai-job {@code ExecutionCompensationTask} 直捅
+     * {@code AgentExecutionRecordMapper.selectByStatusAndStartTimeBefore}，SQL 语义不变。</p>
+     *
+     * @param status 目标状态
+     * @param before start_time &lt; before 视为超时
+     * @return 命中记录列表（可能为空，绝不返回 null）
+     */
+    List<AgentExecutionRecord> listByStatusStartedBefore(ExecutionStatus status, OffsetDateTime before);
 }

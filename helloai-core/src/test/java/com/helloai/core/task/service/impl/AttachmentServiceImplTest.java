@@ -1,4 +1,4 @@
-package com.helloai.core.system.service;
+package com.helloai.core.task.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
 import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapper;
@@ -6,7 +6,6 @@ import com.baomidou.mybatisplus.extension.conditions.update.LambdaUpdateChainWra
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AttachmentStatus;
 import com.helloai.core.task.entity.Attachment;
-import com.helloai.core.task.service.impl.AttachmentServiceImpl;
 import com.helloai.core.system.storage.ArtifactStorage;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;

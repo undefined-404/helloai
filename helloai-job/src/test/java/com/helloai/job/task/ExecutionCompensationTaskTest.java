@@ -6,7 +6,6 @@ import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.AgentExecutionRecord;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.agent.mapper.AgentExecutionRecordMapper;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
@@ -40,9 +39,6 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 @DisplayName("ExecutionCompensationTask")
 class ExecutionCompensationTaskTest {
-
-    @Mock
-    private AgentExecutionRecordMapper executionRecordMapper;
 
     @Mock
     private AgentExecutionRecordService agentExecutionRecordService;
@@ -92,9 +88,9 @@ class ExecutionCompensationTaskTest {
         subTask.setId(201L);
         subTask.setStatus(SubTaskStatus.ASSIGNED);
 
-        when(executionRecordMapper.selectByStatusAndCreateTimeBefore(any(), any()))
+        when(agentExecutionRecordService.listByStatusCreatedBefore(any(), any()))
                 .thenReturn(List.of(pendingRecord));
-        when(executionRecordMapper.selectByStatusAndStartTimeBefore(any(), any()))
+        when(agentExecutionRecordService.listByStatusStartedBefore(any(), any()))
                 .thenReturn(List.of());
         when(agentExecutionRecordService.markTimeout(101L)).thenReturn(true);
         when(subTaskService.getById(201L)).thenReturn(subTask);
@@ -122,9 +118,9 @@ class ExecutionCompensationTaskTest {
         subTask.setTaskId(502L);
         subTask.setStatus(SubTaskStatus.IN_PROGRESS);
 
-        when(executionRecordMapper.selectByStatusAndCreateTimeBefore(eq(ExecutionStatus.PENDING), any()))
+        when(agentExecutionRecordService.listByStatusCreatedBefore(eq(ExecutionStatus.PENDING), any()))
                 .thenReturn(List.of());
-        when(executionRecordMapper.selectByStatusAndStartTimeBefore(eq(ExecutionStatus.RUNNING), any()))
+        when(agentExecutionRecordService.listByStatusStartedBefore(eq(ExecutionStatus.RUNNING), any()))
                 .thenReturn(List.of(runningRecord));
         when(agentExecutionRecordService.markTimeout(102L)).thenReturn(true);
         when(subTaskService.getById(202L)).thenReturn(subTask);
@@ -151,9 +147,9 @@ class ExecutionCompensationTaskTest {
     @Test
     @DisplayName("未超时记录不会触发任何补偿")
     void shouldIgnoreWhenNoTimedOutRecords() {
-        when(executionRecordMapper.selectByStatusAndCreateTimeBefore(eq(ExecutionStatus.PENDING), any()))
+        when(agentExecutionRecordService.listByStatusCreatedBefore(eq(ExecutionStatus.PENDING), any()))
                 .thenReturn(List.of());
-        when(executionRecordMapper.selectByStatusAndStartTimeBefore(eq(ExecutionStatus.RUNNING), any()))
+        when(agentExecutionRecordService.listByStatusStartedBefore(eq(ExecutionStatus.RUNNING), any()))
                 .thenReturn(List.of());
 
         executionCompensationTask.compensate();

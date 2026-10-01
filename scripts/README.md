@@ -92,10 +92,10 @@ verify-login-e2e、verify-requirement-clarify、verify-websearch-e2e、verify-pl
 
 | 脚本 | 用途 |
 |---|---|
-| `ci/ci-gate.sh` | **主门禁**：固定可用 JDK → 构建+真实单测（显式 `-DskipTests=false`）→ 断言「用例数 > 0」→ 架构漂移冻结 → 前端 type-check/build |
+| `ci/ci-gate.sh` | **主门禁**：固定可用 JDK → 构建+真实单测（显式 `-DskipTests=false`）→ 断言「用例数 > 0」→ 架构漂移冻结 → 前端 type-check/build。**用例数计数口径（2026-10-01 修正）**：按 surefire XML 内的 `<testcase>` 元素计，**不可**读 `<testsuite tests="N">` 属性——JUnit5 `@Nested` 用例会被写进外层类 XML，但该文件 `tests` 属性仍为 0（实测 `AgentProviderResolverTest.xml`：`tests="0"` 而 `<testcase>` 12 个），属性口径会使本仓库漏计约 **639** 个用例（1144 vs 真实 1783） |
 | `ci/lib-jdk.sh` | JDK 解析库：优先 `$HELLOAI_JAVA_HOME` → `$JAVA_HOME` → 探测 `~/.jdks/*`；**黑名单排除 ms-17.0.19**（本机必然 JVM 崩溃）；并**实测 `java -version` 大版本必须为 17**（防 Gitee 自有主机上 Agent 自带的 JDK 8 被误用） |
-| `ci/check-arch-freeze.sh` | 跨域反向依赖「只降不升」守卫；`--update-baseline` 刷新冻结基线 |
-| `ci/arch-baseline.txt` | 冻结基线（自动生成，勿手改数字） |
+| `ci/check-arch-freeze.sh` | 跨域反向依赖「只降不升」守卫（**2026-09-30 规则集由 3 条扩至 20 条 = CODE_STYLE §6 反向依赖全量 + §7.1 跨域直捅 Mapper**）；`--update-baseline` 刷新冻结基线，`--verbose` 打印明细 |
+| `ci/arch-baseline.txt` | 冻结基线（20 条规则的计数快照，自动生成，勿手改数字） |
 | `ci/host-prepare.sh` | **自有主机侧准备与自检**（Gitee Go 主机组跑 CI 时用）：默认只检测；`--install` 装 JDK17/Maven/Node20；`--swap 2G` 给 4G 内存机器建 swap |
 
 常用命令：
@@ -108,6 +108,20 @@ bash scripts/ci/host-prepare.sh               # 自有主机自检（只读，�
 ```
 
 平台接入：`.workflow/helloai-ci.yml`（Gitee Go，对应本仓库远程）与 `.github/workflows/ci.yml`（GitHub Actions 备份）。**平台配置只是薄封装**——门禁语义全在上表的脚本里，因此本地执行同一脚本即可复现 CI 结论（这正是 §5.2 约定「新增验收口径优先下沉为可跨平台执行的形式」的落地）。
+
+**架构红线门禁的两层分工（2026-09-30 明确）**
+
+| 层 | 脚本 | 语义 | 是否进 CI |
+|---|---|---|---|
+| 冻结层（增量） | `ci/check-arch-freeze.sh`（bash，跨平台） | **§6 全量 + §7.1**，20 条规则「只降不升」；已存量标债（如 `agent->task=68`）允许存在但**禁止增长**；0 计数的规则即回归护栏 | ✅ 门禁 4 |
+| 断言层（存量/命名） | `powershell/verify-dependency-direction.ps1` | 严格断言「应为 0」的红线（2026-10-01 起 `system->task` 已端口反转清零，**亦为严格 0**，不再有 `[DEBT]` 豁免）+ **`@MapperScan` 注册守卫**（漏注册包 → 启动失败） | ❌ 本地/评审辅助 |
+
+```bash
+# 两层都跑（冻结层跨平台可进 CI；断言层需 Windows PowerShell）
+bash scripts/ci/check-arch-freeze.sh
+powershell -File scripts/powershell/verify-dependency-direction.ps1
+```
+
 
 **Gitee Go 的两种执行形态（2026-09-29 补充）**
 

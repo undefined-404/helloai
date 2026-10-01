@@ -14,7 +14,7 @@ import com.helloai.core.agent.runtime.AgentRuntime;
 import com.helloai.core.agent.runtime.ExecutionEnvironment;
 import com.helloai.core.agent.runtime.ExecutionEnvironmentProvider;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.shared.event.ExecutionCommandCreatedEvent;
+import com.helloai.core.agent.event.ExecutionCommandCreatedEvent;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentMcpServerService;
 import com.helloai.core.agent.service.AgentService;

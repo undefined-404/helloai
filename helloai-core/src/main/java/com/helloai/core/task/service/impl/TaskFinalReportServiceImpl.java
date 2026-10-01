@@ -15,7 +15,7 @@ import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.task.port.TaskPlannerPickerPort;
 import com.helloai.core.shared.event.TaskAutoCompletedEvent;
 import com.helloai.core.shared.util.AttachmentContentPolicy;
-import com.helloai.core.shared.util.SubTaskDependencyOrder;
+import com.helloai.core.task.util.SubTaskDependencyOrder;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.shared.util.TextTruncator;
 import com.helloai.core.task.entity.Attachment;
@@ -793,9 +793,9 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
         return count;
     }
 
-    /** 读取 context.lastExecution.output（统一走 SubTaskOutputExtractor，与 TaskDeliverableService 同一事实源）。 */
+    /** 读取 context.lastExecution.output（统一走 SubTaskOutputExtractor，读取 subTask.getContext()，与 TaskDeliverableService 同一事实源；入参可为 null）。 */
     private static String extractExecutionOutput(SubTask subTask) {
-        return SubTaskOutputExtractor.extractExecutionOutput(subTask);
+        return SubTaskOutputExtractor.extractExecutionOutput(subTask == null ? null : subTask.getContext());
     }
 
     /**

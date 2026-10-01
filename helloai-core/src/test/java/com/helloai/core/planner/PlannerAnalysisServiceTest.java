@@ -12,7 +12,6 @@ import com.helloai.core.planner.service.PlannerDecomposeAsyncService;
 import com.helloai.core.planner.service.impl.PlannerAnalysisServiceImpl;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
-import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
@@ -66,9 +65,6 @@ class PlannerAnalysisServiceTest {
     private SubTaskService subTaskService;
 
     @Mock
-    private SubTaskMapper subTaskMapper;
-
-    @Mock
     private PlannerDecomposeAsyncService plannerDecomposeAsyncService;
 
     @Mock
@@ -92,7 +88,7 @@ class PlannerAnalysisServiceTest {
     @BeforeEach
     void setUp() {
         plannerAnalysisService = new PlannerAnalysisServiceImpl(
-                taskService, subTaskService, subTaskMapper, plannerDecomposeAsyncService,
+                taskService, subTaskService, plannerDecomposeAsyncService,
                 taskTimelineService, subTaskDispatchService, taskRunningSpecService);
 
         lenient().when(subTaskService.lambdaQuery()).thenReturn(subTaskQueryChain);
@@ -204,7 +200,7 @@ class PlannerAnalysisServiceTest {
                 .hasMessageContaining("不允许重复拆解");
         verify(taskService, never()).lambdaUpdate();
         // §6.100: 有非 CANCELLED 残留时不得触碰物理删除
-        verify(subTaskMapper, never()).physicalDeleteByTaskId(anyLong());
+        verify(subTaskService, never()).physicalDeleteByTaskId(anyLong());
     }
 
     @Test
@@ -217,7 +213,7 @@ class PlannerAnalysisServiceTest {
         List<SubTask> drafts = plannerAnalysisService.decompose(TASK_ID);
 
         // 物理删除发生在提交异步前，同步守卫正常返回空列表
-        verify(subTaskMapper).physicalDeleteByTaskId(TASK_ID);
+        verify(subTaskService).physicalDeleteByTaskId(TASK_ID);
         assertThat(drafts).isEmpty();
         verify(plannerDecomposeAsyncService).executeDecompose(TASK_ID);
     }
@@ -230,7 +226,7 @@ class PlannerAnalysisServiceTest {
         List<SubTask> drafts = plannerAnalysisService.decompose(TASK_ID);
 
         assertThat(drafts).isEmpty();
-        verify(subTaskMapper, never()).physicalDeleteByTaskId(anyLong());
+        verify(subTaskService, never()).physicalDeleteByTaskId(anyLong());
         verify(plannerDecomposeAsyncService).executeDecompose(TASK_ID);
     }
 

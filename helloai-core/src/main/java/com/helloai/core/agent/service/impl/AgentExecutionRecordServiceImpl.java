@@ -195,4 +195,18 @@ public class AgentExecutionRecordServiceImpl extends ServiceImpl<AgentExecutionR
                 .set(AgentExecutionRecord::getLastAttemptTime, OffsetDateTime.now())
                 .update();
     }
+
+    // ══════════════════════════════════════════════════════════════
+    //  §7.1 helloai-job 去 Mapper 直连收口（同域薄委托，SQL 口径不变）
+    // ══════════════════════════════════════════════════════════════
+
+    @Override
+    public List<AgentExecutionRecord> listByStatusCreatedBefore(ExecutionStatus status, OffsetDateTime before) {
+        return baseMapper.selectByStatusAndCreateTimeBefore(status, before);
+    }
+
+    @Override
+    public List<AgentExecutionRecord> listByStatusStartedBefore(ExecutionStatus status, OffsetDateTime before) {
+        return baseMapper.selectByStatusAndStartTimeBefore(status, before);
+    }
 }

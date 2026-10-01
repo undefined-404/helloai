@@ -29,20 +29,12 @@ import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskRunningSpecService;
 import com.helloai.core.task.service.TaskTimelineService;
 import com.helloai.core.task.spec.ExecutionRecord;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.stereotype.Service;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -100,59 +92,6 @@ public class AgentRuntimeContextAssembler {
     private final ToolRegistry toolRegistry;
     private final AgentEventRecorder agentEventRecorder;
 
-    // #region debug-point redispatch-stuck-blocked（迁移自 SubTaskExecutionServiceImpl，行为等价）
-    private static final ObjectMapper DBG_MAPPER = new ObjectMapper();
-    private static final HttpClient DBG_HTTP = HttpClient.newHttpClient();
-    private static volatile String DBG_URL;
-
-    private static void dbg(String point, Map<String, Object> data) {
-        if (DBG_URL == null) {
-            DBG_URL = loadDbgUrl();
-        }
-        if (DBG_URL == null || DBG_URL.isBlank()) {
-            return;
-        }
-        try {
-            Map<String, Object> evt = new HashMap<>();
-            evt.put("sessionId", "redispatch-stuck-blocked");
-            evt.put("point", point);
-            evt.put("ts", OffsetDateTime.now().toString());
-            evt.put("data", data != null ? data : Map.of());
-            String body = DBG_MAPPER.writeValueAsString(evt);
-            HttpRequest req = HttpRequest.newBuilder(URI.create(DBG_URL))
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(body))
-                    .build();
-            DBG_HTTP.sendAsync(req, HttpResponse.BodyHandlers.discarding());
-        } catch (Exception ignore) {
-            // best-effort：调试上报失败忽略，不影响执行链路
-        }
-    }
-
-    private static String loadDbgUrl() {
-        try {
-            String envUrl = System.getenv("DEBUG_SERVER_URL");
-            if (envUrl != null && !envUrl.isBlank()) {
-                return envUrl;
-            }
-            Path envFile = Path.of(".dbg", "redispatch-stuck-blocked.env");
-            if (Files.exists(envFile)) {
-                for (String line : Files.readAllLines(envFile)) {
-                    if (line.startsWith("DEBUG_SERVER_URL=")) {
-                        String url = line.substring("DEBUG_SERVER_URL=".length()).trim();
-                        if (!url.isBlank()) {
-                            return url;
-                        }
-                    }
-                }
-            }
-        } catch (Exception ignore) {
-            // best-effort：调试配置读取失败即放弃，不影响主链路
-        }
-        return null;
-    }
-    // #endregion debug-point redispatch-stuck-blocked
-
     /**
      * 装配 Runtime 真身执行上下文（消费侧在 startIfNeeded 之后、执行之前调用）。
      *
@@ -173,14 +112,6 @@ public class AgentRuntimeContextAssembler {
         String runId = AgentEventContextResolver.resolveRunId(subTask.getTaskId());
         List<String> requiredSkills = command.getRequiredSkills() != null
                 ? command.getRequiredSkills() : Collections.emptyList();
-
-        dbg("sub_task_execute_enter", safeMap(
-                "subTaskId", subTaskId,
-                "status", subTask.getStatus() != null ? subTask.getStatus().name() : null,
-                "assignedAgent", subTask.getAssignedAgentId(),
-                "agentAccessType", agent.getAccessType() != null ? agent.getAccessType().name() : null,
-                "agentOnlineStatus", agent.getOnlineStatus() != null ? agent.getOnlineStatus().name() : null
-        ));
 
         // 1) Prompt 装配：全局段（Task Running Spec）+ 插件规范段 + 历史表现段 + 依赖段 + 恢复上下文
         String promptSection = taskRunningSpecService.buildExecutorPromptSection(subTask.getTaskId());
@@ -278,13 +209,6 @@ public class AgentRuntimeContextAssembler {
                         "success", result != null && result.getStatus() == com.helloai.common.constant.ExecutionStatus.SUCCESS,
                         "finishReason", result != null ? result.getFinishReason() : null,
                         "tokens", result != null ? result.getTokenUsage() : null));
-        dbg("sub_task_execute_success", safeMap(
-                "subTaskId", subTask.getId(),
-                "agentId", agent.getId(),
-                "success", result != null && result.getStatus() == com.helloai.common.constant.ExecutionStatus.SUCCESS,
-                "executor", "RuntimeTurnExecutor",
-                "finishReason", result != null ? result.getFinishReason() : null
-        ));
     }
 
     /** mock 模式返回 null；真实模式解析 Vault/Agent 级 API Key（requireVault 校验同旧口径）。 */
@@ -698,7 +622,7 @@ public class AgentRuntimeContextAssembler {
             log.warn("读取前置物化附件内容失败，回退原始产出: subTaskId={}, err={}",
                     dep.getId(), e.getMessage());
         }
-        return SubTaskOutputExtractor.extractExecutionOutput(dep);
+        return SubTaskOutputExtractor.extractExecutionOutput(dep.getContext());
     }
 
     /** 启用工具并集（G-004 增量 A）：命令 tools ∪ 命中技能 requiredTools（去重保序，纯函数式）。 */

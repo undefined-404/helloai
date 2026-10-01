@@ -5,7 +5,6 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
@@ -48,7 +47,6 @@ public class ExternalAgentFallbackTask {
 
     private final ExternalAgentFailureTracker failureTracker;
     private final SubTaskDispatchService subTaskDispatchService;
-    private final SubTaskMapper subTaskMapper;
     private final TaskTimelineService taskTimelineService;
     private final AgentFallbackProperties properties;
     private final SubTaskService subTaskService;
@@ -103,7 +101,7 @@ public class ExternalAgentFallbackTask {
      * 避免后续 cycle 又把它当作候选；再逐个重新分发在跑子任务。</p>
      */
     private int processCandidate(Agent agent) {
-        List<SubTask> inFlight = subTaskMapper.selectInFlightByAgent(agent.getId(), PER_AGENT_LIMIT);
+        List<SubTask> inFlight = subTaskService.selectInFlightByAgent(agent.getId(), PER_AGENT_LIMIT);
         if (inFlight.isEmpty()) {
             // 没有在跑任务，仍然清零计数 + 写 last_fallback_at，避免下一轮重复扫描
             failureTracker.markFallbackTriggered(agent.getId());
@@ -139,7 +137,7 @@ public class ExternalAgentFallbackTask {
                         agent.getConsecutiveFailureCount(), properties.getFailureThreshold());
                 subTaskDispatchService.redispatchForFallback(subTask.getId(), agent.getId(), reason);
                 // 累加 sub_task.external_fallback_count（重置状态后再次写）
-                subTaskMapper.incrementExternalFallbackCount(
+                subTaskService.incrementExternalFallbackCount(
                         subTask.getId(), OffsetDateTime.now());
                 log.info("N11 阈值回退重分发: subTaskId={}, failedAgentId={}, newAgentId=API_KEY_LLM",
                         subTask.getId(), agent.getId());
@@ -168,7 +166,7 @@ public class ExternalAgentFallbackTask {
      * 兜底处理"有历史 execution record 但无活跃 record、且处于 PENDING 未指派"的调度链遗留任务。
      *
      * <p>目标：覆盖"离线重派在 reset 后失败留下"的子任务。判定 SQL 见
-     * {@code SubTaskMapper.selectPendingUnassignedWithoutActiveExecutionRecord}。</p>
+     * {@link SubTaskService#listPendingUnassignedWithoutActiveExecutionRecord(int)}。</p>
      *
      * <p>职责划分：
      * <ul>
@@ -188,7 +186,7 @@ public class ExternalAgentFallbackTask {
     private void recoverPendingUnassigned() {
         List<Long> orphanIds;
         try {
-            orphanIds = subTaskMapper.selectPendingUnassignedWithoutActiveExecutionRecord(
+            orphanIds = subTaskService.listPendingUnassignedWithoutActiveExecutionRecord(
                     PENDING_ORPHAN_BATCH_LIMIT);
         } catch (Exception e) {
             log.error("扫描调度链遗留 PENDING 未指派任务失败", e);

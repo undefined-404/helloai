@@ -33,6 +33,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.OffsetDateTime;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -607,5 +608,20 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
         total += conversationArchiveMapper.physicalDeleteByTaskId(taskId);
         total += conversationMessageMapper.physicalDeleteByTaskId(taskId);
         return total;
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  §7.1 helloai-job 去 Mapper 直连收口（同域薄委托，SQL 口径不变）
+    // ══════════════════════════════════════════════════════════════
+
+    @Override
+    public List<Agent> listStaleSince(OffsetDateTime cutoff) {
+        return baseMapper.selectByLastSeenBefore(cutoff);
+    }
+
+    @Override
+    public int markOfflineIfStale(Long agentId, OffsetDateTime cutoff, String newStatus,
+                                  String reason, OffsetDateTime now) {
+        return baseMapper.markOfflineIfStale(agentId, cutoff, newStatus, reason, now);
     }
 }

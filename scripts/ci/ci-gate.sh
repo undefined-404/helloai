@@ -105,18 +105,23 @@ fi
 # 门禁 2：用例数 > 0（杜绝「零用例假绿」）
 # ---------------------------------------------------------------------------
 step "门禁 2 / 5：用例数 > 0 断言（杜绝零用例假绿）"
+# 计数口径：按 surefire XML 内的 <testcase> 元素个数，**不要**读 <testsuite tests="N"> 属性。
+# 原因（2026-10-01 实测）：JUnit5 @Nested 用例会被写进外层类的 XML，但该文件的
+#   tests 属性仍为 0（实测 AgentProviderResolverTest.xml：tests="0" 而 <testcase> 12 个）。
+#   用属性口径汇总，本仓库会漏计约 639 个用例（1144 vs 真实 1783）；按 <testcase> 计
+#   才与「实际执行了多少个测试」一致（含 skipped，skipped 同样产出 <testcase>）。
 TOTAL_TESTS=0
 SUITE_FILES=0
 while IFS= read -r f; do
   [ -n "$f" ] || continue
-  n="$(grep -o 'tests="[0-9]*"' "$f" 2>/dev/null | head -1 | grep -o '[0-9]*')"
+  n="$(grep -o '<testcase' "$f" 2>/dev/null | wc -l | tr -d '[:space:]')"
   [ -n "$n" ] || n=0
   TOTAL_TESTS=$((TOTAL_TESTS + n))
   SUITE_FILES=$((SUITE_FILES + 1))
 done < <(find "$ROOT" -path '*/target/surefire-reports/TEST-*.xml' -type f 2>/dev/null)
 
 printf '  surefire 报告文件：%s 个\n' "$SUITE_FILES"
-printf '  累计用例数：%s\n' "$TOTAL_TESTS"
+printf '  累计用例数（按 <testcase> 计）：%s\n' "$TOTAL_TESTS"
 if [ "$TOTAL_TESTS" -gt 0 ]; then
   ok "用例数 $TOTAL_TESTS > 0"
 else

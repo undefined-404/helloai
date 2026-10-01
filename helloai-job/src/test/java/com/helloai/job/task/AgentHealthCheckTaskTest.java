@@ -1,6 +1,5 @@
 package com.helloai.job.task;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.helloai.common.config.AgentHealthProperties;
@@ -10,8 +9,6 @@ import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.mapper.SubTaskMapper;
-import com.helloai.core.agent.mapper.AgentMapper;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
@@ -28,7 +25,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
-import java.lang.reflect.Field;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
@@ -38,7 +34,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -48,6 +43,9 @@ import static org.mockito.Mockito.when;
 
 /**
  * {@link AgentHealthCheckTask} 单元测试（§4.1 二次选人加固）。
+ *
+ * <p>§7.1 去 Mapper 直连后：巡检读写一律经 {@link AgentService} / {@link SubTaskService}
+ * 出口，测试相应 mock Service（原 Mapper mock 已移除）。</p>
  *
  * <p>覆盖：</p>
  * <ul>
@@ -65,10 +63,6 @@ import static org.mockito.Mockito.when;
 @DisplayName("AgentHealthCheckTask")
 class AgentHealthCheckTaskTest {
 
-    @Mock
-    private AgentMapper agentMapper;
-    @Mock
-    private SubTaskMapper subTaskMapper;
     @Mock
     private TaskTimelineService taskTimelineService;
     @Mock
@@ -94,7 +88,7 @@ class AgentHealthCheckTaskTest {
         healthProperties.setInFlightGraceMinutes(30);
 
         task = new AgentHealthCheckTask(
-                agentMapper, subTaskMapper, taskTimelineService,
+                taskTimelineService,
                 agentService, subTaskDispatchService, redis,
                 failureTracker, healthProperties, agentDutyLeaseService,
                 subTaskService);
@@ -108,7 +102,6 @@ class AgentHealthCheckTaskTest {
      * 通过反射调用 private 方法 reassignStaleTasks(Agent)，覆盖二次选人加固逻辑。
      * §4.1：reassignStaleTasks 已重构为按 Agent 维度调用，无需提前查找字段。
      */
-    @SuppressWarnings("unchecked")
     private int invokeReassignStaleTasks(Agent staleAgent) throws Exception {
         java.lang.reflect.Method m = AgentHealthCheckTask.class.getDeclaredMethod(
                 "reassignStaleTasks", Agent.class);
@@ -135,18 +128,18 @@ class AgentHealthCheckTaskTest {
 
             task.checkHealth();
 
-            verify(agentMapper, never()).selectByLastSeenBefore(any());
+            verify(agentService, never()).listStaleSince(any());
         }
 
         @Test
         @DisplayName("无超时 Agent → 直接返回")
         void shouldReturnWhenNoStaleAgent() {
-            when(agentMapper.selectByLastSeenBefore(any(OffsetDateTime.class))).thenReturn(List.of());
+            when(agentService.listStaleSince(any(OffsetDateTime.class))).thenReturn(List.of());
 
             task.checkHealth();
 
-            verify(agentMapper, times(1)).selectByLastSeenBefore(any(OffsetDateTime.class));
-            verify(subTaskMapper, never()).selectList(any(LambdaQueryWrapper.class));
+            verify(agentService, times(1)).listStaleSince(any(OffsetDateTime.class));
+            verify(subTaskService, never()).listInFlightAssignedOrInProgress(anyLong());
         }
     }
 
@@ -159,7 +152,7 @@ class AgentHealthCheckTaskTest {
         void shouldOnlyUseFallbackWhenPrimarySucceeds() throws Exception {
             Agent stale = cliAgent(101L, AgentRole.EXECUTOR);
             SubTask t1 = assignedSubTask(11L, 101L);
-            when(subTaskMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(t1));
+            when(subTaskService.listInFlightAssignedOrInProgress(anyLong())).thenReturn(List.of(t1));
 
             invokeReassignStaleTasks(stale);
 
@@ -174,7 +167,7 @@ class AgentHealthCheckTaskTest {
         void shouldUseStaleRoleWhenPrimaryFails() throws Exception {
             Agent stale = cliAgent(101L, AgentRole.EXECUTOR);
             SubTask t1 = assignedSubTask(11L, 101L);
-            when(subTaskMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(t1));
+            when(subTaskService.listInFlightAssignedOrInProgress(anyLong())).thenReturn(List.of(t1));
             doThrow(new RuntimeException("primary failure"))
                     .when(subTaskDispatchService).redispatchOfflineSubTask(eq(11L), eq(101L));
 
@@ -194,7 +187,7 @@ class AgentHealthCheckTaskTest {
         void shouldLogBothExceptionsWhenAllFail() throws Exception {
             Agent stale = cliAgent(101L, AgentRole.REVIEWER);
             SubTask t1 = assignedSubTask(11L, 101L);
-            when(subTaskMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(t1));
+            when(subTaskService.listInFlightAssignedOrInProgress(anyLong())).thenReturn(List.of(t1));
             doThrow(new RuntimeException("primary failure"))
                     .when(subTaskDispatchService).redispatchOfflineSubTask(eq(11L), eq(101L));
             doThrow(new RuntimeException("secondary failure"))
@@ -214,7 +207,7 @@ class AgentHealthCheckTaskTest {
         void shouldFallbackToExecutorRoleWhenStaleRoleNull() throws Exception {
             Agent stale = cliAgent(101L, null);
             SubTask t1 = assignedSubTask(11L, 101L);
-            when(subTaskMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(t1));
+            when(subTaskService.listInFlightAssignedOrInProgress(anyLong())).thenReturn(List.of(t1));
             doThrow(new RuntimeException("primary failure"))
                     .when(subTaskDispatchService).redispatchOfflineSubTask(eq(11L), eq(101L));
 
@@ -228,7 +221,7 @@ class AgentHealthCheckTaskTest {
         @DisplayName("无待重分配任务 → 不调用任何 dispatch 入口")
         void shouldDoNothingWhenNoTasks() throws Exception {
             Agent stale = cliAgent(101L, AgentRole.EXECUTOR);
-            when(subTaskMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+            when(subTaskService.listInFlightAssignedOrInProgress(anyLong())).thenReturn(List.of());
 
             invokeReassignStaleTasks(stale);
 
@@ -259,14 +252,14 @@ class AgentHealthCheckTaskTest {
         void shouldNotProcessWhenCasFails() {
             Agent stale = cliAgent(101L, AgentRole.EXECUTOR);
             stale.setLastSeenTime(OffsetDateTime.now().minusMinutes(10));
-            when(agentMapper.selectByLastSeenBefore(any(OffsetDateTime.class))).thenReturn(List.of(stale));
-            when(agentMapper.markOfflineIfStale(any(), any(), anyString(), anyString(), any()))
+            when(agentService.listStaleSince(any(OffsetDateTime.class))).thenReturn(List.of(stale));
+            when(agentService.markOfflineIfStale(any(), any(), anyString(), anyString(), any()))
                     .thenReturn(0);  // CAS 失败
 
             task.checkHealth();
 
-            verify(agentMapper, times(1)).markOfflineIfStale(any(), any(), anyString(), anyString(), any());
-            // CAS 失败 → 不得触达任何重派入口（selectList 会被 PAUSED 回收查询用到，故不断言它）
+            verify(agentService, times(1)).markOfflineIfStale(any(), any(), anyString(), anyString(), any());
+            // CAS 失败 → 不得触达任何重派入口（PAUSED 回收查询会被用到，故不断言它）
             verify(subTaskDispatchService, never()).redispatchOfflineSubTask(anyLong(), anyLong());
             verify(subTaskDispatchService, never()).dispatchPendingSubTaskCompensating(anyLong(), any());
             verify(taskTimelineService, never()).recordEvent(
@@ -279,10 +272,10 @@ class AgentHealthCheckTaskTest {
         void shouldProcessWhenCasSucceeds() {
             Agent stale = cliAgent(101L, AgentRole.EXECUTOR);
             stale.setLastSeenTime(OffsetDateTime.now().minusMinutes(10));
-            when(agentMapper.selectByLastSeenBefore(any(OffsetDateTime.class))).thenReturn(List.of(stale));
-            when(agentMapper.markOfflineIfStale(any(), any(), anyString(), anyString(), any()))
+            when(agentService.listStaleSince(any(OffsetDateTime.class))).thenReturn(List.of(stale));
+            when(agentService.markOfflineIfStale(any(), any(), anyString(), anyString(), any()))
                     .thenReturn(1);  // CAS 成功
-            when(subTaskMapper.selectList(any(LambdaQueryWrapper.class)))
+            when(subTaskService.listInFlightAssignedOrInProgress(anyLong()))
                     .thenReturn(List.of(assignedSubTask(11L, 101L)));
 
             task.checkHealth();
@@ -297,10 +290,10 @@ class AgentHealthCheckTaskTest {
         void shouldNotRecordFailureWhenNoInFlightTasks() {
             Agent stale = cliAgent(101L, AgentRole.EXECUTOR);
             stale.setLastSeenTime(OffsetDateTime.now().minusMinutes(10));
-            when(agentMapper.selectByLastSeenBefore(any(OffsetDateTime.class))).thenReturn(List.of(stale));
-            when(agentMapper.markOfflineIfStale(any(), any(), anyString(), anyString(), any()))
+            when(agentService.listStaleSince(any(OffsetDateTime.class))).thenReturn(List.of(stale));
+            when(agentService.markOfflineIfStale(any(), any(), anyString(), anyString(), any()))
                     .thenReturn(1);  // CAS 成功
-            when(subTaskMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of());
+            when(subTaskService.listInFlightAssignedOrInProgress(anyLong())).thenReturn(List.of());
 
             task.checkHealth();
 
@@ -316,12 +309,12 @@ class AgentHealthCheckTaskTest {
         void shouldSkipWhenRedisTtlAlive() {
             Agent stale = cliAgent(101L, AgentRole.EXECUTOR);
             stale.setLastSeenTime(OffsetDateTime.now().minusMinutes(10));
-            when(agentMapper.selectByLastSeenBefore(any(OffsetDateTime.class))).thenReturn(List.of(stale));
+            when(agentService.listStaleSince(any(OffsetDateTime.class))).thenReturn(List.of(stale));
             when(redis.hasKey(anyString())).thenReturn(true);  // Redis TTL 仍在
 
             task.checkHealth();
 
-            verify(agentMapper, never()).markOfflineIfStale(any(), any(), anyString(), anyString(), any());
+            verify(agentService, never()).markOfflineIfStale(any(), any(), anyString(), anyString(), any());
         }
     }
 
@@ -333,13 +326,13 @@ class AgentHealthCheckTaskTest {
         @DisplayName("持 ACTIVE 值班租约 → 跳过离线处置（不 CAS / 不重派 / 不计失败）")
         void shouldSkipWhenActiveDutyLease() {
             Agent stale = cliAgent(101L, AgentRole.EXECUTOR);
-            when(agentMapper.selectByLastSeenBefore(any(OffsetDateTime.class))).thenReturn(List.of(stale));
+            when(agentService.listStaleSince(any(OffsetDateTime.class))).thenReturn(List.of(stale));
             when(agentDutyLeaseService.isOnDuty(101L)).thenReturn(true);
 
             task.checkHealth();
 
-            verify(agentMapper, never()).markOfflineIfStale(any(), any(), anyString(), anyString(), any());
-            verify(subTaskMapper, never()).selectList(any(LambdaQueryWrapper.class));
+            verify(agentService, never()).markOfflineIfStale(any(), any(), anyString(), anyString(), any());
+            verify(subTaskService, never()).listInFlightAssignedOrInProgress(anyLong());
             verify(failureTracker, never()).recordFailure(anyLong());
         }
 
@@ -347,14 +340,14 @@ class AgentHealthCheckTaskTest {
         @DisplayName("持在飞子任务 → CAS 使用宽限 cutoff（30 分钟），而非 5 分钟")
         void shouldUseGraceCutoffWhenInFlight() {
             Agent stale = cliAgent(101L, AgentRole.EXECUTOR);
-            when(agentMapper.selectByLastSeenBefore(any(OffsetDateTime.class))).thenReturn(List.of(stale));
-            when(subTaskMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(1L);
-            when(agentMapper.markOfflineIfStale(any(), any(), anyString(), anyString(), any())).thenReturn(0);
+            when(agentService.listStaleSince(any(OffsetDateTime.class))).thenReturn(List.of(stale));
+            when(subTaskService.existsInFlightAssignedOrInProgress(anyLong())).thenReturn(true);
+            when(agentService.markOfflineIfStale(any(), any(), anyString(), anyString(), any())).thenReturn(0);
 
             task.checkHealth();
 
             ArgumentCaptor<OffsetDateTime> cutoffCaptor = ArgumentCaptor.forClass(OffsetDateTime.class);
-            verify(agentMapper, times(1))
+            verify(agentService, times(1))
                     .markOfflineIfStale(eq(101L), cutoffCaptor.capture(), anyString(), anyString(), any());
             OffsetDateTime now = OffsetDateTime.now();
             assertThat(cutoffCaptor.getValue())
@@ -366,14 +359,14 @@ class AgentHealthCheckTaskTest {
         @DisplayName("无在飞子任务 → CAS 使用常规 cutoff（5 分钟）")
         void shouldUseNormalCutoffWhenNoInFlight() {
             Agent stale = cliAgent(101L, AgentRole.EXECUTOR);
-            when(agentMapper.selectByLastSeenBefore(any(OffsetDateTime.class))).thenReturn(List.of(stale));
-            when(subTaskMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(0L);
-            when(agentMapper.markOfflineIfStale(any(), any(), anyString(), anyString(), any())).thenReturn(0);
+            when(agentService.listStaleSince(any(OffsetDateTime.class))).thenReturn(List.of(stale));
+            when(subTaskService.existsInFlightAssignedOrInProgress(anyLong())).thenReturn(false);
+            when(agentService.markOfflineIfStale(any(), any(), anyString(), anyString(), any())).thenReturn(0);
 
             task.checkHealth();
 
             ArgumentCaptor<OffsetDateTime> cutoffCaptor = ArgumentCaptor.forClass(OffsetDateTime.class);
-            verify(agentMapper, times(1))
+            verify(agentService, times(1))
                     .markOfflineIfStale(eq(101L), cutoffCaptor.capture(), anyString(), anyString(), any());
             OffsetDateTime now = OffsetDateTime.now();
             assertThat(cutoffCaptor.getValue())
@@ -385,28 +378,28 @@ class AgentHealthCheckTaskTest {
         @DisplayName("租约查询异常 → 按无租约处理，继续走离线流程（fail-close）")
         void shouldTreatLeaseQueryFailureAsNoLease() {
             Agent stale = cliAgent(101L, AgentRole.EXECUTOR);
-            when(agentMapper.selectByLastSeenBefore(any(OffsetDateTime.class))).thenReturn(List.of(stale));
+            when(agentService.listStaleSince(any(OffsetDateTime.class))).thenReturn(List.of(stale));
             when(agentDutyLeaseService.isOnDuty(101L)).thenThrow(new RuntimeException("lease db down"));
-            when(subTaskMapper.selectCount(any(LambdaQueryWrapper.class))).thenReturn(0L);
-            when(agentMapper.markOfflineIfStale(any(), any(), anyString(), anyString(), any())).thenReturn(0);
+            when(subTaskService.existsInFlightAssignedOrInProgress(anyLong())).thenReturn(false);
+            when(agentService.markOfflineIfStale(any(), any(), anyString(), anyString(), any())).thenReturn(0);
 
             task.checkHealth();
 
-            verify(agentMapper, times(1)).markOfflineIfStale(any(), any(), anyString(), anyString(), any());
+            verify(agentService, times(1)).markOfflineIfStale(any(), any(), anyString(), anyString(), any());
         }
 
         @Test
         @DisplayName("在飞子任务查询异常 → 按无在飞处理，用常规 cutoff（不放宽）")
         void shouldTreatInFlightQueryFailureAsNoInFlight() {
             Agent stale = cliAgent(101L, AgentRole.EXECUTOR);
-            when(agentMapper.selectByLastSeenBefore(any(OffsetDateTime.class))).thenReturn(List.of(stale));
-            when(subTaskMapper.selectCount(any(LambdaQueryWrapper.class))).thenThrow(new RuntimeException("db down"));
-            when(agentMapper.markOfflineIfStale(any(), any(), anyString(), anyString(), any())).thenReturn(0);
+            when(agentService.listStaleSince(any(OffsetDateTime.class))).thenReturn(List.of(stale));
+            when(subTaskService.existsInFlightAssignedOrInProgress(anyLong())).thenThrow(new RuntimeException("db down"));
+            when(agentService.markOfflineIfStale(any(), any(), anyString(), anyString(), any())).thenReturn(0);
 
             task.checkHealth();
 
             ArgumentCaptor<OffsetDateTime> cutoffCaptor = ArgumentCaptor.forClass(OffsetDateTime.class);
-            verify(agentMapper, times(1))
+            verify(agentService, times(1))
                     .markOfflineIfStale(eq(101L), cutoffCaptor.capture(), anyString(), anyString(), any());
             OffsetDateTime now = OffsetDateTime.now();
             assertThat(cutoffCaptor.getValue())
@@ -423,7 +416,7 @@ class AgentHealthCheckTaskTest {
         @DisplayName("IN_PROGRESS 子任务 → 置 PAUSED 保留归属，不调用任何重派入口")
         void shouldPauseInProgressTaskInsteadOfReassign() throws Exception {
             Agent stale = cliAgent(101L, AgentRole.EXECUTOR);
-            when(subTaskMapper.selectList(any(LambdaQueryWrapper.class)))
+            when(subTaskService.listInFlightAssignedOrInProgress(anyLong()))
                     .thenReturn(List.of(subTask(11L, 101L, SubTaskStatus.IN_PROGRESS)));
 
             invokeReassignStaleTasks(stale);
@@ -437,7 +430,7 @@ class AgentHealthCheckTaskTest {
         @DisplayName("IN_PROGRESS 与 ASSIGNED 混合 → 前者 PAUSED、后者重派")
         void shouldSplitByStatus() throws Exception {
             Agent stale = cliAgent(101L, AgentRole.EXECUTOR);
-            when(subTaskMapper.selectList(any(LambdaQueryWrapper.class)))
+            when(subTaskService.listInFlightAssignedOrInProgress(anyLong()))
                     .thenReturn(List.of(subTask(11L, 101L, SubTaskStatus.IN_PROGRESS),
                             subTask(12L, 101L, SubTaskStatus.ASSIGNED)));
 
@@ -451,7 +444,7 @@ class AgentHealthCheckTaskTest {
         @DisplayName("置 PAUSED 失败 → 只记 failed，不抛异常也不误重派")
         void shouldToleratePauseFailure() throws Exception {
             Agent stale = cliAgent(101L, AgentRole.EXECUTOR);
-            when(subTaskMapper.selectList(any(LambdaQueryWrapper.class)))
+            when(subTaskService.listInFlightAssignedOrInProgress(anyLong()))
                     .thenReturn(List.of(subTask(11L, 101L, SubTaskStatus.IN_PROGRESS)));
             doThrow(new RuntimeException("state changed"))
                     .when(subTaskService).pause(11L);
@@ -467,9 +460,9 @@ class AgentHealthCheckTaskTest {
             Agent stale = cliAgent(101L, AgentRole.EXECUTOR);
             SubTask paused = subTask(11L, 101L, SubTaskStatus.PAUSED);
             paused.setUpdateTime(OffsetDateTime.now().minusMinutes(45));
-            when(agentMapper.selectByLastSeenBefore(any(OffsetDateTime.class))).thenReturn(List.of(stale));
-            when(subTaskMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(List.of(paused));
-            when(agentMapper.markOfflineIfStale(any(), any(), anyString(), anyString(), any())).thenReturn(0);
+            when(agentService.listStaleSince(any(OffsetDateTime.class))).thenReturn(List.of(stale));
+            when(subTaskService.listPausedBefore(anyLong(), any())).thenReturn(List.of(paused));
+            when(agentService.markOfflineIfStale(any(), any(), anyString(), anyString(), any())).thenReturn(0);
 
             task.checkHealth();
 
@@ -477,8 +470,8 @@ class AgentHealthCheckTaskTest {
         }
 
         // 说明：「PAUSED 未超宽限不回收」无法在本层用 Mockito 断言 —— 时间窗口条件
-        // （update_time <= now - graceMinutes）由 LambdaQueryWrapper 下推给 DB，
-        // mock 的 mapper 会忽略 wrapper 条件、原样返回列表，构造不出「被 SQL 过滤掉」的场景。
+        // （update_time <= now - graceMinutes）由 listPausedBefore 的 wrapper 下推给 DB，
+        // mock 的 Service 会忽略 wrapper 条件、原样返回列表，构造不出「被 SQL 过滤掉」的场景。
         // 该条件由 SQL 承担，属集成/E2E 覆盖范围（本机无 PG，记 NOT RUN）。
     }
 
