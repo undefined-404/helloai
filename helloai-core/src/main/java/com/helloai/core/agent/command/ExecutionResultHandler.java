@@ -265,18 +265,18 @@ public class ExecutionResultHandler {
             // 方案2 产出物化：仿 failureTracker 的 afterCommit 范式挂主事务提交后执行——
             // 物化内部会调 attachmentService.register（独立事务）与本地磁盘 IO，
             // 留在主事务内既拉长事务又有锁风险；best-effort，失败不影响 REVIEW 推进
-            final SubTask materializeTarget = subTask;
+            final Long materializeSubTaskId = report.getSubTaskId();
             final Long materializeAgentId = report.getAgentId();
             final ParsedOutput materializeParsed = parsedOutput;
             if (TransactionSynchronizationManager.isSynchronizationActive()) {
                 TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                     @Override
                     public void afterCommit() {
-                        executionArtifactService.materialize(materializeTarget, materializeAgentId, materializeParsed);
+                        executionArtifactService.materialize(materializeSubTaskId, materializeAgentId, materializeParsed);
                     }
                 });
             } else {
-                executionArtifactService.materialize(materializeTarget, materializeAgentId, materializeParsed);
+                executionArtifactService.materialize(materializeSubTaskId, materializeAgentId, materializeParsed);
             }
 
             // 反馈回路第 1 层：executorDoneIssues LLM 语义对比回填（异步 best-effort）。

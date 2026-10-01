@@ -111,7 +111,7 @@ class ExecutionCommandPollerTest {
         void shouldProcessSingleOrphan() {
             AgentExecutionRecord orphan = orphanRecord(101L, 22L, 11L, AgentAccessType.API_KEY_LLM, "assigned");
             when(agentExecutionRecordService.listOrphanPending(60, 20)).thenReturn(List.of(orphan));
-            SubTaskSnapshot subTask = new SubTaskSnapshot(22L, null, 33L, null, null);
+            SubTaskSnapshot subTask = new SubTaskSnapshot(22L, null, 33L, null, null, null);
             when(subTaskQueryPort.findById(22L)).thenReturn(subTask);
 
             poller.poll();
@@ -296,7 +296,7 @@ class ExecutionCommandPollerTest {
             when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.POLLER);
             AgentExecutionRecord orphan = orphanRecord(402L, 22L, 11L, AgentAccessType.API_KEY_LLM, "assigned");
             when(agentExecutionRecordService.listOrphanPending(60, 20)).thenReturn(List.of(orphan));
-            SubTaskSnapshot subTask = new SubTaskSnapshot(22L, null, 33L, null, null);
+            SubTaskSnapshot subTask = new SubTaskSnapshot(22L, null, 33L, null, null, null);
             when(subTaskQueryPort.findById(22L)).thenReturn(subTask);
 
             poller.poll();
@@ -328,7 +328,7 @@ class ExecutionCommandPollerTest {
             when(executionProperties.getConsumerMode()).thenReturn(AgentExecutionProperties.ConsumerMode.POLLER);
             AgentExecutionRecord orphan = orphanRecord(404L, 22L, 11L, AgentAccessType.API_KEY_LLM, "assigned");
             when(agentExecutionRecordService.listOrphanPending(60, 20)).thenReturn(List.of(orphan));
-            SubTaskSnapshot subTask = new SubTaskSnapshot(22L, null, 33L, null, null);
+            SubTaskSnapshot subTask = new SubTaskSnapshot(22L, null, 33L, null, null, null);
             when(subTaskQueryPort.findById(22L)).thenReturn(subTask);
 
             poller.poll();

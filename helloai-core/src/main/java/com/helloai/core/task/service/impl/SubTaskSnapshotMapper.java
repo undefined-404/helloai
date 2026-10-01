@@ -29,7 +29,7 @@ final class SubTaskSnapshotMapper {
             return null;
         }
         return new SubTaskSnapshot(subTask.getId(), subTask.getStatus(), subTask.getTaskId(),
-                subTask.getAssignedAgentId(), subTask.getContext());
+                subTask.getAssignedAgentId(), subTask.getContext(), subTask.getTitle());
     }
 
     /**

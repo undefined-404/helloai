@@ -54,6 +54,7 @@ class SubTaskQueryPortAdapterTest {
         subTask.setStatus(SubTaskStatus.ASSIGNED);
         subTask.setTaskId(8L);
         subTask.setAssignedAgentId(9L);
+        subTask.setTitle("调度分析");
         when(subTaskService.getById(7L)).thenReturn(subTask);
 
         SubTaskSnapshot snapshot = adapter.findById(7L);
@@ -63,10 +64,11 @@ class SubTaskQueryPortAdapterTest {
         assertThat(snapshot.status()).isEqualTo(SubTaskStatus.ASSIGNED);
         assertThat(snapshot.taskId()).isEqualTo(8L);
         assertThat(snapshot.assignedAgentId()).isEqualTo(9L);
+        assertThat(snapshot.title()).isEqualTo("调度分析");
     }
 
     @Test
-    @DisplayName("实体 → 快照：id/status/taskId/assignedAgentId/context 全量透传")
+    @DisplayName("实体 → 快照：id/status/taskId/assignedAgentId/context/title 全量透传")
     void shouldMapEntityToSnapshot() {
         SubTask subTask = new SubTask();
         subTask.setId(11L);
@@ -74,6 +76,7 @@ class SubTaskQueryPortAdapterTest {
         subTask.setTaskId(22L);
         subTask.setAssignedAgentId(33L);
         subTask.setContext(Map.of("k", "v"));
+        subTask.setTitle("需求分析");
         when(subTaskService.listRecentlyChanged(any(OffsetDateTime.class), anyInt()))
                 .thenReturn(List.of(subTask));
 
@@ -86,6 +89,7 @@ class SubTaskQueryPortAdapterTest {
         assertThat(snapshot.taskId()).isEqualTo(22L);
         assertThat(snapshot.assignedAgentId()).isEqualTo(33L);
         assertThat(snapshot.context()).containsEntry("k", "v");
+        assertThat(snapshot.title()).isEqualTo("需求分析");
     }
 
     @Test
