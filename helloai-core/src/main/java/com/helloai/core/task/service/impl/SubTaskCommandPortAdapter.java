@@ -41,4 +41,41 @@ public class SubTaskCommandPortAdapter implements SubTaskCommandPort {
         // SubTaskService.unlinkByAssignedAgent 自身按 REQUIRED 传播）。
         subTaskService.unlinkByAssignedAgent(agentId);
     }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p><b>原子命令、零判定</b>：直接委派 {@code SubTaskService#start}（内部由
+     * {@code SubTaskStateMachine} 校验合法性 + {@code @Version} 乐观锁兜并发）。
+     * 调用方自带的「状态白名单 + 对外 reason 码」属其协议适配职责，不在此复刻。</p>
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void start(Long subTaskId) {
+        subTaskService.start(subTaskId);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>互斥条件（{@code WHERE status='PENDING' AND (assigned_agent IS NULL OR = agentId)}）
+     * 是状态机的一部分、写在 SQL 条件更新里，消费方无从复现，故整体委派。</p>
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean claimAtomic(Long subTaskId, Long agentId) {
+        return subTaskService.claimAtomic(subTaskId, agentId);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>阻塞写入与 PLANNER 通知均在 {@code SubTaskService#block} 内整体完成，
+     * 本适配器不加任何判定。调用方（MCP）已持有事务，此处按 REQUIRED 加入。</p>
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void block(Long subTaskId, String reason, Long agentId) {
+        subTaskService.block(subTaskId, reason, agentId);
+    }
 }

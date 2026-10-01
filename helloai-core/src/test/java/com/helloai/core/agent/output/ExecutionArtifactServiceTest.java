@@ -67,7 +67,9 @@ class ExecutionArtifactServiceTest {
 
     private void stubSubTaskFound() {
         when(subTaskQueryPort.findById(SUB_TASK_ID)).thenReturn(
-                new SubTaskSnapshot(SUB_TASK_ID, null, TASK_ID, OWNER_AGENT_ID, null, "调度分析"));
+                SubTaskSnapshot.builder()
+                        .id(SUB_TASK_ID).taskId(TASK_ID).assignedAgentId(OWNER_AGENT_ID)
+                        .title("调度分析").build());
     }
 
     @Test

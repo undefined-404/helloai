@@ -10,10 +10,12 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * {@code SubTaskCommandPortAdapter} 单测。
@@ -100,5 +102,39 @@ class SubTaskCommandPortAdapterTest {
         adapter.unlinkByAssignedAgent(9L);
 
         verify(subTaskService).unlinkByAssignedAgent(9L);
+    }
+
+    @Test
+    @DisplayName("start: 原子命令零判定，直接委派 SubTaskService.start（合法性由状态机 + 乐观锁兜底）")
+    void shouldDelegateStartWithoutJudgement() {
+        adapter.start(22L);
+
+        verify(subTaskService).start(22L);
+        // 零判定：不读库、不做状态白名单裁决（判定/协议码留在消费方协议适配层）
+        verify(subTaskService, never()).getById(any());
+    }
+
+    @Test
+    @DisplayName("claimAtomic: 委派条件更新并原样回传结果（true）")
+    void shouldDelegateClaimAtomicTrue() {
+        when(subTaskService.claimAtomic(22L, 7L)).thenReturn(true);
+
+        assertThat(adapter.claimAtomic(22L, 7L)).isTrue();
+    }
+
+    @Test
+    @DisplayName("claimAtomic: 委派条件更新并原样回传结果（false = 被抢走或状态已变）")
+    void shouldDelegateClaimAtomicFalse() {
+        when(subTaskService.claimAtomic(22L, 7L)).thenReturn(false);
+
+        assertThat(adapter.claimAtomic(22L, 7L)).isFalse();
+    }
+
+    @Test
+    @DisplayName("block: 委派 SubTaskService.block（阻塞写入与 PLANNER 通知整体在提供方）")
+    void shouldDelegateBlock() {
+        adapter.block(22L, "缺少上游产出", 7L);
+
+        verify(subTaskService).block(22L, "缺少上游产出", 7L);
     }
 }

@@ -1,6 +1,6 @@
 package com.helloai.core.agent.service;
 
-import com.helloai.core.task.entity.Uncertainty;
+import com.helloai.core.agent.port.UncertaintySnapshot;
 import lombok.Data;
 
 import java.util.List;
@@ -152,12 +152,12 @@ public interface McpToolService {
      * <p>字段与子任务实体一一对应，不做事后截断：验收标准与执行边界被截断正是
      * 「执行者看不到验收标准」缺口的成因，故全文下发（内容长度由拆解侧 LLM 产物约束）。</p>
      *
-     * <p>§6.1 豁免记录（2026-09-11，code review 显式豁免）：{@code uncertainties} 字段
-     * 直接使用 task 域 {@link Uncertainty} 值对象，使本接口新增 1 处 agent → task entity
-     * 类型引用（此前本文件无 task 域 import）。豁免理由：该字段为只读投影，kind 常量
-     * （ASSUMPTION / UNCONFIRMED）语义必须与 task 域执行注入、审查核验链保持单源，
-     * 另建同形值对象将引入双源漂移；本引用不注入 task 域 Service、不产生任何写操作。
-     * 回收方向：随 §6.1 AgentRuntime 改造（Port 反转 / 职责上移）统一处理。</p>
+     * <p>§6.1 豁免<b>已回收</b>（2026-10-01 W7）：{@code uncertainties} 原直接使用 task 域
+     * {@code Uncertainty} 实体（2026-09-11 code review 显式豁免，理由为 kind 常量须与
+     * 拆解写入 / 执行注入 / 审查核验链单源）。现改用 {@link UncertaintySnapshot}
+     * ——只做<b>原样透传投影</b>（kind + note），**不在 agent 侧定义任何 kind 常量、
+     * 不做归一化或校验**，故单源语义仍完整保留，同时摘除 {@code agent → task} 实体依赖。
+     * 豁免记录中指明的回收方向「随 §6.1 AgentRuntime 改造统一处理」即本轮。</p>
      */
     @Data
     class SubTaskDetail {
@@ -173,7 +173,7 @@ public interface McpToolService {
         /** 执行约束（不许改 / 不许越界事项；COARSE 档必填，其余档位可空）。 */
         private String constraints;
         /** 不确定性申报（ASSUMPTION 可自行验证 / 推翻；UNCONFIRMED 须先验证，验证不了走 reportBlocked）。 */
-        private List<Uncertainty> uncertainties;
+        private List<UncertaintySnapshot> uncertainties;
         /** 子任务级 ∪ 任务级技能标签（合并清单，与执行侧注入 / 审查侧核验同源）。 */
         private List<String> requiredSkills;
         /** 优先级：HIGH / MEDIUM / LOW。 */

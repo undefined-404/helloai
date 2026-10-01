@@ -1,6 +1,7 @@
 package com.helloai.core.agent.port;
 
 import java.time.OffsetDateTime;
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -64,4 +65,42 @@ public interface SubTaskQueryPort {
      * @return 最近变更子任务快照列表（按更新时间倒序，绝不返回 null）
      */
     List<SubTaskSnapshot> listRecentlyChanged(OffsetDateTime since, int limit);
+
+    /**
+     * 按 ID 集合批量读取子任务快照（W7 新增，供前置产出装载）。
+     *
+     * <p>语义与 {@code SubTaskService#listByIds(Collection)} 一致：入参为空/为 {@code null}
+     * 时返回空列表（绝不返回 {@code null}）；命中不到的 ID 直接缺席（不补空位），
+     * 由消费方按原 ID 顺序自行对号。</p>
+     *
+     * @param subTaskIds 子任务 ID 集合
+     * @return 命中的子任务快照列表（绝不返回 {@code null}）
+     */
+    List<SubTaskSnapshot> listByIds(Collection<Long> subTaskIds);
+
+    /**
+     * 判断子任务的前置是否<b>全部就绪</b>（前置均 DONE；无前置恒为就绪）。
+     *
+     * <p><b>为什么形参是 ID 而不是快照</b>：该判定除依赖 {@code dependsOn} 外还要查一次
+     * 前置状态计数（{@code count(status=DONE)}），属**提供方持有的口径**
+     * （{@code SubTaskService#isReady(SubTask)} 同时被内部分发链复用）。若把它拆成
+     * 「消费方拿快照里的 dependsOn → 自行统计」会把就绪口径复制进消费方，故保持
+     * **整体不透明**：消费方只问「这个子任务是否就绪」，提供方内部自行取数判定。
+     * 代价是提供方多一次主键读（认领路径低频，可接受）。</p>
+     *
+     * @param subTaskId 子任务 ID
+     * @return 前置全部 DONE（或无前置）返回 {@code true}；子任务不存在返回 {@code false}
+     */
+    boolean isReady(Long subTaskId);
+
+    /**
+     * 取「子任务级 ∪ 任务级」技能标签合并清单（去重保序，子任务级在前）。
+     *
+     * <p>与 {@link #isReady(Long)} 同理：合并需读任务级技能（另一张表/另一个查询），
+     * 属提供方口径，故整体不透明暴露，消费方不做任何合并。</p>
+     *
+     * @param subTaskId 子任务 ID
+     * @return 合并后的技能清单（绝不返回 {@code null}）
+     */
+    List<String> mergeSkills(Long subTaskId);
 }

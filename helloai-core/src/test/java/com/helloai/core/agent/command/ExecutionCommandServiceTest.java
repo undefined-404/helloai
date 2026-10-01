@@ -91,7 +91,7 @@ class ExecutionCommandServiceTest {
     @Test
     @DisplayName("为 ASSIGNED 子任务创建 execution command 并发布事件")
     void shouldCreateExecutionCommandAndPublishEvent() {
-        SubTaskSnapshot subTask = new SubTaskSnapshot(22L, null, 33L, 11L, null, null);
+        SubTaskSnapshot subTask = SubTaskSnapshot.builder().id(22L).taskId(33L).assignedAgentId(11L).build();
 
         Agent agent = new Agent();
         agent.setId(11L);
@@ -142,7 +142,7 @@ class ExecutionCommandServiceTest {
     @Test
     @DisplayName("dispatch-mode=NONE 时创建 execution command 后不发布本地事件")
     void shouldNotPublishEventInPollerMode() {
-        SubTaskSnapshot subTask = new SubTaskSnapshot(22L, null, 33L, 11L, null, null);
+        SubTaskSnapshot subTask = SubTaskSnapshot.builder().id(22L).taskId(33L).assignedAgentId(11L).build();
 
         Agent agent = new Agent();
         agent.setId(11L);
@@ -174,7 +174,7 @@ class ExecutionCommandServiceTest {
     @Test
     @DisplayName("dispatch-mode=MQ 时调用 outbox.createPending，不发本地事件")
     void shouldEnqueueOutboxWhenDispatchMq() {
-        SubTaskSnapshot subTask = new SubTaskSnapshot(22L, null, 33L, 11L, null, null);
+        SubTaskSnapshot subTask = SubTaskSnapshot.builder().id(22L).taskId(33L).assignedAgentId(11L).build();
 
         Agent agent = new Agent();
         agent.setId(11L);
@@ -209,7 +209,7 @@ class ExecutionCommandServiceTest {
     @Test
     @DisplayName("子任务已有进行中执行记录时拒绝重复创建 execution command")
     void shouldRejectWhenPendingOrRunningRecordExists() {
-        SubTaskSnapshot subTask = new SubTaskSnapshot(22L, null, 33L, 11L, null, null);
+        SubTaskSnapshot subTask = SubTaskSnapshot.builder().id(22L).taskId(33L).assignedAgentId(11L).build();
 
         Agent agent = new Agent();
         agent.setId(11L);
@@ -229,7 +229,7 @@ class ExecutionCommandServiceTest {
     @Test
     @DisplayName("P2-1: 防重保护应同时使用 DB 行锁 + hasPendingOrRunning 双重检查")
     void shouldUseBothRowLockAndHasPendingOrRunningForDuplicatePrevention() {
-        SubTaskSnapshot subTask = new SubTaskSnapshot(22L, null, 33L, 11L, null, null);
+        SubTaskSnapshot subTask = SubTaskSnapshot.builder().id(22L).taskId(33L).assignedAgentId(11L).build();
 
         Agent agent = new Agent();
         agent.setId(11L);

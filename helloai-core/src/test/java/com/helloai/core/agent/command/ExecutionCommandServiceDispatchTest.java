@@ -94,7 +94,8 @@ class ExecutionCommandServiceDispatchTest {
      * 组装最小可用的 SubTask 快照 / Agent / Record，让 createAssignedCommand 顺利跑到分发逻辑。
      */
     private void primeCommonMocks() {
-        SubTaskSnapshot subTask = new SubTaskSnapshot(SUB_TASK_ID, null, TASK_ID, AGENT_ID, null, null);
+        SubTaskSnapshot subTask = SubTaskSnapshot.builder()
+                .id(SUB_TASK_ID).taskId(TASK_ID).assignedAgentId(AGENT_ID).build();
         when(subTaskQueryPort.findByIdForUpdate(SUB_TASK_ID)).thenReturn(subTask);
 
         when(agentExecutionRecordService.hasPendingOrRunning(SUB_TASK_ID)).thenReturn(false);

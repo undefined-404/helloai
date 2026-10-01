@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.time.OffsetDateTime;
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -42,5 +43,36 @@ public class SubTaskQueryPortAdapter implements SubTaskQueryPort {
     @Override
     public List<SubTaskSnapshot> listRecentlyChanged(OffsetDateTime since, int limit) {
         return SubTaskSnapshotMapper.toSnapshots(subTaskService.listRecentlyChanged(since, limit));
+    }
+
+    @Override
+    public List<SubTaskSnapshot> listByIds(Collection<Long> subTaskIds) {
+        if (subTaskIds == null || subTaskIds.isEmpty()) {
+            return List.of();
+        }
+        return SubTaskSnapshotMapper.toSnapshots(subTaskService.listByIds(subTaskIds));
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>整体不透明：就绪口径（前置全 DONE / 空依赖恒就绪）由 {@link SubTaskService#isReady}
+     * 单源持有，本适配器不多加任何判定，仅补一次主键读把实体交给它。</p>
+     */
+    @Override
+    public boolean isReady(Long subTaskId) {
+        return subTaskService.isReady(subTaskService.getById(subTaskId));
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>整体不透明：合并规则（子任务级在前 ∪ 任务级、去重保序）由
+     * {@link SubTaskService#mergeSkills} 单源持有，本适配器不做任何合并。</p>
+     */
+    @Override
+    public List<String> mergeSkills(Long subTaskId) {
+        List<String> merged = subTaskService.mergeSkills(subTaskService.getById(subTaskId));
+        return merged != null ? merged : List.of();
     }
 }

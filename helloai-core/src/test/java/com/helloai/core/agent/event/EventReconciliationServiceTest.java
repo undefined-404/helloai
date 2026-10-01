@@ -154,6 +154,6 @@ class EventReconciliationServiceTest {
      * 对账候选源快照；对账只看 id + status，其余字段留空（快照字段按需增长）。
      */
     private SubTaskSnapshot subTask(Long id, SubTaskStatus status) {
-        return new SubTaskSnapshot(id, status, null, null, null, null);
+        return SubTaskSnapshot.builder().id(id).status(status).build();
     }
 }
