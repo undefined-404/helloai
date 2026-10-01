@@ -38,7 +38,7 @@ import com.helloai.core.agent.observability.CircuitBreakerEventRecorder;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.agent.port.TaskTimelinePort;
 
 /**
  * ResilientDispatcher 单元测试。
@@ -66,7 +66,7 @@ class ResilientDispatcherTest {
     private AgentDispatchProperties agentDispatchProperties;
 
     @Mock
-    private TaskTimelineService taskTimelineService;
+    private TaskTimelinePort taskTimelinePort;
 
     private CircuitBreakerRegistry circuitBreakerRegistry;
     private ResilientDispatcher resilientDispatcher;
@@ -85,7 +85,7 @@ class ResilientDispatcherTest {
                 agentService,
                 agentSelector,
                 agentDispatchProperties,
-                taskTimelineService);
+                taskTimelinePort);
         // assignNext fast-fail 段新增心跳新鲜度检查，默认桩为“新鲜”，
         // 心跳陈旧场景在具体用例中单独覆盖
         lenient().when(agentSelector.isHeartbeatFresh(any())).thenReturn(true);
@@ -239,7 +239,7 @@ class ResilientDispatcherTest {
                     agentService,
                     agentSelector,
                     agentDispatchProperties,
-                    taskTimelineService);
+                    taskTimelinePort);
             Agent online = onlineAgent(1L);
             when(agentService.getById(1L)).thenReturn(online);
 
@@ -301,7 +301,7 @@ class ResilientDispatcherTest {
             verify(subTaskService, never()).assignNext(anyLong(), anyLong());
             verify(subTaskService).markManualIntervention(
                     eq(100L), eq("dispatch_skip_execution_dense"), anyMap());
-            verify(taskTimelineService).recordEvent(
+            verify(taskTimelinePort).recordEvent(
                     eq(1100L), eq(100L), eq("sub_task_dispatch_skip_no_capability"),
                     eq(AgentRole.SYSTEM), eq(1L), anyMap());
         }

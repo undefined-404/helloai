@@ -33,7 +33,7 @@ import java.util.List;
 import java.util.Map;
 import com.helloai.core.agent.service.SubTaskExecutionService;
 import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.agent.port.TaskTimelinePort;
 import com.helloai.core.task.spec.ExecutionRecord;
 import com.helloai.core.task.spec.ExecutionRecordParser;
 import com.helloai.core.task.service.TaskRunningSpecService;
@@ -51,7 +51,7 @@ import com.helloai.core.task.service.TaskRunningSpecService;
 public class ExecutionResultHandler {
 
     private final SubTaskService subTaskService;
-    private final TaskTimelineService taskTimelineService;
+    private final TaskTimelinePort taskTimelinePort;
     private final ExternalAgentFailureTracker failureTracker;
     private final AgentService agentService;
     private final ApplicationEventPublisher applicationEventPublisher;
@@ -131,7 +131,7 @@ public class ExecutionResultHandler {
         }
 
         if (subTask.getStatus() != SubTaskStatus.IN_PROGRESS) {
-            taskTimelineService.recordEvent(
+            taskTimelinePort.recordEvent(
                     subTask.getTaskId(),
                     report.getSubTaskId(),
                     "sub_task_execute_result_discarded",
@@ -231,7 +231,7 @@ public class ExecutionResultHandler {
             // Phase 1 Step 3：执行会话终态 COMPLETED（best-effort 不阻断回写）
             agentSessionService.complete(report.getSubTaskId(), report.getAgentId(),
                     AgentEventContextResolver.resolveTurn(subTask.getReworkCount(), subTask.getAttemptTotal()));
-            taskTimelineService.recordEvent(
+            taskTimelinePort.recordEvent(
                     subTask.getTaskId(),
                     report.getSubTaskId(),
                     "sub_task_execute_submit",
@@ -303,7 +303,7 @@ public class ExecutionResultHandler {
             // Phase 1 Step 3：执行会话终态 FAILED（error 摘要；best-effort 不阻断回写）
             agentSessionService.fail(report.getSubTaskId(), report.getAgentId(),
                     AgentEventContextResolver.resolveTurn(subTask.getReworkCount(), subTask.getAttemptTotal()), report.getError());
-            taskTimelineService.recordEvent(
+            taskTimelinePort.recordEvent(
                     subTask.getTaskId(),
                     report.getSubTaskId(),
                     "sub_task_execute_failed",

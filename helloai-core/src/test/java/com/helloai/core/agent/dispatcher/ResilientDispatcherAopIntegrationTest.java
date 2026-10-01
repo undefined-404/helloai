@@ -11,7 +11,7 @@ import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.port.TaskDispatchPort;
 import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.agent.port.TaskTimelinePort;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
@@ -92,7 +92,7 @@ class ResilientDispatcherAopIntegrationTest {
     private AgentDispatchProperties agentDispatchProperties;
 
     @MockBean
-    private TaskTimelineService taskTimelineService;
+    private TaskTimelinePort taskTimelinePort;
 
     @Test
     @DisplayName("Bean 是 Spring AOP 代理（不是原生对象）")

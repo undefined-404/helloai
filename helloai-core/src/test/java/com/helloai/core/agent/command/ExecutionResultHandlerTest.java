@@ -32,7 +32,7 @@ import com.helloai.core.agent.output.ParsedOutput;
 import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskRunningSpecService;
-import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.agent.port.TaskTimelinePort;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("ExecutionResultHandler")
@@ -42,7 +42,7 @@ class ExecutionResultHandlerTest {
     private SubTaskService subTaskService;
 
     @Mock
-    private TaskTimelineService taskTimelineService;
+    private TaskTimelinePort taskTimelinePort;
 
     @Mock
     private ExternalAgentFailureTracker failureTracker;
@@ -109,7 +109,7 @@ class ExecutionResultHandlerTest {
         verify(subTaskService).submit(22L);
         // Phase 1 Step 3：执行会话终态 COMPLETED（turn=1+rework+attempt=1）
         verify(agentSessionService).complete(22L, 11L, 1);
-        verify(taskTimelineService).recordEvent(
+        verify(taskTimelinePort).recordEvent(
                 eq(33L), eq(22L), eq("sub_task_execute_submit"), eq(AgentRole.EXECUTOR), eq(11L),
                 argThat((Map<String, Object> payload) ->
                         Boolean.TRUE.equals(payload.get("success"))
@@ -143,7 +143,7 @@ class ExecutionResultHandlerTest {
         verify(subTaskService).block(22L);
         // Phase 1 Step 3：执行会话终态 FAILED（error 摘要；turn=1）
         verify(agentSessionService).fail(22L, 11L, 1, "boom");
-        verify(taskTimelineService).recordEvent(
+        verify(taskTimelinePort).recordEvent(
                 eq(33L), eq(22L), eq("sub_task_execute_failed"), eq(AgentRole.EXECUTOR), eq(11L),
                 argThat((Map<String, Object> payload) ->
                         Boolean.FALSE.equals(payload.get("success"))
@@ -169,7 +169,7 @@ class ExecutionResultHandlerTest {
         // 不应覆写 context
         verify(subTaskService, never()).updateById(org.mockito.ArgumentMatchers.any(SubTask.class));
         // 应记录 "结果被丢弃" 事件
-        verify(taskTimelineService).recordEvent(
+        verify(taskTimelinePort).recordEvent(
                 org.mockito.ArgumentMatchers.eq(33L),
                 org.mockito.ArgumentMatchers.eq(22L),
                 org.mockito.ArgumentMatchers.eq("sub_task_execute_result_discarded"),
@@ -194,7 +194,7 @@ class ExecutionResultHandlerTest {
         // 不应修改 context
         verify(subTaskService, never()).updateById(org.mockito.ArgumentMatchers.any(SubTask.class));
         // 走 "结果被丢弃" 时间线（Phase 2B 后由 handleReport() 统一接管非 IN_PROGRESS 拒绝）
-        verify(taskTimelineService).recordEvent(
+        verify(taskTimelinePort).recordEvent(
                 eq(33L), eq(22L), eq("sub_task_execute_result_discarded"), eq(AgentRole.EXECUTOR), eq(11L),
                 argThat((Map<String, Object> payload) ->
                         "subtask_status_not_in_progress".equals(payload.get("reason"))

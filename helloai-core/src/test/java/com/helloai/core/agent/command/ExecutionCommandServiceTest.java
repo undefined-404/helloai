@@ -17,7 +17,7 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.core.agent.service.impl.ExecutionCommandServiceImpl;
 import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.agent.port.TaskTimelinePort;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -65,7 +65,7 @@ class ExecutionCommandServiceTest {
     private AgentExecutionRecordService agentExecutionRecordService;
 
     @Mock
-    private TaskTimelineService taskTimelineService;
+    private TaskTimelinePort taskTimelinePort;
 
     @Mock
     private ApplicationEventPublisher applicationEventPublisher;
@@ -84,7 +84,7 @@ class ExecutionCommandServiceTest {
     @BeforeEach
     void setUp() {
         executionCommandService = new ExecutionCommandServiceImpl(
-                subTaskService, agentService, agentExecutionRecordService, taskTimelineService,
+                subTaskService, agentService, agentExecutionRecordService, taskTimelinePort,
                 applicationEventPublisher, executionProperties, agentCommandOutboxService, agentEventRecorder);
     }
 
@@ -125,7 +125,7 @@ class ExecutionCommandServiceTest {
         assertEquals(AgentAccessType.API_KEY_LLM, command.getAccessType());
         assertNotNull(command.getEventId());
 
-        verify(taskTimelineService).recordEvent(
+        verify(taskTimelinePort).recordEvent(
                 33L, 22L, "sub_task_execution_command_created", AgentRole.SYSTEM, 11L,
                 Map.of(
                         "trigger", "assigned",

@@ -11,7 +11,7 @@ import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.system.storage.ArtifactStorage;
 import com.helloai.core.system.storage.StoredArtifact;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.agent.port.TaskTimelinePort;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -40,7 +40,7 @@ class ExecutionArtifactServiceTest {
     @Mock
     private AttachmentService attachmentService;
     @Mock
-    private TaskTimelineService taskTimelineService;
+    private TaskTimelinePort taskTimelinePort;
     @Mock
     private AgentService agentService;
 
@@ -51,7 +51,7 @@ class ExecutionArtifactServiceTest {
     void setUp() {
         properties = new ArtifactStorageProperties();
         service = new ExecutionArtifactServiceImpl(properties, new ExecutionOutputParser(),
-                artifactStorage, attachmentService, taskTimelineService, agentService);
+                artifactStorage, attachmentService, taskTimelinePort, agentService);
     }
 
     private SubTask subTask() {
@@ -79,7 +79,7 @@ class ExecutionArtifactServiceTest {
 
         service.materialize(subTask(), 99L, "# 报告内容");
 
-        verify(taskTimelineService).recordEvent(eq(10L), eq(100L),
+        verify(taskTimelinePort).recordEvent(eq(10L), eq(100L),
                 eq("sub_task_artifact_materialized"), eq(AgentRole.EXECUTOR), eq(99L), any());
     }
 
@@ -88,7 +88,7 @@ class ExecutionArtifactServiceTest {
     void shouldSkipWhenOutputBlank() {
         service.materialize(subTask(), 99L, "   ");
 
-        verifyNoInteractions(artifactStorage, attachmentService, taskTimelineService);
+        verifyNoInteractions(artifactStorage, attachmentService, taskTimelinePort);
     }
 
     @Test
@@ -98,7 +98,7 @@ class ExecutionArtifactServiceTest {
 
         service.materialize(subTask(), 99L, "# 报告内容");
 
-        verifyNoInteractions(artifactStorage, attachmentService, taskTimelineService);
+        verifyNoInteractions(artifactStorage, attachmentService, taskTimelinePort);
     }
 
     @Test
@@ -109,7 +109,7 @@ class ExecutionArtifactServiceTest {
 
         service.materialize(subTask(), 99L, "# 报告内容");
 
-        verifyNoInteractions(attachmentService, taskTimelineService);
+        verifyNoInteractions(attachmentService, taskTimelinePort);
     }
 
     @Test
@@ -119,6 +119,6 @@ class ExecutionArtifactServiceTest {
 
         service.materialize(subTask(), 99L, "超过四字节的产出内容");
 
-        verifyNoInteractions(artifactStorage, attachmentService, taskTimelineService);
+        verifyNoInteractions(artifactStorage, attachmentService, taskTimelinePort);
     }
 }

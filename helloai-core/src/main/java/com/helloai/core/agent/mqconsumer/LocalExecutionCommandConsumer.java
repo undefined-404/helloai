@@ -19,7 +19,7 @@ import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentMcpServerService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.agent.port.TaskTimelinePort;
 import com.helloai.core.agent.service.AgentRuntimeContextAssembler;
 import com.helloai.core.agent.service.SubTaskExecutionService;
 import lombok.RequiredArgsConstructor;
@@ -61,7 +61,7 @@ import java.util.Map;
 public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
 
     private final AgentExecutionRecordService agentExecutionRecordService;
-    private final TaskTimelineService taskTimelineService;
+    private final TaskTimelinePort taskTimelinePort;
     private final SubTaskService subTaskService;
     private final AgentService agentService;
     /** Phase 1 Step 2：启用工具为 agent 域数据（agent_mcp_server），消费侧 agent 域内直读注入 ctx.tools。 */
@@ -160,7 +160,7 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
         }
 
         // 3. 消费阶段 timeline（route 观察点：灰度脚本据此区分路径）
-        taskTimelineService.recordEvent(
+        taskTimelinePort.recordEvent(
                 subTask.getTaskId(),
                 command.getSubTaskId(),
                 "sub_task_execution_command_consume",
@@ -172,7 +172,7 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
                         "eventId", command.getEventId(),
                         "accessType", command.getAccessType() != null ? command.getAccessType().name() : "UNKNOWN",
                         "route", "agent_runtime"));
-        taskTimelineService.recordEvent(
+        taskTimelinePort.recordEvent(
                 subTask.getTaskId(),
                 command.getSubTaskId(),
                 "sub_task_execute_start",

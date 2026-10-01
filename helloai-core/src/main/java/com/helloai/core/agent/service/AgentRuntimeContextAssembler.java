@@ -27,7 +27,7 @@ import com.helloai.core.task.entity.Uncertainty;
 import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskRunningSpecService;
-import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.agent.port.TaskTimelinePort;
 import com.helloai.core.task.spec.ExecutionRecord;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -81,7 +81,7 @@ public class AgentRuntimeContextAssembler {
     private final AgentExecutionProperties executionProperties;
     private final AgentChatClientService agentChatClientService;
     private final AgentLlmCredentialResolver agentLlmCredentialResolver;
-    private final TaskTimelineService taskTimelineService;
+    private final TaskTimelinePort taskTimelinePort;
     private final TaskRunningSpecService taskRunningSpecService;
     private final AgentSkillSpecService agentSkillSpecService;
     private final AgentQualityProfileService agentQualityProfileService;
@@ -152,7 +152,7 @@ public class AgentRuntimeContextAssembler {
                 agentSessionService.saveLoopCheckpoint(subTaskId, runTurn, checkpoint);
 
         // 5) spec 装配可观测（与旧链同键同事件名）
-        taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_spec_context_loaded",
+        taskTimelinePort.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_spec_context_loaded",
                 AgentRole.EXECUTOR, agent.getId(),
                 safeMap("agentId", agent.getId(),
                         "depCount", dependencySection.depCount,
@@ -162,7 +162,7 @@ public class AgentRuntimeContextAssembler {
                         "pluginSpec", resolved.section() != null && !resolved.section().isBlank(),
                         "historySummary", historySection != null && !historySection.isBlank(),
                         "recoveryInjected", recovery != null));
-        taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_llm_call_start",
+        taskTimelinePort.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_llm_call_start",
                 AgentRole.EXECUTOR, agent.getId(),
                 Map.of("agentId", agent.getId(), "agentName", agent.getName()));
 
@@ -203,7 +203,7 @@ public class AgentRuntimeContextAssembler {
         } catch (Exception e) {
             log.debug("执行会话推进失败（best-effort 降级）: subTaskId={}, err={}", subTask.getId(), e.getMessage());
         }
-        taskTimelineService.recordEvent(subTask.getTaskId(), subTask.getId(), "sub_task_llm_call_end",
+        taskTimelinePort.recordEvent(subTask.getTaskId(), subTask.getId(), "sub_task_llm_call_end",
                 AgentRole.EXECUTOR, agent.getId(),
                 safeMap("agentId", agent.getId(),
                         "success", result != null && result.getStatus() == com.helloai.common.constant.ExecutionStatus.SUCCESS,

@@ -18,7 +18,7 @@ import com.helloai.core.agent.quality.ExecutorDoneIssuesBackfiller;
 import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.agent.port.TaskTimelinePort;
 import com.helloai.core.task.service.TaskRunningSpecService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -58,7 +58,7 @@ class ExecutionResultHandlerIntegrationTest {
     private SubTaskService subTaskService;
 
     @Mock
-    private TaskTimelineService taskTimelineService;
+    private TaskTimelinePort taskTimelinePort;
 
     @Mock
     private ExternalAgentFailureTracker failureTracker;
@@ -95,7 +95,7 @@ class ExecutionResultHandlerIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        handler = new ExecutionResultHandler(subTaskService, taskTimelineService, failureTracker, agentService,
+        handler = new ExecutionResultHandler(subTaskService, taskTimelinePort, failureTracker, agentService,
                 applicationEventPublisher, conversationService, executionArtifactService, taskRunningSpecService,
                 new ExecutionOutputParser(), executorDoneIssuesBackfiller, agentEventRecorder, agentSessionService);
         // 模拟 Spring @Transactional 已开启（afterCommit 注册需要激活的同步管理器）
@@ -141,7 +141,7 @@ class ExecutionResultHandlerIntegrationTest {
         verify(failureTracker, never()).recordSuccess(11L);
 
         // 断言 3：submit 后 timeline event 正常记录（业务主链路已完成）
-        verify(taskTimelineService, times(1)).recordEvent(
+        verify(taskTimelinePort, times(1)).recordEvent(
                 eq(33L), eq(22L), eq("sub_task_execute_submit"),
                 eq(AgentRole.EXECUTOR), eq(11L), any());
     }
@@ -230,11 +230,11 @@ class ExecutionResultHandlerIntegrationTest {
 
         // 关键不变量：主事务结束前 failureTracker.recordSuccess 从未被调用
         // 在测试线程内调用任何 afterCommit 之前
-        InOrder order = inOrder(subTaskService, taskTimelineService, failureTracker);
+        InOrder order = inOrder(subTaskService, taskTimelinePort, failureTracker);
         order.verify(subTaskService).getById(22L);
         order.verify(subTaskService).updateById(any(SubTask.class));
         order.verify(subTaskService).submit(22L);
-        order.verify(taskTimelineService).recordEvent(
+        order.verify(taskTimelinePort).recordEvent(
                 eq(33L), eq(22L), eq("sub_task_execute_submit"),
                 eq(AgentRole.EXECUTOR), eq(11L), any());
         order.verify(failureTracker, never()).recordSuccess(anyLong());

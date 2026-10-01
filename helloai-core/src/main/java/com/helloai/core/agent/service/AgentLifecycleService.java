@@ -6,7 +6,7 @@ import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentMapper;
-import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.agent.port.TaskTimelinePort;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,11 +29,11 @@ import java.util.Map;
 public class AgentLifecycleService {
 
     private final AgentMapper agentMapper;
-    private final TaskTimelineService taskTimelineService;
+    private final TaskTimelinePort taskTimelinePort;
 
-    public AgentLifecycleService(AgentMapper agentMapper, TaskTimelineService taskTimelineService) {
+    public AgentLifecycleService(AgentMapper agentMapper, TaskTimelinePort taskTimelinePort) {
         this.agentMapper = agentMapper;
-        this.taskTimelineService = taskTimelineService;
+        this.taskTimelinePort = taskTimelinePort;
     }
 
     /**
@@ -95,7 +95,7 @@ public class AgentLifecycleService {
         payload.put("new_status", AgentOnlineStatus.SLEEPING.name());
         payload.put("at", OffsetDateTime.now().toString());
 
-        taskTimelineService.recordEvent(
+        taskTimelinePort.recordEvent(
                 null, null, "agent_sleep", AgentRole.SYSTEM, agent.getId(), payload);
 
         log.info("Agent 手动暂停: id={}, prev={}, operator={}, reason={}",
@@ -236,7 +236,7 @@ public class AgentLifecycleService {
         payload.put("new_status", AgentOnlineStatus.OFFLINE.name());
         payload.put("at", OffsetDateTime.now().toString());
 
-        taskTimelineService.recordEvent(
+        taskTimelinePort.recordEvent(
                 null, null, "agent_wake", AgentRole.SYSTEM, agentId, payload);
 
         log.info("Agent 手动唤醒: id={}, operator={}, reason={}", agentId, effectiveOperator, reason);

@@ -13,7 +13,7 @@ import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.system.storage.ArtifactStorage;
 import com.helloai.core.system.storage.StoredArtifact;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.agent.port.TaskTimelinePort;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -41,7 +41,7 @@ public class ExecutionArtifactServiceImpl implements ExecutionArtifactService {
     private final ExecutionOutputParser executionOutputParser;
     private final ArtifactStorage artifactStorage;
     private final AttachmentService attachmentService;
-    private final TaskTimelineService taskTimelineService;
+    private final TaskTimelinePort taskTimelinePort;
     private final AgentService agentService;
 
     /**
@@ -124,7 +124,7 @@ public class ExecutionArtifactServiceImpl implements ExecutionArtifactService {
         payload.put("attachmentIds", attachmentIds);
         payload.put("fileNames", fileNames);
         payload.put("count", attachmentIds.size());
-        taskTimelineService.recordEvent(subTask.getTaskId(), subTask.getId(),
+        taskTimelinePort.recordEvent(subTask.getTaskId(), subTask.getId(),
                 "sub_task_artifact_materialized", AgentRole.EXECUTOR, agentId, payload);
         log.info("执行产出物化完成: subTaskId={}, attachmentIds={}", subTask.getId(), attachmentIds);
     }

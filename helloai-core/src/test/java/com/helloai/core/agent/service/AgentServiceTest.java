@@ -20,7 +20,7 @@ import com.helloai.core.system.entity.LlmProviderModel;
 import com.helloai.core.agent.service.ActivityLogService;
 import com.helloai.core.agent.service.RewardService;
 import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.agent.port.TaskTimelinePort;
 import com.helloai.core.system.crypto.AgentApiKeyCipher;
 import com.helloai.core.system.service.LlmProviderModelQueryService;
 import org.junit.jupiter.api.DisplayName;
@@ -72,7 +72,7 @@ class AgentServiceTest {
     @Mock
     private AgentMapper agentMapper;
     @Mock
-    private TaskTimelineService taskTimelineService;
+    private TaskTimelinePort taskTimelinePort;
     @Mock
     private AgentMcpServerService agentMcpServerService;
     @Mock
@@ -87,7 +87,7 @@ class AgentServiceTest {
                 agentMcpServerService, agentApiKeyCipher,
                 new AgentCredentialService(agentMapper, agentApiKeyCipher),
                 new AgentSkillPolicyService(agentMapper, llmProviderModelQueryService),
-                new AgentLifecycleService(agentMapper, taskTimelineService),
+                new AgentLifecycleService(agentMapper, taskTimelinePort),
                 new AgentStatsService(agentMapper, subTaskStatsPort, rewardService, activityLogService)));
     }
 

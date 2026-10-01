@@ -15,7 +15,7 @@ import com.helloai.core.agent.service.AgentCommandOutboxService;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.agent.port.TaskTimelinePort;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -65,7 +65,7 @@ class ExecutionCommandServiceDispatchTest {
     @Mock
     private AgentExecutionRecordService agentExecutionRecordService;
     @Mock
-    private TaskTimelineService taskTimelineService;
+    private TaskTimelinePort taskTimelinePort;
     @Mock
     private ApplicationEventPublisher applicationEventPublisher;
     @Mock
@@ -86,7 +86,7 @@ class ExecutionCommandServiceDispatchTest {
     @BeforeEach
     void setUp() {
         service = new ExecutionCommandServiceImpl(
-                subTaskService, agentService, agentExecutionRecordService, taskTimelineService,
+                subTaskService, agentService, agentExecutionRecordService, taskTimelinePort,
                 applicationEventPublisher, executionProperties, agentCommandOutboxService, agentEventRecorder);
     }
 

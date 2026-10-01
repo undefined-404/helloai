@@ -25,7 +25,7 @@ import com.helloai.core.task.entity.Uncertainty;
 import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskRunningSpecService;
-import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.agent.port.TaskTimelinePort;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -74,7 +74,7 @@ class AgentRuntimeContextAssemblerTest {
     private AgentLlmCredentialResolver agentLlmCredentialResolver;
 
     @Mock
-    private TaskTimelineService taskTimelineService;
+    private TaskTimelinePort taskTimelinePort;
 
     @Mock
     private TaskRunningSpecService taskRunningSpecService;
@@ -116,7 +116,7 @@ class AgentRuntimeContextAssemblerTest {
         properties.setMockMode(true);
         properties.setProvider("mock");
         assembler = new AgentRuntimeContextAssembler(properties, agentChatClientService, agentLlmCredentialResolver,
-                taskTimelineService, taskRunningSpecService, agentSkillSpecService, agentQualityProfileService,
+                taskTimelinePort, taskRunningSpecService, agentSkillSpecService, agentQualityProfileService,
                 agentSessionService, conversationService, attachmentService, subTaskService, toolRegistry,
                 agentEventRecorder);
     }
@@ -527,7 +527,7 @@ class AgentRuntimeContextAssemblerTest {
 
             verify(agentChatClientService, never()).buildChatModel(any(), anyString(), any());
             verify(agentSessionService, never()).start(any(), any(), any(), anyInt(), anyInt(), any());
-            verify(taskTimelineService, never()).recordEvent(any(), any(), anyString(), any(), any(), any());
+            verify(taskTimelinePort, never()).recordEvent(any(), any(), anyString(), any(), any(), any());
         }
 
         @Test
@@ -616,9 +616,9 @@ class AgentRuntimeContextAssemblerTest {
                     .containsEntry("environment", "local-process")
                     .containsEntry("depCount", 0);
 
-            verify(taskTimelineService).recordEvent(any(), any(), eq("sub_task_spec_context_loaded"),
+            verify(taskTimelinePort).recordEvent(any(), any(), eq("sub_task_spec_context_loaded"),
                     eq(AgentRole.EXECUTOR), eq(11L), any());
-            verify(taskTimelineService).recordEvent(any(), any(), eq("sub_task_llm_call_start"),
+            verify(taskTimelinePort).recordEvent(any(), any(), eq("sub_task_llm_call_start"),
                     eq(AgentRole.EXECUTOR), eq(11L), any());
             verify(conversationService).addMessage(eq(22L), eq(11L), eq("user"), eq("agent"), anyString(),
                     eq("sub_task_execute_user_prompt"));
@@ -646,7 +646,7 @@ class AgentRuntimeContextAssemblerTest {
             assembler.afterTurn(subTask(), agent(), 1, AgentExecutionResult.builder()
                     .status(ExecutionStatus.FAILED).build());
 
-            verify(taskTimelineService).recordEvent(any(), any(), eq("sub_task_llm_call_end"),
+            verify(taskTimelinePort).recordEvent(any(), any(), eq("sub_task_llm_call_end"),
                     any(), any(), any());
         }
 
@@ -694,7 +694,7 @@ class AgentRuntimeContextAssemblerTest {
     @SuppressWarnings("unchecked")
     private Map<String, Object> captureTimelinePayload(String eventType) {
         ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
-        verify(taskTimelineService).recordEvent(any(), any(), eq(eventType), any(), any(), captor.capture());
+        verify(taskTimelinePort).recordEvent(any(), any(), eq(eventType), any(), any(), captor.capture());
         return captor.getValue();
     }
 

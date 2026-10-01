@@ -3,7 +3,7 @@ package com.helloai.core.agent.quality;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.agent.port.TaskTimelinePort;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
@@ -40,7 +40,7 @@ public class ExecutorDoneIssuesBackfiller {
     private final ConcurrentHashMap<Long, Object> subTaskLocks = new ConcurrentHashMap<>();
 
     private final SubTaskService subTaskService;
-    private final TaskTimelineService taskTimelineService;
+    private final TaskTimelinePort taskTimelinePort;
     private final ExecutorIssueResolutionAssessor assessor;
 
     /** 获取 subTaskId 粒度锁对象（分段锁，无锁清理——锁对象可复用）。 */
@@ -186,7 +186,7 @@ public class ExecutorDoneIssuesBackfiller {
         try {
             Map<String, Object> payload = new HashMap<>(extra != null ? extra : Map.of());
             payload.put("state", state);
-            taskTimelineService.recordEvent(
+            taskTimelinePort.recordEvent(
                     subTask.getTaskId(),
                     subTask.getId(),
                     TIMELINE_EVENT,

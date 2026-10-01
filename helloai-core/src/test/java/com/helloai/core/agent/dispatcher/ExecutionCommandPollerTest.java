@@ -36,7 +36,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.agent.port.TaskTimelinePort;
 
 /**
  * {@link ExecutionCommandPoller} 单元测试。
@@ -69,7 +69,7 @@ class ExecutionCommandPollerTest {
     @Mock
     private LocalExecutionCommandConsumer executionCommandConsumer;
     @Mock
-    private TaskTimelineService taskTimelineService;
+    private TaskTimelinePort taskTimelinePort;
     @Mock
     private SubTaskService subTaskService;
     @Mock
@@ -119,7 +119,7 @@ class ExecutionCommandPollerTest {
             poller.poll();
 
             verify(agentExecutionRecordService).markPolled(101L);
-            verify(taskTimelineService).recordEvent(
+            verify(taskTimelinePort).recordEvent(
                     eq(33L), eq(22L), eq("sub_task_execution_command_poll_recovery"),
                     any(), eq(11L), any());
             ArgumentCaptor<ExecutionCommand> commandCaptor = ArgumentCaptor.forClass(ExecutionCommand.class);
@@ -177,7 +177,7 @@ class ExecutionCommandPollerTest {
 
             poller.poll();
 
-            verifyNoInteractions(executionCommandConsumer, taskTimelineService);
+            verifyNoInteractions(executionCommandConsumer, taskTimelinePort);
             verify(agentExecutionRecordService, never()).markPolled(anyLong());
         }
 
@@ -191,7 +191,7 @@ class ExecutionCommandPollerTest {
 
             verify(agentExecutionRecordService).markPolled(101L);
             verify(executionCommandConsumer, never()).consume(any(ExecutionCommand.class));
-            verifyNoInteractions(taskTimelineService);
+            verifyNoInteractions(taskTimelinePort);
         }
 
         @Test
@@ -228,7 +228,7 @@ class ExecutionCommandPollerTest {
             poller.poll();
 
             verify(agentExecutionRecordService).markPolled(101L);
-            verifyNoInteractions(taskTimelineService);
+            verifyNoInteractions(taskTimelinePort);
             verify(executionCommandConsumer).consume(any(ExecutionCommand.class));
         }
 
@@ -345,7 +345,7 @@ class ExecutionCommandPollerTest {
             assertThat(commandCaptor.getValue().getTrigger()).isEqualTo("poll-recovery:assigned");
 
             // timeline 事件统一为 sub_task_execution_command_poll_recovery，不再有 sub_task_execution_command_polled_main
-            verify(taskTimelineService).recordEvent(
+            verify(taskTimelinePort).recordEvent(
                     eq(33L), eq(22L), eq("sub_task_execution_command_poll_recovery"),
                     any(), eq(11L), any());
         }
@@ -359,7 +359,7 @@ class ExecutionCommandPollerTest {
 
             verify(agentExecutionRecordService).listOrphanPending(60, 20);
             verify(agentExecutionRecordService, never()).listAllPending(anyInt());
-            verifyNoInteractions(executionCommandConsumer, taskTimelineService);
+            verifyNoInteractions(executionCommandConsumer, taskTimelinePort);
         }
     }
 }

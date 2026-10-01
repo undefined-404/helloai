@@ -17,7 +17,7 @@ import com.helloai.core.agent.service.AgentCommandOutboxService;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.agent.port.TaskTimelinePort;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -50,7 +50,7 @@ public class ExecutionCommandServiceImpl implements ExecutionCommandService {
     private final SubTaskService subTaskService;
     private final AgentService agentService;
     private final AgentExecutionRecordService agentExecutionRecordService;
-    private final TaskTimelineService taskTimelineService;
+    private final TaskTimelinePort taskTimelinePort;
     private final ApplicationEventPublisher applicationEventPublisher;
     private final AgentExecutionProperties executionProperties;
     private final AgentCommandOutboxService agentCommandOutboxService;
@@ -109,7 +109,7 @@ public class ExecutionCommandServiceImpl implements ExecutionCommandService {
                 .requiredSkills(skills)
                 .build();
 
-        taskTimelineService.recordEvent(
+        taskTimelinePort.recordEvent(
                 subTask.getTaskId(),
                 subTaskId,
                 "sub_task_execution_command_created",

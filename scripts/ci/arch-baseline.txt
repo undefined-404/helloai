@@ -16,7 +16,7 @@
 # ============================================================================
 task->planner=0
 task->review=0
-agent->task=51
+agent->task=41
 agent->planner=0
 agent->review=0
 system->planner=0
@@ -33,4 +33,4 @@ review->task.mapper=0
 agent->task.mapper=0
 task->agent.mapper=0
 planner->agent=34
-task->agent=43
+task->agent=44

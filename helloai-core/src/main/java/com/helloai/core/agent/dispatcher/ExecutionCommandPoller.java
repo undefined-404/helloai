@@ -18,7 +18,7 @@ import java.util.List;
 import java.util.Map;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.agent.port.TaskTimelinePort;
 
 /**
  * 执行命令 DB Poller 兜底扫描器。
@@ -81,7 +81,7 @@ public class ExecutionCommandPoller {
 
     private final AgentExecutionRecordService agentExecutionRecordService;
     private final ExecutionCommandConsumer executionCommandConsumer;
-    private final TaskTimelineService taskTimelineService;
+    private final TaskTimelinePort taskTimelinePort;
     private final SubTaskService subTaskService;
     private final AgentExecutionProperties executionProperties;
 
@@ -92,12 +92,12 @@ public class ExecutionCommandPoller {
      */
     public ExecutionCommandPoller(AgentExecutionRecordService agentExecutionRecordService,
                                   LocalExecutionCommandConsumer executionCommandConsumer,
-                                  TaskTimelineService taskTimelineService,
+                                  TaskTimelinePort taskTimelinePort,
                                   SubTaskService subTaskService,
                                   AgentExecutionProperties executionProperties) {
         this.agentExecutionRecordService = agentExecutionRecordService;
         this.executionCommandConsumer = executionCommandConsumer;
-        this.taskTimelineService = taskTimelineService;
+        this.taskTimelinePort = taskTimelinePort;
         this.subTaskService = subTaskService;
         this.executionProperties = executionProperties;
     }
@@ -162,7 +162,7 @@ public class ExecutionCommandPoller {
         // scanType 恒为 listOrphanPending，timeline 事件统一使用 sub_task_execution_command_poll_recovery
         String timelineEvent = "sub_task_execution_command_poll_recovery";
         if (subTask != null) {
-            taskTimelineService.recordEvent(
+            taskTimelinePort.recordEvent(
                     subTask.getTaskId(),
                     record.getSubTaskId(),
                     timelineEvent,

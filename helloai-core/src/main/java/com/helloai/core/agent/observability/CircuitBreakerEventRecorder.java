@@ -13,7 +13,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import com.helloai.core.agent.service.CircuitBreakerAlertService;
-import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.agent.port.TaskTimelinePort;
 
 /**
  * 熔断器事件审计记录器。
@@ -26,14 +26,14 @@ import com.helloai.core.task.service.TaskTimelineService;
  * <p>使用 ConcurrentHashMap 追踪已注册的熔断器名，避免重复注册。</p>
  *
  * @see ResilientDispatcher
- * @see TaskTimelineService
+ * @see TaskTimelinePort
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class CircuitBreakerEventRecorder {
 
-    private final TaskTimelineService taskTimelineService;
+    private final TaskTimelinePort taskTimelinePort;
     private final CircuitBreakerAlertService alertService;
     private final Set<String> registered = ConcurrentHashMap.newKeySet();
 
@@ -80,7 +80,7 @@ public class CircuitBreakerEventRecorder {
         payload.put("at", OffsetDateTime.now().toString());
 
         try {
-            taskTimelineService.recordEvent(
+            taskTimelinePort.recordEvent(
                     null,           // 系统级事件，无主任务
                     null,           // 系统级事件，无子任务
                     eventType,

@@ -21,7 +21,7 @@ import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.port.TaskDispatchPort;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.agent.port.TaskTimelinePort;
 
 import java.util.Map;
 
@@ -64,7 +64,7 @@ public class ResilientDispatcher implements TaskDispatchPort {
     private final AgentService agentService;
     private final AgentSelector agentSelector;
     private final AgentDispatchProperties agentDispatchProperties;
-    private final TaskTimelineService taskTimelineService;
+    private final TaskTimelinePort taskTimelinePort;
 
     private static final String DISPATCH_CB_NAME = "agentDispatch";
 
@@ -177,7 +177,7 @@ public class ResilientDispatcher implements TaskDispatchPort {
         if (SubTaskDispatchService.hasLocalExecutionCapability(agent)) {
             return false;
         }
-        taskTimelineService.recordEvent(subTask.getTaskId(), subTask.getId(),
+        taskTimelinePort.recordEvent(subTask.getTaskId(), subTask.getId(),
                 "sub_task_dispatch_skip_no_capability", AgentRole.SYSTEM, agentId,
                 Map.of("reason", "execution_dense_no_local_capability",
                         "agentId", agentId,

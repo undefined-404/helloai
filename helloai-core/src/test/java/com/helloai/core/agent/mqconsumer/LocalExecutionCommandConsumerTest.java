@@ -19,7 +19,7 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.SubTaskExecutionService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.agent.port.TaskTimelinePort;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -56,7 +56,7 @@ class LocalExecutionCommandConsumerTest {
     private AgentExecutionRecordService agentExecutionRecordService;
 
     @Mock
-    private TaskTimelineService taskTimelineService;
+    private TaskTimelinePort taskTimelinePort;
 
     @Mock
     private SubTaskService subTaskService;
@@ -139,11 +139,11 @@ class LocalExecutionCommandConsumerTest {
                             && "STOP".equals(r.getFinishReason())
                             && "RuntimeTurnExecutor".equals(r.getExecutorName())));
             // timeline 观察点（route=agent_runtime 标记契约路径）
-            verify(taskTimelineService).recordEvent(
+            verify(taskTimelinePort).recordEvent(
                     eq(33L), eq(22L), eq("sub_task_execution_command_consume"),
                     eq(AgentRole.EXECUTOR), eq(11L),
                     argThat((Map<String, Object> m) -> "agent_runtime".equals(m.get("route"))));
-            verify(taskTimelineService).recordEvent(
+            verify(taskTimelinePort).recordEvent(
                     33L, 22L, "sub_task_execute_start", AgentRole.EXECUTOR, 11L,
                     Map.of("executor", "agent_runtime"));
         }
