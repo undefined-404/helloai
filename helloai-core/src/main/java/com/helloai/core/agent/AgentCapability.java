@@ -97,4 +97,30 @@ public final class AgentCapability {
         }
         return defaultValue;
     }
+
+    /**
+     * §6.52 本机执行能力判定：CLI_CLIENT / WEB_BROWSER 天然可本机操作；
+     * API_KEY_LLM 需 {@code capabilities.supportsMCP=true}。
+     *
+     * <p><b>归属说明（2026-10-01 W8 归位）</b>：原为 {@code task.service.SubTaskDispatchService}
+     * 的静态方法，但它判定依据**全部是 Agent 自身字段**（{@code accessType} + {@code capabilities}），
+     * 属 agent 领域规则，故迁入本工具类。归位后：
+     * <ul>
+     *   <li>{@code agent} 侧（{@code ResilientDispatcher}）直接调用，不再 import task 域；</li>
+     *   <li>{@code task} / {@code review} 侧调用成为顺向合法的 {@code *→agent} 依赖。</li>
+     * </ul>
+     * 判定语义与原实现<b>逐字一致</b>（含「值非 {@code Boolean.TRUE} 即视为无能力」这一严格口径，
+     * 故此处刻意不复用 {@link #hasCapability} 的宽松解析）。</p>
+     *
+     * @param agent Agent；null 视为可本机执行（与原实现一致）
+     * @return true-具备本机执行能力
+     */
+    public static boolean hasLocalExecutionCapability(Agent agent) {
+        if (agent == null || agent.getAccessType() != AgentAccessType.API_KEY_LLM) {
+            return true;
+        }
+        Object supportsMcp = agent.getCapabilities() != null
+                ? agent.getCapabilities().get("supportsMCP") : null;
+        return Boolean.TRUE.equals(supportsMcp);
+    }
 }

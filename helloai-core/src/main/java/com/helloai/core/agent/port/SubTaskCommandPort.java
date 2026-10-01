@@ -2,6 +2,8 @@ package com.helloai.core.agent.port;
 
 import com.helloai.common.constant.SubTaskStatus;
 
+import java.util.Map;
+
 /**
  * 子任务命令端口（agent 域消费，task 域实现）。
  *
@@ -91,4 +93,36 @@ public interface SubTaskCommandPort {
      * @param agentId   上报 Agent ID
      */
     void block(Long subTaskId, String reason, Long agentId);
+
+    /**
+     * 把 PENDING 子任务分配给指定 Agent（<b>不透明命令</b>，W8 新增）。
+     *
+     * <p>「判定 + 写」整体在 task 域：{@code SubTaskService#assignNext} 内含
+     * PENDING 前置校验 + <b>Agent 行锁（FOR UPDATE）串行化并发派发</b> +
+     * 锁内并发额度判定 + {@code changeStatus(ASSIGNED)} 落库。互斥与额度口径
+     * 都是提供方领域规则，消费方（{@code ResilientDispatcher}）只表达
+     * 「把这个子任务派给这个 Agent」的意图，不做任何裁决。</p>
+     *
+     * <p>失败语义保持原样：状态非 PENDING 抛 {@code BizException}；
+     * Agent 并发额度已满抛 {@code AgentUnavailableException}（<b>不计入熔断统计</b>，
+     * 由调用方的 fallback 换人）。</p>
+     *
+     * @param agentId   目标 Agent ID
+     * @param subTaskId 待分配的子任务 ID
+     */
+    void assignNext(Long agentId, Long subTaskId);
+
+    /**
+     * 写入「需人工介入」标记（best-effort 降级写，W8 新增）。
+     *
+     * <p>在子任务 {@code context} 打 {@code manualIntervention} 标记并落 timeline。
+     * 提供方按 CODE_STYLE §7.1「单语句原子写豁免」口径<b>不加事务</b>、
+     * 整段 try-catch 降级（失败仅告警、不影响主链路）——该降级语义属提供方实现细节，
+     * 消费方无需感知，故作为不透明命令暴露。</p>
+     *
+     * @param subTaskId 子任务 ID
+     * @param reason    介入原因码（如 {@code dispatch_skip_execution_dense}）
+     * @param extra     附加审计字段；可为 {@code null}
+     */
+    void markManualIntervention(Long subTaskId, String reason, Map<String, Object> extra);
 }

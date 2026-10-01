@@ -24,12 +24,14 @@ import static org.mockito.Mockito.when;
 
 /**
  * {@code SubTaskQueryPortAdapter} 单测（2026-10-01，W3 建；W4 补 {@code findById}；W7 补
- * {@code listByIds} / {@code isReady} / {@code mergeSkills}）。
+ * {@code listByIds} / {@code isReady} / {@code mergeSkills}；W8 补 {@code isExecutionDense}）。
  *
  * <p>覆盖「task 实体 → agent 域只读快照」的映射口径与空值边界：字段全量透传、
  * 入参为空/含 null 元素时不抛异常且绝不返回 {@code null}（{@code findById} 除外——
  * 它按 {@code getById} 语义在不存在时返回 {@code null}）；W7 新增的 {@code isReady} /
- * {@code mergeSkills} <b>不做任何本地判定</b>，仅验证「整体委派 + 空值收敛」。</p>
+ * {@code mergeSkills} <b>不做任何本地判定</b>，仅验证「整体委派 + 空值收敛」；
+ * W8 的 {@code isExecutionDense} 同理——判定仍由 {@code SubTaskDispatchService}
+ * 单源持有，适配器只补一次主键读、不复制信号词表。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("SubTaskQueryPortAdapter")
@@ -179,5 +181,37 @@ class SubTaskQueryPortAdapterTest {
         when(subTaskService.mergeSkills(null)).thenReturn(null);
 
         assertThat(adapter.mergeSkills(7L)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("isExecutionDense：内容命中执行密集信号词 → true（判定口径仍走 SubTaskDispatchService 单源）")
+    void shouldDetectExecutionDense() {
+        SubTask entity = new SubTask();
+        entity.setId(7L);
+        entity.setContent("请用 docker 启动服务并执行脚本");
+        when(subTaskService.getById(7L)).thenReturn(entity);
+
+        assertThat(adapter.isExecutionDense(7L)).isTrue();
+    }
+
+    @Test
+    @DisplayName("isExecutionDense：无信号词 → false（适配器不做任何本地判定）")
+    void shouldReturnFalseWhenNotExecutionDense() {
+        SubTask entity = new SubTask();
+        entity.setId(7L);
+        entity.setContent("整理需求并输出一份产品说明文档");
+        entity.setAcceptance("文档结构完整");
+        entity.setDeliverable("需求说明.md");
+        when(subTaskService.getById(7L)).thenReturn(entity);
+
+        assertThat(adapter.isExecutionDense(7L)).isFalse();
+    }
+
+    @Test
+    @DisplayName("isExecutionDense：子任务不存在 → false（与「无信号」同义，消费方免再判空）")
+    void shouldReturnFalseWhenSubTaskMissing() {
+        when(subTaskService.getById(9L)).thenReturn(null);
+
+        assertThat(adapter.isExecutionDense(9L)).isFalse();
     }
 }

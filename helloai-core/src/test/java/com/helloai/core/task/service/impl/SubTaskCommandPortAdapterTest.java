@@ -10,6 +10,8 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.Map;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -22,7 +24,9 @@ import static org.mockito.Mockito.when;
  *
  * <p>本测试由原 {@code agent.execution.SubTaskExecutionServiceTest} 平移而来（2026-10-01，W3）：
  * 「判定 + 写」整体迁回 task 域后，用例断言与覆盖点<b>逐条不变</b>，只是被测类换到提供方一侧。
- * 覆盖 {@code startIfNeeded} 的幂等与边界，以及 {@code unlinkByAssignedAgent} 的薄委托。</p>
+ * 覆盖 {@code startIfNeeded} 的幂等与边界，以及 {@code unlinkByAssignedAgent} 的薄委托；
+ * W7 补 {@code start} / {@code claimAtomic} / {@code block}（原子命令、判定留消费方）；
+ * W8 补 {@code assignNext} / {@code markManualIntervention}（不透明命令，判定与降级语义全在提供方）。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("SubTaskCommandPortAdapter")
@@ -136,5 +140,23 @@ class SubTaskCommandPortAdapterTest {
         adapter.block(22L, "缺少上游产出", 7L);
 
         verify(subTaskService).block(22L, "缺少上游产出", 7L);
+    }
+
+    @Test
+    @DisplayName("assignNext: 不透明命令整体委派（行锁 + 并发额度判定全在提供方，适配器零判定）")
+    void shouldDelegateAssignNext() {
+        adapter.assignNext(7L, 22L);
+
+        verify(subTaskService).assignNext(7L, 22L);
+        // 零判定：本适配器不读库、不做状态/额度裁决（PENDING 前置校验与 Agent 行锁都在提供方）
+        verify(subTaskService, never()).getById(any());
+    }
+
+    @Test
+    @DisplayName("markManualIntervention: 委派 SubTaskService（best-effort 降级写，适配器刻意不叠事务）")
+    void shouldDelegateMarkManualIntervention() {
+        adapter.markManualIntervention(22L, "dispatch_skip_execution_dense", Map.of("agentId", 7L));
+
+        verify(subTaskService).markManualIntervention(22L, "dispatch_skip_execution_dense", Map.of("agentId", 7L));
     }
 }

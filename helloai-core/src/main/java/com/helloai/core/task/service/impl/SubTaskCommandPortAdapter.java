@@ -8,6 +8,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Map;
+
 /**
  * {@link SubTaskCommandPort} 的提供方实现（task 域）。
  *
@@ -77,5 +79,30 @@ public class SubTaskCommandPortAdapter implements SubTaskCommandPort {
     @Transactional(rollbackFor = Exception.class)
     public void block(Long subTaskId, String reason, Long agentId) {
         subTaskService.block(subTaskId, reason, agentId);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p><b>整体不透明</b>：PENDING 前置校验 + Agent 行锁（FOR UPDATE）串行化 +
+     * 锁内并发额度判定 + {@code changeStatus(ASSIGNED)} 全部落在
+     * {@code SubTaskService#assignNext} 内；本适配器零判定、零额外读写。</p>
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void assignNext(Long agentId, Long subTaskId) {
+        subTaskService.assignNext(agentId, subTaskId);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p><b>刻意不加 {@code @Transactional}</b>：{@code SubTaskService#markManualIntervention}
+     * 按 CODE_STYLE §7.1「单语句原子写豁免」口径自持 try-catch 降级（失败仅告警、不影响主链路）。
+     * 若在此叠加事务，会把「best-effort 降级」变成「随调用方事务回滚」，改变既有语义。</p>
+     */
+    @Override
+    public void markManualIntervention(Long subTaskId, String reason, Map<String, Object> extra) {
+        subTaskService.markManualIntervention(subTaskId, reason, extra);
     }
 }

@@ -7,6 +7,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.RetryPolicy;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.core.agent.AgentCapability;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.executor.AgentSelector.AgentSelectionConstraints;
@@ -15,8 +16,8 @@ import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.policy.TaskAgentPolicy;
-import com.helloai.core.task.port.TaskDispatchPort;
-import com.helloai.core.task.port.TaskDispatchPort.DispatchConstraints;
+import com.helloai.core.agent.port.TaskDispatchPort;
+import com.helloai.core.agent.port.TaskDispatchPort.DispatchConstraints;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
@@ -339,7 +340,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
                 log.debug("人工介入标记已存在，跳过重复回退: subTaskId={}", subTaskId);
                 return null;
             }
-            if (!SubTaskDispatchService.hasLocalExecutionCapability(fallbackAgent)) {
+            if (!AgentCapability.hasLocalExecutionCapability(fallbackAgent)) {
                 taskTimelineService.recordEvent(subTask.getTaskId(), subTask.getId(),
                         "sub_task_fallback_skip_need_human", AgentRole.SYSTEM, fallbackAgent.getId(),
                         Map.of("reason", "execution_dense_no_local_capability",

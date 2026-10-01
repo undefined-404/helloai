@@ -103,4 +103,18 @@ public interface SubTaskQueryPort {
      * @return 合并后的技能清单（绝不返回 {@code null}）
      */
     List<String> mergeSkills(Long subTaskId);
+
+    /**
+     * 判定子任务是否属「<b>执行密集</b>」（内容 / 验收 / 交付物含本机操作信号词）。
+     *
+     * <p><b>为什么形参是 ID 而不是快照</b>：判定口径**单源在提供方**
+     * （{@code SubTaskDispatchService.isExecutionDense} 的 §6.52 信号词表），
+     * 消费方不得自行复现——历史教训正是「各入口各自实现导致判定不一致」。
+     * 故消费方只问结论，提供方自读文本判定（信号词表与匹配逻辑都不外泄）。
+     * 代价是提供方多一次主键读（仅走「执行密集预检」分支时发生）。</p>
+     *
+     * @param subTaskId 子任务 ID
+     * @return 命中执行密集信号返回 {@code true}；子任务不存在返回 {@code false}
+     */
+    boolean isExecutionDense(Long subTaskId);
 }

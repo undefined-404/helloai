@@ -2,6 +2,8 @@ package com.helloai.core.task.service.impl;
 
 import com.helloai.core.agent.port.SubTaskQueryPort;
 import com.helloai.core.agent.port.SubTaskSnapshot;
+import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -74,5 +76,19 @@ public class SubTaskQueryPortAdapter implements SubTaskQueryPort {
     public List<String> mergeSkills(Long subTaskId) {
         List<String> merged = subTaskService.mergeSkills(subTaskService.getById(subTaskId));
         return merged != null ? merged : List.of();
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>整体不透明：执行密集信号词表与匹配逻辑由
+     * {@link SubTaskDispatchService#isExecutionDense} 单源持有，
+     * 本适配器只把「ID → 实体」这一步补上，判定口径零复制。子任务不存在时返回 {@code false}
+     * （与「无信号」同义，避免消费方再判空）。</p>
+     */
+    @Override
+    public boolean isExecutionDense(Long subTaskId) {
+        SubTask subTask = subTaskService.getById(subTaskId);
+        return subTask != null && SubTaskDispatchService.isExecutionDense(subTask);
     }
 }

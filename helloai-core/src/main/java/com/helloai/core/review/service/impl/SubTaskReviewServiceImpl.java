@@ -7,6 +7,7 @@ import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.core.agent.AgentCapability;
 import com.helloai.core.agent.event.AgentEventContextResolver;
 import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
@@ -293,7 +294,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                 && SubTaskDispatchService.isExecutionDense(subTask)
                 && submitterId != null) {
             Agent submitter = agentService.getById(submitterId);
-            if (!SubTaskDispatchService.hasLocalExecutionCapability(submitter)) {
+            if (!AgentCapability.hasLocalExecutionCapability(submitter)) {
                 log.warn("自动核验跳过：执行密集任务由无本机能力 Agent 提交, subTaskId={}, submitterAgentId={}",
                         subTaskId, submitterId);
                 taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId,

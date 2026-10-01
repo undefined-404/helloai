@@ -1,19 +1,22 @@
-package com.helloai.core.task.port;
+package com.helloai.core.agent.port;
 
 import java.util.List;
 
 /**
- * 子任务分发端口（task↔agent 事件解耦，阶段五）。
+ * 子任务分发端口（agent 域提供，task 域消费）。
  *
- * <p>按 §3.x 依赖方向红线与依赖倒置先例（同 {@code TaskPlannerPickerPort}）：
- * 端口定义在 task 域、由 agent 域 {@code ResilientDispatcher} 实现，
- * task 域（SubTaskDispatchService 及各补偿任务）只依赖本接口，
- * 不再直接引用 agent.dispatcher 具体类。</p>
+ * <p><b>端口归属判据</b>（{@code doc/HelloAI_CODE_STYLE.md} §7.2）：本端口原先落
+ * {@code task.port}，属检验判据时发现的<b>反教科书反例</b>——消费方 {@code task}
+ * <b>高于</b>提供方 {@code agent}，端口却放在消费方，强迫提供方反向依赖 {@code task}
+ * （即存量 {@code agent->task} 的一笔）。按完整判据（「让依赖落在顺向那一侧；
+ * 端口放在顺向依赖的被依赖方」）归位到<b>提供方</b> {@code agent.port}：由 {@code agent}
+ * 自身（{@code ResilientDispatcher}）实现，消费方 {@code task} 依赖它 = {@code task → agent}，
+ * 属<b>顺向合法</b>（2026-10-01 W8 归位）。</p>
  *
- * <p>实现侧语义（ResilientDispatcher）：首选 Agent fast-fail（SLEEPING/OFFLINE/
+ * <p>实现侧语义（{@code ResilientDispatcher}）：首选 Agent fast-fail（SLEEPING/OFFLINE/
  * 心跳陈旧/执行密集不匹配）+ per-agent 熔断 + fallback 同角色替代选人。</p>
  *
- * <p>端口契约不引用 agent 域类型：任务级选人约束以纯数据 record
+ * <p>端口契约不引用 task 域类型：任务级选人约束以纯数据 record
  * {@link DispatchConstraints} 表达，agent 域实现侧自行转换为内部约束。</p>
  */
 public interface TaskDispatchPort {

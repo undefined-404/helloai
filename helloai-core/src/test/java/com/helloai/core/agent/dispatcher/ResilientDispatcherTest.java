@@ -35,10 +35,11 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.observability.CircuitBreakerEventRecorder;
-import com.helloai.core.agent.service.AgentService;
-import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.agent.port.SubTaskCommandPort;
+import com.helloai.core.agent.port.SubTaskQueryPort;
+import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.port.TaskTimelinePort;
+import com.helloai.core.agent.service.AgentService;
 
 /**
  * ResilientDispatcher 单元测试。
@@ -51,7 +52,10 @@ import com.helloai.core.agent.port.TaskTimelinePort;
 class ResilientDispatcherTest {
 
     @Mock
-    private SubTaskService subTaskService;
+    private SubTaskQueryPort subTaskQueryPort;
+
+    @Mock
+    private SubTaskCommandPort subTaskCommandPort;
 
     @Mock
     private AgentService agentService;
@@ -81,7 +85,8 @@ class ResilientDispatcherTest {
         resilientDispatcher = new ResilientDispatcher(
                 circuitBreakerRegistry,
                 eventRecorder,
-                subTaskService,
+                subTaskQueryPort,
+                subTaskCommandPort,
                 agentService,
                 agentSelector,
                 agentDispatchProperties,
@@ -114,14 +119,14 @@ class ResilientDispatcherTest {
         return a;
     }
 
-    private SubTask executionDenseSubTask(Long id) {
-        SubTask s = new SubTask();
-        s.setId(id);
-        s.setTaskId(id + 1000L);
-        s.setContent("编写 verify-order-expire.ps1 脚本并执行验证");
-        s.setAcceptance("脚本运行通过");
-        s.setDeliverable("verify-order-expire.ps1");
-        return s;
+    private SubTaskSnapshot executionDenseSubTask(Long id) {
+        return SubTaskSnapshot.builder()
+                .id(id)
+                .taskId(id + 1000L)
+                .content("编写 verify-order-expire.ps1 脚本并执行验证")
+                .acceptance("脚本运行通过")
+                .deliverable("verify-order-expire.ps1")
+                .build();
     }
 
     /**
@@ -168,7 +173,7 @@ class ResilientDispatcherTest {
                     .hasMessageContaining("SLEEPING");
 
             // SLEEPING 不计入熔断，不应该调用 assignNext
-            verify(subTaskService, never()).assignNext(anyLong(), anyLong());
+            verify(subTaskCommandPort, never()).assignNext(anyLong(), anyLong());
         }
 
         @Test
@@ -195,7 +200,7 @@ class ResilientDispatcherTest {
                     .isInstanceOf(AgentUnavailableException.class)
                     .hasMessageContaining("心跳已陈旧");
 
-            verify(subTaskService, never()).assignNext(anyLong(), anyLong());
+            verify(subTaskCommandPort, never()).assignNext(anyLong(), anyLong());
         }
 
         @Test
@@ -208,7 +213,7 @@ class ResilientDispatcherTest {
 
             resilientDispatcher.assignNext(1L, 100L);
 
-            verify(subTaskService).assignNext(eq(1L), eq(100L));
+            verify(subTaskCommandPort).assignNext(eq(1L), eq(100L));
         }
     }
 
@@ -224,7 +229,7 @@ class ResilientDispatcherTest {
 
             resilientDispatcher.assignNext(1L, 100L);
 
-            verify(subTaskService).assignNext(eq(1L), eq(100L));
+            verify(subTaskCommandPort).assignNext(eq(1L), eq(100L));
         }
 
         @Test
@@ -235,7 +240,8 @@ class ResilientDispatcherTest {
             ResilientDispatcher dispatcherWithoutNamedConfig = new ResilientDispatcher(
                     registryWithoutNamedConfig,
                     eventRecorder,
-                    subTaskService,
+                    subTaskQueryPort,
+                    subTaskCommandPort,
                     agentService,
                     agentSelector,
                     agentDispatchProperties,
@@ -245,7 +251,7 @@ class ResilientDispatcherTest {
 
             dispatcherWithoutNamedConfig.assignNext(1L, 100L);
 
-            verify(subTaskService).assignNext(eq(1L), eq(100L));
+            verify(subTaskCommandPort).assignNext(eq(1L), eq(100L));
         }
     }
 
@@ -265,7 +271,7 @@ class ResilientDispatcherTest {
 
             invokeFallback(1L, 100L, new BizException("Agent 不存在: 1"));
 
-            verify(subTaskService).assignNext(eq(2L), eq(100L));
+            verify(subTaskCommandPort).assignNext(eq(2L), eq(100L));
         }
 
         @Test
@@ -292,14 +298,15 @@ class ResilientDispatcherTest {
             when(agentDispatchProperties.isFallbackSkipExecutionDense()).thenReturn(true);
             Agent noCap = apiKeyLlmAgent(1L, false);
             when(agentService.getById(1L)).thenReturn(noCap);
-            when(subTaskService.getById(100L)).thenReturn(executionDenseSubTask(100L));
+            when(subTaskQueryPort.findById(100L)).thenReturn(executionDenseSubTask(100L));
+            when(subTaskQueryPort.isExecutionDense(100L)).thenReturn(true);
 
             assertThatThrownBy(() -> resilientDispatcher.assignNext(1L, 100L))
                     .isInstanceOf(AgentUnavailableException.class)
                     .hasMessageContaining("执行密集任务不匹配无本机能力 Agent");
 
-            verify(subTaskService, never()).assignNext(anyLong(), anyLong());
-            verify(subTaskService).markManualIntervention(
+            verify(subTaskCommandPort, never()).assignNext(anyLong(), anyLong());
+            verify(subTaskCommandPort).markManualIntervention(
                     eq(100L), eq("dispatch_skip_execution_dense"), anyMap());
             verify(taskTimelinePort).recordEvent(
                     eq(1100L), eq(100L), eq("sub_task_dispatch_skip_no_capability"),
@@ -312,19 +319,21 @@ class ResilientDispatcherTest {
             when(agentDispatchProperties.isFallbackSkipExecutionDense()).thenReturn(true);
             Agent withCap = apiKeyLlmAgent(1L, true);
             when(agentService.getById(1L)).thenReturn(withCap);
-            when(subTaskService.getById(100L)).thenReturn(executionDenseSubTask(100L));
+            when(subTaskQueryPort.findById(100L)).thenReturn(executionDenseSubTask(100L));
+            when(subTaskQueryPort.isExecutionDense(100L)).thenReturn(true);
 
             resilientDispatcher.assignNext(1L, 100L);
 
-            verify(subTaskService).assignNext(eq(1L), eq(100L));
-            verify(subTaskService, never()).markManualIntervention(anyLong(), anyString(), anyMap());
+            verify(subTaskCommandPort).assignNext(eq(1L), eq(100L));
+            verify(subTaskCommandPort, never()).markManualIntervention(anyLong(), anyString(), anyMap());
         }
 
         @Test
         @DisplayName("fallback 替代 Agent 无本机能力 → 放弃分配 + 标记人工介入")
         void shouldSkipAlternativeWithoutLocalCapabilityInFallback() {
             when(agentDispatchProperties.isFallbackSkipExecutionDense()).thenReturn(true);
-            when(subTaskService.getById(100L)).thenReturn(executionDenseSubTask(100L));
+            when(subTaskQueryPort.findById(100L)).thenReturn(executionDenseSubTask(100L));
+            when(subTaskQueryPort.isExecutionDense(100L)).thenReturn(true);
             when(agentService.getById(1L)).thenReturn(null);
 
             Agent alternative = apiKeyLlmAgent(2L, false);
@@ -333,8 +342,8 @@ class ResilientDispatcherTest {
 
             invokeFallback(1L, 100L, new BizException("Agent 不存在: 1"));
 
-            verify(subTaskService, never()).assignNext(anyLong(), anyLong());
-            verify(subTaskService).markManualIntervention(
+            verify(subTaskCommandPort, never()).assignNext(anyLong(), anyLong());
+            verify(subTaskCommandPort).markManualIntervention(
                     eq(100L), eq("dispatch_skip_execution_dense"), anyMap());
         }
 
@@ -342,7 +351,8 @@ class ResilientDispatcherTest {
         @DisplayName("fallback 替代 Agent 有本机能力 → 正常分配")
         void shouldAssignToCapableAlternativeInFallback() {
             when(agentDispatchProperties.isFallbackSkipExecutionDense()).thenReturn(true);
-            when(subTaskService.getById(100L)).thenReturn(executionDenseSubTask(100L));
+            when(subTaskQueryPort.findById(100L)).thenReturn(executionDenseSubTask(100L));
+            when(subTaskQueryPort.isExecutionDense(100L)).thenReturn(true);
             when(agentService.getById(1L)).thenReturn(null);
 
             Agent alternative = apiKeyLlmAgent(2L, true);
@@ -351,7 +361,7 @@ class ResilientDispatcherTest {
 
             invokeFallback(1L, 100L, new BizException("Agent 不存在: 1"));
 
-            verify(subTaskService).assignNext(eq(2L), eq(100L));
+            verify(subTaskCommandPort).assignNext(eq(2L), eq(100L));
         }
     }
 }

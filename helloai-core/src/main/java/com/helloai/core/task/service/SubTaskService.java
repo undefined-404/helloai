@@ -5,7 +5,7 @@ import com.baomidou.mybatisplus.extension.service.IService;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Uncertainty;
-import com.helloai.core.task.port.TaskDispatchPort;
+import com.helloai.core.agent.port.TaskDispatchPort;
 import lombok.Data;
 import org.springframework.transaction.annotation.Transactional;
 

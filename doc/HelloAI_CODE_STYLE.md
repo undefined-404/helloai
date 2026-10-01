@@ -754,9 +754,9 @@ review.ReviewPortAdapter
 | `system.port.ArtifactReferencePort` | system（低） | task（高） | 消费方 | `task → system` | ✅ 顺向 |
 | `task.port.ReviewPort` | task（低） | review（高） | 消费方 | `review → task` | ✅ 顺向 |
 | `task.port.TaskPlannerPickerPort` | task（低） | planner（高） | 消费方 | `planner → task` | ✅ 顺向 |
-| `task.port.TaskDispatchPort` | task（**高**） | agent（**低**） | ❌ 消费方 | `agent → task` | ❌ **反向**，存量 68 的一笔 |
+| `agent.port.TaskDispatchPort` | task（**高**） | agent（**低**） | **提供方**（2026-10-01 W8 归位） | `task → agent` | ✅ 顺向 |
 
-> `TaskDispatchPort` 为**待回收反例**：消费方 `task` 高于提供方 `agent`，端口却按教科书放在消费方 → 强迫 `agent` 依赖 `task`。回收方式 = 端口归位到 `agent.port`（见 `doc/review/HelloAI 优先级决策分析（V2架构调整 vs 代码质量）.md` §16 批次 3）。
+> **反例已回收（2026-10-01 W8）**：`TaskDispatchPort` 原先按教科书放在**消费方** `task`，但消费方 `task` **高于**提供方 `agent` → 强迫 `agent` 反向依赖 `task`（正是存量 `agent->task` 的一笔）。已按完整判据归位到**提供方** `agent.port.TaskDispatchPort`（由 `ResilientDispatcher` 自身实现），消费方 `task` 依赖它属顺向合法。**教训：通用范式（Clean Architecture「端口恒在消费方」）必须叠加项目分层约束后重新验算依赖方向，不能照搬。**
 
 **禁止默认把 Port 放 `shared`**：`shared` 是**叶子域**（任何域都可依赖它）；把只服务单一消费方的窄接口放进去，会让契约归属与使用方分离，并诱发后续无谓扩散。仅当**多个域都是消费方**（端口确实多方共用）时才考虑。
 

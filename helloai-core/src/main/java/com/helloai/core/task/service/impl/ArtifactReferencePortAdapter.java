@@ -16,7 +16,7 @@ import java.util.List;
  *
  * <p><b>为什么端口定义在 system 域、实现在 task 域？</b>沿用本项目既有端口反转约定
  * 「消费方域定义接口、提供方域实现」（参见 {@code task.port.ReviewPort} /
- * {@code task.port.TaskDispatchPort} / {@code task.port.TaskPlannerPickerPort}）：
+ * {@code agent.port.TaskDispatchPort} / {@code task.port.TaskPlannerPickerPort}）：
  * 消费方 system 域零 import 反向域，提供方 task 域以 {@code task → system} 合法
  * 向下依赖实现之。</p>
  *

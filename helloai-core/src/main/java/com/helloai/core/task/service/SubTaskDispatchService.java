@@ -1,9 +1,8 @@
 package com.helloai.core.task.service;
 
 import com.helloai.common.constant.AgentRole;
-import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.TaskDispatchPort;
 import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.port.TaskDispatchPort;
 
 import java.util.regex.Pattern;
 
@@ -175,8 +174,11 @@ public interface SubTaskDispatchService {
     void redispatchInProgress(Long subTaskId, Long preferredAgentId);
 
     // ══════════════════════════════════════════════════════════════
-    //  §6.52 执行能力判定（public static：供 ResilientDispatcher 与
-    //  SubTaskReviewService 复用，避免各入口各自实现导致判定不一致）
+    //  §6.52 执行密集判定（public static：供 SubTaskDispatchServiceImpl /
+    //  SubTaskReviewService / ReviewEvidenceAssembler 复用，避免各入口
+    //  各自实现导致判定不一致）。
+    //  注：原同组的 hasLocalExecutionCapability 已于 2026-10-01（W8）归位到
+    //  agent 域 {@code AgentCapability}——其判定依据全部是 Agent 自身字段。
     // ══════════════════════════════════════════════════════════════
 
     /**
@@ -191,16 +193,6 @@ public interface SubTaskDispatchService {
         String text = String.join("\n",
                 nvl(subTask.getContent()), nvl(subTask.getAcceptance()), nvl(subTask.getDeliverable()));
         return EXECUTION_DENSE_PATTERN.matcher(text).find();
-    }
-
-    /** §6.52 本机执行能力判定：CLI_CLIENT/WEB_BROWSER 天然可本机操作；API_KEY_LLM 需 capabilities.supportsMCP=true。 */
-    static boolean hasLocalExecutionCapability(Agent agent) {
-        if (agent == null || agent.getAccessType() != com.helloai.common.constant.AgentAccessType.API_KEY_LLM) {
-            return true;
-        }
-        Object supportsMcp = agent.getCapabilities() != null
-                ? agent.getCapabilities().get("supportsMCP") : null;
-        return Boolean.TRUE.equals(supportsMcp);
     }
 
     /** §6.52 是否已有人工介入标记（防定时兜底反复触发回退）。 */

@@ -14,7 +14,7 @@ import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.policy.TaskAgentPolicy;
-import com.helloai.core.task.port.TaskDispatchPort;
+import com.helloai.core.agent.port.TaskDispatchPort;
 import com.helloai.core.task.service.impl.SubTaskDispatchServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;

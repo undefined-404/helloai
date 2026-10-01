@@ -8,10 +8,11 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.executor.AgentSelector;
-import com.helloai.core.agent.service.AgentService;
-import com.helloai.core.task.port.TaskDispatchPort;
-import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.agent.port.SubTaskCommandPort;
+import com.helloai.core.agent.port.SubTaskQueryPort;
+import com.helloai.core.agent.port.TaskDispatchPort;
 import com.helloai.core.agent.port.TaskTimelinePort;
+import com.helloai.core.agent.service.AgentService;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
@@ -59,7 +60,7 @@ import static org.mockito.Mockito.when;
  *   <li>{@link ResilientDispatcher} Bean 是 AOP 代理（AopUtils.isAopProxy）</li>
  *   <li>用 OFFLINE CLI_CLIENT 调用 {@link ResilientDispatcher#assignNext} 触发 fallback</li>
  *   <li>替代 Agent 是同角色健康 Agent</li>
- *   <li>{@link SubTaskService#assignNext} 被调用了两次：原 OFFLINE 一次 + 替代 Agent 一次</li>
+ *   <li>{@link SubTaskCommandPort#assignNext(Long, Long)} 被调用了两次：原 OFFLINE 一次 + 替代 Agent 一次</li>
  * </ul>
  * </p>
  */
@@ -77,7 +78,10 @@ class ResilientDispatcherAopIntegrationTest {
     private ResilientDispatcher resilientDispatcher;
 
     @MockBean
-    private SubTaskService subTaskService;
+    private SubTaskQueryPort subTaskQueryPort;
+
+    @MockBean
+    private SubTaskCommandPort subTaskCommandPort;
 
     @MockBean
     private AgentService agentService;
@@ -142,12 +146,12 @@ class ResilientDispatcherAopIntegrationTest {
         // 调用受保护的方法：触发 fallback
         resilientDispatcher.assignNext(101L, 999L);
 
-        // 断言 1：fallback 中调用的 subTaskService.assignNext 是替代 Agent ID
+        // 断言 1：fallback 中调用的 subTaskCommandPort.assignNext 是替代 Agent ID
         verify(agentSelector, times(1)).pickAlternative(eq(101L), any(), any());
-        verify(subTaskService, times(1)).assignNext(eq(202L), eq(999L));
-        // 断言 2：原 OFFLINE Agent 的 subTaskService.assignNext 没有被调用
+        verify(subTaskCommandPort, times(1)).assignNext(eq(202L), eq(999L));
+        // 断言 2：原 OFFLINE Agent 的 subTaskCommandPort.assignNext 没有被调用
         //         （因为它在 fast-fail 阶段抛出 AgentUnavailableException，根本走不到 assignNext）
-        verify(subTaskService, never()).assignNext(eq(101L), anyLong());
+        verify(subTaskCommandPort, never()).assignNext(eq(101L), anyLong());
     }
 
     @Test
@@ -222,8 +226,8 @@ class ResilientDispatcherAopIntegrationTest {
         resilientDispatcher.assignNext(101L, 999L, constraints);
 
         verify(agentSelector, times(1)).pickAlternative(eq(101L), any(), any());
-        verify(subTaskService, times(1)).assignNext(eq(202L), eq(999L));
-        verify(subTaskService, never()).assignNext(eq(101L), anyLong());
+        verify(subTaskCommandPort, times(1)).assignNext(eq(202L), eq(999L));
+        verify(subTaskCommandPort, never()).assignNext(eq(101L), anyLong());
     }
 
     /**

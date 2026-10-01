@@ -17,10 +17,11 @@ import org.springframework.stereotype.Service;
 import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.observability.CircuitBreakerEventRecorder;
 import com.helloai.core.agent.service.AgentService;
-import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.port.TaskDispatchPort;
-import com.helloai.core.task.service.SubTaskDispatchService;
-import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.agent.AgentCapability;
+import com.helloai.core.agent.port.SubTaskCommandPort;
+import com.helloai.core.agent.port.SubTaskQueryPort;
+import com.helloai.core.agent.port.SubTaskSnapshot;
+import com.helloai.core.agent.port.TaskDispatchPort;
 import com.helloai.core.agent.port.TaskTimelinePort;
 
 import java.util.Map;
@@ -28,8 +29,9 @@ import java.util.Map;
 /**
  * 弹性调度器。
  *
- * <p>实现 {@link TaskDispatchPort}（task 域定义的子任务分发端口，阶段五
- * task↔agent 事件解耦）：task 域只依赖端口，本类按依赖倒置提供实现。</p>
+ * <p>实现 {@link TaskDispatchPort}（<b>agent 域</b>提供的子任务分发端口）：
+ * 端口按 §7.2 判据落在提供方 agent 域（消费方 task 高于提供方 agent），
+ * task 域依赖它属顺向合法的 {@code task → agent}（2026-10-01 W8 由 {@code task.port} 归位）。</p>
  *
  * <p>为任务分配提供熔断降级保护：
  * <ul>
@@ -51,7 +53,7 @@ import java.util.Map;
  * </ul>
  *
  * @see AgentSelector
- * @see SubTaskService#assignNext(Long, Long)
+ * @see SubTaskCommandPort#assignNext(Long, Long)
  */
 @Slf4j
 @Service
@@ -60,7 +62,8 @@ public class ResilientDispatcher implements TaskDispatchPort {
 
     private final CircuitBreakerRegistry circuitBreakerRegistry;
     private final CircuitBreakerEventRecorder circuitBreakerEventRecorder;
-    private final SubTaskService subTaskService;
+    private final SubTaskQueryPort subTaskQueryPort;
+    private final SubTaskCommandPort subTaskCommandPort;
     private final AgentService agentService;
     private final AgentSelector agentSelector;
     private final AgentDispatchProperties agentDispatchProperties;
@@ -77,7 +80,7 @@ public class ResilientDispatcher implements TaskDispatchPort {
      *   <li>按 agentId 获取/创建 per-agent 熔断器</li>
      *   <li>校验 Agent 在线状态（SLEEPING/OFFLINE 立即 fast-fail）</li>
      *   <li>执行密集能力预检（不匹配 → 标记人工介入并 fast-fail 走 fallback）</li>
-     *   <li>调用 {@link SubTaskService#assignNext} 执行分配</li>
+     *   <li>调用 {@link SubTaskCommandPort#assignNext} 执行分配</li>
      *   <li>失败/熔断打开 → fallback 选取替代 Agent</li>
      * </ol>
      *
@@ -158,7 +161,7 @@ public class ResilientDispatcher implements TaskDispatchPort {
 
             log.info("弹性调度分配: agentId={}, subTaskId={}, onlineStatus={}",
                     agentId, subTaskId, onlineStatus);
-            subTaskService.assignNext(agentId, subTaskId);
+            subTaskCommandPort.assignNext(agentId, subTaskId);
         }).run();
     }
 
@@ -170,19 +173,19 @@ public class ResilientDispatcher implements TaskDispatchPort {
         if (!agentDispatchProperties.isFallbackSkipExecutionDense()) {
             return false;
         }
-        SubTask subTask = subTaskService.getById(subTaskId);
-        if (subTask == null || !SubTaskDispatchService.isExecutionDense(subTask)) {
+        SubTaskSnapshot subTask = subTaskQueryPort.findById(subTaskId);
+        if (subTask == null || !subTaskQueryPort.isExecutionDense(subTaskId)) {
             return false;
         }
-        if (SubTaskDispatchService.hasLocalExecutionCapability(agent)) {
+        if (AgentCapability.hasLocalExecutionCapability(agent)) {
             return false;
         }
-        taskTimelinePort.recordEvent(subTask.getTaskId(), subTask.getId(),
+        taskTimelinePort.recordEvent(subTask.taskId(), subTask.id(),
                 "sub_task_dispatch_skip_no_capability", AgentRole.SYSTEM, agentId,
                 Map.of("reason", "execution_dense_no_local_capability",
                         "agentId", agentId,
                         "subTaskId", subTaskId));
-        subTaskService.markManualIntervention(subTaskId, "dispatch_skip_execution_dense",
+        subTaskCommandPort.markManualIntervention(subTaskId, "dispatch_skip_execution_dense",
                 Map.of("agentId", agentId));
         log.warn("V27.1 分配跳过：执行密集任务不可分配给无本机能力 Agent, subTaskId={}, agentId={}",
                 subTaskId, agentId);
@@ -266,6 +269,6 @@ public class ResilientDispatcher implements TaskDispatchPort {
 
         log.info("熔断降级成功: originalAgentId={} → alternativeAgentId={}, subTaskId={}",
                 agentId, alternative.getId(), subTaskId);
-        subTaskService.assignNext(alternative.getId(), subTaskId);
+        subTaskCommandPort.assignNext(alternative.getId(), subTaskId);
     }
 }
