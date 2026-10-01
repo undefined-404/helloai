@@ -1,12 +1,14 @@
 package com.helloai.core.agent.event;
 
-import com.helloai.core.task.entity.SubTask;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * {@link AgentEventContextResolver} 单元测试（Phase 0 B2）。
+ *
+ * <p>2026-10-01：{@code resolveTurn} 形参由 task 域实体 {@code SubTask} 改为两个计数，
+ * 以摘除 agent → task 的反向 import；原「空实体」语义等价折算为「两个计数皆空」。</p>
  */
 class AgentEventContextResolverTest {
 
@@ -18,33 +20,26 @@ class AgentEventContextResolverTest {
 
     @Test
     void turnStartsAtOneWhenCountersEmpty() {
-        SubTask subTask = new SubTask();
-        assertEquals(1, AgentEventContextResolver.resolveTurn(subTask));
+        assertEquals(1, AgentEventContextResolver.resolveTurn(0, 0));
     }
 
     @Test
     void turnAccountsReworkAndReassign() {
-        SubTask subTask = new SubTask();
-        subTask.setReworkCount(2);
-        subTask.setAttemptTotal(3);
         // 1 + rework(2) + attemptTotal(3) = 6
-        assertEquals(6, AgentEventContextResolver.resolveTurn(subTask));
+        assertEquals(6, AgentEventContextResolver.resolveTurn(2, 3));
     }
 
     @Test
     void turnTreatsNullCountersAsZero() {
-        SubTask subTask = new SubTask();
-        subTask.setReworkCount(null);
-        subTask.setAttemptTotal(null);
-        assertEquals(1, AgentEventContextResolver.resolveTurn(subTask));
-
-        subTask.setReworkCount(1);
-        subTask.setAttemptTotal(null);
-        assertEquals(2, AgentEventContextResolver.resolveTurn(subTask));
+        // rework=1, attempt=null -> 1 + 1 + 0 = 2
+        assertEquals(2, AgentEventContextResolver.resolveTurn(1, null));
+        // rework=null, attempt=3 -> 1 + 0 + 3 = 4
+        assertEquals(4, AgentEventContextResolver.resolveTurn(null, 3));
     }
 
     @Test
-    void turnReturnsOneForNullSubTask() {
-        assertEquals(1, AgentEventContextResolver.resolveTurn(null));
+    void turnReturnsOneWhenBothCountersNull() {
+        // 原「空 SubTask → 1」语义：调用方的可空实体折算为 (null, null) 后仍返回 1
+        assertEquals(1, AgentEventContextResolver.resolveTurn(null, null));
     }
 }

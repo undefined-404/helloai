@@ -386,7 +386,9 @@ public class McpToolServiceImpl implements McpToolService {
             agentEventRecorder.record(
                     AgentEventContextResolver.resolveRunId(taskId),
                     taskId, subTaskId,
-                    AgentEventContextResolver.resolveTurn(subTask), 0,
+                    AgentEventContextResolver.resolveTurn(
+                            subTask != null ? subTask.getReworkCount() : null,
+                            subTask != null ? subTask.getAttemptTotal() : null), 0,
                     AgentEventType.AGENT_STARTED, agentId,
                     Map.of("scenario", "claim"));
         } catch (Exception e) {

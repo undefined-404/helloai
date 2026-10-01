@@ -230,7 +230,7 @@ public class ExecutionResultHandler {
             subTaskService.submit(report.getSubTaskId());
             // Phase 1 Step 3：执行会话终态 COMPLETED（best-effort 不阻断回写）
             agentSessionService.complete(report.getSubTaskId(), report.getAgentId(),
-                    AgentEventContextResolver.resolveTurn(subTask));
+                    AgentEventContextResolver.resolveTurn(subTask.getReworkCount(), subTask.getAttemptTotal()));
             taskTimelineService.recordEvent(
                     subTask.getTaskId(),
                     report.getSubTaskId(),
@@ -248,7 +248,7 @@ public class ExecutionResultHandler {
                 agentEventRecorder.record(
                         AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
                         subTask.getTaskId(), report.getSubTaskId(),
-                        AgentEventContextResolver.resolveTurn(subTask), 0,
+                        AgentEventContextResolver.resolveTurn(subTask.getReworkCount(), subTask.getAttemptTotal()), 0,
                         AgentEventType.AGENT_COMPLETED, report.getAgentId(),
                         safeMap("success", report.isSuccess(),
                                 "source", report.getSource(),
@@ -302,7 +302,7 @@ public class ExecutionResultHandler {
             subTaskService.block(report.getSubTaskId());
             // Phase 1 Step 3：执行会话终态 FAILED（error 摘要；best-effort 不阻断回写）
             agentSessionService.fail(report.getSubTaskId(), report.getAgentId(),
-                    AgentEventContextResolver.resolveTurn(subTask), report.getError());
+                    AgentEventContextResolver.resolveTurn(subTask.getReworkCount(), subTask.getAttemptTotal()), report.getError());
             taskTimelineService.recordEvent(
                     subTask.getTaskId(),
                     report.getSubTaskId(),

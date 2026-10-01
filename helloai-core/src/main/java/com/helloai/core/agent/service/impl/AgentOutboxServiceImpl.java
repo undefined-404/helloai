@@ -7,8 +7,8 @@ import com.helloai.common.constant.OutboxStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.AgentOutboxEvent;
 import com.helloai.core.agent.mapper.AgentOutboxEventMapper;
+import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.service.AgentOutboxService;
-import com.helloai.core.task.entity.SubTask;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -31,23 +31,23 @@ public class AgentOutboxServiceImpl extends ServiceImpl<AgentOutboxEventMapper, 
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public AgentOutboxEvent createEvent(SubTask subTask, SubTaskStatus newStatus) {
+    public AgentOutboxEvent createEvent(SubTaskSnapshot subTask, SubTaskStatus newStatus) {
         AgentOutboxEvent event = new AgentOutboxEvent();
         event.setEventId(UUID.randomUUID().toString().replace("-", ""));
         event.setEventType("sub_task." + newStatus.name().toLowerCase());
-        event.setRoutingKey(resolveRoutingKey(subTask, newStatus));
+        event.setRoutingKey(resolveRoutingKey(newStatus));
         Map<String, Object> payload = new HashMap<>(Map.of(
                 // §6.82 批次 D：eventId 随 payload 下发，MQ 消费者（MqReviewCommandConsumer）
                 // 以 eventId 为消息幂等键（同一事件重投不重复消费；同子任务多轮 REVIEW 各自独立）
                 "eventId", event.getEventId(),
-                "subTaskId", subTask.getId(),
-                "taskId", subTask.getTaskId(),
+                "subTaskId", subTask.id(),
+                "taskId", subTask.taskId(),
                 "status", newStatus.name(),
-                "agentId", subTask.getAssignedAgentId() != null ? subTask.getAssignedAgentId() : 0L
+                "agentId", subTask.assignedAgentId() != null ? subTask.assignedAgentId() : 0L
         ));
         if (newStatus == SubTaskStatus.BLOCKED
-                && subTask.getContext() != null
-                && subTask.getContext().get("blockedReason") instanceof String reason
+                && subTask.context() != null
+                && subTask.context().get("blockedReason") instanceof String reason
                 && reason != null
                 && !reason.isBlank()) {
             payload.put("blockedReason", reason);
@@ -57,7 +57,7 @@ public class AgentOutboxServiceImpl extends ServiceImpl<AgentOutboxEventMapper, 
         event.setRetryCount(0);
         save(event);
         log.info("Outbox event created: eventId={}, type={}, subTaskId={}",
-                event.getEventId(), event.getEventType(), subTask.getId());
+                event.getEventId(), event.getEventType(), subTask.id());
         return event;
     }
 
@@ -119,7 +119,7 @@ public class AgentOutboxServiceImpl extends ServiceImpl<AgentOutboxEventMapper, 
                 .update();
     }
 
-    private String resolveRoutingKey(SubTask subTask, SubTaskStatus status) {
+    private String resolveRoutingKey(SubTaskStatus status) {
         return switch (status) {
             case ASSIGNED -> "agent.executor.assigned";
             case REVIEW -> "agent.reviewer.assigned";

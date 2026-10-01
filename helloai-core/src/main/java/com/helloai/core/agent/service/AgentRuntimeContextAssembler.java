@@ -108,7 +108,7 @@ public class AgentRuntimeContextAssembler {
             throw new BizException("子任务不可执行: status=" + subTask.getStatus());
         }
 
-        int runTurn = AgentEventContextResolver.resolveTurn(subTask);
+        int runTurn = AgentEventContextResolver.resolveTurn(subTask.getReworkCount(), subTask.getAttemptTotal());
         String runId = AgentEventContextResolver.resolveRunId(subTask.getTaskId());
         List<String> requiredSkills = command.getRequiredSkills() != null
                 ? command.getRequiredSkills() : Collections.emptyList();

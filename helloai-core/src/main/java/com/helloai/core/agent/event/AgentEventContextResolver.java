@@ -1,7 +1,5 @@
 package com.helloai.core.agent.event;
 
-import com.helloai.core.task.entity.SubTask;
-
 /**
  * Agent 事件埋点上下文解析（Phase 0 B2，ADR-001 §3 标识规则）。
  *
@@ -36,14 +34,12 @@ public final class AgentEventContextResolver {
      * （{@code redispatchDeadLetter}）同样清零 attemptTotal 与 reworkCount 导致的序号回落为已知近似——
      * 事件仅 write-only 不参与业务决策，回落不影响 B3 对账（对账只校验终态事件 vs 业务表状态）。</p>
      *
-     * @param subTask 子任务实体（可空，空时返回 1）
+     * @param reworkCount  返工次数（可空，空按 0）
+     * @param attemptTotal 重派次数（可空，空按 0）
      */
-    public static int resolveTurn(SubTask subTask) {
-        if (subTask == null) {
-            return 1;
-        }
-        int rework = subTask.getReworkCount() != null ? subTask.getReworkCount() : 0;
-        int attempts = subTask.getAttemptTotal() != null ? subTask.getAttemptTotal() : 0;
+    public static int resolveTurn(Integer reworkCount, Integer attemptTotal) {
+        int rework = reworkCount != null ? reworkCount : 0;
+        int attempts = attemptTotal != null ? attemptTotal : 0;
         return 1 + rework + attempts;
     }
 }

@@ -16,6 +16,7 @@ import com.helloai.common.util.HostNameUtils;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.event.AgentEventContextResolver;
 import com.helloai.core.agent.event.AgentEventRecorder;
+import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentOutboxService;
@@ -363,7 +364,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
             throw new BizException("并发修改，请重试");
         }
 
-        agentOutboxService.createEvent(subTask, newStatus);
+        agentOutboxService.createEvent(toSnapshot(subTask), newStatus);
 
         // 投递收件箱通知
         sendInboxNotification(subTask, newStatus, oldStatus);
@@ -453,7 +454,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         }
 
         updateById(subTask);
-        agentOutboxService.createEvent(subTask, SubTaskStatus.DONE);
+        agentOutboxService.createEvent(toSnapshot(subTask), SubTaskStatus.DONE);
         // 审查通过补发收件箱通知（携带最新一轮 review 评分/评语），
         // 外部 Agent 轮询 pullTasks 即可感知交付结果反馈
         sendApprovedInboxNotification(subTask);
@@ -805,7 +806,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         // 驳回统一补发收件箱通知（自动核验 rejectAndRework 与人工 reworkById 共用本入口），
         // 摘要携带最近一轮 review 结果（评分/评语/问题），外部 Agent 轮询 pullTasks 即可感知返工原因
         sendReworkInboxNotification(subTask);
-        agentOutboxService.createEvent(subTask, SubTaskStatus.REWORK);
+        agentOutboxService.createEvent(toSnapshot(subTask), SubTaskStatus.REWORK);
         // Phase 0 B2：REWORK_STARTED（Run 级事件 turn=0/step=0；reworkCount 已递增）
         recordReworkStartedSafely(subTask, reworkAgentId, false);
         // §6.104 打回失效：旧提交附件全部置 INACTIVE，返工必须重新上传最新版
@@ -896,7 +897,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         notifyAgentHandover(subTask, oldAgentId);
         // 人工驳回同样补发收件箱通知（携带 review 摘要，无历史时回退默认文案）
         sendReworkInboxNotification(subTask);
-        agentOutboxService.createEvent(subTask, SubTaskStatus.REWORK);
+        agentOutboxService.createEvent(toSnapshot(subTask), SubTaskStatus.REWORK);
         // Phase 0 B2：REWORK_STARTED（Run 级事件 turn=0/step=0；reworkFresh 已重置 reworkCount）
         recordReworkStartedSafely(subTask, reworkAgentId, true);
         // 注意：Map.of 不接受 null 值，reworkAgentId 可能为 null（不换派原执行者重做），必须用 HashMap
@@ -1361,5 +1362,18 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     @Override
     public List<Long> listStalePendingWithoutExecutionRecord(OffsetDateTime cutoff, int limit) {
         return baseMapper.selectStalePendingWithoutExecutionRecord(cutoff, limit);
+    }
+
+    /**
+     * 子任务实体 → agent 域只读快照。
+     *
+     * <p><b>为什么要在这里映射</b>：{@code AgentOutboxService} 属 agent 域，其
+     * {@code createEvent} 若以 {@code task.entity.SubTask} 为形参，会造成
+     * agent → task 的 §6 反向依赖。改由提供方（task）把实体映射为消费方（agent）定义的
+     * {@link SubTaskSnapshot} 后传入，依赖方向变为 {@code task → agent}，**顺向合法**。</p>
+     */
+    private SubTaskSnapshot toSnapshot(SubTask subTask) {
+        return new SubTaskSnapshot(subTask.getId(), subTask.getTaskId(),
+                subTask.getAssignedAgentId(), subTask.getContext());
     }
 }

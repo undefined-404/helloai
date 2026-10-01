@@ -3,7 +3,7 @@ package com.helloai.core.agent.service;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.AgentOutboxEvent;
-import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.agent.port.SubTaskSnapshot;
 
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -15,8 +15,11 @@ public interface AgentOutboxService extends IService<AgentOutboxEvent> {
 
     /**
      * 创建 Outbox 事件（同业务事务写入，MQ 侧经 AgentEventCompensationTask 投递）。
+     *
+     * <p>入参为 {@link SubTaskSnapshot} 快照而非 task 域实体：本接口属 agent 域，
+     * 若形参用 {@code task.entity.SubTask} 会引入 agent → task 反向依赖。</p>
      */
-    AgentOutboxEvent createEvent(SubTask subTask, SubTaskStatus newStatus);
+    AgentOutboxEvent createEvent(SubTaskSnapshot subTask, SubTaskStatus newStatus);
 
     /**
      * 创建「最终报告审查请求」Outbox 事件（§12.2 审查链三级容错 L2）。

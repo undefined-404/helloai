@@ -639,3 +639,87 @@ grep -rn "^[[:space:]]*import[[:space:]]\+com\.helloai\.core\.task" helloai-core
 
 
 
+### 16.8 批次 5 的真实难点：`read-check-write` 事务序列（2026-10-01 批次 2 后实测补记）
+
+**背景**：批次 2 第一组落地后 `agent->task` 余 **54**。为判定「是否存在业务逻辑上不可拆的反向依赖」，逐调用点复核了 54 处的**实际方法名**（非仅 import 计数）。结论：**不存在业务语义上非反向不可的依赖**，但存在一个**接口形状**上的硬约束。
+
+**实测 54 处归因（2026-10-01，批次 2 后）**：
+
+| 归因 | 处数 | 成员（import 计） |
+|---|---|---|
+| 实体当自身数据用 | 19 | `SubTask` 14、`Uncertainty` 2、`Attachment` 2、`entity.*` 通配 1 |
+| 直接调对方域 Service | 30 | `SubTaskService` 12、`TaskTimelineService` 11、`TaskRunningSpecService` 3、`AttachmentService` 3、`SubTaskDispatchService` 1 |
+| 规格值对象跨域复用 | 4 | `ExecutionRecord` 3、`ExecutionRecordParser` 1 |
+| 端口放错域 | 1 | `TaskDispatchPort`（误放消费方） |
+
+**两个可判定的结论**：
+
+1. **`TaskTimelineService` 是教科书级事件解耦对象，不是难点**。17 个调用点 **100% 是 `recordEvent(...)`**——纯写副作用、无返回值、无读取。它之所以是反向 import，纯粹因为被放进 task 域当 Service 直调；改为「agent 发领域事件 + task 侧 `AFTER_COMMIT` 监听」是语义等价替换，**无原子性负担**（append-only 审计流）。
+2. **真正的硬核心只有 3~4 处（属批次 5）**：`ExecutionCommandServiceImpl.createAssignedCommand`（`getByIdForUpdate` 悲观锁 → 二次判重 → 三表同事务写入）、`McpToolServiceImpl` 认领链（`isReady` → `claimAtomic` → 重新读取）、`SubTaskExecutionServiceImpl.start`。
+
+**硬核约束（决定批次 5 的接口形状）**：这些点的「加锁读 → 判定 → 写」在**同一事务内**，**不可**按「读子集 → 端口、写子集 → 事件」对半拆——那会**撕开事务边界**：agent 读到的状态可能已被并发修改，判定失去依据 → 认领竞态 / 重复执行。
+
+> **正确做法**：把整条序列**整体反转为一个「不透明命令端口」方法**——agent 只传参、不做判定；加锁、判定、写全部留在 task 侧原事务内。语义与原子性不变，而 `agent -> task` 的 import 归零。
+>
+> 附带证据：`claimAtomic` 本身已是 DB 层原子条件更新（`WHERE status='PENDING' AND (assigned_agent IS NULL OR = agentId)`），说明「判定已下沉到 DB」的写法**天然适合整体做命令端口**，而不是拆成读+写。
+
+**对 §16.4 批次 5 行的补充约束**：批次 5 描述「写操作 → 领域事件」只适用于**无判定的副作用写**（`recordEvent` 类，占 `TaskTimelineService` 11 处）；**有判定的状态推进必须走命令端口**，二者不可混用同一手法。
+
+### 16.9 可执行计划：从「按 import 类型分 5 批」改为「按文件收敛的 10 轮」（2026-10-01 批次 2 后重排）
+
+**为什么必须重排**：§16.4 的 5 批是按 **import 类型** 切的软分段，但**执行的原子单位是文件**。实测 20 个含 task import 的 agent 文件里，**12 个同时跨 2~4 种机制**（仅 8 个是单机制）：
+
+| 需机制数 | 文件数 | 文件 |
+|---|---|---|
+| 4 种 | 3 | `ExecutionResultHandler`、`ResilientDispatcher`、`AgentRuntimeContextAssembler` |
+| 2~3 种 | 9 | `ExecutionCommandPoller`、`SubTaskAutoExecutionDispatcher`、`LocalExecutionCommandConsumer`、`ExecutorDoneIssuesBackfiller`、`ExecutionCommandServiceImpl`、`McpToolServiceImpl`、`ExecutionArtifactServiceImpl`、`EventReconciliationServiceImpl`、`AgentServiceImpl` |
+| 1 种 | 8 | `AgentEventContextResolver`、`CircuitBreakerEventRecorder`、`AgentLifecycleService`、`AgentOutboxService`、`AgentOutboxServiceImpl`、`ExecutionArtifactService`、`McpToolService`、`SubTaskExecutionServiceImpl` |
+
+> 故**一个文件必须一次性改完**（否则同文件被多轮反复改动、反复锁基线，且中间态可能编译不过）。
+>
+> **补充铁律（W1 实测订正，2026-10-01）**：除「同文件跨机制」外，还有两类**跨文件耦合**必须同轮处理——
+> ① **接口与其实现必须同轮**：改接口签名不改实现必然编译不过（如 `ExecutionArtifactService` ↔ `ExecutionArtifactServiceImpl`、`McpToolService` ↔ `McpToolServiceImpl`）；
+> ② **被调方（形参接收方）改签名会波及其调用方**：纯静态工具或 agent 自有接口若形参是 task 实体，改成快照后，调用方必须能提供快照——若调用方自己还没换（属后续轮），则只能改成**基础类型**（如 `resolveTurn(SubTask)` → `resolveTurn(Integer, Integer)`）或由提供方（task）侧映射。
+>
+> 依据此铁律，原 W1 的 5 处**订正为 3 处**：`ExecutionArtifactService` 并入 W6（5 处）、`McpToolService` 并入 W7（6 处）。
+
+**前置件（按需增量就位，不必一次全建）**：
+
+| 编号 | 出口 | 何时就位 | 说明 |
+|---|---|---|---|
+| **P1** | 快照 `record` 族 | W1 前 | ✅ `agent.port.SubTaskSnapshot`（id / taskId / assignedAgentId / context，**字段按需增长**）已于 W1 交付；`UncertaintySnapshot`（W7）、`AttachmentRef`（W6）待建——**照抄 §15 `system/port/ArtifactReference`（record）+ Adapter 先例** |
+| **P2** | 事件族 | W2 前 | `SubTaskTimelineEvent` + task 侧 `AFTER_COMMIT` 监听，替换 `TaskTimelineService.recordEvent` |
+| **P3** | 只读端口族 + 命令端口族 | W3 前 | `SubTaskQueryPort` / `TaskRunningSpecPort` / `AttachmentQueryPort`（读）；**`SubTaskCommandPort`（有判定的状态推进，整体不透明，见 §16.8）** |
+
+**轮次（每轮 = 一批文件，独立提交、独立锁基线）**：
+
+| 轮 | 消除 | 剩 | 文件（处数） | 机制 | 风险 |
+|---|---|---|---|---|---|
+| **W1** ✅ **已完成（2026-10-01）** | 3 | 51 | `AgentEventContextResolver`(1)、`AgentOutboxService`(1)、`AgentOutboxServiceImpl`(1) | 计量下沉（实体 → 两个计数）+ 快照契约（`agent.port.SubTaskSnapshot`） | 低 |
+| **W2** | 2 | 49 | `CircuitBreakerEventRecorder`(1)、`AgentLifecycleService`(1) | 纯事件 | 低 |
+| **W3** | 4 | 45 | `EventReconciliationServiceImpl`(2)、`AgentServiceImpl`(1)、`SubTaskExecutionServiceImpl`(1) | 端口读 + 命令写 | 低~中 |
+| **W4** | 12 | 33 | `ExecutionCommandPoller`(3)、`SubTaskAutoExecutionDispatcher`(3)、`LocalExecutionCommandConsumer`(3)、`ExecutorDoneIssuesBackfiller`(3) | 快照 + 端口 + 事件 | 中 |
+| **W5** | 3 | 30 | `ExecutionCommandServiceImpl`(3) | **含硬核 `getByIdForUpdate` 命令端口** | 中高 |
+| **W6** | 5 | 25 | `ExecutionArtifactServiceImpl`(4) + `ExecutionArtifactService`(1，**接口与实现同轮**) | 快照 + 端口 + 事件 | 中 |
+| **W7** | 6 | 19 | `McpToolServiceImpl`(5) + `McpToolService`(1，**接口与实现同轮**；`SubTaskDetail.uncertainties` → 快照) | **含硬核 `claimAtomic` 命令端口** | 高 |
+| **W8** | 5 | 14 | `ResilientDispatcher`(5) | 快照 + **端口归位（原批次 3）** + 命令 + 事件 | 高 |
+| **W9** | 6 | 8 | `ExecutionResultHandler`(6) | 四机制齐用（核心回调链） | 高 |
+| **W10** | 8 | 0 | `AgentRuntimeContextAssembler`(8) | 四机制齐用；**顺带拆上帝类（678 行）** | 高 |
+
+> 合计 **3+2+4+12+3+5+6+5+6+8 = 54**，文件 **3+2+3+4+1+2+2+1+1+1 = 20**，与实测逐项对齐。
+> **排序原则**：从「单机制、调用面窄、零行为变更」到「多机制、核心链路、含事务语义」；每轮都可独立验证、独立回滚。
+
+**每轮纪律（§16.5 不变）**：一改一测 → `check-arch-freeze.sh` 确认 `agent->task` 单调下降 → `--update-baseline` 锁定 → 复跑 `EXIT=0` → 全量 `clean test` + `<testcase>` 计数 → 独立一笔提交。
+
+**两项必须提前处理的副作用 / 阻塞**：
+
+1. **`task->agent`（组 3 前向）会随轮次上升**——每新建一个端口适配器或事件监听器，提供方 `task` 就多 1 条 `task->agent`。当前 42，随 W1~W10 预计升至 **约 48~52**。**这是端口反转的机制性代价，不是回归**；需在 W1 开工前就「组 3 是否降为仅提示」达成结论（见 §16.5 风险表末行），否则每轮都要单独走一次棘轮评审。
+2. **`SubTaskAutoExecutionDispatcher`（W4）与未提交的「批次 B（凭据硬切）」同文件** —— 批 B 对该文件有 103 行删除、且 hunk 上下文落在 import 区。**须先提交批 B（或先合批），再做 W4**，否则必然冲突。
+
+**W1 执行记录（2026-10-01）**
+
+- **做法**：① `AgentEventContextResolver.resolveTurn(SubTask)` → `resolveTurn(Integer reworkCount, Integer attemptTotal)`（该工具类只用这两个计数，改基础类型即可摘除实体依赖；调用方 3 处 `ExecutionResultHandler` + `AgentRuntimeContextAssembler` + `McpToolServiceImpl` 中，前两者 `subTask` 已保证非空，**`McpToolServiceImpl` 的 `updated` 可为 null，故保留等价空值容错**）；② 新建 `agent.port.SubTaskSnapshot`（record），`AgentOutboxService.createEvent(SubTask, …)` → `createEvent(SubTaskSnapshot, …)`，由**提供方 `SubTaskServiceImpl` 的私有 `toSnapshot(SubTask)` 映射**（`task → agent` 顺向），并顺势删掉 `resolveRoutingKey` 里未使用的 `SubTask` 形参。
+- **验收**：定向 **148 例 / 0 失败**；`agent->task` **54 → 51**（−3，与推演一致）；代价 `task->agent` **42 → 43**（+1，`SubTaskServiceImpl` 新增 1 条 `task → agent` import，顺向合法）；`--update-baseline` 锁定 **51 / 43**，复跑 20 条 `EXIT=0`；全量 `clean test` **7/7 SUCCESS**、`<testcase>` 口径 **1783 / 0 / 0 / 0**（core 1628 / job 85 / api 70，与改前一致）。
+
+
+
