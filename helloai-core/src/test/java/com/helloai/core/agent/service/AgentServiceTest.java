@@ -14,6 +14,7 @@ import com.helloai.core.agent.mapper.AgentMapper;
 import com.helloai.core.agent.mapper.ConversationArchiveMapper;
 import com.helloai.core.agent.mapper.ConversationMessageMapper;
 import com.helloai.core.agent.port.AgentAuthPort;
+import com.helloai.core.agent.port.SubTaskStatsPort;
 import com.helloai.core.agent.service.impl.AgentServiceImpl;
 import com.helloai.core.system.entity.LlmProviderModel;
 import com.helloai.core.agent.service.ActivityLogService;
@@ -53,6 +54,8 @@ class AgentServiceTest {
     @Mock
     private SubTaskService subTaskService;
     @Mock
+    private SubTaskStatsPort subTaskStatsPort;
+    @Mock
     private RewardService rewardService;
     @Mock
     private ActivityLogService activityLogService;
@@ -85,7 +88,7 @@ class AgentServiceTest {
                 new AgentCredentialService(agentMapper, agentApiKeyCipher),
                 new AgentSkillPolicyService(agentMapper, llmProviderModelQueryService),
                 new AgentLifecycleService(agentMapper, taskTimelineService),
-                new AgentStatsService(agentMapper, subTaskService, rewardService, activityLogService)));
+                new AgentStatsService(agentMapper, subTaskStatsPort, rewardService, activityLogService)));
     }
 
     @Test
@@ -98,8 +101,8 @@ class AgentServiceTest {
         // 阶段五：getRelatedCounts 收口到 AgentStatsService，经 AgentMapper 取 Agent
         when(agentMapper.selectById(1L)).thenReturn(agent);
 
-        when(subTaskService.countByAssignedAgent(1L)).thenReturn(3L);
-        when(subTaskService.countReviewByReviewerAgent(1L)).thenReturn(2L);
+        when(subTaskStatsPort.countByAssignedAgent(1L)).thenReturn(3L);
+        when(subTaskStatsPort.countReviewByReviewerAgent(1L)).thenReturn(2L);
         when(rewardService.countByAgent(1L)).thenReturn(5L);
         when(activityLogService.countByAgent(1L)).thenReturn(7L);
 

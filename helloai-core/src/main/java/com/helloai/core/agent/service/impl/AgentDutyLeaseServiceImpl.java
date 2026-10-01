@@ -13,11 +13,10 @@ import com.helloai.core.agent.entity.AgentDutyLease;
 import com.helloai.core.agent.entity.AgentDutyLeaseLatestRow;
 import com.helloai.core.agent.mapper.AgentDutyLeaseMapper;
 import com.helloai.core.agent.mapper.AgentMapper;
+import com.helloai.core.agent.port.SubTaskStatsPort;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.shared.event.DutyLeaseClosedEvent;
-import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.service.SubTaskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -46,7 +45,7 @@ public class AgentDutyLeaseServiceImpl extends ServiceImpl<AgentDutyLeaseMapper,
 
     private final ApplicationEventPublisher eventPublisher;
     private final AgentMapper agentMapper;
-    private final SubTaskService subTaskService;
+    private final SubTaskStatsPort subTaskStatsPort;
     private final AgentDutyLeaseProperties dutyLeaseProperties;
     private final AgentDispatchProperties agentDispatchProperties;
     private final AgentQualityProfileService agentQualityProfileService;
@@ -333,8 +332,7 @@ public class AgentDutyLeaseServiceImpl extends ServiceImpl<AgentDutyLeaseMapper,
         if (agentId == null) {
             return false;
         }
-        List<SubTask> inFlight = subTaskService.selectInFlightByAgent(agentId, 1);
-        return inFlight != null && !inFlight.isEmpty();
+        return subTaskStatsPort.existsInFlight(agentId);
     }
 
     /**

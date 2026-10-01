@@ -3,7 +3,7 @@ package com.helloai.core.agent.service;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
 import com.helloai.core.agent.service.impl.InFlightDbQuotaService;
-import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.agent.port.SubTaskStatsPort;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -33,10 +33,10 @@ class InFlightDbQuotaServiceTest {
     private static final long AGENT_ID = 7L;
 
     @Mock
-    private SubTaskService subTaskService;
+    private SubTaskStatsPort subTaskStatsPort;
 
     @Mock
-    private ObjectProvider<SubTaskService> subTaskServiceProvider;
+    private ObjectProvider<SubTaskStatsPort> subTaskStatsPortProvider;
 
     @Mock
     private AgentDutyLeaseService agentDutyLeaseService;
@@ -55,9 +55,9 @@ class InFlightDbQuotaServiceTest {
     @BeforeEach
     void setUp() {
         quotaService = new InFlightDbQuotaService(
-                subTaskServiceProvider, agentDutyLeaseServiceProvider, agentServiceProvider);
+                subTaskStatsPortProvider, agentDutyLeaseServiceProvider, agentServiceProvider);
         // 懒解析：provider 返回实际 mock；lenient 避免严格模式对未使用 stub 报错
-        lenient().when(subTaskServiceProvider.getIfAvailable()).thenReturn(subTaskService);
+        lenient().when(subTaskStatsPortProvider.getIfAvailable()).thenReturn(subTaskStatsPort);
         lenient().when(agentDutyLeaseServiceProvider.getIfAvailable()).thenReturn(agentDutyLeaseService);
         lenient().when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
     }
@@ -69,7 +69,7 @@ class InFlightDbQuotaServiceTest {
         @Test
         @DisplayName("返回 mapper 统计的在飞数")
         void shouldReturnMapperCount() {
-            when(subTaskService.countInFlightByAgent(AGENT_ID)).thenReturn(3);
+            when(subTaskStatsPort.countInFlightByAgent(AGENT_ID)).thenReturn(3);
 
             assertThat(quotaService.inFlightCount(AGENT_ID)).isEqualTo(3);
         }
@@ -165,7 +165,7 @@ class InFlightDbQuotaServiceTest {
             Agent agent = new Agent();
             agent.setCapabilities(Map.of("maxConcurrentTasks", 3));
             when(agentService.getById(AGENT_ID)).thenReturn(agent);
-            when(subTaskService.countInFlightByAgent(AGENT_ID)).thenReturn(2);
+            when(subTaskStatsPort.countInFlightByAgent(AGENT_ID)).thenReturn(2);
 
             assertThat(quotaService.canAccept(AGENT_ID)).isTrue();
         }
@@ -177,7 +177,7 @@ class InFlightDbQuotaServiceTest {
             Agent agent = new Agent();
             agent.setCapabilities(Map.of("maxConcurrentTasks", 3));
             when(agentService.getById(AGENT_ID)).thenReturn(agent);
-            when(subTaskService.countInFlightByAgent(AGENT_ID)).thenReturn(3);
+            when(subTaskStatsPort.countInFlightByAgent(AGENT_ID)).thenReturn(3);
 
             assertThat(quotaService.canAccept(AGENT_ID)).isFalse();
         }
@@ -189,7 +189,7 @@ class InFlightDbQuotaServiceTest {
             Agent agent = new Agent();
             agent.setCapabilities(Map.of("maxConcurrentTasks", 2));
             when(agentService.getById(AGENT_ID)).thenReturn(agent);
-            when(subTaskService.countInFlightByAgent(AGENT_ID)).thenReturn(5);
+            when(subTaskStatsPort.countInFlightByAgent(AGENT_ID)).thenReturn(5);
 
             assertThat(quotaService.canAccept(AGENT_ID)).isFalse();
         }

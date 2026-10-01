@@ -2,10 +2,10 @@ package com.helloai.core.agent.service.impl;
 
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
+import com.helloai.core.agent.port.SubTaskStatsPort;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConcurrencyQuotaService;
-import com.helloai.core.task.service.SubTaskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -33,20 +33,20 @@ public class InFlightDbQuotaService implements ConcurrencyQuotaService {
     public static final String MAX_CONCURRENT_CAPABILITY_KEY = "maxConcurrentTasks";
 
     // 懒解析打破循环：SubTaskServiceImpl 构造注入 ConcurrencyQuotaService（本类），
-    // 本类再直接注入 SubTaskService/AgentService/AgentDutyLeaseService 会形成多条构造器环
-    // （subTaskServiceImpl ↔ inFlightDbQuotaService、inFlightDbQuotaService → agentDutyLeaseServiceImpl
-    // → subTaskServiceImpl、inFlightDbQuotaService → agentServiceImpl，§6.86 引入，重启暴露）
-    private final ObjectProvider<SubTaskService> subTaskServiceProvider;
+    // 本类再直接注入 SubTaskStatsPort（→ 适配器 → SubTaskServiceImpl）/AgentService/AgentDutyLeaseService
+    // 会形成多条构造器环（subTaskServiceImpl ↔ inFlightDbQuotaService、inFlightDbQuotaService →
+    // agentDutyLeaseServiceImpl → subTaskServiceImpl、inFlightDbQuotaService → agentServiceImpl，§6.86 引入，重启暴露）
+    private final ObjectProvider<SubTaskStatsPort> subTaskStatsPortProvider;
     private final ObjectProvider<AgentDutyLeaseService> agentDutyLeaseServiceProvider;
     private final ObjectProvider<AgentService> agentServiceProvider;
 
     @Override
     public int inFlightCount(Long agentId) {
-        SubTaskService subTaskService = subTaskServiceProvider.getIfAvailable();
-        if (subTaskService == null) {
+        SubTaskStatsPort subTaskStatsPort = subTaskStatsPortProvider.getIfAvailable();
+        if (subTaskStatsPort == null) {
             return 0;
         }
-        return subTaskService.countInFlightByAgent(agentId);
+        return subTaskStatsPort.countInFlightByAgent(agentId);
     }
 
     @Override

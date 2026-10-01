@@ -8,8 +8,7 @@ import com.helloai.core.agent.entity.AgentDutyLease;
 import com.helloai.core.agent.mapper.AgentMapper;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.service.impl.AgentDutyLeaseServiceImpl;
-import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.agent.port.SubTaskStatsPort;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -19,8 +18,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.OffsetDateTime;
-import java.util.Collections;
-import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -54,7 +51,7 @@ class AgentDutyLeaseAdaptiveTtlTest {
     private static final long AGENT_ID = 1L;
 
     @Mock private AgentMapper agentMapper;
-    @Mock private SubTaskService subTaskService;
+    @Mock private SubTaskStatsPort subTaskStatsPort;
     @Mock private AgentQualityProfileService agentQualityProfileService;
 
     private AgentDutyLeaseProperties props;
@@ -72,7 +69,7 @@ class AgentDutyLeaseAdaptiveTtlTest {
         // 默认权重 0.1 开启复合分；质量分缺失 stub 返回 null → 回退原逻辑
         lenient().when(agentQualityProfileService.computeQualityScore(anyLong())).thenReturn(null);
         service = spy(new AgentDutyLeaseServiceImpl(
-                mock(ApplicationEventPublisher.class), agentMapper, subTaskService, props,
+                mock(ApplicationEventPublisher.class), agentMapper, subTaskStatsPort, props,
                 dispatchProps, agentQualityProfileService));
     }
 
@@ -198,7 +195,7 @@ class AgentDutyLeaseAdaptiveTtlTest {
         AgentDispatchProperties zeroWeightProps = new AgentDispatchProperties();
         zeroWeightProps.setQualityWeight(0);
         AgentDutyLeaseService zeroWeightService = spy(new AgentDutyLeaseServiceImpl(
-                mock(ApplicationEventPublisher.class), agentMapper, subTaskService, props,
+                mock(ApplicationEventPublisher.class), agentMapper, subTaskStatsPort, props,
                 zeroWeightProps, agentQualityProfileService));
         stubAgent(50, 0);
 
@@ -218,9 +215,7 @@ class AgentDutyLeaseAdaptiveTtlTest {
     @DisplayName("adaptiveRenew：有在跑子任务 → 用最大窗口续约")
     void adaptiveRenewWithInFlightUsesMaxWindow() {
         stubActiveLease();
-        SubTask inFlight = new SubTask();
-        inFlight.setId(99L);
-        when(subTaskService.selectInFlightByAgent(AGENT_ID, 1)).thenReturn(List.of(inFlight));
+        when(subTaskStatsPort.existsInFlight(AGENT_ID)).thenReturn(true);
 
         service.adaptiveRenew(AGENT_ID);
 
@@ -232,7 +227,7 @@ class AgentDutyLeaseAdaptiveTtlTest {
     void adaptiveRenewIdleUsesDynamicWindow() {
         stubActiveLease();
         stubAgent(100, 0);
-        when(subTaskService.selectInFlightByAgent(AGENT_ID, 1)).thenReturn(Collections.emptyList());
+        when(subTaskStatsPort.existsInFlight(AGENT_ID)).thenReturn(false);
 
         service.adaptiveRenew(AGENT_ID);
 
@@ -244,7 +239,7 @@ class AgentDutyLeaseAdaptiveTtlTest {
     void adaptiveRenewIdleLowScoreUsesShortWindow() {
         stubActiveLease();
         stubAgent(0, 0);
-        when(subTaskService.selectInFlightByAgent(AGENT_ID, 1)).thenReturn(Collections.emptyList());
+        when(subTaskStatsPort.existsInFlight(AGENT_ID)).thenReturn(false);
 
         service.adaptiveRenew(AGENT_ID);
 

@@ -7,9 +7,9 @@ import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentMapper;
 import com.helloai.core.agent.entity.ActivityLog;
 import com.helloai.core.agent.entity.RewardLog;
+import com.helloai.core.agent.port.SubTaskStatsPort;
 import com.helloai.core.agent.service.ActivityLogService;
 import com.helloai.core.agent.service.RewardService;
-import com.helloai.core.task.service.SubTaskService;
 import org.springframework.stereotype.Service;
 
 import java.util.LinkedHashMap;
@@ -29,16 +29,16 @@ import java.util.Map;
 public class AgentStatsService {
 
     private final AgentMapper agentMapper;
-    private final SubTaskService subTaskService;
+    private final SubTaskStatsPort subTaskStatsPort;
     private final RewardService rewardService;
     private final ActivityLogService activityLogService;
 
     public AgentStatsService(AgentMapper agentMapper,
-                             SubTaskService subTaskService,
+                             SubTaskStatsPort subTaskStatsPort,
                              RewardService rewardService,
                              ActivityLogService activityLogService) {
         this.agentMapper = agentMapper;
-        this.subTaskService = subTaskService;
+        this.subTaskStatsPort = subTaskStatsPort;
         this.rewardService = rewardService;
         this.activityLogService = activityLogService;
     }
@@ -47,14 +47,14 @@ public class AgentStatsService {
      * Agent 工作量统计（assigned/inProgress/done/blocked/review 计数）。
      */
     public Map<String, Integer> workloadStats(Long agentId) {
-        return subTaskService.countByStatusForAgent(agentId);
+        return subTaskStatsPort.countByStatusForAgent(agentId);
     }
 
     /**
      * Agent 进行中的子任务数。
      */
     public int inProgressCount(Long agentId) {
-        return subTaskService.countByStatusForAgent(agentId).getOrDefault("inProgressCount", 0);
+        return subTaskStatsPort.countByStatusForAgent(agentId).getOrDefault("inProgressCount", 0);
     }
 
     /**
@@ -99,8 +99,8 @@ public class AgentStatsService {
         counts.put("agentId", agentId);
         counts.put("agentName", agent.getName());
         // 计数统一压成 Integer：AdminAgentController 侧按 (Integer) 强转，Long 会 500
-        counts.put("subTaskCount", (int) subTaskService.countByAssignedAgent(agentId));
-        counts.put("reviewCount", (int) subTaskService.countReviewByReviewerAgent(agentId));
+        counts.put("subTaskCount", (int) subTaskStatsPort.countByAssignedAgent(agentId));
+        counts.put("reviewCount", (int) subTaskStatsPort.countReviewByReviewerAgent(agentId));
         counts.put("rewardCount", (int) rewardService.countByAgent(agentId));
         counts.put("activityCount", (int) activityLogService.countByAgent(agentId));
         return counts;
