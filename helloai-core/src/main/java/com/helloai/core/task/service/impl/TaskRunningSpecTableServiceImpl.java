@@ -80,18 +80,44 @@ public class TaskRunningSpecTableServiceImpl implements TaskRunningSpecService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void appendExecutionRecord(Long taskId, ExecutionRecord record) {
-        // DB 层 UPSERT：先 DELETE 旧记录（按 taskId+subTaskId），再 INSERT 新记录
-        recordMapper.physicalDeleteByTaskIdAndSubTaskId(taskId, record.subTaskId());
+        // 按 taskId 取 Postgres advisory 事务锁：跨实例串行化「建 spec 行 + 记录 upsert」。
+        // 为什么必须在事前串行化而不是事后补救：Postgres 一旦报 duplicate key，
+        // 整个事务进入 aborted（25P02），后续语句全部失败 —— 捕获 DuplicateKeyException
+        // 后在同一事务里改走 UPDATE 是无效的（B 级 IT 实测）。
+        specMapper.acquireTaskLock(String.valueOf(taskId));
 
-        TaskExecutionRecordEntity entity = toEntity(taskId, record);
-        recordMapper.insert(entity);
+        // DB 层 UPSERT：先 DELETE 旧记录（按 taskId+subTaskId），再 INSERT 新记录。
+        // 持锁后不存在「两个线程都 DELETE 完再各自 INSERT」的窗口，唯一索引不再被撞。
+        recordMapper.physicalDeleteByTaskIdAndSubTaskId(taskId, record.subTaskId());
+        recordMapper.insert(toEntity(taskId, record));
 
         // 基于去重后的全量记录重新编译 ContextSummary 并写回
         String newSummary = compileSummaryFromRecords(loadExecutionRecords(taskId));
-        specMapper.updateContextSummary(taskId, newSummary);
+        persistContextSummary(taskId, newSummary);
 
         log.info("ExecutionRecord 已写入: taskId={}, subTaskId={}, deduped=false",
                 taskId, record.subTaskId());
+    }
+
+    /**
+     * 回写 ContextSummary：spec 行不存在时补建一行，避免编译结果被静默丢弃。
+     *
+     * <p>2026-10-02 修复：原实现只做 {@code UPDATE ... WHERE task_id=?}，
+     * 而 spec 行由 Planner 的 {@link #initialize} 创建。未初始化 baseline 的历史任务
+     * （或 initialize 尚未执行的竞态窗口）下该 UPDATE 影响 0 行 —— 无异常、无日志，
+     * 编译结果直接丢失（B 级 IT 用例 1 实测查不到 context_summary）。</p>
+     */
+    private void persistContextSummary(Long taskId, String summary) {
+        // 与 appendExecutionRecord 同一把 advisory 锁（可重入）：串行化「补建 spec 行」
+        specMapper.acquireTaskLock(String.valueOf(taskId));
+        if (specMapper.updateContextSummary(taskId, summary) > 0) {
+            return;
+        }
+        TaskRunningSpecEntity entity = new TaskRunningSpecEntity();
+        entity.setTaskId(taskId);
+        entity.setVersion(1);
+        entity.setContextSummary(summary);
+        specMapper.insert(entity);
     }
 
     @Override
@@ -119,7 +145,7 @@ public class TaskRunningSpecTableServiceImpl implements TaskRunningSpecService {
         if (summary == null || summary.isBlank()) {
             return;
         }
-        specMapper.updateContextSummary(taskId, summary);
+        persistContextSummary(taskId, summary);
         log.debug("ContextSummary 已重新编译: taskId={}", taskId);
     }
 
