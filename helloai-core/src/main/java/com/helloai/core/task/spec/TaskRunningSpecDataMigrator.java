@@ -11,7 +11,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,20 +18,24 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Phase A → Phase B 数据迁移器（一次性）。
+ * JSONB（旧） → 独立表（新）数据迁移器（一次性，幂等）。
  *
- * <p>仅在 {@code helloai.task-running-spec.storage=table} 时注册。
- * 应用启动后扫描 {@code task.context.runningSpec} 中的 JSONB 数据，
- * 写入 {@code task_running_spec} + {@code task_execution_record}。</p>
+ * <p>B4'（2026-10-02）：双轨二选一后开关已删除，本迁移器改为**无条件注册**——
+ * 存量库里仍有 {@code task.context.runningSpec} 的 JSONB 数据需要搬进
+ * {@code task_running_spec} + {@code task_execution_record}，否则切换后历史任务的
+ * Running Spec 会「看起来是空的」。</p>
  *
- * <p>迁移完成后表内已有数据，后续启动直接跳过（基于 {@code task_running_spec} 行数 > 0 判定）。
- * 安全失败：任意任务迁移抛错都会中断该任务迁移并打印日志，不影响其他任务；
+ * <p>幂等：迁移完成后表内已有数据，后续启动直接跳过（基于 {@code task_running_spec}
+ * 行数 > 0 判定）。安全失败：任意任务迁移抛错都会中断该任务迁移并打印日志，不影响其他任务；
  * 整轮结束后再次打印汇总，下一次启动仍会重试未成功的任务。</p>
+ *
+ * <p>⚠️ 待办：确认存量数据迁移完成后，本类应随「不留退路」原则删除（连同
+ * {@code TaskMapper#selectWithRunningSpec}），并把 task.context 里的旧
+ * {@code runningSpec} 键清理掉，避免长期双份数据。</p>
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
-@ConditionalOnProperty(name = "helloai.task-running-spec.storage", havingValue = "table", matchIfMissing = false)
 public class TaskRunningSpecDataMigrator implements ApplicationRunner {
 
     private final TaskMapper taskMapper;

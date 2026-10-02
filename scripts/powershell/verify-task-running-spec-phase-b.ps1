@@ -249,8 +249,10 @@ if (-not $SkipRestart) {
 
     if (Test-Path $logFile) { Remove-Item $logFile -Force }
     # 用 Start-Process 启动后台 Java；通过 -PassThru 拿 PID，立刻写 PID 文件
+    # B4'（2026-10-02）：双轨二选一后 helloai.task-running-spec.storage 开关已删除，
+    # 独立表是唯一实现 —— 不再向 java 传该参数（传了也是无效参数）。
     $proc = Start-Process -FilePath $javaExe `
-        -ArgumentList @('-Dhelloai.task-running-spec.storage=' + $StorageMode, '-jar', $jarPath) `
+        -ArgumentList @('-jar', $jarPath) `
         -RedirectStandardOutput $logFile `
         -RedirectStandardError ($logFile + '.err') `
         -PassThru -NoNewWindow

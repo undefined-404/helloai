@@ -10,7 +10,6 @@ import com.helloai.core.task.spec.TaskBaseline;
 import com.helloai.core.task.spec.TaskRunningSpec;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,24 +19,27 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Phase B 实现：TaskRunningSpecService 接口的独立表实现。
+ * TaskRunningSpecService 的**唯一**实现（独立表形态）。
  *
- * <p>启用条件：配置 {@code helloai.task-running-spec.storage=table}；
- * 默认（未配置或 {@code jsonb}）仍由 {@link TaskRunningSpecJsonbServiceImpl} 承载，
- * 保持向后兼容，可一键切换做 A/B 对比或故障回退。</p>
+ * <p>B4'（2026-10-02）：原「Phase A JSONB / Phase B 独立表」双轨已按
+ * **分布式改造目标**二选一 —— 保留独立表、删除 JSONB 实现与
+ * {@code helloai.task-running-spec.storage} 开关。选它的理由不是偏好，而是
+ * **JSONB 形态在分布式下不成立**：它依赖「读整行 task → 改 context → 整行写回」
+ * 加 **JVM 本地分段锁**串行化，锁不跨实例，多实例部署必丢更新；独立表用
+ * 行级 upsert（{@code (task_id, sub_task_id)} 唯一）天然无覆盖竞态，**无需任何锁**，
+ * 与「单应用 → 分布式」的改造方向一致。</p>
  *
  * <p>实现要点：
  * <ul>
  *   <li>{@code task_running_spec}（1 行 / task）：存 Baseline（JSONB）与 ContextSummary</li>
  *   <li>{@code task_execution_record}（N 行 / task）：(task_id, sub_task_id) 唯一，rework 时 DELETE + INSERT</li>
- *   <li>每次写记录后重算 ContextSummary（基于去重后的全量记录），保持与 Phase A JSONB 一致的语义</li>
+ *   <li>每次写记录后重算 ContextSummary（基于去重后的全量记录）</li>
  * </ul>
  * </p>
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
-@ConditionalOnProperty(name = "helloai.task-running-spec.storage", havingValue = "table", matchIfMissing = false)
 public class TaskRunningSpecTableServiceImpl implements TaskRunningSpecService {
 
     private final TaskRunningSpecMapper specMapper;

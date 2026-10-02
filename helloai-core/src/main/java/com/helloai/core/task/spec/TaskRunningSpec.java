@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Task Running Spec——任务运行态结构化文档（Phase A 不可变领域模型）。
+ * Task Running Spec——任务运行态结构化文档（不可变领域模型，与存储形态无关）。
  *
  * <p>封装了 Task 执行过程中累积的结构化知识，替代当前原始产出注入。
  * 包含：Planner 写入的 Baseline、各 executor 回填的 ExecutionRecord、

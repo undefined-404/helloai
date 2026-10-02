@@ -46,9 +46,10 @@ public class Task extends BaseEntity {
     /**
      * 任务扩展上下文（JSONB）。
      *
-     * <p>当前用途：Task Running Spec（Phase A JSONB 过渡态）——
-     * {@code runningSpec.baseline} / {@code runningSpec.executionRecords} /
-     * {@code runningSpec.contextSummary}。</p>
+     * <p>历史用途：Task Running Spec 曾以 {@code runningSpec} 键存在本列（JSONB 过渡态）。
+     * B4'（2026-10-02）双轨二选一后，Running Spec 已迁至独立表
+     * （{@code task_running_spec} / {@code task_execution_record}），**不再写本键**；
+     * 存量数据由 {@code TaskRunningSpecDataMigrator} 搬迁，迁完应清理本键。</p>
      */
     @TableField(typeHandler = PgJsonbTypeHandler.class)
     private Map<String, Object> context;

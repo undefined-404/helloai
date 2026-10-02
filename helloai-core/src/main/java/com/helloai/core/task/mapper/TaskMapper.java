@@ -18,7 +18,7 @@ public interface TaskMapper extends BaseMapper<Task> {
     int physicalDeleteById(@Param("taskId") Long taskId);
 
     /**
-     * 列出所有 context 中含 runningSpec 键的任务（Phase A 数据迁移用）。
+     * 列出所有 context 中含 runningSpec 键的任务（**历史 JSONB 数据**迁移用，见 TaskRunningSpecDataMigrator）。
      *
      * <p>PostgreSQL JSONB 有"键存在"操作符 {@code ?}，但 MyBatis/JDBC 驱动会把
      * SQL 文本里的 {@code ?} 当成 prepared-statement 占位符并试图绑定参数，
