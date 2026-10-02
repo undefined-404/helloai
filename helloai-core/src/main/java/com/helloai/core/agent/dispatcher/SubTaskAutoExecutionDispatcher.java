@@ -3,7 +3,9 @@ package com.helloai.core.agent.dispatcher;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.agent.port.SubTaskQueryPort;
+import com.helloai.core.agent.port.SubTaskSnapshot;
+import com.helloai.core.agent.port.TaskTimelinePort;
 import com.helloai.core.shared.event.SubTaskAssignedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -15,8 +17,6 @@ import org.springframework.transaction.event.TransactionalEventListener;
 import java.util.Map;
 import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.core.agent.service.AgentService;
-import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.service.TaskTimelineService;
 
 /**
  * 子任务自动执行命令派发器。
@@ -31,9 +31,9 @@ import com.helloai.core.task.service.TaskTimelineService;
 public class SubTaskAutoExecutionDispatcher {
 
     private final AgentService agentService;
-    private final SubTaskService subTaskService;
+    private final SubTaskQueryPort subTaskQueryPort;
     private final ExecutionCommandService executionCommandService;
-    private final TaskTimelineService taskTimelineService;
+    private final TaskTimelinePort taskTimelinePort;
 
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
@@ -50,15 +50,15 @@ public class SubTaskAutoExecutionDispatcher {
             return;
         }
 
-        SubTask subTask = subTaskService.getById(event.getSubTaskId());
+        SubTaskSnapshot subTask = subTaskQueryPort.findById(event.getSubTaskId());
         if (subTask == null) {
             log.warn("自动执行跳过：子任务不存在, subTaskId={}", event.getSubTaskId());
             return;
         }
 
-        taskTimelineService.recordEvent(
-                subTask.getTaskId(),
-                subTask.getId(),
+        taskTimelinePort.recordEvent(
+                subTask.taskId(),
+                subTask.id(),
                 "sub_task_auto_execute_dispatch",
                 AgentRole.SYSTEM,
                 agent.getId(),
@@ -69,7 +69,7 @@ public class SubTaskAutoExecutionDispatcher {
             // （task 域数据随命令正向传入执行侧，执行侧不再反向查询 task）
             // G-010：改用并集装箱（子任务级 ∪ 任务级），与审查核验同源
             executionCommandService.createAssignedCommand(event.getSubTaskId(), agent.getId(), "assigned",
-                    subTaskService.mergeSkills(subTask));
+                    subTaskQueryPort.mergeSkills(event.getSubTaskId()));
             log.info("执行命令派发成功: subTaskId={}, agentId={}", event.getSubTaskId(), agent.getId());
         } catch (Exception e) {
             log.error("执行命令派发失败: subTaskId={}, agentId={}", event.getSubTaskId(), agent.getId(), e);
