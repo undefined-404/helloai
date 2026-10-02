@@ -106,7 +106,7 @@ agent->shared.entity=0
 system->shared.entity=0
 
 # ---- 组 3c：非 core 模块的 core 实体泄漏（A3；仅提示） ----
-api->core.entity=51
+api->core.entity=50
 job->core.entity=14
 mq->core.entity=0
 start->core.entity=0

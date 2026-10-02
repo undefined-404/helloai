@@ -3,6 +3,7 @@ package com.helloai.core.task.service.impl;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AttachmentStatus;
+import com.helloai.common.constant.AttachmentVisibility;
 import com.helloai.core.system.storage.ArtifactStorage;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.entity.SubTask;
@@ -97,6 +98,12 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
         attachment.setObjectKey(detectObjectKey(storageUrl, subTaskId, fileName));
         attachment.setStorageUrl(storageUrl);
         attachment.setStatus(AttachmentStatus.ACTIVE);
+        // Task-Team 可见性（V99/V100）：上传者身份 + 默认可见范围。
+        // 上传者用 register 的 agentId（上方已强校验 agentId == subTask.assignedAgentId）；
+        // 默认 TASK（上传者 + 所属根任务团队），与 DB 列 DEFAULT 'TASK' 同口径。
+        // 平台侧/人工上传（非本方法）无 agentId ⇒ uploaderAgentId 为空，PERSONAL 语义下仅平台可见。
+        attachment.setUploaderAgentId(agentId);
+        attachment.setVisibility(AttachmentVisibility.TASK);
         save(attachment);
 
         log.info("附件注册: id={}, subTaskId={}, fileName={}", attachment.getId(), subTaskId, fileName);

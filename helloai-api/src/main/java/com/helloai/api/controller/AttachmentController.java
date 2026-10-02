@@ -3,9 +3,8 @@ package com.helloai.api.controller;
 import com.helloai.common.base.BizException;
 import com.helloai.common.base.R;
 import com.helloai.core.task.entity.Attachment;
-import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.policy.AttachmentVisibilityPolicy;
 import com.helloai.core.task.service.AttachmentService;
-import com.helloai.core.task.service.SubTaskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ContentDisposition;
@@ -38,20 +37,28 @@ import java.util.List;
 public class AttachmentController {
 
     private final AttachmentService attachmentService;
-    private final SubTaskService subTaskService;
+    private final AttachmentVisibilityPolicy attachmentVisibilityPolicy;
 
     /**
      * 附件列表。
+     *
+     * <p><b>2026-10-02（Task-Team 可见性）</b>：由「按 subTaskId 整表放行/拦截」改为
+     * <b>按附件粒度过滤</b> —— 同一子任务下的附件可能具有不同 {@code visibility}，
+     * 故列表结果逐条过 {@link AttachmentVisibilityPolicy}，不可读者从结果中剔除
+     * （而非整表 403）。平台账号 / 无主体请求放行（由管理侧鉴权覆盖）。</p>
      */
     @GetMapping
     public R<List<Attachment>> list(
             @RequestParam(value = "subTaskId", required = false) Long subTaskId,
             @RequestAttribute(value = "_authType", required = false) String authType,
             @RequestAttribute(value = "_authId", required = false) Long agentId) {
-        if (subTaskId != null) {
-            assertSubTaskReadable(subTaskId, authType, agentId);
+        List<Attachment> all = attachmentService.list(subTaskId);
+        if (!isAgentChannel(authType, agentId)) {
+            return R.ok(all);
         }
-        return R.ok(attachmentService.list(subTaskId));
+        return R.ok(all.stream()
+                .filter(attachment -> attachmentVisibilityPolicy.canRead(agentId, attachment))
+                .toList());
     }
 
     /**
@@ -62,7 +69,7 @@ public class AttachmentController {
                                  @RequestAttribute(value = "_authType", required = false) String authType,
                                  @RequestAttribute(value = "_authId", required = false) Long agentId) {
         Attachment attachment = attachmentService.getByIdRequired(id);
-        assertSubTaskReadable(attachment.getSubTaskId(), authType, agentId);
+        assertAttachmentReadable(attachment, authType, agentId);
         return R.ok(attachment);
     }
 
@@ -76,7 +83,7 @@ public class AttachmentController {
                                                @RequestAttribute(value = "_authType", required = false) String authType,
                                                @RequestAttribute(value = "_authId", required = false) Long agentId) {
         Attachment attachment = attachmentService.getByIdRequired(id);
-        assertSubTaskReadable(attachment.getSubTaskId(), authType, agentId);
+        assertAttachmentReadable(attachment, authType, agentId);
         if (attachmentService.isContentLoadable(attachment)) {
             byte[] content = attachmentService.loadContent(id);
             HttpHeaders headers = new HttpHeaders();
@@ -103,7 +110,7 @@ public class AttachmentController {
                                               @RequestAttribute(value = "_authType", required = false) String authType,
                                               @RequestAttribute(value = "_authId", required = false) Long agentId) {
         Attachment attachment = attachmentService.getByIdRequired(id);
-        assertSubTaskReadable(attachment.getSubTaskId(), authType, agentId);
+        assertAttachmentReadable(attachment, authType, agentId);
         if (!attachmentService.isPreviewable(attachment)) {
             // 413 与 RFC 7231 一致；前端可统一捕获 413 走下载
             throw new BizException(413, "附件过大或类型不支持浏览器内联预览，请使用下载");
@@ -121,29 +128,35 @@ public class AttachmentController {
     }
 
     /**
-     * Agent 通道附件归属校验。
+     * Agent 通道附件读取校验 —— <b>唯一入口，一律走 {@link AttachmentVisibilityPolicy}</b>。
      *
-     * <p>安全修复（G-014 T04b）：此前四端点无任何归属校验，任意有效 Agent API Key 可凭
-     * {@code attachmentId} 读取任意子任务的附件正文。</p>
+     * <p><b>历史（G-014 T04b）</b>：此前四端点无任何归属校验，任意有效 Agent API Key 可凭
+     * {@code attachmentId} 读取任意子任务的附件正文。当时的修复是"仅可读自己名下子任务"——
+     * 那属于 sub_task 级硬隔离，导致<b>同任务团队内无法互通产出物</b>。</p>
+     *
+     * <p><b>2026-10-02（Task-Team 可见性）</b>：放宽为「声明范围 × 任务成员关系」，
+     * 由 {@link AttachmentVisibilityPolicy} 统一判定（PERSONAL=仅上传者 /
+     * TASK=上传者+所属根任务团队 / PUBLIC 预留未启用）。宽松度提高但<b>边界仍是任务级</b>，
+     * 不会回退到"任意 key 可读任意附件"——判据分散是漂移与越权的根源，故必须收口在本入口。</p>
      *
      * <p><b>通道判定以 {@code _authType} 为准而非 {@code _authId} 是否为空</b>：
      * {@code AuthInterceptor} 对两条通道都会注入 {@code _authId}——平台账号写
      * admin session id（{@code _authType=admin}），Agent 通道写 {@code agent.getId()}
-     * （{@code _authType=agent}）。仅 Agent 通道做归属比对，平台账号与无主体请求放行。</p>
+     * （{@code _authType=agent}）。仅 Agent 通道做可见性判定，平台账号与无主体请求放行。</p>
      *
-     * <p>按 §10 红线不加 {@code @SaCheckPermission}，以「请求属性 + 服务层归属比对」实现。</p>
+     * <p>按 §10 红线不加 {@code @SaCheckPermission}，以「请求属性 + 领域策略判定」实现。</p>
      */
-    private void assertSubTaskReadable(Long subTaskId, String authType, Long agentId) {
-        if (!"agent".equals(authType) || agentId == null) {
+    private void assertAttachmentReadable(Attachment attachment, String authType, Long agentId) {
+        if (!isAgentChannel(authType, agentId)) {
             return; // 平台账号 / 无主体：由管理侧鉴权覆盖
         }
-        if (subTaskId == null) {
-            throw new BizException(403, "无权访问该附件（无法确定归属子任务）");
+        if (!attachmentVisibilityPolicy.canRead(agentId, attachment)) {
+            throw new BizException(403, "无权访问该附件（不在可见范围内）");
         }
-        SubTask subTask = subTaskService.getById(subTaskId);
-        if (subTask == null || subTask.getAssignedAgentId() == null
-                || !agentId.equals(subTask.getAssignedAgentId())) {
-            throw new BizException(403, "无权访问该附件（非所属子任务的执行者）");
-        }
+    }
+
+    /** 是否 Agent 通道请求（判定基准为 {@code _authType}，见 {@link #assertAttachmentReadable}）。 */
+    private static boolean isAgentChannel(String authType, Long agentId) {
+        return "agent".equals(authType) && agentId != null;
     }
 }
