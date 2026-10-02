@@ -13,8 +13,7 @@ import java.util.Map;
  * <p>与 {@code context.lastExecution.output}（原始 LLM 产出）不同，本记录是经过收口的、
  * 面向下游 executor 的结构化信息，不包含执行过程的噪声。</p>
  *
- * <p>Phase A 通过 {@link #toMap()} / {@link #fromMap(Map)} 做 JSONB 序列化边界；
- * Phase B 将变成 {@code task_execution_record} 表行。</p>
+ * <p>通过 {@link #toMap()} / {@link #fromMap(Map)} 做 JSONB 序列化边界（B4 后为唯一存储形态）。</p>
  */
 public final class ExecutionRecord {
 

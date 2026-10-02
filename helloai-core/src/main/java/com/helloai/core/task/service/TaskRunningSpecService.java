@@ -7,7 +7,10 @@ import com.helloai.core.task.spec.TaskRunningSpec;
 import java.util.Map;
 
 /**
- * Task Running Spec 服务接口——隔离存储细节，Phase A JSONB / Phase B 独立表共享同一接口。
+ * Task Running Spec 服务接口——隔离存储细节（当前唯一实现为 `task.context` JSONB）。
+ *
+ * <p>B4（2026-10-02）：原「Phase A JSONB / Phase B 独立表」双实现已二选一，
+ * 独立表实现与其开关（yml 零设置 ⇒ 恒为死代码）一并删除，本接口不再为切换而存在。</p>
  *
  * <p>消费方（executor、ExecutionResultHandler、PlannerAnalysisService）
  * 只依赖本接口，不感知底层存储实现。</p>

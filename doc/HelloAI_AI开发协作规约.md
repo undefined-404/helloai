@@ -1028,7 +1028,6 @@ verify-code-style-p1-ui-sync.ps1
 verify-c3-route.ps1
 verify-execution-dispatch-guard.ps1
 verify-poller-e2e.ps1
-verify-task-running-spec-phase-b.ps1
 verify-subtask-redispatch-auto-execution.ps1
 ```
 
