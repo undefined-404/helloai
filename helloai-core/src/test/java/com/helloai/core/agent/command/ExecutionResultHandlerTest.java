@@ -1,11 +1,12 @@
 package com.helloai.core.agent.command;
 
-import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
-import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.agent.port.SubTaskCommandPort;
+import com.helloai.core.agent.port.SubTaskQueryPort;
+import com.helloai.core.agent.port.SubTaskSnapshot;
+import com.helloai.core.agent.port.TaskRunningSpecPort;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -19,6 +20,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
@@ -30,16 +32,26 @@ import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
 import com.helloai.core.agent.output.ExecutionOutputParser;
 import com.helloai.core.agent.output.ParsedOutput;
 import com.helloai.core.agent.session.service.AgentSessionService;
-import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.service.TaskRunningSpecService;
 import com.helloai.core.agent.port.TaskTimelinePort;
 
+/**
+ * {@code ExecutionResultHandler} 单测。
+ *
+ * <p><b>2026-10-01 W10 改造</b>：被测类不再直接依赖 {@code task} 域（{@code SubTaskService} /
+ * {@code TaskRunningSpecService} / {@code SubTask} 实体），改为依赖 {@code agent.port} 三个端口
+ * （{@link SubTaskQueryPort} / {@link SubTaskCommandPort} / {@link TaskRunningSpecPort}）。
+ * 断言<b>逐条保留</b>，仅把「mock 服务 + 捕获实体」换成「mock 端口 + 捕获 context Map」——
+ * 回写内容（{@code lastExecution} 载荷）与状态推进调用（{@code submit} / {@code block}）口径不变。</p>
+ */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("ExecutionResultHandler")
 class ExecutionResultHandlerTest {
 
     @Mock
-    private SubTaskService subTaskService;
+    private SubTaskQueryPort subTaskQueryPort;
+
+    @Mock
+    private SubTaskCommandPort subTaskCommandPort;
 
     @Mock
     private TaskTimelinePort taskTimelinePort;
@@ -61,7 +73,7 @@ class ExecutionResultHandlerTest {
 
     // §6.93 后 ExecutionResultHandler 构造器新增字段；@InjectMocks 缺 mock 会注入 null 导致 NPE
     @Mock
-    private TaskRunningSpecService taskRunningSpecService;
+    private TaskRunningSpecPort taskRunningSpecPort;
 
     @Mock
     private ExecutionOutputParser executionOutputParser;
@@ -79,22 +91,29 @@ class ExecutionResultHandlerTest {
         lenient().when(executionOutputParser.parse(any(), any())).thenReturn(ParsedOutput.empty());
     }
 
+    private static SubTaskSnapshot snapshot(Long id, Long taskId, SubTaskStatus status) {
+        return SubTaskSnapshot.builder()
+                .id(id)
+                .taskId(taskId)
+                .status(status)
+                .title("sub-task-" + id)
+                .build();
+    }
+
     @Test
     @DisplayName("成功结果回写 context、推进 REVIEW 并记录时间线")
     void shouldHandleSuccess() {
-        SubTask subTask = new SubTask();
-        subTask.setId(22L);
-        subTask.setTaskId(33L);
-        subTask.setStatus(SubTaskStatus.IN_PROGRESS);
-        when(subTaskService.getById(22L)).thenReturn(subTask);
+        when(subTaskQueryPort.findById(22L))
+                .thenReturn(snapshot(22L, 33L, SubTaskStatus.IN_PROGRESS));
 
         AgentResult result = AgentResult.success("done", "stop", "ApiKeyAgentExecutor", 12);
 
         executionResultHandler.handleSuccess(22L, 11L, result);
 
-        ArgumentCaptor<SubTask> subTaskCaptor = ArgumentCaptor.forClass(SubTask.class);
-        verify(subTaskService).updateById(subTaskCaptor.capture());
-        Map<String, Object> context = subTaskCaptor.getValue().getContext();
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> ctxCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(subTaskCommandPort).updateContext(eq(22L), ctxCaptor.capture());
+        Map<String, Object> context = ctxCaptor.getValue();
         assertThat(context).containsKey("lastExecution");
         @SuppressWarnings("unchecked")
         Map<String, Object> lastExecution = (Map<String, Object>) context.get("lastExecution");
@@ -106,7 +125,7 @@ class ExecutionResultHandlerTest {
                 .containsEntry("tokens", 12)
                 .containsEntry("output", "done");
 
-        verify(subTaskService).submit(22L);
+        verify(subTaskCommandPort).submit(22L);
         // Phase 1 Step 3：执行会话终态 COMPLETED（turn=1+rework+attempt=1）
         verify(agentSessionService).complete(22L, 11L, 1);
         verify(taskTimelinePort).recordEvent(
@@ -121,17 +140,15 @@ class ExecutionResultHandlerTest {
     @Test
     @DisplayName("失败结果回写 context、推进 BLOCKED 并记录失败时间线")
     void shouldHandleFailure() {
-        SubTask subTask = new SubTask();
-        subTask.setId(22L);
-        subTask.setTaskId(33L);
-        subTask.setStatus(SubTaskStatus.IN_PROGRESS);
-        when(subTaskService.getById(22L)).thenReturn(subTask);
+        when(subTaskQueryPort.findById(22L))
+                .thenReturn(snapshot(22L, 33L, SubTaskStatus.IN_PROGRESS));
 
         executionResultHandler.handleFailure(22L, 11L, new RuntimeException("boom"));
 
-        ArgumentCaptor<SubTask> subTaskCaptor = ArgumentCaptor.forClass(SubTask.class);
-        verify(subTaskService).updateById(subTaskCaptor.capture());
-        Map<String, Object> context = subTaskCaptor.getValue().getContext();
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> ctxCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(subTaskCommandPort).updateContext(eq(22L), ctxCaptor.capture());
+        Map<String, Object> context = ctxCaptor.getValue();
         assertThat(context).containsKey("lastExecution");
         @SuppressWarnings("unchecked")
         Map<String, Object> lastExecution = (Map<String, Object>) context.get("lastExecution");
@@ -140,7 +157,8 @@ class ExecutionResultHandlerTest {
                 .containsEntry("success", false)
                 .containsEntry("error", "boom");
 
-        verify(subTaskService).block(22L);
+        // W10：block(subTaskId, null, null) 逐字等价于 SubTaskService#block(Long)
+        verify(subTaskCommandPort).block(22L, null, null);
         // Phase 1 Step 3：执行会话终态 FAILED（error 摘要；turn=1）
         verify(agentSessionService).fail(22L, 11L, 1, "boom");
         verify(taskTimelinePort).recordEvent(
@@ -154,45 +172,41 @@ class ExecutionResultHandlerTest {
     @Test
     @DisplayName("P2-2: 补偿任务将 subTask 推进到 BLOCKED 后，handleSuccess 不应复活到 REVIEW")
     void shouldNotReviveSubTaskWhenStatusIsBlocked() {
-        SubTask subTask = new SubTask();
-        subTask.setId(22L);
-        subTask.setTaskId(33L);
-        subTask.setStatus(SubTaskStatus.BLOCKED);  // 已被补偿任务推进
-        when(subTaskService.getById(22L)).thenReturn(subTask);
+        // 已被补偿任务推进
+        when(subTaskQueryPort.findById(22L))
+                .thenReturn(snapshot(22L, 33L, SubTaskStatus.BLOCKED));
 
         AgentResult result = AgentResult.success("done", "stop", "ApiKeyAgentExecutor", 12);
 
         executionResultHandler.handleSuccess(22L, 11L, result);
 
         // 不应推进到 REVIEW
-        verify(subTaskService, never()).submit(22L);
+        verify(subTaskCommandPort, never()).submit(22L);
         // 不应覆写 context
-        verify(subTaskService, never()).updateById(org.mockito.ArgumentMatchers.any(SubTask.class));
+        verify(subTaskCommandPort, never()).updateContext(any(), any());
         // 应记录 "结果被丢弃" 事件
         verify(taskTimelinePort).recordEvent(
-                org.mockito.ArgumentMatchers.eq(33L),
-                org.mockito.ArgumentMatchers.eq(22L),
-                org.mockito.ArgumentMatchers.eq("sub_task_execute_result_discarded"),
-                org.mockito.ArgumentMatchers.eq(AgentRole.EXECUTOR),
-                org.mockito.ArgumentMatchers.eq(11L),
-                org.mockito.ArgumentMatchers.anyMap());
+                eq(33L),
+                eq(22L),
+                eq("sub_task_execute_result_discarded"),
+                eq(AgentRole.EXECUTOR),
+                eq(11L),
+                anyMap());
     }
 
     @Test
     @DisplayName("P2-3: handleFailure 对非 IN_PROGRESS 状态的子任务不应调用 block，并丢弃结果记录 timeline")
     void shouldNotBlockWhenStatusIsNotInProgress() {
-        SubTask subTask = new SubTask();
-        subTask.setId(22L);
-        subTask.setTaskId(33L);
-        subTask.setStatus(SubTaskStatus.BLOCKED);  // 已经是 BLOCKED
-        when(subTaskService.getById(22L)).thenReturn(subTask);
+        // 已经是 BLOCKED
+        when(subTaskQueryPort.findById(22L))
+                .thenReturn(snapshot(22L, 33L, SubTaskStatus.BLOCKED));
 
         executionResultHandler.handleFailure(22L, 11L, new RuntimeException("boom"));
 
         // 不应再次 block
-        verify(subTaskService, never()).block(22L);
+        verify(subTaskCommandPort, never()).block(any(), any(), any());
         // 不应修改 context
-        verify(subTaskService, never()).updateById(org.mockito.ArgumentMatchers.any(SubTask.class));
+        verify(subTaskCommandPort, never()).updateContext(any(), any());
         // 走 "结果被丢弃" 时间线（Phase 2B 后由 handleReport() 统一接管非 IN_PROGRESS 拒绝）
         verify(taskTimelinePort).recordEvent(
                 eq(33L), eq(22L), eq("sub_task_execute_result_discarded"), eq(AgentRole.EXECUTOR), eq(11L),

@@ -3,6 +3,7 @@ package com.helloai.core.task.service.impl;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.port.SubTaskCommandPort;
+import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.SubTaskService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -60,6 +61,18 @@ public class SubTaskCommandPortAdapter implements SubTaskCommandPort {
     /**
      * {@inheritDoc}
      *
+     * <p><b>原子命令、零判定</b>：直接委派 {@code SubTaskService#submit}
+     * （内部 {@code changeStatus(REVIEW)}，状态合法性由 {@code SubTaskStateMachine} 保障）。</p>
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void submit(Long subTaskId) {
+        subTaskService.submit(subTaskId);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
      * <p>互斥条件（{@code WHERE status='PENDING' AND (assigned_agent IS NULL OR = agentId)}）
      * 是状态机的一部分、写在 SQL 条件更新里，消费方无从复现，故整体委派。</p>
      */
@@ -104,5 +117,25 @@ public class SubTaskCommandPortAdapter implements SubTaskCommandPort {
     @Override
     public void markManualIntervention(Long subTaskId, String reason, Map<String, Object> extra) {
         subTaskService.markManualIntervention(subTaskId, reason, extra);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p><b>读改写回写整体不透明</b>：消费方只给出目标 {@code context}，本适配器自行
+     * {@code getById → setContext → updateById}。取<b>最新行</b>而非消费方快照，
+     * 既保留同行互斥（提供方事务内 {@code @Version} CAS 仍生效），又避免消费方携带的
+     * 陈旧 {@code version} 让 {@code context} 写入静默丢失。子任务不存在时静默返回，
+     * 与原 {@code updateById} 更新 0 行同样不抛错。</p>
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void updateContext(Long subTaskId, Map<String, Object> context) {
+        SubTask subTask = subTaskService.getById(subTaskId);
+        if (subTask == null) {
+            return;
+        }
+        subTask.setContext(context);
+        subTaskService.updateById(subTask);
     }
 }

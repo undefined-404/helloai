@@ -8,6 +8,10 @@ import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.event.AgentEventRecorder;
+import com.helloai.core.agent.port.SubTaskCommandPort;
+import com.helloai.core.agent.port.SubTaskQueryPort;
+import com.helloai.core.agent.port.SubTaskSnapshot;
+import com.helloai.core.agent.port.TaskRunningSpecPort;
 import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.ExecutionArtifactService;
 import com.helloai.core.agent.service.AgentService;
@@ -16,10 +20,7 @@ import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
 import com.helloai.core.agent.output.ExecutionOutputParser;
 import com.helloai.core.agent.quality.ExecutorDoneIssuesBackfiller;
 import com.helloai.core.agent.session.service.AgentSessionService;
-import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.agent.port.TaskTimelinePort;
-import com.helloai.core.task.service.TaskRunningSpecService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -29,6 +30,8 @@ import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+
+import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -49,13 +52,20 @@ import static org.mockito.Mockito.when;
  *   <li>{@code failureTracker.recordSuccess()} 必须在主事务提交后（afterCommit）执行</li>
  *   <li>active() 复用 seen() 双写后行锁更频繁，afterCommit 模式不可豁免</li>
  * </ol>
+ *
+ * <p><b>2026-10-01 W10</b>：被测类改经 {@code agent.port} 端口访问 task 域
+ * （{@code SubTaskQueryPort} / {@code SubTaskCommandPort} / {@code TaskRunningSpecPort}），
+ * 故本集成用例的依赖注入与顺序断言同步换到端口；<b>锁序不变量断言逐条保留</b>。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("ExecutionResultHandler AOP 自死锁防护")
 class ExecutionResultHandlerIntegrationTest {
 
     @Mock
-    private SubTaskService subTaskService;
+    private SubTaskQueryPort subTaskQueryPort;
+
+    @Mock
+    private SubTaskCommandPort subTaskCommandPort;
 
     @Mock
     private TaskTimelinePort taskTimelinePort;
@@ -79,7 +89,7 @@ class ExecutionResultHandlerIntegrationTest {
     private ExecutionArtifactService executionArtifactService;
 
     @Mock
-    private TaskRunningSpecService taskRunningSpecService;
+    private TaskRunningSpecPort taskRunningSpecPort;
 
     @Mock
     private ExecutorDoneIssuesBackfiller executorDoneIssuesBackfiller;
@@ -95,9 +105,10 @@ class ExecutionResultHandlerIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        handler = new ExecutionResultHandler(subTaskService, taskTimelinePort, failureTracker, agentService,
-                applicationEventPublisher, conversationService, executionArtifactService, taskRunningSpecService,
-                new ExecutionOutputParser(), executorDoneIssuesBackfiller, agentEventRecorder, agentSessionService);
+        handler = new ExecutionResultHandler(subTaskQueryPort, subTaskCommandPort, taskTimelinePort, failureTracker,
+                agentService, applicationEventPublisher, conversationService, executionArtifactService,
+                taskRunningSpecPort, new ExecutionOutputParser(), executorDoneIssuesBackfiller, agentEventRecorder,
+                agentSessionService);
         // 模拟 Spring @Transactional 已开启（afterCommit 注册需要激活的同步管理器）
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.initSynchronization();
@@ -111,16 +122,20 @@ class ExecutionResultHandlerIntegrationTest {
         }
     }
 
+    private static SubTaskSnapshot inProgressSnapshot() {
+        return SubTaskSnapshot.builder()
+                .id(22L)
+                .taskId(33L)
+                .assignedAgentId(11L)
+                .status(SubTaskStatus.IN_PROGRESS)
+                .build();
+    }
+
     @Test
     @DisplayName("CLI_CLIENT 成功：failureTracker.recordSuccess 必须挂在 afterCommit，不能在主事务内直调")
     void shouldRegisterFailureTrackingOnAfterCommitForCliClientSuccess() {
         // 准备：IN_PROGRESS 子任务 + CLI_CLIENT Agent + 成功结果
-        SubTask subTask = new SubTask();
-        subTask.setId(22L);
-        subTask.setTaskId(33L);
-        subTask.setAssignedAgentId(11L);
-        subTask.setStatus(SubTaskStatus.IN_PROGRESS);
-        when(subTaskService.getById(22L)).thenReturn(subTask);
+        when(subTaskQueryPort.findById(22L)).thenReturn(inProgressSnapshot());
 
         Agent cliAgent = cliAgent(11L);
         when(agentService.getById(11L)).thenReturn(cliAgent);
@@ -149,12 +164,7 @@ class ExecutionResultHandlerIntegrationTest {
     @Test
     @DisplayName("CLI_CLIENT 成功：afterCommit 触发后 recordSuccess 必须被调用一次")
     void shouldInvokeRecordSuccessOnAfterCommit() {
-        SubTask subTask = new SubTask();
-        subTask.setId(22L);
-        subTask.setTaskId(33L);
-        subTask.setAssignedAgentId(11L);
-        subTask.setStatus(SubTaskStatus.IN_PROGRESS);
-        when(subTaskService.getById(22L)).thenReturn(subTask);
+        when(subTaskQueryPort.findById(22L)).thenReturn(inProgressSnapshot());
         when(agentService.getById(11L)).thenReturn(cliAgent(11L));
 
         // 执行
@@ -173,12 +183,7 @@ class ExecutionResultHandlerIntegrationTest {
     @Test
     @DisplayName("API_KEY_LLM Agent 成功：failureTracker 不应被调用（仅 CLI_CLIENT 计数）")
     void shouldNotTrackApiKeyLlmAgent() {
-        SubTask subTask = new SubTask();
-        subTask.setId(22L);
-        subTask.setTaskId(33L);
-        subTask.setAssignedAgentId(11L);
-        subTask.setStatus(SubTaskStatus.IN_PROGRESS);
-        when(subTaskService.getById(22L)).thenReturn(subTask);
+        when(subTaskQueryPort.findById(22L)).thenReturn(inProgressSnapshot());
         Agent apiAgent = cliAgent(11L);
         apiAgent.setAccessType(AgentAccessType.API_KEY_LLM);
         when(agentService.getById(11L)).thenReturn(apiAgent);
@@ -193,12 +198,7 @@ class ExecutionResultHandlerIntegrationTest {
     @Test
     @DisplayName("CLI_CLIENT 失败：afterCommit 触发后 recordFailure 必须被调用一次")
     void shouldInvokeRecordFailureOnAfterCommit() {
-        SubTask subTask = new SubTask();
-        subTask.setId(22L);
-        subTask.setTaskId(33L);
-        subTask.setAssignedAgentId(11L);
-        subTask.setStatus(SubTaskStatus.IN_PROGRESS);
-        when(subTaskService.getById(22L)).thenReturn(subTask);
+        when(subTaskQueryPort.findById(22L)).thenReturn(inProgressSnapshot());
         when(agentService.getById(11L)).thenReturn(cliAgent(11L));
 
         handler.handleFailure(22L, 11L, new RuntimeException("tool timeout"));
@@ -216,12 +216,7 @@ class ExecutionResultHandlerIntegrationTest {
     @Test
     @DisplayName("锁顺序断言：主事务内不调 failureTracker（避免自死锁）")
     void shouldNeverCallFailureTrackerInsideMainTransaction() {
-        SubTask subTask = new SubTask();
-        subTask.setId(22L);
-        subTask.setTaskId(33L);
-        subTask.setAssignedAgentId(11L);
-        subTask.setStatus(SubTaskStatus.IN_PROGRESS);
-        when(subTaskService.getById(22L)).thenReturn(subTask);
+        when(subTaskQueryPort.findById(22L)).thenReturn(inProgressSnapshot());
         when(agentService.getById(11L)).thenReturn(cliAgent(11L));
 
         // 执行 handleSuccess
@@ -230,10 +225,10 @@ class ExecutionResultHandlerIntegrationTest {
 
         // 关键不变量：主事务结束前 failureTracker.recordSuccess 从未被调用
         // 在测试线程内调用任何 afterCommit 之前
-        InOrder order = inOrder(subTaskService, taskTimelinePort, failureTracker);
-        order.verify(subTaskService).getById(22L);
-        order.verify(subTaskService).updateById(any(SubTask.class));
-        order.verify(subTaskService).submit(22L);
+        InOrder order = inOrder(subTaskQueryPort, subTaskCommandPort, taskTimelinePort, failureTracker);
+        order.verify(subTaskQueryPort).findById(22L);
+        order.verify(subTaskCommandPort).updateContext(eq(22L), any(Map.class));
+        order.verify(subTaskCommandPort).submit(22L);
         order.verify(taskTimelinePort).recordEvent(
                 eq(33L), eq(22L), eq("sub_task_execute_submit"),
                 eq(AgentRole.EXECUTOR), eq(11L), any());

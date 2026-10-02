@@ -10,9 +10,12 @@ import com.helloai.core.agent.event.AgentEventContextResolver;
 import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.output.ExecutionOutputParser;
 import com.helloai.core.agent.output.ParsedOutput;
+import com.helloai.core.agent.port.SubTaskCommandPort;
+import com.helloai.core.agent.port.SubTaskQueryPort;
+import com.helloai.core.agent.port.SubTaskSnapshot;
+import com.helloai.core.agent.port.TaskRunningSpecPort;
 import com.helloai.core.agent.quality.ExecutorDoneIssuesBackfiller;
 import com.helloai.core.agent.session.service.AgentSessionService;
-import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.shared.event.SubTaskSubmittedForReviewEvent;
 import com.helloai.core.agent.service.ExecutionArtifactService;
 import com.helloai.core.agent.service.AgentService;
@@ -32,10 +35,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import com.helloai.core.agent.port.TaskTimelinePort;
-import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.spec.ExecutionRecord;
-import com.helloai.core.task.spec.ExecutionRecordParser;
-import com.helloai.core.task.service.TaskRunningSpecService;
 
 /**
  * 执行结果处理器。
@@ -43,20 +42,33 @@ import com.helloai.core.task.service.TaskRunningSpecService;
  * <p>负责把执行成功/失败结果回写到子任务状态机与时间线，
  * 让消费侧编排（{@code LocalExecutionCommandConsumer}）更聚焦“执行本身”，
  * 后续也便于把结果处理独立挂接到 MQ/轮询消费端。</p>
+ *
+ * <p><b>跨域访问（2026-10-01 W10）</b>：本类曾直接 import {@code task.entity.SubTask} /
+ * {@code task.service.SubTaskService} / {@code task.spec.ExecutionRecord(Parser)} /
+ * {@code task.service.TaskRunningSpecService}，构成 CODE_STYLE §6 反向依赖
+ * （{@code agent → task}）。现一律改经 {@code agent.port} 端口：
+ * 读走 {@link SubTaskQueryPort}（返回 {@link SubTaskSnapshot} 快照，非实体）、
+ * 写走 {@link SubTaskCommandPort}（{@code submit / block / updateContext} 原子命令）、
+ * 执行记录回填走 {@link TaskRunningSpecPort}（解析 + fallback 整体落 task 域）。
+ * 端口归属判据见 §7.2：消费方 agent <b>低于</b>提供方 task ⇒ 契约落消费方、适配器落提供方。</p>
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class ExecutionResultHandler {
 
-    private final SubTaskService subTaskService;
+    /** 子任务只读快照端口（原 {@code SubTaskService#getById}）。 */
+    private final SubTaskQueryPort subTaskQueryPort;
+    /** 子任务命令端口（原 {@code SubTaskService#submit/block/updateById}）。 */
+    private final SubTaskCommandPort subTaskCommandPort;
     private final TaskTimelinePort taskTimelinePort;
     private final ExternalAgentFailureTracker failureTracker;
     private final AgentService agentService;
     private final ApplicationEventPublisher applicationEventPublisher;
     private final ConversationService conversationService;
     private final ExecutionArtifactService executionArtifactService;
-    private final TaskRunningSpecService taskRunningSpecService;
+    /** 执行记录端口（原 {@code TaskRunningSpecService}；含 EXECUTION_RECORD 解析与 fallback）。 */
+    private final TaskRunningSpecPort taskRunningSpecPort;
     private final ExecutionOutputParser executionOutputParser;
     private final ExecutorDoneIssuesBackfiller executorDoneIssuesBackfiller;
     /** Phase 0 B2：事件记录器（AGENT_COMPLETED 埋点；事件 write-only，失败仅告警不阻断回写）。 */
@@ -106,7 +118,7 @@ public class ExecutionResultHandler {
             return r;
         }
 
-        SubTask subTask = subTaskService.getById(report.getSubTaskId());
+        SubTaskSnapshot subTask = subTaskQueryPort.findById(report.getSubTaskId());
         if (subTask == null) {
             ExecutionResultApplyResult r = new ExecutionResultApplyResult();
             r.setApplied(false);
@@ -114,7 +126,7 @@ public class ExecutionResultHandler {
             return r;
         }
 
-        Map<String, Object> ctx = new HashMap<>(subTask.getContext() != null ? subTask.getContext() : Map.of());
+        Map<String, Object> ctx = new HashMap<>(subTask.context() != null ? subTask.context() : Map.of());
         Object lastExecutionObj = ctx.get("lastExecution");
         if (report.getIdempotencyKey() != null
                 && !report.getIdempotencyKey().isBlank()
@@ -129,16 +141,16 @@ public class ExecutionResultHandler {
             }
         }
 
-        if (subTask.getStatus() != SubTaskStatus.IN_PROGRESS) {
+        if (subTask.status() != SubTaskStatus.IN_PROGRESS) {
             taskTimelinePort.recordEvent(
-                    subTask.getTaskId(),
+                    subTask.taskId(),
                     report.getSubTaskId(),
                     "sub_task_execute_result_discarded",
                     AgentRole.EXECUTOR,
                     report.getAgentId(),
                     safeMap(
                             "reason", "subtask_status_not_in_progress",
-                            "currentStatus", subTask.getStatus().name(),
+                            "currentStatus", subTask.status().name(),
                             "source", report.getSource(),
                             "idempotencyKey", report.getIdempotencyKey(),
                             "success", report.isSuccess()));
@@ -159,7 +171,7 @@ public class ExecutionResultHandler {
         last.put("tokens", report.getTokenUsage());
         // 方案3 displayText：物化开启时 output/对话流写摘要+文件概览+尾部（EXECUTION_RECORD 保留），
         // 避免 manifest JSON 全文刷屏；物化关闭/降级时保持原文，与现状一致
-        ParsedOutput parsedOutput = executionOutputParser.parse(subTask.getTitle(), report.getOutput());
+        ParsedOutput parsedOutput = executionOutputParser.parse(subTask.title(), report.getOutput());
         String outputText = report.getOutput();
         if (!parsedOutput.isEmpty() && parsedOutput.displayText() != null
                 && executionArtifactService.isEnabled()) {
@@ -169,35 +181,19 @@ public class ExecutionResultHandler {
         last.put("error", report.getError());
         ctx.put("lastExecution", last);
 
-        // Task Running Spec 回填：从 executor 输出解析 EXECUTION_RECORD 块
+        // Task Running Spec 回填：从 executor 输出解析 EXECUTION_RECORD 块。
+        // 解析 / fallback（前 200 字符）/ 落库整体在 task 域（TaskRunningSpecPort）完成——
+        // ExecutionRecord(Parser) 是 task 协议类型，留在消费方会重新引入反向依赖。
         try {
-            ExecutionRecord record = ExecutionRecordParser.parse(
-                    report.getOutput(), subTask.getId(), subTask.getTitle(), report.getAgentId());
-            if (record != null) {
-                taskRunningSpecService.appendExecutionRecord(subTask.getTaskId(), record);
-            } else {
-                // 解析失败：用 output 前 200 字符做 fallback summary
-                String output = report.getOutput();
-                if (output != null && !output.isBlank()) {
-                    String fallbackSummary = output.length() > 200
-                            ? output.substring(0, 200) + "..." : output;
-                    log.warn("EXECUTION_RECORD 解析失败，使用 fallback summary: subTaskId={}", subTask.getId());
-                    ExecutionRecord fallback = ExecutionRecord.builder()
-                            .subTaskId(subTask.getId())
-                            .title(subTask.getTitle())
-                            .agentId(report.getAgentId())
-                            .summary(fallbackSummary)
-                            .build();
-                    taskRunningSpecService.appendExecutionRecord(subTask.getTaskId(), fallback);
-                }
-            }
+            taskRunningSpecPort.parseAndAppendExecutionRecord(
+                    subTask.taskId(), subTask.id(), subTask.title(), report.getAgentId(), report.getOutput());
         } catch (Exception e) {
             log.warn("Task Running Spec 回填失败（不阻断主链路）: subTaskId={}, err={}",
-                    subTask.getId(), e.getMessage());
+                    subTask.id(), e.getMessage());
         }
 
-        subTask.setContext(ctx);
-        subTaskService.updateById(subTask);
+        // 读改写回写整体收为不透明命令：消费方只给目标 context，提供方自取最新行整体覆写
+        subTaskCommandPort.updateContext(subTask.id(), ctx);
 
         // 对话流增量副本：执行产出/失败原因写入 conversation_message，
         // INTERNAL/EXTERNAL 上报共用本入口；REQUIRES_NEW 独立事务 + try/catch，失败不阻断主链路
@@ -226,12 +222,12 @@ public class ExecutionResultHandler {
         }
 
         if (report.isSuccess()) {
-            subTaskService.submit(report.getSubTaskId());
+            subTaskCommandPort.submit(report.getSubTaskId());
             // Phase 1 Step 3：执行会话终态 COMPLETED（best-effort 不阻断回写）
             agentSessionService.complete(report.getSubTaskId(), report.getAgentId(),
-                    AgentEventContextResolver.resolveTurn(subTask.getReworkCount(), subTask.getAttemptTotal()));
+                    AgentEventContextResolver.resolveTurn(subTask.reworkCount(), subTask.attemptTotal()));
             taskTimelinePort.recordEvent(
-                    subTask.getTaskId(),
+                    subTask.taskId(),
                     report.getSubTaskId(),
                     "sub_task_execute_submit",
                     AgentRole.EXECUTOR,
@@ -245,9 +241,9 @@ public class ExecutionResultHandler {
             // Phase 0 B2：AGENT_COMPLETED（Turn 端点事件 step=0；失败路径不发，ADR §5.3）
             try {
                 agentEventRecorder.record(
-                        AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
-                        subTask.getTaskId(), report.getSubTaskId(),
-                        AgentEventContextResolver.resolveTurn(subTask.getReworkCount(), subTask.getAttemptTotal()), 0,
+                        AgentEventContextResolver.resolveRunId(subTask.taskId()),
+                        subTask.taskId(), report.getSubTaskId(),
+                        AgentEventContextResolver.resolveTurn(subTask.reworkCount(), subTask.attemptTotal()), 0,
                         AgentEventType.AGENT_COMPLETED, report.getAgentId(),
                         safeMap("success", report.isSuccess(),
                                 "source", report.getSource(),
@@ -298,12 +294,14 @@ public class ExecutionResultHandler {
                 }
             }
         } else {
-            subTaskService.block(report.getSubTaskId());
+            // block(subTaskId, null, null) 逐字等价于 SubTaskService#block(Long)：
+            // 仅写 blockedAt + 落 sub_task_report_blocked 时间线（reason 记空串）
+            subTaskCommandPort.block(report.getSubTaskId(), null, null);
             // Phase 1 Step 3：执行会话终态 FAILED（error 摘要；best-effort 不阻断回写）
             agentSessionService.fail(report.getSubTaskId(), report.getAgentId(),
-                    AgentEventContextResolver.resolveTurn(subTask.getReworkCount(), subTask.getAttemptTotal()), report.getError());
+                    AgentEventContextResolver.resolveTurn(subTask.reworkCount(), subTask.attemptTotal()), report.getError());
             taskTimelinePort.recordEvent(
-                    subTask.getTaskId(),
+                    subTask.taskId(),
                     report.getSubTaskId(),
                     "sub_task_execute_failed",
                     AgentRole.EXECUTOR,
@@ -321,7 +319,7 @@ public class ExecutionResultHandler {
         //
         // 关键自死锁防护（§4.1  锁语义重审）：
         // 修复点：failureTracker 以 REQUIRES_NEW 独立事务更新同一 agent 行，
-        // 而本事务在成功路径下已通过 subTaskService.submit() -> changeStatus(REVIEW)
+        // 而本事务在成功路径下已通过 subTaskCommandPort.submit() -> changeStatus(REVIEW)
         // -> heartbeatService.active() 锁定了该 agent 行；若在事务内直接调用，
         // 会形成"外层持锁 + 内层新事务改同一行"的自死锁。
         // 修复：把 failureTracker.recordSuccess/Failure 挪到主事务提交后（afterCommit）

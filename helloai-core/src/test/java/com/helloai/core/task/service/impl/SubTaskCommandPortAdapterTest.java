@@ -2,19 +2,23 @@ package com.helloai.core.task.service.impl;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.SubTaskService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.HashMap;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -26,7 +30,8 @@ import static org.mockito.Mockito.when;
  * 「判定 + 写」整体迁回 task 域后，用例断言与覆盖点<b>逐条不变</b>，只是被测类换到提供方一侧。
  * 覆盖 {@code startIfNeeded} 的幂等与边界，以及 {@code unlinkByAssignedAgent} 的薄委托；
  * W7 补 {@code start} / {@code claimAtomic} / {@code block}（原子命令、判定留消费方）；
- * W8 补 {@code assignNext} / {@code markManualIntervention}（不透明命令，判定与降级语义全在提供方）。</p>
+ * W8 补 {@code assignNext} / {@code markManualIntervention}（不透明命令，判定与降级语义全在提供方）；
+ * W10 补 {@code submit}（原子状态推进）与 {@code updateContext}（读改写回写不透明）。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("SubTaskCommandPortAdapter")
@@ -158,5 +163,47 @@ class SubTaskCommandPortAdapterTest {
         adapter.markManualIntervention(22L, "dispatch_skip_execution_dense", Map.of("agentId", 7L));
 
         verify(subTaskService).markManualIntervention(22L, "dispatch_skip_execution_dense", Map.of("agentId", 7L));
+    }
+
+    @Test
+    @DisplayName("submit: 原子命令零判定，直接委派 SubTaskService.submit（状态合法性由状态机保障）")
+    void shouldDelegateSubmitWithoutJudgement() {
+        adapter.submit(22L);
+
+        verify(subTaskService).submit(22L);
+        // 零判定：不读库、不做状态白名单裁决
+        verify(subTaskService, never()).getById(any());
+    }
+
+    @Test
+    @DisplayName("updateContext: 提供方自取最新行整体覆写（读改写回写不透明，消费方不持 version）")
+    void shouldUpdateContextByReReadingLatestRow() {
+        SubTask existing = new SubTask();
+        existing.setId(22L);
+        existing.setTaskId(33L);
+        Map<String, Object> staleContext = new HashMap<>();
+        staleContext.put("stale", "old");
+        existing.setContext(staleContext);
+        when(subTaskService.getById(22L)).thenReturn(existing);
+
+        Map<String, Object> target = Map.of("lastExecution", Map.of("success", true));
+        adapter.updateContext(22L, target);
+
+        ArgumentCaptor<SubTask> captor = ArgumentCaptor.forClass(SubTask.class);
+        verify(subTaskService).updateById(captor.capture());
+        // 目标 context 整体覆写（非增量合并），并保留行内其余字段
+        assertThat(captor.getValue().getId()).isEqualTo(22L);
+        assertThat(captor.getValue().getTaskId()).isEqualTo(33L);
+        assertThat(captor.getValue().getContext()).isEqualTo(target);
+    }
+
+    @Test
+    @DisplayName("updateContext: 子任务不存在时静默返回（等价 updateById 更新 0 行，不抛错）")
+    void shouldSilentlyReturnWhenSubTaskMissing() {
+        when(subTaskService.getById(22L)).thenReturn(null);
+
+        adapter.updateContext(22L, Map.of("k", "v"));
+
+        verify(subTaskService, never()).updateById(any());
     }
 }

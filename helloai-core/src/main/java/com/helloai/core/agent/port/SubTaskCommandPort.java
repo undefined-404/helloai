@@ -72,6 +72,18 @@ public interface SubTaskCommandPort {
     void start(Long subTaskId);
 
     /**
+     * 子任务状态推进到 {@code REVIEW}（<b>原子命令，无消费侧判定</b>，W10 新增）。
+     *
+     * <p>直接委派 {@code SubTaskService#submit}（内部 {@code changeStatus(subTaskId, REVIEW, null)}，
+     * 由 {@code SubTaskStateMachine} 校验合法性）。执行结果回写链路在「执行成功」分支调用：
+     * 合法性（当前须为 {@code IN_PROGRESS}）由提供方状态机保障，消费方不做前置裁决——
+     * 与 {@link #start} 同属「原子命令 + 判定留消费方」一族。</p>
+     *
+     * @param subTaskId 子任务 ID
+     */
+    void submit(Long subTaskId);
+
+    /**
      * 原子认领：条件更新 {@code WHERE status='PENDING' AND (assigned_agent IS NULL OR = agentId)}。
      *
      * <p><b>不透明原子命令</b>：互斥条件写在 SQL 里（状态机的一部分），消费方无从复现，
@@ -88,9 +100,14 @@ public interface SubTaskCommandPort {
      *
      * <p>副作用（通知）与写入整体在提供方，消费方只表达「我要报阻塞」的意图。</p>
      *
+     * <p><b>两个入参均可为 {@code null}</b>：{@code null} 时提供方仅记录 {@code blockedAt}
+     * 时间戳并落 {@code sub_task_report_blocked} 时间线（{@code reason} 记空串）。
+     * 故 {@code block(subTaskId, null, null)} <b>逐字等价于</b> {@code SubTaskService#block(Long)}——
+     * 执行结果回写链路的「执行失败」分支即以此形式复用本方法，无需另开重载。</p>
+     *
      * @param subTaskId 子任务 ID
-     * @param reason    阻塞原因
-     * @param agentId   上报 Agent ID
+     * @param reason    阻塞原因；可为 {@code null}（仅记录时间戳）
+     * @param agentId   上报 Agent ID；可为 {@code null}
      */
     void block(Long subTaskId, String reason, Long agentId);
 
@@ -125,4 +142,28 @@ public interface SubTaskCommandPort {
      * @param extra     附加审计字段；可为 {@code null}
      */
     void markManualIntervention(Long subTaskId, String reason, Map<String, Object> extra);
+
+    /**
+     * 整体覆写子任务 {@code context}（<b>不透明命令</b>，W10 新增）。
+     *
+     * <p><b>为什么是「不透明命令」而不是「读快照 + 消费方改 + 写回」</b>：执行结果回写链路
+     * 原先是「{@code subTaskService.getById} 取实体 → 消费方就地改 {@code context} →
+     * {@code subTaskService.updateById(subTask)}」的<b>读改写回写</b>（依赖实体可变性）。
+     * 若改为「消费方拿 {@link SubTaskSnapshot} 改完再写回」，契约就得带上 {@code version}
+     * 乐观锁字段让消费方复现 MyBatis-Plus 的 CAS 语义——那是<b>提供方存储实现细节</b>，
+     * 不该外泄。故整体收为「调用方给出目标 {@code context}，提供方自行取最新行、整体覆写」。</p>
+     *
+     * <p><b>语义</b>：适配器内 {@code getById → setContext → updateById} 单实体原子写
+     * （与 {@code SubTaskService#markManualIntervention} 同范式）；子任务不存在则静默返回
+     * （与原 {@code updateById} 更新 0 行同样不报错）。<b>刻意按「取最新行再写」实现</b>：
+     * 消费方持有的快照可能是更早读取的，由其携带陈旧 {@code version} 触发 CAS 失败会让
+     * {@code context} 写入静默丢失；提供方取最新行既保留同行互斥，又避免该静默失败。</p>
+     *
+     * <p><b>⚠️ 调用方须持有事务</b>：本方法按 {@code REQUIRED} 传播加入调用方事务，
+     * 与 {@code SubTaskService#updateById} 的原事务边界一致（执行结果回写链路整体在一个事务内）。</p>
+     *
+     * @param subTaskId 子任务 ID
+     * @param context   目标 {@code context} 全量内容（整体覆写，非增量合并）；可为 {@code null}
+     */
+    void updateContext(Long subTaskId, Map<String, Object> context);
 }
