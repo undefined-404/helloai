@@ -111,7 +111,7 @@ $javaExe = Join-Path ([Environment]::GetEnvironmentVariable('JAVA_HOME')) 'bin\j
 if (-not (Test-Path $javaExe)) { Write-Error "JAVA_HOME java.exe not found"; exit 1 }
 
 $proc = Start-Process -FilePath $javaExe `
-    -ArgumentList @('-jar', $jarPath) `
+    -ArgumentList @('-Dhelloai.task-running-spec.storage=table', '-jar', $jarPath) `
     -RedirectStandardOutput $logFile `
     -RedirectStandardError ($logFile + '.err') `
     -PassThru -NoNewWindow

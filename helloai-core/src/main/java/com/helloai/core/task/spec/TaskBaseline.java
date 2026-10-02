@@ -11,7 +11,8 @@ import java.util.Objects;
  * <p>内容：任务目标、平台约束、子任务 DAG 结构摘要。创建后不可变
  * （version 以外字段不在运行时更新），仅供 executor 执行前了解全局上下文。</p>
  *
- * <p>通过 {@link #toMap()} / {@link #fromMap(Map)} 做 JSONB 序列化边界（B4 后为唯一存储形态）。</p>
+ * <p>Phase A 通过 {@link #toMap()} / {@link #fromMap(Map)} 做 JSONB 序列化边界；
+ * Phase B 将直接映射到独立表列。</p>
  */
 public final class TaskBaseline {
 

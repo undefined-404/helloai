@@ -8,6 +8,7 @@ import com.helloai.core.task.spec.TaskBaseline;
 import com.helloai.core.task.spec.TaskRunningSpec;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,17 +20,15 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Task Running Spec 的**唯一**实现：以 {@code task.context.runningSpec} JSONB 存储。
+ * Phase A 实现：以 {@code task.context.runningSpec} JSONB 存储 Task Running Spec。
  *
- * <p>B4（2026-10-02）：原 Phase B 独立表实现（`TaskRunningSpecTableServiceImpl` + 迁移器
- * + 两张表）由 {@code helloai.task-running-spec.storage=table} 开关，而该开关在全部 yml
- * 中**零显式设置**、且 {@code matchIfMissing=false} ⇒ 恒为死代码。按「不留退路」决策删除后，
- * 本实现不再带条件装配注解（原为 {@code @ConditionalOnProperty(... matchIfMissing=true)}，
- * 移除**不改变**运行时行为——它本就恒定生效）。</p>
+ * <p>Phase B（{@link TaskRunningSpecTableServiceImpl}）采用独立表，
+ * 本实现保留为 fallback，通过配置切换。</p>
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
+@ConditionalOnProperty(name = "helloai.task-running-spec.storage", havingValue = "jsonb", matchIfMissing = true)
 public class TaskRunningSpecJsonbServiceImpl implements TaskRunningSpecService {
 
     private static final String RUNNING_SPEC_KEY = "runningSpec";
@@ -37,7 +36,7 @@ public class TaskRunningSpecJsonbServiceImpl implements TaskRunningSpecService {
     /**
      * taskId 粒度分段锁：JSONB 存储的 append/initialize 是"读-改-写"非原子操作，
      * 同一任务下多个子任务（尤其多前置并行）完成时并发回填可能互相覆盖丢记录。
-     * 锁住整段保证单实例下串行；多实例部署需升级为 Redis 分布式锁（JVM 本地锁不跨实例）。
+     * 锁住整段保证单实例下串行；多实例部署需切 Phase B（独立表行级天然安全）或升级 Redis 锁。
      */
     private final ConcurrentHashMap<Long, Object> taskLocks = new ConcurrentHashMap<>();
 
