@@ -1,6 +1,6 @@
 package com.helloai.api.interceptor;
 
-import com.helloai.core.system.mapper.RequestLogMapper;
+import com.helloai.core.system.service.RequestLogService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -12,7 +12,13 @@ import org.slf4j.MDC;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
+import java.util.Map;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
  * Phase 0 C4：{@link RequestLogInterceptor} 的 MDC 业务标识行为测试。
@@ -25,13 +31,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 class RequestLogInterceptorTest {
 
     @Mock
-    private RequestLogMapper requestLogMapper;
+    private RequestLogService requestLogService;
 
     private RequestLogInterceptor interceptor;
 
     @BeforeEach
     void setUp() {
-        interceptor = new RequestLogInterceptor(requestLogMapper);
+        interceptor = new RequestLogInterceptor(requestLogService);
     }
 
     @AfterEach
@@ -95,5 +101,36 @@ class RequestLogInterceptorTest {
         assertThat(MDC.get("run_id")).isNull();
         assertThat(MDC.get("task_id")).isNull();
         assertThat(MDC.get("step_id")).isNull();
+    }
+
+    @Test
+    @DisplayName("afterCompletion：/api/ 请求经 RequestLogService 契约落库（字段映射保持不变）")
+    void shouldRecordThroughServiceContract() {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/agents");
+        request.setQueryString("page=1");
+        request.setRemoteAddr("127.0.0.1");
+        request.addHeader("X-Trace-Id", "trace-3");
+        request.setAttribute(AuthInterceptor.AUTH_TYPE_KEY, "admin");
+        request.setAttribute(AuthInterceptor.AUTH_ID_KEY, 1001L);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        response.setStatus(200);
+
+        interceptor.preHandle(request, response, new Object());
+        interceptor.afterCompletion(request, response, new Object(), null);
+
+        // B1 迁移后落库改经 Service 契约；断言 9 个形参逐项对位，确保字段映射未漂
+        verify(requestLogService).record(eq("trace-3"), eq("GET"), eq("/api/agents"),
+                eq(Map.of("query", "page=1")), anyInt(), eq("127.0.0.1"), eq(200), eq("admin"), eq(1001L));
+    }
+
+    @Test
+    @DisplayName("afterCompletion：非 /api/ 路径不落库")
+    void shouldSkipNonApiPath() {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/actuator/health");
+
+        interceptor.preHandle(request, new MockHttpServletResponse(), new Object());
+        interceptor.afterCompletion(request, new MockHttpServletResponse(), new Object(), null);
+
+        verifyNoInteractions(requestLogService);
     }
 }

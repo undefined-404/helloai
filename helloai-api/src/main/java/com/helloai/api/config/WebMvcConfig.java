@@ -5,8 +5,8 @@ import com.helloai.api.interceptor.AdminOnlyInterceptor;
 import com.helloai.api.interceptor.AuthInterceptor;
 import com.helloai.api.interceptor.RequestLogInterceptor;
 import com.helloai.core.agent.port.AgentAuthPort;
-import com.helloai.core.system.mapper.RequestLogMapper;
 import com.helloai.core.system.service.AuthService;
+import com.helloai.core.system.service.RequestLogService;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -21,12 +21,12 @@ public class WebMvcConfig implements WebMvcConfigurer {
 
     private final AuthService authService;
     private final AgentAuthPort agentAuthPort;
-    private final RequestLogMapper requestLogMapper;
+    private final RequestLogService requestLogService;
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
         // 请求日志（所有 /api/**）
-        registry.addInterceptor(new RequestLogInterceptor(requestLogMapper))
+        registry.addInterceptor(new RequestLogInterceptor(requestLogService))
                 .addPathPatterns("/api/**");
 
         // 认证拦截器

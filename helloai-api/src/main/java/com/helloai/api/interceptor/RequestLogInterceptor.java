@@ -1,7 +1,6 @@
 package com.helloai.api.interceptor;
 
-import com.helloai.core.system.entity.RequestLog;
-import com.helloai.core.system.mapper.RequestLogMapper;
+import com.helloai.core.system.service.RequestLogService;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -22,10 +21,10 @@ public class RequestLogInterceptor implements HandlerInterceptor {
     /** 请求级 MDC 键集：preHandle 写入、afterCompletion 统一清理（含 Phase 0 C4 事件链业务键）。 */
     private static final String[] MDC_REQUEST_KEYS = {TRACE_ID_KEY, RUN_ID_KEY, TASK_ID_KEY, STEP_ID_KEY};
 
-    private final RequestLogMapper requestLogMapper;
+    private final RequestLogService requestLogService;
 
-    public RequestLogInterceptor(RequestLogMapper requestLogMapper) {
-        this.requestLogMapper = requestLogMapper;
+    public RequestLogInterceptor(RequestLogService requestLogService) {
+        this.requestLogService = requestLogService;
     }
 
     @Override
@@ -70,20 +69,18 @@ public class RequestLogInterceptor implements HandlerInterceptor {
             // 只记录 /api/ 请求
             if (!path.startsWith("/api/")) return;
 
-            RequestLog log = new RequestLog();
-            log.setRequestId(MDC.get(TRACE_ID_KEY));
-            log.setMethod(method);
-            log.setPath(path);
-            log.setParams(Map.of(
-                    "query", request.getQueryString() != null ? request.getQueryString() : ""
-            ));
-            log.setDuration(duration);
-            log.setIp(request.getRemoteAddr());
-            log.setStatusCode(response.getStatus());
-            log.setAuthType((String) request.getAttribute(AuthInterceptor.AUTH_TYPE_KEY));
-            log.setAuthId((Long) request.getAttribute(AuthInterceptor.AUTH_ID_KEY));
-
-            requestLogMapper.insert(log);
+            // 落库走 system 域 Service 契约（§7.1：跨域不得直捅 Mapper；
+            // 实体与表结构由 system 域持有，本层只传基础类型快照）
+            requestLogService.record(
+                    MDC.get(TRACE_ID_KEY),
+                    method,
+                    path,
+                    Map.of("query", request.getQueryString() != null ? request.getQueryString() : ""),
+                    duration,
+                    request.getRemoteAddr(),
+                    response.getStatus(),
+                    (String) request.getAttribute(AuthInterceptor.AUTH_TYPE_KEY),
+                    (Long) request.getAttribute(AuthInterceptor.AUTH_ID_KEY));
         } catch (Exception e) {
             // 日志记录异常不应影响主流程
         } finally {
