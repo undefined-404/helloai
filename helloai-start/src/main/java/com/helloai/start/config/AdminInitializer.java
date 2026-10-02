@@ -1,7 +1,5 @@
 package com.helloai.start.config;
 
-import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.helloai.core.system.mapper.SysUserMapper;
 import com.helloai.core.system.service.SysUserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -20,12 +18,11 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class AdminInitializer implements CommandLineRunner {
 
-    private final SysUserMapper sysUserMapper;
     private final SysUserService sysUserService;
 
     @Override
     public void run(String... args) {
-        long count = sysUserMapper.selectCount(Wrappers.emptyWrapper());
+        long count = sysUserService.count();
         if (count > 0) {
             log.info("系统用户表已有 {} 条记录，跳过初始化", count);
             return;
