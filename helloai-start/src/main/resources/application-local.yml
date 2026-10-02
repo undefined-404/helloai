@@ -2,11 +2,20 @@
 # HelloAI - local 环境配置
 # 使用本地 Docker 开发环境（docker-compose.yml）
 # 激活方式：spring.profiles.active=local（默认）
+#
+# 【为什么本文件保留凭据默认值，而 application.yml 不保留】
+#   application.yml（§41 例外分支）对所有凭据一律「无默认、缺失即启动失败」，
+#   保证 dev/prod 不会以弱口令静默启动；但本机开发若每次都要手配 6 个环境变量
+#   会显著抬高门槛。故 local profile 显式补回**本地 Docker 中间件**的默认口令：
+#   这些值与 docker-compose.yml 完全一致（本地中间件的公开默认账号，非机密），
+#   且仅在本 profile 生效，不影响 dev/prod 的 fail-fast 语义（CODE_STYLE §41/§42）。
+#   如需覆盖：环境变量优先级高于此处的默认值。
 # ============================================================
 
 spring:
   datasource:
     url: jdbc:postgresql://localhost:15432/helloai?currentSchema=public&reWriteBatchedInserts=true
+    password: ${DATASOURCE_PASSWORD:postgres}
   data:
     redis:
       host: localhost
@@ -14,3 +23,18 @@ spring:
   rabbitmq:
     host: localhost
     port: 25672
+    password: ${RABBITMQ_PASSWORD:guest}
+
+helloai:
+  agent:
+    # 本地开发专用注册 token（非机密；生产必须由 HELLOAI_AGENT_REGISTRATION_TOKEN 注入）
+    registration-token: ${HELLOAI_AGENT_REGISTRATION_TOKEN:helloai-local-dev-registration-token}
+  security:
+    credential:
+      # 本地专用随机 AES 密钥（非机密）：仅用于加密本机 credential_vault 数据；
+      # 与任何生产/历史密钥无关，本机凭据可按需强制清理后重灌。
+      aes-key-base64: ${HELLOAI_CREDENTIAL_AES_KEY_BASE64:yHziOov2muy6jNtwp/7/+Ifsq3zup/rm/UkLW+kymVQ=}
+  storage:
+    # 本地 docker-compose 中间件的默认 MinIO 账号（与 docker-compose.yml 一致，非机密）
+    minio-access-key: ${MINIO_ACCESS_KEY:minioadmin}
+    minio-secret-key: ${MINIO_SECRET_KEY:minioadmin123}

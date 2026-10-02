@@ -15,21 +15,39 @@
 #      无 API Key 时 fail-close；LLM 凭据属不可控外部边界，与 @MockitoBean RuntimeTurnExecutor
 #      同一隔离口径，mock 模式只脱敏模型构建、不改变落库/会话/回写断言语义。
 #   5. 日志收敛 —— 集成测试只看断言证据，interest 之外的 SQL/业务日志降到 INFO。
+#   6. 凭据补齐（2026-09-30 安全止损）—— base application.yml 的凭据占位符已改为
+#      「无默认、缺失即启动失败」（§41 例外分支）；测试侧必须显式补回可解析值：
+#        · spring.datasource.password：由 AbstractItTestBase 的 @DynamicPropertySource
+#          以最高优先级注入（Testcontainers 随机口令），此处无需重复；
+#        · spring.rabbitmq.password：测试容器为 guest/guest，此处补 guest；
+#        · helloai.storage.minio-* / security.credential.aes-key-base64 /
+#          helloai.agent.registration-token：均为**测试专用非机密占位值**
+#          （storage 属性与 enabled 无关，启动期一律绑定，占位符不可缺）。
 
 spring:
   flyway:
     # 容忍历史迁移缺号（V3~V12 不存在，差距表 C-6 口径）
     ignore-migration-patterns: "*:missing"
   rabbitmq:
+    password: guest
     listener:
       simple:
         concurrency: 1
         max-concurrency: 2
 
 helloai:
+  agent:
+    registration-token: it-registration-token
+  security:
+    credential:
+      # 测试专用随机 AES 密钥（非机密；仅本测试进程内加解密）
+      aes-key-base64: uMEUiCY+QIyJ2AUdVesc1XWOGF6uyB8YzGb8Yf090g4=
   storage:
     # 物化开关：关闭 MinIO 产物上传，执行结果保持 output 原文（ExecutionArtifactService.isEnabled=false 语义）
     enabled: false
+    # 边界字段仍需可绑定（与 enabled 无关）→ 补测试占位凭据
+    minio-access-key: it-minio-access
+    minio-secret-key: it-minio-secret
   execution:
     # LLM 外部边界隔离（差异项 4）：单轨装配器构建模型时跳过真实 Provider / API Key 校验
     mock-mode: true

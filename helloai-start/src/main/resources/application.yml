@@ -39,7 +39,9 @@ spring:
   datasource:
     url: jdbc:postgresql://localhost:15432/helloai?currentSchema=public&reWriteBatchedInserts=true
     username: postgres
-    password: postgres
+    # §41 例外分支：生产/CI 必须显式注入 DATASOURCE_PASSWORD，缺失即启动失败（不再提供默认口令）。
+    # 本地开发由 application-local.yml 补 Docker 默认口令，故 local profile 无需注入。
+    password: ${DATASOURCE_PASSWORD}
     driver-class-name: org.postgresql.Driver
     hikari:
       maximum-pool-size: 20
@@ -57,7 +59,8 @@ spring:
     host: localhost
     port: 25672
     username: guest
-    password: guest
+    # §41 例外分支：缺失即启动失败；本地开发由 application-local.yml 提供默认 guest。
+    password: ${RABBITMQ_PASSWORD}
     publisher-confirm-type: correlated
     publisher-returns: true
     listener:
@@ -103,7 +106,9 @@ springdoc:
 # === Agent 自注册配置 ===
 helloai:
   agent:
-    registration-token: "helloai-reg-2024"
+    # §42：Agent 自注册共享 token 不再硬编码入库（原 "helloai-reg-2024" 已轮换回收）。
+    # §41 例外分支：必须由 HELLOAI_AGENT_REGISTRATION_TOKEN 注入，缺失即启动失败。
+    registration-token: ${HELLOAI_AGENT_REGISTRATION_TOKEN}
     allow-registration: true
     # E1 动态 TTL 自适应（N12 A2 第 2 段）：租约 TTL 不再静态固定
     # checkIn 未显式传 TTL 时按 Agent 表现动态推断（低分短窗口快速回收、高分长窗口减少续约）；
@@ -279,10 +284,12 @@ helloai:
   security:
     credential:
       # 凭据加密密钥（credential_vault / 系统设置页 API Key 落库加密）：
-      # 默认值为随机占位符（开源仓库不含生产密钥），生产必须用环境变量
-      # HELLOAI_CREDENTIAL_AES_KEY_BASE64 注入原密钥（docker-compose.server.yml 有 .env 入口）；
-      # 未注入而服务器已有历史凭据时，解密会失败（启动/读取报错，属预期保护行为）
-      aes-key-base64: ${HELLOAI_CREDENTIAL_AES_KEY_BASE64:cWXZTi5+S2WtnVBc+jQeJ5VCMviW+pPGB8QZN45mKFM=}
+      # §42：原「开箱可用」默认密钥已轮换回收（曾随 Git 入库，等价于公开密钥，任何人可解密）。
+      # §41 例外分支：现无默认值 —— 必须由 HELLOAI_CREDENTIAL_AES_KEY_BASE64 注入，缺失即启动失败。
+      # 本地开发由 application-local.yml 提供仅本地可用的随机密钥；
+      # 生产由 docker-compose.server.yml 经部署目录 .env（已 gitignore）注入。
+      # 用旧密钥加密的 credential_vault 行在轮换后无法解密，按自研项目口径重灌（可强制清理）。
+      aes-key-base64: ${HELLOAI_CREDENTIAL_AES_KEY_BASE64}
       # N-004 Credential Vault 收口（Phase 2 B2）：凭证过期扫描开关。
       # CredentialExpireTask 5min 一扫：ACTIVE 且 expire_time 已过 → EXPIRED + EXPIRE 审计，
       # 激活 expireTime 死字段，到期凭证自动退出路由；不物理删除（状态隔离 + 审计保留）。
@@ -300,10 +307,12 @@ helloai:
     type: minio
     local-base-dir: ./data/artifacts
     bucket: helloai-local
-    # --- MinIO（type=minio 时生效；本地 docker compose 默认账号见 docker-compose.yml）---
+    # --- MinIO（type=minio 时生效）---
+    # 端点 / 桶名非机密，保留默认；凭据按 §41 例外分支改为无默认（缺失即启动失败），
+    # 本地开发由 application-local.yml 提供 Docker 默认 minioadmin / minioadmin123。
     minio-endpoint: ${MINIO_ENDPOINT:http://localhost:29000}
-    minio-access-key: ${MINIO_ACCESS_KEY:minioadmin}
-    minio-secret-key: ${MINIO_SECRET_KEY:minioadmin123}
+    minio-access-key: ${MINIO_ACCESS_KEY}
+    minio-secret-key: ${MINIO_SECRET_KEY}
     minio-bucket: ${MINIO_BUCKET:helloai-artifacts}
     max-files: 10
     max-file-size: 5242880

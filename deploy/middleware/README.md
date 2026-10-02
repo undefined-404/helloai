@@ -101,7 +101,10 @@ NEW_MINIO_ENDPOINT=http://新IP:29000 NEW_MINIO_ACCESS=helloai-s3 NEW_MINIO_SECR
 ### 方式二：直接改 `helloai-start/src/main/resources/application-dev.yml`
 
 `DATASOURCE_URL` / `REDIS_HOST` / `REDIS_PORT` / `RABBITMQ_HOST` / `RABBITMQ_PORT` 已有 env 占位；
-需在 redis / rabbitmq 节点下补 `username` / `password` 字段（或同样走 SPRING_* env 覆盖）。
+`rabbitmq` 节点的 `username` / `password` / `virtual-host` 占位符已补齐（2026-10-01：默认
+`helloai` + `/helloai`，密码默认值见文件内注释，生产仍可走 SPRING_* env 覆盖）；`redis` 节点若要启用
+ACL 用户（对应上表 SPRING_DATA_REDIS_USERNAME/PASSWORD），仍需同步补 `username` / `password` 字段
+（或同样走 SPRING_* env 覆盖）。
 
 ## 8. 其他项目连接与共用隔离
 
