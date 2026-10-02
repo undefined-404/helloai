@@ -45,6 +45,14 @@ public class TaskAgentMemberServiceImpl
     }
 
     @Override
+    public boolean isCurrentExecutorOfTask(Long taskId, Long agentId) {
+        if (taskId == null || agentId == null) {
+            return false;
+        }
+        return baseMapper.countCurrentExecutor(taskId, agentId) > 0;
+    }
+
+    @Override
     public void register(Long taskId, Long agentId, TaskMemberJoinSource source) {
         if (taskId == null || agentId == null) {
             return;

@@ -82,7 +82,18 @@ CREATE INDEX IF NOT EXISTS idx_task_agent_member_agent ON task_agent_member(agen
   3. 改派（`redispatchInProgress` / `dispatchBlockedSubTask` → `REASSIGNED`）
   4. 死信人工指派（`redispatchDeadLetter` → `ASSIGNED`）
 - **改派不写 `leave_time`**：按需求「改派进来的能看、原来干过的也能看」，**加入过即成员**（`status` 保持 ACTIVE）。
-- **自愈**：提供重建/对账入口，从 `sub_task.assigned_agent_id` ∪ `agent_execution_record.agent_id`（追加型历史）重建，覆盖「事件丢失 / 崩溃中断写入」。成员表可查（快），权威源可重建（不怕漂移）。
+- **自愈（两层）**：
+  1. **启动一次性重建**：从权威源 `sub_task.assigned_agent_id` 补齐成员表（幂等，可反复执行）。
+  2. **判据内 derive-on-miss 兜底**（2026-10-03 追加，替代原计划的"四类入队钩子"）：
+     `isMember` 未命中时再查权威源"该 agent 当前是否为该任务任一子任务执行者"，命中即视为成员。
+
+**为什么用 derive-on-miss 替代"四类入队钩子"**：钩子需分别挂在 ≥3 条独立写入路径
+（`SubTaskServiceImpl` 归属变更 / `rework`、`TaskDispatchPort#assignNext` 调度改派），
+**漏挂任一条即静默缺行**——这与 2026-10-02 反复出现的"写入/判据分散导致漂移"属同一类隐患。
+而 `sub_task.assigned_agent_id` 是**所有**写入路径的最终落点，以其兜底后判定**不可能漏路径**。
+语义上"正在为该任务干活"必然蕴含"属于该任务团队"，故兜底保守且正确。
+代价：成员表的 `join_source` 在运行期主要落 `REBUILT`；审计粒度弱于钩子方案，
+若后续需要精确入队来源审计，再补钩子作为增强（两者可并存，不冲突）。
 
 ---
 

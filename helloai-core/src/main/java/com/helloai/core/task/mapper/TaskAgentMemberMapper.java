@@ -67,6 +67,28 @@ public interface TaskAgentMemberMapper extends BaseMapper<TaskAgentMember> {
     List<Long> selectActiveAgentIds(@Param("taskId") Long taskId);
 
     /**
+     * 权威源兜底：该 agent 是否<b>当前</b>是某任务内任一子任务的执行者（derive-on-miss）。
+     *
+     * <p><b>为什么需要它（而不只依赖成员表）</b>：成员表写入是"事件驱动派生"，
+     * 涉及至少三条独立写入路径（{@code SubTaskServiceImpl} 的归属变更 / {@code rework}、
+     * 以及 {@code TaskDispatchPort#assignNext} 的调度改派）。只要漏挂任一条，成员表就<b>静默缺行</b>
+     * ——这与 2026-10-02 反复出现的"判据/写入分散导致漂移"是同一类隐患。</p>
+     *
+     * <p>本方法把权威源（{@code sub_task.assigned_agent_id}）作为<b>判定兜底</b>：
+     * 成员表未命中时再查一次当前归属，命中即视为成员。语义上"正在为该任务干活"必然蕴含
+     * "属于该任务团队"，故是<b>保守且正确</b>的兜底；它<b>不可能漏路径</b>，因为无论哪条写入路径，
+     * 最终都要落到 {@code assigned_agent_id}。</p>
+     *
+     * <p>补齐的历史执行者（已改派换下、成员表又无记录）不在本方法覆盖内——其自身产出由
+     * 可见性策略的"上传者恒可读自传"分支兜住。</p>
+     */
+    @Select("""
+            SELECT COUNT(*) FROM sub_task
+            WHERE task_id = #{taskId} AND assigned_agent_id = #{agentId} AND deleted = 0
+            """)
+    int countCurrentExecutor(@Param("taskId") Long taskId, @Param("agentId") Long agentId);
+
+    /**
      * 权威源快照：全部「任务 → 当前执行者」对（重建对账用）。
      *
      * <p>权威源取 {@code sub_task.assigned_agent_id}（task 域内，**不跨域直捅他域表**）。

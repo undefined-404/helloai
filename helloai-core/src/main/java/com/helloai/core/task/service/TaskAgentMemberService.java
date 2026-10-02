@@ -26,6 +26,19 @@ public interface TaskAgentMemberService {
     boolean isMember(Long taskId, Long agentId);
 
     /**
+     * 权威源兜底判定：agent 是否<b>当前</b>为该任务内任一子任务的执行者（derive-on-miss）。
+     *
+     * <p>{@link #isMember(Long, Long)} 只读成员表；本方法读权威源
+     * {@code sub_task.assigned_agent_id}。二者组合使用（先表后源）可让成员判定
+     * <b>不可能漏路径</b>——无论分配 / 认领 / 改派 / 死信指派走哪条写入路径，
+     * 最终都要落到 {@code assigned_agent_id}。</p>
+     *
+     * <p>由 {@code AttachmentVisibilityPolicy} 在成员表未命中时调用；
+     * 不建议外部直接使用（判据入口应保持单一）。</p>
+     */
+    boolean isCurrentExecutorOfTask(Long taskId, Long agentId);
+
+    /**
      * 幂等登记入队（不存在则插入，已存在则保持 ACTIVE）。并发安全，
      * 可由调用方事务包裹，也可独立调用。
      *

@@ -81,9 +81,26 @@ public class AttachmentVisibilityPolicy {
                     agentId, subTaskId);
             return false;
         }
-        // ④ TASK：请求者须为附件所属「根任务」的 Task-Team 在队成员
+        // ④ TASK：请求者须为附件所属「根任务」的 Task-Team 成员。
+        //    先查成员表（快、含审计与人工登记），未命中再查权威源做兜底 —— 见下方 derive-on-miss 说明。
         Long taskId = rootTaskIdOf(subTaskId);
-        return taskId != null && taskAgentMemberService.isMember(taskId, agentId);
+        if (taskId == null) {
+            return false;
+        }
+        if (taskAgentMemberService.isMember(taskId, agentId)) {
+            return true;
+        }
+        // derive-on-miss（2026-10-02）：成员表写入是"事件驱动派生"，涉及 ≥3 条独立写入路径
+        // （SubTaskServiceImpl 归属变更 / rework、TaskDispatchPort#assignNext 调度改派）。
+        // 若只信成员表，漏挂任一条即"静默缺行"—— 与今日反复出现的"写入/判据分散导致漂移"同类隐患。
+        // 权威源 sub_task.assigned_agent_id 是**所有**写入路径的最终落点，故以其兜底后
+        // 判定**不可能漏路径**；语义上"正在为该任务干活"必然蕴含"属于该任务团队"。
+        if (taskAgentMemberService.isCurrentExecutorOfTask(taskId, agentId)) {
+            log.debug("附件可见性：成员表未命中，经权威源兜底判定为团队成员（derive-on-miss）: taskId={}, agentId={}",
+                    taskId, agentId);
+            return true;
+        }
+        return false;
     }
 
     /**

@@ -142,6 +142,37 @@ class AttachmentControllerAuthScopeTest {
         assertInstanceOf(BizException.class, root);
     }
 
+    @Test
+    @DisplayName("成员表未命中但权威源命中（运行期新分配尚未入队）：derive-on-miss 兜底放行")
+    void currentExecutorShouldPassViaAuthoritativeFallback() {
+        stubAttachment(AttachmentVisibility.TASK, UPLOADER_AGENT_ID);
+        lenient().when(subTaskService.getById(SUB_TASK_ID)).thenReturn(taskIdBackedSubTask());
+        // 成员表未命中（事件驱动派生可能漏路径 / 尚未入队）
+        when(taskAgentMemberService.isMember(TASK_ID, TEAMMATE_AGENT_ID)).thenReturn(false);
+        // 权威源命中：该 agent 当前正是本任务某子任务的执行者
+        when(taskAgentMemberService.isCurrentExecutorOfTask(TASK_ID, TEAMMATE_AGENT_ID)).thenReturn(true);
+
+        assertDoesNotThrow(() -> mockMvc.perform(
+                get("/api/attachments/getById/" + ATTACHMENT_ID)
+                        .requestAttr("_authType", "agent")
+                        .requestAttr("_authId", TEAMMATE_AGENT_ID)));
+    }
+
+    @Test
+    @DisplayName("成员表未命中且权威源亦未命中：403 拒绝（兜底不放宽边界）")
+    void outsiderShouldBeRejectedWhenNeitherSourceHits() {
+        stubAttachment(AttachmentVisibility.TASK, UPLOADER_AGENT_ID);
+        stubMembership(OUTSIDER_AGENT_ID, false);
+        // 显式声明兜底也未命中，避免依赖 Mockito 默认返回值而掩盖真实判定路径
+        when(taskAgentMemberService.isCurrentExecutorOfTask(TASK_ID, OUTSIDER_AGENT_ID)).thenReturn(false);
+
+        Throwable root = unwrap(assertThrows(Exception.class, () -> mockMvc.perform(
+                get("/api/attachments/getById/" + ATTACHMENT_ID)
+                        .requestAttr("_authType", "agent")
+                        .requestAttr("_authId", OUTSIDER_AGENT_ID))));
+        assertInstanceOf(BizException.class, root);
+    }
+
     // ==================== helpers ====================
 
     private void stubAttachment(AttachmentVisibility visibility, Long uploaderAgentId) {
