@@ -19,13 +19,13 @@ import com.helloai.core.agent.runtime.loop.LoopCheckpointListener;
 import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
 import com.helloai.core.agent.tool.ToolRegistry;
-import com.helloai.core.task.entity.Attachment;
-import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.entity.Uncertainty;
-import com.helloai.core.task.service.AttachmentService;
-import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.service.TaskRunningSpecService;
+import com.helloai.core.agent.port.AttachmentPort;
+import com.helloai.core.agent.port.AttachmentRef;
+import com.helloai.core.agent.port.SubTaskQueryPort;
+import com.helloai.core.agent.port.SubTaskSnapshot;
+import com.helloai.core.agent.port.TaskRunningSpecPort;
 import com.helloai.core.agent.port.TaskTimelinePort;
+import com.helloai.core.agent.port.UncertaintySnapshot;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -77,7 +77,7 @@ class AgentRuntimeContextAssemblerTest {
     private TaskTimelinePort taskTimelinePort;
 
     @Mock
-    private TaskRunningSpecService taskRunningSpecService;
+    private TaskRunningSpecPort taskRunningSpecPort;
 
     @Mock
     private AgentSkillSpecService agentSkillSpecService;
@@ -92,10 +92,10 @@ class AgentRuntimeContextAssemblerTest {
     private ConversationService conversationService;
 
     @Mock
-    private AttachmentService attachmentService;
+    private AttachmentPort attachmentPort;
 
     @Mock
-    private SubTaskService subTaskService;
+    private SubTaskQueryPort subTaskQueryPort;
 
     @Mock
     private ToolRegistry toolRegistry;
@@ -116,8 +116,8 @@ class AgentRuntimeContextAssemblerTest {
         properties.setMockMode(true);
         properties.setProvider("mock");
         assembler = new AgentRuntimeContextAssembler(properties, agentChatClientService, agentLlmCredentialResolver,
-                taskTimelinePort, taskRunningSpecService, agentSkillSpecService, agentQualityProfileService,
-                agentSessionService, conversationService, attachmentService, subTaskService, toolRegistry,
+                taskTimelinePort, taskRunningSpecPort, agentSkillSpecService, agentQualityProfileService,
+                agentSessionService, conversationService, attachmentPort, subTaskQueryPort, toolRegistry,
                 agentEventRecorder);
     }
 
@@ -130,21 +130,21 @@ class AgentRuntimeContextAssemblerTest {
         @Test
         @DisplayName("DONE → BizException，且不触达任何装配依赖")
         void shouldRejectWhenDone() {
-            SubTask subTask = subTask();
+            SubTaskFixture subTask = subTask();
             subTask.setStatus(SubTaskStatus.DONE);
 
             assertThatThrownBy(() -> invokeAssemble(subTask, agent(), List.of(), List.of()))
                     .isInstanceOf(BizException.class)
                     .hasMessageContaining("子任务不可执行");
 
-            verify(taskRunningSpecService, never()).buildExecutorPromptSection(any());
+            verify(taskRunningSpecPort, never()).buildExecutorPromptSection(any());
             verify(agentSessionService, never()).start(any(), any(), any(), anyInt(), anyInt(), any());
         }
 
         @Test
         @DisplayName("CANCELLED → BizException")
         void shouldRejectWhenCancelled() {
-            SubTask subTask = subTask();
+            SubTaskFixture subTask = subTask();
             subTask.setStatus(SubTaskStatus.CANCELLED);
 
             assertThatThrownBy(() -> invokeAssemble(subTask, agent(), List.of(), List.of()))
@@ -164,14 +164,14 @@ class AgentRuntimeContextAssemblerTest {
         @Test
         @DisplayName("全段注入：spec/技能规范/历史画像/四要素/约束/不确定性/恢复/返工/回填块齐全")
         void shouldAssembleAllSectionsWhenPresent() {
-            SubTask subTask = subTask();
+            SubTaskFixture subTask = subTask();
             subTask.setContent("完成 A 与 B");
             subTask.setDeliverable("report.md");
             subTask.setAcceptance("全部通过");
             subTask.setConstraints("不要动 X");
             subTask.setUncertainties(List.of(
-                    new Uncertainty(Uncertainty.KIND_ASSUMPTION, "假设可用"),
-                    new Uncertainty(Uncertainty.KIND_UNCONFIRMED, "接口待确认")));
+                    new UncertaintySnapshot("ASSUMPTION", "假设可用", true),
+                    new UncertaintySnapshot("UNCONFIRMED", "接口待确认", false)));
             subTask.setContext(Map.of("reviewHistory", List.of(Map.of(
                     "ts", "2026-09-30T04:00:00Z",
                     "issues", List.of("问题 A", "问题 B"),
@@ -179,7 +179,7 @@ class AgentRuntimeContextAssemblerTest {
                     "score", 3))));
             Agent agent = agent();
 
-            when(taskRunningSpecService.buildExecutorPromptSection(33L)).thenReturn("【运行规格段】");
+            when(taskRunningSpecPort.buildExecutorPromptSection(33L)).thenReturn("【运行规格段】");
             when(agentSkillSpecService.resolve(anyList())).thenReturn(new AgentSkillSpecService.ResolvedSpec(
                     List.of("eng-code-review"), List.of("eng-code-review"), "【技能规范段】",
                     Map.of(), List.of("web_search")));
@@ -228,7 +228,7 @@ class AgentRuntimeContextAssemblerTest {
         @Test
         @DisplayName("空段零注入：无 spec/技能/画像/依赖/恢复/返工时仅保留四要素与固定块")
         void shouldSkipOptionalSectionsWhenAbsent() {
-            SubTask subTask = subTask();
+            SubTaskFixture subTask = subTask();
 
             AgentContext context = invokeAssemble(subTask, agent(), List.of(), List.of());
             String prompt = context.getUserPrompt();
@@ -252,11 +252,11 @@ class AgentRuntimeContextAssemblerTest {
         @Test
         @DisplayName("不确定性分级：blank note 跳过，ASSUMPTION/UNCONFIRMED 后缀各自渲染")
         void shouldRenderUncertaintySuffixesAndSkipBlankNote() {
-            SubTask subTask = subTask();
+            SubTaskFixture subTask = subTask();
             subTask.setUncertainties(List.of(
-                    new Uncertainty(Uncertainty.KIND_ASSUMPTION, "可用性假设"),
-                    new Uncertainty(Uncertainty.KIND_UNCONFIRMED, "对外接口"),
-                    new Uncertainty(Uncertainty.KIND_ASSUMPTION, "   ")));
+                    new UncertaintySnapshot("ASSUMPTION", "可用性假设", true),
+                    new UncertaintySnapshot("UNCONFIRMED", "对外接口", false),
+                    new UncertaintySnapshot("ASSUMPTION", "   ", true)));
 
             String prompt = invokeAssemble(subTask, agent(), List.of(), List.of()).getUserPrompt();
 
@@ -269,7 +269,7 @@ class AgentRuntimeContextAssemblerTest {
         @Test
         @DisplayName("返工上下文：reviewHistory 多轮铺开（时间/问题/评语/评分/已修复）")
         void shouldRenderReworkContextFromReviewHistory() {
-            SubTask subTask = subTask();
+            SubTaskFixture subTask = subTask();
             subTask.setContext(Map.of("reviewHistory", List.of(
                     Map.of("ts", "2026-09-29T01:00:00Z", "issues", List.of("一轮问题"),
                             "comment", "一轮评语", "score", 2, "executorDoneIssues", List.of("一轮自认修复")),
@@ -292,7 +292,7 @@ class AgentRuntimeContextAssemblerTest {
         @Test
         @DisplayName("返工上下文兼容：无 reviewHistory 时回退 lastAutoReview 单轮")
         void shouldFallbackToLegacyLastAutoReview() {
-            SubTask subTask = subTask();
+            SubTaskFixture subTask = subTask();
             subTask.setContext(Map.of("lastAutoReview", Map.of("comment", "旧格式评语", "issues", List.of("I1"))));
 
             String prompt = invokeAssemble(subTask, agent(), List.of(), List.of()).getUserPrompt();
@@ -305,14 +305,14 @@ class AgentRuntimeContextAssemblerTest {
         @Test
         @DisplayName("依赖段：前置内容装载 + 超 4000 字符截断 + 统计进 timeline")
         void shouldBuildDependencySectionWithTruncation() {
-            SubTask subTask = subTask();
+            SubTaskFixture subTask = subTask();
             subTask.setDependsOn(List.of(7L));
-            SubTask dep = new SubTask();
+            SubTaskFixture dep = new SubTaskFixture();
             dep.setId(7L);
             dep.setTitle("上游子任务");
             dep.setStatus(SubTaskStatus.DONE);
             dep.setContext(Map.of("lastExecution", Map.of("output", "x".repeat(5000))));
-            when(subTaskService.listByIds(anyList())).thenReturn(List.of(dep));
+            when(subTaskQueryPort.listByIds(anyList())).thenReturn(List.of(dep.toSnapshot()));
 
             String prompt = invokeAssemble(subTask, agent(), List.of(), List.of()).getUserPrompt();
 
@@ -332,26 +332,20 @@ class AgentRuntimeContextAssemblerTest {
         @Test
         @DisplayName("依赖段：多附件正序拼接并带来源标题行（P-1：不再只取倒序第一个附件）")
         void shouldConcatenateAllAttachmentsInCreationOrder() {
-            SubTask subTask = subTask();
+            SubTaskFixture subTask = subTask();
             subTask.setDependsOn(List.of(7L));
-            SubTask dep = new SubTask();
+            SubTaskFixture dep = new SubTaskFixture();
             dep.setId(7L);
             dep.setTitle("上游子任务");
             dep.setStatus(SubTaskStatus.DONE);
-            when(subTaskService.listByIds(anyList())).thenReturn(List.of(dep));
+            when(subTaskQueryPort.listByIds(anyList())).thenReturn(List.of(dep.toSnapshot()));
 
             // listActive 按 createTime 倒序返回：附录（晚创建）在前——修复前下游只拿到附录
-            Attachment appendix = new Attachment();
-            appendix.setId(2L);
-            appendix.setFileName("appendix.md");
-            Attachment main = new Attachment();
-            main.setId(1L);
-            main.setFileName("main.md");
-            when(attachmentService.listActive(7L)).thenReturn(List.of(appendix, main));
-            when(attachmentService.isContentLoadable(appendix)).thenReturn(true);
-            when(attachmentService.isContentLoadable(main)).thenReturn(true);
-            when(attachmentService.loadContent(2L)).thenReturn("附录正文".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            when(attachmentService.loadContent(1L)).thenReturn("主文件正文".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            AttachmentRef appendix = new AttachmentRef(2L, "appendix.md", null, null, null, null, true);
+            AttachmentRef main = new AttachmentRef(1L, "main.md", null, null, null, null, true);
+            when(attachmentPort.listActive(7L)).thenReturn(List.of(appendix, main));
+            when(attachmentPort.loadContent(2L)).thenReturn("附录正文".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            when(attachmentPort.loadContent(1L)).thenReturn("主文件正文".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
             String prompt = invokeAssemble(subTask, agent(), List.of(), List.of()).getUserPrompt();
 
@@ -364,28 +358,22 @@ class AgentRuntimeContextAssemblerTest {
         @Test
         @DisplayName("依赖段：主附件超预算时次附件仍可见（R2 配额渲染，不再被单点截断整体吃掉）")
         void shouldKeepMinorAttachmentVisibleWhenMainOversized() {
-            SubTask subTask = subTask();
+            SubTaskFixture subTask = subTask();
             subTask.setDependsOn(List.of(7L));
-            SubTask dep = new SubTask();
+            SubTaskFixture dep = new SubTaskFixture();
             dep.setId(7L);
             dep.setTitle("上游子任务");
             dep.setStatus(SubTaskStatus.DONE);
-            when(subTaskService.listByIds(anyList())).thenReturn(List.of(dep));
+            when(subTaskQueryPort.listByIds(anyList())).thenReturn(List.of(dep.toSnapshot()));
 
-            Attachment appendix = new Attachment();
-            appendix.setId(2L);
-            appendix.setFileName("appendix.md");
-            Attachment main = new Attachment();
-            main.setId(1L);
-            main.setFileName("main.md");
-            when(attachmentService.listActive(7L)).thenReturn(List.of(appendix, main));
-            when(attachmentService.isContentLoadable(appendix)).thenReturn(true);
-            when(attachmentService.isContentLoadable(main)).thenReturn(true);
+            AttachmentRef appendix = new AttachmentRef(2L, "appendix.md", null, null, null, null, true);
+            AttachmentRef main = new AttachmentRef(1L, "main.md", null, null, null, null, true);
+            when(attachmentPort.listActive(7L)).thenReturn(List.of(appendix, main));
             // 近似 tku-e2e-01 真实规模：主文件 7809 + 附录 19294，拼接 27,103 字符——
             // 修复前单点截断 4000 时附录整体不可见（审计 §15.4）
-            when(attachmentService.loadContent(2L))
+            when(attachmentPort.loadContent(2L))
                     .thenReturn("A".repeat(19294).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            when(attachmentService.loadContent(1L))
+            when(attachmentPort.loadContent(1L))
                     .thenReturn("M".repeat(7809).getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
             String prompt = invokeAssemble(subTask, agent(), List.of(), List.of()).getUserPrompt();
@@ -407,15 +395,15 @@ class AgentRuntimeContextAssemblerTest {
         @Test
         @DisplayName("依赖段：超限截断回退到行边界（回退窗口内最近换行，不拦腰切断）")
         void shouldTruncateAtLineBoundary() {
-            SubTask subTask = subTask();
+            SubTaskFixture subTask = subTask();
             subTask.setDependsOn(List.of(7L));
-            SubTask dep = new SubTask();
+            SubTaskFixture dep = new SubTaskFixture();
             dep.setId(7L);
             dep.setTitle("上游子任务");
             dep.setStatus(SubTaskStatus.DONE);
             // 换行在 3500（回退窗口 floor=3488 与上限 4000 之间）→ 截点回退到 3500
             dep.setContext(Map.of("lastExecution", Map.of("output", "x".repeat(3500) + "\n" + "y".repeat(2000))));
-            when(subTaskService.listByIds(anyList())).thenReturn(List.of(dep));
+            when(subTaskQueryPort.listByIds(anyList())).thenReturn(List.of(dep.toSnapshot()));
 
             String prompt = invokeAssemble(subTask, agent(), List.of(), List.of()).getUserPrompt();
 
@@ -427,9 +415,9 @@ class AgentRuntimeContextAssemblerTest {
         @Test
         @DisplayName("依赖段降级：查询异常不阻断装配，degraded=true 零注入")
         void shouldDegradeWhenDependencyQueryFails() {
-            SubTask subTask = subTask();
+            SubTaskFixture subTask = subTask();
             subTask.setDependsOn(List.of(7L));
-            when(subTaskService.listByIds(anyList())).thenThrow(new RuntimeException("db down"));
+            when(subTaskQueryPort.listByIds(anyList())).thenThrow(new RuntimeException("db down"));
 
             String prompt = invokeAssemble(subTask, agent(), List.of(), List.of()).getUserPrompt();
 
@@ -452,7 +440,7 @@ class AgentRuntimeContextAssemblerTest {
         @Test
         @DisplayName("最小注入：step=4/FAILED/无快照/无 error 时仍渲染中断行")
         void shouldInjectMinimalRecoveryWhenSnapshotEmpty() {
-            SubTask subTask = subTask();
+            SubTaskFixture subTask = subTask();
             when(agentSessionService.findLatestInterrupted(22L)).thenReturn(new AgentSessionService.InterruptedSession(
                     100L, 11L, 1, 4, "FAILED", null, Map.of()));
 
@@ -469,7 +457,7 @@ class AgentRuntimeContextAssemblerTest {
         @Test
         @DisplayName("查询异常降级：findLatestInterrupted 抛异常 → 零注入零阻断")
         void shouldDegradeWhenRecoveryQueryThrows() {
-            SubTask subTask = subTask();
+            SubTaskFixture subTask = subTask();
             when(agentSessionService.findLatestInterrupted(anyLong())).thenThrow(new RuntimeException("db down"));
 
             String prompt = invokeAssemble(subTask, agent(), List.of(), List.of()).getUserPrompt();
@@ -482,7 +470,7 @@ class AgentRuntimeContextAssemblerTest {
         @Test
         @DisplayName("循环进度注入：snapshot.loop 渲染已完成轮数/工具执行/已执行工具")
         void shouldInjectLoopProgressFromSnapshot() {
-            SubTask subTask = subTask();
+            SubTaskFixture subTask = subTask();
             when(agentSessionService.findLatestInterrupted(22L)).thenReturn(new AgentSessionService.InterruptedSession(
                     100L, 11L, 2, 4, "FAILED", "llm timeout", Map.of(
                             "loop", Map.of("iteration", 2, "toolCallCount", 3, "messageCount", 6,
@@ -602,7 +590,7 @@ class AgentRuntimeContextAssemblerTest {
         @Test
         @DisplayName("装配完成：session.start(step=2) 携装配快照，timeline 两事件按序落库")
         void shouldStartSessionWithSnapshotAndRecordTimeline() {
-            SubTask subTask = subTask();
+            SubTaskFixture subTask = subTask();
             subTask.setReworkCount(2);
 
             invokeAssemble(subTask, agent(), List.of("pullTasks"), List.of("eng-code-review"));
@@ -627,7 +615,7 @@ class AgentRuntimeContextAssemblerTest {
         @Test
         @DisplayName("afterTurn：advance(step=4) + llm_call_end 携带 success/finishReason/tokens")
         void shouldAdvanceSessionAndRecordLlmEnd() {
-            assembler.afterTurn(subTask(), agent(), 1, AgentExecutionResult.builder()
+            assembler.afterTurn(subTask().toSnapshot(), agent(), 1, AgentExecutionResult.builder()
                     .status(ExecutionStatus.SUCCESS).finishReason("STOP").tokenUsage(123).build());
 
             verify(agentSessionService).advance(22L, 11L, 1, 4);
@@ -643,7 +631,7 @@ class AgentRuntimeContextAssemblerTest {
         void shouldSwallowAdvanceFailureButStillRecordTimeline() {
             doThrow(new RuntimeException("db")).when(agentSessionService).advance(anyLong(), anyLong(), anyInt(), anyInt());
 
-            assembler.afterTurn(subTask(), agent(), 1, AgentExecutionResult.builder()
+            assembler.afterTurn(subTask().toSnapshot(), agent(), 1, AgentExecutionResult.builder()
                     .status(ExecutionStatus.FAILED).build());
 
             verify(taskTimelinePort).recordEvent(any(), any(), eq("sub_task_llm_call_end"),
@@ -686,9 +674,10 @@ class AgentRuntimeContextAssemblerTest {
 
     // #region 测试夹具
 
-    private AgentContext invokeAssemble(SubTask subTask, Agent agent,
+    private AgentContext invokeAssemble(SubTaskFixture subTask, Agent agent,
                                         List<String> tools, List<String> declaredSkills) {
-        return assembler.assemble(command(declaredSkills, tools), subTask, agent, tools, new LocalProcessEnvironment());
+        return assembler.assemble(command(declaredSkills, tools), subTask.toSnapshot(), agent, tools,
+                new LocalProcessEnvironment());
     }
 
     @SuppressWarnings("unchecked")
@@ -711,16 +700,16 @@ class AgentRuntimeContextAssemblerTest {
                 .build();
     }
 
-    private static SubTask subTask() {
-        SubTask subTask = new SubTask();
-        subTask.setId(22L);
-        subTask.setTaskId(33L);
-        subTask.setAssignedAgentId(11L);
-        subTask.setStatus(SubTaskStatus.ASSIGNED);
-        subTask.setTitle("测试子任务");
-        subTask.setReworkCount(0);
-        subTask.setAttemptTotal(0);
-        return subTask;
+    private static SubTaskFixture subTask() {
+        SubTaskFixture fixture = new SubTaskFixture();
+        fixture.setId(22L);
+        fixture.setTaskId(33L);
+        fixture.setAssignedAgentId(11L);
+        fixture.setStatus(SubTaskStatus.ASSIGNED);
+        fixture.setTitle("测试子任务");
+        fixture.setReworkCount(0);
+        fixture.setAttemptTotal(0);
+        return fixture;
     }
 
     private static Agent agent() {
@@ -730,6 +719,104 @@ class AgentRuntimeContextAssemblerTest {
         agent.setAccessType(AgentAccessType.API_KEY_LLM);
         agent.setModelType("mock:helloai-mock-executor");
         return agent;
+    }
+
+    /**
+     * 测试内部可变夹具：保留原 task 实体 {@code SubTask} 的同名 setter，使测试方法体零改动；
+     * {@link #toSnapshot()} 以 {@link SubTaskSnapshot#builder()} 产出 agent 域不可变快照
+     * （W11 端口化后装配器只接收快照，测试侧以夹具承接原实体的可变写法）。
+     */
+    private static final class SubTaskFixture {
+
+        private Long id;
+        private SubTaskStatus status;
+        private Long taskId;
+        private Long assignedAgentId;
+        private Map<String, Object> context;
+        private String title;
+        private String content;
+        private String deliverable;
+        private String acceptance;
+        private String constraints;
+        private List<Long> dependsOn;
+        private List<UncertaintySnapshot> uncertainties;
+        private Integer reworkCount;
+        private Integer attemptTotal;
+
+        void setId(Long id) {
+            this.id = id;
+        }
+
+        void setStatus(SubTaskStatus status) {
+            this.status = status;
+        }
+
+        void setTaskId(Long taskId) {
+            this.taskId = taskId;
+        }
+
+        void setAssignedAgentId(Long assignedAgentId) {
+            this.assignedAgentId = assignedAgentId;
+        }
+
+        void setContext(Map<String, Object> context) {
+            this.context = context;
+        }
+
+        void setTitle(String title) {
+            this.title = title;
+        }
+
+        void setContent(String content) {
+            this.content = content;
+        }
+
+        void setDeliverable(String deliverable) {
+            this.deliverable = deliverable;
+        }
+
+        void setAcceptance(String acceptance) {
+            this.acceptance = acceptance;
+        }
+
+        void setConstraints(String constraints) {
+            this.constraints = constraints;
+        }
+
+        void setDependsOn(List<Long> dependsOn) {
+            this.dependsOn = dependsOn;
+        }
+
+        void setUncertainties(List<UncertaintySnapshot> uncertainties) {
+            this.uncertainties = uncertainties;
+        }
+
+        void setReworkCount(Integer reworkCount) {
+            this.reworkCount = reworkCount;
+        }
+
+        void setAttemptTotal(Integer attemptTotal) {
+            this.attemptTotal = attemptTotal;
+        }
+
+        SubTaskSnapshot toSnapshot() {
+            return SubTaskSnapshot.builder()
+                    .id(id)
+                    .status(status)
+                    .taskId(taskId)
+                    .assignedAgentId(assignedAgentId)
+                    .context(context)
+                    .title(title)
+                    .content(content)
+                    .deliverable(deliverable)
+                    .acceptance(acceptance)
+                    .constraints(constraints)
+                    .reworkCount(reworkCount)
+                    .attemptTotal(attemptTotal)
+                    .dependsOn(dependsOn)
+                    .uncertainties(uncertainties)
+                    .build();
+        }
     }
 
     // #endregion

@@ -801,6 +801,23 @@ review.ReviewPortAdapter
 
 **同一语义的入参可为 `null` 时，直接复用既有方法，不要为「少传两个 null」新增重载**（2026-10-01 W10）：执行失败回写原先调 `SubTaskService#block(Long)`，端口已有 `block(Long, String, Long)`——**`block(id, null, null)` 与 `block(id)` 逐字等价**（提供方仅记 `blockedAt`）。此时应**复用 + 在契约 javadoc 写明 null 语义**，而不是新增一个 `block(Long)` 重载：端口每多一个方法就多一处需要维护的契约面，而换来的只是调用点少写两个 `null`。
 
+**「提供方派生字段」优先于「消费方复制常量或比字符串」（2026-10-01 W11 固化）**：当消费方需要一个**由提供方领域常量决定**的布尔/派生值时，三种做法里只有一种对：
+
+```text
+❌ 消费方 import 提供方常量再比较
+   → 反向依赖（§6），计数不降；且端口化为快照后常量根本拿不到
+❌ 消费方硬编码字面量（如 kind.equals("ASSUMPTION")）
+   → 提供方常量值一改就【静默失效】——编译不报错、测试可能仍绿
+✅ 由【提供方映射器】在产出快照时顺带算好，作为快照字段透传
+   → 判定责任留提供方、常量单源、消费方零判定
+     例：AttachmentRef.contentLoadable（W7）
+         UncertaintySnapshot.assumption（W11：= Uncertainty.KIND_ASSUMPTION.equals(kind)）
+```
+
+> **判据**：**「判断依据属于谁，判定就由谁做」**——这与「能力判定按归属域二分」（W8）同源，只是发生在**数据契约**而非**行为契约**上。
+> **为什么不能做成独立查询**（如 `isContentLoadable(id)` / `isAssumption(id)`）：那会让提供方**每条都回查一次实体**（+N 次 DB 往返、随条数线性增长）；顺带算进快照则是**零额外往返**。
+> **代价**：映射器多一处派生逻辑 ⇒ 必须在映射器 javadoc 逐条登记「本层有哪些派生字段、依据什么」，否则后人会以为它「只做纯投影」。当前 `SubTaskSnapshotMapper` 登记了两处（`dependsOn` 归一化、`assumption` 等值判定）。
+
 ***
 
 ## 7.3 Adapter

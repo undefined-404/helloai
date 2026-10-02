@@ -40,6 +40,17 @@ public class TaskRunningSpecPortAdapter implements TaskRunningSpecPort {
     /**
      * {@inheritDoc}
      *
+     * <p>纯薄委托 —— 全局段文本的拼装口径（Baseline + Context Summary）整体在
+     * {@link TaskRunningSpecService} 内，本层不解释、不裁剪。</p>
+     */
+    @Override
+    public String buildExecutorPromptSection(Long taskId) {
+        return taskRunningSpecService.buildExecutorPromptSection(taskId);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
      * <p>三步顺序与原内联块逐字一致：解析成功 ⇒ 用解析结果；解析失败但输出非空白 ⇒
      * 用「前 200 字符 + {@code ...}」fallback；输出空白 ⇒ 不落记录。
      * 异常<b>不在此吞掉</b>——「降级不阻断主链路」由调用方 try-catch 表达。</p>

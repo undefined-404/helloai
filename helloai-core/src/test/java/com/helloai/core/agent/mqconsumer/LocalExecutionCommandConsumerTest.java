@@ -17,8 +17,8 @@ import com.helloai.core.agent.service.AgentMcpServerService;
 import com.helloai.core.agent.service.AgentRuntimeContextAssembler;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.port.SubTaskCommandPort;
-import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.agent.port.SubTaskQueryPort;
+import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.port.TaskTimelinePort;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -59,7 +59,7 @@ class LocalExecutionCommandConsumerTest {
     private TaskTimelinePort taskTimelinePort;
 
     @Mock
-    private SubTaskService subTaskService;
+    private SubTaskQueryPort subTaskQueryPort;
 
     @Mock
     private AgentService agentService;
@@ -98,12 +98,12 @@ class LocalExecutionCommandConsumerTest {
         @DisplayName("should run startIfNeeded + assemble + runtime.execute + afterTurn + handleSuccess")
         void shouldExecuteViaRuntimeAndMarkSuccess() {
             setAgentRuntime();
-            SubTask subTask = subTask();
+            SubTaskSnapshot subTask = subTask();
             Agent agent = agent();
             agent.setAccessType(AgentAccessType.API_KEY_LLM);
             AgentContext ctx = assembledContext();
 
-            when(subTaskService.getById(22L)).thenReturn(subTask);
+            when(subTaskQueryPort.findById(22L)).thenReturn(subTask);
             when(agentService.getById(11L)).thenReturn(agent);
             when(agentExecutionRecordService.markRunning(44L)).thenReturn(true);
             when(agentExecutionRecordService.markSuccess(44L, null)).thenReturn(true);
@@ -152,10 +152,10 @@ class LocalExecutionCommandConsumerTest {
         @DisplayName("should markFailed + handleFailure when runtime returns FAILED")
         void shouldMarkFailedWhenRuntimeReturnsFailed() {
             setAgentRuntime();
-            SubTask subTask = subTask();
+            SubTaskSnapshot subTask = subTask();
             Agent agent = agent();
 
-            when(subTaskService.getById(22L)).thenReturn(subTask);
+            when(subTaskQueryPort.findById(22L)).thenReturn(subTask);
             when(agentService.getById(11L)).thenReturn(agent);
             when(agentExecutionRecordService.markRunning(44L)).thenReturn(true);
             when(agentExecutionRecordService.markFailed(44L, "run failed", null)).thenReturn(true);
@@ -182,10 +182,10 @@ class LocalExecutionCommandConsumerTest {
         @DisplayName("should markFailed + handleFailure when runtime execute throws (防御违约实现)")
         void shouldMarkFailedWhenRuntimeThrows() {
             setAgentRuntime();
-            SubTask subTask = subTask();
+            SubTaskSnapshot subTask = subTask();
             Agent agent = agent();
 
-            when(subTaskService.getById(22L)).thenReturn(subTask);
+            when(subTaskQueryPort.findById(22L)).thenReturn(subTask);
             when(agentService.getById(11L)).thenReturn(agent);
             when(agentExecutionRecordService.markRunning(44L)).thenReturn(true);
             when(agentExecutionRecordService.markFailed(44L, "boom")).thenReturn(true);
@@ -206,11 +206,11 @@ class LocalExecutionCommandConsumerTest {
         @DisplayName("should markFailed + handleFailure when startIfNeeded throws (状态推进失败契约化)")
         void shouldMarkFailedWhenStartIfNeededThrows() {
             setAgentRuntime();
-            SubTask subTask = subTask();
-            subTask.setStatus(SubTaskStatus.REVIEW); // 不允许执行：startIfNeeded 抛 BizException
+            // 不允许执行：startIfNeeded 抛 BizException
+            SubTaskSnapshot subTask = subTaskBuilder().status(SubTaskStatus.REVIEW).build();
             Agent agent = agent();
 
-            when(subTaskService.getById(22L)).thenReturn(subTask);
+            when(subTaskQueryPort.findById(22L)).thenReturn(subTask);
             when(agentService.getById(11L)).thenReturn(agent);
             when(agentExecutionRecordService.markFailed(44L, "sub task not allowed")).thenReturn(true);
             doThrow(new IllegalStateException("sub task not allowed"))
@@ -234,11 +234,10 @@ class LocalExecutionCommandConsumerTest {
         @DisplayName("should skip execution when markRunning returns false")
         void shouldSkipExecutionWhenMarkRunningReturnsFalse() {
             setAgentRuntime();
-            SubTask subTask = subTask();
-            subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+            SubTaskSnapshot subTask = subTaskBuilder().status(SubTaskStatus.IN_PROGRESS).build();
             Agent agent = agent();
 
-            when(subTaskService.getById(22L)).thenReturn(subTask);
+            when(subTaskQueryPort.findById(22L)).thenReturn(subTask);
             when(agentService.getById(11L)).thenReturn(agent);
             when(agentExecutionRecordService.markRunning(44L)).thenReturn(false);
 
@@ -254,10 +253,10 @@ class LocalExecutionCommandConsumerTest {
         @Test
         @DisplayName("should skip when no AgentRuntime implementation registered (防御装配异常)")
         void shouldSkipWhenNoAgentRuntime() {
-            SubTask subTask = subTask();
+            SubTaskSnapshot subTask = subTask();
             Agent agent = agent();
 
-            when(subTaskService.getById(22L)).thenReturn(subTask);
+            when(subTaskQueryPort.findById(22L)).thenReturn(subTask);
             when(agentService.getById(11L)).thenReturn(agent);
             // agentRuntimes = null（构造器注入失败场景）与空列表同语义：防御跳过
 
@@ -272,7 +271,7 @@ class LocalExecutionCommandConsumerTest {
         @Test
         @DisplayName("should skip when subTask does not exist")
         void shouldSkipWhenSubTaskNotExist() {
-            when(subTaskService.getById(22L)).thenReturn(null);
+            when(subTaskQueryPort.findById(22L)).thenReturn(null);
 
             localExecutionCommandConsumer.consume(baseCommand());
 
@@ -283,10 +282,10 @@ class LocalExecutionCommandConsumerTest {
         @Test
         @DisplayName("should skip when agentId does not match assignedAgent")
         void shouldSkipWhenAgentIdMismatch() {
-            SubTask subTask = subTask();
-            subTask.setAssignedAgentId(99L); // 与 command.agentId=11L 不一致
+            // 与 command.agentId=11L 不一致
+            SubTaskSnapshot subTask = subTaskBuilder().assignedAgentId(99L).build();
 
-            when(subTaskService.getById(22L)).thenReturn(subTask);
+            when(subTaskQueryPort.findById(22L)).thenReturn(subTask);
 
             localExecutionCommandConsumer.consume(baseCommand());
 
@@ -297,9 +296,9 @@ class LocalExecutionCommandConsumerTest {
         @Test
         @DisplayName("should skip when agent does not exist")
         void shouldSkipWhenAgentNotExist() {
-            SubTask subTask = subTask();
+            SubTaskSnapshot subTask = subTask();
 
-            when(subTaskService.getById(22L)).thenReturn(subTask);
+            when(subTaskQueryPort.findById(22L)).thenReturn(subTask);
             when(agentService.getById(11L)).thenReturn(null);
 
             localExecutionCommandConsumer.consume(baseCommand());
@@ -329,13 +328,17 @@ class LocalExecutionCommandConsumerTest {
                 .build();
     }
 
-    private static SubTask subTask() {
-        SubTask subTask = new SubTask();
-        subTask.setId(22L);
-        subTask.setTaskId(33L);
-        subTask.setAssignedAgentId(11L);
-        subTask.setStatus(SubTaskStatus.ASSIGNED);
-        return subTask;
+    /** 子任务快照基准（W11 端口化后消费侧只读 SubTaskSnapshot，不再是 task 实体）。 */
+    private static SubTaskSnapshot.SubTaskSnapshotBuilder subTaskBuilder() {
+        return SubTaskSnapshot.builder()
+                .id(22L)
+                .taskId(33L)
+                .assignedAgentId(11L)
+                .status(SubTaskStatus.ASSIGNED);
+    }
+
+    private static SubTaskSnapshot subTask() {
+        return subTaskBuilder().build();
     }
 
     private static Agent agent() {

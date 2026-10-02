@@ -21,14 +21,13 @@ import com.helloai.core.agent.tool.ToolRegistry;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.shared.util.TextTruncator;
 import com.helloai.core.shared.util.UpstreamAttachmentRenderer;
-import com.helloai.core.task.entity.Attachment;
-import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.entity.Uncertainty;
-import com.helloai.core.task.service.AttachmentService;
-import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.service.TaskRunningSpecService;
+import com.helloai.core.agent.port.AttachmentPort;
+import com.helloai.core.agent.port.AttachmentRef;
+import com.helloai.core.agent.port.SubTaskQueryPort;
+import com.helloai.core.agent.port.SubTaskSnapshot;
+import com.helloai.core.agent.port.TaskRunningSpecPort;
 import com.helloai.core.agent.port.TaskTimelinePort;
-import com.helloai.core.task.spec.ExecutionRecord;
+import com.helloai.core.agent.port.UncertaintySnapshot;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
@@ -66,6 +65,15 @@ import java.util.stream.Collectors;
  * （{@code SubTaskExecutionService.startIfNeeded}）与结果回写（{@link ExecutionResultHandler}），
  * 两者是消费侧（{@code LocalExecutionCommandConsumer}）的编排职责。</p>
  *
+ * <p><b>跨域访问（2026-10-01 W11）</b>：本类曾直接 import {@code task.entity.SubTask} /
+ * {@code task.entity.Attachment} / {@code task.entity.Uncertainty} / {@code task.service.*} /
+ * {@code task.spec.ExecutionRecord}，构成 CODE_STYLE §6 反向依赖（{@code agent → task}）。
+ * 现一律改经 {@code agent.port} 端口：子任务走 {@link SubTaskQueryPort}（{@link SubTaskSnapshot}
+ * 快照，含 `dependsOn` 与 `uncertainties` 投影）、附件走 {@link AttachmentPort}
+ * （{@link AttachmentRef}，其 `contentLoadable` 与不确定性的 `assumption` 均由 <b>task 侧映射器</b>
+ * 派生后透传，本域不复制 task 常量）、执行记录走 {@link TaskRunningSpecPort}。
+ * 端口归属判据见 §7.2：消费方 agent <b>低于</b>提供方 task ⇒ 契约落消费方、适配器落提供方。</p>
+ *
  * <p><b>容错纪律</b>：与旧链一致的 best-effort 降级哲学——会话 / 对话流 / 画像 / 依赖段 /
  * 恢复上下文任一部分失败均降级不阻断执行；唯一 fail-close 点是真实模式下 API Key 缺失
  * （Runtime 循环必须可解析凭据，契约化失败）。</p>
@@ -82,13 +90,16 @@ public class AgentRuntimeContextAssembler {
     private final AgentChatClientService agentChatClientService;
     private final AgentLlmCredentialResolver agentLlmCredentialResolver;
     private final TaskTimelinePort taskTimelinePort;
-    private final TaskRunningSpecService taskRunningSpecService;
+    /** 执行记录端口（原 {@code TaskRunningSpecService}；W11 端口化）。 */
+    private final TaskRunningSpecPort taskRunningSpecPort;
     private final AgentSkillSpecService agentSkillSpecService;
     private final AgentQualityProfileService agentQualityProfileService;
     private final AgentSessionService agentSessionService;
     private final ConversationService conversationService;
-    private final AttachmentService attachmentService;
-    private final SubTaskService subTaskService;
+    /** 附件端口（原 {@code AttachmentService}；W11 端口化，读快照 {@link AttachmentRef}）。 */
+    private final AttachmentPort attachmentPort;
+    /** 子任务只读端口（原 {@code SubTaskService}；W11 端口化，读快照 {@link SubTaskSnapshot}）。 */
+    private final SubTaskQueryPort subTaskQueryPort;
     private final ToolRegistry toolRegistry;
     private final AgentEventRecorder agentEventRecorder;
 
@@ -100,21 +111,21 @@ public class AgentRuntimeContextAssembler {
      *
      * @throws BizException 子任务状态不可执行 / 真实模式 API Key 不可解析（契约化失败，由消费侧回写）
      */
-    public AgentContext assemble(ExecutionCommand command, SubTask subTask, Agent agent,
+    public AgentContext assemble(ExecutionCommand command, SubTaskSnapshot subTask, Agent agent,
                                  List<String> tools, ExecutionEnvironment environment) {
-        Long subTaskId = subTask.getId();
-        if (subTask.getStatus() == com.helloai.common.constant.SubTaskStatus.DONE
-                || subTask.getStatus() == com.helloai.common.constant.SubTaskStatus.CANCELLED) {
-            throw new BizException("子任务不可执行: status=" + subTask.getStatus());
+        Long subTaskId = subTask.id();
+        if (subTask.status() == com.helloai.common.constant.SubTaskStatus.DONE
+                || subTask.status() == com.helloai.common.constant.SubTaskStatus.CANCELLED) {
+            throw new BizException("子任务不可执行: status=" + subTask.status());
         }
 
-        int runTurn = AgentEventContextResolver.resolveTurn(subTask.getReworkCount(), subTask.getAttemptTotal());
-        String runId = AgentEventContextResolver.resolveRunId(subTask.getTaskId());
+        int runTurn = AgentEventContextResolver.resolveTurn(subTask.reworkCount(), subTask.attemptTotal());
+        String runId = AgentEventContextResolver.resolveRunId(subTask.taskId());
         List<String> requiredSkills = command.getRequiredSkills() != null
                 ? command.getRequiredSkills() : Collections.emptyList();
 
         // 1) Prompt 装配：全局段（Task Running Spec）+ 插件规范段 + 历史表现段 + 依赖段 + 恢复上下文
-        String promptSection = taskRunningSpecService.buildExecutorPromptSection(subTask.getTaskId());
+        String promptSection = taskRunningSpecPort.buildExecutorPromptSection(subTask.taskId());
         AgentSkillSpecService.ResolvedSpec resolved = agentSkillSpecService.resolve(requiredSkills);
         if (resolved == null) {
             resolved = new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), "");
@@ -137,7 +148,7 @@ public class AgentRuntimeContextAssembler {
         ChatModel chatModel = buildChatModel(agent);
 
         // 4) 执行会话开始（step=2=上下文装配完成/LLM 前；快照承载恢复上下文，best-effort）
-        agentSessionService.start(subTask.getTaskId(), subTaskId, agent.getId(), runTurn, 2,
+        agentSessionService.start(subTask.taskId(), subTaskId, agent.getId(), runTurn, 2,
                 safeMap("agentId", agent.getId(),
                         "skills", requiredSkills,
                         "tools", enabledTools,
@@ -152,7 +163,7 @@ public class AgentRuntimeContextAssembler {
                 agentSessionService.saveLoopCheckpoint(subTaskId, runTurn, checkpoint);
 
         // 5) spec 装配可观测（与旧链同键同事件名）
-        taskTimelinePort.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_spec_context_loaded",
+        taskTimelinePort.recordEvent(subTask.taskId(), subTaskId, "sub_task_spec_context_loaded",
                 AgentRole.EXECUTOR, agent.getId(),
                 safeMap("agentId", agent.getId(),
                         "depCount", dependencySection.depCount,
@@ -162,7 +173,7 @@ public class AgentRuntimeContextAssembler {
                         "pluginSpec", resolved.section() != null && !resolved.section().isBlank(),
                         "historySummary", historySection != null && !historySection.isBlank(),
                         "recoveryInjected", recovery != null));
-        taskTimelinePort.recordEvent(subTask.getTaskId(), subTaskId, "sub_task_llm_call_start",
+        taskTimelinePort.recordEvent(subTask.taskId(), subTaskId, "sub_task_llm_call_start",
                 AgentRole.EXECUTOR, agent.getId(),
                 Map.of("agentId", agent.getId(), "agentName", agent.getName()));
 
@@ -176,7 +187,7 @@ public class AgentRuntimeContextAssembler {
 
         return AgentContext.builder()
                 .runId(runId)
-                .taskId(subTask.getTaskId())
+                .taskId(subTask.taskId())
                 .subTaskId(subTaskId)
                 .turn(runTurn)
                 .step(0)
@@ -197,13 +208,13 @@ public class AgentRuntimeContextAssembler {
      * Turn 执行完成后的会话推进（LLM 调用完成，step=4=结果回写前；best-effort）。
      * 由消费侧在 {@code AgentRuntime.execute} 返回后调用，与旧链 executeOnce 尾部行为等价。
      */
-    public void afterTurn(SubTask subTask, Agent agent, int turn, AgentExecutionResult result) {
+    public void afterTurn(SubTaskSnapshot subTask, Agent agent, int turn, AgentExecutionResult result) {
         try {
-            agentSessionService.advance(subTask.getId(), agent.getId(), turn, 4);
+            agentSessionService.advance(subTask.id(), agent.getId(), turn, 4);
         } catch (Exception e) {
-            log.debug("执行会话推进失败（best-effort 降级）: subTaskId={}, err={}", subTask.getId(), e.getMessage());
+            log.debug("执行会话推进失败（best-effort 降级）: subTaskId={}, err={}", subTask.id(), e.getMessage());
         }
-        taskTimelinePort.recordEvent(subTask.getTaskId(), subTask.getId(), "sub_task_llm_call_end",
+        taskTimelinePort.recordEvent(subTask.taskId(), subTask.id(), "sub_task_llm_call_end",
                 AgentRole.EXECUTOR, agent.getId(),
                 safeMap("agentId", agent.getId(),
                         "success", result != null && result.getStatus() == com.helloai.common.constant.ExecutionStatus.SUCCESS,
@@ -265,7 +276,7 @@ public class AgentRuntimeContextAssembler {
      * 组装执行 Prompt：任务全局上下文 + 依赖产出参考（直接前置）+ 当前子任务四要素 +
      * 执行恢复上下文（重派接续，仅命中时注入）+ 返工修正指引 + 回填要求。
      */
-    private String buildUserPrompt(SubTask subTask, String runningSpecSection, String dependencySection,
+    private String buildUserPrompt(SubTaskSnapshot subTask, String runningSpecSection, String dependencySection,
                                    AgentSessionService.InterruptedSession recovery) {
         StringBuilder sb = new StringBuilder();
 
@@ -283,31 +294,32 @@ public class AgentRuntimeContextAssembler {
 
         // 当前子任务四要素
         sb.append("## 当前任务\n");
-        sb.append("任务标题: ").append(subTask.getTitle()).append("\n");
-        if (subTask.getContent() != null && !subTask.getContent().isBlank()) {
-            sb.append("任务描述: ").append(subTask.getContent()).append("\n");
+        sb.append("任务标题: ").append(subTask.title()).append("\n");
+        if (subTask.content() != null && !subTask.content().isBlank()) {
+            sb.append("任务描述: ").append(subTask.content()).append("\n");
         }
-        if (subTask.getDeliverable() != null && !subTask.getDeliverable().isBlank()) {
-            sb.append("交付物要求: ").append(subTask.getDeliverable()).append("\n");
+        if (subTask.deliverable() != null && !subTask.deliverable().isBlank()) {
+            sb.append("交付物要求: ").append(subTask.deliverable()).append("\n");
         }
-        if (subTask.getAcceptance() != null && !subTask.getAcceptance().isBlank()) {
-            sb.append("验收标准: ").append(subTask.getAcceptance()).append("\n");
+        if (subTask.acceptance() != null && !subTask.acceptance().isBlank()) {
+            sb.append("验收标准: ").append(subTask.acceptance()).append("\n");
         }
 
         // G-011 D6 三段增量（空值零注入）：执行约束补偿 + 不确定性分级申报 + 事实回源声明
-        if (subTask.getConstraints() != null && !subTask.getConstraints().isBlank()) {
-            sb.append("执行约束（不许改的事）: ").append(subTask.getConstraints()).append("\n");
+        if (subTask.constraints() != null && !subTask.constraints().isBlank()) {
+            sb.append("执行约束（不许改的事）: ").append(subTask.constraints()).append("\n");
         }
-        if (subTask.getUncertainties() != null && !subTask.getUncertainties().isEmpty()) {
+        if (subTask.uncertainties() != null && !subTask.uncertainties().isEmpty()) {
             sb.append("不确定性申报:\n");
-            for (Uncertainty u : subTask.getUncertainties()) {
-                if (u.getNote() == null || u.getNote().isBlank()) {
+            for (UncertaintySnapshot u : subTask.uncertainties()) {
+                if (u.note() == null || u.note().isBlank()) {
                     continue;
                 }
-                String suffix = Uncertainty.KIND_ASSUMPTION.equals(u.getKind())
+                // assumption 由 task 侧映射器判定（常量单源留 task 域，避免 agent 侧复制或硬编码 kind）
+                String suffix = u.assumption()
                         ? "（可自行验证，推翻即上报）"
                         : "（须先验证再动手，无法验证则 BLOCKED 上报）";
-                sb.append("- [").append(u.getKind()).append("] ").append(u.getNote())
+                sb.append("- [").append(u.kind()).append("] ").append(u.note())
                         .append(suffix).append("\n");
             }
         }
@@ -447,8 +459,8 @@ public class AgentRuntimeContextAssembler {
     }
 
     /** 返工上下文注入：从 {@code sub_task.context.reviewHistory} 按轮次铺开 REVIEWER 历史审核意见。 */
-    private void appendReworkContext(StringBuilder sb, SubTask subTask) {
-        Map<String, Object> ctx = subTask.getContext();
+    private void appendReworkContext(StringBuilder sb, SubTaskSnapshot subTask) {
+        Map<String, Object> ctx = subTask.context();
         if (ctx == null) {
             return;
         }
@@ -508,17 +520,17 @@ public class AgentRuntimeContextAssembler {
     }
 
     /** 按 dependsOnIdList 收集直接前置的依赖产出参考段（双轨：结构化摘要 + 内容本体）。 */
-    private DependencySectionResult buildDependencySection(SubTask subTask) {
-        List<Long> dependsOn = subTask.dependsOnIdList();
+    private DependencySectionResult buildDependencySection(SubTaskSnapshot subTask) {
+        List<Long> dependsOn = subTask.dependsOn();
         if (dependsOn == null || dependsOn.isEmpty()) {
             return DependencySectionResult.empty();
         }
         try {
-            List<SubTask> deps = subTaskService.listByIds(dependsOn);
-            Map<Long, SubTask> depMap = new HashMap<>();
+            List<SubTaskSnapshot> deps = subTaskQueryPort.listByIds(dependsOn);
+            Map<Long, SubTaskSnapshot> depMap = new HashMap<>();
             if (deps != null) {
-                for (SubTask dep : deps) {
-                    depMap.put(dep.getId(), dep);
+                for (SubTaskSnapshot dep : deps) {
+                    depMap.put(dep.id(), dep);
                 }
             }
 
@@ -530,16 +542,17 @@ public class AgentRuntimeContextAssembler {
             int truncatedCount = 0;
             int idx = 1;
             for (Long depId : dependsOn) {
-                SubTask dep = depMap.get(depId);
+                SubTaskSnapshot dep = depMap.get(depId);
                 if (dep == null) {
                     continue;
                 }
-                ExecutionRecord record = taskRunningSpecService.findRecord(subTask.getTaskId(), depId);
-                sb.append("### 前置 ").append(idx++).append("：").append(dep.getTitle())
-                        .append("（状态：").append(dep.getStatus() != null ? dep.getStatus() : "UNKNOWN")
+                // 只取摘要字符串：TaskRunningSpecPort 只暴露 summary（不引入 ExecutionRecord 类型）
+                String depSummary = taskRunningSpecPort.findExecutionSummary(subTask.taskId(), depId);
+                sb.append("### 前置 ").append(idx++).append("：").append(dep.title())
+                        .append("（状态：").append(dep.status() != null ? dep.status() : "UNKNOWN")
                         .append("）\n");
-                if (record != null && record.summary() != null && !record.summary().isBlank()) {
-                    sb.append("**产出摘要**: ").append(record.summary()).append('\n');
+                if (depSummary != null && !depSummary.isBlank()) {
+                    sb.append("**产出摘要**: ").append(depSummary).append('\n');
                 }
                 String content = loadUpstreamContent(dep);
                 if (content == null || content.isBlank()) {
@@ -571,7 +584,7 @@ public class AgentRuntimeContextAssembler {
             }
             return new DependencySectionResult(sb.toString(), dependsOn.size(), loadedCount, truncatedCount, false);
         } catch (Exception e) {
-            log.warn("依赖产出上下文装配失败，降级跳过注入: subTaskId={}, err={}", subTask.getId(), e.getMessage());
+            log.warn("依赖产出上下文装配失败，降级跳过注入: subTaskId={}, err={}", subTask.id(), e.getMessage());
             return DependencySectionResult.degraded(dependsOn.size());
         }
     }
@@ -589,29 +602,29 @@ public class AgentRuntimeContextAssembler {
      * 逐附件 {@code [TRUNCATED] file=...} 标注）——替代「拼接后单点 4000 截断」，
      * 第二个及以后附件不再整体不可见。</p>
      */
-    private String loadUpstreamContent(SubTask dep) {
+    private String loadUpstreamContent(SubTaskSnapshot dep) {
         try {
-            List<Attachment> attachments = attachmentService.listActive(dep.getId());
+            List<AttachmentRef> attachments = attachmentPort.listActive(dep.id());
             if (attachments != null && !attachments.isEmpty()) {
-                List<Attachment> ordered = new ArrayList<>(attachments);
+                List<AttachmentRef> ordered = new ArrayList<>(attachments);
                 Collections.reverse(ordered);
                 List<UpstreamAttachmentRenderer.LoadedAttachment> loaded = new ArrayList<>();
-                for (Attachment attachment : ordered) {
+                for (AttachmentRef attachment : ordered) {
                     try {
-                        if (!attachmentService.isContentLoadable(attachment)) {
+                        if (!attachment.contentLoadable()) {
                             continue;
                         }
-                        byte[] bytes = attachmentService.loadContent(attachment.getId());
+                        byte[] bytes = attachmentPort.loadContent(attachment.id());
                         if (bytes == null || bytes.length == 0) {
                             continue;
                         }
-                        String fileName = attachment.getFileName() != null && !attachment.getFileName().isBlank()
-                                ? attachment.getFileName() : "attachment-" + attachment.getId();
+                        String fileName = attachment.fileName() != null && !attachment.fileName().isBlank()
+                                ? attachment.fileName() : "attachment-" + attachment.id();
                         loaded.add(new UpstreamAttachmentRenderer.LoadedAttachment(
                                 fileName, new String(bytes, StandardCharsets.UTF_8)));
                     } catch (Exception singleEx) {
                         log.warn("读取单个前置附件失败，跳过该附件: subTaskId={}, attachmentId={}, err={}",
-                                dep.getId(), attachment.getId(), singleEx.getMessage());
+                                dep.id(), attachment.id(), singleEx.getMessage());
                     }
                 }
                 if (!loaded.isEmpty()) {
@@ -620,9 +633,9 @@ public class AgentRuntimeContextAssembler {
             }
         } catch (Exception e) {
             log.warn("读取前置物化附件内容失败，回退原始产出: subTaskId={}, err={}",
-                    dep.getId(), e.getMessage());
+                    dep.id(), e.getMessage());
         }
-        return SubTaskOutputExtractor.extractExecutionOutput(dep.getContext());
+        return SubTaskOutputExtractor.extractExecutionOutput(dep.context());
     }
 
     /** 启用工具并集（G-004 增量 A）：命令 tools ∪ 命中技能 requiredTools（去重保序，纯函数式）。 */

@@ -13,12 +13,12 @@ import com.helloai.core.agent.runtime.AgentExecutionResult;
 import com.helloai.core.agent.runtime.AgentRuntime;
 import com.helloai.core.agent.runtime.ExecutionEnvironment;
 import com.helloai.core.agent.runtime.ExecutionEnvironmentProvider;
-import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.agent.port.SubTaskQueryPort;
+import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.event.ExecutionCommandCreatedEvent;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentMcpServerService;
 import com.helloai.core.agent.service.AgentService;
-import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.agent.port.SubTaskCommandPort;
 import com.helloai.core.agent.port.TaskTimelinePort;
 import com.helloai.core.agent.service.AgentRuntimeContextAssembler;
@@ -62,7 +62,8 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
 
     private final AgentExecutionRecordService agentExecutionRecordService;
     private final TaskTimelinePort taskTimelinePort;
-    private final SubTaskService subTaskService;
+    /** 子任务只读端口（原 {@code SubTaskService}；W11 端口化，读快照 {@link SubTaskSnapshot}）。 */
+    private final SubTaskQueryPort subTaskQueryPort;
     private final AgentService agentService;
     /** Phase 1 Step 2：启用工具为 agent 域数据（agent_mcp_server），消费侧 agent 域内直读注入 ctx.tools。 */
     private final AgentMcpServerService agentMcpServerService;
@@ -102,24 +103,24 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
             return;
         }
 
-        // 1. 加载 subTask + agent，做一致性校验
-        SubTask subTask = subTaskService.getById(command.getSubTaskId());
+        // 1. 加载 subTask + agent，做一致性校验（快照只读，零 task 实体泄漏）
+        SubTaskSnapshot subTask = subTaskQueryPort.findById(command.getSubTaskId());
         if (subTask == null) {
             log.warn("执行命令消费跳过：subTask 不存在 subTaskId={}", command.getSubTaskId());
             return;
         }
-        if (subTask.getAssignedAgentId() == null) {
+        if (subTask.assignedAgentId() == null) {
             log.warn("执行命令消费跳过：subTask 未分配 Agent subTaskId={}", command.getSubTaskId());
             return;
         }
-        if (!command.getAgentId().equals(subTask.getAssignedAgentId())) {
+        if (!command.getAgentId().equals(subTask.assignedAgentId())) {
             log.warn("执行命令消费跳过：command.agentId={} 与 subTask.assignedAgent={} 不匹配",
-                    command.getAgentId(), subTask.getAssignedAgentId());
+                    command.getAgentId(), subTask.assignedAgentId());
             return;
         }
-        Agent agent = agentService.getById(subTask.getAssignedAgentId());
+        Agent agent = agentService.getById(subTask.assignedAgentId());
         if (agent == null) {
-            log.warn("执行命令消费跳过：Agent 不存在 agentId={}", subTask.getAssignedAgentId());
+            log.warn("执行命令消费跳过：Agent 不存在 agentId={}", subTask.assignedAgentId());
             return;
         }
 
@@ -138,11 +139,11 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
      * startIfNeeded 状态推进 → record CAS → 消费 timeline → 上下文装配 →
      * 真身 execute + afterTurn 会话推进 → record CAS 终态 → ExecutionResultHandler 回写。
      */
-    private void runViaRuntime(ExecutionCommand command, SubTask subTask, Agent agent) {
+    private void runViaRuntime(ExecutionCommand command, SubTaskSnapshot subTask, Agent agent) {
         // 1. 状态推进（幂等：IN_PROGRESS 恒过；ASSIGNED / REWORK / PAUSED → IN_PROGRESS）。
         //    失败契约化：record CAS 终态 + 回写失败，不进入执行阶段
         try {
-            subTaskCommandPort.startIfNeeded(command.getSubTaskId(), subTask.getStatus());
+            subTaskCommandPort.startIfNeeded(command.getSubTaskId(), subTask.status());
         } catch (Exception e) {
             log.error("子任务状态推进失败: subTaskId={}, agentId={}, err={}",
                     command.getSubTaskId(), command.getAgentId(), e.getMessage());
@@ -161,7 +162,7 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
 
         // 3. 消费阶段 timeline（route 观察点：灰度脚本据此区分路径）
         taskTimelinePort.recordEvent(
-                subTask.getTaskId(),
+                subTask.taskId(),
                 command.getSubTaskId(),
                 "sub_task_execution_command_consume",
                 AgentRole.EXECUTOR,
@@ -173,7 +174,7 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
                         "accessType", command.getAccessType() != null ? command.getAccessType().name() : "UNKNOWN",
                         "route", "agent_runtime"));
         taskTimelinePort.recordEvent(
-                subTask.getTaskId(),
+                subTask.taskId(),
                 command.getSubTaskId(),
                 "sub_task_execute_start",
                 AgentRole.EXECUTOR,

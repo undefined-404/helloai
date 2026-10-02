@@ -57,4 +57,19 @@ public interface TaskRunningSpecPort {
      * @param rawOutput executor 完整原始输出，可为 {@code null}
      */
     void parseAndAppendExecutionRecord(Long taskId, Long subTaskId, String title, Long agentId, String rawOutput);
+
+    /**
+     * 构建 executor Prompt 的<b>全局上下文段</b>（W11 新增）。
+     *
+     * <p>语义与 {@code TaskRunningSpecService#buildExecutorPromptSection(Long)} 逐字一致：
+     * 返回 Markdown 格式的「Baseline 全局目标 + Context Summary（全局进度）」章节文本，
+     * <b>不含</b>各子任务执行记录明细（明细由消费方按 {@code dependsOn} 经
+     * {@link #findExecutionSummary(Long, Long)} 逐条收集）。无内容时返回空串（绝不返回 {@code null}）。</p>
+     *
+     * <p>消费方：{@code AgentRuntimeContextAssembler} 的 Prompt 装配（W11）。</p>
+     *
+     * @param taskId 主任务 ID
+     * @return Prompt 全局上下文段；无内容返回空串
+     */
+    String buildExecutorPromptSection(Long taskId);
 }

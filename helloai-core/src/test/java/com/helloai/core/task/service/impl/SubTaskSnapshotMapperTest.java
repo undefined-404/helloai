@@ -26,7 +26,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  *     <li>空值边界：{@code null} 入参 → {@code null}；批量入参与不确定性列表
  *         <b>绝不返回 {@code null}</b>，且逐条 {@code null} 元素跳过；</li>
  *     <li><b>映射不做业务判定</b>：{@code kind} 原样透传，不做归一化/校验
- *         （校验责任在 task 域拆解落库侧，单源语义不得复制）。</li>
+ *         （校验责任在 task 域拆解落库侧，单源语义不得复制）；</li>
+ *     <li><b>两处提供方派生</b>（W7 {@code dependsOn} Long 归一化；W11 {@code uncertainty.assumption}
+ *         —— 由 task 域常量 {@code Uncertainty.KIND_ASSUMPTION} 判定后透传，避免消费方复制常量）。</li>
  * </ul>
  */
 @DisplayName("SubTaskSnapshotMapper 实体 → agent 域快照")
@@ -116,6 +118,22 @@ class SubTaskSnapshotMapperTest {
         assertThat(snapshots.get(0).note()).isEqualTo("存量调用方是否受影响未确认");
         // 非法 kind 原样透传 —— 本层不做 fail-close 降级（那是 task 域拆解落库侧的职责）
         assertThat(snapshots.get(1).kind()).isEqualTo("weird_kind_未归一化");
+    }
+
+    @Test
+    @DisplayName("toUncertaintySnapshots：W11 派生字段 assumption 由 task 域常量判定后透传")
+    void shouldDeriveAssumptionFlag() {
+        List<Uncertainty> source = List.of(
+                new Uncertainty(Uncertainty.KIND_ASSUMPTION, "假设可用"),
+                new Uncertainty(Uncertainty.KIND_UNCONFIRMED, "接口待确认"),
+                new Uncertainty("weird_kind_未归一化", "note"));
+
+        List<UncertaintySnapshot> snapshots = SubTaskSnapshotMapper.toUncertaintySnapshots(source);
+
+        assertThat(snapshots.get(0).assumption()).isTrue();
+        assertThat(snapshots.get(1).assumption()).isFalse();
+        // 非 ASSUMPTION 一律 false —— 消费方无需（也不得）自行比较 kind 字符串
+        assertThat(snapshots.get(2).assumption()).isFalse();
     }
 
     @Test

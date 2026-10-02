@@ -31,6 +31,9 @@ import static org.mockito.Mockito.when;
  * <p><b>W10 新增写路径</b>：{@code parseAndAppendExecutionRecord} 承接原
  * {@code ExecutionResultHandler} 内联的「解析 EXECUTION_RECORD / fallback / 落库」整块逻辑，
  * 覆盖三条分支：解析成功、解析失败取前 200 字符 fallback、输出空白不落记录。</p>
+ *
+ * <p><b>W11 新增读路径</b>：{@code buildExecutorPromptSection} 供
+ * {@code AgentRuntimeContextAssembler} 的 Prompt 装配使用，纯薄委托（拼装口径不外泄）。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("TaskRunningSpecPortAdapter")
@@ -68,6 +71,14 @@ class TaskRunningSpecPortAdapterTest {
         when(taskRunningSpecService.findRecord(100L, 11L)).thenReturn(null);
 
         assertThat(adapter.findExecutionSummary(100L, 11L)).isNull();
+    }
+
+    @Test
+    @DisplayName("buildExecutorPromptSection：薄委托透传全局段文本（拼装口径整体在 TaskRunningSpecService）")
+    void shouldDelegateBuildExecutorPromptSection() {
+        when(taskRunningSpecService.buildExecutorPromptSection(100L)).thenReturn("【运行规格段】");
+
+        assertThat(adapter.buildExecutorPromptSection(100L)).isEqualTo("【运行规格段】");
     }
 
     @Test

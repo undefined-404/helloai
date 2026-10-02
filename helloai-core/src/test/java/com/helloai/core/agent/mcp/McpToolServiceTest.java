@@ -861,7 +861,7 @@ class McpToolServiceTest {
                 .priority("HIGH")
                 .reworkCount(1)
                 .uncertainties(List.of(
-                        new UncertaintySnapshot("UNCONFIRMED", "存量调用方是否受影响未确认")))
+                        new UncertaintySnapshot("UNCONFIRMED", "存量调用方是否受影响未确认", false)))
                 .dependsOn(List.of(11L))
                 .build();
     }
@@ -948,7 +948,7 @@ class McpToolServiceTest {
                 .reworkCount(1)
                 .version(2)
                 .uncertainties(List.of(
-                        new UncertaintySnapshot("UNCONFIRMED", "存量调用方是否受影响未确认")))
+                        new UncertaintySnapshot("UNCONFIRMED", "存量调用方是否受影响未确认", false)))
                 .dependsOn(List.of(11L))
                 .build();
         when(subTaskQueryPort.findById(SUB_TASK_ID)).thenReturn(pending, claimed);
