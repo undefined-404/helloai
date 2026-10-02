@@ -9,13 +9,15 @@ import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.port.TaskTimelinePort;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 /**
  * executorDoneIssues 回填器（反馈回路第 1 层，Phase 1.4）。
@@ -25,8 +27,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * issues 非空 → 调 {@link ExecutorIssueResolutionAssessor} 做 LLM 语义对比 → 回填该轮
  * {@code executorDoneIssues}。</p>
  *
- * <p>防覆盖：LLM 评估在锁外执行（长耗时）；写入前按 subTaskId 分段锁（V38 同款思想）
- * 重读 context，仅当最后一轮 round 未变且 executorDoneIssues 仍为空时落笔，
+ * <p>防覆盖：LLM 评估在锁外执行（长耗时）；写入前按 subTaskId 取**分布式锁**
+ * （Redisson RLock，2026-10-02 由 JVM 本地分段锁迁来）后重读 context，仅当最后一轮 round 未变且 executorDoneIssues 仍为空时落笔，
  * 避免覆盖评估期间新发生的评审轮次或并发回填。全程 best-effort，
  * 三态 timeline（success/skipped/failed）观测。</p>
  *
@@ -40,8 +42,15 @@ import java.util.concurrent.ConcurrentHashMap;
  *         {@link SubTaskReviewContextPort#backfillExecutorDoneIssues}（重读 + 判定 + 写
  *         全在 task 域，见备忘录 §16.8）</li>
  * </ul>
- * 行为逐字保留：判定分支、timeline 三态的触发条件与文案均未变；本类的分段锁仍只承担
+ * 行为逐字保留：判定分支、timeline 三态的触发条件与文案均未变；本类的锁仍只承担
  * 「并发回填串行化」，不承担正确性判定（与原实现一致）。</p>
+ *
+ * <p><b>2026-10-02（分布式改造）</b>：原 {@code ConcurrentHashMap<Long, Object> +
+ * synchronized} 分段锁是**单实例假设**（原注释即自承「单实例安全」），多实例部署下
+ * 锁不跨实例 ⇒ 并发回填可能重复触发 LLM 评估与写入。迁 Redisson RLock 后跨实例互斥成立。
+ * 语义取 waitTime=0「抢占失败即跳过」是安全的：本回填幂等（同 round 同一份 assess 结果
+ * 写同一处）+ 入口跳过已回填 + 临界区 round/already-filled 双重校验 +
+ * {@code SubTask} 带 {@code @Version} ⇒ 跳过不丢数据。</p>
  */
 @Slf4j
 @Component
@@ -51,18 +60,17 @@ public class ExecutorDoneIssuesBackfiller {
     /** timeline 事件类型（成功/跳过/失败三态 payload，state 字段区分）。 */
     static final String TIMELINE_EVENT = "sub_task_executor_done_issues";
 
-    /** subTaskId 粒度分段锁：回填的"重读-改写"串行化（单实例安全，V38 同款思想）。 */
-    private final ConcurrentHashMap<Long, Object> subTaskLocks = new ConcurrentHashMap<>();
+    /** 回填互斥锁 key 前缀（与 §6.82 防双审锁同构）。 */
+    private static final String BACKFILL_LOCK_PREFIX = "helloai:lock:executor-done-issues:backfill:";
+
+    /** 回填锁 TTL（秒）：临界区只是「重读 + 条件写」，不应长时间持有；显式 leaseTime 禁看门狗。 */
+    private static final long BACKFILL_LOCK_TTL_SECONDS = 30L;
 
     private final SubTaskQueryPort subTaskQueryPort;
     private final SubTaskReviewContextPort reviewContextPort;
     private final TaskTimelinePort taskTimelinePort;
     private final ExecutorIssueResolutionAssessor assessor;
-
-    /** 获取 subTaskId 粒度锁对象（分段锁，无锁清理——锁对象可复用）。 */
-    private Object lockFor(Long subTaskId) {
-        return subTaskLocks.computeIfAbsent(subTaskId, k -> new Object());
-    }
+    private final RedissonClient redissonClient;
 
     /**
      * 异步回填入口：由 ExecutionResultHandler 事务提交后调用。
@@ -103,22 +111,45 @@ public class ExecutorDoneIssuesBackfiller {
             }
 
             // 锁内条件回填：重读/轮次校验/幂等校验/写入整体在 task 域完成
-            synchronized (lockFor(subTaskId)) {
-                BackfillOutcome outcome = reviewContextPort.backfillExecutorDoneIssues(
-                        subTaskId, round.round(), result.getDoneIssues());
-                switch (outcome) {
-                    case SUB_TASK_MISSING, SKIPPED_ALREADY_FILLED -> {
-                        // 与原实现一致：这两种情形静默返回，不记 timeline
-                        return;
+            //
+            // 分布式锁（原为 JVM 本地分段锁，注释自承「单实例安全」——多实例部署下失效）。
+            // waitTime=0「抢占失败即跳过」在此是安全的：本回填**幂等**（同一 round 的同一
+            // 份 assess 结果写同一处），且入口已跳过「已回填」、临界区内有 round +
+            // already-filled 双重校验、SubTask 带 @Version 乐观锁 ⇒ 跳过不丢数据，
+            // 只省掉一次重复的写入竞争。
+            RLock lock = redissonClient.getLock(BACKFILL_LOCK_PREFIX + subTaskId);
+            try {
+                // waitTime=0 保持「抢占失败即跳过」；显式 leaseTime 禁看门狗，TTL 兜底崩溃残留
+                if (!lock.tryLock(0, BACKFILL_LOCK_TTL_SECONDS, TimeUnit.SECONDS)) {
+                    log.debug("executorDoneIssues 回填跳过：同子任务回填进行中, subTaskId={}", subTaskId);
+                    return;
+                }
+                try {
+                    BackfillOutcome outcome = reviewContextPort.backfillExecutorDoneIssues(
+                            subTaskId, round.round(), result.getDoneIssues());
+                    switch (outcome) {
+                        case SUB_TASK_MISSING, SKIPPED_ALREADY_FILLED -> {
+                            // 与原实现一致：这两种情形静默返回，不记 timeline
+                            return;
+                        }
+                        case SKIPPED_ROUND_CHANGED -> {
+                            recordTimeline(snapshot, "skipped", Map.of("reason", "round_changed"));
+                            return;
+                        }
+                        case WRITTEN -> {
+                            // 与原实现一致：进入写入分支后继续记 success
+                        }
                     }
-                    case SKIPPED_ROUND_CHANGED -> {
-                        recordTimeline(snapshot, "skipped", Map.of("reason", "round_changed"));
-                        return;
-                    }
-                    case WRITTEN -> {
-                        // 与原实现一致：进入写入分支后继续记 success
+                } finally {
+                    // isHeldByCurrentThread 防御：锁已过期被他人接管时，本线程不得释放他人持有的锁
+                    if (lock.isHeldByCurrentThread()) {
+                        lock.unlock();
                     }
                 }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warn("executorDoneIssues 回填锁获取中断: subTaskId={}", subTaskId);
+                return;
             }
             recordTimeline(snapshot, "success", Map.of(
                     "doneIssues", result.getDoneIssues(),
