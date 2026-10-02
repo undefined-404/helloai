@@ -9,11 +9,14 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * ConfirmCardProtocol 单测——确认卡协议重载（澄清问题文本覆盖默认题面）。
+ * ConfirmCardProtocol 单测——确认卡协议（纯确认意图形态）。
  *
- * <p>前置联合决策（intent=clarify）的澄清问题经 {@code buildAskPayload(String)} /
- * {@code buildAskText(String)} 直通卡片题面与可读正文；null/blank 回退默认文案。
- * 本测试只覆盖新增重载与回退边界，无参方法既有行为由 RequirementClarifyServiceTest 覆盖。</p>
+ * <p><b>2026-10-02 语义反转（选项 A）</b>：原 {@code buildAskPayload(String)} /
+ * {@code buildAskText(String)} 重载把联合决策 LLM 产出的「澄清问题」直通卡片题面与可读正文，
+ * 但该卡只有「确认/取消」两个选项且 {@code allowCustom=false} —— 题面是要自由回答的澄清问题，
+ * 交互却只能点「确认/取消」且无输入框，用户无法回答；点「确认」只切模式，问题被静默丢弃。
+ * 故确认卡恢复<b>纯确认意图</b>：题面与正文恒为默认文案，澄清问题由 CLARIFY 模式下一轮正式生成。
+ * 本测试反转原断言，锁定「确认卡不承载澄清问题」。</p>
  */
 @DisplayName("ConfirmCardProtocol")
 class ConfirmCardProtocolTest {
@@ -26,43 +29,38 @@ class ConfirmCardProtocolTest {
     }
 
     @Test
-    @DisplayName("传澄清问题：payload.question.text 与可读正文均展示该问题")
-    void shouldUseQuestionTextWhenProvided() throws Exception {
+    @DisplayName("确认卡 payload：题面恒为默认确认文案、选项仅确认/取消、禁自定义输入（不承载澄清问题）")
+    void shouldAlwaysUseDefaultQuestionText() throws Exception {
+        String payload = protocol.buildAskPayload();
+
+        JsonNode root = new ObjectMapper().readTree(payload);
+        JsonNode cardQuestion = root.get("questions").get(0);
+        assertThat(cardQuestion.get("id").asText()).isEqualTo(ConfirmCardProtocol.CONFIRM_QUESTION_ID);
+        assertThat(cardQuestion.get("text").asText()).isEqualTo(ConfirmCardProtocol.CONFIRM_QUESTION_TEXT);
+        assertThat(cardQuestion.get("multiple").asBoolean()).isFalse();
+        assertThat(cardQuestion.get("allowCustom").asBoolean()).isFalse();
+        JsonNode options = cardQuestion.get("options");
+        assertThat(options).hasSize(2);
+        assertThat(options.get(0).get("label").asText()).isEqualTo(ConfirmCardProtocol.CONFIRM_OPTION_ACCEPT);
+        assertThat(options.get(1).get("label").asText()).isEqualTo(ConfirmCardProtocol.CONFIRM_OPTION_CANCEL);
+    }
+
+    @Test
+    @DisplayName("确认卡可读正文：恒为默认正文（不含澄清问题）")
+    void shouldAlwaysUseDefaultAskText() {
+        assertThat(protocol.buildAskText()).isEqualTo(ConfirmCardProtocol.CONFIRM_ASK_TEXT);
+    }
+
+    @Test
+    @DisplayName("带澄清问题的重载（遗留）：仍回退默认题面，保证旧调用方不会把问题塞进确认卡")
+    void shouldFallbackToDefaultEvenWhenQuestionProvided() throws Exception {
         String question = "你希望这套方案覆盖哪些核心场景？";
 
         String payload = protocol.buildAskPayload(question);
 
         JsonNode root = new ObjectMapper().readTree(payload);
-        JsonNode cardQuestion = root.get("questions").get(0);
-        assertThat(cardQuestion.get("id").asText()).isEqualTo(ConfirmCardProtocol.CONFIRM_QUESTION_ID);
-        assertThat(cardQuestion.get("text").asText()).isEqualTo(question);
-        assertThat(protocol.buildAskText(question))
-                .startsWith(ConfirmCardProtocol.CONFIRM_ASK_TEXT)
-                .endsWith(question);
-    }
-
-    @Test
-    @DisplayName("null 澄清问题：回退默认题面 CONFIRM_QUESTION_TEXT 与默认正文")
-    void shouldFallbackDefaultWhenNull() {
-        String payload = protocol.buildAskPayload(null);
-
-        assertThat(payload).contains("\"" + ConfirmCardProtocol.CONFIRM_QUESTION_TEXT + "\"");
-        assertThat(protocol.buildAskText(null)).isEqualTo(ConfirmCardProtocol.CONFIRM_ASK_TEXT);
-    }
-
-    @Test
-    @DisplayName("空白澄清问题：同样回退默认（blank 视为未提供）")
-    void shouldFallbackDefaultWhenBlank() {
-        String payload = protocol.buildAskPayload("   ");
-
-        assertThat(payload).contains("\"" + ConfirmCardProtocol.CONFIRM_QUESTION_TEXT + "\"");
-        assertThat(protocol.buildAskText(" \n ")).isEqualTo(ConfirmCardProtocol.CONFIRM_ASK_TEXT);
-    }
-
-    @Test
-    @DisplayName("无参方法委托重载：payload 题面保持默认文案（行为不变）")
-    void shouldDelegateNoArgToOverload() {
-        assertThat(protocol.buildAskPayload()).isEqualTo(protocol.buildAskPayload(null));
-        assertThat(protocol.buildAskText()).isEqualTo(ConfirmCardProtocol.CONFIRM_ASK_TEXT);
+        assertThat(root.get("questions").get(0).get("text").asText())
+                .isEqualTo(ConfirmCardProtocol.CONFIRM_QUESTION_TEXT);
+        assertThat(protocol.buildAskText(question)).isEqualTo(ConfirmCardProtocol.CONFIRM_ASK_TEXT);
     }
 }

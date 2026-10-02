@@ -1804,7 +1804,7 @@ class RequirementClarifyServiceTest {
         // ════════════════════════════════════════════════════════
 
         @Test
-        @DisplayName("联合决策 clarify 意图：单条确认卡落库（题面=LLM 澄清问题），主回复 LLM 不调用")
+        @DisplayName("联合决策 clarify 意图：单条确认卡落库（纯确认意图，题面=默认文案，不承载澄清问题），主回复 LLM 不调用")
         void llmClarifyIntent_setsPendingConfirmAndSendsCard() {
             RequirementConversation conversation = chatConversation();
             conversation.setRoundCount(3);
@@ -1833,21 +1833,24 @@ class RequirementClarifyServiceTest {
                     argThat(task -> task != null
                             && "requirement_chat".equals(task.getContext() == null
                             ? null : task.getContext().get("scene"))));
-            // 确认卡单条落库：内容承载澄清问题，payload 题面 = 澄清问题
+            // 确认卡单条落库：内容与 payload 题面均为默认确认文案（选项 A：不承载澄清问题，
+            // 澄清问题由 CLARIFY 模式下一轮正式生成，防止「只能点确认/取消却没法回答问题」）
             ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
             verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
-                    eq(ConfirmCardProtocol.CONFIRM_ASK_TEXT + "\n\n你希望这套方案覆盖哪些核心场景？"),
+                    eq(ConfirmCardProtocol.CONFIRM_ASK_TEXT),
                     payloadCaptor.capture());
             assertThat(payloadCaptor.getValue())
                     .contains("\"mode\":\"structured\"")
                     .contains("\"confirm-switch\"")
-                    .contains("你希望这套方案覆盖哪些核心场景？")
+                    .contains(ConfirmCardProtocol.CONFIRM_QUESTION_TEXT)
                     .contains("确认").contains("取消")
-                    .doesNotContain("recommended");
+                    .doesNotContain("recommended")
+                    // 澄清问题不得出现在确认卡 payload 中
+                    .doesNotContain("你希望这套方案覆盖哪些核心场景？");
         }
 
         @Test
-        @DisplayName("联合决策 clarify 意图确认卡 payload：仅 1 题 2 选项，allowCustom=false 且无 recommended 标记")
+        @DisplayName("联合决策 clarify 意图确认卡 payload：仅 1 题 2 选项，题面=默认文案、allowCustom=false 且无 recommended 标记")
         void llmClarifyIntent_confirmPayloadHasTwoOptionsWithoutRecommended() throws Exception {
             RequirementConversation conversation = chatConversation();
             when(conversationService.getById(CONV_ID)).thenReturn(conversation);
@@ -1865,7 +1868,7 @@ class RequirementClarifyServiceTest {
             assertThat(conversation.getPendingClarifyConfirm()).isTrue();
             ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
             verify(messageService).addMessage(eq(CONV_ID), eq("assistant"),
-                    eq(ConfirmCardProtocol.CONFIRM_ASK_TEXT + "\n\n方案的第一期范围怎么定？"),
+                    eq(ConfirmCardProtocol.CONFIRM_ASK_TEXT),
                     payloadCaptor.capture());
             ObjectMapper mapper = new ObjectMapper();
             com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(payloadCaptor.getValue());
@@ -1874,8 +1877,8 @@ class RequirementClarifyServiceTest {
             assertThat(questions).hasSize(1);
             com.fasterxml.jackson.databind.JsonNode question = questions.get(0);
             assertThat(question.get("id").asText()).isEqualTo("confirm-switch");
-            // 题面直通 LLM 澄清问题（不再使用固定默认文案）
-            assertThat(question.get("text").asText()).isEqualTo("方案的第一期范围怎么定？");
+            // 选项 A：题面恒为默认确认文案，LLM 澄清问题不得直通确认卡（否则用户无法回答）
+            assertThat(question.get("text").asText()).isEqualTo(ConfirmCardProtocol.CONFIRM_QUESTION_TEXT);
             assertThat(question.get("multiple").asBoolean()).isFalse();
             assertThat(question.get("allowCustom").asBoolean()).isFalse();
             com.fasterxml.jackson.databind.JsonNode options = question.get("options");
@@ -2472,7 +2475,7 @@ class RequirementClarifyServiceTest {
     }
 
     @Test
-    @DisplayName("流式轮决策=clarify：确认卡 question 流式播放 + 落库 + done（主回复流式零调用）")
+    @DisplayName("流式轮决策=clarify：确认意图正文流式播放 + 落库 + done（主回复流式零调用；澄清问题不再播放）")
     void streamRound_playQuestionWhenDecisionIsClarify() {
         when(conversationService.getById(CONV_ID)).thenReturn(streamChatConversation());
         when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
@@ -2488,14 +2491,15 @@ class RequirementClarifyServiceTest {
                 clarifyService.streamRound(CONV_ID, "你好", null).collectList().block();
 
         assertThat(events).isNotNull();
-        // question 分片播放为 token 帧，最后 done
+        // 确认意图正文分片播放为 token 帧，最后 done
         assertThat(events.get(events.size() - 1).type())
                 .isEqualTo(RequirementClarifyService.ChatStreamEvent.Type.DONE);
         String joined = events.stream()
                 .filter(e -> e.type() == RequirementClarifyService.ChatStreamEvent.Type.TOKEN)
                 .map(RequirementClarifyService.ChatStreamEvent::data)
                 .reduce("", String::concat);
-        assertThat(joined).isEqualTo("方案的第一期范围怎么定？");
+        // 选项 A：播放的是确认意图默认正文，而非澄清问题（澄清问题待切 CLARIFY 后正式生成）
+        assertThat(joined).isEqualTo(ConfirmCardProtocol.CONFIRM_ASK_TEXT);
         // 确认卡单条落库（applyClarifyDecision），主回复流式通道零调用
         verify(messageService).addMessage(eq(CONV_ID), eq("assistant"), anyString(), anyString());
         verify(platformAgentExecutionService, never())

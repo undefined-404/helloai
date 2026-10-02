@@ -484,16 +484,20 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     }
 
     /**
-     * 确认卡流式播放（intent=clarify）：question 文本按小块分片、小延时发射 token 帧，
+     * 确认卡流式播放（intent=clarify）：把<b>确认意图正文</b>按小块分片、小延时发射 token 帧，
      * 打字机效果；播放完成后按 {@link #applyClarifyDecision} 落库确认卡并置待确认标记 → done。
-     * question 由联合决策 LLM 整段产出，此处为体验层播放（非重复生成），分片延时仅驱动 UI。
+     *
+     * <p><b>2026-10-02 修复（选项 A）</b>：原实现播放的是联合决策 LLM 产出的「澄清问题」，
+     * 与确认卡「确认/取消」交互不匹配（见 {@link #applyClarifyDecision} 修复说明）；
+     * 现改为播放<b>确认意图默认正文</b>（{@code buildAskText()}），澄清问题待切 CLARIFY 后正式生成。
+     * 此处为体验层播放（非重复生成），分片延时仅驱动 UI。</p>
      */
     private Flux<ChatStreamEvent> playClarifyQuestion(RequirementConversation conversation,
                                                       ChatRoundDecisionParser.ChatRoundDecision decision) {
-        String question = decision.clarificationQuestion();
+        String text = confirmCardProtocol.buildAskText();
         List<String> chunks = new ArrayList<>();
-        for (int i = 0; i < question.length(); i += CLARIFY_PLAY_CHUNK_SIZE) {
-            chunks.add(question.substring(i, Math.min(question.length(), i + CLARIFY_PLAY_CHUNK_SIZE)));
+        for (int i = 0; i < text.length(); i += CLARIFY_PLAY_CHUNK_SIZE) {
+            chunks.add(text.substring(i, Math.min(text.length(), i + CLARIFY_PLAY_CHUNK_SIZE)));
         }
         return Flux.fromIterable(chunks)
                 .delayElements(Duration.ofMillis(CLARIFY_PLAY_DELAY_MS))
@@ -1055,19 +1059,26 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     }
 
     /**
-     * 应用 clarify 决策：落库单条确认卡（内容与卡片题面均承载澄清问题），
-     * 置待确认标记后返回——不生成主回复，对齐 ZLAgent「响应即问题」。
+     * 应用 clarify 决策：落库单条<b>纯确认意图卡</b>，置待确认标记后返回——不生成主回复，
+     * 对齐 ZLAgent「响应即问题」。
+     *
+     * <p><b>2026-10-02 修复（选项 A）</b>：原实现把联合决策 LLM 产出的「澄清问题」
+     * 塞进确认卡题面（{@code buildAskPayload(question)}），但该卡只有「确认/取消」两个
+     * 选项且 {@code allowCustom=false} —— 题面是要自由回答的澄清问题，交互却只能点
+     * 「确认/取消」且无输入框，用户根本无法回答；且点「确认」只切模式，问题被静默丢弃。
+     * 故确认卡恢复<b>纯确认意图</b>（题面/正文均用默认文案），澄清问题不再展示在确认卡上；
+     * 用户确认切 CLARIFY 后，由澄清模式在下一轮以结构化选项题 / 自由文本<b>正式</b>生成可回答的澄清问题。</p>
      */
     private ClarifyConversationDetail applyClarifyDecision(RequirementConversation conversation,
                                                            ChatRoundDecisionParser.ChatRoundDecision decision) {
         Long conversationId = conversation.getId();
         String question = decision.clarificationQuestion();
         messageService.addMessage(conversationId, ROLE_ASSISTANT,
-                confirmCardProtocol.buildAskText(question),
-                confirmCardProtocol.buildAskPayload(question));
+                confirmCardProtocol.buildAskText(),
+                confirmCardProtocol.buildAskPayload());
         conversation.setPendingClarifyConfirm(true);
         conversationService.updateById(conversation);
-        log.info("联合决策 intent=clarify，落库单条确认卡: conversationId={}, question={}",
+        log.info("联合决策 intent=clarify，落库单条确认卡: conversationId={}, question(下一轮重新生成)={}",
                 conversationId, question);
         return new ClarifyConversationDetail(conversation,
                 messageService.listByConversation(conversationId));

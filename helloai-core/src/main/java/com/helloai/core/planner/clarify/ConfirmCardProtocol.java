@@ -50,7 +50,7 @@ public class ConfirmCardProtocol {
     }
 
     /**
-     * 意图词二次确认的 structured payload：1 题 2 选项（确认/取消），
+     * 意图确认卡 structured payload：<b>纯确认意图</b>，题面恒为默认文案、选项仅确认/取消、
      * 均不带 recommended → 前端不渲染"推荐"按钮；allowCustom=false → 隐藏自定义补充输入框。
      *
      * <p>为什么用 structured 卡片替代纯文本确认：用户点选后经 selections 快照通道判定
@@ -58,24 +58,38 @@ public class ConfirmCardProtocol {
      * 手写确认词仍兼容（IntentDetectionService 已删除，改为 LLM auto 意图路由），
      * 后端状态机零改动，交互形态与方案细则确认卡片一致。</p>
      *
-     * <p>重载 {@link #buildAskPayload(String)} 供前置联合决策（intent=clarify）使用：
-     * 题面直接展示 LLM 生成的澄清问题；本无参版本保留默认题面文案，委托新重载。</p>
+     * <p><b>2026-10-02 语义反转（选项 A）</b>：原 {@code buildAskPayload(String questionText)}
+     * 重载把联合决策 LLM 产出的「澄清问题」直通卡片题面——但本卡只有「确认/取消」两个选项
+     * 且无自由输入框，用户无法回答该澄清问题；点「确认」只切模式，问题被静默丢弃。故本类
+     * <b>忽略传入的澄清问题</b>，确认卡题面恒为默认确认文案；澄清问题由 CLARIFY 模式下一轮
+     * 正式生成（带结构化选项/自由输入）。</p>
      *
      * @return payload JSON；序列化失败降级 null（回退纯文本确认，不阻断主流程）
      */
     public String buildAskPayload() {
-        return buildAskPayload(null);
+        return buildAskPayloadInternal();
     }
 
     /**
-     * 意图确认卡 structured payload 重载：题面文案可替换为澄清问题。
+     * 意图确认卡 structured payload 重载（遗留兼容入口）。
      *
-     * @param questionText 澄清问题文本；null/空白回退默认题面 {@link #CONFIRM_QUESTION_TEXT}
+     * <p><b>2026-10-02 语义反转（选项 A）</b>：参数 {@code questionText} <b>被忽略</b>，
+     * 确认卡题面恒为默认文案——杜绝「把澄清问题塞进只有确认/取消选项的卡」这一类 bug 复发。
+     * 调用方若想让用户回答澄清问题，应走 CLARIFY 模式的正式追问，而非本确认卡。</p>
+     *
+     * @param questionText 遗留参数，已忽略（不再承载澄清问题）
      * @return payload JSON；序列化失败降级 null（回退纯文本确认，不阻断主流程）
      */
     public String buildAskPayload(String questionText) {
-        String text = (questionText == null || questionText.isBlank())
-                ? CONFIRM_QUESTION_TEXT : questionText;
+        return buildAskPayloadInternal();
+    }
+
+    /**
+     * 确认卡 payload 构造（无参，题面/选项恒定）。
+     *
+     * @return payload JSON；序列化失败降级 null
+     */
+    private String buildAskPayloadInternal() {
         RequirementClarifyService.ClarifyOption accept = new RequirementClarifyService.ClarifyOption();
         accept.setLabel(CONFIRM_OPTION_ACCEPT);
         accept.setValue(CONFIRM_OPTION_ACCEPT);
@@ -85,7 +99,7 @@ public class ConfirmCardProtocol {
 
         RequirementClarifyService.ClarifyQuestion question = new RequirementClarifyService.ClarifyQuestion();
         question.setId(CONFIRM_QUESTION_ID);
-        question.setText(text);
+        question.setText(CONFIRM_QUESTION_TEXT);
         question.setMultiple(false);
         question.setAllowCustom(false);
         question.setOptions(List.of(accept, cancel));
@@ -105,27 +119,27 @@ public class ConfirmCardProtocol {
     }
 
     /**
-     * 确认卡可读正文（transcript 转录用，与 {@link #buildAskPayload()} 结构化卡片配对）。
+     * 确认卡可读正文（transcript 转录用）：<b>纯确认意图</b>，恒为默认正文。
      * LLM auto 意图路由检测到 clarify 意图时，先落库可见回复，再落库此正文 + payload 卡片。
      *
      * @return 确认卡可读文本（非 null）
      */
     public String buildAskText() {
-        return buildAskText(null);
+        return CONFIRM_ASK_TEXT;
     }
 
     /**
-     * 确认卡可读正文重载：可携带澄清问题（与 {@link #buildAskPayload(String)} 配对），
-     * 无标题可读正文也承担澄清问题展示（转录用）。
+     * 确认卡可读正文重载（遗留兼容入口）。
      *
-     * @param questionText 澄清问题文本；null/空白回退默认正文 {@link #CONFIRM_ASK_TEXT}
+     * <p><b>2026-10-02 语义反转（选项 A）</b>：参数 {@code questionText} <b>被忽略</b>，
+     * 正文恒为默认文案——与 {@link #buildAskPayload(String)} 口径一致，
+     * 澄清问题由 CLARIFY 模式下一轮正式生成。</p>
+     *
+     * @param questionText 遗留参数，已忽略（不再承载澄清问题）
      * @return 确认卡可读文本（非 null）
      */
     public String buildAskText(String questionText) {
-        if (questionText == null || questionText.isBlank()) {
-            return CONFIRM_ASK_TEXT;
-        }
-        return CONFIRM_ASK_TEXT + "\n\n" + questionText;
+        return CONFIRM_ASK_TEXT;
     }
 
     /**
