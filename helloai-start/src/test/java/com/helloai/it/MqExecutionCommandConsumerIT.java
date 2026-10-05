@@ -7,6 +7,7 @@ import com.helloai.core.agent.runtime.AgentExecutionResult;
 import com.helloai.core.agent.runtime.RuntimeTurnExecutor;
 import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.mq.config.RabbitMQConfig;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.Message;
@@ -113,6 +114,45 @@ class MqExecutionCommandConsumerIT extends AbstractItTestBase {
                 SELECT COUNT(*) FROM event_consumption_log
                 WHERE message_id = ? AND consumer = 'MqExecutionCommandConsumer' AND status = 'CONSUMED'
                 """, Integer.class, eventId));
+    }
+
+    // ==================== 清理 ====================
+
+    /**
+     * 用例后清场：本类 seed 的 9101 段数据必须回收，
+     * 否则残留行会与外层共享容器（{@link ItContainers} 跨类静态单例）中其它 IT 类的
+     * 同名段冲突——2026-10-05 实跑暴露：{@code TaskRunningSpecPhaseBIT} 的
+     * {@code DELETE FROM sub_task} 被本类残留的 {@code agent_execution_record(sub_task_id=9101)}
+     * 触发的 {@code agent_execution_record_sub_task_id_fkey} 阻断，整类 setup ERROR。
+     *
+     * <p>本用例跑的是<b>真实消费链</b>（MQ → 幂等 → 本地执行 → 回写），除 seed 的
+     * agent_execution_record 外还会写 conversation_message（执行产出对话流）与
+     * task_execution_record / task_running_spec（Running Spec 回填）等子表，
+     * 故须连同这些子表一并清理。严格按 FK 依赖顺序（子 → 父）删除。</p>
+     */
+    @AfterEach
+    void cleanup() {
+        // 1) 引用 sub_task 的子表
+        jdbcTemplate.update("DELETE FROM conversation_message WHERE sub_task_id = ?", SUB_TASK_ID);
+        jdbcTemplate.update("DELETE FROM conversation_archive WHERE sub_task_id = ?", SUB_TASK_ID);
+        jdbcTemplate.update("DELETE FROM attachment WHERE sub_task_id = ?", SUB_TASK_ID);
+        jdbcTemplate.update("DELETE FROM review_record WHERE sub_task_id = ?", SUB_TASK_ID);
+        jdbcTemplate.update("DELETE FROM review_recheck_log WHERE sub_task_id = ?", SUB_TASK_ID);
+        jdbcTemplate.update("DELETE FROM agent_execution_record WHERE sub_task_id = ?", SUB_TASK_ID);
+        // 2) 引用 task 的子表
+        jdbcTemplate.update("DELETE FROM task_execution_record WHERE task_id = ?", TASK_ID);
+        jdbcTemplate.update("DELETE FROM task_running_spec WHERE task_id = ?", TASK_ID);
+        jdbcTemplate.update("DELETE FROM task_agent_member WHERE task_id = ?", TASK_ID);
+        jdbcTemplate.update("DELETE FROM module WHERE task_id = ?", TASK_ID);
+        // 3) sub_task 本体
+        jdbcTemplate.update("DELETE FROM sub_task WHERE id = ?", SUB_TASK_ID);
+        // 4) 引用 agent 的子表 + agent 本体
+        jdbcTemplate.update("DELETE FROM agent_inbox WHERE agent_id = ?", AGENT_ID);
+        jdbcTemplate.update("DELETE FROM agent_duty_lease WHERE agent_id = ?", AGENT_ID);
+        jdbcTemplate.update("DELETE FROM task_agent_member WHERE agent_id = ?", AGENT_ID);
+        jdbcTemplate.update("DELETE FROM agent WHERE id = ?", AGENT_ID);
+        // 5) task 本体
+        jdbcTemplate.update("DELETE FROM task WHERE id = ?", TASK_ID);
     }
 
     // ==================== 工具 ====================

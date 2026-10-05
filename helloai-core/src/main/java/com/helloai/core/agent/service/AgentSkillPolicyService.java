@@ -7,7 +7,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.AgentSkillDeriver;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentMapper;
-import com.helloai.core.system.entity.LlmProviderModel;
+import com.helloai.core.system.port.LlmProviderModelProfile;
 import com.helloai.core.system.service.LlmProviderModelQueryService;
 import org.springframework.stereotype.Service;
 
@@ -50,17 +50,17 @@ public class AgentSkillPolicyService {
         if (cleaned.isEmpty()) {
             return;
         }
-        LlmProviderModel capability = llmProviderModelQueryService.findCapabilityByModelType(modelType);
+        LlmProviderModelProfile capability = llmProviderModelQueryService.findCapabilityProfileByModelType(modelType);
         if (capability == null) {
             // 未识别模型：不校验（降级兼容）
             return;
         }
         Set<String> whitelist = new HashSet<>();
-        if (capability.getCapabilitySkills() != null) {
-            whitelist.addAll(capability.getCapabilitySkills());
+        if (capability.capabilitySkills() != null) {
+            whitelist.addAll(capability.capabilitySkills());
         }
-        if (capability.getAvailableOptionalSkills() != null) {
-            whitelist.addAll(capability.getAvailableOptionalSkills());
+        if (capability.availableOptionalSkills() != null) {
+            whitelist.addAll(capability.availableOptionalSkills());
         }
         List<String> invalid = cleaned.stream()
                 .filter(AgentSkillDeriver.STANDARD_SKILLS::contains)
@@ -84,13 +84,13 @@ public class AgentSkillPolicyService {
         AgentAccessType accessType = agent.getAccessType();
         String modelType = agent.getModelType();
         if (accessType == AgentAccessType.API_KEY_LLM && modelType != null && !modelType.isBlank()) {
-            LlmProviderModel capability = llmProviderModelQueryService.findCapabilityByModelType(modelType);
+            LlmProviderModelProfile capability = llmProviderModelQueryService.findCapabilityProfileByModelType(modelType);
             if (capability != null) {
                 return AgentSkillDeriver.deriveWithCapabilities(
                         accessType, agent.getName(), agent.getRemark(),
                         explicitSkills,
-                        capability.getCapabilitySkills(),
-                        capability.getAvailableOptionalSkills());
+                        capability.capabilitySkills(),
+                        capability.availableOptionalSkills());
             }
         }
         // 非 API_KEY_LLM / 未识别模型：基础推导（显式优先，不合并基础技能）
@@ -111,13 +111,16 @@ public class AgentSkillPolicyService {
             return;
         }
         int colonIdx = modelType.indexOf(':');
+        // 入参校验失败属客户端错误：显式 code=400（BizException 单参构造默认 500，
+        // 会让 GlobalExceptionHandler 把「格式错误」这类可自纠的问题也返 500；
+        // 2026-10-05 修复：Agent 注册接口非法 modelType 一律 500 → 现 400）。
         if (colonIdx <= 0 || colonIdx == modelType.length() - 1) {
-            throw new BizException("modelType 格式错误，应为 providerCode:modelName");
+            throw new BizException(400, "modelType 格式错误，应为 providerCode:modelName");
         }
         String providerCode = modelType.substring(0, colonIdx);
         String modelName = modelType.substring(colonIdx + 1);
         if (!llmProviderModelQueryService.isModelAvailable(providerCode, modelName)) {
-            throw new BizException("模型不可用或已禁用: " + modelType);
+            throw new BizException(400, "模型不可用或已禁用: " + modelType);
         }
         validateModelUniqueInRole(providerCode, modelName, role, excludeAgentId);
     }
@@ -143,7 +146,8 @@ public class AgentSkillPolicyService {
                 .eq(Agent::getDeleted, 0)
                 .ne(excludeAgentId != null, Agent::getId, excludeAgentId));
         if (exists != null && exists > 0) {
-            throw new BizException("角色 " + role + " 已存在使用模型 " + modelName + " 的Agent，同一模型在同一角色下只能注册一个");
+            // 唯一性冲突属资源冲突：显式 code=409（原单参构造默认 500，2026-10-05 修复）
+            throw new BizException(409, "角色 " + role + " 已存在使用模型 " + modelName + " 的Agent，同一模型在同一角色下只能注册一个");
         }
     }
 }

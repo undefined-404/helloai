@@ -73,8 +73,8 @@ public class AgentController {
         if (!agentConfig.isAllowRegistration()) {
             return R.fail(403, "Agent 自注册已关闭，请联系管理员创建");
         }
-        String name = (String) body.get("name");
-        AgentRole role = AgentRole.valueOf(((String) body.get("role")).toUpperCase());
+        String name = resolveName(body);
+        AgentRole role = resolveRole(body);
         String description = (String) body.getOrDefault("description", "");
         boolean idempotent = Boolean.TRUE.equals(body.get("idempotent"));
         // 注册前预校验 modelType（格式/可用性/角色唯一性），失败时不创建 Agent，避免留下无 modelType 的脏 Agent
@@ -98,10 +98,9 @@ public class AgentController {
             return R.fail(403, "注册令牌无效");
         }
 
-        String name = (String) body.get("name");
-        String roleStr = (String) body.get("role");
+        String name = resolveName(body);
         String description = (String) body.getOrDefault("description", "");
-        AgentRole role = AgentRole.valueOf(roleStr.toUpperCase());
+        AgentRole role = resolveRole(body);
         boolean idempotent = Boolean.TRUE.equals(body.get("idempotent"));
         // 注册前预校验 modelType（格式/可用性/角色唯一性），失败时不创建 Agent，避免留下无 modelType 的脏 Agent
         agentService.validateModelType((String) body.get("modelType"), role, null);
@@ -113,6 +112,45 @@ public class AgentController {
         log.info("Agent 自助注册成功: name={}, role={}, id={}, accessType={}",
                 name, role, agent.getId(), agent.getAccessType());
         return R.ok(toRegistrationResponse(agent));
+    }
+
+    /**
+     * 解析并校验注册入参 name。
+     *
+     * <p>空白 name 一律抛 {@code BizException(400, ...)}（经
+     * {@link com.helloai.api.advice.GlobalExceptionHandler} 透出 HTTP 400，与 {@link #resolveRole}
+     * 同口径）：此前空 name 会正常建库，生成一个「无名 Agent」，而删除入口
+     * {@code deleteById} 的 confirmName 校验会因 {@code isBlank()} 直接拒绝，
+     * 导致该空名 Agent <b>无法删除</b>（2026-10-05 修复）。</p>
+     */
+    private static String resolveName(Map<String, Object> body) {
+        Object raw = body.get("name");
+        if (raw == null || String.valueOf(raw).isBlank()) {
+            throw new com.helloai.common.base.BizException(400, "name 不能为空");
+        }
+        return String.valueOf(raw);
+    }
+
+    /**
+     * 解析并校验注册入参 role。
+     *
+     * <p>缺失/空白/非法取值一律抛 {@code BizException(400, ...)}（经
+     * {@link com.helloai.api.advice.GlobalExceptionHandler} 透出 HTTP 400）：
+     * 此前 {@code AgentRole.valueOf} 的 {@code IllegalArgumentException} 在 role 为 null 时
+     * 退化为 NPE → 500，且非法枚举值会把枚举类路径泄漏进错误消息（2026-10-05 修复）。</p>
+     */
+    private static AgentRole resolveRole(Map<String, Object> body) {
+        Object raw = body.get("role");
+        if (raw == null || String.valueOf(raw).isBlank()) {
+            throw new com.helloai.common.base.BizException(400,
+                    "role 不能为空，应为 PLANNER/EXECUTOR/REVIEWER");
+        }
+        try {
+            return AgentRole.valueOf(String.valueOf(raw).toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new com.helloai.common.base.BizException(400,
+                    "role 取值非法: " + raw + "，应为 PLANNER/EXECUTOR/REVIEWER");
+        }
     }
 
     /**
@@ -129,14 +167,16 @@ public class AgentController {
         String modelType = (String) body.get("modelType");
         if (modelType != null && !modelType.isBlank()) {
             int colonIdx = modelType.indexOf(':');
+            // 入参校验失败属客户端错误，显式 code=400（BizException 单参构造默认 500；
+            // 2026-10-05 修复：Agent 注册非法入参由 500 收敛为 400，经 GlobalExceptionHandler 透出）。
             if (colonIdx <= 0 || colonIdx == modelType.length() - 1) {
-                throw new com.helloai.common.base.BizException(
+                throw new com.helloai.common.base.BizException(400,
                         "modelType 格式错误，应为 providerCode:modelName，例如 deepseek:deepseek-v4-flash");
             }
             String providerCode = modelType.substring(0, colonIdx);
             String modelName = modelType.substring(colonIdx + 1);
             if (!llmProviderModelQueryService.isModelAvailable(providerCode, modelName)) {
-                throw new com.helloai.common.base.BizException(
+                throw new com.helloai.common.base.BizException(400,
                         "模型不可用或已禁用: " + modelType);
             }
             // 同一模型在同一角色下全局唯一（与 registerWithExtras 路径的 validateModelType 对齐）

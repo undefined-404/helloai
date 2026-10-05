@@ -1,13 +1,9 @@
 package com.helloai.api.controller;
 
 import com.helloai.common.base.BizException;
-import com.helloai.common.constant.AttachmentVisibility;
+import com.helloai.common.constant.AttachmentStatus;
 import com.helloai.core.task.entity.Attachment;
-import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.policy.AttachmentVisibilityPolicy;
 import com.helloai.core.task.service.AttachmentService;
-import com.helloai.core.task.service.SubTaskService;
-import com.helloai.core.task.service.TaskAgentMemberService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -17,183 +13,183 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.Mockito.lenient;
+import static org.mockito.ArgumentMatchers.nullable;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 
 /**
- * 附件读端可见性判定的**通道边界 + 范围语义**测试。
+ * {@link AttachmentController} 的<b>通道边界 + 响应投影</b>测试。
  *
- * <p><b>演进史</b>：G-014 T04b 的安全修复是"仅可读自己名下子任务"（sub_task 级硬隔离），
- * 其代价是<b>同任务团队内无法互通产出物</b>。2026-10-02 起放宽为「声明范围（visibility）×
- * 任务成员关系」，判定收口到 {@link AttachmentVisibilityPolicy}。</p>
- *
- * <p>本测试用<b>真实策略 + Mock 依赖</b>（而非 Mock 策略），使策略分支本身也被覆盖：
- * 平台账号放行 / 上传者恒可读自传 / TASK 团队成员可读 / PERSONAL 仅上传者 /
- * PUBLIC 预留未启用（fail-closed）/ 非成员拒绝。</p>
+ * <p><b>职责边界（2026-10-03 重构后）</b>：可见性判据的<b>分支语义</b>
+ * （上传者恒可读 / PERSONAL / PUBLIC fail-closed / TASK 成员关系 / derive-on-miss）
+ * 由 {@code helloai-core} 的 {@code AttachmentVisibilityPolicyTest} 直接覆盖（§47.1 明确列
+ * Policy 为单测对象）。本类只验证 Controller 自身的两件事：</p>
+ * <ol>
+ *     <li><b>通道语义</b>：平台账号（{@code _authType=admin}）不做可见性判定直接放行；
+ *         Agent 通道（{@code _authType=agent}）必须调用
+ *         {@link AttachmentService#assertReadable} / {@code listReadable} —— 判据收口在
+ *         Service，Controller 不再直接依赖 {@code task.policy}；</li>
+ *     <li><b>响应投影（§11.3）</b>：响应体是 {@code AttachmentVO}，<b>不泄露</b>实体内部字段
+ *         （{@code deleted}/{@code createBy}/{@code visibility}/{@code uploaderAgentId}）。</li>
+ * </ol>
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("AttachmentController 附件读端可见性判定")
+@DisplayName("AttachmentController 通道边界与响应投影")
 class AttachmentControllerAuthScopeTest {
 
     private static final long ADMIN_SESSION_ID = 1L;
-    private static final long UPLOADER_AGENT_ID = 9L;
-    private static final long TEAMMATE_AGENT_ID = 7L;
-    private static final long OUTSIDER_AGENT_ID = 8L;
+    private static final long AGENT_ID = 7L;
     private static final long ATTACHMENT_ID = 100L;
     private static final long SUB_TASK_ID = 500L;
-    private static final long TASK_ID = 900L;
 
     @Mock
     private AttachmentService attachmentService;
-    @Mock
-    private SubTaskService subTaskService;
-    @Mock
-    private TaskAgentMemberService taskAgentMemberService;
 
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
-        AttachmentVisibilityPolicy policy =
-                new AttachmentVisibilityPolicy(taskAgentMemberService, subTaskService);
         mockMvc = MockMvcBuilders
-                .standaloneSetup(new AttachmentController(attachmentService, policy))
+                .standaloneSetup(new AttachmentController(attachmentService))
                 .build();
     }
 
     @Test
-    @DisplayName("平台账号（_authType=admin，_authId=sessionId）读取任意附件：放行（不走可见性判据）")
-    void adminShouldReadAnyAttachment() {
-        stubAttachment(AttachmentVisibility.PERSONAL, UPLOADER_AGENT_ID);
+    @DisplayName("平台账号（_authType=admin）：不做可见性判定，直接返回附件详情")
+    void adminShouldBypassVisibilityCheck() throws Exception {
+        when(attachmentService.getByIdRequired(ATTACHMENT_ID)).thenReturn(sampleAttachment());
 
-        assertDoesNotThrow(() -> mockMvc.perform(
-                get("/api/attachments/getById/" + ATTACHMENT_ID)
+        mockMvc.perform(get("/api/attachments/getById/" + ATTACHMENT_ID)
                         .requestAttr("_authType", "admin")
-                        .requestAttr("_authId", ADMIN_SESSION_ID)));
+                        .requestAttr("_authId", ADMIN_SESSION_ID))
+                .andExpect(jsonPath("$.data.fileName").value("design.md"));
+
+        verify(attachmentService, never()).assertReadable(any(), anyLong());
     }
 
     @Test
-    @DisplayName("上传者读取自己上传的 PERSONAL 附件：放行（上传者恒可读自传）")
-    void uploaderShouldReadOwnPersonalAttachment() {
-        stubAttachment(AttachmentVisibility.PERSONAL, UPLOADER_AGENT_ID);
+    @DisplayName("Agent 通道：必须经 Service 的 assertReadable 收口判定（Controller 不自行判可见性）")
+    void agentChannelShouldDelegateVisibilityToService() throws Exception {
+        Attachment attachment = sampleAttachment();
+        when(attachmentService.getByIdRequired(ATTACHMENT_ID)).thenReturn(attachment);
 
-        assertDoesNotThrow(() -> mockMvc.perform(
-                get("/api/attachments/getById/" + ATTACHMENT_ID)
+        mockMvc.perform(get("/api/attachments/getById/" + ATTACHMENT_ID)
                         .requestAttr("_authType", "agent")
-                        .requestAttr("_authId", UPLOADER_AGENT_ID)));
+                        .requestAttr("_authId", AGENT_ID))
+                .andExpect(jsonPath("$.data.fileName").value("design.md"));
+
+        verify(attachmentService).assertReadable(attachment, AGENT_ID);
     }
 
     @Test
-    @DisplayName("同任务的团队成员读取 TASK 附件：放行（本次改造的核心目的——团队产出互通）")
-    void teammateShouldReadTaskScopedAttachment() {
-        stubAttachment(AttachmentVisibility.TASK, UPLOADER_AGENT_ID);
-        stubMembership(TEAMMATE_AGENT_ID, true);
-
-        assertDoesNotThrow(() -> mockMvc.perform(
-                get("/api/attachments/getById/" + ATTACHMENT_ID)
-                        .requestAttr("_authType", "agent")
-                        .requestAttr("_authId", TEAMMATE_AGENT_ID)));
-    }
-
-    @Test
-    @DisplayName("非团队成员读取 TASK 附件：403 拒绝（边界仍是任务级，不得跨任务读）")
-    void outsiderShouldBeRejectedForTaskScopedAttachment() {
-        stubAttachment(AttachmentVisibility.TASK, UPLOADER_AGENT_ID);
-        stubMembership(OUTSIDER_AGENT_ID, false);
+    @DisplayName("Agent 通道不可读：Service 抛 403 原样透出（边界仍在任务级）")
+    void agentShouldBeRejectedWhenServiceDenies() {
+        when(attachmentService.getByIdRequired(ATTACHMENT_ID)).thenReturn(sampleAttachment());
+        doThrow(new BizException(403, "无权访问该附件（不在可见范围内）"))
+                .when(attachmentService).assertReadable(any(), anyLong());
 
         Throwable root = unwrap(assertThrows(Exception.class, () -> mockMvc.perform(
                 get("/api/attachments/getById/" + ATTACHMENT_ID)
                         .requestAttr("_authType", "agent")
-                        .requestAttr("_authId", OUTSIDER_AGENT_ID))));
+                        .requestAttr("_authId", AGENT_ID))));
         assertInstanceOf(BizException.class, root);
         assertTrue(root.getMessage().contains("无权访问"), "实际异常：" + root.getMessage());
     }
 
     @Test
-    @DisplayName("同任务团队成员读取 PERSONAL 附件：403 拒绝（仅上传者，团队身份不能越权）")
-    void teammateShouldBeRejectedForPersonalAttachment() {
-        // 即便团队判定为真，PERSONAL 分支也应在上传者判定之后直接拒绝（不触达成员查询）
-        stubAttachment(AttachmentVisibility.PERSONAL, UPLOADER_AGENT_ID);
-        lenient().when(taskAgentMemberService.isMember(TASK_ID, TEAMMATE_AGENT_ID)).thenReturn(true);
-        lenient().when(subTaskService.getById(SUB_TASK_ID)).thenReturn(taskIdBackedSubTask());
+    @DisplayName("下载 / 预览端点同受 Agent 通道判定约束（不得绕过 getById）")
+    void downloadAndPreviewAlsoEnforceAgentChannel() {
+        when(attachmentService.getByIdRequired(ATTACHMENT_ID)).thenReturn(sampleAttachment());
+        doThrow(new BizException(403, "无权访问该附件（不在可见范围内）"))
+                .when(attachmentService).assertReadable(any(), anyLong());
 
-        Throwable root = unwrap(assertThrows(Exception.class, () -> mockMvc.perform(
-                get("/api/attachments/getById/" + ATTACHMENT_ID)
-                        .requestAttr("_authType", "agent")
-                        .requestAttr("_authId", TEAMMATE_AGENT_ID))));
-        assertInstanceOf(BizException.class, root);
+        for (String path : List.of("/api/attachments/downloadById/", "/api/attachments/previewById/")) {
+            Throwable root = unwrap(assertThrows(Exception.class, () -> mockMvc.perform(
+                    get(path + ATTACHMENT_ID)
+                            .requestAttr("_authType", "agent")
+                            .requestAttr("_authId", AGENT_ID))));
+            assertInstanceOf(BizException.class, root, "端点未受判定约束：" + path);
+        }
     }
 
     @Test
-    @DisplayName("PUBLIC 附件：fail-closed 拒绝（枚举仅预留，未开放设置入口，不得隐式全局可读）")
-    void publicVisibilityShouldFailClosed() {
-        stubAttachment(AttachmentVisibility.PUBLIC, UPLOADER_AGENT_ID);
+    @DisplayName("列表（Agent 通道）：走 listReadable 行级过滤，不走全量 list")
+    void listForAgentChannelShouldUseReadableVariant() throws Exception {
+        when(attachmentService.listReadable(nullable(Long.class), anyLong()))
+                .thenReturn(List.of(sampleAttachment()));
 
-        Throwable root = unwrap(assertThrows(Exception.class, () -> mockMvc.perform(
-                get("/api/attachments/getById/" + ATTACHMENT_ID)
+        mockMvc.perform(get("/api/attachments")
                         .requestAttr("_authType", "agent")
-                        .requestAttr("_authId", TEAMMATE_AGENT_ID))));
-        assertInstanceOf(BizException.class, root);
+                        .requestAttr("_authId", AGENT_ID))
+                .andExpect(jsonPath("$.data[0].fileName").value("design.md"));
+
+        verify(attachmentService, never()).list(nullable(Long.class));
     }
 
     @Test
-    @DisplayName("成员表未命中但权威源命中（运行期新分配尚未入队）：derive-on-miss 兜底放行")
-    void currentExecutorShouldPassViaAuthoritativeFallback() {
-        stubAttachment(AttachmentVisibility.TASK, UPLOADER_AGENT_ID);
-        lenient().when(subTaskService.getById(SUB_TASK_ID)).thenReturn(taskIdBackedSubTask());
-        // 成员表未命中（事件驱动派生可能漏路径 / 尚未入队）
-        when(taskAgentMemberService.isMember(TASK_ID, TEAMMATE_AGENT_ID)).thenReturn(false);
-        // 权威源命中：该 agent 当前正是本任务某子任务的执行者
-        when(taskAgentMemberService.isCurrentExecutorOfTask(TASK_ID, TEAMMATE_AGENT_ID)).thenReturn(true);
+    @DisplayName("列表（平台账号）：走全量 list，不做行级过滤")
+    void listForAdminChannelShouldUseFullList() throws Exception {
+        when(attachmentService.list(nullable(Long.class)))
+                .thenReturn(List.of(sampleAttachment()));
 
-        assertDoesNotThrow(() -> mockMvc.perform(
-                get("/api/attachments/getById/" + ATTACHMENT_ID)
-                        .requestAttr("_authType", "agent")
-                        .requestAttr("_authId", TEAMMATE_AGENT_ID)));
+        mockMvc.perform(get("/api/attachments")
+                        .requestAttr("_authType", "admin")
+                        .requestAttr("_authId", ADMIN_SESSION_ID))
+                .andExpect(jsonPath("$.data[0].fileName").value("design.md"));
+
+        verify(attachmentService, never()).listReadable(nullable(Long.class), anyLong());
     }
 
     @Test
-    @DisplayName("成员表未命中且权威源亦未命中：403 拒绝（兜底不放宽边界）")
-    void outsiderShouldBeRejectedWhenNeitherSourceHits() {
-        stubAttachment(AttachmentVisibility.TASK, UPLOADER_AGENT_ID);
-        stubMembership(OUTSIDER_AGENT_ID, false);
-        // 显式声明兜底也未命中，避免依赖 Mockito 默认返回值而掩盖真实判定路径
-        when(taskAgentMemberService.isCurrentExecutorOfTask(TASK_ID, OUTSIDER_AGENT_ID)).thenReturn(false);
+    @DisplayName("响应体为 VO 投影：含业务字段、不含实体内部字段（§11.3）")
+    void responseShouldNotLeakEntityInternalFields() throws Exception {
+        when(attachmentService.getByIdRequired(ATTACHMENT_ID)).thenReturn(sampleAttachment());
 
-        Throwable root = unwrap(assertThrows(Exception.class, () -> mockMvc.perform(
-                get("/api/attachments/getById/" + ATTACHMENT_ID)
-                        .requestAttr("_authType", "agent")
-                        .requestAttr("_authId", OUTSIDER_AGENT_ID))));
-        assertInstanceOf(BizException.class, root);
+        mockMvc.perform(get("/api/attachments/getById/" + ATTACHMENT_ID)
+                        .requestAttr("_authType", "admin")
+                        .requestAttr("_authId", ADMIN_SESSION_ID))
+                .andExpect(jsonPath("$.data.fileName").value("design.md"))
+                .andExpect(jsonPath("$.data.status").value("ACTIVE"))
+                .andExpect(jsonPath("$.data.deleted").doesNotExist())
+                .andExpect(jsonPath("$.data.createBy").doesNotExist())
+                .andExpect(jsonPath("$.data.visibility").doesNotExist())
+                .andExpect(jsonPath("$.data.uploaderAgentId").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("无主体请求（无 _authType）：放行，交由管理侧鉴权覆盖")
+    void anonymousRequestShouldPassThrough() {
+        when(attachmentService.getByIdRequired(ATTACHMENT_ID)).thenReturn(sampleAttachment());
+
+        assertDoesNotThrow(() -> mockMvc.perform(get("/api/attachments/getById/" + ATTACHMENT_ID)));
+
+        verify(attachmentService, never()).assertReadable(any(), anyLong());
     }
 
     // ==================== helpers ====================
 
-    private void stubAttachment(AttachmentVisibility visibility, Long uploaderAgentId) {
+    private static Attachment sampleAttachment() {
         Attachment attachment = new Attachment();
         attachment.setId(ATTACHMENT_ID);
         attachment.setSubTaskId(SUB_TASK_ID);
-        attachment.setVisibility(visibility);
-        attachment.setUploaderAgentId(uploaderAgentId);
-        when(attachmentService.getByIdRequired(anyLong())).thenReturn(attachment);
-    }
-
-    private void stubMembership(Long agentId, boolean member) {
-        lenient().when(subTaskService.getById(SUB_TASK_ID)).thenReturn(taskIdBackedSubTask());
-        when(taskAgentMemberService.isMember(TASK_ID, agentId)).thenReturn(member);
-    }
-
-    private static SubTask taskIdBackedSubTask() {
-        SubTask subTask = new SubTask();
-        subTask.setId(SUB_TASK_ID);
-        subTask.setTaskId(TASK_ID);
-        return subTask;
+        attachment.setFileName("design.md");
+        attachment.setFileType("markdown");
+        attachment.setFileSize(2048L);
+        attachment.setStorageUrl("local://helloai/500/design.md");
+        attachment.setStatus(AttachmentStatus.ACTIVE);
+        return attachment;
     }
 
     private static Throwable unwrap(Throwable thrown) {

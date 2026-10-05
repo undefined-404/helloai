@@ -1,6 +1,6 @@
 ﻿# ============================================================
 # helloai 本地 B 级集成测试（Testcontainers *IT）一键运行脚本
-# 用途：封装本机实跑 4 个 IT 的三前置 ——
+# 用途：封装本机实跑 B 级 IT（当前 7 个 IT 类 / 27 用例）的三前置 ——
 #       1) 会话级 PATH 清洗（剔除系统注册表坏项 'C:\Program '，仅本会话生效，不代改注册表）
 #       2) $env:DOCKER_HOST 指向 Docker Desktop npipe 端点（新版 Docker Desktop 强制 Host 头，
 #          必须配 testcontainers 2.0.5 / docker-java 4.x 才能连通）
@@ -8,6 +8,7 @@
 #       然后执行 mvn -s .tmp\settings-aliyun.xml -pl helloai-start -am test
 #       仅跑 *IT（surefire 默认 exclude 集成测试），完整日志落 .tmp\it-run-local.log。
 # Ref:  doc/log/2026-09.md「2026-09-29 本机 Docker 实跑 4 个 IT：8/8 全绿」
+#       （历史首跑口径；2026-10-05 已扩至 7 个 IT 类 / 27 用例——见下方 [PASS] 行）
 # 用法（项目根）：powershell -File .\scripts\run-it-local.ps1
 # 前置：Docker Desktop 已启动且引擎就绪；Maven 在系统 PATH（如 E:\apache-maven-3.9.15\bin）
 # ============================================================
@@ -124,7 +125,9 @@ try {
 
 # ---- 5) 汇总与退出码（从日志提取，此时控制台已恢复 UTF-8，中文正确显示） ----
 $buildFailed = [bool](Select-String -Path $logFile -Pattern 'BUILD FAILURE' -Quiet)
-Select-String -Path $logFile -Pattern 'in B[1-4]:' | ForEach-Object { Write-Host ('  ' + $_.Line.Trim()) }
+# 逐类汇总行：匹配「Tests run: ... -- in <类名>」，覆盖全部 IT 类（不再硬编码 B1~B4，
+# 否则 TaskAgentMemberPhaseBIT / TaskRunningSpecPhaseBIT 等新类不会出现在控制台）
+Select-String -Path $logFile -Pattern 'Tests run: .*-- in ' | ForEach-Object { Write-Host ('  ' + $_.Line.Trim()) }
 $summary = Select-String -Path $logFile -Pattern 'Tests run: \d+, Failures: \d+, Errors: \d+, Skipped: \d+\s*$' |
     Select-Object -Last 1
 if ($summary) { Write-Host ("[SUMMARY] " + $summary.Line.Trim()) }
@@ -132,5 +135,5 @@ if ($LASTEXITCODE -ne 0 -or $buildFailed) {
     Write-Host "[FAIL] B 级 IT 未全绿，完整日志见 $logFile" -ForegroundColor Red
     exit 1
 }
-Write-Host "[PASS] B 级 IT 全绿（8/8 期望），完整日志见 $logFile"
+Write-Host "[PASS] B 级 IT 全绿（7 个 IT 类 / 27 用例期望），完整日志见 $logFile"
 exit 0

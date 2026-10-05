@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.fail;
 /**
  * Phase B（TaskRunningSpec 独立表）B 级集成测试（2026-10-02）。
  *
- * <p><b>为什么必须补这条</b>：{@code TaskRunningSpecTableServiceImpl} 共 255 行，
+ * <p><b>为什么必须补这条</b>：{@code TaskRunningSpecServiceImpl} 共 255 行，
  * 双轨二选一前只有 4 例**纯 mock 单测**，从未在真实数据库上跑过；B4' 把它变成
  * 唯一实现后，它就是全链路 Running Spec 的唯一落库路径。mock 单测无法覆盖
  * JSONB 列读写、{@code (task_id, sub_task_id)} 唯一索引 upsert、
@@ -47,13 +47,20 @@ import static org.junit.jupiter.api.Assertions.fail;
 @DisplayName("TaskRunningSpec Phase B（独立表）真实库集成验证")
 class TaskRunningSpecPhaseBIT extends AbstractItTestBase {
 
-    // 主键固定 9xxx 段 + it- 前缀，与内建 seed 隔离（AbstractItTestBase 口径）
-    private static final long TASK_A = 9001L;
-    private static final long TASK_B = 9002L;
-    private static final long SUB_A = 9101L;
-    private static final long SUB_B = 9102L;
-    private static final long SUB_C = 9103L;
-    private static final long AGENT_ID = 9201L;
+    // 主键固定 9xxx 段 + it- 前缀，与内建 seed 隔离（AbstractItTestBase 口径）。
+    // 2026-10-05：ID 段切到 9401+，与同容器共享的其它 IT 类错开——
+    //   MqExecutionCommandConsumerIT 用 9101（task/agent/sub_task/record 四合一），
+    //   AgentCommandOutboxIT 用 9201，AgentExecutionRecordCasIT 用 9301/9302，
+    //   TaskAgentMemberPhaseBIT 用 9010/9011/9210/9211/9310。
+    //   此前 SUB_A=9101 与 MqExecutionCommandConsumerIT 撞号，且后者 seed 的
+    //   agent_execution_record(sub_task_id=9101) 无清理，跨类污染导致本类
+    //   `DELETE FROM sub_task WHERE id=9101` 撞 agent_execution_record_sub_task_id_fkey（setup ERROR）。
+    private static final long TASK_A = 9401L;
+    private static final long TASK_B = 9402L;
+    private static final long SUB_A = 9403L;
+    private static final long SUB_B = 9404L;
+    private static final long SUB_C = 9405L;
+    private static final long AGENT_ID = 9406L;
 
     @Autowired
     private TaskRunningSpecPort taskRunningSpecPort;
@@ -65,6 +72,10 @@ class TaskRunningSpecPhaseBIT extends AbstractItTestBase {
     void seed() {
         jdbcTemplate.update("DELETE FROM task_execution_record WHERE task_id IN (?, ?)", TASK_A, TASK_B);
         jdbcTemplate.update("DELETE FROM task_running_spec WHERE task_id IN (?, ?)", TASK_A, TASK_B);
+        // 先清引用 sub_task 的子表，避免残留行触发 FK 冲突（agent_execution_record 等）：
+        // 容器为跨类静态单例，任何 IT 残留的同 id 执行记录都会让 DELETE sub_task 报
+        // agent_execution_record_sub_task_id_fkey（2026-10-05 L2 门禁实跑暴露）。
+        jdbcTemplate.update("DELETE FROM agent_execution_record WHERE sub_task_id IN (?, ?, ?)", SUB_A, SUB_B, SUB_C);
         jdbcTemplate.update("DELETE FROM sub_task WHERE id IN (?, ?, ?)", SUB_A, SUB_B, SUB_C);
         jdbcTemplate.update("DELETE FROM task WHERE id IN (?, ?)", TASK_A, TASK_B);
 
