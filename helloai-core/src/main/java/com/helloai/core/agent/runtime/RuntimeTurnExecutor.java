@@ -130,6 +130,23 @@ public class RuntimeTurnExecutor implements AgentRuntime {
                         "tokens", loopResult.tokenUsage(),
                         "finishReason", loopResult.finishReason()));
         if (loopResult.success()) {
+            // A（2026-10-05 空产出护栏）：成功终态下若「最终正文为空白（StringUtils.isBlank 口径：
+            // null / "" / 纯空白字符均算空）」且「工具调用数 == 0」，判为**可重试失败**而非 SUCCESS。
+            // 依据：模型返回 STOP 但既无任何可见正文、也无任何工具调用 ⇒ 本次未产出任何交付物
+            // （典型触发：推理模型把输出全放进 reasoning_content，正文被解析为空）。
+            // ★必须保留 toolCallCount() == 0：否则会误伤「靠工具 / 附件交付产物、正文本来就为空」
+            //   的合法成功（此时附件存在，核验侧 no_output_no_attachment 也不会触发）。
+            // 失败走既有失败链（消费侧 markFailed → handleFailure → block → 退避重派），不新造旁路。
+            if (isBlank(loopResult.text()) && loopResult.toolCallCount() == 0) {
+                return AgentExecutionResult.builder()
+                        .status(ExecutionStatus.FAILED)
+                        .output("agent_runtime_empty_output: 模型返回空正文（finishReason="
+                                + loopResult.finishReason() + ", toolCalls=0），无任何交付物，判定为可重试失败")
+                        .thinking(loopResult.thinking())
+                        .finishReason(loopResult.finishReason())
+                        .tokenUsage(loopResult.tokenUsage())
+                        .build();
+            }
             return AgentExecutionResult.builder()
                     .status(ExecutionStatus.SUCCESS)
                     .output(loopResult.text())

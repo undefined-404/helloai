@@ -33,8 +33,11 @@ import java.util.List;
 import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.same;
@@ -173,8 +176,9 @@ class LocalExecutionCommandConsumerTest {
             verify(agentExecutionRecordService).markRunning(44L);
             verify(agentExecutionRecordService).markFailed(44L, "run failed", null);
             verify(agentExecutionRecordService, never()).markSuccess(any(), any());
-            // 失败回写：handleFailure（BizException 承载失败正文）
-            verify(executionResultHandler).handleFailure(eq(22L), eq(11L), argThat(e -> e instanceof RuntimeException));
+            // 失败回写：handleFailure（thinking 随失败透传的四参重载；本用例 thinking=null）
+            verify(executionResultHandler).handleFailure(eq(22L), eq(11L),
+                    nullable(String.class), argThat(e -> e instanceof RuntimeException));
             verify(executionResultHandler, never()).handleSuccess(any(), any(), any());
         }
 
@@ -199,7 +203,8 @@ class LocalExecutionCommandConsumerTest {
             verify(agentExecutionRecordService).markRunning(44L);
             verify(agentExecutionRecordService).markFailed(44L, "boom");
             verify(agentExecutionRecordService, never()).markSuccess(any(), any());
-            verify(executionResultHandler).handleFailure(eq(22L), eq(11L), any());
+            // 真身抛异常路径带 recordId 回写（804 归属校验版四参重载）
+            verify(executionResultHandler).handleFailure(eq(22L), eq(11L), eq(44L), any());
         }
 
         @Test
@@ -212,17 +217,42 @@ class LocalExecutionCommandConsumerTest {
 
             when(subTaskQueryPort.findById(22L)).thenReturn(subTask);
             when(agentService.getById(11L)).thenReturn(agent);
+            // 2026-10-05 顺序契约：record CAS 先于 startIfNeeded，故此处须允许 CAS 通过
+            when(agentExecutionRecordService.markRunning(44L)).thenReturn(true);
             when(agentExecutionRecordService.markFailed(44L, "sub task not allowed")).thenReturn(true);
             doThrow(new IllegalStateException("sub task not allowed"))
                     .when(subTaskCommandPort).startIfNeeded(22L, SubTaskStatus.REVIEW);
 
             localExecutionCommandConsumer.consume(baseCommand());
 
-            // 状态推进失败：不进入执行阶段，record CAS 终态 + 回写失败
-            verify(agentExecutionRecordService, never()).markRunning(any());
+            // 状态推进失败：不进入执行阶段，回写失败（带 recordId 归属校验）+ record CAS 终态
+            verify(agentExecutionRecordService).markRunning(44L);
             verify(agentExecutionRecordService).markFailed(44L, "sub task not allowed");
             verify(agentRuntime, never()).execute(any(AgentContext.class));
-            verify(executionResultHandler).handleFailure(eq(22L), eq(11L), any());
+            verify(executionResultHandler).handleFailure(eq(22L), eq(11L), eq(44L), any());
+        }
+
+        @Test
+        @DisplayName("804: record CAS 被拒（双消费输家）→ 软跳过，不推进状态、不回写失败、不 block")
+        void shouldSoftSkipWhenRecordCasRejected() {
+            setAgentRuntime();
+            when(subTaskQueryPort.findById(22L)).thenReturn(subTask());
+            when(agentService.getById(11L)).thenReturn(agent());
+            // 他路（MQ 主路径 / DB Poller）已把记录推进，本消费 CAS 被拒
+            when(agentExecutionRecordService.markRunning(44L)).thenReturn(false);
+
+            localExecutionCommandConsumer.consume(baseCommand());
+
+            verify(agentExecutionRecordService).markRunning(44L);
+            // 输家：不推进子任务状态、不起真身、不回写失败、不产生终态（避免假 BLOCKED）
+            verify(subTaskCommandPort, never()).startIfNeeded(any(), any());
+            verify(agentRuntime, never()).execute(any(AgentContext.class));
+            verify(executionResultHandler, never()).handleFailure(any(), any(), any());
+            // 4 参重载已分叉为「recordId(Long)」与「thinking(String)」两支，显式限定以消歧义
+            verify(executionResultHandler, never()).handleFailure(anyLong(), anyLong(), anyLong(), any());
+            verify(executionResultHandler, never()).handleFailure(anyLong(), anyLong(), anyString(), any());
+            verify(agentExecutionRecordService, never()).markFailed(any(), any(), any());
+            verify(agentExecutionRecordService, never()).markSuccess(any(), any());
         }
     }
 

@@ -82,6 +82,10 @@ class ExecutionResultHandlerTest {
     @Mock
     private AgentSessionService agentSessionService;
 
+    // 804 归属校验：失败回写前读执行记录状态（@InjectMocks 缺 mock 会注入 null 导致 NPE）
+    @Mock
+    private com.helloai.core.agent.service.AgentExecutionRecordService agentExecutionRecordService;
+
     @InjectMocks
     private ExecutionResultHandler executionResultHandler;
 
@@ -170,6 +174,26 @@ class ExecutionResultHandlerTest {
     }
 
     @Test
+    @DisplayName("B 方案配套：失败回写携带 thinking ⇒ 仍落 sub_task_execute_thinking 对话消息，且失败语义不变（block）")
+    void shouldPersistThinkingOnFailure() {
+        when(subTaskQueryPort.findById(22L))
+                .thenReturn(snapshot(22L, 33L, SubTaskStatus.IN_PROGRESS));
+
+        executionResultHandler.handleFailure(22L, 11L, "模型的思维链",
+                new RuntimeException("agent_runtime_empty_output: 模型返回空正文"));
+
+        // 思维链落同一通道（toolName=sub_task_execute_thinking）
+        verify(conversationService).addMessage(eq(22L), eq(11L), eq("assistant"), eq("agent"),
+                eq("模型的思维链"), eq("sub_task_execute_thinking"));
+        // 失败原因照常落 sub_task_execute_failed
+        verify(conversationService).addMessage(eq(22L), eq(11L), eq("assistant"), eq("agent"),
+                any(), eq("sub_task_execute_failed"));
+        // B 不改变失败语义：仍 block、不 submit
+        verify(subTaskCommandPort).block(22L, null, null);
+        verify(subTaskCommandPort, never()).submit(any());
+    }
+
+    @Test
     @DisplayName("P2-2: 补偿任务将 subTask 推进到 BLOCKED 后，handleSuccess 不应复活到 REVIEW")
     void shouldNotReviveSubTaskWhenStatusIsBlocked() {
         // 已被补偿任务推进
@@ -215,5 +239,43 @@ class ExecutionResultHandlerTest {
                                 && "BLOCKED".equals(payload.get("currentStatus"))
                                 && Boolean.FALSE.equals(payload.get("success"))
                                 && "INTERNAL".equals(payload.get("source"))));
+    }
+
+    @Test
+    @DisplayName("804: 失败回写带 recordId 且记录非 RUNNING（双消费输家）→ 不 block，落 skipped 时间线")
+    void shouldNotBlockWhenRecordNotOwned() {
+        when(subTaskQueryPort.findById(22L))
+                .thenReturn(snapshot(22L, 33L, SubTaskStatus.IN_PROGRESS));
+        // 记录已被他路接管/终结（SUCCESS）→ 本轮非持有者，不得据此阻塞赢家
+        com.helloai.core.agent.entity.AgentExecutionRecord record =
+                new com.helloai.core.agent.entity.AgentExecutionRecord();
+        record.setId(44L);
+        record.setStatus(com.helloai.common.constant.ExecutionStatus.SUCCESS);
+        when(agentExecutionRecordService.getById(44L)).thenReturn(record);
+
+        executionResultHandler.handleFailure(22L, 11L, 44L, new RuntimeException("并发修改，请重试"));
+
+        verify(subTaskCommandPort, never()).block(any(), any(), any());
+        verify(taskTimelinePort).recordEvent(
+                eq(33L), eq(22L), eq("sub_task_report_blocked_skipped"), eq(AgentRole.EXECUTOR), eq(11L),
+                argThat((Map<String, Object> payload) ->
+                        "record_not_running_owned_by_other".equals(payload.get("reason"))
+                                && Long.valueOf(44L).equals(payload.get("recordId"))));
+    }
+
+    @Test
+    @DisplayName("804: 失败回写带 recordId 且记录仍 RUNNING（本消费持有）→ 正常 block")
+    void shouldBlockWhenRecordStillRunning() {
+        when(subTaskQueryPort.findById(22L))
+                .thenReturn(snapshot(22L, 33L, SubTaskStatus.IN_PROGRESS));
+        com.helloai.core.agent.entity.AgentExecutionRecord record =
+                new com.helloai.core.agent.entity.AgentExecutionRecord();
+        record.setId(44L);
+        record.setStatus(com.helloai.common.constant.ExecutionStatus.RUNNING);
+        when(agentExecutionRecordService.getById(44L)).thenReturn(record);
+
+        executionResultHandler.handleFailure(22L, 11L, 44L, new RuntimeException("boom"));
+
+        verify(subTaskCommandPort).block(22L, null, null);
     }
 }

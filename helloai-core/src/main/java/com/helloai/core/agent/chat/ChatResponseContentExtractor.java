@@ -3,6 +3,7 @@ package com.helloai.core.agent.chat;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.deepseek.DeepSeekAssistantMessage;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -16,9 +17,9 @@ import java.util.List;
  * properties 带 signature 标记）。若只取 {@code getResult()}（第一个 Generation）
  * 会拿到思考文本而丢弃正文——这正是自动核验 unparseable 的根因。</p>
  *
- * <p>本工具遍历全部 Generation：带 signature/data 标记的归入 thinking，
- * 其余 text 拼接为正文。OpenAI 协议系 provider（deepseek/moonshot/dashscope）
- * 单 Generation 且思考在 metadata（reasoningContent），行为不变。</p>
+ * <p>本工具遍历全部 Generation：带 signature/data 标记的（Anthropic）归入 thinking，
+ * DeepSeek 的 {@code DeepSeekAssistantMessage.reasoningContent}（spring-ai-deepseek 将其
+ * 映射为**独立字段**，不在 content / metadata）亦归入 thinking；其余 text 拼接为正文。</p>
  */
 public final class ChatResponseContentExtractor {
 
@@ -39,6 +40,17 @@ public final class ChatResponseContentExtractor {
             AssistantMessage message = generation.getOutput();
             if (message == null) {
                 continue;
+            }
+            // B（2026-10-05）DeepSeek 推理模型分支：思维链在**独立字段** reasoningContent
+            // （既不在 getText()=content，也不在 Anthropic 的 signature/data metadata 里），
+            // 归入 **thinking 通道**（下游 ExecutionResultHandler 落 conversation_message，
+            // toolName=sub_task_execute_thinking，同一通道不新造）。
+            // ★约束：仅可观测，**绝不并入正文 text**——避免污染交付物与核验；正文为空时
+            //   仍由 RuntimeTurnExecutor 的空产出护栏判 FAILED（B 不改变 A 的结论）。
+            if (message instanceof DeepSeekAssistantMessage deepSeek
+                    && deepSeek.getReasoningContent() != null
+                    && !deepSeek.getReasoningContent().isBlank()) {
+                thinkingParts.add(deepSeek.getReasoningContent());
             }
             String content = message.getText();
             if (isThinkingMessage(message)) {

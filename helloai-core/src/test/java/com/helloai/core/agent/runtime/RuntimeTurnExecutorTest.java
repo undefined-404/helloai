@@ -132,6 +132,59 @@ class RuntimeTurnExecutorTest {
     }
 
     @Test
+    @DisplayName("A 空产出护栏：成功终态但正文空白 + 零工具调用 ⇒ FAILED（可重试），非 SUCCESS")
+    void shouldFailWhenSuccessButEmptyOutputWithoutTools() {
+        when(agentSkillSpecService.resolve(any()))
+                .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
+        when(toolRegistry.resolve(any())).thenReturn(List.of());
+        // 复刻现场：finishReason=STOP、iterations=1、toolCalls=0、tokens 很大但正文为空
+        when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("", null, 1, 0, 83958));
+
+        AgentExecutionResult result = new RuntimeTurnExecutor(
+                agentLoop, toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider)
+                .execute(context());
+
+        assertThat(result.getStatus()).isEqualTo(ExecutionStatus.FAILED);
+        assertThat(result.getOutput()).contains("agent_runtime_empty_output");
+        // tokenUsage 仍透传（诊断用），思维链若存在也随失败透传
+        assertThat(result.getTokenUsage()).isEqualTo(83958);
+    }
+
+    @Test
+    @DisplayName("A 空产出护栏：纯空白字符正文（StringUtils.isBlank 口径）同样判 FAILED")
+    void shouldFailWhenSuccessButWhitespaceOnlyOutput() {
+        when(agentSkillSpecService.resolve(any()))
+                .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
+        when(toolRegistry.resolve(any())).thenReturn(List.of());
+        when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("  \n\t  ", "思考过程", 1, 0, null));
+
+        AgentExecutionResult result = new RuntimeTurnExecutor(
+                agentLoop, toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider)
+                .execute(context());
+
+        assertThat(result.getStatus()).isEqualTo(ExecutionStatus.FAILED);
+        // B 配套：思维链在 FAILED 结果上仍保留（供失败路径落 conversation_message）
+        assertThat(result.getThinking()).isEqualTo("思考过程");
+    }
+
+    @Test
+    @DisplayName("A 防误伤：正文空白但**有工具调用** ⇒ 仍 SUCCESS（靠工具/附件交付产物的合法成功）")
+    void shouldKeepSuccessWhenEmptyTextButToolsInvoked() {
+        when(agentSkillSpecService.resolve(any()))
+                .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
+        when(toolRegistry.resolve(any())).thenReturn(List.of());
+        when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("", null, 3, 2, 100));
+
+        AgentExecutionResult result = new RuntimeTurnExecutor(
+                agentLoop, toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider)
+                .execute(context());
+
+        assertThat(result.getStatus()).isEqualTo(ExecutionStatus.SUCCESS);
+        assertThat(result.getOutput()).isEmpty();
+        assertThat(result.getTokenUsage()).isEqualTo(100);
+    }
+
+    @Test
     @DisplayName("tokenUsage 映射：loop 累加值透传到结果 + AGENT_COMPLETED payload（成功）")
     void shouldMapTokenUsageOnSuccess() {
         when(agentSkillSpecService.resolve(any()))

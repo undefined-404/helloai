@@ -152,6 +152,11 @@ public class AgentExecutionRecordServiceImpl extends ServiceImpl<AgentExecutionR
 
     /**
      * DB Poller 扫描：查找「长时间未被消费的 PENDING」记录。
+     *
+     * <p><b>2026-10-05（804 双消费假阻塞）</b>：新增 {@code create_time < cutoff} 条件——
+     * 此前 {@code last_attempt_time IS NULL} 分支会把「<b>刚创建、MQ 主路径即将消费</b>」的
+     * PENDING 也纳入兜底，导致 Poller 与 MQ 同时消费同一 {@code recordId}（同一命令双消费）。
+     * 现要求记录创建时间早于阈值，只兜底<b>长期滞留</b>的记录，不再抢占新鲜 PENDING。</p>
      */
     @Override
     public List<AgentExecutionRecord> listOrphanPending(int thresholdSeconds, int limit) {
@@ -161,6 +166,8 @@ public class AgentExecutionRecordServiceImpl extends ServiceImpl<AgentExecutionR
         OffsetDateTime cutoff = OffsetDateTime.now().minusSeconds(thresholdSeconds);
         return lambdaQuery()
                 .eq(AgentExecutionRecord::getStatus, ExecutionStatus.PENDING)
+                // 只兜底「长期滞留」：创建时间须早于同一阈值，避免抢占刚创建、主路径即将消费的 PENDING
+                .lt(AgentExecutionRecord::getCreateTime, cutoff)
                 .and(w -> w.isNull(AgentExecutionRecord::getLastAttemptTime)
                         .or().lt(AgentExecutionRecord::getLastAttemptTime, cutoff))
                 .orderByAsc(AgentExecutionRecord::getCreateTime)
@@ -208,5 +215,35 @@ public class AgentExecutionRecordServiceImpl extends ServiceImpl<AgentExecutionR
     @Override
     public List<AgentExecutionRecord> listByStatusStartedBefore(ExecutionStatus status, OffsetDateTime before) {
         return baseMapper.selectByStatusAndStartTimeBefore(status, before);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  B5.2 Fleet 成本选人：成本画像聚合
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 最近 N 次成功执行的 token 均值（best-effort：任何异常都降级为「无成本数据」）。
+     *
+     * <p>无样本 / SQL 返回 NULL / 查询异常 一律返回 {@code null}，语义统一为
+     * 「该 Agent 无成本画像」——由选人侧 {@code AgentSelector.resolveCostRanks}
+     * 记 0 档（不参与成本维度比较），与质量画像缺失口径保持一致。</p>
+     */
+    @Override
+    public Integer averageRecentSuccessTokens(Long agentId, int limit) {
+        if (agentId == null) {
+            return null;
+        }
+        int sampleLimit = limit > 0 ? limit : 1;
+        try {
+            Double avg = baseMapper.selectRecentAvgTokenUsage(agentId, sampleLimit);
+            if (avg == null) {
+                return null;
+            }
+            return (int) Math.round(avg);
+        } catch (Exception e) {
+            // 防御式：成本画像查询异常不得阻断选人（等同于无成本数据）
+            log.debug("成本画像查询异常（按无成本数据处理）: agentId={}, err={}", agentId, e.getMessage());
+            return null;
+        }
     }
 }

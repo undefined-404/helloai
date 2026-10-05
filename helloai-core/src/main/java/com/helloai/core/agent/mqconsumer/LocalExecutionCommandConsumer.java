@@ -46,8 +46,9 @@ import java.util.Map;
  * （RuntimeAgentRuntimeRouter / LegacyExecutorAdapter）已删除，本类为唯一执行入口，分层编排：</p>
  * <ol>
  *     <li>加载 subTask / agent，做一致性校验</li>
+ *     <li>{@link AgentExecutionRecordService#markRunning} CAS 执行记录 PENDING→RUNNING
+ *         （<b>先占执行记录</b>；双消费下输家在此被拒即软跳过，2026-10-05 修 804 假阻塞）</li>
  *     <li>{@link SubTaskCommandPort#startIfNeeded} 幂等状态推进（ASSIGNED / REWORK / PAUSED → IN_PROGRESS）</li>
- *     <li>{@link AgentExecutionRecordService#markRunning} CAS 执行记录 PENDING→RUNNING</li>
  *     <li>记录消费阶段 timeline（route 观察点，route=agent_runtime）</li>
  *     <li>{@link AgentRuntimeContextAssembler#assemble} 装配真身上下文（prompt / chatModel / 会话）</li>
  *     <li>{@link AgentRuntime#execute} 真身执行（唯一实现 RuntimeTurnExecutor）+ {@link AgentRuntimeContextAssembler#afterTurn} 会话推进</li>
@@ -136,27 +137,39 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
 
     /**
      * Runtime 真身路径执行（G-002 单轨后唯一执行入口，分层编排）：
-     * startIfNeeded 状态推进 → record CAS → 消费 timeline → 上下文装配 →
+     * record CAS（先占执行记录）→ startIfNeeded 状态推进 → 消费 timeline → 上下文装配 →
      * 真身 execute + afterTurn 会话推进 → record CAS 终态 → ExecutionResultHandler 回写。
      */
     private void runViaRuntime(ExecutionCommand command, SubTaskSnapshot subTask, Agent agent) {
-        // 1. 状态推进（幂等：IN_PROGRESS 恒过；ASSIGNED / REWORK / PAUSED → IN_PROGRESS）。
-        //    失败契约化：record CAS 终态 + 回写失败，不进入执行阶段
+        // 1. 执行记录 CAS：PENDING → RUNNING（**先占执行记录，再推进子任务状态**）。
+        //    ⚠ 顺序契约（2026-10-05 修 804 双消费假阻塞）：MQ 主路径与 DB Poller 兜底路径
+        //    可能同时消费同一命令（同一 recordId），两者都读到 sub_task(ASSIGNED) 快照。
+        //      · 旧顺序（先 startIfNeeded 后 markRunning）下，输家在 startIfNeeded 的
+        //        ASSIGNED→IN_PROGRESS 乐观锁 CAS 上抛「并发修改，请重试」→ 进 catch →
+        //        假失败 → 把子任务误打成 BLOCKED（而赢家已成功接管、产出被丢弃）。
+        //      · 新顺序先做 record CAS：输家在此即被拒（记录已非 PENDING），直接**软跳过返回**
+        //        ——不推进状态、不起运行时、不回写失败、不 block（非本消费持有，非执行失败）。
+        if (command.getRecordId() != null && !agentExecutionRecordService.markRunning(command.getRecordId())) {
+            log.debug("跳过执行(记录已非 PENDING, 判为他路已接管, route=agent_runtime): subTaskId={}, recordId={}",
+                    command.getSubTaskId(), command.getRecordId());
+            return;
+        }
+
+        // 2. 状态推进（幂等：IN_PROGRESS 恒过；ASSIGNED / REWORK / PAUSED → IN_PROGRESS）。
+        //    失败契约化：回写失败（含归属校验，见 ExecutionResultHandler#handleFailure 四参重载）
+        //    + record CAS 终态，不进入执行阶段。
+        //    注意顺序：handleFailure 先于 markFailed —— 归属校验要求此刻记录仍为 RUNNING
+        //    （若先 markFailed 把记录置为 FAILED，归属校验将无法区分「真失败」与「双消费输家」）。
         try {
             subTaskCommandPort.startIfNeeded(command.getSubTaskId(), subTask.status());
         } catch (Exception e) {
             log.error("子任务状态推进失败: subTaskId={}, agentId={}, err={}",
                     command.getSubTaskId(), command.getAgentId(), e.getMessage());
+            executionResultHandler.handleFailure(command.getSubTaskId(), command.getAgentId(),
+                    command.getRecordId(), e);
             if (command.getRecordId() != null) {
                 agentExecutionRecordService.markFailed(command.getRecordId(), e.getMessage());
             }
-            executionResultHandler.handleFailure(command.getSubTaskId(), command.getAgentId(), e);
-            return;
-        }
-
-        // 2. 执行记录 CAS：PENDING → RUNNING（双入口并发时由 CAS 保证幂等，与旧直连同语义）
-        if (command.getRecordId() != null && !agentExecutionRecordService.markRunning(command.getRecordId())) {
-            log.warn("跳过执行(记录已非 PENDING, route=agent_runtime): recordId={}", command.getRecordId());
             return;
         }
 
@@ -202,13 +215,15 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
             result = agentRuntimes.get(0).execute(ctx);
             contextAssembler.afterTurn(subTask, agent, ctx.getTurn(), result);
         } catch (Exception e) {
-            // 装配 / 真身违约异常契约化：record CAS 终态 + 回写失败（与旧链 executeCommand catch 等价）
+            // 装配 / 真身违约异常契约化：回写失败（含归属校验）+ record CAS 终态
+            // （与旧链 executeCommand catch 等价）
             log.error("Runtime 真身执行异常: subTaskId={}, agentId={}, recordId={}",
                     command.getSubTaskId(), command.getAgentId(), command.getRecordId(), e);
+            executionResultHandler.handleFailure(command.getSubTaskId(), command.getAgentId(),
+                    command.getRecordId(), e);
             if (command.getRecordId() != null) {
                 agentExecutionRecordService.markFailed(command.getRecordId(), e.getMessage());
             }
-            executionResultHandler.handleFailure(command.getSubTaskId(), command.getAgentId(), e);
             return;
         }
 
@@ -228,7 +243,10 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
         if (result.getStatus() == ExecutionStatus.SUCCESS) {
             executionResultHandler.handleSuccess(command.getSubTaskId(), command.getAgentId(), toAgentResult(result));
         } else {
+            // thinking 随失败一同透传（B 方案配套）：空产出被 A 判 FAILED 时，模型思维链仍需落
+            // conversation_message（toolName=sub_task_execute_thinking），供前端可见
             executionResultHandler.handleFailure(command.getSubTaskId(), command.getAgentId(),
+                    result.getThinking(),
                     new BizException(result.getOutput() != null ? result.getOutput() : "agent_runtime_failed"));
         }
         log.info("执行命令消费成功(route=agent_runtime): subTaskId={}, agentId={}, recordId={}, status={}",

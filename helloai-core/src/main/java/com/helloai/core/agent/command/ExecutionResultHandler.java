@@ -3,9 +3,11 @@ package com.helloai.core.agent.command;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.entity.AgentExecutionRecord;
 import com.helloai.core.agent.event.AgentEventContextResolver;
 import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.output.ExecutionOutputParser;
@@ -18,6 +20,7 @@ import com.helloai.core.agent.quality.ExecutorDoneIssuesBackfiller;
 import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.shared.event.SubTaskSubmittedForReviewEvent;
 import com.helloai.core.agent.service.ExecutionArtifactService;
+import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
@@ -75,6 +78,8 @@ public class ExecutionResultHandler {
     private final AgentEventRecorder agentEventRecorder;
     /** Phase 1 Step 3：执行会话服务（终态 COMPLETED/FAILED；best-effort 不阻断回写）。 */
     private final AgentSessionService agentSessionService;
+    /** 执行记录服务（804 归属校验：失败回写前确认本消费仍持有该 RUNNING 记录）。 */
+    private final AgentExecutionRecordService agentExecutionRecordService;
 
     @Transactional(rollbackFor = Exception.class)
     public void handleSuccess(Long subTaskId, Long agentId, AgentResult result) {
@@ -93,11 +98,57 @@ public class ExecutionResultHandler {
         handleReport(report);
     }
 
+    /**
+     * 失败回写（无归属信息；保留既有语义 —— 状态为 {@code IN_PROGRESS} 即推进 {@code BLOCKED}）。
+     *
+     * <p>补偿任务（超时判定后主动报失败）等调用方使用；执行记录已由调用方终结，故不做归属校验。</p>
+     */
     @Transactional(rollbackFor = Exception.class)
     public void handleFailure(Long subTaskId, Long agentId, Exception e) {
+        applyFailure(subTaskId, agentId, null, null, e);
+    }
+
+    /**
+     * 失败回写（含<b>归属校验</b>）。
+     *
+     * <p><b>2026-10-05 修 804 双消费假阻塞</b>：MQ 主路径与 DB Poller 兜底路径可能同时消费同一
+     * 执行命令（同一 {@code recordId}）。输家在 {@code startIfNeeded} 的
+     * {@code ASSIGNED→IN_PROGRESS} 乐观锁 CAS 上抛「并发修改，请重试」后进本入口——
+     * 若不加校验会直接把<b>已被赢家接管</b>的子任务误打成 {@code BLOCKED}（产出被丢弃）。</p>
+     *
+     * <p>校验口径：仅当 {@code recordId} 对应记录仍为 {@code RUNNING}（即本轮上报方确实持有
+     * 这次执行）时才推进 {@code BLOCKED}；记录非 {@code RUNNING}（他路已终结 / 从未启动）则
+     * 判定为「并发修改 / 重复消费」的输家 —— 不 block，只落
+     * {@code sub_task_report_blocked_skipped} 时间线，终态由接管方决定。</p>
+     *
+     * @param recordId 上报方持有的执行记录 ID；{@code null} 时退化为无归属校验（等同三参重载）
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void handleFailure(Long subTaskId, Long agentId, Long recordId, Exception e) {
+        applyFailure(subTaskId, agentId, recordId, null, e);
+    }
+
+    /**
+     * 失败回写（携带 thinking；归属校验同三参重载 —— {@code recordId} 恒 {@code null}）。
+     *
+     * <p><b>2026-10-05 方案 B 配套</b>：空产出被 A 判为 {@code FAILED} 后，模型思维链
+     * （DeepSeek {@code reasoningContent}）仍需可见。本入口与三参重载同链（同 {@code handleReport}），
+     * 仅额外透传 {@code thinking}，由 {@code handleReport} 落 conversation_message
+     * （toolName={@code sub_task_execute_thinking}，**同一通道**）——<b>不改变失败语义</b>（仍 block）。</p>
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void handleFailure(Long subTaskId, Long agentId, String thinking, Exception e) {
+        applyFailure(subTaskId, agentId, null, thinking, e);
+    }
+
+    /**
+     * 失败上报装配（private 核心）：三/四参重载与 thinking 重载统一收敛到此，避免构造重复。
+     */
+    private void applyFailure(Long subTaskId, Long agentId, Long recordId, String thinking, Exception e) {
         ExecutionResultReport report = new ExecutionResultReport();
         report.setSubTaskId(subTaskId);
         report.setAgentId(agentId);
+        report.setRecordId(recordId);
         report.setSource("INTERNAL");
         report.setIdempotencyKey(null);
         report.setSuccess(false);
@@ -105,6 +156,7 @@ public class ExecutionResultHandler {
         report.setFinishReason(null);
         report.setTokenUsage(null);
         report.setOutput(null);
+        report.setThinking(thinking);
         report.setError(e != null ? e.getMessage() : "unknown_error");
         handleReport(report);
     }
@@ -198,14 +250,16 @@ public class ExecutionResultHandler {
         // 对话流增量副本：执行产出/失败原因写入 conversation_message，
         // INTERNAL/EXTERNAL 上报共用本入口；REQUIRES_NEW 独立事务 + try/catch，失败不阻断主链路
         try {
+            // B（2026-10-05）：思考过程与成功/失败无关 —— 只要模型产出了思考过程就落库
+            // （同通道 sub_task_execute_thinking）。空产出被 A 判 FAILED 时，思维链仍应可见，
+            // 供前端「看到模型到底思考了什么」；仅可观测，不参与成功/失败判定。
+            if (report.getThinking() != null && !report.getThinking().isBlank()) {
+                conversationService.addMessage(report.getSubTaskId(), report.getAgentId(),
+                        "assistant", "agent",
+                        report.getThinking(),
+                        "sub_task_execute_thinking");
+            }
             if (report.isSuccess()) {
-                // 思考过程单独落一条消息（保留推理模型 thinking，供前端动态展示）
-                if (report.getThinking() != null && !report.getThinking().isBlank()) {
-                    conversationService.addMessage(report.getSubTaskId(), report.getAgentId(),
-                            "assistant", "agent",
-                            report.getThinking(),
-                            "sub_task_execute_thinking");
-                }
                 conversationService.addMessage(report.getSubTaskId(), report.getAgentId(),
                         "assistant", "agent",
                         outputText,
@@ -294,9 +348,29 @@ public class ExecutionResultHandler {
                 }
             }
         } else {
-            // block(subTaskId, null, null) 逐字等价于 SubTaskService#block(Long)：
-            // 仅写 blockedAt + 落 sub_task_report_blocked 时间线（reason 记空串）
-            subTaskCommandPort.block(report.getSubTaskId(), null, null);
+            // 归属校验（2026-10-05 修 804 假 BLOCKED）：仅当本消费确实持有该 sub_task 的
+            // RUNNING 执行记录时才推进 BLOCKED。否则（记录非 RUNNING，说明本轮是双消费的
+            // 输家：他路已接管/已终结，或该记录从未由本轮启动）不 block，只留痕，
+            // 避免把赢家正在执行的子任务误判为失败。
+            if (report.getRecordId() != null && !isRecordRunning(report.getRecordId())) {
+                taskTimelinePort.recordEvent(
+                        subTask.taskId(),
+                        report.getSubTaskId(),
+                        "sub_task_report_blocked_skipped",
+                        AgentRole.EXECUTOR,
+                        report.getAgentId(),
+                        safeMap(
+                                "reason", "record_not_running_owned_by_other",
+                                "recordId", report.getRecordId(),
+                                "error", report.getError(),
+                                "source", report.getSource()));
+                log.warn("失败回写跳过 BLOCKED（记录非本轮持有, 判为双消费输家）: subTaskId={}, recordId={}, err={}",
+                        report.getSubTaskId(), report.getRecordId(), report.getError());
+            } else {
+                // block(subTaskId, null, null) 逐字等价于 SubTaskService#block(Long)：
+                // 仅写 blockedAt + 落 sub_task_report_blocked 时间线（reason 记空串）
+                subTaskCommandPort.block(report.getSubTaskId(), null, null);
+            }
             // Phase 1 Step 3：执行会话终态 FAILED（error 摘要；best-effort 不阻断回写）
             agentSessionService.fail(report.getSubTaskId(), report.getAgentId(),
                     AgentEventContextResolver.resolveTurn(subTask.reworkCount(), subTask.attemptTotal()), report.getError());
@@ -357,6 +431,23 @@ public class ExecutionResultHandler {
         private boolean applied;
         private boolean idempotent;
         private String status;
+    }
+
+    /**
+     * 归属校验辅助：该执行记录当前是否为 {@code RUNNING}（即本轮上报方仍持有这次执行）。
+     *
+     * <p>见 {@link #handleFailure(Long, Long, Long, Exception)}；任何异常都降级为
+     * {@code false}（宁可不 block，也不误阻塞赢家）。</p>
+     */
+    private boolean isRecordRunning(Long recordId) {
+        try {
+            AgentExecutionRecord record = agentExecutionRecordService.getById(recordId);
+            return record != null && record.getStatus() == ExecutionStatus.RUNNING;
+        } catch (Exception e) {
+            log.warn("执行记录归属校验异常（按未持有处理，不 block）: recordId={}, err={}",
+                    recordId, e.getMessage());
+            return false;
+        }
     }
 
     /**

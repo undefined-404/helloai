@@ -101,6 +101,10 @@ class ExecutionResultHandlerIntegrationTest {
     @Mock
     private AgentSessionService agentSessionService;
 
+    // 804 归属校验：失败回写前读执行记录状态（集成用例仅防 NPE）
+    @Mock
+    private com.helloai.core.agent.service.AgentExecutionRecordService agentExecutionRecordService;
+
     private ExecutionResultHandler handler;
 
     @BeforeEach
@@ -108,7 +112,7 @@ class ExecutionResultHandlerIntegrationTest {
         handler = new ExecutionResultHandler(subTaskQueryPort, subTaskCommandPort, taskTimelinePort, failureTracker,
                 agentService, applicationEventPublisher, conversationService, executionArtifactService,
                 taskRunningSpecPort, new ExecutionOutputParser(), executorDoneIssuesBackfiller, agentEventRecorder,
-                agentSessionService);
+                agentSessionService, agentExecutionRecordService);
         // 模拟 Spring @Transactional 已开启（afterCommit 注册需要激活的同步管理器）
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.initSynchronization();
