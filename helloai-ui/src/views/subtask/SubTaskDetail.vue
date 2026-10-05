@@ -992,7 +992,13 @@ const CONV_TAG_MAP: Record<string, { label: string; type: 'success' | 'danger' |
   subtask_recheck_prompt: { label: '抽检请求', type: 'info' },
   subtask_recheck_thinking: { label: '抽检思考', type: 'info' },
   subtask_recheck_verdict: { label: '抽检分析', type: 'warning' },
-  subtask_recheck_result: { label: '抽检结论', type: 'danger' }
+  subtask_recheck_result: { label: '抽检结论', type: 'danger' },
+  // 核验跳过 / 终态分支（2026-10-05）：让终态分支对话流与时间线「对得上」
+  subtask_review_skip_max_rework: { label: '跳过核验·返工超限', type: 'warning' },
+  subtask_review_skip_no_capability: { label: '跳过核验·无本机能力', type: 'warning' },
+  subtask_review_skip_no_evidence: { label: '跳过核验·无产出证据', type: 'warning' },
+  subtask_review_skip_disagreement: { label: '跳过核验·双审分歧', type: 'warning' },
+  subtask_review_skip_repeated_failure: { label: '跳过核验·重复失败', type: 'danger' }
 }
 
 interface ConvRound {

@@ -893,6 +893,9 @@ async function runAudit(page = auditPage.value) {
     })
     auditEvents.value = result.list
     auditTotal.value = result.total
+    // 与 Replay 路径保持一致：按需补全 Audit 结果中出现的子任务标题/拓扑序号映射，
+    // 缺失时归属列会退化为 #末6位 短 ID（即“只显示到 #N”的根因）；失败静默降级不阻断展示
+    void ensureSubTaskMeta(result.list)
   } catch {
     auditEvents.value = []
     auditTotal.value = 0

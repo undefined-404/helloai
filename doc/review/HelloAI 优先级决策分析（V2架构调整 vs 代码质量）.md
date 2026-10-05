@@ -16,6 +16,8 @@
 >
 > **建议：先做一个「有界的质量-架构交集批次」（下文称 **Q1**，约 6 项，成本 S~M），再启动 V2 阶段 3（Sandbox 真隔离 + Quality Gate 泛化）。**
 > **不做**全面质量重整；**也暂不**直接推阶段 3。
+>
+> ⚠️ **2026-10-03 补**：Q1 已全部落地（安全止损 / 门禁扩全量 70 条 / 反向依赖 68→0 / job 去 Mapper）。**阶段 3 内部的四项次序已由 §17 重排为 `B4 → B3 → B2 → B5`**（依据实测取证，取代本节"B2 + B4 并列启动"的表述）；本节其余结论不变。
 
 三条理由（按强度排序）：
 
@@ -312,6 +314,8 @@
 **第三优先 = 4 条反向依赖 + job 6 类收口**。**理由**：第二项做完后，这三步的成果会被**永久锁死**；先修后修成本相同，但**早修早被拦**，边际成本最低。
 
 **最后**才启动阶段 3（Sandbox 真隔离 + Quality Gate 泛化）——不在被污染的地基上建隔离与质量门。
+
+> ⚠️ **2026-10-03 补（前向指引）**：上列第一~第三优先**已全部执行完毕**（安全止损 ✅ / 门禁扩全量 ✅ / 反向依赖与 job 收口 ✅）。**阶段 3 内部的四项次序见 §17**（结论：`B4 → B3 → B2 → B5`；其中 B2 应"等待触发条件"而非无条件启动）。本节此前的"Sandbox + Quality Gate 并列"仅为**范围**表述，非次序判断。
 
 **唯一仍需用户拍板的**：**Q1 规模**（§8 的 A / B 分支），取决于目标是「可持续演进」还是「尽快目标态可演示」。
 
@@ -802,3 +806,48 @@ grep -rn "^[[:space:]]*import[[:space:]]\+com\.helloai\.core\.task" helloai-core
 - **验收**：定向 **53 例 / 0 失败**（物化 7 / 查询适配器 5 / 执行命令服务 5 + 分发 4 / Poller 16 / 事件对账 7 / 结果回调与集成测试若干）；`agent->task` **31 → 27**（−4，与计划一致）；代价 `task->agent` **50 → 51**（+1，`AttachmentPortAdapter`）；全量 `clean test` **7/7 SUCCESS**，`<testcase>` 口径 **1803 / 0 / 0 / 0**（core 1648 / job 85 / api 70；净 +2 = 物化测试 5 → 7，新增「子任务不存在跳过」与「subTaskId 为 null 跳过」两例）。
 - **基线**：锁定 **27 / 51**（后者仅提示），复跑 `EXIT=0`。
 - **退出清单**：`ExecutionArtifactService`、`ExecutionArtifactServiceImpl` 归零退出 → 剩余 **27 处 / 7 文件**：`AgentRuntimeContextAssembler`(7)、`McpToolServiceImpl`(5)、`ExecutionResultHandler`(5)、`ResilientDispatcher`(4)、`SubTaskAutoExecutionDispatcher`(3)、`LocalExecutionCommandConsumer`(2)、`McpToolService`(1)。
+
+---
+
+## 17. 阶段 3 内部次序重排：B2~B5 四项候选的优先级（2026-10-03 定稿）
+
+> **前向指引**：本节**取代 §0 / §12 中「阶段 3 = B2 + B4 并列启动」的表述**。§0/§12 的**结论仍成立**（Q1 先行、不在被污染的地基上建隔离与质量门——Q1 已全部落地），本节只重排**阶段 3 内部**的四项次序，依据是 2026-10-03 的实测取证。
+
+### 17.1 四项候选的实测现状（不沿用旧结论）
+
+| 项 | 旧口径 | **实测（2026-10-03）** | 证据 |
+|---|---|---|---|
+| **B2** Sandbox 真隔离 | 「契约已落地、五边界未实现」 | ✅ 成立，且**比旧口径更弱**：`SandboxProvider` **已接线**（`RuntimeTurnExecutor:59` 注入、`:198` `observeSandbox`），但**只观测不强制**；`ISOLATED` 仅在枚举定义与注释出现、**零使用**。**关键新事实：平台侧零真实进程执行**——`ProcessBuilder` / `Runtime.getRuntime()` 全仓 `helloai-core/src/main` **0 命中**；执行面 = LLM HTTP（`ApiKeyAgentExecutor`）+ MCP 工具回调 + 浏览器网关 + 对象存储，**没有任何"可能失控的进程"可被隔离** | `grep -rn "ProcessBuilder\|Runtime.getRuntime()" helloai-core/src/main` → 空；`find ... -iname "*Sandbox*"` → 契约 4 文件 + 1 实现（一律 `PARTIAL`） |
+| **B3** 事件 Recovery / Fork | 「写侧 + Replay/Audit/UI 已上线；Recovery/Fork 未建」 | ✅ **完全成立**（此前曾怀疑 Replay 未建，**已自查否证**：`AgentEventController` 确有 Replay/Audit 读侧端点 + 专属测试）。**前置比预期更充分**：`task_timeline` **688 行**、`agent_outbox_event` **901 行**、`agent_command_outbox` 表在位且 Relay/恢复控制器均已接线；`agent_session.snapshot` **23 行全部非空，其中 13 行含 loop 级 checkpoint**（`snapshot->'loop'`）⇒ **事件读侧 + 轮次检查点都已就绪**，缺的只是「从某点分叉重跑」这一读侧消费者 | `\dt *outbox*` → 2 表；`agent_session` 聚合查询；`AgentEventController` + `AgentEventControllerTest` |
+| **B4** Quality Gate 泛化 | 「全仓 0 个类」 | ✅ 成立。**且比旧口径更严重**：所谓 "Rule + Test + LLM" 三类闸门中，**只有 LLM 一类已建**（`ReviewExecutionEngine` / `VerdictParser`）；**Rule 闸门不存在**——`system.entity.Rule` 是**注入 Prompt 的规则文本**（消费方仅 `PromptTemplateServiceImpl`），**不是判定闸门**；Test 闸门不存在。质量判定**散落在 ≥6 个类、横跨 3 个域**：`review`（`SubTaskReviewServiceImpl` 熔断+评分 / `ReviewFailureSignature` / `VerdictParser` / `FinalReportFidelityChecker` / `ReviewRecheckExecutor`）、`agent.quality`（`ExecutorIssueResolutionAssessor` / `QualityProfileUpdater`）、`planner.clarify`（`SearchGapAssessor`） | `grep -rln QualityGate` → **0**；`Rule` 实体 4 字段 + 唯一业务消费方 `PromptTemplateServiceImpl` |
+| **B5** 成本选人 | 「数据就绪 · 策略未接」 | ⚠️ **「数据就绪」被高估，这是本次最重要的订正**。`tokenUsage` 确实端到端落库，但**覆盖面不足**：`agent_execution_record` 22 条 SUCCESS 中**仅 10 条有 token**（≈45%）；更决定性的——**7 个 EXECUTOR 里 6 个是 `CLI_CLIENT`（外部），token 回传是 G-008 协议盲区**，唯一有 token 的是 1 个 `API_KEY_LLM`（内部）。REVIEWER 侧 4 个中 3 内部 / 1 外部。⇒ **在补完 G-008（外部 agent 回传 tokens）之前，"成本选人"只能在那唯一 1 个内部执行者上生效** | `SELECT role, access_type, count(*) FROM agent` → EXECUTOR: API_KEY_LLM 1 / CLI_CLIENT 6；`SELECT status, count(*), count(token_usage) FROM agent_execution_record` |
+
+### 17.2 建议次序与理由
+
+**建议：B4 → B3 → B2 → B5。**
+
+1. **B4 第一（唯一"已被真机事故证明必须做"的项）**。质量判定散落已造成两次**可复现的真机事故**：① 熔断器 `score_stall` 单判据在子任务 687 上**连续误伤 2 次**（round6 sim=0.17 / round8 sim=0.236，均为全新问题却被送死信，全靠人工打捞）；② `ReviewFailureSignature` 阈值 0.85 对真实长驳回只算出 **0.25 / 0.19**，防御层在实际语料上**完全失效**、token 照烧。两者的共同根因是**「质量判定逻辑分散、无单一仲裁点」**——正是 Quality Gate 泛化要解决的问题。此外它**无前置依赖**，且与 V1→V2「解耦 / 规范」核心目标同构（把散落判定收敛为单一契约，与刚落地的 `AttachmentVisibilityPolicy` 收敛同一手法）。
+   - **落地方式建议：先做"行为零变更的结构收口"**——抽出 `QualityGate` 契约，把上述 6 处既有判定改为其实现者，**判定逻辑逐字不动**。这样既不引入真机回归风险，又立刻获得「判定清单唯一可见」的收益；新增规则/测试闸门留到结构就位之后。
+
+2. **B3 第二（前置最充分，且直接对冲当前唯一的兜底成本）**。写侧（事件 + loop checkpoint）**已在库里**，Replay 读侧也已上线 ⇒ Fork 的边际成本集中在「新增一个读侧消费者」而非「补写侧」。收益直接：当前 **「整子任务重跑」是唯一兜底**，而 687 的 10 轮返工中有 8 轮是重复劳动——Fork 可从某轮 checkpoint 分叉，把返工成本从「整子任务」降到「从失效轮次起」。成本中等（新能力、新代码），故排第二。
+
+3. **B2 第三（当前无被保护对象，做了也验证不了）**。「五边界」里最核心的**进程边界当前没有可被隔离的东西**——平台侧零进程执行。在这个前提下实现 ISOLATED，既无法被真机验证，也会沉淀成"名义隔离"。**触发条件**：等平台真的要引入「平台侧代码/命令执行」或「Skill 沙箱」时再做。
+   - **例外（若在意安全，可拆出最小增量）**：**网络 + 凭证**两条边界对**浏览器自动化**（`BrowserAgentExecutor` + `BrowserAgentGateway`）是真实攻击面（SSRF / 凭据外泄），与进程隔离无关，可单独小步做——但那是安全加固，不是"B2 完成"。
+
+4. **B5 第四（受 G-008 协议硬阻塞）**。见 17.1：6/7 执行者无 token 数据。**正确的前置动作是扩展 G-008 协议**（外部 agent 回传 tokens + 定义内外部混算口径），否则"成本选人"退化为"在 1 个候选上选人"，无实际决策空间。
+   - **可并行的替代收益**：在 G-008 到位前，成本维度**可以先落在"任务级预算/熔断"而非"候选人间比价"**（例如按累计 token 触发降档或告警）——这不依赖外部回传，且直接对冲已观测到的 token 浪费。
+
+### 17.3 与既有决策的关系
+
+| 既有决策 | 关系 |
+|---|---|
+| §0 / §12「Q1 先行，最后启动阶段 3」 | **不变**。Q1（①安全止损 ②门禁扩全量 ③反向依赖 68→0 ④job 去 Mapper）**已全部落地**，本节就是"Q1 之后"的执行令 |
+| §0 / §12「阶段 3 = Sandbox 真隔离 + Quality Gate 泛化」 | **本节取代其内部次序**：B4 先于 B2；并明确 B2 应**等待触发条件**而非无条件启动 |
+| `D-2026-09-29-2`（验证基建优先于功能） | 一致——本节的"行为零变更的结构收口"正是该决策的延续 |
+| 差距表 §0.1 C-16/C-17「B2/B3/B4/B5 未动」 | 一致（状态未变）；本节只增加**次序判断**，不改状态登记 |
+
+### 17.4 局限（诚实举证）
+
+- 本节的"真实收益"评分是**基于当前 agent 结构**（7 EXECUTOR 中 6 外部）的判断；若后续大量引入内部 LLM 执行者，**B5 的位次会立刻上升**。
+- B4 的"行为零变更结构收口"虽风险低，但**不解决判定本身的正确性**（如 R1 阈值仍需按真实语料重校准）——收口与调参是两件事，须分开排期。
+- 未做**成本估算**（三项均为 L 级），本节排序依据是"前置就绪度 × 已证实的真实收益"，不是工时。

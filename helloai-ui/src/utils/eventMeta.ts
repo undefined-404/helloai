@@ -61,6 +61,12 @@ export const EVENT_META: Record<string, { label: string; desc: string }> = {
   subtask_recheck_verdict: { label: '抽检审查', desc: '抽检复审给出的核验结论' },
   subtask_recheck_thinking: { label: '抽检思考', desc: '抽检复审的分析过程' },
   subtask_recheck_result: { label: '抽检结论', desc: '抽检复审结论（只度量不改状态）' },
+  // 核验跳过 / 终态分支（2026-10-05）：timeline 事件 + 对话流消息类型（前端两边共用字典）
+  subtask_review_skip_max_rework: { label: '跳过核验·返工超限', desc: '返工次数达上限，跳过自动核验并转入死信等待人工' },
+  subtask_review_skip_no_capability: { label: '跳过核验·无本机能力', desc: '执行密集任务由无本机执行能力的 Agent 提交，跳过自动核验转人工' },
+  subtask_review_skip_no_evidence: { label: '跳过核验·无产出证据', desc: '无产出本体（正文与附件皆空），跳过自动核验转人工' },
+  subtask_review_skip_disagreement: { label: '跳过核验·双审分歧', desc: '双审结论不一致，停留 REVIEW 等人工裁决' },
+  subtask_review_skip_repeated_failure: { label: '跳过核验·重复失败', desc: '判定为结构化重复失败，熔断转死信等人工' },
   // 死信 / 重派
   sub_task_dead_letter: { label: '进入死信', desc: '多次失败，子任务进入死信池' },
   sub_task_dead_letter_manual_assign: { label: '死信重派', desc: '人工把死信子任务重新指派给 Agent' },
