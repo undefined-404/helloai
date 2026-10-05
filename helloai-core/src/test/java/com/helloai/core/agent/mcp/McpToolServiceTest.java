@@ -7,6 +7,7 @@ import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.AttachmentStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.command.ExecutionResultHandler;
+import com.helloai.core.agent.command.ExecutionResultReport;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
 import com.helloai.core.agent.entity.AgentInbox;
@@ -30,6 +31,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -338,7 +340,7 @@ class McpToolServiceTest {
         AttachmentRef attachment = new AttachmentRef(22L, null, null, null, null,
                 AttachmentStatus.ACTIVE, true);
         when(attachmentPort.listActive(11L)).thenReturn(List.of(attachment));
-        when(attachmentPort.loadContent(22L)).thenReturn("x".repeat(5000).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        when(attachmentPort.loadContent(22L)).thenReturn("x".repeat(70000).getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         McpToolService.GetDepsSummaryResult result = mcpToolService.getDepsSummary(AGENT_ID, SUB_TASK_ID);
 
@@ -346,12 +348,12 @@ class McpToolServiceTest {
         McpToolService.GetDepsSummaryResult.DepItem item = result.getDeps().get(0);
         assertThat(item.getTruncated()).isTrue();
         // R2 修复（审计 §15.4）：附件路径走 UpstreamAttachmentRenderer 逐附件配额渲染——
-        // 单附件独享预算（4000 − 预留 2×13+84=110 = 3890），无换行可回退 → 硬切 3890，
+        // 单附件独享预算（64000 − 预留 2×13+84=110 = 63890），无换行可回退 → 硬切 63890，
         // [TRUNCATED] 标注补 file= 字段（与核验侧同口径）
         assertThat(item.getContent())
                 .startsWith("【文件：attachment-22】\n")
-                .contains("[TRUNCATED] file=attachment-22 shown=3890 total=5000 reason=dep_content_limit")
-                .doesNotContain("x".repeat(3891));
+                .contains("[TRUNCATED] file=attachment-22 shown=63890 total=70000 reason=dep_content_limit")
+                .doesNotContain("x".repeat(63891));
     }
 
     @Test
@@ -777,7 +779,7 @@ class McpToolServiceTest {
     }
 
     @Test
-    @DisplayName("已归属自己幂等认领：不重复埋点（重复认领非工作起点）")
+    @DisplayName("已归属自己（ASSIGNED）幂等认领：不重复埋点，但顺带推进 IN_PROGRESS（防超时回收）")
     void shouldNotRecordEventOnIdempotentClaim() {
         when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("claimSubTask"))).thenReturn(true);
 
@@ -785,12 +787,45 @@ class McpToolServiceTest {
                 .id(SUB_TASK_ID)
                 .assignedAgentId(AGENT_ID)
                 .status(SubTaskStatus.ASSIGNED)
+                .version(2)
                 .build();
-        when(subTaskQueryPort.findById(SUB_TASK_ID)).thenReturn(mine);
+        SubTaskSnapshot started = SubTaskSnapshot.builder()
+                .id(SUB_TASK_ID)
+                .taskId(TASK_ID)
+                .assignedAgentId(AGENT_ID)
+                .status(SubTaskStatus.IN_PROGRESS)
+                .version(3)
+                .build();
+        when(subTaskQueryPort.findById(SUB_TASK_ID)).thenReturn(mine, started);
 
         McpToolService.ClaimSubTaskResult result = mcpToolService.claimSubTask(AGENT_ID, SUB_TASK_ID);
 
         assertThat(result.isClaimed()).isTrue();
+        assertThat(result.getVersion()).isEqualTo(3);
+        // ★修复断言：ASSIGNED 幂等分支必须推进 IN_PROGRESS，否则会被超时巡检误收
+        verify(subTaskCommandPort).start(SUB_TASK_ID);
+        verifyNoInteractions(agentEventRecorder);
+    }
+
+    @Test
+    @DisplayName("已归属自己（IN_PROGRESS）幂等认领：不重复推进状态（start 不二次调用）")
+    void shouldNotReStartWhenAlreadyInProgress() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("claimSubTask"))).thenReturn(true);
+
+        SubTaskSnapshot inProgress = SubTaskSnapshot.builder()
+                .id(SUB_TASK_ID)
+                .assignedAgentId(AGENT_ID)
+                .status(SubTaskStatus.IN_PROGRESS)
+                .version(5)
+                .build();
+        when(subTaskQueryPort.findById(SUB_TASK_ID)).thenReturn(inProgress);
+
+        McpToolService.ClaimSubTaskResult result = mcpToolService.claimSubTask(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(result.isClaimed()).isTrue();
+        assertThat(result.getVersion()).isEqualTo(5);
+        // 已是 IN_PROGRESS 不应再次 start（避免无谓的状态机/乐观锁写）
+        verify(subTaskCommandPort, never()).start(SUB_TASK_ID);
         verifyNoInteractions(agentEventRecorder);
     }
 
@@ -1120,5 +1155,62 @@ class McpToolServiceTest {
         assertThat(result.isOk()).isFalse();
         assertThat(result.getReason()).isEqualTo("invalid_status:DONE");
         verify(subTaskCommandPort, never()).start(eq(SUB_TASK_ID));
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  submitResult：外部执行者 token 回报（B5.1 / G-008 盲区收口）
+    //  ══════════════════════════════════════════════════════════════
+
+    private SubTaskSnapshot inProgressSubTask() {
+        return SubTaskSnapshot.builder()
+                .id(SUB_TASK_ID)
+                .taskId(TASK_ID)
+                .assignedAgentId(AGENT_ID)
+                .status(SubTaskStatus.IN_PROGRESS)
+                .build();
+    }
+
+    @Test
+    @DisplayName("submitResult：外部执行者回报 tokenUsage → 原样透传进 ExecutionResultReport（B5.1 成本观测数据前置）")
+    void shouldPassReportedTokenUsageToHandler() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("submitResult"))).thenReturn(true);
+        when(subTaskQueryPort.findById(SUB_TASK_ID)).thenReturn(inProgressSubTask());
+        ExecutionResultHandler.ExecutionResultApplyResult applied =
+                new ExecutionResultHandler.ExecutionResultApplyResult();
+        applied.setApplied(true);
+        applied.setStatus("DONE");
+        when(executionResultHandler.handleReport(any())).thenReturn(applied);
+
+        McpToolService.SubmitResultResult result = mcpToolService.submitResult(
+                AGENT_ID, SUB_TASK_ID, "rid-token", true, "产出正文", null, "stop", 12345);
+
+        assertThat(result.isOk()).isTrue();
+        assertThat(result.isAccepted()).isTrue();
+        ArgumentCaptor<ExecutionResultReport> captor = ArgumentCaptor.forClass(ExecutionResultReport.class);
+        verify(executionResultHandler).handleReport(captor.capture());
+        ExecutionResultReport report = captor.getValue();
+        // 外部 CLI_CLIENT 执行者的 token 全盲（G-008）在 B5.1 收口：回报值原样入链路
+        assertThat(report.getTokenUsage()).isEqualTo(12345);
+        assertThat(report.getSource()).isEqualTo("EXTERNAL");
+        assertThat(report.getExecutorName()).isEqualTo("cli_client");
+    }
+
+    @Test
+    @DisplayName("submitResult：未回报 tokenUsage（null）→ 与旧协议行为完全一致（防回归）")
+    void shouldKeepLegacyNullTokenUsageWhenNotReported() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("submitResult"))).thenReturn(true);
+        when(subTaskQueryPort.findById(SUB_TASK_ID)).thenReturn(inProgressSubTask());
+        ExecutionResultHandler.ExecutionResultApplyResult applied =
+                new ExecutionResultHandler.ExecutionResultApplyResult();
+        applied.setApplied(true);
+        applied.setStatus("DONE");
+        when(executionResultHandler.handleReport(any())).thenReturn(applied);
+
+        mcpToolService.submitResult(
+                AGENT_ID, SUB_TASK_ID, "rid-legacy", true, "产出正文", null, "stop", null);
+
+        ArgumentCaptor<ExecutionResultReport> captor = ArgumentCaptor.forClass(ExecutionResultReport.class);
+        verify(executionResultHandler).handleReport(captor.capture());
+        assertThat(captor.getValue().getTokenUsage()).isNull();
     }
 }

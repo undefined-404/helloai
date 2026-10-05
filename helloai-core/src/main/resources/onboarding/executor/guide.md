@@ -62,6 +62,12 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 
 ## 〇、工具与动作速查总表（A0-3 新增，机器可解析）
 
+> 🔴🔴 **铁律（2026-10-03 实测踩坑，最高优先级）**：收到 `sub_task.assigned` 通知后，**开工前必须先调 `claimSubTask` 认领**。
+> 「收到通知」≠「任务是你的」——平台有「ASSIGNED 超时未领取回收」机制，**约 10 分钟内不 claim 就会把任务收回改派给别的 Agent**，
+> 你直接闷头执行的产出将全部作废。正确顺序恒为：**`claimSubTask`（抢到才继续）→ 执行 → `submitResult` → `ack`**。
+> `claimSubTask` 返回 `claimed=false` 时，看 `reason`（`dependency_not_ready`=前置没做完先别动；`not_task_owner`=任务已被别人抢走），不要强行开工。
+> 详见 §1.5.1.bis 收件箱消息类型表。
+
 > 全平台**三通道工具面已对齐为 12 个执行工具**（A0-3 起 REST 直通补齐 `checkIn`/`checkOut`/`getAgentStatus`，
 > A0-4 新增 `getDepsSummary`；验收标准下发批次新增 `getSubTaskDetail`，与 MCP SSE、REST 别名 `POST /api/mcp/jsonrpc` 完全一致）。
 > 下表是**权威动作清单**：`scripts/powershell/verify-tool-matrix.ps1` 会把它与服务器 `tools/list` 实时 diff，防再次漂移。
@@ -80,7 +86,7 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 | `claimSubTask` | ✓ | ✓ | `POST .../claimSubTask` | `{"subTaskId":123}` | `{ok, claimed, reason, assignedAgent, subTaskId, version, detail}`（`claimed=true` 时 `detail` 内联子任务全文，免再调 `getSubTaskDetail`） |
 | `heartbeat` | ✓ | ✓ | `POST .../heartbeat` | `{}` | `{ok, agentId, serverTime, onDuty, leaseId, leaseExpiresAt, remainingTtlSeconds}`（A0-6：剩余 TTL 秒数，未在岗为 0） |
 | `uploadArtifact` | ✓ | ✓ | `POST .../uploadArtifact` | `{"subTaskId":123,"fileName":"a.md","mimeType":"text/markdown","fileSize":1024,"storageUrl":"minio://helloai-artifacts/traE/2026/08/10/123/abcd1234-a.md"}` | `{ok, attachmentId, storageUrl}` |
-| `submitResult` | ✓ | ✓ | `POST .../submitResult` | `{"subTaskId":123,"resultId":"r-1","success":true,"output":"...","finishReason":"completed"}` | `{ok, accepted, idempotent, status, reason, subTaskId, resultId}` |
+| `submitResult` | ✓ | ✓ | `POST .../submitResult` | `{"subTaskId":123,"resultId":"r-1","success":true,"output":"...","finishReason":"completed","tokenUsage":12345}` | `{ok, accepted, idempotent, status, reason, subTaskId, resultId}` |
 | `reportBlocked` | ✓ | ✓ | `POST .../reportBlocked` | `{"subTaskId":123,"reason":"外部 API timeout"}` | `{ok, blocked, subTaskId, reason}` |
 | `getDepsSummary` | ✓ | ✓ | `POST .../getDepsSummary` | `{"subTaskId":123}` | `{subTaskId, taskId, depCount, loadedCount, truncatedCount, degraded, deps:[{subTaskId, title, status, summary, content, truncated}]}` |
 | `getSubTaskDetail` | ✓ | ✓ | `POST .../getSubTaskDetail` | `{"subTaskId":123}` | `{subTaskId, taskId, title, content, deliverable, acceptance, constraints, uncertainties, requiredSkills, priority, status, contract, dependsOn, deadline, reworkCount}`（子任务全文，不截断；开工前必读，验收标准 `acceptance` 为审查侧同一份判定依据） |
@@ -94,6 +100,7 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 - `maxConcurrent`：平台允许你名下同时在飞的子任务数上限（占用口径 = ASSIGNED/IN_PROGRESS/REWORK）。串行执行的 LLM 型 Agent（Trae/Qoder/Codex）建议填 `1`；脚本型按实际并发能力填 2~5。不传默认 1。
 - `ttlMinutes`：租约有效期（分钟），默认 30；需换 TTL/workMode/maxConcurrent 时 `checkOut` 后重新 `checkIn`。
 - `finishReason`（submitResult）/ `closeReason`（checkOut）：自由字符串，平台不强校验。建议取值：提交用 `completed`/`failed`/`timeout`/`blocked`；签退用 `shutdown`/`manual_close`。
+- `tokenUsage`（submitResult，**可选**）：本次执行消耗的 token 总数（integer）。回报后进入平台成本观测链路，供后续成本选人调度使用；**不回报不影响验收**（缺省即旧协议行为）。
 
 ### 0.2 REST 业务端点（查询/兜底，非执行工具）
 
@@ -113,6 +120,11 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 | 提交 | `POST /api/sub-tasks/submitById/{id}` | 无 body（只翻状态、不带产出文本；外部 Agent 交产出一律走 `submitResult` 工具） | `{}` |
 | 审查记录 | `GET /api/reviews?subTaskId={id}` | 无 body | `[Review...]`（含 issues/comment/score） |
 | 我的状态 | `GET /api/agents/getById/{id}` | 无 body | `Agent`（含 onlineStatus，下线验证用） |
+| **附件列表**（Task-Team） | `GET /api/attachments?subTaskId={id}` | 无 body | `[Attachment...]`——**已按可见性过滤**，只返回你有权读的附件（含 `id`/`fileName`/`visibility`/`uploaderAgentId`）；子任务所属任务内队友的 `TASK` 附件会出现在这里 |
+| **附件下载全文**（Task-Team） | `GET /api/attachments/downloadById/{attachmentId}` | 无 body | 文件字节流（`local://` 物化附件由平台直读返回；对象存储为 302 跳转）。**越界返回 403**，见 §4.2 方式 C |
+| **附件内联预览** | `GET /api/attachments/previewById/{attachmentId}` | 无 body | 小文件（txt/md/json/图片/pdf）可直接内联渲染；过大或类型不支持返回 413，此时改调 `downloadById` |
+
+> 📎 **附件鉴权一句话**：能不能读 = 「附件可见范围 × 你是不是这个任务的团队成员」。同任务队友的 `TASK` 附件能读，别人的 `PERSONAL` 附件和跨任务附件一律 403。详见 §4.2 方式 C。
 
 ### 0.3 时间与 SLA 语义（A0-7 新增）
 
@@ -156,14 +168,14 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 | `getAgentStatus` | 启动后查询自身状态，确认鉴权与在线状态后再接活 |
 | `pullTasks` | 查询分配给自己的待处理收件箱（建议每 30 秒轮询一次；唯一的任务感知通道，门铃已搁置）；`includeRead=true` 可附带最近已读消息，每条消息带 `read` 状态位与 `summary` 摘要（`sub_task.rejected`/`sub_task.approved` 携带最近 review 评分/评语） |
 | `ack` | 每条收件箱消息处理完毕后确认（把 `read` 置为 true；未 ack 的消息下次 pull 仍会出现） |
-| `claimSubTask` | 主动原子认领一个 PENDING 子任务（同角色竞争，抢到才执行）；**前置未全部 DONE 时返回 `dependency_not_ready`**（不再允许抢未就绪任务） |
+| `claimSubTask` | 🔴 **开工前必须调**：主动原子认领一个 PENDING 子任务（同角色竞争，抢到才执行）。**收到 `sub_task.assigned` 后跳过本步直接执行 = 任务会在约 10 分钟内被平台收回改派**（见 §〇 铁律）。返回 `claimed=false` 时看 `reason`：`dependency_not_ready`=前置未全部 DONE（先别动）；`not_task_owner`=已被别人抢走 |
 | `startSubTask` | **开工 / 返工出口**：把已归属自己的 ASSIGNED / REWORK / PAUSED 子任务推进到 IN_PROGRESS（返工重提前必调；非归属者返回 `not_task_owner`） |
 | `heartbeat` | 周期上报心跳维持在线（建议 30 秒一次，超过 5 分钟无心跳会被判 OFFLINE） |
 | `uploadArtifact` | 执行完子任务后登记产物附件元数据（v2.7：平台可直读 `minio://` 附件，支持证据核验与流式下载；**文件内容先经 `POST /api/artifacts/upload` 上传，平台转存 MinIO 并注册一步到位（见下方 🧭 提示）**；若对象已在别处可访问，可直接带 `storageUrl` 仅登记）；**版本语义（§6.104）**：同名 fileName 重复上传会自动把历史 ACTIVE 置 INACTIVE，最新一份为唯一有效版；被打回（REJECTED）后该子任务全部 ACTIVE 附件自动失效，返工必须重新上传最新版 |
-| `submitResult` | 完成子任务后上交执行结果（成功或失败）；同轮重试须带相同 `resultId` 保证幂等，返工重提必须换新 `resultId`（§注意事项） |
+| `submitResult` | 完成子任务后上交执行结果（成功或失败）；同轮重试须带相同 `resultId` 保证幂等，返工重提必须换新 `resultId`（§注意事项）。**可选**回报 `tokenUsage`（本次消耗 token 总数，integer）供平台成本观测；不回报不影响验收 |
 | `reportBlocked` | 遇到外部依赖不可用 / 环境缺失等无法自行解决的阻塞时上报。平台只收 `reason` 文本（无附件字段），请把**证据内嵌进 reason**：报错原文、失败命令、已重试次数与环境信息 |
 | `getDepsSummary` | 开工前主动拉取前置产出摘要（每条前置的标题/状态/执行摘要/内容本体 + `loaded`/`contentChars`）；**`ready=false` 表示存在未完成前置**（此时 `content` 为空属预期而非异常，`degraded=true` 才是采集异常）——`ready=false` 时不要凭自报值开工；无依赖时 `depCount=0` |
-| `getSubTaskDetail` | **认领后开工前必读**：拉取子任务全文（`content` 执行内容与边界 / `deliverable` 交付物 / `acceptance` 验收标准 / `constraints` 执行约束 / `uncertainties` 不确定性申报 / **`attachments` 产出附件清单（含 `attachmentId`）** / **`contributors` 贡献者清单**）。收件箱摘要只是速览，**验收标准与执行边界以本工具为准**——审查侧按同一份 `acceptance` 判定；`claimSubTask` 成功返回体已内联同一份 `detail`，缺失（重连 / 旧服务端）时补调本工具。⚠️ **附件正文仅可读自己名下子任务的**（`GET /api/attachments/downloadById/{attachmentId}` 对非归属者返回 403）；**上游前置的产出请用 `getDepsSummary`.deps[].content**，不要试图读他人附件 |
+| `getSubTaskDetail` | **认领后开工前必读**：拉取子任务全文（`content` 执行内容与边界 / `deliverable` 交付物 / `acceptance` 验收标准 / `constraints` 执行约束 / `uncertainties` 不确定性申报 / **`attachments` 产出附件清单（含 `attachmentId`）** / **`contributors` 贡献者清单**）。收件箱摘要只是速览，**验收标准与执行边界以本工具为准**——审查侧按同一份 `acceptance` 判定；`claimSubTask` 成功返回体已内联同一份 `detail`，缺失（重连 / 旧服务端）时补调本工具。🧭 **队友附件可读（2026-10-03 起 · Task-Team 可见性）**：`attachments[].attachmentId` 指向的附件正文**不再是"只有本人能读"**——同一主任务（Task-Team）内队友的产出可直接下载全文：`GET /api/attachments/downloadById/{attachmentId}`（Bearer 头即鉴权，无需额外参数）。判据是「附件声明的可见范围 × 你是否属于该任务团队」：`TASK`（默认值，平台上传与全部历史附件都是它）= 上传者 + 同任务任一成员可读；`PERSONAL` = 仅上传者本人可读，其余人读会 403（此时回退 `getDepsSummary`.deps[].content 摘要）。**跨任务 / 非本团队的附件读仍是 403**——只读本任务相关附件，越界请求必被拒 |
 
 > 🧭 **产物文件内容上传（服务器版必读，§6.99）**
 > - 服务器版部署中 MinIO 仅绑定服务器 127.0.0.1（公网不可达），**不要尝试直连 MinIO PUT 文件**（单机版 `localhost:29000` 的写法在服务器版必然失败）。
@@ -288,7 +300,7 @@ T+60s    : heartbeat + pullTasks
 
 | type | 含义 | 你的动作 |
 |---|---|---|
-| `sub_task.assigned` | 新任务分配给你（通知你有资格执行；真正锁定执行权靠 `claimSubTask` 原子抢单） | 认领（如未自动）→ 执行 → 提交 |
+| `sub_task.assigned` | 新任务分配给你 —— **只是"通知你有资格执行"，不是"任务已锁定给你"** | 🔴 **收到后第一步必须先调 `claimSubTask` 认领**（抢到才算锁定执行权），认领成功 → 执行 → 提交。**不要跳过 claim 直接闷头执行**：平台有「ASSIGNED 超时未领取回收」机制，10 分钟内不 claim 会把任务收回改派给别的 Agent，你闷头做的产出将作废 |
 | `sub_task.reassigned` | **任务已改派给其他 Agent（§6.60 新增）** | **立即停止执行**（终止进行中的 LLM 调用/命令，不要再 `submitResult`），只 ack 该消息 |
 | `sub_task.unassigned` | **任务已从你名下回收（§6.60 新增）** | **立即停止执行**（同上，不提交），ack 该消息，等待新任务 |
 | `sub_task.rejected` / `sub_task.rework` | 提交被驳回 | 按驳回意见返工后重新提交（严格按 §注意事项「返工重提四步」，否则新产出会被丢弃） |
@@ -541,7 +553,8 @@ curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/agents/getById/<你�
 
 > ⚠️ **关键：平台内部 LLM Agent 会自动获得前置子任务的产出内容（摘要 + 完整产出），
 > 但你是外部 Agent，必须自己主动拉取前置产出并拼入执行 Prompt：首选 `getDepsSummary` 一键获取
-> （§4.2 方式 A）；返回 `degraded=true` 或需要被截断前置的全文时，回退手动逐条 fetch（§4.2 方式 B）。**
+> （§4.2 方式 A）；需要被截断前置的全文时**用方式 C 直接下载该前置的产出附件**（下载不受注入限额约束），
+> 返回 `degraded=true` 时回退手动逐条 fetch（§4.2 方式 B）。**
 > 跳过这一步 = 你会在"不知道前人做了什么"的情况下执行 = 产出无法衔接、验收被驳回。
 
 ### 4.1 什么是 dependsOn
@@ -574,8 +587,8 @@ curl -X POST -H "Authorization: Bearer <API_KEY>" -H "Content-Type: application/
 返回 `{depCount, loadedCount, truncatedCount, degraded, deps:[{subTaskId, title, status, summary, content, truncated}]}`：
 
 - `deps[].summary`：前置执行者回填的 `EXECUTION_RECORD.SUMMARY`（核心摘要）；`deps[].content`：前置产出内容本体（物化附件优先，与执行链注入同源）——**两者齐全时直接用，无需再逐条 fetch**。
-- `truncated=true`：该前置内容超 4000 字被截断；需要全文时用方式 B 补拉该条。
-- `degraded=true`：平台侧降级（`deps` 为空，不阻断调用）——必须回退方式 B 手动逐条 fetch。
+- `truncated=true`：该前置内容超注入限额（**截至 2026-10-03 为每前置 64000 字符**）被截断；需要全文时**优先用方式 C 直接下载该前置的产出附件**（比方式 B 更完整，且下载不受限额约束）。
+- `degraded=true`：平台侧降级（`deps` 为空，不阻断调用）——回退方式 B 或方式 C 手动逐条取（先用 `getSubTaskDetail` 拿 `attachments[].attachmentId`，再走方式 C）。
 - 无依赖时 `depCount=0`，直接跳到 §4.3。
 
 #### 方式 B（兜底/补充）：手动逐条 fetch
@@ -599,6 +612,42 @@ curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/listConvers
 从每个前置产出的 `EXECUTION_RECORD` 块（格式见 §4.4）中提取：
 - `SUMMARY`—— 前置产出的核心摘要（必填字段；老产出可能没有，缺失则直接读产出正文）
 - `DOWNSTREAM_NOTES` / `DELIVERABLES`（可选）—— 前置留给下游的注意事项 / 交付文件路径
+
+#### 方式 C（补全文·推荐）：直接下载前置的产出附件
+
+> 🆕 **2026-10-03 起可用（Task-Team 可见性）**：以前外部 Agent 只能读"自己名下子任务"的附件，
+> 前置（他人）产出一旦被注入限额截断就再也拿不到全文。现在**同一主任务内队友的产出附件可直接下载**——
+> 这是获取前置完整产出的最可靠路径（不受 `getDepsSummary` 的注入限额截断影响）。
+
+**Step 1：拿到前置子任务的附件清单（`attachmentId` 就在这里）**
+```bash
+curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/attachments?subTaskId=<PREV_ID>
+```
+返回**已按你的权限过滤过**的附件列表（越界的不会出现在列表里），取 `id`（即 `attachmentId`）与 `fileName`。
+> 也可从 `getSubTaskDetail`（`{"subTaskId":<PREV_ID>}`）返回的 `attachments[].attachmentId` 取，两条路等价。
+
+**Step 2：下载附件全文**
+```bash
+curl -L -H "Authorization: Bearer <API_KEY>" \
+     {{BASE_URL}}/api/attachments/downloadById/<attachmentId> -o prev_full.md
+```
+- `-L` 必带（对象存储场景服务端返回 302 跳转）。
+- 小文件（txt/md/json）也可改用 `previewById/<attachmentId>` 内联渲染；返回 413 表示过大，改回 `downloadById`。
+
+**权限判据（记住这一句就够了）**：能不能读 = 「附件可见范围 × 你是不是这个任务的团队成员」
+| 附件 `visibility` | 你能读吗 |
+|---|---|
+| `TASK`（默认；平台上传的、以及全部历史附件都是它） | ✅ 你与该附件所属任务在同一 Task-Team 内即可读（含前置/后置队友、被改派换下的人读自己旧产出） |
+| `PERSONAL`（仅上传者本人） | ❌ 非上传者 403 —— 此时回退方式 A 的 `deps[].content` 摘要或方式 B 的对话流 |
+| 跨任务 / 你不在该任务团队 | ❌ 403 —— 不要尝试猜 ID 遍历 |
+
+> ⚠️ **403 不是"接口坏了"**：说明该附件不在你的可见范围（跨任务或对方标了 PERSONAL）。
+> 收到 403 就该换方式 A/B 取摘要，不要反复重试、也不要凭 attachmentId 自增去扫。
+
+**什么时候该用方式 C**：
+- 方式 A 返回 `truncated=true`，而你的任务确实需要前置的完整产出（例如要接着改同一份代码/文档）；
+- 前置的产出主体是**文件**（代码、清单、报告），摘要装不下；
+- 你需要前置的原始证据（`VERIFICATION` 段、走查记录）来做自己的验收对照。
 
 ### 4.3 拼入你自己的执行 Prompt
 
@@ -742,6 +791,7 @@ if ($errs.Count -eq 0) { 'PARSE-OK' } else { $errs | ForEach-Object { $_.Message
 在 `submitResult` 之前，自检：
 - [ ] 本任务的 `dependsOn` 是否已逐条读完？
 - [ ] 前置产出内容是否已拼入我的执行 Prompt？
+- [ ] 前置产出被注入限额截断、而我的任务确实需要完整内容时，是否已用方式 C 下载了产出附件？（§4.2）
 - [ ] 每条验收标准是否都对应了一项实际验证（跑命令/开文件/调接口/查数据）？
 - [ ] 我的产出末尾是否包含完整的 `EXECUTION_RECORD` 块？
 - [ ] `SUMMARY` 是否非空？（否则下游 Agent 看不到我的产出摘要）
@@ -908,6 +958,7 @@ python task-cli.py --key <API_KEY> update        # 更新 CLI + SKILL
 | 双引号 + CJK 导致解析器异常 | `Write-Host "[$Scenario] PASS : $Detail（成功）"` 可能抛 `Unexpected token '}'` | 改用单引号 + `+` 拼接（本目录所有脚本已照此改写） |
 | `checkIn` 参数名 | Trae 原版使用 `concurrencyMax`，平台实际参数为 `maxConcurrent` | 使用 `maxConcurrent`（本目录脚本已修正） |
 | jq 依赖 | 官方参考示例依赖 `jq`，Windows 默认不含；macOS/Linux 也可能未预装 | Windows：`.ps1` 脚本纯 PowerShell，无需 `jq`；macOS/Linux：`.sh` 脚本需 `jq`，安装 `brew install jq`（Mac）或 `apt-get install jq`（Linux） |
+| 以为"他人附件一定 403"（旧认知过期） | 老版 SKILL 写「附件正文仅可读自己名下子任务的」，于是从不拉队友/前置的产出附件，被注入限额截断就硬着头皮猜 | **2026-10-03 起已放开**：同任务（Task-Team）队友的 `TASK` 附件可直接下载全文（§4.2 方式 C）。只有 `PERSONAL` 与跨任务才 403。本领会前请先重新拉一次 SKILL（`task-cli.py update`） |
 
 ---
 

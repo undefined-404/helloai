@@ -87,7 +87,7 @@
 | TBD-04-1 | 第 04 章 | 无 ACTIVE 租约时 500 `Agent 未在岗` 门禁的适用范围（实测 REST 别名通道下 pullTasks/claimSubTask/getDepsSummary 均未触发） |  |
 | TBD-04-2 | 第 04 章 | `heartbeat` 续租窗口口径与 `checkIn` 的 `ttlMinutes` 不一致（契约 §8 TBD-2） |  |
 | TBD-04-3 | 第 04 章 | 心跳间隔/阈值是否可按 Agent 配置 |  |
-| TBD-05-1 | 第 05 章 | 核验 Prompt 中附件与 `output` 的实际注入形态（已知限额 8000/4000 字符，见契约 §2.5） |  |
+| TBD-05-1 | 第 05 章 | 核验 Prompt 中附件与 `output` 的实际注入形态（已知限额每份 64000 字符 / 总量 200000 字符，见契约 §2.5） |  |
 | TBD-05-2 | 第 05 章 | 死信再派单的授权范围（哪个角色可调用） |  |
 | TBD-05-3 | 第 05 章 | 各故障的重试计数是否由平台持久化 |  |
 
@@ -106,7 +106,7 @@
 | 打卡 | `checkIn` / `checkOut`（MCP SSE · REST 别名 · REST 直通三通道同名） | checkIn: `workMode` `maxConcurrent` `ttlMinutes` `skills`；checkOut: `closeReason` | checkIn: `ok` `leaseId` `sessionId` `workMode` `maxConcurrent` `expiresAt` `mergedSkills`；checkOut: `ok` `closedCount` `reason` `currentStatus` `latestLeaseId` `latestLeaseExpiresAt` `latestLeaseClosedReason` | 未 `checkIn` 调 `pullTasks` 报 500 `Agent 未在岗`；换 TTL/模式须 `checkOut` 后再 `checkIn`；`checkOut` 幂等，`currentStatus`=CLOSED/EXPIRED/NONE | §2.2 | SKILL§0.1 · 实测 |
 | 工作模式 | 无独立工具；工作模式只能作为 `checkIn` 入参声明 | `workMode` `maxConcurrent` `ttlMinutes` | 同打卡 | `workMode` 仅 `AUTO`/`STRICT`（null/空串按 `AUTO`，非法值立即拒绝）；并发占用口径 = `ASSIGNED`+`IN_PROGRESS`+`REWORK`；串行 LLM 型 Agent 填 1 | §2.3 | SKILL§0.1 · 实测 |
 | 任务获取与认领 | `pullTasks` `ack` `claimSubTask` `getSubTaskDetail` `getDepsSummary` `reportBlocked`；REST：`GET /api/sub-tasks/listMine?agentId=` `GET /api/sub-tasks/listAvailable` `GET /api/sub-tasks/list?taskId=` `POST /api/sub-tasks/claimById/{id}?agentId=` `MCP 工具 startSubTask` `GET /api/sub-tasks/getById/{id}` | pullTasks: `role` `max` `includeRead`；ack: `messageId`；claimSubTask: `subTaskId`；getSubTaskDetail: `agentId` `subTaskId`；getDepsSummary: `subTaskId`；reportBlocked: `subTaskId` `reason` | pullTasks: `messages:[{messageId,type,subTaskId,taskId,title,priority,deadline,summary,read,reassigned,currentAgentId}]`；claimSubTask: `ok` `claimed` `reason` `assignedAgent` `subTaskId` `version` `detail`；getSubTaskDetail: `content` `deliverable` `acceptance` `constraints` `uncertainties` `requiredSkills`；getDepsSummary: `depCount` `loadedCount` `truncatedCount` `degraded` `deps[]` | `pullTasks` 是唯一任务感知通道（门铃已搁置）且不自动标记已读，处理完必须 `ack`；`claimSubTask` 为原子抢单，`claimed=false` 时不得执行；`reassigned`/`unassigned` 必须立即停止执行且不再提交 | §2.4 | SKILL§0.1、§1.5.1 · 实测 |
-| 结果提交 | `submitResult` `uploadArtifact`；文件内容上传 `POST /api/artifacts/upload`（multipart） | submitResult: `subTaskId` `resultId` `success` `output` `finishReason`；uploadArtifact: `subTaskId` `fileName` `mimeType` `fileSize` `storageUrl` | submitResult: `ok` `accepted` `idempotent` `status` `reason` `subTaskId` `resultId`；上传: `attachmentId` `storageUrl` | 只自动推进 `ASSIGNED`/`IN_PROGRESS`（`REWORK` 须先 `startSubTask`）；同一轮重试必须同 `resultId`，返工重提必须换新 `resultId`；`output` 末尾必须附 `EXECUTION_RECORD`；不得直连 MinIO | §2.5 | SKILL§0.1、§4.4 · 实测 |
+| 结果提交 | `submitResult` `uploadArtifact`；文件内容上传 `POST /api/artifacts/upload`（multipart） | submitResult: `subTaskId` `resultId` `success` `output` `finishReason` `tokenUsage`(可选)；uploadArtifact: `subTaskId` `fileName` `mimeType` `fileSize` `storageUrl` | submitResult: `ok` `accepted` `idempotent` `status` `reason` `subTaskId` `resultId`；上传: `attachmentId` `storageUrl` | 只自动推进 `ASSIGNED`/`IN_PROGRESS`（`REWORK` 须先 `startSubTask`）；同一轮重试必须同 `resultId`，返工重提必须换新 `resultId`；`output` 末尾必须附 `EXECUTION_RECORD`；不得直连 MinIO；`tokenUsage` 可选，仅供平台成本观测 | §2.5 | SKILL§0.1、§4.4 · 实测 |
 | 心跳与租约 | `heartbeat` `getAgentStatus` | `{}` | heartbeat: `ok` `agentId` `serverTime` `onDuty` `leaseId` `leaseExpiresAt` `remainingTtlSeconds`；getAgentStatus: `status` `dbOnlineStatus` `computedOnlineStatus` `lastSeenAt` `lastActiveAt` `offlineReason` `offlineAt` `serverTime` | `heartbeat` 是唯一刷新 `last_seen_time` 的调用，超 5 分钟无心跳判 `OFFLINE`（业务调用只刷 `last_active_time`）；除 checkIn/checkOut 外任一工具调用自动按原 TTL 续租 | §2.6 | SKILL§0.1、§1.4(4) · 实测 |
 
 ### 2. 平台交互契约详表
@@ -196,15 +196,16 @@ REST 辅助端点（查询/兜底，非执行工具）：
 
 | 工具 | 请求字段 | 返回字段 | 来源 |
 |---|---|---|---|
-| `submitResult` | `subTaskId` `resultId` `success` `output` `finishReason` | `ok` `accepted` `idempotent` `status` `reason` `subTaskId` `resultId` | SKILL§0.1 · 实测 |
+| `submitResult` | `subTaskId` `resultId` `success` `output` `finishReason` `tokenUsage`(可选) | `ok` `accepted` `idempotent` `status` `reason` `subTaskId` `resultId` | SKILL§0.1 · 实测 |
 | `uploadArtifact` | `subTaskId` `fileName` `mimeType` `fileSize` `storageUrl` | `ok` `attachmentId` `storageUrl` | SKILL§0.1 |
 | `POST /api/artifacts/upload` | multipart：`file` + `subTaskId` + 可选 `mimeType` | `{attachmentId, storageUrl}` | SKILL§1.2 · 实测 |
 
 - `submitResult` 只自动推进 `ASSIGNED` / `IN_PROGRESS`；在 `{状态为 REWORK}` 条件下，**必须**先调 MCP 工具 `startSubTask`（`{"name":"startSubTask","arguments":{"subTaskId":<id>}}`；REST `startById` 对 API Key 返回 401）拉回 `IN_PROGRESS` 再提交；做不到的后果：返回 `invalid_status:REWORK`。来源：SKILL§5.3、§注意事项。
 - `finishReason` 为自由字符串，平台不强校验；建议取值：提交用 `completed`/`failed`/`timeout`/`blocked`，签退用 `shutdown`/`manual_close`。来源：SKILL§0.1。
+- `tokenUsage`（submitResult，**可选**）：本次执行消耗的 token 总数（integer）。回报后进入平台成本观测链路，供后续成本选人调度使用；**不回报不影响验收**（缺省即旧协议行为）。来源：平台工具 schema（B5.1）。
 - 在 `{同一轮重试}` 条件下**必须**携带相同 `resultId`；在 `{返工重提}` 条件下**必须**换新 `resultId`；做不到的后果：同轮重试产生重复结果记录，返工沿用旧 `resultId` 被判 `idempotent_duplicate`——返回看似成功（`accepted=true, idempotent=true`）但新产出不被写入。来源：SKILL§1.2、§注意事项。
 - 在 `{output 含完整 EXECUTION_RECORD}` 条件下，**必须**先把内容写为 UTF-8 无 BOM 文件再读取并做 JSON 转义后提交，**不得**直接内联拼接；做不到的后果：易触发 500。来源：SKILL§5.2。
-- 核验视图的注入限额（决定产出呈现方式）：执行 `output` 以 **4000 字符**摘要注入核验，每条附件正文以 **8000 字符**注入、总量 24000 字符。在 `{产出长度超过该限额}` 条件下，**必须**把契约性内容前置并保证 `EXECUTION_RECORD` 落在 4000 字符以内；做不到的后果：核验侧看不到 `VERIFICATION` 与后续章节，按证据不足驳回。来源：代码:helloai-core/.../ReviewEvidenceAssembler.java · 实测。
+- 核验视图的注入限额（决定产出呈现方式）：执行 `output` 摘要与每条附件正文**均以 64000 字符**注入核验、总量 200000 字符（**2026-10-03 由 4000/8000/24000 上调**，以匹配官方 DeepSeek 64K 上下文）。正常产出**远低于上限、不会触发截断**；仅在极端超长时被截断并打 `[TRUNCATED] file=… shown=… total=…` 标注——此时建议把契约性内容前置。做不到的后果：核验侧看不到被截断的后半章节，按证据不足驳回。来源：代码:helloai-core/.../ReviewEvidenceAssembler.java · 实测。
 - 在 `{提交成功}` 条件下，**必须**进入轮询（建议 15 秒一次、最多 8 轮 ≈ 2 分钟），直到收到 `sub_task.approved` / `sub_task.rejected` / `sub_task.rework` 之一；**不得**以“拉一次为空”判定无消息。来源：SKILL§5.4。
 - 提交失败的排查顺序（禁止盲目重试）：① `GET /api/sub-tasks/getById/{id}` 查状态判断是否已生效 → ② 用 `heartbeat` 区分故障范围 → ③ 最小化 output 测试前**必须先上传完整附件**（最小化提交一旦被接受即进入 REVIEW，无法再补交完整 output）→ ④ `tools/list` 核对参数类型（`subTaskId` 声明为 integer）→ ⑤ 核对 §5.2 状态机。来源：SKILL§5.3。
 - 产物文件内容一律走 `POST /api/artifacts/upload`；**不得**直连 MinIO（服务器版 MinIO 仅绑定 127.0.0.1，外部必然失败）。来源：SKILL§1.2。
@@ -728,8 +729,10 @@ POST {{BASE_URL}}/api/mcp/jsonrpc
 Authorization: Bearer <API_KEY>
 Content-Type: application/json; charset=utf-8
 
-{"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"submitResult","arguments":{"subTaskId":2097935069198065667,"resultId":"subTask-2097935069198065667-r1","success":true,"output":"<产出正文 + EXECUTION_RECORD 块>","finishReason":"completed"}}}
+{"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"submitResult","arguments":{"subTaskId":2097935069198065667,"resultId":"subTask-2097935069198065667-r1","success":true,"output":"<产出正文 + EXECUTION_RECORD 块>","finishReason":"completed","tokenUsage":12345}}}
 ```
+
+> `tokenUsage` 为**可选**字段（见 §3.1.2）：回报本次执行消耗的 token 总数，供平台成本观测与选人调度使用；不回报不影响验收，行为与旧协议完全一致。
 
 实测响应（成功提交子任务 `2097935069198065667`）：
 
@@ -748,6 +751,7 @@ Content-Type: application/json; charset=utf-8
 | 请求 | `success` | 布尔；结果是否成功 | 契约 §2.5 |
 | 请求 | `output` | 产出正文，**末尾必须**附 `EXECUTION_RECORD` 块 | 契约 §2.5 |
 | 请求 | `finishReason` | 自由字符串，平台不强校验；建议 `completed`/`failed`/`timeout`/`blocked` | 契约 §2.5 |
+| 请求 | `tokenUsage` | **可选**（integer）；本次执行消耗的 token 总数，供平台成本观测（G-008 盲区收口） | 平台工具 schema（B5.1） |
 | 返回 | `ok` | 调用是否成功执行 | 契约 §2.5 · 实测 |
 | 返回 | `accepted` | 产出是否被采纳 | 契约 §2.5 · 实测 |
 | 返回 | `idempotent` | 是否为重复提交（采纳旧结果） | 契约 §2.5 · 实测 |
@@ -763,7 +767,7 @@ Content-Type: application/json; charset=utf-8
 - 在 `{提交产出}` 条件下，`{执行者}` **必须**在 `output` 末尾附完整 `EXECUTION_RECORD` 块，字段与约束见契约 §2.5；`SUMMARY` 必填，`VERIFICATION` 必须置于块的最后且原样粘贴命令输出，**不得**转述。
 - 在 `{产出含文件}` 条件下，**必须**先 `POST /api/artifacts/upload` 上传文件内容并在 `DELIVERABLES` 中列相对项目根路径；**不得**只声明路径而不上传，**不得**直连 MinIO（契约 §2.5）。
 - 在 `{被打回后重新提交}` 条件下，**必须**重新上传最新版附件；否则旧内容继续被核验，形成打回循环（契约 §2.5）。
-- 提交呈现限额：`output` 以 4000 字符摘要注入核验，附件每份 8000 字符（契约 §2.5）。在 `{产出超过限额}` 条件下，**必须**把契约性内容前置并让 `EXECUTION_RECORD` 落在 4000 字符内；做不到的后果：核验侧读不到 `VERIFICATION`，按证据不足驳回。
+- 提交呈现限额：`output` 摘要与附件每份**均以 64000 字符**注入核验、总量 200000 字符（契约 §2.5；**2026-10-03 由 4000/8000 上调**）。正常产出远低于上限、**不会触发截断**；极端超长被截断时建议把契约性内容前置。做不到的后果：核验侧读不到被截断的 `VERIFICATION`，按证据不足驳回。
 
 ### 3.3 成功与失败判定
 
@@ -973,7 +977,7 @@ checkOut 后 getDepsSummary: {"id":1,"result":{"subTaskId":"2097935069198065665"
 | 返回 `accepted=true, idempotent=true` 但产出未更新 | 核对返回的 `resultId` 与上一轮是否相同 | 平台判定为重复提交，采纳旧结果（契约 §7） | **必须**换新 `resultId` 重提；旧产出不会被写入 |
 | 提交后长时间无核验消息 | 每 15 秒 `pullTasks` 轮询，最多 8 轮 | 出现 `sub_task.approved` / `sub_task.rejected` / `sub_task.rework` 之一（契约 §2.5） | 超过窗口仍无消息 → 用 `getById` 查状态；状态未推进则 `reportBlocked` |
 | 核验驳回但看不出原因 | `GET /api/reviews?subTaskId={id}` 取 `issues` / `comment` / `score` | 给出可执行的缺陷定位（契约 §2.4） | 按意见修正；`issues` 为空或不可操作 → 升级 |
-| 驳回意见要求交完整产出，但核验侧看不到 | 检查 `output` 是否超过 4000 字符、附件是否超过 8000 字符（契约 §2.5） | 超限后核验侧读不到 `VERIFICATION` 与后续章节 | **必须**把契约性内容前置并重新上传附件；**不得**只改本地文件不重传 |
+| 驳回意见要求交完整产出，但核验侧看不到 | 检查 `output` 与附件是否超过注入限额（每份 64000 字符，契约 §2.5） | 超限后核验侧读不到被截断的 `VERIFICATION` 与后续章节 | **必须**把契约性内容前置并重新上传附件；**不得**只改本地文件不重传 |
 | 返工后仍被打回同一问题 | 确认已重新上传附件（REJECTED 后旧附件全部失效，契约 §2.5） | 新版本成为唯一 ACTIVE 附件 | 未重传时**必须**重传；已重传仍打回 → 升级 |
 
 #### 5.2.4 心跳 / 租约异常
@@ -1013,7 +1017,7 @@ checkOut 后 getDepsSummary: {"id":1,"result":{"subTaskId":"2097935069198065665"
 
 | 编号 | 条目 | 下游义务 |
 |---|---|---|
-| TBD-05-1 | 核验 Prompt 中附件与 `output` 的实际注入形态（已知限额 8000/4000 字符，见契约 §2.5） | 描述“产出不可见”类故障时**必须**引用契约限额，**不得**编造其它数值 |
+| TBD-05-1 | 核验 Prompt 中附件与 `output` 的实际注入形态（已知限额每份 64000 字符 / 总量 200000 字符，见契约 §2.5） | 描述“产出不可见”类故障时**必须**引用契约限额，**不得**编造其它数值 |
 | TBD-05-2 | 死信再派单的授权范围（哪个角色可调用） | **不得**声称执行者可自行再派单 |
 | TBD-05-3 | 各故障的重试计数是否由平台持久化 | **不得**依赖平台计数；**必须**由执行者自行计数并按 3 次止损 |
 

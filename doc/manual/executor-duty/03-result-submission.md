@@ -14,8 +14,10 @@ POST {{BASE_URL}}/api/mcp/jsonrpc
 Authorization: Bearer <API_KEY>
 Content-Type: application/json; charset=utf-8
 
-{"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"submitResult","arguments":{"subTaskId":2097935069198065667,"resultId":"subTask-2097935069198065667-r1","success":true,"output":"<产出正文 + EXECUTION_RECORD 块>","finishReason":"completed"}}}
+{"jsonrpc":"2.0","method":"tools/call","id":1,"params":{"name":"submitResult","arguments":{"subTaskId":2097935069198065667,"resultId":"subTask-2097935069198065667-r1","success":true,"output":"<产出正文 + EXECUTION_RECORD 块>","finishReason":"completed","tokenUsage":12345}}}
 ```
+
+> `tokenUsage` 为**可选**字段（见 §3.1.2）：回报本次执行消耗的 token 总数，供平台成本观测与选人调度使用；不回报不影响验收，行为与旧协议完全一致。
 
 实测响应（成功提交子任务 `2097935069198065667`）：
 
@@ -34,6 +36,7 @@ Content-Type: application/json; charset=utf-8
 | 请求 | `success` | 布尔；结果是否成功 | 契约 §2.5 |
 | 请求 | `output` | 产出正文，**末尾必须**附 `EXECUTION_RECORD` 块 | 契约 §2.5 |
 | 请求 | `finishReason` | 自由字符串，平台不强校验；建议 `completed`/`failed`/`timeout`/`blocked` | 契约 §2.5 |
+| 请求 | `tokenUsage` | **可选**（integer）；本次执行消耗的 token 总数，供平台成本观测（G-008 盲区收口） | 平台工具 schema（B5.1） |
 | 返回 | `ok` | 调用是否成功执行 | 契约 §2.5 · 实测 |
 | 返回 | `accepted` | 产出是否被采纳 | 契约 §2.5 · 实测 |
 | 返回 | `idempotent` | 是否为重复提交（采纳旧结果） | 契约 §2.5 · 实测 |
@@ -49,7 +52,7 @@ Content-Type: application/json; charset=utf-8
 - 在 `{提交产出}` 条件下，`{执行者}` **必须**在 `output` 末尾附完整 `EXECUTION_RECORD` 块，字段与约束见契约 §2.5；`SUMMARY` 必填，`VERIFICATION` 必须置于块的最后且原样粘贴命令输出，**不得**转述。
 - 在 `{产出含文件}` 条件下，**必须**先 `POST /api/artifacts/upload` 上传文件内容并在 `DELIVERABLES` 中列相对项目根路径；**不得**只声明路径而不上传，**不得**直连 MinIO（契约 §2.5）。
 - 在 `{被打回后重新提交}` 条件下，**必须**重新上传最新版附件；否则旧内容继续被核验，形成打回循环（契约 §2.5）。
-- 提交呈现限额：`output` 以 4000 字符摘要注入核验，附件每份 8000 字符（契约 §2.5）。在 `{产出超过限额}` 条件下，**必须**把契约性内容前置并让 `EXECUTION_RECORD` 落在 4000 字符内；做不到的后果：核验侧读不到 `VERIFICATION`，按证据不足驳回。
+- 提交呈现限额：`output` 摘要与附件每份**均以 64000 字符**注入核验、总量 200000 字符（契约 §2.5；**2026-10-03 由 4000/8000 上调**）。正常产出远低于上限、**不会触发截断**；极端超长被截断时建议把契约性内容前置。做不到的后果：核验侧读不到被截断的 `VERIFICATION`，按证据不足驳回。
 
 ## 3.3 成功与失败判定
 

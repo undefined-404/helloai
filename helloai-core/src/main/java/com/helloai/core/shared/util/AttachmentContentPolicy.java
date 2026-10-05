@@ -18,13 +18,21 @@ public final class AttachmentContentPolicy {
     private AttachmentContentPolicy() {
     }
 
-    /** 执行产出摘要上限（字符）：超限截断并加省略号，供核验/报告装配摘要口径使用。 */
-    public static final int OUTPUT_SUMMARY_LIMIT = 4000;
+    /** 执行产出摘要上限（字符）：超限截断并加省略号，供核验/报告装配摘要口径使用。
+     *  <p>2026-10-03 上调：4000 → 64000。核验 Reviewer 走官方 DeepSeek（64K+ 上下文），
+     *  原 4000 把执行产出正文砍掉大半，导致「不可见内容不得补全」误判驳回、反复返工；
+     *  现按 64K 窗口留足 system/指令/输出余量，执行产出基本全量注入。 */
+    public static final int OUTPUT_SUMMARY_LIMIT = 64000;
 
-    /** 附件内容注入限额：每附件 8000 字符，超限截断并标注。 */
-    public static final int ATTACHMENT_CONTENT_PER_FILE_LIMIT = 8000;
-    /** 附件内容注入限额：总计 24000 字符，超限停止注入后续附件正文。 */
-    public static final int ATTACHMENT_CONTENT_TOTAL_LIMIT = 24000;
+    /** 附件内容注入限额：每附件 64000 字符，超限截断并标注。
+     *  <p>2026-10-03 上调：8000 → 64000。官方 DeepSeek 64K 上下文下，原 8000 是
+     *  自我阉割——普通交付物（如 1.4 万字符的整合稿）被从头砍掉后半段，尾部章节
+     *  （目录树/教程大纲/启动测试排障正文）对 Reviewer 不可见，直接诱发误判驳回。
+     *  现仅对真正的超大文件（&gt;64000 字符）才触发截断。 */
+    public static final int ATTACHMENT_CONTENT_PER_FILE_LIMIT = 64000;
+    /** 附件内容注入限额：总计 200000 字符，超限停止注入后续附件正文。
+     *  <p>2026-10-03 上调：24000 → 200000。留足 64K 上下文下的 system prompt/指令/输出空间。 */
+    public static final int ATTACHMENT_CONTENT_TOTAL_LIMIT = 200000;
 
     /** 文本族 MIME 精确值集（text/* 前缀另判）：命中才允许注入附件正文。 */
     public static final Set<String> TEXTUAL_MIME_EXACT = Set.of(

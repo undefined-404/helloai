@@ -43,9 +43,16 @@ public interface McpToolService {
                                         String fileName, String mimeType,
                                         Long fileSize, String storageUrl);
 
-    /** 提交子任务执行结果（幂等）。 */
+    /**
+     * 提交子任务执行结果（幂等）。
+     *
+     * @param tokenUsage 本轮执行消耗的 token 总数（可选）。外部执行者回报后进入平台成本观测链路
+     *                   （{@code sub_task.context.lastExecution.tokens}）；为 null 时与旧协议行为完全一致
+     *                   ——本参数是 B5「Fleet 成本选人」的数据前置（G-008 盲区收口）。
+     */
     SubmitResultResult submitResult(Long agentId, Long subTaskId, String resultId,
-                                    Boolean success, String output, String error, String finishReason);
+                                    Boolean success, String output, String error, String finishReason,
+                                    Integer tokenUsage);
 
     /** 上报子任务阻塞。 */
     ReportBlockedResult reportBlocked(Long agentId, Long subTaskId, String reason);
@@ -344,7 +351,7 @@ public interface McpToolService {
             private String summary;
             /** 产出内容本体（物化附件优先，回退 context.lastExecution.output），可能为 null。 */
             private String content;
-            /** true=内容超过 4000 字符被截断。 */
+            /** true=内容超过 64000 字符被截断。 */
             private Boolean truncated;
             /** true=本条读到产出内容（content 非空）；false=前置未产出或无内容。 */
             private Boolean loaded;

@@ -10,8 +10,8 @@ import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
-import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
+import com.helloai.core.task.port.PlannerAgentRef;
 import com.helloai.core.task.port.TaskPlannerPickerPort;
 import com.helloai.core.shared.event.TaskAutoCompletedEvent;
 import com.helloai.core.shared.util.AttachmentContentPolicy;
@@ -61,11 +61,13 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
     private static final String PROMPT_TEMPLATE_PATH = "prompts/task-final-report.md";
     private static final String OUTLINE_TEMPLATE_PATH = "prompts/task-final-report-outline.md";
     /**
-     * 单个子任务产出喂给 LLM 的截断上限阶梯（字符）。首档 8000 面向大上下文模型保信息量；
-     * 命中模型 token 上限错误时逐档收紧重试，适配 8k 级小上下文模型（子任务多时
-     * 逐段截断挡不住总量爆炸，实测 13 段 ×8000 字符可达 4.5w token）。
+     * 单个子任务产出喂给 LLM 的截断上限阶梯（字符）。2026-10-03 由 {8000,2000,500} 上调为
+     * {64000,16000,4000}：所有 LLM 走官方 DeepSeek（64K 上下文），首档 8000 是自我阉割——
+     * 普通子任务产出（几万字）被硬截掉大半，与「整合报告须信息密度高、可独立交付」的目标冲突。
+     * 首档 64000 让正常任务全量注入；命中模型 token 上限错误时仍逐档收紧重试（降档语义保留，
+     * 兜底极端超大产出的场景，64K 并非无限）。
      */
-    private static final int[] SECTION_OUTPUT_LIMITS = {8000, 2000, 500};
+    private static final int[] SECTION_OUTPUT_LIMITS = {64000, 16000, 4000};
     private static final int TIMELINE_SUMMARY_LIMIT = 300;
     /** 大纲 JSON 解析器（record 反序列化；LLM 输出经模板约束为标准 JSON）。 */
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
@@ -222,7 +224,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
             throw new BizException("任务整合报告状态已变化（可能正在生成中），请稍候后再试: taskId=" + taskId);
         }
 
-        Agent planner = plannerPickerPort.pickForTask(taskId);
+        PlannerAgentRef planner = plannerPickerPort.pickForTask(taskId);
         // 3C 大纲先行两段式：先归并出纲（覆盖追溯表/主线论点/章节顺序/矛盾清单），
         // 失败/解析失败/开关关闭降级为 null，正文渲染走单次调用兜底（与开关引入前行为一致）
         OutlinePlan outline = planOutlineQuietly(task, sections, planner);
@@ -232,9 +234,9 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
             boolean lastTier = i == SECTION_OUTPUT_LIMITS.length - 1;
             String prompt = renderPrompt(task, sections, outline, limit, reviewFeedback);
             taskTimelineService.recordEvent(taskId, null, "task_final_report_llm_call_start",
-                    AgentRole.PLANNER, planner.getId(),
-                    Map.of("agentId", planner.getId(),
-                            "agentName", planner.getName(),
+                    AgentRole.PLANNER, planner.id(),
+                    Map.of("agentId", planner.id(),
+                            "agentName", planner.name(),
                             "sectionCount", sections.size(),
                             "sectionOutputLimit", limit));
             try {
@@ -246,7 +248,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
                         // G-016 契约层技能注入：与任务级 required_skills 同源（null 防御为 List.of()）
                         .skills(task.getRequiredSkills() != null ? task.getRequiredSkills() : List.of())
                         .build();
-                AgentResult result = platformAgentExecutionService.executeSync(planner, agentTask);
+                AgentResult result = platformAgentExecutionService.executeSync(planner.id(), agentTask);
                 if (result == null || !result.isSuccess()) {
                     throw new BizException("Planner LLM 调用失败: "
                             + (result != null ? result.getErrorMessage() : "null_result"));
@@ -261,7 +263,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
                 // 关闭时直接 DONE（无审查链存在，避免状态无人收敛）
                 boolean reviewEnabled = dispatchProperties.isAutoFinalReportReviewEnabled();
                 boolean persisted = finalReportPersistService.persistAndRequestReview(
-                        taskId, report, planner.getId(), now, attempt, sections.size(), reviewEnabled);
+                        taskId, report, planner.id(), now, attempt, sections.size(), reviewEnabled);
                 if (!persisted) {
                     // CAS 未命中 = 状态已被其它链路接管：本次写回与审查触发一并作废，
                     // 不覆盖别人刚写入的状态，也不误判 FAILED（PersistService 内已告警）
@@ -269,15 +271,15 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
                     return taskService.getById(taskId);
                 }
                 taskTimelineService.recordEvent(taskId, null, "task_final_report_generated",
-                        AgentRole.PLANNER, planner.getId(),
-                        Map.of("agentId", planner.getId(),
-                                "agentName", planner.getName(),
+                        AgentRole.PLANNER, planner.id(),
+                        Map.of("agentId", planner.id(),
+                                "agentName", planner.name(),
                                 "sectionCount", sections.size(),
                                 "sectionOutputLimit", limit,
                                 "reportLength", report.length(),
                                 "reportSummary", summarize(report)));
                 log.info("任务整合报告生成完成: taskId={}, plannerAgentId={}, reportLength={}, sectionOutputLimit={}",
-                        taskId, planner.getId(), report.length(), limit);
+                        taskId, planner.id(), report.length(), limit);
                 // 回填 task_iteration 表（失败不阻断报告生成）
                 backfillIterationsQuietly(taskId, sections, planner);
                 return taskService.getById(taskId);
@@ -289,7 +291,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
                     continue;
                 }
                 taskTimelineService.recordEvent(taskId, null, "task_final_report_failed",
-                        AgentRole.PLANNER, planner.getId(),
+                        AgentRole.PLANNER, planner.id(),
                         Map.of("error", errMsg, "sectionOutputLimit", limit));
                 log.warn("任务整合报告生成失败: taskId={}", taskId, e);
                 // 最终失败置 FAILED，允许手动重试（避免 GENERATING 卡死无恢复口）
@@ -370,7 +372,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
      * 输出非 JSON/解析后章节为空/运行期异常）一律返回 null，由调用方降级为单次调用——
      * 大纲规划绝不阻断报告生成主链。
      */
-    private OutlinePlan planOutlineQuietly(Task task, List<SubTask> sections, Agent planner) {
+    private OutlinePlan planOutlineQuietly(Task task, List<SubTask> sections, PlannerAgentRef planner) {
         if (!dispatchProperties.isAutoFinalReportOutlineEnabled()) {
             return null;
         }
@@ -383,13 +385,13 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
                     // G-016 契约层技能注入：与正文生成同源
                     .skills(task.getRequiredSkills() != null ? task.getRequiredSkills() : List.of())
                     .build();
-            AgentResult result = platformAgentExecutionService.executeSync(planner, agentTask);
+            AgentResult result = platformAgentExecutionService.executeSync(planner.id(), agentTask);
             OutlinePlan plan = (result != null && result.isSuccess()
                     && result.getOutput() != null && !result.getOutput().isBlank())
                     ? parseOutline(result.getOutput()) : null;
             if (plan == null) {
                 taskTimelineService.recordEvent(task.getId(), null, "task_final_report_outline_failed",
-                        AgentRole.PLANNER, planner.getId(),
+                        AgentRole.PLANNER, planner.id(),
                         Map.of("error", result != null && !result.isSuccess()
                                 ? result.getErrorMessage() : "parse_failed_or_empty"));
                 log.warn("报告大纲规划失败，降级为单次调用: taskId={}, error={}", task.getId(),
@@ -398,12 +400,12 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
                 return null;
             }
             taskTimelineService.recordEvent(task.getId(), null, "task_final_report_outline_ready",
-                    AgentRole.PLANNER, planner.getId(),
-                    Map.of("agentId", planner.getId(), "agentName", planner.getName(),
+                    AgentRole.PLANNER, planner.id(),
+                    Map.of("agentId", planner.id(), "agentName", planner.name(),
                             "chapterCount", plan.sections().size(),
                             "mainThesisCount", plan.mainTheses() != null ? plan.mainTheses().size() : 0,
                             "conflictCount", plan.conflicts() != null ? plan.conflicts().size() : 0));
-            warnIfOutlineOrderUnchanged(task.getId(), planner.getId(), plan);
+            warnIfOutlineOrderUnchanged(task.getId(), planner.id(), plan);
             log.info("报告大纲规划完成: taskId={}, chapterCount={}", task.getId(), plan.sections().size());
             return plan;
         } catch (Exception e) {
@@ -829,14 +831,14 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
      * <p>报告生成成功后调用，把全部 DONE 子任务的执行迭代数据一次性固化到
      * task_iteration 表。回填失败仅记 timeline + 日志，不影响报告生成结果。</p>
      */
-    private void backfillIterationsQuietly(Long taskId, List<SubTask> sections, Agent planner) {
+    private void backfillIterationsQuietly(Long taskId, List<SubTask> sections, PlannerAgentRef planner) {
         try {
-            taskIterationService.backfillForTask(taskId, sections, planner);
+            taskIterationService.backfillForTask(taskId, sections, planner != null ? planner.id() : null);
         } catch (Exception e) {
             log.warn("task_iteration 回填失败（不影响报告生成）: taskId={}, err={}",
                     taskId, e.getMessage());
             taskTimelineService.recordEvent(taskId, null, "task_iteration_backfill_failed",
-                    AgentRole.PLANNER, planner != null ? planner.getId() : null,
+                    AgentRole.PLANNER, planner != null ? planner.id() : null,
                     Map.of("error", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
         }
     }

@@ -32,7 +32,6 @@ import com.helloai.core.agent.port.SubTaskCommandPort;
 import com.helloai.core.agent.port.SubTaskQueryPort;
 import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.port.TaskRunningSpecPort;
-import com.helloai.core.system.entity.*;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.AgentInboxService;
@@ -89,8 +88,15 @@ public class McpToolServiceImpl implements McpToolService {
     private final AgentDutyLeaseService agentDutyLeaseService;
     private final TaskRunningSpecPort taskRunningSpecPort;
 
-    /** 依赖产出单条内容截断上限（与 SubTaskExecutionService.DEP_CONTENT_MAX_CHARS 对齐，避免两处口径漂移）。 */
-    private static final int DEP_CONTENT_MAX_CHARS = 4000;
+    /**
+     * 依赖产出单条内容截断上限（与 SubTaskExecutionService.DEP_CONTENT_MAX_CHARS 对齐，避免两处口径漂移）。
+     *
+     * <p>2026-10-03 上调：4000 → 64000。所有 LLM 走官方 api-key（DeepSeek 64K~1M 上下文），
+     * 4000 对 64K 上下文是自我阉割——外部 agent 通过 getDepsSummary 读不到前置关键产出、
+     * 诱发幻觉，属纯沉默成本。与执行链侧 {@code AgentRuntimeContextAssembler.DEP_CONTENT_MAX_CHARS}
+     * 及核验/报告侧口径对齐，统一为「正常产出全量注入 + 极端超长兜底截断」。</p>
+     */
+    private static final int DEP_CONTENT_MAX_CHARS = 64000;
 
     /** 通知/评语摘要截断上限（收件箱 summary、review 摘要等）。 */
     private static final int SUMMARY_MAX_CHARS = 200;
@@ -236,6 +242,25 @@ public class McpToolServiceImpl implements McpToolService {
                 && (subTask.status() == SubTaskStatus.ASSIGNED
                     || subTask.status() == SubTaskStatus.IN_PROGRESS)) {
             heartbeatService.active(agentId);
+            // ★2026-10-03 修复「claim 成功却被超时回收」：自动派单已把任务推到 ASSIGNED，
+            // 此处幂等分支原样返回会让任务停留 ASSIGNED、update_time 不刷新，
+            // 被 AssignedSubTaskTimeoutTask 误判为「超时未领取」收回改派（真机复现：
+            // trae claim 成功 version=2，10 分钟后仍被 unclaimed_timeout_reassign 收回）。
+            // 认领成功即等价于「开始干活」——顺带推进 IN_PROGRESS（状态机合法转换，
+            // startSubTask 同款路径），刷新 update_time，让超时巡检不再扫到它。
+            if (subTask.status() == SubTaskStatus.ASSIGNED) {
+                subTaskCommandPort.start(subTaskId);
+                SubTaskSnapshot started = subTaskQueryPort.findById(subTaskId);
+                ClaimSubTaskResult result = new ClaimSubTaskResult();
+                result.setOk(true);
+                result.setClaimed(true);
+                result.setAssignedAgent(agentId);
+                result.setSubTaskId(subTaskId);
+                result.setVersion(started != null ? started.version() : subTask.version() + 1);
+                result.setDetail(buildSubTaskDetail(started != null ? started : subTask));
+                log.info("MCP 认领即开工（ASSIGNED→IN_PROGRESS）: subTaskId={}, agentId={}", subTaskId, agentId);
+                return result;
+            }
             ClaimSubTaskResult result = new ClaimSubTaskResult();
             result.setOk(true);
             result.setClaimed(true);
@@ -500,7 +525,8 @@ public class McpToolServiceImpl implements McpToolService {
 
     @Transactional(rollbackFor = Exception.class)
     public SubmitResultResult submitResult(Long agentId, Long subTaskId, String resultId,
-                                          Boolean success, String output, String error, String finishReason) {
+                                          Boolean success, String output, String error, String finishReason,
+                                          Integer tokenUsage) {
         assertAgentActive(agentId);
         assertToolEnabled(agentId, "submitResult");
         refreshDutyLease(agentId); // 结果提交顺带续租
@@ -556,7 +582,8 @@ public class McpToolServiceImpl implements McpToolService {
         report.setSuccess(success);
         report.setExecutorName("cli_client");
         report.setFinishReason(finishReason);
-        report.setTokenUsage(null);
+        // B5.1（G-008 盲区收口）：外部执行者回报的 token 原样入链路（null = 旧协议，行为不变）
+        report.setTokenUsage(tokenUsage);
         report.setOutput(output);
         report.setError(error);
 

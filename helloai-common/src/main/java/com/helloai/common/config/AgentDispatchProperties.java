@@ -98,20 +98,25 @@ public class AgentDispatchProperties {
     private int autoReviewMaxRework = 3;
 
     /**
-     * 自动核验重复失败短路开关（P-1 防御层 A2-2，2026-09-30）。
+     * 自动核验重复失败短路开关（P-1 防御层 A2-2，2026-09-30；判据 2026-10-03 二次修订）。
      *
-     * <p>开启后：本轮驳回的 issues 与上一轮高度相似（相似度 ≥
-     * {@link #autoReviewRepeatFailureSimilarity}）且评分未提升时，判为「结构性失败」
-     * （同一输入连续驳回相同问题，重派结构上不可能成功——tku-e2e-01 空转 4 轮烧
-     * 346K tokens 后仍进死信）——不再触发返工重派，直接转 DEAD_LETTER 待人工。
-     * 默认 true。</p>
+     * <p>开启后：「本轮驳回的 issues 与上一轮高度相似（相似度 ≥
+     * {@link #autoReviewRepeatFailureSimilarity}）」<b>且</b>「评分未提升」两者<b>同时成立</b>时，
+     * 判为「结构性失败」（同一输入连续驳回相同问题，重派结构上不可能成功）——
+     * 不再触发返工重派，直接转 DEAD_LETTER 待人工。默认 true。</p>
+     *
+     * <p><b>2026-10-03 修订原因</b>：原实现以「评分未提升」为单判据（相似度仅在 score 缺失时兜底），
+     * 因评分 1~5 粗粒度，连续 2→2 会误伤「问题性质已变、有实质进展」的返工（真机 687 连续两次误伤，
+     * round6/round8 相似度仅 0.17/0.24 却因分数停滞被判重复失败送死信，各靠人工打捞救回）。
+     * 现改为双条件、与本文档描述一致；真停滞场景改由返工预算（autoReviewMaxRework / attempt_total）兜底封顶。</p>
      */
     private boolean autoReviewRepeatFailureShortCircuit = true;
 
     /**
      * 重复失败相似度阈值（P-1 防御层 A2-2）：连续两轮驳回 issues 的字符 bigram
      * Jaccard 相似度，1.0 = 完全相同。默认 0.85——既容忍 LLM 措辞微漂移，又要求
-     * 两轮驳回实质同因；配合「评分未提升」联合判定防误伤进步中的返工。</p>
+     * 两轮驳回实质同因；与「评分未提升」联合判定（两者同时成立才短路）——
+     * 2026-10-03 起在 score 可读时也强制生效（此前仅 score 缺失时作兜底信号）。
      */
     private double autoReviewRepeatFailureSimilarity = 0.85;
 
@@ -154,6 +159,38 @@ public class AgentDispatchProperties {
     private double qualityWeight = 0.1;
 
     /**
+     * 成本画像回灌权重（B5.3 Fleet 成本选人，2026-10-03）。
+     *
+     * <p>用于 {@code AgentSelector} 选人排序：costRank（成本分档位，见
+     * {@link #costSampleLimit}）乘以本权重后，插入 <b>qualityRank 之后、score 之前</b>
+     * 参与比较——与 {@link #qualityWeight} 同为低权重起步防抖动。</p>
+     *
+     * <p><b>语义</b>：成本画像 = 该 Agent「最近 {@link #costSampleLimit} 次成功执行」
+     * 的 token 均值（越小越省）。候选集合内按 min-max 反向归一为 <b>1~5 档</b>
+     * （最省 = 5，最贵 = 1）；无成本数据记 <b>中立档</b>（不可比 ⇒ 不偏袒）；
+     * 候选内<b>有效样本 &lt; 2</b> 时成本维度整体不生效（无可比对象）。</p>
+     *
+     * <p><b>⚠️ 影响面（字典序，非加权求和）</b>：比较器是
+     * {@code dutyRank → accessTypeRank → qualityRank×w1 → costRank×w2 → score} 的链式
+     * {@code thenComparing}，因此 <b>qualityRank 档位不同时 costRank 不生效</b>；
+     * 且 {@code dutyRank} 为最高优先级档，成本/质量实际只在「同值班档」内起作用。</p>
+     *
+     * <p>默认 0.1；0 表示完全关闭成本分参与排序（与接入前行为一致）。</p>
+     */
+    private double costWeight = 0.1;
+
+    /**
+     * 成本画像取样条数：最近 N 次<b>成功执行</b>的 token 均值（B5.3）。
+     *
+     * <p>数据源 {@code agent_execution_record}（{@code status='SUCCESS'} 且
+     * {@code token_usage IS NOT NULL}，按 {@code id DESC} 取最近 N 条）。</p>
+     *
+     * <p>默认 5——对近期模型/负载变化敏感，同时保证样本量可控；
+     * 外部执行者的 token 由 MCP {@code submitResult} 可选参数回报（B5.1）。</p>
+     */
+    private int costSampleLimit = 5;
+
+    /**
      * 自动核验证据硬检查的附件补偿等待（毫秒）。
      *
      * <p>产出物化在结果回报事务 afterCommit 同步执行，自动核验在 AFTER_COMMIT
@@ -165,7 +202,8 @@ public class AgentDispatchProperties {
 
     /**
      * 核验侧附件内容注入开关（方案3 F2）：开启后核验 Prompt 注入可直读物化附件正文
-     * （每附件 8000 字符、总计 24000 字符截断），Reviewer 基于真实文件内容核对
+     * （每附件 64000 字符、总计 200000 字符截断，2026-10-03 由 8000/24000 上调以匹配
+     * 官方 DeepSeek 64K 上下文），Reviewer 基于真实文件内容核对
      * "声称交付物 ↔ 文件正文 ↔ 验收标准"；关闭时仅注入附件清单（与开关引入前行为一致）。
      * 默认 true。
      */

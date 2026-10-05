@@ -2,13 +2,16 @@ package com.helloai.core.agent.service;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentExecutionProperties;
+import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.AgentLlmCredentialResolver;
 import com.helloai.core.agent.chat.AgentProviderResolver;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.event.AgentEventContextResolver;
+import com.helloai.core.agent.event.AgentEventQueryService;
 import com.helloai.core.agent.event.AgentEventRecorder;
+import com.helloai.core.agent.event.AgentEventTraceItem;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.runtime.AgentContext;
 import com.helloai.core.agent.runtime.AgentExecutionResult;
@@ -40,6 +43,7 @@ import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
@@ -50,7 +54,8 @@ import java.util.stream.Collectors;
  * 的装配职责（G-002 迁移后旧链入口退役，装配逻辑平移至此，行为等价）：</p>
  * <ul>
  *     <li>Prompt 装配：Task Running Spec 全局段 + 技能规范段 + 执行者历史画像段 + 依赖产出参考段
- *         + 重派恢复上下文 + 返工修正指引 + 产出回填要求（EXECUTION_RECORD / manifest 多文件协议）；</li>
+ *         + 重派恢复上下文（B3 Resume 起含事件流「已完成的事实」）+ 返工修正指引 + 产出回填要求
+ *         （EXECUTION_RECORD / manifest 多文件协议）；</li>
  *     <li>底层模型：按 provider + API Key 经 {@link AgentChatClientService#buildChatModel} 构建
  *         （mock 模式 MockChatModel；真实模式 Vault/Agent 级凭据解析，requireVault 校验同旧口径）；</li>
  *     <li>执行会话：LLM 调用前 {@code AgentSessionService.start}（step=2，中断点快照，best-effort），
@@ -83,8 +88,15 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class AgentRuntimeContextAssembler {
 
-    /** 单条前置产出注入的字符上限（迁移自 SubTaskExecutionServiceImpl，语义不变）。 */
-    private static final int DEP_CONTENT_MAX_CHARS = 4000;
+    /**
+     * 单条前置产出注入的字符上限（迁移自 SubTaskExecutionServiceImpl，语义不变）。
+     *
+     * <p>2026-10-03 上调：4000 → 64000。所有 LLM 走官方 api-key（DeepSeek 64K~1M 上下文），
+     * 4000 对 64K 上下文是自我阉割——硬切导致下游 executor 看不到前置关键产出、诱发幻觉，
+     * 属纯沉默成本。与核验侧（{@link AttachmentContentPolicy#ATTACHMENT_CONTENT_PER_FILE_LIMIT}）
+     * 及报告侧首档（64000）口径对齐，统一为「正常产出全量注入 + 极端超长兜底截断」。</p>
+     */
+    private static final int DEP_CONTENT_MAX_CHARS = 64000;
 
     private final AgentExecutionProperties executionProperties;
     private final AgentChatClientService agentChatClientService;
@@ -102,6 +114,12 @@ public class AgentRuntimeContextAssembler {
     private final SubTaskQueryPort subTaskQueryPort;
     private final ToolRegistry toolRegistry;
     private final AgentEventRecorder agentEventRecorder;
+    /**
+     * 事件流读侧契约（B3 Resume·Prompt 级结构化续接）：重派接续时从 {@code agent_event}
+     * 提取「已完成 Step 事实」（Step 槽位 + 已成功工具调用及结果摘要），供接续者避免重复。
+     * 与 {@link #agentEventRecorder}（写侧）同域（{@code core.agent.event}），依赖顺向。
+     */
+    private final AgentEventQueryService agentEventQueryService;
 
     /**
      * 装配 Runtime 真身执行上下文（消费侧在 startIfNeeded 之后、执行之前调用）。
@@ -135,7 +153,11 @@ public class AgentRuntimeContextAssembler {
         promptSection = mergeSpecSections(promptSection, historySection);
         DependencySectionResult dependencySection = buildDependencySection(subTask);
         AgentSessionService.InterruptedSession recovery = findRecoverySafely(subTaskId);
-        String userPrompt = buildUserPrompt(subTask, promptSection, dependencySection.section, recovery);
+        // B3 Resume：仅重派接续场景（recovery 命中）才查事件流，无中断时不产生额外查询
+        List<AgentEventTraceItem> completedTrace = recovery != null
+                ? findTraceSafely(subTaskId, recovery.turn()) : List.of();
+        String userPrompt = buildUserPrompt(subTask, promptSection, dependencySection.section, recovery,
+                completedTrace);
 
         // 2) 启用工具并集（命令 tools ∪ 命中技能 requiredTools，与旧链同语义）
         List<String> enabledTools = mergeTools(tools, resolved.requiredTools());
@@ -273,11 +295,34 @@ public class AgentRuntimeContextAssembler {
     }
 
     /**
+     * 事件流轨迹安全查询（B3 Resume）：优先取中断 Turn 的轨迹；该 Turn 无事件时退回全量轨迹
+     * （兼容事件埋点降级/旧路径）；查询异常一律降级为空列表（零注入零阻断）。
+     */
+    private List<AgentEventTraceItem> findTraceSafely(Long subTaskId, int turn) {
+        try {
+            List<AgentEventTraceItem> trace = agentEventQueryService.traceBySubTaskId(subTaskId);
+            if (trace == null || trace.isEmpty()) {
+                return List.of();
+            }
+            List<AgentEventTraceItem> sameTurn = trace.stream()
+                    .filter(item -> item.getTurn() != null && item.getTurn() == turn)
+                    .toList();
+            return sameTurn.isEmpty() ? trace : sameTurn;
+        } catch (Exception e) {
+            log.debug("事件流轨迹查询失败（best-effort 降级，零注入）: subTaskId={}, err={}",
+                    subTaskId, e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
      * 组装执行 Prompt：任务全局上下文 + 依赖产出参考（直接前置）+ 当前子任务四要素 +
-     * 执行恢复上下文（重派接续，仅命中时注入）+ 返工修正指引 + 回填要求。
+     * 执行恢复上下文（重派接续，仅命中时注入；B3 Resume 起附带事件流已完成事实）+
+     * 返工修正指引 + 回填要求。
      */
     private String buildUserPrompt(SubTaskSnapshot subTask, String runningSpecSection, String dependencySection,
-                                   AgentSessionService.InterruptedSession recovery) {
+                                   AgentSessionService.InterruptedSession recovery,
+                                   List<AgentEventTraceItem> completedTrace) {
         StringBuilder sb = new StringBuilder();
 
         // 任务全局上下文（Task Running Spec）
@@ -327,7 +372,8 @@ public class AgentRuntimeContextAssembler {
                 + "历史兼容行为不得在未声明的情况下「优化」移除。\n");
 
         // 执行恢复上下文（N-007 B1）：重派接续时注入上一次被中断尝试的摘要
-        appendRecoveryContext(sb, recovery);
+        // + B3 Resume：附带事件流「已完成的事实」，明确接续者无需重复的工作
+        appendRecoveryContext(sb, recovery, completedTrace);
 
         // 返工上下文：上次提交被审核驳回，需参考驳回意见修正
         appendReworkContext(sb, subTask);
@@ -364,8 +410,19 @@ public class AgentRuntimeContextAssembler {
         return sb.toString();
     }
 
-    /** 执行恢复上下文注入（N-007 B1 prompt 续接）：重派后以「接续者」视角重新完成任务；无中断摘要零注入。 */
-    private void appendRecoveryContext(StringBuilder sb, AgentSessionService.InterruptedSession recovery) {
+    /**
+     * 执行恢复上下文注入（N-007 B1 prompt 续接 + B3 Resume 事件流事实）：
+     * 重派后以「接续者」视角重新完成任务；无中断摘要零注入。
+     *
+     * <p><b>Resume 语义边界</b>：本方法提供的是 <b>Prompt 级结构化续接</b>——把「已完成的事实」
+     * 以结构化清单注入接续期 prompt，由接续者自行避免重复；<b>并非</b> ADR-001 定义的
+     * Step 级续跑（「不重跑已成功的 Step」需 AgentLoop 以既有 messages 为起点续跑 +
+     * Step 状态映射，ADR-001 §8 明确留待 Phase 2）。</p>
+     *
+     * @param completedTrace 中断 Turn 的事件流轨迹（B3 Resume 事实来源）；空/null 时零注入
+     */
+    private void appendRecoveryContext(StringBuilder sb, AgentSessionService.InterruptedSession recovery,
+                                       List<AgentEventTraceItem> completedTrace) {
         if (recovery == null) {
             return;
         }
@@ -430,7 +487,64 @@ public class AgentRuntimeContextAssembler {
                 }
             }
         }
+        // B3 Resume：事件流已完成事实（Step 槽位 + 已成功工具调用及结果摘要），无事件零注入
+        appendCompletedStepFacts(sb, completedTrace);
         sb.append("请以接续者身份结合上述上下文重新完成本任务，输出交付物并按协议回填，不要复述以上中断事实。\n");
+    }
+
+    /**
+     * 已完成事实块（B3 Resume·Prompt 级结构化续接）：从事件流提取「本 Turn 已记录的 Step
+     * 事件槽位」与「已成功工具调用及结果摘要」，向接续者显式声明「无需重复」的工作。
+     *
+     * <p>事实来源为 {@code agent_event}（ADR-001 Run/Turn/Step 模型的事件侧权威投影）；
+     * 工具结果摘要取 {@code TOOL_CALL_COMPLETED.payload.output}（埋点侧已截断 500 字符，
+     * 此处再取首行限长防刷屏）。轨迹为空时零注入，不产出空标题。</p>
+     */
+    private void appendCompletedStepFacts(StringBuilder sb, List<AgentEventTraceItem> completedTrace) {
+        if (completedTrace == null || completedTrace.isEmpty()) {
+            return;
+        }
+        List<AgentEventTraceItem> toolCompletions = completedTrace.stream()
+                .filter(item -> AgentEventType.TOOL_CALL_COMPLETED.code().equals(item.getEventType()))
+                .toList();
+        List<String> stepTypes = completedTrace.stream()
+                .map(AgentEventTraceItem::getEventType)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (stepTypes.isEmpty() && toolCompletions.isEmpty()) {
+            return;
+        }
+        sb.append("\n### 已完成的事实（无需重复）\n");
+        if (!stepTypes.isEmpty()) {
+            sb.append("- 本 Turn 已记录的 Step 事件：").append(String.join("、", stepTypes)).append("\n");
+        }
+        if (!toolCompletions.isEmpty()) {
+            sb.append("- 已成功工具调用（按执行序，结果摘要）：\n");
+            for (AgentEventTraceItem item : toolCompletions) {
+                Map<String, Object> payload = item.getPayload();
+                String tool = payload != null && payload.get("tool") != null
+                        ? String.valueOf(payload.get("tool")) : "unknown";
+                boolean failed = payload != null && Boolean.FALSE.equals(payload.get("success"));
+                String output = payload != null && payload.get("output") != null
+                        ? String.valueOf(payload.get("output")) : "";
+                sb.append("  - ").append(tool).append(failed ? "（失败）" : "（成功）");
+                String summary = summarizeLine(output);
+                if (!summary.isBlank()) {
+                    sb.append("：").append(summary);
+                }
+                sb.append("\n");
+            }
+        }
+    }
+
+    /** 取文本首个非空行并限长 120 字符（工具结果摘要渲染用）。 */
+    private static String summarizeLine(String text) {
+        if (text == null || text.isBlank()) {
+            return "";
+        }
+        String firstLine = text.strip().lines().findFirst().orElse("").strip();
+        return firstLine.length() <= 120 ? firstLine : firstLine.substring(0, 120) + "…";
     }
 
     /** 中断点（step）语义标签：2=LLM 前 / 4=LLM 完成回写前 / 其他原样。 */

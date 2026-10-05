@@ -9,7 +9,9 @@ import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.AgentLlmCredentialResolver;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.event.AgentEventQueryService;
 import com.helloai.core.agent.event.AgentEventRecorder;
+import com.helloai.core.agent.event.AgentEventTraceItem;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.runtime.AgentContext;
 import com.helloai.core.agent.runtime.AgentExecutionResult;
@@ -104,6 +106,9 @@ class AgentRuntimeContextAssemblerTest {
     private AgentEventRecorder agentEventRecorder;
 
     @Mock
+    private AgentEventQueryService agentEventQueryService;
+
+    @Mock
     private ChatModel mockChatModel;
 
     private AgentExecutionProperties properties;
@@ -118,7 +123,7 @@ class AgentRuntimeContextAssemblerTest {
         assembler = new AgentRuntimeContextAssembler(properties, agentChatClientService, agentLlmCredentialResolver,
                 taskTimelinePort, taskRunningSpecPort, agentSkillSpecService, agentQualityProfileService,
                 agentSessionService, conversationService, attachmentPort, subTaskQueryPort, toolRegistry,
-                agentEventRecorder);
+                agentEventRecorder, agentEventQueryService);
     }
 
     // #region 状态守卫
@@ -303,7 +308,7 @@ class AgentRuntimeContextAssemblerTest {
         }
 
         @Test
-        @DisplayName("依赖段：前置内容装载 + 超 4000 字符截断 + 统计进 timeline")
+        @DisplayName("依赖段：前置内容装载 + 超 64000 字符截断 + 统计进 timeline")
         void shouldBuildDependencySectionWithTruncation() {
             SubTaskFixture subTask = subTask();
             subTask.setDependsOn(List.of(7L));
@@ -311,7 +316,7 @@ class AgentRuntimeContextAssemblerTest {
             dep.setId(7L);
             dep.setTitle("上游子任务");
             dep.setStatus(SubTaskStatus.DONE);
-            dep.setContext(Map.of("lastExecution", Map.of("output", "x".repeat(5000))));
+            dep.setContext(Map.of("lastExecution", Map.of("output", "x".repeat(70000))));
             when(subTaskQueryPort.listByIds(anyList())).thenReturn(List.of(dep.toSnapshot()));
 
             String prompt = invokeAssemble(subTask, agent(), List.of(), List.of()).getUserPrompt();
@@ -319,7 +324,7 @@ class AgentRuntimeContextAssemblerTest {
             assertThat(prompt)
                     .contains("## 依赖产出参考（直接前置）")
                     .contains("### 前置 1：上游子任务（状态：DONE）")
-                    .contains("[TRUNCATED] shown=4000 total=5000 reason=dep_content_limit")
+                    .contains("[TRUNCATED] shown=64000 total=70000 reason=dep_content_limit")
                     .contains("必须在交付物中显式声明缺失项");
             Map<String, Object> payload = captureTimelinePayload("sub_task_spec_context_loaded");
             assertThat(payload)
@@ -369,12 +374,12 @@ class AgentRuntimeContextAssemblerTest {
             AttachmentRef appendix = new AttachmentRef(2L, "appendix.md", null, null, null, null, true);
             AttachmentRef main = new AttachmentRef(1L, "main.md", null, null, null, null, true);
             when(attachmentPort.listActive(7L)).thenReturn(List.of(appendix, main));
-            // 近似 tku-e2e-01 真实规模：主文件 7809 + 附录 19294，拼接 27,103 字符——
+            // 放大到超 64000 预算：主文件 80000 + 附录 19294 ≈ 99K 字符——
             // 修复前单点截断 4000 时附录整体不可见（审计 §15.4）
             when(attachmentPort.loadContent(2L))
                     .thenReturn("A".repeat(19294).getBytes(java.nio.charset.StandardCharsets.UTF_8));
             when(attachmentPort.loadContent(1L))
-                    .thenReturn("M".repeat(7809).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    .thenReturn("M".repeat(80000).getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
             String prompt = invokeAssemble(subTask, agent(), List.of(), List.of()).getUserPrompt();
 
@@ -401,14 +406,14 @@ class AgentRuntimeContextAssemblerTest {
             dep.setId(7L);
             dep.setTitle("上游子任务");
             dep.setStatus(SubTaskStatus.DONE);
-            // 换行在 3500（回退窗口 floor=3488 与上限 4000 之间）→ 截点回退到 3500
-            dep.setContext(Map.of("lastExecution", Map.of("output", "x".repeat(3500) + "\n" + "y".repeat(2000))));
+            // 换行在 63800（回退窗口 floor=63488 与上限 64000 之间）→ 截点回退到 63800
+            dep.setContext(Map.of("lastExecution", Map.of("output", "x".repeat(63800) + "\n" + "y".repeat(3000))));
             when(subTaskQueryPort.listByIds(anyList())).thenReturn(List.of(dep.toSnapshot()));
 
             String prompt = invokeAssemble(subTask, agent(), List.of(), List.of()).getUserPrompt();
 
             assertThat(prompt)
-                    .contains("[TRUNCATED] shown=3500 total=5501 reason=dep_content_limit")
+                    .contains("[TRUNCATED] shown=63800 total=66801 reason=dep_content_limit")
                     .doesNotContain("y".repeat(100));
         }
 
@@ -481,6 +486,60 @@ class AgentRuntimeContextAssemblerTest {
             assertThat(prompt)
                     .contains("上次循环进度：已完成 2 轮 LLM 调用、3 次工具执行")
                     .contains("已执行工具：pullTasks、submitResult");
+        }
+
+        @Test
+        @DisplayName("事件流事实注入：渲染已完成 Step 槽位与工具结果摘要（B3 Resume）")
+        void shouldInjectCompletedFactsFromEventTrace() {
+            SubTaskFixture subTask = subTask();
+            when(agentSessionService.findLatestInterrupted(22L)).thenReturn(new AgentSessionService.InterruptedSession(
+                    100L, 11L, 2, 4, "FAILED", "llm timeout", Map.of(
+                            "loop", Map.of("iteration", 2, "toolCallCount", 1,
+                                    "executedTools", List.of("pullTasks")))));
+            when(agentEventQueryService.traceBySubTaskId(22L)).thenReturn(List.of(
+                    AgentEventTraceItem.builder().turn(2).step(2).eventType("context_built").build(),
+                    AgentEventTraceItem.builder().turn(2).step(3).eventType("tool_call_started").build(),
+                    AgentEventTraceItem.builder().turn(2).step(4).eventType("tool_call_completed")
+                            .payload(Map.of("tool", "pullTasks", "success", true,
+                                    "output", "任务列表已拉取\n第二行忽略")).build()));
+
+            String prompt = invokeAssemble(subTask, agent(), List.of(), List.of()).getUserPrompt();
+
+            assertThat(prompt)
+                    .contains("### 已完成的事实（无需重复）")
+                    .contains("本 Turn 已记录的 Step 事件：context_built、tool_call_started、tool_call_completed")
+                    .contains("已成功工具调用（按执行序，结果摘要）")
+                    .contains("pullTasks（成功）：任务列表已拉取")
+                    .doesNotContain("第二行忽略");
+        }
+
+        @Test
+        @DisplayName("事件流为空：不渲染已完成事实块（零注入）")
+        void shouldSkipCompletedFactsWhenTraceEmpty() {
+            SubTaskFixture subTask = subTask();
+            when(agentSessionService.findLatestInterrupted(22L)).thenReturn(new AgentSessionService.InterruptedSession(
+                    100L, 11L, 1, 4, "FAILED", "boom", Map.of()));
+
+            String prompt = invokeAssemble(subTask, agent(), List.of(), List.of()).getUserPrompt();
+
+            assertThat(prompt)
+                    .contains("## 执行恢复上下文（接续执行）")
+                    .doesNotContain("### 已完成的事实");
+        }
+
+        @Test
+        @DisplayName("事件流查询异常：降级零注入，恢复上下文照常渲染")
+        void shouldDegradeWhenTraceQueryThrows() {
+            SubTaskFixture subTask = subTask();
+            when(agentSessionService.findLatestInterrupted(22L)).thenReturn(new AgentSessionService.InterruptedSession(
+                    100L, 11L, 1, 2, "ABORTED", "租约回收", Map.of()));
+            when(agentEventQueryService.traceBySubTaskId(anyLong())).thenThrow(new RuntimeException("db down"));
+
+            String prompt = invokeAssemble(subTask, agent(), List.of(), List.of()).getUserPrompt();
+
+            assertThat(prompt)
+                    .contains("## 执行恢复上下文（接续执行）")
+                    .doesNotContain("### 已完成的事实");
         }
     }
 

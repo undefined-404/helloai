@@ -20,7 +20,7 @@
 注册为 REVIEWER（或 PLANNER）角色、接入方式 `API_KEY_LLM` 的 agent 会被平台**自动调用**做内容级核验：
 
 - 子任务提交后，平台按「任务级指定核验 agent → 首选 REVIEWER（API_KEY_LLM）→ 任意 REVIEWER（API_KEY_LLM）→ 回退 PLANNER（API_KEY_LLM）」选出核验 agent（`pickReviewerAgent`，代码实证）。
-- 平台以**核验 Prompt**直接调用你的模型：Prompt 含验收标准、交付物、执行产出与物化附件正文（每附件 8000 / 总计 24000 字符限额），模板为平台内 `subtask-review` 规则。
+- 平台以**核验 Prompt**直接调用你的模型：Prompt 含验收标准、交付物、执行产出与物化附件正文（**2026-10-03 起每附件 64000 / 总计 200000 字符限额**，由 8000/24000 上调以匹配官方 DeepSeek 64K 上下文；正常产出不会触发截断），模板为平台内 `subtask-review` 规则。
 - 你只需按 Prompt 完成审查并返回结论（APPROVED / REJECTED + 评分 + issues），平台自动落库 `review_record` 并推进子任务状态。
 - **你不消费收件箱**（API_KEY_LLM 的收件箱投递被平台跳过），**不需要 pullTasks 轮询、不需要 checkIn/心跳**（选人过滤对 API_KEY_LLM 豁免在线与心跳新鲜度检查）。
 - 入选必要条件（代码实证）：REVIEWER（或 PLANNER）角色 + `API_KEY_LLM` 接入类型 + Agent 状态 **ACTIVE** + 托管凭证已启用；任务级指定核验 agent 时还要求该 agent 可用（ACTIVE + API_KEY_LLM，否则回退自动选择）。

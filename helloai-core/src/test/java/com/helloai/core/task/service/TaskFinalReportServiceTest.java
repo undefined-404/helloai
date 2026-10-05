@@ -7,12 +7,10 @@ import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
 import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapper;
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentDispatchProperties;
-import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.FinalReportStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskStatus;
-import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
@@ -20,6 +18,7 @@ import com.helloai.core.shared.event.TaskAutoCompletedEvent;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.port.PlannerAgentRef;
 import com.helloai.core.task.port.TaskPlannerPickerPort;
 import com.helloai.core.task.service.TaskIterationService;
 import com.helloai.core.task.service.impl.FinalReportPersistService;
@@ -48,6 +47,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -154,13 +154,8 @@ class TaskFinalReportServiceTest {
         return attemptCaptor.getAllValues();
     }
 
-    private Agent planner() {
-        Agent agent = new Agent();
-        agent.setId(9L);
-        agent.setName("planner-llm");
-        agent.setRole(AgentRole.PLANNER);
-        agent.setAccessType(AgentAccessType.API_KEY_LLM);
-        return agent;
+    private PlannerAgentRef planner() {
+        return new PlannerAgentRef(9L, "planner-llm");
     }
 
     private SubTask doneSubTask(long id, String title, String output) {
@@ -193,7 +188,7 @@ class TaskFinalReportServiceTest {
     private String captureFinalPrompt() {
         ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
         verify(platformAgentExecutionService, atLeastOnce())
-                .executeSync(any(Agent.class), taskCaptor.capture());
+                .executeSync(anyLong(), taskCaptor.capture());
         List<AgentTask> calls = taskCaptor.getAllValues();
         return calls.get(calls.size() - 1).getUserPrompt();
     }
@@ -205,14 +200,14 @@ class TaskFinalReportServiceTest {
         when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
         when(subTaskQueryChain.list()).thenReturn(List.of(
                 doneSubTask(11L, "架构梳理", "# 架构梳理产出")));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("# 整合报告\n\n全局结论", "stop", "llm", 10));
 
         service.generate(TASK_ID);
 
         ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
         verify(platformAgentExecutionService, atLeastOnce())
-                .executeSync(any(Agent.class), taskCaptor.capture());
+                .executeSync(anyLong(), taskCaptor.capture());
         assertThat(taskCaptor.getValue().getUserPrompt())
                 .contains("调度分析").contains("架构梳理").contains("# 架构梳理产出");
         assertThat(taskCaptor.getValue().getContext()).containsEntry("scene", "task_final_report");
@@ -268,7 +263,7 @@ class TaskFinalReportServiceTest {
         when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
         when(subTaskQueryChain.list()).thenReturn(List.of(
                 doneSubTask(11L, "架构梳理", "# 架构梳理产出")));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.failure("provider timeout", "error", "llm"));
 
         assertThatThrownBy(() -> service.generate(TASK_ID))
@@ -288,10 +283,10 @@ class TaskFinalReportServiceTest {
         dispatchProperties.setAutoFinalReportOutlineEnabled(false);
         when(taskService.getById(TASK_ID)).thenReturn(doneTask());
         when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
-        // 产出超过第二档 2000 字符，确保重试 prompt 确实被收紧
+        // 产出超过第二档 16000 字符，确保重试 prompt 确实被收紧
         when(subTaskQueryChain.list()).thenReturn(List.of(
-                doneSubTask(11L, "架构梳理", "X".repeat(9000))));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                doneSubTask(11L, "架构梳理", "X".repeat(50000))));
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.failure(
                         "400 - Your request exceeded model token limit: 8192", "error", "llm"))
                 .thenReturn(AgentResult.success("# 整合报告", "stop", "llm", 10));
@@ -301,8 +296,8 @@ class TaskFinalReportServiceTest {
         ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
         // 共 2 次：①首档正文（token 超限）②降档重试成功
         verify(platformAgentExecutionService, org.mockito.Mockito.times(2))
-                .executeSync(any(Agent.class), taskCaptor.capture());
-        // 降档重试的 prompt 明显短于首档正文 prompt（截断从 8000 收紧到 2000）
+                .executeSync(anyLong(), taskCaptor.capture());
+        // 降档重试的 prompt 明显短于首档正文 prompt（截断从 64000 收紧到 16000）
         List<AgentTask> calls = taskCaptor.getAllValues();
         assertThat(calls.get(1).getUserPrompt().length())
                 .isLessThan(calls.get(0).getUserPrompt().length());
@@ -323,7 +318,7 @@ class TaskFinalReportServiceTest {
         when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
         when(subTaskQueryChain.list()).thenReturn(List.of(
                 doneSubTask(11L, "架构梳理", "# 架构梳理产出")));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.failure(
                         "400 - Your request exceeded model token limit: 8192", "error", "llm"));
 
@@ -332,7 +327,7 @@ class TaskFinalReportServiceTest {
                 .hasMessageContaining("token limit");
         // 3C 后共 4 次：①出纲调用（失败→降级）②③④ 三档阶梯全部尝试后才失败
         verify(platformAgentExecutionService, org.mockito.Mockito.times(4))
-                .executeSync(any(Agent.class), any(AgentTask.class));
+                .executeSync(anyLong(), any(AgentTask.class));
         verify(finalReportPersistService, never())
                 .persistAndRequestReview(any(), any(), any(), any(), anyInt(), anyInt(), anyBoolean());
         verify(taskTimelineService).recordEvent(
@@ -387,7 +382,7 @@ class TaskFinalReportServiceTest {
                 .hasMessageContaining("正在生成中");
         verify(plannerPickerPort, never()).pickForTask(any());
         verify(platformAgentExecutionService, never())
-                .executeSync(any(Agent.class), any(AgentTask.class));
+                .executeSync(anyLong(), any(AgentTask.class));
     }
 
     @Test
@@ -405,7 +400,7 @@ class TaskFinalReportServiceTest {
         // 前置拦截在 CAS 之前：入口 CAS 一次都不该发生（修复前 CAS 先置 GENERATING 再断言，竞态下会永久卡 GENERATING）
         verify(taskService, never()).update(any());
         verify(platformAgentExecutionService, never())
-                .executeSync(any(Agent.class), any(AgentTask.class));
+                .executeSync(anyLong(), any(AgentTask.class));
     }
 
     @Test
@@ -415,7 +410,7 @@ class TaskFinalReportServiceTest {
         when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
         when(subTaskQueryChain.list()).thenReturn(List.of(
                 doneSubTask(11L, "架构梳理", "# 架构梳理产出")));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.failure("provider timeout", "error", "llm"));
 
         assertThatThrownBy(() -> service.generate(TASK_ID))
@@ -450,7 +445,7 @@ class TaskFinalReportServiceTest {
         when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
         when(subTaskQueryChain.list()).thenReturn(List.of(
                 doneSubTask(11L, "架构梳理", "# 架构梳理产出")));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("# 整合报告", "stop", "llm", 10));
 
         service.generate(TASK_ID);
@@ -472,7 +467,7 @@ class TaskFinalReportServiceTest {
         List<Attachment> atts = new ArrayList<>();
         atts.add(textAttachment(201L, "detail.md", "附件完整正文内容"));
         when(attachmentService.listActive(11L)).thenReturn(atts);
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("# 整合报告", "stop", "llm", 10));
 
         service.generate(TASK_ID);
@@ -498,7 +493,7 @@ class TaskFinalReportServiceTest {
                         .addDeliverable("接口清单")
                         .addKeyDecision("采用异步触发")
                         .build());
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("# 整合报告", "stop", "llm", 10));
 
         service.generate(TASK_ID);
@@ -510,34 +505,27 @@ class TaskFinalReportServiceTest {
     }
 
     @Test
-    @DisplayName("多附件正文超生成层预算：块级截断保护上下文窗口，后续附件不注入")
+    @DisplayName("附件正文超生成层预算：块级截断保护上下文窗口，超限部分不注入")
     void shouldCapAttachmentLongTailBySectionLimit() {
         when(taskService.getById(TASK_ID)).thenReturn(doneTask());
         when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
         when(subTaskQueryChain.list()).thenReturn(List.of(
                 doneSubTask(11L, "架构梳理", "兜底文本")));
-        // 4 个附件各 9000 字符：附件层先按 AttachmentContentPolicy 预算处理（per-file 8000），
-        // 拼接结果仍超生成层首档 8000 → 块级截断，后续附件正文不注入（降档优先降附件正文）
-        // （先构造列表再 stub：避免 thenReturn 参数求值中嵌套 when() 触发 Mockito UnfinishedStubbing）
+        // 单个附件 70000 字符：超附件层 per-file 64000 → 先被附件层截到 64000，
+        // 拼接后仍超生成层首档 64000（含标题行开销）→ 块级截断，注入 [TRUNCATED] 标注
         List<Attachment> atts = new ArrayList<>();
-        atts.add(textAttachment(201L, "a.md", "A".repeat(9000)));
-        atts.add(textAttachment(202L, "b.md", "B".repeat(9000)));
-        atts.add(textAttachment(203L, "c.md", "C".repeat(9000)));
-        atts.add(textAttachment(204L, "d.md", "D".repeat(9000)));
+        atts.add(textAttachment(201L, "a.md", "A".repeat(70000)));
         when(attachmentService.listActive(11L)).thenReturn(atts);
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("# 整合报告", "stop", "llm", 10));
 
         service.generate(TASK_ID);
 
         String prompt = captureFinalPrompt();
-        // 首个附件正文已注入（附件优先口径）
+        // 附件正文已注入（附件优先口径）
         assertThat(prompt).contains("#### 附件：a.md");
         // 无执行记录时超限标注 [TRUNCATED] 完整内容见附件
         assertThat(prompt).contains("[TRUNCATED] 完整内容见附件。");
-        // 后续附件被生成层预算截断，不再逐文件注入（避免上下文爆炸）
-        assertThat(prompt).doesNotContain("#### 附件：b.md");
-        assertThat(prompt).doesNotContain("#### 附件：d.md");
     }
 
     @Test
@@ -567,7 +555,7 @@ class TaskFinalReportServiceTest {
         when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
         when(subTaskQueryChain.list()).thenReturn(List.of(
                 doneSubTask(11L, "架构梳理", "# 架构梳理产出")));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("# 整合报告", "stop", "llm", 10));
 
         service.generate(TASK_ID);
@@ -606,14 +594,14 @@ class TaskFinalReportServiceTest {
                 + "{\"title\":\"接口契约\",\"subTaskRefs\":[\"#2\",\"#1\"]},"
                 + "{\"title\":\"架构方案\",\"subTaskRefs\":[\"#1\"]}],"
                 + "\"conflicts\":[\"超时阈值口径不一致\"]}";
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(outlineJson, "stop", "llm", 10),
                         AgentResult.success("# 整合报告", "stop", "llm", 10));
 
         service.generate(TASK_ID);
 
         ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
-        verify(platformAgentExecutionService, times(2)).executeSync(any(Agent.class), taskCaptor.capture());
+        verify(platformAgentExecutionService, times(2)).executeSync(anyLong(), taskCaptor.capture());
         List<AgentTask> calls = taskCaptor.getAllValues();
         // 第 1 次：出纲调用（outline 模板，含子任务编号输入）
         assertThat(calls.get(0).getUserPrompt())
@@ -645,14 +633,14 @@ class TaskFinalReportServiceTest {
         when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
         when(subTaskQueryChain.list()).thenReturn(List.of(
                 doneSubTask(11L, "架构梳理", "# 架构产出")));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.failure("outline provider timeout", "error", "llm"),
                         AgentResult.success("# 整合报告", "stop", "llm", 10));
 
         service.generate(TASK_ID);
 
         ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
-        verify(platformAgentExecutionService, times(2)).executeSync(any(Agent.class), taskCaptor.capture());
+        verify(platformAgentExecutionService, times(2)).executeSync(anyLong(), taskCaptor.capture());
         // 第 2 次（正文渲染）走单次调用兜底：不含大纲注入段，产出按拓扑序拼接
         String prompt = taskCaptor.getAllValues().get(1).getUserPrompt();
         assertThat(prompt).doesNotContain("主线论点（执行摘要必须以此为准）")
@@ -666,14 +654,14 @@ class TaskFinalReportServiceTest {
         when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
         when(subTaskQueryChain.list()).thenReturn(List.of(
                 doneSubTask(11L, "架构梳理", "# 架构产出")));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("这不是 JSON，只是普通文本", "stop", "llm", 10),
                         AgentResult.success("# 整合报告", "stop", "llm", 10));
 
         service.generate(TASK_ID);
 
         ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
-        verify(platformAgentExecutionService, times(2)).executeSync(any(Agent.class), taskCaptor.capture());
+        verify(platformAgentExecutionService, times(2)).executeSync(anyLong(), taskCaptor.capture());
         assertThat(taskCaptor.getAllValues().get(1).getUserPrompt())
                 .doesNotContain("主线论点（执行摘要必须以此为准）");
     }
@@ -686,13 +674,13 @@ class TaskFinalReportServiceTest {
         when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
         when(subTaskQueryChain.list()).thenReturn(List.of(
                 doneSubTask(11L, "架构梳理", "# 架构产出")));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("# 整合报告", "stop", "llm", 10));
 
         service.generate(TASK_ID);
 
         verify(platformAgentExecutionService, times(1))
-                .executeSync(any(Agent.class), any(AgentTask.class));
+                .executeSync(anyLong(), any(AgentTask.class));
     }
 
     @Test
@@ -702,7 +690,7 @@ class TaskFinalReportServiceTest {
         when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
         when(subTaskQueryChain.list()).thenReturn(List.of(
                 doneSubTask(11L, "架构梳理", "# 架构产出")));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("# 整合报告", "stop", "llm", 10));
 
         service.generate(TASK_ID);
@@ -729,7 +717,7 @@ class TaskFinalReportServiceTest {
         when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
         when(subTaskQueryChain.list()).thenReturn(List.of(
                 doneSubTask(11L, "架构梳理", "# 架构产出")));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("# 整合报告", "stop", "llm", 10));
 
         // 监听器持 event.getAttempt()=2，同轮返工显式传 3（2 + 1）；无计数器可依赖
@@ -745,7 +733,7 @@ class TaskFinalReportServiceTest {
         when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
         when(subTaskQueryChain.list()).thenReturn(List.of(
                 doneSubTask(11L, "架构梳理", "# 架构产出")));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("# 整合报告", "stop", "llm", 10));
 
         service.generate(TASK_ID);
@@ -763,7 +751,7 @@ class TaskFinalReportServiceTest {
         when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
         when(subTaskQueryChain.list()).thenReturn(List.of(
                 doneSubTask(11L, "架构梳理", "# 架构产出")));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("# 整合报告", "stop", "llm", 10));
 
         service.generate(TASK_ID);
@@ -781,7 +769,7 @@ class TaskFinalReportServiceTest {
         when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
         when(subTaskQueryChain.list()).thenReturn(List.of(
                 doneSubTask(11L, "架构梳理", "# 架构产出")));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("# 整合报告", "stop", "llm", 10));
 
         // 第一次点击：CAS 拒绝（另一条路径正在生成）
@@ -802,7 +790,7 @@ class TaskFinalReportServiceTest {
         when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
         when(subTaskQueryChain.list()).thenReturn(List.of(
                 doneSubTask(11L, "架构梳理", "# 架构产出")));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("# 整合报告", "stop", "llm", 10));
 
         service.generate(TASK_ID);
@@ -822,23 +810,23 @@ class TaskFinalReportServiceTest {
         when(taskService.getById(TASK_ID)).thenReturn(doneTask());
         when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
         when(subTaskQueryChain.list()).thenReturn(List.of(
-                doneSubTask(11L, "架构梳理", "X".repeat(9000)),
+                doneSubTask(11L, "架构梳理", "X".repeat(40000)),
                 doneSubTask(12L, "接口设计", "YYYY")));
         String outlineJson = "{\"mainTheses\":[],"
                 + "\"sections\":["
                 + "{\"title\":\"接口规范\",\"subTaskRefs\":[\"#1\"]},"
                 + "{\"title\":\"架构方案\",\"subTaskRefs\":[\"#2\"]}],"
                 + "\"conflicts\":[]}";
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(outlineJson, "stop", "llm", 10),
                         AgentResult.success("# 整合报告", "stop", "llm", 10));
 
         service.generate(TASK_ID);
 
         ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
-        verify(platformAgentExecutionService, times(2)).executeSync(any(Agent.class), taskCaptor.capture());
+        verify(platformAgentExecutionService, times(2)).executeSync(anyLong(), taskCaptor.capture());
         String prompt = taskCaptor.getAllValues().get(1).getUserPrompt();
-        // 章 1 正文 9000 字符超每章预算 4000（首档 8000/2 章）→ 块级截断标注
+        // 章 1 正文 40000 字符超每章预算 32000（首档 64000/2 章）→ 块级截断标注
         assertThat(prompt).contains("[TRUNCATED] 完整内容见附件。");
         // 章 2 短正文完整注入，不受章 1 超长影响（每章预算独立）
         assertThat(prompt).contains("### 章节 2：架构方案（大纲归并主题）")
@@ -852,12 +840,12 @@ class TaskFinalReportServiceTest {
         when(taskService.getById(TASK_ID)).thenReturn(doneTask());
         when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
         when(subTaskQueryChain.list()).thenReturn(List.of(
-                doneSubTask(11L, "架构梳理", "X".repeat(9000)),
-                doneSubTask(12L, "链路设计", "Y".repeat(9000))));
+                doneSubTask(11L, "架构梳理", "X".repeat(70000)),
+                doneSubTask(12L, "链路设计", "Y".repeat(70000))));
         when(taskRunningSpecService.findRecord(TASK_ID, 11L)).thenReturn(
                 ExecutionRecord.builder().subTaskId(11L).summary("摘要A").build());
         // 12L 无记录
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("# 整合报告", "stop", "llm", 10));
 
         service.generate(TASK_ID);
@@ -880,7 +868,7 @@ class TaskFinalReportServiceTest {
         when(plannerPickerPort.pickForTask(TASK_ID)).thenReturn(planner());
         when(subTaskQueryChain.list()).thenReturn(List.of(
                 doneSubTask(11L, "架构梳理", "# 架构产出")));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("# 整合报告", "stop", "llm", 10));
 
         service.generate(TASK_ID);

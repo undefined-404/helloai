@@ -15,11 +15,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AttachmentContentPolicyTest {
 
     @Test
-    @DisplayName("限额常量锁定：摘要 4000 / 每附件 8000 / 总计 24000")
+    @DisplayName("限额常量锁定：摘要 64000 / 每附件 64000 / 总计 200000（2026-10-03 上调以匹配 64K 上下文）")
     void shouldLockLimitConstants() {
-        assertThat(AttachmentContentPolicy.OUTPUT_SUMMARY_LIMIT).isEqualTo(4000);
-        assertThat(AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT).isEqualTo(8000);
-        assertThat(AttachmentContentPolicy.ATTACHMENT_CONTENT_TOTAL_LIMIT).isEqualTo(24000);
+        assertThat(AttachmentContentPolicy.OUTPUT_SUMMARY_LIMIT).isEqualTo(64000);
+        assertThat(AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT).isEqualTo(64000);
+        assertThat(AttachmentContentPolicy.ATTACHMENT_CONTENT_TOTAL_LIMIT).isEqualTo(200000);
     }
 
     @Test
