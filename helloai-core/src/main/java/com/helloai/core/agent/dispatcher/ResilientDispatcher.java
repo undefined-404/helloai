@@ -9,6 +9,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.executor.AgentSelector.AgentSelectionConstraints;
 import io.github.resilience4j.core.ConfigurationNotFoundException;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.RequiredArgsConstructor;
@@ -267,8 +268,52 @@ public class ResilientDispatcher implements TaskDispatchPort {
             return;
         }
 
+        // 落 sub_task_dispatch_fallback 时间线（2026-10-05 修 804 根因③）：
+        // 此前 fallback 只 log.warn、不落 timeline —— 前端时间线只看得到「首选/preferred Agent」，
+        // 看不到「实际执行者」，用户选了 trae 却被静默换成内置 Agent 且无任何痕迹。
+        // 此处补 preferred → actual + reason 留痕，让「实际执行者」可观测。
+        recordDispatchFallback(agentId, alternative.getId(), subTaskId, t);
+
         log.info("熔断降级成功: originalAgentId={} → alternativeAgentId={}, subTaskId={}",
                 agentId, alternative.getId(), subTaskId);
         subTaskCommandPort.assignNext(alternative.getId(), subTaskId);
+    }
+
+    /**
+     * 落 {@code sub_task_dispatch_fallback} 时间线（preferred → actual + reason）。
+     *
+     * <p>best-effort：时间线写入失败只 warn，不阻断分配主链路。</p>
+     */
+    private void recordDispatchFallback(Long preferredAgentId, Long actualAgentId, Long subTaskId, Throwable t) {
+        try {
+            SubTaskSnapshot snap = subTaskQueryPort.findById(subTaskId);
+            if (snap == null) {
+                return;
+            }
+            taskTimelinePort.recordEvent(
+                    snap.taskId(),
+                    subTaskId,
+                    "sub_task_dispatch_fallback",
+                    AgentRole.SYSTEM,
+                    actualAgentId,
+                    Map.of(
+                            "preferredAgentId", preferredAgentId,
+                            "actualAgentId", actualAgentId,
+                            "reason", fallbackReason(t)));
+        } catch (Exception e) {
+            log.warn("落 sub_task_dispatch_fallback 时间线失败（不影响分配）: subTaskId={}, err={}",
+                    subTaskId, e.getMessage());
+        }
+    }
+
+    /** fallback 原因短码（供前端展示「为何换人」）。 */
+    private static String fallbackReason(Throwable t) {
+        if (t instanceof CallNotPermittedException) {
+            return "circuit_open";
+        }
+        if (t instanceof AgentUnavailableException) {
+            return "agent_unavailable";
+        }
+        return "dispatch_error";
     }
 }

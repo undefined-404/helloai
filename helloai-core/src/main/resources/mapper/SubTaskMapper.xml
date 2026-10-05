@@ -222,10 +222,16 @@
         及自动驳回返工（LOG-20260904-007：SubTaskServiceImpl.consumeReworkBudget 同款调用）；
         判定语义见 RetryPolicy.exceedsMax，超限由各入口转 DEAD_LETTER 待人工兜底。
         并发安全：UPDATE 同时满足 id + deleted；不依赖读后写。
+
+        V102（2026-10-05 修 804）：同批写入 last_attempt_time 作为退避窗口时钟。
+        退避时钟必须与「尝试」严格同源——只在本方法（唯一累加尝试处）写入，
+        updateById（block/resume/changeStatus/reset）一律不写，杜绝状态流转自我刷新时钟
+        导致「换人」被自己刚刷新的 update_time 拦截。
     -->
         <update id="incrementAttemptTotal">
         UPDATE sub_task
         SET attempt_total = COALESCE(attempt_total, 0) + 1,
+            last_attempt_time = #{now},
             update_time = #{now}
         WHERE id = #{subTaskId}
           AND deleted = 0
@@ -235,10 +241,14 @@
         V25 死信人工兜底（Phase 0 A3 起重置 attempt_total）：
         仅由 SubTaskDispatchService.redispatchDeadLetter 在人工指派前调用，
         保证重新投入调度链后熔断计数从头开始。
+
+        V102：同批清空 last_attempt_time —— 人工死信重派 = 用户开启新一轮，
+        退避时钟一并归零（否则新一轮首次重派会残留上一轮的退避窗口）。
     -->
     <update id="resetAttemptTotal">
         UPDATE sub_task
         SET attempt_total = 0,
+            last_attempt_time = NULL,
             update_time = #{now}
         WHERE id = #{subTaskId}
           AND deleted = 0

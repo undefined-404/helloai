@@ -110,6 +110,24 @@ public class SubTask extends BaseEntity {
     private Integer attemptTotal;
 
     /**
+     * 上次重派尝试时刻（G-015 B2.2 退避窗口时钟，V102）。
+     *
+     * <p><b>为什么独立于 {@code update_time}</b>（2026-10-05 修 804 换人静默失败）：
+     * 退避窗口原以 {@code update_time} 为时钟，但 {@code block()}/{@code resume()}/
+     * {@code changeStatus()}/{@code resetToPendingForDispatch()} 全走 {@code updateById}
+     * 会刷新 {@code update_time}——「换人」入口先 {@code block()} 再重派，闸门读到被自身
+     * 刷新的 now，{@code nextAllowed = now + 600s} 必然拦截。改绑本列后：</p>
+     * <ul>
+     *   <li>仅 {@code SubTaskMapper.incrementAttemptTotal} 原子写入（与 {@code attempt_total} 同批，单一权威）；</li>
+     *   <li>{@code insert}/{@code updateById} 的 SQL 显式不写本列，任何状态流转都不会自我刷新退避时钟；</li>
+     *   <li>退避闸门 {@code SubTaskDispatchServiceImpl.isReassignBlockedOrEscalate} 只读本列。</li>
+     * </ul>
+     *
+     * <p>NULL 表示从未重派过（或人工死信重派已清零），退避判断直接放行。</p>
+     */
+    private OffsetDateTime lastAttemptTime;
+
+    /**
      * 依赖的子任务 id 数组：同 Task 内的前置子任务，
      * 全部 DONE 后本任务才可被分发（ready 语义）；空数组=无依赖。
      *

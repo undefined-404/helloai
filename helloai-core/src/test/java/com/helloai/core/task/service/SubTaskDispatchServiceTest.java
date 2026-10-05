@@ -8,6 +8,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.entity.SubTask;
@@ -37,6 +38,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.inOrder;
@@ -172,25 +174,27 @@ class SubTaskDispatchServiceTest {
         subTask.setId(41L);
         subTask.setTaskId(51L);
 
-        Agent failedAgent = new Agent();
-        failedAgent.setId(11L);
-        failedAgent.setRole(AgentRole.EXECUTOR);
+        AgentProfileSnapshot failedAgent = AgentProfileSnapshot.builder()
+                .id(11L)
+                .role(AgentRole.EXECUTOR)
+                .build();
 
-        Agent fallbackAgent = new Agent();
-        fallbackAgent.setId(99L);
-        fallbackAgent.setName("llm-executor");
-        fallbackAgent.setRole(AgentRole.EXECUTOR);
-        fallbackAgent.setAccessType(AgentAccessType.API_KEY_LLM);
-        fallbackAgent.setStatus(AgentStatus.ACTIVE);
-        fallbackAgent.setOnlineStatus(AgentOnlineStatus.ONLINE);
-        fallbackAgent.setScore(100);
+        AgentProfileSnapshot fallbackAgent = AgentProfileSnapshot.builder()
+                .id(99L)
+                .name("llm-executor")
+                .role(AgentRole.EXECUTOR)
+                .accessType(AgentAccessType.API_KEY_LLM)
+                .status(AgentStatus.ACTIVE)
+                .onlineStatus(AgentOnlineStatus.ONLINE)
+                .score(100)
+                .build();
 
         when(subTaskService.resetToPendingForDispatch(
                 41L, Set.of(SubTaskStatus.ASSIGNED, SubTaskStatus.IN_PROGRESS,
                         SubTaskStatus.BLOCKED, SubTaskStatus.REWORK)))
                 .thenReturn(subTask);
-        when(agentService.getById(11L)).thenReturn(failedAgent);
-        when(agentService.listActive()).thenReturn(List.of(fallbackAgent));
+        when(agentService.getProfileById(11L)).thenReturn(failedAgent);
+        when(agentService.listActiveProfiles()).thenReturn(List.of(fallbackAgent));
 
         Long newAgentId = subTaskDispatchService.redispatchForFallback(41L, 11L, "consecutive_failure=5");
 
@@ -216,21 +220,23 @@ class SubTaskDispatchServiceTest {
         subTask.setId(42L);
         subTask.setTaskId(52L);
 
-        Agent failedAgent = new Agent();
-        failedAgent.setId(11L);
-        failedAgent.setRole(null);
+        AgentProfileSnapshot failedAgent = AgentProfileSnapshot.builder()
+                .id(11L)
+                .role(null)
+                .build();
 
-        Agent fallbackAgent = new Agent();
-        fallbackAgent.setId(99L);
-        fallbackAgent.setRole(AgentRole.EXECUTOR);
-        fallbackAgent.setAccessType(AgentAccessType.API_KEY_LLM);
-        fallbackAgent.setStatus(AgentStatus.ACTIVE);
-        fallbackAgent.setOnlineStatus(AgentOnlineStatus.ONLINE);
-        fallbackAgent.setScore(100);
+        AgentProfileSnapshot fallbackAgent = AgentProfileSnapshot.builder()
+                .id(99L)
+                .role(AgentRole.EXECUTOR)
+                .accessType(AgentAccessType.API_KEY_LLM)
+                .status(AgentStatus.ACTIVE)
+                .onlineStatus(AgentOnlineStatus.ONLINE)
+                .score(100)
+                .build();
 
         when(subTaskService.resetToPendingForDispatch(any(), any())).thenReturn(subTask);
-        when(agentService.getById(11L)).thenReturn(failedAgent);
-        when(agentService.listActive()).thenReturn(List.of(fallbackAgent));
+        when(agentService.getProfileById(11L)).thenReturn(failedAgent);
+        when(agentService.listActiveProfiles()).thenReturn(List.of(fallbackAgent));
 
         Long newAgentId = subTaskDispatchService.redispatchForFallback(42L, 11L, "reason");
 
@@ -245,13 +251,14 @@ class SubTaskDispatchServiceTest {
         subTask.setId(43L);
         subTask.setTaskId(53L);
 
-        Agent failedAgent = new Agent();
-        failedAgent.setId(11L);
-        failedAgent.setRole(AgentRole.EXECUTOR);
+        AgentProfileSnapshot failedAgent = AgentProfileSnapshot.builder()
+                .id(11L)
+                .role(AgentRole.EXECUTOR)
+                .build();
 
         when(subTaskService.resetToPendingForDispatch(any(), any())).thenReturn(subTask);
-        when(agentService.getById(11L)).thenReturn(failedAgent);
-        when(agentService.listActive()).thenReturn(List.of());  // 没有 LLM 候选
+        when(agentService.getProfileById(11L)).thenReturn(failedAgent);
+        when(agentService.listActiveProfiles()).thenReturn(List.of());  // 没有 LLM 候选
 
         assertThatThrownBy(() -> subTaskDispatchService.redispatchForFallback(43L, 11L, "reason"))
                 .isInstanceOf(BizException.class)
@@ -273,23 +280,25 @@ class SubTaskDispatchServiceTest {
         subTask.setTaskId(54L);
         subTask.setContent("实现 verify-order-expire.ps1 超时取消校验脚本，需启动服务执行");
 
-        Agent failedAgent = new Agent();
-        failedAgent.setId(11L);
-        failedAgent.setRole(AgentRole.EXECUTOR);
+        AgentProfileSnapshot failedAgent = AgentProfileSnapshot.builder()
+                .id(11L)
+                .role(AgentRole.EXECUTOR)
+                .build();
 
-        Agent fallbackAgent = new Agent();
-        fallbackAgent.setId(99L);
-        fallbackAgent.setRole(AgentRole.EXECUTOR);
-        fallbackAgent.setAccessType(AgentAccessType.API_KEY_LLM);
-        fallbackAgent.setStatus(AgentStatus.ACTIVE);
-        fallbackAgent.setOnlineStatus(AgentOnlineStatus.ONLINE);
-        fallbackAgent.setScore(100);
-        fallbackAgent.setCapabilities(Map.of("supportsMCP", false));
+        AgentProfileSnapshot fallbackAgent = AgentProfileSnapshot.builder()
+                .id(99L)
+                .role(AgentRole.EXECUTOR)
+                .accessType(AgentAccessType.API_KEY_LLM)
+                .status(AgentStatus.ACTIVE)
+                .onlineStatus(AgentOnlineStatus.ONLINE)
+                .score(100)
+                .localExecutionCapable(false)
+                .build();
 
         when(agentDispatchProperties.isFallbackSkipExecutionDense()).thenReturn(true);
         when(subTaskService.resetToPendingForDispatch(any(), any())).thenReturn(subTask);
-        when(agentService.getById(11L)).thenReturn(failedAgent);
-        when(agentService.listActive()).thenReturn(List.of(fallbackAgent));
+        when(agentService.getProfileById(11L)).thenReturn(failedAgent);
+        when(agentService.listActiveProfiles()).thenReturn(List.of(fallbackAgent));
 
         Long newAgentId = subTaskDispatchService.redispatchForFallback(44L, 11L, "consecutive_failure=5");
 
@@ -311,23 +320,25 @@ class SubTaskDispatchServiceTest {
         subTask.setTaskId(55L);
         subTask.setContent("启动服务并执行 .ps1 脚本");
 
-        Agent failedAgent = new Agent();
-        failedAgent.setId(11L);
-        failedAgent.setRole(AgentRole.EXECUTOR);
+        AgentProfileSnapshot failedAgent = AgentProfileSnapshot.builder()
+                .id(11L)
+                .role(AgentRole.EXECUTOR)
+                .build();
 
-        Agent fallbackAgent = new Agent();
-        fallbackAgent.setId(99L);
-        fallbackAgent.setRole(AgentRole.EXECUTOR);
-        fallbackAgent.setAccessType(AgentAccessType.API_KEY_LLM);
-        fallbackAgent.setStatus(AgentStatus.ACTIVE);
-        fallbackAgent.setOnlineStatus(AgentOnlineStatus.ONLINE);
-        fallbackAgent.setScore(100);
-        fallbackAgent.setCapabilities(Map.of("supportsMCP", true));
+        AgentProfileSnapshot fallbackAgent = AgentProfileSnapshot.builder()
+                .id(99L)
+                .role(AgentRole.EXECUTOR)
+                .accessType(AgentAccessType.API_KEY_LLM)
+                .status(AgentStatus.ACTIVE)
+                .onlineStatus(AgentOnlineStatus.ONLINE)
+                .score(100)
+                .localExecutionCapable(true)
+                .build();
 
         when(agentDispatchProperties.isFallbackSkipExecutionDense()).thenReturn(true);
         when(subTaskService.resetToPendingForDispatch(any(), any())).thenReturn(subTask);
-        when(agentService.getById(11L)).thenReturn(failedAgent);
-        when(agentService.listActive()).thenReturn(List.of(fallbackAgent));
+        when(agentService.getProfileById(11L)).thenReturn(failedAgent);
+        when(agentService.listActiveProfiles()).thenReturn(List.of(fallbackAgent));
 
         Long newAgentId = subTaskDispatchService.redispatchForFallback(45L, 11L, "reason");
 
@@ -344,22 +355,24 @@ class SubTaskDispatchServiceTest {
         subTask.setTaskId(56L);
         subTask.setContent("整理需求文档并输出分析结论");
 
-        Agent failedAgent = new Agent();
-        failedAgent.setId(11L);
-        failedAgent.setRole(AgentRole.EXECUTOR);
+        AgentProfileSnapshot failedAgent = AgentProfileSnapshot.builder()
+                .id(11L)
+                .role(AgentRole.EXECUTOR)
+                .build();
 
-        Agent fallbackAgent = new Agent();
-        fallbackAgent.setId(99L);
-        fallbackAgent.setRole(AgentRole.EXECUTOR);
-        fallbackAgent.setAccessType(AgentAccessType.API_KEY_LLM);
-        fallbackAgent.setStatus(AgentStatus.ACTIVE);
-        fallbackAgent.setOnlineStatus(AgentOnlineStatus.ONLINE);
-        fallbackAgent.setScore(100);
+        AgentProfileSnapshot fallbackAgent = AgentProfileSnapshot.builder()
+                .id(99L)
+                .role(AgentRole.EXECUTOR)
+                .accessType(AgentAccessType.API_KEY_LLM)
+                .status(AgentStatus.ACTIVE)
+                .onlineStatus(AgentOnlineStatus.ONLINE)
+                .score(100)
+                .build();
 
         when(agentDispatchProperties.isFallbackSkipExecutionDense()).thenReturn(true);
         when(subTaskService.resetToPendingForDispatch(any(), any())).thenReturn(subTask);
-        when(agentService.getById(11L)).thenReturn(failedAgent);
-        when(agentService.listActive()).thenReturn(List.of(fallbackAgent));
+        when(agentService.getProfileById(11L)).thenReturn(failedAgent);
+        when(agentService.listActiveProfiles()).thenReturn(List.of(fallbackAgent));
 
         Long newAgentId = subTaskDispatchService.redispatchForFallback(46L, 11L, "reason");
 
@@ -495,12 +508,13 @@ class SubTaskDispatchServiceTest {
         subTask.setStatus(SubTaskStatus.DEAD_LETTER);
         when(subTaskService.getById(83L)).thenReturn(subTask);
 
-        Agent agent = new Agent();
-        agent.setId(15L);
-        agent.setName("manual-agent");
-        // LOG-20260903-011：死信重派目标必须 EXECUTOR 角色
-        agent.setRole(AgentRole.EXECUTOR);
-        when(agentService.getById(15L)).thenReturn(agent);
+        AgentProfileSnapshot agent = AgentProfileSnapshot.builder()
+                .id(15L)
+                .name("manual-agent")
+                // LOG-20260903-011：死信重派目标必须 EXECUTOR 角色
+                .role(AgentRole.EXECUTOR)
+                .build();
+        when(agentService.getProfileById(15L)).thenReturn(agent);
 
         subTaskDispatchService.redispatchDeadLetter(83L, 15L);
 
@@ -544,11 +558,12 @@ class SubTaskDispatchServiceTest {
         subTask.setStatus(SubTaskStatus.DEAD_LETTER);
         when(subTaskService.getById(85L)).thenReturn(subTask);
 
-        Agent planner = new Agent();
-        planner.setId(16L);
-        planner.setName("planner-agent");
-        planner.setRole(AgentRole.PLANNER);
-        when(agentService.getById(16L)).thenReturn(planner);
+        AgentProfileSnapshot planner = AgentProfileSnapshot.builder()
+                .id(16L)
+                .name("planner-agent")
+                .role(AgentRole.PLANNER)
+                .build();
+        when(agentService.getProfileById(16L)).thenReturn(planner);
 
         assertThatThrownBy(() -> subTaskDispatchService.redispatchDeadLetter(85L, 16L))
                 .isInstanceOf(BizException.class)
@@ -567,22 +582,22 @@ class SubTaskDispatchServiceTest {
         return subTask;
     }
 
-    private Agent failedExecutor(long id) {
-        Agent failedAgent = new Agent();
-        failedAgent.setId(id);
-        failedAgent.setRole(AgentRole.EXECUTOR);
-        return failedAgent;
+    private AgentProfileSnapshot failedExecutor(long id) {
+        return AgentProfileSnapshot.builder()
+                .id(id)
+                .role(AgentRole.EXECUTOR)
+                .build();
     }
 
-    private Agent llmExecutor(long id) {
-        Agent fallbackAgent = new Agent();
-        fallbackAgent.setId(id);
-        fallbackAgent.setRole(AgentRole.EXECUTOR);
-        fallbackAgent.setAccessType(AgentAccessType.API_KEY_LLM);
-        fallbackAgent.setStatus(AgentStatus.ACTIVE);
-        fallbackAgent.setOnlineStatus(AgentOnlineStatus.ONLINE);
-        fallbackAgent.setScore(100);
-        return fallbackAgent;
+    private AgentProfileSnapshot llmExecutor(long id) {
+        return AgentProfileSnapshot.builder()
+                .id(id)
+                .role(AgentRole.EXECUTOR)
+                .accessType(AgentAccessType.API_KEY_LLM)
+                .status(AgentStatus.ACTIVE)
+                .onlineStatus(AgentOnlineStatus.ONLINE)
+                .score(100)
+                .build();
     }
 
     @Test
@@ -595,7 +610,7 @@ class SubTaskDispatchServiceTest {
                 TaskAgentPolicy.FallbackPolicy.NONE, null));
         when(taskService.getById(57L)).thenReturn(task);
         when(subTaskService.resetToPendingForDispatch(any(), any())).thenReturn(subTask);
-        when(agentService.getById(11L)).thenReturn(failedExecutor(11L));
+        when(agentService.getProfileById(11L)).thenReturn(failedExecutor(11L));
 
         Long newAgentId = subTaskDispatchService.redispatchForFallback(47L, 11L, "consecutive_failure=5");
 
@@ -608,7 +623,7 @@ class SubTaskDispatchServiceTest {
                         "previousAgentId", 11L));
         verify(subTaskService).markManualIntervention(
                 eq(47L), eq("fallback_skip_policy"), anyMap());
-        verify(agentService, never()).listActive();
+        verify(agentService, never()).listActiveProfiles();
         verify(taskDispatchPort, never()).assignNext(any(), any(), any());
     }
 
@@ -622,14 +637,14 @@ class SubTaskDispatchServiceTest {
                 null, TaskAgentPolicy.Difficulty.HIGH));
         when(taskService.getById(58L)).thenReturn(task);
         when(subTaskService.resetToPendingForDispatch(any(), any())).thenReturn(subTask);
-        when(agentService.getById(11L)).thenReturn(failedExecutor(11L));
+        when(agentService.getProfileById(11L)).thenReturn(failedExecutor(11L));
 
         Long newAgentId = subTaskDispatchService.redispatchForFallback(48L, 11L, "consecutive_failure=5");
 
         assertThat(newAgentId).isNull();
         verify(subTaskService).markManualIntervention(
                 eq(48L), eq("fallback_skip_policy"), anyMap());
-        verify(agentService, never()).listActive();
+        verify(agentService, never()).listActiveProfiles();
         verify(taskDispatchPort, never()).assignNext(any(), any(), any());
     }
 
@@ -643,9 +658,9 @@ class SubTaskDispatchServiceTest {
                 TaskAgentPolicy.FallbackPolicy.RESTRICTED, null));
         when(taskService.getById(59L)).thenReturn(task);
         when(subTaskService.resetToPendingForDispatch(any(), any())).thenReturn(subTask);
-        when(agentService.getById(11L)).thenReturn(failedExecutor(11L));
+        when(agentService.getProfileById(11L)).thenReturn(failedExecutor(11L));
         // 同角色 API_KEY_LLM 候选分数最高者为 99L，但不在白名单 [7L] 内
-        when(agentService.listActive()).thenReturn(List.of(llmExecutor(99L)));
+        when(agentService.listActiveProfiles()).thenReturn(List.of(llmExecutor(99L)));
 
         Long newAgentId = subTaskDispatchService.redispatchForFallback(49L, 11L, "reason");
 
@@ -669,8 +684,8 @@ class SubTaskDispatchServiceTest {
                 TaskAgentPolicy.FallbackPolicy.RESTRICTED, null));
         when(taskService.getById(60L)).thenReturn(task);
         when(subTaskService.resetToPendingForDispatch(any(), any())).thenReturn(subTask);
-        when(agentService.getById(11L)).thenReturn(failedExecutor(11L));
-        when(agentService.listActive()).thenReturn(List.of(llmExecutor(99L)));
+        when(agentService.getProfileById(11L)).thenReturn(failedExecutor(11L));
+        when(agentService.listActiveProfiles()).thenReturn(List.of(llmExecutor(99L)));
 
         Long newAgentId = subTaskDispatchService.redispatchForFallback(50L, 11L, "reason");
 
@@ -730,5 +745,157 @@ class SubTaskDispatchServiceTest {
         inOrder.verify(subTaskService).resume(53L);
         inOrder.verify(subTaskService).block(53L, "人工判定执行停滞，改派新执行者", null);
         verify(taskDispatchPort).assignNext(11L, 53L, null);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  804 修复：退避时钟改绑 last_attempt_time + 闸门拦截可观测 + 换人不被自身时钟拦截
+    // ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("退避时钟改绑 last_attempt_time：update_time 新鲜但从未累加 → 放行（不再被 update_time 误拦）")
+    void shouldNotBlockWhenUpdateTimeFreshButLastAttemptTimeNull() {
+        when(agentDispatchProperties.getMaxReassignAttempts()).thenReturn(5);
+
+        SubTask subTask = subTaskWithTaskId(71L, 81L);
+        subTask.setStatus(SubTaskStatus.BLOCKED);
+        subTask.setAttemptTotal(3);
+        // block()/changeStatus 会刷新 update_time；若闸门仍读 update_time 会被拦截
+        subTask.setUpdateTime(OffsetDateTime.now());
+        // 退避时钟为空（从未真正 incrementAttemptTotal）→ 不应拦截
+        subTask.setLastAttemptTime(null);
+        when(subTaskService.getById(71L)).thenReturn(subTask);
+        when(subTaskService.resetToPendingForDispatch(71L, Set.of(SubTaskStatus.BLOCKED)))
+                .thenReturn(subTask);
+
+        var result = subTaskDispatchService.dispatchBlockedSubTask(71L, 11L);
+
+        assertThat(result.applied()).isTrue();
+        verify(taskDispatchPort).assignNext(11L, 71L, null);
+    }
+
+    @Test
+    @DisplayName("退避窗口内（last_attempt_time 新鲜）→ 拦截 + 落 sub_task_redispatch_skipped（不再静默）")
+    void shouldBlockAndRecordSkipWhenWithinBackoffByLastAttemptTime() {
+        when(agentDispatchProperties.getMaxReassignAttempts()).thenReturn(5);
+
+        SubTask subTask = subTaskWithTaskId(72L, 82L);
+        subTask.setStatus(SubTaskStatus.BLOCKED);
+        subTask.setAttemptTotal(1);                       // 第 1 档退避 60s
+        subTask.setLastAttemptTime(OffsetDateTime.now()); // 刚累加 → 窗口内
+        when(subTaskService.getById(72L)).thenReturn(subTask);
+
+        var result = subTaskDispatchService.dispatchBlockedSubTask(72L, 11L);
+
+        assertThat(result.applied()).isFalse();
+        assertThat(result.reason()).isEqualTo("backoff");
+        assertThat(result.nextAllowed()).isNotNull();
+        // 退避不消耗预算、不改状态、不派发
+        verify(subTaskMapper, never()).incrementAttemptTotal(anyLong(), any());
+        verify(subTaskService, never()).resetToPendingForDispatch(anyLong(), any());
+        verify(taskDispatchPort, never()).assignNext(any(), any(), any());
+        // 可观测性：落 sub_task_redispatch_skipped（reason=backoff）
+        verify(taskTimelineService).recordEvent(
+                eq(82L), eq(72L), eq("sub_task_redispatch_skipped"), eq(AgentRole.SYSTEM), isNull(), anyMap());
+    }
+
+    @Test
+    @DisplayName("换人：退避时钟为空时不被自身刷新的 update_time 拦截（804 主因回归锁）")
+    void shouldRedispatchInProgressWithoutBeingBlockedBySelfRefreshedClock() {
+        when(agentDispatchProperties.getMaxReassignAttempts()).thenReturn(5);
+
+        SubTask subTask = subTaskWithTaskId(73L, 83L);
+        subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+        subTask.setAttemptTotal(3);
+        subTask.setUpdateTime(OffsetDateTime.now()); // block() 前置判定：这里若仍读 update_time 必然拦截
+        subTask.setLastAttemptTime(null);            // 退避时钟为空 → 放行
+        when(subTaskService.getById(73L)).thenReturn(subTask);
+        when(subTaskService.resetToPendingForDispatch(73L, Set.of(SubTaskStatus.BLOCKED)))
+                .thenReturn(subTask);
+
+        var result = subTaskDispatchService.redispatchInProgress(73L, 11L);
+
+        assertThat(result.applied()).isTrue();
+        verify(subTaskService).block(73L, "人工判定执行停滞，改派新执行者", null);
+        verify(taskDispatchPort).assignNext(11L, 73L, null);
+    }
+
+    @Test
+    @DisplayName("换人：确在退避窗口内 → 不改动状态（不 block）+ 返回 skipped + 落 skip 时间线")
+    void shouldRedispatchInProgressSkipWithoutBlockingWhenWithinBackoff() {
+        when(agentDispatchProperties.getMaxReassignAttempts()).thenReturn(5);
+
+        SubTask subTask = subTaskWithTaskId(74L, 84L);
+        subTask.setStatus(SubTaskStatus.IN_PROGRESS);
+        subTask.setAttemptTotal(2);                       // 第 2 档 180s
+        subTask.setLastAttemptTime(OffsetDateTime.now()); // 窗口内
+        when(subTaskService.getById(74L)).thenReturn(subTask);
+
+        var result = subTaskDispatchService.redispatchInProgress(74L, 11L);
+
+        assertThat(result.applied()).isFalse();
+        assertThat(result.reason()).isEqualTo("backoff");
+        // 关键：闸门判定在 block() 之前 → 被拦时不 block、不 resume、不派发
+        verify(subTaskService, never()).block(anyLong(), any(), any());
+        verify(subTaskService, never()).resume(anyLong());
+        verify(taskDispatchPort, never()).assignNext(any(), any(), any());
+        verify(taskTimelineService).recordEvent(
+                eq(84L), eq(74L), eq("sub_task_redispatch_skipped"), eq(AgentRole.SYSTEM), isNull(), anyMap());
+    }
+
+    @Test
+    @DisplayName("预算耗尽（熔断转死信）→ 拦截 + 落 sub_task_redispatch_skipped（reason=circuit_open）")
+    void shouldEscalateToDeadLetterAndRecordSkipWhenBudgetExhausted() {
+        when(agentDispatchProperties.getMaxReassignAttempts()).thenReturn(5);
+
+        SubTask subTask = subTaskWithTaskId(75L, 85L);
+        subTask.setStatus(SubTaskStatus.BLOCKED);
+        subTask.setAttemptTotal(5);
+        when(subTaskService.getById(75L)).thenReturn(subTask);
+
+        var result = subTaskDispatchService.dispatchBlockedSubTask(75L, 11L);
+
+        assertThat(result.applied()).isFalse();
+        assertThat(result.reason()).isEqualTo("circuit_open");
+        verify(subTaskService).changeStatus(eq(75L), eq(SubTaskStatus.DEAD_LETTER), isNull(), anyMap());
+        verify(taskTimelineService).recordEvent(
+                eq(85L), eq(75L), eq("sub_task_redispatch_skipped"), eq(AgentRole.SYSTEM), isNull(), anyMap());
+    }
+
+    @Test
+    @DisplayName("系统入口（超时回收）走熔断 → 仍落 sub_task_redispatch_skipped（reason=circuit_open，一次性）")
+    void shouldRecordSkipOnCircuitOpenFromSystemEntry() {
+        when(agentDispatchProperties.getMaxReassignAttempts()).thenReturn(5);
+
+        SubTask subTask = subTaskWithTaskId(76L, 86L);
+        subTask.setStatus(SubTaskStatus.ASSIGNED);
+        subTask.setAttemptTotal(5);
+        when(subTaskService.getById(76L)).thenReturn(subTask);
+
+        subTaskDispatchService.redispatchAssignedTimeout(76L, 11L, AgentRole.EXECUTOR);
+
+        verify(subTaskService).changeStatus(eq(76L), eq(SubTaskStatus.DEAD_LETTER), isNull(), anyMap());
+        verify(taskTimelineService).recordEvent(
+                eq(86L), eq(76L), eq("sub_task_redispatch_skipped"), eq(AgentRole.SYSTEM), isNull(), anyMap());
+        verify(taskDispatchPort, never()).assignNext(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("系统入口（超时回收）退避窗口内 → 不落 skip 事件（周期巡检防刷屏）")
+    void shouldNotRecordSkipOnBackoffFromSystemEntry() {
+        when(agentDispatchProperties.getMaxReassignAttempts()).thenReturn(5);
+
+        SubTask subTask = subTaskWithTaskId(77L, 87L);
+        subTask.setStatus(SubTaskStatus.ASSIGNED);
+        subTask.setAttemptTotal(1);
+        subTask.setLastAttemptTime(OffsetDateTime.now());
+        when(subTaskService.getById(77L)).thenReturn(subTask);
+
+        subTaskDispatchService.redispatchAssignedTimeout(77L, 11L, AgentRole.EXECUTOR);
+
+        // 退避窗口内：系统入口只静默跳过，不落 skip 事件、不派发、不改状态
+        verify(taskTimelineService, never()).recordEvent(
+                anyLong(), anyLong(), eq("sub_task_redispatch_skipped"), any(), any(), anyMap());
+        verify(subTaskService, never()).resetToPendingForDispatch(anyLong(), any());
+        verify(taskDispatchPort, never()).assignNext(any(), any(), any());
     }
 }

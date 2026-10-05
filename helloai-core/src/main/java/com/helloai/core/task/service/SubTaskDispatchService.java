@@ -3,7 +3,9 @@ package com.helloai.core.task.service;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.port.TaskDispatchPort;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.port.SubTaskView;
 
+import java.time.OffsetDateTime;
 import java.util.regex.Pattern;
 
 /**
@@ -16,9 +18,37 @@ import java.util.regex.Pattern;
 public interface SubTaskDispatchService {
 
     /**
-     * 对 BLOCKED 子任务执行重新调度。
+     * 重派/改派结果 —— 把「闸门拦截导致的静默跳过」显式化（2026-10-05 修 804）。
+     *
+     * <p>退避/熔断拦截不再返回 void 让调用方无从辨识：接口据此回传明确语义
+     * （{@code applied=false} + {@code reason} + {@code nextAllowed}），
+     * 同时闸门拦截会落 {@code sub_task_redispatch_skipped} 时间线。</p>
+     *
+     * @param applied     是否真正进入调度链（false=被闸门拦截，未改动子任务状态）
+     * @param reason      拦截原因：{@code backoff}（退避窗口未过）/ {@code circuit_open}
+     *                    （重派预算耗尽转死信）；{@code applied=true} 时为 null
+     * @param nextAllowed 退避窗口结束时刻（仅 {@code reason=backoff} 时非 null，供前端提示重试时间）
      */
-    void dispatchBlockedSubTask(Long subTaskId, Long preferredAgentId);
+    record RedispatchResult(boolean applied, String reason, OffsetDateTime nextAllowed) {
+
+        /** 已进入调度链。 */
+        public static RedispatchResult ofApplied() {
+            return new RedispatchResult(true, null, null);
+        }
+
+        /** 被闸门拦截（退避 / 熔断），未改动子任务状态。 */
+        public static RedispatchResult ofSkipped(String reason, OffsetDateTime nextAllowed) {
+            return new RedispatchResult(false, reason, nextAllowed);
+        }
+    }
+
+    /**
+     * 对 BLOCKED 子任务执行重新调度。
+     *
+     * @return 重派结果；被退避/熔断闸门拦截时 {@code applied=false}（子任务保持 BLOCKED），
+     *         并落 {@code sub_task_redispatch_skipped} 时间线
+     */
+    RedispatchResult dispatchBlockedSubTask(Long subTaskId, Long preferredAgentId);
 
     /**
      * 对离线 Agent 遗留子任务执行重新调度。
@@ -169,9 +199,11 @@ public interface SubTaskDispatchService {
      *
      * @param subTaskId         待改派的 IN_PROGRESS 或 PAUSED 子任务 ID
      * @param preferredAgentId  首选目标 Agent ID（不满足时由调度链 fallback）
+     * @return 改派结果；被退避/熔断闸门拦截时 {@code applied=false} 且**不改动子任务状态**
+     *         （闸门判定已提到 block() 之前，见实现），并落 {@code sub_task_redispatch_skipped}
      * @throws BizException 子任务不存在或状态不是 IN_PROGRESS/PAUSED 时抛出
      */
-    void redispatchInProgress(Long subTaskId, Long preferredAgentId);
+    RedispatchResult redispatchInProgress(Long subTaskId, Long preferredAgentId);
 
     // ══════════════════════════════════════════════════════════════
     //  §6.52 执行密集判定（public static：供 SubTaskDispatchServiceImpl /
@@ -190,8 +222,18 @@ public interface SubTaskDispatchService {
 
     /** §6.52 执行密集任务判定：内容/验收/交付物含本机操作信号时视为需要本机能力。 */
     static boolean isExecutionDense(SubTask subTask) {
-        String text = String.join("\n",
-                nvl(subTask.getContent()), nvl(subTask.getAcceptance()), nvl(subTask.getDeliverable()));
+        return subTask != null
+                && denseMatch(subTask.getContent(), subTask.getAcceptance(), subTask.getDeliverable());
+    }
+
+    /** RM5 批 4：review 域持有的只读快照版本（同判定口径，消费方零实体依赖）。 */
+    static boolean isExecutionDense(SubTaskView subTask) {
+        return subTask != null
+                && denseMatch(subTask.content(), subTask.acceptance(), subTask.deliverable());
+    }
+
+    private static boolean denseMatch(String content, String acceptance, String deliverable) {
+        String text = String.join("\n", nvl(content), nvl(acceptance), nvl(deliverable));
         return EXECUTION_DENSE_PATTERN.matcher(text).find();
     }
 

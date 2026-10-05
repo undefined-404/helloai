@@ -7,10 +7,9 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.RetryPolicy;
 import com.helloai.common.constant.SubTaskStatus;
-import com.helloai.core.agent.AgentCapability;
-import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.executor.AgentSelector.AgentSelectionConstraints;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
@@ -56,17 +55,27 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
      * 加入退避后，第 1 次重派后等 60s、第 2 次后 180s、第 3 次后 600s、第 4 次及以后 1800s，
      * 让瞬时抖动自然恢复而不是立刻耗尽预算。</p>
      *
-     * <p>退避时刻取自 {@code sub_task.update_time}（{@code incrementAttemptTotal} 每次累加都写入），
-     * 因此**不新增列、不新增 context 键**。</p>
+     * <p><b>退避时钟 = {@code sub_task.last_attempt_time}（V102，2026-10-05 修 804）</b>：
+     * 仅由 {@code incrementAttemptTotal} 原子写入，与尝试严格同源。
+     * 此前误用 {@code update_time}——而 {@code block()}/{@code resume()}/{@code changeStatus()}/
+     * {@code resetToPendingForDispatch()} 都会 {@code updateById} 刷新它，导致「换人」入口
+     * 先 {@code block()} 再重派时闸门读到被自身刷新的 now，{@code nextAllowed = now + 600s}
+     * 必然拦截（attempt_total ≥ 1 时「换人」100% 静默失败）。</p>
      */
     private static final int[] REASSIGN_BACKOFF_SECONDS = {60, 180, 600, 1800};
 
     @Override
-    public void dispatchBlockedSubTask(Long subTaskId, Long preferredAgentId) {
-        // 重分配熔断检查
-        if (checkReassignCircuitBreaker(subTaskId)) {
-            return;
+    public RedispatchResult dispatchBlockedSubTask(Long subTaskId, Long preferredAgentId) {
+        // 重分配闸门（熔断 + 退避）：命中则落 sub_task_redispatch_skipped + 返回明确语义，
+        // 不再静默 return（2026-10-05 修 804 可观测性）。
+        ReassignGateDecision gate = evaluateReassignGate(subTaskId);
+        if (gate.blocked()) {
+            recordRedispatchSkipped(subTaskId, gate);
+            log.info("BLOCKED 重派被闸门拦截，未改动子任务: subTaskId={}, reason={}, nextAllowed={}",
+                    subTaskId, gate.reason(), gate.nextAllowed());
+            return RedispatchResult.ofSkipped(gate.reason(), gate.nextAllowed());
         }
+        accumulateReassignAttempt(subTaskId);
         SubTask subTask = subTaskService.resetToPendingForDispatch(
                 subTaskId, Set.of(SubTaskStatus.BLOCKED));
         taskTimelineService.recordEvent(
@@ -80,6 +89,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
                         "preferredAgentId", preferredAgentId));
         taskDispatchPort.assignNext(preferredAgentId, subTaskId, resolveConstraints(subTask));
         log.info("阻塞子任务重新进入调度: subTaskId={}, preferredAgentId={}", subTaskId, preferredAgentId);
+        return RedispatchResult.ofApplied();
     }
 
     @Override
@@ -213,13 +223,13 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         if (agentId == null) {
             throw new BizException("人工兜底指派必须指定目标 Agent: subTaskId=" + subTaskId);
         }
-        Agent agent = agentService.getById(agentId);
+        AgentProfileSnapshot agent = agentService.getProfileById(agentId);
         if (agent == null) {
             throw new BizException("Agent 不存在: " + agentId);
         }
         // 人工兜底指派语义 = 选执行者；PLANNER/REVIEWER 不参与执行（与改派候选接口同口径）
-        if (agent.getRole() != AgentRole.EXECUTOR) {
-            throw new BizException("死信重派只支持执行者（EXECUTOR）Agent，实际角色: " + agent.getRole());
+        if (agent.role() != AgentRole.EXECUTOR) {
+            throw new BizException("死信重派只支持执行者（EXECUTOR）Agent，实际角色: " + agent.role());
         }
 
         // 清零共享重试预算（Phase 0 A3：attempt_total），重新投入调度链后从头计数
@@ -256,7 +266,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
                 Map.of(
                         "trigger", "manual_dead_letter_redispatch",
                         "assignedAgentId", agentId,
-                        "agentName", agent.getName() != null ? agent.getName() : "unknown",
+                        "agentName", agent.name() != null ? agent.name() : "unknown",
                         "reworkCountReset", true));
         log.info("死信子任务人工兜底指派完成: subTaskId={}, agentId={}", subTaskId, agentId);
     }
@@ -276,9 +286,9 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
 
         // 角色从失败 Agent 推导：SubTask 本身不存角色，失败 Agent 的 role 决定了
         // 我们要选哪个 role 的 API_KEY_LLM Agent 接替；取不到时回退 EXECUTOR。
-        Agent failedAgent = failedAgentId != null ? agentService.getById(failedAgentId) : null;
-        final AgentRole role = (failedAgent != null && failedAgent.getRole() != null)
-                ? failedAgent.getRole() : AgentRole.EXECUTOR;
+        AgentProfileSnapshot failedAgent = failedAgentId != null ? agentService.getProfileById(failedAgentId) : null;
+        final AgentRole role = (failedAgent != null && failedAgent.role() != null)
+                ? failedAgent.role() : AgentRole.EXECUTOR;
 
         // （§6.58 P1）：任务级回退策略约束——fallbackPolicy=NONE 或 difficulty=HIGH
         // 时禁止 N11 自动回退，改打人工介入标记等人工处置，避免高风险任务被静默换人。
@@ -303,7 +313,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
                     TaskAgentPolicy.difficulty(agentPolicy));
             return null;
         }
-        Agent fallbackAgent = pickApiKeyLlmAgent(role);
+        AgentProfileSnapshot fallbackAgent = pickApiKeyLlmAgent(role);
 
         if (fallbackAgent == null) {
             String msg = String.format(
@@ -317,17 +327,17 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         // 集合为空或回退目标不在集合内时等同 NONE，打人工介入标记。
         if (TaskAgentPolicy.fallbackPolicy(agentPolicy) == TaskAgentPolicy.FallbackPolicy.RESTRICTED) {
             List<Long> allowed = TaskAgentPolicy.executorAgentIds(agentPolicy);
-            if (allowed.isEmpty() || !allowed.contains(fallbackAgent.getId())) {
+            if (allowed.isEmpty() || !allowed.contains(fallbackAgent.id())) {
                 taskTimelineService.recordEvent(subTask.getTaskId(), subTask.getId(),
-                        "sub_task_fallback_skip_policy", AgentRole.SYSTEM, fallbackAgent.getId(),
+                        "sub_task_fallback_skip_policy", AgentRole.SYSTEM, fallbackAgent.id(),
                         Map.of("reason", "fallback_policy_restricted_not_in_whitelist",
-                                "fallbackAgentId", fallbackAgent.getId(),
+                                "fallbackAgentId", fallbackAgent.id(),
                                 "previousAgentId", failedAgentId));
                 subTaskService.markManualIntervention(subTaskId, "fallback_skip_policy_restricted",
                         Map.of("failedAgentId", failedAgentId == null ? "" : failedAgentId,
-                                "fallbackAgentId", fallbackAgent.getId()));
+                                "fallbackAgentId", fallbackAgent.id()));
                 log.warn("N11 回退跳过：RESTRICTED 策略下回退目标不在执行者白名单, subTaskId={}, fallbackAgentId={}",
-                        subTaskId, fallbackAgent.getId());
+                        subTaskId, fallbackAgent.id());
                 return null;
             }
         }
@@ -340,17 +350,17 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
                 log.debug("人工介入标记已存在，跳过重复回退: subTaskId={}", subTaskId);
                 return null;
             }
-            if (!AgentCapability.hasLocalExecutionCapability(fallbackAgent)) {
+            if (!fallbackAgent.localExecutionCapable()) {
                 taskTimelineService.recordEvent(subTask.getTaskId(), subTask.getId(),
-                        "sub_task_fallback_skip_need_human", AgentRole.SYSTEM, fallbackAgent.getId(),
+                        "sub_task_fallback_skip_need_human", AgentRole.SYSTEM, fallbackAgent.id(),
                         Map.of("reason", "execution_dense_no_local_capability",
-                                "fallbackAgentId", fallbackAgent.getId(),
+                                "fallbackAgentId", fallbackAgent.id(),
                                 "previousAgentId", failedAgentId));
                 subTaskService.markManualIntervention(subTaskId, "fallback_skip_execution_dense",
                         Map.of("failedAgentId", failedAgentId == null ? "" : failedAgentId,
-                                "fallbackAgentId", fallbackAgent.getId()));
+                                "fallbackAgentId", fallbackAgent.id()));
                 log.warn("N11 回退跳过：执行密集任务不可回退给无本机能力 Agent, subTaskId={}, fallbackAgentId={}",
-                        subTaskId, fallbackAgent.getId());
+                        subTaskId, fallbackAgent.id());
                 return null;
             }
         }
@@ -360,17 +370,17 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
                 subTask.getId(),
                 "sub_task_dispatch_prepare",
                 AgentRole.SYSTEM,
-                fallbackAgent.getId(),
+                fallbackAgent.id(),
                 Map.of(
                         "trigger", "external_fallback",
-                        "preferredAgentId", fallbackAgent.getId(),
+                        "preferredAgentId", fallbackAgent.id(),
                         "previousAgentId", failedAgentId,
                         "reason", reason != null ? reason : ""));
 
-        taskDispatchPort.assignNext(fallbackAgent.getId(), subTaskId);
+        taskDispatchPort.assignNext(fallbackAgent.id(), subTaskId);
         log.info("N11 阈值回退已重新进入调度链: subTaskId={}, failedAgentId={}, fallbackAgentId={}",
-                subTaskId, failedAgentId, fallbackAgent.getId());
-        return fallbackAgent.getId();
+                subTaskId, failedAgentId, fallbackAgent.id());
+        return fallbackAgent.id();
     }
 
     /**
@@ -381,17 +391,18 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
      * 不复用 {@link AgentSelector} 是为了彻底屏蔽"preferExternal"在回退路径上的影响，
      * 即使配置被误改也保证回退方向。</p>
      */
-    private Agent pickApiKeyLlmAgent(AgentRole inputRole) {
+    private AgentProfileSnapshot pickApiKeyLlmAgent(AgentRole inputRole) {
         final AgentRole role = (inputRole != null) ? inputRole : AgentRole.EXECUTOR;
-        return agentService.listActive().stream()
-                .filter(a -> a.getAccessType() == AgentAccessType.API_KEY_LLM)
-                .filter(a -> a.getStatus() == AgentStatus.ACTIVE)
-                .filter(a -> role.equals(a.getRole()))
-                .filter(a -> a.getOnlineStatus() == null
-                        || a.getOnlineStatus().name().equals("ONLINE")
-                        || a.getOnlineStatus().name().equals("IDLE"))
+        return agentService.listActiveProfiles().stream()
+                .filter(a -> a.accessType() == AgentAccessType.API_KEY_LLM)
+                .filter(a -> a.status() == AgentStatus.ACTIVE)
+                .filter(a -> role.equals(a.role()))
+                .filter(a -> a.onlineStatus() == null
+                        || a.onlineStatus().name().equals("ONLINE")
+                        || a.onlineStatus().name().equals("IDLE"))
                 .max(java.util.Comparator.comparing(
-                        Agent::getScore, java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())))
+                        AgentProfileSnapshot::score,
+                        java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())))
                 .orElse(null);
     }
 
@@ -442,24 +453,43 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
     }
 
     @Override
-    public void redispatchInProgress(Long subTaskId, Long preferredAgentId) {
+    public RedispatchResult redispatchInProgress(Long subTaskId, Long preferredAgentId) {
         SubTask subTask = subTaskService.getById(subTaskId);
         if (subTask == null) {
             throw new BizException("子任务不存在: " + subTaskId);
         }
+        // 状态校验前置（保持既有语义：非 IN_PROGRESS/PAUSED 直接报错，不产生任何副作用）
+        if (subTask.getStatus() != SubTaskStatus.IN_PROGRESS
+                && subTask.getStatus() != SubTaskStatus.PAUSED) {
+            throw new BizException("只有 IN_PROGRESS 或 PAUSED 状态的子任务才能改派，当前状态: " + subTask.getStatus());
+        }
+
+        // 闸门判定提到 block()/resume() 之前（2026-10-05 修 804 修法 4）：
+        // block()/resume() 均经 updateById 写 update_time，历史上闸门读 update_time 会被自身
+        // 刷新（nextAllowed = now + 600s 必然拦截「换人」）。退避时钟现已改绑 last_attempt_time
+        // （updateById 不写），此处仍显式前置判定——一旦被拦：不改动任务状态、不 block，
+        // 落 sub_task_redispatch_skipped 并回传明确语义（消除静默 return）。
+        ReassignGateDecision gate = evaluateReassignGate(subTaskId);
+        if (gate.blocked()) {
+            recordRedispatchSkipped(subTaskId, gate);
+            log.info("执行停滞改派被闸门拦截，未改动子任务: subTaskId={}, reason={}, nextAllowed={}",
+                    subTaskId, gate.reason(), gate.nextAllowed());
+            return RedispatchResult.ofSkipped(gate.reason(), gate.nextAllowed());
+        }
+
         if (subTask.getStatus() == SubTaskStatus.PAUSED) {
             // 暂停后换人：先恢复执行权（PAUSED 到 IN_PROGRESS 是状态机允许的转移），
             // 再统一走下方 block + 重调度链。
             subTaskService.resume(subTaskId);
-        } else if (subTask.getStatus() != SubTaskStatus.IN_PROGRESS) {
-            throw new BizException("只有 IN_PROGRESS 或 PAUSED 状态的子任务才能改派，当前状态: " + subTask.getStatus());
         }
         // 人工判定执行停滞：先报告阻塞（带原因落 timeline + BLOCKED 收件箱通知），
         // 再走既有 BLOCKED 重调度链（熔断计数/选人/fallback 全部复用，语义一致）。
         // 两步各自事务：block 先落库，重派失败时任务停在 BLOCKED 可再人工重试。
         subTaskService.block(subTaskId, "人工判定执行停滞，改派新执行者", null);
-        dispatchBlockedSubTask(subTaskId, preferredAgentId);
-        log.info("执行停滞改派: subTaskId={}, preferredAgentId={}", subTaskId, preferredAgentId);
+        RedispatchResult result = dispatchBlockedSubTask(subTaskId, preferredAgentId);
+        log.info("执行停滞改派: subTaskId={}, preferredAgentId={}, applied={}",
+                subTaskId, preferredAgentId, result.applied());
+        return result;
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -540,15 +570,72 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
      * <p>熔断后的状态由 CANCELLED 改为 DEAD_LETTER，区分"人工主动取消"与
      * "系统熔断待人工"；死信由 {@link #redispatchDeadLetter} 人工恢复。</p>
      *
+     * <p><b>2026-10-05 修 804</b>：本入口由周期巡检驱动，拦截时仅对一次性的
+     * {@code circuit_open} 落 {@code sub_task_redispatch_skipped} 时间线
+     * （backoff 每 tick 命中故不落，避免刷屏）；人工入口另在各自方法内对 backoff 也留痕。</p>
+     *
      * @param subTaskId 待检查的子任务 ID
-     * @return true = 跳过本次重分配（已达熔断阈值或子任务已终态/死信）；false = 继续重分配
+     * @return true = 跳过本次重分配（已达熔断阈值 / 处于退避窗口 / 已终态死信）；false = 继续重分配
      */
     private boolean checkReassignCircuitBreaker(Long subTaskId) {
-        if (isReassignBlockedOrEscalate(subTaskId)) {
+        ReassignGateDecision gate = evaluateReassignGate(subTaskId);
+        if (gate.blocked()) {
+            // 可观测性（2026-10-05 修 804）：闸门拦截不再静默。但这几个入口由周期巡检驱动
+            // （离线巡检 / 超时回收 / N11 回退），退避窗口内的 backoff 每 tick 都会命中——
+            // 若逐次落事件会刷屏 timeline，故系统入口只对**一次性**的 circuit_open 留痕
+            // （熔断转死信后子任务即变终态，不重复）。人工入口（redispatchInProgress /
+            // dispatchBlockedSubTask）另在各自方法内对 backoff 也留痕。
+            if (!"backoff".equals(gate.reason())) {
+                recordRedispatchSkipped(subTaskId, gate);
+            }
             return true;
         }
         accumulateReassignAttempt(subTaskId);
         return false;
+    }
+
+    /**
+     * 重派闸门判定（**只判定、不累加预算**）的布尔投影 —— 供周期扫描的自动补偿路径
+     * （{@link #dispatchPendingSubTaskAuto}）复用：只需"是否拦截"、不需要拦截原因，
+     * 且**不落 skip 时间线**（避免逐 tick 刷屏）。
+     *
+     * <p>完整判定语义见 {@link #evaluateReassignGate(Long)}。</p>
+     *
+     * @param subTaskId 待检查的子任务 ID
+     * @return true = 跳过本次重分配（已达熔断阈值 / 处于退避窗口 / 已终态死信）
+     */
+    private boolean isReassignBlockedOrEscalate(Long subTaskId) {
+        return evaluateReassignGate(subTaskId).blocked();
+    }
+
+    /**
+     * 重派闸门决策 —— 判定结果连同「拦截原因 / 退避结束时刻」一并返回，
+     * 供调用方落 {@code sub_task_redispatch_skipped} 时间线与回传接口明确语义（2026-10-05 修 804）。
+     *
+     * @param blocked     true = 拦截本次重派
+     * @param reason      拦截原因：{@code terminal}（终态/死信）/ {@code circuit_open}（预算耗尽转死信）
+     *                    / {@code backoff}（退避窗口未过）；未拦截时为 null
+     * @param nextAllowed 退避窗口结束时刻（仅 {@code reason=backoff} 时非 null）
+     * @param taskId      所属主任务 ID（用于落时间线；取不到时为 null）
+     */
+    private record ReassignGateDecision(boolean blocked, String reason,
+                                        OffsetDateTime nextAllowed, Long taskId) {
+
+        static ReassignGateDecision pass(Long taskId) {
+            return new ReassignGateDecision(false, null, null, taskId);
+        }
+
+        static ReassignGateDecision terminal(Long taskId) {
+            return new ReassignGateDecision(true, "terminal", null, taskId);
+        }
+
+        static ReassignGateDecision circuitOpen(Long taskId) {
+            return new ReassignGateDecision(true, "circuit_open", null, taskId);
+        }
+
+        static ReassignGateDecision backoff(Long taskId, OffsetDateTime nextAllowed) {
+            return new ReassignGateDecision(true, "backoff", nextAllowed, taskId);
+        }
     }
 
     /**
@@ -560,7 +647,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
      *   <li>子任务不存在 → 放行（交由调用方后续校验）；</li>
      *   <li>已是终态/死信（DONE/CANCELLED/DEAD_LETTER）→ 拦截；</li>
      *   <li>{@code attempt_total >= max-reassign-attempts} → 标记 DEAD_LETTER + timeline，拦截；</li>
-     *   <li><b>退避窗口未过</b>（距上次累加不足 {@link #REASSIGN_BACKOFF_SECONDS} 对应时长）→ 拦截。
+     *   <li><b>退避窗口未过</b>（距上次尝试不足 {@link #REASSIGN_BACKOFF_SECONDS} 对应时长）→ 拦截。
      *       与"熔断"的区别：退避**不改变子任务状态**、不消耗预算，只是本轮不重派，窗口过后自然恢复；</li>
      *   <li>否则放行（调用方随后应调用 {@link #accumulateReassignAttempt}）。</li>
      * </ol>
@@ -569,27 +656,32 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
      * （{@link #dispatchPendingSubTaskCompensating}）需要复用同一套拦截判定
      * **但不重复计数**，避免同一轮对同一子任务累加两次、把 {@code attempt_total} 快速打满推向死信。</p>
      *
+     * <p><b>退避时钟 = {@code sub_task.last_attempt_time}（V102）</b>——只由 {@code incrementAttemptTotal}
+     * 写入，与尝试严格同源；不再读 {@code update_time}（会被 block/resume/changeStatus 刷新，
+     * 导致「换人」被自身刷新的时钟拦截）。</p>
+     *
      * @param subTaskId 待检查的子任务 ID
-     * @return true = 跳过本次重分配（已达熔断阈值 / 处于退避窗口 / 已终态死信）
+     * @return 闸门决策（含拦截原因与退避结束时刻）
      */
-    private boolean isReassignBlockedOrEscalate(Long subTaskId) {
+    private ReassignGateDecision evaluateReassignGate(Long subTaskId) {
         int maxAttempts = agentDispatchProperties.getMaxReassignAttempts();
         if (maxAttempts <= 0) {
             // 熔断禁用（逃生口，不推荐生产使用）
-            return false;
+            return ReassignGateDecision.pass(null);
         }
 
         SubTask subTask = subTaskService.getById(subTaskId);
         if (subTask == null) {
-            return false;
+            return ReassignGateDecision.pass(null);
         }
+        Long taskId = subTask.getTaskId();
 
         // 终态/死信不再重分配（死信只能走 redispatchDeadLetter 人工入口）
         SubTaskStatus currentStatus = subTask.getStatus();
         if (currentStatus == SubTaskStatus.DONE || currentStatus == SubTaskStatus.CANCELLED
                 || currentStatus == SubTaskStatus.DEAD_LETTER) {
             log.debug("子任务已终态或死信，跳过重分配: subTaskId={}, status={}", subTaskId, currentStatus);
-            return true;
+            return ReassignGateDecision.terminal(taskId);
         }
 
         int currentCount = subTask.getAttemptTotal() != null
@@ -616,22 +708,61 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
             } catch (Exception e) {
                 log.error("子任务重分配熔断-转死信失败: subTaskId={}", subTaskId, e);
             }
-            return true;
+            return ReassignGateDecision.circuitOpen(taskId);
         }
 
-        // G-015 B2.2 退避窗口：距上次累加（incrementAttemptTotal 写入的 update_time）不足本档
+        // G-015 B2.2 退避窗口：距上次尝试（incrementAttemptTotal 写入的 last_attempt_time）不足本档
         // 退避时长则跳过本轮重派，且不消耗预算。只推迟不终止，窗口过后自然恢复。
-        if (currentCount > 0 && subTask.getUpdateTime() != null) {
+        if (currentCount > 0 && subTask.getLastAttemptTime() != null) {
             int backoffSeconds = REASSIGN_BACKOFF_SECONDS[
                     Math.min(currentCount - 1, REASSIGN_BACKOFF_SECONDS.length - 1)];
-            OffsetDateTime nextAllowed = subTask.getUpdateTime().plusSeconds(backoffSeconds);
+            OffsetDateTime nextAllowed = subTask.getLastAttemptTime().plusSeconds(backoffSeconds);
             if (OffsetDateTime.now().isBefore(nextAllowed)) {
                 log.debug("子任务处于重派退避窗口，跳过本轮重派: subTaskId={}, attemptTotal={}, backoffSeconds={}, nextAllowed={}",
                         subTaskId, currentCount, backoffSeconds, nextAllowed);
-                return true;
+                return ReassignGateDecision.backoff(taskId, nextAllowed);
             }
         }
-        return false;
+        return ReassignGateDecision.pass(taskId);
+    }
+
+    /**
+     * 落 {@code sub_task_redispatch_skipped} 时间线（2026-10-05 修 804 可观测性）。
+     *
+     * <p>仅对**非终态**的闸门拦截留痕（{@code backoff} / {@code circuit_open}）——
+     * 终态 / 死信拦截属正常流转不记。</p>
+     *
+     * <p><b>调用点与频控</b>：</p>
+     * <ul>
+     *   <li>人工入口 {@link #redispatchInProgress}、{@link #dispatchBlockedSubTask}：
+     *       backoff 与 circuit_open 均留痕（用户点一次落一条，正是要消除的「静默」）；</li>
+     *   <li>系统入口（经 {@link #checkReassignCircuitBreaker} 的离线巡检 / 超时回收 / N11 回退）：
+     *       只对一次性的 circuit_open 留痕；backoff 由周期巡检反复命中，若逐次落事件会刷屏 timeline；</li>
+     *   <li>周期自动补偿 {@link #dispatchPendingSubTaskAuto}：完全不落（只读布尔判定）。</li>
+     * </ul>
+     */
+    private void recordRedispatchSkipped(Long subTaskId, ReassignGateDecision gate) {
+        String reason = gate.reason();
+        if (reason == null || "terminal".equals(reason) || gate.taskId() == null) {
+            return;
+        }
+        try {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("reason", reason);
+            payload.put("subTaskId", subTaskId);
+            if (gate.nextAllowed() != null) {
+                payload.put("nextAllowed", gate.nextAllowed().toString());
+            }
+            taskTimelineService.recordEvent(
+                    gate.taskId(),
+                    subTaskId,
+                    "sub_task_redispatch_skipped",
+                    AgentRole.SYSTEM,
+                    null,
+                    payload);
+        } catch (Exception e) {
+            log.warn("重派拦截 timeline 写入失败（不影响主链路）: subTaskId={}, err={}", subTaskId, e.getMessage());
+        }
     }
 
     /**

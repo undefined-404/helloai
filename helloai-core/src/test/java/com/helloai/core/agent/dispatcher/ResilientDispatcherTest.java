@@ -27,6 +27,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
@@ -285,6 +286,43 @@ class ResilientDispatcherTest {
                     invokeFallback(1L, 100L, new BizException("Agent 不存在: 1")))
                     .isInstanceOf(BizException.class)
                     .hasMessageContaining("无可用替代 Agent");
+        }
+
+        @Test
+        @DisplayName("fallback 落 sub_task_dispatch_fallback 时间线（preferred → actual + reason，804 落点可观测）")
+        void shouldRecordDispatchFallbackTimeline() {
+            when(agentService.getById(1L)).thenReturn(null);
+            Agent alternative = onlineAgent(2L);
+            when(agentSelector.pickAlternative(eq(1L), eq(null), any()))
+                    .thenReturn(alternative);
+            // 时间线需要 subTask 快照取 taskId
+            when(subTaskQueryPort.findById(100L)).thenReturn(
+                    SubTaskSnapshot.builder().id(100L).taskId(1100L).build());
+
+            invokeFallback(1L, 100L, new BizException("Agent 不存在: 1"));
+
+            verify(subTaskCommandPort).assignNext(eq(2L), eq(100L));
+            verify(taskTimelinePort).recordEvent(
+                    eq(1100L), eq(100L), eq("sub_task_dispatch_fallback"), eq(AgentRole.SYSTEM), eq(2L),
+                    argThat(p -> Long.valueOf(1L).equals(p.get("preferredAgentId"))
+                            && Long.valueOf(2L).equals(p.get("actualAgentId"))
+                            && "dispatch_error".equals(p.get("reason"))));
+        }
+
+        @Test
+        @DisplayName("fallback 取不到 subTask 快照 → 仍完成分配（时间线 best-effort 不阻断）")
+        void shouldStillAssignWhenSnapshotMissing() {
+            when(agentService.getById(1L)).thenReturn(null);
+            Agent alternative = onlineAgent(2L);
+            when(agentSelector.pickAlternative(eq(1L), eq(null), any()))
+                    .thenReturn(alternative);
+            when(subTaskQueryPort.findById(100L)).thenReturn(null);
+
+            invokeFallback(1L, 100L, new BizException("Agent 不存在: 1"));
+
+            verify(subTaskCommandPort).assignNext(eq(2L), eq(100L));
+            verify(taskTimelinePort, never()).recordEvent(
+                    anyLong(), anyLong(), eq("sub_task_dispatch_fallback"), any(), any(), anyMap());
         }
     }
 

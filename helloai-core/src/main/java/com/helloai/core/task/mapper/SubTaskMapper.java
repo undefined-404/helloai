@@ -40,6 +40,10 @@ public interface SubTaskMapper extends BaseMapper<SubTask> {
      * {@link com.helloai.core.task.service.SubTaskDispatchService} 判定熔断
      * （坑点 3「单一权威」：同预算还供返工 / 超时后续并入）。</p>
      *
+     * <p><b>V102（2026-10-05）</b>：同批写入 {@code last_attempt_time}，作为重派退避窗口
+     * 时钟。退避时钟与「尝试」严格同源——只在本方法（唯一累加尝试处）写入，
+     * {@code updateById} 一律不写，杜绝 block/resume/changeStatus 等状态流转自我刷新时钟。</p>
+     *
      * @return 1 = 成功累加；0 = 子任务不存在或已删除
      */
     int incrementAttemptTotal(@Param("subTaskId") Long subTaskId,

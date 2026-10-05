@@ -324,9 +324,10 @@ public class SubTaskController {
 
     @SaCheckPermission("subtask:reassign")
     @PostMapping("/reassignById/{id}")
-    public R<Void> reassign(@PathVariable("id") Long id, @Valid @RequestBody ReassignRequest req) {
-        subTaskDispatchService.dispatchBlockedSubTask(id, req.getAgentId());
-        return R.ok();
+    public R<SubTaskDispatchService.RedispatchResult> reassign(@PathVariable("id") Long id, @Valid @RequestBody ReassignRequest req) {
+        // 2026-10-05 修 804：被退避/熔断闸门拦截时返回明确语义（applied=false + reason + nextAllowed），
+        // 不再静默返回 code=200 让前端误判「换人成功」。
+        return R.ok(subTaskDispatchService.dispatchBlockedSubTask(id, req.getAgentId()));
     }
 
     /**
@@ -336,13 +337,16 @@ public class SubTaskController {
      * 后端先 {@code SubTaskService.block} 报告人工阻塞，再复用
      * {@code dispatchBlockedSubTask} 走既有熔断 + 选人 + fallback 重调度链。
      * 重派失败时任务停留在 BLOCKED，可再次调用重新调度接口。</p>
+     *
+     * <p><b>2026-10-05 修 804</b>：闸门判定已提到 {@code block()} 之前，退避时钟改绑
+     * {@code last_attempt_time}——「换人」不再被自身刷新的时钟拦截；若确在退避窗口内，
+     * 返回 {@code applied=false} + {@code nextAllowed} 且**不改动任务状态**。</p>
      */
     @SaCheckPermission("subtask:redispatch")
     @PostMapping("/redispatchInProgressById/{id}")
-    public R<Void> redispatchInProgress(@PathVariable("id") Long id,
+    public R<SubTaskDispatchService.RedispatchResult> redispatchInProgress(@PathVariable("id") Long id,
                                         @Valid @RequestBody ReassignRequest req) {
-        subTaskDispatchService.redispatchInProgress(id, req.getAgentId());
-        return R.ok();
+        return R.ok(subTaskDispatchService.redispatchInProgress(id, req.getAgentId()));
     }
 
     /**
