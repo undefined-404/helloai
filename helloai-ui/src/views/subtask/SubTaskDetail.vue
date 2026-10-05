@@ -618,6 +618,7 @@ const timelineFull = ref(false)
 // 精简版隐藏的例行内部事件（分发/指令流转/上下文装配/思考过程等，全量视图仍可回查）
 const COMPACT_HIDDEN_EVENTS = new Set([
   'sub_task_dispatch_prepare',
+  'sub_task_no_candidate',
   'sub_task_auto_execute_dispatch_enter',
   'sub_task_auto_execute_dispatch',
   'sub_task_auto_execute_dispatch_ok',

@@ -98,6 +98,7 @@ const LABEL: Record<string, string> = {
   task_auto_completed: '任务最终完成',
 
   sub_task_dispatch_prepare: '准备派单',
+  sub_task_no_candidate: '暂无可用执行者',
   sub_task_unclaimed_timeout_reassign: '超时未领取改派',
   sub_task_execution_timeout_reassign: '执行超时改派',
   sub_task_offline_reassign: '离线改派',
