@@ -2,6 +2,7 @@ package com.helloai.core.task.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.helloai.core.task.entity.TaskAgentMember;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
@@ -16,7 +17,7 @@ import java.util.List;
  * 「先查后写」在并发下会撞 {@code uk(task_id, agent_id)} 唯一索引抛
  * {@code DuplicateKeyException}，而 PostgreSQL 一旦报 duplicate key，<b>整个事务进入
  * aborted(25P02)</b>，后续语句全部失败——捕获异常后在同一事务里补救是无效的
- * （2026-10-02 在 {@code TaskRunningSpecTableServiceImpl} 已实证并改掉）。
+ * （2026-10-02 在 {@code TaskRunningSpecServiceImpl} 已实证并改掉）。
  * {@code ON CONFLICT DO UPDATE} 是<b>单条原子语句</b>、不产生错误、不污染事务。</p>
  *
  * <p><b>为什么 id 由调用方传入</b>：自定义 {@code @Insert} 不会走 MyBatis-Plus 的
@@ -101,4 +102,20 @@ public interface TaskAgentMemberMapper extends BaseMapper<TaskAgentMember> {
             WHERE deleted = 0 AND assigned_agent_id IS NOT NULL
             """)
     List<TaskAgentMember> selectAuthoritativeAssignments();
+
+    /**
+     * 物理删除某任务的全部成员行（任务级联删除时使用，先于 task 本体删除）。
+     *
+     * <p>{@code task_agent_member_task_id_fkey} 引用 {@code task.id}，不先清会撞外键（P2-4）。</p>
+     */
+    @Delete("DELETE FROM task_agent_member WHERE task_id = #{taskId}")
+    int physicalDeleteByTaskId(@Param("taskId") Long taskId);
+
+    /**
+     * 物理删除某 Agent 的全部成员行（Agent 级联删除时使用，先于 agent 本体删除）。
+     *
+     * <p>{@code task_agent_member_agent_id_fkey} 引用 {@code agent.id}，不先清会撞外键（P2-4）。</p>
+     */
+    @Delete("DELETE FROM task_agent_member WHERE agent_id = #{agentId}")
+    int physicalDeleteByAgentId(@Param("agentId") Long agentId);
 }

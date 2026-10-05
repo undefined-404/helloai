@@ -70,4 +70,13 @@ public interface RewardService extends IService<RewardLog> {
      * @return 删除行数
      */
     int physicalDeleteByAgent(Long agentId);
+
+    /**
+     * 任务级联删除前物理删除该任务下全部积分流水（D-1：reward_log.sub_task_id 无外键，
+     * 原任务级联被静默漏删）。
+     *
+     * @param taskId 任务 ID
+     * @return 删除行数
+     */
+    int physicalDeleteByTask(Long taskId);
 }

@@ -8,6 +8,11 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.TeamService;
 import com.helloai.core.task.mapper.AttachmentMapper;
 import com.helloai.core.task.mapper.ModuleMapper;
+import com.helloai.core.task.mapper.TaskAgentMemberMapper;
+import com.helloai.core.task.mapper.TaskExecutionRecordMapper;
+import com.helloai.core.task.mapper.TaskIterationMapper;
+import com.helloai.core.task.mapper.TaskRunningSpecMapper;
+import com.helloai.core.task.workflow.mapper.WorkflowInstanceMapper;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.entity.TaskTimeline;
@@ -70,6 +75,16 @@ class TaskServiceTest {
     @Mock
     private AttachmentMapper attachmentMapper;
     @Mock
+    private TaskRunningSpecMapper taskRunningSpecMapper;
+    @Mock
+    private TaskExecutionRecordMapper taskExecutionRecordMapper;
+    @Mock
+    private TaskAgentMemberMapper taskAgentMemberMapper;
+    @Mock
+    private TaskIterationMapper taskIterationMapper;
+    @Mock
+    private WorkflowInstanceMapper workflowInstanceMapper;
+    @Mock
     private AgentInboxService agentInboxService;
     @Mock
     private AgentService agentService;
@@ -81,8 +96,10 @@ class TaskServiceTest {
     private LambdaQueryChainWrapper<SubTask> subTaskChain;
 
     private TaskService newSpyService() {
-        return spy(new TaskServiceImpl(subTaskMapper, moduleMapper, reviewPort,
-                taskTimelineMapper, attachmentMapper, agentInboxService,
+        return spy(new TaskServiceImpl(subTaskMapper, moduleMapper,
+                taskRunningSpecMapper, taskExecutionRecordMapper, taskAgentMemberMapper,
+                taskIterationMapper, workflowInstanceMapper,
+                reviewPort, taskTimelineMapper, attachmentMapper, agentInboxService,
                 agentService, subTaskService, teamService));
     }
 

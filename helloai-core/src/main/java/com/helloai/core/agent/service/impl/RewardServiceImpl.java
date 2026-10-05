@@ -119,4 +119,13 @@ public class RewardServiceImpl extends ServiceImpl<RewardLogMapper, RewardLog>
     public int physicalDeleteByAgent(Long agentId) {
         return baseMapper.physicalDeleteByAgentId(agentId);
     }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public int physicalDeleteByTask(Long taskId) {
+        if (taskId == null) {
+            return 0; // 空 id 短路
+        }
+        return baseMapper.physicalDeleteByTaskId(taskId);
+    }
 }

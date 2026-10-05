@@ -7,8 +7,10 @@ import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.ActivityLog;
 import com.helloai.core.agent.entity.RewardLog;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 
 import java.time.OffsetDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
@@ -293,4 +295,37 @@ public interface AgentService extends IService<Agent> {
      * @return 影响行数；0 = CAS 失败
      */
     int markOfflineIfStale(Long agentId, OffsetDateTime cutoff, String newStatus, String reason, OffsetDateTime now);
+
+    // ══════════════════════════════════════════════════════════════
+    //  读侧只读快照出口（RM5 批 2：planner/review/task 三域前向实体泄漏收口）
+    //  五方法各逐字镜像一条既有查询，零新增 Mapper / SQL / DB 往返；
+    //  契约 AgentProfileSnapshot 归属 agent 域（§7.2 情形②），消费方不再 import 实体。
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 按 id 取 Agent 画像快照（镜像 {@link #getById} 语义）。
+     *
+     * @return 快照；Agent 不存在或已删除时返回 {@code null}（与 getById 一致）
+     */
+    AgentProfileSnapshot getProfileById(Long agentId);
+
+    /**
+     * 按 id 集合取 Agent 画像快照（镜像 {@link #listByIds} 语义，绝不返回 {@code null}）。
+     */
+    List<AgentProfileSnapshot> listProfilesByIds(Collection<Long> ids);
+
+    /**
+     * 按角色取 Agent 画像快照（镜像 {@link #listByRole} 语义，绝不返回 {@code null}）。
+     */
+    List<AgentProfileSnapshot> listProfilesByRole(AgentRole role);
+
+    /**
+     * 取全部 ACTIVE Agent 画像快照，按 score DESC（镜像 {@link #listActive} 语义，绝不返回 {@code null}）。
+     */
+    List<AgentProfileSnapshot> listActiveProfiles();
+
+    /**
+     * 取全量 Agent 画像快照，按 score DESC（镜像 {@link #listAllOrderByScoreDesc} 语义，绝不返回 {@code null}）。
+     */
+    List<AgentProfileSnapshot> listProfilesOrderByScoreDesc();
 }

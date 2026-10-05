@@ -5,6 +5,7 @@ import com.helloai.core.agent.quality.dto.AgentQualityRank;
 import com.helloai.core.agent.quality.dto.QualityOverview;
 import com.helloai.core.agent.quality.dto.RebuildSourceRow;
 import com.helloai.core.agent.quality.entity.AgentQualityProfile;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
@@ -21,6 +22,15 @@ import java.util.Map;
  */
 @Mapper
 public interface AgentQualityProfileMapper extends BaseMapper<AgentQualityProfile> {
+
+    /**
+     * 物理删除某 Agent 的质量画像（cascade）。
+     *
+     * <p>2026-10-05 D-1：{@code agent_quality_profile.agent_id} 语义列无外键，
+     * Agent 级联删除时被静默漏删（实测 1 行孤儿）。供 Agent 级联删除使用。</p>
+     */
+    @Delete("DELETE FROM agent_quality_profile WHERE agent_id = #{agentId}")
+    int physicalDeleteByAgentId(@Param("agentId") Long agentId);
 
     /**
      * 核心计数原子增量：单条 UPDATE 内完成全部计数累加，

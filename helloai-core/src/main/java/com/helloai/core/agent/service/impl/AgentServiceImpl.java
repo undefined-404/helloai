@@ -10,14 +10,21 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentDutyLeaseMapper;
+import com.helloai.core.agent.mapper.AgentEventMapper;
 import com.helloai.core.agent.mapper.AgentExecutionRecordMapper;
 import com.helloai.core.agent.mapper.AgentInboxMapper;
 import com.helloai.core.agent.mapper.AgentMapper;
+import com.helloai.core.agent.mapper.BrowserSessionMapper;
 import com.helloai.core.agent.mapper.ConversationArchiveMapper;
 import com.helloai.core.agent.mapper.ConversationMessageMapper;
+import com.helloai.core.agent.mapper.TeamMemberMapper;
+import com.helloai.core.agent.quality.mapper.AgentQualityProfileMapper;
+import com.helloai.core.agent.session.mapper.AgentSessionMapper;
 import com.helloai.core.agent.port.AgentAuthPort;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.port.SubTaskCommandPort;
 import com.helloai.core.agent.port.SubTaskStatsPort;
+import com.helloai.core.agent.port.TaskTeamMemberPort;
 import com.helloai.core.agent.service.AgentCredentialService;
 import com.helloai.core.agent.service.AgentLifecycleService;
 import com.helloai.core.agent.service.AgentMcpServerService;
@@ -35,6 +42,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -70,6 +78,8 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     // 状态推进 / 解绑见 SubTaskCommandPort）
     private final SubTaskStatsPort subTaskStatsPort;
     private final SubTaskCommandPort subTaskCommandPort;
+    /** P2-4：task_agent_member（task 域）按 agent 物理删除端口（agent → task 反向依赖的合规出口）。 */
+    private final TaskTeamMemberPort taskTeamMemberPort;
     private final RewardService rewardService;
     private final ActivityLogService activityLogService;
     private final AgentInboxMapper agentInboxMapper;
@@ -78,6 +88,13 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     private final AgentExecutionRecordMapper agentExecutionRecordMapper;
     private final ConversationArchiveMapper conversationArchiveMapper;
     private final ConversationMessageMapper conversationMessageMapper;
+    // D-1（2026-10-05）：task_id/sub_task_id/agent_id 语义列但无外键的漏删表，按域收口在此清理
+    private final AgentEventMapper agentEventMapper;
+    private final AgentSessionMapper agentSessionMapper;
+    private final BrowserSessionMapper browserSessionMapper;
+    private final AgentQualityProfileMapper agentQualityProfileMapper;
+    /** D-1：team_member（agent 域）按 agent 物理删除，删 Agent 时清团队花名册成员关系。 */
+    private final TeamMemberMapper teamMemberMapper;
     private final AgentMcpServerService agentMcpServerService;
     private final AgentApiKeyCipher agentApiKeyCipher;
     private final AgentCredentialService credentialService;
@@ -88,6 +105,7 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     @Autowired
     public AgentServiceImpl(SubTaskStatsPort subTaskStatsPort,
                             SubTaskCommandPort subTaskCommandPort,
+                            TaskTeamMemberPort taskTeamMemberPort,
                             RewardService rewardService,
                             ActivityLogService activityLogService,
                             AgentInboxMapper agentInboxMapper,
@@ -95,6 +113,11 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
                             AgentExecutionRecordMapper agentExecutionRecordMapper,
                             ConversationArchiveMapper conversationArchiveMapper,
                             ConversationMessageMapper conversationMessageMapper,
+                            AgentEventMapper agentEventMapper,
+                            AgentSessionMapper agentSessionMapper,
+                            BrowserSessionMapper browserSessionMapper,
+                            AgentQualityProfileMapper agentQualityProfileMapper,
+                            TeamMemberMapper teamMemberMapper,
                             AgentMcpServerService agentMcpServerService,
                             AgentApiKeyCipher agentApiKeyCipher,
                             AgentCredentialService credentialService,
@@ -103,6 +126,7 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
                             AgentStatsService statsService) {
         this.subTaskStatsPort = subTaskStatsPort;
         this.subTaskCommandPort = subTaskCommandPort;
+        this.taskTeamMemberPort = taskTeamMemberPort;
         this.rewardService = rewardService;
         this.activityLogService = activityLogService;
         this.agentInboxMapper = agentInboxMapper;
@@ -110,6 +134,11 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
         this.agentExecutionRecordMapper = agentExecutionRecordMapper;
         this.conversationArchiveMapper = conversationArchiveMapper;
         this.conversationMessageMapper = conversationMessageMapper;
+        this.agentEventMapper = agentEventMapper;
+        this.agentSessionMapper = agentSessionMapper;
+        this.browserSessionMapper = browserSessionMapper;
+        this.agentQualityProfileMapper = agentQualityProfileMapper;
+        this.teamMemberMapper = teamMemberMapper;
         this.agentMcpServerService = agentMcpServerService;
         this.agentApiKeyCipher = agentApiKeyCipher;
         this.credentialService = credentialService;
@@ -423,6 +452,41 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     }
 
     // ══════════════════════════════════════════════════════════════
+    //  读侧只读快照出口（RM5 批 2：planner/review/task 三域前向实体泄漏收口）
+    //  各方法逐字镜像一条既有查询 + AgentProfileSnapshotMapper 映射，零新增 DB 往返。
+    // ══════════════════════════════════════════════════════════════
+
+    /** 按 id 取快照（镜像 getById：不存在/已删返回 null）。 */
+    @Override
+    public AgentProfileSnapshot getProfileById(Long agentId) {
+        return AgentProfileSnapshotMapper.toSnapshot(getById(agentId));
+    }
+
+    /** 按 id 集合取快照（镜像 listByIds：绝不返回 null）。 */
+    @Override
+    public List<AgentProfileSnapshot> listProfilesByIds(Collection<Long> ids) {
+        return AgentProfileSnapshotMapper.toSnapshots(listByIds(ids));
+    }
+
+    /** 按角色取快照（镜像 listByRole：绝不返回 null）。 */
+    @Override
+    public List<AgentProfileSnapshot> listProfilesByRole(AgentRole role) {
+        return AgentProfileSnapshotMapper.toSnapshots(listByRole(role));
+    }
+
+    /** 全部 ACTIVE 快照，score DESC（镜像 listActive：绝不返回 null）。 */
+    @Override
+    public List<AgentProfileSnapshot> listActiveProfiles() {
+        return AgentProfileSnapshotMapper.toSnapshots(listActive());
+    }
+
+    /** 全量快照，score DESC（镜像 listAllOrderByScoreDesc：绝不返回 null）。 */
+    @Override
+    public List<AgentProfileSnapshot> listProfilesOrderByScoreDesc() {
+        return AgentProfileSnapshotMapper.toSnapshots(listAllOrderByScoreDesc());
+    }
+
+    // ══════════════════════════════════════════════════════════════
     //  分页列表
     // ══════════════════════════════════════════════════════════════
 
@@ -513,6 +577,19 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
         // agent_inbox / agent_duty_lease 对 agent.id 有外键约束，必须先于 agent 行删除
         agentInboxMapper.physicalDeleteByAgentId(agentId);
         agentDutyLeaseMapper.physicalDeleteByAgentId(agentId);
+        // P2-4（2026-10-05）：task_agent_member 的 agent_id 亦有外键
+        // （task_agent_member_agent_id_fkey），漏清会撞 FK → HTTP 500。
+        // task 域表经端口收口（agent 域不得直捅 task.mapper）。
+        taskTeamMemberPort.physicalDeleteByAgentId(agentId);
+        // D-1（2026-10-05）：以下 4 表带 agent_id 语义列但**无外键**，原 Agent 级联被静默漏删
+        // （全库孤儿实测：agent_event 91、agent_quality_profile 1；agent_session/browser_session 现网 0）。
+        // 均须先于 agent 行删除。
+        agentEventMapper.physicalDeleteByAgentId(agentId);
+        agentSessionMapper.physicalDeleteByAgentId(agentId);
+        browserSessionMapper.physicalDeleteByAgentId(agentId);
+        agentQualityProfileMapper.physicalDeleteByAgentId(agentId);
+        // D-1：删 Agent 却仍留在团队花名册里语义错误 —— 清 team_member（agent 域，无外键）
+        teamMemberMapper.physicalDeleteByAgentId(agentId);
 
         baseMapper.physicalDeleteById(agentId);
 
@@ -605,6 +682,9 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
 
     @Override
     public int physicalDeleteTaskTrace(Long taskId) {
+        if (taskId == null) {
+            return 0; // 空 id 短路
+        }
         // 顺序与 deleteTaskCascade 既有约定一致：inbox 依赖 sub_task/review_record 子查询，
         // 调用方必须同一事务内先于子任务/审查记录执行本方法
         int total = 0;
@@ -612,6 +692,14 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
         total += agentExecutionRecordMapper.physicalDeleteByTaskId(taskId);
         total += conversationArchiveMapper.physicalDeleteByTaskId(taskId);
         total += conversationMessageMapper.physicalDeleteByTaskId(taskId);
+        // D-1（2026-10-05）：以下 5 表带 task_id/sub_task_id 语义列但**无外键**，原任务级联被静默漏删
+        // （全库孤儿实测：agent_event 211、agent_session 10、reward_log 2；activity_log/browser_session 现网 0）。
+        // 均须在 sub_task 行删除之前执行（子查询依赖 sub_task）。
+        total += agentEventMapper.physicalDeleteByTaskId(taskId);
+        total += agentSessionMapper.physicalDeleteByTaskId(taskId);
+        total += browserSessionMapper.physicalDeleteByTaskId(taskId);
+        total += rewardService.physicalDeleteByTask(taskId);
+        total += activityLogService.physicalDeleteByTask(taskId);
         return total;
     }
 

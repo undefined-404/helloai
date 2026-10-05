@@ -8,15 +8,20 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentDutyLeaseMapper;
+import com.helloai.core.agent.mapper.AgentEventMapper;
 import com.helloai.core.agent.mapper.AgentExecutionRecordMapper;
 import com.helloai.core.agent.mapper.AgentInboxMapper;
 import com.helloai.core.agent.mapper.AgentMapper;
+import com.helloai.core.agent.mapper.BrowserSessionMapper;
 import com.helloai.core.agent.mapper.ConversationArchiveMapper;
 import com.helloai.core.agent.mapper.ConversationMessageMapper;
+import com.helloai.core.agent.mapper.TeamMemberMapper;
 import com.helloai.core.agent.port.AgentAuthPort;
 import com.helloai.core.agent.port.SubTaskStatsPort;
+import com.helloai.core.agent.quality.mapper.AgentQualityProfileMapper;
 import com.helloai.core.agent.service.impl.AgentServiceImpl;
-import com.helloai.core.system.entity.LlmProviderModel;
+import com.helloai.core.agent.session.mapper.AgentSessionMapper;
+import com.helloai.core.system.port.LlmProviderModelProfile;
 import com.helloai.core.agent.service.ActivityLogService;
 import com.helloai.core.agent.service.RewardService;
 import com.helloai.core.agent.port.SubTaskCommandPort;
@@ -28,6 +33,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 import java.util.Map;
@@ -41,6 +47,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -69,6 +76,17 @@ class AgentServiceTest {
     private ConversationArchiveMapper conversationArchiveMapper;
     @Mock
     private ConversationMessageMapper conversationMessageMapper;
+    // D-1：task_id/sub_task_id/agent_id 语义列但无外键的漏删表
+    @Mock
+    private AgentEventMapper agentEventMapper;
+    @Mock
+    private AgentSessionMapper agentSessionMapper;
+    @Mock
+    private BrowserSessionMapper browserSessionMapper;
+    @Mock
+    private AgentQualityProfileMapper agentQualityProfileMapper;
+    @Mock
+    private TeamMemberMapper teamMemberMapper;
     @Mock
     private AgentMapper agentMapper;
     @Mock
@@ -79,11 +97,15 @@ class AgentServiceTest {
     private LlmProviderModelQueryService llmProviderModelQueryService;
     @Mock
     private AgentApiKeyCipher agentApiKeyCipher;
+    @Mock
+    private com.helloai.core.agent.port.TaskTeamMemberPort taskTeamMemberPort;
 
     private AgentService newSpyService() {
-        return spy(new AgentServiceImpl(subTaskStatsPort, subTaskCommandPort, rewardService, activityLogService,
+        return spy(new AgentServiceImpl(subTaskStatsPort, subTaskCommandPort, taskTeamMemberPort, rewardService, activityLogService,
                 agentInboxMapper, agentDutyLeaseMapper,
                 agentExecutionRecordMapper, conversationArchiveMapper, conversationMessageMapper,
+                agentEventMapper, agentSessionMapper, browserSessionMapper, agentQualityProfileMapper,
+                teamMemberMapper,
                 agentMcpServerService, agentApiKeyCipher,
                 new AgentCredentialService(agentMapper, agentApiKeyCipher),
                 new AgentSkillPolicyService(agentMapper, llmProviderModelQueryService),
@@ -127,6 +149,70 @@ class AgentServiceTest {
         assertThatThrownBy(() -> service.getRelatedCounts(999L))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("Agent 不存在");
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  D-1 级联删除完整性（2026-10-05）：无外键漏删表补齐
+    // ════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("D-1 physicalDeleteTaskTrace：任务级联须清 agent_event/agent_session/browser_session/reward_log/activity_log")
+    void physicalDeleteTaskTraceShouldCleanLeakyTables() {
+        AgentService service = newSpyService();
+
+        service.physicalDeleteTaskTrace(9L);
+
+        // 既有收口（inbox / execution_record / archive / message）
+        verify(agentInboxMapper).physicalDeleteByTaskRef(9L);
+        verify(agentExecutionRecordMapper).physicalDeleteByTaskId(9L);
+        verify(conversationArchiveMapper).physicalDeleteByTaskId(9L);
+        verify(conversationMessageMapper).physicalDeleteByTaskId(9L);
+        // D-1 新增（无外键、原级联静默漏删）
+        verify(agentEventMapper).physicalDeleteByTaskId(9L);
+        verify(agentSessionMapper).physicalDeleteByTaskId(9L);
+        verify(browserSessionMapper).physicalDeleteByTaskId(9L);
+        verify(rewardService).physicalDeleteByTask(9L);
+        verify(activityLogService).physicalDeleteByTask(9L);
+    }
+
+    @Test
+    @DisplayName("D-1 physicalDeleteTaskTrace：空 taskId 短路，不触达任何 Mapper")
+    void physicalDeleteTaskTraceShouldShortCircuitOnNull() {
+        AgentService service = newSpyService();
+
+        assertThat(service.physicalDeleteTaskTrace(null)).isZero();
+
+        verifyNoInteractions(agentEventMapper, agentSessionMapper, browserSessionMapper,
+                conversationMessageMapper, conversationArchiveMapper, agentInboxMapper);
+        verify(rewardService, never()).physicalDeleteByTask(any());
+        verify(activityLogService, never()).physicalDeleteByTask(any());
+    }
+
+    @Test
+    @DisplayName("D-1 deleteAgentCascade：Agent 级联须清 agent_event/agent_session/browser_session/agent_quality_profile")
+    void deleteAgentCascadeShouldCleanLeakyTables() {
+        AgentService service = newSpyService();
+        ReflectionTestUtils.setField(service, "baseMapper", agentMapper);
+        Agent agent = new Agent();
+        agent.setId(1L);
+        agent.setName("agent-a");
+        when(agentMapper.selectById(1L)).thenReturn(agent);
+        when(agentMapper.physicalDeleteById(1L)).thenReturn(1);
+
+        service.deleteAgentCascade(1L, "agent-a");
+
+        // 既有：外键表
+        verify(agentInboxMapper).physicalDeleteByAgentId(1L);
+        verify(agentDutyLeaseMapper).physicalDeleteByAgentId(1L);
+        verify(taskTeamMemberPort).physicalDeleteByAgentId(1L);
+        // D-1 新增（无外键、原级联静默漏删）
+        verify(agentEventMapper).physicalDeleteByAgentId(1L);
+        verify(agentSessionMapper).physicalDeleteByAgentId(1L);
+        verify(browserSessionMapper).physicalDeleteByAgentId(1L);
+        verify(agentQualityProfileMapper).physicalDeleteByAgentId(1L);
+        // D-1：删 Agent 须清团队花名册成员关系（team_member 按 agent 计数归零）
+        verify(teamMemberMapper).physicalDeleteByAgentId(1L);
+        verify(agentMapper).physicalDeleteById(1L);
     }
 
     // ════════════════════════════════════════════════════════════
@@ -247,21 +333,15 @@ class AgentServiceTest {
     //  validateAgentSkills / deriveSkillsForRegistration（能力驱动）
     // ════════════════════════════════════════════════════════════
 
-    private LlmProviderModel capability(String modelType, List<String> capability, List<String> available) {
-        String[] parts = modelType.split(":", 2);
-        LlmProviderModel m = new LlmProviderModel();
-        m.setProviderCode(parts[0]);
-        m.setModelName(parts[1]);
-        m.setCapabilitySkills(capability);
-        m.setAvailableOptionalSkills(available);
-        return m;
+    private LlmProviderModelProfile capability(String modelType, List<String> capability, List<String> available) {
+        return new LlmProviderModelProfile(capability, available);
     }
 
     @Test
     @DisplayName("validateAgentSkills：标准技能超出模型白名单 → 抛 BizException")
     void validateSkills_standardSkillOutOfWhitelist_throws() {
         AgentService service = newSpyService();
-        when(llmProviderModelQueryService.findCapabilityByModelType("deepseek:deepseek-v4-flash"))
+        when(llmProviderModelQueryService.findCapabilityProfileByModelType("deepseek:deepseek-v4-flash"))
                 .thenReturn(capability("deepseek:deepseek-v4-flash",
                         List.of("thinking"), List.of("shell", "code-review")));
 
@@ -276,7 +356,7 @@ class AgentServiceTest {
     @DisplayName("validateAgentSkills：白名单内标准技能 + 自定义技能 → 通过")
     void validateSkills_whitelistAndCustom_pass() {
         AgentService service = newSpyService();
-        when(llmProviderModelQueryService.findCapabilityByModelType("deepseek:deepseek-v4-flash"))
+        when(llmProviderModelQueryService.findCapabilityProfileByModelType("deepseek:deepseek-v4-flash"))
                 .thenReturn(capability("deepseek:deepseek-v4-flash",
                         List.of("thinking"), List.of("shell", "code-review")));
 
@@ -288,7 +368,7 @@ class AgentServiceTest {
     @DisplayName("validateAgentSkills：未识别模型 / modelType 为空 / skills 为空 → 直接放行")
     void validateSkills_unknownOrEmpty_pass() {
         AgentService service = newSpyService();
-        when(llmProviderModelQueryService.findCapabilityByModelType("legacy:old-model"))
+        when(llmProviderModelQueryService.findCapabilityProfileByModelType("legacy:old-model"))
                 .thenReturn(null);
 
         service.validateAgentSkills("legacy:old-model", List.of("python"));   // 未识别模型放行
@@ -302,7 +382,7 @@ class AgentServiceTest {
     @DisplayName("deriveSkillsForRegistration：API_KEY_LLM + 已识别模型 → 能力驱动（thinking 锁定 + 白名单过滤）")
     void deriveSkills_capabilityDriven() {
         AgentService service = newSpyService();
-        when(llmProviderModelQueryService.findCapabilityByModelType("deepseek:deepseek-v4-flash"))
+        when(llmProviderModelQueryService.findCapabilityProfileByModelType("deepseek:deepseek-v4-flash"))
                 .thenReturn(capability("deepseek:deepseek-v4-flash",
                         List.of("thinking"), List.of("shell", "code-review")));
 
@@ -321,7 +401,7 @@ class AgentServiceTest {
     @DisplayName("deriveSkillsForRegistration：API_KEY_LLM + 未识别模型 → A2 原推导（code-review 兜底）")
     void deriveSkills_unknownModel_fallsBackToDerive() {
         AgentService service = newSpyService();
-        when(llmProviderModelQueryService.findCapabilityByModelType("legacy:old-model"))
+        when(llmProviderModelQueryService.findCapabilityProfileByModelType("legacy:old-model"))
                 .thenReturn(null);
 
         Agent agent = new Agent();

@@ -8,6 +8,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.core.review.quality.RepeatedFailureGate;
 import com.helloai.core.review.picker.ReviewerPicker;
 import com.helloai.core.review.service.SubTaskReviewService;
 import com.helloai.core.review.service.impl.SubTaskReviewServiceImpl;
@@ -17,16 +18,16 @@ import com.helloai.core.review.support.VerdictParser;
 import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
-import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.service.ConversationService;
-import com.helloai.core.task.entity.Attachment;
+import com.helloai.core.task.port.AttachmentView;
 import com.helloai.core.task.service.AttachmentService;
-import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.entity.Uncertainty;
+import com.helloai.core.task.port.SubTaskView;
+import com.helloai.core.task.port.UncertaintyView;
 import com.helloai.core.review.service.ReviewService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
@@ -161,32 +162,68 @@ class SubTaskReviewServiceTest {
                 conversationService, recordReviewService, redissonClient,
                 new ReviewEvidenceAssembler(attachmentService, dispatchProperties),
                 new VerdictParser(new ObjectMapper()),
-                reviewerPicker, reviewProperties, agentQualityProfileService, executor, agentEventRecorder);
+                reviewerPicker, reviewProperties, agentQualityProfileService, executor, agentEventRecorder,
+                new RepeatedFailureGate(dispatchProperties));
     }
 
-    private SubTask reviewSubTask() {
-        SubTask subTask = new SubTask();
-        subTask.setId(SUB_TASK_ID);
-        subTask.setTaskId(TASK_ID);
-        subTask.setStatus(SubTaskStatus.REVIEW);
-        subTask.setTitle("写接口文档");
-        subTask.setContent("整理 REST 接口清单");
-        subTask.setDeliverable("接口文档");
-        subTask.setAcceptance("覆盖全部端点");
-        subTask.setReworkCount(0);
+    private SubTaskView reviewSubTask() {
         //  证据检查：默认携带可读产出（非执行密集任务 output 即产出支撑）
         Map<String, Object> ctx = new HashMap<>();
         ctx.put("lastExecution", Map.of("output", "接口清单已整理完毕，覆盖全部端点。"));
-        subTask.setContext(ctx);
-        return subTask;
+        return new SubTaskView(SUB_TASK_ID, TASK_ID, SubTaskStatus.REVIEW, null, 0,
+                "写接口文档", "整理 REST 接口清单", "接口文档", "覆盖全部端点", null, ctx, List.of());
     }
 
-    private Agent llmAgent(long id, AgentRole role) {
-        Agent agent = new Agent();
-        agent.setId(id);
-        agent.setRole(role);
-        agent.setAccessType(AgentAccessType.API_KEY_LLM);
-        return agent;
+    private static SubTaskView withStatus(SubTaskView base, SubTaskStatus status) {
+        return new SubTaskView(base.id(), base.taskId(), status, base.assignedAgentId(), base.reworkCount(),
+                base.title(), base.content(), base.deliverable(), base.acceptance(), base.constraints(),
+                base.context(), base.uncertainties());
+    }
+
+    private static SubTaskView withReworkCount(SubTaskView base, int reworkCount) {
+        return new SubTaskView(base.id(), base.taskId(), base.status(), base.assignedAgentId(), reworkCount,
+                base.title(), base.content(), base.deliverable(), base.acceptance(), base.constraints(),
+                base.context(), base.uncertainties());
+    }
+
+    private static SubTaskView withConstraints(SubTaskView base, String constraints) {
+        return new SubTaskView(base.id(), base.taskId(), base.status(), base.assignedAgentId(), base.reworkCount(),
+                base.title(), base.content(), base.deliverable(), base.acceptance(), constraints,
+                base.context(), base.uncertainties());
+    }
+
+    private static SubTaskView withUncertainties(SubTaskView base, List<UncertaintyView> uncertainties) {
+        return new SubTaskView(base.id(), base.taskId(), base.status(), base.assignedAgentId(), base.reworkCount(),
+                base.title(), base.content(), base.deliverable(), base.acceptance(), base.constraints(),
+                base.context(), uncertainties);
+    }
+
+    /** 以给定 context 覆写快照（视图不可变，等价原 setContext 写法）。 */
+    private static SubTaskView withContext(SubTaskView base, Map<String, Object> context) {
+        return new SubTaskView(base.id(), base.taskId(), base.status(), base.assignedAgentId(),
+                base.reworkCount(), base.title(), base.content(), base.deliverable(),
+                base.acceptance(), base.constraints(), context, base.uncertainties());
+    }
+
+    /** 执行密集子任务视图（内容/交付物含本机操作信号）。 */
+    private SubTaskView denseView(String content, String deliverable, Map<String, Object> context) {
+        return new SubTaskView(SUB_TASK_ID, TASK_ID, SubTaskStatus.REVIEW, null, 0,
+                "写接口文档", content, deliverable, "覆盖全部端点", null, context, List.of());
+    }
+
+    /** 附件视图（等价原实体 setter 写法；contentLoadable 即原 isContentLoadable 桩值）。 */
+    private static AttachmentView attachmentView(Long id, String fileName, String fileType, String mimeType,
+                                                 Long fileSize, boolean contentLoadable) {
+        return new AttachmentView(id, fileName, fileType, mimeType, fileSize, contentLoadable);
+    }
+
+    private AgentProfileSnapshot llmAgent(long id, AgentRole role) {
+        return AgentProfileSnapshot.builder()
+                .id(id)
+                .role(role)
+                .accessType(AgentAccessType.API_KEY_LLM)
+                .localExecutionCapable(true)
+                .build();
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -270,8 +307,8 @@ class SubTaskReviewServiceTest {
     @Test
     @DisplayName("核验通过 → complete（REVIEW→DONE）并记 timeline")
     void shouldCompleteWhenVerdictPass() {
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
@@ -286,10 +323,10 @@ class SubTaskReviewServiceTest {
     @Test
     @DisplayName("核验不通过 → rework 并对 API_KEY_LLM 执行者重发执行命令")
     void shouldReworkAndRedispatchWhenVerdictFail() {
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 2, \"issues\": \"缺 3 个端点\", \"comment\": \"\"}", "stop", "llm", 100));
-        when(agentService.getById(EXECUTOR_ID)).thenReturn(llmAgent(EXECUTOR_ID, AgentRole.EXECUTOR));
+        when(agentService.getProfileById(EXECUTOR_ID)).thenReturn(llmAgent(EXECUTOR_ID, AgentRole.EXECUTOR));
         // Phase 0 A3：预算充足返回 true（mock 默认 false 会误判为预算熔断分支）
         when(subTaskService.rework(SUB_TASK_ID, EXECUTOR_ID)).thenReturn(true);
 
@@ -313,8 +350,7 @@ class SubTaskReviewServiceTest {
             "7 条关键词中仅 2 条出现在材料中，其余 5 条 not contained in the material";
 
     /** 携带上轮驳回历史的子任务（可指定上轮 issues / score；score=null 模拟缺失场景）。 */
-    private SubTask reviewSubTaskWithFailureHistory(String prevIssues, Integer prevScore) {
-        SubTask subTask = reviewSubTask();
+    private SubTaskView reviewSubTaskWithFailureHistory(String prevIssues, Integer prevScore) {
         Map<String, Object> ctx = new HashMap<>();
         ctx.put("lastExecution", Map.of("output", "接口清单已整理完毕，覆盖全部端点。"));
         Map<String, Object> prev = new HashMap<>();
@@ -327,12 +363,11 @@ class SubTaskReviewServiceTest {
         }
         prev.put("executorDoneIssues", List.of());
         ctx.put("reviewHistory", List.of(prev));
-        subTask.setContext(ctx);
-        return subTask;
+        return withContext(reviewSubTask(), ctx);
     }
 
     /** 携带上轮同因驳回的 reviewHistory 子任务（P-1 事故形态复现）。 */
-    private SubTask reviewSubTaskWithRepeatedFailureHistory() {
+    private SubTaskView reviewSubTaskWithRepeatedFailureHistory() {
         return reviewSubTaskWithFailureHistory(SAME_ISSUES, 2);
     }
 
@@ -340,8 +375,8 @@ class SubTaskReviewServiceTest {
     @DisplayName("P-1 A2-2 连续同因驳回（相似≥阈值 + 评分未提升）→ 短路转死信，不返工不重派")
     void shouldShortCircuitRepeatedFailureSignatureToDeadLetter() {
         when(dispatchProperties.isAutoReviewRepeatFailureShortCircuit()).thenReturn(true);
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTaskWithRepeatedFailureHistory());
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTaskWithRepeatedFailureHistory());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 2, \"issues\": \""
                         + SAME_ISSUES + "，无法完成核验\", \"comment\": \"\"}", "stop", "llm", 100));
 
@@ -358,6 +393,7 @@ class SubTaskReviewServiceTest {
                 eq(AgentRole.REVIEWER), eq(9L), skipPayload.capture());
         assertThat(skipPayload.getValue())
                 .containsEntry("reason", "repeated_failure_signature")
+                .containsEntry("basis", "score_stall_and_text_repeat")
                 .containsEntry("round", 2);
         assertThat(((Number) skipPayload.getValue().get("similarity")).doubleValue())
                 .isGreaterThanOrEqualTo(0.85);
@@ -372,16 +408,18 @@ class SubTaskReviewServiceTest {
         // 判决仍落 review_record 留痕
         verify(recordReviewService).recordAutoReview(
                 eq(SUB_TASK_ID), eq(9L), eq(ReviewResult.REJECTED), eq(2), anyString(), anyString());
+        verify(conversationService).addMessage(eq(SUB_TASK_ID), eq(9L), eq("assistant"), eq("agent"),
+                anyString(), eq("subtask_review_skip_repeated_failure"));
     }
 
     @Test
     @DisplayName("P-1 A2-2 驳回意见相似但评分提升（2→3）→ 不短路，正常返工（防误伤进步迭代）")
     void shouldReworkWhenSimilarFailureButScoreImproves() {
         when(dispatchProperties.isAutoReviewRepeatFailureShortCircuit()).thenReturn(true);
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTaskWithRepeatedFailureHistory());
-        when(agentService.getById(EXECUTOR_ID)).thenReturn(llmAgent(EXECUTOR_ID, AgentRole.EXECUTOR));
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTaskWithRepeatedFailureHistory());
+        when(agentService.getProfileById(EXECUTOR_ID)).thenReturn(llmAgent(EXECUTOR_ID, AgentRole.EXECUTOR));
         when(subTaskService.rework(SUB_TASK_ID, EXECUTOR_ID)).thenReturn(true);
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 3, \"issues\": \""
                         + SAME_ISSUES + "，无法完成核验\", \"comment\": \"\"}", "stop", "llm", 100));
 
@@ -398,9 +436,9 @@ class SubTaskReviewServiceTest {
     @DisplayName("P-1 A2-2 短路开关关闭 → 相同驳回意见仍走正常返工（行为开关生效）")
     void shouldReworkWhenShortCircuitSwitchDisabled() {
         // isAutoReviewRepeatFailureShortCircuit 默认 false：两轮意见逐字相同也不短路
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTaskWithRepeatedFailureHistory());
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTaskWithRepeatedFailureHistory());
         when(subTaskService.rework(SUB_TASK_ID, EXECUTOR_ID)).thenReturn(true);
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 2, \"issues\": \""
                         + SAME_ISSUES + "\", \"comment\": \"\"}", "stop", "llm", 100));
 
@@ -416,42 +454,38 @@ class SubTaskReviewServiceTest {
     // ══════════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("R1 真实语料回归：sub3 场景 score 恒定 2→2（issues 整篇重写、相似度仅 0.25）→ 主判据 score_stall 短路")
-    void shouldShortCircuitRealCorpusScoreStall() throws Exception {
+    @DisplayName("2026-10-03 修订（真机 687）：score 恒定 2→2 但问题已变（相似度仅 0.25）→ 不短路，正常返工")
+    void shouldReworkWhenScoreStallsButIssuesChanged() throws Exception {
         when(dispatchProperties.isAutoReviewRepeatFailureShortCircuit()).thenReturn(true);
-        when(subTaskService.getById(SUB_TASK_ID))
+        when(subTaskService.getView(SUB_TASK_ID))
                 .thenReturn(reviewSubTaskWithFailureHistory(loadCorpus("tku-e2e-01-sub3-r1.txt"), 2));
+        when(agentService.getProfileById(EXECUTOR_ID)).thenReturn(llmAgent(EXECUTOR_ID, AgentRole.EXECUTOR));
+        when(subTaskService.rework(SUB_TASK_ID, EXECUTOR_ID)).thenReturn(true);
         // 本轮评审输出 r2 全文（与 r1 措辞/编号全变，实测相似度 0.2537 < 阈值 0.85）
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
                         verdictJson(2, loadCorpus("tku-e2e-01-sub3-r2.txt")), "stop", "llm", 100));
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
-        // 旧判据（相似度前置门槛）下此形态永不短路——新判据以 score 未提升为主判据触发
-        verify(subTaskService, never()).rework(anyLong(), any());
-        verify(executionCommandService, never()).createAssignedCommand(anyLong(), anyLong(), anyString(), any());
-        ArgumentCaptor<Map> skipPayload = ArgumentCaptor.forClass(Map.class);
-        verify(taskTimelineService).recordEvent(
+        // 分数停滞但相似度（0.25 量级）< 阈值 → 问题性质已变、有实质进展 → 继续返工（防误伤迭代）
+        verify(subTaskService).rework(SUB_TASK_ID, EXECUTOR_ID);
+        verify(executionCommandService).createAssignedCommand(
+                SUB_TASK_ID, EXECUTOR_ID, "auto-review-rework", List.of());
+        verify(subTaskService, never()).changeStatus(eq(SUB_TASK_ID), eq(SubTaskStatus.DEAD_LETTER), isNull());
+        verify(subTaskService, never()).markManualIntervention(anyLong(), anyString(), anyMap());
+        verify(taskTimelineService, never()).recordEvent(
                 eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_auto_review_skip_repeated_failure"),
-                eq(AgentRole.REVIEWER), eq(9L), skipPayload.capture());
-        assertThat(skipPayload.getValue())
-                .containsEntry("basis", "score_stall")
-                .containsEntry("scoreTrend", "2->2");
-        // 关键实证：低相似度（0.25 量级）也触发——旧判据永不可能到达的路径
-        assertThat(((Number) skipPayload.getValue().get("similarity")).doubleValue()).isLessThan(0.5);
-        verify(subTaskService).changeStatus(eq(SUB_TASK_ID), eq(SubTaskStatus.DEAD_LETTER), isNull());
-        verify(subTaskService).markManualIntervention(
-                eq(SUB_TASK_ID), eq("repeated_failure_signature"), anyMap());
+                any(), any(), anyMap());
     }
 
     @Test
     @DisplayName("R1 兜底：上轮 score 缺失且文本高度相似 → basis=text_repeat 短路（旧行为保留）")
     void shouldShortCircuitViaTextRepeatWhenScoreMissing() {
         when(dispatchProperties.isAutoReviewRepeatFailureShortCircuit()).thenReturn(true);
-        when(subTaskService.getById(SUB_TASK_ID))
+        when(subTaskService.getView(SUB_TASK_ID))
                 .thenReturn(reviewSubTaskWithFailureHistory(SAME_ISSUES, null));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 2, \"issues\": \""
                         + SAME_ISSUES + "，无法完成核验\", \"comment\": \"\"}", "stop", "llm", 100));
 
@@ -472,10 +506,10 @@ class SubTaskReviewServiceTest {
     @DisplayName("R1 兜底不误伤：score 缺失且两轮文本不同（相似度 < 阈值）→ 正常返工")
     void shouldReworkWhenScoreMissingAndTextDiffers() {
         when(dispatchProperties.isAutoReviewRepeatFailureShortCircuit()).thenReturn(true);
-        when(subTaskService.getById(SUB_TASK_ID))
+        when(subTaskService.getView(SUB_TASK_ID))
                 .thenReturn(reviewSubTaskWithFailureHistory("缺少订单过期接口的幂等性处理", null));
         when(subTaskService.rework(SUB_TASK_ID, EXECUTOR_ID)).thenReturn(true);
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
                         "{\"pass\": false, \"score\": 2, \"issues\": \"文档格式不符，缺少目录结构说明\", \"comment\": \"\"}",
                         "stop", "llm", 100));
@@ -504,8 +538,8 @@ class SubTaskReviewServiceTest {
     @Test
     @DisplayName("A3 预算耗尽：rework 返回 false → 不补发执行命令（子任务已转死信待人工）")
     void shouldSkipExecutionCommandWhenReworkBudgetExhausted() {
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 2, \"issues\": \"缺 3 个端点\", \"comment\": \"\"}", "stop", "llm", 100));
         // Phase 0 A3：返工预算耗尽（attempt_total 达 max-reassign-attempts），rework 已转 DEAD_LETTER
         when(subTaskService.rework(SUB_TASK_ID, EXECUTOR_ID)).thenReturn(false);
@@ -520,8 +554,8 @@ class SubTaskReviewServiceTest {
     @Test
     @DisplayName("输出不可解析 → 不改状态（停留 REVIEW），记 unparseable timeline")
     void shouldStayInReviewWhenUnparseable() {
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("这个任务完成得还行吧", "stop", "llm", 100));
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
@@ -536,17 +570,17 @@ class SubTaskReviewServiceTest {
     @Test
     @DisplayName("状态非 REVIEW 或返工达上限 → 跳过，不调 LLM")
     void shouldSkipWhenNotReviewOrReworkLimitReached() {
-        SubTask done = reviewSubTask();
-        done.setStatus(SubTaskStatus.DONE);
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(done);
+        SubTaskView done = reviewSubTask();
+        done = withStatus(done, SubTaskStatus.DONE);
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(done);
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
-        SubTask maxRework = reviewSubTask();
-        maxRework.setReworkCount(3);
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(maxRework);
+        SubTaskView maxRework = reviewSubTask();
+        maxRework = withReworkCount(maxRework, 3);
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(maxRework);
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
-        verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
+        verify(platformAgentExecutionService, never()).executeSync(anyLong(), any(AgentTask.class));
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_auto_review_skip_max_rework"),
                 eq(AgentRole.REVIEWER), any(), anyMap());
@@ -563,22 +597,29 @@ class SubTaskReviewServiceTest {
                 .containsEntry("reason", "rework_limit_exceeded")
                 .containsEntry("reworkCount", 3)
                 .containsEntry("maxRework", 3);
+        // 2026-10-05 补做：终态分支须同时落一条对话消息（toolName 前缀 subtask_review，前端归核验轮次）
+        verify(conversationService).addMessage(eq(SUB_TASK_ID), isNull(), eq("assistant"), eq("agent"),
+                anyString(), eq("subtask_review_skip_max_rework"));
     }
 
     @Test
     @DisplayName("执行密集任务 + 提交者无本机能力 → 跳过自动核验 + 标记人工介入")
     void shouldSkipReviewWhenExecutionDenseSubmitterLacksCapability() {
         when(dispatchProperties.isFallbackSkipExecutionDense()).thenReturn(true);
-        SubTask dense = reviewSubTask();
-        dense.setContent("编写 verify-order-expire.ps1 脚本并执行验证");
-        dense.setDeliverable("verify-order-expire.ps1");
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(dense);
-        // 提交者：API_KEY_LLM 且无 supportsMCP（inner-loop 场景）
-        when(agentService.getById(EXECUTOR_ID)).thenReturn(llmAgent(EXECUTOR_ID, AgentRole.EXECUTOR));
+        SubTaskView dense = denseView("编写 verify-order-expire.ps1 脚本并执行验证", "verify-order-expire.ps1", null);
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(dense);
+        // 提交者：API_KEY_LLM 且无本机执行能力（localExecutionCapable=false，与原 supportsMCP 缺失语义等价）
+        AgentProfileSnapshot nonCapableSubmitter = AgentProfileSnapshot.builder()
+                .id(EXECUTOR_ID)
+                .role(AgentRole.EXECUTOR)
+                .accessType(AgentAccessType.API_KEY_LLM)
+                .localExecutionCapable(false)
+                .build();
+        when(agentService.getProfileById(EXECUTOR_ID)).thenReturn(nonCapableSubmitter);
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
-        verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
+        verify(platformAgentExecutionService, never()).executeSync(anyLong(), any(AgentTask.class));
         verify(subTaskService, never()).complete(anyLong());
         verify(subTaskService, never()).rework(anyLong(), any());
         verify(subTaskService).markManualIntervention(
@@ -586,35 +627,31 @@ class SubTaskReviewServiceTest {
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_review_skip_no_capability"),
                 eq(AgentRole.REVIEWER), eq(EXECUTOR_ID), anyMap());
+        verify(conversationService).addMessage(eq(SUB_TASK_ID), eq(EXECUTOR_ID), eq("assistant"), eq("agent"),
+                anyString(), eq("subtask_review_skip_no_capability"));
     }
 
     @Test
     @DisplayName("执行密集任务 + 提交者有本机能力 → 正常自动核验")
     void shouldReviewWhenExecutionDenseSubmitterHasLocalCapability() {
         when(dispatchProperties.isFallbackSkipExecutionDense()).thenReturn(true);
-        SubTask dense = reviewSubTask();
-        dense.setContent("编写 verify-order-expire.ps1 脚本并执行验证");
-        dense.setDeliverable("verify-order-expire.ps1");
-        dense.setContext(Map.of("lastExecution",
-                Map.of("output", "脚本执行完成: PASS=12 FAIL=0 全绿\nVERIFICATION:\n命令: ./verify-order-expire.ps1\n输出: PASS=12 FAIL=0\n结论: 脚本真实执行通过")));
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(dense);
+        SubTaskView dense = reviewSubTask();
+        dense = denseView("编写 verify-order-expire.ps1 脚本并执行验证", "verify-order-expire.ps1",
+                Map.of("lastExecution",
+                        Map.of("output", "脚本执行完成: PASS=12 FAIL=0 全绿\nVERIFICATION:\n命令: ./verify-order-expire.ps1\n输出: PASS=12 FAIL=0\n结论: 脚本真实执行通过")));
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(dense);
         // 提交者：CLI_CLIENT（天然具备本机执行能力）
-        Agent submitter = new Agent();
-        submitter.setId(EXECUTOR_ID);
-        submitter.setRole(AgentRole.EXECUTOR);
-        submitter.setAccessType(AgentAccessType.CLI_CLIENT);
-        when(agentService.getById(EXECUTOR_ID)).thenReturn(submitter);
+        AgentProfileSnapshot submitter = AgentProfileSnapshot.builder()
+                .id(EXECUTOR_ID)
+                .role(AgentRole.EXECUTOR)
+                .accessType(AgentAccessType.CLI_CLIENT)
+                .localExecutionCapable(true)
+                .build();
+        when(agentService.getProfileById(EXECUTOR_ID)).thenReturn(submitter);
         //  证据检查：执行密集任务需有可读物化附件支撑
-        Attachment attachment = new Attachment();
-        attachment.setId(100L);
-        attachment.setSubTaskId(SUB_TASK_ID);
-        attachment.setFileName("verify-order-expire.ps1");
-        attachment.setFileType("other");
-        attachment.setFileSize(2048L);
-        attachment.setStorageUrl("local://helloai-local/1/verify-order-expire.ps1");
-        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(attachment));
-        when(attachmentService.isContentLoadable(attachment)).thenReturn(true);
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        AttachmentView attachment = attachmentView(100L, "verify-order-expire.ps1", "other", null, 2048L, true);
+        when(attachmentService.listActiveViews(SUB_TASK_ID)).thenReturn(List.of(attachment));
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
                         "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
 
@@ -625,10 +662,69 @@ class SubTaskReviewServiceTest {
     }
 
     @Test
+    @DisplayName("执行密集 + 提交者快照缺失（getProfileById=null）→ 不跳过（等价锁定 hasLocalExecutionCapability(null)==true）")
+    void shouldNotSkipReviewWhenExecutionDenseSubmitterSnapshotMissing() {
+        when(dispatchProperties.isFallbackSkipExecutionDense()).thenReturn(true);
+        SubTaskView dense = reviewSubTask();
+        dense = denseView("编写 verify-order-expire.ps1 脚本并执行验证", "verify-order-expire.ps1",
+                Map.of("lastExecution",
+                        Map.of("output", "脚本执行完成: PASS=12 FAIL=0 全绿\nVERIFICATION:\n命令: ./verify-order-expire.ps1\n输出: PASS=12 FAIL=0\n结论: 脚本真实执行通过")));
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(dense);
+        // 提交者快照缺失：getProfileById 返回 null（原 hasLocalExecutionCapability(null)==true → 不跳过）
+        when(agentService.getProfileById(EXECUTOR_ID)).thenReturn(null);
+        // 证据检查：执行密集任务需有可读物化附件支撑
+        AttachmentView attachment = attachmentView(100L, "verify-order-expire.ps1", "other", null, 2048L, true);
+        when(attachmentService.listActiveViews(SUB_TASK_ID)).thenReturn(List.of(attachment));
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
+                .thenReturn(AgentResult.success(
+                        "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        // 不跳过：正式进入核验并放行，未打人工介入标记
+        verify(platformAgentExecutionService).executeSync(anyLong(), any(AgentTask.class));
+        verify(subTaskService).complete(SUB_TASK_ID);
+        verify(subTaskService, never()).markManualIntervention(anyLong(), anyString(), anyMap());
+    }
+
+    @Test
+    @DisplayName("执行密集 + 提交者快照存在但 localExecutionCapable=false → 跳过（能力门先于证据门，故造证据齐备仍拦截）")
+    void shouldSkipReviewWhenExecutionDenseSubmitterHasNoLocalCapability() {
+        when(dispatchProperties.isFallbackSkipExecutionDense()).thenReturn(true);
+        SubTaskView dense = reviewSubTask();
+        dense = denseView("编写 verify-order-expire.ps1 脚本并执行验证", "verify-order-expire.ps1",
+                Map.of("lastExecution",
+                        Map.of("output", "脚本执行完成: PASS=12 FAIL=0 全绿\nVERIFICATION:\n命令: ./verify-order-expire.ps1\n输出: PASS=12 FAIL=0\n结论: 脚本真实执行通过")));
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(dense);
+        // 提交者存在但无本机执行能力（API_KEY_LLM 且 localExecutionCapable=false）
+        AgentProfileSnapshot submitter = AgentProfileSnapshot.builder()
+                .id(EXECUTOR_ID)
+                .role(AgentRole.EXECUTOR)
+                .accessType(AgentAccessType.API_KEY_LLM)
+                .localExecutionCapable(false)
+                .build();
+        when(agentService.getProfileById(EXECUTOR_ID)).thenReturn(submitter);
+        // 证据齐备（附件可读）：用以证明拦截来自「能力门」而非「证据门」；
+        // 能力门先于证据门返回，故这两处 stub 不会被触达，用 lenient 规避严格桩校验
+        AttachmentView attachment = attachmentView(100L, "verify-order-expire.ps1", "other", null, 2048L, true);
+        lenient().when(attachmentService.listActiveViews(SUB_TASK_ID)).thenReturn(List.of(attachment));
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        verify(taskTimelineService).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_review_skip_no_capability"),
+                eq(AgentRole.REVIEWER), eq(EXECUTOR_ID), anyMap());
+        verify(subTaskService).markManualIntervention(
+                eq(SUB_TASK_ID), eq("review_skip_execution_dense_no_capability"), anyMap());
+        verify(subTaskService, never()).complete(anyLong());
+        verify(platformAgentExecutionService, never()).executeSync(anyLong(), any(AgentTask.class));
+    }
+
+    @Test
     @DisplayName("LLM 调用失败 → 不改状态（停留 REVIEW 等人工兜底）")
     void shouldStayInReviewWhenLlmFails() {
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenThrow(new RuntimeException("llm timeout"));
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
@@ -646,16 +742,16 @@ class SubTaskReviewServiceTest {
     @Test
     @DisplayName("§6.41 TC-1 首次驳回 → context.reviewHistory.length == 1，round=1")
     void shouldAppendFirstRoundToReviewHistory() {
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 2, \"issues\": \"缺端点\", \"comment\": \"请补\"}", "stop", "llm", 100));
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
-        ArgumentCaptor<com.helloai.core.task.entity.SubTask> captor =
-                ArgumentCaptor.forClass(com.helloai.core.task.entity.SubTask.class);
-        verify(subTaskService).updateById(captor.capture());
-        Map<String, Object> savedCtx = captor.getValue().getContext();
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+        verify(subTaskService).updateContext(org.mockito.ArgumentMatchers.eq(SUB_TASK_ID), captor.capture());
+        Map<String, Object> savedCtx = captor.getValue();
         assertThat(savedCtx).isNotNull();
         Object historyObj = savedCtx.get("reviewHistory");
         assertThat(historyObj).isInstanceOf(List.class);
@@ -675,23 +771,23 @@ class SubTaskReviewServiceTest {
     @Test
     @DisplayName("§6.41 TC-2 第二次驳回 → reviewHistory.length == 2，第二轮 round=2")
     void shouldAppendSecondRoundToReviewHistory() {
-        SubTask subTask = reviewSubTask();
         Map<String, Object> ctx = new HashMap<>();
         ctx.put("lastExecution", Map.of("output", "接口清单已整理完毕，覆盖全部端点。"));
         ctx.put("reviewHistory", List.of(Map.of(
                 "round", 1, "ts", "2026-08-01T10:00:00Z",
                 "issues", "缺端点", "comment", "请补", "score", 2,
                 "executorDoneIssues", List.of())));
-        subTask.setContext(ctx);
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        SubTaskView subTask = withContext(reviewSubTask(), ctx);
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(subTask);
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 3, \"issues\": \"格式不对\", \"comment\": \"再改\"}", "stop", "llm", 100));
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
-        ArgumentCaptor<SubTask> captor = ArgumentCaptor.forClass(SubTask.class);
-        verify(subTaskService).updateById(captor.capture());
-        List<?> history = (List<?>) captor.getValue().getContext().get("reviewHistory");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+        verify(subTaskService).updateContext(org.mockito.ArgumentMatchers.eq(SUB_TASK_ID), captor.capture());
+        List<?> history = (List<?>) captor.getValue().get("reviewHistory");
         assertThat(history).hasSize(2);
         // 第一轮保留
         Map<?, ?> first = (Map<?, ?>) history.get(0);
@@ -706,22 +802,22 @@ class SubTaskReviewServiceTest {
     @Test
     @DisplayName("§6.41 TC-3 兼容历史：context 只有 lastAutoReview 无 reviewHistory 时，新写入包成 reviewHistory[0] + lastAutoReview 同值")
     void shouldMigrateLegacyLastAutoReviewToReviewHistory() {
-        SubTask subTask = reviewSubTask();
         Map<String, Object> ctx = new HashMap<>();
         ctx.put("lastExecution", Map.of("output", "接口清单已整理完毕，覆盖全部端点。"));
         ctx.put("lastAutoReview", Map.of(
                 "reviewerAgentId", 9L,
                 "issues", "缺端点", "comment", "请补", "score", 2));
-        subTask.setContext(ctx);
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        SubTaskView subTask = withContext(reviewSubTask(), ctx);
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(subTask);
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 2, \"issues\": \"仍未达标\", \"comment\": \"\"}", "stop", "llm", 100));
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
-        ArgumentCaptor<SubTask> captor = ArgumentCaptor.forClass(SubTask.class);
-        verify(subTaskService).updateById(captor.capture());
-        Map<String, Object> savedCtx = captor.getValue().getContext();
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+        verify(subTaskService).updateContext(org.mockito.ArgumentMatchers.eq(SUB_TASK_ID), captor.capture());
+        Map<String, Object> savedCtx = captor.getValue();
         List<?> history = (List<?>) savedCtx.get("reviewHistory");
         assertThat(history).hasSize(2);
         // 首轮是兼容的旧 lastAutoReview
@@ -740,15 +836,16 @@ class SubTaskReviewServiceTest {
     @Test
     @DisplayName("§6.41 TC-4 executorDoneIssues 初始为空列表（留待后续执行回填 hook）")
     void shouldInitializeExecutorDoneIssuesAsEmptyList() {
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 2, \"issues\": \"缺端点\", \"comment\": \"\"}", "stop", "llm", 100));
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
-        ArgumentCaptor<SubTask> captor = ArgumentCaptor.forClass(SubTask.class);
-        verify(subTaskService).updateById(captor.capture());
-        List<?> history = (List<?>) captor.getValue().getContext().get("reviewHistory");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+        verify(subTaskService).updateContext(org.mockito.ArgumentMatchers.eq(SUB_TASK_ID), captor.capture());
+        List<?> history = (List<?>) captor.getValue().get("reviewHistory");
         Map<?, ?> first = (Map<?, ?>) history.get(0);
         Object done = first.get("executorDoneIssues");
         assertThat(done).isInstanceOf(List.class);
@@ -758,8 +855,8 @@ class SubTaskReviewServiceTest {
     @Test
     @DisplayName("P2-4 驳回 → reviewHistory 当前轮写入归一后的 missingEvidence 清单")
     void shouldPersistMissingEvidenceIntoReviewHistory() {
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
                         "{\"pass\": false, \"score\": 2, \"issues\": \"缺端点\", \"comment\": \"请补\","
                                 + " \"missingEvidence\": [{\"acceptanceRef\": \"覆盖全部端点\","
@@ -769,9 +866,10 @@ class SubTaskReviewServiceTest {
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
-        ArgumentCaptor<SubTask> captor = ArgumentCaptor.forClass(SubTask.class);
-        verify(subTaskService).updateById(captor.capture());
-        List<?> history = (List<?>) captor.getValue().getContext().get("reviewHistory");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+        verify(subTaskService).updateContext(org.mockito.ArgumentMatchers.eq(SUB_TASK_ID), captor.capture());
+        List<?> history = (List<?>) captor.getValue().get("reviewHistory");
         Map<?, ?> first = (Map<?, ?>) history.get(0);
         Object raw = first.get("missingEvidence");
         assertThat(raw).isInstanceOf(List.class);
@@ -786,17 +884,18 @@ class SubTaskReviewServiceTest {
     @Test
     @DisplayName("P2-4 驳回：LLM 未产出 missingEvidence → 落库空清单（形状稳定，零影响）")
     void shouldPersistEmptyMissingEvidenceWhenAbsent() {
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
                         "{\"pass\": false, \"score\": 2, \"issues\": \"缺端点\", \"comment\": \"请补\"}",
                         "stop", "llm", 100));
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
-        ArgumentCaptor<SubTask> captor = ArgumentCaptor.forClass(SubTask.class);
-        verify(subTaskService).updateById(captor.capture());
-        List<?> history = (List<?>) captor.getValue().getContext().get("reviewHistory");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+        verify(subTaskService).updateContext(org.mockito.ArgumentMatchers.eq(SUB_TASK_ID), captor.capture());
+        List<?> history = (List<?>) captor.getValue().get("reviewHistory");
         Map<?, ?> first = (Map<?, ?>) history.get(0);
         assertThat((List<?>) first.get("missingEvidence")).isEmpty();
     }
@@ -808,11 +907,16 @@ class SubTaskReviewServiceTest {
     @Test
     @DisplayName("§6.58: policy 指定 reviewerAgentId 生效（Picker 返回指定 reviewer）")
     void shouldUsePolicyReviewerWhenSpecified() {
-        Agent pinned = llmAgent(99L, AgentRole.REVIEWER);
-        pinned.setStatus(AgentStatus.ACTIVE);
+        AgentProfileSnapshot pinned = AgentProfileSnapshot.builder()
+                .id(99L)
+                .role(AgentRole.REVIEWER)
+                .accessType(AgentAccessType.API_KEY_LLM)
+                .status(AgentStatus.ACTIVE)
+                .localExecutionCapable(true)
+                .build();
         when(reviewerPicker.pickSingle(any())).thenReturn(pinned);
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
                         "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
 
@@ -828,9 +932,9 @@ class SubTaskReviewServiceTest {
     @Test
     @DisplayName("§6.58: 指定 reviewer 不可用（DISABLED）→ Picker 回退自动选择（9L）")
     void shouldFallbackToAutoWhenPolicyReviewerUnusable() {
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
         when(reviewerPicker.pickSingle(any())).thenReturn(llmAgent(9L, AgentRole.REVIEWER));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
                         "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
 
@@ -850,13 +954,13 @@ class SubTaskReviewServiceTest {
     @Test
     @DisplayName("无产出本体（output 与附件皆空）→ 跳过自动核验 + 人工介入标记")
     void shouldSkipReviewWhenNoOutputAndNoAttachment() {
-        SubTask fake = reviewSubTask();
-        fake.setContext(null); // 编造提交：连产出文本都没有
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(fake);
+        // 编造提交：连产出文本都没有
+        SubTaskView fake = withContext(reviewSubTask(), null);
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(fake);
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
-        verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
+        verify(platformAgentExecutionService, never()).executeSync(anyLong(), any(AgentTask.class));
         verify(subTaskService, never()).complete(anyLong());
         verify(subTaskService, never()).rework(anyLong(), any());
         verify(subTaskService).markManualIntervention(
@@ -865,29 +969,24 @@ class SubTaskReviewServiceTest {
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_review_skip_no_evidence"),
                 eq(AgentRole.REVIEWER), eq(EXECUTOR_ID), anyMap());
+        verify(conversationService).addMessage(eq(SUB_TASK_ID), eq(EXECUTOR_ID), eq("assistant"), eq("agent"),
+                anyString(), eq("subtask_review_skip_no_evidence"));
     }
 
     @Test
     @DisplayName("执行密集任务仅文字描述产出、无可读物化附件 → 跳过自动核验")
     void shouldSkipReviewWhenExecutionDenseWithoutReadableAttachment() {
-        SubTask dense = reviewSubTask();
-        dense.setContent("编写 verify-order-expire.ps1 脚本并执行验证");
-        dense.setDeliverable("verify-order-expire.ps1");
-        dense.setContext(Map.of("lastExecution",
-                Map.of("output", "脚本已完成并执行通过: 文件 203 行 errors=0"))); // 仅文字声称，无真实附件
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(dense);
+        SubTaskView dense = denseView("编写 verify-order-expire.ps1 脚本并执行验证", "verify-order-expire.ps1",
+                Map.of("lastExecution",
+                        Map.of("output", "脚本已完成并执行通过: 文件 203 行 errors=0"))); // 仅文字声称，无真实附件
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(dense);
         // 附件存在但平台不可直读（外部存储）→ 不算可验证证据
-        Attachment external = new Attachment();
-        external.setId(100L);
-        external.setSubTaskId(SUB_TASK_ID);
-        external.setFileName("verify-order-expire.ps1");
-        external.setStorageUrl("minio://bucket/obj");
-        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(external));
-        when(attachmentService.isContentLoadable(external)).thenReturn(false);
+        AttachmentView external = attachmentView(100L, "verify-order-expire.ps1", null, null, null, false);
+        when(attachmentService.listActiveViews(SUB_TASK_ID)).thenReturn(List.of(external));
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
-        verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
+        verify(platformAgentExecutionService, never()).executeSync(anyLong(), any(AgentTask.class));
         verify(subTaskService, never()).complete(anyLong());
         verify(subTaskService).markManualIntervention(
                 eq(SUB_TASK_ID), eq("review_skip_no_evidence"),
@@ -902,19 +1001,17 @@ class SubTaskReviewServiceTest {
     void shouldSkipReviewWhenExecutionDenseNoAttachmentAfterRetry() {
         // 覆盖 setUp 的 0：给一个真实等待窗口，验证物化竞态补偿路径（等待→重查→仍无→拦截）
         when(dispatchProperties.getReviewEvidenceCheckWaitMs()).thenReturn(5);
-        SubTask dense = reviewSubTask();
-        dense.setContent("编写 verify-order-expire.ps1 脚本并执行验证");
-        dense.setDeliverable("verify-order-expire.ps1");
-        dense.setContext(Map.of("lastExecution",
-                Map.of("output", "脚本执行完成: PASS=12 FAIL=0 全绿")));
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(dense);
+        SubTaskView dense = denseView("编写 verify-order-expire.ps1 脚本并执行验证", "verify-order-expire.ps1",
+                Map.of("lastExecution",
+                        Map.of("output", "脚本执行完成: PASS=12 FAIL=0 全绿")));
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(dense);
         // 无任何附件（物化缺失/失败场景，重查后仍无）
-        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of());
+        when(attachmentService.listActiveViews(SUB_TASK_ID)).thenReturn(List.of());
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
-        verify(attachmentService, org.mockito.Mockito.times(2)).listActive(SUB_TASK_ID);
-        verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
+        verify(attachmentService, org.mockito.Mockito.times(2)).listActiveViews(SUB_TASK_ID);
+        verify(platformAgentExecutionService, never()).executeSync(anyLong(), any(AgentTask.class));
         verify(subTaskService).markManualIntervention(
                 eq(SUB_TASK_ID), eq("review_skip_no_evidence"),
                 argThat(m -> "execution_dense_no_attachment".equals(m.get("reason"))));
@@ -924,25 +1021,18 @@ class SubTaskReviewServiceTest {
     @DisplayName("核验 Prompt 注入物化附件清单（有附件列文件名 / 无附件占位）")
     void shouldInjectAttachmentListIntoReviewPrompt() {
         // 有可读附件：prompt 应含附件清单章节与文件名
-        SubTask subTask = reviewSubTask();
-        Attachment attachment = new Attachment();
-        attachment.setId(100L);
-        attachment.setSubTaskId(SUB_TASK_ID);
-        attachment.setFileName("api-docs.md");
-        attachment.setFileType("markdown");
-        attachment.setFileSize(1024L);
-        attachment.setStorageUrl("local://helloai-local/1/api-docs.md");
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
-        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(attachment));
-        when(attachmentService.isContentLoadable(attachment)).thenReturn(true);
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        SubTaskView subTask = reviewSubTask();
+        AttachmentView attachment = attachmentView(100L, "api-docs.md", "markdown", null, 1024L, true);
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(subTask);
+        when(attachmentService.listActiveViews(SUB_TASK_ID)).thenReturn(List.of(attachment));
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
                         "{\"pass\": true, \"score\": 4, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
         ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
-        verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+        verify(platformAgentExecutionService).executeSync(anyLong(), taskCaptor.capture());
         String prompt = taskCaptor.getValue().getUserPrompt();
         assertThat(prompt).contains("## 物化附件清单");
         assertThat(prompt).contains("api-docs.md");
@@ -953,17 +1043,13 @@ class SubTaskReviewServiceTest {
     @Test
     @DisplayName("G-011 D7：核验 Prompt 注入执行约束与不确定性申报（分级条目逐条渲染）")
     void shouldInjectConstraintsAndUncertaintiesIntoReviewPrompt() {
-        SubTask subTask = reviewSubTask();
-        subTask.setConstraints("不得改动既有接口签名");
-        Uncertainty assumed = new Uncertainty();
-        assumed.setKind(Uncertainty.KIND_ASSUMPTION);
-        assumed.setNote("仅在线表参与统计");
-        Uncertainty pending = new Uncertainty();
-        pending.setKind(Uncertainty.KIND_UNCONFIRMED);
-        pending.setNote("归档分区口径待确认");
-        subTask.setUncertainties(List.of(assumed, pending));
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        SubTaskView subTask = reviewSubTask();
+        subTask = withConstraints(subTask, "不得改动既有接口签名");
+        subTask = withUncertainties(subTask, List.of(
+                new UncertaintyView("ASSUMPTION", "仅在线表参与统计"),
+                new UncertaintyView("UNCONFIRMED", "归档分区口径待确认")));
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(subTask);
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
                         "{\"pass\": true, \"score\": 4, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
 
@@ -980,8 +1066,8 @@ class SubTaskReviewServiceTest {
     @Test
     @DisplayName("G-011 D7：无约束无申报时占位渲染「（无）」，不残留双大括号占位符")
     void shouldRenderPlaceholderWhenNoConstraintsOrUncertainties() {
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
                         "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
 
@@ -1006,8 +1092,8 @@ class SubTaskReviewServiceTest {
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
-        verify(subTaskService, never()).getById(anyLong());
-        verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
+        verify(subTaskService, never()).getView(anyLong());
+        verify(platformAgentExecutionService, never()).executeSync(anyLong(), any(AgentTask.class));
         verify(subTaskService, never()).complete(anyLong());
         verify(subTaskService, never()).rework(anyLong(), any());
         // 锁获取失败（未持有），不得释放他人持有的锁
@@ -1017,8 +1103,8 @@ class SubTaskReviewServiceTest {
     @Test
     @DisplayName("§6.82: 核验正常完成 → finally 释放互斥锁")
     void shouldReleaseLockAfterReview() {
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
@@ -1031,8 +1117,8 @@ class SubTaskReviewServiceTest {
     @Test
     @DisplayName("§6.82: LLM 调用异常 → 锁仍释放（finally 兜底）")
     void shouldReleaseLockEvenOnException() {
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenThrow(new RuntimeException("llm down"));
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
@@ -1046,27 +1132,22 @@ class SubTaskReviewServiceTest {
     //  方案3 F2：核验 Prompt 附件内容注入（Reviewer 内容级核验）
     // ══════════════════════════════════════════════════════════════
 
-    private Attachment readableAttachment(Long id, String name, String type, long size, byte[] content) {
-        Attachment att = new Attachment();
-        att.setId(id);
-        att.setFileName(name);
-        att.setFileType(type);
-        att.setFileSize(size);
-        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(att));
-        when(attachmentService.isContentLoadable(att)).thenReturn(true);
+    private AttachmentView readableAttachment(Long id, String name, String type, long size, byte[] content) {
+        AttachmentView att = attachmentView(id, name, type, null, size, true);
+        when(attachmentService.listActiveViews(SUB_TASK_ID)).thenReturn(List.of(att));
         when(attachmentService.loadContent(id)).thenReturn(content);
         return att;
     }
 
     private String captureReviewPrompt() {
         ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
-        verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+        verify(platformAgentExecutionService).executeSync(anyLong(), taskCaptor.capture());
         return taskCaptor.getValue().getUserPrompt();
     }
 
     private void stubReviewerPass() {
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
     }
 
@@ -1088,33 +1169,61 @@ class SubTaskReviewServiceTest {
     }
 
     @Test
-    @DisplayName("方案3 F2: 附件正文超过每附件限额（8000）时截断并标注")
+    @DisplayName("方案3 F2: 附件正文超过每附件限额（64000）时截断并标注")
     void shouldTruncateOversizedAttachmentContent() {
-        String longContent = "行".repeat(12000);
-        readableAttachment(502L, "big.log", "text/plain", 24000L, longContent.getBytes(StandardCharsets.UTF_8));
+        String longContent = "行".repeat(70000);
+        readableAttachment(502L, "big.log", "text/plain", 70000L, longContent.getBytes(StandardCharsets.UTF_8));
         stubReviewerPass();
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
         String prompt = captureReviewPrompt();
         assertThat(prompt).contains("部分附件内容已截断至限额");
-        assertThat(prompt).contains("行".repeat(8000));
-        assertThat(prompt).doesNotContain("行".repeat(8001));
+        assertThat(prompt).contains("行".repeat(64000));
+        assertThat(prompt).doesNotContain("行".repeat(64001));
     }
 
     @Test
     @DisplayName("P1-4-c: 附件超限时输出结构化 [TRUNCATED] 标注行（file/shown/total/reason）")
     void shouldEmitStructuredTruncationMarker() {
-        String longContent = "行".repeat(12000);
-        readableAttachment(504L, "big2.log", "text/plain", 24000L, longContent.getBytes(StandardCharsets.UTF_8));
+        String longContent = "行".repeat(70000);
+        readableAttachment(504L, "big2.log", "text/plain", 70000L, longContent.getBytes(StandardCharsets.UTF_8));
         stubReviewerPass();
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
         String prompt = captureReviewPrompt();
         assertThat(prompt).contains("[TRUNCATED] file=big2.log");
-        assertThat(prompt).contains("shown=8000");
+        assertThat(prompt).contains("shown=64000");
         assertThat(prompt).contains("reason=per_file_limit");
+    }
+
+    @Test
+    @DisplayName("R2 修复: 带 Markdown 标题的长附件截断后，注入章节大纲（后半段章节名可见）")
+    void shouldInjectStructureOutlineWhenTruncated() {
+        // 构造一个超 64000 字符、含 Markdown 标题的附件：前半段是正文，后半段有「目录树/教程大纲」章节
+        StringBuilder body = new StringBuilder();
+        body.append("# 契约文档\n\n## 1. API 端点表\n");
+        body.append("正文".repeat(33000)); // 66000 字符，确保超过 64000 触发截断
+        body.append("\n## 2. 目录树\n");
+        body.append("目录树正文\n");
+        body.append("## 3. 教程大纲\n");
+        body.append("大纲正文\n");
+        body.append("## 4. 排查与验证\n");
+        readableAttachment(507L, "fastapi_contract.md", "markdown", 70000L,
+                body.toString().getBytes(StandardCharsets.UTF_8));
+        stubReviewerPass();
+
+        reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
+
+        String prompt = captureReviewPrompt();
+        // 截断标注仍在（证明确实触发了 per-file 截断）
+        assertThat(prompt).contains("[TRUNCATED] file=fastapi_contract.md");
+        assertThat(prompt).contains("reason=per_file_limit");
+        // ★R2 核心断言：即使正文被截断，「目录树」「教程大纲」章节名也必须出现在大纲里
+        assertThat(prompt).contains("（该文件后续章节结构，正文已截断）");
+        assertThat(prompt).contains("目录树");
+        assertThat(prompt).contains("教程大纲");
     }
 
     @Test
@@ -1133,42 +1242,39 @@ class SubTaskReviewServiceTest {
     }
 
     @Test
-    @DisplayName("方案3 F2: 多个附件总计超限（24000）时停止注入后续附件正文")
+    @DisplayName("方案3 F2: 多个附件总计超限（200000）时，靠后附件正文被截到剩余额度")
     void shouldStopWhenTotalLimitExceeded() {
-        // 4 个 10000 字符附件：前 3 个吃满总限 24000，第 4 个不再注入正文
-        Attachment a = attachmentWithId(503L, "a.log");
-        Attachment b = attachmentWithId(504L, "b.log");
-        Attachment c = attachmentWithId(505L, "c.log");
-        Attachment d = attachmentWithId(506L, "d.log");
-        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(a, b, c, d));
-        for (Attachment att : List.of(a, b, c, d)) {
-            when(attachmentService.isContentLoadable(att)).thenReturn(true);
-        }
-        when(attachmentService.loadContent(503L)).thenReturn("A".repeat(10000).getBytes(StandardCharsets.UTF_8));
-        when(attachmentService.loadContent(504L)).thenReturn("B".repeat(10000).getBytes(StandardCharsets.UTF_8));
-        when(attachmentService.loadContent(505L)).thenReturn("C".repeat(10000).getBytes(StandardCharsets.UTF_8));
-        when(attachmentService.loadContent(506L)).thenReturn("D".repeat(10000).getBytes(StandardCharsets.UTF_8));
+        // 4 个 70000 字符附件：每个先被 per-file 截到 64000，前 3 个注入 192000 未超限；
+        // 第 4 个（d.log）注入时剩余额度不足 64000，被截到剩余额度（reason=total_limit）
+        AttachmentView a = attachmentWithMime(503L, "a.log", null, true);
+        AttachmentView b = attachmentWithMime(504L, "b.log", null, true);
+        AttachmentView c = attachmentWithMime(505L, "c.log", null, true);
+        AttachmentView d = attachmentWithMime(506L, "d.log", null, true);
+        when(attachmentService.listActiveViews(SUB_TASK_ID)).thenReturn(List.of(a, b, c, d));
+        when(attachmentService.loadContent(503L)).thenReturn("A".repeat(70000).getBytes(StandardCharsets.UTF_8));
+        when(attachmentService.loadContent(504L)).thenReturn("B".repeat(70000).getBytes(StandardCharsets.UTF_8));
+        when(attachmentService.loadContent(505L)).thenReturn("C".repeat(70000).getBytes(StandardCharsets.UTF_8));
+        when(attachmentService.loadContent(506L)).thenReturn("D".repeat(70000).getBytes(StandardCharsets.UTF_8));
         stubReviewerPass();
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
 
         String prompt = captureReviewPrompt();
         assertThat(prompt).contains("附件内容总计超出限额，后续附件仅见清单");
-        assertThat(prompt).contains("### a.log").contains("### b.log").contains("### c.log");
-        // 清单仍全量展示 d.log，但内容段不注入其正文
-        assertThat(prompt).contains("- d.log");
-        assertThat(prompt).doesNotContain("### d.log");
+        // 前三个附件以 per-file 上限（64000）注入，第四个附件因总量上限被截到剩余额度
+        assertThat(prompt).contains("reason=per_file_limit");
+        assertThat(prompt).contains("reason=total_limit");
+        // 总量上限截断标注落在 d.log：正文被截到剩余额度（shown < 64000），不再是完整 per-file 64000
+        assertThat(prompt).contains("file=d.log");
+        assertThat(prompt).contains("shown=");
+        assertThat(prompt).doesNotContain("[TRUNCATED] file=d.log shown=64000");
     }
 
     @Test
     @DisplayName("方案3 F2: 不可直读附件仅见清单，内容段标注不可读")
     void shouldMarkUnreadableAttachment() {
-        Attachment external = new Attachment();
-        external.setId(505L);
-        external.setFileName("out.zip");
-        external.setFileType("application/zip");
-        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(external));
-        when(attachmentService.isContentLoadable(external)).thenReturn(false);
+        AttachmentView external = attachmentView(505L, "out.zip", "application/zip", null, null, false);
+        when(attachmentService.listActiveViews(SUB_TASK_ID)).thenReturn(List.of(external));
         stubReviewerPass();
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
@@ -1182,12 +1288,8 @@ class SubTaskReviewServiceTest {
     @DisplayName("方案3 F2: 开关关闭时退化为仅清单，不读取附件内容")
     void shouldSkipContentWhenSwitchDisabled() {
         when(dispatchProperties.isAttachmentContentEnabled()).thenReturn(false);
-        Attachment att = new Attachment();
-        att.setId(507L);
-        att.setFileName("main.sh");
-        att.setFileType("text/x-shellscript");
-        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(att));
-        when(attachmentService.isContentLoadable(att)).thenReturn(true);
+        AttachmentView att = attachmentView(507L, "main.sh", "text/x-shellscript", null, null, true);
+        when(attachmentService.listActiveViews(SUB_TASK_ID)).thenReturn(List.of(att));
         stubReviewerPass();
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
@@ -1198,11 +1300,13 @@ class SubTaskReviewServiceTest {
     }
 
     /** 构造仅含 id/name 的附件（配合 list 覆盖 stub 使用）。 */
-    private Attachment attachmentWithId(Long id, String name) {
-        Attachment att = new Attachment();
-        att.setId(id);
-        att.setFileName(name);
-        return att;
+    private AttachmentView attachmentWithId(Long id, String name) {
+        return attachmentView(id, name, null, null, null, false);
+    }
+
+    /** 仅含 id/name/mimeType 的附件视图（含 contentLoadable 显式值）。 */
+    private static AttachmentView attachmentWithMime(Long id, String name, String mimeType, boolean contentLoadable) {
+        return new AttachmentView(id, name, null, mimeType, null, contentLoadable);
     }
 
     // ════════════════════════════════════════════════════════════
@@ -1212,13 +1316,9 @@ class SubTaskReviewServiceTest {
     @Test
     @DisplayName("硬化: 图片附件不注入二进制正文，媒体可见性标注点名文件")
     void shouldNotInjectImageBinaryAndAddMediaNote() {
-        Attachment md = attachmentWithId(601L, "walkthrough.md");
-        md.setMimeType("text/markdown");
-        Attachment png = attachmentWithId(602L, "screenshot_01.png");
-        png.setMimeType("image/png");
-        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(md, png));
-        when(attachmentService.isContentLoadable(md)).thenReturn(true);
-        when(attachmentService.isContentLoadable(png)).thenReturn(true);
+        AttachmentView md = attachmentWithMime(601L, "walkthrough.md", "text/markdown", true);
+        AttachmentView png = attachmentWithMime(602L, "screenshot_01.png", "image/png", true);
+        when(attachmentService.listActiveViews(SUB_TASK_ID)).thenReturn(List.of(md, png));
         when(attachmentService.loadContent(601L))
                 .thenReturn("走查正文内容".getBytes(StandardCharsets.UTF_8));
         stubReviewerPass();
@@ -1236,9 +1336,8 @@ class SubTaskReviewServiceTest {
     @Test
     @DisplayName("硬化: mimeType 缺失时按扩展名识别媒体附件，同样不注入正文")
     void shouldDetectMediaByExtensionWhenMimeMissing() {
-        Attachment png = attachmentWithId(603L, "screenshot_02.png"); // mimeType 缺失
-        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(png));
-        when(attachmentService.isContentLoadable(png)).thenReturn(true);
+        AttachmentView png = attachmentWithMime(603L, "screenshot_02.png", null, true); // mimeType 缺失
+        when(attachmentService.listActiveViews(SUB_TASK_ID)).thenReturn(List.of(png));
         stubReviewerPass();
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
@@ -1252,9 +1351,8 @@ class SubTaskReviewServiceTest {
     @DisplayName("硬化: 注入开关关闭时媒体可见性标注仍注入")
     void shouldKeepMediaNoteWhenSwitchDisabled() {
         when(dispatchProperties.isAttachmentContentEnabled()).thenReturn(false);
-        Attachment png = attachmentWithId(604L, "shot.jpg");
-        png.setMimeType("image/jpeg");
-        when(attachmentService.listActive(SUB_TASK_ID)).thenReturn(List.of(png));
+        AttachmentView png = attachmentWithMime(604L, "shot.jpg", "image/jpeg", false);
+        when(attachmentService.listActiveViews(SUB_TASK_ID)).thenReturn(List.of(png));
         stubReviewerPass();
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
@@ -1299,8 +1397,8 @@ class SubTaskReviewServiceTest {
         stubDualReviewEnabled();
         when(reviewerPicker.pickDual(any())).thenReturn(List.of(
                 llmAgent(9L, AgentRole.REVIEWER), llmAgent(10L, AgentRole.REVIEWER)));
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
                         "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100),
                         AgentResult.success(
@@ -1328,8 +1426,8 @@ class SubTaskReviewServiceTest {
         stubDualReviewEnabled();
         when(reviewerPicker.pickDual(any())).thenReturn(List.of(
                 llmAgent(9L, AgentRole.REVIEWER), llmAgent(10L, AgentRole.REVIEWER)));
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
                         "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100),
                         AgentResult.success(
@@ -1354,6 +1452,8 @@ class SubTaskReviewServiceTest {
         verify(agentQualityProfileService).incrementReviewerStats(10L, 1, 1);
         // 分歧不落 review_record（未产生共识判定，防画像重复计数）
         verify(recordReviewService, never()).recordAutoReview(anyLong(), any(), any(), anyInt(), any(), any());
+        verify(conversationService).addMessage(eq(SUB_TASK_ID), eq(9L), eq("assistant"), eq("agent"),
+                anyString(), eq("subtask_review_skip_disagreement"));
     }
 
     @Test
@@ -1363,8 +1463,8 @@ class SubTaskReviewServiceTest {
         when(reviewProperties.isDualReviewEnabled()).thenReturn(true);
         when(reviewerPicker.isDualReviewRequired(TASK_ID)).thenReturn(true);
         when(reviewerPicker.pickDual(any())).thenReturn(List.of(llmAgent(9L, AgentRole.REVIEWER)));
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
                         "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
 
@@ -1383,8 +1483,8 @@ class SubTaskReviewServiceTest {
     void shouldSkipDualWhenNotRequired() {
         when(reviewProperties.isDualReviewEnabled()).thenReturn(true);
         when(reviewerPicker.isDualReviewRequired(TASK_ID)).thenReturn(false);
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
                         "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
 
@@ -1405,8 +1505,8 @@ class SubTaskReviewServiceTest {
                 .thenReturn(ReviewProperties.DualReviewConsensusPolicy.ANY);
         when(reviewerPicker.pickDual(any())).thenReturn(List.of(
                 llmAgent(9L, AgentRole.REVIEWER), llmAgent(10L, AgentRole.REVIEWER)));
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
                         "{\"pass\": false, \"score\": 2, \"issues\": \"缺端点\", \"comment\": \"\"}", "stop", "llm", 100),
                         AgentResult.success(
@@ -1431,8 +1531,8 @@ class SubTaskReviewServiceTest {
         when(reviewProperties.getDualReviewTimeoutSeconds()).thenReturn(0L);
         when(reviewerPicker.pickDual(any())).thenReturn(List.of(
                 llmAgent(9L, AgentRole.REVIEWER), llmAgent(10L, AgentRole.REVIEWER)));
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
                         "{\"pass\": true, \"score\": 5, \"issues\": \"\", \"comment\": \"ok\"}", "stop", "llm", 100));
 
@@ -1455,12 +1555,12 @@ class SubTaskReviewServiceTest {
         stubDualReviewEnabled();
         when(reviewerPicker.pickDual(any())).thenReturn(List.of(
                 llmAgent(9L, AgentRole.REVIEWER), llmAgent(10L, AgentRole.REVIEWER)));
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(reviewSubTask());
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
         // 两路 executeSync 同时在途：各自进入 answer 后互相等待，观察线程验证并发度后放行
         CountDownLatch bothInFlight = new CountDownLatch(2);
         CountDownLatch release = new CountDownLatch(1);
         AtomicInteger maxConcurrent = new AtomicInteger();
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenAnswer(inv -> {
                     maxConcurrent.incrementAndGet();
                     bothInFlight.countDown();

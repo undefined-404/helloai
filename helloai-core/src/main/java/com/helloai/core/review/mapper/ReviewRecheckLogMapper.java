@@ -2,6 +2,7 @@ package com.helloai.core.review.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.helloai.core.review.entity.ReviewRecheckLog;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
@@ -18,6 +19,18 @@ import java.util.List;
  */
 @Mapper
 public interface ReviewRecheckLogMapper extends BaseMapper<ReviewRecheckLog> {
+
+    /**
+     * 物理删除某任务下全部抽检日志（cascade：{@code review_recheck_log.sub_task_id} <b>有外键</b>
+     * 引用 {@code sub_task.id}）。
+     *
+     * <p>2026-10-05 D-1：此前任务级联删除<b>完全未清理本表</b>（42 行现网数据，虽当前 0 孤儿），
+     * 一旦所辖子任务存在抽检日志，删 sub_task 即撞外键 → HTTP 500（与 P2-4 同类隐患）。
+     * 须在 {@code sub_task} 行删除之前执行。</p>
+     */
+    @Delete("DELETE FROM review_recheck_log WHERE sub_task_id IN "
+            + "(SELECT id FROM sub_task WHERE task_id = #{taskId})")
+    int physicalDeleteByTaskId(@Param("taskId") Long taskId);
 
     /**
      * 抽检候选计数：窗口内 APPROVED 且未被任何抽检记录覆盖的 review_record 数。

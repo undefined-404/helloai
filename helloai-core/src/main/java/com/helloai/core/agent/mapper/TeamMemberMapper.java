@@ -18,4 +18,14 @@ public interface TeamMemberMapper extends BaseMapper<TeamMember> {
      */
     @Delete("DELETE FROM team_member WHERE id = #{id}")
     int physicallyDeleteById(@Param("id") Long id);
+
+    /**
+     * 物理删除某 Agent 的全部团队成员关系（cascade）。
+     *
+     * <p>D-1（2026-10-05）：{@code team_member.agent_id} 语义列<b>无外键</b>——删 Agent 却仍留
+     * 在团队花名册里语义错误（全库孤儿实测为 0，属防御性补齐）。供 Agent 级联删除使用；
+     * 物理删除（绕开逻辑删除），与 {@link #physicallyDeleteById} 同口径。</p>
+     */
+    @Delete("DELETE FROM team_member WHERE agent_id = #{agentId}")
+    int physicalDeleteByAgentId(@Param("agentId") Long agentId);
 }

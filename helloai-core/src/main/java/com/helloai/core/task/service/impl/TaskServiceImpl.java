@@ -11,9 +11,8 @@ import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskPriority;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.common.constant.TeamStatus;
-import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.agent.entity.Team;
-import com.helloai.core.agent.entity.TeamMember;
+import com.helloai.core.agent.port.TeamMemberView;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.TeamService;
@@ -22,10 +21,17 @@ import com.helloai.core.task.mapper.AttachmentMapper;
 import com.helloai.core.task.mapper.ModuleMapper;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.port.TaskView;
+import com.helloai.core.task.port.TaskDraft;
 import com.helloai.core.task.entity.TaskTimeline;
 import com.helloai.core.task.mapper.SubTaskMapper;
+import com.helloai.core.task.mapper.TaskAgentMemberMapper;
+import com.helloai.core.task.mapper.TaskExecutionRecordMapper;
+import com.helloai.core.task.mapper.TaskIterationMapper;
 import com.helloai.core.task.mapper.TaskMapper;
+import com.helloai.core.task.mapper.TaskRunningSpecMapper;
 import com.helloai.core.task.mapper.TaskTimelineMapper;
+import com.helloai.core.task.workflow.mapper.WorkflowInstanceMapper;
 import com.helloai.core.task.policy.TaskAgentPolicy;
 import com.helloai.core.task.policy.TeamPolicyExpander;
 import com.helloai.core.task.port.ReviewPort;
@@ -55,6 +61,12 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
 
     private final SubTaskMapper subTaskMapper;
     private final ModuleMapper moduleMapper;
+    private final TaskRunningSpecMapper taskRunningSpecMapper;
+    private final TaskExecutionRecordMapper taskExecutionRecordMapper;
+    private final TaskAgentMemberMapper taskAgentMemberMapper;
+    // D-1（2026-10-05）：task_id 语义列但无外键/原级联漏删的 task 域子表
+    private final TaskIterationMapper taskIterationMapper;
+    private final WorkflowInstanceMapper workflowInstanceMapper;
     private final ReviewPort reviewPort;
     private final TaskTimelineMapper taskTimelineMapper;
     private final AttachmentMapper attachmentMapper;
@@ -109,11 +121,10 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         if (teamId == null) {
             return agentPolicy;
         }
-        Team team = teamService.getTeam(teamId);
-        if (team.getStatus() != TeamStatus.ACTIVE) {
+        if (teamService.getTeamStatus(teamId) != TeamStatus.ACTIVE) {
             throw new BizException("Team 未发布（非 ACTIVE），不可作为 agent_policy 展开源: teamId=" + teamId);
         }
-        List<TeamMember> members = teamService.listMembers(teamId);
+        List<TeamMemberView> members = teamService.listMemberViews(teamId);
         if (members.isEmpty()) {
             throw new BizException("Team 无成员，无法展开 agent_policy: teamId=" + teamId);
         }
@@ -260,8 +271,11 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     public Map<String, Object> deleteTaskCascade(Long taskId, String confirmTitle) {
         Task task = getById(taskId);
         if (task == null) throw new BizException("任务不存在: " + taskId);
+        // O-1（2026-10-05）：确认标题不匹配属调用方入参错误，应收敛为 400。
+        // BizException(String) 默认 code=500（GlobalExceptionHandler 据 code 设置 HTTP 状态），
+        // 此前误将「标题不匹配」打成 HTTP 500；与 P2-3/P3 口径对齐改为 BizException(400, ...)。
         if (!task.getTitle().equals(confirmTitle)) {
-            throw new BizException("任务标题不匹配，请确认后重试");
+            throw new BizException(400, "任务标题不匹配");
         }
 
         // 先统计（结果返回给前端展示删除影响面）
@@ -277,6 +291,17 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         reviewPort.physicalDeleteByTaskId(taskId);
         attachmentMapper.physicalDeleteByTaskId(taskId);
         taskTimelineMapper.physicalDeleteByTaskId(taskId);
+        // P2-4（2026-10-05）：引用 task.id 的子表共 5 张 —— module / sub_task /
+        // task_running_spec / task_execution_record / task_agent_member。此前只清前两张，
+        // 漏掉承载 Running Spec 与执行记录/成员的三张 → 物理删除 task 行时撞
+        // task_running_spec_task_id_fkey 等外键 → HTTP 500。全部先于 task 本体删除。
+        taskRunningSpecMapper.physicalDeleteByTaskId(taskId);
+        taskExecutionRecordMapper.physicalDeleteByTaskId(taskId);
+        taskAgentMemberMapper.physicalDeleteByTaskId(taskId);
+        // D-1（2026-10-05）：task 域另两张带 task_id 但无外键的子表，原级联静默漏删
+        // （全库孤儿实测：task_iteration 2；workflow_instance 现网 0）。均须先于 task 本体删除。
+        taskIterationMapper.deleteByTaskId(taskId);
+        workflowInstanceMapper.physicalDeleteByTaskId(taskId);
         subTaskMapper.physicalDeleteByTaskId(taskId);
         moduleMapper.physicalDeleteByTaskId(taskId);
         baseMapper.physicalDeleteById(taskId);
@@ -303,10 +328,10 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         task.setStatus(TaskStatus.PENDING);
         updateById(task);
 
-        List<Agent> planners = agentService.listByRole(AgentRole.PLANNER);
+        List<AgentProfileSnapshot> planners = agentService.listProfilesByRole(AgentRole.PLANNER);
         String eventId = "task.republish." + taskId + "." + System.currentTimeMillis();
-        for (Agent planner : planners) {
-            agentInboxService.send(planner.getId(), eventId, "task.republished",
+        for (AgentProfileSnapshot planner : planners) {
+            agentInboxService.send(planner.id(), eventId, "task.republished",
                     "任务重新发布: " + task.getTitle(),
                     task.getDescription() != null ? task.getDescription() : "请查看详情",
                     "task", taskId, "HIGH");
@@ -367,5 +392,39 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     @Override
     public List<Task> listTimedOutPlanning(OffsetDateTime deadline, int limit) {
         return baseMapper.selectTimedOutPlanning(deadline, limit);
+    }
+
+    // ── 只读快照（RM5 批 4）──
+
+    @Override
+    public TaskView getView(Long taskId) {
+        Task t = getById(taskId);
+        return t == null ? null
+                : new TaskView(t.getId(), t.getTitle(), t.getDescription(), t.getFinalReport(),
+                        t.getFinalReportStatus(), t.getFinalReportAgentId(), t.getFinalReportTime(),
+                        t.getAgentPolicy(), t.getStatus(), t.getSlaMinutes(), t.getPriority(), t.getContext(),
+                        t.getRequiredSkills(), t.getCreateTime(), t.getUpdateTime());
+    }
+
+    // ── 写命令（RM5 批 5a）──
+
+    @Override
+    public boolean casStatus(Long taskId, TaskStatus expect, TaskStatus target) {
+        return lambdaUpdate()
+                .eq(Task::getId, taskId)
+                .eq(Task::getStatus, expect)
+                .set(Task::getStatus, target)
+                .update();
+    }
+
+    @Override
+    public TaskView createFromDraft(TaskDraft draft) {
+        Task task = new Task();
+        task.setTitle(draft.title());
+        task.setDescription(draft.description());
+        task.setStatus(draft.status());
+        task.setContext(draft.context());
+        save(task);
+        return getView(task.getId());
     }
 }
