@@ -327,18 +327,21 @@ class SubTaskPendingOrphanTaskTest {
         }
 
         @Test
-        @DisplayName("时钟C: 达阈值 → markManualIntervention(no_candidate_long_wait)，不再写 nextDispatchAt")
+        @DisplayName("时钟C: 达阈值 → markManualIntervention(no_candidate_long_wait) 且清除残留 noCandidate 计数器")
         void shouldEscalateToManualInterventionWhenRoundsReachMax() {
             when(subTaskService.listStalePendingWithoutExecutionRecord(any(), anyInt()))
                     .thenReturn(List.of(1L));
 
             SubTask st = pendingSubTask(1L);
-            // rounds=9，阈值 10 ⇒ 本轮 +1 = 10 达阈值
+            // rounds=9，阈值 10 ⇒ 本轮 +1 = 10 达阈值；同 context 内含其它 key（须整体覆盖不丢）
             Map<String, Object> prev = new HashMap<>();
             prev.put("rounds", 9);
             prev.put("firstSeenAt", OffsetDateTime.now().minusMinutes(20).toString());
             prev.put("nextDispatchAt", OffsetDateTime.now().minusSeconds(5).toString());
-            st.setContext(new HashMap<>(Map.of("noCandidate", prev)));
+            Map<String, Object> ctx = new HashMap<>();
+            ctx.put("noCandidate", prev);
+            ctx.put("someKey", "keep-me");
+            st.setContext(ctx);
             when(subTaskService.getById(1L)).thenReturn(st);
 
             doThrow(new NoCandidateAgentException("无可用候选 Agent: role=EXECUTOR"))
@@ -353,8 +356,14 @@ class SubTaskPendingOrphanTaskTest {
             verify(subTaskService).markManualIntervention(eq(1L), eq("no_candidate_long_wait"), extraCaptor.capture());
             assertThat(extraCaptor.getValue()).containsEntry("rounds", 10);
             assertThat(((Number) extraCaptor.getValue().get("waitedMs")).longValue()).isGreaterThan(0L);
-            // 达阈值后不再写 nextDispatchAt
-            verify(subTaskService, never()).updateContext(eq(1L), anyMap());
+
+            // P3 修复：达阈值转人工的同时清除残留 noCandidate 计数器（防人工重开后「复活即再死」）；
+            // 整体覆盖须保留其它 key
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Map<String, Object>> ctxCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(subTaskService).updateContext(eq(1L), ctxCaptor.capture());
+            assertThat(ctxCaptor.getValue()).doesNotContainKey("noCandidate");
+            assertThat(ctxCaptor.getValue()).containsEntry("someKey", "keep-me");
         }
 
         @Test

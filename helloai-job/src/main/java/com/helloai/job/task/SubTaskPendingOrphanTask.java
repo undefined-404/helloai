@@ -262,10 +262,16 @@ public class SubTaskPendingOrphanTask {
     }
 
     /**
-     * 时钟 C 复位：选中执行者后清除 {@code context.noCandidate}（计数归零）。
-     * {@code updateContext} 为整体覆盖 —— 先复制旧 map、移除 noCandidate 键、再整体写回，保留其它 key。
+     * 时钟 C 复位：清除 {@code context.noCandidate} 计数器（选中执行者成功时 / 达阈值转人工时）。
+     * {@code updateContext} 为整体覆盖 —— 先复制旧 map、移除 noCandidate 键、再整体写回，保留其它 key
+     *（含 {@code manualIntervention} 等）。
+     *
+     * @param subTask 必须是最新回读的实体（含刚写入的 manualIntervention），否则整体覆盖会抹掉它
      */
     private void clearNoCandidateContext(SubTask subTask) {
+        if (subTask == null) {
+            return;
+        }
         Map<String, Object> ctx = subTask.getContext();
         if (ctx == null || !ctx.containsKey("noCandidate")) {
             return; // 无节拍可清，避免无谓写
@@ -324,7 +330,15 @@ public class SubTaskPendingOrphanTask {
                 long waitedMs = resolveWaitedMs(noCandidate, rounds, now);
                 subTaskService.markManualIntervention(subTaskId, "no_candidate_long_wait",
                         Map.of("rounds", rounds, "waitedMs", waitedMs));
-                log.warn("PENDING 孤儿连续 {} 轮无候选，转人工介入: subTaskId={}, waitedMs={}",
+                // 转人工 = 交棒给人的终态动作：一并清除残留的 noCandidate 计数器（2026-10-05 修 P3）。
+                // 否则人工日后清除标记重开（如死信人工重派 SubTaskDispatchServiceImpl 会
+                // remove("manualIntervention")）时，残留 rounds（如 9）会接着累加 ⇒ 下一轮无候选
+                // 立刻又达阈值（「复活即再死」），且 waitedMs 会用旧 firstSeenAt 算出偏大错误值。
+                // 清除后重开可得到一个全新的完整等待窗口，与死信重派重置计数的既有范式一致。
+                // ⚠️ 必须重读最新 context 再整体覆盖：markManualIntervention 已自行写库（含
+                // manualIntervention），若沿用 mark 之前的旧 map 回写会把刚写入的标记抹掉。
+                clearNoCandidateContext(subTaskService.getById(subTaskId));
+                log.warn("PENDING 孤儿连续 {} 轮无候选，转人工介入并清除计数器: subTaskId={}, waitedMs={}",
                         rounds, subTaskId, waitedMs);
                 return true;
             }
