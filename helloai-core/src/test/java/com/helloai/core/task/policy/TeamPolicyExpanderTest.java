@@ -1,7 +1,7 @@
 package com.helloai.core.task.policy;
 
 import com.helloai.common.constant.AgentRole;
-import com.helloai.core.agent.entity.TeamMember;
+import com.helloai.core.agent.port.TeamMemberView;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -16,19 +16,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayName("TeamPolicyExpander 槽位展开（C2-S2）")
 class TeamPolicyExpanderTest {
 
-    private TeamMember member(Long id, Long agentId, AgentRole role, Integer weight) {
-        TeamMember m = new TeamMember();
-        m.setId(id);
-        m.setAgentId(agentId);
-        m.setSlotRole(role);
-        m.setWeight(weight);
-        return m;
+    private TeamMemberView member(Long id, Long agentId, AgentRole role, Integer weight) {
+        return new TeamMemberView(id, agentId, role, weight);
     }
 
     @Test
     @DisplayName("展开：EXECUTOR 落白名单，PLANNER/REVIEWER 单值取 weight 高者")
     void expandBySlot() {
-        List<TeamMember> members = List.of(
+        List<TeamMemberView> members = List.of(
                 member(1L, 101L, AgentRole.EXECUTOR, 100),
                 member(2L, 102L, AgentRole.EXECUTOR, 80),
                 member(3L, 103L, AgentRole.PLANNER, 100),
@@ -45,7 +40,7 @@ class TeamPolicyExpanderTest {
     @Test
     @DisplayName("显式槽位优先：已指定 executor/planner/reviewer 不被 Team 覆盖")
     void explicitSlotsWin() {
-        List<TeamMember> members = List.of(member(1L, 101L, AgentRole.EXECUTOR, 100));
+        List<TeamMemberView> members = List.of(member(1L, 101L, AgentRole.EXECUTOR, 100));
         Map<String, Object> base = Map.of(
                 TaskAgentPolicy.KEY_TEAM_ID, 99L,
                 TaskAgentPolicy.KEY_EXECUTOR_AGENT_IDS, List.of(201L),
@@ -82,7 +77,7 @@ class TeamPolicyExpanderTest {
     @Test
     @DisplayName("单槽位选人：weight desc、id asc")
     void pickSingleOrder() {
-        List<TeamMember> members = List.of(
+        List<TeamMemberView> members = List.of(
                 member(5L, 105L, AgentRole.REVIEWER, 100),
                 member(6L, 106L, AgentRole.REVIEWER, 100),
                 member(7L, 107L, AgentRole.REVIEWER, 120));

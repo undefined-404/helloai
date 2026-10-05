@@ -3,11 +3,10 @@ package com.helloai.core.planner.service;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.entity.RequirementMessage;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
-import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.port.TaskView;
 import lombok.Data;
 import reactor.core.publisher.Flux;
 
@@ -143,7 +142,7 @@ public interface RequirementClarifyService {
      *
      * @return 创建的任务
      */
-    Task finalize(Long conversationId);
+    TaskView finalize(Long conversationId);
 
     /**
      * 重新生成任务：会话已 FINALIZED 且原任务已被删除时，复用会话终稿重建 PENDING Task，
@@ -154,7 +153,7 @@ public interface RequirementClarifyService {
      *
      * @return 重新创建的任务
      */
-    Task regenerate(Long conversationId);
+    TaskView regenerate(Long conversationId);
 
     /** 放弃会话：ACTIVE → ABANDONED。 */
     void abandon(Long conversationId);

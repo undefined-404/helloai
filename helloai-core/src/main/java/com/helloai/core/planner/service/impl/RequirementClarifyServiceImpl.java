@@ -6,7 +6,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
-import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentService;
@@ -26,7 +26,8 @@ import com.helloai.core.planner.search.WebSearchOutcome;
 import com.helloai.core.planner.service.RequirementClarifyService;
 import com.helloai.core.planner.service.RequirementConversationService;
 import com.helloai.core.planner.service.RequirementMessageService;
-import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.port.TaskDraft;
+import com.helloai.core.task.port.TaskView;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import lombok.extern.slf4j.Slf4j;
@@ -419,7 +420,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
 
         // 主回复 prompt 构造（与 runLlmRound CHAT 分支同构：固定 CHAT 模板）
         String webSearchContext = webSearchOutcome != null ? webSearchOutcome.toContextText() : "";
-        Agent planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
+        AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
         AgentTask agentTask = AgentTask.builder()
                 .systemPrompt("")
                 .userPrompt(renderPrompt(conversationId, webSearchContext, CHAT_PROMPT_TEMPLATE_PATH))
@@ -428,7 +429,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                 .build();
         // 流式主回复：增量转发 → 完成后与 runLlmRound 同语义落库 → done
         StringBuilder buffer = new StringBuilder();
-        return platformAgentExecutionService.executeStream(planner, agentTask)
+        return platformAgentExecutionService.executeStream(planner.id(), agentTask)
                 .map(token -> {
                     buffer.append(token);
                     return token;
@@ -457,7 +458,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
             webSearchOutcome = null;
         }
         String webSearchContext = webSearchOutcome != null ? webSearchOutcome.toContextText() : "";
-        Agent planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
+        AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
         String prompt = renderPrompt(conversationId, webSearchContext, PROMPT_TEMPLATE_PATH);
         AgentTask agentTask = AgentTask.builder()
                 .systemPrompt("")
@@ -466,7 +467,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                 .requiredCapabilities(Map.of())
                 .build();
         StringBuilder buffer = new StringBuilder();
-        return platformAgentExecutionService.executeStream(planner, agentTask)
+        return platformAgentExecutionService.executeStream(planner.id(), agentTask)
                 .map(token -> {
                     buffer.append(token);
                     return token;
@@ -530,13 +531,13 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
      * ACTIVE → FINALIZED + 建任务。直达轮与手动确认按钮并发时只有一方 CAS 成功，
      * 另一方拒绝建任务，避免重复建任务与状态回退。
      */
-    private Task finalizeAfterDraft(RequirementConversation conversation, String timelineEvent) {
+    private TaskView finalizeAfterDraft(RequirementConversation conversation, String timelineEvent) {
         Long conversationId = conversation.getId();
         if (conversation.getFinalTitle() == null || conversation.getFinalTitle().isBlank()) {
             throw new BizException("会话尚无终稿，请先对话至 LLM 产出终稿: conversationId=" + conversationId);
         }
         // 幂等防御：已关联存活任务则拒绝重复创建（防竞态脏数据 / 重复点击造成双任务）
-        if (conversation.getTaskId() != null && taskService.getById(conversation.getTaskId()) != null) {
+        if (conversation.getTaskId() != null && taskService.getView(conversation.getTaskId()) != null) {
             throw new BizException("会话已创建关联任务，请勿重复创建: taskId=" + conversation.getTaskId());
         }
         // CAS 推进 ACTIVE → FINALIZED：失败即并发已推进，拒绝建任务避免重复
@@ -553,7 +554,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
      * @return 创建的任务
      */
     @Override
-    public Task finalize(Long conversationId) {
+    public TaskView finalize(Long conversationId) {
         return finalizeAfterDraft(requireActive(conversationId), "task_created_from_clarify");
     }
 
@@ -583,7 +584,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
      * @return 重新创建的任务
      */
     @Override
-    public Task regenerate(Long conversationId) {
+    public TaskView regenerate(Long conversationId) {
         RequirementConversation conversation = conversationService.getById(conversationId);
         if (conversation == null) {
             throw new BizException("澄清会话不存在: " + conversationId);
@@ -596,7 +597,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
             throw new BizException("会话缺少终稿，无法重新生成: conversationId=" + conversationId);
         }
         Long oldTaskId = conversation.getTaskId();
-        if (oldTaskId != null && taskService.getById(oldTaskId) != null) {
+        if (oldTaskId != null && taskService.getView(oldTaskId) != null) {
             throw new BizException("原任务仍然存在（taskId=" + oldTaskId
                     + "），请先在任务管理中删除后再重新生成");
         }
@@ -608,49 +609,46 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
      * 状态由调用方提前推进（finalize / /task 直达走 CAS，regenerate 保持 FINALIZED）；
      * task_id 定点字段写入，避免全字段 updateById 用陈旧快照覆盖并发写入。
      */
-    private Task buildTaskFromDraft(RequirementConversation conversation, String timelineEvent) {
+    private TaskView buildTaskFromDraft(RequirementConversation conversation, String timelineEvent) {
         Long conversationId = conversation.getId();
-        Task task = new Task();
-        task.setTitle(conversation.getFinalTitle());
-        task.setDescription(conversation.getFinalDescription());
-        task.setStatus(TaskStatus.PENDING);
         // G-011 双写：会话终稿需求包原样进 task.context.requirementPackage（S3 拆解链经
         // RequirementPackageParser.fromContext 防御式读取；无需求包不初始化 context，
         // 行为零变化；与 runningSpec 键空间隔离互不影响）
+        Map<String, Object> context = null;
         if (conversation.getFinalPackage() != null && !conversation.getFinalPackage().isEmpty()) {
-            Map<String, Object> context = new LinkedHashMap<>();
+            context = new LinkedHashMap<>();
             context.put(RequirementPackageParser.CONTEXT_KEY_REQUIREMENT_PACKAGE,
                     conversation.getFinalPackage());
-            task.setContext(context);
         }
-        taskService.save(task);
+        TaskView task = taskService.createFromDraft(new TaskDraft(conversation.getFinalTitle(),
+                conversation.getFinalDescription(), TaskStatus.PENDING, context));
         log.info("澄清终稿建任务: conversationId={}, taskId={}, title={}, event={}",
-                conversationId, task.getId(), task.getTitle(), timelineEvent);
+                conversationId, task.id(), task.title(), timelineEvent);
 
         // 照 TaskController.create 的通知段：best-effort 通知全部 PLANNER，失败不阻断
         try {
-            List<Agent> planners = agentService.listByRole(AgentRole.PLANNER);
-            String eventId = "task.create." + task.getId() + "." + System.currentTimeMillis();
-            for (Agent planner : planners) {
-                agentInboxService.send(planner.getId(), eventId, "task.created",
-                        "新任务需要规划: " + task.getTitle(),
-                        task.getDescription() != null ? task.getDescription() : "请查看详情",
-                        "task", task.getId(), "HIGH");
+            List<AgentProfileSnapshot> planners = agentService.listProfilesByRole(AgentRole.PLANNER);
+            String eventId = "task.create." + task.id() + "." + System.currentTimeMillis();
+            for (AgentProfileSnapshot planner : planners) {
+                agentInboxService.send(planner.id(), eventId, "task.created",
+                        "新任务需要规划: " + task.title(),
+                        task.description() != null ? task.description() : "请查看详情",
+                        "task", task.id(), "HIGH");
             }
             log.info("已通知 {} 个 PLANNER Agent", planners.size());
         } catch (Exception e) {
-            log.warn("澄清建任务后通知 PLANNER 失败: taskId={}", task.getId(), e);
+            log.warn("澄清建任务后通知 PLANNER 失败: taskId={}", task.id(), e);
         }
 
-        conversation.setTaskId(task.getId());
+        conversation.setTaskId(task.id());
         // 定点更新只写 task_id：全字段 updateById 会用加载期陈旧快照覆盖并发澄清轮
         // 已落库的终稿字段 / 轮数（丢失更新竞态），只写本路径负责的状态字段
         conversationService.lambdaUpdate()
                 .eq(RequirementConversation::getId, conversationId)
-                .set(RequirementConversation::getTaskId, task.getId())
+                .set(RequirementConversation::getTaskId, task.id())
                 .update();
 
-        taskTimelineService.recordEvent(task.getId(), null, timelineEvent,
+        taskTimelineService.recordEvent(task.id(), null, timelineEvent,
                 AgentRole.PLANNER, null, Map.of("conversationId", conversationId));
         // 会话摘要归档（N-009，C5-S2）：finalize 建任务后 best-effort 归档，失败不阻断
         archiveSessionMemory(conversationId);
@@ -762,7 +760,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                 messageService.listByConversation(conversationId));
         // 供前端判断 FINALIZED 会话的原任务是否已被删除（悬挂软引用），从而决定能否重新生成
         view.setTaskExists(conversation.getTaskId() != null
-                && taskService.getById(conversation.getTaskId()) != null);
+                && taskService.getView(conversation.getTaskId()) != null);
         return view;
     }
 
@@ -878,7 +876,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                                                           WebSearchOutcome webSearchOutcome) {
         Long conversationId = conversation.getId();
         String webSearchContext = webSearchOutcome != null ? webSearchOutcome.toContextText() : "";
-        Agent planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
+        AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
         String prompt = renderPrompt(conversationId, webSearchContext, FINALIZE_TEMPLATE_PATH);
         AgentTask agentTask = AgentTask.builder()
                 .systemPrompt("")
@@ -886,7 +884,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                 .context(Map.of("conversationId", conversationId, "scene", "requirement_finalize"))
                 .requiredCapabilities(Map.of())
                 .build();
-        AgentResult result = platformAgentExecutionService.executeSync(planner, agentTask);
+        AgentResult result = platformAgentExecutionService.executeSync(planner.id(), agentTask);
         if (!result.isSuccess()) {
             throw new BizException("终稿产出 LLM 调用失败: " + result.getErrorMessage());
         }
@@ -911,9 +909,9 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
             updateFinalDraftFields(conversationId, reply.getTitle(), reply.getDescription(), finalPackage);
             // 复用手动终稿确认：幂等校验 + CAS 推进 + 建任务（事件区分直达路径），
             // 与用户在澄清轮在跑时并发点「创建任务并自动拆解」的竞态由同一套守卫兼顾
-            Task task = finalizeAfterDraft(conversation, "task_created_from_clarify_direct");
+            TaskView task = finalizeAfterDraft(conversation, "task_created_from_clarify_direct");
             log.info("/task 直达拆解产出终稿并建任务: conversationId={}, taskId={}",
-                    conversationId, task.getId());
+                    conversationId, task.id());
         } else {
             // 信息严重不足：LLM 输出追问，降级为普通澄清轮（不建任务，会话保持 ACTIVE）
             messageService.addMessage(conversationId, ROLE_ASSISTANT,
@@ -940,7 +938,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
      * @return 重试后小节齐全的 final 结果；未触发重试或重试无效时原样返回首轮结果
      */
     private ClarifyReply applyDescriptionSectionGuard(RequirementConversation conversation,
-                                                      Agent planner, String prompt,
+                                                      AgentProfileSnapshot planner, String prompt,
                                                       String scene, ClarifyReply firstReply) {
         if (!isFinalMissingSections(firstReply)) {
             return firstReply;
@@ -957,7 +955,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                     .context(Map.of("conversationId", conversationId, "scene", scene))
                     .requiredCapabilities(Map.of())
                     .build();
-            AgentResult retryResult = platformAgentExecutionService.executeSync(planner, retryTask);
+            AgentResult retryResult = platformAgentExecutionService.executeSync(planner.id(), retryTask);
             if (!retryResult.isSuccess()) {
                 throw new BizException("重试 LLM 调用失败: " + retryResult.getErrorMessage());
             }
@@ -1028,7 +1026,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
      */
     private RoundDecision makeRoundDecision(RequirementConversation conversation, String userMessage) {
         Long conversationId = conversation.getId();
-        Agent planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
+        AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
         AgentTask agentTask = AgentTask.builder()
                 .systemPrompt("")
                 .userPrompt(renderDecisionPrompt(conversation, userMessage))
@@ -1036,7 +1034,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                 .requiredCapabilities(Map.of())
                 .build();
         try {
-            AgentResult result = platformAgentExecutionService.executeSync(planner, agentTask);
+            AgentResult result = platformAgentExecutionService.executeSync(planner.id(), agentTask);
             if (!result.isSuccess()) {
                 log.warn("联合决策 LLM 调用失败，降级 chat 决策: conversationId={}, err={}",
                         conversationId, result.getErrorMessage());
@@ -1291,7 +1289,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
         boolean clarifyMode = isClarifyMode(conversation);
 
         String webSearchContext = webSearchOutcome != null ? webSearchOutcome.toContextText() : "";
-        Agent planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
+        AgentProfileSnapshot planner = plannerAgentPicker.pick(conversation.getPlannerAgentId());
         String prompt = renderPrompt(conversationId, webSearchContext,
                 clarifyMode ? PROMPT_TEMPLATE_PATH : CHAT_PROMPT_TEMPLATE_PATH);
         AgentTask agentTask = AgentTask.builder()
@@ -1301,7 +1299,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
                         "scene", clarifyMode ? "requirement_clarify" : "requirement_chat"))
                 .requiredCapabilities(Map.of())
                 .build();
-        AgentResult result = platformAgentExecutionService.executeSync(planner, agentTask);
+        AgentResult result = platformAgentExecutionService.executeSync(planner.id(), agentTask);
         if (!result.isSuccess()) {
             throw new BizException("需求澄清 LLM 调用失败: " + result.getErrorMessage());
         }

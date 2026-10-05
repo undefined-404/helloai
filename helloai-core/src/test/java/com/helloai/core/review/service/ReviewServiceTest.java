@@ -5,12 +5,12 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.common.constant.SubTaskStatus;
-import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.quality.QualityProfileUpdater;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ExecutionCommandService;
-import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.agent.service.RewardService;
 import com.helloai.core.task.service.TaskTimelineService;
@@ -99,15 +99,9 @@ class ReviewServiceTest {
         lenient().when(reviewRecordMapper.selectCount(any())).thenReturn(0L);
     }
 
-    private SubTask reviewSubTask(int reworkCount, Map<String, Object> context) {
-        SubTask subTask = new SubTask();
-        subTask.setId(SUB_TASK_ID);
-        subTask.setTaskId(TASK_ID);
-        subTask.setStatus(SubTaskStatus.REVIEW);
-        subTask.setAssignedAgentId(EXECUTOR_ID);
-        subTask.setReworkCount(reworkCount);
-        subTask.setContext(context);
-        return subTask;
+    private SubTaskView reviewSubTask(int reworkCount, Map<String, Object> context) {
+        return new SubTaskView(SUB_TASK_ID, TASK_ID, SubTaskStatus.REVIEW, EXECUTOR_ID, reworkCount,
+                null, null, null, null, null, context, List.of());
     }
 
     private Map<String, Object> manualInterventionContext() {
@@ -119,8 +113,8 @@ class ReviewServiceTest {
     @Test
     @DisplayName("§6.57: 人工驳回改派走 reworkFresh（计数归零 + 清标记），新执行者重新计数")
     void shouldResetReworkOnManualRejectWithReassign() {
-        SubTask subTask = reviewSubTask(3, manualInterventionContext());
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
+        SubTaskView subTask = reviewSubTask(3, manualInterventionContext());
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(subTask);
 
         reviewService.createReview(SUB_TASK_ID, REVIEWER_ID, ReviewResult.REJECTED,
                 1, "产出质量不达标", "人工驳回并改派", NEW_AGENT_ID);
@@ -138,8 +132,8 @@ class ReviewServiceTest {
     @Test
     @DisplayName("§6.57: 人工驳回不改派（原执行者重做）同样重置计数")
     void shouldResetReworkOnManualRejectWithoutReassign() {
-        SubTask subTask = reviewSubTask(3, manualInterventionContext());
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
+        SubTaskView subTask = reviewSubTask(3, manualInterventionContext());
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(subTask);
 
         reviewService.createReview(SUB_TASK_ID, REVIEWER_ID, ReviewResult.REJECTED,
                 2, "需补充验收证据", "人工驳回重做", null);
@@ -151,8 +145,8 @@ class ReviewServiceTest {
     @Test
     @DisplayName("§6.57: 人工通过不受影响，走 complete 且不触发重置")
     void shouldCompleteOnManualApprove() {
-        SubTask subTask = reviewSubTask(3, manualInterventionContext());
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
+        SubTaskView subTask = reviewSubTask(3, manualInterventionContext());
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(subTask);
 
         reviewService.createReview(SUB_TASK_ID, REVIEWER_ID, ReviewResult.APPROVED,
                 4, null, "人工直接通过", null);
@@ -167,12 +161,13 @@ class ReviewServiceTest {
     @Test
     @DisplayName("§6.100: 人工驳回改派 API_KEY_LLM 执行者时补发执行命令（内循环闭合）")
     void shouldSendExecutionCommandOnManualRejectToApiKeyAgent() {
-        SubTask subTask = reviewSubTask(3, manualInterventionContext());
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
-        Agent reworkAgent = new Agent();
-        reworkAgent.setId(NEW_AGENT_ID);
-        reworkAgent.setAccessType(AgentAccessType.API_KEY_LLM);
-        when(agentService.getById(NEW_AGENT_ID)).thenReturn(reworkAgent);
+        SubTaskView subTask = reviewSubTask(3, manualInterventionContext());
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(subTask);
+        AgentProfileSnapshot reworkAgent = AgentProfileSnapshot.builder()
+                .id(NEW_AGENT_ID)
+                .accessType(AgentAccessType.API_KEY_LLM)
+                .build();
+        when(agentService.getProfileById(NEW_AGENT_ID)).thenReturn(reworkAgent);
 
         reviewService.createReview(SUB_TASK_ID, REVIEWER_ID, ReviewResult.REJECTED,
                 1, "产出质量不达标", "人工驳回并改派", NEW_AGENT_ID);
@@ -184,12 +179,13 @@ class ReviewServiceTest {
     @Test
     @DisplayName("§6.100: 人工驳回不改派时对原执行者（API_KEY_LLM）补发执行命令")
     void shouldSendExecutionCommandToOriginalExecutorWhenNoReassign() {
-        SubTask subTask = reviewSubTask(3, manualInterventionContext());
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
-        Agent executor = new Agent();
-        executor.setId(EXECUTOR_ID);
-        executor.setAccessType(AgentAccessType.API_KEY_LLM);
-        when(agentService.getById(EXECUTOR_ID)).thenReturn(executor);
+        SubTaskView subTask = reviewSubTask(3, manualInterventionContext());
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(subTask);
+        AgentProfileSnapshot executor = AgentProfileSnapshot.builder()
+                .id(EXECUTOR_ID)
+                .accessType(AgentAccessType.API_KEY_LLM)
+                .build();
+        when(agentService.getProfileById(EXECUTOR_ID)).thenReturn(executor);
 
         reviewService.createReview(SUB_TASK_ID, REVIEWER_ID, ReviewResult.REJECTED,
                 2, "需补充验收证据", "人工驳回重做", null);
@@ -201,12 +197,13 @@ class ReviewServiceTest {
     @Test
     @DisplayName("§6.100: 非 API_KEY_LLM 执行者（CLI_CLIENT）不补发执行命令")
     void shouldNotSendExecutionCommandToCliAgent() {
-        SubTask subTask = reviewSubTask(3, manualInterventionContext());
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
-        Agent reworkAgent = new Agent();
-        reworkAgent.setId(NEW_AGENT_ID);
-        reworkAgent.setAccessType(AgentAccessType.CLI_CLIENT);
-        when(agentService.getById(NEW_AGENT_ID)).thenReturn(reworkAgent);
+        SubTaskView subTask = reviewSubTask(3, manualInterventionContext());
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(subTask);
+        AgentProfileSnapshot reworkAgent = AgentProfileSnapshot.builder()
+                .id(NEW_AGENT_ID)
+                .accessType(AgentAccessType.CLI_CLIENT)
+                .build();
+        when(agentService.getProfileById(NEW_AGENT_ID)).thenReturn(reworkAgent);
 
         reviewService.createReview(SUB_TASK_ID, REVIEWER_ID, ReviewResult.REJECTED,
                 1, "产出质量不达标", "人工驳回并改派", NEW_AGENT_ID);
@@ -218,12 +215,13 @@ class ReviewServiceTest {
     @Test
     @DisplayName("§6.100: 执行命令下发失败仅告警，不阻断人工驳回链路")
     void shouldNotBreakReviewWhenCommandDispatchFails() {
-        SubTask subTask = reviewSubTask(3, manualInterventionContext());
-        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTask);
-        Agent reworkAgent = new Agent();
-        reworkAgent.setId(NEW_AGENT_ID);
-        reworkAgent.setAccessType(AgentAccessType.API_KEY_LLM);
-        when(agentService.getById(NEW_AGENT_ID)).thenReturn(reworkAgent);
+        SubTaskView subTask = reviewSubTask(3, manualInterventionContext());
+        when(subTaskService.getView(SUB_TASK_ID)).thenReturn(subTask);
+        AgentProfileSnapshot reworkAgent = AgentProfileSnapshot.builder()
+                .id(NEW_AGENT_ID)
+                .accessType(AgentAccessType.API_KEY_LLM)
+                .build();
+        when(agentService.getProfileById(NEW_AGENT_ID)).thenReturn(reworkAgent);
         when(executionCommandService.createAssignedCommand(SUB_TASK_ID, NEW_AGENT_ID, "manual-review-rework", List.of()))
                 .thenThrow(new RuntimeException("MQ 不可用"));
 
@@ -299,10 +297,11 @@ class ReviewServiceTest {
                 new ReviewerLeniency(2L, "", 5, 80, 4.2),
                 new ReviewerLeniency(9L, "", 3, 33, 3.0));
         when(reviewRecordMapper.selectReviewerLeniency(30)).thenReturn(rows);
-        Agent reviewer = new Agent();
-        reviewer.setId(2L);
-        reviewer.setName("审查者A");
-        when(agentService.listByIds(List.of(2L, 9L))).thenReturn(List.of(reviewer));
+        AgentProfileSnapshot reviewer = AgentProfileSnapshot.builder()
+                .id(2L)
+                .name("审查者A")
+                .build();
+        when(agentService.listProfilesByIds(List.of(2L, 9L))).thenReturn(List.of(reviewer));
 
         List<ReviewerLeniency> result = reviewService.statsReviewerLeniency(30);
 

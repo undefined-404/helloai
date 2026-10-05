@@ -10,6 +10,7 @@ import com.helloai.core.system.storage.ArtifactStorage;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.mapper.AttachmentMapper;
+import com.helloai.core.task.policy.AttachmentVisibilityPolicy;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
 import org.junit.jupiter.api.BeforeEach;
@@ -38,6 +39,7 @@ class AttachmentServiceImplTest {
     private SubTaskService subTaskService;
     private TaskService taskService;
     private ArtifactStorage artifactStorage;
+    private AttachmentVisibilityPolicy attachmentVisibilityPolicy;
 
     private AttachmentServiceImpl service;
     private LambdaQueryChainWrapper<Attachment> chain;
@@ -49,7 +51,9 @@ class AttachmentServiceImplTest {
         subTaskService = mock(SubTaskService.class);
         taskService = mock(TaskService.class);
         artifactStorage = mock(ArtifactStorage.class);
-        service = spy(new AttachmentServiceImpl(subTaskService, taskService, artifactStorage));
+        attachmentVisibilityPolicy = mock(AttachmentVisibilityPolicy.class);
+        service = spy(new AttachmentServiceImpl(subTaskService, taskService, artifactStorage,
+                attachmentVisibilityPolicy));
         chain = mock(LambdaQueryChainWrapper.class);
         updateChain = mock(LambdaUpdateChainWrapper.class);
         doReturn(chain).when(service).lambdaQuery();
@@ -154,6 +158,45 @@ class AttachmentServiceImplTest {
         assertThat(resultAllStatus).hasSize(1);
         // 过滤条件来自 status=ACTIVE（SQL 层过滤，mock 链验证追加；SFunction 按值断言）
         verify(chain).eq(any(SFunction.class), eq(AttachmentStatus.ACTIVE));
+    }
+
+    @Test
+    @DisplayName("listReadable：逐条过可见性判据，仅保留可读行（行粒度过滤而非整表放行）")
+    void listReadable_shouldFilterRowByRowByPolicy() {
+        Attachment readable = attachment(1L, 100L, "可见.md");
+        Attachment hidden = attachment(2L, 100L, "不可见.md");
+        when(chain.list()).thenReturn(List.of(readable, hidden));
+        when(subTaskService.listByIds(any())).thenReturn(List.of(subTask(100L, 10L, "子任务A")));
+        when(attachmentVisibilityPolicy.canRead(7L, readable)).thenReturn(true);
+        when(attachmentVisibilityPolicy.canRead(7L, hidden)).thenReturn(false);
+
+        List<Attachment> result = service.listReadable(100L, 7L);
+
+        assertThat(result).containsExactly(readable);
+    }
+
+    @Test
+    @DisplayName("listReadable：agentId 为 null 直接返回空列表，不查库")
+    void listReadable_nullAgentId_shouldReturnEmptyWithoutQuery() {
+        assertThat(service.listReadable(100L, null)).isEmpty();
+        verify(chain, never()).list();
+    }
+
+    @Test
+    @DisplayName("assertReadable：判据不通过抛 403，通过则不抛（判定零复制，全委托 Policy）")
+    void assertReadable_shouldThrow403WhenPolicyDenies() {
+        Attachment attachment = attachment(1L, 100L, "证据.md");
+        when(attachmentVisibilityPolicy.canRead(7L, attachment)).thenReturn(false);
+
+        BizException ex = catchThrowableOfType(
+                () -> service.assertReadable(attachment, 7L), BizException.class);
+
+        assertThat(ex).isNotNull();
+        assertThat(ex.getCode()).isEqualTo(403);
+
+        when(attachmentVisibilityPolicy.canRead(7L, attachment)).thenReturn(true);
+        assertThat(catchThrowableOfType(
+                () -> service.assertReadable(attachment, 7L), BizException.class)).isNull();
     }
 
     @Test

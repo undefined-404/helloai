@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.core.agent.service.LlmProviderKeyVerifyService;
 import com.helloai.core.agent.service.PlatformProviderConfigService;
-import com.helloai.core.system.entity.LlmProvider;
+import com.helloai.core.system.port.LlmProviderProfile;
 import com.helloai.core.system.service.LlmProviderService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -72,11 +72,11 @@ public class LlmProviderKeyVerifyServiceImpl implements LlmProviderKeyVerifyServ
     @Override
     public Map<String, Object> verifyById(Long providerId) {
         long start = System.currentTimeMillis();
-        LlmProvider provider = providerService.getById(providerId);
+        LlmProviderProfile provider = providerService.getProfileById(providerId);
         if (provider == null) {
             return result(false, "Provider 不存在", null, start);
         }
-        String code = provider.getProviderCode();
+        String code = provider.providerCode();
         String apiKey = platformProviderConfigService.getApiKey(code);
         if (apiKey == null || apiKey.isBlank()) {
             return result(false, "尚未配置 API Key，请先保存密钥再验证", null, start);
@@ -115,20 +115,20 @@ public class LlmProviderKeyVerifyServiceImpl implements LlmProviderKeyVerifyServ
     }
 
     /** 按协议类型构造最小探测请求。 */
-    private HttpRequest buildRequest(LlmProvider provider, String baseUrl,
+    private HttpRequest buildRequest(LlmProviderProfile provider, String baseUrl,
                                      String apiKey, String model) throws Exception {
         String body = objectMapper.writeValueAsString(Map.of(
                 "model", model,
                 "max_tokens", 1,
                 "messages", List.of(Map.of("role", "user", "content", "ping"))
         ));
-        String endpoint = buildEndpoint(provider.getProtocolType(), baseUrl);
+        String endpoint = buildEndpoint(provider.protocolType(), baseUrl);
         HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(endpoint))
                 .timeout(REQUEST_TIMEOUT)
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
-        if (PROTOCOL_ANTHROPIC.equals(provider.getProtocolType())) {
+        if (PROTOCOL_ANTHROPIC.equals(provider.protocolType())) {
             builder.header("x-api-key", apiKey);
             builder.header("anthropic-version", "2023-06-01");
         } else {

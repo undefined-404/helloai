@@ -2,7 +2,7 @@ package com.helloai.core.agent.chat.provider;
 
 import com.helloai.common.base.BizException;
 import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.system.entity.LlmProvider;
+import com.helloai.core.system.port.LlmProviderProfile;
 import com.helloai.core.system.service.LlmProviderQueryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -67,18 +67,18 @@ public class LlmProviderChatClientFactoryRegistry {
      * @throws BizException 当 provider 不存在 / 未启用 / 协议不支持时
      */
     public ChatClient createChatClient(String providerCode, String apiKeyPlaintext, Agent agent, String model) {
-        LlmProvider provider = queryService.findByCode(providerCode)
+        LlmProviderProfile provider = queryService.findProfileByCode(providerCode)
                 .orElseThrow(() -> new BizException("Provider 未找到或未启用: " + providerCode));
 
         // DeepSeek 走官方 SDK（DeepSeekChatModel），优先匹配专用 Factory
-        if ("deepseek".equalsIgnoreCase(provider.getProviderCode()) && deepSeekFactory.supports(provider.getProviderCode())) {
+        if ("deepseek".equalsIgnoreCase(provider.providerCode()) && deepSeekFactory.supports(provider.providerCode())) {
             return deepSeekFactory.createChatClient(apiKeyPlaintext, agent, model);
         }
 
-        ProtocolFactory factory = protocolFactoryMap().get(normalizeProtocolType(provider.getProtocolType()));
+        ProtocolFactory factory = protocolFactoryMap().get(normalizeProtocolType(provider.protocolType()));
         if (factory == null) {
-            throw new BizException("不支持的 protocol_type: " + provider.getProtocolType()
-                    + "（provider=" + provider.getProviderCode() + "）");
+            throw new BizException("不支持的 protocol_type: " + provider.protocolType()
+                    + "（provider=" + provider.providerCode() + "）");
         }
         return factory.createChatClient(provider, apiKeyPlaintext, agent, model);
     }
@@ -104,18 +104,18 @@ public class LlmProviderChatClientFactoryRegistry {
      * @throws BizException 当 provider 不存在 / 未启用 / 协议不支持时
      */
     public ChatModel createChatModel(String providerCode, String apiKeyPlaintext, Agent agent, String model) {
-        LlmProvider provider = queryService.findByCode(providerCode)
+        LlmProviderProfile provider = queryService.findProfileByCode(providerCode)
                 .orElseThrow(() -> new BizException("Provider 未找到或未启用: " + providerCode));
 
         // DeepSeek 走官方 SDK（DeepSeekChatModel），优先匹配专用 Factory
-        if ("deepseek".equalsIgnoreCase(provider.getProviderCode()) && deepSeekFactory.supports(provider.getProviderCode())) {
+        if ("deepseek".equalsIgnoreCase(provider.providerCode()) && deepSeekFactory.supports(provider.providerCode())) {
             return deepSeekFactory.createChatModel(apiKeyPlaintext, agent, model);
         }
 
-        ProtocolFactory factory = protocolFactoryMap().get(normalizeProtocolType(provider.getProtocolType()));
+        ProtocolFactory factory = protocolFactoryMap().get(normalizeProtocolType(provider.protocolType()));
         if (factory == null) {
-            throw new BizException("不支持的 protocol_type: " + provider.getProtocolType()
-                    + "（provider=" + provider.getProviderCode() + "）");
+            throw new BizException("不支持的 protocol_type: " + provider.protocolType()
+                    + "（provider=" + provider.providerCode() + "）");
         }
         return factory.createChatModel(provider, apiKeyPlaintext, agent, model);
     }
@@ -133,11 +133,11 @@ public class LlmProviderChatClientFactoryRegistry {
         /**
          * 根据 LlmProvider 配置创建 ChatClient。
          */
-        ChatClient createChatClient(LlmProvider provider, String apiKeyPlaintext, Agent agent, String model);
+        ChatClient createChatClient(LlmProviderProfile provider, String apiKeyPlaintext, Agent agent, String model);
 
         /**
          * 根据 LlmProvider 配置创建 ChatModel（P0-B-2：与 createChatClient 共享缓存实例）。
          */
-        ChatModel createChatModel(LlmProvider provider, String apiKeyPlaintext, Agent agent, String model);
+        ChatModel createChatModel(LlmProviderProfile provider, String apiKeyPlaintext, Agent agent, String model);
     }
 }

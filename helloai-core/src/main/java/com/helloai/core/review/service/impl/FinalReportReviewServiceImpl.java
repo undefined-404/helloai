@@ -6,9 +6,12 @@ import com.helloai.common.constant.FinalReportStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
-import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
+import com.helloai.core.agent.quality.gate.GateDecision;
+import com.helloai.core.agent.quality.gate.GateSeverity;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.review.picker.ReviewerPicker;
+import com.helloai.core.review.quality.FinalReportFidelityGate;
 import com.helloai.core.review.service.FinalReportReviewService;
 import com.helloai.core.review.service.SubTaskReviewService;
 import com.helloai.core.review.support.FinalReportFidelityChecker;
@@ -18,8 +21,8 @@ import com.helloai.core.review.support.ReviewEvidenceAssembler;
 import com.helloai.core.review.support.ReviewNotExecutedException;
 import com.helloai.core.review.support.VerdictParser;
 import com.helloai.core.shared.event.TaskFinalReportGeneratedEvent;
-import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.port.SubTaskView;
+import com.helloai.core.task.port.TaskView;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskFinalReportService;
 import com.helloai.core.task.service.TaskRunningSpecService;
@@ -118,6 +121,8 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
     private final Executor reportReviewExecutor;
     /** §12.5.5 #4：AFTER_COMMIT / 池满兜底落库经 REQUIRES_NEW 独立事务，避免加入已提交事务而丢失。 */
     private final FinalReportReviewFallbackWriter fallbackWriter;
+    /** RM12（B4 Quality Gate 泛化）：最终报告保真机械闸门（持有纯静态 {@link FinalReportFidelityChecker}）。 */
+    private final FinalReportFidelityGate fidelityGate;
 
     /**
      * L1 入口：AFTER_COMMIT 只做<b>提交</b>不阻塞发布线程。<p>
@@ -227,8 +232,8 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
      * （实测：审查被丢弃且不收敛 → 报告永久卡在 {@code REVIEWING}，需人工介入）；
      * 故用 {@link OffsetDateTime#isEqual(OffsetDateTime)}（只比瞬间，与时区无关）。</p>
      */
-    private static boolean isStale(Task task, TaskFinalReportGeneratedEvent event) {
-        OffsetDateTime dbTime = task.getFinalReportTime();
+    private static boolean isStale(TaskView task, TaskFinalReportGeneratedEvent event) {
+        OffsetDateTime dbTime = task.finalReportTime();
         OffsetDateTime eventTime = event.getReportTime();
         if (dbTime == null || eventTime == null) {
             return true;
@@ -237,16 +242,16 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
     }
 
     private void doReview(TaskFinalReportGeneratedEvent event) {
-        Task task = taskService.getById(event.getTaskId());
-        if (task == null || task.getFinalReport() == null || task.getFinalReport().isBlank()) {
+        TaskView task = taskService.getView(event.getTaskId());
+        if (task == null || task.finalReport() == null || task.finalReport().isBlank()) {
             log.debug("报告不存在或为空，跳过审查: taskId={}", event.getTaskId());
             return;
         }
         // §12.2 状态守卫：已被兄弟链路（L1/L2/L3）收敛或审查开关关闭时写回的 DONE → 幂等跳过。
         // 这是三路触发不重复审查的关键守卫（Redis 锁只挡并发窗口，退出后到达的路径靠本守卫挡住）。
-        if (task.getFinalReportStatus() != FinalReportStatus.REVIEWING) {
+        if (task.finalReportStatus() != FinalReportStatus.REVIEWING) {
             log.debug("最终报告审查跳过：状态已非 REVIEWING（已被收敛/接管）: taskId={}, status={}",
-                    event.getTaskId(), task.getFinalReportStatus());
+                    event.getTaskId(), task.finalReportStatus());
             return;
         }
         // §12.2 陈旧守卫（审查前）：期间被重新生成/回滚接管 → 旧链审查丢弃，不选人不动用 LLM
@@ -260,31 +265,31 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
         }
         // 3A-V2 机械前置门（确定性、零 token）：空壳引用 / 围栏失衡命中即机械驳回，
         // 不给 LLM 放过的机会（实测「完整矩阵见分册」曾被 LLM 判 pass）
-        FinalReportFidelityChecker.Result fidelity = FinalReportFidelityChecker.check(task.getFinalReport());
-        if (fidelity.hasHard()) {
+        GateDecision fidelity = fidelityGate.evaluate(task.finalReport());
+        if (fidelity.blocks()) {
             log.info("最终报告机械校验命中硬违规，直接驳回: taskId={}, issues={}",
-                    event.getTaskId(), fidelity.hardIssueList());
-            rejectOrRework(event, null, 0, fidelity.hardIssueList(), "mechanical");
+                    event.getTaskId(), fidelity.detailList(GateSeverity.HARD));
+            rejectOrRework(event, null, 0, fidelity.detailList(GateSeverity.HARD), "mechanical");
             return;
         }
-        Agent reviewer = pickReviewer(event.getTaskId());
+        AgentProfileSnapshot reviewer = pickReviewer(event.getTaskId());
         if (reviewer == null) {
             skipped(event, "no_reviewer_available");
             return;
         }
         // 自审自过硬守卫：审查人不得是报告写作者（不满足则跳过审查，不得静默判 pass）
-        if (task.getFinalReportAgentId() != null
-                && reviewer.getId().equals(task.getFinalReportAgentId())) {
+        if (task.finalReportAgentId() != null
+                && reviewer.id().equals(task.finalReportAgentId())) {
             skipped(event, "self_review_guard");
             return;
         }
         // 机械软违规（跨章逐字重复 / 覆盖追溯表缺失）：落告警事件，交审查 LLM 重点关注（不直接驳回）
-        if (fidelity.hasSoft()) {
+        if (fidelity.hasSeverity(GateSeverity.SOFT)) {
             taskTimelineService.recordEvent(event.getTaskId(), null,
-                    "task_final_report_review_warned", AgentRole.REVIEWER, reviewer.getId(),
-                    Map.of("softIssues", fidelity.softIssueList(), "attempt", event.getAttempt()));
+                    "task_final_report_review_warned", AgentRole.REVIEWER, reviewer.id(),
+                    Map.of("softIssues", fidelity.detailList(GateSeverity.SOFT), "attempt", event.getAttempt()));
             log.info("最终报告机械校验命中软违规（交 LLM 复核）: taskId={}, soft={}",
-                    event.getTaskId(), fidelity.softIssueList());
+                    event.getTaskId(), fidelity.detailList(GateSeverity.SOFT));
         }
         AgentResult result = callReviewLlm(event, task, reviewer);
         if (result == null) {
@@ -296,7 +301,7 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
         SubTaskReviewService.ReviewVerdict verdict = verdictParser.parseVerdict(result.getOutput());
         if (verdict == null) {
             taskTimelineService.recordEvent(event.getTaskId(), null,
-                    "task_final_report_review_unparseable", AgentRole.REVIEWER, reviewer.getId(),
+                    "task_final_report_review_unparseable", AgentRole.REVIEWER, reviewer.id(),
                     Map.of("rawOutput", VerdictParser.summarize(result.getOutput(), 300),
                             "attempt", event.getAttempt()));
             log.warn("最终报告审查输出不可解析: taskId={}, raw={}", event.getTaskId(),
@@ -308,16 +313,16 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
         int score = verdict.getScore() != null ? verdict.getScore() : 0;
         if (Boolean.TRUE.equals(verdict.getPass())) {
             taskTimelineService.recordEvent(event.getTaskId(), null,
-                    "task_final_report_review_passed", AgentRole.REVIEWER, reviewer.getId(),
-                    Map.of("reviewerAgentId", reviewer.getId(), "score", score,
+                    "task_final_report_review_passed", AgentRole.REVIEWER, reviewer.id(),
+                    Map.of("reviewerAgentId", reviewer.id(), "score", score,
                             "attempt", event.getAttempt()));
             log.info("最终报告审查通过: taskId={}, reviewerAgentId={}, score={}",
-                    event.getTaskId(), reviewer.getId(), score);
+                    event.getTaskId(), reviewer.id(), score);
             // §12.2 REVIEWING 收敛：审查通过置 DONE（条件写回，版本未变才生效）
             convergeToDone(event);
             return;
         }
-        rejectOrRework(event, reviewer.getId(), score,
+        rejectOrRework(event, reviewer.id(), score,
                 verdict.getIssues() != null ? verdict.getIssues() : "（无具体驳回意见）", "llm");
     }
 
@@ -343,7 +348,7 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
         if (maxReview > 0 && event.getAttempt() <= maxReview) {
             // §12.2 陈旧守卫（rework 前）：审查耗时期间版本可能已被新生成/回滚接管——
             // 此时返工基于旧链已无意义，丢弃并落 rework_discarded_stale（不重写不收敛）
-            Task latest = taskService.getById(event.getTaskId());
+            TaskView latest = taskService.getView(event.getTaskId());
             if (latest == null || isStale(latest, event)) {
                 taskTimelineService.recordEvent(event.getTaskId(), null,
                         "task_final_report_rework_discarded_stale", AgentRole.REVIEWER,
@@ -369,7 +374,7 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
     }
 
     /** 渲染审查 Prompt 并调用平台 LLM；调用失败/异常返回 null（内部已记 failed 事件）。 */
-    private AgentResult callReviewLlm(TaskFinalReportGeneratedEvent event, Task task, Agent reviewer) {
+    private AgentResult callReviewLlm(TaskFinalReportGeneratedEvent event, TaskView task, AgentProfileSnapshot reviewer) {
         String prompt;
         try {
             prompt = renderReviewPrompt(task, event);
@@ -384,10 +389,10 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
                     .context(Map.of("taskId", event.getTaskId(), "scene", "task_final_report_review"))
                     .requiredCapabilities(Map.of())
                     .build();
-            AgentResult result = platformAgentExecutionService.executeSync(reviewer, agentTask);
+            AgentResult result = platformAgentExecutionService.executeSync(reviewer.id(), agentTask);
             if (result == null || !result.isSuccess()) {
                 taskTimelineService.recordEvent(event.getTaskId(), null,
-                        "task_final_report_review_failed", AgentRole.REVIEWER, reviewer.getId(),
+                        "task_final_report_review_failed", AgentRole.REVIEWER, reviewer.id(),
                         Map.of("error", result != null ? result.getErrorMessage() : "null_result",
                                 "attempt", event.getAttempt()));
                 log.warn("最终报告审查 LLM 调用失败: taskId={}, err={}",
@@ -397,7 +402,7 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
             return result;
         } catch (Exception e) {
             taskTimelineService.recordEvent(event.getTaskId(), null,
-                    "task_final_report_review_failed", AgentRole.REVIEWER, reviewer.getId(),
+                    "task_final_report_review_failed", AgentRole.REVIEWER, reviewer.id(),
                     Map.of("error", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName(),
                             "attempt", event.getAttempt()));
             log.warn("最终报告审查 LLM 调用异常: taskId={}, err={}", event.getTaskId(), e.getMessage());
@@ -405,11 +410,9 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
         }
     }
 
-    /** 报告无子任务实体：传探针（仅填 taskId）使任务级 {@code reviewerAgentId} 生效（SubTask 仅 @Data 无 @Builder）。 */
-    private Agent pickReviewer(Long taskId) {
-        SubTask probe = new SubTask();
-        probe.setTaskId(taskId);
-        return reviewerPicker.pickSingle(probe);
+    /** 报告无子任务实体：传探针（仅填 taskId）使任务级 {@code reviewerAgentId} 生效（SubTaskView 仅 @Data 无 @Builder）。 */
+    private AgentProfileSnapshot pickReviewer(Long taskId) {
+        return reviewerPicker.pickSingle(SubTaskView.taskScopedProbe(taskId));
     }
 
     /** 跳过审查落库标记（reason 区分守卫/无可用 reviewer/池满），不做任何 pass 判定；审查跳过即收敛 DONE。 */
@@ -422,7 +425,7 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
     }
 
     /** 渲染审查 Prompt：任务信息 + 报告正文 + 子任务产出证据（产出摘要复用 review 域装配器同款口径）。 */
-    private String renderReviewPrompt(Task task, TaskFinalReportGeneratedEvent event) {
+    private String renderReviewPrompt(TaskView task, TaskFinalReportGeneratedEvent event) {
         ClassPathResource resource = new ClassPathResource(REVIEW_TEMPLATE_PATH);
         if (!resource.exists()) {
             throw new IllegalStateException("未找到最终报告审查 Prompt 模板: " + REVIEW_TEMPLATE_PATH);
@@ -434,11 +437,11 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
             throw new IllegalStateException("读取最终报告审查 Prompt 模板失败: " + e.getMessage(), e);
         }
         return template
-                .replace("{{TASK_TITLE}}", task.getTitle() != null ? task.getTitle() : "")
+                .replace("{{TASK_TITLE}}", task.title() != null ? task.title() : "")
                 .replace("{{TASK_DESCRIPTION}}",
-                        task.getDescription() != null && !task.getDescription().isBlank()
-                                ? task.getDescription() : "（无补充描述）")
-                .replace("{{FINAL_REPORT}}", task.getFinalReport() != null ? task.getFinalReport() : "")
+                        task.description() != null && !task.description().isBlank()
+                                ? task.description() : "（无补充描述）")
+                .replace("{{FINAL_REPORT}}", task.finalReport() != null ? task.finalReport() : "")
                 .replace("{{SUB_TASK_EVIDENCE}}", buildSubTaskEvidence(event.getTaskId()))
                 .replace("{{ATTEMPT}}", String.valueOf(event.getAttempt()))
                 .replace("{{REPORT_LENGTH}}", String.valueOf(event.getReportLength()));
@@ -446,12 +449,8 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
 
     /** 子任务产出证据：编号/标题/交付物/验收/执行摘要 + 产出摘要（与报告链同口径的只读事实源）。 */
     private String buildSubTaskEvidence(Long taskId) {
-        List<SubTask> subTasks = subTaskService.lambdaQuery()
-                .eq(SubTask::getTaskId, taskId)
-                .orderByAsc(SubTask::getCreateTime)
-                .list();
-        List<SubTask> done = subTasks == null ? List.of() : subTasks.stream()
-                .filter(st -> st.getStatus() == SubTaskStatus.DONE)
+        List<SubTaskView> done = subTaskService.listViewsByTaskId(taskId).stream()
+                .filter(st -> st.status() == SubTaskStatus.DONE)
                 .toList();
         if (done.isEmpty()) {
             return "（无 DONE 子任务产出证据）";
@@ -463,16 +462,16 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
                 truncated = true;
                 break;
             }
-            SubTask st = done.get(i);
+            SubTaskView st = done.get(i);
             sb.append("### #").append(i + 1).append(' ')
-                    .append(st.getTitle() != null ? st.getTitle() : "（无标题）").append('\n');
-            if (st.getDeliverable() != null && !st.getDeliverable().isBlank()) {
-                sb.append("- 交付物要求：").append(st.getDeliverable()).append('\n');
+                    .append(st.title() != null ? st.title() : "（无标题）").append('\n');
+            if (st.deliverable() != null && !st.deliverable().isBlank()) {
+                sb.append("- 交付物要求：").append(st.deliverable()).append('\n');
             }
-            if (st.getAcceptance() != null && !st.getAcceptance().isBlank()) {
-                sb.append("- 验收标准：").append(st.getAcceptance()).append('\n');
+            if (st.acceptance() != null && !st.acceptance().isBlank()) {
+                sb.append("- 验收标准：").append(st.acceptance()).append('\n');
             }
-            ExecutionRecord record = taskRunningSpecService.findRecord(taskId, st.getId());
+            ExecutionRecord record = taskRunningSpecService.findRecord(taskId, st.id());
             if (record != null && record.summary() != null && !record.summary().isBlank()) {
                 sb.append("- 执行摘要：").append(record.summary()).append('\n');
             }

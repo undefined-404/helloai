@@ -2,7 +2,7 @@ package com.helloai.core.task.service.impl;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.SubTaskStatus;
-import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.util.SubTaskDependencyOrder;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
@@ -192,8 +192,8 @@ public class TaskDeliverableServiceImpl implements TaskDeliverableService {
         if (agentId == null) {
             return "-";
         }
-        Agent agent = agentService.getById(agentId);
-        return agent != null && agent.getName() != null ? agent.getName() : String.valueOf(agentId);
+        AgentProfileSnapshot agent = agentService.getProfileById(agentId);
+        return agent != null && agent.name() != null ? agent.name() : String.valueOf(agentId);
     }
 
     /** 读取 context.lastExecution.output（统一走 SubTaskOutputExtractor，读取 subTask.getContext()，消除多消费方同款先例漂移；入参可为 null）。 */

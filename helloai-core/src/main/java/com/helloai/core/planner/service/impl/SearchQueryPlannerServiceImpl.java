@@ -5,7 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.config.WebSearchProperties;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
-import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.planner.clarify.SystemTimeContextBuilder;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
@@ -185,14 +185,14 @@ public class SearchQueryPlannerServiceImpl implements SearchQueryPlannerService 
                     // 每轮改写前注入系统当前时间（第一层防线）：
                     // 改写器把"今天/上周五"等相对时间词转绝对日期时以服务器实时时钟为准
                     .replace("{{SYSTEM_TIME_CONTEXT}}", systemTimeContextBuilder.build());
-            Agent planner = plannerAgentPicker.pick(null); // 自动选择平台内 PLANNER
+            AgentProfileSnapshot planner = plannerAgentPicker.pick(null); // 自动选择平台内 PLANNER
             AgentTask agentTask = AgentTask.builder()
                     .systemPrompt("")
                     .userPrompt(prompt)
                     .context(Map.of("scene", REWRITE_SCENE))
                     .requiredCapabilities(Map.of())
                     .build();
-            AgentResult result = platformAgentExecutionService.executeSync(planner, agentTask);
+            AgentResult result = platformAgentExecutionService.executeSync(planner.id(), agentTask);
             if (!result.isSuccess()) {
                 log.warn("搜索词 LLM 改写失败（降级规则结果）: err={}", result.getErrorMessage());
                 return List.of();

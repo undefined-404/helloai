@@ -3,6 +3,7 @@ package com.helloai.core.task.service;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.helloai.common.base.BizException;
 import com.helloai.core.task.entity.Attachment;
+import com.helloai.core.task.port.AttachmentView;
 
 import java.util.List;
 
@@ -32,6 +33,41 @@ public interface AttachmentService extends IService<Attachment> {
      * @return 附件列表（绝不返回 null）
      */
     List<Attachment> list(Long subTaskId);
+
+    /**
+     * 按子任务 ID 查询<b>指定 agent 可读</b>的附件列表（按创建时间倒序）。
+     *
+     * <p>与 {@link #list(Long)} 同源，但逐条经
+     * {@code AttachmentVisibilityPolicy} 过滤：同一子任务下的附件可能具有不同
+     * {@code visibility}，故"A 可见、B 不可见"必须在<b>行粒度</b>上剔除，
+     * 而非整表放行或整表 403。</p>
+     *
+     * <p><b>为什么读端可见性判定放在 Service 而不是 Controller</b>（§8.1）：
+     * Controller 只应依赖 Service 契约，可见性判据属业务规则（§8.2），
+     * 且将来 MCP 读取工具等通道需要同一判据。故收敛在此，
+     * Controller 不再直接 import {@code task.policy}。</p>
+     *
+     * @param subTaskId 子任务 ID（null 表示不限）
+     * @param agentId   请求 Agent ID（{@code null} 时按不可读处理，返回空列表）
+     * @return 该 agent 可读的附件列表（绝不返回 null）
+     */
+    List<Attachment> listReadable(Long subTaskId, Long agentId);
+
+    /**
+     * 校验指定 agent 可读该附件；不可读抛 {@link BizException}(403)。
+     *
+     * <p>判据唯一来源为 {@code AttachmentVisibilityPolicy}（"声明范围 × 任务成员关系"），
+     * 本方法只做"判定 → 转异常"的收口，不复制任何判定逻辑。传入已加载的实体而非
+     * {@code id}，避免调用方为做校验再查一次库。</p>
+     *
+     * <p><b>调用方约定</b>：仅 Agent 通道需要调用；平台账号 / 无主体请求由管理侧鉴权覆盖
+     * （通道判定属 HTTP 关注点，留在 Controller）。</p>
+     *
+     * @param attachment 已加载的附件实体
+     * @param agentId    请求 Agent ID
+     * @throws BizException 不可读时抛 403
+     */
+    void assertReadable(Attachment attachment, Long agentId);
 
     /**
      * 按子任务 ID 查询有效（ACTIVE）附件列表（按创建时间倒序）。
@@ -128,4 +164,9 @@ public interface AttachmentService extends IService<Attachment> {
      * @return 是否适合浏览器内联预览
      */
     boolean isPreviewable(Attachment attachment);
+
+    // ── 只读快照（RM5 批 4）：供 review 域消费，避免其 import task.entity ──
+
+    /** 启用态附件的只读快照（顺序与 {@link #listActive} 一致；{@code contentLoadable} 由提供方派生，W11）。 */
+    List<AttachmentView> listActiveViews(Long subTaskId);
 }

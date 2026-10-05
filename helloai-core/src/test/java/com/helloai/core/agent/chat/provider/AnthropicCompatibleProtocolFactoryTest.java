@@ -4,7 +4,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentProviderProperties;
 import com.helloai.core.agent.service.PlatformProviderConfigService;
 import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.system.entity.LlmProvider;
+import com.helloai.core.system.port.LlmProviderProfile;
 import io.micrometer.observation.ObservationRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -63,13 +63,8 @@ class AnthropicCompatibleProtocolFactoryTest {
                 observationRegistry, cache, providerProperties, platformProviderConfigService);
     }
 
-    private LlmProvider llmProvider(String protocolType, String baseUrl, String defaultModel) {
-        LlmProvider provider = new LlmProvider();
-        provider.setProviderCode(PROVIDER_CODE);
-        provider.setProtocolType(protocolType);
-        provider.setBaseUrl(baseUrl);
-        provider.setDefaultModel(defaultModel);
-        return provider;
+    private LlmProviderProfile llmProvider(String protocolType, String baseUrl, String defaultModel) {
+        return new LlmProviderProfile(PROVIDER_CODE, null, baseUrl, defaultModel, protocolType, 1);
     }
 
     private Agent agent() {
@@ -85,7 +80,7 @@ class AnthropicCompatibleProtocolFactoryTest {
         @Test
         @DisplayName("null apiKey 抛 BizException")
         void shouldRejectNullApiKey() {
-            LlmProvider provider = llmProvider("ANTHROPIC_COMPATIBLE", "https://api.minimaxi.com/anthropic", "MiniMax-M2.5");
+            LlmProviderProfile provider = llmProvider("ANTHROPIC_COMPATIBLE", "https://api.minimaxi.com/anthropic", "MiniMax-M2.5");
 
             assertThatThrownBy(() -> factory.createChatClient(provider, null, agent(), null))
                     .isInstanceOf(BizException.class)
@@ -95,7 +90,7 @@ class AnthropicCompatibleProtocolFactoryTest {
         @Test
         @DisplayName("空白 apiKey 抛 BizException")
         void shouldRejectBlankApiKey() {
-            LlmProvider provider = llmProvider("ANTHROPIC_COMPATIBLE", "https://api.minimaxi.com/anthropic", "MiniMax-M2.5");
+            LlmProviderProfile provider = llmProvider("ANTHROPIC_COMPATIBLE", "https://api.minimaxi.com/anthropic", "MiniMax-M2.5");
 
             assertThatThrownBy(() -> factory.createChatClient(provider, "  ", agent(), null))
                     .isInstanceOf(BizException.class)
@@ -110,7 +105,7 @@ class AnthropicCompatibleProtocolFactoryTest {
         @Test
         @DisplayName("创建成功：ChatModel 为 AnthropicChatModel 且 model 用请求值")
         void shouldCreateAnthropicChatModelWithRequestedModel() {
-            LlmProvider provider = llmProvider("ANTHROPIC_COMPATIBLE", "https://api.minimaxi.com/anthropic", "MiniMax-M2.5");
+            LlmProviderProfile provider = llmProvider("ANTHROPIC_COMPATIBLE", "https://api.minimaxi.com/anthropic", "MiniMax-M2.5");
             when(platformProviderConfigService.getBaseUrl(PROVIDER_CODE)).thenReturn("https://api.minimaxi.com/anthropic");
 
             ChatClient client = factory.createChatClient(provider, "sk-test", agent(), "MiniMax-Text-01");
@@ -126,7 +121,7 @@ class AnthropicCompatibleProtocolFactoryTest {
         @Test
         @DisplayName("requestedModel 为空时回退 llm_provider.defaultModel，不再查 sys_config")
         void shouldFallbackToProviderDefaultModel() {
-            LlmProvider provider = llmProvider("ANTHROPIC_COMPATIBLE", "https://api.minimaxi.com/anthropic", "MiniMax-M2.5");
+            LlmProviderProfile provider = llmProvider("ANTHROPIC_COMPATIBLE", "https://api.minimaxi.com/anthropic", "MiniMax-M2.5");
             when(platformProviderConfigService.getBaseUrl(PROVIDER_CODE)).thenReturn("https://api.minimaxi.com/anthropic");
 
             factory.createChatClient(provider, "sk-test", agent(), null);
@@ -141,7 +136,7 @@ class AnthropicCompatibleProtocolFactoryTest {
         @Test
         @DisplayName("defaultModel 也缺省时走 sys_config 兜底")
         void shouldFallbackToSysConfigDefaultModel() {
-            LlmProvider provider = llmProvider("ANTHROPIC_COMPATIBLE", "https://api.minimaxi.com/anthropic", null);
+            LlmProviderProfile provider = llmProvider("ANTHROPIC_COMPATIBLE", "https://api.minimaxi.com/anthropic", null);
             when(platformProviderConfigService.getBaseUrl(PROVIDER_CODE)).thenReturn("https://api.minimaxi.com/anthropic");
             when(platformProviderConfigService.getDefaultModel(PROVIDER_CODE)).thenReturn("MiniMax-M2.5");
 
@@ -157,7 +152,7 @@ class AnthropicCompatibleProtocolFactoryTest {
         @Test
         @DisplayName("平台 baseUrl 缺失时回退 llm_provider.baseUrl，不抛错")
         void shouldFallbackToProviderBaseUrlWhenPlatformConfigMissing() {
-            LlmProvider provider = llmProvider("ANTHROPIC_COMPATIBLE", "https://api.minimaxi.com/anthropic", "MiniMax-M2.5");
+            LlmProviderProfile provider = llmProvider("ANTHROPIC_COMPATIBLE", "https://api.minimaxi.com/anthropic", "MiniMax-M2.5");
             when(platformProviderConfigService.getBaseUrl(PROVIDER_CODE)).thenReturn(null);
 
             ChatClient client = factory.createChatClient(provider, "sk-test", agent(), null);
@@ -170,7 +165,7 @@ class AnthropicCompatibleProtocolFactoryTest {
         @DisplayName("agent.providers 配置段缺失时使用默认超时，不抛错")
         void shouldWorkWithoutYmlConfigSection() {
             providerProperties.getProviders().clear();
-            LlmProvider provider = llmProvider("ANTHROPIC_COMPATIBLE", "https://api.minimaxi.com/anthropic", "MiniMax-M2.5");
+            LlmProviderProfile provider = llmProvider("ANTHROPIC_COMPATIBLE", "https://api.minimaxi.com/anthropic", "MiniMax-M2.5");
             when(platformProviderConfigService.getBaseUrl(PROVIDER_CODE)).thenReturn("https://api.minimaxi.com/anthropic");
 
             ChatClient client = factory.createChatClient(provider, "sk-test", agent(), null);
@@ -187,7 +182,7 @@ class AnthropicCompatibleProtocolFactoryTest {
         @Test
         @DisplayName("同四元组二次创建复用同一 ChatModel（ChatClient 包装每次新建）")
         void shouldReuseCachedChatModel() {
-            LlmProvider provider = llmProvider("ANTHROPIC_COMPATIBLE", "https://api.minimaxi.com/anthropic", "MiniMax-M2.5");
+            LlmProviderProfile provider = llmProvider("ANTHROPIC_COMPATIBLE", "https://api.minimaxi.com/anthropic", "MiniMax-M2.5");
             when(platformProviderConfigService.getBaseUrl(PROVIDER_CODE)).thenReturn("https://api.minimaxi.com/anthropic");
 
             ChatClient first = factory.createChatClient(provider, "sk-test", agent(), "MiniMax-M2.5");
@@ -205,7 +200,7 @@ class AnthropicCompatibleProtocolFactoryTest {
         @Test
         @DisplayName("同四元组不同 model 各自建桶，不共享实例（改模型即时生效的缓存基础）")
         void shouldIsolateByModel() {
-            LlmProvider provider = llmProvider("ANTHROPIC_COMPATIBLE", "https://api.minimaxi.com/anthropic", "MiniMax-M2.5");
+            LlmProviderProfile provider = llmProvider("ANTHROPIC_COMPATIBLE", "https://api.minimaxi.com/anthropic", "MiniMax-M2.5");
             when(platformProviderConfigService.getBaseUrl(PROVIDER_CODE)).thenReturn("https://api.minimaxi.com/anthropic");
 
             factory.createChatClient(provider, "sk-test", agent(), "MiniMax-Text-01");
@@ -224,7 +219,7 @@ class AnthropicCompatibleProtocolFactoryTest {
         @Test
         @DisplayName("不同 apiKey 不共享缓存实例")
         void shouldIsolateByApiKey() {
-            LlmProvider provider = llmProvider("ANTHROPIC_COMPATIBLE", "https://api.minimaxi.com/anthropic", "MiniMax-M2.5");
+            LlmProviderProfile provider = llmProvider("ANTHROPIC_COMPATIBLE", "https://api.minimaxi.com/anthropic", "MiniMax-M2.5");
             when(platformProviderConfigService.getBaseUrl(PROVIDER_CODE)).thenReturn("https://api.minimaxi.com/anthropic");
 
             factory.createChatClient(provider, "sk-a", agent(), null);

@@ -15,6 +15,7 @@ import com.helloai.core.agent.entity.TeamMember;
 import com.helloai.core.agent.mapper.AgentMapper;
 import com.helloai.core.agent.mapper.TeamMapper;
 import com.helloai.core.agent.mapper.TeamMemberMapper;
+import com.helloai.core.agent.port.TeamMemberView;
 import com.helloai.core.agent.service.TeamService;
 import com.helloai.core.agent.validator.TeamValidator;
 import lombok.RequiredArgsConstructor;
@@ -146,6 +147,20 @@ public class TeamServiceImpl extends ServiceImpl<TeamMapper, Team> implements Te
                 .eq(TeamMember::getTeamId, teamId)
                 .orderByDesc(TeamMember::getWeight)
                 .orderByAsc(TeamMember::getId));
+    }
+
+    // ── 只读快照变体（RM5 批 5）──
+
+    @Override
+    public TeamStatus getTeamStatus(Long id) {
+        return requireTeam(id).getStatus();
+    }
+
+    @Override
+    public List<TeamMemberView> listMemberViews(Long teamId) {
+        return listMembers(teamId).stream()
+                .map(m -> new TeamMemberView(m.getId(), m.getAgentId(), m.getSlotRole(), m.getWeight()))
+                .toList();
     }
 
     @Transactional(rollbackFor = Exception.class)

@@ -4,6 +4,7 @@ import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.core.agent.chat.AgentProviderResolver;
 import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.PlatformProviderConfigService;
 import com.helloai.core.system.service.CredentialVaultBindingService;
 import com.helloai.core.system.service.CredentialVaultService;
@@ -85,6 +86,33 @@ public class AgentLlmCredentialResolver {
         } catch (Exception e) {
             log.debug("hasUsableCredential fallback to false for agent {}: {}",
                     agent.getId(), e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * API_KEY_LLM 候选的凭证可用性判定（RM5 批 2：只读快照重载）。
+     *
+     * <p>与 {@link #hasUsableCredential(Agent)} 判定口径<b>逐字一致</b>：
+     * 平台级已配置 或 Agent 级存在启用态凭证即视为可用；其它 accessType 直接放行；
+     * 查询异常防御式降级为不可用。仅把入参从实体收窄为 {@link AgentProfileSnapshot}，
+     * 使持有快照的选人链（如 {@code PlannerAgentPicker}）无需 import 实体。</p>
+     */
+    public boolean hasUsableCredential(AgentProfileSnapshot agent) {
+        if (agent == null || agent.accessType() != AgentAccessType.API_KEY_LLM) {
+            return true;
+        }
+        try {
+            String provider = AgentProviderResolver.resolveProvider(agent.modelType(), executionProperties.getProvider());
+            boolean usable = platformProviderConfigService.isApiKeyConfigured(provider)
+                    || credentialVaultService.hasActiveAgentCredential(agent.id());
+            if (!usable) {
+                log.debug("Agent {} 无可用凭证（平台级与 Agent 级均未配置），跳过选人", agent.id());
+            }
+            return usable;
+        } catch (Exception e) {
+            log.debug("hasUsableCredential fallback to false for agent {}: {}",
+                    agent.id(), e.getMessage());
             return false;
         }
     }

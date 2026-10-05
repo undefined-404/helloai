@@ -8,8 +8,8 @@ import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.planner.service.PlannerAnalysisService;
 import com.helloai.core.planner.service.PlannerDecomposeAsyncService;
 import com.helloai.core.task.util.SubTaskDependencyOrder;
-import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.port.SubTaskView;
+import com.helloai.core.task.port.TaskView;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskRunningSpecService;
@@ -72,23 +72,20 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
      * {@code task_plan_generated}/{@code task_plan_failed} timeline 收敛结果，
      * 前端轮询草案；卡死任务由 PlanningTimeoutTask 兜底回收。</p>
      *
-     * @return 恒为空列表（API 契约 {@code List<SubTask>} 保持不变，草案经 listDrafts 轮询获取）
+     * @return 恒为空列表（API 契约 {@code List<SubTaskView>} 保持不变，草案经 listDrafts 轮询获取）
      */
     @Override
-    public List<SubTask> decompose(Long taskId) {
-        Task task = taskService.getById(taskId);
+    public List<SubTaskView> decompose(Long taskId) {
+        TaskView task = taskService.getView(taskId);
         if (task == null) {
             throw new BizException("任务不存在: " + taskId);
         }
-        if (task.getStatus() != TaskStatus.PENDING) {
+        if (task.status() != TaskStatus.PENDING) {
             throw new BizException("只有 PENDING 状态的任务才能触发拆解: taskId=" + taskId
-                    + ", status=" + task.getStatus());
+                    + ", status=" + task.status());
         }
         // 已有非 CANCELLED 子任务不再拆分（对齐 openMoss 防重复拆分原则）
-        long existing = subTaskService.lambdaQuery()
-                .eq(SubTask::getTaskId, taskId)
-                .ne(SubTask::getStatus, SubTaskStatus.CANCELLED)
-                .count();
+        long existing = subTaskService.countByTaskIdExcludingStatus(taskId, SubTaskStatus.CANCELLED);
         if (existing > 0) {
             throw new BizException("任务已存在 " + existing + " 个子任务，不允许重复拆解；"
                     + "如需重新规划请先取消既有子任务");
@@ -96,10 +93,7 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
         // §6.100 重新拆解前物理清理 CANCELLED 旧草案：拒绝计划后残留行携带幽灵依赖
         // （回写时引用未落库 ID，导致后续 PENDING 子任务依赖校验永不就绪），
         // 直接物理删除避免新草案再次被污染（该场景草案从未执行，无关联执行记录）
-        long cancelled = subTaskService.lambdaQuery()
-                .eq(SubTask::getTaskId, taskId)
-                .eq(SubTask::getStatus, SubTaskStatus.CANCELLED)
-                .count();
+        long cancelled = subTaskService.countByTaskIdAndStatus(taskId, SubTaskStatus.CANCELLED);
         if (cancelled > 0) {
             log.info("重新拆解前物理清理 CANCELLED 旧草案: taskId={}, count={}", taskId, cancelled);
             // §7.1：跨域物理删除经 task 域 Service 收口，不直捅 SubTaskMapper
@@ -107,11 +101,7 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
         }
 
         // CAS 推进 PENDING → PLANNING，防并发重复拆解
-        boolean cas = taskService.lambdaUpdate()
-                .eq(Task::getId, taskId)
-                .eq(Task::getStatus, TaskStatus.PENDING)
-                .set(Task::getStatus, TaskStatus.PLANNING)
-                .update();
+        boolean cas = taskService.casStatus(taskId, TaskStatus.PENDING, TaskStatus.PLANNING);
         if (!cas) {
             throw new BizException("任务正在被其他请求拆解中，请稍后查看草案: taskId=" + taskId);
         }
@@ -125,11 +115,7 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
         try {
             plannerDecomposeAsyncService.executeDecompose(taskId);
         } catch (TaskRejectedException e) {
-            taskService.lambdaUpdate()
-                    .eq(Task::getId, taskId)
-                    .eq(Task::getStatus, TaskStatus.PLANNING)
-                    .set(Task::getStatus, TaskStatus.PENDING)
-                    .update();
+            taskService.casStatus(taskId, TaskStatus.PLANNING, TaskStatus.PENDING);
             log.warn("拆解提交被线程池拒绝，已回退 PENDING: taskId={}", taskId);
             throw new BizException("拆解排队已满，请稍后重试");
         }
@@ -143,12 +129,11 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
 
     /** 查看指定任务的草案列表（PENDING_PLAN_REVIEW），按依赖拓扑排序为正序（根在前）。 */
     @Override
-    public List<SubTask> listDrafts(Long taskId) {
-        if (taskService.getById(taskId) == null) {
+    public List<SubTaskView> listDrafts(Long taskId) {
+        if (taskService.getView(taskId) == null) {
             throw new BizException("任务不存在: " + taskId);
         }
-        return orderByDependency(subTaskService.list(
-                taskId, SubTaskStatus.PENDING_PLAN_REVIEW, null, null, 0).getRecords());
+        return orderByDependency(subTaskService.listViewsByTaskIdAndStatus(taskId, SubTaskStatus.PENDING_PLAN_REVIEW));
     }
 
     /**
@@ -161,37 +146,36 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
      * @return 转正后的子任务列表
      */
     @Override
-    public List<SubTask> confirmPlan(Long taskId) {
-        Task task = taskService.getById(taskId);
+    public List<SubTaskView> confirmPlan(Long taskId) {
+        TaskView task = taskService.getView(taskId);
         if (task == null) {
             throw new BizException("任务不存在: " + taskId);
         }
-        if (task.getStatus() != TaskStatus.PLANNING) {
+        if (task.status() != TaskStatus.PLANNING) {
             throw new BizException("只有 PLANNING 状态的任务才能确认草案: taskId=" + taskId
-                    + ", status=" + task.getStatus());
+                    + ", status=" + task.status());
         }
-        List<SubTask> drafts = orderByDependency(subTaskService.list(
-                taskId, SubTaskStatus.PENDING_PLAN_REVIEW, null, null, 0).getRecords());
+        List<SubTaskView> drafts = orderByDependency(subTaskService.listViewsByTaskIdAndStatus(taskId, SubTaskStatus.PENDING_PLAN_REVIEW));
         if (drafts.isEmpty()) {
             // 幂等恢复：若 PLANNING 草案已为空但存在已确认（PENDING 且 context 含 planConfirmedAt）的子任务，
-            // 说明前次 confirmPlan 的 SubTask 状态变更已提交但 Task 状态更新未生效，允许恢复。
-            List<SubTask> alreadyConfirmed = recoverAlreadyConfirmed(taskId);
+            // 说明前次 confirmPlan 的 SubTaskView 状态变更已提交但 Task 状态更新未生效，允许恢复。
+            List<SubTaskView> alreadyConfirmed = recoverAlreadyConfirmed(taskId);
             if (alreadyConfirmed.isEmpty()) {
                 throw new BizException("任务没有待确认的规划草案: taskId=" + taskId);
             }
-            log.warn("检测到部分确认状态（SubTask 已转正但 Task 未推进），自动恢复: taskId={}, count={}",
+            log.warn("检测到部分确认状态（SubTaskView 已转正但 Task 未推进），自动恢复: taskId={}, count={}",
                     taskId, alreadyConfirmed.size());
             return finishConfirm(task, alreadyConfirmed);
         }
 
-        for (SubTask draft : drafts) {
+        for (SubTaskView draft : drafts) {
             // 任务级 SLA 下发 deadline。必须先持久化再 changeStatus——
             // changeStatus 内部按 id 重查库后全字段 updateById，未落库的 deadline 会被覆盖丢失。
-            if (task.getSlaMinutes() != null && task.getSlaMinutes() > 0) {
-                draft.setDeadline(OffsetDateTime.now().plusMinutes(task.getSlaMinutes()));
-                subTaskService.updateById(draft);
+            if (task.slaMinutes() != null && task.slaMinutes() > 0) {
+                subTaskService.updateDeadline(draft.id(),
+                        OffsetDateTime.now().plusMinutes(task.slaMinutes()));
             }
-            subTaskService.changeStatus(draft.getId(), SubTaskStatus.PENDING, null,
+            subTaskService.changeStatus(draft.id(), SubTaskStatus.PENDING, null,
                     Map.of("planConfirmedAt", OffsetDateTime.now().toString()));
         }
         return finishConfirm(task, drafts);
@@ -200,11 +184,9 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
     /**
      * 完成确认收尾：推进 Task 状态、初始化 RunningSpec、记录 timeline、触发自动分发。
      */
-    private List<SubTask> finishConfirm(Task task, List<SubTask> confirmed) {
-        task.setStatus(TaskStatus.IN_PROGRESS);
-        boolean updated = taskService.updateById(task);
-        if (!updated) {
-            throw new BizException("任务状态推进失败（updateById 返回 false），请重试: taskId=" + task.getId());
+    private List<SubTaskView> finishConfirm(TaskView task, List<SubTaskView> confirmed) {
+        if (taskService.updateStatus(task.id(), TaskStatus.IN_PROGRESS) == null) {
+            throw new BizException("任务状态推进失败（updateStatus 未命中），请重试: taskId=" + task.id());
         }
 
         // 初始化 Task Running Spec Baseline
@@ -217,13 +199,13 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
                     .createdBy(plannerAgentId)
                     .createdAt(OffsetDateTime.now().toString())
                     .build();
-            taskRunningSpecService.initialize(task.getId(), baseline);
+            taskRunningSpecService.initialize(task.id(), baseline);
         } catch (Exception e) {
             log.warn("TaskRunningSpec Baseline 初始化失败（不阻断草案确认）: taskId={}, err={}",
-                    task.getId(), e.getMessage());
+                    task.id(), e.getMessage());
         }
 
-        Long taskId = task.getId();
+        Long taskId = task.id();
         taskTimelineService.recordEvent(taskId, null, "task_plan_confirmed",
                 AgentRole.PLANNER, null, Map.of("subTaskCount", confirmed.size()));
 
@@ -231,28 +213,27 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
         // 确认草案是用户显式启动内循环的动作，不受 auto-assign-on-create
         // （任务创建即分发）开关控制；否则开关关闭时只能等孤儿扫描兜底，
         // 内循环无法自动运转。ready 守卫会自动拦住依赖未就绪的节点。
-        for (SubTask draft : confirmed) {
+        for (SubTaskView draft : confirmed) {
             try {
-                subTaskDispatchService.dispatchPendingSubTaskAuto(draft.getId(), AgentRole.EXECUTOR);
+                subTaskDispatchService.dispatchPendingSubTaskAuto(draft.id(), AgentRole.EXECUTOR);
             } catch (Exception e) {
                 log.warn("草案转正后自动分发失败（保持 PENDING 等待兜底任务）: subTaskId={}, err={}",
-                        draft.getId(), e.getMessage());
+                        draft.id(), e.getMessage());
             }
         }
         log.info("任务规划草案已确认: taskId={}, subTaskCount={}", taskId, confirmed.size());
-        return confirmed.stream().map(d -> subTaskService.getById(d.getId())).toList();
+        return confirmed.stream().map(d -> subTaskService.getView(d.id())).toList();
     }
 
     /**
      * 幂等恢复：查找已确认（PENDING 状态且 context 含 planConfirmedAt）的子任务。
-     * <p>用于处理前次 confirmPlan 的 SubTask 状态变更已提交但 Task 状态更新未生效的场景。</p>
+     * <p>用于处理前次 confirmPlan 的 SubTaskView 状态变更已提交但 Task 状态更新未生效的场景。</p>
      */
-    private List<SubTask> recoverAlreadyConfirmed(Long taskId) {
-        List<SubTask> pending = subTaskService.list(
-                taskId, SubTaskStatus.PENDING, null, null, 0).getRecords();
+    private List<SubTaskView> recoverAlreadyConfirmed(Long taskId) {
+        List<SubTaskView> pending = subTaskService.listViewsByTaskIdAndStatus(taskId, SubTaskStatus.PENDING);
         return pending.stream()
-                .filter(st -> st.getContext() != null
-                        && st.getContext().containsKey("planConfirmedAt"))
+                .filter(st -> st.context() != null
+                        && st.context().containsKey("planConfirmedAt"))
                 .toList();
     }
 
@@ -263,23 +244,21 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
      */
     @Override
     public int rejectPlan(Long taskId) {
-        Task task = taskService.getById(taskId);
+        TaskView task = taskService.getView(taskId);
         if (task == null) {
             throw new BizException("任务不存在: " + taskId);
         }
-        if (task.getStatus() != TaskStatus.PLANNING) {
+        if (task.status() != TaskStatus.PLANNING) {
             throw new BizException("只有 PLANNING 状态的任务才能拒绝草案: taskId=" + taskId
-                    + ", status=" + task.getStatus());
+                    + ", status=" + task.status());
         }
-        List<SubTask> drafts = subTaskService.list(
-                taskId, SubTaskStatus.PENDING_PLAN_REVIEW, null, null, 0).getRecords();
+        List<SubTaskView> drafts = subTaskService.listViewsByTaskIdAndStatus(taskId, SubTaskStatus.PENDING_PLAN_REVIEW);
 
-        for (SubTask draft : drafts) {
-            subTaskService.changeStatus(draft.getId(), SubTaskStatus.CANCELLED, null,
+        for (SubTaskView draft : drafts) {
+            subTaskService.changeStatus(draft.id(), SubTaskStatus.CANCELLED, null,
                     Map.of("planRejectedAt", OffsetDateTime.now().toString()));
         }
-        task.setStatus(TaskStatus.PENDING);
-        taskService.updateById(task);
+        taskService.updateStatus(taskId, TaskStatus.PENDING);
         taskTimelineService.recordEvent(taskId, null, "task_plan_rejected",
                 AgentRole.PLANNER, null, Map.of("cancelledCount", drafts.size()));
         log.info("任务规划草案已拒绝: taskId={}, cancelledCount={}", taskId, drafts.size());
@@ -298,29 +277,29 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
      * <p>实现已提炼为公共工具 {@link SubTaskDependencyOrder}（交付物 zip
      * 聚合复用同一排序语义），本方法保留为委托入口，行为不变。</p>
      */
-    private List<SubTask> orderByDependency(List<SubTask> drafts) {
-        return SubTaskDependencyOrder.orderByDependency(drafts);
+    private List<SubTaskView> orderByDependency(List<SubTaskView> drafts) {
+        return SubTaskDependencyOrder.orderViewsByDependency(drafts);
     }
 
     /** 构建 Baseline goal：任务标题 + 描述。 */
-    private String buildBaselineGoal(Task task) {
+    private String buildBaselineGoal(TaskView task) {
         StringBuilder sb = new StringBuilder();
-        sb.append("任务标题: ").append(task.getTitle());
-        if (task.getDescription() != null && !task.getDescription().isBlank()) {
-            sb.append("\n任务描述: ").append(task.getDescription());
+        sb.append("任务标题: ").append(task.title());
+        if (task.description() != null && !task.description().isBlank()) {
+            sb.append("\n任务描述: ").append(task.description());
         }
         return sb.toString();
     }
 
     /** 构建 Baseline raw：子任务 DAG 结构摘要。 */
-    private String buildBaselineRaw(List<SubTask> drafts) {
+    private String buildBaselineRaw(List<SubTaskView> drafts) {
         StringBuilder sb = new StringBuilder();
         sb.append("子任务 DAG 结构（共 ").append(drafts.size()).append(" 个）：\n");
         for (int i = 0; i < drafts.size(); i++) {
-            SubTask d = drafts.get(i);
-            sb.append(i + 1).append(". ").append(d.getTitle());
-            if (d.getDependsOn() != null && !d.getDependsOn().isEmpty()) {
-                sb.append(" [依赖: ").append(d.getDependsOn().size()).append("个前置]");
+            SubTaskView d = drafts.get(i);
+            sb.append(i + 1).append(". ").append(d.title());
+            if (d.dependsOn() != null && !d.dependsOn().isEmpty()) {
+                sb.append(" [依赖: ").append(d.dependsOn().size()).append("个前置]");
             }
             sb.append("\n");
         }
@@ -328,11 +307,11 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
     }
 
     /** 从草案 context 中提取 Planner Agent ID。 */
-    private Long extractPlannerAgentId(List<SubTask> drafts) {
+    private Long extractPlannerAgentId(List<SubTaskView> drafts) {
         if (drafts.isEmpty()) {
             return null;
         }
-        Map<String, Object> ctx = drafts.get(0).getContext();
+        Map<String, Object> ctx = drafts.get(0).context();
         if (ctx != null && ctx.get("plannerAgentId") instanceof Number n) {
             return n.longValue();
         }

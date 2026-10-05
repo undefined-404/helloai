@@ -147,7 +147,7 @@ class AgentLlmCredentialResolverTest {
         @Test
         @DisplayName("agent 为 null 时放行")
         void shouldPassForNullAgent() {
-            assertThat(resolver.hasUsableCredential(null)).isTrue();
+            assertThat(resolver.hasUsableCredential((Agent) null)).isTrue();
         }
 
         @Test

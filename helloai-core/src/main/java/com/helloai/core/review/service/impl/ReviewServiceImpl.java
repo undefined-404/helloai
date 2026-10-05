@@ -8,7 +8,7 @@ import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.common.constant.SubTaskStatus;
-import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.event.AgentEventContextResolver;
 import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.quality.DefectLabelParser;
@@ -24,7 +24,7 @@ import com.helloai.core.review.entity.ReviewRecord;
 import com.helloai.core.review.mapper.ReviewRecheckLogMapper;
 import com.helloai.core.review.mapper.ReviewRecordMapper;
 import com.helloai.core.review.service.ReviewService;
-import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.agent.service.RewardService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
@@ -81,19 +81,19 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
             throw new BizException("评分必须 1-5，当前: " + score);
         }
 
-        SubTask subTask = subTaskService.getById(subTaskId);
+        SubTaskView subTask = subTaskService.getView(subTaskId);
         if (subTask == null) {
             throw new BizException("子任务不存在: " + subTaskId);
         }
         // 核验熔断（返工达上限）后子任务已转入 DEAD_LETTER 死信池，
         // 人工介入面板仍通过 reviewApi 处置（直接通过 → complete；驳回改派 → reworkFresh），
         // 故 DEAD_LETTER 与 REVIEW 同等可审查。
-        if (subTask.getStatus() != SubTaskStatus.REVIEW
-                && subTask.getStatus() != SubTaskStatus.DEAD_LETTER) {
-            throw new BizException("子任务状态为 " + subTask.getStatus() + "，只有 REVIEW/DEAD_LETTER 状态才能审查");
+        if (subTask.status() != SubTaskStatus.REVIEW
+                && subTask.status() != SubTaskStatus.DEAD_LETTER) {
+            throw new BizException("子任务状态为 " + subTask.status() + "，只有 REVIEW/DEAD_LETTER 状态才能审查");
         }
 
-        Long executorAgentId = subTask.getAssignedAgentId();
+        Long executorAgentId = subTask.assignedAgentId();
 
         long round = count(new LambdaQueryWrapper<ReviewRecord>()
                 .eq(ReviewRecord::getSubTaskId, subTaskId)) + 1;
@@ -137,16 +137,16 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
             // §6.100 人工驳回改派内循环闭合：对 API_KEY_LLM 执行者补发执行命令。
             // 执行链完全由 execution_record 驱动，改派不补命令则子任务永久停留 REWORK 卡死
             // （与 SubTaskReviewServiceImpl.rejectAndRework 自动驳回补发范式对齐）。
-            Long targetExecutor = reworkAgentId != null ? reworkAgentId : subTask.getAssignedAgentId();
+            Long targetExecutor = reworkAgentId != null ? reworkAgentId : subTask.assignedAgentId();
             if (targetExecutor != null) {
-                Agent executor = agentService.getById(targetExecutor);
-                if (executor != null && executor.getAccessType() == AgentAccessType.API_KEY_LLM) {
+                AgentProfileSnapshot executor = agentService.getProfileById(targetExecutor);
+                if (executor != null && executor.accessType() == AgentAccessType.API_KEY_LLM) {
                     try {
                         // Phase 1 Step 1 fix（LOG-20260904-009）：requiredSkills 装箱透传
                         // （task 域数据随命令正向传入执行侧，禁止执行侧反向依赖 task）
                         // G-010：改用并集装箱（子任务级 ∪ 任务级），核验与执行同清单
                         executionCommandService.createAssignedCommand(subTaskId, targetExecutor, "manual-review-rework",
-                                subTaskService.mergeSkills(subTask));
+                                subTaskService.mergeSkills(subTask.id()));
                         log.info("人工驳回返工执行命令已下发: subTaskId={}, executorAgentId={}",
                                 subTaskId, targetExecutor);
                     } catch (Exception e) {
@@ -174,7 +174,7 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
      * 人工审查结果落 timeline（LOG-20260903-005）：approve/reject 均写入，
      * 与自动核验 sub_task_auto_review_passed/rejected 对称；失败不阻断审查主链路。
      */
-    private void recordManualReviewEvent(SubTask subTask, Long reviewerAgentId, ReviewResult result,
+    private void recordManualReviewEvent(SubTaskView subTask, Long reviewerAgentId, ReviewResult result,
                                          int score, String issues, String comment, Long reworkAgentId, long round) {
         try {
             Map<String, Object> payload = new LinkedHashMap<>();
@@ -191,11 +191,11 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
             }
             String eventType = result == ReviewResult.APPROVED
                     ? "sub_task_manual_review_passed" : "sub_task_manual_review_rejected";
-            taskTimelineService.recordEvent(subTask.getTaskId(), subTask.getId(),
+            taskTimelineService.recordEvent(subTask.taskId(), subTask.id(),
                     eventType, AgentRole.REVIEWER, reviewerAgentId, payload);
         } catch (Exception e) {
             log.warn("人工审查 timeline 记录失败（不影响审查主链路）: subTaskId={}, result={}, err={}",
-                    subTask.getId(), result, e.getMessage());
+                    subTask.id(), result, e.getMessage());
         }
     }
 
@@ -205,7 +205,7 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
      * 供 B3 对账终态投影校验（DONE → review_approved、REWORK → review_rejected/rework_started）；
      * 事件 write-only，失败仅告警不阻断审查主链路。
      */
-    private void recordReviewEventSafely(SubTask subTask, Long reviewerAgentId, AgentEventType eventType,
+    private void recordReviewEventSafely(SubTaskView subTask, Long reviewerAgentId, AgentEventType eventType,
                                          int score, String issues, String comment, long round) {
         try {
             Map<String, Object> payload = new LinkedHashMap<>();
@@ -219,12 +219,12 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
                 payload.put("issues", issues);
             }
             agentEventRecorder.record(
-                    AgentEventContextResolver.resolveRunId(subTask.getTaskId()),
-                    subTask.getTaskId(), subTask.getId(), 0, 0,
+                    AgentEventContextResolver.resolveRunId(subTask.taskId()),
+                    subTask.taskId(), subTask.id(), 0, 0,
                     eventType, reviewerAgentId, payload);
         } catch (Exception e) {
             log.warn("Agent 事件记录失败（事件 write-only，降级不阻断主链路）: type={}, subTaskId={}, err={}",
-                    eventType, subTask.getId(), e.getMessage());
+                    eventType, subTask.id(), e.getMessage());
         }
     }
 
@@ -257,9 +257,9 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
         // 反馈回路第 1 层：画像增量维护与 review_record 同事务（失败不阻断核验主链路）。
         // 执行者维度取落库时刻 sub_task.assigned_agent_id 归属
         Long executorAgentId = null;
-        SubTask subTask = subTaskService.getById(subTaskId);
+        SubTaskView subTask = subTaskService.getView(subTaskId);
         if (subTask != null) {
-            executorAgentId = subTask.getAssignedAgentId();
+            executorAgentId = subTask.assignedAgentId();
         }
         qualityProfileUpdater.onReviewRecordPersisted(executorAgentId,
                 record.getId(), record.getRound(), record.getResult(),
@@ -349,8 +349,8 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
         }
         // 审查者补名：批量查 agent 表，缺失（如已删除）显示 ID 字符串
         List<Long> ids = rows.stream().map(ReviewerLeniency::reviewerAgentId).toList();
-        Map<Long, String> names = agentService.listByIds(ids).stream()
-                .collect(Collectors.toMap(Agent::getId, Agent::getName, (a, b) -> a));
+        Map<Long, String> names = agentService.listProfilesByIds(ids).stream()
+                .collect(Collectors.toMap(AgentProfileSnapshot::id, AgentProfileSnapshot::name, (a, b) -> a));
         return rows.stream().map(r -> {
             Long id = r.reviewerAgentId();
             String name = names.get(id);

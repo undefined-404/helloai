@@ -1,7 +1,7 @@
 package com.helloai.core.task.policy;
 
 import com.helloai.common.constant.AgentRole;
-import com.helloai.core.agent.entity.TeamMember;
+import com.helloai.core.agent.port.TeamMemberView;
 
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -27,7 +27,7 @@ public final class TeamPolicyExpander {
      * <p>对 basePolicy 浅拷贝后处理，不改动入参。无对应槽位成员时保持原状
      * （缺 EXECUTOR 成员则 executorAgentIds 不写，等价不限定）。</p>
      */
-    public static Map<String, Object> expand(Map<String, Object> basePolicy, List<TeamMember> members) {
+    public static Map<String, Object> expand(Map<String, Object> basePolicy, List<TeamMemberView> members) {
         Map<String, Object> policy = basePolicy == null
                 ? new LinkedHashMap<>()
                 : new LinkedHashMap<>(basePolicy);
@@ -53,25 +53,25 @@ public final class TeamPolicyExpander {
     }
 
     /** 指定槽位角色的成员 agentId 列表（weight desc、id asc）。 */
-    public static List<Long> agentIds(List<TeamMember> members, AgentRole role) {
+    public static List<Long> agentIds(List<TeamMemberView> members, AgentRole role) {
         return members == null ? List.of()
                 : members.stream()
-                        .filter(m -> m != null && m.getSlotRole() == role && m.getAgentId() != null)
+                        .filter(m -> m != null && m.slotRole() == role && m.agentId() != null)
                         .sorted(memberOrder())
-                        .map(TeamMember::getAgentId)
+                        .map(TeamMemberView::agentId)
                         .toList();
     }
 
     /** 单槽位取一个：weight desc、id asc 的第一个；无则 null。 */
-    public static Long pickSingle(List<TeamMember> members, AgentRole role) {
+    public static Long pickSingle(List<TeamMemberView> members, AgentRole role) {
         List<Long> ids = agentIds(members, role);
         return ids.isEmpty() ? null : ids.get(0);
     }
 
-    private static Comparator<TeamMember> memberOrder() {
+    private static Comparator<TeamMemberView> memberOrder() {
         return Comparator
-                .comparingInt((TeamMember m) -> m.getWeight() == null ? 100 : m.getWeight())
+                .comparingInt((TeamMemberView m) -> m.weight() == null ? 100 : m.weight())
                 .reversed()
-                .thenComparing(TeamMember::getId);
+                .thenComparing(TeamMemberView::id);
     }
 }

@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.config.AgentQualityProperties;
 import com.helloai.core.agent.chat.provider.LlmProviderChatClientFactoryRegistry;
 import com.helloai.core.agent.service.PlatformProviderConfigService;
-import com.helloai.core.system.entity.LlmProvider;
+import com.helloai.core.system.port.LlmProviderProfile;
 import com.helloai.core.system.service.LlmProviderQueryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -79,10 +79,8 @@ class ExecutorIssueResolutionAssessorTest {
         when(requestSpec.call()).thenReturn(callResponseSpec);
     }
 
-    private LlmProvider provider(String code) {
-        LlmProvider p = new LlmProvider();
-        p.setProviderCode(code);
-        return p;
+    private LlmProviderProfile provider(String code) {
+        return new LlmProviderProfile(code, null, null, null, null, 1);
     }
 
     // ════════════════════════════════════════════════════════════
@@ -120,7 +118,7 @@ class ExecutorIssueResolutionAssessorTest {
         @Test
         @DisplayName("无任何已启用 Provider → 返回 null（不查凭证）")
         void skipWhenNoEnabledProvider() {
-            when(llmProviderQueryService.listEnabled()).thenReturn(List.of());
+            when(llmProviderQueryService.listEnabledProfiles()).thenReturn(List.of());
 
             assertThat(assessor.assess(List.of("issue1"), "output")).isNull();
             verify(platformProviderConfigService, never()).getApiKey(anyString());
@@ -139,7 +137,7 @@ class ExecutorIssueResolutionAssessorTest {
         @Test
         @DisplayName("启用 Provider 均无平台凭证 → 返回 null")
         void skipWhenAllProvidersLackApiKey() {
-            when(llmProviderQueryService.listEnabled())
+            when(llmProviderQueryService.listEnabledProfiles())
                     .thenReturn(List.of(provider("deepseek"), provider("moonshot")));
             when(platformProviderConfigService.getApiKey("deepseek")).thenReturn(null);
             when(platformProviderConfigService.getApiKey("moonshot")).thenReturn("  ");
@@ -152,7 +150,7 @@ class ExecutorIssueResolutionAssessorTest {
         @Test
         @DisplayName("Provider 选择查询异常 → 返回 null")
         void skipWhenProviderSelectionThrows() {
-            when(llmProviderQueryService.listEnabled()).thenThrow(new RuntimeException("db down"));
+            when(llmProviderQueryService.listEnabledProfiles()).thenThrow(new RuntimeException("db down"));
 
             assertThat(assessor.assess(List.of("issue1"), "output")).isNull();
         }
@@ -323,7 +321,7 @@ class ExecutorIssueResolutionAssessorTest {
         @Test
         @DisplayName("未指定时取第一个「已启用且有平台凭证」的 Provider")
         void selectsFirstEnabledProviderWithKey() {
-            when(llmProviderQueryService.listEnabled())
+            when(llmProviderQueryService.listEnabledProfiles())
                     .thenReturn(List.of(provider("deepseek"), provider("moonshot")));
             when(platformProviderConfigService.getApiKey("deepseek")).thenReturn(null);
             when(platformProviderConfigService.getApiKey("moonshot")).thenReturn("sk-m");

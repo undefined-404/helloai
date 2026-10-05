@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
-import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.search.WebSearchResult;
@@ -81,14 +81,14 @@ public class SearchGapAssessor {
                     .replace("{{EXISTING_QUERIES}}", existingQueries == null || existingQueries.isEmpty()
                             ? "（无）" : String.join("、", existingQueries))
                     .replace("{{SEARCH_RESULTS}}", renderResults(firstRound));
-            Agent planner = plannerAgentPicker.pick(null); // 自动选择平台内 PLANNER
+            AgentProfileSnapshot planner = plannerAgentPicker.pick(null); // 自动选择平台内 PLANNER
             AgentTask agentTask = AgentTask.builder()
                     .systemPrompt("")
                     .userPrompt(prompt)
                     .context(Map.of("scene", GAP_SCENE))
                     .requiredCapabilities(Map.of())
                     .build();
-            AgentResult result = platformAgentExecutionService.executeSync(planner, agentTask);
+            AgentResult result = platformAgentExecutionService.executeSync(planner.id(), agentTask);
             if (!result.isSuccess()) {
                 log.warn("检索缺口评估 LLM 失败（不补搜）: err={}", result.getErrorMessage());
                 return null;

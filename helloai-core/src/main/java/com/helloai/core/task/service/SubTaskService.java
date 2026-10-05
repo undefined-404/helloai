@@ -4,11 +4,14 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.port.SubTaskDraft;
+import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.entity.Uncertainty;
 import com.helloai.core.agent.port.TaskDispatchPort;
 import lombok.Data;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.OffsetDateTime;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
@@ -505,4 +508,56 @@ public interface SubTaskService extends IService<SubTask> {
      * @return PENDING 孤儿子任务 ID 列表（可能为空，绝不返回 null）
      */
     List<Long> listStalePendingWithoutExecutionRecord(OffsetDateTime cutoff, int limit);
+
+    // ── 只读快照 / 不透明命令（RM5 批 4）：供 review 域消费，避免其 import task.entity ──
+
+    /** 按主键查询子任务只读快照（语义与 {@link #getById} 一致：不存在返回 null）。 */
+    SubTaskView getView(Long subTaskId);
+
+    /**
+     * 整体覆写子任务 {@code context}（<b>不透明命令</b>，W10）。
+     *
+     * <p>消费方只交目标值，提供方自行「取最新行 → set → updateById」；子任务不存在静默返回
+     * （与 {@code updateById} 更新 0 行同样不报错）。<b>本方法不自带事务</b>，按调用方事务边界
+     * 传播（与既有 {@code updateById} 语义一致；agent 侧由 {@code SubTaskCommandPortAdapter}
+     * 自持 {@code @Transactional}）。</p>
+     */
+    void updateContext(Long subTaskId, Map<String, Object> context);
+
+    /** 技能并集（W6：跨域形参取 ID，由提供方自读实体）。 */
+    List<String> mergeSkills(Long subTaskId);
+
+    /** 按 taskId 查询子任务快照（createTime asc，与最终报告证据口径一致）。 */
+    List<SubTaskView> listViewsByTaskId(Long taskId);
+
+    /** REVIEW 孤儿候选的只读快照（语义/顺序与 {@link #listReviewOrphans} 一致）。 */
+    List<SubTaskView> listReviewOrphanViews(int thresholdSeconds, int limit);
+
+    // ── 写命令 / 视图变体（RM5 批 5a）：供 planner 域消费 ──
+
+    /**
+     * 批量创建子任务草案（<b>写命令</b>）。
+     *
+     * <p>消费方只交目标值（{@link SubTaskDraft}），行内状态由提供方落库；返回落库后的只读快照
+     * （含 MP 回填的 id）。原 planner 侧 {@code new SubTask()} + {@code saveBatch} 的等价收口。</p>
+     */
+    List<SubTaskView> saveDrafts(List<SubTaskDraft> drafts);
+
+    /** 按 taskId + 状态查询只读快照（顺序与 {@link #list(Long, com.helloai.common.constant.SubTaskStatus, Long, Integer, int)} 一致）。 */
+    List<SubTaskView> listViewsByTaskIdAndStatus(Long taskId, com.helloai.common.constant.SubTaskStatus status);
+
+    /** 覆写子任务 deadline（读改写回写不透明，W10；子任务不存在返回 false）。 */
+    boolean updateDeadline(Long subTaskId, OffsetDateTime deadline);
+
+    /** 待审草案快照（createTime asc + id asc，与插入序一致）。 */
+    List<SubTaskView> listDraftsInInsertOrder(Long taskId, com.helloai.common.constant.SubTaskStatus status);
+
+    /** 统计排除指定状态的子任务数。 */
+    long countByTaskIdExcludingStatus(Long taskId, com.helloai.common.constant.SubTaskStatus excluded);
+
+    /** 统计指定状态的子任务数。 */
+    long countByTaskIdAndStatus(Long taskId, com.helloai.common.constant.SubTaskStatus status);
+
+    /** 按 id 集合查询只读快照（顺序与 {@link #listByIds} 一致）。 */
+    List<SubTaskView> listViewsByIds(java.util.Collection<Long> ids);
 }

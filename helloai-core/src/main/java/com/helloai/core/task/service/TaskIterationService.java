@@ -1,7 +1,6 @@
 package com.helloai.core.task.service;
 
 import com.baomidou.mybatisplus.extension.service.IService;
-import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.TaskIteration;
 
@@ -23,9 +22,9 @@ public interface TaskIterationService extends IService<TaskIteration> {
      *
      * @param taskId       顶层任务 ID
      * @param sections     已排序的 DONE 子任务列表（DAG 拓扑序）
-     * @param plannerAgent Planner Agent（用于日志关联，不写入记录）
+     * @param plannerAgentId Planner Agent 主键（仅用于日志关联，不写入记录）
      */
-    void backfillForTask(Long taskId, List<SubTask> sections, Agent plannerAgent);
+    void backfillForTask(Long taskId, List<SubTask> sections, Long plannerAgentId);
 
     /**
      * 回填所有历史 DONE 任务中尚未写入 task_iteration 的记录。

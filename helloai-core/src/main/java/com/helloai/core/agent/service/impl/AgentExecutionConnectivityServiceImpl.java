@@ -10,7 +10,7 @@ import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.AgentChatClientService;
 import com.helloai.core.agent.service.AgentExecutionConnectivityService;
 import com.helloai.core.agent.service.AgentService;
-import com.helloai.core.system.entity.CredentialVault;
+import com.helloai.core.system.port.CredentialSecret;
 import com.helloai.core.system.service.CredentialVaultService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.metadata.Usage;
@@ -49,7 +49,7 @@ public class AgentExecutionConnectivityServiceImpl implements AgentExecutionConn
 
         String provider = resolveProvider(agent);
         String model = resolveModel(agent);
-        CredentialVault activeVault = credentialVaultService.getActiveAgentApiKey(agentId, provider);
+        CredentialSecret activeVault = credentialVaultService.getActiveAgentApiKeySecret(agentId, provider);
         AgentExecutionConnectivityResult.AgentExecutionConnectivityResultBuilder builder =
                 AgentExecutionConnectivityResult.builder()
                         .agentId(agent.getId())
@@ -61,11 +61,11 @@ public class AgentExecutionConnectivityServiceImpl implements AgentExecutionConn
                         .mockMode(executionProperties.isMockMode())
                         .hasActiveVaultCredential(activeVault != null)
                         .hasEncryptedValue(activeVault != null
-                                && activeVault.getEncryptedValue() != null
-                                && !activeVault.getEncryptedValue().isBlank())
+                                && activeVault.encryptedValue() != null
+                                && !activeVault.encryptedValue().isBlank())
                         .hasSecretRef(activeVault != null
-                                && activeVault.getSecretRef() != null
-                                && !activeVault.getSecretRef().isBlank());
+                                && activeVault.secretRef() != null
+                                && !activeVault.secretRef().isBlank());
 
         long startedAt = System.nanoTime();
         String stage = "init";

@@ -1,4 +1,4 @@
-package com.helloai.core.task.service.impl;
+package com.helloai.core.task.adapter;
 
 import com.helloai.core.system.port.ArtifactReference;
 import com.helloai.core.system.port.ArtifactReferencePort;

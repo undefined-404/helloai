@@ -2,7 +2,7 @@ package com.helloai.core.agent.chat.provider;
 
 import com.helloai.common.base.BizException;
 import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.system.entity.LlmProvider;
+import com.helloai.core.system.port.LlmProviderProfile;
 import com.helloai.core.system.service.LlmProviderQueryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -53,11 +53,8 @@ class LlmProviderChatClientFactoryRegistryTest {
                 queryService, deepSeekFactory, openAiFactory, anthropicFactory);
     }
 
-    private LlmProvider llmProvider(String providerCode, String protocolType) {
-        LlmProvider provider = new LlmProvider();
-        provider.setProviderCode(providerCode);
-        provider.setProtocolType(protocolType);
-        return provider;
+    private LlmProviderProfile llmProvider(String providerCode, String protocolType) {
+        return new LlmProviderProfile(providerCode, null, null, null, protocolType, 1);
     }
 
     private Agent agent() {
@@ -73,7 +70,7 @@ class LlmProviderChatClientFactoryRegistryTest {
         @Test
         @DisplayName("provider 未找到抛 BizException")
         void shouldThrowWhenProviderNotFound() {
-            when(queryService.findByCode("unknown")).thenReturn(Optional.empty());
+            when(queryService.findProfileByCode("unknown")).thenReturn(Optional.empty());
 
             assertThatThrownBy(() -> registry.createChatClient("unknown", "sk-test", agent(), null))
                     .isInstanceOf(BizException.class)
@@ -85,8 +82,8 @@ class LlmProviderChatClientFactoryRegistryTest {
         @Test
         @DisplayName("未知协议类型抛 BizException")
         void shouldThrowWhenProtocolTypeUnsupported() {
-            LlmProvider provider = llmProvider("gemini", "GEMINI_NATIVE");
-            when(queryService.findByCode("gemini")).thenReturn(Optional.of(provider));
+            LlmProviderProfile provider = llmProvider("gemini", "GEMINI_NATIVE");
+            when(queryService.findProfileByCode("gemini")).thenReturn(Optional.of(provider));
 
             assertThatThrownBy(() -> registry.createChatClient("gemini", "sk-test", agent(), null))
                     .isInstanceOf(BizException.class)
@@ -101,8 +98,8 @@ class LlmProviderChatClientFactoryRegistryTest {
         @Test
         @DisplayName("deepseek 走专用 Factory，不经过协议工厂")
         void shouldRouteDeepSeekToDedicatedFactory() {
-            LlmProvider provider = llmProvider("deepseek", "OPENAI_COMPATIBLE");
-            when(queryService.findByCode("deepseek")).thenReturn(Optional.of(provider));
+            LlmProviderProfile provider = llmProvider("deepseek", "OPENAI_COMPATIBLE");
+            when(queryService.findProfileByCode("deepseek")).thenReturn(Optional.of(provider));
             when(deepSeekFactory.supports("deepseek")).thenReturn(true);
             ChatClient expected = mock(ChatClient.class);
             when(deepSeekFactory.createChatClient("sk-test", agent(), null)).thenReturn(expected);
@@ -119,8 +116,8 @@ class LlmProviderChatClientFactoryRegistryTest {
         @Test
         @DisplayName("OPENAI_COMPATIBLE 路由到 OpenAI 兼容工厂")
         void shouldRouteOpenAiCompatible() {
-            LlmProvider provider = llmProvider("moonshot", "OPENAI_COMPATIBLE");
-            when(queryService.findByCode("moonshot")).thenReturn(Optional.of(provider));
+            LlmProviderProfile provider = llmProvider("moonshot", "OPENAI_COMPATIBLE");
+            when(queryService.findProfileByCode("moonshot")).thenReturn(Optional.of(provider));
             ChatClient expected = mock(ChatClient.class);
             when(openAiFactory.createChatClient(provider, "sk-test", agent(), "moonshot-v1-8k"))
                     .thenReturn(expected);
@@ -137,8 +134,8 @@ class LlmProviderChatClientFactoryRegistryTest {
         @Test
         @DisplayName("ANTHROPIC_COMPATIBLE 路由到 Anthropic 兼容工厂")
         void shouldRouteAnthropicCompatible() {
-            LlmProvider provider = llmProvider("minimax", "ANTHROPIC_COMPATIBLE");
-            when(queryService.findByCode("minimax")).thenReturn(Optional.of(provider));
+            LlmProviderProfile provider = llmProvider("minimax", "ANTHROPIC_COMPATIBLE");
+            when(queryService.findProfileByCode("minimax")).thenReturn(Optional.of(provider));
             ChatClient expected = mock(ChatClient.class);
             when(anthropicFactory.createChatClient(provider, "sk-test", agent(), null))
                     .thenReturn(expected);
@@ -152,8 +149,8 @@ class LlmProviderChatClientFactoryRegistryTest {
         @Test
         @DisplayName("协议类型小写时仍可路由（大小写归一）")
         void shouldRouteLowercaseProtocolType() {
-            LlmProvider provider = llmProvider("moonshot", "openai_compatible");
-            when(queryService.findByCode("moonshot")).thenReturn(Optional.of(provider));
+            LlmProviderProfile provider = llmProvider("moonshot", "openai_compatible");
+            when(queryService.findProfileByCode("moonshot")).thenReturn(Optional.of(provider));
             ChatClient expected = mock(ChatClient.class);
             when(openAiFactory.createChatClient(provider, "sk-test", agent(), null))
                     .thenReturn(expected);

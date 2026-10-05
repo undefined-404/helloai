@@ -28,7 +28,7 @@ import java.util.List;
  * </ul>
  * <p>{@code uncertainties} 其余部分仅逐元素原样投影，<b>不解释、不校验、不归一化 kind</b>。</p>
  */
-final class SubTaskSnapshotMapper {
+public final class SubTaskSnapshotMapper {
 
     private SubTaskSnapshotMapper() {
     }
@@ -36,7 +36,7 @@ final class SubTaskSnapshotMapper {
     /**
      * 单条映射；入参为 {@code null} 时返回 {@code null}（保持调用方原空值语义）。
      */
-    static SubTaskSnapshot toSnapshot(SubTask subTask) {
+    public static SubTaskSnapshot toSnapshot(SubTask subTask) {
         if (subTask == null) {
             return null;
         }
@@ -66,7 +66,7 @@ final class SubTaskSnapshotMapper {
      * 批量映射；入参为 {@code null} / 空时返回空列表（绝不返回 {@code null}），
      * 逐条 {@code null} 元素跳过。
      */
-    static List<SubTaskSnapshot> toSnapshots(List<SubTask> subTasks) {
+    public static List<SubTaskSnapshot> toSnapshots(List<SubTask> subTasks) {
         if (subTasks == null || subTasks.isEmpty()) {
             return List.of();
         }
@@ -88,7 +88,7 @@ final class SubTaskSnapshotMapper {
      * {@link Uncertainty#KIND_ASSUMPTION} 属 task 域常量，本层顺带算好布尔透传，
      * 消费方（执行 Prompt 装配）无需复制常量、也不比字符串字面量。</p>
      */
-    static List<UncertaintySnapshot> toUncertaintySnapshots(List<Uncertainty> uncertainties) {
+    public static List<UncertaintySnapshot> toUncertaintySnapshots(List<Uncertainty> uncertainties) {
         if (uncertainties == null || uncertainties.isEmpty()) {
             return List.of();
         }

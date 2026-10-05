@@ -1,6 +1,7 @@
 package com.helloai.core.task.util;
 
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.port.SubTaskView;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -70,6 +71,62 @@ public final class SubTaskDependencyOrder {
             }
         }
         // 兜底：残留（异常成环/脏依赖）按原顺序补齐，绝不丢条目
+        if (ordered.size() < n) {
+            for (int i = 0; i < n; i++) {
+                if (!emitted[i]) {
+                    ordered.add(subTasks.get(i));
+                }
+            }
+        }
+        return ordered;
+    }
+
+    /** RM5 批 5a：只读快照版本（{@code dependsOn} 已由提供方映射器归一化为 Long）。 */
+    public static List<SubTaskView> orderViewsByDependency(List<SubTaskView> subTasks) {
+        int n = subTasks.size();
+        if (n <= 1) {
+            return subTasks;
+        }
+        Map<Long, Integer> indexById = new HashMap<>();
+        for (int i = 0; i < n; i++) {
+            indexById.put(subTasks.get(i).id(), i);
+        }
+        int[] inDegree = new int[n];
+        List<List<Integer>> adjacency = new ArrayList<>(n);
+        for (int i = 0; i < n; i++) {
+            adjacency.add(new ArrayList<>());
+        }
+        for (int i = 0; i < n; i++) {
+            List<Long> deps = subTasks.get(i).dependsOn();
+            if (deps == null) {
+                continue;
+            }
+            for (Long depId : deps) {
+                Integer depIdx = indexById.get(depId);
+                if (depIdx != null) {
+                    adjacency.get(depIdx).add(i);
+                    inDegree[i]++;
+                }
+            }
+        }
+        Deque<Integer> queue = new ArrayDeque<>();
+        for (int i = 0; i < n; i++) {
+            if (inDegree[i] == 0) {
+                queue.add(i);
+            }
+        }
+        List<SubTaskView> ordered = new ArrayList<>(n);
+        boolean[] emitted = new boolean[n];
+        while (!queue.isEmpty()) {
+            int node = queue.poll();
+            ordered.add(subTasks.get(node));
+            emitted[node] = true;
+            for (int next : adjacency.get(node)) {
+                if (--inDegree[next] == 0) {
+                    queue.add(next);
+                }
+            }
+        }
         if (ordered.size() < n) {
             for (int i = 0; i < n; i++) {
                 if (!emitted[i]) {

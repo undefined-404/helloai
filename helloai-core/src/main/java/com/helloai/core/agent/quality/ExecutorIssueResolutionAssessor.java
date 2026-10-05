@@ -5,7 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.config.AgentQualityProperties;
 import com.helloai.core.agent.chat.provider.LlmProviderChatClientFactoryRegistry;
 import com.helloai.core.agent.service.PlatformProviderConfigService;
-import com.helloai.core.system.entity.LlmProvider;
+import com.helloai.core.system.port.LlmProviderProfile;
 import com.helloai.core.system.service.LlmProviderQueryService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
@@ -110,12 +110,12 @@ public class ExecutorIssueResolutionAssessor {
                 String key = platformProviderConfigService.getApiKey(code);
                 return key != null && !key.isBlank() ? code : null;
             }
-            List<LlmProvider> enabled = llmProviderQueryService.listEnabled();
+            List<LlmProviderProfile> enabled = llmProviderQueryService.listEnabledProfiles();
             if (enabled == null) {
                 return null;
             }
-            for (LlmProvider provider : enabled) {
-                String code = provider.getProviderCode();
+            for (LlmProviderProfile provider : enabled) {
+                String code = provider.providerCode();
                 String key = platformProviderConfigService.getApiKey(code);
                 if (key != null && !key.isBlank()) {
                     return code;

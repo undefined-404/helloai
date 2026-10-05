@@ -4,7 +4,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentProviderProperties;
 import com.helloai.core.agent.service.PlatformProviderConfigService;
 import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.system.entity.LlmProvider;
+import com.helloai.core.system.port.LlmProviderProfile;
 import io.micrometer.observation.ObservationRegistry;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.anthropic.AnthropicChatModel;
@@ -47,36 +47,36 @@ public class AnthropicCompatibleProtocolFactory implements LlmProviderChatClient
     }
 
     @Override
-    public ChatClient createChatClient(LlmProvider provider, String apiKeyPlaintext, Agent agent, String model) {
+    public ChatClient createChatClient(LlmProviderProfile provider, String apiKeyPlaintext, Agent agent, String model) {
         return ChatClient.create(createChatModel(provider, apiKeyPlaintext, agent, model));
     }
 
     @Override
-    public ChatModel createChatModel(LlmProvider provider, String apiKeyPlaintext, Agent agent, String model) {
+    public ChatModel createChatModel(LlmProviderProfile provider, String apiKeyPlaintext, Agent agent, String model) {
         if (apiKeyPlaintext == null || apiKeyPlaintext.isBlank()) {
             throw new BizException("apiKey 不能为空");
         }
-        String baseUrl = platformProviderConfigService.getBaseUrl(provider.getProviderCode());
+        String baseUrl = platformProviderConfigService.getBaseUrl(provider.providerCode());
         String cacheKey = ProviderChatModelCache.buildKey(
-                provider.getProviderCode(), apiKeyPlaintext, baseUrl, PROTOCOL_TYPE, model);
+                provider.providerCode(), apiKeyPlaintext, baseUrl, PROTOCOL_TYPE, model);
 
         return cache.getOrCompute(cacheKey,
                 () -> buildChatModel(provider, apiKeyPlaintext, baseUrl, model));
     }
 
-    private ChatModel buildChatModel(LlmProvider provider,
+    private ChatModel buildChatModel(LlmProviderProfile provider,
                                      String apiKey,
                                      String baseUrl,
                                      String requestedModel) {
         AgentProviderProperties.ProviderConfig config =
-                providerProperties.getConfig(provider.getProviderCode());
+                providerProperties.getConfig(provider.providerCode());
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout(Math.max(config.getConnectTimeoutMs(), 1));
         requestFactory.setReadTimeout(Math.max(config.getReadTimeoutMs(), 1));
 
         String effectiveBaseUrl = baseUrl != null && !baseUrl.isBlank()
                 ? baseUrl
-                : provider.getBaseUrl();
+                : provider.baseUrl();
 
         AnthropicApi anthropicApi = AnthropicApi.builder()
                 .apiKey(apiKey)
@@ -86,9 +86,9 @@ public class AnthropicCompatibleProtocolFactory implements LlmProviderChatClient
 
         String effectiveModel = requestedModel != null && !requestedModel.isBlank()
                 ? requestedModel
-                : (provider.getDefaultModel() != null && !provider.getDefaultModel().isBlank()
-                        ? provider.getDefaultModel()
-                        : platformProviderConfigService.getDefaultModel(provider.getProviderCode()));
+                : (provider.defaultModel() != null && !provider.defaultModel().isBlank()
+                        ? provider.defaultModel()
+                        : platformProviderConfigService.getDefaultModel(provider.providerCode()));
 
         AnthropicChatOptions options = AnthropicChatOptions.builder()
                 .model(effectiveModel)

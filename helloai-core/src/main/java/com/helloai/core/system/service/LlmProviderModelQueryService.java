@@ -1,6 +1,7 @@
 package com.helloai.core.system.service;
 
 import com.helloai.core.system.entity.LlmProviderModel;
+import com.helloai.core.system.port.LlmProviderModelProfile;
 
 import java.util.List;
 
@@ -48,6 +49,15 @@ public interface LlmProviderModelQueryService {
      * 供 Agent 技能推导与 skill-options 端点使用；模型不存在或已删除时返回 null。</p>
      */
     LlmProviderModel findCapabilityByModelType(String modelType);
+
+    /**
+     * 按 modelType 查询模型能力配置的【只读快照】（RM5 批 3）。
+     *
+     * <p>语义与 {@link #findCapabilityByModelType} 逐字一致（模型不存在或已删除返回 null），
+     * 但只暴露 {@code capabilitySkills} / {@code availableOptionalSkills} 两列，
+     * 供 agent 域技能推导使用，避免其 import {@code system.entity.LlmProviderModel}。</p>
+     */
+    LlmProviderModelProfile findCapabilityProfileByModelType(String modelType);
 
     /**
      * 统计 Provider 的模型数量。

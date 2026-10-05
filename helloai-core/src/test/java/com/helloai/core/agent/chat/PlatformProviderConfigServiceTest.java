@@ -2,7 +2,7 @@ package com.helloai.core.agent.chat;
 
 import com.helloai.common.config.AgentProviderProperties;
 import com.helloai.common.crypto.CredentialCryptoService;
-import com.helloai.core.system.entity.CredentialVault;
+import com.helloai.core.system.port.CredentialSecret;
 import com.helloai.core.system.service.CredentialVaultService;
 import com.helloai.core.system.service.LlmProviderQueryService;
 import com.helloai.core.system.service.SysConfigService;
@@ -54,11 +54,8 @@ class PlatformProviderConfigServiceTest {
                 providerProperties, providerChatModelCache, llmProviderQueryService);
     }
 
-    private CredentialVault platformVault(String secretRef, String encryptedValue) {
-        CredentialVault vault = new CredentialVault();
-        vault.setSecretRef(secretRef);
-        vault.setEncryptedValue(encryptedValue);
-        return vault;
+    private CredentialSecret platformVault(String secretRef, String encryptedValue) {
+        return new CredentialSecret(encryptedValue, secretRef);
     }
 
     private AgentProviderProperties.ProviderConfig ymlConfig(String apiKey) {
@@ -74,7 +71,7 @@ class PlatformProviderConfigServiceTest {
         @Test
         @DisplayName("vault 有 encrypted_value 时优先解密返回，不读 yml")
         void shouldPreferVaultEncryptedValueOverYml() {
-            when(credentialVaultService.getActivePlatformApiKey(PROVIDER))
+            when(credentialVaultService.getActivePlatformApiKeySecret(PROVIDER))
                     .thenReturn(platformVault(null, "cipher-vault"));
             when(credentialCryptoService.decryptFromBase64("cipher-vault")).thenReturn("sk-vault");
 
@@ -85,7 +82,7 @@ class PlatformProviderConfigServiceTest {
         @DisplayName("vault 有 secretRef 时环境变量优先（vault 内 secretRef 高于 encrypted_value）")
         void shouldPreferVaultSecretRefEnv() {
             // 用系统必然存在的 PATH 环境变量验证 secretRef 优先语义（Mockito 禁止 mock System 静态方法）
-            when(credentialVaultService.getActivePlatformApiKey(PROVIDER))
+            when(credentialVaultService.getActivePlatformApiKeySecret(PROVIDER))
                     .thenReturn(platformVault("PATH", "cipher-ignored"));
 
             assertThat(configService.getApiKey(PROVIDER)).isEqualTo(System.getenv("PATH"));
@@ -94,7 +91,7 @@ class PlatformProviderConfigServiceTest {
         @Test
         @DisplayName("vault secretRef 指向的环境变量为空时回退 yml，不抛错")
         void shouldFallbackToYmlWhenVaultSecretRefEnvBlank() {
-            when(credentialVaultService.getActivePlatformApiKey(PROVIDER))
+            when(credentialVaultService.getActivePlatformApiKeySecret(PROVIDER))
                     .thenReturn(platformVault("HELLOAI_EMPTY_ENV", "cipher"));
             when(providerProperties.getConfig(PROVIDER)).thenReturn(ymlConfig("sk-yml"));
 
@@ -104,7 +101,7 @@ class PlatformProviderConfigServiceTest {
         @Test
         @DisplayName("无 vault 凭证时回退 yml 配置（老环境平滑迁移）")
         void shouldFallbackToYmlWhenNoVault() {
-            when(credentialVaultService.getActivePlatformApiKey(PROVIDER)).thenReturn(null);
+            when(credentialVaultService.getActivePlatformApiKeySecret(PROVIDER)).thenReturn(null);
             when(providerProperties.getConfig(PROVIDER)).thenReturn(ymlConfig("sk-yml"));
 
             assertThat(configService.getApiKey(PROVIDER)).isEqualTo("sk-yml");
@@ -113,7 +110,7 @@ class PlatformProviderConfigServiceTest {
         @Test
         @DisplayName("vault 与 yml 均无配置时返回 null")
         void shouldReturnNullWhenNoVaultAndNoYml() {
-            when(credentialVaultService.getActivePlatformApiKey(PROVIDER)).thenReturn(null);
+            when(credentialVaultService.getActivePlatformApiKeySecret(PROVIDER)).thenReturn(null);
             when(providerProperties.getConfig(PROVIDER)).thenReturn(ymlConfig(null));
 
             assertThat(configService.getApiKey(PROVIDER)).isNull();
@@ -161,7 +158,7 @@ class PlatformProviderConfigServiceTest {
         @Test
         @DisplayName("maskApiKey：解密后仅保留尾 4 位")
         void shouldMaskTailFour() {
-            when(credentialVaultService.getActivePlatformApiKey(PROVIDER))
+            when(credentialVaultService.getActivePlatformApiKeySecret(PROVIDER))
                     .thenReturn(platformVault(null, "cipher-vault"));
             when(credentialCryptoService.decryptFromBase64("cipher-vault")).thenReturn("sk-abc12345");
 
@@ -171,7 +168,7 @@ class PlatformProviderConfigServiceTest {
         @Test
         @DisplayName("maskApiKey：未配置返回 null")
         void shouldReturnNullMaskWhenUnconfigured() {
-            when(credentialVaultService.getActivePlatformApiKey(PROVIDER)).thenReturn(null);
+            when(credentialVaultService.getActivePlatformApiKeySecret(PROVIDER)).thenReturn(null);
             when(providerProperties.getConfig(PROVIDER)).thenReturn(ymlConfig(null));
 
             assertThat(configService.maskApiKey(PROVIDER)).isNull();

@@ -6,9 +6,11 @@ import com.helloai.common.constant.AttachmentStatus;
 import com.helloai.common.constant.AttachmentVisibility;
 import com.helloai.core.system.storage.ArtifactStorage;
 import com.helloai.core.task.entity.Attachment;
+import com.helloai.core.task.port.AttachmentView;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.mapper.AttachmentMapper;
+import com.helloai.core.task.policy.AttachmentVisibilityPolicy;
 import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
@@ -36,6 +38,17 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
     private final SubTaskService subTaskService;
     private final TaskService taskService;
     private final ArtifactStorage artifactStorage;
+
+    /**
+     * 附件可见性判据（"声明范围 × 任务成员关系"的唯一入口）。
+     *
+     * <p><b>依赖方向说明（§7.1/§8.1）</b>：本类 → {@code task.policy} 是域内前向依赖。
+     * 该 Policy 自身又依赖 {@code SubTaskService}，而 {@code SubTaskServiceImpl} 反向依赖
+     * 本服务 —— 该回边已由 {@code SubTaskServiceImpl} 用 {@code ObjectProvider} 懒解析打破
+     * （见其字段注释），故此处新增的是<b>构造器强依赖</b>但不构成 Spring 循环引用；
+     * 新增依赖后仍能正常装配（已由 {@code AttachmentControllerAuthScopeTest} 与启动验证覆盖）。</p>
+     */
+    private final AttachmentVisibilityPolicy attachmentVisibilityPolicy;
 
     /**
      * 注册产物附件元数据。
@@ -128,6 +141,36 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
                 .list();
         fillBrowseTitles(result);
         return result;
+    }
+
+    /**
+     * 按子任务 ID 查询<b>指定 agent 可读</b>的附件列表（按创建时间倒序）。
+     *
+     * <p>在 {@link #list(Long)} 的全量结果上逐条过 {@code AttachmentVisibilityPolicy}：
+     * 同子任务下不同 {@code visibility} 的附件必须行级剔除（而非整表放行/整表 403），
+     * 否则要么团队产出互通能力丢失（整表 403），要么越权（整表放行）。</p>
+     */
+    @Override
+    public List<Attachment> listReadable(Long subTaskId, Long agentId) {
+        if (agentId == null) {
+            return List.of();
+        }
+        return list(subTaskId).stream()
+                .filter(attachment -> attachmentVisibilityPolicy.canRead(agentId, attachment))
+                .toList();
+    }
+
+    /**
+     * 校验指定 agent 可读该附件；不可读抛 {@link BizException}(403)。
+     *
+     * <p>判定逻辑零复制，一律委托 {@code AttachmentVisibilityPolicy}（唯一入口）。
+     * 任何在本方法内"顺手补一条 if"的写法都会造成判据分散，属禁止项。</p>
+     */
+    @Override
+    public void assertReadable(Attachment attachment, Long agentId) {
+        if (!attachmentVisibilityPolicy.canRead(agentId, attachment)) {
+            throw new BizException(403, "无权访问该附件（不在可见范围内）");
+        }
     }
 
     /**
@@ -472,5 +515,18 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
             }
         }
         return (subTaskId != null ? subTaskId : "0") + "/" + (fileName != null ? fileName : "unknown");
+    }
+
+    // ── 只读快照（RM5 批 4）──
+
+    @Override
+    public List<AttachmentView> listActiveViews(Long subTaskId) {
+        return listActive(subTaskId).stream().map(this::toView).toList();
+    }
+
+    /** 实体 → 只读快照；{@code contentLoadable} 由提供方判定（W11），消费方零判定。 */
+    private AttachmentView toView(Attachment att) {
+        return new AttachmentView(att.getId(), att.getFileName(), att.getFileType(), att.getMimeType(),
+                att.getFileSize(), isContentLoadable(att));
     }
 }

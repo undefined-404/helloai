@@ -4,7 +4,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.config.PromptEnhancerProperties;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
-import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.prompt.impl.PromptEnhancerServiceImpl;
@@ -19,6 +19,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -43,23 +44,24 @@ class PromptEnhancerServiceTest {
 
     private PromptEnhancerService promptEnhancerService;
 
-    private Agent agent;
+    private AgentProfileSnapshot agent;
 
     @BeforeEach
     void setUp() {
         properties = new PromptEnhancerProperties();
         promptEnhancerService = new PromptEnhancerServiceImpl(properties, plannerAgentPicker,
                 platformAgentExecutionService);
-        agent = new Agent();
-        agent.setId(1L);
-        agent.setName("planner-test");
+        agent = AgentProfileSnapshot.builder()
+                .id(1L)
+                .name("planner-test")
+                .build();
     }
 
     @Test
     @DisplayName("成功路径：模板注入 system、原文注入 user、温度与场景标记透传")
     void enhance_success() {
         when(plannerAgentPicker.pick(null)).thenReturn(agent);
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("## 功能目标\n结构化后的需求", "STOP", "API_KEY_LLM", 100));
 
         PromptEnhanceResult result = promptEnhancerService.enhance("  帮我做一个导出功能  ");
@@ -68,7 +70,7 @@ class PromptEnhancerServiceTest {
         assertThat(result.optimizedPrompt()).isEqualTo("## 功能目标\n结构化后的需求");
 
         ArgumentCaptor<AgentTask> captor = ArgumentCaptor.forClass(AgentTask.class);
-        verify(platformAgentExecutionService).executeSync(any(Agent.class), captor.capture());
+        verify(platformAgentExecutionService).executeSync(anyLong(), captor.capture());
         AgentTask task = captor.getValue();
         assertThat(task.getUserPrompt()).isEqualTo("帮我做一个导出功能");
         assertThat(task.getSystemPrompt()).contains("增强表达，而不是重新定义需求");
@@ -85,7 +87,7 @@ class PromptEnhancerServiceTest {
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("未开启");
         verify(plannerAgentPicker, never()).pick(any());
-        verify(platformAgentExecutionService, never()).executeSync(any(Agent.class), any(AgentTask.class));
+        verify(platformAgentExecutionService, never()).executeSync(anyLong(), any(AgentTask.class));
     }
 
     @Test
@@ -101,7 +103,7 @@ class PromptEnhancerServiceTest {
     @DisplayName("LLM 执行失败：抛 BizException 并携带失败原因")
     void enhance_llmFailure() {
         when(plannerAgentPicker.pick(null)).thenReturn(agent);
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.failure("上游限流", "ERROR", "API_KEY_LLM"));
 
         assertThatThrownBy(() -> promptEnhancerService.enhance("一个需求"))
@@ -114,7 +116,7 @@ class PromptEnhancerServiceTest {
     @DisplayName("LLM 输出为空：视为失败，抛 BizException")
     void enhance_emptyOutput() {
         when(plannerAgentPicker.pick(null)).thenReturn(agent);
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("  ", "STOP", "API_KEY_LLM", 10));
 
         assertThatThrownBy(() -> promptEnhancerService.enhance("一个需求"))

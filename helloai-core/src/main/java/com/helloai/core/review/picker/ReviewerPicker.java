@@ -1,7 +1,7 @@
 package com.helloai.core.review.picker;
 
-import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
+import com.helloai.core.task.port.SubTaskView;
 
 import java.util.List;
 
@@ -26,7 +26,7 @@ public interface ReviewerPicker {
      * @param subTask 待核验子任务（可空；taskId 为空时直接走回退链）
      * @return 可用核验 Agent；无可用时返回 null
      */
-    Agent pickSingle(SubTask subTask);
+    AgentProfileSnapshot pickSingle(SubTaskView subTask);
 
     /**
      * 双审选取：返回两个 {@code modelType}（provider:model 整体比对）不同的
@@ -36,7 +36,7 @@ public interface ReviewerPicker {
      * @param subTask 待核验子任务（可空）
      * @return 0~2 个 Reviewer；size&lt;2 表示无法配对（候选缺失或全同模型）
      */
-    List<Agent> pickDual(SubTask subTask);
+    List<AgentProfileSnapshot> pickDual(SubTaskView subTask);
 
     /**
      * 判定是否应走双审：任务 {@code task.agent_policy.difficulty==HIGH}

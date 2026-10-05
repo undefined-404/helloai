@@ -3,7 +3,7 @@ package com.helloai.core.task.spec;
 import com.helloai.core.task.entity.TaskRunningSpecEntity;
 import com.helloai.core.task.mapper.TaskExecutionRecordMapper;
 import com.helloai.core.task.mapper.TaskRunningSpecMapper;
-import com.helloai.core.task.service.impl.TaskRunningSpecTableServiceImpl;
+import com.helloai.core.task.service.impl.TaskRunningSpecServiceImpl;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -20,12 +20,12 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * TaskRunningSpecTableServiceImpl 契约先行拆解（Phase 2）增补测试：
+ * TaskRunningSpecServiceImpl 契约先行拆解增补测试：
  * updateContract 透传 / assembleDomain 组装契约 / Prompt 渲染「## 任务契约」节。
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("TaskRunningSpecTableService (contract)")
-class TaskRunningSpecTableServiceTest {
+@DisplayName("TaskRunningSpecService (contract)")
+class TaskRunningSpecServiceTest {
 
     @Mock
     private TaskRunningSpecMapper specMapper;
@@ -34,7 +34,7 @@ class TaskRunningSpecTableServiceTest {
     private TaskExecutionRecordMapper recordMapper;
 
     @InjectMocks
-    private TaskRunningSpecTableServiceImpl tableService;
+    private TaskRunningSpecServiceImpl specService;
 
     @Test
     @DisplayName("should delegate updateContract to specMapper.updateContract")
@@ -42,7 +42,7 @@ class TaskRunningSpecTableServiceTest {
         Map<String, Object> contract = Map.of(
                 "subTaskId", 11L, "title", "契约定义", "content", "接口签名");
 
-        tableService.updateContract(100L, contract);
+        specService.updateContract(100L, contract);
 
         verify(specMapper).updateContract(eq(100L), eq(contract));
     }
@@ -59,7 +59,7 @@ class TaskRunningSpecTableServiceTest {
         when(specMapper.selectByTaskId(100L)).thenReturn(entity);
         when(recordMapper.selectByTaskId(100L)).thenReturn(List.of());
 
-        TaskRunningSpec spec = tableService.getOrCreate(100L);
+        TaskRunningSpec spec = specService.getOrCreate(100L);
 
         assertThat(spec.contract()).isNotNull()
                 .containsEntry("title", "接口契约")
@@ -77,7 +77,7 @@ class TaskRunningSpecTableServiceTest {
         when(specMapper.selectByTaskId(100L)).thenReturn(entity);
         when(recordMapper.selectByTaskId(100L)).thenReturn(List.of());
 
-        String section = tableService.buildExecutorPromptSection(100L);
+        String section = specService.buildExecutorPromptSection(100L);
 
         assertThat(section)
                 .contains("## 任务契约")
@@ -95,7 +95,7 @@ class TaskRunningSpecTableServiceTest {
         when(specMapper.selectByTaskId(100L)).thenReturn(entity);
         when(recordMapper.selectByTaskId(100L)).thenReturn(List.of());
 
-        String section = tableService.buildExecutorPromptSection(100L);
+        String section = specService.buildExecutorPromptSection(100L);
 
         assertThat(section).doesNotContain("## 任务契约");
     }

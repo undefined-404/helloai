@@ -5,6 +5,9 @@ import com.baomidou.mybatisplus.extension.service.IService;
 import com.helloai.common.constant.FinalReportStatus;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.task.entity.Task;
+import com.helloai.common.constant.TaskStatus;
+import com.helloai.core.task.port.TaskView;
+import com.helloai.core.task.port.TaskDraft;
 
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -211,4 +214,22 @@ public interface TaskService extends IService<Task> {
      * @return 超时卡死任务列表（可能为空，绝不返回 null）
      */
     List<Task> listTimedOutPlanning(OffsetDateTime deadline, int limit);
+
+    // ── 只读快照（RM5 批 4）：供 review 域消费，避免其 import task.entity ──
+
+    /** 按主键查询顶层任务只读快照（语义与 {@link #getById} 一致：不存在返回 null）。 */
+    TaskView getView(Long taskId);
+
+    // ── 写命令（RM5 批 5a）：供 planner 域消费 ──
+
+    /**
+     * 状态 CAS 推进（{@code WHERE id=? AND status=?} → 目标状态）。
+     *
+     * <p>替代 planner 侧原 {@code taskService.lambdaUpdate().eq(Task::getStatus,…)} 直写，
+     * 返回是否命中一行（并发下未命中即 CAS 失败）。</p>
+     */
+    boolean casStatus(Long taskId, TaskStatus expect, TaskStatus target);
+
+    /** 由创建物料建任务（写命令）并返回落库后的只读快照（RM5 批 5a）。 */
+    TaskView createFromDraft(TaskDraft draft);
 }

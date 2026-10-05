@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.helloai.common.constant.CredentialOwnerType;
 import com.helloai.core.system.entity.CredentialAuditLog;
 import com.helloai.core.system.entity.CredentialVault;
+import com.helloai.core.system.port.CredentialSecret;
 
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -28,6 +29,21 @@ public interface CredentialVaultService extends IService<CredentialVault> {
      * 由 {@code PlatformProviderConfigService} 读取，替代 yml 启动期一次性绑定。</p>
      */
     CredentialVault getActivePlatformApiKey(String provider);
+
+    // ── 只读快照变体（RM5 批 3）：供 agent 域消费，避免其 import system.entity ──
+
+    /**
+     * 查询 Agent 当前启用 API Key 凭证的只读快照。
+     *
+     * <p>语义与 {@link #getActiveAgentApiKey} 逐字一致（无启用凭证返回 null），
+     * 仅投影解密所需字段（{@code encryptedValue} / {@code secretRef}）。</p>
+     */
+    CredentialSecret getActiveAgentApiKeySecret(Long agentId, String provider);
+
+    /**
+     * 查询平台级当前启用 API Key 凭证的只读快照（语义与 {@link #getActivePlatformApiKey} 一致）。
+     */
+    CredentialSecret getActivePlatformApiKeySecret(String provider);
 
     /**
      * 查询平台级全部凭证记录（不含加密值明文），供管理端脱敏展示。

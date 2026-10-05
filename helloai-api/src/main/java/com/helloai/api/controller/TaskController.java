@@ -13,7 +13,7 @@ import com.helloai.common.constant.FinalReportStatus;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.planner.service.PlannerAnalysisService;
-import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.entity.TaskIteration;
 import com.helloai.core.agent.service.AgentInboxService;
@@ -130,18 +130,18 @@ public class TaskController {
 
     @SaCheckPermission("task:plan")
     @PostMapping("/planById/{id}")
-    public R<List<SubTask>> plan(@PathVariable("id") Long id) {
+    public R<List<SubTaskView>> plan(@PathVariable("id") Long id) {
         return R.ok(plannerAnalysisService.decompose(id));
     }
 
     @GetMapping("/findPlanByTaskId/{id}")
-    public R<List<SubTask>> listPlanDrafts(@PathVariable("id") Long id) {
+    public R<List<SubTaskView>> listPlanDrafts(@PathVariable("id") Long id) {
         return R.ok(plannerAnalysisService.listDrafts(id));
     }
 
     @SaCheckPermission("task:confirm-plan")
     @PostMapping("/confirmPlanByTaskId/{id}")
-    public R<List<SubTask>> confirmPlan(@PathVariable("id") Long id) {
+    public R<List<SubTaskView>> confirmPlan(@PathVariable("id") Long id) {
         return R.ok(plannerAnalysisService.confirmPlan(id));
     }
 

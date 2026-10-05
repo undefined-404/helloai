@@ -2,7 +2,7 @@ package com.helloai.core.task.service.impl;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentStatus;
-import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.system.storage.ArtifactStorage;
 import com.helloai.core.system.storage.StoredArtifact;
@@ -35,7 +35,7 @@ public class ArtifactUploadServiceImpl implements ArtifactUploadService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public ArtifactUploadResult upload(Long agentId, Long subTaskId, String fileName, String mimeType, byte[] content) {
-        Agent agent = assertAgentActive(agentId);
+        AgentProfileSnapshot agent = assertAgentActive(agentId);
 
         if (fileName == null || fileName.isBlank()) {
             throw new BizException("fileName 不能为空");
@@ -59,8 +59,8 @@ public class ArtifactUploadServiceImpl implements ArtifactUploadService {
         }
 
         // objectKey 首层目录使用执行 Agent 注册名（username 维度），与物化链路口径一致
-        String ownerName = agent.getName() != null && !agent.getName().isBlank()
-                ? agent.getName() : "agent-" + agentId;
+        String ownerName = agent.name() != null && !agent.name().isBlank()
+                ? agent.name() : "agent-" + agentId;
         String safeName = ArtifactStorage.sanitizeFileName(fileName);
         StoredArtifact stored = artifactStorage.store(
                 ownerName, subTask.getTaskId(), subTaskId, safeName, content);
@@ -79,13 +79,13 @@ public class ArtifactUploadServiceImpl implements ArtifactUploadService {
     }
 
     /** Agent 存在且 ACTIVE 校验（与 McpToolServiceImpl.assertAgentActive 同口径）。 */
-    private Agent assertAgentActive(Long agentId) {
-        Agent agent = agentService.getById(agentId);
+    private AgentProfileSnapshot assertAgentActive(Long agentId) {
+        AgentProfileSnapshot agent = agentService.getProfileById(agentId);
         if (agent == null) {
             throw new BizException("Agent 不存在: " + agentId);
         }
-        if (agent.getStatus() != AgentStatus.ACTIVE) {
-            throw new BizException("Agent 未激活: " + agentId + ", status=" + agent.getStatus());
+        if (agent.status() != AgentStatus.ACTIVE) {
+            throw new BizException("Agent 未激活: " + agentId + ", status=" + agent.status());
         }
         return agent;
     }

@@ -3,6 +3,7 @@ package com.helloai.core.system.service.impl;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
 import com.helloai.core.system.entity.LlmProvider;
+import com.helloai.core.system.port.LlmProviderProfile;
 import com.helloai.core.system.mapper.LlmProviderMapper;
 import com.helloai.core.system.service.LlmProviderModelService;
 import com.helloai.core.system.service.LlmProviderQueryService;
@@ -167,6 +168,11 @@ public class LlmProviderServiceImpl extends ServiceImpl<LlmProviderMapper, LlmPr
     @Override
     public void validateProviderHasEnabledModels(Long providerId) {
         llmProviderModelService.validateProviderHasEnabledModels(providerId);
+    }
+
+    @Override
+    public LlmProviderProfile getProfileById(Long id) {
+        return LlmProviderProfileMapper.toProfile(getById(id));
     }
 }
 

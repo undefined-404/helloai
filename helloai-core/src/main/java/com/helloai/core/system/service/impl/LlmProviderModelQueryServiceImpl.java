@@ -2,6 +2,7 @@ package com.helloai.core.system.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.helloai.core.system.entity.LlmProviderModel;
+import com.helloai.core.system.port.LlmProviderModelProfile;
 import com.helloai.core.system.mapper.LlmProviderModelMapper;
 import com.helloai.core.system.service.LlmProviderModelQueryService;
 import lombok.RequiredArgsConstructor;
@@ -117,6 +118,13 @@ public class LlmProviderModelQueryServiceImpl implements LlmProviderModelQuerySe
                         .last("LIMIT 1")
         );
         return model;
+    }
+
+    @Override
+    public LlmProviderModelProfile findCapabilityProfileByModelType(String modelType) {
+        LlmProviderModel model = findCapabilityByModelType(modelType);
+        return model == null ? null
+                : new LlmProviderModelProfile(model.getCapabilitySkills(), model.getAvailableOptionalSkills());
     }
 
     @Override

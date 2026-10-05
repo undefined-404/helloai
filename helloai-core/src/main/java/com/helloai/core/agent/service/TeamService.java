@@ -5,6 +5,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.TeamStatus;
 import com.helloai.core.agent.entity.Team;
 import com.helloai.core.agent.entity.TeamMember;
+import com.helloai.core.agent.port.TeamMemberView;
 
 import java.util.List;
 
@@ -36,6 +37,19 @@ public interface TeamService {
 
     /** 成员列表（按 weight desc、id asc）。 */
     List<TeamMember> listMembers(Long teamId);
+
+    // ── 只读快照变体（RM5 批 5）：供 task 域消费，避免其 import agent.entity ──
+
+    /**
+     * 按 id 查询 Team 状态（RM5 批 5）。
+     *
+     * <p>语义与 {@link #getTeam} 一致（不存在抛 {@code BizException}），
+     * 只暴露消费方（task 域展开 agent_policy）实际读取的 status 字段。</p>
+     */
+    TeamStatus getTeamStatus(Long id);
+
+    /** 成员列表的只读快照（顺序与 {@link #listMembers} 一致）。 */
+    List<TeamMemberView> listMemberViews(Long teamId);
 
     /** 新增成员：校验 Team 非 ARCHIVED、槽位角色白名单、Agent ACTIVE、不重复；返回落库成员。 */
     TeamMember addMember(Long teamId, Long agentId, AgentRole slotRole);

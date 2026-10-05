@@ -27,7 +27,7 @@
 # 背景：见 doc/review/HelloAI 代码规范与架构偏离专项审计报告（2026-09-30）.md §7
 #       与 doc/review/HelloAI 架构V2进度与质量审计报告（2026-10-02）.md §6.3。
 #
-# 最后更新：2026-10-02
+# 最后更新：2026-10-04
 # ============================================================================
 # ---- 组 1：§6 反向依赖（严格拦截；目标恒为 0） ----
 review->planner=0
@@ -85,28 +85,28 @@ mq->core.mapper=0
 start->core.mapper=0
 
 # ---- 组 3a：域级前向依赖（§6 合法；仅提示） ----
-planner->agent=34
-task->agent=58
+planner->agent=33
+task->agent=53
 
 # ---- 组 3b：前向跨域实体泄漏（A3；仅提示，用于暴露清偿目标） ----
 planner->review.entity=0
-planner->task.entity=9
-planner->agent.entity=7
+planner->task.entity=0
+planner->agent.entity=0
 planner->system.entity=0
 planner->shared.entity=0
-review->task.entity=13
-review->agent.entity=7
+review->task.entity=0
+review->agent.entity=0
 review->system.entity=0
 review->shared.entity=0
-task->agent.entity=14
+task->agent.entity=0
 task->system.entity=0
 task->shared.entity=0
-agent->system.entity=11
+agent->system.entity=0
 agent->shared.entity=0
 system->shared.entity=0
 
 # ---- 组 3c：非 core 模块的 core 实体泄漏（A3；仅提示） ----
-api->core.entity=50
+api->core.entity=49
 job->core.entity=14
 mq->core.entity=0
 start->core.entity=0

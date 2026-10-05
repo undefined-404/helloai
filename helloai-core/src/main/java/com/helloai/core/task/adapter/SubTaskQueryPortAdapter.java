@@ -1,10 +1,11 @@
-package com.helloai.core.task.service.impl;
+package com.helloai.core.task.adapter;
 
 import com.helloai.core.agent.port.SubTaskQueryPort;
 import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.impl.SubTaskSnapshotMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -74,7 +75,7 @@ public class SubTaskQueryPortAdapter implements SubTaskQueryPort {
      */
     @Override
     public List<String> mergeSkills(Long subTaskId) {
-        List<String> merged = subTaskService.mergeSkills(subTaskService.getById(subTaskId));
+        List<String> merged = subTaskService.mergeSkills(subTaskId);
         return merged != null ? merged : List.of();
     }
 

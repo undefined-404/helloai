@@ -1,9 +1,9 @@
-package com.helloai.core.task.service.impl;
+package com.helloai.core.task.adapter;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.port.SubTaskCommandPort;
-import com.helloai.core.task.entity.SubTask;
+
 import com.helloai.core.task.service.SubTaskService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -131,11 +131,6 @@ public class SubTaskCommandPortAdapter implements SubTaskCommandPort {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void updateContext(Long subTaskId, Map<String, Object> context) {
-        SubTask subTask = subTaskService.getById(subTaskId);
-        if (subTask == null) {
-            return;
-        }
-        subTask.setContext(context);
-        subTaskService.updateById(subTask);
+        subTaskService.updateContext(subTaskId, context);
     }
 }

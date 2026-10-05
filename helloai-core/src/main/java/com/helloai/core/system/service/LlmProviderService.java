@@ -2,6 +2,7 @@ package com.helloai.core.system.service;
 
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.helloai.core.system.entity.LlmProvider;
+import com.helloai.core.system.port.LlmProviderProfile;
 
 /**
  * LlmProvider 业务服务（CRUD + 启用/禁用）。
@@ -48,4 +49,12 @@ public interface LlmProviderService extends IService<LlmProvider> {
      * @throws com.helloai.common.base.BizException 当 Provider 没有启用模型时
      */
     void validateProviderHasEnabledModels(Long providerId);
+
+    /**
+     * 按主键查询 Provider 的【只读快照】（RM5 批 3）。
+     *
+     * <p>语义与 {@code getById} 一致（不存在或已删除返回 null），供 agent 域消费，
+     * 避免其 import {@code system.entity.LlmProvider}。</p>
+     */
+    LlmProviderProfile getProfileById(Long id);
 }

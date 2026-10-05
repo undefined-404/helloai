@@ -3,12 +3,12 @@ package com.helloai.core.review.support;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
-import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.review.service.SubTaskReviewService;
-import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.entity.Uncertainty;
+import com.helloai.core.task.port.SubTaskView;
+import com.helloai.core.task.port.UncertaintyView;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import lombok.RequiredArgsConstructor;
@@ -56,12 +56,12 @@ public class ReviewExecutionEngine {
      * @param reviewer 核验 Reviewer Agent
      * @return 结构化判定；LLM 调用失败/超时/输出不可解析时返回 null
      */
-    public SubTaskReviewService.ReviewVerdict execute(SubTask subTask, Agent reviewer) {
+    public SubTaskReviewService.ReviewVerdict execute(SubTaskView subTask, AgentProfileSnapshot reviewer) {
         return execute(subTask, reviewer, ReviewChannel.SINGLE);
     }
 
     /**
-     * 单次核验（不改状态不落库）：同 {@link #execute(SubTask, Agent)}，按链路来源
+     * 单次核验（不改状态不落库）：同 {@link #execute(SubTaskView, AgentProfileSnapshot)}，按链路来源
      * 切换对话流消息类型前缀（单审/双审/抽检三态可分辨）。
      *
      * @param subTask  待核验子任务
@@ -69,8 +69,8 @@ public class ReviewExecutionEngine {
      * @param channel  链路来源（SINGLE / DUAL / RECHECK），决定消息类型前缀
      * @return 结构化判定；LLM 调用失败/超时/输出不可解析时返回 null
      */
-    public SubTaskReviewService.ReviewVerdict execute(SubTask subTask, Agent reviewer, ReviewChannel channel) {
-        Long subTaskId = subTask.getId();
+    public SubTaskReviewService.ReviewVerdict execute(SubTaskView subTask, AgentProfileSnapshot reviewer, ReviewChannel channel) {
+        Long subTaskId = subTask.id();
         String prompt = renderPrompt(subTask);
         AgentResult result;
         try {
@@ -81,9 +81,9 @@ public class ReviewExecutionEngine {
                     .context(Map.of("subTaskId", subTaskId, "scene", "subtask_review"))
                     .requiredCapabilities(Map.of())
                     // G-016 契约层技能注入：核验与执行同一技能清单（mergeSkills 恒非 null）
-                    .skills(subTaskService.mergeSkills(subTask))
+                    .skills(subTaskService.mergeSkills(subTask.id()))
                     .build();
-            result = platformAgentExecutionService.executeSync(reviewer, agentTask);
+            result = platformAgentExecutionService.executeSync(reviewer.id(), agentTask);
         } catch (Exception e) {
             log.warn("自动核验 LLM 调用异常，子任务停留 REVIEW: subTaskId={}, err={}", subTaskId, e.getMessage());
             return null;
@@ -103,12 +103,12 @@ public class ReviewExecutionEngine {
                 "user", "platform", prompt, channel.toolName("prompt"));
         // 推理模型的思考过程单独落一条消息（保留 thinking，供前端动态展示）
         if (result.getThinking() != null && !result.getThinking().isBlank()) {
-            writeConversationQuietly(subTaskId, reviewer.getId(),
+            writeConversationQuietly(subTaskId, reviewer.id(),
                     "assistant", "agent",
                     result.getThinking(),
                     channel.toolName("thinking"));
         }
-        writeConversationQuietly(subTaskId, reviewer.getId(),
+        writeConversationQuietly(subTaskId, reviewer.id(),
                 "assistant", "agent",
                 result.getOutput() != null ? result.getOutput() : "",
                 channel.toolName("verdict"));
@@ -117,9 +117,9 @@ public class ReviewExecutionEngine {
         if (verdict == null) {
             log.warn("自动核验输出不可解析，子任务停留 REVIEW 等人工: subTaskId={}, rawOutput={}",
                     subTaskId, VerdictParser.summarize(result.getOutput(), 300));
-            taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId,
+            taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
                     "sub_task_auto_review_unparseable", AgentRole.REVIEWER,
-                    reviewer.getId(),
+                    reviewer.id(),
                     Map.of("rawOutput", VerdictParser.summarize(result.getOutput(), 300)));
             return null;
         }
@@ -143,7 +143,7 @@ public class ReviewExecutionEngine {
      * G-011 D7：增 {{CONSTRAINTS}} + {{UNCERTAINTIES}} 渲染（空时「（无）」），
      * 清偿 G-010 后置缺口③（审查侧 constraints 此前未消费）。
      */
-    private String renderPrompt(SubTask subTask) {
+    private String renderPrompt(SubTaskView subTask) {
         ClassPathResource resource = new ClassPathResource(PROMPT_TEMPLATE_PATH);
         String template;
         try (InputStream in = resource.getInputStream()) {
@@ -152,10 +152,10 @@ public class ReviewExecutionEngine {
             throw new IllegalStateException("读取核验 Prompt 模板失败: " + e.getMessage(), e);
         }
         return template
-                .replace("{{SUB_TASK_TITLE}}", VerdictParser.nullToEmpty(subTask.getTitle()))
-                .replace("{{SUB_TASK_CONTENT}}", VerdictParser.nullToEmpty(subTask.getContent()))
-                .replace("{{DELIVERABLE}}", VerdictParser.nullToEmpty(subTask.getDeliverable()))
-                .replace("{{ACCEPTANCE}}", VerdictParser.nullToEmpty(subTask.getAcceptance()))
+                .replace("{{SUB_TASK_TITLE}}", VerdictParser.nullToEmpty(subTask.title()))
+                .replace("{{SUB_TASK_CONTENT}}", VerdictParser.nullToEmpty(subTask.content()))
+                .replace("{{DELIVERABLE}}", VerdictParser.nullToEmpty(subTask.deliverable()))
+                .replace("{{ACCEPTANCE}}", VerdictParser.nullToEmpty(subTask.acceptance()))
                 .replace("{{CONSTRAINTS}}", renderConstraints(subTask))
                 .replace("{{UNCERTAINTIES}}", renderUncertainties(subTask))
                 .replace("{{EXECUTION_OUTPUT}}", reviewEvidenceAssembler.extractExecutionOutput(subTask))
@@ -166,22 +166,22 @@ public class ReviewExecutionEngine {
     }
 
     /** D7：执行约束渲染——非空注入「执行约束：…」，空时「（无）」（G-010 缺口③清偿）。 */
-    private String renderConstraints(SubTask subTask) {
-        return subTask.getConstraints() != null && !subTask.getConstraints().isBlank()
-                ? subTask.getConstraints() : "（无）";
+    private String renderConstraints(SubTaskView subTask) {
+        return subTask.constraints() != null && !subTask.constraints().isBlank()
+                ? subTask.constraints() : "（无）";
     }
 
     /** D7：不确定性申报渲染——逐条「[kind] note」，空时「（无）」（空白 note 条目跳过）。 */
-    private String renderUncertainties(SubTask subTask) {
-        if (subTask.getUncertainties() == null || subTask.getUncertainties().isEmpty()) {
+    private String renderUncertainties(SubTaskView subTask) {
+        if (subTask.uncertainties() == null || subTask.uncertainties().isEmpty()) {
             return "（无）";
         }
         StringBuilder sb = new StringBuilder();
-        for (Uncertainty u : subTask.getUncertainties()) {
-            if (u.getNote() == null || u.getNote().isBlank()) {
+        for (UncertaintyView u : subTask.uncertainties()) {
+            if (u.note() == null || u.note().isBlank()) {
                 continue;
             }
-            sb.append("- [").append(u.getKind()).append("] ").append(u.getNote()).append('\n');
+            sb.append("- [").append(u.kind()).append("] ").append(u.note()).append('\n');
         }
         return sb.length() > 0 ? sb.toString().trim() : "（无）";
     }

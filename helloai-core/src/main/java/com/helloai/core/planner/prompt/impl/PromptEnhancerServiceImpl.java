@@ -4,7 +4,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.config.PromptEnhancerProperties;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
-import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.prompt.PromptEnhanceResult;
@@ -49,20 +49,20 @@ public class PromptEnhancerServiceImpl implements PromptEnhancerService {
         }
         String originalPrompt = prompt.trim();
 
-        Agent agent = plannerAgentPicker.pick(null);
+        AgentProfileSnapshot agent = plannerAgentPicker.pick(null);
         AgentTask task = AgentTask.builder()
                 .systemPrompt(loadSystemPrompt())
                 .userPrompt(originalPrompt)
                 .temperature(properties.getTemperature())
                 .context(Map.of("scene", "prompt_enhance"))
                 .build();
-        AgentResult result = platformAgentExecutionService.executeSync(agent, task);
+        AgentResult result = platformAgentExecutionService.executeSync(agent.id(), task);
         if (!result.isSuccess() || result.getOutput() == null || result.getOutput().isBlank()) {
             String reason = result.getErrorMessage();
             throw new BizException("输入优化失败" + (reason != null && !reason.isBlank() ? ": " + reason : ""));
         }
         log.info("输入优化完成: agentId={}, 原文长度={}, 优化后长度={}",
-                agent.getId(), originalPrompt.length(), result.getOutput().length());
+                agent.id(), originalPrompt.length(), result.getOutput().length());
         return new PromptEnhanceResult(originalPrompt, result.getOutput().trim());
     }
 

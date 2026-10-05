@@ -92,6 +92,22 @@ public class PlatformAgentExecutionServiceImpl implements PlatformAgentExecution
     }
 
     /**
+     * 流式执行（按 agentId 路由）：与 {@link #executeStream(Agent, AgentTask)} 同构，
+     * 仅多一步按 id 解析 Agent。解析包进 {@code Flux.defer} 保证惰性（订阅时才查库/路由/打卡），
+     * Agent 不存在时在订阅时抛 BizException（与 {@link #execute(Long, AgentTask)} 的守卫一致）。
+     */
+    @Override
+    public Flux<String> executeStream(Long agentId, AgentTask task) {
+        return Flux.defer(() -> {
+            Agent agent = agentService.getById(agentId);
+            if (agent == null) {
+                throw new BizException("Agent 不存在: " + agentId);
+            }
+            return executeStream(agent, task);
+        });
+    }
+
+    /**
      * 契约层技能规范注入：{@code AgentTask.skills} 非空时把 resolve 出的「平台技能规范（执行速览）」
      * 段拼入 systemPrompt。skills 为空 / 无命中 / 段为空时原样返回（全部既有链路行为零变化）。
      */

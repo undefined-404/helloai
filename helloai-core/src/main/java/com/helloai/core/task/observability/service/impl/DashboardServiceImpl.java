@@ -2,7 +2,7 @@ package com.helloai.core.task.observability.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.helloai.common.constant.SubTaskStatus;
-import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Task;
@@ -56,15 +56,15 @@ public class DashboardServiceImpl implements DashboardService {
                 new LambdaQueryWrapper<SubTask>().eq(SubTask::getStatus, SubTaskStatus.BLOCKED).eq(SubTask::getDeleted, 0));
 
         // Agent 积分排行（按 score 倒序取前 10，跨域走 AgentService 接口，不直捅 agent.mapper）
-        List<Agent> topAgents = agentService.listAllOrderByScoreDesc().stream()
+        List<AgentProfileSnapshot> topAgents = agentService.listProfilesOrderByScoreDesc().stream()
                 .limit(AGENT_RANKING_LIMIT)
                 .collect(Collectors.toList());
         List<Map<String, Object>> agentRanking = topAgents == null ? new ArrayList<>()
                 : topAgents.stream().map(a -> {
             Map<String, Object> m = new LinkedHashMap<>();
-            m.put("name", a.getName());
-            m.put("role", a.getRole().name());
-            m.put("score", a.getScore() != null ? a.getScore() : 0);
+            m.put("name", a.name());
+            m.put("role", a.role().name());
+            m.put("score", a.score() != null ? a.score() : 0);
             return m;
         }).collect(Collectors.toList());
 

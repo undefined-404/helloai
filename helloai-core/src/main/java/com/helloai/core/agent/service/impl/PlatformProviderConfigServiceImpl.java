@@ -5,8 +5,8 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentProviderProperties;
 import com.helloai.common.crypto.CredentialCryptoService;
 import com.helloai.core.agent.chat.provider.ProviderChatModelCache;
-import com.helloai.core.system.entity.CredentialVault;
-import com.helloai.core.system.entity.LlmProvider;
+import com.helloai.core.system.port.CredentialSecret;
+import com.helloai.core.system.port.LlmProviderProfile;
 import com.helloai.core.system.service.CredentialVaultService;
 import com.helloai.core.system.service.LlmProviderQueryService;
 import com.helloai.core.system.service.SysConfigService;
@@ -51,18 +51,18 @@ public class PlatformProviderConfigServiceImpl implements PlatformProviderConfig
      * @return 明文；未配置返回 null
      */
     public String getApiKey(String provider) {
-        CredentialVault vault = credentialVaultService.getActivePlatformApiKey(provider);
+        CredentialSecret vault = credentialVaultService.getActivePlatformApiKeySecret(provider);
         if (vault != null) {
-            if (vault.getSecretRef() != null && !vault.getSecretRef().isBlank()) {
-                String env = System.getenv(vault.getSecretRef());
+            if (vault.secretRef() != null && !vault.secretRef().isBlank()) {
+                String env = System.getenv(vault.secretRef());
                 if (env == null || env.isBlank()) {
                     log.warn("平台级凭证 secretRef 指向的环境变量为空，回退 yml: provider={}, secretRef={}",
-                            provider, vault.getSecretRef());
+                            provider, vault.secretRef());
                 } else {
                     return env;
                 }
-            } else if (vault.getEncryptedValue() != null && !vault.getEncryptedValue().isBlank()) {
-                return credentialCryptoService.decryptFromBase64(vault.getEncryptedValue());
+            } else if (vault.encryptedValue() != null && !vault.encryptedValue().isBlank()) {
+                return credentialCryptoService.decryptFromBase64(vault.encryptedValue());
             }
         }
         String ymlKey = providerProperties.getConfig(provider).getApiKey();
@@ -77,9 +77,9 @@ public class PlatformProviderConfigServiceImpl implements PlatformProviderConfig
      * 保持老环境兼容。</p>
      */
     public String getBaseUrl(String provider) {
-        LlmProvider lp = llmProviderQueryService.findByCode(provider).orElse(null);
-        if (lp != null && lp.getBaseUrl() != null && !lp.getBaseUrl().isBlank()) {
-            return lp.getBaseUrl();
+        LlmProviderProfile lp = llmProviderQueryService.findProfileByCode(provider).orElse(null);
+        if (lp != null && lp.baseUrl() != null && !lp.baseUrl().isBlank()) {
+            return lp.baseUrl();
         }
         String sysValue = sysConfigService.getValue(sysConfigKey(provider, "base-url"));
         if (sysValue != null && !sysValue.isBlank()) {
@@ -93,9 +93,9 @@ public class PlatformProviderConfigServiceImpl implements PlatformProviderConfig
      * 读取 provider 的默认模型：{@code llm_provider.default_model}（DB）&gt; sys_config &gt; yml &gt; null。
      */
     public String getDefaultModel(String provider) {
-        LlmProvider lp = llmProviderQueryService.findByCode(provider).orElse(null);
-        if (lp != null && lp.getDefaultModel() != null && !lp.getDefaultModel().isBlank()) {
-            return lp.getDefaultModel();
+        LlmProviderProfile lp = llmProviderQueryService.findProfileByCode(provider).orElse(null);
+        if (lp != null && lp.defaultModel() != null && !lp.defaultModel().isBlank()) {
+            return lp.defaultModel();
         }
         String sysValue = sysConfigService.getValue(sysConfigKey(provider, "default-model"));
         if (sysValue != null && !sysValue.isBlank()) {

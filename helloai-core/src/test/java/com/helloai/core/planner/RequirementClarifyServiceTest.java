@@ -8,7 +8,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
-import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentService;
@@ -35,7 +35,8 @@ import com.helloai.core.planner.service.RequirementConversationService;
 import com.helloai.core.planner.service.RequirementMessageService;
 import com.helloai.core.planner.search.WebPageContent;
 import com.helloai.core.planner.search.WebSearchResult;
-import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.port.TaskDraft;
+import com.helloai.core.task.port.TaskView;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import org.junit.jupiter.api.BeforeEach;
@@ -192,13 +193,13 @@ class RequirementClarifyServiceTest {
         return conversation;
     }
 
-    private Agent llmPlanner() {
-        Agent agent = new Agent();
-        agent.setId(9L);
-        agent.setName("planner-llm");
-        agent.setRole(AgentRole.PLANNER);
-        agent.setAccessType(AgentAccessType.API_KEY_LLM);
-        return agent;
+    private AgentProfileSnapshot llmPlanner() {
+        return AgentProfileSnapshot.builder()
+                .id(9L)
+                .name("planner-llm")
+                .role(AgentRole.PLANNER)
+                .accessType(AgentAccessType.API_KEY_LLM)
+                .build();
     }
 
     private RequirementMessage message(String role, String content, int seq) {
@@ -215,7 +216,7 @@ class RequirementClarifyServiceTest {
         when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
         when(messageService.listByConversation(CONV_ID))
                 .thenReturn(List.of(message("user", "做一个报表", 1)));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(rawOutput, "stop", "llm", 100));
     }
 
@@ -226,7 +227,7 @@ class RequirementClarifyServiceTest {
         when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
         when(messageService.listByConversation(CONV_ID))
                 .thenReturn(List.of(message("user", "你好", 1)));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(output, "stop", "llm", 100));
         stubDecisionRound(DECISION_CHAT_NO_SEARCH);
     }
@@ -249,7 +250,7 @@ class RequirementClarifyServiceTest {
 
     /** 决策轮 executeSync stub：按 AgentTask.context.scene=requirement_chat_decision 精确匹配。 */
     private void stubDecisionRound(String decisionJson) {
-        when(platformAgentExecutionService.executeSync(any(Agent.class),
+        when(platformAgentExecutionService.executeSync(anyLong(),
                 argThat(task -> task != null
                         && DECISION_SCENE.equals(task.getContext() == null
                         ? null : task.getContext().get("scene")))))
@@ -374,7 +375,7 @@ class RequirementClarifyServiceTest {
         when(messageService.listByConversation(CONV_ID))
                 .thenReturn(List.of(message("user", "做一个报表", 1)));
         // 首轮：只有「背景」一节 → 触发纠偏重试；重试轮：四小节齐全
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
                         "{\"type\":\"final\",\"title\":\"首轮标题\",\"description\":\"## 背景\\n要一个报表\"}",
                         "stop", "llm", 100))
@@ -388,7 +389,7 @@ class RequirementClarifyServiceTest {
 
         // 恰好一次重试（不多不少），且采用补全后的终稿
         verify(platformAgentExecutionService, times(2))
-                .executeSync(any(Agent.class), any(AgentTask.class));
+                .executeSync(anyLong(), any(AgentTask.class));
         assertThat(conversation.getFinalTitle()).isEqualTo("补全标题");
         verify(messageService).addMessage(CONV_ID, "assistant", "已生成终稿");
         // 补全成功不记缺失审计
@@ -407,7 +408,7 @@ class RequirementClarifyServiceTest {
         clarifyService.sendMessage(CONV_ID, "直接生成吧");
 
         verify(platformAgentExecutionService, times(2))
-                .executeSync(any(Agent.class), any(AgentTask.class));
+                .executeSync(anyLong(), any(AgentTask.class));
         // 放行首轮结果：不因小节格式卡死终稿
         assertThat(conversation.getFinalTitle()).isEqualTo("标题");
         verify(messageService).addMessage(CONV_ID, "assistant", "已生成终稿");
@@ -429,7 +430,7 @@ class RequirementClarifyServiceTest {
         clarifyService.sendMessage(CONV_ID, "直接生成吧");
 
         verify(platformAgentExecutionService, times(1))
-                .executeSync(any(Agent.class), any(AgentTask.class));
+                .executeSync(anyLong(), any(AgentTask.class));
         assertThat(conversation.getFinalTitle()).isEqualTo("标题");
         verify(taskTimelineService, never()).recordEvent(isNull(), isNull(),
                 eq("requirement_description_section_missing"), any(), any(), anyMap());
@@ -560,7 +561,7 @@ class RequirementClarifyServiceTest {
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("轮数已达上限");
         verify(platformAgentExecutionService, never())
-                .executeSync(any(Agent.class), any(AgentTask.class));
+                .executeSync(anyLong(), any(AgentTask.class));
         verify(messageService, never()).addMessage(anyLong(), anyString(), anyString(), any());
     }
 
@@ -623,7 +624,7 @@ class RequirementClarifyServiceTest {
         when(plannerAgentPicker.pick(9L)).thenReturn(llmPlanner());
         when(messageService.listByConversation(CONV_ID))
                 .thenReturn(List.of(message("user", "做一个报表", 1)));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(
                         "{\"type\":\"question\",\"message\":\"目标是什么？\"}", "stop", "llm", 100));
 
@@ -706,7 +707,7 @@ class RequirementClarifyServiceTest {
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("无需重试");
         verify(platformAgentExecutionService, never())
-                .executeSync(any(Agent.class), any(AgentTask.class));
+                .executeSync(anyLong(), any(AgentTask.class));
     }
 
     @Test
@@ -724,7 +725,7 @@ class RequirementClarifyServiceTest {
         when(messageService.listByConversation(CONV_ID))
                 .thenReturn(List.of(message("user", "最新行情怎样", 1)));
         // 先注册主回复 any stub，再注册决策轮 stub（retry 同样走 决策 → 搜索 → 主回复）
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("行情如下：", "stop", "llm", 100));
         stubDecisionRound(decisionChatWithSearch("最新行情"));
 
@@ -740,11 +741,11 @@ class RequirementClarifyServiceTest {
                 payloadCaptor.capture());
         assertThat(payloadCaptor.getValue()).contains("\"webSearch\"").contains("行情速递");
         // 决策轮与主回复轮各恰一次（§6.166 同语义：retry 与 sendMessage 走同一 runRoundCore）
-        verify(platformAgentExecutionService, times(1)).executeSync(any(Agent.class),
+        verify(platformAgentExecutionService, times(1)).executeSync(anyLong(),
                 argThat(task -> task != null
                         && DECISION_SCENE.equals(task.getContext() == null
                         ? null : task.getContext().get("scene"))));
-        verify(platformAgentExecutionService, times(1)).executeSync(any(Agent.class),
+        verify(platformAgentExecutionService, times(1)).executeSync(anyLong(),
                 argThat(task -> task != null
                         && "requirement_chat".equals(task.getContext() == null
                         ? null : task.getContext().get("scene"))));
@@ -772,20 +773,20 @@ class RequirementClarifyServiceTest {
         conversation.setFinalTitle("搭建日报模块");
         conversation.setFinalDescription("## 背景\n做日报");
         when(conversationService.getById(CONV_ID)).thenReturn(conversation);
-        when(taskService.save(any(Task.class))).thenAnswer(inv -> {
-            Task t = inv.getArgument(0);
-            t.setId(300L);
-            return true;
+        when(taskService.createFromDraft(any(TaskDraft.class))).thenAnswer(inv -> {
+            TaskDraft d = inv.getArgument(0);
+            return new TaskView(300L, d.title(), d.description(), null, null, null, null, null,
+                    d.status(), null, null, d.context(), null, null, null);
         });
-        when(agentService.listByRole(AgentRole.PLANNER)).thenReturn(List.of(llmPlanner()));
+        when(agentService.listProfilesByRole(AgentRole.PLANNER)).thenReturn(List.of(llmPlanner()));
 
-        Task task = clarifyService.finalize(CONV_ID);
+        TaskView task = clarifyService.finalize(CONV_ID);
 
-        assertThat(task.getId()).isEqualTo(300L);
-        assertThat(task.getTitle()).isEqualTo("搭建日报模块");
-        assertThat(task.getStatus()).isEqualTo(TaskStatus.PENDING);
+        assertThat(task.id()).isEqualTo(300L);
+        assertThat(task.title()).isEqualTo("搭建日报模块");
+        assertThat(task.status()).isEqualTo(TaskStatus.PENDING);
         // 无需求包会话：不初始化 context（行为零变化）
-        assertThat(task.getContext()).isNull();
+        assertThat(task.context()).isNull();
         assertThat(conversation.getTaskId()).isEqualTo(300L);
         assertThat(conversation.getStatus()).isEqualTo(RequirementClarifyService.STATUS_FINALIZED);
         // CAS 推进 + task_id 定点回填各走一次 lambdaUpdate（不再有全字段 updateById）
@@ -820,9 +821,8 @@ class RequirementClarifyServiceTest {
         conversation.setFinalTitle("标题");
         conversation.setTaskId(300L);
         when(conversationService.getById(CONV_ID)).thenReturn(conversation);
-        Task existing = new Task();
-        existing.setId(300L);
-        when(taskService.getById(300L)).thenReturn(existing);
+        when(taskService.getView(300L)).thenReturn(new TaskView(300L, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null));
 
         assertThatThrownBy(() -> clarifyService.finalize(CONV_ID))
                 .isInstanceOf(BizException.class)
@@ -842,19 +842,19 @@ class RequirementClarifyServiceTest {
         pkg.put("scope", List.of("日报生成"));
         conversation.setFinalPackage(pkg);
         when(conversationService.getById(CONV_ID)).thenReturn(conversation);
-        when(taskService.save(any(Task.class))).thenAnswer(inv -> {
-            Task t = inv.getArgument(0);
-            t.setId(300L);
-            return true;
+        when(taskService.createFromDraft(any(TaskDraft.class))).thenAnswer(inv -> {
+            TaskDraft d = inv.getArgument(0);
+            return new TaskView(300L, d.title(), d.description(), null, null, null, null, null,
+                    d.status(), null, null, d.context(), null, null, null);
         });
-        when(agentService.listByRole(AgentRole.PLANNER)).thenReturn(List.of(llmPlanner()));
+        when(agentService.listProfilesByRole(AgentRole.PLANNER)).thenReturn(List.of(llmPlanner()));
 
-        Task task = clarifyService.finalize(CONV_ID);
+        TaskView task = clarifyService.finalize(CONV_ID);
 
         // 需求包原样双写，键名与 runningSpec 键空间隔离（拆解链经 RequirementPackageParser 读取）
-        assertThat(task.getContext())
+        assertThat(task.context())
                 .containsEntry("requirementPackage", pkg);
-        assertThat(task.getContext().get("requirementPackage"))
+        assertThat(task.context().get("requirementPackage"))
                 .isSameAs(pkg);
     }
 
@@ -865,16 +865,16 @@ class RequirementClarifyServiceTest {
         conversation.setFinalTitle("标题");
         conversation.setFinalDescription("描述");
         when(conversationService.getById(CONV_ID)).thenReturn(conversation);
-        when(taskService.save(any(Task.class))).thenAnswer(inv -> {
-            Task t = inv.getArgument(0);
-            t.setId(301L);
-            return true;
+        when(taskService.createFromDraft(any(TaskDraft.class))).thenAnswer(inv -> {
+            TaskDraft d = inv.getArgument(0);
+            return new TaskView(301L, d.title(), d.description(), null, null, null, null, null,
+                    d.status(), null, null, d.context(), null, null, null);
         });
-        when(agentService.listByRole(AgentRole.PLANNER)).thenThrow(new RuntimeException("inbox down"));
+        when(agentService.listProfilesByRole(AgentRole.PLANNER)).thenThrow(new RuntimeException("inbox down"));
 
-        Task task = clarifyService.finalize(CONV_ID);
+        TaskView task = clarifyService.finalize(CONV_ID);
 
-        assertThat(task.getId()).isEqualTo(301L);
+        assertThat(task.id()).isEqualTo(301L);
         assertThat(conversation.getStatus()).isEqualTo(RequirementClarifyService.STATUS_FINALIZED);
     }
 
@@ -891,20 +891,20 @@ class RequirementClarifyServiceTest {
         conversation.setFinalPackage(pkg);
         when(conversationService.getById(CONV_ID)).thenReturn(conversation);
         // 原任务已删除（悬挂软引用）→ 放行重建
-        when(taskService.getById(300L)).thenReturn(null);
-        when(taskService.save(any(Task.class))).thenAnswer(inv -> {
-            Task t = inv.getArgument(0);
-            t.setId(301L);
-            return true;
+        when(taskService.getView(300L)).thenReturn(null);
+        when(taskService.createFromDraft(any(TaskDraft.class))).thenAnswer(inv -> {
+            TaskDraft d = inv.getArgument(0);
+            return new TaskView(301L, d.title(), d.description(), null, null, null, null, null,
+                    d.status(), null, null, d.context(), null, null, null);
         });
-        when(agentService.listByRole(AgentRole.PLANNER)).thenReturn(List.of(llmPlanner()));
+        when(agentService.listProfilesByRole(AgentRole.PLANNER)).thenReturn(List.of(llmPlanner()));
 
-        Task task = clarifyService.regenerate(CONV_ID);
+        TaskView task = clarifyService.regenerate(CONV_ID);
 
-        assertThat(task.getId()).isEqualTo(301L);
+        assertThat(task.id()).isEqualTo(301L);
         assertThat(conversation.getTaskId()).isEqualTo(301L);
         // regenerate 复用会话侧需求包（权威存储于会话），不依赖旧任务
-        assertThat(task.getContext()).containsEntry("requirementPackage", pkg);
+        assertThat(task.context()).containsEntry("requirementPackage", pkg);
     }
 
     @Test
@@ -984,18 +984,18 @@ class RequirementClarifyServiceTest {
         when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
         when(messageService.listByConversation(anyLong()))
                 .thenReturn(List.of(message("user", userContent, 1)));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success(output, "stop", "llm", 100));
     }
 
     /** 建任务 stub：save 回填 id 300L，通知 PLANNER 返回在班 Agent。 */
     private void stubCreateTask() {
-        when(taskService.save(any(Task.class))).thenAnswer(inv -> {
-            Task t = inv.getArgument(0);
-            t.setId(300L);
-            return true;
+        when(taskService.createFromDraft(any(TaskDraft.class))).thenAnswer(inv -> {
+            TaskDraft d = inv.getArgument(0);
+            return new TaskView(300L, d.title(), d.description(), null, null, null, null, null,
+                    d.status(), null, null, d.context(), null, null, null);
         });
-        when(agentService.listByRole(AgentRole.PLANNER)).thenReturn(List.of(llmPlanner()));
+        when(agentService.listProfilesByRole(AgentRole.PLANNER)).thenReturn(List.of(llmPlanner()));
     }
 
     @Test
@@ -1018,7 +1018,7 @@ class RequirementClarifyServiceTest {
         verify(messageService).addMessage(eq(CONV_ID), eq("user"),
                 eq("搭建一个电商后台：用户登录、商品管理、订单管理"), isNull());
         assertThat(conversation.getRoundCount()).isEqualTo(2);
-        verify(taskService).save(any(Task.class));
+        verify(taskService).createFromDraft(any(TaskDraft.class));
         verify(taskTimelineService).recordEvent(
                 eq(300L), isNull(), eq("task_created_from_clarify_direct"),
                 eq(AgentRole.PLANNER), isNull(), anyMap());
@@ -1040,7 +1040,7 @@ class RequirementClarifyServiceTest {
         assertThat(conversation.getMode()).isEqualTo(RequirementClarifyService.MODE_CLARIFY);
         // 追问落库（结构化卡），不触发建任务
         verify(messageService).addMessage(eq(CONV_ID), eq("assistant"), anyString(), any());
-        verify(taskService, never()).save(any(Task.class));
+        verify(taskService, never()).createFromDraft(any(TaskDraft.class));
     }
 
     @Test
@@ -1055,7 +1055,7 @@ class RequirementClarifyServiceTest {
 
         verify(messageService, never()).addMessage(eq(CONV_ID), eq("user"), anyString(), any());
         assertThat(conversation.getRoundCount()).isEqualTo(1);
-        verify(taskService).save(any(Task.class));
+        verify(taskService).createFromDraft(any(TaskDraft.class));
     }
 
     @Test
@@ -1069,7 +1069,7 @@ class RequirementClarifyServiceTest {
 
         clarifyService.sendMessage(CONV_ID, "/task 搭建一个电商后台");
 
-        verify(taskService).save(any(Task.class));
+        verify(taskService).createFromDraft(any(TaskDraft.class));
     }
 
     @Test
@@ -1145,7 +1145,7 @@ class RequirementClarifyServiceTest {
             clarifyService.sendMessage(CONV_ID, "你好");
 
             ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
-            verify(platformAgentExecutionService, times(2)).executeSync(any(Agent.class), taskCaptor.capture());
+            verify(platformAgentExecutionService, times(2)).executeSync(anyLong(), taskCaptor.capture());
             // 第 2 次调用是主回复轮（第 1 次为联合决策轮），取主回复 prompt 断言模板
             assertThat(taskCaptor.getAllValues().get(1).getUserPrompt())
                     .contains("AI 助手")
@@ -1169,7 +1169,7 @@ class RequirementClarifyServiceTest {
             when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
             when(messageService.listByConversation(CONV_ID))
                     .thenReturn(List.of(message("user", "做一个报表", 1)));
-            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+            when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                     .thenReturn(AgentResult.success(
                             "{\"type\":\"question\",\"message\":\"验收标准是什么？\"}", "stop", "llm", 100));
 
@@ -1177,7 +1177,7 @@ class RequirementClarifyServiceTest {
 
             verify(toolExecutor).execute(eq("web_search"), anyString());
             ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
-            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            verify(platformAgentExecutionService).executeSync(anyLong(), taskCaptor.capture());
             assertThat(taskCaptor.getValue().getUserPrompt()).contains("资深需求分析师");
         }
 
@@ -1195,7 +1195,7 @@ class RequirementClarifyServiceTest {
             assertThat(conversation.getPendingClarifyConfirm()).isNull();
             // 正常 CHAT 轮：轮数 +1，主回复 LLM 被调用（决策轮之外第二次调用）
             assertThat(conversation.getRoundCount()).isEqualTo(4);
-            verify(platformAgentExecutionService).executeSync(any(Agent.class),
+            verify(platformAgentExecutionService).executeSync(anyLong(),
                     argThat(task -> task != null
                             && "requirement_chat".equals(task.getContext() == null
                             ? null : task.getContext().get("scene"))));
@@ -1214,7 +1214,7 @@ class RequirementClarifyServiceTest {
             // 意图词不再触发 pendingClarifyConfirm
             assertThat(conversation.getPendingClarifyConfirm()).isNull();
             assertThat(conversation.getRoundCount()).isEqualTo(4);
-            verify(platformAgentExecutionService).executeSync(any(Agent.class),
+            verify(platformAgentExecutionService).executeSync(anyLong(),
                     argThat(task -> task != null
                             && "requirement_chat".equals(task.getContext() == null
                             ? null : task.getContext().get("scene"))));
@@ -1235,7 +1235,7 @@ class RequirementClarifyServiceTest {
             when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
             when(messageService.listByConversation(CONV_ID))
                     .thenReturn(List.of(message("user", "你好", 1)));
-            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+            when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                     .thenReturn(AgentResult.success("你好！", "stop", "llm", 100));
             // 联合决策：AUTO 模式下 LLM 决策 need_search=true，优化词优先（与规则词同词，兼容原断言）
             stubDecisionRound(decisionChatWithSearch("你好"));
@@ -1246,7 +1246,7 @@ class RequirementClarifyServiceTest {
             verify(toolExecutor).execute(eq("web_search"), contains("你好"));
             // 联网资料注入 CHAT 通用助手模板（主回复轮 = 第 2 次 executeSync）
             ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
-            verify(platformAgentExecutionService, times(2)).executeSync(any(Agent.class), taskCaptor.capture());
+            verify(platformAgentExecutionService, times(2)).executeSync(anyLong(), taskCaptor.capture());
             assertThat(taskCaptor.getAllValues().get(1).getUserPrompt())
                     .contains("AI 助手")
                     .contains("OpenMaic 官网");
@@ -1290,7 +1290,7 @@ class RequirementClarifyServiceTest {
             when(messageService.listByConversation(CONV_ID))
                     .thenReturn(List.of(message("user", "帮我查一下最新行情", 1)));
             // 先注册主回复 any stub，再注册决策轮 stub（后注册优先：决策轮命中坏 JSON → 解析失败降级）
-            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+            when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                     .thenReturn(AgentResult.success("最新行情如下：", "stop", "llm", 100));
             stubDecisionRound("\"这不是合法的决策对象\"");
 
@@ -1307,7 +1307,7 @@ class RequirementClarifyServiceTest {
             // AUTO 降级 → 规则搜索兜底（决策不可用不丢搜索机会，词=当前轮消息截断）
             verify(toolExecutor).execute(eq("web_search"), contains("帮我查一下最新行情"));
             // 决策轮 + 主回复轮各一次
-            verify(platformAgentExecutionService, times(2)).executeSync(any(Agent.class), any(AgentTask.class));
+            verify(platformAgentExecutionService, times(2)).executeSync(anyLong(), any(AgentTask.class));
         }
 
         @Test
@@ -1326,7 +1326,7 @@ class RequirementClarifyServiceTest {
             when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
             when(messageService.listByConversation(CONV_ID))
                     .thenReturn(List.of(message("user", "你好", 1)));
-            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+            when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                     .thenReturn(AgentResult.success("最近 AI 编程这么火：", "stop", "llm", 100));
             stubDecisionRound(decisionChatWithSearch("最新 AI 编程动态"));
 
@@ -1357,7 +1357,7 @@ class RequirementClarifyServiceTest {
             when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
             when(messageService.listByConversation(CONV_ID))
                     .thenReturn(List.of(message("user", "你好", 1)));
-            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+            when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                     .thenReturn(AgentResult.success("这是最新行情：", "stop", "llm", 100));
             // ALWAYS_ON 忽略 need_search 的决策结果（false 也搜），仅取 search_query 作优化词
             stubDecisionRound("""
@@ -1392,7 +1392,7 @@ class RequirementClarifyServiceTest {
             when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
             when(messageService.listByConversation(CONV_ID))
                     .thenReturn(List.of(message("user", "你好", 1)));
-            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+            when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                     .thenReturn(AgentResult.success("好的，这是快速上手手册大纲：", "stop", "llm", 100));
             // 联合决策：AUTO 决策 need_search=true，LLM 优化词为剥离 URL 后的语义关键词
             stubDecisionRound(decisionChatWithSearch("快速上手 操作手册"));
@@ -1403,7 +1403,7 @@ class RequirementClarifyServiceTest {
             verify(pageFetchService).fetch("https://open.maic.chat/");
             // 直取正文（第一手资料）注入 CHAT 模板（主回复轮 = 第 2 次 executeSync）
             ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
-            verify(platformAgentExecutionService, times(2)).executeSync(any(Agent.class), taskCaptor.capture());
+            verify(platformAgentExecutionService, times(2)).executeSync(anyLong(), taskCaptor.capture());
             assertThat(taskCaptor.getAllValues().get(1).getUserPrompt()).contains("这里是官网正文内容");
             // 纯文本回复 payload 携带 webSearch + fetched 查验键
             ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
@@ -1439,7 +1439,7 @@ class RequirementClarifyServiceTest {
                     .isInstanceOf(BizException.class)
                     .hasMessageContaining("自由对话轮数已达上限");
             verify(platformAgentExecutionService, never())
-                    .executeSync(any(Agent.class), any(AgentTask.class));
+                    .executeSync(anyLong(), any(AgentTask.class));
             verify(messageService, never()).addMessage(anyLong(), anyString(), anyString(), any());
         }
 
@@ -1465,7 +1465,7 @@ class RequirementClarifyServiceTest {
             when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
             when(messageService.listByConversation(CONV_ID))
                     .thenReturn(List.of(message("user", "帮我把讨论整理成方案", 1)));
-            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+            when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                     .thenReturn(AgentResult.success(
                             "{\"type\":\"question\",\"message\":\"验收标准是什么？\"}", "stop", "llm", 100));
 
@@ -1481,7 +1481,7 @@ class RequirementClarifyServiceTest {
                     userPayloadCaptor.capture());
             assertThat(userPayloadCaptor.getValue()).contains("\"selections\"");
             ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
-            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            verify(platformAgentExecutionService).executeSync(anyLong(), taskCaptor.capture());
             assertThat(taskCaptor.getValue().getUserPrompt()).contains("资深需求分析师");
         }
 
@@ -1495,7 +1495,7 @@ class RequirementClarifyServiceTest {
             when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
             when(messageService.listByConversation(CONV_ID))
                     .thenReturn(List.of(message("user", "帮我把讨论整理成方案", 1)));
-            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+            when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                     .thenReturn(AgentResult.success(
                             "{\"type\":\"question\",\"message\":\"验收标准是什么？\"}", "stop", "llm", 100));
 
@@ -1540,7 +1540,7 @@ class RequirementClarifyServiceTest {
             // 再次意图词不再视为确认（LLM auto 意图路由替代），清标记继续 CHAT
             assertThat(conversation.getPendingClarifyConfirm()).isFalse();
             assertThat(conversation.getMode()).isEqualTo(RequirementClarifyService.MODE_CHAT);
-            verify(platformAgentExecutionService).executeSync(any(Agent.class),
+            verify(platformAgentExecutionService).executeSync(anyLong(),
                     argThat(task -> task != null
                             && "requirement_chat".equals(task.getContext() == null
                             ? null : task.getContext().get("scene"))));
@@ -1565,7 +1565,7 @@ class RequirementClarifyServiceTest {
             assertThat(convCaptor.getValue().getMode()).isEqualTo(RequirementClarifyService.MODE_CHAT);
             // 正常调 LLM（决策轮 + 主回复轮各一次，不再走意图词正则拦截）
             verify(platformAgentExecutionService, times(2))
-                    .executeSync(any(Agent.class), any(AgentTask.class));
+                    .executeSync(anyLong(), any(AgentTask.class));
         }
 
         @Test
@@ -1611,7 +1611,7 @@ class RequirementClarifyServiceTest {
             when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
             when(messageService.listByConversation(CONV_ID))
                     .thenReturn(List.of(message("user", "做一个报表", 1)));
-            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+            when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                     .thenReturn(AgentResult.success(
                             "{\"type\":\"question\",\"message\":\"验收标准是什么？\"}", "stop", "llm", 100));
 
@@ -1621,7 +1621,7 @@ class RequirementClarifyServiceTest {
             assertThat(conversation.getPendingClarifyConfirm()).isFalse();
             verify(messageService).addMessage(CONV_ID, "assistant", "验收标准是什么？", null);
             ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
-            verify(platformAgentExecutionService).executeSync(any(Agent.class), taskCaptor.capture());
+            verify(platformAgentExecutionService).executeSync(anyLong(), taskCaptor.capture());
             assertThat(taskCaptor.getValue().getUserPrompt()).contains("资深需求分析师");
         }
 
@@ -1633,7 +1633,7 @@ class RequirementClarifyServiceTest {
             when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
             when(messageService.listByConversation(CONV_ID))
                     .thenReturn(List.of(message("user", "做一个报表", 1)));
-            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+            when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                     .thenReturn(AgentResult.failure("llm down", "stop", "llm"));
 
             assertThatThrownBy(() -> clarifyService.switchToClarify(CONV_ID))
@@ -1650,7 +1650,7 @@ class RequirementClarifyServiceTest {
             when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
             when(messageService.listByConversation(CONV_ID))
                     .thenReturn(List.of(message("user", "做一个报表", 1)));
-            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+            when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                     .thenReturn(AgentResult.success(
                             "{\"type\":\"question\",\"mode\":\"structured\",\"progress\":40,"
                                     + "\"message\":\"需要确认几个关键点\","
@@ -1683,7 +1683,7 @@ class RequirementClarifyServiceTest {
             when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
             when(messageService.listByConversation(CONV_ID))
                     .thenReturn(List.of(message("user", "做一个报表", 1)));
-            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+            when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                     .thenReturn(AgentResult.success(
                             "{\"type\":\"question\",\"message\":\"验收标准是什么？\"}", "stop", "llm", 100));
 
@@ -1703,7 +1703,7 @@ class RequirementClarifyServiceTest {
                 when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
                 when(messageService.listByConversation(CONV_ID))
                         .thenReturn(List.of(message("user", "做一个报表", 1)));
-                when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+                when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                         .thenReturn(AgentResult.success(
                                 "{\"type\":\"question\",\"message\":\"验收标准是什么？\"}", "stop", "llm", 100));
 
@@ -1717,8 +1717,8 @@ class RequirementClarifyServiceTest {
             verify(messageService, never()).addMessage(eq(CONV_ID), eq("user"),
                     argThat(content -> content != null && content.startsWith("/")), any());
             // 3 条命令各触发一次澄清轮（requirements_clarify 澄清模板），全程零决策轮
-            verify(platformAgentExecutionService, times(3)).executeSync(any(Agent.class), any(AgentTask.class));
-            verify(platformAgentExecutionService, never()).executeSync(any(Agent.class),
+            verify(platformAgentExecutionService, times(3)).executeSync(anyLong(), any(AgentTask.class));
+            verify(platformAgentExecutionService, never()).executeSync(anyLong(),
                     argThat(task -> task != null
                             && DECISION_SCENE.equals(task.getContext() == null
                             ? null : task.getContext().get("scene"))));
@@ -1780,7 +1780,7 @@ class RequirementClarifyServiceTest {
 
             assertThat(conversation.getMode()).isEqualTo(RequirementClarifyService.MODE_CHAT);
             verify(platformAgentExecutionService, never())
-                    .executeSync(any(Agent.class), any(AgentTask.class));
+                    .executeSync(anyLong(), any(AgentTask.class));
         }
 
         @Test
@@ -1825,11 +1825,11 @@ class RequirementClarifyServiceTest {
             // 决策前置：轮数 +1 但不走主回复 LLM（确认卡单条落库即返回）
             assertThat(conversation.getRoundCount()).isEqualTo(4);
             // 决策轮恰一次；主回复轮零调用（intent=clarify 直接返回）
-            verify(platformAgentExecutionService, times(1)).executeSync(any(Agent.class),
+            verify(platformAgentExecutionService, times(1)).executeSync(anyLong(),
                     argThat(task -> task != null
                             && DECISION_SCENE.equals(task.getContext() == null
                             ? null : task.getContext().get("scene"))));
-            verify(platformAgentExecutionService, never()).executeSync(any(Agent.class),
+            verify(platformAgentExecutionService, never()).executeSync(anyLong(),
                     argThat(task -> task != null
                             && "requirement_chat".equals(task.getContext() == null
                             ? null : task.getContext().get("scene"))));
@@ -1911,11 +1911,11 @@ class RequirementClarifyServiceTest {
                 assertThat(conversation.getPendingClarifyConfirm()).as(phrase).isTrue();
             }
             // 5 轮各触发一次决策调用；主回复轮零调用（全部 clarify 直接返回）
-            verify(platformAgentExecutionService, times(5)).executeSync(any(Agent.class),
+            verify(platformAgentExecutionService, times(5)).executeSync(anyLong(),
                     argThat(task -> task != null
                             && DECISION_SCENE.equals(task.getContext() == null
                             ? null : task.getContext().get("scene"))));
-            verify(platformAgentExecutionService, never()).executeSync(any(Agent.class),
+            verify(platformAgentExecutionService, never()).executeSync(anyLong(),
                     argThat(task -> task != null
                             && "requirement_chat".equals(task.getContext() == null
                             ? null : task.getContext().get("scene"))));
@@ -1945,7 +1945,7 @@ class RequirementClarifyServiceTest {
             when(plannerAgentPicker.pick(isNull())).thenReturn(llmPlanner());
             when(messageService.listByConversation(CONV_ID))
                     .thenReturn(List.of(message("user", "新建个计划吧", 1)));
-            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+            when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                     .thenReturn(AgentResult.success(
                             "{\"type\":\"question\",\"message\":\"验收标准是什么？\"}", "stop", "llm", 100));
 
@@ -2045,7 +2045,7 @@ class RequirementClarifyServiceTest {
                     message("user", "你知道openMaic么？你知道这个怎么使用么？", 1),
                     message("user", "帮我整理成方案", 2),
                     message("assistant", "检测到你想把讨论整理成落地方案，是否切换到方案澄清模式？", 3)));
-            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+            when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                     .thenReturn(AgentResult.success(
                             "{\"type\":\"question\",\"message\":\"验收标准是什么？\"}", "stop", "llm", 100));
 
@@ -2075,7 +2075,7 @@ class RequirementClarifyServiceTest {
             // 历史只有纯意图短句，无可检索主题
             when(messageService.listByConversation(CONV_ID)).thenReturn(List.of(
                     message("user", "帮我生成计划", 1)));
-            when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+            when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                     .thenReturn(AgentResult.success(
                             "{\"type\":\"question\",\"message\":\"验收标准是什么？\"}", "stop", "llm", 100));
 
@@ -2394,7 +2394,7 @@ class RequirementClarifyServiceTest {
         when(messageService.listByConversation(CONV_ID))
                 .thenReturn(List.of(message("user", "你好", 1)));
         stubDecisionRound(DECISION_CHAT_NO_SEARCH);
-        when(platformAgentExecutionService.executeStream(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeStream(anyLong(), any(AgentTask.class)))
                 .thenReturn(Flux.just(tokenChunks));
     }
 
@@ -2431,7 +2431,7 @@ class RequirementClarifyServiceTest {
         when(messageService.listByConversation(CONV_ID))
                 .thenReturn(List.of(message("user", "你好", 1)));
         // CLARIFY 模式绕过意图决策，主回复真流式：正文分片 + 末尾 JSON 块（与 prompt 输出格式一致）
-        when(platformAgentExecutionService.executeStream(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeStream(anyLong(), any(AgentTask.class)))
                 .thenReturn(Flux.just("先确认一下：", "目标规模是？",
                         " {\"type\":\"question\",\"mode\":\"freeform\",\"progress\":40,\"message\":\"先确认一下：目标规模是？\"}"));
 
@@ -2460,7 +2460,7 @@ class RequirementClarifyServiceTest {
         when(messageService.listByConversation(CONV_ID))
                 .thenReturn(List.of(message("user", "你好", 1)));
         stubDecisionRound(DECISION_CHAT_NO_SEARCH);
-        when(platformAgentExecutionService.executeStream(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeStream(anyLong(), any(AgentTask.class)))
                 .thenReturn(Flux.error(new RuntimeException("上游 LLM 超时")));
 
         List<RequirementClarifyService.ChatStreamEvent> events =
@@ -2503,7 +2503,7 @@ class RequirementClarifyServiceTest {
         // 确认卡单条落库（applyClarifyDecision），主回复流式通道零调用
         verify(messageService).addMessage(eq(CONV_ID), eq("assistant"), anyString(), anyString());
         verify(platformAgentExecutionService, never())
-                .executeStream(any(Agent.class), any(AgentTask.class));
+                .executeStream(anyLong(), any(AgentTask.class));
     }
 
     @Test
@@ -2517,14 +2517,14 @@ class RequirementClarifyServiceTest {
                 message("user", "需求起点：做一个报表", 1),
                 message("assistant", "追问：范围多大？", 2),
                 message("user", "本期先做核心报表", 3)));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("明白。", "stop", "llm", 100));
         stubDecisionRound(DECISION_CHAT_NO_SEARCH);
 
         clarifyService.sendMessage(CONV_ID, "本期先做核心报表");
 
         ArgumentCaptor<AgentTask> taskCaptor = ArgumentCaptor.forClass(AgentTask.class);
-        verify(platformAgentExecutionService, times(2)).executeSync(any(Agent.class), taskCaptor.capture());
+        verify(platformAgentExecutionService, times(2)).executeSync(anyLong(), taskCaptor.capture());
         String mainPrompt = taskCaptor.getAllValues().get(1).getUserPrompt();
         // Current User Input 层：最新用户消息独立注入（N-012 Context 分层）
         assertThat(mainPrompt).contains("## 当前用户输入").contains("本期先做核心报表");

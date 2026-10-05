@@ -10,8 +10,8 @@ import com.helloai.common.constant.TaskStatus;
 import com.helloai.core.planner.service.PlannerAnalysisService;
 import com.helloai.core.planner.service.PlannerDecomposeAsyncService;
 import com.helloai.core.planner.service.impl.PlannerAnalysisServiceImpl;
-import com.helloai.core.task.entity.SubTask;
-import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.port.SubTaskView;
+import com.helloai.core.task.port.TaskView;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
@@ -80,10 +80,10 @@ class PlannerAnalysisServiceTest {
 
     // lambdaQuery / lambdaUpdate 链式 mock（项目内首例：手动 stub 链式返回自身）
     @SuppressWarnings("unchecked")
-    private final LambdaQueryChainWrapper<SubTask> subTaskQueryChain = mock(LambdaQueryChainWrapper.class);
+    private final LambdaQueryChainWrapper<SubTaskView> subTaskQueryChain = mock(LambdaQueryChainWrapper.class);
 
     @SuppressWarnings("unchecked")
-    private final LambdaUpdateChainWrapper<Task> taskUpdateChain = mock(LambdaUpdateChainWrapper.class);
+    private final LambdaUpdateChainWrapper<TaskView> taskUpdateChain = mock(LambdaUpdateChainWrapper.class);
 
     @BeforeEach
     void setUp() {
@@ -91,45 +91,35 @@ class PlannerAnalysisServiceTest {
                 taskService, subTaskService, plannerDecomposeAsyncService,
                 taskTimelineService, subTaskDispatchService, taskRunningSpecService);
 
-        lenient().when(subTaskService.lambdaQuery()).thenReturn(subTaskQueryChain);
-        lenient().when(subTaskQueryChain.eq(any(), any())).thenReturn(subTaskQueryChain);
-        lenient().when(subTaskQueryChain.ne(any(), any())).thenReturn(subTaskQueryChain);
-        lenient().when(subTaskQueryChain.count()).thenReturn(0L);
+        lenient().when(subTaskService.countByTaskIdExcludingStatus(anyLong(), any())).thenReturn(0L);
+        lenient().when(subTaskService.countByTaskIdAndStatus(anyLong(), any())).thenReturn(0L);
 
-        lenient().when(taskService.lambdaUpdate()).thenReturn(taskUpdateChain);
-        lenient().when(taskUpdateChain.eq(any(), any())).thenReturn(taskUpdateChain);
-        lenient().when(taskUpdateChain.set(any(), any())).thenReturn(taskUpdateChain);
-        lenient().when(taskUpdateChain.update()).thenReturn(true);
-
-        // finishConfirm 新增的 updateById + RunningSpec 初始化
-        lenient().when(taskService.updateById(any(Task.class))).thenReturn(true);
+        // RM5 批 5a：状态推进改走 casStatus / updateStatus（原 lambdaUpdate 链已移除）
+        lenient().when(taskService.casStatus(anyLong(), any(TaskStatus.class), any(TaskStatus.class))).thenReturn(true);
+        lenient().when(taskService.updateStatus(anyLong(), any(TaskStatus.class)))
+                .thenReturn(org.mockito.Mockito.mock(com.helloai.core.task.entity.Task.class));
     }
 
-    private Task pendingTask() {
-        Task task = new Task();
-        task.setId(TASK_ID);
-        task.setTitle("搭建报表模块");
-        task.setDescription("需要一个日报统计模块");
-        task.setStatus(TaskStatus.PENDING);
-        return task;
+    private TaskView taskView(TaskStatus status, Integer slaMinutes) {
+        return new TaskView(TASK_ID, "搭建报表模块", "需要一个日报统计模块", null, null, null, null, null,
+                status, slaMinutes, null, null, null, null, null);
     }
 
-    private Task planningTask() {
-        Task task = pendingTask();
-        task.setStatus(TaskStatus.PLANNING);
-        return task;
+    private TaskView pendingTask() {
+        return taskView(TaskStatus.PENDING, null);
     }
 
-    private SubTask draft(long id) {
-        SubTask subTask = new SubTask();
-        subTask.setId(id);
-        subTask.setTaskId(TASK_ID);
-        subTask.setStatus(SubTaskStatus.PENDING_PLAN_REVIEW);
-        return subTask;
+    private TaskView planningTask() {
+        return taskView(TaskStatus.PLANNING, null);
     }
 
-    private Page<SubTask> pageOf(List<SubTask> records) {
-        Page<SubTask> page = new Page<>();
+    private SubTaskView draft(long id) {
+        return new SubTaskView(id, TASK_ID, SubTaskStatus.PENDING_PLAN_REVIEW, null, null,
+                null, null, null, null, null, null, List.of());
+    }
+
+    private Page<SubTaskView> pageOf(List<SubTaskView> records) {
+        Page<SubTaskView> page = new Page<>();
         page.setRecords(records);
         return page;
     }
@@ -141,13 +131,13 @@ class PlannerAnalysisServiceTest {
     @Test
     @DisplayName("正常拆解：校验 + CAS 推进 PLANNING 后提交异步执行，立即返回空列表")
     void shouldSubmitAsyncAndReturnEmpty() {
-        when(taskService.getById(TASK_ID)).thenReturn(pendingTask());
+        when(taskService.getView(TASK_ID)).thenReturn(pendingTask());
 
-        List<SubTask> drafts = plannerAnalysisService.decompose(TASK_ID);
+        List<SubTaskView> drafts = plannerAnalysisService.decompose(TASK_ID);
 
         assertThat(drafts).isEmpty();
         // CAS 推进 PLANNING
-        verify(taskUpdateChain).update();
+        verify(taskService).casStatus(TASK_ID, TaskStatus.PENDING, TaskStatus.PLANNING);
         // 记录异步提交 timeline
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_plan_async_submitted"),
@@ -159,7 +149,7 @@ class PlannerAnalysisServiceTest {
     @Test
     @DisplayName("线程池拒绝：回退 PENDING 并抛『排队已满』业务异常")
     void shouldRollbackWhenExecutorRejects() {
-        when(taskService.getById(TASK_ID)).thenReturn(pendingTask());
+        when(taskService.getView(TASK_ID)).thenReturn(pendingTask());
         doThrow(new TaskRejectedException("队列已满"))
                 .when(plannerDecomposeAsyncService).executeDecompose(TASK_ID);
 
@@ -168,7 +158,7 @@ class PlannerAnalysisServiceTest {
                 .hasMessageContaining("排队已满");
 
         // CAS 推进 + 拒绝回退各走一次 lambdaUpdate
-        verify(taskService, times(2)).lambdaUpdate();
+        verify(taskService, times(2)).casStatus(anyLong(), any(TaskStatus.class), any(TaskStatus.class));
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -178,27 +168,26 @@ class PlannerAnalysisServiceTest {
     @Test
     @DisplayName("非 PENDING 任务拒绝拆解")
     void shouldRejectDecomposeWhenTaskNotPending() {
-        Task task = pendingTask();
-        task.setStatus(TaskStatus.IN_PROGRESS);
-        when(taskService.getById(TASK_ID)).thenReturn(task);
+        TaskView task = taskView(TaskStatus.IN_PROGRESS, null);
+        when(taskService.getView(TASK_ID)).thenReturn(task);
 
         assertThatThrownBy(() -> plannerAnalysisService.decompose(TASK_ID))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("只有 PENDING");
-        verify(taskService, never()).lambdaUpdate();
+        verify(taskService, never()).casStatus(anyLong(), any(TaskStatus.class), any(TaskStatus.class));
         verify(plannerDecomposeAsyncService, never()).executeDecompose(anyLong());
     }
 
     @Test
     @DisplayName("已存在非 CANCELLED 子任务时拒绝重复拆解")
     void shouldRejectDecomposeWhenSubTasksAlreadyExist() {
-        when(taskService.getById(TASK_ID)).thenReturn(pendingTask());
-        when(subTaskQueryChain.count()).thenReturn(3L);
+        when(taskService.getView(TASK_ID)).thenReturn(pendingTask());
+        when(subTaskService.countByTaskIdExcludingStatus(anyLong(), any())).thenReturn(3L);
 
         assertThatThrownBy(() -> plannerAnalysisService.decompose(TASK_ID))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("不允许重复拆解");
-        verify(taskService, never()).lambdaUpdate();
+        verify(taskService, never()).casStatus(anyLong(), any(TaskStatus.class), any(TaskStatus.class));
         // §6.100: 有非 CANCELLED 残留时不得触碰物理删除
         verify(subTaskService, never()).physicalDeleteByTaskId(anyLong());
     }
@@ -206,11 +195,12 @@ class PlannerAnalysisServiceTest {
     @Test
     @DisplayName("§6.100: 仅残留 CANCELLED 旧草案时，拆解前物理删除再提交异步")
     void shouldPhysicallyDeleteCancelledDraftsBeforeRedecompose() {
-        when(taskService.getById(TASK_ID)).thenReturn(pendingTask());
+        when(taskService.getView(TASK_ID)).thenReturn(pendingTask());
         // 第一次 count（非 CANCELLED）= 0，第二次 count（CANCELLED）= 2，按调用顺序 stub
-        when(subTaskQueryChain.count()).thenReturn(0L, 2L);
+        when(subTaskService.countByTaskIdExcludingStatus(anyLong(), any())).thenReturn(0L);
+        when(subTaskService.countByTaskIdAndStatus(anyLong(), any())).thenReturn(2L);
 
-        List<SubTask> drafts = plannerAnalysisService.decompose(TASK_ID);
+        List<SubTaskView> drafts = plannerAnalysisService.decompose(TASK_ID);
 
         // 物理删除发生在提交异步前，同步守卫正常返回空列表
         verify(subTaskService).physicalDeleteByTaskId(TASK_ID);
@@ -221,9 +211,9 @@ class PlannerAnalysisServiceTest {
     @Test
     @DisplayName("§6.100: 无 CANCELLED 残留时不触发物理删除（正常首次拆解不受影响）")
     void shouldNotDeleteWhenNoCancelledDrafts() {
-        when(taskService.getById(TASK_ID)).thenReturn(pendingTask());
+        when(taskService.getView(TASK_ID)).thenReturn(pendingTask());
 
-        List<SubTask> drafts = plannerAnalysisService.decompose(TASK_ID);
+        List<SubTaskView> drafts = plannerAnalysisService.decompose(TASK_ID);
 
         assertThat(drafts).isEmpty();
         verify(subTaskService, never()).physicalDeleteByTaskId(anyLong());
@@ -233,8 +223,8 @@ class PlannerAnalysisServiceTest {
     @Test
     @DisplayName("CAS 失败（并发拆解中）时拒绝，不提交异步")
     void shouldRejectWhenCasLost() {
-        when(taskService.getById(TASK_ID)).thenReturn(pendingTask());
-        when(taskUpdateChain.update()).thenReturn(false);
+        when(taskService.getView(TASK_ID)).thenReturn(pendingTask());
+        when(taskService.casStatus(anyLong(), any(TaskStatus.class), any(TaskStatus.class))).thenReturn(false);
 
         assertThatThrownBy(() -> plannerAnalysisService.decompose(TASK_ID))
                 .isInstanceOf(BizException.class)
@@ -249,20 +239,19 @@ class PlannerAnalysisServiceTest {
     @Test
     @DisplayName("confirm：草案批量转正 PENDING，Task → IN_PROGRESS，无条件逐条分发")
     void shouldConfirmDraftsAndDispatch() {
-        Task task = planningTask();
-        when(taskService.getById(TASK_ID)).thenReturn(task);
-        List<SubTask> drafts = List.of(draft(1L), draft(2L));
-        when(subTaskService.list(TASK_ID, SubTaskStatus.PENDING_PLAN_REVIEW, null, null, 0))
-                .thenReturn(pageOf(drafts));
-        when(subTaskService.getById(anyLong())).thenAnswer(inv -> draft(inv.getArgument(0)));
+        TaskView task = planningTask();
+        when(taskService.getView(TASK_ID)).thenReturn(task);
+        List<SubTaskView> drafts = List.of(draft(1L), draft(2L));
+        when(subTaskService.listViewsByTaskIdAndStatus(TASK_ID, SubTaskStatus.PENDING_PLAN_REVIEW))
+                .thenReturn(drafts);
+        when(subTaskService.getView(anyLong())).thenAnswer(inv -> draft(inv.getArgument(0)));
 
-        List<SubTask> confirmed = plannerAnalysisService.confirmPlan(TASK_ID);
+        List<SubTaskView> confirmed = plannerAnalysisService.confirmPlan(TASK_ID);
 
         assertThat(confirmed).hasSize(2);
         verify(subTaskService).changeStatus(eq(1L), eq(SubTaskStatus.PENDING), isNull(), anyMap());
         verify(subTaskService).changeStatus(eq(2L), eq(SubTaskStatus.PENDING), isNull(), anyMap());
-        assertThat(task.getStatus()).isEqualTo(TaskStatus.IN_PROGRESS);
-        verify(taskService).updateById(task);
+        verify(taskService).updateStatus(TASK_ID, TaskStatus.IN_PROGRESS);
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_plan_confirmed"),
                 eq(AgentRole.PLANNER), isNull(), anyMap());
@@ -273,15 +262,15 @@ class PlannerAnalysisServiceTest {
     @Test
     @DisplayName("confirm：单条分发失败不阻断确认与其余分发")
     void shouldConfirmEvenWhenDispatchFails() {
-        when(taskService.getById(TASK_ID)).thenReturn(planningTask());
-        List<SubTask> drafts = List.of(draft(1L), draft(2L));
-        when(subTaskService.list(TASK_ID, SubTaskStatus.PENDING_PLAN_REVIEW, null, null, 0))
-                .thenReturn(pageOf(drafts));
-        when(subTaskService.getById(anyLong())).thenAnswer(inv -> draft(inv.getArgument(0)));
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        List<SubTaskView> drafts = List.of(draft(1L), draft(2L));
+        when(subTaskService.listViewsByTaskIdAndStatus(TASK_ID, SubTaskStatus.PENDING_PLAN_REVIEW))
+                .thenReturn(drafts);
+        when(subTaskService.getView(anyLong())).thenAnswer(inv -> draft(inv.getArgument(0)));
         doThrow(new BizException("无可用 Agent"))
                 .when(subTaskDispatchService).dispatchPendingSubTaskAuto(1L, AgentRole.EXECUTOR);
 
-        List<SubTask> confirmed = plannerAnalysisService.confirmPlan(TASK_ID);
+        List<SubTaskView> confirmed = plannerAnalysisService.confirmPlan(TASK_ID);
 
         assertThat(confirmed).hasSize(2);
         verify(subTaskDispatchService).dispatchPendingSubTaskAuto(2L, AgentRole.EXECUTOR);
@@ -290,13 +279,12 @@ class PlannerAnalysisServiceTest {
     @Test
     @DisplayName("confirm：任务带 SLA 时按 确认时刻+slaMinutes 下发子任务 deadline，先持久化再转正")
     void shouldAssignDeadlineFromTaskSlaWhenConfirming() {
-        Task task = planningTask();
-        task.setSlaMinutes(60);
-        when(taskService.getById(TASK_ID)).thenReturn(task);
-        List<SubTask> drafts = List.of(draft(1L), draft(2L));
-        when(subTaskService.list(TASK_ID, SubTaskStatus.PENDING_PLAN_REVIEW, null, null, 0))
-                .thenReturn(pageOf(drafts));
-        when(subTaskService.getById(anyLong())).thenAnswer(inv -> draft(inv.getArgument(0)));
+        TaskView task = taskView(TaskStatus.PLANNING, 60);
+        when(taskService.getView(TASK_ID)).thenReturn(task);
+        List<SubTaskView> drafts = List.of(draft(1L), draft(2L));
+        when(subTaskService.listViewsByTaskIdAndStatus(TASK_ID, SubTaskStatus.PENDING_PLAN_REVIEW))
+                .thenReturn(drafts);
+        when(subTaskService.getView(anyLong())).thenAnswer(inv -> draft(inv.getArgument(0)));
 
         OffsetDateTime before = OffsetDateTime.now();
         plannerAnalysisService.confirmPlan(TASK_ID);
@@ -304,12 +292,12 @@ class PlannerAnalysisServiceTest {
 
         // deadline 必须在 changeStatus 前落库（changeStatus 内部重查库后全字段更新，
         // 未落库的 deadline 会被覆盖丢失），取值区间 [now, now+60min]，序列化 ISO8601 带时区偏移
-        ArgumentCaptor<SubTask> captor = ArgumentCaptor.forClass(SubTask.class);
-        verify(subTaskService, times(2)).updateById(captor.capture());
-        assertThat(captor.getAllValues()).allSatisfy(st -> {
-            assertThat(st.getDeadline()).isNotNull();
-            assertThat(st.getDeadline()).isBetween(before.plusMinutes(59), after.plusMinutes(60));
-            assertThat(st.getDeadline().toString()).matches(".*(Z|[+-]\\d{2}:\\d{2})$");
+        ArgumentCaptor<OffsetDateTime> captor = ArgumentCaptor.forClass(OffsetDateTime.class);
+        verify(subTaskService, times(2)).updateDeadline(anyLong(), captor.capture());
+        assertThat(captor.getAllValues()).allSatisfy(dl -> {
+            assertThat(dl).isNotNull();
+            assertThat(dl).isBetween(before.plusMinutes(59), after.plusMinutes(60));
+            assertThat(dl.toString()).matches(".*(Z|[+-]\\d{2}:\\d{2})$");
         });
         // 转正仍逐条执行，与 deadline 下发互不干扰
         verify(subTaskService).changeStatus(eq(1L), eq(SubTaskStatus.PENDING), isNull(), anyMap());
@@ -319,17 +307,17 @@ class PlannerAnalysisServiceTest {
     @Test
     @DisplayName("confirm：非 PLANNING 状态或无草案时拒绝")
     void shouldRejectConfirmOnIllegalState() {
-        when(taskService.getById(TASK_ID)).thenReturn(pendingTask());
+        when(taskService.getView(TASK_ID)).thenReturn(pendingTask());
         assertThatThrownBy(() -> plannerAnalysisService.confirmPlan(TASK_ID))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("只有 PLANNING");
 
-        when(taskService.getById(TASK_ID)).thenReturn(planningTask());
-        when(subTaskService.list(TASK_ID, SubTaskStatus.PENDING_PLAN_REVIEW, null, null, 0))
-                .thenReturn(pageOf(List.of()));
+        when(taskService.getView(TASK_ID)).thenReturn(planningTask());
+        when(subTaskService.listViewsByTaskIdAndStatus(TASK_ID, SubTaskStatus.PENDING_PLAN_REVIEW))
+                .thenReturn(List.of());
         // recoverAlreadyConfirmed 会查 PENDING 子任务，未 stub 则返回 null 导致 NPE
-        when(subTaskService.list(TASK_ID, SubTaskStatus.PENDING, null, null, 0))
-                .thenReturn(pageOf(List.of()));
+        when(subTaskService.listViewsByTaskIdAndStatus(TASK_ID, SubTaskStatus.PENDING))
+                .thenReturn(List.of());
         assertThatThrownBy(() -> plannerAnalysisService.confirmPlan(TASK_ID))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("没有待确认的规划草案");
@@ -338,18 +326,17 @@ class PlannerAnalysisServiceTest {
     @Test
     @DisplayName("reject：草案全部翻 CANCELLED，Task 回退 PENDING")
     void shouldRejectDraftsAndRollbackTask() {
-        Task task = planningTask();
-        when(taskService.getById(TASK_ID)).thenReturn(task);
-        when(subTaskService.list(TASK_ID, SubTaskStatus.PENDING_PLAN_REVIEW, null, null, 0))
-                .thenReturn(pageOf(List.of(draft(1L), draft(2L), draft(3L))));
+        TaskView task = planningTask();
+        when(taskService.getView(TASK_ID)).thenReturn(task);
+        when(subTaskService.listViewsByTaskIdAndStatus(TASK_ID, SubTaskStatus.PENDING_PLAN_REVIEW))
+                .thenReturn(List.of(draft(1L), draft(2L), draft(3L)));
 
         int cancelled = plannerAnalysisService.rejectPlan(TASK_ID);
 
         assertThat(cancelled).isEqualTo(3);
         verify(subTaskService).changeStatus(eq(1L), eq(SubTaskStatus.CANCELLED), isNull(), anyMap());
         verify(subTaskService).changeStatus(eq(3L), eq(SubTaskStatus.CANCELLED), isNull(), anyMap());
-        assertThat(task.getStatus()).isEqualTo(TaskStatus.PENDING);
-        verify(taskService).updateById(task);
+        verify(taskService).updateStatus(TASK_ID, TaskStatus.PENDING);
         verify(taskTimelineService).recordEvent(
                 eq(TASK_ID), isNull(), eq("task_plan_rejected"),
                 eq(AgentRole.PLANNER), isNull(), anyMap());
@@ -358,9 +345,8 @@ class PlannerAnalysisServiceTest {
     @Test
     @DisplayName("reject：非 PLANNING 状态拒绝")
     void shouldRejectRejectPlanOnIllegalState() {
-        Task task = pendingTask();
-        task.setStatus(TaskStatus.DONE);
-        when(taskService.getById(TASK_ID)).thenReturn(task);
+        TaskView task = taskView(TaskStatus.DONE, null);
+        when(taskService.getView(TASK_ID)).thenReturn(task);
 
         assertThatThrownBy(() -> plannerAnalysisService.rejectPlan(TASK_ID))
                 .isInstanceOf(BizException.class)

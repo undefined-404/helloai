@@ -21,7 +21,21 @@ public final class AgentProviderResolver {
      * @return provider 名称，不会为 null
      */
     public static String resolveProvider(Agent agent, String fallback) {
-        String modelType = agent.getModelType();
+        return resolveProvider(agent.getModelType(), fallback);
+    }
+
+    /**
+     * 从 {@code modelType} 原文解析 provider 名称（RM5 批 2：供只读快照消费方复用）。
+     *
+     * <p>与 {@link #resolveProvider(Agent, String)} 解析口径<b>逐字一致</b>，
+     * 仅把入参从实体收窄为 {@code modelType} 字符串，使持有 {@code AgentProfileSnapshot}
+     * 的调用方无需取实体即可解析 provider。</p>
+     *
+     * @param modelType 形如 {@code provider:model}；null/blank 时返回 fallback
+     * @param fallback  当 modelType 为空时的默认值
+     * @return provider 名称，不会为 null
+     */
+    public static String resolveProvider(String modelType, String fallback) {
         if (modelType == null || modelType.isBlank()) {
             return fallback;
         }

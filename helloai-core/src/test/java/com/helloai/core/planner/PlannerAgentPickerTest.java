@@ -8,13 +8,14 @@ import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.agent.AgentLlmCredentialResolver;
-import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
 import com.helloai.core.planner.service.RequirementConversationService;
-import com.helloai.core.task.entity.Task;
+import com.helloai.common.constant.TaskStatus;
+import com.helloai.core.task.port.TaskView;
 import com.helloai.core.task.policy.TaskAgentPolicy;
 import com.helloai.core.task.service.TaskService;
 import org.junit.jupiter.api.BeforeEach;
@@ -43,6 +44,8 @@ import static org.mockito.Mockito.when;
  * pinned 有效直用 / 失效回退自动 / 自动选择优先空闲（等权重）/
  * 无候选报错 / validateSelectable 拒外部与禁用 / pickForTask 反查会话 /
  * listOptions 组成（平台内可选 + 在班外部置灰）。
+ *
+ * <p>RM5 批 2：选型器改返回 {@link AgentProfileSnapshot}，断言改 record accessor。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("PlannerAgentPicker")
@@ -72,29 +75,31 @@ class PlannerAgentPickerTest {
         picker = new PlannerAgentPicker(agentService, conversationService,
                 agentDutyLeaseService, agentLlmCredentialResolver, taskService);
         // 默认：全部凭证可用（单测按需覆盖）
-        lenient().when(agentLlmCredentialResolver.hasUsableCredential(any())).thenReturn(true);
+        lenient().when(agentLlmCredentialResolver.hasUsableCredential(any(AgentProfileSnapshot.class)))
+                .thenReturn(true);
     }
 
-    private Agent llmPlanner(long id) {
-        Agent agent = new Agent();
-        agent.setId(id);
-        agent.setName("planner-" + id);
-        agent.setRole(AgentRole.PLANNER);
-        agent.setAccessType(AgentAccessType.API_KEY_LLM);
-        agent.setStatus(AgentStatus.ACTIVE);
-        agent.setOnlineStatus(AgentOnlineStatus.IDLE);
-        return agent;
+    private static AgentProfileSnapshot snapshot(long id, String name, AgentRole role,
+                                                 AgentAccessType accessType, AgentStatus status,
+                                                 AgentOnlineStatus onlineStatus) {
+        return AgentProfileSnapshot.builder()
+                .id(id)
+                .name(name)
+                .role(role)
+                .accessType(accessType)
+                .status(status)
+                .onlineStatus(onlineStatus)
+                .build();
     }
 
-    private Agent cliAgent(long id) {
-        Agent agent = new Agent();
-        agent.setId(id);
-        agent.setName("cli-" + id);
-        agent.setRole(AgentRole.EXECUTOR);
-        agent.setAccessType(AgentAccessType.CLI_CLIENT);
-        agent.setStatus(AgentStatus.ACTIVE);
-        agent.setOnlineStatus(AgentOnlineStatus.ONLINE);
-        return agent;
+    private static AgentProfileSnapshot llmPlanner(long id) {
+        return snapshot(id, "planner-" + id, AgentRole.PLANNER,
+                AgentAccessType.API_KEY_LLM, AgentStatus.ACTIVE, AgentOnlineStatus.IDLE);
+    }
+
+    private static AgentProfileSnapshot cliAgent(long id) {
+        return snapshot(id, "cli-" + id, AgentRole.EXECUTOR,
+                AgentAccessType.CLI_CLIENT, AgentStatus.ACTIVE, AgentOnlineStatus.ONLINE);
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -104,35 +109,35 @@ class PlannerAgentPickerTest {
     @Test
     @DisplayName("pinned 有效时直接使用，不走自动选择")
     void shouldUsePinnedAgentWhenUsable() {
-        Agent pinned = llmPlanner(9L);
-        when(agentService.getById(9L)).thenReturn(pinned);
+        AgentProfileSnapshot pinned = llmPlanner(9L);
+        when(agentService.getProfileById(9L)).thenReturn(pinned);
 
-        Agent picked = picker.pick(9L);
+        AgentProfileSnapshot picked = picker.pick(9L);
 
         assertThat(picked).isSameAs(pinned);
-        verify(agentService, never()).listByRole(any());
+        verify(agentService, never()).listProfilesByRole(any());
     }
 
     @Test
     @DisplayName("pinned 已禁用时回退自动选择")
     void shouldFallbackToAutoWhenPinnedDisabled() {
-        Agent pinned = llmPlanner(9L);
-        pinned.setStatus(AgentStatus.DISABLED);
-        when(agentService.getById(9L)).thenReturn(pinned);
-        Agent auto = llmPlanner(10L);
-        when(agentService.listByRole(AgentRole.PLANNER)).thenReturn(List.of(auto));
+        AgentProfileSnapshot pinned = snapshot(9L, "planner-9", AgentRole.PLANNER,
+                AgentAccessType.API_KEY_LLM, AgentStatus.DISABLED, AgentOnlineStatus.IDLE);
+        when(agentService.getProfileById(9L)).thenReturn(pinned);
+        AgentProfileSnapshot auto = llmPlanner(10L);
+        when(agentService.listProfilesByRole(AgentRole.PLANNER)).thenReturn(List.of(auto));
 
-        assertThat(picker.pick(9L).getId()).isEqualTo(10L);
+        assertThat(picker.pick(9L).id()).isEqualTo(10L);
     }
 
     @Test
-    @DisplayName("pinned 已被删除（getById 为 null）时回退自动选择")
+    @DisplayName("pinned 已被删除（getProfileById 为 null）时回退自动选择")
     void shouldFallbackToAutoWhenPinnedMissing() {
-        when(agentService.getById(9L)).thenReturn(null);
-        Agent auto = llmPlanner(10L);
-        when(agentService.listByRole(AgentRole.PLANNER)).thenReturn(List.of(auto));
+        when(agentService.getProfileById(9L)).thenReturn(null);
+        AgentProfileSnapshot auto = llmPlanner(10L);
+        when(agentService.listProfilesByRole(AgentRole.PLANNER)).thenReturn(List.of(auto));
 
-        assertThat(picker.pick(9L).getId()).isEqualTo(10L);
+        assertThat(picker.pick(9L).id()).isEqualTo(10L);
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -142,36 +147,36 @@ class PlannerAgentPickerTest {
     @Test
     @DisplayName("自动选择：等权重，in-progress 子任务最少者优先")
     void shouldPickIdlestCandidate() {
-        Agent busy = llmPlanner(1L);
-        Agent idle = llmPlanner(2L);
-        when(agentService.listByRole(AgentRole.PLANNER)).thenReturn(List.of(busy, idle));
+        AgentProfileSnapshot busy = llmPlanner(1L);
+        AgentProfileSnapshot idle = llmPlanner(2L);
+        when(agentService.listProfilesByRole(AgentRole.PLANNER)).thenReturn(List.of(busy, idle));
         when(agentService.inProgressCount(1L)).thenReturn(3);
         when(agentService.inProgressCount(2L)).thenReturn(0);
 
-        assertThat(picker.pick(null).getId()).isEqualTo(2L);
+        assertThat(picker.pick(null).id()).isEqualTo(2L);
     }
 
     @Test
     @DisplayName("自动选择：过滤 SLEEPING、非 API_KEY_LLM、无凭证候选")
     void shouldFilterOutIneligibleCandidates() {
-        Agent sleeping = llmPlanner(1L);
-        sleeping.setOnlineStatus(AgentOnlineStatus.SLEEPING);
-        Agent external = cliAgent(2L);
-        external.setRole(AgentRole.PLANNER);
-        Agent noCredential = llmPlanner(3L);
-        Agent eligible = llmPlanner(4L);
-        when(agentService.listByRole(AgentRole.PLANNER))
+        AgentProfileSnapshot sleeping = snapshot(1L, "planner-1", AgentRole.PLANNER,
+                AgentAccessType.API_KEY_LLM, AgentStatus.ACTIVE, AgentOnlineStatus.SLEEPING);
+        AgentProfileSnapshot external = snapshot(2L, "cli-2", AgentRole.PLANNER,
+                AgentAccessType.CLI_CLIENT, AgentStatus.ACTIVE, AgentOnlineStatus.ONLINE);
+        AgentProfileSnapshot noCredential = llmPlanner(3L);
+        AgentProfileSnapshot eligible = llmPlanner(4L);
+        when(agentService.listProfilesByRole(AgentRole.PLANNER))
                 .thenReturn(List.of(sleeping, external, noCredential, eligible));
         when(agentLlmCredentialResolver.hasUsableCredential(noCredential)).thenReturn(false);
         when(agentLlmCredentialResolver.hasUsableCredential(eligible)).thenReturn(true);
 
-        assertThat(picker.pick(null).getId()).isEqualTo(4L);
+        assertThat(picker.pick(null).id()).isEqualTo(4L);
     }
 
     @Test
     @DisplayName("自动选择：无可用候选时抛 BizException 并附操作指引")
     void shouldThrowWhenNoCandidate() {
-        when(agentService.listByRole(AgentRole.PLANNER)).thenReturn(List.of());
+        when(agentService.listProfilesByRole(AgentRole.PLANNER)).thenReturn(List.of());
 
         assertThatThrownBy(() -> picker.pick(null))
                 .isInstanceOf(BizException.class)
@@ -200,33 +205,33 @@ class PlannerAgentPickerTest {
         RequirementConversation conversation = new RequirementConversation();
         conversation.setPlannerAgentId(9L);
         stubConversationQuery(conversation);
-        Agent pinned = llmPlanner(9L);
-        when(agentService.getById(9L)).thenReturn(pinned);
+        AgentProfileSnapshot pinned = llmPlanner(9L);
+        when(agentService.getProfileById(9L)).thenReturn(pinned);
 
-        assertThat(picker.pickForTask(TASK_ID)).isSameAs(pinned);
+        assertThat(picker.pickForTask(TASK_ID).id()).isEqualTo(pinned.id());
     }
 
     @Test
     @DisplayName("pickForTask：无钉住会话时走自动选择")
     void shouldAutoPickWhenNoPinnedConversation() {
         stubConversationQuery(null);
-        Agent auto = llmPlanner(10L);
-        when(agentService.listByRole(AgentRole.PLANNER)).thenReturn(List.of(auto));
+        AgentProfileSnapshot auto = llmPlanner(10L);
+        when(agentService.listProfilesByRole(AgentRole.PLANNER)).thenReturn(List.of(auto));
 
-        assertThat(picker.pickForTask(TASK_ID).getId()).isEqualTo(10L);
+        assertThat(picker.pickForTask(TASK_ID).id()).isEqualTo(10L);
     }
 
     @Test
     @DisplayName("pickForTask：任务级 agent_policy.plannerAgentId 优先于会话钉住")
     void shouldPreferPolicyPlannerOverConversationPinned() {
-        Task task = new Task();
-        task.setId(TASK_ID);
-        task.setAgentPolicy(TaskAgentPolicy.build(9L, null, null, null, null));
-        when(taskService.getById(TASK_ID)).thenReturn(task);
-        Agent policyPlanner = llmPlanner(9L);
-        when(agentService.getById(9L)).thenReturn(policyPlanner);
+        TaskView task = new TaskView(TASK_ID, null, null, null, null, null, null,
+                TaskAgentPolicy.build(9L, null, null, null, null), TaskStatus.PLANNING, null, null,
+                null, null, null, null);
+        when(taskService.getView(TASK_ID)).thenReturn(task);
+        AgentProfileSnapshot policyPlanner = llmPlanner(9L);
+        when(agentService.getProfileById(9L)).thenReturn(policyPlanner);
 
-        assertThat(picker.pickForTask(TASK_ID)).isSameAs(policyPlanner);
+        assertThat(picker.pickForTask(TASK_ID).id()).isEqualTo(policyPlanner.id());
         // 会话即使钉住其他 Planner 也不应被查询——policy 指定优先
         verify(conversationService, never()).lambdaQuery();
     }
@@ -234,17 +239,17 @@ class PlannerAgentPickerTest {
     @Test
     @DisplayName("pickForTask：policy 指定 Planner 失效（禁用）时回退自动选择")
     void shouldFallbackToAutoWhenPolicyPlannerDisabled() {
-        Task task = new Task();
-        task.setId(TASK_ID);
-        task.setAgentPolicy(TaskAgentPolicy.build(9L, null, null, null, null));
-        when(taskService.getById(TASK_ID)).thenReturn(task);
-        Agent disabled = llmPlanner(9L);
-        disabled.setStatus(AgentStatus.DISABLED);
-        when(agentService.getById(9L)).thenReturn(disabled);
-        Agent auto = llmPlanner(10L);
-        when(agentService.listByRole(AgentRole.PLANNER)).thenReturn(List.of(auto));
+        TaskView task = new TaskView(TASK_ID, null, null, null, null, null, null,
+                TaskAgentPolicy.build(9L, null, null, null, null), TaskStatus.PLANNING, null, null,
+                null, null, null, null);
+        when(taskService.getView(TASK_ID)).thenReturn(task);
+        AgentProfileSnapshot disabled = snapshot(9L, "planner-9", AgentRole.PLANNER,
+                AgentAccessType.API_KEY_LLM, AgentStatus.DISABLED, AgentOnlineStatus.IDLE);
+        when(agentService.getProfileById(9L)).thenReturn(disabled);
+        AgentProfileSnapshot auto = llmPlanner(10L);
+        when(agentService.listProfilesByRole(AgentRole.PLANNER)).thenReturn(List.of(auto));
 
-        assertThat(picker.pickForTask(TASK_ID)).isSameAs(auto);
+        assertThat(picker.pickForTask(TASK_ID).id()).isEqualTo(auto.id());
         verify(conversationService, never()).lambdaQuery();
     }
 
@@ -255,9 +260,9 @@ class PlannerAgentPickerTest {
     @Test
     @DisplayName("validateSelectable：外部 Agent 拒绝（暂不支持对话澄清）")
     void shouldRejectExternalAgent() {
-        Agent external = cliAgent(8L);
-        external.setRole(AgentRole.PLANNER);
-        when(agentService.getById(8L)).thenReturn(external);
+        AgentProfileSnapshot external = snapshot(8L, "cli-8", AgentRole.PLANNER,
+                AgentAccessType.CLI_CLIENT, AgentStatus.ACTIVE, AgentOnlineStatus.ONLINE);
+        when(agentService.getProfileById(8L)).thenReturn(external);
 
         assertThatThrownBy(() -> picker.validateSelectable(8L))
                 .isInstanceOf(BizException.class)
@@ -267,21 +272,21 @@ class PlannerAgentPickerTest {
     @Test
     @DisplayName("validateSelectable：非 PLANNER 角色 / 禁用 / 不存在均拒绝")
     void shouldRejectNonPlannerOrDisabledOrMissing() {
-        Agent executor = llmPlanner(7L);
-        executor.setRole(AgentRole.EXECUTOR);
-        when(agentService.getById(7L)).thenReturn(executor);
+        AgentProfileSnapshot executor = snapshot(7L, "planner-7", AgentRole.EXECUTOR,
+                AgentAccessType.API_KEY_LLM, AgentStatus.ACTIVE, AgentOnlineStatus.IDLE);
+        when(agentService.getProfileById(7L)).thenReturn(executor);
         assertThatThrownBy(() -> picker.validateSelectable(7L))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("不是 PLANNER 角色");
 
-        Agent disabled = llmPlanner(6L);
-        disabled.setStatus(AgentStatus.DISABLED);
-        when(agentService.getById(6L)).thenReturn(disabled);
+        AgentProfileSnapshot disabled = snapshot(6L, "planner-6", AgentRole.PLANNER,
+                AgentAccessType.API_KEY_LLM, AgentStatus.DISABLED, AgentOnlineStatus.IDLE);
+        when(agentService.getProfileById(6L)).thenReturn(disabled);
         assertThatThrownBy(() -> picker.validateSelectable(6L))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("已被禁用");
 
-        when(agentService.getById(999L)).thenReturn(null);
+        when(agentService.getProfileById(999L)).thenReturn(null);
         assertThatThrownBy(() -> picker.validateSelectable(999L))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("不存在");
@@ -294,16 +299,16 @@ class PlannerAgentPickerTest {
     @Test
     @DisplayName("listOptions：平台内 PLANNER 可选，在班外部 Agent 展示但置灰")
     void shouldListInternalSelectableAndExternalGreyed() {
-        Agent internal = llmPlanner(1L);
-        Agent internalNoCred = llmPlanner(2L);
-        when(agentService.listByRole(AgentRole.PLANNER))
+        AgentProfileSnapshot internal = llmPlanner(1L);
+        AgentProfileSnapshot internalNoCred = llmPlanner(2L);
+        when(agentService.listProfilesByRole(AgentRole.PLANNER))
                 .thenReturn(List.of(internal, internalNoCred));
         when(agentLlmCredentialResolver.hasUsableCredential(internal)).thenReturn(true);
         when(agentLlmCredentialResolver.hasUsableCredential(internalNoCred)).thenReturn(false);
 
-        Agent onDutyExternal = cliAgent(3L);
-        Agent offDutyExternal = cliAgent(4L);
-        when(agentService.listActive()).thenReturn(List.of(onDutyExternal, offDutyExternal));
+        AgentProfileSnapshot onDutyExternal = cliAgent(3L);
+        AgentProfileSnapshot offDutyExternal = cliAgent(4L);
+        when(agentService.listActiveProfiles()).thenReturn(List.of(onDutyExternal, offDutyExternal));
         when(agentDutyLeaseService.isOnDuty(3L)).thenReturn(true);
         when(agentDutyLeaseService.isOnDuty(4L)).thenReturn(false);
         lenient().when(agentDutyLeaseService.isOnDuty(1L)).thenReturn(false);

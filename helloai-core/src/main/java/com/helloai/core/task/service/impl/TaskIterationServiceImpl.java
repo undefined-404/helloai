@@ -3,7 +3,7 @@ package com.helloai.core.task.service.impl;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskIterationConst;
-import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.task.util.SubTaskDependencyOrder;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
@@ -42,7 +42,7 @@ public class TaskIterationServiceImpl extends ServiceImpl<TaskIterationMapper, T
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void backfillForTask(Long taskId, List<SubTask> sections, Agent plannerAgent) {
+    public void backfillForTask(Long taskId, List<SubTask> sections, Long plannerAgentId) {
         if (sections == null || sections.isEmpty()) {
             log.debug("无子任务可回填: taskId={}", taskId);
             return;
@@ -85,9 +85,9 @@ public class TaskIterationServiceImpl extends ServiceImpl<TaskIterationMapper, T
 
             // 执行 Agent 名称
             if (st.getAssignedAgentId() != null) {
-                Agent agent = agentService.getById(st.getAssignedAgentId());
+                AgentProfileSnapshot agent = agentService.getProfileById(st.getAssignedAgentId());
                 if (agent != null) {
-                    iter.setExecutorAgent(agent.getName());
+                    iter.setExecutorAgent(agent.name());
                 }
             }
 
@@ -116,7 +116,7 @@ public class TaskIterationServiceImpl extends ServiceImpl<TaskIterationMapper, T
             save(record);
         }
         log.info("任务迭代记录回填完成: taskId={}, recordCount={}, plannerAgentId={}",
-                taskId, records.size(), plannerAgent != null ? plannerAgent.getId() : null);
+                taskId, records.size(), plannerAgentId);
     }
 
     /**

@@ -3,7 +3,7 @@ package com.helloai.core.task.observability.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskStatus;
-import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.system.service.SysUserService;
 import com.helloai.core.task.entity.SubTask;
@@ -57,7 +57,7 @@ public class AdminDashboardServiceImpl implements AdminDashboardService {
                 new LambdaQueryWrapper<SubTask>().eq(SubTask::getStatus, SubTaskStatus.BLOCKED).eq(SubTask::getDeleted, 0)));
         // 跨域 Agent 计数走 AgentService 接口，不直捅 agent.mapper
         result.put("totalAgents", agentService.countAll());
-        result.put("activeAgents", (long) agentService.listActive().size());
+        result.put("activeAgents", (long) agentService.listActiveProfiles().size());
         result.put("pendingReviews", subTaskMapper.selectCount(
                 new LambdaQueryWrapper<SubTask>().eq(SubTask::getStatus, SubTaskStatus.REVIEW).eq(SubTask::getDeleted, 0)));
         result.put("todayCompleted", subTaskMapper.selectCount(
@@ -121,9 +121,9 @@ public class AdminDashboardServiceImpl implements AdminDashboardService {
             item.put("subTaskTitle", st.getTitle());
             item.put("priority", st.getPriority());
             if (st.getAssignedAgentId() != null) {
-                Agent agent = agentService.getById(st.getAssignedAgentId());
+                AgentProfileSnapshot agent = agentService.getProfileById(st.getAssignedAgentId());
                 if (agent != null) {
-                    item.put("assignedAgent", agent.getName());
+                    item.put("assignedAgent", agent.name());
                 }
             }
             return item;
@@ -135,19 +135,19 @@ public class AdminDashboardServiceImpl implements AdminDashboardService {
      */
     @Override
     public List<Map<String, Object>> listLowActivityAgents() {
-        List<Agent> agents = agentService.listActive();
+        List<AgentProfileSnapshot> agents = agentService.listActiveProfiles();
         if (agents == null || agents.isEmpty()) {
             return Collections.emptyList();
         }
         OffsetDateTime sevenDaysAgo = OffsetDateTime.now().minusDays(7);
         return agents.stream().map(agent -> {
             Map<String, Object> item = new LinkedHashMap<>();
-            item.put("agentId", agent.getId());
-            item.put("agentName", agent.getName());
-            item.put("role", agent.getRole().name());
+            item.put("agentId", agent.id());
+            item.put("agentName", agent.name());
+            item.put("role", agent.role().name());
             long taskCount = subTaskMapper.selectCount(
                     new LambdaQueryWrapper<SubTask>()
-                            .eq(SubTask::getAssignedAgentId, agent.getId())
+                            .eq(SubTask::getAssignedAgentId, agent.id())
                             .ge(SubTask::getCreateTime, sevenDaysAgo)
                             .eq(SubTask::getDeleted, 0));
             item.put("taskCount", (int) taskCount);

@@ -13,7 +13,7 @@ import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.config.WatchdogProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ReviewResult;
-import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.entity.Uncertainty;
 import com.helloai.core.task.mapper.SubTaskMapper;
@@ -108,11 +108,12 @@ class SubTaskServiceHandoverTest {
         when(attachmentServiceProvider.getIfAvailable()).thenReturn(attachmentService);
         // LOG-20260903-011：reworkFresh 换派目标必须 EXECUTOR（校验经 agentServiceProvider 懒解析）
         AgentService agentService = mock(AgentService.class);
-        Agent target = new Agent();
-        target.setId(NEW_AGENT);
-        target.setName("new-executor");
-        target.setRole(AgentRole.EXECUTOR);
-        when(agentService.getById(NEW_AGENT)).thenReturn(target);
+        AgentProfileSnapshot target = AgentProfileSnapshot.builder()
+                .id(NEW_AGENT)
+                .name("new-executor")
+                .role(AgentRole.EXECUTOR)
+                .build();
+        when(agentService.getProfileById(NEW_AGENT)).thenReturn(target);
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
     }
 
@@ -276,11 +277,12 @@ class SubTaskServiceHandoverTest {
                 .when(subTaskService).getById(SUB_TASK_ID);
         // 覆盖 setUp 的 EXECUTOR stub：本次改派目标为 PLANNER
         AgentService agentService = mock(AgentService.class);
-        Agent planner = new Agent();
-        planner.setId(NEW_AGENT);
-        planner.setName("planner-agent");
-        planner.setRole(AgentRole.PLANNER);
-        when(agentService.getById(NEW_AGENT)).thenReturn(planner);
+        AgentProfileSnapshot planner = AgentProfileSnapshot.builder()
+                .id(NEW_AGENT)
+                .name("planner-agent")
+                .role(AgentRole.PLANNER)
+                .build();
+        when(agentService.getProfileById(NEW_AGENT)).thenReturn(planner);
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
 
         assertThatThrownBy(() -> subTaskService.reworkFresh(SUB_TASK_ID, NEW_AGENT))

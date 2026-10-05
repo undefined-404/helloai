@@ -2,7 +2,7 @@ package com.helloai.core.task.service;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentStatus;
-import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.system.storage.ArtifactStorage;
 import com.helloai.core.system.storage.StoredArtifact;
@@ -43,12 +43,12 @@ class ArtifactUploadServiceImplTest {
         service = new ArtifactUploadServiceImpl(agentService, subTaskService, attachmentService, artifactStorage);
     }
 
-    private Agent agent(Long id, String name, AgentStatus status) {
-        Agent agent = new Agent();
-        agent.setId(id);
-        agent.setName(name);
-        agent.setStatus(status);
-        return agent;
+    private AgentProfileSnapshot agent(Long id, String name, AgentStatus status) {
+        return AgentProfileSnapshot.builder()
+                .id(id)
+                .name(name)
+                .status(status)
+                .build();
     }
 
     private SubTask subTask(Long id, Long taskId, Long assignedAgentId) {
@@ -66,7 +66,7 @@ class ArtifactUploadServiceImplTest {
     @Test
     @DisplayName("正常上传：store + register 一步到位，返回 attachmentId/storageUrl/fileSize")
     void shouldStoreAndRegister() {
-        when(agentService.getById(1L)).thenReturn(agent(1L, "traE", AgentStatus.ACTIVE));
+        when(agentService.getProfileById(1L)).thenReturn(agent(1L, "traE", AgentStatus.ACTIVE));
         when(subTaskService.getById(100L)).thenReturn(subTask(100L, 10L, 1L));
         when(artifactStorage.store(eq("traE"), eq(10L), eq(100L), eq("a.md"), any()))
                 .thenReturn(new StoredArtifact(
@@ -90,7 +90,7 @@ class ArtifactUploadServiceImplTest {
     @Test
     @DisplayName("fileName 做安全清洗：路径分隔符先替换为 _ 再剥点前缀（../报告.md → _报告.md）")
     void shouldSanitizeFileNameBeforeStore() {
-        when(agentService.getById(1L)).thenReturn(agent(1L, "traE", AgentStatus.ACTIVE));
+        when(agentService.getProfileById(1L)).thenReturn(agent(1L, "traE", AgentStatus.ACTIVE));
         when(subTaskService.getById(100L)).thenReturn(subTask(100L, 10L, 1L));
         when(artifactStorage.store(any(), any(), any(), any(), any()))
                 .thenReturn(new StoredArtifact("minio://b/k", "b", "k", 15));
@@ -104,7 +104,7 @@ class ArtifactUploadServiceImplTest {
     @Test
     @DisplayName("Agent 不存在：抛 BizException，不触碰子任务与存储")
     void shouldRejectUnknownAgent() {
-        when(agentService.getById(1L)).thenReturn(null);
+        when(agentService.getProfileById(1L)).thenReturn(null);
 
         assertThatThrownBy(() -> service.upload(1L, 100L, "a.md", null, content()))
                 .isInstanceOf(BizException.class)
@@ -115,7 +115,7 @@ class ArtifactUploadServiceImplTest {
     @Test
     @DisplayName("Agent 未激活：抛 BizException")
     void shouldRejectDisabledAgent() {
-        when(agentService.getById(1L)).thenReturn(agent(1L, "traE", AgentStatus.DISABLED));
+        when(agentService.getProfileById(1L)).thenReturn(agent(1L, "traE", AgentStatus.DISABLED));
 
         assertThatThrownBy(() -> service.upload(1L, 100L, "a.md", null, content()))
                 .isInstanceOf(BizException.class)
@@ -125,7 +125,7 @@ class ArtifactUploadServiceImplTest {
     @Test
     @DisplayName("子任务不存在：抛 BizException")
     void shouldRejectMissingSubTask() {
-        when(agentService.getById(1L)).thenReturn(agent(1L, "traE", AgentStatus.ACTIVE));
+        when(agentService.getProfileById(1L)).thenReturn(agent(1L, "traE", AgentStatus.ACTIVE));
         when(subTaskService.getById(100L)).thenReturn(null);
 
         assertThatThrownBy(() -> service.upload(1L, 100L, "a.md", null, content()))
@@ -137,7 +137,7 @@ class ArtifactUploadServiceImplTest {
     @Test
     @DisplayName("非本人子任务：抛 BizException，不写存储")
     void shouldRejectNotOwnedSubTask() {
-        when(agentService.getById(1L)).thenReturn(agent(1L, "traE", AgentStatus.ACTIVE));
+        when(agentService.getProfileById(1L)).thenReturn(agent(1L, "traE", AgentStatus.ACTIVE));
         when(subTaskService.getById(100L)).thenReturn(subTask(100L, 10L, 2L));
 
         assertThatThrownBy(() -> service.upload(1L, 100L, "a.md", null, content()))
@@ -149,7 +149,7 @@ class ArtifactUploadServiceImplTest {
     @Test
     @DisplayName("fileName 为空：抛 BizException")
     void shouldRejectBlankFileName() {
-        when(agentService.getById(1L)).thenReturn(agent(1L, "traE", AgentStatus.ACTIVE));
+        when(agentService.getProfileById(1L)).thenReturn(agent(1L, "traE", AgentStatus.ACTIVE));
 
         assertThatThrownBy(() -> service.upload(1L, 100L, "  ", null, content()))
                 .isInstanceOf(BizException.class)
@@ -159,7 +159,7 @@ class ArtifactUploadServiceImplTest {
     @Test
     @DisplayName("文件内容为空：抛 BizException")
     void shouldRejectEmptyContent() {
-        when(agentService.getById(1L)).thenReturn(agent(1L, "traE", AgentStatus.ACTIVE));
+        when(agentService.getProfileById(1L)).thenReturn(agent(1L, "traE", AgentStatus.ACTIVE));
 
         assertThatThrownBy(() -> service.upload(1L, 100L, "a.md", null, new byte[0]))
                 .isInstanceOf(BizException.class)

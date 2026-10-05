@@ -3,7 +3,7 @@ package com.helloai.core.planner.service;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import lombok.Data;
 
@@ -42,10 +42,10 @@ public interface PlannerAnalysisService {
      *
      * @return 恒为空列表（API 契约保持不变，草案经 {@link #listDrafts(Long)} 轮询获取）
      */
-    List<SubTask> decompose(Long taskId);
+    List<SubTaskView> decompose(Long taskId);
 
     /** 查看指定任务的草案列表（PENDING_PLAN_REVIEW），按依赖拓扑排序为正序（根在前）。 */
-    List<SubTask> listDrafts(Long taskId);
+    List<SubTaskView> listDrafts(Long taskId);
 
     /**
      * 确认草案：全部 PENDING_PLAN_REVIEW → PENDING，Task → IN_PROGRESS。
@@ -56,7 +56,7 @@ public interface PlannerAnalysisService {
      *
      * @return 转正后的子任务列表
      */
-    List<SubTask> confirmPlan(Long taskId);
+    List<SubTaskView> confirmPlan(Long taskId);
 
     /**
      * 拒绝草案：全部 PENDING_PLAN_REVIEW → CANCELLED（保留审计），Task 回退 PENDING 可重新拆解。

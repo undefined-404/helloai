@@ -1,4 +1,4 @@
-package com.helloai.core.task.service.impl;
+package com.helloai.core.task.adapter;
 
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.agent.port.SubTaskSnapshot;
@@ -166,10 +166,7 @@ class SubTaskQueryPortAdapterTest {
     @Test
     @DisplayName("mergeSkills：整体委派 SubTaskService.mergeSkills（合并规则单源留提供方）")
     void shouldDelegateMergeSkills() {
-        SubTask entity = new SubTask();
-        entity.setId(7L);
-        when(subTaskService.getById(7L)).thenReturn(entity);
-        when(subTaskService.mergeSkills(entity)).thenReturn(List.of("eng-doc-standard", "shell"));
+        when(subTaskService.mergeSkills(7L)).thenReturn(List.of("eng-doc-standard", "shell"));
 
         assertThat(adapter.mergeSkills(7L)).containsExactly("eng-doc-standard", "shell");
     }
@@ -177,8 +174,7 @@ class SubTaskQueryPortAdapterTest {
     @Test
     @DisplayName("mergeSkills：提供方返回 null 时收敛为空列表（契约要求绝不返回 null）")
     void shouldCoerceNullMergeSkillsToEmptyList() {
-        when(subTaskService.getById(7L)).thenReturn(null);
-        when(subTaskService.mergeSkills(null)).thenReturn(null);
+        when(subTaskService.mergeSkills(7L)).thenReturn(null);
 
         assertThat(adapter.mergeSkills(7L)).isEmpty();
     }

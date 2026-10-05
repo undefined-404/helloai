@@ -8,7 +8,7 @@ import com.helloai.core.planner.service.RequirementClarifyService;
 import com.helloai.core.planner.service.RequirementClarifyService.ChatStreamEvent;
 import com.helloai.core.planner.service.RequirementClarifyService.ClarifyConversationDetail;
 import com.helloai.core.planner.entity.RequirementConversation;
-import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.port.TaskView;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -204,14 +204,14 @@ public class RequirementConversationController {
     /** 终稿确认：创建任务并回填会话。 */
     @SaCheckPermission("conversation:finalize")
     @PostMapping("/finalizeById/{id}")
-    public R<Task> finalizeById(@PathVariable("id") Long id) {
+    public R<TaskView> finalizeById(@PathVariable("id") Long id) {
         return R.ok(requirementClarifyService.finalize(id));
     }
 
     /** 重新生成：FINALIZED 会话原任务已删除时，复用终稿重建任务并回填。 */
     @SaCheckPermission("conversation:regenerate")
     @PostMapping("/regenerateById/{id}")
-    public R<Task> regenerateById(@PathVariable("id") Long id) {
+    public R<TaskView> regenerateById(@PathVariable("id") Long id) {
         return R.ok(requirementClarifyService.regenerate(id));
     }
 

@@ -11,6 +11,7 @@ import com.helloai.common.constant.CredentialStatus;
 import com.helloai.common.constant.CredentialType;
 import com.helloai.core.system.entity.CredentialAuditLog;
 import com.helloai.core.system.entity.CredentialVault;
+import com.helloai.core.system.port.CredentialSecret;
 import com.helloai.core.system.mapper.CredentialVaultMapper;
 import com.helloai.core.system.service.CredentialAuditService;
 import com.helloai.core.system.service.CredentialVaultService;
@@ -47,6 +48,23 @@ public class CredentialVaultServiceImpl extends ServiceImpl<CredentialVaultMappe
     @Override
     public CredentialVault getActivePlatformApiKey(String provider) {
         return getActiveApiKey(CredentialOwnerType.PLATFORM, 0L, provider);
+    }
+
+    // ── 只读快照变体（RM5 批 3）：语义与 getActive* 逐字一致，仅投影解密所需字段 ──
+
+    @Override
+    public CredentialSecret getActiveAgentApiKeySecret(Long agentId, String provider) {
+        return toSecret(getActiveAgentApiKey(agentId, provider));
+    }
+
+    @Override
+    public CredentialSecret getActivePlatformApiKeySecret(String provider) {
+        return toSecret(getActivePlatformApiKey(provider));
+    }
+
+    /** 凭证实体 → 解密素材快照（null 透传，最小投影）。 */
+    private static CredentialSecret toSecret(CredentialVault vault) {
+        return vault == null ? null : new CredentialSecret(vault.getEncryptedValue(), vault.getSecretRef());
     }
 
     private CredentialVault getActiveApiKey(CredentialOwnerType ownerType, Long ownerId, String provider) {

@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.core.agent.service.impl.LlmProviderKeyVerifyServiceImpl;
 import com.helloai.core.agent.service.LlmProviderKeyVerifyService;
 import com.helloai.core.agent.service.PlatformProviderConfigService;
-import com.helloai.core.system.entity.LlmProvider;
+import com.helloai.core.system.port.LlmProviderProfile;
 import com.helloai.core.system.service.LlmProviderService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -45,19 +45,14 @@ class LlmProviderKeyVerifyServiceTest {
                 providerService, platformProviderConfigService, new ObjectMapper());
     }
 
-    private LlmProvider provider(String defaultModel) {
-        LlmProvider p = new LlmProvider();
-        p.setId(PROVIDER_ID);
-        p.setProviderCode(PROVIDER_CODE);
-        p.setProtocolType("OPENAI_COMPATIBLE");
-        p.setDefaultModel(defaultModel);
-        return p;
+    private LlmProviderProfile provider(String defaultModel) {
+        return new LlmProviderProfile(PROVIDER_CODE, null, null, defaultModel, "OPENAI_COMPATIBLE", 1);
     }
 
     @Test
     @DisplayName("verifyById：Provider 不存在时返回失败结果，不抛异常")
     void verifyById_providerNotFound_returnsFailure() {
-        when(providerService.getById(PROVIDER_ID)).thenReturn(null);
+        when(providerService.getProfileById(PROVIDER_ID)).thenReturn(null);
 
         Map<String, Object> result = verifyService.verifyById(PROVIDER_ID);
 
@@ -68,7 +63,7 @@ class LlmProviderKeyVerifyServiceTest {
     @Test
     @DisplayName("verifyById：API Key 未配置时返回失败并提示先保存密钥")
     void verifyById_apiKeyMissing_returnsFailure() {
-        when(providerService.getById(PROVIDER_ID)).thenReturn(provider("probe-model"));
+        when(providerService.getProfileById(PROVIDER_ID)).thenReturn(provider("probe-model"));
         when(platformProviderConfigService.getApiKey(PROVIDER_CODE)).thenReturn(null);
 
         Map<String, Object> result = verifyService.verifyById(PROVIDER_ID);
@@ -80,7 +75,7 @@ class LlmProviderKeyVerifyServiceTest {
     @Test
     @DisplayName("verifyById：Base URL 未配置时返回失败")
     void verifyById_baseUrlMissing_returnsFailure() {
-        when(providerService.getById(PROVIDER_ID)).thenReturn(provider("probe-model"));
+        when(providerService.getProfileById(PROVIDER_ID)).thenReturn(provider("probe-model"));
         when(platformProviderConfigService.getApiKey(PROVIDER_CODE)).thenReturn("sk-test");
         when(platformProviderConfigService.getBaseUrl(PROVIDER_CODE)).thenReturn(" ");
 
@@ -93,7 +88,7 @@ class LlmProviderKeyVerifyServiceTest {
     @Test
     @DisplayName("verifyById：默认模型缺失且无兜底时返回失败，不发起请求")
     void verifyById_modelMissing_returnsFailure() {
-        when(providerService.getById(PROVIDER_ID)).thenReturn(provider(null));
+        when(providerService.getProfileById(PROVIDER_ID)).thenReturn(provider(null));
         when(platformProviderConfigService.getApiKey(PROVIDER_CODE)).thenReturn("sk-test");
         when(platformProviderConfigService.getBaseUrl(PROVIDER_CODE)).thenReturn("https://probe.example.com");
         when(platformProviderConfigService.getDefaultModel(PROVIDER_CODE)).thenReturn(null);

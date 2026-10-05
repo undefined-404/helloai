@@ -8,7 +8,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.core.agent.chat.provider.LlmProviderChatClientFactoryRegistry;
 import com.helloai.core.agent.entity.Agent;
-import com.helloai.core.system.entity.LlmProvider;
+import com.helloai.core.system.port.LlmProviderProfile;
 import com.helloai.core.system.service.LlmProviderQueryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -48,18 +48,18 @@ public class LlmProviderCatalogServiceImpl implements LlmProviderCatalogService 
      * （不实际创建 ChatClient，仅判断 protocolType 是否被任何 Factory 支持）。</p>
      */
     public List<ProviderCatalogItem> listProviders() {
-        List<LlmProvider> providers = llmProviderQueryService.listAll();
+        List<LlmProviderProfile> providers = llmProviderQueryService.listAllProfiles();
         List<ProviderCatalogItem> items = new ArrayList<>(providers.size());
-        for (LlmProvider p : providers) {
-            String name = p.getProviderCode().toLowerCase(Locale.ROOT);
-            boolean enabled = Integer.valueOf(1).equals(p.getEnabled());
+        for (LlmProviderProfile p : providers) {
+            String name = p.providerCode().toLowerCase(Locale.ROOT);
+            boolean enabled = Integer.valueOf(1).equals(p.enabled());
             boolean factorySupported = isFactorySupported(p);
             boolean apiKeyConfigured = platformProviderConfigService.isApiKeyConfigured(name);
             items.add(new ProviderCatalogItem(
                     name,
-                    p.getProviderName(),
-                    p.getProtocolType(),
-                    p.getDefaultModel(),
+                    p.providerName(),
+                    p.protocolType(),
+                    p.defaultModel(),
                     apiKeyConfigured,
                     factorySupported,
                     enabled && apiKeyConfigured && factorySupported));
@@ -106,12 +106,12 @@ public class LlmProviderCatalogServiceImpl implements LlmProviderCatalogService 
      * <p>仅凭 protocolType 判定：deepseek 走专用 Factory；其他按协议类型分发。
      * 真正的 ChatClient 创建校验留给 {@link LlmProviderChatClientFactoryRegistry}。</p>
      */
-    private boolean isFactorySupported(LlmProvider provider) {
-        if (provider == null || provider.getProtocolType() == null) {
+    private boolean isFactorySupported(LlmProviderProfile provider) {
+        if (provider == null || provider.protocolType() == null) {
             return false;
         }
-        String type = provider.getProtocolType().toUpperCase(Locale.ROOT);
-        if ("deepseek".equalsIgnoreCase(provider.getProviderCode())) {
+        String type = provider.protocolType().toUpperCase(Locale.ROOT);
+        if ("deepseek".equalsIgnoreCase(provider.providerCode())) {
             return true;
         }
         return "OPENAI_COMPATIBLE".equals(type) || "ANTHROPIC_COMPATIBLE".equals(type);

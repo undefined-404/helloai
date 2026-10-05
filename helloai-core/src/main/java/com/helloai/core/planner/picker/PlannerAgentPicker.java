@@ -6,13 +6,14 @@ import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.core.agent.AgentLlmCredentialResolver;
-import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.planner.entity.RequirementConversation;
 import com.helloai.core.planner.service.RequirementConversationService;
-import com.helloai.core.task.entity.Task;
+import com.helloai.core.task.port.TaskView;
 import com.helloai.core.task.policy.TaskAgentPolicy;
+import com.helloai.core.task.port.PlannerAgentRef;
 import com.helloai.core.task.port.TaskPlannerPickerPort;
 import com.helloai.core.task.service.TaskService;
 import lombok.Data;
@@ -53,9 +54,9 @@ public class PlannerAgentPicker implements TaskPlannerPickerPort {
     /**
      * 按会话钉住的 Planner 选人；pinnedAgentId 为空或失效时走自动选择。
      */
-    public Agent pick(Long pinnedAgentId) {
+    public AgentProfileSnapshot pick(Long pinnedAgentId) {
         if (pinnedAgentId != null) {
-            Agent pinned = agentService.getById(pinnedAgentId);
+            AgentProfileSnapshot pinned = agentService.getProfileById(pinnedAgentId);
             if (isUsable(pinned)) {
                 return pinned;
             }
@@ -78,14 +79,14 @@ public class PlannerAgentPicker implements TaskPlannerPickerPort {
      * </p>
      */
     @Override
-    public Agent pickForTask(Long taskId) {
+    public PlannerAgentRef pickForTask(Long taskId) {
         // 任务级 agent_policy.plannerAgentId 优先
         if (taskId != null) {
-            Task task = taskService.getById(taskId);
+            TaskView task = taskService.getView(taskId);
             if (task != null) {
-                Long policyPlannerId = TaskAgentPolicy.plannerAgentId(task.getAgentPolicy());
+                Long policyPlannerId = TaskAgentPolicy.plannerAgentId(task.agentPolicy());
                 if (policyPlannerId != null) {
-                    return pick(policyPlannerId);
+                    return toRef(pick(policyPlannerId));
                 }
             }
         }
@@ -101,25 +102,30 @@ public class PlannerAgentPicker implements TaskPlannerPickerPort {
                 pinnedAgentId = conversation.getPlannerAgentId();
             }
         }
-        return pick(pinnedAgentId);
+        return toRef(pick(pinnedAgentId));
+    }
+
+    /** Agent 画像快照 → 端口只读引用（RM6 契约去实体：跨域只暴露 id + name）。 */
+    private static PlannerAgentRef toRef(AgentProfileSnapshot agent) {
+        return new PlannerAgentRef(agent.id(), agent.name());
     }
 
     /**
      * 新建会话时校验用户手动指定的 Planner 是否可选（防御前端绕过置灰）。
      */
     public void validateSelectable(Long agentId) {
-        Agent agent = agentService.getById(agentId);
+        AgentProfileSnapshot agent = agentService.getProfileById(agentId);
         if (agent == null) {
             throw new BizException("指定的 Planner Agent 不存在: " + agentId);
         }
-        if (agent.getRole() != AgentRole.PLANNER) {
-            throw new BizException("指定的 Agent 不是 PLANNER 角色: " + agent.getName());
+        if (agent.role() != AgentRole.PLANNER) {
+            throw new BizException("指定的 Agent 不是 PLANNER 角色: " + agent.name());
         }
-        if (agent.getAccessType() != AgentAccessType.API_KEY_LLM) {
-            throw new BizException("外部 Agent 暂不支持对话澄清，请选择平台内 Planner: " + agent.getName());
+        if (agent.accessType() != AgentAccessType.API_KEY_LLM) {
+            throw new BizException("外部 Agent 暂不支持对话澄清，请选择平台内 Planner: " + agent.name());
         }
-        if (agent.getStatus() != AgentStatus.ACTIVE) {
-            throw new BizException("指定的 Planner Agent 已被禁用: " + agent.getName());
+        if (agent.status() != AgentStatus.ACTIVE) {
+            throw new BizException("指定的 Planner Agent 已被禁用: " + agent.name());
         }
     }
 
@@ -128,21 +134,21 @@ public class PlannerAgentPicker implements TaskPlannerPickerPort {
      */
     public List<PlannerOption> listOptions() {
         List<PlannerOption> options = new ArrayList<>();
-        for (Agent agent : agentService.listByRole(AgentRole.PLANNER)) {
-            if (agent.getStatus() != AgentStatus.ACTIVE
-                    || agent.getAccessType() != AgentAccessType.API_KEY_LLM) {
+        for (AgentProfileSnapshot agent : agentService.listProfilesByRole(AgentRole.PLANNER)) {
+            if (agent.status() != AgentStatus.ACTIVE
+                    || agent.accessType() != AgentAccessType.API_KEY_LLM) {
                 continue;
             }
             boolean hasCredential = hasUsableCredential(agent);
-            options.add(buildOption(agent, isOnDuty(agent.getId()), hasCredential,
+            options.add(buildOption(agent, isOnDuty(agent.id()), hasCredential,
                     hasCredential ? null : "未配置可用凭证"));
         }
         // 在班（值班租约 ACTIVE）的外部 Agent：任意角色都展示，置灰并注明原因
-        for (Agent agent : agentService.listActive()) {
-            if (agent.getAccessType() == AgentAccessType.API_KEY_LLM) {
+        for (AgentProfileSnapshot agent : agentService.listActiveProfiles()) {
+            if (agent.accessType() == AgentAccessType.API_KEY_LLM) {
                 continue;
             }
-            if (!isOnDuty(agent.getId())) {
+            if (!isOnDuty(agent.id())) {
                 continue;
             }
             options.add(buildOption(agent, true, false, "外部 Agent 暂不支持对话澄清"));
@@ -153,35 +159,35 @@ public class PlannerAgentPicker implements TaskPlannerPickerPort {
     /**
      * 自动选择：候选权重一致，优先空闲（in-progress 子任务数最少）。
      */
-    private Agent autoPick() {
-        return agentService.listByRole(AgentRole.PLANNER).stream()
-                .filter(a -> a.getAccessType() == AgentAccessType.API_KEY_LLM)
-                .filter(a -> a.getStatus() == AgentStatus.ACTIVE)
-                .filter(a -> a.getOnlineStatus() != AgentOnlineStatus.SLEEPING)
+    private AgentProfileSnapshot autoPick() {
+        return agentService.listProfilesByRole(AgentRole.PLANNER).stream()
+                .filter(a -> a.accessType() == AgentAccessType.API_KEY_LLM)
+                .filter(a -> a.status() == AgentStatus.ACTIVE)
+                .filter(a -> a.onlineStatus() != AgentOnlineStatus.SLEEPING)
                 .filter(this::hasUsableCredential)
-                .min(Comparator.comparingInt(a -> agentService.inProgressCount(a.getId())))
+                .min(Comparator.comparingInt(a -> agentService.inProgressCount(a.id())))
                 .orElseThrow(() -> new BizException(
                         "无可用的平台内 Planner Agent（需要 role=PLANNER 且 accessType=API_KEY_LLM）；"
                                 + "请先在 Agent 管理中注册，或改用外部 Planner Agent 手工创建子任务"));
     }
 
     /** pinned Agent 使用时校验（比 create 时校验宽松失败：不抛错，回退自动）。 */
-    private boolean isUsable(Agent agent) {
+    private boolean isUsable(AgentProfileSnapshot agent) {
         return agent != null
-                && agent.getStatus() == AgentStatus.ACTIVE
-                && agent.getAccessType() == AgentAccessType.API_KEY_LLM;
+                && agent.status() == AgentStatus.ACTIVE
+                && agent.accessType() == AgentAccessType.API_KEY_LLM;
     }
 
     /**
      * 凭证可用性检查（委托 AgentLlmCredentialResolver：平台级模型配置密钥优先，
      * Agent 级凭证兜底，与执行链解析顺序一致；防御式降级照旧）。
      */
-    private boolean hasUsableCredential(Agent agent) {
+    private boolean hasUsableCredential(AgentProfileSnapshot agent) {
         try {
             return agentLlmCredentialResolver.hasUsableCredential(agent);
         } catch (Exception e) {
             log.debug("凭证可用性判定异常，防御式降级为排除: agentId={}, reason={}",
-                    agent != null ? agent.getId() : null, e.getMessage());
+                    agent != null ? agent.id() : null, e.getMessage());
             return false;
         }
     }
@@ -196,14 +202,14 @@ public class PlannerAgentPicker implements TaskPlannerPickerPort {
         }
     }
 
-    private PlannerOption buildOption(Agent agent, boolean onDuty,
+    private PlannerOption buildOption(AgentProfileSnapshot agent, boolean onDuty,
                                       boolean selectable, String disabledReason) {
         PlannerOption option = new PlannerOption();
-        option.setId(agent.getId());
-        option.setName(agent.getName());
-        option.setRole(agent.getRole());
-        option.setAccessType(agent.getAccessType());
-        option.setModelType(agent.getModelType());
+        option.setId(agent.id());
+        option.setName(agent.name());
+        option.setRole(agent.role());
+        option.setAccessType(agent.accessType());
+        option.setModelType(agent.modelType());
         option.setOnDuty(onDuty);
         option.setSelectable(selectable);
         option.setDisabledReason(disabledReason);

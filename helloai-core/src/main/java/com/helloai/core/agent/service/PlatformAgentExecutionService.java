@@ -41,4 +41,11 @@ public interface PlatformAgentExecutionService {
      * 外部 Agent / 未实现通道的执行器在订阅时抛 BizException，由调用方回退同步语义。</p>
      */
     Flux<String> executeStream(Agent agent, AgentTask task);
+
+    /**
+     * 流式执行一次 Agent 任务（按 agentId 解析 Agent）：
+     * 与 {@link #executeStream(Agent, AgentTask)} 同构，仅多一步按 id 解析 Agent；
+     * 解析在<b>订阅时</b>进行（保持惰性），Agent 不存在时抛 BizException。
+     */
+    Flux<String> executeStream(Long agentId, AgentTask task);
 }

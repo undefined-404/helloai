@@ -13,7 +13,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.RetryPolicy;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.util.HostNameUtils;
-import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.event.AgentEventContextResolver;
 import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.port.SubTaskSnapshot;
@@ -26,6 +26,10 @@ import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.shared.event.SubTaskAssignedEvent;
 import com.helloai.core.shared.event.SubTaskCompletedEvent;
 import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.port.SubTaskView;
+import com.helloai.core.task.port.SubTaskDraft;
+import com.helloai.core.task.port.UncertaintyDraft;
+import com.helloai.core.task.port.UncertaintyView;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.entity.Uncertainty;
 import com.helloai.core.task.mapper.SubTaskMapper;
@@ -671,10 +675,10 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
                             ? ("阻塞原因: " + reason)
                             : "需要 Planner 排障处理";
                     AgentService agentService = agentServiceProvider.getIfAvailable();
-                    List<Agent> planners = agentService == null
-                            ? List.of() : agentService.listByRole(AgentRole.PLANNER);
-                    for (Agent planner : planners) {
-                        agentInboxService.send(planner.getId(), eventId, "sub_task.blocked",
+                    List<AgentProfileSnapshot> planners = agentService == null
+                            ? List.of() : agentService.listProfilesByRole(AgentRole.PLANNER);
+                    for (AgentProfileSnapshot planner : planners) {
+                        agentInboxService.send(planner.id(), eventId, "sub_task.blocked",
                                 "任务阻塞: " + title,
                                 summary,
                                 "sub_task", subTask.getId(), "URGENT");
@@ -692,10 +696,10 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
                     // 修复: EXECUTOR 提交后，通知所有 PLANNER/REVIEWER 来审查
                     try {
                         AgentService agentService = agentServiceProvider.getIfAvailable();
-                        List<Agent> planners = agentService == null
-                                ? List.of() : agentService.listByRole(AgentRole.PLANNER);
-                        for (Agent planner : planners) {
-                            agentInboxService.send(planner.getId(), eventId, "sub_task.review",
+                        List<AgentProfileSnapshot> planners = agentService == null
+                                ? List.of() : agentService.listProfilesByRole(AgentRole.PLANNER);
+                        for (AgentProfileSnapshot planner : planners) {
+                            agentInboxService.send(planner.id(), eventId, "sub_task.review",
                                     "任务已提交审查: " + title,
                                     "请 PLANNER/REVIEWER 评分并完成审查",
                                     "sub_task", subTask.getId(), "HIGH");
@@ -878,12 +882,12 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         if (reworkAgentId != null) {
             // 人工驳回改派语义 = 选执行者；与改派候选接口/死信重派同口径，防御 API 直调绕过
             AgentService agentService = agentServiceProvider.getIfAvailable();
-            Agent target = agentService != null ? agentService.getById(reworkAgentId) : null;
+            AgentProfileSnapshot target = agentService != null ? agentService.getProfileById(reworkAgentId) : null;
             if (target == null) {
                 throw new BizException("改派目标 Agent 不存在: " + reworkAgentId);
             }
-            if (target.getRole() != AgentRole.EXECUTOR) {
-                throw new BizException("驳回改派只支持执行者（EXECUTOR）Agent，实际角色: " + target.getRole());
+            if (target.role() != AgentRole.EXECUTOR) {
+                throw new BizException("驳回改派只支持执行者（EXECUTOR）Agent，实际角色: " + target.role());
             }
             subTask.setAssignedAgentId(reworkAgentId);
         }
@@ -1375,5 +1379,146 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
      */
     private SubTaskSnapshot toSnapshot(SubTask subTask) {
         return SubTaskSnapshotMapper.toSnapshot(subTask);
+    }
+
+    // ── 只读快照 / 不透明命令（RM5 批 4）──
+
+    @Override
+    public SubTaskView getView(Long subTaskId) {
+        return toView(getById(subTaskId));
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p><b>读改写回写整体不透明</b>：取<b>最新行</b>而非消费方快照，既保留同行互斥
+     * （{@code @Version} CAS 仍生效），又避免消费方携带的陈旧 {@code version} 让写入静默丢失。
+     * 与 {@code SubTaskCommandPortAdapter#updateContext} 同源（适配器现委托本方法）。</p>
+     */
+    @Override
+    public void updateContext(Long subTaskId, Map<String, Object> context) {
+        SubTask subTask = getById(subTaskId);
+        if (subTask == null) {
+            return;
+        }
+        subTask.setContext(context);
+        updateById(subTask);
+    }
+
+    @Override
+    public List<String> mergeSkills(Long subTaskId) {
+        return mergeSkills(subTaskId == null ? null : getById(subTaskId));
+    }
+
+    @Override
+    public List<SubTaskView> listViewsByTaskId(Long taskId) {
+        return list(new LambdaQueryWrapper<SubTask>()
+                .eq(SubTask::getTaskId, taskId)
+                .orderByAsc(SubTask::getCreateTime)).stream().map(SubTaskServiceImpl::toView).toList();
+    }
+
+    @Override
+    public List<SubTaskView> listReviewOrphanViews(int thresholdSeconds, int limit) {
+        return listReviewOrphans(thresholdSeconds, limit).stream().map(SubTaskServiceImpl::toView).toList();
+    }
+
+    /** 实体 → 只读快照（提供方映射，消费方零映射）；{@code uncertainties} 逐项投影，null 元素跳过。 */
+    private static SubTaskView toView(SubTask st) {
+        if (st == null) {
+            return null;
+        }
+        List<UncertaintyView> uncertainties = st.getUncertainties() == null ? List.of()
+                : st.getUncertainties().stream()
+                        .filter(u -> u != null)
+                        .map(u -> new UncertaintyView(u.getKind(), u.getNote()))
+                        .toList();
+        return new SubTaskView(st.getId(), st.getTaskId(), st.getStatus(), st.getAssignedAgentId(),
+                st.getReworkCount(), st.getTitle(), st.getContent(), st.getDeliverable(),
+                st.getAcceptance(), st.getConstraints(), st.getContext(), uncertainties,
+                st.dependsOnIdList(), st.getDeadline(), st.getPriority(), st.getIsContract(),
+                st.getRequiredSkills(), st.getModuleId(), st.getScoreFactors(), st.getCompositeScore(),
+                st.getScoreGrade(), st.getTimeoutCount(), st.getCreateTime(), st.getUpdateTime());
+    }
+
+    // ── 写命令 / 视图变体（RM5 批 5a）──
+
+    @Override
+    public List<SubTaskView> saveDrafts(List<SubTaskDraft> drafts) {
+        if (drafts == null || drafts.isEmpty()) {
+            return List.of();
+        }
+        List<SubTask> entities = drafts.stream().map(SubTaskServiceImpl::toEntity).toList();
+        saveBatch(entities);
+        return entities.stream().map(SubTaskServiceImpl::toView).toList();
+    }
+
+    @Override
+    public List<SubTaskView> listViewsByTaskIdAndStatus(Long taskId, com.helloai.common.constant.SubTaskStatus status) {
+        return list(taskId, status, null, null, 0).getRecords().stream()
+                .map(SubTaskServiceImpl::toView).toList();
+    }
+
+    @Override
+    public boolean updateDeadline(Long subTaskId, OffsetDateTime deadline) {
+        SubTask subTask = getById(subTaskId);
+        if (subTask == null) {
+            return false;
+        }
+        subTask.setDeadline(deadline);
+        return updateById(subTask);
+    }
+
+    /** 写入物料 → 实体（提供方内部映射，消费方零实体依赖）；uncertainties 逐项投影。 */
+    private static SubTask toEntity(SubTaskDraft d) {
+        SubTask st = new SubTask();
+        st.setTaskId(d.taskId());
+        st.setTitle(d.title());
+        st.setContent(d.content());
+        st.setDeliverable(d.deliverable());
+        st.setAcceptance(d.acceptance());
+        st.setPriority(d.priority());
+        st.setIsContract(d.isContract());
+        st.setRequiredSkills(d.requiredSkills());
+        st.setConstraints(d.constraints());
+        st.setStatus(d.status());
+        st.setContext(d.context());
+        st.setUncertainties(d.uncertainties() == null ? null : d.uncertainties().stream()
+                .filter(u -> u != null)
+                .map(u -> {
+                    Uncertainty entity = new Uncertainty();
+                    entity.setKind(u.kind());
+                    entity.setNote(u.note());
+                    return entity;
+                })
+                .toList());
+        return st;
+    }
+
+    /** 待审草案的只读快照，按 <b>createTime asc + id asc</b>（与 saveBatch 插入序一致，供依赖序号回写）。 */
+    @Override
+    public List<SubTaskView> listDraftsInInsertOrder(Long taskId, com.helloai.common.constant.SubTaskStatus status) {
+        return list(new LambdaQueryWrapper<SubTask>()
+                .eq(SubTask::getTaskId, taskId)
+                .eq(SubTask::getStatus, status)
+                .orderByAsc(SubTask::getCreateTime, SubTask::getId)).stream()
+                .map(SubTaskServiceImpl::toView).toList();
+    }
+
+    /** 按 taskId 统计排除指定状态的子任务数（planner 重复拆解前置校验用）。 */
+    @Override
+    public long countByTaskIdExcludingStatus(Long taskId, com.helloai.common.constant.SubTaskStatus excluded) {
+        return lambdaQuery().eq(SubTask::getTaskId, taskId).ne(SubTask::getStatus, excluded).count();
+    }
+
+    /** 按 taskId + 状态统计子任务数（planner 拒绝前清理判定用）。 */
+    @Override
+    public long countByTaskIdAndStatus(Long taskId, com.helloai.common.constant.SubTaskStatus status) {
+        return lambdaQuery().eq(SubTask::getTaskId, taskId).eq(SubTask::getStatus, status).count();
+    }
+
+    /** 按 id 集合查询只读快照（顺序与 {@link #listByIds} 一致）。 */
+    @Override
+    public List<SubTaskView> listViewsByIds(java.util.Collection<Long> ids) {
+        return listByIds(ids).stream().map(SubTaskServiceImpl::toView).toList();
     }
 }

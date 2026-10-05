@@ -4,8 +4,8 @@ import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.core.shared.util.AttachmentContentPolicy;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.shared.util.TextTruncator;
-import com.helloai.core.task.entity.Attachment;
-import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.port.AttachmentView;
+import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import lombok.extern.slf4j.Slf4j;
@@ -21,11 +21,11 @@ import java.util.Map;
  *
  * <p>职责边界（自 {@code SubTaskReviewServiceImpl} 拆分）：</p>
  * <ul>
- *     <li>证据硬检查 {@link #checkEvidence(SubTask)}：fail-close 判定声称的交付物
+ *     <li>证据硬检查 {@link #checkEvidence(SubTaskView)}：fail-close 判定声称的交付物
  *         是否有物化附件/可读产出支撑，含执行密集任务物化竞态补偿；</li>
- *     <li>产出提取 {@link #extractExecutionOutput(SubTask)} / {@link #extractRawOutput(SubTask)}
+ *     <li>产出提取 {@link #extractExecutionOutput(SubTaskView)} / {@link #extractRawOutput(SubTaskView)}
  *         与围栏证据信号 {@link #verificationSignal(String)}；</li>
- *     <li>附件族装配 {@link #buildAttachmentList(SubTask)} / {@link #buildAttachmentContent(SubTask)}：
+ *     <li>附件族装配 {@link #buildAttachmentList(SubTaskView)} / {@link #buildAttachmentContent(SubTaskView)}：
  *         清单 + 文本正文限额注入 + 媒体可见性标注（方案3 F2 与硬化条款）。</li>
  * </ul>
  *
@@ -69,9 +69,9 @@ public class ReviewEvidenceAssembler {
      * 竞态；执行密集任务未发现可读附件时等待 {@code reviewEvidenceCheckWaitMs} 后重查
      * 一次，避免物化未完成被误判为无证据。</p>
      */
-    public EvidenceCheckResult checkEvidence(SubTask subTask) {
-        List<Attachment> readable = readableAttachments(subTask.getId());
-        String output = SubTaskOutputExtractor.extractExecutionOutput(subTask.getContext());
+    public EvidenceCheckResult checkEvidence(SubTaskView subTask) {
+        List<AttachmentView> readable = readableAttachments(subTask.id());
+        String output = SubTaskOutputExtractor.extractExecutionOutput(subTask.context());
         boolean hasOutput = output != null && !output.isBlank();
         boolean isDense = SubTaskDispatchService.isExecutionDense(subTask);
 
@@ -85,7 +85,7 @@ public class ReviewEvidenceAssembler {
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                     }
-                    readable = readableAttachments(subTask.getId());
+                    readable = readableAttachments(subTask.id());
                 }
             }
             if (readable.isEmpty()) {
@@ -104,13 +104,13 @@ public class ReviewEvidenceAssembler {
     /** 子任务可读附件列表（local:// 平台直读产物；仅 ACTIVE 有效版本——同名多版本在
      * {@link com.helloai.core.task.service.impl.AttachmentServiceImpl#register} 时
      * 已自动去活，核验只认当前最新上传，避免旧版本冲突污染判定；list 返回 null 防御按空处理）。 */
-    private List<Attachment> readableAttachments(Long subTaskId) {
-        List<Attachment> attachments = attachmentService.listActive(subTaskId);
+    private List<AttachmentView> readableAttachments(Long subTaskId) {
+        List<AttachmentView> attachments = attachmentService.listActiveViews(subTaskId);
         if (attachments == null) {
             return List.of();
         }
         return attachments.stream()
-                .filter(attachmentService::isContentLoadable)
+                .filter(AttachmentView::contentLoadable)
                 .toList();
     }
 
@@ -119,18 +119,18 @@ public class ReviewEvidenceAssembler {
      * 外部存储标注不可直读），供核验 LLM 核对"声称交付物 ↔ 真实附件"的对应关系——
      * 声称"文件 203 行 errors=0"但附件清单无对应文件时判不达标。
      */
-    public String buildAttachmentList(SubTask subTask) {
-        List<Attachment> attachments = attachmentService.listActive(subTask.getId());
+    public String buildAttachmentList(SubTaskView subTask) {
+        List<AttachmentView> attachments = attachmentService.listActiveViews(subTask.id());
         if (attachments == null || attachments.isEmpty()) {
             return "（无物化附件）";
         }
         StringBuilder sb = new StringBuilder();
-        for (Attachment att : attachments) {
-            String size = att.getFileSize() != null ? att.getFileSize() + " bytes" : "?";
-            String readable = attachmentService.isContentLoadable(att)
+        for (AttachmentView att : attachments) {
+            String size = att.fileSize() != null ? att.fileSize() + " bytes" : "?";
+            String readable = att.contentLoadable()
                     ? "平台可直读" : "外部存储（平台不可直读）";
-            String type = att.getFileType() != null ? att.getFileType() : "other";
-            sb.append("- ").append(att.getFileName())
+            String type = att.fileType() != null ? att.fileType() : "other";
+            sb.append("- ").append(att.fileName())
                     .append("（").append(type).append(", ").append(size).append(", ")
                     .append(readable).append("）\n");
         }
@@ -142,7 +142,8 @@ public class ReviewEvidenceAssembler {
      * 注入核验 Prompt，让 Reviewer 基于真实文件内容核对"声称交付物 ↔ 文件正文 ↔ 验收标准"，
      * 而非仅凭文件名猜测（消除"Reviewer 审查靠摘要+文件名"的幻觉缺口）。
      *
-     * <p>限额策略：每附件 8000 字符、总计 24000 字符（常量单源见 {@link AttachmentContentPolicy}），
+     * <p>限额策略：每附件 64000 字符、总计 200000 字符（常量单源见 {@link AttachmentContentPolicy}，
+     * 2026-10-03 由 8000/24000 上调以匹配官方 DeepSeek 64K 上下文），
      * 超限截断并标注；不可直读/读取失败/
      * 空内容附件不注入正文（清单仍全量展示）；开关 {@code helloai.dispatch.attachment-content-enabled}
      * 关闭时退化为仅清单（与开关引入前行为一致）。</p>
@@ -151,12 +152,12 @@ public class ReviewEvidenceAssembler {
      * （避免二进制乱码进 Prompt 并吞占限额）；提交含媒体附件时前置注入媒体可见性标注
      * （独立于注入开关），告知核验 LLM 原内容不可见、文字声称从严核验。</p>
      */
-    public String buildAttachmentContent(SubTask subTask) {
-        String mediaNote = buildMediaVisibilityNote(subTask.getId());
+    public String buildAttachmentContent(SubTaskView subTask) {
+        String mediaNote = buildMediaVisibilityNote(subTask.id());
         if (!dispatchProperties.isAttachmentContentEnabled()) {
             return mediaNote + "（附件内容注入已关闭，仅见清单）";
         }
-        List<Attachment> attachments = readableAttachments(subTask.getId());
+        List<AttachmentView> attachments = readableAttachments(subTask.id());
         if (attachments.isEmpty()) {
             return mediaNote + "（无平台可直读附件，无法核对文件正文）";
         }
@@ -164,25 +165,33 @@ public class ReviewEvidenceAssembler {
         int totalChars = 0;
         boolean truncated = false;
         boolean totalExceeded = false;
-        for (Attachment att : attachments) {
-            if (!AttachmentContentPolicy.isTextual(att.getMimeType(), att.getFileName())) {
+        for (AttachmentView att : attachments) {
+            if (!AttachmentContentPolicy.isTextual(att.mimeType(), att.fileName())) {
                 // 非文本附件（图片/音频/视频等）不注入正文，避免二进制乱码；媒体可见性标注已覆盖
                 continue;
             }
             String content = readAttachmentContent(att);
             if (content == null) {
-                sb.append("### ").append(att.getFileName())
-                        .append("（").append(att.getFileType() != null ? att.getFileType() : "other")
+                sb.append("### ").append(att.fileName())
+                        .append("（").append(att.fileType() != null ? att.fileType() : "other")
                         .append("，内容不可读/为空）\n");
                 continue;
             }
-            String attName = att.getFileName() != null ? att.getFileName() : "unknown";
+            String attName = att.fileName() != null ? att.fileName() : "unknown";
             int originalChars = content.length();
             boolean perFileTruncated = false;
             if (content.length() > AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT) {
+                // ★2026-10-03 R2 修复：截断前先基于**全文**提取 Markdown 章节结构，
+                // 让 Reviewer 即使看不到后半段正文，也能知道该文件还有哪些章节——
+                // 避免「目录树/教程大纲」等验收标准直接依赖的章节因排在后半段被静默丢弃
+                // （真机复现：fastapi_contract.md 2.9 万字符被截到 §7.3，目录树/教程大纲不可见 → 误判驳回）。
+                String structureOutline = buildStructureOutline(content);
                 // P-1 防御：行边界回退截断（避免拦腰切断 URL/代码行）
                 content = TextTruncator.truncateAtLineBoundary(
                         content, AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT);
+                if (structureOutline != null) {
+                    content = content + structureOutline;
+                }
                 truncated = true;
                 perFileTruncated = true;
             }
@@ -222,24 +231,64 @@ public class ReviewEvidenceAssembler {
     }
 
     /** 单附件内容段：标题行（文件名/类型/大小）+ 正文。 */
-    private void appendAttachmentContent(StringBuilder sb, Attachment att, String content) {
-        String size = att.getFileSize() != null ? att.getFileSize() + " bytes" : "?";
-        String type = att.getFileType() != null ? att.getFileType() : "other";
-        sb.append("### ").append(att.getFileName())
+    private void appendAttachmentContent(StringBuilder sb, AttachmentView att, String content) {
+        String size = att.fileSize() != null ? att.fileSize() + " bytes" : "?";
+        String type = att.fileType() != null ? att.fileType() : "other";
+        sb.append("### ").append(att.fileName())
                 .append("（").append(type).append("，").append(size).append("）\n")
                 .append(content).append("\n");
     }
 
+    /**
+     * 提取 Markdown 章节结构大纲（R2 修复）：扫描全文的行首 {@code #} 标题，
+     * 生成缩进的「章节树」，供超限截断后追加，让 Reviewer 知道后半段还有哪些章节。
+     *
+     * <p>仅提取标题行本身（每行极短），整体开销可控（通常几十~上百字符），
+     * 不占用附件正文限额之外的实质预算；无标题的纯文本/代码文件返回 {@code null}
+     * （保持原「从头截断」行为不变）。</p>
+     *
+     * @param fullContent 附件全文（截断前）
+     * @return 结构大纲块（含前导空行），无可提取标题时返回 {@code null}
+     */
+    private String buildStructureOutline(String fullContent) {
+        if (fullContent == null || fullContent.isEmpty()) {
+            return null;
+        }
+        StringBuilder outline = new StringBuilder();
+        int headingCount = 0;
+        for (String line : fullContent.split("\n", -1)) {
+            int level = 0;
+            int idx = 0;
+            while (idx < line.length() && line.charAt(idx) == '#') {
+                level++;
+                idx++;
+            }
+            // 仅认行首连续 # 后跟空格的 ATX 标题（# 空格 标题），忽略 # 之后非空格的（如 #include）
+            if (level >= 1 && level <= 6 && idx < line.length() && line.charAt(idx) == ' ') {
+                String title = line.substring(idx).trim();
+                if (!title.isEmpty()) {
+                    outline.append("\n").append("  ".repeat(level - 1))
+                            .append("- ").append(title);
+                    headingCount++;
+                }
+            }
+        }
+        if (headingCount == 0) {
+            return null;
+        }
+        return "\n\n---\n（该文件后续章节结构，正文已截断）\n" + outline + "\n";
+    }
+
     /** 读取可直读附件正文；不可读/为空返回 null（注入"内容不可读"标注，不中断整体注入）。 */
-    private String readAttachmentContent(Attachment att) {
+    private String readAttachmentContent(AttachmentView att) {
         try {
-            byte[] bytes = attachmentService.loadContent(att.getId());
+            byte[] bytes = attachmentService.loadContent(att.id());
             if (bytes == null || bytes.length == 0) {
                 return null;
             }
             return new String(bytes, StandardCharsets.UTF_8);
         } catch (Exception e) {
-            log.debug("附件内容读取失败，仅注入清单: attachmentId={}, err={}", att.getId(), e.getMessage());
+            log.debug("附件内容读取失败，仅注入清单: attachmentId={}, err={}", att.id(), e.getMessage());
             return null;
         }
     }
@@ -250,13 +299,13 @@ public class ReviewEvidenceAssembler {
      * 故开关关闭时同样注入；无媒体附件返回空串。
      */
     private String buildMediaVisibilityNote(Long subTaskId) {
-        List<Attachment> attachments = attachmentService.listActive(subTaskId);
+        List<AttachmentView> attachments = attachmentService.listActiveViews(subTaskId);
         if (attachments == null || attachments.isEmpty()) {
             return "";
         }
         List<String> mediaNames = attachments.stream()
-                .filter(att -> AttachmentContentPolicy.isMedia(att.getMimeType(), att.getFileName()))
-                .map(Attachment::getFileName)
+                .filter(att -> AttachmentContentPolicy.isMedia(att.mimeType(), att.fileName()))
+                .map(AttachmentView::fileName)
                 .toList();
         if (mediaNames.isEmpty()) {
             return "";
@@ -268,7 +317,7 @@ public class ReviewEvidenceAssembler {
     /**
      * 从 context.lastExecution.output 提取执行产出，缺失时给出占位说明。
      */
-    public String extractExecutionOutput(SubTask subTask) {
+    public String extractExecutionOutput(SubTaskView subTask) {
         String raw = extractRawOutput(subTask);
         if (!raw.isBlank()) {
             return summarize(raw, AttachmentContentPolicy.OUTPUT_SUMMARY_LIMIT);
@@ -277,8 +326,8 @@ public class ReviewEvidenceAssembler {
     }
 
     /** 取执行产出原文（不截断），供围栏证据信号检测使用。 */
-    public String extractRawOutput(SubTask subTask) {
-        Map<String, Object> ctx = subTask.getContext();
+    public String extractRawOutput(SubTaskView subTask) {
+        Map<String, Object> ctx = subTask.context();
         if (ctx != null && ctx.get("lastExecution") instanceof Map<?, ?> lastExecution) {
             Object output = lastExecution.get("output");
             if (output != null) {

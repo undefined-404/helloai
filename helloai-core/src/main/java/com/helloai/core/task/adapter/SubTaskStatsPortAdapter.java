@@ -1,4 +1,4 @@
-package com.helloai.core.task.service.impl;
+package com.helloai.core.task.adapter;
 
 import com.helloai.core.agent.port.SubTaskStatsPort;
 import com.helloai.core.task.entity.SubTask;

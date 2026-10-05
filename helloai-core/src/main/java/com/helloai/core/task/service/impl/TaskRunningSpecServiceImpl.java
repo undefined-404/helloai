@@ -8,6 +8,7 @@ import com.helloai.core.task.service.TaskRunningSpecService;
 import com.helloai.core.task.spec.ExecutionRecord;
 import com.helloai.core.task.spec.TaskBaseline;
 import com.helloai.core.task.spec.TaskRunningSpec;
+import com.helloai.core.task.spec.TaskRunningSpecPromptRenderer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -19,28 +20,28 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * TaskRunningSpecService 的**唯一**实现（独立表形态）。
+ * {@link TaskRunningSpecService} 的唯一实现（存于独立表）。
  *
- * <p>B4'（2026-10-02）：原「Phase A JSONB / Phase B 独立表」双轨已按
- * **分布式改造目标**二选一 —— 保留独立表、删除 JSONB 实现与
- * {@code helloai.task-running-spec.storage} 开关。选它的理由不是偏好，而是
- * **JSONB 形态在分布式下不成立**：它依赖「读整行 task → 改 context → 整行写回」
- * 加 **JVM 本地分段锁**串行化，锁不跨实例，多实例部署必丢更新；独立表用
- * 行级 upsert（{@code (task_id, sub_task_id)} 唯一）天然无覆盖竞态，**无需任何锁**，
- * 与「单应用 → 分布式」的改造方向一致。</p>
+ * <p>历史上曾有「{@code task.context.runningSpec} JSONB / 独立表」双实现；2026-10-02 按
+ * **分布式改造目标**二选一，保留独立表、删除 JSONB 实现与
+ * {@code helloai.task-running-spec.storage} 开关。判据：JSONB 形态依赖
+ * 「读整行 task → 改 context → 整行写回」+ JVM 本地分段锁串行化，**锁不跨实例**；
+ * 独立表用行级 upsert（{@code (task_id, sub_task_id)} 唯一）天然无覆盖竞态、
+ * 无需任何锁，与「单应用 → 分布式」改造方向一致。</p>
  *
  * <p>实现要点：
  * <ul>
  *   <li>{@code task_running_spec}（1 行 / task）：存 Baseline（JSONB）与 ContextSummary</li>
  *   <li>{@code task_execution_record}（N 行 / task）：(task_id, sub_task_id) 唯一，rework 时 DELETE + INSERT</li>
- *   <li>每次写记录后重算 ContextSummary（基于去重后的全量记录）</li>
+ *   <li>每次写记录后按已去重的全量记录重算 ContextSummary</li>
+ *   <li>Prompt 段渲染已外移 {@link TaskRunningSpecPromptRenderer}（§38 Prompt 规范）</li>
  * </ul>
  * </p>
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class TaskRunningSpecTableServiceImpl implements TaskRunningSpecService {
+public class TaskRunningSpecServiceImpl implements TaskRunningSpecService {
 
     private final TaskRunningSpecMapper specMapper;
     private final TaskExecutionRecordMapper recordMapper;
@@ -77,6 +78,14 @@ public class TaskRunningSpecTableServiceImpl implements TaskRunningSpecService {
         log.info("TaskRunningSpec baseline 初始化完成: taskId={}", taskId);
     }
 
+    /**
+     * 追加一条执行记录并重算 ContextSummary。
+     *
+     * <p><b>复杂度（明示取舍）</b>：每追加 1 条即按当前全量记录重算 summary
+     * （一次全表读 + 内存拼接），故整任务累计 O(n²)（n = 子任务数）。这是
+     * 「summary 必须与全量去重记录一致」的刻意取舍；n 的量级为单任务子任务数
+     * （通常 &lt; 30），非瓶颈。若将来 n 显著增大，再改为增量维护（须同时维护去重不变量）。</p>
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void appendExecutionRecord(Long taskId, ExecutionRecord record) {
@@ -95,7 +104,7 @@ public class TaskRunningSpecTableServiceImpl implements TaskRunningSpecService {
         String newSummary = compileSummaryFromRecords(loadExecutionRecords(taskId));
         persistContextSummary(taskId, newSummary);
 
-        log.info("ExecutionRecord 已写入: taskId={}, subTaskId={}, deduped=false",
+        log.info("ExecutionRecord 已写入: taskId={}, subTaskId={}",
                 taskId, record.subTaskId());
     }
 
@@ -131,11 +140,7 @@ public class TaskRunningSpecTableServiceImpl implements TaskRunningSpecService {
 
     @Override
     public String buildExecutorPromptSection(Long taskId) {
-        TaskRunningSpec spec = getOrCreate(taskId);
-        if (spec.isEmpty()) {
-            return "";
-        }
-        return JsonbPromptRenderer.render(spec);
+        return TaskRunningSpecPromptRenderer.render(getOrCreate(taskId));
     }
 
     @Override
@@ -153,7 +158,6 @@ public class TaskRunningSpecTableServiceImpl implements TaskRunningSpecService {
     @Transactional(rollbackFor = Exception.class)
     public void updateContract(Long taskId, Map<String, Object> contract) {
         // DB 层 UPDATE：契约写入独立列（JSONB），行级更新天然并发安全
-        // （Phase A JSONB 实现按 taskId 分段锁串行，两实现语义一致）
         specMapper.updateContract(taskId, contract);
         log.info("TaskRunningSpec 契约已写入: taskId={}, contractKeys={}",
                 taskId, contract != null ? contract.keySet() : null);
@@ -214,9 +218,7 @@ public class TaskRunningSpecTableServiceImpl implements TaskRunningSpecService {
         return b.build();
     }
 
-    /**
-     * 与 Phase A JsonbService 保持同一编译逻辑：N 条已去重记录拼接成一连贯段落。
-     */
+    /** 把 N 条已去重记录拼接成一连贯段落（ContextSummary）。 */
     private String compileSummaryFromRecords(List<ExecutionRecord> records) {
         if (records == null || records.isEmpty()) {
             return "";
@@ -235,49 +237,5 @@ public class TaskRunningSpecTableServiceImpl implements TaskRunningSpecService {
             }
         }
         return sb.toString().trim();
-    }
-
-    // ──────────────── 静态提示词渲染（与 Phase A 共享，避免重复实现） ────────────────
-
-    /**
-     * 把 TaskRunningSpec 渲染成 Markdown 提示词段——逻辑与 Phase A 完全一致，
-     * 抽到这里共用，避免两套实现各写一遍漂移。
-     */
-    private static final class JsonbPromptRenderer {
-        static String render(TaskRunningSpec spec) {
-            StringBuilder sb = new StringBuilder();
-            sb.append("## 任务全局上下文（Task Running Spec）\n");
-            TaskBaseline bl = spec.baseline();
-            if (bl != null) {
-                sb.append("\n### 总体目标\n");
-                sb.append(bl.goal()).append('\n');
-                if (bl.constraints() != null && !bl.constraints().isBlank()) {
-                    sb.append("\n### 平台约束\n");
-                    sb.append(bl.constraints()).append('\n');
-                }
-            }
-            String cs = spec.contextSummary();
-            if (cs != null && !cs.isBlank()) {
-                sb.append("\n### 全局进度与关键事实\n");
-                sb.append(cs).append('\n');
-            }
-            // 任务契约（契约先行拆解）：与 Jsonb 侧 buildExecutorPromptSection
-            // 渲染逻辑保持一致，作为独立二级节全局注入所有下游执行 Prompt
-            Map<String, Object> contract = spec.contract();
-            if (contract != null && !contract.isEmpty()) {
-                sb.append("\n## 任务契约\n\n");
-                Object title = contract.get("title");
-                if (title != null && !String.valueOf(title).isBlank()) {
-                    sb.append("契约来源：").append(title).append("\n\n");
-                }
-                Object content = contract.get("content");
-                if (content != null && !String.valueOf(content).isBlank()) {
-                    sb.append(content).append('\n');
-                }
-            }
-            // 子任务执行记录明细不在此全量铺开：依赖上下文由调用方按 dependsOnIdList
-            // 经 findRecord 逐条收集渲染（见 SubTaskExecutionService.buildDependencySection）
-            return sb.toString();
-        }
     }
 }

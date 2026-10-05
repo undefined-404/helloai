@@ -2,13 +2,13 @@ package com.helloai.core.review.support;
 
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ReviewResult;
-import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.service.ConversationService;
 import com.helloai.core.review.picker.ReviewerPicker;
 import com.helloai.core.review.service.SubTaskReviewService;
 import com.helloai.core.review.entity.ReviewRecord;
-import com.helloai.core.task.entity.SubTask;
+import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.review.service.ReviewService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskTimelineService;
@@ -66,13 +66,13 @@ public class ReviewRecheckExecutor {
                     reviewRecordId, record.getResult());
             return;
         }
-        SubTask subTask = subTaskService.getById(record.getSubTaskId());
+        SubTaskView subTask = subTaskService.getView(record.getSubTaskId());
         if (subTask == null) {
             log.warn("抽检复审跳过：子任务不存在, reviewRecordId={}, subTaskId={}",
                     reviewRecordId, record.getSubTaskId());
             return;
         }
-        Agent reviewer = reviewerPicker.pickSingle(subTask);
+        AgentProfileSnapshot reviewer = reviewerPicker.pickSingle(subTask);
         if (reviewer == null) {
             log.warn("抽检复审跳过：无可用平台内核验 Agent, reviewRecordId={}", reviewRecordId);
             return;
@@ -100,7 +100,7 @@ public class ReviewRecheckExecutor {
             if (verdict.getComment() != null && !verdict.getComment().isBlank()) {
                 resultText += "\n- 评语: " + verdict.getComment();
             }
-            conversationService.addMessage(subTask.getId(), reviewer.getId(),
+            conversationService.addMessage(subTask.id(), reviewer.id(),
                     "assistant", "agent", resultText, "subtask_recheck_result");
         } catch (Exception e) {
             log.warn("抽检结论对话流写入失败（不阻断抽检）: reviewRecordId={}, err={}",
@@ -108,8 +108,8 @@ public class ReviewRecheckExecutor {
         }
         // 抽检日志落库（best-effort）：放水率度量与人工复核追溯的唯一事实源
         try {
-            reviewService.recordRecheck(reviewRecordId, subTask.getId(), ReviewResult.APPROVED,
-                    recheckResult, !pass, reviewer.getId(), score,
+            reviewService.recordRecheck(reviewRecordId, subTask.id(), ReviewResult.APPROVED,
+                    recheckResult, !pass, reviewer.id(), score,
                     verdict.getIssues(), verdict.getComment());
         } catch (Exception e) {
             log.warn("抽检复审落 review_recheck_log 失败: reviewRecordId={}, err={}",
@@ -117,18 +117,18 @@ public class ReviewRecheckExecutor {
         }
         // Reviewer 维度画像计数（best-effort）：复审完成 +1 reviewed；分歧信号留在 log.discrepancy
         try {
-            agentQualityProfileService.incrementReviewerStats(reviewer.getId(), 1, 0);
+            agentQualityProfileService.incrementReviewerStats(reviewer.id(), 1, 0);
         } catch (Exception e) {
             log.warn("抽检 Reviewer 画像计数增量失败: reviewRecordId={}, err={}",
                     reviewRecordId, e.getMessage());
         }
-        taskTimelineService.recordEvent(subTask.getTaskId(), subTask.getId(),
+        taskTimelineService.recordEvent(subTask.taskId(), subTask.id(),
                 pass ? "sub_task_recheck_consistent" : "sub_task_recheck_discrepancy",
-                AgentRole.REVIEWER, reviewer.getId(),
+                AgentRole.REVIEWER, reviewer.id(),
                 Map.of("reviewRecordId", reviewRecordId, "originalResult", "APPROVED",
                         "recheckResult", recheckResult.name(), "discrepancy", !pass,
                         "score", score));
         log.info("抽检复审完成: reviewRecordId={}, subTaskId={}, recheckResult={}, reviewerAgentId={}",
-                reviewRecordId, subTask.getId(), recheckResult, reviewer.getId());
+                reviewRecordId, subTask.id(), recheckResult, reviewer.id());
     }
 }

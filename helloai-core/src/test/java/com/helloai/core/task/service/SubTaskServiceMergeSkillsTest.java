@@ -117,7 +117,7 @@ class SubTaskServiceMergeSkillsTest {
         @DisplayName("null 子任务安全：不 NPE，返回任务级或空列表")
         void shouldHandleNullSubTask() {
             doReturn(List.of()).when(subTaskService).requiredSkillsOf(null);
-            assertThat(subTaskService.mergeSkills(null)).isEmpty();
+            assertThat(subTaskService.mergeSkills((SubTask) null)).isEmpty();
         }
 
         @Test

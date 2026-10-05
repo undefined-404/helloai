@@ -1,4 +1,4 @@
-package com.helloai.core.task.service.impl;
+package com.helloai.core.task.adapter;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.SubTaskStatus;
@@ -176,34 +176,13 @@ class SubTaskCommandPortAdapterTest {
     }
 
     @Test
-    @DisplayName("updateContext: 提供方自取最新行整体覆写（读改写回写不透明，消费方不持 version）")
-    void shouldUpdateContextByReReadingLatestRow() {
-        SubTask existing = new SubTask();
-        existing.setId(22L);
-        existing.setTaskId(33L);
-        Map<String, Object> staleContext = new HashMap<>();
-        staleContext.put("stale", "old");
-        existing.setContext(staleContext);
-        when(subTaskService.getById(22L)).thenReturn(existing);
-
+    @DisplayName("updateContext: 纯委托提供方做「取最新行整体覆写」（适配器零判定，语义在 task 域）")
+    void shouldDelegateUpdateContextToProvider() {
         Map<String, Object> target = Map.of("lastExecution", Map.of("success", true));
+
         adapter.updateContext(22L, target);
 
-        ArgumentCaptor<SubTask> captor = ArgumentCaptor.forClass(SubTask.class);
-        verify(subTaskService).updateById(captor.capture());
-        // 目标 context 整体覆写（非增量合并），并保留行内其余字段
-        assertThat(captor.getValue().getId()).isEqualTo(22L);
-        assertThat(captor.getValue().getTaskId()).isEqualTo(33L);
-        assertThat(captor.getValue().getContext()).isEqualTo(target);
-    }
-
-    @Test
-    @DisplayName("updateContext: 子任务不存在时静默返回（等价 updateById 更新 0 行，不抛错）")
-    void shouldSilentlyReturnWhenSubTaskMissing() {
-        when(subTaskService.getById(22L)).thenReturn(null);
-
-        adapter.updateContext(22L, Map.of("k", "v"));
-
+        verify(subTaskService).updateContext(22L, target);
         verify(subTaskService, never()).updateById(any());
     }
 }

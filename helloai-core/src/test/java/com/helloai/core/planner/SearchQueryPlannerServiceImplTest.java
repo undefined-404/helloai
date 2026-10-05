@@ -3,7 +3,7 @@ package com.helloai.core.planner;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.config.WebSearchProperties;
 import com.helloai.core.agent.domain.AgentTask;
-import com.helloai.core.agent.entity.Agent;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
 import com.helloai.core.planner.clarify.SystemTimeContextBuilder;
 import com.helloai.core.planner.picker.PlannerAgentPicker;
@@ -16,6 +16,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -103,8 +104,8 @@ class SearchQueryPlannerServiceImplTest {
     @DisplayName("LLM 改写失败（平台执行抛异常）：降级规则结果，不抛异常")
     void planQueries_llmRewriteFails_degradesToRuleResult() {
         // 长疑问句 + 规则仅单候选词 → 触发 LLM 改写；平台执行抛异常 → 降级规则结果
-        when(plannerAgentPicker.pick(isNull())).thenReturn(mock(Agent.class));
-        when(platformAgentExecutionService.executeSync(any(Agent.class), any(AgentTask.class)))
+        when(plannerAgentPicker.pick(isNull())).thenReturn(mock(AgentProfileSnapshot.class));
+        when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenThrow(new RuntimeException("LLM 不可用"));
 
         List<String> queries = planner.planQueries(

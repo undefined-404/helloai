@@ -6,7 +6,7 @@ import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.LlmProviderCatalogService;
 import com.helloai.core.agent.service.PlatformProviderConfigService;
 import com.helloai.core.agent.service.impl.LlmProviderCatalogServiceImpl;
-import com.helloai.core.system.entity.LlmProvider;
+import com.helloai.core.system.port.LlmProviderProfile;
 import com.helloai.core.system.service.LlmProviderQueryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -50,14 +50,9 @@ class LlmProviderCatalogServiceTest {
                 factoryRegistry, platformProviderConfigService);
     }
 
-    private LlmProvider llmProvider(String providerCode, String providerName,
-                                    String protocolType, Integer enabled) {
-        LlmProvider provider = new LlmProvider();
-        provider.setProviderCode(providerCode);
-        provider.setProviderName(providerName);
-        provider.setProtocolType(protocolType);
-        provider.setEnabled(enabled);
-        return provider;
+    private LlmProviderProfile llmProvider(String providerCode, String providerName,
+                                           String protocolType, Integer enabled) {
+        return new LlmProviderProfile(providerCode, providerName, null, null, protocolType, enabled);
     }
 
     private Agent agent(String modelType) {
@@ -74,7 +69,7 @@ class LlmProviderCatalogServiceTest {
         @Test
         @DisplayName("deepseek 走专用 Factory 特判，协议类型任意非空均支持")
         void shouldMarkDeepSeekSupported() {
-            when(queryService.listAll()).thenReturn(List.of(
+            when(queryService.listAllProfiles()).thenReturn(List.of(
                     llmProvider("deepseek", "DeepSeek", "OPENAI_COMPATIBLE", 1)));
             when(platformProviderConfigService.isApiKeyConfigured("deepseek")).thenReturn(true);
 
@@ -88,7 +83,7 @@ class LlmProviderCatalogServiceTest {
         @Test
         @DisplayName("OPENAI_COMPATIBLE / ANTHROPIC_COMPATIBLE 协议被支持")
         void shouldSupportKnownProtocolTypes() {
-            when(queryService.listAll()).thenReturn(List.of(
+            when(queryService.listAllProfiles()).thenReturn(List.of(
                     llmProvider("moonshot", "Moonshot", "OPENAI_COMPATIBLE", 1),
                     llmProvider("minimax", "MiniMax", "ANTHROPIC_COMPATIBLE", 1)));
             when(platformProviderConfigService.isApiKeyConfigured("moonshot")).thenReturn(true);
@@ -106,7 +101,7 @@ class LlmProviderCatalogServiceTest {
         @Test
         @DisplayName("未知协议 GEMINI_NATIVE 不支持，available=false")
         void shouldRejectUnknownProtocolType() {
-            when(queryService.listAll()).thenReturn(List.of(
+            when(queryService.listAllProfiles()).thenReturn(List.of(
                     llmProvider("gemini", "Gemini", "GEMINI_NATIVE", 1)));
             when(platformProviderConfigService.isApiKeyConfigured("gemini")).thenReturn(true);
 
@@ -119,7 +114,7 @@ class LlmProviderCatalogServiceTest {
         @Test
         @DisplayName("protocolType 为 null 时不支持（deepseek 特判之前拦截）")
         void shouldRejectNullProtocolType() {
-            when(queryService.listAll()).thenReturn(List.of(
+            when(queryService.listAllProfiles()).thenReturn(List.of(
                     llmProvider("moonshot", "Moonshot", null, 1)));
             when(platformProviderConfigService.isApiKeyConfigured("moonshot")).thenReturn(true);
 
@@ -131,7 +126,7 @@ class LlmProviderCatalogServiceTest {
         @Test
         @DisplayName("providerCode 归一为小写")
         void shouldNormalizeProviderCodeToLowerCase() {
-            when(queryService.listAll()).thenReturn(List.of(
+            when(queryService.listAllProfiles()).thenReturn(List.of(
                     llmProvider("Moonshot", "Moonshot", "OPENAI_COMPATIBLE", 1)));
             when(platformProviderConfigService.isApiKeyConfigured("moonshot")).thenReturn(true);
 
@@ -148,7 +143,7 @@ class LlmProviderCatalogServiceTest {
         @Test
         @DisplayName("enabled=0 时 available=false，即使其他条件满足")
         void shouldNotAvailableWhenDisabled() {
-            when(queryService.listAll()).thenReturn(List.of(
+            when(queryService.listAllProfiles()).thenReturn(List.of(
                     llmProvider("moonshot", "Moonshot", "OPENAI_COMPATIBLE", 0)));
             when(platformProviderConfigService.isApiKeyConfigured("moonshot")).thenReturn(true);
 
@@ -162,7 +157,7 @@ class LlmProviderCatalogServiceTest {
         @Test
         @DisplayName("平台 Key 未配置时 available=false，factorySupported 仍为 true")
         void shouldNotAvailableWithoutApiKey() {
-            when(queryService.listAll()).thenReturn(List.of(
+            when(queryService.listAllProfiles()).thenReturn(List.of(
                     llmProvider("moonshot", "Moonshot", "OPENAI_COMPATIBLE", 1)));
             when(platformProviderConfigService.isApiKeyConfigured("moonshot")).thenReturn(false);
 
@@ -188,7 +183,7 @@ class LlmProviderCatalogServiceTest {
         @Test
         @DisplayName("大小写不敏感匹配可用项")
         void shouldMatchCaseInsensitive() {
-            when(queryService.listAll()).thenReturn(List.of(
+            when(queryService.listAllProfiles()).thenReturn(List.of(
                     llmProvider("moonshot", "Moonshot", "OPENAI_COMPATIBLE", 1)));
             when(platformProviderConfigService.isApiKeyConfigured("moonshot")).thenReturn(true);
 
@@ -198,7 +193,7 @@ class LlmProviderCatalogServiceTest {
         @Test
         @DisplayName("不可用项返回 false")
         void shouldReturnFalseWhenNotAvailable() {
-            when(queryService.listAll()).thenReturn(List.of(
+            when(queryService.listAllProfiles()).thenReturn(List.of(
                     llmProvider("moonshot", "Moonshot", "OPENAI_COMPATIBLE", 1)));
             when(platformProviderConfigService.isApiKeyConfigured("moonshot")).thenReturn(false);
 
@@ -214,7 +209,7 @@ class LlmProviderCatalogServiceTest {
         @DisplayName("modelType 为空时回退 execution.provider，核对通过返回 true")
         void shouldFallbackToExecutionProvider() {
             when(executionProperties.getProvider()).thenReturn("deepseek");
-            when(queryService.listAll()).thenReturn(List.of(
+            when(queryService.listAllProfiles()).thenReturn(List.of(
                     llmProvider("deepseek", "DeepSeek", "OPENAI_COMPATIBLE", 1)));
             when(platformProviderConfigService.isApiKeyConfigured("deepseek")).thenReturn(true);
 
@@ -227,7 +222,7 @@ class LlmProviderCatalogServiceTest {
         @Test
         @DisplayName("modelType 带前缀时按前缀解析 provider，核对通过返回 true")
         void shouldResolveProviderFromModelTypePrefix() {
-            when(queryService.listAll()).thenReturn(List.of(
+            when(queryService.listAllProfiles()).thenReturn(List.of(
                     llmProvider("moonshot", "Moonshot", "OPENAI_COMPATIBLE", 1)));
             when(platformProviderConfigService.isApiKeyConfigured("moonshot")).thenReturn(true);
 
@@ -241,7 +236,7 @@ class LlmProviderCatalogServiceTest {
         @DisplayName("provider 未生效时静默跳过返回 false，不抛错")
         void shouldSkipSilentlyWhenProviderUnavailable() {
             when(executionProperties.getProvider()).thenReturn("deepseek");
-            when(queryService.listAll()).thenReturn(List.of(
+            when(queryService.listAllProfiles()).thenReturn(List.of(
                     llmProvider("deepseek", "DeepSeek", "OPENAI_COMPATIBLE", 1)));
             when(platformProviderConfigService.isApiKeyConfigured("deepseek")).thenReturn(false);
 
@@ -253,7 +248,7 @@ class LlmProviderCatalogServiceTest {
         @Test
         @DisplayName("平台 Key 已配置但 provider 未启用时同样跳过返回 false")
         void shouldSkipWhenProviderDisabled() {
-            when(queryService.listAll()).thenReturn(List.of(
+            when(queryService.listAllProfiles()).thenReturn(List.of(
                     llmProvider("moonshot", "Moonshot", "OPENAI_COMPATIBLE", 0)));
             when(platformProviderConfigService.isApiKeyConfigured("moonshot")).thenReturn(true);
 

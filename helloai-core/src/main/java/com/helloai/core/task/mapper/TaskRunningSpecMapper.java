@@ -11,12 +11,12 @@ import org.apache.ibatis.annotations.Update;
 import java.util.Map;
 
 /**
- * TaskRunningSpec Mapper（Phase B）。
+ * {@code task_running_spec} 表 Mapper（{@link TaskRunningSpecEntity}）——任务级 Running Spec 持久化访问。
  */
 @Mapper
 public interface TaskRunningSpecMapper extends BaseMapper<TaskRunningSpecEntity> {
 
-    /** 按 taskId 查询（运行时常按 1:1 用 BaseMapper.getOne 即可，这里留冗余声明）。 */
+    /** 按 taskId 查当前任务的 Running Spec 行（taskId 唯一，最多 1 行）。 */
     @Select("SELECT * FROM task_running_spec WHERE task_id = #{taskId} AND deleted = 0 LIMIT 1")
     TaskRunningSpecEntity selectByTaskId(@Param("taskId") Long taskId);
 
