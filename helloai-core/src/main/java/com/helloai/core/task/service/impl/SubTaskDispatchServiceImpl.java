@@ -1,6 +1,7 @@
 package com.helloai.core.task.service.impl;
 
 import com.helloai.common.base.BizException;
+import com.helloai.common.base.NoCandidateAgentException;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
@@ -158,6 +159,12 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
     /**
      * {@link #dispatchPendingSubTaskAuto} 与 {@link #dispatchPendingSubTaskCompensating} 的共用实现。
      *
+     * <p><b>计数时机（2026-10-05 修 P1-1）</b>：{@code accumulateReassignAttempt} 已后移到
+     * 「选人成功之后、真正派发之前」——只有真正选出执行者、进入派发才消耗一次重派预算。
+     * 「无候选」「子任务不存在」「状态非 PENDING」等<b>未派出</b>的失败不再累加
+     * {@code attempt_total}，也不再推进退避时钟 {@code last_attempt_time}（二者同源于
+     * {@code incrementAttemptTotal}）⇒ 等待态不会被误烧成熔断死信。</p>
+     *
      * @param countAttempt true=消耗一次重派预算（常规入口）；false=只复用拦截判定不计数（补偿路径）
      */
     private Long doDispatchPendingAuto(Long subTaskId, AgentRole role, boolean countAttempt) {
@@ -175,9 +182,6 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         if (isReassignBlockedOrEscalate(subTaskId)) {
             return null;
         }
-        if (countAttempt) {
-            accumulateReassignAttempt(subTaskId);
-        }
         SubTask subTask = subTaskService.getById(subTaskId);
         if (subTask == null) {
             throw new BizException("子任务不存在: " + subTaskId);
@@ -190,7 +194,15 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         DispatchConstraints constraints = resolveConstraints(subTask);
         var preferred = agentSelector.pickPreferred(role, toSelectorConstraints(constraints));
         if (preferred == null) {
-            throw new BizException("无可用候选 Agent: role=" + role);
+            // 无候选属可自愈等待态：抛专用异常且**不消耗**重派预算（见方法 javadoc）
+            throw new NoCandidateAgentException("无可用候选 Agent: role=" + role);
+        }
+
+        // ★ P1-1 修复：只有真正选出执行者、进入派发，才消耗一次重派预算。
+        // 「无候选」「状态非 PENDING」等**未派出**的失败不再累加 attempt_total、
+        // 不再推进退避时钟 last_attempt_time ⇒ 不会把等待态误烧成熔断死信。
+        if (countAttempt) {
+            accumulateReassignAttempt(subTaskId);
         }
 
         taskTimelineService.recordEvent(

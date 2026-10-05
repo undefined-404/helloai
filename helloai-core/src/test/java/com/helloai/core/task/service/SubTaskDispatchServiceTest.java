@@ -1,6 +1,7 @@
 package com.helloai.core.task.service;
 
 import com.helloai.common.base.BizException;
+import com.helloai.common.base.NoCandidateAgentException;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
@@ -497,6 +498,33 @@ class SubTaskDispatchServiceTest {
         verify(subTaskMapper).incrementAttemptTotal(eq(82L), any(OffsetDateTime.class));
         verify(subTaskService, never()).changeStatus(anyLong(), any(), any(), any());
         verify(taskDispatchPort).assignNext(99L, 82L, null);
+    }
+
+    @Test
+    @DisplayName("P1-1: 无候选 → 抛 NoCandidateAgentException 且不累加 attempt_total（不烧重派预算）")
+    void shouldThrowNoCandidateAndNotConsumeReassignBudget() {
+        when(agentDispatchProperties.getMaxReassignAttempts()).thenReturn(5);
+
+        SubTask subTask = new SubTask();
+        subTask.setId(86L);
+        subTask.setTaskId(96L);
+        subTask.setStatus(SubTaskStatus.PENDING);
+        subTask.setAttemptTotal(0);
+        when(subTaskService.getById(86L)).thenReturn(subTask);
+        // ready 守卫在熔断检查前，无依赖子任务视为就绪
+        when(subTaskService.isReady(subTask)).thenReturn(true);
+        // 选人失败：当前没有任何可用候选
+        when(agentSelector.pickPreferred(AgentRole.EXECUTOR, null)).thenReturn(null);
+
+        assertThatThrownBy(() -> subTaskDispatchService.dispatchPendingSubTaskAuto(86L, AgentRole.EXECUTOR))
+                .isInstanceOf(NoCandidateAgentException.class)
+                .hasMessageContaining("无可用候选 Agent");
+
+        // 关键回归锁：未派出 ⇒ 不消耗重派预算、不推进退避时钟、不派发、不落 dispatch_prepare
+        verify(subTaskMapper, never()).incrementAttemptTotal(anyLong(), any(OffsetDateTime.class));
+        verify(taskDispatchPort, never()).assignNext(any(), any(), any());
+        verify(taskTimelineService, never()).recordEvent(
+                any(), any(), eq("sub_task_dispatch_prepare"), any(), any(), any());
     }
 
     @Test

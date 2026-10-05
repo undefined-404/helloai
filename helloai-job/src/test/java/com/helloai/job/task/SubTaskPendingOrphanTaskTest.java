@@ -1,12 +1,14 @@
 package com.helloai.job.task;
 
 import com.helloai.common.base.BizException;
+import com.helloai.common.base.NoCandidateAgentException;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskTimelineService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -25,7 +27,10 @@ import java.util.Map;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -58,6 +63,8 @@ class SubTaskPendingOrphanTaskTest {
     private SubTaskDispatchService subTaskDispatchService;
     @Mock
     private AgentExecutionProperties executionProperties;
+    @Mock
+    private TaskTimelineService taskTimelineService;
 
     private SubTaskPendingOrphanTask task;
 
@@ -71,7 +78,7 @@ class SubTaskPendingOrphanTaskTest {
 
         task = new SubTaskPendingOrphanTask(
                 subTaskService, subTaskDispatchService,
-                executionProperties);
+                executionProperties, taskTimelineService);
     }
 
     @Nested
@@ -222,6 +229,53 @@ class SubTaskPendingOrphanTaskTest {
                     .dispatchPendingSubTaskAuto(eq(1L), eq(AgentRole.EXECUTOR));
             verify(subTaskDispatchService, times(1))
                     .dispatchPendingSubTaskAuto(eq(2L), eq(AgentRole.EXECUTOR));
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        //  P1-1：无候选属可自愈等待态 → 单独分流 + 落 timeline（不再静默）
+        // ═══════════════════════════════════════════════════════════════
+
+        @Test
+        @DisplayName("P1-1: 无候选 → skipNoCandidate + 落 sub_task_no_candidate，不误报已重派")
+        void shouldRecordNoCandidateAndNotReportDispatched() {
+            when(subTaskService.listStalePendingWithoutExecutionRecord(any(), anyInt()))
+                    .thenReturn(List.of(1L));
+            when(subTaskService.getById(1L)).thenReturn(pendingSubTask(1L));
+
+            // 选不出人：抛 NoCandidateAgentException（未消耗预算的等待态）
+            doThrow(new NoCandidateAgentException("无可用候选 Agent: role=EXECUTOR"))
+                    .when(subTaskDispatchService)
+                    .dispatchPendingSubTaskAuto(eq(1L), eq(AgentRole.EXECUTOR));
+
+            task.scan();
+
+            // 可观测性：落 sub_task_no_candidate（taskId=null，系统级等待态事件）
+            verify(taskTimelineService).recordEvent(
+                    isNull(), eq(1L), eq("sub_task_no_candidate"),
+                    eq(AgentRole.SYSTEM), isNull(), anyMap());
+            // 未被状态冲突分支截走（不落其它 skip 事件）
+            verify(taskTimelineService, never()).recordEvent(
+                    any(), any(), eq("sub_task_redispatch_skipped"), any(), any(), anyMap());
+        }
+
+        @Test
+        @DisplayName("P1-1: 返回值 null（闸门拦截/退避）→ 走 skipGated，不落 no_candidate 事件")
+        void shouldSkipGatedWithoutNoCandidateEvent() {
+            when(subTaskService.listStalePendingWithoutExecutionRecord(any(), anyInt()))
+                    .thenReturn(List.of(1L));
+            when(subTaskService.getById(1L)).thenReturn(pendingSubTask(1L));
+
+            // 闸门拦截：本轮未派出，返回 null
+            doReturn(null).when(subTaskDispatchService)
+                    .dispatchPendingSubTaskAuto(eq(1L), eq(AgentRole.EXECUTOR));
+
+            task.scan();
+
+            verify(subTaskDispatchService, times(1))
+                    .dispatchPendingSubTaskAuto(eq(1L), eq(AgentRole.EXECUTOR));
+            // 非「无候选」路径 → 不应落 no_candidate 事件
+            verify(taskTimelineService, never()).recordEvent(
+                    any(), any(), eq("sub_task_no_candidate"), any(), any(), anyMap());
         }
 
         @Test

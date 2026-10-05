@@ -1,11 +1,13 @@
 package com.helloai.job.task;
 
 import com.helloai.common.base.BizException;
+import com.helloai.common.base.NoCandidateAgentException;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.TaskTimelineService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
@@ -14,6 +16,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 
 /**
  * PENDING 孤儿子任务巡检任务。
@@ -50,6 +53,12 @@ import java.util.List;
  *     <li>{@code dispatchPendingSubTaskAuto} 本身要求子任务当前为 PENDING 状态，
  *         若已被外部 Agent claim 或被其它路径推进到非 PENDING，会抛 BizException；
  *         catch 后仅记录日志，不影响同轮其他记录</li>
+ *     <li><b>「暂无可用候选」是可自愈等待态（2026-10-05 修 P1-1）</b>：
+ *         {@code dispatchPendingSubTaskAuto} 选不出人时抛 {@link NoCandidateAgentException}
+ *         （不消耗重派预算），本类按异常类型<b>单独分流</b>并落
+ *         {@code sub_task_no_candidate} 时间线，不再被静默归入 skipStatusChanged；
+ *         下一轮巡检（60s）候选恢复后自动重试。返回值 {@code null}（闸门拦截 / 退避 /
+ *         依赖未就绪）计入 skipGated，不与「已重派」混为一谈。</li>
  * </ol>
  *
  * <h3>配置项</h3>
@@ -73,6 +82,7 @@ public class SubTaskPendingOrphanTask {
     private final SubTaskService subTaskService;
     private final SubTaskDispatchService subTaskDispatchService;
     private final AgentExecutionProperties executionProperties;
+    private final TaskTimelineService taskTimelineService;
 
     /**
      * 周期扫描入口。
@@ -107,6 +117,8 @@ public class SubTaskPendingOrphanTask {
             int skipStatusChanged = 0;
             int skipNotReady = 0;
             int skipManualIntervention = 0;
+            int skipGated = 0;
+            int skipNoCandidate = 0;
 
             for (Long subTaskId : orphanIds) {
                 try {
@@ -142,9 +154,31 @@ public class SubTaskPendingOrphanTask {
                     // PENDING 孤儿重派：默认按 EXECUTOR 角色选人
                     // —— 因为 PENDING 子任务通常还未指定角色，Module.role 在更上层传入；
                     // 本任务作为兜底路径，统一按 EXECUTOR 处理最常见场景
-                    subTaskDispatchService.dispatchPendingSubTaskAuto(subTaskId, AgentRole.EXECUTOR);
-                    recovered++;
-                    log.info("PENDING 孤儿已重派: subTaskId={}", subTaskId);
+                    Long dispatchedAgentId = subTaskDispatchService.dispatchPendingSubTaskAuto(subTaskId, AgentRole.EXECUTOR);
+                    if (dispatchedAgentId != null) {
+                        recovered++;
+                        log.info("PENDING 孤儿已重派: subTaskId={}, agentId={}", subTaskId, dispatchedAgentId);
+                    } else {
+                        // 闸门拦截 / 退避窗口 / 依赖未就绪 —— 本轮未派出，不算重派（P1-1 修误报）
+                        skipGated++;
+                        log.debug("PENDING 孤儿本轮未派出（闸门拦截/退避/依赖未就绪）: subTaskId={}", subTaskId);
+                    }
+                } catch (NoCandidateAgentException noCand) {
+                    // 「暂无可用执行者」是可自愈的等待态：不消耗预算、不误判死信；
+                    // 落 timeline 让用户可见（不再静默），下一轮孤儿扫描（60s）自动重试。
+                    skipNoCandidate++;
+                    log.warn("PENDING 孤儿暂无可用执行者（等待自动重试）: subTaskId={}, reason={}",
+                            subTaskId, noCand.getMessage());
+                    try {
+                        // latest 在 try 内声明、catch 不可见，故 taskId 传 null
+                        //（recordEvent 允许 taskId 为空，属系统级等待态事件；前端按 subTaskId 可查）
+                        taskTimelineService.recordEvent(null, subTaskId, "sub_task_no_candidate",
+                                AgentRole.SYSTEM, null,
+                                Map.of("reason", noCand.getMessage() != null ? noCand.getMessage() : "no_available_candidate",
+                                        "waitFor", "pending_orphan_scan"));
+                    } catch (Exception te) {
+                        log.debug("记录 sub_task_no_candidate 事件失败: subTaskId={}, err={}", subTaskId, te.getMessage());
+                    }
                 } catch (BizException bizEx) {
                     // 子任务状态被外部改写（典型 case：刚被另外路径 claim / block / cancel）
                     // —— 视为并发冲突，skip 而不是 fail
@@ -157,9 +191,11 @@ public class SubTaskPendingOrphanTask {
                 }
             }
 
-            if (recovered > 0 || failed > 0 || skipStatusChanged > 0 || skipNotReady > 0 || skipManualIntervention > 0) {
-                log.info("PENDING 孤儿巡检完成: 扫描={}, 重派={}, 跳过（状态冲突）={}, 跳过（依赖未就绪）={}, 跳过（人工介入）={}, 失败={}",
-                        orphanIds.size(), recovered, skipStatusChanged, skipNotReady, skipManualIntervention, failed);
+            if (recovered > 0 || failed > 0 || skipStatusChanged > 0 || skipNotReady > 0
+                    || skipManualIntervention > 0 || skipGated > 0 || skipNoCandidate > 0) {
+                log.info("PENDING 孤儿巡检完成: 扫描={}, 重派={}, 跳过（状态冲突）={}, 跳过（依赖未就绪）={}, 跳过（人工介入）={}, 跳过（闸门/退避）={}, 跳过（暂无候选）={}, 失败={}",
+                        orphanIds.size(), recovered, skipStatusChanged, skipNotReady, skipManualIntervention,
+                        skipGated, skipNoCandidate, failed);
             }
 
         } catch (Exception e) {
