@@ -143,7 +143,7 @@
           </el-table-column>
           <el-table-column
             label="状态"
-            width="100"
+            width="190"
           >
             <template #default="{ row }">
               <el-tag
@@ -151,6 +151,16 @@
                 size="small"
               >
                 {{ getSubTaskStatusMeta(row.status)?.label || row.status }}
+              </el-tag>
+              <!-- 无候选等待可视化（短版）：PENDING 且 context.noCandidate.nextDispatchAt 存在时，
+                   在状态标签旁补一个「约 Ns 后重试」小标签；已转人工则显示「等待人工介入」 -->
+              <el-tag
+                v-if="pendingWaitOf(row)"
+                size="small"
+                :type="pendingWaitOf(row)!.kind === 'manual' ? 'warning' : 'info'"
+                class="wait-tag"
+              >
+                {{ pendingWaitOf(row)!.text }}
               </el-tag>
             </template>
           </el-table-column>
@@ -447,6 +457,7 @@ import { fmtTime } from '@/utils/tableConfig'
 import { orderByDependency } from '@/utils/subTaskDag'
 import { queryString } from '@/utils/queryParam'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { resolvePendingWait, usePendingCountdown, type PendingWait } from '@/composables/usePendingCountdown'
 import { useAuthStore } from '@/stores/auth'
 import type { Task, SubTask, SubTaskStatus, TaskIteration } from '@/types'
 
@@ -536,6 +547,18 @@ function depItems(row: SubTask): { id: string; seq: number; title: string }[] {
 }
 
 function goDetail(id: string) { router.push('/sub-tasks/' + id) }
+
+// ── 无候选等待倒计时（短版）：与详情页共用 usePendingCountdown 口径 ──
+// PENDING 且 context.noCandidate.nextDispatchAt 存在的行，在状态标签旁显示「约 Ns 后重试」；
+// 单页最多数十行，逐行按 nowTick 计算即可，无需为每行单独建定时器。
+// 全列表共用 1 个每秒 tick：仅当当前页存在可见倒计时才启动，避免空表也空转。
+const pendingWaitOf = (row: SubTask): PendingWait | null =>
+  resolvePendingWait(row.status, row.context, now.value, true)
+
+const hasCountdown = computed(() =>
+  displayList.value.some(row => pendingWaitOf(row)?.kind === 'countdown')
+)
+const { now } = usePendingCountdown({ active: hasCountdown })
 
 async function loadParentTask() {
   if (!taskId.value) { parentTask.value = null; return }
@@ -770,6 +793,12 @@ onMounted(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--ha-ink);
+}
+/* 状态列内的等待倒计时小标签：紧跟状态标签，不压缩、单行不换行 */
+.wait-tag {
+  flex: none;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 /* 表格 cell 默认 vertical-align: middle，显式居中作为升级防御，
    保证单行 Agent 名与单行时间戳视觉中线对齐 */

@@ -24,6 +24,22 @@
           >
             评分 {{ SCORE_GRADE_MAP[item.scoreGrade]?.label || item.scoreGrade }}
           </el-tag>
+          <!-- 无候选等待可视化：PENDING 且 context.noCandidate.nextDispatchAt 存在时，
+               显示「等待执行者 · 约 N 秒后重试」（每秒刷新）；已转人工则优先显示「等待人工介入」 -->
+          <el-tag
+            v-if="pendingWait"
+            size="small"
+            :type="pendingWait.kind === 'manual' ? 'warning' : 'info'"
+            class="pending-wait-tag"
+          >
+            <el-icon
+              v-if="pendingWait.kind === 'countdown'"
+              class="pending-wait-icon"
+            >
+              <Clock />
+            </el-icon>
+            {{ pendingWait.text }}
+          </el-tag>
         </div>
         <div class="head-actions">
           <el-button
@@ -585,7 +601,7 @@ import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import type { ComponentPublicInstance } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowRight } from '@element-plus/icons-vue'
+import { ArrowRight, Clock } from '@element-plus/icons-vue'
 import { subTaskApi } from '@/api/subTask'
 import { agentApi } from '@/api/agent'
 import { reviewApi } from '@/api/review'
@@ -599,6 +615,7 @@ import { fmtTime } from '@/utils/tableConfig'
 // G-006 抽取：事件字典与语义色/分类派生统一由 utils/eventMeta 提供（与事件流工作台同源）
 import { EVENT_META, eventCategory, eventLabel, eventTypeColor } from '@/utils/eventMeta'
 import { orderByDependency } from '@/utils/subTaskDag'
+import { resolvePendingWait, usePendingCountdown } from '@/composables/usePendingCountdown'
 import type { SubTask, TaskTimelineItem, ConversationMessageItem, Attachment, LongId, Agent } from '@/types'
 
 const route = useRoute()
@@ -901,6 +918,18 @@ const manualReasonText = computed(() => {
   }
   return '返工已达上限（' + (item.value?.reworkCount ?? 0) + ' 次），自动核验已停止'
 })
+
+// PENDING 等待文案：人工介入优先于倒计时（后端已停止自动重派，倒计时会误导）
+const pendingWait = computed(() => resolvePendingWait(
+  item.value?.status,
+  item.value?.context,
+  nowTick.value
+))
+
+// 仅在确有可见倒计时时才启动 1s 定时器（转人工 / 非 PENDING 时自动停表），避免空转；
+// 定时器清理由 usePendingCountdown 内部的 onBeforeUnmount 兜底
+const countdownActive = computed(() => pendingWait.value?.kind === 'countdown')
+const { now: nowTick } = usePendingCountdown({ active: countdownActive })
 
 // 改派候选：EXECUTOR 角色 + ACTIVE，排除当前负责人（原执行者重做走下方独立选项），
 // 在线优先（外部/内部 Agent 均可选）；当前负责人若为唯一内部 Agent 时仍可通过
@@ -1443,6 +1472,15 @@ onBeforeUnmount(() => {
   font-variant-numeric: tabular-nums;
 }
 .dep-tag:hover { filter: brightness(1.08); }
+
+/* 无候选等待倒计时标签：状态徽标行内，等宽数字避免秒数跳动导致布局抖动 */
+.pending-wait-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.pending-wait-icon { font-size: 12px; }
 
 /* 版本三：任务摘要（已并入头部卡，虚线分隔） */
 .head-summary {
