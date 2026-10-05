@@ -2,6 +2,7 @@ package com.helloai.job.task;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.base.NoCandidateAgentException;
+import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.core.task.entity.SubTask;
@@ -15,8 +16,10 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.OffsetDateTime;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * PENDING 孤儿子任务巡检任务。
@@ -59,14 +62,22 @@ import java.util.Map;
  *         {@code sub_task_no_candidate} 时间线，不再被静默归入 skipStatusChanged；
  *         下一轮巡检（60s）候选恢复后自动重试。返回值 {@code null}（闸门拦截 / 退避 /
  *         依赖未就绪）计入 skipGated，不与「已重派」混为一谈。</li>
+ *     <li><b>时钟 C · 每子任务重试节拍（2026-10-05）</b>：连续无候选时按
+ *         {@code no-candidate-retry-interval-seconds} + 抖动 写回
+ *         {@code context.noCandidate.nextDispatchAt}，未到点则 {@code skipWaiting} 跳过
+ *         （不再每 60s 空扫）；达 {@code no-candidate-max-rounds} 轮转人工介入
+ *         （{@code no_candidate_long_wait}）。选中执行者即清除节拍、计数归零。</li>
  * </ol>
  *
  * <h3>配置项</h3>
  * <ul>
  *     <li>{@code helloai.execution.pending-orphan-enabled}（默认 true）</li>
- *     <li>{@code helloai.execution.pending-orphan-scan-interval-ms}（默认 60000）</li>
+ *     <li>{@code helloai.execution.pending-orphan-scan-interval-ms}（默认 60000，时钟 A）</li>
  *     <li>{@code helloai.execution.pending-orphan-threshold-minutes}（默认 5）</li>
  *     <li>{@code helloai.execution.pending-orphan-batch-size}（默认 50）</li>
+ *     <li>{@code helloai.dispatch.no-candidate-max-rounds}（默认 10，时钟 C）</li>
+ *     <li>{@code helloai.dispatch.no-candidate-retry-interval-seconds}（默认 120，时钟 C）</li>
+ *     <li>{@code helloai.dispatch.no-candidate-retry-jitter-seconds}（默认 15，时钟 C）</li>
  * </ul>
  *
  * @see AssignedSubTaskTimeoutTask
@@ -83,6 +94,7 @@ public class SubTaskPendingOrphanTask {
     private final SubTaskDispatchService subTaskDispatchService;
     private final AgentExecutionProperties executionProperties;
     private final TaskTimelineService taskTimelineService;
+    private final AgentDispatchProperties agentDispatchProperties;
 
     /**
      * 周期扫描入口。
@@ -119,6 +131,8 @@ public class SubTaskPendingOrphanTask {
             int skipManualIntervention = 0;
             int skipGated = 0;
             int skipNoCandidate = 0;
+            int skipWaiting = 0;
+            int escalated = 0;
 
             for (Long subTaskId : orphanIds) {
                 try {
@@ -151,6 +165,16 @@ public class SubTaskPendingOrphanTask {
                         continue;
                     }
 
+                    // // 时钟 C（2026-10-05）：每子任务重试节拍 —— 上一轮「无候选」写入的
+                    // nextDispatchAt 未到之前，不重试、不计数、不落事件（避免 60s 空扫噪音）。
+                    // 该门控必须在 dispatchPendingSubTaskAuto 之前，否则每次 tick 都会再试一次。
+                    OffsetDateTime nextDispatchAt = readNextDispatchAt(latest);
+                    if (nextDispatchAt != null && OffsetDateTime.now().isBefore(nextDispatchAt)) {
+                        skipWaiting++;
+                        log.debug("跳过：无候选重试节拍未到: subTaskId={}, nextDispatchAt={}", subTaskId, nextDispatchAt);
+                        continue;
+                    }
+
                     // PENDING 孤儿重派：默认按 EXECUTOR 角色选人
                     // —— 因为 PENDING 子任务通常还未指定角色，Module.role 在更上层传入；
                     // 本任务作为兜底路径，统一按 EXECUTOR 处理最常见场景
@@ -158,26 +182,32 @@ public class SubTaskPendingOrphanTask {
                     if (dispatchedAgentId != null) {
                         recovered++;
                         log.info("PENDING 孤儿已重派: subTaskId={}, agentId={}", subTaskId, dispatchedAgentId);
+                        // 时钟 C 复位：选中人即计数归零，清除 noCandidate 节拍（下次若再失败重新起算）
+                        clearNoCandidateContext(latest);
                     } else {
                         // 闸门拦截 / 退避窗口 / 依赖未就绪 —— 本轮未派出，不算重派（P1-1 修误报）
                         skipGated++;
                         log.debug("PENDING 孤儿本轮未派出（闸门拦截/退避/依赖未就绪）: subTaskId={}", subTaskId);
                     }
                 } catch (NoCandidateAgentException noCand) {
-                    // 「暂无可用执行者」是可自愈的等待态：不消耗预算、不误判死信；
-                    // 落 timeline 让用户可见（不再静默），下一轮孤儿扫描（60s）自动重试。
+                    // 「暂无可用执行者」是可自愈的等待态：不消耗重派预算、不误判死信；
+                    // 落 timeline 让用户可见（不再静默），并按时钟 C 安排下一次重试。
                     skipNoCandidate++;
-                    log.warn("PENDING 孤儿暂无可用执行者（等待自动重试）: subTaskId={}, reason={}",
-                            subTaskId, noCand.getMessage());
+                    String reason = noCand.getMessage() != null ? noCand.getMessage() : "no_available_candidate";
+                    log.warn("PENDING 孤儿暂无可用执行者（等待自动重试）: subTaskId={}, reason={}", subTaskId, reason);
                     try {
                         // latest 在 try 内声明、catch 不可见，故 taskId 传 null
                         //（recordEvent 允许 taskId 为空，属系统级等待态事件；前端按 subTaskId 可查）
                         taskTimelineService.recordEvent(null, subTaskId, "sub_task_no_candidate",
                                 AgentRole.SYSTEM, null,
-                                Map.of("reason", noCand.getMessage() != null ? noCand.getMessage() : "no_available_candidate",
-                                        "waitFor", "pending_orphan_scan"));
+                                Map.of("reason", reason, "waitFor", "pending_orphan_scan"));
                     } catch (Exception te) {
                         log.debug("记录 sub_task_no_candidate 事件失败: subTaskId={}, err={}", subTaskId, te.getMessage());
+                    }
+                    // 时钟 C 计数推进：rounds+1；达阈值转人工介入，否则写回 nextDispatchAt。
+                    // catch 内重新 getById（`latest` 作用域不可见；且需最新 context 防丢并发写）。
+                    if (accumulateNoCandidateOrEscalate(subTaskId, reason)) {
+                        escalated++;
                     }
                 } catch (BizException bizEx) {
                     // 子任务状态被外部改写（典型 case：刚被另外路径 claim / block / cancel）
@@ -192,15 +222,144 @@ public class SubTaskPendingOrphanTask {
             }
 
             if (recovered > 0 || failed > 0 || skipStatusChanged > 0 || skipNotReady > 0
-                    || skipManualIntervention > 0 || skipGated > 0 || skipNoCandidate > 0) {
-                log.info("PENDING 孤儿巡检完成: 扫描={}, 重派={}, 跳过（状态冲突）={}, 跳过（依赖未就绪）={}, 跳过（人工介入）={}, 跳过（闸门/退避）={}, 跳过（暂无候选）={}, 失败={}",
+                    || skipManualIntervention > 0 || skipGated > 0 || skipNoCandidate > 0
+                    || skipWaiting > 0 || escalated > 0) {
+                log.info("PENDING 孤儿巡检完成: 扫描={}, 重派={}, 跳过（状态冲突）={}, 跳过（依赖未就绪）={}, 跳过（人工介入）={}, 跳过（闸门/退避）={}, 跳过（暂无候选）={}, 跳过（节拍未到）={}, 转人工={}, 失败={}",
                         orphanIds.size(), recovered, skipStatusChanged, skipNotReady, skipManualIntervention,
-                        skipGated, skipNoCandidate, failed);
+                        skipGated, skipNoCandidate, skipWaiting, escalated, failed);
             }
 
         } catch (Exception e) {
             log.error("SubTaskPendingOrphanTask 执行异常", e);
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  时钟 C（2026-10-05）：每子任务无候选重试节拍
+    //  与时钟 A（孤儿扫描 60s tick）/ 时钟 B（重派退避）正交，独立于 dispatch 本体
+    // ═══════════════════════════════════════════════════════════════
+
+    /** 读 {@code context.noCandidate.nextDispatchAt}（缺失/非法返回 null ⇒ 视为无节拍、放行重试）。 */
+    @SuppressWarnings("unchecked")
+    private static OffsetDateTime readNextDispatchAt(SubTask subTask) {
+        Map<String, Object> ctx = subTask.getContext();
+        if (ctx == null) {
+            return null;
+        }
+        Object noCandidate = ctx.get("noCandidate");
+        if (!(noCandidate instanceof Map)) {
+            return null;
+        }
+        Object raw = ((Map<String, Object>) noCandidate).get("nextDispatchAt");
+        if (raw == null) {
+            return null;
+        }
+        try {
+            return OffsetDateTime.parse(raw.toString());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 时钟 C 复位：选中执行者后清除 {@code context.noCandidate}（计数归零）。
+     * {@code updateContext} 为整体覆盖 —— 先复制旧 map、移除 noCandidate 键、再整体写回，保留其它 key。
+     */
+    private void clearNoCandidateContext(SubTask subTask) {
+        Map<String, Object> ctx = subTask.getContext();
+        if (ctx == null || !ctx.containsKey("noCandidate")) {
+            return; // 无节拍可清，避免无谓写
+        }
+        Map<String, Object> copy = new HashMap<>(ctx);
+        copy.remove("noCandidate");
+        try {
+            subTaskService.updateContext(subTask.getId(), copy);
+        } catch (Exception e) {
+            log.debug("清除无候选节拍失败（不影响主链路）: subTaskId={}, err={}", subTask.getId(), e.getMessage());
+        }
+    }
+
+    /**
+     * 时钟 C 计数推进：连续无候选 {@code rounds + 1}。
+     *
+     * <p>达 {@link AgentDispatchProperties#getNoCandidateMaxRounds} 阈值 ⇒
+     * {@code markManualIntervention("no_candidate_long_wait")}（该 API 内部已落
+     * {@code sub_task_manual_intervention_required} 事件），此后不再写 {@code nextDispatchAt}，
+     * 后续扫描由 manualIntervention 分支自然跳过；未达阈值 ⇒ 写回
+     * {@code context.noCandidate = {rounds, nextDispatchAt, reason, updatedAt}}，
+     * 安排下一次重试时刻（{@code now + interval + rand[0, jitter]}）。</p>
+     *
+     * <p>catch 内重新 {@code getById} 取最新 context（防丢并发写）；{@code updateContext}
+     * 为整体覆盖，故先复制旧 map 再 put。整段 try-catch 降级，失败不影响主链路。</p>
+     *
+     * @return true=本轮达阈值已转人工介入；false=仅累加并安排下次重试（或写失败降级）
+     */
+    @SuppressWarnings("unchecked")
+    private boolean accumulateNoCandidateOrEscalate(Long subTaskId, String reason) {
+        try {
+            SubTask fresh = subTaskService.getById(subTaskId);
+            if (fresh == null) {
+                return false;
+            }
+            Map<String, Object> oldCtx = fresh.getContext() != null ? fresh.getContext() : Map.of();
+            Map<String, Object> noCandidate = oldCtx.get("noCandidate") instanceof Map
+                    ? new HashMap<>((Map<String, Object>) oldCtx.get("noCandidate"))
+                    : new HashMap<>();
+
+            int rounds = 1;
+            Object prev = noCandidate.get("rounds");
+            if (prev instanceof Number n) {
+                rounds = n.intValue() + 1;
+            } else if (prev != null) {
+                try {
+                    rounds = Integer.parseInt(prev.toString()) + 1;
+                } catch (NumberFormatException ignored) {
+                    rounds = 1;
+                }
+            }
+
+            OffsetDateTime now = OffsetDateTime.now();
+            int maxRounds = agentDispatchProperties.getNoCandidateMaxRounds();
+            if (maxRounds > 0 && rounds >= maxRounds) {
+                long waitedMs = resolveWaitedMs(noCandidate, rounds, now);
+                subTaskService.markManualIntervention(subTaskId, "no_candidate_long_wait",
+                        Map.of("rounds", rounds, "waitedMs", waitedMs));
+                log.warn("PENDING 孤儿连续 {} 轮无候选，转人工介入: subTaskId={}, waitedMs={}",
+                        rounds, subTaskId, waitedMs);
+                return true;
+            }
+
+            int interval = agentDispatchProperties.getNoCandidateRetryIntervalSeconds();
+            int jitter = agentDispatchProperties.getNoCandidateRetryJitterSeconds();
+            int delay = interval + (jitter > 0 ? ThreadLocalRandom.current().nextInt(jitter + 1) : 0);
+            noCandidate.put("rounds", rounds);
+            noCandidate.put("nextDispatchAt", now.plusSeconds(delay).toString());
+            noCandidate.put("reason", reason);
+            noCandidate.putIfAbsent("firstSeenAt", now.toString());
+            noCandidate.put("updatedAt", now.toString());
+
+            Map<String, Object> newCtx = new HashMap<>(oldCtx);
+            newCtx.put("noCandidate", noCandidate);
+            subTaskService.updateContext(subTaskId, newCtx);
+            log.info("PENDING 孤儿无候选第 {} 轮，{}s 后重试: subTaskId={}", rounds, delay, subTaskId);
+            return false;
+        } catch (Exception e) {
+            log.debug("推进无候选重试节拍失败（不影响主链路）: subTaskId={}, err={}", subTaskId, e.getMessage());
+            return false;
+        }
+    }
+
+    /** 估算已等待时长：优先用 {@code firstSeenAt} 起算，缺失则按 {@code rounds × interval} 兜底。 */
+    private long resolveWaitedMs(Map<String, Object> noCandidate, int rounds, OffsetDateTime now) {
+        Object firstSeen = noCandidate.get("firstSeenAt");
+        if (firstSeen != null) {
+            try {
+                return Math.max(0L, java.time.Duration.between(OffsetDateTime.parse(firstSeen.toString()), now).toMillis());
+            } catch (Exception ignored) {
+                // 落到兜底
+            }
+        }
+        return (long) rounds * Math.max(0, agentDispatchProperties.getNoCandidateRetryIntervalSeconds()) * 1000L;
     }
 
 }

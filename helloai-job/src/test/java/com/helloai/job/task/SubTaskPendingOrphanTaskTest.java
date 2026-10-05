@@ -2,6 +2,7 @@ package com.helloai.job.task;
 
 import com.helloai.common.base.BizException;
 import com.helloai.common.base.NoCandidateAgentException;
+import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
@@ -14,6 +15,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -24,10 +26,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doReturn;
@@ -65,6 +69,8 @@ class SubTaskPendingOrphanTaskTest {
     private AgentExecutionProperties executionProperties;
     @Mock
     private TaskTimelineService taskTimelineService;
+    @Mock
+    private AgentDispatchProperties agentDispatchProperties;
 
     private SubTaskPendingOrphanTask task;
 
@@ -75,10 +81,14 @@ class SubTaskPendingOrphanTaskTest {
         when(executionProperties.getPendingOrphanBatchSize()).thenReturn(50);
         // 孤儿扫描前置依赖检查：默认无依赖即就绪，避免既有用例被 ready 守卫拦截
         when(subTaskService.isReady(any(SubTask.class))).thenReturn(true);
+        // 时钟 C 缺省：阈值 10 / 间隔 120s / 抖动 0（确定性，便于断言）
+        when(agentDispatchProperties.getNoCandidateMaxRounds()).thenReturn(10);
+        when(agentDispatchProperties.getNoCandidateRetryIntervalSeconds()).thenReturn(120);
+        when(agentDispatchProperties.getNoCandidateRetryJitterSeconds()).thenReturn(0);
 
         task = new SubTaskPendingOrphanTask(
                 subTaskService, subTaskDispatchService,
-                executionProperties, taskTimelineService);
+                executionProperties, taskTimelineService, agentDispatchProperties);
     }
 
     @Nested
@@ -276,6 +286,128 @@ class SubTaskPendingOrphanTaskTest {
             // 非「无候选」路径 → 不应落 no_candidate 事件
             verify(taskTimelineService, never()).recordEvent(
                     any(), any(), eq("sub_task_no_candidate"), any(), any(), anyMap());
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        //  时钟 C（2026-10-05）：每子任务无候选重试节拍 + 长等待转人工
+        // ═══════════════════════════════════════════════════════════════
+
+        @Test
+        @DisplayName("时钟C: 连续无候选 → rounds 累加并写回 nextDispatchAt（未达阈值）")
+        void shouldAccumulateRoundsAndWriteNextDispatchAt() {
+            when(subTaskService.listStalePendingWithoutExecutionRecord(any(), anyInt()))
+                    .thenReturn(List.of(1L));
+
+            SubTask st = pendingSubTask(1L);
+            // 上一轮已记 rounds=2；nextDispatchAt 已过期 ⇒ 放行本次重试
+            Map<String, Object> prev = new HashMap<>();
+            prev.put("rounds", 2);
+            prev.put("nextDispatchAt", OffsetDateTime.now().minusSeconds(5).toString());
+            st.setContext(new HashMap<>(Map.of("noCandidate", prev)));
+            when(subTaskService.getById(1L)).thenReturn(st);
+
+            doThrow(new NoCandidateAgentException("无可用候选 Agent: role=EXECUTOR"))
+                    .when(subTaskDispatchService)
+                    .dispatchPendingSubTaskAuto(eq(1L), eq(AgentRole.EXECUTOR));
+
+            task.scan();
+
+            // rounds 2 → 3，写回 context.noCandidate（含未来 nextDispatchAt）
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Map<String, Object>> ctxCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(subTaskService).updateContext(eq(1L), ctxCaptor.capture());
+            @SuppressWarnings("unchecked")
+            Map<String, Object> noCandidate = (Map<String, Object>) ctxCaptor.getValue().get("noCandidate");
+            assertThat(noCandidate).isNotNull();
+            assertThat(noCandidate.get("rounds")).isEqualTo(3);
+            assertThat(OffsetDateTime.parse(noCandidate.get("nextDispatchAt").toString()))
+                    .isAfter(OffsetDateTime.now());
+            // 未达阈值 → 不转人工介入
+            verify(subTaskService, never()).markManualIntervention(anyLong(), anyString(), anyMap());
+        }
+
+        @Test
+        @DisplayName("时钟C: 达阈值 → markManualIntervention(no_candidate_long_wait)，不再写 nextDispatchAt")
+        void shouldEscalateToManualInterventionWhenRoundsReachMax() {
+            when(subTaskService.listStalePendingWithoutExecutionRecord(any(), anyInt()))
+                    .thenReturn(List.of(1L));
+
+            SubTask st = pendingSubTask(1L);
+            // rounds=9，阈值 10 ⇒ 本轮 +1 = 10 达阈值
+            Map<String, Object> prev = new HashMap<>();
+            prev.put("rounds", 9);
+            prev.put("firstSeenAt", OffsetDateTime.now().minusMinutes(20).toString());
+            prev.put("nextDispatchAt", OffsetDateTime.now().minusSeconds(5).toString());
+            st.setContext(new HashMap<>(Map.of("noCandidate", prev)));
+            when(subTaskService.getById(1L)).thenReturn(st);
+
+            doThrow(new NoCandidateAgentException("无可用候选 Agent: role=EXECUTOR"))
+                    .when(subTaskDispatchService)
+                    .dispatchPendingSubTaskAuto(eq(1L), eq(AgentRole.EXECUTOR));
+
+            task.scan();
+
+            // reason 必须为 no_candidate_long_wait，且带上 rounds=10 / waitedMs
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Map<String, Object>> extraCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(subTaskService).markManualIntervention(eq(1L), eq("no_candidate_long_wait"), extraCaptor.capture());
+            assertThat(extraCaptor.getValue()).containsEntry("rounds", 10);
+            assertThat(((Number) extraCaptor.getValue().get("waitedMs")).longValue()).isGreaterThan(0L);
+            // 达阈值后不再写 nextDispatchAt
+            verify(subTaskService, never()).updateContext(eq(1L), anyMap());
+        }
+
+        @Test
+        @DisplayName("时钟C: 门控 —— now < nextDispatchAt → skipWaiting 且不调 dispatch")
+        void shouldSkipWhenNextDispatchAtInFuture() {
+            when(subTaskService.listStalePendingWithoutExecutionRecord(any(), anyInt()))
+                    .thenReturn(List.of(1L));
+
+            SubTask st = pendingSubTask(1L);
+            Map<String, Object> prev = new HashMap<>();
+            prev.put("rounds", 2);
+            // 节拍未到（未来 300s）
+            prev.put("nextDispatchAt", OffsetDateTime.now().plusSeconds(300).toString());
+            st.setContext(new HashMap<>(Map.of("noCandidate", prev)));
+            when(subTaskService.getById(1L)).thenReturn(st);
+
+            task.scan();
+
+            // 节拍未到：不重试、不落事件、不改 context
+            verify(subTaskDispatchService, never()).dispatchPendingSubTaskAuto(anyLong(), any());
+            verify(taskTimelineService, never()).recordEvent(
+                    any(), any(), eq("sub_task_no_candidate"), any(), any(), anyMap());
+            verify(subTaskService, never()).updateContext(anyLong(), anyMap());
+            verify(subTaskService, never()).markManualIntervention(anyLong(), anyString(), anyMap());
+        }
+
+        @Test
+        @DisplayName("时钟C: 选中执行者 → 清除 context.noCandidate（计数归零）")
+        void shouldClearNoCandidateWhenDispatched() {
+            when(subTaskService.listStalePendingWithoutExecutionRecord(any(), anyInt()))
+                    .thenReturn(List.of(1L));
+
+            SubTask st = pendingSubTask(1L);
+            Map<String, Object> prev = new HashMap<>();
+            prev.put("rounds", 2);
+            prev.put("nextDispatchAt", OffsetDateTime.now().minusSeconds(5).toString());
+            // 同 context 内含其它 key，须验证整体覆盖时不丢
+            Map<String, Object> ctx = new HashMap<>();
+            ctx.put("noCandidate", prev);
+            ctx.put("someKey", "keep-me");
+            st.setContext(ctx);
+            when(subTaskService.getById(1L)).thenReturn(st);
+            doReturn(99L).when(subTaskDispatchService)
+                    .dispatchPendingSubTaskAuto(eq(1L), eq(AgentRole.EXECUTOR));
+
+            task.scan();
+
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Map<String, Object>> ctxCaptor = ArgumentCaptor.forClass(Map.class);
+            verify(subTaskService).updateContext(eq(1L), ctxCaptor.capture());
+            assertThat(ctxCaptor.getValue()).doesNotContainKey("noCandidate");
+            // 整体覆盖不丢其它 key
+            assertThat(ctxCaptor.getValue()).containsEntry("someKey", "keep-me");
         }
 
         @Test

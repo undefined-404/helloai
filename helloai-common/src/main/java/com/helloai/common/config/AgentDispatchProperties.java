@@ -70,6 +70,39 @@ public class AgentDispatchProperties {
     private int maxReassignAttempts = 5;
 
     /**
+     * 「长期无候选 → 人工介入」的最大连续轮数（2026-10-05，时钟 C）。
+     *
+     * <p><b>与 {@link #maxReassignAttempts} 语义不同</b>：那个统计的是「<b>试过但没派成</b>」
+     * 的重派次数（选出人后被退回/超时/离线等）；本项统计的是「<b>根本没试成</b>」——
+     * 当前压根没有可用候选执行 Agent（外部 Agent 忙 / 离线 / 单会话已被占用），
+     * 属可自愈的等待态，不消耗重派预算（见 P1-1 的 {@code NoCandidateAgentException}）。</p>
+     *
+     * <p>连续 {@code 无候选} 达到本阈值（每轮由孤儿巡检按 {@link #noCandidateRetryIntervalSeconds}
+     * 节拍累加）即判定为「长期无候选」，转人工介入（{@code no_candidate_long_wait}），
+     * 停止自动重试等人工处置。默认 10。设为 0 或负数表示禁用该兜底（永远自动重试）。</p>
+     */
+    private int noCandidateMaxRounds = 10;
+
+    /**
+     * 无候选后的重试间隔基准（秒，时钟 C）。
+     *
+     * <p>每次「无候选」失败后，为该子任务写入 {@code context.noCandidate.nextDispatchAt}
+     * = now + 本值 + 抖动；孤儿巡检（时钟 A，60s 一跳）在 {@code now < nextDispatchAt}
+     * 时跳过该子任务，从而把「每 60s 空扫一次」改造为「每子任务独立 120s 节拍」，
+     * 且各子任务的倒计时天然各不相同（前端可显示「约 N 秒后重试」）。默认 120。</p>
+     */
+    private int noCandidateRetryIntervalSeconds = 120;
+
+    /**
+     * 无候选重试节拍的抖动上限（秒，时钟 C）。
+     *
+     * <p>{@code nextDispatchAt = now + (interval + rand[0, jitter])}，用于打散同批次
+     * 子任务的重试时刻，避免它们在同一个 tick 上同步惊群（同时抢同一批候选）。
+     * 默认 15；设为 0 表示不抖动。</p>
+     */
+    private int noCandidateRetryJitterSeconds = 15;
+
+    /**
      * ASSIGNED 超时未 claim 回收阈值（分钟）。
      *
      * <p>子任务 ASSIGNED 后若 update_time 超过本阈值仍无人 claim，
