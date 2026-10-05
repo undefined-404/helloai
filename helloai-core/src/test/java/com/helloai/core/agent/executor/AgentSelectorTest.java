@@ -10,6 +10,7 @@ import com.helloai.core.agent.AgentLlmCredentialResolver;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
+import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.common.constant.AgentDutyLeaseStatus;
 import com.helloai.common.constant.WorkMode;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
@@ -29,6 +30,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -67,6 +69,9 @@ class AgentSelectorTest {
     @Mock
     private AgentQualityProfileService agentQualityProfileService;
 
+    @Mock
+    private AgentExecutionRecordService agentExecutionRecordService;
+
     private AgentSelector agentSelector;
 
     @BeforeEach
@@ -82,7 +87,7 @@ class AgentSelectorTest {
         lenient().when(agentDutyLeaseService.isOnDuty(anyLong())).thenReturn(false);
         // 默认所有候选均有有效凭证，避免 API_KEY_LLM 用例被 hasUsableCredential 过滤；
         // 无凭证用例请单独 stub 返回 false
-        lenient().when(agentLlmCredentialResolver.hasUsableCredential(any())).thenReturn(true);
+        lenient().when(agentLlmCredentialResolver.hasUsableCredential(any(Agent.class))).thenReturn(true);
         // E2 默认所有候选额度未满；满额用例请单独 stub 返回 false
         lenient().when(concurrencyQuotaService.canAccept(anyLong())).thenReturn(true);
         // 质量画像默认缺失（computeQualityScore=null → qualityRank 记 0 档不参与排序）；
@@ -90,7 +95,8 @@ class AgentSelectorTest {
         lenient().when(agentQualityProfileService.computeQualityScore(anyLong())).thenReturn(null);
         agentSelector = new AgentSelector(
                 agentService, circuitBreakerRegistry, props, health, agentDutyLeaseService,
-                agentLlmCredentialResolver, concurrencyQuotaService, agentQualityProfileService);
+                agentLlmCredentialResolver, concurrencyQuotaService, agentQualityProfileService,
+                agentExecutionRecordService);
     }
 
     // ════════════════════════════════════════════════════════════
@@ -454,7 +460,8 @@ class AgentSelectorTest {
             policyHealth.setOfflineMinutes(5);
             policySelector = new AgentSelector(
                     agentService, circuitBreakerRegistry, policyProps, policyHealth, agentDutyLeaseService,
-                    agentLlmCredentialResolver, concurrencyQuotaService, agentQualityProfileService);
+                    agentLlmCredentialResolver, concurrencyQuotaService, agentQualityProfileService,
+                    agentExecutionRecordService);
         }
 
         private Agent agentWith(Long id, Integer score,
@@ -507,7 +514,8 @@ class AgentSelectorTest {
             AgentSelector forceSelector =
                     new AgentSelector(
                             agentService, circuitBreakerRegistry, forceProps, forceHealth, agentDutyLeaseService,
-                            agentLlmCredentialResolver, concurrencyQuotaService, agentQualityProfileService);
+                            agentLlmCredentialResolver, concurrencyQuotaService, agentQualityProfileService,
+                            agentExecutionRecordService);
 
             when(agentService.listByRole(AgentRole.EXECUTOR))
                     .thenReturn(List.of(cli, api));
@@ -662,7 +670,8 @@ class AgentSelectorTest {
             zeroHealth.setOfflineMinutes(0);
             AgentSelector zeroSelector = new AgentSelector(
                     agentService, circuitBreakerRegistry, zeroProps, zeroHealth, agentDutyLeaseService,
-                    agentLlmCredentialResolver, concurrencyQuotaService, agentQualityProfileService);
+                    agentLlmCredentialResolver, concurrencyQuotaService, agentQualityProfileService,
+                    agentExecutionRecordService);
 
             Agent stale = agentWithHeartbeat(2L, 90, AgentOnlineStatus.ONLINE,
                     AgentStatus.ACTIVE, 120L);  // 2 小时前
@@ -686,7 +695,8 @@ class AgentSelectorTest {
             customHealth.setOfflineMinutes(3);
             AgentSelector customSelector = new AgentSelector(
                     agentService, circuitBreakerRegistry, customProps, customHealth, agentDutyLeaseService,
-                    agentLlmCredentialResolver, concurrencyQuotaService, agentQualityProfileService);
+                    agentLlmCredentialResolver, concurrencyQuotaService, agentQualityProfileService,
+                    agentExecutionRecordService);
 
             Agent stale = agentWithHeartbeat(2L, 90, AgentOnlineStatus.ONLINE,
                     AgentStatus.ACTIVE, 9L);  // 9 分钟前 > 3 分钟阈值
@@ -971,7 +981,8 @@ class AgentSelectorTest {
             AgentSelector disabledSelector = new AgentSelector(
                     agentService, circuitBreakerRegistry, disabledProps, health,
                     agentDutyLeaseService, agentLlmCredentialResolver, concurrencyQuotaService,
-                    agentQualityProfileService);
+                    agentQualityProfileService,
+                    agentExecutionRecordService);
 
             Agent result = disabledSelector.pickAlternative(1L, AgentRole.EXECUTOR);
 
@@ -998,7 +1009,8 @@ class AgentSelectorTest {
             health.setOfflineMinutes(5);
             qualitySelector = new AgentSelector(
                     agentService, circuitBreakerRegistry, props, health, agentDutyLeaseService,
-                    agentLlmCredentialResolver, concurrencyQuotaService, agentQualityProfileService);
+                    agentLlmCredentialResolver, concurrencyQuotaService, agentQualityProfileService,
+                    agentExecutionRecordService);
         }
 
         @Test
@@ -1071,7 +1083,8 @@ class AgentSelectorTest {
             health.setOfflineMinutes(5);
             AgentSelector zeroWeightSelector = new AgentSelector(
                     agentService, circuitBreakerRegistry, zeroWeightProps, health, agentDutyLeaseService,
-                    agentLlmCredentialResolver, concurrencyQuotaService, agentQualityProfileService);
+                    agentLlmCredentialResolver, concurrencyQuotaService, agentQualityProfileService,
+                    agentExecutionRecordService);
 
             Agent lowQualityHighScore = agent(2L, 95, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
             Agent highQualityLowScore = agent(3L, 30, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
@@ -1087,6 +1100,180 @@ class AgentSelectorTest {
             assertThat(result.getId()).isEqualTo(2L);
             // 权重关闭：画像查询完全不被调用
             verify(agentQualityProfileService, never()).computeQualityScore(anyLong());
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════
+    //  B5.3 Fleet 成本选人：costRank 调度回灌
+    //  ════════════════════════════════════════════════════════════
+
+    @Nested
+    @DisplayName("B5.3 Fleet 成本选人：costRank 调度回灌")
+    class CostRank {
+
+        /**
+         * 隔离构造：qualityWeight=0（本组只验证成本维度），costWeight=0.1（默认值，参与排序）。
+         */
+        private AgentSelector costSelector(double costWeight, double qualityWeight) {
+            AgentDispatchProperties costProps = new AgentDispatchProperties();
+            costProps.setPreferExternal(false);
+            costProps.setRequireIdle(false);
+            costProps.setQualityWeight(qualityWeight);
+            costProps.setCostWeight(costWeight);
+            costProps.setCostSampleLimit(5);
+            AgentHealthProperties health = new AgentHealthProperties();
+            health.setOfflineMinutes(5);
+            return new AgentSelector(
+                    agentService, circuitBreakerRegistry, costProps, health, agentDutyLeaseService,
+                    agentLlmCredentialResolver, concurrencyQuotaService, agentQualityProfileService,
+                    agentExecutionRecordService);
+        }
+
+        @Test
+        @DisplayName("成本档位不同 → 更省 token 的 Agent 优先于更贵但 score 更高的 Agent")
+        void shouldPreferCheaperAgentOverHigherScore() {
+            // 贵者 rank 1（×0.1=0.1），省者 rank 5（×0.1=0.5）；
+            // costRank 插在 score 之前 ⇒ 省者即使 score 更低也胜出
+            Agent expensiveHighScore = agent(2L, 95, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            Agent cheapLowScore = agent(3L, 30, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(expensiveHighScore, cheapLowScore));
+            when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
+            when(circuitBreakerRegistry.find("agentDispatch-3")).thenReturn(Optional.empty());
+            when(agentExecutionRecordService.averageRecentSuccessTokens(2L, 5)).thenReturn(90000);
+            when(agentExecutionRecordService.averageRecentSuccessTokens(3L, 5)).thenReturn(10000);
+
+            Agent result = costSelector(0.1, 0).pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(3L);
+        }
+
+        @Test
+        @DisplayName("候选内仅 1 个有样本 → 成本维无可比对象，整维不生效，按 score 决胜")
+        void shouldIgnoreCostDimensionWhenOnlyOneCandidateHasCostData() {
+            Agent noCostData = agent(2L, 95, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            Agent withCostData = agent(3L, 30, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(noCostData, withCostData));
+            when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
+            when(circuitBreakerRegistry.find("agentDispatch-3")).thenReturn(Optional.empty());
+            // 仅 3L 有样本（有效样本 1 < 2）→ 成本维整维不生效 → 回退 score，2L（95）胜出
+            when(agentExecutionRecordService.averageRecentSuccessTokens(2L, 5)).thenReturn(null);
+            when(agentExecutionRecordService.averageRecentSuccessTokens(3L, 5)).thenReturn(42000);
+
+            Agent result = costSelector(0.1, 0).pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(2L);
+        }
+
+        @Test
+        @DisplayName("无成本数据记中立档（不可比 ⇒ 不偏袒）：与有样本者同档时按 score 决胜（★原 0 档缺陷回归防线）")
+        void shouldTreatMissingCostDataAsNeutralNotAsWorst() {
+            // 2L 无样本（原实现记 0 档 = 比最贵还差 → 必输）；3L/4L 均值相同 → min==max → 两侧均中立 3 档
+            Agent noCostData = agent(2L, 90, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            Agent costA = agent(3L, 50, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            Agent costB = agent(4L, 50, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(noCostData, costA, costB));
+            for (long id : new long[]{2L, 3L, 4L}) {
+                when(circuitBreakerRegistry.find("agentDispatch-" + id)).thenReturn(Optional.empty());
+            }
+            when(agentExecutionRecordService.averageRecentSuccessTokens(2L, 5)).thenReturn(null);
+            when(agentExecutionRecordService.averageRecentSuccessTokens(3L, 5)).thenReturn(42000);
+            when(agentExecutionRecordService.averageRecentSuccessTokens(4L, 5)).thenReturn(42000);
+
+            Agent result = costSelector(0.1, 0).pickAlternative(1L, AgentRole.EXECUTOR);
+
+            // 三者在成本维均记中立 3 档 → 完全打平 → 由 score 决胜：2L(90) 胜出
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(2L);
+        }
+
+        @Test
+        @DisplayName("候选全部无成本数据 → 成本维度整体失效，回退 score 排序")
+        void shouldFallbackToScoreWhenNoCostDataAtAll() {
+            Agent lowerScore = agent(2L, 40, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            Agent higherScore = agent(3L, 90, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(lowerScore, higherScore));
+            when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
+            when(circuitBreakerRegistry.find("agentDispatch-3")).thenReturn(Optional.empty());
+            when(agentExecutionRecordService.averageRecentSuccessTokens(2L, 5)).thenReturn(null);
+            when(agentExecutionRecordService.averageRecentSuccessTokens(3L, 5)).thenReturn(null);
+
+            Agent result = costSelector(0.1, 0).pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(3L);
+        }
+
+        @Test
+        @DisplayName("候选内成本无区分度（min==max）→ 记中立 3 档，回退 score 排序")
+        void shouldTreatEqualCostAsNeutralAndFallbackToScore() {
+            Agent lowerScore = agent(2L, 40, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            Agent higherScore = agent(3L, 90, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(lowerScore, higherScore));
+            when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
+            when(circuitBreakerRegistry.find("agentDispatch-3")).thenReturn(Optional.empty());
+            // 两者均值相同 → min==max → 双方均记 3 档 → 成本维度打平
+            when(agentExecutionRecordService.averageRecentSuccessTokens(2L, 5)).thenReturn(50000);
+            when(agentExecutionRecordService.averageRecentSuccessTokens(3L, 5)).thenReturn(50000);
+
+            Agent result = costSelector(0.1, 0).pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(3L);
+        }
+
+        @Test
+        @DisplayName("cost-weight=0 关闭 → 不查成本画像，仅按 score 排序")
+        void shouldDisableCostRankWhenWeightZero() {
+            Agent expensiveHighScore = agent(2L, 95, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            Agent cheapLowScore = agent(3L, 30, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(expensiveHighScore, cheapLowScore));
+            when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
+            when(circuitBreakerRegistry.find("agentDispatch-3")).thenReturn(Optional.empty());
+
+            Agent result = costSelector(0, 0).pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(2L);
+            // 权重关闭：成本画像查询完全不被调用（与接入前行为逐字一致）
+            verify(agentExecutionRecordService, never()).averageRecentSuccessTokens(anyLong(), anyInt());
+        }
+
+        @Test
+        @DisplayName("字典序验证：qualityRank 档位不同时 costRank 不生效（质量高者胜，即使更贵）")
+        void shouldNotOverrideDifferentQualityRank() {
+            // 比较链是 thenComparing 链式（字典序）而非加权求和：
+            // 质量档位一旦分出高下，成本维度即被短路
+            Agent highQualityExpensive = agent(2L, 95, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+            Agent lowQualityCheap = agent(3L, 30, AgentOnlineStatus.ONLINE, AgentStatus.ACTIVE);
+
+            when(agentService.listByRole(AgentRole.EXECUTOR))
+                    .thenReturn(List.of(highQualityExpensive, lowQualityCheap));
+            when(circuitBreakerRegistry.find("agentDispatch-2")).thenReturn(Optional.empty());
+            when(circuitBreakerRegistry.find("agentDispatch-3")).thenReturn(Optional.empty());
+            when(agentQualityProfileService.computeQualityScore(2L)).thenReturn(80); // rank 4
+            when(agentQualityProfileService.computeQualityScore(3L)).thenReturn(20); // rank 1
+            when(agentExecutionRecordService.averageRecentSuccessTokens(2L, 5)).thenReturn(90000); // 贵
+            when(agentExecutionRecordService.averageRecentSuccessTokens(3L, 5)).thenReturn(10000);  // 省
+
+            Agent result = costSelector(0.1, 0.1).pickAlternative(1L, AgentRole.EXECUTOR);
+
+            assertThat(result).isNotNull();
+            // 质量档位先分出高下（0.4 vs 0.1），成本维度不再参与比较
+            assertThat(result.getId()).isEqualTo(2L);
         }
     }
 }

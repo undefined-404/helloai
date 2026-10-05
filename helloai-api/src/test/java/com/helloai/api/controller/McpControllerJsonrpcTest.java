@@ -121,7 +121,7 @@ class McpControllerJsonrpcTest {
         receipt.setStatus("REVIEW");
         receipt.setSubTaskId(101L);
         receipt.setResultId("res-20260811-001");
-        when(mcpToolService.submitResult(anyLong(), anyLong(), any(), any(), any(), any(), any()))
+        when(mcpToolService.submitResult(anyLong(), anyLong(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(receipt);
 
         MvcResult result = postJsonrpc(Map.of(

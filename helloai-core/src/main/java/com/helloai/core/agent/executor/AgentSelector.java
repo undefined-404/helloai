@@ -11,10 +11,13 @@ import com.helloai.core.agent.AgentLlmCredentialResolver;
 import com.helloai.core.agent.SkillNormalizer;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentDutyLease;
+import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
+import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
 import com.helloai.core.agent.service.ConcurrencyQuotaService;
+import com.helloai.core.agent.service.impl.AgentProfileSnapshotMapper;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import lombok.Data;
@@ -51,6 +54,16 @@ public class AgentSelector {
     private final AgentLlmCredentialResolver agentLlmCredentialResolver;
     private final ConcurrencyQuotaService concurrencyQuotaService;
     private final AgentQualityProfileService agentQualityProfileService;
+    private final AgentExecutionRecordService agentExecutionRecordService;
+
+    /** 成本档位下界（最贵，有成本数据）。 */
+    private static final int COST_RANK_MIN = 1;
+
+    /** 成本档位上界（最省，有成本数据）。 */
+    private static final int COST_RANK_MAX = 5;
+
+    /** 成本档位中立值：候选内成本无区分度（min == max，含仅 1 个有样本）时取之，不偏袒。 */
+    private static final int COST_RANK_NEUTRAL = 3;
 
     /**
      * 从指定角色的 Agent 中选取首选执行器（用于初始分配）。
@@ -60,6 +73,20 @@ public class AgentSelector {
      */
     public Agent pickPreferred(AgentRole role) {
         return pickPreferred(role, null);
+    }
+
+    /**
+     * 供跨域只读消费方使用的首选画像快照（RM5 批 2）。
+     *
+     * <p>与 {@link #pickPreferred(AgentRole)} 同口径选人，仅把返回的实体投影为
+     * {@link AgentProfileSnapshot}——消费方（如 {@code ReviewerPickerImpl}）无需 import
+     * {@code agent.entity.Agent}。选人语义、可用性过滤、排序<b>逐字不变</b>。</p>
+     *
+     * @param role Agent 角色；为 null 时不限定角色
+     * @return 首选 Agent 画像快照；无可选时返回 {@code null}
+     */
+    public AgentProfileSnapshot pickPreferredProfile(AgentRole role) {
+        return AgentProfileSnapshotMapper.toSnapshot(pickPreferred(role));
     }
 
     /**
@@ -105,8 +132,13 @@ public class AgentSelector {
      *       （不参与他人失败后的替补池，但可被初始/直接分配的任务命中）</li>
      *   <li>E2：跳过并发额度已满的 Agent（当前占用 &gt;= 声明额度时不再接收新任务；
      *       {@code enforceMaxConcurrent=false} 时跳过本检查，与 E2 前行为一致）</li>
-     *   <li>按 score DESC 排序，选最高分</li>
+     *   <li>按 score DESC 排序，选最高分；前置软优先级为
+     *       dutyRank →（preferExternal 时）accessTypeRank → qualityRank×qualityWeight
+     *       → costRank×costWeight（B5.3 Fleet 成本选人，见 {@link #resolveCostRanks}）</li>
      * </ol>
+     *
+     * <p><b>过滤 vs 排序的分界</b>：任务级技能约束（{@code required_skills} AND 匹配）
+     * 属<b>硬过滤</b>（决定能否进池），<b>不</b>参与排序打分；质量与成本属<b>软排序维度</b>。</p>
      *
      * @param excludeAgentId 需要排除的 Agent ID（原分配目标）
      * @param role           Agent 角色；为 null 时不限定角色
@@ -141,6 +173,7 @@ public class AgentSelector {
     private Agent pickFromCandidates(List<Agent> candidates, Long excludeAgentId,
                                      AgentSelectionConstraints constraints) {
         Map<Long, Integer> qualityRanks = resolveQualityRanks(candidates);
+        Map<Long, Integer> costRanks = resolveCostRanks(candidates);
         return candidates.stream()
                 .filter(a -> excludeAgentId == null || !a.getId().equals(excludeAgentId))
                 .filter(a -> constraints == null || constraints.allows(a))
@@ -157,7 +190,7 @@ public class AgentSelector {
                 .filter(this::hasUsableCredential)
                 .filter(a -> !isOnStrictDuty(a.getId()))
                 .filter(this::isCircuitClosed)
-                .max(resolveComparator(qualityRanks))
+                .max(resolveComparator(qualityRanks, costRanks))
                 .orElse(null);
     }
 
@@ -227,7 +260,8 @@ public class AgentSelector {
         }
     }
 
-    private Comparator<Agent> resolveComparator(Map<Long, Integer> qualityRanks) {
+    private Comparator<Agent> resolveComparator(Map<Long, Integer> qualityRanks,
+                                                Map<Long, Integer> costRanks) {
         // AgentHub P0-B：“当前是否处于值班”作为软优先级最高一档。
         // 无硬拒绝：即使无任何值班 Agent，仍能从非值班候选中选出，
         // 保证与当前行为向后兼容（未上线时 checkIn 未被调用，选择器表现与以前一致）。
@@ -242,6 +276,16 @@ public class AgentSelector {
         if (qualityWeight > 0) {
             dutyFirst = dutyFirst.thenComparingDouble(
                     a -> qualityRanks.getOrDefault(a.getId(), 0) * qualityWeight);
+        }
+        // B5.3 Fleet 成本回灌：在 qualityRank 之后、score 之前插入 costRank（成本分档位 ×
+        // cost-weight，默认 0.1；0 关闭）。与 quality 完全同型——档位来源见
+        // resolveCostRanks（候选内 min-max 反向归一 1~5，无成本数据记 0 档）。
+        // ⚠️ 链式 thenComparing 是字典序而非加权求和：qualityRank 档位不同时
+        // costRank 不生效；dutyRank 为最高档，故成本实际只在「同值班档」内起作用。
+        double costWeight = agentDispatchProperties.getCostWeight();
+        if (costWeight > 0) {
+            dutyFirst = dutyFirst.thenComparingDouble(
+                    a -> costRanks.getOrDefault(a.getId(), COST_RANK_NEUTRAL) * costWeight);
         }
         return dutyFirst.thenComparing(Agent::getScore,
                 Comparator.nullsFirst(Comparator.naturalOrder()));
@@ -273,6 +317,77 @@ public class AgentSelector {
             }
         }
         return ranks;
+    }
+
+    /**
+     * 预计算候选 Agent 的<b>成本档位</b>（B5.3 Fleet 成本选人）。
+     *
+     * <p>原料：每个候选「最近 {@code costSampleLimit} 次成功执行」的 token 均值
+     * （{@link AgentExecutionRecordService#averageRecentSuccessTokens}，越小越省）。</p>
+     *
+     * <p>归一方式：在<b>本批候选集合内</b>按均值做 min-max <b>反向</b>归一 → 档位
+     * {@code 1~5}（最省 = {@link #COST_RANK_MAX}，最贵 = {@link #COST_RANK_MIN}）。
+     * 采用相对档位而非绝对量纲，是因为 token 消耗没有天然上界（不同模型/任务量级差异极大），
+     * 任何绝对阈值都会引入"拍脑袋常数"。</p>
+     *
+     * <p><b>缺失语义（2026-10-04 订正）</b>：无成本数据（无成功执行记录 / {@code token_usage}
+     * 全 NULL / 查询异常）记 {@link #COST_RANK_NEUTRAL}（<b>中立档</b>）——「不可比」的正确落点是
+     * <b>不偏袒</b>，而非记 {@code 0}。原实现记 {@code 0} 并在 {@code max(...)} 中比较，等价于
+     * 「比最贵档还差」，会在<b>部分覆盖</b>（如候选内仅 1 个 Agent 有历史样本）时把
+     * 「有历史样本」本身变成胜出理由，与「缺失值须与最差值区分」的判据相悖。</p>
+     *
+     * <p><b>可比性门槛</b>：候选内**有效样本数 &lt; 2** 时直接返回空 Map ⇒ 成本维度整体不生效
+     * （无可比对象）；候选内成本无区分度（{@code min == max}）同样记
+     * {@link #COST_RANK_NEUTRAL}（中立，不偏袒）。</p>
+     *
+     * <p>{@code costWeight ≤ 0} 时直接返回空 Map（完全关闭，与接入前行为一致）。
+     * 一次选人只查询一轮（避免 Comparator 两两比较时重复查库，与
+     * {@link #resolveQualityRanks} 同款范式）。</p>
+     */
+    private Map<Long, Integer> resolveCostRanks(List<Agent> candidates) {
+        if (agentDispatchProperties.getCostWeight() <= 0
+                || candidates == null || candidates.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<Long, Integer> avgTokens = new HashMap<>();
+        int sampleLimit = agentDispatchProperties.getCostSampleLimit();
+        for (Agent agent : candidates) {
+            if (agent == null || agent.getId() == null) {
+                continue;
+            }
+            try {
+                Integer avg = agentExecutionRecordService.averageRecentSuccessTokens(agent.getId(), sampleLimit);
+                if (avg != null) {
+                    avgTokens.put(agent.getId(), avg);
+                }
+            } catch (Exception e) {
+                // 防御式：成本画像查询异常降级为「无成本数据」（0 档），不阻断选人
+                log.debug("costRank fallback to 0 for agent {}: {}", agent.getId(), e.getMessage());
+            }
+        }
+        // 可比性门槛：候选内有效样本 < 2 时无比较对象 ⇒ 整维不生效（否则唯一有样本者凭空占优）
+        if (avgTokens.size() < 2) {
+            return Collections.emptyMap();
+        }
+        int min = avgTokens.values().stream().mapToInt(Integer::intValue).min().orElse(0);
+        int max = avgTokens.values().stream().mapToInt(Integer::intValue).max().orElse(0);
+        Map<Long, Integer> ranks = new HashMap<>();
+        for (Map.Entry<Long, Integer> entry : avgTokens.entrySet()) {
+            ranks.put(entry.getKey(), inverseCostRank(entry.getValue(), min, max));
+        }
+        return ranks;
+    }
+
+    /**
+     * min-max 反向归一到成本档位：最省 → {@link #COST_RANK_MAX}，最贵 → {@link #COST_RANK_MIN}。
+     * 区间退化（{@code max <= min}）→ {@link #COST_RANK_NEUTRAL}。
+     */
+    private static int inverseCostRank(int avgTokens, int min, int max) {
+        if (max <= min) {
+            return COST_RANK_NEUTRAL;
+        }
+        int rank = (int) Math.round(COST_RANK_MAX * (double) (max - avgTokens) / (max - min));
+        return Math.max(COST_RANK_MIN, Math.min(COST_RANK_MAX, rank));
     }
 
     /**

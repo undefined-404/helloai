@@ -101,4 +101,26 @@ public interface AgentExecutionRecordService extends IService<AgentExecutionReco
      * @return 命中记录列表（可能为空，绝不返回 null）
      */
     List<AgentExecutionRecord> listByStatusStartedBefore(ExecutionStatus status, OffsetDateTime before);
+
+    // ══════════════════════════════════════════════════════════════
+    //  B5.2 Fleet 成本选人：成本画像聚合（agent_execution_record 派生）
+    // ══════════════════════════════════════════════════════════════
+
+    /**
+     * 某 Agent「最近 {@code limit} 次成功执行」的 token 均值（成本画像原料）。
+     *
+     * <p>B5.3 选人链（{@code AgentSelector}）按候选逐个调用，与质量画像
+     * {@code AgentQualityProfileService.computeQualityScore} 的调用形态一致。</p>
+     *
+     * <p><b>best-effort 契约</b>：查询异常一律返回 {@code null}（等同于「无成本数据」），
+     * 绝不向调度主链路抛出——选人不可因成本画像故障而失败。返回值语义：</p>
+     * <ul>
+     *   <li>{@code null} = 无样本（该 Agent 无成功执行记录 / 全部 {@code token_usage} 为 NULL / 查询异常）</li>
+     *   <li>{@code >= 0} = 均值（四舍五入取整）</li>
+     * </ul>
+     *
+     * @param agentId 目标 Agent；为 null 返回 null
+     * @param limit   取样条数（最近 N 次成功执行）；&le; 0 时按默认 1 处理
+     */
+    Integer averageRecentSuccessTokens(Long agentId, int limit);
 }

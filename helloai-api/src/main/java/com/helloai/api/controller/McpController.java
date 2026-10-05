@@ -144,11 +144,12 @@ public class McpController {
         String output = (String) body.get("output");
         String error = (String) body.get("error");
         String finishReason = (String) body.get("finishReason");
+        Integer tokenUsage = toInt(body.get("tokenUsage")); // B5.1 可选：成本观测
 
         if (subTaskId == null) return R.fail("subTaskId 不能为空");
         if (success == null) return R.fail("success 不能为空");
 
-        return R.ok(mcpToolService.submitResult(agentId, subTaskId, resultId, success, output, error, finishReason));
+        return R.ok(mcpToolService.submitResult(agentId, subTaskId, resultId, success, output, error, finishReason, tokenUsage));
     }
 
     /** POST /api/mcp/tools/reportBlocked */
@@ -305,11 +306,12 @@ public class McpController {
                                     "mimeType", Map.of("type", "string"), "fileSize", Map.of("type", "integer"),
                                     "storageUrl", Map.of("type", "string")),
                                     "required", java.util.List.of("subTaskId", "fileName", "storageUrl"))),
-                    Map.of("name", "submitResult", "description", "上交子任务执行结果（同步返回 accepted/status）",
+                    Map.of("name", "submitResult", "description", "上交子任务执行结果（同步返回 accepted/status；可选回报 tokenUsage 供平台成本观测）",
                             "inputSchema", Map.of("type", "object", "properties", Map.of(
                                     "subTaskId", Map.of("type", "integer"), "resultId", Map.of("type", "string"),
                                     "success", Map.of("type", "boolean"), "output", Map.of("type", "string"),
-                                    "error", Map.of("type", "string"), "finishReason", Map.of("type", "string")),
+                                    "error", Map.of("type", "string"), "finishReason", Map.of("type", "string"),
+                                    "tokenUsage", Map.of("type", "integer", "description", "本次执行消耗的 token 总数（可选，成本观测用）")),
                                     "required", java.util.List.of("subTaskId", "success"))),
                     Map.of("name", "reportBlocked", "description", "上报任务阻塞（REWORK 态亦可上报）",
                             "inputSchema", Map.of("type", "object", "properties", Map.of(
@@ -412,9 +414,10 @@ public class McpController {
                 String output = (String) args.get("output");
                 String error = (String) args.get("error");
                 String finishReason = (String) args.get("finishReason");
+                Integer tokenUsage = toInt(args.get("tokenUsage")); // B5.1 可选：成本观测
                 if (subTaskId == null) throw new BizException("subTaskId is required");
                 if (success == null) throw new BizException("success is required");
-                yield mcpToolService.submitResult(agentId, subTaskId, resultId, success, output, error, finishReason);
+                yield mcpToolService.submitResult(agentId, subTaskId, resultId, success, output, error, finishReason, tokenUsage);
             }
             case "reportBlocked" -> {
                 Long subTaskId = toLong(args.get("subTaskId"));
@@ -464,6 +467,15 @@ public class McpController {
         if (value instanceof Number n) return n.longValue();
         if (value instanceof String s) {
             try { return Long.valueOf(s); } catch (NumberFormatException e) { return null; }
+        }
+        return null;
+    }
+
+    /** B5.1：外部执行者可选回报 token 总数（缺失/非法一律 null，不阻断提交）。 */
+    private Integer toInt(Object value) {
+        if (value instanceof Number n) return n.intValue();
+        if (value instanceof String s) {
+            try { return Integer.valueOf(s.trim()); } catch (NumberFormatException e) { return null; }
         }
         return null;
     }
