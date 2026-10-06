@@ -36,6 +36,7 @@ export const EVENT_META: Record<string, { label: string; desc: string }> = {
   sub_task_execute: { label: '执行产出', desc: '执行 Agent 产出了内容' },
   sub_task_execute_submit: { label: '提交产出', desc: '执行 Agent 提交了本次产出' },
   sub_task_artifact_materialized: { label: '产出物化', desc: '执行产出已物化为附件，可在产出附件中下载' },
+  attachment_deleted: { label: '删除产出', desc: '执行 Agent 删除了此前上传的产出附件（止损即停、零残留）' },
   sub_task_execute_success: { label: '执行成功', desc: '子任务执行成功' },
   sub_task_execute_failed: { label: '执行失败', desc: '子任务执行失败' },
   sub_task_execute_result_discarded: { label: '结果丢弃', desc: '本次执行结果被丢弃（可能已过期）' },
@@ -116,7 +117,7 @@ export function eventCategory(eventType: string): EventCategory {
   if (/dead_letter|manual|blocked|intervention|rework/.test(eventType)) return '人工介入'
   if (/dispatch|command|assigned|timeout_reassign|offline_reassign|no_candidate|claim_rejected/.test(eventType)) return '分发'
   if (/^task_|^run_|task_auto/.test(eventType)) return '任务'
-  if (/execute|llm|artifact|context_loaded|thinking|report|skill_resolved|tool_resolved|environment_resolved|context_built|tool_call|agent_/.test(eventType)) return '执行'
+  if (/execute|llm|artifact|attachment|context_loaded|thinking|report|skill_resolved|tool_resolved|environment_resolved|context_built|tool_call|agent_/.test(eventType)) return '执行'
   return '流程'
 }
 

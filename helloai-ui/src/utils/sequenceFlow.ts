@@ -84,7 +84,8 @@ export function classifySwimlane(ev: TaskTimelineItem): Swimlane {
   if (t.startsWith('sub_task_execute_') || t.startsWith('sub_task_llm_call_')
       || t === 'sub_task_deps_context_loaded' || t === 'sub_task_spec_context_loaded'
       || t === 'sub_task_execution_command_consume'
-      || t === 'sub_task_execution_command_consume_skipped') return 'EXT'
+      || t === 'sub_task_execution_command_consume_skipped'
+      || t === 'attachment_deleted') return 'EXT'
   // 其余 SYSTEM 角色 → 调度引擎
   return 'SCH'
 }
@@ -127,6 +128,7 @@ const LABEL: Record<string, string> = {
   sub_task_execute_failed: '执行失败',
   sub_task_execute_result_discarded: '结果丢弃',
   sub_task_report_blocked: '执行受阻',
+  attachment_deleted: '删除产出附件',
 
   sub_task_auto_review_passed: '核验通过',
   sub_task_auto_review_rejected: '核验驳回',
