@@ -148,7 +148,7 @@ EXEC_AGENT_ID="$(print -r -- "$EXEC_RESP" | jq -r '.data.id')"
 log "executorAgentId=$EXEC_AGENT_ID"
 
 log "STEP2.1: bind agent api-key credential (provider=$VAULT_PROVIDER)"
-BIND_RESP="$(http_json POST "$BASE_URL/api/credentials/agents/$EXEC_AGENT_ID/api-key" \
+BIND_RESP="$(http_json POST "$BASE_URL/api/credentials/bindApiKeyByAgentId/$EXEC_AGENT_ID" \
   "{\"provider\":\"$VAULT_PROVIDER\",\"apiKey\":\"$LLM_API_KEY\",\"remark\":\"verify-deps-context-e2e\"}")"
 assert_r200 "$BIND_RESP" "bind api-key"
 

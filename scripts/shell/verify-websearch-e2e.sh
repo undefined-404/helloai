@@ -115,7 +115,7 @@ PLANNER_AGENT_ID="$(jq_value "$PLANNER_RESP" '.data.id')"
 log "plannerAgentId=$PLANNER_AGENT_ID"
 
 log "STEP2.1: bind agent api-key credential"
-BIND_RESP="$(http_json POST "$BASE_URL/api/credentials/agents/$PLANNER_AGENT_ID/api-key" \
+BIND_RESP="$(http_json POST "$BASE_URL/api/credentials/bindApiKeyByAgentId/$PLANNER_AGENT_ID" \
   "{\"provider\":\"$VAULT_PROVIDER\",\"apiKey\":\"$LLM_API_KEY\",\"remark\":\"verify-websearch-e2e\"}")"
 assert_r200 "$BIND_RESP" "bind api-key"
 

@@ -125,7 +125,7 @@ PLANNER_AGENT_ID="$(print -r -- "$PLANNER_RESP" | jq -r '.data.id')"
 log "plannerAgentId=$PLANNER_AGENT_ID"
 
 log "STEP2.1: bind agent api-key credential (provider=$VAULT_PROVIDER)"
-BIND_RESP="$(http_json POST "$BASE_URL/api/credentials/agents/$PLANNER_AGENT_ID/api-key" \
+BIND_RESP="$(http_json POST "$BASE_URL/api/credentials/bindApiKeyByAgentId/$PLANNER_AGENT_ID" \
   "{\"provider\":\"$VAULT_PROVIDER\",\"apiKey\":\"$LLM_API_KEY\",\"remark\":\"verify-planner-chat-dual-mode\"}")"
 assert_r200 "$BIND_RESP" "bind api-key"
 
