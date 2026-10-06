@@ -91,7 +91,7 @@ if ($BindVault) {
     Write-Host "STEP2.1: bind credential_vault"
     $apiKey = [System.Environment]::GetEnvironmentVariable($VaultApiKeyEnv)
     Assert-True (-not [string]::IsNullOrWhiteSpace($apiKey)) ("env var is empty: " + $VaultApiKeyEnv)
-    $bindResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/credentials/agents/" + $agentId + "/api-key") -Body @{
+    $bindResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/credentials/bindApiKeyByAgentId/" + $agentId) -Body @{
         provider = $VaultProvider
         apiKey = $apiKey
         remark = "verify-agent-llm-connectivity.ps1"

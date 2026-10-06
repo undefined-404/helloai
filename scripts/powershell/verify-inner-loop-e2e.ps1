@@ -90,7 +90,7 @@ function Register-LlmAgent([string]$Name, [string]$Role, [hashtable]$Headers) {
 }
 
 function Bind-AgentApiKey([string]$AgentId, [string]$Provider, [hashtable]$Headers) {
-    $resp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/credentials/agents/" + $AgentId + "/api-key") -Body @{
+    $resp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/credentials/bindApiKeyByAgentId/" + $AgentId) -Body @{
         provider = $Provider
         apiKey = $LlmApiKey
         remark = "verify-inner-loop-e2e"

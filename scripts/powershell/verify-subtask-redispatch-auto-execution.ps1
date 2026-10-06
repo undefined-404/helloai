@@ -173,7 +173,7 @@ function Bind-TargetVault([string]$AdminToken, [string]$AgentId) {
     $apiKey = [System.Environment]::GetEnvironmentVariable($VaultApiKeyEnv)
     Assert-True (-not [string]::IsNullOrWhiteSpace($apiKey)) ("env var is empty: " + $VaultApiKeyEnv)
 
-    $bindResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/credentials/agents/" + $AgentId + "/api-key") -Body @{
+    $bindResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/credentials/bindApiKeyByAgentId/" + $AgentId) -Body @{
         provider = $VaultProvider
         apiKey = $apiKey
         remark = "verify-subtask-redispatch-auto-execution.ps1"

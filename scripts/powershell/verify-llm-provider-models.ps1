@@ -223,7 +223,7 @@ if ($moonshot -ne $null) {
     $msModels = @($msModelsResp.data)
     Assert-Pass ($msModels.Count -eq 5) 'S2' ('moonshot has 5 seed models, got ' + $msModels.Count)
     $msDefault = $msModels | Where-Object { $_.isDefault -eq 1 } | Select-Object -First 1
-    Assert-Pass ($msDefault -ne $null -and $msDefault.modelName -eq 'kimi-k2.5') 'S2' ('moonshot default model is kimi-k2.5, got ' + $msDefault.modelName)
+    Assert-Pass ($msDefault -ne $null -and $msDefault.modelName -eq 'kimi-k3') 'S2' ('moonshot default model is kimi-k3, got ' + $msDefault.modelName)
 } else {
     Write-Output '[S2] WARN : moonshot provider missing, skip its assertions'
 }

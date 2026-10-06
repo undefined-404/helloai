@@ -92,7 +92,7 @@ if ($BindVault) {
     Write-Host "STEP2.1: bind credential_vault"
     $apiKey = [System.Environment]::GetEnvironmentVariable($VaultApiKeyEnv)
     Assert-True (-not [string]::IsNullOrWhiteSpace($apiKey)) ("env var is empty: " + $VaultApiKeyEnv)
-    $bindResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/credentials/agents/" + $agentId + "/api-key") -Body @{
+    $bindResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/credentials/bindApiKeyByAgentId/" + $agentId) -Body @{
         provider = $VaultProvider
         apiKey = $apiKey
         remark = "verify-agent-execution-preview.ps1"
@@ -103,7 +103,7 @@ if ($BindVault) {
 
     if ($BindVaultTwice) {
         Write-Host "STEP2.2: bind credential_vault again (rotate)"
-        $bind2Resp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/credentials/agents/" + $agentId + "/api-key") -Body @{
+        $bind2Resp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/credentials/bindApiKeyByAgentId/" + $agentId) -Body @{
             provider = $VaultProvider
             apiKey = $apiKey
             remark = "verify-agent-execution-preview.ps1 rotate"
