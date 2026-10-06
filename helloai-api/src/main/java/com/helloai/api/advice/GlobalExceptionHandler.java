@@ -19,6 +19,7 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.MultipartException;
 import org.springframework.web.multipart.support.MissingServletRequestPartException;
@@ -189,6 +190,25 @@ public class GlobalExceptionHandler {
             return null;
         }
         return R.fail(415, message);
+    }
+
+    /**
+     * 路径/查询参数<b>类型不匹配</b>（如 {@code /api/attachments/deleteById/{id}} 的 {@code id} 传非数字）：
+     * Spring 抛 {@link MethodArgumentTypeMismatchException} → <b>400 Bad Request</b>。
+     * 此前被 {@link #handleException} 兜底成 500，客户端拿到「服务内部错误」无法判断是自己传错参数，
+     * 属参数校验盲区（与 P1-1 上传端点同类问题，2026-10-07 随 ① 删除通道一并收口）。
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public R<Void> handleTypeMismatch(MethodArgumentTypeMismatchException e,
+                                      HttpServletRequest request, HttpServletResponse response) {
+        String message = "参数类型不合法: " + e.getName();
+        log.debug("参数类型不匹配: {}", e.getMessage());
+        if (sseRequest(request)) {
+            writeSseError(request, response, message);
+            return null;
+        }
+        return R.fail(400, message);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

@@ -17,6 +17,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.MultipartException;
@@ -217,6 +218,16 @@ class GlobalExceptionHandlerTest {
                 .andExpect(jsonPath("$.msg").value("服务内部错误，请联系管理员"));
     }
 
+    // ==================== 参数类型纠偏（① 删除通道参数校验，2026-10-07）====================
+
+    @Test
+    @DisplayName("路径参数类型不匹配（{id} 非数字）：MethodArgumentTypeMismatchException → HTTP 400 且 code 400")
+    void typeMismatchShouldMapTo400() throws Exception {
+        mockMvc.perform(get("/test/ex/type-mismatch/not-a-number"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(400));
+    }
+
     /**
      * 触发器：把各类异常从控制器方法抛出，交由 {@link GlobalExceptionHandler} 解析。
      * {@code MaxUploadSizeExceededException} / {@code MultipartException} 为非受检异常，无需 throws；
@@ -253,6 +264,11 @@ class GlobalExceptionHandlerTest {
         @GetMapping("/test/ex/unknown")
         public void unknown() {
             throw new IllegalStateException("boom");
+        }
+
+        @GetMapping("/test/ex/type-mismatch/{id}")
+        public String typeMismatch(@PathVariable("id") Long id) {
+            return "ok:" + id;
         }
     }
 }
