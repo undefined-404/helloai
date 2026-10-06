@@ -23,9 +23,6 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.argThat;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -42,9 +39,12 @@ import static org.mockito.Mockito.when;
  * 这正是审计批评「@MockBean 挂集成测试」之外的正当用途——只隔离不可控外部调用，
  * MQ / 幂等 / CAS / DB 落库全部走真实链路。</p>
  *
- * <p><b>用例</b>：同一 eventId 投递两次。断言：业务逻辑只执行 1 次
- * （execute 调用 1 次），幂等日志只 1 行，执行记录终态 SUCCESS 且 version 走完
- * 0→1→2 的乐观锁演进（markRunning +1、markSuccess +1）。</p>
+ * <p><b>用例</b>：同一 eventId 投递两次。断言全部落在<b>与「谁消费」无关的真实副作用</b>上：
+ * 幂等日志只 1 行，执行记录终态 SUCCESS 且 version 走完 0→1→2 的乐观锁演进
+ * （markRunning +1、markSuccess +1）。<b>不以 mock 交互计数</b>为判据——共享同一
+ * Testcontainers RabbitMQ 的「无 mock」配置 B 与配置 A 构成 competing consumer，
+ * 消息可能被真实 executor 抢走（it profile {@code mock-mode=true} 下真实执行同样产出
+ * SUCCESS/version），故移除对 {@code verify(execute)} 计数的依赖（2026-10-07 实跑暴露）。</p>
  */
 @DisplayName("B2: MQ 执行命令幂等消费")
 class MqExecutionCommandConsumerIT extends AbstractItTestBase {
@@ -101,10 +101,11 @@ class MqExecutionCommandConsumerIT extends AbstractItTestBase {
                     return consumptionLogCount(eventId) == 1;
                 });
 
-        // 业务逻辑只执行了一次（第二次被 Redis + DB 双层幂等拦截）。
-        // 按 subTaskId 精确匹配本用例调用：B2/B3 共享同一 @MockitoBean 实例
-        // （TestContext 缓存复用同配置上下文），类间计数会累计（2026-09-29 实跑暴露）
-        verify(runtimeTurnExecutor, times(1)).execute(argThat(ctx -> ctx.getSubTaskId() == SUB_TASK_ID));
+        // 「业务只执行一次」的证据（不依赖「谁消费」的 mock 交互计数）：
+        // 第二次投递被 Redis + DB 双层幂等拦截，故幂等日志恒为 1 行（上方 awaitUntil），
+        // 且执行记录 version 恰走完 0→1→2 —— markRunning(+1)/markSuccess(+1) 各一次，
+        // 重复执行会再触发 CAS 使 version 继续自增或状态回退。
+        // （配置 B 的真实 executor 抢走消息时同样产出该证据，故本断言对「谁消费」不敏感。）
 
         // 状态机演进：PENDING(0) → markRunning(1) → markSuccess(2)
         assertEquals("SUCCESS", recordStatus(RECORD_ID));

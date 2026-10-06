@@ -15,9 +15,6 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.argThat;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -111,9 +108,11 @@ class AgentCommandOutboxIT extends AbstractItTestBase {
                         "SELECT status FROM agent_execution_record WHERE sub_task_id = ?",
                         String.class, SUB_TASK_ID)));
 
-        // 执行链真实走了一次（mock 只隔离 LLM）；按 subTaskId 匹配本用例调用——
-        // 与 B2 共享同一 @MockitoBean（TestContext 缓存复用），计数跨类累计（2026-09-29 实跑暴露）
-        verify(runtimeTurnExecutor, times(1)).execute(argThat(ctx -> ctx.getSubTaskId() == SUB_TASK_ID));
+        // 「执行链只走一次」的证据（不依赖「谁消费」的 mock 交互计数）：执行记录已到
+        // SUCCESS（上方 awaitUntil）+ 幂等日志恰 1 行（上方 awaitUntil）+ 消费阶段 timeline
+        // 恰 1 条（下方断言）。同 B2：共享 Testcontainers RabbitMQ 的「无 mock」配置 B 与
+        // 配置 A 构成 competing consumer，消息可能被真实 executor 抢走（it profile
+        // mock-mode=true 下真实执行同样驱动 SUCCESS），故移除 mock 计数依赖（2026-10-07 实跑暴露）。
         // outbox confirms 回写字段：last_sent_time / confirmed_time 均非空
         Integer confirmedWithTimes = jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM agent_command_outbox
