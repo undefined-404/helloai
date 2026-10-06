@@ -36,7 +36,7 @@ param(
     [ValidateSet('S1','S2','S3','all')]
     [string]$Scene = 'all',
     [string]$AdminUsername = 'admin',
-    [string]$AdminPassword = 'admin123',
+    [string]$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD,
     [int]$PollIntervalSec = 5,
     [int]$ReviewWaitSec = 240,
     [int]$RecheckWindowDays = 7,
@@ -51,6 +51,7 @@ param(
     [string]$JdbcUser = $env:DATASOURCE_USERNAME,
     [string]$JdbcPassword = $env:DATASOURCE_PASSWORD
 )
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 
 $ErrorActionPreference = 'Stop'
 

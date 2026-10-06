@@ -27,11 +27,12 @@
 param(
     [string]$BaseUrl = 'http://localhost:6565',
     [string]$AdminUsername = 'admin',
-    [string]$AdminPassword = 'admin123',
+    [string]$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD,
     [string]$ProbeProviderCode = 'model-e2e-probe',
     [string]$JarPath = 'e:\yhzx\1027\helloai\helloai-start\target\helloai-start-1.0.0-SNAPSHOT.jar',
     [int]$StartupTimeoutSec = 150
 )
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 
 # ------------------------------------------------------------
 # UTF-8 编码强制头（规则 6）—— 避免中文乱码

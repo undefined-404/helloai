@@ -18,7 +18,7 @@
 param(
     [string]$BaseUrl = "http://localhost:6565",
     [string]$AdminUsername = "admin",
-    [string]$AdminPassword = "admin123",
+    [string]$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD,
     # G-002 单轨验证固定三角色（数据清理前保留的平台内建 API_KEY_LLM Agent）
     [string]$PlannerAgentId  = "2088623807767121922",
     [string]$ExecutorAgentId = "2088623654343675905",
@@ -27,6 +27,7 @@ param(
     [int]$LoopTimeoutSec = 1200,
     [int]$PollIntervalSec = 10
 )
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 
 # ------------------------------------------------------------
 # UTF-8 编码强制头（规则 6）—— 避免中文乱码

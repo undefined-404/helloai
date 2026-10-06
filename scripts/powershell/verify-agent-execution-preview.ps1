@@ -15,8 +15,9 @@ param(
     [string]$VaultProvider = "deepseek",
     [string]$VaultApiKeyEnv = "DEEPSEEK_API_KEY",
     [string]$AdminUsername = "admin",
-    [string]$AdminPassword = "admin123"
+    [string]$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD
 )
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 
 $ErrorActionPreference = "Stop"
 

@@ -23,11 +23,12 @@
 param(
     [string]$BaseUrl = 'http://localhost:6565',
     [string]$AdminUsername = 'admin',
-    [string]$AdminPassword = 'admin123',
+    [string]$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD,
     [int]$PollIntervalSec = 3,
     [int]$SubmitTimeoutSec = 60,
     [int]$ReviewTimeoutSec = 150
 )
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 
 $ErrorActionPreference = 'Stop'
 

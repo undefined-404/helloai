@@ -18,12 +18,13 @@
 param(
     [string]$BaseUrl = "http://localhost:6565",
     [string]$AdminUsername = "admin",
-    [string]$AdminPassword = "admin123",
+    [string]$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD,
     # 平台 llm_provider_model 现役模型（V49 模型管理启用后注册会校验）：deepseek→v4-flash/v4-pro
     [string]$LlmModelType = "deepseek:deepseek-v4-flash",
     [string]$LlmApiKey = $env:DEEPSEEK_API_KEY,
     [int]$RoundTimeoutSec = 180
 )
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8

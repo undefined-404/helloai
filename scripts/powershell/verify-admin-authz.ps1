@@ -20,6 +20,8 @@
 #   E) 无凭证探一个端点 -> 断言 401
 #   F) 汇总 PASS/FAIL，FAIL > 0 时退出码 1
 # ============================================================
+$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -78,7 +80,7 @@ Write-Output ''
 
 # ==================== [A] admin login ====================
 Write-Output '=== [A] admin login ==='
-$loginBody = '{"type":"admin","username":"admin","credential":"admin123"}'
+$loginBody = '{"type":"admin","username":"admin","credential":"' + $AdminPassword + '"}'
 $loginResp = Invoke-Http -Method 'POST' -Uri ($base + '/api/auth/login') -Body $loginBody
 if ($loginResp.Code -ne 200) {
     Write-Output ('admin login failed: ' + $loginResp.Body)

@@ -12,6 +12,8 @@
 #   3) 跑 MCP SSE + 各种鉴权组合 -> 验证 401 / 200 + agentId 覆盖
 # ============================================================
 
+$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 Add-Type -AssemblyName System.Net.Http
 
 $base = "http://localhost:6565"
@@ -94,7 +96,7 @@ Write-Output ""
 
 # ==================== STEP A: admin login ====================
 Write-Output "=== [A] admin login ==="
-$loginBody = '{"type":"admin","username":"admin","credential":"admin123"}'
+$loginBody = '{"type":"admin","username":"admin","credential":"' + $AdminPassword + '"}'
 $loginResp = Invoke-PostJson -Uri "$base/api/auth/login" -Body $loginBody
 Write-Output "HTTP $($loginResp.Code)"
 $adminToken = ($loginResp.Body | ConvertFrom-Json).data.token

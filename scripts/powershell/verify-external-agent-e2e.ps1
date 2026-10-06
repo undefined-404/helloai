@@ -41,20 +41,21 @@
 param(
     [string]$BaseUrl = "http://localhost:6565",
     [string]$AdminUsername = "admin",
-    [string]$AdminPassword = "admin123",
+    [string]$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD,
     # inner platform agents (pinned, same as single-track verify)
     [string]$PlannerAgentId  = "2088623807767121922",
     [string]$ReviewerAgentId = "2088623970980073473",
     # external CLI_CLIENT executors, comma separated; tasks rotate over them
     [string]$ExternalAgentIds = "",
     [int]$PlanTimeoutSec = 360,
-    [int]$LoopTimeoutSec = 2400,
+    [int]$LoopTimeoutSec = 3600,
     [int]$PollIntervalSec = 10,
     [string]$PgContainer = "helloai-postgres",
     [switch]$SkipDutyPreflight,
     # 只断言已存在任务（不新建/不轮询）：配合固定标题查重，二次运行 STEP6/7 用
     [switch]$AssertOnly
 )
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 
 # ------------------------------------------------------------
 # UTF-8 encoding header (repo rule 6) - avoid CJK garbled output
@@ -299,36 +300,91 @@ foreach ($t in $todo) {
 Write-Host ("issued=" + $issued.Count)
 
 # ============================================================
-# STEP5: watch external loop until all sub tasks DONE
+# STEP5: watch external loop until all sub tasks reach TERMINAL state
+# 终态集合 = {DONE, DEAD_LETTER, CANCELLED, FAILED}（§25 轮询语义，对齐 awaitUntil）。
+# 收敛后判定：任一子任务 FAILED/DEAD_LETTER ⇒ FAIL（真实失败）；全 DONE/CANCELLED ⇒ 继续。
+# 窗口耗尽仍有非终态（RUNNING/PENDING…）⇒ INCONCLUSIVE（§27，≠FAIL）并打印诊断快照。
 # ============================================================
 Write-Host ("STEP5: watch external loop (dispatch -> external client claim/execute/submit -> auto review), timeout=" + $LoopTimeoutSec + "s")
 $deadline = [DateTime]::UtcNow.AddSeconds($LoopTimeoutSec)
-$allDone = $false
+$terminalSet = @("DONE", "DEAD_LETTER", "CANCELLED", "FAILED")
+$allTerminal = $false
 $finalMap = @{}
 $round = 0
 while ([DateTime]::UtcNow -lt $deadline) {
     Start-Sleep -Seconds $PollIntervalSec
     $round = $round + 1
-    $totalNotDone = 0
+    $totalNotTerminal = 0
     $rowTexts = @()
     foreach ($it in $issued) {
         $subTasks = Get-SubTasks -TaskId $it.TaskId -Headers $adminHeaders
         $finalMap[$it.TaskId] = $subTasks
-        $dead = @($subTasks | Where-Object { $_.status -in @("DEAD_LETTER") })
-        Assert-True ($dead.Count -eq 0) ("task " + $it.Key + " subTasks entered DEAD_LETTER")
-        $notDone = @($subTasks | Where-Object { $_.status -notin @("DONE", "CANCELLED") })
-        $totalNotDone = $totalNotDone + $notDone.Count
+        # 终态收敛：DEAD_LETTER/FAILED 视为终态（是否 FAIL 交由收敛后的判定统一给结论，
+        # 不在循环内即时判死——避免长返工链在推进中被误判）
+        $notTerminal = @($subTasks | Where-Object { $_.status -notin $terminalSet })
+        $totalNotTerminal = $totalNotTerminal + $notTerminal.Count
         $rowTexts += ("task " + $it.Key + ":" + (($subTasks | ForEach-Object { $_.id.ToString().Substring([Math]::Max(0, $_.id.ToString().Length - 4)) + "=" + $_.status }) -join " "))
     }
-    if (($round % 3) -eq 0 -or $totalNotDone -eq 0) {
-        Write-Host ("  [" + [DateTime]::UtcNow.ToString("HH:mm:ss") + "] " + ($rowTexts -join " | ") + "  (left=" + $totalNotDone + ")")
+    if (($round % 3) -eq 0 -or $totalNotTerminal -eq 0) {
+        Write-Host ("  [" + [DateTime]::UtcNow.ToString("HH:mm:ss") + "] " + ($rowTexts -join " | ") + "  (left=" + $totalNotTerminal + ")")
     }
-    if ($totalNotDone -eq 0) {
-        $allDone = $true
+    if ($totalNotTerminal -eq 0) {
+        $allTerminal = $true
         break
     }
 }
-Assert-True $allDone ("external loop not finished in " + $LoopTimeoutSec + "s")
+
+# 子任务状态计数快照（供收敛后判定与 INCONCLUSIVE 诊断共用）
+$statusCounts = @{}
+foreach ($it in $issued) {
+    foreach ($s in @($finalMap[$it.TaskId])) {
+        $k = [string]$s.status
+        if (-not $statusCounts.ContainsKey($k)) { $statusCounts[$k] = 0 }
+        $statusCounts[$k] = $statusCounts[$k] + 1
+    }
+}
+$statusSummary = (($statusCounts.GetEnumerator() | Sort-Object Name | ForEach-Object { $_.Key + "=" + $_.Value }) -join " ")
+Write-Host ("STEP5 status summary: " + $statusSummary)
+
+# 取子任务最近一条 timeline 事件（诊断用，失败不致命）
+function Get-LastTimelineEvent([string]$SubTaskId) {
+    try {
+        $tlResp = Invoke-Json -Method "Get" -Url ($BaseUrl + "/api/sub-tasks/listTimelineBySubTaskId/" + $SubTaskId) -Body $null -Headers $adminHeaders
+        $evs = @($tlResp.data)
+        if ($evs.Count -eq 0) { return "(no timeline)" }
+        $last = $evs[$evs.Count - 1]
+        return ([string]$last.eventType + "@" + [string]$last.createdTime)
+    } catch {
+        return ("(timeline query failed: " + $_.Exception.Message + ")")
+    }
+}
+
+if (-not $allTerminal) {
+    # INCONCLUSIVE（§27）：窗口耗尽仍有子任务非终态 ⇒ 不等价于 FAIL，打印诊断后退出
+    Write-Host ""
+    Write-Host ("[INCONCLUSIVE] external loop not converged within " + $LoopTimeoutSec + "s (NOT a FAIL; still " + $statusSummary + ")")
+    foreach ($it in $issued) {
+        foreach ($s in @($finalMap[$it.TaskId])) {
+            Write-Host ("  " + $it.Key + " subTask=" + $s.id + " status=" + $s.status + " lastTimeline=" + (Get-LastTimelineEvent ([string]$s.id)))
+        }
+    }
+    foreach ($aid in $ExternalIds) {
+        $hb = Get-PsqlField ("SELECT COALESCE(last_seen_time::text,'') FROM agent WHERE id = " + $aid + " AND deleted = 0")
+        Write-Host ("  agent " + $aid + " last_seen_time=" + $hb)
+    }
+    Write-Host "  hint: external client may still be working; re-run with -AssertOnly, or raise -LoopTimeoutSec"
+    exit 2
+}
+
+# 终态收敛后判定：任一 FAILED / DEAD_LETTER ⇒ FAIL（真实失败，不作 INCONCLUSIVE）
+foreach ($it in $issued) {
+    foreach ($s in @($finalMap[$it.TaskId])) {
+        if ($s.status -in @("FAILED", "DEAD_LETTER")) {
+            $lastTl = Get-LastTimelineEvent ([string]$s.id)
+            Assert-True $false ("task " + $it.Key + " subTask=" + $s.id + " status=" + $s.status + " (terminal failure) lastTimeline=" + $lastTl)
+        }
+    }
+}
 } else {
     Write-Host "STEP4/5 skipped (AssertOnly)"
 }

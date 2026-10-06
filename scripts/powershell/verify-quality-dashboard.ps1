@@ -25,8 +25,9 @@ param(
     [ValidateSet('S1','S2','S3','S4','S5','S6','all')]
     [string]$Scene = 'all',
     [string]$AdminUsername = 'admin',
-    [string]$AdminPassword = 'admin123'
+    [string]$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD
 )
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 
 $ErrorActionPreference = 'Stop'
 

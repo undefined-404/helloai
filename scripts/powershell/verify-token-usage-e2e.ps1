@@ -35,7 +35,7 @@
 param(
     [string]$BaseUrl = "http://localhost:6565",
     [string]$AdminUsername = "admin",
-    [string]$AdminPassword = "admin123",
+    [string]$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD,
     [string]$PlannerAgentId  = "2088623807767121922",
     [string]$ExecutorAgentId = "2088623654343675905",
     [string]$ReviewerAgentId = "2088623970980073473",
@@ -46,6 +46,7 @@ param(
     [string]$PgContainer = "helloai-postgres",
     [switch]$AssertOnly
 )
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 
 # ------------------------------------------------------------
 # UTF-8 encoding header (repo rule 6) - avoid CJK garbled output

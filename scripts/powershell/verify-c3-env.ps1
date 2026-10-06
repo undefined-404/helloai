@@ -28,7 +28,7 @@ param(
     [string]$BaseUrl = 'http://localhost:6565',
     [string]$DbHost = '39.106.204.43',
     [string]$AdminUsername = 'admin',
-    [string]$AdminPassword = 'admin123',
+    [string]$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD,
     [int]$ReconcileWindowMinutes = 12,
     [int]$FreshMinutes = 5,
     [int]$LogTailLines = 10000,
@@ -36,6 +36,7 @@ param(
     [int]$ExpectedGrayPercent = 100,
     [string]$LogFile = ''
 )
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 
 # ------------------------------------------------------------
 # UTF-8 encoding header (rule 6)

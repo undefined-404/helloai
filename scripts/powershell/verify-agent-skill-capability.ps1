@@ -22,7 +22,8 @@ $OutputEncoding = $script:Utf8NoBom
 $ErrorActionPreference = 'Stop'
 $BaseUrl = 'http://localhost:6565'
 $AdminUsername = 'admin'
-$AdminPassword = 'admin123'
+$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 
 $Script:PassCount = 0
 $Script:FailCount = 0

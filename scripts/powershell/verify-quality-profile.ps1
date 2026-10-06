@@ -35,12 +35,13 @@ param(
     [ValidateSet('S1','S2','S3','S4','S5','S6','all')]
     [string]$Scene = 'all',
     [string]$AdminUsername = 'admin',
-    [string]$AdminPassword = 'admin123',
+    [string]$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD,
     [int]$PollIntervalSec = 3,
     [int]$DispatchWaitSec = 60
     # 三个 preset agent 统一以 CLI_CLIENT 注册：外部 agent 自带模型，平台不管理其 model_type
     # （与线上 trae-excutor/TeleAgent-executor 一致，落库为空），故不再需要 provider:model 参数。
 )
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 
 $ErrorActionPreference = 'Stop'
 

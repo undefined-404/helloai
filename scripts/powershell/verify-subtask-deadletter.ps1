@@ -34,12 +34,13 @@ param(
     [string]$BaseUrl = "http://localhost:6565",
     [string]$Role = "EXECUTOR",
     [string]$AdminUsername = "admin",
-    [string]$AdminPassword = "admin123",
+    [string]$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD,
     [int]$MaxReassignAttempts = 5,
     [string]$PgContainer = "helloai-postgres",
     [string]$PgUser = "postgres",
     [string]$PgDb = "helloai"
 )
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8

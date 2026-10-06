@@ -16,12 +16,13 @@
 param(
     [string]$BaseUrl = 'http://localhost:6565',
     [string]$AdminUsername = 'admin',
-    [string]$AdminPassword = 'admin123',
+    [string]$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD,
     [string]$AgentIds = '',
     [switch]$SkipA1,
     [switch]$SkipA2,
     [switch]$SkipA3
 )
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 
 # ------------------------------------------------------------
 # UTF-8 encoding header (rule 6) - avoid CJK mojibake on Chinese Windows

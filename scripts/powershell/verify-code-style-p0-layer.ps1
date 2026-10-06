@@ -12,6 +12,8 @@
 param(
     [string]$BaseUrl = "http://localhost:6565"
 )
+$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -111,7 +113,7 @@ Write-Host '  BACKEND_UP'
 Write-Host '== [4b/5] smoke 4 endpoints (non-5xx) =='
 # 阶段1 不改路径：使用当前路径验证收口后接口仍正常
 # 先登录 admin 拿到 token，带认证真实执行查询逻辑（401 只能证明路由存在）
-$loginBody = @{ type = 'admin'; username = 'admin'; credential = 'admin123' } | ConvertTo-Json
+$loginBody = @{ type = 'admin'; username = 'admin'; credential = $AdminPassword } | ConvertTo-Json
 $loginResp = Invoke-RestMethod -Uri ($BaseUrl + '/api/auth/login') -Method Post `
     -ContentType 'application/json' -Body $loginBody -TimeoutSec 15
 Assert-True ($loginResp.code -eq 200) ('admin login code=' + $loginResp.code + ' msg=' + $loginResp.msg)

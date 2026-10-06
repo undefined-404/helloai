@@ -1,7 +1,7 @@
 ﻿# verify-674-remove-specialization.ps1 - specializationSlug 移除链路验收脚本
 # Usage: .\verify-674-remove-specialization.ps1
 # 覆盖: 列表/详情响应不再含 specializationSlug / 注册带 skills / 编辑不带 modelType / 内部 LLM 注册缺省 modelType / 级联清理
-# 前置: 后端已启动 (http://localhost:6565), 管理员账号 admin/admin123
+# 前置: 后端已启动 (http://localhost:6565), 管理员账号 admin/<HELLOAI_ADMIN_PASSWORD>
 # ------------------------------------------------------------
 # UTF-8 encoding header (rule 6)
 # ------------------------------------------------------------
@@ -13,7 +13,8 @@ $ErrorActionPreference    = 'Stop'
 
 $BaseUrl       = 'http://localhost:6565'
 $AdminUsername = 'admin'
-$AdminPassword = 'admin123'
+$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 
 $global:StepCount = 0
 $global:FailCount = 0

@@ -1,7 +1,7 @@
 ﻿# verify-a2-skill-derive.ps1 - A2 agent.skills best-effort 推导验证脚本
 # Usage: .\verify-a2-skill-derive.ps1
 # 覆盖: 注册推导(accessType 基础技能) / 关键词命中合并 / 显式技能优先 / 幂等复用不覆盖 / 管理端更新(整体替换+null 保持) / 级联清理
-# 前置: 后端已启动 (http://localhost:6565), 管理员账号 admin/admin123
+# 前置: 后端已启动 (http://localhost:6565), 管理员账号 admin/<HELLOAI_ADMIN_PASSWORD>
 # ------------------------------------------------------------
 # UTF-8 encoding header (rule 6)
 # ------------------------------------------------------------
@@ -13,7 +13,8 @@ $ErrorActionPreference    = 'Stop'
 
 $BaseUrl       = 'http://localhost:6565'
 $AdminUsername = 'admin'
-$AdminPassword = 'admin123'
+$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 
 $global:StepCount = 0
 $global:FailCount = 0

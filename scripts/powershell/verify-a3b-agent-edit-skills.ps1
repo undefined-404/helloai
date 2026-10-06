@@ -1,7 +1,7 @@
 ﻿# verify-a3b-agent-edit-skills.ps1 - AgentEditDialog skills 编辑链路验收脚本
 # Usage: .\verify-a3b-agent-edit-skills.ps1
 # 覆盖: adminList 列表回显 skills(VO 补字段) / updateById 整体替换 / [] 清空 / null 保持 / 级联清理
-# 前置: 后端已启动 (http://localhost:6565), 管理员账号 admin/admin123
+# 前置: 后端已启动 (http://localhost:6565), 管理员账号 admin/<HELLOAI_ADMIN_PASSWORD>
 # ------------------------------------------------------------
 # UTF-8 encoding header (rule 6)
 # ------------------------------------------------------------
@@ -13,7 +13,8 @@ $ErrorActionPreference    = 'Stop'
 
 $BaseUrl       = 'http://localhost:6565'
 $AdminUsername = 'admin'
-$AdminPassword = 'admin123'
+$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 
 $global:StepCount = 0
 $global:FailCount = 0

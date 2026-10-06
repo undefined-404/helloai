@@ -20,6 +20,8 @@
 # ------------------------------------------------------------
 # UTF-8 encoding header (rule 6)
 # ------------------------------------------------------------
+$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 $script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [Console]::InputEncoding  = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -105,7 +107,7 @@ Write-Output ""
 # STEP A: admin login
 # ============================================================
 Write-Output "=== [A] admin login ==="
-$loginBody = '{"type":"admin","username":"admin","credential":"admin123"}'
+$loginBody = '{"type":"admin","username":"admin","credential":"' + $AdminPassword + '"}'
 $loginResp = Invoke-Json -Method POST -Uri "$base/api/auth/login" -Body $loginBody
 Write-Output "HTTP $($loginResp.Code)"
 $adminToken = ($loginResp.Body | ConvertFrom-Json).data.token

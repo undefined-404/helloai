@@ -4,6 +4,8 @@
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
 $ErrorActionPreference = 'Stop'
+$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 
 $projectRoot = 'e:\yhzx\1027\helloai'
 $jarPath     = "$projectRoot\helloai-start\target\helloai-start-1.0.0-SNAPSHOT.jar"
@@ -132,7 +134,7 @@ Write-Output 'health OK'
 # ------------------------------------------------------------
 Write-Output '=== [3] admin login + register PLANNER ==='
 $loginResp = Invoke-Json -Method 'Post' -Url ($BaseUrl + '/api/auth/login') -Body @{
-    type = 'admin'; username = 'admin'; credential = 'admin123'
+    type = 'admin'; username = 'admin'; credential = $AdminPassword
 } -Headers @{}
 Assert-True ($loginResp.code -eq 200) 'login failed'
 $adminHeaders = @{ 'X-Admin-Token' = $loginResp.data.token }

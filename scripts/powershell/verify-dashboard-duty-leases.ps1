@@ -23,6 +23,8 @@
 # ============================================================
 
 $ErrorActionPreference = 'Stop'
+$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 
 # ------------------------------------------------------------
 # UTF-8 编码强制头（规则 6）—— 避免中文乱码
@@ -139,7 +141,7 @@ Write-Output ''
 # STEP A: admin login
 # ============================================================
 Write-Output '=== [A] admin login ==='
-$loginResp = Invoke-Json -Method POST -Uri "$base/api/auth/login" -Body '{"type":"admin","username":"admin","credential":"admin123"}'
+$loginResp = Invoke-Json -Method POST -Uri "$base/api/auth/login" -Body '{"type":"admin","username":"admin","credential":"' + $AdminPassword + '"}'
 $adminToken = ($loginResp.Body | ConvertFrom-Json).data.token
 if ([string]::IsNullOrEmpty($adminToken)) {
     Write-Error "admin login failed: $($loginResp.Body)"
