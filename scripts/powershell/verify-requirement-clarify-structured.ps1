@@ -11,7 +11,7 @@
 #          长度 >= 300、context.requirementPackage 存在（LLM 输出不可控，不 hard fail）
 #       ⑥ abandon 会话清理（已 FINALIZED 时跳过，改提示人工清理测试数据）
 # Ref:  doc/HelloAI 实现差距表.md（V33 结构化选项式需求澄清）
-# 前置：helloai-start 已运行 + LLM 可用（DEEPSEEK_API_KEY 或 application.yml 默认 key）
+# 前置：helloai-start 已运行 + LLM 可用（DEEPSEEK_API_KEY 必填，无内置默认 key）
 # 用法（项目根）：
 #   powershell -File .\scripts\powershell\verify-requirement-clarify-structured.ps1
 # ============================================================
@@ -25,6 +25,7 @@ param(
     [int]$RoundTimeoutSec = 180
 )
 if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
+if ([string]::IsNullOrWhiteSpace($LlmApiKey)) { throw "未设置 LLM API Key：请导出环境变量 DEEPSEEK_API_KEY（或传 -LlmApiKey）" }
 
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -96,11 +97,6 @@ Assert-True ($loginResp.code -eq 200) ("login code=" + $loginResp.code + " msg="
 Assert-True (-not [string]::IsNullOrWhiteSpace($loginResp.data.token)) "admin token is empty"
 $adminHeaders = @{ "X-Admin-Token" = $loginResp.data.token }
 
-if ([string]::IsNullOrWhiteSpace($LlmApiKey)) {
-    # 与 helloai-start application.yml 中 spring.ai.deepseek.api-key 的默认值保持一致
-    $LlmApiKey = "sk-a36fdda1d4ad4e0386e78fc435be0d16"
-    Write-Host "WARN: DEEPSEEK_API_KEY not set, fallback to application.yml default key"
-}
 $llmProvider = ($LlmModelType -split ":")[0]
 
 Write-Host "STEP2: register PLANNER LLM agent (API_KEY_LLM, idempotent fixed name)"

@@ -10,7 +10,7 @@
 #       6. 日志验证：TaskRunningSpecDataMigrator 已触发
 # Ref:  doc/HelloAI 实现差距表.md（V36 + Phase B）
 # 前置：docker compose up -d（postgres:15432）；mvn package 已产出 helloai-start jar；
-#       DEEPSEEK_API_KEY 已配置（或使用 application.yml 默认）。
+#       DEEPSEEK_API_KEY 已配置（脚本 fail-fast 校验，无内置默认）。
 # 用法（项目根）：
 #   powershell -File .\scripts\powershell\verify-task-running-spec-phase-b.ps1
 #   # 不重启后端（用现有 6565 进程；storage 可能不是 table，Phase B 断言可能失败）：
@@ -30,6 +30,7 @@ param(
     [switch]$SkipRestart = $false
 )
 if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
+if ([string]::IsNullOrWhiteSpace($LlmApiKey)) { throw "未设置 LLM API Key：请导出环境变量 DEEPSEEK_API_KEY（或传 -LlmApiKey）" }
 
 $ErrorActionPreference = 'Stop'
 
@@ -283,10 +284,6 @@ $loginResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/auth/login") -Bod
 Assert-True ($loginResp.code -eq 200) ("login code=" + $loginResp.code + " msg=" + $loginResp.msg)
 $adminHeaders = @{ "X-Admin-Token" = $loginResp.data.token }
 
-if ([string]::IsNullOrWhiteSpace($LlmApiKey)) {
-    $LlmApiKey = "sk-a36fdda1d4ad4e0386e78fc435be0d16"
-    Write-Output "WARN: DEEPSEEK_API_KEY not set, fallback to application.yml default key"
-}
 $llmProvider = ($LlmModelType -split ":")[0]
 
 $plannerAgentId  = Register-LlmAgent -Name "phase-b-planner"  -Role "PLANNER"  -Headers $adminHeaders

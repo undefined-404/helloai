@@ -23,14 +23,14 @@ param(
     [string]$AdminUsername = "admin",
     [string]$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD,
     [string]$LlmModelType = "deepseek:deepseek-v4-flash",
-    # require-vault=true 时绑定给 Agent 的托管 API Key；默认取环境变量，
-    # 再回退 application.yml 中 spring.ai.deepseek.api-key 的同款默认值
+    # require-vault=true 时绑定给 Agent 的托管 API Key；取自环境变量 DEEPSEEK_API_KEY（缺失即 fail-fast）
     [string]$LlmApiKey = $env:DEEPSEEK_API_KEY,
     [int]$PlanTimeoutSec = 360,
     [int]$LoopTimeoutSec = 900,
     [int]$PollIntervalSec = 10
 )
 if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
+if ([string]::IsNullOrWhiteSpace($LlmApiKey)) { throw "未设置 LLM API Key：请导出环境变量 DEEPSEEK_API_KEY（或传 -LlmApiKey）" }
 
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -112,11 +112,6 @@ $adminHeaders = @{ "X-Admin-Token" = $loginResp.data.token }
 $ts = [DateTime]::UtcNow.ToString("yyyyMMddHHmmss")
 
 # require-vault=true 时脚本必须能拿到可绑定的 API Key，否则拆解/执行必然 500
-if ([string]::IsNullOrWhiteSpace($LlmApiKey)) {
-    # 与 helloai-start application.yml 中 spring.ai.deepseek.api-key 的默认值保持一致
-    $LlmApiKey = "sk-a36fdda1d4ad4e0386e78fc435be0d16"
-    Write-Host "WARN: DEEPSEEK_API_KEY not set, fallback to application.yml default key"
-}
 $llmProvider = ($LlmModelType -split ":")[0]
 
 # STEP2.0 (sleep stale inner-loop-* agents) removed:

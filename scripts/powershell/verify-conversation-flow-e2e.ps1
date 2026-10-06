@@ -24,6 +24,7 @@ param(
     [int]$PollIntervalSec = 10
 )
 if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
+if ([string]::IsNullOrWhiteSpace($LlmApiKey)) { throw "未设置 LLM API Key：请导出环境变量 DEEPSEEK_API_KEY（或传 -LlmApiKey）" }
 
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -98,11 +99,6 @@ $adminHeaders = @{ "X-Admin-Token" = $loginResp.data.token }
 
 $ts = [DateTime]::UtcNow.ToString("yyyyMMddHHmmss")
 
-if ([string]::IsNullOrWhiteSpace($LlmApiKey)) {
-    # 与 helloai-start application.yml 中 spring.ai.deepseek.api-key 的默认值保持一致
-    $LlmApiKey = "sk-a36fdda1d4ad4e0386e78fc435be0d16"
-    Write-Host "WARN: DEEPSEEK_API_KEY not set, fallback to application.yml default key"
-}
 $llmProvider = ($LlmModelType -split ":")[0]
 
 # STEP2.0 (sleep stale agents) removed: fixed-name idempotent registration reuses

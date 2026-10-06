@@ -28,6 +28,7 @@
 
 set -euo pipefail
 : "${HELLOAI_ADMIN_PASSWORD:?请设置环境变量 HELLOAI_ADMIN_PASSWORD（或 export 后再运行）}"
+: "${DEEPSEEK_API_KEY:?请设置环境变量 DEEPSEEK_API_KEY（或 export 后再运行）}"
 
 # ------------------------------------------------------------
 # UTF-8 编码强制头 (规则 6) — 避免中文乱码
@@ -41,8 +42,8 @@ ADMIN_PASSWORD="${ADMIN_PASSWORD:-$HELLOAI_ADMIN_PASSWORD}"
 PLANNER_MODEL_TYPE="${PLANNER_MODEL_TYPE:-deepseek:deepseek-v4-pro}"
 PLAN_TIMEOUT_SEC="${PLAN_TIMEOUT_SEC:-360}"
 EXT_EXECUTOR_NAME="${EXT_EXECUTOR_NAME:-ext-executor-e2e}"
-# require-vault=true 时拆解必须有托管凭证；对齐 verify-planner-decompose.sh 默认
-LLM_API_KEY="${DEEPSEEK_API_KEY:-sk-a36fdda1d4ad4e0386e78fc435be0d16}"
+# require-vault=true 时拆解必须有托管凭证；密钥取自环境变量 DEEPSEEK_API_KEY（缺失即 fail-fast）
+LLM_API_KEY="${DEEPSEEK_API_KEY}"
 VAULT_PROVIDER="${VAULT_PROVIDER:-deepseek}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

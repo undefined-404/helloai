@@ -19,6 +19,7 @@
 
 set -euo pipefail
 : "${HELLOAI_ADMIN_PASSWORD:?请设置环境变量 HELLOAI_ADMIN_PASSWORD（或 export 后再运行）}"
+: "${DEEPSEEK_API_KEY:?请设置环境变量 DEEPSEEK_API_KEY（或 export 后再运行）}"
 
 # ------------------------------------------------------------
 # UTF-8 编码强制头（规则 6）— 避免中文乱码
@@ -31,7 +32,7 @@ ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-$HELLOAI_ADMIN_PASSWORD}"
 PLANNER_MODEL_TYPE="${PLANNER_MODEL_TYPE:-deepseek:deepseek-v4-flash}"
 LLM_TIMEOUT_SEC="${LLM_TIMEOUT_SEC:-180}"
-LLM_API_KEY="${DEEPSEEK_API_KEY:-sk-a36fdda1d4ad4e0386e78fc435be0d16}"
+LLM_API_KEY="${DEEPSEEK_API_KEY}"
 VAULT_PROVIDER="${VAULT_PROVIDER:-deepseek}"
 # 验证用例措辞：留出"行业资料"关键词空间（同句含足够多可检索实体，便于人工质化对比）
 PROBE_PROMPT="${PROBE_PROMPT:-我想做一个在线协作文档平台，类似 Notion/飞书文档那种风格，能写富文本、多人实时协作、有版本历史，给企业研发团队用。}"

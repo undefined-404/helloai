@@ -19,6 +19,7 @@
 
 set -euo pipefail
 : "${HELLOAI_ADMIN_PASSWORD:?请设置环境变量 HELLOAI_ADMIN_PASSWORD（或 export 后再运行）}"
+: "${DEEPSEEK_API_KEY:?请设置环境变量 DEEPSEEK_API_KEY（或 export 后再运行）}"
 
 # ------------------------------------------------------------
 # UTF-8 编码强制头 (规则 6) — 避免中文乱码
@@ -31,9 +32,8 @@ ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-$HELLOAI_ADMIN_PASSWORD}"
 PLANNER_MODEL_TYPE="${PLANNER_MODEL_TYPE:-deepseek:deepseek-v4-flash}"
 LLM_TIMEOUT_SEC="${LLM_TIMEOUT_SEC:-360}"
-# require-vault=true 时 LLM 调用必须有托管凭证；与 helloai-start application.yml
-# spring.ai.deepseek.api-key 默认值保持一致（对齐 verify-planner-decompose.sh 做法）
-LLM_API_KEY="${DEEPSEEK_API_KEY:-sk-a36fdda1d4ad4e0386e78fc435be0d16}"
+# require-vault=true 时 LLM 调用必须有托管凭证；密钥取自环境变量 DEEPSEEK_API_KEY（缺失即 fail-fast）
+LLM_API_KEY="${DEEPSEEK_API_KEY}"
 VAULT_PROVIDER="${VAULT_PROVIDER:-deepseek}"
 # LLM 回 question 时追发"直接生成终稿"的最大轮数
 MAX_PUSH_ROUNDS="${MAX_PUSH_ROUNDS:-3}"
