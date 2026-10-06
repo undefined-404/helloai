@@ -796,7 +796,9 @@ const TRIGGER_LABEL: Record<string, string> = {
 
 // payload 内英文枚举值人话化（避免用户看到裸英文，如 dependency_not_ready）
 const REASON_LABEL: Record<string, string> = {
-  dependency_not_ready: '依赖任务未完成'
+  dependency_not_ready: '依赖任务未完成',
+  not_in_executor_whitelist: '不在执行者白名单内',
+  skill_not_matched: '缺少必需技能'
 }
 function reasonText(reason: unknown): string {
   const r = String(reason || '')

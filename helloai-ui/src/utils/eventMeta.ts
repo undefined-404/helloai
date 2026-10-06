@@ -14,6 +14,7 @@ export const EVENT_META: Record<string, { label: string; desc: string }> = {
   sub_task_auto_execute_dispatch_ok: { label: '派单成功', desc: '已成功把子任务交给执行 Agent' },
   sub_task_auto_execute_dispatch_fail: { label: '派单失败', desc: '暂时没有空闲的执行 Agent，稍后重试' },
   sub_task_no_candidate: { label: '暂无可用执行者', desc: '当前没有空闲或可用的候选执行 Agent，系统将自动重试派发' },
+  sub_task_claim_rejected: { label: '认领被拒', desc: '该 Agent 不在任务执行者白名单内或缺少必需技能，认领未通过' },
   sub_task_execution_command_created: { label: '生成执行指令', desc: '系统已生成执行指令，等待 Agent 领取' },
   sub_task_execution_command_consume: { label: '领取指令', desc: '执行 Agent 已领取指令，准备开始' },
   sub_task_execution_command_consume_skipped: { label: '跳过指令', desc: '该执行指令被跳过（可能已被处理）' },
@@ -113,7 +114,7 @@ export type EventCategory = '分发' | '执行' | '核验' | '人工介入' | '�
 export function eventCategory(eventType: string): EventCategory {
   if (/review|recheck/.test(eventType)) return '核验'
   if (/dead_letter|manual|blocked|intervention|rework/.test(eventType)) return '人工介入'
-  if (/dispatch|command|assigned|timeout_reassign|offline_reassign|no_candidate/.test(eventType)) return '分发'
+  if (/dispatch|command|assigned|timeout_reassign|offline_reassign|no_candidate|claim_rejected/.test(eventType)) return '分发'
   if (/^task_|^run_|task_auto/.test(eventType)) return '任务'
   if (/execute|llm|artifact|context_loaded|thinking|report|skill_resolved|tool_resolved|environment_resolved|context_built|tool_call|agent_/.test(eventType)) return '执行'
   return '流程'
