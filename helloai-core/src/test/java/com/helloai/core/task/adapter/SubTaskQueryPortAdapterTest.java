@@ -1,6 +1,7 @@
 package com.helloai.core.task.adapter;
 
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.core.agent.port.SubTaskClaimConstraint;
 import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.SubTaskService;
@@ -24,14 +25,17 @@ import static org.mockito.Mockito.when;
 
 /**
  * {@code SubTaskQueryPortAdapter} 单测（2026-10-01，W3 建；W4 补 {@code findById}；W7 补
- * {@code listByIds} / {@code isReady} / {@code mergeSkills}；W8 补 {@code isExecutionDense}）。
+ * {@code listByIds} / {@code isReady} / {@code mergeSkills}；W8 补 {@code isExecutionDense}；
+ * 2026-10-06 P1 补 {@code claimConstraint}）。
  *
  * <p>覆盖「task 实体 → agent 域只读快照」的映射口径与空值边界：字段全量透传、
  * 入参为空/含 null 元素时不抛异常且绝不返回 {@code null}（{@code findById} 除外——
  * 它按 {@code getById} 语义在不存在时返回 {@code null}）；W7 新增的 {@code isReady} /
  * {@code mergeSkills} <b>不做任何本地判定</b>，仅验证「整体委派 + 空值收敛」；
  * W8 的 {@code isExecutionDense} 同理——判定仍由 {@code SubTaskDispatchService}
- * 单源持有，适配器只补一次主键读、不复制信号词表。</p>
+ * 单源持有，适配器只补一次主键读、不复制信号词表。
+ * P1 的 {@code claimConstraint} 同理整体委派，且 <b>{@code null} 原样透传</b>
+ * （消费方 agent 域据此判定「不约束」）。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("SubTaskQueryPortAdapter")
@@ -209,5 +213,22 @@ class SubTaskQueryPortAdapterTest {
         when(subTaskService.getById(9L)).thenReturn(null);
 
         assertThat(adapter.isExecutionDense(9L)).isFalse();
+    }
+
+    @Test
+    @DisplayName("claimConstraint：整体委派 SubTaskService.claimConstraint（白名单/技能口径单源留提供方）")
+    void shouldDelegateClaimConstraint() {
+        SubTaskClaimConstraint expected = SubTaskClaimConstraint.of(List.of(1L), List.of("eng-shell"));
+        when(subTaskService.claimConstraint(7L)).thenReturn(expected);
+
+        assertThat(adapter.claimConstraint(7L)).isEqualTo(expected);
+    }
+
+    @Test
+    @DisplayName("claimConstraint：提供方返回 null（无约束）时原样透传 null（消费方据此放行）")
+    void shouldPassThroughNullClaimConstraint() {
+        when(subTaskService.claimConstraint(7L)).thenReturn(null);
+
+        assertThat(adapter.claimConstraint(7L)).isNull();
     }
 }
