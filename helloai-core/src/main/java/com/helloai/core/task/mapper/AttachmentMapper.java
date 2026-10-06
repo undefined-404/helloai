@@ -27,4 +27,16 @@ public interface AttachmentMapper extends BaseMapper<Attachment> {
      */
     @Select("SELECT * FROM attachment")
     List<Attachment> selectAllIncludingDeleted();
+
+    /**
+     * 查询某任务下全部附件行（不过滤逻辑删除），供任务级联删除<b>前</b>捞取对象引用，
+     * 以便事务提交后同步回收对象存储（P3-3，2026-10-07）。口径与
+     * {@link #physicalDeleteByTaskId(Long)} 一致（同一条 sub_task 子查询），保证
+     * 「捞到的行」正是「将被物理删的行」。
+     *
+     * @param taskId 主任务 ID
+     * @return 该任务下全部附件行（含已逻辑删除）
+     */
+    @Select("SELECT * FROM attachment WHERE sub_task_id IN (SELECT id FROM sub_task WHERE task_id = #{taskId})")
+    List<Attachment> selectByTaskId(@Param("taskId") Long taskId);
 }

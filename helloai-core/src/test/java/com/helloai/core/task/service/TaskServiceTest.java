@@ -19,6 +19,7 @@ import com.helloai.core.task.entity.TaskTimeline;
 import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.mapper.SubTaskMapper;
 import com.helloai.core.task.mapper.TaskTimelineMapper;
+import com.helloai.core.task.support.AttachmentObjectPurgeSupport;
 import com.helloai.core.task.service.impl.TaskServiceImpl;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -93,14 +94,16 @@ class TaskServiceTest {
     @Mock
     private TeamService teamService;
     @Mock
+    private AttachmentObjectPurgeSupport attachmentObjectPurgeSupport;
+    @Mock
     private LambdaQueryChainWrapper<SubTask> subTaskChain;
 
     private TaskService newSpyService() {
         return spy(new TaskServiceImpl(subTaskMapper, moduleMapper,
                 taskRunningSpecMapper, taskExecutionRecordMapper, taskAgentMemberMapper,
                 taskIterationMapper, workflowInstanceMapper,
-                reviewPort, taskTimelineMapper, attachmentMapper, agentInboxService,
-                agentService, subTaskService, teamService));
+                reviewPort, taskTimelineMapper, attachmentMapper, attachmentObjectPurgeSupport,
+                agentInboxService, agentService, subTaskService, teamService));
     }
 
     private static Map<String, Object> policy() {

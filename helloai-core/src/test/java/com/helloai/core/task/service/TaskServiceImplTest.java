@@ -22,6 +22,7 @@ import com.helloai.core.task.mapper.TaskTimelineMapper;
 import com.helloai.core.task.workflow.mapper.WorkflowInstanceMapper;
 import com.helloai.core.task.policy.TaskAgentPolicy;
 import com.helloai.core.task.port.ReviewPort;
+import com.helloai.core.task.support.AttachmentObjectPurgeSupport;
 import com.helloai.core.task.service.impl.TaskServiceImpl;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -86,11 +87,13 @@ class TaskServiceImplTest {
                 mock(com.helloai.core.task.service.SubTaskService.class);
         teamService = mock(TeamService.class);
         taskMapper = mock(TaskMapper.class);
+        // P3-3（2026-10-07）：级联删除新增对象存储回收依赖
+        AttachmentObjectPurgeSupport attachmentObjectPurgeSupport = mock(AttachmentObjectPurgeSupport.class);
         service = spy(new TaskServiceImpl(subTaskMapper, moduleMapper,
                 taskRunningSpecMapper, taskExecutionRecordMapper, taskAgentMemberMapper,
                 taskIterationMapper, workflowInstanceMapper,
-                reviewPort, timelineMapper, attachmentMapper, agentInboxService,
-                agentService, subTaskService, teamService));
+                reviewPort, timelineMapper, attachmentMapper, attachmentObjectPurgeSupport,
+                agentInboxService, agentService, subTaskService, teamService));
         ReflectionTestUtils.setField(service, "baseMapper", taskMapper);
     }
 

@@ -16,6 +16,7 @@ import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.TeamService;
+import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.entity.Module;
 import com.helloai.core.task.mapper.AttachmentMapper;
 import com.helloai.core.task.mapper.ModuleMapper;
@@ -38,6 +39,7 @@ import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.statemachine.FinalReportStateMachine;
+import com.helloai.core.task.support.AttachmentObjectPurgeSupport;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -70,6 +72,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     private final ReviewPort reviewPort;
     private final TaskTimelineMapper taskTimelineMapper;
     private final AttachmentMapper attachmentMapper;
+    /** 对象存储回收（P3-3，2026-10-07）：级联删除提交后 best-effort 删对象；独立无环承载点，见其类注释。 */
+    private final AttachmentObjectPurgeSupport attachmentObjectPurgeSupport;
     private final AgentInboxService agentInboxService;
     private final AgentService agentService;
     private final SubTaskService subTaskService;
@@ -289,7 +293,13 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         int traceCleaned = agentService.physicalDeleteTaskTrace(taskId);
         // §6.146 域迁移：review_record 级联删除经 ReviewPort 收口（review 域同事务执行）
         reviewPort.physicalDeleteByTaskId(taskId);
+        // P3-3（2026-10-07）：删行前捞取该任务对象引用（口径与 physicalDeleteByTaskId 一致），
+        // 事务提交后同步回收对象存储。此前级联删除只物理删 DB 行、从不触对象存储，
+        // 导致 L4 反复 create/delete 时桶内孤儿持续堆积；回收为 best-effort + 事务后置，
+        // 失败不回滚、不 500（见 AttachmentObjectPurgeSupport）。
+        List<Attachment> taskAttachments = attachmentMapper.selectByTaskId(taskId);
         attachmentMapper.physicalDeleteByTaskId(taskId);
+        attachmentObjectPurgeSupport.purgeAfterCommit(taskAttachments);
         taskTimelineMapper.physicalDeleteByTaskId(taskId);
         // P2-4（2026-10-05）：引用 task.id 的子表共 5 张 —— module / sub_task /
         // task_running_spec / task_execution_record / task_agent_member。此前只清前两张，
