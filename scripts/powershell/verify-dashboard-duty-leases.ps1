@@ -6,7 +6,7 @@
 #   本地 preflight 技能   (规则 6：脚本 UTF-8 编码 + PS 5.1 单引号 + 拼接)
 #
 # 覆盖四个真实环境场景：
-#   S1  GET /api/admin/duty-leases/overview          -> 200，active/closed/expired/total 字段齐
+#   S1  GET /api/admin/duty-leases/getOverview      -> 200，active/closed/expired/total 字段齐
 #   S2  GET /api/admin/duty-leases                   -> 200，PageResult.list/total/pages/current 齐
 #   S3  GET /api/admin/duty-leases?status=ACTIVE     -> 过滤生效（返回行 status 均为 ACTIVE）
 #   S4  DB 抽查：agent_command_outbox 中 status IN (1,3) 行的 last_sent_time/confirmed_time 不全为 NULL
@@ -151,8 +151,8 @@ Write-Output ''
 # ============================================================
 # STEP S1: overview
 # ============================================================
-Write-Output '=== [S1] GET /api/admin/duty-leases/overview ==='
-$s1Resp = Invoke-Json -Method GET -Uri "$base/api/admin/duty-leases/overview" -Headers @{ 'X-Admin-Token' = $adminToken }
+Write-Output '=== [S1] GET /api/admin/duty-leases/getOverview ==='
+$s1Resp = Invoke-Json -Method GET -Uri "$base/api/admin/duty-leases/getOverview" -Headers @{ 'X-Admin-Token' = $adminToken }
 Write-Output "HTTP $($s1Resp.Code)"
 Write-Output "body: $($s1Resp.Body)"
 if ($s1Resp.Code -ne 200) {
@@ -269,5 +269,5 @@ Write-Output ''
 # ============================================================
 # done
 # ============================================================
-Write-Output 'ALL PASSED: S1 overview / S2 list / S3 status filter / S4 V22 backfill audit'
+Write-Output 'ALL PASSED: S1 getOverview / S2 list / S3 status filter / S4 V22 backfill audit'
 Write-Output "S4 out:    $s4File"

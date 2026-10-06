@@ -1,7 +1,7 @@
 ﻿# verify-onboarding.ps1
 # Step 1 of the external-agent end-to-end plan: verify one-click self-registration.
 #   S1 POST /api/agents/register           -> returns apiKey + id (R.code == 200)
-#   S2 GET  /api/agents/me/skill (Bearer)  -> skill placeholders fully substituted
+#   S2 GET  /api/agents/getMySkill (Bearer)  -> skill placeholders fully substituted
 #   S3 GET  /api/agent/inbox     (Bearer)  -> 200, proves the new key can authenticate
 # Prereq: backend up on BaseUrl (PostgreSQL only; Redis/MQ NOT required for this step).
 # Usage: .\scripts\powershell\verify-onboarding.ps1 [http://localhost:6565]
@@ -48,7 +48,7 @@ try {
 if ($apiKey) {
     try {
         $headers = @{ Authorization = ('Bearer ' + $apiKey) }
-        $skillResp = Invoke-RestMethod -Method Get -Uri ($BaseUrl + '/api/agents/me/skill') -Headers $headers
+        $skillResp = Invoke-RestMethod -Method Get -Uri ($BaseUrl + '/api/agents/getMySkill') -Headers $headers
         Assert ($skillResp.code -eq 200) 'S2 me/skill returns code 200'
         $content = [string]$skillResp.data.content
         Assert ($content.Length -gt 0) 'S2 skill content not empty'

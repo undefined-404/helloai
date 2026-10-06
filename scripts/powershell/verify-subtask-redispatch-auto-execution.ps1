@@ -271,7 +271,7 @@ Assert-True (-not [string]::IsNullOrWhiteSpace($sourceAgentApiKey)) "source agen
 Write-Host ("sourceAgentId=" + $sourceAgentId)
 
 Write-Host "STEP3: register target API agent (idempotent fixed name per scenario)"
-$target = Register-Agent -Name ("redispatch-target-" + $Scenario) -RoleValue $Role -AccessType "API_KEY_LLM" -Description "redispatch target" -ModelType "deepseek:deepseek-v4-flash"
+$target = Register-Agent -Name ("redispatch-target-" + $Scenario) -RoleValue $Role -AccessType "API_KEY_LLM" -Description "redispatch target" -ModelType "deepseek:deepseek-v4-pro"
 $targetAgentId = [string]$target.id
 Assert-True (-not [string]::IsNullOrWhiteSpace($targetAgentId)) "target agent id empty"
 Write-Host ("targetAgentId=" + $targetAgentId)

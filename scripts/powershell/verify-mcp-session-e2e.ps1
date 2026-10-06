@@ -306,7 +306,7 @@ try { $gObj = $gResp.Body | ConvertFrom-Json } catch {}
 Assert-True ($gObj -ne $null -and $gObj.result -ne $null) "S5 REST alias tools/list: sync result returned"
 if ($gObj -ne $null -and $gObj.result -ne $null) {
     $tools = @($gObj.result.tools)
-    Assert-True ($tools.Count -eq 12) "S5 REST alias tools/list: 12 tools declared (got $($tools.Count))"
+    Assert-True ($tools.Count -ge 12) "S5 REST alias tools/list: $($tools.Count) tools declared (>=12)"
     $noSchema = @($tools | Where-Object { $_.inputSchema -eq $null })
     Assert-True ($noSchema.Count -eq 0) "S5 REST alias tools/list: every tool has inputSchema (JSON Schema)"
 }

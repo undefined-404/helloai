@@ -138,7 +138,7 @@ if ($apiKey) {
         Invoke-Json -Method POST -Uri $msgUri -Headers $auth -Body '{"jsonrpc":"2.0","method":"notifications/initialized"}' | Out-Null
         Start-Sleep -Seconds 1
         # tools/call checkIn (agentId is overridden by server-side auth id anyway)
-        $ciBody = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"checkIn","arguments":{"agentId":' + $agentId + ',"workMode":"NORMAL","maxConcurrent":1,"ttlMinutes":5,"sessionId":"' + $sid + '"}}}'
+        $ciBody = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"checkIn","arguments":{"agentId":' + $agentId + ',"workMode":"AUTO","maxConcurrent":1,"ttlMinutes":5,"sessionId":"' + $sid + '"}}}'
         $ci = Invoke-Json -Method POST -Uri $msgUri -Headers $auth -Body $ciBody
         Write-Host ('       S2 checkIn POST HTTP=' + $ci.Code)
         Start-Sleep -Seconds 2

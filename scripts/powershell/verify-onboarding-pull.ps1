@@ -134,7 +134,7 @@ if ($apiKey) {
         Invoke-Json -Method POST -Uri $msgUri -Headers $auth -Body '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"onboard-pull-e2e","version":"1.0"}}}' | Out-Null
         Invoke-Json -Method POST -Uri $msgUri -Headers $auth -Body '{"jsonrpc":"2.0","method":"notifications/initialized"}' | Out-Null
         Start-Sleep -Seconds 1
-        $ciBody = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"checkIn","arguments":{"agentId":' + $agentId + ',"workMode":"NORMAL","maxConcurrent":3,"ttlMinutes":10,"sessionId":"' + $sid + '"}}}'
+        $ciBody = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"checkIn","arguments":{"agentId":' + $agentId + ',"workMode":"AUTO","maxConcurrent":3,"ttlMinutes":10,"sessionId":"' + $sid + '"}}}'
         Invoke-Json -Method POST -Uri $msgUri -Headers $auth -Body $ciBody | Out-Null
         Start-Sleep -Seconds 2
         $mcpContent = ''
