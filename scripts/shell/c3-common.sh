@@ -35,7 +35,8 @@ DB_NAME="${DB_NAME:-helloai}"
 DB_PASSWORD="${DB_PASSWORD:-postgres}"
 PG_CONTAINER="${PG_CONTAINER:-helloai-postgres}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
-ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin123}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-$HELLOAI_ADMIN_PASSWORD}"
+: "${HELLOAI_ADMIN_PASSWORD:?请设置环境变量 HELLOAI_ADMIN_PASSWORD（或 export 后再运行）}"
 
 # 入口脚本未设置时的兜底（本库位于 scripts/shell/）
 if [[ -z "${PROJECT_ROOT:-}" ]]; then

@@ -19,6 +19,7 @@
 # ============================================================
 
 set -euo pipefail
+: "${HELLOAI_ADMIN_PASSWORD:?请设置环境变量 HELLOAI_ADMIN_PASSWORD（或 export 后再运行）}"
 
 # ------------------------------------------------------------
 # UTF-8 编码强制头 (AGENTS.md 规则 6) — 避免中文乱码
@@ -28,7 +29,7 @@ export LC_ALL="${LC_ALL:-zh_CN.UTF-8}"
 
 BASE_URL="${BASE_URL:-http://localhost:6565}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
-ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin123}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-$HELLOAI_ADMIN_PASSWORD}"
 EXEC_MODEL_TYPE="${EXEC_MODEL_TYPE:-deepseek:deepseek-v4-flash}"
 LLM_API_KEY="${DEEPSEEK_API_KEY:-sk-a36fdda1d4ad4e0386e78fc435be0d16}"
 VAULT_PROVIDER="${VAULT_PROVIDER:-deepseek}"

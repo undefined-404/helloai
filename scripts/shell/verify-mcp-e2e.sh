@@ -1,6 +1,7 @@
 #!/bin/zsh
 
 set -euo pipefail
+: "${HELLOAI_ADMIN_PASSWORD:?请设置环境变量 HELLOAI_ADMIN_PASSWORD（或 export 后再运行）}"
 
 BASE_URL="${BASE_URL:-http://localhost:6565}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -197,7 +198,7 @@ log "HTTP $HTTP_CODE - server is up"
 log ""
 
 log "=== [A] admin login ==="
-login_body="$(jq -cn '{type:"admin",username:"admin",credential:"admin123"}')"
+login_body="$(jq -cn --arg p "$HELLOAI_ADMIN_PASSWORD" '{type:"admin",username:"admin",credential:$p}')"
 http_request POST "$BASE_URL/api/auth/login" "$login_body"
 assert_eq "200" "$HTTP_CODE" "admin 登录失败"
 ADMIN_TOKEN="$(print -r -- "$HTTP_BODY" | jq -r '.data.token // empty')"

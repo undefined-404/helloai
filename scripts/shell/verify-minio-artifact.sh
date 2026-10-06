@@ -15,18 +15,19 @@
 # 用法（项目根）：
 #   chmod +x ./scripts/shell/verify-minio-artifact.sh
 #   ./scripts/shell/verify-minio-artifact.sh
-#   ADMIN_USER=admin ADMIN_PASSWORD=admin123 ./scripts/shell/verify-minio-artifact.sh
+#   HELLOAI_ADMIN_PASSWORD=<口令> ./scripts/shell/verify-minio-artifact.sh
 # ============================================================
 
 export LANG=zh_CN.UTF-8
 export LC_ALL=zh_CN.UTF-8
 
 set -euo pipefail
+: "${HELLOAI_ADMIN_PASSWORD:?请设置环境变量 HELLOAI_ADMIN_PASSWORD（或 export 后再运行）}"
 
 BASE_URL="${BASE_URL:-http://localhost:6565}"
 MINIO_HEALTH_URL="${MINIO_HEALTH_URL:-http://localhost:29000}"
 ADMIN_USER="${ADMIN_USER:-admin}"
-ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin123}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-$HELLOAI_ADMIN_PASSWORD}"
 AGENT_NAME="minio-e2e-executor-$(date +%s)"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TMP_ROOT="${TMP_ROOT:-$SCRIPT_DIR/.tmp}"

@@ -23,6 +23,7 @@
 # ============================================================
 
 set -euo pipefail
+: "${HELLOAI_ADMIN_PASSWORD:?请设置环境变量 HELLOAI_ADMIN_PASSWORD（或 export 后再运行）}"
 
 # ------------------------------------------------------------
 # UTF-8 编码强制头 (规则 6) — 避免中文乱码
@@ -32,7 +33,7 @@ export LC_ALL="${LC_ALL:-zh_CN.UTF-8}"
 
 BASE_URL="${BASE_URL:-http://localhost:6565}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
-ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin123}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-$HELLOAI_ADMIN_PASSWORD}"
 AGENT_A_NAME="redispatch-e2e-a-v1"
 AGENT_B_NAME="redispatch-e2e-b-v1"
 

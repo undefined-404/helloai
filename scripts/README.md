@@ -17,7 +17,22 @@
 ## 一、验收脚本（verify-*，57 ps1 + 19 sh）
 
 命名即入口：`powershell -File .\scripts\powershell\<name>.ps1` / `zsh scripts/shell/<name>.sh`。
-绝大多数前置为「后端 6565 已启动 + admin/admin123」，个别需 Docker 中间件（postgres:15432 / redis:26379 / rabbitmq:25672 / minio:29000）。
+绝大多数前置为「后端 6565 已启动 + admin/$HELLOAI_ADMIN_PASSWORD」，个别需 Docker 中间件（postgres:15432 / redis:26379 / rabbitmq:25672 / minio:29000）。
+
+### 运行前置：管理员口令环境变量
+
+自 2026-10-07 起，所有调用管理员登录的验证脚本（`verify-*.ps1` / `verify-*.sh`）**不再内置默认口令**，
+运行前需先导出环境变量 `HELLOAI_ADMIN_PASSWORD`：
+
+```bash
+export HELLOAI_ADMIN_PASSWORD='<你的管理员登录口令>'   # zsh / bash
+```
+
+```powershell
+$env:HELLOAI_ADMIN_PASSWORD = '<你的管理员登录口令>'   # PowerShell
+```
+
+未设置时脚本会 fail-fast 退出（提示「请设置环境变量 HELLOAI_ADMIN_PASSWORD」）。
 
 ### 双平台对实现（ps1 与 sh 各有对应版本）
 

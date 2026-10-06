@@ -10,20 +10,21 @@
 # Ref:  doc/archive/legacy/HelloAI_实现差距表_V1.md（登录页去除 API 登录）
 # Pre-conditions（fail-fast，本脚本不负责启动服务）：
 #   - helloai-start 已在 6565 运行，且包含最新登录改造
-#   - 默认管理员账号 admin/admin123 可用（可用环境变量覆盖）
+#   - 默认管理员账号 admin/<HELLOAI_ADMIN_PASSWORD> 可用（可用环境变量覆盖）
 # Usage:
 #   chmod +x ./scripts/shell/verify-login-e2e.sh
-#   ADMIN_USER=admin ADMIN_PASSWORD=admin123 ./scripts/shell/verify-login-e2e.sh
+#   HELLOAI_ADMIN_PASSWORD=<口令> ./scripts/shell/verify-login-e2e.sh
 # ============================================================
 
 export LANG=zh_CN.UTF-8
 export LC_ALL=zh_CN.UTF-8
 
 set -euo pipefail
+: "${HELLOAI_ADMIN_PASSWORD:?请设置环境变量 HELLOAI_ADMIN_PASSWORD（或 export 后再运行）}"
 
 BASE_URL="${BASE_URL:-http://localhost:6565}"
 ADMIN_USER="${ADMIN_USER:-admin}"
-ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin123}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-$HELLOAI_ADMIN_PASSWORD}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TMP_ROOT="${TMP_ROOT:-$SCRIPT_DIR/.tmp}"
 mkdir -p "$TMP_ROOT"
