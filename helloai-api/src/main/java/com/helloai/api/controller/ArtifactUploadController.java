@@ -45,21 +45,25 @@ public class ArtifactUploadController {
             @RequestParam("file") MultipartFile file,
             @RequestParam("subTaskId") Long subTaskId,
             @RequestParam(value = "mimeType", required = false) String mimeType) {
+        // P1-1（2026-10-06）：客户端校验错误一律用带码 BizException → HTTP 400，
+        // 不再用单参构造（默认 code=500）把「参数错误」误报成「服务故障」。
         if (file == null || file.isEmpty()) {
-            throw new BizException("file 不能为空");
+            throw new BizException(400, "file 不能为空");
         }
         if (subTaskId == null) {
-            throw new BizException("subTaskId 不能为空");
+            throw new BizException(400, "subTaskId 不能为空");
         }
         String fileName = file.getOriginalFilename();
         if (fileName == null || fileName.isBlank()) {
-            throw new BizException("fileName 不能为空");
+            throw new BizException(400, "fileName 不能为空");
         }
         byte[] content;
         try {
             content = file.getBytes();
         } catch (IOException e) {
-            throw new BizException("读取上传文件失败: " + e.getMessage());
+            // 服务端读取临时文件失败：保留 500 语义，但不回显底层异常消息（可能含服务端路径）
+            log.error("读取上传文件失败: subTaskId={}, fileName={}", subTaskId, fileName, e);
+            throw new BizException(500, "读取上传文件失败，请重试");
         }
         return R.ok(artifactUploadService.upload(agentId, subTaskId, fileName, mimeType, content));
     }

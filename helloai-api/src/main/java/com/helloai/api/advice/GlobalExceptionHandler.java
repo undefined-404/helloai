@@ -12,11 +12,16 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.io.IOException;
@@ -92,6 +97,98 @@ public class GlobalExceptionHandler {
             return null;
         }
         return R.fail(405, "请求方法不支持");
+    }
+
+    /**
+     * multipart 上传超限：{@code spring.servlet.multipart.max-file-size}（默认 8MB）被突破时
+     * 容器抛出 {@link MaxUploadSizeExceededException}。
+     *
+     * <p>此前无专属 handler，落入 {@link #handleException} 兜底成 HTTP 500 +「服务内部错误」，
+     * 外部 Agent 无法区分「文件过大（客户端问题，不该重试）」与「平台故障（应上报）」——
+     * 属静默语义失败（P1-1，2026-10-06 L4 复测暴露）。现按 RFC 9110 → <b>413 Payload Too Large</b>。</p>
+     */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    @ResponseStatus(HttpStatus.PAYLOAD_TOO_LARGE)
+    public R<Void> handleMaxUploadSizeExceeded(MaxUploadSizeExceededException e,
+                                               HttpServletRequest request, HttpServletResponse response) {
+        // 兜底提示不泄露服务端真实上限（该值随部署配置变化，且属服务端内部信息）
+        String message = "上传文件超过大小上限";
+        log.warn("上传超限: {}", e.getMessage());
+        if (sseRequest(request)) {
+            writeSseError(request, response, message);
+            return null;
+        }
+        return R.fail(413, message);
+    }
+
+    /**
+     * multipart 解析失败（缺 file part、Content-Type 非 multipart、multipart 体损坏等）：
+     * 均由 Spring 抛出 {@link MultipartException} 或其子类。
+     *
+     * <p>此前同样兜底成 500。现归为客户端请求错误 → <b>400 Bad Request</b>。
+     * 注：{@link MaxUploadSizeExceededException} 是 {@code MultipartException} 子类，
+     * 因更具体而由 {@link #handleMaxUploadSizeExceeded} 优先命中（413），不会落到本分支。</p>
+     */
+    @ExceptionHandler(MultipartException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public R<Void> handleMultipartException(MultipartException e,
+                                            HttpServletRequest request, HttpServletResponse response) {
+        String message = "multipart 请求格式非法（请以 multipart/form-data 提交，且包含所需文件字段）";
+        log.warn("multipart 解析失败: {}", e.getMessage());
+        if (sseRequest(request)) {
+            writeSseError(request, response, message);
+            return null;
+        }
+        return R.fail(400, message);
+    }
+
+    /** 缺 multipart part（如未携带 {@code file} 字段）：客户端错误 → <b>400 Bad Request</b>。 */
+    @ExceptionHandler(MissingServletRequestPartException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public R<Void> handleMissingPart(MissingServletRequestPartException e,
+                                     HttpServletRequest request, HttpServletResponse response) {
+        String message = "缺少必需的上传字段: " + e.getRequestPartName();
+        log.debug("缺少 multipart part: {}", message);
+        if (sseRequest(request)) {
+            writeSseError(request, response, message);
+            return null;
+        }
+        return R.fail(400, message);
+    }
+
+    /**
+     * 缺必需查询/表单参数（如 {@code subTaskId} 未携带）：客户端错误 → <b>400 Bad Request</b>。
+     * 此前无专属 handler，被 {@link #handleException} 兜底成 500。
+     */
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public R<Void> handleMissingParameter(MissingServletRequestParameterException e,
+                                          HttpServletRequest request, HttpServletResponse response) {
+        String message = "缺少必需参数: " + e.getParameterName();
+        log.debug("缺少请求参数: {}", message);
+        if (sseRequest(request)) {
+            writeSseError(request, response, message);
+            return null;
+        }
+        return R.fail(400, message);
+    }
+
+    /**
+     * Content-Type 不受支持（如上传端点要求 {@code multipart/form-data} 却提交 JSON）：
+     * Spring 抛 {@link HttpMediaTypeNotSupportedException} → <b>415 Unsupported Media Type</b>。
+     * 此前被兜底成 500。
+     */
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    @ResponseStatus(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+    public R<Void> handleMediaTypeNotSupported(HttpMediaTypeNotSupportedException e,
+                                               HttpServletRequest request, HttpServletResponse response) {
+        String message = "不支持的 Content-Type，请使用: " + e.getContentType();
+        log.debug("Content-Type 不支持: {}", message);
+        if (sseRequest(request)) {
+            writeSseError(request, response, message);
+            return null;
+        }
+        return R.fail(415, message);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
