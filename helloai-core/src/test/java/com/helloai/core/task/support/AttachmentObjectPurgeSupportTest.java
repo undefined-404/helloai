@@ -124,6 +124,22 @@ class AttachmentObjectPurgeSupportTest {
     }
 
     @Test
+    @DisplayName("fail-safe：护栏查询抛错 ⇒ 不冒泡、主流程仍成功、保守跳过回收（不调 removeObject）")
+    void purge_shouldSwallowGuardQueryFailureAndSkipConservatively() {
+        Attachment a = att(1L, "k/1.md", "minio://helloai-artifacts/k/1.md");
+        when(artifactStorage.supports(anyString())).thenReturn(true);
+        when(attachmentMapper.selectActiveObjectKeysIn(any()))
+                .thenThrow(new RuntimeException("db down"));
+
+        // 不得冒泡（afterCommit 阶段抛异常会污染已提交事务的响应）
+        assertThatCode(() -> support.purgeAfterCommit(List.of(a))).doesNotThrowAnyException();
+
+        // 护栏不可信 ⇒ 保守跳过：绝不删对象（防误删共享对象）
+        verify(artifactStorage, never()).removeObject(anyString(), anyString());
+        verify(attachmentMapper, never()).selectAllIncludingDeleted();
+    }
+
+    @Test
     @DisplayName("外部 https 地址（平台不可读）不参与回收，且不触发任何引用查询")
     void purge_shouldSkipNonPlatformUrl() {
         Attachment a = att(1L, "k/1.md", "https://example.com/k/1.md");
