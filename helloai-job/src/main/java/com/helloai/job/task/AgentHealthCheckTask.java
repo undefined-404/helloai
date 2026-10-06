@@ -82,6 +82,15 @@ public class AgentHealthCheckTask {
 
     /** OFFLINE 时 CAS 写入的 online_status 值（字符串，与 DB CHECK 约束对齐） */
     private static final String OFFLINE_STATUS = "OFFLINE";
+    /**
+     * IDLE 状态值（G-015 B1 P2-1：租约在岗守卫分支的只读口径校正目标）。
+     *
+     * <p>读侧 {@code HeartbeatServiceImpl.checkOnlineStatus} 对「心跳过期但持 ACTIVE 租约」
+     * 返回 IDLE（声明在岗）；写侧巡检若直接 return 会让 DB {@code online_status} 停留在
+     * 陈旧值（如 ONLINE），形成「写侧 ONLINE / 读侧 IDLE」双视图分裂。此常量用于把 DB 侧
+     * 校正为与读侧一致的 IDLE（仅状态校正，非离线处置）。</p>
+     */
+    private static final String IDLE_STATUS = "IDLE";
     /** 离线原因标记（payload 中记录） */
     private static final String REASON_HEARTBEAT_LOST = "heartbeat_lost";
 
@@ -138,6 +147,17 @@ public class AgentHealthCheckTask {
         // 返回 IDLE（声明在岗），写侧必须同口径——否则巡检仍会把在岗 Agent 标 OFFLINE，
         // 形成「租约 ACTIVE + dbOnlineStatus OFFLINE」双视图分裂，并误重派其在飞任务。
         if (hasActiveDutyLease(agent.getId())) {
+            // P2-1：不判死、不重派，但需把 DB online_status 校正为与读侧一致的 IDLE——
+            // 否则「心跳陈旧 + ACTIVE 租约」场景下 DB 停留在陈旧值（如 ONLINE），
+            // 巡检每轮只 return 不写库，写侧/读侧永远对不上（双视图分裂）。
+            // 仅做状态校正：不写 offline_reason / offline_time，不触发重派，不计 N11 失败。
+            // 阈值口径与离线判定一致（thresholdMinutes，非 graceMinutes）：只对「心跳已达到
+            // 常规离线阈值」的 Agent 校正，宽限中的在飞执行者不在此列。
+            int corrected = agentService.correctOnlineStatusIfStale(
+                    agent.getId(), IDLE_STATUS, now.minusMinutes(thresholdMinutes), now);
+            if (corrected > 0) {
+                log.info("持 ACTIVE 租约且心跳陈旧，online_status 校正为 IDLE: agentId={}", agent.getId());
+            }
             log.debug("持 ACTIVE 值班租约，跳过离线处置: agentId={}", agent.getId());
             return;
         }

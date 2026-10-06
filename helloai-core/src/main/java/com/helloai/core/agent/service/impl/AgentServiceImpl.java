@@ -717,4 +717,12 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
                                   String reason, OffsetDateTime now) {
         return baseMapper.markOfflineIfStale(agentId, cutoff, newStatus, reason, now);
     }
+
+    @Override
+    public int correctOnlineStatusIfStale(Long agentId, String newStatus, OffsetDateTime cutoff,
+                                          OffsetDateTime now) {
+        // P2-1：仅校正 online_status（不写 offline_reason / offline_time），
+        // 与读侧 checkOnlineStatus「心跳过期 + ACTIVE 租约 → IDLE」同口径。
+        return baseMapper.correctOnlineStatusIfStale(agentId, newStatus, cutoff, now);
+    }
 }

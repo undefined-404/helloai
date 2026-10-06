@@ -120,6 +120,31 @@
     </update>
 
     <!--
+        P2-1 仅校正 online_status（G-015 B1 守卫①「持 ACTIVE 租约」分支专用）：
+        与 markOfflineIfStale 的区别是**不写 offline_reason / offline_time**——
+        这是状态口径校正，不是离线处置；用于消除「写侧 DB online_status 陈旧（如 ONLINE）
+        / 读侧 checkOnlineStatus 对『心跳过期 + ACTIVE 租约』返回 IDLE」的双视图分裂。
+        CAS 条件：
+          1) last_seen_time 仍 < cutoff（防止 seen() 刚刷新就被改写）
+          2) online_status 不是 SLEEPING（管理员手动状态不覆盖）
+          3) online_status 不是 OFFLINE（已离线不重复刷写）
+          4) online_status 与目标值不同（已是目标状态不再写，避免无谓刷新 update_time）
+          5) 未删除
+        影响行数 = 0 表示 CAS 失败（心跳刚到 / 已 SLEEPING / 已 OFFLINE / 已是目标状态）。
+    -->
+    <update id="correctOnlineStatusIfStale">
+        UPDATE agent
+        SET online_status = #{newStatus},
+            update_time = #{now}
+        WHERE id = #{agentId}
+          AND last_seen_time &lt; #{cutoff}
+          AND (online_status IS DISTINCT FROM 'SLEEPING')
+          AND (online_status IS DISTINCT FROM 'OFFLINE')
+          AND (online_status IS DISTINCT FROM #{newStatus})
+          AND deleted = 0
+    </update>
+
+    <!--
         阶段 4 Reconcile：扫描 last_seen_time 早于 cutoff 的 Agent。
         返回结果包括 ONLINE / IDLE / OFFLINE 三种状态（排除 SLEEPING 和已删除）。
         调用方（AgentHealthCheckTask）对每个 Agent 调用 markOfflineIfStale 做 CAS 标 OFFLINE。

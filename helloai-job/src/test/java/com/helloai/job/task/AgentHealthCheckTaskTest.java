@@ -475,6 +475,92 @@ class AgentHealthCheckTaskTest {
         // 该条件由 SQL 承担，属集成/E2E 覆盖范围（本机无 PG，记 NOT RUN）。
     }
 
+    @Nested
+    @DisplayName("P2-1 租约在岗 online_status 校正（写侧/读侧双视图分裂修复）")
+    class P21LeaseStatusCorrection {
+
+        @Test
+        @DisplayName("持 ACTIVE 租约 + 心跳陈旧 → 校正 online_status 为 IDLE，不触达离线处置链")
+        void shouldCorrectOnlineStatusWhenActiveLease() {
+            Agent stale = cliAgent(101L, AgentRole.EXECUTOR);
+            when(agentService.listStaleSince(any(OffsetDateTime.class))).thenReturn(List.of(stale));
+            when(agentDutyLeaseService.isOnDuty(101L)).thenReturn(true);
+            when(agentService.correctOnlineStatusIfStale(eq(101L), eq("IDLE"), any(), any()))
+                    .thenReturn(1);
+
+            task.checkHealth();
+
+            // 走「先校正后 return」：不再让 DB 停留在陈旧值
+            verify(agentService, times(1))
+                    .correctOnlineStatusIfStale(eq(101L), eq("IDLE"), any(), any());
+            // 亚于离线处置：不判死（不写 offline_reason/offline_time 的 5 参 CAS）
+            verify(agentService, never())
+                    .markOfflineIfStale(any(), any(), anyString(), anyString(), any());
+            // 不重派 / 不写 agent_offline timeline / 不计 N11 失败
+            verify(subTaskDispatchService, never()).redispatchOfflineSubTask(anyLong(), anyLong());
+            verify(subTaskDispatchService, never())
+                    .dispatchPendingSubTaskCompensating(anyLong(), any());
+            verify(taskTimelineService, never())
+                    .recordEvent(any(), any(), eq("agent_offline"), any(), any(), any());
+            verify(failureTracker, never()).recordFailure(anyLong());
+        }
+
+        @Test
+        @DisplayName("持 ACTIVE 租约但校正 CAS 返回 0（心跳刚到/已是 IDLE）→ 仍不触达离线处置链")
+        void shouldNotProcessWhenCorrectionCasMisses() {
+            Agent stale = cliAgent(101L, AgentRole.EXECUTOR);
+            when(agentService.listStaleSince(any(OffsetDateTime.class))).thenReturn(List.of(stale));
+            when(agentDutyLeaseService.isOnDuty(101L)).thenReturn(true);
+            when(agentService.correctOnlineStatusIfStale(eq(101L), eq("IDLE"), any(), any()))
+                    .thenReturn(0);
+
+            task.checkHealth();
+
+            verify(agentService, times(1))
+                    .correctOnlineStatusIfStale(eq(101L), eq("IDLE"), any(), any());
+            verify(agentService, never())
+                    .markOfflineIfStale(any(), any(), anyString(), anyString(), any());
+            verify(subTaskService, never()).listInFlightAssignedOrInProgress(anyLong());
+            verify(failureTracker, never()).recordFailure(anyLong());
+        }
+
+        @Test
+        @DisplayName("校正 cutoff 用常规阈值 thresholdMinutes（5 分钟）而非在飞宽限（30 分钟）")
+        void shouldUseThresholdCutoffNotGraceCutoff() {
+            Agent stale = cliAgent(101L, AgentRole.EXECUTOR);
+            when(agentService.listStaleSince(any(OffsetDateTime.class))).thenReturn(List.of(stale));
+            when(agentDutyLeaseService.isOnDuty(101L)).thenReturn(true);
+            when(agentService.correctOnlineStatusIfStale(anyLong(), anyString(), any(), any()))
+                    .thenReturn(1);
+
+            task.checkHealth();
+
+            ArgumentCaptor<OffsetDateTime> cutoffCaptor = ArgumentCaptor.forClass(OffsetDateTime.class);
+            verify(agentService, times(1))
+                    .correctOnlineStatusIfStale(eq(101L), eq("IDLE"), cutoffCaptor.capture(), any());
+            OffsetDateTime now = OffsetDateTime.now();
+            assertThat(cutoffCaptor.getValue())
+                    .isAfter(now.minusMinutes(6))
+                    .isBefore(now.minusMinutes(4));
+        }
+
+        @Test
+        @DisplayName("无 ACTIVE 租约 → 不调用 correctOnlineStatusIfStale（走常规判死链）")
+        void shouldNotCorrectWhenNoLease() {
+            Agent stale = cliAgent(101L, AgentRole.EXECUTOR);
+            when(agentService.listStaleSince(any(OffsetDateTime.class))).thenReturn(List.of(stale));
+            when(agentDutyLeaseService.isOnDuty(101L)).thenReturn(false);
+            when(subTaskService.existsInFlightAssignedOrInProgress(anyLong())).thenReturn(false);
+            when(agentService.markOfflineIfStale(any(), any(), anyString(), anyString(), any()))
+                    .thenReturn(0);
+
+            task.checkHealth();
+
+            verify(agentService, never())
+                    .correctOnlineStatusIfStale(anyLong(), anyString(), any(), any());
+        }
+    }
+
     private static Agent cliAgent(Long id, AgentRole role) {
         Agent a = new Agent();
         a.setId(id);

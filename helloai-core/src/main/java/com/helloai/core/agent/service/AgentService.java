@@ -296,6 +296,28 @@ public interface AgentService extends IService<Agent> {
      */
     int markOfflineIfStale(Long agentId, OffsetDateTime cutoff, String newStatus, String reason, OffsetDateTime now);
 
+    /**
+     * 仅校正超时 Agent 的 {@code online_status}（P2-1 租约在岗守卫分支专用）。
+     *
+     * <p>承接 helloai-job {@code AgentHealthCheckTask} 直捅
+     * {@code AgentMapper.correctOnlineStatusIfStale}。<b>仅状态校正、非离线处置</b>：
+     * 只写 {@code online_status} 与 {@code update_time}，不写 {@code offline_reason} /
+     * {@code offline_time}，不触发重派，不计 N11 失败。用于让写侧 DB 状态与读侧
+     * {@code HeartbeatServiceImpl.checkOnlineStatus}（「心跳过期 + ACTIVE 租约 → IDLE」）
+     * 同口径，消除双视图分裂。</p>
+     *
+     * <p>阈值口径：调用方传 {@code thresholdMinutes}（常规离线阈值）而非 {@code graceMinutes}
+     * （在飞宽限）——只对心跳已达常规离线阈值的 Agent 做校正；在飞宽限中的执行者
+     * （heartbeat 仍在宽限窗口内）不满足 {@code last_seen_time < cutoff}，CAS 自然为 0，不会被误刷。</p>
+     *
+     * @param agentId   Agent ID
+     * @param newStatus 校正目标状态（如 {@code "IDLE"}）
+     * @param cutoff    心跳超时截止时间（{@code last_seen_time < cutoff} 才校正）
+     * @param now       写入的 {@code update_time}
+     * @return 影响行数；0 = CAS 失败（seen() 已刷新 / 已 SLEEPING / 已 OFFLINE / 已是目标状态）
+     */
+    int correctOnlineStatusIfStale(Long agentId, String newStatus, OffsetDateTime cutoff, OffsetDateTime now);
+
     // ══════════════════════════════════════════════════════════════
     //  读侧只读快照出口（RM5 批 2：planner/review/task 三域前向实体泄漏收口）
     //  五方法各逐字镜像一条既有查询，零新增 Mapper / SQL / DB 往返；

@@ -56,6 +56,33 @@ public interface AgentMapper extends BaseMapper<Agent> {
                            @Param("now") OffsetDateTime now);
 
     /**
+     * 仅校正超时 Agent 的 {@code online_status}（CAS UPDATE，P2-1 租约在岗专用）。
+     *
+     * <p>与 {@link #markOfflineIfStale} 的关键区别：<b>只写 {@code online_status} 与
+     * {@code update_time}</b>，绝不写 {@code offline_reason} / {@code offline_time}——
+     * 这是「状态口径校正」而非「离线处置」，用于消除「写侧 DB online_status 陈旧 /
+     * 读侧 checkOnlineStatus 返回 IDLE」的双视图分裂（G-015 B1 守卫①的配套写侧落地）。</p>
+     *
+     * <p>CAS 条件：
+     * <ul>
+     *   <li>{@code id = #{agentId}}</li>
+     *   <li>{@code last_seen_time < #{cutoff}} — 仍超时（防止 seen() 刚刷新又被改写）</li>
+     *   <li>{@code online_status IS DISTINCT FROM 'SLEEPING'} — SLEEPING 是管理员手动状态，不覆盖</li>
+     *   <li>{@code online_status IS DISTINCT FROM 'OFFLINE'} — 已离线不重复刷写</li>
+     *   <li>{@code online_status IS DISTINCT FROM #{newStatus}} — 已是目标状态则不再写
+     *       （避免每个 Reconcile cycle 无谓刷新 update_time）</li>
+     *   <li>{@code deleted = 0}</li>
+     * </ul>
+     * </p>
+     *
+     * @return 影响行数；0 表示 CAS 失败（seen() 已刷新 / 已 SLEEPING / 已 OFFLINE / 已是目标状态）
+     */
+    int correctOnlineStatusIfStale(@Param("agentId") Long agentId,
+                                   @Param("newStatus") String newStatus,
+                                   @Param("cutoff") OffsetDateTime cutoff,
+                                   @Param("now") OffsetDateTime now);
+
+    /**
      * 查 last_seen_time 早于 cutoff 的 Agent 列表（用于 Reconcile 扫描）。
      *
      * <p>过滤条件：
