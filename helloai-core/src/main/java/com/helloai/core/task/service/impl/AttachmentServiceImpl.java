@@ -2,6 +2,7 @@ package com.helloai.core.task.service.impl;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AttachmentStatus;
 import com.helloai.common.constant.AttachmentVisibility;
 import com.helloai.core.system.storage.ArtifactStorage;
@@ -14,6 +15,8 @@ import com.helloai.core.task.policy.AttachmentVisibilityPolicy;
 import com.helloai.core.task.service.AttachmentService;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
+import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.task.support.AttachmentObjectPurgeSupport;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
@@ -21,6 +24,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -49,6 +53,12 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
      * 新增依赖后仍能正常装配（已由 {@code AttachmentControllerAuthScopeTest} 与启动验证覆盖）。</p>
      */
     private final AttachmentVisibilityPolicy attachmentVisibilityPolicy;
+
+    /** timeline 审计（P2 删除通道，2026-10-07）：删除附件落 {@code attachment_deleted} 事件。 */
+    private final TaskTimelineService taskTimelineService;
+
+    /** 对象存储回收（P3-3 / P2，2026-10-07）：事务提交后 best-effort 删对象；独立无环承载点，见其类注释。 */
+    private final AttachmentObjectPurgeSupport attachmentObjectPurgeSupport;
 
     /**
      * 注册产物附件元数据。
@@ -171,6 +181,61 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
         if (!attachmentVisibilityPolicy.canRead(agentId, attachment)) {
             throw new BizException(403, "无权访问该附件（不在可见范围内）");
         }
+    }
+
+    /**
+     * 校验指定 agent 可删除该附件；不可删抛 {@link BizException}(403)。
+     * 判据零复制，一律委托 {@code AttachmentVisibilityPolicy#canDelete}（仅上传者）。
+     */
+    @Override
+    public void assertDeletable(Attachment attachment, Long agentId) {
+        if (!attachmentVisibilityPolicy.canDelete(agentId, attachment)) {
+            throw new BizException(403, "仅上传者可删除该附件: id="
+                    + (attachment != null ? attachment.getId() : null));
+        }
+    }
+
+    /**
+     * 删除附件（P2 删除通道）：软删 DB 行（{@code @TableLogic}）+ 事务提交后 best-effort 回收对象 +
+     * 落 timeline 事件 {@code attachment_deleted}。
+     *
+     * <p>幂等（不存在/已删直接返回）与 fail-safe（对象回收失败不回滚）语义见接口注释。</p>
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteAttachment(Long id, Long requesterAgentId) {
+        if (id == null) {
+            return;
+        }
+        Attachment attachment = getById(id);
+        if (attachment == null) {
+            // 幂等：不存在 / 已逻辑删除（@TableLogic 过滤）—— 不 404/500，便于外部 Agent 重试
+            log.info("附件删除幂等命中（不存在或已删）: id={}", id);
+            return;
+        }
+        // 判据收口：仅 Agent 通道（requesterAgentId 非 null）强制「仅上传者可删」；平台通道放行
+        if (requesterAgentId != null) {
+            assertDeletable(attachment, requesterAgentId);
+        }
+        // 软删（保留审计痕迹；物理删仅用于任务级联删除路径）
+        removeById(id);
+
+        // timeline 审计：与 register（attachment 注册）对称的销毁留痕
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("attachmentId", attachment.getId());
+        payload.put("subTaskId", attachment.getSubTaskId());
+        payload.put("fileName", attachment.getFileName());
+        if (requesterAgentId != null) {
+            payload.put("agentId", requesterAgentId);
+        }
+        taskTimelineService.recordEvent(attachmentVisibilityPolicy.rootTaskIdOf(attachment),
+                attachment.getSubTaskId(), "attachment_deleted",
+                requesterAgentId != null ? AgentRole.EXECUTOR : AgentRole.SYSTEM, requesterAgentId, payload);
+
+        // 事务提交后 best-effort 回收对象存储（fail-safe，不阻断删除结果）
+        attachmentObjectPurgeSupport.purgeAfterCommit(List.of(attachment));
+        log.info("附件已删除: id={}, subTaskId={}, objectKey={}",
+                id, attachment.getSubTaskId(), attachment.getObjectKey());
     }
 
     /**

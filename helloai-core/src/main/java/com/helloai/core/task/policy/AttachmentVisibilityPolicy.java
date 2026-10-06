@@ -52,6 +52,28 @@ public class AttachmentVisibilityPolicy {
     }
 
     /**
+     * 判某 agent 是否可<b>删除</b>某附件（P2 删除通道，2026-10-07）。
+     *
+     * <p><b>删除判据比读判据更严</b>：读侧 {@link #canRead} 允许 TASK 团队成员互通产出，
+     * 若删除照搬读判据会退化成「同任务他人可互删产出」。故删除<b>只认第①条
+     * 「上传者恒可删自传」</b>（与 {@link #canRead} 的 ① 分支同源语义），非上传者一律不可删。</p>
+     *
+     * <p>平台账号 / 无主体通道不进入本判据（由 Controller 判通道后传 {@code agentId=null}，
+     * 由管理侧鉴权覆盖，避免把「平台删除」误判成越权）。</p>
+     *
+     * @param agentId    Agent ID；{@code null} 恒不可删（平台通道另走放行）
+     * @param attachment 附件实体（需已加载 {@code uploaderAgentId}）
+     * @return 可删返回 {@code true}
+     */
+    public boolean canDelete(Long agentId, Attachment attachment) {
+        if (agentId == null || attachment == null) {
+            return false;
+        }
+        Long uploader = attachment.getUploaderAgentId();
+        return uploader != null && uploader.equals(agentId);
+    }
+
+    /**
      * 可见性判据核心（按已解析出的三元组判定，供按 attachmentId 与按 subTaskId 两条入口复用）。
      *
      * <p>判定顺序：① 上传者恒可读自传 → ② PERSONAL 到此为止 → ③ PUBLIC（预留，fail-closed）

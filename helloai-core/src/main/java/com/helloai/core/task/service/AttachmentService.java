@@ -70,6 +70,36 @@ public interface AttachmentService extends IService<Attachment> {
     void assertReadable(Attachment attachment, Long agentId);
 
     /**
+     * 校验指定 agent 可<b>删除</b>该附件；不可删抛 {@link BizException}(403)。
+     *
+     * <p>判据唯一来源为 {@code AttachmentVisibilityPolicy#canDelete}（仅上传者），
+     * 本方法只做「判定 → 转异常」的收口。删除判据<b>比读判据更严</b>：
+     * 读侧允许 TASK 团队成员互通，删除<b>只认上传者</b>，避免同任务他人互删产出。</p>
+     *
+     * <p><b>调用方约定</b>：仅 Agent 通道需要调用；平台账号 / 无主体请求由管理侧鉴权覆盖
+     * （通道判定属 HTTP 关注点，留在 Controller）。</p>
+     *
+     * @param attachment 已加载的附件实体
+     * @param agentId    请求 Agent ID
+     * @throws BizException 不可删时抛 403
+     */
+    void assertDeletable(Attachment attachment, Long agentId);
+
+    /**
+     * 删除附件（P2 删除通道，2026-10-07）：<b>软删</b> DB 行（{@code @TableLogic}）+ 事务提交后
+     * best-effort 回收对象存储 + 写入 timeline 事件 {@code attachment_deleted}。
+     *
+     * <p><b>幂等</b>：附件不存在 / 已逻辑删除时直接返回（不抛 404/500），使外部 Agent 重试安全。</p>
+     *
+     * <p><b>fail-safe</b>：对象回收失败只记日志，不回滚、不影响删除主结果（留对账兜底）。</p>
+     *
+     * @param id               附件主键
+     * @param requesterAgentId 请求 Agent ID；<b>非 null</b> 时强制「仅上传者可删」（不可删抛 403）；
+     *                         {@code null} 表示平台 / 无主体通道，放行（管理侧鉴权覆盖）
+     */
+    void deleteAttachment(Long id, Long requesterAgentId);
+
+    /**
      * 按子任务 ID 查询有效（ACTIVE）附件列表（按创建时间倒序）。
      *
      * <p>平台可信视角：同名文件每次上传会把历史版本置为 INACTIVE，

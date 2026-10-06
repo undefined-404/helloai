@@ -14,6 +14,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestAttribute;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -123,6 +124,29 @@ public class AttachmentController {
         log.info("附件内联预览: id={}, fileName={}, size={}, mime={}",
                 id, attachment.getFileName(), content.length, contentType);
         return new ResponseEntity<>(content, headers, HttpStatus.OK);
+    }
+
+    /**
+     * 删除附件（P2 删除通道，2026-10-07）。
+     *
+     * <p><b>动词用 POST 而非 DELETE</b>：本平台部分端点已实证 {@code DELETE} 动词返 405
+     * （见 {@code /api/tasks/deleteById/{id}} 既有约定），故对齐为 {@code POST}。</p>
+     *
+     * <p><b>权限（比读更严）</b>：Agent 通道仅<b>上传者本人</b>可删（判据收口在
+     * {@link AttachmentService#deleteAttachment(Long, Long)} → {@code AttachmentVisibilityPolicy#canDelete}）；
+     * 平台账号 / 无主体通道放行（管理侧鉴权覆盖）。本类只做「通道判定」这一 HTTP 关注点，不复制任何判据。</p>
+     *
+     * <p><b>幂等</b>：附件不存在 / 已删返回 {@code R.ok}（不 404/500），外部 Agent 重试安全。</p>
+     *
+     * <p>软删（保留审计）+ 事务提交后 best-effort 回收对象存储 + 落 timeline 事件
+     * {@code attachment_deleted}。按 §10 红线不加 {@code @SaCheckPermission}。</p>
+     */
+    @PostMapping("/deleteById/{id}")
+    public R<Void> deleteById(@PathVariable("id") Long id,
+                              @RequestAttribute(value = "_authType", required = false) String authType,
+                              @RequestAttribute(value = "_authId", required = false) Long agentId) {
+        attachmentService.deleteAttachment(id, isAgentChannel(authType, agentId) ? agentId : null);
+        return R.ok();
     }
 
     /**

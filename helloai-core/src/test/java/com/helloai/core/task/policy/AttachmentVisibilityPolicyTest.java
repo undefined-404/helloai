@@ -168,6 +168,39 @@ class AttachmentVisibilityPolicyTest {
         verifyNoInteractions(taskAgentMemberService);
     }
 
+    // ==================== ⑤ 删除判据 canDelete（P2 删除通道，2026-10-07）====================
+    //  删除权限严格于读取：只认「上传者本人」，不复用 TASK 成员关系（团队可读≠可删）。
+
+    @Test
+    @DisplayName("canDelete：上传者本人删自己的附件 → 放行（唯一放行分支）")
+    void canDelete_uploaderShouldPass() {
+        assertThat(policy.canDelete(UPLOADER, attachment(AttachmentVisibility.TASK, UPLOADER))).isTrue();
+        assertThat(policy.canDelete(UPLOADER, attachment(AttachmentVisibility.PERSONAL, UPLOADER))).isTrue();
+        verifyNoInteractions(taskAgentMemberService, subTaskService);
+    }
+
+    @Test
+    @DisplayName("canDelete：非上传者（即使同任务成员）→ 拒绝，且不触达成员查询")
+    void canDelete_nonUploaderShouldBeRejectedWithoutMembershipLookup() {
+        assertThat(policy.canDelete(TEAMMATE, attachment(AttachmentVisibility.TASK, UPLOADER))).isFalse();
+        verifyNoInteractions(taskAgentMemberService, subTaskService);
+    }
+
+    @Test
+    @DisplayName("canDelete：agentId 为 null（平台/无主体）→ 拒绝，不触达任何依赖")
+    void canDelete_nullAgentIdShouldBeRejected() {
+        assertThat(policy.canDelete(null, attachment(AttachmentVisibility.TASK, UPLOADER))).isFalse();
+        verifyNoInteractions(taskAgentMemberService, subTaskService);
+    }
+
+    @Test
+    @DisplayName("canDelete：附件为 null 或 uploaderAgentId 为 null（平台上传）→ 拒绝（防御空引用）")
+    void canDelete_nullAttachmentOrUploaderShouldBeRejected() {
+        assertThat(policy.canDelete(UPLOADER, (Attachment) null)).isFalse();
+        assertThat(policy.canDelete(UPLOADER, attachment(AttachmentVisibility.TASK, null))).isFalse();
+        verifyNoInteractions(taskAgentMemberService, subTaskService);
+    }
+
     // ==================== 根任务解析（唯一层级相关逻辑） ====================
 
     @Test

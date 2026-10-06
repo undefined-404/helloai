@@ -27,6 +27,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 
 /**
@@ -176,6 +177,39 @@ class AttachmentControllerAuthScopeTest {
         assertDoesNotThrow(() -> mockMvc.perform(get("/api/attachments/getById/" + ATTACHMENT_ID)));
 
         verify(attachmentService, never()).assertReadable(any(), anyLong());
+    }
+
+    // ==================== 删除通道（P2，2026-10-07）====================
+
+    @Test
+    @DisplayName("删除：Agent 通道把 agentId 透传给 Service（判据收口在 Service，Controller 不自行判定）")
+    void deleteForAgentChannelShouldPassAgentId() throws Exception {
+        mockMvc.perform(post("/api/attachments/deleteById/" + ATTACHMENT_ID)
+                        .requestAttr("_authType", "agent")
+                        .requestAttr("_authId", AGENT_ID))
+                .andExpect(jsonPath("$.code").value(200));
+
+        verify(attachmentService).deleteAttachment(ATTACHMENT_ID, AGENT_ID);
+    }
+
+    @Test
+    @DisplayName("删除：平台账号通道（_authType=admin）传 null agentId，交由管理侧鉴权覆盖")
+    void deleteForAdminChannelShouldPassNullAgentId() throws Exception {
+        mockMvc.perform(post("/api/attachments/deleteById/" + ATTACHMENT_ID)
+                        .requestAttr("_authType", "admin")
+                        .requestAttr("_authId", ADMIN_SESSION_ID))
+                .andExpect(jsonPath("$.code").value(200));
+
+        verify(attachmentService).deleteAttachment(ATTACHMENT_ID, null);
+    }
+
+    @Test
+    @DisplayName("删除：无主体请求（无 _authType）传 null agentId，不触发越权判定")
+    void deleteWithoutSubjectShouldPassNullAgentId() throws Exception {
+        mockMvc.perform(post("/api/attachments/deleteById/" + ATTACHMENT_ID))
+                .andExpect(jsonPath("$.code").value(200));
+
+        verify(attachmentService).deleteAttachment(ATTACHMENT_ID, null);
     }
 
     // ==================== helpers ====================

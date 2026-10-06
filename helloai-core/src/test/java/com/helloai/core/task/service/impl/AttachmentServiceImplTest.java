@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
 import com.baomidou.mybatisplus.extension.conditions.query.LambdaQueryChainWrapper;
 import com.baomidou.mybatisplus.extension.conditions.update.LambdaUpdateChainWrapper;
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AttachmentStatus;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.system.storage.ArtifactStorage;
@@ -13,6 +14,8 @@ import com.helloai.core.task.mapper.AttachmentMapper;
 import com.helloai.core.task.policy.AttachmentVisibilityPolicy;
 import com.helloai.core.task.service.SubTaskService;
 import com.helloai.core.task.service.TaskService;
+import com.helloai.core.task.service.TaskTimelineService;
+import com.helloai.core.task.support.AttachmentObjectPurgeSupport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -40,6 +43,8 @@ class AttachmentServiceImplTest {
     private TaskService taskService;
     private ArtifactStorage artifactStorage;
     private AttachmentVisibilityPolicy attachmentVisibilityPolicy;
+    private TaskTimelineService taskTimelineService;
+    private AttachmentObjectPurgeSupport attachmentObjectPurgeSupport;
 
     private AttachmentServiceImpl service;
     private LambdaQueryChainWrapper<Attachment> chain;
@@ -52,8 +57,10 @@ class AttachmentServiceImplTest {
         taskService = mock(TaskService.class);
         artifactStorage = mock(ArtifactStorage.class);
         attachmentVisibilityPolicy = mock(AttachmentVisibilityPolicy.class);
+        taskTimelineService = mock(TaskTimelineService.class);
+        attachmentObjectPurgeSupport = mock(AttachmentObjectPurgeSupport.class);
         service = spy(new AttachmentServiceImpl(subTaskService, taskService, artifactStorage,
-                attachmentVisibilityPolicy));
+                attachmentVisibilityPolicy, taskTimelineService, attachmentObjectPurgeSupport));
         chain = mock(LambdaQueryChainWrapper.class);
         updateChain = mock(LambdaUpdateChainWrapper.class);
         doReturn(chain).when(service).lambdaQuery();
@@ -435,5 +442,89 @@ class AttachmentServiceImplTest {
 
         assertThat(service.listAllIncludingDeleted()).isSameAs(rows);
         verify(mapper).selectAllIncludingDeleted();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  assertDeletable / deleteAttachment（P2 删除通道，2026-10-07）
+    //  ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("assertDeletable：非上传者（Policy 拒绝）抛 403，上传者不抛（判定零复制）")
+    void assertDeletable_shouldThrow403WhenPolicyDenies() {
+        Attachment att = attachment(1L, 100L, "证据.md");
+        when(attachmentVisibilityPolicy.canDelete(7L, att)).thenReturn(false);
+
+        BizException ex = catchThrowableOfType(
+                () -> service.assertDeletable(att, 7L), BizException.class);
+        assertThat(ex).isNotNull();
+        assertThat(ex.getCode()).isEqualTo(403);
+
+        when(attachmentVisibilityPolicy.canDelete(7L, att)).thenReturn(true);
+        assertThat(catchThrowableOfType(
+                () -> service.assertDeletable(att, 7L), BizException.class)).isNull();
+    }
+
+    @Test
+    @DisplayName("deleteAttachment：上传者本人可删 —— 软删 + 注册对象回收 + 落 attachment_deleted 事件")
+    void deleteAttachment_uploader_shouldSoftDeletePurgeAndRecord() {
+        Attachment att = attachment(1L, 100L, "证据.md");
+        att.setUploaderAgentId(7L);
+        doReturn(att).when(service).getById(1L);
+        doReturn(true).when(service).removeById(1L);
+        when(attachmentVisibilityPolicy.canDelete(7L, att)).thenReturn(true);
+        when(attachmentVisibilityPolicy.rootTaskIdOf(att)).thenReturn(10L);
+
+        service.deleteAttachment(1L, 7L);
+
+        verify(service).removeById(1L);
+        verify(attachmentObjectPurgeSupport).purgeAfterCommit(List.of(att));
+        verify(taskTimelineService).recordEvent(eq(10L), eq(100L), eq("attachment_deleted"),
+                eq(AgentRole.EXECUTOR), eq(7L), any());
+    }
+
+    @Test
+    @DisplayName("deleteAttachment：非上传者越权 —— 403，且不删行、不回收对象、不落事件")
+    void deleteAttachment_nonUploader_shouldThrow403AndNotDelete() {
+        Attachment att = attachment(1L, 100L, "他人产出.md");
+        att.setUploaderAgentId(99L);
+        doReturn(att).when(service).getById(1L);
+        when(attachmentVisibilityPolicy.canDelete(7L, att)).thenReturn(false);
+
+        BizException ex = catchThrowableOfType(
+                () -> service.deleteAttachment(1L, 7L), BizException.class);
+
+        assertThat(ex).isNotNull();
+        assertThat(ex.getCode()).isEqualTo(403);
+        verify(service, never()).removeById(any(Long.class));
+        verify(attachmentObjectPurgeSupport, never()).purgeAfterCommit(any());
+        verify(taskTimelineService, never()).recordEvent(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("deleteAttachment：平台通道（requesterAgentId=null）放行，不做上传者判定，事件 role=SYSTEM")
+    void deleteAttachment_platformChannel_shouldBypassOwnerCheck() {
+        Attachment att = attachment(1L, 100L, "平台删除.md");
+        att.setUploaderAgentId(99L);
+        doReturn(att).when(service).getById(1L);
+        doReturn(true).when(service).removeById(1L);
+
+        service.deleteAttachment(1L, null);
+
+        verify(attachmentVisibilityPolicy, never()).canDelete(any(), any());
+        verify(service).removeById(1L);
+        verify(taskTimelineService).recordEvent(any(), eq(100L), eq("attachment_deleted"),
+                eq(AgentRole.SYSTEM), any(), any());
+    }
+
+    @Test
+    @DisplayName("deleteAttachment：附件不存在/已删 —— 幂等返回，不删行、不回收、不落事件（不 404/500）")
+    void deleteAttachment_missing_shouldBeIdempotentNoop() {
+        doReturn(null).when(service).getById(1L);
+
+        service.deleteAttachment(1L, 7L);
+
+        verify(service, never()).removeById(any(Long.class));
+        verify(attachmentObjectPurgeSupport, never()).purgeAfterCommit(any());
+        verify(taskTimelineService, never()).recordEvent(any(), any(), any(), any(), any(), any());
     }
 }
