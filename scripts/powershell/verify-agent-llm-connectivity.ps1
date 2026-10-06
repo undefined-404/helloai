@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # helloai Agent LLM 真连通验证脚本
 # 用途：验证平台内 API_KEY_LLM Agent 通过 credential_vault 绑定真实 Provider(DeepSeek)
 #       后能真正连通 LLM 并返回结果（真连通冒烟，非 mock）。
@@ -77,7 +77,7 @@ $regResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/agents/register") -
     role = "EXECUTOR"
     description = "llm connectivity probe"
     accessType = "API_KEY_LLM"
-    modelType = "deepseek:deepseek-chat"
+    modelType = "deepseek:deepseek-v4-flash"
     idempotent = $true
 } -Headers @{}
 

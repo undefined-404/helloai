@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # helloai Planner 平台内自动拆解验证脚本（V26）
 # 用途：验证"需求 → 自动拆解 → 用户确认/拒绝 → 进入既有分发链"闭环：
 #       POST /api/tasks/planById/{id}            触发 LLM 拆解（拆解异步化：同步段只做
@@ -19,7 +19,7 @@ param(
     [string]$BaseUrl = "http://localhost:6565",
     [string]$AdminUsername = "admin",
     [string]$AdminPassword = "admin123",
-    [string]$PlannerModelType = "deepseek:deepseek-chat",
+    [string]$PlannerModelType = "deepseek:deepseek-v4-flash",
     [int]$PlanTimeoutSec = 360
 )
 

@@ -82,7 +82,7 @@ $r3 = Invoke-Json -Method 'Post' -Url ($BaseUrl + '/api/agents/register') -Body 
     role        = 'EXECUTOR'
     description = 'Docker 审查专家'
     accessType  = 'API_KEY_LLM'
-    modelType   = 'deepseek:deepseek-chat'
+    modelType   = 'deepseek:deepseek-v4-flash'
     idempotent  = $true
 } -Headers @{}
 Assert-True ($r3.code -eq 200) ('reg llm code=' + $r3.code)

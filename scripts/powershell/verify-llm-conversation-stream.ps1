@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # helloai §6.41 子任务 LLM 对话流与 reviewHistory 多轮累积 E2E 验证脚本
 # 用途：验证 §6.41 两件改造的端到端落地：
 #       (a) SubTaskExecutionService.executeOnce user prompt 落库到 conversation_message，
@@ -29,7 +29,7 @@ param(
     [string]$BaseUrl = "http://localhost:6565",
     [string]$AdminUsername = "admin",
     [string]$AdminPassword = "admin123",
-    [string]$LlmModelType = "deepseek:deepseek-chat",
+    [string]$LlmModelType = "deepseek:deepseek-v4-flash",
     [string]$LlmApiKey = $env:DEEPSEEK_API_KEY,
     [int]$PlanTimeoutSec = 360,
     [int]$LoopTimeoutSec = 1200,

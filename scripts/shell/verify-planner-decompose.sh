@@ -32,7 +32,7 @@ export LC_ALL="${LC_ALL:-zh_CN.UTF-8}"
 BASE_URL="${BASE_URL:-http://localhost:6565}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin123}"
-PLANNER_MODEL_TYPE="${PLANNER_MODEL_TYPE:-deepseek:deepseek-chat}"
+PLANNER_MODEL_TYPE="${PLANNER_MODEL_TYPE:-deepseek:deepseek-v4-flash}"
 PLAN_TIMEOUT_SEC="${PLAN_TIMEOUT_SEC:-360}"
 # require-vault=true 时拆解必须有托管凭证；与 helloai-start application.yml
 # spring.ai.deepseek.api-key 默认值保持一致（对齐 verify-inner-loop-e2e.ps1 做法）

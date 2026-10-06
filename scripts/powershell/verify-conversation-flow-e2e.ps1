@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # helloai 执行对话流与核验落库 E2E 验证脚本（V28）
 # 用途：真实链路验证 conversation_message 激活 + 自动核验落 review_record：
 #       复用内循环链路（拆解 → confirm → 自动执行 → 自动核验 → DONE），随后断言
@@ -17,7 +17,7 @@ param(
     [string]$BaseUrl = "http://localhost:6565",
     [string]$AdminUsername = "admin",
     [string]$AdminPassword = "admin123",
-    [string]$LlmModelType = "deepseek:deepseek-chat",
+    [string]$LlmModelType = "deepseek:deepseek-v4-flash",
     [string]$LlmApiKey = $env:DEEPSEEK_API_KEY,
     [int]$PlanTimeoutSec = 360,
     [int]$LoopTimeoutSec = 900,

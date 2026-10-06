@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # helloai 子任务重派自动执行验证脚本
 # 用途：验证子任务在 blocked / offline 两种场景下被重新分派到目标 API_KEY_LLM Agent
 #       后能自动继续执行闭环（reassign -> 目标 Agent 接手 -> assignedAgent 校验 + timeline 证据）。
@@ -271,7 +271,7 @@ Assert-True (-not [string]::IsNullOrWhiteSpace($sourceAgentApiKey)) "source agen
 Write-Host ("sourceAgentId=" + $sourceAgentId)
 
 Write-Host "STEP3: register target API agent (idempotent fixed name per scenario)"
-$target = Register-Agent -Name ("redispatch-target-" + $Scenario) -RoleValue $Role -AccessType "API_KEY_LLM" -Description "redispatch target" -ModelType "deepseek:deepseek-chat"
+$target = Register-Agent -Name ("redispatch-target-" + $Scenario) -RoleValue $Role -AccessType "API_KEY_LLM" -Description "redispatch target" -ModelType "deepseek:deepseek-v4-flash"
 $targetAgentId = [string]$target.id
 Assert-True (-not [string]::IsNullOrWhiteSpace($targetAgentId)) "target agent id empty"
 Write-Host ("targetAgentId=" + $targetAgentId)

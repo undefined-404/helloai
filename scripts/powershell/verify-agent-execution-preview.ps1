@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # helloai Agent 执行预览验证脚本
 # 用途：验证 Agent 执行链路"最小执行/预览"闭环——建 Agent +（可选）绑定 credential_vault，
 #       触发执行并断言输出包含期望片段（默认 [mock-executor]）。
@@ -79,7 +79,7 @@ $regResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/agents/register") -
     role = "EXECUTOR"
     description = "t6 preview"
     accessType = "API_KEY_LLM"
-    modelType = "deepseek:deepseek-chat"
+    modelType = "deepseek:deepseek-v4-flash"
     idempotent = $true
 } -Headers @{}
 

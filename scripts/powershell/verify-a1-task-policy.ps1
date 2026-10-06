@@ -58,7 +58,7 @@ $plannerResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/agents/register
     role = "PLANNER"
     description = "verify-a1-task-policy"
     accessType = "API_KEY_LLM"
-    modelType = "deepseek:deepseek-chat"
+    modelType = "deepseek:deepseek-v4-flash"
     idempotent = $true
 } -Headers @{}
 Assert-True ($plannerResp.code -eq 200) ("register planner code=" + $plannerResp.code + " msg=" + $plannerResp.msg)
@@ -69,7 +69,7 @@ $reviewerResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/agents/registe
     role = "REVIEWER"
     description = "verify-a1-task-policy"
     accessType = "API_KEY_LLM"
-    modelType = "deepseek:deepseek-chat"
+    modelType = "deepseek:deepseek-v4-flash"
     idempotent = $true
 } -Headers @{}
 Assert-True ($reviewerResp.code -eq 200) ("register reviewer code=" + $reviewerResp.code + " msg=" + $reviewerResp.msg)
@@ -80,7 +80,6 @@ $executorResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/agents/registe
     role = "EXECUTOR"
     description = "verify-a1-task-policy"
     accessType = "CLI_CLIENT"
-    modelType = "gpt-4o"
     idempotent = $true
 } -Headers @{}
 Assert-True ($executorResp.code -eq 200) ("register executor code=" + $executorResp.code + " msg=" + $executorResp.msg)

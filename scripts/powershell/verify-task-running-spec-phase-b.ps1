@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # helloai Task Running Spec Phase B 端到端验证脚本
 # 用途：切到 storage=table，独立表存储验证全链路：
 #       1. 重启 backend（带 -Dhelloai.task-running-spec.storage=table）
@@ -20,7 +20,7 @@ param(
     [string]$BaseUrl = "http://localhost:6565",
     [string]$AdminUsername = "admin",
     [string]$AdminPassword = "admin123",
-    [string]$LlmModelType = "deepseek:deepseek-chat",
+    [string]$LlmModelType = "deepseek:deepseek-v4-flash",
     [string]$LlmApiKey = $env:DEEPSEEK_API_KEY,
     [string]$StorageMode = "table",
     [int]$PlanTimeoutSec = 360,

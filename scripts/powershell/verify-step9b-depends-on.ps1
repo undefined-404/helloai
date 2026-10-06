@@ -1,4 +1,4 @@
-# step9b 验证：Planner applyDependsOn 修复后 depends_on 不再回滚到同一 id
+﻿# step9b 验证：Planner applyDependsOn 修复后 depends_on 不再回滚到同一 id
 # Usage: .\verify-step9b-depends-on.ps1
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
@@ -142,7 +142,7 @@ $plannerResp = Invoke-Json -Method 'Post' -Url ($BaseUrl + '/api/agents/register
     role = 'PLANNER'
     description = 'step9b verify'
     accessType = 'API_KEY_LLM'
-    modelType = 'deepseek:deepseek-chat'
+    modelType = 'deepseek:deepseek-v4-flash'
     idempotent = $true
 } -Headers @{}
 Assert-True ($plannerResp.code -eq 200) 'register planner failed'

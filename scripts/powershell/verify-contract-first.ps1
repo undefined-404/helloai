@@ -188,7 +188,11 @@ function Ensure-TestAgent {
         }
     }
     if (-not $agentId) {
-        $regBody = @{ name = $Name; role = $RoleValue; description = 'verify-contract-first preset agent'; accessType = $AccessType; modelType = $ModelType; idempotent = $true } | ConvertTo-Json -Depth 6
+        $regBody = @{ name = $Name; role = $RoleValue; description = 'verify-contract-first preset agent'; accessType = $AccessType; idempotent = $true }
+        # CLI_CLIENT 无 LLM 模型绑定：modelType 留空即不写入请求体（register 对空 modelType 直接放行）；
+        # 仅当显式传入有效 providerCode:modelName 时才携带（保留参数可覆盖性）。
+        if (-not [string]::IsNullOrWhiteSpace($ModelType)) { $regBody['modelType'] = $ModelType }
+        $regBody = $regBody | ConvertTo-Json -Depth 6
         $regResp = Invoke-Json -Method POST -Uri ($BaseUrl + '/api/agents/register') -Body $regBody -Headers @{}
         if ($regResp.Code -ne 200) {
             Write-Output ('[agent] FAIL register ' + $Name + ' HTTP=' + $regResp.Code + ' body=' + $regResp.Body)
@@ -387,8 +391,8 @@ Assert-Pass ($gateResp.Code -eq 200) 'A1.5-quality-gate' ('PUT /api/admin/config
 # ============================================================
 Write-Output ''
 Write-Output '=== [agents] ensure preset test agents ==='
-$execA = Ensure-TestAgent -Name $execName -RoleValue 'EXECUTOR' -AccessType 'CLI_CLIENT' -ModelType 'gpt-4o' -AdminToken $adminToken
-$reviewer = Ensure-TestAgent -Name $reviewerName -RoleValue 'REVIEWER' -AccessType 'CLI_CLIENT' -ModelType 'gpt-4o' -AdminToken $adminToken
+$execA = Ensure-TestAgent -Name $execName -RoleValue 'EXECUTOR' -AccessType 'CLI_CLIENT' -AdminToken $adminToken
+$reviewer = Ensure-TestAgent -Name $reviewerName -RoleValue 'REVIEWER' -AccessType 'CLI_CLIENT' -AdminToken $adminToken
 if (-not $execA -or -not $reviewer) {
     Write-Output 'FAIL : preset agents unavailable'
     exit 1

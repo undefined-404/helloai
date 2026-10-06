@@ -282,7 +282,7 @@ $regResp = Invoke-Json 'Post' ($BaseUrl + '/api/agents/register') @{
     role        = 'EXECUTOR'
     description = 'platform config dynamic e2e probe'
     accessType  = 'API_KEY_LLM'
-    modelType   = $Provider + ':deepseek-chat'
+    modelType   = $Provider + ':deepseek-v4-flash'
     idempotent  = $true
 } @{}
 Assert-Pass ($regResp -ne $null -and $regResp.code -eq 200) 'S6' ('register code=' + $regResp.code + ' msg=' + $regResp.msg)

@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # helloai 内循环最小流程 E2E 验证脚本（V27）
 # 用途：真实链路验证"拆解(带依赖) → ready 分发 → 平台 LLM 执行 → LLM 自动核验
 #       → 下游解锁 → Task 自动收尾"完整闭环（不使用 mock，全程走 DB + LLM）：
@@ -22,7 +22,7 @@ param(
     [string]$BaseUrl = "http://localhost:6565",
     [string]$AdminUsername = "admin",
     [string]$AdminPassword = "admin123",
-    [string]$LlmModelType = "deepseek:deepseek-chat",
+    [string]$LlmModelType = "deepseek:deepseek-v4-flash",
     # require-vault=true 时绑定给 Agent 的托管 API Key；默认取环境变量，
     # 再回退 application.yml 中 spring.ai.deepseek.api-key 的同款默认值
     [string]$LlmApiKey = $env:DEEPSEEK_API_KEY,
