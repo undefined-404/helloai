@@ -1,5 +1,6 @@
 package com.helloai.it;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -30,21 +31,23 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 @DisplayName("级联删除 FK 删序（D-1）真实库集成验证")
 class CascadeDeleteFkOrderIT extends AbstractItTestBase {
 
-    // 主键固定 9xxx 段 + it- 前缀，与内建 seed 隔离（AbstractItTestBase 口径）
-    private static final long TASK = 9101L;
-    private static final long MODULE = 9101L;
-    private static final long SUB = 9101L;
-    private static final long AGENT = 9101L;
-    private static final long RECORD = 9101L;
-    private static final long RECHECK = 9101L;
-    private static final long EVENT = 9101L;
-    private static final long SESSION = 9101L;
-    private static final long REWARD = 9101L;
-    private static final long ITERATION = 9101L;
-    private static final long PROFILE = 9101L;
-    private static final long TEAM_MEMBER = 9101L;
-    private static final long TIMELINE = 9101L;
-    private static final long TEAM = 9101L;
+    // 主键固定 9xxx 段 + it- 前缀，与内建 seed 隔离（AbstractItTestBase 口径）。
+    // 2026-10-06：由 9101 段迁至 9501 段 —— 9101 段已被 MqExecutionCommandConsumerIT 占用，
+    // 二者共用同段时（Testcontainers 容器为跨类静态单例）本类残留会撞其后跑者的 agent_pkey。
+    private static final long TASK = 9501L;
+    private static final long MODULE = 9501L;
+    private static final long SUB = 9501L;
+    private static final long AGENT = 9501L;
+    private static final long RECORD = 9501L;
+    private static final long RECHECK = 9501L;
+    private static final long EVENT = 9501L;
+    private static final long SESSION = 9501L;
+    private static final long REWARD = 9501L;
+    private static final long ITERATION = 9501L;
+    private static final long PROFILE = 9501L;
+    private static final long TEAM_MEMBER = 9501L;
+    private static final long TIMELINE = 9501L;
+    private static final long TEAM = 9501L;
 
     @Autowired
     private com.helloai.core.task.service.TaskService taskService;
@@ -54,21 +57,7 @@ class CascadeDeleteFkOrderIT extends AbstractItTestBase {
     /** 每个用例独立、可重复：先尽量清残留（子先父后），再 seed。 */
     @BeforeEach
     void seed() {
-        // 清理残留（顺序：子 → 父，避免清理自身撞 FK）
-        jdbcTemplate.update("DELETE FROM review_recheck_log WHERE id = ?", RECHECK);
-        jdbcTemplate.update("DELETE FROM review_record WHERE id = ?", RECORD);
-        jdbcTemplate.update("DELETE FROM agent_event WHERE id = ?", EVENT);
-        jdbcTemplate.update("DELETE FROM agent_session WHERE id = ?", SESSION);
-        jdbcTemplate.update("DELETE FROM reward_log WHERE id = ?", REWARD);
-        jdbcTemplate.update("DELETE FROM task_iteration WHERE id = ?", ITERATION);
-        jdbcTemplate.update("DELETE FROM agent_quality_profile WHERE id = ?", PROFILE);
-        jdbcTemplate.update("DELETE FROM team_member WHERE id = ?", TEAM_MEMBER);
-        jdbcTemplate.update("DELETE FROM task_timeline WHERE id = ?", TIMELINE);
-        jdbcTemplate.update("DELETE FROM task_agent_member WHERE task_id = ?", TASK);
-        jdbcTemplate.update("DELETE FROM sub_task WHERE id = ?", SUB);
-        jdbcTemplate.update("DELETE FROM module WHERE id = ?", MODULE);
-        jdbcTemplate.update("DELETE FROM task WHERE id = ?", TASK);
-        jdbcTemplate.update("DELETE FROM agent WHERE id = ?", AGENT);
+        clearResidual();
 
         jdbcTemplate.update("""
                 INSERT INTO task (id, title, status, create_by, update_by)
@@ -167,6 +156,45 @@ class CascadeDeleteFkOrderIT extends AbstractItTestBase {
         assertEquals(0, childRows("agent_session", "agent_id", AGENT), "agent_session 应清空（D-1）");
         assertEquals(0, childRows("agent_quality_profile", "agent_id", AGENT), "agent_quality_profile 应清空（D-1）");
         assertEquals(0, childRows("team_member", "agent_id", AGENT), "team_member 应清空（D-1 收尾）");
+    }
+
+    // ==================== 清理 ====================
+
+    /**
+     * 用例后清场：本类 seed 的 9501 段数据必须回收，否则残留行会污染外层共享容器
+     * （{@link ItContainers} 跨类静态单例）中其它 IT 类 —— 2026-10-06 实跑暴露：
+     * 本类原用 9101 段且<b>无 {@code @AfterEach}</b>，残留 {@code agent(id=9101)}
+     * 使后跑的 {@code MqExecutionCommandConsumerIT}（同用 9101 段）seed 时
+     * 撞 {@code agent_pkey}（{@code DuplicateKeyException}），门禁 5（{@code -Dtest='*IT'}）确定性失败。
+     *
+     * <p>与 {@link #seed()} 共用 {@link #clearResidual()} 单一口径，避免两处清理漂移。</p>
+     */
+    @AfterEach
+    void cleanup() {
+        clearResidual();
+    }
+
+    /**
+     * 按 FK 依赖顺序（子 → 父）清除本类 9501 段全部 seed 残留。
+     * {@code @BeforeEach}（保证用例可重复）与 {@code @AfterEach}（防类间污染）共用。
+     */
+    private void clearResidual() {
+        // 子 → 父：review_recheck_log 引用 review_record / sub_task，故最先删
+        jdbcTemplate.update("DELETE FROM review_recheck_log WHERE id = ?", RECHECK);
+        jdbcTemplate.update("DELETE FROM review_record WHERE id = ?", RECORD);
+        jdbcTemplate.update("DELETE FROM agent_event WHERE id = ?", EVENT);
+        jdbcTemplate.update("DELETE FROM agent_session WHERE id = ?", SESSION);
+        jdbcTemplate.update("DELETE FROM reward_log WHERE id = ?", REWARD);
+        jdbcTemplate.update("DELETE FROM task_iteration WHERE id = ?", ITERATION);
+        jdbcTemplate.update("DELETE FROM agent_quality_profile WHERE id = ?", PROFILE);
+        jdbcTemplate.update("DELETE FROM team_member WHERE id = ?", TEAM_MEMBER);
+        jdbcTemplate.update("DELETE FROM task_timeline WHERE id = ?", TIMELINE);
+        jdbcTemplate.update("DELETE FROM task_agent_member WHERE task_id = ?", TASK);
+        // sub_task 引用 module（module_id）与 agent（assigned_agent_id）：先 sub_task 再 module
+        jdbcTemplate.update("DELETE FROM sub_task WHERE id = ?", SUB);
+        jdbcTemplate.update("DELETE FROM module WHERE id = ?", MODULE);
+        jdbcTemplate.update("DELETE FROM task WHERE id = ?", TASK);
+        jdbcTemplate.update("DELETE FROM agent WHERE id = ?", AGENT);
     }
 
     // ==================== 断言辅助 ====================
