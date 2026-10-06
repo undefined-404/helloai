@@ -2787,6 +2787,8 @@ mvn -pl helloai-start -am compile
 > **串行化约定**：同工作树同一时刻只允许一个 mvn/门禁进程；并发会互相删 `target/classes` 致 `ClassNotFoundException`（2026-10-06 实测两次踩踏）。
 >
 > 应用在跑（classpath 指向 `*/target/classes`）时运行门禁须加 `--no-clean`：`bash scripts/ci/ci-gate.sh --no-clean`，跳过 `clean` 以保留运行中应用的类文件。
+>
+> **共享工作树提交约定**：多人共用同一工作树时，索引（index）会被并发 `git add` 互相污染——裸 `git commit` 会把他人已暂存的文件一并带入你的提交（2026-10-07 实测：一次 `git commit` 误并入他人 15 个文件）。故提交**必须显式锁定路径**：`git commit -- <文件1> <文件2> …`，**禁止裸 `git commit`**（除非确认索引中仅有你的文件）。此约定是上述「同工作树串行」规则的配套例外（串行针对 mvn/门禁，本约定针对 git 索引）。
 
 ***
 
