@@ -7,6 +7,7 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 
+import java.util.Collection;
 import java.util.List;
 
 @Mapper
@@ -39,4 +40,27 @@ public interface AttachmentMapper extends BaseMapper<Attachment> {
      */
     @Select("SELECT * FROM attachment WHERE sub_task_id IN (SELECT id FROM sub_task WHERE task_id = #{taskId})")
     List<Attachment> selectByTaskId(@Param("taskId") Long taskId);
+
+    /**
+     * <b>窄查询</b>：在给定候选 {@code objectKey} 集合中，返回仍被活跃行（{@code deleted=0}）引用的子集，
+     * 供对象回收护栏做批量判定（P2/P3-3 护栏性能收敛，2026-10-07）。
+     *
+     * <p><b>为何不再全表读</b>：此前的护栏用 {@link #selectAllIncludingDeleted()} 把整张 {@code attachment}
+     * 表载入 JVM 再内存过滤——每次删任意一个附件都是 O(全表)，与 V2「可分布式/可扩展」目标冲突。
+     * 现改为「入参为候选 key 去重集合（有界）→ 数据库仅回这些 key 中仍活跃者」，<b>1 次查询</b>、
+     * 不再全表。语义不变：调用方对候选 key 做 {@code contains} 过滤即可判定「是否仍被活跃行引用」。</p>
+     *
+     * <p><b>口径</b>：{@code deleted} 列 {@code SMALLINT NOT NULL DEFAULT 0}（V1），故 {@code deleted = 0}
+     * 即「活跃」，与旧实现的 {@code getDeleted()==null || ==0} 等价。返回结果<b>可能含重复</b>
+     * （同一 key 多条活跃行），调用方须自行去重。</p>
+     *
+     * @param keys 候选 objectKey 集合（调用方保证非空、已去重）
+     * @return 其中仍存在 {@code deleted=0} 行引用的 objectKey（可能重复）
+     */
+    @Select({"<script>",
+            "SELECT object_key FROM attachment",
+            "WHERE deleted = 0 AND object_key IN",
+            "<foreach collection='keys' item='k' open='(' separator=',' close=')'>#{k}</foreach>",
+            "</script>"})
+    List<String> selectActiveObjectKeysIn(@Param("keys") Collection<String> keys);
 }
