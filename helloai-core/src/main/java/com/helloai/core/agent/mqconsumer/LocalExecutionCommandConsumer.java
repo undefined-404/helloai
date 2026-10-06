@@ -203,8 +203,11 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
             List<String> skills = command.getRequiredSkills() != null
                     ? command.getRequiredSkills() : Collections.emptyList();
             // Phase 1 Step 2：启用工具为 agent 域数据（agent_mcp_server），消费侧 agent 域内
-            // 直读注入 ctx.tools（与 skills 的 task 域装箱不同，无 §6 跨域问题）；恒非 null 仅防御
-            List<String> tools = agentMcpServerService.getEnabledTools(command.getAgentId());
+            // 直读注入 ctx.tools（与 skills 的 task 域装箱不同，无 §6 跨域问题）；恒非 null 仅防御。
+            // L3 P1-1（2026-10-06）：按 accessType 过滤 —— 内部 LLM 执行者（API_KEY_LLM）进程内
+            // 无 MCP 会话，注入 13 个 MCP 生命周期工具必然 401；外部 Agent（CLI_CLIENT）原样注入。
+            List<String> tools = agentMcpServerService.getEnabledToolsForAccess(
+                    command.getAgentId(), command.getAccessType());
             if (tools == null) {
                 tools = Collections.emptyList();
             }

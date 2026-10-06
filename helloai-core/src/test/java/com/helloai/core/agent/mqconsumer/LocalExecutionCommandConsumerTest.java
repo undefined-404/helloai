@@ -110,9 +110,11 @@ class LocalExecutionCommandConsumerTest {
             when(agentService.getById(11L)).thenReturn(agent);
             when(agentExecutionRecordService.markRunning(44L)).thenReturn(true);
             when(agentExecutionRecordService.markSuccess(44L, null)).thenReturn(true);
-            // Phase 1 Step 2/4：工具 / 环境由消费侧 agent 域解析注入装配器
-            when(agentMcpServerService.getEnabledTools(11L))
-                    .thenReturn(List.of("pullTasks", "submitResult"));
+            // Phase 1 Step 2/4：工具 / 环境由消费侧 agent 域解析注入装配器。
+            // L3 P1-1（2026-10-06）：消费侧改调「按接入类型过滤」的 getEnabledToolsForAccess，
+            // 本用例 accessType=API_KEY_LLM ⇒ 内部 LLM 执行者，注入清单应为过滤后的可注入集。
+            when(agentMcpServerService.getEnabledToolsForAccess(11L, AgentAccessType.API_KEY_LLM))
+                    .thenReturn(List.of("submitResult"));
             when(executionEnvironmentProvider.resolve(AgentAccessType.API_KEY_LLM))
                     .thenReturn(new LocalProcessEnvironment());
             // G-002：装配器产出完整上下文，真身 execute 接收同一对象

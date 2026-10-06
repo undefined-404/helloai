@@ -1,6 +1,7 @@
 package com.helloai.core.agent.service.impl;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.helloai.common.constant.AgentAccessType;
 import com.helloai.core.agent.entity.AgentMcpServer;
 import com.helloai.core.agent.mapper.AgentMcpServerMapper;
 import com.helloai.core.agent.service.AgentMcpServerService;
@@ -52,6 +53,38 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
      * </ul>
      */
     private static final List<String> DEFAULT_EXECUTOR_TOOLS = List.of(
+            "pullTasks",
+            "ack",
+            "claimSubTask",
+            "startSubTask",
+            "getSubTaskDetail",
+            "heartbeat",
+            "uploadArtifact",
+            "submitResult",
+            "reportBlocked",
+            "getAgentStatus",
+            "getDepsSummary",
+            "checkIn",
+            "checkOut"
+    );
+
+    /**
+     * 需经 <b>MCP 会话</b>（{@code McpAuthFilter} 鉴权 + {@code McpAuthContext} sessionId）才能
+     * 正常工作的工具清单 —— 与 {@link #DEFAULT_EXECUTOR_TOOLS} 同集合，语义不同：
+     * 本常量回答「哪些工具是<b>跨进程 MCP 生命周期</b>工具」，用于按接入类型过滤注入。
+     *
+     * <p><b>为什么单列为常量而不是复用 DEFAULT_EXECUTOR_TOOLS</b>：两者当前恰好同集合，
+     * 但语义正交 —— 前者是「EXECUTOR 注册即授权哪些工具」（授权面），后者是
+     * 「哪些工具依赖 MCP 会话上下文」（可注入面）。外部 Agent（CLI_CLIENT）走这两者；
+     * 内部 LLM 执行者（API_KEY_LLM）有授权但<b>不可注入</b>（进程内调用无 sessionId）。
+     * 若未来授权面与可注入面分叉，本常量独立演进，不会误伤授权语义。</p>
+     *
+     * <p><b>缺陷背景（2026-10-06 L3 P1-1）</b>：内部 LLM 执行者（{@code API_KEY_LLM}、
+     * {@code supportsMCP=false}）此前被等价注入这 13 个工具，进程内调用 100% 命中
+     * {@code McpAuthContext.requireAuthId} 的空 {@code _sessionId} 分支 → 401，
+     * 模型反复重试至 {@code MAX_ITERATIONS} 失败（L3 实测占内循环约 14.8%）。</p>
+     */
+    private static final List<String> MCP_SESSION_TOOLS = List.of(
             "pullTasks",
             "ack",
             "claimSubTask",
@@ -174,6 +207,26 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
                 .list()
                 .stream()
                 .map(AgentMcpServer::getToolName)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p><b>内部 LLM 执行者（{@link AgentAccessType#API_KEY_LLM}）过滤掉
+     * {@link #MCP_SESSION_TOOLS}</b>：该类执行者走进程内 {@code AgentLoop}，
+     * 无 MCP 会话上下文（{@code McpAuthContext} 无 sessionId），调用这 13 个工具
+     * 100% 401。其余接入类型（{@code CLI_CLIENT} / {@code WEB_BROWSER} / {@code null}）
+     * <b>原样返回</b>，与 {@link #getEnabledTools(Long)} <b>逐字一致</b>（外部链路零回归）。</p>
+     */
+    @Override
+    public List<String> getEnabledToolsForAccess(Long agentId, AgentAccessType accessType) {
+        List<String> enabled = getEnabledTools(agentId);
+        if (accessType != AgentAccessType.API_KEY_LLM) {
+            return enabled;
+        }
+        return enabled.stream()
+                .filter(tool -> !MCP_SESSION_TOOLS.contains(tool))
                 .collect(Collectors.toList());
     }
 

@@ -1,6 +1,7 @@
 package com.helloai.core.agent.service;
 
 import com.baomidou.mybatisplus.extension.service.IService;
+import com.helloai.common.constant.AgentAccessType;
 import com.helloai.core.agent.entity.AgentMcpServer;
 
 import java.util.List;
@@ -39,6 +40,30 @@ public interface AgentMcpServerService extends IService<AgentMcpServer> {
      * 获取 Agent 所有启用的工具名列表。
      */
     List<String> getEnabledTools(Long agentId);
+
+    /**
+     * 按接入类型获取 Agent 可注入的启用工具名列表（L3 P1-1 内循环工具注入修复）。
+     *
+     * <p><b>语义</b>：在 {@link #getEnabledTools(Long)} 的授权结果之上，按
+     * {@code accessType} 追加一层「可注入性」过滤 ——</p>
+     * <ul>
+     *   <li>{@code API_KEY_LLM}（内部 LLM 执行者，进程内 {@code AgentLoop} 无 MCP 会话）：
+     *       剔除 MCP 会话类工具（pullTasks / ack / claimSubTask / startSubTask /
+     *       getSubTaskDetail / heartbeat / uploadArtifact / submitResult / reportBlocked /
+     *       getAgentStatus / getDepsSummary / checkIn / checkOut）——它们依赖
+     *       {@code McpAuthContext} 的 sessionId，进程内调用必然 401；</li>
+     *   <li>{@code CLI_CLIENT} / {@code WEB_BROWSER} / {@code null}：<b>原样返回</b>，
+     *       与 {@link #getEnabledTools(Long)} 逐字一致（外部 Agent 唯一在用链路，零回归）。</li>
+     * </ul>
+     *
+     * <p><b>与 {@code getEnabledTools} 的关系</b>：后者语义<b>不变</b>（其它调用点/授权查询
+     * 仍取全集）；本方法仅用于「工具注入执行上下文」这一消费场景。</p>
+     *
+     * @param agentId    Agent ID
+     * @param accessType 接入类型（可 null，视为非 API_KEY_LLM ⇒ 不过滤）
+     * @return 可注入的工具名列表（绝不返回 {@code null}）
+     */
+    List<String> getEnabledToolsForAccess(Long agentId, AgentAccessType accessType);
 
     /**
      * 获取工具的参数约束（如 pullTasks 的 max 上限）。
