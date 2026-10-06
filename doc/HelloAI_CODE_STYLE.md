@@ -2784,6 +2784,10 @@ mvn -pl helloai-start -am compile
 必须增加对应启动或集成验证。
 ```
 
+> **串行化约定**：同工作树同一时刻只允许一个 mvn/门禁进程；并发会互相删 `target/classes` 致 `ClassNotFoundException`（2026-10-06 实测两次踩踏）。
+>
+> 应用在跑（classpath 指向 `*/target/classes`）时运行门禁须加 `--no-clean`：`bash scripts/ci/ci-gate.sh --no-clean`，跳过 `clean` 以保留运行中应用的类文件。
+
 ***
 
 # 49. 自动化校验

@@ -17,7 +17,11 @@
 #   bash scripts/ci/ci-gate.sh --quick         # 快速：仅 helloai-core 单个测试类（本地自检）
 #   bash scripts/ci/ci-gate.sh --skip-ui       # 跳过前端
 #   bash scripts/ci/ci-gate.sh --offline       # 追加 mvn -o（无网/依赖已缓存时）
+#   bash scripts/ci/ci-gate.sh --no-clean      # 应用在跑时用：跳过 clean，保留各模块 target/classes
 #   bash scripts/ci/ci-gate.sh --quick --skip-ui
+#
+# 【串行化约定】同一工作树同一时刻只允许一个 mvn/门禁进程；并发会互相删
+#   target/classes 致 ClassNotFoundException（2026-10-06 实测两次踩踏）。
 #
 # 退出码：0 全部门禁通过 / 非 0 表示具体门禁失败（见输出 [FAIL] 行）
 # ============================================================================
@@ -34,15 +38,29 @@ source "$SCRIPT_DIR/lib-jdk.sh"
 MODE_FULL=1
 SKIP_UI=0
 OFFLINE=0
+NO_CLEAN=0
 for arg in "$@"; do
   case "$arg" in
     --quick)     MODE_FULL=0 ;;
     --skip-ui)   SKIP_UI=1 ;;
     --offline)   OFFLINE=1 ;;
-    -h|--help)   sed -n '2,20p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    --no-clean)  NO_CLEAN=1 ;;
+    -h|--help)   sed -n '2,26p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) printf '[ci-gate] 未知参数：%s\n' "$arg" >&2; exit 64 ;;
   esac
 done
+
+# --no-clean：应用在跑时用。跳过多模块 `clean`，保留各模块 target/classes。
+# 应用的 classpath 指向 */target/classes（见启动脚本），clean 会删掉它们 →
+# 正在运行的应用抛 ClassNotFoundException / NoClassDefFoundError。
+#
+# 【串行化约定】同一工作树同一时刻只允许一个 mvn/门禁进程；并发会互相删
+#   target/classes 致 ClassNotFoundException（2026-10-06 实测两次踩踏）。
+CLEAN_GOAL="clean"
+if [ "$NO_CLEAN" = "1" ]; then
+  CLEAN_GOAL=""
+  printf '[ci-gate] 已启用 --no-clean：跳过 clean，保留 target/classes\n'
+fi
 
 MVN_ARGS=(-B --no-transfer-progress)
 [ "$OFFLINE" = "1" ] && MVN_ARGS+=(-o)
@@ -83,15 +101,21 @@ done < <(find "$ROOT" -type d -path '*/target/surefire-reports' 2>/dev/null)
 printf '  已清理历史 surefire 报告目录：%s 个\n' "$STALE"
 
 if [ "$MODE_FULL" = "1" ]; then
-  printf '  范围：全部模块 clean test\n'
-  MVN_CMD=(mvn "${MVN_ARGS[@]}" -DskipTests=false clean test)
+  if [ "$NO_CLEAN" = "1" ]; then
+    printf '  范围：全部模块 test（--no-clean：跳过 clean）\n'
+  else
+    printf '  范围：全部模块 clean test\n'
+  fi
+  # shellcheck disable=SC2086  # $CLEAN_GOAL 空串时按词拆分自动省略（实现 --no-clean）
+  MVN_CMD=(mvn "${MVN_ARGS[@]}" -DskipTests=false $CLEAN_GOAL test)
 else
   printf '  范围：--quick（仅 helloai-core 的 SubTaskStateMachineTest）\n'
+  # shellcheck disable=SC2086
   MVN_CMD=(mvn "${MVN_ARGS[@]}" -DskipTests=false -pl helloai-core -am \
             -Dtest=SubTaskStateMachineTest \
             -DfailIfNoSpecifiedTests=false \
             -Dsurefire.failIfNoSpecifiedTests=false \
-            clean test)
+            $CLEAN_GOAL test)
 fi
 printf '  命令：%s\n' "${MVN_CMD[*]}"
 if "${MVN_CMD[@]}"; then
