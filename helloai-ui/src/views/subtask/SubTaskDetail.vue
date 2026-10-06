@@ -647,7 +647,6 @@ const COMPACT_HIDDEN_EVENTS = new Set([
   'sub_task_execute_before_platform',
   'sub_task_deps_context_loaded',
   'sub_task_spec_context_loaded',
-  'attachment_deleted',
   'sub_task_execute_thinking',
   'sub_task_llm_call_start',
   'subtask_review_prompt',

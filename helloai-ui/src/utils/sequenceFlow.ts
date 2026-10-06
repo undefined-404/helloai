@@ -128,7 +128,7 @@ const LABEL: Record<string, string> = {
   sub_task_execute_failed: '执行失败',
   sub_task_execute_result_discarded: '结果丢弃',
   sub_task_report_blocked: '执行受阻',
-  attachment_deleted: '删除产出附件',
+  attachment_deleted: '删除产出',
 
   sub_task_auto_review_passed: '核验通过',
   sub_task_auto_review_rejected: '核验驳回',
