@@ -66,7 +66,8 @@ public interface AgentMapper extends BaseMapper<Agent> {
      * <p>CAS 条件：
      * <ul>
      *   <li>{@code id = #{agentId}}</li>
-     *   <li>{@code last_seen_time < #{cutoff}} — 仍超时（防止 seen() 刚刷新又被改写）</li>
+     *   <li>{@code last_seen_time IS NULL OR last_seen_time < #{cutoff}} — NULL 或仍超时
+     *       （与 {@link #selectByLastSeenBefore} 同口径：NULL 也算超时；防止 seen() 刚刷新又被改写）</li>
      *   <li>{@code online_status IS DISTINCT FROM 'SLEEPING'} — SLEEPING 是管理员手动状态，不覆盖</li>
      *   <li>{@code online_status IS DISTINCT FROM 'OFFLINE'} — 已离线不重复刷写</li>
      *   <li>{@code online_status IS DISTINCT FROM #{newStatus}} — 已是目标状态则不再写

@@ -125,7 +125,7 @@
         这是状态口径校正，不是离线处置；用于消除「写侧 DB online_status 陈旧（如 ONLINE）
         / 读侧 checkOnlineStatus 对『心跳过期 + ACTIVE 租约』返回 IDLE」的双视图分裂。
         CAS 条件：
-          1) last_seen_time 仍 < cutoff（防止 seen() 刚刷新就被改写）
+          1) last_seen_time 为 NULL 或早于 cutoff（NULL 也算超时；防止 seen() 刚刷新就被改写）
           2) online_status 不是 SLEEPING（管理员手动状态不覆盖）
           3) online_status 不是 OFFLINE（已离线不重复刷写）
           4) online_status 与目标值不同（已是目标状态不再写，避免无谓刷新 update_time）
@@ -137,7 +137,7 @@
         SET online_status = #{newStatus},
             update_time = #{now}
         WHERE id = #{agentId}
-          AND last_seen_time &lt; #{cutoff}
+          AND (last_seen_time IS NULL OR last_seen_time &lt; #{cutoff})
           AND (online_status IS DISTINCT FROM 'SLEEPING')
           AND (online_status IS DISTINCT FROM 'OFFLINE')
           AND (online_status IS DISTINCT FROM #{newStatus})

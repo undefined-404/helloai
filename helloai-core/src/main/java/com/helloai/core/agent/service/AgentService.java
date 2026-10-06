@@ -308,11 +308,13 @@ public interface AgentService extends IService<Agent> {
      *
      * <p>阈值口径：调用方传 {@code thresholdMinutes}（常规离线阈值）而非 {@code graceMinutes}
      * （在飞宽限）——只对心跳已达常规离线阈值的 Agent 做校正；在飞宽限中的执行者
-     * （heartbeat 仍在宽限窗口内）不满足 {@code last_seen_time < cutoff}，CAS 自然为 0，不会被误刷。</p>
+     * （heartbeat 仍在宽限窗口内）不满足 {@code last_seen_time IS NULL OR last_seen_time < cutoff}，
+     * CAS 自然为 0，不会被误刷。NULL last_seen_time 也视为超时（与扫描入口
+     * {@code selectByLastSeenBefore} 同口径）。</p>
      *
      * @param agentId   Agent ID
      * @param newStatus 校正目标状态（如 {@code "IDLE"}）
-     * @param cutoff    心跳超时截止时间（{@code last_seen_time < cutoff} 才校正）
+     * @param cutoff    心跳超时截止时间（{@code last_seen_time} 为 NULL 或早于 cutoff 才校正）
      * @param now       写入的 {@code update_time}
      * @return 影响行数；0 = CAS 失败（seen() 已刷新 / 已 SLEEPING / 已 OFFLINE / 已是目标状态）
      */

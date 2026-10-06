@@ -559,6 +559,28 @@ class AgentHealthCheckTaskTest {
             verify(agentService, never())
                     .correctOnlineStatusIfStale(anyLong(), anyString(), any(), any());
         }
+
+        @Test
+        @DisplayName("持 ACTIVE 租约 + last_seen_time=null（NULL 也算超时）→ 仍调用校正，不触达离线链")
+        void shouldCorrectWhenLastSeenNullAndActiveLease() {
+            Agent stale = cliAgent(101L, AgentRole.EXECUTOR);
+            stale.setLastSeenTime(null);
+            when(agentService.listStaleSince(any(OffsetDateTime.class))).thenReturn(List.of(stale));
+            when(agentDutyLeaseService.isOnDuty(101L)).thenReturn(true);
+            when(agentService.correctOnlineStatusIfStale(eq(101L), eq("IDLE"), any(), any()))
+                    .thenReturn(1);
+
+            task.checkHealth();
+
+            // NULL last_seen 也计入超时（与 selectByLastSeenBefore 同口径）⇒ 必须调用校正；
+            // SQL 层谓词 (last_seen_time IS NULL OR last_seen_time < cutoff) 由真机验证覆盖。
+            verify(agentService, times(1))
+                    .correctOnlineStatusIfStale(eq(101L), eq("IDLE"), any(), any());
+            verify(agentService, never())
+                    .markOfflineIfStale(any(), any(), anyString(), anyString(), any());
+            verify(subTaskDispatchService, never()).redispatchOfflineSubTask(anyLong(), anyLong());
+            verify(failureTracker, never()).recordFailure(anyLong());
+        }
     }
 
     private static Agent cliAgent(Long id, AgentRole role) {
