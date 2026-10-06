@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # helloai MCP M5 end-to-end business loop verifier v10
 # 用途：MCP-over-SSE 完整业务闭环 E2E（登录/建 Agent/建 Task/SubTask ->
 #       heartbeat/pullTasks/claim/uploadArtifact/ack/submit/complete 全链路）。

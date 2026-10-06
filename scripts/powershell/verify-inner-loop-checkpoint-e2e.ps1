@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # HelloAI inner-loop checkpoint E2E verification
 # (P0-C checkpoint; audit 2026-09-30 section 12.6 item 3: real E2E
 #  DB evidence for agent_session.snapshot.loop growth across the

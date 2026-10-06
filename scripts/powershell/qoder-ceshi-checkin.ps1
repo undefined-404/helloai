@@ -1,4 +1,4 @@
-# qoder-ceshi MCP checkIn + doorbell 一次性验证脚本
+﻿# qoder-ceshi MCP checkIn + doorbell 一次性验证脚本
 # 流程：
 #   1) GET /mcp/sse 拿 sessionId（Start-Job 后台 curl.exe 写入 sse-qoder.log）
 #   2) POST initialize (HttpClient + StringContent, 必须带 Authorization + charset)

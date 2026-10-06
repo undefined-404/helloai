@@ -1,4 +1,4 @@
-# qoder-ceshi-daemon.ps1
+﻿# qoder-ceshi-daemon.ps1
 # HelloAI EXECUTOR 常驻值班守护进程（PowerShell 5.1 兼容）
 # 用法：
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\powershell\qoder-ceshi-daemon.ps1

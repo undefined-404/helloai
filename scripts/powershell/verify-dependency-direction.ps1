@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # helloai dependency direction guard (regression) v2
 # verify dependency direction for core business domains
 #

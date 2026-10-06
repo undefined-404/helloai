@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # HelloAI token-usage E2E verification
 # (audit 2026-09-30 section 12.3 P2 / B5: real E2E DB evidence
 #  for the token usage capture chain:

@@ -1,4 +1,4 @@
-# 统计 surefire XML 报告 testcase 数（surefire txt/XML 的 tests 属性存在统计 bug，以 testcase 元素为准）
+﻿# 统计 surefire XML 报告 testcase 数（surefire txt/XML 的 tests 属性存在统计 bug，以 testcase 元素为准）
 # Usage: .\count-testcases.ps1 <xmlPath>
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8

@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # helloai execution-dispatch startup guard verifier (S6, v1.0)
 # 用途：验证 ExecutionDispatchValidator 的启动期 fail-fast 守卫。反复用不同
 #       调度配置组合启动 helloai-start，断言非法组合在 @PostConstruct 直接 fail-fast

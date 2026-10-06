@@ -1,4 +1,4 @@
-# qoder-ceshi Agent 后台轮询脚本
+﻿# qoder-ceshi Agent 后台轮询脚本
 # Agent ID: 2078110337491955714
 # 用途：REST 轮询收件箱与可认领子任务，发现新任务时输出告警
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8

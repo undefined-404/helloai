@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # helloai verify-quality-dashboard.ps1
 # Purpose: assert Phase 5 quality metrics dashboard endpoints:
 #   S1 gate closed : GET /api/admin/quality/overview returns business

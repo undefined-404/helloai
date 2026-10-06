@@ -1,4 +1,4 @@
-# executor-onboard.ps1
+﻿# executor-onboard.ps1
 # One-click self-registration for a HelloAI EXECUTOR agent (external Agent onboarding).
 #   S1 POST /api/agents/register        -> { apiKey, id }   (idempotent=true reuses the same agent by name)
 #   S2 GET  /api/agents/getMySkill      -> role SKILL.md with apiKey/baseUrl placeholders substituted

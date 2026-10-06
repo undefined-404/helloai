@@ -1,4 +1,4 @@
-# verify-onboarding-pull.ps1
+﻿# verify-onboarding-pull.ps1
 # Step 3 of the external-agent end-to-end plan: prove the doorbell -> pullTasks loop.
 #   register -> MCP checkIn -> open doorbell -> create ASSIGNED sub_task (real inbox source)
 #   -> doorbell pushes an 'inbox' signal -> external AI calls MCP pullTasks and gets the task.

@@ -1,4 +1,4 @@
-# verify-code-style-p1-paths.ps1
+﻿# verify-code-style-p1-paths.ps1
 # Stage 2 P1: Verify backend Controller path/method naming compliance with CODE_STYLE.md S8.2
 # Usage: .\scripts\powershell\verify-code-style-p1-paths.ps1
 # ------------------------------------------------------------

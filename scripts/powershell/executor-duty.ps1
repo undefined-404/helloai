@@ -1,4 +1,4 @@
-# executor-duty.ps1
+﻿# executor-duty.ps1
 # HelloAI EXECUTOR duty actions for "in-conversation" passive polling mode.
 # Reads baseUrl / apiKey / agentId from executor-config.json (created by executor-onboard.ps1).
 #

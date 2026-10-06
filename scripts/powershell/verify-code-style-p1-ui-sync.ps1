@@ -1,4 +1,4 @@
-# verify-code-style-p1-ui-sync.ps1
+﻿# verify-code-style-p1-ui-sync.ps1
 # Stage 3 P1: Verify frontend paths.ts (single source of truth) is in sync with backend Controller endpoints
 # Channel A: every path literal in paths.ts must exist as a backend endpoint (method-agnostic)
 # Channel B: every request.xxx() call in api/*.ts must reference a valid paths.<block>.<key> (no inline literals)

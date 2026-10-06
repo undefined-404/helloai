@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # helloai attachment versioning (same-name supersede) verifier v1.0
 # Purpose:
 #   S1  upload file a.md v1            -> ACTIVE

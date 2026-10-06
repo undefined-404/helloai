@@ -1,4 +1,4 @@
-# MCP SSE 长连接保持脚本（幂等：每次启动先 truncate 日志）
+﻿# MCP SSE 长连接保持脚本（幂等：每次启动先 truncate 日志）
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 

@@ -1,4 +1,4 @@
-# verify-onboarding-submit.ps1
+﻿# verify-onboarding-submit.ps1
 # Step 5 (final) of the external-agent end-to-end plan: prove the full loop closes with submitResult.
 #   register -> MCP checkIn (on-duty) -> get an ASSIGNED sub_task -> submitResult(success=true)
 #   -> ExecutionResultHandler applies it -> sub_task flows IN_PROGRESS -> REVIEW (accepted).

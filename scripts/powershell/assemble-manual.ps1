@@ -1,4 +1,4 @@
-# assemble-manual.ps1 - deterministic assembly of the final manual from approved chapters.
+﻿# assemble-manual.ps1 - deterministic assembly of the final manual from approved chapters.
 # Rules: chapter bodies are copied verbatim; only heading levels are shifted (H1->H2, H2->H3, H3->H4).
 # Front matter lives in tmp/manual-front-template.md and is filled from derived data.
 # No timestamps are emitted, so repeated runs produce byte-identical output.

@@ -1,4 +1,4 @@
-# verify-e2e-batch-a.ps1 - E2E batch A: Workflow instantiation / Team policy snapshot / Task priority (HTTP-only)
+﻿# verify-e2e-batch-a.ps1 - E2E batch A: Workflow instantiation / Team policy snapshot / Task priority (HTTP-only)
 # Usage: .\verify-e2e-batch-a.ps1 [-BaseUrl http://localhost:6565] [-AgentIds 'id1,id2'] [-SkipA1] [-SkipA2] [-SkipA3]
 # Purpose: verify three closed-loop chains against a RUNNING local backend (started by user):
 #   A1 Workflow (C1/N-001): template -> version -> publish -> instantiate ->

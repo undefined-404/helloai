@@ -1,4 +1,4 @@
-# verify-tool-matrix.ps1
+﻿# verify-tool-matrix.ps1
 # ============================================================
 # helloai A0-3 tool surface consistency verifier
 # 用途：验证三通道工具面一致性 + SKILL 动作清单与服务器声明 diff（防漂移）：

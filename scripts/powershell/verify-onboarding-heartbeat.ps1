@@ -1,4 +1,4 @@
-# verify-onboarding-heartbeat.ps1
+﻿# verify-onboarding-heartbeat.ps1
 # Step 4 of the external-agent end-to-end plan: prove the connection stays alive with dual heartbeat.
 #   Dual heartbeat has two directions:
 #     A) server -> client : DoorbellKeepaliveTask broadcasts event:keepalive every

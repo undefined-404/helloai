@@ -1,4 +1,4 @@
-# executor-api.ps1 - REST business endpoints + generic MCP tool escape hatch.
+﻿# executor-api.ps1 - REST business endpoints + generic MCP tool escape hatch.
 # Companion to executor-duty.ps1 (duty loop) for the parts duty actions do not cover.
 #
 # Usage:

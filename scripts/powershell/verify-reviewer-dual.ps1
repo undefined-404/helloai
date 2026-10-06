@@ -275,7 +275,11 @@ function Ensure-TestAgent {
         }
     }
     if (-not $agentId) {
-        $regBody = @{ name = $Name; role = $RoleValue; description = 'verify-reviewer-dual preset agent'; accessType = $AccessType; modelType = $ModelType; idempotent = $true } | ConvertTo-Json -Depth 6
+        $regBody = @{ name = $Name; role = $RoleValue; description = 'verify-reviewer-dual preset agent'; accessType = $AccessType; idempotent = $true }
+        # CLI_CLIENT 无 LLM 模型绑定：modelType 留空即不写入请求体（register 对空 modelType 直接放行）；
+        # 仅当显式传入有效 providerCode:modelName 时才携带（API_KEY_LLM reviewer 仍须带）。
+        if (-not [string]::IsNullOrWhiteSpace($ModelType)) { $regBody['modelType'] = $ModelType }
+        $regBody = $regBody | ConvertTo-Json -Depth 6
         $regResp = Invoke-Json -Method POST -Uri ($BaseUrl + '/api/agents/register') -Body $regBody -Headers @{}
         if ($regResp.Code -ne 200) {
             Write-Host ('[agent] FAIL register ' + $Name + ' HTTP=' + $regResp.Code + ' body=' + $regResp.Body)
@@ -301,8 +305,15 @@ function Ensure-TestAgent {
             }
         }
     }
-    # SQL fallback: force ACTIVE + distinct model_type so pickDual pairing is stable
-    $fixSql = "UPDATE agent SET status = 'ACTIVE', model_type = '" + $ModelType + "' WHERE id = " + $agentId + " AND deleted = 0;"
+    # SQL fallback: force ACTIVE (+ distinct model_type when provided, so pickDual
+    # pairing is stable); CLI_CLIENT 无 modelType 时归空为 NULL（与线上 trae-excutor 一致）。
+    $fixSql = "UPDATE agent SET status = 'ACTIVE'"
+    if (-not [string]::IsNullOrWhiteSpace($ModelType)) {
+        $fixSql = $fixSql + ", model_type = '" + $ModelType + "'"
+    } else {
+        $fixSql = $fixSql + ", model_type = NULL"
+    }
+    $fixSql = $fixSql + " WHERE id = " + $agentId + " AND deleted = 0;"
     $fixOut = Join-Path $scriptDir 'verify-reviewer-dual-agentfix.out'
     $null = Run-Psql -Sql $fixSql -OutFile $fixOut
     return @{ Id = $agentId; ApiKey = [string]$agentApiKey }
@@ -603,7 +614,7 @@ Write-Output '[A1] admin token acquired'
 # ============================================================
 Write-Output ''
 Write-Output '=== [agents] ensure preset test agents ==='
-$exec = Ensure-TestAgent -Name $execName -RoleValue 'EXECUTOR' -AccessType 'CLI_CLIENT' -ModelType 'deepseek:deepseek-v4-pro' -AdminToken $adminToken
+$exec = Ensure-TestAgent -Name $execName -RoleValue 'EXECUTOR' -AccessType 'CLI_CLIENT' -AdminToken $adminToken
 $revA = Ensure-TestAgent -Name $revAName -RoleValue 'REVIEWER' -AccessType 'API_KEY_LLM' -ModelType $ReviewerModelA -AdminToken $adminToken
 $revB = Ensure-TestAgent -Name $revBName -RoleValue 'REVIEWER' -AccessType 'API_KEY_LLM' -ModelType $ReviewerModelB -AdminToken $adminToken
 if (-not $exec) {

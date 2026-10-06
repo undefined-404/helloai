@@ -37,13 +37,9 @@ param(
     [string]$AdminUsername = 'admin',
     [string]$AdminPassword = 'admin123',
     [int]$PollIntervalSec = 3,
-    [int]$DispatchWaitSec = 60,
-    # provider:model pairs for preset agents; must exist in llm_provider_model
-    # and be role-free within the role (same role + same model is unique),
-    # otherwise register pre-validation fails and the script aborts.
-    [string]$ExecutorModelA = 'dashscope:qwen3.6-Flash',
-    [string]$ExecutorModelB = 'dashscope:qwen3.7-plus',
-    [string]$ReviewerModel  = 'moonshot:kimi-k3'
+    [int]$DispatchWaitSec = 60
+    # 三个 preset agent 统一以 CLI_CLIENT 注册：外部 agent 自带模型，平台不管理其 model_type
+    # （与线上 trae-excutor/TeleAgent-executor 一致，落库为空），故不再需要 provider:model 参数。
 )
 
 $ErrorActionPreference = 'Stop'
@@ -194,7 +190,11 @@ function Ensure-TestAgent {
         }
     }
     if (-not $agentId) {
-        $regBody = @{ name = $Name; role = $RoleValue; description = 'verify-quality-profile preset agent'; accessType = $AccessType; modelType = $ModelType; idempotent = $true } | ConvertTo-Json -Depth 6
+        $regBody = @{ name = $Name; role = $RoleValue; description = 'verify-quality-profile preset agent'; accessType = $AccessType; idempotent = $true }
+        # CLI_CLIENT 无 LLM 模型绑定：modelType 留空即不写入请求体（register 对空 modelType 直接放行）；
+        # 仅当显式传入有效 providerCode:modelName 时才携带（保留可覆盖性）。
+        if (-not [string]::IsNullOrWhiteSpace($ModelType)) { $regBody['modelType'] = $ModelType }
+        $regBody = $regBody | ConvertTo-Json -Depth 6
         $regResp = Invoke-Json -Method POST -Uri ($BaseUrl + '/api/agents/register') -Body $regBody -Headers @{}
         if ($regResp.Code -ne 200) {
             Write-Host ('[agent] FAIL register ' + $Name + ' HTTP=' + $regResp.Code + ' body=' + $regResp.Body)
@@ -224,10 +224,15 @@ function Ensure-TestAgent {
         Write-Host ('[agent] FAIL ' + $Name + ' apiKey empty (re-register manually or clean the agent)')
         return $null
     }
-    # SQL fallback: force ACTIVE + correct model_type so reuse is idempotent
-    # (same precedent as verify-reviewer-dual.ps1; register pre-validation
-    # rejects legacy/gpt-4o model_type on the next run otherwise).
-    $fixSql = "UPDATE agent SET status = 'ACTIVE', model_type = '" + $ModelType + "' WHERE id = " + $agentId + " AND deleted = 0;"
+    # SQL fallback: force ACTIVE so reuse is idempotent（消除残留模型名的 register 预校验风险）。
+    # CLI_CLIENT 语义上不绑定 LLM 模型：$ModelType 留空时 model_type 归空为 NULL（对齐线上 trae-excutor）。
+    $fixSql = "UPDATE agent SET status = 'ACTIVE'"
+    if (-not [string]::IsNullOrWhiteSpace($ModelType)) {
+        $fixSql = $fixSql + ", model_type = '" + $ModelType + "'"
+    } else {
+        $fixSql = $fixSql + ", model_type = NULL"
+    }
+    $fixSql = $fixSql + " WHERE id = " + $agentId + " AND deleted = 0;"
     $fixOut = Join-Path $scriptDir 'verify-quality-profile-agentfix.out'
     $null = Run-Psql -Sql $fixSql -OutFile $fixOut
     return @{ Id = $agentId; ApiKey = [string]$agentApiKey }
@@ -445,9 +450,9 @@ Assert-Pass ($gateResp.Code -eq 200) 'A1.5-quality-gate' ('PUT /api/admin/config
 # ============================================================
 Write-Output ''
 Write-Output '=== [agents] ensure preset test agents ==='
-$execA = Ensure-TestAgent -Name $execAName -RoleValue 'EXECUTOR' -AccessType 'CLI_CLIENT' -ModelType $ExecutorModelA -AdminToken $adminToken
-$execB = Ensure-TestAgent -Name $execBName -RoleValue 'EXECUTOR' -AccessType 'CLI_CLIENT' -ModelType $ExecutorModelB -AdminToken $adminToken
-$reviewer = Ensure-TestAgent -Name $reviewerName -RoleValue 'REVIEWER' -AccessType 'CLI_CLIENT' -ModelType $ReviewerModel -AdminToken $adminToken
+$execA = Ensure-TestAgent -Name $execAName -RoleValue 'EXECUTOR' -AccessType 'CLI_CLIENT' -AdminToken $adminToken
+$execB = Ensure-TestAgent -Name $execBName -RoleValue 'EXECUTOR' -AccessType 'CLI_CLIENT' -AdminToken $adminToken
+$reviewer = Ensure-TestAgent -Name $reviewerName -RoleValue 'REVIEWER' -AccessType 'CLI_CLIENT' -AdminToken $adminToken
 if (-not $execA -or -not $execB -or -not $reviewer) {
     Write-Output 'FAIL : preset agents unavailable'
     exit 1

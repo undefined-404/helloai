@@ -1,4 +1,4 @@
-# outer-trae-daemon.ps1
+﻿# outer-trae-daemon.ps1
 # HelloAI EXECUTOR outer_trae_executor (2084920580641759234)
 # Usage:
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\powershell\outer-trae-daemon.ps1

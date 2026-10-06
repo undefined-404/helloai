@@ -1,4 +1,4 @@
-# qoder-ceshi Agent 门铃 SSE 后台长连接脚本
+﻿# qoder-ceshi Agent 门铃 SSE 后台长连接脚本
 # 前置：checkIn 已成功，租约 ACTIVE
 # 用途：保持 GET /api/agents/doorbell/sse 长连接，自动追加心跳后保持在线
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8

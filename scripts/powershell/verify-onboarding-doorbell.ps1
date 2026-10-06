@@ -1,4 +1,4 @@
-# verify-onboarding-doorbell.ps1
+﻿# verify-onboarding-doorbell.ps1
 # Step 2 of the external-agent end-to-end plan: prove the REAL onboarding path
 #   register -> MCP checkIn (self-service apiKey, NO db seed) -> doorbell SSE connected.
 # This complements verify-doorbell-e2e.ps1 (which DB-inserts a lease); here we prove an

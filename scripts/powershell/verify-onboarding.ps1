@@ -1,4 +1,4 @@
-# verify-onboarding.ps1
+﻿# verify-onboarding.ps1
 # Step 1 of the external-agent end-to-end plan: verify one-click self-registration.
 #   S1 POST /api/agents/register           -> returns apiKey + id (R.code == 200)
 #   S2 GET  /api/agents/me/skill (Bearer)  -> skill placeholders fully substituted
