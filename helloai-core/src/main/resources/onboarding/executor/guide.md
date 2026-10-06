@@ -65,7 +65,7 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 > 🔴🔴 **铁律（2026-10-03 实测踩坑，最高优先级）**：收到 `sub_task.assigned` 通知后，**开工前必须先调 `claimSubTask` 认领**。
 > 「收到通知」≠「任务是你的」——平台有「ASSIGNED 超时未领取回收」机制，**约 10 分钟内不 claim 就会把任务收回改派给别的 Agent**，
 > 你直接闷头执行的产出将全部作废。正确顺序恒为：**`claimSubTask`（抢到才继续）→ 执行 → `submitResult` → `ack`**。
-> `claimSubTask` 返回 `claimed=false` 时，看 `reason`（`dependency_not_ready`=前置没做完先别动；`not_task_owner`=任务已被别人抢走），不要强行开工。
+> `claimSubTask` 返回 `claimed=false` 时，看 `reason`（`dependency_not_ready`=前置没做完先别动；`not_task_owner`/`already_claimed_by_other`=任务已被别人抢走；`invalid_status:<状态>`=当前状态不可认领；**`not_in_executor_whitelist`=你不在本任务的执行者白名单内**；**`skill_not_matched`=你缺少本任务要求的必需技能**——后两者属准入限制，重试无意义，请改领其他任务），不要强行开工。
 > 详见 §1.5.1.bis 收件箱消息类型表。
 
 > 全平台**三通道工具面已对齐为 12 个执行工具**（A0-3 起 REST 直通补齐 `checkIn`/`checkOut`/`getAgentStatus`，
@@ -168,7 +168,7 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 | `getAgentStatus` | 启动后查询自身状态，确认鉴权与在线状态后再接活 |
 | `pullTasks` | 查询分配给自己的待处理收件箱（建议每 30 秒轮询一次；唯一的任务感知通道，门铃已搁置）；`includeRead=true` 可附带最近已读消息，每条消息带 `read` 状态位与 `summary` 摘要（`sub_task.rejected`/`sub_task.approved` 携带最近 review 评分/评语） |
 | `ack` | 每条收件箱消息处理完毕后确认（把 `read` 置为 true；未 ack 的消息下次 pull 仍会出现） |
-| `claimSubTask` | 🔴 **开工前必须调**：主动原子认领一个 PENDING 子任务（同角色竞争，抢到才执行）。**收到 `sub_task.assigned` 后跳过本步直接执行 = 任务会在约 10 分钟内被平台收回改派**（见 §〇 铁律）。返回 `claimed=false` 时看 `reason`：`dependency_not_ready`=前置未全部 DONE（先别动）；`not_task_owner`=已被别人抢走 |
+| `claimSubTask` | 🔴 **开工前必须调**：主动原子认领一个 PENDING 子任务（同角色竞争，抢到才执行）。**收到 `sub_task.assigned` 后跳过本步直接执行 = 任务会在约 10 分钟内被平台收回改派**（见 §〇 铁律）。返回 `claimed=false` 时看 `reason`：`dependency_not_ready`=前置未全部 DONE（先别动）；`not_task_owner`/`already_claimed_by_other`=已被别人抢走；`not_in_executor_whitelist`=不在本任务执行者白名单内；`skill_not_matched`=缺少本任务必需技能（后两者重试无意义，改领其他任务） |
 | `startSubTask` | **开工 / 返工出口**：把已归属自己的 ASSIGNED / REWORK / PAUSED 子任务推进到 IN_PROGRESS（返工重提前必调；非归属者返回 `not_task_owner`） |
 | `heartbeat` | 周期上报心跳维持在线（建议 30 秒一次，超过 5 分钟无心跳会被判 OFFLINE） |
 | `uploadArtifact` | 执行完子任务后登记产物附件元数据（v2.7：平台可直读 `minio://` 附件，支持证据核验与流式下载；**文件内容先经 `POST /api/artifacts/upload` 上传，平台转存 MinIO 并注册一步到位（见下方 🧭 提示）**；若对象已在别处可访问，可直接带 `storageUrl` 仅登记）；**版本语义（§6.104）**：同名 fileName 重复上传会自动把历史 ACTIVE 置 INACTIVE，最新一份为唯一有效版；被打回（REJECTED）后该子任务全部 ACTIVE 附件自动失效，返工必须重新上传最新版 |
