@@ -3,6 +3,7 @@ package com.helloai.core.agent.mcp;
 import com.helloai.common.constant.AgentDutyLeaseStatus;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentEventType;
+import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.AttachmentStatus;
 import com.helloai.common.constant.SubTaskStatus;
@@ -14,10 +15,12 @@ import com.helloai.core.agent.entity.AgentInbox;
 import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.port.AttachmentPort;
 import com.helloai.core.agent.port.AttachmentRef;
+import com.helloai.core.agent.port.SubTaskClaimConstraint;
 import com.helloai.core.agent.port.SubTaskCommandPort;
 import com.helloai.core.agent.port.SubTaskQueryPort;
 import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.port.TaskRunningSpecPort;
+import com.helloai.core.agent.port.TaskTimelinePort;
 import com.helloai.core.agent.port.UncertaintySnapshot;
 import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
@@ -44,6 +47,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.doThrow;
@@ -86,6 +90,7 @@ class McpToolServiceTest {
     @Mock private AgentEventRecorder agentEventRecorder;
     @Mock private AgentDutyLeaseService agentDutyLeaseService;
     @Mock private TaskRunningSpecPort taskRunningSpecPort;
+    @Mock private TaskTimelinePort taskTimelinePort;
 
     private McpToolService mcpToolService;
 
@@ -95,7 +100,7 @@ class McpToolServiceTest {
                 agentService, agentInboxService, agentMcpServerService,
                 subTaskQueryPort, subTaskCommandPort, heartbeatService,
                 attachmentPort, agentExecutionRecordService, executionResultHandler, agentEventRecorder,
-                agentDutyLeaseService, taskRunningSpecPort);
+                agentDutyLeaseService, taskRunningSpecPort, taskTimelinePort);
 
         Agent agent = new Agent();
         agent.setId(AGENT_ID);
@@ -1033,6 +1038,92 @@ class McpToolServiceTest {
 
         assertThat(result.isClaimed()).isFalse();
         assertThat(result.getDetail()).isNull();
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  claimSubTask 认领准入闸门（P1 权限绕过修复）
+    //  口径与自动派发链同源（白名单 + required_skills），此前 MCP 链未校验
+    //  ══════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("claimSubTask：执行者白名单外 → claimed=false + not_in_executor_whitelist，不入原子认领并落拒绝事件")
+    void shouldRejectClaimWhenAgentNotInExecutorWhitelist() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("claimSubTask"))).thenReturn(true);
+        SubTaskSnapshot pending = SubTaskSnapshot.builder()
+                .id(SUB_TASK_ID)
+                .taskId(TASK_ID)
+                .status(SubTaskStatus.PENDING)
+                .build();
+        when(subTaskQueryPort.findById(SUB_TASK_ID)).thenReturn(pending);
+        // 白名单只钉 999，当前认领者 AGENT_ID=1 在白名单外
+        when(subTaskQueryPort.claimConstraint(SUB_TASK_ID))
+                .thenReturn(SubTaskClaimConstraint.of(List.of(OTHER_AGENT), List.of()));
+
+        McpToolService.ClaimSubTaskResult result = mcpToolService.claimSubTask(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(result.isOk()).isTrue();
+        assertThat(result.isClaimed()).isFalse();
+        assertThat(result.getReason()).isEqualTo("not_in_executor_whitelist");
+        // 白名单外不得进入原子认领，也不得埋 AGENT_STARTED
+        verify(subTaskCommandPort, never()).claimAtomic(eq(SUB_TASK_ID), eq(AGENT_ID));
+        verifyNoInteractions(agentEventRecorder);
+        // 可观测：拒绝必须落 timeline，否则前端「点了没反应」
+        verify(taskTimelinePort).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_claim_rejected"),
+                eq(AgentRole.SYSTEM), eq(AGENT_ID), anyMap());
+    }
+
+    @Test
+    @DisplayName("claimSubTask：必需技能不匹配 → claimed=false + skill_not_matched")
+    void shouldRejectClaimWhenSkillNotMatched() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("claimSubTask"))).thenReturn(true);
+        SubTaskSnapshot pending = SubTaskSnapshot.builder()
+                .id(SUB_TASK_ID)
+                .taskId(TASK_ID)
+                .status(SubTaskStatus.PENDING)
+                .build();
+        when(subTaskQueryPort.findById(SUB_TASK_ID)).thenReturn(pending);
+        // 无白名单，但要求技能 eng-verification；setUp 的 Agent 无 skills ⇒ 不匹配
+        when(subTaskQueryPort.claimConstraint(SUB_TASK_ID))
+                .thenReturn(SubTaskClaimConstraint.of(List.of(), List.of("eng-verification")));
+
+        McpToolService.ClaimSubTaskResult result = mcpToolService.claimSubTask(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(result.isClaimed()).isFalse();
+        assertThat(result.getReason()).isEqualTo("skill_not_matched");
+        verify(subTaskCommandPort, never()).claimAtomic(eq(SUB_TASK_ID), eq(AGENT_ID));
+        verify(taskTimelinePort).recordEvent(
+                eq(TASK_ID), eq(SUB_TASK_ID), eq("sub_task_claim_rejected"),
+                eq(AgentRole.SYSTEM), eq(AGENT_ID), anyMap());
+    }
+
+    @Test
+    @DisplayName("claimSubTask：无约束（claimConstraint 返回 null）→ 放行，正常原子认领")
+    void shouldAllowClaimWhenNoConstraint() {
+        when(agentMcpServerService.isToolEnabled(eq(AGENT_ID), eq("claimSubTask"))).thenReturn(true);
+        SubTaskSnapshot pending = SubTaskSnapshot.builder()
+                .id(SUB_TASK_ID)
+                .taskId(TASK_ID)
+                .status(SubTaskStatus.PENDING)
+                .build();
+        SubTaskSnapshot claimed = SubTaskSnapshot.builder()
+                .id(SUB_TASK_ID)
+                .taskId(TASK_ID)
+                .assignedAgentId(AGENT_ID)
+                .status(SubTaskStatus.IN_PROGRESS)
+                .version(2)
+                .build();
+        when(subTaskQueryPort.findById(SUB_TASK_ID)).thenReturn(pending, claimed);
+        when(subTaskQueryPort.claimConstraint(SUB_TASK_ID)).thenReturn(null);
+        when(subTaskQueryPort.isReady(SUB_TASK_ID)).thenReturn(true);
+        when(subTaskCommandPort.claimAtomic(SUB_TASK_ID, AGENT_ID)).thenReturn(true);
+
+        McpToolService.ClaimSubTaskResult result = mcpToolService.claimSubTask(AGENT_ID, SUB_TASK_ID);
+
+        assertThat(result.isClaimed()).isTrue();
+        verify(subTaskCommandPort).claimAtomic(eq(SUB_TASK_ID), eq(AGENT_ID));
+        verify(taskTimelinePort, never()).recordEvent(
+                any(), any(), eq("sub_task_claim_rejected"), any(), any(), anyMap());
     }
 
     // ══════════════════════════════════════════════════════════════

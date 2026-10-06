@@ -500,21 +500,41 @@ public class AgentSelector {
 
         /** 候选是否满足约束：白名单内（若有）且技能全匹配（若有）。防御式：agent 为 null 直接拒绝。 */
         public boolean allows(Agent agent) {
+            return denialReason(agent) == null;
+        }
+
+        /**
+         * 判定候选被约束拒绝的<b>原因码</b>（未拒绝返回 {@code null}）。
+         *
+         * <p>与 {@link #allows(Agent)} <b>同源单实现</b>：{@code allows} 即
+         * {@code denialReason(agent) == null}，故两者判定<b>逐字一致</b>、永不分叉。
+         * 抽出原因码是为了让<b>非选人入口</b>（如 MCP 认领闸门）也能复用同一套白名单 /
+         * 技能口径，并给出可读的拒绝理由（{@code not_in_executor_whitelist} /
+         * {@code skill_not_matched}），避免规则在各入口各写一份。</p>
+         *
+         * <p><b>口径单源</b>：白名单取任务 {@code agent_policy.executorAgentIds}、
+         * 技能取 {@code required_skills}（归一化后 AND 匹配，A3 同义词互命中），
+         * 与自动派发链完全同款。</p>
+         *
+         * @param agent 待判定候选
+         * @return {@code null}=满足约束；否则为拒绝原因码
+         */
+        public String denialReason(Agent agent) {
             if (agent == null) {
-                return false;
+                return "agent_not_found";
             }
             if (allowedAgentIds != null && !allowedAgentIds.isEmpty()
                     && (agent.getId() == null || !allowedAgentIds.contains(agent.getId()))) {
-                return false;
+                return "not_in_executor_whitelist";
             }
             if (requiredSkills != null && !requiredSkills.isEmpty()) {
                 List<String> skills = agent.getSkills();
                 // A3：匹配前归一化（trim + 小写 + 同义词归并），"powershell"/"bash" 与 "shell" 互相命中
                 if (skills == null || skills.isEmpty() || !SkillNormalizer.matches(skills, requiredSkills)) {
-                    return false;
+                    return "skill_not_matched";
                 }
             }
-            return true;
+            return null;
         }
     }
 }

@@ -1,5 +1,6 @@
 package com.helloai.core.task.adapter;
 
+import com.helloai.core.agent.port.SubTaskClaimConstraint;
 import com.helloai.core.agent.port.SubTaskQueryPort;
 import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.task.entity.SubTask;
@@ -91,5 +92,17 @@ public class SubTaskQueryPortAdapter implements SubTaskQueryPort {
     public boolean isExecutionDense(Long subTaskId) {
         SubTask subTask = subTaskService.getById(subTaskId);
         return subTask != null && SubTaskDispatchService.isExecutionDense(subTask);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>整体不透明：白名单口径（{@code agent_policy.executorAgentIds}）与技能口径
+     * （子任务级 ∪ 任务级）由 {@link SubTaskService#claimConstraint} 单源持有，与派发链同源；
+     * 本适配器不做任何规则复制，仅薄委托。</p>
+     */
+    @Override
+    public SubTaskClaimConstraint claimConstraint(Long subTaskId) {
+        return subTaskService.claimConstraint(subTaskId);
     }
 }

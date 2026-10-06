@@ -117,4 +117,21 @@ public interface SubTaskQueryPort {
      * @return 命中执行密集信号返回 {@code true}；子任务不存在返回 {@code false}
      */
     boolean isExecutionDense(Long subTaskId);
+
+    /**
+     * 取「认领准入」所需的白名单 + 必需技能约束（MCP 认领闸门 P1 修复）。
+     *
+     * <p><b>整体不透明</b>：白名单口径（任务 {@code agent_policy.executorAgentIds}）与
+     * 技能口径（子任务级 ∪ 任务级 {@code required_skills}）单源都在提供方 task 域，
+     * 消费方不做任何规则复制。与 {@link #mergeSkills(Long)} 同源（提供方复用的正是派发链
+     * 同款合并），口径必然一致。</p>
+     *
+     * <p><b>为什么返回 {@link SubTaskClaimConstraint} 而非白名单 / 技能两个平行方法</b>：
+     * 二者是同一次准入判定的两个维度，合并成一个值对象可让「不约束」以 {@code null} 单点表达，
+     * 避免消费方对两个返回值分别判空、口径漂移。</p>
+     *
+     * @param subTaskId 子任务 ID
+     * @return 认领约束；<b>无约束（白名单与技能均空）或子任务不存在时返回 {@code null}</b>
+     */
+    SubTaskClaimConstraint claimConstraint(Long subTaskId);
 }

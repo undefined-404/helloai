@@ -17,6 +17,7 @@ import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.event.AgentEventContextResolver;
 import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.port.SubTaskSnapshot;
+import com.helloai.core.agent.port.SubTaskClaimConstraint;
 import com.helloai.core.agent.service.HeartbeatService;
 import com.helloai.core.agent.service.AgentInboxService;
 import com.helloai.core.agent.service.AgentOutboxService;
@@ -33,6 +34,7 @@ import com.helloai.core.task.port.UncertaintyView;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.entity.Uncertainty;
 import com.helloai.core.task.mapper.SubTaskMapper;
+import com.helloai.core.task.policy.TaskAgentPolicy;
 import com.helloai.core.task.port.ReviewFact;
 import com.helloai.core.task.port.ReviewPort;
 import com.helloai.core.task.port.ReviewSummary;
@@ -1408,6 +1410,33 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     @Override
     public List<String> mergeSkills(Long subTaskId) {
         return mergeSkills(subTaskId == null ? null : getById(subTaskId));
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p><b>复用既有口径，不新造规则</b>：白名单取任务 {@code agent_policy.executorAgentIds}
+     * （{@link TaskAgentPolicy#executorAgentIds}，与派发链同源）；技能取
+     * {@link #mergeSkills(Long)}（子任务级 ∪ 任务级，与 {@code SubTaskDispatchServiceImpl.resolveConstraints}
+     * 同源）。两者由 {@code SubTaskClaimConstraint.of} 合并，均空即返回 {@code null}（不约束）。</p>
+     *
+     * <p><b>只依赖 {@code agent.port} 契约</b>：本方法 import 的是
+     * {@code agent.port.SubTaskClaimConstraint}（顺向合法），<b>不</b> import
+     * {@code agent.entity.Agent}；匹配动作由消费方 agent 域用既有
+     * {@code AgentSelector.AgentSelectionConstraints.denialReason} 完成。</p>
+     */
+    @Override
+    public SubTaskClaimConstraint claimConstraint(Long subTaskId) {
+        SubTask subTask = subTaskId == null ? null : getById(subTaskId);
+        if (subTask == null) {
+            return null;
+        }
+        TaskService taskService = taskServiceProvider.getIfAvailable();
+        Task task = taskService == null ? null : taskService.getById(subTask.getTaskId());
+        List<Long> whitelist = task == null ? List.of()
+                : TaskAgentPolicy.executorAgentIds(task.getAgentPolicy());
+        List<String> skills = mergeSkills(subTask);
+        return SubTaskClaimConstraint.of(whitelist, skills);
     }
 
     @Override

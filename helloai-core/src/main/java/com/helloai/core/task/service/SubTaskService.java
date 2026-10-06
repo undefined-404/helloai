@@ -8,6 +8,7 @@ import com.helloai.core.task.port.SubTaskDraft;
 import com.helloai.core.task.port.SubTaskView;
 import com.helloai.core.task.entity.Uncertainty;
 import com.helloai.core.agent.port.TaskDispatchPort;
+import com.helloai.core.agent.port.SubTaskClaimConstraint;
 import lombok.Data;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -526,6 +527,15 @@ public interface SubTaskService extends IService<SubTask> {
 
     /** 技能并集（W6：跨域形参取 ID，由提供方自读实体）。 */
     List<String> mergeSkills(Long subTaskId);
+
+    /**
+     * 取「认领准入」约束（MCP 认领闸门 P1 修复；跨域形参取 ID，由提供方自读实体）。
+     *
+     * <p><b>整体不透明</b>：白名单取任务 {@code agent_policy.executorAgentIds}、
+     * 技能取 {@link #mergeSkills(Long)}（子任务级 ∪ 任务级），与自动派发链
+     * {@code resolveConstraints} <b>同源复用</b>，不新造规则。无约束或子任务不存在返回 {@code null}。</p>
+     */
+    SubTaskClaimConstraint claimConstraint(Long subTaskId);
 
     /** 按 taskId 查询子任务快照（createTime asc，与最终报告证据口径一致）。 */
     List<SubTaskView> listViewsByTaskId(Long taskId);

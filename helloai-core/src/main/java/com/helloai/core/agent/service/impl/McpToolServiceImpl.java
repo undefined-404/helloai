@@ -15,6 +15,7 @@ import com.helloai.core.agent.service.McpToolService.ReportBlockedResult;
 import com.helloai.core.agent.service.McpToolService.SubmitResultResult;
 import com.helloai.core.agent.service.McpToolService.UploadArtifactResult;
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.WorkMode;
@@ -29,9 +30,12 @@ import com.helloai.core.agent.entity.*;
 import com.helloai.core.agent.port.AttachmentPort;
 import com.helloai.core.agent.port.AttachmentRef;
 import com.helloai.core.agent.port.SubTaskCommandPort;
+import com.helloai.core.agent.port.SubTaskClaimConstraint;
 import com.helloai.core.agent.port.SubTaskQueryPort;
 import com.helloai.core.agent.port.SubTaskSnapshot;
 import com.helloai.core.agent.port.TaskRunningSpecPort;
+import com.helloai.core.agent.port.TaskTimelinePort;
+import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.AgentInboxService;
@@ -87,6 +91,8 @@ public class McpToolServiceImpl implements McpToolService {
     private final AgentEventRecorder agentEventRecorder;
     private final AgentDutyLeaseService agentDutyLeaseService;
     private final TaskRunningSpecPort taskRunningSpecPort;
+    /** P1 认领准入闸门可观测：认领被拒落 task_timeline（{@code sub_task_claim_rejected}，write-only 降级）。 */
+    private final TaskTimelinePort taskTimelinePort;
 
     /**
      * 依赖产出单条内容截断上限（与 SubTaskExecutionService.DEP_CONTENT_MAX_CHARS 对齐，避免两处口径漂移）。
@@ -290,6 +296,33 @@ public class McpToolServiceImpl implements McpToolService {
             return result;
         }
 
+        // P1 权限闸门：执行者白名单 + 必需技能。此前该口径只在自动派发链
+        // （SubTaskDispatchServiceImpl.resolveConstraints → AgentSelectionConstraints.allows）
+        // 生效，MCP 认领链完全未校验 ⇒ 白名单外 ACTIVE EXECUTOR 可抢走白名单任务的 PENDING 子任务。
+        // 口径整体不透明：白名单/技能单源在提供方 task 域（SubTaskQueryPort.claimConstraint），
+        // 本层不复制规则，只用既有 AgentSelectionConstraints.denialReason 判定。
+        // null 契约 = 不约束 = 放行（与派发链 DispatchConstraints.of 同语义）。
+        // ★ 位置关键：必须在「已归属自己」幂等分支之后 —— 幂等 ASSIGNED/IN_PROGRESS
+        //   不得被网关拦住（verify-mcp-e2e.ps1 STEP J 依赖此幂等路径）。
+        SubTaskClaimConstraint claimConstraint = subTaskQueryPort.claimConstraint(subTaskId);
+        if (claimConstraint != null) {
+            // assertAgentActive 已确保 agent 存在；此处为 agent 域原生实体，无需新增跨域依赖
+            Agent claimer = agentService.getById(agentId);
+            String denial = AgentSelector.AgentSelectionConstraints
+                    .of(claimConstraint.allowedAgentIds(), claimConstraint.requiredSkills())
+                    .denialReason(claimer);
+            if (denial != null) {
+                recordClaimRejected(subTask.taskId(), subTaskId, agentId, denial);
+                ClaimSubTaskResult result = new ClaimSubTaskResult();
+                result.setOk(true);
+                result.setClaimed(false);
+                result.setReason(denial);
+                log.warn("MCP 认领被拒（准入约束未过）: subTaskId={}, agentId={}, reason={}",
+                        subTaskId, agentId, denial);
+                return result;
+            }
+        }
+
         // P0-1 依赖门禁：前置未全部 DONE 时不得认领。与内部分发链共用
         // SubTaskService.isReady 口径（SubTaskDispatchServiceImpl/PendingOrphanTask 已复用），
         // 避免外部 Agent 通道旁路依赖校验、在无前置产出时抢单。
@@ -425,6 +458,26 @@ public class McpToolServiceImpl implements McpToolService {
         } catch (Exception e) {
             log.warn("Agent 事件记录失败（事件 write-only，降级不阻断认领）: type={}, subTaskId={}, agentId={}, err={}",
                     AgentEventType.AGENT_STARTED, subTaskId, agentId, e.getMessage());
+        }
+    }
+
+    /**
+     * P1 认领准入闸门可观测：认领被拒（白名单外 / 技能不匹配）落 task_timeline。
+     *
+     * <p>不落此事件则「白名单外 Agent 点了认领却毫无反应」，OPS 泳道看不到拒绝节点、
+     * 无法区分「被拒」与「没点」。整段 write-only 降级：失败仅告警、不阻断主链路
+     * （与 {@link #recordClaimStarted} 同款范式）。</p>
+     *
+     * @param reason 拒绝原因码（{@code not_in_executor_whitelist} / {@code skill_not_matched}）
+     */
+    private void recordClaimRejected(Long taskId, Long subTaskId, Long agentId, String reason) {
+        try {
+            taskTimelinePort.recordEvent(taskId, subTaskId, "sub_task_claim_rejected",
+                    AgentRole.SYSTEM, agentId,
+                    Map.of("reason", reason, "agentId", String.valueOf(agentId)));
+        } catch (Exception e) {
+            log.warn("认领被拒事件记录失败（事件 write-only，降级不阻断）: subTaskId={}, agentId={}, err={}",
+                    subTaskId, agentId, e.getMessage());
         }
     }
 
