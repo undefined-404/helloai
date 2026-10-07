@@ -22,6 +22,7 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.DefaultToolCallingChatOptions;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -65,7 +66,14 @@ public class ChatModelToolLoop implements AgentLoop {
             return AgentLoopResult.error("agent loop requires chatModel and toolExecutor", 0, 0);
         }
         List<Message> messages = new ArrayList<>();
-        messages.add(new SystemMessage(input.systemPrompt() != null ? input.systemPrompt() : ""));
+        // 空 system 消息不发送：部分 provider（moonshot / kimi）对 `role=system` 的空内容
+        // 直接返回 400 "the message at position 0 with role 'system' must not be empty"，
+        // 而 deepseek / minimax 会忽略——同一份代码在不同 provider 上表现不一致。
+        // 与 AgentChatClientServiceImpl#doGenerate 的 hasText 守卫同口径（该链一直有此守卫，
+        // AgentLoop 链此前遗漏）。
+        if (StringUtils.hasText(input.systemPrompt())) {
+            messages.add(new SystemMessage(input.systemPrompt()));
+        }
         messages.add(new UserMessage(input.userPrompt() != null ? input.userPrompt() : ""));
 
         int iterations = 0;

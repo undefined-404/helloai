@@ -16,7 +16,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.metadata.DefaultUsage;
 import org.springframework.ai.chat.model.ChatModel;
@@ -75,6 +77,48 @@ class ChatModelToolLoopTest {
         assertThat(result.errorMessage()).isNull();
         verifyNoInteractions(toolExecutor);
         verifyNoInteractions(eventRecorder);
+    }
+
+    @Test
+    @DisplayName("空 systemPrompt → 不发送空 SystemMessage，仅剩 UserMessage")
+    void shouldSkipBlankSystemMessage() {
+        StubChatModel model = new StubChatModel().enqueue(responseWithText("ok"));
+
+        loop.run(new AgentLoopInput(model, "", "user", toolExecutor, List.of(),
+                AgentLoopInput.DEFAULT_MAX_ITERATIONS, "run-1-1", 1L, 10L, 1, 3L, eventRecorder));
+
+        List<Message> sent = model.lastMessages();
+        assertThat(sent).hasSize(1);
+        assertThat(sent.get(0)).isInstanceOf(UserMessage.class);
+        assertThat(sent).noneMatch(m -> m instanceof SystemMessage);
+    }
+
+    @Test
+    @DisplayName("null systemPrompt → 同样不发送空 SystemMessage（provider 会 400）")
+    void shouldSkipNullSystemMessage() {
+        StubChatModel model = new StubChatModel().enqueue(responseWithText("ok"));
+
+        loop.run(new AgentLoopInput(model, null, "user", toolExecutor, List.of(),
+                AgentLoopInput.DEFAULT_MAX_ITERATIONS, "run-1-1", 1L, 10L, 1, 3L, eventRecorder));
+
+        List<Message> sent = model.lastMessages();
+        assertThat(sent).hasSize(1);
+        assertThat(sent.get(0)).isInstanceOf(UserMessage.class);
+        assertThat(sent).noneMatch(m -> m instanceof SystemMessage);
+    }
+
+    @Test
+    @DisplayName("非空 systemPrompt → 首位仍为 SystemMessage 且内容一致（不误伤正常链路）")
+    void shouldKeepNonBlankSystemMessage() {
+        StubChatModel model = new StubChatModel().enqueue(responseWithText("ok"));
+
+        loop.run(input(model));
+
+        List<Message> sent = model.lastMessages();
+        assertThat(sent).hasSize(2);
+        assertThat(sent.get(0)).isInstanceOf(SystemMessage.class);
+        assertThat(sent.get(0).getText()).isEqualTo("sys");
+        assertThat(sent.get(1)).isInstanceOf(UserMessage.class);
     }
 
     @Test
