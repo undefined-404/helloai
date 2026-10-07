@@ -16,7 +16,7 @@
 #   helloai-start-1.0.0-SNAPSHOT.jar   # app 镜像内运行的 jar
 #   dist/                              # 前端静态文件（web 服务挂载）
 #   nginx.conf                         # web 服务反向代理配置
-#   deploy/middleware/rabbitmq/init.sh # rabbitmq-init 容器执行的初始化脚本
+#   deploy/init-rabbitmq.sh      # rabbitmq-init 容器执行的初始化脚本
 #     ⚠️ 必须连同目录结构 deploy/middleware/rabbitmq/ 一起存在：
 #        缺此文件时 rabbitmq-init 会「假成功」（详见 rabbitmq-init 服务注释里的 fail-open 说明），
 #        结果是 app 照常启动但 vhost /helloai 从未创建 —— 即本次线上事故的静默形态。
@@ -86,7 +86,7 @@ services:
       retries: 5
 
   # --- RabbitMQ 隔离初始化（一次性容器，幂等，可反复重跑）---
-  # 职责：创建 vhost /helloai + 业务用户 helloai + 授权（脚本复用 deploy/middleware/rabbitmq/init.sh）。
+  # 职责：创建 vhost /helloai + 业务用户 helloai + 授权（脚本复用 deploy/init-rabbitmq.sh）。
   # 缺失本服务 = 本轮线上故障的制度性根因（vhost /helloai 从未被创建，MQ 静默不可用）。
   # 管理员必须是非 guest 账号：guest 仅限回环登录，兄弟容器（非回环）用它会 403/ACCESS_REFUSED。
   #
@@ -108,10 +108,10 @@ services:
     # 守卫：/init/init.sh 必须是【存在的普通文件】，否则明确报错并非 0 退出。
     # 用 exec 替换 shell 进程，保证脚本的退出码被 compose 如实看到。
     entrypoint: ["/bin/sh", "-c"]
-    command: ["test -f /init/init.sh || { echo '[rabbitmq-init] 错误：/init/init.sh 不存在（bind mount 源文件缺失，或 Docker 因源缺失建成了空目录）。请确认部署目录含 deploy/middleware/rabbitmq/init.sh。' >&2; exit 1; }; exec /bin/sh /init/init.sh"]
+    command: ["test -f /init/init.sh || { echo '[rabbitmq-init] 错误：/init/init.sh 不存在（bind mount 源文件缺失，或 Docker 因源缺失建成了空目录）。请确认部署目录含 deploy/init-rabbitmq.sh。' >&2; exit 1; }; exec /bin/sh /init/init.sh"]
     volumes:
       - type: bind
-        source: ./deploy/middleware/rabbitmq/init.sh
+        source: ./deploy/init-rabbitmq.sh
         target: /init/init.sh
         read_only: true
     environment:

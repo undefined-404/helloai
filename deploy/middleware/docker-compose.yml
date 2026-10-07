@@ -13,6 +13,12 @@
 #     (15432/26379/25672/25673/29000/29001), so apps only change host, not port
 #   - RabbitMQ / MinIO isolation setup is done by one-shot init containers (idempotent)
 #   - Memory limits total ~2.9GB; fits a 4C4G server (typical usage ~1.8~2.3GB)
+#
+# ⚠️ 已废弃（ARCHIVED，2026-10-07）：本文件属于「独立中间件服务器（摆法 A）」方案，该方案已放弃。
+#    现网改为单机部署，统一由仓库根的 docker-compose.server.yml（中间件 + app + web 同栈）承担。
+#    本文件仅作历史留档，不再维护、不再使用。
+#    RabbitMQ 初始化脚本已迁出本目录（deploy/middleware/rabbitmq/init.sh → deploy/init-rabbitmq.sh），
+#    故下方 rabbitmq-init 改为按相对路径 ../init-rabbitmq.sh 引用同一份脚本（避免逻辑重复）。
 # ============================================================
 
 services:
@@ -197,7 +203,7 @@ services:
     entrypoint: /bin/sh
     command: /init/init.sh
     volumes:
-      - ./rabbitmq/init.sh:/init/init.sh:ro
+      - ../init-rabbitmq.sh:/init/init.sh:ro
     environment:
       RABBITMQ_ADMIN_USER: ${RABBITMQ_ADMIN_USER}
       RABBITMQ_ADMIN_PASSWORD: ${RABBITMQ_ADMIN_PASSWORD}

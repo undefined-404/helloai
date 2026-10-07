@@ -1,15 +1,29 @@
 # HelloAI 中间件独立部署（摆法 A）
 
+> ## ⚠️ 已废弃（ARCHIVED，2026-10-07）
+>
+> 本目录属于「**独立中间件服务器（摆法 A）**」方案 —— 一台 4C4G 服务器只跑中间件，
+> 应用留在原处通过网络连接。**该方案已放弃**：现网改为**单机部署**，中间件 + app + web
+> 同栈，统一由仓库根的 `docker-compose.server.yml` 承担。
+>
+> - 本目录的 `docker-compose.yml` / `scripts/` / `minio/` **仅作历史留档**，不再维护、不再使用。
+> - 其中 §10 FAQ 与 §11 修复记录**仍有参考价值**（故障判据与踩坑记录对单机部署同样适用）。
+> - **RabbitMQ 初始化脚本已迁出本目录**：`deploy/middleware/rabbitmq/init.sh`
+>   → **`deploy/init-rabbitmq.sh`**（单机部署与之一并脱钩）。下文出现旧路径处均以新路径为准。
+
 新服务器（4C4G）只部署中间件：PostgreSQL（HelloAI）+ MySQL（其他项目）+ Redis + RabbitMQ + MinIO。
 HelloAI 应用与另一项目应用留在原处，通过网络连接新服务器（安全组按 IP 白名单放行）。
 
 ## 1. 部署包结构
 
 ```text
-deploy/middleware/
+deploy/init-rabbitmq.sh     # RabbitMQ vhost/用户/权限初始化（幂等）—— 单机部署亦复用
+                            # （原 deploy/middleware/rabbitmq/init.sh，2026-10-07 迁出本目录）
+
+deploy/middleware/          # ⚠️ 以下均为已废弃方案的历史留档
 ├── docker-compose.yml      # 中间件 compose（含一次性初始化容器）
 ├── .env.example            # 配置模板（复制为 .env 后修改密码）
-├── rabbitmq/init.sh        # RabbitMQ vhost/用户/权限初始化（幂等）
+├── rabbitmq/rabbitmq.conf  # RabbitMQ 配置（init.sh 已迁出至 deploy/init-rabbitmq.sh）
 ├── minio/
 │   ├── init.sh             # MinIO bucket/access key/policy 初始化（幂等）
 │   └── policies/           # bucket 专属 policy（Resource 限定单桶）
@@ -110,7 +124,7 @@ ACL 用户（对应上表 SPRING_DATA_REDIS_USERNAME/PASSWORD），仍需同步�
 
 | 中间件 | 隔离机制 | 其他项目连接方式 |
 |---|---|---|
-| RabbitMQ | vhost 级完全隔离（`/helloai` 与 `/other` 互不可见） | 管理员在管理 UI（`新IP:25673`）新建 vhost+用户+权限，或仿 `rabbitmq/init.sh` 追加 |
+| RabbitMQ | vhost 级完全隔离（`/helloai` 与 `/other` 互不可见） | 管理员在管理 UI（`新IP:25673`）新建 vhost+用户+权限，或仿 `deploy/init-rabbitmq.sh` 追加 |
 | Redis | ACL 用户 + 密码隔离（默认 `~*`，凭据防串用） | 新用户 `user other on >密码 ~* &* +@all ...`；应用层 key 前缀约定 `other:` |
 | MinIO | bucket + 独立 access key + bucket policy | 用 `mc mb` 建 bucket、`mc admin user add` 建用户、attach `other-project.json` policy（`minio/init.sh` 已留模板） |
 | PostgreSQL / MySQL | 各自独立实例、独立端口、独立数据目录 | 两库完全物理隔离 |
@@ -146,6 +160,42 @@ ACL 用户（对应上表 SPRING_DATA_REDIS_USERNAME/PASSWORD），仍需同步�
 
 - **Redis 报 `NOPERM`**：ACL 限制了 key 前缀但应用 key 不带前缀。当前配置为 `~*` 不会触发；只有改成 `~helloai:*` 才会，需先统一 key 前缀。
 - **RabbitMQ `ACCESS_REFUSED`**：检查 vhost 与用户名密码——应用连 `helloai` 用户 + `/helloai` vhost（Spring 默认 vhost=`/`，需设 `spring.rabbitmq.virtual-host=/helloai`）。
+- **RabbitMQ `ACCESS_REFUSED - Login was refused using authentication mechanism PLAIN`（2026-10-07 生产复现，完整定位法）**：
+  > 这是**部署侧状态问题，不是应用代码问题**。业务代码改动与 MQ 无关，不要为此回滚代码或凭直觉改密码。
+  >
+  > **先理解机制（否则会改错地方）**：`guest` 受 RabbitMQ 官方限制**仅允许回环登录**（AMQP 与 Management API 都受限）。
+  > 本机开发时应用跑在**宿主机**、连 `localhost:25672` ⇒ 走回环 ⇒ `guest/guest@/` 可用；
+  > 而 `docker-compose.server.yml` 里应用是**兄弟容器**（日志可见 `AMQP Connection 172.18.0.x:5672`，源 IP 是 compose 网段）
+  > ⇒ **永远用不了 `guest`**，必须由 `rabbitmq-init` 在 broker 上创建 `helloai` 用户 + `/helloai` vhost。
+  > `rabbitmq-init` 没跑成功 ⇒ 应用的 `helloai@/helloai` 认证必然被拒。
+  >
+  > **定位（在服务器部署目录执行，只读取证）**：
+  >
+  > ```bash
+  > docker exec helloai-rabbitmq rabbitmqctl list_vhosts        # 期望看到 /helloai
+  > docker exec helloai-rabbitmq rabbitmqctl list_users         # 期望看到 helloai
+  > docker exec helloai-rabbitmq rabbitmqctl list_permissions   # 期望 helloai -> /helloai
+  > grep -n "rabbitmq-init" docker-compose.yml                  # 无输出 = compose 是旧版（缺 init 服务）⇒ 根因
+  > ls -l deploy/init-rabbitmq.sh                              # 必须存在（缺它 init 会 fail-open 假成功）
+  > grep -c "HELLOAI_RABBIT_PASSWORD\|RABBITMQ_ADMIN_USER\|RABBITMQ_ADMIN_PASSWORD" .env   # 应为 3
+  > docker compose logs rabbitmq-init                            # 看 init 是否非 0 退出、报什么码
+  > ```
+  >
+  > **修复**：
+  > 1. compose / `init.sh` / `.env` 任一缺失 ⇒ 从仓库同步（`docker-compose.server.yml` → 服务器 `docker-compose.yml`，
+  >    并保持 `deploy/middleware/rabbitmq/` 相对路径），再 `docker compose up -d`。
+  > 2. `rabbitmq-init` 非 0 退出且报 `HTTP 401` ⇒ `RABBITMQ_ADMIN_USER/PASSWORD` 在该 broker 上不存在或非 administrator。
+  >    **注意 `RABBITMQ_DEFAULT_USER/PASS` 只在节点【首次启动】生效**，已有 volume 的 broker 改它无效，须一次性手工补：
+  >    `docker exec helloai-rabbitmq rabbitmqctl add_user <管理员> <密码>` +
+  >    `docker exec helloai-rabbitmq rabbitmqctl set_user_tags <管理员> administrator`，然后重跑 `docker compose up -d`。
+  > 3. 密码分叉（app 与 init 用了不同值）⇒ `init.sh` 三步是**无条件 PUT（幂等）**，重跑会把 `helloai` 的密码
+  >    **重置为 `.env` 的 `HELLOAI_RABBIT_PASSWORD`**，一次重跑即可对齐。
+  >
+  > ⚠️ **修完 broker 必须重启应用**：认证失败抛的是 `FatalListenerStartupException`
+  > （日志 `Consumer received fatal exception on startup`），Spring AMQP 对**致命启动异常不自动重试**
+  > （本项目未配自定义 `FatalExceptionStrategy`，也未开 `listener.simple.retry`，已核）⇒ 监听器容器就此停住，
+  > 只修 broker 不重启应用，日志会持续报错，容易误判「修复无效」。
+  > 执行 `docker compose restart app`（或 `docker compose up -d --force-recreate app`）。
 - **init 容器非 0 退出**：`docker compose logs rabbitmq-init / minio-init` 查看原因；修复后重新 `docker compose up -d`（幂等）。
 - **迁移后附件直读失败**：确认 `MINIO_ENDPOINT` 应用可达（公网需白名单），`MINIO_ACCESS_KEY/SECRET_KEY` 与 `.env` 一致。
 - **Redis 容器 `Restarting` 崩溃循环** —— **已确认根因（2026-09-29，生产实测）**：§8 那条「ACL 写法约束」
