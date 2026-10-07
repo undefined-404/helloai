@@ -59,12 +59,18 @@ AUTH="Authorization: Basic ${AUTH_B64}"
 #    因此这里区分两种情形并显式失败：
 #      - 401/403          → 凭据被拒，立即退出（重试无意义）
 #      - 连接失败/超时     → 计入重试上限，超限退出
-MAX_ATTEMPTS="${RABBITMQ_INIT_MAX_ATTEMPTS:-30}"   # 30 次 × 2s ≈ 60s
+# ⚠️ 探测用的 curl 必须带超时（--connect-timeout / --max-time）：
+#    否则单次 DNS 解析失败或连接吊死会让「最大等待」彻底失去意义
+#    （实测：DNS 不可解析场景曾耗时约 179s，远超按次数×间隔估算的「约 60s」）。
+CURL_CONNECT_TIMEOUT=3
+CURL_MAX_TIME=5
+MAX_ATTEMPTS="${RABBITMQ_INIT_MAX_ATTEMPTS:-30}"   # 默认 30 次
 INTERVAL=2
 attempt=0
 PROBE_CODE=""
 while :; do
-  if PROBE_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "${AUTH}" "${API}/overview" 2>/dev/null); then
+  if PROBE_CODE=$(curl -sS --connect-timeout "${CURL_CONNECT_TIMEOUT}" --max-time "${CURL_MAX_TIME}" \
+                    -o /dev/null -w '%{http_code}' -H "${AUTH}" "${API}/overview" 2>/dev/null); then
     if [ "${PROBE_CODE}" = "200" ]; then
       echo "[rabbitmq-init] management API ready (HTTP 200)"
       break
@@ -79,7 +85,7 @@ while :; do
   esac
   attempt=$((attempt + 1))
   if [ "${attempt}" -ge "${MAX_ATTEMPTS}" ]; then
-    echo "[rabbitmq-init] 错误：等待管理 API 就绪超时（已尝试 ${MAX_ATTEMPTS} 次 / 约 $((MAX_ATTEMPTS * INTERVAL))s），最后 HTTP 码='${PROBE_CODE}'，放弃。" >&2
+    echo "[rabbitmq-init] 错误：等待管理 API 就绪超时（已尝试 ${MAX_ATTEMPTS} 次，最坏约 $((MAX_ATTEMPTS * (INTERVAL + CURL_MAX_TIME)))s，含单次 curl 上限 ${CURL_MAX_TIME}s；最后 HTTP 码='${PROBE_CODE}'），放弃。" >&2
     case "${PROBE_CODE}" in
       ""|000)
         echo "[rabbitmq-init] 提示：无 HTTP 响应，通常为 API 尚未监听 / 网络不通 / 或本容器内缺少 curl 可执行文件。" >&2

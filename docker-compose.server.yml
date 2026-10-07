@@ -12,8 +12,14 @@
 #      MUST whitelist 15432/26379/25672/25673 in Alibaba Cloud security group to your IP
 #   4. Added web service (nginx): serves frontend dist + proxies /api, /mcp to app,
 #      only port 80 exposed publicly; 6565 bound to 127.0.0.1 for local troubleshooting
-# Prerequisite files (same directory as this file):
-#   helloai-start-1.0.0-SNAPSHOT.jar / dist/ / nginx.conf
+# Prerequisite files (same dir as this file, relative paths preserved):
+#   helloai-start-1.0.0-SNAPSHOT.jar   # app 镜像内运行的 jar
+#   dist/                              # 前端静态文件（web 服务挂载）
+#   nginx.conf                         # web 服务反向代理配置
+#   deploy/middleware/rabbitmq/init.sh # rabbitmq-init 容器执行的初始化脚本
+#     ⚠️ 必须连同目录结构 deploy/middleware/rabbitmq/ 一起存在：
+#        缺此文件时 rabbitmq-init 会「假成功」（详见 rabbitmq-init 服务注释里的 fail-open 说明），
+#        结果是 app 照常启动但 vhost /helloai 从未创建 —— 即本次线上事故的静默形态。
 # ============================================================
 
 services:
@@ -83,14 +89,31 @@ services:
   # 职责：创建 vhost /helloai + 业务用户 helloai + 授权（脚本复用 deploy/middleware/rabbitmq/init.sh）。
   # 缺失本服务 = 本轮线上故障的制度性根因（vhost /helloai 从未被创建，MQ 静默不可用）。
   # 管理员必须是非 guest 账号：guest 仅限回环登录，兄弟容器（非回环）用它会 403/ACCESS_REFUSED。
+  #
+  # ⚠️ fail-open 防护（两处都必须保留；已实测，勿凭直觉简化）：
+  #   源文件缺失时，Docker 会在宿主机【创建同名空目录】而不是报错 —— 短语法与
+  #   长语法 bind 都是如此（实测 docker compose 29.2.1 / compose v5.1.0：两种写法
+  #   均 up 成功且都建出空目录，均未报错）。随后 `/bin/sh /init/init.sh` 变成
+  #   `/bin/sh <一个空目录>` —— 实测返回 **rc=0 且零输出**，于是 compose 判 init「成功」，
+  #   app 照常被拉起，而 vhost/用户/权限一条都没建 = 与本次事故完全同构的静默 MQ 故障。
+  #   保险一：长语法 bind（语义更明确；但它【并不】阻止空目录，不能单独依赖）。
+  #   保险二：显式 test -f 守卫 —— 这才是真正兜住 fail-open 的那一道：
+  #           实测挂了空目录时守卫使容器 ExitCode=1，进而 app 被
+  #           service_completed_successfully 拦住（app 停在 created、日志为空），
+  #           且 `docker compose up -d` 返回非 0。
   rabbitmq-init:
     image: curlimages/curl:latest
     container_name: helloai-rabbitmq-init
     restart: "no"
-    entrypoint: /bin/sh
-    command: /init/init.sh
+    # 守卫：/init/init.sh 必须是【存在的普通文件】，否则明确报错并非 0 退出。
+    # 用 exec 替换 shell 进程，保证脚本的退出码被 compose 如实看到。
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["test -f /init/init.sh || { echo '[rabbitmq-init] 错误：/init/init.sh 不存在（bind mount 源文件缺失，或 Docker 因源缺失建成了空目录）。请确认部署目录含 deploy/middleware/rabbitmq/init.sh。' >&2; exit 1; }; exec /bin/sh /init/init.sh"]
     volumes:
-      - ./deploy/middleware/rabbitmq/init.sh:/init/init.sh:ro
+      - type: bind
+        source: ./deploy/middleware/rabbitmq/init.sh
+        target: /init/init.sh
+        read_only: true
     environment:
       # 刻意使用 `:-` 空默认：无 .env 时 compose 渲染不产生 "variable is not set" 告警；
       # 值为空则由 init.sh 顶部的守卫【明确报中文错误并非 0 退出】（绝不静默继续）。
@@ -147,16 +170,23 @@ services:
       SPRING_DATA_REDIS_PORT: "6379"
       # RabbitMQ 收敛为【单一机制】：统一走 application-dev.yml 的 RABBITMQ_* 占位符，
       # 不再混用 SPRING_RABBITMQ_*（后者无 username/virtual-host 对应项，会让 user/vhost 失控）。
-      # 下面四项的值全部等于 application-dev.yml 现有默认值 ⇒ 行为中性。
       RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
       RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
       RABBITMQ_USERNAME: ${HELLOAI_RABBIT_USER:-helloai}
-      RABBITMQ_VHOST: ${HELLOAI_RABBIT_VHOST:-/helloai}
-      # ⚠️ 这里【故意不声明】RABBITMQ_PASSWORD：
-      #    application-dev.yml 是 ${RABBITMQ_PASSWORD:RabbitHelloai_2026}，
-      #    而 Spring 对「已设置但为空」的环境变量不再回落默认值 ⇒
-      #    一旦该变量为空，会覆盖掉当前可用的默认密码，把服务从「能跑」打成「跑不了」。
-      #    密码请由 yml 占位符或部署目录 .env 提供。
+      # vhost 固定为 /helloai（不作变量化）：
+      #   init.sh 也硬编码创建此 vhost（Management API 里须 URL 编码为 %2Fhelloai）。
+      #   二者必须一致，故此处不暴露为可配置项 —— 否则改 .env 会让 app 与 init.sh 分叉，
+      #   表现为「app 连得上 broker 但 vhost 不存在」的静默故障。
+      RABBITMQ_VHOST: /helloai
+      # 密码与 rabbitmq-init 建用户时【同源】：都取 .env 的 HELLOAI_RABBIT_PASSWORD。
+      #   只保留这一个变量名，避免出现「init.sh 用新密码建用户、app 却用另一个密码去连」的分叉
+      #   （那正是本次事故的重演路径）。
+      # 用 `:?` 做 fail-fast：缺 .env 时 compose 立即报错并指明缺哪个变量，
+      #   而不是静默注入空串——空串会被 Spring 当作「已设置」，覆盖掉 application-dev.yml 的
+      #   默认密码，把服务从「能跑」打成「跑不了」。
+      # 取舍：这会让「无 .env 时 docker compose config 由通过变为失败」。这是期望行为，
+      #   符合项目 §41/42「fail-fast when missing」口径：明确失败优于静默半可用。
+      RABBITMQ_PASSWORD: ${HELLOAI_RABBIT_PASSWORD:?部署目录 .env 必须提供 HELLOAI_RABBIT_PASSWORD，且该值必须与 rabbitmq-init 建用户时用的值一致（同一个变量，勿分叉）}
       # MinIO 走 compose 内网（app 容器内 localhost 是自身，默认值 localhost:29000 不可达），
       # 不配置则平台物化/附件直读全部失败（核验报“附件内容不可读”）
       MINIO_ENDPOINT: http://minio:9000
