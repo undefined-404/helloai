@@ -1,0 +1,179 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 900" width="760" height="900" role="img" aria-label="内部 LLM Executor 执行流程与状态迭代">
+  <style>
+    svg {
+      --surface: #F7F7F8;
+      --surface-muted: #EFEFF2;
+      --text: #171717;
+      --text-muted: #52525B;
+      --border: rgba(23, 23, 23, 0.12);
+      --brand: #4B3FE3;
+      --brand-soft: #F2F7FF;
+      --success: #1DC981;
+      --warning: #EFAA17;
+      --danger: #E8463A;
+      --font-sans: "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    .title { fill: var(--text); font: 500 16px/24px var(--font-sans); }
+    .sub { fill: var(--text-muted); font: 400 11px/16px var(--font-sans); }
+    .th { fill: var(--text); font: 500 13px/18px var(--font-sans); }
+    .ts { fill: var(--text-muted); font: 400 11px/16px var(--font-sans); }
+    .tp { fill: var(--text); font: 500 12px/18px var(--font-sans); }
+    .leg { fill: var(--text-muted); font: 400 11px/16px var(--font-sans); }
+    .g-neutral rect { fill: var(--surface-muted); stroke: var(--border); stroke-width: 1.5; }
+    .g-brand rect { fill: var(--brand-soft); stroke: var(--brand); stroke-width: 2; }
+    .g-success rect { fill: color-mix(in srgb, var(--success) 14%, transparent); stroke: var(--success); stroke-width: 1.5; }
+    .g-warning rect { fill: color-mix(in srgb, var(--warning) 14%, transparent); stroke: var(--warning); stroke-width: 1.5; }
+    .g-danger rect { fill: color-mix(in srgb, var(--danger) 14%, transparent); stroke: var(--danger); stroke-width: 1.5; }
+    .g-panel rect { fill: var(--surface-muted); stroke: var(--border); stroke-width: 1; stroke-dasharray: 4 3; }
+    .e-brand { stroke: var(--brand); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .e-neutral { stroke: var(--text-muted); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .e-dash { stroke: var(--text-muted); stroke-width: 1.5; stroke-dasharray: 4 4; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .leader { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; fill: none; }
+    .cap { fill: var(--surface); stroke: var(--border); }
+    .code { font: 400 10px/14px "SF Mono", Consolas, monospace; }
+  </style>
+  <defs>
+    <marker id="mke-b" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" style="fill: var(--brand);"/>
+    </marker>
+    <marker id="mke-n" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" style="fill: var(--text-muted);"/>
+    </marker>
+  </defs>
+  <rect x="1" y="1" width="758" height="898" rx="12" style="fill: var(--surface); stroke: var(--border);"/>
+  <text class="title" x="20" y="32">内部 LLM Executor（API_KEY_LLM）执行流程：派发 · Runtime 回合 · 产出物化</text>
+  <text class="sub" x="20" y="50">中心列 = 后端主链（Outbox→MQ→Runtime）· 右列 = 事件与承载类 · 底部 = 状态迭代与空产出护栏</text>
+
+  <!-- 主链 中心 x=250 -->
+  <g>
+    <g class="g-neutral">
+      <rect x="100" y="66" width="300" height="44" rx="8"/>
+      <text class="th" x="250" y="84" text-anchor="middle">PENDING → ASSIGNED（AgentSelector 选人）</text>
+      <text class="ts" x="250" y="100" text-anchor="middle">SubTaskAutoExecutionDispatcher.onAssigned</text>
+    </g>
+    <path class="e-brand" d="M250,110 V132" marker-end="url(#mke-b)"/>
+    <g><rect class="cap" x="252" y="112" width="126" height="18" rx="9"/><text class="ts" x="315" y="125" text-anchor="middle">sub_task_auto_execute_dispatch</text></g>
+
+    <g class="g-neutral">
+      <rect x="100" y="132" width="300" height="46" rx="8"/>
+      <text class="th" x="250" y="151" text-anchor="middle">创建执行命令（事务 Outbox）</text>
+      <text class="ts" x="250" y="169" text-anchor="middle">ExecutionCommandServiceImpl.createAssignedCommand</text>
+    </g>
+    <path class="e-brand" d="M250,178 V200" marker-end="url(#mke-b)"/>
+    <g><rect class="cap" x="256" y="180" width="180" height="18" rx="9"/><text class="ts" x="346" y="193" text-anchor="middle">sub_task_execution_command_created</text></g>
+
+    <g class="g-neutral">
+      <rect x="100" y="200" width="300" height="46" rx="8"/>
+      <text class="th" x="250" y="219" text-anchor="middle">Outbox → RabbitMQ 异步投递</text>
+      <text class="ts" x="250" y="237" text-anchor="middle">LocalExecutionCommandConsumer.runViaRuntime</text>
+    </g>
+    <path class="e-brand" d="M250,246 V268" marker-end="url(#mke-b)"/>
+
+    <g class="g-brand">
+      <rect x="100" y="268" width="300" height="46" rx="8"/>
+      <text class="th" x="250" y="287" text-anchor="middle">markRunning（CAS 抢占）</text>
+      <text class="ts" x="250" y="305" text-anchor="middle">ASSIGNED → IN_PROGRESS（幂等去重）</text>
+    </g>
+    <path class="e-brand" d="M250,314 V336" marker-end="url(#mke-b)"/>
+    <g><rect class="cap" x="256" y="316" width="176" height="18" rx="9"/><text class="ts" x="344" y="329" text-anchor="middle">sub_task_execution_command_consume</text></g>
+
+    <g class="g-neutral">
+      <rect x="100" y="336" width="300" height="46" rx="8"/>
+      <text class="th" x="250" y="355" text-anchor="middle">执行开始</text>
+      <text class="ts" x="250" y="373" text-anchor="middle">AgentRuntimeContextAssembler 装配上下文</text>
+    </g>
+    <path class="e-brand" d="M250,382 V404" marker-end="url(#mke-b)"/>
+    <g><rect class="cap" x="252" y="384" width="150" height="18" rx="9"/><text class="ts" x="327" y="397" text-anchor="middle">sub_task_execute_start</text></g>
+
+    <g class="g-neutral">
+      <rect x="100" y="404" width="300" height="60" rx="8"/>
+      <text class="th" x="250" y="424" text-anchor="middle">Runtime 回合执行（LLM + 工具循环）</text>
+      <text class="ts" x="250" y="441" text-anchor="middle">RuntimeTurnExecutor.execute → ChatModelToolLoop.run</text>
+      <text class="ts" x="250" y="457" text-anchor="middle">多轮 Prompt / 工具调用 / 流式产出</text>
+    </g>
+    <path class="e-brand" d="M250,464 V486" marker-end="url(#mke-b)"/>
+    <g><rect class="cap" x="244" y="466" width="200" height="18" rx="9"/><text class="ts" x="344" y="479" text-anchor="middle">sub_task_llm_call_start / _end「新」</text></g>
+
+    <g class="g-brand">
+      <rect x="100" y="486" width="300" height="48" rx="8"/>
+      <text class="th" x="250" y="505" text-anchor="middle">结果收敛 handleReport</text>
+      <text class="ts" x="250" y="523" text-anchor="middle">ExecutionResultHandler.handleReport（source=内置）</text>
+    </g>
+    <path class="e-brand" d="M250,534 V556" marker-end="url(#mke-b)"/>
+    <g><rect class="cap" x="256" y="536" width="150" height="18" rx="9"/><text class="ts" x="331" y="549" text-anchor="middle">sub_task_execute_submit</text></g>
+
+    <g class="g-neutral">
+      <rect x="100" y="556" width="300" height="46" rx="8"/>
+      <text class="th" x="250" y="575" text-anchor="middle">产出物化 / 附件落库</text>
+      <text class="ts" x="250" y="593" text-anchor="middle">ExecutionArtifactServiceImpl.materialize</text>
+    </g>
+    <path class="e-brand" d="M250,602 V624" marker-end="url(#mke-b)"/>
+    <g><rect class="cap" x="250" y="604" width="176" height="18" rx="9"/><text class="ts" x="338" y="617" text-anchor="middle">sub_task_artifact_materialized</text></g>
+
+    <g class="g-success">
+      <rect x="140" y="624" width="220" height="40" rx="20"/>
+      <text class="th" x="250" y="649" text-anchor="middle">IN_PROGRESS → REVIEW</text>
+    </g>
+    <path class="e-brand" d="M250,664 V690" marker-end="url(#mke-b)"/>
+    <g class="g-success">
+      <rect x="120" y="690" width="260" height="34" rx="17"/>
+      <text class="th" x="250" y="712" text-anchor="middle">进入 Reviewer 核验链 →</text>
+    </g>
+  </g>
+
+  <!-- 右侧事件 + 承载类 -->
+  <g class="g-panel"><rect x="424" y="66" width="312" height="238" rx="10"/></g>
+  <text class="tp" x="440" y="88">timeline 事件（严格顺序）</text>
+  <text class="code" x="440" y="110" fill="#4B3FE3">sub_task_auto_execute_dispatch</text>
+  <text class="code" x="440" y="130" fill="#4B3FE3">sub_task_execution_command_created</text>
+  <text class="code" x="440" y="150" fill="#4B3FE3">sub_task_execution_command_consume</text>
+  <text class="code" x="440" y="170" fill="#4B3FE3">sub_task_execute_start</text>
+  <text class="code" x="440" y="190" fill="#4B3FE3">sub_task_llm_call_start「新」</text>
+  <text class="code" x="440" y="210" fill="#4B3FE3">sub_task_llm_call_end「新」</text>
+  <text class="code" x="440" y="230" fill="#4B3FE3">sub_task_execute_submit</text>
+  <text class="code" x="440" y="250" fill="#4B3FE3">sub_task_artifact_materialized</text>
+  <text class="ts" x="440" y="278">※ 无 sub_task_execute_enter（已核对源码）</text>
+  <text class="ts" x="440" y="296">※ llm_call_start/_end 由 AgentRuntimeContextAssembler 产出</text>
+
+  <g class="g-panel"><rect x="424" y="318" width="312" height="190" rx="10"/></g>
+  <text class="tp" x="440" y="340">承载类（按调用顺序）</text>
+  <text class="ts" x="440" y="362">SubTaskAutoExecutionDispatcher</text>
+  <text class="ts" x="440" y="382">ExecutionCommandServiceImpl</text>
+  <text class="ts" x="440" y="402">LocalExecutionCommandConsumer</text>
+  <text class="ts" x="440" y="422">AgentRuntimeContextAssembler</text>
+  <text class="ts" x="440" y="442">RuntimeTurnExecutor / ChatModelToolLoop</text>
+  <text class="ts" x="440" y="462">ExecutionResultHandler</text>
+  <text class="ts" x="440" y="482">ExecutionArtifactServiceImpl</text>
+  <text class="ts" x="440" y="502">※ 仅 API_KEY_LLM 走 Runtime 回合（单轨硬切）</text>
+
+  <!-- 底部状态迭代 + 护栏 -->
+  <g class="g-panel"><rect x="24" y="742" width="356" height="136" rx="10"/></g>
+  <text class="tp" x="40" y="764">状态迭代（SubTaskStatus）</text>
+  <g>
+    <rect x="40" y="778" width="72" height="22" rx="11" style="fill: var(--surface); stroke: var(--border);"/>
+    <text class="ts" x="76" y="793" text-anchor="middle">PENDING</text>
+    <path class="e-neutral" d="M112,789 H130" marker-end="url(#mke-n)"/>
+    <rect x="132" y="778" width="76" height="22" rx="11" style="fill: var(--surface); stroke: var(--border);"/>
+    <text class="ts" x="170" y="793" text-anchor="middle">ASSIGNED</text>
+    <path class="e-neutral" d="M208,789 H226" marker-end="url(#mke-n)"/>
+    <rect x="228" y="778" width="96" height="22" rx="11" style="fill: var(--brand-soft); stroke: var(--brand);"/>
+    <text class="ts" x="276" y="793" text-anchor="middle">IN_PROGRESS</text>
+    <path class="e-neutral" d="M324,789 H342" marker-end="url(#mke-n)"/>
+  </g>
+  <rect x="40" y="812" width="72" height="22" rx="11" style="fill: color-mix(in srgb, var(--success) 14%, transparent); stroke: var(--success);"/>
+  <text class="ts" x="76" y="827" text-anchor="middle">REVIEW</text>
+  <text class="ts" x="130" y="827">← 成功收敛点（进入核验）</text>
+  <text class="ts" x="40" y="856">CAS：markRunning 从 ASSIGNED 抢占，重复消费被幂等挡下</text>
+
+  <g class="g-danger"><rect x="392" y="742" width="344" height="136" rx="10"/></g>
+  <text class="tp" x="408" y="764">空产出护栏（本窗口新增）</text>
+  <text class="ts" x="408" y="788">RuntimeTurnExecutor 检测「回合结束但产出为空」：</text>
+  <text class="ts" x="408" y="808">· 落 agent_runtime_empty_output timeline</text>
+  <text class="ts" x="408" y="828">· 判定未真正执行 → 走失败路径，不计成功</text>
+  <text class="ts" x="408" y="848">· 封堵「执行对话流有记录、执行产物为空」的静默成功</text>
+
+  <line x1="24" y1="888" x2="60" y2="888" style="stroke: var(--brand); stroke-width: 2; stroke-linecap: round;"/>
+  <text class="leg" x="68" y="892">主链</text>
+  <line x1="130" y1="888" x2="166" y2="888" style="stroke: var(--text-muted); stroke-width: 1.5; stroke-dasharray: 4 4; stroke-linecap: round;"/>
+  <text class="leg" x="174" y="892">状态迁移</text>
+</svg>

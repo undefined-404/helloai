@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 720" width="760" height="720" role="img" aria-label="无候选兜底与每子任务倒计时设计">
+  <style>
+    svg {
+      --surface: #F7F7F8;
+      --surface-muted: #EFEFF2;
+      --text: #171717;
+      --text-muted: #52525B;
+      --border: rgba(23, 23, 23, 0.12);
+      --brand: #4B3FE3;
+      --brand-soft: #F2F7FF;
+      --success: #1DC981;
+      --warning: #EFAA17;
+      --danger: #E8463A;
+      --font-sans: "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    .title { fill: var(--text); font: 500 16px/24px var(--font-sans); }
+    .sub { fill: var(--text-muted); font: 400 11px/16px var(--font-sans); }
+    .th { fill: var(--text); font: 500 13px/18px var(--font-sans); }
+    .ts { fill: var(--text-muted); font: 400 11px/16px var(--font-sans); }
+    .tp { fill: var(--text); font: 500 12px/18px var(--font-sans); }
+    .leg { fill: var(--text-muted); font: 400 11px/16px var(--font-sans); }
+    .g-neutral rect { fill: var(--surface-muted); stroke: var(--border); stroke-width: 1.5; }
+    .g-brand rect { fill: var(--brand-soft); stroke: var(--brand); stroke-width: 2; }
+    .g-success rect { fill: color-mix(in srgb, var(--success) 14%, transparent); stroke: var(--success); stroke-width: 1.5; }
+    .g-warning rect { fill: color-mix(in srgb, var(--warning) 14%, transparent); stroke: var(--warning); stroke-width: 1.5; }
+    .g-danger rect { fill: color-mix(in srgb, var(--danger) 14%, transparent); stroke: var(--danger); stroke-width: 1.5; }
+    .g-panel rect { fill: var(--surface-muted); stroke: var(--border); stroke-width: 1; stroke-dasharray: 4 3; }
+    .e-brand { stroke: var(--brand); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .e-neutral { stroke: var(--text-muted); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .e-dash { stroke: var(--text-muted); stroke-width: 1.5; stroke-dasharray: 4 4; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .cap { fill: var(--surface); stroke: var(--border); }
+    .code { font: 400 10px/14px "SF Mono", Consolas, monospace; }
+    .tick { stroke: var(--brand); stroke-width: 2; }
+  </style>
+  <defs>
+    <marker id="mk3-b" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" style="fill: var(--brand);"/>
+    </marker>
+    <marker id="mk3-n" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" style="fill: var(--text-muted);"/>
+    </marker>
+  </defs>
+  <rect x="1" y="1" width="758" height="718" rx="12" style="fill: var(--surface); stroke: var(--border);"/>
+  <text class="title" x="20" y="32">「长期无候选 → 人工介入」兜底 + 每子任务重派倒计时（方案设计）</text>
+  <text class="sub" x="20" y="50">已于 2026-10-05 落地（SubTaskPendingOrphanTask 时钟 C）· 核心：把「重试节拍」从全局扫描 tick 里独立出来，做成每子任务自带的下次重试时刻 → 倒计时天然各不相同</text>
+
+  <!-- 为什么不同子任务倒计时不一样 -->
+  <g class="g-panel"><rect x="16" y="66" width="728" height="150" rx="10"/></g>
+  <text class="tp" x="32" y="90">① 每子任务记录自己的下次重试时刻（存 context，不新增列）</text>
+  <text class="ts" x="32" y="114">context.noCandidate = { rounds, nextDispatchAt, reason, firstSeenAt, updatedAt }（firstSeenAt 用于算 waitedMs）</text>
+  <line x1="40" y1="152" x2="720" y2="152" style="stroke: var(--border);"/>
+  <text class="ts" x="40" y="176">子任务 A  进 no-candidate @t0 → nextDispatchAt=t0+120s      倒计时 120→0   ⟲ 再试</text>
+  <text class="ts" x="40" y="196">子任务 B  进 no-candidate @t0+37s → nextDispatchAt=+157s    倒计时 157→0   ⟲ 再试</text>
+  <text class="ts" x="40" y="216">子任务 C  进 no-candidate @t0+83s → nextDispatchAt=+203s    倒计时 203→0   ⟲ 再试</text>
+  <line x1="40" y1="152" x2="40" y2="160" class="tick"/>
+  <line x1="160" y1="140" x2="160" y2="152" class="tick"/>
+  <line x1="197" y1="140" x2="197" y2="152" style="stroke: var(--text-muted); stroke-width:1.5;"/>
+  <line x1="243" y1="140" x2="243" y2="152" style="stroke: var(--text-muted); stroke-width:1.5;"/>
+  <text class="ts" x="700" y="176" text-anchor="end" fill="#4B3FE3">↑ 各自独立，不再同步</text>
+
+  <!-- 主流程 -->
+  <g class="g-brand"><rect x="16" y="232" width="460" height="248" rx="10"/></g>
+  <text class="tp" x="32" y="256">② 孤儿扫描（时钟 A，tick 仍 60s）每跳对每个孤儿：</text>
+  <g class="g-neutral"><rect x="32" y="270" width="428" height="34" rx="8"/></g>
+  <text class="ts" x="44" y="292">读 context.noCandidate.nextDispatchAt</text>
+  <g class="g-warning"><rect x="32" y="314" width="428" height="34" rx="8"/></g>
+  <text class="ts" x="44" y="336">now &lt; nextDispatchAt ？→ 是：本轮跳过（skipWaiting，不计数不重试）</text>
+  <path class="e-brand" d="M246,348 V372" marker-end="url(#mk3-b)"/>
+  <g class="g-neutral"><rect x="32" y="372" width="428" height="34" rx="8"/></g>
+  <text class="ts" x="44" y="394">否 → 调用 dispatchPendingSubTaskAuto（选人）</text>
+  <path class="e-brand" d="M180,406 V430" marker-end="url(#mk3-b)"/>
+  <path class="e-neutral" d="M300,406 V430" marker-end="url(#mk3-n)"/>
+  <g class="g-success"><rect x="32" y="430" width="196" height="42" rx="8"/></g>
+  <text class="ts" x="44" y="450">选中人 → 清除 noCandidate</text>
+  <text class="ts" x="44" y="466">计数归零 · 正常派发</text>
+  <g class="g-warning"><rect x="248" y="430" width="212" height="42" rx="8"/></g>
+  <text class="ts" x="260" y="450">无候选异常 → rounds+1</text>
+  <text class="ts" x="260" y="466">nextDispatchAt = now+120s(±抖动)</text>
+
+  <!-- 达阈值 -->
+  <g class="g-danger"><rect x="492" y="232" width="252" height="248" rx="10"/></g>
+  <text class="tp" x="508" y="256" fill="#E8463A">③ 达阈值 → 人工介入</text>
+  <text class="ts" x="508" y="280">rounds ≥ noCandidateMaxRounds</text>
+  <text class="ts" x="508" y="298">（默认 10 轮）</text>
+  <text class="ts" x="508" y="326">调 markManualIntervention(</text>
+  <text class="ts" x="508" y="344">  subTaskId,</text>
+  <text class="ts" x="508" y="362">  "no_candidate_long_wait",</text>
+  <text class="ts" x="508" y="380">  {rounds, waitedMs,…})</text>
+  <text class="ts" x="508" y="408">复用现有事件：</text>
+  <text class="code" x="508" y="428" fill="#E8463A">sub_task_manual_intervention_required</text>
+  <text class="ts" x="508" y="450">→ 现有 isManualInterventionMarked</text>
+  <text class="ts" x="508" y="468">  自动跳过 · 前端人工介入面板可见</text>
+
+  <!-- 前端倒计时 -->
+  <g class="g-panel"><rect x="16" y="496" width="352" height="150" rx="10"/></g>
+  <text class="tp" x="32" y="520">④ 前端倒计时（无需改 DTO）</text>
+  <text class="ts" x="32" y="544">context 字段已在 SubTaskResponse 暴露</text>
+  <text class="ts" x="32" y="566">PENDING 且存在 noCandidate.nextDispatchAt：</text>
+  <text class="code" x="32" y="588" fill="#4B3FE3">显示「等待执行者 · 约 87s 后重试」</text>
+  <text class="ts" x="32" y="610">每秒刷新（前端计算差值，组件卸载清理）</text>
+  <text class="ts" x="32" y="632">出现 manualIntervention → 改显示「等待人工介入」</text>
+
+  <!-- 范围与约束 -->
+  <g class="g-panel"><rect x="384" y="496" width="360" height="150" rx="10"/></g>
+  <text class="tp" x="400" y="520">⑤ 范围与约束</text>
+  <text class="ts" x="400" y="544">· 计数/门控只加在孤儿扫描；不改 dispatch 本体</text>
+  <text class="ts" x="400" y="566">· 事件驱动路径（依赖解锁/草案确认）保持即时尝试</text>
+  <text class="ts" x="400" y="588">· 不动时钟 A tick、不动时钟 B 退避常量</text>
+  <text class="ts" x="400" y="610">· 不新增 Flyway 迁移（用 context JSONB）</text>
+  <text class="ts" x="400" y="632">· 间隔可配：no-candidate-retry-interval-seconds</text>
+  <text class="ts" x="400" y="654">· 抖动可配：no-candidate-retry-jitter-seconds</text>
+
+  <line x1="16" y1="678" x2="52" y2="678" style="stroke: var(--brand); stroke-width: 2; stroke-linecap: round;"/>
+  <text class="leg" x="60" y="682">扫描节拍（不变）</text>
+  <line x1="220" y1="678" x2="256" y2="678" style="stroke: var(--text-muted); stroke-width: 1.5; stroke-dasharray: 4 4; stroke-linecap: round;"/>
+  <text class="leg" x="264" y="682">每子任务重试节拍（新增，120s）+ 倒计时</text>
+  <rect x="560" y="670" width="16" height="16" rx="4" style="fill: color-mix(in srgb, var(--danger) 14%, transparent); stroke: var(--danger);"/>
+  <text class="leg" x="584" y="682">转人工</text>
+</svg>

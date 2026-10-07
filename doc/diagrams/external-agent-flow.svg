@@ -1,0 +1,172 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 916" width="760" height="916" role="img" aria-label="外部 AI Agent 执行流程与状态迭代">
+  <style>
+    svg {
+      --surface: #F7F7F8;
+      --surface-muted: #EFEFF2;
+      --text: #171717;
+      --text-muted: #52525B;
+      --border: rgba(23, 23, 23, 0.12);
+      --brand: #4B3FE3;
+      --brand-soft: #F2F7FF;
+      --success: #1DC981;
+      --warning: #EFAA17;
+      --danger: #E8463A;
+      --font-sans: "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    .title { fill: var(--text); font: 500 16px/24px var(--font-sans); }
+    .sub { fill: var(--text-muted); font: 400 11px/16px var(--font-sans); }
+    .th { fill: var(--text); font: 500 13px/18px var(--font-sans); }
+    .ts { fill: var(--text-muted); font: 400 11px/16px var(--font-sans); }
+    .tp { fill: var(--text); font: 500 12px/18px var(--font-sans); }
+    .leg { fill: var(--text-muted); font: 400 11px/16px var(--font-sans); }
+    .g-neutral rect { fill: var(--surface-muted); stroke: var(--border); stroke-width: 1.5; }
+    .g-brand rect { fill: var(--brand-soft); stroke: var(--brand); stroke-width: 2; }
+    .g-success rect { fill: color-mix(in srgb, var(--success) 14%, transparent); stroke: var(--success); stroke-width: 1.5; }
+    .g-warning rect { fill: color-mix(in srgb, var(--warning) 14%, transparent); stroke: var(--warning); stroke-width: 1.5; }
+    .g-danger rect { fill: color-mix(in srgb, var(--danger) 14%, transparent); stroke: var(--danger); stroke-width: 1.5; }
+    .g-panel rect { fill: var(--surface-muted); stroke: var(--border); stroke-width: 1; stroke-dasharray: 4 3; }
+    .e-brand { stroke: var(--brand); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .e-neutral { stroke: var(--text-muted); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .e-dash { stroke: var(--text-muted); stroke-width: 1.5; stroke-dasharray: 4 4; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .leader { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; fill: none; }
+    .cap { fill: var(--surface); stroke: var(--border); }
+    .code { font: 400 10px/14px "SF Mono", Consolas, monospace; }
+  </style>
+  <defs>
+    <marker id="mkx-b" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" style="fill: var(--brand);"/>
+    </marker>
+    <marker id="mkx-n" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" style="fill: var(--text-muted);"/>
+    </marker>
+  </defs>
+  <rect x="1" y="1" width="758" height="914" rx="12" style="fill: var(--surface); stroke: var(--border);"/>
+  <text class="title" x="20" y="32">外部 AI Agent（CLI_CLIENT / MCP）执行流程：拉取 · 认领 · 心跳 · 提交</text>
+  <text class="sub" x="20" y="50">平台侧只「派发 + 登记」，实际执行在外部进程 · 与内部 LLM 的关键差异见底部标注</text>
+
+  <!-- 主链 中心 x=250 -->
+  <g>
+    <g class="g-neutral">
+      <rect x="100" y="66" width="300" height="46" rx="8"/>
+      <text class="th" x="250" y="85" text-anchor="middle">AgentSelector 选中外部 Agent</text>
+      <text class="ts" x="250" y="103" text-anchor="middle">PENDING → ASSIGNED，落 preferredAgentId 意图</text>
+    </g>
+    <path class="e-brand" d="M250,112 V134" marker-end="url(#mkx-b)"/>
+    <g><rect class="cap" x="252" y="114" width="150" height="18" rx="9"/><text class="ts" x="327" y="127" text-anchor="middle">sub_task_dispatch_prepare</text></g>
+
+    <g class="g-neutral">
+      <rect x="100" y="134" width="300" height="44" rx="8"/>
+      <text class="th" x="250" y="153" text-anchor="middle">checkIn 值班打卡（一次性）</text>
+      <text class="ts" x="250" y="170" text-anchor="middle">签发 ACTIVE 租约 · 上报技能 / maxConcurrent</text>
+    </g>
+    <path class="e-brand" d="M250,178 V200" marker-end="url(#mkx-b)"/>
+
+    <g class="g-brand">
+      <rect x="100" y="200" width="300" height="52" rx="8"/>
+      <text class="th" x="250" y="220" text-anchor="middle">轮询拉取（外部进程主动）</text>
+      <text class="ts" x="250" y="238" text-anchor="middle">pullTasks / getSubTaskDetail</text>
+      <text class="ts" x="250" y="254" text-anchor="middle">只看到分配给自己的题目</text>
+    </g>
+    <path class="e-brand" d="M250,252 V278" marker-end="url(#mkx-b)"/>
+
+    <g class="g-brand">
+      <rect x="100" y="278" width="300" height="52" rx="8"/>
+      <text class="th" x="250" y="298" text-anchor="middle">claimSubTask 认领（CAS 抢占）</text>
+      <text class="ts" x="250" y="316" text-anchor="middle">ASSIGNED → IN_PROGRESS（原子更新）</text>
+      <text class="ts" x="250" y="332" text-anchor="middle">抢不到 = 已被他人认领，安全重试</text>
+    </g>
+    <path class="e-brand" d="M250,330 V356" marker-end="url(#mkx-b)"/>
+
+    <g class="g-neutral">
+      <rect x="100" y="356" width="300" height="46" rx="8"/>
+      <text class="th" x="250" y="375" text-anchor="middle">startSubTask + 持续 heartbeat</text>
+      <text class="ts" x="250" y="393" text-anchor="middle">心跳续租约 · 刷新 last_seen_time（≤5min 阈值）</text>
+    </g>
+    <path class="e-brand" d="M250,402 V424" marker-end="url(#mkx-b)"/>
+    <g><rect class="cap" x="256" y="404" width="180" height="18" rx="9"/><text class="ts" x="346" y="417" text-anchor="middle">sub_task_execute_start（外部视角）</text></g>
+
+    <g class="g-brand">
+      <rect x="100" y="424" width="300" height="58" rx="8"/>
+      <text class="th" x="250" y="444" text-anchor="middle">外部进程本地执行</text>
+      <text class="ts" x="250" y="462" text-anchor="middle">真实工作发生在这里（终端 / 本地 LLM / 脚本）</text>
+      <text class="ts" x="250" y="478" text-anchor="middle">平台不经 Runtime 回合，不产 llm_call 事件</text>
+    </g>
+    <path class="e-brand" d="M250,482 V508" marker-end="url(#mkx-b)"/>
+
+    <g class="g-brand">
+      <rect x="100" y="508" width="300" height="52" rx="8"/>
+      <text class="th" x="250" y="528" text-anchor="middle">submitResult 提交产出</text>
+      <text class="ts" x="250" y="546" text-anchor="middle">McpToolServiceImpl → handleReport(source=EXTERNAL)</text>
+      <text class="ts" x="250" y="562" text-anchor="middle">越权校验：仅本人的子任务可提交</text>
+    </g>
+    <path class="e-brand" d="M250,560 V582" marker-end="url(#mkx-b)"/>
+    <g><rect class="cap" x="256" y="562" width="150" height="18" rx="9"/><text class="ts" x="331" y="575" text-anchor="middle">sub_task_execute_submit</text></g>
+
+    <g class="g-success">
+      <rect x="140" y="582" width="220" height="40" rx="20"/>
+      <text class="th" x="250" y="607" text-anchor="middle">IN_PROGRESS → REVIEW</text>
+    </g>
+    <path class="e-brand" d="M250,622 V648" marker-end="url(#mkx-b)"/>
+    <g class="g-success">
+      <rect x="120" y="648" width="260" height="34" rx="17"/>
+      <text class="th" x="250" y="670" text-anchor="middle">进入 Reviewer 核验链（统一口径）→</text>
+    </g>
+  </g>
+
+  <!-- 右侧 -->
+  <g class="g-panel"><rect x="424" y="66" width="312" height="200" rx="10"/></g>
+  <text class="tp" x="440" y="88">MCP 工具（平台暴露给外部进程）</text>
+  <text class="ts" x="440" y="110">checkIn     —— 值班打卡，签发租约</text>
+  <text class="ts" x="440" y="130">heartbeat   —— 续租 + 刷新心跳</text>
+  <text class="ts" x="440" y="150">pullTasks / getSubTaskDetail —— 拉题</text>
+  <text class="ts" x="440" y="170">claimSubTask —— CAS 认领</text>
+  <text class="ts" x="440" y="190">startSubTask —— 开始执行</text>
+  <text class="ts" x="440" y="210">submitResult —— 提交产出</text>
+  <text class="ts" x="440" y="234">承载类：McpToolServiceImpl（:232 claim / :379 start / :500 hb / :580 submit）</text>
+  <text class="ts" x="440" y="254">MCP 注册共 13 个 @Tool（另含 uploadArtifact / reportBlocked / checkOut / ack 等）</text>
+
+  <g class="g-warning"><rect x="424" y="282" width="312" height="196" rx="10"/></g>
+  <text class="tp" x="440" y="304">回收 / 自愈线（外部失联时触发）</text>
+  <text class="ts" x="440" y="328">· 心跳超时 → 判 OFFLINE（≤5min 阈值）</text>
+  <text class="ts" x="440" y="348">· 认领后长期未开始 → 租约超时回收</text>
+  <text class="ts" x="440" y="368">· 离线遗留 → 自动改派给同角色替代者</text>
+  <text class="code" x="440" y="392" fill="#EFAA17">sub_task_unclaimed_timeout_reassign</text>
+  <text class="code" x="440" y="412" fill="#EFAA17">sub_task_offline_reassign</text>
+  <text class="code" x="440" y="432" fill="#EFAA17">sub_task_lease_reclaimed</text>
+  <text class="code" x="440" y="452" fill="#EFAA17">sub_task_session_interrupted</text>
+  <text class="ts" x="440" y="472">回收后回 PENDING，重新进入选人链</text>
+
+  <!-- 底部状态迭代 -->
+  <g class="g-panel"><rect x="24" y="706" width="356" height="150" rx="10"/></g>
+  <text class="tp" x="40" y="728">状态迭代（SubTaskStatus）</text>
+  <g>
+    <rect x="40" y="742" width="72" height="22" rx="11" style="fill: var(--surface); stroke: var(--border);"/>
+    <text class="ts" x="76" y="757" text-anchor="middle">PENDING</text>
+    <path class="e-neutral" d="M112,753 H130" marker-end="url(#mkx-n)"/>
+    <rect x="132" y="742" width="76" height="22" rx="11" style="fill: var(--surface); stroke: var(--border);"/>
+    <text class="ts" x="170" y="757" text-anchor="middle">ASSIGNED</text>
+    <path class="e-neutral" d="M208,753 H226" marker-end="url(#mkx-n)"/>
+    <rect x="228" y="742" width="96" height="22" rx="11" style="fill: var(--brand-soft); stroke: var(--brand);"/>
+    <text class="ts" x="276" y="757" text-anchor="middle">IN_PROGRESS</text>
+    <path class="e-neutral" d="M324,753 H342" marker-end="url(#mkx-n)"/>
+    <rect x="344" y="742" width="26" height="22" rx="11" style="fill: color-mix(in srgb, var(--success) 14%, transparent); stroke: var(--success);"/>
+  </g>
+  <text class="ts" x="40" y="786">assigned→in_progress 由 claimSubTask 的 CAS 完成（非派发方写）</text>
+  <text class="ts" x="40" y="806">回收线：in_progress → PENDING（超时 / 离线 / 租约失守）</text>
+  <text class="ts" x="40" y="826">提交后进入 REVIEW，与内部 LLM 完全同一条核验链</text>
+  <text class="ts" x="40" y="846">★ 物理瓶颈：一个外部会话同一时刻只认领并执行一个子任务</text>
+
+  <g class="g-danger"><rect x="392" y="706" width="344" height="150" rx="10"/></g>
+  <text class="tp" x="408" y="728">与内部 LLM 的关键差异</text>
+  <text class="ts" x="408" y="752">· 不产执行命令：无 sub_task_execution_command_created</text>
+  <text class="ts" x="408" y="772">· 不产 sub_task_llm_call_start / _end（执行在外部）</text>
+  <text class="ts" x="408" y="792">· 无 task_assigned 事件（由 dispatch_prepare 承载）</text>
+  <text class="ts" x="408" y="812">· 不经 RuntimeTurnExecutor / ChatModelToolLoop</text>
+  <text class="ts" x="408" y="832">· 结果直调 handleReport，source="EXTERNAL" 区分来源</text>
+  <text class="ts" x="408" y="850">· 状态推进全靠外部主动调用，平台被动登记</text>
+
+  <line x1="24" y1="892" x2="60" y2="892" style="stroke: var(--brand); stroke-width: 2; stroke-linecap: round;"/>
+  <text class="leg" x="68" y="896">主链</text>
+  <line x1="130" y1="892" x2="166" y2="892" style="stroke: var(--text-muted); stroke-width: 1.5; stroke-dasharray: 4 4; stroke-linecap: round;"/>
+  <text class="leg" x="174" y="896">状态迁移 / 回收</text>
+</svg>

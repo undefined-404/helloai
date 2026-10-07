@@ -1,0 +1,203 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 872" width="760" height="872" role="img" aria-label="Planner 任务拆解分析流程与状态迭代">
+  <style>
+    svg {
+      --surface: #F7F7F8;
+      --surface-muted: #EFEFF2;
+      --text: #171717;
+      --text-muted: #52525B;
+      --border: rgba(23, 23, 23, 0.12);
+      --brand: #4B3FE3;
+      --brand-soft: #F2F7FF;
+      --success: #1DC981;
+      --warning: #EFAA17;
+      --danger: #E8463A;
+      --font-sans: "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    .title { fill: var(--text); font: 500 16px/24px var(--font-sans); }
+    .sub { fill: var(--text-muted); font: 400 11px/16px var(--font-sans); }
+    .th { fill: var(--text); font: 500 13px/18px var(--font-sans); }
+    .ts { fill: var(--text-muted); font: 400 11px/16px var(--font-sans); }
+    .tp { fill: var(--text); font: 500 12px/18px var(--font-sans); }
+    .leg { fill: var(--text-muted); font: 400 11px/16px var(--font-sans); }
+    .g-neutral rect { fill: var(--surface-muted); stroke: var(--border); stroke-width: 1.5; }
+    .g-brand rect { fill: var(--brand-soft); stroke: var(--brand); stroke-width: 2; }
+    .g-success rect { fill: color-mix(in srgb, var(--success) 14%, transparent); stroke: var(--success); stroke-width: 1.5; }
+    .g-warning rect { fill: color-mix(in srgb, var(--warning) 14%, transparent); stroke: var(--warning); stroke-width: 1.5; }
+    .g-danger rect { fill: color-mix(in srgb, var(--danger) 14%, transparent); stroke: var(--danger); stroke-width: 1.5; }
+    .g-panel rect { fill: var(--surface-muted); stroke: var(--border); stroke-width: 1; stroke-dasharray: 4 3; }
+    .e-brand { stroke: var(--brand); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .e-neutral { stroke: var(--text-muted); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .e-dash { stroke: var(--text-muted); stroke-width: 1.5; stroke-dasharray: 4 4; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .leader { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; fill: none; }
+    .cap { fill: var(--surface); stroke: var(--border); }
+    .badge { fill: var(--brand); }
+    .bgt { fill: #FFFFFF; font: 500 9px/12px var(--font-sans); }
+    .code { font: 400 10px/14px "SF Mono", Consolas, monospace; }
+  </style>
+  <defs>
+    <marker id="mkp-b" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" style="fill: var(--brand);"/>
+    </marker>
+    <marker id="mkp-n" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" style="fill: var(--text-muted);"/>
+    </marker>
+  </defs>
+  <rect x="1" y="1" width="758" height="870" rx="12" style="fill: var(--surface); stroke: var(--border);"/>
+  <text class="title" x="20" y="32">Planner 任务拆解分析：流程与状态迭代</text>
+  <text class="sub" x="20" y="50">对应改动窗口 2026-09-28 ~ 10-05 · 单轨硬切后 Planner 仅走 API_KEY_LLM · 标注「新」= 本窗口新增 timeline 事件</text>
+
+  <!-- ── 主流程（中心列，中心 x=250） ── -->
+  <g>
+    <g class="g-neutral">
+      <rect x="110" y="66" width="280" height="44" rx="8"/>
+      <text class="th" x="250" y="84" text-anchor="middle">任务创建 · PENDING</text>
+      <text class="ts" x="250" y="100" text-anchor="middle">用户提交拆解请求（task 落库）</text>
+    </g>
+    <path class="e-brand" d="M250,110 V134" marker-end="url(#mkp-b)"/>
+
+    <g class="g-brand">
+      <rect x="110" y="134" width="280" height="50" rx="8"/>
+      <text class="th" x="250" y="153" text-anchor="middle">planAsync 受理</text>
+      <text class="ts" x="250" y="171" text-anchor="middle">Task: PENDING → PLANNING</text>
+    </g>
+    <path class="e-brand" d="M250,184 V208" marker-end="url(#mkp-b)"/>
+    <g><rect class="cap" x="256" y="186" width="150" height="18" rx="9"/><text class="ts" x="331" y="199" text-anchor="middle">task_plan_async_submitted</text></g>
+
+    <g class="g-neutral">
+      <rect x="110" y="208" width="280" height="48" rx="8"/>
+      <text class="th" x="250" y="227" text-anchor="middle">PlannerAgentPicker.pickForTask 选人</text>
+      <text class="ts" x="250" y="245" text-anchor="middle">PLANNER · 任务 policy → 会话 pinned → 自动选</text>
+    </g>
+    <path class="e-brand" d="M250,256 V282" marker-end="url(#mkp-b)"/>
+
+    <g class="g-neutral">
+      <rect x="110" y="282" width="280" height="48" rx="8"/>
+      <text class="th" x="250" y="301" text-anchor="middle">LLM 拆解调用（异步）</text>
+      <text class="ts" x="250" y="319" text-anchor="middle">prompts/planner-decompose.md</text>
+    </g>
+    <path class="e-brand" d="M250,330 V356" marker-end="url(#mkp-b)"/>
+    <g><rect class="cap" x="200" y="332" width="140" height="18" rx="9"/><text class="ts" x="270" y="345" text-anchor="middle">task_plan_llm_call_start</text></g>
+
+    <g class="g-neutral">
+      <rect x="110" y="356" width="280" height="62" rx="8"/>
+      <text class="th" x="250" y="376" text-anchor="middle">结构化产出与编排</text>
+      <text class="ts" x="250" y="393" text-anchor="middle">JSON 数组 → stable-Kahn 环检测</text>
+      <text class="ts" x="250" y="409" text-anchor="middle">依赖序号回写真实 id → 落 sub_task</text>
+    </g>
+    <path class="e-brand" d="M250,418 V444" marker-end="url(#mkp-b)"/>
+
+    <g class="g-warning">
+      <rect x="110" y="444" width="280" height="48" rx="8"/>
+      <text class="th" x="250" y="463" text-anchor="middle">草案就绪 · 待人工确认</text>
+      <text class="ts" x="250" y="481" text-anchor="middle">sub_task: PENDING_PLAN_REVIEW</text>
+    </g>
+    <path class="e-brand" d="M250,492 V518" marker-end="url(#mkp-b)"/>
+    <g><rect class="cap" x="196" y="494" width="196" height="18" rx="9"/><text class="ts" x="294" y="507" text-anchor="middle">task_plan_generated / _llm_call_end「新」</text></g>
+
+    <g class="g-brand">
+      <rect x="110" y="518" width="280" height="62" rx="8"/>
+      <text class="th" x="250" y="538" text-anchor="middle">人工确认 confirmPlan</text>
+      <text class="ts" x="250" y="555" text-anchor="middle">逐条 changeStatus → PENDING</text>
+      <text class="ts" x="250" y="571" text-anchor="middle">写 planConfirmedAt（幂等恢复凭据）</text>
+    </g>
+    <path class="e-brand" d="M250,580 V606" marker-end="url(#mkp-b)"/>
+    <g><rect class="cap" x="216" y="582" width="118" height="18" rx="9"/><text class="ts" x="275" y="595" text-anchor="middle">task_plan_confirmed</text></g>
+
+    <g class="g-success">
+      <rect x="110" y="606" width="280" height="56" rx="8"/>
+      <text class="th" x="250" y="625" text-anchor="middle">Task 推进 IN_PROGRESS</text>
+      <text class="ts" x="250" y="642" text-anchor="middle">初始化 RunningSpec Baseline</text>
+      <text class="ts" x="250" y="657" text-anchor="middle">逐条触发自动分发（进入 Executor 链）</text>
+    </g>
+    <path class="e-neutral" d="M250,662 V688" marker-end="url(#mkp-n)"/>
+    <g class="g-success">
+      <rect x="150" y="688" width="200" height="34" rx="17"/>
+      <text class="th" x="250" y="710" text-anchor="middle">进入子任务分发内循环 →</text>
+    </g>
+  </g>
+
+  <!-- ── 右侧：状态迭代 rail ── -->
+  <g class="g-panel">
+    <rect x="420" y="66" width="316" height="300" rx="10"/>
+  </g>
+  <text class="tp" x="436" y="90">状态迭代（State Iteration）</text>
+  <text class="ts" x="436" y="114">主任务 Task：</text>
+  <g>
+    <rect x="436" y="124" width="76" height="22" rx="11" style="fill: var(--surface); stroke: var(--border);"/>
+    <text class="ts" x="474" y="139" text-anchor="middle">PENDING</text>
+    <path class="e-neutral" d="M512,135 H534" marker-end="url(#mkp-n)"/>
+    <rect x="536" y="124" width="82" height="22" rx="11" style="fill: var(--brand-soft); stroke: var(--brand);"/>
+    <text class="ts" x="577" y="139" text-anchor="middle">PLANNING</text>
+    <path class="e-neutral" d="M618,135 H640" marker-end="url(#mkp-n)"/>
+    <rect x="642" y="124" width="82" height="22" rx="11" style="fill: color-mix(in srgb, var(--success) 14%, transparent); stroke: var(--success);"/>
+    <text class="ts" x="683" y="139" text-anchor="middle">IN_PROG</text>
+  </g>
+  <text class="ts" x="436" y="172">草案 SubTask：</text>
+  <g>
+    <rect x="436" y="182" width="150" height="22" rx="11" style="fill: color-mix(in srgb, var(--warning) 14%, transparent); stroke: var(--warning);"/>
+    <text class="ts" x="511" y="197" text-anchor="middle">PENDING_PLAN_REVIEW</text>
+    <path class="e-neutral" d="M586,193 H604" marker-end="url(#mkp-n)"/>
+    <rect x="606" y="182" width="118" height="22" rx="11" style="fill: var(--surface); stroke: var(--border);"/>
+    <text class="ts" x="665" y="197" text-anchor="middle">PENDING（可分发）</text>
+  </g>
+  <text class="ts" x="436" y="230">· 确认 = 草案逐条 changeStatus，无独立 promote 步骤</text>
+  <text class="ts" x="436" y="248">· 部分确认状态可幂等恢复（recoverAlreadyConfirmed）</text>
+  <text class="ts" x="436" y="272">失败 / 回退：</text>
+  <text class="ts" x="436" y="290">· LLM 异常 / JSON 解析失败 → PLANNING 回退 PENDING</text>
+  <text class="ts" x="436" y="308">· 拒绝草案 → 草案全 CANCELLED，Task 回 PENDING 重拆</text>
+  <text class="ts" x="436" y="326">· 拆解超时 → CAS 回退 PENDING（PlanningTimeoutTask）</text>
+  <text class="ts" x="436" y="350">承载类：</text>
+
+  <g class="g-panel">
+    <rect x="420" y="386" width="316" height="140" rx="10"/>
+  </g>
+  <text class="tp" x="436" y="408">timeline 事件序列（用户可见）</text>
+  <text class="code" x="436" y="430" fill="#4B3FE3">task_plan_async_submitted</text>
+  <text class="code" x="436" y="450" fill="#4B3FE3">task_plan_llm_call_start</text>
+  <text class="code" x="436" y="470" fill="#4B3FE3">task_plan_llm_call_end  ← 本窗口新增</text>
+  <text class="code" x="436" y="490" fill="#4B3FE3">task_plan_generated</text>
+  <text class="code" x="436" y="510" fill="#4B3FE3">task_plan_confirmed</text>
+
+  <g class="g-panel">
+    <rect x="420" y="542" width="316" height="160" rx="10"/>
+  </g>
+  <text class="tp" x="436" y="564">承载类（helloai-core / helloai-job）</text>
+  <text class="ts" x="436" y="586">PlannerAnalysisServiceImpl  · 受理 / 确认 / 拒绝</text>
+  <text class="ts" x="436" y="606">PlannerDecomposeAsyncServiceImpl · LLM 拆解段</text>
+  <text class="ts" x="436" y="626">SubTaskDependencyOrder · 稳定 Kahn 拓扑排序</text>
+  <text class="ts" x="436" y="646">PlanningTimeoutTask（job）· 超时回收</text>
+  <text class="ts" x="436" y="670">PlannerAgentPicker · 选人（实现 TaskPlannerPickerPort）</text>
+  <text class="ts" x="436" y="690">  自动选：PLANNER + API_KEY_LLM + ACTIVE + 非 SLEEPING + 有凭证</text>
+  <text class="ts" x="436" y="706">  排序：min(inProgressCount) 优先空闲（非 12 层硬过滤链）</text>
+
+  <!-- ── 底部：异常 / 旁路三分支 ── -->
+  <text class="tp" x="24" y="748">异常与旁路分支（不改主链，均回退 PENDING 可重入）</text>
+  <g class="g-danger">
+    <rect x="24" y="760" width="222" height="72" rx="8"/>
+    <text class="th" x="36" y="780">① 拆解失败 task_plan_failed</text>
+    <text class="ts" x="36" y="798">LLM 异常 / JSON 解析失败 / 无可用 Planner</text>
+    <text class="ts" x="36" y="816">Task 回退 PLANNING→PENDING，草案不落库</text>
+  </g>
+  <g class="g-warning">
+    <rect x="256" y="760" width="222" height="72" rx="8"/>
+    <text class="th" x="268" y="780">② 拒绝草案 task_plan_rejected</text>
+    <text class="ts" x="268" y="798">保留审计：草案全部 CANCELLED</text>
+    <text class="ts" x="268" y="816">Task 回 PENDING，可重新触发拆解</text>
+  </g>
+  <g class="g-neutral">
+    <rect x="488" y="760" width="248" height="72" rx="8"/>
+    <text class="th" x="500" y="780">③ 超时恢复 task_plan_timeout_recovered</text>
+    <text class="ts" x="500" y="798">PLANNING 长期停滞 → CAS 回退 PENDING</text>
+    <text class="ts" x="500" y="816">下一轮计划扫描兜底，用户可重新拆解</text>
+  </g>
+  <path class="e-dash" d="M110,374 H96 V790 H24" marker-end="url(#mkp-n)"/>
+  <path class="e-dash" d="M110,549 H96 V790 H256" marker-end="url(#mkp-n)"/>
+  <line x1="24" y1="852" x2="60" y2="852" style="stroke: var(--brand); stroke-width: 2; stroke-linecap: round;"/>
+  <text class="leg" x="68" y="856">主流程</text>
+  <line x1="130" y1="852" x2="166" y2="852" style="stroke: var(--text-muted); stroke-width: 1.5; stroke-dasharray: 4 4; stroke-linecap: round;"/>
+  <text class="leg" x="174" y="856">虚线 = 异常 / 旁路</text>
+  <rect x="300" y="844" width="16" height="16" rx="4" style="fill: color-mix(in srgb, var(--warning) 14%, transparent); stroke: var(--warning);"/>
+  <text class="leg" x="324" y="856">待人工确认</text>
+  <rect x="420" y="844" width="16" height="16" rx="4" style="fill: color-mix(in srgb, var(--success) 14%, transparent); stroke: var(--success);"/>
+  <text class="leg" x="444" y="856">推进成功</text>
+</svg>

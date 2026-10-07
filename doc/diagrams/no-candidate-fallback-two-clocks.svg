@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 620" width="760" height="620" role="img" aria-label="两个时钟的区分与人工介入兜底设计">
+  <style>
+    svg {
+      --surface: #F7F7F8;
+      --surface-muted: #EFEFF2;
+      --text: #171717;
+      --text-muted: #52525B;
+      --border: rgba(23, 23, 23, 0.12);
+      --brand: #4B3FE3;
+      --brand-soft: #F2F7FF;
+      --success: #1DC981;
+      --warning: #EFAA17;
+      --danger: #E8463A;
+      --font-sans: "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    .title { fill: var(--text); font: 500 16px/24px var(--font-sans); }
+    .sub { fill: var(--text-muted); font: 400 11px/16px var(--font-sans); }
+    .th { fill: var(--text); font: 500 13px/18px var(--font-sans); }
+    .ts { fill: var(--text-muted); font: 400 11px/16px var(--font-sans); }
+    .tp { fill: var(--text); font: 500 12px/18px var(--font-sans); }
+    .leg { fill: var(--text-muted); font: 400 11px/16px var(--font-sans); }
+    .g-neutral rect { fill: var(--surface-muted); stroke: var(--border); stroke-width: 1.5; }
+    .g-brand rect { fill: var(--brand-soft); stroke: var(--brand); stroke-width: 2; }
+    .g-success rect { fill: color-mix(in srgb, var(--success) 14%, transparent); stroke: var(--success); stroke-width: 1.5; }
+    .g-warning rect { fill: color-mix(in srgb, var(--warning) 14%, transparent); stroke: var(--warning); stroke-width: 1.5; }
+    .g-danger rect { fill: color-mix(in srgb, var(--danger) 14%, transparent); stroke: var(--danger); stroke-width: 1.5; }
+    .g-panel rect { fill: var(--surface-muted); stroke: var(--border); stroke-width: 1; stroke-dasharray: 4 3; }
+    .e-brand { stroke: var(--brand); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .e-neutral { stroke: var(--text-muted); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .e-dash { stroke: var(--text-muted); stroke-width: 1.5; stroke-dasharray: 4 4; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .cap { fill: var(--surface); stroke: var(--border); }
+    .code { font: 400 10px/14px "SF Mono", Consolas, monospace; }
+    .tick { stroke: var(--brand); stroke-width: 2; }
+    .tickn { stroke: var(--text-muted); stroke-width: 2; stroke-dasharray: 3 3; }
+  </style>
+  <defs>
+    <marker id="mk2-b" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" style="fill: var(--brand);"/>
+    </marker>
+    <marker id="mk2-n" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" style="fill: var(--text-muted);"/>
+    </marker>
+  </defs>
+  <rect x="1" y="1" width="758" height="618" rx="12" style="fill: var(--surface); stroke: var(--border);"/>
+  <text class="title" x="20" y="32">两个时钟别混淆：孤儿「扫描」节奏 ≠ 重派「退避」节奏</text>
+  <text class="sub" x="20" y="50">你的问题核心 —— 60s 是「多久看一眼」，{60,180,600,1800}s 是「看上了也不许动」的冷静期；本次兜底只动第一个钟</text>
+
+  <!-- 时钟A -->
+  <g class="g-brand"><rect x="16" y="66" width="362" height="230" rx="10"/></g>
+  <text class="tp" x="32" y="90" fill="#4B3FE3">时钟 A · 孤儿扫描节奏（固定，本次不改）</text>
+  <text class="ts" x="32" y="112">配置：helloai.execution.pending-orphan-scan-interval-ms = 60000</text>
+  <text class="ts" x="32" y="130">机制：@Scheduled fixedDelay 60s + ShedLock 实例互斥</text>
+  <text class="ts" x="32" y="148">作用：每 60s 扫一次「PENDING 且超 5min 无执行记录」的孤儿</text>
+  <line x1="40" y1="188" x2="360" y2="188" class="e-neutral"/>
+  <line x1="40" y1="176" x2="40" y2="200" class="tick"/>
+  <line x1="120" y1="176" x2="120" y2="200" class="tick"/>
+  <line x1="200" y1="176" x2="200" y2="200" class="tick"/>
+  <line x1="280" y1="176" x2="280" y2="200" class="tick"/>
+  <line x1="340" y1="176" x2="340" y2="200" class="tick"/>
+  <text class="ts" x="40" y="216">t=0</text>
+  <text class="ts" x="106" y="216">60s</text>
+  <text class="ts" x="186" y="216">120s</text>
+  <text class="ts" x="266" y="216">180s</text>
+  <text class="ts" x="326" y="216">240s</text>
+  <text class="ts" x="32" y="248">每一跳 = 一次「试着重派人」的机会（interval 恒定 60s）</text>
+  <text class="ts" x="32" y="272">不随失败次数变长 · 不与退避耦合 · 无候选时也照扫</text>
+
+  <!-- 时钟B -->
+  <g class="g-warning"><rect x="382" y="66" width="362" height="230" rx="10"/></g>
+  <text class="tp" x="398" y="90" fill="#EFAA17">时钟 B · 重派退避冷静期（本次不动）</text>
+  <text class="ts" x="398" y="112">常量：REASSIGN_BACKOFF_SECONDS = {60, 180, 600, 1800}</text>
+  <text class="ts" x="398" y="130">时钟源：sub_task.last_attempt_time（只由 increment 写）</text>
+  <text class="ts" x="398" y="148">作用：**已消耗过预算**的重派，命中退避窗口就跳过本轮</text>
+  <line x1="406" y1="188" x2="726" y2="188" class="e-neutral"/>
+  <rect x="404" y="182" width="34" height="12" style="fill: color-mix(in srgb, var(--warning) 30%, transparent);"/>
+  <rect x="470" y="182" width="78" height="12" style="fill: color-mix(in srgb, var(--warning) 30%, transparent);"/>
+  <rect x="580" y="182" width="112" height="12" style="fill: color-mix(in srgb, var(--warning) 30%, transparent);"/>
+  <text class="ts" x="406" y="216">第1档 60s</text>
+  <text class="ts" x="472" y="216">第2档 180s</text>
+  <text class="ts" x="582" y="216">第3档 600s</text>
+  <text class="ts" x="398" y="248">只有「真正派出过」（attempt_total≥1）才进入退避；</text>
+  <text class="ts" x="398" y="272">P1-1 修复后：无候选 = 未派出 = 不烧预算 ⇒ 永不进这个钟</text>
+
+  <!-- 关键结论 -->
+  <g class="g-success"><rect x="16" y="310" width="728" height="88" rx="10"/></g>
+  <text class="tp" x="32" y="334" fill="#1DC981">关键结论：两个钟互不影响</text>
+  <text class="ts" x="32" y="358">· 「无候选」不是「重派失败」：它不消耗 attempt_total、不推进 last_attempt_time ⇒ 本就不受 {60,180,600,1800} 约束</text>
+  <text class="ts" x="32" y="380">· 所以修复后，无候选场景实际观察到的就是「孤儿扫描 60s/次、每次都试着选人、选不到就落事件」</text>
+
+  <!-- 兜底设计 -->
+  <g class="g-panel"><rect x="16" y="412" width="728" height="188" rx="10"/></g>
+  <text class="tp" x="32" y="436">「长期无候选 → 人工介入」兜底：已于 2026-10-05 落地（即时钟 C，保持时钟 A / B 不变）</text>
+  <text class="ts" x="32" y="460">① 连续计数：每轮扫描抛 NoCandidateAgentException 时，context.noCandidate.rounds +1；选中人即清除整个 noCandidate</text>
+  <text class="ts" x="32" y="482">② 计数载体：sub_task.context JSONB（与 manualIntervention 同款，无需迁移、无新列）</text>
+  <text class="ts" x="32" y="504">③ 阈值可配：helloai.dispatch.no-candidate-max-rounds（默认 10 轮 ×（120s + 抖动 0~15s）≈ 21 分钟）</text>
+  <text class="ts" x="32" y="526">④ 达阈值 → markManualIntervention(subTaskId, "no_candidate_long_wait", {rounds, waitedMs})，由该 API 内部落 sub_task_manual_intervention_required</text>
+  <text class="ts" x="32" y="548">⑤ 之后 SubTaskPendingOrphanTask 现有的 isManualInterventionMarked 判断自动跳过 → 不再空扫、前端人工介入面板可见</text>
+  <text class="ts" x="32" y="570">⑥ 外部 agent 回线 / 人工改派 → 复用现有路径清除标记，恢复自动派发（与死信人工重派同款「清零重开」语义）</text>
+  <text class="ts" x="32" y="592">不采用固定 5 次：与熔断同阈值会与 maxReassignAttempts 语义打架（一个是「试过但没派成」，一个是「没试成」）</text>
+
+  <line x1="16" y1="608" x2="52" y2="608" class="tick"/>
+  <text class="leg" x="60" y="612">扫描/退避节拍</text>
+</svg>

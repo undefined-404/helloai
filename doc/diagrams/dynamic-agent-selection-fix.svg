@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 700" width="760" height="700" role="img" aria-label="动态选人缺陷修复对比">
+  <style>
+    svg {
+      --surface: #F7F7F8;
+      --surface-muted: #EFEFF2;
+      --text: #171717;
+      --text-muted: #52525B;
+      --border: rgba(23, 23, 23, 0.12);
+      --brand: #4B3FE3;
+      --brand-soft: #F2F7FF;
+      --success: #1DC981;
+      --warning: #EFAA17;
+      --danger: #E8463A;
+      --font-sans: "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    .title { fill: var(--text); font: 500 16px/24px var(--font-sans); }
+    .sub { fill: var(--text-muted); font: 400 11px/16px var(--font-sans); }
+    .th { fill: var(--text); font: 500 13px/18px var(--font-sans); }
+    .ts { fill: var(--text-muted); font: 400 11px/16px var(--font-sans); }
+    .tp { fill: var(--text); font: 500 12px/18px var(--font-sans); }
+    .leg { fill: var(--text-muted); font: 400 11px/16px var(--font-sans); }
+    .g-neutral rect { fill: var(--surface-muted); stroke: var(--border); stroke-width: 1.5; }
+    .g-brand rect { fill: var(--brand-soft); stroke: var(--brand); stroke-width: 2; }
+    .g-success rect { fill: color-mix(in srgb, var(--success) 14%, transparent); stroke: var(--success); stroke-width: 1.5; }
+    .g-warning rect { fill: color-mix(in srgb, var(--warning) 14%, transparent); stroke: var(--warning); stroke-width: 1.5; }
+    .g-danger rect { fill: color-mix(in srgb, var(--danger) 14%, transparent); stroke: var(--danger); stroke-width: 1.5; }
+    .g-panel rect { fill: var(--surface-muted); stroke: var(--border); stroke-width: 1; stroke-dasharray: 4 3; }
+    .e-brand { stroke: var(--brand); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .e-neutral { stroke: var(--text-muted); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .e-dash { stroke: var(--text-muted); stroke-width: 1.5; stroke-dasharray: 4 4; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .e-danger { stroke: var(--danger); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+    .cap { fill: var(--surface); stroke: var(--border); }
+    .capd { fill: var(--surface); stroke: var(--danger); }
+    .code { font: 400 10px/14px "SF Mono", Consolas, monospace; }
+  </style>
+  <defs>
+    <marker id="mkd-b" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" style="fill: var(--brand);"/>
+    </marker>
+    <marker id="mkd-n" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" style="fill: var(--text-muted);"/>
+    </marker>
+    <marker id="mkd-d" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" style="fill: var(--danger);"/>
+    </marker>
+  </defs>
+  <rect x="1" y="1" width="758" height="698" rx="12" style="fill: var(--surface); stroke: var(--border);"/>
+  <text class="title" x="20" y="32">动态选人缺陷修复对比（P1-1，2026-10-05）· doDispatchPendingAuto 单一入口</text>
+  <text class="sub" x="20" y="50">承载类：SubTaskDispatchServiceImpl · 触发路径：PENDING 孤儿扫描 60s/次 · 缺陷引入 017be9bf（2026-09-28，存量）</text>
+
+  <!-- ── 左：修复前 ── -->
+  <g class="g-danger"><rect x="16" y="66" width="362" height="436" rx="10"/></g>
+  <text class="tp" x="32" y="90" fill="#E8463A">修复前：先计数 · 后选人（确定性烧预算）</text>
+
+  <g class="g-neutral">
+    <rect x="32" y="104" width="330" height="34" rx="8"/>
+    <text class="th" x="197" y="126" text-anchor="middle">进入 doDispatchPendingAuto（PENDING）</text>
+  </g>
+  <path class="e-neutral" d="M197,138 V162" marker-end="url(#mkd-n)"/>
+  <g class="g-neutral">
+    <rect x="32" y="162" width="330" height="34" rx="8"/>
+    <text class="th" x="197" y="184" text-anchor="middle">① 闸门判定 isReassignBlockedOrEscalate</text>
+  </g>
+  <path class="e-neutral" d="M197,196 V220" marker-end="url(#mkd-n)"/>
+  <g class="g-danger">
+    <rect x="32" y="220" width="330" height="40" rx="8"/>
+    <text class="th" x="197" y="238" text-anchor="middle">② accumulateReassignAttempt(+1)</text>
+    <text class="ts" x="197" y="254" text-anchor="middle">← 无论后面是否选出人，都先烧一次预算</text>
+  </g>
+  <path class="e-danger" d="M197,260 V284" marker-end="url(#mkd-d)"/>
+  <g class="g-neutral">
+    <rect x="32" y="284" width="330" height="34" rx="8"/>
+    <text class="th" x="197" y="306" text-anchor="middle">③ agentSelector.pickPreferred 选人</text>
+  </g>
+  <path class="e-danger" d="M197,318 V350" marker-end="url(#mkd-d)"/>
+  <g><rect class="capd" x="86" y="326" width="222" height="18" rx="9"/><text class="ts" x="197" y="339" text-anchor="middle">候选被滤空（白名单窄 / 并发占满）</text></g>
+  <g class="g-danger">
+    <rect x="32" y="350" width="330" height="52" rx="8"/>
+    <text class="th" x="197" y="370" text-anchor="middle">④ 抛裸 BizException「无可用候选」</text>
+    <text class="ts" x="197" y="388" text-anchor="middle">被上层当「状态冲突」静默吞掉 · 零 timeline</text>
+  </g>
+  <path class="e-danger" d="M197,402 V426" marker-end="url(#mkd-d)"/>
+  <g class="g-danger">
+    <rect x="32" y="426" width="330" height="60" rx="8"/>
+    <text class="th" x="197" y="446" text-anchor="middle">预算被白烧 → 后果链</text>
+    <text class="ts" x="197" y="464" text-anchor="middle">60s 一次 × 烧到 4 → 触发 1800s 退避 → 再 1 次</text>
+    <text class="ts" x="197" y="480" text-anchor="middle">= DEAD_LETTER 死信；用户侧「点了没反应」</text>
+  </g>
+
+  <!-- ── 右：修复后 ── -->
+  <g class="g-success"><rect x="382" y="66" width="362" height="436" rx="10"/></g>
+  <text class="tp" x="398" y="90" fill="#1DC981">修复后：先选人 · 后计数 + 专用异常分流</text>
+
+  <g class="g-neutral">
+    <rect x="398" y="104" width="330" height="34" rx="8"/>
+    <text class="th" x="563" y="126" text-anchor="middle">进入 doDispatchPendingAuto（PENDING）</text>
+  </g>
+  <path class="e-neutral" d="M563,138 V162" marker-end="url(#mkd-n)"/>
+  <g class="g-neutral">
+    <rect x="398" y="162" width="330" height="34" rx="8"/>
+    <text class="th" x="563" y="184" text-anchor="middle">① 闸门判定 isReassignBlockedOrEscalate</text>
+  </g>
+  <path class="e-brand" d="M563,196 V220" marker-end="url(#mkd-b)"/>
+  <g class="g-neutral">
+    <rect x="398" y="220" width="330" height="34" rx="8"/>
+    <text class="th" x="563" y="242" text-anchor="middle">② agentSelector.pickPreferred 选人</text>
+  </g>
+  <path class="e-danger" d="M563,254 V286" marker-end="url(#mkd-d)"/>
+  <g><rect class="capd" x="452" y="262" width="222" height="18" rx="9"/><text class="ts" x="563" y="275" text-anchor="middle">候选被滤空 → 专用异常分流</text></g>
+  <g class="g-warning">
+    <rect x="398" y="286" width="330" height="52" rx="8"/>
+    <text class="th" x="563" y="306" text-anchor="middle">抛 NoCandidateAgentException</text>
+    <text class="ts" x="563" y="324" text-anchor="middle">extends BizException（409）· 语义 = 未派出 / 未消耗预算</text>
+  </g>
+  <path class="e-brand" d="M563,338 V362" marker-end="url(#mkd-b)"/>
+  <g class="g-success">
+    <rect x="398" y="362" width="330" height="40" rx="8"/>
+    <text class="th" x="563" y="380" text-anchor="middle">③ 仅当选出人 → accumulateReassignAttempt(+1)</text>
+    <text class="ts" x="563" y="396" text-anchor="middle">★ 计数后移到选人成功之后</text>
+  </g>
+  <path class="e-brand" d="M563,402 V426" marker-end="url(#mkd-b)"/>
+  <g class="g-success">
+    <rect x="398" y="426" width="330" height="60" rx="8"/>
+    <text class="th" x="563" y="446" text-anchor="middle">孤儿扫描捕获 → 落 sub_task_no_candidate</text>
+    <text class="ts" x="563" y="464" text-anchor="middle">可自愈等待态：预算不烧、退避时钟不动</text>
+    <text class="ts" x="563" y="480" text-anchor="middle">下一轮 60s 自动重试 · 前端可见不再静默</text>
+  </g>
+
+  <!-- 底部：三条结论 -->
+  <g class="g-panel"><rect x="16" y="520" width="728" height="118" rx="10"/></g>
+  <text class="tp" x="32" y="544">修复三要点</text>
+  <text class="ts" x="32" y="568">① 计数后移：只有真正选出执行者、进入派发才消耗一次重派预算 → 等待态不再被误烧成熔断死信</text>
+  <text class="ts" x="32" y="590">② 异常分流：新增 NoCandidateAgentException（extends BizException）与并发状态冲突类型区分 → 不再被裸 BizException 吞掉</text>
+  <text class="ts" x="32" y="612">③ 可观测：孤儿扫描捕获后落 sub_task_no_candidate timeline，前端字典三处同步登记（eventMeta / sequenceFlow / COMPACT_HIDDEN_EVENTS）</text>
+
+  <line x1="16" y1="660" x2="52" y2="660" style="stroke: var(--danger); stroke-width: 2; stroke-linecap: round;"/>
+  <text class="leg" x="60" y="664">修复前 · 烧预算路径</text>
+  <line x1="200" y1="660" x2="236" y2="660" style="stroke: var(--brand); stroke-width: 2; stroke-linecap: round;"/>
+  <text class="leg" x="244" y="664">修复后 · 正常选中路径</text>
+  <line x1="410" y1="660" x2="446" y2="660" style="stroke: var(--success); stroke-width: 2; stroke-linecap: round;"/>
+  <text class="leg" x="454" y="664">修复后 · 无候选自愈等待</text>
+  <text class="leg" x="628" y="664">零改动：其余 5 个重派入口</text>
+</svg>
