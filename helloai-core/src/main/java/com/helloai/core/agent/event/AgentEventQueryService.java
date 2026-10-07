@@ -47,15 +47,28 @@ public interface AgentEventQueryService {
     /**
      * 按 Task 分页读取事件审计列表（Phase 0 A7 Audit 读侧）。
      *
-     * <p>按 task 维度查询执行事实（谁在何时做了什么），支持可选 {@code eventType}
-     * 过滤，按写入时序正序（{@code createTime ASC, id ASC}）；供 Audit 消费面从
-     * Event Stream 获取事实（G-001 验收）。</p>
+     * <p>按 task 维度查询执行事实（谁在何时做了什么），支持可选 {@code eventType} 与
+     * {@code timeStart}/{@code timeEnd} 时间范围过滤。时间字符串由实现负责按以下两种
+     * 形态之一解析（与前端 {@code el-date-picker} 默认输出对齐）：</p>
+     *
+     * <ul>
+     *   <li>{@code yyyy-MM-dd HH:mm:ss}（前端显式 {@code value-format} 形态，无时区）</li>
+     *   <li>{@code yyyy-MM-ddTHH:mm:ss[.fff][±HH:mm]}（前端默认 ISO 形态，带时区偏移）</li>
+     * </ul>
+     *
+     * <p>解析后必须以 {@link java.time.OffsetDateTime} 形式下传至 mapper，避免
+     * {@code String → timestamptz} 在 PostgreSQL 上抛
+     * {@code operator does not exist: timestamp with time zone >= character varying}
+     * （实测：http-nio 500）。</p>
      *
      * @param taskId    Task ID；为空时返回空分页
      * @param eventType 事件类型过滤（可空/空白 = 不过滤）
+     * @param timeStart 时间下界字符串（{@code null} / 空白 = 不限；包含边界）
+     * @param timeEnd   时间上界字符串（{@code null} / 空白 = 不限；包含边界）
      * @param pageNum   页码（从 1 起，由调用方校验）
      * @param pageSize  页大小（由调用方校验）
      * @return 分页轨迹投影（含 total / pages 元数据），永不为 null
      */
-    IPage<AgentEventTraceItem> pageAuditByTaskId(Long taskId, String eventType, long pageNum, long pageSize);
+    IPage<AgentEventTraceItem> pageAuditByTaskId(Long taskId, String eventType, String timeStart, String timeEnd,
+                                                 long pageNum, long pageSize);
 }

@@ -132,7 +132,7 @@ class AgentEventQueryServiceImplTest {
     @Test
     @DisplayName("taskId 为空 → 空分页且不触达 mapper")
     void shouldReturnEmptyPageWhenTaskIdNull() {
-        IPage<AgentEventTraceItem> page = queryService.pageAuditByTaskId(null, null, 1, 10);
+        IPage<AgentEventTraceItem> page = queryService.pageAuditByTaskId(null, null, null, null, 1, 10);
         assertThat(page.getRecords()).isEmpty();
         assertThat(page.getTotal()).isZero();
         verifyNoInteractions(agentEventMapper);
@@ -146,10 +146,12 @@ class AgentEventQueryServiceImplTest {
         Page<AgentEvent> resultPage = new Page<>(1, 2);
         resultPage.setTotal(2);
         resultPage.setRecords(List.of(first, second));
-        when(agentEventMapper.selectPageAuditByTaskId(any(), eq(100L), eq("agent_started")))
+        OffsetDateTime start = OffsetDateTime.parse("2026-10-01T00:00:00+08:00");
+        OffsetDateTime end = OffsetDateTime.parse("2026-10-08T23:59:59+08:00");
+        when(agentEventMapper.selectPageAuditByTaskId(any(), eq(100L), eq("agent_started"), eq(start), eq(end)))
                 .thenReturn(resultPage);
 
-        IPage<AgentEventTraceItem> page = queryService.pageAuditByTaskId(100L, "agent_started", 1, 2);
+        IPage<AgentEventTraceItem> page = queryService.pageAuditByTaskId(100L, "agent_started", "2026-10-01 00:00:00", "2026-10-08 23:59:59", 1, 2);
 
         assertThat(page.getRecords()).hasSize(2);
         assertThat(page.getTotal()).isEqualTo(2);
@@ -163,13 +165,53 @@ class AgentEventQueryServiceImplTest {
     @DisplayName("按 task 分页审计：eventType 为空时透传不过滤")
     void shouldPassBlankEventTypeThrough() {
         Page<AgentEvent> resultPage = new Page<>(1, 10);
-        when(agentEventMapper.selectPageAuditByTaskId(any(), eq(100L), eq("  ")))
+        when(agentEventMapper.selectPageAuditByTaskId(any(), eq(100L), eq("  "), eq((OffsetDateTime) null), eq((OffsetDateTime) null)))
                 .thenReturn(resultPage);
 
-        IPage<AgentEventTraceItem> page = queryService.pageAuditByTaskId(100L, "  ", 1, 10);
+        IPage<AgentEventTraceItem> page = queryService.pageAuditByTaskId(100L, "  ", null, null, 1, 10);
 
         assertThat(page.getRecords()).isEmpty();
-        verify(agentEventMapper).selectPageAuditByTaskId(any(), eq(100L), eq("  "));
+        verify(agentEventMapper).selectPageAuditByTaskId(any(), eq(100L), eq("  "), eq((OffsetDateTime) null), eq((OffsetDateTime) null));
+    }
+
+    @Test
+    @DisplayName("Audit 时间参数解析：ISO 形态直接 parse，本地形态按系统时区装配")
+    void shouldParseAuditTimeStringIntoOffsetDate() {
+        Page<AgentEvent> resultPage = new Page<>(1, 10);
+        when(agentEventMapper.selectPageAuditByTaskId(any(), eq(100L), any(), any(), any())).thenReturn(resultPage);
+
+        // ISO 带时区 → 严格 parse
+        queryService.pageAuditByTaskId(100L, null,
+                "2026-10-01T08:00:00+08:00", "2026-10-08T20:00:00+08:00", 1, 10);
+        verify(agentEventMapper).selectPageAuditByTaskId(any(), eq(100L), any(),
+                eq(OffsetDateTime.parse("2026-10-01T08:00:00+08:00")),
+                eq(OffsetDateTime.parse("2026-10-08T20:00:00+08:00")));
+
+        // 隔离 mock 上下文，确保下面的 verify 锚定在「本地形态」这一次调用
+        org.mockito.Mockito.clearInvocations(agentEventMapper);
+        when(agentEventMapper.selectPageAuditByTaskId(any(), eq(100L), any(), any(), any())).thenReturn(resultPage);
+
+        // yyyy-MM-dd HH:mm:ss → 按系统默认时区装配
+        java.time.ZoneOffset zone = java.time.OffsetDateTime.now().getOffset();
+        queryService.pageAuditByTaskId(100L, null, "2026-10-01 08:00:00", "2026-10-08 20:00:00", 1, 10);
+        OffsetDateTime expectedStart = OffsetDateTime.of(
+                java.time.LocalDateTime.parse("2026-10-01 08:00:00", java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")),
+                zone);
+        OffsetDateTime expectedEnd = OffsetDateTime.of(
+                java.time.LocalDateTime.parse("2026-10-08 20:00:00", java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")),
+                zone);
+        verify(agentEventMapper).selectPageAuditByTaskId(any(), eq(100L), any(), eq(expectedStart), eq(expectedEnd));
+    }
+
+    @Test
+    @DisplayName("Audit 时间参数无法解析时降级为 null（不阻塞查询）")
+    void shouldFallbackToNullOnUnparseableTime() {
+        Page<AgentEvent> resultPage = new Page<>(1, 10);
+        when(agentEventMapper.selectPageAuditByTaskId(any(), eq(100L), any(), any(), any())).thenReturn(resultPage);
+
+        queryService.pageAuditByTaskId(100L, null, "garbled", "also-garbled", 1, 10);
+
+        verify(agentEventMapper).selectPageAuditByTaskId(any(), eq(100L), any(), eq((OffsetDateTime) null), eq((OffsetDateTime) null));
     }
 
     private AgentEvent entity(Long id, String eventId, String runId, int turn, int step,

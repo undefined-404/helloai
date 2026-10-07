@@ -9,6 +9,7 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 
 /**
@@ -93,18 +94,27 @@ public interface AgentEventMapper extends BaseMapper<AgentEvent> {
      * 按 Task 分页读取事件审计列表，按写入时序正序（{@code create_time ASC, id ASC}）。
      *
      * <p>Phase 0 A7 Audit 读侧：按 task 维度查询执行事实（谁在何时做了什么），
-     * 支持可选 {@code eventType} 过滤；纯读、不参与业务状态决策。分页走
-     * {@code BaseMapper#selectPage} + {@code LambdaQueryWrapper} 实体投影。</p>
+     * 支持可选 {@code eventType} 与 {@code timeStart}/{@code timeEnd} 时间范围过滤。
+     * 时间参数要求 {@link OffsetDateTime} 类型（不可为 {@code String}）—— 否则 MyBatis 会以
+     * VARCHAR 形式发送给 PostgreSQL 的 {@code timestamptz} 列，触发
+     * {@code operator does not exist: timestamp with time zone >= character varying}
+     * 错误（实测：http-nio 500，PG 报 ERROR）。时间字符串由调用方在 controller/service 层
+     * 用 {@link OffsetDateTime#parse} 解析，避免在 mapper 里重复同一解析口径。</p>
      *
      * @param page      分页参数（页码/页大小由调用方校验）
      * @param taskId    Task ID（不可空，由调用方判空）
      * @param eventType 事件类型过滤（可空/空白 = 不过滤）
+     * @param timeStart 时间下界（{@code null} = 不限；包含边界）
+     * @param timeEnd   时间上界（{@code null} = 不限；包含边界）
      * @return 分页事件结果（含 total / pages 元数据）
      */
-    default IPage<AgentEvent> selectPageAuditByTaskId(IPage<AgentEvent> page, Long taskId, String eventType) {
+    default IPage<AgentEvent> selectPageAuditByTaskId(IPage<AgentEvent> page, Long taskId, String eventType,
+                                                     OffsetDateTime timeStart, OffsetDateTime timeEnd) {
         return selectPage(page, new LambdaQueryWrapper<AgentEvent>()
                 .eq(AgentEvent::getTaskId, taskId)
                 .eq(eventType != null && !eventType.isBlank(), AgentEvent::getEventType, eventType)
+                .ge(timeStart != null, AgentEvent::getCreateTime, timeStart)
+                .le(timeEnd != null, AgentEvent::getCreateTime, timeEnd)
                 .orderByAsc(AgentEvent::getCreateTime)
                 .orderByAsc(AgentEvent::getId));
     }

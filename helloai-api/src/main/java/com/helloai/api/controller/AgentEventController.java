@@ -82,21 +82,25 @@ public class AgentEventController {
     }
 
     /**
-     * Audit：按 Task 分页读取事件审计列表，可选事件类型过滤，按写入时序正序。
+     * Audit：按 Task 分页读取事件审计列表，可选事件类型 + 时间范围过滤，按写入时序正序。
      *
      * <p>page/pageSize 做最小归一（非正回默认值、pageSize 上限 100），
-     * 不限制事件类型集合（由消费方按需传入，service 层空白透传不过滤）。</p>
+     * 不限制事件类型集合（由消费方按需传入，service 层空白透传不过滤）。
+     * {@code timeStart}/{@code timeEnd} 接受 {@code yyyy-MM-dd HH:mm:ss} 形态字符串，
+     * 与实体 {@code createTime} 字典序比较语义一致（包含两端边界），空 / 空白 = 该方向不限。</p>
      */
     @GetMapping("/pageAuditByTaskId/{taskId}")
     public R<PageResult<AgentEventItem>> pageAuditByTaskId(
             @PathVariable("taskId") Long taskId,
             @RequestParam(value = "eventType", required = false) String eventType,
+            @RequestParam(value = "timeStart", required = false) String timeStart,
+            @RequestParam(value = "timeEnd", required = false) String timeEnd,
             @RequestParam(value = "page", defaultValue = "1") long page,
             @RequestParam(value = "pageSize", defaultValue = "20") long pageSize) {
         long safePage = Math.max(page, 1L);
         long safePageSize = pageSize <= 0 ? DEFAULT_PAGE_SIZE : Math.min(pageSize, MAX_PAGE_SIZE);
         IPage<AgentEventTraceItem> result =
-                agentEventQueryService.pageAuditByTaskId(taskId, eventType, safePage, safePageSize);
+                agentEventQueryService.pageAuditByTaskId(taskId, eventType, timeStart, timeEnd, safePage, safePageSize);
         return R.ok(PageResult.of(result, this::toItem));
     }
 

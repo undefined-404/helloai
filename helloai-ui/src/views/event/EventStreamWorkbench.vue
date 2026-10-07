@@ -10,10 +10,10 @@
           <h2 class="page-heading">
             事件流工作台
             <span
-              v-if="activeEvents.length"
+              v-if="headerCount"
               class="query-stats"
               style="margin-left: 4px"
-            >共 {{ activeEvents.length }} 条</span>
+            >共 {{ headerCount }} 条</span>
           </h2>
           <p class="page-subheading">
             Agent 事件回放与审计
@@ -47,7 +47,7 @@
           </div>
         </div>
         <div class="stat-tile-value">
-          {{ activeEvents.length }}
+          {{ headerCount || activeEvents.length }}
         </div>
         <div class="stat-tile-extra">
           <span class="query-stats">覆盖 {{ activeRunCount }} 个 Run</span>
@@ -481,141 +481,33 @@
         </div>
       </div>
 
-      <div class="query-card">
-        <el-table
-          :data="auditEvents"
-          class="audit-table"
-          :empty-text="' '"
-        >
-          <el-table-column
-            label="事件类型"
-            width="180"
-          >
-            <template #default="{ row }">
-              <span
-                class="cell-tag"
-                :class="['tone-' + eventCategoryColor(eventCategory(row.eventType)),
-                         'bg-' + eventCategoryColor(eventCategory(row.eventType))]"
-              >
-                {{ eventLabel(row.eventType) }}
-              </span>
-            </template>
-          </el-table-column>
-          <el-table-column
-            prop="eventId"
-            label="eventId"
-            min-width="150"
-            show-overflow-tooltip
-          />
-          <el-table-column
-            label="归属"
-            min-width="220"
-          >
-            <template #default="{ row }">
-              <div class="cell-stack">
-                <span>run {{ row.runId }}</span>
-                <span v-if="row.taskId != null">task {{ row.taskId }}</span>
-                <el-button
-                  v-if="row.subTaskId != null"
-                  link
-                  type="primary"
-                  class="cell-link"
-                  @click="goSubTask(row.subTaskId)"
-                >
-                  sub {{ subTaskRef(row.subTaskId) }}
-                </el-button>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column
-            label="执行方"
-            min-width="140"
-            show-overflow-tooltip
-          >
-            <template #default="{ row }">
-              {{ row.agentId != null ? resolveAgentName(row.agentId) : '-' }}
-            </template>
-          </el-table-column>
-          <el-table-column
-            label="时间"
-            width="172"
-          >
-            <template #default="{ row }">
-              {{ fmtTime(row.createTime) }}
-            </template>
-          </el-table-column>
-          <el-table-column
-            label="payload"
-            min-width="220"
-          >
-            <template #default="{ row }">
-              <div
-                v-if="row.payload"
-                class="cell-payload"
-              >
-                <span
-                  v-if="payloadBrief(row.payload)"
-                  class="cell-brief"
-                  :title="payloadBrief(row.payload)"
-                >{{ payloadBrief(row.payload) }}</span>
-                <el-collapse
-                  v-if="payloadHasNested(row.payload)"
-                  class="payload-collapse"
-                >
-                  <el-collapse-item
-                    title="完整原文"
-                    name="p"
-                  >
-                    <pre class="payload-pre">{{ jsonOf(row.payload) }}</pre>
-                  </el-collapse-item>
-                </el-collapse>
-              </div>
-              <span
-                v-else
-                class="cell-muted"
-              >-</span>
-            </template>
-          </el-table-column>
-        </el-table>
-
-        <!-- Audit 加载态：6 行表格骨架 -->
+      <div class="query-card audit-waterfall-card">
+        <!-- 瀑布流卡片列表（与 Replay 共用 .tl-item 卡片样式，加载更多在底部） -->
         <div
           v-if="auditLoading && !auditEvents.length"
+          class="tl"
           aria-busy="true"
         >
           <div
             v-for="i in 6"
             :key="i"
-            class="audit-skeleton-row"
+            class="tl-skeleton-row"
           >
             <div
-              class="ha-skeleton audit-skeleton-bar"
-              style="width: 14%"
+              class="ha-skeleton tl-skeleton-bar"
+              style="width: 40%"
             />
             <div
-              class="ha-skeleton audit-skeleton-bar"
-              style="width: 18%"
+              class="ha-skeleton tl-skeleton-bar"
+              style="width: 70%"
             />
             <div
-              class="ha-skeleton audit-skeleton-bar"
-              style="width: 22%"
-            />
-            <div
-              class="ha-skeleton audit-skeleton-bar"
-              style="width: 12%"
-            />
-            <div
-              class="ha-skeleton audit-skeleton-bar"
-              style="width: 14%"
-            />
-            <div
-              class="ha-skeleton audit-skeleton-bar"
-              style="width: 18%; margin-left: auto"
+              class="ha-skeleton tl-skeleton-bar"
+              style="width: 55%"
             />
           </div>
         </div>
 
-        <!-- Audit 空态 -->
         <div
           v-else-if="!auditLoading && !auditEvents.length"
           class="empty-state"
@@ -651,39 +543,131 @@
           </div>
         </div>
 
-        <!-- Audit 读取数据横幅 -->
         <div
-          v-if="auditLoading"
-          class="audit-loading-banner"
+          v-else
+          class="tl tl-stagger"
         >
-          <el-icon
-            class="is-loading"
+          <div
+            v-for="ev in auditEvents"
+            :key="ev.id"
+            class="tl-item"
           >
-            <Loading />
-          </el-icon>
-          正在从 agent_event 执行轨迹表读取数据，请稍候…
-        </div>
+            <span
+              class="tl-node"
+              :class="eventCategoryColor(eventCategory(ev.eventType))"
+            />
+            <span class="tl-line" />
+            <span
+              class="tl-item-stripe"
+              :class="eventCategoryColor(eventCategory(ev.eventType))"
+            />
+            <div class="tl-top">
+              <span
+                class="tl-tag"
+                :class="['tone-' + eventCategoryColor(eventCategory(ev.eventType)),
+                         'bg-' + eventCategoryColor(eventCategory(ev.eventType))]"
+              >
+                {{ eventCategory(ev.eventType) }} · {{ eventLabel(ev.eventType) }}
+              </span>
+              <span class="tl-time">
+                {{ fmtTime(ev.createTime) }}
+              </span>
+            </div>
+            <div class="tl-title">
+              {{ descOf(ev) }}
+            </div>
+            <div class="tl-desc">
+              eventId {{ ev.eventId }}
+              <span
+                v-if="ev.turn != null || ev.step != null"
+                class="tl-pos"
+              >环节 #{{ ev.turn ?? '-' }}/{{ ev.step ?? '-' }}</span>
+            </div>
+            <div
+              v-if="ev.runId || ev.taskId != null || ev.subTaskId != null || ev.agentId != null"
+              class="tl-meta"
+            >
+              <span
+                v-if="ev.runId"
+                class="tl-meta-key"
+              >run</span>
+              <span class="tl-meta-val">{{ ev.runId }}</span>
+              <span
+                v-if="ev.taskId != null"
+                class="tl-meta-key"
+              >task</span>
+              <span class="tl-meta-val">{{ ev.taskId }}</span>
+              <el-button
+                v-if="ev.subTaskId != null"
+                link
+                type="primary"
+                class="tl-link"
+                @click="goSubTask(ev.subTaskId)"
+              >
+                sub {{ subTaskRef(ev.subTaskId) }}
+              </el-button>
+              <span
+                v-if="ev.agentId != null"
+                class="tl-meta-key"
+              >执行方</span>
+              <span class="tl-meta-val">{{ resolveAgentName(ev.agentId) }}</span>
+            </div>
+            <div
+              v-if="ev.payload && payloadFields(ev.payload).length"
+              class="tl-fields"
+            >
+              <div
+                v-for="f in payloadFields(ev.payload)"
+                :key="f.key"
+                class="pf-row"
+                :class="{ 'pf-text': f.kind === 'text' }"
+              >
+                <span class="pf-label">{{ f.label }}</span>
+                <span class="pf-value">{{ f.kind === 'agent' ? resolveAgentName(f.value) : f.value }}</span>
+              </div>
+            </div>
+            <el-collapse
+              v-if="ev.payload && payloadHasNested(ev.payload)"
+              class="payload-collapse"
+            >
+              <el-collapse-item
+                title="payload 完整原文"
+                name="p"
+              >
+                <pre class="payload-pre">{{ jsonOf(ev.payload) }}</pre>
+              </el-collapse-item>
+            </el-collapse>
+          </div>
 
-        <!-- Audit 分页 -->
-        <el-pagination
-          v-if="auditTotal"
-          background
-          layout="total, sizes, prev, pager, next, jumper"
-          :total="auditTotal"
-          :page-sizes="[10, 14, 20, 50, 100]"
-          :page-size="auditPageSize"
-          :current-page="auditPage"
-          class="pager-row"
-          @current-change="runAudit"
-          @size-change="onAuditSizeChange"
-        />
+          <!-- 加载更多：底部哨兵 + 状态条 -->
+          <div
+            ref="auditSentinel"
+            class="audit-sentinel"
+          >
+            <span
+              v-if="auditLoadingMore"
+              class="query-stats"
+            >
+              <span class="dot" />
+              正在加载更多…
+            </span>
+            <span
+              v-else-if="auditLoadedAll"
+              class="query-stats"
+            >已加载全部 {{ auditEvents.length }} 条</span>
+            <span
+              v-else
+              class="hint"
+            >滚动到底部自动加载更多</span>
+          </div>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
@@ -693,7 +677,6 @@ import {
   FolderOpened,
   InfoFilled,
   List,
-  Loading,
   Operation,
   RefreshLeft,
   Search,
@@ -866,49 +849,134 @@ const auditEvents = ref<AgentEventItem[]>([])
 const auditTotal = ref(0)
 const auditPage = ref(1)
 const auditPageSize = ref(14)
+// 瀑布流：区分「首次 / 加载更多」两个加载态，避免覆盖现有滚动位置
+const auditLoadingMore = ref(false)
+const auditLoadedAll = ref(false)
+// 底部哨兵：IntersectionObserver 命中时触发加载下一页
+const auditSentinel = ref<HTMLElement | null>(null)
+let auditObserver: IntersectionObserver | null = null
 
 // 高级模式面板的额外字段（runId / 子任务 ID / 时间范围）
 const advancedSubTaskId = ref('')
 const advancedTimeStart = ref('')
 const advancedTimeEnd = ref('')
 
-async function runAudit(page = auditPage.value) {
+// 解析本次查询应使用的时间范围：高级模式优先（手工下界 / 时间上界），否则读 auditTimeRange
+function resolveAuditTimeWindow(): { timeStart?: string; timeEnd?: string } {
+  if (advanced.value) {
+    return {
+      timeStart: advancedTimeStart.value || undefined,
+      timeEnd: advancedTimeEnd.value || undefined
+    }
+  }
+  if (auditTimeRange.value && auditTimeRange.value.length === 2) {
+    return { timeStart: auditTimeRange.value[0], timeEnd: auditTimeRange.value[1] }
+  }
+  return {}
+}
+
+/**
+ * Audit 查询统一入口。
+ *
+ * mode:
+ *   - 'reset'：替换 auditEvents（筛选条件 / 切 tab / 任务切换）；置 auditLoadedAll = false
+ *   - 'append'：在 auditEvents 尾部追加下一页（瀑布流加载更多）；命中 auditTotal 后停止
+ */
+async function runAudit(
+  page = auditPage.value,
+  mode: 'reset' | 'append' = 'reset'
+) {
   const taskId = (advanced.value && auditTaskId.value.trim()) || selectedTaskId.value
   if (!taskId) {
     ElMessage.warning('请先选择任务，或打开高级模式手工输入 Task ID')
     return
   }
-  auditPage.value = page
-  auditLoading.value = true
+  const isFirstPage = page <= 1
+  const pageToFetch = isFirstPage ? 1 : page
+  auditPage.value = pageToFetch
+  const loadingFlag = mode === 'append' ? auditLoadingMore : auditLoading
+  loadingFlag.value = true
+  if (isFirstPage) auditLoadedAll.value = false
   try {
-    // TODO(G-006 follow-up): 后端 AgentEventAudit 暂未支持 timeStart/timeEnd 参数，
-    // 这里 UI 已就位（advancedTimeStart/End + auditTimeRange），等后端补齐 DDL 后切换为：
-    //   timeStart: advanced.value ? advancedTimeStart.value : auditTimeRange.value?.[0],
-    //   timeEnd:   advanced.value ? advancedTimeEnd.value   : auditTimeRange.value?.[1],
+    const timeWindow = resolveAuditTimeWindow()
     const result = await agentEventApi.audit({
       taskId,
       eventType: auditEventType.value || undefined,
-      page,
+      timeStart: timeWindow.timeStart,
+      timeEnd: timeWindow.timeEnd,
+      page: pageToFetch,
       pageSize: auditPageSize.value
     })
-    auditEvents.value = result.list
+    if (mode === 'append' && !isFirstPage) {
+      // 去重后追加（极端边界：两次请求重叠，避免同一 id 重复渲染）
+      const seen = new Set(auditEvents.value.map((e) => String(e.id)))
+      const merged = result.list.filter((e) => !seen.has(String(e.id)))
+      auditEvents.value = auditEvents.value.concat(merged)
+    } else {
+      auditEvents.value = result.list
+    }
     auditTotal.value = result.total
+    // 已加载到末页 → 关闭 IntersectionObserver 触发并展示「已加载全部」
+    auditLoadedAll.value = auditEvents.value.length >= auditTotal.value
+    if (auditLoadedAll.value) unobserveAuditSentinel()
+    else void observeAuditSentinel()
     // 与 Replay 路径保持一致：按需补全 Audit 结果中出现的子任务标题/拓扑序号映射，
-    // 缺失时归属列会退化为 #末6位 短 ID（即“只显示到 #N”的根因）；失败静默降级不阻断展示
+    // 缺失时归属列会退化为 #末6位 短 ID；失败静默降级不阻断展示
     void ensureSubTaskMeta(result.list)
   } catch {
-    auditEvents.value = []
-    auditTotal.value = 0
+    if (mode === 'reset') {
+      auditEvents.value = []
+      auditTotal.value = 0
+      auditLoadedAll.value = true
+    }
   } finally {
-    auditLoading.value = false
+    loadingFlag.value = false
   }
 }
 
-function onAuditSizeChange(s: number) {
-  auditPageSize.value = s
-  auditPage.value = 1
-  void runAudit(1)
+// 卸载哨兵：避免切换 tab 后旧 observer 仍持有 DOM 引用
+function unobserveAuditSentinel() {
+  if (auditObserver) {
+    auditObserver.disconnect()
+    auditObserver = null
+  }
 }
+
+// 加载哨兵：当 auditSentinel 进入视口时拉取下一页；首次挂载 / tab 切换 / 筛选变更时复用
+async function observeAuditSentinel() {
+  await nextTick()
+  const el = auditSentinel.value
+  if (!el) return
+  if (auditObserver) auditObserver.disconnect()
+  if (typeof IntersectionObserver === 'undefined') {
+    // 极少数环境无 IO：退化为绑定 scroll，监听滚动到底部
+    return
+  }
+  auditObserver = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (
+          entry.isIntersecting
+          && !auditLoading.value
+          && !auditLoadingMore.value
+          && !auditLoadedAll.value
+        ) {
+          // 命中底部 → 加载下一页
+          void runAudit(auditPage.value + 1, 'append')
+        }
+      }
+    },
+    { rootMargin: '120px 0px' }
+  )
+  auditObserver.observe(el)
+}
+
+// 切回 audit tab 时，若已有数据但 observer 未挂载，重新挂载一次；
+// 切走时断开 observer，避免占用资源。
+watch(activeTab, (tab) => {
+  if (tab === 'audit') void observeAuditSentinel()
+  else unobserveAuditSentinel()
+})
 
 // 高级模式「按 ID 追溯」按钮：按当前 activeTab 触发对应查询
 function onAdvancedTrace() {
@@ -967,6 +1035,23 @@ const replayEmptyText = computed(() => {
 const activeEvents = computed<AgentEventItem[]>(() => {
   if (activeTab.value === 'replay') return replayEvents.value
   return auditEvents.value
+})
+
+/**
+ * 页面标题与「事件总数」卡片显示的数字：
+ * - Replay：Replay 路径一次性拉完全量，len 就是总数；
+ * - Audit：Audit 走瀑布流分页加载，当前 auditEvents 只是已加载部分；
+ *   真实总数用 auditTotal（后端 PageResult.total），保证「共 N 条」与底部状态条一致。
+ * 未发起查询时两者皆空，headerCount 为 0（隐藏徽标）。
+ */
+const headerCount = computed(() => {
+  if (activeTab.value === 'replay') return replayEvents.value.length
+  return auditTotal.value || auditEvents.value.length
+})
+
+// 卸载时释放 IntersectionObserver，避免页面卸载后回调仍在观察
+onBeforeUnmount(() => {
+  unobserveAuditSentinel()
 })
 
 // 覆盖的 Run 数（按 runId 去重）
@@ -1110,15 +1195,6 @@ function descOf(ev: AgentEventItem): string {
   return EVENT_META[ev.eventType]?.desc || ev.eventType
 }
 
-// Audit 表格 payload 摘要：结构化字段拼接（agent 解析名称），单元格内截断、title 悬停看全文
-function payloadBrief(payload: Record<string, any> | null): string {
-  const fields = payloadFields(payload)
-  if (!fields.length) return ''
-  return fields
-    .map((f) => `${f.label} ${f.kind === 'agent' ? resolveAgentName(f.value) : f.value}`)
-    .join(' · ')
-}
-
 // payload 原文美化：审计场景保留原始结构，异常 payload 兜底直显
 function jsonOf(payload: Record<string, any>): string {
   try {
@@ -1133,11 +1209,38 @@ function jsonOf(payload: Record<string, any>): string {
 /* 页面宽度与外层间距（沿用 design-system.css .page 已 token 化的全局 padding） */
 .page { max-width: var(--ha-content-width); }
 
-/* 分页右对齐（Audit 表格尾部） */
-.pager-row {
+/* Audit 加载更多哨兵：与卡片同宽，居中文案 */
+.audit-sentinel {
   display: flex;
-  justify-content: flex-end;
-  margin-top: 14px;
+  align-items: center;
+  justify-content: center;
+  min-height: 56px;
+  padding: 16px 0 4px;
+  font-size: 12px;
+}
+.audit-sentinel .hint {
+  color: var(--ha-muted);
+  font-size: 12px;
+}
+.audit-sentinel .dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ha-primary);
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+/* tl-meta 在 Audit 卡片里跑两条行内键值对，键名做次要色 */
+.tl-meta-key {
+  color: var(--ha-muted);
+  font-size: 11px;
+  margin-right: 2px;
+}
+.tl-meta-val {
+  font-family: var(--ha-font-mono);
+  color: var(--ha-ink-secondary);
 }
 
 /* 分类色背景/文字对（事件卡 .tl-tag / 表格 .cell-tag 共用） */

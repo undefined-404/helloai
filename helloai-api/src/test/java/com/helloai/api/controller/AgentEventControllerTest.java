@@ -135,14 +135,14 @@ class AgentEventControllerTest {
     }
 
     @Test
-    @DisplayName("Audit：taskId/eventType/page/pageSize 透传 + PageResult 封装")
+    @DisplayName("Audit：taskId/eventType/timeStart/timeEnd/page/pageSize 透传 + PageResult 封装")
     void pageAuditByTaskId() {
         Page<AgentEventTraceItem> page = new Page<>(2, 20);
         page.setRecords(List.of(traceItem()));
         page.setTotal(1);
-        when(agentEventQueryService.pageAuditByTaskId(TASK_ID, "agent_started", 2L, 20L)).thenReturn(page);
+        when(agentEventQueryService.pageAuditByTaskId(TASK_ID, "agent_started", "2026-10-01 00:00:00", "2026-10-08 23:59:59", 2L, 20L)).thenReturn(page);
 
-        R<PageResult<AgentEventItem>> resp = controller.pageAuditByTaskId(TASK_ID, "agent_started", 2, 20);
+        R<PageResult<AgentEventItem>> resp = controller.pageAuditByTaskId(TASK_ID, "agent_started", "2026-10-01 00:00:00", "2026-10-08 23:59:59", 2, 20);
 
         assertThat(resp.getCode()).isEqualTo(200);
         assertThat(resp.getData().getList()).hasSize(1);
@@ -151,7 +151,7 @@ class AgentEventControllerTest {
         assertThat(resp.getData().getTotal()).isEqualTo(1);
         assertThat(resp.getData().getCurrent()).isEqualTo(2);
         assertThat(resp.getData().getPages()).isEqualTo(1);
-        verify(agentEventQueryService).pageAuditByTaskId(TASK_ID, "agent_started", 2L, 20L);
+        verify(agentEventQueryService).pageAuditByTaskId(TASK_ID, "agent_started", "2026-10-01 00:00:00", "2026-10-08 23:59:59", 2L, 20L);
         verifyNoMoreInteractions(agentEventQueryService);
     }
 
@@ -160,13 +160,13 @@ class AgentEventControllerTest {
     void pageAuditByTaskIdBlankEventType() {
         Page<AgentEventTraceItem> page = new Page<>(1, 20);
         page.setRecords(List.of());
-        when(agentEventQueryService.pageAuditByTaskId(TASK_ID, "  ", 1L, 20L)).thenReturn(page);
+        when(agentEventQueryService.pageAuditByTaskId(TASK_ID, "  ", null, null, 1L, 20L)).thenReturn(page);
 
-        R<PageResult<AgentEventItem>> resp = controller.pageAuditByTaskId(TASK_ID, "  ", 1, 20);
+        R<PageResult<AgentEventItem>> resp = controller.pageAuditByTaskId(TASK_ID, "  ", null, null, 1, 20);
 
         assertThat(resp.getCode()).isEqualTo(200);
         assertThat(resp.getData().getList()).isEmpty();
-        verify(agentEventQueryService).pageAuditByTaskId(TASK_ID, "  ", 1L, 20L);
+        verify(agentEventQueryService).pageAuditByTaskId(TASK_ID, "  ", null, null, 1L, 20L);
         verifyNoMoreInteractions(agentEventQueryService);
     }
 
@@ -175,20 +175,20 @@ class AgentEventControllerTest {
     void pageAuditByTaskIdParamNormalize() {
         Page<AgentEventTraceItem> page = new Page<>(1, 20);
         page.setRecords(List.of());
-        when(agentEventQueryService.pageAuditByTaskId(TASK_ID, null, 1L, 100L))
+        when(agentEventQueryService.pageAuditByTaskId(TASK_ID, null, null, null, 1L, 100L))
                 .thenReturn(page);
-        when(agentEventQueryService.pageAuditByTaskId(TASK_ID, null, 1L, 20L))
+        when(agentEventQueryService.pageAuditByTaskId(TASK_ID, null, null, null, 1L, 20L))
                 .thenReturn(page);
-        when(agentEventQueryService.pageAuditByTaskId(TASK_ID, null, 1L, 50L))
+        when(agentEventQueryService.pageAuditByTaskId(TASK_ID, null, null, null, 1L, 50L))
                 .thenReturn(page);
 
-        controller.pageAuditByTaskId(TASK_ID, null, 0, -1);
-        controller.pageAuditByTaskId(TASK_ID, null, 1, 1000);
-        controller.pageAuditByTaskId(TASK_ID, null, 0, 50);
+        controller.pageAuditByTaskId(TASK_ID, null, null, null, 0, -1);
+        controller.pageAuditByTaskId(TASK_ID, null, null, null, 1, 1000);
+        controller.pageAuditByTaskId(TASK_ID, null, null, null, 0, 50);
 
-        verify(agentEventQueryService).pageAuditByTaskId(TASK_ID, null, 1L, 20L);
-        verify(agentEventQueryService).pageAuditByTaskId(TASK_ID, null, 1L, 100L);
-        verify(agentEventQueryService).pageAuditByTaskId(TASK_ID, null, 1L, 50L);
+        verify(agentEventQueryService).pageAuditByTaskId(TASK_ID, null, null, null, 1L, 20L);
+        verify(agentEventQueryService).pageAuditByTaskId(TASK_ID, null, null, null, 1L, 100L);
+        verify(agentEventQueryService).pageAuditByTaskId(TASK_ID, null, null, null, 1L, 50L);
         verifyNoMoreInteractions(agentEventQueryService);
     }
 }

@@ -335,6 +335,10 @@ export interface AgentEventItem {
 export interface AgentEventAuditQuery {
   taskId: LongId
   eventType?: string
+  /** 时间下界（含），格式 'yyyy-MM-dd HH:mm:ss'；与 auditTimeRange[0] 同口径 */
+  timeStart?: string
+  /** 时间上界（含），格式 'yyyy-MM-dd HH:mm:ss'；与 auditTimeRange[1] 同口径 */
+  timeEnd?: string
   page: number
   pageSize?: number
 }
