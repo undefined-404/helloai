@@ -1,5 +1,7 @@
 package com.helloai.core.agent.service;
 
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import com.helloai.core.agent.port.UncertaintySnapshot;
 import lombok.Data;
 
@@ -129,6 +131,8 @@ public interface McpToolService {
         private boolean ok;
         private boolean claimed;
         private String reason;
+        /** Agent ID：命名不符 {@code *Id} 约定，须显式声明为字符串以免雪花 ID 在前端丢精度。 */
+        @JsonSerialize(using = ToStringSerializer.class)
         private Long assignedAgent;
         private Long subTaskId;
         private Integer version;
@@ -147,6 +151,8 @@ public interface McpToolService {
         /** 拒绝原因：subtask_not_found / not_task_owner / invalid_status:XXX。 */
         private String reason;
         private Long subTaskId;
+        /** Agent ID：命名不符 {@code *Id} 约定，须显式声明为字符串以免雪花 ID 在前端丢精度。 */
+        @JsonSerialize(using = ToStringSerializer.class)
         private Long assignedAgent;
         /** 推进后的子任务状态；成功时为 IN_PROGRESS。 */
         private String status;

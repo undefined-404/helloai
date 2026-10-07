@@ -10,13 +10,17 @@ import java.util.List;
 /**
  * 附件响应投影（§11.3：API 层不直接暴露数据库 Entity）。
  *
- * <p><b>为什么字段类型与实体逐字对齐</b>：本 VO 替代原先把 {@code Attachment} 实体直接
- * 塞进响应体的写法，而前端契约（{@code helloai-ui/src/types/entities.ts#Attachment}）
- * 已按实体序列化结果定型。Jackson 全局配置把 {@code Long} 序列化为字符串
- * （见 {@code JacksonConfig#jacksonLongToStringCustomizer}），故此处保留 {@code Long}
- * 字段类型，可使新响应与原实体响应<b>逐字节一致</b>，前端零改动、无接口版本迁移成本。
- * 若改用 {@code long}/{@code Number}，会静默改变 {@code id}/{@code fileSize} 的线上格式，
- * 属于破坏性变更，必须避免。</p>
+ * <p><b>字段类型为何与实体逐字对齐</b>：本 VO 替代原先把 {@code Attachment} 实体直接
+ * 塞进响应体的写法，以保证 {@code id}/{@code subTaskId}/{@code taskId} 等 <b>ID</b> 字段的
+ * 线上格式不变（字符串 ⇒ 前端雪花 ID 不丢精度），前端零改动、无接口版本迁移成本。</p>
+ *
+ * <p><b>{@code fileSize} 的格式（2026-10-07 口径变更）</b>：{@code fileSize} <b>不是 ID</b>，
+ * 按 {@code JacksonConfig} 的「两层口径」由属性修饰器自动改为 JSON <b>数字</b>（非 ID 命名的
+ * {@code Long} 属性一律回退为数字）。真正决定线上格式的是全局序列化口径而非 Java 字段类型
+ * （{@code Long} 与 {@code long} 都会命中默认层），故此处保留 {@code Long} 以与实体一致、
+ * 避免额外的映射代码。前端 {@code types/entities.ts#Attachment} 本就把 {@code fileSize}
+ * 声明为 {@code number}，且全部消费点（{@code formatSize} / {@code fmtSize} /
+ * {@code filePreview}）均为数值运算，对数字字符串同样成立 ⇒ 该变更对前端<b>行为中性</b>。</p>
  *
  * <p><b>刻意不投影的字段</b>：{@code deleted}/{@code createBy}/{@code updateBy}/{@code remark}
  * 属持久化内部控制字段；{@code visibility}/{@code uploaderAgentId} 属可见性判定的内部输入

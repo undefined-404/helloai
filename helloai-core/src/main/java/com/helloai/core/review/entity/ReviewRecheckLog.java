@@ -1,6 +1,8 @@
 package com.helloai.core.review.entity;
 
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import com.helloai.common.base.BaseEntity;
 import com.helloai.common.constant.ReviewResult;
 import lombok.Data;
@@ -34,7 +36,8 @@ public class ReviewRecheckLog extends BaseEntity {
     /** 放水标记：1=原 APPROVED 复审 REJECTED，0=一致。 */
     private Integer discrepancy;
 
-    /** 执行复审的 Reviewer Agent ID。 */
+    /** 执行复审的 Reviewer Agent ID。命名不符 {@code *Id} 约定，须显式声明为字符串（雪花 ID 精度）。 */
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long reviewerAgent;
 
     /** 复审评分（1-5）。 */
