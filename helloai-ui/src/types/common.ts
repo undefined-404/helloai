@@ -3,6 +3,9 @@
 // ============================================================
 
 // --- 分页 ---
+// 数值字段（total / pages / current）后端保证为 JSON 数字：JacksonConfig 按 ID 语义
+// 收窄 Long 序列化，仅 ID 字段写字符串、非 ID Long 数值写数字，契约由
+// helloai-api 的 JacksonConfigLongSerializationTest 守护。
 export interface PageResult<T> {
   list: T[]
   total: number

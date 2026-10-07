@@ -23,6 +23,38 @@ function shouldLetCallerHandleError(url: string | undefined): boolean {
 }
 
 /**
+ * PageResult 数值字段兜底（防御性保留）。
+ *
+ * 历史背景：后端全局 LongId-to-string 序列化器按「Java 类型」一刀切，把 PageResult 的
+ * total / pages / current 也写成了 JSON 字符串，导致 Element Plus <el-pagination :total>
+ * 校验失败、组件 DOM 不挂载、整片分页按钮消失。
+ *
+ * 该问题已从后端根除：JacksonConfig 收窄为「按 ID 语义判定」——只有 ID 字段写字符串，
+ * 非 ID 的 Long 数值（分页计数、仪表盘计数、耗时、字节数等）写 JSON 数字，
+ * 契约由 JacksonConfigLongSerializationTest 守护。
+ *
+ * 此处仍保留一层防御性 Number 归一化：前端与后端可独立发布，滚动升级期间可能出现
+ * 「旧后端 + 新前端」的窗口，兜底可保证分页组件不因契约错位而整体消失。
+ * 仅识别有 list 数组 + total 字段的对象结构（即 PageResult 形状），原地转 Number，
+ * 避免每个调用方各自打补丁。
+ */
+function normalizePageResult(data: any): any {
+  if (
+    data
+    && typeof data === 'object'
+    && !Array.isArray(data)
+    && Array.isArray((data as any).list)
+    && 'total' in (data as any)
+  ) {
+    // 字段清单与后端 PageResult（list / total / pages / current）保持一致
+    if ((data as any).total != null) (data as any).total = Number((data as any).total) || 0
+    if ((data as any).pages != null) (data as any).pages = Number((data as any).pages) || 1
+    if ((data as any).current != null) (data as any).current = Number((data as any).current) || 1
+  }
+  return data
+}
+
+/**
  * 集中管理的超时档位：
  * - fast（默认 30s）：列表、详情、状态修改等普通 CRUD
  * - llm（120s）：LLM 拆解、模型目录加载、provider 校验等依赖上游 LLM/网络的接口
@@ -71,7 +103,7 @@ instance.interceptors.response.use(
     }
     const res = response.data
     if (res.code === 200) {
-      return res.data
+      return normalizePageResult(res.data)
     }
     // 白名单内接口（登录/登出/改密/me）由页面自行处理错误提示
     if (shouldLetCallerHandleError(response.config.url)) {

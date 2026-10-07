@@ -346,9 +346,12 @@ async function load(page = 1) {
     if (keyword.value) params.keyword = keyword.value
     const res = await agentApi.adminList(params)
     list.value = res.list || []
-    total.value = res.total
+    // 防御性 Number 归一化：后端已修（JacksonConfig 按 ID 语义收窄，total / pages
+    // 恢复为 JSON 数字），此处仅兜底滚动升级期间的契约错位。
+    // el-pagination 要求 total 为 Number，否则组件 DOM 不挂载、按钮全部消失。
+    total.value = Number(res.total) || 0
     current.value = page
-    pages.value = res.pages || 1
+    pages.value = Number(res.pages) || 1
   } finally {
     loading.value = false
   }

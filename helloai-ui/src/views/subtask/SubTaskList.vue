@@ -579,7 +579,10 @@ async function load(page = 1) {
     // 后端真分页：传 page 返回 PageResult（list/total）
     const res = await subTaskApi.list(params)
     list.value = res.list
-    total.value = res.total
+    // 防御性 Number 归一化：后端已修（JacksonConfig 按 ID 语义收窄，PageResult.total
+    // 恢复为 JSON 数字），此处仅兜底滚动升级期间的契约错位。
+    // el-pagination 要求 total 为 Number，否则整个分页组件 DOM 不挂载。
+    total.value = Number(res.total) || 0
     currentPage.value = page
     // 按主任务过滤时同步刷新全量列表（依赖列序号/依赖图状态色保持最新）
     if (taskId.value) { loadFullList(); loadIterations() }
