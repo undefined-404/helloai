@@ -1,10 +1,16 @@
 <template>
+  <!-- ⚠️ append-to-body 不可移除：页面根节点常带 .ha-entrance-up 等入场动画，
+       其 animation-fill-mode:both 会让动画结束后长期保留 transform:translateY(0)，
+       从而使该节点成为 position:fixed 的包含块 —— 若不传送到 body，
+       el-overlay 会被钉在页面顶部而非视口（页面滚动后弹窗跑到屏幕外）。
+       与项目内其余 23 个弹窗的既有写法保持一致。 -->
   <el-dialog
     v-model="visible"
     :title="title"
     width="85%"
     top="4vh"
     destroy-on-close
+    append-to-body
     @close="handleClose"
   >
     <div

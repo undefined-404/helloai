@@ -66,15 +66,23 @@
 .ha-stagger-entrance > *:nth-child(7)  { animation-delay: 480ms; }
 .ha-stagger-entrance > *:nth-child(8)  { animation-delay: 560ms; }
 
-/* Single entrance */
+/* Single entrance
+   ⚠️ fill-mode 必须是 backwards，不能是 both/forwards：
+   ha-fade-up / ha-scale-in 的 to 态分别是 translateY(0) / scale(1)，
+   只要 transform 不为 none，该节点就会成为 position:fixed 后代的**包含块**
+   —— 页面根节点带 .ha-entrance-up 时，内部 el-dialog 的 .el-overlay
+   会被钉在页面顶部而不是视口（页面滚动后弹窗跑到屏幕外）。
+   而 to 态（opacity:1 + translateY(0)/scale(1)）与元素自然样式完全等价，
+   改用 backwards（仅在 animation-delay 期间应用 from 态）视觉表现不变，
+   动画结束即回到自然态，不再残留 transform。 */
 .ha-entrance-up {
-  animation: ha-fade-up var(--ha-duration-slow) var(--ha-ease-out) both;
+  animation: ha-fade-up var(--ha-duration-slow) var(--ha-ease-out) backwards;
 }
 .ha-entrance-fade {
-  animation: ha-fade-in var(--ha-duration-slow) var(--ha-ease-out) both;
+  animation: ha-fade-in var(--ha-duration-slow) var(--ha-ease-out) backwards;
 }
 .ha-entrance-scale {
-  animation: ha-scale-in 400ms var(--ha-ease-out) both;
+  animation: ha-scale-in 400ms var(--ha-ease-out) backwards;
 }
 
 /* Page transition wrapper */
