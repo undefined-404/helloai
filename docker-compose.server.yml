@@ -144,7 +144,19 @@ services:
   #            app via `service_completed_successfully` (app stays in `created` with
   #            empty logs) and makes `docker compose up -d` return non-zero.
   rabbitmq-init:
-    image: curlimages/curl:latest
+    # Image choice: reuse the MinIO image instead of a dedicated curl image.
+    #   The script only needs a POSIX shell + curl (plus optional base64/tr that it no
+    #   longer uses). minio/minio already ships curl and is already present on the
+    #   server because the `minio` service below pulls the very same tag -- so this
+    #   service starts with NO additional image pull.
+    #   Why it matters: curlimages/curl lives on Docker Hub, and pulling it was measured
+    #   to hang indefinitely in this environment (145s+ with no layer progress), which
+    #   blocked the whole `docker compose up -d`. Add a dedicated curl image back only
+    #   if a working registry mirror is configured.
+    #   Verified locally: `docker exec <minio container> sh /init-rabbitmq.sh` against a
+    #   real broker created vhost /helloai + user + permissions (HTTP 201 x3, exit 0),
+    #   was idempotent on re-run (HTTP 204), and the created account authenticated (200).
+    image: minio/minio:latest
     container_name: helloai-rabbitmq-init
     restart: "no"
     # Guard: /init/init.sh must be an EXISTING REGULAR FILE, otherwise fail loudly

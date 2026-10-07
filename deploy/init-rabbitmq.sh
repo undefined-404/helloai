@@ -62,9 +62,24 @@ RABBIT_USER="${HELLOAI_RABBIT_USER:-helloai}"
 # URL-encoded form of the target vhost ("/" in a path segment must be escaped)
 RABBIT_VHOST_ENC="%2Fhelloai"
 
-API="http://rabbitmq:15672/api"
-AUTH_B64=$(printf '%s:%s' "${RABBITMQ_ADMIN_USER}" "${RABBITMQ_ADMIN_PASSWORD}" | base64 | tr -d '\n')
-AUTH="Authorization: Basic ${AUTH_B64}"
+# Management API host. Parameterised only so the script can be tested against a
+# broker on a different host; compose uses the default.
+MGMT_HOST="${RABBITMQ_MGMT_HOST:-rabbitmq}"
+API="http://${MGMT_HOST}:15672/api"
+
+# Basic auth is delegated to curl's built-in -u instead of hand-rolling
+# `base64 | tr`. Reason: it removes two external-command dependencies, so the script
+# runs on ANY image that ships curl (the init container no longer has to be a
+# dedicated curl image, which previously forced a Docker Hub pull).
+# Caveat of -u: a ':' inside the password would be parsed as the user/password
+# separator, so reject it explicitly rather than failing silently at auth time.
+case "${RABBITMQ_ADMIN_USER}${RABBITMQ_ADMIN_PASSWORD}" in
+  *:*)
+    echo "[rabbitmq-init] ERROR: the admin user or password contains ':'; curl's -u parses it as the user/password separator. Use a hex password without ':'." >&2
+    exit 1
+    ;;
+esac
+CREDS="${RABBITMQ_ADMIN_USER}:${RABBITMQ_ADMIN_PASSWORD}"
 
 # Wait for the broker management API to become ready.
 # WARNING - a retry cap is mandatory: when the ADMIN PASSWORD IS WRONG the management
@@ -85,7 +100,7 @@ attempt=0
 PROBE_CODE=""
 while :; do
   if PROBE_CODE=$(curl -sS --connect-timeout "${CURL_CONNECT_TIMEOUT}" --max-time "${CURL_MAX_TIME}" \
-                    -o /dev/null -w '%{http_code}' -H "${AUTH}" "${API}/overview" 2>/dev/null); then
+                    -o /dev/null -w '%{http_code}' -u "${CREDS}" "${API}/overview" 2>/dev/null); then
     if [ "${PROBE_CODE}" = "200" ]; then
       echo "[rabbitmq-init] management API ready (HTTP 200)"
       break
@@ -140,7 +155,7 @@ http_put() {
 
   if [ -n "${_payload}" ]; then
     if _code=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT \
-                 -H "${AUTH}" -H 'content-type: application/json' \
+                 -u "${CREDS}" -H 'content-type: application/json' \
                  -d "${_payload}" "${API}${_path}"); then
       _rc=0
     else
@@ -148,7 +163,7 @@ http_put() {
     fi
   else
     if _code=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT \
-                 -H "${AUTH}" "${API}${_path}"); then
+                 -u "${CREDS}" "${API}${_path}"); then
       _rc=0
     else
       _rc=$?
