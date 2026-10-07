@@ -62,8 +62,14 @@ services:
       - "25672:5672"    # AMQP
       - "25673:15672"   # Management UI
     environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
+      # 管理员账号改为可覆盖，默认值保持 guest 以不改变现有行为。
+      # 注意：default_user/default_pass 只在节点【首次启动】时创建；
+      #       已有 volume 数据的节点改这两个变量【完全无效】，
+      #       必须用 rabbitmqctl add_user 一次性手工建管理员（见 deploy 文档）。
+      # RabbitMQ 官方限制：guest 仅允许回环登录（与协议无关），
+      #       故 rabbitmq-init 这类兄弟容器【不能】用 guest，须用非 guest 专用管理员。
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_ADMIN_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_ADMIN_PASSWORD:-guest}
       TZ: Asia/Shanghai
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
@@ -72,6 +78,29 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # --- RabbitMQ 隔离初始化（一次性容器，幂等，可反复重跑）---
+  # 职责：创建 vhost /helloai + 业务用户 helloai + 授权（脚本复用 deploy/middleware/rabbitmq/init.sh）。
+  # 缺失本服务 = 本轮线上故障的制度性根因（vhost /helloai 从未被创建，MQ 静默不可用）。
+  # 管理员必须是非 guest 账号：guest 仅限回环登录，兄弟容器（非回环）用它会 403/ACCESS_REFUSED。
+  rabbitmq-init:
+    image: curlimages/curl:latest
+    container_name: helloai-rabbitmq-init
+    restart: "no"
+    entrypoint: /bin/sh
+    command: /init/init.sh
+    volumes:
+      - ./deploy/middleware/rabbitmq/init.sh:/init/init.sh:ro
+    environment:
+      # 刻意使用 `:-` 空默认：无 .env 时 compose 渲染不产生 "variable is not set" 告警；
+      # 值为空则由 init.sh 顶部的守卫【明确报中文错误并非 0 退出】（绝不静默继续）。
+      RABBITMQ_ADMIN_USER: ${RABBITMQ_ADMIN_USER:-}
+      RABBITMQ_ADMIN_PASSWORD: ${RABBITMQ_ADMIN_PASSWORD:-}
+      HELLOAI_RABBIT_USER: ${HELLOAI_RABBIT_USER:-helloai}
+      HELLOAI_RABBIT_PASSWORD: ${HELLOAI_RABBIT_PASSWORD:-}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
 
   # --- MinIO Object Storage ---
   minio:
@@ -116,8 +145,18 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/helloai?currentSchema=public&reWriteBatchedInserts=true
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: "6379"
-      SPRING_RABBITMQ_HOST: rabbitmq
-      SPRING_RABBITMQ_PORT: "5672"
+      # RabbitMQ 收敛为【单一机制】：统一走 application-dev.yml 的 RABBITMQ_* 占位符，
+      # 不再混用 SPRING_RABBITMQ_*（后者无 username/virtual-host 对应项，会让 user/vhost 失控）。
+      # 下面四项的值全部等于 application-dev.yml 现有默认值 ⇒ 行为中性。
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
+      RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
+      RABBITMQ_USERNAME: ${HELLOAI_RABBIT_USER:-helloai}
+      RABBITMQ_VHOST: ${HELLOAI_RABBIT_VHOST:-/helloai}
+      # ⚠️ 这里【故意不声明】RABBITMQ_PASSWORD：
+      #    application-dev.yml 是 ${RABBITMQ_PASSWORD:RabbitHelloai_2026}，
+      #    而 Spring 对「已设置但为空」的环境变量不再回落默认值 ⇒
+      #    一旦该变量为空，会覆盖掉当前可用的默认密码，把服务从「能跑」打成「跑不了」。
+      #    密码请由 yml 占位符或部署目录 .env 提供。
       # MinIO 走 compose 内网（app 容器内 localhost 是自身，默认值 localhost:29000 不可达），
       # 不配置则平台物化/附件直读全部失败（核验报“附件内容不可读”）
       MINIO_ENDPOINT: http://minio:9000
