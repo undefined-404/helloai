@@ -48,61 +48,61 @@
           style="width: 100%"
           empty-text="暂无接口权限码"
         >
-        <el-table-column
-          prop="name"
-          label="名称"
-          min-width="200"
-        />
-        <el-table-column
-          prop="code"
-          label="权限码"
-          min-width="220"
-        >
-          <template #default="{ row }">
-            <code class="perm-code">{{ row.code }}</code>
-          </template>
-        </el-table-column>
-        <el-table-column
-          prop="sort"
-          label="排序"
-          width="90"
-        />
-        <el-table-column
-          label="操作"
-          :width="ACTION.THREE"
-          fixed="right"
-        >
-          <template #default="{ row }">
-            <el-button
-              v-auth="'permission:edit'"
-              size="small"
-              link
-              type="primary"
-              @click="openEdit(row)"
-            >
-              编辑
-            </el-button>
-            <el-button
-              v-auth="'permission:edit'"
-              size="small"
-              link
-              type="warning"
-              @click="openDataRule(row)"
-            >
-              数据规则
-            </el-button>
-            <el-button
-              v-auth="'permission:delete'"
-              size="small"
-              link
-              type="danger"
-              @click="removePermission(row)"
-            >
-              删除
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+          <el-table-column
+            prop="name"
+            label="名称"
+            min-width="200"
+          />
+          <el-table-column
+            prop="code"
+            label="权限码"
+            min-width="220"
+          >
+            <template #default="{ row }">
+              <code class="perm-code">{{ row.code }}</code>
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="sort"
+            label="排序"
+            width="90"
+          />
+          <el-table-column
+            label="操作"
+            :width="ACTION.THREE"
+            fixed="right"
+          >
+            <template #default="{ row }">
+              <el-button
+                v-auth="'permission:edit'"
+                size="small"
+                link
+                type="primary"
+                @click="openEdit(row)"
+              >
+                编辑
+              </el-button>
+              <el-button
+                v-auth="'permission:edit'"
+                size="small"
+                link
+                type="warning"
+                @click="openDataRule(row)"
+              >
+                数据规则
+              </el-button>
+              <el-button
+                v-auth="'permission:delete'"
+                size="small"
+                link
+                type="danger"
+                @click="removePermission(row)"
+              >
+                删除
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
       </div>
     </el-card>
 

@@ -48,157 +48,156 @@
           style="width: 100%"
           empty-text="暂无用户"
         >
-        <el-table-column
-          prop="id"
-          label="ID"
-          width="90"
-        />
-        <el-table-column
-          label="用户名"
-          min-width="140"
-        >
-          <template #default="{ row }">
-            <span class="user-username">{{ row.username }}</span>
-            <el-tag
-              v-if="row.username === 'admin'"
-              size="small"
-              type="warning"
-              effect="plain"
-              style="margin-left: 6px"
-            >
-              内置
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column
-          prop="nickname"
-          label="昵称"
-          min-width="120"
-          show-overflow-tooltip
-        >
-          <template #default="{ row }">
-            {{ row.nickname || '—' }}
-          </template>
-        </el-table-column>
-        <el-table-column
-          prop="email"
-          label="邮箱"
-          min-width="160"
-          show-overflow-tooltip
-        >
-          <template #default="{ row }">
-            {{ row.email || '—' }}
-          </template>
-        </el-table-column>
-        <el-table-column
-          label="角色"
-          min-width="160"
-        >
-          <template #default="{ row }">
-            <el-tag
-              v-for="code in row.roleCodes"
-              :key="code"
-              size="small"
-              :type="code === 'SUPER_ADMIN' ? 'danger' : 'primary'"
-              effect="light"
-              style="margin-right: 4px"
-            >
-              {{ code }}
-            </el-tag>
-            <span
-              v-if="!row.roleCodes || row.roleCodes.length === 0"
-              class="muted"
-            >未分配</span>
-          </template>
-        </el-table-column>
-        <el-table-column
-          label="部门"
-          min-width="140"
-        >
-          <template #default="{ row }">
-            <el-tag
-              v-for="(name, i) in row.departNames"
-              :key="i"
-              size="small"
-              effect="plain"
-              style="margin-right: 4px"
-            >
-              {{ name }}
-            </el-tag>
-            <span
-              v-if="!row.departNames || row.departNames.length === 0"
-              class="muted"
-            >—</span>
-          </template>
-        </el-table-column>
-        <el-table-column
-          label="状态"
-          width="90"
-        >
-          <template #default="{ row }">
-            <el-tag
-              size="small"
-              :type="row.status === 'ACTIVE' ? 'success' : 'info'"
-              effect="light"
-            >
-              {{ row.status === 'ACTIVE' ? '启用' : '禁用' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column
-          label="最近登录"
-          width="170"
-        >
-          <template #default="{ row }">
-            {{ fmtTime(row.lastLoginTime) }}
-          </template>
-        </el-table-column>
-        <el-table-column
-          label="操作"
-          :width="ACTION.FOUR"
-          fixed="right"
-        >
-          <template #default="{ row }">
-            <el-button
-              v-auth="'user:edit'"
-              size="small"
-              link
-              type="primary"
-              @click="openEdit(row)"
-            >
-              编辑
-            </el-button>
-            <el-button
-              v-auth="'user:assign-role'"
-              size="small"
-              link
-              type="primary"
-              @click="openAssignRoles(row)"
-            >
-              分配角色
-            </el-button>
-            <el-button
-              v-auth="'user:edit'"
-              size="small"
-              link
-              type="primary"
-              @click="openAssignOrg(row)"
-            >
-              组织归属
-            </el-button>
-            <el-button
-              v-auth="'user:reset-pwd'"
-              size="small"
-              link
-              type="warning"
-              @click="openResetPassword(row)"
-            >
-              重置密码
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-
+          <el-table-column
+            prop="id"
+            label="ID"
+            width="90"
+          />
+          <el-table-column
+            label="用户名"
+            min-width="140"
+          >
+            <template #default="{ row }">
+              <span class="user-username">{{ row.username }}</span>
+              <el-tag
+                v-if="row.username === 'admin'"
+                size="small"
+                type="warning"
+                effect="plain"
+                style="margin-left: 6px"
+              >
+                内置
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="nickname"
+            label="昵称"
+            min-width="120"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">
+              {{ row.nickname || '—' }}
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="email"
+            label="邮箱"
+            min-width="160"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">
+              {{ row.email || '—' }}
+            </template>
+          </el-table-column>
+          <el-table-column
+            label="角色"
+            min-width="160"
+          >
+            <template #default="{ row }">
+              <el-tag
+                v-for="code in row.roleCodes"
+                :key="code"
+                size="small"
+                :type="code === 'SUPER_ADMIN' ? 'danger' : 'primary'"
+                effect="light"
+                style="margin-right: 4px"
+              >
+                {{ code }}
+              </el-tag>
+              <span
+                v-if="!row.roleCodes || row.roleCodes.length === 0"
+                class="muted"
+              >未分配</span>
+            </template>
+          </el-table-column>
+          <el-table-column
+            label="部门"
+            min-width="140"
+          >
+            <template #default="{ row }">
+              <el-tag
+                v-for="(name, i) in row.departNames"
+                :key="i"
+                size="small"
+                effect="plain"
+                style="margin-right: 4px"
+              >
+                {{ name }}
+              </el-tag>
+              <span
+                v-if="!row.departNames || row.departNames.length === 0"
+                class="muted"
+              >—</span>
+            </template>
+          </el-table-column>
+          <el-table-column
+            label="状态"
+            width="90"
+          >
+            <template #default="{ row }">
+              <el-tag
+                size="small"
+                :type="row.status === 'ACTIVE' ? 'success' : 'info'"
+                effect="light"
+              >
+                {{ row.status === 'ACTIVE' ? '启用' : '禁用' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column
+            label="最近登录"
+            width="170"
+          >
+            <template #default="{ row }">
+              {{ fmtTime(row.lastLoginTime) }}
+            </template>
+          </el-table-column>
+          <el-table-column
+            label="操作"
+            :width="ACTION.FOUR"
+            fixed="right"
+          >
+            <template #default="{ row }">
+              <el-button
+                v-auth="'user:edit'"
+                size="small"
+                link
+                type="primary"
+                @click="openEdit(row)"
+              >
+                编辑
+              </el-button>
+              <el-button
+                v-auth="'user:assign-role'"
+                size="small"
+                link
+                type="primary"
+                @click="openAssignRoles(row)"
+              >
+                分配角色
+              </el-button>
+              <el-button
+                v-auth="'user:edit'"
+                size="small"
+                link
+                type="primary"
+                @click="openAssignOrg(row)"
+              >
+                组织归属
+              </el-button>
+              <el-button
+                v-auth="'user:reset-pwd'"
+                size="small"
+                link
+                type="warning"
+                @click="openResetPassword(row)"
+              >
+                重置密码
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
       </div>
       <el-pagination
         v-if="total > 0"
@@ -228,16 +227,28 @@
         label-width="80px"
       >
         <el-form-item label="用户名">
-          <el-input :model-value="editForm.username" disabled />
+          <el-input
+            :model-value="editForm.username"
+            disabled
+          />
         </el-form-item>
         <el-form-item label="昵称">
-          <el-input v-model="editForm.nickname" placeholder="昵称" />
+          <el-input
+            v-model="editForm.nickname"
+            placeholder="昵称"
+          />
         </el-form-item>
         <el-form-item label="邮箱">
-          <el-input v-model="editForm.email" placeholder="邮箱" />
+          <el-input
+            v-model="editForm.email"
+            placeholder="邮箱"
+          />
         </el-form-item>
         <el-form-item label="手机号">
-          <el-input v-model="editForm.phone" placeholder="手机号" />
+          <el-input
+            v-model="editForm.phone"
+            placeholder="手机号"
+          />
         </el-form-item>
         <el-form-item
           label="状态"

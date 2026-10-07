@@ -33,91 +33,91 @@
           style="width: 100%"
           empty-text="暂无角色"
         >
-        <el-table-column
-          label="角色编码"
-          min-width="140"
-        >
-          <template #default="{ row }">
-            <el-tag
-              size="small"
-              :type="row.code === 'SUPER_ADMIN' ? 'danger' : 'primary'"
-              effect="light"
-            >
-              {{ row.code }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column
-          prop="name"
-          label="角色名称"
-          min-width="120"
-        />
-        <el-table-column
-          prop="description"
-          label="描述"
-          min-width="200"
-          show-overflow-tooltip
-        >
-          <template #default="{ row }">
-            {{ row.description || '—' }}
-          </template>
-        </el-table-column>
-        <el-table-column
-          label="状态"
-          width="90"
-        >
-          <template #default="{ row }">
-            <el-tag
-              size="small"
-              :type="row.status === 'ACTIVE' ? 'success' : 'info'"
-              effect="light"
-            >
-              {{ row.status === 'ACTIVE' ? '启用' : '禁用' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column
-          prop="sort"
-          label="排序"
-          width="70"
-        />
-        <el-table-column
-          label="操作"
-          :width="ACTION.THREE"
-          fixed="right"
-        >
-          <template #default="{ row }">
-            <el-button
-              v-auth="'role:edit'"
-              size="small"
-              link
-              type="primary"
-              @click="openEdit(row)"
-            >
-              编辑
-            </el-button>
-            <el-button
-              v-auth="'role:assign-perm'"
-              size="small"
-              link
-              type="primary"
-              @click="openAssignPermissions(row)"
-            >
-              分配权限
-            </el-button>
-            <el-button
-              v-auth="'role:delete'"
-              size="small"
-              link
-              type="danger"
-              :disabled="row.code === 'SUPER_ADMIN'"
-              @click="removeRole(row)"
-            >
-              删除
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+          <el-table-column
+            label="角色编码"
+            min-width="140"
+          >
+            <template #default="{ row }">
+              <el-tag
+                size="small"
+                :type="row.code === 'SUPER_ADMIN' ? 'danger' : 'primary'"
+                effect="light"
+              >
+                {{ row.code }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="name"
+            label="角色名称"
+            min-width="120"
+          />
+          <el-table-column
+            prop="description"
+            label="描述"
+            min-width="200"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">
+              {{ row.description || '—' }}
+            </template>
+          </el-table-column>
+          <el-table-column
+            label="状态"
+            width="90"
+          >
+            <template #default="{ row }">
+              <el-tag
+                size="small"
+                :type="row.status === 'ACTIVE' ? 'success' : 'info'"
+                effect="light"
+              >
+                {{ row.status === 'ACTIVE' ? '启用' : '禁用' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="sort"
+            label="排序"
+            width="70"
+          />
+          <el-table-column
+            label="操作"
+            :width="ACTION.THREE"
+            fixed="right"
+          >
+            <template #default="{ row }">
+              <el-button
+                v-auth="'role:edit'"
+                size="small"
+                link
+                type="primary"
+                @click="openEdit(row)"
+              >
+                编辑
+              </el-button>
+              <el-button
+                v-auth="'role:assign-perm'"
+                size="small"
+                link
+                type="primary"
+                @click="openAssignPermissions(row)"
+              >
+                分配权限
+              </el-button>
+              <el-button
+                v-auth="'role:delete'"
+                size="small"
+                link
+                type="danger"
+                :disabled="row.code === 'SUPER_ADMIN'"
+                @click="removeRole(row)"
+              >
+                删除
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
       </div>
     </el-card>
 

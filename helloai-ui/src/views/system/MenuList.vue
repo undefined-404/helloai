@@ -42,130 +42,142 @@
           style="width: 100%"
           empty-text="暂无菜单"
         >
-        <el-table-column
-          prop="name"
-          label="菜单名称"
-          min-width="180"
-        />
-        <el-table-column
-          prop="code"
-          label="权限码"
-          min-width="180"
-        >
-          <template #default="{ row }">
-            <code class="perm-code">{{ row.code }}</code>
-          </template>
-        </el-table-column>
-        <el-table-column
-          prop="path"
-          label="路由路径"
-          min-width="180"
-          show-overflow-tooltip
-        >
-          <template #default="{ row }">
-            <code v-if="row.path" class="perm-code">{{ row.path }}</code>
-            <span v-else class="muted">—</span>
-          </template>
-        </el-table-column>
-        <el-table-column
-          prop="component"
-          label="组件"
-          min-width="180"
-          show-overflow-tooltip
-        >
-          <template #default="{ row }">
-            <span v-if="row.component">{{ row.component }}</span>
-            <span v-else class="muted">—（目录/聚合父，跳转首个可见子）</span>
-          </template>
-        </el-table-column>
-        <el-table-column
-          prop="icon"
-          label="图标"
-          width="110"
-        >
-          <template #default="{ row }">
-            <span v-if="row.icon">{{ row.icon }}</span>
-            <span v-else class="muted">—</span>
-          </template>
-        </el-table-column>
-        <el-table-column
-          prop="sort"
-          label="排序"
-          width="70"
-        />
-        <el-table-column
-          label="渲染"
-          width="130"
-        >
-          <template #default="{ row }">
-            <el-tag
-              v-if="row.hidden === 1"
-              size="small"
-              type="warning"
-              effect="plain"
-            >
-              隐藏
-            </el-tag>
-            <el-tag
-              v-if="row.keepAlive === 1"
-              size="small"
-              type="success"
-              effect="plain"
-              class="tag-gap"
-            >
-              缓存
-            </el-tag>
-            <el-tag
-              v-if="row.externalLink"
-              size="small"
-              type="info"
-              effect="plain"
-              class="tag-gap"
-            >
-              外链
-            </el-tag>
-            <span
-              v-if="row.hidden !== 1 && row.keepAlive !== 1 && !row.externalLink"
-              class="muted"
-            >—</span>
-          </template>
-        </el-table-column>
-        <el-table-column
-          label="操作"
-          :width="ACTION.THREE"
-          fixed="right"
-        >
-          <template #default="{ row }">
-            <el-button
-              v-auth="'permission:add'"
-              size="small"
-              link
-              type="primary"
-              @click="openCreate(row)"
-            >
-              新增子菜单
-            </el-button>
-            <el-button
-              v-auth="'permission:edit'"
-              size="small"
-              link
-              type="primary"
-              @click="openEdit(row)"
-            >
-              编辑
-            </el-button>
-            <el-button
-              v-auth="'permission:delete'"
-              size="small"
-              link
-              type="danger"
-              @click="removeMenu(row)"
-            >
-              删除
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+          <el-table-column
+            prop="name"
+            label="菜单名称"
+            min-width="180"
+          />
+          <el-table-column
+            prop="code"
+            label="权限码"
+            min-width="180"
+          >
+            <template #default="{ row }">
+              <code class="perm-code">{{ row.code }}</code>
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="path"
+            label="路由路径"
+            min-width="180"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">
+              <code
+                v-if="row.path"
+                class="perm-code"
+              >{{ row.path }}</code>
+              <span
+                v-else
+                class="muted"
+              >—</span>
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="component"
+            label="组件"
+            min-width="180"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">
+              <span v-if="row.component">{{ row.component }}</span>
+              <span
+                v-else
+                class="muted"
+              >—（目录/聚合父，跳转首个可见子）</span>
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="icon"
+            label="图标"
+            width="110"
+          >
+            <template #default="{ row }">
+              <span v-if="row.icon">{{ row.icon }}</span>
+              <span
+                v-else
+                class="muted"
+              >—</span>
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="sort"
+            label="排序"
+            width="70"
+          />
+          <el-table-column
+            label="渲染"
+            width="130"
+          >
+            <template #default="{ row }">
+              <el-tag
+                v-if="row.hidden === 1"
+                size="small"
+                type="warning"
+                effect="plain"
+              >
+                隐藏
+              </el-tag>
+              <el-tag
+                v-if="row.keepAlive === 1"
+                size="small"
+                type="success"
+                effect="plain"
+                class="tag-gap"
+              >
+                缓存
+              </el-tag>
+              <el-tag
+                v-if="row.externalLink"
+                size="small"
+                type="info"
+                effect="plain"
+                class="tag-gap"
+              >
+                外链
+              </el-tag>
+              <span
+                v-if="row.hidden !== 1 && row.keepAlive !== 1 && !row.externalLink"
+                class="muted"
+              >—</span>
+            </template>
+          </el-table-column>
+          <el-table-column
+            label="操作"
+            :width="ACTION.THREE"
+            fixed="right"
+          >
+            <template #default="{ row }">
+              <el-button
+                v-auth="'permission:add'"
+                size="small"
+                link
+                type="primary"
+                @click="openCreate(row)"
+              >
+                新增子菜单
+              </el-button>
+              <el-button
+                v-auth="'permission:edit'"
+                size="small"
+                link
+                type="primary"
+                @click="openEdit(row)"
+              >
+                编辑
+              </el-button>
+              <el-button
+                v-auth="'permission:delete'"
+                size="small"
+                link
+                type="danger"
+                @click="removeMenu(row)"
+              >
+                删除
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
       </div>
     </el-card>
 

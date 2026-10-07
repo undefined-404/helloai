@@ -1,7 +1,11 @@
 <template>
   <div class="not-found">
-    <div class="not-found-code">404</div>
-    <div class="not-found-desc">页面不存在或无权访问</div>
+    <div class="not-found-code">
+      404
+    </div>
+    <div class="not-found-desc">
+      页面不存在或无权访问
+    </div>
     <el-button
       type="primary"
       @click="goHome"

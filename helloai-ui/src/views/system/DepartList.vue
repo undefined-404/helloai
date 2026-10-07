@@ -35,76 +35,76 @@
           style="width: 100%"
           empty-text="暂无部门"
         >
-        <el-table-column
-          prop="name"
-          label="部门名称"
-          min-width="220"
-        />
-        <el-table-column
-          label="状态"
-          width="90"
-        >
-          <template #default="{ row }">
-            <el-tag
-              size="small"
-              :type="row.status === 'ACTIVE' ? 'success' : 'info'"
-              effect="light"
-            >
-              {{ row.status === 'ACTIVE' ? '启用' : '禁用' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column
-          prop="sort"
-          label="排序"
-          width="70"
-        />
-        <el-table-column
-          prop="description"
-          label="描述"
-          min-width="180"
-          show-overflow-tooltip
-        >
-          <template #default="{ row }">
-            {{ row.description || '—' }}
-          </template>
-        </el-table-column>
-        <el-table-column
-          label="操作"
-          :width="ACTION.FOUR"
-          fixed="right"
-        >
-          <template #default="{ row }">
-            <el-button
-              v-auth="'depart:add'"
-              size="small"
-              link
-              type="primary"
-              @click="openCreate(row)"
-            >
-              新增子
-            </el-button>
-            <el-button
-              v-auth="'depart:edit'"
-              size="small"
-              link
-              type="primary"
-              @click="openEdit(row)"
-            >
-              编辑
-            </el-button>
-            <el-button
-              v-auth="'depart:delete'"
-              size="small"
-              link
-              type="danger"
-              @click="removeDepart(row)"
-            >
-              删除
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+          <el-table-column
+            prop="name"
+            label="部门名称"
+            min-width="220"
+          />
+          <el-table-column
+            label="状态"
+            width="90"
+          >
+            <template #default="{ row }">
+              <el-tag
+                size="small"
+                :type="row.status === 'ACTIVE' ? 'success' : 'info'"
+                effect="light"
+              >
+                {{ row.status === 'ACTIVE' ? '启用' : '禁用' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="sort"
+            label="排序"
+            width="70"
+          />
+          <el-table-column
+            prop="description"
+            label="描述"
+            min-width="180"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">
+              {{ row.description || '—' }}
+            </template>
+          </el-table-column>
+          <el-table-column
+            label="操作"
+            :width="ACTION.FOUR"
+            fixed="right"
+          >
+            <template #default="{ row }">
+              <el-button
+                v-auth="'depart:add'"
+                size="small"
+                link
+                type="primary"
+                @click="openCreate(row)"
+              >
+                新增子
+              </el-button>
+              <el-button
+                v-auth="'depart:edit'"
+                size="small"
+                link
+                type="primary"
+                @click="openEdit(row)"
+              >
+                编辑
+              </el-button>
+              <el-button
+                v-auth="'depart:delete'"
+                size="small"
+                link
+                type="danger"
+                @click="removeDepart(row)"
+              >
+                删除
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
       </div>
     </el-card>
 

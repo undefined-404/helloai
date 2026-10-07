@@ -193,10 +193,10 @@
                 </el-button>
                 <el-button
                   v-if="row.status === 'DRAFT'"
+                  v-auth="'team:edit'"
                   size="small"
                   link
                   type="primary"
-                  v-auth="'team:edit'"
                   @click="onPublish(row)"
                 >
                   发布
