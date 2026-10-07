@@ -584,6 +584,15 @@
           <el-button
             link
             size="small"
+            :disabled="!isPreviewable(att)"
+            :title="isPreviewable(att) ? '在线预览' : '该类型不支持在线预览（可下载查看）'"
+            @click="openPreview(att)"
+          >
+            预览
+          </el-button>
+          <el-button
+            link
+            size="small"
             type="primary"
             :loading="downloadingAttId === att.id"
             @click="downloadAttachment(att)"
@@ -593,6 +602,12 @@
         </div>
       </div>
     </el-card>
+
+    <!-- 产出附件在线预览：与附件管理页共用同一组件（图片/PDF 走 iframe、Markdown 渲染、文本等宽） -->
+    <PreviewDialog
+      v-model="previewVisible"
+      :attachment="previewTarget"
+    />
   </div>
 </template>
 
@@ -607,6 +622,8 @@ import { agentApi } from '@/api/agent'
 import { reviewApi } from '@/api/review'
 import { attachmentApi } from '@/api/attachment'
 import { saveBlobResponse } from '@/utils/download'
+import PreviewDialog from '@/components/PreviewDialog.vue'
+import { isPreviewableAttachment } from '@/utils/filePreview'
 import MarkdownView from '@/components/MarkdownView.vue'
 import ReviewVerdictView from '@/components/ReviewVerdictView.vue'
 import SubTaskSequenceFlow from '@/components/SubTaskSequenceFlow.vue'
@@ -1274,6 +1291,9 @@ async function loadConversation(id: string) {
 // ── 方案 2：产出附件列表 + 单附件下载 ──
 const attachments = ref<Attachment[]>([])
 const downloadingAttId = ref<LongId | null>(null)
+// 在线预览（复用附件管理页的 PreviewDialog；不可预览类型按钮禁用，避免点了才发现 413）
+const previewVisible = ref(false)
+const previewTarget = ref<Attachment | null>(null)
 // 附件版本化（2026-08-19）：同名重传后旧版 INACTIVE；默认只看有效版，"历史"开关回查旧版
 const showHistoryAtt = ref(false)
 const historyAttachments = computed(() => attachments.value.filter(a => a.status !== 'ACTIVE'))
@@ -1298,6 +1318,16 @@ function fmtSize(bytes: number | null | undefined): string {
 function attExt(fileName: string | null | undefined): string {
   const ext = (fileName || '').split('.').pop()?.toUpperCase() || ''
   return ext && ext.length <= 5 ? ext : 'FILE'
+}
+
+/** 前端估算是否可内联预览（后端 isPreviewable 为权威源）。 */
+function isPreviewable(att: Attachment): boolean {
+  return isPreviewableAttachment(att)
+}
+
+function openPreview(att: Attachment) {
+  previewTarget.value = att
+  previewVisible.value = true
 }
 
 async function downloadAttachment(att: Attachment) {
