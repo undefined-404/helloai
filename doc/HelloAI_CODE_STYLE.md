@@ -1125,6 +1125,48 @@ Service → DTO / VO
 
 > API 层不要直接暴露数据库 Entity。
 
+### 11.3.1 计数口径（2026-10-07 固化，可执行）
+
+**违规判定**：`helloai-api/**/controller/*Controller.java` 中，**带 `@RequestMapping` /
+`@GetMapping` / `@PostMapping` / `@PutMapping` / `@DeleteMapping` / `@PatchMapping`
+注解的 public 方法**（即 HTTP 端点），其**方法签名**（返回类型或入参）出现
+`com.helloai.core.<domain>.entity.*` 类型，即记 1 处违规。
+
+计入：
+
+```text
+返回类型   R<Entity> / R<List<Entity>> / R<IPage<Entity>> / ResponseEntity<Entity>
+入参       @RequestBody Entity / 裸 Entity 形参
+```
+
+不计入：
+
+```text
+private 方法            内部映射器（如 private XxxResponse toResponse(Entity e)）
+                        实体不越 API 边界，属正确写法，不误伤
+port record / VO / DTO  TaskView / SubTaskView / *Response / *Request 等非 Entity 类型
+局部变量                Task t = taskService.getById(id);
+```
+
+**计数单位 = 方法**（每个违规端点计 1，与签名是否换行无关）。
+
+**冻结基线（2026-10-07）**：**19 处 / 8 控制器**。
+
+```text
+响应侧（返回类型含 Entity）        17 处 / 7 控制器
+请求侧（返回为 VO，仅入参为实体）   2 处 / 1 控制器  —— AdminPromptController.create / .updateById
+```
+
+> 历史口径并存说明（本次法证还原）：
+> `13/5` = 仅单实体返回 + 请求侧；`17/7` = 返回侧全量（含 List/IPage）；
+> `19/8` = 返回侧全量 + 请求侧。三者互不矛盾，当前**以 19/8 为准**。
+
+**校验**：`scripts/powershell/verify-code-style-p0-layer.ps1 -StaticOnly`
+（红线：违规数不得 > 19；下降提示刷新基线）。
+
+> 本口径只冻结、不要求本次清偿。清掉这 19 处会改动 API 响应契约，须与 `helloai-ui` 联动，
+> 单独立项。
+
 ***
 
 # 12. ID 与状态

@@ -1,19 +1,25 @@
 ﻿# ============================================================
 # helloai 代码规范整改 阶段1(P0) 分层红线清理 验证脚本
 # 用途：静态断言 8 个 Controller 无 QueryWrapper/lambdaQuery/updateById/save/select
-#       直调，然后打包 -> 启动 jar -> 等待就绪 -> 4 接口冒烟（非 5xx）-> 收尾。
+#       直调；并断言 CODE_STYLE §11.3「Controller 不得暴露 core Entity」未超冻结基线；
+#       然后打包 -> 启动 jar -> 等待就绪 -> 4 接口冒烟（非 5xx）-> 收尾。
 # 说明：本阶段不改接口路径，冒烟使用当前路径；阶段2 路径整改后另行验证。
 # 修复（2026-09-28）：原步骤 2/3/4 引用的 tmp\package-backend.ps1 /
 #       tmp\kill-backend.ps1 / tmp\wait-backend.ps1 三个助手已不存在（脚本此前必然
 #       在 [2/5] 失败），已按 start-sb.ps1 / kill-old.ps1 同口径内联，本机无 pwsh 未实跑。
+# 追加（2026-10-07）：
+#   - 新增 [1b/5] §11.3 静态断言（冻结基线 19 处 / 8 控制器，口径见 CODE_STYLE §11.3.1）；
+#   - 新增 -StaticOnly 开关：只跑静态断言，不打包 / 不启动 / 不需要管理员口令；
+#   - 修复 [5/5] 收尾对已删除脚本 tmp\kill-backend.ps1 的坏引用，改用 kill-old.ps1
+#     （tmp\ 清理后原引用必然抛错，等于收尾步骤恒失败）。
 # 用法（项目根）：
-#   powershell -File .\scripts\powershell\verify-code-style-p0-layer.ps1
+#   powershell -File .\scripts\powershell\verify-code-style-p0-layer.ps1 -StaticOnly
+#   $env:HELLOAI_ADMIN_PASSWORD='<口令>'; powershell -File .\scripts\powershell\verify-code-style-p0-layer.ps1
 # ============================================================
 param(
-    [string]$BaseUrl = "http://localhost:6565"
+    [string]$BaseUrl = "http://localhost:6565",
+    [switch]$StaticOnly
 )
-$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD
-if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 
 $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -55,6 +61,70 @@ foreach ($file in $Controllers) {
 }
 Assert-True ($totalHits -eq 0) ("static violation hits=" + $totalHits)
 Write-Host '  STATIC_PASS (0 hits)'
+
+# ---------- 1b) 静态断言：CODE_STYLE §11.3 API 层不得暴露 core Entity ----------
+# 口径见 doc/HelloAI_CODE_STYLE.md §11.3.1：
+#   命中 = helloai-api Controller 中 public 方法（HTTP 端点）的「签名」
+#          （返回类型或入参）出现 com.helloai.core.*.entity 类型；
+#   计数单位 = 方法；private 映射器 / VO / port record / 局部变量均不计。
+Write-Host '== [1b/5] static assertion: CODE_STYLE 11.3 (controller must not expose core Entity) =='
+$EntityBaseline = 19
+$EntityImportRe = 'import\s+com\.helloai\.core\.[a-z]+\.entity\.([A-Za-z0-9_]+)'
+$entityViolations = New-Object System.Collections.ArrayList
+$entityFileSet = New-Object 'System.Collections.Generic.HashSet[string]'
+foreach ($cf in @(Get-ChildItem -Path $ControllerDir -Filter '*Controller.java' -File | Sort-Object Name)) {
+    $lines = @(Get-Content -Path $cf.FullName -Encoding UTF8)
+    $ents = New-Object System.Collections.ArrayList
+    foreach ($ln in $lines) {
+        $m = [regex]::Match($ln, $EntityImportRe)
+        if ($m.Success) { [void]$ents.Add($m.Groups[1].Value) }
+    }
+    $ents = @($ents | Sort-Object -Unique)
+    if ($ents.Count -eq 0) { continue }
+
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $head = $lines[$i]
+        # 只认方法声明行：public 开头 + 含 '(' + 非类声明（public class XxxController { 无 '('，天然排除）
+        if ($head -notmatch '^\s*public\s' -or $head -notmatch '\(' -or $head -match '\bclass\b') { continue }
+        # 拼接完整签名（返回类型 + 形参），按括号配平跨行收集
+        $sig = $head
+        $depth = ([regex]::Matches($sig, '\(')).Count - ([regex]::Matches($sig, '\)')).Count
+        $j = $i
+        while ($depth -gt 0 -and ($j + 1) -lt $lines.Count -and ($j - $i) -lt 40) {
+            $j++
+            $sig += ' ' + $lines[$j]
+            $depth += ([regex]::Matches($lines[$j], '\(')).Count - ([regex]::Matches($lines[$j], '\)')).Count
+        }
+        foreach ($e in $ents) {
+            # 词边界：防止 SubTaskResponse 撞车 SubTask、TaskTimeline 撞车 Task
+            $wordRe = '(?<![A-Za-z0-9_])' + [regex]::Escape($e) + '(?![A-Za-z0-9_])'
+            if ($sig -cmatch $wordRe) {
+                [void]$entityViolations.Add("  VIOLATION " + $cf.Name + ":" + ($i + 1) + "  " + $sig.Trim())
+                [void]$entityFileSet.Add($cf.Name)
+                break
+            }
+        }
+        $i = $j
+    }
+}
+foreach ($v in $entityViolations) { Write-Host $v }
+$entityCount = $entityViolations.Count
+$entityFileCount = $entityFileSet.Count
+Write-Host ("  11.3 violations=" + $entityCount + " controllers=" + $entityFileCount + " baseline=" + $EntityBaseline)
+Assert-True ($entityCount -le $EntityBaseline) ("CODE_STYLE 11.3 regression: violations=" + $entityCount + " > baseline=" + $EntityBaseline)
+if ($entityCount -lt $EntityBaseline) {
+    Write-Host ("  IMPROVED: violations=" + $entityCount + " < baseline=" + $EntityBaseline + " ; refresh CODE_STYLE 11.3.1")
+}
+Write-Host '  11.3_STATIC_PASS'
+
+# ---------- -StaticOnly：静态断言完成即退出（不打包 / 不启动 / 不需口令） ----------
+if ($StaticOnly) {
+    Write-Host 'STATIC_ONLY_DONE (skipped [2/5]..[5/5])'
+    exit 0
+}
+
+$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD" }
 
 # ---------- 2) 打包 ----------
 Write-Host '== [2/5] package backend =='
@@ -141,5 +211,6 @@ Write-Host '  SMOKE_PASS'
 
 # ---------- 5) 收尾 ----------
 Write-Host '== [5/5] cleanup =='
-& (Join-Path $Root 'tmp\kill-backend.ps1')
+# 复用既有 kill-old.ps1（原先引用的 tmp\kill-backend.ps1 随 tmp\ 清理已不存在，必然抛错）
+& (Join-Path $PSScriptRoot 'kill-old.ps1')
 Write-Host 'P0_LAYER_VERIFY_PASS'
