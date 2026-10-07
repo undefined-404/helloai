@@ -173,6 +173,13 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      # 等 rabbitmq-init 成功退出后再启动 app。原因：首次 up -d 时 app 与 init 并发，
+      # app 会因为 vhost/用户尚未建好而认证失败，进入重连窗口；该窗口内
+      # outbox 投递 / 执行指令消费 / 审查 三条 MQ 链路都不可用。
+      # 取舍：这会让「init 失败 ⇒ app 不启动」。这是期望行为——
+      #       宁可明确失败并暴露问题，也不要静默地半可用。
+      rabbitmq-init:
+        condition: service_completed_successfully
 
   # --- Nginx: frontend static hosting + API reverse proxy (only public entry) ---
   web:

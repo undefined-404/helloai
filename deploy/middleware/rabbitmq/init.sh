@@ -46,10 +46,42 @@ API="http://rabbitmq:15672/api"
 AUTH_B64=$(printf '%s:%s' "${RABBITMQ_ADMIN_USER}" "${RABBITMQ_ADMIN_PASSWORD}" | base64 | tr -d '\n')
 AUTH="Authorization: Basic ${AUTH_B64}"
 
-# 等待 broker 管理 API 就绪
-until curl -sf -H "${AUTH}" "${API}/overview" >/dev/null 2>&1; do
-  echo "[rabbitmq-init] waiting for management API..."
-  sleep 2
+# 等待 broker 管理 API 就绪。
+# ⚠️ 必须设最大重试上限：管理员【密码错误】时管理 API 返回 401，
+#    若用不带上限的 until 循环会永远重试、容器永不退出（静默挂死）。
+#    因此这里区分两种情形并显式失败：
+#      - 401/403          → 凭据被拒，立即退出（重试无意义）
+#      - 连接失败/超时     → 计入重试上限，超限退出
+MAX_ATTEMPTS="${RABBITMQ_INIT_MAX_ATTEMPTS:-30}"   # 30 次 × 2s ≈ 60s
+INTERVAL=2
+attempt=0
+PROBE_CODE=""
+while :; do
+  if PROBE_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "${AUTH}" "${API}/overview" 2>/dev/null); then
+    if [ "${PROBE_CODE}" = "200" ]; then
+      echo "[rabbitmq-init] management API ready (HTTP 200)"
+      break
+    fi
+  fi
+  case "${PROBE_CODE}" in
+    401|403)
+      echo "[rabbitmq-init] 错误：管理 API 拒绝认证（HTTP ${PROBE_CODE}）——管理员账号或密码不正确，重试无意义，直接退出。" >&2
+      echo "[rabbitmq-init] 请检查 .env 的 RABBITMQ_ADMIN_USER / RABBITMQ_ADMIN_PASSWORD 是否为该 broker 上真实存在且启用（且非 guest）的管理员。" >&2
+      exit 1
+      ;;
+  esac
+  attempt=$((attempt + 1))
+  if [ "${attempt}" -ge "${MAX_ATTEMPTS}" ]; then
+    echo "[rabbitmq-init] 错误：等待管理 API 就绪超时（已尝试 ${MAX_ATTEMPTS} 次 / 约 $((MAX_ATTEMPTS * INTERVAL))s），最后 HTTP 码='${PROBE_CODE}'，放弃。" >&2
+    case "${PROBE_CODE}" in
+      ""|000)
+        echo "[rabbitmq-init] 提示：无 HTTP 响应，通常为 API 尚未监听 / 网络不通 / 或本容器内缺少 curl 可执行文件。" >&2
+        ;;
+    esac
+    exit 1
+  fi
+  echo "[rabbitmq-init] waiting for management API... (${attempt}/${MAX_ATTEMPTS}, last HTTP='${PROBE_CODE}')"
+  sleep "${INTERVAL}"
 done
 
 echo "[rabbitmq-init] creating vhost /helloai (URL-encoded as ${RABBIT_VHOST_ENC})"

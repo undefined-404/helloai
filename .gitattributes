@@ -5,6 +5,10 @@
 scripts/ci/*.sh text eol=lf
 scripts/ci/*.txt text eol=lf
 deploy/middleware/scripts/*.sh text eol=lf
+# RabbitMQ 初始化脚本：在 Linux 容器内以 /bin/sh 执行，CRLF 会导致
+# "bad interpreter: /bin/sh^M"（脚本静默起不来）。此前只钉了 scripts/*.sh，
+# 漏掉了 rabbitmq/*.sh，故补钉，避免 core.autocrlf 在 checkout 时转成 CRLF。
+deploy/middleware/rabbitmq/*.sh text eol=lf
 .workflow/*.yml text eol=lf
 .github/workflows/*.yml text eol=lf
 # 测试语料夹具：相似度回归锚点依赖逐字符原文快照（含换行），禁止任何换行转换
