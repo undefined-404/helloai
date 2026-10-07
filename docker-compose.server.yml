@@ -161,6 +161,16 @@ services:
       - "127.0.0.1:6565:6565"   # localhost only; public traffic goes through web(nginx):80
     environment:
       TZ: Asia/Shanghai
+      # === UTF-8 locale（2026-10-07 补）===
+      # 容器内 java 的 file.encoding 由 OS locale 推导（Java 18+ 才默认 UTF-8，本项目是 JDK 17）。
+      # 镜像 locale 为 C/POSIX 时 file.encoding 会退化成 ANSI_X3.4-1968(ASCII) ⇒ 中文全部乱码：
+      #   ① 日志/异常里的中文不可读；② Spring 读 application*.yml、Flyway 读含中文注释的 V*.sql
+      #   可能解码异常。显式钉死 locale + file.encoding 是根治项 —— 比逐个把中文注释翻译成英文可靠
+      #   （本项目 application.yml + application-dev.yml 共 178 行中文，全部是注释；翻译只治标）。
+      # C.UTF-8 由 glibc 内置，无需额外生成 locale（en_US.UTF-8 需镜像预装 locales 才有）。
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+      JAVA_TOOL_OPTIONS: -Dfile.encoding=UTF-8
       # Activate dev profile, using Docker internal network config from application-dev.yml
       SPRING_PROFILES_ACTIVE: dev
       # SPRING_* env vars below override application-dev.yml fields,
@@ -195,7 +205,15 @@ services:
       MINIO_BUCKET: helloai-artifacts
       # 凭据加密密钥入口：application.yml 默认值已随开源仓库随机化，
       # 生产必须在部署目录 .env 写入 HELLOAI_CREDENTIAL_AES_KEY_BASE64=<原密钥>（.env 已被 .gitignore 排除）
-      HELLOAI_CREDENTIAL_AES_KEY_BASE64: ${HELLOAI_CREDENTIAL_AES_KEY_BASE64:-}
+      #
+      # ⚠️ 必须用 `:?` fail-fast，不能写 `:-`（2026-10-07 修正）：
+      #   本行若写成 `${HELLOAI_CREDENTIAL_AES_KEY_BASE64:-}`，.env 缺该变量时 compose 会注入【空串】，
+      #   而 Spring 的「已设置」判定包含空串 ⇒ 空值优先级高于 application-dev.yml 的默认真密钥
+      #   （${HELLOAI_CREDENTIAL_AES_KEY_BASE64:MEsmol…}）与 application.yml 的无默认占位符
+      #   ⇒ CredentialCryptoService 抛「缺少凭证加密密钥配置」⇒ 全部凭据解密失败。
+      #   这是「应用起来了、但取不到任何 LLM/Agent 凭据」的静默故障（与本次 MQ 故障同一失败模式），
+      #   故与上面的 RABBITMQ_PASSWORD 同口径做 fail-fast：宁可 compose 明确报错，也不要静默半可用。
+      HELLOAI_CREDENTIAL_AES_KEY_BASE64: ${HELLOAI_CREDENTIAL_AES_KEY_BASE64:?部署目录 .env 必须提供 HELLOAI_CREDENTIAL_AES_KEY_BASE64（与库中密文对应的原密钥），缺失会导致全部凭据解密失败}
     depends_on:
       postgres:
         condition: service_healthy
