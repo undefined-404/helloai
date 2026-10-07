@@ -11,6 +11,10 @@ deploy/middleware/scripts/*.sh text eol=lf
 # （脱离已废弃的「独立中间件服务器」目录结构，单机 server compose 与之一并脱钩），
 # 故本条规则改为按新路径匹配 —— 漏钉会让 core.autocrlf 在 checkout 时转成 CRLF。
 /deploy/init-rabbitmq.sh text eol=lf
+# 部署 compose：由服务器上的 docker compose 读取，且会被直接上传到 Linux
+# （工作树若为 CRLF，用户从工作树直接拷贝上传即带入 CRLF）。索引与工作树统一 LF。
+# 2026-10-07 补充：伴随 docker-compose.server.yml 去中文（转纯 ASCII）一并规范行尾。
+/docker-compose*.yml text eol=lf
 .workflow/*.yml text eol=lf
 .github/workflows/*.yml text eol=lf
 # 测试语料夹具：相似度回归锚点依赖逐字符原文快照（含换行），禁止任何换行转换

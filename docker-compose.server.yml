@@ -4,22 +4,53 @@
 # Prerequisite: helloai-start-1.0.0-SNAPSHOT.jar in same directory
 # Usage: docker compose up -d
 # ------------------------------------------------------------
+# NOTE: this file is intentionally ASCII-only (no CJK characters).
+#   Reason: it is consumed by `docker compose` on the server, and its comments /
+#   `${VAR:?message}` texts / `command:` strings are echoed to a terminal or
+#   container log that may not run a UTF-8 locale (the curlimages/curl and
+#   eclipse-temurin base images default to C/POSIX), which would garble them.
+#   Keep every line ASCII. Use English for comments and runtime messages.
+# ------------------------------------------------------------
 # Differences from local dev version:
 #   1. Added app service running jar directly with eclipse-temurin:17-jre
 #   2. App connects to middleware via compose internal network (service names),
-#      overridden by SPRING_* env vars, no jar repackaging needed
+#      overridden by SPRING_* / RABBITMQ_* env vars, no jar repackaging needed
 #   3. Middleware ports bound to all interfaces (incl. public IP) for remote IDE debugging;
 #      MUST whitelist 15432/26379/25672/25673 in Alibaba Cloud security group to your IP
 #   4. Added web service (nginx): serves frontend dist + proxies /api, /mcp to app,
 #      only port 80 exposed publicly; 6565 bound to 127.0.0.1 for local troubleshooting
+#   5. Added rabbitmq-init one-shot service: creates vhost /helloai + business user,
+#      because the official `guest` account is loopback-only and cannot be used from
+#      a sibling container.
 # Prerequisite files (same dir as this file, relative paths preserved):
-#   helloai-start-1.0.0-SNAPSHOT.jar   # app 镜像内运行的 jar
-#   dist/                              # 前端静态文件（web 服务挂载）
-#   nginx.conf                         # web 服务反向代理配置
-#   deploy/init-rabbitmq.sh      # rabbitmq-init 容器执行的初始化脚本
-#     ⚠️ 必须连同目录结构 deploy/middleware/rabbitmq/ 一起存在：
-#        缺此文件时 rabbitmq-init 会「假成功」（详见 rabbitmq-init 服务注释里的 fail-open 说明），
-#        结果是 app 照常启动但 vhost /helloai 从未创建 —— 即本次线上事故的静默形态。
+#   helloai-start-1.0.0-SNAPSHOT.jar   # jar executed inside the app container
+#   dist/                              # frontend static files (mounted by the web service)
+#   nginx.conf                         # reverse proxy config for the web service
+#   deploy/init-rabbitmq.sh            # init script executed by the rabbitmq-init container
+#     WARNING: this file must exist, otherwise rabbitmq-init "silently succeeds"
+#     (see the fail-open notes on the rabbitmq-init service below) and the app
+#     starts normally while vhost /helloai was never created -- exactly the
+#     silent-failure shape of the 2026-10-07 production incident.
+#
+# REQUIRED PRE-STEP BEFORE `docker compose up -d` (do not skip):
+#   The rabbitmq-init container authenticates with RABBITMQ_ADMIN_USER /
+#   RABBITMQ_ADMIN_PASSWORD. That account MUST already exist on the broker with the
+#   administrator tag, and it MUST NOT be `guest` (loopback-only).
+#   `RABBITMQ_DEFAULT_USER/PASS` below only take effect on a broker's FIRST boot;
+#   on a broker that already has a data volume they are ignored, so you must create
+#   the admin once by hand:
+#     docker exec helloai-rabbitmq rabbitmqctl add_user <admin> <password>
+#     docker exec helloai-rabbitmq rabbitmqctl set_user_tags <admin> administrator
+#   Without it, rabbitmq-init exits non-zero and -- by design -- the app is blocked
+#   by `service_completed_successfully` (stuck in `created`, no logs). Fail-loud by
+#   intent: an explicit failure beats a silent half-working stack.
+#
+# Required .env variables (in the deploy dir; .env is gitignored):
+#   RABBITMQ_ADMIN_USER              # non-guest admin, created manually (see above)
+#   RABBITMQ_ADMIN_PASSWORD
+#   HELLOAI_RABBIT_USER          # optional, defaults to helloai
+#   HELLOAI_RABBIT_PASSWORD      # REQUIRED (`:?`); rabbitmq-init and the app share it
+#   HELLOAI_CREDENTIAL_AES_KEY_BASE64  # REQUIRED (`:?`); must match existing ciphertext
 # ============================================================
 
 services:
@@ -68,12 +99,15 @@ services:
       - "25672:5672"    # AMQP
       - "25673:15672"   # Management UI
     environment:
-      # 管理员账号改为可覆盖，默认值保持 guest 以不改变现有行为。
-      # 注意：default_user/default_pass 只在节点【首次启动】时创建；
-      #       已有 volume 数据的节点改这两个变量【完全无效】，
-      #       必须用 rabbitmqctl add_user 一次性手工建管理员（见 deploy 文档）。
-      # RabbitMQ 官方限制：guest 仅允许回环登录（与协议无关），
-      #       故 rabbitmq-init 这类兄弟容器【不能】用 guest，须用非 guest 专用管理员。
+      # Admin account made overridable; the default stays `guest` to keep existing
+      # behaviour unchanged for first-boot brokers.
+      # NOTE: default_user/default_pass are only applied on the node's FIRST boot.
+      #       On a node that already has a data volume these two variables have NO
+      #       effect at all, and the admin must be created once by hand via
+      #       `rabbitmqctl add_user` (see the pre-step note in the file header).
+      # NOTE: RabbitMQ restricts `guest` to loopback logins (protocol-independent),
+      #       so sibling containers such as rabbitmq-init CANNOT use it; a dedicated
+      #       non-guest admin is required.
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_ADMIN_USER:-guest}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_ADMIN_PASSWORD:-guest}
       TZ: Asia/Shanghai
@@ -85,38 +119,49 @@ services:
       timeout: 5s
       retries: 5
 
-  # --- RabbitMQ 隔离初始化（一次性容器，幂等，可反复重跑）---
-  # 职责：创建 vhost /helloai + 业务用户 helloai + 授权（脚本复用 deploy/init-rabbitmq.sh）。
-  # 缺失本服务 = 本轮线上故障的制度性根因（vhost /helloai 从未被创建，MQ 静默不可用）。
-  # 管理员必须是非 guest 账号：guest 仅限回环登录，兄弟容器（非回环）用它会 403/ACCESS_REFUSED。
+  # --- RabbitMQ isolation bootstrap (one-shot, idempotent, safe to re-run) ---
+  # Duty: create vhost /helloai + business user helloai + permissions
+  #       (script reused from deploy/init-rabbitmq.sh).
+  # Missing this service is the institutional root cause of the production incident:
+  # vhost /helloai was never created, so MQ was silently unusable.
+  # The admin must be a non-guest account: guest is loopback-only, so a sibling
+  # container using it gets 403 / ACCESS_REFUSED.
   #
-  # ⚠️ fail-open 防护（两处都必须保留；已实测，勿凭直觉简化）：
-  #   源文件缺失时，Docker 会在宿主机【创建同名空目录】而不是报错 —— 短语法与
-  #   长语法 bind 都是如此（实测 docker compose 29.2.1 / compose v5.1.0：两种写法
-  #   均 up 成功且都建出空目录，均未报错）。随后 `/bin/sh /init/init.sh` 变成
-  #   `/bin/sh <一个空目录>` —— 实测返回 **rc=0 且零输出**，于是 compose 判 init「成功」，
-  #   app 照常被拉起，而 vhost/用户/权限一条都没建 = 与本次事故完全同构的静默 MQ 故障。
-  #   保险一：长语法 bind（语义更明确；但它【并不】阻止空目录，不能单独依赖）。
-  #   保险二：显式 test -f 守卫 —— 这才是真正兜住 fail-open 的那一道：
-  #           实测挂了空目录时守卫使容器 ExitCode=1，进而 app 被
-  #           service_completed_successfully 拦住（app 停在 created、日志为空），
-  #           且 `docker compose up -d` 返回非 0。
+  # WARNING - fail-open protection (BOTH parts are required; measured, do not simplify):
+  #   When the bind source file is missing, Docker CREATES AN EMPTY DIRECTORY of the
+  #   same name on the host instead of erroring out -- true for both the short and
+  #   the long bind syntax (measured with docker compose 29.2.1 / compose v5.1.0:
+  #   both forms `up` successfully and both create an empty dir, neither reports an
+  #   error). Then `/bin/sh /init/init.sh` becomes `/bin/sh <an empty directory>`,
+  #   which was measured to return rc=0 with zero output -- so compose considers the
+  #   init "successful", the app is started, and no vhost/user/permission was ever
+  #   created: a silent MQ failure identical in shape to the incident.
+  #   Guard 1: long bind syntax (clearer semantics; it does NOT prevent the empty
+  #            directory, so it cannot be relied on alone).
+  #   Guard 2: the explicit `test -f` guard -- this is the one that actually catches
+  #            the fail-open case. Measured: with an empty directory mounted, the
+  #            guard makes the container exit with code 1, which in turn blocks the
+  #            app via `service_completed_successfully` (app stays in `created` with
+  #            empty logs) and makes `docker compose up -d` return non-zero.
   rabbitmq-init:
     image: curlimages/curl:latest
     container_name: helloai-rabbitmq-init
     restart: "no"
-    # 守卫：/init/init.sh 必须是【存在的普通文件】，否则明确报错并非 0 退出。
-    # 用 exec 替换 shell 进程，保证脚本的退出码被 compose 如实看到。
+    # Guard: /init/init.sh must be an EXISTING REGULAR FILE, otherwise fail loudly
+    # with a non-zero exit. `exec` replaces the shell process so that compose sees
+    # the script's exit code faithfully.
     entrypoint: ["/bin/sh", "-c"]
-    command: ["test -f /init/init.sh || { echo '[rabbitmq-init] 错误：/init/init.sh 不存在（bind mount 源文件缺失，或 Docker 因源缺失建成了空目录）。请确认部署目录含 deploy/init-rabbitmq.sh。' >&2; exit 1; }; exec /bin/sh /init/init.sh"]
+    command: ["test -f /init/init.sh || { echo '[rabbitmq-init] ERROR: /init/init.sh not found (bind-mount source missing, or Docker created an empty directory because the source was absent). Make sure the deploy dir contains deploy/init-rabbitmq.sh.' >&2; exit 1; }; exec /bin/sh /init/init.sh"]
     volumes:
       - type: bind
         source: ./deploy/init-rabbitmq.sh
         target: /init/init.sh
         read_only: true
     environment:
-      # 刻意使用 `:-` 空默认：无 .env 时 compose 渲染不产生 "variable is not set" 告警；
-      # 值为空则由 init.sh 顶部的守卫【明确报中文错误并非 0 退出】（绝不静默继续）。
+      # Deliberately use the `:-` empty default: with no .env, compose rendering
+      # does not emit a "variable is not set" warning; an empty value is then
+      # rejected by the guard at the top of init.sh (which fails loudly with a
+      # non-zero exit and never continues silently).
       RABBITMQ_ADMIN_USER: ${RABBITMQ_ADMIN_USER:-}
       RABBITMQ_ADMIN_PASSWORD: ${RABBITMQ_ADMIN_PASSWORD:-}
       HELLOAI_RABBIT_USER: ${HELLOAI_RABBIT_USER:-helloai}
@@ -161,13 +206,18 @@ services:
       - "127.0.0.1:6565:6565"   # localhost only; public traffic goes through web(nginx):80
     environment:
       TZ: Asia/Shanghai
-      # === UTF-8 locale（2026-10-07 补）===
-      # 容器内 java 的 file.encoding 由 OS locale 推导（Java 18+ 才默认 UTF-8，本项目是 JDK 17）。
-      # 镜像 locale 为 C/POSIX 时 file.encoding 会退化成 ANSI_X3.4-1968(ASCII) ⇒ 中文全部乱码：
-      #   ① 日志/异常里的中文不可读；② Spring 读 application*.yml、Flyway 读含中文注释的 V*.sql
-      #   可能解码异常。显式钉死 locale + file.encoding 是根治项 —— 比逐个把中文注释翻译成英文可靠
-      #   （本项目 application.yml + application-dev.yml 共 178 行中文，全部是注释；翻译只治标）。
-      # C.UTF-8 由 glibc 内置，无需额外生成 locale（en_US.UTF-8 需镜像预装 locales 才有）。
+      # === UTF-8 locale (added 2026-10-07) ===
+      # Inside the container, java derives file.encoding from the OS locale
+      # (default UTF-8 only since Java 18; this project runs JDK 17).
+      # With a C/POSIX image locale, file.encoding degrades to ANSI_X3.4-1968
+      # (ASCII), which garbles every non-ASCII character:
+      #   1) non-English log/exception text becomes unreadable;
+      #   2) Spring reading application*.yml, and Flyway reading V*.sql that contain
+      #      non-ASCII comments, may hit decoding errors.
+      # Pinning the locale + file.encoding fixes all of it at the root, rather than
+      # translating every file by hand.
+      # C.UTF-8 is built into glibc and needs no generated locale, unlike
+      # en_US.UTF-8 which requires the image to ship `locales`.
       LANG: C.UTF-8
       LC_ALL: C.UTF-8
       JAVA_TOOL_OPTIONS: -Dfile.encoding=UTF-8
@@ -178,42 +228,57 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/helloai?currentSchema=public&reWriteBatchedInserts=true
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: "6379"
-      # RabbitMQ 收敛为【单一机制】：统一走 application-dev.yml 的 RABBITMQ_* 占位符，
-      # 不再混用 SPRING_RABBITMQ_*（后者无 username/virtual-host 对应项，会让 user/vhost 失控）。
+      # RabbitMQ is consolidated onto ONE mechanism: the RABBITMQ_* placeholders
+      # consumed by application-dev.yml. SPRING_RABBITMQ_* is no longer mixed in
+      # (it has no username/virtual-host counterpart, which would leave user/vhost
+      # uncontrolled).
       RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
       RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
       RABBITMQ_USERNAME: ${HELLOAI_RABBIT_USER:-helloai}
-      # vhost 固定为 /helloai（不作变量化）：
-      #   init.sh 也硬编码创建此 vhost（Management API 里须 URL 编码为 %2Fhelloai）。
-      #   二者必须一致，故此处不暴露为可配置项 —— 否则改 .env 会让 app 与 init.sh 分叉，
-      #   表现为「app 连得上 broker 但 vhost 不存在」的静默故障。
+      # vhost is pinned to /helloai and deliberately not parameterised:
+      #   init.sh also hardcodes creating this vhost (URL-encoded as %2Fhelloai on
+      #   the Management API). The two MUST agree, so this is not exposed as a knob --
+      #   otherwise changing .env would fork the app from init.sh, producing the silent
+      #   failure "app can reach the broker but the vhost does not exist".
       RABBITMQ_VHOST: /helloai
-      # 密码与 rabbitmq-init 建用户时【同源】：都取 .env 的 HELLOAI_RABBIT_PASSWORD。
-      #   只保留这一个变量名，避免出现「init.sh 用新密码建用户、app 却用另一个密码去连」的分叉
-      #   （那正是本次事故的重演路径）。
-      # 用 `:?` 做 fail-fast：缺 .env 时 compose 立即报错并指明缺哪个变量，
-      #   而不是静默注入空串——空串会被 Spring 当作「已设置」，覆盖掉 application-dev.yml 的
-      #   默认密码，把服务从「能跑」打成「跑不了」。
-      # 取舍：这会让「无 .env 时 docker compose config 由通过变为失败」。这是期望行为，
-      #   符合项目 §41/42「fail-fast when missing」口径：明确失败优于静默半可用。
-      RABBITMQ_PASSWORD: ${HELLOAI_RABBIT_PASSWORD:?部署目录 .env 必须提供 HELLOAI_RABBIT_PASSWORD，且该值必须与 rabbitmq-init 建用户时用的值一致（同一个变量，勿分叉）}
-      # MinIO 走 compose 内网（app 容器内 localhost 是自身，默认值 localhost:29000 不可达），
-      # 不配置则平台物化/附件直读全部失败（核验报“附件内容不可读”）
+      # The password is SINGLE-SOURCED with the one rabbitmq-init uses to create the
+      #   user: both read .env's HELLOAI_RABBIT_PASSWORD.
+      #   Only this one variable name is kept, to prevent the fork "init.sh creates the
+      #   user with a new password while the app connects with another one" -- which is
+      #   exactly how the incident could repeat.
+      # `:?` gives fail-fast behaviour: with no .env, compose errors out immediately and
+      #   names the missing variable, instead of silently injecting an empty string.
+      #   An empty string would be treated by Spring as "set", overriding the default
+      #   password in application-dev.yml and turning a working service into a broken one.
+      # Trade-off: this makes `docker compose config` FAIL (rather than pass) when .env
+      #   is absent. That is intended, per the project's fail-fast-when-missing rule:
+      #   an explicit failure beats a silent half-working state.
+      RABBITMQ_PASSWORD: ${HELLOAI_RABBIT_PASSWORD:?.env in the deploy dir must define HELLOAI_RABBIT_PASSWORD, and it must equal the value rabbitmq-init used to create the user (same variable, do not fork)}
+      # MinIO goes over the compose internal network (inside the app container
+      # "localhost" is the container itself, so the localhost:29000 default is unreachable).
+      # If this is not configured, artifact materialization and direct attachment reads
+      # all fail (review reports "attachment content unreadable").
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin123
       MINIO_BUCKET: helloai-artifacts
-      # 凭据加密密钥入口：application.yml 默认值已随开源仓库随机化，
-      # 生产必须在部署目录 .env 写入 HELLOAI_CREDENTIAL_AES_KEY_BASE64=<原密钥>（.env 已被 .gitignore 排除）
+      # Credential encryption key entry point: the default in application.yml has been
+      # randomized for the public repo, so production MUST write
+      # HELLOAI_CREDENTIAL_AES_KEY_BASE64=<original key> into the deploy dir's .env
+      # (.env is excluded by .gitignore).
       #
-      # ⚠️ 必须用 `:?` fail-fast，不能写 `:-`（2026-10-07 修正）：
-      #   本行若写成 `${HELLOAI_CREDENTIAL_AES_KEY_BASE64:-}`，.env 缺该变量时 compose 会注入【空串】，
-      #   而 Spring 的「已设置」判定包含空串 ⇒ 空值优先级高于 application-dev.yml 的默认真密钥
-      #   （${HELLOAI_CREDENTIAL_AES_KEY_BASE64:MEsmol…}）与 application.yml 的无默认占位符
-      #   ⇒ CredentialCryptoService 抛「缺少凭证加密密钥配置」⇒ 全部凭据解密失败。
-      #   这是「应用起来了、但取不到任何 LLM/Agent 凭据」的静默故障（与本次 MQ 故障同一失败模式），
-      #   故与上面的 RABBITMQ_PASSWORD 同口径做 fail-fast：宁可 compose 明确报错，也不要静默半可用。
-      HELLOAI_CREDENTIAL_AES_KEY_BASE64: ${HELLOAI_CREDENTIAL_AES_KEY_BASE64:?部署目录 .env 必须提供 HELLOAI_CREDENTIAL_AES_KEY_BASE64（与库中密文对应的原密钥），缺失会导致全部凭据解密失败}
+      # WARNING - must use `:?` (fail-fast), never `:-` (corrected 2026-10-07):
+      #   Written as `${HELLOAI_CREDENTIAL_AES_KEY_BASE64:-}`, a missing .env variable
+      #   makes compose inject an EMPTY STRING, and Spring's "is set" check counts an
+      #   empty string as set -- so the empty value outranks both the real default key
+      #   in application-dev.yml (${HELLOAI_CREDENTIAL_AES_KEY_BASE64:<key>}) and the
+      #   no-default placeholder in application.yml.
+      #   CredentialCryptoService then throws "missing credential encryption key",
+      #   i.e. ALL credentials fail to decrypt. That is the silent failure
+      #   "the app starts but cannot obtain any LLM/Agent credential" -- the same
+      #   failure mode as the MQ incident, so it gets the same fail-fast treatment:
+      #   an explicit compose error is preferable to a silent half-working state.
+      HELLOAI_CREDENTIAL_AES_KEY_BASE64: ${HELLOAI_CREDENTIAL_AES_KEY_BASE64:?.env in the deploy dir must define HELLOAI_CREDENTIAL_AES_KEY_BASE64 (the original key matching the ciphertext already in the database); without it every credential fails to decrypt}
     depends_on:
       postgres:
         condition: service_healthy
@@ -221,11 +286,14 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-      # 等 rabbitmq-init 成功退出后再启动 app。原因：首次 up -d 时 app 与 init 并发，
-      # app 会因为 vhost/用户尚未建好而认证失败，进入重连窗口；该窗口内
-      # outbox 投递 / 执行指令消费 / 审查 三条 MQ 链路都不可用。
-      # 取舍：这会让「init 失败 ⇒ app 不启动」。这是期望行为——
-      #       宁可明确失败并暴露问题，也不要静默地半可用。
+      # Start the app only after rabbitmq-init has exited successfully. Reason: on the
+      # first `up -d` the app and init run concurrently, and the app would fail auth
+      # because the vhost/user are not created yet, entering a reconnect window during
+      # which all three MQ paths (outbox relay / execution-command consumption /
+      # review) are unavailable.
+      # Trade-off: this makes "init fails => app does not start". That is intended --
+      # an explicit failure that surfaces the problem is preferable to a silent
+      # half-working state.
       rabbitmq-init:
         condition: service_completed_successfully
 
