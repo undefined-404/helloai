@@ -1053,10 +1053,16 @@ const CONV_TAG_MAP: Record<string, { label: string; type: 'success' | 'danger' |
 interface ConvRound {
   type: 'execute' | 'review'
   roundNo: number
+  /** 本轮主体 Agent ID（字符串）；平台侧消息 senderId 为空，取不到时为 null */
+  senderKey: string | null
   messages: ConversationMessageItem[]
 }
 
 // 把扁平消息按「执行轮次 / 核验轮次」分组，方便看清 Agent ↔ LLM 完整请求/返回
+// 2026-10-07：分段键由「仅 type」扩为「type + Agent」——执行中换人（如 kimi 失败后
+// 人工换 qwen 重跑）会在同一 type 下混入两个 Agent 的消息，此前全被并进一轮，
+// 轮头 Agent 取轮内第一条（显示旧 Agent）、状态取「轮内存在失败」（整轮标失败），
+// 于是轮头写着 kimi 失败、轮内却装着 qwen 的成功产出，误导运维判断。
 const convRounds = computed<ConvRound[]>(() => {
   const rounds: ConvRound[] = []
   let executeNo = 0
@@ -1069,11 +1075,12 @@ const convRounds = computed<ConvRound[]>(() => {
       current.value = null
     }
   }
-  const startRound = (type: 'execute' | 'review') => {
+  const startRound = (type: 'execute' | 'review', senderKey: string | null) => {
     flush()
     current.value = {
       type,
       roundNo: type === 'execute' ? ++executeNo : ++reviewNo,
+      senderKey,
       messages: []
     }
   }
@@ -1083,13 +1090,20 @@ const convRounds = computed<ConvRound[]>(() => {
     const isExecute = tool === 'sub_task_execute_user_prompt' || tool === 'sub_task_execute' || tool === 'sub_task_execute_failed'
     // V58: 核验轮次识别含单审 / 双审 / 抽检三链路前缀
     const isReview = tool.startsWith('subtask_review') || tool.startsWith('subtask_dual_review') || tool.startsWith('subtask_recheck')
-    if (isExecute && (!current.value || current.value.type !== 'execute')) {
-      startRound('execute')
-    } else if (isReview && (!current.value || current.value.type !== 'review')) {
-      startRound('review')
+    const key = msg.senderId != null ? String(msg.senderId) : null
+    const cur = current.value
+    // Agent 变更即开新轮（平台侧 senderId 为空，不触发切换）
+    const agentSwitched = cur !== null && key !== null && cur.senderKey !== null && cur.senderKey !== key
+    if (isExecute && (!cur || cur.type !== 'execute' || agentSwitched)) {
+      startRound('execute', key)
+    } else if (isReview && (!cur || cur.type !== 'review' || agentSwitched)) {
+      startRound('review', key)
     }
     if (!current.value) {
-      startRound('execute')
+      startRound('execute', key)
+    } else if (current.value.senderKey === null && key !== null) {
+      // 平台侧前置消息（如核验 Prompt）先出现时本轮还没有主体 Agent，采纳随后首个 Agent
+      current.value.senderKey = key
     }
     current.value!.messages.push(msg)
   }

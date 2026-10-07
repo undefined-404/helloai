@@ -286,6 +286,14 @@
                       >
                         <span class="dropdown-danger">重新指派</span>
                       </el-dropdown-item>
+                      <!-- 已指派未开工（ASSIGNED）：首个分配不当（外部队列 Agent 不在线等）时的人工换人入口。
+                           此前三个改派入口均不收该状态，人工无法介入，只能等 dispatch.assigned-timeout-minutes（默认 10 分钟）自动回收 -->
+                      <el-dropdown-item
+                        v-if="row.status==='ASSIGNED' && auth.hasPermission('subtask:reassign')"
+                        command="reassign"
+                      >
+                        <span class="dropdown-danger">换人</span>
+                      </el-dropdown-item>
                       <!-- BLOCKED 阻塞子任务：重新调度（reset → PENDING 后交调度链） -->
                       <el-dropdown-item
                         v-if="row.status==='BLOCKED' && auth.hasPermission('subtask:reassign')"
@@ -388,10 +396,10 @@
         </template>
       </el-dialog>
 
-      <!-- BLOCKED 重新调度 / PAUSED 换人 共用弹窗：选目标 Agent，后端先标 BLOCKED 再重新进入调度链 -->
+      <!-- BLOCKED 重新调度 / PAUSED、ASSIGNED 换人 共用弹窗：选目标 Agent，后端先标 BLOCKED 再重新进入调度链 -->
       <el-dialog
         v-model="reassignDialog.visible"
-        :title="reassignDialog.row?.status === 'PAUSED' ? '改派暂停任务' : '重新调度阻塞子任务'"
+        :title="reassignIsHandover ? '改派任务执行者' : '重新调度阻塞子任务'"
         width="420px"
         top="5vh"
         append-to-body
@@ -406,13 +414,22 @@
             description="系统会将任务标记为阻塞后重新分配给新 Agent；原执行者将收到任务已转移通知。"
             style="margin-bottom:12px"
           />
+          <el-alert
+            v-else-if="reassignDialog.row?.status === 'ASSIGNED'"
+            type="warning"
+            :closable="false"
+            show-icon
+            title="将为该已指派任务改派新执行者"
+            description="任务已指派但尚未开工（原 Agent 未认领/未执行），可在此直接改派；系统会先标记为阻塞再重新分配给新 Agent。"
+            style="margin-bottom:12px"
+          />
           <el-form-item label="子任务">
             <span>{{ reassignDialog.row?.title || '-' }}</span>
           </el-form-item>
           <el-form-item label="目标 Agent">
             <AgentSelect
               v-model="reassignDialog.agentId"
-              placeholder="选择重新调度的 Agent"
+              :placeholder="reassignIsHandover ? '选择新的执行 Agent' : '选择重新调度的 Agent'"
               executor-only
             />
           </el-form-item>
@@ -427,7 +444,7 @@
             :disabled="!reassignDialog.agentId"
             @click="doReassign"
           >
-            {{ reassignDialog.row?.status === 'PAUSED' ? '确认改派' : '确认重新调度' }}
+            {{ reassignIsHandover ? '确认改派' : '确认重新调度' }}
           </el-button>
         </template>
       </el-dialog>
@@ -698,18 +715,33 @@ function handleReassign(row: SubTask) {
   reassignDialog.visible = true
 }
 
+// 弹窗语义分流：PAUSED（暂停后换人）/ ASSIGNED（已指派未开工）都走人工「改派」链，
+// BLOCKED 才走「重新调度」。文案与按钮随之切换，避免把 ASSIGNED 说成「阻塞」。
+const reassignIsHandover = computed(() =>
+  reassignDialog.row?.status === 'PAUSED' || reassignDialog.row?.status === 'ASSIGNED')
+
 async function doReassign() {
   if (!reassignDialog.row || !reassignDialog.agentId) return
   reassignDialog.loading = true
   try {
-    if (reassignDialog.row.status === 'PAUSED') {
-      // 暂停后换人：后端先自动恢复（PAUSED 到 IN_PROGRESS）再标 BLOCKED 进入重调度链
-      await subTaskApi.redispatchInProgress(reassignDialog.row.id, reassignDialog.agentId)
-      ElMessage.success('已改派，子任务重新进入分发链')
-    } else {
-      await subTaskApi.reassign(reassignDialog.row.id, reassignDialog.agentId)
-      ElMessage.success('已重新调度，子任务重新进入分发链')
+    // PAUSED（暂停后换人）/ ASSIGNED（已指派未开工，首个分配不当）同走人工换人链：
+    // 后端先（PAUSED 时恢复）再标 BLOCKED 进入重调度链
+    const result = reassignDialog.row.status === 'PAUSED' || reassignDialog.row.status === 'ASSIGNED'
+      ? await subTaskApi.redispatchInProgress(reassignDialog.row.id, reassignDialog.agentId)
+      : await subTaskApi.reassign(reassignDialog.row.id, reassignDialog.agentId)
+    // 闸门（熔断 / 退避）拦截时后端返回 applied=false 且不改动任务状态，
+    // 此处必须消费，否则前端仍报「成功」——用户感知就是「点了没反应」
+    if (result && result.applied === false) {
+      ElMessage.warning(result.reason === 'backoff'
+        ? `重派被退避窗口拦截，最早可于 ${result.nextAllowed ? fmtTime(result.nextAllowed) : '稍后'} 重试`
+        : '重派被熔断闸门拦截（重派预算耗尽），子任务已转死信池，请走「重新指派」')
+      reassignDialog.visible = false
+      load()
+      return
     }
+    ElMessage.success(reassignDialog.row.status === 'BLOCKED'
+      ? '已重新调度，子任务重新进入分发链'
+      : '已改派，子任务重新进入分发链')
     reassignDialog.visible = false
     load()
   } finally { reassignDialog.loading = false }
@@ -719,7 +751,7 @@ async function doReassign() {
 // 仅当当前状态存在可执行操作时展示「更多」（无操作状态只留「详情」）；
 // 下拉内每一项都是写动作（模板里各自 v-auth 门控），若角色一个动作码都没有
 // （如 GUEST），再展示「更多」只会得到一个点开为空的下拉，故一并按权限收口。
-const MORE_ACTION_STATUSES: readonly SubTask['status'][] = ['PENDING', 'IN_PROGRESS', 'PAUSED', 'BLOCKED', 'DEAD_LETTER']
+const MORE_ACTION_STATUSES: readonly SubTask['status'][] = ['PENDING', 'ASSIGNED', 'IN_PROGRESS', 'PAUSED', 'BLOCKED', 'DEAD_LETTER']
 const MORE_ACTION_CODES = ['subtask:claim', 'subtask:pause', 'subtask:resume', 'subtask:reassign', 'subtask:redispatch'] as const
 function hasMoreActions(row: SubTask) {
   if (!MORE_ACTION_STATUSES.includes(row.status)) return false

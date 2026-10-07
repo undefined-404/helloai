@@ -1,6 +1,6 @@
 import request from './request'
 import { paths } from './paths'
-import type { SubTask, ChangeStatusRequest, PageResult, LongId, CreateSubTaskPayload, TaskTimelineItem, ConversationMessageItem, Uncertainty } from '@/types'
+import type { SubTask, ChangeStatusRequest, PageResult, LongId, CreateSubTaskPayload, TaskTimelineItem, ConversationMessageItem, Uncertainty, RedispatchResult } from '@/types'
 
 export const subTaskApi = {
   // taskId: 按主任务过滤（任务管理页跳转携带），LongId 传 string 防精度丢
@@ -42,12 +42,14 @@ export const subTaskApi = {
     return request.post(paths.subTasks.redispatchDeadLetter(id), { agentId })
   },
   // BLOCKED 子任务重新调度（reset → PENDING 后交调度链，dispatchBlockedSubTask）
+  // 契约：被闸门拦截时返回 { applied:false, reason, nextAllowed }（任务状态不变）
   reassign(id: LongId, agentId: LongId) {
-    return request.post(paths.subTasks.reassign(id), { agentId })
+    return request.post<any, RedispatchResult>(paths.subTasks.reassign(id), { agentId })
   },
-  // IN_PROGRESS 执行中卡死改派（先标 BLOCKED 再重新调度，redispatchInProgress）
+  // ASSIGNED / IN_PROGRESS / PAUSED 人工换人（先标 BLOCKED 再重新调度，redispatchInProgress）
+  // 契约：被闸门拦截时返回 { applied:false, reason, nextAllowed }（任务状态不变）
   redispatchInProgress(id: LongId, agentId: LongId) {
-    return request.post(paths.subTasks.redispatchInProgress(id), { agentId })
+    return request.post<any, RedispatchResult>(paths.subTasks.redispatchInProgress(id), { agentId })
   },
   changeStatus(data: ChangeStatusRequest) {
     return request.post(paths.subTasks.changeStatus, data)

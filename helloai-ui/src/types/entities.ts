@@ -365,6 +365,15 @@ export interface ConversationMessageItem {
   createTime: string
 }
 
+// 重派结果（POST /sub-tasks/reassignById|redispatchInProgressById 响应体）：
+// 被熔断 / 退避闸门拦截时 applied=false、任务状态不变，reason=backoff|circuit_open|terminal
+export interface RedispatchResult {
+  applied: boolean
+  reason: string | null
+  /** 退避窗口结束时刻（仅 reason=backoff 时非空） */
+  nextAllowed: string | null
+}
+
 // --- 规则 / 附件 ---
 export interface Rule {
   id: LongId
