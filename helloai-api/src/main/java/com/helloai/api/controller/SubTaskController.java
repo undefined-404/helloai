@@ -331,16 +331,21 @@ public class SubTaskController {
     }
 
     /**
-     * 执行中卡死改派：将 IN_PROGRESS 子任务先标记 BLOCKED，再重新进入调度链改派给指定 Agent。
+     * 人工换人：将 ASSIGNED / IN_PROGRESS / PAUSED 子任务先标记 BLOCKED，
+     * 再重新进入调度链改派给指定 Agent。
      *
-     * <p>外部 Agent 长时间未完成任务（心跳正常但停滞）时的人工换人入口：
-     * 后端先 {@code SubTaskService.block} 报告人工阻塞，再复用
-     * {@code dispatchBlockedSubTask} 走既有熔断 + 选人 + fallback 重调度链。
+     * <p>外部 Agent 长时间未完成任务（心跳正常但停滞）、或首个分配不当（子任务卡在
+     * ASSIGNED 未开工）时的人工换人入口：后端先 {@code SubTaskService.block} 报告人工阻塞，
+     * 再复用 {@code dispatchBlockedSubTask} 走既有熔断 + 选人 + fallback 重调度链。
      * 重派失败时任务停留在 BLOCKED，可再次调用重新调度接口。</p>
      *
      * <p><b>2026-10-05 修 804</b>：闸门判定已提到 {@code block()} 之前，退避时钟改绑
      * {@code last_attempt_time}——「换人」不再被自身刷新的时钟拦截；若确在退避窗口内，
      * 返回 {@code applied=false} + {@code nextAllowed} 且**不改动任务状态**。</p>
+     *
+     * <p><b>2026-10-07</b>：放开 {@code ASSIGNED}——原先三个改派入口均不收该状态，
+     * 人工无法介入「已指派未开工」的子任务，只能等 {@code dispatch.assigned-timeout-minutes}
+     * （默认 10 分钟）自动回收。仍受同一重派闸门约束。</p>
      */
     @SaCheckPermission("subtask:redispatch")
     @PostMapping("/redispatchInProgressById/{id}")

@@ -743,7 +743,7 @@ class SubTaskDispatchServiceTest {
     }
 
     @Test
-    @DisplayName("人工换人：非 IN_PROGRESS/PAUSED 状态拒绝且不触发调度")
+    @DisplayName("人工换人：非 ASSIGNED/IN_PROGRESS/PAUSED 状态拒绝且不触发调度")
     void shouldRejectRedispatchInProgressWhenNotInProgressOrPaused() {
         SubTask subTask = subTaskWithTaskId(52L, 62L);
         subTask.setStatus(SubTaskStatus.PENDING);
@@ -751,10 +751,31 @@ class SubTaskDispatchServiceTest {
 
         assertThatThrownBy(() -> subTaskDispatchService.redispatchInProgress(52L, 11L))
                 .isInstanceOf(BizException.class)
-                .hasMessageContaining("只有 IN_PROGRESS 或 PAUSED 状态的子任务才能改派");
+                .hasMessageContaining("只有 ASSIGNED / IN_PROGRESS / PAUSED 状态的子任务才能改派");
         verify(subTaskService, never()).resume(anyLong());
         verify(subTaskService, never()).block(anyLong(), any(), any());
         verify(taskDispatchPort, never()).assignNext(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("已指派未开工（ASSIGNED）换人：不触发 resume，直接 block 再走既有重调度链")
+    void shouldRedispatchAssignedWithoutResume() {
+        // 2026-10-07：首个分配不当导致子任务卡在 ASSIGNED，此前无任何人工改派入口
+        SubTask subTask = subTaskWithTaskId(54L, 64L);
+        subTask.setStatus(SubTaskStatus.ASSIGNED);
+        when(subTaskService.getById(54L)).thenReturn(subTask);
+        when(subTaskService.resetToPendingForDispatch(54L, Set.of(SubTaskStatus.BLOCKED)))
+                .thenReturn(subTask);
+
+        subTaskDispatchService.redispatchInProgress(54L, 11L);
+
+        // ASSIGNED 非 PAUSED，不应触发 resume（resume 仅 PAUSED→IN_PROGRESS 语义）
+        verify(subTaskService, never()).resume(anyLong());
+        verify(subTaskService).block(54L, "人工判定执行停滞，改派新执行者", null);
+        verify(taskTimelineService).recordEvent(
+                64L, 54L, "sub_task_dispatch_prepare", AgentRole.PLANNER, 11L,
+                Map.of("trigger", "blocked_reassign", "preferredAgentId", 11L));
+        verify(taskDispatchPort).assignNext(11L, 54L, null);
     }
 
     @Test

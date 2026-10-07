@@ -470,10 +470,18 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         if (subTask == null) {
             throw new BizException("子任务不存在: " + subTaskId);
         }
-        // 状态校验前置（保持既有语义：非 IN_PROGRESS/PAUSED 直接报错，不产生任何副作用）
-        if (subTask.getStatus() != SubTaskStatus.IN_PROGRESS
+        // 状态校验前置（保持既有语义：非人工可处置状态直接报错，不产生任何副作用）
+        // ASSIGNED 亦为人工处置窗口：子任务已被指派但尚未开工（外部 Agent 不在线 /
+        // 首个分配不当时），此前三个改派入口（reassignById 仅 BLOCKED、
+        // redispatchInProgressById 仅 IN_PROGRESS/PAUSED、redispatchDeadLetterById 仅 DEAD_LETTER）
+        // 均不收 ASSIGNED ⇒ 人工无法介入，只能干等 dispatch.assigned-timeout-minutes（默认 10 分钟）
+        // 自动回收。block() 早已允许 ASSIGNED（SubTaskServiceImpl#block），状态机亦允许
+        // ASSIGNED→BLOCKED，故此处放开不涉及状态机改动。
+        // 仍受下方重派闸门（熔断 + 退避）统一约束，人工入口不享受特权。
+        if (subTask.getStatus() != SubTaskStatus.ASSIGNED
+                && subTask.getStatus() != SubTaskStatus.IN_PROGRESS
                 && subTask.getStatus() != SubTaskStatus.PAUSED) {
-            throw new BizException("只有 IN_PROGRESS 或 PAUSED 状态的子任务才能改派，当前状态: " + subTask.getStatus());
+            throw new BizException("只有 ASSIGNED / IN_PROGRESS / PAUSED 状态的子任务才能改派，当前状态: " + subTask.getStatus());
         }
 
         // 闸门判定提到 block()/resume() 之前（2026-10-05 修 804 修法 4）：
