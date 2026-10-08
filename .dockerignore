@@ -1,0 +1,49 @@
+# ============================================================================
+# HelloAI - .dockerignore (build context trim)
+# Keeps the Docker build context small and avoids copying generated artifacts
+# (target/, dist/, node_modules/, .git/) into `docker compose build`.
+# ============================================================================
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Java build output
+target/
+**/target/
+*.jar
+!pom.xml
+!**/pom.xml
+
+# Node
+node_modules/
+**/node_modules/
+helloai-ui/dist/
+
+# Local / tooling
+.workbuddy/
+tools/
+.tmp/
+logs/
+.cache/
+.vscode/
+.idea/
+*.iml
+
+# Runtime config (never bake secrets into an image)
+.env
+.env.local
+executor-config*.json
+application-local.yml
+
+# Docs / misc (not needed for the image)
+doc/
+scripts/
+*.md
+
+# Deploy artifacts (not needed in the image), except the public dev-yml template
+# that the Dockerfile copies to replace the working-tree (secret-bearing) one.
+deploy/*
+!deploy/templates/
+!deploy/templates/application-dev.yml

@@ -146,16 +146,16 @@ HelloAI: clarify → decompose into a dependency-aware subtask draft → you con
 
 Two paths have **completely different requirements**:
 
-| | Build from source (local dev) | Server deployment (jar only) |
+| | Build from source (local dev) | Server deployment (one-click Docker) |
 |---|---|---|
-| JDK 17 | ✅ required | ❌ no (JRE is in the container) |
-| Maven 3.8+ | ✅ required (build) | ❌ no |
-| Node.js 18+ | ✅ required (frontend dev) | ❌ no (dist is prebuilt) |
+| JDK 17 | ✅ required | ❌ no (JRE is in the image) |
+| Maven 3.8+ | ✅ required (build) | ❌ no (built inside a Docker container) |
+| Node.js 18+ | ✅ required (frontend dev) | ❌ no (built inside a Docker container) |
 | Docker + Compose | ✅ required (middleware) | ✅ required |
-| Download source | ✅ full `git clone` | ⚠️ only the deploy files (see Option B), no toolchain |
+| Download source | ✅ full `git clone` | ✅ `git clone` once (`docker compose up -d --build` builds the images on the server) |
 | Recommended | 4C8GB | 4C8GB |
 
-> 💡 **In one sentence**: JDK / Maven / Node are only needed to **build from source**. To run HelloAI on a server that already has Docker, you do **not** need any Java/frontend toolchain — just grab `docker-compose.server.yml`, `deploy/init-rabbitmq.sh`, and `nginx.server.conf` from the repo, plus a prebuilt jar and frontend dist.
+> 💡 **In one sentence**: JDK / Maven / Node are only needed to **build from source locally**. For one-click server deployment you do **not** need any Java/frontend toolchain — `git clone` once, then `docker compose up -d --build` builds both the backend jar image and the frontend image on the server using the repo's multi-stage `Dockerfile`.
 
 ### Option A: Build from source (5 minutes)
 
@@ -182,23 +182,30 @@ API docs: `http://localhost:6565/swagger-ui.html`
 
 ### Option B: One-command Docker deployment (server)
 
-For running on a server **without installing a Java/frontend toolchain**. You do **not** need a full `git clone` — just the deployment artifacts and three deploy files. See the header comments of [`docker-compose.server.yml`](docker-compose.server.yml) (ASCII-only convention and port notes).
+For running on a server **without installing a Java/frontend toolchain**. A single `git clone` is enough — the multi-stage [`Dockerfile`](Dockerfile) builds both the backend jar image and the frontend dist image **on the server**, so **no prebuilt artifacts are needed**. See the header comments of [`docker-compose.server.yml`](docker-compose.server.yml) (ASCII-only convention and port notes).
 
-#### First-time preparation (one-off)
+#### First-time deployment (one-off)
 
-On a server with Docker, create a deploy directory (e.g. `/home/admin/helloai`) containing:
+On a server with Docker + Docker Compose:
+
+```bash
+# 1. Clone (once; the build depends on the source tree)
+git clone https://gitee.com/undefined_404/helloai.git /home/admin/helloai && cd /home/admin/helloai
+
+# 2. Create .env (gitignored; must be created by hand), 5 variables below
+```
+
+Deploy directory layout (complete after clone; only `.env` needs to be created):
 
 ```
 /home/admin/helloai/
-├── docker-compose.server.yml     # copy from the repo; rename to docker-compose.yml after upload
-├── nginx.server.conf             # copy from the repo; rename to nginx.conf after upload
-├── deploy/init-rabbitmq.sh       # copy from the repo (keep LF line endings, pure ASCII)
-├── helloai-start-1.0.0-SNAPSHOT.jar   # build artifact
-├── dist/                         # frontend build artifact
+├── docker-compose.server.yml     # compose reads the sibling .env automatically
+├── Dockerfile                    # multi-stage: Maven→jar→JRE image + Node→dist→nginx image
+├── deploy/init-rabbitmq.sh       # rabbitmq-init bootstrap script (bind-mounted)
 └── .env                          # create, see below
 ```
 
-`.env` needs **5 variables** (the server `.env` is the Docker Compose variable interpolation source; containers do not read `.env` directly):
+`.env` needs **5 variables** (`.env` is the Docker Compose variable interpolation source; containers do not read `.env` directly; everything is injected at runtime, the images contain no secrets):
 
 ```bash
 # RabbitMQ admin (must be created manually first, see below; cannot be guest)
@@ -224,16 +231,25 @@ HELLOAI_CREDENTIAL_AES_KEY_BASE64=<base64 key>
 #### Start & update
 
 ```bash
-# Start (the app starts only after rabbitmq-init completes successfully; `:?` fail-fast reports missing variables)
-docker compose up -d
+# One-click start (builds app/web images first, then starts everything; the app
+# starts only after rabbitmq-init completes successfully).
+# First build pulls base images + downloads Maven/Node deps: 5~15 min depending on network.
+docker compose up -d --build
 
-# Check the init log
+# Check the init log (confirm vhost /helloai and the business account were created)
 docker compose logs rabbitmq-init
 
-# Update: replace only the jar / dist, then bring it up again
-docker compose up -d --build
+# Check overall status
+docker compose ps
+
+# Update to latest code: git pull, then re-run the same command (Docker layer cache makes it incremental)
+git pull && docker compose up -d --build
 ```
 
+**Configuring API keys**: after startup, sign in to the admin console and fill them in under **System Settings → Model Configuration**. Keys are encrypted at rest, take effect immediately, and require no restart.
+
+> 💡 **Upgrade compatibility**: upgrading from the legacy bind-mount mode (manually uploading jar/dist) to build mode is just `git clone` + reuse the same `.env` (same 5 variable names), then `docker compose up -d --build`. Data volumes (PG/Redis/RabbitMQ/MinIO) are unchanged; no data loss.
+# Check the init log
 **Configuring API keys**: after startup, sign in to the admin console and fill them in under **System Settings → Model Configuration**. Keys are encrypted at rest, take effect immediately, and require no restart.
 
 ---

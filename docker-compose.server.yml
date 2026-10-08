@@ -1,37 +1,29 @@
 # ============================================================
-# HelloAI - Server Deployment Docker Compose (middleware + app)
+# HelloAI - Server Deployment Docker Compose (middleware + app + web)
 # Deploy path: /home/admin/helloai/docker-compose.yml
-# Prerequisite: helloai-start-1.0.0-SNAPSHOT.jar in same directory
-# Usage: docker compose up -d
+# Usage: docker compose up -d --build
 # ------------------------------------------------------------
 # NOTE: this file is intentionally ASCII-only (no CJK characters).
 #   Reason: it is consumed by `docker compose` on the server, and its comments /
 #   `${VAR:?message}` texts / `command:` strings are echoed to a terminal or
-#   container log that may not run a UTF-8 locale (the curlimages/curl and
-#   eclipse-temurin base images default to C/POSIX), which would garble them.
+#   container log that may not run a UTF-8 locale (the eclipse-temurin / nginx
+#   base images default to C/POSIX), which would garble them.
 #   Keep every line ASCII. Use English for comments and runtime messages.
 # ------------------------------------------------------------
 # Differences from local dev version:
-#   1. Added app service running jar directly with eclipse-temurin:17-jre
+#   1. app + web are BUILT from the repo Dockerfile (multi-stage), so the server
+#      needs NO prebuilt jar / dist: `docker compose up -d --build` is one-click.
+#      To update: re-run the same command (Docker caches unchanged layers).
 #   2. App connects to middleware via compose internal network (service names),
-#      overridden by SPRING_* / RABBITMQ_* env vars, no jar repackaging needed
+#      overridden by SPRING_* / RABBITMQ_* env vars, no jar repackaging needed.
 #   3. Middleware ports bound to all interfaces (incl. public IP) for remote IDE debugging;
-#      MUST whitelist 15432/26379/25672/25673 in Alibaba Cloud security group to your IP
-#   4. Added web service (nginx): serves frontend dist + proxies /api, /mcp to app,
-#      only port 80 exposed publicly; 6565 bound to 127.0.0.1 for local troubleshooting
-#   5. Added rabbitmq-init one-shot service: creates vhost /helloai + business user,
+#      MUST whitelist 15432/26379/25672/25673 in Alibaba Cloud security group to your IP.
+#   4. web service (nginx): serves frontend dist + proxies /api, /mcp to app,
+#      only port 80 exposed publicly; 6565 bound to 127.0.0.1 for local troubleshooting.
+#   5. rabbitmq-init one-shot service: creates vhost /helloai + business user,
 #      because the official `guest` account is loopback-only and cannot be used from
 #      a sibling container.
-# Prerequisite files (same dir as this file, relative paths preserved):
-#   helloai-start-1.0.0-SNAPSHOT.jar   # jar executed inside the app container
-#   dist/                              # frontend static files (mounted by the web service)
-#   nginx.conf                         # reverse proxy config for the web service
-#   deploy/init-rabbitmq.sh            # init script executed by the rabbitmq-init container
-#     WARNING: this file must exist, otherwise rabbitmq-init "silently succeeds"
-#     (see the fail-open notes on the rabbitmq-init service below) and the app
-#     starts normally while vhost /helloai was never created -- exactly the
-#     silent-failure shape of the 2026-10-07 production incident.
-#
+# ------------------------------------------------------------
 # REQUIRED PRE-STEP BEFORE `docker compose up -d` (do not skip):
 #   The rabbitmq-init container authenticates with RABBITMQ_ADMIN_USER /
 #   RABBITMQ_ADMIN_PASSWORD. That account MUST already exist on the broker with the
@@ -51,6 +43,21 @@
 #   HELLOAI_RABBIT_USER          # optional, defaults to helloai
 #   HELLOAI_RABBIT_PASSWORD      # REQUIRED (`:?`); rabbitmq-init and the app share it
 #   HELLOAI_CREDENTIAL_AES_KEY_BASE64  # REQUIRED (`:?`); must match existing ciphertext
+#
+# Required files in the deploy dir (relative to this compose file):
+#   deploy/init-rabbitmq.sh       # bind-mounted into rabbitmq-init (repo path kept)
+#   (jar / dist / nginx.conf are NO LONGER needed: baked into the images)
+#
+# FALLBACK (legacy bind-mount mode, optional): if you prefer to keep mounting a
+#   locally built jar and dist, replace the `build:` blocks of app/web with:
+#     app:  image: eclipse-temurin:17-jre
+#           volumes:
+#             - ./helloai-start-1.0.0-SNAPSHOT.jar:/app/helloai-start.jar:ro
+#             - ./logs:/app/logs
+#     web:  image: nginx:1.27-alpine
+#           volumes:
+#             - ./dist:/usr/share/nginx/html:ro
+#             - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
 # ============================================================
 
 services:
@@ -203,17 +210,26 @@ services:
       timeout: 5s
       retries: 3
 
-  # --- HelloAI Application (jar, no image build needed) ---
+  # --- HelloAI Application (built from repo Dockerfile; jar baked into the image) ---
   app:
-    image: eclipse-temurin:17-jre
+    # Build from the multi-stage Dockerfile. The image embeds the runnable jar;
+    # no bind-mount of a local jar is needed, so a user without build artifacts
+    # can still start with `docker compose up -d --build` (true one-click).
+    # Without `--build`, compose reuses an existing `helloai-app` image.
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: app
+    image: helloai-app:local
     container_name: helloai-app
     restart: unless-stopped
     working_dir: /app
-    # To update jar: replace jar file then run docker compose restart app
+    # To update the jar: re-run `docker compose build app` / `up -d --build`.
     volumes:
-      - ./helloai-start-1.0.0-SNAPSHOT.jar:/app/helloai-start.jar:ro
       - ./logs:/app/logs              # persistent logs on host
-    command: java -Xms512m -Xmx2g -jar helloai-start.jar
+    # The Dockerfile already sets LANG/LC_ALL/JAVA_TOOL_OPTIONS; kept here too for
+    # parity when someone swaps to a bind-mount (see comments at the end of this file).
+    command: ["java", "-Xms512m", "-Xmx2g", "-jar", "helloai-start.jar"]
     ports:
       - "127.0.0.1:6565:6565"   # localhost only; public traffic goes through web(nginx):80
     environment:
@@ -310,16 +326,19 @@ services:
         condition: service_completed_successfully
 
   # --- Nginx: frontend static hosting + API reverse proxy (only public entry) ---
+  # Built from the same Dockerfile (target: web) which bakes in the frontend dist
+  # and nginx.server.conf; no bind-mount of ./dist or ./nginx.conf is required.
   web:
-    image: nginx:1.27-alpine
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: web
+    image: helloai-web:local
     container_name: helloai-web
     restart: unless-stopped
     ports:
       - "80:80"
       - "5173:80"
-    volumes:
-      - ./dist:/usr/share/nginx/html:ro
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - app
 
