@@ -223,6 +223,11 @@ bash deploy/init-env.sh
 
 # 3. 用脚本把 RabbitMQ 管理员建到 broker 上（自动启动 broker + 创建管理员 + 验证）
 bash deploy/init-rabbitmq-admin.sh
+
+# 4. 首次初始化构建+启动
+cd /home/admin/helloai && git pull
+docker compose -f docker-compose.server.yml up -d --build
+
 ```
 
 > 💡 **从零到启动，总共 4 条命令**：`git clone` → `bash deploy/init-env.sh` → `bash deploy/init-rabbitmq-admin.sh` → `docker compose -f docker-compose.server.yml up -d --build`，全程**不需要手动编辑 .env、不需要复制粘贴任何密码**。
