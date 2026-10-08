@@ -1,10 +1,15 @@
 # ============================================================
-# HelloAI - Local Dev Docker Compose
+# HelloAI - LOCAL DEV Docker Compose
 # Stack: PostgreSQL 16.4 + Redis 7.2.5 + RabbitMQ 3.12.14 + MinIO
 # Usage: docker-compose up -d
+#
+# ⚠️  WARNING: this file is for LOCAL DEVELOPMENT ONLY (middleware).
+#   It does NOT contain the app / web services.
+#   For SERVER DEPLOYMENT use docker-compose.server.yml instead, and
+#   start it explicitly with:  docker compose -f docker-compose.server.yml up -d --build
+#   (`docker compose` defaults to this file, so forgetting `-f` will start
+#   middleware only and appear to "do nothing" for the app.)
 # ============================================================
-
-version: '3.8'
 
 services:
 

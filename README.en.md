@@ -152,10 +152,10 @@ Two paths have **completely different requirements**:
 | Maven 3.8+ | ✅ required (build) | ❌ no (built inside a Docker container) |
 | Node.js 18+ | ✅ required (frontend dev) | ❌ no (built inside a Docker container) |
 | Docker + Compose | ✅ required (middleware) | ✅ required |
-| Download source | ✅ full `git clone` | ✅ `git clone` once (`docker compose up -d --build` builds the images on the server) |
+| Download source | ✅ full `git clone` | ✅ `git clone` once (`docker compose -f docker-compose.server.yml up -d --build` builds the images on the server) |
 | Recommended | 4C8GB | 4C8GB |
 
-> 💡 **In one sentence**: JDK / Maven / Node are only needed to **build from source locally**. For one-click server deployment you do **not** need any Java/frontend toolchain — `git clone` once, then `docker compose up -d --build` builds both the backend jar image and the frontend image on the server using the repo's multi-stage `Dockerfile`.
+> 💡 **In one sentence**: JDK / Maven / Node are only needed to **build from source locally**. For one-click server deployment you do **not** need any Java/frontend toolchain — `git clone` once, then `docker compose -f docker-compose.server.yml up -d --build` builds both the backend jar image and the frontend image on the server using the repo's multi-stage `Dockerfile`.
 
 ### Option A: Build from source (5 minutes)
 
@@ -199,13 +199,16 @@ bash deploy/init-env.sh
 bash deploy/init-rabbitmq-admin.sh
 ```
 
-> 💡 **From zero to running: 4 commands total** — `git clone` → `bash deploy/init-env.sh` → `bash deploy/init-rabbitmq-admin.sh` → `docker compose up -d --build`. **No manual .env editing, no copy-pasting passwords.**
+> 💡 **From zero to running: 4 commands total** — `git clone` → `bash deploy/init-env.sh` → `bash deploy/init-rabbitmq-admin.sh` → `docker compose -f docker-compose.server.yml up -d --build`. **No manual .env editing, no copy-pasting passwords.**
+>
+> ⚠️ **The server compose file is `docker-compose.server.yml`; you MUST pass it with `-f`**: `docker compose` only reads `docker-compose.yml` by default (that one is the **local-dev** file with middleware only — no app/web services). Without `-f` you will start the wrong file — measured symptom: only PG/Redis/RabbitMQ/MinIO come up, no app or web.
 
 Deploy directory layout (complete after clone; just run the script once to generate `.env`):
 
 ```
 /home/admin/helloai/
-├── docker-compose.server.yml     # compose reads the sibling .env automatically
+├── docker-compose.server.yml     # server deploy file (app/web build); pass it with `-f`
+├── docker-compose.yml            # local-dev file (middleware only); do NOT use on the server
 ├── Dockerfile                    # multi-stage: Maven→jar→JRE image + Node→dist→nginx image
 ├── deploy/init-rabbitmq.sh       # rabbitmq-init bootstrap script (bind-mounted)
 ├── deploy/init-env.sh            # one-command .env generator (random secrets, idempotent)
@@ -256,25 +259,27 @@ HELLOAI_CREDENTIAL_AES_KEY_BASE64=<base64> # random (credential_vault encryption
 
 #### Start & update
 
+> All commands below target the server deployment; **always pass `-f docker-compose.server.yml`** (the default file is the local-dev one, which cannot start app/web).
+
 ```bash
 # One-click start (builds app/web images first, then starts everything; the app
 # starts only after rabbitmq-init completes successfully).
 # First build pulls base images + downloads Maven/Node deps: 5~15 min depending on network.
-docker compose up -d --build
+docker compose -f docker-compose.server.yml up -d --build
 
 # Check the init log (confirm vhost /helloai and the business account were created)
-docker compose logs rabbitmq-init
+docker compose -f docker-compose.server.yml logs rabbitmq-init
 
 # Check overall status
-docker compose ps
+docker compose -f docker-compose.server.yml ps
 
 # Update to latest code: git pull, then re-run the same command (Docker layer cache makes it incremental)
-git pull && docker compose up -d --build
+git pull && docker compose -f docker-compose.server.yml up -d --build
 ```
 
 **Configuring API keys**: after startup, sign in to the admin console and fill them in under **System Settings → Model Configuration**. Keys are encrypted at rest, take effect immediately, and require no restart.
 
-> 💡 **Upgrade compatibility**: upgrading from the legacy bind-mount mode (manually uploading jar/dist) to build mode is just `git clone` + reuse the same `.env` (same 5 variable names), then `docker compose up -d --build`. Data volumes (PG/Redis/RabbitMQ/MinIO) are unchanged; no data loss.
+> 💡 **Upgrade compatibility**: upgrading from the legacy bind-mount mode (manually uploading jar/dist) to build mode is just `git clone` + reuse the same `.env` (same 5 variable names), then `docker compose -f docker-compose.server.yml up -d --build`. Data volumes (PG/Redis/RabbitMQ/MinIO) are unchanged; no data loss.
 # Check the init log
 **Configuring API keys**: after startup, sign in to the admin console and fill them in under **System Settings → Model Configuration**. Keys are encrypted at rest, take effect immediately, and require no restart.
 

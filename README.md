@@ -178,10 +178,10 @@ HelloAI：追问澄清 → 拆解为带依赖的子任务草案 → 你确认 �
 | 需要 Maven 3.8+ | ✅ 是（构建用） | ❌ 否（构建在 Docker 容器内完成） |
 | 需要 Node.js 18+ | ✅ 是（前端 dev） | ❌ 否（构建在 Docker 容器内完成） |
 | 需要 Docker + Compose | ✅ 是（中间件） | ✅ 是 |
-| 需要下载源码 | ✅ `git clone` 全量 | ✅ `git clone` 一次（`docker compose up -d --build` 在服务器本地构建镜像） |
+| 需要下载源码 | ✅ `git clone` 全量 | ✅ `git clone` 一次（`docker compose -f docker-compose.server.yml up -d --build` 在服务器本地构建镜像） |
 | 建议配置 | 4C8GB | 4C8GB |
 
-> 💡 **一句话**：JDK / Maven / Node 是**本地源码构建**才需要的；服务器一键部署**不需要装任何 Java/前端工具链**——`git clone` 后 `docker compose up -d --build` 会用仓库自带的多阶段 `Dockerfile` 在服务器本地构建好 jar 镜像与前端镜像，再一键拉起。
+> 💡 **一句话**：JDK / Maven / Node 是**本地源码构建**才需要的；服务器一键部署**不需要装任何 Java/前端工具链**——`git clone` 后 `docker compose -f docker-compose.server.yml up -d --build` 会用仓库自带的多阶段 `Dockerfile` 在服务器本地构建好 jar 镜像与前端镜像，再一键拉起。
 
 ### 方式 A：源码开发（5 分钟）
 
@@ -208,7 +208,7 @@ cd helloai-ui && npm install && npm run dev
 
 ### 方式 B：Docker 一键部署（服务器）
 
-适合**不装 Java/前端工具链**、直接在服务器上把服务跑起来。**只需要 `git clone` 一次**，之后 `docker compose up -d --build` 一条命令即可——后端 jar 与前端 dist 都由仓库里的多阶段 [`Dockerfile`](Dockerfile) 在服务器本地构建，**不需要任何预构建产物**。详见 [`docker-compose.server.yml`](docker-compose.server.yml) 头部注释（含纯 ASCII 约定与端口说明）。
+适合**不装 Java/前端工具链**、直接在服务器上把服务跑起来。**只需要 `git clone` 一次**，之后 `docker compose -f docker-compose.server.yml up -d --build` 一条命令即可——后端 jar 与前端 dist 都由仓库里的多阶段 [`Dockerfile`](Dockerfile) 在服务器本地构建，**不需要任何预构建产物**。详见 [`docker-compose.server.yml`](docker-compose.server.yml) 头部注释（含纯 ASCII 约定与端口说明）。
 
 #### 首次部署（一次性）
 
@@ -225,13 +225,16 @@ bash deploy/init-env.sh
 bash deploy/init-rabbitmq-admin.sh
 ```
 
-> 💡 **从零到启动，总共 4 条命令**：`git clone` → `bash deploy/init-env.sh` → `bash deploy/init-rabbitmq-admin.sh` → `docker compose up -d --build`，全程**不需要手动编辑 .env、不需要复制粘贴任何密码**。
+> 💡 **从零到启动，总共 4 条命令**：`git clone` → `bash deploy/init-env.sh` → `bash deploy/init-rabbitmq-admin.sh` → `docker compose -f docker-compose.server.yml up -d --build`，全程**不需要手动编辑 .env、不需要复制粘贴任何密码**。
+>
+> ⚠️ **服务器 compose 文件是 `docker-compose.server.yml`，必须用 `-f` 显式指定**：`docker compose` 默认只读 `docker-compose.yml`（那是**本地开发版**，只有中间件、没有 app/web 服务），不带 `-f` 会起错文件——实测表现是「只起了 PG/Redis/RabbitMQ/MinIO，没有 app 和 web」。
 
 部署目录结构（clone 后自动齐备，只需跑一次上面的脚本生成 `.env`）：
 
 ```
 /home/admin/helloai/
-├── docker-compose.server.yml     # 服务器用；`docker compose` 会自动读同目录 .env
+├── docker-compose.server.yml     # 服务器部署版（含 app/web build）；命令需 `-f` 显式指定
+├── docker-compose.yml            # 本地开发版（仅中间件）；服务器部署【不要】用它
 ├── Dockerfile                    # 多阶段构建：Maven→jar→JRE 镜像 + Node→dist→nginx 镜像
 ├── deploy/init-rabbitmq.sh       # rabbitmq-init 容器初始化脚本（bind 挂载）
 ├── deploy/init-env.sh            # 一键生成 .env（随机密码 + AES 密钥，幂等可重跑）
@@ -283,24 +286,26 @@ HELLOAI_CREDENTIAL_AES_KEY_BASE64=<base64> # 脚本随机生成（credential_vau
 
 #### 启动与更新
 
+> 以下命令均针对服务器部署，**统一带 `-f docker-compose.server.yml`**（默认文件是本地开发版，起不了 app/web）。
+
 ```bash
 # 一键启动（先构建 app/web 镜像，再起全部服务；rabbitmq-init 成功后 app 才启动）
 # 首次构建需拉取基础镜像 + 下载 Maven/Node 依赖，视网络 5~15 分钟
-docker compose up -d --build
+docker compose -f docker-compose.server.yml up -d --build
 
 # 查看初始化日志（确认 vhost /helloai 与业务账号已创建）
-docker compose logs rabbitmq-init
+docker compose -f docker-compose.server.yml logs rabbitmq-init
 
 # 查看整体状态
-docker compose ps
+docker compose -f docker-compose.server.yml ps
 
 # 更新到最新代码：git pull 后重跑同一条命令（Docker 层缓存，增量构建）
-git pull && docker compose up -d --build
+git pull && docker compose -f docker-compose.server.yml up -d --build
 ```
 
 **配置 API Key**：启动后在管理端「系统设置 → 模型配置」页面填写，加密落库、实时生效、无需重启。
 
-> 💡 **升级兼容**：旧版（`1.0.0-SNAPSHOT` 手动传 jar/dist 的挂载方式）升级到 build 模式，只需 `git clone` + 迁移 `.env`（5 个变量同名）后执行 `docker compose up -d --build`，数据卷（PG/Redis/RabbitMQ/MinIO）不变，数据不丢。
+> 💡 **升级兼容**：旧版（`1.0.0-SNAPSHOT` 手动传 jar/dist 的挂载方式）升级到 build 模式，只需 `git clone` + 迁移 `.env`（5 个变量同名）后执行 `docker compose -f docker-compose.server.yml up -d --build`，数据卷（PG/Redis/RabbitMQ/MinIO）不变，数据不丢。
 
 ### 方式 C：本地验证与 CI 门禁
 
