@@ -102,7 +102,7 @@ if docker exec "$CONTAINER" rabbitmqctl add_user "$ADMIN_USER" "$ADMIN_PW"; then
   echo "[init-rabbitmq-admin]   user created (first run)"
 else
   add_rc=$?
-  if docker exec "$CONTAINER" rabbitmqctl list_users 2>/dev/null | grep -q "^${ADMIN_USER}[[:space:]]"; then
+  if docker exec "$CONTAINER" rabbitmqctl -q list_users 2>/dev/null | grep -q "${ADMIN_USER}[[:space:]]"; then
     echo "[init-rabbitmq-admin]   user already exists, keeping existing password"
   else
     # Distinguish "startup race" (rabbit app not running yet, despite check_running
@@ -142,8 +142,15 @@ fi
 
 # --- 5. Verify --------------------------------------------------------------------
 echo "[init-rabbitmq-admin] verifying..."
-if ! docker exec "$CONTAINER" rabbitmqctl list_users 2>/dev/null | grep -q "^${ADMIN_USER}[[:space:]]"; then
-  echo "[init-rabbitmq-admin] ERROR: verification failed - user '${ADMIN_USER}' not found in list_users." >&2
+# Match on "username<space>" anywhere in the line (no ^ anchor, no -q header issue,
+# immune to hidden line-leading chars). If the line-based check is inconclusive,
+# fall back to authenticate_user, which proves the account + password actually work.
+if docker exec "$CONTAINER" rabbitmqctl -q list_users 2>/dev/null | grep -q "${ADMIN_USER}[[:space:]]"; then
+  echo "[init-rabbitmq-admin]   user '${ADMIN_USER}' present in list_users"
+elif docker exec "$CONTAINER" rabbitmqctl authenticate_user "$ADMIN_USER" "$ADMIN_PW" >/dev/null 2>&1; then
+  echo "[init-rabbitmq-admin]   user '${ADMIN_USER}' verified via authenticate_user"
+else
+  echo "[init-rabbitmq-admin] ERROR: verification failed - user '${ADMIN_USER}' not found in list_users nor able to authenticate." >&2
   exit 1
 fi
 echo "[init-rabbitmq-admin] DONE: admin '${ADMIN_USER}' ready with tag 'administrator'."
