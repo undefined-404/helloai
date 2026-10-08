@@ -167,9 +167,11 @@ async function downloadSkillZip() {
 
 // 复制一键上班口令：粘到 IDE 对话框第一句话即可触发 AI Agent 自检接入
 // 口令尾部带上服务地址（本地/服务器 IP 不同，由后端 AgentBaseUrlResolver 动态解析）
+// 追加「必须在当前对话内逐轮执行」：防止部分 AI 把这套打卡→接任务流程写成 python 脚本后台轮询——
+// 后台脚本只接单不执行（脱离当前对话不会触发对应 skills / prompt 提示词），任务完成质量会很差
 async function copyActivation() {
   if (!data.value) return
-  const cmd = `你是 HelloAI 平台的 ${data.value.agentName}（ID=${data.value.agentId}），请按平台 SKILL 接入并开始工作。服务地址:${data.value.baseUrl}`
+  const cmd = `你是 HelloAI 平台的 ${data.value.agentName}（ID=${data.value.agentId}），请按平台 SKILL 接入并开始工作。服务地址:${data.value.baseUrl} 注意：「打卡 → 拉取 → 执行 → 提交」全流程必须在当前对话内逐轮执行，禁止写成 Python 脚本后台轮询。`
   // 使用带降级的剪贴板写入，兼容 HTTP 公网部署下 navigator.clipboard 不可用的情况
   await copyTextWithToast(cmd, '已复制激活口令，粘到 IDE 对话框即可触发接入')
 }
