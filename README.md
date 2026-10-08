@@ -220,7 +220,12 @@ git clone https://gitee.com/undefined_404/helloai.git /home/admin/helloai && cd 
 
 # 2. 用脚本自动生成 .env（含随机密码与 AES 密钥；git 不跟踪 .env）
 bash deploy/init-env.sh
+
+# 3. 用脚本把 RabbitMQ 管理员建到 broker 上（自动启动 broker + 创建管理员 + 验证）
+bash deploy/init-rabbitmq-admin.sh
 ```
+
+> 💡 **从零到启动，总共 4 条命令**：`git clone` → `bash deploy/init-env.sh` → `bash deploy/init-rabbitmq-admin.sh` → `docker compose up -d --build`，全程**不需要手动编辑 .env、不需要复制粘贴任何密码**。
 
 部署目录结构（clone 后自动齐备，只需跑一次上面的脚本生成 `.env`）：
 
@@ -261,13 +266,20 @@ HELLOAI_CREDENTIAL_AES_KEY_BASE64=<base64> # 脚本随机生成（credential_vau
 
 > ⚠️ **AES 密钥务必妥善保管**：`credential_vault` 表中的 API Key 均用此密钥加密，密钥变更将导致所有已配置 Provider 解密失败。脚本**只生成一次、绝不覆盖**（重跑幂等）；**若复用已有数据库**则必须沿用旧密钥，否则历史密文全部解不开。脚本会输出管理员的明文密码，请记录到密码管理器后即可删除终端历史。
 
-> ⚠️ **RabbitMQ 前置步骤（必做，否则应用起不来）**：`rabbitmq-init` 一次性容器会用 `RABBITMQ_ADMIN_USER/PASSWORD` 调 Management API 创建 `/helloai` vhost 和业务账号。`RABBITMQ_DEFAULT_USER/PASS` 只在 broker **首次启动**时生效；**已有数据卷的 broker 会忽略它**，且 `guest` 仅允许本机回环登录（兄弟容器必然被拒）。因此 `up -d` 前必须先手工建一次管理员：
+> ⚠️ **RabbitMQ 前置步骤（必做，否则应用起不来）**：`rabbitmq-init` 一次性容器会用 `RABBITMQ_ADMIN_USER/PASSWORD` 调 Management API 创建 `/helloai` vhost 和业务账号。`RABBITMQ_DEFAULT_USER/PASS` 只在 broker **首次启动**时生效；**已有数据卷的 broker 会忽略它**，且 `guest` 仅允许本机回环登录（兄弟容器必然被拒）。因此 `up -d` 前必须先把管理员建到 broker 上——**用一条脚本搞定，无需手动复制密码**：
 >
 > ```bash
-> docker compose up -d rabbitmq          # 先只起 broker
-> docker exec helloai-rabbitmq rabbitmqctl add_user helloaiadmin '<hex 密码>'
-> docker exec helloai-rabbitmq rabbitmqctl set_user_tags helloaiadmin administrator
+> # 一条命令：启动 broker → 等待就绪 → 创建管理员 + 打 administrator 标签 → 验证
+> bash deploy/init-rabbitmq-admin.sh
 > ```
+>
+> 脚本 [`deploy/init-rabbitmq-admin.sh`](deploy/init-rabbitmq-admin.sh) 自动完成原本需要手工执行的 3 步（启动 broker / `rabbitmqctl add_user` / `set_user_tags`），**密码从 `deploy/init-env.sh` 生成的 `.env` 读取**，全程无需复制粘贴；**幂等**，重复运行不会改密码、只会重打标签。也支持指定部署目录或直接传环境变量：
+>
+> ```bash
+> bash deploy/init-rabbitmq-admin.sh /home/admin/helloai   # 指定 .env 所在目录
+> RABBITMQ_ADMIN_USER=foo RABBITMQ_ADMIN_PASSWORD=bar bash deploy/init-rabbitmq-admin.sh
+> ```
+>
 
 #### 启动与更新
 
