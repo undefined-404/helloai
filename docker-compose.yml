@@ -9,6 +9,25 @@
 #   start it explicitly with:  docker compose -f docker-compose.server.yml up -d --build
 #   (`docker compose` defaults to this file, so forgetting `-f` will start
 #   middleware only and appear to "do nothing" for the app.)
+#
+# --- 本地开发对接契约（改这里之前先读，避免照搬服务器方案）---
+#   1) 起后端必须用 local profile（回退值都在 application-local.yml）：
+#        java -jar ... --spring.profiles.active=local
+#      application.yml 的 6 项凭据【无默认值】(DATASOURCE_PASSWORD / RABBITMQ_PASSWORD /
+#      HELLOAI_AGENT_REGISTRATION_TOKEN / HELLOAI_CREDENTIAL_AES_KEY_BASE64 /
+#      MINIO_ACCESS_KEY / MINIO_SECRET_KEY)：用 dev profile 会在启动期解析占位符失败，
+#      报错形似 MQ/凭据故障，实为 profile 选错，与本文件无关。
+#   2) RabbitMQ 用 guest/guest + 默认 vhost "/"，【不需要】rabbitmq-init / 管理员账号。
+#      判据：guest 官方限制「仅允许回环登录」；本地 app 跑宿主机走回环 → 可用；
+#      服务器 app 是兄弟容器（非回环）→ 用不了 guest，才必须由 rabbitmq-init 建
+#      helloai 用户 + /helloai vhost（见 deploy/middleware/README.md §10）。
+#   3) MinIO 不需要 minio-init：bucket helloai-artifacts 由
+#      MinioArtifactStorage.ensureBucket() 在首次写入时自动创建。
+#   4) 系统管理员账号由 Flyway V1 播种（admin / admin123），无需手工建。
+#   5) 时区统一 Asia/Shanghai（与 docker-compose.server.yml 逐项一致）：
+#      PG 的 date_trunc/会话时区、各中间件日志时间都受容器 TZ 影响，
+#      本地与生产口径必须一致，否则「本地对、线上差 8 小时」这类问题无法复现。
+#      注意：改这里只影响下次 `docker compose up -d` 重建的容器，数据卷不受影响。
 # ============================================================
 
 services:
@@ -24,10 +43,14 @@ services:
       POSTGRES_DB: helloai
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
+      TZ: Asia/Shanghai
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U helloai"]
+      # 与 docker-compose.server.yml 对齐：probe 必须用真实存在的超级用户 postgres。
+      # 原写法 `pg_isready -U helloai` 指向一个并不存在的角色（本 compose 只建 postgres），
+      # pg_isready 不做鉴权故不会真的失败，但语义是错的、会误导排障。
+      test: ["CMD-SHELL", "pg_isready -U postgres -d helloai"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -39,6 +62,8 @@ services:
     restart: unless-stopped
     ports:
       - "26379:6379"
+    environment:
+      TZ: Asia/Shanghai
     volumes:
       - redis_data:/data
     healthcheck:
@@ -56,14 +81,30 @@ services:
       - "25672:5672"    # AMQP
       - "25673:15672"   # Management UI
     environment:
+      # 本地用官方默认 guest/guest + 默认 vhost "/" 即可，无需 rabbitmq-init / 管理员账号：
+      # app 在宿主机跑、连 localhost:25672 走【回环】，而 guest 的官方限制正是「仅允许回环登录」。
+      # 服务器版（docker-compose.server.yml）才需要 init，因为那里 app 是兄弟容器（非回环），
+      # 连不上 guest，必须由 rabbitmq-init 建 helloai 用户 + /helloai vhost。详见 deploy/middleware/README.md §10。
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
+      TZ: Asia/Shanghai
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      # 与 docker-compose.server.yml 对齐：此前本地 rabbitmq 没有 healthcheck，
+      # 容器进程起来 ≠ broker 可用，缺它时排障只能靠肉眼看日志。
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # --- MinIO Object Storage ---
   minio:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    # 与 docker-compose.server.yml 对齐用 latest。
+    # 原写法钉 RELEASE.2025-09-07T16-13-09Z：该 tag 在 registry 上并不存在，
+    # 实测 `docker compose up -d` 必报 “not found” 而整体中止（已存在的容器只因
+    # 当初用 latest 创建 + 之后一直靠 docker start 拉起，才侥幸没暴露）。
+    image: minio/minio:latest
     container_name: helloai-minio
     restart: unless-stopped
     ports:
@@ -72,6 +113,11 @@ services:
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin123
+      # 与服务器版对齐照样写 TZ，但【实测该镜像里 TZ 不生效】：minio/minio 镜像
+      # 不携带 tzdata（容器内没有 /usr/share/zoneinfo），故 `date` 回落到 UTC。
+      # 保留这一行的理由：与其它中间件口径一致，且镜像将来补上 tzdata 即自动生效；
+      # 但别指望它 —— 需要精确时间请以对象/日志自带的 UTC 时间戳为准。
+      TZ: Asia/Shanghai
     volumes:
       - minio_data:/data
     command: server /data --console-address ':9001'

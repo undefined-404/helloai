@@ -11,8 +11,9 @@
 # 解析优先级：
 #   1. $HELLOAI_JAVA_HOME   （显式指定，最高优先级，供 CI 与换机场景使用）
 #   2. $JAVA_HOME           （须不在崩溃黑名单内，且**实测大版本为 17**）
-#   3. 探测 ~/.jdks/* 中可用的 JDK 17（优先 17.0.20 系，跳过黑名单）
-#   4. 探测常见系统安装位置（/usr/lib/jvm 等）
+#   3. 探测 ~/.jdks/* 与 macOS 的 ~/Library/Java/JavaVirtualMachines/*/Contents/Home
+#      中可用的 JDK 17（优先 17.0.20 系，跳过黑名单）
+#   4. 探测常见系统安装位置（/usr/lib/jvm、/opt/java、/opt/jdk* 等）
 # 解析失败 -> 返回码 1，并打印可执行的修复指引。
 #
 # 2026-09-29 补强（自有主机 CI 场景）：
@@ -84,7 +85,13 @@ helloai_resolve_java_home() {
   # 探测常见 JDK 安装位置。
   # 注意：不再用「路径里是否含 17」当判据（会漏掉 /opt/java/latest 这类命名），
   # 统一交给 helloai_jdk_is_usable 实测 java -version 大版本。
-  for p in "$HOME"/.jdks/* /usr/lib/jvm/* /opt/java/* /opt/jdk*; do
+  #
+  # macOS 必须在列表里（2026-10-08 补）：本机 JDK 一律装在
+  # ~/Library/Java/JavaVirtualMachines/<name>/Contents/Home，不在 ~/.jdks、
+  # /usr/lib/jvm 也不在 /opt —— 不探测就得每次手设 JAVA_HOME 才能跑门禁。
+  # 注意 Contents/Home 这层不能省（<name> 本身不是 JAVA_HOME，里面没有 bin/java）。
+  for p in "$HOME"/.jdks/* "$HOME"/Library/Java/JavaVirtualMachines/*/Contents/Home \
+           /usr/lib/jvm/* /opt/java/* /opt/jdk*; do
     [ -e "$p" ] || continue
     if helloai_jdk_is_usable "$p"; then cands+=("$p"); fi
   done

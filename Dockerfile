@@ -73,9 +73,15 @@ RUN npm run build   # vue-tsc -b && vite build -> dist/
 FROM eclipse-temurin:17-jre AS app
 # Container locale pinned to C.UTF-8 + UTF-8 file.encoding (same as compose env,
 # so behaviour is identical whether the jar is baked in or bind-mounted).
+# TZ + -Duser.timezone pin the JVM business timezone to Asia/Shanghai: the compose
+# file sets the same pair, and CI/tests are pinned to it too (root pom surefire
+# <user.timezone>), so "local green / server differs by 8 hours" cannot happen.
+# -Duser.timezone rather than TZ alone, so a base image without tzdata cannot
+# silently fall back to UTC.
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
-    JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8
+    TZ=Asia/Shanghai \
+    JAVA_TOOL_OPTIONS="-Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai"
 WORKDIR /app
 COPY --from=backend-build /workspace/helloai-start/target/helloai-start-1.0.0-SNAPSHOT.jar helloai-start.jar
 # Runs as root (same as the legacy bind-mount mode) so the bind-mounted

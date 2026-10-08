@@ -25,27 +25,32 @@ concurrency:
 jobs:
   gate:
     name: 构建 · 单测 · 架构冻结 · 前端
-    runs-on: ubuntu-latest
+    # 锁到具体的 Ubuntu 版本，而不是 ubuntu-latest：
+    #   GitHub 公告 ubuntu-latest 将于 2026-10-19 迁到 Ubuntu 26，漂移会静默改变构建环境。
+    runs-on: ubuntu-24.04
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        # v5：Node 20 runtime 已弃用（runner 强制以 Node 24 运行 v4 系列）
+        uses: actions/checkout@v5
 
       - name: 安装 JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
           cache: maven
 
-      - name: 安装 Node 20
-        uses: actions/setup-node@v4
+      - name: 安装 Node 22
+        uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          # 与本地开发一致（Node 20 已进入弃用期）
+          node-version: '22'
           cache: npm
           cache-dependency-path: helloai-ui/package-lock.json
 
-      # 注意：必须走 ci-gate.sh —— 它内部显式传 -DskipTests=false
-      # 并断言「用例数 > 0」，否则根 POM 的默认跳过会让流水线假绿通过。
+      # 注意：必须走 ci-gate.sh —— 它内部显式传 -DskipTests=false、
+      # 断言「用例数 > 0」、固定时区（Asia/Shanghai，见脚本设计原则 7），
+      # 否则根 POM 的默认跳过会让流水线假绿通过，或让时间语义用例在 UTC runner 上误报。
       - name: 执行门禁（ci-gate.sh）
         env:
           HELLOAI_CI: '1'
@@ -53,7 +58,7 @@ jobs:
 
       - name: 归档单测报告
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: surefire-reports
           path: '**/target/surefire-reports/*.xml'

@@ -200,6 +200,10 @@ services:
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin123
+      # Measured 2026-10-08: this TZ has NO effect -- the minio/minio image ships no
+      # tzdata (no /usr/share/zoneinfo inside), so `date` falls back to UTC.
+      # Kept for parity with the other middleware and so it starts working if the
+      # image later bundles tzdata; just do not rely on it for business time.
       TZ: Asia/Shanghai
     volumes:
       - minio_data:/data
@@ -248,7 +252,11 @@ services:
       # en_US.UTF-8 which requires the image to ship `locales`.
       LANG: C.UTF-8
       LC_ALL: C.UTF-8
-      JAVA_TOOL_OPTIONS: -Dfile.encoding=UTF-8
+      # -Duser.timezone is belt-and-braces on top of TZ above: it pins the JVM zone
+      # even if the base image ever ships without tzdata (in which case TZ alone
+      # would silently fall back to UTC, shifting all business-time semantics).
+      # Must stay in sync with the Dockerfile's JAVA_TOOL_OPTIONS.
+      JAVA_TOOL_OPTIONS: -Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai
       # Activate dev profile, using Docker internal network config from application-dev.yml
       SPRING_PROFILES_ACTIVE: dev
       # SPRING_* env vars below override application-dev.yml fields,

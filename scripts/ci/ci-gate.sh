@@ -11,6 +11,11 @@
 #   5. 固定可用 JDK，消除 ms-17.0.19 崩溃类「无法验证」。
 #   6. B 级集成（Testcontainers PG/Redis/RabbitMQ）无 Docker 时输出 NOT RUN 而非 FAIL
 #      （协作规约 §27 语义：不可用环境不制造假失败，门禁仍对真实回归负责）。
+#   7. 时区固定为 Asia/Shanghai（业务口径，与 docker-compose.server.yml 的 TZ 一致）：
+#      CI runner 默认 UTC、开发机默认 +08:00，会让「时间语义」用例云端失败、本地通过
+#      （2026-10-08 实测）。可用 HELLOAI_CI_TZ 覆盖。
+#   8. 失败项在 GitHub Actions 上输出 ::error:: 注解：否则云端只有一句
+#      "Process completed with exit code 1"，看不到到底挂了哪一项。
 #
 # 用法：
 #   bash scripts/ci/ci-gate.sh                 # 全量：所有模块 clean test + 前端
@@ -65,10 +70,27 @@ fi
 MVN_ARGS=(-B --no-transfer-progress)
 [ "$OFFLINE" = "1" ] && MVN_ARGS+=(-o)
 
+# ---------------------------------------------------------------------------
+# 时区固定（见头部设计原则 7）
+#   业务口径 Asia/Shanghai，与 docker-compose.server.yml 的 TZ 保持一致。
+#   这里的 export 覆盖本脚本派生的所有进程（mvn、node、docker CLI...）；
+#   测试 JVM 的另一层保险在根 pom 的 surefire <user.timezone>（IDE 直接跑也生效）。
+# ---------------------------------------------------------------------------
+export TZ="${HELLOAI_CI_TZ:-Asia/Shanghai}"
+printf '[ci-gate] 时区固定：TZ=%s（可用 HELLOAI_CI_TZ 覆盖）\n' "$TZ"
+
 FAILURES=0
 step() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
 ok()   { printf '  [ OK ] %s\n' "$1"; }
-bad()  { printf '  [FAIL] %s\n' "$1"; FAILURES=$((FAILURES + 1)); }
+bad()  {
+  FAILURES=$((FAILURES + 1))
+  printf '  [FAIL] %s\n' "$1"
+  # GitHub Actions：同时输出 ::error:: 注解，云端 Annotations 可直接看到失败项；
+  # 本地/其它平台无副作用。% 需转义为 %25，否则注解正文会被 GitHub 误解析。
+  if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    printf '::error title=CI 门禁失败::%s\n' "${1//%/%25}"
+  fi
+}
 
 # ---------------------------------------------------------------------------
 # 门禁 0：解析可用 JDK（消除 ms-17.0.19 崩溃）

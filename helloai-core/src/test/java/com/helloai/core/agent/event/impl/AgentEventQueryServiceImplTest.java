@@ -12,7 +12,9 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
 
@@ -146,8 +148,14 @@ class AgentEventQueryServiceImplTest {
         Page<AgentEvent> resultPage = new Page<>(1, 2);
         resultPage.setTotal(2);
         resultPage.setRecords(List.of(first, second));
-        OffsetDateTime start = OffsetDateTime.parse("2026-10-01T00:00:00+08:00");
-        OffsetDateTime end = OffsetDateTime.parse("2026-10-08T23:59:59+08:00");
+        // 期望值口径必须与服务端一致：{@code parseAuditTime} 对「yyyy-MM-dd HH:mm:ss」形态
+        // 用 JVM 默认时区装配偏移量（{@code OffsetDateTime.of(local, now().getOffset())}）。
+        // 原先硬编码 +08:00，导致本用例在非 +08:00 环境（CI runner = UTC）必然
+        // PotentialStubbingProblem 失败（2026-10-08 CI 复现），故改为按同一口径构造。
+        OffsetDateTime start = OffsetDateTime.of(
+                LocalDateTime.parse("2026-10-01 00:00:00", AUDIT_LOCAL_FORMATTER), currentOffset());
+        OffsetDateTime end = OffsetDateTime.of(
+                LocalDateTime.parse("2026-10-08 23:59:59", AUDIT_LOCAL_FORMATTER), currentOffset());
         when(agentEventMapper.selectPageAuditByTaskId(any(), eq(100L), eq("agent_started"), eq(start), eq(end)))
                 .thenReturn(resultPage);
 
@@ -212,6 +220,15 @@ class AgentEventQueryServiceImplTest {
         queryService.pageAuditByTaskId(100L, null, "garbled", "also-garbled", 1, 10);
 
         verify(agentEventMapper).selectPageAuditByTaskId(any(), eq(100L), any(), eq((OffsetDateTime) null), eq((OffsetDateTime) null));
+    }
+
+    /** 前端 el-date-picker / 数据库写入的本地时间形态（与服务端 parseAuditTime 的兜底格式一致）。 */
+    private static final DateTimeFormatter AUDIT_LOCAL_FORMATTER =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+    /** JVM 默认时区当前偏移量——与服务端 {@code parseAuditTime} 的装配口径同源。 */
+    private static java.time.ZoneOffset currentOffset() {
+        return OffsetDateTime.now().getOffset();
     }
 
     private AgentEvent entity(Long id, String eventId, String runId, int turn, int step,

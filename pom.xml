@@ -234,6 +234,11 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
+                <!-- 必须显式钉版本（2026-10-08 CI 修复）：不写 version 时 Maven 会解析「当前最新 RELEASE」，
+                     而本机走阿里云镜像（~/.m2/settings.xml, mirrorOf=*）元数据滞后、CI 直连 central，
+                     结果同一份代码在本机与 CI 跑的是两套插件（实测 3.13.0 vs 3.16.0）——
+                     门禁「本地可复现」形同虚设，且产生 'plugin.version is missing' 警告。 -->
+                <version>3.16.0</version>
                 <configuration>
                     <source>${java.version}</source>
                     <target>${java.version}</target>
@@ -250,6 +255,22 @@
         </plugins>
         <pluginManagement>
             <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <!-- 钉版本：理由同 maven-compiler-plugin（不钉会导致 3.2.5 与 3.6.0 漂移，
+                         连 surefire 报告的文件数都不同：343 vs 198）。 -->
+                    <version>3.6.0</version>
+                    <configuration>
+                        <systemPropertyVariables>
+                            <!-- 测试 JVM 固定业务时区，不随宿主机/CI runner 漂移
+                                 （2026-10-08 CI 失败根因：runner 是 UTC，用例期望值是 +08:00）。
+                                 生产口径同源：容器与 compose 均设 TZ=Asia/Shanghai。
+                                 注意：只影响 fork 出来的测试 JVM，不改变应用运行时行为。 -->
+                            <user.timezone>Asia/Shanghai</user.timezone>
+                        </systemPropertyVariables>
+                    </configuration>
+                </plugin>
                 <plugin>
                     <groupId>org.springframework.boot</groupId>
                     <artifactId>spring-boot-maven-plugin</artifactId>
