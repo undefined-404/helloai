@@ -2,7 +2,7 @@
 # ============================================================
 # HelloAI - RabbitMQ admin bootstrap (run BEFORE `docker compose up -d`)
 # Automates the 3 manual commands from the README Quick Start:
-#   docker compose up -d rabbitmq
+#   docker compose -f docker-compose.server.yml up -d rabbitmq
 #   docker exec helloai-rabbitmq rabbitmqctl add_user helloaiadmin '<pw>'
 #   docker exec helloai-rabbitmq rabbitmqctl set_user_tags helloaiadmin administrator
 #
@@ -38,7 +38,13 @@ fi
 cd "$TARGET_DIR"
 
 CONTAINER="helloai-rabbitmq"
-COMPOSE="docker compose"
+# MUST target the SERVER compose file explicitly: a bare `docker compose`
+# would default to docker-compose.yml (the LOCAL dev stack), which shares the
+# same container name (helloai-rabbitmq) and volume name (rabbitmq_data) but
+# is a different project -- creating the admin on that broker would then be
+# invisible to the server stack's rabbitmq-init, and the app would fail MQ
+# auth with ACCESS_REFUSED (measured 2026-10-08).
+COMPOSE="docker compose -f docker-compose.server.yml"
 ADMIN_USER=""
 ADMIN_PW=""
 
@@ -60,9 +66,9 @@ if [ -z "$ADMIN_USER" ] || [ -z "$ADMIN_PW" ]; then
 fi
 
 # --- 2. Bring up only the broker ------------------------------------------------
-echo "[init-rabbitmq-admin] starting RabbitMQ broker (docker compose up -d rabbitmq)..."
+echo "[init-rabbitmq-admin] starting RabbitMQ broker (docker compose -f docker-compose.server.yml up -d rabbitmq)..."
 if ! $COMPOSE up -d rabbitmq; then
-  echo "[init-rabbitmq-admin] ERROR: 'docker compose up -d rabbitmq' failed." >&2
+  echo "[init-rabbitmq-admin] ERROR: 'docker compose -f docker-compose.server.yml up -d rabbitmq' failed." >&2
   echo "[init-rabbitmq-admin]   Is this the deploy dir containing docker-compose.server.yml? Does Docker have permission?" >&2
   exit 1
 fi
@@ -86,7 +92,7 @@ while :; do
   attempt=$((attempt + 1))
   if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then
     echo "[init-rabbitmq-admin] ERROR: broker did not become ready within $((MAX_ATTEMPTS * INTERVAL))s." >&2
-    echo "[init-rabbitmq-admin]   Check: docker compose ps; docker compose logs rabbitmq" >&2
+    echo "[init-rabbitmq-admin]   Check: docker compose -f docker-compose.server.yml ps; docker compose -f docker-compose.server.yml logs rabbitmq" >&2
     exit 1
   fi
   sleep "$INTERVAL"
@@ -123,7 +129,7 @@ else
       done
       if [ "$retry_ok" -ne 1 ]; then
         echo "[init-rabbitmq-admin] ERROR: 'rabbitmqctl add_user' kept failing (rc=64) after 5 retries." >&2
-        echo "[init-rabbitmq-admin]   Check: docker compose logs rabbitmq --tail 50" >&2
+        echo "[init-rabbitmq-admin]   Check: docker compose -f docker-compose.server.yml logs rabbitmq --tail 50" >&2
         exit 1
       fi
     else
@@ -154,4 +160,4 @@ else
   exit 1
 fi
 echo "[init-rabbitmq-admin] DONE: admin '${ADMIN_USER}' ready with tag 'administrator'."
-echo "[init-rabbitmq-admin] Next: docker compose up -d --build"
+echo "[init-rabbitmq-admin] Next: docker compose -f docker-compose.server.yml up -d --build"
