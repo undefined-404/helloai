@@ -67,14 +67,20 @@ if ! $COMPOSE up -d rabbitmq; then
   exit 1
 fi
 
-# --- 3. Wait until the broker's management/CLI is ready --------------------------
-echo "[init-rabbitmq-admin] waiting for broker to become ready..."
+# --- 3. Wait until the broker's rabbit app is fully running ----------------------
+# NOTE: `rabbitmq-diagnostics -q ping` is NOT enough here -- it only verifies the
+# Erlang node is reachable (passes in ~6s), while `rabbitmqctl add_user` requires
+# the `rabbit` APPLICATION to be running. Measured on the production server
+# (2026-10-08): ping passed, then add_user failed with rc=64
+# "this command requires the 'rabbit' app to be running".
+# `check_running` is the diagnostic that actually gates on the rabbit app being up.
+echo "[init-rabbitmq-admin] waiting for the rabbit app to become ready..."
 MAX_ATTEMPTS=60
 INTERVAL=3
 attempt=0
 while :; do
-  if docker exec "$CONTAINER" rabbitmq-diagnostics -q ping >/dev/null 2>&1; then
-    echo "[init-rabbitmq-admin] broker is up (after ~$((attempt * INTERVAL))s)"
+  if docker exec "$CONTAINER" rabbitmq-diagnostics -q check_running >/dev/null 2>&1; then
+    echo "[init-rabbitmq-admin] rabbit app is running (after ~$((attempt * INTERVAL))s)"
     break
   fi
   attempt=$((attempt + 1))
@@ -99,9 +105,32 @@ else
   if docker exec "$CONTAINER" rabbitmqctl list_users 2>/dev/null | grep -q "^${ADMIN_USER}[[:space:]]"; then
     echo "[init-rabbitmq-admin]   user already exists, keeping existing password"
   else
-    echo "[init-rabbitmq-admin] ERROR: 'rabbitmqctl add_user' failed (rc=$add_rc) and the user is not listed." >&2
-    echo "[init-rabbitmq-admin]   Check the password for characters that the shell/CLI may interpret." >&2
-    exit 1
+    # Distinguish "startup race" (rabbit app not running yet, despite check_running
+    # passing moments ago) from a real credential/command failure. Retry a few
+    # times before giving up; measured rc=64 on the production server.
+    if [ "$add_rc" -eq 64 ]; then
+      echo "[init-rabbitmq-admin]   add_user rc=64 (rabbit app not running yet), retrying up to 5x..."
+      retried=0
+      retry_ok=0
+      while [ "$retried" -lt 5 ]; do
+        retried=$((retried + 1))
+        sleep 3
+        if docker exec "$CONTAINER" rabbitmqctl add_user "$ADMIN_USER" "$ADMIN_PW" 2>/dev/null; then
+          retry_ok=1
+          echo "[init-rabbitmq-admin]   user created on retry #$retried"
+          break
+        fi
+      done
+      if [ "$retry_ok" -ne 1 ]; then
+        echo "[init-rabbitmq-admin] ERROR: 'rabbitmqctl add_user' kept failing (rc=64) after 5 retries." >&2
+        echo "[init-rabbitmq-admin]   Check: docker compose logs rabbitmq --tail 50" >&2
+        exit 1
+      fi
+    else
+      echo "[init-rabbitmq-admin] ERROR: 'rabbitmqctl add_user' failed (rc=$add_rc) and the user is not listed." >&2
+      echo "[init-rabbitmq-admin]   Check the password for characters that the shell/CLI may interpret." >&2
+      exit 1
+    fi
   fi
 fi
 
