@@ -26,6 +26,16 @@ spring:
   rabbitmq:
     host: "${RABBITMQ_HOST:localhost}"
     port: "${RABBITMQ_PORT:25672}"
+    # username / password / virtual-host MUST be present as placeholders: the
+    # Dockerfile overwrites the working-tree application-dev.yml with THIS template
+    # (to keep real credentials out of the image), so without these three keys the
+    # baked jar would fall back to Spring's default "guest" account and the app
+    # would fail MQ auth with ACCESS_REFUSED -- even though the real account exists.
+    # The defaults below are harmless placeholders; docker-compose.server.yml always
+    # injects the real values via RABBITMQ_USERNAME / RABBITMQ_PASSWORD / RABBITMQ_VHOST.
+    username: "${RABBITMQ_USERNAME:helloai}"
+    password: "${RABBITMQ_PASSWORD:helloai}"
+    virtual-host: "${RABBITMQ_VHOST:/helloai}"
 
 # 整合报告生成耗时长（大 prompt + 长输出），切到 deepseek-v4-pro（输出上限 384K tokens）
 helloai:
