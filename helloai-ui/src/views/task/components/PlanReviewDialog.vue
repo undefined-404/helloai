@@ -94,7 +94,7 @@
                     size="small"
                     type="primary"
                   >
-                    {{ s }}
+                    {{ skillLabelOf(s) }}
                   </el-tag>
                 </div>
               </div>
@@ -187,7 +187,7 @@
                 type="primary"
                 style="margin-right:4px"
               >
-                {{ s }}
+                {{ skillLabelOf(s) }}
               </el-tag>
             </template>
             <span v-else>-</span>
@@ -280,7 +280,7 @@
             <el-option
               v-for="s in skillOptions"
               :key="s"
-              :label="s"
+              :label="skillLabelOf(s)"
               :value="s"
             />
           </el-select>
@@ -362,6 +362,7 @@ import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { taskApi } from '@/api/task'
 import { subTaskApi } from '@/api/subTask'
+import { ENG_SKILL_OPTIONS, skillLabelOf } from '@/constants/agentSkills'
 import type { Task, SubTask, LongId, Uncertainty } from '@/types'
 
 const props = defineProps<{ modelValue: boolean; task: Task | null }>()
@@ -482,9 +483,10 @@ const editForm = ref<{ requiredSkills: string[]; constraints: string; uncertaint
   { requiredSkills: [], constraints: '', uncertainties: [] }
 )
 
-// 技能下拉候选：全部草案已指派标签的并集（目录端点本批未暴露，allow-create 兜自由输入）
+// 技能下拉候选：平台 eng-* 规范目录（固定可指派）+ 全部草案已指派标签的并集（allow-create 兜自由输入）
 const skillOptions = computed(() => {
   const set = new Set<string>()
+  ENG_SKILL_OPTIONS.forEach(o => set.add(o.value))
   drafts.value.forEach(d => d.requiredSkills?.forEach(s => set.add(s)))
   return [...set]
 })

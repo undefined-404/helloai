@@ -206,7 +206,7 @@
               size="small"
               type="primary"
             >
-              {{ s }}
+              {{ skillLabelOf(s) }}
             </el-tag>
           </div>
         </div>
@@ -632,6 +632,7 @@ import { fmtTime } from '@/utils/tableConfig'
 // G-006 抽取：事件字典与语义色/分类派生统一由 utils/eventMeta 提供（与事件流工作台同源）
 import { EVENT_META, eventCategory, eventLabel, eventTypeColor } from '@/utils/eventMeta'
 import { orderByDependency } from '@/utils/subTaskDag'
+import { skillLabelOf } from '@/constants/agentSkills'
 import { resolvePendingWait, usePendingCountdown } from '@/composables/usePendingCountdown'
 import type { SubTask, TaskTimelineItem, ConversationMessageItem, Attachment, LongId, Agent } from '@/types'
 

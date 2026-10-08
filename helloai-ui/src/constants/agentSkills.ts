@@ -13,3 +13,23 @@ export const AGENT_SKILL_OPTIONS = [
   { label: 'java', value: 'java' },
   { label: 'thinking（深度思考/推理）', value: 'thinking' },
 ] as const
+
+// 平台 eng-* 规范技能目录（与后端 AgentSkillSpecServiceImpl.KNOWN_SPECS 对齐）
+// 任务 required_skills 中由 Planner 按「平台技能目录」指派的规范标签；description 取自后端
+// SkillPackage.description（中文）。前端渲染 requiredSkills 时经 skillLabelOf 映射为中文。
+export const ENG_SKILL_OPTIONS = [
+  { label: 'eng-code-review（代码评审规范）', value: 'eng-code-review' },
+  { label: 'eng-doc-standard（文档规范）', value: 'eng-doc-standard' },
+  { label: 'eng-verification（验证规范）', value: 'eng-verification' },
+  { label: 'eng-web-research（联网调研规范）', value: 'eng-web-research' },
+] as const
+
+/** 技能标签 → 中文显示名（能力声明 ∪ eng-* 规范目录）；未命中回退原文，兼容自定义技能。 */
+export function skillLabelOf(s: string | null | undefined): string {
+  if (!s) return ''
+  return (
+    AGENT_SKILL_OPTIONS.find(o => o.value === s)?.label
+    ?? ENG_SKILL_OPTIONS.find(o => o.value === s)?.label
+    ?? s
+  )
+}

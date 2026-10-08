@@ -203,10 +203,11 @@ import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { taskApi } from '@/api/task'
 import { agentApi } from '@/api/agent'
 import { clarifyApi } from '@/api/clarify'
-import { AGENT_SKILL_OPTIONS } from '@/constants/agentSkills'
+import { AGENT_SKILL_OPTIONS, ENG_SKILL_OPTIONS } from '@/constants/agentSkills'
 import type { Task, TaskAgentPolicy, Agent, PlannerOption, LongId } from '@/types'
 
-const skillOptions = AGENT_SKILL_OPTIONS
+// 任务级「要求技能」候选：能力声明 ∪ eng-* 规范目录（任务拆解/执行侧按规范注入）
+const skillOptions = [...AGENT_SKILL_OPTIONS, ...ENG_SKILL_OPTIONS]
 
 // task 为 null 时是新建模式，否则为编辑模式
 const props = defineProps<{ modelValue: boolean; task: Task | null }>()
