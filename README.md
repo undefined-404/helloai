@@ -218,33 +218,48 @@ cd helloai-ui && npm install && npm run dev
 # 1. 克隆（只需一次；构建依赖源码树）
 git clone https://gitee.com/undefined_404/helloai.git /home/admin/helloai && cd /home/admin/helloai
 
-# 2. 新建 .env（git 不跟踪，必须手建），5 个变量见下
+# 2. 用脚本自动生成 .env（含随机密码与 AES 密钥；git 不跟踪 .env）
+bash deploy/init-env.sh
 ```
 
-部署目录结构（clone 后自动齐备，只需补 `.env`）：
+部署目录结构（clone 后自动齐备，只需跑一次上面的脚本生成 `.env`）：
 
 ```
 /home/admin/helloai/
 ├── docker-compose.server.yml     # 服务器用；`docker compose` 会自动读同目录 .env
 ├── Dockerfile                    # 多阶段构建：Maven→jar→JRE 镜像 + Node→dist→nginx 镜像
 ├── deploy/init-rabbitmq.sh       # rabbitmq-init 容器初始化脚本（bind 挂载）
-└── .env                          # 新建，见下
+├── deploy/init-env.sh            # 一键生成 .env（随机密码 + AES 密钥，幂等可重跑）
+└── .env                          # 由脚本生成，权限 600，含 5 个变量
 ```
 
-`.env` 需要 **5 个变量**（`.env` 是 Docker Compose 变量插值来源，应用容器内不直接读 `.env`；全部为运行时注入，镜像内不含任何密钥）：
+**`.env` 自动生成脚本 [`deploy/init-env.sh`](deploy/init-env.sh)**——一条命令生成全部 5 个变量，**不用手写**：
 
 ```bash
-# RabbitMQ 管理员（必须先手工创建，见下；不能用 guest）
-RABBITMQ_ADMIN_USER=helloaiadmin
-RABBITMQ_ADMIN_PASSWORD=<hex 密码，不要含冒号>
-# RabbitMQ 业务账号（rabbitmq-init 创建；与 app 共享同一个密码）
-HELLOAI_RABBIT_USER=helloai
-HELLOAI_RABBIT_PASSWORD=<hex 密码>
-# AES 密钥：必须与库中已有密文匹配（credential_vault 加密用）
-HELLOAI_CREDENTIAL_AES_KEY_BASE64=<base64 密钥>
+# 用法（在部署目录执行，即在当前目录生成 .env）
+bash deploy/init-env.sh
+
+# 或指定目录 / 仅打印不落盘
+bash deploy/init-env.sh /home/admin/helloai
+bash deploy/init-env.sh --print
 ```
 
-> ⚠️ **AES 密钥务必妥善保管**：`credential_vault` 表中的 API Key 均用此密钥加密，密钥变更将导致所有已配置 Provider 解密失败。**首次部署生成**用 `openssl rand -base64 32`；**若复用已有数据库**则必须沿用旧密钥，否则历史密文全部解不开。
+脚本行为：
+- 生成 **3 个随机口令**：`RABBITMQ_ADMIN_PASSWORD`（hex 32 位）、`HELLOAI_RABBIT_PASSWORD`（hex 32 位）、`HELLOAI_CREDENTIAL_AES_KEY_BASE64`（base64 256-bit AES 密钥）；固定 `RABBITMQ_ADMIN_USER=helloaiadmin`、`HELLOAI_RABBIT_USER=helloai`
+- **幂等**：重复运行**不会覆盖**已有值（尤其 AES 密钥必须与库中密文匹配）；`.env` 权限自动设为 `600`
+- **`--print` 模式**：只打印生成的变量值，不写文件（便于先预览）
+
+`.env` 的 5 个变量（`.env` 是 Docker Compose 变量插值来源，应用容器内不直接读 `.env`；全部为运行时注入，镜像内不含任何密钥）：
+
+```bash
+RABBITMQ_ADMIN_USER=helloaiadmin          # RabbitMQ 管理员（脚本固定；必须先手工建到 broker，见下）
+RABBITMQ_ADMIN_PASSWORD=<hex 密码>         # 脚本随机生成（hex，无冒号）
+HELLOAI_RABBIT_USER=helloai               # RabbitMQ 业务账号（脚本固定；rabbitmq-init 创建）
+HELLOAI_RABBIT_PASSWORD=<hex 密码>         # 脚本随机生成（与 app 共享）
+HELLOAI_CREDENTIAL_AES_KEY_BASE64=<base64> # 脚本随机生成（credential_vault 加密用）
+```
+
+> ⚠️ **AES 密钥务必妥善保管**：`credential_vault` 表中的 API Key 均用此密钥加密，密钥变更将导致所有已配置 Provider 解密失败。脚本**只生成一次、绝不覆盖**（重跑幂等）；**若复用已有数据库**则必须沿用旧密钥，否则历史密文全部解不开。脚本会输出管理员的明文密码，请记录到密码管理器后即可删除终端历史。
 
 > ⚠️ **RabbitMQ 前置步骤（必做，否则应用起不来）**：`rabbitmq-init` 一次性容器会用 `RABBITMQ_ADMIN_USER/PASSWORD` 调 Management API 创建 `/helloai` vhost 和业务账号。`RABBITMQ_DEFAULT_USER/PASS` 只在 broker **首次启动**时生效；**已有数据卷的 broker 会忽略它**，且 `guest` 仅允许本机回环登录（兄弟容器必然被拒）。因此 `up -d` 前必须先手工建一次管理员：
 >
