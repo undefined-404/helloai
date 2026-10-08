@@ -88,7 +88,7 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 | `uploadArtifact` | ✓ | ✓ | `POST .../uploadArtifact` | `{"subTaskId":123,"fileName":"a.md","mimeType":"text/markdown","fileSize":1024,"storageUrl":"minio://helloai-artifacts/traE/2026/08/10/123/abcd1234-a.md"}` | `{ok, attachmentId, storageUrl}` |
 | `submitResult` | ✓ | ✓ | `POST .../submitResult` | `{"subTaskId":123,"resultId":"r-1","success":true,"output":"...","finishReason":"completed","tokenUsage":12345}` | `{ok, accepted, idempotent, status, reason, subTaskId, resultId}` |
 | `reportBlocked` | ✓ | ✓ | `POST .../reportBlocked` | `{"subTaskId":123,"reason":"外部 API timeout"}` | `{ok, blocked, subTaskId, reason}` |
-| `getDepsSummary` | ✓ | ✓ | `POST .../getDepsSummary` | `{"subTaskId":123}` | `{subTaskId, taskId, depCount, loadedCount, truncatedCount, degraded, deps:[{subTaskId, title, status, summary, content, truncated}]}` |
+| `getDepsSummary` | ✓ | ✓ | `POST .../getDepsSummary` | `{"subTaskId":123}` | `{subTaskId, taskId, depCount, loadedCount, truncatedCount, degraded, deps:[{subTaskId, title, status, summary, content, truncated}]}`（⚠️ **返回是单行 JSON**，本地 Read/查看工具可能按 2000 字符截断显示，**务必用脚本/jq/ConvertFrom-Json 解析后再看**，不要直接 Read 原始响应；`content` 字段本身未截断） |
 | `getSubTaskDetail` | ✓ | ✓ | `POST .../getSubTaskDetail` | `{"subTaskId":123}` | `{subTaskId, taskId, title, content, deliverable, acceptance, constraints, uncertainties, requiredSkills, priority, status, contract, dependsOn, deadline, reworkCount}`（子任务全文，不截断；开工前必读，验收标准 `acceptance` 为审查侧同一份判定依据） |
 
 > 通道选择：MCP SSE 是标准协议（需 4 步握手，session 绑定长连接）；REST 别名与 REST 直通**免 session、同步返回**，断连后仍可用。
@@ -101,6 +101,11 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 - `ttlMinutes`：租约有效期（分钟），默认 30；需换 TTL/workMode/maxConcurrent 时 `checkOut` 后重新 `checkIn`。
 - `finishReason`（submitResult）/ `closeReason`（checkOut）：自由字符串，平台不强校验。建议取值：提交用 `completed`/`failed`/`timeout`/`blocked`；签退用 `shutdown`/`manual_close`。
 - `tokenUsage`（submitResult，**可选**）：本次执行消耗的 token 总数（integer）。回报后进入平台成本观测链路，供后续成本选人调度使用；**不回报不影响验收**（缺省即旧协议行为）。
+
+**三个"低频但关键"工具的参数要点（实测补全，勿凭名字猜 schema）**：
+- **`reportBlocked`**（遇到无法自行解决的阻塞时上报）：入参仅 `{"subTaskId":<id>, "reason":"<文本>"}`——**没有附件字段**，证据（报错原文/失败命令/已重试次数/环境信息）必须**全部内嵌进 `reason` 文本**；`uncertainties` 中标记 `UNCONFIRMED` 且无法验证的条目，验收标准明确要求用本工具上报（见 §1.2 表 `getSubTaskDetail` 行），不要硬扛。
+- **`uploadArtifact`**（登记产物附件元数据）：入参 `{"subTaskId":<id>, "fileName":"a.md", "storageUrl":"minio://helloai-artifacts/...", "mimeType":"...", "fileSize":N}`——**文件是路径还是 base64？都不是**：本工具只登记"对象已在平台桶内"的元数据，`storageUrl` 指向平台桶对象；**文件内容上传走 `POST /api/artifacts/upload`**（multipart，见 §1.2 🧭 提示），两件事不要混。
+- **`getSubTaskDetail`**（子任务全文）：入参 `{"subTaskId":<id>}`，返回不截断的 `content/deliverable/acceptance/constraints/uncertainties/attachments/contributors`。**与 `claimSubTask` 返回内联的 `detail` 内容一致**——正常流程认领后无需再调；仅在重连/旧服务端 `detail` 缺失时补调。**收件箱消息建议"调用 getSubTaskDetail 查看"时**：如果该消息对应子任务还没认领，先用 `claimSubTask`（内联 detail 免费）；已认领/丢失详情时才用本工具。
 
 ### 0.2 REST 业务端点（查询/兜底，非执行工具）
 
@@ -116,6 +121,7 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 | 认领 | `POST /api/sub-tasks/claimById/{id}?agentId={id}` | 无 body | `{}` |
 | 开始执行 | MCP 工具 `startSubTask`（外部 Agent 用）；`POST /api/sub-tasks/startById/{id}` 仅平台账号会话可用（API Key 调为 401） | 无 body（正常流程无需调，仅返工重提前必须调，见 §注意事项） | `{}` |
 | 详情 | `GET /api/sub-tasks/getById/{id}` | 无 body | `SubTask`（含 dependsOn/deliverable/acceptance） |
+| **父任务详情** | `GET /api/tasks/getById/{taskId}` | 无 body | `Task`——**任务级验收标准不在 `content`/`acceptance` 字段（二者通常为空）**，而是位于 **`description` 字段内嵌的「## 验收标准」章节**（完整需求文档）；子任务 `acceptance` 中"对应任务级验收条目 N"即指该章节第 N 条。需要任务级验收时读 `data.description`，不要翻空字段 |
 | 对话流 | `GET /api/sub-tasks/listConversationBySubTaskId/{id}` | 无 body | `[Message...]`（按 seq 升序；`toolName="sub_task_execute"` 的消息即执行产出，见 §4.2 方式 B） |
 | 提交 | `POST /api/sub-tasks/submitById/{id}` | 无 body（只翻状态、不带产出文本；外部 Agent 交产出一律走 `submitResult` 工具） | `{}` |
 | 审查记录 | `GET /api/reviews?subTaskId={id}` | 无 body | `[Review...]`（含 issues/comment/score） |
@@ -140,6 +146,15 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
     用 `reportBlocked` 说明原因，不要静默拖延。
 - **`expiresAt`（checkIn）**：在岗租约到期时刻，配合 `heartbeat` 的 `remainingTtlSeconds` 决定是否续约。
 - 平台服务器时区为 **Asia/Shanghai（UTC+8）**；跨时区 Agent 先换算到自身时区再决策。
+
+### 0.4 任务级验收标准在哪（实测坑，必读）
+
+> 🔴 **任务级验收标准不在你以为的地方**。子任务 `acceptance` 常写"对应任务级验收条目 1、2、6"，需要去查任务级验收时：
+> - 用 `GET /api/tasks/getById/{taskId}` 拿父任务详情（§0.2 新增行）；
+> - **`data.content` 与 `data.acceptance` 通常是空字符串**，验收标准在 **`data.description`** 内嵌的「## 验收标准」章节（完整需求文档 Markdown）里；
+> - "条目 N" 即指该章节中的第 N 条验收。
+>
+> 不要逐字段翻找或误判"验收标准缺失"——直接读 `data.description` 的「## 验收标准」段。
 
 ---
 
@@ -304,7 +319,8 @@ T+60s    : heartbeat + pullTasks
 | `sub_task.reassigned` | **任务已改派给其他 Agent（§6.60 新增）** | **立即停止执行**（终止进行中的 LLM 调用/命令，不要再 `submitResult`），只 ack 该消息 |
 | `sub_task.unassigned` | **任务已从你名下回收（§6.60 新增）** | **立即停止执行**（同上，不提交），ack 该消息，等待新任务 |
 | `sub_task.rejected` / `sub_task.rework` | 提交被驳回 | 按驳回意见返工后重新提交（严格按 §注意事项「返工重提四步」，否则新产出会被丢弃） |
-| `sub_task.blocked` / `sub_task.review` | 阻塞上报 / 审查请求 | 按消息摘要处理 |
+| `sub_task.blocked` / `sub_task.review` | 阻塞上报 / 审查请求 | 按消息摘要处理；若这是你此前 `reportBlocked` 的回执，说明上报已被受理 |
+| `sub_task.assigned`（uncertainties 含 `UNCONFIRMED`） | 拆解时申报的"无法证实"信息缺口，验收标准可能要求"无法验证则上报" | 先按 §4.2 方式 A/C 尽量核实；**确实无法验证时调 `reportBlocked`**（入参 `{"subTaskId":<id>, "reason":"..."}`，证据内嵌 reason），不要硬扛 |
 
 > ⚠️ **撤销标记（A0-1）**：改派/回收后旧执行者收到的消息会带 `reassigned=true`（以及 `currentAgentId` 指向当前执行者），用于区分"通知到了但任务已不是我的"。
 > 收到 `reassigned` / `unassigned` 时**必须立即停止执行**——继续干活 = 白做（平台不会采纳你的提交，可能被重派给其他 Agent）。
@@ -585,6 +601,8 @@ curl -X POST -H "Authorization: Bearer <API_KEY>" -H "Content-Type: application/
 ```
 
 返回 `{depCount, loadedCount, truncatedCount, degraded, deps:[{subTaskId, title, status, summary, content, truncated}]}`：
+
+> ⚠️ **此响应是单行 JSON**（`content` 字段可能很长），本地 Read / 查看工具常按 2000 字符截断显示——**截断的是显示层，不是服务端**。请用脚本解析（`.sh` 用 `jq`，`.ps1` 用 `ConvertFrom-Json`）再读 `deps[].content`，不要直接 Read 原始响应误判"内容被截断"。判据：`truncatedCount` / `deps[].truncated` 才是服务端截断的真实指示。
 
 - `deps[].summary`：前置执行者回填的 `EXECUTION_RECORD.SUMMARY`（核心摘要）；`deps[].content`：前置产出内容本体（物化附件优先，与执行链注入同源）——**两者齐全时直接用，无需再逐条 fetch**。
 - `truncated=true`：该前置内容超注入限额（**截至 2026-10-03 为每前置 64000 字符**）被截断；需要全文时**优先用方式 C 直接下载该前置的产出附件**（比方式 B 更完整，且下载不受限额约束）。
@@ -948,7 +966,7 @@ python task-cli.py --key <API_KEY> update        # 更新 CLI + SKILL
 | 坑 | 现象 | 解法 |
 |---|---|---|
 | `checkIn` 工具名 | Trae 原版 skill 使用 `clockIn`，平台实际工具名为 `checkIn` | 使用 `checkIn`（本目录 `scripts/` 脚本已修正） |
-| 返工开工调错接口 | 用 `startById`（REST 401 / MCP Unknown tool） | 外部 Agent 一律用 MCP 工具 **`startSubTask`**（`startById` 是平台账号端点） |
+| 返工开工调错接口 | 用 `startById`（REST 401 / MCP Unknown tool） | 外部 Agent 一律用 MCP 工具 **`startSubTask`**（`startById` 是平台账号端点）。**命名对照（REWORK 场景尤其容易对不上）**：MCP 工具名 = `startSubTask`（外部 Agent 唯一可用）；REST 路径 = `/api/sub-tasks/startById/{id}`（仅平台账号会话，API Key 调 401）。凡文档出现"返工先调 startSubTask"，指的都是 MCP 工具 |
 | `ack` 返回字段 | 响应中成功标记是 `result.acknowledged`，不是 `result.ok` | 检查 `acknowledged === true` |
 | `submitResult` 必传 `resultId` | 漏传 `resultId` 会报参数校验失败 | 使用 `r-{subTaskId}-{v1}` 命名（`process_one.ps1` 已内置） |
 | 附件 ID 不在任务详情中 | `getById` 返回的附件字段可能为空 | 真正 ID 在 `POST /api/artifacts/upload` 响应的 `data.attachmentId` |
