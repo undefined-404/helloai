@@ -194,9 +194,9 @@ git clone https://gitee.com/undefined_404/helloai.git && cd helloai
 # 2. 启动中间件（PostgreSQL / Redis / RabbitMQ / MinIO）
 docker compose up -d
 
-# 3. 启动后端（Flyway 自动建表；默认 active 指向本地 local 配置）
+# 3. 启动后端（Flyway 自动建表；默认 active 为 dev，本地开发请用 local，见下方警告）
 mvn clean package -DskipTests
-java -jar helloai-start/target/helloai-start-1.0.0-SNAPSHOT.jar
+java -jar helloai-start/target/helloai-start-1.0.0-SNAPSHOT.jar --spring.profiles.active=local
 
 # 4. 启动前端
 cd helloai-ui && npm install && npm run dev
@@ -224,15 +224,34 @@ bash deploy/init-env.sh
 # 3. 用脚本把 RabbitMQ 管理员建到 broker 上（自动启动 broker + 创建管理员 + 验证）
 bash deploy/init-rabbitmq-admin.sh
 
-# 4. 首次初始化构建+启动
-cd /home/admin/helloai && git pull
+# 4. 首次初始化构建+启动（首次构建拉基础镜像 + Maven/Node 依赖，视网络 5~15 分钟）
 docker compose -f docker-compose.server.yml up -d --build
-
 ```
 
 > 💡 **从零到启动，总共 4 条命令**：`git clone` → `bash deploy/init-env.sh` → `bash deploy/init-rabbitmq-admin.sh` → `docker compose -f docker-compose.server.yml up -d --build`，全程**不需要手动编辑 .env、不需要复制粘贴任何密码**。
 >
 > ⚠️ **服务器 compose 文件是 `docker-compose.server.yml`，必须用 `-f` 显式指定**：`docker compose` 默认只读 `docker-compose.yml`（那是**本地开发版**，只有中间件、没有 app/web 服务），不带 `-f` 会起错文件——实测表现是「只起了 PG/Redis/RabbitMQ/MinIO，没有 app 和 web」。
+>
+> ⚠️ **首次部署不要执行 `git pull`**：刚 `git clone` 完就是最新代码，此时 `git pull` 是多余的；且若服务器上存在本地改动（如 `docker-compose.yml` 被手动改过、脚本被手动放置），`git pull` 会报「local changes would be overwritten」**中断流程**。只有**后续更新**场景才需要 `git pull`（见「启动与更新」）。
+
+**如何确认部署成功（小白必看）**：
+
+```bash
+# ① 所有服务应为 running 或 exited(0)
+docker compose -f docker-compose.server.yml ps
+
+# ② rabbitmq-init 应显示 DONE（vhost /helloai + 业务账号 helloai 已创建）
+docker compose -f docker-compose.server.yml logs rabbitmq-init | tail
+
+# ③ 后端日志应出现「Started HelloAIApplication」，且无 ACCESS_REFUSED / ERROR
+docker compose -f docker-compose.server.yml logs app | tail -50
+# 或实时看文件日志（app 挂载了 ./logs 目录）
+tail -f logs/helloai.log
+
+# ④ 浏览器访问 http://<服务器IP>/ 应看到管理端登录页
+```
+
+> 🆘 **常见启动失败自查**：若 ③ 出现 `ACCESS_REFUSED - Login was refused`（RabbitMQ 认证失败），先确认**镜像已重新构建**（`up -d --build` 而非 `up -d`）——镜像内打包了不含 MQ 凭据的配置时，应用会退化成用默认 `guest` 账号连接而失败；修复配置后**必须重新 build**。若 `rabbitmq-init` 未显示 DONE，执行 `bash deploy/init-rabbitmq-admin.sh` 重跑初始化（幂等）。
 
 部署目录结构（clone 后自动齐备，只需跑一次上面的脚本生成 `.env`）：
 

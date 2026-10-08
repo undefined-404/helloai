@@ -168,9 +168,9 @@ git clone https://gitee.com/undefined_404/helloai.git && cd helloai
 # 2. Start middleware (PostgreSQL / Redis / RabbitMQ / MinIO)
 docker compose up -d
 
-# 3. Start the backend (Flyway migrates the schema automatically)
+# 3. Start the backend (Flyway migrates the schema automatically; default profile is dev, use local for local dev, see warning below)
 mvn clean package -DskipTests
-java -jar helloai-start/target/helloai-start-1.0.0-SNAPSHOT.jar
+java -jar helloai-start/target/helloai-start-1.0.0-SNAPSHOT.jar --spring.profiles.active=local
 
 # 4. Start the frontend
 cd helloai-ui && npm install && npm run dev
@@ -197,11 +197,35 @@ bash deploy/init-env.sh
 
 # 3. Create the RabbitMQ admin on the broker (auto-starts broker + creates admin + verifies)
 bash deploy/init-rabbitmq-admin.sh
+
+# 4. First build + start (first build pulls base images + Maven/Node deps: 5~15 min depending on network)
+docker compose -f docker-compose.server.yml up -d --build
 ```
 
 > 💡 **From zero to running: 4 commands total** — `git clone` → `bash deploy/init-env.sh` → `bash deploy/init-rabbitmq-admin.sh` → `docker compose -f docker-compose.server.yml up -d --build`. **No manual .env editing, no copy-pasting passwords.**
 >
 > ⚠️ **The server compose file is `docker-compose.server.yml`; you MUST pass it with `-f`**: `docker compose` only reads `docker-compose.yml` by default (that one is the **local-dev** file with middleware only — no app/web services). Without `-f` you will start the wrong file — measured symptom: only PG/Redis/RabbitMQ/MinIO come up, no app or web.
+>
+> ⚠️ **Do NOT run `git pull` on first deployment**: right after `git clone` you already have the latest code, so `git pull` is redundant. Worse, if the server has local changes (e.g. `docker-compose.yml` manually edited, scripts manually placed), `git pull` aborts with "local changes would be overwritten" and **breaks the flow**. Only use `git pull` for later updates (see "Start & update").
+
+**How to confirm the deployment succeeded (first-timers)**:
+
+```bash
+# ① All services should be running or exited(0)
+docker compose -f docker-compose.server.yml ps
+
+# ② rabbitmq-init should show DONE (vhost /helloai + business account helloai created)
+docker compose -f docker-compose.server.yml logs rabbitmq-init | tail
+
+# ③ The backend log should show "Started HelloAIApplication", with no ACCESS_REFUSED / ERROR
+docker compose -f docker-compose.server.yml logs app | tail -50
+# or tail the file log (the app bind-mounts ./logs)
+tail -f logs/helloai.log
+
+# ④ Visit http://<server-IP>/ in a browser — you should see the admin login page
+```
+
+> 🆘 **Common startup-failure checklist**: if ③ shows `ACCESS_REFUSED - Login was refused` (RabbitMQ auth failure), first make sure the image was **rebuilt** (`up -d --build`, not `up -d`) — if the image baked in a config without MQ credentials, the app silently falls back to the default `guest` account and fails; after fixing the config you **must rebuild**. If `rabbitmq-init` does not show DONE, re-run `bash deploy/init-rabbitmq-admin.sh` (idempotent).
 
 Deploy directory layout (complete after clone; just run the script once to generate `.env`):
 
@@ -280,8 +304,6 @@ git pull && docker compose -f docker-compose.server.yml up -d --build
 **Configuring API keys**: after startup, sign in to the admin console and fill them in under **System Settings → Model Configuration**. Keys are encrypted at rest, take effect immediately, and require no restart.
 
 > 💡 **Upgrade compatibility**: upgrading from the legacy bind-mount mode (manually uploading jar/dist) to build mode is just `git clone` + reuse the same `.env` (same 5 variable names), then `docker compose -f docker-compose.server.yml up -d --build`. Data volumes (PG/Redis/RabbitMQ/MinIO) are unchanged; no data loss.
-# Check the init log
-**Configuring API keys**: after startup, sign in to the admin console and fill them in under **System Settings → Model Configuration**. Keys are encrypted at rest, take effect immediately, and require no restart.
 
 ---
 
