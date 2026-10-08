@@ -144,15 +144,28 @@ HelloAI: clarify → decompose into a dependency-aware subtask draft → you con
 
 ## 🚀 Quick Start
 
-**Requirements**: JDK 17 · Maven 3.8+ · Node.js 18+ · Docker + Docker Compose · 4C8GB recommended
+Two paths have **completely different requirements**:
+
+| | Build from source (local dev) | Server deployment (jar only) |
+|---|---|---|
+| JDK 17 | ✅ required | ❌ no (JRE is in the container) |
+| Maven 3.8+ | ✅ required (build) | ❌ no |
+| Node.js 18+ | ✅ required (frontend dev) | ❌ no (dist is prebuilt) |
+| Docker + Compose | ✅ required (middleware) | ✅ required |
+| Download source | ✅ full `git clone` | ⚠️ only the deploy files (see Option B), no toolchain |
+| Recommended | 4C8GB | 4C8GB |
+
+> 💡 **In one sentence**: JDK / Maven / Node are only needed to **build from source**. To run HelloAI on a server that already has Docker, you do **not** need any Java/frontend toolchain — just grab `docker-compose.server.yml`, `deploy/init-rabbitmq.sh`, and `nginx.server.conf` from the repo, plus a prebuilt jar and frontend dist.
 
 ### Option A: Build from source (5 minutes)
 
+For local development / customization. **You must `git clone` the source first**, because both the Maven backend build and the Node frontend dev server depend on the source tree.
+
 ```bash
-# 1. Clone
+# 1. Clone (prerequisite for mvn / npm)
 git clone https://gitee.com/undefined_404/helloai.git && cd helloai
 
-# 2. Start middleware
+# 2. Start middleware (PostgreSQL / Redis / RabbitMQ / MinIO)
 docker compose up -d
 
 # 3. Start the backend (Flyway migrates the schema automatically)
@@ -165,23 +178,61 @@ cd helloai-ui && npm install && npm run dev
 
 API docs: `http://localhost:6565/swagger-ui.html`
 
-### Option B: One-command Docker deployment
+> ⚠️ **The backend defaults to the `dev` profile (cloud integration)**: for local Docker-only development, start it with `--spring.profiles.active=local`, or set `local` in your IDEA Run Configuration (otherwise it connects to the cloud datasource in `application-dev.yml`).
 
-For running directly on a server. See [`docker-compose.server.yml`](docker-compose.server.yml). Key steps:
+### Option B: One-command Docker deployment (server)
 
-```bash
-# 1. Build artifacts
-mvn clean package -DskipTests
-cd helloai-ui && npm run build
+For running on a server **without installing a Java/frontend toolchain**. You do **not** need a full `git clone` — just the deployment artifacts and three deploy files. See the header comments of [`docker-compose.server.yml`](docker-compose.server.yml) (ASCII-only convention and port notes).
 
-# 2. Generate an AES key and write it into .env
-openssl rand -base64 32  # write the output into HELLOAI_CREDENTIAL_AES_KEY_BASE64
+#### First-time preparation (one-off)
 
-# 3. Start
-docker compose -f docker-compose.server.yml up -d
+On a server with Docker, create a deploy directory (e.g. `/home/admin/helloai`) containing:
+
+```
+/home/admin/helloai/
+├── docker-compose.server.yml     # copy from the repo; rename to docker-compose.yml after upload
+├── nginx.server.conf             # copy from the repo; rename to nginx.conf after upload
+├── deploy/init-rabbitmq.sh       # copy from the repo (keep LF line endings, pure ASCII)
+├── helloai-start-1.0.0-SNAPSHOT.jar   # build artifact
+├── dist/                         # frontend build artifact
+└── .env                          # create, see below
 ```
 
-> ⚠️ **Keep the AES key safe**: every API key in the `credential_vault` table is encrypted with it. Changing the key makes all configured providers fail to decrypt.
+`.env` needs **5 variables** (the server `.env` is the Docker Compose variable interpolation source; containers do not read `.env` directly):
+
+```bash
+# RabbitMQ admin (must be created manually first, see below; cannot be guest)
+RABBITMQ_ADMIN_USER=helloaiadmin
+RABBITMQ_ADMIN_PASSWORD=<hex password, no colon>
+# RabbitMQ business account (created by rabbitmq-init; shared with the app)
+HELLOAI_RABBIT_USER=helloai
+HELLOAI_RABBIT_PASSWORD=<hex password>
+# AES key: must match existing ciphertext in the DB (credential_vault encryption)
+HELLOAI_CREDENTIAL_AES_KEY_BASE64=<base64 key>
+```
+
+> ⚠️ **Keep the AES key safe**: every API key in the `credential_vault` table is encrypted with it. Changing the key makes all configured providers fail to decrypt. **First deployment**: generate with `openssl rand -base64 32`. **When reusing an existing database**: you must keep the old key, otherwise all historical ciphertext becomes undecryptable.
+
+> ⚠️ **RabbitMQ prerequisite (mandatory, otherwise the app cannot start)**: the one-shot `rabbitmq-init` container uses `RABBITMQ_ADMIN_USER/PASSWORD` to call the Management API and create the `/helloai` vhost and business account. `RABBITMQ_DEFAULT_USER/PASS` only take effect on the broker's **first boot**; a broker with an existing data volume ignores them, and `guest` is loopback-only (a sibling container is always rejected). So you must create the admin manually **before** `up -d`:
+>
+> ```bash
+> docker compose up -d rabbitmq          # start only the broker first
+> docker exec helloai-rabbitmq rabbitmqctl add_user helloaiadmin '<hex password>'
+> docker exec helloai-rabbitmq rabbitmqctl set_user_tags helloaiadmin administrator
+> ```
+
+#### Start & update
+
+```bash
+# Start (the app starts only after rabbitmq-init completes successfully; `:?` fail-fast reports missing variables)
+docker compose up -d
+
+# Check the init log
+docker compose logs rabbitmq-init
+
+# Update: replace only the jar / dist, then bring it up again
+docker compose up -d --build
+```
 
 **Configuring API keys**: after startup, sign in to the admin console and fill them in under **System Settings → Model Configuration**. Keys are encrypted at rest, take effect immediately, and require no restart.
 

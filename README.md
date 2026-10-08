@@ -170,18 +170,31 @@ HelloAI：追问澄清 → 拆解为带依赖的子任务草案 → 你确认 �
 
 ## 🚀 快速开始
 
-**环境要求**：JDK 17 · Maven 3.8+ · Node.js 18+ · Docker + Docker Compose · 建议 4C8GB
+先分清两条路径，**环境要求完全不同**：
+
+| | 源码开发（本地跑） | 服务器部署（只跑 jar） |
+|---|---|---|
+| 需要 JDK 17 | ✅ 是 | ❌ 否（容器内已带 JRE） |
+| 需要 Maven 3.8+ | ✅ 是（构建用） | ❌ 否 |
+| 需要 Node.js 18+ | ✅ 是（前端 dev） | ❌ 否（dist 已构建好） |
+| 需要 Docker + Compose | ✅ 是（中间件） | ✅ 是 |
+| 需要下载源码 | ✅ `git clone` 全量 | ⚠️ **只需仓库里的部署文件**（见方式 B），不装工具链 |
+| 建议配置 | 4C8GB | 4C8GB |
+
+> 💡 **一句话**：JDK / Maven / Node 是**源码构建**才需要的；如果只是想在一台**已有 Docker 的服务器**上把 HelloAI 跑起来，**不需要装任何 Java/前端工具链**，只需要从仓库拿 `docker-compose.server.yml`、`deploy/init-rabbitmq.sh`、`nginx.server.conf` 三个文件，加上构建好的 jar 与前端 dist 即可。
 
 ### 方式 A：源码开发（5 分钟）
 
+面向本地开发、二次开发。**必须先 `git clone` 下载源码**，因为后端构建（Maven）、前端开发服务器（Node）都依赖源码树。
+
 ```bash
-# 1. 克隆
+# 1. 克隆（启动的前提：mvn / npm 都需要源码）
 git clone https://gitee.com/undefined_404/helloai.git && cd helloai
 
-# 2. 启动中间件
+# 2. 启动中间件（PostgreSQL / Redis / RabbitMQ / MinIO）
 docker compose up -d
 
-# 3. 启动后端（Flyway 自动建表）
+# 3. 启动后端（Flyway 自动建表；默认 active 指向本地 local 配置）
 mvn clean package -DskipTests
 java -jar helloai-start/target/helloai-start-1.0.0-SNAPSHOT.jar
 
@@ -191,25 +204,63 @@ cd helloai-ui && npm install && npm run dev
 
 访问 `http://localhost:6565/swagger-ui.html` 查看 API 文档。
 
-### 方式 B：Docker 一键部署
+> ⚠️ **后端默认激活 `dev` profile（云服务器联调）**：本地纯 Docker 开发请在启动参数加 `--spring.profiles.active=local`，或用 IDEA Run Configuration 指定 `local`（否则会连云上的 `application-dev.yml` 数据源）。
 
-适合服务器直接跑起来，详见 [`docker-compose.server.yml`](docker-compose.server.yml)。核心步骤：
+### 方式 B：Docker 一键部署（服务器）
 
-```bash
-# 1. 准备产物
-mvn clean package -DskipTests
-cd helloai-ui && npm run build
+适合**不装 Java/前端工具链**、直接在服务器上把服务跑起来。**不需要 `git clone` 全量源码**——只需要仓库里的部署产物与三个部署文件。详见 [`docker-compose.server.yml`](docker-compose.server.yml) 头部注释（含纯 ASCII 约定与端口说明）。
 
-# 2. 生成 AES 密钥并写入 .env
-openssl rand -base64 32  # 将输出写入 HELLOAI_CREDENTIAL_AES_KEY_BASE64
+#### 首次准备（一次性）
 
-# 3. 启动
-docker compose -f docker-compose.server.yml up -d
+在**有 Docker 的服务器**上，建一个部署目录（例如 `/home/admin/helloai`），放入以下内容：
+
+```
+/home/admin/helloai/
+├── docker-compose.server.yml     # 从仓库复制，上传后改名 docker-compose.yml
+├── nginx.server.conf             # 从仓库复制，上传后改名 nginx.conf
+├── deploy/init-rabbitmq.sh       # 从仓库复制（保持 LF 行尾、纯 ASCII）
+├── helloai-start-1.0.0-SNAPSHOT.jar   # 构建产物
+├── dist/                         # 前端构建产物
+└── .env                          # 新建，见下
 ```
 
-> ⚠️ **AES 密钥务必妥善保管**：`credential_vault` 表中的 API Key 均用此密钥加密，密钥变更将导致所有已配置 Provider 解密失败。
+`.env` 需要 **5 个变量**（服务器 `.env` 是 Docker Compose 变量插值来源，应用容器内不直接读 `.env`）：
 
-**配置 API Key**：推荐启动后在管理端「系统设置 → 模型配置」页面填写，加密落库、实时生效、无需重启。
+```bash
+# RabbitMQ 管理员（必须先手工创建，见下；不能用 guest）
+RABBITMQ_ADMIN_USER=helloaiadmin
+RABBITMQ_ADMIN_PASSWORD=<hex 密码，不要含冒号>
+# RabbitMQ 业务账号（rabbitmq-init 创建；与 app 共享同一个密码）
+HELLOAI_RABBIT_USER=helloai
+HELLOAI_RABBIT_PASSWORD=<hex 密码>
+# AES 密钥：必须与库中已有密文匹配（credential_vault 加密用）
+HELLOAI_CREDENTIAL_AES_KEY_BASE64=<base64 密钥>
+```
+
+> ⚠️ **AES 密钥务必妥善保管**：`credential_vault` 表中的 API Key 均用此密钥加密，密钥变更将导致所有已配置 Provider 解密失败。**首次部署生成**用 `openssl rand -base64 32`；**若复用已有数据库**则必须沿用旧密钥，否则历史密文全部解不开。
+
+> ⚠️ **RabbitMQ 前置步骤（必做，否则应用起不来）**：`rabbitmq-init` 一次性容器会用 `RABBITMQ_ADMIN_USER/PASSWORD` 调 Management API 创建 `/helloai` vhost 和业务账号。`RABBITMQ_DEFAULT_USER/PASS` 只在 broker **首次启动**时生效；**已有数据卷的 broker 会忽略它**，且 `guest` 仅允许本机回环登录（兄弟容器必然被拒）。因此 `up -d` 前必须先手工建一次管理员：
+>
+> ```bash
+> docker compose up -d rabbitmq          # 先只起 broker
+> docker exec helloai-rabbitmq rabbitmqctl add_user helloaiadmin '<hex 密码>'
+> docker exec helloai-rabbitmq rabbitmqctl set_user_tags helloaiadmin administrator
+> ```
+
+#### 启动与更新
+
+```bash
+# 启动（rabbitmq-init 成功完成后 app 才会启动；有 `:?` fail-fast，缺变量会直接报错）
+docker compose up -d
+
+# 查看初始化日志
+docker compose logs rabbitmq-init
+
+# 更新：只换 jar / dist，再拉起即可
+docker compose up -d --build
+```
+
+**配置 API Key**：启动后在管理端「系统设置 → 模型配置」页面填写，加密落库、实时生效、无需重启。
 
 ### 方式 C：本地验证与 CI 门禁
 
