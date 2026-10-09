@@ -4,7 +4,21 @@
 >
 > 当前主线：**Event Stream → Dual Executor → AgentRuntime → Skill Capability → Sandbox Provider**；P0 全链收官，P1 主体推进——G-004 / G-006 / G-010 / G-011 落地并完成 2026-09-10 外部执行者双轮全链闭环（Round2/Round3）。后续：P1 剩余项（Recovery/Fork 消费面 / Skill 回流规范 / Sandbox 第二阶段）+ 技术债清偿。近况增量：2026-09-11 外部上下文供给打通（子任务详情 MCP 工具 V76 + REST/inbox 三通道，提交 8fa09e0）；2026-09-13 Sa-Token 异步上下文修复（SSE 流式接口 500：拦截器 ASYNC 放行 + 异常处理器 SSE 分支，提交 dd3bd18，见 §14）。
 >
-> 最后更新：2026-09-13
+> **2026-10-09 次序与范围变更（用户裁定，`D-2026-10-09-4` / `D-2026-10-09-5` / `D-2026-10-09-6`）**：借鉴落地专项（`plan/HelloAI 借鉴落地实施计划.md`，编号 `REF-x.y`）并入本主线执行：
+>
+> ```text
+> Skill Capability（技能可装配）──► 备份/恢复 ──► RAG 知识库（可后置，G-019）
+> 条件触发（不排期）：Sandbox Provider（G-005，见下）
+> Event 消费面：Timeline → Replay → Audit → Recovery（按 §7 原次序推进，次序未变）
+> ```
+>
+> - **备份/恢复（`G-018`）提前到 Sandbox Provider 之前**；**RAG 知识库（`G-019`）为新增目标边界，排在最后**（见《目标架构》§13 / §14）。
+> - **Fork 不再作为开发要求**（`D-2026-10-09-5`：触发入口 / 原 Run 冻结 / 驱动新 Run 执行三项 **WONTFIX**；`AgentEventForkService` 快照服务保留但无消费方）⇒ Event 消费面**回到 §7 原本以 `Recovery` 收尾的次序**。
+> - **`Sandbox Provider`（§6）由 P1 主干改为「条件触发、不排期」**（`D-2026-10-09-6③`）：复核判据是**当前没有可隔离的执行对象**——外部 agent 跑在它自己终端（本平台定位 = 派单方 ≠ 执行方）；内部 `API_KEY_LLM` agent 的工具面全是平台 API（`McpMcpServer` 内 `File` / `Path` / `ProcessBuilder` 0 命中）；平台全库无脚本引擎 / 表达式求值器。**三个触发条件（任一成立 ⇒ 本项回到主干排期）**：① 平台增加碰宿主的工具；② 技能包要被执行；③ 平台自持浏览器。**连带修正**：原「技能的脚本要在沙箱里跑」硬约束在现形态下自动满足（平台本就不执行脚本）。§6 正文保留为**预案**。
+> - **新增 `G-020` 外部 Agent 工作详情快照**（`D-2026-10-09-6⑤`，`REF-7`，可后置）——不改变本主线次序，登记见《目标架构》§15。
+> - 本次调整不新增/删除其余 P1 能力项，不改变 P0 已收官口径。
+>
+> 最后更新：2026-10-09
 
 # 1. 重构目标
 
@@ -69,7 +83,7 @@ A6 收口（2026-09-07 已落地）：`/timeline` 读侧并轨 `agent_event`—�
 
 A7（2026-09-07 已落地）：Replay / Audit 最小读取——`AgentEventQueryService` 新增 `traceByRunId`（按 runId 以 `createTime ASC, id ASC` 重建 Run 级轨迹，Replay 读侧，G-001 验收「一个 Run 可以按 sequence 重建轨迹」成立）与 `pageAuditByTaskId`（按 taskId 分页查执行事实，eventType 可选过滤，按写入时序正序）；`AgentEventMapper` 对应新增 `selectByRunIdOrdered` / `selectPageAuditByTaskId`（`idx_agent_event_run` 索引支撑）；纯后端读侧，未接 API/UI（与 A6 路线 B 同形态）；单测 8 用例 + dev 库连库探针 PASS。
 
-**当前动作**：P0-A 完整闭环（A1~A7 已落地）——G-001 Event Stream 验收全量成立；消费面已在 P1 补齐至全链暴露（G-006 增量 C1/C2/D，2026-09-08~10，见 §7）。剩余：Recovery / Fork 消费面。
+**当前动作**：P0-A 完整闭环（A1~A7 已落地）——G-001 Event Stream 验收全量成立；消费面已在 P1 补齐至全链暴露（G-006 增量 C1/C2/D，2026-09-08~10，见 §7）。剩余：**Recovery 消费面**（Fork 已于 2026-10-09 裁定 WONTFIX，见 `D-2026-10-09-5`）。
 
 # 3. P0-B：Executor 双轨迁移
 
@@ -102,7 +116,7 @@ Legacy    Runtime
 
 ## 现状基线（2026-09-07 代码核查）
 
-> **订正（2026-09-30，G-002 单轨硬切）**：本行以下、含 P0-B / P0-B-2 / 「灰度第 0 步」各段，均为 **2026-09-07~09-08 的历史过程记录**，保留用于追溯。旧链入口（`LegacyExecutorAdapter` / `RuntimeAgentRuntimeRouter` / `TurnLlmCaller` / `TurnLlmCallContext`）与 `runtime-enabled` / `v2-enabled` / `gray-percent` 开关**已于 2026-09-30 全部删除**；`RuntimeTurnExecutor` 为唯一 `AgentRuntime` 实现。**灰度机制不复存在**，「迁移节奏 100% Legacy → … → Runtime 主路径」已直接终结于最后一步；回退手段为 `git revert`。
+> **订正（2026-09-30，G-002 单轨硬切）**：本行以下、含 P0-B / P0-B-2 / 「真身灰度联调」各段，均为 **2026-09-07~09-08 的历史过程记录**，保留用于追溯（原口径名「灰度第 0 步」已于 2026-10-09 去分期化，改称能力名并登记进《差距表》§0 注册表 ⑧）。旧链入口（`LegacyExecutorAdapter` / `RuntimeAgentRuntimeRouter` / `TurnLlmCaller` / `TurnLlmCallContext`）与 `runtime-enabled` / `v2-enabled` / `gray-percent` 开关**已于 2026-09-30 全部删除**；`RuntimeTurnExecutor` 为唯一 `AgentRuntime` 实现。**灰度机制不复存在**，「迁移节奏 100% Legacy → … → Runtime 主路径」已直接终结于最后一步；回退手段为 `git revert`。
 
 契约层已是单轨：`LocalExecutionCommandConsumer` 与 `MqExecutionCommandConsumer`（委托本地消费）统一经 `AgentRuntime#execute`——唯一执行契约，旧直连执行链已下线。
 
@@ -116,7 +130,7 @@ P0-B-2 落地（2026-09-07）：**主链接线注入完成，P0 主线收官**�
 
 ---
 
-**灰度第 0 步（2026-09-08 立执行口径，对应 §11 第 1/2/7 问验收）**
+**真身灰度联调 · 执行口径（2026-09-08 立，见 `LOG-20260908-006`，对应 §11 第 1/2/7 问验收）**
 
 迁移节奏（100% Legacy → 95/5 → …）当前停在「100% 经契约、0% 真身」：开关机制已就位但从未在真实环境打开过。本步目标是把 §3 灰度验证走起来，不是新功能。执行口径：
 
@@ -126,7 +140,7 @@ P0-B-2 落地（2026-09-07）：**主链接线注入完成，P0 主线收官**�
 - **外部 Agent 定性（CLI_CLIENT）**：外部链路（pullTasks / checkIn / checkOut / heartbeat / submitResult）**代码路径零变更**——submitResult 直达 McpToolService → ExecutionResultHandler.handleReport，不经 AgentRuntime / 本次消费者；本步只做回归验证（既有 verify 脚本 + 真实外部 agent 拉取一轮）。预期事件流 = 命令下发 timeline 事件 + 回写层 `AGENT_COMPLETED(0)`，无 Turn / Step（外部自执行，平台只统一命令与回写契约）。
 - **执行顺序**：① 幂等口径已立（本段）→ ②（可选）Replay / Audit 两端点（traceByRunId / pageAuditByTaskId 接 Controller，半天）→ ③ dev 全量开关 LLM 灰度联调 → ④ 外部 Agent 回归 + 真实拉取 → ⑤ 回填差距表 G-002 / G-006 状态与迭代日志。
 
-**灰度第 0 步联调结果（2026-09-08 已执行并闭环，对应 §11 第 1/2/7 问验收）**
+**真身灰度联调 · 结果（2026-09-08 已执行并闭环，见 `LOG-20260908-006`，对应 §11 第 1/2/7 问验收）**
 
 - **执行器实证**：基线（false）`agent_completed` payload.executor=`ApiKeyAgentExecutor`；真身（true）=`RuntimeAgentLoop`（TurnLlmCaller#runRuntimeLoop 点亮路径实证，非代码路径推断）。
 - **事件序列断言命中**：基线 `1→5→6→7→2→3→4→0` 单轮；真身 `1→5→6→7→2→[3/4]×3→0`——真实 DeepSeek tool-calling 3 轮成对（getAgentStatus → pullTasks → heartbeat），LLM 每轮学习工具结果继续尝试，工具失败（agentId=0 校验失败）不中断 Loop；参数 JSON 解析与 assistant 回传格式真实报文跑通，**联调预留修复项（provider tool-calling 兼容窗口）未触发**；若全部成功为只读/幂等类无副作用（幂等口径实证）。
@@ -207,7 +221,11 @@ Skill Package
 
 现状（2026-09-10）：元数据层已落地并保持 resolve 行为兼容——SkillPackage（name / version / description / requiredTools / dependencies / inputSchema / outputSchema / validationRules）3 个 eng-* 已结构化；requiredTools→tools 双链并集联动（增量 A）+ 拆解技能通路（增量 B）已接；任务级四段（创建 → 拆解 → 派发 → 执行）贯通，真实任务带 required_skills 实测完成（2026-09-10：Round2 硬门槛准入 / Round3 技能分布派单）。剩余：技能回流贡献规范（G-010 后置）。详见差距表 G-004。
 
-# 6. P1：Sandbox Provider
+# 6. P1：Sandbox Provider（**2026-10-09 起：条件触发，不排期**）
+
+> **状态变更（`D-2026-10-09-6③`）**：本节由「P1 主干」改为**「条件触发、不排期」**，正文保留为**预案**。判据 = **当前没有可隔离的执行对象**（外部 agent 在它自己终端；内部 `API_KEY_LLM` agent 工具面全是平台 API，`McpMcpServer` 内 `File` / `Path` / `ProcessBuilder` 0 命中；平台全库无脚本引擎 / 表达式求值器）。
+> **触发条件（任一成立 ⇒ 本项回到主干排期，届时启动专项出 ADR）**：① 平台增加「碰宿主」的工具（自持 shell / 文件写）；② 技能包要被执行；③ 平台自持浏览器（`WEB_BROWSER` 真实接入链路）。
+> **形态已裁定** = **独立沙箱服务**（低权限面，不走「挂 `docker.sock` 进 app 容器」）；**spec 必须是纯声明**，不得内嵌 Docker API 参数。
 
 第一阶段只建立：
 
@@ -243,8 +261,9 @@ Audit
 
 ```text
 Recovery
-Fork
 ```
+
+> **Fork 移出本序列（2026-10-09，`D-2026-10-09-5`）**：Fork 的触发入口 / 原 Run 冻结 / 驱动新 Run 执行三项 **WONTFIX**；`AgentEventForkService`（快照复制）保留为未接线的内部能力。故 Event 消费面以 **Recovery 收尾**。
 
 现状（2026-09-10）：Timeline 已并轨 Event（A6）；Replay / Audit 全链暴露——读侧（A7，见 P0-A）→ API + UI 工作台（增量 C1）→ 外部认领埋点 + run 级汇总卡（增量 C2）→ 任务/子任务维度端点（免传 runId，service 内部推导）+ 工作台选择器/名称解析/payload 结构化展开/事件流深链（增量 D）；外部执行轨迹加厚为四事件（AGENT_STARTED → AGENT_COMPLETED → REVIEW_STARTED → REVIEW_APPROVED），agent_execution_record 仍 0 行（细线状态，登记 G-006 剩余缺口）。Recovery / Fork 消费面待建（当前下一动作；注：MQ 级死信恢复 dlx 包——DeadLetterRecoveryService / DlxAlertConsumer / V60 mq_dead_letter_archive——为子任务重派兑底，属命令/结果链路，**非** Event Stream 消费面，两者勿混）。
 

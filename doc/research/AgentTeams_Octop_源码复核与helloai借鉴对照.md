@@ -4,7 +4,8 @@
 > **目的**：用户要求「再次分析两个开源项目代码，结合 helloai 现状」，特别关注四个主题——**Fork/Return 回退**、**沙箱**、**外部 AI agent 对接**、**RAG 知识库**，并核对两份既有报告的观点与独立分析的一致性。
 > **勘察对象**：`E:/workspace/AgentTeams-main`（Go+Python 混合，K8s 原生）、`E:/workspace/Octop-main`（Python 单进程，LangGraph）。
 > **对照基线**：helloai（Java 分布式任务编排，`E:/yhzx/1027/helloai`）。
-> **证据口径**：凡结论均带 `path:line` 实证；helloai 侧现状均逐文件核实。本报告是对两份既有报告的**独立复核**，与报告冲突处以本报告为准（标 ★）。
+> **勘察口径（2026-10-09 按《治理规则》§3.6 补齐）**：凡标 `[实测]` 的论断均由本地逐文件读取源码/文档得出并附 `路径:行号`；标 `[推断]` 的为基于上游用法与文档的反推，已单独说明；**未核实的写「未核实」，不用「通常/一般」充当事实**。本报告是对两份既有报告的**独立复核**，与报告冲突处以本报告为准（标 ★）。helloai 侧现状均逐文件核实。
+> **路径基准**：对 Octop 的路径引用**以仓库根为基准、写全 `src/octop/...`**（`docs/**`、`AGENTS.md` 以仓库根为基准）；对 AgentTeams 的路径引用以仓库根为基准（Go 侧 `agentteams-controller/internal/...`，Python 侧 `plugins/teamharness/...`）。
 > **分析日期**：2026-10-09。
 
 ---
@@ -30,7 +31,7 @@
 
 **核心事实**：AgentTeams 的「return」是**任务级 revision**——Leader 验收不合格时把任务**退回**（状态 `submitted → revision`），Worker 修正后重新提交。这是 helloai `REWORK` 的**同构物**，但 AgentTeams 把它做进了「一张表 + 单入口 + 可审计历史」的转换引擎里。
 
-**状态机**（`plugins/teamharness/contracts/task-transitions.json`）：
+**状态机** `[实测]`（`plugins/teamharness/contracts/task-transitions.json`）：
 ```json
 "states": ["planned","prepared","assigned","in_progress","submitted",
            "completed","revision","blocked","cancelled"],
@@ -38,9 +39,9 @@
   "submitted": ["completed","revision","blocked","cancelled"]
 }
 ```
-- **`revision` 是终态之一**（`server.py:4482` `TERMINAL_TASK_STATUSES = {"completed","revision","blocked","cancelled"}`）——注意：revision 一旦落定即为终态，**新的执行靠「re-dispatch」新建一条任务流**，不是原地改状态。
+- **`revision` 是终态之一**（`plugins/teamharness/mcp/server.py:4482` `TERMINAL_TASK_STATUSES = {"completed","revision","blocked","cancelled"}`）——注意：revision 一旦落定即为终态，**新的执行靠「re-dispatch」新建一条任务流**，不是原地改状态。
 
-**revision 的产生**（`server.py:3384-3385`）：
+**revision 的产生** `[实测]`（`plugins/teamharness/mcp/server.py:3384-3385`）：
 ```python
 accepted = _payload_bool(payload.get("accepted"), True)
 node_status = _accepted_node_status(result_status_value)
@@ -50,13 +51,13 @@ if not accepted and node_status == "completed":
 ```
 即：Leader 收到结果时若传 `accepted: false`，则本应 completed 的结果被强制改写为 `REVISION_NEEDED` → 节点状态 `revision`。
 
-**退回通知**（`server.py:4952`）：
+**退回通知** `[实测]`（`plugins/teamharness/mcp/server.py:4952`）：
 ```
 @leader TASK_REVISION_NEEDED: <task-id> - <summary>
 ```
 Matrix 房间内用**契约行**唤醒 Leader 处理退回任务（与 helloai 的 inbox 通知同族）。
 
-**退回后如何重做**（`server.py:5390-5403`）——**最关键的一段**：
+**退回后如何重做** `[实测]`（`plugins/teamharness/mcp/server.py:5390-5403`）——**最关键的一段**：
 ```python
 # /re-dispatch of a broken or revision state) must not erase
 # the audit trail already recorded on this task: the fresh
@@ -73,7 +74,7 @@ _append_transition_history(task, _delegate_from, "prepared", "delegate_task",
 ```
 **判据（★）**：退回重派 = **re-delegate 到 `prepared` + 保留原 history（不抹审计）**。terminal 状态的 revision 任务可被 re-dispatch 重新打开为 `prepared`——但**审计轨迹（谁、何时、为何退回）永久保留**。
 
-**可审计转换史**（`server.py:4633` `_transition_task`）：
+**可审计转换史** `[实测]`（`plugins/teamharness/mcp/server.py:4633` `_transition_task`）：
 - 单入口：表校验 → 写 status → 追加 `history`（cap 50 丢最旧）→ 同批同步；
 - 条目格式：`{ts, from, to, action, actor, note, seq}`，`actor = role:account`，同状态重入不记，`seq` 为游标提供稳定身份；
 - 新增 `report_progress` action：`from == to`，note 必填 ≤200 字符，**不改状态、不发房间通知**（v1 防噪音）。
@@ -82,7 +83,7 @@ _append_transition_history(task, _delegate_from, "prepared", "delegate_task",
 
 **核心事实**：Octop 的「Fork」是**对话级分叉**——从某条 assistant 回复处把整段历史**复制到一个新 thread**，原会话不动，用户在新分支继续。
 
-**完整实现**（`src/octop/infra/agents/threads/fork.py`，290 行）：
+**完整实现** `[实测]`（`src/octop/infra/agents/threads/fork.py`，290 行）：
 - `find_assistant_fork_index`（`:94-135`）：定位要分叉的 assistant 回答——优先按「从末尾数第 N 个回答」(`assistant_turns_from_end`)，其次按 `message_id` / `content` 回退；**跳过只发工具调用、没有最终回答的 AIMessage**（`:78-91`，与前端「一个回答一个气泡」对齐）；
 - `load_checkpoint_messages`（`:138-156`）：从 LangGraph checkpoint 读全量 transcript（`_FORK_HISTORY_LIMIT = 100_000`）；
 - `write_checkpoint_messages`（`:159-178`）：用 `aupdate_state` 把 `prefix = messages[:idx+1]` 灌进新 thread——**「包含被选中的那条 assistant 消息及其之前的全部工具流量」**；
@@ -90,7 +91,7 @@ _append_transition_history(task, _delegate_from, "prepared", "delegate_task",
 - **失败回滚**（`:260-264`）：写入失败 → `archive.remove_thread` + `thread_registry.delete_thread`，不留脏线程；
 - 与版本化历史联动（`:202-212`）：源会话若已走 v2 分段归档，则从 `history_archive` 读、否则从 checkpoint 读——**fork 兼容两种存储形态**。
 
-**API 入口**（`src/octop/api/routers/chat/history.py:419-445`）：`POST /agents/{agent_id}/threads/{thread_id}/fork`，body 为 `ForkThreadBody`（`models.py:152`）。`versioned-history.md:83` 明写「分叉从兼容读取结果取选定前缀，**原会话不被回填或重写**」。
+**API 入口** `[实测]`（`src/octop/api/routers/chat/history.py:419-445`）：`POST /agents/{agent_id}/threads/{thread_id}/fork`，body 为 `ForkThreadBody`（`models.py:152`）。`versioned-history.md:83` 明写「分叉从兼容读取结果取选定前缀，**原会话不被回填或重写**」。
 
 **判据（★）**：Octop 的 fork = **「读 checkpoint 前缀 → 写入全新 thread → 继承会话上下文」**，原会话只读不改。与 helloai 的 `AgentEventForkService` 是**同一思维**（快照复制不扰动原链路），但 Octop 完成了「**驱动新会话可继续跑**」这后半截。
 
@@ -114,10 +115,10 @@ _append_transition_history(task, _delegate_from, "prepared", "delegate_task",
 | # | 借鉴项 | 来源 | helloai 落点 |
 |---|---|---|---|
 | F1 | **转换史收口进 `changeStatus()`**：单一入口 + `history[]`（cap 50）+ `actor` | AgentTeams `_transition_task` | 不新建字段（避免与 `task_timeline` 双事实源），把 `taskTimelineService.recordEvent` 收口进 `changeStatus()`；`rework/reworkFresh` 的扩展语义表达为「基础 + 后置钩子」 |
-| F2 | **re-dispatch 保留审计**：退回重派必须**携带原 history**、不得抹轨迹 | AgentTeams `server.py:5390-5403` | helloai `reworkFresh` 已重置计数——**需核对改派时 `task_timeline` 是否保留**（当前 review 驳回路径有 `REVIEW_REJECTED` 落 timeline，基本满足，但建议加断言） |
-| F3 | **Fork 驱动执行**（补 helloai 后半截）：fork 快照后，让 `sub_task`/execution command 带 fork run_id 上下文接线 | Octop `fork.py`（新线程可继续） | `AgentEventForkService` 注释已自述方向（ADR-001 §2）；接线 = `SubTaskSnapshot`/execution command 增加 fork run_id |
-| F4 | **对话级 Fork（Octop 形态）**：若 helloai 未来要做「从某条消息分叉对话」，Octop 的「读 checkpoint 前缀→新 thread→继承会话上下文」可照抄 | Octop `fork.py` | helloai 事件模型是 `agent_event`（run 级）而非 LangGraph checkpoint——需评估是否值得为对话级分叉引入 thread 抽象 |
-| F5 | **report_progress**：长任务 `from==to` 进度记账，note 必填截断，不通知 | AgentTeams `task-transition-engine.md` §4 | helloai 长任务执行期无机器可读进度，可补 `progress` 事件 |
+| F2 | **re-dispatch 保留审计**：退回重派必须**携带原 history**、不得抹轨迹 | AgentTeams `plugins/teamharness/mcp/server.py:5390-5403` | helloai `reworkFresh` 已重置计数——**需核对改派时 `task_timeline` 是否保留**（当前 review 驳回路径有 `REVIEW_REJECTED` 落 timeline，基本满足，但建议加断言） |
+| F3 | **Fork 驱动执行**（补 helloai 后半截）：fork 快照后，让 `sub_task`/execution command 带 fork run_id 上下文接线 | Octop `src/octop/infra/agents/threads/fork.py`（新线程可继续） | `AgentEventForkService` 注释已自述方向（ADR-001 §2）；接线 = `SubTaskSnapshot`/execution command 增加 fork run_id |
+| F4 | **对话级 Fork（Octop 形态）**：若 helloai 未来要做「从某条消息分叉对话」，Octop 的「读 checkpoint 前缀→新 thread→继承会话上下文」可照抄 | Octop `src/octop/infra/agents/threads/fork.py` | helloai 事件模型是 `agent_event`（run 级）而非 LangGraph checkpoint——需评估是否值得为对话级分叉引入 thread 抽象 |
+| F5 | **report_progress**：长任务 `from==to` 进度记账，note 必填截断，不通知 | AgentTeams `docs/design/teamharness/task-transition-engine.md:48-54` | helloai 长任务执行期无机器可读进度，可补 `progress` 事件 |
 
 ---
 
@@ -125,14 +126,14 @@ _append_transition_history(task, _delegate_from, "prepared", "delegate_task",
 
 ### 2.1 Octop：声明式 spec + 真实探针（**最值得抄的形状**）
 
-**声明式后端 spec**（`src/octop/infra/backend/docker_spec.py:10-29`）：`_DOCKER_PASSTHROUGH_KEYS` 共 17 键——`allow_network / memory / cpus / pids_limit / command_timeout / max_output_bytes / auto_remove / workspace_path / volumes / environment / environment_file / agent_id / container_name / sandbox_scope / sandbox_prefix / username / sandbox_id / previewable`。
+**声明式后端 spec** `[实测]`（`src/octop/infra/backend/docker_spec.py:10-29`）：`_DOCKER_PASSTHROUGH_KEYS` 共 17 键——`allow_network / memory / cpus / pids_limit / command_timeout / max_output_bytes / auto_remove / workspace_path / volumes / environment / environment_file / agent_id / container_name / sandbox_scope / sandbox_prefix / username / sandbox_id / previewable`。
 
-**scope 三态**（`docker_spec.py:72-77`）：
+**scope 三态** `[实测]`（`src/octop/infra/backend/docker_spec.py:72-77`）：
 - `agent`（默认）：一 Agent 一沙箱，注入 `agent_id`；
 - `user`：同用户多专家共用，注入 `username`；
 - `fixed`：固定共享（需显式 `sandbox_id`）。
 
-**真实探针**（`probe.py:118-214` `_probe_docker`，写→读→删完整往返）：
+**真实探针** `[实测]`（`src/octop/infra/backend/probe.py:118-214` `_probe_docker`，写→读→删完整往返）：
 1. `ensure_docker_image`（`:159`）确保镜像；
 2. `spec["auto_remove"] = True`（`:168`）**探针容器必然一次性**；
 3. `backend.write(test_path, _PROBE_CONTENT)`（`:176`）→ `backend.read(test_path)`（`:179`）→ **比对内容**（`:184` `content != _PROBE_CONTENT` 判失败）；
@@ -140,11 +141,11 @@ _append_transition_history(task, _delegate_from, "prepared", "delegate_task",
 5. `finally` 块 `destroy()` / `close()` + `shutil.rmtree(workspace)`（`:202-213`）——**失败路径也必须回收**。
 **这是「容器能起来 ≠ 沙箱能用」的正确答案**。
 
-**可观测性与隔离二选一**（`docker_spec.py:39-52`）：docker 后端默认**不让 Admin 浏览文件**，仅 `fixed` scope 默认可浏览或显式 `previewable: true`。
+**可观测性与隔离二选一** `[实测]`（`src/octop/infra/backend/docker_spec.py:39-52`）：docker 后端默认**不让 Admin 浏览文件**，仅 `fixed` scope 默认可浏览或显式 `previewable: true`。
 
 ### 2.2 AgentTeams：K8s SandboxClaim + Hibernate/Resume 冷启动
 
-**接口**（`agentteams-controller/internal/backend/sandbox/plugin.go:12-53`）：
+**接口** `[实测]`（`agentteams-controller/internal/backend/sandbox/plugin.go:12-53`）：
 ```go
 type SandboxPlugin interface {
     Type() string
@@ -155,10 +156,10 @@ type SandboxPlugin interface {
     Validate(config) / HealthCheck(ctx, config)
 }
 ```
-- **注册表**（`registry.go:16-30`）：按 type 注册，**重复注册 panic**，未注册报错；
-- **能力位**（`plugin.go:62-65`）：`ProviderCapabilities{Hibernate bool; Pool bool}`——**声明能力 ≤ 配置能力**（`min(MaxCapabilities, config.Capabilities)`，`plugin.go:18`）；
-- **沙箱 ≠ Worker 容器**：SandboxClaim 从 SandboxSet 领一个实例绑定到 Worker（`plugin.go:71-80`），PodSpec 字段归 pod backend 路径（`plugin.go:69-70`）——**Claim（绑定）与 Sandbox（实体）两层分离**；
-- **Hibernate/Resume**（`plugin.go:30-36`）：沙箱可休眠/唤醒——这是 K8s 生态的**冷启动优化**（省资源），不是隔离安全（隔离由 CRD/namespace 提供）。
+- **注册表**（`agentteams-controller/internal/backend/sandbox/registry.go:16-30`）：按 type 注册，**重复注册 panic**，未注册报错；
+- **能力位**（`agentteams-controller/internal/backend/sandbox/plugin.go:55-65`）：`ProviderCapabilities{Hibernate bool; Pool bool}`——**声明能力 ≤ 配置能力**（`min(MaxCapabilities, config.Capabilities)`，`plugin.go:18`）；
+- **沙箱 ≠ Worker 容器**：SandboxClaim 从 SandboxSet 领一个实例绑定到 Worker（`agentteams-controller/internal/backend/sandbox/plugin.go:67-92`），PodSpec 字段归 pod backend 路径（`agentteams-controller/internal/backend/sandbox/plugin.go:69-70`）——**Claim（绑定）与 Sandbox（实体）两层分离**；
+- **Hibernate/Resume**（`agentteams-controller/internal/backend/sandbox/plugin.go:30-36`）：沙箱可休眠/唤醒——这是 K8s 生态的**冷启动优化**（省资源），不是隔离安全（隔离由 CRD/namespace 提供）。
 
 ### 2.3 helloai 现状（已核实）——抽象已对、实现为零
 
@@ -174,9 +175,9 @@ type SandboxPlugin interface {
 
 | # | 借鉴项 | 来源 | 说明 |
 |---|---|---|---|
-| S-a | **写→读→删真实探针**（不是 `docker ps`） | Octop `probe.py:118-214` | helloai 的执行体健康检查/`AgentSelector` 可照抄「真实业务往返 + 失败必回收」 |
-| S-b | **scope（agent/user/fixed）+ 容器不自动销毁、显式回收** | Octop `docker_spec.py:72-77` + 生命周期口径 | 对齐 `Sandbox_Provider.md` 实施原则 4「安全沙箱引入必须有权限与资源策略，不是只加一个 Docker 类」 |
-| S-c | **Capabilities = min(声明, 配置) + 能力位** | AgentTeams `plugin.go:18,62-65` | helloai `ExecutionPolicy` 可加「能力声明 ≤ 配置」口径 |
+| S-a | **写→读→删真实探针**（不是 `docker ps`） | Octop `src/octop/infra/backend/probe.py:118-214` | helloai 的执行体健康检查/`AgentSelector` 可照抄「真实业务往返 + 失败必回收」 |
+| S-b | **scope（agent/user/fixed）+ 容器不自动销毁、显式回收** | Octop `src/octop/infra/backend/docker_spec.py:72-77` + 生命周期口径 | 对齐 `Sandbox_Provider.md` 实施原则 4「安全沙箱引入必须有权限与资源策略，不是只加一个 Docker 类」 |
+| S-c | **Capabilities = min(声明, 配置) + 能力位** | AgentTeams `internal/backend/sandbox/plugin.go:16-18,55-65` | helloai `ExecutionPolicy` 可加「能力声明 ≤ 配置」口径 |
 | S-d | **探针可观测性登记** | 综合 | 沙箱探针结果要落 timeline/事件，否则「容器起来了但 agent 用不了」用户不可见 |
 
 ---
@@ -185,7 +186,7 @@ type SandboxPlugin interface {
 
 ### 3.1 Octop：三模式连接器 + 失败必须回叫
 
-**三模式连接器**（`src/octop/infra/connectors/catalog.py`，26 条目录）：`remote`（harness 直连厂商 MCP URL）/ `gateway`（进程内写适配器把无 MCP 的服务包成 MCP）/ `internal`（自托管 HTTP MCP）。适配器契约仅三方法（`gateway/registry.py:22-30`）：
+**三模式连接器** `[实测]`（`src/octop/infra/connectors/catalog.py`，26 条目录）：`remote`（harness 直连厂商 MCP URL）/ `gateway`（进程内写适配器把无 MCP 的服务包成 MCP）/ `internal`（自托管 HTTP MCP）。适配器契约仅三方法（`src/octop/infra/connectors/gateway/registry.py:22-30`）：
 ```python
 class GatewayAdapter(Protocol):
     def list_tools(self) -> list[dict[str, Any]]: ...
@@ -193,7 +194,7 @@ class GatewayAdapter(Protocol):
     def probe_credentials(self, creds: dict) -> None: ...   # 自检
 ```
 
-**失败必须回叫**（`infra/agents/teams/team_manager.py:279` `on_reply`）：
+**失败必须回叫** `[实测]`（`src/octop/infra/agents/teams/team_manager.py:279` `on_reply`）：
 ```python
 text = (event.error_text or "Background task did not complete."
         if event.status != "done"
@@ -205,8 +206,8 @@ text = (event.error_text or "Background task did not complete."
 
 ### 3.2 AgentTeams：MCP 分发表 + 房间消息驱动
 
-**工具分发表**（`plugins/teamharness/mcp/server.py:610-645`）：`call_tool(name, args)` 一入口 → `if name == ... elif name == ...` 分发到 `message / roomflow / filesync / artifact / projectflow / taskflow` 六个大工具，每个大工具再按 `action` 路由子命令（如 `taskflow` 的 `delegate_task / ack_task / submit_task / accept_task_result / cancel_task / report_progress`）。**工具面 = MCP，协作面 = Matrix 房间**：
-- 派发：Leader 调 `taskflow/delegate_task` → 校验成员房间资格（`server.py:4727` `_validate_assignee_membership`，**严格 `join` 不是 `invite`**）→ 发布 spec 到 shared storage → **同步成功才发 Matrix 通知**；
+**工具分发表** `[实测]`（`plugins/teamharness/mcp/server.py:610-645`）：`call_tool(name, args)` 一入口 → `if name == ... elif name == ...` 分发到 `message / roomflow / filesync / artifact / projectflow / taskflow` 六个大工具，每个大工具再按 `action` 路由子命令（如 `taskflow` 的 `delegate_task / ack_task / submit_task / accept_task_result / cancel_task / report_progress`）。**工具面 = MCP，协作面 = Matrix 房间**：
+- 派发：Leader 调 `taskflow/delegate_task` → 校验成员房间资格（`plugins/teamharness/mcp/server.py:4727` `_validate_assignee_membership`，**严格 `join` 不是 `invite`**）→ 发布 spec 到 shared storage → **同步成功才发 Matrix 通知**；
 - Worker 领活：MCP 轮询 / 房间消息；
 - **外部 agent 形态**：`deepseek-harness/` 把 DSH 包成 Worker——Matrix 房间驱动、**每房间一个 DSH 会话**、bridge state 持久化（`deepseek-harness/README.md:20-24`）。
 
@@ -220,10 +221,10 @@ text = (event.error_text or "Background task did not complete."
 
 | # | 借鉴项 | 来源 | helloai 落点 |
 |---|---|---|---|
-| E1 | **「派工失败 ⇒ 必须产出面向用户的说明」定为不变量** | Octop `team_manager.py:284` + 报告 §2.3 | `ResilientDispatcher.doAssignNextFallback` 只 `log.warn` 不落 timeline——改成「失败必须回叫（timeline + 可读原因）」 |
-| E2 | **探活区分两类问题**：①对象在、连接死 → 探活可解；②对象在别的 JVM → 探活无解、必须外置状态 | Octop `harness.py:43-60` + 报告 §5.2c | helloai `SESSION_AUTH` 属②，用探活解决不了；登记为「多实例部署前置条件」 |
-| E3 | **连接器三方法（list/call/probe）+ 鉴权声明化** | Octop `gateway/registry.py:22-30` | helloai 只有 MCP Server，缺 Client/适配器侧；`probe_credentials` 是契约一部分（「配好了必须能被机器验证」） |
-| E4 | **stable txn + sync-first, then notify** | AgentTeams `server.py:5390` + 报告 §4.3 | helloai outbox 已有 status 幂等；核对「产物先落盘再发通知」顺序 |
+| E1 | **「派工失败 ⇒ 必须产出面向用户的说明」定为不变量** | Octop `src/octop/infra/agents/teams/team_manager.py:284` + 报告 §2.3 | `ResilientDispatcher.doAssignNextFallback` 只 `log.warn` 不落 timeline——改成「失败必须回叫（timeline + 可读原因）」 |
+| E2 | **探活区分两类问题**：①对象在、连接死 → 探活可解；②对象在别的 JVM → 探活无解、必须外置状态 | Octop `src/octop/api/routers/browser/harness.py:43-60` + 报告 §5.2c | helloai `SESSION_AUTH` 属②，用探活解决不了；登记为「多实例部署前置条件」 |
+| E3 | **连接器三方法（list/call/probe）+ 鉴权声明化** | Octop `src/octop/infra/connectors/gateway/registry.py:22-30` | helloai 只有 MCP Server，缺 Client/适配器侧；`probe_credentials` 是契约一部分（「配好了必须能被机器验证」） |
+| E4 | **stable txn + sync-first, then notify** | AgentTeams `plugins/teamharness/mcp/server.py:5765-5800` + 报告 §4.3 | helloai outbox 已有 status 幂等；核对「产物先落盘再发通知」顺序 |
 
 ---
 
@@ -287,12 +288,29 @@ text = (event.error_text or "Background task did not complete."
 
 ---
 
-## 六、给 helloai 的落地优先级建议（按 ROI 排序）
+## 六、借鉴项索引与硬约束
 
-1. **F3｜Fork 驱动执行接线**（补 helloai 后半截）：`AgentEventForkService` + `sub_task`/execution command 带 fork run_id → fork 后的 Run 能真的跑起来。改动集中、直接命中用户心愿。
-2. **E1｜派工失败回叫不变量**：`ResilientDispatcher` 失败必落 timeline + 可读原因；人工兜底池（`nc-fallback-*`）接入 attention 语义。低风险高感知。
-3. **S1~S5｜沙箱 spec 声明化 + 探针**：先做 spec 解析与探针（不真起 Docker），对齐 `Sandbox_Provider.md`；探针形状照抄 Octop `probe.py`。
-4. **F1｜转换史收口**：`changeStatus()` 统一扇出 + 越序错误带「下一步引导」；不动 `history` 字段（用 timeline）。
-5. **R1~R4｜RAG 知识库（pgvector）**：先定「无 KB 即摘工具 + 注入预算」，再谈存储与检索；引用 marker 最后补。
+> **本节不承载排序**（《治理规则》§3.6：`research/` 不写排期与进度）。
+> **排序唯一载体 = `doc/plan/HelloAI 借鉴落地实施计划.md`（编号 `REF-x.y`）+ 《HelloAI 实现差距表》**。本报告各条借鉴项与该计划的对应关系如下（供追溯「哪条借鉴落到哪里」）：
 
-> **硬约束**（与项目红线对齐）：① 技能的脚本要在沙箱里跑 ⇒ 技能化推进到「可执行」依赖沙箱完成；② `SESSION_AUTH` 进程级注册表必须先于多实例部署解决（故障现象像鉴权 bug，排查成本极高）。
+| 本报告条目 | 实施落点（`REF-x.y`） | 状态 |
+|---|---|---|
+| `F1` 转换史收口进入 `changeStatus()` | `REF-6.x` 判据类（随对应组落地） | — |
+| `F2` re-dispatch 保留审计 | 已由 Return 闭环覆盖（`REF-2` 内仅保留一条断言建议） | — |
+| `F3` Fork 驱动执行接线 | **不做（WONTFIX，`D-2026-10-09-5`）** | ❌ 已关闭 |
+| `F4` 对话级 Fork | 随 `F3` 一并搁置 | ❌ 已关闭 |
+| `F5` report_progress | 未立项（登记为观察项） | — |
+| `S-a` 写→读→删真实探针 | `REF-3.4`（**预案**，条件触发） | ⏸ 条件触发 |
+| `S-b` scope + 显式回收 | `REF-3.5`（**预案**，条件触发） | ⏸ 条件触发 |
+| `S-c` Capabilities = min(声明, 配置) | `REF-3.2`（**预案**，条件触发；上游注释与实现相反，落地前须先定语义） | ⏸ 条件触发 |
+| `E1` 派工失败必产出面向用户的说明 | `REF-5.1` | ✅ 已立项 |
+| `E2` 探活区分两类问题 | `REF-6.6`（判据） | ✅ 已登记 |
+| `E3` 连接器三方法 + 鉴权声明化 | 未立项（登记为观察项） | — |
+| `E4` stable txn + sync-first | `REF-6.1`（判据） | ✅ 已登记 |
+| `R1~R4` RAG（pgvector） | `REF-4.x`（`G-019`，可后置） | ✅ 已立项 |
+
+> **硬约束**（与项目红线对齐）：
+> ① ~~技能的脚本要在沙箱里跑 ⇒ 技能化推进到「可执行」依赖沙箱完成~~ —— **2026-10-09 订正：本约束的前提在当前平台形态下不成立**（helloai **不执行任何脚本**：`ProcessBuilder` / `Runtime.getRuntime` / `ScriptEngine` / 表达式求值器在 `src/main` 全库 0 命中；技能是**文本规范**而非可执行包）。故「只做安装/解析/校验」无需额外机制即可成立；**反过来，若将来要开放脚本执行，那本身就是沙箱的触发条件之一**（《目标架构》§7）。
+> ② **`SESSION_AUTH` 进程级注册表必须先于多实例部署解决**（故障现象像鉴权 bug 而不是架构 bug，排查成本极高）—— **仍然成立**，已登记为 `REF-6.5`。
+>
+> **2026-10-09 说明**：本节原有「按 ROI 排序」的 5 项优先级列表（含 `F3` 居首）**已移出**——它是**项目排期口径**，按当日的分期/排期治理令不得留在 `research/`；其中 `F3` 已被用户裁定 `WONTFIX`（`D-2026-10-09-5`，理由：用法已被 Return 与 Replay 工作台覆盖，且驱动执行须改 ADR-001 的 Run 标识模型与 execution command 载荷）；沙箱相关三项目前为**条件触发**（`D-2026-10-09-6③`）。**无信息损失**：各条的定义与证据在 §一~§五 完整保留。

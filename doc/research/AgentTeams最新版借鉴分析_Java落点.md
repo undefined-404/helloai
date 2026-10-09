@@ -3,7 +3,8 @@
 > **分析对象**：`E:\workspace\AgentTeams-main`（原 HiClaw，`agentscope-ai/AgentTeams`），changelog 覆盖 `v1.0.1` → `v1.2.2`（16 个版本）。  
 > **对照基线**：`doc/archive/reference/HelloAI_外部项目借鉴技术细节.md` §1（**5 月版**已借鉴的 7 项）。  
 > **配套报告**：`doc/research/Octop全库借鉴分析_综合版.md`（Octop 全库；旧版 `Octop全库借鉴分析_Java落点.md` 已并入该综合版，2026-10-09）。  
-> **证据口径**：本文所有结论均带 `path:line` 或 `path` 实测；未读到的部分**显式标注为不可核实**，不做推测。
+> **勘察口径（2026-10-09 按《治理规则》§3.6 统一为标记式）**：凡标 `[实测]` 的论断均由本地逐文件读取源码/文档得出并附 `路径:行号`；标 `[推断]` 的为**文档口径反推**（未能读源码，已单列说明）；**未核实的写 `[未核实]`，不用「通常/一般」充当事实**。§八 事实核查表逐条标注了本报告的勘察口径。
+> **路径基准**：对 AgentTeams 的路径引用以仓库根为基准（Go 侧 `agentteams-controller/internal/...`，Python 侧 `plugins/teamharness/...`，设计文档 `docs/design/...`）；helloai 侧现状均逐文件核实。
 
 ---
 
@@ -468,78 +469,52 @@ AgentTeams 的 CRD 侧未展开读；`Octop全库借鉴分析_综合版.md` 已�
 
 ---
 
-## 七、落地顺序建议（含依赖）
+## 七、借鉴项索引（**本节不承载排序**）
 
-```
-① A2 转换表外置为资源文件
-   └─ 无依赖，最低成本；后端测试断言「表↔枚举↔前端映射」三一致
-   └─ 产出物可被 ② 与 helloai-ui 复用
+> **《治理规则》§3.6：`research/` 不写排期与进度。** 排序唯一载体 = `doc/plan/HelloAI 借鉴落地实施计划.md`（编号 `REF-x.y`）+ 《HelloAI 实现差距表》。
+> 本报告 `A1~A16` 各条的定义与证据见 **§四**；与该计划的对应关系如下（供追溯「哪条借鉴落到哪里」）：
 
-② A1 状态写入收口到单一入口
-   ├─ 依赖 ①（表已外置才好断言）
-   ├─ 先做「收口 + 补 timeline」（不新建 history 字段，避免双事实源）
-   ├─ 局部改造：6 条转换路径 → changeStatus() 为基础 + 显式后置钩子
-   │  （rework/reworkFresh 的预算、附件失效等扩展语义各归其位）
-   ├─ 优先核实 resetToPendingForDispatch 的外层调用点是否补了扇出
-   └─ 再做「越序错误自解释」（补「应该先做什么」）
+| 本报告条目 | 实施落点（`REF-x.y`） | 状态 |
+|---|---|---|
+| `A2` 转换表外置为可断言资源 | `REF-6.x` 判据类（随对应组落地；建议作 `verify-*` 门禁） | — |
+| `A1` 状态写入收口单一入口 | `REF-6.x` 判据类（与 `A14` 同族） | — |
+| `A3` sync-first, then notify | `REF-6.1`（判据；与 Octop 侧 `E4` 同源） | ✅ 已登记 |
+| `A4` `request_attention` 人工决策一等公民 | 未立项（登记为观察项） | — |
+| `A5` 审计双层 + 闭合 schema | `REF-6.2`（判据；keyset 分页） | ✅ 已登记 |
+| `A6` 水位四判据 | `REF-6.4`（判据） | ✅ 已登记 |
+| `A7` 权限档位零扩散 + 全字段探针 | 未立项（登记为观察项） | — |
+| `A8` 能力声明式可插拔 + Sandbox 插件 | `REF-3.2`（**预案**，条件触发；须先定 `min(声明,配置)` 语义——上游注释与实现相反） | ⏸ 条件触发 |
+| `A9`~`A13`、`A15`、`A16` | 判据类，未单独编号（按需在实现时对照） | — |
+| `A11`/`A12` 技能目录与上传双闸门 | `REF-1.2` / `REF-1.5`（`REF-1.5` 须在 `REF-1.6` 安装入口之后） | ✅ 已立项 |
+| `A14` 不透明游标 + 游标过期 | `REF-6.2` 同族（keyset 分页） | ✅ 已登记 |
 
-③ A14 timeline/events 分页的游标化
-   ├─ 依赖 ②（有统一写入才谈得上稳定序号）
-   └─ 先实测现有分页是否 offset / 是否有并发重漏
-
-④ A3 sync-first, then notify 的次序核对与固化
-   ├─ 独立；但需先实测产物落盘与 outbox 的先后
-   └─ 顺带核对 outbox 幂等/去重键是否带 status
-
-⑤ A5 通用审计（闭合 schema）
-   ├─ 独立；可先只写「闭合 schema + append-only + keyset 分页」三件套
-   └─ 与 ④ 共用「失败可重试」语义
-
-⑥ A6 水位四判据 → 登记为可复用判据 + 核对现有同步实现
-   └─ 独立；纯审计性工作，先核对再决定改不改
-
-⑦ A7 权限档位零扩散 + 全字段探针
-   └─ 独立；建议与下一次权限/作用域变更合并做
-
-⑧ A8 Sandbox 能力声明式（RM10）
-   ├─ 依赖用户批准的拆法（RM9/RM10 须与用户确认）
-   └─ 借 A8 的 5 条判据设计接口：min(上限,配置) / ErrCapabilityNotSupported
-      / 能力位只放被消费的 / Validate 与 HealthCheck 分离 / Hibernate-Resume 成对
-
-⑨ A11/A12 技能目录与上传双闸门
-   └─ 独立；若做 B2 技能化，把 A12 的 8 条负例直接当验收清单
-```
-
-**优先级建议**：**① → ②** 是本轮**性价比最高**的一组（**直接命中 12 个写入点 + 无状态史**，且改动局部、可回归）；**④ → ⑤** 是**正确性**类（**防止「通知了但产物不可达」**）；**⑧** 与 RM10 绑定，等用户决策。
-
----
-
+> **2026-10-09 说明**：本节原有「落地顺序建议（含依赖）」的 `① ~ ⑨` 排序块**已移出**——它属**项目排期口径**，按当日的排期/分期治理令不得留在 `research/`；**无信息损失**：各条 A 档借鉴项的定义、证据与依赖说明在 §四 完整保留，其排期已由 `plan/HelloAI 借鉴落地实施计划.md` 承载。原块中的两条依赖判断仍然成立、已并入上表：① `A2 → A1`（表先外置才好断言）；② `A8` 依赖 RM9/RM10 的拆法裁定（**RM9 仍未动**，见 `plan/HelloAI_RM存量缺口清偿计划（2026-10-04）.md`）。
 ## 八、事实核查表
 
 | 结论                                                                      | 核实方式                                                                                                                                 | 结果                                                                      |                        |      |
 | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- | ---------------------- | ---- |
-| AgentTeams 已 K8s 原生化                                                    | `internal/` 包清单（27 包）+ `api/v1beta1` + `cmd/{agt,controller}` + `changelog/v1.1.0.md`                                                | ✅ 确认                                                                    |                        |      |
-| 有独立的任务转换引擎                                                              | `docs/design/teamharness/task-transition-engine.md`（6318 B）全文                                                                        | ✅ 确认（**文档口径**，未读到 `server.py` 全源码）                                      |                        |      |
-| 转换表跨语言共享                                                                | 同上，`plugins/teamharness/contracts/task-transitions.json` + Go 测试加载                                                                   | ✅ 确认（文档口径）                                                              |                        |      |
-| 审计是「闭合 schema」                                                          | `capability-foundation.md` §Dual-layer audit + `TestEventJSONHasClosedSchema`                                                        | ✅ 确认                                                                    |                        |      |
-| `HasCapability` 角色基线                                                    | `internal/auth/capability.go:92-111` 实读                                                                                              | ✅ 确认                                                                    |                        |      |
-| 权限档位由数据承载                                                               | `l3-worker-scoped-read.md` §Design / §Tests                                                                                          | ✅ 确认                                                                    |                        |      |
-| 全字段探针测试                                                                 | `l2-worker-scoped-write.md`：`TestL2WorkerUpdateFieldPolicyCoversAllRequestFields`                                                    | ✅ 确认（测试名，未读测试源码）                                                        |                        |      |
-| Sandbox 能力是 min 计算                                                      | `internal/backend/sandbox/{plugin.go,openkruise.go:44-66}` 实读                                                                        | ✅ 确认                                                                    |                        |      |
-| 能力位「不投机预加」                                                              | `plugin.go` 注释原文                                                                                                                     | ✅ 确认                                                                    |                        |      |
-| 水位四判据                                                                   | `issue-1107-file-sync-io-amplification.md` §六 全文                                                                                     | ✅ 确认                                                                    |                        |      |
-| **helloai 有 12 个 `updateById` / 8 个 `setStatus` 写入点**                   | `grep -n "updateById(\|subTask.setStatus" SubTaskServiceImpl.java`                                                                   | ✅ 确认（updateById：192/200/368/462/809/901/987/1090/1110/1147/1407/1497）   |                        |      |
-| **扇出被手写实现 4 次，无共用入口**                                                   | `grep -n "sendInboxNotification\|sendApprovedInboxNotification\|sendReworkInboxNotification"` → 定义在 `:629` / `:580` / `:491`，各有独立调用点 | ✅ 确认                                                                    |                        |      |
-| **`changeStatus()` 与 `complete()` 都不写 timeline**                        | `grep -n "taskTimelineService.recordEvent"` → 命中 `:852/:913/:990/:1029/:1155/:1173`，**均不在 `:330-381` 与 `:415-473` 区间内**              | ✅ 确认                                                                    |                        |      |
-| **`resetToPendingForDispatch` 零覆盖（无 validate / 无 outbox / 无 timeline）** | `sed -n '1079,1094p'` 实读：仅 allowlist + `setStatus` + `setAssignedAgentId(null)` + `updateById`                                       | ✅ 确认（**`SubTaskServiceImpl` 内无扇出；外层调用点未核**）                             |                        |      |
-| **helloai `SubTask` 无状态变更史字段**                                          | `SubTask.java` 字段清单实读                                                                                                                | ✅ 确认                                                                    |                        |      |
-| **helloai 有 `taskTimelineService` 但不由 `changeStatus` 驱动**               | `grep -n "taskTimelineService\|TimelineEvent"` → 仅 `:988`/`:1159` 等零星点                                                               | ✅ 确认                                                                    |                        |      |
-| **helloai 无通用审计**                                                       | \`ls db/migration                                                                                                                    | grep audit`→ 仅`V28`（会话消息列）与 `V67`（凭据审计）；`find                           | grep -i audit\` → 仅凭据域 | ✅ 确认 |
-| **helloai `SubTaskStateMachine` 仅 Java 内联**                             | 全文实读（`static {}` 块，无外部资源）                                                                                                            | ✅ 确认                                                                    |                        |      |
-| **`AgentSkillSpecServiceImpl.KNOWN_SPECS` 是编译期 Map**                    | `:29` `KNOWN_SPECS = knownSpecs()`；`:148` `knownSpecs()`                                                                             | ✅ 确认（**未逐一核对是否可能漂移**，报告只做对照不做断言）                                        |                        |      |
-| `plugins/teamharness/mcp/server.py` 的 `_transition_task()` 全实现          | 未读到源码                                                                                                                                | ❌ **不可核实**（本文相关结论均为文档口径）                                                |                        |      |
-| `deepseek-harness` runtime 内部                                           | 未读（17 文件）                                                                                                                            | ❌ **不可核实**；`skill-catalog-api.md` 自述其对 `runtime.yaml` 的 skills 段是 no-op |                        |      |
-| K8s 实测行为                                                                | 本机无集群                                                                                                                                | ❌ **不可核实**（文档附 fake 强制同规则的测试证据）                                         |                        |      |
+| AgentTeams 已 K8s 原生化                                                    | `internal/` 包清单（27 包）+ `api/v1beta1` + `cmd/{agt,controller}` + `changelog/v1.1.0.md` `[实测]` | ✅ 确认                                                                    |                        |      |
+| 有独立的任务转换引擎                                                              | `docs/design/teamharness/task-transition-engine.md`（6318 B）全文 `[推断]` | ✅ 确认（**文档口径**，未读到 `server.py` 全源码）                                      |                        |      |
+| 转换表跨语言共享                                                                | 同上，`plugins/teamharness/contracts/task-transitions.json` + Go 测试加载 `[推断]` | ✅ 确认（文档口径）                                                              |                        |      |
+| 审计是「闭合 schema」                                                          | `capability-foundation.md` §Dual-layer audit + `TestEventJSONHasClosedSchema` `[实测]` | ✅ 确认                                                                    |                        |      |
+| `HasCapability` 角色基线                                                    | `internal/auth/capability.go:92-111` 实读 `[实测]` | ✅ 确认                                                                    |                        |      |
+| 权限档位由数据承载                                                               | `l3-worker-scoped-read.md` §Design / §Tests `[实测]` | ✅ 确认                                                                    |                        |      |
+| 全字段探针测试                                                                 | `l2-worker-scoped-write.md`：`TestL2WorkerUpdateFieldPolicyCoversAllRequestFields` `[推断]` | ✅ 确认（测试名，未读测试源码）                                                        |                        |      |
+| Sandbox 能力是 min 计算                                                      | `internal/backend/sandbox/{plugin.go,openkruise.go:44-66}` 实读 `[实测]` | ✅ 确认                                                                    |                        |      |
+| 能力位「不投机预加」                                                              | `plugin.go` 注释原文 `[实测]` | ✅ 确认                                                                    |                        |      |
+| 水位四判据                                                                   | `issue-1107-file-sync-io-amplification.md` §六 全文 `[实测]` | ✅ 确认                                                                    |                        |      |
+| **helloai 有 12 个 `updateById` / 8 个 `setStatus` 写入点** | `grep -n "updateById(\|subTask.setStatus" SubTaskServiceImpl.java` `[实测]` | ✅ 确认（updateById：192/200/368/462/809/901/987/1090/1110/1147/1407/1497） |  |  |
+| **扇出被手写实现 4 次，无共用入口** | `grep -n "sendInboxNotification\|sendApprovedInboxNotification\|sendReworkInboxNotification"` → 定义在 `:629` / `:580` / `:491`，各有独立调用点 `[实测]` | ✅ 确认 |  |  |
+| **`changeStatus()` 与 `complete()` 都不写 timeline**                        | `grep -n "taskTimelineService.recordEvent"` → 命中 `:852/:913/:990/:1029/:1155/:1173`，**均不在 `:330-381` 与 `:415-473` 区间内** `[实测]` | ✅ 确认                                                                    |                        |      |
+| **`resetToPendingForDispatch` 零覆盖（无 validate / 无 outbox / 无 timeline）** | `sed -n '1079,1094p'` 实读：仅 allowlist + `setStatus` + `setAssignedAgentId(null)` + `updateById` `[实测]`（内层实读；外层调用点未核） | ✅ 确认（**`SubTaskServiceImpl` 内无扇出；外层调用点未核**）                             |                        |      |
+| **helloai `SubTask` 无状态变更史字段**                                          | `SubTask.java` 字段清单实读 `[实测]` | ✅ 确认                                                                    |                        |      |
+| **helloai 有 `taskTimelineService` 但不由 `changeStatus` 驱动** | `grep -n "taskTimelineService\|TimelineEvent"` → 仅 `:988`/`:1159` 等零星点 `[实测]` | ✅ 确认 |  |  |
+| **helloai 无通用审计** | `ls db/migration \| grep audit` → 仅 `V28`（会话消息列）与 `V67`（凭据审计）；`find \| grep -i audit` → 仅凭据域 `[实测]` | ✅ 确认 |  |  |
+| **helloai `SubTaskStateMachine` 仅 Java 内联**                             | 全文实读（`static {}` 块，无外部资源） `[实测]` | ✅ 确认                                                                    |                        |      |
+| **`AgentSkillSpecServiceImpl.KNOWN_SPECS` 是编译期 Map**                    | `:29` `KNOWN_SPECS = knownSpecs()`；`:148` `knownSpecs()` `[实测]` | ✅ 确认（**未逐一核对是否可能漂移**，报告只做对照不做断言）                                        |                        |      |
+| `plugins/teamharness/mcp/server.py` 的 `_transition_task()` 全实现          | 未读到源码 `[未核实]` | ❌ **不可核实**（本文相关结论均为文档口径）                                                |                        |      |
+| `deepseek-harness` runtime 内部                                           | 未读（17 文件） `[未核实]` | ❌ **不可核实**；`skill-catalog-api.md` 自述其对 `runtime.yaml` 的 skills 段是 no-op |                        |      |
+| K8s 实测行为                                                                | 本机无集群 `[未核实]` | ❌ **不可核实**（文档附 fake 强制同规则的测试证据）                                         |                        |      |
 
 ---
 

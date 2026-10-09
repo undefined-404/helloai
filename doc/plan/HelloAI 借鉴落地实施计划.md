@@ -1,145 +1,388 @@
 # HelloAI 借鉴落地实施计划
 
-> **状态：ACTIVE**
-> **编号体系：`REF-xxx`**（借鉴落地项，批次.序号），与既有 `BASE-xxx` / `RMx` / `P0-x` 完全错开。
-> **依据**：`doc/research/` 5 份调研（2026-10-09）——用户裁定的四项优先级 + 四项之外 A 档独立交付项。
-> **性质**：本计划只收**可执行结论**（借鉴落点 → 验收），不含调研过程（在 `research/`）与稳定设计（在 `design/`）。
+> **状态：Active**
+> **编号体系：`REF-x.y`**（借鉴落地专项任务，`x` = 能力组，`y` = 组内序号）。**已按差距表 §7.1「孤儿项回流规则」登记进《HelloAI 实现差距表》§0 编号口径表**，与 `G-xxx` / `RMx` / `B1~B5` / `BASE-x.y` 均不撞号。
+> **依据**：`doc/research/` 5 份调研（2026-10-09）+ **2026-10-09 对 helloai 源码与 `~/Downloads/{Octop-main,AgentTeams-main}` 参考源码的逐条复核（v2 修订）**。
+> **用户裁定**：`D-2026-10-09-4`（见《差距表》§0「当前生效的取舍决策」）——四项能力优先级、备份/恢复与 RAG 入目标架构、沙箱生产形态、语义位与不可关闭清单同批。
+> **性质**：本计划只收**可执行结论**（借鉴落点 → 动作 → 验收 → 验证集 → 回填），不含调研过程（在 `research/`）与稳定设计（在 `design/`）。
 > **完成迁移**：执行完成后迁入 `doc/archive/implemented/` 并标 `Done`。
-> 最后更新：2026-10-09
+> **最后更新：2026-10-09（v4）**——v1 勘误已并入正文；v2 新增 **11 处动作订正**（会导致回归失败或做不出来的部分）、**每组的验证集与文档回填**、**许可证口径**、**REF-6 载体修正**；v3 **Fork 相关条目全部取消**（`D-2026-10-09-5`，REF-2 收敛为「备份 / 恢复」）；**v4 两项重大调整**（`D-2026-10-09-6`）：① **REF-3 沙箱整组降级为「条件触发」**——当前**没有可隔离的执行对象**，不排期、只留预案（修正原「第 3 优先级」排序）；② **新增 `REF-7`「外部 Agent 工作详情快照」**（差距锚点 `G-020`）。原 §11 待拍板 5 条**已全部裁定**并移入 §12 裁定记录，**本计划当前无待拍板项**。
 
 ---
 
-# 1. 优先级总览（用户裁定，2026-10-09）
+# 1. 编号与治理前置
+
+| 项 | 口径 |
+|---|---|
+| `REF-x.y` 含义 | 借鉴落地专项任务；`x` 取 1~7（技能 / 备份·恢复 / 沙箱〔条件触发〕 / RAG / A 档 / 判据 / 工作详情快照） |
+| 与 `G-0xx` 的关系 | 每个 REF 组必须映射到差距锚点：`REF-1 → G-004`、`REF-2 → G-018`（**原 `REF-2.1/2.2 → G-001·G-006` 已随 Fork WONTFIX 取消映射**）、`REF-3 → G-005`（**条件触发**）、`REF-4 → G-019`、`REF-5.1 → G-015`、`REF-5.3/5.4 → 新增 G 项或就地登记`、`REF-7 → G-020` |
+| 与 `B1~B5` 的关系 | `REF-3` 即《差距表》§0 所指「现仅 **B2 Sandbox** 未动」的那一项；**REF-3 组内不得另立第二套能力层编号** |
+| 与本文件的关系 | REF 项**只在本文件排期**；`G-` 项状态**只在差距表更新**（唯一事实源），双方不得互相复述进度 |
+| 孤儿项回流 | 本文件作出的「后置 / 降级 / 不做」决定，必须同批在差距表登记条目或显式记 WONTFIX（差距表 §7.1） |
+
+**治理前置（已完成，2026-10-09）**：`REF-x.y` 入《差距表》§0 编号口径表 ✅；`G-018`/`G-019` 立项 ✅；《目标架构》§13/§14 新增 ✅；《重构实施计划》次序同步 ✅；当月 Log 记账 ✅。
+
+**许可证口径（新增，2026-10-09）**：本计划多处使用「照抄 / 直译」措辞，落地时按上游许可处理——
 
 ```text
-第 1 步：skills 技能可装配（最高优先）
-第 2 步：Fork/Return 回退 + 备份/恢复
-第 3 步：沙箱（B2 能力层，用户裁定最后做）
-第 4 步：RAG 知识库（可后置）
-并行/插队：四项之外 A 档（独立交付，互不依赖）
+Octop（MIT）        ⇒ 可自由复制；保留上游版权与许可声明即可
+AgentTeams（Apache-2.0）⇒ 可复制；必须①保留版权/许可/NOTICE 声明 ②注明本处已作修改
+落地纪律：凡复制上游代码，源文件头部注明来源项目 + 许可 + 是否改动
 ```
 
-**依赖约束**：
-- 技能脚本执行依赖沙箱 ⇒ 沙箱未完成前只做「安装/解析/校验」，不开放脚本执行；
-- `SESSION_AUTH` 进程级注册表必须先于多实例部署解决（故障现象像鉴权 bug）。
+---
+
+# 2. 执行次序（用户裁定 + 依赖约束）
+
+```text
+REF-1 技能可装配  ──►  REF-2 备份 / 恢复  ──►  REF-4 RAG 知识库（可后置）
+REF-3 沙箱：条件触发（不排期）
+REF-5 四项之外 A 档：独立交付，可插队（互不依赖）
+REF-7 工作详情快照：能力外延，可后置（触发 = 审计深度需求）
+REF-6 判据：随对应组落地，不单独排期
+备份/恢复（REF-2）为纯增量、可独立交付，不触任何 MQ 载荷契约
+```
+
+> **与主线的对接**：本次序已同步进《重构实施计划》头部——**备份/恢复提前到 Sandbox Provider 之前**，RAG 排在最后。
+> **Fork 已于 2026-10-09 裁定 WONTFIX**（`D-2026-10-09-5`）⇒ Event 消费面**回到既有 `Timeline → Replay → Audit → Recovery` 次序**，`Recovery` 留在 P1 剩余项内按原次序推进，**不加 `REF-` 编号**（它不是借鉴项，不需要借 REF 的名义排期）。
+> **REF-3 沙箱已于 2026-10-09 整组降级为「条件触发」**（`D-2026-10-09-6③`）：当前**没有可隔离的执行对象**（外部 agent 在它自己终端；内部 agent 的工具面全是平台 API，无 shell / 文件写），故不排期，只保留预案与三个触发条件。
+> **REF-7 为本次新增**（`D-2026-10-09-6⑤`）：来自用户对平台定位的澄清——外部 agent 事后经审批提交「全任务工作详情快照」，平台解析后插入执行时间线等审计信息。
 
 ---
 
-# 2. 第 1 步：skills 技能可装配（REF-1.x）
+# 3. REF-1 技能可装配（最高优先）
 
-> 调研依据：`research/helloai四能力完善优先级与借鉴路线.md` §2（K1~K4）+ Octop `skill/` 系列。
-> helloai 现状：`AgentSkillSpecServiceImpl.KNOWN_SPECS` 编译期硬编码（`:31`）；4 个 `eng-*.md` 无 frontmatter；`ToolDefinition(name, description)` 仅两字段。
+> 调研依据：`research/helloai四能力完善优先级与借鉴路线.md` §2 + Octop `src/octop/infra/skills/`。
+> helloai 现状（2026-10-09 源码复核）：`AgentSkillSpecServiceImpl.KNOWN_SPECS` 编译期硬编码（`:29`、`:148-210`，4 条手工 `put`）；classpath 4 个 `eng-*.md` **无 frontmatter**；`ToolDefinition` 仅 `name + description` 两字段（`ToolDefinition.java:11`）；`ToolRegistry.resolve(List)` 单向 best-effort；技能侧**无任何 Controller**；**无**任何摄入/安装代码。
+
+### REF-1.1 补 frontmatter
 
 | 项 | 动作 | 验收 |
 |---|---|---|
-| REF-1.1 | 给现有 4 个 `eng-*.md` 补 YAML frontmatter（name/description/version/required_tools），正文不变 | 现有渲染行为不变（回归）；新增解析器能读出 frontmatter |
-| REF-1.2 | `KNOWN_SPECS` 硬编码 → 目录扫描（`skills/plugins/` + 可选外部目录），解析失败显式报 corrupt | 单测：坏文件出现在列表且带 `error`，不静默跳过 |
-| REF-1.3 | **`ToolRegistry` 加两个语义位**——「按条件可用」「按上下文动态描述」；`ToolDefinition` 追加字段（兼容旧构造） | 无 KB 即摘工具；每轮重写 description；**planner 工具收窄从硬编码变配置** |
-| REF-1.4 | 技能来源标记：`origin` + `locked`，拷贝进 Agent 工作区时打标 | 单测：带标技能被下游改写时能被识别 |
-| REF-1.5 | 第三方摄入安全闸门（文件数 ≤2000 / 解压 ≤64MB / 压缩比 >100 拒 / 路径含 `..` 拒 / symlink 拒 / 清单必须根 SKILL.md） | 针对每类攻击各写一个必失败用例 |
-| REF-1.6 | 导出/安装闭环（打包 zip → 过闸门 → 可解析且 requiredTools 一致） | 端到端：导出再导入可解析 |
+| REF-1.1a | **先改解析**：`AgentSkillSpecServiceImpl` 剥离 frontmatter **之后**再按 `DETAIL_SEPARATOR`（`"\n---\n"`，`:32` 定义、`:129` `indexOf` 取首个命中）切「执行速览」 | 改造前后**同一份 md 的注入输出逐字一致** |
+| REF-1.1b | 给 4 个 `eng-*.md` 补 YAML frontmatter，**承载 `SkillPackage` 全 9 字段**（name/version/description/requiredTools/dependencies/inputSchema/outputSchema/validationRules；`fileName` 由目录扫描推导） | 新增解析器能读出 9 字段且与现状逐一相等 |
 
-**拆巨类联动**：REF-1.3 语义位是拆 `McpToolServiceImpl`(1181) 的前置——先让工具判断从方法体收敛到注册元数据，再拆类。RM9 拆法仍须用户确认。
+> ⚠️ **v1 订正（两处硬伤）**：
+> ① **不加 REF-1.1a 直接加围栏 ⇒ 回归必挂**：frontmatter 的**闭合围栏**本身就是 `\n---\n`，会被 `indexOf` 先命中，注入内容退化成 frontmatter 块本身。
+> ② **只搬 4 个字段 ⇒ 存量元数据丢失**：`eng-code-review` 已实填 `inputSchema` / `outputSchema`；字段集必须取全 9 个。
+
+### REF-1.2 目录扫描替代 `KNOWN_SPECS`
+
+| 项 | 动作 | 验收 |
+|---|---|---|
+| REF-1.2a | `KNOWN_SPECS` → 目录扫描（classpath `skills/plugins/` + 可选外部目录；后者为**新增配置项**，按 `CODE_STYLE §40/41` 落 `application.yml` + 属性类） | 新增一个 md 即出现在技能目录，零改码 |
+| REF-1.2b | 解析失败**显式报 corrupt 且仍出现在列表中**（不静默跳过） | 单测：坏文件在列表且带 `error` 字段 |
+| REF-1.2c | **新增技能目录查询 API**（当前技能侧 0 个 Controller——「出现在列表」缺宿主） | 列表接口可查、坏文件带 `error` |
+
+> ⚠️ **v1 漏项（同批必改）**：
+> - `helloai-ui/src/constants/agentSkills.ts:17-27` 是 `KNOWN_SPECS` 的**对齐副本**（含中文 description）——扫描化后必然漂移。 ✅ **已裁定（`D-2026-10-09-6③-4`）**：**改服务端下发**（消费 REF-1.2c 的技能目录 API，前端 5 个消费点改为读 store，拉取失败回退原始标签）；**parity 守卫留给不适合下发的词表**（`AGENT_SKILL_OPTIONS` ↔ 后端 `KEYWORD_SKILLS`/`SYNONYMS`）与**事件码**（`REF-6.8`）。
+> - `scripts/powershell/verify-skill-packages.ps1` 靠**正则解析 Java 源码文本**（`List.of(...)`）取声明——元数据迁到 md 后解析基础消失，**必须同批重写**；现有 4 组断言（fileName 存在于 classpath / requiredTools ⊆ 已注册 `@Tool` / version 三段式 / name+fileName 唯一）**等价保留**。
+
+### REF-1.3 工具注册的「条件可用」与「动态描述」
+
+| 项 | 动作 | 验收 |
+|---|---|---|
+| REF-1.3 | **新增**两个语义位——「按条件可用」（`false` 即从工具列表**摘除**）与「按上下文动态描述」（每轮重写 description） | 无 KB 时 `search_knowledge` 不在工具列表；每轮 description 反映本轮可见资源 |
+| REF-1.3b | 同批实现 `CRITICAL_TOOLS` 式**不可关闭清单**（写进禁用列表也被剔除） | 单测：把关键工具写入禁用列表后仍在列表内 |
+
+> ⚠️ **v1 订正（三处）**：
+> ① **前提不成立**：所谓「planner 工具收窄**从硬编码变配置**」——现状**根本没有收窄机制**（`excludeTool` / `disabledTool` / `availability` 全库 0 命中）；唯一近似是 **Agent-工具绑定层** `agent_mcp_server.is_enabled` + `getEnabledToolsForAccess`。本项应表述为「**新增**可用性语义位」，**双层边界须显式界定**（用户裁定 `D-2026-10-09-4④`）：绑定层 = 某 Agent 是否启用某工具（DB 事实）；语义位 = 平台/运行时事实是否具备该能力（进程内事实）。**「禁用了」与「不具备」分开表达**。
+> ② **别塞进 record**：`ToolDefinition` 是 record，追加 `Predicate` / `Function` 字段会破坏值语义与可序列化。语义位应落在 **`ToolRegistry.resolve(...)` 的上下文参数**上（新增 `ToolContext`），而不是 record 的字段。 ✅ **已裁定采纳（`D-2026-10-09-6③-1`）**：实施时**只在 Tool 侧加参**，`AgentSkillSpecService.resolve(List)` 签名不动（避免污染 Skill/Tool 共用元数据面）。
+> ③ **它不再是拆巨类的前置**：v1 曾称「先语义位、再拆 `McpToolServiceImpl`」——实测该因果不成立（该类 `requireAuthId` **0 处**，头注释 `:57-74` 记录 2026-08-23 书面「不拆」结论）。语义位对 `McpMcpServer`（真正的 `@Tool` 协议层）更有意义。
+
+### REF-1.4 / 1.5 / 1.6 来源标记与摄入闭环
+
+| 项 | 动作 | 验收 |
+|---|---|---|
+| REF-1.4 | 技能来源标记 `origin` + `locked`，拷贝进 Agent 工作区时**文本打戳** | 单测：带标技能被下游改写时能被识别 |
+| REF-1.6 | **安装入口**：打包 zip → 过闸门 → 可解析且 `requiredTools` 一致 | 端到端：导出再导入可解析 |
+| REF-1.5 | **摄入安全闸门**（见下表数值） | 每类攻击各一个**必失败**用例 |
+
+**闸门阈值（含 v1 订正）**：
+
+```text
+文件数 ≤ 2000              解压总量 ≤ 64MB              HTTP 下载 ≤ 32MB
+压缩比 > 100 拒 —— 但【仅对 > 1MiB 的文件判定】（小文件高压缩比属正常，照抄会误伤）
+路径含 ".." / 绝对路径 / 反斜杠 / 盘符前缀 拒
+symlink 拒（目录与文件）        非普通文件拒        加密 zip 拒（加密位）
+清单必须含根 SKILL.md（且 UTF-8 可解码）
+```
+
+> ⚠️ **v1 订正（两点）**：
+> ① 压缩比阈值**不可无条件套用**（上游对小文件豁免）。
+> ② **顺序应调整为 REF-1.6 → REF-1.5**：现在没有任何摄入入口，闸门**没有落点宿主**；先有安装入口，再挂闸门。
+>
+> ⚠️ **术语红线**：`AdminAgentController.getMySkillZipByAgentId`（`:378`）是**外部 Agent 角色接入手册 ZIP**（交付物内名 `SKILL.md`），与 `skills/plugins/*.md` 能力包**是两件事**——《文档体系分类与治理规则》§3.7 **禁止混用 SKILL 一词**。REF-1.6 的导出/安装必须使用**不同 API 路径与不同术语**（建议：能力包 = Capability Package / `skills`，接入手册 = Onboarding Guide）。
+
+**REF-1 验证集**
+
+```text
+Required   ：verify-skill-packages.ps1（重写后）、verify-agent-skill-capability.ps1、新增覆盖用例（坏文件/闸门各一）
+Regression ：verify-tool-matrix.ps1、verify-a2-skill-derive.ps1、verify-a3b-agent-edit-skills.ps1、verify-planner-decompose.ps1
+Diagnosis  ：.tmp/diag-skill-scan.*（仅诊断，不得作为正式验证）
+门禁       ：bash scripts/ci/ci-gate.sh
+```
 
 ---
 
-# 3. 第 2 步：Fork/Return 回退 + 备份/恢复（REF-2.x）
+# 4. REF-2 备份 / 恢复
 
-> 调研依据：`research/AgentTeams_Octop_源码复核与helloai借鉴对照.md` §1（F1~F5）+ Octop `backup/`。
-> helloai 现状：`AgentEventForkService` 快照复制完成、驱动执行后置；REWORK 闭环已完整；**备份完全空白**。
+> 调研依据：`research/AgentTeams_Octop_源码复核与helloai借鉴对照.md` §1 + Octop `infra/backup/`。
+> helloai 现状（2026-10-09 源码复核）：REWORK 闭环完整；**备份完全空白**。
+> **MinIO 是生产主存储**：`storage.type=minio`、bucket `helloai-artifacts`；`docker-compose.yml:101-127` 定义容器（29000/29001）；`helloai-core` 依赖 minio SDK（8.5.12）；`system/storage/` 有完整 `ArtifactStorage` 抽象（Minio/Local/Composite + 对账巡检）→ 备份方案的「MinIO 对象清单」可直接落地，无需新增基础设施。
+
+> **v3 范围收缩（用户裁定 2026-10-09，`D-2026-10-09-5`）：Fork 相关条目全部取消** —— 原 `REF-2.1`（触发入口 / 驱动新 Run 执行 / seq 并发加固）与 `REF-2.2`（快照可观测 / 前端三处登记）**不再执行**。理由：①「驱动执行」自 2026-10-04 拍板起即为后置项；② 实际用法已被 **Return**（闭环完整）与 **Replay 工作台**覆盖；③ 驱动执行须改 ADR-001 的 Run 标识模型 + execution command 载荷（协作规约 §30/§31）。
+> **处置**：`AgentEventForkService`（108 行，零生产调用方）**保留**为未接线的内部能力，不删不接线；回流登记见《差距表》§7.1.2 `R1`/`R2`。
+> **连带收益**：去掉 Fork 后，本专项**不再改动任何 MQ 载荷契约**，也不再触及 `frozen` 列、轮次编号归属与 Replay 的 run 归属裁决。
+> **仍成立的判据**（不随 Fork 取消而失效）：`sub_task_dispatch_fallback` 后端已落 timeline 而前端三处登记 0 命中——「后端落库 ≠ 用户可见」，该反例继续作为 `REF-5.1` 与 `REF-6.8`（key parity 守卫）的依据。
+
+### REF-2.3 / 2.4 备份 / 恢复
 
 | 项 | 动作 | 验收 |
 |---|---|---|
-| REF-2.1 | **Fork 驱动执行接线**：`AgentEventForkService` + `sub_task`/execution command 带 fork run_id → fork 后的 Run 能真的跑起来 | fork 后新 Run 可执行；原 Run 不被扰动 |
-| REF-2.2 | Fork 快照可观测：`remark = forked from <originRunId>` 已带；补 timeline 事件 | 前端可见 fork 来源 |
-| REF-2.3 | 备份/恢复：`pg_dump -Fc` + MinIO 对象清单 + manifest 前置 peek + Redisson 单飞锁 + 仅淘汰自动备份 | 备份可恢复；运行中备份不锁库；手动备份永不被自动清理误删 |
-| REF-2.4 | 停机恢复流程文档化（诚实边界：运行中备份不保证多文件同一瞬间） | 文档成文 |
+| REF-2.3 | `pg_dump -Fc` 全库 + **MinIO 对象清单（复用 `ArtifactStorage.listObjects` 递归枚举）** + manifest 前置 peek + **Redisson 单飞锁** + 仅淘汰自动备份 | 备份可恢复；运行中备份不锁库；手动备份永不被自动清理误删 |
+| REF-2.3b | **恢复侧安全闸门**：跨引擎拒恢复 / schema 版本高过运行时拒恢复 / 在线恢复拒绝（均给出可读原因） | 三类非法恢复各有一个必拒绝用例 |
+| REF-2.4 | 停机恢复流程文档化（诚实边界：运行中备份**不保证**多文件同一瞬间） | 文档成文并随能力交付 |
 
-**Return 部分**：REWORK→驳回→改派→重开工闭环已完整，**不新做**；仅建议核对改派时 `task_timeline` 是否保留（review 驳回路径已有 `REVIEW_REJECTED` 落 timeline）。
+> ⚠️ **v1 漏项（三条硬约束）**：
+> ① **恢复侧闸门不可省**：这是备份功能里风险最高的一段（上游 `system_archive.py` 中约 650 行）。无闸门的「可恢复」= 可把生产库恢复成不一致状态。
+> ② **`listObjects` 为空必须显式失败**：`ArtifactStorage.listObjects` 是 **fail-safe 默认返回 `List.of()`**（`:145-147`）；「枚举为空」既可能是**真空桶**，也可能是**实现不支持**。静默通过 ⇒ 产出「完整备份」但没有对象，**故障直到恢复时才暴露**。
+> ③ **单飞锁用 Redisson，不用上游形态**：上游是**进程内 `asyncio.Lock`**（其项目默认单进程）。helloai 已有 Redisson 4.0.0 `RLock`（`SubTaskReviewServiceImpl:233-249` 范式）与 ShedLock 6.6.0 `@SchedulerLock`，直接用前者。
+> **可复用资产**：`deploy/middleware/scripts/migrate.sh:67-81` 已有 `pg_dump -Fc` 与 `pg_restore --no-owner --no-privileges -j 4` 的现成写法。
+
+**Return 部分**：REWORK→驳回→改派→重开工闭环已完整，**不新做**；仅建议加一条断言：改派时 `task_timeline` 保留（review 驳回路径已有 `REVIEW_REJECTED` 落 timeline）。
+
+**REF-2 验证集**
+
+```text
+Required   ：新增 verify-backup-restore 演练脚本（备份 → 恢复 → 对账，含三类非法恢复必拒绝用例）
+Regression ：verify-c3-reconcile.ps1、verify-subtask-redispatch-auto-execution.ps1、verify-minio-artifact.ps1、verify-c3-rollback.ps1
+门禁       ：bash scripts/ci/ci-gate.sh
+```
 
 ---
 
-# 4. 第 3 步：沙箱（REF-3.x，B2 能力层）
+# 5. REF-3 沙箱（B2 能力层）——**整组降级为「条件触发」**
 
-> 调研依据：`research/helloai四能力完善优先级与借鉴路线.md` 第 3 步（S1~S5）+ Octop `backend/probe.py` + AgentTeams `sandbox/plugin.go`。
-> helloai 现状：`ExecutionPolicy` 五边界 record 已设计、诚实标注「无真实沙箱」；`SandboxProvider` 唯一实现只做环境路由（53 行）；`Sandbox_Provider.md` `Status: Planned`。
+> 调研依据：`research/helloai四能力完善优先级与借鉴路线.md` 第 3 组 + Octop `src/octop/infra/backend/probe.py` + AgentTeams `internal/backend/sandbox/plugin.go`。
+> helloai 现状：`ExecutionPolicy` 五边界 record 已设计、诚实标注「无真实沙箱」；`EnvironmentSandboxProvider` 唯一实现只做环境路由（53 行）；`Sandbox_Provider.md` `Status: Planned`。
+
+> ## ⚠️ v4 重大调整（用户裁定 2026-10-09，`D-2026-10-09-6③`）：本组**不排期**，改为「条件触发」
+>
+> **结论：REF-3.1 ~ REF-3.5 全部暂缓；`ExecutionPolicy` / `SandboxProvider` 契约保持现状，不再扩展。** 现状不是「隔离能力弱」，而是**没有被隔离的执行对象**。
+>
+> **核实依据（2026-10-09）**——逐主体看「沙箱拦谁」：
+>
+> | 主体 | 在哪跑 | 平台能否/该否隔离 |
+> |---|---|---|
+> | 外部 agent（Qoder / Claude Code / Codex） | **它自己的终端** | 不能也不该——这正是平台定位（派单方 ≠ 执行方） |
+> | 内部 LLM agent（`API_KEY_LLM`，平台跑 AgentLoop） | 平台进程内 | 工具面 = 平台 API，**无可隔离面**（见下） |
+>
+> - **内部 agent 的工具面无可隔离面**：`McpMcpServer` 的 13 个 `@Tool` 全是订单生命周期操作（`pullTasks` / `claimSubTask` / `heartbeat` / `uploadArtifact` / `submitResult` / `getDepsSummary` …），**`File` / `Path` / `ProcessBuilder` 在该文件 0 命中**；唯一碰存储的 `uploadArtifact` 走 `ArtifactStorage` 抽象，已有路径穿越守卫（`LocalArtifactStorage:51-53`）。
+> - **平台不执行任何外部内容**：`ProcessBuilder` / `Runtime.getRuntime` / `ScriptEngine` / 表达式求值器（Groovy / SpEL / Aviator / QLExpress）在 `src/main` **全库 0 命中**；`onboarding/executor/scripts/*` 是打包给外部 agent 的交付物。
+> - 故「五边界」中对 helloai **当前唯一有真实意义的是网络边界**——而它的正确实现是 **`REF-5.4` 的出站 SSRF 守卫**（平台自己发起的外联），**不是容器网络隔离**。
+>
+> **三个触发条件（任一成立 ⇒ 本组重新进入排期，届时启动专项）**：
+>
+> ```text
+> ① 平台增加「碰宿主」的工具（自持 shell / 文件写）
+> ② 技能包要被执行（Octop 那种「技能带脚本、平台跑脚本」的形态）
+> ③ 平台自持浏览器（README 待办里的 WEB_BROWSER 真实接入链路）
+> ```
+>
+> **连带修正**：原「`REF-1.5` 技能脚本执行依赖本组」这条硬约束**已在当前形态下自动满足**——平台本来就不执行脚本，故技能摄入只做「安装 / 解析 / 校验」的限制无需额外机制即可成立；**若将来要开放脚本执行，那本身就是触发条件 ②**。
+
+## 预案（保留调研结论，触发后再执行）
+
+> 以下是触发条件成立时的执行预案，**当前不作为待办**。`REF-3.1` / `REF-3.2`（声明式 spec）排在专项之前，其唯一目的是给专项提供确定的 spec 形状。
 
 | 项 | 动作 | 验收 |
 |---|---|---|
-| REF-3.1 | `ExecutionPolicy` 补 `DockerPolicy`/`BubblewrapPolicy` 静态工厂（只声明事实）；`EnvironmentSandboxProvider` 增加 docker 分支（先解析不执行） | 单测：`SandboxContext(docker 配置)` → 返回带非 NONE 五边界的 `Sandbox` |
-| REF-3.2 | 定义 `SandboxSpec`（声明式）：type + 五边界字段 + scope；来源可为 Agent 配置或平台默认 | 同一份 spec 能渲染出容器创建参数；配置可被单测断言 |
-| REF-3.3 | 实现 `DockerSandboxProvider`：起容器 + 白名单 env（≤4 变量）+ `allow_network=false` 默认 + 资源上限 | 集成测试（Testcontainers）：容器内 ls/read/write/execute 可用；宿主 env 不出现在容器内 |
-| REF-3.4 | **照抄 probe**：写→读→删真实往返 + 失败路径也 `destroy()` | 探针结果落 timeline（可观测登记） |
-| REF-3.5 | `scope`（agent/user/fixed）与容器生命周期：不自动销毁，显式回收 | 单测：「同 Agent 复用同一容器」「删除 Agent 不删容器」 |
+| REF-3.1（预案） | `ExecutionPolicy` 补 `DockerPolicy` / `BubblewrapPolicy` 静态工厂（只声明事实）；`EnvironmentSandboxProvider` 增加解析分支（**先解析不执行**） | 单测：`SandboxContext(docker 配置)` → 返回带非 NONE 五边界的 `Sandbox` |
+| REF-3.2（预案） | 定义 `SandboxSpec`（声明式）：type + 五边界字段 + scope；**必须是纯声明，不得内嵌 Docker API 调用参数**（否则换成独立服务要返工） | 同一份 spec 能渲染出容器创建参数；配置可被单测断言 |
+| REF-3.3（预案） | **形态已裁定 = 独立沙箱服务**（低权限面，`D-2026-10-09-4③`）；即**不走**「把 `docker.sock` 挂进 app 容器」路线。专项须产出 ADR + 部署拓扑变更清单（compose / `.env` / 基线技术栈表） | 生产形态可验证（**Testcontainers 只证明「本机能起容器」，不证明部署形态可行**） |
+| REF-3.4（预案） | **照抄 probe**：写→读→删真实往返 + 失败路径也 `destroy()` | 探针结果落 timeline（可观测登记） |
+| REF-3.5（预案） | `scope`（agent/user/fixed）与容器生命周期：不自动销毁，显式回收 | 单测：「同 Agent 复用同一容器」「删除 Agent 不删容器」 |
 
-**硬约束**：REF-1.5 技能脚本执行依赖 REF-3.3 完成；自持浏览器（若做）也依赖沙箱。
+> **触发后落地时，三条别照抄上游**：
+> ① **spec 字段集不能照抄**：AgentTeams 的 claim spec 只有 8 字段且**完全没有网络配置项**——五边界里的**网络边界没有可抄的源**，必须自己设计（建议默认 `allow_network=false`）。
+> ② **`Capabilities` 语义先定死**：上游注释说「零值回退 `MaxCapabilities`」，实现却是布尔 AND（零值 = **全部关闭**），**注释与实现相反**。若采用「min(声明, 配置)」语义，先定语义并写单测钉住。
+> ③ **诚实边界**：《协作规约》§22 + 《目标架构》§7 —— **不得在无真实隔离时宣称「安全沙箱已完成」**。
+
+**REF-3 验证集（触发后适用）**
+
+```text
+Required   ：单测（spec 渲染 / 五边界非 NONE / scope 复用）+ 探针用例（含失败路径回收）
+Regression ：verify-agent-execution-preview.ps1、verify-c3-events.ps1（ENVIRONMENT_RESOLVED 语义不变）
+门禁       ：bash scripts/ci/ci-gate.sh
+```
 
 ---
 
-# 5. 第 4 步：RAG 知识库（REF-4.x，可后置）
+# 6. REF-4 RAG 知识库（可后置）
 
-> 调研依据：`research/helloai四能力完善优先级与借鉴路线.md` 第 4 步（R1~R3）+ Octop `knowledge/`。
-> helloai 现状：**完全空白**（pgvector/embedding/知识库 零命中）。
+> 调研依据：`research/helloai四能力完善优先级与借鉴路线.md` 第 4 组 + Octop `src/octop/infra/knowledge/`。
+> helloai 现状：**完全空白**（pgvector / embedding / 知识库零命中）。
 
 | 项 | 动作 | 验收 |
 |---|---|---|
-| REF-4.1 | 先定「什么不许进上下文」：无 KB 即摘工具（REF-1.3 语义位消费）+ 注入预算（`char_budget` 契约 + 单测断言） | 无 KB 时 `search_knowledge` 不在工具列表 |
-| REF-4.2 | pgvector 存储与检索（**不抄 Octop SQLite 侧库**，PG 单后端优势） | 检索命中正确；预算截断生效 |
+| REF-4.0a | **基础设施**：PG 镜像换 `pgvector` 版（现 `postgres:16.4-alpine` 无扩展）+ `CREATE EXTENSION vector` | 迁移可执行；两份 compose 与 deploy 文档同步 |
+| REF-4.0b | **架构决策**：嵌入模型供应商 / 维度 / 密钥管理（`credential_vault`）落 `design/adr/ADR-00x` | ADR 成文 |
+| REF-4.1 | 先定「什么不许进上下文」：无 KB 即摘工具（消费 REF-1.3 语义位）+ 注入预算（`char_budget` 契约 + 单测断言） | 无 KB 时 `search_knowledge` 不在工具列表 |
+| REF-4.2 | pgvector 存储与检索（**不抄上游 SQLite 侧库**，PG 单后端优势） | 检索命中正确；预算截断生效 |
 | REF-4.3 | 引用溯源 marker：检索结果尾部附 marker，前端渲染卡片、喂模型前剥掉 | 报告/核验意见可点开引用来源 |
 
+> **接线口径（`CODE_STYLE §35.1`）**：`search_knowledge` 属**程序化能力**，必须经 `ToolCallbackContributor` 端口注册，并登记技能包（至少一个 `AgentTask.skills` 挂点）；**禁止**给 LLM 直插域内 Service。
+
+**REF-4 验证集**
+
+```text
+Required   ：检索单测 + 预算截断断言 + 无 KB 摘除断言
+Regression ：verify-agent-skill-capability.ps1（技能包登记）、verify-websearch-e2e.sh（工具面不受扰）
+门禁       ：bash scripts/ci/ci-gate.sh
+```
+
 ---
 
-# 6. 四项之外 A 档（REF-5.x，独立交付，可插队）
+# 7. REF-5 四项之外 A 档（独立交付，可插队）
 
 > 调研依据：`research/helloai借鉴清单_四项之外_完整版.md` A 档（A1~A6）。
 
 | 项 | 动作 | 验收 | 备注 |
 |---|---|---|---|
-| REF-5.1 | **失败回叫闭环**：`ResilientDispatcher.doAssignNextFallback` 失败必落 timeline + 可读原因 | 派工失败用户可见原因 | 一行级，可先做 |
-| REF-5.2 | **载荷旁路**：`ToolResult` 双视图（modelView 摘要+ref / uiPayload 全量），全量落 MinIO 按内容哈希去重 | 第二个附件全文不再丢 | 唯一真丢数据处；建议单独立项 |
-| REF-5.3 | **首次运行锁定**：无用户时锁死除 setup 外全部端点 | 初始化中实例不对外裸奔 | 廉价 |
+| REF-5.1 | **失败回叫闭环**：`alternative == null` 分支（`ResilientDispatcher:256-261`）补 `sub_task_dispatch_no_alternative` timeline + 可读原因 | 无替代 Agent 时用户可见原因（不再是裸 500） | 小改动，可先做 |
+| REF-5.2a | **常量单源化**：`DEP_CONTENT_MAX_CHARS` 现**两份 64000**（`McpToolServiceImpl:105`、`AgentRuntimeContextAssembler:99`）→ 收敛单源；顺带修 `McpToolServiceImpl:98` 指向**已删除类** `SubTaskExecutionService` 的陈旧注释 | 单源、无陈旧引用 | 零风险、先做 |
+| REF-5.2b | **载荷旁路（双视图）**：`ToolResult` 的 `modelView`（摘要 + ref）/ `uiPayload`（全量） | 超长附件全量可回取 | **独立评估项**，见下 |
+| REF-5.3 | **首次运行锁定**：锁死除 setup 外全部端点 | 初始化中实例不对外裸奔 | 触发条件见下订正 |
 | REF-5.4 | **SSRF 出站校验**（含 DNS-rebinding pinning） | 外联 URL 必过校验 | 落点 `WebPageFetchServiceImpl` |
-| REF-5.5 | **目录守卫 + 结构化拒绝码** | 拒绝原因可读 | 开放工作目录前做 |
-| REF-5.6 | **备份/恢复**（= REF-2.3，此处仅索引） | — | 与第 2 步合并 |
+| REF-5.5 | **目录守卫 + 结构化拒绝码** | 拒绝原因可读 | **未来前置**（开放工作目录之前置，当前无该能力） |
+| REF-5.6 | **备份/恢复**（= REF-2.3，此处仅索引） | — | 与 REF-2 合并 |
+
+> **v2 订正（逐条）**：
+>
+> - **REF-5.1**：v1 勘误成立（成功降级路径已于 2026-10-05 落 `sub_task_dispatch_fallback`）。**剩余缺口收敛为「无替代分支」**。补两点：① 该分支抛的是 `BizException`（默认 500）→ 用户看到的是 500 而非可读原因；② **连带前端三处登记**（`sub_task_dispatch_fallback` 至今前端 0 命中，会裸显示英文）。
+> - **REF-5.2**：v1 **表格验收列与勘误自相矛盾**（仍写「第二个附件全文不再丢」/「唯一真丢数据处」）——现对齐为 5.2a + 5.2b 两项。**另一处勘误**：上游 Octop 的 offload **没有「内容哈希去重」**（`data_ref` 是固定哨兵字符串 `"artifact"`，非内容哈希）——「按内容哈希去重」是本项目自研增量，其成本收益必须单独论证，不得以「借鉴」名义默认带上。当前真丢数据点 = **超 64K 极端超长附件被兜底截断**。
+> - **REF-5.3**：**触发条件错了**。`system.setup_finished` 在 `V1__init_all.sql:875` 被**预置为 `'1'`**——新实例一开始就是「已完成初始化」，用它做判据等于**永不生效**。上游 Octop 的判据是**用户数 == 0**；helloai 的 `SetupController.getStatus` 已返回 `hasUsers` / `userCount`，且前端 `Login.vue` 已在用 `!setupStatus.hasUsers`。**改用 `userCount == 0` ⇒ 503 `{setup_required:true}`**，与前端既有语义天然一致。现无任何拦截器（`WebMvcConfig:51` 只放行 `/api/setup/**`）。
+> - **REF-5.4**：现状确认**无任何出站校验**，且 `WebPageFetchServiceImpl:80` 用 `HttpClient.Redirect.NORMAL` **跟随跳转且不校验跳转目标** ⇒ 重定向式 SSRF 与 DNS rebinding 均真实存在。**不能 1:1 移植上游**：上游的 pinning 依赖 `httpx` 私有属性（`self._pool._network_backend`），而 helloai 用的是 **JDK 内置 `java.net.http.HttpClient`——没有公开的 DNS pin 钩子**。
+>
+> ✅ **已裁定（用户，2026-10-09，`D-2026-10-09-6②`）**：**采用 OkHttp + 自定义 `Dns`** 做 pinning；**协议白名单默认只放 https**，本地开发放行 http 走**显式开关（默认关）**。
+> - 「IP 直连 + 手写 Host 头」**已排除**：SNI 会变成 IP ⇒ https 证书主机名校验失败，绕过等于关校验，安全性反而更差。
+> - OkHttp **已在类路径**（`pom.xml:184` 注释：MinIO SDK 的传递依赖），但落地时**必须在 `pom.xml` 显式声明**，不裸用传递依赖。
+> - 顺带治 `WebPageFetchServiceImpl:80` 的 `Redirect.NORMAL`：换成 OkHttp 后以拦截器对**每次跳转目标**重跑守卫。
 
 ---
 
-# 7. B 档判据登记（REF-6.x，零成本，入 MEMORY.md「可复用判据」）
+# 8. REF-7 外部 Agent 工作详情快照（**2026-10-09 新增**）
 
-> 调研依据：`research/helloai借鉴清单_四项之外_完整版.md` B 档（B1~B13）。
+> **来源**：用户对平台定位的澄清（2026-10-09）——「后期如果需要了解具体的工作详情，让外部 AI agent 在**审批通过后**，再次提交一份**全任务工作详情的快照**，平台进行分析后插入执行时间线等关键审计信息中」。
+> **性质**：**能力外延，正式立项**（`D-2026-10-09-6⑤`），差距锚点 **`G-020`**；可后置，触发条件 = 「对子任务内部执行深度的审计需求」成立。
+> **与平台定位的关系**：这是「外卖员事后补交行程记录」——平台**不改变**「不干涉 agent 怎么做」的原则，也不要求 agent 实时上报；快照是**事后、经审批、可选**的补充。
+
+## 8.1 要解决的空白
+
+现状平台能审计到的是**订单层面**：认领 / 开工 / 心跳 / 交单 / 产物 / 阻塞 / 依赖读取（`agent_event` + `task_timeline` + 产物对账）。**子任务内部的执行过程是黑盒**——这是刻意的解耦，但带来了取证盲区：返工争议、质量复盘、责任界定都只能看结果，看不到过程。
+
+## 8.2 三条设计约束（动手前必须先定）
+
+| # | 约束 | 说明与倾向 |
+|---|---|---|
+| C1 | **与 `REF-6.2`「审计事件闭合 schema」的张力** | `REF-6.2` 的判据是「审计事件**不允许任何自由文本字段**」（一旦有，就无法证明凭据没从那里漏出去）。而「工作详情快照」**天然是自由文本 / 大对象** ⇒ **必须双面**：**原文落 MinIO**（已就绪），**时间线只放结构化索引 + `ref`**。这与 `REF-5.2b` 的「双视图」是**同一个模式** |
+| C2 | **审批方是谁** | 待定：平台侧新增审批流？还是挂到既有 Reviewer 双轨？还是复用人工介入（HUMAN_REVIEW）通道？**倾向复用人工介入通道**——不新建第二套审批（治理红线：不建第二套状态机） |
+| C3 | **落时间线的粒度** | 待定：一条汇总事件（最快）/ 按阶段拆多条 / 只登记上链标记不给事件。**倾向先做「一条汇总事件 + 快照 ref」**，逐阶段拆解后置 |
+
+## 8.3 建议形态（待 C1~C3 拍板后细化）
+
+```text
+外部 Agent（事后、可选）
+    └─► 提交工作详情快照（新 MCP 工具，走既有 13 工具同款鉴权 / 心跳前置守卫）
+            └─► 快照原文落 MinIO（内容哈希 key，去重）
+                    └─► 平台解析 → 结构化摘要
+                            └─► 时间线插入一条审计事件（闭合 schema + snapshotRef）
+```
+
+**注意**：新增工具必须走既有 `McpMcpServer` + `assertAgentActive` / `assertToolEnabled` / `refreshDutyLease` 守卫（不新建平行通道），且**默认关闭**（`REF-6.13`：新能力默认关闭、通过注入启用），避免污染既有工具面与外部 agent 契约。
+
+## 8.4 验证集（定性后细化）
+
+```text
+Required   ：快照提交 → MinIO 落对象 → 时间线出现审计事件且 payload 闭合（无自由文本）
+Regression ：verify-mcp-auth.ps1（工具面鉴权不变）、verify-c3-events.ps1（事件成对性）
+门禁       ：bash scripts/ci/ci-gate.sh
+```
+
+---
+
+# 9. REF-6 判据登记（跨组判据，随对应组落地）
+
+> 本节不是能力组，而是**跨组判据登记表**（调研依据：`research/helloai借鉴清单_四项之外_完整版.md` B 档 B1~B13），故编号排在 `REF-7` 之后；**不单独排期**。
+
+> ⚠️ **v2 订正（载体）**：v1 写「入 `MEMORY.md` 可复用判据」——**该载体当前不存在**：全仓 `find -iname MEMORY.md` **零命中**（`2026-10-03` / `2026-10-04` 的历史 Log 曾以它为回填目标，`.workbuddy/memory/` 现仅存按日文件）。且 `MEMORY.md` 即便存在也**不在 `doc/` 治理体系内**（治理规则 §3.1 只覆盖 `doc/`），`plan/` 引用体系外载体 = 引用一个无人保证存在的对象。**改按载体分流**：
+>
+> ```text
+> 能机器校验的  ⇒ 落 scripts/ 的 verify-*.ps1/.sh（CODE_STYLE §49：优先脚本化，别继续加 Markdown）
+> 属口径/决策的 ⇒ 落《差距表》§0「当前生效的取舍决策」
+> 属设计边界的 ⇒ 落 design/*.md 的 Scope 段
+> 不得新造第 8 份根文档
+> ```
 
 | 项 | 判据 | 落地 |
 |---|---|---|
-| REF-6.1 | 幂等键必须 status-scoped（「先报 BLOCKED 后报 SUCCESS」不被静默吞） | 核对 `agentOutboxService` 去重键 |
-| REF-6.2 | 审计闭合 schema（无自由文本字段）+ append-only keyset 分页 | 核对 timeline 分页是否 offset |
+| REF-6.1 | 幂等键必须 **status-scoped**（「先报 BLOCKED 后报 SUCCESS」不被静默吞） | 核对 `agentOutboxService` 去重键 |
+| REF-6.2 | 审计闭合 schema（无自由文本字段）；append-only 必须 **keyset 分页** | 见下订正 |
 | REF-6.3 | 能力摘除式治理（无 KB 即摘工具 / 不可关闭清单 / 条件可用） | 随 REF-1.3 |
-| REF-6.4 | 水位四判据（一 marker 不得两语义 / 失败不推进 / 检测范围=推送范围） | MinIO 附件同步 |
+| REF-6.4 | 水位四判据（一 marker 不得两语义 / 失败不推进 / 检测范围=推送范围 / 「扫描 0 B」≠「无 I/O」） | MinIO 附件同步 |
 | REF-6.5 | 身份调用上下文（`_sessionId` 进程级 = 多实例前置） | 登记，多实例前解决 |
 | REF-6.6 | 探活两类区分（对象在连接死 vs 对象在别 JVM） | 登记 |
 | REF-6.7 | 错误语义 domain 层，HTTP 层只映射 | 生成式校验候选 |
-| REF-6.8 | key parity 守卫（事件码服务端单一来源 + 前后端 key 匹配测试） | 治 eventMeta 三处漂移 |
+| REF-6.8 | key parity 守卫（事件码服务端单一来源 + 前后端 key 匹配测试） | 治 `eventMeta` 三处漂移（已被 `sub_task_dispatch_fallback` 实例证伪） |
 | REF-6.9 | 探针纪律（「配好了」必须能被机器验证 + 保证回收） | 随 REF-3.4 |
 | REF-6.10 | 状态面最小化（有没有「事后查」的查询方） | 登记 |
-| REF-6.11 | denylist 默认全开 + 不可关闭清单 | 随 REF-1.3 |
+| REF-6.11 | denylist 默认全开 + 不可关闭清单 | 随 REF-1.3b |
 | REF-6.12 | sentinel 区分「未传」/「传 null」 | PATCH 语义 |
-| REF-6.13 | 新能力默认关闭（通过注入启用） | Sandbox/Skill 上线时 |
+| REF-6.13 | 新能力默认关闭（通过注入启用） | Sandbox / Skill 上线时 |
+
+> **REF-6.2 订正**：`task_timeline` 的读侧**不是 offset 分页——是完全没有分页**（`TaskTimelineServiceImpl:53-61` 全量 `list()`，REST 端点直返全量 List）。所以动作不是「把 offset 换成 keyset」，而是「**补上 keyset 分页**」。另：上游的闭合 schema 测试是**单样本式**（只断言一个样本对象的 key 集合，不具声明式约束力）——移植时应做得更严（如 `FAIL_ON_UNKNOWN_PROPERTIES` + 显式字段白名单），别只抄形状。
 
 ---
 
-# 8. 明确不做（C 档，与治理红线一致）
+# 10. 明确不做（C 档，与治理红线一致）
 
 - Octop 单进程 / 双后端 / 进程内调度（C1~C3）——路线分歧；
-- AgentTeams CRD / Helm / leader-election / Matrix 房间（C4）——K8s 原生平台实现细节；
+- AgentTeams CRD / Helm / leader-election / kine / Matrix 房间（C4）——K8s 原生平台实现细节；
 - CDP 逐帧直播 / Python IM 网关 / 桌面移动语音交付面（C5~C7）——定位无关；
-- **外部 agent 对接**（C8）——用户裁定可借鉴内容有限（两者未实现真 A2A；helloai 的 MCP+SSE+心跳接单是当前最优解）。
+- **外部 agent 对接**（C8）——用户裁定可借鉴内容有限。**v2 补独立证据**：AgentTeams 全仓 `a2a` **零命中**、`interface.go:32-40` 为**封闭 runtime 枚举**（新增 runtime 必须改码）；helloai 的 MCP+SSE+心跳接单是当前最优解。
+- **Fork 触发入口 / 原 Run 冻结 / 驱动新 Run 执行**（C9，2026-10-09 新增）——**WONTFIX**（`D-2026-10-09-5`）。理由：①「驱动执行」自 2026-10-04 拍板起即为后置项（与 Resume 对称的「先做成、再做好」）；② 实际用法（分叉重跑 / 路径对比）已被 **Return**（REWORK→驳回→改派→重开工，闭环完整）与 **Replay 工作台**覆盖；③ 驱动执行须改 ADR-001 的 Run 标识模型 + execution command 载荷（协作规约 §30/§31），成本收益不匹配。**已建部分**：`AgentEventForkService` 快照复制（6 单测全绿、零生产调用方）**保留**为未接线的内部能力；是否删除另行裁定。回流登记：《差距表》§7.1.2 `R1`/`R2`。
 
 ---
 
-# 9. 建议执行顺序（第一批）
+# 11. 每组的统一收口（验证 + 回填）
 
-```text
-REF-5.1 失败回叫（一行级，可立即）──► REF-1.1 补 frontmatter（零风险）──► REF-1.3 语义位（拆巨类前置）
-──► REF-2.1 Fork 驱动执行 ──► REF-5.3 首次运行锁定 ──► REF-5.2 载荷旁路（单独立项评估）
-```
+任何 REF 组完成，**必须同批**做以下动作（《协作规约》§28/§32 + 《文档体系分类与治理规则》§4）：
 
-**待用户拍板**：RM9 拆 `McpToolServiceImpl` 是否采用「先 REF-1.3 语义位、再拆类」顺序（原裁定「拆法须确认」）。
+| 动作 | 落点 |
+|---|---|
+| 测试 + 门禁 | 单测 → 本文件该组「验证集」→ `bash scripts/ci/ci-gate.sh` |
+| 仅功能实现 | 《差距表》对应 `G-` 行就地更新（唯一进度事实源） |
+| 当前真实架构变化 | 《项目基线文档》对应节 |
+| 目标边界变化 | 《目标架构》对应节 + §0 状态行（**只改状态必同步改判定依据**） |
+| 实施顺序变化 | 《重构实施计划》 |
+| 重大架构决策（**即时**） | `log/2026-10.md` 的 `### 决策` 段 + 《差距表》 |
+| 重大架构决策（**定期**） | `log/HelloAI 架构变更记录.md`（按周期汇总回填，非逐条） |
+| 长期设计锚点 | `design/adr/ADR-00x` |
+| 引用完整性 | 移动/改名后同批修正活文档引用（治理规则 §7） |
+| 完成后 | 本组条目迁 `doc/archive/implemented/` 并标 `Done` |
+
+---
+
+# 12. 裁定记录（原「待拍板」段，2026-10-09 已全部裁定）
+
+> **本计划当前无待拍板项**（除 REF-7 §8.2 的 C1~C3 三条设计约束，在 REF-7 触发后、动手前再定）。
+> 原 5 条待拍板已全部裁定，记入《差距表》`D-2026-10-09-5`（Fork）与 **`D-2026-10-09-6`**（下述 5 条）。
+
+| # | 议题 | **裁定** | 依据 / 取舍（保留供追溯） |
+|---|---|---|---|
+| ③-1 | **REF-1.3 语义位落点** | **采纳建议**：放 `ToolRegistry.resolve(...)` 的上下文参数（新增 `ToolContext`，命名对齐 `SandboxContext`），**不进 `ToolDefinition` record** | 两者是不同层次事实：「工具是什么」（注册事实，单一事实源 = `@Tool` 注解）vs「本轮能不能用/怎么说」（运行时事实）；record 加 `Predicate`/`Function` 会破坏值语义与可序列化。`resolve` 仅 **2 个调用点**（`RuntimeTurnExecutor:93`、`AgentRuntimeContextAssembler:164`）且都是**每轮装配时**调用 ⇒「每轮重写 description」时序天然成立。实施时只在 Tool 侧加参、Skill 侧签名不动 |
+| ③-2 | **REF-5.4 出站客户端** | **采纳建议**：**OkHttp + 自定义 `Dns`** 做 pinning；协议白名单**默认只放 https**，本地开发放行 http 走**显式开关（默认关）** | ① **OkHttp 已在类路径**（`pom.xml:184` 注释：MinIO SDK 的传递依赖）——落地必须在 `pom.xml` **显式声明**；② 「IP 直连 + Host 头」**已排除**（SNI 变 IP ⇒ 证书主机名校验失败，绕过等于关校验）；③ JDK 内置 `HttpClient` **无公开 DNS 钩子** |
+| ③-3 | **REF-3 沙箱** | **采纳建议（修正原优先级）**：**整组降级为「条件触发」，不排期**；契约保持现状不再扩展；`G-005` 改「`Planned`（条件触发）」并登记三个触发条件 | 当前**无可隔离的执行对象**（外部 agent 在它自己终端；内部 agent 工具面全是平台 API、无 shell / 文件写；平台全库无脚本引擎 / 表达式求值）。触发条件：① 平台增加碰宿主的工具 / ② 技能包要被执行 / ③ 平台自持浏览器。**此项修正了原「第 3 优先级」排序** |
+| ③-4 | **REF-1.2 技能目录的下游一致性** | **采纳建议**：**服务端下发**（复用 REF-1.2c 的技能目录 API）；parity 守卫只留给**不适合下发的词表**（`AGENT_SKILL_OPTIONS` ↔ 后端 `KEYWORD_SKILLS`/`SYNONYMS`）与**事件码**（`REF-6.8`） | 前端常量有 **3 类语义**（`TaskFormDialog:210` 下拉拼接 / `PlanReviewDialog:489` 平台技能判定 / `skillLabelOf` 中文标签，被 `SubTaskDetail:209` 等 3 处调用）。保留常量 ⇒ 新增技能「后端生效、前端看不见」，直接抵消 REF-1.2 收益 |
+| ⑤ | **工作详情快照** | **采纳建议**：登记为 **`REF-7`**（§8），差距锚点 `G-020`；可后置，触发条件 = 子任务内部执行深度的审计需求成立 | 与 `REF-6.2`「审计闭合 schema」存在张力 ⇒ 必须双面（原文落 MinIO + 时间线放结构化索引 + `ref`），与 `REF-5.2b` 双视图同模式；审批方倾向复用人工介入通道（不建第二套审批）；新增工具须走既有 `McpMcpServer` 守卫且**默认关闭**（`REF-6.13`） |

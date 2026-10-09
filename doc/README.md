@@ -79,11 +79,11 @@
 
 | 文档 | Status | 主题 |
 |---|---|---|
-| `Octop全库借鉴分析_综合版.md` | `Analysis` | 合并沙箱/技能/WebAgent 与全库两份分析 · 含对既有结论的实测裁决（2026-10-09） |
-| `AgentTeams最新版借鉴分析_Java落点.md` | `Analysis` | AgentTeams v1.0.1→v1.2.2 演进对照 · 任务转换引擎/审计/水位等 A 档借鉴（2026-10-09） |
-| `AgentTeams_Octop_源码复核与helloai借鉴对照.md` | `Analysis` | 两项目源码独立复核 · Fork/Return/沙箱/外部Agent/RAG 四主题对照 · 与两份报告一致性裁定（2026-10-09） |
-| `helloai四能力完善优先级与借鉴路线.md` | `Analysis` | 用户裁定四项优先级（skills>Fork/Return+备份>沙箱>RAG）· ToolRegistry 语义位=拆巨类钥匙（2026-10-09） |
-| `helloai借鉴清单_四项之外_完整版.md` | `Analysis` | 四项之外 A/B/C/D 四档借鉴清单 · 判据级与明确不抄（2026-10-09） |
+| `Octop全库借鉴分析_综合版.md` | `Analysis` | 合并沙箱/技能/WebAgent 与全库两份分析 · 含对既有结论的实测裁决 · §10 按**性质**分档（不承载排期）、§10.6 为借鉴项索引；硬约束 1 订正（2026-10-09） |
+| `AgentTeams最新版借鉴分析_Java落点.md` | `Analysis` | AgentTeams v1.0.1→v1.2.2 演进对照 · `A1~A16` 借鉴项 · §七为借鉴项索引（不承载排期）、**§八事实核查表逐条标注勘察口径**（`[实测]`/`[推断]`/`[未核实]`）（2026-10-09） |
+| `AgentTeams_Octop_源码复核与helloai借鉴对照.md` | `Analysis` | 两项目源码独立复核 · Fork/Return/沙箱/外部Agent/RAG 四主题对照 · §六为借鉴项索引 + 硬约束 1 订正、硬约束 2 转为 `REF-6.5`（2026-10-09） |
+| `helloai四能力完善优先级与借鉴路线.md` | `Analysis` | 用户裁定四项优先级（skills > 备份/恢复 > 沙箱 > RAG；**同日两项调整：Fork 收缩为 WONTFIX、沙箱降级为条件触发**）· **§三排序块已移出**、§六为落点索引（`REF-x.y`），含实现判断勘误（2026-10-09） |
+| `helloai借鉴清单_四项之外_完整版.md` | `Analysis` | 四项之外 A/B/C/D 四档借鉴清单 · 判据级与明确不抄 · §汇总为落点索引 · **全部来源行已补 `[实测]` + `路径:行号`**（2026-10-09） |
 
 ## 2.3 计划与方案（`plan/`）
 
@@ -97,10 +97,10 @@
 
 | 文档 | 主题 |
 |---|---|
-| `HelloAI 重构实施计划.md` | 业务主线实施顺序（Event Stream → Dual Executor → AgentRuntime → Capability） |
+| `HelloAI 重构实施计划.md` | 业务主线实施顺序（Event Stream → Dual Executor → AgentRuntime → Capability；2026-10-09：备份/恢复提前到 Sandbox 之前，Fork WONTFIX 后 Event 消费面回到 Recovery 收尾） |
 | `HelloAI 基础架构调整实施计划.md` | RBAC 底座专项（`BASE-xxx`） |
 | `HelloAI_RM存量缺口清偿计划（2026-10-04）.md` | 代码质量路线图 RM5/6/8/9 分轮清偿（**RM9 未动，仍在办**） |
-| `HelloAI 借鉴落地实施计划.md` | 借鉴落地专项（`REF-xxx`）：四项能力（skills>Fork/Return+备份>沙箱>RAG）+ 四项之外 A 档 + B 档判据登记（2026-10-09） |
+| `HelloAI 借鉴落地实施计划.md` | 借鉴落地专项（`REF-x.y`，已登记进《差距表》§0 编号口径表）：skills > 备份/恢复 > RAG（可后置）+ 四项之外 A 档 + 判据登记 + **REF-7 工作详情快照**；v4（2026-10-09）含 11 处代码级订正、每组验证集与文档回填口径、**Fork 收缩**（`D-2026-10-09-5`）、**REF-3 沙箱降级为条件触发**与 **REF-7 新增**（`D-2026-10-09-6`） |
 
 > **2026-10-09 出列记录（`plan/` 只留在办项）**：3 份**已执行完成**的方案 / 清单迁入 `archive/implemented/` 并标 `Done` —— `HelloAI_V2回归测试方案（2026-10-04）.md`、`HelloAI_全面复测清单（2026-10-06）.md`、`deploy-checklist-arch-collect-2026-10.md`。
 

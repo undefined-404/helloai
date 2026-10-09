@@ -412,8 +412,8 @@ sudo bash scripts/ci/host-prepare.sh --swap 2G   # 4G 内存机器建议加 2G s
 
 **待办 🔜**
 
-- [ ] Sandbox 真实隔离：Docker / Remote / K8s 执行环境（Provider 契约已就绪）
-- [ ] Event 消费面补齐：Recovery 恢复 / Fork 分支消费
+- [ ] Sandbox 真实隔离：Docker / Remote / K8s 执行环境（Provider 契约已就绪；**2026-10-09 起为条件触发**——平台当前只负责拆分与派单、不执行子任务的具体工作，故暂无可隔离的执行体，触发条件见 `doc/HelloAI 目标架构.md` §7）
+- [ ] Event 消费面补齐：Recovery 恢复（Fork 分支消费已于 2026-10-09 裁定不做，见 `doc/HelloAI 实现差距表.md` §7.1.2）
 - [ ] Quality Gate 自动化门槛：Rule + Test + LLM 统一决策
 - [ ] Agent Fleet 能力化选人：Health / Load / Cost 完整选路 + 外部执行成本回传
 - [ ] Dynamic Workflow：动态分支与运行期编排（远期）
