@@ -79,7 +79,11 @@
 
 | 文档 | Status | 主题 |
 |---|---|---|
-| `Octop_借鉴分析_沙箱_技能化_WebAgent接入.md` | `Analysis` | 沙箱声明化 · 技能包治理 · Web Agent 接入路线对比 |
+| `Octop全库借鉴分析_综合版.md` | `Analysis` | 合并沙箱/技能/WebAgent 与全库两份分析 · 含对既有结论的实测裁决（2026-10-09） |
+| `AgentTeams最新版借鉴分析_Java落点.md` | `Analysis` | AgentTeams v1.0.1→v1.2.2 演进对照 · 任务转换引擎/审计/水位等 A 档借鉴（2026-10-09） |
+| `AgentTeams_Octop_源码复核与helloai借鉴对照.md` | `Analysis` | 两项目源码独立复核 · Fork/Return/沙箱/外部Agent/RAG 四主题对照 · 与两份报告一致性裁定（2026-10-09） |
+| `helloai四能力完善优先级与借鉴路线.md` | `Analysis` | 用户裁定四项优先级（skills>Fork/Return+备份>沙箱>RAG）· ToolRegistry 语义位=拆巨类钥匙（2026-10-09） |
+| `helloai借鉴清单_四项之外_完整版.md` | `Analysis` | 四项之外 A/B/C/D 四档借鉴清单 · 判据级与明确不抄（2026-10-09） |
 
 ## 2.3 计划与方案（`plan/`）
 
@@ -96,6 +100,7 @@
 | `HelloAI 重构实施计划.md` | 业务主线实施顺序（Event Stream → Dual Executor → AgentRuntime → Capability） |
 | `HelloAI 基础架构调整实施计划.md` | RBAC 底座专项（`BASE-xxx`） |
 | `HelloAI_RM存量缺口清偿计划（2026-10-04）.md` | 代码质量路线图 RM5/6/8/9 分轮清偿（**RM9 未动，仍在办**） |
+| `HelloAI 借鉴落地实施计划.md` | 借鉴落地专项（`REF-xxx`）：四项能力（skills>Fork/Return+备份>沙箱>RAG）+ 四项之外 A 档 + B 档判据登记（2026-10-09） |
 
 > **2026-10-09 出列记录（`plan/` 只留在办项）**：3 份**已执行完成**的方案 / 清单迁入 `archive/implemented/` 并标 `Done` —— `HelloAI_V2回归测试方案（2026-10-04）.md`、`HelloAI_全面复测清单（2026-10-06）.md`、`deploy-checklist-arch-collect-2026-10.md`。
 
