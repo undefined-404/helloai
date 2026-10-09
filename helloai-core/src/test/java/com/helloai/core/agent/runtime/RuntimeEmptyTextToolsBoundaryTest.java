@@ -85,11 +85,11 @@ class RuntimeEmptyTextToolsBoundaryTest {
                 .enqueue(responseWithToolCall("tc1", "echo", "{}"))
                 .enqueue(responseWithBlankText());
         when(toolExecutor.execute("echo", "{}")).thenReturn(ToolExecutionResult.success("echo", "ok"));
-        when(toolRegistry.resolve(any())).thenReturn(List.of());
+        when(toolRegistry.resolve(any(), any())).thenReturn(List.of());
         when(agentSkillSpecService.resolve(any()))
                 .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
-        // 注：enabledTools 为空 ⇒ RuntimeTurnExecutor.resolveEnabledCallbacks 提前返回，不会触达 toolCallbackProvider
-        //     （故此处不 stub，避免 Mockito unnecessary-stubbing）。
+        // 注：resolve 的生效形态为空 ⇒ RuntimeTurnExecutor.resolveVisibleCallbacks 提前返回，
+        //     不会触达 toolCallbackProvider（故此处不 stub，避免 Mockito unnecessary-stubbing）。
 
         RuntimeTurnExecutor executor = new RuntimeTurnExecutor(
                 new ChatModelToolLoop(), toolExecutor, toolRegistry, agentSkillSpecService,

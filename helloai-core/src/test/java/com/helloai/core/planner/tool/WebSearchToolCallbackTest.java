@@ -1,6 +1,8 @@
 package com.helloai.core.planner.tool;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.helloai.common.constant.AgentAccessType;
+import com.helloai.core.agent.tool.ToolContext;
 import com.helloai.core.planner.search.WebSearchResult;
 import com.helloai.core.planner.service.WebSearchService;
 import org.junit.jupiter.api.BeforeEach;
@@ -164,4 +166,43 @@ class WebSearchToolCallbackTest {
         assertThat(parsed.results().get(0).getUrl()).isEqualTo("https://n.example/1");
         assertThat(parsed.results().get(0).getSiteName()).isEqualTo("示例站");
     }
+
+    // #region REF-1.3 条件可用（首个真实消费者）
+
+    @Test
+    @DisplayName("★ REF-1.3：条件可用声明的键必须与真实注册名一致（防键名漂移导致声明静默失效）")
+    void availabilityKeyShouldMatchRegisteredToolName() {
+        String registeredName = MethodToolCallbackProvider.builder()
+                .toolObjects(tool)
+                .build()
+                .getToolCallbacks()[0]
+                .getToolDefinition()
+                .name();
+
+        assertThat(tool.toolAvailability()).containsOnlyKeys(registeredName);
+    }
+
+    @Test
+    @DisplayName("REF-1.3 条件可用：能力不具备（无凭据 / 总开关关闭）⇒ 判为不可用（模型视野摘除）")
+    void shouldDeclareUnavailableWhenSearchCapabilityMissing() {
+        when(webSearchService.isAvailable()).thenReturn(false);
+
+        assertThat(availability(ToolContext.empty())).isFalse();
+    }
+
+    @Test
+    @DisplayName("REF-1.3 条件可用：能力具备 ⇒ 判为可用；判定不依赖 ToolContext 任何字段（天然 fail-open）")
+    void shouldDeclareAvailableWhenSearchCapabilityReady() {
+        when(webSearchService.isAvailable()).thenReturn(true);
+
+        assertThat(availability(ToolContext.empty())).isTrue();
+        assertThat(availability(new ToolContext(1L, 2L, 3L, 5,
+                AgentAccessType.API_KEY_LLM, List.of("eng-web-research")))).isTrue();
+    }
+
+    private boolean availability(ToolContext context) {
+        return tool.toolAvailability().get("web_search").test(context);
+    }
+
+    // #endregion
 }

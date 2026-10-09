@@ -84,6 +84,18 @@ public class WebSearchServiceRouter implements WebSearchService {
         return delegate.verifyApiKey();
     }
 
+    /**
+     * 当前搜索能力是否具备（REF-1.3）：总开关开启 <b>且</b> 能解析出供应商实现。
+     *
+     * <p>判据与 {@link #search(String, int)} 的短路条件<b>逐条同源</b>（同一对
+     * {@code properties.isEnabled()} + {@link #resolve()}），不另立第二套口径——
+     * 故「能搜」与「报告能搜」不可能漂移。</p>
+     */
+    @Override
+    public boolean isAvailable() {
+        return properties.isEnabled() && resolve() != null;
+    }
+
     /** 解析当前应使用的供应商实现，候选为 0 或与 provider 配置不匹配时返回 null。 */
     private WebSearchService resolve() {
         List<WebSearchService> available = candidates.orderedStream().toList();

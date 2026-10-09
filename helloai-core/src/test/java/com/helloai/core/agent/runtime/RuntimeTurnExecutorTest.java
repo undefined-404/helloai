@@ -11,6 +11,7 @@ import com.helloai.core.agent.runtime.loop.LoopCheckpointListener;
 import com.helloai.core.agent.runtime.sandbox.SandboxContext;
 import com.helloai.core.agent.runtime.sandbox.SandboxProvider;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
+import com.helloai.core.agent.tool.ToolContext;
 import com.helloai.core.agent.tool.ToolDefinition;
 import com.helloai.core.agent.tool.ToolExecutor;
 import com.helloai.core.agent.tool.ToolRegistry;
@@ -21,6 +22,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 
 import java.util.List;
@@ -28,6 +30,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -72,7 +75,7 @@ class RuntimeTurnExecutorTest {
     void shouldExecuteFullTurnWithEventSkeleton() {
         when(agentSkillSpecService.resolve(any()))
                 .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of("s1"), List.of("s1"), ""));
-        when(toolRegistry.resolve(any())).thenReturn(List.of(new ToolDefinition("t1", "desc")));
+        when(toolRegistry.resolve(any(), any())).thenReturn(List.of(new ToolDefinition("t1", "desc")));
         when(toolCallbackProvider.getToolCallbacks()).thenReturn(new org.springframework.ai.tool.ToolCallback[0]);
         when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("final answer", null, 1, 0));
 
@@ -120,7 +123,7 @@ class RuntimeTurnExecutorTest {
     void shouldMapLoopFailureToFailedResult() {
         when(agentSkillSpecService.resolve(any()))
                 .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
-        when(toolRegistry.resolve(any())).thenReturn(List.of());
+        when(toolRegistry.resolve(any(), any())).thenReturn(List.of());
         when(agentLoop.run(any())).thenReturn(AgentLoopResult.error("boom", 3, 2));
 
         AgentExecutionResult result = new RuntimeTurnExecutor(
@@ -136,7 +139,7 @@ class RuntimeTurnExecutorTest {
     void shouldFailWhenSuccessButEmptyOutputWithoutTools() {
         when(agentSkillSpecService.resolve(any()))
                 .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
-        when(toolRegistry.resolve(any())).thenReturn(List.of());
+        when(toolRegistry.resolve(any(), any())).thenReturn(List.of());
         // 复刻现场：finishReason=STOP、iterations=1、toolCalls=0、tokens 很大但正文为空
         when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("", null, 1, 0, 83958));
 
@@ -155,7 +158,7 @@ class RuntimeTurnExecutorTest {
     void shouldFailWhenSuccessButWhitespaceOnlyOutput() {
         when(agentSkillSpecService.resolve(any()))
                 .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
-        when(toolRegistry.resolve(any())).thenReturn(List.of());
+        when(toolRegistry.resolve(any(), any())).thenReturn(List.of());
         when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("  \n\t  ", "思考过程", 1, 0, null));
 
         AgentExecutionResult result = new RuntimeTurnExecutor(
@@ -172,7 +175,7 @@ class RuntimeTurnExecutorTest {
     void shouldKeepSuccessWhenEmptyTextButToolsInvoked() {
         when(agentSkillSpecService.resolve(any()))
                 .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
-        when(toolRegistry.resolve(any())).thenReturn(List.of());
+        when(toolRegistry.resolve(any(), any())).thenReturn(List.of());
         when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("", null, 3, 2, 100));
 
         AgentExecutionResult result = new RuntimeTurnExecutor(
@@ -189,7 +192,7 @@ class RuntimeTurnExecutorTest {
     void shouldMapTokenUsageOnSuccess() {
         when(agentSkillSpecService.resolve(any()))
                 .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
-        when(toolRegistry.resolve(any())).thenReturn(List.of());
+        when(toolRegistry.resolve(any(), any())).thenReturn(List.of());
         when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("ok", null, 2, 1, 42));
 
         AgentExecutionResult result = new RuntimeTurnExecutor(
@@ -210,7 +213,7 @@ class RuntimeTurnExecutorTest {
     void shouldMapTokenUsageOnFailure() {
         when(agentSkillSpecService.resolve(any()))
                 .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
-        when(toolRegistry.resolve(any())).thenReturn(List.of());
+        when(toolRegistry.resolve(any(), any())).thenReturn(List.of());
         when(agentLoop.run(any())).thenReturn(AgentLoopResult.maxIterations("cut", 5, 4, 30));
 
         AgentExecutionResult result = new RuntimeTurnExecutor(
@@ -226,7 +229,7 @@ class RuntimeTurnExecutorTest {
     void shouldPassLoopCheckpointListenerIntoAgentLoopInput() {
         when(agentSkillSpecService.resolve(any()))
                 .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
-        when(toolRegistry.resolve(any())).thenReturn(List.of());
+        when(toolRegistry.resolve(any(), any())).thenReturn(List.of());
         when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("ok", null, 1, 0));
         LoopCheckpointListener listener = checkpoint -> { };
         AgentContext ctx = AgentContext.builder()
@@ -250,7 +253,7 @@ class RuntimeTurnExecutorTest {
     void shouldPassNullLoopCheckpointListenerWhenAbsent() {
         when(agentSkillSpecService.resolve(any()))
                 .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
-        when(toolRegistry.resolve(any())).thenReturn(List.of());
+        when(toolRegistry.resolve(any(), any())).thenReturn(List.of());
         when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("ok", null, 1, 0));
 
         new RuntimeTurnExecutor(
@@ -267,7 +270,7 @@ class RuntimeTurnExecutorTest {
     void shouldSkipEventsWhenRecorderNull() {
         when(agentSkillSpecService.resolve(any()))
                 .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of(), List.of(), ""));
-        when(toolRegistry.resolve(any())).thenReturn(List.of());
+        when(toolRegistry.resolve(any(), any())).thenReturn(List.of());
         when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("ok", null, 1, 0));
         AgentContext ctx = AgentContext.builder()
                 .runId("run-1-1").taskId(1L).subTaskId(10L).turn(1).agentId(3L)
@@ -289,8 +292,7 @@ class RuntimeTurnExecutorTest {
         when(agentSkillSpecService.resolve(any()))
                 .thenReturn(new AgentSkillSpecService.ResolvedSpec(
                         List.of("s1"), List.of("s1"), "", Map.of("s1", "1.0.0"), List.of()));
-        when(toolRegistry.resolve(any())).thenReturn(List.of());
-        when(toolCallbackProvider.getToolCallbacks()).thenReturn(new org.springframework.ai.tool.ToolCallback[0]);
+        when(toolRegistry.resolve(any(), any())).thenReturn(List.of());
         when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("ok", null, 1, 0));
 
         new RuntimeTurnExecutor(
@@ -313,7 +315,7 @@ class RuntimeTurnExecutorTest {
         when(agentSkillSpecService.resolve(any()))
                 .thenReturn(new AgentSkillSpecService.ResolvedSpec(
                         List.of("s1"), List.of("s1"), "", Map.of("s1", "1.0.0"), List.of("t2", "t3")));
-        when(toolRegistry.resolve(List.of("t1", "t2", "t3")))
+        when(toolRegistry.resolve(eq(List.of("t1", "t2", "t3")), any()))
                 .thenReturn(List.of(new ToolDefinition("t3", "skill tool")));
         when(toolCallbackProvider.getToolCallbacks()).thenReturn(new org.springframework.ai.tool.ToolCallback[0]);
         when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("ok", null, 1, 0));
@@ -323,7 +325,7 @@ class RuntimeTurnExecutorTest {
                 .execute(context());
 
         // Registry 收到并集（上下文工具在前、技能声明工具按 resolve 序追加）
-        verify(toolRegistry).resolve(List.of("t1", "t2", "t3"));
+        verify(toolRegistry).resolve(eq(List.of("t1", "t2", "t3")), any());
         // TOOL_RESOLVED payload 呈现并集
         org.mockito.ArgumentCaptor<Map<String, Object>> payloadCaptor =
                 org.mockito.ArgumentCaptor.forClass(Map.class);
@@ -339,16 +341,167 @@ class RuntimeTurnExecutorTest {
         when(agentSkillSpecService.resolve(any()))
                 .thenReturn(new AgentSkillSpecService.ResolvedSpec(
                         List.of("s1"), List.of("s1"), "", Map.of("s1", "1.0.0"), List.of()));
-        when(toolRegistry.resolve(List.of("t1"))).thenReturn(List.of());
-        when(toolCallbackProvider.getToolCallbacks()).thenReturn(new org.springframework.ai.tool.ToolCallback[0]);
+        when(toolRegistry.resolve(eq(List.of("t1")), any())).thenReturn(List.of());
         when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("ok", null, 1, 0));
 
         new RuntimeTurnExecutor(
                 agentLoop, toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider)
                 .execute(context());
 
-        verify(toolRegistry).resolve(List.of("t1"));
+        verify(toolRegistry).resolve(eq(List.of("t1")), any());
     }
+
+    // #region REF-1.3 生效面（两条主路径：摘除到达模型 / 描述改写到达模型）
+
+    @Test
+    @DisplayName("★ REF-1.3 生效面：被条件可用摘除的工具不进入 AgentLoopInput（模型真的看不到）")
+    void shouldExcludeRemovedToolFromAgentLoopInput() {
+        stubSimpleSkill();
+        // registry 的「生效形态」已摘除 web_search（语义位在 registry 侧生效）
+        when(toolRegistry.resolve(any(), any())).thenReturn(List.of(
+                new ToolDefinition("pullTasks", "拉取待处理收件箱"),
+                new ToolDefinition("submitResult", "上交执行结果")));
+        ToolCallback pull = callback("pullTasks", "拉取待处理收件箱");
+        ToolCallback search = callback("web_search", "联网搜索");
+        ToolCallback submit = callback("submitResult", "上交执行结果");
+        when(toolCallbackProvider.getToolCallbacks()).thenReturn(new ToolCallback[]{pull, search, submit});
+        when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("ok", null, 1, 0));
+
+        new RuntimeTurnExecutor(
+                agentLoop, toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider)
+                .execute(context());
+
+        assertThat(captureLoopInput().enabledToolCallbacks())
+                .extracting(cb -> cb.getToolDefinition().name())
+                .containsExactly("pullTasks", "submitResult");
+    }
+
+    @Test
+    @DisplayName("★ REF-1.3 生效面：registry 改写的描述进入模型可见 schema，name / inputSchema 逐字不变")
+    void shouldApplyDynamicDescriptionToModelVisibleSchema() {
+        stubSimpleSkill();
+        when(toolRegistry.resolve(any(), any()))
+                .thenReturn(List.of(new ToolDefinition("pullTasks", "本轮新描述")));
+        ToolCallback pull = callback("pullTasks", "旧描述");
+        when(toolCallbackProvider.getToolCallbacks()).thenReturn(new ToolCallback[]{pull});
+        when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("ok", null, 1, 0));
+
+        new RuntimeTurnExecutor(
+                agentLoop, toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider)
+                .execute(context());
+
+        List<ToolCallback> visible = captureLoopInput().enabledToolCallbacks();
+        assertThat(visible).hasSize(1);
+        assertThat(visible.get(0).getToolDefinition().description()).isEqualTo("本轮新描述");
+        assertThat(visible.get(0).getToolDefinition().name()).isEqualTo("pullTasks");
+        assertThat(visible.get(0).getToolDefinition().inputSchema()).isEqualTo(DEFAULT_INPUT_SCHEMA);
+    }
+
+    @Test
+    @DisplayName("REF-1.3 零包装短路：生效描述与 provider 原描述相同 ⇒ 原回调实例直接透传")
+    void shouldPassThroughOriginalCallbackWhenDescriptionUnchanged() {
+        stubSimpleSkill();
+        when(toolRegistry.resolve(any(), any()))
+                .thenReturn(List.of(new ToolDefinition("pullTasks", "拉取待处理收件箱")));
+        ToolCallback pull = callback("pullTasks", "拉取待处理收件箱");
+        when(toolCallbackProvider.getToolCallbacks()).thenReturn(new ToolCallback[]{pull});
+        when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("ok", null, 1, 0));
+
+        new RuntimeTurnExecutor(
+                agentLoop, toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider)
+                .execute(context());
+
+        assertThat(captureLoopInput().enabledToolCallbacks()).containsExactly(pull);
+    }
+
+    @Test
+    @DisplayName("REF-1.3 事件可观测：TOOL_RESOLVED 新增 effectiveTools / removedTools，tools 原值不变")
+    void shouldRecordEffectiveAndRemovedTools() {
+        when(agentSkillSpecService.resolve(any()))
+                .thenReturn(new AgentSkillSpecService.ResolvedSpec(
+                        List.of("s1"), List.of("s1"), "", Map.of(), List.of("pullTasks", "web_search")));
+        when(toolRegistry.resolve(any(), any()))
+                .thenReturn(List.of(new ToolDefinition("pullTasks", "拉取待处理收件箱")));
+        when(toolCallbackProvider.getToolCallbacks()).thenReturn(new ToolCallback[0]);
+        when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("ok", null, 1, 0));
+
+        new RuntimeTurnExecutor(
+                agentLoop, toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider)
+                .execute(context());
+
+        org.mockito.ArgumentCaptor<Map<String, Object>> payloadCaptor =
+                org.mockito.ArgumentCaptor.forClass(Map.class);
+        verify(eventRecorder).record(eqRun("run-1-1"), eqLong(1L), eqLong(10L), eqInt(1), eqInt(6),
+                eqType(AgentEventType.TOOL_RESOLVED), eqLong(3L), payloadCaptor.capture());
+        assertThat(payloadCaptor.getValue())
+                .containsEntry("tools", List.of("t1", "pullTasks", "web_search"))
+                .containsEntry("effectiveTools", List.of("pullTasks"))
+                .containsEntry("removedTools", List.of("t1", "web_search"));
+    }
+
+    @Test
+    @DisplayName("REF-1.3 上下文透传：ToolContext 只由 AgentContext 已有事实装配（不许臆造字段）")
+    void shouldAssembleToolContextFromAgentContext() {
+        stubSimpleSkill();
+        when(toolRegistry.resolve(any(), any())).thenReturn(List.of());
+        when(agentLoop.run(any())).thenReturn(AgentLoopResult.stop("ok", null, 1, 0));
+
+        new RuntimeTurnExecutor(
+                agentLoop, toolExecutor, toolRegistry, agentSkillSpecService, sandboxProvider, toolCallbackProvider)
+                .execute(context());
+
+        ArgumentCaptor<ToolContext> captor = ArgumentCaptor.forClass(ToolContext.class);
+        verify(toolRegistry).resolve(eq(List.of("t1")), captor.capture());
+        ToolContext toolContext = captor.getValue();
+        assertThat(toolContext.agentId()).isEqualTo(3L);
+        assertThat(toolContext.taskId()).isEqualTo(1L);
+        assertThat(toolContext.subTaskId()).isEqualTo(10L);
+        assertThat(toolContext.turn()).isEqualTo(1);
+        assertThat(toolContext.accessType()).isEqualTo(AgentAccessType.API_KEY_LLM);
+        assertThat(toolContext.requiredSkills()).containsExactly("s1");
+    }
+
+    /** 技能解析桩：命中 s1、不声明额外工具（启用清单 = 上下文 tools 原样）。 */
+    private void stubSimpleSkill() {
+        when(agentSkillSpecService.resolve(any()))
+                .thenReturn(new AgentSkillSpecService.ResolvedSpec(List.of("s1"), List.of("s1"), ""));
+    }
+
+    private AgentLoopInput captureLoopInput() {
+        ArgumentCaptor<AgentLoopInput> captor = ArgumentCaptor.forClass(AgentLoopInput.class);
+        verify(agentLoop).run(captor.capture());
+        return captor.getValue();
+    }
+
+    private static final String DEFAULT_INPUT_SCHEMA = "{\"type\":\"object\",\"properties\":{}}";
+
+    /**
+     * 轻量真值替身（非 Mockito mock）：避免 strict-stubs 对「只读其中一个访问器」的用例
+     * 报未用桩，同时让 {@code isSameAs} 的身份断言天然成立。
+     */
+    private record FakeDefinition(String name, String description, String inputSchema)
+            implements org.springframework.ai.tool.definition.ToolDefinition {
+    }
+
+    private record FakeCallback(org.springframework.ai.tool.definition.ToolDefinition definition)
+            implements ToolCallback {
+
+        @Override
+        public org.springframework.ai.tool.definition.ToolDefinition getToolDefinition() {
+            return definition;
+        }
+
+        @Override
+        public String call(String toolInput) {
+            return "";
+        }
+    }
+
+    private static ToolCallback callback(String name, String description) {
+        return new FakeCallback(new FakeDefinition(name, description, DEFAULT_INPUT_SCHEMA));
+    }
+
+    // #endregion
 
     private AgentContext context() {
         return AgentContext.builder()

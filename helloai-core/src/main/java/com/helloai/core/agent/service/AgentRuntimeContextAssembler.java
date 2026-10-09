@@ -19,8 +19,6 @@ import com.helloai.core.agent.runtime.ExecutionEnvironment;
 import com.helloai.core.agent.runtime.loop.LoopCheckpointListener;
 import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
-import com.helloai.core.agent.tool.ToolDefinition;
-import com.helloai.core.agent.tool.ToolRegistry;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
 import com.helloai.core.shared.util.TextTruncator;
 import com.helloai.core.shared.util.UpstreamAttachmentRenderer;
@@ -112,7 +110,6 @@ public class AgentRuntimeContextAssembler {
     private final AttachmentPort attachmentPort;
     /** 子任务只读端口（原 {@code SubTaskService}；W11 端口化，读快照 {@link SubTaskSnapshot}）。 */
     private final SubTaskQueryPort subTaskQueryPort;
-    private final ToolRegistry toolRegistry;
     private final AgentEventRecorder agentEventRecorder;
     /**
      * 事件流读侧契约（B3 Resume·Prompt 级结构化续接）：重派接续时从 {@code agent_event}
@@ -160,11 +157,10 @@ public class AgentRuntimeContextAssembler {
                 completedTrace);
 
         // 2) 启用工具并集（命令 tools ∪ 命中技能 requiredTools，与旧链同语义）
+        // REF-1.3：此处**刻意不做** ToolRegistry.resolve——生效形态（条件可用摘除 + 动态描述）
+        // 的唯一接线点是 RuntimeTurnExecutor（resolve 的结果决定模型可见工具）。
+        // 本类保留的 enabledTools 是**请求集**，用于会话快照与 AgentContext.tools。
         List<String> enabledTools = mergeTools(tools, resolved.requiredTools());
-        List<ToolDefinition> resolvedTools = toolRegistry.resolve(enabledTools);
-        if (resolvedTools == null) {
-            resolvedTools = List.of();
-        }
 
         // 3) 底层模型（mock 返回 MockChatModel；真实模式显式 provider + API Key，缺失 fail-close）
         ChatModel chatModel = buildChatModel(agent);

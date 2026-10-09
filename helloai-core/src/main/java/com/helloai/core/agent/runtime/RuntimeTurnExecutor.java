@@ -10,9 +10,11 @@ import com.helloai.core.agent.runtime.sandbox.Sandbox;
 import com.helloai.core.agent.runtime.sandbox.SandboxContext;
 import com.helloai.core.agent.runtime.sandbox.SandboxProvider;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
+import com.helloai.core.agent.tool.ToolContext;
 import com.helloai.core.agent.tool.ToolDefinition;
 import com.helloai.core.agent.tool.ToolExecutor;
 import com.helloai.core.agent.tool.ToolRegistry;
+import com.helloai.core.agent.tool.impl.DescribedToolCallback;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.tool.ToolCallback;
@@ -86,16 +88,29 @@ public class RuntimeTurnExecutor implements AgentRuntime {
                         "resolvedSpecs", resolved.matchedLabels(),
                         "resolvedVersions", resolved.resolvedVersions()));
 
-        // 4. TOOL_RESOLVED（step=6）：启用工具解析元数据（ToolRegistry 契约恒非 null）
+        // 4. TOOL_RESOLVED（step=6）：启用工具解析「生效形态」（ToolRegistry 契约恒非 null）
         // G-004 增量 A：启用清单 = 上下文 tools ∪ 命中技能 requiredTools（并集去重保序），
         // 无技能时行为与旧版一致（mergeTools 原样返回）
         List<String> enabledTools = mergeTools(ctx.getTools(), resolved.requiredTools());
-        List<ToolDefinition> resolvedTools = toolRegistry.resolve(enabledTools);
+        // REF-1.3：解析上下文只装配调用点手头已有的事实（不臆造字段）；
+        // resolve 的结果自此成为「模型可见工具的唯一判据」（见下方 resolveVisibleCallbacks）
+        ToolContext toolContext = new ToolContext(ctx.getAgentId(), ctx.getTaskId(), ctx.getSubTaskId(),
+                ctx.getTurn(), ctx.getAccessType(), resolved.requiredSkills());
+        List<ToolDefinition> resolvedTools = toolRegistry.resolve(enabledTools, toolContext);
         if (resolvedTools == null) {
             resolvedTools = List.of();
         }
+        // 事件可观测：tools = 请求集（原语义不变，外部读取零回归）；
+        // effectiveTools = 模型实际可见集（摘除的可观测证据）；removedTools = 被摘除项（诊断）
+        List<String> effectiveTools = resolvedTools.stream().map(ToolDefinition::name).toList();
+        Set<String> effectiveToolSet = new HashSet<>(effectiveTools);
+        List<String> removedTools = enabledTools.stream()
+                .filter(name -> !effectiveToolSet.contains(name))
+                .toList();
         record(ctx, 6, AgentEventType.TOOL_RESOLVED,
                 safeMap("tools", enabledTools,
+                        "effectiveTools", effectiveTools,
+                        "removedTools", removedTools,
                         "resolvedTools", resolvedTools.stream()
                                 .map(td -> Map.of("name", td.name(), "description", td.description()))
                                 .toList()));
@@ -117,7 +132,7 @@ public class RuntimeTurnExecutor implements AgentRuntime {
                 ctx.getSystemPrompt(),
                 ctx.getUserPrompt(),
                 toolExecutor,
-                resolveEnabledCallbacks(enabledTools),
+                resolveVisibleCallbacks(resolvedTools),
                 null,
                 ctx.getRunId(), ctx.getTaskId(), ctx.getSubTaskId(), ctx.getTurn(), ctx.getAgentId(),
                 ctx.getEventRecorder(),
@@ -164,22 +179,46 @@ public class RuntimeTurnExecutor implements AgentRuntime {
     }
 
     /**
-     * 按启用工具名过滤 ToolCallback 目录（AgentLoop 可见 schema 与可调工具一致；
-     * best-effort：解析失败返回空列表，循环内无工具）。
+     * 按 registry 的「生效形态」装配模型可见 ToolCallback（REF-1.3 生效面；
+     * AgentLoop 可见 schema 与可调工具一致；best-effort：解析失败返回已装配部分 / 空列表）。
+     *
+     * <p>与改造前（{@code resolveEnabledCallbacks(names)}）的差别：过滤依据由「入参名字集合」
+     * 改为「{@code resolve} 结果」——前者不含条件可用语义，只做名字匹配；后者是摘除 + 描述重写
+     * 之后的生效形态。描述被改写的工具以 {@link DescribedToolCallback} 委托包装，
+     * 使<b>模型读到的 schema 与生效描述一致</b>。</p>
+     *
+     * <p>顺序 = provider 注册顺序（与改造前一致 ⇒ schema 顺序零变化）；描述相同或生效描述为空白
+     * ⇒ 原回调直接透传（零包装、零开销）。</p>
+     *
+     * <p>注意空列表的语义变化：{@code resolvedTools} 为空<b>不再等价于</b> {@code enabledTools}
+     * 为空——「全部被条件可用摘除」是合法情形，此时提前返回既正确又省掉一次 provider 遍历。</p>
      */
-    private List<ToolCallback> resolveEnabledCallbacks(List<String> enabledTools) {
-        if (enabledTools == null || enabledTools.isEmpty()) {
+    private List<ToolCallback> resolveVisibleCallbacks(List<ToolDefinition> resolvedTools) {
+        if (resolvedTools == null || resolvedTools.isEmpty()) {
             return List.of();
         }
-        Set<String> names = new HashSet<>(enabledTools);
+        Map<String, String> effective = new LinkedHashMap<>();
+        for (ToolDefinition definition : resolvedTools) {
+            effective.put(definition.name(), definition.description());
+        }
         List<ToolCallback> callbacks = new ArrayList<>();
         try {
             ToolCallback[] all = toolCallbackProvider.getToolCallbacks();
             if (all != null) {
                 for (ToolCallback callback : all) {
-                    if (callback != null && callback.getToolDefinition() != null
-                            && names.contains(callback.getToolDefinition().name())) {
-                        callbacks.add(callback);
+                    if (callback == null || callback.getToolDefinition() == null) {
+                        continue;
+                    }
+                    String name = callback.getToolDefinition().name();
+                    if (!effective.containsKey(name)) {
+                        continue; // 未启用 / 被条件可用摘除 ⇒ 模型不可见
+                    }
+                    String description = effective.get(name);
+                    if (description == null || description.isBlank()
+                            || description.equals(callback.getToolDefinition().description())) {
+                        callbacks.add(callback); // 无生效描述 / 描述未变 ⇒ 原样透传
+                    } else {
+                        callbacks.add(new DescribedToolCallback(callback, description));
                     }
                 }
             }

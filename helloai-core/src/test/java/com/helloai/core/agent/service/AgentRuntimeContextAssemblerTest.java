@@ -20,7 +20,6 @@ import com.helloai.core.agent.runtime.loop.LoopCheckpoint;
 import com.helloai.core.agent.runtime.loop.LoopCheckpointListener;
 import com.helloai.core.agent.session.service.AgentSessionService;
 import com.helloai.core.agent.skill.AgentSkillSpecService;
-import com.helloai.core.agent.tool.ToolRegistry;
 import com.helloai.core.agent.port.AttachmentPort;
 import com.helloai.core.agent.port.AttachmentRef;
 import com.helloai.core.agent.port.SubTaskQueryPort;
@@ -100,9 +99,6 @@ class AgentRuntimeContextAssemblerTest {
     private SubTaskQueryPort subTaskQueryPort;
 
     @Mock
-    private ToolRegistry toolRegistry;
-
-    @Mock
     private AgentEventRecorder agentEventRecorder;
 
     @Mock
@@ -122,7 +118,7 @@ class AgentRuntimeContextAssemblerTest {
         properties.setProvider("mock");
         assembler = new AgentRuntimeContextAssembler(properties, agentChatClientService, agentLlmCredentialResolver,
                 taskTimelinePort, taskRunningSpecPort, agentSkillSpecService, agentQualityProfileService,
-                agentSessionService, conversationService, attachmentPort, subTaskQueryPort, toolRegistry,
+                agentSessionService, conversationService, attachmentPort, subTaskQueryPort,
                 agentEventRecorder, agentEventQueryService);
     }
 
@@ -707,11 +703,10 @@ class AgentRuntimeContextAssemblerTest {
             AgentContext context = invokeAssemble(subTask(), agent(),
                     List.of("pullTasks", "submitResult"), List.of("eng-code-review"));
 
+            // REF-1.3：装配侧只产出「请求集」（AgentContext.tools），生效形态
+            // （条件可用摘除 + 动态描述）的唯一接线点是 RuntimeTurnExecutor——
+            // 故此处不再断言 ToolRegistry.resolve（原断言已由 RuntimeTurnExecutorTest 覆盖）。
             assertThat(context.getTools()).containsExactly("pullTasks", "submitResult", "web_search");
-            @SuppressWarnings("unchecked")
-            ArgumentCaptor<List<String>> toolsCaptor = ArgumentCaptor.forClass(List.class);
-            verify(toolRegistry).resolve(toolsCaptor.capture());
-            assertThat(toolsCaptor.getValue()).containsExactly("pullTasks", "submitResult", "web_search");
         }
 
         @Test

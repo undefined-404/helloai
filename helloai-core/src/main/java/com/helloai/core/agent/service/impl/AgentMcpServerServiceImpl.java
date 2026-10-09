@@ -11,6 +11,7 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -100,6 +101,27 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
             "checkOut"
     );
 
+    /**
+     * <b>不可关闭清单（CRITICAL_TOOLS，REF-1.3b）</b>——「写进禁用列表也被剔除」的下界：
+     * 管理层把这些工具置为 {@code is_enabled=0}（或压根没有行）时，仍判为启用、仍出现在启用列表内。
+     *
+     * <p>与 {@link #DEFAULT_EXECUTOR_TOOLS} / {@link #MCP_SESSION_TOOLS} 三者<b>语义正交（不可合并）</b>：</p>
+     * <ul>
+     *   <li>{@code DEFAULT_EXECUTOR_TOOLS} = <b>授权面</b>：EXECUTOR 注册即授权哪些工具（可被管理面改动）；</li>
+     *   <li>{@code MCP_SESSION_TOOLS} = <b>可注入面</b>：哪些工具依赖跨进程 MCP 会话上下文；</li>
+     *   <li>{@code CRITICAL_TOOLS} = <b>不可关闭面</b>：授权面之上的下界，任何 Agent 不得关闭。</li>
+     * </ul>
+     *
+     * <p>最小集 = Agent 工作循环三要素：拉取（{@code pullTasks}）/ 交付（{@code submitResult}）/
+     * 保活（{@code heartbeat}）。缺任一 ⇒ 外部 Agent 事实上无法上岗。
+     * <b>刻意保持最小</b>：清单越长，「不可关闭」越会退化成「不可裁剪」，
+     * 与 REF-1.3 的「摘除式治理」自相矛盾。</p>
+     *
+     * <p><b>本清单不落库</b>（{@link #getEnabledTools(Long)} / {@link #isToolEnabled} 的生效均为内存并集 /
+     * 短路），读路径保持纯读，不在热路径引入写放大与事务语义。</p>
+     */
+    private static final List<String> CRITICAL_TOOLS = List.of("pullTasks", "submitResult", "heartbeat");
+
     /** 默认启用 is_enabled 值。 */
     private static final int DEFAULT_IS_ENABLED = 1;
     /** 默认 rate_limit（次/分钟，0=不限）。 */
@@ -168,9 +190,16 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
 
     /**
      * 查询指定 Agent 的某个工具是否启用。
+     *
+     * <p><b>REF-1.3b</b>：{@link #CRITICAL_TOOLS} <b>短路在查询之前</b>——即使存在 {@code is_enabled=0}
+     * 的行（或被管理面删除了行），也判为启用；顺带消除关键工具的「自动补行」写副作用，
+     * 使 {@code McpToolServiceImpl} 的 13 处 {@code assertToolEnabled} 守卫零改动即可获得下界保护。</p>
      */
     @Override
     public boolean isToolEnabled(Long agentId, String toolName) {
+        if (CRITICAL_TOOLS.contains(toolName)) {
+            return true;
+        }
         AgentMcpServer config = lambdaQuery()
                 .eq(AgentMcpServer::getAgentId, agentId)
                 .eq(AgentMcpServer::getToolName, toolName)
@@ -198,16 +227,23 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
 
     /**
      * 获取 Agent 所有启用的工具名列表。
+     *
+     * <p><b>REF-1.3b</b>：返回值 = 查询结果 <b>∪</b> {@link #CRITICAL_TOOLS}（{@code LinkedHashSet}
+     * 去重保序，库内授权项在前、集合兜底项按常量序追加）。<b>刻意用并集而非过滤</b>——
+     * 「写进禁用列表」（{@code is_enabled=0} 的行，或干脆没有行）也必须在内。</p>
      */
     @Override
     public List<String> getEnabledTools(Long agentId) {
-        return lambdaQuery()
+        List<String> enabled = lambdaQuery()
                 .eq(AgentMcpServer::getAgentId, agentId)
                 .eq(AgentMcpServer::getIsEnabled, 1)
                 .list()
                 .stream()
                 .map(AgentMcpServer::getToolName)
                 .collect(Collectors.toList());
+        LinkedHashSet<String> merged = new LinkedHashSet<>(enabled);
+        merged.addAll(CRITICAL_TOOLS);
+        return List.copyOf(merged);
     }
 
     /**
@@ -218,6 +254,14 @@ public class AgentMcpServerServiceImpl extends ServiceImpl<AgentMcpServerMapper,
      * 无 MCP 会话上下文（{@code McpAuthContext} 无 sessionId），调用这 13 个工具
      * 100% 401。其余接入类型（{@code CLI_CLIENT} / {@code WEB_BROWSER} / {@code null}）
      * <b>原样返回</b>，与 {@link #getEnabledTools(Long)} <b>逐字一致</b>（外部链路零回归）。</p>
+     *
+     * <p><b>REF-1.3b 边界：{@link #CRITICAL_TOOLS} 刻意<b>不</b>抵销上述过滤。</b>
+     * 「不可关闭」（授权面下界）≠「必须出现在每一个执行者的可见列表里」。
+     * 若在此分支把 3 个关键工具并回来，将原样复活 2026-10-06 已实测并修复的 L3 P1-1
+     * （进程内注入必然 401，占内循环约 14.8%），而收益为零——不可关闭的设计意图
+     * （外部 Agent 不因管理员误操作失去工作循环）已在 {@link #getEnabledTools(Long)} 的并集中完整达成。
+     * 摘除后它们依然「未关闭」（管理面仍显示启用），只是<b>本执行者不具备调用条件</b>——
+     * 这正是 REF-1.3「禁用了 ≠ 不具备」要表达的同一件事。</p>
      */
     @Override
     public List<String> getEnabledToolsForAccess(Long agentId, AgentAccessType accessType) {
