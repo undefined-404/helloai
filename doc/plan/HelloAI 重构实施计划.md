@@ -134,7 +134,7 @@ P0-B-2 落地（2026-09-07）：**主链接线注入完成，P0 主线收官**�
 - **回滚演练**：`runtime-enabled` 置回 false 重启后 executor 回到 `ApiKeyAgentExecutor`、单轮序列、review score=4，与基线零差异（严格回滚：配置恢复 + 重启 + 同任务重跑对比）。
 - **对账**：verify-c3-events 三探针全绿（P1 无孤儿 15/15 成对 / P2 无 MISMATCH / P3 RUNNING 0 滞留）。
 - **外部 Agent 回归（CLI_CLIENT，真实 TeleAgent）**：造数→10min 认领窗口内拉取→claimSubTask→本地执行（4 个 API 测试，命令/stdout/exit code 证据）→submitResult→DONE；`sub_task_execute_submit` source=EXTERNAL + executor=cli_client + **idempotencyKey=r-{subTaskId}-v1**（submitResult 自带键实证）；回写层 `AGENT_COMPLETED(0)` 无 Turn/Step（外部自执行口径命中）；review approved score=4 一次通过。
-- **执行口径修正 2 条**（首轮实跑踩坑）：① 外部 CLI_CLIENT 任务无人认领会触发 `assigned-timeout` 重派，5 次超限进死信（run 1 即被超时重派→死信→人工重派 inner 吃掉）——外部回归须在认领窗口内完成；② `runtime.v2-enabled`（application.yml，C3 Step 6 遗留）与 `helloai.execution.runtime-enabled` 是**两个开关**——前者代码零读取（仅文档/脚本语义），后者才是真身开关，勿混淆。
+- **执行口径修正 2 条**（首轮实跑踩坑）：① 外部 CLI_CLIENT 任务无人认领会触发 `assigned-timeout` 重派，5 次超限进死信（run 1 即被超时重派→死信→人工重派 inner 吃掉）——外部回归须在认领窗口内完成；② `runtime.v2-enabled`（application.yml 遗留）与 `helloai.execution.runtime-enabled` 是**两个开关**——前者代码零读取（仅文档/脚本语义），后者才是真身开关，勿混淆。
 - **状态落账**：G-002 / G-003「名义收官 → 实际闭环」，差距表已同步；G-006（Replay / Audit API 暴露）当轮未做（服务层就绪），已由增量 C1/C2/D 补齐（2026-09-08~10，见 §7）。
 
 # 4. P0-C：AgentRuntime
@@ -179,7 +179,7 @@ Task Service
 
 ## 现状基线（2026-09-10）
 
-八件套现状：Context / EventRecorder / Environment 已落地；ToolRegistry 为元数据面（12 平台工具，仅注入 prompt 描述）；ToolExecutor 已落地（P0-C Phase 2，执行回路真身）；AgentLoop 已落地（P0-C Phase 3，`runtime/loop` 手动工具循环——ChatModel 契约 + ToolExecutor 执行 + TOOL_CALL 事件，maxIterations 硬上限防死循环）；Session 为中断恢复检查点（AgentSessionService）；SandboxProvider 契约已落地（Phase 4，五边界 + 诚实策略，见 §6）。旧链编排仍在 `SubTaskExecutionServiceImpl`（约 790 行）。
+八件套现状：Context / EventRecorder / Environment 已落地；ToolRegistry 为元数据面（12 平台工具，仅注入 prompt 描述）；ToolExecutor 已落地（执行回路真身）；AgentLoop 已落地（`runtime/loop` 手动工具循环——ChatModel 契约 + ToolExecutor 执行 + TOOL_CALL 事件，maxIterations 硬上限防死循环）；Session 为中断恢复检查点（AgentSessionService）；SandboxProvider 契约已落地（五边界 + 诚实策略，见 §6）。旧链编排仍在 `SubTaskExecutionServiceImpl`（约 790 行）。
 
 **第一阶段~第四阶段已全部落地**——Docker / K8s 隔离能力属 P1/P2 后置（见 §6）。
 
@@ -225,7 +225,7 @@ Remote
 K8s
 ```
 
-现状（2026-09-07 代码核查）：已有 ExecutionEnvironment / ExecutionEnvironmentProvider（remote-agent / local-process，场所标签，非安全沙箱）；SandboxProvider Contract 已落地（P0-C Phase 4：SandboxProvider / SandboxContext / Sandbox / ExecutionPolicy 五边界，复用环境解析 + 诚实策略无 ISOLATED）；第二阶段（Docker / Remote / K8s）后置。
+现状（2026-09-07 代码核查）：已有 ExecutionEnvironment / ExecutionEnvironmentProvider（remote-agent / local-process，场所标签，非安全沙箱）；SandboxProvider Contract 已落地（SandboxProvider / SandboxContext / Sandbox / ExecutionPolicy 五边界，复用环境解析 + 诚实策略无 ISOLATED）；第二阶段（Docker / Remote / K8s）后置。
 
 # 7. P1：Event Consumers
 

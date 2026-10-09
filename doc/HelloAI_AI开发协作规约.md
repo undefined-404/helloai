@@ -325,7 +325,7 @@ log/HelloAI 架构变更记录.md          # 架构决策汇总（按周期·定
 log/README.md                       # 日志体系说明与记录格式规范
 ```
 
-- **`YYYY-MM.md`（当月·即时）**：重大架构决策写入当月条目的 `### 决策` 段（含依据 / 取舍 / 边界）；已过月记录归档至 `doc/archive/logs/`。
+- **`YYYY-MM.md`（当月·即时）**：重大架构决策写入当月条目的 `### 决策` 段（含依据 / 取舍 / 边界）；已过月记录归档至 `doc/archive/log/`。
 - **`HelloAI 架构变更记录.md`（按周期·定期回填）**：`ARCH-YYYYMMDD-NNN` 编号的**唯一事实源**，**随开发周期迭代定期汇总**，**不要求逐决策即时更新**（末条 2026-09-28，已停更待回填）；**不得删除** —— 被历史 Log 的 `### 关联 → - Design：` 引用。
 - **`C-NN` 编号已于 2026-10-09 退役**：原 `log/HelloAI 差距表订正留痕.md` 的 `C-1`~`C-42` 已按「**一次订正 = 一条 Log**」并入对应月份的 `LOG-YYYYMMDD-NNN` 条目（差距表订正的载体唯一化）。`doc/archive/**` 内的 `C-NN` 引用为**历史现场**，保留原样。
 
@@ -874,17 +874,10 @@ AgentRuntime
 推荐：
 
 ```text
-Phase 1
-Context + Event
-
-Phase 2
-Tool Registry / Executor
-
-Phase 3
-Agent Loop
-
-Phase 4
-Session / Sandbox
+1. Context + Event
+2. Tool Registry / Executor
+3. Agent Loop
+4. Session / Sandbox
 ```
 
 Runtime 不得直接依赖：

@@ -200,10 +200,10 @@ RuntimeTurnExecutor          ← 唯一 AgentRuntime 实现
 当前仍不能宣称已完成完整 Harness Runtime：
 
 ```text
-ToolExecutor      → 契约+真身已具备（Phase 2），AgentLoop 已接线
-AgentLoop         → 契约+真身已具备（Phase 3），已组装进 RuntimeTurnExecutor
-Session 协调      → 已确认收敛口径（AgentSessionService 承载，Phase 1 Step 3）
-SandboxProvider   → 契约已具备（Phase 4），隔离能力后置（Docker/K8s P2/P3）
+ToolExecutor      → 契约+真身已具备（执行回路真身），AgentLoop 已接线
+AgentLoop         → 契约+真身已具备（手动工具循环真身），已组装进 RuntimeTurnExecutor
+Session 协调      → 已确认收敛口径（AgentSessionService 承载）
+SandboxProvider   → 契约已具备，隔离能力后置（Docker/K8s P2/P3）
 Capability 体系   → 尚需完善
 ```
 
@@ -271,7 +271,7 @@ ExecutionEnvironmentProvider
 RemoteAgent
 LocalProcess
 ENVIRONMENT_RESOLVED
-SandboxProvider / SandboxContext / Sandbox / ExecutionPolicy（契约层 Phase 4；诚实策略无 ISOLATED）
+SandboxProvider / SandboxContext / Sandbox / ExecutionPolicy（契约层；诚实策略无 ISOLATED）
 ```
 
 当前准确定位是：

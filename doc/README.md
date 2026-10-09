@@ -107,7 +107,7 @@
 |---|---|
 | `archive/implemented/` | 已执行完成的改造 / 修复 / 预研方案、Phase 执行方案 |
 | `archive/legacy/` | V2 文档体系重组前的旧事实源快照与旧体系文档 |
-| `archive/logs/` | 已归档的月度 Log（如 `2026-09.md`） |
+| `archive/log/` | 已归档的月度 Log（如 `2026-09.md`） |
 | `archive/reference/` | 只读参考资料（架构设计参考 / 长期思路 / 历史进度） |
 
 各子目录均带目录级 `README.md`（存放类型 + 准入规则 + 只读纪律）。

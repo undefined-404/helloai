@@ -6,7 +6,7 @@
 >
 > 本文件是 `doc/log/` 的**目录说明 + 记录规范**：定义 Log 的定位、存储方式、编号规则（§4）与单条标准格式（§5）。
 >
-> 月度记录本身在 `doc/log/YYYY-MM.md`，已过月归档至 `doc/archive/logs/`；**架构决策**见 `doc/log/HelloAI 架构变更记录.md`（`ARCH-YYYYMMDD-NNN` 编号的**唯一事实源**，**按开发周期迭代定期回填**，末条 2026-09-28；详见 `doc/文档体系分类与治理规则.md` §3.4）。
+> 月度记录本身在 `doc/log/YYYY-MM.md`，已过月归档至 `doc/archive/log/`；**架构决策**见 `doc/log/HelloAI 架构变更记录.md`（`ARCH-YYYYMMDD-NNN` 编号的**唯一事实源**，**按开发周期迭代定期回填**，末条 2026-09-28；详见 `doc/文档体系分类与治理规则.md` §3.4）。
 >
 > 本文档不是当前项目状态的事实源。
 >
@@ -857,7 +857,7 @@ Log 的目标不是：
 例如：
 
 ```text
-doc/archive/logs/
+doc/archive/log/
 ```
 
 中的文件：
