@@ -76,6 +76,7 @@ tmp/
 .dbg/
 # --- Qoder IDE 缓存（plans / skills 缓存目录，不入仓） ---
 .qoder/
+.trae/
 # --- 其他 AI 编程工具本地目录（skills / hooks / plans / repowiki 均为本地产物，不入仓 2026-09-30）---
 # 说明：.qoder/ 于 2026-09-30 之前已列入本文件但未执行 git rm --cached，
 #       导致 clone 仍然携带；本次四类目录统一 untrack（文件保留在本地工作区）。
