@@ -43,7 +43,7 @@ import static org.mockito.Mockito.when;
  * 不引入 Spring 上下文。</p>
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("ExecutionDispatchValidator (Phase 2H ②b + T5)")
+@DisplayName("ExecutionDispatchValidator (T5)")
 class ExecutionDispatchValidatorTest {
 
     @Mock

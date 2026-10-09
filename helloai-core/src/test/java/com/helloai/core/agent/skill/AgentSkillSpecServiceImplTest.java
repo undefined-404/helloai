@@ -10,7 +10,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * {@link AgentSkillSpecService} 实现单元测试（Phase 1 Step 1 fix：由 task 域
+ * {@link AgentSkillSpecService} 实现单元测试（由 task 域
  * {@code PluginSkillSpecServiceImplTest} 迁域改造，LOG-20260904-009）。
  *
  * <p>纯函数语义：入参即 requiredSkills，不再查 task（§6 依赖方向红线）；命中语义与

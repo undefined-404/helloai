@@ -47,7 +47,7 @@ import org.mockito.ArgumentCaptor;
  *
  * <p>本轮新增：投递前守卫——API_KEY_LLM / 不存在的 Agent 跳过写入与响铃。</p>
  *
- * <p>N-008（Phase 2 A3）新增：消息 TTL——{@code send} 落库即写 expireTime；
+ * <p>N-008 新增：消息 TTL——{@code send} 落库即写 expireTime；
  * {@code archiveExpired} 过期归档（baseMapper 行数模式，TableInfo 预热规避 MP 3.5.9
  * lambda 缓存坑，参照 {@code TaskFinalReportServiceTest.initTableInfo}）。</p>
  */
@@ -182,7 +182,7 @@ class AgentInboxServiceTest {
     }
 
     // ══════════════════════════════════════════════════════════════
-    //  N-008（Phase 2 A3）：消息 TTL + 过期归档
+    //  N-008：消息 TTL + 过期归档
     //  ══════════════════════════════════════════════════════════════
 
     @Test

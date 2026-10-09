@@ -37,9 +37,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Phase 2H ②a：{@link ExecutionCommandService} 按 {@code dispatch-mode} 分发的单元测试。
+ * {@link ExecutionCommandService} 按 {@code dispatch-mode} 分发的单元测试。
  *
- * <p>Phase 2H 关键变化：MQ / BOTH 分支不再调
+ * <p>关键变化：MQ / BOTH 分支不再调
  * {@link ExecutionCommandMqPublisher}，改为调用
  * {@link AgentCommandOutboxService#createPending(ExecutionCommand, ExecutionCommandMqMessage)}
  * 写 outbox 行（由 OutboxRelayTask 异步发 MQ）。测试重点相应迁移到 outbox 调用。</p>
@@ -55,7 +55,7 @@ import static org.mockito.Mockito.when;
  * <p>本测试不启动 Spring 容器，也不引入 RabbitMQ，全部基于 Mockito 装配。</p>
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("ExecutionCommandService dispatch-mode (Phase 2H ②a)")
+@DisplayName("ExecutionCommandService dispatch-mode")
 class ExecutionCommandServiceDispatchTest {
 
     @Mock

@@ -38,7 +38,7 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.lenient;
 
 /**
- * {@link ExternalAgentFallbackTask} 单元测试（N11 Phase 2C）。
+ * {@link ExternalAgentFallbackTask} 单元测试（N11）。
  *
  * <p>覆盖：</p>
  * <ul>

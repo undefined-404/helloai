@@ -122,7 +122,7 @@ class ReviewServiceTest {
         // 核心断言：人工驳回必须走重置链路（而非累加或原样流转）
         verify(subTaskService).reworkFresh(SUB_TASK_ID, NEW_AGENT_ID);
         verify(subTaskService, never()).complete(SUB_TASK_ID);
-        // Phase 0 B2：人工驳回补发 REVIEW_REJECTED（终态投影与自动核验驳回对称）
+        // 人工驳回补发 REVIEW_REJECTED（终态投影与自动核验驳回对称）
         verify(agentEventRecorder).record(any(), eq(TASK_ID), eq(SUB_TASK_ID), eq(0), eq(0),
                 eq(AgentEventType.REVIEW_REJECTED), eq(REVIEWER_ID), any());
         // 原执行者按评分扣分（与 兼容）
@@ -153,7 +153,7 @@ class ReviewServiceTest {
 
         verify(subTaskService).complete(SUB_TASK_ID);
         verify(subTaskService, never()).reworkFresh(anyLong(), any());
-        // Phase 0 B2：人工验收补发 REVIEW_APPROVED（DONE 终态投影一致，Step 2 对账修复）
+        // 人工验收补发 REVIEW_APPROVED（DONE 终态投影一致，Step 2 对账修复）
         verify(agentEventRecorder).record(any(), eq(TASK_ID), eq(SUB_TASK_ID), eq(0), eq(0),
                 eq(AgentEventType.REVIEW_APPROVED), eq(REVIEWER_ID), any());
     }

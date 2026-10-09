@@ -24,7 +24,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Phase 0 C4：{@link AbstractIdempotentConsumer} 携带 MDC 上下文重载的单元测试。
+ * {@link AbstractIdempotentConsumer} 携带 MDC 上下文重载的单元测试。
  *
  * <p>覆盖：消费执行期间 MDC 业务键可见、退出后清理（正常 / 异常路径）、context 为 null 时
  * 行为与旧签名一致。basic 与 enhanced 两种幂等路径各验证一次。</p>

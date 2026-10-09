@@ -9,7 +9,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 执行环境解析器单元测试（Phase 1 Step 4）：accessType → ExecutionEnvironment
+ * 执行环境解析器单元测试：accessType → ExecutionEnvironment
  * 路由契约（与 AgentExecutorRouter 同构的 supports 过滤语义）。纯对象测试，
  * 直接以真实实现列表装配（两个环境实现均为无状态轻量组件，无需 mock）。
  */
@@ -42,7 +42,7 @@ class ExecutionEnvironmentProviderTest {
     }
 
     @Test
-    @DisplayName("resolve：null accessType → null（契约：不抛异常，Phase 0 语义兼容）")
+    @DisplayName("resolve：null accessType → null（契约：不抛异常，语义兼容）")
     void shouldReturnNullForNullAccessType() {
         assertThat(provider.resolve(null)).isNull();
     }

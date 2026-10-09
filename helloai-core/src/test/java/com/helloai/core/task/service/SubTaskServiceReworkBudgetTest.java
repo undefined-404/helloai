@@ -49,7 +49,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Phase 0 A3 共享重试预算（attempt_total）单元测试（坑点 3「单一权威」）：
+ * 共享重试预算（attempt_total）单元测试（坑点 3「单一权威」）：
  * 自动驳回返工计入共享预算 / 预算耗尽转 DEAD_LETTER / 人工驳回清零预算 / 熔断禁用逃生口。
  */
 @ExtendWith(MockitoExtension.class)
@@ -74,7 +74,7 @@ class SubTaskServiceReworkBudgetTest {
     @Mock private ObjectProvider<TaskService> taskServiceProvider;
     @Mock private AgentEventRecorder agentEventRecorder;
     @Mock private SubTaskMapper subTaskMapper;
-    // Phase 1 Step 3：执行会话服务（rework 用例不触达，仅防 NPE）
+    // 执行会话服务（rework 用例不触达，仅防 NPE）
     @Mock private AgentSessionService agentSessionService;
 
     private AgentDispatchProperties dispatchProps;

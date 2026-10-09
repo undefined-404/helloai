@@ -32,9 +32,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
- * Phase 2H ②b 收尾：{@link ExecutionCommandMqPublisher} 单测。
+ * {@link ExecutionCommandMqPublisher} 单测。
  *
- * <p>Phase 2F 的"AFTER_COMMIT 推迟"语义在 ②a 引入 Outbox 后已无调用方，本轮删除
+ * <p>"AFTER_COMMIT 推迟"语义在 ②a 引入 Outbox 后已无调用方，本轮删除
  * {@code publish(ExecutionCommand)} 入口并同步清掉对应测试分支。
  * 现仅覆盖 {@link ExecutionCommandMqPublisher#publishWithCorrelation}：</p>
  * <ol>
@@ -48,7 +48,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
  * <p>使用真实 {@link ObjectMapper}（不 mock 序列化路径），mock {@link RabbitTemplate} 以避免连 RabbitMQ。</p>
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("ExecutionCommandMqPublisher (Phase 2H ②b)")
+@DisplayName("ExecutionCommandMqPublisher")
 class ExecutionCommandMqPublisherTest {
 
     @Mock

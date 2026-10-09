@@ -16,7 +16,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * 工具注册表单元测试（Phase 1 Step 2）：
+ * 工具注册表单元测试：
  * 懒加载目录（首次 resolve 触发）+ 按启用工具名解析命中元数据（启用/匹配契约）。
  * 纯 Mockito 测试，spring-ai ToolCallback / ToolDefinition 均为接口可 mock。
  */

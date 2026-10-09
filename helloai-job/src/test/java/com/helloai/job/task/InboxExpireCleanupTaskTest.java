@@ -18,7 +18,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link InboxExpireCleanupTask} 单元测试（N-008 统一消息生命周期，Phase 2 A3）。
+ * {@link InboxExpireCleanupTask} 单元测试（N-008 统一消息生命周期）。
  *
  * <p>覆盖：</p>
  * <ul>

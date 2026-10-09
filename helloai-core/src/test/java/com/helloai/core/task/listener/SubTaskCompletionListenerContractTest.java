@@ -35,7 +35,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * SubTaskCompletionListener 契约产出回流（Phase 2）测试：
+ * SubTaskCompletionListener 契约产出回流测试：
  * isContract 检测 / 物化附件优先 / output 回退 / 无产出跳过 /
  * 非契约零动作 / 失败 best-effort 不阻断收尾链。
  */

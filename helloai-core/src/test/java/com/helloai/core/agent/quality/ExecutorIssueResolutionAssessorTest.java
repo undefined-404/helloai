@@ -28,7 +28,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * executorDoneIssues LLM 语义对比评估器单元测试（反馈回路第 1 层，Phase 1.5）。
+ * executorDoneIssues LLM 语义对比评估器单元测试（反馈回路第 1 层）。
  *
  * <p>覆盖：协议解析（doneIssues/reason 提取、非文本项过滤、空列表合法）、
  * JSON 围栏容错（stripFence 纯函数）、降级跳过（入参缺失/无平台凭证/自动选

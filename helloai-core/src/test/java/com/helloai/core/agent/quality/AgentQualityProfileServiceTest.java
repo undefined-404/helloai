@@ -34,7 +34,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Agent 质量画像服务单元测试（反馈回路第 1 层，Phase 1.5）。
+ * Agent 质量画像服务单元测试（反馈回路第 1 层）。
  *
  * <p>覆盖：质量分口径（首轮通过率 ×0.5 + 平均分归一 ×0.5、null 安全、clamp）、
  * 历史表现节渲染（TOP3 / 空画像省略）与 rebuild 重算一致性（口径与增量一致）。</p>
@@ -237,7 +237,7 @@ class AgentQualityProfileServiceTest {
     }
 
     // ════════════════════════════════════════════════════════════
-    //  incrementReviewerStats（反馈回路 Phase 4：双审/抽检 reviewer 维度计数）
+    //  incrementReviewerStats（反馈回路：双审/抽检 reviewer 维度计数）
     //  ════════════════════════════════════════════════════════════
 
     @Test
@@ -305,7 +305,7 @@ class AgentQualityProfileServiceTest {
     }
 
     // ════════════════════════════════════════════════════════════
-    //  statsOverview / statsAgentRankings（Phase 5 质量度量看板）
+    //  statsOverview / statsAgentRankings（质量度量看板）
     //  ════════════════════════════════════════════════════════════
 
     @Test

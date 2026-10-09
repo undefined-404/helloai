@@ -327,7 +327,7 @@ class SubTaskReviewServiceTest {
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 2, \"issues\": \"缺 3 个端点\", \"comment\": \"\"}", "stop", "llm", 100));
         when(agentService.getProfileById(EXECUTOR_ID)).thenReturn(llmAgent(EXECUTOR_ID, AgentRole.EXECUTOR));
-        // Phase 0 A3：预算充足返回 true（mock 默认 false 会误判为预算熔断分支）
+        // 预算充足返回 true（mock 默认 false 会误判为预算熔断分支）
         when(subTaskService.rework(SUB_TASK_ID, EXECUTOR_ID)).thenReturn(true);
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);
@@ -541,7 +541,7 @@ class SubTaskReviewServiceTest {
         when(subTaskService.getView(SUB_TASK_ID)).thenReturn(reviewSubTask());
         when(platformAgentExecutionService.executeSync(anyLong(), any(AgentTask.class)))
                 .thenReturn(AgentResult.success("{\"pass\": false, \"score\": 2, \"issues\": \"缺 3 个端点\", \"comment\": \"\"}", "stop", "llm", 100));
-        // Phase 0 A3：返工预算耗尽（attempt_total 达 max-reassign-attempts），rework 已转 DEAD_LETTER
+        // 返工预算耗尽（attempt_total 达 max-reassign-attempts），rework 已转 DEAD_LETTER
         when(subTaskService.rework(SUB_TASK_ID, EXECUTOR_ID)).thenReturn(false);
 
         reviewService.reviewSubTask(SUB_TASK_ID, EXECUTOR_ID);

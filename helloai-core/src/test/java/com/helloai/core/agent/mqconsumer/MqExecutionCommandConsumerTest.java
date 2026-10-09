@@ -30,7 +30,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Phase 2D N6：{@link MqExecutionCommandConsumer} 骨架单元测试。
+ * {@link MqExecutionCommandConsumer} 骨架单元测试。
  *
  * <p>覆盖 6 类行为：</p>
  * <ol>
@@ -76,7 +76,7 @@ class MqExecutionCommandConsumerTest {
     /**
      * 真实消息体构造器。
      */
-    /** 消息体含 requiredSkills（Phase 1 Step 1 fix：装箱字段经 MQ 反序列化不丢）。 */
+    /** 消息体含 requiredSkills（装箱字段经 MQ 反序列化不丢）。 */
     private byte[] buildMessageBody(String eventId, Long subTaskId, Long agentId, String accessType) {
         ExecutionCommandMqMessage msg = ExecutionCommandMqMessage.builder()
                 .recordId(1001L)
@@ -107,7 +107,7 @@ class MqExecutionCommandConsumerTest {
 
             consumer.onMessage(amqpMessage, channel, 99L);
 
-            // Phase 1 Step 1 fix：requiredSkills 装箱字段经 MQ 反序列化后不丢（toDomain 透传）
+            // requiredSkills 装箱字段经 MQ 反序列化后不丢（toDomain 透传）
             ArgumentCaptor<ExecutionCommand> cmdCaptor = ArgumentCaptor.forClass(ExecutionCommand.class);
             verify(localDelegate).consume(cmdCaptor.capture());
             assertThat(cmdCaptor.getValue().getRequiredSkills()).isEqualTo(List.of("eng-code-review"));

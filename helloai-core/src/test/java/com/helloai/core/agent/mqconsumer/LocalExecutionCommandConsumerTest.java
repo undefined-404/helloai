@@ -67,11 +67,11 @@ class LocalExecutionCommandConsumerTest {
     @Mock
     private AgentService agentService;
 
-    /** Phase 1 Step 2：启用工具解析（agent_mcp_server），消费侧 agent 域直读注入 ctx.tools。 */
+    /** 启用工具解析（agent_mcp_server），消费侧 agent 域直读注入 ctx.tools。 */
     @Mock
     private AgentMcpServerService agentMcpServerService;
 
-    /** Phase 1 Step 4：执行环境解析（agent.accessType），消费侧 agent 域解析注入 ctx.environment。 */
+    /** 执行环境解析（agent.accessType），消费侧 agent 域解析注入 ctx.environment。 */
     @Mock
     private ExecutionEnvironmentProvider executionEnvironmentProvider;
 
@@ -110,7 +110,7 @@ class LocalExecutionCommandConsumerTest {
             when(agentService.getById(11L)).thenReturn(agent);
             when(agentExecutionRecordService.markRunning(44L)).thenReturn(true);
             when(agentExecutionRecordService.markSuccess(44L, null)).thenReturn(true);
-            // Phase 1 Step 2/4：工具 / 环境由消费侧 agent 域解析注入装配器。
+            // 工具 / 环境由消费侧 agent 域解析注入装配器。
             // L3 P1-1（2026-10-06）：消费侧改调「按接入类型过滤」的 getEnabledToolsForAccess，
             // 本用例 accessType=API_KEY_LLM ⇒ 内部 LLM 执行者，注入清单应为过滤后的可注入集。
             when(agentMcpServerService.getEnabledToolsForAccess(11L, AgentAccessType.API_KEY_LLM))
@@ -381,7 +381,7 @@ class LocalExecutionCommandConsumerTest {
     }
 
     /**
-     * Phase 1 Step 1 fix：requiredSkills 由命令装箱（等价于 task.requiredSkills 装箱后的值，
+     * requiredSkills 由命令装箱（等价于 task.requiredSkills 装箱后的值，
      * 消费侧不再反向查询 task；生产代码由 4 处 createAssignedCommand 调用方装箱）。
      */
     private static ExecutionCommand baseCommand() {

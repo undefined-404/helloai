@@ -27,7 +27,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 事件流对账服务单元测试（Phase 0 B3）：
+ * 事件流对账服务单元测试：
  * 状态 → 期望末条事件映射、事件缺失/错位检出、无事件语义状态跳过、窗口与 limit 透传。
  */
 @ExtendWith(MockitoExtension.class)

@@ -17,7 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
 
 /**
- * 沙箱提供方第一阶段实现单元测试（P0-C Phase 4）。
+ * 沙箱提供方第一阶段实现单元测试（P0-C）。
  *
  * <p>验证 {@link EnvironmentSandboxProvider} 的环境解析透传与<b>诚实策略</b>：
  * 当前实现一律不标 ISOLATED（无真实安全沙箱，差距表 §6 口径），

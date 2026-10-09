@@ -22,7 +22,7 @@ import static org.mockito.Mockito.when;
  *
  * <p><b>被测事实</b>：{@code ExecutionCommandServiceImpl.createAssignedCommand}
  * （@Transactional）同事务写入 {@code ExecutionCommand / agent_execution_record /
- * agent_command_outbox} 三表（Phase 2H ②a 语义：要么一起提交要么一起回滚，杜绝
+ * agent_command_outbox} 三表（语义：要么一起提交要么一起回滚，杜绝
  * 「record 已提交但 outbox 没写」或反向孤儿）；随后手动触发
  * {@code OutboxRelayTask.relay()}（测试环境无 @EnableScheduling，调度显式化），
  * 经真实 Publisher Confirms 把 outbox 行推进 SENT → CONFIRMED，并经真实

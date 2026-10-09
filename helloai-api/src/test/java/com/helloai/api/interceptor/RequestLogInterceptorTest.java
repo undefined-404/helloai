@@ -21,7 +21,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
- * Phase 0 C4：{@link RequestLogInterceptor} 的 MDC 业务标识行为测试。
+ * {@link RequestLogInterceptor} 的 MDC 业务标识行为测试。
  *
  * <p>覆盖：请求头 X-Run-Id / X-Task-Id / X-Step-Id / X-Trace-Id 写入 MDC、空白头跳过、
  * traceId 自动生成、afterCompletion 统一清理。纯 Mockito + MockHttpServletRequest，不启动容器。</p>

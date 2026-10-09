@@ -16,7 +16,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 工具执行回路单元测试（P0-C Phase 2）。
+ * 工具执行回路单元测试（P0-C）。
  *
  * <p>验证 {@link ToolCallbackToolExecutor} 的执行对偶契约：懒加载目录 + 按名调用
  * {@link ToolCallback}，覆盖成功透传 / 空参默认 / 未知工具 / 空名短路 / 异常降级 /

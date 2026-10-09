@@ -78,7 +78,7 @@ class ExecutionResultHandlerTest {
     @Mock
     private ExecutionOutputParser executionOutputParser;
 
-    // Phase 1 Step 3：执行会话服务（终态 COMPLETED/FAILED；@InjectMocks 缺 mock 会注入 null 导致 NPE）
+    // 执行会话服务（终态 COMPLETED/FAILED；@InjectMocks 缺 mock 会注入 null 导致 NPE）
     @Mock
     private AgentSessionService agentSessionService;
 
@@ -130,7 +130,7 @@ class ExecutionResultHandlerTest {
                 .containsEntry("output", "done");
 
         verify(subTaskCommandPort).submit(22L);
-        // Phase 1 Step 3：执行会话终态 COMPLETED（turn=1+rework+attempt=1）
+        // 执行会话终态 COMPLETED（turn=1+rework+attempt=1）
         verify(agentSessionService).complete(22L, 11L, 1);
         verify(taskTimelinePort).recordEvent(
                 eq(33L), eq(22L), eq("sub_task_execute_submit"), eq(AgentRole.EXECUTOR), eq(11L),
@@ -163,7 +163,7 @@ class ExecutionResultHandlerTest {
 
         // W10：block(subTaskId, null, null) 逐字等价于 SubTaskService#block(Long)
         verify(subTaskCommandPort).block(22L, null, null);
-        // Phase 1 Step 3：执行会话终态 FAILED（error 摘要；turn=1）
+        // 执行会话终态 FAILED（error 摘要；turn=1）
         verify(agentSessionService).fail(22L, 11L, 1, "boom");
         verify(taskTimelinePort).recordEvent(
                 eq(33L), eq(22L), eq("sub_task_execute_failed"), eq(AgentRole.EXECUTOR), eq(11L),
@@ -231,7 +231,7 @@ class ExecutionResultHandlerTest {
         verify(subTaskCommandPort, never()).block(any(), any(), any());
         // 不应修改 context
         verify(subTaskCommandPort, never()).updateContext(any(), any());
-        // 走 "结果被丢弃" 时间线（Phase 2B 后由 handleReport() 统一接管非 IN_PROGRESS 拒绝）
+        // 走 "结果被丢弃" 时间线（后由 handleReport() 统一接管非 IN_PROGRESS 拒绝）
         verify(taskTimelinePort).recordEvent(
                 eq(33L), eq(22L), eq("sub_task_execute_result_discarded"), eq(AgentRole.EXECUTOR), eq(11L),
                 argThat((Map<String, Object> payload) ->

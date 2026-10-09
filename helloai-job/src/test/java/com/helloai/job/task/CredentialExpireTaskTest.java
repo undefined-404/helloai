@@ -17,7 +17,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link CredentialExpireTask} 单元测试（N-004 Credential Vault 收口，Phase 2 B2）。
+ * {@link CredentialExpireTask} 单元测试（N-004 Credential Vault 收口）。
  *
  * <p>覆盖：</p>
  * <ul>

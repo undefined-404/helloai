@@ -75,9 +75,9 @@ class SubTaskServiceQuotaTest {
     // LOG-20260904-009：装箱出口 requiredSkillsOf 懒解析 TaskService（quota 用例不触达，防 NPE）
     @Mock private org.springframework.beans.factory.ObjectProvider<TaskService> taskServiceProvider;
     @Mock private AgentEventRecorder agentEventRecorder;
-    // Phase 0 A3：共享预算原子累加 mapper（构造注入，quota 用例不触达，仅防 NPE）
+    // 共享预算原子累加 mapper（构造注入，quota 用例不触达，仅防 NPE）
     @Mock private SubTaskMapper subTaskMapper;
-    // Phase 1 Step 3：执行会话服务（quota 用例不触达，仅防 NPE）
+    // 执行会话服务（quota 用例不触达，仅防 NPE）
     @Mock private AgentSessionService agentSessionService;
 
     private SubTaskService subTaskService;
@@ -92,9 +92,9 @@ class SubTaskServiceQuotaTest {
                 heartbeatService, reviewPort, implicitScoreCalculator,
                 rewardService, applicationEventPublisher, taskTimelineService,
                 dispatchProps, concurrencyQuotaService,
-                // Phase 0 A2：租约看门狗配置（assignNext 不涉及租约，默认值即可）
+                // 租约看门狗配置（assignNext 不涉及租约，默认值即可）
                 new WatchdogProperties(), agentSessionService, attachmentServiceProvider, taskServiceProvider, agentEventRecorder,
-                // Phase 0 A3：共享预算 mapper（构造注入）
+                // 共享预算 mapper（构造注入）
                 subTaskMapper));
         // §6.140 收口：行锁改走 AgentService.lockByIdForUpdate（ObjectProvider 懒解析）；
         // lenient：状态校验失败路径不触发行锁，避免 UnnecessaryStubbing

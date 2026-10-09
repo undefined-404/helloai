@@ -11,7 +11,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 /**
- * {@link ProviderChatModelCache} 单元测试（N9 Phase 2B）。
+ * {@link ProviderChatModelCache} 单元测试（N9）。
  *
  * <p>覆盖：</p>
  * <ul>

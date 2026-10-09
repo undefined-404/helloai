@@ -40,7 +40,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Phase 2H ②a 适配后的 {@link ExecutionCommandService} 单元测试。
+ * 适配后的 {@link ExecutionCommandService} 单元测试。
  *
  * <p>本测试覆盖：</p>
  * <ul>
@@ -52,7 +52,7 @@ import static org.mockito.Mockito.when;
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("ExecutionCommandService (Phase 2H ②a)")
+@DisplayName("ExecutionCommandService")
 class ExecutionCommandServiceTest {
 
     @Mock

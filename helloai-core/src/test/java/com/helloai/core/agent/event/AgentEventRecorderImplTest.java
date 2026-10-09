@@ -23,7 +23,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.verify;
 
 /**
- * Phase 0 B1：Agent 事件记录器双写测试。
+ * Agent 事件记录器双写测试。
  *
  * <p>验证 {@code agent_event}（轨迹主表）与 {@code agent_outbox_event}（Outbox）
  * 同事务双写、共享同一 eventId（B3 对账键）、payload 冗余事件上下文。</p>

@@ -26,7 +26,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * Phase 0 A6 / A7：Agent 事件流读侧投影测试。
+ * Agent 事件流读侧投影测试。
  *
  * <p>验证 {@link AgentEventQueryServiceImpl#traceBySubTaskId} / {@link #traceByRunId} /
  * {@link #traceByTaskId} / {@link #pageAuditByTaskId} 的投影口径（entity → VO 字段一一映射）与顺序透传；

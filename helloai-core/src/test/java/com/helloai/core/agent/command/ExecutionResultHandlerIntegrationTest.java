@@ -97,7 +97,7 @@ class ExecutionResultHandlerIntegrationTest {
     @Mock
     private AgentEventRecorder agentEventRecorder;
 
-    // Phase 1 Step 3：执行会话服务（终态 best-effort，集成用例仅防 NPE）
+    // 执行会话服务（终态 best-effort，集成用例仅防 NPE）
     @Mock
     private AgentSessionService agentSessionService;
 

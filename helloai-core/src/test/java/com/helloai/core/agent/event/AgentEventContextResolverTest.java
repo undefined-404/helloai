@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * {@link AgentEventContextResolver} 单元测试（Phase 0 B2）。
+ * {@link AgentEventContextResolver} 单元测试。
  *
  * <p>2026-10-01：{@code resolveTurn} 形参由 task 域实体 {@code SubTask} 改为两个计数，
  * 以摘除 agent → task 的反向 import；原「空实体」语义等价折算为「两个计数皆空」。</p>

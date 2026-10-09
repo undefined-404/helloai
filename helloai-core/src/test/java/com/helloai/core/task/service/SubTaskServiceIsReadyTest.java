@@ -60,17 +60,17 @@ class SubTaskServiceIsReadyTest {
                 mock(RewardService.class), mock(ApplicationEventPublisher.class),
                 mock(TaskTimelineService.class),
                 new AgentDispatchProperties(), mock(ConcurrencyQuotaService.class),
-                // Phase 0 A2：租约看门狗配置（默认值即可，isReady 不涉及租约）
+                // 租约看门狗配置（默认值即可，isReady 不涉及租约）
                 new WatchdogProperties(),
-                // Phase 1 Step 3：执行会话服务 mock（isReady 不触达，仅防 NPE）
+                // 执行会话服务 mock（isReady 不触达，仅防 NPE）
                 mock(AgentSessionService.class),
                 // §6.104 打回失效：ObjectProvider mock 不返任何 bean，getIfAvailable 返回 null 内部判空跳过
                 mock(org.springframework.beans.factory.ObjectProvider.class),
                 // LOG-20260904-009：装箱出口 requiredSkillsOf 懒解析 TaskService（isReady 不触达，仅防 NPE）
                 mock(org.springframework.beans.factory.ObjectProvider.class),
-                // Phase 0 B2：事件记录器 mock（rework/reworkFresh 埋点不验证，仅防 NPE）
+                // 事件记录器 mock（rework/reworkFresh 埋点不验证，仅防 NPE）
                 mock(AgentEventRecorder.class),
-                // Phase 0 A3：共享预算 mapper mock（isReady 不触达，仅防 NPE）
+                // 共享预算 mapper mock（isReady 不触达，仅防 NPE）
                 mock(SubTaskMapper.class));
         subTaskService = spy(real);
         // lambdaQuery 链式 mock：绕开无 Spring 上下文时的 baseMapper 依赖

@@ -42,7 +42,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * Agent 循环真身单元测试（P0-C Phase 3）。
+ * Agent 循环真身单元测试（P0-C）。
  *
  * <p>以确定性 {@link StubChatModel}（可编程响应队列 + 记录最近 messages）验证
  * {@link ChatModelToolLoop} 的手动工具循环契约：终态判定 / 工具执行与 Observation 回喂 /

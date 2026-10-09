@@ -40,7 +40,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Phase 2H ②a：{@link OutboxRelayTask} 的单元测试。
+ * {@link OutboxRelayTask} 的单元测试。
  *
  * <p>覆盖：</p>
  * <ol>
@@ -55,7 +55,7 @@ import static org.mockito.Mockito.when;
  * 单测直建对象不涉及锁分支（v1.2 §阶段2：SETNX 手写锁迁 ShedLock）。</p>
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("OutboxRelayTask (Phase 2H ②a)")
+@DisplayName("OutboxRelayTask")
 class OutboxRelayTaskTest {
 
     @Mock

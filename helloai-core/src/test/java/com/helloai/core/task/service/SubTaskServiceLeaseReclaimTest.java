@@ -44,7 +44,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 租约回收 + 执行会话中断点记录（Phase 1 Step 3，N-007 恢复载体）：
+ * 租约回收 + 执行会话中断点记录（N-007 恢复载体）：
  * reclaimExpiredLeases 回收过期租约时，调用 agentSessionService.interrupt 记录中断点
  * （ABORT 幂等防重入）并落 timeline sub_task_session_interrupted。
  */

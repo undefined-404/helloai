@@ -13,7 +13,7 @@ import java.net.SocketTimeoutException;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Phase 0 A3 坑点 3「单一权威」：共享重试预算（attempt_total）判定测试。
+ * 坑点 3「单一权威」：共享重试预算（attempt_total）判定测试。
  *
  * <p>模拟「Executor 重试 N 次 → 各重试层检查共享计数器已达上限 → 不再重试」链路：
  * 计数器统一存在 {@code sub_task.attempt_total}，判定语义收敛在 {@link RetryPolicy}，

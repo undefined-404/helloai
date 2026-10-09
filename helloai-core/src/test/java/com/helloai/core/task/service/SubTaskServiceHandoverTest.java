@@ -82,9 +82,9 @@ class SubTaskServiceHandoverTest {
     // LOG-20260904-009：装箱出口 requiredSkillsOf 懒解析 TaskService（换派用例不触达，防 NPE）
     @Mock private ObjectProvider<TaskService> taskServiceProvider;
     @Mock private AgentEventRecorder agentEventRecorder;
-    // Phase 0 A3：共享预算原子累加 mapper（rework 预算消费 / reworkFresh 清零）
+    // 共享预算原子累加 mapper（rework 预算消费 / reworkFresh 清零）
     @Mock private SubTaskMapper subTaskMapper;
-    // Phase 1 Step 3：执行会话服务（换派用例不触达，仅防 NPE）
+    // 执行会话服务（换派用例不触达，仅防 NPE）
     @Mock private AgentSessionService agentSessionService;
 
     private SubTaskService subTaskService;
@@ -98,9 +98,9 @@ class SubTaskServiceHandoverTest {
                 heartbeatService, reviewPort, implicitScoreCalculator,
                 rewardService, applicationEventPublisher, taskTimelineService,
                 dispatchProps, concurrencyQuotaService,
-                // Phase 0 A2：租约看门狗配置（changeStatus 进 IN_PROGRESS 时会读，默认值即可）
+                // 租约看门狗配置（changeStatus 进 IN_PROGRESS 时会读，默认值即可）
                 new WatchdogProperties(), agentSessionService, attachmentServiceProvider, taskServiceProvider, agentEventRecorder,
-                // Phase 0 A3：共享预算 mapper（rework 预算消费 / reworkFresh 清零）
+                // 共享预算 mapper（rework 预算消费 / reworkFresh 清零）
                 subTaskMapper));
         doReturn(true).when(subTaskService).updateById(any(SubTask.class));
         // §6.104 打回失效：让 ObjectProvider 返回 mock，便于断言 invalidateBySubTask 被调

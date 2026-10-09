@@ -26,7 +26,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link ReviewerRecheckTask} 单元测试（反馈回路 Phase 4 抽检）。
+ * {@link ReviewerRecheckTask} 单元测试（反馈回路抽检）。
  *
  * <p>覆盖：开关关闭跳过 / 无候选跳过 / 抽样批量折算（候选 × 比例，
  * 上限 maxBatch）/ 单条失败不中断。</p>

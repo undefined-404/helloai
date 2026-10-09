@@ -27,7 +27,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 质量画像增量维护器单元测试（反馈回路第 1 层，Phase 1.5）。
+ * 质量画像增量维护器单元测试（反馈回路第 1 层）。
  *
  * <p>覆盖：null 防御、首次建画像初始值口径、防重幂等（last_review_record_id 递增判定）、
  * 增量原子调用参数口径（首轮通过/返工轮次/评分）、incrementCore 0 行短路、

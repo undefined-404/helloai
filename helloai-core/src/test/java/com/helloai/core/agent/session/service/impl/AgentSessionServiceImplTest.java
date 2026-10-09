@@ -24,7 +24,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Agent 执行会话服务单元测试（Phase 1 Step 3）：
+ * Agent 执行会话服务单元测试：
  * start 幂等（同 turn 复用 / 异 turn append）/ advance / saveLoopCheckpoint（merge snapshot.loop）/
  * complete / fail / interrupt（ABORT + 返回中断摘要）。纯 Mockito 测试 mapper 层。
  *
