@@ -4,7 +4,7 @@
 >
 > 本文档只描述当前真实代码与已落地能力，不描述未来愿景。
 >
-> 最后更新：2026-10-09（**§8 Event 基线订正**：Fork「消费面已落地」与代码实测不符 → 改为「仅快照服务、**无消费方**；入口 / 原 Run 冻结 / 驱动执行已于 2026-10-09 裁定 **WONTFIX**」，依据 `D-2026-10-09-5`）
+> 最后更新：2026-10-09（**§8 Event 基线订正**：Fork「消费面已落地」与代码实测不符 → 改为「仅快照服务、**无消费方**；入口 / 原 Run 冻结 / 驱动执行已于 2026-10-09 裁定 **WONTFIX**」，依据 `D-2026-10-09-5`；**§7 Runtime 基线补 REF-1.3 工具注册两个语义位 + 不可关闭清单**；**§9 Skill 基线补元数据事实源迁移**（REF-1.1/1.2，md frontmatter + 目录扫描））
 
 # 1. 当前项目定位
 
@@ -196,6 +196,7 @@ RuntimeTurnExecutor          ← 唯一 AgentRuntime 实现
 - `ToolExecutor` 已具备执行回路真身（懒加载 spring-ai ToolCallback 目录按名调用，与 ToolRegistry 元数据面同源同构；未知工具 / 空参 / 执行异常 best-effort 返回失败不抛）；
 - `AgentLoop` 已具备手动工具循环真身（`runtime/loop`：ChatModel 契约 + ToolExecutor 执行 + TOOL_CALL 事件，`internalToolExecutionEnabled=false` 由循环接管工具执行，maxIterations 硬上限防死循环）；**每轮 iteration 边界经 `LoopCheckpointListener` 落 `agent_session.snapshot.loop`**（同层恢复 checkpoint，零 DDL），`tokenUsage` 逐轮累加并落 `agent_execution_record.token_usage`（V97）；
 - `RuntimeTurnExecutor` 组装 `AgentLoop` / `ToolExecutor` / `ToolRegistry` / `AgentSkillSpecService` / `SandboxProvider`；prompt / chatModel / 会话 / 对话流由 `AgentRuntimeContextAssembler` 装配后注入。
+- **工具注册两个语义位（2026-10-09 起）**：`ToolRegistry.resolve(names, ToolContext)` 返回「**生效形态**」，其结果是**模型可见工具的唯一判据**（`resolveVisibleCallbacks` → `AgentLoopInput`）——①「按条件可用」（`ToolCallbackContributor.toolAvailability()`，`false` ⇒ 摘除）②「按上下文动态描述」（`toolDescription()` + `DescribedToolCallback` 包装）。**生效粒度 = Turn**；工具目录加载失败时 **fail-open**（`catalogDegraded`，未知名字保留）；**不作用**于 MCP `tools/list` 暴露面。**不可关闭清单 `CRITICAL_TOOLS = {pullTasks, submitResult, heartbeat}`** 生效于授权面（`isToolEnabled` 短路 + `getEnabledTools` 并集），**刻意不抵销** `API_KEY_LLM` 的 MCP 会话工具过滤。当前真实声明者 = `WebSearchToolCallback`（无搜索凭据 ⇒ 摘 `web_search`）。边界正文见 `design/Agent_Runtime.md`。
 
 当前仍不能宣称已完成完整 Harness Runtime：
 
@@ -246,19 +247,24 @@ Skill resolve
 resolvedSpecs
 SKILL_RESOLVED（携带 resolvedVersions）
 SkillPackage 元数据层（version / requiredTools / dependencies / inputSchema / outputSchema / validationRules）
+SkillPackageCatalog 目录扫描（元数据事实源 = md frontmatter，懒加载，按 name 升序）
 SKILL_CATALOG 目录注入（拆解侧能力感知，G-010 S2）
 AgentTask.skills 契约层统一注入（execute/executeStream + 拆解/审查收口/报告 5 类同步 LLM 调用挂点，空不注入行为零变化）
+技能目录查询 API（GET /api/skills/catalog，skill:view，V103）
 ```
 
 Skill 已从隐式 Prompt 拼接迁移为显式 Runtime 输入 + 元数据面，required_skills 创建 → 拆解 → 派发 → 执行四段贯通，并经真实任务实测闭环（外部执行者双轮，见 log）。
 
-已结构化技能包 4 个（eng-*）：eng-doc-standard / eng-code-review / eng-verification / eng-web-research（requiredTools=[web_search]）。
+**元数据事实源（2026-10-09 起）**：技能的 9 个元数据字段由 classpath `skills/plugins/*.md` 的 **YAML frontmatter** 承载（8 键白名单，`fileName` 由文件名推导），**原先的 Java `KNOWN_SPECS` 编译期硬编码已删除**；目录扫描按 name 升序，坏文件显式报 corrupt（不静默跳过）。⇒ **新增技能 = 丢一个 md 文件，零改 Java 代码**（「零发版」未达成：需外部技能目录）。
+
+已结构化技能包 4 个（eng-*）：eng-code-review / eng-doc-standard / eng-verification / eng-web-research（requiredTools=[web_search]）。
 
 当前尚未全量形成的 Capability Package 剩余缺口主要是：
 
 ```text
 Instructions 结构化
 技能回流贡献规范（D5-3 未交付）
+外部技能目录 + 摄入安全闸门（REF-1.5/1.6）
 ```
 
 # 10. 当前 Environment / Sandbox 基线

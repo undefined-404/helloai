@@ -114,42 +114,13 @@ Legacy    Runtime
 → Runtime 主路径
 ```
 
-## 现状基线（2026-09-07 代码核查）
+## 迁移期记录（已终结）
 
-> **订正（2026-09-30，G-002 单轨硬切）**：本行以下、含 P0-B / P0-B-2 / 「真身灰度联调」各段，均为 **2026-09-07~09-08 的历史过程记录**，保留用于追溯（原口径名「灰度第 0 步」已于 2026-10-09 去分期化，改称能力名并登记进《差距表》§0 注册表 ⑧）。旧链入口（`LegacyExecutorAdapter` / `RuntimeAgentRuntimeRouter` / `TurnLlmCaller` / `TurnLlmCallContext`）与 `runtime-enabled` / `v2-enabled` / `gray-percent` 开关**已于 2026-09-30 全部删除**；`RuntimeTurnExecutor` 为唯一 `AgentRuntime` 实现。**灰度机制不复存在**，「迁移节奏 100% Legacy → … → Runtime 主路径」已直接终结于最后一步；回退手段为 `git revert`。
-
-契约层已是单轨：`LocalExecutionCommandConsumer` 与 `MqExecutionCommandConsumer`（委托本地消费）统一经 `AgentRuntime#execute`——唯一执行契约，旧直连执行链已下线。
-
-即当前 100% 流量经 Runtime 契约、0% Runtime 真身。本阶段实际工作不是"建轨"，而是：① 让 Runtime 侧长出真身（能力提取见 P0-C）；② 真身可用后补 Legacy ↔ Runtime 灰度切换与回滚口径。
-
-P0-B 落地（2026-09-07）：**Runtime 真身已装配**——`RuntimeTurnExecutor`（AgentContext 输入 + AgentLoop / ToolExecutor / ToolRegistry / AgentSkillSpecService / SandboxProvider 组装；Turn 事件骨架 AGENT_STARTED→SKILL/TOOL/ENVIRONMENT_RESOLVED→CONTEXT_BUILT→[Loop TOOL_CALL]→AGENT_COMPLETED + 沙箱策略观测；prompt/chatModel 由调用方注入，不复制旧链业务编排）+ `RuntimeAgentRuntimeRouter`（`@Primary` + `@Order(1)`，`agentRuntimes.get(0)` 恒命中；按 `helloai.execution.runtime-enabled` 二进制切换，默认 `false`=Legacy 零变化，回滚=置回 false）。`AgentContext` 扩展 `accessType / systemPrompt / userPrompt / chatModel`；消费者注入 accessType。单测 6 用例 + 回归 38 用例 PASS（44 用例 0 失败）。
-
-P0-B-2 落地（2026-09-07）：**主链接线注入完成，P0 主线收官**——LLM 工厂暴露 ChatModel（`ProviderChatClientFactory`/`ProtocolFactory` 三工厂 + `LlmProviderChatClientFactoryRegistry.createChatModel`，与 ChatClient 共享缓存实例）；`AgentChatClientService.buildChatModel`（mock → MockChatModel；真实 → 工厂出口）；新增 `TurnLlmCaller`（executeOnce LLM 调用点封装 Legacy 单次 / Runtime AgentLoop 切换，同一 `runtime-enabled` 开关；Runtime 路径 ChatModel + ToolExecutor + 循环内 TOOL_CALL 事件，Legacy 路径维持手动 TOOL_CALL 标记防双记）；`Router` 增加驱动性感知（runtimeEnabled 且 ctx 携带 chatModel 才走真身，dispatch 上下文回落 Legacy）。单测 TurnLlmCaller 4 + Router 3 + 工厂套回归，累计 **75 用例 0 失败**。
-
-**当前动作**：**P0 主线（P0-A / P0-B / P0-C）完整收官**——Event Stream 统一、Runtime 真身 + 主链接线注入、八件套落地全部完成。P1 主体已推进（G-004 真实任务实测 / G-006 C1·C2·D 全链暴露 / G-010·G-011 落地），2026-09-10 完成外部执行者双轮全链闭环（Round2/Round3）。后续主线程：P1 剩余项（Recovery/Fork 消费面 / Skill 回流规范 / Sandbox 第二阶段）+ 技术债清偿。
-
----
-
-**真身灰度联调 · 执行口径（2026-09-08 立，见 `LOG-20260908-006`，对应 §11 第 1/2/7 问验收）**
-
-迁移节奏（100% Legacy → 95/5 → …）当前停在「100% 经契约、0% 真身」：开关机制已就位但从未在真实环境打开过。本步目标是把 §3 灰度验证走起来，不是新功能。执行口径：
-
-- **点亮路径（联调排障关键）**：打开 `runtime-enabled` 后的真实接线 = `TurnLlmCaller#runRuntimeLoop`（buildChatModel → AgentLoop 手动循环 + 循环内 TOOL_CALL 事件）。消费侧 `LocalExecutionCommandConsumer` 构造 AgentContext **不注入 chatModel / prompt**，Router 驱动性判断（runtimeEnabled && chatModel != null）恒 false → **恒回落 LegacyExecutorAdapter** → executeOnce → TurnLlmCaller 内切换；Router → RuntimeTurnExecutor 八件套骨架需消费侧注入模型后才点亮，为后续项。开关 = Router + TurnLlmCaller 同一 `runtime-enabled`（默认 false），dev 全量打开，回滚 = 置回 false。
-- **事件序列断言（parity 对账基线）**：Legacy / Runtime 双路径均为 `AGENT_STARTED(1) → SKILL_RESOLVED(5) → TOOL_RESOLVED(6) → ENVIRONMENT_RESOLVED(7) → CONTEXT_BUILT(2) → [TOOL_CALL(3/4)]×n → AGENT_COMPLETED(0)`（step 编号 = 槽位语义，非时间序）；对账用执行记录 executorName（Runtime = `RuntimeAgentLoop`）+ timeline route=agent_runtime 双点区分路径。真实 provider 的 tool-calling 兼容验证窗口为联调预留修复项（75 用例单测全 mock/stub ChatModel，真实报文未在链路跑过）。
-- **幂等口径（拍板）**：Loop 内工具调用无幂等键（ToolCallbackToolExecutor.execute(toolName, argumentsJson)，循环无每轮 checkpoint）→ **Loop 级失败即整体失败**，由现有重派链兜底（TurnLlmCaller 异常 best-effort 转 failure → ExecutionResultHandler.handleFailure；结果级 idempotencyKey 去重不变）。12 个平台工具逐个标注幂等性：只读类（pullTasks / getDepsSummary / getAgentStatus / Echo 等）天然安全；写操作类要么自带幂等键（submitResult(resultId)）、要么天然幂等（claim / checkIn / heartbeat 等 CAS 状态守卫）、要么测试期禁用。
-- **外部 Agent 定性（CLI_CLIENT）**：外部链路（pullTasks / checkIn / checkOut / heartbeat / submitResult）**代码路径零变更**——submitResult 直达 McpToolService → ExecutionResultHandler.handleReport，不经 AgentRuntime / 本次消费者；本步只做回归验证（既有 verify 脚本 + 真实外部 agent 拉取一轮）。预期事件流 = 命令下发 timeline 事件 + 回写层 `AGENT_COMPLETED(0)`，无 Turn / Step（外部自执行，平台只统一命令与回写契约）。
-- **执行顺序**：① 幂等口径已立（本段）→ ②（可选）Replay / Audit 两端点（traceByRunId / pageAuditByTaskId 接 Controller，半天）→ ③ dev 全量开关 LLM 灰度联调 → ④ 外部 Agent 回归 + 真实拉取 → ⑤ 回填差距表 G-002 / G-006 状态与迭代日志。
-
-**真身灰度联调 · 结果（2026-09-08 已执行并闭环，见 `LOG-20260908-006`，对应 §11 第 1/2/7 问验收）**
-
-- **执行器实证**：基线（false）`agent_completed` payload.executor=`ApiKeyAgentExecutor`；真身（true）=`RuntimeAgentLoop`（TurnLlmCaller#runRuntimeLoop 点亮路径实证，非代码路径推断）。
-- **事件序列断言命中**：基线 `1→5→6→7→2→3→4→0` 单轮；真身 `1→5→6→7→2→[3/4]×3→0`——真实 DeepSeek tool-calling 3 轮成对（getAgentStatus → pullTasks → heartbeat），LLM 每轮学习工具结果继续尝试，工具失败（agentId=0 校验失败）不中断 Loop；参数 JSON 解析与 assistant 回传格式真实报文跑通，**联调预留修复项（provider tool-calling 兼容窗口）未触发**；若全部成功为只读/幂等类无副作用（幂等口径实证）。
-- **parity 对比**：结果质量（review score 双路径均 4）/ 事件序列 / 回写唯一入口（ExecutionResultHandler + idempotencyKey 去重）三方一致；差异仅 Runtime 不统计 tokens（payload.tokens=null），Legacy ≈10.3K~10.8K，属已知语义差异。
-- **回滚演练**：`runtime-enabled` 置回 false 重启后 executor 回到 `ApiKeyAgentExecutor`、单轮序列、review score=4，与基线零差异（严格回滚：配置恢复 + 重启 + 同任务重跑对比）。
-- **对账**：verify-c3-events 三探针全绿（P1 无孤儿 15/15 成对 / P2 无 MISMATCH / P3 RUNNING 0 滞留）。
-- **外部 Agent 回归（CLI_CLIENT，真实 TeleAgent）**：造数→10min 认领窗口内拉取→claimSubTask→本地执行（4 个 API 测试，命令/stdout/exit code 证据）→submitResult→DONE；`sub_task_execute_submit` source=EXTERNAL + executor=cli_client + **idempotencyKey=r-{subTaskId}-v1**（submitResult 自带键实证）；回写层 `AGENT_COMPLETED(0)` 无 Turn/Step（外部自执行口径命中）；review approved score=4 一次通过。
-- **执行口径修正 2 条**（首轮实跑踩坑）：① 外部 CLI_CLIENT 任务无人认领会触发 `assigned-timeout` 重派，5 次超限进死信（run 1 即被超时重派→死信→人工重派 inner 吃掉）——外部回归须在认领窗口内完成；② `runtime.v2-enabled`（application.yml 遗留）与 `helloai.execution.runtime-enabled` 是**两个开关**——前者代码零读取（仅文档/脚本语义），后者才是真身开关，勿混淆。
-- **状态落账**：G-002 / G-003「名义收官 → 实际闭环」，差距表已同步；G-006（Replay / Audit API 暴露）当轮未做（服务层就绪），已由增量 C1/C2/D 补齐（2026-09-08~10，见 §7）。
+> **本段已终结**（2026-09-30 G-002 单轨硬切）：旧链入口与双轨开关（`runtime-enabled` / `v2-enabled` / `gray-percent`）**全部删除**——不存在双轨，也不存在灰度阶段；本段原载的迁移期口径（真身装配 → 主链接线注入 → 灰度联调 → 全量档）与「当前动作」均**已失效，不再作为行动依据**。
+>
+> 当前执行链基线见 `doc/HelloAI 项目基线文档.md` §5 / §7；`G-002` 状态见《HelloAI 实现差距表》。
+>
+> **历史现场**：该迁移期的执行口径、联调结果、parity 对账、回滚演练、外部 CLI_CLIENT Agent 回归与两条实跑修正，见 `LOG-20260908-006`（原文已于 2026-10-09 按去过程化清理移出本文件）。
 
 # 4. P0-C：AgentRuntime
 

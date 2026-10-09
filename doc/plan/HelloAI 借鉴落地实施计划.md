@@ -6,7 +6,7 @@
 > **用户裁定**：`D-2026-10-09-4`（见《差距表》§0「当前生效的取舍决策」）——四项能力优先级、备份/恢复与 RAG 入目标架构、沙箱生产形态、语义位与不可关闭清单同批。
 > **性质**：本计划只收**可执行结论**（借鉴落点 → 动作 → 验收 → 验证集 → 回填），不含调研过程（在 `research/`）与稳定设计（在 `design/`）。
 > **完成迁移**：执行完成后迁入 `doc/archive/implemented/` 并标 `Done`。
-> **最后更新：2026-10-09（v4）**——v1 勘误已并入正文；v2 新增 **11 处动作订正**（会导致回归失败或做不出来的部分）、**每组的验证集与文档回填**、**许可证口径**、**REF-6 载体修正**；v3 **Fork 相关条目全部取消**（`D-2026-10-09-5`，REF-2 收敛为「备份 / 恢复」）；**v4 两项重大调整**（`D-2026-10-09-6`）：① **REF-3 沙箱整组降级为「条件触发」**——当前**没有可隔离的执行对象**，不排期、只留预案（修正原「第 3 优先级」排序）；② **新增 `REF-7`「外部 Agent 工作详情快照」**（差距锚点 `G-020`）。原 §11 待拍板 5 条**已全部裁定**并移入 §12 裁定记录，**本计划当前无待拍板项**。
+> **最后更新：2026-10-09（v5）**——v1 勘误已并入正文；v2 新增 **11 处动作订正**（会导致回归失败或做不出来的部分）、**每组的验证集与文档回填**、**许可证口径**、**REF-6 载体修正**；v3 **Fork 相关条目全部取消**（`D-2026-10-09-5`，REF-2 收敛为「备份 / 恢复」）；**v4 两项重大调整**（`D-2026-10-09-6`）：① **REF-3 沙箱整组降级为「条件触发」**——当前**没有可隔离的执行对象**，不排期、只留预案（修正原「第 3 优先级」排序）；② **新增 `REF-7`「外部 Agent 工作详情快照」**（差距锚点 `G-020`）。原 §11 待拍板 5 条**已全部裁定**并移入 §12 裁定记录，**本计划当前无待拍板项**；**v5 = REF-1.1 / 1.2 / 1.3 / 1.3b 已完成**（2026-10-09），各组结果与未达成分项见各节 `Status` 行。
 
 ---
 
@@ -57,6 +57,8 @@ REF-6 判据：随对应组落地，不单独排期
 
 ### REF-1.1 补 frontmatter
 
+> **Status：✅ 已完成**（2026-10-09）。**须遵守的口径**：`fileName` 由文件名推导、**不得写入 frontmatter**（写入即判 corrupt）；技能元数据以 frontmatter 为唯一事实源。
+
 | 项 | 动作 | 验收 |
 |---|---|---|
 | REF-1.1a | **先改解析**：`AgentSkillSpecServiceImpl` 剥离 frontmatter **之后**再按 `DETAIL_SEPARATOR`（`"\n---\n"`，`:32` 定义、`:129` `indexOf` 取首个命中）切「执行速览」 | 改造前后**同一份 md 的注入输出逐字一致** |
@@ -67,6 +69,8 @@ REF-6 判据：随对应组落地，不单独排期
 > ② **只搬 4 个字段 ⇒ 存量元数据丢失**：`eng-code-review` 已实填 `inputSchema` / `outputSchema`；字段集必须取全 9 个。
 
 ### REF-1.2 目录扫描替代 `KNOWN_SPECS`
+
+> **Status：✅ 已完成**（2026-10-09）。**未达成**：「新增技能**零发版**」——当前只达「零改 Java 代码」，零发版需外部技能目录（与 `REF-1.6` 同批）。
 
 | 项 | 动作 | 验收 |
 |---|---|---|
@@ -84,6 +88,9 @@ REF-6 判据：随对应组落地，不单独排期
 |---|---|---|
 | REF-1.3 | **新增**两个语义位——「按条件可用」（`false` 即从工具列表**摘除**）与「按上下文动态描述」（每轮重写 description） | 无 KB 时 `search_knowledge` 不在工具列表；每轮 description 反映本轮可见资源 |
 | REF-1.3b | 同批实现 `CRITICAL_TOOLS` 式**不可关闭清单**（写进禁用列表也被剔除） | 单测：把关键工具写入禁用列表后仍在列表内 |
+
+> **Status：✅ 已完成**（2026-10-09）。**需调整一处**：本组原按「`resolve` 仅 2 个调用点、且都在每轮装配时调用 ⇒ 语义位天然生效」排期，该前提**不成立**（两处调用的结果都不进模型可见工具）⇒ **实际范围含「同批改造消费点」**（`resolve` 结果成为模型可见工具的唯一判据），复用本组做同类改造时按此预估工期与风险。
+> **未具备**：动态描述的生产消费者（待 `REF-4.1`）；字面验收项 `search_knowledge` 随 `REF-4`；生效粒度 = Turn（非每次迭代）。过程、判据与边界正文见 `LOG-20261009-012` 与 `design/Agent_Runtime.md` §ToolRegistry 语义位。
 
 > ⚠️ **v1 订正（三处）**：
 > ① **前提不成立**：所谓「planner 工具收窄**从硬编码变配置**」——现状**根本没有收窄机制**（`excludeTool` / `disabledTool` / `availability` 全库 0 命中）；唯一近似是 **Agent-工具绑定层** `agent_mcp_server.is_enabled` + `getEnabledToolsForAccess`。本项应表述为「**新增**可用性语义位」，**双层边界须显式界定**（用户裁定 `D-2026-10-09-4④`）：绑定层 = 某 Agent 是否启用某工具（DB 事实）；语义位 = 平台/运行时事实是否具备该能力（进程内事实）。**「禁用了」与「不具备」分开表达**。
@@ -228,7 +235,7 @@ Regression ：verify-agent-execution-preview.ps1、verify-c3-events.ps1（ENVIRO
 |---|---|---|
 | REF-4.0a | **基础设施**：PG 镜像换 `pgvector` 版（现 `postgres:16.4-alpine` 无扩展）+ `CREATE EXTENSION vector` | 迁移可执行；两份 compose 与 deploy 文档同步 |
 | REF-4.0b | **架构决策**：嵌入模型供应商 / 维度 / 密钥管理（`credential_vault`）落 `design/adr/ADR-00x` | ADR 成文 |
-| REF-4.1 | 先定「什么不许进上下文」：无 KB 即摘工具（消费 REF-1.3 语义位）+ 注入预算（`char_budget` 契约 + 单测断言） | 无 KB 时 `search_knowledge` 不在工具列表 |
+| REF-4.1 | 先定「什么不许进上下文」：无 KB 即摘工具（**消费 REF-1.3 语义位，已具备**）+ 注入预算（`char_budget` 契约 + 单测断言） | 无 KB 时 `search_knowledge` 不在工具列表 |
 | REF-4.2 | pgvector 存储与检索（**不抄上游 SQLite 侧库**，PG 单后端优势） | 检索命中正确；预算截断生效 |
 | REF-4.3 | 引用溯源 marker：检索结果尾部附 marker，前端渲染卡片、喂模型前剥掉 | 报告/核验意见可点开引用来源 |
 
@@ -329,7 +336,7 @@ Regression ：verify-mcp-auth.ps1（工具面鉴权不变）、verify-c3-events.
 |---|---|---|
 | REF-6.1 | 幂等键必须 **status-scoped**（「先报 BLOCKED 后报 SUCCESS」不被静默吞） | 核对 `agentOutboxService` 去重键 |
 | REF-6.2 | 审计闭合 schema（无自由文本字段）；append-only 必须 **keyset 分页** | 见下订正 |
-| REF-6.3 | 能力摘除式治理（无 KB 即摘工具 / 不可关闭清单 / 条件可用） | 随 REF-1.3 |
+| REF-6.3 | 能力摘除式治理（无 KB 即摘工具 / 不可关闭清单 / 条件可用） | ✅ **已具备**（随 REF-1.3，2026-10-09）：语义位 + 生效面齐备，当前消费者 = `web_search`；`search_knowledge` 侧随 `REF-4.1` |
 | REF-6.4 | 水位四判据（一 marker 不得两语义 / 失败不推进 / 检测范围=推送范围 / 「扫描 0 B」≠「无 I/O」） | MinIO 附件同步 |
 | REF-6.5 | 身份调用上下文（`_sessionId` 进程级 = 多实例前置） | 登记，多实例前解决 |
 | REF-6.6 | 探活两类区分（对象在连接死 vs 对象在别 JVM） | 登记 |
@@ -337,7 +344,7 @@ Regression ：verify-mcp-auth.ps1（工具面鉴权不变）、verify-c3-events.
 | REF-6.8 | key parity 守卫（事件码服务端单一来源 + 前后端 key 匹配测试） | 治 `eventMeta` 三处漂移（已被 `sub_task_dispatch_fallback` 实例证伪） |
 | REF-6.9 | 探针纪律（「配好了」必须能被机器验证 + 保证回收） | 随 REF-3.4 |
 | REF-6.10 | 状态面最小化（有没有「事后查」的查询方） | 登记 |
-| REF-6.11 | denylist 默认全开 + 不可关闭清单 | 随 REF-1.3b |
+| REF-6.11 | denylist 默认全开 + 不可关闭清单 | ✅ **已具备**（随 REF-1.3b，2026-10-09）：MCP `tools/list` 保持「denylist 默认全开」（摘除不作用于该暴露面）；`CRITICAL_TOOLS = {pullTasks, submitResult, heartbeat}` 生效于授权面，不抵销 `API_KEY_LLM` 的可注入面过滤 |
 | REF-6.12 | sentinel 区分「未传」/「传 null」 | PATCH 语义 |
 | REF-6.13 | 新能力默认关闭（通过注入启用） | Sandbox / Skill 上线时 |
 
@@ -381,7 +388,7 @@ Regression ：verify-mcp-auth.ps1（工具面鉴权不变）、verify-c3-events.
 
 | # | 议题 | **裁定** | 依据 / 取舍（保留供追溯） |
 |---|---|---|---|
-| ③-1 | **REF-1.3 语义位落点** | **采纳建议**：放 `ToolRegistry.resolve(...)` 的上下文参数（新增 `ToolContext`，命名对齐 `SandboxContext`），**不进 `ToolDefinition` record** | 两者是不同层次事实：「工具是什么」（注册事实，单一事实源 = `@Tool` 注解）vs「本轮能不能用/怎么说」（运行时事实）；record 加 `Predicate`/`Function` 会破坏值语义与可序列化。`resolve` 仅 **2 个调用点**（`RuntimeTurnExecutor:93`、`AgentRuntimeContextAssembler:164`）且都是**每轮装配时**调用 ⇒「每轮重写 description」时序天然成立。实施时只在 Tool 侧加参、Skill 侧签名不动 |
+| ③-1 | **REF-1.3 语义位落点** | **采纳建议**：放 `ToolRegistry.resolve(...)` 的上下文参数（新增 `ToolContext`，命名对齐 `SandboxContext`），**不进 `ToolDefinition` record** | 两者是不同层次事实：「工具是什么」（注册事实，单一事实源 = `@Tool` 注解）vs「本轮能不能用/怎么说」（运行时事实）；record 加 `Predicate`/`Function` 会破坏值语义与可序列化。`resolve` 仅 **2 个调用点**（`RuntimeTurnExecutor:93`、`AgentRuntimeContextAssembler:164`）且都是**每轮装配时**调用 ⇒「每轮重写 description」时序天然成立。实施时只在 Tool 侧加参、Skill 侧签名不动。**⚠️ 本行「时序天然成立」的技术前提已于 2026-10-09 证伪**（两处调用结果都不进模型可见工具，实际范围含同批改造消费点）；订正过程见 `LOG-20261009-012`，`REF-1.3` 节的 `Status` 行记录了对后续同类改造的预估修正 |
 | ③-2 | **REF-5.4 出站客户端** | **采纳建议**：**OkHttp + 自定义 `Dns`** 做 pinning；协议白名单**默认只放 https**，本地开发放行 http 走**显式开关（默认关）** | ① **OkHttp 已在类路径**（`pom.xml:184` 注释：MinIO SDK 的传递依赖）——落地必须在 `pom.xml` **显式声明**；② 「IP 直连 + Host 头」**已排除**（SNI 变 IP ⇒ 证书主机名校验失败，绕过等于关校验）；③ JDK 内置 `HttpClient` **无公开 DNS 钩子** |
 | ③-3 | **REF-3 沙箱** | **采纳建议（修正原优先级）**：**整组降级为「条件触发」，不排期**；契约保持现状不再扩展；`G-005` 改「`Planned`（条件触发）」并登记三个触发条件 | 当前**无可隔离的执行对象**（外部 agent 在它自己终端；内部 agent 工具面全是平台 API、无 shell / 文件写；平台全库无脚本引擎 / 表达式求值）。触发条件：① 平台增加碰宿主的工具 / ② 技能包要被执行 / ③ 平台自持浏览器。**此项修正了原「第 3 优先级」排序** |
 | ③-4 | **REF-1.2 技能目录的下游一致性** | **采纳建议**：**服务端下发**（复用 REF-1.2c 的技能目录 API）；parity 守卫只留给**不适合下发的词表**（`AGENT_SKILL_OPTIONS` ↔ 后端 `KEYWORD_SKILLS`/`SYNONYMS`）与**事件码**（`REF-6.8`） | 前端常量有 **3 类语义**（`TaskFormDialog:210` 下拉拼接 / `PlanReviewDialog:489` 平台技能判定 / `skillLabelOf` 中文标签，被 `SubTaskDetail:209` 等 3 处调用）。保留常量 ⇒ 新增技能「后端生效、前端看不见」，直接抵消 REF-1.2 收益 |

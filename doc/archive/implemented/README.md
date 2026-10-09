@@ -14,6 +14,7 @@
 | 具体改造 / 缺陷修复方案 | `HelloAI_契约层能力注入与最终报告整合改造方案.md`、`HelloAI_外部Agent执行通道缺陷修复方案.md`、`HelloAI_子任务调度与对话流三处缺陷修复方案（2026-10-07）.md`、`HelloAI_无候选兜底与倒计时方案（2026-10-05）.md` |
 | 已执行完成的执行 / 检查 / 回归清单 | `HelloAI_V2回归测试方案（2026-10-04）.md`、`HelloAI_全面复测清单（2026-10-06）.md`、`deploy-checklist-arch-collect-2026-10.md` |
 | 借鉴方案 | `HelloAI_DeepSeek_Harness_Skills借鉴方案.md` |
+| 文档治理 / 去过程化清理方案 | `HelloAI 差距表去过程化专项清理方案（2026-10-09）.md` |
 
 ## 准入规则
 

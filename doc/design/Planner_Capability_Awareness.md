@@ -105,8 +105,8 @@ rule-based 先行的理由：粒度决策可解释、可回归（矩阵单测全
 
 回流最小形态（外部自升级 agent 迭代技能 → 融入平台技能包）：
 
-1. **贡献规范**：`skills/plugins/*.md` 文件承载 instructions；元数据登记于 `AgentSkillSpecServiceImpl.KNOWN_SPECS`（Java 声明，SkillPackage 构造）——两步合入即完成一个新技能包；
-2. **校验脚本**：新增 `verify-skill-packages.ps1`（UTF-8 头强制）——校验 KNOWN_SPECS 声明的 fileName 均存在于 classpath、requiredTools 均命中 ToolRegistry、版本格式合法；<br>**〔已交付 2026-09-10〕** 落地于 `scripts/powershell/verify-skill-packages.ps1`（UTF-8 BOM）：校验 fileName 存在于 classpath（src 必有 / target 同步核对 + 孤儿 WARN）、requiredTools 均命中 ToolRegistry 注册事实（@Tool 注解静态收集，无事实禁止全绿）、version 三段式数字、name / fileName / map.put 键唯一。真实仓库 18 PASS + 破坏样本 5 FAIL 双验证；
+1. **贡献规范**：`skills/plugins/*.md` 文件承载 instructions + **元数据（YAML frontmatter）**——**一步合入即完成一个新技能包**。<br>**〔2026-10-09 更新（REF-1.1/1.2）〕** 原先需「md + Java `KNOWN_SPECS` 两步」，现 `KNOWN_SPECS` 已删除，元数据由 frontmatter 承载（8 键白名单，见 [`Skill_Capability.md`](Skill_Capability.md) 头部契约）；**新增技能零改 Java 代码**（「零发版」待外部技能目录，未达成）；
+2. **校验脚本**：`verify-skill-packages.ps1`——校验 fileName 均存在于 classpath、requiredTools 均命中 ToolRegistry、版本格式合法；<br>**〔已交付 2026-09-10〕** 落地于 `scripts/powershell/verify-skill-packages.ps1`（UTF-8 BOM）：校验 fileName 存在于 classpath（src 必有 / target 同步核对 + 孤儿 WARN）、requiredTools 均命中 ToolRegistry 注册事实（@Tool 注解静态收集，无事实禁止全绿）、version 三段式数字、name / fileName / map.put 键唯一。真实仓库 18 PASS + 破坏样本 5 FAIL 双验证；<br>**〔2026-10-09 重写（REF-1.1/1.2）〕** 元数据迁至 frontmatter 后，原「正则解析 Java 源码」的解析基础消失，脚本改为解析 md frontmatter：A（每个 md 均可解析 + target 同步核对）、B（requiredTools ⊆ @Tool，收集逻辑一字未改）、C（version 三段式，去引号）、D（**name == 文件名去 .md**，由此保证 name/fileName 唯一——取代仅在扫描模型下恒不成立的「孤儿 WARN」）；新增 E1（禁 fileName 键）/ E2（禁未知顶层键）/ E3（围栏内禁整行 ---）/ F（测试资源不得遮蔽 main 技能目录）；
 3. **DB 化 / 热加载**：明确不做。§50.7 不建平行 Registry 的边界解读：元数据从「代码内声明」演进为「运行时可写」是形态升级，涉及管理端/权限/版本治理，超出本批——登记为后续决策点，待技能目录规模（>10 个）或回流频次证明必要时再立项。
 
 ### D6：外部 agent 技能感知 = 下行通道增量（可选字段，向后兼容）
