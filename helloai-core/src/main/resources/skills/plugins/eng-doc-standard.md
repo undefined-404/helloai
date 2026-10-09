@@ -1,3 +1,19 @@
+---
+# 文档类产出无结构化输出声明（outputSchema 置空）；验证规则提炼自 D1~D3 + 信息密度。
+name: eng-doc-standard
+version: "1.0.0"
+description: "文档规范：接口文档化、自查产出四元组格式"
+requiredTools: []
+dependencies: []
+inputSchema: {}
+outputSchema: {}
+validationRules:
+  - "命题完整保留：每条必须/不得陈述含主体 + 条件 + 模态 + 失败模式（D1）"
+  - "tutorial / reference 分离，不混写（D3）"
+  - "无思维链泄漏：8 类实现/评审叙事不得出现在面向使用者文档（D2）"
+  - "信息密度：删掉后信息不减的语句必须删"
+---
+
 # eng-doc-standard 平台文档规范
 
 > 来源：提炼自 DeepSeek Harness `dsh-prose-standard` / `dsh-doc-standards`，已按 HelloAI 语义适配（2026-08-20，§6.114）。

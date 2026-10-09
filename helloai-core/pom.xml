@@ -120,6 +120,12 @@
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-core</artifactId>
         </dependency>
+        <!-- 技能包 frontmatter 的 YAML 解析（版本由 spring-boot-dependencies BOM 管理 = 2.3）。
+             本已是 spring-boot-starter 的传递依赖，此处显式声明：不裸用传递依赖，避免上游升级时静默断开。 -->
+        <dependency>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
+        </dependency>
         <!-- 测试（v2.4 §4.10） -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

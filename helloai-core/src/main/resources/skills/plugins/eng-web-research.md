@@ -1,3 +1,21 @@
+---
+# 任务需外部实时资料时声明；requiredTools 声明 web_search，G-004 联动（resolve 工具并集）
+# 自动并入启用工具清单。
+name: eng-web-research
+version: "1.0.0"
+description: "联网调研规范：检索目标先行 / 多词覆盖 / 来源可追溯 / 信息时效标注"
+requiredTools:
+  - web_search
+dependencies: []
+inputSchema: {}
+outputSchema: {}
+validationRules:
+  - "检索目标先行：先写要回答的问题清单再检索，不让搜索词替代问题"
+  - "多词覆盖：同一问题按多候选词检索合并，单一搜索词不足以支撑结论"
+  - "来源可追溯：每条关键事实必须带 url 溯源，禁止无出处事实"
+  - "信息时效：注明检索时间与资料时效前提，过期信息不充当现状"
+---
+
 # eng-web-research 平台联网调研规范
 
 > 来源：提炼自阶段四「联网搜索 Capability 化」（web_search 平台工具 + G-004 技能 requiredTools 联动，2026-09-xx，§5.3）。

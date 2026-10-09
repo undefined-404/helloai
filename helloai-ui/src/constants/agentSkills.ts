@@ -14,22 +14,11 @@ export const AGENT_SKILL_OPTIONS = [
   { label: 'thinking（深度思考/推理）', value: 'thinking' },
 ] as const
 
-// 平台 eng-* 规范技能目录（与后端 AgentSkillSpecServiceImpl.KNOWN_SPECS 对齐）
-// 任务 required_skills 中由 Planner 按「平台技能目录」指派的规范标签；description 取自后端
-// SkillPackage.description（中文）。前端渲染 requiredSkills 时经 skillLabelOf 映射为中文。
-export const ENG_SKILL_OPTIONS = [
-  { label: 'eng-code-review（代码评审规范）', value: 'eng-code-review' },
-  { label: 'eng-doc-standard（文档规范）', value: 'eng-doc-standard' },
-  { label: 'eng-verification（验证规范）', value: 'eng-verification' },
-  { label: 'eng-web-research（联网调研规范）', value: 'eng-web-research' },
-] as const
+// 【2026-10-09 REF-1.2c 改造】本文件原先还导出 ENG_SKILL_OPTIONS（平台 eng-* 目录对齐副本）
+// 与 skillLabelOf（标签→中文名）。技能元数据改为 md frontmatter + 服务端下发后，那份副本必然
+// 漂移（新增技能会出现「后端生效、前端看不见」），已删除：
+//   · 平台技能目录 → `stores/skillCatalog.ts`（懒加载 /api/skills/catalog）
+//   · 标签显示名   → `useSkillCatalogStore().labelOf()`（能力词表 ∪ 目录，未命中回退原文）
+// 本文件只保留 AGENT_SKILL_OPTIONS —— 它是**能力词表**（对齐后端 AgentSkillDeriver.KEYWORD_SKILLS
+// 与 SkillNormalizer.SYNONYMS），不是可枚举的技能目录，故不适合下发，按裁定归 parity 守卫。
 
-/** 技能标签 → 中文显示名（能力声明 ∪ eng-* 规范目录）；未命中回退原文，兼容自定义技能。 */
-export function skillLabelOf(s: string | null | undefined): string {
-  if (!s) return ''
-  return (
-    AGENT_SKILL_OPTIONS.find(o => o.value === s)?.label
-    ?? ENG_SKILL_OPTIONS.find(o => o.value === s)?.label
-    ?? s
-  )
-}

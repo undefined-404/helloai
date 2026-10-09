@@ -86,6 +86,11 @@ export const paths = {
     // 技能包 zip 下载（SKILL.md + scripts/ 整体交付）
     skillZip: (id: string | number) => `/admin/agents/getMySkillZipByAgentId/${enc(id)}`
   },
+  skills: {
+    // 平台技能包目录（REF-1.2c）：元数据来自 md frontmatter，label 由服务端派生。
+    // 注意与 agents.skillZip（Agent 角色接入手册 ZIP）区分——两者不是一件事。
+    catalog: '/skills/catalog'
+  },
   setup: {
     getStatus: '/setup/getStatus',
     initialize: '/setup/initialize'

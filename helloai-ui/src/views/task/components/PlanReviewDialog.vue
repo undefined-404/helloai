@@ -94,7 +94,7 @@
                     size="small"
                     type="primary"
                   >
-                    {{ skillLabelOf(s) }}
+                    {{ skillCatalog.labelOf(s) }}
                   </el-tag>
                 </div>
               </div>
@@ -187,7 +187,7 @@
                 type="primary"
                 style="margin-right:4px"
               >
-                {{ skillLabelOf(s) }}
+                {{ skillCatalog.labelOf(s) }}
               </el-tag>
             </template>
             <span v-else>-</span>
@@ -280,7 +280,7 @@
             <el-option
               v-for="s in skillOptions"
               :key="s"
-              :label="skillLabelOf(s)"
+              :label="skillCatalog.labelOf(s)"
               :value="s"
             />
           </el-select>
@@ -362,14 +362,19 @@ import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { taskApi } from '@/api/task'
 import { subTaskApi } from '@/api/subTask'
-import { ENG_SKILL_OPTIONS, skillLabelOf } from '@/constants/agentSkills'
+import { useSkillCatalogStore } from '@/stores/skillCatalog'
 import type { Task, SubTask, LongId, Uncertainty } from '@/types'
 
 const props = defineProps<{ modelValue: boolean; task: Task | null }>()
 const emit = defineEmits<{ 'update:modelValue': [v: boolean]; close: []; done: [] }>()
 
+const skillCatalog = useSkillCatalogStore()
+
 const visible = ref(props.modelValue)
-watch(() => props.modelValue, v => { visible.value = v })
+watch(() => props.modelValue, v => {
+  visible.value = v
+  if (v) skillCatalog.ensureLoaded()   // 弹窗打开时才拉技能目录（懒加载）
+})
 watch(visible, v => {
   emit('update:modelValue', v)
   // 弹窗关闭即停轮询，避免后台定时器持续打接口
@@ -483,10 +488,10 @@ const editForm = ref<{ requiredSkills: string[]; constraints: string; uncertaint
   { requiredSkills: [], constraints: '', uncertainties: [] }
 )
 
-// 技能下拉候选：平台 eng-* 规范目录（固定可指派）+ 全部草案已指派标签的并集（allow-create 兜自由输入）
+// 技能下拉候选：平台技能目录（服务端下发，REF-1.2c）+ 全部草案已指派标签的并集（allow-create 兜自由输入）
 const skillOptions = computed(() => {
   const set = new Set<string>()
-  ENG_SKILL_OPTIONS.forEach(o => set.add(o.value))
+  skillCatalog.options.forEach(o => set.add(o.value))
   drafts.value.forEach(d => d.requiredSkills?.forEach(s => set.add(s)))
   return [...set]
 })

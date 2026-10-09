@@ -52,13 +52,15 @@ $env:HELLOAI_ADMIN_PASSWORD = '<你的管理员登录口令>'   # PowerShell
 - **任务/拆解/澄清**：verify-a1-task-policy、verify-a2-skill-derive、verify-a3b-agent-edit-skills、verify-674-remove-specialization、verify-requirement-clarify-structured、verify-step9b-depends-on、verify-task-running-spec-phase-b、verify-inner-loop-e2e、verify-conversation-flow-e2e、verify-e2e-batch-a、verify-m5-scenarios、verify-g014
 - **执行/调度**：verify-execution-dispatch-guard（启动期 fail-fast 守卫）、verify-poller-e2e（DB Poller）、verify-subtask-redispatch-auto-execution（重派自动执行）、verify-subtask-deadletter（死信兜底）、verify-agent-execution-preview、verify-agent-llm-connectivity（真 LLM 冒烟）、verify-single-track-e2e（内部单轨：计划/执行/评审/报告全绿）
 - **审查/质量**：verify-reviewer-dual（双评审）、verify-quality-profile、verify-quality-dashboard、verify-artifact-content-review、verify-llm-conversation-stream
-- **Agent/技能/配置**：verify-agent-skill-capability、verify-skill-packages、verify-platform-config、verify-api-key-verify、verify-llm-provider-models、verify-admin-authz、verify-attachment-version
+- **Agent/技能/配置**：verify-agent-skill-capability、verify-skill-packages（**2026-10-09 重写**：解析对象由 Java `KNOWN_SPECS` 源码文本改为 `skills/plugins/*.md` 的 YAML frontmatter；4 组断言等价保留 + 新增 E1/E2/E3 结构约束与 F 测试资源遮蔽守卫）、verify-platform-config、verify-api-key-verify、verify-llm-provider-models、verify-admin-authz、verify-attachment-version
 - **MCP/门铃/外部 Agent 入职**：verify-mcp（最小连通）、verify-mcp-session-e2e、verify-doorbell-e2e、verify-onboarding（+ -doorbell / -heartbeat / -pull / -submit 五步链）、verify-external-agent-e2e（外部 CLI_CLIENT 多 Agent 实接单，含 -AssertOnly 断言模式）
 - **MQ**：verify-outbox-relay-confirm-e2e（Outbox/Confirm 失败路径，配合 start-sb-e2e-mq.ps1）
 
 ### 仅 sh（macOS/Linux 侧）
 
 verify-login-e2e、verify-requirement-clarify、verify-websearch-e2e、verify-planner-chat-dual-mode、verify-deps-context-e2e、verify-external-executor-e2e、verify-redispatch-in-progress（另有与 ps1 对实现的 12 个见上表）
+
+**文档结构守卫（无运行时依赖）**：verify-doc-gap-table —— 《差距表》结构守卫，四项只读断言：① 表格完整性（每行竖线数 == 表头，防裸 `|` 切格）② 无转义竖线 ③ 处置列首词 ∈ 九态词集（`协作规约 §6.3`）+ 一行一态 + 矩阵 20 行齐备 ④ 矩阵两列无过程叙述信号（日期 / 用例数 / 施工动词 / 分期标签 / 代码行号）。建立背景见 `LOG-20261009-014`，配套口径见《差距表》§0「状态词表」。
 
 ## 二、运维启停
 

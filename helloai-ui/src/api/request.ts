@@ -14,7 +14,10 @@ const ERROR_BY_CALLER_URL_PREFIXES = [
   '/auth/login',
   '/auth/logout',
   '/auth/changePassword',
-  '/auth/me'
+  '/auth/me',
+  // 技能目录（REF-1.2c）：由 skillCatalog store 懒加载并静默降级（未命中回退原始标签），
+  // 失败不弹错——否则每打开一次含技能下拉的弹窗就会弹一次红条。
+  '/skills/catalog'
 ]
 
 function shouldLetCallerHandleError(url: string | undefined): boolean {

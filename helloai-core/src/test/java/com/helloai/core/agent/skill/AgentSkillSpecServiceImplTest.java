@@ -20,7 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayName("AgentSkillSpecServiceImpl")
 class AgentSkillSpecServiceImplTest {
 
-    private final AgentSkillSpecService service = new AgentSkillSpecServiceImpl();
+    private final AgentSkillSpecService service = new AgentSkillSpecServiceImpl(new SkillPackageCatalog());
 
     private static final String REQUIRED = "任务 required_skills 命中 eng-code-review 时注入执行 Prompt";
 

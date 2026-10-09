@@ -1,6 +1,7 @@
 package com.helloai.core.agent.skill;
 
 import com.helloai.core.agent.SkillNormalizer;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
@@ -23,24 +24,22 @@ import java.util.Map;
  */
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class AgentSkillSpecServiceImpl implements AgentSkillSpecService {
 
-    /** 已登记插件标签 → 技能包元数据（LinkedHashMap 保序，渲染顺序按声明顺序）。 */
-    private static final Map<String, SkillPackage> KNOWN_SPECS = knownSpecs();
-
-    /** 规范文件内「执行速览」与「详细规范」的分隔标记（速览在前）。 */
-    private static final String DETAIL_SEPARATOR = "\n---\n";
+    /** 技能包目录（REF-1.2a）：元数据事实源 = classpath {@code skills/plugins/*.md} 的 frontmatter。 */
+    private final SkillPackageCatalog catalog;
 
     /**
      * 一次性解析任务平台技能规范（D1=B）：声明 / 命中 / 渲染三件套 + 版本映射 + 工具并集，
      * 命中语义与 Prompt 注入事实严格一致（两层过滤：标签命中 + 速览非空）。
      *
      * <p>G-004 增量 A（联动接线）：resolvedVersions 供 SKILL_RESOLVED 事件携带版本；
-     * requiredTools 为命中技能的声明工具并集（去重、保持 KNOWN_SPECS 声明序追加），
-     * 供执行侧并入启用工具清单（TOOL_RESOLVED 前合并）。当前 3 个 eng-* 技能 requiredTools
-     * 均未声明（不臆造），并集为空——结构就位，待技能声明工具依赖后生效。</p>
+     * requiredTools 为命中技能的声明工具并集（去重、按技能 name 升序追加），
+     * 供执行侧并入启用工具清单（TOOL_RESOLVED 前合并）。</p>
      *
-     * <p>best-effort：requiredSkills 为 null / 空 / 未命中均返回空五字段，不抛异常。</p>
+     * <p>best-effort：requiredSkills 为 null / 空 / 未命中均返回空五字段，不抛异常。
+     * <b>坏技能包（corrupt）等同「文件缺失」</b>——在目录层已被过滤为 healthy，不会进入本方法。</p>
      */
     @Override
     public ResolvedSpec resolve(List<String> requiredSkills) {
@@ -53,7 +52,7 @@ public class AgentSkillSpecServiceImpl implements AgentSkillSpecService {
         Map<String, String> versions = new LinkedHashMap<>();
         List<String> tools = new ArrayList<>();
         StringBuilder specs = new StringBuilder();
-        for (Map.Entry<String, SkillPackage> entry : KNOWN_SPECS.entrySet()) {
+        for (Map.Entry<String, SkillPackage> entry : catalog.byName().entrySet()) {
             if (!normalized.contains(entry.getKey())) {
                 continue;
             }
@@ -84,7 +83,7 @@ public class AgentSkillSpecServiceImpl implements AgentSkillSpecService {
 
     @Override
     public List<SkillPackage> listPackages() {
-        return List.copyOf(KNOWN_SPECS.values());
+        return catalog.healthyPackages();
     }
 
     @Override
@@ -95,7 +94,7 @@ public class AgentSkillSpecServiceImpl implements AgentSkillSpecService {
         }
         List<String> normalized = SkillNormalizer.normalizeAll(required);
         List<SkillPackage> matched = new ArrayList<>();
-        for (Map.Entry<String, SkillPackage> entry : KNOWN_SPECS.entrySet()) {
+        for (Map.Entry<String, SkillPackage> entry : catalog.byName().entrySet()) {
             if (!normalized.contains(entry.getKey())) {
                 continue;
             }
@@ -110,8 +109,12 @@ public class AgentSkillSpecServiceImpl implements AgentSkillSpecService {
     }
 
     /**
-     * 读取规范文件的「执行速览」部分（首个 {@code ---} 之前），并去掉文件 h1 标题行
+     * 读取规范文件的「执行速览」部分，并去掉文件 h1 标题行
      * （渲染段自带 {@code ### 标签} 标题，避免重复层级）。
+     *
+     * <p><b>顺序即正确性</b>：必须<b>先剥 frontmatter、再切分隔符</b>——md 引入 frontmatter 后，
+     * 闭合围栏本身就是 {@code \n---\n}，会被 {@code indexOf} 先命中（REF-1.1a）。
+     * 无 frontmatter 时 {@link SkillFrontMatter#stripBody} 为恒等变换，故纯正文 md 行为不变。</p>
      */
     private String loadSpeedSummary(String label, String fileName) {
         try {
@@ -124,88 +127,11 @@ public class AgentSkillSpecServiceImpl implements AgentSkillSpecService {
             try (InputStream in = resource.getInputStream()) {
                 content = new String(in.readAllBytes(), StandardCharsets.UTF_8);
             }
-            // 兼容 CRLF 行尾（Windows 检出），否则 DETAIL_SEPARATOR 匹配失败导致详细规范被整体注入
-            content = content.replace("\r\n", "\n");
-            int cut = content.indexOf(DETAIL_SEPARATOR);
-            if (cut >= 0) {
-                content = content.substring(0, cut);
-            }
-            StringBuilder body = new StringBuilder();
-            for (String line : content.split("\r?\n")) {
-                if (line.startsWith("# ")) {
-                    continue;
-                }
-                body.append(line).append('\n');
-            }
-            return body.toString().trim();
+            return SkillSpeedSummaryRenderer.render(SkillFrontMatter.stripBody(content));
         } catch (Exception e) {
             log.warn("平台技能规范读取失败，跳过该规范（不阻断执行链）: label={}, err={}",
                     label, e.getMessage());
             return null;
         }
-    }
-
-    private static Map<String, SkillPackage> knownSpecs() {
-        Map<String, SkillPackage> map = new LinkedHashMap<>();
-        // eng-code-review：输出为自查问题四元组（[defect][location][impact][evidence]，文件明示）；
-        // 验证规则提炼自 C1~C4
-        map.put("eng-code-review", new SkillPackage(
-                "eng-code-review", "1.0.0",
-                "代码评审规范：接口契约 / 生命周期与并发 / 验证强度 / 范围与必要性（C1~C4）",
-                List.of(), List.of(), Map.of(),
-                Map.of("type", "array", "items", Map.of(
-                        "type", "object",
-                        "properties", Map.of(
-                                "defect", Map.of("type", "string"),
-                                "location", Map.of("type", "string"),
-                                "impact", Map.of("type", "string"),
-                                "evidence", Map.of("type", "string")))),
-                List.of(
-                        "接口契约必须文档化：函数签名 / 返回值区分 / 异常约定 / 边界条件（C1）",
-                        "资源创建与释放成对出现，共享状态说明锁粒度与竞态处理（C2）",
-                        "每个关键行为至少一条真断言，禁止永真冒烟充当证据（C3）",
-                        "不写投机泛化与过度抽象，新增依赖须说明必要性（C4）"),
-                "eng-code-review.md"));
-        // eng-doc-standard：文档类产出无结构化输出声明（outputSchema 置空）；验证规则提炼自 D1~D3 + 信息密度
-        map.put("eng-doc-standard", new SkillPackage(
-                "eng-doc-standard", "1.0.0",
-                "文档规范：接口文档化、自查产出四元组格式",
-                List.of(), List.of(), Map.of(), Map.of(),
-                List.of(
-                        "命题完整保留：每条必须/不得陈述含主体 + 条件 + 模态 + 失败模式（D1）",
-                        "tutorial / reference 分离，不混写（D3）",
-                        "无思维链泄漏：8 类实现/评审叙事不得出现在面向使用者文档（D2）",
-                        "信息密度：删掉后信息不减的语句必须删"),
-                "eng-doc-standard.md"));
-        // eng-verification：输出为验证证据结构（命令 + 实测输出 + 结论 + 环境，文件明示）；
-        // 验证规则提炼自最小证据集 / 证据真实可复现 / 断言有效 / 环境可复现
-        map.put("eng-verification", new SkillPackage(
-                "eng-verification", "1.0.0",
-                "验证规范：最小证据集 / 证据真实可复现 / 断言有效性 / 环境可复现",
-                List.of(), List.of(), Map.of(),
-                Map.of("type", "object", "properties", Map.of(
-                        "command", Map.of("type", "string"),
-                        "output", Map.of("type", "string"),
-                        "conclusion", Map.of("type", "string"),
-                        "environment", Map.of("type", "string"))),
-                List.of(
-                        "最小证据集：所选验证组合必须覆盖目标行为本身",
-                        "证据真实可复现：写明验证命令与实测输出关键片段",
-                        "断言必须因目标回归而失败，写死预期等于无验证",
-                        "注明验证环境（JDK 版本 / 服务版本 / profile / 关键配置）"),
-                "eng-verification.md"));
-        // eng-web-research（阶段四）：任务需外部实时资料时声明；requiredTools 声明 web_search，
-        // G-004 联动（resolve 工具并集）自动并入启用工具清单
-        map.put("eng-web-research", new SkillPackage(
-                "eng-web-research", "1.0.0",
-                "联网调研规范：检索目标先行 / 多词覆盖 / 来源可追溯 / 信息时效标注",
-                List.of("web_search"), List.of(), Map.of(), Map.of(),
-                List.of(
-                        "检索目标先行：先写要回答的问题清单再检索，不让搜索词替代问题",
-                        "多词覆盖：同一问题按多候选词检索合并，单一搜索词不足以支撑结论",
-                        "来源可追溯：每条关键事实必须带 url 溯源，禁止无出处事实",
-                        "信息时效：注明检索时间与资料时效前提，过期信息不充当现状"),
-                "eng-web-research.md"));
-        return map;
     }
 }

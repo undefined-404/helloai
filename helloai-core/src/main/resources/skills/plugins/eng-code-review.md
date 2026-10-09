@@ -1,3 +1,32 @@
+---
+# 来源：提炼自 DeepSeek Harness dsh-code-review 的评审纪律；验证规则提炼自 C1~C4。
+# 输出为自查问题四元组（[defect][location][impact][evidence]，正文「四元组产出格式」明示）。
+name: eng-code-review
+version: "1.0.0"
+description: "代码评审规范：接口契约 / 生命周期与并发 / 验证强度 / 范围与必要性（C1~C4）"
+requiredTools: []
+dependencies: []
+inputSchema: {}
+outputSchema:
+  type: array
+  items:
+    type: object
+    properties:
+      defect:
+        type: string
+      location:
+        type: string
+      impact:
+        type: string
+      evidence:
+        type: string
+validationRules:
+  - "接口契约必须文档化：函数签名 / 返回值区分 / 异常约定 / 边界条件（C1）"
+  - "资源创建与释放成对出现，共享状态说明锁粒度与竞态处理（C2）"
+  - "每个关键行为至少一条真断言，禁止永真冒烟充当证据（C3）"
+  - "不写投机泛化与过度抽象，新增依赖须说明必要性（C4）"
+---
+
 # eng-code-review 平台技能规范
 
 > 来源：提炼自 DeepSeek Harness `dsh-code-review`，已按 HelloAI 语义适配（2026-08-20，§6.114）。

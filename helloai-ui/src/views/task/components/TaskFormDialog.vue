@@ -203,18 +203,24 @@ import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { taskApi } from '@/api/task'
 import { agentApi } from '@/api/agent'
 import { clarifyApi } from '@/api/clarify'
-import { AGENT_SKILL_OPTIONS, ENG_SKILL_OPTIONS } from '@/constants/agentSkills'
+import { AGENT_SKILL_OPTIONS } from '@/constants/agentSkills'
+import { useSkillCatalogStore } from '@/stores/skillCatalog'
 import type { Task, TaskAgentPolicy, Agent, PlannerOption, LongId } from '@/types'
 
-// 任务级「要求技能」候选：能力声明 ∪ eng-* 规范目录（任务拆解/执行侧按规范注入）
-const skillOptions = [...AGENT_SKILL_OPTIONS, ...ENG_SKILL_OPTIONS]
+const skillCatalog = useSkillCatalogStore()
+// 任务级「要求技能」候选：能力词表 ∪ 平台技能目录（eng-* 经服务端下发，REF-1.2c；
+// 目录未加载/失败时退化为仅能力词表，下拉仍可用 allow-create 自由输入）
+const skillOptions = computed(() => [...AGENT_SKILL_OPTIONS, ...skillCatalog.options])
 
 // task 为 null 时是新建模式，否则为编辑模式
 const props = defineProps<{ modelValue: boolean; task: Task | null }>()
 const emit = defineEmits<{ 'update:modelValue': [v: boolean]; close: []; done: [] }>()
 
 const visible = ref(props.modelValue)
-watch(() => props.modelValue, v => { visible.value = v })
+watch(() => props.modelValue, v => {
+  visible.value = v
+  if (v) skillCatalog.ensureLoaded()   // 弹窗打开时才拉技能目录（懒加载）
+})
 watch(visible, v => emit('update:modelValue', v))
 
 const isEdit = computed(() => !!props.task)

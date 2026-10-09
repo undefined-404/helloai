@@ -1,3 +1,30 @@
+---
+# 输出为验证证据结构（命令 + 实测输出 + 结论 + 环境，正文明示）；
+# 验证规则提炼自：最小证据集 / 证据真实可复现 / 断言有效 / 环境可复现。
+name: eng-verification
+version: "1.0.0"
+description: "验证规范：最小证据集 / 证据真实可复现 / 断言有效性 / 环境可复现"
+requiredTools: []
+dependencies: []
+inputSchema: {}
+outputSchema:
+  type: object
+  properties:
+    command:
+      type: string
+    output:
+      type: string
+    conclusion:
+      type: string
+    environment:
+      type: string
+validationRules:
+  - "最小证据集：所选验证组合必须覆盖目标行为本身"
+  - "证据真实可复现：写明验证命令与实测输出关键片段"
+  - "断言必须因目标回归而失败，写死预期等于无验证"
+  - "注明验证环境（JDK 版本 / 服务版本 / profile / 关键配置）"
+---
+
 # eng-verification 平台验证规范
 
 > 来源：提炼自 DeepSeek Harness `dsh-pre-push-checks`，与 HelloAI VERIFICATION 围栏对齐（2026-08-20，§6.114）。
