@@ -4,27 +4,27 @@
 >
 > 本文档定义未来稳定架构边界，不表示所有能力当前已经落地。
 >
-> 最后更新：2026-09-30（**Document V2.1 治理**：新增 §0「实现状态（Implementation Status）」逐层状态标记，
-> 各层补内联 `Status` 行。本文件自此只声明**目标边界 + 状态**；进度百分比与逐条差距一律以
-> 《HelloAI 实现差距表》为**唯一事实源**，不在本文件复述）
+> 最后更新：2026-10-09（**§0 状态表与各层内联 `Status` 全量复核订正**：Quality Gate / Recovery·Fork /
+> Cost·Latency 三处状态声明与代码实测不符，已更正；判定基线前移至 HEAD `d3c1b129`。本文件只声明
+> **目标边界 + 状态**；进度百分比与逐条差距一律以《HelloAI 实现差距表》为**唯一事实源**）
 
 # 0. 实现状态（Implementation Status）
 
 > **状态四值**：`Implemented`（已达成）· `Partial`（部分达成）· `Planned`（未启动，已登记）· `Non-goal`（明确非目标）。
-> **判定基线**：2026-09-30，HEAD `e2c7e8c`（代码实测 + 两份 09-30 审计，逐层实测见
-> `doc/review/HelloAI 架构V2进度与质量审计报告（2026-09-30）.md`、`HelloAI 代码规范与架构偏离专项审计报告（2026-09-30）.md`）。
+> **判定基线**：2026-10-09，HEAD `d3c1b129`（§0 各行逐项对代码实测；上一判定基线 2026-09-30 / HEAD `e2c7e8c`
+> 见 `doc/review/HelloAI 架构V2进度与质量审计报告（2026-09-30）.md`、`HelloAI 代码规范与架构偏离专项审计报告（2026-09-30）.md`）。
 
 | 章节 | 层 / 能力 | 状态 | 差距锚点（唯一事实源 = 差距表） | 判定依据 |
 |---|---|---|---|---|
-| §3 | **Role Layer**（Planner / Reviewer·Quality Gate / Governance） | **Partial** | G-007 · G-012 · G-013 · G-016 | Planner ✅；Review 链 ✅；Governance（RBAC）✅ 批次一~四；**Quality Gate 泛化未做**（全仓无 `QualityGate` 类） |
+| §3 | **Role Layer**（Planner / Reviewer·Quality Gate / Governance） | **Partial** | G-007 · G-012 · G-013 · G-016 | Planner ✅；Review 链 ✅；Governance（RBAC）✅ 批次一~四；**Quality Gate 契约族已收口**（`QualityGate` 统一契约 + 2 真闸门 `RepeatedFailureGate` / `FinalReportFidelityGate`，RM12）；通用多闸门决策未全量泛化（差距表 G-007） |
 | §3 | **Orchestration Layer**（Workflow / Scheduler / DAG / Dependency / Parallelism / Routing） | **Partial** | G-009 · G-010 · G-015 | Task·SubTask DAG / 依赖门禁 / 并行派发 / 路由 ✅；**Dynamic Workflow 语义未抽象**（P3 后置，且 §11 禁止新建第二套 Engine） |
 | §3 | **Runtime Layer**（AgentRuntime / Context / Session / AgentLoop） | **Implemented** | G-002 · G-003 | 2026-09-30 单轨硬切，`RuntimeTurnExecutor` 为唯一 `AgentRuntime` 实现；八件套契约齐备；每轮 checkpoint 与 tokenUsage 已落库 |
 | §3 | **Capability Layer**（Skill Package / Tool / MCP / Sandbox Provider） | **Partial** | G-004 · G-005 · G-008 | Skill 元数据层 ✅、Tool / MCP ✅；**Sandbox 仅契约、无真实隔离** |
 | §3 | **Provider Layer**（Qoder / Trae / Codex …） | **Implemented** | G-014 · G-016 | 异构 Provider 契约清晰；外部 Agent 通道获 A 级端到端实证 |
-| §5 | Event Stream（Run / Turn / Step + Replay · Audit） | **Partial** | G-001 · G-006 | 写侧 + Replay / Audit / UI 已上线；**Recovery / Fork 未建** |
+| §5 | Event Stream（Run / Turn / Step + Replay · Audit） | **Partial** | G-001 · G-006 | 写侧 + Replay / Audit / UI 已上线；**Fork 已落地**（`AgentEventForkService`，B3）；**Recovery 未建** |
 | §6 | Skill Capability Package | **Partial** | G-004 | 9 个元数据字段已落地（含 `inputSchema` / `outputSchema` / `validationRules`）；**Instructions 结构化未动**；Discover→Validate 生命周期部分达成 |
 | §7 | Sandbox Provider | **Planned** | G-005 | 契约已落地；**文件 / 网络 / 进程 / 资源 / 凭证五边界隔离未实现**（`EnvironmentSandboxProvider` 一律不标 ISOLATED） |
-| §8 | Agent Fleet | **Partial** | G-008 · G-014 | Capability Match / Health ✅，多外部执行者同台已实证；**Cost / Latency 维度的 Fleet 化未做**（`tokenUsage` 已落库但未纳入选人策略） |
+| §8 | Agent Fleet | **Partial** | G-008 · G-014 | Capability Match / Health ✅，多外部执行者同台已实证；**Cost 维度已接入选人比较链**（`AgentSelector.resolveCostRanks`，近 5 次成功均值 min-max 反向归一，B5.3）；**Latency 维度未做** |
 | §9 | 最终执行链 | **Implemented** | G-001 · G-002 · G-016 | 需求包 → Planner → Workflow → Scheduler → Runtime → Skill/Tool/Sandbox → 异构 Agent → Event Stream → Reviewer → PASS/REWORK/HUMAN_REVIEW/BLOCK 全链 A 级实证 |
 | §10 | Harness | **Non-goal** | — | 明示为 Runtime 参考架构，非目标产品 |
 | §11 | 非目标清单 | **Non-goal** | — | 显式列出并持续生效（含禁第二套 Scheduler / Workflow Runtime） |
@@ -107,7 +107,7 @@ Planning
 
 ## Role Layer
 
-> **Status: Partial** — Planner ✅ / Reviewer ✅（Review 链）/ Governance ✅（RBAC 底座）；**Quality Gate 泛化未做**（无 `QualityGate` 类，差距表 G-007）。
+> **Status: Partial** — Planner ✅ / Reviewer ✅（Review 链）/ Governance ✅（RBAC 底座）；**Quality Gate 契约族已收口**（`QualityGate` 统一契约 + 2 真闸门，RM12）；通用多闸门决策未全量泛化（差距表 G-007）。
 
 ```text
 Planner
@@ -227,7 +227,7 @@ Agent Fleet Routing
 
 # 5. Event Stream
 
-> **Status: Partial** — Run/Turn/Step + Replay / Audit / UI 已上线；**Recovery / Fork 未建**（差距表 G-001 / G-006）。
+> **Status: Partial** — Run/Turn/Step + Replay / Audit / UI 已上线；**Fork 已落地**（`AgentEventForkService`），**Recovery 未建**（差距表 G-001 / G-006）。
 
 目标统一模型：
 
@@ -304,7 +304,7 @@ K8s
 
 # 8. Agent Fleet
 
-> **Status: Partial** — Capability Match / Health 已落地且多外部执行者同台已实证；**Cost / Latency 未纳入选人策略**（差距表 G-008 / G-014）。
+> **Status: Partial** — Capability Match / Health 已落地且多外部执行者同台已实证；**Cost 已纳入选人比较链**（`AgentSelector.resolveCostRanks`，B5.3），**Latency 未纳入**（差距表 G-008 / G-014）。
 
 每个 Agent 应拥有：
 
@@ -398,7 +398,7 @@ DeepSeek Harness 是**重要的 Agent Runtime 参考架构**，但不是 HelloAI
 
 > 定界（2026-09-12）：平台基础架构专项（用户 / 角色 / 权限 / 菜单底座）纳入目标架构，
 > 与业务五层（Planning / Orchestration / Runtime / Capability / Provider）**正交不冲突**。
-> 实施编排见 `doc/HelloAI 基础架构调整实施计划.md`（任务编号 BASE-xxx，独立于业务主线编号）。
+> 实施编排见 `doc/plan/HelloAI 基础架构调整实施计划.md`（任务编号 BASE-xxx，独立于业务主线编号）。
 
 ## 12.1 定位
 
@@ -462,6 +462,6 @@ RBAC 是平台治理（Governance）之下、所有业务模块共用的支撑�
 - **授权完整性**：新增业务接口默认须声明动作级权限码；确属 Agent / 系统 / 公开通道的，
   须在文档中显式登记为例外，禁止「静默无授权」。
 - **外部 Agent 不迁移**：CLI_CLIENT 契约（API Key / MCP）保持不变，不进 Sa-Token 会话体系。
-- **渐进演进**：按 `doc/HelloAI 基础架构调整实施计划.md` 分批次实施（批次一~三已落地：
+- **渐进演进**：按 `doc/plan/HelloAI 基础架构调整实施计划.md` 分批次实施（批次一~三已落地：
   动态路由 / 按钮权限 / 菜单管理 / 差异更新 / 部门 / 数据权限；批次四 BASE-4.x 已立项：
   认证收口 / 身份单事实源 / 角色分层 / 全量授权化 / 建号），完成后回填基线。

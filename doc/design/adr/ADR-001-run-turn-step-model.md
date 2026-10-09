@@ -5,7 +5,7 @@
 | **编号**   | ADR-001                                                                                                                                                       |
 | **状态**   | Accepted（Phase 0 Epic-A Task A1 定稿；R1 修订 2026-09-04：step 语义定为事件类型槽位）                                                                                          |
 | **日期**   | 2026-09-02                                                                                                                                                    |
-| **关联文档** | [HelloAI\_架构改造长期思路](../archive/reference/HelloAI_架构改造长期思路.md)、[HelloAI\_Phase0\_架构改造执行方案](../archive/implemented/HelloAI_Phase0_架构改造执行方案.md)、[HelloAI\_CODE\_STYLE.md](../../HelloAI_CODE_STYLE.md) |
+| **关联文档** | [HelloAI\_架构改造长期思路](../../archive/reference/HelloAI_架构改造长期思路.md)、[HelloAI\_Phase0\_架构改造执行方案](../../archive/implemented/HelloAI_Phase0_架构改造执行方案.md)、[HelloAI\_CODE\_STYLE.md](../../HelloAI_CODE_STYLE.md) |
 | **决策类型** | 模型定义（contract-first，先于 Event Stream 建表）                                                                                                                       |
 
 ***

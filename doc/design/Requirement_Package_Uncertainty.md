@@ -29,7 +29,7 @@
 - [RequirementClarifyServiceImpl.buildTaskFromDraft](../../helloai-core/src/main/java/com/helloai/core/planner/service/impl/RequirementClarifyServiceImpl.java) 仅写 `task.title` / `task.description`，`task.context` JSONB 只承载 runningSpec，无需求包概念；
 - [requirement-clarify.md](../../helloai-core/src/main/resources/prompts/requirement-clarify.md) / [requirement-finalize.md](../../helloai-core/src/main/resources/prompts/requirement-finalize.md) 的 `final` 形态只有 `title` / `message` / `description` 三字段，六维自检产出无结构化出口；
 - [planner-decompose.md](../../helloai-core/src/main/resources/prompts/planner-decompose.md) 拆解要求 9 条、子任务 schema 9 字段，无任何不确定性 / 实现路径申报字段；
-- **G-010 后置缺口（本轮新发现）**：`sub_task.constraints` 落库后全项目无消费点（`getConstraints()` 仅拆解落库一处调用），[SubTaskExecutionServiceImpl.buildUserPrompt](../../helloai-core/src/main/java/com/helloai/core/agent/service/impl/SubTaskExecutionServiceImpl.java)「当前子任务四要素」段不含 constraints——约束声明了但执行者看不见，本批一并清偿。**〔已清偿 2026-09-09〕** S4 执行注入（D6）+ 审查核验（D7）双落点闭环（见差距表 G-011 S4）。
+- **G-010 后置缺口（本轮新发现）**：`sub_task.constraints` 落库后全项目无消费点（`getConstraints()` 仅拆解落库一处调用），[AgentRuntimeContextAssembler.buildUserPrompt](../../helloai-core/src/main/java/com/helloai/core/agent/service/AgentRuntimeContextAssembler.java)「当前子任务四要素」段不含 constraints——约束声明了但执行者看不见，本批一并清偿。**〔已清偿 2026-09-09〕** S4 执行注入（D6）+ 审查核验（D7）双落点闭环（见差距表 G-011 S4）。
 
 ### 0.2 事实基线（已落地，本批不重做）
 
@@ -124,7 +124,7 @@
 
 ### D6：执行侧注入 = buildUserPrompt 三段增量，顺带清偿 G-010 constraints 缺口
 
-[SubTaskExecutionServiceImpl.buildUserPrompt](../../helloai-core/src/main/java/com/helloai/core/agent/service/impl/SubTaskExecutionServiceImpl.java)「当前子任务」段增三行（空值零注入）：
+[AgentRuntimeContextAssembler.buildUserPrompt](../../helloai-core/src/main/java/com/helloai/core/agent/service/AgentRuntimeContextAssembler.java)「当前子任务」段增三行（空值零注入）：
 
 1. **执行约束**（`constraints` 非空时）——清偿 G-010 后置缺口（约束落库后执行者不可见）；
 2. **不确定性申报**（`uncertainties` 非空时）：ASSUMPTION 条目后缀「（可自行验证，推翻即上报）」、UNCONFIRMED 条目后缀「（须先验证再动手，无法验证则 BLOCKED 上报）」；

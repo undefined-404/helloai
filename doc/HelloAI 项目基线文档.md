@@ -4,7 +4,7 @@
 >
 > 本文档只描述当前真实代码与已落地能力，不描述未来愿景。
 >
-> 最后更新：2026-09-28（最终报告链路升级至阶段四：审查异步化 REVIEWING + 专用池 + 三重陈旧守卫、轮次无状态、V95 单槽列 + rollback 端点；**同日晚间补齐报告审查三级容错 + 状态机写口收口（§12.5）**；外部 Agent v3 反馈闭环）
+> 最后更新：2026-10-09
 
 # 1. 当前项目定位
 
@@ -123,7 +123,7 @@ Credential
                 PASS        REWORK
 ```
 
-最终报告链路（阶段四，2026-09-28）：
+最终报告链路：
 
 ```text
 生成：出纲（Outline Prompt）→ 成文（Report Prompt）→ 审查(Review Prompt)，至多 3 次 LLM 调用
@@ -158,11 +158,11 @@ Credential
 - Lease / Heartbeat / Reconcile；
 - Retry / Timeout / Compensation；
 - DLQ / 死信台账；
-- Agent 在线状态治理（**2026-09-24 更新**：ACTIVE 值班租约作为一等存活证据——心跳过期不直接判 OFFLINE，避免在岗 Agent 被误判离线触发在飞任务重派；`renewLease` 到期时刻同租约内单调不减）；
-- 外部 Agent 通道与内部分发链约束同口径（**2026-09-24，G-014**：`claimSubTask` 复用 `isReady` 依赖门禁、`listAvailable` 就绪过滤；新增 MCP `startSubTask` 打通 REWORK 返工出口；`SubTaskDetail` 内联产出附件与贡献者，产物可发现）；
+- Agent 在线状态治理（ACTIVE 值班租约作为一等存活证据——心跳过期不直接判 OFFLINE，避免在岗 Agent 被误判离线触发在飞任务重派；`renewLease` 到期时刻同租约内单调不减）；
+- 外部 Agent 通道与内部分发链约束同口径（`claimSubTask` 复用 `isReady` 依赖门禁、`listAvailable` 就绪过滤；新增 MCP `startSubTask` 打通 REWORK 返工出口；`SubTaskDetail` 内联产出附件与贡献者，产物可发现）；
 - 失败重派和结果收敛；
-- 报告审查链三级容错（**2026-09-28，§12.5**：L1 `@TransactionalEventListener(AFTER_COMMIT)` 内存事件 + L2 Outbox（报告写回与 `agent_outbox_event` 同事务 → `AgentEventCompensationTask` 补投 → `helloai.report-review.queue` → `MqFinalReportReviewConsumer` 幂等消费）+ L3 `FinalReportReviewOrphanTask` 巡检（`REVIEWING` 超阈值收敛 `DONE`，刻意不重投审查）；写口收口 `FinalReportStateMachine` 显式迁移表 + `TaskService.transitFinalReportStatus` / `convergeFinalReportToDone`；入口 Redisson 防双审锁）；
-- 产物存储一致性（**2026-09-28，G-017**：ArtifactStorage 抽象 + Composite 路由（local/minio 双实现、按 type/URL 前缀分派）+ `AttachmentServiceImpl.register` 前置校验（validateAddress + 存在性，不存在 400 拒绝，把预览期 500 提前成登记期 400）；`ArtifactStorageReconcileTask` 6h ShedLock 只读对账（attachment 全量含逻辑删除 ↔ 桶内对象双向比对，悬空/孤儿/字节不符三态）；孤儿清理默认关闭，三重保险——开关 + 24h 时间窗 + 单轮上限 200）。
+- 报告审查链三级容错（L1 `@TransactionalEventListener(AFTER_COMMIT)` 内存事件 + L2 Outbox（报告写回与 `agent_outbox_event` 同事务 → `AgentEventCompensationTask` 补投 → `helloai.report-review.queue` → `MqFinalReportReviewConsumer` 幂等消费）+ L3 `FinalReportReviewOrphanTask` 巡检（`REVIEWING` 超阈值收敛 `DONE`，刻意不重投审查）；写口收口 `FinalReportStateMachine` 显式迁移表 + `TaskService.transitFinalReportStatus` / `convergeFinalReportToDone`；入口 Redisson 防双审锁）；
+- 产物存储一致性（ArtifactStorage 抽象 + Composite 路由（local/minio 双实现、按 type/URL 前缀分派）+ `AttachmentServiceImpl.register` 前置校验（validateAddress + 存在性，不存在 400 拒绝，把预览期 500 提前成登记期 400）；`ArtifactStorageReconcileTask` 6h ShedLock 只读对账（attachment 全量含逻辑删除 ↔ 桶内对象双向比对，悬空/孤儿/字节不符三态）；孤儿清理默认关闭，三重保险——开关 + 24h 时间窗 + 单轮上限 200）。
 
 这些属于 HelloAI 的**分布式编排与可靠性基础设施**。
 
@@ -191,17 +191,17 @@ RuntimeTurnExecutor          ← 唯一 AgentRuntime 实现
 当前含义：
 
 - `AgentRuntime` 已成为统一执行契约，且**实现层已唯一化**；
-- **2026-09-30 单轨硬切（G-002）**：`LegacyExecutorAdapter` / `RuntimeAgentRuntimeRouter` / `TurnLlmCaller` / `TurnLlmCallContext` 与 `runtime-enabled` / `v2-enabled` / `gray-percent` 开关**已全部删除**——不再存在双轨，也不再存在配置级回退开关（回退手段为 `git revert`）。消费链统一由 `LocalExecutionCommandConsumer` 分层编排（startIfNeeded → markRunning CAS → `AgentRuntimeContextAssembler` 装配 → `AgentRuntime#execute` → afterTurn → 终态 CAS → `ExecutionResultHandler` 回写）；
+- **单轨硬切（G-002）**：`LegacyExecutorAdapter` / `RuntimeAgentRuntimeRouter` / `TurnLlmCaller` / `TurnLlmCallContext` 与 `runtime-enabled` / `v2-enabled` / `gray-percent` 开关**已全部删除**——不再存在双轨，也不再存在配置级回退开关（回退手段为 `git revert`）。消费链统一由 `LocalExecutionCommandConsumer` 分层编排（startIfNeeded → markRunning CAS → `AgentRuntimeContextAssembler` 装配 → `AgentRuntime#execute` → afterTurn → 终态 CAS → `ExecutionResultHandler` 回写）；
 - `RuntimeTurnExecutor` 是**唯一** `AgentRuntime` 实现（`agentRuntimes.get(0)` 直取，无路由、无排序、无开关）；
 - `ToolExecutor` 已具备执行回路真身（懒加载 spring-ai ToolCallback 目录按名调用，与 ToolRegistry 元数据面同源同构；未知工具 / 空参 / 执行异常 best-effort 返回失败不抛）；
-- `AgentLoop` 已具备手动工具循环真身（`runtime/loop`：ChatModel 契约 + ToolExecutor 执行 + TOOL_CALL 事件，`internalToolExecutionEnabled=false` 由循环接管工具执行，maxIterations 硬上限防死循环）；**每轮 iteration 边界经 `LoopCheckpointListener` 落 `agent_session.snapshot.loop`**（2026-09-30，同层恢复 checkpoint，零 DDL），`tokenUsage` 逐轮累加并落 `agent_execution_record.token_usage`（V97）；
+- `AgentLoop` 已具备手动工具循环真身（`runtime/loop`：ChatModel 契约 + ToolExecutor 执行 + TOOL_CALL 事件，`internalToolExecutionEnabled=false` 由循环接管工具执行，maxIterations 硬上限防死循环）；**每轮 iteration 边界经 `LoopCheckpointListener` 落 `agent_session.snapshot.loop`**（同层恢复 checkpoint，零 DDL），`tokenUsage` 逐轮累加并落 `agent_execution_record.token_usage`（V97）；
 - `RuntimeTurnExecutor` 组装 `AgentLoop` / `ToolExecutor` / `ToolRegistry` / `AgentSkillSpecService` / `SandboxProvider`；prompt / chatModel / 会话 / 对话流由 `AgentRuntimeContextAssembler` 装配后注入。
 
 当前仍不能宣称已完成完整 Harness Runtime：
 
 ```text
 ToolExecutor      → 契约+真身已具备（Phase 2），AgentLoop 已接线
-AgentLoop         → 契约+真身已具备（Phase 3），已组装进 RuntimeTurnExecutor 并经 dev 灰度联调
+AgentLoop         → 契约+真身已具备（Phase 3），已组装进 RuntimeTurnExecutor
 Session 协调      → 已确认收敛口径（AgentSessionService 承载，Phase 1 Step 3）
 SandboxProvider   → 契约已具备（Phase 4），隔离能力后置（Docker/K8s P2/P3）
 Capability 体系   → 尚需完善
@@ -228,7 +228,7 @@ Event
 Timeline / Review 的事实输入
 ```
 
-读侧已具备 `AgentEventQueryService` 多消费面：`traceBySubTaskId`（按 subTaskId 以 `createTime + id` 有序投影，Timeline 消费面，A6 已并轨 `/timeline`；增量 D 起亦经 REST 暴露）、`traceByRunId`（按 runId 重建 Run 级轨迹，Replay 读侧，A7）、`traceByTaskId`（任务维度轨迹，免传 runId 由 service 内部推导，增量 D）、`pageAuditByTaskId`（按 taskId 分页查执行事实，eventType 可选过滤，Audit 读侧，A7）——Timeline / Replay / Audit 已从 Event Stream 获取事实，并经 REST API（`/api/agent-events` 四端点）+ UI 事件流工作台（`/event-stream`，增量 C1/C2/D）全链暴露；Recovery / Fork 消费面后续建设。`task_timeline` 保持独立载体不迁移（ADR-001 §4）。
+读侧已具备 `AgentEventQueryService` 多消费面：`traceBySubTaskId`（按 subTaskId 以 `createTime + id` 有序投影，Timeline 消费面，A6 已并轨 `/timeline`；增量 D 起亦经 REST 暴露）、`traceByRunId`（按 runId 重建 Run 级轨迹，Replay 读侧，A7）、`traceByTaskId`（任务维度轨迹，免传 runId 由 service 内部推导，增量 D）、`pageAuditByTaskId`（按 taskId 分页查执行事实，eventType 可选过滤，Audit 读侧，A7）——Timeline / Replay / Audit 已从 Event Stream 获取事实，并经 REST API（`/api/agent-events` 四端点）+ UI 事件流工作台（`/event-stream`，增量 C1/C2/D）全链暴露；**Fork 消费面已落地**（`AgentEventForkService`），Recovery 消费面后续建设。`task_timeline` 保持独立载体不迁移（ADR-001 §4）。
 
 原则：
 
@@ -247,18 +247,18 @@ resolvedSpecs
 SKILL_RESOLVED（携带 resolvedVersions）
 SkillPackage 元数据层（version / requiredTools / dependencies / inputSchema / outputSchema / validationRules）
 SKILL_CATALOG 目录注入（拆解侧能力感知，G-010 S2）
-AgentTask.skills 契约层统一注入（execute/executeStream + 拆解/审查收口/报告 5 类同步 LLM 调用挂点，空不注入行为零变化，2026-09-28）
+AgentTask.skills 契约层统一注入（execute/executeStream + 拆解/审查收口/报告 5 类同步 LLM 调用挂点，空不注入行为零变化）
 ```
 
-Skill 已从隐式 Prompt 拼接迁移为显式 Runtime 输入 + 元数据面，required_skills 创建 → 拆解 → 派发 → 执行四段贯通，并经真实任务实测闭环（2026-09-10 外部执行者双轮，见 log）。
+Skill 已从隐式 Prompt 拼接迁移为显式 Runtime 输入 + 元数据面，required_skills 创建 → 拆解 → 派发 → 执行四段贯通，并经真实任务实测闭环（外部执行者双轮，见 log）。
 
-已结构化技能包 4 个（eng-*）：eng-doc-standard / eng-code-review / eng-verification / eng-web-research（requiredTools=[web_search]，阶段四）。
+已结构化技能包 4 个（eng-*）：eng-doc-standard / eng-code-review / eng-verification / eng-web-research（requiredTools=[web_search]）。
 
 当前尚未全量形成的 Capability Package 剩余缺口主要是：
 
 ```text
 Instructions 结构化
-技能回流贡献规范（D5-3 未交付；校验脚本 D5-2 verify-skill-packages 已交付 2026-09-10）
+技能回流贡献规范（D5-3 未交付）
 ```
 
 # 10. 当前 Environment / Sandbox 基线
@@ -322,7 +322,7 @@ REWORK
 
 后续目标是把它收敛为 Quality Gate，但现阶段不建立第二套 Review Runtime。
 
-**核验证据边界（2026-09-24 首版，2026-10-03 上调限额）**：附件正文注入进核验 Prompt 时按限额截断（**2026-10-03 起每份 64000 字符 / 总量 200000 字符**，由 8000/24000 上调以匹配官方 DeepSeek 64K 上下文；正常产出不会触发截断），截断处输出结构化标注行 `[TRUNCATED] file=… shown=… total=… reason=…`；核验 Prompt 明确要求「不可见部分一律视为未提供证据，禁止以提交方自报数值/自检清单补全，依赖不可见内容的验收项不得判 pass」。
+**核验证据边界**：附件正文注入进核验 Prompt 时按限额截断（**每份 64000 字符 / 总量 200000 字符**，以匹配官方 DeepSeek 64K 上下文；正常产出不会触发截断），截断处输出结构化标注行 `[TRUNCATED] file=… shown=… total=… reason=…`；核验 Prompt 明确要求「不可见部分一律视为未提供证据，禁止以提交方自报数值/自检清单补全，依赖不可见内容的验收项不得判 pass」。
 
 # 13. 当前明确边界
 
@@ -337,4 +337,4 @@ REWORK
 
 # 14. 当前基线一句话
 
-> **HelloAI 已经具备异步执行、分布式调度、异构 Agent 接入、可靠性治理和基础执行环境抽象；Agent Event Stream 与 AgentRuntime 已统一收敛（2026-09 收官，经 dev 灰度联调与外部执行者双轮全链实测），下一阶段的核心是继续收敛 Skill Capability 剩余缺口与 Sandbox Provider 隔离能力，并补齐 Event 消费面的 Recovery / Fork。**
+> **HelloAI 已经具备异步执行、分布式调度、异构 Agent 接入、可靠性治理和基础执行环境抽象；Agent Event Stream 与 AgentRuntime 已统一收敛（2026-09 收官，经外部执行者双轮全链实测），下一阶段的核心是继续收敛 Skill Capability 剩余缺口与 Sandbox Provider 隔离能力，并补齐 Event 消费面的 Recovery。**

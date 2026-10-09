@@ -4,7 +4,7 @@
 >
 > 适用对象：Qoder、Trae、Codex、Claude Code 及其他参与 HelloAI 代码修改的 AI 编程 Agent。
 >
-> 最后更新：2026-09-07
+> 最后更新：2026-10-09（§6.6 log 域文档清单与定位 + `C-NN` 编号退役说明；§32「出现重大架构决策」改为「当月 Log 即时 + 架构变更记录定期回填」；§36 P0-A Prompt 收尾同步）
 
 ---
 
@@ -320,10 +320,14 @@ design/**
 ## 6.6 log
 
 ```text
-log/HelloAI 架构变更记录.md
+log/YYYY-MM.md                      # 月度迭代记录（当月·即时承载）
+log/HelloAI 架构变更记录.md          # 架构决策汇总（按周期·定期回填）
+log/README.md                       # 日志体系说明与记录格式规范
 ```
 
-只记录重大架构决策和变更原因。
+- **`YYYY-MM.md`（当月·即时）**：重大架构决策写入当月条目的 `### 决策` 段（含依据 / 取舍 / 边界）；已过月记录归档至 `doc/archive/logs/`。
+- **`HelloAI 架构变更记录.md`（按周期·定期回填）**：`ARCH-YYYYMMDD-NNN` 编号的**唯一事实源**，**随开发周期迭代定期汇总**，**不要求逐决策即时更新**（末条 2026-09-28，已停更待回填）；**不得删除** —— 被历史 Log 的 `### 关联 → - Design：` 引用。
+- **`C-NN` 编号已于 2026-10-09 退役**：原 `log/HelloAI 差距表订正留痕.md` 的 `C-1`~`C-42` 已按「**一次订正 = 一条 Log**」并入对应月份的 `LOG-YYYYMMDD-NNN` 条目（差距表订正的载体唯一化）。`doc/archive/**` 内的 `C-NN` 引用为**历史现场**，保留原样。
 
 不作为当前设计入口。
 
@@ -1347,10 +1351,17 @@ HelloAI 重构实施计划.md
 
 ## 出现重大架构决策
 
-更新：
+**即时**更新（本批同批完成）：
 
 ```text
-log/HelloAI 架构变更记录.md
+log/YYYY-MM.md                      # 当月 Log 的「### 决策」段（依据 / 取舍 / 边界）
+HelloAI 实现差距表.md                # 若改变当前差距或生效口径
+```
+
+**定期**汇总回填（按开发周期迭代，非逐决策）：
+
+```text
+log/HelloAI 架构变更记录.md          # ARCH-YYYYMMDD-NNN 编号锚点
 ```
 
 ## 专项设计发生变化
@@ -1472,7 +1483,7 @@ doc/README.md
 doc/HelloAI 项目基线文档.md
 doc/HelloAI 目标架构.md
 doc/HelloAI 实现差距表.md
-doc/HelloAI 重构实施计划.md
+doc/plan/HelloAI 重构实施计划.md
 doc/HelloAI_CODE_STYLE.md
 
 根据当前任务继续阅读对应 design 文档。
@@ -1560,7 +1571,8 @@ Planner / Scheduler / Reviewer 不属于 Runtime 内部。
 完成后：
 更新实现差距表；
 必要时更新项目基线；
-如有架构决策，更新架构变更记录。
+如有架构决策，记入当月 Log（log/YYYY-MM.md）的「### 决策」段。
+（log/HelloAI 架构变更记录.md 按开发周期迭代定期汇总，非逐条即时更新）
 ```
 
 ---
