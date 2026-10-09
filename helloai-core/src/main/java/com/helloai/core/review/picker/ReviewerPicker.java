@@ -6,7 +6,7 @@ import com.helloai.core.task.port.SubTaskView;
 import java.util.List;
 
 /**
- * 核验 Reviewer 选型器（反馈回路 Phase 4 双审前置拆分）。
+ * 核验 Reviewer 选型器（反馈回路双审前置拆分）。
  *
  * <p>「选取策略」与「审核编排」分离：单审/双审的 Reviewer 选取统一收口
  * 本接口（对齐 {@code planner/picker/PlannerAgentPicker} 先例），

@@ -115,7 +115,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
     private final AgentQualityProfileService agentQualityProfileService;
     /** §6.142 双审并行化：两路核验共享的专用线程池（helloai-start ReviewDualExecutorConfig）。 */
     private final Executor reviewDualExecutor;
-    /** Phase 0 B2：事件记录器（REVIEW_STARTED/APPROVED/REJECTED 埋点；事件 write-only，失败仅告警）。 */
+    /** 事件记录器（REVIEW_STARTED/APPROVED/REJECTED 埋点；事件 write-only，失败仅告警）。 */
     private final AgentEventRecorder agentEventRecorder;
     /** RM12（B4 Quality Gate 泛化）：重复失败判定闸门（判定收口；事件/死信处置仍在本类）。 */
     private final RepeatedFailureGate repeatedFailureGate;
@@ -349,7 +349,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             return;
         }
 
-        // Phase 0 B2：REVIEW_STARTED（Run 级事件 turn=0/step=0）。
+        // REVIEW_STARTED（Run 级事件 turn=0/step=0）。
         // 已过返工上限/能力预检/证据硬检查，正式进入核验；审核者此刻尚未选出，agentId 留空
         try {
             agentEventRecorder.record(
@@ -433,7 +433,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
     }
 
     /**
-     * Phase 0 B2：审核终态事件记录（REVIEW_APPROVED / REVIEW_REJECTED，Run 级 turn=0/step=0）。
+     * 审核终态事件记录（REVIEW_APPROVED / REVIEW_REJECTED，Run 级 turn=0/step=0）。
      * 单审/双审共识共用同一落地口，此处统一降级封装（事件 write-only，失败仅告警）。
      */
     private void recordReviewEventSafely(SubTaskView subTask, Long reviewerAgentId, AgentEventType eventType,
@@ -649,7 +649,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             return;
         }
 
-        // Phase 0 A3（LOG-20260904-007）：rework 返回 false = 共享预算耗尽（attempt_total 达
+        // LOG-20260904-007：rework 返回 false = 共享预算耗尽（attempt_total 达
         // max-reassign-attempts），子任务已转 DEAD_LETTER 待人工——不再补发执行命令，
         // 避免给死信子任务触发新一轮执行尝试（执行预算已封顶）。
         if (!subTaskService.rework(subTaskId, targetExecutor)) {
@@ -676,7 +676,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             return;
         }
         try {
-            // Phase 1 Step 1 fix（LOG-20260904-009）：requiredSkills 装箱透传
+            // LOG-20260904-009：requiredSkills 装箱透传
             // （task 域数据随命令正向传入执行侧，执行侧不再反向查询 task）
             // G-010：改用并集装箱（子任务级 ∪ 任务级），核验与执行同清单
             executionCommandService.createAssignedCommand(subTaskId, targetExecutor, "auto-review-rework",

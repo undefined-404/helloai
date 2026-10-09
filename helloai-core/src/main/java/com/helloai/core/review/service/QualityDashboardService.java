@@ -3,7 +3,7 @@ package com.helloai.core.review.service;
 import com.helloai.core.review.dto.QualityDashboardResponse;
 
 /**
- * 质量看板聚合服务（Phase 5 质量度量看板）。
+ * 质量看板聚合服务（质量度量看板）。
  *
  * <p>聚合逻辑收口于 Service（§6.7 聚合看板语义延伸），Controller 零编排只透传；
  * 跨域只依赖两域 Service 接口（agent 域画像统计 + 本域 review_record 窗口统计），

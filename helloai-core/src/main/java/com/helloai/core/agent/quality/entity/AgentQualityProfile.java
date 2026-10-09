@@ -46,10 +46,10 @@ public class AgentQualityProfile extends BaseEntity {
     @TableField(typeHandler = PgJsonbTypeHandler.class)
     private Map<String, Integer> issueDefectStats;
 
-    /** 作为 Reviewer 累计核验次数（Phase 4 双审/抽检预留）。 */
+    /** 作为 Reviewer 累计核验次数（双审/抽检预留）。 */
     private Integer reviewerReviewedCount;
 
-    /** 作为 Reviewer 产生分歧次数（Phase 4 双审预留）。 */
+    /** 作为 Reviewer 产生分歧次数（双审预留）。 */
     private Integer reviewerDisagreementCount;
 
     /** 最近一次纳入统计的 review_record.id（增量更新幂等判定 + 对账起点）。 */

@@ -12,7 +12,6 @@ import java.time.OffsetDateTime;
 import java.util.Map;
 
 /**
- * Phase 2H ②a 引入 / Phase 2H ②b 扩展：
  * 执行命令 Outbox 行实体（{@code agent_command_outbox}）。
  *
  * <p>本实体与 {@link AgentOutboxEvent}（SubTask 状态变更事件）严格分层——前者负责

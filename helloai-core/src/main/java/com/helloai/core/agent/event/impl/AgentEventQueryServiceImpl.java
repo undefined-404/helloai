@@ -18,7 +18,7 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Agent 事件流读侧查询实现（Phase 0 A6 / A7）。
+ * Agent 事件流读侧查询实现。
  *
  * <p>纯读服务：{@link #traceBySubTaskId} / {@link #traceByRunId} / {@link #traceByTaskId} /
  * {@link #pageAuditByTaskId} 将 {@code agent_event}（mapper 已按对应时序返回）

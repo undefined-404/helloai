@@ -17,7 +17,7 @@ public class SubTaskStateMachine {
         TRANSITIONS.put(SubTaskStatus.PENDING_PLAN_REVIEW, Set.of(SubTaskStatus.PENDING, SubTaskStatus.CANCELLED));
         TRANSITIONS.put(SubTaskStatus.PENDING,     Set.of(SubTaskStatus.ASSIGNED, SubTaskStatus.CANCELLED, SubTaskStatus.DEAD_LETTER));
         TRANSITIONS.put(SubTaskStatus.ASSIGNED,     Set.of(SubTaskStatus.IN_PROGRESS, SubTaskStatus.BLOCKED, SubTaskStatus.PENDING, SubTaskStatus.CANCELLED, SubTaskStatus.DEAD_LETTER));
-        // PENDING 仅限租约过期回收路径（LeaseReconcilerTask，Phase 0 A2.4）：Worker 崩溃后
+        // PENDING 仅限租约过期回收路径（LeaseReconcilerTask）：Worker 崩溃后
         // 租约到期将任务退回分发链重派；人工/正常路径不允许把在执行的子任务打回 PENDING。
         TRANSITIONS.put(SubTaskStatus.IN_PROGRESS,  Set.of(SubTaskStatus.PENDING, SubTaskStatus.REVIEW, SubTaskStatus.BLOCKED, SubTaskStatus.PAUSED, SubTaskStatus.CANCELLED, SubTaskStatus.DEAD_LETTER));
         TRANSITIONS.put(SubTaskStatus.PAUSED,       Set.of(SubTaskStatus.IN_PROGRESS, SubTaskStatus.CANCELLED));

@@ -13,7 +13,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 
 /**
- * Reviewer 抽检任务（反馈回路 Phase 4）：对窗口内 APPROVED 审查记录抽样复审。
+ * Reviewer 抽检任务（反馈回路）：对窗口内 APPROVED 审查记录抽样复审。
  *
  * <p>只度量不改状态：复审结果写 review_recheck_log（discrepancy=原 APPROVED 复审
  * REJECTED 的放水标记）+ timeline 观测，子任务状态与 review_record 均不动；

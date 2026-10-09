@@ -3,7 +3,7 @@ package com.helloai.core.agent.runtime.sandbox;
 import com.helloai.core.agent.runtime.ExecutionEnvironment;
 
 /**
- * 沙箱解析结果（P0-C Phase 4）。
+ * 沙箱解析结果（P0-C）。
  *
  * <p>{@code environment} 表达「在哪执行」（场所，ExecutionEnvironment 既有抽象）；
  * {@code policy} 表达「隔离到什么程度」（安全边界事实）。二者分离：Environment 是

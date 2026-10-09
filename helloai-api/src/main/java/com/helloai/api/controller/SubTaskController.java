@@ -412,7 +412,7 @@ public class SubTaskController {
             return R.fail("子任务已有进行中的执行记录，请勿重复触发");
         }
 
-        // Phase 1 Step 1 fix（LOG-20260904-009）：requiredSkills 装箱透传
+        // LOG-20260904-009：requiredSkills 装箱透传
         // （task 域数据随命令正向传入执行侧，执行侧不再反向查询 task）
         // G-010：改用并集装箱（子任务级 ∪ 任务级），与执行链其余装箱点同源
         ExecutionCommand command = executionCommandService.createAssignedCommand(

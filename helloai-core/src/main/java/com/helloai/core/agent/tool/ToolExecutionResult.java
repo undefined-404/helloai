@@ -1,7 +1,7 @@
 package com.helloai.core.agent.tool;
 
 /**
- * 工具执行结果（P0-C Phase 2）。
+ * 工具执行结果（P0-C）。
  *
  * <p>由 {@link ToolExecutor} 返回的不可变执行结果；成功时携带工具原始输出，
  * 失败时携带错误消息，二者互斥（success=true 时 errorMessage 恒 null）。</p>

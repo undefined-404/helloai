@@ -5,7 +5,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import java.util.List;
 
 /**
- * Agent 事件流读侧查询（Phase 0 A6 / A7）。
+ * Agent 事件流读侧查询。
  *
  * <p>职责：从 append-only 的 {@code agent_event} 重建执行轨迹，是 Timeline / Replay / Audit
  * 共用的首个读消费面。仅读、不参与业务状态决策（事件 write-only 纪律的读侧对偶）。</p>
@@ -21,7 +21,7 @@ public interface AgentEventQueryService {
     List<AgentEventTraceItem> traceBySubTaskId(Long subTaskId);
 
     /**
-     * 按 Run 读取完整执行轨迹（Phase 0 A7 Replay 读侧）。
+     * 按 Run 读取完整执行轨迹（Replay 读侧）。
      *
      * <p>一个 Run（{@code run-{taskId}-{roundNum}}，见 ADR-001）跨 Turn / Step
      * 全量重建执行轨迹，支撑 G-001 验收「一个 Run 可以按 sequence 重建轨迹」；
@@ -45,7 +45,7 @@ public interface AgentEventQueryService {
     List<AgentEventTraceItem> traceByTaskId(Long taskId);
 
     /**
-     * 按 Task 分页读取事件审计列表（Phase 0 A7 Audit 读侧）。
+     * 按 Task 分页读取事件审计列表（Audit 读侧）。
      *
      * <p>按 task 维度查询执行事实（谁在何时做了什么），支持可选 {@code eventType} 与
      * {@code timeStart}/{@code timeEnd} 时间范围过滤。时间字符串由实现负责按以下两种

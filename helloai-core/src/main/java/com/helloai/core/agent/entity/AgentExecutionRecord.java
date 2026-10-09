@@ -56,7 +56,7 @@ public class AgentExecutionRecord extends BaseEntity {
     private OffsetDateTime lastAttemptTime;
 
     /**
-     * 乐观锁版本号（Phase 0 A2.1）。
+     * 乐观锁版本号。
      * <p>mark* 系列改为 {@code update(entity, wrapper)} + {@code eq(status, oldStatus)} 双条件 CAS 后，
      * version 比较与自增交由 MyBatis-Plus OptimisticLockerInnerInterceptor 自动处理（规范 §15），
      * 禁止手写 {@code version = version + 1} SQL。</p>

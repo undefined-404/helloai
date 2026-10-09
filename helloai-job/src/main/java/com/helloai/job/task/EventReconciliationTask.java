@@ -8,7 +8,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * 事件流对账任务（Phase 0 B3）。
+ * 事件流对账任务。
  *
  * <p>周期扫描最近变更的子任务，校验事件流末条事件与业务状态是否一致
  * （ADR-001 §5.3：事件是业务状态的投影，事件流终态事件应与业务表状态匹配）。

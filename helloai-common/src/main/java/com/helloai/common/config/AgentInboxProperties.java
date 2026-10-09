@@ -5,7 +5,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 /**
- * Agent 收件箱消息生命周期配置（N-008 统一消息生命周期，Phase 2 A3）。
+ * Agent 收件箱消息生命周期配置（N-008 统一消息生命周期）。
  *
  * <p>本类是收件箱消息 TTL 的单一来源：{@code AgentInboxServiceImpl#send} 落库时写入
  * {@code expire_time = now + expireHours}，{@code InboxExpireCleanupTask} 定期将过期

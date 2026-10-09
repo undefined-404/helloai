@@ -187,13 +187,13 @@ public class RabbitMQConfig {
      * SimpleMessageConverter，封死 Java 序列化消息在监听转换层的反序列化入口。
      *
      * <p><b>背景</b>：spring-amqp 默认 SimpleMessageConverter 会对
-     * content-type=application/x-java-serialized-object 的消息做 Java 反序列化（Phase 2F 之前
+     * content-type=application/x-java-serialized-object 的消息做 Java 反序列化（此前
      * 旧发布器 convertAndSend(Map) 的遗留毒消息），被反序列化安全白名单拦截抛 SecurityException；
      * 且该异常抛在 MessagingMessageListenerAdapter 转换层（进入 @RabbitListener 方法体之前），
      * 消费端方法内的「坏消息 ACK」防御够不着；MANUAL ACK 模式下消息永远停在 unacked，
      * 每次重启重投、反复打 "Failed to convert message" WARN。
      *
-     * <p><b>效果</b>：正常 JSON 消息（各发布器 Phase 2F 起均显式 JSON）照常转换（提取出的
+     * <p><b>效果</b>：正常 JSON 消息（各发布器均显式 JSON）照常转换（提取出的
      * payload 被丢弃，各消费端仍按 message.getBody() 自行 objectMapper 解析，行为不变）；
      * 非 JSON 消息（含遗留 Java 序列化毒消息）抛 MessageConversionException，被
      * ConditionalRejectingErrorHandler 判定 fatal → 拒投不重投 → 走 DLX 隔离。
@@ -202,7 +202,7 @@ public class RabbitMQConfig {
      * Boot 自动装配的 rabbitListenerContainerFactory 会经 ObjectProvider 消费本 Bean
      * （yml 里 spring.rabbitmq.listener.simple.* 的 manual/concurrency 配置照常生效）；
      * 而本项目的 rabbitTemplate 是自定义 Bean、未设置 converter，且全部发布端均用
-     * 显式 RabbitTemplate.send(Message)（Phase 2F 起），不经过 converter，发布侧行为不变。
+     * 显式 RabbitTemplate.send(Message)，不经过 converter，发布侧行为不变。
      */
     @Bean
     public MessageConverter rabbitMessageConverter() {

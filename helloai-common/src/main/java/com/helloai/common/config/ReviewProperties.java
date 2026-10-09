@@ -5,7 +5,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 /**
- * 自动核验双审与抽检配置（反馈回路 Phase 4）。
+ * 自动核验双审与抽检配置（反馈回路）。
  *
  * <p>双审：difficulty=HIGH 且未指定 reviewerAgentId 的子任务自动选两个
  * 不同模型（modelType）的 API_KEY_LLM Reviewer 独立核验，一致按共识走
@@ -27,7 +27,7 @@ public class ReviewProperties {
         ANY
     }
 
-    /** 是否启用 HIGH 任务双审。默认 true；关闭后与 Phase 4 前行为一致（单审）。 */
+    /** 是否启用 HIGH 任务双审。默认 true；关闭后与开启前行为一致（单审）。 */
     private boolean dualReviewEnabled = true;
 
     /** 双审共识策略。默认 REQUIRE_BOTH。 */

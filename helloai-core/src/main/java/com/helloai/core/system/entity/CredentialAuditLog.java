@@ -7,7 +7,7 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 
 /**
- * 凭证操作审计日志（Phase 2 B2，N-004 收口）。
+ * 凭证操作审计日志（N-004 收口）。
  *
  * <p>append-only 审计台账：bind / rotate / revoke / expire 四类凭证操作落库，
  * 支撑差距表 N-004 完成标准「异常情况下如何恢复」的取证与审计。只 INSERT，

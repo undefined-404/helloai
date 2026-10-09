@@ -5,7 +5,7 @@ import com.helloai.core.system.entity.CredentialAuditLog;
 import org.apache.ibatis.annotations.Mapper;
 
 /**
- * CredentialAuditLog Mapper（Phase 2 B2）。
+ * CredentialAuditLog Mapper。
  */
 @Mapper
 public interface CredentialAuditLogMapper extends BaseMapper<CredentialAuditLog> {

@@ -5,7 +5,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 /**
- * 凭证生命周期治理配置（N-004 Credential Vault 收口，Phase 2 B2）。
+ * 凭证生命周期治理配置（N-004 Credential Vault 收口）。
  *
  * <p>{@code CredentialExpireTask} 的单一来源：定期将 ACTIVE 且 {@code expire_time} 已过
  * 的凭证批量置为 EXPIRED（激活 V14 建表以来 {@code expireTime} 死字段），

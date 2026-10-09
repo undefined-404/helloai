@@ -14,7 +14,7 @@ import java.nio.charset.StandardCharsets;
 /**
  * 领域事件 MQ 发布器。
  *
- * <p><b>Phase 2F 修正（与 ExecutionCommandMqPublisher 同款）：显式 JSON 序列化。</b>
+ * <p><b>（与 ExecutionCommandMqPublisher 同款）：显式 JSON 序列化。</b>
  * 原实现 rabbitTemplate.convertAndSend(POJO/Map) 依赖 SimpleMessageConverter 的 Java 序列化
  * （content-type=application/x-java-serialized-object），消费端 @RabbitListener 在转换层被
  * 反序列化安全白名单拦截（SecurityException: Attempt to deserialize unauthorized class

@@ -1,7 +1,7 @@
 package com.helloai.core.agent.runtime.sandbox;
 
 /**
- * 沙箱提供方（P0-C Phase 4；AgentRuntime 八件套成员之一）。
+ * 沙箱提供方（P0-C；AgentRuntime 八件套成员之一）。
  *
  * <p>契约：从 {@link SandboxContext} 解析执行环境 + 诚实隔离策略，返回 {@link Sandbox}。
  * 第一阶段只定义契约（不实现 Docker / K8s 完整安全体系，P2/P3 后置）；

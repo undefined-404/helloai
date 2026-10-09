@@ -1,7 +1,7 @@
 package com.helloai.common.constant;
 
 /**
- * Agent 执行会话状态（Phase 1 Step 3，agent_session.status）。
+ * Agent 执行会话状态（agent_session.status）。
  *
  * <p>会话 = 一次执行尝试（ADR-001 Turn 级）的快照/中断点/恢复上下文载体，
  * 与 {@code agent_execution_record}（命令生命周期）互补。</p>

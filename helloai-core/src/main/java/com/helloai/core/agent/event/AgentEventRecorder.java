@@ -5,7 +5,7 @@ import com.helloai.common.constant.AgentEventType;
 import java.util.Map;
 
 /**
- * Agent 事件记录器（Phase 0 B1，ADR-001 Run/Turn/Step 模型配套）。
+ * Agent 事件记录器（ADR-001 Run/Turn/Step 模型配套）。
  *
  * <p>同事务双写：
  * <ol>

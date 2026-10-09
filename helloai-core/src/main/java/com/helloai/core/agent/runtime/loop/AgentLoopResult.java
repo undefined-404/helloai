@@ -1,7 +1,7 @@
 package com.helloai.core.agent.runtime.loop;
 
 /**
- * Agent 循环结果（P0-C Phase 3）。
+ * Agent 循环结果（P0-C）。
  *
  * <p>由 {@link AgentLoop} 返回的不可变结果。success=true 时 errorMessage 恒 null；
  * {@code finishReason} 取 {@code STOP} / {@code MAX_ITERATIONS} / {@code ERROR} 三值之一。</p>

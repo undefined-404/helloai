@@ -18,7 +18,7 @@ public class RequestLogInterceptor implements HandlerInterceptor {
     private static final String STEP_ID_KEY = "step_id";
     private static final String START_TIME_KEY = "_startTime";
 
-    /** 请求级 MDC 键集：preHandle 写入、afterCompletion 统一清理（含 Phase 0 C4 事件链业务键）。 */
+    /** 请求级 MDC 键集：preHandle 写入、afterCompletion 统一清理（含事件链业务键）。 */
     private static final String[] MDC_REQUEST_KEYS = {TRACE_ID_KEY, RUN_ID_KEY, TASK_ID_KEY, STEP_ID_KEY};
 
     private final RequestLogService requestLogService;
@@ -39,7 +39,7 @@ public class RequestLogInterceptor implements HandlerInterceptor {
             traceId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
         }
         MDC.put(TRACE_ID_KEY, traceId);
-        // Phase 0 C4：事件链业务标识入 MDC（下游执行链/RabbitMQ 消费端按同键续传，无头则跳过不影响主流程）
+        // 事件链业务标识入 MDC（下游执行链/RabbitMQ 消费端按同键续传，无头则跳过不影响主流程）
         putHeaderIfPresent(request, "X-Run-Id", RUN_ID_KEY);
         putHeaderIfPresent(request, "X-Task-Id", TASK_ID_KEY);
         putHeaderIfPresent(request, "X-Step-Id", STEP_ID_KEY);

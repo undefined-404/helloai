@@ -6,7 +6,7 @@ import java.net.UnknownHostException;
 /**
  * 本机主机名工具。
  *
- * <p>Phase 0 A2 从 {@code AgentExecutionRecordServiceImpl#getHostName()} 提取为公共工具
+ * <p>从 {@code AgentExecutionRecordServiceImpl#getHostName()} 提取为公共工具
  * （规范 §50.4 复用优先），保证执行记录节点标识（{@code agent_execution_record.worker_node}
  * 与 {@code sub_task.owner}）同源，Watchdog 据此只续自己节点的租约。</p>
  */

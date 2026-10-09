@@ -1,9 +1,9 @@
 package com.helloai.core.review.dto;
 
 /**
- * Reviewer 放水率点（Phase 5 质量度量看板）：审查者维度通过率统计。
+ * Reviewer 放水率点（质量度量看板）：审查者维度通过率统计。
  *
- * <p>配 Phase 4 抽检度量放水（review_recheck_log 只管一致性，本统计按
+ * <p>配抽检度量放水（review_recheck_log 只管一致性，本统计按
  * review_record 的 APPROVED 占比反映宽松度）；approveRate 为 0-100 整数百分比。</p>
  *
  * @param reviewerAgentId 审查者 Agent ID

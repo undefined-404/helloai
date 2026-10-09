@@ -58,7 +58,7 @@ public interface AgentInboxService extends IService<AgentInbox> {
     /**
      * 过期归档：将 expire_time 已过且未归档的消息批量软删（is_archived=1）。
      *
-     * <p>N-008 统一消息生命周期（Phase 2 A3）：由 {@code InboxExpireCleanupTask} 周期调用，
+     * <p>N-008 统一消息生命周期：由 {@code InboxExpireCleanupTask} 周期调用，
      * 消除 unread 消息无限堆积；归档保留审计查询能力（fail-close：不丢数据）。</p>
      *
      * @param batchLimit 单轮最大归档条数

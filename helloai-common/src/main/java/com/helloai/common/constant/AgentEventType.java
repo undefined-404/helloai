@@ -1,7 +1,7 @@
 package com.helloai.common.constant;
 
 /**
- * Agent 事件类型（Phase 0 B1，ADR-001 Run/Turn/Step 模型配套）。
+ * Agent 事件类型（ADR-001 Run/Turn/Step 模型配套）。
  *
  * <p>事件分类（写 {@code agent_event.event_type}，snake_case）：
  * <ul>

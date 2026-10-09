@@ -417,7 +417,7 @@ public class AgentRuntimeContextAssembler {
      * <p><b>Resume 语义边界</b>：本方法提供的是 <b>Prompt 级结构化续接</b>——把「已完成的事实」
      * 以结构化清单注入接续期 prompt，由接续者自行避免重复；<b>并非</b> ADR-001 定义的
      * Step 级续跑（「不重跑已成功的 Step」需 AgentLoop 以既有 messages 为起点续跑 +
-     * Step 状态映射，ADR-001 §8 明确留待 Phase 2）。</p>
+     * Step 状态映射，ADR-001 §8 明确后置）。</p>
      *
      * @param completedTrace 中断 Turn 的事件流轨迹（B3 Resume 事实来源）；空/null 时零注入
      */

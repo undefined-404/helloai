@@ -5,7 +5,7 @@ import com.helloai.common.constant.CredentialOwnerType;
 import com.helloai.core.system.entity.CredentialAuditLog;
 
 /**
- * 凭证操作审计服务（Phase 2 B2，N-004 收口）。
+ * 凭证操作审计服务（N-004 收口）。
  *
  * <p>append-only 审计台账写入与查询。审计与凭证主操作同事务：审计失败整体回滚
  * （fail-close——无审计的凭证变更宁可不做）。</p>

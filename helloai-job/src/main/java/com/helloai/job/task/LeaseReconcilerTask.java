@@ -8,7 +8,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * 子任务执行租约过期回收任务（Phase 0 A2.4）。
+ * 子任务执行租约过期回收任务。
  *
  * <p>周期扫描 {@code sub_task} 中 {@code status=IN_PROGRESS AND owner IS NOT NULL}
  * 且 {@code lease_until} 已过期的行，CAS 回收为 PENDING 并清空

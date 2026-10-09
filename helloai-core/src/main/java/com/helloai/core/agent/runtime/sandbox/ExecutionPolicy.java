@@ -1,7 +1,7 @@
 package com.helloai.core.agent.runtime.sandbox;
 
 /**
- * 执行隔离策略（P0-C Phase 4，Sandbox Provider 契约核心）。
+ * 执行隔离策略（P0-C，Sandbox Provider 契约核心）。
  *
  * <p>表达一次执行在五个边界上的隔离事实（真正安全沙箱需覆盖的维度）：
  * 文件系统 / 网络 / 进程 / 资源 / 凭证。当前实现必须诚实标注——平台尚未提供

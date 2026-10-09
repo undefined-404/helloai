@@ -82,7 +82,7 @@ public interface TaskRunningSpecService {
     void compileContextSummary(Long taskId);
 
     /**
-     * 写入任务契约（契约先行拆解模式，Phase 2）。
+     * 写入任务契约（契约先行拆解模式）。
      *
      * <p>契约定义子任务（{@code sub_task.is_contract=1}）完成（DONE）后，
      * 由其产出回流调用本方法；契约会经 {@link #buildExecutorPromptSection}

@@ -3,7 +3,6 @@ package com.helloai.common.constant;
 import com.baomidou.mybatisplus.annotation.IEnum;
 
 /**
- * Phase 2H ②a 引入 / Phase 2H ②b 扩展：
  * 执行命令 Outbox 表（{@code agent_command_outbox}）的投递状态机。
  *
  * <p>本枚举与现有 {@link OutboxStatus} 严格区分 ——

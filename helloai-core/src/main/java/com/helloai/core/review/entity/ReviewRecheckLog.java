@@ -9,7 +9,7 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 
 /**
- * Reviewer 抽检日志实体（反馈回路 Phase 4，V57）。
+ * Reviewer 抽检日志实体（反馈回路，V57）。
  *
  * <p>一行 = 一次抽检复审：记录被抽检 review_record 的原判、复审判定与
  * 放水标记（原 APPROVED 复审 REJECTED），度量 Reviewer 放水率并驱动

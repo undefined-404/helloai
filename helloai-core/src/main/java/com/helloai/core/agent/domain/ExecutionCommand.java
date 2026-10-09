@@ -13,7 +13,7 @@ import java.util.List;
  * 触发来源与已创建的执行记录标识。后续若接 MQ / Outbox / 独立 Consumer，
  * 统一以该对象为边界继续扩展。</p>
  *
- * <p>Phase 1 Step 1 fix（LOG-20260904-009）：新增 {@link #requiredSkills}——
+ * <p>LOG-20260904-009：新增 {@link #requiredSkills}——
  * task 域 → agent 域装箱传入的技能标签（§6 依赖方向红线：agent 域不反向查询 task，
  * 由调用方在创建命令时从 task 数据装箱；null 由 builder 默认值规范化为空列表）。</p>
  */
@@ -47,7 +47,7 @@ public class ExecutionCommand {
     List<String> requiredSkills = List.of();
 
     /**
-     * 执行时可用工具名清单（Phase 1 Step 2：agent 域消费侧解析 agent_mcp_server
+     * 执行时可用工具名清单（agent 域消费侧解析 agent_mcp_server
      * 注入，随 AgentContext 透传；与 {@code AgentMcpServerService.getEnabledTools}
      * 同表示，非命令创建方装箱——工具是 agent 域数据，无 §6 跨域问题；
      * null 由 builder 默认值规范化，消费端恒非 null）。
@@ -56,7 +56,7 @@ public class ExecutionCommand {
     List<String> tools = List.of();
 
     /**
-     * 执行环境标识（Phase 1 Step 4：remote-agent / local-process）：agent 域消费侧
+     * 执行环境标识（remote-agent / local-process）：agent 域消费侧
      * 经 {@code ExecutionEnvironmentProvider.resolve(agent.accessType)} 解析后随
      * {@code AgentContext.environment} 透传（与 tools 同为 agent 域数据直读路径，无 §6 跨域
      * 问题；取 {@code ExecutionEnvironment.name()} 存 String，MQ/Outbox 序列化安全）；

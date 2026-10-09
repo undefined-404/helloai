@@ -19,7 +19,7 @@ import org.springframework.stereotype.Component;
 import java.util.Map;
 
 /**
- * 抽检复审执行器（反馈回路 Phase 4，§7.8 拆分：抽检与核验编排分离）。
+ * 抽检复审执行器（反馈回路，§7.8 拆分：抽检与核验编排分离）。
  *
  * <p>对已 APPROVED 的审查记录换 Reviewer 复判一次：<b>只度量不改状态</b>——
  * 子任务已按原判 DONE/REWORK 推进，复审结果仅写 review_recheck_log

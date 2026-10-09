@@ -13,7 +13,7 @@ spring:
     exclude: org.springframework.ai.model.deepseek.autoconfigure.DeepSeekChatAutoConfiguration
   # === 默认激活 dev 环境（云服务器联调），本地 Docker 开发切换 local 使用 spring.profiles.active=local ===
   profiles:
-    active: local
+    active: dev
   # === 时区锁定：与 HelloAIApplication.main() 的 TimeZone.setDefault 一致 ===
   # Date / LocalDateTime 等不带时区偏移的类型也按北京时间序列化，避免 UTC 少 8 小时
   jackson:
@@ -119,7 +119,7 @@ helloai:
       max-ttl-minutes: 240
       default-ttl-minutes: 30
       full-score: 100
-    # N-008 统一消息生命周期（Phase 2 A3）：收件箱消息 TTL 与过期归档。
+    # N-008 统一消息生命周期：收件箱消息 TTL 与过期归档。
     # expire-hours：send 落库即写 expire_time（默认 7 天，远大于 ASSIGNED 10min 消费窗口，
     # 只兜「Agent 长期不拉单」堆积）；InboxExpireCleanupTask 5min 一扫软删（is_archived=1）。
     # 「超时未消费→重新分派」由子任务层承担（dispatch.assigned-timeout-minutes），
@@ -147,7 +147,7 @@ helloai:
       enabled: true
       # 采样温度：保持语义 + 结构化改写而非创作，取低值保证稳定（建议 0.1~0.3）。
       temperature: 0.2
-  # Phase 2B 调度策略 3：外部优先 / 空闲优先 / 平台内 LLM 保底
+  # 调度策略 3：外部优先 / 空闲优先 / 平台内 LLM 保底
   dispatch:
     auto-assign-on-create: false
     prefer-external: false
@@ -168,7 +168,7 @@ helloai:
     # 执行密集任务（需本机 shell/文件/服务操作）不自动回退给无本机能力的 API_KEY_LLM，
     # 停留原状态并标记人工介入，避免"无能力执行→交付物不达标→返工循环→卡死审核"。
     fallback-skip-execution-dense: true
-    # Phase 2C N11：外部 Agent 连续失败阈值后自动回退到平台内 API_KEY_LLM
+    # N11：外部 Agent 连续失败阈值后自动回退到平台内 API_KEY_LLM
     fallback:
       enabled: true
       failure-threshold: 3
@@ -201,7 +201,7 @@ helloai:
     # 真实 Provider 共用同一批 API Key，上游有 RPS 限流，超限排队等待、超时友好报错。
     max-concurrent-llm-calls: 8
     llm-acquire-timeout-seconds: 60
-    # Phase 2A §5.1/§5.2 + T5 改造：DB Poller 兜底扫描（主消费路径由 consumer-mode 决定）
+    # §5.1/§5.2 + T5 改造：DB Poller 兜底扫描（主消费路径由 consumer-mode 决定）
     poller-enabled: true
     poller-interval-ms: 1000
     poller-orphan-threshold-seconds: 60
@@ -221,14 +221,14 @@ helloai:
     # ⚠️ POLLER/BOTH 模式下 ExecutionDispatchValidator 会强制要求 helloai.mq.execution-command.consumer-enabled=true
     #   默认开启（见下），启动期 fail-fast，避免"主消费路径失效但 Poller 仅兜底"的部署形态
     consumer-mode: POLLER
-    # Phase 2E: 生产端 / 调度侧的显式派发模式，与 consumer-mode 完全解耦
+    # 生产端 / 调度侧的显式派发模式，与 consumer-mode 完全解耦
     #   NONE:  命令只落库，交给 DB Poller 兜底消费（与 consumer-mode=EVENT 配套保留）
     #   EVENT: 只发布本地 Spring 事件（旧 EVENT 路径）
     #   MQ:    只投递 RabbitMQ，前提需 mq.execution-command.producer-enabled=true，否则启动 fail-fast
     #   BOTH:  事件 + MQ 双发，用于 EVENT→MQ 灰度切换
     # ⚠️ MQ/BOTH 模式下 ExecutionDispatchValidator 会同时校验 producer-enabled + outbox.relay.enabled
     dispatch-mode: MQ
-  # Phase 2D N6 / Phase 2E / T5：MQ ExecutionCommand 主链路开关
+  # N6 / T5：MQ ExecutionCommand 主链路开关
   #   producer-enabled=true 时 ExecutionCommandMqPublisher 才会注册（必须与 dispatch-mode=MQ/BOTH 同时打开）
   #   consumer-enabled=true 时 MqExecutionCommandConsumer 才会注册
   # ⚠️ T5 起：consumer-mode=POLLER/BOTH 必须开启 consumer-enabled=true（启动期 fail-fast）
@@ -290,7 +290,7 @@ helloai:
       # 生产由 docker-compose.server.yml 经部署目录 .env（已 gitignore）注入。
       # 用旧密钥加密的 credential_vault 行在轮换后无法解密，按自研项目口径重灌（可强制清理）。
       aes-key-base64: ${HELLOAI_CREDENTIAL_AES_KEY_BASE64}
-      # N-004 Credential Vault 收口（Phase 2 B2）：凭证过期扫描开关。
+      # N-004 Credential Vault 收口：凭证过期扫描开关。
       # CredentialExpireTask 5min 一扫：ACTIVE 且 expire_time 已过 → EXPIRED + EXPIRE 审计，
       # 激活 expireTime 死字段，到期凭证自动退出路由；不物理删除（状态隔离 + 审计保留）。
       # 关闭 = 逃生口：过期凭证不再自动失效，仅人工 revoke 可停用。

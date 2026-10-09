@@ -99,20 +99,20 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     private final TaskTimelineService taskTimelineService;
     private final AgentDispatchProperties agentDispatchProperties;
     private final ConcurrencyQuotaService concurrencyQuotaService;
-    // Phase 0 A2：执行租约看门狗配置（TTL / 开关）
+    // 执行租约看门狗配置（TTL / 开关）
     private final WatchdogProperties watchdogProperties;
-    /** Phase 1 Step 3：执行会话服务（租约回收时记录中断点 + ABORT，N-007 恢复载体）。 */
+    /** 执行会话服务（租约回收时记录中断点 + ABORT，N-007 恢复载体）。 */
     private final AgentSessionService agentSessionService;
     // 懒解析打破循环：AttachmentServiceImpl 依赖 SubTaskService（register 归属校验）
     private final ObjectProvider<AttachmentService> attachmentServiceProvider;
-    // 懒解析打破循环（Phase 1 Step 1 fix，LOG-20260904-009）：TaskServiceImpl 已注入
+    // 懒解析打破循环（LOG-20260904-009）：TaskServiceImpl 已注入
     // SubTaskService（反链依赖），直接注入 TaskService 会形成构造器环；仅 requiredSkillsOf
     // 在 task 域内查询 required_skills（装箱出口），不持有长生命周期跨域引用
     private final ObjectProvider<TaskService> taskServiceProvider;
-    /** Phase 0 B2：事件记录器（REWORK_STARTED 埋点；事件 write-only，失败仅告警不阻断返工链）。 */
+    /** 事件记录器（REWORK_STARTED 埋点；事件 write-only，失败仅告警不阻断返工链）。 */
     private final AgentEventRecorder agentEventRecorder;
     /**
-     * Phase 0 A3：共享重试预算原子累加（attempt_total）。
+     * 共享重试预算原子累加（attempt_total）。
      * Schema 基类 ServiceImpl 的 baseMapper 在单元测试手动 new 场景为 null，
      * 因此显式注入 mapper 以保证 rework/reworkFresh 的预算读写可测。
      */
@@ -120,7 +120,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
 
     @Override
     public List<String> requiredSkillsOf(Long taskId) {
-        // Phase 1 Step 1 fix（LOG-20260904-009）：task 域查询出口，供跨域装箱。
+        // LOG-20260904-009：task 域查询出口，供跨域装箱。
         // 全部异常路径（taskId null / 服务不可用 / 任务不存在 / 字段 null）统一返回空列表，
         // 保证装箱调用方拿到恒非 null 值，消费端无需再判空。
         if (taskId == null) {
@@ -357,7 +357,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
             subTask.setAssignedAgentId(agentId);
         }
 
-        // Phase 0 A2.2：进入 IN_PROGRESS 时写执行租约（owner + lease_until = now + TTL），
+        // 进入 IN_PROGRESS 时写执行租约（owner + lease_until = now + TTL），
         // 由 WatchdogLeaseRenewTask 周期续期、LeaseReconcilerTask 过期回收；
         // 开关关闭时不再写入，完全回归存量行为。
         if (newStatus == SubTaskStatus.IN_PROGRESS && watchdogProperties.isEnabled()) {
@@ -792,7 +792,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         SubTask subTask = getById(subTaskId);
         if (subTask == null) throw new BizException("子任务不存在: " + subTaskId);
         SubTaskStateMachine.validate(subTask.getStatus(), SubTaskStatus.REWORK);
-        // Phase 0 A3 收口（LOG-20260904-007）：自动驳回返工 = 新一轮执行尝试，
+        // LOG-20260904-007：自动驳回返工 = 新一轮执行尝试，
         // 计入共享预算 attempt_total（与调度重分配同源，判定语义统一收敛于
         // RetryPolicy.exceedsMax）；预算耗尽不再打回重执行，直接 DEAD_LETTER 待人工，
         // 杜绝「返工 3 次 × 重派 5 次 = 8 次实际执行」的叠加放大（坑点 3 单一权威）。
@@ -813,7 +813,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         // 摘要携带最近一轮 review 结果（评分/评语/问题），外部 Agent 轮询 pullTasks 即可感知返工原因
         sendReworkInboxNotification(subTask);
         agentOutboxService.createEvent(SubTaskSnapshotMapper.toSnapshot(subTask), SubTaskStatus.REWORK);
-        // Phase 0 B2：REWORK_STARTED（Run 级事件 turn=0/step=0；reworkCount 已递增）
+        // REWORK_STARTED（Run 级事件 turn=0/step=0；reworkCount 已递增）
         recordReworkStartedSafely(subTask, reworkAgentId, false);
         // §6.104 打回失效：旧提交附件全部置 INACTIVE，返工必须重新上传最新版
         // （与核验/装载/打包的 listActive 可信视角闭环，旧证据不再进入下次核验）
@@ -823,7 +823,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     }
 
     /**
-     * 返工共享预算消费（Phase 0 A3，LOG-20260904-007）。
+     * 返工共享预算消费（LOG-20260904-007）。
      *
      * <p>预算充足：原子累加 {@code attempt_total}（与调度重分配 incrementAttemptTotal 同款 SQL），
      * 返回 true；预算耗尽（{@code attempt_total >= max-reassign-attempts}，判定语义
@@ -877,7 +877,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         Long oldAgentId = subTask.getAssignedAgentId();
         subTask.setStatus(SubTaskStatus.REWORK);
         subTask.setReworkCount(0);
-        // Phase 0 A3 语义闭环（LOG-20260904-007）：人工驳回 = 用户拍板开启新一轮，
+        // 语义闭环（LOG-20260904-007）：人工驳回 = 用户拍板开启新一轮，
         // 与死信重派（redispatchDeadLetter）对称重置共享预算 attempt_total ——
         // 否则改派后的重执行仍消耗旧预算，一次自动驳回即再入死信，违背人工裁定意图
         subTaskMapper.resetAttemptTotal(subTaskId, OffsetDateTime.now());
@@ -904,7 +904,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         // 人工驳回同样补发收件箱通知（携带 review 摘要，无历史时回退默认文案）
         sendReworkInboxNotification(subTask);
         agentOutboxService.createEvent(SubTaskSnapshotMapper.toSnapshot(subTask), SubTaskStatus.REWORK);
-        // Phase 0 B2：REWORK_STARTED（Run 级事件 turn=0/step=0；reworkFresh 已重置 reworkCount）
+        // REWORK_STARTED（Run 级事件 turn=0/step=0；reworkFresh 已重置 reworkCount）
         recordReworkStartedSafely(subTask, reworkAgentId, true);
         // 注意：Map.of 不接受 null 值，reworkAgentId 可能为 null（不换派原执行者重做），必须用 HashMap
         Map<String, Object> extra = new HashMap<>();
@@ -918,7 +918,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     }
 
     /**
-     * Phase 0 B2：REWORK_STARTED 事件记录（Run 级 turn=0/step=0，事件 write-only，失败仅告警）。
+     * REWORK_STARTED 事件记录（Run 级 turn=0/step=0，事件 write-only，失败仅告警）。
      * rework / reworkFresh 共用（reworkCountReset 区分重置语义）。
      */
     private void recordReworkStartedSafely(SubTask subTask, Long reworkAgentId, boolean reworkCountReset) {
@@ -1158,7 +1158,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
                 } catch (Exception e) {
                     log.warn("租约回收 timeline 事件写入失败，不影响回收: subTaskId={}", subTaskId, e);
                 }
-                // Phase 1 Step 3（N-007 恢复载体）：识别未完成执行 → 记录中断点
+                // （N-007 恢复载体）：识别未完成执行 → 记录中断点
                 // （turn/step/agentId/恢复上下文快照）→ ABORT 幂等防重入；best-effort 不阻断回收
                 try {
                     AgentSessionService.InterruptedSession interrupted =
@@ -1239,7 +1239,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
 
     @Override
     public List<SubTask> listRecentlyChanged(OffsetDateTime since, int limit) {
-        // Phase 0 B3：事件对账候选源，按 update_time 倒序截断（update_time 由 MetaObjectHandler
+        // 事件对账候选源，按 update_time 倒序截断（update_time 由 MetaObjectHandler
         // 自动填充，每次状态/字段变更都会推进；配合对账窗口扫描最近活跃子任务）
         return lambdaQuery()
                 .ge(SubTask::getUpdateTime, since)

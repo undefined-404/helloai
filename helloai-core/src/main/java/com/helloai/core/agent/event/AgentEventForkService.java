@@ -35,12 +35,12 @@ import java.util.UUID;
  *   <li><b>原 Run 不冻结</b>——task 执行链仍派生原 {@code run-{taskId}-1}，原 Run 可继续写；
  *       冻结需在 {@code agent_event} 加 {@code frozen} 列 + Recorder 写入前校验，保留为后续方案；</li>
  *   <li><b>不驱动新 Run 执行</b>——「fork 后让新 Run 跑起来」需 run_id 上下文接线
- *       （{@code sub_task} / execution command 带 fork run_id），属 Phase 2 Agent Governance，
- *       与 Resume 的 Step 级续跑同属 Phase 2。</li>
+ *       （{@code sub_task} / execution command 带 fork run_id），属 Agent Governance，
+ *       与 Resume 的 Step 级续跑同批。</li>
  * </ul></p>
  *
- * <p><b>对称性</b>：Resume 先做成 Prompt 级（Step 级续跑留 Phase 2）；
- * Fork 先做成快照复制（驱动执行留 Phase 2）。两者都是「先做成、再做好」。</p>
+ * <p><b>对称性</b>：Resume 先做成 Prompt 级（Step 级续跑后置）；
+ * Fork 先做成快照复制（驱动执行后置）。两者都是「先做成、再做好」。</p>
  */
 @Slf4j
 @Service

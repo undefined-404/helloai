@@ -244,7 +244,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
             throw new BizException("死信重派只支持执行者（EXECUTOR）Agent，实际角色: " + agent.role());
         }
 
-        // 清零共享重试预算（Phase 0 A3：attempt_total），重新投入调度链后从头计数
+        // 清零共享重试预算（attempt_total），重新投入调度链后从头计数
         subTaskMapper.resetAttemptTotal(subTaskId, OffsetDateTime.now());
 
         // §6.57 语义对齐：人工死信重派 = 用户拍板开启新一轮，与人工驳回（reworkFresh）
@@ -580,7 +580,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
      * <ol>
      *   <li>{@code max-reassign-attempts <= 0} → 熔断禁用，返回 false</li>
      *   <li>子任务不存在或已是终态/死信（DONE/CANCELLED/DEAD_LETTER）→ 返回 true（跳过）</li>
-     *   <li>{@code attempt_total >= max-reassign-attempts}（Phase 0 A3 共享预算，
+     *   <li>{@code attempt_total >= max-reassign-attempts}（共享预算，
      *       判定语义见 {@code RetryPolicy.exceedsMax}）
      *       → 标记子任务为 DEAD_LETTER（死信池，待人工兜底）+ 记录 timeline → 返回 true（熔断）</li>
      *   <li>否则 → 原子累加 {@code attempt_total} → 返回 false（放行）</li>
@@ -786,7 +786,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
     }
 
     /**
-     * 原子累加共享重试预算（Phase 0 A3：{@code attempt_total} 替代 {@code reassign_attempt_count}）。
+     * 原子累加共享重试预算（{@code attempt_total} 替代 {@code reassign_attempt_count}）。
      *
      * <p>与 {@link #isReassignBlockedOrEscalate} 分离，供"复用判定但不重复计数"的补偿路径
      * （{@link #dispatchPendingSubTaskCompensating}）选择调用。</p>

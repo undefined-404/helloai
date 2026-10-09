@@ -36,7 +36,7 @@ public interface AgentQualityProfileService extends IService<AgentQualityProfile
     Integer computeQualityScore(Long agentId);
 
     /**
-     * 渲染「## 你的历史表现」节（Phase 3 注入执行 Prompt 用）。
+     * 渲染「## 你的历史表现」节（注入执行 Prompt 用）。
      *
      * <p>包含累计评审数、一次通过率、最常见驳回原因 TOP3 与本轮提醒语；
      * 画像缺失返回空串（调用方据此省略注入，best-effort 哲学）。</p>
@@ -47,7 +47,7 @@ public interface AgentQualityProfileService extends IService<AgentQualityProfile
     String renderHistorySection(Long agentId);
 
     /**
-     * Reviewer 维度计数增量（反馈回路 Phase 4 双审/抽检）。
+     * Reviewer 维度计数增量（反馈回路双审/抽检）。
      *
      * <p>reviewer_reviewed_count / reviewer_disagreement_count 原子累加；
      * 画像行不存在时创建（仅 reviewer 维度字段非零），并发冲突时回退 UPDATE。
@@ -71,7 +71,7 @@ public interface AgentQualityProfileService extends IService<AgentQualityProfile
     void rebuild(Long agentId);
 
     /**
-     * 全局质量概览（Phase 5 质量度量看板 overview 卡片）。
+     * 全局质量概览（质量度量看板 overview 卡片）。
      *
      * <p>数据源为画像表存量（执行者维度累计值，非时间窗口）；空表返回
      * 全 0 概览（Mapper COALESCE 兜底单行必返回）。</p>
@@ -81,7 +81,7 @@ public interface AgentQualityProfileService extends IService<AgentQualityProfile
     QualityOverview statsOverview();
 
     /**
-     * Agent 质量排行（Phase 5 质量度量看板 agents 排行）。
+     * Agent 质量排行（质量度量看板 agents 排行）。
      *
      * <p>排序：一次通过率降序 → 审查数降序 → agentId 升序；qualityScore
      * 复用 {@link #computeQualityScore} 逐行计算（口径唯一）；agentName 经

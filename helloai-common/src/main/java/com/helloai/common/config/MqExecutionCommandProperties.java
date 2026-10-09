@@ -5,9 +5,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 /**
- * Phase 2D N6 / Phase 2E：MQ 执行命令主链路配置。
+ * N6：MQ 执行命令主链路配置。
  *
- * <p>Phase 2E 起，生产端与消费端各自独立开关，支持独立灰度：</p>
+ * <p>生产端与消费端各自独立开关，支持独立灰度：</p>
  * <ul>
  *     <li>{@link #producerEnabled}：控制 {@code ExecutionCommandMqPublisher} 是否作为 Spring Bean 注册；</li>
  *     <li>{@link #consumerEnabled}：控制 {@code MqExecutionCommandConsumer} 是否作为 Spring Bean 注册。</li>

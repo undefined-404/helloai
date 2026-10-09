@@ -74,9 +74,9 @@ public class ExecutionResultHandler {
     private final TaskRunningSpecPort taskRunningSpecPort;
     private final ExecutionOutputParser executionOutputParser;
     private final ExecutorDoneIssuesBackfiller executorDoneIssuesBackfiller;
-    /** Phase 0 B2：事件记录器（AGENT_COMPLETED 埋点；事件 write-only，失败仅告警不阻断回写）。 */
+    /** 事件记录器（AGENT_COMPLETED 埋点；事件 write-only，失败仅告警不阻断回写）。 */
     private final AgentEventRecorder agentEventRecorder;
-    /** Phase 1 Step 3：执行会话服务（终态 COMPLETED/FAILED；best-effort 不阻断回写）。 */
+    /** 执行会话服务（终态 COMPLETED/FAILED；best-effort 不阻断回写）。 */
     private final AgentSessionService agentSessionService;
     /** 执行记录服务（804 归属校验：失败回写前确认本消费仍持有该 RUNNING 记录）。 */
     private final AgentExecutionRecordService agentExecutionRecordService;
@@ -277,7 +277,7 @@ public class ExecutionResultHandler {
 
         if (report.isSuccess()) {
             subTaskCommandPort.submit(report.getSubTaskId());
-            // Phase 1 Step 3：执行会话终态 COMPLETED（best-effort 不阻断回写）
+            // 执行会话终态 COMPLETED（best-effort 不阻断回写）
             agentSessionService.complete(report.getSubTaskId(), report.getAgentId(),
                     AgentEventContextResolver.resolveTurn(subTask.reworkCount(), subTask.attemptTotal()));
             taskTimelinePort.recordEvent(
@@ -292,7 +292,7 @@ public class ExecutionResultHandler {
                             "executor", report.getExecutorName(),
                             "tokens", report.getTokenUsage(),
                             "idempotencyKey", report.getIdempotencyKey()));
-            // Phase 0 B2：AGENT_COMPLETED（Turn 端点事件 step=0；失败路径不发，ADR §5.3）
+            // AGENT_COMPLETED（Turn 端点事件 step=0；失败路径不发，ADR §5.3）
             try {
                 agentEventRecorder.record(
                         AgentEventContextResolver.resolveRunId(subTask.taskId()),
@@ -371,7 +371,7 @@ public class ExecutionResultHandler {
                 // 仅写 blockedAt + 落 sub_task_report_blocked 时间线（reason 记空串）
                 subTaskCommandPort.block(report.getSubTaskId(), null, null);
             }
-            // Phase 1 Step 3：执行会话终态 FAILED（error 摘要；best-effort 不阻断回写）
+            // 执行会话终态 FAILED（error 摘要；best-effort 不阻断回写）
             agentSessionService.fail(report.getSubTaskId(), report.getAgentId(),
                     AgentEventContextResolver.resolveTurn(subTask.reworkCount(), subTask.attemptTotal()), report.getError());
             taskTimelinePort.recordEvent(

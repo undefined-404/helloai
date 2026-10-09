@@ -32,7 +32,7 @@ public interface SubTaskMapper extends BaseMapper<SubTask> {
                                        @Param("now") OffsetDateTime now);
 
     /**
-     * 原子累加 sub_task.attempt_total（全局共享重试预算，Phase 0 A3）。
+     * 原子累加 sub_task.attempt_total（全局共享重试预算）。
      *
      * <p>替代原 reassign_attempt_count 计数：所有类型的重分配入口
      * （离线重派、超时回收、N11回退、阻塞重试）都通过本方法累加。

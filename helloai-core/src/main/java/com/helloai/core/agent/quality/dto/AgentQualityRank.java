@@ -1,7 +1,7 @@
 package com.helloai.core.agent.quality.dto;
 
 /**
- * Agent 质量排行点（Phase 5 质量度量看板 agents 排行）。
+ * Agent 质量排行点（质量度量看板 agents 排行）。
  *
  * <p>排序口径：一次通过率降序 → 审查数降序 → agentId 升序（稳定）；
  * qualityScore 复用 {@code AgentQualityProfileService.computeQualityScore}

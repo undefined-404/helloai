@@ -38,7 +38,7 @@ public class AgentQualityProfileServiceImpl
     /** 历史表现节 TOP3 驳回原因条数。 */
     private static final int HISTORY_TOP_N = 3;
 
-    /** Phase 5 看板排行补名用：agent 表只读查询，与画像域无环（已核验依赖清单）。 */
+    /** 看板排行补名用：agent 表只读查询，与画像域无环（已核验依赖清单）。 */
     private final AgentService agentService;
 
     @Override

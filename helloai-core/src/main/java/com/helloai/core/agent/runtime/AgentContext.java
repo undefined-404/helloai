@@ -11,13 +11,13 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Agent 运行时执行上下文（Phase 0 C1；P0-B 扩展 Runtime 真身输入）。
+ * Agent 运行时执行上下文（P0-B 扩展 Runtime 真身输入）。
  *
  * <p>一次 {@link AgentRuntime#execute} 的完整输入：Run/Turn/Step 定位 + 执行主体 + 能力（技能/工具）
  * + 事件记录器 + 执行环境 + 接入类型 + 提示词与底层模型（P0-B：Runtime 真身消费）。
  * 风格与旧执行链输入 {@code agent.domain.AgentTask} 一致：不可变值对象 + Builder。</p>
  *
- * <p>Phase 0 仅定义契约（供 C2 LegacyExecutorAdapter / C3 新 Runtime 实现消费），
+ * <p>仅定义契约（供 C2 LegacyExecutorAdapter / C3 新 Runtime 实现消费），
  * 本上下文的生产方在双轨切换后才出现。</p>
  *
  * @see AgentRuntime
@@ -56,10 +56,10 @@ public class AgentContext {
     AgentEventRecorder eventRecorder;
 
     /**
-     * 执行环境（坑 4 预留；Phase 1 Step 4 起显式供电）：由消费侧经
+     * 执行环境（坑 4 预留；显式供电）：由消费侧经
      * {@code ExecutionEnvironmentProvider.resolve(agent.accessType)} 解析注入
      * （RemoteAgentEnvironment / LocalProcessEnvironment，agent 域数据直读）；
-     * accessType 为 null 或无命中时保持 null（Phase 0 语义兼容，调用方不得依赖非 null）。
+     * accessType 为 null 或无命中时保持 null（语义兼容，调用方不得依赖非 null）。
      */
     ExecutionEnvironment environment;
 

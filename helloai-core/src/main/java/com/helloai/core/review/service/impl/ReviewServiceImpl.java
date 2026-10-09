@@ -53,11 +53,11 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
     private final AgentService agentService;
     private final ExecutionCommandService executionCommandService;
     private final TaskTimelineService taskTimelineService;
-    /** Phase 0 B2：Agent 事件记录器（人工审核终态事件 REVIEW_APPROVED/REVIEW_REJECTED）。 */
+    /** Agent 事件记录器（人工审核终态事件 REVIEW_APPROVED/REVIEW_REJECTED）。 */
     private final AgentEventRecorder agentEventRecorder;
     /** 反馈回路第 1 层：review_record 落库后同事务增量维护质量画像（best-effort 不阻断）。 */
     private final QualityProfileUpdater qualityProfileUpdater;
-    /** 反馈回路 Phase 4：抽检候选查询与抽检日志落库（review_recheck_log，同域 Mapper）。 */
+    /** 反馈回路：抽检候选查询与抽检日志落库（review_recheck_log，同域 Mapper）。 */
     private final ReviewRecheckLogMapper reviewRecheckLogMapper;
 
     private static final Map<Integer, Integer> SCORE_RULES = Map.of(
@@ -119,7 +119,7 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
             // 可观测：人工验收通过落 timeline（OPS 泳道），与自动核验 sub_task_auto_review_passed 对称；
             // 修复前人工审查路径无任何 timeline 事件，死信回收后时间线断层（LOG-20260903-005）
             recordManualReviewEvent(subTask, reviewerAgentId, result, score, issues, comment, reworkAgentId, round);
-            // Phase 0 B2 埋点补齐（Step 2 对账发现）：人工验收仅落 timeline、不落 agent_event，
+            // 埋点补齐（对账发现）：人工验收仅落 timeline、不落 agent_event，
             // 导致 DONE 终态末条事件非 review_approved（对账 WARN 41 条，命中样本 c3gs-r1 同源）；
             // 补发 REVIEW_APPROVED 使终态投影一致（与自动核验 recordReviewEventSafely 同构降级）
             recordReviewEventSafely(subTask, reviewerAgentId, AgentEventType.REVIEW_APPROVED,
@@ -127,7 +127,7 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
         } else {
             // 人工驳回同样落 timeline（人工驳回审查事件；改派/重置由 reworkFresh 落 sub_task_manual_rework_reset）
             recordManualReviewEvent(subTask, reviewerAgentId, result, score, issues, comment, reworkAgentId, round);
-            // Phase 0 B2 埋点补齐：人工驳回补发 REVIEW_REJECTED（reworkFresh 后 REWORK 期望末条
+            // 人工驳回补发 REVIEW_REJECTED（reworkFresh 后 REWORK 期望末条
             // 为 review_rejected/rework_started），与自动核验驳回路径对称
             recordReviewEventSafely(subTask, reviewerAgentId, AgentEventType.REVIEW_REJECTED,
                     score, issues, comment, round);
@@ -142,7 +142,7 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
                 AgentProfileSnapshot executor = agentService.getProfileById(targetExecutor);
                 if (executor != null && executor.accessType() == AgentAccessType.API_KEY_LLM) {
                     try {
-                        // Phase 1 Step 1 fix（LOG-20260904-009）：requiredSkills 装箱透传
+                        // LOG-20260904-009：requiredSkills 装箱透传
                         // （task 域数据随命令正向传入执行侧，禁止执行侧反向依赖 task）
                         // G-010：改用并集装箱（子任务级 ∪ 任务级），核验与执行同清单
                         executionCommandService.createAssignedCommand(subTaskId, targetExecutor, "manual-review-rework",
@@ -200,7 +200,7 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
     }
 
     /**
-     * Phase 0 B2：人工审核终态事件记录（REVIEW_APPROVED / REVIEW_REJECTED，Run 级 turn=0/step=0）。
+     * 人工审核终态事件记录（REVIEW_APPROVED / REVIEW_REJECTED，Run 级 turn=0/step=0）。
      * 与自动核验 recordReviewEventSafely 同构：同事务双写 agent_event + outbox，
      * 供 B3 对账终态投影校验（DONE → review_approved、REWORK → review_rejected/rework_started）；
      * 事件 write-only，失败仅告警不阻断审查主链路。

@@ -1,7 +1,6 @@
 package com.helloai.common.constant;
 
 /**
- * Phase 2H ②a 引入：
  * 执行命令 Outbox / 未来统一 outbox 的"业务聚合类型"枚举。
  *
  * <p>本枚举出现在 {@code agent_command_outbox.aggregate_type} 列上，

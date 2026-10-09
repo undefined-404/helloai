@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
 import java.time.OffsetDateTime;
 
 /**
- * 子任务执行租约看门狗续期任务（Phase 0 A2.3）。
+ * 子任务执行租约看门狗续期任务。
  *
  * <p>周期为当前节点持有的全部 {@code sub_task} 执行租约续期（{@code owner = 本节点名}），
  * 防止正常执行中的长任务因租约到期被 {@link LeaseReconcilerTask} 误回收。</p>

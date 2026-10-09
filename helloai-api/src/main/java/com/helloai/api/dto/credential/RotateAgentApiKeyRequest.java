@@ -3,7 +3,7 @@ package com.helloai.api.dto.credential;
 import lombok.Data;
 
 /**
- * Agent API Key 轮换请求（Phase 2 B2，N-004 收口）。
+ * Agent API Key 轮换请求（N-004 收口）。
  */
 @Data
 public class RotateAgentApiKeyRequest {

@@ -48,7 +48,7 @@ public class AgentExecutionRecordServiceImpl extends ServiceImpl<AgentExecutionR
     /**
      * PENDING → RUNNING（CAS：status + @Version 乐观锁双条件）。
      *
-     * <p>Phase 0 A2.1：由 lambdaUpdate 链式改为 {@code update(entity, wrapper)} 形式——
+     * <p>由 lambdaUpdate 链式改为 {@code update(entity, wrapper)} 形式——
      * 链式更新不触发 MyBatis-Plus OptimisticLockerInnerInterceptor（规范 §15），
      * entity 快照带 version 才能启用拦截器的 version 比较与自增，杜绝并发状态覆盖。</p>
      */

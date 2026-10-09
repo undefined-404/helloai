@@ -65,7 +65,7 @@ public class SubTaskAutoExecutionDispatcher {
                 Map.of("trigger", "assigned", "accessType", agent.getAccessType().name()));
 
         try {
-            // Phase 1 Step 1 fix（LOG-20260904-009）：requiredSkills 装箱透传
+            // LOG-20260904-009：requiredSkills 装箱透传
             // （task 域数据随命令正向传入执行侧，执行侧不再反向查询 task）
             // G-010：改用并集装箱（子任务级 ∪ 任务级），与审查核验同源
             executionCommandService.createAssignedCommand(event.getSubTaskId(), agent.getId(), "assigned",

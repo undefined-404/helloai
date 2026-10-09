@@ -16,7 +16,7 @@ public interface ExecutionCommandService {
      * <p>事务边界：{@code ExecutionCommand / agent_execution_record / agent_command_outbox}
      * 三表同事务写入；NONE 路径不写 outbox，EVENT 路径不写 outbox。</p>
      *
-     * <p>Phase 1 Step 1 fix（LOG-20260904-009）：新增 {@code requiredSkills} 入参——
+     * <p>LOG-20260904-009：新增 {@code requiredSkills} 入参——
      * task 域数据由调用方<b>装箱传入</b>（§6 依赖方向红线：本服务在 agent 域，
      * 不反向查询 task），null 由调用方契约保证或由命令 builder 默认值兜底。</p>
      *

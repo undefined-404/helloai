@@ -26,7 +26,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * executorDoneIssues LLM 语义对比评估器（反馈回路第 1 层，Phase 1.4）。
+ * executorDoneIssues LLM 语义对比评估器（反馈回路第 1 层）。
  *
  * <p>入参 = 上一轮 REVIEWER 四元组 issues + 执行者本轮产出正文；经平台级 LLM
  * 判定上一轮哪些问题已被实质解决，产出严格 JSON

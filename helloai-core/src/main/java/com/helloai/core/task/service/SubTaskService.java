@@ -24,7 +24,7 @@ import java.util.Set;
 public interface SubTaskService extends IService<SubTask> {
 
     /**
-     * 读取主任务声明的技能标签清单（task 域查询出口，Phase 1 Step 1 fix）。
+     * 读取主任务声明的技能标签清单（task 域查询出口）。
      *
      * <p>供跨域装箱使用：执行命令创建方（agent 域 dispatcher / review 域）需要
      * {@code task.requiredSkills} 数据随命令装箱传入执行侧，但不能反向持有 task 域引用
@@ -160,7 +160,7 @@ public interface SubTaskService extends IService<SubTask> {
      * 摘要携带最近一轮 review 结果（评分/评语/问题），外部 Agent 轮询 pullTasks 即可感知返工原因。
      * 发送失败只 warn 不阻断（返工主链路优先）。
      *
-     * <p>自动驳回返工（Phase 0 A3 共享预算，LOG-20260904-007）：打回 = 新一轮执行尝试，
+     * <p>自动驳回返工（共享预算，LOG-20260904-007）：打回 = 新一轮执行尝试，
      * 计入 {@code attempt_total}（与调度重分配同源）；预算耗尽直接转 DEAD_LETTER 不再打回。</p>
      *
      * @return true = 已打回 REWORK；false = 共享预算耗尽，已转 DEAD_LETTER（调用方需跳过
@@ -282,7 +282,7 @@ public interface SubTaskService extends IService<SubTask> {
     List<SubTask> listReviewOrphans(int thresholdSeconds, int limit);
 
     /**
-     * 列出最近有变更的子任务（Phase 0 B3 事件对账候选源）。
+     * 列出最近有变更的子任务（事件对账候选源）。
      *
      * <p>事件是业务状态的投影（ADR-001 §5.3），对账必须<b>以业务表为候选源</b>：
      * 只扫描最近变更的子任务，校验其是否发出了与当前状态匹配的终态事件；
@@ -295,7 +295,7 @@ public interface SubTaskService extends IService<SubTask> {
     List<SubTask> listRecentlyChanged(OffsetDateTime since, int limit);
 
     /**
-     * 看门狗续期：更新当前节点持有的全部执行租约（Phase 0 A2.3）。
+     * 看门狗续期：更新当前节点持有的全部执行租约。
      *
      * <p>由 {@code WatchdogLeaseRenewTask}（helloai-job，每节点独立运行、不加 ShedLock）
      * 周期调用，仅续 {@code owner = 当前节点名} 的 IN_PROGRESS 子任务租约；
@@ -310,7 +310,7 @@ public interface SubTaskService extends IService<SubTask> {
     int renewCurrentNodeLeases(OffsetDateTime newLeaseUntil, int limit);
 
     /**
-     * 租约过期回收：把 {@code lease_until < now} 的 IN_PROGRESS 子任务退回 PENDING（Phase 0 A2.4）。
+     * 租约过期回收：把 {@code lease_until < now} 的 IN_PROGRESS 子任务退回 PENDING。
      *
      * <p>由 {@code LeaseReconcilerTask}（helloai-job，ShedLock 集群单例）周期调用，
      * 处理 Worker 崩溃 / 宕机后无人续租的任务：回收为 PENDING + 清空

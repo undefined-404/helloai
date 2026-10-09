@@ -23,7 +23,6 @@ import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Phase 2H ②a 引入 / Phase 2H ②b 扩展：
  * 执行命令 Outbox Relay 周期任务。
  *
  * <p><b>职责</b>：扫描 {@code agent_command_outbox} 中 PENDING 的行，调用
@@ -276,7 +275,7 @@ public class OutboxRelayTask {
                         .agentId(command.getAgentId())
                         .trigger(command.getTrigger())
                         .accessType(command.getAccessType())
-                        // Phase 1 Step 1 fix：重建时透传 requiredSkills（toDomain 已规范化非 null）
+                        // 重建时透传 requiredSkills（toDomain 已规范化非 null）
                         .requiredSkills(command.getRequiredSkills())
                         .build();
             } catch (NumberFormatException ignored) {

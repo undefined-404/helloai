@@ -17,7 +17,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Agent 事件记录器实现（Phase 0 B1）。
+ * Agent 事件记录器实现。
  *
  * <p>双写链路：{@code agent_event}（轨迹主表）→ {@code agent_outbox_event}
  * （Outbox 投递，routingKey = {@code agent.event.{type}}，由

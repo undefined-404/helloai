@@ -1,7 +1,7 @@
 package com.helloai.core.agent.quality.dto;
 
 /**
- * 全局质量概览（Phase 5 质量度量看板 overview 卡片）。
+ * 全局质量概览（质量度量看板 overview 卡片）。
  *
  * <p>数据源 agent_quality_profile（agent 域画像表，经 AgentQualityProfileService
  * 收口）；窗口语义 = 画像表存量（执行者维度累计值），非时间窗口。</p>

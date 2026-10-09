@@ -35,7 +35,7 @@ import java.util.Set;
  * {@link AgentLoop} 真身——手动工具循环（spring-ai ChatModel 契约，provider 无关）。
  *
  * <p>核心机制：{@code DefaultToolCallingChatOptions.setInternalToolExecutionEnabled(false)}
- * 让模型只返回工具调用请求（不自动执行），由本类经 {@link ToolExecutor}（Phase 2 执行回路）
+ * 让模型只返回工具调用请求（不自动执行），由本类经 {@link ToolExecutor}（执行回路）
  * 执行并把 {@link ToolResponseMessage} 回喂给模型，循环至模型输出终态文本。</p>
  *
  * <p>事件：每次工具调用按 ADR-001 记 TOOL_CALL_STARTED（step=3）/ TOOL_CALL_COMPLETED（step=4），

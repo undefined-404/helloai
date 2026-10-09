@@ -1,7 +1,7 @@
 package com.helloai.core.review.dto;
 
 /**
- * 驳回原因分布点（Phase 5 质量度量看板）：issues 四元组 {@code [defect]} 标签计数。
+ * 驳回原因分布点（质量度量看板）：issues 四元组 {@code [defect]} 标签计数。
  *
  * <p>解析口径与质量画像增量/rebuild 完全一致（复用 agent 域
  * {@code DefectLabelParser}，review → agent 合法向下依赖），保证看板

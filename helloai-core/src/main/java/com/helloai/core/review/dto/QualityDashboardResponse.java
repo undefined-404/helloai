@@ -5,7 +5,7 @@ import com.helloai.core.agent.quality.dto.QualityOverview;
 import java.util.List;
 
 /**
- * 质量看板聚合响应（Phase 5：GET /api/admin/quality/dashboard?days=）。
+ * 质量看板聚合响应（GET /api/admin/quality/dashboard?days=）。
  *
  * <p>由 review 域 {@code QualityDashboardService} 组装（聚合放 Service 而非
  * Controller，遵守零编排红线）：overview 来自 agent 域画像聚合，其余四组

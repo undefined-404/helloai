@@ -125,7 +125,7 @@ public class MqReviewCommandConsumer extends AbstractIdempotentConsumer {
     }
 
     /**
-     * 组装消费期 MDC 上下文：payload 业务标识（review 消息自带 taskId/subTaskId，Phase 0 C4）。
+     * 组装消费期 MDC 上下文：payload 业务标识（review 消息自带 taskId/subTaskId）。
      */
     private static Map<String, String> mdcOf(Long subTaskId, Long taskId) {
         Map<String, String> mdc = new HashMap<>();

@@ -18,7 +18,7 @@ import org.springframework.stereotype.Component;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Phase 2E N6 引入 / Phase 2F 修正 / Phase 2H ②b 收尾：执行命令生产端 MQ 投递器。
+ * 执行命令生产端 MQ 投递器。
  *
  * <p>与本地事件路径并列，实现"调度只发命令、执行独立消费"目标态里的 MQ 主链路生产端一环：</p>
  * <ol>
@@ -32,14 +32,14 @@ import java.nio.charset.StandardCharsets;
  * <p>幂等策略：Publisher 不做去重，eventId 作为 MessageProperties.messageId 落到消息头，
  * 去重由消费端 AbstractIdempotentConsumer 的 Redis + DB 双层机制保证。</p>
  *
- * <p><b>Phase 2H ②b 收尾：AFTER_COMMIT 语义已移除。</b>
+ * <p><b>AFTER_COMMIT 语义已移除。</b>
  * 2F 阶段曾用 TransactionSynchronization.afterCommit 把 publish 推迟到事务提交后。
  * ②a 引入 Outbox 后，唯一调用路径变成 OutboxRelayTask 扫 PENDING → publish，不再位于业务事务体；
  * 旧的 publish(ExecutionCommand) 入口被删除以消除第二套时序假设。
  * 调用方拿到返回的 {@link CorrelationData} 后通过 ConfirmCallback 把 broker 回执写回 Outbox 行
  * （status=CONFIRMED/FAILED + confirmed_at/last_sent_at）。</p>
  *
- * <p><b>Phase 2F 关键修正二：显式 JSON 序列化。</b>
+ * <p><b>显式 JSON 序列化。</b>
  * 原实现 rabbitTemplate.convertAndSend(POJO) 依赖 SimpleMessageConverter，
  * 而 ExecutionCommandMqMessage 既非 Serializable 也无对应 converter → 抛 MessageConversionException，
  * 链路根本发不出去；消费端反而是按 JSON 用 objectMapper.readValue(byte[]) 解析。

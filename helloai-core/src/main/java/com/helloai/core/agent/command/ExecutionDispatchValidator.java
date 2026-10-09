@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
 import java.util.Optional;
 
 /**
- * Phase 2E N6 引入 / Phase 2H ②b 扩展 / 改造：执行命令派发链路启动期校验器。
+ * 执行命令派发链路启动期校验器。
  *
  * <p>职责：</p>
  * <ol>

@@ -10,7 +10,6 @@ import org.apache.ibatis.annotations.Select;
 import java.time.OffsetDateTime;
 
 /**
- * Phase 2H ②a 引入：
  * {@code agent_command_outbox} 表的 MyBatis-Plus Mapper。
  *
  * <p>本 Mapper 仅承载 {@code agent_command_outbox} 行——执行命令 → MQ 的投递生命周期；

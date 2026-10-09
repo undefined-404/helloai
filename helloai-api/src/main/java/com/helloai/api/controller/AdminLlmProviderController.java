@@ -304,7 +304,7 @@ public class AdminLlmProviderController {
         body.put("modelType", modelType);
         LlmProviderModel capability = llmProviderModelQueryService.findCapabilityByModelType(modelType);
         if (capability == null) {
-            // 降级：返回 Phase 2 默认可选项，前端提示使用已上架模型
+            // 降级：返回默认可选项，前端提示使用已上架模型
             body.put("capabilitySkills", List.of());
             body.put("availableOptionalSkills", List.of("shell", "code-review"));
             body.put("degraded", true);

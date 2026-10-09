@@ -66,7 +66,7 @@ public class AgentInboxServiceImpl extends ServiceImpl<AgentInboxMapper, AgentIn
         inbox.setIsRead(0);
         inbox.setIsArchived(0);
         inbox.setPriority(priority != null ? priority : "NORMAL");
-        // N-008 消息生命周期（Phase 2 A3）：落库即写 TTL。expireHours <= 0 视为关闭（留 NULL，存量语义）
+        // N-008 消息生命周期：落库即写 TTL。expireHours <= 0 视为关闭（留 NULL，存量语义）
         if (inboxProperties.getExpireHours() > 0) {
             inbox.setExpireTime(OffsetDateTime.now().plusHours(inboxProperties.getExpireHours()));
         }
@@ -89,7 +89,7 @@ public class AgentInboxServiceImpl extends ServiceImpl<AgentInboxMapper, AgentIn
     /**
      * 查询 Agent 未读消息列表
      *
-     * <p>N-008（Phase 2 A3）：过滤已过期消息（expire_time IS NULL OR &gt; now），
+     * <p>N-008：过滤已过期消息（expire_time IS NULL OR &gt; now），
      * 防清理任务周期窗口内投递过期消息；存量 NULL 消息行为不变。</p>
      */
     @Override

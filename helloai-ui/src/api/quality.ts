@@ -3,7 +3,7 @@ import { paths } from './paths'
 import type { AgentQualityRank, QualityDashboardResponse, QualityOverview } from '@/types/quality'
 
 /**
- * Phase 5 质量度量看板 API（对齐后端 AdminQualityController）。
+ * 质量度量看板 API（对齐后端 AdminQualityController）。
  *
  * <p>全部端点受 sys_config 键 admin.quality.enabled 门控（§6.151 起默认开放，
  * 仅显式 false 关闭）；关闭时后端返回业务码 403，前端由 request 拦截器统一

@@ -62,7 +62,7 @@ public interface ReviewService extends IService<ReviewRecord> {
 
     /**
      * 抽检候选计数：窗口内 APPROVED 且未被抽检覆盖的 review_record 数
-     * （反馈回路 Phase 4，供 ReviewerRecheckTask 按抽样比例折算批量）。
+     * （反馈回路，供 ReviewerRecheckTask 按抽样比例折算批量）。
      *
      * @param since 窗口起点（含）；null 时按全量统计
      */
@@ -77,7 +77,7 @@ public interface ReviewService extends IService<ReviewRecord> {
     List<Long> listRecheckCandidateIds(OffsetDateTime since, int limit);
 
     /**
-     * 抽检复审落库（反馈回路 Phase 4）：一条抽检日志 = 一次复审判定。
+     * 抽检复审落库（反馈回路）：一条抽检日志 = 一次复审判定。
      *
      * <p>抽检只度量不改状态：子任务已按原判推进，本记录仅供放水率统计
      * 与人工复核追溯（discrepancy=1 表示原 APPROVED 复审 REJECTED）。</p>
@@ -99,7 +99,7 @@ public interface ReviewService extends IService<ReviewRecord> {
                                    Integer score, String issues, String comment);
 
     /**
-     * 质量趋势源（Phase 5 看板）：窗口内按天分组的审查统计。
+     * 质量趋势源（看板）：窗口内按天分组的审查统计。
      *
      * @param days 统计窗口（天）；&lt;=0 按 30 兜底
      * @return 按日期升序的趋势点；窗口内无数据返回空列表
@@ -107,7 +107,7 @@ public interface ReviewService extends IService<ReviewRecord> {
     List<QualityTrendPoint> statsTrendSource(int days);
 
     /**
-     * 驳回原因分布（Phase 5 看板）：窗口内 issues 的 {@code [defect]} 标签计数。
+     * 驳回原因分布（看板）：窗口内 issues 的 {@code [defect]} 标签计数。
      *
      * <p>解析口径与质量画像增量/rebuild 一致（复用 agent 域 DefectLabelParser）。</p>
      *
@@ -117,7 +117,7 @@ public interface ReviewService extends IService<ReviewRecord> {
     List<DefectDistribution> statsDefectDistribution(int days);
 
     /**
-     * 返工轮次分布（Phase 5 看板）：窗口内按审查轮次分组计数。
+     * 返工轮次分布（看板）：窗口内按审查轮次分组计数。
      *
      * @param days 统计窗口（天）；&lt;=0 按 30 兜底
      * @return 按 round 升序；窗口内无数据返回空列表
@@ -125,7 +125,7 @@ public interface ReviewService extends IService<ReviewRecord> {
     List<ReworkRoundPoint> statsReworkDistribution(int days);
 
     /**
-     * Reviewer 放水率（Phase 5 看板）：窗口内审查者维度通过率统计。
+     * Reviewer 放水率（看板）：窗口内审查者维度通过率统计。
      *
      * @param days 统计窗口（天）；&lt;=0 按 30 兜底
      * @return 按审查记录数降序；reviewerName 经 agent 域服务补名（缺失显示 ID 字符串）

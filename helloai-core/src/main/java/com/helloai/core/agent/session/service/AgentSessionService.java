@@ -5,7 +5,7 @@ import com.helloai.core.agent.runtime.loop.LoopCheckpoint;
 import java.util.Map;
 
 /**
- * Agent 执行会话服务（Phase 1 Step 3，Session Manager / N-007 收口）。
+ * Agent 执行会话服务（Session Manager / N-007 收口）。
  *
  * <p>职责：维护一次执行尝试（ADR-001 Turn 级）的 {@code agent_session}
  * 快照/中断点/恢复上下文，并暴露恢复消费端入口（{@link #interrupt}）。

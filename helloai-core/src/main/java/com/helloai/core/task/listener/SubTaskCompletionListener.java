@@ -39,7 +39,7 @@ import java.util.Map;
  * <ol>
  *     <li><b>契约产出回流</b>：本子任务为契约定义子任务（{@code is_contract=1}）时，
  *         提取产出（物化附件优先、{@code context.lastExecution.output} 回退）写入
- *         {@code task_running_spec.contract}，全局注入所有下游执行 Prompt（Phase 2）</li>
+ *         {@code task_running_spec.contract}，全局注入所有下游执行 Prompt</li>
  *     <li><b>解锁下游</b>：查同 Task 下 PENDING 且 {@code depends_on} 包含本子任务的节点，
  *         逐个尝试 {@code dispatchPendingSubTaskAuto}（其内部 ready 守卫会自动过滤仍未就绪的）</li>
  *     <li><b>Task 自动收尾</b>：同 Task 全部有效子任务均为 DONE/CANCELLED 时，
@@ -83,7 +83,7 @@ public class SubTaskCompletionListener {
     }
 
     /**
-     * 契约产出回流（契约先行拆解模式，Phase 2）：
+     * 契约产出回流（契约先行拆解模式）：
      * 仅当完成子任务为契约定义子任务（isContract=1）时执行。
      *
      * <p>产出提取口径与执行链依赖装载同源：物化附件（local:// 平台直读，仅 ACTIVE

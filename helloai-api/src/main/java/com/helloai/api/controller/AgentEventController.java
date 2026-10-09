@@ -16,7 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 /**
- * Agent 事件流读侧端点（Phase 0 A7 Replay / Audit 暴露层）。
+ * Agent 事件流读侧端点（Replay / Audit 暴露层）。
  *
  * <p>只读端点：从 append-only 的 {@code agent_event} 重建执行轨迹 / 分页审计事实
  * （G-001 验收「一个 Run 可以按 sequence 重建轨迹」的 API 面）；Replay 仅读取历史，

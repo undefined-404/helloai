@@ -1,7 +1,7 @@
 package com.helloai.common.constant;
 
 /**
- * 凭证操作审计动作（Phase 2 B2，N-004 收口）。
+ * 凭证操作审计动作（N-004 收口）。
  *
  * <p>存储于 {@code credential_audit_log.action}（snake_case 字符串）。
  * 用常量类而非枚举：动作集随管理操作演进，硬编码常量 + 字符串列

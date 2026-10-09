@@ -176,7 +176,7 @@ public class CredentialVaultServiceImpl extends ServiceImpl<CredentialVaultMappe
         vault.setExpireTime(expiresAt);
         vault.setRemark(remark);
         save(vault);
-        // Phase 2 B2：绑定/保存动作审计（同事务，fail-close——审计失败整体回滚）
+        // 绑定/保存动作审计（同事务，fail-close——审计失败整体回滚）
         recordAudit(vault, CredentialAuditAction.BIND, CredentialAuditAction.OPERATOR_ADMIN,
                 "save/bind credential");
         return vault;
@@ -260,14 +260,14 @@ public class CredentialVaultServiceImpl extends ServiceImpl<CredentialVaultMappe
         newVault.setStatus(CredentialStatus.ACTIVE);
         newVault.setRemark(finalRemark);
         save(newVault);
-        // Phase 2 B2：轮换动作审计（同事务；detail 记录 rotated_from_id 审计链）
+        // 轮换动作审计（同事务；detail 记录 rotated_from_id 审计链）
         recordAudit(newVault, CredentialAuditAction.ROTATE, CredentialAuditAction.OPERATOR_ADMIN,
                 oldVault != null ? "rotated_from_id=" + oldVault.getId() : "first credential");
         return newVault;
     }
 
     /**
-     * 人工停用凭证（Phase 2 B2，N-004 收口）。
+     * 人工停用凭证（N-004 收口）。
      */
     @Transactional(rollbackFor = Exception.class)
     @Override
@@ -296,7 +296,7 @@ public class CredentialVaultServiceImpl extends ServiceImpl<CredentialVaultMappe
     }
 
     /**
-     * 过期扫描：ACTIVE 且 expire_time < now 的凭证批量置为 EXPIRED（Phase 2 B2）。
+     * 过期扫描：ACTIVE 且 expire_time < now 的凭证批量置为 EXPIRED。
      */
     @Transactional(rollbackFor = Exception.class)
     @Override
@@ -329,7 +329,7 @@ public class CredentialVaultServiceImpl extends ServiceImpl<CredentialVaultMappe
     }
 
     /**
-     * 分页查询凭证操作审计（Phase 2 B2）。
+     * 分页查询凭证操作审计。
      */
     @Override
     public IPage<CredentialAuditLog> listAudits(Long credentialId, CredentialOwnerType ownerType,

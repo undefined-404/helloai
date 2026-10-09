@@ -15,7 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * {@link AgentSessionService} 实现（Phase 1 Step 3）。
+ * {@link AgentSessionService} 实现。
  *
  * <p>写入纪律：全部 best-effort——方法内部 try/catch + 日志含定位字段
  * （subTaskId/turn，§27），失败不阻断执行主链路；start/interrupt 为

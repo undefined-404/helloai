@@ -10,7 +10,7 @@ import lombok.EqualsAndHashCode;
 import java.util.Map;
 
 /**
- * Agent 执行会话实体（{@code agent_session} 表，Phase 1 Step 3）。
+ * Agent 执行会话实体（{@code agent_session} 表）。
  *
  * <p>一次执行尝试（ADR-001 Turn 级）的执行快照 / 中断点 / 恢复上下文载体：
  * 与 {@code agent_execution_record}（命令生命周期 CAS）互补，记录

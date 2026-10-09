@@ -9,7 +9,7 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Agent 运行时执行结果契约（Phase 0 C1）。
+ * Agent 运行时执行结果契约。
  *
  * <p>一次 {@link AgentRuntime#execute} 的完整生命周期结果：终态 + 输出 + 事件类型轨迹 + 待物化交付物。</p>
  *

@@ -17,7 +17,7 @@ import java.util.Map;
  * {@link ToolRegistry} 实现——从 spring-ai {@link ToolCallbackProvider}（McpToolConfig
  * 注册的全部 @Tool，单一事实源）收集平台工具元数据目录。
  *
- * <p>Phase 1 Step 2：平台当前工具均为 MCP 工具（McpMcpServer 11 + EchoMcpTool 1），
+ * <p>平台当前工具均为 MCP 工具（McpMcpServer 11 + EchoMcpTool 1），
  * 目录自动跟随 MCP 工具注册，零漂移；未来 GitTool / ShellTool 等工具类型（长期思路
  * P1）注册进同一目录即可，不另建平行 Registry（§50.7）。</p>
  *

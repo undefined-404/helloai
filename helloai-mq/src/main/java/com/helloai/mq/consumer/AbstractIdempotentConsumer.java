@@ -46,7 +46,7 @@ public abstract class AbstractIdempotentConsumer {
     /**
      * 幂等消费（携带 MDC 业务上下文）：进入前写入、退出时清理，异常路径同样不残留。
      *
-     * <p>Phase 0 C4：子任务执行 / 核验等消费链在业务入口传入消息体中的业务标识
+     * <p>子任务执行 / 核验等消费链在业务入口传入消息体中的业务标识
      * （如 {@link #MDC_SUB_TASK_ID}），使该线程的整段消费日志具备跨链路可追踪性。</p>
      */
     protected boolean tryConsume(String messageId, String consumerName, Map<String, String> mdcContext,

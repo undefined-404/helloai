@@ -5,7 +5,6 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 /**
- * Phase 2H ②a 引入 / Phase 2H ②b 扩展：
  * 执行命令 Outbox Relay 任务的可调参数。
  *
  * <p>本类是 {@code OutboxRelayTask}（helloai-job）的运行开关与节奏参数，

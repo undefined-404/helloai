@@ -16,7 +16,7 @@ import java.util.Map;
  * {@link AgentSkillSpecService} 实现——classpath 读取平台 eng-* 规范库，
  * 把任务声明的 required_skills（装箱传入）解析为命中标签 + 渲染速览段。
  *
- * <p>Phase 1 Step 1 fix（LOG-20260904-009）：由 task 域 {@code PluginSkillSpecServiceImpl}
+ * <p>LOG-20260904-009：由 task 域 {@code PluginSkillSpecServiceImpl}
  * 迁域而来，<b>纯函数式</b>——入参即 requiredSkills，不再反向查询 task（§6 依赖方向红线），
  * 因此不持有任何 task 域依赖；资源仍从 classpath {@code skills/plugins/*.md} 读取
  * （helloai-core 模块内，迁域不改资源位置）。</p>

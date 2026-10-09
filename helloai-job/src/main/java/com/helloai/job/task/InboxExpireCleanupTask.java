@@ -9,7 +9,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * 收件箱过期归档任务（N-008 统一消息生命周期，Phase 2 A3）。
+ * 收件箱过期归档任务（N-008 统一消息生命周期）。
  *
  * <p>周期扫描 {@code agent_inbox} 表中 {@code expire_time} 已过且未归档的消息，
  * 批量软删（{@code is_archived = 1}）。消除 V1 建表以来 {@code expire_time}

@@ -1,7 +1,7 @@
 package com.helloai.core.agent.event;
 
 /**
- * 事件流对账服务（Phase 0 B3，ADR-001 §5.3 端点事件约定）。
+ * 事件流对账服务（ADR-001 §5.3 端点事件约定）。
  *
  * <p>对账规则：同一 {@code subTaskId} 下，事件流的最后一条事件应匹配业务表
  * 当前状态（业务状态 → 事件投影的单向校验）。事件仅 write-only（B2 埋点纪律），

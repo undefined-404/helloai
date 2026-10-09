@@ -20,7 +20,7 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * 核验 Reviewer 选型器实现（反馈回路 Phase 4）。
+ * 核验 Reviewer 选型器实现（反馈回路）。
  *
  * <p>选取语义承接原 SubTaskReviewServiceImpl 私有方法（pickReviewerAgent /
  * isUsableReviewer / firstApiKeyLlm，§6.58 P1 指定优先 + 回退链），

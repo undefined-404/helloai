@@ -25,7 +25,7 @@ import java.util.Map;
 /**
  * 通知消息消费者。
  * 消费通知队列，将 MQ 事件投递到目标 Agent 的收件箱（agent_inbox 表）。
- * 消息体为生产端显式 JSON 序列化（Phase 2F 修正），此处按 JSON 解析。
+ * 消息体为生产端显式 JSON 序列化，此处按 JSON 解析。
  */
 @Slf4j
 @Component

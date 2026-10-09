@@ -11,7 +11,7 @@ import lombok.NoArgsConstructor;
 import java.util.List;
 
 /**
- * Phase 2D N6：执行命令的 MQ 序列化载体。
+ * 执行命令的 MQ 序列化载体。
  *
  * <p>{@link ExecutionCommand} 使用 Lombok {@code @Value} 标记，缺少无参构造与 setter，
  * 与 Jackson 反序列化不兼容。本 DTO 以可序列化形式承载同一份字段，
@@ -43,7 +43,7 @@ public class ExecutionCommandMqMessage {
     /** 目标 Agent 的接入类型（字符串形式落地）。 */
     private String accessType;
 
-    /** 任务声明的技能标签清单（Phase 1 Step 1 fix 装箱透传；老消息缺该字段时 toDomain 按空列表还原）。 */
+    /** 任务声明的技能标签清单（装箱透传；老消息缺该字段时 toDomain 按空列表还原）。 */
     private List<String> requiredSkills;
 
     /**

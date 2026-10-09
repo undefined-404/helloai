@@ -1,10 +1,10 @@
 package com.helloai.core.agent.runtime.loop;
 
 /**
- * Agent 执行循环（P0-C Phase 3，AgentRuntime 八件套成员之一）。
+ * Agent 执行循环（P0-C，AgentRuntime 八件套成员之一）。
  *
  * <p>负责一次 Agent Turn 的完整循环：Model → 工具调用 → Observation → ... → 终态文本。
- * 循环内工具执行走 {@link com.helloai.core.agent.tool.ToolExecutor}（Phase 2 执行回路），
+ * 循环内工具执行走 {@link com.helloai.core.agent.tool.ToolExecutor}（执行回路），
  * 每次调用按 ADR-001 记录 TOOL_CALL_STARTED / TOOL_CALL_COMPLETED 事件（write-only）。</p>
  *
  * <p>与 Runtime 边界一致：不依赖 Planner / Scheduler / Reviewer / Task Service；

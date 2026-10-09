@@ -11,7 +11,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 
 /**
- * Reviewer 抽检日志 Mapper（反馈回路 Phase 4，V57）。
+ * Reviewer 抽检日志 Mapper（反馈回路，V57）。
  *
  * <p>抽检候选查询收口在本域：review_record / review_recheck_log 同属 review 域
  * （§6.146 域迁移），本 Mapper 仅供 review 域自查自表；跨域（job）一律走

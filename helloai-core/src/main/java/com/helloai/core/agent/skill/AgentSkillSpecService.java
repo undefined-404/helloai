@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Agent 技能规范库（eng-*）解析服务（§5.1 Agent Skill 职责归属 agent 域；Phase 1 Step 1 fix：
+ * Agent 技能规范库（eng-*）解析服务（§5.1 Agent Skill 职责归属 agent 域；
  * 由 task 域 {@code PluginSkillSpecService} 迁域而来，LOG-20260904-009）。
  *
  * <p>职责边界：只负责「读任务 required_skills（装箱传入）→ 命中插件标签 → 渲染规范速览段」，

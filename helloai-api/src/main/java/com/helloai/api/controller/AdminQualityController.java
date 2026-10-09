@@ -23,7 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 /**
- * 管理端质量画像端点（反馈回路第 1 层，Phase 1 交付）。
+ * 管理端质量画像端点（反馈回路第 1 层）。
  *
  * <p>Controller 零编排：薄透传端点均直接转发 service 方法，不承载任何
  * 条件/循环/聚合逻辑。用途：
@@ -36,9 +36,9 @@ import java.util.List;
  *       （auto-assign-on-create 默认关闭，实测需显式触发入口）；</li>
  *   <li>{@code GET /findSpecSectionByTaskId/{taskId}}：返回 TaskRunningSpec 执行上下文
  *       Prompt 段（含契约先行拆解「## 任务契约」节），供
- *       verify-contract-first.ps1 S3/S4 断言契约节渲染（Phase 2）；</li>
+ *       verify-contract-first.ps1 S3/S4 断言契约节渲染；</li>
  *   <li>{@code GET /overview}、{@code GET /agents?limit=}、{@code GET /dashboard?days=}：
- *       质量度量看板三查询端点（Phase 5），薄透传两域统计 Service，供
+ *       质量度量看板三查询端点，薄透传两域统计 Service，供
  *       verify-quality-dashboard.ps1 字段断言（聚合在 review 域 QualityDashboardService）。</li>
  * </ul>
  *
@@ -67,7 +67,7 @@ public class AdminQualityController {
     private final SubTaskDispatchService subTaskDispatchService;
     private final TaskRunningSpecService taskRunningSpecService;
     private final SysConfigService sysConfigService;
-    /** Phase 5：看板聚合（review 域，Controller 零编排只透传）。 */
+    /** 看板聚合（review 域，Controller 零编排只透传）。 */
     private final QualityDashboardService qualityDashboardService;
 
     /**
@@ -116,7 +116,7 @@ public class AdminQualityController {
     }
 
     /**
-     * 全局质量概览（Phase 5 看板 overview 卡片）。
+     * 全局质量概览（看板 overview 卡片）。
      *
      * @return 画像表存量聚合；空表返回全 0 概览
      */
@@ -129,7 +129,7 @@ public class AdminQualityController {
     }
 
     /**
-     * Agent 质量排行（Phase 5 看板 agents 排行）。
+     * Agent 质量排行（看板 agents 排行）。
      *
      * @param limit 返回条数上限；缺省/&lt;=0 返回全部
      * @return 一次通过率降序排行（含质量分与补名）
@@ -143,7 +143,7 @@ public class AdminQualityController {
     }
 
     /**
-     * 质量看板全量数据（Phase 5：趋势/驳回原因/返工轮次/放水率 + 概览）。
+     * 质量看板全量数据（趋势/驳回原因/返工轮次/放水率 + 概览）。
      *
      * @param days 统计窗口（天）；缺省/&lt;=0 按 30 兜底
      * @return 聚合响应；排行单独走 {@code /agents} 端点

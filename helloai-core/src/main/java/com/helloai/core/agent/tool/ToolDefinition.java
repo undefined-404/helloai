@@ -1,7 +1,7 @@
 package com.helloai.core.agent.tool;
 
 /**
- * 平台工具注册元数据（Phase 1 Step 2，长期思路 P0-1 ToolRegistry 最小形态）。
+ * 平台工具注册元数据（长期思路 P0-1 ToolRegistry 最小形态）。
  *
  * <p>当前只承载工具标识与描述——平台当前工具均为 MCP 工具（McpMcpServer 11 个 @Tool +
  * EchoMcpTool 1 个），元数据来源 = spring-ai {@code ToolCallbackProvider} 收集的 @Tool

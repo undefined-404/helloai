@@ -4,7 +4,7 @@ import com.helloai.common.constant.AgentAccessType;
 import org.springframework.stereotype.Component;
 
 /**
- * 远程 Agent 执行环境（Phase 1 Step 4，坑 4 结论两个实现之一）。
+ * 远程 Agent 执行环境（坑 4 结论两个实现之一）。
  *
  * <p>执行发生在平台外的外部 Agent 自有环境（Qoder / Trae / Codex / Claude Code 等
  * CLI_CLIENT，经 MCP-over-SSE 拉取任务并回传结果）；WEB_BROWSER（网页版 AI 经

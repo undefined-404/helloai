@@ -4,7 +4,7 @@ import com.helloai.common.constant.AgentAccessType;
 import org.springframework.stereotype.Component;
 
 /**
- * 本地进程执行环境（Phase 1 Step 4，坑 4 结论两个实现之一）。
+ * 本地进程执行环境（坑 4 结论两个实现之一）。
  *
  * <p>执行发生在平台自身进程内（API_KEY_LLM：平台经 ChatClient 直调 LLM API，
  * 无外部执行体）；「简单 subprocess，够开发自测」的本地隔离形态留待后续按需扩展，

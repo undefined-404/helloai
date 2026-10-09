@@ -37,7 +37,7 @@ import java.util.UUID;
  * "投递到 MQ"之间切出清晰边界，并把 publisher-confirms/重试节奏这些投递可靠性细节
  * 收敛到 outbox 表上。</p>
  *
- * <p>Phase 2H ②a 变更：MQ / BOTH 分支不再直接调用 {@link ExecutionCommandMqPublisher}，
+ * <p>变更：MQ / BOTH 分支不再直接调用 {@link ExecutionCommandMqPublisher}，
  * 改为<em>同事务</em>写入 {@code agent_command_outbox} 行——
  * 命令创建与 outbox 行要么一起提交，要么一起回滚；后续 OutboxRelay 周期任务负责真正发 MQ。
  * NONE / EVENT 分支保持零改动，沿用既有 Poller 兜底 / 事务事件路径。</p>
@@ -54,7 +54,7 @@ public class ExecutionCommandServiceImpl implements ExecutionCommandService {
     private final ApplicationEventPublisher applicationEventPublisher;
     private final AgentExecutionProperties executionProperties;
     private final AgentCommandOutboxService agentCommandOutboxService;
-    /** Phase 0 B2：事件记录器（TASK_ASSIGNED 埋点；事件 write-only，失败仅告警不阻断调度链）。 */
+    /** 事件记录器（TASK_ASSIGNED 埋点；事件 write-only，失败仅告警不阻断调度链）。 */
     private final AgentEventRecorder agentEventRecorder;
 
     /**
@@ -97,7 +97,7 @@ public class ExecutionCommandServiceImpl implements ExecutionCommandService {
         AgentExecutionRecord record = agentExecutionRecordService.createPending(
                 eventId, subTaskId, agentId, agent.getAccessType(), trigger);
 
-        // Phase 1 Step 1 fix：requiredSkills 装箱透传（调用方可能传 null，显式 null 会覆盖
+        // requiredSkills 装箱透传（调用方可能传 null，显式 null 会覆盖
         // @Builder.Default，这里规范化为空列表，保证消费端恒非 null）
         List<String> skills = requiredSkills != null ? requiredSkills : List.of();
         ExecutionCommand command = ExecutionCommand.builder()
@@ -122,7 +122,7 @@ public class ExecutionCommandServiceImpl implements ExecutionCommandService {
                         "eventId", eventId,
                         "accessType", agent.getAccessType().name()));
 
-        // Phase 2H ②a：按 dispatch-mode 显式分发，与 consumer-mode 完全解耦
+        // 按 dispatch-mode 显式分发，与 consumer-mode 完全解耦
         //   NONE  : 只落库（不写 outbox、不发 event），交给 DB Poller 兜底
         //   EVENT : 只发本地 Spring 事件（事务事件，AFTER_COMMIT 异步消费）
         //   MQ    : 只写 agent_command_outbox（PENDING），由 OutboxRelayTask 异步发 MQ
@@ -144,7 +144,7 @@ public class ExecutionCommandServiceImpl implements ExecutionCommandService {
                     subTaskId, record.getId());
         }
 
-        // Phase 0 B2：TASK_ASSIGNED（Run 级事件，turn=0/step=0）。
+        // TASK_ASSIGNED（Run 级事件，turn=0/step=0）。
         // 重派/死信兜底重新分配同样走本入口，每次发命令即代表一次分配事实。
         try {
             agentEventRecorder.record(

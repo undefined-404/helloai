@@ -16,7 +16,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
 /**
- * 死信队列告警消费者（Step 4，v1.2 分布式健壮性改造）。
+ * 死信队列告警消费者（v1.2 分布式健壮性改造）。
  *
  * <p>消费 dlxQueue 上的死信消息，固定顺序为「台账 → 告警 → ACK」：先落死信台账
  * （{@code mq_dead_letter_archive}，V60）再打告警日志后 ACK。死信消息 ACK 后即从队列消失，

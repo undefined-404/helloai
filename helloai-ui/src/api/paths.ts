@@ -125,7 +125,7 @@ export const paths = {
     dutyLeases: '/admin/duty-leases',
     dutyLeasesByAgent: '/admin/duty-leases/listByAgent',
     dutyLeasesOverview: '/admin/duty-leases/getOverview',
-    // Phase 5 质量度量看板三查询端点
+    // 质量度量看板三查询端点
     qualityOverview: '/admin/quality/overview',
     qualityAgents: '/admin/quality/agents',
     qualityDashboard: '/admin/quality/dashboard',

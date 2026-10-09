@@ -215,7 +215,7 @@
     </select>
 
     <!--
-        V24 重分配熔断（Phase 0 A3 起原子累加 attempt_total，替代 reassign_attempt_count）：
+        V24 重分配熔断（原子累加 attempt_total，替代 reassign_attempt_count）：
         与 incrementExternalFallbackCount 平行但语义独立：
         external_fallback_count 仅计 N11 外部→LLM 回退，
         attempt_total 是全局共享重试预算（坑点3「单一权威」），计所有类型的重分配入口
@@ -238,7 +238,7 @@
     </update>
 
     <!--
-        V25 死信人工兜底（Phase 0 A3 起重置 attempt_total）：
+        V25 死信人工兜底（重置 attempt_total）：
         仅由 SubTaskDispatchService.redispatchDeadLetter 在人工指派前调用，
         保证重新投入调度链后熔断计数从头开始。
 

@@ -16,7 +16,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * 事件流对账服务实现（Phase 0 B3）。
+ * 事件流对账服务实现。
  *
  * <p>候选源选型：以 {@code sub_task}（业务表）为扫描起点而非事件表——
  * 事件是业务状态的投影，埋点失败/降级时事件缺失正是对账要发现的问题，

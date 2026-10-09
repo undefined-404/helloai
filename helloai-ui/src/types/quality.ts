@@ -1,4 +1,4 @@
-// Phase 5 质量度量看板类型定义（对齐后端 review/agent 域统计 DTO）。
+// 质量度量看板类型定义（对齐后端 review/agent 域统计 DTO）。
 
 /** 全局质量概览（GET /admin/quality/overview）。 */
 export interface QualityOverview {

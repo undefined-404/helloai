@@ -8,16 +8,16 @@ import org.springframework.ai.tool.ToolCallback;
 import java.util.List;
 
 /**
- * Agent 循环输入（P0-C Phase 3）。
+ * Agent 循环输入（P0-C）。
  *
  * <p>一次 Agent Turn 循环的完整输入：模型 + 提示词 + 允许调用的工具回调（调用方已按
- * 启用工具名过滤，模型可见其 schema）+ Phase 2 工具执行回路 + 事件定位与记录器。
+ * 启用工具名过滤，模型可见其 schema）+ 工具执行回路 + 事件定位与记录器。
  * provider 无关——只依赖 spring-ai {@link ChatModel} 契约。</p>
  *
  * @param chatModel            底层模型（spring-ai 契约，不可空）
  * @param systemPrompt         系统提示词（可空，按空串处理）
  * @param userPrompt           用户提示词（可空，按空串处理）
- * @param toolExecutor         Phase 2 工具执行回路（不可空）
+ * @param toolExecutor 工具执行回路（不可空）
  * @param enabledToolCallbacks 允许循环调用的工具回调（可空/空 = 循环内无工具）
  * @param maxIterations        LLM 调用轮数硬上限（null/&lt;=0 时取 {@link #DEFAULT_MAX_ITERATIONS}）
  * @param runId                Run 标识（事件定位，ADR-001）

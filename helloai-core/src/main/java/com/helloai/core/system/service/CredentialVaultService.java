@@ -118,7 +118,7 @@ public interface CredentialVaultService extends IService<CredentialVault> {
                                          String remark);
 
     /**
-     * 人工停用凭证（Phase 2 B2，N-004 收口）。
+     * 人工停用凭证（N-004 收口）。
      *
      * <p>复用 {@link CredentialStatus#DISABLED} 人为停用语义（与 bind 旧凭证一致），
      * 不新增状态。仅 ACTIVE / DISABLED 可停用；EXPIRED（轮换淘汰）不可逆，禁止停用。</p>
@@ -131,7 +131,7 @@ public interface CredentialVaultService extends IService<CredentialVault> {
     CredentialVault revokeCredential(Long id, String operator);
 
     /**
-     * 过期扫描：将 ACTIVE 且 {@code expire_time < now} 的凭证批量置为 EXPIRED（Phase 2 B2）。
+     * 过期扫描：将 ACTIVE 且 {@code expire_time < now} 的凭证批量置为 EXPIRED。
      *
      * <p>Secret 生命周期治理——激活 {@code expireTime} 死字段：到期凭证自动退出路由
      * （{@code getActive*} 只查 ACTIVE）。逐行 CAS（WHERE status='ACTIVE'）防并发双写。</p>
@@ -142,7 +142,7 @@ public interface CredentialVaultService extends IService<CredentialVault> {
     int expireOverdue(int batchLimit);
 
     /**
-     * 分页查询凭证操作审计（Phase 2 B2）。
+     * 分页查询凭证操作审计。
      */
     IPage<CredentialAuditLog> listAudits(Long credentialId, CredentialOwnerType ownerType,
                                          Long ownerId, long page, long size);

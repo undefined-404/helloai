@@ -20,7 +20,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
- * executorDoneIssues 回填器（反馈回路第 1 层，Phase 1.4）。
+ * executorDoneIssues 回填器（反馈回路第 1 层）。
  *
  * <p>挂接在 {@code ExecutionResultHandler.handleReport} 成功回写路径（事务提交后异步）：
  * 检测 {@code context.reviewHistory} 最后一轮 {@code executorDoneIssues} 为空且

@@ -48,7 +48,7 @@ public class SubTask extends BaseEntity {
     private Integer version;
 
     /**
-     * 当前执行 Worker 节点标识（Phase 0 A2.2）。
+     * 当前执行 Worker 节点标识。
      *
      * <p>子任务进入 IN_PROGRESS 时由 {@code changeStatus} 写入（与
      * {@code agent_execution_record.worker_node} 同源，取自 {@code HostNameUtils.getHostName()}），
@@ -58,7 +58,7 @@ public class SubTask extends BaseEntity {
     private String owner;
 
     /**
-     * 执行租约到期时间（Phase 0 A2.2）。
+     * 执行租约到期时间。
      *
      * <p>进入 IN_PROGRESS 时写入 {@code now + watchdog.ttl-seconds}，由
      * {@code WatchdogLeaseRenewTask} 周期续期；过期未续视为 Worker 崩溃，由
@@ -93,13 +93,13 @@ public class SubTask extends BaseEntity {
      * <p>达到 {@code helloai.dispatch.max-reassign-attempts}（默认 5）后，
      * 子任务将被直接标记为 CANCELLED，不再进入重分配链，防止无限重试死循环。</p>
      *
-     * <p><b>Phase 0 A3 起不再由业务读写</b>：重分配熔断已切换读取 {@link #attemptTotal}，
+     * <p><b>不再由业务读写</b>：重分配熔断已切换读取 {@link #attemptTotal}，
      * 本字段保留仅供存量数据审计（V64 已一次性搬迁到 attempt_total）。</p>
      */
     private Integer reassignAttemptCount;
 
     /**
-     * 全局共享重试计数器（Phase 0 A3，坑点 3「单一权威」）。
+     * 全局共享重试计数器（坑点 3「单一权威」）。
      *
      * <p>同一子任务所有重试（重分配 / 自动驳回返工，LOG-20260904-007 返工已并入）共享一个预算：
      * 任何一层重试前用 {@code RetryPolicy.exceedsMax(attemptTotal, max)} 判定达上限即停，

@@ -20,7 +20,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 /**
- * 凭证保险库管理端点（Phase 2 B2，N-004 收口后覆盖完整管理面）。
+ * 凭证保险库管理端点（N-004 收口后覆盖完整管理面）。
  *
  * <p>全部 requireAdmin：bind / list / rotate / revoke / 审计查询。
  * 明文 API Key 仅入参（bind/rotate），响应一律脱敏（{@link CredentialInfoResponse}）。

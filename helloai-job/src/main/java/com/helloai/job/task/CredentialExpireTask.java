@@ -9,7 +9,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * 凭证过期扫描任务（N-004 Credential Vault 收口，Phase 2 B2）。
+ * 凭证过期扫描任务（N-004 Credential Vault 收口）。
  *
  * <p>周期扫描 {@code credential_vault} 中 ACTIVE 且 {@code expire_time} 已过的凭证，
  * 批量置为 EXPIRED + 落 EXPIRE 审计。激活 V14 建表以来 {@code expireTime} 死字段：

@@ -10,7 +10,7 @@ import lombok.EqualsAndHashCode;
 import java.util.Map;
 
 /**
- * Agent 事件轨迹实体（{@code agent_event} 表，Phase 0 B1）。
+ * Agent 事件轨迹实体（{@code agent_event} 表）。
  *
  * <p>append-only：只插入、不更新（无状态机）；与 {@code agent_outbox_event}
  * 共享同一 {@code eventId}，供 {@code EventReconciliationService}（B3）对账。</p>

@@ -14,7 +14,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.function.Supplier;
 
 /**
- * Provider ChatModel 全局缓存（Phase 2B / N9 实现）。
+ * Provider ChatModel 全局缓存。
  *
  * <p>目标：避免 AgentChatClientService 每条 LLM 调用都新建 DeepSeekChatModel/DeepSeekApi，
  * 减少 TCP 连接重建 / RestClient 连接池抖动 / 超时配置不一致等问题。</p>

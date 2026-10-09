@@ -50,7 +50,7 @@ public interface SubTaskQueryPort {
     SubTaskSnapshot findByIdForUpdate(Long subTaskId);
 
     /**
-     * 列出最近有变更的子任务（Phase 0 B3 事件对账候选源）。
+     * 列出最近有变更的子任务（事件对账候选源）。
      *
      * <p>语义与 {@code SubTaskService#listRecentlyChanged(OffsetDateTime, int)} 逐字一致，
      * 仅把返回类型由 task 实体收敛为 {@link SubTaskSnapshot}（对账消费方实际只用

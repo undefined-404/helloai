@@ -66,9 +66,9 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
     /** 子任务只读端口（原 {@code SubTaskService}；W11 端口化，读快照 {@link SubTaskSnapshot}）。 */
     private final SubTaskQueryPort subTaskQueryPort;
     private final AgentService agentService;
-    /** Phase 1 Step 2：启用工具为 agent 域数据（agent_mcp_server），消费侧 agent 域内直读注入 ctx.tools。 */
+    /** 启用工具为 agent 域数据（agent_mcp_server），消费侧 agent 域内直读注入 ctx.tools。 */
     private final AgentMcpServerService agentMcpServerService;
-    /** Phase 1 Step 4：执行环境为 agent 域数据（agent.accessType），消费侧 agent 域内解析注入 ctx.environment。 */
+    /** 执行环境为 agent 域数据（agent.accessType），消费侧 agent 域内解析注入 ctx.environment。 */
     private final ExecutionEnvironmentProvider executionEnvironmentProvider;
     /** G-002 单轨：状态推进（agent 域端口的不透明命令入口，判定在 task 域）。 */
     private final SubTaskCommandPort subTaskCommandPort;
@@ -197,12 +197,12 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
         // 4. 装配 + 真身执行 + 会话推进（事件骨架由真身内部记录，防双写见 AgentRuntimeContextAssembler）
         AgentExecutionResult result;
         try {
-            // Phase 1 Step 1 fix（LOG-20260904-009）：requiredSkills 由命令装箱传入，
+            // LOG-20260904-009：requiredSkills 由命令装箱传入，
             // 本层不再反向查询 task（§6 依赖方向红线）；command.requiredSkills 恒非 null，
             // 这里仅保留防御
             List<String> skills = command.getRequiredSkills() != null
                     ? command.getRequiredSkills() : Collections.emptyList();
-            // Phase 1 Step 2：启用工具为 agent 域数据（agent_mcp_server），消费侧 agent 域内
+            // 启用工具为 agent 域数据（agent_mcp_server），消费侧 agent 域内
             // 直读注入 ctx.tools（与 skills 的 task 域装箱不同，无 §6 跨域问题）；恒非 null 仅防御。
             // L3 P1-1（2026-10-06）：按 accessType 过滤 —— 内部 LLM 执行者（API_KEY_LLM）进程内
             // 无 MCP 会话，注入 13 个 MCP 生命周期工具必然 401；外部 Agent（CLI_CLIENT）原样注入。
@@ -211,8 +211,8 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
             if (tools == null) {
                 tools = Collections.emptyList();
             }
-            // Phase 1 Step 4：执行环境为 agent 域数据（agent.accessType 随命令透传），
-            // 消费侧 agent 域内解析注入；accessType 为 null 或无命中时保持 null（Phase 0 语义兼容）
+            // 执行环境为 agent 域数据（agent.accessType 随命令透传），
+            // 消费侧 agent 域内解析注入；accessType 为 null 或无命中时保持 null（语义兼容）
             ExecutionEnvironment environment = executionEnvironmentProvider.resolve(command.getAccessType());
             AgentContext ctx = contextAssembler.assemble(command, subTask, agent, tools, environment);
             result = agentRuntimes.get(0).execute(ctx);

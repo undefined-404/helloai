@@ -91,7 +91,7 @@ public interface AgentQualityProfileMapper extends BaseMapper<AgentQualityProfil
                          @Param("updateBy") String updateBy);
 
     /**
-     * Reviewer 维度计数原子增量（反馈回路 Phase 4 双审/抽检）：
+     * Reviewer 维度计数原子增量（反馈回路双审/抽检）：
      * reviewer_reviewed_count / reviewer_disagreement_count 单条 UPDATE 累加，
      * 并发由 PG 行锁串行化；调用方（review 域经 Service 接口）best-effort 包裹。
      *
@@ -128,7 +128,7 @@ public interface AgentQualityProfileMapper extends BaseMapper<AgentQualityProfil
     List<RebuildSourceRow> selectRebuildSource(@Param("agentId") Long agentId);
 
     /**
-     * 全局质量概览（Phase 5 看板 overview）：画像表存量聚合，单行必返回。
+     * 全局质量概览（看板 overview）：画像表存量聚合，单行必返回。
      *
      * <p>COALESCE 兜底保证空表也返回一行 0 值；投影 record（非 Map），
      * 防 Map→JacksonTypeHandler 劫持（§6.132）。</p>
@@ -145,7 +145,7 @@ public interface AgentQualityProfileMapper extends BaseMapper<AgentQualityProfil
     QualityOverview selectOverviewRow();
 
     /**
-     * Agent 质量排行（Phase 5 看板 agents）：一次通过率降序 → 审查数降序 → agentId 升序。
+     * Agent 质量排行（看板 agents）：一次通过率降序 → 审查数降序 → agentId 升序。
      *
      * <p>agentName/qualityScore 为占位：前者由 Service 层经 AgentService 批量补名，
      * 后者由 Service 层逐行调 {@code computeQualityScore} 重算（口径唯一，防 SQL 漂移）。

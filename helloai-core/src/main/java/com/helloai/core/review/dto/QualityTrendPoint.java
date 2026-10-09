@@ -1,7 +1,7 @@
 package com.helloai.core.review.dto;
 
 /**
- * 质量趋势点（Phase 5 质量度量看板）：按天分组的审查统计。
+ * 质量趋势点（质量度量看板）：按天分组的审查统计。
  *
  * <p>数据源 review_record（review 域），经 {@code ReviewService.statsTrendSource}
  * 提供；period 为 {@code YYYY-MM-DD} 文本（PostgreSQL date_trunc 格式化）。</p>

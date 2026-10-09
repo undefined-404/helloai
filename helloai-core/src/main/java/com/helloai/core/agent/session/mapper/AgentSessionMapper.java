@@ -9,7 +9,7 @@ import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 /**
- * Agent 执行会话 Mapper（{@code agent_session} 表，Phase 1 Step 3）。
+ * Agent 执行会话 Mapper（{@code agent_session} 表）。
  *
  * <p>读取一律取最新（{@code create_time + id} 倒序）：turn 在计数器清零后
  * 可能复用，不能用 (sub_task_id, turn) 唯一推断当前会话。</p>

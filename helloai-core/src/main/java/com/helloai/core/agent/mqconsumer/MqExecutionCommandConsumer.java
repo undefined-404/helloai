@@ -23,7 +23,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Phase 2D N6：MQ 维度的执行命令消费者骨架。
+ * MQ 维度的执行命令消费者骨架。
  *
  * <p>本类与 {@link LocalExecutionCommandConsumer} 共同实现
  * {@link ExecutionCommandConsumer} 扩展点，遵循"调度只发命令、执行独立消费、结果异步回写"的统一哲学：</p>
@@ -84,7 +84,7 @@ public class MqExecutionCommandConsumer extends AbstractIdempotentConsumer imple
 
     /**
      * 组装消费期 MDC 上下文：消息体业务标识。消息体无 run_id（事件链层级），
-     * 消费端不做跨域查库，仅续传本链路可得的 sub_task_id（Phase 0 C4）。
+     * 消费端不做跨域查库，仅续传本链路可得的 sub_task_id。
      */
     private Map<String, String> mdcOf(ExecutionCommandMqMessage msg) {
         Map<String, String> mdc = new HashMap<>();
@@ -167,7 +167,7 @@ public class MqExecutionCommandConsumer extends AbstractIdempotentConsumer imple
     /**
      * 提供给外部（生产端 / 启动日志）的对外配置引用。
      *
-     * <p>Phase 2E 起已真正注入 {@link MqExecutionCommandProperties}，不再返回 null。</p>
+     * <p>已真正注入 {@link MqExecutionCommandProperties}，不再返回 null。</p>
      */
     public MqExecutionCommandProperties describeProperties() {
         return mqProperties;

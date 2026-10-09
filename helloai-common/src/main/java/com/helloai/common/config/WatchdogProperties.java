@@ -5,7 +5,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 /**
- * Phase 0 A2：子任务执行租约看门狗（Watchdog）配置。
+ * 子任务执行租约看门狗（Watchdog）配置。
  *
  * <p>与执行方案 A2.2 ~ A2.4 配套：{@code sub_task} 进入 IN_PROGRESS 时写入
  * {@code owner + lease_until = now + ttl}，WatchdogLeaseRenewTask 每节点独立

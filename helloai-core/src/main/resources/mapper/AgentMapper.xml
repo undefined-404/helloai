@@ -94,7 +94,7 @@
     </select>
 
     <!--
-        阶段 4 Reconcile：CAS UPDATE 标 OFFLINE。
+        Reconcile：CAS UPDATE 标 OFFLINE。
         只有同时满足以下条件的 Agent 才会被标离线：
           1) id 匹配
           2) last_seen_time 仍 < cutoff（防止 seen() 刚刷新就被覆盖）
@@ -145,7 +145,7 @@
     </update>
 
     <!--
-        阶段 4 Reconcile：扫描 last_seen_time 早于 cutoff 的 Agent。
+        Reconcile：扫描 last_seen_time 早于 cutoff 的 Agent。
         返回结果包括 ONLINE / IDLE / OFFLINE 三种状态（排除 SLEEPING 和已删除）。
         调用方（AgentHealthCheckTask）对每个 Agent 调用 markOfflineIfStale 做 CAS 标 OFFLINE。
         IS DISTINCT FROM 用于安全处理 NULL（last_seen_time 为 NULL 也算超时）。

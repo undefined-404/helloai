@@ -9,7 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 /**
- * 质量看板聚合服务实现（Phase 5 质量度量看板）。
+ * 质量看板聚合服务实现（质量度量看板）。
  *
  * <p>无环验证：本类只被 AdminQualityController（api 层）引用；依赖的
  * AgentQualityProfileServiceImpl（agent → system/shared）与 ReviewServiceImpl

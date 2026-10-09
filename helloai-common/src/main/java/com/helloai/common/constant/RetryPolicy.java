@@ -5,7 +5,7 @@ import com.helloai.common.base.AgentUnavailableException;
 import java.io.IOException;
 
 /**
- * 重试统一预算规则（Phase 0 A3，坑点 3「单一权威」）。
+ * 重试统一预算规则（坑点 3「单一权威」）。
  *
  * <p>同一子任务的所有重试共享一个全局计数器 {@code sub_task.attempt_total}，
  * 每一层在重试前都必须先检查预算是否耗尽，杜绝「重分配 5 × 返工 N × 投递 N」
