@@ -193,7 +193,11 @@ symlink 拒（目录与文件）        非普通文件拒        加密 zip 拒
 **REF-1 验证集**
 
 ```text
-Required   ：verify-skill-packages.ps1（**须扩展为双源**：现仅扫 classpath 内置 4 个）、verify-agent-skill-capability.ps1、新增 verify-skill-package-install.ps1（导出 → 安装 → catalog 可见 → 卸载）、闸门攻击用例（完整矩阵由 REF-1.5 补全）
+Required   ：verify-skill-packages.ps1、verify-agent-skill-capability.ps1、verify-skill-package-install.ps1（安装 → 同版本拒 → 需确认 → 确认升级 → 目录可见 → 回滚 → 卸载）、闸门攻击用例（SkillPackageZipGateTest 15 类）、InstalledSkillResolveTest（双源注入）
+  ⚠️ **分工订正（2026-10-10）**：原写「verify-skill-packages.ps1 **须扩展为双源**」**未采纳且不采纳**——
+  该脚本是**纯静态**校验（扫 classpath md + 静态扫 Java 里的 @Tool），而已安装包在 PG 里、静态脚本看不见；
+  强行扩展会把它从静态守卫变成运行时脚本。**双源覆盖改由分工承担**：静态守卫管内置源，
+  verify-skill-package-install.ps1（经 API）与 InstalledSkillResolveTest（经替身源，零 DB）管已安装源。
 Regression ：verify-tool-matrix.ps1（`requiredTools` 联动）、verify-a2-skill-derive.ps1、verify-a3b-agent-edit-skills.ps1、verify-planner-decompose.ps1
 Diagnosis  ：.tmp/diag-skill-scan.*（仅诊断，不得作为正式验证）
 门禁       ：bash scripts/ci/ci-gate.sh
