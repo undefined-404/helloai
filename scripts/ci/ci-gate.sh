@@ -187,7 +187,7 @@ fi
 # 交付文档一致性（外部 Agent 手册 ↔ 内部手册 ↔ 代码常量）：纯文本、零依赖，CI 可跑。
 # 与 verify-tool-matrix.ps1（需后端在跑 + 管理员口令）互补；见 scripts/README.md 与 LOG-20261010-012。
 if bash "$SCRIPT_DIR/../shell/verify-executor-doc-parity.sh"; then
-  ok "交付文档一致性（工具面三源 / 错误口径黑名单 / 必备口径 / 拼装产物 / 限额常量）"
+  ok "交付文档一致性（工具面三源 / 错误口径黑名单 / 必备口径 / 拼装产物 / 限额常量 / 脚本索引计数）"
 else
   bad "交付文档一致性失败（详见上方 verify-executor-doc-parity.sh 输出）"
 fi
