@@ -18,13 +18,9 @@ import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import javax.sql.DataSource;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.sql.Connection;
-import java.sql.ResultSet;
-import java.sql.Statement;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -57,12 +53,11 @@ public class DatabaseBackupService {
     private final ArtifactStorageProperties artifactStorageProperties;
     private final BackupStorage backupStorage;
     private final PgDumpRunner pgRunner;
-    private final MigrationVersionResolver migrationVersionResolver;
     private final ArtifactStorage artifactStorage;
     private final ArtifactReferencePort artifactReferencePort;
     private final PlatformBackupMapper backupMapper;
     private final RedissonClient redissonClient;
-    private final DataSource dataSource;
+    private final DbSchemaVersionReader dbSchemaVersionReader;
 
     /** 单飞锁键（全平台一次只允许一个备份）。 */
     private static final String BACKUP_LOCK_KEY = "backup:lock:platform";
@@ -169,7 +164,7 @@ public class DatabaseBackupService {
             BackupManifest manifest = new BackupManifest(
                     row.getId(), row.getBackupType().name(), OffsetDateTime.now(),
                     header.pgVersion(), header.pgDumpVersion(),
-                    dbFlywayMaxVersion(), target.database(),
+                    dbSchemaVersionReader.dbMaxMigrationVersion(), target.database(),
                     dumpKey, Files.size(dumpFile), sha256Hex(dumpFile),
                     objects.size(), sumSizes(objects),
                     artifactBucket, row.getCreateBy());
@@ -273,24 +268,7 @@ public class DatabaseBackupService {
         return sum;
     }
 
-    /**
-     * 备份时刻**数据库**的 schema 版本（{@code flyway_schema_history} 最高版本）。
-     *
-     * <p>注意与 {@link MigrationVersionResolver} 的区别，二者不可混用：
-     * 本值写进 manifest 供**恢复侧门②** 与"当时的代码基线"比较；
-     * 而门② 的对照物是**恢复时**的代码基线。写"代码基线"会让门② 恒不触发、形同虚设。</p>
-     */
-    private String dbFlywayMaxVersion() {
-        try (Connection c = dataSource.getConnection();
-             Statement st = c.createStatement();
-             ResultSet rs = st.executeQuery(
-                     "SELECT max(version) FROM flyway_schema_history WHERE success = true")) {
-            return rs.next() ? rs.getString(1) : null;
-        } catch (Exception e) {
-            throw new BizException("读取数据库 schema 版本失败: " + e.getMessage());
-        }
-    }
-
+    /** 归档文件的 SHA-256 摘要（十六进制小写）。 */
     private static String sha256Hex(Path file) {
         try {
             byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
