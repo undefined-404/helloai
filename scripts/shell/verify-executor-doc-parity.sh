@@ -19,6 +19,8 @@
 #   S4 内部手册 ↔ **拼装产物**一致 —— `manual-assembled.md` 必须含 `00-manual-contract.md` 的关键词
 #      （它是 `assemble-manual.ps1` 的确定性产物；改源不重装即红）。
 #   S5 文档里的限额数字 ↔ **代码常量** —— 防止「代码调了限额、文档没跟」。
+#   S6 scripts/README.md 的脚本计数 ↔ **仓库在册实数**（git ls-files）—— 索引里的数字不许悄悄过期
+#   （五组 + S6 共 23 项；S6 的解析口径契约见其分节注释）
 #
 # 为什么用 bash（不用 zsh / python）：仓库既有 `verify-doc-gap-table.sh` 用 zsh+python3，
 # Windows/Git Bash 下不可直接运行；本守卫刻意只用 bash + grep/sed，**三平台都能跑**。
@@ -171,6 +173,55 @@ if [ -n "$per_file" ] && [ -n "$total_lim" ] \
 else
   bad "S5 核验侧限额不一致：代码 每附件=${per_file:-?} 总计=${total_lim:-?}，reviewer 手册含「每附件」的行未同时出现两个数字"
 fi
+
+# ------------------------------------------------------------
+# S6 scripts/README.md 的脚本计数 ↔ 仓库在册实数（git ls-files）
+#
+#   口径契约：改动 README 开头那一行时，**须保持这些标注词**，否则守卫判「无法解析」：
+#     共 **N 个 PowerShell（…）+ N 个 Shell + N 个 Java 工具 + N 个 SQL**
+#     另有 **N 个 CI 门禁脚本 + N 个架构冻结基线**
+#
+#   为什么用「仓库在册」而不是 on-disk：on-disk 会混入 logs/ 下解包 jar 的残留
+#   （实测 sql 在册 1 / on-disk 13 —— 那 12 个是 scripts/powershell/logs/mcp-jar/… 里的迁移脚本）。
+#   代价：**刚新增脚本、尚未 `git add` 时会红** —— 这是有意的，正确顺序是
+#   「加文件 + 同步 README + git add」三者一起成立。
+# ------------------------------------------------------------
+printf '\n-- S6 脚本索引计数 ↔ 仓库在册实数 --\n'
+
+S_README="$REPO_ROOT/scripts/README.md"
+readme_line="$(grep -n '个 PowerShell' "$S_README" | head -1)"
+num() { printf '%s' "$readme_line" | sed -nE "$1" | head -1; }
+
+claim_ps="$(num 's/.*共 \*\*([0-9]+) 个 PowerShell.*/\1/p')"
+claim_sh="$(num 's/.*\+ ([0-9]+) 个 Shell.*/\1/p')"
+claim_java="$(num 's/.*\+ ([0-9]+) 个 Java 工具.*/\1/p')"
+claim_sql="$(num 's/.*\+ ([0-9]+) 个 SQL.*/\1/p')"
+claim_ci="$(num 's/.*([0-9]+) 个 CI 门禁脚本.*/\1/p')"
+claim_base="$(num 's/.*([0-9]+) 个架构冻结基线.*/\1/p')"
+
+real_ps=$(( $(git ls-files scripts/powershell | grep -c '\.ps1$') + $(git ls-files scripts | grep -cE '^scripts/[^/]+\.ps1$') ))
+real_sh="$(git ls-files scripts/shell | grep -c '\.sh$')"
+real_java="$(git ls-files scripts | grep -c '\.java$')"
+real_sql="$(git ls-files scripts | grep -c '\.sql$')"
+real_ci="$(git ls-files scripts/ci | grep -c '\.sh$')"
+real_base="$(git ls-files scripts/ci | grep -c '\.txt$')"
+
+check_count() { # $1=名称 $2=README 声明值 $3=仓库在册实数
+  if [ -z "$2" ]; then
+    bad "S6 $1 计数无法从 scripts/README.md 解析（口径契约见守卫注释，勿改动该行标注词）"
+  elif [ "$2" = "$3" ]; then
+    ok "S6 $1 计数一致（$2）"
+  else
+    bad "S6 $1 计数不一致：README 记 $2 / 仓库在册 $3（刚新增脚本？先 git add 并同步 README）"
+  fi
+}
+
+check_count "PowerShell" "$claim_ps" "$real_ps"
+check_count "Shell" "$claim_sh" "$real_sh"
+check_count "Java 工具" "$claim_java" "$real_java"
+check_count "SQL" "$claim_sql" "$real_sql"
+check_count "CI 门禁脚本" "$claim_ci" "$real_ci"
+check_count "架构冻结基线" "$claim_base" "$real_base"
 
 # ------------------------------------------------------------
 printf '\n== 汇总 ==\n'

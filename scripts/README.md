@@ -71,7 +71,9 @@ verify-login-e2e、verify-requirement-clarify、verify-websearch-e2e、verify-pl
 
 **文档结构守卫（无运行时依赖）**：verify-doc-gap-table —— 《差距表》结构守卫，四项只读断言：① 表格完整性（每行竖线数 == 表头，防裸 `|` 切格）② 无转义竖线 ③ 处置列首词 ∈ 九态词集（`协作规约 §6.3`）+ 一行一态 + 矩阵 20 行齐备 ④ 矩阵两列无过程叙述信号（日期 / 用例数 / 施工动词 / 分期标签 / 代码行号）。建立背景见 `LOG-20261009-014`，配套口径见《差距表》§0「状态词表」。
 
-**交付文档一致性守卫（无运行时依赖，**已在门禁 3 内执行**）**：`shell/verify-executor-doc-parity.sh` —— 治「代码改了、交付给外部 Agent 的说明书没跟」这类漂移。五组只读断言：**S1 工具面三源静态对齐**（`onboarding/executor/guide.md` §0.1 表格 ↔ `McpController.TOOL_NAMES` ↔ `McpMcpServer` 的 `@Tool(name=…)`，并校验标题声明数量）——是 `verify-tool-matrix.ps1` 的**离线版**（后者需后端在跑 + 管理员口令）；**S2 已知错误口径黑名单**（「每前置 N 字符」误述 / `getSubTaskDetail` 与「等价」同行）；**S3 关键口径必备词**（取回链 / 总预算口径 / 可见性判据，交付手册与内部手册各一份）；**S4 内部手册 ↔ 拼装产物**（改源未重跑 `assemble-manual.ps1` 即红）；**S5 文档限额数字 ↔ 代码常量**（执行侧 `DEP_CONTENT_MAX_CHARS` 与核验侧每附件/总计）。**bash 实现、零 zsh/python 依赖**（三平台可跑；`verify-doc-gap-table.sh` 需 zsh+python3，Windows 下跑不了）。建立背景与扰动验证见 `LOG-20261010-012`。
+**交付文档一致性守卫（无运行时依赖，**已在门禁 3 内执行**）**：`shell/verify-executor-doc-parity.sh` —— 治「代码改了、交付给外部 Agent 的说明书没跟」这类漂移。五组只读断言：**S1 工具面三源静态对齐**（`onboarding/executor/guide.md` §0.1 表格 ↔ `McpController.TOOL_NAMES` ↔ `McpMcpServer` 的 `@Tool(name=…)`，并校验标题声明数量）——是 `verify-tool-matrix.ps1` 的**离线版**（后者需后端在跑 + 管理员口令）；**S2 已知错误口径黑名单**（「每前置 N 字符」误述 / `getSubTaskDetail` 与「等价」同行）；**S3 关键口径必备词**（取回链 / 总预算口径 / 可见性判据，交付手册与内部手册各一份）；**S4 内部手册 ↔ 拼装产物**（改源未重跑 `assemble-manual.ps1` 即红）；**S5 文档限额数字 ↔ 代码常量**（执行侧 `DEP_CONTENT_MAX_CHARS` 与核验侧每附件/总计）；**S6 本文件的脚本计数 ↔ 仓库在册实数**（`git ls-files` —— 索引里的数字不许悄悄过期）。**bash 实现、零 zsh/python 依赖**（三平台可跑；`verify-doc-gap-table.sh` 需 zsh+python3，Windows 下跑不了）。建立背景与扰动验证见 `LOG-20261010-012`。
+
+> **S6 的口径契约（改本文件开头那一行时须知）**：S6 按**标注词**解析——须保留 `共 **N 个 PowerShell（…）+ N 个 Shell + N 个 Java 工具 + N 个 SQL**` 与 `N 个 CI 门禁脚本 + N 个架构冻结基线` 这些措辞；改坏措辞不会静默通过，而是判「无法解析」。口径为**仓库在册**（`git ls-files`）：on-disk 会混入 `powershell/logs/` 下解包 jar 的残留（实测 sql 在册 1 / on-disk 13）。故**新增脚本后先 `git add` 并同步本行计数**，二者缺一即红。
 
 ## 二、运维启停
 
