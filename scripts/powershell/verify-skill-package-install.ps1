@@ -10,6 +10,7 @@
 #   S3  install higher version w/o confirm -> 409 [NEEDS_CONFIRM]
 #   S4  same + confirmUpgrade=true         -> 200 (v1.0.0 -> HISTORICAL)
 #   S5  GET /api/skills/catalog contains it (dual source visible)
+#   S5b requiredTools round-trip: declared -> persisted -> read back (REF-1.6 acceptance)
 #   S6  activate v1.0.0 (rollback)         -> 200
 #   S7  GET /api/skills/packages states    -> 1.0.0 ACTIVE / 1.1.0 HISTORICAL
 #   S8  gate rejects traversal zip         -> 400 [BAD_PATH]
@@ -51,6 +52,9 @@ Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $skillName = 'e2e-pkg-demo'
+# 声明一个**真实已注册**的工具（@Tool 单一事实源里存在，见 eng-web-research 的 requiredTools），
+# 用于行使 REF-1.6 验收的「requiredTools 一致」——用不存在的名字会让该断言失去意义。
+$script:DeclaredTool = 'web_search'
 
 # ------------------------------------------------------------
 # repo root resolution (CODE_STYLE sec 39: no hardcoded local absolute path)
@@ -149,12 +153,16 @@ function Invoke-Install {
 # Build a package zip via ZipArchive (forward-slash entry names; see header note).
 function New-PackageZip {
     param([string]$Path, [string]$Version, [string]$ExtraEntryName = $null, [string]$ExtraEntryText = 'x')
+    # requiredTools 用 YAML 块列表（与 skills/plugins/eng-web-research.md 同格式），
+    # 且刻意声明一个**真实已注册**的工具——用于行使 REF-1.6 验收里的「requiredTools 一致」
+    # （计划 :115）。此前 fixture 声明空数组，等于该验收项没行使。
     $manifest = @"
 ---
 name: $skillName
 version: $Version
 description: e2e demo skill package
-requiredTools: []
+requiredTools:
+  - $script:DeclaredTool
 ---
 ## 执行速览
 
@@ -262,6 +270,24 @@ try { $catNames = @(($cat.Body | ConvertFrom-Json).data | ForEach-Object { $_.na
 Write-Output ('catalog: ' + ($catNames -join ','))
 Assert-True ($catNames -contains $skillName) ('S5 catalog contains ' + $skillName)
 Assert-True ($catNames -contains 'eng-code-review') 'S5 built-in source still present (no regression)'
+
+# ============================================================
+# STEP 5b: requiredTools round-trip (REF-1.6 acceptance: plan :115)
+#   声明 -> 落库 -> 回读，值必须一致。走列表端点而非安装响应，
+#   因为安装响应是精简结果、不含 requiredTools。
+# ============================================================
+Write-Output '=== [S5b] requiredTools round-trip ==='
+$ls5 = Invoke-Api -Method 'Get' -Uri ($BaseUrl + '/api/skills/packages') -Headers $adminHeaders
+$row5 = $null
+try {
+    $row5 = @(($ls5.Body | ConvertFrom-Json).data |
+        Where-Object { $_.name -eq $skillName -and $_.version -eq '1.0.0' }) | Select-Object -First 1
+} catch {}
+$tools5 = @()
+if ($row5 -ne $null -and $row5.requiredTools -ne $null) { $tools5 = @($row5.requiredTools) }
+Write-Output ('declared=[' + $script:DeclaredTool + '] readback=[' + ($tools5 -join ',') + ']')
+Assert-True ($row5 -ne $null) 'S5b installed row is listable'
+Assert-True ($tools5 -contains $script:DeclaredTool) ('S5b requiredTools round-trip: declared ' + $script:DeclaredTool + ' survives install')
 
 # ============================================================
 # STEP 6: rollback to v1.0.0
