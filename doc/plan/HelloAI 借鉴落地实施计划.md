@@ -140,7 +140,11 @@ REF-6 判据：随对应组落地，不单独排期
    ⚠️ 连带发现：MyBatisPlusMetaObjectHandler.getCurrentUser() 为硬编码桩（恒返 "system"），
    全平台 create_by 不记操作人 —— 属平台级问题，**本组不改**，另行立项。
 ⑦ 版本策略（2026-10-10 追加裁定）：唯一键 `(name, version)`，**多版本共存**（回滚需要历史行）。
-   安装命中「同名 + 版本更高」⇒ 不直接装，返 409 `{needsConfirm, currentVersion, incomingVersion}`，
+   安装命中「同名 + 版本更高」⇒ 不直接装，返 409 要求确认。**实现注记（2026-10-10）**：原写的
+   `{needsConfirm, currentVersion, incomingVersion}` **结构化载荷未实现**——现有 `R.fail(code,msg)`
+   不带 data、`GlobalExceptionHandler` 也只透 code+msg，做成结构化须改全局异常处理器，超出本组范围；
+   实际返回**可读消息** `[NEEDS_CONFIRM] 当前生效版本 X，新版本 Y 更高；…`，调用方若需当前版本
+   可查 `GET /api/skills/packages`（安装 UI 本来就要展示该列表）。偏差详见 `LOG-20261010-005` 决策 3。
    带 `confirmUpgrade=true` 重发才覆盖；「同名 + 版本更低或相同」⇒ 拒绝。
    回滚 / 降版**不复用安装入口**，走 `POST /api/skills/packages/{name}/activate`：
    目标版本已在库 ⇒ 直接翻 ACTIVE（不重传包体）；不在库 ⇒ 须带包体（低版本覆盖）。权限复用 `skill:install`。
