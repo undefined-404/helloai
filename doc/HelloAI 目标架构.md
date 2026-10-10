@@ -528,6 +528,8 @@ RBAC 是平台治理（Governance）之下、所有业务模块共用的支撑�
 
 > **Status: Planned** — 当前**完全空白**（差距表 `G-019`）。**用户裁定正式立项（`D-2026-10-09-4`，2026-10-09）**。
 > 任务锚点见 `plan/HelloAI 借鉴落地实施计划.md`（`REF-4.x`）。
+> **选型与前置契约已定稿（`D-2026-10-11-1`）**：嵌入模型 = DashScope `text-embedding-v4` / **1024 维（单向门）**、
+> 密钥共用既有 dashscope 条目、向量存储沿用 `pgvector`（不引入 ES）—— 详见 `design/adr/ADR-002-embedding-provider.md`。
 
 目标形态：
 

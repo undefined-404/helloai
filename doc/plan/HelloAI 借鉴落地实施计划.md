@@ -372,6 +372,13 @@ Regression ：verify-agent-execution-preview.ps1、verify-c3-events.ps1（ENVIRO
 | REF-4.2 | pgvector 存储与检索（**不抄上游 SQLite 侧库**，PG 单后端优势） | 检索命中正确；预算截断生效 |
 | REF-4.3 | 引用溯源 marker：检索结果尾部附 marker，前端渲染卡片、喂模型前剥掉 | 报告/核验意见可点开引用来源 |
 
+> **Status（2026-10-11）**：`REF-4.0b` **已定稿** —— `design/adr/ADR-002-embedding-provider.md`（`D-2026-10-11-1`）：
+> 嵌入模型 = DashScope `text-embedding-v4` / **1024 维（单向门，上线即冻结）**；密钥**共用**既有 dashscope 条目；
+> 数据边界 = 接受正文发送至阿里云（不引入境外供应商）；向量存储沿用 `pgvector`（不引入 ES）。
+> **落地前置（未做）**：① 用现有 key 跑 embeddings 探针（期望 1024 维；失败则显式报不可用）；
+> ② `REF-4.0a` 换 pgvector 镜像 + `CREATE EXTENSION vector`（+ 两份 compose 与 deploy 文档同步）；
+> ③ `REF-4.2` 前先小样本验证召回质量再全量灌库（维度冻结 ⇒ 试错成本集中在建库前）。
+
 > **接线口径（`CODE_STYLE §35.1`）**：`search_knowledge` 属**程序化能力**，必须经 `ToolCallbackContributor` 端口注册，并登记技能包（至少一个 `AgentTask.skills` 挂点）；**禁止**给 LLM 直插域内 Service。
 
 **REF-4 验证集**
