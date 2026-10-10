@@ -19,3 +19,18 @@ deploy/middleware/scripts/*.sh text eol=lf
 .github/workflows/*.yml text eol=lf
 # 测试语料夹具：相似度回归锚点依赖逐字符原文快照（含换行），禁止任何换行转换
 helloai-core/src/test/resources/review-corpus/** -text
+# 技能注入 golden 夹具（REF-1.1a 逐字回归）：与上方 review-corpus 同因——锚点依赖
+# 「含换行」的逐字符原文快照。漏钉的后果实测（2026-10-10）：core.autocrlf=true 的 Windows
+# 检出会把夹具转成 CRLF，而渲染结果恒为 LF（md 资源同为 CRLF，但经 SkillFrontMatter /
+# SkillSpeedSummaryRenderer 归一化掉 \r）⇒ GoldenSectionParityTest 在 Windows 必挂、
+# 在 Mac 通过，形成平台相关的假红。
+helloai-core/src/test/resources/skills/golden/** -text
+# 技能包资源与夹具：内容与解析结果必须跨平台一致，钉成 LF。
+# 与上面两条 fixture 规则的区别：这里用 `text eol=lf` 而非 `-text`——它们是会被人工编辑的
+# markdown（新增技能包 / 新增损坏用例），需保留 diff 与 merge；`-text` 会让 git 视作二进制。
+# 实测（2026-10-10）：core.autocrlf=true 的 Windows 检出会把这些 md 转成 CRLF，而
+# AgentSkillSpecServiceImpl 的渲染结果恒为 LF（\r 被渲染管线归一化掉）——
+# 即「注入段逐字一致」曾隐含依赖渲染器的归一化行为，改渲染器就可能让 Mac/Windows 输出分叉；
+# 钉成 LF 后**输入侧**不再有平台差异。损坏夹具同因：行尾多一个 \r 会影响 fence/键的逐行判定。
+helloai-core/src/main/resources/skills/plugins/** text eol=lf
+helloai-core/src/test/resources/skills/plugins-corrupt/** text eol=lf
