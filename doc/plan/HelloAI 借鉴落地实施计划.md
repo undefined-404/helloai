@@ -105,6 +105,11 @@ REF-6 判据：随对应组落地，不单独排期
 > ③ **REF-1.4 最后**：`origin` 的取值来源（`BUILTIN` / `INSTALLED`）与 `locked` 的下游改写检测，都依赖包模型与**摘要**先存在。
 > ④ **REF-1.4 的字段部分并入 REF-1.6 建表**（`origin` / `locked` 只是 `skill_package` 上的两列，零成本）；REF-1.4 只留「拷贝进 Agent 工作区时文本打戳」那半。
 
+> **Status（2026-10-10）**：
+> - **`REF-1.6` ✅ 已完成** —— 安装 / 激活（回滚、降版）/ 卸载 + 审计；V104 迁移（两表 + `skill:install` / `skill:uninstall` 权限）；`/api/skills/packages` 四端点；目录双源（classpath 内置 + PG 已安装）。e2e 脚本 `verify-skill-package-install.ps1` **15/15 全绿**。
+> - **`REF-1.5` ✅ 已完成** —— 两段式闸门（`SkillPackageZipGate`）：文件数 / 解压总量 / 压缩比（仅 >1MiB）/ 路径穿越 / symlink / 非普通文件 / 加密位 / 清单存在 / 严格 UTF-8。`SkillPackageZipGateTest` **16/16**（15 类攻击各一「必失败」用例 + 1 正常路径）。
+> - **`REF-1.4` ⚠️ 部分完成（能力已落、未接线）** —— `origin` / `locked` 字段随 V104 建表已落；`copy_policy ∈ {SNAPSHOT, LOCK, DENY}` 语义与打戳器 `SkillPackageStamper`（含「下游改写可识别」，单测 **6/6**）已实现。**但本仓库不存在「把技能包拷贝进 Agent 工作区」的动作**（全库检索零命中，详见 `LOG-20261010-005`），按用户裁定**只落能力、不接路径**。**触发条件**：平台出现该拷贝动作时，必须经由本器打戳并补端到端用例。
+
 | 项 | 动作 | 验收 |
 |---|---|---|
 | REF-1.6 | **安装入口 + 受控存储**：上传 zip → 过最简闸门 → 解析 → 落 PG（元数据 + 正文）+ MinIO（原始 zip 存档）→ 进技能目录；含卸载与审计 | 端到端：导出再导入可解析，且 `/api/skills/catalog` 可见 |

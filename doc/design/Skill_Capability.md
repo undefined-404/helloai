@@ -1,8 +1,8 @@
 # Skill Capability Package
 
-> **Status: `Partial`** · **Scope: Skill Capability Package 元数据 + 生命周期（Discover→Resolve→Load→Execute→Validate）；Instructions 结构化未动** · **差距锚点：`G-004`**
+> **Status: `Partial`** · **Scope: Skill Capability Package 元数据 + 生命周期（**`Install`**→Discover→Resolve→Load→Execute→Validate）；Instructions 结构化未动** · **差距锚点：`G-004`**
 >
-> 最后更新：2026-10-09（**元数据事实源迁移（REF-1.1/1.2）**：`SkillPackage` 元数据由 Java `KNOWN_SPECS` 编译期硬编码改为 **classpath `skills/plugins/*.md` 的 YAML frontmatter + 目录扫描**。状态事实源 = [`../HelloAI 实现差距表.md`](../HelloAI%20实现差距表.md)，本文件只声明设计边界，不复述进度）
+> 最后更新：2026-10-09（**元数据事实源迁移（REF-1.1/1.2）**：`SkillPackage` 元数据由 Java `KNOWN_SPECS` 编译期硬编码改为 **classpath `skills/plugins/*.md` 的 YAML frontmatter + 目录扫描**。状态事实源 = [`../HelloAI 实现差距表.md`](../HelloAI%20实现差距表.md)，本文件只声明设计边界，不复述进度）。**2026-10-10（`REF-1.4` / `1.5` / `1.6` 实施）**：生命周期新增 `Install` 阶段（受控存储：PG 存元数据与原始正文、MinIO 存原始 zip；不写宿主文件系统）；摄入闸门与来源打戳的边界见「生命周期」节与其后。
 >
 > **元数据契约（2026-10-09 起）**：
 >
@@ -60,9 +60,17 @@ Skill Package
 ## 生命周期
 
 ```text
-Discover
+Install      （REF-1.6：上传 zip → 过摄入闸门 → 元数据+正文落 PG、原始 zip 落 MinIO）
+→ Discover   （目录双源：classpath 内置 + 已安装 ACTIVE 行）
 → Resolve
 → Load
 → Execute
 → Validate
 ```
+
+> **`Install` 阶段的边界（2026-10-10 新增）**：
+> - **落点是受控存储，不是宿主文件系统** —— 不构成 `G-005` 沙箱触发条件①（`D-2026-10-10-1①`）；
+> - 进入目录的是**元数据 + 原始正文**（PG），原始 zip 仅作溯源 / 完整性 / 再分发（MinIO）；
+> - 同 name 至多一行 `ACTIVE`；多版本共存供回滚，回滚 / 降版走 `activate` 而不复用安装入口；
+> - 与内置 `eng-*` 同名一律拒绝（内置随发版走、不可替换）；
+> - 摄入闸门（`REF-1.5`）是该阶段的**前置**：闸门不过，不落任何数据。

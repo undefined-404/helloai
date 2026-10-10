@@ -251,6 +251,7 @@ SkillPackageCatalog 目录扫描（元数据事实源 = md frontmatter，懒加�
 SKILL_CATALOG 目录注入（拆解侧能力感知，G-010 S2）
 AgentTask.skills 契约层统一注入（execute/executeStream + 拆解/审查收口/报告 5 类同步 LLM 调用挂点，空不注入行为零变化）
 技能目录查询 API（GET /api/skills/catalog，skill:view，V103）
+技能包安装入口（POST /api/skills/packages，skill:install，V104）：受控存储（PG 元数据 + 正文 / MinIO 原始 zip）+ 摄入闸门（REF-1.5）+ 安装-激活-卸载审计
 ```
 
 Skill 已从隐式 Prompt 拼接迁移为显式 Runtime 输入 + 元数据面，required_skills 创建 → 拆解 → 派发 → 执行四段贯通，并经真实任务实测闭环（外部执行者双轮，见 log）。
@@ -259,12 +260,13 @@ Skill 已从隐式 Prompt 拼接迁移为显式 Runtime 输入 + 元数据面，
 
 已结构化技能包 4 个（eng-*）：eng-code-review / eng-doc-standard / eng-verification / eng-web-research（requiredTools=[web_search]）。
 
+**技能包安装面（2026-10-10 起，REF-1.5 / 1.6）**：技能包可由安装入口装入并持久化到**受控存储**——元数据与原始正文落 PG、原始上传 zip 落 MinIO（`minio://…/skill-packages/…`），**不写宿主文件系统**（故不构成 `G-005` 沙箱触发条件①）。技能目录改为**双源**（classpath 内置 + 已安装 ACTIVE 行）：同 name 至多一行 ACTIVE、多版本共存供回滚，与内置 `eng-*` 同名一律拒绝。**摄入安全闸门**（文件数 / 解压总量 / 压缩比 / 路径穿越 / symlink / 非普通文件 / 加密位 / 清单 UTF-8）是安装的前置。原计划的「外部技能目录」**已裁 WONTFIX**（差距表 §7.1.3 R4）。
+
 当前尚未全量形成的 Capability Package 剩余缺口主要是：
 
 ```text
 Instructions 结构化
 技能回流贡献规范（D5-3 未交付）
-外部技能目录 + 摄入安全闸门（REF-1.5/1.6）
 ```
 
 # 10. 当前 Environment / Sandbox 基线

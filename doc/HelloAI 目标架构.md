@@ -24,10 +24,10 @@
 | §3 | **Role Layer**（Planner / Reviewer·Quality Gate / Governance） | **Partial** | G-007 · G-012 · G-013 · G-016 | Planner ✅；Review 链 ✅；Governance（RBAC）✅ 批次一~四；**Quality Gate 契约族已收口**（`QualityGate` 统一契约 + 2 真闸门 `RepeatedFailureGate` / `FinalReportFidelityGate`，RM12）；通用多闸门决策未全量泛化（差距表 G-007） |
 | §3 | **Orchestration Layer**（Workflow / Scheduler / DAG / Dependency / Parallelism / Routing） | **Partial** | G-009 · G-010 · G-015 | Task·SubTask DAG / 依赖门禁 / 并行派发 / 路由 ✅；**Dynamic Workflow 语义未抽象**（P3 后置，且 §11 禁止新建第二套 Engine） |
 | §3 | **Runtime Layer**（AgentRuntime / Context / Session / AgentLoop） | **Implemented** | G-002 · G-003 | 2026-09-30 单轨硬切，`RuntimeTurnExecutor` 为唯一 `AgentRuntime` 实现；八件套契约齐备；每轮 checkpoint 与 tokenUsage 已落库 |
-| §3 | **Capability Layer**（Skill Package / Tool / MCP / Sandbox Provider） | **Partial** | G-004 · G-005 · G-008 | Skill 元数据层 ✅、Tool / MCP ✅；**Sandbox 仅契约、无真实隔离** |
+| §3 | **Capability Layer**（Skill Package / Tool / MCP / Sandbox Provider） | **Partial** | G-004 · G-005 · G-008 | Skill 元数据层 + 安装入口 ✅、Tool / MCP ✅；**Sandbox 仅契约、无真实隔离** |
 | §3 | **Provider Layer**（Qoder / Trae / Codex …） | **Implemented** | G-014 · G-016 | 异构 Provider 契约清晰；外部 Agent 通道获 A 级端到端实证 |
 | §5 | Event Stream（Run / Turn / Step + Replay · Audit） | **Partial** | G-001 · G-006 | 写侧 + Replay / Audit / UI 已上线；**Fork 仅快照服务**（`AgentEventForkService` 108 行，把 `run-{taskId}-1` 的 `agent_event` 复制到新 run_id，**无任何生产调用方**）——**其触发入口 / 原 Run 冻结 / 驱动新 Run 执行三项由用户裁定 WONTFIX**（`D-2026-10-09-5`，2026-10-09；理由：用法已被 Return + Replay 覆盖，且须改 ADR-001 Run 模型与 execution command 载荷）；**Recovery 未建**（留在 P1 剩余项按原次序推进） |
-| §6 | Skill Capability Package | **Partial** | G-004 | 9 个元数据字段已落地（含 `inputSchema` / `outputSchema` / `validationRules`）；**Instructions 结构化未动**；Discover→Validate 生命周期部分达成 |
+| §6 | Skill Capability Package | **Partial** | G-004 | 9 个元数据字段已落地（含 `inputSchema` / `outputSchema` / `validationRules`）；**Instructions 结构化未动**；**`Install`→`Validate`** 生命周期部分达成（安装入口 + 摄入闸门 + 来源打戳能力已落地） |
 | §7 | Sandbox Provider | **Planned**（条件触发，不排期） | G-005 | 契约已落地；**五边界隔离未实现**（`EnvironmentSandboxProvider` 一律不标 ISOLATED）。**2026-10-09 复核：当前无可隔离的执行对象**——外部 agent 在它自己终端；内部 agent 工具面全是平台 API（`File`/`Path`/`ProcessBuilder` 0 命中）；平台无脚本引擎 / 表达式求值器 ⇒ 降级为条件触发（`D-2026-10-09-6③`），三个触发条件见 §7 |
 | §8 | Agent Fleet | **Partial** | G-008 · G-014 | Capability Match / Health ✅，多外部执行者同台已实证；**Cost 维度已接入选人比较链**（`AgentSelector.resolveCostRanks`，近 5 次成功均值 min-max 反向归一，B5.3）；**Latency 维度未做** |
 | §9 | 最终执行链 | **Implemented** | G-001 · G-002 · G-016 | 需求包 → Planner → Workflow → Scheduler → Runtime → Skill/Tool/Sandbox → 异构 Agent → Event Stream → Reviewer → PASS/REWORK/HUMAN_REVIEW/BLOCK 全链 A 级实证 |
@@ -256,7 +256,7 @@ Run
 
 # 6. Skill Capability Package
 
-> **Status: Partial** — 9 个元数据字段已落地；**Instructions 结构化未动**；Discover→Validate 生命周期部分达成（差距表 G-004）。
+> **Status: Partial** — 9 个元数据字段已落地；**Instructions 结构化未动**；**`Install`→`Validate`** 生命周期部分达成（安装入口、摄入闸门、来源打戳能力已落地；生命周期新增 `Install` 阶段，见 `design/Skill_Capability.md`；差距表 G-004）。
 
 目标：
 
