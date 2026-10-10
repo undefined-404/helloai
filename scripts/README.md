@@ -1,6 +1,6 @@
 # scripts/ 索引
 
-本目录是 HelloAI 的验证与运维脚本库。共 **82 个 PowerShell（powershell/ 81 + 根目录 run-it-local.ps1）+ 28 个 Shell + 1 个 Java 工具 + 1 个 SQL**（2026-09-30 复核计数，09-28 盘点基线 77/24），另有 **4 个 CI 门禁脚本 + 1 个架构冻结基线**（2026-09-29 新增）。
+本目录是 HelloAI 的验证与运维脚本库。共 **83 个 PowerShell（powershell/ 82 + 根目录 run-it-local.ps1）+ 28 个 Shell + 1 个 Java 工具 + 1 个 SQL**（2026-09-30 复核计数 82/28，2026-10-10 新增备份演练脚本后 83；09-28 盘点基线 77/24），另有 **4 个 CI 门禁脚本 + 1 个架构冻结基线**（2026-09-29 新增）。
 
 - `ci/`：**跨平台 CI 门禁与架构守卫**（bash，Git Bash / Linux CI 通用；详细见下方第六节）
 - `powershell/`：Windows 侧（pwsh / Windows PowerShell 5.1），含全部规范类与大部分 E2E 验收脚本
@@ -14,7 +14,7 @@
 >（`.agents/` / `.qoder/` 下的 `helloai-preflight`，属本地产物、不入仓 2026-09-30）——仓库内没有对应文件，
 > 按注释所述纪律执行即可，不必去找文件。2026-09-30 治理时已把脚本头里的死路径替换为「本地 preflight 技能」字样。
 
-## 一、验收脚本（verify-*，57 ps1 + 19 sh）
+## 一、验收脚本（verify-*，58 ps1 + 19 sh）
 
 命名即入口：`powershell -File .\scripts\powershell\<name>.ps1` / `zsh scripts/shell/<name>.sh`。
 绝大多数前置为「后端 6565 已启动 + admin/$HELLOAI_ADMIN_PASSWORD」，个别需 Docker 中间件（postgres:15432 / redis:26379 / rabbitmq:25672 / minio:29000）。
@@ -55,6 +55,7 @@ $env:HELLOAI_ADMIN_PASSWORD = '<你的管理员登录口令>'   # PowerShell
 - **Agent/技能/配置**：verify-agent-skill-capability、verify-skill-packages（**2026-10-09 重写**：解析对象由 Java `KNOWN_SPECS` 源码文本改为 `skills/plugins/*.md` 的 YAML frontmatter；4 组断言等价保留 + 新增 E1/E2/E3 结构约束与 F 测试资源遮蔽守卫）、verify-platform-config、verify-api-key-verify、verify-llm-provider-models、verify-admin-authz、verify-attachment-version
 - **MCP/门铃/外部 Agent 入职**：verify-mcp（最小连通）、verify-mcp-session-e2e、verify-doorbell-e2e、verify-onboarding（+ -doorbell / -heartbeat / -pull / -submit 五步链）、verify-external-agent-e2e（外部 CLI_CLIENT 多 Agent 实接单，含 -AssertOnly 断言模式）
 - **MQ**：verify-outbox-relay-confirm-e2e（Outbox/Confirm 失败路径，配合 start-sb-e2e-mq.ps1）
+- **备份/恢复**：verify-backup-restore（触发备份 → 校验台账字段 → preflight → **真恢复进一次性探针库**（`helloai_restore_probe`）逐表对账 → 清理；三类非法恢复必拒绝由单测 `RestoreGateTest` 覆盖，app 一键恢复端点按停机操作**不**自动跑）
 
 ### 仅 sh（macOS/Linux 侧）
 
