@@ -1,16 +1,14 @@
 package com.helloai.api.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
-import cn.dev33.satoken.stp.StpUtil;
 import com.helloai.api.dto.skill.InstalledSkillPackageResponse;
+import com.helloai.api.support.AdminOperatorResolver;
 import com.helloai.common.base.BizException;
 import com.helloai.common.base.R;
 import com.helloai.core.agent.entity.InstalledSkillPackage;
 import com.helloai.core.agent.skill.SkillPackageAuditService;
 import com.helloai.core.agent.skill.SkillPackageAuditService.Operator;
 import com.helloai.core.agent.skill.SkillPackageInstallService;
-import com.helloai.core.system.entity.SysUser;
-import com.helloai.core.system.service.SysUserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
@@ -45,7 +43,7 @@ import java.util.List;
 public class SkillPackageController {
 
     private final SkillPackageInstallService installService;
-    private final SysUserService sysUserService;
+    private final AdminOperatorResolver adminOperatorResolver;
 
     /**
      * 安装技能包（上传 zip）。
@@ -113,19 +111,8 @@ public class SkillPackageController {
      * <p>取不到时**不阻断**——审计只丢显示名，业务照常（审计不得反向卡业务）。</p>
      */
     private Operator currentOperator() {
-        try {
-            Long userId = Long.valueOf(StpUtil.getLoginId().toString());
-            SysUser user = sysUserService.getById(userId);
-            String displayName = "";
-            if (user != null) {
-                displayName = (user.getNickname() != null && !user.getNickname().isBlank())
-                        ? user.getNickname() : user.getUsername();
-            }
-            return Operator.of(String.valueOf(userId), displayName);
-        } catch (Exception e) {
-            log.warn("取当前操作人失败，本条审计只记动作不记人: {}", e.getMessage());
-            return Operator.of("", "");
-        }
+        AdminOperatorResolver.Operator op = adminOperatorResolver.current();
+        return Operator.of(op.id(), op.name());
     }
 
     private static InstalledSkillPackageResponse toResponse(InstalledSkillPackage row) {
