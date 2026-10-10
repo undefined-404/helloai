@@ -100,7 +100,7 @@
 | G-015 | 外部 Agent 心跳/重派止血（B1：误判离线 → 在飞任务被重派打满死信） | 写侧值班租约守卫已具备（CAS 标 OFFLINE 前判 `isOnDuty`，持 ACTIVE 租约即跳过离线处置，与读侧「租约 ACTIVE → IDLE」同口径）；在飞子任务宽限（`inFlightGraceMinutes`，窗口取 `max(grace, offlineMinutes)`）；只读 / 登记类工具经 `refreshDutyLease` 顺带刷 `last_seen_time`；重派退避档绑独立列 `sub_task.last_attempt_time`（`V102`，仅 `incrementAttemptTotal` 原子写入，闸门只读该列）；离线在飞 IN_PROGRESS 置 PAUSED 保留归属（不消耗重派预算）；`redispatchDeadLetter` 清理残留 context 键；REST 双通道（直通 + JSON-RPC）透传 skills（兼容数组与 CSV）；`agent_duty_lease.ttl_minutes`（`V94`）持久化签发窗口；附件上传按「无归属 409 / 归属他人 403 / 子任务不存在 404」语义化报错 | 外部 Agent 埋头执行长任务（数分钟不触网）不被 5min 心跳窗口误判离线；判离线的读/写两视图口径统一 | **P0** | PARTIAL · 未达成：`SKILL.md` 与 `doc/manual/executor-duty/` 的 `attachmentId` 字段名同步。观察点：在飞续约仍用 `maxTtlMinutes(240)` 保活（仅体现在 `expire_time`，不污染 `ttl_minutes`）；「无候选空烧预算 + NO_ELIGIBLE_AGENT 独立告警」未做。见 `LOG-20260926-001` / `LOG-20260926-002` / `LOG-20261003-001` / `LOG-20261005-001` |
 | G-016 | 报告整合质量 | 报告读取与子任务链同口径（物化附件优先 → `ExecutionRecord` SUMMARY / DELIVERABLES 注入 → output 兜底）；附件限额与族判定单源（`AttachmentContentPolicy`，shared）；Markdown 块级截断 + 超限结构化标注；大纲先行两段式（出纲失败降级单次调用）；核验 / 返工闭环（自审自过硬守卫 `review_skipped`）；报告版本单槽列 `final_report_prev(_agent_id/_time)`，rollback 端点 current ↔ prev 整体互换；审查异步化（REVIEWING 态 + 专用池 + `reportTime` 三重陈旧守卫 + 六出口收敛 DONE）；审查链三级容错（L1 `AFTER_COMMIT` 内存事件 / L2 Outbox 幂等消费 / L3 孤儿巡检收敛 DONE）；轮次无状态（由审查服务显式传 attempt，不落库） | 报告按主题归并有覆盖追溯，与执行链同口径读事实源；生成后自动核验、驳回可返工；自审自过不静默放行；审查不阻塞前端请求；历史报告可恢复上一版 | **P1** | PARTIAL · 未达成：前端轮询两项可选精修（keep-alive 退出未停表 / 无失败退避）。见 `LOG-20260928-002` / `LOG-20260928-003` / `LOG-20260929-005` / `LOG-20260930-007` / `LOG-20260930-008` |
 | G-017 | 附件存储一致性（产物对象 ↔ attachment 记录对账） | `ArtifactStorage` 契约已具备（Local / Minio 双实现 + Composite 按 type / URL 前缀路由；`exists` fail-open / `listObjects` fail-safe / `removeObject` fail-close）；`AttachmentServiceImpl.register` 前置校验（storageUrl 必填 + `validateAddress` + `exists` 校验，不存在 400 拒绝）；对账巡检 `ArtifactStorageReconcileTask`（6h + ShedLock，attachment 全量含逻辑删除 ↔ 桶内对象双向比对，悬空 / 孤儿 / 字节不符三态）；孤儿清理默认关闭 + 三重保险（开关 + 24h 时间窗 + 单轮上限 200）；MCP `uploadArtifact` 描述重写（storageUrl 格式 + bucket 白名单 + 错误示例） | DB 与对象存储两侧一致；悬空/孤儿可发现可报告；不再产生僵尸附件；孤儿清理受控有保险 | **P1** | PARTIAL · 未达成：① 历史 106 条悬空附件不自动修复（对账可见可报告）；② 部署侧安全动作待执行（改 MinIO 默认凭据 + 端口收安全组白名单）。见 `LOG-20260928-001` |
-| G-018 | 备份 / 恢复（平台数据可靠性） | **完全空白**：全仓无 DB 备份/恢复能力（`helloai-core` / `helloai-api` 内 grep `backup` / `restore` 零功能命中；唯一真实 `pg_dump -Fc` 用法是 `deploy/middleware/scripts/migrate.sh` 的一次性跨机迁移脚本）。**可复用资产已就绪**：MinIO 为生产主存储（`storage.type=minio`，bucket `helloai-artifacts`）+ `ArtifactStorage.listObjects(bucket, prefix)` 递归枚举（Minio 实现）；Redisson 4.0.0 `RLock` 与 ShedLock 6.6.0 `@SchedulerLock` 既有单飞范式 | `pg_dump -Fc` 全库 + MinIO 对象清单 + manifest 前置 peek（不解档即可判内容）+ 分布式单飞锁 + 自动/手动备份分离的保留策略 + 停机恢复流程文档化（诚实边界：运行中备份不保证多文件同一瞬间） | **P1** | TODO · 未启动（`REF-2.3` / `REF-2.4`）。落地硬约束：① 必补**恢复侧安全闸门**（跨引擎拒恢复 / schema 版本高过运行时拒恢复 / 在线恢复拒绝）；② 「`listObjects` 返回空」既可能是真空也可能是实现不支持（fail-safe 默认返回 `List.of()`）——**必须显式失败，不得静默产出缺对象的「完整备份」**；③ 复用既有 `pg_restore --no-owner --no-privileges` 写法 |
+| G-018 | 备份 / 恢复（平台数据可靠性） | 备份/恢复链已具备：备份编排（`pg_dump -Fc` 全库 + MinIO 对象清单递归枚举 + manifest 前置 peek + Redisson 单飞锁 + 仅淘汰自动备份）+ `platform_backup` 记录表（`V105`）+ 恢复侧三门（跨引擎 / schema 高过运行时 / 在线）+ 管理端 preflight、restore 端点；备份落独立 bucket `helloai-backups`（不参与产物对账）；停机恢复流程文档未成文 | `pg_dump -Fc` 全库 + MinIO 对象清单 + manifest 前置 peek（不解档即可判内容）+ 分布式单飞锁 + 自动/手动备份分离的保留策略 + 停机恢复流程文档化（诚实边界：运行中备份不保证多文件同一瞬间） | **P1** | PARTIAL · `REF-2.3` / `REF-2.3b` 已交付（备份编排 + 恢复三门 + `platform_backup`）；`REF-2.4` 停机恢复流程文档化未启动。验证见 `LOG-20261010-007`。落地硬约束（`REF-2.3b` 已满足）：① 恢复侧安全闸门（跨引擎 / schema 高过运行时 / 在线）；② 「`listObjects` 返回空」显式失败，不产出缺对象的「完整备份」；③ 复用既有 `pg_restore --no-owner --no-privileges` 写法 |
 | G-019 | RAG 知识库（检索增强） | **完全空白**：pgvector / embedding / 知识库 / 向量 全仓零命中 | pgvector 存储与检索（**PG 单后端，不引入侧库**）+「无 KB 即摘工具」的条件可用语义位 + 注入预算（char_budget 契约）+ 引用溯源 marker（前端渲染卡片、喂模型前剥离） | **P2** | TODO · 未启动（`REF-4.x`）。**前置三件**：① PG 镜像换 `pgvector` 版（现 `postgres:16.4-alpine`，无扩展，属基础设施变更）；② 嵌入模型供应商 / 维度 / 密钥管理选型落 `design/adr/`；③ `search_knowledge` 必须经 `ToolCallbackContributor` 端口注册并登记技能包（`CODE_STYLE §35.1` 平台能力接线规则），不得给 LLM 直插域内 Service。**前置④「无 KB 即摘工具」的语义位已具备**——`search_knowledge` 只需在 `ToolCallbackContributor.toolAvailability()` 声明「KB 不存在 ⇒ false」即从模型可见列表摘除，无需改动 `ToolRegistry` / `RuntimeTurnExecutor` |
 | G-020 | 外部 Agent 工作详情快照（子任务执行过程的取证能力） | **完全空白**：平台当前只能审计到**订单层面**（认领 / 开工 / 心跳 / 交单 / 产物 / 阻塞 / 依赖读取，经 `agent_event` + `task_timeline` + 产物对账）；**子任务内部执行过程是黑盒**（这是刻意的解耦，但带来返工争议 / 质量复盘 / 责任界定的取证盲区） | 外部 Agent **事后、经审批、可选**地提交一份全任务工作详情快照 → 平台解析 → **原文落 MinIO** + **时间线插入结构化审计事件（闭合 schema + `snapshotRef`）** | **P2（可后置）** | TODO · 新增立项（`D-2026-10-09-6⑤`），任务锚点 `REF-7`。**动手前三项设计约束必须先定**（见 `plan/HelloAI 借鉴落地实施计划.md` §8.2）：① 与 `REF-6.2`「审计闭合 schema」的张力 ⇒ 必须双面（与 `REF-5.2b` 双视图同模式）；② 审批方是谁（倾向复用人工介入通道，不建第二套审批）；③ 落时间线的粒度。新增工具须走既有 `McpMcpServer` 守卫且**默认关闭**（`REF-6.13`） |
 
@@ -228,6 +228,21 @@ Timeline / Replay
 listObjects 为空 / 失败 ⇒ 备份显式失败，不得产出「完整备份」
 手动备份永不被自动保留策略淘汰（仅自动备份参与 prune）
 恢复侧三门：跨引擎拒绝 / schema 版本高过运行时拒绝 / 在线恢复拒绝
+```
+
+**状态**：`REF-2.3` / `REF-2.3b` **已交付** —— 备份编排（`DatabaseBackupService`）+ 恢复侧三门
+（`RestoreGate`）+ `platform_backup`（迁移 V105）；`REF-2.4`（停机恢复流程文档化）**未启动**。
+
+验证载体：单元测试 `RestoreGateTest` / `DbSchemaVersionReaderTest` / `PgDumpRunnerTest`；
+端到端演练 `scripts/powershell/verify-backup-restore.ps1`（备份 → preflight → 真恢复进一次性探针库 → 逐表对账 → 清理）。
+
+**不变量**
+
+```text
+门② 的判据来源 flywayMaxVersion 必须取 flyway_schema_history.version 的「数值最大」
+（该列为 VARCHAR，SQL max() 走字典序会取小，进而放行本该拒绝的更新备份）
+—— 由 DbSchemaVersionReader 保证（按前导整数求最大，与 MigrationVersionResolver 同口径）
+恢复演练只对一次性探针库，绝不指向配置库；app 一键恢复端点按停机操作不自动跑
 ```
 
 # 4. P2
