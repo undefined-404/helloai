@@ -6,7 +6,7 @@
 > **用户裁定**：`D-2026-10-09-4`（见《差距表》§0「当前生效的取舍决策」）——四项能力优先级、备份/恢复与 RAG 入目标架构、沙箱生产形态、语义位与不可关闭清单同批。
 > **性质**：本计划只收**可执行结论**（借鉴落点 → 动作 → 验收 → 验证集 → 回填），不含调研过程（在 `research/`）与稳定设计（在 `design/`）。
 > **完成迁移**：执行完成后迁入 `doc/archive/implemented/` 并标 `Done`。
-> **最后更新：2026-10-10（v6）**——v1 勘误已并入正文；v2 新增 **11 处动作订正**（会导致回归失败或做不出来的部分）、**每组的验证集与文档回填**、**许可证口径**、**REF-6 载体修正**；v3 **Fork 相关条目全部取消**（`D-2026-10-09-5`，REF-2 收敛为「备份 / 恢复」）；**v4 两项重大调整**（`D-2026-10-09-6`）：① **REF-3 沙箱整组降级为「条件触发」**——当前**没有可隔离的执行对象**，不排期、只留预案（修正原「第 3 优先级」排序）；② **新增 `REF-7`「外部 Agent 工作详情快照」**（差距锚点 `G-020`）。原 §11 待拍板 5 条**已全部裁定**并移入 §12 裁定记录，**本计划当前无待拍板项**；**v5 = REF-1.1 / 1.2 / 1.3 / 1.3b 已完成**（2026-10-09），各组结果与未达成分项见各节 `Status` 行；**v6 = REF-1.4 / 1.5 / 1.6 次序与 REF-1.6 设计定稿**（`D-2026-10-10-1`，见该节）——次序定为 **`REF-1.6 → REF-1.5 → REF-1.4`**；同时落定十条：存储形态走受控存储（不触发 G-005 条件①）、技能正文存 PG、**不建新 ADR**、外部技能目录 **WONTFIX**、命名统一「**技能包**」+ 清单文件 `skill-package-manifest.md`、安装 / 卸载落 `skill_package_audit`、**版本策略**（多版本共存 / 高版本需确认 / 降版走独立接口）、**ACTIVE 选版 + 内容键 `{name}@{version}`**、**内置保护（同名一律拒绝安装）**、**存原始正文**。
+> **最后更新：2026-10-10（v6）**——v1 勘误已并入正文；v2 新增 **11 处动作订正**（会导致回归失败或做不出来的部分）、**每组的验证集与文档回填**、**许可证口径**、**REF-6 载体修正**；v3 **Fork 相关条目全部取消**（`D-2026-10-09-5`，REF-2 收敛为「备份 / 恢复」）；**v4 两项重大调整**（`D-2026-10-09-6`）：① **REF-3 沙箱整组降级为「条件触发」**——当前**没有可隔离的执行对象**，不排期、只留预案（修正原「第 3 优先级」排序）；② **新增 `REF-7`「外部 Agent 工作详情快照」**（差距锚点 `G-020`）。原 §11 待拍板 5 条**已全部裁定**并移入 §12 裁定记录，**本计划当前无待拍板项**；**v5 = REF-1.1 / 1.2 / 1.3 / 1.3b 已完成**（2026-10-09），各组结果与未达成分项见各节 `Status` 行；**v6 = REF-1.4 / 1.5 / 1.6 次序与 REF-1.6 设计定稿**（`D-2026-10-10-1`，见该节）——次序定为 **`REF-1.6 → REF-1.5 → REF-1.4`**；同时落定十条：存储形态走受控存储（不触发 G-005 条件①）、技能正文存 PG、**不建新 ADR**、外部技能目录 **WONTFIX**、命名统一「**技能包**」+ 清单文件 `skill-package-manifest.md`、安装 / 卸载落 `skill_package_audit`、**版本策略**（多版本共存 / 高版本需确认 / 降版走独立接口）、**ACTIVE 选版 + 内容键 `{name}@{version}`**、**内置保护（同名一律拒绝安装）**、**存原始正文**；**v7 = REF-2 实施方案定稿**（`D-2026-10-10-2`，见 §4）——落定六项：执行形态走应用内 `ProcessBuilder` + 前置检查 + Dockerfile 补装 PG 客户端（不做 `docker exec`）、**`ProcessBuilder` 判为不触发 `G-005` 条件①**（故 REF-3 排期不动）、备份落**独立 bucket `helloai-backups`**（对账巡检枚举整桶，共用会被当孤儿删）、定时 + 手动双触发且长操作走异步 + 轮询、仅自动备份按份数淘汰（默认 7）且手动永不淘汰、新增 `platform_backup` 记录表（V105）。
 
 ---
 
@@ -223,6 +223,45 @@ Diagnosis  ：.tmp/diag-skill-scan.*（仅诊断，不得作为正式验证）
 | REF-2.3 | `pg_dump -Fc` 全库 + **MinIO 对象清单（复用 `ArtifactStorage.listObjects` 递归枚举）** + manifest 前置 peek + **Redisson 单飞锁** + 仅淘汰自动备份 | 备份可恢复；运行中备份不锁库；手动备份永不被自动清理误删 |
 | REF-2.3b | **恢复侧安全闸门**：跨引擎拒恢复 / schema 版本高过运行时拒恢复 / 在线恢复拒绝（均给出可读原因） | 三类非法恢复各有一个必拒绝用例 |
 | REF-2.4 | 停机恢复流程文档化（诚实边界：运行中备份**不保证**多文件同一瞬间） | 文档成文并随能力交付 |
+
+> **Status（2026-10-10）**：`REF-2.3` / `REF-2.3b` / `REF-2.4` **未启动**，实施方案已定稿（下述）。
+
+**实施方案（2026-10-10 定稿，`D-2026-10-10-2`）**
+
+```text
+① 执行形态（P1 = A1）：应用内 ProcessBuilder 执行**可配置路径**的 pg_dump / pg_restore。
+   启动做前置检查（`pg_dump --version`）；不可用 ⇒ **备份功能显式不可用**（不静默，其余功能不受影响）。
+   生产：Dockerfile 的 app 阶段补装 postgresql-client-16（客户端主版本须 ≥ 服务端 16）；
+   本地：需装 PG 客户端，或用 helloai.backup.pg-dump-path 指到可用路径。
+   **明确不做 docker exec** —— 那要挂 docker.sock，与 D-2026-10-09-4③ 的裁定相悖。
+   ⚠️ 实测三环境：app 镜像无客户端 / 本地 Windows 无 / 仅 PG 容器内有 —— 这是本组第一前置。
+② G-005 边界（P2 = **不触发**）：ProcessBuilder 是平台首次获得「执行宿主可执行文件」的能力
+   （全仓此前 ProcessBuilder / Runtime.exec 零命中），但 G-005 条件① 的语境是**Agent 可调用工具面**
+   （其判据逐主体分析的是"agent 能碰什么"），备份是**管理端例程、非 agent 工具** ⇒ 不构成触发。
+   REF-3 沙箱排期因此**不动**。
+③ 落点（P3）：**独立 bucket `helloai-backups`**，不复用 helloai-artifacts。
+   硬依据：ArtifactStorageReconcileServiceImpl:70 是 listObjects(bucket, null) **枚举整桶**，
+   凡无 DB 记录的对象都是孤儿候选 —— 备份若落共用桶，一旦开 orphan-cleanup-enabled 就会被当孤儿删掉。
+   且 ArtifactStorage.store(...) 只写配置的单一桶 ⇒ 需**新增独立写路径**，不硬塞进"产物"语义。
+④ 触发：**两者都要** —— helloai-job 的 ShedLock 定时（与既有 18 个任务同构）+ helloai-api 管理端手动端点。
+   长操作走**异步 + 状态守卫 + 轮询查询端点**（学拆解 PlannerDecomposeAsyncServiceImpl:103-105 的范式；
+   仓库无"返回 taskId 让前端轮询"的通用范式）。
+⑤ 保留策略：仅对**自动**备份按份数淘汰（默认 **N=7**，可配）；**手动备份永不淘汰**（计划硬要求）。
+   注：GFS（keep-daily/weekly/monthly）留作后续精化，本批不做。
+⑥ 记录表：新增 `platform_backup`（迁移 **V105**，形态对齐 V67__create_credential_audit_log.sql）——
+   记 谁/何时/类型(手动|自动)/对象键/摘要/大小/状态；同批播种管理端权限码。
+⑦ 恢复侧三门（先于任何 pg_restore 执行）：
+   ① 跨引擎拒 —— dump 的 PG **主版本** ≠ 运行时主版本；
+   ② schema 高过运行时拒 —— manifest 携带 flywayMaxVersion，> 代码内已知最高迁移号即拒；
+   ③ 在线恢复拒 —— 存在在飞子任务 / 活动连接即拒（计划 REF-2.4 是「停机恢复」）。
+⑧ 配置：`BackupProperties` 放 **helloai-common · com.helloai.common.config**（全仓 20+ 个 @ConfigurationProperties
+   的既定落点），前缀 `helloai.backup`。DB 连接信息**独立配置 + 默认从 spring.datasource 派生**（防两处漂移）。
+⑨ 组件落位：BackupScheduler → **helloai-job · job.task**；DatabaseBackupService / PgDumpRunner /
+   BackupStorage / BackupManifest / RestoreGate → helloai-core 新增 backup 域；BackupController → helloai-api（薄透传）。
+⑩ 危险操作防护：恢复演练**只对一次性隔离库**（Testcontainers 或临时 PG 容器），
+   **绝不指向 localhost:15432/helloai**；启动即打印目标库，检测到非隔离目标直接拒跑。
+   ProcessBuilder 以 **env 传 PGPASSWORD**（不进命令行，避免密码进 ps）。
+```
 
 > ⚠️ **v1 漏项（三条硬约束）**：
 > ① **恢复侧闸门不可省**：这是备份功能里风险最高的一段（上游 `system_archive.py` 中约 650 行）。无闸门的「可恢复」= 可把生产库恢复成不一致状态。
