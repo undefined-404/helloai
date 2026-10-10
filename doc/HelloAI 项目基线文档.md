@@ -168,6 +168,8 @@ Credential
 
 - 附件与任务域**读权限单一判据**（`AttachmentVisibilityPolicy`：`TASK` 可见范围 × **根任务 Task-Team 成员关系**，含 derive-on-miss 兜底；上传者恒可读自传 ⇒ 被改派换下者仍能读自己旧产出）；读侧通道**同源**——附件端点（`/api/attachments/**`）与子任务视图端点（时间线 / 对话流 / 详情）统一经该判据（视图侧收口 `SubTaskViewGuard`），其中详情端点 **此前无校验**的缺口已关闭；被注入截断的前置附件在标注行给出可寻址 `id=<attachmentId>`，配合既有 `downloadById` 端点可按需回取全文。
 
+- 前端事件字典与后端事件码**由守卫对齐**（`REF-6.8` 守卫半，2026-10-11）：`EVENT_META`（时间线卡片）与 `sequenceFlow.LABEL`（时序图短标签）对后端**全部 98 个事件码**均有登记，缺一即由 `scripts/shell/verify-event-key-parity.sh`（静态模式，入驻 ci-gate 门禁 3）拦截；存量 46 个未登记码已清偿。
+
 这些属于 HelloAI 的**分布式编排与可靠性基础设施**。
 
 # 7. 当前 Runtime 基线

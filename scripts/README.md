@@ -1,6 +1,6 @@
 # scripts/ 索引
 
-本目录是 HelloAI 的验证与运维脚本库。共 **85 个 PowerShell（`powershell/` 84 + 根目录 `run-it-local.ps1`）+ 26 个 Shell + 1 个 Java 工具 + 1 个 SQL**（**2026-10-11 按 `git ls-files` 重新校准**：PowerShell 84+1、Shell 26（含本次新增的交付文档一致性守卫）；此前记「83 / 28」与仓库实际不符，本次订正），另有 **4 个 CI 门禁脚本 + 1 个架构冻结基线**（`scripts/ci/`）。
+本目录是 HelloAI 的验证与运维脚本库。共 **85 个 PowerShell（`powershell/` 84 + 根目录 `run-it-local.ps1`）+ 27 个 Shell + 1 个 Java 工具 + 1 个 SQL**（**2026-10-11 按 `git ls-files` 重新校准**：PowerShell 84+1、Shell 27（含本批新增的交付文档一致性守卫与事件码 parity 守卫）；此前记「83 / 28」与仓库实际不符，本次订正），另有 **4 个 CI 门禁脚本 + 1 个架构冻结基线**（`scripts/ci/`）。
 
 - `ci/`：**跨平台 CI 门禁与架构守卫**（bash，Git Bash / Linux CI 通用；详细见下方第六节）
 - `powershell/`：Windows 侧（pwsh / Windows PowerShell 5.1），含全部规范类与大部分 E2E 验收脚本
@@ -74,6 +74,13 @@ verify-login-e2e、verify-requirement-clarify、verify-websearch-e2e、verify-pl
 **交付文档一致性守卫（无运行时依赖，**已在门禁 3 内执行**）**：`shell/verify-executor-doc-parity.sh` —— 治「代码改了、交付给外部 Agent 的说明书没跟」这类漂移。五组只读断言：**S1 工具面三源静态对齐**（`onboarding/executor/guide.md` §0.1 表格 ↔ `McpController.TOOL_NAMES` ↔ `McpMcpServer` 的 `@Tool(name=…)`，并校验标题声明数量）——是 `verify-tool-matrix.ps1` 的**离线版**（后者需后端在跑 + 管理员口令）；**S2 已知错误口径黑名单**（「每前置 N 字符」误述 / `getSubTaskDetail` 与「等价」同行）；**S3 关键口径必备词**（取回链 / 总预算口径 / 可见性判据，交付手册与内部手册各一份）；**S4 内部手册 ↔ 拼装产物**（改源未重跑 `assemble-manual.ps1` 即红）；**S5 文档限额数字 ↔ 代码常量**（执行侧 `DEP_CONTENT_MAX_CHARS` 与核验侧每附件/总计）；**S6 本文件的脚本计数 ↔ 仓库在册实数**（`git ls-files` —— 索引里的数字不许悄悄过期）。**bash 实现、零 zsh/python 依赖**（三平台可跑；`verify-doc-gap-table.sh` 需 zsh+python3，Windows 下跑不了）。建立背景与扰动验证见 `LOG-20261010-012`。
 
 > **S6 的口径契约（改本文件开头那一行时须知）**：S6 按**标注词**解析——须保留 `共 **N 个 PowerShell（…）+ N 个 Shell + N 个 Java 工具 + N 个 SQL**` 与 `N 个 CI 门禁脚本 + N 个架构冻结基线` 这些措辞；改坏措辞不会静默通过，而是判「无法解析」。口径为**仓库在册**（`git ls-files`）：on-disk 会混入 `powershell/logs/` 下解包 jar 的残留（实测 sql 在册 1 / on-disk 13）。故**新增脚本后先 `git add` 并同步本行计数**，二者缺一即红。
+
+**事件码 parity 守卫（无运行时依赖，**已在门禁 3 内执行**）**：`shell/verify-event-key-parity.sh` —— 治「后端落了事件码、前端字典没登记 ⇒ 界面回退裸英文（`eventMeta` 回退事件名、`sequenceFlow` 回退伪英文）」。两种模式：
+
+- **静态（默认，CI 用，零依赖）**：码集 = 写入点**字面量**（形态 `"<snake_case>",` 紧邻 `AgentRole.`）∪ `AgentEventType` 枚举；断言每个码 ∈ `EVENT_META` **且** ∈ `sequenceFlow.LABEL`，缺一即红并**打印缺失码名**。
+- **`--db`（本地/运维，地面真值）**：码集取**并集** —— 再叠加库内 `SELECT DISTINCT event_type FROM task_timeline`。可覆盖静态模式的盲区：**常量传参**（`ExecutorDoneIssuesBackfiller.TIMELINE_EVENT`）、**辅助方法参数**（`task_created_from_clarify`）、**历史遗留码**（`agent_offline`）。Docker / 容器不可用时 SKIP（不制造假失败，协作规约 §27）。
+
+建立背景、存量债务（46 个未登记码）与扰动验证见 `LOG-20261010-013`；判据锚点 `REF-6.8`。
 
 ## 二、运维启停
 

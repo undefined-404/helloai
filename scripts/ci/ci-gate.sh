@@ -177,7 +177,7 @@ fi
 # ---------------------------------------------------------------------------
 # 门禁 3：架构漂移冻结（跨域反向依赖只降不升）+ 交付文档一致性
 # ---------------------------------------------------------------------------
-step "门禁 3 / 5：架构漂移冻结 + 交付文档一致性校验"
+step "门禁 3 / 5：静态一致性校验（架构漂移冻结 / 交付文档 / 事件码 parity）"
 if bash "$SCRIPT_DIR/check-arch-freeze.sh"; then
   ok "跨域反向依赖计数未超冻结基线"
 else
@@ -190,6 +190,15 @@ if bash "$SCRIPT_DIR/../shell/verify-executor-doc-parity.sh"; then
   ok "交付文档一致性（工具面三源 / 错误口径黑名单 / 必备口径 / 拼装产物 / 限额常量 / 脚本索引计数）"
 else
   bad "交付文档一致性失败（详见上方 verify-executor-doc-parity.sh 输出）"
+fi
+
+# 事件码 parity（后端写入码 ↔ EVENT_META ↔ sequenceFlow.LABEL）：静态模式，零外部依赖。
+# 地面真值模式（--db，库内 distinct event_type）供本地/运维用，需 PG 容器在跑，故不进 CI；
+# 见 scripts/README.md 与 LOG-20261010-013。
+if bash "$SCRIPT_DIR/../shell/verify-event-key-parity.sh"; then
+  ok "事件码 parity（后端码 ↔ 前端事件字典两处，缺登记即回退裸英文）"
+else
+  bad "事件码 parity 失败（详见上方 verify-event-key-parity.sh 输出）"
 fi
 
 # ---------------------------------------------------------------------------

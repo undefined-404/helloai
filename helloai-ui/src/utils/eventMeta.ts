@@ -104,7 +104,64 @@ export const EVENT_META: Record<string, { label: string; desc: string }> = {
   review_started: { label: '核验开始', desc: '系统开始核验产出' },
   review_rejected: { label: '核验驳回', desc: '核验未通过，需要返工' },
   rework_started: { label: '返工开始', desc: '子任务进入返工流程' },
-  review_approved: { label: '核验通过', desc: '核验通过，子任务完成' }
+  review_approved: { label: '核验通过', desc: '核验通过，子任务完成' },
+
+  // ── 审计 / 内部事件补齐（2026-10-11，REF-6.8）─────────────────────────────
+  // 这些码**后端早已落库**，但本字典未登记 ⇒ `eventLabel()` 回退原始码，时间线显示裸英文
+  // （42 个里 0 个在 `COMPACT_HIDDEN_EVENTS` 内，即默认视图就能看到）。
+  // 由 `scripts/shell/verify-event-key-parity.sh` 守卫（后端写入的事件码 ↔ 本字典 ↔ sequenceFlow.LABEL，缺一即红）。
+  // Agent 生命周期（系统级：taskId / subTaskId 均为空）
+  agent_sleep: { label: 'Agent 休眠', desc: 'Agent 进入休眠，不再接收派单（次日打卡后恢复在岗）' },
+  agent_wake: { label: 'Agent 唤醒', desc: 'Agent 从休眠被唤醒（转离线，待再次打卡恢复在岗）' },
+  // 需求澄清
+  requirement_description_section_missing: { label: '需求小节缺失', desc: '澄清会话的需求描述缺少必需小节（会话级事件，payload 带 conversationId）' },
+  // 子任务：派发 / 降级 / 回收 / 核验跳过
+  sub_task_dispatch_deferred: { label: '派发推迟', desc: '下游节点分发失败，保持 PENDING 等待兜底重派' },
+  sub_task_dispatch_skip_dependency: { label: '跳过派发（依赖未就绪）', desc: '前置依赖未就绪，本轮不派发' },
+  sub_task_dispatch_skip_no_capability: { label: '跳过派发（无本机能力）', desc: '候选 Agent 无本机执行能力，不派发' },
+  sub_task_fallback_skip_policy: { label: '放弃降级（策略）', desc: '按任务约束策略不执行熔断降级' },
+  sub_task_fallback_skip_need_human: { label: '放弃降级（需人工）', desc: '熔断降级的替代 Agent 也无本机执行能力，标记人工介入' },
+  sub_task_redispatch_skipped: { label: '跳过重派', desc: '闸门判定不满足重派条件，本轮跳过（不空烧重派预算）' },
+  sub_task_lease_reclaimed: { label: '租约回收', desc: '在飞租约过期被回收（仅审计用途，不阻断回收主链路）' },
+  sub_task_report_blocked_skipped: { label: '跳过阻塞上报', desc: '重复或无效的阻塞上报被忽略' },
+  sub_task_session_interrupted: { label: '会话中断', desc: '执行会话被中断（payload 保留上下文摘要）' },
+  sub_task_contract_backfilled: { label: '契约内容回填', desc: '完成时回填子任务契约内容（原 content 为空，从产出补齐）' },
+  sub_task_review_skip_no_capability: { label: '核验跳过（无本机能力）', desc: '执行密集任务由无本机能力 Agent 提交，自动核验跳过' },
+  sub_task_review_skip_no_evidence: { label: '核验跳过（无证据）', desc: '无产出证据支撑，自动核验跳过' },
+  sub_task_auto_review_skip_repeated_failure: { label: '核验重复失败短路', desc: '自动核验连续失败且判定为结构性失败，短路转死信不再耗轮次' },
+  // 任务级：拆解（Planner）
+  task_plan_async_submitted: { label: '拆解已异步提交', desc: '拆解已提交异步执行，HTTP 线程返回，进度查草案' },
+  task_plan_llm_call_end: { label: '拆解大模型返回', desc: '拆解调用大模型结束（payload 含耗时与 token 用量）' },
+  task_plan_timeout_recovered: { label: '拆解超时恢复', desc: '拆解超时由定时任务恢复（重置为可重试）' },
+  task_plan_draft_field_missing: { label: '拆解草案缺字段', desc: '草案子项缺必需字段（审计先于抛出，可回溯字段与原始输出）' },
+  task_plan_constraints_missing: { label: '拆解约束缺失', desc: 'COARSE 粒度子项缺 constraints（记审计，不阻断落库）' },
+  task_plan_skill_filtered: { label: '拆解技能被过滤', desc: '草案中的技能不在已知目录，过滤后不落库' },
+  task_plan_uncertainty_degraded: { label: '不确定性降级', desc: '不确定性条目的类型不在白名单内，降级处理' },
+  task_plan_uncertainty_missing: { label: '不确定性缺失', desc: '草案未申报待确认的不确定性（提示可能漏报）' },
+  // 任务级：整合报告生成 + 审查链
+  task_final_report_llm_call_start: { label: '报告调用大模型', desc: '开始调用大模型生成报告章节' },
+  task_final_report_generated: { label: '报告已生成', desc: '整合报告生成完成并写回' },
+  task_final_report_failed: { label: '报告失败', desc: '整合报告生成失败（分章降级后仍失败）' },
+  task_final_report_outline_ready: { label: '报告大纲就绪', desc: '大纲生成完成，进入分章写作' },
+  task_final_report_outline_order_suspect: { label: '报告大纲顺序可疑', desc: '大纲章节顺序异常，疑似顺序错乱' },
+  task_final_report_outline_failed: { label: '报告大纲失败', desc: '报告大纲生成或解析失败' },
+  task_final_report_review_discarded_stale: { label: '报告审查丢弃（陈旧）', desc: '审查前发现已被重新生成 / 回滚接管，旧链审查丢弃' },
+  task_final_report_review_unparseable: { label: '报告审查不可解析', desc: '审查结论无法解析，按证据不足处理' },
+  task_final_report_review_warned: { label: '报告审查告警', desc: '机械软违规（跨章逐字重复 / 覆盖追溯表缺失），交审查重点关注' },
+  task_final_report_review_passed: { label: '报告审查通过', desc: '报告审查通过' },
+  task_final_report_review_rejected: { label: '报告审查驳回', desc: '报告审查驳回，需返工' },
+  task_final_report_review_failed: { label: '报告审查失败', desc: '报告审查调用失败' },
+  task_final_report_review_skipped: { label: '报告审查跳过', desc: '报告审查跳过并收敛为完成（记录原因）' },
+  task_final_report_review_orphan_converged: { label: '报告审查孤儿收敛', desc: '孤儿巡检把长时间停留审查中的报告收敛为完成' },
+  task_final_report_max_review_reached: { label: '报告审查达上限', desc: '报告审查轮次达上限，停止再审' },
+  task_final_report_rework_discarded_stale: { label: '报告返工丢弃（陈旧）', desc: '返工基于旧链已无意义，丢弃不重写不收敛' },
+  task_final_report_rolled_back: { label: '报告已回滚', desc: '报告回滚到上一版（当前版 ↔ 上一版互换）' },
+  task_iteration_backfill_failed: { label: '轮次回填失败', desc: '任务轮次回填失败（不影响报告生成）' },
+  // 非「字面量直写」形态的码：**静态提取扫不到**，靠 `verify-event-key-parity.sh --db`（库内 distinct event_type）发现
+  agent_offline: { label: 'Agent 离线', desc: 'Agent 判为离线（历史事件；payload 带离线原因与触发上下文）' },
+  sub_task_executor_done_issues: { label: '执行完成问题回填', desc: '执行者完成时上报的问题回填到子任务（payload.state 区分成功 / 跳过 / 失败）' },
+  task_created_from_clarify: { label: '澄清完成建单', desc: '澄清会话定稿后创建任务' },
+  agent_external_fallback_triggered: { label: '外部执行兜底触发', desc: '外部 Agent 无在跑子任务时触发阈值回退兜底（仅写冷却标记）' }
 }
 
 // 人话化：事件类型 → 简短标签（未命中回退原始类型名）
