@@ -67,7 +67,11 @@ public class AgentSkillPolicyService {
                 .filter(s -> !whitelist.contains(s))
                 .toList();
         if (!invalid.isEmpty()) {
-            throw new BizException("模型 " + modelType + " 不支持技能: " + String.join(", ", invalid));
+            // 技能超出模型白名单属可自纠入参错误：显式 code=400 而非单参构造的默认 500，
+            // 与同族修复同口径（本类 validateModelType 格式/可用性 → 400、validateModelUniqueInRole → 409，
+            // 以及 AgentController 的 name/role 校验 → 400）。单参构造会让 GlobalExceptionHandler
+            // 把「你请求了一个该模型不支持的技能」也报成服务端故障（2026-10-10 修复）。
+            throw new BizException(400, "模型 " + modelType + " 不支持技能: " + String.join(", ", invalid));
         }
     }
 

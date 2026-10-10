@@ -77,8 +77,13 @@ public class AgentController {
         AgentRole role = resolveRole(body);
         String description = (String) body.getOrDefault("description", "");
         boolean idempotent = Boolean.TRUE.equals(body.get("idempotent"));
-        // 注册前预校验 modelType（格式/可用性/角色唯一性），失败时不创建 Agent，避免留下无 modelType 的脏 Agent
-        agentService.validateModelType((String) body.get("modelType"), role, null);
+        // 注册前预校验 modelType（格式/可用性/角色唯一性）与 skills 白名单：两类校验都前置于
+        // 创建 Agent，失败时库里不留任何痕迹。skills 是后补的一项——此前只预校验了 modelType，
+        // skills 校验留在 applyRegistrationExtras 内，抛错时 register() 已提交，会残留
+        // access_type=CLI_CLIENT / model_type=NULL 的脏 Agent（2026-10-10 修复）。
+        String modelType = (String) body.get("modelType");
+        agentService.validateModelType(modelType, role, null);
+        agentService.validateAgentSkills(modelType, resolveExplicitSkills(body));
         Agent agent = idempotent
                 ? agentService.registerOrGet(name, role, description)
                 : agentService.register(name, role, description);
@@ -102,8 +107,13 @@ public class AgentController {
         String description = (String) body.getOrDefault("description", "");
         AgentRole role = resolveRole(body);
         boolean idempotent = Boolean.TRUE.equals(body.get("idempotent"));
-        // 注册前预校验 modelType（格式/可用性/角色唯一性），失败时不创建 Agent，避免留下无 modelType 的脏 Agent
-        agentService.validateModelType((String) body.get("modelType"), role, null);
+        // 注册前预校验 modelType（格式/可用性/角色唯一性）与 skills 白名单：两类校验都前置于
+        // 创建 Agent，失败时库里不留任何痕迹。skills 是后补的一项——此前只预校验了 modelType，
+        // skills 校验留在 applyRegistrationExtras 内，抛错时 register() 已提交，会残留
+        // access_type=CLI_CLIENT / model_type=NULL 的脏 Agent（2026-10-10 修复）。
+        String modelType = (String) body.get("modelType");
+        agentService.validateModelType(modelType, role, null);
+        agentService.validateAgentSkills(modelType, resolveExplicitSkills(body));
         Agent agent = idempotent
                 ? agentService.registerOrGet(name, role, description)
                 : agentService.register(name, role, description);
@@ -151,6 +161,24 @@ public class AgentController {
             throw new com.helloai.common.base.BizException(400,
                     "role 取值非法: " + raw + "，应为 PLANNER/EXECUTOR/REVIEWER");
         }
+    }
+
+    /**
+     * 从注册入参解析显式 skills；未传 / 非数组返回 {@code null}（语义为「不显式声明，交由推导」）。
+     *
+     * <p>由 {@link #applyRegistrationExtras} 与注册前预校验（{@code validateAgentSkills}）
+     * 共用同一份解析，保证「预校验的集合」与「实际落库的集合」口径一致。</p>
+     */
+    private static List<String> resolveExplicitSkills(Map<String, Object> body) {
+        Object skillsObj = body.get("skills");
+        if (!(skillsObj instanceof List<?> rawSkills)) {
+            return null;
+        }
+        List<String> explicit = new java.util.ArrayList<>();
+        for (Object s : rawSkills) {
+            explicit.add(String.valueOf(s));
+        }
+        return explicit;
     }
 
     /**
@@ -221,15 +249,9 @@ public class AgentController {
         }
         agent.setCapabilities(AgentCapability.mergeDefaults(accessType, override));
 
-        // 5) skills（能力驱动）：显式传入优先；否则已有技能为空时按 accessType + 模型能力推导
-        List<String> explicitSkills = null;
-        Object skillsObj = body.get("skills");
-        if (skillsObj instanceof List<?> rawSkills) {
-            explicitSkills = new java.util.ArrayList<>();
-            for (Object s : rawSkills) {
-                explicitSkills.add(String.valueOf(s));
-            }
-        }
+        // 5) skills（能力驱动）：显式传入优先；否则已有技能为空时按 accessType + 模型能力推导。
+        // 白名单校验已在注册前完成（register / registerWithToken），此处只做推导与落库。
+        List<String> explicitSkills = resolveExplicitSkills(body);
         if (explicitSkills != null) {
             // 先按模型能力校验（标准技能查白名单、自定义豁免、未识别模型放行），
             // 再按能力驱动落库（API_KEY_LLM + 已识别模型时 thinking 锁定不回退）

@@ -25,6 +25,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -32,6 +33,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -138,6 +140,26 @@ class AgentControllerRegisterValidationTest {
                 "name", "it-agent", "role", "EXECUTOR", "modelType", "deepseek:deepseek-v4-flash")));
 
         assertThat(code).isEqualTo(409);
+    }
+
+    @Test
+    @DisplayName("技能超出模型白名单 → HTTP 400，且不创建 Agent（不再残留脏 Agent）")
+    void unsupportedSkillReturns400AndCreatesNothing() {
+        when(agentConfig.isAllowRegistration()).thenReturn(true);
+        doThrow(new BizException(400, "模型 deepseek:deepseek-v4-pro 不支持技能: web-search"))
+                .when(agentService).validateAgentSkills(any(), any());
+
+        int code = statusOf(() -> controller.register(body(
+                "name", "it-agent", "role", "EXECUTOR",
+                "modelType", "deepseek:deepseek-v4-pro",
+                "skills", List.of("web-search"))));
+
+        assertThat(code).isEqualTo(400);
+        // 回归点：校验前置于创建，因此任何 register 路径都不得被触达 ——
+        // 一旦触达，applyRegistrationExtras 抛错后就会留下
+        // access_type=CLI_CLIENT / model_type=NULL 的孤儿行（2026-10-10 修复）。
+        verify(agentService, never()).register(anyString(), any(), any());
+        verify(agentService, never()).registerOrGet(anyString(), any(), any());
     }
 
     @Test

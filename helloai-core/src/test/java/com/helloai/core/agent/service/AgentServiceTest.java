@@ -349,7 +349,9 @@ class AgentServiceTest {
                 "deepseek:deepseek-v4-flash", List.of("python", "shell")))
                 .isInstanceOf(BizException.class)
                 .hasMessageContaining("不支持技能")
-                .hasMessageContaining("python");
+                .hasMessageContaining("python")
+                // 错误码：可自纠入参 → 400，而非单参构造默认的 500（2026-10-10 修复）
+                .satisfies(ex -> assertThat(((BizException) ex).getCode()).isEqualTo(400));
     }
 
     @Test
