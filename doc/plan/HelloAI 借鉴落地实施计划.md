@@ -6,7 +6,7 @@
 > **用户裁定**：`D-2026-10-09-4`（见《差距表》§0「当前生效的取舍决策」）——四项能力优先级、备份/恢复与 RAG 入目标架构、沙箱生产形态、语义位与不可关闭清单同批。
 > **性质**：本计划只收**可执行结论**（借鉴落点 → 动作 → 验收 → 验证集 → 回填），不含调研过程（在 `research/`）与稳定设计（在 `design/`）。
 > **完成迁移**：执行完成后迁入 `doc/archive/implemented/` 并标 `Done`。
-> **最后更新：2026-10-09（v5）**——v1 勘误已并入正文；v2 新增 **11 处动作订正**（会导致回归失败或做不出来的部分）、**每组的验证集与文档回填**、**许可证口径**、**REF-6 载体修正**；v3 **Fork 相关条目全部取消**（`D-2026-10-09-5`，REF-2 收敛为「备份 / 恢复」）；**v4 两项重大调整**（`D-2026-10-09-6`）：① **REF-3 沙箱整组降级为「条件触发」**——当前**没有可隔离的执行对象**，不排期、只留预案（修正原「第 3 优先级」排序）；② **新增 `REF-7`「外部 Agent 工作详情快照」**（差距锚点 `G-020`）。原 §11 待拍板 5 条**已全部裁定**并移入 §12 裁定记录，**本计划当前无待拍板项**；**v5 = REF-1.1 / 1.2 / 1.3 / 1.3b 已完成**（2026-10-09），各组结果与未达成分项见各节 `Status` 行。
+> **最后更新：2026-10-10（v6）**——v1 勘误已并入正文；v2 新增 **11 处动作订正**（会导致回归失败或做不出来的部分）、**每组的验证集与文档回填**、**许可证口径**、**REF-6 载体修正**；v3 **Fork 相关条目全部取消**（`D-2026-10-09-5`，REF-2 收敛为「备份 / 恢复」）；**v4 两项重大调整**（`D-2026-10-09-6`）：① **REF-3 沙箱整组降级为「条件触发」**——当前**没有可隔离的执行对象**，不排期、只留预案（修正原「第 3 优先级」排序）；② **新增 `REF-7`「外部 Agent 工作详情快照」**（差距锚点 `G-020`）。原 §11 待拍板 5 条**已全部裁定**并移入 §12 裁定记录，**本计划当前无待拍板项**；**v5 = REF-1.1 / 1.2 / 1.3 / 1.3b 已完成**（2026-10-09），各组结果与未达成分项见各节 `Status` 行；**v6 = REF-1.4 / 1.5 / 1.6 次序与 REF-1.6 设计定稿**（`D-2026-10-10-1`，见该节）——次序定为 **`REF-1.6 → REF-1.5 → REF-1.4`**；同时落定十条：存储形态走受控存储（不触发 G-005 条件①）、技能正文存 PG、**不建新 ADR**、外部技能目录 **WONTFIX**、命名统一「**技能包**」+ 清单文件 `skill-package-manifest.md`、安装 / 卸载落 `skill_package_audit`、**版本策略**（多版本共存 / 高版本需确认 / 降版走独立接口）、**ACTIVE 选版 + 内容键 `{name}@{version}`**、**内置保护（同名一律拒绝安装）**、**存原始正文**。
 
 ---
 
@@ -70,11 +70,11 @@ REF-6 判据：随对应组落地，不单独排期
 
 ### REF-1.2 目录扫描替代 `KNOWN_SPECS`
 
-> **Status：✅ 已完成**（2026-10-09）。**未达成**：「新增技能**零发版**」——当前只达「零改 Java 代码」，零发版需外部技能目录（与 `REF-1.6` 同批）。
+> **Status：✅ 已完成**（2026-10-09）。**未达成项已改判（2026-10-10）**：原「零发版需外部技能目录」的**手段**已裁 WONTFIX（`D-2026-10-10-1④`）——「零发版」的**目标**改由 `REF-1.6` 安装入口直接满足，不再需要文件系统外部目录。
 
 | 项 | 动作 | 验收 |
 |---|---|---|
-| REF-1.2a | `KNOWN_SPECS` → 目录扫描（classpath `skills/plugins/` + 可选外部目录；后者为**新增配置项**，按 `CODE_STYLE §40/41` 落 `application.yml` + 属性类） | 新增一个 md 即出现在技能目录，零改码 |
+| REF-1.2a | `KNOWN_SPECS` → 目录扫描（classpath `skills/plugins/`；~~可选外部目录~~ —— **2026-10-10 裁 WONTFIX**，见 REF-1.6 节 `D-2026-10-10-1④`） | 新增一个 md 即出现在技能目录，零改码 |
 | REF-1.2b | 解析失败**显式报 corrupt 且仍出现在列表中**（不静默跳过） | 单测：坏文件在列表且带 `error` 字段 |
 | REF-1.2c | **新增技能目录查询 API**（当前技能侧 0 个 Controller——「出现在列表」缺宿主） | 列表接口可查、坏文件带 `error` |
 
@@ -99,33 +99,93 @@ REF-6 判据：随对应组落地，不单独排期
 
 ### REF-1.4 / 1.5 / 1.6 来源标记与摄入闭环
 
+> **执行次序（2026-10-10 定稿，`D-2026-10-10-1`）：`REF-1.6 → REF-1.5 → REF-1.4`**，取代 v1 的两段式（「REF-1.6 → REF-1.5」）：
+> ① **REF-1.6 先**：安装入口是**闸门与来源标记共同的宿主**，无它两者无处可挂。
+> ② **REF-1.5 紧随**：最简闸门**必须与 REF-1.6 同批**——否则等于上线一个无校验的对外摄入面，与仓库既有的「消除 fail-open」纪律相悖；本组落最简版，**完整攻击用例矩阵与阈值精化归 REF-1.5**。
+> ③ **REF-1.4 最后**：`origin` 的取值来源（`BUILTIN` / `INSTALLED`）与 `locked` 的下游改写检测，都依赖包模型与**摘要**先存在。
+> ④ **REF-1.4 的字段部分并入 REF-1.6 建表**（`origin` / `locked` 只是 `skill_package` 上的两列，零成本）；REF-1.4 只留「拷贝进 Agent 工作区时文本打戳」那半。
+
 | 项 | 动作 | 验收 |
 |---|---|---|
-| REF-1.4 | 技能来源标记 `origin` + `locked`，拷贝进 Agent 工作区时**文本打戳** | 单测：带标技能被下游改写时能被识别 |
-| REF-1.6 | **安装入口**：打包 zip → 过闸门 → 可解析且 `requiredTools` 一致 | 端到端：导出再导入可解析 |
-| REF-1.5 | **摄入安全闸门**（见下表数值） | 每类攻击各一个**必失败**用例 |
+| REF-1.6 | **安装入口 + 受控存储**：上传 zip → 过最简闸门 → 解析 → 落 PG（元数据 + 正文）+ MinIO（原始 zip 存档）→ 进技能目录；含卸载与审计 | 端到端：导出再导入可解析，且 `/api/skills/catalog` 可见 |
+| REF-1.5 | **摄入安全闸门（完整版）**：攻击用例矩阵 + 阈值精化 + 可读拒绝码（最简版随 REF-1.6 落地） | 每类攻击各一个**必失败**用例 |
+| REF-1.4 | 技能来源标记 `origin` + `locked` 的**下游打戳**（字段已随 REF-1.6 建表） | 单测：带标技能被下游改写时能被识别 |
 
-**闸门阈值（含 v1 订正）**：
+**REF-1.6 关键设计裁定（2026-10-10，`D-2026-10-10-1`）**
 
 ```text
-文件数 ≤ 2000              解压总量 ≤ 64MB              HTTP 下载 ≤ 32MB
+① 存储形态（决策 A）：技能包落「受控存储」（PG 元数据+正文 / MinIO 原始 zip），不走宿主文件系统
+   ⇒ G-005 触发条件①「平台增加碰宿主的工具（自持 shell / 文件写）」不成立，
+     REF-3 沙箱维持「条件触发，不排期」；但**不得**据此宣称「安全沙箱已完成」（协作规约 §22）。
+② 正文存 PG（D-a）：resolve() 在每轮装配热路径读技能正文（loadSpeedSummary），
+   若正文只在 MinIO，则「MinIO 故障 ⇒ 技能注入整链断」；落 PG 使热路径零外部 I/O。
+   MinIO 只存**原始上传 zip**（溯源 / 完整性 / 再分发）。
+③ 不建新 ADR：全仓仅 ADR-001（Run/Turn/Step 执行模型定稿），门槛 = 地基级模型定稿；
+   本项属既有 G-005 判定的**适用判定**，记《差距表》§0 决策区。
+   升级触发：出现「平台与宿主文件系统的边界」这类系统性议题时再升 ADR。
+④ 不造「外部技能目录」（WONTFIX）：原 REF-1.2a 的「可选外部目录」取消——
+   「零发版」的目标由安装入口直接满足；保留目录会与受控存储形成**两个事实源**，
+   且 Docker 部署需挂卷。按 §1 孤儿项回流，同批在《差距表》登记 WONTFIX。
+⑤ 命名（决策 B）：中文统一「技能包」，英文 Skill Package；清单文件 = `skill-package-manifest.md`（根，UTF-8）。
+   理由：代码族（SkillPackage / skills/plugins / /api/skills/* / skill:view / 前端常量）全是 skill，
+   文档侧改一个词的成本远低于改代码族；用 capability 会给同一事物再造第二个名字。
+   本项**取代** v1 的「能力包 = Capability Package」建议。
+⑥ 审计：安装 / 卸载显式落 `skill_package_audit`（操作人取自 Sa-Token），对齐凭证域
+   CredentialAuditLog 先例——「安装」是供应链入口，非普通管理端 CRUD。
+   ⚠️ 连带发现：MyBatisPlusMetaObjectHandler.getCurrentUser() 为硬编码桩（恒返 "system"），
+   全平台 create_by 不记操作人 —— 属平台级问题，**本组不改**，另行立项。
+⑦ 版本策略（2026-10-10 追加裁定）：唯一键 `(name, version)`，**多版本共存**（回滚需要历史行）。
+   安装命中「同名 + 版本更高」⇒ 不直接装，返 409 `{needsConfirm, currentVersion, incomingVersion}`，
+   带 `confirmUpgrade=true` 重发才覆盖；「同名 + 版本更低或相同」⇒ 拒绝。
+   回滚 / 降版**不复用安装入口**，走 `POST /api/skills/packages/{name}/activate`：
+   目标版本已在库 ⇒ 直接翻 ACTIVE（不重传包体）；不在库 ⇒ 须带包体（低版本覆盖）。权限复用 `skill:install`。
+   版本比较 = 三段式数字逐段按数值比较（对齐 verify-skill-packages.ps1 的「三段式数字」断言，不引入 pre-release）。
+⑧ 选版与内容键：同 name **至多一行 ACTIVE**（partial unique index `WHERE state='ACTIVE'` 保证）；
+   目录层只出 ACTIVE 行（**取代** `byName()` 的静默 `map.put` 覆盖，`:69`）；
+   内容键 = `{name}@{version}`（多版本共存后 `name` 不再唯一指向一份内容）。
+   内容读取抽 `SkillContentSource`（classpath 实现 + DB 实现），
+   `AgentSkillSpecServiceImpl.loadSpeedSummary` 不再硬编码 `ClassPathResource`（现 `:121`）。
+⑨ 内置保护：与内置 `eng-*` 同名**一律拒绝安装**（不论版本高低）——内置随发版走、不可替换，
+   否则发版基线与运行内容会分叉。
+⑩ PG 存**原始正文**（非预渲染速览）：保真、渲染器升级后存量包自动重算；
+   `resolve()` 每轮装配的渲染成本与现状同构（今天 classpath 亦是每轮读取）。
+```
+
+**DB / API / 组件（REF-1.6）**
+
+| 面 | 内容 |
+|---|---|
+| 迁移 | **V104**：`skill_package`（元数据 + `body` 原始正文 + `origin` / `locked` + `checksum_sha256` + `origin_zip_url` + `state`(ACTIVE / HISTORICAL / DISABLED)；唯一 `(name, version)` + **partial unique `(name) WHERE state='ACTIVE'`**）+ `skill_package_audit` + 播种 `skill:install` / `skill:uninstall`（按 `V103` 体例） |
+| API | `POST /api/skills/packages`（`skill:install`；命中「同名 + 更高版本」返 409 + `confirmUpgrade=true` 重发）· `POST /api/skills/packages/{name}/activate`（`skill:install`；回滚 / 降版）· `GET /api/skills/packages`（`skill:view`）· `DELETE /api/skills/packages/{id}`（`skill:uninstall`）；既有 `GET /api/skills/catalog` **改为合并双源**（classpath 内置 + 已安装，只出 ACTIVE） |
+| 存储接线 | `ArtifactStorage` **加重载** `store(ownerName, fileName, content)`——现有签名带 `taskId` / `subTaskId`，技能包没有 |
+| 目录 | `SkillPackageCatalog` 双源合并（classpath + DB），**按 ACTIVE 行选版**；`SkillPackageScanner` 只管内置源（不动）；`refresh()` 保持为安装后的失效钩子；新增 `SkillContentSource`（classpath + DB 两实现）供正文读取 |
+| 分层 | Controller 只收 / 校验 / 转（§10）；闸门 + 解析 + 落库 + 审计收在一个 `@Transactional` Service（§8.2 / §14.1） |
+| MQ | 无（不触任何载荷契约） |
+| 回滚 | Flyway 无 down ⇒ ① `git revert` ② `UPDATE skill_package SET state='DISABLED'` 停用已装包 ③ 表与 MinIO 工件保留（不删，保审计与溯源） |
+
+**闸门阈值（含 v1 订正 + 2026-10-10 改名）**：
+
+```text
+文件数 ≤ 2000              解压总量 ≤ 64MB              上传体 ≤ 32MB
 压缩比 > 100 拒 —— 但【仅对 > 1MiB 的文件判定】（小文件高压缩比属正常，照抄会误伤）
 路径含 ".." / 绝对路径 / 反斜杠 / 盘符前缀 拒
 symlink 拒（目录与文件）        非普通文件拒        加密 zip 拒（加密位）
-清单必须含根 SKILL.md（且 UTF-8 可解码）
+清单必须含根 skill-package-manifest.md（且 UTF-8 可解码）
 ```
 
-> ⚠️ **v1 订正（两点）**：
+> ⚠️ **v1 订正（保留供追溯）**：
 > ① 压缩比阈值**不可无条件套用**（上游对小文件豁免）。
-> ② **顺序应调整为 REF-1.6 → REF-1.5**：现在没有任何摄入入口，闸门**没有落点宿主**；先有安装入口，再挂闸门。
+> ② ~~顺序应调整为 REF-1.6 → REF-1.5~~ —— **已由 2026-10-10 的「REF-1.6 → REF-1.5 → REF-1.4」取代**（见本节开头）。
 >
-> ⚠️ **术语红线**：`AdminAgentController.getMySkillZipByAgentId`（`:378`）是**外部 Agent 角色接入手册 ZIP**（交付物内名 `SKILL.md`），与 `skills/plugins/*.md` 能力包**是两件事**——《文档体系分类与治理规则》§3.7 **禁止混用 SKILL 一词**。REF-1.6 的导出/安装必须使用**不同 API 路径与不同术语**（建议：能力包 = Capability Package / `skills`，接入手册 = Onboarding Guide）。
+> ⚠️ **术语红线**：`AdminAgentController.getMySkillZipByAgentId`（`:378`）是**外部 Agent 角色接入手册 ZIP**（交付物内名 `SKILL.md`），与 `skills/plugins/*.md` **技能包**是两件事——《文档体系分类与治理规则》§3.7 **禁止混用 SKILL 一词**（活文档四处登记：治理规则 `:160`、`doc/README:53-54`、本节、`SkillPackageResponse.java:18-20`）。REF-1.6 的安装 / 卸载必须使用**不同 API 路径与不同术语**；本组按 `D-2026-10-10-1⑤` 定名——**技能包 = Skill Package / `skills`**，接入手册 = Onboarding Guide。（v1 建议的「能力包 = Capability Package」已按同一裁定退役。）
+>
+> ⚠️ **许可证**：闸门借鉴 Octop（MIT）zip 安全清单 ⇒ 源文件头须标「来源项目 + 许可 + 是否改动」（口径见本文件 §「许可证口径」）。
 
 **REF-1 验证集**
 
 ```text
-Required   ：verify-skill-packages.ps1（重写后）、verify-agent-skill-capability.ps1、新增覆盖用例（坏文件/闸门各一）
-Regression ：verify-tool-matrix.ps1、verify-a2-skill-derive.ps1、verify-a3b-agent-edit-skills.ps1、verify-planner-decompose.ps1
+Required   ：verify-skill-packages.ps1（**须扩展为双源**：现仅扫 classpath 内置 4 个）、verify-agent-skill-capability.ps1、新增 verify-skill-package-install.ps1（导出 → 安装 → catalog 可见 → 卸载）、闸门攻击用例（完整矩阵由 REF-1.5 补全）
+Regression ：verify-tool-matrix.ps1（`requiredTools` 联动）、verify-a2-skill-derive.ps1、verify-a3b-agent-edit-skills.ps1、verify-planner-decompose.ps1
 Diagnosis  ：.tmp/diag-skill-scan.*（仅诊断，不得作为正式验证）
 门禁       ：bash scripts/ci/ci-gate.sh
 ```
