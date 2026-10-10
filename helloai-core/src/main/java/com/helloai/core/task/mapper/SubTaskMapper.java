@@ -91,6 +91,19 @@ public interface SubTaskMapper extends BaseMapper<SubTask> {
     int countInFlightByAgent(@Param("agentId") Long agentId);
 
     /**
+     * 统计**全平台**在飞子任务数（同 {@link #countInFlightByAgent} 的三状态口径，不带 Agent 条件）。
+     *
+     * <p>供 REF-2.3b 的「在线恢复拒」判定平台是否静默 —— 恢复要求停机，
+     * 而停机是人的约定、不是机器事实，须由本域回答"此刻还有没有在飞任务"。</p>
+     *
+     * <p>口径**刻意与并发额度占用一致**（ASSIGNED / IN_PROGRESS / REWORK）：用宽口径
+     * （如"未完成任务总数"）会让恢复在正常运行时也被拒，把守卫变成噪声。</p>
+     *
+     * @return 在飞任务数（&gt;= 0）
+     */
+    int countInFlightAll();
+
+    /**
      * 查询 ASSIGNED 超时未 claim 的子任务（按 update_time 升序，limit 上限）。
      *
      * <p>只查 status=ASSIGNED 且 update_time 早于 deadline 的记录。

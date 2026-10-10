@@ -2,6 +2,7 @@ package com.helloai.core.agent.skill;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.helloai.common.base.BizException;
+import com.helloai.common.constant.SkillPackageState;
 import com.helloai.core.agent.entity.InstalledSkillPackage;
 import com.helloai.core.agent.mapper.InstalledSkillPackageMapper;
 import com.helloai.core.agent.skill.SkillPackageAuditService.Operator;
@@ -147,7 +148,7 @@ public class SkillPackageInstallService {
         if (row == null) {
             throw new BizException(404, "[NOT_FOUND] 技能包不存在: " + id);
         }
-        row.setState(InstalledSkillPackage.STATE_DISABLED);
+        row.setState(SkillPackageState.DISABLED);
         packageMapper.updateById(row);
         refreshCatalogAfterCommit();
         auditService.record(operator, row.getId(), row.getName(), row.getVersion(),
@@ -233,10 +234,10 @@ public class SkillPackageInstallService {
 
         // 先把现有 ACTIVE 让位（partial unique index 要求同 name 至多一行 ACTIVE）
         if (currentActive != null && !currentActive.getId().equals(row.getId())) {
-            currentActive.setState(InstalledSkillPackage.STATE_HISTORICAL);
+            currentActive.setState(SkillPackageState.HISTORICAL);
             packageMapper.updateById(currentActive);
         }
-        row.setState(InstalledSkillPackage.STATE_ACTIVE);
+        row.setState(SkillPackageState.ACTIVE);
         if (created) {
             packageMapper.insert(row);
         } else {
@@ -250,10 +251,10 @@ public class SkillPackageInstallService {
     private void flipActive(String name, InstalledSkillPackage target) {
         InstalledSkillPackage active = findActive(name);
         if (active != null && !active.getId().equals(target.getId())) {
-            active.setState(InstalledSkillPackage.STATE_HISTORICAL);
+            active.setState(SkillPackageState.HISTORICAL);
             packageMapper.updateById(active);
         }
-        target.setState(InstalledSkillPackage.STATE_ACTIVE);
+        target.setState(SkillPackageState.ACTIVE);
         packageMapper.updateById(target);
         refreshCatalogAfterCommit();
     }
@@ -261,7 +262,7 @@ public class SkillPackageInstallService {
     private InstalledSkillPackage findActive(String name) {
         return packageMapper.selectOne(new LambdaQueryWrapper<InstalledSkillPackage>()
                 .eq(InstalledSkillPackage::getName, name)
-                .eq(InstalledSkillPackage::getState, InstalledSkillPackage.STATE_ACTIVE));
+                .eq(InstalledSkillPackage::getState, SkillPackageState.ACTIVE));
     }
 
     private InstalledSkillPackage findByNameVersion(String name, String version) {

@@ -13,7 +13,7 @@ spring:
     exclude: org.springframework.ai.model.deepseek.autoconfigure.DeepSeekChatAutoConfiguration
   # === 默认激活 dev 环境（云服务器联调），本地 Docker 开发切换 local 使用 spring.profiles.active=local ===
   profiles:
-    active: dev
+    active: local
   # === 时区锁定：与 HelloAIApplication.main() 的 TimeZone.setDefault 一致 ===
   # Date / LocalDateTime 等不带时区偏移的类型也按北京时间序列化，避免 UTC 少 8 小时
   jackson:
@@ -326,6 +326,33 @@ helloai:
     orphan-min-age-hours: ${STORAGE_ORPHAN_MIN_AGE_HOURS:24}
     # 单轮最多删除的孤儿对象数，防止误判导致批量损伤
     orphan-max-deletes-per-round: ${STORAGE_ORPHAN_MAX_DELETES:200}
+  # === 平台备份 / 恢复（REF-2，D-2026-10-10-2）===
+  # 备份 = pg_dump 全库 + 对象存储对象清单；产物落**独立桶**（下列 bucket）。
+  # ⚠️ 该桶**不得**与 helloai.storage.minio-bucket 相同 —— 那个桶参与对账巡检
+  #    （ArtifactStorageReconcileServiceImpl 以 listObjects(bucket, null) 枚举整桶，
+  #     凡无 DB 记录者即孤儿候选），备份对象在其中会被 orphan-cleanup 当孤儿删掉。
+  backup:
+    enabled: ${BACKUP_ENABLED:true}
+    bucket: ${BACKUP_BUCKET:helloai-backups}
+    # pg_dump / pg_restore 可执行路径；留空 ⇒ 按 PATH 查找。
+    # 本地开发（IDEA 直跑）由 application-local.yml 指向 .tools/pgsql/bin；
+    # 服务器 Docker 一键部署由镜像内 postgresql-client 提供，保持留空即可。
+    pg-dump-path: ${BACKUP_PG_DUMP_PATH:}
+    pg-restore-path: ${BACKUP_PG_RESTORE_PATH:}
+    # PG 连接：**全留空 ⇒ 自动从 spring.datasource.url 派生**（防两处漂移）。
+    # 需覆盖时逐项填；password 只经进程 env（PGPASSWORD）传递，不进命令行。
+    host: ${BACKUP_PG_HOST:}
+    port: ${BACKUP_PG_PORT:}
+    database: ${BACKUP_PG_DATABASE:}
+    username: ${BACKUP_PG_USERNAME:}
+    password: ${BACKUP_PG_PASSWORD:}
+    # 定时自动备份：默认关 —— 开启前须确认宿主/镜像侧已具备 pg_dump（前置检查会显式报不可用）。
+    auto-enabled: ${BACKUP_AUTO_ENABLED:false}
+    auto-interval-ms: ${BACKUP_AUTO_INTERVAL_MS:21600000}
+    # 仅对 AUTO 按份数淘汰；MANUAL 永不淘汰（D-2026-10-10-2⑤）。
+    auto-retention-count: ${BACKUP_AUTO_RETENTION_COUNT:7}
+    command-timeout-seconds: ${BACKUP_COMMAND_TIMEOUT_SECONDS:1800}
+    key-prefix: ${BACKUP_KEY_PREFIX:backups}
   alert:
     # 钉钉机器人 Webhook（v2.4 §4.8）。留空则不发送
     dingtalk-webhook-url: ""

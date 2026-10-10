@@ -389,6 +389,16 @@ public interface SubTaskService extends IService<SubTask> {
     int countInFlightByAgent(Long agentId);
 
     /**
+     * 统计**全平台**在飞子任务数（同 {@link #countInFlightByAgent} 的三状态口径，不带 Agent 条件）。
+     *
+     * <p>供 {@code RestoreQuiescencePort}（REF-2.3b「在线恢复拒」）判定平台是否静默。
+     * 口径刻意与并发额度占用一致：宽口径会让恢复在正常运行时被误拒。</p>
+     *
+     * @return 在飞子任务数（&gt;= 0）
+     */
+    int countInFlightAll();
+
+    /**
      * 原子认领子任务（并发安全：DB 条件更新 WHERE status='PENDING' 且 assigned 为空或本人）。
      *
      * <p>原实现位于 agent 域 McpToolServiceImpl（直捅 SubTaskMapper.claimAtomic），

@@ -1316,6 +1316,11 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
     }
 
     @Override
+    public int countInFlightAll() {
+        return baseMapper.countInFlightAll();
+    }
+
+    @Override
     @Transactional(rollbackFor = Exception.class)
     public int physicalDeleteByTaskId(Long taskId) {
         // ServiceImpl<SubTaskMapper, SubTask>：baseMapper 即 SubTaskMapper（同域直捅合规）

@@ -38,3 +38,14 @@ helloai:
     # 本地 docker-compose 中间件的默认 MinIO 账号（与 docker-compose.yml 一致，非机密）
     minio-access-key: ${MINIO_ACCESS_KEY:minioadmin}
     minio-secret-key: ${MINIO_SECRET_KEY:minioadmin123}
+  backup:
+    # 本地开发（IDEA 直跑，应用不在容器内）需要**宿主侧**的 pg_dump / pg_restore：
+    # 用 PG 官方 zip 版二进制（免安装、不注册服务）解压到仓库内 .tools/pgsql（已 gitignore），
+    # 与 JDK / Maven 同类的「本地源码开发」前置。服务器 Docker 一键部署由镜像内的
+    # postgresql-client 提供，**不依赖本目录**（保持 application.yml 的留空即可）。
+    #
+    # 路径写**仓库根相对**；PgDumpRunner 对相对路径会**自工作目录向上找**，
+    # 故 IDEA 默认工作目录为模块目录（helloai-start/）时同样能命中——
+    # 与 scripts/powershell/*.ps1 从 $PSScriptRoot 上溯的做法同源。
+    pg-dump-path: ${BACKUP_PG_DUMP_PATH:.tools/pgsql/bin/pg_dump.exe}
+    pg-restore-path: ${BACKUP_PG_RESTORE_PATH:.tools/pgsql/bin/pg_restore.exe}

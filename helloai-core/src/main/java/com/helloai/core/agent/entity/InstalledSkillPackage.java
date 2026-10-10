@@ -3,6 +3,7 @@ package com.helloai.core.agent.entity;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.helloai.common.base.BaseEntity;
+import com.helloai.common.constant.SkillPackageState;
 import com.helloai.core.shared.handler.PgJsonbTypeHandler;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -28,15 +29,6 @@ import java.util.Map;
 @EqualsAndHashCode(callSuper = true)
 @TableName(value = "skill_package", autoResultMap = true)
 public class InstalledSkillPackage extends BaseEntity {
-
-    /** 状态：当前生效。同 name 至多一行（DB partial unique index 保证）。 */
-    public static final String STATE_ACTIVE = "ACTIVE";
-
-    /** 状态：历史版本。保留供回滚（{@code activate} 把它翻回 ACTIVE）。 */
-    public static final String STATE_HISTORICAL = "HISTORICAL";
-
-    /** 状态：已停用。目录不读，也不再被回滚命中。 */
-    public static final String STATE_DISABLED = "DISABLED";
 
     /** 技能标签（= frontmatter 的 name），也是 required_skills 命中的键。 */
     private String name;
@@ -85,8 +77,13 @@ public class InstalledSkillPackage extends BaseEntity {
     /** REF-1.4 来源锁定标记：{@code 1}=禁止下游改写（打戳能力见 REF-1.4）。 */
     private Integer locked;
 
-    /** 状态：{@code ACTIVE}（当前生效，同 name 唯一）/ {@code HISTORICAL}（可回滚）/ {@code DISABLED}。 */
-    private String state;
+    /**
+     * 状态（**枚举**，CODE_STYLE §12.2「状态用枚举」/ §64 Checklist）。
+     *
+     * <p>持久化为 {@code name()}（MyBatis 默认 {@code EnumTypeHandler}），与 V104 的
+     * {@code CHECK (state IN ('ACTIVE','HISTORICAL','DISABLED'))} 逐字对齐。</p>
+     */
+    private SkillPackageState state;
 
     /** 原始上传 zip 的 SHA-256（完整性 / 溯源）。 */
     private String checksumSha256;

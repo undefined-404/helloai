@@ -134,7 +134,8 @@ public class SkillPackageController {
         r.setName(row.getName());
         r.setVersion(row.getVersion());
         r.setDescription(row.getDescription());
-        r.setState(row.getState());
+        // DTO 侧保持字符串契约（对外稳定），实体侧是枚举（§12.2）—— 边界处显式转换
+        r.setState(row.getState() == null ? null : row.getState().name());
         r.setRequiredTools(row.getRequiredTools());
         r.setChecksumSha256(row.getChecksumSha256());
         r.setOriginZipUrl(row.getOriginZipUrl());

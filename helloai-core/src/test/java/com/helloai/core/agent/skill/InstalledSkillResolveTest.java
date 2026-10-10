@@ -1,5 +1,6 @@
 package com.helloai.core.agent.skill;
 
+import com.helloai.common.constant.SkillPackageState;
 import com.helloai.core.agent.entity.InstalledSkillPackage;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -99,7 +100,7 @@ class InstalledSkillResolveTest {
         row.setName(INSTALLED_NAME);
         row.setVersion("1.0.0");
         row.setDescription("已安装演示技能包");
-        row.setState(InstalledSkillPackage.STATE_ACTIVE);
+        row.setState(SkillPackageState.ACTIVE);
         row.setBody(readClasspath(BUILTIN_NAME + ".md"));
         return row;
     }

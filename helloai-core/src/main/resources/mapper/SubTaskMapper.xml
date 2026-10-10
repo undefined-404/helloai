@@ -165,6 +165,17 @@
     </select>
 
     <!--
+        全平台在飞子任务数（REF-2.3b 在线恢复拒的判据）。
+        与 countInFlightByAgent 同口径（三状态 + deleted=0），只是去掉 Agent 条件——
+        口径必须与并发额度占用一致，否则恢复会在正常运行时被误拒。
+    -->
+    <select id="countInFlightAll" resultType="int">
+        SELECT COUNT(*) FROM sub_task
+        WHERE status IN ('ASSIGNED', 'IN_PROGRESS', 'REWORK')
+          AND deleted = 0
+    </select>
+
+    <!--
         ASSIGNED 超时巡检：查询 status=ASSIGNED 且 update_time 早于 deadline 的记录。
         用于 AssignedSubTaskTimeoutTask 回收长时间无人 claim 的子任务。
         按 update_time 升序（最早超时的优先处理），limit 防止单轮扫描过多。

@@ -1,6 +1,7 @@
 package com.helloai.core.agent.skill;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.helloai.common.constant.SkillPackageState;
 import com.helloai.core.agent.entity.InstalledSkillPackage;
 import com.helloai.core.agent.mapper.InstalledSkillPackageMapper;
 import lombok.RequiredArgsConstructor;
@@ -27,7 +28,7 @@ public class DbInstalledSkillPackageSource implements InstalledSkillPackageSourc
     public List<InstalledSkillPackage> activePackages() {
         List<InstalledSkillPackage> rows = mapper.selectList(
                 new LambdaQueryWrapper<InstalledSkillPackage>()
-                        .eq(InstalledSkillPackage::getState, InstalledSkillPackage.STATE_ACTIVE)
+                        .eq(InstalledSkillPackage::getState, SkillPackageState.ACTIVE)
                         .orderByAsc(InstalledSkillPackage::getName));
         return rows == null ? List.of() : rows;
     }
