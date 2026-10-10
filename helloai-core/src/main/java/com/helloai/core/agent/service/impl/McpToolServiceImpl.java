@@ -94,15 +94,10 @@ public class McpToolServiceImpl implements McpToolService {
     /** P1 认领准入闸门可观测：认领被拒落 task_timeline（{@code sub_task_claim_rejected}，write-only 降级）。 */
     private final TaskTimelinePort taskTimelinePort;
 
-    /**
-     * 依赖产出单条内容截断上限（与 SubTaskExecutionService.DEP_CONTENT_MAX_CHARS 对齐，避免两处口径漂移）。
-     *
-     * <p>2026-10-03 上调：4000 → 64000。所有 LLM 走官方 api-key（DeepSeek 64K~1M 上下文），
-     * 4000 对 64K 上下文是自我阉割——外部 agent 通过 getDepsSummary 读不到前置关键产出、
-     * 诱发幻觉，属纯沉默成本。与执行链侧 {@code AgentRuntimeContextAssembler.DEP_CONTENT_MAX_CHARS}
-     * 及核验/报告侧口径对齐，统一为「正常产出全量注入 + 极端超长兜底截断」。</p>
-     */
-    private static final int DEP_CONTENT_MAX_CHARS = 64000;
+    // 依赖产出单条内容截断上限：**口径单源**，见 UpstreamAttachmentRenderer.DEP_CONTENT_MAX_CHARS
+    //（该类是两个消费方共用的预算算法宿主）。
+    // REF-5.2a（2026-10-10）：此前本类与 AgentRuntimeContextAssembler 各写一份 64000；本处旧注释还指向
+    // **已删除的类** SubTaskExecutionService（属文档与代码不符）—— 现统一引用单源，陈旧指认一并清除。
 
     /** 通知/评语摘要截断上限（收件箱 summary、review 摘要等）。 */
     private static final int SUMMARY_MAX_CHARS = 200;
@@ -878,7 +873,7 @@ public class McpToolServiceImpl implements McpToolService {
      * <p>执行链在 executeOnce 时已把依赖产出注入 Prompt（buildDependencySection），
      * 但外部 Agent 开工前无法主动查看——本工具提供接口层能力，数据口径与执行链同源：
      * 执行记录摘要（TaskRunningSpec）优先 + 内容本体（物化附件 local:// 平台直读，回退
-     * {@code context.lastExecution.output}），单条超 {@link #DEP_CONTENT_MAX_CHARS} 字符截断并打标；
+     * {@code context.lastExecution.output}），单条超 {@link UpstreamAttachmentRenderer#DEP_CONTENT_MAX_CHARS} 字符截断并打标；
      * 任何异常降级为 degraded（deps 为空，不阻断调用），与执行链降级哲学一致。</p>
      */
     public GetDepsSummaryResult getDepsSummary(Long agentId, Long subTaskId) {
@@ -941,7 +936,7 @@ public class McpToolServiceImpl implements McpToolService {
                     // P-1 防御：行边界回退截断 + 结构化 [TRUNCATED] 标注行（与核验侧同口径，
                     // 消费方可机读「哪些内容不可见」），替代原硬切 substring(0, 4000)
                     int originalChars = content.length();
-                    String render = TextTruncator.truncateAtLineBoundary(content, DEP_CONTENT_MAX_CHARS);
+                    String render = TextTruncator.truncateAtLineBoundary(content, UpstreamAttachmentRenderer.DEP_CONTENT_MAX_CHARS);
                     if (render.length() < originalChars) {
                         render = render + "\n[TRUNCATED] shown=" + render.length()
                                 + " total=" + originalChars + " reason=dep_content_limit";
@@ -1015,14 +1010,14 @@ public class McpToolServiceImpl implements McpToolService {
                         String fileName = attachment.fileName() != null && !attachment.fileName().isBlank()
                                 ? attachment.fileName() : "attachment-" + attachment.id();
                         loaded.add(new UpstreamAttachmentRenderer.LoadedAttachment(
-                                fileName, new String(bytes, StandardCharsets.UTF_8)));
+                                fileName, new String(bytes, StandardCharsets.UTF_8), attachment.id()));
                     } catch (Exception singleEx) {
                         log.warn("读取单个前置附件失败，跳过该附件: subTaskId={}, attachmentId={}, err={}",
                                 dep.id(), attachment.id(), singleEx.getMessage());
                     }
                 }
                 if (!loaded.isEmpty()) {
-                    return UpstreamAttachmentRenderer.render(loaded, DEP_CONTENT_MAX_CHARS);
+                    return UpstreamAttachmentRenderer.render(loaded, UpstreamAttachmentRenderer.DEP_CONTENT_MAX_CHARS);
                 }
             }
         } catch (Exception e) {

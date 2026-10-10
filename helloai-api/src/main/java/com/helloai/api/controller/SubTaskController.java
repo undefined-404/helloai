@@ -28,6 +28,7 @@ import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.agent.service.ExecutionCommandService;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
+import com.helloai.core.task.service.SubTaskViewGuard;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -60,6 +61,8 @@ public class SubTaskController {
     private final AgentDispatchProperties agentDispatchProperties;
     private final TaskTimelineService taskTimelineService;
     private final ConversationService conversationService;
+    /** 子任务视图读权限收口（2026-10-10 统一判据：根任务 Task-Team 成员，与附件读侧同源）。 */
+    private final SubTaskViewGuard subTaskViewGuard;
 
     @SaCheckPermission("subtask:add")
     @PostMapping
@@ -144,14 +147,17 @@ public class SubTaskController {
      * 按 §10 红线不加 {@code @SaCheckPermission}。</p>
      */
     private void assertSubTaskReadableByAgent(Long subTaskId, String authType, Long agentId) {
-        if (!"agent".equals(authType) || agentId == null) {
+        if (!isAgentChannel(authType, agentId)) {
             return; // 平台账号 / 无主体：由管理侧鉴权覆盖
         }
-        SubTask subTask = subTaskService.getById(subTaskId);
-        if (subTask == null || subTask.getAssignedAgentId() == null
-                || !agentId.equals(subTask.getAssignedAgentId())) {
-            throw new BizException(403, "无权访问该子任务（非其执行者）");
-        }
+        // 2026-10-10 统一：判据改为「根任务 Task-Team 成员」（与附件读侧同一条，见 SubTaskViewGuard）。
+        // 此前只认 assigned_agent_id —— 实测把合法团队成员也拒了（加入 team 后读附件 200、读时间线仍 403）。
+        subTaskViewGuard.assertAgentCanView(subTaskId, agentId);
+    }
+
+    /** 是否 Agent 通道请求（判定基准为 {@code _authType}；与 AttachmentController 同口径）。 */
+    private static boolean isAgentChannel(String authType, Long agentId) {
+        return "agent".equals(authType) && agentId != null;
     }
 
     /** 从 CreateSubTaskRequest 装配 SubTask 实体（Controller 唯一装配点）。 */
@@ -231,7 +237,12 @@ public class SubTaskController {
     }
 
     @GetMapping("/getById/{id}")
-    public R<SubTaskResponse> getById(@PathVariable("id") Long id) {
+    public R<SubTaskResponse> getById(@PathVariable("id") Long id,
+                                      @RequestAttribute(value = "_authType", required = false) String authType,
+                                      @RequestAttribute(value = "_authId", required = false) Long agentId) {
+        // 2026-10-10：补主体校验 —— 此前**无任何校验**，任何有效 Agent API Key 都能读任意子任务详情
+        // （实测 200；与附件侧修过的 G-014 T04b「凭 attachmentId 读任意附件」同形状）。
+        assertSubTaskReadableByAgent(id, authType, agentId);
         SubTask subTask = subTaskService.getById(id);
         if (subTask == null) return R.fail("子任务不存在");
         SubTaskResponse response = toResponse(subTask);

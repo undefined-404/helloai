@@ -185,7 +185,7 @@ function Bind-TargetVault([string]$AdminToken, [string]$AgentId) {
 }
 
 function Get-SubTask([string]$SubTaskId, [string]$AdminToken) {
-    $resp = Invoke-Json -Method "Get" -Url ($BaseUrl + "/api/sub-tasks/" + $SubTaskId) -Body $null -Headers @{
+    $resp = Invoke-Json -Method "Get" -Url ($BaseUrl + "/api/sub-tasks/getById/" + $SubTaskId) -Body $null -Headers @{
         "X-Admin-Token" = $AdminToken
     }
     Assert-True ($resp.code -eq 200) ("get subTask code=" + $resp.code + " msg=" + $resp.msg)
@@ -248,6 +248,23 @@ function Write-SqlSnapshot([string]$Path, [string]$ScenarioValue, [string]$TaskI
         "ORDER BY id DESC LIMIT 30;"
     )
     Set-Content -Path $Path -Value $lines -Encoding UTF8
+}
+
+# 子任务时间线 id 快照（改派前后对比用）。
+# 判据来源：REF-2「Return 部分」建议的断言「改派时 task_timeline 保留」——
+# 改派走的是同一条 sub_task 行（不新建行），故改派前已落的时间线条目必须全部还在。
+# `return ,$ids` 强制数组返回：PowerShell 会把单元素数组拆包成标量，拆包后
+# `-notcontains` / `-join` 的语义会随条目数变化（1 条与 N 条行为不同）。
+function Get-TimelineIds([string]$SubTaskIdValue, [string]$AdminToken) {
+    $resp = Invoke-Json -Method "Get" -Url ($BaseUrl + "/api/sub-tasks/listTimelineBySubTaskId/" + $SubTaskIdValue) -Body $null -Headers @{
+        "X-Admin-Token" = $AdminToken
+    }
+    Assert-True ($resp.code -eq 200) ("listTimelineBySubTaskId code=" + $resp.code + " msg=" + $resp.msg)
+    $ids = @()
+    if ($resp.data -ne $null) {
+        foreach ($e in $resp.data) { $ids += ([string]$e.id) }
+    }
+    return ,$ids
 }
 
 Write-Host "STEP1: admin login"
@@ -321,15 +338,19 @@ $errorText = $null
 try {
     if ($Scenario -eq "blocked") {
         Write-Host "STEP6: block subTask"
-        $blockResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/sub-tasks/block/" + $subTaskId) -Body @{} -Headers @{
+        $blockResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/sub-tasks/blockById/" + $subTaskId) -Body @{} -Headers @{
             "X-Admin-Token" = $adminToken
         }
         Assert-True ($blockResp.code -eq 200) ("block code=" + $blockResp.code + " msg=" + $blockResp.msg)
         $blockedDetail = Get-SubTask -SubTaskId $subTaskId -AdminToken $adminToken
         Assert-True ($blockedDetail.status -eq "BLOCKED") ("expected BLOCKED, actual=" + $blockedDetail.status)
 
+        # 改派前的时间线快照（判据：改派不新建 sub_task 行 ⇒ 这些条目改派后必须仍在）
+        $timelineBefore = Get-TimelineIds -SubTaskIdValue $subTaskId -AdminToken $adminToken
+        Write-Host ("timelineBefore=" + $timelineBefore.Count)
+
         Write-Host "STEP7: reassign blocked subTask to target API agent"
-        $reassignResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/sub-tasks/reassign/" + $subTaskId) -Body @{
+        $reassignResp = Invoke-Json -Method "Post" -Url ($BaseUrl + "/api/sub-tasks/reassignById/" + $subTaskId) -Body @{
             agentId = [long]$targetAgentId
         } -Headers @{
             "X-Admin-Token" = $adminToken
@@ -343,6 +364,10 @@ try {
         $sseFile = Join-Path "E:\yhzx\1027\helloai" ("sse-redispatch-offline-" + $ts + ".txt")
         Heartbeat-SourceAgent -SourceAgentId $sourceAgentId -SourceAgentApiKey $sourceAgentApiKey -AdminToken $adminToken -SseFile $sseFile
 
+        # 改派前的时间线快照（离线重派由巡检在等待期内异步触发，故在等待前取样）
+        $timelineBefore = Get-TimelineIds -SubTaskIdValue $subTaskId -AdminToken $adminToken
+        Write-Host ("timelineBefore=" + $timelineBefore.Count)
+
         Write-Host "STEP8: wait for offline reconcile and auto execution"
         $finalDetail = Wait-SubTaskReview -SubTaskId $subTaskId -AdminToken $adminToken -TimeoutSec $OfflineTimeoutSec
         Assert-True ($finalDetail.assignedAgent.ToString() -ne $sourceAgentId) ("subTask still assigned to source agent: " + $sourceAgentId)
@@ -350,6 +375,17 @@ try {
     }
 
     Assert-True (($finalDetail.status -eq "REVIEW") -or ($finalDetail.status -eq "DONE")) ("expected REVIEW/DONE, actual=" + $finalDetail.status)
+
+    # 改派后：时间线必须仍非空，且改派前的每一条都还在（改派不丢历史 timeline）
+    $timelineAfter = Get-TimelineIds -SubTaskIdValue $subTaskId -AdminToken $adminToken
+    Assert-True ($timelineAfter.Count -gt 0) ("task_timeline is empty after reassign (subTask=" + $subTaskId + ")")
+    $lost = @()
+    foreach ($tid in $timelineBefore) {
+        if ($timelineAfter -notcontains $tid) { $lost += $tid }
+    }
+    Write-Host ("timelineAfter=" + $timelineAfter.Count + " retained=" + ($timelineBefore.Count - $lost.Count) + "/" + $timelineBefore.Count)
+    Assert-True ($lost.Count -eq 0) ("task_timeline lost entries across reassign: " + ($lost -join ","))
+
     $ok = $true
 } catch {
     $errorText = $_.ToString()

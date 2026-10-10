@@ -32,6 +32,10 @@
         <lombok.version>1.18.32</lombok.version>
         <resilience4j.version>2.2.0</resilience4j.version>
         <minio.version>8.5.12</minio.version>
+        <!-- OkHttp：出站 SSRF 守卫（REF-5.4）用自定义 Dns 做地址 pinning。
+             它原是本仓传递依赖（MinIO SDK 8.5.12 → okhttp 4.12.0），按 D-2026-10-09-6③-2
+             「传递依赖落地必须在 pom.xml 显式声明，不裸用」在此定版（与 commons-compress 同规矩）。 -->
+        <okhttp.version>4.12.0</okhttp.version>
         <!-- Apache Commons Compress：技能包 zip 摄入闸门（REF-1.5）。
              JDK 的 java.util.zip.ZipEntry **不暴露** unix mode（external attributes 在中央目录里）
              与加密位，查不了 symlink / 加密条目；commons-compress 两者都给。
@@ -198,6 +202,12 @@
                 <groupId>org.apache.commons</groupId>
                 <artifactId>commons-compress</artifactId>
                 <version>${commons-compress.version}</version>
+            </dependency>
+            <!-- OkHttp：出站 SSRF 守卫（REF-5.4，WebPageFetchServiceImpl 改用它 + 自定义 Dns） -->
+            <dependency>
+                <groupId>com.squareup.okhttp3</groupId>
+                <artifactId>okhttp</artifactId>
+                <version>${okhttp.version}</version>
             </dependency>
             <!-- Redisson 分布式锁（v1.2 §阶段1：SubTaskReview 锁迁 RLock；4.0.0 starter 默认带 spring-data-40 适配器，
                  Boot 3.4 需显式用 redisson-spring-data-34 并排除 40） -->

@@ -234,4 +234,57 @@ class AttachmentVisibilityPolicyTest {
         attachment.setUploaderAgentId(uploaderAgentId);
         return attachment;
     }
+
+    // ==================== 子任务视图读（canReadTaskScoped，2026-10-10 统一） ====================
+
+    @Test
+    @DisplayName("视图读：根任务团队成员 → 放行（与附件读侧同一条判据）")
+    void taskScopedViewAllowedForTeamMember() {
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTaskOf(TASK_ID));
+        when(taskAgentMemberService.isMember(TASK_ID, TEAMMATE)).thenReturn(true);
+
+        assertThat(policy.canReadTaskScoped(TEAMMATE, SUB_TASK_ID)).isTrue();
+    }
+
+    @Test
+    @DisplayName("视图读：非成员 → 拒绝（不放行全局读）")
+    void taskScopedViewRejectedForOutsider() {
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTaskOf(TASK_ID));
+        when(taskAgentMemberService.isMember(TASK_ID, OUTSIDER)).thenReturn(false);
+        when(taskAgentMemberService.isCurrentExecutorOfTask(TASK_ID, OUTSIDER)).thenReturn(false);
+
+        assertThat(policy.canReadTaskScoped(OUTSIDER, SUB_TASK_ID)).isFalse();
+    }
+
+    @Test
+    @DisplayName("视图读：成员表未命中但为在岗执行者 → derive-on-miss 放行")
+    void taskScopedViewAllowedByDeriveOnMiss() {
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(subTaskOf(TASK_ID));
+        when(taskAgentMemberService.isMember(TASK_ID, TEAMMATE)).thenReturn(false);
+        when(taskAgentMemberService.isCurrentExecutorOfTask(TASK_ID, TEAMMATE)).thenReturn(true);
+
+        assertThat(policy.canReadTaskScoped(TEAMMATE, SUB_TASK_ID)).isTrue();
+    }
+
+    @Test
+    @DisplayName("视图读：agentId 为 null → 拒绝（平台通道不得走本判据）")
+    void taskScopedViewRejectedForNullAgent() {
+        assertThat(policy.canReadTaskScoped(null, SUB_TASK_ID)).isFalse();
+    }
+
+    @Test
+    @DisplayName("视图读：子任务不存在 → 拒绝")
+    void taskScopedViewRejectedWhenSubTaskMissing() {
+        when(subTaskService.getById(SUB_TASK_ID)).thenReturn(null);
+
+        assertThat(policy.canReadTaskScoped(TEAMMATE, SUB_TASK_ID)).isFalse();
+    }
+
+    /** 构造一个属于指定 task 的子任务替身。 */
+    private static SubTask subTaskOf(long taskId) {
+        SubTask subTask = new SubTask();
+        subTask.setId(SUB_TASK_ID);
+        subTask.setTaskId(taskId);
+        return subTask;
+    }
 }

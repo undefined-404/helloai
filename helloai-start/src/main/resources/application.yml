@@ -187,6 +187,9 @@ helloai:
     ai-search-max-results: 15
     # ai-search-answer: true
     # ai-search-max-rounds: 2
+    # REF-5.4 出站守卫：网页直取默认**只放 https**；确需明文 http 时显式打开。
+    # 注意：回环 / 私网 / 链路本地 / 保留段**无条件拒绝**，本开关放行不了它们。
+    url-fetch-allow-insecure-http: false
   execution:
     enabled: true
     mock-mode: false

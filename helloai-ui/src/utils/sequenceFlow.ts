@@ -101,6 +101,8 @@ const LABEL: Record<string, string> = {
   sub_task_dispatch_prepare: '准备派单',
   sub_task_no_candidate: '暂无可用执行者',
   sub_task_claim_rejected: '认领被拒',
+  sub_task_dispatch_fallback: '熔断降级换人',
+  sub_task_dispatch_no_alternative: '无可用替代执行者',
   sub_task_unclaimed_timeout_reassign: '超时未领取改派',
   sub_task_execution_timeout_reassign: '执行超时改派',
   sub_task_offline_reassign: '离线改派',

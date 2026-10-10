@@ -22,6 +22,14 @@ param(
     [string]$MinioHealthUrl = 'http://localhost:29000'
 )
 
+# G1 入参在头注释里是「MinIO 基址」（如 http://localhost:29000），而探活端点是
+# /minio/health/live。基址直接交给 Invoke-WebRequest 会打到 MinIO 根路径 —— 该路径
+# 对匿名请求返回 403 Forbidden，于是脚本报「MinIO 未就绪」的**假失败**（容器其实是健康的）。
+# 故此处归一：缺路径补上，已带路径则原样使用。
+if ($MinioHealthUrl -notmatch '/minio/health/live/?$') {
+    $MinioHealthUrl = $MinioHealthUrl.TrimEnd('/') + '/minio/health/live'
+}
+
 $script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [Console]::InputEncoding  = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -75,7 +83,10 @@ if ([string]::IsNullOrWhiteSpace($Token)) {
     exit 0
 }
 
-$headers = @{ Authorization = ('Bearer ' + $Token) }
+# 管理端登录态走 Sa-Token，「X-Admin-Token」头（与本目录其余 verify-*.ps1 同口径）。
+# 旧写法 `Authorization: Bearer <token>` 是 Sa-Token 收口前的遗留：实测该头返回 401，
+# 会让 G2 表现为「附件列表接口不可用」的假失败。
+$headers = @{ 'X-Admin-Token' = $Token }
 $attachments = $null
 try {
     $listResp = Invoke-WebRequest -Uri ($BaseUrl + '/api/attachments') -Headers $headers -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop

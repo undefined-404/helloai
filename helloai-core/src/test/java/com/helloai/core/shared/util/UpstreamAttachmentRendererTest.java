@@ -63,8 +63,10 @@ class UpstreamAttachmentRendererTest {
                 .contains("【文件：appendix.md】")
                 .contains("A".repeat(500))
                 .doesNotContain("A".repeat(501))
-                // 主附件保底（3296）+ 次附件最低配额（500）均为行边界硬切（无换行可回退）
-                .contains("[TRUNCATED] file=main.md shown=3296 total=7809 reason=dep_content_limit")
+                // 主附件保底（3248）+ 次附件最低配额（500）均为行边界硬切（无换行可回退）
+                // （3248 = 原 3296 − 48：2026-10-10 每附件开销预留 84→108（标注行新增 id= 字段），
+                //   2 个附件各让出 24 字符；次附件已在下限 500，不受影响 —— 保底语义不变）
+                .contains("[TRUNCATED] file=main.md shown=3248 total=7809 reason=dep_content_limit")
                 .contains("[TRUNCATED] file=appendix.md shown=500 total=19294 reason=dep_content_limit");
         assertThat(out.length()).isLessThanOrEqualTo(4000);
     }
@@ -101,5 +103,29 @@ class UpstreamAttachmentRendererTest {
         assertThat(out)
                 .contains("【文件：attachment-1】\n甲")
                 .contains("【文件：attachment-2】\n乙");
+    }
+
+    @Test
+    @DisplayName("截断标注带可寻址 ref：有 attachmentId 时输出 id=，消费侧据此回取全文（2026-10-10）")
+    void shouldIncludeAttachmentIdInTruncatedMarker() {
+        String out = UpstreamAttachmentRenderer.render(List.of(
+                new UpstreamAttachmentRenderer.LoadedAttachment(
+                        "big.md", "M".repeat(9000), 2105188736737857538L)), 2000);
+
+        assertThat(out).contains("[TRUNCATED] file=big.md id=2105188736737857538 shown=");
+        // 未被截断的附件不产出标注行（自然也不会有 id）
+        String small = UpstreamAttachmentRenderer.render(List.of(
+                new UpstreamAttachmentRenderer.LoadedAttachment("s.md", "短", 123L)), 2000);
+        assertThat(small).doesNotContain("[TRUNCATED]");
+    }
+
+    @Test
+    @DisplayName("非附件引用路径（无 attachmentId）→ 标注行省略 id 字段（不输出 id=null）")
+    void shouldOmitIdWhenAbsent() {
+        String out = UpstreamAttachmentRenderer.render(List.of(
+                new UpstreamAttachmentRenderer.LoadedAttachment("text.md", "T".repeat(9000))), 2000);
+
+        assertThat(out).contains("[TRUNCATED] file=text.md shown=")
+                .doesNotContain("id=");
     }
 }

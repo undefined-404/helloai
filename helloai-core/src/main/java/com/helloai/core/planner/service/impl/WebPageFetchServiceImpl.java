@@ -3,34 +3,48 @@ package com.helloai.core.planner.service.impl;
 import com.helloai.common.config.WebSearchProperties;
 import com.helloai.core.planner.search.WebPageContent;
 import com.helloai.core.planner.service.WebPageFetchService;
+import com.helloai.core.shared.util.OutboundUrlGuard;
 import lombok.extern.slf4j.Slf4j;
+import okhttp3.HttpUrl;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 网页直取服务实现（纯 JDK 无额外依赖）。
+ * 网页直取服务实现（出站经 {@link OutboundUrlGuard} 守卫，`REF-5.4`）。
  *
- * <p>流程：GET 目标 URL（跟随重定向）→ 限流读取响应体（{@value #MAX_BODY_BYTES} 字节上限，
- * 防超大页面拖垮内存）→ 仅接受文本类 Content-Type → 轻量 HTML 转纯文本
+ * <p>流程：过出站守卫 → GET 目标 URL（**手工**跟随重定向，每一跳重跑守卫）→
+ * 限流读取响应体（{@value #MAX_BODY_BYTES} 字节上限，防超大页面拖垮内存）→
+ * 仅接受文本类 Content-Type → 轻量 HTML 转纯文本
  * （剔除 script/style/noscript 块 → 去标签 → 解码常见实体 → 折叠空白）→
  * 提取 &lt;title&gt; → 正文按 {@code urlFetchMaxTextChars} 截断。</p>
+ *
+ * <p><b>为什么从 JDK {@code HttpClient} 换成 OkHttp</b>（裁定 `D-2026-10-09-6②`）：
+ * 旧实现用 {@code Redirect.NORMAL} **跟随跳转且不校验跳转目标** —— 首跳公网合法域名
+ * 302 到 {@code 169.254.169.254}/{@code 127.0.0.1} 即可绕过（重定向式 SSRF），
+ * 且 JDK 客户端**没有公开的 DNS pin 钩子**，防不了 DNS-rebinding。
+ * OkHttp 的 {@code Dns} 接口可以「按我们的判定解析、并把同一个结果交给建连」（pinning），
+ * 这是本仓库能落地的唯一形状。</p>
  *
  * <p>局限（已知代价，不引 jsoup）：正则式 HTML 解析对极端嵌套/畸形标签不完备，
  * 但对本场景（抓站点介绍/文档页给 LLM 作资料）足够；SPA 空壳页正文极少，
  * 元数据兜底：正文为空时仍提取 &lt;title&gt;/meta 描述/og 标签拼作最低限度资料
  * （{@code metaOnly=true}），而非整体丢弃（用户实测 open.maic.chat 空壳页 textChars=0）。</p>
  *
- * <p>失败语义：捕获所有异常返回 ok=false 记录，不抛出（{@link WebPageFetchService} 契约）。</p>
+ * <p>失败语义：捕获所有异常返回 ok=false 记录，不抛出（{@link WebPageFetchService} 契约）——
+ * 守卫拒绝（{@link OutboundUrlGuard.SsrfBlockedException}）同样走这条降级路径，只是**先记 WARN**，
+ * 让"被拦"与"抓取失败"在日志里可区分。</p>
  */
 @Slf4j
 @Service
@@ -71,13 +85,40 @@ public class WebPageFetchServiceImpl implements WebPageFetchService {
     };
 
     private final WebSearchProperties properties;
-    private final HttpClient httpClient;
+    private final OkHttpClient httpClient;
 
+    /**
+     * Spring 装配入口（**本类有两个 public 构造器，故必须显式指明用哪个** ——
+     * 不加 {@code @Autowired} 时 Spring 找不到唯一的候选构造器，会退回去找一个无参构造器，
+     * 结果是 `No default constructor found`，**整个应用上下文起不来**；B 级集成门禁实测抓到过）。
+     */
+    @Autowired
     public WebPageFetchServiceImpl(WebSearchProperties properties) {
+        this(properties, strictClient(properties));
+    }
+
+    /**
+     * 装配 / 单测用：注入客户端。
+     *
+     * <p><b>为什么需要这个口子</b>：默认客户端（{@link #strictClient}）的 DNS 守卫会**正确**拦掉
+     * 回环地址，而本类的既有单测用 JDK {@code HttpServer} 在 {@code 127.0.0.1} 上起桩站点 ——
+     * 两者天然冲突。与其为了让测试能跑而给**生产**加一个「放行私网」开关（那等于把 SSRF 防护
+     * 变成可配置项），不如让**测试**注入一个刻意放行的客户端：生产路径保持唯一且严格。</p>
+     */
+    public WebPageFetchServiceImpl(WebSearchProperties properties, OkHttpClient httpClient) {
         this.properties = properties;
-        this.httpClient = HttpClient.newBuilder()
+        this.httpClient = httpClient;
+    }
+
+    /** 生产默认客户端：地址层守卫（{@link OutboundUrlGuard.SafeDns}）+ 自管跳转 + 双超时。 */
+    private static OkHttpClient strictClient(WebSearchProperties properties) {
+        return new OkHttpClient.Builder()
+                // 出站守卫**地址层**：解析后逐地址判定，并用同一份结果建连（= DNS-rebinding pinning）
+                .dns(new OutboundUrlGuard.SafeDns())
+                // 跳转自管：跟随跳转会绕过「每跳重跑 URL 层守卫」（协议白名单 + 主机名）
+                .followRedirects(false)
                 .connectTimeout(Duration.ofMillis(properties.getUrlFetchTimeoutMs()))
-                .followRedirects(HttpClient.Redirect.NORMAL)
+                .callTimeout(Duration.ofMillis(properties.getUrlFetchTimeoutMs()))
                 .build();
     }
 
@@ -87,56 +128,81 @@ public class WebPageFetchServiceImpl implements WebPageFetchService {
             return failed(url, "URL 为空");
         }
         try {
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .timeout(Duration.ofMillis(properties.getUrlFetchTimeoutMs()))
-                    // 浏览器风格 UA（原「HelloAI-WebPageFetch」自曝爬虫身份易被反爬拦截）
-                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                            + "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
-                    .header("Accept", "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5")
-                    .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-                    .GET()
-                    .build();
-            HttpResponse<InputStream> response = httpClient.send(request,
-                    HttpResponse.BodyHandlers.ofInputStream());
-            if (response.statusCode() / 100 != 2) {
-                return failed(url, "HTTP " + response.statusCode());
-            }
-            String contentType = response.headers().firstValue("Content-Type").orElse("");
-            if (!contentType.isBlank() && !contentType.contains("text/")
-                    && !contentType.contains("application/xhtml") && !contentType.contains("application/json")) {
-                return failed(url, "非文本内容类型: " + truncate(contentType, 60));
-            }
-            String body = readLimited(response.body());
-            String text = htmlToText(body);
-            String title = extractTitle(body);
-            if (text.isBlank()) {
-                // SPA 空壳兜底：正文为空但 title/meta 描述存在时，拼作最低限度资料
-                // （站点名+一句描述对 LLM 仍优于零信息），而非整体丢弃
-                String metaText = salvageMetaText(body, title);
-                if (metaText.isBlank()) {
-                    return failed(url, "页面正文为空且无元数据（可能是 SPA 空壳或反爬拦截）");
-                }
-                log.info("网页直取 SPA 空壳元数据兜底: url={}, metaChars={}", url, metaText.length());
-                text = metaText;
-                if (title == null) title = hostOf(url);
-                int metaMax = properties.getUrlFetchMaxTextChars();
-                return WebPageContent.builder()
-                        .url(url)
-                        .ok(true)
-                        .metaOnly(true)
-                        .title(title)
-                        .text(text.length() <= metaMax ? text : text.substring(0, metaMax) + "…")
+            String next = url.trim();
+            // 手工跟随跳转：**每一跳**都重跑 URL 层守卫（协议白名单 + 主机名非空）；
+            // 地址层的私网/回环判定由 SafeDns 在每次建连前完成（两跳都覆盖）
+            for (int hop = 0; hop <= OutboundUrlGuard.MAX_REDIRECTS; hop++) {
+                HttpUrl target = OutboundUrlGuard.assertFetchable(next, properties.isUrlFetchAllowInsecureHttp());
+                Request request = new Request.Builder()
+                        .url(target.toString())
+                        // 浏览器风格 UA（原「HelloAI-WebPageFetch」自曝爬虫身份易被反爬拦截）
+                        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                + "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+                        .header("Accept", "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5")
+                        .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+                        .get()
                         .build();
+                try (Response response = httpClient.newCall(request).execute()) {
+                    int status = response.code();
+                    if (status / 100 == 3) {
+                        String location = response.header("Location");
+                        if (location == null || location.isBlank()) {
+                            return failed(url, "重定向缺少 Location（HTTP " + status + "）");
+                        }
+                        // 相对 Location 也在此解析成绝对地址，下一轮继续过守卫
+                        next = target.resolve(location).toString();
+                        continue;
+                    }
+                    if (status / 100 != 2) {
+                        return failed(url, "HTTP " + status);
+                    }
+                    String contentType = response.header("Content-Type", "");
+                    if (!contentType.isBlank() && !contentType.contains("text/")
+                            && !contentType.contains("application/xhtml")
+                            && !contentType.contains("application/json")) {
+                        return failed(url, "非文本内容类型: " + truncate(contentType, 60));
+                    }
+                    ResponseBody responseBody = response.body();
+                    if (responseBody == null) {
+                        return failed(url, "响应体为空");
+                    }
+                    String body = readLimited(responseBody.byteStream());
+                    String text = htmlToText(body);
+                    String title = extractTitle(body);
+                    if (text.isBlank()) {
+                        // SPA 空壳兜底：正文为空但 title/meta 描述存在时，拼作最低限度资料
+                        // （站点名+一句描述对 LLM 仍优于零信息），而非整体丢弃
+                        String metaText = salvageMetaText(body, title);
+                        if (metaText.isBlank()) {
+                            return failed(url, "页面正文为空且无元数据（可能是 SPA 空壳或反爬拦截）");
+                        }
+                        log.info("网页直取 SPA 空壳元数据兜底: url={}, metaChars={}", url, metaText.length());
+                        text = metaText;
+                        if (title == null) title = hostOf(url);
+                        int metaMax = properties.getUrlFetchMaxTextChars();
+                        return WebPageContent.builder()
+                                .url(url)
+                                .ok(true)
+                                .metaOnly(true)
+                                .title(title)
+                                .text(text.length() <= metaMax ? text : text.substring(0, metaMax) + "…")
+                                .build();
+                    }
+                    if (title == null) title = hostOf(url);
+                    int max = properties.getUrlFetchMaxTextChars();
+                    return WebPageContent.builder()
+                            .url(url)
+                            .ok(true)
+                            .title(title)
+                            .text(text.length() <= max ? text : text.substring(0, max) + "…")
+                            .build();
+                }
             }
-            if (title == null) title = hostOf(url);
-            int max = properties.getUrlFetchMaxTextChars();
-            return WebPageContent.builder()
-                    .url(url)
-                    .ok(true)
-                    .title(title)
-                    .text(text.length() <= max ? text : text.substring(0, max) + "…")
-                    .build();
+            return failed(url, "重定向次数超过 " + OutboundUrlGuard.MAX_REDIRECTS);
+        } catch (OutboundUrlGuard.SsrfBlockedException e) {
+            // 被守卫拦下 ≠ 抓取失败：单独记 WARN，便于在日志里区分"目标不合法"与"网络/页面问题"
+            log.warn("网页直取被出站守卫拒绝: url={}, reason={}", url, e.getMessage());
+            return failed(url, e.getMessage());
         } catch (Exception e) {
             log.warn("网页直取失败（已降级，不阻断澄清主流程）: url={}, err={}", url, e.getMessage());
             return failed(url, truncate(String.valueOf(e.getMessage()), 120));

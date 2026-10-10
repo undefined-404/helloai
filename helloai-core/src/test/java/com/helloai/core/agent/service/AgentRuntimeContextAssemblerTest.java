@@ -384,7 +384,8 @@ class AgentRuntimeContextAssemblerTest {
                     .contains("【文件：main.md】")
                     .contains("【文件：appendix.md】")
                     .contains("A".repeat(500))
-                    .contains("[TRUNCATED] file=appendix.md shown=500 total=19294 reason=dep_content_limit");
+                    // 2026-10-10 起标注行含可寻址 ref（id=<attachmentId>），消费侧据此回取全文
+                    .contains("[TRUNCATED] file=appendix.md id=2 shown=500 total=19294 reason=dep_content_limit");
             // R2 统计口径：附件路径逐附件截断并入 truncatedCount（顶层未触发）
             Map<String, Object> payload = captureTimelinePayload("sub_task_spec_context_loaded");
             assertThat(payload)

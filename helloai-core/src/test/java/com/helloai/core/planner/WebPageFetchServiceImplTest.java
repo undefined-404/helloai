@@ -4,6 +4,7 @@ import com.helloai.common.config.WebSearchProperties;
 import com.helloai.core.planner.search.WebPageContent;
 import com.helloai.core.planner.service.impl.WebPageFetchServiceImpl;
 import com.sun.net.httpserver.HttpServer;
+import okhttp3.OkHttpClient;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -12,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -29,6 +31,8 @@ class WebPageFetchServiceImplTest {
     private WebSearchProperties properties;
     private WebPageFetchServiceImpl service;
     private String baseUrl;
+    /** 回环**字面量**形式（专供守卫用例：URL 层应直接拒绝）。 */
+    private String loopbackLiteralUrl;
 
     /** 桩响应（由用例覆盖）。 */
     private volatile int responseStatus = 200;
@@ -47,12 +51,31 @@ class WebPageFetchServiceImplTest {
             }
         });
         server.start();
-        baseUrl = "http://127.0.0.1:" + server.getAddress().getPort() + "/page";
+        // 桩站点绑定 127.0.0.1，但**请求走主机名** localhost：
+        // REF-5.4 的 URL 层会直判 IP 字面量（回环）为禁用，用字面量就测不到抓取/解析本身了。
+        // 「字面量被拒」由本类末尾的守卫用例单独证明。
+        baseUrl = "http://localhost:" + server.getAddress().getPort() + "/page";
+        loopbackLiteralUrl = "http://127.0.0.1:" + server.getAddress().getPort() + "/page";
 
         properties = new WebSearchProperties();
         properties.setUrlFetchTimeoutMs(5_000L);
         properties.setUrlFetchMaxTextChars(4_000);
-        service = new WebPageFetchServiceImpl(properties);
+        // 桩站点是**明文 http**，而 URL 层守卫默认只放 https ⇒ 测试显式打开该开关
+        // （生产默认 false；这里只为让桩链路可达，与下面的放行式客户端是两件事）
+        properties.setUrlFetchAllowInsecureHttp(true);
+        // REF-5.4：桩站点在 127.0.0.1（**回环**）上，生产默认客户端的外站守卫会正确拦掉它，
+        // 故这里**刻意注入放行式客户端**（Dns.SYSTEM，不套守卫），让既有链路用例继续测「抓取/解析」；
+        // 「严格默认会拦回环」由本类下面的 guardBlocksLoopbackByDefault 用例单独证明。
+        service = new WebPageFetchServiceImpl(properties, permissiveClient());
+    }
+
+    /** 测试用放行式客户端（参数与生产 strictClient 一致，唯独不套地址守卫）。 */
+    private static OkHttpClient permissiveClient() {
+        return new OkHttpClient.Builder()
+                .followRedirects(false)
+                .connectTimeout(Duration.ofSeconds(5))
+                .callTimeout(Duration.ofSeconds(5))
+                .build();
     }
 
     @AfterEach
@@ -116,7 +139,7 @@ class WebPageFetchServiceImplTest {
         WebPageContent page = service.fetch(baseUrl);
 
         assertThat(page.isOk()).isTrue();
-        assertThat(page.getTitle()).isEqualTo("127.0.0.1");
+        assertThat(page.getTitle()).isEqualTo("localhost");
     }
 
     @Test
@@ -174,7 +197,7 @@ class WebPageFetchServiceImplTest {
         assertThat(page.isOk()).isTrue();
         assertThat(page.isMetaOnly()).isTrue();
         // 无 title 标签 → 标题回退 host；描述与站点名入文本
-        assertThat(page.getTitle()).isEqualTo("127.0.0.1");
+        assertThat(page.getTitle()).isEqualTo("localhost");
         assertThat(page.getText())
                 .contains("AI 多智能体平台")
                 .contains("OpenMaic");
@@ -216,5 +239,27 @@ class WebPageFetchServiceImplTest {
 
         assertThat(page.isOk()).isFalse();
         assertThat(page.getReason()).isNotBlank();
+    }
+
+    // ── REF-5.4 出站守卫（用**生产默认**客户端，证明默认路径确实是严格的） ──────────
+
+    @Test
+    @DisplayName("REF-5.4：默认客户端拒绝明文 http（协议白名单默认只放 https）")
+    void guardBlocksPlainHttpByDefault() {
+        properties.setUrlFetchAllowInsecureHttp(false);   // 显式回到生产默认值（setUp 为桩链路开了它）
+        WebPageContent page = new WebPageFetchServiceImpl(properties).fetch(baseUrl);
+
+        assertThat(page.isOk()).isFalse();
+        assertThat(page.getReason()).contains("只允许 https");
+    }
+
+    @Test
+    @DisplayName("REF-5.4：默认客户端拒绝回环地址（重定向式 SSRF / 平台自身管理面）")
+    void guardBlocksLoopbackByDefault() {
+        properties.setUrlFetchAllowInsecureHttp(true);   // 放行协议，但**不禁**私网/回环
+        WebPageContent page = new WebPageFetchServiceImpl(properties).fetch(baseUrl);
+
+        assertThat(page.isOk()).isFalse();
+        assertThat(page.getReason()).contains("出站守卫拒绝");
     }
 }

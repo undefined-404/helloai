@@ -31,14 +31,44 @@ public final class UpstreamAttachmentRenderer {
     /** 次要附件最低正文配额：每个非主附件至少可读量；预算不足以覆盖时按剩余均分。 */
     public static final int MINOR_MIN_BODY_CHARS = 500;
 
-    /** 每附件渲染开销预留（标题行 + 截断标注行 + 段分隔 + 数值位宽余量，保守上界）。 */
-    private static final int PER_FILE_RESERVE_EXTRA = 84;
+    /** 每附件渲染开销预留（标题行 + 截断标注行 + 段分隔 + 数值位宽余量，保守上界）。
+     *  2026-10-10 由 84 上调至 108：截断标注行新增 {@code id=<19 位雪花>}（约 23 字符）——
+     *  预留必须覆盖最坏开销，否则「输出总长不超过 {@code totalBudget}」这条上界会破。 */
+    private static final int PER_FILE_RESERVE_EXTRA = 108;
+
+    /**
+     * 单条前置产出（依赖产出）内容的字符上限 —— **执行域两处消费方的唯一口径来源**。
+     *
+     * <p>消费方：① 执行链 Prompt 注入（{@code AgentRuntimeContextAssembler}）；
+     * ② 外部 Agent 的 {@code getDepsSummary}（{@code McpToolServiceImpl}）。
+     * 两者都把本值作为 {@link #render(List, int) render} 的 {@code totalBudget}，
+     * 并对非附件文本走同一上限截断 —— 故常量放本类（预算算法的宿主），
+     * 不再各自复制一份（2026-10-10 `REF-5.2a`：此前两份 64000 各写一遍，
+     * 且注释互相指认，属典型的口径漂移风险）。</p>
+     *
+     * <p>2026-10-03 上调 4000 → 64000：所有 LLM 走官方 api-key（DeepSeek 64K~1M 上下文），
+     * 4000 对 64K 上下文是自我阉割 —— 下游 executor 读不到前置关键产出、诱发幻觉，属纯沉默成本。
+     * 与核验侧 {@code AttachmentContentPolicy.ATTACHMENT_CONTENT_PER_FILE_LIMIT} 同值对齐，
+     * 统一为「正常产出全量注入 + 极端超长兜底截断」；若需调整，先改这里再评估两处消费方影响。</p>
+     */
+    public static final int DEP_CONTENT_MAX_CHARS = 64000;
 
     private UpstreamAttachmentRenderer() {
     }
 
-    /** 已成功读取的附件（名称 + 正文）；读取失败 / 不可加载的附件由调用方先过滤。 */
-    public record LoadedAttachment(String name, String content) {
+    /** 已成功读取的附件（名称 + 正文）；读取失败 / 不可加载的附件由调用方先过滤。
+     *
+     *  <p>{@code attachmentId} 用于被截断时在标注行里给出**可寻址的 ref**（2026-10-10）：
+     *  消费侧（外部 Agent）拿到它才能用既有
+     *  {@code GET /api/attachments/downloadById/{attachmentId}} 取回被截掉的部分 ——
+     *  此前标注行只有文件名，agent「知道被截了、也不知道拿什么去取」。
+     *  非附件文本（无对应附件行）传 {@code null}，标注行会省略该字段。</p> */
+    public record LoadedAttachment(String name, String content, Long attachmentId) {
+
+        /** 无附件 id 时的便捷构造（非附件文本 / 单元测试）。 */
+        public LoadedAttachment(String name, String content) {
+            this(name, content, null);
+        }
     }
 
     /**
@@ -76,8 +106,12 @@ public final class UpstreamAttachmentRenderer {
                 // 行边界回退截断；配额被开销挤到 0 时输出空（极端防御，保证总长上界）
                 String shown = budget > 0 ? TextTruncator.truncateAtLineBoundary(body, budget) : "";
                 sb.append(shown).append('\n');
-                sb.append("[TRUNCATED] file=").append(name)
-                        .append(" shown=").append(shown.length())
+                sb.append("[TRUNCATED] file=").append(name);
+                if (file.attachmentId() != null) {
+                    // 可寻址 ref：消费侧据此可经既有 REST 端点回取全文（见 LoadedAttachment javadoc）
+                    sb.append(" id=").append(file.attachmentId());
+                }
+                sb.append(" shown=").append(shown.length())
                         .append(" total=").append(body.length())
                         .append(" reason=dep_content_limit");
             } else {

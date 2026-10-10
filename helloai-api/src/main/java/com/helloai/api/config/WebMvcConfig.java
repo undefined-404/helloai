@@ -1,12 +1,15 @@
 package com.helloai.api.config;
 
 import cn.dev33.satoken.interceptor.SaInterceptor;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.api.interceptor.AdminOnlyInterceptor;
 import com.helloai.api.interceptor.AuthInterceptor;
 import com.helloai.api.interceptor.RequestLogInterceptor;
+import com.helloai.api.interceptor.SetupLockInterceptor;
 import com.helloai.core.agent.port.AgentAuthPort;
 import com.helloai.core.system.service.AuthService;
 import com.helloai.core.system.service.RequestLogService;
+import com.helloai.core.system.service.SysUserService;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -22,12 +25,22 @@ public class WebMvcConfig implements WebMvcConfigurer {
     private final AuthService authService;
     private final AgentAuthPort agentAuthPort;
     private final RequestLogService requestLogService;
+    private final SysUserService sysUserService;
+    private final ObjectMapper objectMapper;
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
         // 请求日志（所有 /api/**）
         registry.addInterceptor(new RequestLogInterceptor(requestLogService))
                 .addPathPatterns("/api/**");
+
+        // 首次运行锁定（REF-5.3）：无任何用户 ⇒ 除初始化向导 / 健康检查外一律 503 setup_required。
+        // 排在认证之前：未初始化实例对**任何**调用方（含无 token 者）都给同一答案，
+        // 而不是先撞 401 —— 判据源「用户数」与前端 Login.vue 的 !hasUsers 同源（见拦截器 javadoc）。
+        registry.addInterceptor(new SetupLockInterceptor(sysUserService::count, objectMapper))
+                .addPathPatterns("/api/**")
+                .excludePathPatterns("/api/setup/**")
+                .excludePathPatterns("/api/health/**");
 
         // 认证拦截器
         // 通道分流：X-Admin-Token → Sa-Token 会话（标准 checkLogin，含滑动续期）；

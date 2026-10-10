@@ -5,6 +5,11 @@
 scripts/ci/*.sh text eol=lf
 scripts/ci/*.txt text eol=lf
 deploy/middleware/scripts/*.sh text eol=lf
+# 验证守卫脚本（scripts/shell/*.sh）：同为 bash 脚本，且**已接入 CI 门禁**（如
+# scripts/shell/verify-executor-doc-parity.sh 由 ci-gate.sh 门禁 3 调用）。
+# 若被 core.autocrlf 转成 CRLF，bash 会在变量值里带上 \r（如 $REPO_ROOT 带 \r ⇒
+# 路径解析失败）⇒ 门禁**假红**。2026-10-11 按上方 ci/ 的同源理由补钉。
+scripts/shell/*.sh text eol=lf
 # RabbitMQ 初始化脚本：在 Linux 容器内以 /bin/sh 执行，CRLF 会导致
 # "bad interpreter: /bin/sh^M"（脚本静默起不来）。
 # 2026-10-07：脚本由 deploy/middleware/rabbitmq/init.sh 迁到 deploy/init-rabbitmq.sh

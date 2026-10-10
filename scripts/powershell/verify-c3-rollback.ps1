@@ -2,6 +2,8 @@
 # helloai Phase0 C3 rollback drill verifier (verify-c3-rollback, v1.0)
 # 用途：C3 回滚预案演练验收（预研 7 章验收脚本表 verify-c3-rollback.ps1；四章回滚表格灰度期行）：
 #   S1 解析 application.yml gray-percent：
+#      - 键不存在（G-002 单轨硬切后）：判 N/A 并退出 0 —— 演练前提已消失
+#        （开关已删除，回退手段 = git revert，见 D-2026-09-30-3）
 #      - 非 0（未处于回滚态）：输出演练操作指引并退出 0（本脚本只读，不改配置）
 #        指引：改 gray-percent=0 -> 重启后端 -> 造一个新任务 -> 重跑本脚本验证
 #      - 为 0（回滚态）：继续 S2-S4 断言
@@ -82,7 +84,21 @@ if ($ymlFound) {
         if ($m.Success) { $cfgGray = [int]$m.Groups[1].Value }
     }
 }
-Assert-Pass ($cfgGray -ge 0) 'S1' ('gray-percent=' + $cfgGray + ' (parsed from yml)')
+if ($cfgGray -lt 0) {
+    # 演练前提已消失：gray-percent 随 G-002「单轨硬切」删除（D-2026-09-30-3 ——
+    # 硬切为单向门，不再保留配置级回退开关，回退手段 = git revert）。
+    # 本演练验证的是「灰度期把 gray-percent 改 0 回滚」，该形态已不存在 ⇒
+    # 判 N/A（不是 PASS，也不是 FAIL），避免给后来者留下一条恒定红的假失败。
+    Write-Output '[S1] N/A : no gray-percent in application.yml'
+    Write-Output '     reason: dual-track gray switches were removed by G-002 (single-track hard cut,'
+    Write-Output '             2026-09-30, D-2026-09-30-3). Rollback is now git revert, not a config switch.'
+    Write-Output '     effect: this drill (gray-percent=0 rollback) has no premise; S2-S4 not applicable.'
+    Write-Output ('SUMMARY: PASS=' + $global:PassCount + ' FAIL=0 N/A=1')
+    Write-Output 'RESULT: N/A - C3 rollback drill is obsolete under single-track architecture'
+    exit 0
+}
+
+Assert-Pass ($true) 'S1' ('gray-percent=' + $cfgGray + ' (parsed from yml)')
 
 if ($global:FailCount -gt 0) {
     Write-Output ('SUMMARY: PASS=' + $global:PassCount + ' FAIL=' + $global:FailCount)

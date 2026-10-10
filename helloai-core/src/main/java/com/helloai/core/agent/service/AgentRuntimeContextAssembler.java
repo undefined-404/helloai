@@ -86,15 +86,10 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class AgentRuntimeContextAssembler {
 
-    /**
-     * 单条前置产出注入的字符上限（迁移自 SubTaskExecutionServiceImpl，语义不变）。
-     *
-     * <p>2026-10-03 上调：4000 → 64000。所有 LLM 走官方 api-key（DeepSeek 64K~1M 上下文），
-     * 4000 对 64K 上下文是自我阉割——硬切导致下游 executor 看不到前置关键产出、诱发幻觉，
-     * 属纯沉默成本。与核验侧（{@link AttachmentContentPolicy#ATTACHMENT_CONTENT_PER_FILE_LIMIT}）
-     * 及报告侧首档（64000）口径对齐，统一为「正常产出全量注入 + 极端超长兜底截断」。</p>
-     */
-    private static final int DEP_CONTENT_MAX_CHARS = 64000;
+    // 单条前置产出注入的字符上限：**口径单源**，见
+    // UpstreamAttachmentRenderer.DEP_CONTENT_MAX_CHARS（该类是两个消费方共用的预算算法宿主）。
+    // REF-5.2a（2026-10-10）：此前本类与 McpToolServiceImpl 各写一份 64000（且注释互相指认已删除的
+    // SubTaskExecutionService/Impl），属典型的口径漂移风险 —— 现统一引用单源。
 
     private final AgentExecutionProperties executionProperties;
     private final AgentChatClientService agentChatClientService;
@@ -673,7 +668,7 @@ public class AgentRuntimeContextAssembler {
                 sb.append("**内容**:\n");
                 // P-1 防御：截断升级为「行边界回退 + 结构化标注 + 缺失声明指引」——
                 // 原实现硬切 substring(0, 4000) 会拦腰截断 URL/清单，且消费方无法机读缺了什么
-                String render = TextTruncator.truncateAtLineBoundary(content, DEP_CONTENT_MAX_CHARS);
+                String render = TextTruncator.truncateAtLineBoundary(content, UpstreamAttachmentRenderer.DEP_CONTENT_MAX_CHARS);
                 boolean topLevelTruncated = render.length() < content.length();
                 // R2（2026-09-30 审计 §15.4）：附件路径的逐附件截断已由 UpstreamAttachmentRenderer
                 // 内置 [TRUNCATED] file= 标注（总长受控故顶层不再触发）——统计口径并入，
@@ -731,14 +726,14 @@ public class AgentRuntimeContextAssembler {
                         String fileName = attachment.fileName() != null && !attachment.fileName().isBlank()
                                 ? attachment.fileName() : "attachment-" + attachment.id();
                         loaded.add(new UpstreamAttachmentRenderer.LoadedAttachment(
-                                fileName, new String(bytes, StandardCharsets.UTF_8)));
+                                fileName, new String(bytes, StandardCharsets.UTF_8), attachment.id()));
                     } catch (Exception singleEx) {
                         log.warn("读取单个前置附件失败，跳过该附件: subTaskId={}, attachmentId={}, err={}",
                                 dep.id(), attachment.id(), singleEx.getMessage());
                     }
                 }
                 if (!loaded.isEmpty()) {
-                    return UpstreamAttachmentRenderer.render(loaded, DEP_CONTENT_MAX_CHARS);
+                    return UpstreamAttachmentRenderer.render(loaded, UpstreamAttachmentRenderer.DEP_CONTENT_MAX_CHARS);
                 }
             }
         } catch (Exception e) {

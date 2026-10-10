@@ -1,6 +1,6 @@
 # scripts/ 索引
 
-本目录是 HelloAI 的验证与运维脚本库。共 **83 个 PowerShell（powershell/ 82 + 根目录 run-it-local.ps1）+ 28 个 Shell + 1 个 Java 工具 + 1 个 SQL**（2026-09-30 复核计数 82/28，2026-10-10 新增备份演练脚本后 83；09-28 盘点基线 77/24），另有 **4 个 CI 门禁脚本 + 1 个架构冻结基线**（2026-09-29 新增）。
+本目录是 HelloAI 的验证与运维脚本库。共 **85 个 PowerShell（`powershell/` 84 + 根目录 `run-it-local.ps1`）+ 26 个 Shell + 1 个 Java 工具 + 1 个 SQL**（**2026-10-11 按 `git ls-files` 重新校准**：PowerShell 84+1、Shell 26（含本次新增的交付文档一致性守卫）；此前记「83 / 28」与仓库实际不符，本次订正），另有 **4 个 CI 门禁脚本 + 1 个架构冻结基线**（`scripts/ci/`）。
 
 - `ci/`：**跨平台 CI 门禁与架构守卫**（bash，Git Bash / Linux CI 通用；详细见下方第六节）
 - `powershell/`：Windows 侧（pwsh / Windows PowerShell 5.1），含全部规范类与大部分 E2E 验收脚本
@@ -39,10 +39,18 @@ $env:HELLOAI_ADMIN_PASSWORD = '<你的管理员登录口令>'   # PowerShell
 | 领域 | ps1 | sh |
 |---|---|---|
 | C3 灰度六件套（env/events/reconcile/rollback/route/seed） | verify-c3-*.ps1 | verify-c3-*.sh（共享库 c3-common.sh） |
+
+> **C3 六件套现状（2026-10-10 实测）**：`verify-c3-rollback` 判 **N/A** —— 它依赖的 `gray-percent`
+> 开关已随 G-002「单轨硬切」删除（`D-2026-09-30-3`：回退手段 = `git revert`），演练前提不存在；
+> 脚本已改为显式打印 N/A 并 `exit 0`（判 N/A 而非 PASS，不留恒定红的假失败）。其余五件套仍适用。
 | AgentHub 值班 P0/P1 | verify-agenthub-duty-e2e.ps1 | verify-agenthub-duty-e2e.sh |
 | Dashboard 值班概览 | verify-dashboard-duty-leases.ps1 | verify-dashboard-duty-leases.sh |
 | MCP 鉴权 / 业务闭环 | verify-mcp-auth.ps1 / verify-mcp-e2e.ps1 | 同名 .sh |
 | MinIO 附件链路 | verify-minio-artifact.ps1 | verify-minio-artifact.sh |
+
+> **MinIO 附件链路前置（2026-10-10 订正）**：`-Token` 取管理端登录态，脚本按 **`X-Admin-Token`**
+> 头发送（旧写法 `Authorization: Bearer` 实测返回 401，会让 G2 假失败）；`-MinioHealthUrl` 传
+> **基址**（如 `http://localhost:29000`）即可，脚本自行补 `/minio/health/live`（基址直打根路径是 403，同样会假失败）。
 | Planner 自动拆解 | verify-planner-decompose.ps1 | verify-planner-decompose.sh |
 | C3 Step4 灰度观察 | watch-step4.ps1 | watch-step4.sh |
 
@@ -50,7 +58,7 @@ $env:HELLOAI_ADMIN_PASSWORD = '<你的管理员登录口令>'   # PowerShell
 
 - **规范红线**：verify-dependency-direction（依赖方向）、verify-code-style-p0-layer（Controller 分层）、verify-code-style-p1-paths（路径命名）、verify-code-style-p1-ui-sync（前后端路径同步）、verify-contract-first（契约先行）、verify-tool-matrix（工具面一致）
 - **任务/拆解/澄清**：verify-a1-task-policy、verify-a2-skill-derive、verify-a3b-agent-edit-skills、verify-674-remove-specialization、verify-requirement-clarify-structured、verify-step9b-depends-on、verify-task-running-spec-phase-b、verify-inner-loop-e2e、verify-conversation-flow-e2e、verify-e2e-batch-a、verify-m5-scenarios、verify-g014
-- **执行/调度**：verify-execution-dispatch-guard（启动期 fail-fast 守卫）、verify-poller-e2e（DB Poller）、verify-subtask-redispatch-auto-execution（重派自动执行）、verify-subtask-deadletter（死信兜底）、verify-agent-execution-preview、verify-agent-llm-connectivity（真 LLM 冒烟）、verify-single-track-e2e（内部单轨：计划/执行/评审/报告全绿）
+- **执行/调度**：verify-execution-dispatch-guard（启动期 fail-fast 守卫）、verify-poller-e2e（DB Poller）、verify-subtask-redispatch-auto-execution（重派自动执行；`-Scenario blocked|offline` **两场景互斥** —— target agent 硬编码同一模型 `deepseek:deepseek-v4-pro`，而平台限「同角色同模型唯一」，先跑的占用后跑的即 409；同批新增改派后 `task_timeline` 保留断言）、verify-subtask-deadletter（死信兜底）、verify-agent-execution-preview、verify-agent-llm-connectivity（真 LLM 冒烟）、verify-single-track-e2e（内部单轨：计划/执行/评审/报告全绿）
 - **审查/质量**：verify-reviewer-dual（双评审）、verify-quality-profile、verify-quality-dashboard、verify-artifact-content-review、verify-llm-conversation-stream
 - **Agent/技能/配置**：verify-agent-skill-capability、verify-skill-packages（**2026-10-09 重写**：解析对象由 Java `KNOWN_SPECS` 源码文本改为 `skills/plugins/*.md` 的 YAML frontmatter；4 组断言等价保留 + 新增 E1/E2/E3 结构约束与 F 测试资源遮蔽守卫）、verify-platform-config、verify-api-key-verify、verify-llm-provider-models、verify-admin-authz、verify-attachment-version
 - **MCP/门铃/外部 Agent 入职**：verify-mcp（最小连通）、verify-mcp-session-e2e、verify-doorbell-e2e、verify-onboarding（+ -doorbell / -heartbeat / -pull / -submit 五步链）、verify-external-agent-e2e（外部 CLI_CLIENT 多 Agent 实接单，含 -AssertOnly 断言模式）
@@ -62,6 +70,8 @@ $env:HELLOAI_ADMIN_PASSWORD = '<你的管理员登录口令>'   # PowerShell
 verify-login-e2e、verify-requirement-clarify、verify-websearch-e2e、verify-planner-chat-dual-mode、verify-deps-context-e2e、verify-external-executor-e2e、verify-redispatch-in-progress（另有与 ps1 对实现的 12 个见上表）
 
 **文档结构守卫（无运行时依赖）**：verify-doc-gap-table —— 《差距表》结构守卫，四项只读断言：① 表格完整性（每行竖线数 == 表头，防裸 `|` 切格）② 无转义竖线 ③ 处置列首词 ∈ 九态词集（`协作规约 §6.3`）+ 一行一态 + 矩阵 20 行齐备 ④ 矩阵两列无过程叙述信号（日期 / 用例数 / 施工动词 / 分期标签 / 代码行号）。建立背景见 `LOG-20261009-014`，配套口径见《差距表》§0「状态词表」。
+
+**交付文档一致性守卫（无运行时依赖，**已在门禁 3 内执行**）**：`shell/verify-executor-doc-parity.sh` —— 治「代码改了、交付给外部 Agent 的说明书没跟」这类漂移。五组只读断言：**S1 工具面三源静态对齐**（`onboarding/executor/guide.md` §0.1 表格 ↔ `McpController.TOOL_NAMES` ↔ `McpMcpServer` 的 `@Tool(name=…)`，并校验标题声明数量）——是 `verify-tool-matrix.ps1` 的**离线版**（后者需后端在跑 + 管理员口令）；**S2 已知错误口径黑名单**（「每前置 N 字符」误述 / `getSubTaskDetail` 与「等价」同行）；**S3 关键口径必备词**（取回链 / 总预算口径 / 可见性判据，交付手册与内部手册各一份）；**S4 内部手册 ↔ 拼装产物**（改源未重跑 `assemble-manual.ps1` 即红）；**S5 文档限额数字 ↔ 代码常量**（执行侧 `DEP_CONTENT_MAX_CHARS` 与核验侧每附件/总计）。**bash 实现、零 zsh/python 依赖**（三平台可跑；`verify-doc-gap-table.sh` 需 zsh+python3，Windows 下跑不了）。建立背景与扰动验证见 `LOG-20261010-012`。
 
 ## 二、运维启停
 

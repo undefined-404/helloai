@@ -113,6 +113,8 @@ REST 辅助端点（查询/兜底，非执行工具）：
 - 产物文件内容一律走 `POST /api/artifacts/upload`；**不得**直连 MinIO（服务器版 MinIO 仅绑定 127.0.0.1，外部必然失败）。来源：SKILL§1.2。
 - 附件版本语义：同一子任务内同名 `fileName` 重复上传会把历史 ACTIVE 置 INACTIVE，最新一份为唯一有效版；子任务被打回（REJECTED）后其全部 ACTIVE 附件自动失效，返工**必须**重新上传最新版。来源：SKILL§1.2、§注意事项。
 - 在 `{需要 attachmentId}` 条件下，**必须**取自上传响应的 `data.attachmentId`；**不得**依赖 `getById` 的附件字段（可能为空）。来源：SKILL§已知坑。
+  - **读取前置产出时另有两个来源（2026-10-10 补）**：① `getDepsSummary` 注入文本里被截断处的标注行 `[TRUNCATED] file=<名> id=<attachmentId> …`（`id` 即 `attachmentId`，可**一步直达** `attachments/downloadById/{id}` 取全文）；② 列前置全部附件 `GET /api/attachments?subTaskId=<PREV_ID>` 返回的 `id`。
+  - ⚠️ **`getSubTaskDetail` 不可用于取"前置"的附件清单**：其准入门槛为「已分配给你」或「未分配且 `PENDING`」，前置子任务（队友已 `DONE`）会被拒（`无权查看该子任务`）。来源：代码 `McpToolServiceImpl.getSubTaskDetail` · 实测。
 
 `EXECUTION_RECORD` 字段契约（必须置于 `output` 最后）：
 

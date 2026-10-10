@@ -123,6 +123,12 @@
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-compress</artifactId>
         </dependency>
+        <!-- OkHttp：出站 SSRF 守卫（REF-5.4，WebPageFetchServiceImpl 改用它 + 自定义 Dns 做地址 pinning）。
+             原为本仓传递依赖（MinIO SDK），按 D-2026-10-09-6③-2 的处置显式声明（版本见根 pom dependencyManagement）。 -->
+        <dependency>
+            <groupId>com.squareup.okhttp3</groupId>
+            <artifactId>okhttp</artifactId>
+        </dependency>
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-core</artifactId>

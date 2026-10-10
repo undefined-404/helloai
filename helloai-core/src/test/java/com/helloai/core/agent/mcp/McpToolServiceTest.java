@@ -357,7 +357,9 @@ class McpToolServiceTest {
         // [TRUNCATED] 标注补 file= 字段（与核验侧同口径）
         assertThat(item.getContent())
                 .startsWith("【文件：attachment-22】\n")
-                .contains("[TRUNCATED] file=attachment-22 shown=63890 total=70000 reason=dep_content_limit")
+                // 2026-10-10 起标注行含可寻址 ref（id=<attachmentId>）；63866 = 原 63890 − 24
+                //（每附件开销预留 84→108，为 id= 字段让位）
+                .contains("[TRUNCATED] file=attachment-22 id=22 shown=63866 total=70000 reason=dep_content_limit")
                 .doesNotContain("x".repeat(63891));
     }
 

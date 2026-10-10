@@ -151,4 +151,13 @@ public class WebSearchProperties {
 
     /** 单页抓取正文注入上下文的最大字符数（超出截断，防 token 爆炸）。 */
     private int urlFetchMaxTextChars = 4_000;
+
+    /**
+     * 是否允许**明文 http** 抓取（默认 {@code false}，只放 https）。
+     *
+     * <p>`REF-5.4` 出站守卫的协议白名单开关（裁定 `D-2026-10-09-6②`）：默认只放 https，
+     * 本地/内网调试确需明文时显式打开。<b>与「私网地址」无关</b> —— 回环 / 私网 / 链路本地 /
+     * 保留段由 {@code OutboundUrlGuard} 无条件拒绝，本开关**不能**放行它们。</p>
+     */
+    private boolean urlFetchAllowInsecureHttp = false;
 }

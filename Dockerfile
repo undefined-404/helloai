@@ -70,7 +70,10 @@ COPY helloai-ui/ ./
 RUN npm run build   # vue-tsc -b && vite build -> dist/
 
 # ---------- Stage 3: app image (Spring Boot jar) ----------
-FROM eclipse-temurin:17-jre AS app
+# Base pinned to the Ubuntu 24.04 (noble) variant ON PURPOSE: the floating
+# `17-jre` tag now resolves to Ubuntu 26.04 ("resolute"), whose default repos no
+# longer carry postgresql-client-16 (only 18). See the apt line below for why 16.
+FROM eclipse-temurin:17-jre-noble AS app
 # Container locale pinned to C.UTF-8 + UTF-8 file.encoding (same as compose env,
 # so behaviour is identical whether the jar is baked in or bind-mounted).
 # TZ + -Duser.timezone pin the JVM business timezone to Asia/Shanghai: the compose
@@ -83,6 +86,15 @@ ENV LANG=C.UTF-8 \
     TZ=Asia/Shanghai \
     JAVA_TOOL_OPTIONS="-Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai"
 WORKDIR /app
+# postgresql-client-16 provides the pg_dump / pg_restore that the platform backup
+# capability (REF-2.3) shells out to (helloai.backup.pg-dump-path left empty =>
+# resolved from PATH). Major 16 matches the server used by docker-compose
+# (postgres:16.4) and RestoreGate gate 1 requires dump major == runtime major.
+# Without this the backup endpoint fails explicitly ("cannot start pg_dump");
+# the capability is unavailable rather than silently degraded.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends postgresql-client-16 \
+ && rm -rf /var/lib/apt/lists/*
 COPY --from=backend-build /workspace/helloai-start/target/helloai-start-1.0.0-SNAPSHOT.jar helloai-start.jar
 # Runs as root (same as the legacy bind-mount mode) so the bind-mounted
 # host `./logs` directory remains writable without host-side chown.

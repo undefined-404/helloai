@@ -164,6 +164,10 @@ Credential
 - 报告审查链三级容错（L1 `@TransactionalEventListener(AFTER_COMMIT)` 内存事件 + L2 Outbox（报告写回与 `agent_outbox_event` 同事务 → `AgentEventCompensationTask` 补投 → `helloai.report-review.queue` → `MqFinalReportReviewConsumer` 幂等消费）+ L3 `FinalReportReviewOrphanTask` 巡检（`REVIEWING` 超阈值收敛 `DONE`，刻意不重投审查）；写口收口 `FinalReportStateMachine` 显式迁移表 + `TaskService.transitFinalReportStatus` / `convergeFinalReportToDone`；入口 Redisson 防双审锁）；
 - 产物存储一致性（ArtifactStorage 抽象 + Composite 路由（local/minio 双实现、按 type/URL 前缀分派）+ `AttachmentServiceImpl.register` 前置校验（validateAddress + 存在性，不存在 400 拒绝，把预览期 500 提前成登记期 400）；`ArtifactStorageReconcileTask` 6h ShedLock 只读对账（attachment 全量含逻辑删除 ↔ 桶内对象双向比对，悬空/孤儿/字节不符三态）；孤儿清理默认关闭，三重保险——开关 + 24h 时间窗 + 单轮上限 200）。
 
+- 平台备份 / 恢复（备份编排：`pg_dump -Fc` 全库 + MinIO 对象清单递归枚举 + manifest 前置 peek（不解档即可判内容）+ Redisson 单飞锁 + 仅淘汰自动备份，落**独立桶** `helloai-backups`（不参与产物对账）+ `platform_backup` 台账（`V105`）；恢复侧三门（跨引擎拒 / schema 高过运行时拒 / 在线拒）+ 管理端 preflight（只读）与 restore 端点；生产镜像内置 `pg_dump` / `pg_restore` 客户端。**诚实边界**：对象**本体**不在备份内（只有 `key` + `size` 清单）；运行中备份不比多文件同一瞬间。停机恢复流程见 `doc/manual/platform-backup-restore/runbook.md`）。
+
+- 附件与任务域**读权限单一判据**（`AttachmentVisibilityPolicy`：`TASK` 可见范围 × **根任务 Task-Team 成员关系**，含 derive-on-miss 兜底；上传者恒可读自传 ⇒ 被改派换下者仍能读自己旧产出）；读侧通道**同源**——附件端点（`/api/attachments/**`）与子任务视图端点（时间线 / 对话流 / 详情）统一经该判据（视图侧收口 `SubTaskViewGuard`），其中详情端点 **此前无校验**的缺口已关闭；被注入截断的前置附件在标注行给出可寻址 `id=<attachmentId>`，配合既有 `downloadById` 端点可按需回取全文。
+
 这些属于 HelloAI 的**分布式编排与可靠性基础设施**。
 
 # 7. 当前 Runtime 基线

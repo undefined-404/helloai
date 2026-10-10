@@ -6,7 +6,7 @@
 > **用户裁定**：`D-2026-10-09-4`（见《差距表》§0「当前生效的取舍决策」）——四项能力优先级、备份/恢复与 RAG 入目标架构、沙箱生产形态、语义位与不可关闭清单同批。
 > **性质**：本计划只收**可执行结论**（借鉴落点 → 动作 → 验收 → 验证集 → 回填），不含调研过程（在 `research/`）与稳定设计（在 `design/`）。
 > **完成迁移**：执行完成后迁入 `doc/archive/implemented/` 并标 `Done`。
-> **最后更新：2026-10-10（v8）**——v1 勘误已并入正文；v2 新增 **11 处动作订正**（会导致回归失败或做不出来的部分）、**每组的验证集与文档回填**、**许可证口径**、**REF-6 载体修正**；v3 **Fork 相关条目全部取消**（`D-2026-10-09-5`，REF-2 收敛为「备份 / 恢复」）；**v4 两项重大调整**（`D-2026-10-09-6`）：① **REF-3 沙箱整组降级为「条件触发」**——当前**没有可隔离的执行对象**，不排期、只留预案（修正原「第 3 优先级」排序）；② **新增 `REF-7`「外部 Agent 工作详情快照」**（差距锚点 `G-020`）。原 §11 待拍板 5 条**已全部裁定**并移入 §12 裁定记录，**本计划当前无待拍板项**；**v5 = REF-1.1 / 1.2 / 1.3 / 1.3b 已完成**（2026-10-09），各组结果与未达成分项见各节 `Status` 行；**v6 = REF-1.4 / 1.5 / 1.6 次序与 REF-1.6 设计定稿**（`D-2026-10-10-1`，见该节）——次序定为 **`REF-1.6 → REF-1.5 → REF-1.4`**；同时落定十条：存储形态走受控存储（不触发 G-005 条件①）、技能正文存 PG、**不建新 ADR**、外部技能目录 **WONTFIX**、命名统一「**技能包**」+ 清单文件 `skill-package-manifest.md`、安装 / 卸载落 `skill_package_audit`、**版本策略**（多版本共存 / 高版本需确认 / 降版走独立接口）、**ACTIVE 选版 + 内容键 `{name}@{version}`**、**内置保护（同名一律拒绝安装）**、**存原始正文**；**v7 = REF-2 实施方案定稿**（`D-2026-10-10-2`，见 §4）——落定六项：执行形态走应用内 `ProcessBuilder` + 前置检查 + Dockerfile 补装 PG 客户端（不做 `docker exec`）、**`ProcessBuilder` 判为不触发 `G-005` 条件①**（故 REF-3 排期不动）、备份落**独立 bucket `helloai-backups`**（对账巡检枚举整桶，共用会被当孤儿删）、定时 + 手动双触发且长操作走异步 + 轮询、仅自动备份按份数淘汰（默认 7）且手动永不淘汰、新增 `platform_backup` 记录表（V105）；**v8 = `REF-2.3` / `REF-2.3b` 落地并验证**（2026-10-10，见 §4 `Status`）——编排层 + 恢复三门 + `platform_backup`；单测 22 例、演练脚本 `verify-backup-restore.ps1` 29 项全过。
+> **最后更新：2026-10-10（v10）**——v1 勘误已并入正文；v2 新增 **11 处动作订正**（会导致回归失败或做不出来的部分）、**每组的验证集与文档回填**、**许可证口径**、**REF-6 载体修正**；v3 **Fork 相关条目全部取消**（`D-2026-10-09-5`，REF-2 收敛为「备份 / 恢复」）；**v4 两项重大调整**（`D-2026-10-09-6`）：① **REF-3 沙箱整组降级为「条件触发」**——当前**没有可隔离的执行对象**，不排期、只留预案（修正原「第 3 优先级」排序）；② **新增 `REF-7`「外部 Agent 工作详情快照」**（差距锚点 `G-020`）。原 §11 待拍板 5 条**已全部裁定**并移入 §12 裁定记录，**本计划当前无待拍板项**；**v5 = REF-1.1 / 1.2 / 1.3 / 1.3b 已完成**（2026-10-09），各组结果与未达成分项见各节 `Status` 行；**v6 = REF-1.4 / 1.5 / 1.6 次序与 REF-1.6 设计定稿**（`D-2026-10-10-1`，见该节）——次序定为 **`REF-1.6 → REF-1.5 → REF-1.4`**；同时落定十条：存储形态走受控存储（不触发 G-005 条件①）、技能正文存 PG、**不建新 ADR**、外部技能目录 **WONTFIX**、命名统一「**技能包**」+ 清单文件 `skill-package-manifest.md`、安装 / 卸载落 `skill_package_audit`、**版本策略**（多版本共存 / 高版本需确认 / 降版走独立接口）、**ACTIVE 选版 + 内容键 `{name}@{version}`**、**内置保护（同名一律拒绝安装）**、**存原始正文**；**v7 = REF-2 实施方案定稿**（`D-2026-10-10-2`，见 §4）——落定六项：执行形态走应用内 `ProcessBuilder` + 前置检查 + Dockerfile 补装 PG 客户端（不做 `docker exec`）、**`ProcessBuilder` 判为不触发 `G-005` 条件①**（故 REF-3 排期不动）、备份落**独立 bucket `helloai-backups`**（对账巡检枚举整桶，共用会被当孤儿删）、定时 + 手动双触发且长操作走异步 + 轮询、仅自动备份按份数淘汰（默认 7）且手动永不淘汰、新增 `platform_backup` 记录表（V105）；**v8 = `REF-2.3` / `REF-2.3b` 落地并验证**（2026-10-10，见 §4 `Status`）——编排层 + 恢复三门 + `platform_backup`；单测 22 例、演练脚本 `verify-backup-restore.ps1` 29 项全过；**v9 = `REF-2.4` + `REF-5.2a` / `REF-5.1` 落地**（2026-10-10）——停机恢复流程手册 + 部署侧上线核对清单（§4）；常量单源化 + 「无替代 Agent」分支可读化（409 + 时间线）与前端字典补齐（§7 `Status`）；**v10 = `REF-5.3` / `REF-5.4` 落地**（2026-10-10，见 §7 `Status`）——初始化期服务锁定（判据取用户数）+ 出站 SSRF 守卫（OkHttp 自定义 `Dns`，URL 层 + 地址层两层），A 档六项已交付四项。
 
 ---
 
@@ -224,7 +224,7 @@ Diagnosis  ：.tmp/diag-skill-scan.*（仅诊断，不得作为正式验证）
 | REF-2.3b | **恢复侧安全闸门**：跨引擎拒恢复 / schema 版本高过运行时拒恢复 / 在线恢复拒绝（均给出可读原因） | 三类非法恢复各有一个必拒绝用例 |
 | REF-2.4 | 停机恢复流程文档化（诚实边界：运行中备份**不保证**多文件同一瞬间） | 文档成文并随能力交付 |
 
-> **Status（2026-10-10，v8）**：`REF-2.3` / `REF-2.3b` **已交付并验证**（编排层 + 恢复三门 + `platform_backup` V105；单测 22 例全绿、演练脚本 `verify-backup-restore.ps1` 29 项全过，含「字典序版本」安全回归）；`REF-2.4`（停机恢复流程文档化）**未启动**。落地方案见下。
+> **Status（2026-10-10，v9）**：`REF-2.3` / `REF-2.3b` **已交付并验证**（编排层 + 恢复三门 + `platform_backup` V105；单测 22 例全绿、演练脚本 `verify-backup-restore.ps1` 29 项全过，含「字典序版本」安全回归）；`REF-2.4` **已交付**（停机恢复流程手册 `doc/manual/platform-backup-restore/runbook.md`：能力边界 / 备份判据 / 恢复三路径与三门 / 停机清单）。同批补上 ① 承诺而此前**未落地**的生产前置 —— `Dockerfile` app 阶段装 `postgresql-client-16`（**实测**：容器内 `pg_dump` / `pg_restore` 均为 16.15，与 `postgres:16.4` 服务端同主版本；基础镜像同时钉到 `-noble` —— 浮动 tag 现已指向 Ubuntu 26.04，其源里没有 16 客户端）。验证见 `LOG-20261010-007` / `LOG-20261010-008`。落地方案见下。
 
 **实施方案（2026-10-10 定稿，`D-2026-10-10-2`）**
 
@@ -277,7 +277,8 @@ Diagnosis  ：.tmp/diag-skill-scan.*（仅诊断，不得作为正式验证）
 > ③ **单飞锁用 Redisson，不用上游形态**：上游是**进程内 `asyncio.Lock`**（其项目默认单进程）。helloai 已有 Redisson 4.0.0 `RLock`（`SubTaskReviewServiceImpl:233-249` 范式）与 ShedLock 6.6.0 `@SchedulerLock`，直接用前者。
 > **可复用资产**：`deploy/middleware/scripts/migrate.sh:67-81` 已有 `pg_dump -Fc` 与 `pg_restore --no-owner --no-privileges -j 4` 的现成写法。
 
-**Return 部分**：REWORK→驳回→改派→重开工闭环已完整，**不新做**；仅建议加一条断言：改派时 `task_timeline` 保留（review 驳回路径已有 `REVIEW_REJECTED` 落 timeline）。
+**Return 部分**：REWORK→驳回→改派→重开工闭环已完整，**不新做**。原「建议加一条断言：改派时 `task_timeline` 保留」
+**已落地**（`verify-subtask-redispatch-auto-execution.ps1` 改派前后取时间线 id 快照，blocked 场景实测 `retained=1/1`）。
 
 **REF-2 验证集**
 
@@ -286,8 +287,17 @@ Required   ：新增 verify-backup-restore 演练脚本（备份 → 恢复 → 
              ✅ 已交付（2026-10-10）：`scripts/powershell/verify-backup-restore.ps1`（S0..S7，29 项）；
                 三类非法恢复必拒绝用例落 `RestoreGateTest`（单测，线上造不出伪造归档头/manifest）；
                 真恢复只对一次性探针库，app 一键恢复端点按停机操作不端到端跑（脚本打印说明，不假装验过）
-Regression ：verify-c3-reconcile.ps1、verify-subtask-redispatch-auto-execution.ps1、verify-minio-artifact.ps1、verify-c3-rollback.ps1
-门禁       ：bash scripts/ci/ci-gate.sh
+Regression ：✅ 已跑（2026-10-10）：`verify-c3-reconcile.ps1` PASS=6 FAIL=0（另跑 DB 侧探针：窗口内可判定行失配 0）；
+             `verify-subtask-redispatch-auto-execution.ps1 -Scenario blocked` 通过（**含改派后 `task_timeline` 保留 1/1**）；
+             `verify-minio-artifact.ps1` PASS=6 FAIL=0；`verify-c3-rollback.ps1` 判 **N/A** —— 它依赖的 `gray-percent`
+             已随 G-002 单轨硬切删除（演练前提消失，非 FAIL）。
+             ⚠️ 跑通前先修掉三处脚本漂移（本轮一并修）：退役路径（`/block` `/reassign` `/sub-tasks/{id}` → `*ById`）、
+             管理端鉴权头 `Authorization: Bearer` → `X-Admin-Token`、MinIO 健康检查拿基址直打根路径（补 `/minio/health/live`）。
+             ⚠️ offline 场景 **BLOCKED**：两场景 target agent 硬编码同一模型，平台限「同角色同模型唯一」⇒ 先跑者占用，后跑者 409。
+门禁       ：✅ `bash scripts/ci/ci-gate.sh` **5/5 全过**（累计用例 2128；B 级集成 29 例 0 失败）
+Deploy     ：部署侧核对项（镜像内 `pg_dump` / 服务器侧首次真备份 / 停机恢复路径 C 演练）见
+             `doc/plan/HelloAI 上线核对清单.md` §1 —— 本地走 `.tools/pgsql` + 本地 MinIO，
+             与服务器「镜像内客户端 + 自建桶」是两条路径，**本地通过不代表部署通过**
 ```
 
 ---
@@ -387,6 +397,38 @@ Regression ：verify-agent-skill-capability.ps1（技能包登记）、verify-we
 | REF-5.4 | **SSRF 出站校验**（含 DNS-rebinding pinning） | 外联 URL 必过校验 | 落点 `WebPageFetchServiceImpl` |
 | REF-5.5 | **目录守卫 + 结构化拒绝码** | 拒绝原因可读 | **未来前置**（开放工作目录之前置，当前无该能力） |
 | REF-5.6 | **备份/恢复**（= REF-2.3，此处仅索引） | — | 与 REF-2 合并 |
+
+> **Status（2026-10-10，v10）**：A 档六项**已交付四项** —— `REF-5.2a` / `REF-5.1`（`LOG-20261010-009`）、
+> `REF-5.3` / `REF-5.4`（`LOG-20261010-010`）；`REF-5.6` 已并入 `REF-2`。
+>
+> ① **常量单源化**（`5.2a`）：`DEP_CONTENT_MAX_CHARS` 收敛为 `UpstreamAttachmentRenderer.DEP_CONTENT_MAX_CHARS`
+> （两处消费方引用同一常量）；`McpToolServiceImpl` 旧注释指向**已删除类** `SubTaskExecutionService` 的陈旧指认一并清除。
+> ② **无替代分支可读化**（`5.1`）：落 `sub_task_dispatch_no_alternative` 时间线 + 抛 **409**（可读原因，不再是裸 500）；
+> 前端登记 `eventMeta.ts`（`EVENT_META` + `PAYLOAD_KEY_LABEL`）与 `sequenceFlow.ts`（`LABEL`）—— **第三处
+> `SubTaskDetail.vue` 无需改动**（经 `EVENT_META` 取标签；这两个事件是必须可见的调度决策节点，**不进** `COMPACT_HIDDEN_EVENTS`）。
+> ③ **初始化期服务锁定**（`5.3`）：判据 = **用户数 == 0**（**不用** `system.setup_finished` —— 该值在
+> `V1__init_all.sql` 被预置为 `'1'`，当判据**永不生效**）；落点 `SetupLockInterceptor`，除 `/api/setup/**` 与
+> `/api/health/**` 外一律 `503` + `setup_required`，与前端 `!setupStatus.hasUsers` 同源。
+> ⚠️ **v2 订正原文「现无任何拦截器」不准确**：实测已有 `RequestLog` / `Auth` / `AdminOnly` / `Sa` 四个拦截器，
+> 只是**没有**初始化锁定这一条 —— 落地是**新增一个**并接入 `WebMvcConfig`，不是从零建拦截器体系。
+> ④ **出站 SSRF 守卫**（`5.4`）：`WebPageFetchServiceImpl` 由 JDK `HttpClient` 改 **OkHttp + 自定义 `Dns`**；
+> 两层防线 = **URL 层**（协议白名单默认只放 https + **IP 字面量直判**）+ **地址层**（解析即判并以同一结果建连 = pinning）；
+> 跳转**逐跳**重跑守卫（旧 `Redirect.NORMAL` 的重定向式 SSRF 随之关闭）。OkHttp 由传递依赖转为**显式声明**
+> （根 pom `okhttp.version`，按 `D-2026-10-09-6③-2`「传递依赖落地必须显式声明」）。
+> **实测结论（本项的关键依据）**：OkHttp 对 **IP 字面量不走 `Dns`** —— `http://169.254.169.254/` 这类最高危形态
+> 只在 URL 层拦得住，这是「两层必须同时存在」的直接证据；另实测 `0177.0.0.1` 在本 JDK 下解析为 **177.0.0.1（公网）**，
+> 不构成绕过（守卫的不变量是「最终连的地址必须公网」）。
+>
+> 验证：`SetupLockInterceptorTest` 3 例 / `OutboundUrlGuardTest` 15 例 / `WebPageFetchServiceImplTest` 14 例全过
+> （含「默认拒明文 http」「默认拒回环字面量」「十进制写法解析为 127.0.0.1 被拒」）；前端 type-check 通过；
+> `ci-gate.sh` 全绿（累计用例见本轮 Log）。
+> **`REF-5.2b` 已结项（2026-10-10，用户确认改形）**：结论与实测见 `doc/review/HelloAI REF-5.2b 与 REF-7 合并评估（2026-10-10）.md`。
+> **不引入** `ToolResult` 双视图（该落点**在代码中不存在**）；实测把前提摆正 —— **数据没丢**（原文全量在 PG/MinIO），
+> 丢的是**消费侧可见性**；且 `DEP_CONTENT_MAX_CHARS` 是**整块总预算**（多前置附件合计越限即截断），**现网已在触发**。
+> **改形落地 = ① 截断标注行补 `id=<attachmentId>`（可寻址 ref）+ ② 复用既有 REST 取回通道**
+> —— 实测团队成员读 `attachments/downloadById/{id}` 已 200，**故不新增 MCP 工具**（工具面保持 13 个，避免动外部 Agent 契约）。
+> 连带（用户裁定）：**子任务视图读判据统一**到 task-team（时间线 / 对话流 / `getById` 三处，后者此前**无任何校验**）——
+> 回流锚点 `R11`。仍待：`REF-5.5`（未来前置）。回流锚点见差距表 §7.1.4（`R8`/`R9`/`R10`/`R11`）。
 
 > **v2 订正（逐条）**：
 >

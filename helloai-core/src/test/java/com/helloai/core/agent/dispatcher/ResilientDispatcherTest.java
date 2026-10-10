@@ -22,6 +22,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.Map;
 import java.util.function.Supplier;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -29,6 +30,7 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -276,16 +278,43 @@ class ResilientDispatcherTest {
         }
 
         @Test
-        @DisplayName("无替代 Agent → fallback 抛 BizException")
-        void shouldThrowWhenNoAlternative() {
+        @DisplayName("无替代 Agent → 抛 409 + 可读原因 + 落 sub_task_dispatch_no_alternative 时间线（REF-5.1）")
+        void shouldThrowReadable409AndRecordNoAlternativeTimeline() {
             when(agentService.getById(1L)).thenReturn(null);
             when(agentSelector.pickAlternative(eq(1L), eq(null), any()))
                     .thenReturn(null);
+            when(subTaskQueryPort.findById(100L)).thenReturn(
+                    SubTaskSnapshot.builder().id(100L).taskId(1100L).build());
 
             assertThatThrownBy(() ->
                     invokeFallback(1L, 100L, new BizException("Agent 不存在: 1")))
                     .isInstanceOf(BizException.class)
-                    .hasMessageContaining("无可用替代 Agent");
+                    .hasMessageContaining("无可用替代 Agent")
+                    // 裸 500 → 409：调用方拿到的是「冲突 + 可读原因」，不是「服务器错误」
+                    .satisfies(e -> assertThat(((BizException) e).getCode()).isEqualTo(409));
+
+            verify(taskTimelinePort).recordEvent(
+                    eq(1100L), eq(100L), eq("sub_task_dispatch_no_alternative"), eq(AgentRole.SYSTEM), isNull(),
+                    argThat(p -> Long.valueOf(1L).equals(p.get("excludedAgentId"))
+                            && "N/A".equals(p.get("role"))
+                            && "no_alternative".equals(p.get("reason"))));
+        }
+
+        @Test
+        @DisplayName("无替代 Agent + 取不到 subTask 快照 → 仍抛 409（时间线 best-effort 不阻断）")
+        void shouldStillThrowReadable409WhenSnapshotMissing() {
+            when(agentService.getById(1L)).thenReturn(null);
+            when(agentSelector.pickAlternative(eq(1L), eq(null), any()))
+                    .thenReturn(null);
+            when(subTaskQueryPort.findById(100L)).thenReturn(null);
+
+            assertThatThrownBy(() ->
+                    invokeFallback(1L, 100L, new BizException("Agent 不存在: 1")))
+                    .isInstanceOf(BizException.class)
+                    .satisfies(e -> assertThat(((BizException) e).getCode()).isEqualTo(409));
+
+            verify(taskTimelinePort, never()).recordEvent(
+                    anyLong(), anyLong(), eq("sub_task_dispatch_no_alternative"), any(), any(), anyMap());
         }
 
         @Test

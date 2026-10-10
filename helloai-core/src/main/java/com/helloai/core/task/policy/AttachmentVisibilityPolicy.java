@@ -37,6 +37,29 @@ public class AttachmentVisibilityPolicy {
     private final SubTaskService subTaskService;
 
     /**
+     * 判某 agent 是否可读某**子任务视图**（时间线 / 对话流 / 详情）—— 与附件读侧**同一判据**。
+     *
+     * <p><b>为什么与附件共用一条判据</b>：判据的实质是「请求者是否属于该附件/该子任务所属**根任务**的
+     * Task-Team」（{@link #rootTaskIdOf} + 成员关系 + derive-on-miss），与"读的是附件还是视图"无关。
+     * 视图侧只是**没有**附件侧那条 ①「上传者恒可读自传」，故以 {@code uploaderAgentId = null} 走
+     * {@link #canRead(Long, Long, Long, AttachmentVisibility)} 的 ④ 分支即可 —— **逻辑零复制**
+     * （本仓库对"判据分散"零容忍，见类注释）。</p>
+     *
+     * <p><b>2026-10-10 统一（实测依据）</b>：改动前视图侧用的是另一套更窄的规则
+     * （{@code sub_task.assigned_agent_id == agentId}）—— 实测把**合法团队成员也挡在门外**：
+     * 同一个 Agent 加入 team 后读附件已是 200，而读同任务的时间线 / 对话流**仍 403**；
+     * 同时 {@code /api/sub-tasks/getById} **完全没有校验**（任何有效 Agent API Key 可读任意子任务详情）。
+     * 两者同批收敛到本判据。</p>
+     *
+     * @param agentId    Agent ID（agent 通道的 {@code _authId}）；{@code null} 恒不可读
+     * @param subTaskId  目标子任务 ID
+     * @return 可读返回 {@code true}
+     */
+    public boolean canReadTaskScoped(Long agentId, Long subTaskId) {
+        return canRead(agentId, subTaskId, null, AttachmentVisibility.TASK);
+    }
+
+    /**
      * 判某 agent 是否可读某附件。
      *
      * @param agentId    Agent ID（agent 通道的 {@code _authId}）；{@code null} 恒不可读

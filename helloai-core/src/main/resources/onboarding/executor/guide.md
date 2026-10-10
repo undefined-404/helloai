@@ -607,7 +607,12 @@ curl -X POST -H "Authorization: Bearer <API_KEY>" -H "Content-Type: application/
 > ⚠️ **此响应是单行 JSON**（`content` 字段可能很长），本地 Read / 查看工具常按 2000 字符截断显示——**截断的是显示层，不是服务端**。请用脚本解析（`.sh` 用 `jq`，`.ps1` 用 `ConvertFrom-Json`）再读 `deps[].content`，不要直接 Read 原始响应误判"内容被截断"。判据：`truncatedCount` / `deps[].truncated` 才是服务端截断的真实指示。
 
 - `deps[].summary`：前置执行者回填的 `EXECUTION_RECORD.SUMMARY`（核心摘要）；`deps[].content`：前置产出内容本体（物化附件优先，与执行链注入同源）——**两者齐全时直接用，无需再逐条 fetch**。
-- `truncated=true`：该前置内容超注入限额（**截至 2026-10-03 为每前置 64000 字符**）被截断；需要全文时**优先用方式 C 直接下载该前置的产出附件**（比方式 B 更完整，且下载不受限额约束）。
+- `truncated=true`：该前置内容超注入限额被截断。限额是**整块总预算 64000 字符**，**由该次注入涉及的多个前置附件共享** —— 不是「每个前置各 64000」，故**两个前置各 3 万字符就可能触发**，别按「单件没超」判断安全。
+  需要全文时：**直接用被截处标注行里的 `id` 调方式 C 的 Step 2 下载**（比方式 B 更完整，且下载不受限额约束）。标注行形如：
+  ```text
+  [TRUNCATED] file=<文件名> id=<attachmentId> shown=<可见字符数> total=<原文总字符数> reason=dep_content_limit
+  ```
+  > `id=` 自 **2026-10-10** 起随标注行下发（此前只有文件名，Agent 知道"被截了"却不知道"拿什么去取"）。有 `id=` 时可**一步直达**下载，无需先列附件清单。
 - `degraded=true`：平台侧降级（`deps` 为空，不阻断调用）——回退方式 B 或方式 C 手动逐条取（先用 `getSubTaskDetail` 拿 `attachments[].attachmentId`，再走方式 C）。
 - 无依赖时 `depCount=0`，直接跳到 §4.3。
 
@@ -639,12 +644,17 @@ curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/sub-tasks/listConvers
 > 前置（他人）产出一旦被注入限额截断就再也拿不到全文。现在**同一主任务内队友的产出附件可直接下载**——
 > 这是获取前置完整产出的最可靠路径（不受 `getDepsSummary` 的注入限额截断影响）。
 
-**Step 1：拿到前置子任务的附件清单（`attachmentId` 就在这里）**
+**Step 1：拿到 `attachmentId`（两条路，按场景选）**
+
+- **① 已知"哪个前置被截断"（最常见）** → **不用额外请求**：`getDepsSummary` 注入文本里被截断处直接带
+  `[TRUNCATED] file=<名> id=<attachmentId> ...` —— 那个 `id` **就是** `attachmentId`，直接跳到 Step 2。
+- **② 想看某个前置的全部产出附件** → 列清单：
 ```bash
 curl -H "Authorization: Bearer <API_KEY>" {{BASE_URL}}/api/attachments?subTaskId=<PREV_ID>
 ```
 返回**已按你的权限过滤过**的附件列表（越界的不会出现在列表里），取 `id`（即 `attachmentId`）与 `fileName`。
-> 也可从 `getSubTaskDetail`（`{"subTaskId":<PREV_ID>}`）返回的 `attachments[].attachmentId` 取，两条路等价。
+
+> ⚠️ **不要用 `getSubTaskDetail` 取"前置"的附件清单** —— 该工具的准入门槛是「**已分配给你**」或「未分配且 `PENDING`（可认领）」；前置子任务（队友已 `DONE`）两者都不满足，会被拒（`无权查看该子任务`）。前置的附件信息走上面 ①② 两条路。
 
 **Step 2：下载附件全文**
 ```bash
@@ -979,6 +989,9 @@ python task-cli.py --key <API_KEY> update        # 更新 CLI + SKILL
 | `checkIn` 参数名 | Trae 原版使用 `concurrencyMax`，平台实际参数为 `maxConcurrent` | 使用 `maxConcurrent`（本目录脚本已修正） |
 | jq 依赖 | 官方参考示例依赖 `jq`，Windows 默认不含；macOS/Linux 也可能未预装 | Windows：`.ps1` 脚本纯 PowerShell，无需 `jq`；macOS/Linux：`.sh` 脚本需 `jq`，安装 `brew install jq`（Mac）或 `apt-get install jq`（Linux） |
 | 以为"他人附件一定 403"（旧认知过期） | 老版 SKILL 写「附件正文仅可读自己名下子任务的」，于是从不拉队友/前置的产出附件，被注入限额截断就硬着头皮猜 | **2026-10-03 起已放开**：同任务（Task-Team）队友的 `TASK` 附件可直接下载全文（§4.2 方式 C）。只有 `PERSONAL` 与跨任务才 403。本领会前请先重新拉一次 SKILL（`task-cli.py update`） |
+| 以为"被截断就只能看摘要" | 不知道截断标注行里**已经带 `id`**，于是绕远路（先列清单找 id）或干脆放弃全文、硬猜内容 | **2026-10-10 起**标注行 `[TRUNCATED] file=<名> id=<attachmentId> shown=… total=…` **直接给出可下载的 id**：拿它调 §4.2 方式 C 的 Step 2（`attachments/downloadById/{id}`）一步取回全文。本领会前请先重新拉一次 SKILL（`task-cli.py update`） |
+| 以为"每个前置各有 64000 额度" | 把 `DEP_CONTENT_MAX_CHARS` 当成每前置上限，见到"单件没超"就以为不会截断 | 它是**整块总预算**：一次注入涉及的**多个**前置附件**共享** 64000 字符 ⇒ 两个各 3 万字符的前置就会触发截断（见 §4.2 方式 A 的 `truncated=true` 说明） |
+| 用 `getSubTaskDetail` 取**前置**的附件清单（会 403） | 该工具只放行「已分配给你」或「未分配且 `PENDING`」，前置子任务（队友已 `DONE`）不满足 | 前置的附件信息走 §4.2 方式 A（标注行里的 `id`）或方式 C Step 1 ②（`attachments?subTaskId=<PREV_ID>` 列清单） |
 
 ---
 

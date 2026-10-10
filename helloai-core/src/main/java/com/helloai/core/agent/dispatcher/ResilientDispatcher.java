@@ -254,10 +254,21 @@ public class ResilientDispatcher implements TaskDispatchPort {
         Agent alternative = agentSelector.pickAlternative(agentId, role, constraints);
 
         if (alternative == null) {
+            // REF-5.1（2026-10-10）：此分支此前只 log.error 后抛**默认 500** 的 BizException ——
+            // ① 用户拿到的是「服务器错误」，看不到可读原因；② 与紧邻的**成功降级**路径
+            //（{@link #recordDispatchFallback} 落 sub_task_dispatch_fallback）不对称，
+            // 改派失败在时间线上**无痕**。现改为两件事：
+            //   落 sub_task_dispatch_no_alternative 时间线（best-effort，与成功路径同型）；
+            //   抛 409（冲突语义：当前状态下确无可派对象，非服务端缺陷，不该报 500）。
+            // 409 是仓库既有码（全仓 9 处），且落在 GlobalExceptionHandler 的 [400,600) 分支 ⇒
+            // HTTP 状态与可读 msg 一并给到调用方。
+            String roleName = role == null ? "N/A" : role.name();
             String msg = String.format(
-                    "无可用替代 Agent: excludeAgentId=%d, role=%s", agentId, role);
+                    "无可用替代 Agent: excludeAgentId=%d, role=%s —— 当前无满足任务约束的候选执行者，"
+                            + "请稍后重试或转人工介入", agentId, roleName);
             log.error(msg);
-            throw new BizException(msg);
+            recordDispatchNoAlternative(agentId, subTaskId, roleName);
+            throw new BizException(409, msg);
         }
 
         // 替代 Agent 同样必须通过执行密集能力预检。
@@ -302,6 +313,37 @@ public class ResilientDispatcher implements TaskDispatchPort {
                             "reason", fallbackReason(t)));
         } catch (Exception e) {
             log.warn("落 sub_task_dispatch_fallback 时间线失败（不影响分配）: subTaskId={}, err={}",
+                    subTaskId, e.getMessage());
+        }
+    }
+
+    /**
+     * 落 {@code sub_task_dispatch_no_alternative} 时间线（改派失败留痕，REF-5.1）。
+     *
+     * <p>与 {@link #recordDispatchFallback} 同型：**best-effort**，写失败只 warn，
+     * 不影响随后抛出的 409 —— 时间线是留痕手段，不是判定前置。</p>
+     *
+     * <p>payload 与成功降级路径刻意对齐（都是「谁被排除 + 原因」）：成功路径给
+     * {@code preferredAgentId → actualAgentId}，本事件给 {@code excludedAgentId}（无 actual）。</p>
+     */
+    private void recordDispatchNoAlternative(Long excludedAgentId, Long subTaskId, String roleName) {
+        try {
+            SubTaskSnapshot snap = subTaskQueryPort.findById(subTaskId);
+            if (snap == null) {
+                return;
+            }
+            taskTimelinePort.recordEvent(
+                    snap.taskId(),
+                    subTaskId,
+                    "sub_task_dispatch_no_alternative",
+                    AgentRole.SYSTEM,
+                    null,
+                    Map.of(
+                            "excludedAgentId", excludedAgentId,
+                            "role", roleName,
+                            "reason", "no_alternative"));
+        } catch (Exception e) {
+            log.warn("落 sub_task_dispatch_no_alternative 时间线失败（不影响判定）: subTaskId={}, err={}",
                     subTaskId, e.getMessage());
         }
     }

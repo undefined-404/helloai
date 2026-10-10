@@ -97,10 +97,10 @@
 | G-012 | 登录鉴权与 RBAC 权限体系（Sa-Token） | 登录会话由 Sa-Token 承载（token 走 X-Admin-Token 头，active-timeout 8h 滑动续期）；授权为「角色-权限码」RBAC（四表 + 内置 SUPER_ADMIN / ADMIN + 存量用户 role 迁移 + 注解鉴权）；管理侧 API（角色 CRUD / 角色-权限绑定 / 用户-角色分配 / 权限码列表）与前端动态菜单按权限码过滤已具备 | 自建登录模块 → Sa-Token 统一会话 + 用户/角色/权限码管理 API + 接口注解鉴权 + 前端动态菜单；后续可按需做菜单树建表与页面化管理 | **P2** | DONE · 底座与闭环（会话 / 授权 / 管理 API / 前端页面 / 存量会话迁移 / 菜单树 DB 化）全部落地，原登记三项后置缺口已全部关闭；深化项已转 BASE 专项（见 `G-013`） |
 | G-013 | 基础架构深化（RBAC 底座，参考 JeecgBoot） | 前端动态路由（权限 = 路由可达性，无权限 URL 404）、`v-auth` 按钮级权限、动作级权限码、菜单树携带 component 驱动动态 `addRoute`、可视化菜单 / 权限管理页、角色授权差异更新、路由渲染增强（隐藏菜单 / 页面缓存 / 外链）、部门与岗位组织架构、数据权限规则（受控枚举 ALL / DEPT / DEPT_AND_CHILD / CUSTOM）均已具备 | 对齐 JeecgBoot 标杆：权限 = 路由可达性 + v-auth 按钮级权限 + 动作级权限码 + 菜单树携带 component 动态 addRoute + 可视化菜单树 CRUD + 角色授权差异更新 + 渲染增强/组织架构/数据权限 | **P1** | PARTIAL · 未达成：`active-timeout`（28800s）的**超时过期触发**未实测（仅由代码路径 + 单测覆盖）；`McpAuthFilter` 仍用 `validateAdminToken` 属**有意设计**（其异常不经 `@RestControllerAdvice`，改 `checkLogin` 会把 401 变 500），非缺口。见 `LOG-20260912-002` ~ `LOG-20260913-008` / `LOG-20260929-001` |
 | G-014 | 外部 Agent 执行通道缺陷修复（依赖门禁 / 返工出口 / 附件可发现 / 截断元数据 / 在线语义 / 核验边界） | 外部 Agent 通道已与内部分发链同口径：`claimSubTask` / `listAvailable` 复用依赖门禁（reason `dependency_not_ready`）；返工出口 `startSubTask`（含状态机 `REWORK→BLOCKED`）；`getDepsSummary` 区分「前置未就绪」与「采集异常」；`SubTaskDetail` 内联 attachments 与 contributors；核验侧截断输出结构化标注行且 Prompt 声明「不可见内容不得补全」；在线判定以 ACTIVE 值班租约为存活证据；`renewLease` 到期时刻单调钳制；JSON-RPC `tools/list` 补全 `required` | 外部 Agent 通道与内部分发链同口径：依赖/技能约束一致、返工可自救（不依赖人工放行）、前置产出与附件可发现可读、核验结论只基于可见证据、在线判定不误伤在岗 Agent | **P0** | PARTIAL · 未达成：13 工具矩阵与租约在线语义的**脚本级全量断言**（`verify-tool-matrix.ps1` / `verify-mcp-e2e.ps1` / `verify-agenthub-duty-e2e.ps1`）——当前由真实外部 CLI_CLIENT Agent 端到端 A 级实测覆盖主链。见 `LOG-20260924-001` / `LOG-20260930-002` |
-| G-015 | 外部 Agent 心跳/重派止血（B1：误判离线 → 在飞任务被重派打满死信） | 写侧值班租约守卫已具备（CAS 标 OFFLINE 前判 `isOnDuty`，持 ACTIVE 租约即跳过离线处置，与读侧「租约 ACTIVE → IDLE」同口径）；在飞子任务宽限（`inFlightGraceMinutes`，窗口取 `max(grace, offlineMinutes)`）；只读 / 登记类工具经 `refreshDutyLease` 顺带刷 `last_seen_time`；重派退避档绑独立列 `sub_task.last_attempt_time`（`V102`，仅 `incrementAttemptTotal` 原子写入，闸门只读该列）；离线在飞 IN_PROGRESS 置 PAUSED 保留归属（不消耗重派预算）；`redispatchDeadLetter` 清理残留 context 键；REST 双通道（直通 + JSON-RPC）透传 skills（兼容数组与 CSV）；`agent_duty_lease.ttl_minutes`（`V94`）持久化签发窗口；附件上传按「无归属 409 / 归属他人 403 / 子任务不存在 404」语义化报错 | 外部 Agent 埋头执行长任务（数分钟不触网）不被 5min 心跳窗口误判离线；判离线的读/写两视图口径统一 | **P0** | PARTIAL · 未达成：`SKILL.md` 与 `doc/manual/executor-duty/` 的 `attachmentId` 字段名同步。观察点：在飞续约仍用 `maxTtlMinutes(240)` 保活（仅体现在 `expire_time`，不污染 `ttl_minutes`）；「无候选空烧预算 + NO_ELIGIBLE_AGENT 独立告警」未做。见 `LOG-20260926-001` / `LOG-20260926-002` / `LOG-20261003-001` / `LOG-20261005-001` |
+| G-015 | 外部 Agent 心跳/重派止血（B1：误判离线 → 在飞任务被重派打满死信） | 写侧值班租约守卫已具备（CAS 标 OFFLINE 前判 `isOnDuty`，持 ACTIVE 租约即跳过离线处置，与读侧「租约 ACTIVE → IDLE」同口径）；在飞子任务宽限（`inFlightGraceMinutes`，窗口取 `max(grace, offlineMinutes)`）；只读 / 登记类工具经 `refreshDutyLease` 顺带刷 `last_seen_time`；重派退避档绑独立列 `sub_task.last_attempt_time`（`V102`，仅 `incrementAttemptTotal` 原子写入，闸门只读该列）；离线在飞 IN_PROGRESS 置 PAUSED 保留归属（不消耗重派预算）；`redispatchDeadLetter` 清理残留 context 键；REST 双通道（直通 + JSON-RPC）透传 skills（兼容数组与 CSV）；`agent_duty_lease.ttl_minutes`（`V94`）持久化签发窗口；附件上传按「无归属 409 / 归属他人 403 / 子任务不存在 404」语义化报错；改派链路的「无替代 Agent」分支返回 **409 + 可读原因**并落 `sub_task_dispatch_no_alternative` 时间线（`REF-5.1`），前端字典同批登记 | 外部 Agent 埋头执行长任务（数分钟不触网）不被 5min 心跳窗口误判离线；判离线的读/写两视图口径统一 | **P0** | PARTIAL · 未达成：「无候选空烧预算 + `NO_ELIGIBLE_AGENT` 独立告警」未做。观察点：在飞续约仍用 `maxTtlMinutes(240)` 保活（仅体现在 `expire_time`，不污染 `ttl_minutes`）；附件取回口径在 SKILL 与 executor-duty 手册已对齐（`tools/list` 的 `attachmentId` ↔ REST 附件清单的 `id`，并在手册中写明两处来源与 `getSubTaskDetail` 不适用于前置）。见 `LOG-20260926-001` / `LOG-20260926-002` / `LOG-20261003-001` / `LOG-20261005-001` / `LOG-20261010-009` / `LOG-20261010-011` |
 | G-016 | 报告整合质量 | 报告读取与子任务链同口径（物化附件优先 → `ExecutionRecord` SUMMARY / DELIVERABLES 注入 → output 兜底）；附件限额与族判定单源（`AttachmentContentPolicy`，shared）；Markdown 块级截断 + 超限结构化标注；大纲先行两段式（出纲失败降级单次调用）；核验 / 返工闭环（自审自过硬守卫 `review_skipped`）；报告版本单槽列 `final_report_prev(_agent_id/_time)`，rollback 端点 current ↔ prev 整体互换；审查异步化（REVIEWING 态 + 专用池 + `reportTime` 三重陈旧守卫 + 六出口收敛 DONE）；审查链三级容错（L1 `AFTER_COMMIT` 内存事件 / L2 Outbox 幂等消费 / L3 孤儿巡检收敛 DONE）；轮次无状态（由审查服务显式传 attempt，不落库） | 报告按主题归并有覆盖追溯，与执行链同口径读事实源；生成后自动核验、驳回可返工；自审自过不静默放行；审查不阻塞前端请求；历史报告可恢复上一版 | **P1** | PARTIAL · 未达成：前端轮询两项可选精修（keep-alive 退出未停表 / 无失败退避）。见 `LOG-20260928-002` / `LOG-20260928-003` / `LOG-20260929-005` / `LOG-20260930-007` / `LOG-20260930-008` |
 | G-017 | 附件存储一致性（产物对象 ↔ attachment 记录对账） | `ArtifactStorage` 契约已具备（Local / Minio 双实现 + Composite 按 type / URL 前缀路由；`exists` fail-open / `listObjects` fail-safe / `removeObject` fail-close）；`AttachmentServiceImpl.register` 前置校验（storageUrl 必填 + `validateAddress` + `exists` 校验，不存在 400 拒绝）；对账巡检 `ArtifactStorageReconcileTask`（6h + ShedLock，attachment 全量含逻辑删除 ↔ 桶内对象双向比对，悬空 / 孤儿 / 字节不符三态）；孤儿清理默认关闭 + 三重保险（开关 + 24h 时间窗 + 单轮上限 200）；MCP `uploadArtifact` 描述重写（storageUrl 格式 + bucket 白名单 + 错误示例） | DB 与对象存储两侧一致；悬空/孤儿可发现可报告；不再产生僵尸附件；孤儿清理受控有保险 | **P1** | PARTIAL · 未达成：① 历史 106 条悬空附件不自动修复（对账可见可报告）；② 部署侧安全动作待执行（改 MinIO 默认凭据 + 端口收安全组白名单）。见 `LOG-20260928-001` |
-| G-018 | 备份 / 恢复（平台数据可靠性） | 备份/恢复链已具备：备份编排（`pg_dump -Fc` 全库 + MinIO 对象清单递归枚举 + manifest 前置 peek + Redisson 单飞锁 + 仅淘汰自动备份）+ `platform_backup` 记录表（`V105`）+ 恢复侧三门（跨引擎 / schema 高过运行时 / 在线）+ 管理端 preflight、restore 端点；备份落独立 bucket `helloai-backups`（不参与产物对账）；停机恢复流程文档未成文 | `pg_dump -Fc` 全库 + MinIO 对象清单 + manifest 前置 peek（不解档即可判内容）+ 分布式单飞锁 + 自动/手动备份分离的保留策略 + 停机恢复流程文档化（诚实边界：运行中备份不保证多文件同一瞬间） | **P1** | PARTIAL · `REF-2.3` / `REF-2.3b` 已交付（备份编排 + 恢复三门 + `platform_backup`）；`REF-2.4` 停机恢复流程文档化未启动。验证见 `LOG-20261010-007`。落地硬约束（`REF-2.3b` 已满足）：① 恢复侧安全闸门（跨引擎 / schema 高过运行时 / 在线）；② 「`listObjects` 返回空」显式失败，不产出缺对象的「完整备份」；③ 复用既有 `pg_restore --no-owner --no-privileges` 写法 |
+| G-018 | 备份 / 恢复（平台数据可靠性） | 备份/恢复链已具备：备份编排（`pg_dump -Fc` 全库 + MinIO 对象清单递归枚举 + manifest 前置 peek + Redisson 单飞锁 + 仅淘汰自动备份）+ `platform_backup` 记录表（`V105`）+ 恢复侧三门（跨引擎 / schema 高过运行时 / 在线）+ 管理端 preflight、restore 端点；备份落独立 bucket `helloai-backups`（不参与产物对账）；停机恢复流程手册成文（`doc/manual/platform-backup-restore/runbook.md`：能力边界 / 备份判据 / 恢复三路径与三门 / 停机清单）；生产镜像内置 `postgresql-client-16`，备份在服务器侧可用 | `pg_dump -Fc` 全库 + MinIO 对象清单 + manifest 前置 peek（不解档即可判内容）+ 分布式单飞锁 + 自动/手动备份分离的保留策略 + 停机恢复流程文档化（诚实边界：运行中备份不保证多文件同一瞬间） | **P1** | DONE · 全链成立：备份编排 + 恢复三门 + `platform_backup` 台账 + 停机恢复流程手册 + 生产侧客户端前置。落地硬约束：① 恢复侧安全闸门（跨引擎 / schema 高过运行时 / 在线）；② 「`listObjects` 返回空」显式失败，不产出缺对象的「完整备份」；③ 复用既有 `pg_restore --no-owner --no-privileges` 写法。验证见 `LOG-20261010-007` / `LOG-20261010-008` |
 | G-019 | RAG 知识库（检索增强） | **完全空白**：pgvector / embedding / 知识库 / 向量 全仓零命中 | pgvector 存储与检索（**PG 单后端，不引入侧库**）+「无 KB 即摘工具」的条件可用语义位 + 注入预算（char_budget 契约）+ 引用溯源 marker（前端渲染卡片、喂模型前剥离） | **P2** | TODO · 未启动（`REF-4.x`）。**前置三件**：① PG 镜像换 `pgvector` 版（现 `postgres:16.4-alpine`，无扩展，属基础设施变更）；② 嵌入模型供应商 / 维度 / 密钥管理选型落 `design/adr/`；③ `search_knowledge` 必须经 `ToolCallbackContributor` 端口注册并登记技能包（`CODE_STYLE §35.1` 平台能力接线规则），不得给 LLM 直插域内 Service。**前置④「无 KB 即摘工具」的语义位已具备**——`search_knowledge` 只需在 `ToolCallbackContributor.toolAvailability()` 声明「KB 不存在 ⇒ false」即从模型可见列表摘除，无需改动 `ToolRegistry` / `RuntimeTurnExecutor` |
 | G-020 | 外部 Agent 工作详情快照（子任务执行过程的取证能力） | **完全空白**：平台当前只能审计到**订单层面**（认领 / 开工 / 心跳 / 交单 / 产物 / 阻塞 / 依赖读取，经 `agent_event` + `task_timeline` + 产物对账）；**子任务内部执行过程是黑盒**（这是刻意的解耦，但带来返工争议 / 质量复盘 / 责任界定的取证盲区） | 外部 Agent **事后、经审批、可选**地提交一份全任务工作详情快照 → 平台解析 → **原文落 MinIO** + **时间线插入结构化审计事件（闭合 schema + `snapshotRef`）** | **P2（可后置）** | TODO · 新增立项（`D-2026-10-09-6⑤`），任务锚点 `REF-7`。**动手前三项设计约束必须先定**（见 `plan/HelloAI 借鉴落地实施计划.md` §8.2）：① 与 `REF-6.2`「审计闭合 schema」的张力 ⇒ 必须双面（与 `REF-5.2b` 双视图同模式）；② 审批方是谁（倾向复用人工介入通道，不建第二套审批）；③ 落时间线的粒度。新增工具须走既有 `McpMcpServer` 守卫且**默认关闭**（`REF-6.13`） |
 
@@ -164,7 +164,7 @@ validationRules
 > 平台自身          → 全库无脚本引擎 / 表达式求值器，不执行任何外部内容
 > ```
 >
-> **「五边界」中对 helloai 当前唯一有真实意义的是网络边界**——而它的正确实现是**出站 SSRF 守卫**（`REF-5.4`，平台自己发起的外联），**不是容器网络隔离**。
+> **「五边界」中对 helloai 当前唯一有真实意义的是网络边界**——而它的正确实现是**出站 SSRF 守卫**（`REF-5.4`，平台自己发起的外联），**不是容器网络隔离**。**该项已交付**（`LOG-20261010-010`）：两层防线 —— **URL 层**（协议白名单默认只放 https + IP 字面量直判）与**地址层**（`OutboundUrlGuard.SafeDns` 解析即判、并以同一结果建连即 pinning）；跳转逐跳重跑，故旧实现 `Redirect.NORMAL` 的重定向式 SSRF 一并关闭。**实测结论**：OkHttp 对 **IP 字面量不走 `Dns`**（`http://169.254.169.254/` 这类最高危形态只在 URL 层拦得住），这是两层必须同时存在的直接依据。
 >
 > **触发条件（任一成立 ⇒ 重新进入排期，届时启动专项并出 ADR）**：① 平台增加碰宿主的工具；② 技能包要被执行；③ 平台自持浏览器。**预案**（spec 声明化 / 探针 / scope 生命周期 / 形态 = 独立沙箱服务）见 `plan/HelloAI 借鉴落地实施计划.md` §5。
 
@@ -218,23 +218,28 @@ Timeline / Replay
 
 ```text
 备份：pg_dump -Fc 全库 ──► MinIO 对象清单（listObjects 递归枚举）──► manifest 前置写 ──► 分布式单飞锁
-恢复：manifest peek 校验 ──► 恢复侧安全闸门 ──► pg_restore ──► 对象回填 ──► 停机恢复流程（文档）
+恢复：manifest peek 校验 ──► 恢复侧安全闸门 ──► pg_restore（灌入目标库，验证口径 = 空库）──► 停机恢复流程（手册）
 ```
 
 不变量与诚实边界：
 
 ```text
 运行中备份 ≠ 多文件同一瞬间一致（须在文档中明示，不得宣称「一致快照」）
+对象【本体】不在备份内（只有 key + size 清单）⇒ 恢复不回填对象内容，亦不列为目标
 listObjects 为空 / 失败 ⇒ 备份显式失败，不得产出「完整备份」
 手动备份永不被自动保留策略淘汰（仅自动备份参与 prune）
 恢复侧三门：跨引擎拒绝 / schema 版本高过运行时拒绝 / 在线恢复拒绝
+恢复端点不带 --clean（冻结硬约束），故对已有同名对象的库直接执行会以非 0 退出码结束
 ```
 
-**状态**：`REF-2.3` / `REF-2.3b` **已交付** —— 备份编排（`DatabaseBackupService`）+ 恢复侧三门
-（`RestoreGate`）+ `platform_backup`（迁移 V105）；`REF-2.4`（停机恢复流程文档化）**未启动**。
+**状态**：`REF-2.3` / `REF-2.3b` / `REF-2.4` **均已交付** —— 备份编排（`DatabaseBackupService`）+
+恢复侧三门（`RestoreGate`）+ `platform_backup`（迁移 `V105`）+ 停机恢复流程手册
+（`doc/manual/platform-backup-restore/runbook.md`）；同批补上生产镜像的 `postgresql-client-16`
+（`Dockerfile` app 阶段，计划 `D-2026-10-10-2①` 承诺而此前未落地），使备份在服务器侧真正可用。
 
 验证载体：单元测试 `RestoreGateTest` / `DbSchemaVersionReaderTest` / `PgDumpRunnerTest`；
-端到端演练 `scripts/powershell/verify-backup-restore.ps1`（备份 → preflight → 真恢复进一次性探针库 → 逐表对账 → 清理）。
+端到端演练 `scripts/powershell/verify-backup-restore.ps1`（备份 → preflight → 真恢复进一次性探针库 → 逐表对账 → 清理）；
+运维手册 `doc/manual/platform-backup-restore/runbook.md`（含停机恢复清单与诚实边界）。
 
 **不变量**
 
@@ -352,6 +357,18 @@ Cross-session optimization
 | R5 | 技术债：`MyBatisPlusMetaObjectHandler.getCurrentUser()` 恒返 `"system"`，全平台 `create_by` 不记操作人 | 登记；**不在 REF-1.6 内修**（平台级语义变更，牵动所有表），另行立项 | — |
 | R6 | 沙箱 ADR（「平台与宿主文件系统的边界」这类系统性议题） | 登记升级触发；`REF-1.6` 走受控存储**不触发** `G-005` 条件①，本批**不建新 ADR** | G-005 |
 | R7 | `SaFirewall`（Sa-Token 1.44 **默认防火墙**，应用未配置）对非法 HTTP Method 回 **HTTP 200 + 错误体**而非 4xx | 登记为**低危技术债，暂不修**：触发条件苛刻（需调用方自身发出非法方法）；修它要配 `SaFirewallCheckFailHandleFunction`，会改变**所有**非法请求的响应形状。防线改落**验证脚本侧**——须断言响应体语义、不得只看状态码（判据见 `LOG-20261010-005`） | — |
+
+### 7.1.4 REF-5 四项之外 A 档（2026-10-10，依据 `plan/HelloAI 借鉴落地实施计划.md` §7）
+
+> A 档六项里 `REF-5.2a` / `5.1`（`LOG-20261010-009`）与 `REF-5.3` / `5.4`（`LOG-20261010-010`）已交付；
+> 本表给**每一项**留永久锚点，避免它们随批次闭环从索引里消失（`REF-5.6` 已并入 `REF-2`，故不列）。
+
+| 编号 | 回流项 | 决定 | 关联 |
+|---|---|---|---|
+| R8 | **初始化期服务锁定**（`REF-5.3`） | **已交付**：判据 = **用户数 == 0**（不用 `system.setup_finished` —— 该值在 `V1__init_all.sql` 被预置为 `'1'`，当判据**永不生效**）；落点 `SetupLockInterceptor`，除 `/api/setup/**` 与 `/api/health/**` 外一律 `503 setup_required`，与前端 `!hasUsers` 同源。**边界**：闩锁在内存、单向 —— 清空用户表后恢复锁定需重启 | — |
+| R11 | **子任务视图读判据统一**（2026-10-10 用户裁定） | **已交付**：原为**两套判据且都有问题** —— 时间线 / 对话流只认 `sub_task.assigned_agent_id`（实测把**合法团队成员**也拒：加入 team 后读附件 200、读时间线仍 403）；`/api/sub-tasks/getById` **无任何校验**（任何有效 Agent API Key 可读任意子任务详情）。三处一律收敛到 `SubTaskViewGuard` → `AttachmentVisibilityPolicy.canReadTaskScoped`（与附件读侧**同一判据**，逻辑零复制）。**未动**：MCP `getSubTaskDetail` 的「本人已分配 / 未分配且 PENDING」属**工作面**约束，与可见性面语义不同 | `G-014` |
+| R9 | **载荷双视图**（`REF-5.2b`） | **已评估，结论 = 改形**（`doc/review/HelloAI REF-5.2b 与 REF-7 合并评估（2026-10-10）.md`）：不引入 `ToolResult` 双视图（该落点**在代码中不存在**）；实测前提修正 —— **数据没丢**（原文全量在 PG/MinIO），丢的是消费侧**可见性**；且 **`DEP_CONTENT_MAX_CHARS` 是整块总预算**（多前置附件合计越限即截断），按总预算实测**现网已在触发**（至少 2 条、最坏 12 条子任务越限）。**改形 = 标注行补 `id=<attachmentId>`（已交付）+ 复用既有 REST 取回通道**（实测团队成员 200），**不新增 MCP 工具**（工具面保持 13） | `G-020` · `REF-7` · `R11` |
+| R10 | **目录守卫 + 结构化拒绝码**（`REF-5.5`） | **未来前置**：开放「用户指定工作目录」之前置，当前平台无该能力 ⇒ 不排期 | `G-005` |
 
 ## 7.2 历史编号映射（2026-09-07 文档重构）
 

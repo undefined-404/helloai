@@ -28,7 +28,7 @@
 | §3 | **Provider Layer**（Qoder / Trae / Codex …） | **Implemented** | G-014 · G-016 | 异构 Provider 契约清晰；外部 Agent 通道获 A 级端到端实证 |
 | §5 | Event Stream（Run / Turn / Step + Replay · Audit） | **Partial** | G-001 · G-006 | 写侧 + Replay / Audit / UI 已上线；**Fork 仅快照服务**（`AgentEventForkService` 108 行，把 `run-{taskId}-1` 的 `agent_event` 复制到新 run_id，**无任何生产调用方**）——**其触发入口 / 原 Run 冻结 / 驱动新 Run 执行三项由用户裁定 WONTFIX**（`D-2026-10-09-5`，2026-10-09；理由：用法已被 Return + Replay 覆盖，且须改 ADR-001 Run 模型与 execution command 载荷）；**Recovery 未建**（留在 P1 剩余项按原次序推进） |
 | §6 | Skill Capability Package | **Partial** | G-004 | 9 个元数据字段已落地（含 `inputSchema` / `outputSchema` / `validationRules`）；**Instructions 结构化未动**；**`Install`→`Validate`** 生命周期部分达成（安装入口 + 摄入闸门 + 来源打戳能力已落地） |
-| §7 | Sandbox Provider | **Planned**（条件触发，不排期） | G-005 | 契约已落地；**五边界隔离未实现**（`EnvironmentSandboxProvider` 一律不标 ISOLATED）。**2026-10-09 复核：当前无可隔离的执行对象**——外部 agent 在它自己终端；内部 agent 工具面全是平台 API（`File`/`Path`/`ProcessBuilder` 0 命中）；平台无脚本引擎 / 表达式求值器 ⇒ 降级为条件触发（`D-2026-10-09-6③`），三个触发条件见 §7 |
+| §7 | Sandbox Provider | **Planned**（条件触发，不排期） | G-005 | 契约已落地；**五边界隔离未实现**（`EnvironmentSandboxProvider` 一律不标 ISOLATED）；**例外：网络边界已以「出站 SSRF 守卫」交付（`REF-5.4`，`LOG-20261010-010`）** —— 该边界的正确实现本就与外联方（平台自身）有关，与容器隔离无关。**2026-10-09 复核：当前无可隔离的执行对象**——外部 agent 在它自己终端；内部 agent 工具面全是平台 API（`File`/`Path`/`ProcessBuilder` 0 命中）；平台无脚本引擎 / 表达式求值器 ⇒ 降级为条件触发（`D-2026-10-09-6③`），三个触发条件见 §7 |
 | §8 | Agent Fleet | **Partial** | G-008 · G-014 | Capability Match / Health ✅，多外部执行者同台已实证；**Cost 维度已接入选人比较链**（`AgentSelector.resolveCostRanks`，近 5 次成功均值 min-max 反向归一，B5.3）；**Latency 维度未做** |
 | §9 | 最终执行链 | **Implemented** | G-001 · G-002 · G-016 | 需求包 → Planner → Workflow → Scheduler → Runtime → Skill/Tool/Sandbox → 异构 Agent → Event Stream → Reviewer → PASS/REWORK/HUMAN_REVIEW/BLOCK 全链 A 级实证 |
 | §10 | Harness | **Non-goal** | — | 明示为 Runtime 参考架构，非目标产品 |
@@ -287,7 +287,7 @@ Discover
 
 # 7. Sandbox Provider
 
-> **Status: Planned（条件触发，不排期）** — 契约已落地；**五边界真实隔离未实现**（`EnvironmentSandboxProvider` 一律不标 ISOLATED，差距表 G-005）。
+> **Status: Planned（条件触发，不排期）** — 契约已落地；**五边界真实隔离未实现**（`EnvironmentSandboxProvider` 一律不标 ISOLATED，差距表 G-005）。**例外（已交付）**：五边界中唯一对当前形态有真实意义的**网络边界**，其正确实现是**出站 SSRF 守卫**、**不是容器网络隔离** —— 见 `REF-5.4`（`LOG-20261010-010`）：URL 层（协议白名单默认只放 https + IP 字面量直判）+ 地址层（解析即判并以同一结果建连 = pinning），跳转逐跳重跑。
 >
 > **2026-10-09 降级（`D-2026-10-09-6③`）**：本节**不排期**。判据：**当前没有可隔离的执行对象**——外部 agent 跑在它自己的终端（本平台定位 = **派单方 ≠ 执行方**）；内部 `API_KEY_LLM` agent 的工具面全是平台 API（`McpMcpServer` 内 `File` / `Path` / `ProcessBuilder` 0 命中）；平台全库无脚本引擎 / 表达式求值器。
 >
@@ -481,28 +481,40 @@ RBAC 是平台治理（Governance）之下、所有业务模块共用的支撑�
   Review Runtime；业务模块按需声明权限码即可接入。
 - **授权完整性**：新增业务接口默认须声明动作级权限码；确属 Agent / 系统 / 公开通道的，
   须在文档中显式登记为例外，禁止「静默无授权」。
+- **初始化期锁定**（`REF-5.3`）：**无任何用户**的实例除初始化向导（`/api/setup/**`）与健康检查外
+  一律 `503` + `setup_required` —— 「未初始化」是**就绪度**问题而非权限问题，故不复用 401/403。
+  判据取「**用户数 == 0**」这一事实，不用 `system.setup_finished`（该值随 `V1__init_all.sql` 预置为
+  `'1'`，拿它当判据**永不生效**）；与前端登录页既有的 `!setupStatus.hasUsers` 判定同源。
+  边界（诚实口径）：闩锁在进程内、单向 —— 清空用户表后恢复锁定需重启。
 - **外部 Agent 不迁移**：CLI_CLIENT 契约（API Key / MCP）保持不变，不进 Sa-Token 会话体系。
+- **任务域读权限单源**：附件与子任务视图（时间线 / 对话流 / 详情）的读判据统一为「**附件可见范围 × 根任务 Task-Team 成员**」
+  （判据 `AttachmentVisibilityPolicy`，视图侧收口 `SubTaskViewGuard`）；平台账号 / 无主体通道由管理侧鉴权覆盖，**不**走该判据。
+  被截断的注入内容以 `id=<attachmentId>` 标注，消费侧凭既有 `downloadById` 端点按需回取 —— **不新增读通道、不扩工具面**。
 - **渐进演进**：按 `doc/plan/HelloAI 基础架构调整实施计划.md` 分批次实施（批次一~三已落地：
   动态路由 / 按钮权限 / 菜单管理 / 差异更新 / 部门 / 数据权限；批次四 BASE-4.x 已立项：
   认证收口 / 身份单事实源 / 角色分层 / 全量授权化 / 建号），完成后回填基线。
 
 # 13. 备份与恢复
 
-> **Status: Planned** — 当前**完全空白**（差距表 `G-018`）。**用户裁定正式立项（`D-2026-10-09-4`，2026-10-09）**；
+> **Status: Implemented** — 备份编排 / 恢复三门 / `platform_backup` 台账 / 停机恢复流程手册均已交付，
+> 生产镜像具备 `pg_dump` 客户端（差距表 `G-018`）。**用户裁定正式立项（`D-2026-10-09-4`，2026-10-09）**；
 > 此前该能力在《目标架构》《差距表》中零登记，本节为新增目标边界。
-> 任务锚点见 `plan/HelloAI 借鉴落地实施计划.md`（`REF-2.3` / `REF-2.4`）。
+> 任务锚点见 `plan/HelloAI 借鉴落地实施计划.md`（`REF-2.3` / `REF-2.4`）；运维流程见
+> `doc/manual/platform-backup-restore/runbook.md`。
 
 目标形态：
 
 ```text
 备份：pg_dump -Fc 全库  +  MinIO 对象清单  +  manifest 前置  +  分布式单飞锁
-恢复：manifest peek 校验  →  恢复侧安全闸门  →  pg_restore + 对象回填  →  停机恢复流程
+恢复：manifest peek 校验  →  恢复侧安全闸门  →  pg_restore（灌入目标库）  →  停机恢复流程（手册）
 ```
 
 边界与不含项：
 
 - **不含**应用层「报告回滚」语义——那是 `task.final_report` / `final_report_prev` 两槽互换（`G-016`），与本节无关，二者不得混用「回滚/恢复」措辞。
 - **不含**跨引擎与在线热恢复：恢复只支持**同引擎 + 停机**路径；跨引擎、schema 版本高过运行时、在线恢复一律**拒绝**并给出可读原因。
+- **不含**对象**本体**的备份与回填：备份内含的是对象**清单**（`key` + `size`），对象内容不在备份范围内（对象存储自身的快照/复制属另立事项），故恢复不回填对象内容。
+- **不含**覆盖式恢复参数（`--clean`）：恢复按「灌入空库」语义验证与交付，见停机恢复流程手册。
 - **诚实边界**：运行中备份**不保证**所有文件处于同一瞬间；该限制必须随流程文档一并交付，不得宣称「一致性快照」。
 
 不变量：

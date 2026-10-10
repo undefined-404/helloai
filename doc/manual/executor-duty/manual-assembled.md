@@ -202,7 +202,6 @@ REST 辅助端点（查询/兜底，非执行工具）：
 
 - `submitResult` 只自动推进 `ASSIGNED` / `IN_PROGRESS`；在 `{状态为 REWORK}` 条件下，**必须**先调 MCP 工具 `startSubTask`（`{"name":"startSubTask","arguments":{"subTaskId":<id>}}`；REST `startById` 对 API Key 返回 401）拉回 `IN_PROGRESS` 再提交；做不到的后果：返回 `invalid_status:REWORK`。来源：SKILL§5.3、§注意事项。
 - `finishReason` 为自由字符串，平台不强校验；建议取值：提交用 `completed`/`failed`/`timeout`/`blocked`，签退用 `shutdown`/`manual_close`。来源：SKILL§0.1。
-- `tokenUsage`（submitResult，**可选**）：本次执行消耗的 token 总数（integer）。回报后进入平台成本观测链路，供后续成本选人调度使用；**不回报不影响验收**（缺省即旧协议行为）。来源：平台工具 schema（B5.1）。
 - 在 `{同一轮重试}` 条件下**必须**携带相同 `resultId`；在 `{返工重提}` 条件下**必须**换新 `resultId`；做不到的后果：同轮重试产生重复结果记录，返工沿用旧 `resultId` 被判 `idempotent_duplicate`——返回看似成功（`accepted=true, idempotent=true`）但新产出不被写入。来源：SKILL§1.2、§注意事项。
 - 在 `{output 含完整 EXECUTION_RECORD}` 条件下，**必须**先把内容写为 UTF-8 无 BOM 文件再读取并做 JSON 转义后提交，**不得**直接内联拼接；做不到的后果：易触发 500。来源：SKILL§5.2。
 - 核验视图的注入限额（决定产出呈现方式）：执行 `output` 摘要与每条附件正文**均以 64000 字符**注入核验、总量 200000 字符（**2026-10-03 由 4000/8000/24000 上调**，以匹配官方 DeepSeek 64K 上下文）。正常产出**远低于上限、不会触发截断**；仅在极端超长时被截断并打 `[TRUNCATED] file=… shown=… total=…` 标注——此时建议把契约性内容前置。做不到的后果：核验侧看不到被截断的后半章节，按证据不足驳回。来源：代码:helloai-core/.../ReviewEvidenceAssembler.java · 实测。
@@ -211,6 +210,8 @@ REST 辅助端点（查询/兜底，非执行工具）：
 - 产物文件内容一律走 `POST /api/artifacts/upload`；**不得**直连 MinIO（服务器版 MinIO 仅绑定 127.0.0.1，外部必然失败）。来源：SKILL§1.2。
 - 附件版本语义：同一子任务内同名 `fileName` 重复上传会把历史 ACTIVE 置 INACTIVE，最新一份为唯一有效版；子任务被打回（REJECTED）后其全部 ACTIVE 附件自动失效，返工**必须**重新上传最新版。来源：SKILL§1.2、§注意事项。
 - 在 `{需要 attachmentId}` 条件下，**必须**取自上传响应的 `data.attachmentId`；**不得**依赖 `getById` 的附件字段（可能为空）。来源：SKILL§已知坑。
+  - **读取前置产出时另有两个来源（2026-10-10 补）**：① `getDepsSummary` 注入文本里被截断处的标注行 `[TRUNCATED] file=<名> id=<attachmentId> …`（`id` 即 `attachmentId`，可**一步直达** `attachments/downloadById/{id}` 取全文）；② 列前置全部附件 `GET /api/attachments?subTaskId=<PREV_ID>` 返回的 `id`。
+  - ⚠️ **`getSubTaskDetail` 不可用于取"前置"的附件清单**：其准入门槛为「已分配给你」或「未分配且 `PENDING`」，前置子任务（队友已 `DONE`）会被拒（`无权查看该子任务`）。来源：代码 `McpToolServiceImpl.getSubTaskDetail` · 实测。
 
 `EXECUTION_RECORD` 字段契约（必须置于 `output` 最后）：
 
