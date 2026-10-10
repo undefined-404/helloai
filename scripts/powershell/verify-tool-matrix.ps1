@@ -2,8 +2,8 @@
 # ============================================================
 # helloai A0-3 tool surface consistency verifier
 # 用途：验证三通道工具面一致性 + SKILL 动作清单与服务器声明 diff（防漂移）：
-#   S1) REST alias POST /api/mcp/jsonrpc tools/list -> 12 tools + inputSchema
-#   S2) GET /api/mcp/tools (REST direct) -> 12 tools, same name set as tools/list
+#   S1) REST alias POST /api/mcp/jsonrpc tools/list -> 13 tools + inputSchema
+#   S2) GET /api/mcp/tools (REST direct) -> 13 tools, same name set as tools/list
 #   S3) REST direct /api/mcp/tools/getAgentStatus probe (POST + Bearer -> 200)
 #   S4) SKILL.md 0.1 table tool names == server tools/list names (diff guard)
 #   S5) SKILL.md 0.2 table REST endpoint paths -> probe each (route existence)
@@ -11,16 +11,38 @@
 #   S6) SKILL.md forbidden old paths check (/api/agents/<, /api/rules/merged)
 #   S7) REST direct checkIn -> checkOut real call (sync lease receipt)
 #
+# NOTE: the "13 tools" constant asserted by S1/S2/S4 is the EXTERNAL MCP surface
+#       (McpMcpServer's @Tool methods, restated in AgentMcpServerService:45-58 and
+#       in guide.md 0.1). It is deliberately NOT the ToolRegistry total: internal
+#       tools such as `echo` / `web_search` are registered but never exposed to
+#       external agents. If this ever drifts, the two things to reconcile are the
+#       @Tool annotations on McpMcpServer and the 0.1 table -- not this constant.
+#
 # NOTE: PowerShell 5.1 + zh-CN Windows. All runtime strings are 100% ASCII.
 #
-# Usage (project root, PowerShell):
+# Usage (any cwd, PowerShell):
 #   powershell -File .\scripts\powershell\verify-tool-matrix.ps1
+#   powershell -File .\scripts\powershell\verify-tool-matrix.ps1 -RepoRoot D:\work\helloai
+#   (admin password via $env:HELLOAI_ADMIN_PASSWORD or -AdminPassword)
+#
+# NOTE: paths are resolved RELATIVE TO THE REPO ROOT, never hardcoded absolute
+#       (CODE_STYLE sec 39 / portability: the same checkout may live at any
+#       path or CI host). Precedence: -RepoRoot > walk up from $PSScriptRoot
+#       > walk up from cwd; a missing layout fails loud instead of passing.
 # ============================================================
+
+# ------------------------------------------------------------
+# parameters
+# ------------------------------------------------------------
+param(
+    [string]$RepoRoot = "",
+    [string]$AdminPassword = ""
+)
 
 # ------------------------------------------------------------
 # UTF-8 encoding header (rule 6)
 # ------------------------------------------------------------
-$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { $AdminPassword = $env:HELLOAI_ADMIN_PASSWORD }
 if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 $script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [Console]::InputEncoding  = [System.Text.Encoding]::UTF8
@@ -29,12 +51,69 @@ $OutputEncoding           = $script:Utf8NoBom
 
 Add-Type -AssemblyName System.Net.Http
 
-$base       = "http://localhost:6565"
-$scriptDir  = "E:\yhzx\1027\helloai"
-$skillFile  = Join-Path $scriptDir "helloai-core/src/main/resources/onboarding/executor/guide.md"
+# ------------------------------------------------------------
+# repo root resolution (CODE_STYLE sec 39: no hardcoded local absolute path)
+# ------------------------------------------------------------
+# The skill guide is the layout marker: a directory that contains this relative
+# path is the repo root. Walking up from the script's own location makes the
+# script runnable from any cwd and from any checkout / CI host.
+$script:SkillRelPath = "helloai-core\src\main\resources\onboarding\executor\guide.md"
+
+function Resolve-RepoRoot {
+    param([string]$Explicit, [string[]]$StartDirs)
+    if (-not [string]::IsNullOrWhiteSpace($Explicit)) {
+        try {
+            return (Resolve-Path -LiteralPath $Explicit -ErrorAction Stop).Path
+        } catch {
+            throw "RepoRoot not found: $Explicit"
+        }
+    }
+    foreach ($start in $StartDirs) {
+        if ([string]::IsNullOrWhiteSpace($start)) { continue }
+        $dir = $start
+        while (-not [string]::IsNullOrWhiteSpace($dir)) {
+            if (Test-Path -LiteralPath (Join-Path $dir $script:SkillRelPath) -PathType Leaf) {
+                return $dir
+            }
+            $parent = Split-Path -Parent $dir
+            if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $dir) { break }
+            $dir = $parent
+        }
+    }
+    return $null
+}
+
+# $PSScriptRoot is empty when the script is dot-sourced / run via -Command, so
+# cwd is the fallback start point; both are searched.
+$repoStartDirs = @($PSScriptRoot, (Get-Location).Path)
+$resolvedRoot = Resolve-RepoRoot -Explicit $RepoRoot -StartDirs $repoStartDirs
+if ([string]::IsNullOrWhiteSpace($resolvedRoot)) {
+    Write-Error ("repo root not found: searched upward for '" + $script:SkillRelPath + "' from [script dir, cwd]. Pass -RepoRoot <path>.")
+    exit 1
+}
+$skillFile = Join-Path $resolvedRoot $script:SkillRelPath
+if (-not (Test-Path -LiteralPath $skillFile -PathType Leaf)) {
+    Write-Error ("skill guide not found: " + $skillFile + " (pass -RepoRoot <path>)")
+    exit 1
+}
+Write-Output ("repoRoot  = " + $resolvedRoot)
+Write-Output ("skillFile = " + $skillFile)
+Write-Output ""
+
+$base = "http://localhost:6565"
 
 $passCount = 0
 $failCount = 0
+
+# Never log a full credential: it lands in terminal scrollback, screenshots and
+# redirected logs. Emit length + last 4 chars only (enough to eyeball that the
+# value is non-empty and which agent it belongs to).
+function Mask-Secret {
+    param([string]$Value)
+    if ([string]::IsNullOrEmpty($Value)) { return "(empty)" }
+    if ($Value.Length -le 8) { return "****(len=$($Value.Length))" }
+    return ("****" + $Value.Substring($Value.Length - 4) + "(len=$($Value.Length))")
+}
 
 function Assert-True {
     param([bool]$Condition, [string]$Message)
@@ -115,7 +194,7 @@ if ([string]::IsNullOrEmpty($adminToken)) {
     Write-Error "admin login failed: $($loginResp.Body)"
     exit 1
 }
-Write-Output "adminToken = $($adminToken.Substring(0, 16))..."
+Write-Output ("adminToken = " + (Mask-Secret $adminToken))
 Write-Output ""
 
 # ============================================================
@@ -151,11 +230,11 @@ if ([string]::IsNullOrEmpty($agentApiKey)) {
     exit 1
 }
 Write-Output "agentId    = $agentId"
-Write-Output "agentApiKey = $agentApiKey"
+Write-Output ("agentApiKey = " + (Mask-Secret $agentApiKey))
 Write-Output ""
 
 # ============================================================
-# STEP S1: REST alias tools/list -> 12 tools + inputSchema
+# STEP S1: REST alias tools/list -> 13 tools + inputSchema
 # ============================================================
 Write-Output "=== [S1] REST alias POST /api/mcp/jsonrpc tools/list ==="
 $s1Body = '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
@@ -170,7 +249,7 @@ if ($s1Obj -ne $null -and $s1Obj.result -ne $null -and $s1Obj.result.tools -ne $
     foreach ($t in $s1Obj.result.tools) {
         if ($t.inputSchema -eq $null -or $t.inputSchema.type -ne "object") { $schemaOk = $false }
     }
-    Assert-True ($s1Names.Count -eq 12) "S1 REST alias tools/list: 12 tools declared (got $($s1Names.Count))"
+    Assert-True ($s1Names.Count -eq 13) "S1 REST alias tools/list: 13 tools declared (got $($s1Names.Count))"
     Assert-True $schemaOk "S1 REST alias tools/list: every tool has inputSchema (type=object)"
 } else {
     Assert-True $false "S1 REST alias tools/list: parse failed or no result (HTTP $($s1Resp.Code))"
@@ -190,7 +269,7 @@ $s2Names = @()
 if ($s2Obj -ne $null -and $s2Obj.data -ne $null) {
     $s2Names = @($s2Obj.data | ForEach-Object { [string]$_ })
     $diff = Compare-Object $s1Names $s2Names
-    Assert-True ($diff -eq $null -and $s2Names.Count -eq 12) "S2 GET /api/mcp/tools: 12 tools, same name set as REST alias (got $($s2Names.Count))"
+    Assert-True ($diff -eq $null -and $s2Names.Count -eq 13) "S2 GET /api/mcp/tools: 13 tools, same name set as REST alias (got $($s2Names.Count))"
 } else {
     Assert-True $false "S2 GET /api/mcp/tools: parse failed (HTTP $($s2Resp.Code))"
 }
@@ -249,34 +328,49 @@ if ($idx02b -ge 0 -and $idxNextH2 -gt $idx02b) {
 $skillPathRegex = [regex]'(?m)^\| [^|]+ \| `(GET|POST|PUT|DELETE) ([^`]+)`'
 $s5Total = 0
 $s5Fail = 0
+# Baseline for route existence. A missing route and a missing *record* both answer
+# HTTP 404, and the server wraps both in the same JSON envelope -- only `msg`
+# differs. Probe a path that is definitely unmapped once, remember its message, and
+# any other 404 whose msg differs is a business 404, i.e. the route DOES exist.
+# (Comparing two server responses keeps this script free of non-ASCII literals.)
+$baselineMsg = $null
+try {
+    $b = Invoke-Json -Method GET -Uri "$base/api/__verify_tool_matrix_probe__" -Headers @{ "Authorization" = "Bearer $agentApiKey" }
+    if ($b.Code -eq 404) { $baselineMsg = ($b.Body | ConvertFrom-Json).msg }
+} catch { }
+if ([string]::IsNullOrWhiteSpace($baselineMsg)) {
+    Write-Output "[WARN] S5 could not capture the no-route baseline; every 404 will count as a missing route"
+}
 foreach ($m in $skillPathRegex.Matches($region02)) {
     $method = $m.Groups[1].Value
     $path = $m.Groups[2].Value
-    # normalize placeholders
-    $path = $path -replace '\{id\}', '1'
+    # normalize placeholders: the 0.2 table uses several names ({id} / {taskId} /
+    # {attachmentId}); replacing only '{id}' left literal braces in the URI, which
+    # the server answers with HTTP 400 (type-mismatch) => false "route missing".
+    $path = $path -replace '\{[A-Za-z]+\}', '1'
     $uri = "$base$path"
-    if ($method -eq "GET") {
-        $r = Invoke-Json -Method GET -Uri $uri -Headers @{ "Authorization" = "Bearer $agentApiKey" }
-        # business errors may return 200 with code!=200; 404 means route missing
-        $ok = ($r.Code -eq 200)
-        if (-not $ok) {
-            Write-Output ("[FAIL] S5 GET " + $path + " -> HTTP " + $r.Code)
-            $s5Fail++
+    # Probe with GET only. GET is side-effect free, whereas calling the DECLARED
+    # method of a POST row (claimById / submitById / ...) would mutate real state.
+    # A POST-only path answers 405 to GET -- also a positive "route exists" signal.
+    $r = Invoke-Json -Method GET -Uri $uri -Headers @{ "Authorization" = "Bearer $agentApiKey" }
+    $routeExists = $true
+    $note = "HTTP " + $r.Code
+    if ($r.Code -eq 404) {
+        $msg = ""
+        try { $msg = ($r.Body | ConvertFrom-Json).msg } catch { }
+        if ($null -ne $baselineMsg -and $msg -ne $baselineMsg) {
+            $note = "HTTP 404 (business 404, not the no-route baseline) -> route exists"
         } else {
-            Write-Output ("[PASS] S5 GET " + $path + " -> 200")
-            $script:passCount++
+            $routeExists = $false
+            $note = "HTTP 404 (matches no-route baseline) -> route missing"
         }
+    }
+    if ($routeExists) {
+        Write-Output ("[PASS] S5 " + $method + " " + $path + " -> " + $note)
+        $script:passCount++
     } else {
-        # POST-only route: probe via GET -> 405 (route exists) is the reliable signal
-        $r = Invoke-Json -Method GET -Uri $uri -Headers @{ "Authorization" = "Bearer $agentApiKey" }
-        $ok = ($r.Code -eq 405)
-        if (-not $ok) {
-            Write-Output ("[FAIL] S5 POST-route " + $path + " -> GET probe HTTP " + $r.Code + " (expect 405 = route exists)")
-            $s5Fail++
-        } else {
-            Write-Output ("[PASS] S5 POST-route " + $path + " -> GET probe 405 (route exists)")
-            $script:passCount++
-        }
+        Write-Output ("[FAIL] S5 " + $method + " " + $path + " -> " + $note)
+        $s5Fail++
     }
     $s5Total++
 }

@@ -68,13 +68,14 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 > `claimSubTask` 返回 `claimed=false` 时，看 `reason`（`dependency_not_ready`=前置没做完先别动；`not_task_owner`/`already_claimed_by_other`=任务已被别人抢走；`invalid_status:<状态>`=当前状态不可认领；**`not_in_executor_whitelist`=你不在本任务的执行者白名单内**；**`skill_not_matched`=你缺少本任务要求的必需技能**——后两者属准入限制，重试无意义，请改领其他任务），不要强行开工。
 > 详见 §1.5.1.bis 收件箱消息类型表。
 
-> 全平台**三通道工具面已对齐为 12 个执行工具**（A0-3 起 REST 直通补齐 `checkIn`/`checkOut`/`getAgentStatus`，
-> A0-4 新增 `getDepsSummary`；验收标准下发批次新增 `getSubTaskDetail`，与 MCP SSE、REST 别名 `POST /api/mcp/jsonrpc` 完全一致）。
+> 全平台**三通道工具面已对齐为 13 个执行工具**（A0-3 起 REST 直通补齐 `checkIn`/`checkOut`/`getAgentStatus`，
+> A0-4 新增 `getDepsSummary`；验收标准下发批次新增 `getSubTaskDetail`；G-014 外部 Agent 执行通道修复时纳入 `startSubTask`，
+> 与 MCP SSE、REST 别名 `POST /api/mcp/jsonrpc` 完全一致）。
 > 下表是**权威动作清单**：`scripts/powershell/verify-tool-matrix.ps1` 会把它与服务器 `tools/list` 实时 diff，防再次漂移。
 > 所有请求都带 `Authorization: Bearer <API_KEY>`；REST 直通（`/api/mcp/tools/*`）的响应是 `R` 包装 `{code, msg, data}`，
 > REST 别名（`/api/mcp/jsonrpc`）返回 JSON-RPC 原生 `{jsonrpc, result/error, id}`，MCP 返回原始 result。
 
-### 0.1 三通道执行工具（12 个，与 tools/list 同名集合一致）
+### 0.1 三通道执行工具（13 个，与 tools/list 同名集合一致）
 
 | 工具 | MCP SSE | REST 别名 jsonrpc | REST 直通 /api/mcp/tools/* | 请求体（JSON） | 返回要点（data/result） |
 |---|---|---|---|---|---|
@@ -84,6 +85,7 @@ HelloAI Executor 支持两种执行模式，**推荐在当前对话中被动响�
 | `pullTasks` | ✓ | ✓ | `POST .../pullTasks` | `{"role":"EXECUTOR","max":20,"includeRead":false}` | `{messages:[{messageId, type, subTaskId, taskId, title, priority, deadline, summary, read, reassigned, currentAgentId}]}` |
 | `ack` | ✓ | ✓ | `POST .../ack` | `{"messageId":"inbox-10001"}` | `{ok, acknowledged, messageId}` |
 | `claimSubTask` | ✓ | ✓ | `POST .../claimSubTask` | `{"subTaskId":123}` | `{ok, claimed, reason, assignedAgent, subTaskId, version, detail}`（`claimed=true` 时 `detail` 内联子任务全文，免再调 `getSubTaskDetail`） |
+| `startSubTask` | ✓ | ✓ | `POST .../startSubTask` | `{"subTaskId":123}` | `{ok, started, reason, subTaskId, assignedAgent, status, version}`（认领后 / REWORK 返工 / PAUSED 恢复时推进到 IN_PROGRESS：`started=true` 表示已推进，已是 IN_PROGRESS 时重复调用幂等返回 true；拒绝原因 `reason` = `subtask_not_found` / `not_task_owner` / `invalid_status:XXX`。**REWORK 返工必须先调本工具**，否则 `submitResult` 会以 `invalid_status:REWORK` 拒绝。与 REST 直通 `POST /api/sub-tasks/startById/{id}` 同源，但后者仅平台账号会话可用，外部 Agent 一律走本工具） |
 | `heartbeat` | ✓ | ✓ | `POST .../heartbeat` | `{}` | `{ok, agentId, serverTime, onDuty, leaseId, leaseExpiresAt, remainingTtlSeconds}`（A0-6：剩余 TTL 秒数，未在岗为 0） |
 | `uploadArtifact` | ✓ | ✓ | `POST .../uploadArtifact` | `{"subTaskId":123,"fileName":"a.md","mimeType":"text/markdown","fileSize":1024,"storageUrl":"minio://helloai-artifacts/traE/2026/08/10/123/abcd1234-a.md"}` | `{ok, attachmentId, storageUrl}` |
 | `submitResult` | ✓ | ✓ | `POST .../submitResult` | `{"subTaskId":123,"resultId":"r-1","success":true,"output":"...","finishReason":"completed","tokenUsage":12345}` | `{ok, accepted, idempotent, status, reason, subTaskId, resultId}` |

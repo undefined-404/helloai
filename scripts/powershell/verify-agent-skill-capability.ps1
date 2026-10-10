@@ -2,7 +2,7 @@
 # V52 e2e: Agent skill capability driven (plan 2182376f)
 # Usage: .\scripts\powershell\verify-agent-skill-capability.ps1
 # Prereq: backend on http://localhost:6565 (IDEA or start-sb.ps1),
-#         Flyway V52 applied, DB cleaned.
+#         Flyway V52 applied.
 # Covers:
 #   S1 deepseek register with skills=[shell]      -> [thinking,shell]
 #   S2 kimi register with skills=[web-search]     -> [thinking,web-search]
@@ -10,9 +10,28 @@
 #   S4 deepseek register with skills=[kubernetes] -> [thinking,kubernetes] (custom exempt)
 #   S5 kimi register without skills               -> keyword-derived + thinking locked
 #   S6 edit deepseek agent skills=[web-search]    -> rejected
-#   S7 edit agent to kimi model + [shell,web-search] -> [thinking,shell,web-search]
+#   S7 edit agent to qwen model + [shell,web-search] -> [thinking,shell,web-search]
 #   S8 cleanup (API cascade delete)
+#
+# NOTE on the models below -- BOTH conditions must hold, or the run fails for a
+# reason that has nothing to do with skill policy:
+#   1. UNSETTLED (role, model): AgentSkillPolicyService.validateModelUniqueInRole
+#      keys uniqueness on (role, access_type=API_KEY_LLM, model_type). Registering
+#      a model already held by a resident agent in that role returns 409, which
+#      then cascades into S6/S7 "target agent not found". That is why a model with
+#      a long-lived inner-*-executor/planner/reviewer cannot be used here.
+#   2. WHITELISTED as the case needs: `llm_provider_model.available_optional_skills`
+#      is per-model DB data, and the assertions are model-sensitive --
+#      `deepseek-v4-pro` must NOT list web-search (S3 tests rejection),
+#      `kimi-k3` MUST list web-search (S2/S5). Swapping in a model with a
+#      different whitelist silently changes what S1-S7 mean.
+# Current picks: deepseek-v4-pro [shell,code-review] / kimi-k3 [+web-search]
+#                / qwen3.8-Max (S7 model switch). Change all three together.
 # ============================================================
+param(
+    [string]$AdminPassword = ""
+)
+
 # UTF-8 encoding header (rule 6) -- avoid CJK garbled output
 $script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [Console]::InputEncoding = [System.Text.Encoding]::UTF8
@@ -22,7 +41,7 @@ $OutputEncoding = $script:Utf8NoBom
 $ErrorActionPreference = 'Stop'
 $BaseUrl = 'http://localhost:6565'
 $AdminUsername = 'admin'
-$AdminPassword = $env:HELLOAI_ADMIN_PASSWORD
+if ([string]::IsNullOrWhiteSpace($AdminPassword)) { $AdminPassword = $env:HELLOAI_ADMIN_PASSWORD }
 if ([string]::IsNullOrWhiteSpace($AdminPassword)) { throw "未设置管理员口令：请导出环境变量 HELLOAI_ADMIN_PASSWORD（或传 -AdminPassword）" }
 
 $Script:PassCount = 0
@@ -148,7 +167,7 @@ function Register-TestAgent([string]$Name, [string]$Role, [string]$Desc, [string
 
 # ---- S1: deepseek + explicit shell ----
 Write-Output '==== S1: deepseek register skills=[shell] ===='
-$s1 = Register-TestAgent 'v52-e2e-ds-v1' 'EXECUTOR' 'e2e deepseek' 'deepseek:deepseek-v4-flash' @('shell')
+$s1 = Register-TestAgent 'v52-e2e-ds-v1' 'EXECUTOR' 'e2e deepseek' 'deepseek:deepseek-v4-pro' @('shell')
 Assert-True ($s1 -ne $null -and $s1.code -eq 200) 'S1' ('register code=' + ($s1.code) + ' msg=' + ($s1.msg))
 if ($s1 -ne $null -and $s1.code -eq 200) {
     $s1Skills = Get-AgentSkills ([string]$s1.data.id)
@@ -159,7 +178,7 @@ if ($s1 -ne $null -and $s1.code -eq 200) {
 
 # ---- S2: kimi + explicit web-search ----
 Write-Output '==== S2: kimi register skills=[web-search] ===='
-$s2 = Register-TestAgent 'v52-e2e-kimi-v1' 'EXECUTOR' 'e2e kimi' 'moonshot:kimi-k2.6' @('web-search')
+$s2 = Register-TestAgent 'v52-e2e-kimi-v1' 'EXECUTOR' 'e2e kimi' 'moonshot:kimi-k3' @('web-search')
 Assert-True ($s2 -ne $null -and $s2.code -eq 200) 'S2' ('register code=' + ($s2.code) + ' msg=' + ($s2.msg))
 if ($s2 -ne $null -and $s2.code -eq 200) {
     $s2Skills = Get-AgentSkills ([string]$s2.data.id)
@@ -169,13 +188,13 @@ if ($s2 -ne $null -and $s2.code -eq 200) {
 
 # ---- S3: deepseek + web-search rejected ----
 Write-Output '==== S3: deepseek register skills=[web-search] rejected ===='
-$s3 = Register-TestAgent 'v52-e2e-ds-bad' 'PLANNER' 'e2e bad skill' 'deepseek:deepseek-v4-flash' @('web-search')
+$s3 = Register-TestAgent 'v52-e2e-ds-bad' 'PLANNER' 'e2e bad skill' 'deepseek:deepseek-v4-pro' @('web-search')
 Assert-True ($s3 -eq $null -or $s3.code -ne 200) 'S3' ('register rejected, code=' + ($s3.code) + ' msg=' + ($s3.msg))
 Assert-True ($s3 -ne $null -and $s3.msg -match '不支持技能') 'S3' ('msg contains [不支持技能]: ' + ($s3.msg))
 
 # ---- S4: custom skill exempt ----
 Write-Output '==== S4: deepseek register skills=[kubernetes] custom exempt ===='
-$s4 = Register-TestAgent 'v52-e2e-ds-custom' 'REVIEWER' 'e2e custom' 'deepseek:deepseek-v4-flash' @('kubernetes')
+$s4 = Register-TestAgent 'v52-e2e-ds-custom' 'REVIEWER' 'e2e custom' 'deepseek:deepseek-v4-pro' @('kubernetes')
 Assert-True ($s4 -ne $null -and $s4.code -eq 200) 'S4' ('register code=' + ($s4.code) + ' msg=' + ($s4.msg))
 if ($s4 -ne $null -and $s4.code -eq 200) {
     $s4Skills = Get-AgentSkills ([string]$s4.data.id)
@@ -185,7 +204,7 @@ if ($s4 -ne $null -and $s4.code -eq 200) {
 
 # ---- S5: kimi no skills -> keyword derived ----
 Write-Output '==== S5: kimi register without skills ===='
-$s5 = Register-TestAgent 'v52-e2e-kimi-derive' 'REVIEWER' '负责代码审查与联网检索' 'moonshot:kimi-k2.6' $null
+$s5 = Register-TestAgent 'v52-e2e-kimi-derive' 'REVIEWER' '负责代码审查与联网检索' 'moonshot:kimi-k3' $null
 Assert-True ($s5 -ne $null -and $s5.code -eq 200) 'S5' ('register code=' + ($s5.code) + ' msg=' + ($s5.msg))
 if ($s5 -ne $null -and $s5.code -eq 200) {
     $s5Skills = Get-AgentSkills ([string]$s5.data.id)
@@ -210,7 +229,7 @@ if ($s6Target) {
 # ---- S7: edit agent to kimi model + [shell,web-search] ----
 Write-Output '==== S7: edit agent modelType=kimi + skills=[shell,web-search] ===='
 if ($s6Target) {
-    $s7Body = ConvertTo-JsonSafe @{ modelType = 'moonshot:kimi-k2.7-code'; skills = @('shell', 'web-search') }
+    $s7Body = ConvertTo-JsonSafe @{ modelType = 'dashscope:qwen3.8-Max'; skills = @('shell', 'web-search') }
     $s7 = Invoke-Api -Method 'Put' -Uri ($BaseUrl + '/api/admin/agents/updateById/' + $s6Target.id) -Headers $AdminHeaders -BodyJson $s7Body
     Assert-True ($s7 -ne $null -and $s7.code -eq 200) 'S7' ('update code=' + ($s7.code) + ' msg=' + ($s7.msg))
     if ($s7 -ne $null -and $s7.code -eq 200) {

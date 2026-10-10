@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # helloai 技能包一致性校验脚本（REF-1.1 / REF-1.2）
 # 用途：校验 classpath `skills/plugins/*.md` 的 YAML frontmatter（技能元数据唯一事实源）
 #       与运行资产、工具注册事实的静态一致性：
@@ -300,7 +300,9 @@ foreach ($p in $packages) {
         Write-Check "FAIL" "name 与文件名不一致（要求 name == 文件名去 .md）: name='$($p.Name)' 文件名='$($p.FileName)'"
     }
 }
-$dupName = @($packages | Where-Object { -not [string]::IsNullOrWhiteSpace($_.Name) } | Group-Object Name | Where-Object { $_.Count -gt 1 })
+# 注：$packages 元素为 Hashtable，Group-Object -Property Name 不做键查找，
+# 会把所有项归入一个 Name 为空的组（恒 Count>1）→ 恒误报"重复"。必须用脚本块分组。
+$dupName = @($packages | Where-Object { -not [string]::IsNullOrWhiteSpace($_.Name) } | Group-Object { $_.Name } | Where-Object { $_.Count -gt 1 })
 if ($dupName.Count -gt 0) {
     Write-Check "FAIL" "name 重复: $(($dupName | ForEach-Object { $_.Name }) -join ', ')"
 } else {
