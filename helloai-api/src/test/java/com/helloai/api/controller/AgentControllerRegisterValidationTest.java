@@ -163,6 +163,39 @@ class AgentControllerRegisterValidationTest {
     }
 
     @Test
+    @DisplayName("idempotent 复用：唯一性预校验排除被复用的 Agent 自身（G-011）")
+    void idempotentReuseExcludesItselfFromUniqueness() {
+        when(agentConfig.isAllowRegistration()).thenReturn(true);
+        Agent existing = newAgent();                       // id=940001，EXECUTOR
+        when(agentService.findByName("it-agent")).thenReturn(existing);
+        when(agentService.registerOrGet(anyString(), any(), any())).thenReturn(existing);
+        when(llmProviderModelQueryService.isModelAvailable("deepseek", "deepseek-v4-pro")).thenReturn(true);
+        when(agentApiKeyCipher.decrypt(any())).thenReturn("it-key");
+
+        controller.register(body("name", "it-agent", "role", "EXECUTOR",
+                "modelType", "deepseek:deepseek-v4-pro", "idempotent", true));
+
+        // 不排除自身时，该 Agent 会把自己判成「角色下模型重复」并抛 409 —— 幂等复用形同虚设
+        verify(agentService).validateModelType("deepseek:deepseek-v4-pro", AgentRole.EXECUTOR, 940001L);
+        verify(agentService, never()).register(anyString(), any(), any());
+    }
+
+    @Test
+    @DisplayName("非 idempotent：唯一性预校验不排除任何 Agent（零回归）")
+    void nonIdempotentUniquenessExcludesNothing() {
+        when(agentConfig.isAllowRegistration()).thenReturn(true);
+        when(agentService.register(anyString(), any(), any())).thenReturn(newAgent());
+        when(llmProviderModelQueryService.isModelAvailable("deepseek", "deepseek-v4-pro")).thenReturn(true);
+        when(agentApiKeyCipher.decrypt(any())).thenReturn("it-key");
+
+        controller.register(body("name", "it-agent", "role", "EXECUTOR",
+                "modelType", "deepseek:deepseek-v4-pro"));
+
+        verify(agentService).validateModelType("deepseek:deepseek-v4-pro", AgentRole.EXECUTOR, null);
+        verify(agentService, never()).findByName(anyString());
+    }
+
+    @Test
     @DisplayName("role 非法/缺失 → HTTP 400（不再 NPE 500 / 泄漏枚举类路径）")
     void illegalRoleReturns400() {
         when(agentConfig.isAllowRegistration()).thenReturn(true);

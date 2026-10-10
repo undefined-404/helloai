@@ -81,8 +81,11 @@ public class AgentController {
         // 创建 Agent，失败时库里不留任何痕迹。skills 是后补的一项——此前只预校验了 modelType，
         // skills 校验留在 applyRegistrationExtras 内，抛错时 register() 已提交，会残留
         // access_type=CLI_CLIENT / model_type=NULL 的脏 Agent（2026-10-10 修复）。
+        // 幂等复用（idempotent=true）须先定位既有 Agent 并把「自身」排除出唯一性校验：
+        // 该 Agent 本身就占着 (角色, 模型) 这一格，不排除就会「被自己挡下」报 409
+        // （G-011 技术债，2026-10-10 修复）。定位是只读查询，不产生副作用。
         String modelType = (String) body.get("modelType");
-        agentService.validateModelType(modelType, role, null);
+        agentService.validateModelType(modelType, role, idempotent ? resolveReuseAgentId(name) : null);
         agentService.validateAgentSkills(modelType, resolveExplicitSkills(body));
         Agent agent = idempotent
                 ? agentService.registerOrGet(name, role, description)
@@ -111,8 +114,11 @@ public class AgentController {
         // 创建 Agent，失败时库里不留任何痕迹。skills 是后补的一项——此前只预校验了 modelType，
         // skills 校验留在 applyRegistrationExtras 内，抛错时 register() 已提交，会残留
         // access_type=CLI_CLIENT / model_type=NULL 的脏 Agent（2026-10-10 修复）。
+        // 幂等复用（idempotent=true）须先定位既有 Agent 并把「自身」排除出唯一性校验：
+        // 该 Agent 本身就占着 (角色, 模型) 这一格，不排除就会「被自己挡下」报 409
+        // （G-011 技术债，2026-10-10 修复）。定位是只读查询，不产生副作用。
         String modelType = (String) body.get("modelType");
-        agentService.validateModelType(modelType, role, null);
+        agentService.validateModelType(modelType, role, idempotent ? resolveReuseAgentId(name) : null);
         agentService.validateAgentSkills(modelType, resolveExplicitSkills(body));
         Agent agent = idempotent
                 ? agentService.registerOrGet(name, role, description)
@@ -182,6 +188,15 @@ public class AgentController {
     }
 
     /**
+     * 幂等注册（{@code idempotent=true}）时定位既有 Agent 的 id，供唯一性预校验排除自身；
+     * 不存在时返回 {@code null}（等价于「本次将新建」，无需排除）。
+     */
+    private Long resolveReuseAgentId(String name) {
+        Agent existing = agentService.findByName(name);
+        return existing == null ? null : existing.getId();
+    }
+
+    /**
      * 处理注册入参的可选扩展字段：accessType / capabilities / labels / modelType / skills。
      *
      * <p>accessType 默认 CLI_CLIENT；capabilities 按 accessType 默认值填充后允许调用方覆盖；
@@ -207,8 +222,10 @@ public class AgentController {
                 throw new com.helloai.common.base.BizException(400,
                         "模型不可用或已禁用: " + modelType);
             }
-            // 同一模型在同一角色下全局唯一（与 registerWithExtras 路径的 validateModelType 对齐）
-            agentService.validateModelUniqueInRole(providerCode, modelName, agent.getRole(), null);
+            // 同一模型在同一角色下全局唯一（与 registerWithExtras 路径的 validateModelType 对齐）。
+            // 必须排除自身：幂等复用场景下该 Agent 已占着 (角色, 模型) 这一格，不排除会把
+            // 「自己」判成冲突（G-011，2026-10-10 修复）。
+            agentService.validateModelUniqueInRole(providerCode, modelName, agent.getRole(), agent.getId());
             agent.setModelType(modelType);
         }
 

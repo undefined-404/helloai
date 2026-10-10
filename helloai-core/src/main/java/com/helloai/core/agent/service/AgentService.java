@@ -33,6 +33,15 @@ public interface AgentService extends IService<Agent> {
     Agent registerOrGet(String name, AgentRole role, String description);
 
     /**
+     * 按 name 查 Agent（不含已逻辑删除行）；不存在返回 null。
+     *
+     * <p>供幂等注册在预校验前定位既有 Agent：模型唯一性按 (角色, 模型) 计数，
+     * 复用场景必须把被复用的 Agent 自身排除，否则会「被自己挡下」——
+     * 见 {@link #validateModelType} 的 {@code excludeAgentId}。</p>
+     */
+    Agent findByName(String name);
+
+    /**
      * 校验 modelType 格式、可用性及角色唯一性。
      *
      * <p>格式：providerCode:modelName；模型须启用；同模型在同一角色下只能被一个
@@ -41,7 +50,7 @@ public interface AgentService extends IService<Agent> {
      *
      * @param modelType       待校验的 modelType，null/blank 时跳过
      * @param role            Agent 角色
-     * @param excludeAgentId  排除的 Agent ID（编辑自身时排除；新增时传 null）
+     * @param excludeAgentId  排除的 Agent ID（编辑自身、幂等复用自身时排除；新建时传 null）
      * @throws com.helloai.common.base.BizException 格式错误 / 模型不可用 / 角色内模型已被占用时
      */
     void validateModelType(String modelType, AgentRole role, Long excludeAgentId);

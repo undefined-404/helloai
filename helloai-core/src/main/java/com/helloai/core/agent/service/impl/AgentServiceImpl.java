@@ -218,6 +218,14 @@ public class AgentServiceImpl extends ServiceImpl<AgentMapper, Agent> implements
     }
 
     @Override
+    public Agent findByName(String name) {
+        if (name == null || name.isBlank()) {
+            return null;
+        }
+        return lambdaQuery().eq(Agent::getName, name).one();
+    }
+
+    @Override
     public Agent getByApiKey(String apiKey) {
         // 1) 主路径：hash 点查（等保加密后 AES-GCM 密文不可 SQL eq 匹配）
         Agent agent = lambdaQuery().eq(Agent::getApiKeyHash, agentApiKeyCipher.sha256Hex(apiKey)).one();
