@@ -74,6 +74,10 @@ m5-e2e-psql.log.sql
 tmp/
 .tmp/
 .dbg/
+# --- 本地工具链（REF-2 起：宿主侧 pg_dump/pg_restore，免安装 zip 版解压于此） ---
+# 与 JDK / Maven 同类：仅「本地源码开发」需要，服务器 Docker 一键部署由镜像内的
+# postgresql-client 提供（见 Dockerfile 的 app 阶段），不依赖本目录。
+.tools/
 # --- Qoder IDE 缓存（plans / skills 缓存目录，不入仓） ---
 .qoder/
 .trae/

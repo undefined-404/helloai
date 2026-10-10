@@ -232,7 +232,15 @@ Diagnosis  ：.tmp/diag-skill-scan.*（仅诊断，不得作为正式验证）
 ① 执行形态（P1 = A1）：应用内 ProcessBuilder 执行**可配置路径**的 pg_dump / pg_restore。
    启动做前置检查（`pg_dump --version`）；不可用 ⇒ **备份功能显式不可用**（不静默，其余功能不受影响）。
    生产：Dockerfile 的 app 阶段补装 postgresql-client-16（客户端主版本须 ≥ 服务端 16）；
-   本地：需装 PG 客户端，或用 helloai.backup.pg-dump-path 指到可用路径。
+   本地（**已落地，B 路线**）：PG 官方 zip 版二进制——**免安装、不注册服务**——解压到仓库内
+   `.tools/pgsql/`（72MB，**已 gitignore**；与 JDK / Maven 同类的「本地源码开发」前置，
+   不违背「部署用 Docker 统一」：服务器一键部署由镜像内的 postgresql-client 提供，零宿主依赖），
+   经 `helloai.backup.pg-dump-path` 指向。
+   实测：`pg_dump` / `pg_restore` 均为 **16.4**（与服务端 `postgres:16.4-alpine` 同主版本）；
+   对运行中的库 dump 出 **2.85MB** 归档，`pg_restore -l` 可读（TOC 956 条，**不解档**）。
+   ⚠️ **顺带证实 ⑦① 的判据来源**：`pg_restore -l` 头部直接给出
+   `Dumped from database version: 16.4` / `Dumped by pg_dump version: 16.4` ——
+   「跨引擎拒」读的就是这里，无需解档。
    **明确不做 docker exec** —— 那要挂 docker.sock，与 D-2026-10-09-4③ 的裁定相悖。
    ⚠️ 实测三环境：app 镜像无客户端 / 本地 Windows 无 / 仅 PG 容器内有 —— 这是本组第一前置。
 ② G-005 边界（P2 = **不触发**）：ProcessBuilder 是平台首次获得「执行宿主可执行文件」的能力
