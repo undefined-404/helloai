@@ -116,6 +116,13 @@
             <groupId>io.minio</groupId>
             <artifactId>minio</artifactId>
         </dependency>
+        <!-- Apache Commons Compress：技能包 zip 摄入闸门（REF-1.5，SkillPackageZipGate）。
+             取它而非 JDK 的 java.util.zip：ZipEntry 不暴露 unix mode（symlink 判定）与加密位。
+             原为本仓传递依赖，按 D-2026-10-09-6③-2 的处置显式声明（版本见根 pom dependencyManagement）。 -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-compress</artifactId>
+        </dependency>
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-core</artifactId>

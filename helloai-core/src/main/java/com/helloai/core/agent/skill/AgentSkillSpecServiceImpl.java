@@ -3,11 +3,8 @@ package com.helloai.core.agent.skill;
 import com.helloai.core.agent.SkillNormalizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -57,7 +54,7 @@ public class AgentSkillSpecServiceImpl implements AgentSkillSpecService {
                 continue;
             }
             SkillPackage pkg = entry.getValue();
-            String summary = loadSpeedSummary(pkg.name(), pkg.fileName());
+            String summary = speedSummaryOf(pkg);
             if (summary == null || summary.isBlank()) {
                 continue;
             }
@@ -99,7 +96,7 @@ public class AgentSkillSpecServiceImpl implements AgentSkillSpecService {
                 continue;
             }
             SkillPackage pkg = entry.getValue();
-            String summary = loadSpeedSummary(pkg.name(), pkg.fileName());
+            String summary = speedSummaryOf(pkg);
             if (summary == null || summary.isBlank()) {
                 continue;
             }
@@ -109,29 +106,23 @@ public class AgentSkillSpecServiceImpl implements AgentSkillSpecService {
     }
 
     /**
-     * 读取规范文件的「执行速览」部分，并去掉文件 h1 标题行
+     * 读取技能包的「执行速览」部分，并去掉文件 h1 标题行
      * （渲染段自带 {@code ### 标签} 标题，避免重复层级）。
+     *
+     * <p><b>正文来源已下沉到 {@link SkillPackageCatalog}</b>（REF-1.6 双源）：内置包走
+     * classpath（{@link SkillContentSource}），已安装包走目录快照里的 DB 正文表。
+     * 本类不再自己做 I/O。<b>读取失败一律返回 {@code null}</b> 由调用方跳过——best-effort、
+     * 不阻断执行链，与改造前语义一致。</p>
      *
      * <p><b>顺序即正确性</b>：必须<b>先剥 frontmatter、再切分隔符</b>——md 引入 frontmatter 后，
      * 闭合围栏本身就是 {@code \n---\n}，会被 {@code indexOf} 先命中（REF-1.1a）。
      * 无 frontmatter 时 {@link SkillFrontMatter#stripBody} 为恒等变换，故纯正文 md 行为不变。</p>
      */
-    private String loadSpeedSummary(String label, String fileName) {
-        try {
-            ClassPathResource resource = new ClassPathResource("skills/plugins/" + fileName);
-            if (!resource.exists()) {
-                log.warn("平台技能规范文件缺失，跳过: label={}, path={}", label, fileName);
-                return null;
-            }
-            String content;
-            try (InputStream in = resource.getInputStream()) {
-                content = new String(in.readAllBytes(), StandardCharsets.UTF_8);
-            }
-            return SkillSpeedSummaryRenderer.render(SkillFrontMatter.stripBody(content));
-        } catch (Exception e) {
-            log.warn("平台技能规范读取失败，跳过该规范（不阻断执行链）: label={}, err={}",
-                    label, e.getMessage());
+    private String speedSummaryOf(SkillPackage pkg) {
+        String content = catalog.bodyOf(pkg);
+        if (content == null) {
             return null;
         }
+        return SkillSpeedSummaryRenderer.render(SkillFrontMatter.stripBody(content));
     }
 }

@@ -84,6 +84,26 @@ public interface ArtifactStorage {
     StoredArtifact store(String ownerName, Long taskId, Long subTaskId, String fileName, byte[] content);
 
     /**
+     * 写入<b>无任务上下文</b>的产物（如技能包原始 zip，REF-1.6）。
+     *
+     * <p>默认实现以 {@code null} 委托五参版——两实现的 objectKey 组织对
+     * {@code taskId} / {@code subTaskId} 为 {@code null} 时**本就按 {@code 0} 占位**
+     * （{@code LocalArtifactStorage#buildObjectKey} / {@code MinioArtifactStorage#buildObjectKey}），
+     * 因此 key 形如 {@code {ownerName}/{yyyy}/{MM}/0/0/{uuid8}-{safeName}}。</p>
+     *
+     * <p>刻意用 {@code default} 而不改成抽象方法：否则每新增一个存储实现都要重复覆写一遍；
+     * 中段的 {@code 0/0} 是既有约定的自然结果，不做特化。</p>
+     *
+     * @param ownerName 归属者目录名（会做安全清洗；技能包用固定归属名，如 {@code skill-packages}）
+     * @param fileName  原始文件名（会做安全清洗后落盘）
+     * @param content   文件内容字节
+     * @return 写入结果（storageUrl / bucket / objectKey / 大小）
+     */
+    default StoredArtifact store(String ownerName, String fileName, byte[] content) {
+        return store(ownerName, null, null, fileName, content);
+    }
+
+    /**
      * 按 storageUrl 读取产物内容；地址非法或文件不存在时抛异常。
      */
     byte[] load(String storageUrl);

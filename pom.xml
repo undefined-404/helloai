@@ -32,6 +32,12 @@
         <lombok.version>1.18.32</lombok.version>
         <resilience4j.version>2.2.0</resilience4j.version>
         <minio.version>8.5.12</minio.version>
+        <!-- Apache Commons Compress：技能包 zip 摄入闸门（REF-1.5）。
+             JDK 的 java.util.zip.ZipEntry **不暴露** unix mode（external attributes 在中央目录里）
+             与加密位，查不了 symlink / 加密条目；commons-compress 两者都给。
+             它原是本仓传递依赖（1.26.0），按既有规矩（D-2026-10-09-6③-2 对 OkHttp 的处置：
+             「传递依赖落地必须在 pom.xml 显式声明」）在此定版。 -->
+        <commons-compress.version>1.26.0</commons-compress.version>
         <!-- Redisson 分布式锁（子任务审核并发锁迁移，v1.2 §阶段1） -->
         <redisson.version>4.0.0</redisson.version>
         <!-- ShedLock 定时任务分布式锁（11 个 job 任务迁移，v1.2 §阶段2） -->
@@ -186,6 +192,12 @@
                 <groupId>io.minio</groupId>
                 <artifactId>minio</artifactId>
                 <version>${minio.version}</version>
+            </dependency>
+            <!-- Apache Commons Compress：技能包 zip 摄入闸门（REF-1.5） -->
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-compress</artifactId>
+                <version>${commons-compress.version}</version>
             </dependency>
             <!-- Redisson 分布式锁（v1.2 §阶段1：SubTaskReview 锁迁 RLock；4.0.0 starter 默认带 spring-data-40 适配器，
                  Boot 3.4 需显式用 redisson-spring-data-34 并排除 40） -->
