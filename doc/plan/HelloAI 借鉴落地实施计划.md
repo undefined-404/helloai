@@ -439,6 +439,8 @@ Regression ：verify-agent-skill-capability.ps1（技能包登记）、verify-we
 > ② **无替代分支可读化**（`5.1`）：落 `sub_task_dispatch_no_alternative` 时间线 + 抛 **409**（可读原因，不再是裸 500）；
 > 前端登记 `eventMeta.ts`（`EVENT_META` + `PAYLOAD_KEY_LABEL`）与 `sequenceFlow.ts`（`LABEL`）—— **第三处
 > `SubTaskDetail.vue` 无需改动**（经 `EVENT_META` 取标签；这两个事件是必须可见的调度决策节点，**不进** `COMPACT_HIDDEN_EVENTS`）。
+> ⚠️ **后续更新（2026-10-11）**：上句所提 `EVENT_META` / `LABEL` 两份前端字典**已随 REF-6.8 服务端单一来源收口删除**
+> （`LOG-20261011-006`），改经 `GET /api/events/catalog` 拉取；本行其余结论（含「不进 `COMPACT_HIDDEN_EVENTS`」）不受影响。
 > ③ **初始化期服务锁定**（`5.3`）：判据 = **用户数 == 0**（**不用** `system.setup_finished` —— 该值在
 > `V1__init_all.sql` 被预置为 `'1'`，当判据**永不生效**）；落点 `SetupLockInterceptor`，除 `/api/setup/**` 与
 > `/api/health/**` 外一律 `503` + `setup_required`，与前端 `!setupStatus.hasUsers` 同源。
