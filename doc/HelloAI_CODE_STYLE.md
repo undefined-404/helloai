@@ -2789,7 +2789,7 @@ B 级集成测试资产（2026-09-29 建立，审计建议 #5）：
 
 ```text
 位置：helloai-start/src/test/java/com/helloai/it/（*IT 命名，surefire 默认不跑）
-基础：ItContainers（postgres 16.4-alpine / redis 7.2.5-alpine / rabbitmq 3.12.14-management-alpine 容器单例）
+基础：ItContainers（postgres pgvector/pgvector 0.8.0-pg16 / redis 7.2.5-alpine / rabbitmq 3.12.14-management-alpine 容器单例）
      + ItTestApplication（无 @EnableScheduling，调度由测试显式触发）
      + AbstractItTestBase（@DynamicPropertySource + seed 直插 + awaitUntil 轮询）
 用例：FlywayMigrationIT（迁移全量 apply）/ MqExecutionCommandConsumerIT（幂等消费）

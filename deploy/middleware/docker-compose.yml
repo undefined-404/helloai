@@ -23,9 +23,9 @@
 
 services:
 
-  # --- PostgreSQL 16.4 (dedicated instance for HelloAI) ---
+  # --- PostgreSQL 16.4 (dedicated instance for HelloAI)（REF-4.0a：pgvector 版，含 vector 扩展） ---
   postgres-helloai:
-    image: postgres:16.4-alpine
+    image: pgvector/pgvector:0.8.0-pg16
     container_name: middleware-postgres-helloai
     restart: unless-stopped
     ports:

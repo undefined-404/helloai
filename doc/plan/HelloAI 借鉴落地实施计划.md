@@ -6,7 +6,10 @@
 > **用户裁定**：`D-2026-10-09-4`（见《差距表》§0「当前生效的取舍决策」）——四项能力优先级、备份/恢复与 RAG 入目标架构、沙箱生产形态、语义位与不可关闭清单同批。
 > **性质**：本计划只收**可执行结论**（借鉴落点 → 动作 → 验收 → 验证集 → 回填），不含调研过程（在 `research/`）与稳定设计（在 `design/`）。
 > **完成迁移**：执行完成后迁入 `doc/archive/implemented/` 并标 `Done`。
-> **最后更新：2026-10-11（v12）**——**v12 = REF-4 落地前置① embeddings 探针通过 + 用户新增前置①b**（2026-10-11）：
+> **最后更新：2026-10-11（v13）**——**v13 = REF-4 落地前置①b（通义千问 LLM 有效）+ ② REF-4.0a（pgvector 镜像 + 扩展）交付**（2026-10-11）：
+> ①b `qwen-plus` chat 探针 `200` 通过；REF-4.0a 镜像换 `pgvector/pgvector:0.8.0-pg16`（四处同步）+ `V106` `CREATE EXTENSION vector`，
+> 本地真库验证 `vector|0.8.0` / Flyway `V106` success / `:6565` UP。见 §6 `Status` / `LOG-20261011-003`。
+> **v12 = REF-4 落地前置① embeddings 探针通过 + 用户新增前置①b**（2026-10-11）：
 > `text-embedding-v4` + 1024 维探针 `200`/`1024` 通过（失败分支以误用 DeepSeek key→401 实证）；
 > valid key = 平台 LLM 供应商派通义千问凭据、REF-4 复用不新增、**key 值不入档**；
 > 新增前置①b「RAG 启用前先验证通义千问 LLM 模型有效性」，见 §6 `Status` / `LOG-20261011-002`。
@@ -376,7 +379,7 @@ Regression ：verify-agent-execution-preview.ps1、verify-c3-events.ps1（ENVIRO
 | REF-4.2 | pgvector 存储与检索（**不抄上游 SQLite 侧库**，PG 单后端优势） | 检索命中正确；预算截断生效 |
 | REF-4.3 | 引用溯源 marker：检索结果尾部附 marker，前端渲染卡片、喂模型前剥掉 | 报告/核验意见可点开引用来源 |
 
-> **Status（2026-10-11，v12）**：`REF-4.0b` **已定稿** —— `design/adr/ADR-002-embedding-provider.md`（`D-2026-10-11-1`）：
+> **Status（2026-10-11，v13）**： `REF-4.0b` **已定稿** —— `design/adr/ADR-002-embedding-provider.md`（`D-2026-10-11-1`）：
 > 嵌入模型 = DashScope `text-embedding-v4` / **1024 维（单向门，上线即冻结）**；密钥**共用**既有 dashscope 条目；
 > 数据边界 = 接受正文发送至阿里云（不引入境外供应商）；向量存储沿用 `pgvector`（不引入 ES）。
 > **落地前置**：
@@ -384,8 +387,10 @@ Regression ：verify-agent-execution-preview.ps1、verify-c3-events.ps1（ENVIRO
 >   现有套餐覆盖向量模型。首把误用 **DeepSeek** key → `401 invalid_api_key`（失败显式报分支实证），换**通义千问** key → `200`。
 >   **valid key = 平台配置「LLM 供应商」中已启用且验证有效的通义千问凭据**；REF-4 复用、不新增（对齐 ADR-002 §4）。
 >   **key 值不入档**。
-> - **①b（用户新增）**：RAG 启用须**先验证通义千问 LLM 模型有效性**（内部 LLM Agent 走 dashscope 通义千问）—— ⏳ 待做，独立于 embeddings 探针。
-> - **② `REF-4.0a`** 换 pgvector 镜像 + `CREATE EXTENSION vector`（+ 两份 compose 与 deploy 文档同步）—— ⏳ 未做（实现计划见 `LOG-20261011-002`）。
+> - **①b（用户新增）✅ 已验证**（2026-10-11，`LOG-20261011-003`）：`qwen-plus` 通义千问 LLM chat 探针 `200` / 有内容，RAG 启用前置满足。
+> - **② `REF-4.0a` ✅ 已交付**（2026-10-11，`LOG-20261011-003`）：PG 镜像换 `pgvector/pgvector:0.8.0-pg16`（docker-compose.yml / docker-compose.server.yml / deploy/middleware/docker-compose.yml / ItContainers.java 四处同步）+ 迁移 `V106__create_vector_extension.sql`（`CREATE EXTENSION IF NOT EXISTS vector`）。
+>   本地真库验证：`vector|0.8.0` 扩展入库、Flyway `V106` success、应用 `:6565` UP。镜像内置 PG `16.10`（Debian），仍 16 大版本 ⇒ REF-2 跨引擎恢复门不受影响；16.4→16.10 小版本原地升级，数据卷保留无需迁移。CODE_STYLE §2792 基建行 / 差距表 G-019 前置同步。
+> - **③ `REF-4.2` 前先小样本验证召回质量再全量灌库**（维度冻结 ⇒ 试错成本集中在建库前）—— ⏳ 未做（下一步）。
 > - **③ `REF-4.2` 前先小样本验证召回质量再全量灌库**（维度冻结 ⇒ 试错成本集中在建库前）—— ⏳ 未做。
 
 > **接线口径（`CODE_STYLE §35.1`）**：`search_knowledge` 属**程序化能力**，必须经 `ToolCallbackContributor` 端口注册，并登记技能包（至少一个 `AgentTask.skills` 挂点）；**禁止**给 LLM 直插域内 Service。

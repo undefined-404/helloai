@@ -12,7 +12,7 @@ import org.testcontainers.utility.DockerImageName;
  * {@link AbstractItTestBase} 的 {@code @DynamicPropertySource} 注入端点，
  * 使 B 级集成测试在真实中间件上验证 Flyway / 幂等消费 / Outbox / 状态机 CAS。</p>
  *
- * <p><b>镜像口径</b>：与 {@code docker-compose.yml}（postgres:16.4-alpine /
+ * <p><b>镜像口径</b>：与 {@code docker-compose.yml}（postgres:pgvector/pgvector 0.8.0-pg16 /
  * redis:7.2.5-alpine / rabbitmq:3.12.14-management-alpine）逐一对齐（CODE_STYLE §3 技术栈），
  * 生产与测试同版本，杜绝「测试绿、生产红」的版本漂移。</p>
  *
@@ -25,7 +25,7 @@ import org.testcontainers.utility.DockerImageName;
 final class ItContainers {
 
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>(
-            DockerImageName.parse("postgres:16.4-alpine"))
+            DockerImageName.parse("pgvector/pgvector:0.8.0-pg16"))
             .withDatabaseName("helloai_it")
             .withUsername("postgres")
             .withPassword("postgres");

@@ -62,9 +62,9 @@
 
 services:
 
-  # --- PostgreSQL 16.4 ---
+  # --- PostgreSQL 16.4（REF-4.0a：pgvector 版，含 vector 扩展） ---
   postgres:
-    image: postgres:16.4-alpine
+    image: pgvector/pgvector:0.8.0-pg16
     container_name: helloai-postgres
     restart: unless-stopped
     ports:
