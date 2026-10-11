@@ -2,6 +2,7 @@ package com.helloai.core.review.support;
 
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ReviewResult;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
 import com.helloai.core.agent.service.ConversationService;
@@ -101,7 +102,7 @@ public class ReviewRecheckExecutor {
                 resultText += "\n- 评语: " + verdict.getComment();
             }
             conversationService.addMessage(subTask.id(), reviewer.id(),
-                    "assistant", "agent", resultText, "subtask_recheck_result");
+                    "assistant", "agent", resultText, TimelineEventCode.SUBTASK_RECHECK_RESULT.code());
         } catch (Exception e) {
             log.warn("抽检结论对话流写入失败（不阻断抽检）: reviewRecordId={}, err={}",
                     reviewRecordId, e.getMessage());
@@ -123,7 +124,7 @@ public class ReviewRecheckExecutor {
                     reviewRecordId, e.getMessage());
         }
         taskTimelineService.recordEvent(subTask.taskId(), subTask.id(),
-                pass ? "sub_task_recheck_consistent" : "sub_task_recheck_discrepancy",
+                pass ? TimelineEventCode.SUB_TASK_RECHECK_CONSISTENT.code() : TimelineEventCode.SUB_TASK_RECHECK_DISCREPANCY.code(),
                 AgentRole.REVIEWER, reviewer.id(),
                 Map.of("reviewRecordId", reviewRecordId, "originalResult", "APPROVED",
                         "recheckResult", recheckResult.name(), "discrepancy", !pass,

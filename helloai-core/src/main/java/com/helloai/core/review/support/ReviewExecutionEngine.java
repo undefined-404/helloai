@@ -1,6 +1,7 @@
 package com.helloai.core.review.support;
 
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
@@ -118,7 +119,7 @@ public class ReviewExecutionEngine {
             log.warn("自动核验输出不可解析，子任务停留 REVIEW 等人工: subTaskId={}, rawOutput={}",
                     subTaskId, VerdictParser.summarize(result.getOutput(), 300));
             taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
-                    "sub_task_auto_review_unparseable", AgentRole.REVIEWER,
+                    TimelineEventCode.SUB_TASK_AUTO_REVIEW_UNPARSEABLE.code(), AgentRole.REVIEWER,
                     reviewer.id(),
                     Map.of("rawOutput", VerdictParser.summarize(result.getOutput(), 300)));
             return null;

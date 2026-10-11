@@ -5,19 +5,20 @@
 # 治什么：事件码（task_timeline.event_type 的展示码）经后端 `TimelineEventCode` 枚举
 #   作为**唯一事实源**，前端经 `/api/events/catalog` 拉取代 EVENT_META / sequenceFlow.LABEL
 #   硬编码副本。本守卫保证：
-#   ① 后端**显示通道**写入的每个码，都必须有对应的 `TimelineEventCode` 枚举条目
-#      （否则前端查目录没 label ⇒ 界面回退裸英文/伪英文）；
+#   ① 后端**显示通道写点**不得残留裸字面量（写点替换后统一为 `TimelineEventCode.<CONST>.code()`），
+#      且引用的每个常量必须真实存在于枚举 —— 防「写回字面量绕过单源」与「枚举改名留悬空引用」；
 #   ② 前端**不再残留** `EVENT_META` / `sequenceFlow.LABEL` 硬编码字典（单一来源不可被
 #      一个人偷偷把它复制回前端而漂移）。
-# 背景：`LOG-20261010-013`（旧守卫，对账 EVENT_META/LABEL 两份副本）；REF-6.8 收口后
-#       前端副本删除、守卫转为「enum 单源 + 前端无残留」。
+# 背景：`LOG-20261010-013`（旧守卫，对账 EVENT_META/LABEL 两份副本）；REF-6.8 收口后前端副本删除；
+#       `LOG-20261011-006` 收口「服务端单一来源」；写点替换（`LOG-20261011-008`）后守卫由
+#       「写点字面量 ⊆ enum」转为「写点无字面量残留 + 枚举引用存在 + 库内 ⊆ enum」。
 #
 # 两种模式：
 #   A. 静态（默认；CI 用；零外部依赖）
-#      码集 = 写入点字面量（形态：`"<snake_case>",` 紧邻 `AgentRole.`）——显示通道写点。
+#      断言①写点无字面量残留 + 断言②写点枚举引用常量存在（防形态失配静默失效）
 #   B. `--db`（本地/运维用；地面真值）
-#      码集 = 库内 `SELECT DISTINCT event_type FROM task_timeline`，并入静态并集后断言
-#      ⊆ enum（覆盖常量传参 / 历史遗留码等静态盲区）。
+#      断言③码集 = 库内 `SELECT DISTINCT event_type FROM task_timeline` ⊆ enum
+#      （覆盖常量传参 / 历史遗留码等静态盲区）。
 #
 # 为什么用 bash 而非 PowerShell：见 `verify-executor-doc-parity.sh` 同源理由。
 # 三平台可跑：Git Bash / Linux / macOS。
@@ -95,20 +96,33 @@ else
   bad "前端检测到硬编码事件字典残留（EVENT_META=${leftover_eventmeta} / LABEL=${leftover_label}）——单一来源被破坏，请删除前端副本"
 fi
 
-# ── 后端显示通道写点码 ────────────────────────────────────────────
+# ── 显示通道写点的两种形态 ────────────────────────────────────────
+# 写点替换（REF-6.8 收口遗留项）后，展示码写点统一为 `TimelineEventCode.<CONST>.code()`：
+#   ① 裸字面量写点（旧邻接形态 `"<code>", AgentRole.X`）应**恒为 0** —— 若有人把字面量
+#      写回，枚举单一来源即被绕过（枚举外的新码照样落库 ⇒ 前端查目录缺 label 回退裸英文）；
+#   ② 引用的每个 `<CONST>` 必须真实存在于枚举 —— 防枚举改名后留下悬空引用。
+LITERAL_FILE="$WORK/literal_write_points"
+REF_FILE="$WORK/ref_consts"
+ENUM_NAMES="$WORK/enum_names"
+
+# 枚举常量名集合（与码集分开：码是小写 snake，常量名是大写下划线）
+grep -oE '^    [A-Z][A-Z0-9_]*\(' "$TIMELINE_ENUM" | tr -d ' (' | sort -u > "$ENUM_NAMES"
+
 {
   grep -RzohE '"[a-z][a-z0-9_]+",[[:space:]]*AgentRole\.[A-Z_]+' \
       --include=*.java "${SRC_DIRS[@]}" 2>/dev/null \
     | tr '\n' ' ' | tr '\0' '\n' \
     | sed -E 's/^"([a-z][a-z0-9_]+)".*/\1/' | grep -E '^[a-z][a-z0-9_]+$'
-} | sort -u > "$CODES_FILE"
-static_count="$(grep -c . "$CODES_FILE" || true)"
-if [ "$static_count" -gt 0 ]; then
-  ok "静态写点码集提取成功（邻接形态 ${static_count} 码）"
-else
-  bad "静态写点码集为空 —— 提取模式可能与代码形态失配"
-fi
+} | sort -u > "$LITERAL_FILE"
+literal_count="$(grep -c . "$LITERAL_FILE" || true)"
 
+grep -RohE 'TimelineEventCode\.[A-Z][A-Z0-9_]*\.code\(\)' \
+    --include=*.java "${SRC_DIRS[@]}" 2>/dev/null \
+  | sed -E 's/^TimelineEventCode\.([A-Z][A-Z0-9_]*)\.code\(\)$/\1/' | sort -u > "$REF_FILE"
+ref_count="$(grep -c . "$REF_FILE" || true)"
+
+# ── 采集库内真值（--db）到 CODES_FILE ─────────────────────────────
+: > "$CODES_FILE"
 if [ "$USE_DB" = "1" ]; then
   printf '\n-- 地面真值模式（--db：库内 distinct event_type）--\n'
   if ! command -v docker >/dev/null 2>&1; then
@@ -122,22 +136,43 @@ if [ "$USE_DB" = "1" ]; then
     db_count="$(printf '%s\n' "$db_codes" | grep -c . || true)"
     if [ "$db_count" -gt 0 ]; then
       ok "库内事件码读取成功（${db_count} 码）"
-      printf '%s\n' "$db_codes" >> "$CODES_FILE"
+      printf '%s\n' "$db_codes" > "$CODES_FILE"
       sort -u "$CODES_FILE" -o "$CODES_FILE"
-      ok "静态 ∪ 库内 = $(grep -c . "$CODES_FILE") 码（并集后断言）"
     else
       info "SKIP 库内未读到任何事件码（空库？）"
     fi
   fi
 fi
 
-# ── 断言 ①：每个（显示通道写点 ∪ 库内真值）码 ⊆ 单一来源枚举 ────────
-printf '\n-- 断言 ①：写点/真值码 ⊆ TimelineEventCode 枚举 --\n'
+# ── 断言 ①：显示通道写点无字面量残留 ───────────────────────────────
+printf '\n-- 断言 ①：显示通道写点无字面量残留 --\n'
+if [ "$literal_count" -eq 0 ]; then
+  ok "写点无裸字面量（均走 TimelineEventCode.<CONST>.code()；枚举引用 ${ref_count} 个常量）"
+else
+  bad "写点仍有 ${literal_count} 个裸字面量码未枚举化（应为 0，须改 TimelineEventCode.<X>.code()）：$(tr '\n' ' ' < "$LITERAL_FILE")"
+fi
+
+# ── 断言 ②：写点枚举引用常量 ⊆ 枚举常量集 ─────────────────────────
+printf '\n-- 断言 ②：写点枚举引用 ⊆ TimelineEventCode 常量集 --\n'
+if [ "$ref_count" -eq 0 ]; then
+  bad "未提取到任何 TimelineEventCode.<CONST>.code() 写点 —— 提取形态与代码失配，断言不能静默失效"
+else
+  dangling="$(comm -23 "$REF_FILE" "$ENUM_NAMES" || true)"
+  if [ -z "$dangling" ]; then
+    ok "写点引用的 ${ref_count} 个枚举常量全部存在（无改名悬空）"
+  else
+    bad "写点引用了不存在的枚举常量（改名残留 / 悬空引用）：$(printf '%s ' $dangling)"
+  fi
+fi
+
+# ── 断言 ③：库内真值码 ⊆ 单一来源枚举 ─────────────────────────────
+printf '\n-- 断言 ③：库内真值码 ⊆ TimelineEventCode 枚举 --\n'
+db_total="$(grep -c . "$CODES_FILE" || true)"
 missing="$(comm -23 "$CODES_FILE" "$ENUM_FILE" 2>/dev/null || true)"
 if [ -z "$missing" ]; then
-  ok "全部码都有枚举条目（写点 ${static_count} ∪ 库内 ⊆ ${enum_count}，缺则前端无 label 回退裸英文）"
+  ok "库内码全部有枚举条目（库内 ${db_total} 码 ⊆ ${enum_count}，缺则前端无 label 回退裸英文）"
 else
-  bad "以下码无 TimelineEventCode 条目（前端查目录会缺 label 回退裸英文）：$(printf '%s ' $missing)"
+  bad "以下库内码无 TimelineEventCode 条目（前端查目录会缺 label 回退裸英文）：$(printf '%s ' $missing)"
 fi
 
 # ── 提示（不拦截）：枚举里有、本次码集未见（历史/废弃/非字面量形态）──

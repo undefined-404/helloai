@@ -3,6 +3,7 @@ package com.helloai.job.task;
 import com.helloai.common.config.AgentFallbackProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.agent.observability.ExternalAgentFailureTracker;
@@ -112,7 +113,7 @@ public class ExternalAgentFallbackTask {
         taskTimelineService.recordEvent(
                 null,  // 系统级事件
                 null,  // 系统级事件
-                "agent_external_fallback_triggered",
+                TimelineEventCode.AGENT_EXTERNAL_FALLBACK_TRIGGERED.code(),
                 agent.getRole() != null ? agent.getRole() : AgentRole.EXECUTOR,
                 agent.getId(),
                 Map.of(

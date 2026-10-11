@@ -1,6 +1,7 @@
 package com.helloai.core.review.support;
 
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
 import lombok.RequiredArgsConstructor;
@@ -61,7 +62,7 @@ public class FinalReportReviewFallbackWriter {
     @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
     public void recordSkippedAndConverge(Long taskId, OffsetDateTime reportTime, int attempt, String reason) {
         taskTimelineService.recordEvent(taskId, null,
-                "task_final_report_review_skipped", AgentRole.REVIEWER, null,
+                TimelineEventCode.TASK_FINAL_REPORT_REVIEW_SKIPPED.code(), AgentRole.REVIEWER, null,
                 Map.of("reason", reason, "attempt", attempt));
         taskService.convergeFinalReportToDone(taskId, reportTime);
     }

@@ -6,6 +6,7 @@ import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.executor.AgentSelector.AgentSelectionConstraints;
 import io.github.resilience4j.core.ConfigurationNotFoundException;
@@ -182,11 +183,11 @@ public class ResilientDispatcher implements TaskDispatchPort {
             return false;
         }
         taskTimelinePort.recordEvent(subTask.taskId(), subTask.id(),
-                "sub_task_dispatch_skip_no_capability", AgentRole.SYSTEM, agentId,
+                TimelineEventCode.SUB_TASK_DISPATCH_SKIP_NO_CAPABILITY.code(), AgentRole.SYSTEM, agentId,
                 Map.of("reason", "execution_dense_no_local_capability",
                         "agentId", agentId,
                         "subTaskId", subTaskId));
-        subTaskCommandPort.markManualIntervention(subTaskId, "dispatch_skip_execution_dense",
+        subTaskCommandPort.markManualIntervention(subTaskId, TimelineEventCode.DISPATCH_SKIP_EXECUTION_DENSE.code(),
                 Map.of("agentId", agentId));
         log.warn("V27.1 分配跳过：执行密集任务不可分配给无本机能力 Agent, subTaskId={}, agentId={}",
                 subTaskId, agentId);
@@ -304,7 +305,7 @@ public class ResilientDispatcher implements TaskDispatchPort {
             taskTimelinePort.recordEvent(
                     snap.taskId(),
                     subTaskId,
-                    "sub_task_dispatch_fallback",
+                    TimelineEventCode.SUB_TASK_DISPATCH_FALLBACK.code(),
                     AgentRole.SYSTEM,
                     actualAgentId,
                     Map.of(
@@ -335,7 +336,7 @@ public class ResilientDispatcher implements TaskDispatchPort {
             taskTimelinePort.recordEvent(
                     snap.taskId(),
                     subTaskId,
-                    "sub_task_dispatch_no_alternative",
+                    TimelineEventCode.SUB_TASK_DISPATCH_NO_ALTERNATIVE.code(),
                     AgentRole.SYSTEM,
                     null,
                     Map.of(

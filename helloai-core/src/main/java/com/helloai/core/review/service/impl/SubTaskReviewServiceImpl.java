@@ -7,6 +7,7 @@ import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.event.AgentEventContextResolver;
 import com.helloai.core.agent.event.AgentEventRecorder;
 import com.helloai.core.agent.quality.service.AgentQualityProfileService;
@@ -271,12 +272,12 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             log.warn("自动核验跳过：返工已达上限, subTaskId={}, reworkCount={}, max={}",
                     subTaskId, reworkCount, maxRework);
             taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
-                    "sub_task_auto_review_skip_max_rework", AgentRole.REVIEWER, null,
+                    TimelineEventCode.SUB_TASK_AUTO_REVIEW_SKIP_MAX_REWORK.code(), AgentRole.REVIEWER, null,
                     Map.of("reworkCount", reworkCount, "maxRework", maxRework));
             // 核验返工熔断显式入死信：与调度维度 sub_task_dead_letter 对称，
             // 时序图 DLQ 泳道可见"熔断 → 人工打捞"，回调链路清晰
             taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
-                    "sub_task_review_dead_letter", AgentRole.SYSTEM, null,
+                    TimelineEventCode.SUB_TASK_REVIEW_DEAD_LETTER.code(), AgentRole.SYSTEM, null,
                     Map.of("reason", "rework_limit_exceeded",
                             "reworkCount", reworkCount, "maxRework", maxRework));
             // 状态真正转入 DEAD_LETTER 死信池（REVIEW → DEAD_LETTER，状态机已放行）：
@@ -286,7 +287,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             // agent 不变不触发 handover，与调度维度熔断行为一致。
             subTaskService.changeStatus(subTaskId, SubTaskStatus.DEAD_LETTER, null);
             // §6.52 人工介入标记：前端据此展示"人工介入"面板（用户选 agent 驳回改派 / 直接通过）
-            subTaskService.markManualIntervention(subTaskId, "rework_limit",
+            subTaskService.markManualIntervention(subTaskId, TimelineEventCode.REWORK_LIMIT.code(),
                     Map.of("reworkCount", reworkCount, "maxRework", maxRework));
             // 对话流留痕（2026-10-05）：终态分支与核验正常路径一样在对话流可见，
             // 避免「对话流断档、时间线继续」导致用户看到两边对不上
@@ -294,7 +295,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                     "自动核验跳过：返工已达上限（reason=rework_limit_exceeded，reworkCount=" + reworkCount
                             + "，maxRework=" + maxRework + "）；子任务已转入死信池，"
                             + "等待人工处置（人工通过 / 改派执行者 / 人工驳回）。",
-                    "subtask_review_skip_max_rework");
+                    TimelineEventCode.SUBTASK_REVIEW_SKIP_MAX_REWORK.code());
             return;
         }
 
@@ -311,16 +312,16 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                 log.warn("自动核验跳过：执行密集任务由无本机能力 Agent 提交, subTaskId={}, submitterAgentId={}",
                         subTaskId, submitterId);
                 taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
-                        "sub_task_review_skip_no_capability", AgentRole.REVIEWER, submitterId,
+                        TimelineEventCode.SUB_TASK_REVIEW_SKIP_NO_CAPABILITY.code(), AgentRole.REVIEWER, submitterId,
                         Map.of("reason", "execution_dense_submitter_no_local_capability",
                                 "submitterAgentId", submitterId));
-                subTaskService.markManualIntervention(subTaskId, "review_skip_execution_dense_no_capability",
+                subTaskService.markManualIntervention(subTaskId, TimelineEventCode.REVIEW_SKIP_EXECUTION_DENSE_NO_CAPABILITY.code(),
                         Map.of("submitterAgentId", submitterId));
                 recordReviewSkipConversation(subTaskId, submitterId,
                         "自动核验跳过：执行密集任务由无本机执行能力的 Agent 提交"
                                 + "（reason=execution_dense_submitter_no_local_capability，submitterAgentId="
                                 + submitterId + "），产出可信度存疑；已标记人工介入，等待人工核验处置。",
-                        "subtask_review_skip_no_capability");
+                        TimelineEventCode.SUBTASK_REVIEW_SKIP_NO_CAPABILITY.code());
                 return;
             }
         }
@@ -332,11 +333,11 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         if (!evidence.ok()) {
             log.warn("自动核验跳过：无产出证据支撑, subTaskId={}, reason={}", subTaskId, evidence.reason());
             taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
-                    "sub_task_review_skip_no_evidence", AgentRole.REVIEWER, submitterId,
+                    TimelineEventCode.SUB_TASK_REVIEW_SKIP_NO_EVIDENCE.code(), AgentRole.REVIEWER, submitterId,
                     Map.of("reason", evidence.reason(), "submitterAgentId", submitterId,
                             "attachmentCount", evidence.attachmentCount(),
                             "outputPresent", evidence.outputPresent()));
-            subTaskService.markManualIntervention(subTaskId, "review_skip_no_evidence",
+            subTaskService.markManualIntervention(subTaskId, TimelineEventCode.REVIEW_SKIP_NO_EVIDENCE.code(),
                     Map.of("reason", evidence.reason(), "submitterAgentId", submitterId,
                             "attachmentCount", evidence.attachmentCount(),
                             "outputPresent", evidence.outputPresent()));
@@ -345,7 +346,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                             + "，attachmentCount=" + evidence.attachmentCount()
                             + "，outputPresent=" + evidence.outputPresent() + "）；"
                             + "已标记人工介入，等待人工核验处置。",
-                    "subtask_review_skip_no_evidence");
+                    TimelineEventCode.SUBTASK_REVIEW_SKIP_NO_EVIDENCE.code());
             return;
         }
 
@@ -373,7 +374,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             }
             log.warn("双审候选不足，降级单审: subTaskId={}, available={}", subTaskId, pair.size());
             taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
-                    "sub_task_dual_review_degraded", AgentRole.REVIEWER, null,
+                    TimelineEventCode.SUB_TASK_DUAL_REVIEW_DEGRADED.code(), AgentRole.REVIEWER, null,
                     Map.of("reason", "insufficient_reviewer_candidates", "available", pair.size()));
         }
 
@@ -421,7 +422,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             subTaskService.complete(subTaskId);
             recordAutoReviewQuietly(subTaskId, reviewer.id(), ReviewResult.APPROVED, verdict);
             taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
-                    "sub_task_auto_review_passed", AgentRole.REVIEWER, reviewer.id(),
+                    TimelineEventCode.SUB_TASK_AUTO_REVIEW_PASSED.code(), AgentRole.REVIEWER, reviewer.id(),
                     VerdictParser.safeMap("score", verdict.getScore(), "comment", verdict.getComment()));
             log.info("自动核验通过: subTaskId={}, reviewerAgentId={}, score={}",
                     subTaskId, reviewer.id(), verdict.getScore());
@@ -483,7 +484,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
             log.warn("双审核验不完整，停留 REVIEW 等人工: subTaskId={}, verdict1Ready={}, verdict2Ready={}",
                     subTaskId, v1 != null, v2 != null);
             taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
-                    "sub_task_dual_review_incomplete", AgentRole.REVIEWER, null,
+                    TimelineEventCode.SUB_TASK_DUAL_REVIEW_INCOMPLETE.code(), AgentRole.REVIEWER, null,
                     Map.of("reviewer1AgentId", reviewer1.id(), "reviewer2AgentId", reviewer2.id(),
                             "verdict1Ready", v1 != null, "verdict2Ready", v2 != null));
             return;
@@ -501,7 +502,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                             "comment1", VerdictParser.nullToEmpty(v1.getComment()),
                             "comment2", VerdictParser.nullToEmpty(v2.getComment()))));
             taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
-                    "sub_task_reviewer_disagreement", AgentRole.REVIEWER, null,
+                    TimelineEventCode.SUB_TASK_REVIEWER_DISAGREEMENT.code(), AgentRole.REVIEWER, null,
                     Map.of("reviewer1AgentId", reviewer1.id(), "pass1", pass1,
                             "reviewer2AgentId", reviewer2.id(), "pass2", pass2,
                             "comment1", VerdictParser.nullToEmpty(v1.getComment()),
@@ -513,7 +514,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                     "双审分歧（reason=reviewer_disagreement）：评审1=" + reviewer1.id() + "(pass=" + pass1
                             + ") 与 评审2=" + reviewer2.id() + "(pass=" + pass2 + ") 结论不一致；"
                             + "子任务停留 REVIEW，等待人工介入裁决。",
-                    "subtask_review_skip_disagreement");
+                    TimelineEventCode.SUBTASK_REVIEW_SKIP_DISAGREEMENT.code());
             return;
         }
         // 共识落地：REQUIRE_BOTH 一致或 ANY 至少一过即走既有链；落库取 reviewer1 判定
@@ -529,7 +530,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         applyVerdict(subTask, executorAgentId, reviewer1, chosen, ReviewChannel.DUAL, consensusSummary);
         recordReviewerStats(reviewer1.id(), reviewer2.id(), 1, 0);
         taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
-                "sub_task_dual_review_consented", AgentRole.REVIEWER, reviewer1.id(),
+                TimelineEventCode.SUB_TASK_DUAL_REVIEW_CONSENTED.code(), AgentRole.REVIEWER, reviewer1.id(),
                 Map.of("consensus", consensusPass ? "APPROVED" : "REJECTED",
                         "policy", requireBoth ? "REQUIRE_BOTH" : "ANY",
                         "reviewer1AgentId", reviewer1.id(), "reviewer2AgentId", reviewer2.id(),
@@ -659,7 +660,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         }
         recordAutoReviewQuietly(subTaskId, reviewerAgentId, ReviewResult.REJECTED, verdict);
         taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
-                "sub_task_auto_review_rejected", AgentRole.REVIEWER, reviewerAgentId,
+                TimelineEventCode.SUB_TASK_AUTO_REVIEW_REJECTED.code(), AgentRole.REVIEWER, reviewerAgentId,
                 VerdictParser.safeMap("score", verdict.getScore(), "issues", verdict.getIssues(),
                         "comment", verdict.getComment()));
         log.info("自动核验驳回返工: subTaskId={}, reviewerAgentId={}, issues={}",
@@ -735,7 +736,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
         log.warn("自动核验重复失败短路：判结构性失败转死信, subTaskId={}, basis={}, round={}, score={}, similarity={}, threshold={}",
                 subTaskId, basis, round, scoreTrend, String.format("%.3f", similarity), threshold);
         taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
-                "sub_task_auto_review_skip_repeated_failure", AgentRole.REVIEWER, reviewerAgentId,
+                TimelineEventCode.SUB_TASK_AUTO_REVIEW_SKIP_REPEATED_FAILURE.code(), AgentRole.REVIEWER, reviewerAgentId,
                 Map.of("reason", "repeated_failure_signature",
                         "basis", basis,
                         "round", round,
@@ -745,7 +746,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                         "issues", VerdictParser.summarize(currIssues, 200)));
         // 与调度/返工上限熔断对称：显式入死信事件，DLQ 泳道"短路 → 人工打捞"可见
         taskTimelineService.recordEvent(subTask.taskId(), subTaskId,
-                "sub_task_review_dead_letter", AgentRole.SYSTEM, null,
+                TimelineEventCode.SUB_TASK_REVIEW_DEAD_LETTER.code(), AgentRole.SYSTEM, null,
                 Map.of("reason", "repeated_failure_signature",
                         "basis", basis,
                         "round", round,
@@ -763,7 +764,7 @@ public class SubTaskReviewServiceImpl implements SubTaskReviewService {
                         + "，round=" + round + "，scoreTrend=" + scoreTrend
                         + "，similarity=" + String.format("%.3f", similarity)
                         + "，threshold=" + threshold + "）；子任务已转入死信池，等待人工处置。",
-                "subtask_review_skip_repeated_failure");
+                TimelineEventCode.SUBTASK_REVIEW_SKIP_REPEATED_FAILURE.code());
         return true;
     }
 

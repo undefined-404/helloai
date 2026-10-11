@@ -5,6 +5,7 @@ import com.helloai.common.base.NoCandidateAgentException;
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.task.service.SubTaskDispatchService;
 import com.helloai.core.task.service.SubTaskService;
@@ -198,7 +199,7 @@ public class SubTaskPendingOrphanTask {
                     try {
                         // latest 在 try 内声明、catch 不可见，故 taskId 传 null
                         //（recordEvent 允许 taskId 为空，属系统级等待态事件；前端按 subTaskId 可查）
-                        taskTimelineService.recordEvent(null, subTaskId, "sub_task_no_candidate",
+                        taskTimelineService.recordEvent(null, subTaskId, TimelineEventCode.SUB_TASK_NO_CANDIDATE.code(),
                                 AgentRole.SYSTEM, null,
                                 Map.of("reason", reason, "waitFor", "pending_orphan_scan"));
                     } catch (Exception te) {

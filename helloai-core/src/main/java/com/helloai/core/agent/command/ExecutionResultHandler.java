@@ -5,6 +5,7 @@ import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.entity.AgentExecutionRecord;
@@ -197,7 +198,7 @@ public class ExecutionResultHandler {
             taskTimelinePort.recordEvent(
                     subTask.taskId(),
                     report.getSubTaskId(),
-                    "sub_task_execute_result_discarded",
+                    TimelineEventCode.SUB_TASK_EXECUTE_RESULT_DISCARDED.code(),
                     AgentRole.EXECUTOR,
                     report.getAgentId(),
                     safeMap(
@@ -257,18 +258,18 @@ public class ExecutionResultHandler {
                 conversationService.addMessage(report.getSubTaskId(), report.getAgentId(),
                         "assistant", "agent",
                         report.getThinking(),
-                        "sub_task_execute_thinking");
+                        TimelineEventCode.SUB_TASK_EXECUTE_THINKING.code());
             }
             if (report.isSuccess()) {
                 conversationService.addMessage(report.getSubTaskId(), report.getAgentId(),
                         "assistant", "agent",
                         outputText,
-                        "sub_task_execute");
+                        TimelineEventCode.SUB_TASK_EXECUTE.code());
             } else {
                 conversationService.addMessage(report.getSubTaskId(), report.getAgentId(),
                         "assistant", "agent",
                         report.getError() != null ? report.getError() : "unknown_error",
-                        "sub_task_execute_failed");
+                        TimelineEventCode.SUB_TASK_EXECUTE_FAILED.code());
             }
         } catch (Exception e) {
             log.warn("执行对话流写入失败（不阻断主链路）: subTaskId={}, err={}",
@@ -283,7 +284,7 @@ public class ExecutionResultHandler {
             taskTimelinePort.recordEvent(
                     subTask.taskId(),
                     report.getSubTaskId(),
-                    "sub_task_execute_submit",
+                    TimelineEventCode.SUB_TASK_EXECUTE_SUBMIT.code(),
                     AgentRole.EXECUTOR,
                     report.getAgentId(),
                     safeMap(
@@ -356,7 +357,7 @@ public class ExecutionResultHandler {
                 taskTimelinePort.recordEvent(
                         subTask.taskId(),
                         report.getSubTaskId(),
-                        "sub_task_report_blocked_skipped",
+                        TimelineEventCode.SUB_TASK_REPORT_BLOCKED_SKIPPED.code(),
                         AgentRole.EXECUTOR,
                         report.getAgentId(),
                         safeMap(
@@ -377,7 +378,7 @@ public class ExecutionResultHandler {
             taskTimelinePort.recordEvent(
                     subTask.taskId(),
                     report.getSubTaskId(),
-                    "sub_task_execute_failed",
+                    TimelineEventCode.SUB_TASK_EXECUTE_FAILED.code(),
                     AgentRole.EXECUTOR,
                     report.getAgentId(),
                     safeMap(

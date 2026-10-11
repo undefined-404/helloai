@@ -3,6 +3,7 @@ package com.helloai.core.agent.mqconsumer;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ExecutionStatus;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.command.ExecutionResultHandler;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.ExecutionCommand;
@@ -177,7 +178,7 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
         taskTimelinePort.recordEvent(
                 subTask.taskId(),
                 command.getSubTaskId(),
-                "sub_task_execution_command_consume",
+                TimelineEventCode.SUB_TASK_EXECUTION_COMMAND_CONSUME.code(),
                 AgentRole.EXECUTOR,
                 command.getAgentId(),
                 safeMap(
@@ -189,7 +190,7 @@ public class LocalExecutionCommandConsumer implements ExecutionCommandConsumer {
         taskTimelinePort.recordEvent(
                 subTask.taskId(),
                 command.getSubTaskId(),
-                "sub_task_execute_start",
+                TimelineEventCode.SUB_TASK_EXECUTE_START.code(),
                 AgentRole.EXECUTOR,
                 command.getAgentId(),
                 Map.of("executor", "agent_runtime"));

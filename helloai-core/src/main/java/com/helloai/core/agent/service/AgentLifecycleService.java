@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.mapper.AgentMapper;
 import com.helloai.core.agent.port.TaskTimelinePort;
@@ -96,7 +97,7 @@ public class AgentLifecycleService {
         payload.put("at", OffsetDateTime.now().toString());
 
         taskTimelinePort.recordEvent(
-                null, null, "agent_sleep", AgentRole.SYSTEM, agent.getId(), payload);
+                null, null, TimelineEventCode.AGENT_SLEEP.code(), AgentRole.SYSTEM, agent.getId(), payload);
 
         log.info("Agent 手动暂停: id={}, prev={}, operator={}, reason={}",
                 agent.getId(), prev, effectiveOperator, reason);
@@ -237,7 +238,7 @@ public class AgentLifecycleService {
         payload.put("at", OffsetDateTime.now().toString());
 
         taskTimelinePort.recordEvent(
-                null, null, "agent_wake", AgentRole.SYSTEM, agentId, payload);
+                null, null, TimelineEventCode.AGENT_WAKE.code(), AgentRole.SYSTEM, agentId, payload);
 
         log.info("Agent 手动唤醒: id={}, operator={}, reason={}", agentId, effectiveOperator, reason);
         return agent;

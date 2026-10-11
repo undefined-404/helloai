@@ -18,6 +18,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentStatus;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.common.constant.WorkMode;
 import com.helloai.core.agent.entity.AgentDutyLease;
 import com.helloai.common.constant.SubTaskStatus;
@@ -467,7 +468,7 @@ public class McpToolServiceImpl implements McpToolService {
      */
     private void recordClaimRejected(Long taskId, Long subTaskId, Long agentId, String reason) {
         try {
-            taskTimelinePort.recordEvent(taskId, subTaskId, "sub_task_claim_rejected",
+            taskTimelinePort.recordEvent(taskId, subTaskId, TimelineEventCode.SUB_TASK_CLAIM_REJECTED.code(),
                     AgentRole.SYSTEM, agentId,
                     Map.of("reason", reason, "agentId", String.valueOf(agentId)));
         } catch (Exception e) {

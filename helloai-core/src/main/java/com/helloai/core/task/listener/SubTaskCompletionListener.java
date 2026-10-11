@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskStatus;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.shared.event.SubTaskCompletedEvent;
 import com.helloai.core.shared.event.TaskAutoCompletedEvent;
 import com.helloai.core.shared.util.SubTaskOutputExtractor;
@@ -101,7 +102,7 @@ public class SubTaskCompletionListener {
         }
         String content = extractContractContent(subTask);
         if (content == null || content.isBlank()) {
-            taskTimelineService.recordEvent(taskId, subTaskId, "sub_task_contract_backfilled",
+            taskTimelineService.recordEvent(taskId, subTaskId, TimelineEventCode.SUB_TASK_CONTRACT_BACKFILLED.code(),
                     AgentRole.SYSTEM, null, Map.of("status", "skipped", "reason", "no_output"));
             log.info("契约子任务无产出，跳过回流: subTaskId={}", subTaskId);
             return;
@@ -113,14 +114,14 @@ public class SubTaskCompletionListener {
             contract.put("content", content);
             contract.put("backfilledAt", OffsetDateTime.now().toString());
             taskRunningSpecService.updateContract(taskId, contract);
-            taskTimelineService.recordEvent(taskId, subTaskId, "sub_task_contract_backfilled",
+            taskTimelineService.recordEvent(taskId, subTaskId, TimelineEventCode.SUB_TASK_CONTRACT_BACKFILLED.code(),
                     AgentRole.SYSTEM, null, Map.of("status", "success", "chars", content.length()));
             log.info("契约产出已回流: taskId={}, subTaskId={}, chars={}", taskId, subTaskId, content.length());
         } catch (Exception e) {
             log.warn("契约产出回流失败（不阻断收尾链）: taskId={}, subTaskId={}, err={}",
                     taskId, subTaskId, e.getMessage());
             try {
-                taskTimelineService.recordEvent(taskId, subTaskId, "sub_task_contract_backfilled",
+                taskTimelineService.recordEvent(taskId, subTaskId, TimelineEventCode.SUB_TASK_CONTRACT_BACKFILLED.code(),
                         AgentRole.SYSTEM, null,
                         Map.of("status", "failed",
                                 "error", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
@@ -205,7 +206,7 @@ public class SubTaskCompletionListener {
                 log.warn("下游节点分发失败（保持 PENDING 等兜底）: subTaskId={}, err={}",
                         downstream.getId(), e.getMessage());
                 try {
-                    taskTimelineService.recordEvent(taskId, downstream.getId(), "sub_task_dispatch_deferred",
+                    taskTimelineService.recordEvent(taskId, downstream.getId(), TimelineEventCode.SUB_TASK_DISPATCH_DEFERRED.code(),
                             AgentRole.SYSTEM, null,
                             Map.of("reason", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName(),
                                     "waitFor", "pending_orphan_scan"));
@@ -251,7 +252,7 @@ public class SubTaskCompletionListener {
                 .ne(Task::getStatus, TaskStatus.DONE)
                 .set(Task::getStatus, TaskStatus.DONE));
         if (updated > 0) {
-            taskTimelineService.recordEvent(taskId, null, "task_auto_completed",
+            taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_AUTO_COMPLETED.code(),
                     AgentRole.SYSTEM, null, Map.of("trigger", "all_sub_tasks_done"));
             log.info("Task 自动收尾完成: taskId={}", taskId);
             // CAS 赢家唯一，恰好保证整合报告只被触发一次。此处已无事务上下文，

@@ -2,6 +2,7 @@ package com.helloai.core.agent.dispatcher;
 
 import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.port.SubTaskQueryPort;
 import com.helloai.core.agent.port.SubTaskSnapshot;
@@ -59,7 +60,7 @@ public class SubTaskAutoExecutionDispatcher {
         taskTimelinePort.recordEvent(
                 subTask.taskId(),
                 subTask.id(),
-                "sub_task_auto_execute_dispatch",
+                TimelineEventCode.SUB_TASK_AUTO_EXECUTE_DISPATCH.code(),
                 AgentRole.SYSTEM,
                 agent.getId(),
                 Map.of("trigger", "assigned", "accessType", agent.getAccessType().name()));

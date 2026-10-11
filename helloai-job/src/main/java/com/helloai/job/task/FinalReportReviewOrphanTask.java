@@ -2,6 +2,7 @@ package com.helloai.job.task;
 
 import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.review.support.FinalReportReviewLock;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.service.TaskService;
@@ -134,7 +135,7 @@ public class FinalReportReviewOrphanTask {
             long stuckSeconds = Math.max(0,
                     ChronoUnit.SECONDS.between(task.getFinalReportTime(), OffsetDateTime.now()));
             taskTimelineService.recordEvent(task.getId(), null,
-                    "task_final_report_review_orphan_converged", AgentRole.SYSTEM, null,
+                    TimelineEventCode.TASK_FINAL_REPORT_REVIEW_ORPHAN_CONVERGED.code(), AgentRole.SYSTEM, null,
                     Map.of("thresholdSeconds", thresholdSeconds,
                             "stuckSeconds", stuckSeconds,
                             "reportTime", task.getFinalReportTime().toString()));

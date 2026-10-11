@@ -4,6 +4,7 @@ import com.helloai.common.config.AgentDispatchProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.FinalReportStatus;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
@@ -257,7 +258,7 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
         // §12.2 陈旧守卫（审查前）：期间被重新生成/回滚接管 → 旧链审查丢弃，不选人不动用 LLM
         if (isStale(task, event)) {
             taskTimelineService.recordEvent(event.getTaskId(), null,
-                    "task_final_report_review_discarded_stale", AgentRole.REVIEWER, null,
+                    TimelineEventCode.TASK_FINAL_REPORT_REVIEW_DISCARDED_STALE.code(), AgentRole.REVIEWER, null,
                     Map.of("attempt", event.getAttempt()));
             log.debug("最终报告审查丢弃（版本已更新，旧链失效）: taskId={}, attempt={}",
                     event.getTaskId(), event.getAttempt());
@@ -286,7 +287,7 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
         // 机械软违规（跨章逐字重复 / 覆盖追溯表缺失）：落告警事件，交审查 LLM 重点关注（不直接驳回）
         if (fidelity.hasSeverity(GateSeverity.SOFT)) {
             taskTimelineService.recordEvent(event.getTaskId(), null,
-                    "task_final_report_review_warned", AgentRole.REVIEWER, reviewer.id(),
+                    TimelineEventCode.TASK_FINAL_REPORT_REVIEW_WARNED.code(), AgentRole.REVIEWER, reviewer.id(),
                     Map.of("softIssues", fidelity.detailList(GateSeverity.SOFT), "attempt", event.getAttempt()));
             log.info("最终报告机械校验命中软违规（交 LLM 复核）: taskId={}, soft={}",
                     event.getTaskId(), fidelity.detailList(GateSeverity.SOFT));
@@ -301,7 +302,7 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
         SubTaskReviewService.ReviewVerdict verdict = verdictParser.parseVerdict(result.getOutput());
         if (verdict == null) {
             taskTimelineService.recordEvent(event.getTaskId(), null,
-                    "task_final_report_review_unparseable", AgentRole.REVIEWER, reviewer.id(),
+                    TimelineEventCode.TASK_FINAL_REPORT_REVIEW_UNPARSEABLE.code(), AgentRole.REVIEWER, reviewer.id(),
                     Map.of("rawOutput", VerdictParser.summarize(result.getOutput(), 300),
                             "attempt", event.getAttempt()));
             log.warn("最终报告审查输出不可解析: taskId={}, raw={}", event.getTaskId(),
@@ -313,7 +314,7 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
         int score = verdict.getScore() != null ? verdict.getScore() : 0;
         if (Boolean.TRUE.equals(verdict.getPass())) {
             taskTimelineService.recordEvent(event.getTaskId(), null,
-                    "task_final_report_review_passed", AgentRole.REVIEWER, reviewer.id(),
+                    TimelineEventCode.TASK_FINAL_REPORT_REVIEW_PASSED.code(), AgentRole.REVIEWER, reviewer.id(),
                     Map.of("reviewerAgentId", reviewer.id(), "score", score,
                             "attempt", event.getAttempt()));
             log.info("最终报告审查通过: taskId={}, reviewerAgentId={}, score={}",
@@ -344,14 +345,14 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
         payload.put("issues", issues != null ? issues : "");
         payload.put("source", source);
         taskTimelineService.recordEvent(event.getTaskId(), null,
-                "task_final_report_review_rejected", AgentRole.REVIEWER, reviewerAgentId, payload);
+                TimelineEventCode.TASK_FINAL_REPORT_REVIEW_REJECTED.code(), AgentRole.REVIEWER, reviewerAgentId, payload);
         if (maxReview > 0 && event.getAttempt() <= maxReview) {
             // §12.2 陈旧守卫（rework 前）：审查耗时期间版本可能已被新生成/回滚接管——
             // 此时返工基于旧链已无意义，丢弃并落 rework_discarded_stale（不重写不收敛）
             TaskView latest = taskService.getView(event.getTaskId());
             if (latest == null || isStale(latest, event)) {
                 taskTimelineService.recordEvent(event.getTaskId(), null,
-                        "task_final_report_rework_discarded_stale", AgentRole.REVIEWER,
+                        TimelineEventCode.TASK_FINAL_REPORT_REWORK_DISCARDED_STALE.code(), AgentRole.REVIEWER,
                         reviewerAgentId, Map.of("attempt", event.getAttempt()));
                 log.debug("最终报告返工丢弃（版本已更新，旧链失效）: taskId={}, attempt={}",
                         event.getTaskId(), event.getAttempt());
@@ -365,7 +366,7 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
             return;
         }
         taskTimelineService.recordEvent(event.getTaskId(), null,
-                "task_final_report_max_review_reached", AgentRole.REVIEWER, reviewerAgentId,
+                TimelineEventCode.TASK_FINAL_REPORT_MAX_REVIEW_REACHED.code(), AgentRole.REVIEWER, reviewerAgentId,
                 Map.of("attempt", event.getAttempt(), "maxReview", maxReview));
         log.info("最终报告驳回已达返工上限，保留当前报告等人工: taskId={}, attempt={}, maxReview={}",
                 event.getTaskId(), event.getAttempt(), maxReview);
@@ -392,7 +393,7 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
             AgentResult result = platformAgentExecutionService.executeSync(reviewer.id(), agentTask);
             if (result == null || !result.isSuccess()) {
                 taskTimelineService.recordEvent(event.getTaskId(), null,
-                        "task_final_report_review_failed", AgentRole.REVIEWER, reviewer.id(),
+                        TimelineEventCode.TASK_FINAL_REPORT_REVIEW_FAILED.code(), AgentRole.REVIEWER, reviewer.id(),
                         Map.of("error", result != null ? result.getErrorMessage() : "null_result",
                                 "attempt", event.getAttempt()));
                 log.warn("最终报告审查 LLM 调用失败: taskId={}, err={}",
@@ -402,7 +403,7 @@ public class FinalReportReviewServiceImpl implements FinalReportReviewService {
             return result;
         } catch (Exception e) {
             taskTimelineService.recordEvent(event.getTaskId(), null,
-                    "task_final_report_review_failed", AgentRole.REVIEWER, reviewer.id(),
+                    TimelineEventCode.TASK_FINAL_REPORT_REVIEW_FAILED.code(), AgentRole.REVIEWER, reviewer.id(),
                     Map.of("error", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName(),
                             "attempt", event.getAttempt()));
             log.warn("最终报告审查 LLM 调用异常: taskId={}, err={}", event.getTaskId(), e.getMessage());

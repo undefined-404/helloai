@@ -8,6 +8,7 @@ import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ReviewResult;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.event.AgentEventContextResolver;
 import com.helloai.core.agent.event.AgentEventRecorder;
@@ -190,7 +191,7 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewRecordMapper, ReviewRec
                 payload.put("reworkAgentId", reworkAgentId);
             }
             String eventType = result == ReviewResult.APPROVED
-                    ? "sub_task_manual_review_passed" : "sub_task_manual_review_rejected";
+                    ? TimelineEventCode.SUB_TASK_MANUAL_REVIEW_PASSED.code() : TimelineEventCode.SUB_TASK_MANUAL_REVIEW_REJECTED.code();
             taskTimelineService.recordEvent(subTask.taskId(), subTask.id(),
                     eventType, AgentRole.REVIEWER, reviewerAgentId, payload);
         } catch (Exception e) {

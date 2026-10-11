@@ -10,6 +10,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskPriority;
 import com.helloai.common.constant.TaskStatus;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.SkillNormalizer;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
@@ -113,7 +114,7 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
             doDecompose(task);
         } catch (Exception e) {
             rollbackToPending(taskId);
-            taskTimelineService.recordEvent(taskId, null, "task_plan_failed",
+            taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_PLAN_FAILED.code(),
                     AgentRole.PLANNER, null,
                     Map.of("error", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
             log.error("任务拆解失败，已回退 PENDING: taskId={}", taskId, e);
@@ -136,7 +137,7 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
                 // G-016 契约层技能注入：与任务级 required_skills 同源（null 防御为 List.of()）
                 .skills(task.requiredSkills() != null ? task.requiredSkills() : List.of())
                 .build();
-        taskTimelineService.recordEvent(taskId, null, "task_plan_llm_call_start",
+        taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_PLAN_LLM_CALL_START.code(),
                 AgentRole.PLANNER, planner.id(),
                 Map.of("agentId", planner.id(), "agentName", planner.name()));
         long startMs = System.currentTimeMillis();
@@ -162,7 +163,7 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
                 taskId, items.size(), persisted.size());
         applyDependsOn(persisted, items);
 
-        taskTimelineService.recordEvent(taskId, null, "task_plan_generated",
+        taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_PLAN_GENERATED.code(),
                 AgentRole.PLANNER, planner.id(),
                 Map.of("agentId", planner.id(),
                         "agentName", planner.name(),
@@ -182,7 +183,7 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
             payload.put("success", result.isSuccess());
             payload.put("finishReason", result.getFinishReason());
             payload.put("tokenUsage", result.getTokenUsage());
-            taskTimelineService.recordEvent(taskId, null, "task_plan_llm_call_end",
+            taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_PLAN_LLM_CALL_END.code(),
                     AgentRole.PLANNER, planner.id(), payload);
         } catch (Exception e) {
             // timeline 记录失败不阻断拆解主流程
@@ -307,7 +308,7 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
             String missing = missingRequiredField(item);
             if (missing != null) {
                 // 审计先于抛出：失败原因可回溯到具体字段与原始输出（timeline 记录不阻断主流程）
-                taskTimelineService.recordEvent(taskId, null, "task_plan_draft_field_missing",
+                taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_PLAN_DRAFT_FIELD_MISSING.code(),
                         AgentRole.PLANNER, planner.id(),
                         Map.of("draftSeq", i + 1, "field", missing,
                                 "title", item.getTitle() != null ? item.getTitle() : "",
@@ -379,7 +380,7 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
             // G-010 缺口④清偿：COARSE 粒度 constraints 缺失记 timeline WARN（不阻断落库）
             if (decision.granularity() == PlannerGranularity.COARSE
                     && (item.getConstraints() == null || item.getConstraints().isBlank())) {
-                taskTimelineService.recordEvent(taskId, null, "task_plan_constraints_missing",
+                taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_PLAN_CONSTRAINTS_MISSING.code(),
                         AgentRole.PLANNER, planner.id(),
                         Map.of("draftSeq", drafts.size() + 1, "title", item.getTitle()));
             }
@@ -434,7 +435,7 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
             }
             String kind = u.kind();
             if (!UncertaintyDraft.KIND_ASSUMPTION.equals(kind) && !UncertaintyDraft.KIND_UNCONFIRMED.equals(kind)) {
-                taskTimelineService.recordEvent(taskId, null, "task_plan_uncertainty_degraded",
+                taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_PLAN_UNCERTAINTY_DEGRADED.code(),
                         AgentRole.PLANNER, planner.id(),
                         Map.of("note", u.note(), "rawKind", String.valueOf(kind),
                                 "degradedTo", UncertaintyDraft.KIND_UNCONFIRMED));
@@ -460,7 +461,7 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
                         ? java.util.stream.Stream.<UncertaintyDraft>empty() : d.uncertainties().stream())
                 .anyMatch(u -> UncertaintyDraft.KIND_UNCONFIRMED.equals(u.kind()));
         if (!hasUnconfirmed) {
-            taskTimelineService.recordEvent(task.id(), null, "task_plan_uncertainty_missing",
+            taskTimelineService.recordEvent(task.id(), null, TimelineEventCode.TASK_PLAN_UNCERTAINTY_MISSING.code(),
                     AgentRole.PLANNER, planner.id(),
                     Map.of("openQuestions", pkg.openQuestions()));
         }
@@ -483,7 +484,7 @@ public class PlannerDecomposeAsyncServiceImpl implements PlannerDecomposeAsyncSe
             if (normalized != null && known.contains(normalized)) {
                 kept.add(normalized);
             } else {
-                taskTimelineService.recordEvent(taskId, null, "task_plan_skill_filtered",
+                taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_PLAN_SKILL_FILTERED.code(),
                         AgentRole.PLANNER, planner.id(),
                         Map.of("skill", raw, "reason", "未命中平台技能目录"));
             }

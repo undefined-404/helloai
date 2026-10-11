@@ -3,6 +3,7 @@ package com.helloai.job.task;
 import com.helloai.common.config.PlannerDecomposeProperties;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.TaskStatus;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.task.entity.Task;
 import com.helloai.core.task.service.TaskService;
 import com.helloai.core.task.service.TaskTimelineService;
@@ -96,7 +97,7 @@ public class PlanningTimeoutTask {
             log.info("PLANNING超时回收跳过（状态已变化）: taskId={}", task.getId());
             return false;
         }
-        taskTimelineService.recordEvent(task.getId(), null, "task_plan_timeout_recovered",
+        taskTimelineService.recordEvent(task.getId(), null, TimelineEventCode.TASK_PLAN_TIMEOUT_RECOVERED.code(),
                 AgentRole.PLANNER, null,
                 Map.of("planningTimeoutMinutes", plannerDecomposeProperties.getPlanningTimeoutMinutes()));
         log.info("PLANNING超时已回退 PENDING: taskId={}", task.getId());

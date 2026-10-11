@@ -5,6 +5,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskStatus;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.planner.service.PlannerAnalysisService;
 import com.helloai.core.planner.service.PlannerDecomposeAsyncService;
 import com.helloai.core.task.util.SubTaskDependencyOrder;
@@ -107,7 +108,7 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
         }
 
         // 记录异步提交 timeline：HTTP 线程到此即返回，LLM 拆解转由异步段推进
-        taskTimelineService.recordEvent(taskId, null, "task_plan_async_submitted",
+        taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_PLAN_ASYNC_SUBMITTED.code(),
                 AgentRole.PLANNER, null, Map.of("executor", "plannerDecomposeExecutor"));
 
         // 跨类调用注入的异步服务，确保 @Async 代理生效（禁止同类自调用）；
@@ -206,7 +207,7 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
         }
 
         Long taskId = task.id();
-        taskTimelineService.recordEvent(taskId, null, "task_plan_confirmed",
+        taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_PLAN_CONFIRMED.code(),
                 AgentRole.PLANNER, null, Map.of("subTaskCount", confirmed.size()));
 
         // 事务外触发自动分发（分发链内部有独立事务与事件），单条失败不阻断其余。
@@ -259,7 +260,7 @@ public class PlannerAnalysisServiceImpl implements PlannerAnalysisService {
                     Map.of("planRejectedAt", OffsetDateTime.now().toString()));
         }
         taskService.updateStatus(taskId, TaskStatus.PENDING);
-        taskTimelineService.recordEvent(taskId, null, "task_plan_rejected",
+        taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_PLAN_REJECTED.code(),
                 AgentRole.PLANNER, null, Map.of("cancelledCount", drafts.size()));
         log.info("任务规划草案已拒绝: taskId={}, cancelledCount={}", taskId, drafts.size());
         return drafts.size();

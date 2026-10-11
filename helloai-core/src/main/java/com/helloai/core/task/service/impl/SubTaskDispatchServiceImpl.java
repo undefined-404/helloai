@@ -8,6 +8,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.RetryPolicy;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.executor.AgentSelector;
 import com.helloai.core.agent.executor.AgentSelector.AgentSelectionConstraints;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
@@ -82,7 +83,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         taskTimelineService.recordEvent(
                 subTask.getTaskId(),
                 subTask.getId(),
-                "sub_task_dispatch_prepare",
+                TimelineEventCode.SUB_TASK_DISPATCH_PREPARE.code(),
                 AgentRole.PLANNER,
                 preferredAgentId,
                 Map.of(
@@ -110,10 +111,10 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
             taskTimelineService.recordEvent(
                     subTask.getTaskId(),
                     subTask.getId(),
-                    "sub_task_dispatch_skip_dependency",
+                    TimelineEventCode.SUB_TASK_DISPATCH_SKIP_DEPENDENCY.code(),
                     AgentRole.SYSTEM,
                     offlineAgentId,
-                    Map.of("trigger", "agent_offline",
+                    Map.of("trigger", TimelineEventCode.AGENT_OFFLINE.code(),
                             "reason", "dependency_not_ready",
                             "dependsOn", subTask.dependsOnIdList()));
             log.info("离线子任务依赖未就绪，保持 PENDING 等待依赖完成: subTaskId={}, dependsOn={}",
@@ -125,18 +126,18 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         taskTimelineService.recordEvent(
                 subTask.getTaskId(),
                 subTask.getId(),
-                "sub_task_offline_reassign",
+                TimelineEventCode.SUB_TASK_OFFLINE_REASSIGN.code(),
                 AgentRole.SYSTEM,
                 offlineAgentId,
                 Map.of("previousAgentId", offlineAgentId));
         taskTimelineService.recordEvent(
                 subTask.getTaskId(),
                 subTask.getId(),
-                "sub_task_dispatch_prepare",
+                TimelineEventCode.SUB_TASK_DISPATCH_PREPARE.code(),
                 AgentRole.SYSTEM,
                 offlineAgentId,
                 Map.of(
-                        "trigger", "agent_offline",
+                        "trigger", TimelineEventCode.AGENT_OFFLINE.code(),
                         "preferredAgentId", offlineAgentId,
                         "previousAgentId", offlineAgentId));
         taskDispatchPort.assignNext(offlineAgentId, subTaskId, resolveConstraints(subTask));
@@ -208,7 +209,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         taskTimelineService.recordEvent(
                 subTask.getTaskId(),
                 subTask.getId(),
-                "sub_task_dispatch_prepare",
+                TimelineEventCode.SUB_TASK_DISPATCH_PREPARE.code(),
                 AgentRole.SYSTEM,
                 preferred.getId(),
                 Map.of(
@@ -272,7 +273,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         taskTimelineService.recordEvent(
                 subTask.getTaskId(),
                 subTask.getId(),
-                "sub_task_dead_letter_manual_assign",
+                TimelineEventCode.SUB_TASK_DEAD_LETTER_MANUAL_ASSIGN.code(),
                 AgentRole.SYSTEM,
                 agentId,
                 Map.of(
@@ -311,12 +312,12 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
                 return null;
             }
             taskTimelineService.recordEvent(subTask.getTaskId(), subTask.getId(),
-                    "sub_task_fallback_skip_policy", AgentRole.SYSTEM, failedAgentId,
+                    TimelineEventCode.SUB_TASK_FALLBACK_SKIP_POLICY.code(), AgentRole.SYSTEM, failedAgentId,
                     Map.of("reason", "fallback_policy_forbidden",
                             "fallbackPolicy", TaskAgentPolicy.fallbackPolicy(agentPolicy).name(),
                             "difficulty", TaskAgentPolicy.difficulty(agentPolicy).name(),
                             "previousAgentId", failedAgentId));
-            subTaskService.markManualIntervention(subTaskId, "fallback_skip_policy",
+            subTaskService.markManualIntervention(subTaskId, TimelineEventCode.FALLBACK_SKIP_POLICY.code(),
                     Map.of("failedAgentId", failedAgentId == null ? "" : failedAgentId,
                             "fallbackPolicy", TaskAgentPolicy.fallbackPolicy(agentPolicy).name(),
                             "difficulty", TaskAgentPolicy.difficulty(agentPolicy).name()));
@@ -341,11 +342,11 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
             List<Long> allowed = TaskAgentPolicy.executorAgentIds(agentPolicy);
             if (allowed.isEmpty() || !allowed.contains(fallbackAgent.id())) {
                 taskTimelineService.recordEvent(subTask.getTaskId(), subTask.getId(),
-                        "sub_task_fallback_skip_policy", AgentRole.SYSTEM, fallbackAgent.id(),
+                        TimelineEventCode.SUB_TASK_FALLBACK_SKIP_POLICY.code(), AgentRole.SYSTEM, fallbackAgent.id(),
                         Map.of("reason", "fallback_policy_restricted_not_in_whitelist",
                                 "fallbackAgentId", fallbackAgent.id(),
                                 "previousAgentId", failedAgentId));
-                subTaskService.markManualIntervention(subTaskId, "fallback_skip_policy_restricted",
+                subTaskService.markManualIntervention(subTaskId, TimelineEventCode.FALLBACK_SKIP_POLICY_RESTRICTED.code(),
                         Map.of("failedAgentId", failedAgentId == null ? "" : failedAgentId,
                                 "fallbackAgentId", fallbackAgent.id()));
                 log.warn("N11 回退跳过：RESTRICTED 策略下回退目标不在执行者白名单, subTaskId={}, fallbackAgentId={}",
@@ -364,11 +365,11 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
             }
             if (!fallbackAgent.localExecutionCapable()) {
                 taskTimelineService.recordEvent(subTask.getTaskId(), subTask.getId(),
-                        "sub_task_fallback_skip_need_human", AgentRole.SYSTEM, fallbackAgent.id(),
+                        TimelineEventCode.SUB_TASK_FALLBACK_SKIP_NEED_HUMAN.code(), AgentRole.SYSTEM, fallbackAgent.id(),
                         Map.of("reason", "execution_dense_no_local_capability",
                                 "fallbackAgentId", fallbackAgent.id(),
                                 "previousAgentId", failedAgentId));
-                subTaskService.markManualIntervention(subTaskId, "fallback_skip_execution_dense",
+                subTaskService.markManualIntervention(subTaskId, TimelineEventCode.FALLBACK_SKIP_EXECUTION_DENSE.code(),
                         Map.of("failedAgentId", failedAgentId == null ? "" : failedAgentId,
                                 "fallbackAgentId", fallbackAgent.id()));
                 log.warn("N11 回退跳过：执行密集任务不可回退给无本机能力 Agent, subTaskId={}, fallbackAgentId={}",
@@ -380,7 +381,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         taskTimelineService.recordEvent(
                 subTask.getTaskId(),
                 subTask.getId(),
-                "sub_task_dispatch_prepare",
+                TimelineEventCode.SUB_TASK_DISPATCH_PREPARE.code(),
                 AgentRole.SYSTEM,
                 fallbackAgent.id(),
                 Map.of(
@@ -431,7 +432,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         taskTimelineService.recordEvent(
                 subTask.getTaskId(),
                 subTask.getId(),
-                "sub_task_unclaimed_timeout_reassign",
+                TimelineEventCode.SUB_TASK_UNCLAIMED_TIMEOUT_REASSIGN.code(),
                 AgentRole.SYSTEM,
                 originalAgentId,
                 Map.of(
@@ -440,7 +441,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
         taskTimelineService.recordEvent(
                 subTask.getTaskId(),
                 subTask.getId(),
-                "sub_task_dispatch_prepare",
+                TimelineEventCode.SUB_TASK_DISPATCH_PREPARE.code(),
                 AgentRole.SYSTEM,
                 originalAgentId,
                 Map.of(
@@ -718,7 +719,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
                 taskTimelineService.recordEvent(
                         subTask.getTaskId(),
                         subTask.getId(),
-                        "sub_task_dead_letter",
+                        TimelineEventCode.SUB_TASK_DEAD_LETTER.code(),
                         AgentRole.SYSTEM,
                         null,
                         Map.of(
@@ -776,7 +777,7 @@ public class SubTaskDispatchServiceImpl implements SubTaskDispatchService {
             taskTimelineService.recordEvent(
                     gate.taskId(),
                     subTaskId,
-                    "sub_task_redispatch_skipped",
+                    TimelineEventCode.SUB_TASK_REDISPATCH_SKIPPED.code(),
                     AgentRole.SYSTEM,
                     null,
                     payload);

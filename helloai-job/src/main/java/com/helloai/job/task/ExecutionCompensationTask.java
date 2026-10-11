@@ -6,6 +6,7 @@ import com.helloai.common.constant.AgentAccessType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.ExecutionStatus;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.entity.AgentExecutionRecord;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.agent.service.AgentExecutionRecordService;
@@ -90,7 +91,7 @@ public class ExecutionCompensationTask {
                         taskTimelineService.recordEvent(
                                 subTask.getTaskId(),
                                 subTask.getId(),
-                                "sub_task_execution_timeout_reassign",
+                                TimelineEventCode.SUB_TASK_EXECUTION_TIMEOUT_REASSIGN.code(),
                                 AgentRole.SYSTEM,
                                 record.getAgentId(),
                                 Map.of(

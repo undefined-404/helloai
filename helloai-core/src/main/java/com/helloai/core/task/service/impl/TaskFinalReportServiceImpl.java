@@ -8,6 +8,7 @@ import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.FinalReportStatus;
 import com.helloai.common.constant.SubTaskStatus;
 import com.helloai.common.constant.TaskStatus;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.service.PlatformAgentExecutionService;
@@ -175,7 +176,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
         if (!casOk) {
             throw new BizException(409, "任务整合报告状态已变化，请刷新后重试: taskId=" + taskId);
         }
-        taskTimelineService.recordEvent(taskId, null, "task_final_report_rolled_back",
+        taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_FINAL_REPORT_ROLLED_BACK.code(),
                 AgentRole.PLANNER, task.getFinalReportPrevAgentId(),
                 Map.of("restoredGeneratedAt",
                         task.getFinalReportPrevTime() != null ? String.valueOf(task.getFinalReportPrevTime()) : "",
@@ -233,7 +234,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
             int limit = SECTION_OUTPUT_LIMITS[i];
             boolean lastTier = i == SECTION_OUTPUT_LIMITS.length - 1;
             String prompt = renderPrompt(task, sections, outline, limit, reviewFeedback);
-            taskTimelineService.recordEvent(taskId, null, "task_final_report_llm_call_start",
+            taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_FINAL_REPORT_LLM_CALL_START.code(),
                     AgentRole.PLANNER, planner.id(),
                     Map.of("agentId", planner.id(),
                             "agentName", planner.name(),
@@ -270,7 +271,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
                     log.warn("报告写回被接管，放弃本轮生成结果: taskId={}, attempt={}", taskId, attempt);
                     return taskService.getById(taskId);
                 }
-                taskTimelineService.recordEvent(taskId, null, "task_final_report_generated",
+                taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_FINAL_REPORT_GENERATED.code(),
                         AgentRole.PLANNER, planner.id(),
                         Map.of("agentId", planner.id(),
                                 "agentName", planner.name(),
@@ -290,7 +291,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
                             taskId, limit, SECTION_OUTPUT_LIMITS[i + 1], errMsg);
                     continue;
                 }
-                taskTimelineService.recordEvent(taskId, null, "task_final_report_failed",
+                taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_FINAL_REPORT_FAILED.code(),
                         AgentRole.PLANNER, planner.id(),
                         Map.of("error", errMsg, "sectionOutputLimit", limit));
                 log.warn("任务整合报告生成失败: taskId={}", taskId, e);
@@ -390,7 +391,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
                     && result.getOutput() != null && !result.getOutput().isBlank())
                     ? parseOutline(result.getOutput()) : null;
             if (plan == null) {
-                taskTimelineService.recordEvent(task.getId(), null, "task_final_report_outline_failed",
+                taskTimelineService.recordEvent(task.getId(), null, TimelineEventCode.TASK_FINAL_REPORT_OUTLINE_FAILED.code(),
                         AgentRole.PLANNER, planner.id(),
                         Map.of("error", result != null && !result.isSuccess()
                                 ? result.getErrorMessage() : "parse_failed_or_empty"));
@@ -399,7 +400,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
                                 ? result.getErrorMessage() : "parse_failed_or_empty");
                 return null;
             }
-            taskTimelineService.recordEvent(task.getId(), null, "task_final_report_outline_ready",
+            taskTimelineService.recordEvent(task.getId(), null, TimelineEventCode.TASK_FINAL_REPORT_OUTLINE_READY.code(),
                     AgentRole.PLANNER, planner.id(),
                     Map.of("agentId", planner.id(), "agentName", planner.name(),
                             "chapterCount", plan.sections().size(),
@@ -435,7 +436,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
                 return;
             }
         }
-        taskTimelineService.recordEvent(taskId, null, "task_final_report_outline_order_suspect",
+        taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_FINAL_REPORT_OUTLINE_ORDER_SUSPECT.code(),
                 AgentRole.PLANNER, plannerAgentId,
                 Map.of("chapterCount", plan.sections().size(),
                         "reason", "order_equals_subtask_sequence"));
@@ -837,7 +838,7 @@ public class TaskFinalReportServiceImpl implements TaskFinalReportService {
         } catch (Exception e) {
             log.warn("task_iteration 回填失败（不影响报告生成）: taskId={}, err={}",
                     taskId, e.getMessage());
-            taskTimelineService.recordEvent(taskId, null, "task_iteration_backfill_failed",
+            taskTimelineService.recordEvent(taskId, null, TimelineEventCode.TASK_ITERATION_BACKFILL_FAILED.code(),
                     AgentRole.PLANNER, planner != null ? planner.id() : null,
                     Map.of("error", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
         }

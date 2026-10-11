@@ -1,6 +1,7 @@
 package com.helloai.core.agent.quality;
 
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.port.LastReviewContext;
 import com.helloai.core.agent.port.SubTaskQueryPort;
 import com.helloai.core.agent.port.SubTaskReviewContextPort;
@@ -58,7 +59,7 @@ import java.util.concurrent.TimeUnit;
 public class ExecutorDoneIssuesBackfiller {
 
     /** timeline 事件类型（成功/跳过/失败三态 payload，state 字段区分）。 */
-    static final String TIMELINE_EVENT = "sub_task_executor_done_issues";
+    static final String TIMELINE_EVENT = TimelineEventCode.SUB_TASK_EXECUTOR_DONE_ISSUES.code();
 
     /** 回填互斥锁 key 前缀（与 §6.82 防双审锁同构）。 */
     private static final String BACKFILL_LOCK_PREFIX = "helloai:lock:executor-done-issues:backfill:";

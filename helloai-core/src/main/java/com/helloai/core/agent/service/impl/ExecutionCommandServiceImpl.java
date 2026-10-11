@@ -5,6 +5,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.mqconsumer.ExecutionCommandMqMessage;
 import com.helloai.core.agent.entity.Agent;
@@ -113,7 +114,7 @@ public class ExecutionCommandServiceImpl implements ExecutionCommandService {
         taskTimelinePort.recordEvent(
                 subTask.taskId(),
                 subTaskId,
-                "sub_task_execution_command_created",
+                TimelineEventCode.SUB_TASK_EXECUTION_COMMAND_CREATED.code(),
                 AgentRole.SYSTEM,
                 agentId,
                 Map.of(

@@ -4,6 +4,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.AgentLlmCredentialResolver;
 import com.helloai.core.agent.chat.AgentProviderResolver;
 import com.helloai.core.agent.domain.ExecutionCommand;
@@ -176,7 +177,7 @@ public class AgentRuntimeContextAssembler {
                 agentSessionService.saveLoopCheckpoint(subTaskId, runTurn, checkpoint);
 
         // 5) spec 装配可观测（与旧链同键同事件名）
-        taskTimelinePort.recordEvent(subTask.taskId(), subTaskId, "sub_task_spec_context_loaded",
+        taskTimelinePort.recordEvent(subTask.taskId(), subTaskId, TimelineEventCode.SUB_TASK_SPEC_CONTEXT_LOADED.code(),
                 AgentRole.EXECUTOR, agent.getId(),
                 safeMap("agentId", agent.getId(),
                         "depCount", dependencySection.depCount,
@@ -186,7 +187,7 @@ public class AgentRuntimeContextAssembler {
                         "pluginSpec", resolved.section() != null && !resolved.section().isBlank(),
                         "historySummary", historySection != null && !historySection.isBlank(),
                         "recoveryInjected", recovery != null));
-        taskTimelinePort.recordEvent(subTask.taskId(), subTaskId, "sub_task_llm_call_start",
+        taskTimelinePort.recordEvent(subTask.taskId(), subTaskId, TimelineEventCode.SUB_TASK_LLM_CALL_START.code(),
                 AgentRole.EXECUTOR, agent.getId(),
                 Map.of("agentId", agent.getId(), "agentName", agent.getName()));
 
@@ -227,7 +228,7 @@ public class AgentRuntimeContextAssembler {
         } catch (Exception e) {
             log.debug("执行会话推进失败（best-effort 降级）: subTaskId={}, err={}", subTask.id(), e.getMessage());
         }
-        taskTimelinePort.recordEvent(subTask.taskId(), subTask.id(), "sub_task_llm_call_end",
+        taskTimelinePort.recordEvent(subTask.taskId(), subTask.id(), TimelineEventCode.SUB_TASK_LLM_CALL_END.code(),
                 AgentRole.EXECUTOR, agent.getId(),
                 safeMap("agentId", agent.getId(),
                         "success", result != null && result.getStatus() == com.helloai.common.constant.ExecutionStatus.SUCCESS,

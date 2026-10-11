@@ -5,6 +5,7 @@ import com.helloai.common.constant.AgentOnlineStatus;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AgentStatus;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.task.entity.SubTask;
 import com.helloai.core.agent.service.AgentDutyLeaseService;
@@ -207,7 +208,7 @@ public class AgentHealthCheckTask {
         taskTimelineService.recordEvent(
                 null,  // 系统级事件，无主任务
                 null,  // 系统级事件，无子任务
-                "agent_offline",
+                TimelineEventCode.AGENT_OFFLINE.code(),
                 role,
                 agent.getId(),
                 Map.of(

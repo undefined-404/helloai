@@ -5,6 +5,7 @@ import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.AttachmentStatus;
 import com.helloai.common.constant.AttachmentVisibility;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.system.storage.ArtifactStorage;
 import com.helloai.core.task.entity.Attachment;
 import com.helloai.core.task.port.AttachmentView;
@@ -229,7 +230,7 @@ public class AttachmentServiceImpl extends ServiceImpl<AttachmentMapper, Attachm
             payload.put("agentId", requesterAgentId);
         }
         taskTimelineService.recordEvent(attachmentVisibilityPolicy.rootTaskIdOf(attachment),
-                attachment.getSubTaskId(), "attachment_deleted",
+                attachment.getSubTaskId(), TimelineEventCode.ATTACHMENT_DELETED.code(),
                 requesterAgentId != null ? AgentRole.EXECUTOR : AgentRole.SYSTEM, requesterAgentId, payload);
 
         // 事务提交后 best-effort 回收对象存储（fail-safe，不阻断删除结果）

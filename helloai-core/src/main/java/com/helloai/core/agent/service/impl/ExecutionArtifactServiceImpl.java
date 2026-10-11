@@ -10,6 +10,7 @@ import com.helloai.core.agent.port.TaskTimelinePort;
 import com.helloai.core.agent.service.ExecutionArtifactService;
 import com.helloai.common.config.ArtifactStorageProperties;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.entity.Agent;
 import com.helloai.core.agent.service.AgentService;
 import com.helloai.core.system.storage.ArtifactStorage;
@@ -142,7 +143,7 @@ public class ExecutionArtifactServiceImpl implements ExecutionArtifactService {
         payload.put("fileNames", fileNames);
         payload.put("count", attachmentIds.size());
         taskTimelinePort.recordEvent(subTask.taskId(), subTask.id(),
-                "sub_task_artifact_materialized", AgentRole.EXECUTOR, agentId, payload);
+                TimelineEventCode.SUB_TASK_ARTIFACT_MATERIALIZED.code(), AgentRole.EXECUTOR, agentId, payload);
         log.info("执行产出物化完成: subTaskId={}, attachmentIds={}", subTask.id(), attachmentIds);
     }
 

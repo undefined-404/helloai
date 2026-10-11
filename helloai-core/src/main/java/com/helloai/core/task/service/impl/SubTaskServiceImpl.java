@@ -12,6 +12,7 @@ import com.helloai.common.constant.AgentEventType;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.RetryPolicy;
 import com.helloai.common.constant.SubTaskStatus;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.common.util.HostNameUtils;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
 import com.helloai.core.agent.event.AgentEventContextResolver;
@@ -850,7 +851,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
                                 "attempt_total", String.valueOf(currentCount),
                                 "max_reassign_attempts", String.valueOf(maxAttempts)));
                 taskTimelineService.recordEvent(subTask.getTaskId(), subTask.getId(),
-                        "sub_task_dead_letter", AgentRole.SYSTEM, null,
+                        TimelineEventCode.SUB_TASK_DEAD_LETTER.code(), AgentRole.SYSTEM, null,
                         Map.of("reason", "rework_budget_exceeded",
                                 "attempt_total", currentCount,
                                 "max_reassign_attempts", maxAttempts));
@@ -911,7 +912,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
         extra.put("reworkCountReset", "true");
         extra.put("reworkAgentId", reworkAgentId);
         taskTimelineService.recordEvent(subTask.getTaskId(), subTaskId,
-                "sub_task_manual_rework_reset", AgentRole.SYSTEM, reworkAgentId, extra);
+                TimelineEventCode.SUB_TASK_MANUAL_REWORK_RESET.code(), AgentRole.SYSTEM, reworkAgentId, extra);
         // §6.104 打回失效：人工驳回同步让旧 ACTIVE 附件失效，新执行者重新产出后须 uploadArtifact 重建 ACTIVE
         invalidateAttachmentsOnRework(subTaskId);
         log.info("人工驳回重置返工计数: subTaskId={}, reworkCount=0, reworkAgentId={}", subTaskId, reworkAgentId);
@@ -988,7 +989,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
             // 可观测：人工介入标记落 timeline（OPS 泳道），时序图可见"等待人工处置"节点；
             // 不能复用 Map.of——mark 可能含 null 值（extra 传入时）
             taskTimelineService.recordEvent(fresh.getTaskId(), subTaskId,
-                    "sub_task_manual_intervention_required", AgentRole.SYSTEM, null,
+                    TimelineEventCode.SUB_TASK_MANUAL_INTERVENTION_REQUIRED.code(), AgentRole.SYSTEM, null,
                     new HashMap<>(mark));
             log.info("人工介入标记已写入: subTaskId={}, reason={}", subTaskId, reason);
         } catch (Exception e) {
@@ -1029,7 +1030,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
             taskTimelineService.recordEvent(
                     updated.getTaskId(),
                     updated.getId(),
-                    "sub_task_report_blocked",
+                    TimelineEventCode.SUB_TASK_REPORT_BLOCKED.code(),
                     AgentRole.EXECUTOR,
                     reporterAgentId,
                     Map.of(
@@ -1153,7 +1154,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
                 try {
                     // 回收事件仅审计用途，写入失败不阻断回收主链路
                     taskTimelineService.recordEvent(taskId, subTaskId,
-                            "sub_task_lease_reclaimed", AgentRole.SYSTEM, null,
+                            TimelineEventCode.SUB_TASK_LEASE_RECLAIMED.code(), AgentRole.SYSTEM, null,
                             Map.of("owner", oldOwner, "reason", "lease_expired"));
                 } catch (Exception e) {
                     log.warn("租约回收 timeline 事件写入失败，不影响回收: subTaskId={}", subTaskId, e);
@@ -1171,7 +1172,7 @@ public class SubTaskServiceImpl extends ServiceImpl<SubTaskMapper, SubTask>
                         interruptPayload.put("contextSummary",
                                 interrupted.snapshot() != null ? interrupted.snapshot() : Map.of());
                         taskTimelineService.recordEvent(taskId, subTaskId,
-                                "sub_task_session_interrupted", AgentRole.SYSTEM,
+                                TimelineEventCode.SUB_TASK_SESSION_INTERRUPTED.code(), AgentRole.SYSTEM,
                                 interrupted.agentId(), interruptPayload);
                     }
                 } catch (Exception e) {

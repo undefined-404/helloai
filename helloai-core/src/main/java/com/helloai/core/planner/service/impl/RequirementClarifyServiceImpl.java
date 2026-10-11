@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.helloai.common.base.BizException;
 import com.helloai.common.constant.AgentRole;
 import com.helloai.common.constant.TaskStatus;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.domain.AgentResult;
 import com.helloai.core.agent.domain.AgentTask;
 import com.helloai.core.agent.port.AgentProfileSnapshot;
@@ -555,7 +556,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
      */
     @Override
     public TaskView finalize(Long conversationId) {
-        return finalizeAfterDraft(requireActive(conversationId), "task_created_from_clarify");
+        return finalizeAfterDraft(requireActive(conversationId), TimelineEventCode.TASK_CREATED_FROM_CLARIFY.code());
     }
 
     /**
@@ -1008,7 +1009,7 @@ public class RequirementClarifyServiceImpl implements RequirementClarifyService 
     /** 小节缺失审计：会话尚未建任务，按系统级事件记（taskId 可空 + payload 带 conversationId）。 */
     private void recordDescriptionSectionWarn(Long conversationId, String reason) {
         try {
-            taskTimelineService.recordEvent(null, null, "requirement_description_section_missing",
+            taskTimelineService.recordEvent(null, null, TimelineEventCode.REQUIREMENT_DESCRIPTION_SECTION_MISSING.code(),
                     AgentRole.PLANNER, null,
                     Map.of("conversationId", conversationId, "reason", reason));
         } catch (Exception e) {

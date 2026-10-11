@@ -3,6 +3,7 @@ package com.helloai.core.agent.dispatcher;
 import com.helloai.common.base.BizException;
 import com.helloai.common.config.AgentExecutionProperties;
 import com.helloai.common.constant.AgentRole;
+import com.helloai.common.constant.TimelineEventCode;
 import com.helloai.core.agent.domain.ExecutionCommand;
 import com.helloai.core.agent.mqconsumer.ExecutionCommandConsumer;
 import com.helloai.core.agent.mqconsumer.LocalExecutionCommandConsumer;
@@ -160,7 +161,7 @@ public class ExecutionCommandPoller {
 
         // 4. 记录 timeline：Poller 处理事件
         // scanType 恒为 listOrphanPending，timeline 事件统一使用 sub_task_execution_command_poll_recovery
-        String timelineEvent = "sub_task_execution_command_poll_recovery";
+        String timelineEvent = TimelineEventCode.SUB_TASK_EXECUTION_COMMAND_POLL_RECOVERY.code();
         if (subTask != null) {
             taskTimelinePort.recordEvent(
                     subTask.taskId(),
