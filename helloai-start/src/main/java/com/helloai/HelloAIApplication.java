@@ -3,6 +3,7 @@ package com.helloai;
 import java.util.TimeZone;
 
 import com.helloai.common.config.AgentProviderProperties;
+import com.helloai.common.config.KbProperties;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -11,7 +12,7 @@ import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication(scanBasePackages = "com.helloai")
-@EnableConfigurationProperties(AgentProviderProperties.class)
+@EnableConfigurationProperties({AgentProviderProperties.class, KbProperties.class})
 @MapperScan({
         "com.helloai.core.agent.mapper",
         "com.helloai.core.agent.session.mapper",

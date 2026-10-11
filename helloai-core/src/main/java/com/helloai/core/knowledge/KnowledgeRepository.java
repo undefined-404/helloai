@@ -1,0 +1,70 @@
+package com.helloai.core.knowledge;
+
+import com.baomidou.mybatisplus.core.toolkit.IdWorker;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+
+/**
+ * 知识库分片存储 / 检索（REF-4.2）。PG 单后端：直接经 {@link JdbcTemplate} 使用
+ * `vb106` 已启用的 pgvector `vector` 扩展（自建 SQL，不引入 spring-ai vectorstore
+ * 侧库依赖，PG 单后端与 ADR-002 §7「向量与业务同库同事务」贯通）。
+ *
+ * <p>维度 = {@code vector(1024)}（ADR-002 单向门，上线即冻结）。相似度 = 余弦
+ * （HNSW vector_cosine_ops，`<=>`），对小规模知识库检索质量稳健。</p>
+ */
+@Repository
+public class KnowledgeRepository {
+
+    private final JdbcTemplate jdbcTemplate;
+
+    public KnowledgeRepository(JdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = jdbcTemplate;
+    }
+
+    /** 已有分片数（无 KB ⇒ search_knowledge 摘除，REF-4.1）。 */
+    public long count() {
+        Long c = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM kb_chunk WHERE deleted = 0", Long.class);
+        return c == null ? 0 : c;
+    }
+
+    /** 摄入一个分片。 */
+    public void insertChunk(String source, int chunkIdx, String content, double[] embedding) {
+        jdbcTemplate.update(
+                "INSERT INTO kb_chunk(id, source, chunk_idx, content, embedding, create_by, update_by) "
+                        + "VALUES (?, ?, ?, ?, ?::vector, 'system', 'system')",
+                IdWorker.getId(), source, chunkIdx, content, toVectorStr(embedding));
+    }
+
+    /** 清空某来源的所有分片（重摄 / 回滚用；派生数据硬删，不进业务软删）。 */
+    public void clearSource(String source) {
+        jdbcTemplate.update("DELETE FROM kb_chunk WHERE source = ?", source);
+    }
+
+    /**
+     * 检索：query 向量 → 余弦最近 top-k 分片。
+     */
+    public List<KnowledgeHit> search(double[] queryVec, int limit) {
+        String vec = toVectorStr(queryVec);
+        return jdbcTemplate.query(
+                "SELECT id, source, chunk_idx, content, (embedding <=> ?::vector) AS distance "
+                        + "FROM kb_chunk WHERE deleted = 0 "
+                        + "ORDER BY embedding <=> ?::vector LIMIT ?",
+                (rs, rowNum) -> new KnowledgeHit(
+                        rs.getLong("id"),
+                        rs.getString("source"),
+                        rs.getInt("chunk_idx"),
+                        rs.getString("content"),
+                        rs.getDouble("distance")),
+                vec, vec, limit);
+    }
+
+    private String toVectorStr(double[] v) {
+        return "[" + IntStream.range(0, v.length)
+                .mapToObj(i -> String.valueOf(v[i]))
+                .collect(Collectors.joining(",")) + "]";
+    }
+}

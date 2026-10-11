@@ -361,6 +361,22 @@ helloai:
     dingtalk-webhook-url: ""
     # 飞书机器人 Webhook（v2.4 §4.8）。留空则不发送
     feishu-webhook-url: ""
+  # === 知识库 / RAG（REF-4.x）===
+  # 新能力默认关闭（REF-6.13）；开启需显式置 KB_ENABLED=true（生产不经明示不启用）。
+  # 嵌入走既有 dashscope（复用平台 LLM 供应商 dashscope 凭据，ADR-002 §4），
+  # 存储/检索经 V106/V107 的 pgvector 扩展（维度 1024 单向门，正常情况不覆盖 dimensions）。
+  kb:
+    enabled: ${KB_ENABLED:false}
+    chunk-size: 600
+    chunk-overlap: 100
+    max-results: 8
+    default-results: 4
+    char-budget: 4000
+    provider: dashscope
+    model: text-embedding-v4
+    dimensions: 1024
+    connect-timeout-ms: 5000
+    read-timeout-ms: 60000
 
 
 logging:

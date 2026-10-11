@@ -49,3 +49,6 @@ helloai:
     # 与 scripts/powershell/*.ps1 从 $PSScriptRoot 上溯的做法同源。
     pg-dump-path: ${BACKUP_PG_DUMP_PATH:.tools/pgsql/bin/pg_dump.exe}
     pg-restore-path: ${BACKUP_PG_RESTORE_PATH:.tools/pgsql/bin/pg_restore.exe}
+  kb:
+    # 本地开发默认开启 RAG（REF-4.x）；生产保持 application.yml 的默认关（REF-6.13）。
+    enabled: ${KB_ENABLED:true}

@@ -1,6 +1,6 @@
 # scripts/ 索引
 
-本目录是 HelloAI 的验证与运维脚本库。共 **85 个 PowerShell（`powershell/` 84 + 根目录 `run-it-local.ps1`）+ 27 个 Shell + 1 个 Java 工具 + 1 个 SQL**（**2026-10-11 按 `git ls-files` 重新校准**：PowerShell 84+1、Shell 27（含本批新增的交付文档一致性守卫与事件码 parity 守卫）；此前记「83 / 28」与仓库实际不符，本次订正），另有 **4 个 CI 门禁脚本 + 1 个架构冻结基线**（`scripts/ci/`）。
+本目录是 HelloAI 的验证与运维脚本库。共 **85 个 PowerShell（`powershell/` 84 + 根目录 `run-it-local.ps1`）+ 28 个 Shell + 1 个 Java 工具 + 1 个 SQL**（**2026-10-11 按 `git ls-files` 重新校准**：PowerShell 84+1、Shell 28（含交付文档一致性守卫、事件码 parity 守卫与 REF-4 的 `verify-rag-e2e.sh`）；此前记「83 / 28」与仓库实际不符，本次订正），另有 **4 个 CI 门禁脚本 + 1 个架构冻结基线**（`scripts/ci/`）。
 
 - `ci/`：**跨平台 CI 门禁与架构守卫**（bash，Git Bash / Linux CI 通用；详细见下方第六节）
 - `powershell/`：Windows 侧（pwsh / Windows PowerShell 5.1），含全部规范类与大部分 E2E 验收脚本
@@ -14,7 +14,7 @@
 >（`.agents/` / `.qoder/` 下的 `helloai-preflight`，属本地产物、不入仓 2026-09-30）——仓库内没有对应文件，
 > 按注释所述纪律执行即可，不必去找文件。2026-09-30 治理时已把脚本头里的死路径替换为「本地 preflight 技能」字样。
 
-## 一、验收脚本（verify-*，58 ps1 + 19 sh）
+## 一、验收脚本（verify-*，64 ps1 + 23 sh）
 
 命名即入口：`powershell -File .\scripts\powershell\<name>.ps1` / `zsh scripts/shell/<name>.sh`。
 绝大多数前置为「后端 6565 已启动 + admin/$HELLOAI_ADMIN_PASSWORD」，个别需 Docker 中间件（postgres:15432 / redis:26379 / rabbitmq:25672 / minio:29000）。

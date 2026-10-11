@@ -6,6 +6,7 @@ version: "1.0.0"
 description: "联网调研规范：检索目标先行 / 多词覆盖 / 来源可追溯 / 信息时效标注"
 requiredTools:
   - web_search
+  - search_knowledge
 dependencies: []
 inputSchema: {}
 outputSchema: {}

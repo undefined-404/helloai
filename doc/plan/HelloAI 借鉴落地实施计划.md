@@ -6,7 +6,11 @@
 > **用户裁定**：`D-2026-10-09-4`（见《差距表》§0「当前生效的取舍决策」）——四项能力优先级、备份/恢复与 RAG 入目标架构、沙箱生产形态、语义位与不可关闭清单同批。
 > **性质**：本计划只收**可执行结论**（借鉴落点 → 动作 → 验收 → 验证集 → 回填），不含调研过程（在 `research/`）与稳定设计（在 `design/`）。
 > **完成迁移**：执行完成后迁入 `doc/archive/implemented/` 并标 `Done`。
-> **最后更新：2026-10-11（v13）**——**v13 = REF-4 落地前置①b（通义千问 LLM 有效）+ ② REF-4.0a（pgvector 镜像 + 扩展）交付**（2026-10-11）：
+> **最后更新：2026-10-11（v14）**——**v14 = REF-4.1 + REF-4.2 + 前置③ 交付**（2026-10-11，`LOG-20261011-004`）：
+> `search_knowledge` 无KB即摘 + char_budget + 登记技能；`kb_chunk`（V107）+ 自建 JdbcTemplate vector 检索 + `/api/kb/*`；
+> 前置③ 判别性召回通过（真实嵌入 + 余弦 top1 三题全对），`verify-rag-e2e.sh` PASS=4；
+> `search_knowledge` 并入内部 ToolRegistry、MCP 13 工具面不变（S1 确定）。REF-4.3（溯源 marker + 前端）后置。
+> **v13 = REF-4 落地前置①b（通义千问 LLM 有效）+ ② REF-4.0a（pgvector 镜像 + 扩展）交付**（2026-10-11）：
 > ①b `qwen-plus` chat 探针 `200` 通过；REF-4.0a 镜像换 `pgvector/pgvector:0.8.0-pg16`（四处同步）+ `V106` `CREATE EXTENSION vector`，
 > 本地真库验证 `vector|0.8.0` / Flyway `V106` success / `:6565` UP。见 §6 `Status` / `LOG-20261011-003`。
 > **v12 = REF-4 落地前置① embeddings 探针通过 + 用户新增前置①b**（2026-10-11）：
@@ -390,8 +394,10 @@ Regression ：verify-agent-execution-preview.ps1、verify-c3-events.ps1（ENVIRO
 > - **①b（用户新增）✅ 已验证**（2026-10-11，`LOG-20261011-003`）：`qwen-plus` 通义千问 LLM chat 探针 `200` / 有内容，RAG 启用前置满足。
 > - **② `REF-4.0a` ✅ 已交付**（2026-10-11，`LOG-20261011-003`）：PG 镜像换 `pgvector/pgvector:0.8.0-pg16`（docker-compose.yml / docker-compose.server.yml / deploy/middleware/docker-compose.yml / ItContainers.java 四处同步）+ 迁移 `V106__create_vector_extension.sql`（`CREATE EXTENSION IF NOT EXISTS vector`）。
 >   本地真库验证：`vector|0.8.0` 扩展入库、Flyway `V106` success、应用 `:6565` UP。镜像内置 PG `16.10`（Debian），仍 16 大版本 ⇒ REF-2 跨引擎恢复门不受影响；16.4→16.10 小版本原地升级，数据卷保留无需迁移。CODE_STYLE §2792 基建行 / 差距表 G-019 前置同步。
-> - **③ `REF-4.2` 前先小样本验证召回质量再全量灌库**（维度冻结 ⇒ 试错成本集中在建库前）—— ⏳ 未做（下一步）。
-> - **③ `REF-4.2` 前先小样本验证召回质量再全量灌库**（维度冻结 ⇒ 试错成本集中在建库前）—— ⏳ 未做。
+> - **③ 前置③（召回质量验证）✅ 已通过**（2026-10-11，`LOG-20261011-004`）：真实 dashscope 嵌入 + 余弦检索，对三主题小样本判别性 top1 全对（部署→`deploy-manual` / 消息队列→`mq-arch` / 向量库→`manual-rag`），`verify-rag-e2e.sh` PASS=4。
+> - **REF-4.1 ✅ 已交付**（2026-10-11）：`search_knowledge` 经 `ToolCallbackContributor` 注册且「无 KB 即摘除」（`toolAvailability()`=`hasKnowledge()`，REF-6.13 默认关）+ `char_budget` 注入预算（复用 `TextTruncator` 行边界）+ 登记 `eng-web-research` requiredTools（§35.1）。
+> - **REF-4.2 ✅ 已交付**（2026-10-11，`LOG-20261011-004`）：`kb_chunk` 表（`V107`，`vector(1024)` + HNSW-cosine）+ **自建 `JdbcTemplate`+`vector` SQL** 存储/检索（PG 单后端，不引侧库）+ 管理端 `/api/kb/*`；单测 + core 全量单测通过；`search_knowledge` 并入内部 ToolRegistry、**不暴露 MCP 13 工具面**（S1 断言确定）。
+> - **REF-4.3 ⏳ 后置**：引用溯源 marker（前端渲染卡片、喂模型前剥掉）。<br>**REF-4 验证集**：`verify-rag-e2e.sh`（新增）+ 既有 `verify-agent-skill-capability` / `verify-tool-matrix`（MCP 面回归）；门禁 `ci-gate.sh`。
 
 > **接线口径（`CODE_STYLE §35.1`）**：`search_knowledge` 属**程序化能力**，必须经 `ToolCallbackContributor` 端口注册，并登记技能包（至少一个 `AgentTask.skills` 挂点）；**禁止**给 LLM 直插域内 Service。
 
