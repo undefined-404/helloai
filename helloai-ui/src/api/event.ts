@@ -15,6 +15,6 @@ export interface EventCatalogItem {
 export const eventApi = {
   /** 全量用户可见事件码目录（code → label/desc）。 */
   catalog(): Promise<EventCatalogItem[]> {
-    return request.get<any, EventCatalogItem[]>('/api/events/catalog')
+    return request.get<any, EventCatalogItem[]>('/events/catalog')
   }
 }
