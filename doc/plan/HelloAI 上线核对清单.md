@@ -1,7 +1,7 @@
 # HelloAI 上线核对清单
 
 > **Status: Active**
-> 最后更新：2026-10-10
+> 最后更新：2026-10-11
 > 依据：《文档体系分类与治理规则》§3.2（执行清单与预案 → `plan/`）；各条目在自己的小节里给出事实源与验证出处
 
 **收录口径（决定一条该不该进本清单）**：
@@ -75,7 +75,109 @@
 
 ---
 
-## 2. 后续小节（按需追加）
+## 2. 生产环境 Docker 引擎 / Compose 升级前置
+
+> 出处：2026-10-11 用户指令（回单位升级生产 Docker 引擎 / Compose）；`G-017` 的「部署侧安全动作」同窗口核对（§2.6）。
+> 脚本：`deploy/docker-host-preflight.sh` —— **只读**探测（除 `--record` 外不写任何东西），在**服务器宿主机**执行。
+> 本节全部条目满足收录口径：只在真服务器（真 Docker / 真安全组 / 真数据盘）才有意义。
+
+### 2.0 先决认知：为什么必须是 Compose v2
+
+`docker-compose.server.yml` 用了 `depends_on: condition: service_completed_successfully`，且**无顶层 `version:` 键** —— 它面向 **Compose Spec**，只被 `docker compose`（v2 插件）支持。EOL 的 Compose v1（Python 版 `docker-compose`）**不支持该条件**，用它根本起不来栈。
+
+**判据**：`docker compose version` 有输出（v2 插件在）。`docker-compose --version` **不能**作为判据 —— Docker Desktop / 新版打包把它做成指向 v2 二进制的别名，其 banner 是 `Docker Compose version vX`（只有 `docker-compose version 1.x` 才是真 v1）。
+
+### 2.1 升级前：环境探测（一次性，只读）
+
+- [ ] 在**宿主机**（不是容器内）执行：`bash deploy/docker-host-preflight.sh --record /root/helloai-docker-upgrade-record-$(date +%F).txt`
+- [ ] 记下三样：引擎 `ServerVersion`、`docker compose version`、回退记录文件路径
+- [ ] 确认 `docker system df` 与「docker root 剩余空间」
+
+**判据**：脚本 `VERDICT` 段为 `FAIL blockers: 0`。有 blocker 就先清（脚本会点明是哪一条），**不要带着 blocker 动 Docker 包**。
+
+**脚本会给出的 WARN（都需人工判断，不是失败）**：
+
+| WARN | 含义 | 处置 |
+|---|---|---|
+| `live-restore is DISABLED and N container(s) are running` | 升级 dockerd 会**停掉全部容器** | 见 §2.2 |
+| `less than 5 GiB free on the docker root` | 升级拉包 + 构建缓存可能撑爆盘 | 先 `docker system prune`（谨慎）或扩盘 |
+| `floating ':latest' tag in the stack` | 栈内有浮动 tag | 升级后固定（`image@sha256`） |
+| `docker root is on X but /data exists` | 数据卷落在系统盘而非数据盘 | 确认是否有意；容量与盘位风险 |
+
+> `--record` 产物是**回退依据**：引擎/Compose 包版本 + 每个栈镜像的 digest。请把它留在服务器上（**不要**提交进仓库）。
+
+### 2.2 关键前置抉择：把停机窗口压到最小（`live-restore`）
+
+直接升级 Docker 引擎 = `systemctl restart docker`，会停掉**所有**运行中容器（`restart: unless-stopped` 只会让它们随后自动起来，但中断是真实的，且要叠加应用启动时间）。
+
+- [ ] **可接受中断**（推荐首次升级走这条，最省事）⇒ 跳过本节，直接 §2.3。
+- [ ] **要求最小中断** ⇒ 升级**前**在 `/etc/docker/daemon.json` 置 `"live-restore": true`，然后 `systemctl reload docker`（reload **不会**重启容器），确认生效后再升级引擎 —— 升级期间容器**不中断**。
+
+**判据**：`docker info --format '{{.LiveRestoreEnabled}}'` 返回 `true`，且 reload 后 `docker ps` 的 `Up` 时长**未重置**。
+
+**红线**：`live-restore` 与 Swarm 模式不兼容（本项目不用 Swarm，不影响）；它只保证「容器不被打断」，**不降低升级本身的风险**，也不豁免 §2.3。
+
+### 2.3 升级前：数据与回退准备
+
+- [ ] **云控制台做实例/磁盘快照** —— 最强回退，优先于任何脚本
+- [ ] 记下当前引擎 + Compose 包版本（回退要按版本装回去）；§2.1 的 `--record` 已含
+- [ ] 库已在生产用 ⇒ 应用侧备份一次：管理端 `POST /api/backup` → 轮询至 `state=SUCCESS`（判据见 §1.2）
+- [ ] 停止写入：`cd <部署目录> && docker compose -f docker-compose.server.yml stop`
+- [ ] 确认无容器在跑：`docker compose -f docker-compose.server.yml ps`（应无 `Up`）
+
+**判据**：快照 ID 已记录 + 回退版本已记录 + 备份 `state=SUCCESS` + `ps` 无 `Up`。
+
+### 2.4 执行升级（按发行版）
+
+```bash
+# Debian / Ubuntu
+apt-get update
+apt-get install -y --only-upgrade docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+# RHEL / CentOS / Alibaba Cloud Linux
+dnf -y upgrade docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+# 两者都要复核
+docker --version && docker compose version && docker info >/dev/null && echo ENGINE_OK
+```
+
+**判据**：两条版本命令都有输出且为预期版本；`containerd.io` **一并升级**（引擎与 containerd 版本需配套，只升 `docker-ce` 会留下不匹配）。
+
+**注意（国内网络）**：`download.docker.com` 常极慢或超时 ⇒ 改用阿里云镜像源；仓库文件位置由 §2.1 探测（`/etc/yum.repos.d/*docker*` 或 `/etc/apt/sources.list.d/docker.list`）。
+
+**红线**：**不要** `apt-get remove docker*`、**不要** 删 `/var/lib/docker`。引擎升级**不动数据卷**，容器/镜像/卷全部保留。
+
+### 2.5 升级后：拉起与自检
+
+- [ ] `systemctl status docker` = active，`docker info` 正常
+- [ ] `docker compose -f docker-compose.server.yml up -d` —— **不带 `--build`**（本次只升引擎，镜像未变；带 `--build` 会把「升级」与「重建镜像」两件事混在一起，出问题难归因）
+- [ ] `docker compose -f docker-compose.server.yml ps` 全部 `Up` / `exited(0)`
+- [ ] `logs rabbitmq-init` 显示 DONE
+- [ ] `logs app` 出现 `Started HelloAIApplication`，且无 `ACCESS_REFUSED` / `ERROR`
+- [ ] 冒烟：管理端登录 → 附件直读 → 任务流转
+
+**判据**：`ps` 无 `Restarting`；应用日志无 ERROR；管理端可登录。
+
+### 2.6 同窗口安全动作（`G-017`，与升级无依赖）
+
+现状：MinIO 凭据在 `docker-compose.server.yml` 内**硬编码** `minioadmin/minioadmin123`；`15432/26379/25672/25673/29000/29001` 对公网开放。
+
+- [ ] 云安全组把上列端口收为**仅本机/办公 IP 白名单**（公网只留 `80`）
+- [ ] 轮换 MinIO 凭据 —— **注意三处必须同步**：`minio` 服务的 `MINIO_ROOT_USER/PASSWORD`、`app` 服务的 `MINIO_ACCESS_KEY/SECRET_KEY`、以及 `.env`（若已抽出）。改完需**重建/重启**两个服务，并**复验** `helloai-artifacts` 桶内历史对象的直读链路。
+
+**判据**：非白名单 IP `telnet <ip> 15432` 不通；旧 MinIO 凭据登录失败、新凭据可用。
+
+### 2.7 回退（升级后异常）
+
+- [ ] **首选**：云控制台用 §2.3 的快照回滚
+- [ ] 或用 §2.1 记录把旧版引擎/Compose 包装回去，`systemctl restart docker`
+- [ ] 数据卷 / 镜像均未被升级触碰 ⇒ 回退只涉及引擎二进制，**业务数据不受影响**
+
+**判据**：回退后 `docker --version` 与 `--record` 记录一致；`docker compose ps` 恢复全部 `Up`。
+
+---
+
+## 3. 后续小节（按需追加）
 
 新的专项若产出「只在部署环境可验」的核对项，追加为独立小节，并在小节首行给出出处
 （`LOG-…` / 差距表 `G-0xx`），与本节同构。**不要把本地可验项搬进来。**
@@ -87,3 +189,4 @@
 | 日期 | 变更 |
 |---|---|
 | 2026-10-10 | 建立本清单；首节「备份 / 恢复（`REF-2`）」三条来自 `LOG-20261010-008` —— 该轮 REF-2 回归与门禁均在**本地**完成，三条部署侧核对项此前无任何载体。 |
+| 2026-10-11 | 新增 §2「生产环境 Docker 引擎 / Compose 升级前置」（§2.0~§2.7）：来源 = 2026-10-11 用户指令（回单位升级生产 Docker）+ `G-017` 部署侧安全动作同窗口核对；配套只读探测脚本 `deploy/docker-host-preflight.sh`（`--record` 落回退记录）。原「后续小节」占位顺延为 §3。见 `LOG-20261011-011`。 |

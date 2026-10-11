@@ -15,7 +15,10 @@ scripts/shell/*.sh text eol=lf
 # 2026-10-07：脚本由 deploy/middleware/rabbitmq/init.sh 迁到 deploy/init-rabbitmq.sh
 # （脱离已废弃的「独立中间件服务器」目录结构，单机 server compose 与之一并脱钩），
 # 故本条规则改为按新路径匹配 —— 漏钉会让 core.autocrlf 在 checkout 时转成 CRLF。
-/deploy/init-rabbitmq.sh text eol=lf
+# 2026-10-11：由「逐文件钉」改为**按目录通配**：本批新增 docker-host-preflight.sh
+# （服务器侧只读探测，含 $() 与 heredoc），继续逐文件钉必漏；deploy/*.sh 现全部为 LF，
+# 通配不产生规范化噪音。**此后新增 deploy 脚本不必再改本文件。**
+deploy/*.sh text eol=lf
 # 部署 compose：由服务器上的 docker compose 读取，且会被直接上传到 Linux
 # （工作树若为 CRLF，用户从工作树直接拷贝上传即带入 CRLF）。索引与工作树统一 LF。
 # 2026-10-07 补充：伴随 docker-compose.server.yml 去中文（转纯 ASCII）一并规范行尾。
