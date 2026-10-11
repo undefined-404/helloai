@@ -29,7 +29,7 @@ import org.springframework.scheduling.annotation.EnableAsync;
 @SpringBootApplication
 @ComponentScan(basePackages = "com.helloai",
         excludeFilters = @ComponentScan.Filter(type = FilterType.ASSIGNABLE_TYPE, classes = HelloAIApplication.class))
-@EnableConfigurationProperties(AgentProviderProperties.class)
+@EnableConfigurationProperties({AgentProviderProperties.class, com.helloai.common.config.KbProperties.class})
 @MapperScan({
         "com.helloai.core.agent.mapper",
         "com.helloai.core.agent.session.mapper",

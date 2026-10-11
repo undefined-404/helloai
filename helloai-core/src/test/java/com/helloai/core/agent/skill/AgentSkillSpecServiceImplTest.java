@@ -226,6 +226,7 @@ class AgentSkillSpecServiceImplTest {
     void shouldResolveWebSearchToolFromEngWebResearch() {
         AgentSkillSpecService.ResolvedSpec resolved = service.resolve(List.of("eng-web-research"));
         assertThat(resolved.matchedLabels()).containsExactly("eng-web-research");
-        assertThat(resolved.requiredTools()).containsExactly("web_search");
+        // REF-4.x：eng-web-research 声明 requiredTools=[web_search, search_knowledge]（§35.1 接入 KB 检索）
+        assertThat(resolved.requiredTools()).containsExactlyInAnyOrder("web_search", "search_knowledge");
     }
 }
