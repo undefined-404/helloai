@@ -57,10 +57,14 @@ public class SearchKnowledgeToolCallback implements ToolCallbackContributor {
             【何时使用】需要检索平台知识库（内部文档 / 历史任务产出 / 技能包内容）时调用；
             是内部知识检索，区别于外部实时搜索 web_search。
             【调用频率】每次检索调用一次；可对同一问题换关键词多次检索合并，按需控制总数。
+            【引用溯源（REF-4.3）】命中结果每条含 source 与 chunkIdx（如 source='manual-rag'、chunkIdx=0）。
+            凡在最终报告 / 核验意见中引用某条知识库事实，必须在该句末尾原样附来源标记
+            `[kb:{source}#{chunkIdx}]`（如 `[kb:manual-rag#0]`），便于人类点开核对原文；
+            同一来源多次引用可只标一次。仅当确未使用任何知识库事实时才不输出该标记。
             【Gotchas】
             - 无命中的查询返回空 hits（hits=[]），请在回复中说明未检索到相关内部资料
             - maxResults 1-${max}, 超出按边界收敛；返回值已按注入预算截断（truncated=true 表示内容被截断）
-            - 结果带 source/chunkIdx 溯源；引用内部资料时注明来源
+            - 禁止臆造 source#chunkIdx：只能引用本次返回 hits 里真实存在的 source 与 chunkIdx
             【相关工具】web_search（外部实时检索，知识库缺失时的补充）
             """)
     public KnowledgeSearchResult searchKnowledge(

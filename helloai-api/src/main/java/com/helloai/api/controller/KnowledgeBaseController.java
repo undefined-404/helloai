@@ -70,4 +70,18 @@ public class KnowledgeBaseController {
         log.info("知识库来源已清空: source={}", source);
         return R.ok();
     }
+
+    /**
+     * 按来源 + 分片键取单个分片（引用溯源 marker 卡片，REF-4.3）。
+     */
+    @SaCheckPermission("kb:view")
+    @GetMapping("/chunk/{source}/{chunkIdx}")
+    public R<KnowledgeSearchResult.Hit> chunk(@PathVariable("source") String source,
+                                              @PathVariable("chunkIdx") int chunkIdx) {
+        var hit = kbService.chunkByKey(source, chunkIdx);
+        if (hit.isEmpty()) {
+            return R.fail("知识库分片不存在：" + source + "#" + chunkIdx);
+        }
+        return R.ok(new KnowledgeSearchResult.Hit(hit.get().source(), hit.get().chunkIdx(), hit.get().content()));
+    }
 }

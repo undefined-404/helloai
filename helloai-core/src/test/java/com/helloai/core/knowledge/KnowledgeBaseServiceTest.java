@@ -159,4 +159,44 @@ class KnowledgeBaseServiceTest {
         svc(p).search("q", null);
         verify(repository).search(any(double[].class), org.mockito.ArgumentMatchers.eq(2));
     }
+
+    @Test
+    @DisplayName("chunkByKey：命中返回分片（引用溯源取原文）")
+    void chunkByKey_hit() {
+        when(repository.findBySourceIdx("manual-rag", 0))
+                .thenReturn(java.util.Optional.of(new KnowledgeHit(1L, "manual-rag", 0, "原文", 0.1)));
+        var hit = svc(props()).chunkByKey("manual-rag", 0);
+        assertThat(hit).isPresent();
+        assertThat(hit.get().content()).isEqualTo("原文");
+        assertThat(hit.get().source()).isEqualTo("manual-rag");
+    }
+
+    @Test
+    @DisplayName("chunkByKey：找不到返回空 Optional")
+    void chunkByKey_missing() {
+        when(repository.findBySourceIdx("x", 9)).thenReturn(java.util.Optional.empty());
+        assertThat(svc(props()).chunkByKey("x", 9)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("chunkByKey：总开关关 ⇒ 显式拒绝（REF-6.13）")
+    void chunkByKey_whenDisabled_rejects() {
+        KbProperties p = props();
+        p.setEnabled(false);
+        assertThatThrownBy(() -> svc(p).chunkByKey("x", 0))
+                .isInstanceOf(BizException.class)
+                .hasMessageContaining("未启用");
+    }
+
+    @Test
+    @DisplayName("search：maxResults 缺省时不用 full 上限，避免默认拉满")
+    void search_maxResultsNotAppliedWhenNull() {
+        KbProperties p = props();
+        p.setDefaultResults(2);
+        p.setMaxResults(8);
+        when(embedder.embedOne(anyString())).thenReturn(new double[]{0.9});
+        when(repository.search(any(double[].class), anyInt())).thenReturn(List.of());
+        svc(p).search("q", null);
+        verify(repository).search(any(double[].class), org.mockito.ArgumentMatchers.eq(2));
+    }
 }

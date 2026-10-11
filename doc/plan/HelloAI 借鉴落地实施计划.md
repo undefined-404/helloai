@@ -6,7 +6,9 @@
 > **用户裁定**：`D-2026-10-09-4`（见《差距表》§0「当前生效的取舍决策」）——四项能力优先级、备份/恢复与 RAG 入目标架构、沙箱生产形态、语义位与不可关闭清单同批。
 > **性质**：本计划只收**可执行结论**（借鉴落点 → 动作 → 验收 → 验证集 → 回填），不含调研过程（在 `research/`）与稳定设计（在 `design/`）。
 > **完成迁移**：执行完成后迁入 `doc/archive/implemented/` 并标 `Done`。
-> **最后更新：2026-10-11（v14）**——**v14 = REF-4.1 + REF-4.2 + 前置③ 交付**（2026-10-11，`LOG-20261011-004`）：
+> **最后更新：2026-10-11（v15）**——**v15 = REF-4.3 交付 ⇒ REF-4（RAG）收官**（2026-10-11，`LOG-20261011-005`）：
+> 引用溯源 marker = 内联 `[kb:source#idx]` token，前端 `MarkdownView` 渲染可点开来源卡片 + `/api/kb/chunk` 端点；REF-4 `0a/0b/1/2/3 + 前置` 全部完成。
+> **v14 = REF-4.1 + REF-4.2 + 前置③ 交付**（2026-10-11，`LOG-20261011-004`）：
 > `search_knowledge` 无KB即摘 + char_budget + 登记技能；`kb_chunk`（V107）+ 自建 JdbcTemplate vector 检索 + `/api/kb/*`；
 > 前置③ 判别性召回通过（真实嵌入 + 余弦 top1 三题全对），`verify-rag-e2e.sh` PASS=4；
 > `search_knowledge` 并入内部 ToolRegistry、MCP 13 工具面不变（S1 确定）。REF-4.3（溯源 marker + 前端）后置。
@@ -397,7 +399,8 @@ Regression ：verify-agent-execution-preview.ps1、verify-c3-events.ps1（ENVIRO
 > - **③ 前置③（召回质量验证）✅ 已通过**（2026-10-11，`LOG-20261011-004`）：真实 dashscope 嵌入 + 余弦检索，对三主题小样本判别性 top1 全对（部署→`deploy-manual` / 消息队列→`mq-arch` / 向量库→`manual-rag`），`verify-rag-e2e.sh` PASS=4。
 > - **REF-4.1 ✅ 已交付**（2026-10-11）：`search_knowledge` 经 `ToolCallbackContributor` 注册且「无 KB 即摘除」（`toolAvailability()`=`hasKnowledge()`，REF-6.13 默认关）+ `char_budget` 注入预算（复用 `TextTruncator` 行边界）+ 登记 `eng-web-research` requiredTools（§35.1）。
 > - **REF-4.2 ✅ 已交付**（2026-10-11，`LOG-20261011-004`）：`kb_chunk` 表（`V107`，`vector(1024)` + HNSW-cosine）+ **自建 `JdbcTemplate`+`vector` SQL** 存储/检索（PG 单后端，不引侧库）+ 管理端 `/api/kb/*`；单测 + core 全量单测通过；`search_knowledge` 并入内部 ToolRegistry、**不暴露 MCP 13 工具面**（S1 断言确定）。
-> - **REF-4.3 ⏳ 后置**：引用溯源 marker（前端渲染卡片、喂模型前剥掉）。<br>**REF-4 验证集**：`verify-rag-e2e.sh`（新增）+ 既有 `verify-agent-skill-capability` / `verify-tool-matrix`（MCP 面回归）；门禁 `ci-gate.sh`。
+> - **REF-4.3 ✅ 已交付**（2026-10-11，`LOG-20261011-005`）：引用溯源 marker = 内联 `[kb:{source}#{idx}]` token（模型在报告/核验里输出）→ 前端 `MarkdownView` 渲染可点开来源卡片（`kbApi.chunk` 懒取分片）；后端补 `GET /api/kb/chunk/{source}/{idx}`（`kb:view`）。前端 type-check 通过。
+> - **REF-4 ✅ 收官**（2026-10-11）：`0a/0b/1/2/3 + 前置①②①b③` 全部交付，见 `LOG-20261011-001`~`005`。<br>**REF-4 验证集**：`verify-rag-e2e.sh`（含 S4 溯源取分片）+ 既有 `verify-agent-skill-capability` / `verify-tool-matrix`（MCP 面回归）；门禁 `ci-gate.sh`。
 
 > **接线口径（`CODE_STYLE §35.1`）**：`search_knowledge` 属**程序化能力**，必须经 `ToolCallbackContributor` 端口注册，并登记技能包（至少一个 `AgentTask.skills` 挂点）；**禁止**给 LLM 直插域内 Service。
 

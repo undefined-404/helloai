@@ -39,6 +39,21 @@ public class KnowledgeRepository {
                 IdWorker.getId(), source, chunkIdx, content, toVectorStr(embedding));
     }
 
+    /** 按来源 + 分片键取单个分片（引用溯源卡片，REF-4.3）。空可选。 */
+    public java.util.Optional<KnowledgeHit> findBySourceIdx(String source, int chunkIdx) {
+        List<KnowledgeHit> found = jdbcTemplate.query(
+                "SELECT id, source, chunk_idx, content, 0 AS distance "
+                        + "FROM kb_chunk WHERE source = ? AND chunk_idx = ? AND deleted = 0 LIMIT 1",
+                (rs, rowNum) -> new KnowledgeHit(
+                        rs.getLong("id"),
+                        rs.getString("source"),
+                        rs.getInt("chunk_idx"),
+                        rs.getString("content"),
+                        rs.getDouble("distance")),
+                source, chunkIdx);
+        return found.isEmpty() ? java.util.Optional.empty() : java.util.Optional.of(found.get(0));
+    }
+
     /** 清空某来源的所有分片（重摄 / 回滚用；派生数据硬删，不进业务软删）。 */
     public void clearSource(String source) {
         jdbcTemplate.update("DELETE FROM kb_chunk WHERE source = ?", source);

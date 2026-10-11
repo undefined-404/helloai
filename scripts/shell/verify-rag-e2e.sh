@@ -60,6 +60,13 @@ d1=$(search_top "$TMP/q1.txt"); [ "$d1" = "deploy-manual" ] && ok "Q部署 → d
 d2=$(search_top "$TMP/q2.txt"); [ "$d2" = "mq-arch" ] && ok "Q消息队列 → mq-arch" || bad "Q消息队列 top1=$d2 (期望 mq-arch)"
 d3=$(search_top "$TMP/q3.txt"); [ "$d3" = "manual-rag" ] && ok "Q向量库 → manual-rag" || bad "Q向量库 top1=$d3 (期望 manual-rag)"
 
+echo "[S4] 引用溯源取分片（REF-4.3，/api/kb/chunk/{source}/{idx}）"
+C1=$(curl -s -G "$BASE/api/kb/chunk/manual-rag/0" -H "X-Admin-Token: $TOKEN")
+echo "$C1" | grep -q '"content"' && echo "$C1" | grep -q '"source":"manual-rag"' \
+  && ok "chunk/manual-rag/0 返回分片" || bad "chunk/manual-rag/0 异常: $(echo "$C1" | head -c 120)"
+MISS=$(curl -s -G "$BASE/api/kb/chunk/does-not-exist/9" -H "X-Admin-Token: $TOKEN" | grep -oE '"code":[0-9]+' | head -1)
+[ "$MISS" != '"code":200' ] && ok "chunk 不存在分片被拒" || bad "chunk 不存在分片未拒（$MISS）"
+
 rm -rf "$TMP"
 echo
 echo "RAG_E2E_RESULT PASS=$PASS FAIL=$FAIL"

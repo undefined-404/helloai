@@ -60,6 +60,14 @@ public class KnowledgeBaseService {
         repository.clearSource(source);
     }
 
+    /** 按来源 + 分片键取单个分片（引用溯源卡片，REF-4.3）。空可选。 */
+    public java.util.Optional<KnowledgeHit> chunkByKey(String source, int chunkIdx) {
+        if (!kbProperties.isEnabled()) {
+            throw new BizException("知识库未启用：helloai.kb.enabled=false");
+        }
+        return repository.findBySourceIdx(source, chunkIdx);
+    }
+
     /** 检索：query 嵌入 → 余弦 top-k → 按 char_budget 截断注入内容。 */
     public KnowledgeSearchResult search(String query, Integer maxResults) {
         if (!kbProperties.isEnabled()) {
