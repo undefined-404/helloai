@@ -35,7 +35,7 @@
 >
 > **本表落位 = §1 矩阵「处置」列首词**。四条配套口径：① 一行只允许一个状态词；子项状态不同时取最需关注态（偏序 `BLOCKED > DEFERRED > PARTIAL > TODO > DESIGNING > IMPLEMENTING > VERIFYING > DONE`），明细写在状态词之后；② `WONTFIX` 只用于整行都不做，单子项不做写 `DONE · 附：X 子项 WONTFIX`；③ 第 3 列「当前状态」**不得**使用状态词（改用事实语），两列都表状态是新漂移源；④ **不设进度百分比列**，需要量化时用子项计数（`未达成 3 项`）。
 >
-> 机械守卫：`scripts/shell/verify-doc-gap-table.sh`。
+> 机械守卫：`scripts/shell/verify-doc-gap-table.sh`（bash 实现，**已在 `ci-gate.sh` 门禁 3 执行**）。
 
 > **历史分期编号注册表（2026-10-09 登记并冻结）**
 >

@@ -1,4 +1,4 @@
-#!/usr/bin/env zsh
+#!/usr/bin/env bash
 # ============================================================
 # helloai 《差距表》结构守卫（去过程化专项清理的长期守卫）
 #
@@ -18,40 +18,52 @@
 #       doc/HelloAI_AI开发协作规约.md §6.3（九态状态词 + 落位句）
 #       doc/HelloAI 实现差距表.md §0「状态词表」
 #       LOG-20261009-014（本守卫的建立背景与前后对比）
+#       LOG-20261011-010（zsh→bash 改造 + 接入门禁 3）
+#
+# 实现说明：**bash 实现**（原为 zsh，用 `emulate` 内建 + `print`，
+#   Windows/Git Bash 无 zsh 且 `print` 会被 print.exe 顶替 ⇒ 静默 EXIT=0 假绿）。
+#   正则类断言（③ 状态词边界、④ 过程信号黑名单）用 `python3`（三平台标准件）。
 #
 # 退出码：0 全部通过 / 1 存在失败项
-# 用法：zsh scripts/shell/verify-doc-gap-table.sh [-RepoRoot <path>]
+# 用法：bash scripts/shell/verify-doc-gap-table.sh [-RepoRoot <path>]
 # ============================================================
 
-emulate -L zsh
-set -u
+set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-while [[ $# -gt 0 ]]; do
+while [ $# -gt 0 ]; do
   case "$1" in
     -RepoRoot) REPO_ROOT="$2"; shift 2 ;;
-    *) print -u2 "未知参数：$1"; exit 64 ;;
+    *) printf '未知参数：%s\n' "$1" >&2; exit 64 ;;
   esac
 done
 
 DOC="$REPO_ROOT/doc/HelloAI 实现差距表.md"
-if [[ ! -f "$DOC" ]]; then
-  print -u2 "[FAIL] 找不到 $DOC"
+if [ ! -f "$DOC" ]; then
+  printf '[FAIL] 找不到 %s\n' "$DOC" >&2
+  exit 1
+fi
+
+# 解析 python 解释器（三平台标准件：linux/mac 为 python3，Windows 视安装而定）
+PY="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
+if [ -z "$PY" ]; then
+  printf '[FAIL] 未找到 python3 / python，无法执行正则类断言（③④）\n' >&2
   exit 1
 fi
 
 PASS=0; FAIL=0
-ok()   { print "  [ OK ] $1"; PASS=$((PASS+1)); }
-bad()  { print "  [FAIL] $1"; FAIL=$((FAIL+1)); }
+ok()  { printf '  [ OK ] %s\n' "$1"; PASS=$((PASS+1)); }
+bad() { printf '  [FAIL] %s\n' "$1"; FAIL=$((FAIL+1)); }
 
-print "== 《差距表》结构守卫 =="
-print "  目标文件：${DOC#$REPO_ROOT/}"
+printf '== 《差距表》结构守卫 ==\n'
+printf '  目标文件：%s\n' "${DOC#$REPO_ROOT/}"
 
 # ------------------------------------------------------------
 # ① 表格完整性
 # ------------------------------------------------------------
-table_bad=$(python3 -I - "$DOC" <<'PY'
+table_bad=$("$PY" -I - "$DOC" <<'PY'
 import io, sys
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # 三平台输出一致（-I 会忽略 PYTHONUTF8）
 ls = io.open(sys.argv[1], encoding="utf-8").read().split("\n")
 tbl, bad = [], []
 for i, l in enumerate(ls, 1):
@@ -68,7 +80,7 @@ if tbl:
 print(" ".join(bad))
 PY
 )
-if [[ -z "$table_bad" ]]; then
+if [ -z "$table_bad" ]; then
   ok "① 表格完整性：所有表格块每行竖线数与表头一致"
 else
   bad "① 表格完整性：$table_bad"
@@ -78,7 +90,7 @@ fi
 # ② 无转义竖线
 # ------------------------------------------------------------
 esc=$(grep -c '\\|' "$DOC" || true)
-if [[ "$esc" == "0" ]]; then
+if [ "$esc" = "0" ]; then
   ok "② 无转义竖线（新增文本一律换符号）"
 else
   bad "② 发现 $esc 行含转义竖线 \\|，应改为换符号"
@@ -87,8 +99,9 @@ fi
 # ------------------------------------------------------------
 # ③ 处置列首词 ∈ 九态 + 一行一态
 # ------------------------------------------------------------
-row_check=$(python3 -I - "$DOC" <<'PY'
+row_check=$("$PY" -I - "$DOC" <<'PY'
 import io, sys, re
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # 三平台输出一致（-I 会忽略 PYTHONUTF8）
 S = ["TODO","DESIGNING","IMPLEMENTING","VERIFYING","DONE","PARTIAL","BLOCKED","DEFERRED","WONTFIX"]
 ls = io.open(sys.argv[1], encoding="utf-8").read().split("\n")
 bad, n = [], 0
@@ -112,7 +125,7 @@ if n != 20:
 print(" ".join(bad))
 PY
 )
-if [[ -z "$row_check" ]]; then
+if [ -z "$row_check" ]; then
   ok "③ 处置列首词全部 ∈ 九态集合，一行一态，矩阵 20 行齐备"
 else
   bad "③ 状态词校验：$row_check"
@@ -122,8 +135,9 @@ fi
 # ④ 矩阵行内过程叙述信号（先剔除 durable 锚点，再扫禁止模式）
 # ------------------------------------------------------------
 SIG='20[0-9]{2}-[0-9]{2}-[0-9]{2}|[0-9]+ 用例|0 失败|全绿|BUILD SUCCESS|PASS（|增量 [A-D]|批次[一二三四五]|\.java:[0-9]+|已落地|已修复|新增 [0-9]'
-sig_hits=$(python3 -I - "$DOC" "$SIG" <<'PY'
+sig_hits=$("$PY" -I - "$DOC" "$SIG" <<'PY'
 import io, sys, re
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # 三平台输出一致（-I 会忽略 PYTHONUTF8）
 doc, sig = sys.argv[1], sys.argv[2]
 ls = io.open(doc, encoding="utf-8").read().split("\n")
 pat = re.compile(sig)
@@ -143,18 +157,18 @@ for i, l in enumerate(ls, 1):
 print(" ".join(bad[:20]))
 PY
 )
-if [[ -z "$sig_hits" ]]; then
+if [ -z "$sig_hits" ]; then
   ok "④ 矩阵两列无过程叙述信号（日期 / 用例数 / 施工动词 / 分期标签 / 代码行号）"
 else
   bad "④ 残留过程信号：$sig_hits"
 fi
 
 # ------------------------------------------------------------
-print ""
-if [[ "$FAIL" == "0" ]]; then
-  print "[verify-doc-gap-table] ✅ 全部通过（$PASS 项）"
+printf '\n'
+if [ "$FAIL" = "0" ]; then
+  printf '[verify-doc-gap-table] ✅ 全部通过（%s 项）\n' "$PASS"
   exit 0
 else
-  print "[verify-doc-gap-table] ❌ $FAIL 项失败 / $PASS 项通过"
+  printf '[verify-doc-gap-table] ❌ %s 项失败 / %s 项通过\n' "$FAIL" "$PASS"
   exit 1
 fi

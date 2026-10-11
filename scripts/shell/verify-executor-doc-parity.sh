@@ -22,8 +22,9 @@
 #   S6 scripts/README.md 的脚本计数 ↔ **仓库在册实数**（git ls-files）—— 索引里的数字不许悄悄过期
 #   （五组 + S6 共 23 项；S6 的解析口径契约见其分节注释）
 #
-# 为什么用 bash（不用 zsh / python）：仓库既有 `verify-doc-gap-table.sh` 用 zsh+python3，
-# Windows/Git Bash 下不可直接运行；本守卫刻意只用 bash + grep/sed，**三平台都能跑**。
+# 为什么用 bash（不用 zsh / python）：本守卫刻意只用 bash + grep/sed，**三平台都能跑**、零依赖。
+# （对照：`verify-doc-gap-table.sh` 原为 zsh 实现、Windows/Git Bash 下跑不了且会静默 EXIT=0；
+#   2026-10-11 已改 bash 实现并接入 `ci-gate.sh` 门禁 3，见 LOG-20261011-010。）
 #
 # Ref: doc/log/2026-10.md LOG-20261010-011（本轮落地）/ LOG-20261010-009（前序）
 #      doc/HelloAI 实现差距表.md G-015（`attachmentId` ↔ `id` 命名口径）
